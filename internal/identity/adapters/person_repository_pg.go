@@ -159,26 +159,28 @@ func persistPerson(ctx context.Context, q *Queries, p *person.Person) error {
 	return nil
 }
 
-// drainPersonEvents writes Person events to the outbox. Person is global
-// (non-tenant), so events use the platform-tenant sentinel — outbox rows
-// for global events are still tenant-scoped at the table level (the
-// Watermill forwarder reads under platform scope and routes by topic).
+// drainPersonEvents maps Person aggregate events through
+// integrationevents.FromDomainEvent and writes the resulting V1
+// records to the outbox. Person is global (non-tenant), so the
+// outbox row carries uuid.Nil — RLS WITH CHECK passes under
+// TxScopePlatform.
 //
-// PlatformTenantID is uuid.Nil today (zero UUID). When the platform-tenant
-// concept materialises (cross-tenant operator audit), swap to that.
+// When the platform-tenant concept materialises (cross-tenant
+// operator audit), swap uuid.Nil for that tenant's UUID.
 func drainPersonEvents(ctx context.Context, tx pgx.Tx, p *person.Person) error {
 	evs := p.PullEvents()
 	if len(evs) == 0 {
 		return nil
 	}
-	out := make([]outboxEvent, len(evs))
+	asAny := make([]any, len(evs))
 	for i, e := range evs {
-		out[i] = e
+		asAny[i] = e
 	}
-	// Person events use the platform-tenant sentinel UUID since Person is
-	// not tenant-scoped. The outbox row's tenant_id is satisfied by RLS
-	// `is_platform=true` on insert; downstream consumers branch on topic.
-	return writeOutboxEvents(ctx, tx, uuid.Nil, out)
+	mapped, err := mapDomainEvents(asAny)
+	if err != nil {
+		return fmt.Errorf("person repo: map events: %w", err)
+	}
+	return writeOutboxEvents(ctx, tx, uuid.Nil, mapped)
 }
 
 func rowToPerson(row IdentityPerson) (*person.Person, error) {

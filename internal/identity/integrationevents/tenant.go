@@ -6,24 +6,27 @@ import (
 	"github.com/google/uuid"
 )
 
-// TenantRegisteredV1 — a tenant + its admin Person + admin Membership
-// have been created. Consumed by Platform (initialise lead credits),
-// CRM (seed default pipeline), Notifications (welcome email).
+// TenantRegisteredV1 — a tenant has been registered. Consumed by
+// Platform (initialise lead credits), CRM (seed default pipeline),
+// Notifications (welcome email).
 //
 // Platform-scoped: registration creates the tenant; there's no
 // "current tenant" context separate from the new tenant_id. Per
 // .NET `messaging.md` "Identity (Tenant — PlatformEvent)" classification.
+//
+// Carries TENANT-AGGREGATE fields only. Cross-module consumers that
+// need admin Person info (e.g. Notifications welcome-email) look up
+// via TenantID; sibling integration events (PersonCreatedV1 +
+// MembershipCreatedV1) carry the admin identities for direct routing.
 type TenantRegisteredV1 struct {
 	platformMarker
 
-	TenantID         uuid.UUID `json:"tenant_id"`
-	Slug             string    `json:"slug"`
-	LegalName        string    `json:"legal_name"`
-	DisplayName      string    `json:"display_name"`
-	AdminEmail       string    `json:"admin_email"`
-	AdminPersonID    uuid.UUID `json:"admin_person_id"`
-	AdminMembershipID uuid.UUID `json:"admin_membership_id"`
-	OccurredAtUTC    time.Time `json:"occurred_at_utc"`
+	TenantID      uuid.UUID `json:"tenant_id"`
+	Slug          string    `json:"slug"`
+	LegalName     string    `json:"legal_name"`
+	DisplayName   string    `json:"display_name"`
+	AdminEmail    string    `json:"admin_email"`
+	OccurredAtUTC time.Time `json:"occurred_at_utc"`
 }
 
 // Topic returns the canonical wire alias.

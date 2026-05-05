@@ -154,8 +154,10 @@ func persistTenantStatus(ctx context.Context, q *Queries, t *tenant.Tenant) erro
 	return nil
 }
 
-// drainTenantEvents pulls events off the aggregate and writes them to the
-// outbox. No-op when PullEvents returns nil (e.g. idempotent transitions).
+// drainTenantEvents pulls events off the aggregate, maps each through
+// integrationevents.FromDomainEvent, and writes the resulting V1
+// records to the outbox. No-op when PullEvents returns nil
+// (e.g. idempotent transitions).
 func drainTenantEvents(ctx context.Context, tx pgx.Tx, t *tenant.Tenant) error {
 	evs := t.PullEvents()
 	if len(evs) == 0 {
@@ -165,11 +167,15 @@ func drainTenantEvents(ctx context.Context, tx pgx.Tx, t *tenant.Tenant) error {
 	if err != nil {
 		return err
 	}
-	out := make([]outboxEvent, len(evs))
+	asAny := make([]any, len(evs))
 	for i, e := range evs {
-		out[i] = e
+		asAny[i] = e
 	}
-	return writeOutboxEvents(ctx, tx, uid, out)
+	mapped, err := mapDomainEvents(asAny)
+	if err != nil {
+		return fmt.Errorf("tenant repo: map events: %w", err)
+	}
+	return writeOutboxEvents(ctx, tx, uid, mapped)
 }
 
 // rowToTenant converts a sqlc-generated IdentityTenant into the domain

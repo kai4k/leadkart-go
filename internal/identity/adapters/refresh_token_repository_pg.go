@@ -289,11 +289,15 @@ func drainFamilyEvents(ctx context.Context, tx pgx.Tx, f *refreshtoken.Family) e
 	if err != nil {
 		return err
 	}
-	out := make([]outboxEvent, len(evs))
+	asAny := make([]any, len(evs))
 	for i, e := range evs {
-		out[i] = e
+		asAny[i] = e
 	}
-	return writeOutboxEvents(ctx, tx, tid, out)
+	mapped, err := mapDomainEvents(asAny)
+	if err != nil {
+		return fmt.Errorf("refresh token repo: map events: %w", err)
+	}
+	return writeOutboxEvents(ctx, tx, tid, mapped)
 }
 
 func loadFamilyByID(ctx context.Context, q *Queries, id refreshtoken.FamilyID) (*refreshtoken.Family, error) {

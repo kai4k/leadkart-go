@@ -121,16 +121,20 @@ func TestOutboxForwarder_PublishesUnforwardedRows(t *testing.T) {
 			msg.Metadata.Get("tenant_id"), tn.ID().String())
 	}
 
-	// Payload is the marshaled domain event — has TenantID + Slug fields.
+	// Payload is the marshaled integration-event V1 record — primitive
+	// snake_case wire shape per integrationevents.TenantRegisteredV1.
 	var payload struct {
-		TenantID string `json:"TenantID"`
-		Slug     string `json:"Slug"`
+		TenantID string `json:"tenant_id"`
+		Slug     string `json:"slug"`
 	}
 	if err := json.Unmarshal(msg.Payload, &payload); err != nil {
 		t.Fatalf("payload unmarshal: %v", err)
 	}
 	if payload.TenantID != tn.ID().String() {
-		t.Fatalf("payload TenantID: got %q want %q", payload.TenantID, tn.ID().String())
+		t.Fatalf("payload tenant_id: got %q want %q", payload.TenantID, tn.ID().String())
+	}
+	if payload.Slug != tn.Slug().String() {
+		t.Fatalf("payload slug: got %q want %q", payload.Slug, tn.Slug().String())
 	}
 }
 

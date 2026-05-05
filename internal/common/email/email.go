@@ -83,25 +83,5 @@ func (a Address) IsZero() bool { return a.value == "" }
 // Equal reports whether two addresses are equal (canonical-form comparison).
 func (a Address) Equal(other Address) bool { return a.value == other.value }
 
-// MarshalJSON serialises as a JSON string. Without this, the unexported
-// `value` field would emit `{}`. Domain events embedding Address by
-// value depend on this for outbox + integration-event payloads.
-func (a Address) MarshalJSON() ([]byte, error) {
-	return []byte(`"` + a.value + `"`), nil
-}
-
-// UnmarshalJSON re-hydrates from a JSON string, re-validating via [New].
-func (a *Address) UnmarshalJSON(data []byte) error {
-	if len(data) < 2 || data[0] != '"' || data[len(data)-1] != '"' {
-		return ErrInvalid
-	}
-	parsed, err := New(string(data[1 : len(data)-1]))
-	if err != nil {
-		return err
-	}
-	*a = parsed
-	return nil
-}
-
 // Compile-time guarantee that Address implements fmt.Stringer.
 var _ fmt.Stringer = Address{}

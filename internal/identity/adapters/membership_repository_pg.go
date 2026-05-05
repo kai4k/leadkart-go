@@ -261,11 +261,15 @@ func drainMembershipEvents(ctx context.Context, tx pgx.Tx, m *membership.Members
 	if err != nil {
 		return err
 	}
-	out := make([]outboxEvent, len(evs))
+	asAny := make([]any, len(evs))
 	for i, e := range evs {
-		out[i] = e
+		asAny[i] = e
 	}
-	return writeOutboxEvents(ctx, tx, tid, out)
+	mapped, err := mapDomainEvents(asAny)
+	if err != nil {
+		return fmt.Errorf("membership repo: map events: %w", err)
+	}
+	return writeOutboxEvents(ctx, tx, tid, mapped)
 }
 
 func rowToMembership(row IdentityTenantMembership) (*membership.Membership, error) {
