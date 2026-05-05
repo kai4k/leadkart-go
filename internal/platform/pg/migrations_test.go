@@ -120,15 +120,36 @@ func TestMigrationsApplyCleanly(t *testing.T) {
 	}
 	defer db.Close()
 
-	// Seven identity tables present.
+	// 8 identity tables present (7 from 002 + processed_messages from
+	// 20260507000001_messaging_infra).
 	var count int
 	if err := db.QueryRow(`
 		SELECT count(*) FROM pg_tables WHERE schemaname = 'identity'
 	`).Scan(&count); err != nil {
 		t.Fatalf("count identity tables: %v", err)
 	}
-	if want := 7; count != want {
+	if want := 8; count != want {
 		t.Fatalf("identity tables: got %d, want %d", count, want)
+	}
+
+	// buildingblocks schema present + audit_log_entry table; app schema
+	// extended with command_idempotency.
+	var bbCount, appCount int
+	if err := db.QueryRow(`
+		SELECT count(*) FROM pg_tables WHERE schemaname = 'buildingblocks'
+	`).Scan(&bbCount); err != nil {
+		t.Fatalf("count buildingblocks tables: %v", err)
+	}
+	if bbCount != 1 {
+		t.Fatalf("buildingblocks tables: got %d want 1", bbCount)
+	}
+	if err := db.QueryRow(`
+		SELECT count(*) FROM pg_tables WHERE schemaname = 'app'
+	`).Scan(&appCount); err != nil {
+		t.Fatalf("count app tables: %v", err)
+	}
+	if appCount != 1 {
+		t.Fatalf("app tables: got %d want 1 (command_idempotency)", appCount)
 	}
 
 	// app schema functions present.
