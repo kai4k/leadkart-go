@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/leadkart/leadkart-go/internal/identity/app"
+	"github.com/leadkart/leadkart-go/internal/platform/obs"
 )
 
 // silentLogger discards log output so test runs stay quiet.
@@ -16,38 +17,61 @@ func silentLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
 
-func TestHealth_Returns200OK(t *testing.T) {
+// TestPublicServer_DoesNotMountHealth pins the v0.2 contract: probes
+// (/alive, /ready, /health) live on the admin listener exclusively.
+// A request to /health on the public mux returns 404.
+func TestPublicServer_DoesNotMountHealth(t *testing.T) {
 	t.Parallel()
-
 	srv := newServer(silentLogger(), app.Application{})
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/health", nil)
-
-	srv.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
-	}
-	body, _ := io.ReadAll(rec.Body)
-	if string(body) != "ok\n" {
-		t.Fatalf("body = %q, want %q", body, "ok\n")
+	for _, path := range []string{"/alive", "/ready", "/health"} {
+		path := path
+		t.Run(path, func(t *testing.T) {
+			t.Parallel()
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, path, nil)
+			srv.ServeHTTP(rec, req)
+			if rec.Code != http.StatusNotFound {
+				t.Fatalf("public %s: got %d want 404 (probes belong on admin)", path, rec.Code)
+			}
+		})
 	}
 }
 
-func TestHealth_OnlyAcceptsGET(t *testing.T) {
+// TestAdminServer_MountsHealthEndpoints verifies the admin port
+// surfaces the three-endpoint health split per obs.Health.
+func TestAdminServer_MountsHealthEndpoints(t *testing.T) {
 	t.Parallel()
-
-	srv := newServer(silentLogger(), app.Application{})
-	for _, method := range []string{http.MethodPost, http.MethodPut, http.MethodDelete} {
-		method := method
-		t.Run(method, func(t *testing.T) {
+	health := obs.NewHealth(nil, 0)
+	adminSrv := obs.NewAdminServer(":0", health)
+	for _, tc := range []struct {
+		path string
+		want int
+	}{
+		{"/alive", 200},
+		{"/ready", 200},
+		{"/health", 200},
+	} {
+		tc := tc
+		t.Run(tc.path, func(t *testing.T) {
 			t.Parallel()
 			rec := httptest.NewRecorder()
-			req := httptest.NewRequestWithContext(context.Background(), method, "/health", nil)
-			srv.ServeHTTP(rec, req)
-			if rec.Code != http.StatusMethodNotAllowed {
-				t.Fatalf("status = %d, want %d", rec.Code, http.StatusMethodNotAllowed)
+			req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, tc.path, nil)
+			adminSrv.Handler.ServeHTTP(rec, req)
+			if rec.Code != tc.want {
+				t.Fatalf("admin %s: got %d want %d", tc.path, rec.Code, tc.want)
 			}
 		})
+	}
+}
+
+// TestAdminServer_ServesPprof — pprof index reachable on admin port.
+func TestAdminServer_ServesPprof(t *testing.T) {
+	t.Parallel()
+	adminSrv := obs.NewAdminServer(":0", nil)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/debug/pprof/", nil)
+	adminSrv.Handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("/debug/pprof/: got %d want 200", rec.Code)
 	}
 }

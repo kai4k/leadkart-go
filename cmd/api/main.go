@@ -32,6 +32,8 @@ import (
 	"github.com/ThreeDotsLabs/watermill/pubsub/gochannel"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+
 	"github.com/leadkart/leadkart-go/internal/identity/adapters"
 	"github.com/leadkart/leadkart-go/internal/identity/app"
 	"github.com/leadkart/leadkart-go/internal/identity/app/argon2"
@@ -39,6 +41,7 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/app/jwt"
 	"github.com/leadkart/leadkart-go/internal/identity/ports"
 	"github.com/leadkart/leadkart-go/internal/platform/config"
+	"github.com/leadkart/leadkart-go/internal/platform/obs"
 	"github.com/leadkart/leadkart-go/internal/platform/pg"
 )
 
@@ -70,6 +73,18 @@ func run(ctx context.Context, stdout *os.File, _ []string) error {
 	if err != nil {
 		return fmt.Errorf("config: %w", err)
 	}
+
+	otelShutdown, err := obs.Setup(ctx, cfg.OTel)
+	if err != nil {
+		return fmt.Errorf("obs: %w", err)
+	}
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := otelShutdown(shutdownCtx); err != nil {
+			logger.ErrorContext(ctx, "obs shutdown", "err", err)
+		}
+	}()
 
 	pool, err := pgxpool.New(ctx, cfg.Postgres.DSN)
 	if err != nil {
@@ -107,23 +122,38 @@ func run(ctx context.Context, stdout *os.File, _ []string) error {
 		})
 	}()
 
+	// Three-endpoint health split lives on the admin listener — public
+	// API never carries /alive|/ready|/health (per audit-checklist.md
+	// §12: probes excluded from public-facing caches).
+	health := obs.NewHealth([]obs.HealthChecker{
+		obs.HealthCheckerFunc{N: "postgres", Fn: pool.Ping},
+	}, 2*time.Second)
+	adminSrv := obs.NewAdminServer(cfg.Listen.Admin, health)
+
+	publicHandler := otelhttp.NewHandler(newServer(logger, identityApp), "leadkart-api")
 	srv := &http.Server{
 		Addr:              cfg.Listen.API,
-		Handler:           newServer(logger, identityApp),
+		Handler:           publicHandler,
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      30 * time.Second,
 		IdleTimeout:       120 * time.Second,
 	}
 
-	errCh := make(chan error, 1)
+	errCh := make(chan error, 2)
+	go func() {
+		logger.Info("admin listening", "addr", cfg.Listen.Admin)
+		if err := adminSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			errCh <- fmt.Errorf("admin: %w", err)
+			return
+		}
+	}()
 	go func() {
 		logger.Info("api listening", "addr", cfg.Listen.API)
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			errCh <- err
+			errCh <- fmt.Errorf("api: %w", err)
 			return
 		}
-		errCh <- nil
 	}()
 
 	select {
@@ -133,6 +163,7 @@ func run(ctx context.Context, stdout *os.File, _ []string) error {
 		defer cancel()
 		stopForwarder()
 		workers.Wait()
+		_ = adminSrv.Shutdown(shutdownCtx)
 		return srv.Shutdown(shutdownCtx)
 	case err := <-errCh:
 		stopForwarder()
@@ -141,27 +172,18 @@ func run(ctx context.Context, stdout *os.File, _ []string) error {
 	}
 }
 
-// newServer builds the HTTP handler tree per Mat Ryer 2024.
+// newServer builds the public HTTP handler tree per Mat Ryer 2024.
+//
+// Carries business endpoints ONLY. Probes (/alive, /ready, /health) +
+// pprof live on the admin listener (see [obs.NewAdminServer]).
 //
 // All dependencies arrive pre-built — main() owns wiring, this owns
-// route registration. Tests construct identityApp with fakes and pass
+// route registration. Tests construct identityApp with fakes + pass
 // it directly.
 func newServer(log *slog.Logger, identityApp app.Application) http.Handler {
 	mux := http.NewServeMux()
-	mux.Handle("GET /health", handleHealth())
 	ports.AddRoutes(mux, log, identityApp)
 	return mux
-}
-
-// handleHealth returns 200 for liveness probes (Kubernetes, ALB).
-// LIVENESS only — readiness checks (DB+Redis reachable) belong at
-// /ready and ship when those adapters land.
-func handleHealth() http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("ok\n"))
-	})
 }
 
 // ----- Identity wiring -------------------------------------------------------
