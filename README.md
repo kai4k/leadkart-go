@@ -2,11 +2,18 @@
 
 Go rebuild of LeadKart (multi-tenant Indian PCD pharma SaaS). Reference port from the .NET 10 implementation; architecture derived from 2026 Go canon (Three Dots Labs DDD/EDA, Mat Ryer HTTP services, Brandur Leach sqlc/pgx) — **not** a 1:1 .NET translation.
 
-## Status
+## Status — v0.1.0
 
-**v0.1 in active scaffolding** — Identity module is the first canonical bounded context.
+**Identity module shipped end-to-end.** Register-tenant + login + refresh
++ logout flow runs through HTTP → Application handlers → pgx repos → Postgres
+RLS → outbox → Watermill GoChannel pubsub. ~94 tests green (41 domain unit +
+15 auth-primitive unit + 4 health/HTTP unit + 24 adapter integration +
+3 platform/pg integration + 4 app/command flow integration + 3 outbox
+forwarder integration).
 
-See [`docs/adr/`](docs/adr/) for architectural decisions and [`.claude/plans/`](https://github.com/anrgchauhan/.claude/blob/main/plans/) for the master rebuild plan (private to author tooling).
+See [`docs/adr/`](docs/adr/) for architectural decisions (14 published ADRs
+covering the foundational choices) and [`.claude/plans/`](https://github.com/anrgchauhan/.claude/blob/main/plans/)
+for the master rebuild plan (private to author tooling).
 
 ## Stack
 
