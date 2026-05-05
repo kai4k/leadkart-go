@@ -1,0 +1,44 @@
+# LeadKart Go — local development stack.
+#
+# Start: docker compose -f docker/compose.yml up -d
+# Stop:  docker compose -f docker/compose.yml down
+#
+# Postgres + Redis only at v0.1; API runs on host via `air` for fast iteration.
+# Once Identity ships, an `api` service can be added pointing at the multi-target
+# Dockerfile (see docker/Dockerfile target=api).
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: leadkart-postgres
+    environment:
+      POSTGRES_USER: leadkart
+      POSTGRES_PASSWORD: leadkart_dev
+      POSTGRES_DB: leadkart
+      PGDATA: /var/lib/postgresql/data/pgdata
+    ports:
+      - "5432:5432"
+    volumes:
+      - leadkart_pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U leadkart -d leadkart"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: leadkart-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - leadkart_redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  leadkart_pg_data:
+  leadkart_redis_data:

@@ -1,0 +1,24 @@
+# Architecture Decision Records
+
+One decision per file, Michael Nygard format (Context / Decision / Consequences / Alternatives Considered / Sources). Dated. Sealed once accepted — superseded by new ADRs, never edited in place.
+
+## Index
+
+| # | Title | Status |
+|---|---|---|
+| 0001 | Topology — Modular monolith | Accepted |
+| 0002 | Architectural style — Hexagonal + DDD | Accepted |
+| 0003 | Persistence default — State-based + outbox | Accepted |
+| 0004 | DB layer — sqlc + pgx/v5 + squirrel + goose | Accepted |
+| 0005 | Migrations — goose | Accepted |
+| 0006 | Multi-tenancy — Postgres RLS + SET LOCAL | Accepted |
+| 0007 | HTTP router — stdlib `net/http` ServeMux 1.22+ | Accepted |
+| 0008 | Messaging — Watermill v1.5+ + watermill-sql outbox | Accepted |
+| 0009 | Command dispatch — Application{Commands, Queries} facade | Accepted |
+| 0010 | Background jobs — river | Accepted |
+| 0027 | Audit log — outbox doubles as audit | Accepted |
+| 0033 | Tenant context — `tenant.FromContext(ctx)` package func | Accepted |
+| 0034 | Go version — 1.25 (target 1.26+) | Accepted |
+| 0035 | Event sourcing scope — zero modules at v0.1 | Accepted |
+
+ADRs 0011–0026 + 0028–0032 + 0036+ land as the relevant code lands per the master plan.

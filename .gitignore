@@ -1,0 +1,36 @@
+# Binaries
+/bin/
+/tmp/
+/dist/
+
+# Build output
+*.exe
+*.test
+*.out
+coverage.out
+coverage.html
+
+# Go
+go.work
+go.work.sum
+
+# Editors
+.idea/
+.vscode/
+*.swp
+*~
+.DS_Store
+
+# Local env
+.env
+.env.*
+!.env.example
+
+# Air hot reload
+tmp/
+
+# OS
+Thumbs.db
+
+# Claude
+.claude/local/

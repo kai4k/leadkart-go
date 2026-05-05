@@ -1,0 +1,56 @@
+# golangci-lint v2 schema (released 2024) — strict 2026 SaaS profile.
+# https://golangci-lint.run/
+
+version: "2"
+
+run:
+  timeout: 5m
+  tests: true
+
+linters:
+  default: standard       # errcheck, govet, ineffassign, staticcheck, unused
+  enable:
+    - revive              # successor to deprecated golint
+    - gosec               # security
+    - gocritic            # opinionated correctness/style/perf
+    - misspell
+    - perfsprint          # flags fmt.Sprintf("%s", x) etc.
+    - errorlint           # err == io.EOF instead of errors.Is
+    - bodyclose           # http.Response.Body leaks
+    - noctx               # net/http calls without context
+    - nilnil              # antipattern: returning nil, nil
+    - cyclop              # cyclomatic complexity cap
+    - testifylint
+    - sqlclosecheck
+    - gofumpt             # stricter gofmt
+    - gci                 # import grouping
+    - tagliatelle         # struct tag naming consistency
+
+  exclusions:
+    rules:
+      # Tests get a pass on a few rules.
+      - path: _test\.go
+        linters: [errcheck, gosec, cyclop]
+
+  settings:
+    cyclop:
+      max-complexity: 15
+    revive:
+      rules:
+        - name: var-naming
+        - name: exported
+        - name: unused-parameter
+    gci:
+      sections:
+        - standard
+        - default
+        - prefix(github.com/leadkart/leadkart-go)
+    tagliatelle:
+      case:
+        rules:
+          json: snake
+          yaml: snake
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0

@@ -1,0 +1,88 @@
+# LeadKart Go — Taskfile (taskfile.dev)
+#
+# Install: https://taskfile.dev/installation/
+# Run: `task <name>` from repo root.
+#
+# 2026 Go canon: Taskfile preferred over Makefile (cross-platform, structured).
+version: '3'
+
+vars:
+  COVER_OUT: coverage.out
+  BIN_DIR: bin
+  GO_LINT_VERSION: v2.0.2
+
+tasks:
+  default:
+    desc: Show task list
+    cmds:
+      - task --list
+
+  build:
+    desc: Build all binaries (api / worker / migrate) into bin/
+    cmds:
+      - go build -trimpath -ldflags="-s -w" -o {{.BIN_DIR}}/ ./cmd/...
+
+  run:
+    desc: Run API locally with hot reload (requires `air` installed)
+    cmds:
+      - air
+
+  test:
+    desc: Unit tests with shuffle (race detector requires CGO; CI runs with -race)
+    cmds:
+      - go test -shuffle=on -coverprofile={{.COVER_OUT}} ./...
+
+  test:race:
+    desc: Unit tests with race detector (requires CGO_ENABLED=1)
+    cmds:
+      - CGO_ENABLED=1 go test -race -shuffle=on ./...
+
+  test:int:
+    desc: Integration tests (testcontainers; tagged build)
+    cmds:
+      - go test -shuffle=on -tags=integration ./...
+
+  cover:
+    desc: HTML coverage report
+    deps: [test]
+    cmds:
+      - go tool cover -html={{.COVER_OUT}} -o coverage.html
+
+  lint:
+    desc: Run golangci-lint v2 strict profile
+    cmds:
+      - golangci-lint run
+
+  fmt:
+    desc: Format all Go files
+    cmds:
+      - gofmt -w .
+
+  vet:
+    desc: Run go vet
+    cmds:
+      - go vet ./...
+
+  vuln:
+    desc: Scan for known vulnerabilities (govulncheck)
+    cmds:
+      - go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+
+  tidy:
+    desc: go mod tidy
+    cmds:
+      - go mod tidy
+
+  generate:
+    desc: Run all codegen (sqlc, mocks, oapi)
+    cmds:
+      - go generate ./...
+
+  ci:
+    desc: Full CI pipeline locally (vet + lint + test + vuln)
+    deps: [vet, lint, test, vuln]
+
+  clean:
+    desc: Remove build artifacts
+    cmds:
+      - rm -rf {{.BIN_DIR}} tmp coverage.out coverage.html dist
