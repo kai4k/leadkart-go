@@ -45,12 +45,23 @@ func NewMembershipRepository(pool *pgxpool.Pool, tx *pg.Transactor) *MembershipR
 // invariant) as [membership.ErrAlreadyActive].
 func (r *MembershipRepository) Add(ctx context.Context, m *membership.Membership) error {
 	return r.tx.WithinTx(ctx, pg.TxScopeTenant, func(ctx context.Context, tx pgx.Tx) error {
-		q := r.q.WithTx(tx)
-		if err := insertMembershipRow(ctx, q, m); err != nil {
-			return err
-		}
-		return drainMembershipEvents(ctx, tx, m)
+		return r.AddInTx(ctx, tx, m)
 	})
+}
+
+// AddInTx persists a new Active Membership under an EXISTING
+// transaction. Scope-agnostic: caller chooses TxScopeTenant (in-tenant
+// admin onboards a user) OR TxScopePlatform (orchestrator creates the
+// admin Membership during tenant-registration when no tenant context
+// exists yet).
+//
+// Surfaces ErrAlreadyActive on partial-unique-index violation.
+func (r *MembershipRepository) AddInTx(ctx context.Context, tx pgx.Tx, m *membership.Membership) error {
+	q := r.q.WithTx(tx)
+	if err := insertMembershipRow(ctx, q, m); err != nil {
+		return err
+	}
+	return drainMembershipEvents(ctx, tx, m)
 }
 
 // UpdateByID satisfies [membership.Repository]. Tenant-scoped: caller

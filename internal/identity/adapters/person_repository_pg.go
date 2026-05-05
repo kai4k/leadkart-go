@@ -34,12 +34,19 @@ func NewPersonRepository(pool *pgxpool.Pool, tx *pg.Transactor) *PersonRepositor
 // CreatedEvent into the outbox in one tx under platform scope.
 func (r *PersonRepository) Add(ctx context.Context, p *person.Person) error {
 	return r.tx.WithinTx(ctx, pg.TxScopePlatform, func(ctx context.Context, tx pgx.Tx) error {
-		q := r.q.WithTx(tx)
-		if err := insertPersonRow(ctx, q, p); err != nil {
-			return err
-		}
-		return drainPersonEvents(ctx, tx, p)
+		return r.AddInTx(ctx, tx, p)
 	})
+}
+
+// AddInTx persists a new Person under an EXISTING transaction. See the
+// TenantRepository.AddInTx godoc for the orchestrator-composition
+// rationale (TDL TransactionProvider escape hatch).
+func (r *PersonRepository) AddInTx(ctx context.Context, tx pgx.Tx, p *person.Person) error {
+	q := r.q.WithTx(tx)
+	if err := insertPersonRow(ctx, q, p); err != nil {
+		return err
+	}
+	return drainPersonEvents(ctx, tx, p)
 }
 
 // UpdateByID satisfies [person.Repository] — TDL UpdateFn closure pattern

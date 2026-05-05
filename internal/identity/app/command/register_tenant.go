@@ -6,21 +6,17 @@
 // `internal/identity/app/app.go`; HTTP ports call
 // `app.Commands.X.Handle(...)` directly.
 //
-// Handlers depend on domain repository INTERFACES — never adapter
-// concrete types. This keeps the application layer testable without DB
-// (a fake repo passes the interface; the test never touches Postgres).
+// Handlers stay THIN per `architecture.md` "Command handler scope" —
+// validate → dispatch to service → translate result. Multi-aggregate
+// orchestration lives in [internal/identity/app/service/].
 package command
 
 import (
 	"context"
-	"errors"
-	"fmt"
 
 	"github.com/leadkart/leadkart-go/internal/common/email"
-	"github.com/leadkart/leadkart-go/internal/common/ids"
 	"github.com/leadkart/leadkart-go/internal/common/slug"
-	"github.com/leadkart/leadkart-go/internal/common/tenancy"
-	"github.com/leadkart/leadkart-go/internal/identity/app/argon2"
+	"github.com/leadkart/leadkart-go/internal/identity/app/service"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
@@ -28,168 +24,68 @@ import (
 
 // RegisterTenantCommand carries the validated input for the
 // register-tenant use case — a brand-new pharma company onboarding to
-// LeadKart. Creates: Tenant, the admin Person (or attaches to existing
-// Person by email), and the admin TenantMembership in one orchestrated
-// flow.
-//
-// The handler validates that the email is not already attached to an
-// active Membership in any tenant (single-Active-Membership invariant
-// per multi-tenancy.md "Identity model"). The actual DB-level invariant
-// is the partial unique index `WHERE status='active'`, but we surface a
-// typed error before hitting the constraint for clean error messages.
+// LeadKart. The handler delegates to [service.TenantOnboardingService]
+// which writes Tenant + admin Person + admin Membership in ONE
+// transaction (no saga; per TDL canon).
 type RegisterTenantCommand struct {
-	Slug          slug.Slug
-	LegalName     string
-	DisplayName   string
-	AdminEmail    email.Address
-	AdminPassword string // plaintext; hashed inside the handler
+	Slug           slug.Slug
+	LegalName      string
+	DisplayName    string
+	AdminEmail     email.Address
+	AdminPassword  string
 	AdminFirstName string
 	AdminLastName  string
 }
 
-// RegisterTenantResult is what the handler returns on success — the IDs
-// the HTTP port maps into the response DTO.
+// RegisterTenantResult mirrors [service.OnboardTenantResult] —
+// surfaced through the handler boundary so HTTP ports don't import
+// the service package directly.
 type RegisterTenantResult struct {
 	TenantID     tenant.ID
 	PersonID     person.ID
 	MembershipID membership.ID
 }
 
-// ----- Handler errors --------------------------------------------------------
+// ErrEmailHasActiveMembership re-exports
+// [service.ErrEmailHasActiveMembership] under the command package's
+// error vocabulary. HTTP ports match on this sentinel for the 409
+// Conflict mapping.
+var ErrEmailHasActiveMembership = service.ErrEmailHasActiveMembership
 
-// ErrEmailHasActiveMembership is returned when the AdminEmail belongs
-// to a Person who already has an Active Membership in another tenant.
-// The single-Active-Membership invariant blocks immediate dual-tenancy;
-// the user must Deactivate elsewhere first.
-var ErrEmailHasActiveMembership = errors.New(
-	"register tenant: admin email already has an active membership elsewhere",
-)
-
-// ----- Handler ---------------------------------------------------------------
-
-// RegisterTenantHandler orchestrates Tenant + Person + Membership
-// creation. Per TDL canon: depends on domain interfaces only.
+// RegisterTenantHandler is a thin dispatcher over
+// [service.TenantOnboardingService]. Per `architecture.md` "Command
+// handler scope" — handler body ≤40 lines, ctor ≤6 deps; orchestration
+// is the service's responsibility.
 type RegisterTenantHandler struct {
-	tenants     tenant.Repository
-	persons     person.Repository
-	memberships membership.Repository
+	onboarding *service.TenantOnboardingService
 }
 
-// NewRegisterTenantHandler wires the handler against the three repos.
-func NewRegisterTenantHandler(
-	tenants tenant.Repository,
-	persons person.Repository,
-	memberships membership.Repository,
-) RegisterTenantHandler {
-	return RegisterTenantHandler{
-		tenants:     tenants,
-		persons:     persons,
-		memberships: memberships,
-	}
+// NewRegisterTenantHandler wires the handler.
+func NewRegisterTenantHandler(onboarding *service.TenantOnboardingService) RegisterTenantHandler {
+	return RegisterTenantHandler{onboarding: onboarding}
 }
 
-// Handle executes the use case. Steps:
-//
-//  1. Hash AdminPassword (Argon2id).
-//  2. Find-or-create Person by email globally.
-//     - If Person exists + has an Active Membership elsewhere → fail.
-//     - If Person exists + no Active Membership → reuse the row (the
-//       same human re-onboarding to a new tenant after job change).
-//     - If Person doesn't exist → create.
-//  3. Construct Tenant + persist (TenantRepository.Add — runs under
-//     platform scope; emits TenantRegisteredEvent to outbox).
-//  4. Construct Membership in StatusActive + persist (MembershipRepository.Add
-//     under tenant scope of the just-created tenant — emits CreatedEvent).
-//
-// The orchestration intentionally uses three separate transactions
-// (one per aggregate). State leaks between them are tolerable in the
-// onboarding flow: the application layer would compensate on partial
-// failure (TBD — Phase 6 introduces Sagas where required).
+// Handle translates the command into the service-layer command + maps
+// the result. Errors propagate unchanged.
 func (h RegisterTenantHandler) Handle(
 	ctx context.Context,
 	cmd RegisterTenantCommand,
 ) (RegisterTenantResult, error) {
-	hash, err := argon2.Hash(cmd.AdminPassword)
+	out, err := h.onboarding.Onboard(ctx, service.OnboardTenantCommand{
+		Slug:           cmd.Slug,
+		LegalName:      cmd.LegalName,
+		DisplayName:    cmd.DisplayName,
+		AdminEmail:     cmd.AdminEmail,
+		AdminPassword:  cmd.AdminPassword,
+		AdminFirstName: cmd.AdminFirstName,
+		AdminLastName:  cmd.AdminLastName,
+	})
 	if err != nil {
-		return RegisterTenantResult{}, fmt.Errorf("hash password: %w", err)
+		return RegisterTenantResult{}, err
 	}
-	pwd, err := person.NewPasswordHash(hash)
-	if err != nil {
-		return RegisterTenantResult{}, fmt.Errorf("wrap hash: %w", err)
-	}
-
-	// 2. Resolve-or-create Person by email.
-	//
-	//    GetByEmail runs cross-tenant by design (persons table is
-	//    non-RLS); ErrNotFound is the "create" branch.
-	existing, err := h.persons.GetByEmail(ctx, cmd.AdminEmail)
-	var p *person.Person
-	switch {
-	case err == nil:
-		// Person exists. Block if they have an Active Membership.
-		active, lerr := h.memberships.GetActiveForPerson(ctx, existing.ID())
-		if lerr != nil && !errors.Is(lerr, membership.ErrNotFound) {
-			return RegisterTenantResult{}, fmt.Errorf("check active membership: %w", lerr)
-		}
-		if active != nil {
-			return RegisterTenantResult{}, ErrEmailHasActiveMembership
-		}
-		p = existing
-	case errors.Is(err, person.ErrNotFound):
-		newP, perr := person.New(
-			person.ID(ids.NewV7().String()),
-			cmd.AdminEmail,
-			cmd.AdminFirstName,
-			cmd.AdminLastName,
-			pwd,
-		)
-		if perr != nil {
-			return RegisterTenantResult{}, fmt.Errorf("construct person: %w", perr)
-		}
-		if perr := h.persons.Add(ctx, newP); perr != nil {
-			return RegisterTenantResult{}, fmt.Errorf("persist person: %w", perr)
-		}
-		p = newP
-	default:
-		return RegisterTenantResult{}, fmt.Errorf("lookup person by email: %w", err)
-	}
-
-	// 3. Construct + persist Tenant.
-	tn, err := tenant.New(
-		tenant.ID(ids.NewV7().String()),
-		cmd.Slug,
-		cmd.LegalName,
-		cmd.DisplayName,
-		cmd.AdminEmail,
-	)
-	if err != nil {
-		return RegisterTenantResult{}, fmt.Errorf("construct tenant: %w", err)
-	}
-	if err := h.tenants.Add(ctx, tn); err != nil {
-		return RegisterTenantResult{}, fmt.Errorf("persist tenant: %w", err)
-	}
-
-	// 4. Construct + persist Membership in StatusActive.
-	//
-	//    MembershipRepository.Add runs under TxScopeTenant — needs
-	//    tenancy.WithID on ctx to populate app.tenant_id. The
-	//    just-created Tenant becomes the scope for this insert.
-	m, err := membership.New(
-		membership.ID(ids.NewV7().String()),
-		p.ID(),
-		tn.ID(),
-	)
-	if err != nil {
-		return RegisterTenantResult{}, fmt.Errorf("construct membership: %w", err)
-	}
-	tenantCtx := tenancy.WithID(ctx, tenancy.ID(tn.ID().String()))
-	if err := h.memberships.Add(tenantCtx, m); err != nil {
-		return RegisterTenantResult{}, fmt.Errorf("persist membership: %w", err)
-	}
-
 	return RegisterTenantResult{
-		TenantID:     tn.ID(),
-		PersonID:     p.ID(),
-		MembershipID: m.ID(),
+		TenantID:     out.TenantID,
+		PersonID:     out.PersonID,
+		MembershipID: out.MembershipID,
 	}, nil
 }

@@ -42,6 +42,7 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/app/argon2"
 	"github.com/leadkart/leadkart-go/internal/identity/app/command"
 	"github.com/leadkart/leadkart-go/internal/identity/app/jwt"
+	"github.com/leadkart/leadkart-go/internal/identity/app/service"
 	"github.com/leadkart/leadkart-go/internal/platform/pg"
 )
 
@@ -72,7 +73,8 @@ func newWiredApp(t *testing.T) (*pgxpool.Pool, command.RegisterTenantHandler, co
 		t.Fatalf("dummy hash: %v", err)
 	}
 
-	register := command.NewRegisterTenantHandler(tenants, persons, memberships)
+	onboarding := service.NewTenantOnboardingService(tx, tenants, persons, memberships)
+	register := command.NewRegisterTenantHandler(onboarding)
 	login := command.NewLoginHandler(persons, memberships, families, tenants, issuer, now, refreshTTL, dummyHash)
 	refresh := command.NewRefreshHandler(families, persons, memberships, tenants, issuer, now, refreshTTL)
 	logout := command.NewLogoutHandler(families)

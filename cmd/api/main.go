@@ -39,6 +39,7 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/app/argon2"
 	"github.com/leadkart/leadkart-go/internal/identity/app/command"
 	"github.com/leadkart/leadkart-go/internal/identity/app/jwt"
+	"github.com/leadkart/leadkart-go/internal/identity/app/service"
 	"github.com/leadkart/leadkart-go/internal/identity/ports"
 	"github.com/leadkart/leadkart-go/internal/platform/config"
 	"github.com/leadkart/leadkart-go/internal/platform/obs"
@@ -198,6 +199,7 @@ func buildIdentityApp(pool *pgxpool.Pool, cfg config.AppConfig, now func() time.
 	persons := adapters.NewPersonRepository(pool, tx)
 	memberships := adapters.NewMembershipRepository(pool, tx)
 	families := adapters.NewRefreshTokenFamilyRepository(pool, tx)
+	onboarding := service.NewTenantOnboardingService(tx, tenants, persons, memberships)
 
 	previous := make([]jwt.SigningKey, len(cfg.JWT.PreviousKeys))
 	for i, p := range cfg.JWT.PreviousKeys {
@@ -218,7 +220,7 @@ func buildIdentityApp(pool *pgxpool.Pool, cfg config.AppConfig, now func() time.
 
 	return app.Application{
 		Commands: app.Commands{
-			RegisterTenant: command.NewRegisterTenantHandler(tenants, persons, memberships),
+			RegisterTenant: command.NewRegisterTenantHandler(onboarding),
 			Login:          command.NewLoginHandler(persons, memberships, families, tenants, issuer, now, cfg.Refresh.AbsoluteTTL, dummyHash),
 			Refresh:        command.NewRefreshHandler(families, persons, memberships, tenants, issuer, now, cfg.Refresh.AbsoluteTTL),
 			Logout:         command.NewLogoutHandler(families),

@@ -43,12 +43,26 @@ func NewTenantRepository(pool *pgxpool.Pool, tx *pg.Transactor) *TenantRepositor
 // platform scope (the new tenant has no current_tenant context yet).
 func (r *TenantRepository) Add(ctx context.Context, t *tenant.Tenant) error {
 	return r.tx.WithinTx(ctx, pg.TxScopePlatform, func(ctx context.Context, tx pgx.Tx) error {
-		q := r.q.WithTx(tx)
-		if err := insertTenantRow(ctx, q, t); err != nil {
-			return err
-		}
-		return drainTenantEvents(ctx, tx, t)
+		return r.AddInTx(ctx, tx, t)
 	})
+}
+
+// AddInTx persists a brand-new tenant under an EXISTING transaction.
+// Caller (typically a multi-aggregate orchestrator like
+// TenantOnboardingService) owns the tx + chooses the scope; this
+// method is scope-agnostic and assumes the caller already opened the
+// tx with the appropriate GUC binding.
+//
+// Per TDL TransactionProvider escape hatch in messaging.md G.H.1 — the
+// transactor remains in the repository for the simple Add path; the
+// orchestrator's WithinTx + AddInTx composition is the documented
+// alternative for multi-aggregate atomic writes.
+func (r *TenantRepository) AddInTx(ctx context.Context, tx pgx.Tx, t *tenant.Tenant) error {
+	q := r.q.WithTx(tx)
+	if err := insertTenantRow(ctx, q, t); err != nil {
+		return err
+	}
+	return drainTenantEvents(ctx, tx, t)
 }
 
 // UpdateByID satisfies [tenant.Repository] — TDL Sep 2024 UpdateFn pattern.
