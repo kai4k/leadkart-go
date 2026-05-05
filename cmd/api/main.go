@@ -22,9 +22,12 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
+	"github.com/ThreeDotsLabs/watermill"
+	"github.com/ThreeDotsLabs/watermill/pubsub/gochannel"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/leadkart/leadkart-go/internal/identity/adapters"
@@ -35,6 +38,12 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/ports"
 	"github.com/leadkart/leadkart-go/internal/platform/pg"
 )
+
+// IdentityEventsTopic is the Watermill destination used by both the
+// outbox forwarder (publish) and downstream module subscribers
+// (consume). All identity.* domain events flow through this single
+// topic; subscribers route by `event_type` metadata header.
+const IdentityEventsTopic = "identity.events"
 
 func main() {
 	if err := run(context.Background(), os.Stdout, os.Args[1:]); err != nil {
@@ -75,6 +84,26 @@ func run(ctx context.Context, stdout *os.File, _ []string) error {
 		return fmt.Errorf("build identity app: %w", err)
 	}
 
+	// In-process Watermill GoChannel pub/sub — drains identity.outbox
+	// to in-binary subscribers. Production swap to Redis Streams or
+	// Kafka happens by replacing this single `Publisher`.
+	pubsub := gochannel.NewGoChannel(gochannel.Config{}, watermill.NewSlogLogger(logger))
+	defer pubsub.Close()
+
+	tx := pg.NewTransactor(pool)
+	forwarder := adapters.NewOutboxForwarder(pool, tx, pubsub, IdentityEventsTopic, 0)
+
+	forwarderCtx, stopForwarder := context.WithCancel(ctx)
+	defer stopForwarder()
+	var workers sync.WaitGroup
+	workers.Add(1)
+	go func() {
+		defer workers.Done()
+		forwarder.Run(forwarderCtx, time.Second, 50*time.Millisecond, func(err error) {
+			logger.ErrorContext(forwarderCtx, "outbox forwarder", "err", err)
+		})
+	}()
+
 	srv := &http.Server{
 		Addr:              cfg.ListenAddr,
 		Handler:           newServer(logger, identityApp),
@@ -99,8 +128,12 @@ func run(ctx context.Context, stdout *os.File, _ []string) error {
 		logger.Info("api shutting down")
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
+		stopForwarder()
+		workers.Wait()
 		return srv.Shutdown(shutdownCtx)
 	case err := <-errCh:
+		stopForwarder()
+		workers.Wait()
 		return err
 	}
 }

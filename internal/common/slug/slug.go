@@ -68,3 +68,25 @@ func (s Slug) IsZero() bool { return s.value == "" }
 
 // Equal reports whether two slugs are equal.
 func (s Slug) Equal(other Slug) bool { return s.value == other.value }
+
+// MarshalJSON serialises the slug as its canonical string form.
+// Without this, json.Marshal would emit `{}` because the underlying
+// `value` field is unexported. Domain events embed slug.Slug by value,
+// so the outbox payload + integration-event consumers depend on this.
+func (s Slug) MarshalJSON() ([]byte, error) {
+	return []byte(`"` + s.value + `"`), nil
+}
+
+// UnmarshalJSON re-hydrates a slug from a JSON string. Re-validates
+// via [New] so untrusted JSON inputs can't bypass invariants.
+func (s *Slug) UnmarshalJSON(data []byte) error {
+	if len(data) < 2 || data[0] != '"' || data[len(data)-1] != '"' {
+		return ErrInvalid
+	}
+	parsed, err := New(string(data[1 : len(data)-1]))
+	if err != nil {
+		return err
+	}
+	*s = parsed
+	return nil
+}
