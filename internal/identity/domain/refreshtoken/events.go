@@ -28,9 +28,13 @@ func (FamilyCreatedEvent) Topic() string { return "identity.refresh_token_family
 // OccurredAt returns the domain timestamp.
 func (e FamilyCreatedEvent) OccurredAt() time.Time { return e.At }
 
-// RotatedEvent fires on successful rotation.
+// RotatedEvent fires on successful rotation. Carries PersonID + TenantID
+// so downstream subscribers can react without calling back to the
+// publisher (Udi Dahan event-autonomy rule per messaging.md).
 type RotatedEvent struct {
 	FamilyID           FamilyID
+	PersonID           person.ID
+	TenantID           tenant.ID
 	ConsumedTokenID    TokenID
 	NewTokenID         TokenID
 	NewTokenGeneration int32
@@ -44,13 +48,15 @@ func (RotatedEvent) Topic() string { return "identity.refresh_token_rotated.v1" 
 func (e RotatedEvent) OccurredAt() time.Time { return e.At }
 
 // RevokedEvent fires when a family is revoked — by [Revoke], by reuse
-// detection in [Rotate], or by family-cap eviction in the application
-// service. The Reason field disambiguates the trigger.
+// detection in [Rotate], or by family-cap eviction. Reason disambiguates;
+// "reuse_detected" is the security-incident path Notifications subscribes
+// to for SIEM alerts.
 //
-// Subscribers (Notifications module) react to "reuse_detected" with a
-// SIEM alert + user-notification email — that's a security incident.
+// Carries PersonID + TenantID for the same Udi Dahan reason as RotatedEvent.
 type RevokedEvent struct {
 	FamilyID FamilyID
+	PersonID person.ID
+	TenantID tenant.ID
 	Reason   string
 	At       time.Time
 }

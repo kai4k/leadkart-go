@@ -269,6 +269,8 @@ func (f *Family) Rotate(presentedHash TokenHash, newHash TokenHash, ttl time.Dur
 		f.revokeReason = "reuse_detected"
 		f.recordEvent(RevokedEvent{
 			FamilyID: f.id,
+			PersonID: f.personID,
+			TenantID: f.tenantID,
 			Reason:   "reuse_detected",
 			At:       now,
 		})
@@ -299,6 +301,8 @@ func (f *Family) Rotate(presentedHash TokenHash, newHash TokenHash, ttl time.Dur
 
 	f.recordEvent(RotatedEvent{
 		FamilyID:           f.id,
+		PersonID:           f.personID,
+		TenantID:           f.tenantID,
 		ConsumedTokenID:    f.tokens[idx].id,
 		NewTokenID:         nextID,
 		NewTokenGeneration: next.generation,
@@ -324,6 +328,8 @@ func (f *Family) Revoke(reason string) error {
 	f.revokeReason = reason
 	f.recordEvent(RevokedEvent{
 		FamilyID: f.id,
+		PersonID: f.personID,
+		TenantID: f.tenantID,
 		Reason:   reason,
 		At:       now,
 	})

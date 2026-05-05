@@ -1,0 +1,163 @@
+package integrationevents
+
+import (
+	"fmt"
+
+	"github.com/google/uuid"
+
+	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/refreshtoken"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
+)
+
+// FromDomainEvent translates ANY recognised domain event into its
+// canonical integration event. Used by [drainXEvents] in repository
+// adapters: domain events emitted by aggregates flow through this
+// function before they hit the outbox table.
+//
+// Returns ErrUnknown for events the mapper hasn't been taught about
+// — surfaces in CI as a clear "you minted a domain event but never
+// wired the integration counterpart" failure.
+func FromDomainEvent(d any) (Event, error) {
+	switch e := d.(type) {
+
+	// ----- Tenant -----------------------------------------------------
+
+	case tenant.RegisteredEvent:
+		// AdminPersonID + AdminMembershipID are NOT carried on the
+		// domain event because the Tenant aggregate doesn't own them
+		// — they're created in a sibling aggregate during the
+		// orchestrated RegisterTenant flow. The Application service
+		// emits the integration event directly with the full tuple
+		// after persisting all three aggregates. This mapper handles
+		// the domain-event-only path (Tenant created in isolation,
+		// e.g. test seeds) with zeroed admin fields.
+		return TenantRegisteredV1{
+			TenantID:      mustParseUUID(e.TenantID.String()),
+			Slug:          e.Slug.String(),
+			LegalName:     e.LegalName,
+			DisplayName:   e.DisplayName,
+			AdminEmail:    e.AdminEmail.String(),
+			OccurredAtUTC: e.At.UTC(),
+		}, nil
+
+	case tenant.ActivatedEvent:
+		return TenantActivatedV1{
+			TenantID:      mustParseUUID(e.TenantID.String()),
+			OccurredAtUTC: e.At.UTC(),
+		}, nil
+
+	case tenant.SuspendedEvent:
+		return TenantSuspendedV1{
+			TenantID:      mustParseUUID(e.TenantID.String()),
+			Reason:        e.Reason,
+			OccurredAtUTC: e.At.UTC(),
+		}, nil
+
+	// ----- Person -----------------------------------------------------
+
+	case person.CreatedEvent:
+		return PersonCreatedV1{
+			PersonID:      mustParseUUID(e.PersonID.String()),
+			Email:         e.Email.String(),
+			FirstName:     e.FirstName,
+			LastName:      e.LastName,
+			OccurredAtUTC: e.At.UTC(),
+		}, nil
+
+	case person.PasswordChangedEvent:
+		return PersonPasswordChangedV1{
+			PersonID:      mustParseUUID(e.PersonID.String()),
+			OccurredAtUTC: e.At.UTC(),
+		}, nil
+
+	case person.AnonymisedEvent:
+		return PersonAnonymisedV1{
+			PersonID:      mustParseUUID(e.PersonID.String()),
+			OccurredAtUTC: e.At.UTC(),
+		}, nil
+
+	// ----- Membership -------------------------------------------------
+
+	case membership.CreatedEvent:
+		return MembershipCreatedV1{
+			MembershipID:  mustParseUUID(e.MembershipID.String()),
+			PersonID:      mustParseUUID(e.PersonID.String()),
+			TenantIDClaim: mustParseUUID(e.TenantID.String()),
+			OccurredAtUTC: e.At.UTC(),
+		}, nil
+
+	case membership.DeactivatedEvent:
+		return MembershipDeactivatedV1{
+			MembershipID:  mustParseUUID(e.MembershipID.String()),
+			PersonID:      mustParseUUID(e.PersonID.String()),
+			TenantIDClaim: mustParseUUID(e.TenantID.String()),
+			Reason:        e.Reason,
+			OccurredAtUTC: e.At.UTC(),
+		}, nil
+
+	case membership.ReactivatedEvent:
+		return MembershipReactivatedV1{
+			MembershipID:  mustParseUUID(e.MembershipID.String()),
+			PersonID:      mustParseUUID(e.PersonID.String()),
+			TenantIDClaim: mustParseUUID(e.TenantID.String()),
+			OccurredAtUTC: e.At.UTC(),
+		}, nil
+
+	// ----- Refresh-token family --------------------------------------
+
+	case refreshtoken.FamilyCreatedEvent:
+		return RefreshTokenFamilyCreatedV1{
+			FamilyID:      mustParseUUID(e.FamilyID.String()),
+			PersonID:      mustParseUUID(e.PersonID.String()),
+			TenantIDClaim: mustParseUUID(e.TenantID.String()),
+			DeviceLabel:   e.DeviceLabel,
+			OccurredAtUTC: e.At.UTC(),
+		}, nil
+
+	case refreshtoken.RotatedEvent:
+		return RefreshTokenRotatedV1{
+			FamilyID:           mustParseUUID(e.FamilyID.String()),
+			PersonID:           mustParseUUID(e.PersonID.String()),
+			TenantIDClaim:      mustParseUUID(e.TenantID.String()),
+			ConsumedTokenID:    mustParseUUID(e.ConsumedTokenID.String()),
+			NewTokenID:         mustParseUUID(e.NewTokenID.String()),
+			NewTokenGeneration: e.NewTokenGeneration,
+			OccurredAtUTC:      e.At.UTC(),
+		}, nil
+
+	case refreshtoken.RevokedEvent:
+		return RefreshTokenFamilyRevokedV1{
+			FamilyID:      mustParseUUID(e.FamilyID.String()),
+			PersonID:      mustParseUUID(e.PersonID.String()),
+			TenantIDClaim: mustParseUUID(e.TenantID.String()),
+			Reason:        e.Reason,
+			OccurredAtUTC: e.At.UTC(),
+		}, nil
+	}
+
+	return nil, fmt.Errorf("integrationevents: %w: %T", ErrUnknownDomainEvent, d)
+}
+
+// ErrUnknownDomainEvent surfaces when [FromDomainEvent] is handed a
+// type the mapper hasn't been taught. CI surfaces as "you minted a
+// domain event but the integration counterpart isn't wired".
+var ErrUnknownDomainEvent = unknownErr("unknown domain event type")
+
+type unknownErr string
+
+func (u unknownErr) Error() string { return string(u) }
+
+// mustParseUUID panics on a malformed UUID string. Domain IDs are
+// minted via [ids.NewV7] which produces canonical RFC 9562 UUIDs;
+// a parse failure here means the aggregate constructed an ID via a
+// non-canonical path (programmer error) — fail-fast is the right
+// response per `coding-standards.md` "Result vs exceptions".
+func mustParseUUID(s string) uuid.UUID {
+	u, err := uuid.Parse(s)
+	if err != nil {
+		panic(fmt.Sprintf("integrationevents: malformed UUID %q: %v", s, err))
+	}
+	return u
+}
