@@ -1,0 +1,35 @@
+version: "2"
+
+# LeadKart sqlc config — per ADR 0004 (sqlc + pgx/v5 + squirrel + goose).
+#
+# One sqlc invocation generates per-module typed query packages. The .sql
+# files (queries) and migrations/ (schema) live in the repo; the generated
+# *.sql.go files are committed alongside the adapter so the build never
+# depends on sqlc being installed at compile time.
+#
+# Run: `sqlc generate` (or `task generate` once the tool directive is on).
+
+sql:
+  - engine: postgresql
+    queries: internal/identity/adapters/sql
+    schema: migrations
+    gen:
+      go:
+        package: adapters
+        out: internal/identity/adapters
+        sql_package: pgx/v5
+        emit_pointers_for_null_types: true
+        emit_json_tags: false
+        emit_prepared_queries: false
+        emit_interface: false
+        emit_exact_table_names: false
+        emit_enum_valid_method: true
+        emit_all_enum_values: false
+        # Generated files: db.go, models.go, querier.go (if emit_interface),
+        # plus per-input-file *.sql.go siblings. Hand-written adapter code
+        # (repository structs, domain↔row mappers) lives in *_pg.go siblings.
+        output_db_file_name: db.go
+        output_models_file_name: models.go
+        # uuid + timestamptz mapped to typed Go via pgx/v5 native types
+        # (uuid.UUID + time.Time). No custom overrides needed since each
+        # repo adapter does the domain↔row mapping anyway.
