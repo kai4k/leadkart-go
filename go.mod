@@ -14,3 +14,5 @@ go 1.25
 //     golang.org/x/vuln/cmd/govulncheck
 //     mvdan.cc/gofumpt
 // )
+
+require github.com/google/uuid v1.6.0
