@@ -20,20 +20,17 @@ SELECT id, email, first_name, last_name, password_hash, security_stamp,
 FROM   identity.persons
 WHERE  email = $1;
 
--- name: UpdatePersonPassword :exec
-UPDATE identity.persons
-SET    password_hash  = $2,
-       security_stamp = $3
-WHERE  id = $1;
-
--- name: AnonymisePerson :exec
+-- name: UpdatePerson :exec
+-- General-purpose update covering ChangePassword + Anonymise + future
+-- mutations. Repository decides which fields actually changed; SQL
+-- writes whatever the aggregate currently says.
 UPDATE identity.persons
 SET    email          = $2,
-       first_name     = '',
-       last_name      = '',
-       password_hash  = '',
-       security_stamp = $3,
-       is_active      = false,
-       is_anonymised  = true,
-       anonymised_at  = $4
+       first_name     = $3,
+       last_name      = $4,
+       password_hash  = $5,
+       security_stamp = $6,
+       is_active      = $7,
+       is_anonymised  = $8,
+       anonymised_at  = $9
 WHERE  id = $1;

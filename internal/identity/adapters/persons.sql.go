@@ -11,36 +11,6 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-const anonymisePerson = `-- name: AnonymisePerson :exec
-UPDATE identity.persons
-SET    email          = $2,
-       first_name     = '',
-       last_name      = '',
-       password_hash  = '',
-       security_stamp = $3,
-       is_active      = false,
-       is_anonymised  = true,
-       anonymised_at  = $4
-WHERE  id = $1
-`
-
-type AnonymisePersonParams struct {
-	ID            pgtype.UUID
-	Email         string
-	SecurityStamp pgtype.UUID
-	AnonymisedAt  pgtype.Timestamptz
-}
-
-func (q *Queries) AnonymisePerson(ctx context.Context, arg AnonymisePersonParams) error {
-	_, err := q.db.Exec(ctx, anonymisePerson,
-		arg.ID,
-		arg.Email,
-		arg.SecurityStamp,
-		arg.AnonymisedAt,
-	)
-	return err
-}
-
 const getPersonByEmail = `-- name: GetPersonByEmail :one
 SELECT id, email, first_name, last_name, password_hash, security_stamp,
        is_active, is_anonymised, created_at, anonymised_at
@@ -129,20 +99,45 @@ func (q *Queries) InsertPerson(ctx context.Context, arg InsertPersonParams) erro
 	return err
 }
 
-const updatePersonPassword = `-- name: UpdatePersonPassword :exec
+const updatePerson = `-- name: UpdatePerson :exec
 UPDATE identity.persons
-SET    password_hash  = $2,
-       security_stamp = $3
+SET    email          = $2,
+       first_name     = $3,
+       last_name      = $4,
+       password_hash  = $5,
+       security_stamp = $6,
+       is_active      = $7,
+       is_anonymised  = $8,
+       anonymised_at  = $9
 WHERE  id = $1
 `
 
-type UpdatePersonPasswordParams struct {
+type UpdatePersonParams struct {
 	ID            pgtype.UUID
+	Email         string
+	FirstName     string
+	LastName      string
 	PasswordHash  string
 	SecurityStamp pgtype.UUID
+	IsActive      bool
+	IsAnonymised  bool
+	AnonymisedAt  pgtype.Timestamptz
 }
 
-func (q *Queries) UpdatePersonPassword(ctx context.Context, arg UpdatePersonPasswordParams) error {
-	_, err := q.db.Exec(ctx, updatePersonPassword, arg.ID, arg.PasswordHash, arg.SecurityStamp)
+// General-purpose update covering ChangePassword + Anonymise + future
+// mutations. Repository decides which fields actually changed; SQL
+// writes whatever the aggregate currently says.
+func (q *Queries) UpdatePerson(ctx context.Context, arg UpdatePersonParams) error {
+	_, err := q.db.Exec(ctx, updatePerson,
+		arg.ID,
+		arg.Email,
+		arg.FirstName,
+		arg.LastName,
+		arg.PasswordHash,
+		arg.SecurityStamp,
+		arg.IsActive,
+		arg.IsAnonymised,
+		arg.AnonymisedAt,
+	)
 	return err
 }
