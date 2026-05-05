@@ -43,7 +43,12 @@ CREATE OR REPLACE FUNCTION app.is_platform() RETURNS boolean
     STABLE
     LEAKPROOF
     AS $$
-        SELECT COALESCE(current_setting('app.is_platform', true), 'false')::boolean;
+        -- NULLIF + COALESCE handles three cases identically:
+        --   GUC never set       → current_setting returns NULL  → 'false'
+        --   GUC set then reset  → current_setting returns ''     → 'false'
+        --   GUC set explicitly  → current_setting returns 't'/'f'/'true'/'false'
+        -- Without NULLIF, '' would hit ::boolean and fail SQLSTATE 22P02.
+        SELECT COALESCE(NULLIF(current_setting('app.is_platform', true), ''), 'false')::boolean;
     $$;
 -- +goose StatementEnd
 COMMENT ON FUNCTION app.is_platform() IS 'Returns true when the connection is operating in platform-operator mode (separate connection pool + role). LEAKPROOF. Per ADR 0006.';
