@@ -30,15 +30,20 @@ import (
 
 	"github.com/leadkart/leadkart-go/internal/common/ids"
 	"github.com/leadkart/leadkart-go/internal/identity/ports"
+	"github.com/leadkart/leadkart-go/internal/platform/config"
 )
 
 func TestHTTPFlow_RegisterLoginRefreshLogout(t *testing.T) {
 	pool := startWiredPostgresForHTTP(t)
 
-	cfg := apiConfig{
-		JWTKeyID:        "test-k1",
-		JWTSigningKey:   []byte("0123456789abcdef0123456789abcdef"),
-		RefreshTokenTTL: 14 * 24 * time.Hour,
+	cfg := config.AppConfig{
+		JWT: config.JWTConfig{
+			KeyID:      "test-k1",
+			SigningKey: "0123456789abcdef0123456789abcdef",
+		},
+		Refresh: config.RefreshConfig{
+			AbsoluteTTL: 14 * 24 * time.Hour,
+		},
 	}
 	now := func() time.Time { return time.Date(2026, 5, 6, 12, 0, 0, 0, time.UTC) }
 
@@ -140,10 +145,14 @@ func TestHTTPFlow_RegisterLoginRefreshLogout(t *testing.T) {
 
 func TestHTTPFlow_LoginInvalidCredentials_Returns401(t *testing.T) {
 	pool := startWiredPostgresForHTTP(t)
-	cfg := apiConfig{
-		JWTKeyID:        "test-k1",
-		JWTSigningKey:   []byte("0123456789abcdef0123456789abcdef"),
-		RefreshTokenTTL: 14 * 24 * time.Hour,
+	cfg := config.AppConfig{
+		JWT: config.JWTConfig{
+			KeyID:      "test-k1",
+			SigningKey: "0123456789abcdef0123456789abcdef",
+		},
+		Refresh: config.RefreshConfig{
+			AbsoluteTTL: 14 * 24 * time.Hour,
+		},
 	}
 	now := func() time.Time { return time.Date(2026, 5, 6, 12, 0, 0, 0, time.UTC) }
 	identityApp, err := buildIdentityApp(pool, cfg, now)
