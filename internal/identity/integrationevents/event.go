@@ -6,6 +6,15 @@ import (
 	"github.com/google/uuid"
 )
 
+// Topic is the canonical Watermill destination for ALL Identity
+// integration events. The OutboxForwarder publishes here; subscriber
+// handlers (in-module + future cross-module modules) consume from here
+// and route per [Event.Topic] alias via metadata header.
+//
+// Single-topic-per-source-module pattern aligns with Wolverine canon
+// + watermill-sql forwarder defaults.
+const Topic = "identity.events"
+
 // Event is the marker interface every Identity integration-event record
 // satisfies. Carries the canonical wire-alias (`Topic`) + the
 // domain-time of the event (`OccurredAt`).
