@@ -6,6 +6,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"runtime"
 	"testing"
@@ -26,11 +27,13 @@ import (
 	"github.com/leadkart/leadkart-go/internal/platform/pg"
 )
 
-// repoFixture spins an ephemeral Postgres + applies migrations + returns
-// the pgxpool. Container is auto-cleaned via t.Cleanup. Test connects as
-// the (default) superuser — the tenants + outbox tables we touch don't
-// require RLS bypass for inserts since this repository runs under
-// platform scope by design.
+// repoFixture spins an ephemeral Postgres, applies migrations as the
+// owner role, then provisions a non-superuser `leadkart_app` role and
+// returns a pgxpool connected as THAT role. Without the role swap RLS
+// would never fire (testcontainers' default user is a superuser).
+//
+// Mirrors the production three-role split per multi-tenancy.md
+// "Three Postgres roles": owner runs migrations, app runs queries.
 func repoFixture(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 
@@ -57,33 +60,77 @@ func repoFixture(t *testing.T) *pgxpool.Pool {
 		_ = c.Terminate(ctx)
 	})
 
-	dsn, err := c.ConnectionString(ctx, "sslmode=disable")
+	ownerDSN, err := c.ConnectionString(ctx, "sslmode=disable")
 	if err != nil {
 		t.Fatalf("dsn: %v", err)
 	}
 
-	// Apply migrations via the goose+database/sql path.
-	gooseDB, err := goose.OpenDBWithDriver("pgx", dsn)
-	if err != nil {
-		t.Fatalf("goose open: %v", err)
+	// Apply migrations + provision leadkart_app under the owner role,
+	// then close cleanly before opening the app-role pool.
+	if err := bootstrapTestDB(ctx, ownerDSN, migrationsDir(t)); err != nil {
+		t.Fatalf("bootstrap: %v", err)
 	}
-	if err := goose.SetDialect("postgres"); err != nil {
-		_ = gooseDB.Close()
-		t.Fatalf("set dialect: %v", err)
-	}
-	if err := goose.UpContext(ctx, gooseDB, migrationsDir(t)); err != nil {
-		_ = gooseDB.Close()
-		t.Fatalf("goose up: %v", err)
-	}
-	_ = gooseDB.Close()
 
-	pool, err := pgxpool.New(ctx, dsn)
+	host, port, err := containerHostPort(ctx, c)
+	if err != nil {
+		t.Fatalf("host:port: %v", err)
+	}
+	appDSN := "postgres://leadkart_app:leadkart_app_pw@" + host + ":" + port + "/leadkart_test?sslmode=disable"
+
+	pool, err := pgxpool.New(ctx, appDSN)
 	if err != nil {
 		t.Fatalf("pgxpool.New: %v", err)
 	}
 	t.Cleanup(pool.Close)
 
 	return pool
+}
+
+// bootstrapTestDB applies migrations and provisions the non-superuser
+// `leadkart_app` role with the minimum grants the production app needs.
+// All work happens through one *sql.DB that closes before pgxpool opens
+// its own connections (avoids cached-connection-state confusion).
+func bootstrapTestDB(ctx context.Context, ownerDSN, migrationsDir string) error {
+	gooseDB, err := goose.OpenDBWithDriver("pgx", ownerDSN)
+	if err != nil {
+		return fmt.Errorf("goose open: %w", err)
+	}
+	defer gooseDB.Close()
+
+	if err := goose.SetDialect("postgres"); err != nil {
+		return fmt.Errorf("set dialect: %w", err)
+	}
+	if err := goose.UpContext(ctx, gooseDB, migrationsDir); err != nil {
+		return fmt.Errorf("goose up: %w", err)
+	}
+
+	stmts := []string{
+		`CREATE ROLE leadkart_app LOGIN PASSWORD 'leadkart_app_pw' NOSUPERUSER NOINHERIT NOCREATEROLE NOCREATEDB`,
+		`GRANT USAGE ON SCHEMA app, identity TO leadkart_app`,
+		`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA identity TO leadkart_app`,
+		`GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA app TO leadkart_app`,
+	}
+	for _, s := range stmts {
+		if _, err := gooseDB.ExecContext(ctx, s); err != nil {
+			return fmt.Errorf("provision leadkart_app: %s: %w", s, err)
+		}
+	}
+	return nil
+}
+
+// containerHostPort extracts (host, port) for the container so we can
+// build a DSN with the swapped username/password — testcontainers'
+// own ConnectionString helper bakes the default user into the DSN.
+func containerHostPort(ctx context.Context, c *postgres.PostgresContainer) (string, string, error) {
+	host, err := c.Host(ctx)
+	if err != nil {
+		return "", "", fmt.Errorf("host: %w", err)
+	}
+	port, err := c.MappedPort(ctx, "5432/tcp")
+	if err != nil {
+		return "", "", fmt.Errorf("port: %w", err)
+	}
+	return host, port.Port(), nil
 }
 
 func migrationsDir(t *testing.T) string {
@@ -99,7 +146,11 @@ func migrationsDir(t *testing.T) string {
 func newTenant(t *testing.T) *tenant.Tenant {
 	t.Helper()
 	id := tenant.ID(ids.NewV7().String())
-	s, err := slug.New("acme-pharma-" + ids.NewV7().String()[:8])
+	// UUIDv7's leading chars are timestamp-derived → tests called in rapid
+	// succession would collide on a prefix slug. Use the trailing random
+	// portion (last 8 chars).
+	full := ids.NewV7().String()
+	s, err := slug.New("acme-pharma-" + full[len(full)-8:])
 	if err != nil {
 		t.Fatalf("slug: %v", err)
 	}
@@ -137,12 +188,18 @@ func TestTenantRepository_Add_PersistsRowAndOutboxEvent(t *testing.T) {
 	}
 
 	// Outbox row written with topic identity.tenant_registered.v1.
+	// Outbox is RLS+FORCE — verification queries run under platform GUC
+	// to bypass the policy (mirrors what the Watermill forwarder does in
+	// production).
 	var topic string
 	rawDB, err := openRawDB(t, pool)
 	if err != nil {
 		t.Fatalf("openRawDB: %v", err)
 	}
 	defer rawDB.Close()
+	if _, err := rawDB.ExecContext(ctx, `SELECT set_config('app.is_platform','true',false)`); err != nil {
+		t.Fatalf("set platform: %v", err)
+	}
 	if err := rawDB.QueryRowContext(ctx, `
 		SELECT topic FROM identity.outbox WHERE tenant_id = $1
 	`, tn.ID().String()).Scan(&topic); err != nil {
@@ -227,6 +284,9 @@ func TestTenantRepository_UpdateByID_ActivatesAndDrainsEvent(t *testing.T) {
 		t.Fatalf("openRawDB: %v", err)
 	}
 	defer rawDB.Close()
+	if _, err := rawDB.ExecContext(ctx, `SELECT set_config('app.is_platform','true',false)`); err != nil {
+		t.Fatalf("set platform: %v", err)
+	}
 	rows, err := rawDB.QueryContext(ctx, `
 		SELECT topic FROM identity.outbox WHERE tenant_id = $1 ORDER BY occurred_at
 	`, tn.ID().String())
