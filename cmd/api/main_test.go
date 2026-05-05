@@ -3,15 +3,23 @@ package main
 import (
 	"context"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/leadkart/leadkart-go/internal/identity/app"
 )
+
+// silentLogger discards log output so test runs stay quiet.
+func silentLogger() *slog.Logger {
+	return slog.New(slog.NewTextHandler(io.Discard, nil))
+}
 
 func TestHealth_Returns200OK(t *testing.T) {
 	t.Parallel()
 
-	srv := newServer()
+	srv := newServer(silentLogger(), app.Application{})
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/health", nil)
 
@@ -29,7 +37,7 @@ func TestHealth_Returns200OK(t *testing.T) {
 func TestHealth_OnlyAcceptsGET(t *testing.T) {
 	t.Parallel()
 
-	srv := newServer()
+	srv := newServer(silentLogger(), app.Application{})
 	for _, method := range []string{http.MethodPost, http.MethodPut, http.MethodDelete} {
 		method := method
 		t.Run(method, func(t *testing.T) {
