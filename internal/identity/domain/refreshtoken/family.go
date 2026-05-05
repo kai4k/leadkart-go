@@ -208,6 +208,9 @@ func (f *Family) LastUsedAt() time.Time { return f.lastUsedAt }
 // IsRevoked reports whether the family has been revoked (for any reason).
 func (f *Family) IsRevoked() bool { return !f.revokedAt.IsZero() }
 
+// RevokedAt returns the revocation timestamp; zero if not revoked.
+func (f *Family) RevokedAt() time.Time { return f.revokedAt }
+
 // RevokeReason returns the reason recorded at revocation; empty if active.
 func (f *Family) RevokeReason() string { return f.revokeReason }
 

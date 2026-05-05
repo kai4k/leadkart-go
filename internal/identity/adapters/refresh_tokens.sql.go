@@ -59,38 +59,6 @@ func (q *Queries) GetRefreshTokenFamilyByID(ctx context.Context, id pgtype.UUID)
 	return i, err
 }
 
-const insertRefreshToken = `-- name: InsertRefreshToken :exec
-INSERT INTO identity.refresh_tokens (
-    id, family_id, token_hash, generation,
-    issued_at, expires_at, consumed_at, replaced_by_id
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-`
-
-type InsertRefreshTokenParams struct {
-	ID           pgtype.UUID
-	FamilyID     pgtype.UUID
-	TokenHash    string
-	Generation   int32
-	IssuedAt     pgtype.Timestamptz
-	ExpiresAt    pgtype.Timestamptz
-	ConsumedAt   pgtype.Timestamptz
-	ReplacedByID pgtype.UUID
-}
-
-func (q *Queries) InsertRefreshToken(ctx context.Context, arg InsertRefreshTokenParams) error {
-	_, err := q.db.Exec(ctx, insertRefreshToken,
-		arg.ID,
-		arg.FamilyID,
-		arg.TokenHash,
-		arg.Generation,
-		arg.IssuedAt,
-		arg.ExpiresAt,
-		arg.ConsumedAt,
-		arg.ReplacedByID,
-	)
-	return err
-}
-
 const insertRefreshTokenFamily = `-- name: InsertRefreshTokenFamily :exec
 
 INSERT INTO identity.refresh_token_families (
@@ -165,54 +133,69 @@ func (q *Queries) ListRefreshTokensInFamily(ctx context.Context, familyID pgtype
 	return items, nil
 }
 
-const touchRefreshTokenFamilyLastUsed = `-- name: TouchRefreshTokenFamilyLastUsed :exec
+const updateRefreshTokenFamily = `-- name: UpdateRefreshTokenFamily :exec
 UPDATE identity.refresh_token_families
-SET    last_used_at = $2
+SET    last_used_at  = $2,
+       revoked_at    = $3,
+       revoke_reason = $4
 WHERE  id = $1
 `
 
-type TouchRefreshTokenFamilyLastUsedParams struct {
-	ID         pgtype.UUID
-	LastUsedAt pgtype.Timestamptz
-}
-
-func (q *Queries) TouchRefreshTokenFamilyLastUsed(ctx context.Context, arg TouchRefreshTokenFamilyLastUsedParams) error {
-	_, err := q.db.Exec(ctx, touchRefreshTokenFamilyLastUsed, arg.ID, arg.LastUsedAt)
-	return err
-}
-
-const updateRefreshTokenConsumed = `-- name: UpdateRefreshTokenConsumed :exec
-UPDATE identity.refresh_tokens
-SET    consumed_at    = $2,
-       replaced_by_id = $3
-WHERE  id = $1
-`
-
-type UpdateRefreshTokenConsumedParams struct {
+type UpdateRefreshTokenFamilyParams struct {
 	ID           pgtype.UUID
-	ConsumedAt   pgtype.Timestamptz
-	ReplacedByID pgtype.UUID
-}
-
-func (q *Queries) UpdateRefreshTokenConsumed(ctx context.Context, arg UpdateRefreshTokenConsumedParams) error {
-	_, err := q.db.Exec(ctx, updateRefreshTokenConsumed, arg.ID, arg.ConsumedAt, arg.ReplacedByID)
-	return err
-}
-
-const updateRefreshTokenFamilyRevoked = `-- name: UpdateRefreshTokenFamilyRevoked :exec
-UPDATE identity.refresh_token_families
-SET    revoked_at    = $2,
-       revoke_reason = $3
-WHERE  id = $1
-`
-
-type UpdateRefreshTokenFamilyRevokedParams struct {
-	ID           pgtype.UUID
+	LastUsedAt   pgtype.Timestamptz
 	RevokedAt    pgtype.Timestamptz
 	RevokeReason *string
 }
 
-func (q *Queries) UpdateRefreshTokenFamilyRevoked(ctx context.Context, arg UpdateRefreshTokenFamilyRevokedParams) error {
-	_, err := q.db.Exec(ctx, updateRefreshTokenFamilyRevoked, arg.ID, arg.RevokedAt, arg.RevokeReason)
+// Persists family-level mutable state: last_used_at on every rotate;
+// revoked_at + revoke_reason on Revoke or reuse-detected.
+func (q *Queries) UpdateRefreshTokenFamily(ctx context.Context, arg UpdateRefreshTokenFamilyParams) error {
+	_, err := q.db.Exec(ctx, updateRefreshTokenFamily,
+		arg.ID,
+		arg.LastUsedAt,
+		arg.RevokedAt,
+		arg.RevokeReason,
+	)
+	return err
+}
+
+const upsertRefreshToken = `-- name: UpsertRefreshToken :exec
+INSERT INTO identity.refresh_tokens (
+    id, family_id, token_hash, generation,
+    issued_at, expires_at, consumed_at, replaced_by_id
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+ON CONFLICT (id) DO UPDATE SET
+    consumed_at    = EXCLUDED.consumed_at,
+    replaced_by_id = EXCLUDED.replaced_by_id
+`
+
+type UpsertRefreshTokenParams struct {
+	ID           pgtype.UUID
+	FamilyID     pgtype.UUID
+	TokenHash    string
+	Generation   int32
+	IssuedAt     pgtype.Timestamptz
+	ExpiresAt    pgtype.Timestamptz
+	ConsumedAt   pgtype.Timestamptz
+	ReplacedByID pgtype.UUID
+}
+
+// INSERT-then-UPDATE-on-conflict by token id. The family aggregate
+// emits the FULL token list on persist; rows whose (consumed_at,
+// replaced_by_id) changed are updated, fresh tokens are inserted.
+// Token id, hash, generation, issued_at, expires_at, family_id are
+// immutable post-issuance; only the consumed columns rotate.
+func (q *Queries) UpsertRefreshToken(ctx context.Context, arg UpsertRefreshTokenParams) error {
+	_, err := q.db.Exec(ctx, upsertRefreshToken,
+		arg.ID,
+		arg.FamilyID,
+		arg.TokenHash,
+		arg.Generation,
+		arg.IssuedAt,
+		arg.ExpiresAt,
+		arg.ConsumedAt,
+		arg.ReplacedByID,
+	)
 	return err
 }
