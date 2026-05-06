@@ -1,11 +1,31 @@
 name: CI
 
+# ============================================================================
+# Three jobs:
+#   unit           — restore, build, vet, lint, unit tests, vuln scan, build
+#                    binaries. No Docker. ~3-5 min. Trait filter: TestArch_*
+#                    excluded so the architecture job has the only signal.
+#   architecture   — TestArch_* runs only this surface. Standalone so a
+#                    contract failure (event marker missing, framework leak,
+#                    alias regex break) shows distinctly. ~30s cold.
+#   integration    — //go:build integration files. Testcontainers Postgres
+#                    spun per-test (no services-block — testcontainers is the
+#                    canonical Go pattern). gotestsum produces JUnit XML.
+#                    ~3-10 min warm.
+#
+# JUnit XML reporting via gotestsum + dorny/test-reporter — failures annotate
+# at file:line on the PR Files tab the same way the .NET trx upload does.
+#
+# Modelled after .NET LeadKart ci.yml pattern (split build/arch/integration)
+# + Marten / Wolverine canonical Critter-Stack workflows.
+# ============================================================================
+
 on:
   pull_request:
   push:
-    branches: [main]
+    branches: [main, "feature/**", "fix/**", "ci/**", "refactor/**"]
 
-# Cancel in-progress runs on the same ref to save CI minutes
+# Cancel in-progress runs on the same ref to save CI minutes.
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
@@ -13,15 +33,23 @@ concurrency:
 permissions:
   contents: read
   pull-requests: read
+  checks: write   # dorny/test-reporter writes a Checks run
+  actions: read
 
 jobs:
+  # ---------------------------------------------------------------------------
+  # Unit job — fast feedback. No Docker. Excludes architecture tests so they
+  # surface in their own job. Includes vuln scan (govulncheck) + binary build
+  # so we know `cmd/api` + `cmd/migrate` compile.
+  # ---------------------------------------------------------------------------
   unit:
     name: Build / Lint / Unit Tests / Vuln
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v6
 
-      # Pin Go from go.mod (2026 canon — single source of truth)
+      # Pin Go from go.mod (2026 canon — single source of truth).
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
@@ -41,8 +69,21 @@ jobs:
           version: v2.12.2
           args: --timeout=5m
 
-      - name: Unit tests (race + shuffle + coverage)
-        run: go test -race -shuffle=on -coverprofile=coverage.out ./...
+      # Install gotestsum once for both unit + integration jobs.
+      # gotestsum gives canonical JUnit XML output (dotnet trx equivalent).
+      - name: Install gotestsum
+        run: go install gotest.tools/gotestsum@latest
+
+      # Unit tests with race + shuffle + coverage. -run skips TestArch_*
+      # so the architecture job is the sole signal for arch failures.
+      - name: Unit tests (race + shuffle + coverage, skipping TestArch_*)
+        run: |
+          gotestsum \
+            --junitfile=junit-unit.xml \
+            --format=testname \
+            -- -race -shuffle=on -coverprofile=coverage.out \
+               -skip="^TestArch_" \
+               ./...
 
       - name: Upload coverage artifact
         uses: actions/upload-artifact@v7
@@ -51,23 +92,40 @@ jobs:
           path: coverage.out
           retention-days: 7
 
+      - name: Upload unit test results (JUnit)
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: junit-unit
+          path: junit-unit.xml
+          retention-days: 7
+
+      - name: Annotate test failures (PR Checks)
+        if: always()
+        uses: dorny/test-reporter@v2
+        with:
+          name: Unit Tests
+          path: junit-unit.xml
+          reporter: java-junit
+          fail-on-error: false
+
       - name: Vulnerability scan (govulncheck)
         run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
 
       - name: Build all binaries
         run: go build -trimpath -ldflags="-s -w" -o bin/ ./cmd/...
 
-  # Integration tests — testcontainers Postgres + Redis spun per-test.
-  # Files gated by `//go:build integration` are skipped by the unit job;
-  # this job runs them with the build tag enabled.
-  #
-  # GitHub-hosted ubuntu runners have Docker preinstalled — testcontainers-go
-  # picks it up without configuration. Per testcontainers docs canonical
-  # CI setup (https://golang.testcontainers.org/system_requirements/ci/).
-  integration:
-    name: Integration Tests (testcontainers)
+  # ---------------------------------------------------------------------------
+  # Architecture tests. Mirrors .NET LeadKart's `architecture-tests` job —
+  # standalone so a contract failure (event missing TenantScoped marker, alias
+  # regex violation, forbidden framework import in IntegrationEvents) shows
+  # up distinctly instead of buried in the unit-test list. Cheap (~30s).
+  # ---------------------------------------------------------------------------
+  architecture:
+    name: Architecture Tests
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 5
+    needs: unit
     steps:
       - uses: actions/checkout@v6
 
@@ -76,21 +134,83 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      # Pre-pull Postgres image — testcontainers does it on first use,
-      # but pre-pulling parallelizes with module download + speeds up
-      # the first test by ~30s on a cold cache.
+      - name: Install gotestsum
+        run: go install gotest.tools/gotestsum@latest
+
+      # Run ONLY TestArch_* — the build-time package compile already covers
+      # the rest of the integrationevents package surface.
+      - name: Run architecture tests
+        run: |
+          gotestsum \
+            --junitfile=junit-architecture.xml \
+            --format=testname \
+            -- -run "^TestArch_" -shuffle=on \
+               ./internal/identity/integrationevents/...
+
+      - name: Upload architecture test results (JUnit)
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: junit-architecture
+          path: junit-architecture.xml
+          retention-days: 7
+
+      - name: Annotate architecture failures (PR Checks)
+        if: always()
+        uses: dorny/test-reporter@v2
+        with:
+          name: Architecture Tests
+          path: junit-architecture.xml
+          reporter: java-junit
+          fail-on-error: false
+
+  # ---------------------------------------------------------------------------
+  # Integration tests — //go:build integration files. Per testcontainers-go
+  # canonical CI guidance (golang.testcontainers.org/system_requirements/ci/),
+  # GitHub-hosted runners ship Docker preinstalled — testcontainers picks it
+  # up without further config.
+  #
+  # No services-block Redis: cache tests use miniredis (in-memory). When
+  # production-Redis-only behaviour needs verification (cluster mode, eviction
+  # policies under contention), add `services: redis: image: redis:7-alpine`
+  # alongside the existing pre-pull step.
+  # ---------------------------------------------------------------------------
+  integration:
+    name: Integration Tests (testcontainers)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: unit
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # Pre-pull Postgres image — testcontainers does it on first use, but
+      # pre-pulling parallelises with module download + speeds up the first
+      # test by ~30s on a cold cache.
       - name: Pre-pull Postgres image
         run: docker pull postgres:17-alpine
 
       - name: Verify modules
         run: go mod download
 
+      - name: Install gotestsum
+        run: go install gotest.tools/gotestsum@latest
+
       # `-tags=integration` enables the //go:build integration files.
-      # `-timeout=15m` accommodates testcontainers cold-start +
-      # multiple per-test container spins; production runs typically
-      # settle under 5min once module + image cache warm.
+      # `-timeout=15m` accommodates testcontainers cold-start + multiple
+      # per-test container spins; warm cache typically settles under 5min.
       - name: Integration tests
-        run: go test -race -shuffle=on -tags=integration -timeout=15m -coverprofile=coverage-integration.out ./...
+        run: |
+          gotestsum \
+            --junitfile=junit-integration.xml \
+            --format=testname \
+            -- -race -shuffle=on -tags=integration -timeout=15m \
+               -coverprofile=coverage-integration.out \
+               ./...
 
       - name: Upload integration coverage artifact
         if: always()
@@ -99,3 +219,20 @@ jobs:
           name: coverage-integration
           path: coverage-integration.out
           retention-days: 7
+
+      - name: Upload integration test results (JUnit)
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: junit-integration
+          path: junit-integration.xml
+          retention-days: 7
+
+      - name: Annotate integration failures (PR Checks)
+        if: always()
+        uses: dorny/test-reporter@v2
+        with:
+          name: Integration Tests
+          path: junit-integration.xml
+          reporter: java-junit
+          fail-on-error: false
