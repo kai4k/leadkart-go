@@ -14,3 +14,32 @@ var ErrEmpty = errors.New("permission: name required")
 
 // ErrFormat is returned for charset / length-bound failures.
 var ErrFormat = errors.New("permission: invalid format")
+
+// Permission is a value object — comparable by Name. Identity-equality
+// holds for any two pointers obtained from the intern table.
+type Permission struct {
+	name string
+}
+
+// Name returns the canonical wire-string form. Nil-safe.
+func (p *Permission) Name() string {
+	if p == nil {
+		return ""
+	}
+	return p.name
+}
+
+// String implements fmt.Stringer for log + error formatting.
+func (p *Permission) String() string { return p.Name() }
+
+// Equal reports whether two permissions are the same. Pointer equality
+// for interned instances; name compare otherwise. nil == nil is true.
+func (p *Permission) Equal(other *Permission) bool {
+	if p == other {
+		return true
+	}
+	if p == nil || other == nil {
+		return false
+	}
+	return p.name == other.name
+}

@@ -19,3 +19,22 @@ func TestErrors_AreSentinels(t *testing.T) {
 		t.Fatal("ErrFormat not a sentinel")
 	}
 }
+
+func TestPermission_NilSafe(t *testing.T) {
+	t.Parallel()
+	var p *permission.Permission
+	if p.Name() != "" {
+		t.Fatal("nil.Name() should return empty")
+	}
+	if p.String() != "" {
+		t.Fatal("nil.String() should return empty")
+	}
+}
+
+func TestPermission_Equal(t *testing.T) {
+	t.Parallel()
+	var nilP *permission.Permission
+	if !nilP.Equal(nil) {
+		t.Fatal("nil.Equal(nil) should be true")
+	}
+}
