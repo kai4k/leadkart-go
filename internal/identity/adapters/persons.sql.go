@@ -13,7 +13,11 @@ import (
 
 const getPersonByEmail = `-- name: GetPersonByEmail :one
 SELECT id, email, first_name, last_name, password_hash, security_stamp,
-       is_active, is_anonymised, created_at, anonymised_at
+       is_active, is_anonymised, created_at, anonymised_at,
+       is_globally_suspended, global_suspension_reason, globally_suspended_at,
+       password_reset_token_hash, password_reset_expires_at,
+       pending_email_change_new_email, pending_email_change_token_hash,
+       pending_email_change_expires_at
 FROM   identity.persons
 WHERE  email = $1
 `
@@ -32,13 +36,63 @@ func (q *Queries) GetPersonByEmail(ctx context.Context, email string) (IdentityP
 		&i.IsAnonymised,
 		&i.CreatedAt,
 		&i.AnonymisedAt,
+		&i.IsGloballySuspended,
+		&i.GlobalSuspensionReason,
+		&i.GloballySuspendedAt,
+		&i.PasswordResetTokenHash,
+		&i.PasswordResetExpiresAt,
+		&i.PendingEmailChangeNewEmail,
+		&i.PendingEmailChangeTokenHash,
+		&i.PendingEmailChangeExpiresAt,
+	)
+	return i, err
+}
+
+const getPersonByEmailChangeTokenHash = `-- name: GetPersonByEmailChangeTokenHash :one
+SELECT id, email, first_name, last_name, password_hash, security_stamp,
+       is_active, is_anonymised, created_at, anonymised_at,
+       is_globally_suspended, global_suspension_reason, globally_suspended_at,
+       password_reset_token_hash, password_reset_expires_at,
+       pending_email_change_new_email, pending_email_change_token_hash,
+       pending_email_change_expires_at
+FROM   identity.persons
+WHERE  pending_email_change_token_hash = $1
+`
+
+// Hash-only lookup for the confirm-email-change flow.
+func (q *Queries) GetPersonByEmailChangeTokenHash(ctx context.Context, pendingEmailChangeTokenHash *string) (IdentityPerson, error) {
+	row := q.db.QueryRow(ctx, getPersonByEmailChangeTokenHash, pendingEmailChangeTokenHash)
+	var i IdentityPerson
+	err := row.Scan(
+		&i.ID,
+		&i.Email,
+		&i.FirstName,
+		&i.LastName,
+		&i.PasswordHash,
+		&i.SecurityStamp,
+		&i.IsActive,
+		&i.IsAnonymised,
+		&i.CreatedAt,
+		&i.AnonymisedAt,
+		&i.IsGloballySuspended,
+		&i.GlobalSuspensionReason,
+		&i.GloballySuspendedAt,
+		&i.PasswordResetTokenHash,
+		&i.PasswordResetExpiresAt,
+		&i.PendingEmailChangeNewEmail,
+		&i.PendingEmailChangeTokenHash,
+		&i.PendingEmailChangeExpiresAt,
 	)
 	return i, err
 }
 
 const getPersonByID = `-- name: GetPersonByID :one
 SELECT id, email, first_name, last_name, password_hash, security_stamp,
-       is_active, is_anonymised, created_at, anonymised_at
+       is_active, is_anonymised, created_at, anonymised_at,
+       is_globally_suspended, global_suspension_reason, globally_suspended_at,
+       password_reset_token_hash, password_reset_expires_at,
+       pending_email_change_new_email, pending_email_change_token_hash,
+       pending_email_change_expires_at
 FROM   identity.persons
 WHERE  id = $1
 `
@@ -57,6 +111,54 @@ func (q *Queries) GetPersonByID(ctx context.Context, id pgtype.UUID) (IdentityPe
 		&i.IsAnonymised,
 		&i.CreatedAt,
 		&i.AnonymisedAt,
+		&i.IsGloballySuspended,
+		&i.GlobalSuspensionReason,
+		&i.GloballySuspendedAt,
+		&i.PasswordResetTokenHash,
+		&i.PasswordResetExpiresAt,
+		&i.PendingEmailChangeNewEmail,
+		&i.PendingEmailChangeTokenHash,
+		&i.PendingEmailChangeExpiresAt,
+	)
+	return i, err
+}
+
+const getPersonByPasswordResetTokenHash = `-- name: GetPersonByPasswordResetTokenHash :one
+SELECT id, email, first_name, last_name, password_hash, security_stamp,
+       is_active, is_anonymised, created_at, anonymised_at,
+       is_globally_suspended, global_suspension_reason, globally_suspended_at,
+       password_reset_token_hash, password_reset_expires_at,
+       pending_email_change_new_email, pending_email_change_token_hash,
+       pending_email_change_expires_at
+FROM   identity.persons
+WHERE  password_reset_token_hash = $1
+`
+
+// Hash-only lookup for the confirm-password-reset flow.
+// Caller hashes the plaintext + queries here; UNIQUE index makes this
+// a single-row lookup.
+func (q *Queries) GetPersonByPasswordResetTokenHash(ctx context.Context, passwordResetTokenHash *string) (IdentityPerson, error) {
+	row := q.db.QueryRow(ctx, getPersonByPasswordResetTokenHash, passwordResetTokenHash)
+	var i IdentityPerson
+	err := row.Scan(
+		&i.ID,
+		&i.Email,
+		&i.FirstName,
+		&i.LastName,
+		&i.PasswordHash,
+		&i.SecurityStamp,
+		&i.IsActive,
+		&i.IsAnonymised,
+		&i.CreatedAt,
+		&i.AnonymisedAt,
+		&i.IsGloballySuspended,
+		&i.GlobalSuspensionReason,
+		&i.GloballySuspendedAt,
+		&i.PasswordResetTokenHash,
+		&i.PasswordResetExpiresAt,
+		&i.PendingEmailChangeNewEmail,
+		&i.PendingEmailChangeTokenHash,
+		&i.PendingEmailChangeExpiresAt,
 	)
 	return i, err
 }
@@ -65,20 +167,37 @@ const insertPerson = `-- name: InsertPerson :exec
 
 INSERT INTO identity.persons (
     id, email, first_name, last_name, password_hash, security_stamp,
-    is_active, is_anonymised, created_at
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+    is_active, is_anonymised, created_at,
+    is_globally_suspended, global_suspension_reason, globally_suspended_at,
+    password_reset_token_hash, password_reset_expires_at,
+    pending_email_change_new_email, pending_email_change_token_hash,
+    pending_email_change_expires_at
+) VALUES (
+    $1, $2, $3, $4, $5, $6, $7, $8, $9,
+    $10, $11, $12,
+    $13, $14,
+    $15, $16, $17
+)
 `
 
 type InsertPersonParams struct {
-	ID            pgtype.UUID
-	Email         string
-	FirstName     string
-	LastName      string
-	PasswordHash  string
-	SecurityStamp pgtype.UUID
-	IsActive      bool
-	IsAnonymised  bool
-	CreatedAt     pgtype.Timestamptz
+	ID                          pgtype.UUID
+	Email                       string
+	FirstName                   string
+	LastName                    string
+	PasswordHash                string
+	SecurityStamp               pgtype.UUID
+	IsActive                    bool
+	IsAnonymised                bool
+	CreatedAt                   pgtype.Timestamptz
+	IsGloballySuspended         bool
+	GlobalSuspensionReason      string
+	GloballySuspendedAt         pgtype.Timestamptz
+	PasswordResetTokenHash      *string
+	PasswordResetExpiresAt      pgtype.Timestamptz
+	PendingEmailChangeNewEmail  *string
+	PendingEmailChangeTokenHash *string
+	PendingEmailChangeExpiresAt pgtype.Timestamptz
 }
 
 // Person queries — identity.persons is non-RLS (global identity).
@@ -95,38 +214,63 @@ func (q *Queries) InsertPerson(ctx context.Context, arg InsertPersonParams) erro
 		arg.IsActive,
 		arg.IsAnonymised,
 		arg.CreatedAt,
+		arg.IsGloballySuspended,
+		arg.GlobalSuspensionReason,
+		arg.GloballySuspendedAt,
+		arg.PasswordResetTokenHash,
+		arg.PasswordResetExpiresAt,
+		arg.PendingEmailChangeNewEmail,
+		arg.PendingEmailChangeTokenHash,
+		arg.PendingEmailChangeExpiresAt,
 	)
 	return err
 }
 
 const updatePerson = `-- name: UpdatePerson :exec
 UPDATE identity.persons
-SET    email          = $2,
-       first_name     = $3,
-       last_name      = $4,
-       password_hash  = $5,
-       security_stamp = $6,
-       is_active      = $7,
-       is_anonymised  = $8,
-       anonymised_at  = $9
+SET    email                            = $2,
+       first_name                       = $3,
+       last_name                        = $4,
+       password_hash                    = $5,
+       security_stamp                   = $6,
+       is_active                        = $7,
+       is_anonymised                    = $8,
+       anonymised_at                    = $9,
+       is_globally_suspended            = $10,
+       global_suspension_reason         = $11,
+       globally_suspended_at            = $12,
+       password_reset_token_hash        = $13,
+       password_reset_expires_at        = $14,
+       pending_email_change_new_email   = $15,
+       pending_email_change_token_hash  = $16,
+       pending_email_change_expires_at  = $17
 WHERE  id = $1
 `
 
 type UpdatePersonParams struct {
-	ID            pgtype.UUID
-	Email         string
-	FirstName     string
-	LastName      string
-	PasswordHash  string
-	SecurityStamp pgtype.UUID
-	IsActive      bool
-	IsAnonymised  bool
-	AnonymisedAt  pgtype.Timestamptz
+	ID                          pgtype.UUID
+	Email                       string
+	FirstName                   string
+	LastName                    string
+	PasswordHash                string
+	SecurityStamp               pgtype.UUID
+	IsActive                    bool
+	IsAnonymised                bool
+	AnonymisedAt                pgtype.Timestamptz
+	IsGloballySuspended         bool
+	GlobalSuspensionReason      string
+	GloballySuspendedAt         pgtype.Timestamptz
+	PasswordResetTokenHash      *string
+	PasswordResetExpiresAt      pgtype.Timestamptz
+	PendingEmailChangeNewEmail  *string
+	PendingEmailChangeTokenHash *string
+	PendingEmailChangeExpiresAt pgtype.Timestamptz
 }
 
-// General-purpose update covering ChangePassword + Anonymise + future
-// mutations. Repository decides which fields actually changed; SQL
-// writes whatever the aggregate currently says.
+// General-purpose update covering ChangePassword + Anonymise + global
+// suspension / lift + password-reset request/confirm/cancel + email-
+// change request/confirm/cancel + future mutations. Repository writes
+// whatever the aggregate currently says.
 func (q *Queries) UpdatePerson(ctx context.Context, arg UpdatePersonParams) error {
 	_, err := q.db.Exec(ctx, updatePerson,
 		arg.ID,
@@ -138,6 +282,14 @@ func (q *Queries) UpdatePerson(ctx context.Context, arg UpdatePersonParams) erro
 		arg.IsActive,
 		arg.IsAnonymised,
 		arg.AnonymisedAt,
+		arg.IsGloballySuspended,
+		arg.GlobalSuspensionReason,
+		arg.GloballySuspendedAt,
+		arg.PasswordResetTokenHash,
+		arg.PasswordResetExpiresAt,
+		arg.PendingEmailChangeNewEmail,
+		arg.PendingEmailChangeTokenHash,
+		arg.PendingEmailChangeExpiresAt,
 	)
 	return err
 }
