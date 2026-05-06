@@ -30,6 +30,7 @@ import (
 
 	"github.com/leadkart/leadkart-go/internal/common/clock"
 	"github.com/leadkart/leadkart-go/internal/common/errs"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/permission"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/role"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
@@ -70,6 +71,21 @@ type Membership struct {
 	// FK on (membership_id, tenant_id) → (id, tenant_id) guards this.
 	roleAssignments []role.ID
 
+	// grantedPermissions / revokedPermissions form the per-Membership
+	// overlay ON TOP of role-derived permissions. Effective set
+	// (computed by Task 13's resolver):
+	//
+	//   union(role.Permissions for r in roleAssignments)
+	//     ∪ grantedPermissions
+	//     \ revokedPermissions
+	//
+	// The overlay supports per-user customisation without role
+	// explosion (every "X but with Y disabled" doesn't need a clone of
+	// X). Persistence layer projects to
+	// identity.membership_permission_overrides (kind ∈ {granted, revoked}).
+	grantedPermissions []*permission.Permission
+	revokedPermissions []*permission.Permission
+
 	events []Event
 }
 
@@ -108,26 +124,30 @@ func New(id ID, personID person.ID, tenantID tenant.ID) (*Membership, error) {
 
 // Snapshot is the persistence DTO consumed by [UnmarshalFromDB].
 type Snapshot struct {
-	ID              ID
-	PersonID        person.ID
-	TenantID        tenant.ID
-	Status          Status
-	JoinedAt        time.Time
-	LeftAt          time.Time
-	RoleAssignments []role.ID
+	ID                 ID
+	PersonID           person.ID
+	TenantID           tenant.ID
+	Status             Status
+	JoinedAt           time.Time
+	LeftAt             time.Time
+	RoleAssignments    []role.ID
+	GrantedPermissions []*permission.Permission
+	RevokedPermissions []*permission.Permission
 }
 
 // UnmarshalFromDB re-hydrates a Membership from persistence.
 // Repository-only path; does NOT re-validate (TDL canon).
 func UnmarshalFromDB(s Snapshot) *Membership {
 	return &Membership{
-		id:              s.ID,
-		personID:        s.PersonID,
-		tenantID:        s.TenantID,
-		status:          s.Status,
-		joinedAt:        s.JoinedAt,
-		leftAt:          s.LeftAt,
-		roleAssignments: append([]role.ID(nil), s.RoleAssignments...),
+		id:                 s.ID,
+		personID:           s.PersonID,
+		tenantID:           s.TenantID,
+		status:             s.Status,
+		joinedAt:           s.JoinedAt,
+		leftAt:             s.LeftAt,
+		roleAssignments:    append([]role.ID(nil), s.RoleAssignments...),
+		grantedPermissions: append([]*permission.Permission(nil), s.GrantedPermissions...),
+		revokedPermissions: append([]*permission.Permission(nil), s.RevokedPermissions...),
 	}
 }
 
@@ -157,6 +177,24 @@ func (m *Membership) LeftAt() time.Time { return m.leftAt }
 func (m *Membership) RoleAssignments() []role.ID {
 	out := make([]role.ID, len(m.roleAssignments))
 	copy(out, m.roleAssignments)
+	return out
+}
+
+// GrantedPermissions returns a defensive copy of the per-Membership
+// overlay-grant list. Effective set computed by Task 13's resolver:
+// union(roles) ∪ Granted \ Revoked.
+func (m *Membership) GrantedPermissions() []*permission.Permission {
+	out := make([]*permission.Permission, len(m.grantedPermissions))
+	copy(out, m.grantedPermissions)
+	return out
+}
+
+// RevokedPermissions returns a defensive copy of the per-Membership
+// overlay-revoke list — permissions taken AWAY from what the role
+// union would otherwise grant.
+func (m *Membership) RevokedPermissions() []*permission.Permission {
+	out := make([]*permission.Permission, len(m.revokedPermissions))
+	copy(out, m.revokedPermissions)
 	return out
 }
 
@@ -265,6 +303,102 @@ func (m *Membership) RevokeRole(roleID role.ID) error {
 			return nil
 		}
 	}
+	return nil
+}
+
+// ----- Authorisation: per-Membership permission overlay ---------------------
+
+// GrantPermission adds an overlay-grant entry. If the permission was
+// previously overlay-revoked (suppressing a role-derived grant), the
+// revoke entry is removed first — overlay grants and revokes never
+// coexist for the same permission. Idempotent — granting an already-
+// granted overlay is a no-op (no event).
+func (m *Membership) GrantPermission(p *permission.Permission) error {
+	if p == nil {
+		return fmt.Errorf("%w: permission required", ErrInvalid)
+	}
+	// If currently in revoked overlay, lift the revoke first.
+	for i, r := range m.revokedPermissions {
+		if r.Equal(p) {
+			m.revokedPermissions = append(m.revokedPermissions[:i], m.revokedPermissions[i+1:]...)
+			break
+		}
+	}
+	for _, g := range m.grantedPermissions {
+		if g.Equal(p) {
+			return nil
+		}
+	}
+	m.grantedPermissions = append(m.grantedPermissions, p)
+	m.recordEvent(PermissionsUpdatedEvent{
+		MembershipID: m.id,
+		PersonID:     m.personID,
+		TenantID:     m.tenantID,
+		At:           clock.Now(),
+	})
+	return nil
+}
+
+// RevokePermission adds an overlay-revoke entry. If the permission
+// was previously overlay-granted, the grant entry is removed first.
+// Idempotent — revoking an already-revoked overlay is a no-op
+// (no event).
+func (m *Membership) RevokePermission(p *permission.Permission) error {
+	if p == nil {
+		return fmt.Errorf("%w: permission required", ErrInvalid)
+	}
+	// If currently in granted overlay, lift the grant first.
+	for i, g := range m.grantedPermissions {
+		if g.Equal(p) {
+			m.grantedPermissions = append(m.grantedPermissions[:i], m.grantedPermissions[i+1:]...)
+			break
+		}
+	}
+	for _, r := range m.revokedPermissions {
+		if r.Equal(p) {
+			return nil
+		}
+	}
+	m.revokedPermissions = append(m.revokedPermissions, p)
+	m.recordEvent(PermissionsUpdatedEvent{
+		MembershipID: m.id,
+		PersonID:     m.personID,
+		TenantID:     m.tenantID,
+		At:           clock.Now(),
+	})
+	return nil
+}
+
+// ReplacePermissionOverlays sets both overlay slices atomically.
+// Single PermissionsUpdatedEvent fires regardless of diff size —
+// listeners care about "permissions changed for this Membership",
+// not per-permission deltas.
+//
+// nil entries in either slice are silently dropped.
+func (m *Membership) ReplacePermissionOverlays(
+	granted []*permission.Permission,
+	revoked []*permission.Permission,
+) error {
+	g := make([]*permission.Permission, 0, len(granted))
+	for _, p := range granted {
+		if p != nil {
+			g = append(g, p)
+		}
+	}
+	r := make([]*permission.Permission, 0, len(revoked))
+	for _, p := range revoked {
+		if p != nil {
+			r = append(r, p)
+		}
+	}
+	m.grantedPermissions = g
+	m.revokedPermissions = r
+	m.recordEvent(PermissionsUpdatedEvent{
+		MembershipID: m.id,
+		PersonID:     m.personID,
+		TenantID:     m.tenantID,
+		At:           clock.Now(),
+	})
 	return nil
 }
 

@@ -88,3 +88,21 @@ func (RoleRevokedEvent) Topic() string { return "identity.membership_role_revoke
 
 // OccurredAt returns the domain timestamp.
 func (e RoleRevokedEvent) OccurredAt() time.Time { return e.At }
+
+// PermissionsUpdatedEvent fires when the per-Membership Granted /
+// Revoked overlay changes. Single event per mutation regardless of
+// granularity — subscribers care about "permissions changed for this
+// Membership", not per-permission deltas. Triggers SecurityStamp
+// rotation (per `security.md` "SecurityStamp rotation triggers").
+type PermissionsUpdatedEvent struct {
+	MembershipID ID
+	PersonID     person.ID
+	TenantID     tenant.ID
+	At           time.Time
+}
+
+// Topic returns the integration-event type.
+func (PermissionsUpdatedEvent) Topic() string { return "identity.membership_permissions_updated.v1" }
+
+// OccurredAt returns the domain timestamp.
+func (e PermissionsUpdatedEvent) OccurredAt() time.Time { return e.At }
