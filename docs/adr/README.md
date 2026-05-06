@@ -18,7 +18,8 @@ One decision per file, Michael Nygard format (Context / Decision / Consequences 
 | 0010 | Background jobs — river | Accepted |
 | 0027 | Audit log — outbox doubles as audit | Accepted |
 | 0033 | Tenant context — `tenant.FromContext(ctx)` package func | Accepted |
-| 0034 | Go version — 1.25 (target 1.26+) | Accepted |
+| 0034 | Go version — 1.26.2 (post Phase 1 dep-bump) | Accepted |
 | 0035 | Event sourcing scope — zero modules at v0.1 | Accepted |
+| 0036 | Permission model — closed-set catalog + Role + per-Membership overlay | Accepted |
 
-ADRs 0011–0026 + 0028–0032 + 0036+ land as the relevant code lands per the master plan.
+ADRs 0011–0026 + 0028–0032 + 0037+ land as the relevant code lands per the master plan.
