@@ -55,6 +55,7 @@ type Person struct {
 	globalSuspensionReason string               // populated when isGloballySuspended; cleared on Lift
 	globallySuspendedAt    time.Time            // zero unless suspended; reset on Lift
 	pendingPasswordReset   PendingPasswordReset // zero unless reset requested + pending
+	pendingEmailChange     PendingEmailChange   // zero unless email change requested + pending
 	createdAt              time.Time
 	anonymisedAt           time.Time
 	events                 []Event
@@ -123,6 +124,9 @@ type Snapshot struct {
 	GloballySuspendedAt         time.Time
 	PasswordResetTokenHash      PasswordResetTokenHash
 	PasswordResetExpiresAt      time.Time
+	PendingEmailChangeNewEmail  email.Address
+	PendingEmailChangeHash      EmailChangeTokenHash
+	PendingEmailChangeExpiresAt time.Time
 	CreatedAt                   time.Time
 	AnonymisedAt                time.Time
 }
@@ -149,6 +153,13 @@ func UnmarshalFromDB(s Snapshot) *Person {
 		p.pendingPasswordReset = PendingPasswordReset{
 			hash:      s.PasswordResetTokenHash,
 			expiresAt: s.PasswordResetExpiresAt,
+		}
+	}
+	if !s.PendingEmailChangeHash.IsZero() {
+		p.pendingEmailChange = PendingEmailChange{
+			newEmail:  s.PendingEmailChangeNewEmail,
+			hash:      s.PendingEmailChangeHash,
+			expiresAt: s.PendingEmailChangeExpiresAt,
 		}
 	}
 	return p
@@ -206,6 +217,10 @@ func (p *Person) GloballySuspendedAt() time.Time { return p.globallySuspendedAt 
 // value means no reset is pending. Repository adapter reads
 // `.Hash().IsZero()` to decide whether to write the reset columns.
 func (p *Person) PendingPasswordReset() PendingPasswordReset { return p.pendingPasswordReset }
+
+// PendingEmailChange returns the per-Person email-change sub-state.
+// Zero value means no change is pending.
+func (p *Person) PendingEmailChange() PendingEmailChange { return p.pendingEmailChange }
 
 // ----- State transitions ----------------------------------------------------
 
@@ -422,6 +437,148 @@ func (p *Person) CancelPasswordReset(reason string) error {
 	}
 	p.pendingPasswordReset = PendingPasswordReset{}
 	p.recordEvent(PasswordResetCancelledEvent{
+		PersonID: p.id,
+		Reason:   reason,
+		At:       clock.Now(),
+	})
+	return nil
+}
+
+// RequestEmailChange opens an email-change confirmation window. The
+// caller has already minted a high-entropy raw token, hashed it via
+// SHA-256, and supplies the proposed new email + hash + TTL.
+//
+// At-most-one-pending invariant per Person — a fresh request
+// supersedes any prior pending change. Industry canon (Auth0, Stripe,
+// Microsoft Entra ID): most-recent wins, prior emailed token silently
+// invalidated.
+//
+// Validation:
+//   - newEmail MUST be non-zero and DIFFERENT from current email
+//     (no-op rejected — prevents accidental "change to same address"
+//     from emitting a spurious confirmation request)
+//   - tokenHash non-zero
+//   - ttl positive
+//
+// Rejected on:
+//   - Anonymised Person (terminal — email is the FK; cannot rebind)
+//   - Globally-suspended Person (no path forward without operator lift)
+//
+// Does NOT rotate SecurityStamp — change hasn't applied yet, only
+// the request. SecurityStamp rotates inside ConfirmEmailChange.
+//
+// CALLER INVARIANT: the application service MUST verify the proposed
+// new email is not already taken globally before calling this method
+// (per multi-tenancy.md "Email is globally unique system-wide" partial
+// unique index). Domain trusts the boundary check; the Repository
+// will fail the persist if a race materialises a duplicate.
+//
+// Emits [EmailChangeRequestedEvent] without the raw token.
+func (p *Person) RequestEmailChange(newEmail email.Address, tokenHash EmailChangeTokenHash, ttl time.Duration) error {
+	if newEmail.IsZero() {
+		return fmt.Errorf("%w: new email required", ErrInvalid)
+	}
+	if newEmail.String() == p.email.String() {
+		return fmt.Errorf("%w: new email same as current", ErrInvalid)
+	}
+	if tokenHash.IsZero() {
+		return fmt.Errorf("%w: email change token hash required", ErrInvalid)
+	}
+	if ttl <= 0 {
+		return fmt.Errorf("%w: email change ttl must be positive (got %v)", ErrInvalid, ttl)
+	}
+	if p.isAnonymised {
+		return fmt.Errorf("%w: cannot change email of anonymised person", ErrInvalid)
+	}
+	if p.isGloballySuspended {
+		return fmt.Errorf("%w: cannot change email while globally suspended", ErrInvalid)
+	}
+	now := clock.Now()
+	expiresAt := now.Add(ttl)
+	p.pendingEmailChange = PendingEmailChange{
+		newEmail:  newEmail,
+		hash:      tokenHash,
+		expiresAt: expiresAt,
+	}
+	p.recordEvent(EmailChangeRequestedEvent{
+		PersonID:  p.id,
+		NewEmail:  newEmail,
+		ExpiresAt: expiresAt,
+		At:        now,
+	})
+	return nil
+}
+
+// ConfirmEmailChange applies the pending new email by presenting a
+// valid confirmation token. Caller hashes the user-presented raw
+// token (SHA-256) and supplies the hash; aggregate constant-time-
+// compares against the stored hash.
+//
+// Effects on success:
+//   - email rotated to the pending new email.
+//   - SecurityStamp rotated (kills outstanding JWTs — `sub` rebound).
+//   - pendingEmailChange cleared (single-use).
+//   - EmailChangedEvent emitted with OLD + NEW for audit.
+//
+// Rejected on:
+//   - No pending change.
+//   - Token hash mismatch (defensive: pending preserved for retry
+//     within the window — same shape as ConfirmPasswordReset).
+//   - Expired (defensive cleanup: pending cleared so subsequent calls
+//     see "no pending" rather than re-rejecting on expiry).
+//   - Anonymised / globally-suspended.
+//
+// NOT idempotent — single-use token; second call returns "no pending".
+func (p *Person) ConfirmEmailChange(presentedHash EmailChangeTokenHash) error {
+	if presentedHash.IsZero() {
+		return fmt.Errorf("%w: presented email change token hash required", ErrInvalid)
+	}
+	if p.isAnonymised {
+		return fmt.Errorf("%w: cannot change email of anonymised person", ErrInvalid)
+	}
+	if p.isGloballySuspended {
+		return fmt.Errorf("%w: cannot change email while globally suspended", ErrInvalid)
+	}
+	if p.pendingEmailChange.IsZero() {
+		return fmt.Errorf("%w: no pending email change", ErrInvalid)
+	}
+	now := clock.Now()
+	if !now.Before(p.pendingEmailChange.expiresAt) {
+		p.pendingEmailChange = PendingEmailChange{}
+		return fmt.Errorf("%w: email change token expired", ErrInvalid)
+	}
+	if !p.pendingEmailChange.hash.Equal(presentedHash) {
+		return fmt.Errorf("%w: email change token mismatch", ErrInvalid)
+	}
+	oldEmail := p.email
+	p.email = p.pendingEmailChange.newEmail
+	p.securityStamp = NewSecurityStamp()
+	p.pendingEmailChange = PendingEmailChange{}
+	p.recordEvent(EmailChangedEvent{
+		PersonID: p.id,
+		OldEmail: oldEmail,
+		NewEmail: p.email,
+		At:       now,
+	})
+	return nil
+}
+
+// CancelEmailChange invalidates a pending email change without
+// applying it. Reasons: admin action, security incident response,
+// implicit cancel via direct admin email update.
+//
+// Idempotent — no-op when no change is pending. Audit reason
+// required when pending. Does NOT rotate SecurityStamp (no
+// credential changed).
+func (p *Person) CancelEmailChange(reason string) error {
+	if p.pendingEmailChange.IsZero() {
+		return nil
+	}
+	if strings.TrimSpace(reason) == "" {
+		return fmt.Errorf("%w: cancel reason required for audit", ErrInvalid)
+	}
+	p.pendingEmailChange = PendingEmailChange{}
+	p.recordEvent(EmailChangeCancelledEvent{
 		PersonID: p.id,
 		Reason:   reason,
 		At:       clock.Now(),

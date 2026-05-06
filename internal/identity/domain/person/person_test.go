@@ -507,6 +507,224 @@ func TestCancelPasswordReset_RequiresReason_WhenPending(t *testing.T) {
 	}
 }
 
+// ----- Email change (token flow) --------------------------------------------
+
+const validEmailChangeHash = "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef" // 64 hex chars
+
+func mustEmailChangeHash(t *testing.T, raw string) person.EmailChangeTokenHash {
+	t.Helper()
+	h, err := person.NewEmailChangeTokenHash(raw)
+	if err != nil {
+		t.Fatalf("NewEmailChangeTokenHash(%q): %v", raw, err)
+	}
+	return h
+}
+
+func TestRequestEmailChange_StoresPendingAndEmitsEvent(t *testing.T) {
+	t.Cleanup(clock.Reset)
+	clock.Set(time.Date(2026, 5, 7, 12, 0, 0, 0, time.UTC))
+
+	p := newPerson(t)
+	_ = p.PullEvents()
+
+	newE := mustEmail(t, "new@b.io")
+	h := mustEmailChangeHash(t, validEmailChangeHash)
+	if err := p.RequestEmailChange(newE, h, time.Hour); err != nil {
+		t.Fatalf("RequestEmailChange: %v", err)
+	}
+	pending := p.PendingEmailChange()
+	if pending.IsZero() {
+		t.Fatal("PendingEmailChange is zero")
+	}
+	if pending.NewEmail().String() != "new@b.io" {
+		t.Errorf("NewEmail = %q", pending.NewEmail())
+	}
+	if !pending.Hash().Equal(h) {
+		t.Error("hash mismatch")
+	}
+	expectedExpiry := time.Date(2026, 5, 7, 13, 0, 0, 0, time.UTC)
+	if !pending.ExpiresAt().Equal(expectedExpiry) {
+		t.Errorf("ExpiresAt mismatch")
+	}
+
+	events := p.PullEvents()
+	if len(events) != 1 {
+		t.Fatalf("events: %d", len(events))
+	}
+	ev, ok := events[0].(person.EmailChangeRequestedEvent)
+	if !ok {
+		t.Fatalf("event[0] = %T, want EmailChangeRequestedEvent", events[0])
+	}
+	if ev.NewEmail.String() != "new@b.io" {
+		t.Errorf("event NewEmail = %q", ev.NewEmail)
+	}
+}
+
+func TestRequestEmailChange_RejectsSameAddress(t *testing.T) {
+	t.Cleanup(clock.Reset)
+	p := newPerson(t)
+	h := mustEmailChangeHash(t, validEmailChangeHash)
+	if err := p.RequestEmailChange(p.Email(), h, time.Hour); !errors.Is(err, person.ErrInvalid) {
+		t.Errorf("same email: expected ErrInvalid, got %v", err)
+	}
+}
+
+func TestRequestEmailChange_RejectsZeroAndInvalid(t *testing.T) {
+	t.Cleanup(clock.Reset)
+	p := newPerson(t)
+	h := mustEmailChangeHash(t, validEmailChangeHash)
+
+	if err := p.RequestEmailChange(email.Address{}, h, time.Hour); !errors.Is(err, person.ErrInvalid) {
+		t.Errorf("zero email: %v", err)
+	}
+	if err := p.RequestEmailChange(mustEmail(t, "new@b.io"), person.EmailChangeTokenHash{}, time.Hour); !errors.Is(err, person.ErrInvalid) {
+		t.Errorf("zero hash: %v", err)
+	}
+	if err := p.RequestEmailChange(mustEmail(t, "new@b.io"), h, 0); !errors.Is(err, person.ErrInvalid) {
+		t.Errorf("zero ttl: %v", err)
+	}
+}
+
+func TestRequestEmailChange_NewSupersedesOld(t *testing.T) {
+	t.Cleanup(clock.Reset)
+	clock.Set(time.Date(2026, 5, 7, 12, 0, 0, 0, time.UTC))
+	p := newPerson(t)
+
+	first := mustEmailChangeHash(t, validEmailChangeHash)
+	_ = p.RequestEmailChange(mustEmail(t, "first@b.io"), first, time.Hour)
+	_ = p.PullEvents()
+
+	clock.Set(time.Date(2026, 5, 7, 12, 30, 0, 0, time.UTC))
+	second := mustEmailChangeHash(t, "00000000aaaaaaaa00000000aaaaaaaa00000000aaaaaaaa00000000aaaaaaaa")
+	if err := p.RequestEmailChange(mustEmail(t, "second@b.io"), second, time.Hour); err != nil {
+		t.Fatalf("second: %v", err)
+	}
+	pending := p.PendingEmailChange()
+	if pending.NewEmail().String() != "second@b.io" {
+		t.Errorf("NewEmail = %q, want second@b.io", pending.NewEmail())
+	}
+	if !pending.Hash().Equal(second) {
+		t.Error("hash not superseded")
+	}
+}
+
+func TestConfirmEmailChange_AppliesNewEmailAndRotatesStamp(t *testing.T) {
+	t.Cleanup(clock.Reset)
+	clock.Set(time.Date(2026, 5, 7, 12, 0, 0, 0, time.UTC))
+
+	p := newPerson(t)
+	originalStamp := p.SecurityStamp()
+	originalEmail := p.Email()
+
+	newE := mustEmail(t, "rotated@b.io")
+	h := mustEmailChangeHash(t, validEmailChangeHash)
+	_ = p.RequestEmailChange(newE, h, time.Hour)
+	_ = p.PullEvents()
+
+	clock.Set(time.Date(2026, 5, 7, 12, 30, 0, 0, time.UTC))
+	if err := p.ConfirmEmailChange(h); err != nil {
+		t.Fatalf("ConfirmEmailChange: %v", err)
+	}
+	if p.Email().String() != "rotated@b.io" {
+		t.Errorf("Email not applied: %q", p.Email())
+	}
+	if p.SecurityStamp().Equal(originalStamp) {
+		t.Error("SecurityStamp did not rotate")
+	}
+	if !p.PendingEmailChange().IsZero() {
+		t.Error("pending not cleared")
+	}
+
+	events := p.PullEvents()
+	if len(events) != 1 {
+		t.Fatalf("events: %d", len(events))
+	}
+	ev, ok := events[0].(person.EmailChangedEvent)
+	if !ok {
+		t.Fatalf("event[0] = %T, want EmailChangedEvent", events[0])
+	}
+	if ev.OldEmail.String() != originalEmail.String() {
+		t.Errorf("OldEmail = %q, want %q", ev.OldEmail, originalEmail)
+	}
+	if ev.NewEmail.String() != "rotated@b.io" {
+		t.Errorf("NewEmail = %q", ev.NewEmail)
+	}
+}
+
+func TestConfirmEmailChange_RejectsExpired(t *testing.T) {
+	t.Cleanup(clock.Reset)
+	clock.Set(time.Date(2026, 5, 7, 12, 0, 0, 0, time.UTC))
+	p := newPerson(t)
+	h := mustEmailChangeHash(t, validEmailChangeHash)
+	_ = p.RequestEmailChange(mustEmail(t, "new@b.io"), h, time.Hour)
+
+	clock.Set(time.Date(2026, 5, 7, 14, 0, 0, 0, time.UTC))
+	if err := p.ConfirmEmailChange(h); !errors.Is(err, person.ErrInvalid) {
+		t.Errorf("expired: expected ErrInvalid, got %v", err)
+	}
+	if !p.PendingEmailChange().IsZero() {
+		t.Error("expired pending not defensively cleared")
+	}
+}
+
+func TestConfirmEmailChange_RejectsMismatch(t *testing.T) {
+	t.Cleanup(clock.Reset)
+	p := newPerson(t)
+	stored := mustEmailChangeHash(t, validEmailChangeHash)
+	_ = p.RequestEmailChange(mustEmail(t, "new@b.io"), stored, time.Hour)
+
+	wrong := mustEmailChangeHash(t, "fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffe")
+	if err := p.ConfirmEmailChange(wrong); !errors.Is(err, person.ErrInvalid) {
+		t.Errorf("mismatch: %v", err)
+	}
+	if p.PendingEmailChange().IsZero() {
+		t.Error("pending should remain after mismatch")
+	}
+}
+
+func TestConfirmEmailChange_RejectsWhenNoPending(t *testing.T) {
+	t.Cleanup(clock.Reset)
+	p := newPerson(t)
+	h := mustEmailChangeHash(t, validEmailChangeHash)
+	if err := p.ConfirmEmailChange(h); !errors.Is(err, person.ErrInvalid) {
+		t.Errorf("no pending: %v", err)
+	}
+}
+
+func TestCancelEmailChange_ClearsPendingAndEmitsEvent(t *testing.T) {
+	t.Cleanup(clock.Reset)
+	p := newPerson(t)
+	h := mustEmailChangeHash(t, validEmailChangeHash)
+	_ = p.RequestEmailChange(mustEmail(t, "new@b.io"), h, time.Hour)
+	_ = p.PullEvents()
+
+	if err := p.CancelEmailChange("operator-cleared"); err != nil {
+		t.Fatalf("Cancel: %v", err)
+	}
+	if !p.PendingEmailChange().IsZero() {
+		t.Error("pending not cleared")
+	}
+	events := p.PullEvents()
+	if len(events) != 1 {
+		t.Fatalf("events: %d", len(events))
+	}
+	if _, ok := events[0].(person.EmailChangeCancelledEvent); !ok {
+		t.Errorf("event[0] = %T, want EmailChangeCancelledEvent", events[0])
+	}
+}
+
+func TestCancelEmailChange_NoOp_WhenNoPending(t *testing.T) {
+	t.Cleanup(clock.Reset)
+	p := newPerson(t)
+	_ = p.PullEvents()
+	if err := p.CancelEmailChange("preempt"); err != nil {
+		t.Fatalf("Cancel no-op: %v", err)
+	}
+	if got := p.PullEvents(); len(got) != 0 {
+		t.Errorf("expected 0 events, got %d", len(got))
+	}
+}
+
 // ----- GloballySuspend ------------------------------------------------------
 
 func TestGloballySuspend_FlipsFlagAndRotatesStamp(t *testing.T) {

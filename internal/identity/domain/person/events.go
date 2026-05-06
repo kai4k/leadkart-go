@@ -78,6 +78,67 @@ func (AnonymisedEvent) Topic() string { return "identity.person_anonymised.v1" }
 // OccurredAt returns the domain timestamp.
 func (e AnonymisedEvent) OccurredAt() time.Time { return e.At }
 
+// EmailChangeRequestedEvent fires when [Person.RequestEmailChange]
+// is called. Carries the proposed new email + expiry — but NOT the
+// raw token (raw leaves via the application-layer integration event
+// for delivery to the new address).
+//
+// Per Auth0 / Stripe / Microsoft Entra ID canon: the most recent
+// request supersedes any prior pending email change. The previous
+// emailed token is silently invalidated.
+type EmailChangeRequestedEvent struct {
+	PersonID  ID
+	NewEmail  email.Address
+	ExpiresAt time.Time
+	At        time.Time
+}
+
+// Topic returns the integration-event type.
+func (EmailChangeRequestedEvent) Topic() string { return "identity.email_change_requested.v1" }
+
+// OccurredAt returns the domain timestamp.
+func (e EmailChangeRequestedEvent) OccurredAt() time.Time { return e.At }
+
+// EmailChangedEvent fires when [Person.ConfirmEmailChange] successfully
+// applies a new email via a valid confirmation token.
+//
+// SecurityStamp rotates per security.md "SecurityStamp rotation
+// triggers" — email changes invalidate outstanding JWTs because the
+// `sub` identity is logically rebound (an attacker who hijacked a
+// session can't keep operating after the legitimate user rotates
+// the address).
+//
+// Cross-module subscribers (Notifications: confirm to old address)
+// receive both old + new for audit.
+type EmailChangedEvent struct {
+	PersonID ID
+	OldEmail email.Address
+	NewEmail email.Address
+	At       time.Time
+}
+
+// Topic returns the integration-event type.
+func (EmailChangedEvent) Topic() string { return "identity.email_changed.v1" }
+
+// OccurredAt returns the domain timestamp.
+func (e EmailChangedEvent) OccurredAt() time.Time { return e.At }
+
+// EmailChangeCancelledEvent fires when [Person.CancelEmailChange]
+// invalidates a pending change without applying it (admin action,
+// security incident, or implicit cancel via direct admin email
+// update).
+type EmailChangeCancelledEvent struct {
+	PersonID ID
+	Reason   string
+	At       time.Time
+}
+
+// Topic returns the integration-event type.
+func (EmailChangeCancelledEvent) Topic() string { return "identity.email_change_cancelled.v1" }
+
+// OccurredAt returns the domain timestamp.
+func (e EmailChangeCancelledEvent) OccurredAt() time.Time { return e.At }
+
 // GloballySuspendedEvent fires when [Person.GloballySuspend] is called.
 //
 // Rare — compliance / fraud / cross-tenant abuse. Subscribers (auth,
