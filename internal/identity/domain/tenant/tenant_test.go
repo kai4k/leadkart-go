@@ -153,6 +153,86 @@ func TestNewTenant_RejectsZeroEmail(t *testing.T) {
 
 // ----- State transitions: Activate ------------------------------------------
 
+// ----- UpdateProfile --------------------------------------------------------
+
+func TestUpdateProfile_ChangesNamesAndEmits(t *testing.T) {
+	t.Cleanup(clock.Reset)
+	clock.Set(time.Date(2026, 5, 7, 12, 0, 0, 0, time.UTC))
+
+	tn := newPendingTenant(t)
+	_ = tn.PullEvents()
+
+	if err := tn.UpdateProfile("New Acme Pharma Pvt Ltd", "Acme New"); err != nil {
+		t.Fatalf("UpdateProfile: %v", err)
+	}
+	if tn.LegalName() != "New Acme Pharma Pvt Ltd" {
+		t.Errorf("LegalName = %q", tn.LegalName())
+	}
+	if tn.DisplayName() != "Acme New" {
+		t.Errorf("DisplayName = %q", tn.DisplayName())
+	}
+
+	events := tn.PullEvents()
+	if len(events) != 1 {
+		t.Fatalf("events: %d", len(events))
+	}
+	ev, ok := events[0].(tenant.ProfileUpdatedEvent)
+	if !ok {
+		t.Fatalf("event[0] = %T, want ProfileUpdatedEvent", events[0])
+	}
+	if ev.OldLegalName != "Acme Pharma" || ev.NewLegalName != "New Acme Pharma Pvt Ltd" {
+		t.Errorf("OLD/NEW legal mismatch: %+v", ev)
+	}
+	if ev.OldDisplayName != "Acme" || ev.NewDisplayName != "Acme New" {
+		t.Errorf("OLD/NEW display mismatch: %+v", ev)
+	}
+}
+
+func TestUpdateProfile_NoOp_WhenUnchanged(t *testing.T) {
+	t.Cleanup(clock.Reset)
+	tn := newPendingTenant(t)
+	_ = tn.PullEvents()
+	if err := tn.UpdateProfile(tn.LegalName(), tn.DisplayName()); err != nil {
+		t.Fatalf("UpdateProfile noop: %v", err)
+	}
+	if got := tn.PullEvents(); len(got) != 0 {
+		t.Errorf("expected 0 events, got %d", len(got))
+	}
+}
+
+func TestUpdateProfile_RejectsEmptyAndOverlong(t *testing.T) {
+	t.Cleanup(clock.Reset)
+	cases := []struct {
+		name        string
+		legalName   string
+		displayName string
+	}{
+		{"empty legal", "", "Display"},
+		{"empty display", "Legal", ""},
+		{"whitespace legal", "   ", "Display"},
+		{"whitespace display", "Legal", "  "},
+		{"legal too long", string(make([]byte, 201)), "Display"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tn := newPendingTenant(t)
+			err := tn.UpdateProfile(tc.legalName, tc.displayName)
+			if !errors.Is(err, tenant.ErrInvalid) {
+				t.Errorf("expected ErrInvalid, got %v", err)
+			}
+		})
+	}
+}
+
+func TestUpdateProfile_AllowedOnSuspendedTenant(t *testing.T) {
+	t.Cleanup(clock.Reset)
+	tn := newSuspendedTenant(t)
+	_ = tn.PullEvents()
+	if err := tn.UpdateProfile("Renamed Pharma", "Renamed"); err != nil {
+		t.Errorf("UpdateProfile on suspended tenant: %v", err)
+	}
+}
+
 func TestActivate_FromPending_TransitionsToActive(t *testing.T) {
 	t.Cleanup(clock.Reset)
 	clock.Set(time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC))

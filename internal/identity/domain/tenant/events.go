@@ -50,6 +50,26 @@ func (ActivatedEvent) Topic() string { return "identity.tenant_activated.v1" }
 // OccurredAt returns the domain timestamp.
 func (e ActivatedEvent) OccurredAt() time.Time { return e.At }
 
+// ProfileUpdatedEvent fires when [Tenant.UpdateProfile] is called.
+//
+// Carries OLD + NEW values so audit + downstream subscribers can render
+// the diff without re-loading the aggregate. Mirrors the .NET parent's
+// TenantProfileUpdated integration event.
+type ProfileUpdatedEvent struct {
+	TenantID       ID
+	OldLegalName   string
+	OldDisplayName string
+	NewLegalName   string
+	NewDisplayName string
+	At             time.Time
+}
+
+// Topic returns the integration event type.
+func (ProfileUpdatedEvent) Topic() string { return "identity.tenant_profile_updated.v1" }
+
+// OccurredAt returns the domain timestamp.
+func (e ProfileUpdatedEvent) OccurredAt() time.Time { return e.At }
+
 // SuspendedEvent fires when a Tenant transitions to [StatusSuspended].
 type SuspendedEvent struct {
 	TenantID ID

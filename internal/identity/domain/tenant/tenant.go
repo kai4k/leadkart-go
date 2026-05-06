@@ -177,6 +177,53 @@ func (t *Tenant) SuspendedAt() time.Time { return t.suspendedAt }
 
 // ----- State transitions ----------------------------------------------------
 
+// UpdateProfile changes the tenant's display fields (LegalName +
+// DisplayName). Other tenant attributes (admin email, statutory IDs,
+// settings) ride dedicated mutators per the .NET parent's vocabulary
+// split — narrow events let subscribers react to the specific concern
+// (audit, integration-event consumers, search-index reindexing) without
+// guessing which fields actually changed.
+//
+// Validation mirrors [New]: both fields required, trimmed-non-empty,
+// capped at nameMaxLen.
+//
+// Idempotent — calling with both fields equal to current values emits
+// no event and returns nil. (Per coding-standards.md "no-op idempotency"
+// + AssignManager / Activate precedent.)
+//
+// Allowed in any status — Suspended tenants can still rename for legal
+// reasons (renamed entity, transferred ownership) without an Activate
+// round-trip.
+func (t *Tenant) UpdateProfile(legalName, displayName string) error {
+	if strings.TrimSpace(legalName) == "" {
+		return fmt.Errorf("%w: legal name required", ErrInvalid)
+	}
+	if strings.TrimSpace(displayName) == "" {
+		return fmt.Errorf("%w: display name required", ErrInvalid)
+	}
+	if len(legalName) > nameMaxLen {
+		return fmt.Errorf("%w: legal name too long (max %d, got %d)", ErrInvalid, nameMaxLen, len(legalName))
+	}
+	if len(displayName) > nameMaxLen {
+		return fmt.Errorf("%w: display name too long (max %d, got %d)", ErrInvalid, nameMaxLen, len(displayName))
+	}
+	if legalName == t.legalName && displayName == t.displayName {
+		return nil
+	}
+	old := struct{ legal, display string }{t.legalName, t.displayName}
+	t.legalName = legalName
+	t.displayName = displayName
+	t.recordEvent(ProfileUpdatedEvent{
+		TenantID:       t.id,
+		OldLegalName:   old.legal,
+		OldDisplayName: old.display,
+		NewLegalName:   legalName,
+		NewDisplayName: displayName,
+		At:             clock.Now(),
+	})
+	return nil
+}
+
 // Activate transitions the tenant to [StatusActive] from any non-active state.
 //
 // Idempotent — if already active, returns nil and emits no event. Records

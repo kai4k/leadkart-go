@@ -53,6 +53,16 @@ func FromDomainEvent(d any) (Event, error) {
 			OccurredAtUTC: e.At.UTC(),
 		}, nil
 
+	case tenant.ProfileUpdatedEvent:
+		return TenantProfileUpdatedV1{
+			TenantID:       mustParseUUID(e.TenantID.String()),
+			OldLegalName:   e.OldLegalName,
+			OldDisplayName: e.OldDisplayName,
+			NewLegalName:   e.NewLegalName,
+			NewDisplayName: e.NewDisplayName,
+			OccurredAtUTC:  e.At.UTC(),
+		}, nil
+
 	case tenant.SuspendedEvent:
 		return TenantSuspendedV1{
 			TenantID:      mustParseUUID(e.TenantID.String()),

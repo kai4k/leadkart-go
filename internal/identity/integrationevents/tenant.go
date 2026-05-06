@@ -51,6 +51,29 @@ func (TenantActivatedV1) Topic() string { return "identity.tenant_activated.v1" 
 // OccurredAt returns the domain timestamp.
 func (e TenantActivatedV1) OccurredAt() time.Time { return e.OccurredAtUTC }
 
+// TenantProfileUpdatedV1 — tenant changed its display fields
+// (LegalName + DisplayName). Consumed by Notifications + any
+// integration cache that materialises tenant display strings.
+//
+// Other tenant attributes (admin email, statutory IDs, settings) ride
+// dedicated events per the .NET parent's vocabulary split.
+type TenantProfileUpdatedV1 struct {
+	platformMarker
+
+	TenantID       uuid.UUID `json:"tenant_id"`
+	OldLegalName   string    `json:"old_legal_name"`
+	OldDisplayName string    `json:"old_display_name"`
+	NewLegalName   string    `json:"new_legal_name"`
+	NewDisplayName string    `json:"new_display_name"`
+	OccurredAtUTC  time.Time `json:"occurred_at_utc"`
+}
+
+// Topic returns the canonical wire alias.
+func (TenantProfileUpdatedV1) Topic() string { return "identity.tenant_profile_updated.v1" }
+
+// OccurredAt returns the domain timestamp.
+func (e TenantProfileUpdatedV1) OccurredAt() time.Time { return e.OccurredAtUTC }
+
 // TenantSuspendedV1 — operator suspended a tenant (payment overdue,
 // admin action). Consumed by every module that should block ops:
 // CRM stops lead assignments, Orders rejects new orders, etc.
@@ -74,9 +97,11 @@ func (e TenantSuspendedV1) OccurredAt() time.Time { return e.OccurredAtUTC }
 var (
 	_ Platform = TenantRegisteredV1{}
 	_ Platform = TenantActivatedV1{}
+	_ Platform = TenantProfileUpdatedV1{}
 	_ Platform = TenantSuspendedV1{}
 
 	_ = register(TenantRegisteredV1{})
 	_ = register(TenantActivatedV1{})
+	_ = register(TenantProfileUpdatedV1{})
 	_ = register(TenantSuspendedV1{})
 )
