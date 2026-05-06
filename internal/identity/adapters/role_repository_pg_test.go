@@ -77,7 +77,11 @@ func TestRoleRepository_GetByID_ReturnsNotFound_WhenAbsent(t *testing.T) {
 	pool := repoFixture(t)
 	roles := adapters.NewRoleRepository(pool, pg.NewTransactor(pool))
 
-	_, err := roles.GetByID(t.Context(), role.ID(ids.NewV7().String()))
+	// Bind a synthetic tenant — the row is absent so the value
+	// doesn't filter anything; the GUC just has to be set so the
+	// repo's tenant-scoped tx can open.
+	ctx := tenancy.WithID(t.Context(), tenancy.ID(ids.NewV7().String()))
+	_, err := roles.GetByID(ctx, role.ID(ids.NewV7().String()))
 	if !errors.Is(err, role.ErrNotFound) {
 		t.Fatalf("GetByID absent: got %v want ErrNotFound", err)
 	}
@@ -314,7 +318,11 @@ func TestRoleRepository_UpdateByID_ReturnsNotFound_WhenAbsent(t *testing.T) {
 	pool := repoFixture(t)
 	roles := adapters.NewRoleRepository(pool, pg.NewTransactor(pool))
 
-	err := roles.UpdateByID(t.Context(), role.ID(ids.NewV7().String()),
+	// Bind a synthetic tenant — the row is absent so the value
+	// doesn't filter anything; the GUC just has to be set so the
+	// repo's tenant-scoped tx can open.
+	ctx := tenancy.WithID(t.Context(), tenancy.ID(ids.NewV7().String()))
+	err := roles.UpdateByID(ctx, role.ID(ids.NewV7().String()),
 		func(*role.Role) (bool, error) { return true, nil })
 	if !errors.Is(err, role.ErrNotFound) {
 		t.Fatalf("UpdateByID absent: got %v want ErrNotFound", err)
