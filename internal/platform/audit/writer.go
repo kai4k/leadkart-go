@@ -23,6 +23,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/leadkart/leadkart-go/internal/common/clock"
 	"github.com/leadkart/leadkart-go/internal/common/ids"
 )
 
@@ -66,10 +67,9 @@ func NewWriter(pool *pgxpool.Pool, log *slog.Logger) *Writer {
 // return; it exists for tests + observability.
 func (w *Writer) Write(ctx context.Context, e Entry) error {
 	if e.OccurredAtUTC.IsZero() {
-		e.OccurredAtUTC = time.Now().UTC()
-	} else {
-		e.OccurredAtUTC = e.OccurredAtUTC.UTC()
+		e.OccurredAtUTC = clock.Now()
 	}
+	e.OccurredAtUTC = e.OccurredAtUTC.UTC()
 	if e.Action == "" {
 		return errors.New("audit: Entry.Action required")
 	}

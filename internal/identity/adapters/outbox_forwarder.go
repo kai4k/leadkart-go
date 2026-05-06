@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/leadkart/leadkart-go/internal/common/clock"
 	"github.com/leadkart/leadkart-go/internal/platform/pg"
 )
 
@@ -67,7 +68,7 @@ func (f *OutboxForwarder) ForwardOnce(ctx context.Context) (int, error) {
 		if err != nil {
 			return fmt.Errorf("forwarder: list unforwarded: %w", err)
 		}
-		now := time.Now().UTC()
+		now := clock.Now()
 		for _, row := range rows {
 			msg := message.NewMessage(uuidFromPg(row.ID).String(), row.Payload)
 			msg.Metadata.Set("event_type", row.Topic)
@@ -121,10 +122,11 @@ func (f *OutboxForwarder) Run(ctx context.Context, idleInterval, busyInterval ti
 		if err != nil {
 			errFn(err)
 		}
-		var wait time.Duration
-		if count == 0 {
-			wait = idleInterval
-		} else {
+		// Idle cadence on empty batch; tighter cadence after a non-empty
+		// batch so spikes drain quickly. Doctrine ban on `else`: pick
+		// idleInterval first, narrow on the busy branch.
+		wait := idleInterval
+		if count > 0 {
 			wait = busyInterval
 		}
 		select {
