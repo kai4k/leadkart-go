@@ -37,7 +37,7 @@ func TestNewV7_Unique(t *testing.T) {
 	t.Parallel()
 	const n = 1000
 	seen := make(map[uuid.UUID]struct{}, n)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		id := ids.NewV7()
 		if _, dup := seen[id]; dup {
 			t.Fatalf("duplicate UUIDv7 within %d generations: %s", i+1, id)
@@ -58,11 +58,10 @@ func TestNewV7_ConcurrentSafe(t *testing.T) {
 		seen = make(map[uuid.UUID]struct{}, goroutines*perGoroutine)
 		wg   sync.WaitGroup
 	)
-	for i := 0; i < goroutines; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for j := 0; j < perGoroutine; j++ {
+	for range goroutines {
+		// Go 1.22 — range-over-int + safe loop-var capture; Go 1.25 — wg.Go.
+		wg.Go(func() {
+			for range perGoroutine {
 				id := ids.NewV7()
 				mu.Lock()
 				if _, dup := seen[id]; dup {
@@ -73,7 +72,7 @@ func TestNewV7_ConcurrentSafe(t *testing.T) {
 				seen[id] = struct{}{}
 				mu.Unlock()
 			}
-		}()
+		})
 	}
 	wg.Wait()
 	if len(seen) != goroutines*perGoroutine {

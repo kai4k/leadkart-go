@@ -62,16 +62,13 @@ func TestSet_IsThreadSafe(t *testing.T) {
 	t.Cleanup(clock.Reset)
 
 	var wg sync.WaitGroup
-	for i := 0; i < 100; i++ {
-		wg.Add(2)
-		go func() {
-			defer wg.Done()
+	for i := range 100 {
+		wg.Go(func() {
 			_ = clock.Now()
-		}()
-		go func(i int) {
-			defer wg.Done()
+		})
+		wg.Go(func() {
 			clock.Set(time.Date(2026, 5, 5, 0, 0, i, 0, time.UTC))
-		}(i)
+		})
 	}
 	wg.Wait()
 }

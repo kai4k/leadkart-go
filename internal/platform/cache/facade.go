@@ -94,16 +94,17 @@ func (f *Facade[K, V]) Get(ctx context.Context, key K) (V, error) {
 	}
 
 	// L2 hit?
-	if raw, err := f.cache.L2.Get(ctx, keyStr).Bytes(); err == nil {
+	switch raw, err := f.cache.L2.Get(ctx, keyStr).Bytes(); {
+	case err == nil:
 		var v V
-		if decodeErr := f.cache.Codec.Decode(raw, &v); decodeErr == nil {
-			f.cache.L1.SetWithTTL(keyStr, raw, int64(len(raw)), f.ttl.L1)
-			return v, nil
-		} else {
+		if decodeErr := f.cache.Codec.Decode(raw, &v); decodeErr != nil {
 			f.cache.Logger.Warn("cache: L2 decode failed",
 				"facade", f.name, "key", keyStr, "err", decodeErr)
+			break
 		}
-	} else if !errors.Is(err, redis.Nil) {
+		f.cache.L1.SetWithTTL(keyStr, raw, int64(len(raw)), f.ttl.L1)
+		return v, nil
+	case !errors.Is(err, redis.Nil):
 		f.cache.Logger.Warn("cache: L2 read failed",
 			"facade", f.name, "key", keyStr, "err", err)
 	}

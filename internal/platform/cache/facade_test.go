@@ -97,8 +97,8 @@ func TestFacade_Get_L1HitSkipsFactory(t *testing.T) {
 	}
 	fx.cache.L1.Wait()
 
-	for i := 0; i < 5; i++ {
-		if _, err := fx.facade.Get(context.Background(), "p1"); err != nil {
+	for i := range 5 {
+		if _, err := fx.facade.Get(t.Context(), "p1"); err != nil {
 			t.Fatalf("Get %d: %v", i+2, err)
 		}
 	}
@@ -238,15 +238,13 @@ func TestFacade_Singleflight_CoalescesConcurrentMisses(t *testing.T) {
 
 	const callers = 10
 	var wg sync.WaitGroup
-	wg.Add(callers)
 	results := make([]person, callers)
 	errs := make([]error, callers)
-	for i := 0; i < callers; i++ {
-		i := i
-		go func() {
-			defer wg.Done()
-			results[i], errs[i] = fx.facade.Get(context.Background(), "p1")
-		}()
+	for i := range callers {
+		// Go 1.22 — loop var per-iteration safe; Go 1.25 — wg.Go.
+		wg.Go(func() {
+			results[i], errs[i] = fx.facade.Get(t.Context(), "p1")
+		})
 	}
 	// All callers should be blocked on the factory now.
 	time.Sleep(50 * time.Millisecond)
