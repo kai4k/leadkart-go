@@ -106,6 +106,66 @@ func FromDomainEvent(d any) (Event, error) {
 			OccurredAtUTC: e.At.UTC(),
 		}, nil
 
+	case membership.RoleAssignedEvent:
+		return MembershipRoleAssignedV1{
+			MembershipID:  mustParseUUID(e.MembershipID.String()),
+			PersonID:      mustParseUUID(e.PersonID.String()),
+			TenantIDClaim: mustParseUUID(e.TenantID.String()),
+			RoleID:        mustParseUUID(e.RoleID.String()),
+			OccurredAtUTC: e.At.UTC(),
+		}, nil
+
+	case membership.RoleRevokedEvent:
+		return MembershipRoleRevokedV1{
+			MembershipID:  mustParseUUID(e.MembershipID.String()),
+			PersonID:      mustParseUUID(e.PersonID.String()),
+			TenantIDClaim: mustParseUUID(e.TenantID.String()),
+			RoleID:        mustParseUUID(e.RoleID.String()),
+			OccurredAtUTC: e.At.UTC(),
+		}, nil
+
+	case membership.PermissionsUpdatedEvent:
+		return MembershipPermissionsUpdatedV1{
+			MembershipID:  mustParseUUID(e.MembershipID.String()),
+			PersonID:      mustParseUUID(e.PersonID.String()),
+			TenantIDClaim: mustParseUUID(e.TenantID.String()),
+			OccurredAtUTC: e.At.UTC(),
+		}, nil
+
+	case membership.ProfileUpdatedEvent:
+		return MembershipProfileUpdatedV1{
+			MembershipID:  mustParseUUID(e.MembershipID.String()),
+			PersonID:      mustParseUUID(e.PersonID.String()),
+			TenantIDClaim: mustParseUUID(e.TenantID.String()),
+			Designation:   e.Designation,
+			Department:    e.Department,
+			StatusMessage: e.StatusMessage,
+			OccurredAtUTC: e.At.UTC(),
+		}, nil
+
+	case membership.ManagerAssignedEvent:
+		var prev uuid.UUID
+		if !e.PreviousManager.IsZero() {
+			prev = mustParseUUID(e.PreviousManager.String())
+		}
+		return MembershipManagerAssignedV1{
+			MembershipID:    mustParseUUID(e.MembershipID.String()),
+			PersonID:        mustParseUUID(e.PersonID.String()),
+			TenantIDClaim:   mustParseUUID(e.TenantID.String()),
+			ManagerID:       mustParseUUID(e.ManagerID.String()),
+			PreviousManager: prev,
+			OccurredAtUTC:   e.At.UTC(),
+		}, nil
+
+	case membership.ManagerRemovedEvent:
+		return MembershipManagerRemovedV1{
+			MembershipID:    mustParseUUID(e.MembershipID.String()),
+			PersonID:        mustParseUUID(e.PersonID.String()),
+			TenantIDClaim:   mustParseUUID(e.TenantID.String()),
+			PreviousManager: mustParseUUID(e.PreviousManager.String()),
+			OccurredAtUTC:   e.At.UTC(),
+		}, nil
+
 	// ----- Refresh-token family --------------------------------------
 
 	case refreshtoken.FamilyCreatedEvent:
