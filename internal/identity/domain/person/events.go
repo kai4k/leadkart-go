@@ -96,6 +96,61 @@ func (GloballySuspendedEvent) Topic() string { return "identity.person_globally_
 // OccurredAt returns the domain timestamp.
 func (e GloballySuspendedEvent) OccurredAt() time.Time { return e.At }
 
+// PasswordResetRequestedEvent fires when [Person.RequestPasswordReset]
+// is called. Carries the expiry timestamp for downstream subscribers
+// (audit, SIEM) but NOT the raw token — the raw leaves the domain via
+// the application-layer integration event for email delivery only.
+//
+// Per security.md "Password reset" + Auth0 / Okta canon: the most
+// recent request supersedes any prior pending reset. Subscribers MAY
+// log the supersede for forensics.
+type PasswordResetRequestedEvent struct {
+	PersonID  ID
+	ExpiresAt time.Time
+	At        time.Time
+}
+
+// Topic returns the integration-event type.
+func (PasswordResetRequestedEvent) Topic() string { return "identity.password_reset_requested.v1" }
+
+// OccurredAt returns the domain timestamp.
+func (e PasswordResetRequestedEvent) OccurredAt() time.Time { return e.At }
+
+// PasswordResetConfirmedEvent fires when [Person.ConfirmPasswordReset]
+// successfully applies a new password via a valid reset token.
+//
+// Distinct from PasswordChangedEvent (which fires for any password
+// change — including admin reset, change-password-while-logged-in,
+// AND token-based reset). This narrower event lets subscribers
+// distinguish "user reset their own password via emailed token" from
+// "admin reset" for compliance reporting.
+type PasswordResetConfirmedEvent struct {
+	PersonID ID
+	At       time.Time
+}
+
+// Topic returns the integration-event type.
+func (PasswordResetConfirmedEvent) Topic() string { return "identity.password_reset_confirmed.v1" }
+
+// OccurredAt returns the domain timestamp.
+func (e PasswordResetConfirmedEvent) OccurredAt() time.Time { return e.At }
+
+// PasswordResetCancelledEvent fires when [Person.CancelPasswordReset]
+// invalidates a pending reset (admin action, security-incident
+// response, or implicit cancel via direct password change while a
+// reset was pending).
+type PasswordResetCancelledEvent struct {
+	PersonID ID
+	Reason   string
+	At       time.Time
+}
+
+// Topic returns the integration-event type.
+func (PasswordResetCancelledEvent) Topic() string { return "identity.password_reset_cancelled.v1" }
+
+// OccurredAt returns the domain timestamp.
+func (e PasswordResetCancelledEvent) OccurredAt() time.Time { return e.At }
+
 // GlobalSuspensionLiftedEvent fires when [Person.LiftGlobalSuspension]
 // reverses a previous global suspension. Subscribers re-enable login
 // + remove the SIEM block.

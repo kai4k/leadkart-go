@@ -269,6 +269,244 @@ func TestUpdateProfile_RefusedOnAnonymisedPerson(t *testing.T) {
 	}
 }
 
+// ----- Password reset (token flow) ------------------------------------------
+
+const validResetHash = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789" // 64 hex chars
+
+func mustResetHash(t *testing.T, raw string) person.PasswordResetTokenHash {
+	t.Helper()
+	h, err := person.NewPasswordResetTokenHash(raw)
+	if err != nil {
+		t.Fatalf("NewPasswordResetTokenHash(%q): %v", raw, err)
+	}
+	return h
+}
+
+func TestRequestPasswordReset_StoresPendingAndEmitsEvent(t *testing.T) {
+	t.Cleanup(clock.Reset)
+	clock.Set(time.Date(2026, 5, 7, 12, 0, 0, 0, time.UTC))
+
+	p := newPerson(t)
+	_ = p.PullEvents()
+
+	h := mustResetHash(t, validResetHash)
+	if err := p.RequestPasswordReset(h, time.Hour); err != nil {
+		t.Fatalf("RequestPasswordReset: %v", err)
+	}
+	pending := p.PendingPasswordReset()
+	if pending.IsZero() {
+		t.Fatal("PendingPasswordReset is zero")
+	}
+	if !pending.Hash().Equal(h) {
+		t.Errorf("hash mismatch")
+	}
+	expectedExpiry := time.Date(2026, 5, 7, 13, 0, 0, 0, time.UTC)
+	if !pending.ExpiresAt().Equal(expectedExpiry) {
+		t.Errorf("ExpiresAt = %v, want %v", pending.ExpiresAt(), expectedExpiry)
+	}
+
+	events := p.PullEvents()
+	if len(events) != 1 {
+		t.Fatalf("events: %d", len(events))
+	}
+	ev, ok := events[0].(person.PasswordResetRequestedEvent)
+	if !ok {
+		t.Fatalf("event[0] = %T, want PasswordResetRequestedEvent", events[0])
+	}
+	if !ev.ExpiresAt.Equal(expectedExpiry) {
+		t.Errorf("event ExpiresAt mismatch")
+	}
+}
+
+func TestRequestPasswordReset_RejectsZeroHashAndZeroTTL(t *testing.T) {
+	t.Cleanup(clock.Reset)
+	p := newPerson(t)
+	if err := p.RequestPasswordReset(person.PasswordResetTokenHash{}, time.Hour); !errors.Is(err, person.ErrInvalid) {
+		t.Errorf("zero hash: expected ErrInvalid, got %v", err)
+	}
+	h := mustResetHash(t, validResetHash)
+	for _, ttl := range []time.Duration{0, -1 * time.Second} {
+		if err := p.RequestPasswordReset(h, ttl); !errors.Is(err, person.ErrInvalid) {
+			t.Errorf("ttl %v: expected ErrInvalid, got %v", ttl, err)
+		}
+	}
+}
+
+func TestRequestPasswordReset_RejectedOnAnonymisedAndSuspended(t *testing.T) {
+	t.Cleanup(clock.Reset)
+	h := mustResetHash(t, validResetHash)
+
+	pAnon := newPerson(t)
+	_ = pAnon.Anonymise()
+	if err := pAnon.RequestPasswordReset(h, time.Hour); !errors.Is(err, person.ErrInvalid) {
+		t.Errorf("anonymised: expected ErrInvalid, got %v", err)
+	}
+
+	pSusp := newPerson(t)
+	_ = pSusp.GloballySuspend("fraud")
+	if err := pSusp.RequestPasswordReset(h, time.Hour); !errors.Is(err, person.ErrInvalid) {
+		t.Errorf("suspended: expected ErrInvalid, got %v", err)
+	}
+}
+
+func TestRequestPasswordReset_NewRequestSupersedesOld(t *testing.T) {
+	t.Cleanup(clock.Reset)
+	clock.Set(time.Date(2026, 5, 7, 12, 0, 0, 0, time.UTC))
+	p := newPerson(t)
+
+	first := mustResetHash(t, validResetHash)
+	_ = p.RequestPasswordReset(first, time.Hour)
+	_ = p.PullEvents()
+
+	clock.Set(time.Date(2026, 5, 7, 12, 30, 0, 0, time.UTC))
+	second := mustResetHash(t, "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210")
+	if err := p.RequestPasswordReset(second, 30*time.Minute); err != nil {
+		t.Fatalf("second request: %v", err)
+	}
+	pending := p.PendingPasswordReset()
+	if !pending.Hash().Equal(second) {
+		t.Error("second request did not supersede first")
+	}
+	expectedExpiry := time.Date(2026, 5, 7, 13, 0, 0, 0, time.UTC)
+	if !pending.ExpiresAt().Equal(expectedExpiry) {
+		t.Errorf("ExpiresAt = %v, want %v", pending.ExpiresAt(), expectedExpiry)
+	}
+}
+
+func TestConfirmPasswordReset_AppliesNewPasswordAndRotatesStamp(t *testing.T) {
+	t.Cleanup(clock.Reset)
+	clock.Set(time.Date(2026, 5, 7, 12, 0, 0, 0, time.UTC))
+
+	p := newPerson(t)
+	originalStamp := p.SecurityStamp()
+	originalHash := p.PasswordHash()
+
+	h := mustResetHash(t, validResetHash)
+	_ = p.RequestPasswordReset(h, time.Hour)
+	_ = p.PullEvents()
+
+	clock.Set(time.Date(2026, 5, 7, 12, 30, 0, 0, time.UTC))
+	newHash, _ := person.NewPasswordHash("$argon2id$v=19$m=19456,t=2,p=1$bmV3c2FsdG5ld3NhbHQ$bmV3aGFzaG5ld2hhc2huZXc")
+	if err := p.ConfirmPasswordReset(h, newHash); err != nil {
+		t.Fatalf("ConfirmPasswordReset: %v", err)
+	}
+	if p.PendingPasswordReset().Hash().IsZero() != true {
+		t.Error("pending reset not cleared after confirm")
+	}
+	if p.PasswordHash().String() == originalHash.String() {
+		t.Error("PasswordHash not updated")
+	}
+	if p.SecurityStamp().Equal(originalStamp) {
+		t.Error("SecurityStamp did not rotate")
+	}
+
+	events := p.PullEvents()
+	if len(events) != 2 {
+		t.Fatalf("events: %d, want 2 (Confirmed + Changed)", len(events))
+	}
+	if _, ok := events[0].(person.PasswordResetConfirmedEvent); !ok {
+		t.Errorf("event[0] = %T, want PasswordResetConfirmedEvent", events[0])
+	}
+	if _, ok := events[1].(person.PasswordChangedEvent); !ok {
+		t.Errorf("event[1] = %T, want PasswordChangedEvent", events[1])
+	}
+}
+
+func TestConfirmPasswordReset_RejectsExpiredToken(t *testing.T) {
+	t.Cleanup(clock.Reset)
+	clock.Set(time.Date(2026, 5, 7, 12, 0, 0, 0, time.UTC))
+
+	p := newPerson(t)
+	h := mustResetHash(t, validResetHash)
+	_ = p.RequestPasswordReset(h, time.Hour)
+
+	// Past expiry
+	clock.Set(time.Date(2026, 5, 7, 14, 0, 0, 0, time.UTC))
+	newHash, _ := person.NewPasswordHash("$argon2id$v=19$m=19456,t=2,p=1$bmV3c2FsdG5ld3NhbHQ$bmV3aGFzaG5ld2hhc2huZXc")
+	if err := p.ConfirmPasswordReset(h, newHash); !errors.Is(err, person.ErrInvalid) {
+		t.Errorf("expired: expected ErrInvalid, got %v", err)
+	}
+	// Pending defensively cleared after expired confirm — second call has no pending.
+	if !p.PendingPasswordReset().IsZero() {
+		t.Error("expired pending not cleared defensively")
+	}
+}
+
+func TestConfirmPasswordReset_RejectsMismatchedHash(t *testing.T) {
+	t.Cleanup(clock.Reset)
+	p := newPerson(t)
+	stored := mustResetHash(t, validResetHash)
+	_ = p.RequestPasswordReset(stored, time.Hour)
+
+	wrong := mustResetHash(t, "0000000000000000000000000000000000000000000000000000000000000000")
+	newHash, _ := person.NewPasswordHash("$argon2id$v=19$m=19456,t=2,p=1$bmV3c2FsdG5ld3NhbHQ$bmV3aGFzaG5ld2hhc2huZXc")
+	if err := p.ConfirmPasswordReset(wrong, newHash); !errors.Is(err, person.ErrInvalid) {
+		t.Errorf("wrong hash: expected ErrInvalid, got %v", err)
+	}
+	// Pending NOT cleared on mismatch — legitimate user retry within window must work.
+	if p.PendingPasswordReset().IsZero() {
+		t.Error("pending should remain after mismatch")
+	}
+}
+
+func TestConfirmPasswordReset_RejectsWhenNoPending(t *testing.T) {
+	t.Cleanup(clock.Reset)
+	p := newPerson(t)
+	h := mustResetHash(t, validResetHash)
+	newHash, _ := person.NewPasswordHash("$argon2id$v=19$m=19456,t=2,p=1$bmV3c2FsdG5ld3NhbHQ$bmV3aGFzaG5ld2hhc2huZXc")
+	if err := p.ConfirmPasswordReset(h, newHash); !errors.Is(err, person.ErrInvalid) {
+		t.Errorf("no pending: expected ErrInvalid, got %v", err)
+	}
+}
+
+func TestCancelPasswordReset_ClearsPendingAndEmitsEvent(t *testing.T) {
+	t.Cleanup(clock.Reset)
+	p := newPerson(t)
+	h := mustResetHash(t, validResetHash)
+	_ = p.RequestPasswordReset(h, time.Hour)
+	_ = p.PullEvents()
+
+	if err := p.CancelPasswordReset("operator-cleared-stuck-reset"); err != nil {
+		t.Fatalf("Cancel: %v", err)
+	}
+	if !p.PendingPasswordReset().IsZero() {
+		t.Error("pending not cleared")
+	}
+	events := p.PullEvents()
+	if len(events) != 1 {
+		t.Fatalf("events: %d", len(events))
+	}
+	ev, ok := events[0].(person.PasswordResetCancelledEvent)
+	if !ok {
+		t.Fatalf("event[0] = %T, want PasswordResetCancelledEvent", events[0])
+	}
+	if ev.Reason != "operator-cleared-stuck-reset" {
+		t.Errorf("reason = %q", ev.Reason)
+	}
+}
+
+func TestCancelPasswordReset_NoOp_WhenNoPending(t *testing.T) {
+	t.Cleanup(clock.Reset)
+	p := newPerson(t)
+	_ = p.PullEvents()
+	if err := p.CancelPasswordReset("preemptive"); err != nil {
+		t.Fatalf("Cancel no-op: %v", err)
+	}
+	if got := p.PullEvents(); len(got) != 0 {
+		t.Errorf("expected 0 events on no-op cancel, got %d", len(got))
+	}
+}
+
+func TestCancelPasswordReset_RequiresReason_WhenPending(t *testing.T) {
+	t.Cleanup(clock.Reset)
+	p := newPerson(t)
+	h := mustResetHash(t, validResetHash)
+	_ = p.RequestPasswordReset(h, time.Hour)
+	if err := p.CancelPasswordReset(""); !errors.Is(err, person.ErrInvalid) {
+		t.Errorf("expected ErrInvalid on empty reason, got %v", err)
+	}
+}
+
 // ----- GloballySuspend ------------------------------------------------------
 
 func TestGloballySuspend_FlipsFlagAndRotatesStamp(t *testing.T) {
