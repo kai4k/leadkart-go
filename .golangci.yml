@@ -22,8 +22,6 @@ linters:
     - cyclop              # cyclomatic complexity cap
     - testifylint
     - sqlclosecheck
-    - gofumpt             # stricter gofmt
-    - gci                 # import grouping
     - tagliatelle         # struct tag naming consistency
 
   exclusions:
@@ -40,16 +38,25 @@ linters:
         - name: var-naming
         - name: exported
         - name: unused-parameter
-    gci:
-      sections:
-        - standard
-        - default
-        - prefix(github.com/leadkart/leadkart-go)
     tagliatelle:
       case:
         rules:
           json: snake
           yaml: snake
+
+# gci + gofumpt moved to a top-level `formatters` block in golangci-lint
+# v2 — they are formatters, not linters. Run via `golangci-lint fmt`
+# (and gated in CI by `golangci-lint run --fix=false` in lint mode).
+formatters:
+  enable:
+    - gofumpt             # stricter gofmt
+    - gci                 # import grouping
+  settings:
+    gci:
+      sections:
+        - standard
+        - default
+        - prefix(github.com/leadkart/leadkart-go)
 
 issues:
   max-issues-per-linter: 0
