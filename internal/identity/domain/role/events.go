@@ -28,3 +28,16 @@ type CreatedEvent struct {
 }
 
 func (CreatedEvent) isRoleEvent() {}
+
+// RenamedEvent fires when a non-system-default role's name changes.
+// Carries both the old and new name so audit subscribers can render
+// the diff without re-loading prior state.
+type RenamedEvent struct {
+	RoleID   ID
+	TenantID tenant.ID
+	OldName  string
+	NewName  string
+	At       time.Time
+}
+
+func (RenamedEvent) isRoleEvent() {}

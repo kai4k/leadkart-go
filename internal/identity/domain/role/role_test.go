@@ -87,6 +87,78 @@ func TestNew_RejectsHierarchyOutOfRange(t *testing.T) {
 	}
 }
 
+func TestRename_TransitionsAndEmits(t *testing.T) {
+	t.Parallel()
+	r := newRole(t)
+	_ = r.PullEvents() // drop CreatedEvent
+	if err := r.Rename("Senior Manager"); err != nil {
+		t.Fatalf("Rename: %v", err)
+	}
+	if r.Name() != "Senior Manager" {
+		t.Fatalf("name: %q", r.Name())
+	}
+	events := r.PullEvents()
+	if len(events) != 1 {
+		t.Fatalf("events: %d", len(events))
+	}
+	ev, ok := events[0].(role.RenamedEvent)
+	if !ok {
+		t.Fatalf("event type: %T", events[0])
+	}
+	if ev.OldName != "Sales Manager" || ev.NewName != "Senior Manager" {
+		t.Fatalf("event payload: %+v", ev)
+	}
+}
+
+func TestRename_IdempotentNoEvent(t *testing.T) {
+	t.Parallel()
+	r := newRole(t)
+	_ = r.PullEvents()
+	if err := r.Rename("Sales Manager"); err != nil {
+		t.Fatalf("Rename same: %v", err)
+	}
+	if events := r.PullEvents(); len(events) != 0 {
+		t.Fatalf("idempotent rename should emit 0 events, got %d", len(events))
+	}
+}
+
+func TestRename_TrimsWhitespaceBeforeCompare(t *testing.T) {
+	t.Parallel()
+	r := newRole(t)
+	_ = r.PullEvents()
+	if err := r.Rename("  Sales Manager  "); err != nil {
+		t.Fatalf("Rename trimmed-same: %v", err)
+	}
+	if events := r.PullEvents(); len(events) != 0 {
+		t.Fatalf("rename to trimmed-same should emit 0 events, got %d", len(events))
+	}
+}
+
+func TestRename_RejectsSystemDefault(t *testing.T) {
+	t.Parallel()
+	r, err := role.New(
+		role.ID(ids.NewV7().String()),
+		tenant.ID(ids.NewV7().String()),
+		"TenantAdmin", true, 10, false,
+	)
+	if err != nil {
+		t.Fatalf("New system-default: %v", err)
+	}
+	if err := r.Rename("Renamed"); !errors.Is(err, role.ErrSystemDefault) {
+		t.Fatalf("want ErrSystemDefault, got %v", err)
+	}
+}
+
+func TestRename_RejectsBadName(t *testing.T) {
+	t.Parallel()
+	r := newRole(t)
+	for _, n := range []string{"", " ", "a"} {
+		if err := r.Rename(n); !errors.Is(err, role.ErrInvalid) {
+			t.Fatalf("name=%q: want ErrInvalid got %v", n, err)
+		}
+	}
+}
+
 func TestHierarchyConstants(t *testing.T) {
 	t.Parallel()
 	if role.HierarchyLevelMin != 0 || role.HierarchyLevelMax != 99 ||

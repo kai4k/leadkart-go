@@ -157,6 +157,51 @@ func (r *Role) Permissions() []*permission.Permission {
 	return out
 }
 
+// ----- State transitions ----------------------------------------------------
+
+// Rename changes the Role's display name. System-default roles refuse
+// rename per `multi-tenancy.md` doctrine.
+//
+// Idempotent: renaming to the (trimmed) same name is a no-op (no event).
+func (r *Role) Rename(newName string) error {
+	if err := r.ensureMutable(); err != nil {
+		return err
+	}
+	if r.isSystemDefault {
+		return fmt.Errorf("%w: %s", ErrSystemDefault, r.name)
+	}
+	trimmed := strings.TrimSpace(newName)
+	if trimmed == "" {
+		return fmt.Errorf("%w: name required", ErrInvalid)
+	}
+	if len(trimmed) < 2 || len(trimmed) > 100 {
+		return fmt.Errorf("%w: name length %d not in [2,100]", ErrInvalid, len(trimmed))
+	}
+	if trimmed == r.name {
+		return nil
+	}
+	old := r.name
+	r.name = trimmed
+	r.recordEvent(RenamedEvent{
+		RoleID:   r.id,
+		TenantID: r.tenantID,
+		OldName:  old,
+		NewName:  trimmed,
+		At:       clock.Now(),
+	})
+	return nil
+}
+
+// ensureMutable rejects mutations on a deleted role. Internal helper
+// for the state-transition methods (Rename / SetHierarchyLevel /
+// GrantPermission / etc.).
+func (r *Role) ensureMutable() error {
+	if r.deleted {
+		return fmt.Errorf("%w: %s", ErrDeleted, r.name)
+	}
+	return nil
+}
+
 // ----- Event handling -------------------------------------------------------
 
 // PullEvents drains recorded domain events. Repository calls this
