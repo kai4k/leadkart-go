@@ -2,7 +2,12 @@
 // closed-set IdentityPermissions catalogue.
 package permission
 
-import "errors"
+import (
+	"errors"
+	"fmt"
+	"strings"
+	"sync"
+)
 
 // ErrUnknown is the sentinel returned when an input string does not
 // match any catalogue entry. HTTP layer maps to 400 with code
@@ -107,4 +112,105 @@ var IdentityPermissions = struct {
 		Assign: "identity.roles.assign",
 		Revoke: "identity.roles.revoke",
 	},
+}
+
+func allNames() []string {
+	p := IdentityPermissions
+	return []string{
+		p.Meta.TenantAdmin,
+		p.Platform.TenantsView, p.Platform.TenantsCreate, p.Platform.TenantsManage,
+		p.Platform.UsersView, p.Platform.UsersCreate, p.Platform.UsersManage,
+		p.Platform.RolesView, p.Platform.RolesManage,
+		p.Tenants.View, p.Tenants.Update, p.Tenants.UpdateSettings,
+		p.Tenants.Suspend, p.Tenants.Activate, p.Tenants.Delete,
+		p.Users.View, p.Users.Create, p.Users.Update,
+		p.Users.Deactivate, p.Users.Reactivate, p.Users.Unlock,
+		p.Users.Anonymise, p.Users.UpdatePermissions,
+		p.Roles.View, p.Roles.Create, p.Roles.Update, p.Roles.Delete,
+		p.Roles.Assign, p.Roles.Revoke,
+	}
+}
+
+var (
+	internOnce sync.Once
+	intern     map[string]*Permission
+)
+
+func ensureIntern() {
+	internOnce.Do(func() {
+		names := allNames()
+		intern = make(map[string]*Permission, len(names))
+		for _, n := range names {
+			intern[n] = &Permission{name: n}
+		}
+	})
+}
+
+// All returns every catalogue entry as an interned [Permission] slice.
+func All() []*Permission {
+	ensureIntern()
+	names := allNames()
+	out := make([]*Permission, len(names))
+	for i, n := range names {
+		out[i] = intern[n]
+	}
+	return out
+}
+
+// FromConstant returns the interned [Permission] for a known catalogue
+// constant. Panics on miss — callers MUST pass an `IdentityPermissions.X`
+// reference. Use [TryFromConstant] for untrusted input.
+func FromConstant(name string) *Permission {
+	ensureIntern()
+	p, ok := intern[name]
+	if !ok {
+		panic(fmt.Sprintf("permission: %q not in catalogue", name))
+	}
+	return p
+}
+
+// TryFromConstant is the Result-shaped lookup for untrusted input.
+func TryFromConstant(name string) (*Permission, error) {
+	if strings.TrimSpace(name) == "" {
+		return nil, ErrEmpty
+	}
+	ensureIntern()
+	if p, ok := intern[strings.TrimSpace(name)]; ok {
+		return p, nil
+	}
+	return nil, fmt.Errorf("%w: %q", ErrUnknown, name)
+}
+
+// Create is the open-input validator (charset + length bounds). Returns
+// the interned pointer when input matches a catalogue entry; fresh
+// non-interned otherwise.
+func Create(name string) (*Permission, error) {
+	if strings.TrimSpace(name) == "" {
+		return nil, ErrEmpty
+	}
+	trimmed := strings.TrimSpace(name)
+	if len(trimmed) < 3 || len(trimmed) > 100 {
+		return nil, fmt.Errorf("%w: length %d not in [3,100]", ErrFormat, len(trimmed))
+	}
+	for _, r := range trimmed {
+		ok := (r >= 'a' && r <= 'z') ||
+			(r >= 'A' && r <= 'Z') ||
+			(r >= '0' && r <= '9') ||
+			r == '.' || r == '_' || r == ':'
+		if !ok {
+			return nil, fmt.Errorf("%w: invalid char %q", ErrFormat, r)
+		}
+	}
+	ensureIntern()
+	if p, ok := intern[trimmed]; ok {
+		return p, nil
+	}
+	return &Permission{name: trimmed}, nil
+}
+
+// IsKnown reports whether the supplied name appears in the closed catalogue.
+func IsKnown(name string) bool {
+	ensureIntern()
+	_, ok := intern[name]
+	return ok
 }
