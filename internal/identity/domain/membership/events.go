@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/role"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
 
@@ -55,3 +56,35 @@ func (ReactivatedEvent) Topic() string { return "identity.membership_reactivated
 
 // OccurredAt returns the domain timestamp.
 func (e ReactivatedEvent) OccurredAt() time.Time { return e.At }
+
+// RoleAssignedEvent fires when a Role is assigned to the Membership.
+// Subscribers: SecurityStamp invalidator (rotation triggers per
+// `security.md`), audit log, integration-event mapper.
+type RoleAssignedEvent struct {
+	MembershipID ID
+	PersonID     person.ID
+	TenantID     tenant.ID
+	RoleID       role.ID
+	At           time.Time
+}
+
+// Topic returns the integration-event type.
+func (RoleAssignedEvent) Topic() string { return "identity.membership_role_assigned.v1" }
+
+// OccurredAt returns the domain timestamp.
+func (e RoleAssignedEvent) OccurredAt() time.Time { return e.At }
+
+// RoleRevokedEvent fires when a Role is removed from the Membership.
+type RoleRevokedEvent struct {
+	MembershipID ID
+	PersonID     person.ID
+	TenantID     tenant.ID
+	RoleID       role.ID
+	At           time.Time
+}
+
+// Topic returns the integration-event type.
+func (RoleRevokedEvent) Topic() string { return "identity.membership_role_revoked.v1" }
+
+// OccurredAt returns the domain timestamp.
+func (e RoleRevokedEvent) OccurredAt() time.Time { return e.At }

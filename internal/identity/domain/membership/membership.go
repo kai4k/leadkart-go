@@ -31,6 +31,7 @@ import (
 	"github.com/leadkart/leadkart-go/internal/common/clock"
 	"github.com/leadkart/leadkart-go/internal/common/errs"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/role"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
 
@@ -60,7 +61,16 @@ type Membership struct {
 	status   Status
 	joinedAt time.Time
 	leftAt   time.Time // zero unless inactive
-	events   []Event
+
+	// roleAssignments holds the IDs of every Role the Membership
+	// carries. Persistence layer joins to identity.role_assignments.
+	// CALLER INVARIANT (application service): every Role assigned MUST
+	// belong to the same tenantID — cross-tenant role assignment is a
+	// doctrine violation per `multi-tenancy.md`. The DB-level composite
+	// FK on (membership_id, tenant_id) → (id, tenant_id) guards this.
+	roleAssignments []role.ID
+
+	events []Event
 }
 
 // New constructs a brand-new TenantMembership in [StatusActive].
@@ -98,24 +108,26 @@ func New(id ID, personID person.ID, tenantID tenant.ID) (*Membership, error) {
 
 // Snapshot is the persistence DTO consumed by [UnmarshalFromDB].
 type Snapshot struct {
-	ID       ID
-	PersonID person.ID
-	TenantID tenant.ID
-	Status   Status
-	JoinedAt time.Time
-	LeftAt   time.Time
+	ID              ID
+	PersonID        person.ID
+	TenantID        tenant.ID
+	Status          Status
+	JoinedAt        time.Time
+	LeftAt          time.Time
+	RoleAssignments []role.ID
 }
 
 // UnmarshalFromDB re-hydrates a Membership from persistence.
 // Repository-only path; does NOT re-validate (TDL canon).
 func UnmarshalFromDB(s Snapshot) *Membership {
 	return &Membership{
-		id:       s.ID,
-		personID: s.PersonID,
-		tenantID: s.TenantID,
-		status:   s.Status,
-		joinedAt: s.JoinedAt,
-		leftAt:   s.LeftAt,
+		id:              s.ID,
+		personID:        s.PersonID,
+		tenantID:        s.TenantID,
+		status:          s.Status,
+		joinedAt:        s.JoinedAt,
+		leftAt:          s.LeftAt,
+		roleAssignments: append([]role.ID(nil), s.RoleAssignments...),
 	}
 }
 
@@ -138,6 +150,15 @@ func (m *Membership) JoinedAt() time.Time { return m.joinedAt }
 
 // LeftAt returns the most recent deactivation timestamp; zero if currently active.
 func (m *Membership) LeftAt() time.Time { return m.leftAt }
+
+// RoleAssignments returns a defensive copy of the role-ID list. Mutations to
+// the returned slice do NOT affect aggregate state — Role mutations go
+// through [AssignRole] / [RevokeRole].
+func (m *Membership) RoleAssignments() []role.ID {
+	out := make([]role.ID, len(m.roleAssignments))
+	copy(out, m.roleAssignments)
+	return out
+}
 
 // ----- State transitions ----------------------------------------------------
 
@@ -191,6 +212,59 @@ func (m *Membership) Reactivate() error {
 		TenantID:     m.tenantID,
 		At:           now,
 	})
+	return nil
+}
+
+// ----- Authorisation: role assignments --------------------------------------
+
+// AssignRole adds the supplied Role ID to the Membership's assignment
+// list. Idempotent — assigning an already-assigned role is a no-op
+// (no event).
+//
+// CALLER INVARIANT (application service): the Role's TenantID MUST
+// equal this Membership's TenantID. Cross-tenant role assignment is
+// a doctrine violation per `multi-tenancy.md`. The DB-level composite
+// FK `(membership_id, tenant_id) → (id, tenant_id)` rejects mismatch.
+func (m *Membership) AssignRole(roleID role.ID) error {
+	if roleID.IsZero() {
+		return fmt.Errorf("%w: roleID required", ErrInvalid)
+	}
+	for _, existing := range m.roleAssignments {
+		if existing == roleID {
+			return nil
+		}
+	}
+	m.roleAssignments = append(m.roleAssignments, roleID)
+	m.recordEvent(RoleAssignedEvent{
+		MembershipID: m.id,
+		PersonID:     m.personID,
+		TenantID:     m.tenantID,
+		RoleID:       roleID,
+		At:           clock.Now(),
+	})
+	return nil
+}
+
+// RevokeRole removes the supplied Role ID from the Membership's
+// assignment list. Idempotent — revoking a non-assigned role is a
+// no-op (no event).
+func (m *Membership) RevokeRole(roleID role.ID) error {
+	if roleID.IsZero() {
+		return fmt.Errorf("%w: roleID required", ErrInvalid)
+	}
+	for i, existing := range m.roleAssignments {
+		if existing == roleID {
+			m.roleAssignments = append(m.roleAssignments[:i], m.roleAssignments[i+1:]...)
+			m.recordEvent(RoleRevokedEvent{
+				MembershipID: m.id,
+				PersonID:     m.personID,
+				TenantID:     m.tenantID,
+				RoleID:       roleID,
+				At:           clock.Now(),
+			})
+			return nil
+		}
+	}
 	return nil
 }
 
