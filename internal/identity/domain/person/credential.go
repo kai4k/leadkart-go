@@ -79,7 +79,7 @@ func NewSecurityStamp() SecurityStamp {
 func SecurityStampFromString(raw string) (SecurityStamp, error) {
 	u, err := uuid.Parse(raw)
 	if err != nil {
-		return SecurityStamp{}, fmt.Errorf("%w: invalid security stamp %q: %v", ErrInvalid, raw, err)
+		return SecurityStamp{}, fmt.Errorf("%w: invalid security stamp %q: %w", ErrInvalid, raw, err)
 	}
 	return SecurityStamp(u), nil
 }

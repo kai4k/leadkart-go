@@ -2,6 +2,7 @@ package refreshtoken_test
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -33,10 +34,8 @@ func hash(s string) refreshtoken.TokenHash {
 	// Length must be ≥ 40 chars to satisfy the validator. Pad to exactly
 	// 64 chars (real SHA-256 hex length) so test data resembles production.
 	const target = 64
-	padded := s + "_"
-	for len(padded) < target {
-		padded += "a"
-	}
+	prefix := s + "_"
+	padded := prefix + strings.Repeat("a", target-len(prefix))
 	h, _ := refreshtoken.NewTokenHash(padded[:target])
 	return h
 }

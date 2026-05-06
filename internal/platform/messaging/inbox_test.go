@@ -124,8 +124,8 @@ func TestIdempotentReceiver_Replay_SkipsHandler(t *testing.T) {
 	})
 
 	mid := "22222222-2222-2222-2222-222222222222"
-	for i := 0; i < 5; i++ {
-		if err := wrapped(context.Background(), mid); err != nil {
+	for i := range 5 {
+		if err := wrapped(t.Context(), mid); err != nil {
 			t.Fatalf("call %d: %v", i, err)
 		}
 	}

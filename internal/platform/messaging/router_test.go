@@ -132,7 +132,7 @@ func TestRouter_FullStack_TenantContextAndAuditAndIdempotency(t *testing.T) {
 
 	// Sequential replays: with dedup row already committed, subsequent
 	// publishes short-circuit on the IdempotentReceiver CHECK.
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		if err := pubsub.Publish("test.topic", makeMsg()); err != nil {
 			t.Fatalf("publish replay %d: %v", i, err)
 		}

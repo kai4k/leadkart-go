@@ -19,10 +19,10 @@ jobs:
     name: Build / Lint / Test / Vuln
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       # Pin Go from go.mod (2026 canon — single source of truth)
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
           cache: true
@@ -36,16 +36,16 @@ jobs:
         run: go vet ./...
 
       - name: Lint (golangci-lint v2 strict)
-        uses: golangci/golangci-lint-action@v6
+        uses: golangci/golangci-lint-action@v9
         with:
-          version: v2.0.2
+          version: v2.12.2
           args: --timeout=5m
 
       - name: Test (race + shuffle + coverage)
         run: go test -race -shuffle=on -coverprofile=coverage.out ./...
 
       - name: Upload coverage artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: coverage
           path: coverage.out

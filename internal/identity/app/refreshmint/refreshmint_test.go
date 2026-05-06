@@ -50,7 +50,12 @@ func TestMint_DistinctPairsEveryCall(t *testing.T) {
 
 func TestHashOf_DeterministicForSameInput(t *testing.T) {
 	t.Parallel()
-	if refreshmint.HashOf("foo") != refreshmint.HashOf("foo") {
+	// Capture into vars so staticcheck doesn't flag the determinism
+	// assertion as SA4000 ("identical expressions") — calling HashOf
+	// twice with the same input is the literal contract under test.
+	first := refreshmint.HashOf("foo")
+	second := refreshmint.HashOf("foo")
+	if first != second {
 		t.Fatal("HashOf is non-deterministic")
 	}
 	if refreshmint.HashOf("foo") == refreshmint.HashOf("bar") {

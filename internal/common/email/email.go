@@ -60,7 +60,7 @@ func New(raw string) (Address, error) {
 	}
 	addr, err := mail.ParseAddress(trimmed)
 	if err != nil {
-		return Address{}, fmt.Errorf("%w: %v", ErrInvalid, err)
+		return Address{}, fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
 	// mail.ParseAddress accepts "user@example" without TLD — reject.
 	at := strings.LastIndex(addr.Address, "@")

@@ -116,11 +116,10 @@ func (h *Health) runChecks(ctx context.Context) map[string]string {
 
 	var wg sync.WaitGroup
 	var mu sync.Mutex
+	// Go 1.22 — loop variable per-iteration capture is safe; no need
+	// for `c := c` shadow. Go 1.25 — wg.Go captures spawn + Done.
 	for _, c := range checkers {
-		c := c
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			cctx, cancel := context.WithTimeout(ctx, h.timeout)
 			defer cancel()
 			err := c.Check(cctx)
@@ -131,7 +130,7 @@ func (h *Health) runChecks(ctx context.Context) map[string]string {
 				return
 			}
 			report[c.Name()] = "ok"
-		}()
+		})
 	}
 	wg.Wait()
 	return report
