@@ -159,6 +159,47 @@ func TestRename_RejectsBadName(t *testing.T) {
 	}
 }
 
+func TestSetHierarchyLevel_AcceptsValid(t *testing.T) {
+	t.Parallel()
+	r := newRole(t)
+	if err := r.SetHierarchyLevel(20); err != nil {
+		t.Fatalf("SetHierarchyLevel: %v", err)
+	}
+	if r.HierarchyLevel() != 20 {
+		t.Fatalf("level: got %d want 20", r.HierarchyLevel())
+	}
+}
+
+func TestSetHierarchyLevel_IdempotentNoChange(t *testing.T) {
+	t.Parallel()
+	r := newRole(t)
+	if err := r.SetHierarchyLevel(role.HierarchyLevelDefault); err != nil {
+		t.Fatalf("SetHierarchyLevel same: %v", err)
+	}
+	// HierarchyLevel changes don't emit events (no event type defined
+	// for it in this aggregate; mirror of .NET parent which emits no
+	// event for level change).
+}
+
+func TestSetHierarchyLevel_RejectsOutOfRange(t *testing.T) {
+	t.Parallel()
+	r := newRole(t)
+	for _, lvl := range []int{-1, 100, 500} {
+		if err := r.SetHierarchyLevel(lvl); !errors.Is(err, role.ErrInvalid) {
+			t.Fatalf("lvl=%d: want ErrInvalid got %v", lvl, err)
+		}
+	}
+}
+
+func TestSetHierarchyLevel_RejectsSystemDefault(t *testing.T) {
+	t.Parallel()
+	r, _ := role.New(role.ID(ids.NewV7().String()), tenant.ID(ids.NewV7().String()),
+		"TenantAdmin", true, 10, false)
+	if err := r.SetHierarchyLevel(20); !errors.Is(err, role.ErrSystemDefault) {
+		t.Fatalf("want ErrSystemDefault got %v", err)
+	}
+}
+
 func TestHierarchyConstants(t *testing.T) {
 	t.Parallel()
 	if role.HierarchyLevelMin != 0 || role.HierarchyLevelMax != 99 ||

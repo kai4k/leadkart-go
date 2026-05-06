@@ -192,6 +192,29 @@ func (r *Role) Rename(newName string) error {
 	return nil
 }
 
+// SetHierarchyLevel updates the numeric authority position. System-
+// default roles refuse change. No domain event emitted — hierarchy
+// changes are operational concerns, not user-facing audit events.
+//
+// Idempotent: setting to the current level is a no-op.
+func (r *Role) SetHierarchyLevel(level int) error {
+	if err := r.ensureMutable(); err != nil {
+		return err
+	}
+	if r.isSystemDefault {
+		return fmt.Errorf("%w: %s", ErrSystemDefault, r.name)
+	}
+	if level < HierarchyLevelMin || level > HierarchyLevelMax {
+		return fmt.Errorf("%w: hierarchyLevel %d not in [%d,%d]",
+			ErrInvalid, level, HierarchyLevelMin, HierarchyLevelMax)
+	}
+	if level == r.hierarchyLevel {
+		return nil
+	}
+	r.hierarchyLevel = level
+	return nil
+}
+
 // ensureMutable rejects mutations on a deleted role. Internal helper
 // for the state-transition methods (Rename / SetHierarchyLevel /
 // GrantPermission / etc.).
