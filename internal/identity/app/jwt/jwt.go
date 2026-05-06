@@ -176,7 +176,7 @@ func (i *Issuer) Verify(token string) (*Claims, error) {
 		return nil, fmt.Errorf("jwt: unknown kid %q", kid)
 	})
 	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrInvalidToken, err)
+		return nil, fmt.Errorf("%w: %w", ErrInvalidToken, err)
 	}
 	return claims, nil
 }

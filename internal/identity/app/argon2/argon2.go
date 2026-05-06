@@ -78,7 +78,11 @@ func Verify(password, stored string) error {
 	if err != nil {
 		return err
 	}
-	got := argon2.IDKey([]byte(password), salt, iterations, memory, parallel, uint32(len(want)))
+	// len(want) is bounded by the base64-decoded hash size (Argon2id
+	// canonical 32 bytes; PHC parser rejects malformed values). Conversion
+	// to uint32 cannot overflow within the validated input range.
+	hashLen := uint32(len(want)) //nolint:gosec // G115: bounded by parsePHC validation
+	got := argon2.IDKey([]byte(password), salt, iterations, memory, parallel, hashLen)
 	if subtle.ConstantTimeCompare(got, want) != 1 {
 		return ErrMismatch
 	}
@@ -138,6 +142,18 @@ func parsePHC(s string) (memory, iterations uint32, parallel uint8, salt, hash [
 		return
 	}
 
+	// PHC string supplies cost params as uint64; argon2.IDKey expects
+	// uint32 (memory/iterations) + uint8 (parallel). Reject values that
+	// would overflow on cast — protects against crafted PHC strings
+	// like `m=999999999999` engineering an overflow + DoS via huge
+	// memory allocation.
+	const maxMemory = uint64(1<<32 - 1) // uint32 max
+	const maxIter = uint64(1<<32 - 1)
+	const maxParallel = uint64(1<<8 - 1) // uint8 max
+	if mem > maxMemory || iter > maxIter || par > maxParallel {
+		err = ErrFormat
+		return
+	}
 	memory = uint32(mem)
 	iterations = uint32(iter)
 	parallel = uint8(par)

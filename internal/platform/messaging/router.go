@@ -2,6 +2,7 @@ package messaging
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -104,13 +105,13 @@ const defaultRouterCloseTimeout = 30 * time.Second
 // retry under the same dedup row.
 func NewRouter(deps Deps) (*Router, error) {
 	if deps.Subscriber == nil {
-		return nil, fmt.Errorf("messaging: Subscriber required")
+		return nil, errors.New("messaging: Subscriber required")
 	}
 	if deps.IdempotencyInbox == nil {
-		return nil, fmt.Errorf("messaging: IdempotencyInbox required")
+		return nil, errors.New("messaging: IdempotencyInbox required")
 	}
 	if deps.AuditWriter == nil {
-		return nil, fmt.Errorf("messaging: AuditWriter required")
+		return nil, errors.New("messaging: AuditWriter required")
 	}
 	log := deps.Logger
 	if log == nil {
@@ -157,7 +158,10 @@ func NewRouter(deps Deps) (*Router, error) {
 // retry caps + backoff are tuned for transient errors; non-transient
 // errors should NOT retry (return them unwrapped, broker DLQs).
 func (r *Router) AddSubscriber(handlerName string, topic string, fn SubscriberHandler) {
-	r.router.AddNoPublisherHandler(
+	// AddConsumerHandler superseded AddNoPublisherHandler in Watermill v1.4
+	// (jeremydmiller-style API rename); same behaviour, deprecation
+	// removed in a future major.
+	r.router.AddConsumerHandler(
 		handlerName,
 		topic,
 		r.sub,

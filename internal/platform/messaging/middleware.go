@@ -104,7 +104,7 @@ func IdempotencyMiddleware(receiver *IdempotentReceiver, handlerName string) mes
 		// slice via a captured variable.
 		return func(msg *message.Message) ([]*message.Message, error) {
 			var capturedOut []*message.Message
-			capturedErr := receiver.Wrap(handlerName, func(ctx context.Context, _ string) error {
+			capturedErr := receiver.Wrap(handlerName, func(_ context.Context, _ string) error {
 				out, err := h(msg)
 				capturedOut = out
 				return err
