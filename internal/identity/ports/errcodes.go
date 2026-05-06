@@ -44,4 +44,29 @@ const (
 	// slog.ErrorContext server-side; HTTP body stays empty to avoid
 	// leaking stack traces / SQL fragments to clients.
 	ErrCodeInternalError = "internal_error"
+
+	// ErrCodeIncorrectCurrentPassword — change-password verify-current
+	// gate failed. 401 surface — same shape as login's invalid_credentials
+	// per `security.md` "Password change" + Auth0/Okta canon: never
+	// distinguish "wrong current password" from other auth failures.
+	//nolint:gosec // G101: error code, not a credential
+	ErrCodeIncorrectCurrentPassword = "incorrect_current_password"
+
+	// ErrCodePasswordBreached — HIBP-style breach checker rejected the
+	// new password. 422 surface; UI prompts user to choose another.
+	//nolint:gosec // G101: error code, not a credential
+	ErrCodePasswordBreached = "password_breached"
+
+	// ErrCodePasswordSameAsCurrent — change-password caller supplied
+	// new == current. 422 surface. Per Auth0 + Okta canon: reject the
+	// no-op rather than silently committing nothing.
+	//nolint:gosec // G101: error code, not a credential
+	ErrCodePasswordSameAsCurrent = "password_same_as_current"
+
+	// ErrCodeInvalidPassword — generic password-shape rejection
+	// (empty / too short / too long). Used by change-password +
+	// reset-password endpoints when the password is missing or
+	// fails domain-layer validation. 400 surface.
+	//nolint:gosec // G101: error code, not a credential
+	ErrCodeInvalidPassword = "invalid_password"
 )

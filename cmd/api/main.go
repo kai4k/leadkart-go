@@ -40,9 +40,11 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/app/argon2"
 	"github.com/leadkart/leadkart-go/internal/identity/app/command"
 	"github.com/leadkart/leadkart-go/internal/identity/app/jwt"
+	"github.com/leadkart/leadkart-go/internal/platform/breach"
 	"github.com/leadkart/leadkart-go/internal/identity/app/permissions"
 	"github.com/leadkart/leadkart-go/internal/identity/app/service"
 	"github.com/leadkart/leadkart-go/internal/identity/ports"
+	"github.com/leadkart/leadkart-go/internal/identity/ports/authn"
 	"github.com/leadkart/leadkart-go/internal/platform/config"
 	"github.com/leadkart/leadkart-go/internal/platform/obs"
 	"github.com/leadkart/leadkart-go/internal/platform/pg"
@@ -196,7 +198,7 @@ func run(ctx context.Context, stdout *os.File, _ []string) error {
 	}
 	logger.InfoContext(ctx, "postgres connected")
 
-	identityApp, err := buildIdentityApp(pool, cfg, time.Now)
+	identityApp, issuer, err := buildIdentityApp(pool, cfg, time.Now)
 	if err != nil {
 		return fmt.Errorf("build identity app: %w", err)
 	}
@@ -230,7 +232,7 @@ func run(ctx context.Context, stdout *os.File, _ []string) error {
 	}, healthCheckTimeout)
 	adminSrv := obs.NewAdminServer(cfg.Listen.Admin, health)
 
-	publicHandler := otelhttp.NewHandler(newServer(logger, identityApp), "leadkart-api")
+	publicHandler := otelhttp.NewHandler(newServer(logger, identityApp, issuer), "leadkart-api")
 	srv := &http.Server{
 		Addr:              cfg.Listen.API,
 		Handler:           publicHandler,
@@ -280,9 +282,13 @@ func run(ctx context.Context, stdout *os.File, _ []string) error {
 // All dependencies arrive pre-built — main() owns wiring, this owns
 // route registration. Tests construct identityApp with fakes + pass
 // it directly.
-func newServer(log *slog.Logger, identityApp app.Application) http.Handler {
+//
+// verifier gates authenticated routes (currently change-password). Pass
+// nil to skip wiring those routes — useful for the unit test that only
+// asserts probe-route absence on the public mux.
+func newServer(log *slog.Logger, identityApp app.Application, verifier authn.Verifier) http.Handler {
 	mux := http.NewServeMux()
-	ports.AddRoutes(mux, log, identityApp)
+	ports.AddRoutes(mux, log, identityApp, verifier)
 	return mux
 }
 
@@ -292,7 +298,11 @@ func newServer(log *slog.Logger, identityApp app.Application) http.Handler {
 // config + clock. Extracted from run() so tests construct an
 // Application backed by a testcontainers pool without going through
 // the env-var config path.
-func buildIdentityApp(pool *pgxpool.Pool, cfg config.AppConfig, now func() time.Time) (app.Application, error) {
+//
+// Returns the issuer alongside the Application so the caller can pass
+// it to [newServer] as the [authn.Verifier]; the issuer's Verify method
+// is what gates authenticated routes (change-password and onward).
+func buildIdentityApp(pool *pgxpool.Pool, cfg config.AppConfig, now func() time.Time) (app.Application, *jwt.Issuer, error) {
 	tx := pg.NewTransactor(pool)
 	tenants := adapters.NewTenantRepository(pool, tx)
 	persons := adapters.NewPersonRepository(pool, tx)
@@ -311,13 +321,20 @@ func buildIdentityApp(pool *pgxpool.Pool, cfg config.AppConfig, now func() time.
 		Secret: []byte(cfg.JWT.SigningKey),
 	}, previous, now)
 	if err != nil {
-		return app.Application{}, fmt.Errorf("jwt issuer: %w", err)
+		return app.Application{}, nil, fmt.Errorf("jwt issuer: %w", err)
 	}
 
 	dummyHash, err := argon2.Hash("dummy-for-timing-flatten")
 	if err != nil {
-		return app.Application{}, fmt.Errorf("dummy hash: %w", err)
+		return app.Application{}, nil, fmt.Errorf("dummy hash: %w", err)
 	}
+
+	// Breach checker: offline list seeded with HIBP top-N weakest
+	// passwords. Production swap to k-anonymity API per
+	// `security.md` "Password breach check" is a one-line
+	// constructor change — all consumers depend on the
+	// [breach.Checker] interface, not the concrete impl.
+	breachChecker := breach.NewOfflineList()
 
 	return app.Application{
 		Commands: app.Commands{
@@ -325,6 +342,7 @@ func buildIdentityApp(pool *pgxpool.Pool, cfg config.AppConfig, now func() time.
 			Login:          command.NewLoginHandler(persons, memberships, families, tenants, permResolver, issuer, now, cfg.Refresh.AbsoluteTTL, dummyHash),
 			Refresh:        command.NewRefreshHandler(families, persons, memberships, tenants, permResolver, issuer, now, cfg.Refresh.AbsoluteTTL),
 			Logout:         command.NewLogoutHandler(families),
+			ChangePassword: command.NewChangePasswordHandler(persons, breachChecker),
 		},
-	}, nil
+	}, issuer, nil
 }

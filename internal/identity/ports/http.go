@@ -5,28 +5,42 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/leadkart/leadkart-go/internal/common/email"
 	"github.com/leadkart/leadkart-go/internal/common/slug"
 	"github.com/leadkart/leadkart-go/internal/identity/app"
 	"github.com/leadkart/leadkart-go/internal/identity/app/command"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
+	"github.com/leadkart/leadkart-go/internal/identity/ports/authn"
 )
 
 // AddRoutes registers Identity HTTP handlers on mux. Mat Ryer 2024 canon:
 // ports own request/response translation, not the routing scheme — the
 // composition root chooses the URL space.
 //
+// verifier is the [authn.Verifier] used by [authn.RequireAuth] to gate
+// authenticated routes (currently change-password); pass nil ONLY if
+// the caller wires NO authenticated routes (test fixtures may opt out).
+// Production wiring always provides the [jwt.Issuer] which satisfies
+// [authn.Verifier] via its Verify method.
+//
 // Routes registered here:
 //
-//	POST /api/v1/tenants            register a new tenant + admin user
-//	POST /api/v1/auth/login         exchange credentials for ⟨access, refresh⟩
-//	POST /api/v1/auth/refresh       rotate refresh token + reissue access
-//	POST /api/v1/auth/logout        revoke a refresh-token family
-func AddRoutes(mux *http.ServeMux, log *slog.Logger, a app.Application) {
+//	POST /api/v1/tenants                   register a new tenant + admin user
+//	POST /api/v1/auth/login                exchange credentials for ⟨access, refresh⟩
+//	POST /api/v1/auth/refresh              rotate refresh token + reissue access
+//	POST /api/v1/auth/logout               revoke a refresh-token family
+//	POST /api/v1/auth/change-password      authenticated; rotate own password
+func AddRoutes(mux *http.ServeMux, log *slog.Logger, a app.Application, verifier authn.Verifier) {
 	mux.Handle("POST /api/v1/tenants", handleRegisterTenant(log, a))
 	mux.Handle("POST /api/v1/auth/login", handleLogin(log, a))
 	mux.Handle("POST /api/v1/auth/refresh", handleRefresh(log, a))
 	mux.Handle("POST /api/v1/auth/logout", handleLogout(log, a))
+	if verifier != nil {
+		mux.Handle("POST /api/v1/auth/change-password",
+			authn.RequireAuth(verifier)(handleChangePassword(log, a)))
+	}
 }
 
 // ----- Handlers --------------------------------------------------------------
@@ -162,6 +176,64 @@ func handleLogout(log *slog.Logger, a app.Application) http.Handler {
 			writeError(w, http.StatusInternalServerError, ErrCodeInternalError, "")
 			return
 		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+}
+
+func handleChangePassword(log *slog.Logger, a app.Application) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// PersonID comes from the verified JWT (Subject claim, set at
+		// issuance per `security.md` "Access token: sub = PersonId").
+		// RequireAuth has already populated ctx; missing claims here
+		// is a wiring bug.
+		c, ok := authn.ClaimsFromContext(r.Context())
+		if !ok || strings.TrimSpace(c.Subject) == "" {
+			writeError(w, http.StatusUnauthorized, ErrCodeInvalidCredentials, "")
+			return
+		}
+
+		var req ChangePasswordRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, ErrCodeInvalidBody,
+				"request body is not valid JSON")
+			return
+		}
+
+		err := a.Commands.ChangePassword.Handle(r.Context(), command.ChangePasswordCommand{
+			PersonID:        person.ID(c.Subject),
+			CurrentPassword: req.CurrentPassword,
+			NewPassword:     req.NewPassword,
+		})
+		switch {
+		case errors.Is(err, command.ErrIncorrectCurrentPassword):
+			// 401 — same status as login's invalid_credentials so an
+			// attacker holding a stolen access token can't distinguish
+			// "wrong current password" from "user disabled" via timing
+			// or response code.
+			writeError(w, http.StatusUnauthorized, ErrCodeIncorrectCurrentPassword, "")
+			return
+		case errors.Is(err, command.ErrPasswordBreached):
+			writeError(w, http.StatusUnprocessableEntity, ErrCodePasswordBreached,
+				"this password appears in known breach databases; choose another")
+			return
+		case errors.Is(err, command.ErrPasswordSameAsCurrent):
+			writeError(w, http.StatusUnprocessableEntity, ErrCodePasswordSameAsCurrent,
+				"new password must differ from current password")
+			return
+		case err != nil && (strings.Contains(err.Error(), "new password required") ||
+			strings.Contains(err.Error(), "person id required")):
+			// Domain-layer shape rejections — 400. PersonID-required
+			// hitting here would be a wiring bug (RequireAuth + Subject
+			// guard above should have short-circuited), but treat it as
+			// invalid_body to avoid leaking server-state.
+			writeError(w, http.StatusBadRequest, ErrCodeInvalidPassword, err.Error())
+			return
+		case err != nil:
+			log.ErrorContext(r.Context(), "change password failed", "err", err)
+			writeError(w, http.StatusInternalServerError, ErrCodeInternalError, "")
+			return
+		}
+
 		w.WriteHeader(http.StatusNoContent)
 	})
 }

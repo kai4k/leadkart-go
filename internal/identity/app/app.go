@@ -32,4 +32,5 @@ type Commands struct {
 	Login          command.LoginHandler
 	Refresh        command.RefreshHandler
 	Logout         command.LogoutHandler
+	ChangePassword command.ChangePasswordHandler
 }

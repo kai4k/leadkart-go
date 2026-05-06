@@ -47,12 +47,12 @@ func TestHTTPFlow_RegisterLoginRefreshLogout(t *testing.T) {
 	}
 	now := func() time.Time { return time.Date(2026, 5, 6, 12, 0, 0, 0, time.UTC) }
 
-	identityApp, err := buildIdentityApp(pool, cfg, now)
+	identityApp, issuer, err := buildIdentityApp(pool, cfg, now)
 	if err != nil {
 		t.Fatalf("buildIdentityApp: %v", err)
 	}
 
-	srv := httptest.NewServer(newServer(silentLogger(), identityApp))
+	srv := httptest.NewServer(newServer(silentLogger(), identityApp, issuer))
 	t.Cleanup(srv.Close)
 
 	full := ids.NewV7().String()

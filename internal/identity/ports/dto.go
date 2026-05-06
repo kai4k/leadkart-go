@@ -74,6 +74,20 @@ type LogoutRequest struct {
 	Reason       string `json:"reason,omitempty"`
 }
 
+// ----- ChangePassword --------------------------------------------------------
+
+// ChangePasswordRequest — POST /api/v1/auth/change-password.
+//
+// Authenticated route — PersonID comes from the JWT (set by
+// RequireAuth + tenancy bridge per A.2.3), NOT from the body. Per
+// security.md "Password change": the current password MUST be
+// verified even when authenticated, otherwise an attacker with a
+// stolen access token could permanently take over an account.
+type ChangePasswordRequest struct {
+	CurrentPassword string `json:"current_password"`
+	NewPassword     string `json:"new_password"`
+}
+
 // ----- Errors ----------------------------------------------------------------
 
 // ErrorResponse is the shared 4xx/5xx body shape. RFC 9457 problem-detail
