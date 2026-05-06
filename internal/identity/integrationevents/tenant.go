@@ -117,6 +117,37 @@ func (TenantStatutoryUpdatedV1) Topic() string { return "identity.tenant_statuto
 // OccurredAt returns the domain timestamp.
 func (e TenantStatutoryUpdatedV1) OccurredAt() time.Time { return e.OccurredAtUTC }
 
+// TenantAdminContactUpdatedV1 — tenant changed its admin phone or
+// postal address. Fields flatten the AdminContact composite to wire-
+// stable primitives. Empty-string fields = "not declared" (first-time
+// declaration: empty old_*; full clear: empty new_*).
+type TenantAdminContactUpdatedV1 struct {
+	platformMarker
+
+	TenantID         uuid.UUID `json:"tenant_id"`
+	OldPhone         string    `json:"old_phone"`
+	OldStreet        string    `json:"old_street"`
+	OldCity          string    `json:"old_city"`
+	OldDistrict      string    `json:"old_district"`
+	OldState         string    `json:"old_state"`
+	OldStateCode     string    `json:"old_state_code"`
+	OldPincode       string    `json:"old_pincode"`
+	NewPhone         string    `json:"new_phone"`
+	NewStreet        string    `json:"new_street"`
+	NewCity          string    `json:"new_city"`
+	NewDistrict      string    `json:"new_district"`
+	NewState         string    `json:"new_state"`
+	NewStateCode     string    `json:"new_state_code"`
+	NewPincode       string    `json:"new_pincode"`
+	OccurredAtUTC    time.Time `json:"occurred_at_utc"`
+}
+
+// Topic returns the canonical wire alias.
+func (TenantAdminContactUpdatedV1) Topic() string { return "identity.tenant_admin_contact_updated.v1" }
+
+// OccurredAt returns the domain timestamp.
+func (e TenantAdminContactUpdatedV1) OccurredAt() time.Time { return e.OccurredAtUTC }
+
 // TenantMarkedForDeletionV1 — operator entered the 30-day grace window
 // per `data-retention.md` "Tenant deletion saga". Subscribers MAY
 // block tenant ops immediately or wait for terminal TenantDeletedV1.
@@ -177,6 +208,7 @@ var (
 	_ Platform = TenantActivatedV1{}
 	_ Platform = TenantProfileUpdatedV1{}
 	_ Platform = TenantStatutoryUpdatedV1{}
+	_ Platform = TenantAdminContactUpdatedV1{}
 	_ Platform = TenantSuspendedV1{}
 	_ Platform = TenantMarkedForDeletionV1{}
 	_ Platform = TenantRestoredV1{}
@@ -186,6 +218,7 @@ var (
 	_ = register(TenantActivatedV1{})
 	_ = register(TenantProfileUpdatedV1{})
 	_ = register(TenantStatutoryUpdatedV1{})
+	_ = register(TenantAdminContactUpdatedV1{})
 	_ = register(TenantSuspendedV1{})
 	_ = register(TenantMarkedForDeletionV1{})
 	_ = register(TenantRestoredV1{})

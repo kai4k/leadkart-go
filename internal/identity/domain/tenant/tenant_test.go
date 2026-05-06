@@ -12,6 +12,8 @@ import (
 	"github.com/leadkart/leadkart-go/internal/common/gst"
 	"github.com/leadkart/leadkart-go/internal/common/ids"
 	"github.com/leadkart/leadkart-go/internal/common/pan"
+	"github.com/leadkart/leadkart-go/internal/common/phone"
+	"github.com/leadkart/leadkart-go/internal/common/postaladdress"
 	"github.com/leadkart/leadkart-go/internal/common/slug"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
@@ -577,6 +579,99 @@ func TestUpdateStatutory_RejectedOnDeletedTenant(t *testing.T) {
 	s, _ := tenant.NewStatutory(mustGST(t, "29ABCPE1234F1Z5"), mustPAN(t, "ABCPE1234F"), druglicence.Number{})
 	if err := tn.UpdateStatutory(s); !errors.Is(err, tenant.ErrInvalid) {
 		t.Errorf("expected ErrInvalid on deleted tenant, got %v", err)
+	}
+}
+
+// ----- UpdateAdminContact ---------------------------------------------------
+
+func mustPhone(t *testing.T, raw string) phone.Number {
+	t.Helper()
+	p, err := phone.New(raw)
+	if err != nil {
+		t.Fatalf("phone.New(%q): %v", raw, err)
+	}
+	return p
+}
+
+func mustAddress(t *testing.T) postaladdress.Address {
+	t.Helper()
+	a, err := postaladdress.New("123 MG Road", "Bangalore", "Bangalore Urban", "Karnataka", "KA", "560001")
+	if err != nil {
+		t.Fatalf("postaladdress.New: %v", err)
+	}
+	return a
+}
+
+func TestUpdateAdminContact_FirstDeclaration_EmitsEvent(t *testing.T) {
+	t.Cleanup(clock.Reset)
+	clock.Set(time.Date(2026, 5, 7, 12, 0, 0, 0, time.UTC))
+
+	tn := newActiveTenant(t)
+	_ = tn.PullEvents()
+
+	c := tenant.NewAdminContact(mustPhone(t, "+919876543210"), mustAddress(t))
+	if err := tn.UpdateAdminContact(c); err != nil {
+		t.Fatalf("UpdateAdminContact: %v", err)
+	}
+	if !tn.AdminContact().Equal(c) {
+		t.Error("AdminContact not stored")
+	}
+
+	events := tn.PullEvents()
+	if len(events) != 1 {
+		t.Fatalf("events: %d", len(events))
+	}
+	ev, ok := events[0].(tenant.AdminContactUpdatedEvent)
+	if !ok {
+		t.Fatalf("event[0] = %T, want AdminContactUpdatedEvent", events[0])
+	}
+	if !ev.OldAdminContact.IsZero() {
+		t.Error("OldAdminContact should be zero on first declaration")
+	}
+	if !ev.NewAdminContact.Equal(c) {
+		t.Error("NewAdminContact mismatch")
+	}
+}
+
+func TestUpdateAdminContact_NoOp_WhenUnchanged(t *testing.T) {
+	t.Cleanup(clock.Reset)
+	tn := newActiveTenant(t)
+	c := tenant.NewAdminContact(mustPhone(t, "+919876543210"), mustAddress(t))
+	_ = tn.UpdateAdminContact(c)
+	_ = tn.PullEvents()
+
+	if err := tn.UpdateAdminContact(c); err != nil {
+		t.Fatalf("UpdateAdminContact noop: %v", err)
+	}
+	if got := tn.PullEvents(); len(got) != 0 {
+		t.Errorf("expected 0 events, got %d", len(got))
+	}
+}
+
+func TestUpdateAdminContact_RejectedOnDeletedTenant(t *testing.T) {
+	t.Cleanup(clock.Reset)
+	tn := newPendingTenant(t)
+	_ = tn.HardDelete()
+	c := tenant.NewAdminContact(mustPhone(t, "+919876543210"), mustAddress(t))
+	if err := tn.UpdateAdminContact(c); !errors.Is(err, tenant.ErrInvalid) {
+		t.Errorf("expected ErrInvalid on deleted tenant, got %v", err)
+	}
+}
+
+func TestUpdateAdminContact_PartialUpdate(t *testing.T) {
+	// Only phone, no address (address is zero) — still a valid contact
+	// declaration; tenant's address is just "not declared".
+	t.Cleanup(clock.Reset)
+	tn := newActiveTenant(t)
+	c := tenant.NewAdminContact(mustPhone(t, "+919876543210"), postaladdress.Address{})
+	if err := tn.UpdateAdminContact(c); err != nil {
+		t.Fatalf("UpdateAdminContact phone-only: %v", err)
+	}
+	if !tn.AdminContact().Phone().Equal(mustPhone(t, "+919876543210")) {
+		t.Error("phone not stored")
+	}
+	if !tn.AdminContact().Address().IsZero() {
+		t.Error("address should be zero")
 	}
 }
 

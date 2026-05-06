@@ -102,6 +102,23 @@ func (StatutoryUpdatedEvent) Topic() string { return "identity.tenant_statutory_
 // OccurredAt returns the domain timestamp.
 func (e StatutoryUpdatedEvent) OccurredAt() time.Time { return e.At }
 
+// AdminContactUpdatedEvent fires when [Tenant.UpdateAdminContact]
+// changes the admin phone or postal address. Carries OLD/NEW for
+// audit-diff rendering. Empty (zero) AdminContact in OldAdminContact
+// means the tenant declared contact details for the first time.
+type AdminContactUpdatedEvent struct {
+	TenantID        ID
+	OldAdminContact AdminContact
+	NewAdminContact AdminContact
+	At              time.Time
+}
+
+// Topic returns the integration event type.
+func (AdminContactUpdatedEvent) Topic() string { return "identity.tenant_admin_contact_updated.v1" }
+
+// OccurredAt returns the domain timestamp.
+func (e AdminContactUpdatedEvent) OccurredAt() time.Time { return e.At }
+
 // MarkedForDeletionEvent fires when [Tenant.MarkForDeletion] is called.
 //
 // Per data-retention.md "Tenant deletion saga": entry into the 30-day

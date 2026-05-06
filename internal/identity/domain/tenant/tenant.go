@@ -54,7 +54,8 @@ type Tenant struct {
 	displayName         string
 	adminEmail          email.Address
 	status              Status
-	statutory           Statutory // optional Indian statutory IDs (GST/PAN/DrugLicence)
+	statutory           Statutory    // optional Indian statutory IDs (GST/PAN/DrugLicence)
+	adminContact        AdminContact // optional admin phone + postal address
 	createdAt           time.Time
 	activatedAt         time.Time // zero until first Activate
 	suspendedAt         time.Time // zero until first Suspend; reset on subsequent Activate
@@ -126,6 +127,7 @@ type Snapshot struct {
 	AdminEmail          email.Address
 	Status              Status
 	Statutory           Statutory
+	AdminContact        AdminContact
 	CreatedAt           time.Time
 	ActivatedAt         time.Time
 	SuspendedAt         time.Time
@@ -149,6 +151,7 @@ func UnmarshalFromDB(s Snapshot) *Tenant {
 		adminEmail:          s.AdminEmail,
 		status:              s.Status,
 		statutory:           s.Statutory,
+		adminContact:        s.AdminContact,
 		createdAt:           s.CreatedAt,
 		activatedAt:         s.ActivatedAt,
 		suspendedAt:         s.SuspendedAt,
@@ -203,6 +206,10 @@ func (t *Tenant) HardDeletedAt() time.Time { return t.hardDeletedAt }
 // Statutory returns the tenant's declared statutory IDs (GST/PAN/
 // DrugLicence). Zero value means none declared yet.
 func (t *Tenant) Statutory() Statutory { return t.statutory }
+
+// AdminContact returns the tenant's admin phone + postal address.
+// Zero value means no contact details declared.
+func (t *Tenant) AdminContact() AdminContact { return t.adminContact }
 
 // ----- State transitions ----------------------------------------------------
 
@@ -338,6 +345,39 @@ func (t *Tenant) UpdateStatutory(s Statutory) error {
 		OldStatutory: old,
 		NewStatutory: s,
 		At:           clock.Now(),
+	})
+	return nil
+}
+
+// UpdateAdminContact replaces the tenant's admin phone + postal address.
+// Pass a zero [AdminContact] to clear all contact details.
+//
+// Validation already happened inside the supplied phone.Number /
+// postaladdress.Address VOs — this method only enforces tenant-
+// lifecycle rules.
+//
+// Idempotent: no-op + no event when the new value equals the current.
+//
+// Allowed in any non-terminal status (Pending/Active/Suspended/
+// PendingDeletion). Rejected from StatusDeleted (terminal).
+//
+// Distinct from [Tenant.UpdateProfile] (display fields) and
+// [Tenant.UpdateStatutory] (compliance IDs) — narrow events let
+// subscribers react to the specific concern.
+func (t *Tenant) UpdateAdminContact(c AdminContact) error {
+	if t.status == StatusDeleted {
+		return fmt.Errorf("%w: tenant deleted; cannot update admin contact", ErrInvalid)
+	}
+	if t.adminContact.Equal(c) {
+		return nil
+	}
+	old := t.adminContact
+	t.adminContact = c
+	t.recordEvent(AdminContactUpdatedEvent{
+		TenantID:        t.id,
+		OldAdminContact: old,
+		NewAdminContact: c,
+		At:              clock.Now(),
 	})
 	return nil
 }

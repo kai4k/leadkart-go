@@ -75,6 +75,28 @@ func FromDomainEvent(d any) (Event, error) {
 			OccurredAtUTC:  e.At.UTC(),
 		}, nil
 
+	case tenant.AdminContactUpdatedEvent:
+		oldAddr := e.OldAdminContact.Address()
+		newAddr := e.NewAdminContact.Address()
+		return TenantAdminContactUpdatedV1{
+			TenantID:      mustParseUUID(e.TenantID.String()),
+			OldPhone:      e.OldAdminContact.Phone().String(),
+			OldStreet:     oldAddr.Street(),
+			OldCity:       oldAddr.City(),
+			OldDistrict:   oldAddr.District(),
+			OldState:      oldAddr.State(),
+			OldStateCode:  oldAddr.StateCode(),
+			OldPincode:    oldAddr.Pincode(),
+			NewPhone:      e.NewAdminContact.Phone().String(),
+			NewStreet:     newAddr.Street(),
+			NewCity:       newAddr.City(),
+			NewDistrict:   newAddr.District(),
+			NewState:      newAddr.State(),
+			NewStateCode:  newAddr.StateCode(),
+			NewPincode:    newAddr.Pincode(),
+			OccurredAtUTC: e.At.UTC(),
+		}, nil
+
 	case tenant.SuspendedEvent:
 		return TenantSuspendedV1{
 			TenantID:      mustParseUUID(e.TenantID.String()),
