@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/leadkart/leadkart-go/internal/common/tenancy"
 	"github.com/leadkart/leadkart-go/internal/identity/app/jwt"
 	"github.com/leadkart/leadkart-go/internal/identity/app/permissions"
 	"github.com/leadkart/leadkart-go/internal/identity/app/refreshmint"
@@ -190,6 +191,12 @@ func (h RefreshHandler) Handle(ctx context.Context, cmd RefreshCommand) (Refresh
 	//    as Login. Refresh re-emits the latest claims so a permission
 	//    grant/revoke since the previous JWT propagates within
 	//    AccessTokenTTL of the next refresh.
+	//
+	//    Tenant ctx binding is required: the resolver's downstream
+	//    role-by-IDs query runs under TxScopeTenant, which expects
+	//    `app.tenant_id` GUC set. Refresh is the entry point — no
+	//    upstream middleware has bound it yet.
+	ctx = tenancy.WithID(ctx, tenancy.ID(tn.ID().String()))
 	authClaims, err := h.resolver.ResolveAuth(ctx, m)
 	if err != nil {
 		return RefreshResult{}, fmt.Errorf("refresh: resolve permissions: %w", err)

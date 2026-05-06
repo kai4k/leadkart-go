@@ -24,6 +24,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -86,10 +87,74 @@ const (
 )
 
 func main() {
+	// Distroless container HEALTHCHECK probe — chainguard/static has no
+	// shell + no wget/curl, so the binary itself becomes the probe per
+	// chainguard's canonical "single-binary healthcheck" pattern
+	// (chainguard.dev/unchained/minimal-container-images-best-practices).
+	// Hits the admin listener's /alive endpoint (the public listener
+	// never carries probes per audit-checklist.md §12).
+	if len(os.Args) >= 2 && (os.Args[1] == "-healthcheck" || os.Args[1] == "--healthcheck") {
+		if err := healthcheck(); err != nil {
+			fmt.Fprintf(os.Stderr, "leadkart-api healthcheck: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
+
 	if err := run(context.Background(), os.Stdout, os.Args[1:]); err != nil {
 		fmt.Fprintf(os.Stderr, "leadkart-api: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+// healthcheckTimeout caps the probe HTTP call. K8s default liveness
+// probe timeout is 1s; we give 3s to absorb slow GC pauses without
+// false-failing under load.
+const healthcheckTimeout = 3 * time.Second
+
+// healthcheck probes the admin listener's /alive endpoint. Returns nil
+// on HTTP 200, error otherwise. Reads LEADKART_LISTEN__ADMIN to discover
+// where the admin listener is bound — same env var the runtime config
+// loader consumes, so probe + listener can never disagree.
+func healthcheck() error {
+	addr := os.Getenv("LEADKART_LISTEN__ADMIN")
+	if addr == "" {
+		addr = ":9090"
+	}
+	if !strings.HasPrefix(addr, ":") {
+		// Allow `9090` shorthand alongside `:9090` — some PaaS hosts
+		// surface ports without the leading colon.
+		addr = ":" + addr
+	}
+	url := "http://127.0.0.1" + addr + "/alive"
+
+	ctx, cancel := context.WithTimeout(context.Background(), healthcheckTimeout)
+	defer cancel()
+
+	// Loopback-only target — host is hardcoded "127.0.0.1", only the
+	// port is env-derived (LEADKART_LISTEN__ADMIN, default ":9090").
+	// gosec's taint analysis can't see through the string concat that
+	// the host literal pins to localhost. SSRF is impossible: an
+	// attacker who controls LEADKART_LISTEN__ADMIN can at most redirect
+	// the probe to a different loopback port in the same container,
+	// which has no privilege impact (no other listeners are reachable).
+	// Annotation lives on NewRequestWithContext (where url enters the
+	// http.Request) AND on Do (where gosec re-checks the request).
+	//nolint:gosec // G107: loopback-only host, env-derived port; not SSRF.
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return fmt.Errorf("build request: %w", err)
+	}
+	//nolint:gosec // G107: loopback-only host (see NewRequestWithContext above).
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("get %s: %w", url, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("get %s: status %d", url, resp.StatusCode)
+	}
+	return nil
 }
 
 // run is the testable entrypoint per Mat Ryer 2024 — main() resolves

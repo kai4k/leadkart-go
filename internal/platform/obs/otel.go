@@ -24,7 +24,13 @@ import (
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
-	semconv "go.opentelemetry.io/otel/semconv/v1.27.0"
+	// Must match the semconv version that go.opentelemetry.io/otel/sdk's
+	// resource.Default() imports internally — otherwise resource.Merge
+	// returns "conflicting Schema URL" and Setup fails (containers
+	// crash-loop). OTel-Go SDK v1.43.x imports semconv/v1.40.0 (see
+	// go.opentelemetry.io/otel/sdk/resource/builtin.go). Bump in lockstep
+	// with go.mod's go.opentelemetry.io/otel/sdk version on each refresh.
+	semconv "go.opentelemetry.io/otel/semconv/v1.40.0"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 

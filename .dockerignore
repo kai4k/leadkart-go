@@ -1,21 +1,62 @@
+# LeadKart Go — Docker build context exclusions.
+#
+# Keep the build context small + secret-free. The Dockerfile uses
+# `--mount=type=bind,target=.` so most of these aren't physically copied
+# into image layers — but they ARE sent to the BuildKit daemon, so
+# `*.env`, secrets, and IDE droppings still need filtering.
+#
+# Anything required at build time (go.mod, go.sum, internal/, cmd/,
+# migrations/) is NOT excluded — the COPY rule chooses what lands.
+
+# VCS + IDE + editors
 .git
 .github
 .idea
 .vscode
+.editorconfig
+.gitignore
+.gitattributes
+
+# Local-only tooling — not needed for image build
 .air.toml
+.golangci.yml
+Taskfile.yml
+.pre-commit-config.yaml
+lefthook.yml
+.lefthook.yml
+
+# Build + cache outputs
 tmp/
 bin/
 dist/
-docs/
-docker/compose*.yml
 .dockerignore
-.gitignore
-.editorconfig
-.env
-.env.*
-coverage.out
-coverage.html
-*.md
 node_modules/
 web/dist/
+
+# Test artifacts
+coverage.out
+coverage-integration.out
+coverage.html
+*.coverprofile
+junit-*.xml
+**/*.test
+**/testdata/
+
+# Compose files — never want a compose definition leaking into the image,
+# and the build only needs the Dockerfile itself.
+docker/compose*.yml
+
+# Secrets + envs (defence in depth — these MUST never reach a layer)
+.env
+.env.*
+*.pem
+*.key
+secrets/
+
+# Internal documentation — large + irrelevant at runtime
+*.md
+docs/
 .claude/
+
+# Goose / sqlc downloaded tools (in case `tool` directive caches locally)
+.tools/

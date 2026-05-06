@@ -1,0 +1,181 @@
+name: Release
+
+# ============================================================================
+# Container release pipeline. Triggered by:
+#   - tag push matching v*.*.* (canonical SemVer release)
+#   - workflow_dispatch (manual re-run for retries / staging cuts)
+#
+# CI is NOT re-run here — branch protection on `main` requires `ci.yml`
+# green before merge, so by tag-push time CI has already passed. Mirrors
+# .NET LeadKart deploy.yml + Marten/Wolverine canonical release pattern.
+#
+# Per ADR 0024:
+#   Final base = cgr.dev/chainguard/static (signed, SBOM-attested upstream)
+#   Multi-arch = linux/amd64 + linux/arm64 (Apple Silicon dev + Graviton VPS)
+#   Cosign     = keyless OIDC (sigstore) — no key material to rotate
+#   Syft       = SPDX SBOM attested via cosign attest
+#   Trivy      = CRITICAL/HIGH gating + SARIF upload to Security tab
+#
+# Two images per release: api + migrate. (worker target lives in Dockerfile
+# but cmd/worker doesn't exist yet — image build guards conditionally.)
+# ============================================================================
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Image tag to publish (defaults to commit SHA)"
+        required: false
+        type: string
+  push:
+    tags:
+      - "v*.*.*"
+
+# One release at a time. Don't cancel mid-build — Cosign attestations are
+# expensive and re-running mid-flight wastes the signing transaction.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAMESPACE: ghcr.io/${{ github.repository_owner }}/leadkart-go
+
+jobs:
+  build-and-push:
+    name: Build, Push, Sign, SBOM, Scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write          # GHCR push
+      id-token: write          # Cosign keyless OIDC
+      security-events: write   # Trivy SARIF upload
+
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - api
+          - migrate
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up QEMU (multi-arch emulation)
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: linux/amd64,linux/arm64
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Generate canonical tag set from the SemVer git tag:
+      #   v1.2.3 -> :1.2.3, :1.2, :latest, :sha-<short>
+      # Per docker/metadata-action canonical patterns + GitHub release
+      # docs (semver tag conventions).
+      - name: Docker metadata (${{ matrix.target }})
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_NAMESPACE }}-${{ matrix.target }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,prefix=sha-,format=short
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=${{ inputs.tag }},enable=${{ inputs.tag != '' }}
+          labels: |
+            org.opencontainers.image.title=leadkart-${{ matrix.target }}
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.licenses=Proprietary
+
+      # Multi-arch build + push. cache-from/cache-to:gha keeps subsequent
+      # release builds fast — buildx layer cache lives on GitHub-hosted
+      # storage (~5GB rolling), separate from actions/cache.
+      - name: Build & push ${{ matrix.target }}
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile
+          target: ${{ matrix.target }}
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=${{ matrix.target }}
+          cache-to: type=gha,scope=${{ matrix.target }},mode=max
+          provenance: true
+          sbom: false   # we generate via Syft below for keyless attestation
+
+      # Cosign keyless OIDC signing — no key material to rotate. Per the
+      # canonical sigstore + sigstore/cosign-installer docs (2024+).
+      # The COSIGN_EXPERIMENTAL flag was removed in cosign v2; current
+      # signing is "stable" + uses Fulcio + Rekor by default.
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@v3
+
+      - name: Sign image with Cosign (keyless OIDC)
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          for tag in ${TAGS}; do
+            cosign sign --yes "${tag}@${DIGEST}"
+          done
+
+      # Syft SBOM (SPDX). Attest via cosign so the SBOM lives alongside
+      # the signature in Rekor + can be verified at deploy time.
+      - name: Generate SBOM (Syft → SPDX)
+        uses: anchore/sbom-action@v0
+        with:
+          image: ${{ env.IMAGE_NAMESPACE }}-${{ matrix.target }}@${{ steps.build.outputs.digest }}
+          format: spdx-json
+          output-file: sbom-${{ matrix.target }}.spdx.json
+          upload-artifact: false   # we attest below + upload as artifact ourselves
+
+      - name: Attest SBOM with Cosign
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          IMAGE: ${{ env.IMAGE_NAMESPACE }}-${{ matrix.target }}
+        run: |
+          cosign attest --yes \
+            --predicate sbom-${{ matrix.target }}.spdx.json \
+            --type spdxjson \
+            "${IMAGE}@${DIGEST}"
+
+      - name: Upload SBOM artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: sbom-${{ matrix.target }}
+          path: sbom-${{ matrix.target }}.spdx.json
+          retention-days: 90
+
+      # Trivy filesystem + image scan. CRITICAL/HIGH gate fails the job —
+      # release MUST NOT publish a vulnerable image. SARIF goes to the
+      # Security tab so historical findings are queryable.
+      - name: Trivy image scan (SARIF + gating)
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ env.IMAGE_NAMESPACE }}-${{ matrix.target }}@${{ steps.build.outputs.digest }}
+          format: sarif
+          output: trivy-${{ matrix.target }}.sarif
+          severity: CRITICAL,HIGH
+          exit-code: "1"
+          ignore-unfixed: true   # waste-band noise: vulns with no fix can't be acted on at release time
+
+      - name: Upload Trivy SARIF to Security tab
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-${{ matrix.target }}.sarif
+          category: trivy-${{ matrix.target }}

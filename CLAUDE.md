@@ -4,6 +4,38 @@
 
 ---
 
+## Current state (updated 2026-05-06)
+
+**Tagged releases on `main`:**
+- `v0.1.0` — Phase 0 / foundation baseline. Identity domain layer + sqlc adapters + JWT issuer + outbox forwarder.
+- `v0.2.1-phase1-identity-foundation` — Phase 1 closed. 27 tasks shipped:
+  - Permission package (closed-set catalog + Flyweight intern)
+  - Role aggregate (Tenant-scoped, system-default + super-admin flags, soft-delete)
+  - Membership extensions (RoleAssignments, permission overlay, profile, manager hierarchy)
+  - Migration 20260507000002 — `roles` + `role_assignments` + `permission_overrides` + `tenant_memberships` ALTER, all RLS+FORCE
+  - Repositories: RoleRepository (Add/UpdateByID/GetByIDs/ListByTenant) + MembershipRepository (extended for role+overlay+profile)
+  - DefaultRoleCatalog + ApplyDefaultRoles seed; TenantOnboardingService auto-assigns CompanyOwner with `Meta.TenantAdmin`
+  - PermissionResolver + ResolveAuth (perms + IsSuperUser bundle)
+  - Login/Refresh JWT permission-claim wiring
+  - HTTP middleware: `authn.RequirePermission` / `RequireAnyPermission` / `RequirePlatform`
+  - 11 V1 integration events (Role* + Membership* lifecycle)
+  - E2E gate test (login → JWT → middleware-gated handler)
+  - ADR 0036 — Permission model
+- Audit sweep: Go 1.26.2 + golangci-lint v2.12.2 + 31 anti-pattern fixes (modern stdlib idioms + LeadKart doctrine bans).
+
+**Active branches:**
+- `main` — production; protected via PR-only merge.
+- `archive/vibe-phase1-attempt` — reference-only (the original vibe-coded Phase 1 attempt; never merged, lives forever for archaeology).
+
+**Open work-in-progress at handoff:**
+- `ci/run-integration-tests` (PR open) — adds a second CI job that runs the 10 `//go:build integration` test files (testcontainers Postgres). They were silently dormant in CI before this PR. Phase 2 should not start until that PR merges + we know the actual test posture.
+
+**Up next (Phase 2 — Platform module, ~5-6 weeks):** marketplace + lead credits + verification calls + Platform-tenant detection + SuperAdmin seed (deferred from Phase 1). Off `main` after the CI fix lands. See `BRD.md` + the master plan §"Phase 2".
+
+**Sibling .NET repo:** `d:\Development\LeadKart\` is the source-of-truth reference. Doctrine in its `.claude/rules/` is the canonical text the Go rebuild ports faithfully — when uncertain, that's the tiebreaker.
+
+---
+
 ## What is LeadKart-Go
 
 Go rebuild of LeadKart (.NET 10 modular monolith). Multi-tenant SaaS for Indian PCD pharma:

@@ -9,6 +9,7 @@ import (
 
 	"github.com/leadkart/leadkart-go/internal/common/email"
 	"github.com/leadkart/leadkart-go/internal/common/ids"
+	"github.com/leadkart/leadkart-go/internal/common/tenancy"
 	"github.com/leadkart/leadkart-go/internal/identity/app/argon2"
 	"github.com/leadkart/leadkart-go/internal/identity/app/jwt"
 	"github.com/leadkart/leadkart-go/internal/identity/app/permissions"
@@ -174,6 +175,12 @@ func (h LoginHandler) Handle(ctx context.Context, cmd LoginCommand) (LoginResult
 	//    "Membership in Platform tenant + SuperAdmin role"); the role
 	//    itself is the load-bearing flag, and IsSuperUser drives the
 	//    runtime authorization short-circuit.
+	//
+	//    Tenant ctx binding is required: the resolver's downstream
+	//    role-by-IDs query runs under TxScopeTenant, which expects
+	//    `app.tenant_id` GUC set. Login is the entry point — no upstream
+	//    middleware has bound it yet.
+	ctx = tenancy.WithID(ctx, tenancy.ID(tn.ID().String()))
 	authClaims, err := h.resolver.ResolveAuth(ctx, m)
 	if err != nil {
 		return LoginResult{}, fmt.Errorf("login: resolve permissions: %w", err)

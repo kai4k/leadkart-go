@@ -13,6 +13,7 @@ import (
 	"log/slog"
 	"path/filepath"
 	"runtime"
+	"sync"
 	"testing"
 	"time"
 
@@ -205,6 +206,34 @@ func silentLog() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
 
+// safeBuffer is a goroutine-safe wrapper around bytes.Buffer used as the
+// sink for slog handlers in tests where the assertion goroutine and a
+// subscriber goroutine race on the same buffer. slog.Handler implementations
+// don't serialise writes to the underlying io.Writer — that's the writer's
+// job — so a bare *bytes.Buffer hits the race detector under -race.
+type safeBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *safeBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *safeBuffer) Bytes() []byte {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return bytes.Clone(b.buf.Bytes())
+}
+
+func (b *safeBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
 // runRouter starts a router goroutine + returns a stop fn.
 func runRouter(t *testing.T, r *messaging.Router) func() {
 	t.Helper()
@@ -384,9 +413,10 @@ func TestRevokeFamilies_NoActiveFamilies_NoOp(t *testing.T) {
 
 func TestReuseDetectedSIEM_LogsOnReuseRevocation(t *testing.T) {
 	fx := newFixture(t)
-	// Custom logger that records to a buffer so we can assert on
-	// the WARN line.
-	buf := &bytes.Buffer{}
+	// Custom logger that records to a thread-safe buffer so the
+	// subscriber goroutine's slog.Write doesn't race the assertion
+	// goroutine's bytes.Contains under -race.
+	buf := &safeBuffer{}
 	siemLog := slog.New(slog.NewJSONHandler(buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
 
 	pubsub := gochannel.NewGoChannel(gochannel.Config{}, watermill.NewSlogLogger(silentLog()))
@@ -425,7 +455,8 @@ func TestReuseDetectedSIEM_LogsOnReuseRevocation(t *testing.T) {
 
 func TestReuseDetectedSIEM_IgnoresNonReuseRevocations(t *testing.T) {
 	fx := newFixture(t)
-	buf := &bytes.Buffer{}
+	// safeBuffer — same race-detector reason as the sister test above.
+	buf := &safeBuffer{}
 	siemLog := slog.New(slog.NewJSONHandler(buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
 
 	pubsub := gochannel.NewGoChannel(gochannel.Config{}, watermill.NewSlogLogger(silentLog()))

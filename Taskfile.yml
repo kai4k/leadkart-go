@@ -2,14 +2,28 @@
 #
 # Install: https://taskfile.dev/installation/
 # Run: `task <name>` from repo root.
+# List all tasks: `task` (no args) or `task --list-all`.
 #
 # 2026 Go canon: Taskfile preferred over Makefile (cross-platform, structured).
+# Per the master plan §Phase 4 + JetBrains 2025 Go Ecosystem report.
+#
+# Doctrine: Taskfile is a CONVENIENCE WRAPPER, not a replacement for the
+# underlying tools. Each task delegates to the canon tool (go test, goose,
+# docker buildx, gh, govulncheck) — the wrapper just remembers the long
+# flag combinations so humans don't have to.
+
 version: '3'
 
 vars:
   COVER_OUT: coverage.out
+  COVER_INT_OUT: coverage-integration.out
   BIN_DIR: bin
-  GO_LINT_VERSION: v2.0.2
+  GO_LINT_VERSION: v2.12.2
+  # Migration runner connection — override per env: `DATABASE_URL=... task migrate:up`
+  DATABASE_URL: '{{.DATABASE_URL | default "postgres://leadkart:leadkart_dev@localhost:5432/leadkart?sslmode=disable"}}'
+  MIGRATIONS_DIR: migrations
+  # Compose path used for dev stack tasks
+  COMPOSE_FILE: docker/compose.yml
 
 tasks:
   default:
@@ -17,36 +31,70 @@ tasks:
     cmds:
       - task --list
 
+  # =====================================================================
+  # Build + run
+  # =====================================================================
+
   build:
-    desc: Build all binaries (api / worker / migrate) into bin/
+    desc: Build all binaries (api / migrate) into bin/
     cmds:
       - go build -trimpath -ldflags="-s -w" -o {{.BIN_DIR}}/ ./cmd/...
 
   run:
-    desc: Run API locally with hot reload (requires `air` installed)
+    desc: Run API locally with hot reload (requires `air`)
     cmds:
       - air
 
-  test:
-    desc: Unit tests with shuffle (race detector requires CGO; CI runs with -race)
+  clean:
+    desc: Remove build artifacts + coverage + tmp
     cmds:
-      - go test -shuffle=on -coverprofile={{.COVER_OUT}} ./...
+      - rm -rf {{.BIN_DIR}} tmp coverage.out coverage-integration.out coverage.html dist junit-*.xml
+
+  # =====================================================================
+  # Tests — `go test` is canon. Wrappers below remember the flag combos.
+  # =====================================================================
+
+  test:
+    desc: Unit tests with shuffle (excludes architecture tests — see test:arch)
+    cmds:
+      - go test -shuffle=on -skip "^TestArch_" -coverprofile={{.COVER_OUT}} ./...
 
   test:race:
-    desc: Unit tests with race detector (requires CGO_ENABLED=1)
+    desc: Unit tests with race detector (requires CGO_ENABLED=1 + gcc)
     cmds:
-      - CGO_ENABLED=1 go test -race -shuffle=on ./...
+      - CGO_ENABLED=1 go test -race -shuffle=on -skip "^TestArch_" ./...
+
+  test:arch:
+    desc: Architecture tests (TestArch_* — integration-events hygiene + marker rules)
+    cmds:
+      - go test -shuffle=on -run "^TestArch_" ./internal/identity/integrationevents/...
 
   test:int:
-    desc: Integration tests (testcontainers; tagged build)
+    desc: Integration tests (testcontainers Postgres; requires Docker)
     cmds:
-      - go test -shuffle=on -tags=integration ./...
+      - go test -shuffle=on -tags=integration -timeout=15m -coverprofile={{.COVER_INT_OUT}} ./...
+
+  test:smoke:
+    desc: Container-level smoke against running compose stack (requires `docker:up:full`)
+    cmds:
+      - bash scripts/smoke.sh
+
+  test:all:
+    desc: Run unit + arch + integration sequentially (full local CI)
+    cmds:
+      - task: test
+      - task: test:arch
+      - task: test:int
 
   cover:
-    desc: HTML coverage report
+    desc: HTML coverage report (depends on test)
     deps: [test]
     cmds:
       - go tool cover -html={{.COVER_OUT}} -o coverage.html
+
+  # =====================================================================
+  # Code quality
+  # =====================================================================
 
   lint:
     desc: Run golangci-lint v2 strict profile
@@ -54,7 +102,7 @@ tasks:
       - golangci-lint run
 
   fmt:
-    desc: Format all Go files
+    desc: Format all Go files (gofmt)
     cmds:
       - gofmt -w .
 
@@ -69,20 +117,135 @@ tasks:
       - go run golang.org/x/vuln/cmd/govulncheck@latest ./...
 
   tidy:
-    desc: go mod tidy
+    desc: go mod tidy + verify
     cmds:
       - go mod tidy
+      - go mod verify
 
   generate:
-    desc: Run all codegen (sqlc, mocks, oapi)
+    desc: Run all codegen (sqlc, mocks, oapi when wired)
     cmds:
       - go generate ./...
 
   ci:
-    desc: Full CI pipeline locally (vet + lint + test + vuln)
-    deps: [vet, lint, test, vuln]
-
-  clean:
-    desc: Remove build artifacts
+    desc: Full CI pipeline locally (vet + lint + test + arch + vuln)
     cmds:
-      - rm -rf {{.BIN_DIR}} tmp coverage.out coverage.html dist
+      - task: vet
+      - task: lint
+      - task: test
+      - task: test:arch
+      - task: vuln
+
+  # =====================================================================
+  # Migrations — wraps goose (the canon migration tool, ADR 0005)
+  # =====================================================================
+
+  migrate:status:
+    desc: Show pending vs applied migrations
+    cmds:
+      - go run ./cmd/migrate status
+    env:
+      DATABASE_URL: '{{.DATABASE_URL}}'
+      MIGRATIONS_DIR: '{{.MIGRATIONS_DIR}}'
+
+  migrate:up:
+    desc: Apply all pending migrations (DATABASE_URL overridable)
+    cmds:
+      - go run ./cmd/migrate up
+    env:
+      DATABASE_URL: '{{.DATABASE_URL}}'
+      MIGRATIONS_DIR: '{{.MIGRATIONS_DIR}}'
+
+  migrate:down:
+    desc: Roll back the most recent migration
+    cmds:
+      - go run ./cmd/migrate down
+    env:
+      DATABASE_URL: '{{.DATABASE_URL}}'
+      MIGRATIONS_DIR: '{{.MIGRATIONS_DIR}}'
+
+  migrate:redo:
+    desc: Roll back + re-apply the most recent migration (round-trip check)
+    cmds:
+      - go run ./cmd/migrate redo
+    env:
+      DATABASE_URL: '{{.DATABASE_URL}}'
+      MIGRATIONS_DIR: '{{.MIGRATIONS_DIR}}'
+
+  migrate:version:
+    desc: Print the currently-applied migration version
+    cmds:
+      - go run ./cmd/migrate version
+    env:
+      DATABASE_URL: '{{.DATABASE_URL}}'
+      MIGRATIONS_DIR: '{{.MIGRATIONS_DIR}}'
+
+  migrate:validate:
+    desc: Parse-check every migration file without applying
+    cmds:
+      - go run ./cmd/migrate validate
+    env:
+      DATABASE_URL: '{{.DATABASE_URL}}'
+      MIGRATIONS_DIR: '{{.MIGRATIONS_DIR}}'
+
+  migrate:new:
+    desc: 'Create a new SQL migration: task migrate:new -- <name>'
+    cmds:
+      - 'goose -dir {{.MIGRATIONS_DIR}} create {{.CLI_ARGS}} sql'
+    preconditions:
+      - sh: command -v goose
+        msg: 'goose CLI required. Install: go install github.com/pressly/goose/v3/cmd/goose@latest'
+
+  # =====================================================================
+  # Docker (dev stack via compose --profile full)
+  # =====================================================================
+
+  docker:build:
+    desc: Build api + migrate images locally via docker buildx
+    cmds:
+      - docker compose -f {{.COMPOSE_FILE}} --profile full build
+
+  docker:up:
+    desc: Start postgres + redis only (host-side `air` workflow)
+    cmds:
+      - docker compose -f {{.COMPOSE_FILE}} up -d
+
+  docker:up:full:
+    desc: Start full stack (postgres + redis + migrate + api built locally)
+    cmds:
+      - docker compose -f {{.COMPOSE_FILE}} --profile full up -d --build
+
+  docker:down:
+    desc: Stop and remove all containers (preserves volumes)
+    cmds:
+      - docker compose -f {{.COMPOSE_FILE}} --profile full down
+
+  docker:wipe:
+    desc: Stop + remove containers AND volumes (full reset)
+    cmds:
+      - docker compose -f {{.COMPOSE_FILE}} --profile full down -v
+
+  docker:logs:
+    desc: 'Tail logs from a service: task docker:logs -- api  (default: api)'
+    cmds:
+      - 'docker compose -f {{.COMPOSE_FILE}} --profile full logs -f --tail=200 {{.CLI_ARGS | default "api"}}'
+
+  docker:ps:
+    desc: Show stack status
+    cmds:
+      - docker compose -f {{.COMPOSE_FILE}} --profile full ps
+
+  # =====================================================================
+  # Release (canon: GitHub Actions builds + signs; this just tags)
+  # =====================================================================
+
+  release:tag:
+    desc: 'Tag a release: task release:tag -- v0.2.2  (triggers release.yml)'
+    cmds:
+      - 'git tag -a {{.CLI_ARGS}} -m "Release {{.CLI_ARGS}}"'
+      - 'git push origin {{.CLI_ARGS}}'
+    preconditions:
+      - sh: '[[ -n "{{.CLI_ARGS}}" ]]'
+        msg: 'tag argument required: task release:tag -- v0.2.2'
+      - sh: 'git diff --quiet && git diff --cached --quiet'
+        msg: 'working tree must be clean before tagging'
