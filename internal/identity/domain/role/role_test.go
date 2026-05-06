@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/leadkart/leadkart-go/internal/common/ids"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/permission"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/role"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
@@ -199,6 +200,137 @@ func TestSetHierarchyLevel_RejectsSystemDefault(t *testing.T) {
 		t.Fatalf("want ErrSystemDefault got %v", err)
 	}
 }
+
+func TestGrantPermission_AddsAndEmits(t *testing.T) {
+	t.Parallel()
+	r := newRole(t)
+	_ = r.PullEvents()
+	p := permission.FromConstant(permission.IdentityPermissions.Users.View)
+	if err := r.GrantPermission(p); err != nil {
+		t.Fatalf("Grant: %v", err)
+	}
+	if !r.HasPermission(p) {
+		t.Fatal("HasPermission false after Grant")
+	}
+	events := r.PullEvents()
+	if len(events) != 1 {
+		t.Fatalf("events: %d", len(events))
+	}
+	ev, ok := events[0].(role.PermissionGrantedEvent)
+	if !ok {
+		t.Fatalf("event type: %T", events[0])
+	}
+	if ev.Permission != "identity.users.view" {
+		t.Fatalf("event.Permission: %q", ev.Permission)
+	}
+}
+
+func TestGrantPermission_Idempotent(t *testing.T) {
+	t.Parallel()
+	r := newRole(t)
+	p := permission.FromConstant(permission.IdentityPermissions.Users.View)
+	_ = r.GrantPermission(p)
+	_ = r.PullEvents()
+	if err := r.GrantPermission(p); err != nil {
+		t.Fatalf("dup Grant: %v", err)
+	}
+	if events := r.PullEvents(); len(events) != 0 {
+		t.Fatalf("idempotent dup emitted %d events", len(events))
+	}
+}
+
+func TestGrantPermission_RejectsNil(t *testing.T) {
+	t.Parallel()
+	r := newRole(t)
+	if err := r.GrantPermission(nil); !errors.Is(err, role.ErrInvalid) {
+		t.Fatalf("want ErrInvalid got %v", err)
+	}
+}
+
+func TestRevokePermission_RemovesAndEmits(t *testing.T) {
+	t.Parallel()
+	r := newRole(t)
+	p := permission.FromConstant(permission.IdentityPermissions.Users.View)
+	_ = r.GrantPermission(p)
+	_ = r.PullEvents()
+	if err := r.RevokePermission(p); err != nil {
+		t.Fatalf("Revoke: %v", err)
+	}
+	if r.HasPermission(p) {
+		t.Fatal("HasPermission true after Revoke")
+	}
+	events := r.PullEvents()
+	if len(events) != 1 {
+		t.Fatalf("events: %d", len(events))
+	}
+	if _, ok := events[0].(role.PermissionRevokedEvent); !ok {
+		t.Fatalf("event type: %T", events[0])
+	}
+}
+
+func TestRevokePermission_NotPresentNoEvent(t *testing.T) {
+	t.Parallel()
+	r := newRole(t)
+	_ = r.PullEvents()
+	p := permission.FromConstant(permission.IdentityPermissions.Users.View)
+	if err := r.RevokePermission(p); err != nil {
+		t.Fatalf("Revoke missing: %v", err)
+	}
+	if events := r.PullEvents(); len(events) != 0 {
+		t.Fatalf("revoke-missing should emit 0 events, got %d", len(events))
+	}
+}
+
+func TestReplacePermissions_DiffEvents(t *testing.T) {
+	t.Parallel()
+	r := newRole(t)
+	view := permission.FromConstant(permission.IdentityPermissions.Users.View)
+	create := permission.FromConstant(permission.IdentityPermissions.Users.Create)
+	_ = r.GrantPermission(view)
+	_ = r.PullEvents()
+
+	if err := r.ReplacePermissions([]*permission.Permission{create}); err != nil {
+		t.Fatalf("Replace: %v", err)
+	}
+	if r.HasPermission(view) {
+		t.Fatal("view should be revoked")
+	}
+	if !r.HasPermission(create) {
+		t.Fatal("create should be granted")
+	}
+	events := r.PullEvents()
+	if len(events) != 2 {
+		t.Fatalf("events: got %d want 2", len(events))
+	}
+	if _, ok := events[0].(role.PermissionRevokedEvent); !ok {
+		t.Fatalf("first event should be Revoked, got %T", events[0])
+	}
+	if _, ok := events[1].(role.PermissionGrantedEvent); !ok {
+		t.Fatalf("second event should be Granted, got %T", events[1])
+	}
+}
+
+func TestReplacePermissions_EmptyTargetRevokesAll(t *testing.T) {
+	t.Parallel()
+	r := newRole(t)
+	view := permission.FromConstant(permission.IdentityPermissions.Users.View)
+	create := permission.FromConstant(permission.IdentityPermissions.Users.Create)
+	_ = r.GrantPermission(view)
+	_ = r.GrantPermission(create)
+	_ = r.PullEvents()
+
+	if err := r.ReplacePermissions(nil); err != nil {
+		t.Fatalf("Replace nil: %v", err)
+	}
+	if len(r.Permissions()) != 0 {
+		t.Fatalf("permissions still present: %+v", r.Permissions())
+	}
+	events := r.PullEvents()
+	if len(events) != 2 {
+		t.Fatalf("events: got %d want 2 (both revoked)", len(events))
+	}
+}
+
 
 func TestHierarchyConstants(t *testing.T) {
 	t.Parallel()

@@ -215,6 +215,123 @@ func (r *Role) SetHierarchyLevel(level int) error {
 	return nil
 }
 
+// HasPermission reports whether the role grants `p`. Used by the
+// effective-permission resolver (Task 13 / Task 21) when computing a
+// Membership's authoritative set. Pointer-equality on interned
+// permissions makes this O(N) over a small N (~30 max in catalogue).
+func (r *Role) HasPermission(p *permission.Permission) bool {
+	if p == nil {
+		return false
+	}
+	for _, granted := range r.permissions {
+		if granted.Equal(p) {
+			return true
+		}
+	}
+	return false
+}
+
+// GrantPermission adds `p` to the role's permission set. Idempotent —
+// granting an already-granted permission is a no-op (no event).
+func (r *Role) GrantPermission(p *permission.Permission) error {
+	if err := r.ensureMutable(); err != nil {
+		return err
+	}
+	if p == nil {
+		return fmt.Errorf("%w: permission required", ErrInvalid)
+	}
+	for _, existing := range r.permissions {
+		if existing.Equal(p) {
+			return nil
+		}
+	}
+	r.permissions = append(r.permissions, p)
+	r.recordEvent(PermissionGrantedEvent{
+		RoleID:     r.id,
+		TenantID:   r.tenantID,
+		Permission: p.Name(),
+		At:         clock.Now(),
+	})
+	return nil
+}
+
+// RevokePermission removes `p` from the role's permission set.
+// Idempotent — revoking a non-present permission is a no-op (no event).
+func (r *Role) RevokePermission(p *permission.Permission) error {
+	if err := r.ensureMutable(); err != nil {
+		return err
+	}
+	if p == nil {
+		return fmt.Errorf("%w: permission required", ErrInvalid)
+	}
+	for i, existing := range r.permissions {
+		if existing.Equal(p) {
+			r.permissions = append(r.permissions[:i], r.permissions[i+1:]...)
+			r.recordEvent(PermissionRevokedEvent{
+				RoleID:     r.id,
+				TenantID:   r.tenantID,
+				Permission: p.Name(),
+				At:         clock.Now(),
+			})
+			return nil
+		}
+	}
+	return nil
+}
+
+// ReplacePermissions sets the permission set to `target`. Emits
+// PermissionRevokedEvent for each removal then PermissionGrantedEvent
+// for each addition (event order: revoked-before-granted matches the
+// natural audit-log narrative). Empty/nil target revokes everything.
+//
+// Nil entries in `target` are silently dropped (defensive — callers
+// shouldn't pass nils, but we don't crash if they do).
+func (r *Role) ReplacePermissions(target []*permission.Permission) error {
+	if err := r.ensureMutable(); err != nil {
+		return err
+	}
+	now := clock.Now()
+	wantSet := make(map[*permission.Permission]struct{}, len(target))
+	for _, p := range target {
+		if p != nil {
+			wantSet[p] = struct{}{}
+		}
+	}
+	currentSet := make(map[*permission.Permission]struct{}, len(r.permissions))
+	for _, p := range r.permissions {
+		currentSet[p] = struct{}{}
+	}
+	// Build the kept slice + emit revoke events for removals.
+	kept := r.permissions[:0]
+	for _, p := range r.permissions {
+		if _, keep := wantSet[p]; keep {
+			kept = append(kept, p)
+			continue
+		}
+		r.recordEvent(PermissionRevokedEvent{
+			RoleID:     r.id,
+			TenantID:   r.tenantID,
+			Permission: p.Name(),
+			At:         now,
+		})
+	}
+	r.permissions = kept
+	// Emit grant events for additions (anything in target not in current).
+	for p := range wantSet {
+		if _, already := currentSet[p]; already {
+			continue
+		}
+		r.permissions = append(r.permissions, p)
+		r.recordEvent(PermissionGrantedEvent{
+			RoleID:     r.id,
+			TenantID:   r.tenantID,
+			Permission: p.Name(),
+			At:         now,
+		})
+	}
+	return nil
+}
+
 // ensureMutable rejects mutations on a deleted role. Internal helper
 // for the state-transition methods (Rename / SetHierarchyLevel /
 // GrantPermission / etc.).

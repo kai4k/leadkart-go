@@ -41,3 +41,27 @@ type RenamedEvent struct {
 }
 
 func (RenamedEvent) isRoleEvent() {}
+
+// PermissionGrantedEvent fires when a Permission is added to the
+// role's set. Permission carries the wire-string form
+// (`identity.users.create`) — keeps integration-event mappers cheap
+// (no domain-type imports needed downstream).
+type PermissionGrantedEvent struct {
+	RoleID     ID
+	TenantID   tenant.ID
+	Permission string
+	At         time.Time
+}
+
+func (PermissionGrantedEvent) isRoleEvent() {}
+
+// PermissionRevokedEvent fires when a Permission is removed from the
+// role's set.
+type PermissionRevokedEvent struct {
+	RoleID     ID
+	TenantID   tenant.ID
+	Permission string
+	At         time.Time
+}
+
+func (PermissionRevokedEvent) isRoleEvent() {}
