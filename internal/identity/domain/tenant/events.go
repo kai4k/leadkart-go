@@ -119,6 +119,24 @@ func (AdminContactUpdatedEvent) Topic() string { return "identity.tenant_admin_c
 // OccurredAt returns the domain timestamp.
 func (e AdminContactUpdatedEvent) OccurredAt() time.Time { return e.At }
 
+// SettingsUpdatedEvent fires when [Tenant.UpdateSettings] changes
+// the tenant's operational settings (password policy today).
+//
+// Auth + login-flow caches MUST consume this to invalidate cached
+// policy — incorrect cached policy means stale rules until cache TTL.
+type SettingsUpdatedEvent struct {
+	TenantID    ID
+	OldSettings Settings
+	NewSettings Settings
+	At          time.Time
+}
+
+// Topic returns the integration event type.
+func (SettingsUpdatedEvent) Topic() string { return "identity.tenant_settings_updated.v1" }
+
+// OccurredAt returns the domain timestamp.
+func (e SettingsUpdatedEvent) OccurredAt() time.Time { return e.At }
+
 // MarkedForDeletionEvent fires when [Tenant.MarkForDeletion] is called.
 //
 // Per data-retention.md "Tenant deletion saga": entry into the 30-day

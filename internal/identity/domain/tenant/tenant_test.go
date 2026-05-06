@@ -675,6 +675,118 @@ func TestUpdateAdminContact_PartialUpdate(t *testing.T) {
 	}
 }
 
+// ----- UpdateSettings -------------------------------------------------------
+
+func TestNewPasswordPolicy_AcceptsValid(t *testing.T) {
+	t.Parallel()
+	p, err := tenant.NewPasswordPolicy(12, true, true, true, true, 5, 15)
+	if err != nil {
+		t.Fatalf("NewPasswordPolicy: %v", err)
+	}
+	if p.MinLength() != 12 {
+		t.Errorf("MinLength = %d", p.MinLength())
+	}
+	if p.MaxFailedAttempts() != 5 {
+		t.Errorf("MaxFailedAttempts = %d", p.MaxFailedAttempts())
+	}
+	if !p.RequireUppercase() || !p.RequireLowercase() || !p.RequireDigit() || !p.RequireSymbol() {
+		t.Error("char-class flags not set")
+	}
+}
+
+func TestNewPasswordPolicy_RejectsBelowFloors(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name              string
+		minLength         int
+		maxFailedAttempts int
+		lockoutMinutes    int
+	}{
+		{"minLength below NIST floor", 7, 5, 15},
+		{"minLength too high", 200, 5, 15},
+		{"maxFailedAttempts too low", 12, 2, 15},
+		{"maxFailedAttempts too high", 12, 100, 15},
+		{"lockout negative", 12, 5, -1},
+		{"lockout > 24h", 12, 5, 1500},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := tenant.NewPasswordPolicy(tc.minLength, true, true, true, true, tc.maxFailedAttempts, tc.lockoutMinutes)
+			if !errors.Is(err, tenant.ErrInvalid) {
+				t.Errorf("expected ErrInvalid, got %v", err)
+			}
+		})
+	}
+}
+
+func TestDefaultPasswordPolicy_MeetsAllFloors(t *testing.T) {
+	t.Parallel()
+	d := tenant.DefaultPasswordPolicy()
+	if d.MinLength() < 8 || d.MaxFailedAttempts() < 3 || d.LockoutMinutes() < 0 {
+		t.Errorf("default policy below floors: %+v", d)
+	}
+	if d.IsZero() {
+		t.Error("default should not be zero")
+	}
+}
+
+func TestUpdateSettings_FirstDeclaration_EmitsEvent(t *testing.T) {
+	t.Cleanup(clock.Reset)
+	clock.Set(time.Date(2026, 5, 7, 12, 0, 0, 0, time.UTC))
+
+	tn := newActiveTenant(t)
+	_ = tn.PullEvents()
+
+	pol := tenant.DefaultPasswordPolicy()
+	s := tenant.NewSettings(pol)
+	if err := tn.UpdateSettings(s); err != nil {
+		t.Fatalf("UpdateSettings: %v", err)
+	}
+	if !tn.Settings().Equal(s) {
+		t.Error("Settings not stored")
+	}
+
+	events := tn.PullEvents()
+	if len(events) != 1 {
+		t.Fatalf("events: %d", len(events))
+	}
+	ev, ok := events[0].(tenant.SettingsUpdatedEvent)
+	if !ok {
+		t.Fatalf("event[0] = %T, want SettingsUpdatedEvent", events[0])
+	}
+	if !ev.OldSettings.IsZero() {
+		t.Error("OldSettings should be zero on first declaration")
+	}
+	if !ev.NewSettings.Equal(s) {
+		t.Error("NewSettings mismatch")
+	}
+}
+
+func TestUpdateSettings_NoOp_WhenUnchanged(t *testing.T) {
+	t.Cleanup(clock.Reset)
+	tn := newActiveTenant(t)
+	s := tenant.NewSettings(tenant.DefaultPasswordPolicy())
+	_ = tn.UpdateSettings(s)
+	_ = tn.PullEvents()
+	if err := tn.UpdateSettings(s); err != nil {
+		t.Fatalf("UpdateSettings noop: %v", err)
+	}
+	if got := tn.PullEvents(); len(got) != 0 {
+		t.Errorf("expected 0 events, got %d", len(got))
+	}
+}
+
+func TestUpdateSettings_RejectedOnDeletedTenant(t *testing.T) {
+	t.Cleanup(clock.Reset)
+	tn := newPendingTenant(t)
+	_ = tn.HardDelete()
+	s := tenant.NewSettings(tenant.DefaultPasswordPolicy())
+	if err := tn.UpdateSettings(s); !errors.Is(err, tenant.ErrInvalid) {
+		t.Errorf("expected ErrInvalid on deleted, got %v", err)
+	}
+}
+
 // ----- Deletion lifecycle ---------------------------------------------------
 
 func TestMarkForDeletion_FromActive_TransitionsToPendingDeletion(t *testing.T) {

@@ -148,6 +148,40 @@ func (TenantAdminContactUpdatedV1) Topic() string { return "identity.tenant_admi
 // OccurredAt returns the domain timestamp.
 func (e TenantAdminContactUpdatedV1) OccurredAt() time.Time { return e.OccurredAtUTC }
 
+// TenantSettingsUpdatedV1 — tenant changed its operational settings
+// (password policy today; expanding over time). Auth + login-flow
+// caches MUST consume this to invalidate cached policy.
+//
+// Flattens PasswordPolicy + future settings to wire-stable primitives.
+// Zero values mean "uninitialised" — first-declaration has all old_*
+// fields zero (min_length=0).
+type TenantSettingsUpdatedV1 struct {
+	platformMarker
+
+	TenantID                uuid.UUID `json:"tenant_id"`
+	OldMinLength            int       `json:"old_min_length"`
+	OldRequireUppercase     bool      `json:"old_require_uppercase"`
+	OldRequireLowercase     bool      `json:"old_require_lowercase"`
+	OldRequireDigit         bool      `json:"old_require_digit"`
+	OldRequireSymbol        bool      `json:"old_require_symbol"`
+	OldMaxFailedAttempts    int       `json:"old_max_failed_attempts"`
+	OldLockoutMinutes       int       `json:"old_lockout_minutes"`
+	NewMinLength            int       `json:"new_min_length"`
+	NewRequireUppercase     bool      `json:"new_require_uppercase"`
+	NewRequireLowercase     bool      `json:"new_require_lowercase"`
+	NewRequireDigit         bool      `json:"new_require_digit"`
+	NewRequireSymbol        bool      `json:"new_require_symbol"`
+	NewMaxFailedAttempts    int       `json:"new_max_failed_attempts"`
+	NewLockoutMinutes       int       `json:"new_lockout_minutes"`
+	OccurredAtUTC           time.Time `json:"occurred_at_utc"`
+}
+
+// Topic returns the canonical wire alias.
+func (TenantSettingsUpdatedV1) Topic() string { return "identity.tenant_settings_updated.v1" }
+
+// OccurredAt returns the domain timestamp.
+func (e TenantSettingsUpdatedV1) OccurredAt() time.Time { return e.OccurredAtUTC }
+
 // TenantMarkedForDeletionV1 — operator entered the 30-day grace window
 // per `data-retention.md` "Tenant deletion saga". Subscribers MAY
 // block tenant ops immediately or wait for terminal TenantDeletedV1.
@@ -209,6 +243,7 @@ var (
 	_ Platform = TenantProfileUpdatedV1{}
 	_ Platform = TenantStatutoryUpdatedV1{}
 	_ Platform = TenantAdminContactUpdatedV1{}
+	_ Platform = TenantSettingsUpdatedV1{}
 	_ Platform = TenantSuspendedV1{}
 	_ Platform = TenantMarkedForDeletionV1{}
 	_ Platform = TenantRestoredV1{}
@@ -219,6 +254,7 @@ var (
 	_ = register(TenantProfileUpdatedV1{})
 	_ = register(TenantStatutoryUpdatedV1{})
 	_ = register(TenantAdminContactUpdatedV1{})
+	_ = register(TenantSettingsUpdatedV1{})
 	_ = register(TenantSuspendedV1{})
 	_ = register(TenantMarkedForDeletionV1{})
 	_ = register(TenantRestoredV1{})

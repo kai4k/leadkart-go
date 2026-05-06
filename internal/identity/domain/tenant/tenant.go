@@ -56,6 +56,7 @@ type Tenant struct {
 	status              Status
 	statutory           Statutory    // optional Indian statutory IDs (GST/PAN/DrugLicence)
 	adminContact        AdminContact // optional admin phone + postal address
+	settings            Settings     // password policy + future operational settings
 	createdAt           time.Time
 	activatedAt         time.Time // zero until first Activate
 	suspendedAt         time.Time // zero until first Suspend; reset on subsequent Activate
@@ -128,6 +129,7 @@ type Snapshot struct {
 	Status              Status
 	Statutory           Statutory
 	AdminContact        AdminContact
+	Settings            Settings
 	CreatedAt           time.Time
 	ActivatedAt         time.Time
 	SuspendedAt         time.Time
@@ -152,6 +154,7 @@ func UnmarshalFromDB(s Snapshot) *Tenant {
 		status:              s.Status,
 		statutory:           s.Statutory,
 		adminContact:        s.AdminContact,
+		settings:            s.Settings,
 		createdAt:           s.CreatedAt,
 		activatedAt:         s.ActivatedAt,
 		suspendedAt:         s.SuspendedAt,
@@ -210,6 +213,11 @@ func (t *Tenant) Statutory() Statutory { return t.statutory }
 // AdminContact returns the tenant's admin phone + postal address.
 // Zero value means no contact details declared.
 func (t *Tenant) AdminContact() AdminContact { return t.adminContact }
+
+// Settings returns the tenant's operational settings (password policy
+// today; expanding over time). Zero value means uninitialised — caller
+// SHOULD treat as DefaultPasswordPolicy at runtime.
+func (t *Tenant) Settings() Settings { return t.settings }
 
 // ----- State transitions ----------------------------------------------------
 
@@ -378,6 +386,37 @@ func (t *Tenant) UpdateAdminContact(c AdminContact) error {
 		OldAdminContact: old,
 		NewAdminContact: c,
 		At:              clock.Now(),
+	})
+	return nil
+}
+
+// UpdateSettings replaces the tenant's operational [Settings]
+// (password policy today; expanding over time).
+//
+// Validation already happened inside [NewPasswordPolicy] — this method
+// only enforces tenant-lifecycle rules.
+//
+// Idempotent: no-op + no event when the new value equals the current.
+//
+// Allowed in any non-terminal status. Rejected from StatusDeleted.
+//
+// Settings is a security-sensitive concern (password policy floor +
+// lockout) — auth + login-flow caches MUST react to
+// SettingsUpdatedEvent to invalidate cached policy.
+func (t *Tenant) UpdateSettings(s Settings) error {
+	if t.status == StatusDeleted {
+		return fmt.Errorf("%w: tenant deleted; cannot update settings", ErrInvalid)
+	}
+	if t.settings.Equal(s) {
+		return nil
+	}
+	old := t.settings
+	t.settings = s
+	t.recordEvent(SettingsUpdatedEvent{
+		TenantID:    t.id,
+		OldSettings: old,
+		NewSettings: s,
+		At:          clock.Now(),
 	})
 	return nil
 }

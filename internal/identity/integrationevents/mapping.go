@@ -75,6 +75,28 @@ func FromDomainEvent(d any) (Event, error) {
 			OccurredAtUTC:  e.At.UTC(),
 		}, nil
 
+	case tenant.SettingsUpdatedEvent:
+		oldP := e.OldSettings.PasswordPolicy()
+		newP := e.NewSettings.PasswordPolicy()
+		return TenantSettingsUpdatedV1{
+			TenantID:             mustParseUUID(e.TenantID.String()),
+			OldMinLength:         oldP.MinLength(),
+			OldRequireUppercase:  oldP.RequireUppercase(),
+			OldRequireLowercase:  oldP.RequireLowercase(),
+			OldRequireDigit:      oldP.RequireDigit(),
+			OldRequireSymbol:     oldP.RequireSymbol(),
+			OldMaxFailedAttempts: oldP.MaxFailedAttempts(),
+			OldLockoutMinutes:    oldP.LockoutMinutes(),
+			NewMinLength:         newP.MinLength(),
+			NewRequireUppercase:  newP.RequireUppercase(),
+			NewRequireLowercase:  newP.RequireLowercase(),
+			NewRequireDigit:      newP.RequireDigit(),
+			NewRequireSymbol:     newP.RequireSymbol(),
+			NewMaxFailedAttempts: newP.MaxFailedAttempts(),
+			NewLockoutMinutes:    newP.LockoutMinutes(),
+			OccurredAtUTC:        e.At.UTC(),
+		}, nil
+
 	case tenant.AdminContactUpdatedEvent:
 		oldAddr := e.OldAdminContact.Address()
 		newAddr := e.NewAdminContact.Address()
