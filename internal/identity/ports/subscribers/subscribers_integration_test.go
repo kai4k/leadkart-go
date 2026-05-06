@@ -55,7 +55,7 @@ type fixture struct {
 
 func newFixture(t *testing.T) *fixture {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 90*time.Second)
 	defer cancel()
 
 	c, err := postgres.Run(ctx,
@@ -72,6 +72,7 @@ func newFixture(t *testing.T) *fixture {
 		t.Fatalf("start postgres: %v", err)
 	}
 	t.Cleanup(func() {
+		// Cleanup runs after t.Context() is cancelled — must use Background.
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		_ = c.Terminate(ctx)
@@ -159,7 +160,7 @@ func (fx *fixture) seedPerson(t *testing.T, addr string) *person.Person {
 	if err != nil {
 		t.Fatalf("person.New: %v", err)
 	}
-	if err := fx.persons.Add(context.Background(), p); err != nil {
+	if err := fx.persons.Add(t.Context(), p); err != nil {
 		t.Fatalf("Add person: %v", err)
 	}
 	return p
@@ -174,7 +175,7 @@ func (fx *fixture) seedTenant(t *testing.T) *tenant.Tenant {
 	if err != nil {
 		t.Fatalf("tenant.New: %v", err)
 	}
-	if err := fx.tenants.Add(context.Background(), tn); err != nil {
+	if err := fx.tenants.Add(t.Context(), tn); err != nil {
 		t.Fatalf("Add tenant: %v", err)
 	}
 	return tn
@@ -194,7 +195,7 @@ func (fx *fixture) seedFamily(t *testing.T, p *person.Person, tn *tenant.Tenant)
 	if err != nil {
 		t.Fatalf("NewFamily: %v", err)
 	}
-	if err := fx.families.Add(context.Background(), f); err != nil {
+	if err := fx.families.Add(t.Context(), f); err != nil {
 		t.Fatalf("Add family: %v", err)
 	}
 	return f
@@ -207,7 +208,7 @@ func silentLog() *slog.Logger {
 // runRouter starts a router goroutine + returns a stop fn.
 func runRouter(t *testing.T, r *messaging.Router) func() {
 	t.Helper()
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
@@ -309,7 +310,7 @@ func TestRevokeFamilies_OnPasswordChanged(t *testing.T) {
 	}, uuid.Nil)
 
 	waitFor(t, func() bool {
-		actives, err := fx.families.ListActiveForPerson(context.Background(), p.ID())
+		actives, err := fx.families.ListActiveForPerson(t.Context(), p.ID())
 		if err != nil {
 			return false
 		}
@@ -318,7 +319,7 @@ func TestRevokeFamilies_OnPasswordChanged(t *testing.T) {
 
 	// Verify both were revoked with reason="password_changed".
 	for _, fid := range []refreshtoken.FamilyID{f1.ID(), f2.ID()} {
-		got, err := fx.families.GetByID(context.Background(), fid)
+		got, err := fx.families.GetByID(t.Context(), fid)
 		if err != nil {
 			t.Fatalf("GetByID %s: %v", fid, err)
 		}
@@ -347,7 +348,7 @@ func TestRevokeFamilies_OnAnonymised(t *testing.T) {
 	}, uuid.Nil)
 
 	waitFor(t, func() bool {
-		got, err := fx.families.GetByID(context.Background(), f.ID())
+		got, err := fx.families.GetByID(t.Context(), f.ID())
 		if err != nil {
 			return false
 		}
@@ -372,7 +373,7 @@ func TestRevokeFamilies_NoActiveFamilies_NoOp(t *testing.T) {
 	// + succeeded without error (zero families to revoke is success).
 	waitFor(t, func() bool {
 		var n int
-		_ = fx.pool.QueryRow(context.Background(), `
+		_ = fx.pool.QueryRow(t.Context(), `
 			SELECT count(*) FROM buildingblocks.audit_log_entry
 			WHERE  action = 'identity.person_password_changed.v1'
 			  AND  succeeded = true

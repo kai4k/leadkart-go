@@ -36,7 +36,7 @@ func migrationsDir(t *testing.T) string {
 // returns its DSN. Container is auto-cleaned via t.Cleanup.
 func startPostgres(t *testing.T) string {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 90*time.Second)
 	defer cancel()
 
 	c, err := postgres.Run(ctx,
@@ -78,7 +78,7 @@ func applyMigrations(t *testing.T, dsn string) {
 	if err := goose.SetDialect("postgres"); err != nil {
 		t.Fatalf("set dialect: %v", err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 	defer cancel()
 	if err := goose.UpContext(ctx, db, migrationsDir(t)); err != nil {
 		t.Fatalf("goose up: %v", err)
@@ -94,7 +94,7 @@ func applyMigrations(t *testing.T, dsn string) {
 // reconnecting, which is in-session and applies immediately.
 func createAppRole(t *testing.T, db *sql.DB) {
 	t.Helper()
-	ctx := context.Background()
+	ctx := t.Context()
 	stmts := []string{
 		`CREATE ROLE leadkart_app NOSUPERUSER NOINHERIT NOCREATEROLE NOCREATEDB`,
 		`GRANT USAGE ON SCHEMA app, identity TO leadkart_app`,
@@ -120,16 +120,74 @@ func TestMigrationsApplyCleanly(t *testing.T) {
 	}
 	defer db.Close()
 
-	// 8 identity tables present (7 from 002 + processed_messages from
-	// 20260507000001_messaging_infra).
+	// Single source of truth for the expected `identity.*` tables.
+	// Migrations that add a table extend this list — the count
+	// assertion derives from len(expectedIdentityTables) so the test
+	// fails-loud on either an extra table OR a missing one.
+	expectedIdentityTables := []string{
+		"tenants", "persons", "tenant_memberships",
+		"refresh_token_families", "refresh_tokens", "auth_routing",
+		"outbox",
+		"processed_messages",                                 // 20260507000001
+		"roles", "role_assignments", "membership_permission_overrides", // 20260507000002
+	}
 	var count int
 	if err := db.QueryRow(`
 		SELECT count(*) FROM pg_tables WHERE schemaname = 'identity'
 	`).Scan(&count); err != nil {
 		t.Fatalf("count identity tables: %v", err)
 	}
-	if want := 8; count != want {
+	if want := len(expectedIdentityTables); count != want {
 		t.Fatalf("identity tables: got %d, want %d", count, want)
+	}
+	for _, table := range expectedIdentityTables {
+		var exists bool
+		if err := db.QueryRow(`
+			SELECT EXISTS(
+				SELECT 1 FROM pg_tables
+				WHERE schemaname = 'identity' AND tablename = $1)
+		`, table).Scan(&exists); err != nil {
+			t.Fatalf("check identity.%s: %v", table, err)
+		}
+		if !exists {
+			t.Fatalf("identity.%s missing after migration", table)
+		}
+	}
+
+	// Verify tenant_memberships gained the four profile/hierarchy columns.
+	for _, col := range []string{"designation", "department", "status_message", "reports_to"} {
+		var exists bool
+		if err := db.QueryRow(`
+			SELECT EXISTS(
+				SELECT 1 FROM information_schema.columns
+				WHERE table_schema = 'identity'
+				  AND table_name   = 'tenant_memberships'
+				  AND column_name  = $1)
+		`, col).Scan(&exists); err != nil {
+			t.Fatalf("check tenant_memberships.%s: %v", col, err)
+		}
+		if !exists {
+			t.Fatalf("tenant_memberships.%s missing after migration", col)
+		}
+	}
+
+	// Verify RLS+FORCE enabled on all three new authorization tables.
+	for _, table := range []string{"roles", "role_assignments", "membership_permission_overrides"} {
+		var rlsEnabled, rlsForced bool
+		if err := db.QueryRow(`
+			SELECT relrowsecurity, relforcerowsecurity
+			FROM   pg_class c
+			JOIN   pg_namespace n ON n.oid = c.relnamespace
+			WHERE  n.nspname = 'identity' AND c.relname = $1
+		`, table).Scan(&rlsEnabled, &rlsForced); err != nil {
+			t.Fatalf("check RLS on identity.%s: %v", table, err)
+		}
+		if !rlsEnabled {
+			t.Fatalf("identity.%s RLS not enabled", table)
+		}
+		if !rlsForced {
+			t.Fatalf("identity.%s RLS not FORCEd (would let table-owner bypass)", table)
+		}
 	}
 
 	// buildingblocks schema present + audit_log_entry table; app schema
@@ -184,7 +242,7 @@ func TestRLSIsolatesTenants(t *testing.T) {
 
 	createAppRole(t, db)
 
-	ctx := context.Background()
+	ctx := t.Context()
 	tenantA, tenantB := uuid.New(), uuid.New()
 	personA, personB := uuid.New(), uuid.New()
 
@@ -310,7 +368,7 @@ func TestSingleActiveMembershipInvariant(t *testing.T) {
 	}
 	defer db.Close()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	tenantA, tenantB := uuid.New(), uuid.New()
 	person := uuid.New()
 

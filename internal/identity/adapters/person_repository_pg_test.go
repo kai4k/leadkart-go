@@ -3,7 +3,6 @@
 package adapters_test
 
 import (
-	"context"
 	"errors"
 	"strings"
 	"testing"
@@ -42,7 +41,7 @@ func newPerson(t *testing.T, addr string) *person.Person {
 func TestPersonRepository_Add_PersistsRowAndOutboxEvent(t *testing.T) {
 	pool := repoFixture(t)
 	repo := adapters.NewPersonRepository(pool, pg.NewTransactor(pool))
-	ctx := context.Background()
+	ctx := t.Context()
 
 	p := newPerson(t, "alice@example.test")
 	if err := repo.Add(ctx, p); err != nil {
@@ -85,7 +84,7 @@ func TestPersonRepository_Add_PersistsRowAndOutboxEvent(t *testing.T) {
 func TestPersonRepository_Add_DuplicateEmail_ReturnsErrEmailTaken(t *testing.T) {
 	pool := repoFixture(t)
 	repo := adapters.NewPersonRepository(pool, pg.NewTransactor(pool))
-	ctx := context.Background()
+	ctx := t.Context()
 
 	first := newPerson(t, "dup@example.test")
 	if err := repo.Add(ctx, first); err != nil {
@@ -102,7 +101,7 @@ func TestPersonRepository_Add_DuplicateEmail_ReturnsErrEmailTaken(t *testing.T) 
 func TestPersonRepository_GetByEmail_ResolvesGlobally(t *testing.T) {
 	pool := repoFixture(t)
 	repo := adapters.NewPersonRepository(pool, pg.NewTransactor(pool))
-	ctx := context.Background()
+	ctx := t.Context()
 
 	p := newPerson(t, "router@example.test")
 	if err := repo.Add(ctx, p); err != nil {
@@ -122,7 +121,7 @@ func TestPersonRepository_GetByEmail_ResolvesGlobally(t *testing.T) {
 func TestPersonRepository_UpdateByID_ChangePasswordRotatesStamp(t *testing.T) {
 	pool := repoFixture(t)
 	repo := adapters.NewPersonRepository(pool, pg.NewTransactor(pool))
-	ctx := context.Background()
+	ctx := t.Context()
 
 	p := newPerson(t, "rot@example.test")
 	if err := repo.Add(ctx, p); err != nil {
@@ -156,7 +155,7 @@ func TestPersonRepository_UpdateByID_ChangePasswordRotatesStamp(t *testing.T) {
 func TestPersonRepository_UpdateByID_AnonymiseScrubs(t *testing.T) {
 	pool := repoFixture(t)
 	repo := adapters.NewPersonRepository(pool, pg.NewTransactor(pool))
-	ctx := context.Background()
+	ctx := t.Context()
 
 	p := newPerson(t, "scrub@example.test")
 	if err := repo.Add(ctx, p); err != nil {
@@ -194,7 +193,7 @@ func TestPersonRepository_UpdateByID_AnonymiseScrubs(t *testing.T) {
 func TestPersonRepository_GetByID_NotFound(t *testing.T) {
 	pool := repoFixture(t)
 	repo := adapters.NewPersonRepository(pool, pg.NewTransactor(pool))
-	ctx := context.Background()
+	ctx := t.Context()
 
 	missing := person.ID(ids.NewV7().String())
 	_, err := repo.GetByID(ctx, missing)

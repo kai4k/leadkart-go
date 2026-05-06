@@ -30,7 +30,7 @@ func silentLog() *slog.Logger {
 // stop fn cancels ctx + waits for Run to return.
 func runRouter(t *testing.T, r *messaging.Router) func() {
 	t.Helper()
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
@@ -120,7 +120,7 @@ func TestRouter_FullStack_TenantContextAndAuditAndIdempotency(t *testing.T) {
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
 		var n int
-		_ = pool.QueryRow(context.Background(), `
+		_ = pool.QueryRow(t.Context(), `
 			SELECT count(*) FROM identity.processed_messages
 			WHERE  message_id = $1 AND handler_name = 'test.handler'
 		`, msgID).Scan(&n)
@@ -150,7 +150,7 @@ func TestRouter_FullStack_TenantContextAndAuditAndIdempotency(t *testing.T) {
 
 	// Audit row written for the one processed message.
 	var auditCount int
-	err = pool.QueryRow(context.Background(), `
+	err = pool.QueryRow(t.Context(), `
 		SELECT count(*) FROM buildingblocks.audit_log_entry WHERE action = 'test.event.v1'
 	`).Scan(&auditCount)
 	if err != nil {
@@ -162,7 +162,7 @@ func TestRouter_FullStack_TenantContextAndAuditAndIdempotency(t *testing.T) {
 
 	// Inbox row for the (message, handler) pair.
 	var inboxCount int
-	err = pool.QueryRow(context.Background(), `
+	err = pool.QueryRow(t.Context(), `
 		SELECT count(*) FROM identity.processed_messages
 		WHERE  message_id = $1 AND handler_name = 'test.handler'
 	`, msgID).Scan(&inboxCount)
@@ -228,7 +228,7 @@ func TestRouter_HandlerError_DoesNotRecordInbox_AuditMarksFailure(t *testing.T) 
 
 	// No inbox row — handler errored.
 	var inboxCount int
-	if err := pool.QueryRow(context.Background(), `
+	if err := pool.QueryRow(t.Context(), `
 		SELECT count(*) FROM identity.processed_messages WHERE message_id = $1
 	`, msgID).Scan(&inboxCount); err != nil {
 		t.Fatalf("inbox count: %v", err)
@@ -239,13 +239,13 @@ func TestRouter_HandlerError_DoesNotRecordInbox_AuditMarksFailure(t *testing.T) 
 
 	// At least one audit row — Succeeded=false.
 	var auditCount, failedCount int
-	err = pool.QueryRow(context.Background(), `
+	err = pool.QueryRow(t.Context(), `
 		SELECT count(*) FROM buildingblocks.audit_log_entry WHERE action = 'test.failure.v1'
 	`).Scan(&auditCount)
 	if err != nil {
 		t.Fatalf("audit count: %v", err)
 	}
-	err = pool.QueryRow(context.Background(), `
+	err = pool.QueryRow(t.Context(), `
 		SELECT count(*) FROM buildingblocks.audit_log_entry
 		WHERE  action = 'test.failure.v1' AND succeeded = false
 	`).Scan(&failedCount)

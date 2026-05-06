@@ -10,10 +10,21 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/leadkart/leadkart-go/internal/common/clock"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/permission"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/role"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 	"github.com/leadkart/leadkart-go/internal/platform/pg"
+)
+
+// permission-override kind constants. Mirror of the
+// CHECK (kind IN ('granted', 'revoked')) in migration 20260507000002.
+// Wire-stable; persistence + hydration share these — no magic strings.
+const (
+	overrideKindGranted = "granted"
+	overrideKindRevoked = "revoked"
 )
 
 // MembershipRepository is the pgx/sqlc-backed implementation of
@@ -56,9 +67,22 @@ func (r *MembershipRepository) Add(ctx context.Context, m *membership.Membership
 // exists yet).
 //
 // Surfaces ErrAlreadyActive on partial-unique-index violation.
+//
+// Projects the full aggregate state to all four tables: tenant_memberships
+// (row + profile fields), role_assignments (one row per RoleAssignment),
+// membership_permission_overrides (one row per granted/revoked permission).
 func (r *MembershipRepository) AddInTx(ctx context.Context, tx pgx.Tx, m *membership.Membership) error {
 	q := r.q.WithTx(tx)
 	if err := insertMembershipRow(ctx, q, m); err != nil {
+		return err
+	}
+	if err := persistMembershipProfile(ctx, q, m); err != nil {
+		return err
+	}
+	if err := replaceRoleAssignments(ctx, q, m); err != nil {
+		return err
+	}
+	if err := replacePermissionOverrides(ctx, q, m); err != nil {
 		return err
 	}
 	return drainMembershipEvents(ctx, tx, m)
@@ -66,6 +90,11 @@ func (r *MembershipRepository) AddInTx(ctx context.Context, tx pgx.Tx, m *member
 
 // UpdateByID satisfies [membership.Repository]. Tenant-scoped: caller
 // must have set tenancy on ctx so RLS reveals the row.
+//
+// Persistence projects the full aggregate state — status (+ left_at),
+// profile fields, role_assignments (replace-all), and permission overrides
+// (replace-all) — under one transaction, then drains events. Replace-all
+// is simpler than per-row diff tracking and idempotent under retry.
 func (r *MembershipRepository) UpdateByID(
 	ctx context.Context,
 	id membership.ID,
@@ -85,6 +114,15 @@ func (r *MembershipRepository) UpdateByID(
 			return nil
 		}
 		if err := persistMembershipStatus(ctx, q, m); err != nil {
+			return err
+		}
+		if err := persistMembershipProfile(ctx, q, m); err != nil {
+			return err
+		}
+		if err := replaceRoleAssignments(ctx, q, m); err != nil {
+			return err
+		}
+		if err := replacePermissionOverrides(ctx, q, m); err != nil {
 			return err
 		}
 		return drainMembershipEvents(ctx, tx, m)
@@ -137,14 +175,23 @@ func (r *MembershipRepository) GetActiveForPerson(
 			return fmt.Errorf("membership repo: list for person: %w", err)
 		}
 		for _, row := range rows {
-			if row.Status == "active" {
-				m, perr := rowToMembership(row)
-				if perr != nil {
-					return perr
-				}
-				out = m
-				return nil
+			if row.Status != "active" {
+				continue
 			}
+			roleIDs, lerr := loadRoleAssignments(ctx, q, uuidFromPg(row.ID))
+			if lerr != nil {
+				return lerr
+			}
+			granted, revoked, lerr := loadPermissionOverrides(ctx, q, uuidFromPg(row.ID))
+			if lerr != nil {
+				return lerr
+			}
+			m, perr := rowToMembership(row, roleIDs, granted, revoked)
+			if perr != nil {
+				return perr
+			}
+			out = m
+			return nil
 		}
 		return membership.ErrNotFound
 	})
@@ -168,29 +215,53 @@ func (r *MembershipRepository) ListForTenant(
 	// via the transactor; sqlc adds nothing here.)
 	var out []*membership.Membership
 	err := r.tx.WithinTx(ctx, pg.TxScopeTenant, func(ctx context.Context, tx pgx.Tx) error {
+		// Pull every column the IdentityTenantMembership model carries so
+		// the row→aggregate mapping stays consistent with GetMembershipByID.
 		rows, err := tx.Query(ctx, `
-			SELECT id, person_id, tenant_id, status, joined_at, left_at
+			SELECT id, person_id, tenant_id, status, joined_at, left_at,
+			       designation, department, status_message, reports_to
 			FROM   identity.tenant_memberships
 		`)
 		if err != nil {
 			return fmt.Errorf("membership repo: list for tenant: %w", err)
 		}
 		defer rows.Close()
+		var hydrated []IdentityTenantMembership
 		for rows.Next() {
 			var row IdentityTenantMembership
 			if err := rows.Scan(
 				&row.ID, &row.PersonID, &row.TenantID,
 				&row.Status, &row.JoinedAt, &row.LeftAt,
+				&row.Designation, &row.Department, &row.StatusMessage, &row.ReportsTo,
 			); err != nil {
 				return fmt.Errorf("membership repo: scan: %w", err)
 			}
-			m, perr := rowToMembership(row)
+			hydrated = append(hydrated, row)
+		}
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		// Hydrate child-table state for each row. ListForTenant is an admin
+		// path; the N+2 round-trips per row are acceptable until a hot
+		// path needs the bulk join (Task 21+ benchmark before adopting).
+		q := r.q.WithTx(tx)
+		out = make([]*membership.Membership, 0, len(hydrated))
+		for _, row := range hydrated {
+			roleIDs, lerr := loadRoleAssignments(ctx, q, uuidFromPg(row.ID))
+			if lerr != nil {
+				return lerr
+			}
+			granted, revoked, lerr := loadPermissionOverrides(ctx, q, uuidFromPg(row.ID))
+			if lerr != nil {
+				return lerr
+			}
+			m, perr := rowToMembership(row, roleIDs, granted, revoked)
 			if perr != nil {
 				return perr
 			}
 			out = append(out, m)
 		}
-		return rows.Err()
+		return nil
 	})
 	if err != nil {
 		return nil, err
@@ -212,7 +283,62 @@ func loadMembership(ctx context.Context, q *Queries, id membership.ID) (*members
 		}
 		return nil, fmt.Errorf("membership repo: get by id: %w", err)
 	}
-	return rowToMembership(row)
+	roleIDs, err := loadRoleAssignments(ctx, q, uid)
+	if err != nil {
+		return nil, err
+	}
+	granted, revoked, err := loadPermissionOverrides(ctx, q, uid)
+	if err != nil {
+		return nil, err
+	}
+	return rowToMembership(row, roleIDs, granted, revoked)
+}
+
+// loadRoleAssignments fetches the Membership's projected role-id list.
+// Order: assigned_at, role_id (matches the SQL query) — domain treats
+// the slice as a set, so ordering is informational only.
+func loadRoleAssignments(ctx context.Context, q *Queries, mid uuid.UUID) ([]role.ID, error) {
+	rows, err := q.ListRoleAssignmentsByMembership(ctx, pgUUID(mid))
+	if err != nil {
+		return nil, fmt.Errorf("membership repo: list role assignments: %w", err)
+	}
+	out := make([]role.ID, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, role.ID(uuidFromPg(r.RoleID).String()))
+	}
+	return out, nil
+}
+
+// loadPermissionOverrides splits the persisted overlay into the two
+// slices the domain Snapshot expects. Names go through TryFromConstant
+// — unknown permission_name in storage = data corruption (catalogue is
+// closed-set per coding-standards.md "Permissions — closed-set
+// construction"); fail-loud beats silent privilege-loss.
+func loadPermissionOverrides(
+	ctx context.Context,
+	q *Queries,
+	mid uuid.UUID,
+) (granted, revoked []*permission.Permission, err error) {
+	rows, err := q.ListPermissionOverridesByMembership(ctx, pgUUID(mid))
+	if err != nil {
+		return nil, nil, fmt.Errorf("membership repo: list permission overrides: %w", err)
+	}
+	for _, row := range rows {
+		p, err := permission.TryFromConstant(row.PermissionName)
+		if err != nil {
+			return nil, nil, fmt.Errorf("membership repo: unknown permission %q in row: %w",
+				row.PermissionName, err)
+		}
+		switch row.Kind {
+		case overrideKindGranted:
+			granted = append(granted, p)
+		case overrideKindRevoked:
+			revoked = append(revoked, p)
+		default:
+			return nil, nil, fmt.Errorf("membership repo: unknown override kind %q", row.Kind)
+		}
+	}
+	return granted, revoked, nil
 }
 
 func insertMembershipRow(ctx context.Context, q *Queries, m *membership.Membership) error {
@@ -283,7 +409,15 @@ func drainMembershipEvents(ctx context.Context, tx pgx.Tx, m *membership.Members
 	return writeOutboxEvents(ctx, tx, tid, mapped)
 }
 
-func rowToMembership(row IdentityTenantMembership) (*membership.Membership, error) {
+// rowToMembership hydrates the Membership aggregate from the parent row
+// + the projected child-table state (roleAssignments, granted/revoked
+// permission overrides). Caller (loadMembership) batches the child reads
+// in one tx so RLS scope stays consistent across all four tables.
+func rowToMembership(
+	row IdentityTenantMembership,
+	roleAssignments []role.ID,
+	granted, revoked []*permission.Permission,
+) (*membership.Membership, error) {
 	id := membership.ID(uuidFromPg(row.ID).String())
 	personID := person.ID(uuidFromPg(row.PersonID).String())
 	tenantID := tenant.ID(uuidFromPg(row.TenantID).String())
@@ -292,14 +426,146 @@ func rowToMembership(row IdentityTenantMembership) (*membership.Membership, erro
 	if err != nil {
 		return nil, fmt.Errorf("membership repo: hydrate status %q: %w", row.Status, err)
 	}
+	reportsTo := membership.ID("")
+	if reports := uuidFromPg(row.ReportsTo); reports != uuid.Nil {
+		reportsTo = membership.ID(reports.String())
+	}
 	return membership.UnmarshalFromDB(membership.Snapshot{
-		ID:       id,
-		PersonID: personID,
-		TenantID: tenantID,
-		Status:   status,
-		JoinedAt: timeFromPg(row.JoinedAt),
-		LeftAt:   timeFromPg(row.LeftAt),
+		ID:                 id,
+		PersonID:           personID,
+		TenantID:           tenantID,
+		Status:             status,
+		JoinedAt:           timeFromPg(row.JoinedAt),
+		LeftAt:             timeFromPg(row.LeftAt),
+		RoleAssignments:    roleAssignments,
+		GrantedPermissions: granted,
+		RevokedPermissions: revoked,
+		Designation:        row.Designation,
+		Department:         row.Department,
+		StatusMessage:      row.StatusMessage,
+		ReportsTo:          reportsTo,
 	}), nil
+}
+
+// persistMembershipProfile writes the per-tenant profile fields. Always
+// runs (no diff check) — the columns are NOT NULL DEFAULT '' in schema,
+// so writing the aggregate's current values is always safe.
+func persistMembershipProfile(ctx context.Context, q *Queries, m *membership.Membership) error {
+	mid, err := parseMembershipID(m.ID())
+	if err != nil {
+		return err
+	}
+	var reportsTo uuid.UUID
+	if rt := m.ReportsTo(); !rt.IsZero() {
+		parsed, perr := uuid.Parse(rt.String())
+		if perr != nil {
+			return fmt.Errorf("membership repo: parse reports_to %q: %w", rt, perr)
+		}
+		reportsTo = parsed
+	}
+	err = q.UpdateMembershipProfile(ctx, UpdateMembershipProfileParams{
+		ID:            pgUUID(mid),
+		Designation:   m.Designation(),
+		Department:    m.Department(),
+		StatusMessage: m.StatusMessage(),
+		ReportsTo:     pgUUIDOpt(reportsTo),
+	})
+	if err != nil {
+		return fmt.Errorf("membership repo: update profile: %w", err)
+	}
+	return nil
+}
+
+// replaceRoleAssignments projects the aggregate's current RoleAssignments
+// slice onto identity.role_assignments under replace-all semantics: clear
+// every row for this Membership, then INSERT the current set. Idempotent
+// under retry; simpler than per-row diff tracking.
+//
+// Composite FK on (membership_id, tenant_id) → tenant_memberships(id, tenant_id)
+// rejects cross-tenant role IDs at the schema layer; the domain's
+// `multi-tenancy.md` "Identity model" CALLER INVARIANT (every assigned
+// Role MUST belong to the Membership's TenantID) is the upstream guard.
+func replaceRoleAssignments(ctx context.Context, q *Queries, m *membership.Membership) error {
+	mid, err := parseMembershipID(m.ID())
+	if err != nil {
+		return err
+	}
+	tid, err := parseTenantIDForMembership(m.TenantID())
+	if err != nil {
+		return err
+	}
+	if err := q.DeleteRoleAssignmentsByMembership(ctx, pgUUID(mid)); err != nil {
+		return fmt.Errorf("membership repo: clear role assignments: %w", err)
+	}
+	now := pgRequiredTimestamp(clock.Now())
+	for _, rid := range m.RoleAssignments() {
+		ruid, err := uuid.Parse(rid.String())
+		if err != nil {
+			return fmt.Errorf("membership repo: parse role id %q: %w", rid, err)
+		}
+		err = q.InsertRoleAssignment(ctx, InsertRoleAssignmentParams{
+			MembershipID: pgUUID(mid),
+			RoleID:       pgUUID(ruid),
+			TenantID:     pgUUID(tid),
+			AssignedAt:   now,
+		})
+		if err != nil {
+			return fmt.Errorf("membership repo: insert role assignment %q: %w", rid, err)
+		}
+	}
+	return nil
+}
+
+// replacePermissionOverrides projects the aggregate's overlay (granted +
+// revoked permission slices) onto identity.membership_permission_overrides
+// under replace-all semantics. Domain-level invariant guarantees a
+// permission_name appears at most once across both slices for a given
+// Membership; the table's PK (membership_id, permission_name) defends
+// against any drift.
+func replacePermissionOverrides(ctx context.Context, q *Queries, m *membership.Membership) error {
+	mid, err := parseMembershipID(m.ID())
+	if err != nil {
+		return err
+	}
+	tid, err := parseTenantIDForMembership(m.TenantID())
+	if err != nil {
+		return err
+	}
+	if err := q.DeletePermissionOverridesByMembership(ctx, pgUUID(mid)); err != nil {
+		return fmt.Errorf("membership repo: clear permission overrides: %w", err)
+	}
+	now := pgRequiredTimestamp(clock.Now())
+	for _, p := range m.GrantedPermissions() {
+		if p == nil {
+			continue
+		}
+		err := q.InsertPermissionOverride(ctx, InsertPermissionOverrideParams{
+			MembershipID:   pgUUID(mid),
+			PermissionName: p.Name(),
+			Kind:           overrideKindGranted,
+			TenantID:       pgUUID(tid),
+			UpdatedAt:      now,
+		})
+		if err != nil {
+			return fmt.Errorf("membership repo: insert granted override %q: %w", p.Name(), err)
+		}
+	}
+	for _, p := range m.RevokedPermissions() {
+		if p == nil {
+			continue
+		}
+		err := q.InsertPermissionOverride(ctx, InsertPermissionOverrideParams{
+			MembershipID:   pgUUID(mid),
+			PermissionName: p.Name(),
+			Kind:           overrideKindRevoked,
+			TenantID:       pgUUID(tid),
+			UpdatedAt:      now,
+		})
+		if err != nil {
+			return fmt.Errorf("membership repo: insert revoked override %q: %w", p.Name(), err)
+		}
+	}
+	return nil
 }
 
 func parseMembershipID(id membership.ID) (uuid.UUID, error) {
@@ -326,6 +592,12 @@ func parseTenantIDForMembership(id tenant.ID) (uuid.UUID, error) {
 	return parsed, nil
 }
 
+// constraintMembershipsPersonActive is the partial-unique-index name
+// from `migrations/20260505000002_identity_init.sql` enforcing the
+// single-Active-Membership invariant per `multi-tenancy.md`. Renaming
+// in the migration MUST be paired with updating this constant.
+const constraintMembershipsPersonActive = "uq_memberships_person_active"
+
 // isMembershipActiveCollision reports whether err is the partial-unique
 // index violation specifically (single-Active-Membership invariant).
 // Other unique violations (e.g. (person_id, tenant_id) duplicate) bubble
@@ -335,8 +607,8 @@ func isMembershipActiveCollision(err error) bool {
 	if !errors.As(err, &pgErr) {
 		return false
 	}
-	if pgErr.Code != "23505" {
+	if pgErr.Code != pg.SQLStateUniqueViolation {
 		return false
 	}
-	return pgErr.ConstraintName == "uq_memberships_person_active"
+	return pgErr.ConstraintName == constraintMembershipsPersonActive
 }

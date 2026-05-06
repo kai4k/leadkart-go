@@ -69,7 +69,7 @@ func TestFacade_Get_PopulatesL1AndL2OnMiss(t *testing.T) {
 	t.Parallel()
 	fx := newFixture(t, okFactory(person{ID: "p1", Email: "a@b.test"}))
 
-	got, err := fx.facade.Get(context.Background(), "p1")
+	got, err := fx.facade.Get(t.Context(), "p1")
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
@@ -92,7 +92,7 @@ func TestFacade_Get_L1HitSkipsFactory(t *testing.T) {
 	t.Parallel()
 	fx := newFixture(t, okFactory(person{ID: "p1", Email: "a@b.test"}))
 
-	if _, err := fx.facade.Get(context.Background(), "p1"); err != nil {
+	if _, err := fx.facade.Get(t.Context(), "p1"); err != nil {
 		t.Fatalf("Get 1: %v", err)
 	}
 	fx.cache.L1.Wait()
@@ -113,13 +113,13 @@ func TestFacade_Get_L2HitOnL1Miss(t *testing.T) {
 
 	// Populate L2 directly bypassing the facade — simulates a fresh
 	// process that has L2 warm but L1 cold.
-	if _, err := fx.facade.Get(context.Background(), "p1"); err != nil {
+	if _, err := fx.facade.Get(t.Context(), "p1"); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 	fx.cache.L1.Wait()
 	fx.cache.L1.Clear() // clear L1 only
 
-	got, err := fx.facade.Get(context.Background(), "p1")
+	got, err := fx.facade.Get(t.Context(), "p1")
 	if err != nil {
 		t.Fatalf("Get after L1 clear: %v", err)
 	}
@@ -138,7 +138,7 @@ func TestFacade_Get_FactoryErrorPropagates(t *testing.T) {
 		return person{}, wantErr
 	})
 
-	_, err := fx.facade.Get(context.Background(), "p1")
+	_, err := fx.facade.Get(t.Context(), "p1")
 	if !errors.Is(err, wantErr) {
 		t.Fatalf("expected source error, got %v", err)
 	}
@@ -148,12 +148,12 @@ func TestFacade_Invalidate_EvictsBothLayers(t *testing.T) {
 	t.Parallel()
 	fx := newFixture(t, okFactory(person{ID: "p1", Email: "a@b.test"}))
 
-	if _, err := fx.facade.Get(context.Background(), "p1"); err != nil {
+	if _, err := fx.facade.Get(t.Context(), "p1"); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 	fx.cache.L1.Wait()
 
-	if err := fx.facade.Invalidate(context.Background(), "p1"); err != nil {
+	if err := fx.facade.Invalidate(t.Context(), "p1"); err != nil {
 		t.Fatalf("Invalidate: %v", err)
 	}
 	if fx.store.Exists("test:facade:p1") {
@@ -161,7 +161,7 @@ func TestFacade_Invalidate_EvictsBothLayers(t *testing.T) {
 	}
 
 	// Next Get must re-call factory.
-	if _, err := fx.facade.Get(context.Background(), "p1"); err != nil {
+	if _, err := fx.facade.Get(t.Context(), "p1"); err != nil {
 		t.Fatalf("Get after invalidate: %v", err)
 	}
 	if c := fx.calls.Load(); c != 2 {
@@ -188,7 +188,7 @@ func TestFacade_ProofOfCache(t *testing.T) {
 	fx := newFixture(t, factory)
 
 	// 1. Warm — first call hits factory + populates L1+L2.
-	first, err := fx.facade.Get(context.Background(), "p1")
+	first, err := fx.facade.Get(t.Context(), "p1")
 	if err != nil {
 		t.Fatalf("warm: %v", err)
 	}
@@ -201,7 +201,7 @@ func TestFacade_ProofOfCache(t *testing.T) {
 	source.Store(person{ID: "p1", Email: "after@b.test"})
 
 	// 3. Re-call — caching MUST return the warm value, not the new one.
-	cached, err := fx.facade.Get(context.Background(), "p1")
+	cached, err := fx.facade.Get(t.Context(), "p1")
 	if err != nil {
 		t.Fatalf("cached: %v", err)
 	}
@@ -210,10 +210,10 @@ func TestFacade_ProofOfCache(t *testing.T) {
 	}
 
 	// 4. Invalidate; next call MUST observe the post-mutation value.
-	if err := fx.facade.Invalidate(context.Background(), "p1"); err != nil {
+	if err := fx.facade.Invalidate(t.Context(), "p1"); err != nil {
 		t.Fatalf("Invalidate: %v", err)
 	}
-	post, err := fx.facade.Get(context.Background(), "p1")
+	post, err := fx.facade.Get(t.Context(), "p1")
 	if err != nil {
 		t.Fatalf("post-invalidate: %v", err)
 	}
@@ -274,7 +274,7 @@ func TestFacade_InvalidateMany(t *testing.T) {
 
 	keys := []string{"p1", "p2", "p3"}
 	for _, k := range keys {
-		if _, err := fx.facade.Get(context.Background(), k); err != nil {
+		if _, err := fx.facade.Get(t.Context(), k); err != nil {
 			t.Fatalf("seed %s: %v", k, err)
 		}
 	}
@@ -283,7 +283,7 @@ func TestFacade_InvalidateMany(t *testing.T) {
 		t.Fatalf("seed factory calls: got %d want %d", got, want)
 	}
 
-	if err := fx.facade.InvalidateMany(context.Background(), keys); err != nil {
+	if err := fx.facade.InvalidateMany(t.Context(), keys); err != nil {
 		t.Fatalf("InvalidateMany: %v", err)
 	}
 	for _, k := range keys {
@@ -294,7 +294,7 @@ func TestFacade_InvalidateMany(t *testing.T) {
 
 	// Re-fetch all → factory called again.
 	for _, k := range keys {
-		if _, err := fx.facade.Get(context.Background(), k); err != nil {
+		if _, err := fx.facade.Get(t.Context(), k); err != nil {
 			t.Fatalf("post-invalidate %s: %v", k, err)
 		}
 	}
@@ -308,12 +308,12 @@ func TestFacade_Set_BypassesFactory(t *testing.T) {
 	t.Parallel()
 	fx := newFixture(t, okFactory(person{ID: "from-factory", Email: "factory@b.test"}))
 
-	if err := fx.facade.Set(context.Background(), "p1", person{ID: "from-set", Email: "set@b.test"}); err != nil {
+	if err := fx.facade.Set(t.Context(), "p1", person{ID: "from-set", Email: "set@b.test"}); err != nil {
 		t.Fatalf("Set: %v", err)
 	}
 	fx.cache.L1.Wait()
 
-	got, err := fx.facade.Get(context.Background(), "p1")
+	got, err := fx.facade.Get(t.Context(), "p1")
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
@@ -353,7 +353,7 @@ func TestFacade_TTL_L1ExpiryFallsThroughToL2(t *testing.T) {
 	f := cache.NewFacade(hc, "ttl-test", func(s string) string { return "k:" + s }, wrapped,
 		cache.WithTTL(cache.TTL{L1: 50 * time.Millisecond, L2: 5 * time.Minute}))
 
-	if _, err := f.Get(context.Background(), "p1"); err != nil {
+	if _, err := f.Get(t.Context(), "p1"); err != nil {
 		t.Fatalf("warm: %v", err)
 	}
 	hc.L1.Wait()
@@ -365,7 +365,7 @@ func TestFacade_TTL_L1ExpiryFallsThroughToL2(t *testing.T) {
 	time.Sleep(120 * time.Millisecond)
 	hc.L1.Clear() // belt-and-braces — ristretto TTL is best-effort
 
-	got, err := f.Get(context.Background(), "p1")
+	got, err := f.Get(t.Context(), "p1")
 	if err != nil {
 		t.Fatalf("post-TTL: %v", err)
 	}

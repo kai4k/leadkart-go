@@ -25,12 +25,15 @@ package membership
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/leadkart/leadkart-go/internal/common/clock"
 	"github.com/leadkart/leadkart-go/internal/common/errs"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/permission"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/role"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
 
@@ -60,7 +63,44 @@ type Membership struct {
 	status   Status
 	joinedAt time.Time
 	leftAt   time.Time // zero unless inactive
-	events   []Event
+
+	// roleAssignments holds the IDs of every Role the Membership
+	// carries. Persistence layer joins to identity.role_assignments.
+	// CALLER INVARIANT (application service): every Role assigned MUST
+	// belong to the same tenantID — cross-tenant role assignment is a
+	// doctrine violation per `multi-tenancy.md`. The DB-level composite
+	// FK on (membership_id, tenant_id) → (id, tenant_id) guards this.
+	roleAssignments []role.ID
+
+	// grantedPermissions / revokedPermissions form the per-Membership
+	// overlay ON TOP of role-derived permissions. Effective set
+	// (computed by Task 13's resolver):
+	//
+	//   union(role.Permissions for r in roleAssignments)
+	//     ∪ grantedPermissions
+	//     \ revokedPermissions
+	//
+	// The overlay supports per-user customisation without role
+	// explosion (every "X but with Y disabled" doesn't need a clone of
+	// X). Persistence layer projects to
+	// identity.membership_permission_overrides (kind ∈ {granted, revoked}).
+	grantedPermissions []*permission.Permission
+	revokedPermissions []*permission.Permission
+
+	// Per-tenant profile fields. Job change → new Membership in new
+	// tenant; old Membership keeps its old profile fields for audit.
+	designation   string // "Sales Manager", "Regional Head", etc.
+	department    string // optional grouping
+	statusMessage string // free-text current-availability blurb
+
+	// reportsTo points at this Membership's manager Membership ID;
+	// zero = top-of-tree. Self-reference rejected at the boundary.
+	// Cycle detection (A reports to B, B reports to A, etc.) lives in
+	// the application service since it requires loading other rows —
+	// the domain only enforces the not-self invariant.
+	reportsTo ID
+
+	events []Event
 }
 
 // New constructs a brand-new TenantMembership in [StatusActive].
@@ -98,24 +138,38 @@ func New(id ID, personID person.ID, tenantID tenant.ID) (*Membership, error) {
 
 // Snapshot is the persistence DTO consumed by [UnmarshalFromDB].
 type Snapshot struct {
-	ID       ID
-	PersonID person.ID
-	TenantID tenant.ID
-	Status   Status
-	JoinedAt time.Time
-	LeftAt   time.Time
+	ID                 ID
+	PersonID           person.ID
+	TenantID           tenant.ID
+	Status             Status
+	JoinedAt           time.Time
+	LeftAt             time.Time
+	RoleAssignments    []role.ID
+	GrantedPermissions []*permission.Permission
+	RevokedPermissions []*permission.Permission
+	Designation        string
+	Department         string
+	StatusMessage      string
+	ReportsTo          ID
 }
 
 // UnmarshalFromDB re-hydrates a Membership from persistence.
 // Repository-only path; does NOT re-validate (TDL canon).
 func UnmarshalFromDB(s Snapshot) *Membership {
 	return &Membership{
-		id:       s.ID,
-		personID: s.PersonID,
-		tenantID: s.TenantID,
-		status:   s.Status,
-		joinedAt: s.JoinedAt,
-		leftAt:   s.LeftAt,
+		id:                 s.ID,
+		personID:           s.PersonID,
+		tenantID:           s.TenantID,
+		status:             s.Status,
+		joinedAt:           s.JoinedAt,
+		leftAt:             s.LeftAt,
+		roleAssignments:    append([]role.ID(nil), s.RoleAssignments...),
+		grantedPermissions: append([]*permission.Permission(nil), s.GrantedPermissions...),
+		revokedPermissions: append([]*permission.Permission(nil), s.RevokedPermissions...),
+		designation:        s.Designation,
+		department:         s.Department,
+		statusMessage:      s.StatusMessage,
+		reportsTo:          s.ReportsTo,
 	}
 }
 
@@ -138,6 +192,45 @@ func (m *Membership) JoinedAt() time.Time { return m.joinedAt }
 
 // LeftAt returns the most recent deactivation timestamp; zero if currently active.
 func (m *Membership) LeftAt() time.Time { return m.leftAt }
+
+// RoleAssignments returns a defensive copy of the role-ID list. Mutations to
+// the returned slice do NOT affect aggregate state — Role mutations go
+// through [AssignRole] / [RevokeRole].
+func (m *Membership) RoleAssignments() []role.ID {
+	out := make([]role.ID, len(m.roleAssignments))
+	copy(out, m.roleAssignments)
+	return out
+}
+
+// GrantedPermissions returns a defensive copy of the per-Membership
+// overlay-grant list. Effective set computed by Task 13's resolver:
+// union(roles) ∪ Granted \ Revoked.
+func (m *Membership) GrantedPermissions() []*permission.Permission {
+	out := make([]*permission.Permission, len(m.grantedPermissions))
+	copy(out, m.grantedPermissions)
+	return out
+}
+
+// RevokedPermissions returns a defensive copy of the per-Membership
+// overlay-revoke list — permissions taken AWAY from what the role
+// union would otherwise grant.
+func (m *Membership) RevokedPermissions() []*permission.Permission {
+	out := make([]*permission.Permission, len(m.revokedPermissions))
+	copy(out, m.revokedPermissions)
+	return out
+}
+
+// Designation returns the per-tenant job-title for this Membership.
+func (m *Membership) Designation() string { return m.designation }
+
+// Department returns the per-tenant department grouping.
+func (m *Membership) Department() string { return m.department }
+
+// StatusMessage returns the free-text current-availability blurb.
+func (m *Membership) StatusMessage() string { return m.statusMessage }
+
+// ReportsTo returns the manager Membership ID; zero = top-of-tree.
+func (m *Membership) ReportsTo() ID { return m.reportsTo }
 
 // ----- State transitions ----------------------------------------------------
 
@@ -190,6 +283,267 @@ func (m *Membership) Reactivate() error {
 		PersonID:     m.personID,
 		TenantID:     m.tenantID,
 		At:           now,
+	})
+	return nil
+}
+
+// ----- Authorisation: role assignments --------------------------------------
+
+// AssignRole adds the supplied Role ID to the Membership's assignment
+// list. Idempotent — assigning an already-assigned role is a no-op
+// (no event).
+//
+// CALLER INVARIANT (application service): the Role's TenantID MUST
+// equal this Membership's TenantID. Cross-tenant role assignment is
+// a doctrine violation per `multi-tenancy.md`. The DB-level composite
+// FK `(membership_id, tenant_id) → (id, tenant_id)` rejects mismatch.
+func (m *Membership) AssignRole(roleID role.ID) error {
+	if roleID.IsZero() {
+		return fmt.Errorf("%w: roleID required", ErrInvalid)
+	}
+	if slices.Contains(m.roleAssignments, roleID) {
+		return nil
+	}
+	m.roleAssignments = append(m.roleAssignments, roleID)
+	m.recordEvent(RoleAssignedEvent{
+		MembershipID: m.id,
+		PersonID:     m.personID,
+		TenantID:     m.tenantID,
+		RoleID:       roleID,
+		At:           clock.Now(),
+	})
+	return nil
+}
+
+// RevokeRole removes the supplied Role ID from the Membership's
+// assignment list. Idempotent — revoking a non-assigned role is a
+// no-op (no event).
+func (m *Membership) RevokeRole(roleID role.ID) error {
+	if roleID.IsZero() {
+		return fmt.Errorf("%w: roleID required", ErrInvalid)
+	}
+	idx := slices.Index(m.roleAssignments, roleID)
+	if idx < 0 {
+		return nil
+	}
+	m.roleAssignments = slices.Delete(m.roleAssignments, idx, idx+1)
+	m.recordEvent(RoleRevokedEvent{
+		MembershipID: m.id,
+		PersonID:     m.personID,
+		TenantID:     m.tenantID,
+		RoleID:       roleID,
+		At:           clock.Now(),
+	})
+	return nil
+}
+
+// ----- Authorisation: per-Membership permission overlay ---------------------
+
+// GrantPermission adds an overlay-grant entry. If the permission was
+// previously overlay-revoked (suppressing a role-derived grant), the
+// revoke entry is removed first — overlay grants and revokes never
+// coexist for the same permission. Idempotent — granting an already-
+// granted overlay is a no-op (no event).
+func (m *Membership) GrantPermission(p *permission.Permission) error {
+	if p == nil {
+		return fmt.Errorf("%w: permission required", ErrInvalid)
+	}
+	// If currently in revoked overlay, lift the revoke first.
+	if i := slices.IndexFunc(m.revokedPermissions, p.Equal); i >= 0 {
+		m.revokedPermissions = slices.Delete(m.revokedPermissions, i, i+1)
+	}
+	if slices.ContainsFunc(m.grantedPermissions, p.Equal) {
+		return nil
+	}
+	m.grantedPermissions = append(m.grantedPermissions, p)
+	m.recordEvent(PermissionsUpdatedEvent{
+		MembershipID: m.id,
+		PersonID:     m.personID,
+		TenantID:     m.tenantID,
+		At:           clock.Now(),
+	})
+	return nil
+}
+
+// RevokePermission adds an overlay-revoke entry. If the permission
+// was previously overlay-granted, the grant entry is removed first.
+// Idempotent — revoking an already-revoked overlay is a no-op
+// (no event).
+func (m *Membership) RevokePermission(p *permission.Permission) error {
+	if p == nil {
+		return fmt.Errorf("%w: permission required", ErrInvalid)
+	}
+	// If currently in granted overlay, lift the grant first.
+	if i := slices.IndexFunc(m.grantedPermissions, p.Equal); i >= 0 {
+		m.grantedPermissions = slices.Delete(m.grantedPermissions, i, i+1)
+	}
+	if slices.ContainsFunc(m.revokedPermissions, p.Equal) {
+		return nil
+	}
+	m.revokedPermissions = append(m.revokedPermissions, p)
+	m.recordEvent(PermissionsUpdatedEvent{
+		MembershipID: m.id,
+		PersonID:     m.personID,
+		TenantID:     m.tenantID,
+		At:           clock.Now(),
+	})
+	return nil
+}
+
+// EffectivePermissions resolves the Membership's authoritative permission
+// set by combining role-derived grants with the per-Membership overlay:
+//
+//	union(role.Permissions for r in roles)
+//	  ∪ grantedPermissions
+//	  \ revokedPermissions
+//
+// CALLER INVARIANT: `roles` must be the full set of Role aggregates
+// matching `m.RoleAssignments()`. The application service's
+// PermissionResolver (Task 21) loads them in bulk via
+// `RoleRepository.GetByIDs(ctx, m.RoleAssignments())` before calling
+// this method. The aggregate intentionally doesn't reach across
+// aggregates per Vernon ch.10 — caller threads the dependency.
+//
+// Result is order-stable but not sorted; callers needing
+// deterministic ordering (audit log diff, JWT claim emission) sort
+// by `Permission.Name()` themselves. Pointer-equality on interned
+// permissions makes set-membership cheap.
+func (m *Membership) EffectivePermissions(roles []*role.Role) []*permission.Permission {
+	set := map[*permission.Permission]struct{}{}
+	for _, r := range roles {
+		for _, p := range r.Permissions() {
+			set[p] = struct{}{}
+		}
+	}
+	for _, g := range m.grantedPermissions {
+		set[g] = struct{}{}
+	}
+	for _, rev := range m.revokedPermissions {
+		// Pointer-equality first (cheap for interned catalogue entries),
+		// then fall back to name-equality scan for non-interned values
+		// (rare — only Create-fresh paths produce them).
+		if _, found := set[rev]; found {
+			delete(set, rev)
+			continue
+		}
+		for k := range set {
+			if k.Equal(rev) {
+				delete(set, k)
+				break
+			}
+		}
+	}
+	out := make([]*permission.Permission, 0, len(set))
+	for p := range set {
+		out = append(out, p)
+	}
+	return out
+}
+
+// ReplacePermissionOverlays sets both overlay slices atomically.
+// Single PermissionsUpdatedEvent fires regardless of diff size —
+// listeners care about "permissions changed for this Membership",
+// not per-permission deltas.
+//
+// nil entries in either slice are silently dropped.
+func (m *Membership) ReplacePermissionOverlays(
+	granted []*permission.Permission,
+	revoked []*permission.Permission,
+) error {
+	g := make([]*permission.Permission, 0, len(granted))
+	for _, p := range granted {
+		if p != nil {
+			g = append(g, p)
+		}
+	}
+	r := make([]*permission.Permission, 0, len(revoked))
+	for _, p := range revoked {
+		if p != nil {
+			r = append(r, p)
+		}
+	}
+	m.grantedPermissions = g
+	m.revokedPermissions = r
+	m.recordEvent(PermissionsUpdatedEvent{
+		MembershipID: m.id,
+		PersonID:     m.personID,
+		TenantID:     m.tenantID,
+		At:           clock.Now(),
+	})
+	return nil
+}
+
+// ----- Per-tenant profile + manager hierarchy --------------------------------
+
+// UpdateProfile sets `designation` / `department` / `statusMessage`
+// atomically. Whitespace trimmed on all three. Idempotent: trimmed
+// values matching the current state emit no event.
+//
+// Single ProfileUpdatedEvent fires regardless of which fields
+// changed — listeners care about "profile changed" not per-field
+// deltas.
+func (m *Membership) UpdateProfile(designation, department, statusMessage string) error {
+	d := strings.TrimSpace(designation)
+	dep := strings.TrimSpace(department)
+	sm := strings.TrimSpace(statusMessage)
+	if d == m.designation && dep == m.department && sm == m.statusMessage {
+		return nil
+	}
+	m.designation = d
+	m.department = dep
+	m.statusMessage = sm
+	m.recordEvent(ProfileUpdatedEvent{
+		MembershipID:  m.id,
+		PersonID:      m.personID,
+		TenantID:      m.tenantID,
+		Designation:   d,
+		Department:    dep,
+		StatusMessage: sm,
+		At:            clock.Now(),
+	})
+	return nil
+}
+
+// AssignManager sets the `reportsTo` field. Pass zero ID to clear
+// (top-of-tree). Self-reference rejected. Idempotent — assigning the
+// current manager is a no-op (no event).
+//
+// CALLER INVARIANT: the application service runs cycle detection
+// (recursive CTE on the persisted hierarchy) before calling this.
+// The domain doesn't traverse other Memberships.
+//
+// Manager Membership MUST belong to the same tenant — DB-level FK on
+// `(reports_to, tenant_id) → (id, tenant_id)` enforces this; domain
+// trusts the boundary.
+//
+// Emits ManagerAssignedEvent on set (with PreviousManager carried for
+// audit), ManagerRemovedEvent on clear.
+func (m *Membership) AssignManager(managerID ID) error {
+	if managerID == m.id {
+		return fmt.Errorf("%w: cannot report to self", ErrInvalid)
+	}
+	if m.reportsTo == managerID {
+		return nil
+	}
+	old := m.reportsTo
+	m.reportsTo = managerID
+	if managerID.IsZero() {
+		m.recordEvent(ManagerRemovedEvent{
+			MembershipID:    m.id,
+			PersonID:        m.personID,
+			TenantID:        m.tenantID,
+			PreviousManager: old,
+			At:              clock.Now(),
+		})
+		return nil
+	}
+	m.recordEvent(ManagerAssignedEvent{
+		MembershipID:    m.id,
+		PersonID:        m.personID,
+		TenantID:        m.tenantID,
+		ManagerID:       managerID,
+		PreviousManager: old,
+		At:              clock.Now(),
 	})
 	return nil
 }

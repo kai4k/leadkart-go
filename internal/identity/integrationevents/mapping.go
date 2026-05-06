@@ -8,6 +8,7 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/refreshtoken"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/role"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
 
@@ -19,6 +20,10 @@ import (
 // Returns ErrUnknown for events the mapper hasn't been taught about
 // — surfaces in CI as a clear "you minted a domain event but never
 // wired the integration counterpart" failure.
+//
+//nolint:cyclop // Switch dispatcher — one case per recognised domain
+// event. Cyclomatic complexity scales with catalogue size by
+// definition; refactoring into a registry map costs more than it pays.
 func FromDomainEvent(d any) (Event, error) {
 	switch e := d.(type) {
 
@@ -105,6 +110,66 @@ func FromDomainEvent(d any) (Event, error) {
 			OccurredAtUTC: e.At.UTC(),
 		}, nil
 
+	case membership.RoleAssignedEvent:
+		return MembershipRoleAssignedV1{
+			MembershipID:  mustParseUUID(e.MembershipID.String()),
+			PersonID:      mustParseUUID(e.PersonID.String()),
+			TenantIDClaim: mustParseUUID(e.TenantID.String()),
+			RoleID:        mustParseUUID(e.RoleID.String()),
+			OccurredAtUTC: e.At.UTC(),
+		}, nil
+
+	case membership.RoleRevokedEvent:
+		return MembershipRoleRevokedV1{
+			MembershipID:  mustParseUUID(e.MembershipID.String()),
+			PersonID:      mustParseUUID(e.PersonID.String()),
+			TenantIDClaim: mustParseUUID(e.TenantID.String()),
+			RoleID:        mustParseUUID(e.RoleID.String()),
+			OccurredAtUTC: e.At.UTC(),
+		}, nil
+
+	case membership.PermissionsUpdatedEvent:
+		return MembershipPermissionsUpdatedV1{
+			MembershipID:  mustParseUUID(e.MembershipID.String()),
+			PersonID:      mustParseUUID(e.PersonID.String()),
+			TenantIDClaim: mustParseUUID(e.TenantID.String()),
+			OccurredAtUTC: e.At.UTC(),
+		}, nil
+
+	case membership.ProfileUpdatedEvent:
+		return MembershipProfileUpdatedV1{
+			MembershipID:  mustParseUUID(e.MembershipID.String()),
+			PersonID:      mustParseUUID(e.PersonID.String()),
+			TenantIDClaim: mustParseUUID(e.TenantID.String()),
+			Designation:   e.Designation,
+			Department:    e.Department,
+			StatusMessage: e.StatusMessage,
+			OccurredAtUTC: e.At.UTC(),
+		}, nil
+
+	case membership.ManagerAssignedEvent:
+		var prev uuid.UUID
+		if !e.PreviousManager.IsZero() {
+			prev = mustParseUUID(e.PreviousManager.String())
+		}
+		return MembershipManagerAssignedV1{
+			MembershipID:    mustParseUUID(e.MembershipID.String()),
+			PersonID:        mustParseUUID(e.PersonID.String()),
+			TenantIDClaim:   mustParseUUID(e.TenantID.String()),
+			ManagerID:       mustParseUUID(e.ManagerID.String()),
+			PreviousManager: prev,
+			OccurredAtUTC:   e.At.UTC(),
+		}, nil
+
+	case membership.ManagerRemovedEvent:
+		return MembershipManagerRemovedV1{
+			MembershipID:    mustParseUUID(e.MembershipID.String()),
+			PersonID:        mustParseUUID(e.PersonID.String()),
+			TenantIDClaim:   mustParseUUID(e.TenantID.String()),
+			PreviousManager: mustParseUUID(e.PreviousManager.String()),
+			OccurredAtUTC:   e.At.UTC(),
+		}, nil
+
 	// ----- Refresh-token family --------------------------------------
 
 	case refreshtoken.FamilyCreatedEvent:
@@ -133,6 +198,52 @@ func FromDomainEvent(d any) (Event, error) {
 			PersonID:      mustParseUUID(e.PersonID.String()),
 			TenantIDClaim: mustParseUUID(e.TenantID.String()),
 			Reason:        e.Reason,
+			OccurredAtUTC: e.At.UTC(),
+		}, nil
+
+	// ----- Role -------------------------------------------------------
+
+	case role.CreatedEvent:
+		return RoleCreatedV1{
+			RoleID:          mustParseUUID(e.RoleID.String()),
+			TenantIDClaim:   mustParseUUID(e.TenantID.String()),
+			Name:            e.Name,
+			IsSystemDefault: e.IsSystemDefault,
+			IsSuperAdmin:    e.IsSuperAdmin,
+			HierarchyLevel:  e.HierarchyLevel,
+			OccurredAtUTC:   e.At.UTC(),
+		}, nil
+
+	case role.RenamedEvent:
+		return RoleRenamedV1{
+			RoleID:        mustParseUUID(e.RoleID.String()),
+			TenantIDClaim: mustParseUUID(e.TenantID.String()),
+			OldName:       e.OldName,
+			NewName:       e.NewName,
+			OccurredAtUTC: e.At.UTC(),
+		}, nil
+
+	case role.PermissionGrantedEvent:
+		return RolePermissionGrantedV1{
+			RoleID:        mustParseUUID(e.RoleID.String()),
+			TenantIDClaim: mustParseUUID(e.TenantID.String()),
+			Permission:    e.Permission,
+			OccurredAtUTC: e.At.UTC(),
+		}, nil
+
+	case role.PermissionRevokedEvent:
+		return RolePermissionRevokedV1{
+			RoleID:        mustParseUUID(e.RoleID.String()),
+			TenantIDClaim: mustParseUUID(e.TenantID.String()),
+			Permission:    e.Permission,
+			OccurredAtUTC: e.At.UTC(),
+		}, nil
+
+	case role.DeletedEvent:
+		return RoleDeletedV1{
+			RoleID:        mustParseUUID(e.RoleID.String()),
+			TenantIDClaim: mustParseUUID(e.TenantID.String()),
+			DeletedBy:     e.DeletedBy,
 			OccurredAtUTC: e.At.UTC(),
 		}, nil
 	}

@@ -35,17 +35,17 @@ func handleRegisterTenant(log *slog.Logger, a app.Application) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req RegisterTenantRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeError(w, http.StatusBadRequest, "invalid_body", "request body is not valid JSON")
+			writeError(w, http.StatusBadRequest, ErrCodeInvalidBody, "request body is not valid JSON")
 			return
 		}
 		s, err := slug.New(req.Slug)
 		if err != nil {
-			writeError(w, http.StatusBadRequest, "invalid_slug", err.Error())
+			writeError(w, http.StatusBadRequest, ErrCodeInvalidSlug, err.Error())
 			return
 		}
 		addr, err := email.New(req.AdminEmail)
 		if err != nil {
-			writeError(w, http.StatusBadRequest, "invalid_email", err.Error())
+			writeError(w, http.StatusBadRequest, ErrCodeInvalidEmail, err.Error())
 			return
 		}
 
@@ -60,12 +60,12 @@ func handleRegisterTenant(log *slog.Logger, a app.Application) http.Handler {
 		})
 		switch {
 		case errors.Is(err, command.ErrEmailHasActiveMembership):
-			writeError(w, http.StatusConflict, "email_has_active_membership",
+			writeError(w, http.StatusConflict, ErrCodeEmailHasActiveMembership,
 				"this email already has an active membership in another tenant")
 			return
 		case err != nil:
 			log.ErrorContext(r.Context(), "register tenant failed", "err", err)
-			writeError(w, http.StatusInternalServerError, "internal_error", "")
+			writeError(w, http.StatusInternalServerError, ErrCodeInternalError, "")
 			return
 		}
 
@@ -81,7 +81,7 @@ func handleLogin(log *slog.Logger, a app.Application) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req LoginRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeError(w, http.StatusBadRequest, "invalid_body", "request body is not valid JSON")
+			writeError(w, http.StatusBadRequest, ErrCodeInvalidBody, "request body is not valid JSON")
 			return
 		}
 		addr, err := email.New(req.Email)
@@ -89,7 +89,7 @@ func handleLogin(log *slog.Logger, a app.Application) http.Handler {
 			// Even malformed-email failures return the generic
 			// invalid_credentials shape so an attacker can't probe
 			// "what does this server consider a valid email?".
-			writeError(w, http.StatusUnauthorized, "invalid_credentials", "")
+			writeError(w, http.StatusUnauthorized, ErrCodeInvalidCredentials, "")
 			return
 		}
 
@@ -100,11 +100,11 @@ func handleLogin(log *slog.Logger, a app.Application) http.Handler {
 		})
 		switch {
 		case errors.Is(err, command.ErrInvalidCredentials):
-			writeError(w, http.StatusUnauthorized, "invalid_credentials", "")
+			writeError(w, http.StatusUnauthorized, ErrCodeInvalidCredentials, "")
 			return
 		case err != nil:
 			log.ErrorContext(r.Context(), "login failed", "err", err)
-			writeError(w, http.StatusInternalServerError, "internal_error", "")
+			writeError(w, http.StatusInternalServerError, ErrCodeInternalError, "")
 			return
 		}
 
@@ -121,7 +121,7 @@ func handleRefresh(log *slog.Logger, a app.Application) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req RefreshRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeError(w, http.StatusBadRequest, "invalid_body", "request body is not valid JSON")
+			writeError(w, http.StatusBadRequest, ErrCodeInvalidBody, "request body is not valid JSON")
 			return
 		}
 
@@ -130,11 +130,11 @@ func handleRefresh(log *slog.Logger, a app.Application) http.Handler {
 		})
 		switch {
 		case errors.Is(err, command.ErrRefreshRejected):
-			writeError(w, http.StatusUnauthorized, "refresh_rejected", "")
+			writeError(w, http.StatusUnauthorized, ErrCodeRefreshRejected, "")
 			return
 		case err != nil:
 			log.ErrorContext(r.Context(), "refresh failed", "err", err)
-			writeError(w, http.StatusInternalServerError, "internal_error", "")
+			writeError(w, http.StatusInternalServerError, ErrCodeInternalError, "")
 			return
 		}
 
@@ -151,7 +151,7 @@ func handleLogout(log *slog.Logger, a app.Application) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req LogoutRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeError(w, http.StatusBadRequest, "invalid_body", "request body is not valid JSON")
+			writeError(w, http.StatusBadRequest, ErrCodeInvalidBody, "request body is not valid JSON")
 			return
 		}
 		if err := a.Commands.Logout.Handle(r.Context(), command.LogoutCommand{
@@ -159,7 +159,7 @@ func handleLogout(log *slog.Logger, a app.Application) http.Handler {
 			Reason:            req.Reason,
 		}); err != nil {
 			log.ErrorContext(r.Context(), "logout failed", "err", err)
-			writeError(w, http.StatusInternalServerError, "internal_error", "")
+			writeError(w, http.StatusInternalServerError, ErrCodeInternalError, "")
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)

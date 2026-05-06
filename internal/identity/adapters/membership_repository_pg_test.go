@@ -3,7 +3,6 @@
 package adapters_test
 
 import (
-	"context"
 	"errors"
 	"testing"
 
@@ -13,7 +12,9 @@ import (
 	"github.com/leadkart/leadkart-go/internal/common/tenancy"
 	"github.com/leadkart/leadkart-go/internal/identity/adapters"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/permission"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/role"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 	"github.com/leadkart/leadkart-go/internal/platform/pg"
 )
@@ -36,7 +37,7 @@ func seedTenant(t *testing.T, repo *adapters.TenantRepository) *tenant.Tenant {
 	if err != nil {
 		t.Fatalf("tenant.New: %v", err)
 	}
-	if err := repo.Add(context.Background(), tn); err != nil {
+	if err := repo.Add(t.Context(), tn); err != nil {
 		t.Fatalf("seedTenant Add: %v", err)
 	}
 	return tn
@@ -45,7 +46,7 @@ func seedTenant(t *testing.T, repo *adapters.TenantRepository) *tenant.Tenant {
 func seedPerson(t *testing.T, repo *adapters.PersonRepository, addr string) *person.Person {
 	t.Helper()
 	p := newPerson(t, addr)
-	if err := repo.Add(context.Background(), p); err != nil {
+	if err := repo.Add(t.Context(), p); err != nil {
 		t.Fatalf("seedPerson: %v", err)
 	}
 	return p
@@ -69,7 +70,7 @@ func TestMembershipRepository_Add_PersistsRowAndOutboxEvent(t *testing.T) {
 
 	// Caller binds tenant on ctx — under TxScopeTenant, the INSERT WITH
 	// CHECK passes because tenant_id = app.current_tenant().
-	ctx := tenancy.WithID(context.Background(), tenancy.ID(tn.ID().String()))
+	ctx := tenancy.WithID(t.Context(), tenancy.ID(tn.ID().String()))
 
 	if err := memberships.Add(ctx, m); err != nil {
 		t.Fatalf("Add: %v", err)
@@ -103,7 +104,7 @@ func TestMembershipRepository_Add_SecondActive_ReturnsErrAlreadyActive(t *testin
 
 	// First Active Membership in tenant A.
 	mA, _ := membership.New(membership.ID(ids.NewV7().String()), p.ID(), tnA.ID())
-	ctxA := tenancy.WithID(context.Background(), tenancy.ID(tnA.ID().String()))
+	ctxA := tenancy.WithID(t.Context(), tenancy.ID(tnA.ID().String()))
 	if err := memberships.Add(ctxA, mA); err != nil {
 		t.Fatalf("first Add: %v", err)
 	}
@@ -111,7 +112,7 @@ func TestMembershipRepository_Add_SecondActive_ReturnsErrAlreadyActive(t *testin
 	// Second concurrent Active Membership in tenant B — partial unique
 	// index uq_memberships_person_active blocks it.
 	mB, _ := membership.New(membership.ID(ids.NewV7().String()), p.ID(), tnB.ID())
-	ctxB := tenancy.WithID(context.Background(), tenancy.ID(tnB.ID().String()))
+	ctxB := tenancy.WithID(t.Context(), tenancy.ID(tnB.ID().String()))
 	err := memberships.Add(ctxB, mB)
 	if !errors.Is(err, membership.ErrAlreadyActive) {
 		t.Fatalf("expected ErrAlreadyActive, got %v", err)
@@ -130,13 +131,13 @@ func TestMembershipRepository_GetByID_OutsideTenantScope_NotFound(t *testing.T) 
 	p := seedPerson(t, persons, "isolation@example.test")
 
 	mA, _ := membership.New(membership.ID(ids.NewV7().String()), p.ID(), tnA.ID())
-	ctxA := tenancy.WithID(context.Background(), tenancy.ID(tnA.ID().String()))
+	ctxA := tenancy.WithID(t.Context(), tenancy.ID(tnA.ID().String()))
 	if err := memberships.Add(ctxA, mA); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
 
 	// Look up under tenant B's scope — RLS hides the row.
-	ctxB := tenancy.WithID(context.Background(), tenancy.ID(tnB.ID().String()))
+	ctxB := tenancy.WithID(t.Context(), tenancy.ID(tnB.ID().String()))
 	_, err := memberships.GetByID(ctxB, mA.ID())
 	if !errors.Is(err, membership.ErrNotFound) {
 		t.Fatalf("expected ErrNotFound (RLS isolation), got %v", err)
@@ -156,7 +157,7 @@ func TestMembershipRepository_UpdateByID_DeactivateClearsActiveSlot(t *testing.T
 
 	// Active in tenant A.
 	mA, _ := membership.New(membership.ID(ids.NewV7().String()), p.ID(), tnA.ID())
-	ctxA := tenancy.WithID(context.Background(), tenancy.ID(tnA.ID().String()))
+	ctxA := tenancy.WithID(t.Context(), tenancy.ID(tnA.ID().String()))
 	if err := memberships.Add(ctxA, mA); err != nil {
 		t.Fatalf("Add A: %v", err)
 	}
@@ -174,7 +175,7 @@ func TestMembershipRepository_UpdateByID_DeactivateClearsActiveSlot(t *testing.T
 
 	// Now adding an Active in B is allowed (single-Active slot freed).
 	mB, _ := membership.New(membership.ID(ids.NewV7().String()), p.ID(), tnB.ID())
-	ctxB := tenancy.WithID(context.Background(), tenancy.ID(tnB.ID().String()))
+	ctxB := tenancy.WithID(t.Context(), tenancy.ID(tnB.ID().String()))
 	if err := memberships.Add(ctxB, mB); err != nil {
 		t.Fatalf("Add B after deactivate: %v", err)
 	}
@@ -191,14 +192,14 @@ func TestMembershipRepository_GetActiveForPerson_BypassesRLS(t *testing.T) {
 	p := seedPerson(t, persons, "login@example.test")
 
 	mA, _ := membership.New(membership.ID(ids.NewV7().String()), p.ID(), tn.ID())
-	ctx := tenancy.WithID(context.Background(), tenancy.ID(tn.ID().String()))
+	ctx := tenancy.WithID(t.Context(), tenancy.ID(tn.ID().String()))
 	if err := memberships.Add(ctx, mA); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
 
 	// Login flow: ctx has NO tenant set yet — login resolves it via this
 	// query under platform scope.
-	got, err := memberships.GetActiveForPerson(context.Background(), p.ID())
+	got, err := memberships.GetActiveForPerson(t.Context(), p.ID())
 	if err != nil {
 		t.Fatalf("GetActiveForPerson: %v", err)
 	}
@@ -214,9 +215,181 @@ func TestMembershipRepository_GetActiveForPerson_NoActive_NotFound(t *testing.T)
 	memberships := adapters.NewMembershipRepository(pool, tx)
 
 	p := seedPerson(t, persons, "noactive@example.test")
-	_, err := memberships.GetActiveForPerson(context.Background(), p.ID())
+	_, err := memberships.GetActiveForPerson(t.Context(), p.ID())
 	if !errors.Is(err, membership.ErrNotFound) {
 		t.Fatalf("expected ErrNotFound, got %v", err)
+	}
+}
+
+// ----- Task 18 — child-table state (roles + overrides + profile) ------------
+
+func TestMembershipRepository_Add_PersistsRoleAssignmentsAndOverrides(t *testing.T) {
+	pool := repoFixture(t)
+	tx := pg.NewTransactor(pool)
+	persons := adapters.NewPersonRepository(pool, tx)
+	memberships := adapters.NewMembershipRepository(pool, tx)
+	rolesRepo := adapters.NewRoleRepository(pool, tx)
+	tenants := adapters.NewTenantRepository(pool, tx)
+
+	tn := seedTenant(t, tenants)
+	p := seedPerson(t, persons, "task18-add@example.test")
+
+	// Two real roles in the tenant — composite FK requires real role IDs.
+	r1 := newRole(t, tn.ID(), "Sales")
+	r2 := newRole(t, tn.ID(), "Manager")
+	ctx := tenancy.WithID(t.Context(), tenancy.ID(tn.ID().String()))
+	if err := rolesRepo.Add(ctx, r1); err != nil {
+		t.Fatalf("Add r1: %v", err)
+	}
+	if err := rolesRepo.Add(ctx, r2); err != nil {
+		t.Fatalf("Add r2: %v", err)
+	}
+
+	// Build a Membership carrying role assignments + a granted + a revoked
+	// permission overlay + non-empty profile.
+	m, err := membership.New(
+		membership.ID(ids.NewV7().String()), p.ID(), tn.ID())
+	if err != nil {
+		t.Fatalf("membership.New: %v", err)
+	}
+	if err := m.AssignRole(r1.ID()); err != nil {
+		t.Fatalf("AssignRole r1: %v", err)
+	}
+	if err := m.AssignRole(r2.ID()); err != nil {
+		t.Fatalf("AssignRole r2: %v", err)
+	}
+	grantP := permission.FromConstant(permission.IdentityPermissions.Roles.Assign)
+	revokeP := permission.FromConstant(permission.IdentityPermissions.Users.Anonymise)
+	if err := m.GrantPermission(grantP); err != nil {
+		t.Fatalf("GrantPermission: %v", err)
+	}
+	if err := m.RevokePermission(revokeP); err != nil {
+		t.Fatalf("RevokePermission: %v", err)
+	}
+	if err := m.UpdateProfile("Senior Sales Lead", "South Region", "On call"); err != nil {
+		t.Fatalf("UpdateProfile: %v", err)
+	}
+
+	if err := memberships.Add(ctx, m); err != nil {
+		t.Fatalf("Add membership: %v", err)
+	}
+
+	// GetByID hydrates roles + overrides + profile end-to-end.
+	got, err := memberships.GetByID(ctx, m.ID())
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if len(got.RoleAssignments()) != 2 {
+		t.Fatalf("RoleAssignments: got %d want 2", len(got.RoleAssignments()))
+	}
+	if len(got.GrantedPermissions()) != 1 ||
+		got.GrantedPermissions()[0].Name() != permission.IdentityPermissions.Roles.Assign {
+		t.Fatalf("Granted: got %v", got.GrantedPermissions())
+	}
+	if len(got.RevokedPermissions()) != 1 ||
+		got.RevokedPermissions()[0].Name() != permission.IdentityPermissions.Users.Anonymise {
+		t.Fatalf("Revoked: got %v", got.RevokedPermissions())
+	}
+	if got.Designation() != "Senior Sales Lead" {
+		t.Fatalf("Designation: got %q", got.Designation())
+	}
+	if got.Department() != "South Region" {
+		t.Fatalf("Department: got %q", got.Department())
+	}
+	if got.StatusMessage() != "On call" {
+		t.Fatalf("StatusMessage: got %q", got.StatusMessage())
+	}
+}
+
+func TestMembershipRepository_UpdateByID_ReplacesRoleAssignmentsAndOverrides(t *testing.T) {
+	pool := repoFixture(t)
+	tx := pg.NewTransactor(pool)
+	persons := adapters.NewPersonRepository(pool, tx)
+	memberships := adapters.NewMembershipRepository(pool, tx)
+	rolesRepo := adapters.NewRoleRepository(pool, tx)
+	tenants := adapters.NewTenantRepository(pool, tx)
+
+	tn := seedTenant(t, tenants)
+	p := seedPerson(t, persons, "task18-update@example.test")
+
+	r1 := newRole(t, tn.ID(), "Sales")
+	r2 := newRole(t, tn.ID(), "Manager")
+	r3 := newRole(t, tn.ID(), "Operator")
+	ctx := tenancy.WithID(t.Context(), tenancy.ID(tn.ID().String()))
+	for _, r := range []*role.Role{r1, r2, r3} {
+		if err := rolesRepo.Add(ctx, r); err != nil {
+			t.Fatalf("Add role %s: %v", r.Name(), err)
+		}
+	}
+
+	m, _ := membership.New(membership.ID(ids.NewV7().String()), p.ID(), tn.ID())
+	_ = m.AssignRole(r1.ID())
+	_ = m.AssignRole(r2.ID())
+	_ = m.GrantPermission(permission.FromConstant(permission.IdentityPermissions.Roles.View))
+	if err := memberships.Add(ctx, m); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+
+	// Replace state via UpdateByID: drop r1, add r3, drop the grant, add a revoke.
+	err := memberships.UpdateByID(ctx, m.ID(), func(loaded *membership.Membership) (bool, error) {
+		_ = loaded.RevokeRole(r1.ID())
+		_ = loaded.AssignRole(r3.ID())
+		// flipping the same permission from granted to revoked auto-suppresses.
+		_ = loaded.RevokePermission(permission.FromConstant(permission.IdentityPermissions.Roles.View))
+		return true, nil
+	})
+	if err != nil {
+		t.Fatalf("UpdateByID: %v", err)
+	}
+
+	got, err := memberships.GetByID(ctx, m.ID())
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if len(got.RoleAssignments()) != 2 {
+		t.Fatalf("RoleAssignments: got %d want 2 (r2, r3)", len(got.RoleAssignments()))
+	}
+	gotRoles := map[role.ID]bool{}
+	for _, rid := range got.RoleAssignments() {
+		gotRoles[rid] = true
+	}
+	if !gotRoles[r2.ID()] || !gotRoles[r3.ID()] || gotRoles[r1.ID()] {
+		t.Fatalf("RoleAssignments set wrong: got %v want {r2, r3}", got.RoleAssignments())
+	}
+	if len(got.GrantedPermissions()) != 0 {
+		t.Fatalf("Granted after revoke: got %d want 0", len(got.GrantedPermissions()))
+	}
+	if len(got.RevokedPermissions()) != 1 {
+		t.Fatalf("Revoked: got %d want 1", len(got.RevokedPermissions()))
+	}
+}
+
+func TestMembershipRepository_Add_RejectsCrossTenantRoleAssignment(t *testing.T) {
+	pool := repoFixture(t)
+	tx := pg.NewTransactor(pool)
+	persons := adapters.NewPersonRepository(pool, tx)
+	memberships := adapters.NewMembershipRepository(pool, tx)
+	rolesRepo := adapters.NewRoleRepository(pool, tx)
+	tenants := adapters.NewTenantRepository(pool, tx)
+
+	tnA := seedTenant(t, tenants)
+	tnB := seedTenant(t, tenants)
+	p := seedPerson(t, persons, "cross-tenant@example.test")
+
+	// Role in Tenant B; Membership in Tenant A; assign role from B → must fail.
+	rB := newRole(t, tnB.ID(), "ForeignRole")
+	ctxB := tenancy.WithID(t.Context(), tenancy.ID(tnB.ID().String()))
+	if err := rolesRepo.Add(ctxB, rB); err != nil {
+		t.Fatalf("Add rB: %v", err)
+	}
+
+	m, _ := membership.New(membership.ID(ids.NewV7().String()), p.ID(), tnA.ID())
+	_ = m.AssignRole(rB.ID())
+
+	ctxA := tenancy.WithID(t.Context(), tenancy.ID(tnA.ID().String()))
+	err := memberships.Add(ctxA, m)
+	if err == nil {
+		t.Fatalf("Add: expected schema-level rejection of cross-tenant role assignment")
 	}
 }
 

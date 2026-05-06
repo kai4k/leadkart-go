@@ -63,15 +63,34 @@ type RetryConfig struct {
 	Multiplier      float64
 }
 
+// Production retry tunings — exposed as named constants so they're
+// discoverable + greppable, not buried as magic numbers in the
+// [DefaultRetry] literal.
+//
+// Sized for transient broker / DB blips (≤5s end-to-end with backoff:
+// 200ms → 400ms → 800ms → 1.6s → 3.2s ≈ 6.2s cumulative). Per
+// messaging.md "Retry policy — narrow catches only": handlers narrow
+// errors themselves; this is the outer envelope.
+const (
+	defaultRetryMaxAttempts     = 5
+	defaultRetryInitialInterval = 200 * time.Millisecond
+	defaultRetryMaxInterval     = 5 * time.Second
+	defaultRetryMultiplier      = 2.0
+)
+
 // DefaultRetry mirrors the production retry policy. Tests typically
 // override with MaxRetries=1 + InitialInterval=10ms to keep test
 // duration bounded.
 var DefaultRetry = RetryConfig{
-	MaxRetries:      5,
-	InitialInterval: 200 * time.Millisecond,
-	MaxInterval:     5 * time.Second,
-	Multiplier:      2.0,
+	MaxRetries:      defaultRetryMaxAttempts,
+	InitialInterval: defaultRetryInitialInterval,
+	MaxInterval:     defaultRetryMaxInterval,
+	Multiplier:      defaultRetryMultiplier,
 }
+
+// defaultRouterCloseTimeout is the [Deps.CloseTimeout] fallback —
+// caps how long [Router.Run] waits for in-flight handlers on shutdown.
+const defaultRouterCloseTimeout = 30 * time.Second
 
 // NewRouter constructs the router + applies global middleware.
 //
@@ -100,7 +119,7 @@ func NewRouter(deps Deps) (*Router, error) {
 	}
 	closeTimeout := deps.CloseTimeout
 	if closeTimeout == 0 {
-		closeTimeout = 30 * time.Second
+		closeTimeout = defaultRouterCloseTimeout
 	}
 	retry := deps.Retry
 	if retry == (RetryConfig{}) {

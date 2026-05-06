@@ -11,8 +11,32 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const deletePermissionOverridesByMembership = `-- name: DeletePermissionOverridesByMembership :exec
+DELETE FROM identity.membership_permission_overrides
+WHERE  membership_id = $1
+`
+
+func (q *Queries) DeletePermissionOverridesByMembership(ctx context.Context, membershipID pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, deletePermissionOverridesByMembership, membershipID)
+	return err
+}
+
+const deleteRoleAssignmentsByMembership = `-- name: DeleteRoleAssignmentsByMembership :exec
+DELETE FROM identity.role_assignments
+WHERE  membership_id = $1
+`
+
+// Full clear. UpdateByID's persist step uses this + per-role InsertRoleAssignment
+// to project the aggregate's current RoleAssignments slice (replace-all
+// semantics — simpler than per-row diff tracking, idempotent).
+func (q *Queries) DeleteRoleAssignmentsByMembership(ctx context.Context, membershipID pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, deleteRoleAssignmentsByMembership, membershipID)
+	return err
+}
+
 const getActiveMembershipByPersonAndTenant = `-- name: GetActiveMembershipByPersonAndTenant :one
-SELECT id, person_id, tenant_id, status, joined_at, left_at
+SELECT id, person_id, tenant_id, status, joined_at, left_at,
+       designation, department, status_message, reports_to
 FROM   identity.tenant_memberships
 WHERE  person_id = $1
   AND  tenant_id = $2
@@ -34,12 +58,17 @@ func (q *Queries) GetActiveMembershipByPersonAndTenant(ctx context.Context, arg 
 		&i.Status,
 		&i.JoinedAt,
 		&i.LeftAt,
+		&i.Designation,
+		&i.Department,
+		&i.StatusMessage,
+		&i.ReportsTo,
 	)
 	return i, err
 }
 
 const getMembershipByID = `-- name: GetMembershipByID :one
-SELECT id, person_id, tenant_id, status, joined_at, left_at
+SELECT id, person_id, tenant_id, status, joined_at, left_at,
+       designation, department, status_message, reports_to
 FROM   identity.tenant_memberships
 WHERE  id = $1
 `
@@ -54,6 +83,10 @@ func (q *Queries) GetMembershipByID(ctx context.Context, id pgtype.UUID) (Identi
 		&i.Status,
 		&i.JoinedAt,
 		&i.LeftAt,
+		&i.Designation,
+		&i.Department,
+		&i.StatusMessage,
+		&i.ReportsTo,
 	)
 	return i, err
 }
@@ -88,8 +121,64 @@ func (q *Queries) InsertMembership(ctx context.Context, arg InsertMembershipPara
 	return err
 }
 
+const insertPermissionOverride = `-- name: InsertPermissionOverride :exec
+INSERT INTO identity.membership_permission_overrides (
+    membership_id, permission_name, kind, tenant_id, updated_at
+) VALUES ($1, $2, $3, $4, $5)
+`
+
+type InsertPermissionOverrideParams struct {
+	MembershipID   pgtype.UUID
+	PermissionName string
+	Kind           string
+	TenantID       pgtype.UUID
+	UpdatedAt      pgtype.Timestamptz
+}
+
+// Per-Membership permission overlay. kind ∈ {'granted', 'revoked'} —
+// the domain layer guarantees a permission_name appears at most once
+// per Membership (see Membership.GrantPermission / RevokePermission
+// auto-suppression).
+func (q *Queries) InsertPermissionOverride(ctx context.Context, arg InsertPermissionOverrideParams) error {
+	_, err := q.db.Exec(ctx, insertPermissionOverride,
+		arg.MembershipID,
+		arg.PermissionName,
+		arg.Kind,
+		arg.TenantID,
+		arg.UpdatedAt,
+	)
+	return err
+}
+
+const insertRoleAssignment = `-- name: InsertRoleAssignment :exec
+INSERT INTO identity.role_assignments (
+    membership_id, role_id, tenant_id, assigned_at
+) VALUES ($1, $2, $3, $4)
+`
+
+type InsertRoleAssignmentParams struct {
+	MembershipID pgtype.UUID
+	RoleID       pgtype.UUID
+	TenantID     pgtype.UUID
+	AssignedAt   pgtype.Timestamptz
+}
+
+// Junction row. Caller MUST guarantee role.tenant_id == membership.tenant_id;
+// the composite FK on (membership_id, tenant_id) → tenant_memberships(id, tenant_id)
+// enforces this at the schema level.
+func (q *Queries) InsertRoleAssignment(ctx context.Context, arg InsertRoleAssignmentParams) error {
+	_, err := q.db.Exec(ctx, insertRoleAssignment,
+		arg.MembershipID,
+		arg.RoleID,
+		arg.TenantID,
+		arg.AssignedAt,
+	)
+	return err
+}
+
 const listMembershipsForPerson = `-- name: ListMembershipsForPerson :many
-SELECT id, person_id, tenant_id, status, joined_at, left_at
+SELECT id, person_id, tenant_id, status, joined_at, left_at,
+       designation, department, status_message, reports_to
 FROM   identity.tenant_memberships
 WHERE  person_id = $1
 ORDER  BY joined_at
@@ -114,6 +203,10 @@ func (q *Queries) ListMembershipsForPerson(ctx context.Context, personID pgtype.
 			&i.Status,
 			&i.JoinedAt,
 			&i.LeftAt,
+			&i.Designation,
+			&i.Department,
+			&i.StatusMessage,
+			&i.ReportsTo,
 		); err != nil {
 			return nil, err
 		}
@@ -123,6 +216,102 @@ func (q *Queries) ListMembershipsForPerson(ctx context.Context, personID pgtype.
 		return nil, err
 	}
 	return items, nil
+}
+
+const listPermissionOverridesByMembership = `-- name: ListPermissionOverridesByMembership :many
+SELECT membership_id, permission_name, kind, tenant_id, updated_at
+FROM   identity.membership_permission_overrides
+WHERE  membership_id = $1
+ORDER  BY permission_name
+`
+
+func (q *Queries) ListPermissionOverridesByMembership(ctx context.Context, membershipID pgtype.UUID) ([]IdentityMembershipPermissionOverride, error) {
+	rows, err := q.db.Query(ctx, listPermissionOverridesByMembership, membershipID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []IdentityMembershipPermissionOverride
+	for rows.Next() {
+		var i IdentityMembershipPermissionOverride
+		if err := rows.Scan(
+			&i.MembershipID,
+			&i.PermissionName,
+			&i.Kind,
+			&i.TenantID,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listRoleAssignmentsByMembership = `-- name: ListRoleAssignmentsByMembership :many
+SELECT membership_id, role_id, tenant_id, assigned_at
+FROM   identity.role_assignments
+WHERE  membership_id = $1
+ORDER  BY assigned_at, role_id
+`
+
+func (q *Queries) ListRoleAssignmentsByMembership(ctx context.Context, membershipID pgtype.UUID) ([]IdentityRoleAssignment, error) {
+	rows, err := q.db.Query(ctx, listRoleAssignmentsByMembership, membershipID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []IdentityRoleAssignment
+	for rows.Next() {
+		var i IdentityRoleAssignment
+		if err := rows.Scan(
+			&i.MembershipID,
+			&i.RoleID,
+			&i.TenantID,
+			&i.AssignedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const updateMembershipProfile = `-- name: UpdateMembershipProfile :exec
+UPDATE identity.tenant_memberships
+SET    designation    = $2,
+       department     = $3,
+       status_message = $4,
+       reports_to     = $5
+WHERE  id = $1
+`
+
+type UpdateMembershipProfileParams struct {
+	ID            pgtype.UUID
+	Designation   string
+	Department    string
+	StatusMessage string
+	ReportsTo     pgtype.UUID
+}
+
+// Per-tenant profile fields. designation/department/status_message default
+// to ” (NOT NULL DEFAULT ”); reports_to is NULLable (top-of-tree). Caller
+// (UpdateByID) writes the aggregate's current state — no per-field diff.
+func (q *Queries) UpdateMembershipProfile(ctx context.Context, arg UpdateMembershipProfileParams) error {
+	_, err := q.db.Exec(ctx, updateMembershipProfile,
+		arg.ID,
+		arg.Designation,
+		arg.Department,
+		arg.StatusMessage,
+		arg.ReportsTo,
+	)
+	return err
 }
 
 const updateMembershipStatus = `-- name: UpdateMembershipStatus :exec

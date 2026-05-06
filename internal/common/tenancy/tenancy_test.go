@@ -38,7 +38,7 @@ func TestID_String(t *testing.T) {
 
 func TestWithID_FromContext_Roundtrip(t *testing.T) {
 	t.Parallel()
-	ctx := context.Background()
+	ctx := t.Context()
 	want := tenancy.ID("019df708-f642-7f66-b73b-c7919f2447cb")
 	ctx = tenancy.WithID(ctx, want)
 
@@ -53,7 +53,7 @@ func TestWithID_FromContext_Roundtrip(t *testing.T) {
 
 func TestFromContext_AbsentReturnsFalse(t *testing.T) {
 	t.Parallel()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	got, ok := tenancy.FromContext(ctx)
 	if ok {
@@ -71,7 +71,7 @@ func TestMustFromContext_PanicsWhenAbsent(t *testing.T) {
 			t.Fatal("MustFromContext did not panic on absent tenant")
 		}
 	}()
-	tenancy.MustFromContext(context.Background())
+	tenancy.MustFromContext(t.Context())
 }
 
 func TestMustFromContext_PanicsWhenZero(t *testing.T) {
@@ -81,14 +81,14 @@ func TestMustFromContext_PanicsWhenZero(t *testing.T) {
 			t.Fatal("MustFromContext did not panic on zero tenant")
 		}
 	}()
-	ctx := tenancy.WithID(context.Background(), tenancy.ID(""))
+	ctx := tenancy.WithID(t.Context(), tenancy.ID(""))
 	tenancy.MustFromContext(ctx)
 }
 
 func TestMustFromContext_ReturnsValueWhenPresent(t *testing.T) {
 	t.Parallel()
 	want := tenancy.ID("019df708-f642-7f66-b73b-c7919f2447cb")
-	ctx := tenancy.WithID(context.Background(), want)
+	ctx := tenancy.WithID(t.Context(), want)
 	if got := tenancy.MustFromContext(ctx); got != want {
 		t.Fatalf("got = %q, want %q", got, want)
 	}
@@ -100,7 +100,7 @@ func TestMustFromContext_ReturnsValueWhenPresent(t *testing.T) {
 func TestKey_DoesNotCollideWithStringKey(t *testing.T) {
 	t.Parallel()
 	type rogueKey string
-	ctx := context.WithValue(context.Background(), rogueKey("tenant"), tenancy.ID("rogue"))
+	ctx := context.WithValue(t.Context(), rogueKey("tenant"), tenancy.ID("rogue"))
 
 	got, ok := tenancy.FromContext(ctx)
 	if ok {

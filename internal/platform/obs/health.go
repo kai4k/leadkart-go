@@ -73,6 +73,11 @@ func (h *Health) Alive(w http.ResponseWriter, _ *http.Request) {
 	_, _ = w.Write([]byte("ok\n"))
 }
 
+// healthStatusOK is the wire-stable string returned by /ready and
+// /health for a component that passed its check. Anything else in the
+// `report` map's value position is the error message.
+const healthStatusOK = "ok"
+
 // Ready — readiness probe. Runs every checker concurrently with the
 // per-check timeout; 200 if all pass, 503 if ANY fail. Body is a
 // JSON map of {component: status}.
@@ -81,7 +86,7 @@ func (h *Health) Ready(w http.ResponseWriter, r *http.Request) {
 	report := h.runChecks(r.Context())
 	status := http.StatusOK
 	for _, v := range report {
-		if v != "ok" {
+		if v != healthStatusOK {
 			status = http.StatusServiceUnavailable
 			break
 		}
@@ -129,7 +134,7 @@ func (h *Health) runChecks(ctx context.Context) map[string]string {
 				report[c.Name()] = err.Error()
 				return
 			}
-			report[c.Name()] = "ok"
+			report[c.Name()] = healthStatusOK
 		})
 	}
 	wg.Wait()
