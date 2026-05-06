@@ -23,7 +23,6 @@ func TestPublicServer_DoesNotMountHealth(t *testing.T) {
 	t.Parallel()
 	srv := newServer(silentLogger(), app.Application{})
 	for _, path := range []string{"/alive", "/ready", "/health"} {
-		path := path
 		t.Run(path, func(t *testing.T) {
 			t.Parallel()
 			rec := httptest.NewRecorder()
@@ -50,7 +49,6 @@ func TestAdminServer_MountsHealthEndpoints(t *testing.T) {
 		{"/ready", 200},
 		{"/health", 200},
 	} {
-		tc := tc
 		t.Run(tc.path, func(t *testing.T) {
 			t.Parallel()
 			rec := httptest.NewRecorder()
