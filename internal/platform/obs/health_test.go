@@ -35,7 +35,7 @@ func TestAlive_Always200(t *testing.T) {
 	t.Parallel()
 	h := obs.NewHealth(nil, 0)
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/alive", nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/alive", nil)
 	h.Alive(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status: got %d want 200", rec.Code)
@@ -49,7 +49,7 @@ func TestReady_AllOK_Returns200(t *testing.T) {
 	t.Parallel()
 	h := obs.NewHealth([]obs.HealthChecker{okChecker("postgres"), okChecker("redis")}, 0)
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/ready", nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/ready", nil)
 	h.Ready(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status: got %d want 200", rec.Code)
@@ -70,7 +70,7 @@ func TestReady_AnyFailing_Returns503(t *testing.T) {
 		failChecker("redis", "connection refused"),
 	}, 0)
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/ready", nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/ready", nil)
 	h.Ready(rec, req)
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status: got %d want 503", rec.Code)
@@ -94,7 +94,7 @@ func TestHealth_AlwaysReturns200(t *testing.T) {
 		failChecker("redis", "down"),
 	}, 0)
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/health", nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/health", nil)
 	h.Health(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("/health is diagnostics — must always 200; got %d", rec.Code)
@@ -112,7 +112,7 @@ func TestReady_TimeoutEnforced(t *testing.T) {
 		slowChecker("slow", 200*time.Millisecond),
 	}, 50*time.Millisecond)
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/ready", nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/ready", nil)
 	h.Ready(rec, req)
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("expected 503 on timeout, got %d", rec.Code)
@@ -127,7 +127,7 @@ func TestProbes_NeverCached(t *testing.T) {
 		t.Run(path, func(t *testing.T) {
 			t.Parallel()
 			rec := httptest.NewRecorder()
-			req := httptest.NewRequest(http.MethodGet, path, nil)
+			req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, path, nil)
 			switch path {
 			case "/alive":
 				h.Alive(rec, req)
@@ -149,7 +149,7 @@ func TestRegister_PostConstruction(t *testing.T) {
 	h := obs.NewHealth(nil, 0)
 	h.Register(okChecker("late"))
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/ready", nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/ready", nil)
 	h.Ready(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200 with late-registered checker, got %d", rec.Code)
