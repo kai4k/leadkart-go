@@ -128,9 +128,22 @@ func (s *TenantOnboardingService) Onboard(
 	if err != nil {
 		return OnboardTenantResult{}, err
 	}
-	existing, err := s.resolveExistingPerson(ctx, cmd.AdminEmail)
-	if err != nil {
-		return OnboardTenantResult{}, err
+	// Pre-tx existence check: lookup Person by email, then guard the
+	// single-Active-Membership invariant. nil-existing = create-fresh
+	// path inside the tx. Inline because the lookup-then-guard sequence
+	// reads naturally as a single sentence + lifting it into a helper
+	// would force a (*Person, ?, error) shape that triggers nilnil.
+	existing, err := s.persons.GetByEmail(ctx, cmd.AdminEmail)
+	switch {
+	case errors.Is(err, person.ErrNotFound):
+		existing = nil
+	case err != nil:
+		return OnboardTenantResult{}, fmt.Errorf("onboard: lookup person: %w", err)
+	}
+	if existing != nil {
+		if err := s.assertNoActiveMembership(ctx, existing.ID()); err != nil {
+			return OnboardTenantResult{}, err
+		}
 	}
 	result, err := s.persistAggregatesInTx(ctx, cmd, existing, pwd)
 	if err != nil {
@@ -160,37 +173,29 @@ func (s *TenantOnboardingService) hashAdminPassword(
 	return pwd, nil
 }
 
-// resolveExistingPerson is the pre-tx existence check. Returns:
-//
-//   - (existing, nil)  — Person exists, has NO Active Membership;
-//                        caller will reuse the aggregate in tx.
-//   - (nil, nil)       — no Person under this email; caller creates fresh.
-//   - (nil, ErrEmailHasActiveMembership) — single-Active-Membership
-//                        invariant blocks onboarding.
-//   - (nil, wrapped err) — repository failure; bubble.
+// assertNoActiveMembership guards the single-Active-Membership
+// invariant per `multi-tenancy.md` "Identity model": a Person can
+// hold AT MOST ONE Active Membership across all tenants. Returns
+// [ErrEmailHasActiveMembership] when one is found; nil when clear.
 //
 // The DB partial-unique-index is the authoritative gate inside the
-// tx; this just produces a friendly typed error rather than a
-// SQLSTATE 23505 surfaced as a generic conflict.
-func (s *TenantOnboardingService) resolveExistingPerson(
+// onboarding tx; this pre-tx check just produces a friendly typed
+// error rather than a SQLSTATE 23505 surfaced as a generic conflict.
+func (s *TenantOnboardingService) assertNoActiveMembership(
 	ctx context.Context,
-	addr email.Address,
-) (*person.Person, error) {
-	existing, err := s.persons.GetByEmail(ctx, addr)
+	personID person.ID,
+) error {
+	active, err := s.memberships.GetActiveForPerson(ctx, personID)
 	switch {
-	case errors.Is(err, person.ErrNotFound):
-		return nil, nil
+	case errors.Is(err, membership.ErrNotFound):
+		return nil
 	case err != nil:
-		return nil, fmt.Errorf("onboard: lookup person by email: %w", err)
-	}
-	active, lerr := s.memberships.GetActiveForPerson(ctx, existing.ID())
-	if lerr != nil && !errors.Is(lerr, membership.ErrNotFound) {
-		return nil, fmt.Errorf("onboard: check active membership: %w", lerr)
+		return fmt.Errorf("onboard: check active membership: %w", err)
 	}
 	if active != nil {
-		return nil, ErrEmailHasActiveMembership
+		return ErrEmailHasActiveMembership
 	}
-	return existing, nil
+	return nil
 }
 
 // persistAggregatesInTx is the load-bearing single-tx step: Tenant
