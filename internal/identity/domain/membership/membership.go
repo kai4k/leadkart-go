@@ -548,6 +548,19 @@ func (m *Membership) AssignManager(managerID ID) error {
 	return nil
 }
 
+// RemoveManager clears the `reportsTo` field — semantic-clear inverse
+// of [Membership.AssignManager]. Idempotent: calling on an already-
+// cleared Membership is a no-op (no event). When clearing an actual
+// previous manager, emits ManagerRemovedEvent carrying the
+// PreviousManager for downstream audit / hierarchy-projection updates.
+//
+// Mirrors the .NET LeadKart MembershipManager remove command per
+// messaging.md "Identity event vocabulary" — keeps the read site free
+// of the "AssignManager(zero)" idiom which reads as a smell.
+func (m *Membership) RemoveManager() error {
+	return m.AssignManager(ID(""))
+}
+
 // ----- Event handling -------------------------------------------------------
 
 // PullEvents drains recorded events. See [tenant.Tenant.PullEvents] for semantics.

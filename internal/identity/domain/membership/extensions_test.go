@@ -454,6 +454,49 @@ func TestAssignManager_ZeroIDClears(t *testing.T) {
 	}
 }
 
+// RemoveManager is the semantic-clear counterpart of AssignManager —
+// callers reading "remove the manager" shouldn't have to spell that
+// as "assign the zero ID." Mirrors the .NET LeadKart MembershipManager
+// remove command shape per messaging.md "Identity event vocabulary."
+func TestRemoveManager_ClearsReportsTo_AndEmitsManagerRemovedEvent(t *testing.T) {
+	t.Parallel()
+	m := freshMembership(t)
+	prev := membership.ID(ids.NewV7().String())
+	_ = m.AssignManager(prev)
+	_ = m.PullEvents()
+
+	if err := m.RemoveManager(); err != nil {
+		t.Fatalf("RemoveManager: %v", err)
+	}
+	if !m.ReportsTo().IsZero() {
+		t.Fatalf("ReportsTo not cleared: %v", m.ReportsTo())
+	}
+	events := m.PullEvents()
+	if len(events) != 1 {
+		t.Fatalf("events: %d", len(events))
+	}
+	ev, ok := events[0].(membership.ManagerRemovedEvent)
+	if !ok {
+		t.Fatalf("event type: %T (want ManagerRemovedEvent)", events[0])
+	}
+	if ev.PreviousManager != prev {
+		t.Fatalf("event PreviousManager: %v want %v", ev.PreviousManager, prev)
+	}
+}
+
+func TestRemoveManager_NoOp_WhenNoManagerSet(t *testing.T) {
+	t.Parallel()
+	m := freshMembership(t)
+	// Fresh membership has no manager. RemoveManager must succeed
+	// silently and emit no event (idempotent like AssignManager).
+	if err := m.RemoveManager(); err != nil {
+		t.Fatalf("RemoveManager on cleared: %v", err)
+	}
+	if events := m.PullEvents(); len(events) != 0 {
+		t.Fatalf("RemoveManager on cleared emitted %d events", len(events))
+	}
+}
+
 func TestAssignManager_Idempotent(t *testing.T) {
 	t.Parallel()
 	m := freshMembership(t)
