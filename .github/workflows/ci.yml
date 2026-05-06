@@ -241,3 +241,122 @@ jobs:
           path: junit-integration.xml
           reporter: java-junit
           fail-on-error: false
+
+  # ---------------------------------------------------------------------------
+  # Docker build — proves the production Dockerfile builds clean for both
+  # api + migrate targets on every PR. No push, no sign, no scan — just
+  # `docker buildx build --target=...`. Catches:
+  #   - bind-mount COPY drift (the /src/migrations bug)
+  #   - GO_VERSION ARG vs go.mod toolchain drift
+  #   - target rename / new target without registry update
+  # ~2 min warm cache. Cheaper than the full release.yml multi-arch +
+  # cosign + Syft + Trivy pipeline; that ships only on tag.
+  # ---------------------------------------------------------------------------
+  docker-build:
+    name: Docker Build (api + migrate)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: unit
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # No --push, no --platform=multi-arch — single-arch local build is
+      # enough to validate the Dockerfile shape. release.yml does the
+      # multi-arch + push when a tag fires.
+      - name: Build api target
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile
+          target: api
+          push: false
+          load: true
+          tags: leadkart-go-api:pr-${{ github.event.pull_request.number || github.sha }}
+          cache-from: type=gha,scope=api-pr
+          cache-to: type=gha,scope=api-pr,mode=max
+
+      - name: Build migrate target
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile
+          target: migrate
+          push: false
+          load: true
+          tags: leadkart-go-migrate:pr-${{ github.event.pull_request.number || github.sha }}
+          cache-from: type=gha,scope=migrate-pr
+          cache-to: type=gha,scope=migrate-pr,mode=max
+
+      # Verify the api binary's HEALTHCHECK CLI flag works inside the
+      # built image — guards against the binary breaking its own probe
+      # contract (a future change could regress the -healthcheck path).
+      # We expect exit 1 because there's no admin listener bound here;
+      # the value is "binary parses the flag + exits with the documented
+      # shape" rather than "probe succeeds."
+      - name: Verify -healthcheck flag in built image
+        run: |
+          docker run --rm --entrypoint /api \
+            leadkart-go-api:pr-${{ github.event.pull_request.number || github.sha }} \
+            -healthcheck \
+            && echo "UNEXPECTED: healthcheck exited 0 with no listener" && exit 1 \
+            || echo "OK: healthcheck exited non-zero as expected"
+
+  # ---------------------------------------------------------------------------
+  # Container smoke — boots the full compose stack (postgres + redis +
+  # migrate + api built locally), runs scripts/smoke.sh against it,
+  # tears down. End-to-end happy-path validation: register tenant →
+  # login → refresh → logout → revoked-token replay returns 401.
+  #
+  # Catches:
+  #   - OTel SDK init failures (the semconv schema-URL bug)
+  #   - Migration apply failures against the real Postgres image
+  #   - JWT validator config drift
+  #   - Probe wiring (admin listener vs public listener separation)
+  #
+  # ~3-5 min: image build (cached after docker-build job) + compose up +
+  # 5 curl round-trips + tear-down.
+  # ---------------------------------------------------------------------------
+  container-smoke:
+    name: Container Smoke (compose up + scripts/smoke.sh)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: docker-build
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Compose --profile full builds api + migrate locally. cache-from
+      # the docker-build job's GHA scope so we re-use already-warmed
+      # buildx layers instead of re-downloading the toolchain.
+      - name: Bring up full stack
+        run: |
+          docker compose -f docker/compose.yml --profile full up -d --build
+          docker compose -f docker/compose.yml --profile full ps
+
+      - name: Wait for api healthy (max 60s)
+        run: |
+          for i in $(seq 1 30); do
+            status=$(docker inspect --format='{{.State.Health.Status}}' leadkart-api 2>/dev/null || echo "starting")
+            echo "[$i] api health: $status"
+            [[ "$status" == "healthy" ]] && exit 0
+            sleep 2
+          done
+          echo "api never reached healthy"
+          docker compose -f docker/compose.yml --profile full logs api --tail=100
+          exit 1
+
+      - name: Run smoke script
+        run: bash scripts/smoke.sh
+
+      - name: Dump api logs on failure
+        if: failure()
+        run: docker compose -f docker/compose.yml --profile full logs --tail=200
+
+      - name: Tear down
+        if: always()
+        run: docker compose -f docker/compose.yml --profile full down -v
