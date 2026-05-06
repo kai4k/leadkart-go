@@ -76,7 +76,15 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     if [ -d ./cmd/migrate ]; then \
         CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
             go build -trimpath -ldflags="-s -w -X main.version=$VERSION" -o /out/migrate ./cmd/migrate; \
-    fi
+    fi && \
+    cp -r migrations /out/migrations
+# `cp -r migrations /out/migrations` — bind-mount layers don't persist
+# past the RUN, so the migrate target's `COPY --from=build /src/migrations`
+# fails to resolve. Copying the dir into /out (persistent layer) makes it
+# referenceable from later target stages. Alternative is `COPY migrations
+# /migrations` in the migrate stage from the build context — same outcome,
+# but the /out staging keeps "everything the build stage exports" in one
+# directory which is cleaner when the build matures.
 
 # ===========================================================================
 # Stage 2 — Final stage: API (public HTTP server + admin probe listener)
@@ -153,7 +161,7 @@ ENV MIGRATIONS_DIR="/migrations"
 ENV TZ="UTC"
 
 COPY --from=build /out/migrate /migrate
-COPY --from=build /src/migrations /migrations
+COPY --from=build /out/migrations /migrations
 USER nonroot:nonroot
 ENTRYPOINT ["/migrate"]
 CMD ["up"]
