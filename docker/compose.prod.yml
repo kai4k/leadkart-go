@@ -1,0 +1,196 @@
+# ============================================================================
+# LeadKart Go — Production Docker Compose (VPS deployment)
+# ============================================================================
+# Mirrors .NET LeadKart docker-compose.prod.yml shape (postgres tuning,
+# loopback-only ports, health-gated depends_on, resource limits, migrate
+# one-shot before api comes up).
+#
+# First-time setup on VPS:
+#   1. Create /etc/leadkart/.env (see docs/deploy/.env.example)
+#   2. Copy this file + Caddyfile to /opt/leadkart/
+#   3. docker compose -f compose.prod.yml --env-file /etc/leadkart/.env up -d
+#
+# Startup order (orchestrated by depends_on + healthcheck conditions):
+#   postgres → redis → migrate (applies migrations as owner, exits)
+#                  └─→ api (connects as leadkart_app under FORCE RLS)
+#                  └─→ caddy (when Web BFF lands; reverse-proxy + auto-SSL)
+#
+# CI is NOT re-run here — branch protection on main + green CI gate the
+# release tag that produced these images. By the time this file pulls,
+# the artifacts are signed (cosign) + SBOM-attested + Trivy-scanned via
+# release.yml.
+#
+# Required .env keys:
+#   POSTGRES_OWNER, POSTGRES_OWNER_PASSWORD   — schema-owning role (migrations)
+#   POSTGRES_APP_PASSWORD                     — leadkart_app runtime role
+#   REDIS_PASSWORD                            — redis-cli AUTH
+#   JWT_KEY_ID, JWT_SIGNING_KEY               — JWT issuance (>=32 bytes)
+#   API_IMAGE                                 — ghcr.io/<org>/leadkart-go-api:<tag>
+#   MIGRATE_IMAGE                             — ghcr.io/<org>/leadkart-go-migrate:<tag>
+# ============================================================================
+
+services:
+
+  # ---- PostgreSQL 17 --------------------------------------------------------
+  postgres:
+    image: postgres:17-alpine
+    container_name: leadkart-postgres
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:5432:5432"   # loopback only — never expose to public iface
+    environment:
+      POSTGRES_DB: leadkart
+      POSTGRES_USER: ${POSTGRES_OWNER}
+      POSTGRES_PASSWORD: ${POSTGRES_OWNER_PASSWORD}
+      POSTGRES_INITDB_ARGS: "--auth-host=scram-sha-256"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      # init.sql provisions leadkart_app + leadkart_test roles per the
+      # 3-roles doctrine in multi-tenancy.md. Mounted into the standard
+      # /docker-entrypoint-initdb.d/ — runs on first boot only.
+      - ./postgres/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_OWNER} -d leadkart"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    # Tuning per Brandur Leach's Crunchy Bridge production doc + LeadKart
+    # .NET prod compose. pg_stat_statements is mandatory observability per
+    # audit-checklist.md §12 — without it, slow-query forensics are blind.
+    command: >
+      postgres
+        -c shared_preload_libraries=pg_stat_statements
+        -c pg_stat_statements.track=all
+        -c max_connections=100
+        -c shared_buffers=256MB
+        -c effective_cache_size=1GB
+        -c work_mem=4MB
+        -c maintenance_work_mem=64MB
+        -c random_page_cost=1.1
+        -c log_min_duration_statement=500
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: "1.0"
+
+  # ---- Redis 7 --------------------------------------------------------------
+  # AUTH-protected + AOF persistence + LRU eviction at 128MB. allkeys-lru is
+  # the canonical SaaS-cache eviction policy when you also use Redis as a
+  # session/blacklist store (Microsoft Learn HybridCache + StackExchange.Redis
+  # docs converge on this).
+  redis:
+    image: redis:7-alpine
+    container_name: leadkart-redis
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "--no-auth-warning", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    command: >
+      redis-server
+        --appendonly yes
+        --maxmemory 128mb
+        --maxmemory-policy allkeys-lru
+        --requirepass ${REDIS_PASSWORD}
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: "0.25"
+
+  # ---- Migrate (one-shot) ---------------------------------------------------
+  # Connects as the OWNER role — required to CREATE TABLE / INDEX. Runtime
+  # api uses leadkart_app (non-owner, FORCE RLS active). One-shot per
+  # database.md "Single schema writer" doctrine.
+  migrate:
+    image: ${MIGRATE_IMAGE:-ghcr.io/leadkart/leadkart-go-migrate:latest}
+    container_name: leadkart-migrate
+    restart: "no"
+    environment:
+      DATABASE_URL: "postgres://${POSTGRES_OWNER}:${POSTGRES_OWNER_PASSWORD}@postgres:5432/leadkart?sslmode=disable"
+      MIGRATIONS_DIR: "/migrations"
+    command: ["up"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: "0.5"
+
+  # ---- API + outbox forwarder ----------------------------------------------
+  api:
+    image: ${API_IMAGE:-ghcr.io/leadkart/leadkart-go-api:latest}
+    container_name: leadkart-api
+    restart: unless-stopped
+    ports:
+      # Loopback only — Caddy fronts public traffic. Direct exposure would
+      # bypass HTTPS termination + WAF + rate-limiting at the edge.
+      - "127.0.0.1:8080:8080"
+      - "127.0.0.1:9090:9090"
+    environment:
+      # leadkart_app role — non-owner, FORCE RLS fires on every query.
+      LEADKART_POSTGRES__DSN: "postgres://leadkart_app:${POSTGRES_APP_PASSWORD}@postgres:5432/leadkart?sslmode=disable"
+      LEADKART_REDIS__ADDR: "redis:6379"
+      LEADKART_REDIS__PASSWORD: "${REDIS_PASSWORD}"
+      LEADKART_LISTEN__API: ":8080"
+      LEADKART_LISTEN__ADMIN: ":9090"
+      LEADKART_JWT__KEY_ID: "${JWT_KEY_ID}"
+      LEADKART_JWT__SIGNING_KEY: "${JWT_SIGNING_KEY}"
+      LEADKART_REFRESH__ABSOLUTE_TTL: "336h"
+      TZ: "UTC"
+    healthcheck:
+      test: ["CMD", "/api", "-healthcheck"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: "1.5"
+
+  # ---- Worker (river background jobs — Phase 2+) ---------------------------
+  # Declared but commented out — cmd/worker ships in v0.3 with the Platform
+  # module. Uncomment when MIGRATE_IMAGE picks up the worker target.
+  #
+  # worker:
+  #   image: ${WORKER_IMAGE:-ghcr.io/leadkart/leadkart-go-worker:latest}
+  #   container_name: leadkart-worker
+  #   restart: unless-stopped
+  #   environment: { /* same as api */ }
+  #   depends_on:
+  #     migrate:
+  #       condition: service_completed_successfully
+  #   deploy:
+  #     resources:
+  #       limits: { memory: 512M, cpus: "0.5" }
+
+  # ---- Caddy (reverse proxy + auto-SSL) — placeholder until Web ships ------
+  # The .NET prod compose has Caddy fronting api + web. Go-side waits for
+  # the Svelte SPA (Phase 0 frontend) before this becomes live; until then
+  # `127.0.0.1:8080` is fronted by whatever the host VPS already runs
+  # (typically nginx during initial provisioning, Caddy after).
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local

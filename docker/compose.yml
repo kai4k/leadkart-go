@@ -1,11 +1,20 @@
 # LeadKart Go — local development stack.
 #
-# Start: docker compose -f docker/compose.yml up -d
-# Stop:  docker compose -f docker/compose.yml down
+# Default (postgres + redis only — fast iteration with `air` on host):
+#   docker compose -f docker/compose.yml up -d
 #
-# Postgres + Redis only at v0.1; API runs on host via `air` for fast iteration.
-# Once Identity ships, an `api` service can be added pointing at the multi-target
-# Dockerfile (see docker/Dockerfile target=api).
+# Full stack (api + migrate built from local Dockerfile):
+#   docker compose -f docker/compose.yml --profile full up -d
+#
+# Stop:
+#   docker compose -f docker/compose.yml down
+#
+# Wipe volumes:
+#   docker compose -f docker/compose.yml down -v
+#
+# `profiles:` keep api/migrate opt-in — the typical inner-loop workflow
+# is host-side `air` against containerized PG+Redis. Container-side api
+# is for verifying production wiring + the Dockerfile HEALTHCHECK.
 
 services:
   postgres:
@@ -20,6 +29,10 @@ services:
       - "5432:5432"
     volumes:
       - leadkart_pg_data:/var/lib/postgresql/data
+      # init.sql runs ONCE on first boot — provisions leadkart_app +
+      # leadkart_test roles per the 3-roles doctrine in multi-tenancy.md.
+      # Migrations rely on these roles existing.
+      - ./postgres/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U leadkart -d leadkart"]
       interval: 5s
@@ -38,6 +51,65 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
+
+  # ---- Migration runner (one-shot) ------------------------------------------
+  # Profile-gated — runs only when --profile full is passed. Builds the migrate
+  # target locally; in prod compose the same image is pulled from GHCR.
+  # Exits after applying pending migrations; api waits via depends_on.
+  migrate:
+    profiles: [full]
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      target: migrate
+    container_name: leadkart-migrate
+    environment:
+      DATABASE_URL: "postgres://leadkart:leadkart_dev@postgres:5432/leadkart?sslmode=disable"
+    command: ["up"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  # ---- API + outbox forwarder ----------------------------------------------
+  # Profile-gated; depends on migrate completing successfully so RLS-enabled
+  # schemas exist before the leadkart_app role tries to query them.
+  # The api binary's `-healthcheck` flag is what the Dockerfile HEALTHCHECK
+  # invokes — same probe wired here defensively for compose-level startup
+  # gating.
+  api:
+    profiles: [full]
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      target: api
+    container_name: leadkart-api
+    ports:
+      - "8080:8080"   # public API
+      - "9090:9090"   # admin (probes + pprof)
+    environment:
+      LEADKART_POSTGRES__DSN: "postgres://leadkart:leadkart_dev@postgres:5432/leadkart?sslmode=disable"
+      LEADKART_REDIS__ADDR: "redis:6379"
+      LEADKART_LISTEN__API: ":8080"
+      LEADKART_LISTEN__ADMIN: ":9090"
+      LEADKART_JWT__KEY_ID: "k1-dev"
+      # Dev-only signing key — production compose injects from secrets store.
+      # >32 bytes per JwtOptions validator floor.
+      LEADKART_JWT__SIGNING_KEY: "dev-only-do-not-ship-this-32byte-secret-x"
+    healthcheck:
+      test: ["CMD", "/api", "-healthcheck"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
 
 volumes:
   leadkart_pg_data:
