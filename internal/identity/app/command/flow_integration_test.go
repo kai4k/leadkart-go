@@ -42,6 +42,7 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/app/argon2"
 	"github.com/leadkart/leadkart-go/internal/identity/app/command"
 	"github.com/leadkart/leadkart-go/internal/identity/app/jwt"
+	"github.com/leadkart/leadkart-go/internal/identity/app/permissions"
 	"github.com/leadkart/leadkart-go/internal/identity/app/service"
 	"github.com/leadkart/leadkart-go/internal/platform/pg"
 )
@@ -75,9 +76,10 @@ func newWiredApp(t *testing.T) (*pgxpool.Pool, command.RegisterTenantHandler, co
 	}
 
 	onboarding := service.NewTenantOnboardingService(tx, tenants, persons, memberships, roles)
+	permResolver := permissions.NewResolver(memberships, roles)
 	register := command.NewRegisterTenantHandler(onboarding)
-	login := command.NewLoginHandler(persons, memberships, families, tenants, issuer, now, refreshTTL, dummyHash)
-	refresh := command.NewRefreshHandler(families, persons, memberships, tenants, issuer, now, refreshTTL)
+	login := command.NewLoginHandler(persons, memberships, families, tenants, permResolver, issuer, now, refreshTTL, dummyHash)
+	refresh := command.NewRefreshHandler(families, persons, memberships, tenants, permResolver, issuer, now, refreshTTL)
 	logout := command.NewLogoutHandler(families)
 
 	return pool, register, login, refresh, logout

@@ -93,6 +93,49 @@ func (r *Resolver) ResolveForLoaded(
 	return m.EffectivePermissions(roles), nil
 }
 
+// AuthClaims is the bundled output of [Resolver.ResolveAuth] — the two
+// values JWT-issuance paths need together: the effective permission set
+// + the SuperUser flag (true iff any of the Membership's RoleAssignments
+// references a Role with `IsSuperAdmin == true`).
+//
+// Loading the Roles once + folding both computations is cheaper than the
+// caller invoking Resolve + a parallel "is super-admin?" query.
+type AuthClaims struct {
+	Permissions []*permission.Permission
+	IsSuperUser bool
+}
+
+// ResolveAuth computes [AuthClaims] for the supplied loaded Membership.
+// Used by Login + Refresh handlers at JWT issuance — they already hold
+// the Membership aggregate and don't need a second Repository round-trip.
+//
+// IsSuperUser drives the JWT `is_super_user` claim per `multi-tenancy.md`
+// "SuperUser god-mode" — the runtime authorization-check short-circuit.
+// Computed once at issuance; never re-checked per request.
+func (r *Resolver) ResolveAuth(
+	ctx context.Context,
+	m *membership.Membership,
+) (AuthClaims, error) {
+	if m == nil {
+		return AuthClaims{}, fmt.Errorf("permissions: membership required")
+	}
+	roles, err := r.loadRolesForMembership(ctx, m.RoleAssignments())
+	if err != nil {
+		return AuthClaims{}, err
+	}
+	isSuper := false
+	for _, rl := range roles {
+		if rl.IsSuperAdmin() {
+			isSuper = true
+			break
+		}
+	}
+	return AuthClaims{
+		Permissions: m.EffectivePermissions(roles),
+		IsSuperUser: isSuper,
+	}, nil
+}
+
 func (r *Resolver) loadRolesForMembership(
 	ctx context.Context,
 	ids []role.ID,

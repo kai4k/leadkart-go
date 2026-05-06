@@ -4,14 +4,17 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/leadkart/leadkart-go/internal/common/email"
 	"github.com/leadkart/leadkart-go/internal/common/ids"
 	"github.com/leadkart/leadkart-go/internal/identity/app/argon2"
 	"github.com/leadkart/leadkart-go/internal/identity/app/jwt"
+	"github.com/leadkart/leadkart-go/internal/identity/app/permissions"
 	"github.com/leadkart/leadkart-go/internal/identity/app/refreshmint"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/permission"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/refreshtoken"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
@@ -61,6 +64,7 @@ type LoginHandler struct {
 	memberships membership.Repository
 	families    refreshtoken.Repository
 	tenants     tenant.Repository
+	resolver    *permissions.Resolver
 	jwt         *jwt.Issuer
 	now         func() time.Time
 	refreshTTL  time.Duration
@@ -82,6 +86,7 @@ func NewLoginHandler(
 	memberships membership.Repository,
 	families refreshtoken.Repository,
 	tenants tenant.Repository,
+	resolver *permissions.Resolver,
 	jwtIssuer *jwt.Issuer,
 	now func() time.Time,
 	refreshTTL time.Duration,
@@ -95,6 +100,7 @@ func NewLoginHandler(
 		memberships: memberships,
 		families:    families,
 		tenants:     tenants,
+		resolver:    resolver,
 		jwt:         jwtIssuer,
 		now:         now,
 		refreshTTL:  refreshTTL,
@@ -160,16 +166,29 @@ func (h LoginHandler) Handle(ctx context.Context, cmd LoginCommand) (LoginResult
 		return LoginResult{}, fmt.Errorf("login: persist family: %w", err)
 	}
 
-	// 7. Issue JWT — embed PersonId as `sub`, per-Membership claims.
+	// 7. Resolve effective permissions + SuperUser flag for the Membership.
+	//
+	//    IsPlatform stays false in v0.2 — Platform tenant ships with the
+	//    v0.3 Platform module per CLAUDE.md roadmap. SuperUser doesn't
+	//    require Platform-tenant membership (per multi-tenancy.md it's
+	//    "Membership in Platform tenant + SuperAdmin role"); the role
+	//    itself is the load-bearing flag, and IsSuperUser drives the
+	//    runtime authorization short-circuit.
+	authClaims, err := h.resolver.ResolveAuth(ctx, m)
+	if err != nil {
+		return LoginResult{}, fmt.Errorf("login: resolve permissions: %w", err)
+	}
+
+	// 8. Issue JWT — embed PersonId as `sub`, per-Membership claims.
 	access, err := h.jwt.Issue(jwt.IssueArgs{
 		PersonID:      p.ID().String(),
 		TenantID:      tn.ID().String(),
 		TenantSlug:    tn.Slug().String(),
 		MembershipID:  m.ID().String(),
 		SecurityStamp: p.SecurityStamp().String(),
-		IsPlatform:    false, // TBD: set from Membership-in-Platform-tenant lookup
-		IsSuperUser:   false, // TBD: set from SuperAdmin role on the Membership
-		Permissions:   nil,   // TBD: compute effective permissions from RoleAssignments
+		IsPlatform:    false, // Platform tenant lands in v0.3
+		IsSuperUser:   authClaims.IsSuperUser,
+		Permissions:   permissionNames(authClaims.Permissions),
 	})
 	if err != nil {
 		return LoginResult{}, fmt.Errorf("login: issue jwt: %w", err)
@@ -183,6 +202,25 @@ func (h LoginHandler) Handle(ctx context.Context, cmd LoginCommand) (LoginResult
 		TenantID:             tn.ID(),
 		MembershipID:         m.ID(),
 	}, nil
+}
+
+// permissionNames flattens a [permission.Permission] slice to wire-stable
+// name strings for the JWT `permission` claim. Order is stabilised by
+// sorting so two logins with the same effective set produce byte-
+// identical claim arrays (cache-friendly + diff-friendly in audit logs).
+func permissionNames(perms []*permission.Permission) []string {
+	if len(perms) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(perms))
+	for _, p := range perms {
+		if p == nil {
+			continue
+		}
+		out = append(out, p.Name())
+	}
+	slices.Sort(out)
+	return out
 }
 
 // resolveAndVerify covers steps 1-3: lookup Person, verify password,

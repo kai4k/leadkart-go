@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/leadkart/leadkart-go/internal/identity/app/jwt"
+	"github.com/leadkart/leadkart-go/internal/identity/app/permissions"
 	"github.com/leadkart/leadkart-go/internal/identity/app/refreshmint"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
@@ -51,6 +52,7 @@ type RefreshHandler struct {
 	persons     person.Repository
 	memberships membership.Repository
 	tenants     tenant.Repository
+	resolver    *permissions.Resolver
 	jwt         *jwt.Issuer
 	now         func() time.Time
 	refreshTTL  time.Duration
@@ -62,6 +64,7 @@ func NewRefreshHandler(
 	persons person.Repository,
 	memberships membership.Repository,
 	tenants tenant.Repository,
+	resolver *permissions.Resolver,
 	jwtIssuer *jwt.Issuer,
 	now func() time.Time,
 	refreshTTL time.Duration,
@@ -74,6 +77,7 @@ func NewRefreshHandler(
 		persons:     persons,
 		memberships: memberships,
 		tenants:     tenants,
+		resolver:    resolver,
 		jwt:         jwtIssuer,
 		now:         now,
 		refreshTTL:  refreshTTL,
@@ -182,13 +186,25 @@ func (h RefreshHandler) Handle(ctx context.Context, cmd RefreshCommand) (Refresh
 		return RefreshResult{}, ErrRefreshRejected
 	}
 
-	// 6. Issue new JWT.
+	// 6. Resolve effective permissions + SuperUser flag — same shape
+	//    as Login. Refresh re-emits the latest claims so a permission
+	//    grant/revoke since the previous JWT propagates within
+	//    AccessTokenTTL of the next refresh.
+	authClaims, err := h.resolver.ResolveAuth(ctx, m)
+	if err != nil {
+		return RefreshResult{}, fmt.Errorf("refresh: resolve permissions: %w", err)
+	}
+
+	// 7. Issue new JWT.
 	access, err := h.jwt.Issue(jwt.IssueArgs{
 		PersonID:      p.ID().String(),
 		TenantID:      tn.ID().String(),
 		TenantSlug:    tn.Slug().String(),
 		MembershipID:  m.ID().String(),
 		SecurityStamp: p.SecurityStamp().String(),
+		IsPlatform:    false, // Platform tenant lands in v0.3
+		IsSuperUser:   authClaims.IsSuperUser,
+		Permissions:   permissionNames(authClaims.Permissions),
 	})
 	if err != nil {
 		return RefreshResult{}, fmt.Errorf("refresh: issue jwt: %w", err)

@@ -284,3 +284,86 @@ func TestResolveForLoaded_RejectsNil(t *testing.T) {
 		t.Fatal("ResolveForLoaded(nil) expected error")
 	}
 }
+
+// ----- ResolveAuth (Task 22 — JWT claim wiring) -----------------------------
+
+// newSuperAdminRole constructs a role with isSuperAdmin=true.
+// Mirror of role.New's constructor — only platform-tenant seed code
+// minted these; the test fakes that out to assert the flag flows
+// through ResolveAuth.
+func newSuperAdminRole(t *testing.T, tid tenant.ID) *role.Role {
+	t.Helper()
+	r, err := role.New(
+		role.ID(ids.NewV7().String()), tid,
+		role.SystemRoles.Platform.SuperAdmin,
+		true,                       // IsSystemDefault
+		role.HierarchyLevelMin,     // top of tree
+		true,                       // IsSuperAdmin — the load-bearing flag
+	)
+	if err != nil {
+		t.Fatalf("role.New super-admin: %v", err)
+	}
+	return r
+}
+
+func TestResolveAuth_NoSuperRole_IsSuperUserFalse(t *testing.T) {
+	t.Parallel()
+	tid := freshTenantID(t)
+	m := newMembership(t, tid)
+	view := permission.FromConstant(permission.IdentityPermissions.Roles.View)
+	r1 := newRoleWith(t, tid, "Viewer", view)
+	if err := m.AssignRole(r1.ID()); err != nil {
+		t.Fatalf("AssignRole: %v", err)
+	}
+
+	mems := &fakeMembershipRepo{memberships: map[membership.ID]*membership.Membership{m.ID(): m}}
+	roles := &fakeRoleRepo{roles: map[role.ID]*role.Role{r1.ID(): r1}}
+	res := permissions.NewResolver(mems, roles)
+
+	got, err := res.ResolveAuth(t.Context(), m)
+	if err != nil {
+		t.Fatalf("ResolveAuth: %v", err)
+	}
+	if got.IsSuperUser {
+		t.Fatalf("IsSuperUser: got true, want false (no super-admin role assigned)")
+	}
+	if !slices.Equal(names(got.Permissions), []string{permission.IdentityPermissions.Roles.View}) {
+		t.Fatalf("permissions: got %v want [Roles.View]", names(got.Permissions))
+	}
+}
+
+func TestResolveAuth_AnySuperRoleAssigned_IsSuperUserTrue(t *testing.T) {
+	t.Parallel()
+	tid := freshTenantID(t)
+	m := newMembership(t, tid)
+	regular := newRoleWith(t, tid, "Sales",
+		permission.FromConstant(permission.IdentityPermissions.Roles.View))
+	super := newSuperAdminRole(t, tid)
+	if err := m.AssignRole(regular.ID()); err != nil {
+		t.Fatalf("AssignRole regular: %v", err)
+	}
+	if err := m.AssignRole(super.ID()); err != nil {
+		t.Fatalf("AssignRole super: %v", err)
+	}
+
+	mems := &fakeMembershipRepo{memberships: map[membership.ID]*membership.Membership{m.ID(): m}}
+	roles := &fakeRoleRepo{roles: map[role.ID]*role.Role{regular.ID(): regular, super.ID(): super}}
+	res := permissions.NewResolver(mems, roles)
+
+	got, err := res.ResolveAuth(t.Context(), m)
+	if err != nil {
+		t.Fatalf("ResolveAuth: %v", err)
+	}
+	if !got.IsSuperUser {
+		t.Fatalf("IsSuperUser: got false, want true (super-admin role assigned)")
+	}
+}
+
+func TestResolveAuth_RejectsNil(t *testing.T) {
+	t.Parallel()
+	res := permissions.NewResolver(&fakeMembershipRepo{}, &fakeRoleRepo{})
+	_, err := res.ResolveAuth(t.Context(), nil)
+	if err == nil {
+		t.Fatal("ResolveAuth(nil) expected error")
+	}
+}
