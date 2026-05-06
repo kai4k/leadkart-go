@@ -12,7 +12,8 @@ import (
 )
 
 const getActiveMembershipByPersonAndTenant = `-- name: GetActiveMembershipByPersonAndTenant :one
-SELECT id, person_id, tenant_id, status, joined_at, left_at
+SELECT id, person_id, tenant_id, status, joined_at, left_at,
+       designation, department, status_message, reports_to
 FROM   identity.tenant_memberships
 WHERE  person_id = $1
   AND  tenant_id = $2
@@ -34,12 +35,17 @@ func (q *Queries) GetActiveMembershipByPersonAndTenant(ctx context.Context, arg 
 		&i.Status,
 		&i.JoinedAt,
 		&i.LeftAt,
+		&i.Designation,
+		&i.Department,
+		&i.StatusMessage,
+		&i.ReportsTo,
 	)
 	return i, err
 }
 
 const getMembershipByID = `-- name: GetMembershipByID :one
-SELECT id, person_id, tenant_id, status, joined_at, left_at
+SELECT id, person_id, tenant_id, status, joined_at, left_at,
+       designation, department, status_message, reports_to
 FROM   identity.tenant_memberships
 WHERE  id = $1
 `
@@ -54,6 +60,10 @@ func (q *Queries) GetMembershipByID(ctx context.Context, id pgtype.UUID) (Identi
 		&i.Status,
 		&i.JoinedAt,
 		&i.LeftAt,
+		&i.Designation,
+		&i.Department,
+		&i.StatusMessage,
+		&i.ReportsTo,
 	)
 	return i, err
 }
@@ -89,7 +99,8 @@ func (q *Queries) InsertMembership(ctx context.Context, arg InsertMembershipPara
 }
 
 const listMembershipsForPerson = `-- name: ListMembershipsForPerson :many
-SELECT id, person_id, tenant_id, status, joined_at, left_at
+SELECT id, person_id, tenant_id, status, joined_at, left_at,
+       designation, department, status_message, reports_to
 FROM   identity.tenant_memberships
 WHERE  person_id = $1
 ORDER  BY joined_at
@@ -114,6 +125,10 @@ func (q *Queries) ListMembershipsForPerson(ctx context.Context, personID pgtype.
 			&i.Status,
 			&i.JoinedAt,
 			&i.LeftAt,
+			&i.Designation,
+			&i.Department,
+			&i.StatusMessage,
+			&i.ReportsTo,
 		); err != nil {
 			return nil, err
 		}

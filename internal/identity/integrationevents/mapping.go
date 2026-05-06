@@ -8,6 +8,7 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/refreshtoken"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/role"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
 
@@ -134,6 +135,19 @@ func FromDomainEvent(d any) (Event, error) {
 			TenantIDClaim: mustParseUUID(e.TenantID.String()),
 			Reason:        e.Reason,
 			OccurredAtUTC: e.At.UTC(),
+		}, nil
+
+	// ----- Role -------------------------------------------------------
+
+	case role.CreatedEvent:
+		return RoleCreatedV1{
+			RoleID:          mustParseUUID(e.RoleID.String()),
+			TenantIDClaim:   mustParseUUID(e.TenantID.String()),
+			Name:            e.Name,
+			IsSystemDefault: e.IsSystemDefault,
+			IsSuperAdmin:    e.IsSuperAdmin,
+			HierarchyLevel:  e.HierarchyLevel,
+			OccurredAtUTC:   e.At.UTC(),
 		}, nil
 	}
 

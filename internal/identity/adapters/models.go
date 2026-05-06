@@ -8,11 +8,44 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+// X-Command-Id replay store per Stripe Idempotency-Key canon. 24h default TTL; background purge.
+type AppCommandIdempotency struct {
+	CommandID      string
+	BodyHash       string
+	ResponseStatus int32
+	ResponseBody   []byte
+	CreatedAt      pgtype.Timestamptz
+	ExpiresAt      pgtype.Timestamptz
+}
+
+// Auto-written per command via Watermill AuditLoggingMiddleware. 7-year retention; daily purge.
+type BuildingblocksAuditLogEntry struct {
+	ID            pgtype.UUID
+	Action        string
+	UserID        pgtype.UUID
+	TenantID      pgtype.UUID
+	CorrelationID pgtype.UUID
+	OccurredAtUtc pgtype.Timestamptz
+	DurationMs    int64
+	Succeeded     bool
+	FailureReason *string
+	Payload       []byte
+}
+
 // Cross-tenant email→tenant index for login. NOT RLS-scoped (intentional — login flow predates tenant context). Maintained via Watermill events.
 type IdentityAuthRouting struct {
 	Email          string
 	PersonID       pgtype.UUID
 	ActiveTenantID pgtype.UUID
+	UpdatedAt      pgtype.Timestamptz
+}
+
+// Per-Membership permission overlay. Effective set = role union ∪ granted \ revoked.
+type IdentityMembershipPermissionOverride struct {
+	MembershipID   pgtype.UUID
+	PermissionName string
+	Kind           string
+	TenantID       pgtype.UUID
 	UpdatedAt      pgtype.Timestamptz
 }
 
@@ -42,6 +75,13 @@ type IdentityPerson struct {
 	AnonymisedAt  pgtype.Timestamptz
 }
 
+// Per-handler inbox dedup. (message_id, handler_name) PK guarantees at-most-once-per-handler delivery.
+type IdentityProcessedMessage struct {
+	MessageID      pgtype.UUID
+	HandlerName    string
+	ProcessedAtUtc pgtype.Timestamptz
+}
+
 // Individual tokens within a family. Hash-only storage; plaintext NEVER persisted. RFC 9700 reuse detection in domain layer.
 type IdentityRefreshToken struct {
 	ID           pgtype.UUID
@@ -66,6 +106,29 @@ type IdentityRefreshTokenFamily struct {
 	RevokeReason *string
 }
 
+// Per-tenant Role catalogue. Tenant-scoped, FORCE RLS. SuperAdmin (is_super_admin=true) is seeded once in the platform tenant per multi-tenancy.md "SuperUser god-mode".
+type IdentityRole struct {
+	ID              pgtype.UUID
+	TenantID        pgtype.UUID
+	Name            string
+	IsSystemDefault bool
+	IsSuperAdmin    bool
+	HierarchyLevel  int32
+	Permissions     []byte
+	CreatedAt       pgtype.Timestamptz
+	IsDeleted       bool
+	DeletedAt       pgtype.Timestamptz
+	DeletedBy       *string
+}
+
+// Membership ↔ Role junction with denormalised tenant_id. Composite FK ensures no cross-tenant role assignment.
+type IdentityRoleAssignment struct {
+	MembershipID pgtype.UUID
+	RoleID       pgtype.UUID
+	TenantID     pgtype.UUID
+	AssignedAt   pgtype.Timestamptz
+}
+
 // Tenant aggregate root. Each row IS a tenant; not tenant-scoped (no RLS).
 type IdentityTenant struct {
 	ID          pgtype.UUID
@@ -81,10 +144,14 @@ type IdentityTenant struct {
 
 // Per-tenant junction (Person ↔ Tenant). Tenant-scoped, FORCE RLS. Single-Active-Membership invariant via partial unique index.
 type IdentityTenantMembership struct {
-	ID       pgtype.UUID
-	PersonID pgtype.UUID
-	TenantID pgtype.UUID
-	Status   string
-	JoinedAt pgtype.Timestamptz
-	LeftAt   pgtype.Timestamptz
+	ID            pgtype.UUID
+	PersonID      pgtype.UUID
+	TenantID      pgtype.UUID
+	Status        string
+	JoinedAt      pgtype.Timestamptz
+	LeftAt        pgtype.Timestamptz
+	Designation   string
+	Department    string
+	StatusMessage string
+	ReportsTo     pgtype.UUID
 }

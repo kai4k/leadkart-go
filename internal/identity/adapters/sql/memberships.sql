@@ -9,12 +9,14 @@ INSERT INTO identity.tenant_memberships (
 ) VALUES ($1, $2, $3, $4, $5);
 
 -- name: GetMembershipByID :one
-SELECT id, person_id, tenant_id, status, joined_at, left_at
+SELECT id, person_id, tenant_id, status, joined_at, left_at,
+       designation, department, status_message, reports_to
 FROM   identity.tenant_memberships
 WHERE  id = $1;
 
 -- name: GetActiveMembershipByPersonAndTenant :one
-SELECT id, person_id, tenant_id, status, joined_at, left_at
+SELECT id, person_id, tenant_id, status, joined_at, left_at,
+       designation, department, status_message, reports_to
 FROM   identity.tenant_memberships
 WHERE  person_id = $1
   AND  tenant_id = $2
@@ -24,7 +26,8 @@ WHERE  person_id = $1
 -- Cross-tenant list of a Person's memberships. RLS filters to current
 -- tenant unless platform-bypass is set; cross-tenant enumeration runs
 -- under platform context (anonymise / global-suspend cascade flows).
-SELECT id, person_id, tenant_id, status, joined_at, left_at
+SELECT id, person_id, tenant_id, status, joined_at, left_at,
+       designation, department, status_message, reports_to
 FROM   identity.tenant_memberships
 WHERE  person_id = $1
 ORDER  BY joined_at;
