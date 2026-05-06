@@ -235,8 +235,8 @@ func parseTenantID(id tenant.ID) (uuid.UUID, error) {
 }
 
 // isUniqueViolation reports whether err wraps a Postgres unique-constraint
-// violation (SQLSTATE 23505).
+// violation (SQLSTATE [pg.SQLStateUniqueViolation]).
 func isUniqueViolation(err error) bool {
 	var pgErr *pgconn.PgError
-	return errors.As(err, &pgErr) && pgErr.Code == "23505"
+	return errors.As(err, &pgErr) && pgErr.Code == pg.SQLStateUniqueViolation
 }

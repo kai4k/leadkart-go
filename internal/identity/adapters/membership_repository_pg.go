@@ -326,6 +326,12 @@ func parseTenantIDForMembership(id tenant.ID) (uuid.UUID, error) {
 	return parsed, nil
 }
 
+// constraintMembershipsPersonActive is the partial-unique-index name
+// from `migrations/20260505000002_identity_init.sql` enforcing the
+// single-Active-Membership invariant per `multi-tenancy.md`. Renaming
+// in the migration MUST be paired with updating this constant.
+const constraintMembershipsPersonActive = "uq_memberships_person_active"
+
 // isMembershipActiveCollision reports whether err is the partial-unique
 // index violation specifically (single-Active-Membership invariant).
 // Other unique violations (e.g. (person_id, tenant_id) duplicate) bubble
@@ -335,8 +341,8 @@ func isMembershipActiveCollision(err error) bool {
 	if !errors.As(err, &pgErr) {
 		return false
 	}
-	if pgErr.Code != "23505" {
+	if pgErr.Code != pg.SQLStateUniqueViolation {
 		return false
 	}
-	return pgErr.ConstraintName == "uq_memberships_person_active"
+	return pgErr.ConstraintName == constraintMembershipsPersonActive
 }
