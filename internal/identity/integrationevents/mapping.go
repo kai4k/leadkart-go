@@ -149,6 +149,39 @@ func FromDomainEvent(d any) (Event, error) {
 			HierarchyLevel:  e.HierarchyLevel,
 			OccurredAtUTC:   e.At.UTC(),
 		}, nil
+
+	case role.RenamedEvent:
+		return RoleRenamedV1{
+			RoleID:        mustParseUUID(e.RoleID.String()),
+			TenantIDClaim: mustParseUUID(e.TenantID.String()),
+			OldName:       e.OldName,
+			NewName:       e.NewName,
+			OccurredAtUTC: e.At.UTC(),
+		}, nil
+
+	case role.PermissionGrantedEvent:
+		return RolePermissionGrantedV1{
+			RoleID:        mustParseUUID(e.RoleID.String()),
+			TenantIDClaim: mustParseUUID(e.TenantID.String()),
+			Permission:    e.Permission,
+			OccurredAtUTC: e.At.UTC(),
+		}, nil
+
+	case role.PermissionRevokedEvent:
+		return RolePermissionRevokedV1{
+			RoleID:        mustParseUUID(e.RoleID.String()),
+			TenantIDClaim: mustParseUUID(e.TenantID.String()),
+			Permission:    e.Permission,
+			OccurredAtUTC: e.At.UTC(),
+		}, nil
+
+	case role.DeletedEvent:
+		return RoleDeletedV1{
+			RoleID:        mustParseUUID(e.RoleID.String()),
+			TenantIDClaim: mustParseUUID(e.TenantID.String()),
+			DeletedBy:     e.DeletedBy,
+			OccurredAtUTC: e.At.UTC(),
+		}, nil
 	}
 
 	return nil, fmt.Errorf("integrationevents: %w: %T", ErrUnknownDomainEvent, d)

@@ -210,3 +210,204 @@ func TestRoleRepository_GetByIDs_FiltersOutSoftDeletedAndCrossTenant(t *testing.
 		t.Fatalf("GetByIDs nil: got %d want 0", len(got))
 	}
 }
+
+// ----- Task 17 — UpdateByID (TDL Sep 2024 UpdateFn) ------------------------
+
+func TestRoleRepository_UpdateByID_Rename_Persists(t *testing.T) {
+	pool := repoFixture(t)
+	tenants := adapters.NewTenantRepository(pool, pg.NewTransactor(pool))
+	roles := adapters.NewRoleRepository(pool, pg.NewTransactor(pool))
+
+	tn := seedTenant(t, tenants)
+	ctx := tenancy.WithID(t.Context(), tenancy.ID(tn.ID().String()))
+	r := newRole(t, tn.ID(), "Sales")
+	if err := roles.Add(ctx, r); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+
+	err := roles.UpdateByID(ctx, r.ID(), func(loaded *role.Role) (bool, error) {
+		return true, loaded.Rename("Senior Sales")
+	})
+	if err != nil {
+		t.Fatalf("UpdateByID: %v", err)
+	}
+
+	got, err := roles.GetByID(ctx, r.ID())
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if got.Name() != "Senior Sales" {
+		t.Fatalf("name: got %q want Senior Sales", got.Name())
+	}
+}
+
+func TestRoleRepository_UpdateByID_GrantPermission_Persists(t *testing.T) {
+	pool := repoFixture(t)
+	tenants := adapters.NewTenantRepository(pool, pg.NewTransactor(pool))
+	roles := adapters.NewRoleRepository(pool, pg.NewTransactor(pool))
+
+	tn := seedTenant(t, tenants)
+	ctx := tenancy.WithID(t.Context(), tenancy.ID(tn.ID().String()))
+	r := newRole(t, tn.ID(), "Sales")
+	if err := roles.Add(ctx, r); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+
+	rolesAssign := permission.FromConstant(permission.IdentityPermissions.Roles.Assign)
+	err := roles.UpdateByID(ctx, r.ID(), func(loaded *role.Role) (bool, error) {
+		return true, loaded.GrantPermission(rolesAssign)
+	})
+	if err != nil {
+		t.Fatalf("UpdateByID grant: %v", err)
+	}
+
+	got, err := roles.GetByID(ctx, r.ID())
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if len(got.Permissions()) != 2 {
+		t.Fatalf("permissions: got %d want 2 (Roles.View + Roles.Assign)", len(got.Permissions()))
+	}
+	// Order isn't load-bearing — assert set membership.
+	hasView := false
+	hasAssign := false
+	for _, p := range got.Permissions() {
+		switch p.Name() {
+		case permission.IdentityPermissions.Roles.View:
+			hasView = true
+		case permission.IdentityPermissions.Roles.Assign:
+			hasAssign = true
+		}
+	}
+	if !hasView || !hasAssign {
+		t.Fatalf("permissions set: hasView=%v hasAssign=%v", hasView, hasAssign)
+	}
+}
+
+func TestRoleRepository_UpdateByID_Delete_PersistsSoftDeleteAndHidesFromGetByID(t *testing.T) {
+	pool := repoFixture(t)
+	tenants := adapters.NewTenantRepository(pool, pg.NewTransactor(pool))
+	roles := adapters.NewRoleRepository(pool, pg.NewTransactor(pool))
+
+	tn := seedTenant(t, tenants)
+	ctx := tenancy.WithID(t.Context(), tenancy.ID(tn.ID().String()))
+	r := newRole(t, tn.ID(), "Sales")
+	if err := roles.Add(ctx, r); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+
+	err := roles.UpdateByID(ctx, r.ID(), func(loaded *role.Role) (bool, error) {
+		return true, loaded.Delete("admin@example.test")
+	})
+	if err != nil {
+		t.Fatalf("UpdateByID delete: %v", err)
+	}
+
+	// Live read filters soft-deleted rows.
+	_, err = roles.GetByID(ctx, r.ID())
+	if !errors.Is(err, role.ErrNotFound) {
+		t.Fatalf("GetByID after delete: got %v want ErrNotFound", err)
+	}
+}
+
+func TestRoleRepository_UpdateByID_ReturnsNotFound_WhenAbsent(t *testing.T) {
+	pool := repoFixture(t)
+	roles := adapters.NewRoleRepository(pool, pg.NewTransactor(pool))
+
+	err := roles.UpdateByID(t.Context(), role.ID(ids.NewV7().String()),
+		func(*role.Role) (bool, error) { return true, nil })
+	if !errors.Is(err, role.ErrNotFound) {
+		t.Fatalf("UpdateByID absent: got %v want ErrNotFound", err)
+	}
+}
+
+func TestRoleRepository_UpdateByID_NoOp_WhenUpdateFnReturnsFalse(t *testing.T) {
+	pool := repoFixture(t)
+	tenants := adapters.NewTenantRepository(pool, pg.NewTransactor(pool))
+	roles := adapters.NewRoleRepository(pool, pg.NewTransactor(pool))
+
+	tn := seedTenant(t, tenants)
+	ctx := tenancy.WithID(t.Context(), tenancy.ID(tn.ID().String()))
+	r := newRole(t, tn.ID(), "Sales")
+	if err := roles.Add(ctx, r); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+
+	// Mutate the loaded aggregate but instruct the repo NOT to persist.
+	err := roles.UpdateByID(ctx, r.ID(), func(loaded *role.Role) (bool, error) {
+		_ = loaded.Rename("ShouldNotStick")
+		return false, nil
+	})
+	if err != nil {
+		t.Fatalf("UpdateByID no-op: %v", err)
+	}
+
+	got, err := roles.GetByID(ctx, r.ID())
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if got.Name() != "Sales" {
+		t.Fatalf("name after no-op: got %q want Sales", got.Name())
+	}
+}
+
+func TestRoleRepository_UpdateByID_Rollback_WhenUpdateFnErrors(t *testing.T) {
+	pool := repoFixture(t)
+	tenants := adapters.NewTenantRepository(pool, pg.NewTransactor(pool))
+	roles := adapters.NewRoleRepository(pool, pg.NewTransactor(pool))
+
+	tn := seedTenant(t, tenants)
+	ctx := tenancy.WithID(t.Context(), tenancy.ID(tn.ID().String()))
+	r := newRole(t, tn.ID(), "Sales")
+	if err := roles.Add(ctx, r); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+
+	sentinel := errors.New("update intentionally failed")
+	err := roles.UpdateByID(ctx, r.ID(), func(loaded *role.Role) (bool, error) {
+		_ = loaded.Rename("ShouldRollBack")
+		return true, sentinel
+	})
+	if !errors.Is(err, sentinel) {
+		t.Fatalf("UpdateByID error: got %v want sentinel", err)
+	}
+
+	got, err := roles.GetByID(ctx, r.ID())
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if got.Name() != "Sales" {
+		t.Fatalf("name after rollback: got %q want Sales", got.Name())
+	}
+}
+
+func TestRoleRepository_UpdateByID_RLS_RefusesCrossTenantUpdate(t *testing.T) {
+	pool := repoFixture(t)
+	tenants := adapters.NewTenantRepository(pool, pg.NewTransactor(pool))
+	roles := adapters.NewRoleRepository(pool, pg.NewTransactor(pool))
+
+	tnA := seedTenant(t, tenants)
+	tnB := seedTenant(t, tenants)
+	ctxA := tenancy.WithID(t.Context(), tenancy.ID(tnA.ID().String()))
+	ctxB := tenancy.WithID(t.Context(), tenancy.ID(tnB.ID().String()))
+
+	rA := newRole(t, tnA.ID(), "Sales")
+	if err := roles.Add(ctxA, rA); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+
+	// Tenant B's context cannot load Tenant A's role — RLS hides it,
+	// so UpdateByID surfaces ErrNotFound (the load step fails before
+	// updateFn ever runs).
+	called := false
+	err := roles.UpdateByID(ctxB, rA.ID(), func(*role.Role) (bool, error) {
+		called = true
+		return true, nil
+	})
+	if !errors.Is(err, role.ErrNotFound) {
+		t.Fatalf("UpdateByID cross-tenant: got %v want ErrNotFound", err)
+	}
+	if called {
+		t.Fatalf("updateFn ran under wrong tenant context — RLS leak")
+	}
+}

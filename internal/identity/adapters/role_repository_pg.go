@@ -184,15 +184,40 @@ func (r *RoleRepository) ListByTenant(
 	return out, nil
 }
 
-// UpdateByID satisfies [role.Repository] — TDL Sep 2024 UpdateFn pattern.
-// Wired in Task 17; Task 16 returns a clear stub error so partial
-// integration tests that exercise it fail loudly rather than silently.
+// UpdateByID satisfies [role.Repository] — TDL Sep 2024 UpdateFn pattern:
+// Load → updateFn → persist (if shouldPersist) → drain events. All in
+// one tenant-scoped transaction. RLS naturally refuses cross-tenant
+// loads — updateFn never runs under a foreign tenant context.
+//
+// Persistence branches on aggregate state:
+//   - role.IsDeleted() → SoftDeleteRole (sets is_deleted/deleted_at/deleted_by)
+//   - otherwise        → UpdateRole (name, hierarchy_level, permissions JSONB)
+//
+// is_system_default + is_super_admin + tenant_id + created_at are
+// aggregate-immutable; the SQL doesn't write them under any branch.
 func (r *RoleRepository) UpdateByID(
-	_ context.Context,
-	_ role.ID,
-	_ func(*role.Role) (bool, error),
+	ctx context.Context,
+	id role.ID,
+	updateFn func(*role.Role) (bool, error),
 ) error {
-	return errors.New("role repo: UpdateByID lands in Phase 1 Task 17")
+	return r.tx.WithinTx(ctx, pg.TxScopeTenant, func(ctx context.Context, tx pgx.Tx) error {
+		q := r.q.WithTx(tx)
+		ro, err := loadRole(ctx, q, id)
+		if err != nil {
+			return err
+		}
+		shouldPersist, err := updateFn(ro)
+		if err != nil {
+			return err
+		}
+		if !shouldPersist {
+			return nil
+		}
+		if err := persistRoleState(ctx, q, ro); err != nil {
+			return err
+		}
+		return drainRoleEvents(ctx, tx, ro)
+	})
 }
 
 // ----- Helpers ---------------------------------------------------------------
@@ -244,6 +269,51 @@ func insertRoleRow(ctx context.Context, q *Queries, ro *role.Role) error {
 			return role.ErrNameTaken
 		}
 		return fmt.Errorf("role repo: insert: %w", err)
+	}
+	return nil
+}
+
+// persistRoleState writes the mutable Role state — name, hierarchy_level,
+// permissions OR soft-delete flags — under the aggregate's current
+// shape. Caller (UpdateByID) owns the tx + chose to persist.
+func persistRoleState(ctx context.Context, q *Queries, ro *role.Role) error {
+	rid, err := uuid.Parse(ro.ID().String())
+	if err != nil {
+		return fmt.Errorf("role repo: parse id %q: %w", ro.ID(), err)
+	}
+	if ro.IsDeleted() {
+		// Soft-delete branch — name + permissions stay as-is in the row;
+		// the AND NOT is_deleted predicate on every read filters it out.
+		var deletedBy *string
+		if by := ro.DeletedBy(); by != "" {
+			deletedBy = &by
+		}
+		err = q.SoftDeleteRole(ctx, SoftDeleteRoleParams{
+			ID:        pgUUID(rid),
+			DeletedAt: pgRequiredTimestamp(ro.DeletedAt()),
+			DeletedBy: deletedBy,
+		})
+		if err != nil {
+			return fmt.Errorf("role repo: soft-delete: %w", err)
+		}
+		return nil
+	}
+	permsJSON, err := encodePermissions(ro.Permissions())
+	if err != nil {
+		return err
+	}
+	err = q.UpdateRole(ctx, UpdateRoleParams{
+		ID:             pgUUID(rid),
+		Name:           ro.Name(),
+		HierarchyLevel: int32(ro.HierarchyLevel()),
+		Permissions:    permsJSON,
+	})
+	if err != nil {
+		if isRoleNameUniqueViolation(err) {
+			// Rename collided with another live role's name in the same tenant.
+			return role.ErrNameTaken
+		}
+		return fmt.Errorf("role repo: update: %w", err)
 	}
 	return nil
 }
