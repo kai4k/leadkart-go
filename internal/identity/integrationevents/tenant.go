@@ -91,6 +91,32 @@ func (TenantSuspendedV1) Topic() string { return "identity.tenant_suspended.v1" 
 // OccurredAt returns the domain timestamp.
 func (e TenantSuspendedV1) OccurredAt() time.Time { return e.OccurredAtUTC }
 
+// TenantStatutoryUpdatedV1 — tenant changed its declared Indian
+// statutory IDs (GST/PAN/DrugLicence). Subscribers (audit, search-
+// index reindex, compliance reporting) consume the OLD/NEW pair to
+// render diffs.
+//
+// Empty-string fields mean "not declared" — first-time declaration
+// has empty old_*; full clear has empty new_*.
+type TenantStatutoryUpdatedV1 struct {
+	platformMarker
+
+	TenantID         uuid.UUID `json:"tenant_id"`
+	OldGST           string    `json:"old_gst"`
+	OldPAN           string    `json:"old_pan"`
+	OldDrugLicence   string    `json:"old_drug_licence"`
+	NewGST           string    `json:"new_gst"`
+	NewPAN           string    `json:"new_pan"`
+	NewDrugLicence   string    `json:"new_drug_licence"`
+	OccurredAtUTC    time.Time `json:"occurred_at_utc"`
+}
+
+// Topic returns the canonical wire alias.
+func (TenantStatutoryUpdatedV1) Topic() string { return "identity.tenant_statutory_updated.v1" }
+
+// OccurredAt returns the domain timestamp.
+func (e TenantStatutoryUpdatedV1) OccurredAt() time.Time { return e.OccurredAtUTC }
+
 // TenantMarkedForDeletionV1 — operator entered the 30-day grace window
 // per `data-retention.md` "Tenant deletion saga". Subscribers MAY
 // block tenant ops immediately or wait for terminal TenantDeletedV1.
@@ -150,6 +176,7 @@ var (
 	_ Platform = TenantRegisteredV1{}
 	_ Platform = TenantActivatedV1{}
 	_ Platform = TenantProfileUpdatedV1{}
+	_ Platform = TenantStatutoryUpdatedV1{}
 	_ Platform = TenantSuspendedV1{}
 	_ Platform = TenantMarkedForDeletionV1{}
 	_ Platform = TenantRestoredV1{}
@@ -158,6 +185,7 @@ var (
 	_ = register(TenantRegisteredV1{})
 	_ = register(TenantActivatedV1{})
 	_ = register(TenantProfileUpdatedV1{})
+	_ = register(TenantStatutoryUpdatedV1{})
 	_ = register(TenantSuspendedV1{})
 	_ = register(TenantMarkedForDeletionV1{})
 	_ = register(TenantRestoredV1{})

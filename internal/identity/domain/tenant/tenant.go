@@ -48,19 +48,20 @@ const nameMaxLen = 200
 //   - AdminEmail is a validated [email.Address].
 //   - Status follows the documented state machine; transitions emit events.
 type Tenant struct {
-	id                    ID
-	slug                  slug.Slug
-	legalName             string
-	displayName           string
-	adminEmail            email.Address
-	status                Status
-	createdAt             time.Time
-	activatedAt           time.Time // zero until first Activate
-	suspendedAt           time.Time // zero until first Suspend; reset on subsequent Activate
-	deletionScheduledAt   time.Time // zero until MarkForDeletion; reset on RestoreFromDeletion
-	deletionReason        string    // populated by MarkForDeletion; cleared on Restore
-	hardDeletedAt         time.Time // zero until HardDelete; terminal
-	events                []Event
+	id                  ID
+	slug                slug.Slug
+	legalName           string
+	displayName         string
+	adminEmail          email.Address
+	status              Status
+	statutory           Statutory // optional Indian statutory IDs (GST/PAN/DrugLicence)
+	createdAt           time.Time
+	activatedAt         time.Time // zero until first Activate
+	suspendedAt         time.Time // zero until first Suspend; reset on subsequent Activate
+	deletionScheduledAt time.Time // zero until MarkForDeletion; reset on RestoreFromDeletion
+	deletionReason      string    // populated by MarkForDeletion; cleared on Restore
+	hardDeletedAt       time.Time // zero until HardDelete; terminal
+	events              []Event
 }
 
 // New constructs a brand-new tenant in [StatusPending].
@@ -124,6 +125,7 @@ type Snapshot struct {
 	DisplayName         string
 	AdminEmail          email.Address
 	Status              Status
+	Statutory           Statutory
 	CreatedAt           time.Time
 	ActivatedAt         time.Time
 	SuspendedAt         time.Time
@@ -146,6 +148,7 @@ func UnmarshalFromDB(s Snapshot) *Tenant {
 		displayName:         s.DisplayName,
 		adminEmail:          s.AdminEmail,
 		status:              s.Status,
+		statutory:           s.Statutory,
 		createdAt:           s.CreatedAt,
 		activatedAt:         s.ActivatedAt,
 		suspendedAt:         s.SuspendedAt,
@@ -196,6 +199,10 @@ func (t *Tenant) DeletionReason() string { return t.deletionReason }
 // HardDeletedAt returns the terminal hard-delete timestamp. Zero unless
 // status == Deleted.
 func (t *Tenant) HardDeletedAt() time.Time { return t.hardDeletedAt }
+
+// Statutory returns the tenant's declared statutory IDs (GST/PAN/
+// DrugLicence). Zero value means none declared yet.
+func (t *Tenant) Statutory() Statutory { return t.statutory }
 
 // ----- State transitions ----------------------------------------------------
 
@@ -300,6 +307,37 @@ func (t *Tenant) Suspend(reason string) error {
 		TenantID: t.id,
 		Reason:   reason,
 		At:       now,
+	})
+	return nil
+}
+
+// UpdateStatutory replaces the tenant's declared Indian statutory IDs
+// (GST/PAN/DrugLicence) with a new [Statutory] composite. Pass a zero
+// [Statutory] to clear all declarations (rare — typically used during
+// onboarding-correction or post-suspension audit).
+//
+// Validation already happened inside [NewStatutory] (cross-checks PAN
+// embedded in GST against supplied PAN). This method is the
+// state-mutation entry point — it only enforces tenant-lifecycle rules.
+//
+// Idempotent: no-op + no event when the new value equals the current.
+//
+// Allowed in any non-terminal status (Pending, Active, Suspended,
+// PendingDeletion). Rejected from StatusDeleted (terminal).
+func (t *Tenant) UpdateStatutory(s Statutory) error {
+	if t.status == StatusDeleted {
+		return fmt.Errorf("%w: tenant deleted; cannot update statutory", ErrInvalid)
+	}
+	if t.statutory.Equal(s) {
+		return nil
+	}
+	old := t.statutory
+	t.statutory = s
+	t.recordEvent(StatutoryUpdatedEvent{
+		TenantID:     t.id,
+		OldStatutory: old,
+		NewStatutory: s,
+		At:           clock.Now(),
 	})
 	return nil
 }

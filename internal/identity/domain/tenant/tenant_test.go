@@ -6,9 +6,12 @@ import (
 	"time"
 
 	"github.com/leadkart/leadkart-go/internal/common/clock"
+	"github.com/leadkart/leadkart-go/internal/common/druglicence"
 	"github.com/leadkart/leadkart-go/internal/common/email"
 	"github.com/leadkart/leadkart-go/internal/common/errs"
+	"github.com/leadkart/leadkart-go/internal/common/gst"
 	"github.com/leadkart/leadkart-go/internal/common/ids"
+	"github.com/leadkart/leadkart-go/internal/common/pan"
 	"github.com/leadkart/leadkart-go/internal/common/slug"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
@@ -435,6 +438,145 @@ func TestErrInvalid_IsClassified(t *testing.T) {
 	_, err := tenant.New(tenant.ID(""), mustSlug(t, "acme"), "L", "D", mustEmail(t, "a@b.io"))
 	if !errors.Is(err, tenant.ErrInvalid) {
 		t.Fatalf("expected errors.Is(_, ErrInvalid), got %v", err)
+	}
+}
+
+// ----- UpdateStatutory ------------------------------------------------------
+
+func mustGST(t *testing.T, raw string) gst.Number {
+	t.Helper()
+	g, err := gst.New(raw)
+	if err != nil {
+		t.Fatalf("gst.New(%q): %v", raw, err)
+	}
+	return g
+}
+
+func mustPAN(t *testing.T, raw string) pan.Number {
+	t.Helper()
+	p, err := pan.New(raw)
+	if err != nil {
+		t.Fatalf("pan.New(%q): %v", raw, err)
+	}
+	return p
+}
+
+func mustDL(t *testing.T, raw string) druglicence.Number {
+	t.Helper()
+	dl, err := druglicence.New(raw)
+	if err != nil {
+		t.Fatalf("druglicence.New(%q): %v", raw, err)
+	}
+	return dl
+}
+
+func TestNewStatutory_RejectsGSTPANMismatch(t *testing.T) {
+	t.Parallel()
+	g := mustGST(t, "29ABCPE1234F1Z5") // embedded PAN: ABCPE1234F
+	p := mustPAN(t, "ZZZPZ9999G")       // different PAN, P at position 4
+	_, err := tenant.NewStatutory(g, p, druglicence.Number{})
+	if !errors.Is(err, tenant.ErrInvalid) {
+		t.Errorf("expected ErrInvalid, got %v", err)
+	}
+}
+
+func TestNewStatutory_AcceptsMatchedGSTPAN(t *testing.T) {
+	t.Parallel()
+	g := mustGST(t, "29ABCPE1234F1Z5")
+	p := mustPAN(t, "ABCPE1234F")
+	s, err := tenant.NewStatutory(g, p, druglicence.Number{})
+	if err != nil {
+		t.Fatalf("NewStatutory: %v", err)
+	}
+	if !s.GST().Equal(g) {
+		t.Error("GST not stored")
+	}
+	if !s.PAN().Equal(p) {
+		t.Error("PAN not stored")
+	}
+}
+
+func TestUpdateStatutory_FirstDeclaration_EmitsEvent(t *testing.T) {
+	t.Cleanup(clock.Reset)
+	clock.Set(time.Date(2026, 5, 7, 12, 0, 0, 0, time.UTC))
+
+	tn := newActiveTenant(t)
+	_ = tn.PullEvents()
+
+	s, _ := tenant.NewStatutory(
+		mustGST(t, "29ABCPE1234F1Z5"),
+		mustPAN(t, "ABCPE1234F"),
+		mustDL(t, "KA-W-22B-12345"),
+	)
+	if err := tn.UpdateStatutory(s); err != nil {
+		t.Fatalf("UpdateStatutory: %v", err)
+	}
+	if !tn.Statutory().Equal(s) {
+		t.Error("Statutory not stored")
+	}
+
+	events := tn.PullEvents()
+	if len(events) != 1 {
+		t.Fatalf("events: %d", len(events))
+	}
+	ev, ok := events[0].(tenant.StatutoryUpdatedEvent)
+	if !ok {
+		t.Fatalf("event[0] = %T, want StatutoryUpdatedEvent", events[0])
+	}
+	if !ev.OldStatutory.IsZero() {
+		t.Error("OldStatutory should be zero on first declaration")
+	}
+	if !ev.NewStatutory.Equal(s) {
+		t.Error("NewStatutory mismatch")
+	}
+}
+
+func TestUpdateStatutory_NoOp_WhenUnchanged(t *testing.T) {
+	t.Cleanup(clock.Reset)
+	tn := newActiveTenant(t)
+	s, _ := tenant.NewStatutory(
+		mustGST(t, "29ABCPE1234F1Z5"),
+		mustPAN(t, "ABCPE1234F"),
+		druglicence.Number{},
+	)
+	_ = tn.UpdateStatutory(s)
+	_ = tn.PullEvents()
+
+	if err := tn.UpdateStatutory(s); err != nil {
+		t.Fatalf("UpdateStatutory noop: %v", err)
+	}
+	if got := tn.PullEvents(); len(got) != 0 {
+		t.Errorf("expected 0 events, got %d", len(got))
+	}
+}
+
+func TestUpdateStatutory_AllowedInAllNonTerminalStatuses(t *testing.T) {
+	t.Cleanup(clock.Reset)
+	s, _ := tenant.NewStatutory(mustGST(t, "29ABCPE1234F1Z5"), mustPAN(t, "ABCPE1234F"), druglicence.Number{})
+	for _, factory := range []struct {
+		name string
+		fn   func(*testing.T) *tenant.Tenant
+	}{
+		{"pending", newPendingTenant},
+		{"active", newActiveTenant},
+		{"suspended", newSuspendedTenant},
+	} {
+		t.Run(factory.name, func(t *testing.T) {
+			tn := factory.fn(t)
+			if err := tn.UpdateStatutory(s); err != nil {
+				t.Errorf("UpdateStatutory on %s tenant: %v", factory.name, err)
+			}
+		})
+	}
+}
+
+func TestUpdateStatutory_RejectedOnDeletedTenant(t *testing.T) {
+	t.Cleanup(clock.Reset)
+	tn := newPendingTenant(t)
+	_ = tn.HardDelete()
+	s, _ := tenant.NewStatutory(mustGST(t, "29ABCPE1234F1Z5"), mustPAN(t, "ABCPE1234F"), druglicence.Number{})
+	if err := tn.UpdateStatutory(s); !errors.Is(err, tenant.ErrInvalid) {
+		t.Errorf("expected ErrInvalid on deleted tenant, got %v", err)
 	}
 }
 

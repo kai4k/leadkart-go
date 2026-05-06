@@ -83,6 +83,25 @@ func (SuspendedEvent) Topic() string { return "identity.tenant_suspended.v1" }
 // OccurredAt returns the domain timestamp.
 func (e SuspendedEvent) OccurredAt() time.Time { return e.At }
 
+// StatutoryUpdatedEvent fires when [Tenant.UpdateStatutory] changes
+// any of the declared Indian statutory IDs (GST/PAN/DrugLicence).
+//
+// Carries the OLD and NEW Statutory values so audit subscribers can
+// render diffs. Empty (zero) Statutory in OldStatutory means the
+// tenant declared statutory IDs for the first time.
+type StatutoryUpdatedEvent struct {
+	TenantID      ID
+	OldStatutory  Statutory
+	NewStatutory  Statutory
+	At            time.Time
+}
+
+// Topic returns the integration event type.
+func (StatutoryUpdatedEvent) Topic() string { return "identity.tenant_statutory_updated.v1" }
+
+// OccurredAt returns the domain timestamp.
+func (e StatutoryUpdatedEvent) OccurredAt() time.Time { return e.At }
+
 // MarkedForDeletionEvent fires when [Tenant.MarkForDeletion] is called.
 //
 // Per data-retention.md "Tenant deletion saga": entry into the 30-day
