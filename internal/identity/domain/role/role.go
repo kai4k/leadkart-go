@@ -332,6 +332,76 @@ func (r *Role) ReplacePermissions(target []*permission.Permission) error {
 	return nil
 }
 
+// Delete soft-deletes the role. System-default roles refuse delete.
+// Idempotent — calling Delete on an already-deleted role is a no-op
+// (no event).
+//
+// CALLER INVARIANT: the application service MUST verify NO Membership
+// holds an active assignment to this role before calling Delete (or
+// must mass-revoke first via the role-assignment subscriber). The
+// domain doesn't reach across aggregates — that's an application-tier
+// concern per Vernon ch.10.
+func (r *Role) Delete(deletedBy string) error {
+	if r.deleted {
+		return nil
+	}
+	if r.isSystemDefault {
+		return fmt.Errorf("%w: %s", ErrSystemDefault, r.name)
+	}
+	now := clock.Now()
+	r.deleted = true
+	r.deletedAt = now
+	r.deletedBy = deletedBy
+	r.recordEvent(DeletedEvent{
+		RoleID:    r.id,
+		TenantID:  r.tenantID,
+		DeletedBy: deletedBy,
+		At:        now,
+	})
+	return nil
+}
+
+// ----- Persistence DTO ------------------------------------------------------
+
+// Snapshot is the persistence DTO consumed by [UnmarshalFromDB].
+// Mirror of the database-row shape — sqlc + repository fill this from
+// SELECT results, then call UnmarshalFromDB to construct the
+// in-memory aggregate.
+type Snapshot struct {
+	ID              ID
+	TenantID        tenant.ID
+	Name            string
+	IsSystemDefault bool
+	IsSuperAdmin    bool
+	HierarchyLevel  int
+	Permissions     []*permission.Permission
+	CreatedAt       time.Time
+	IsDeleted       bool
+	DeletedAt       time.Time
+	DeletedBy       string
+}
+
+// UnmarshalFromDB rehydrates a Role from persistence. Repository-only
+// path; does NOT re-validate (TDL canon — DB-stored data is already
+// invariant-checked at write time, re-checking on every read costs
+// without benefit). Does NOT emit domain events — rehydration is not
+// a domain transition.
+func UnmarshalFromDB(s Snapshot) *Role {
+	return &Role{
+		id:              s.ID,
+		tenantID:        s.TenantID,
+		name:            s.Name,
+		isSystemDefault: s.IsSystemDefault,
+		isSuperAdmin:    s.IsSuperAdmin,
+		hierarchyLevel:  s.HierarchyLevel,
+		permissions:     append([]*permission.Permission(nil), s.Permissions...),
+		createdAt:       s.CreatedAt,
+		deleted:         s.IsDeleted,
+		deletedAt:       s.DeletedAt,
+		deletedBy:       s.DeletedBy,
+	}
+}
+
 // ensureMutable rejects mutations on a deleted role. Internal helper
 // for the state-transition methods (Rename / SetHierarchyLevel /
 // GrantPermission / etc.).

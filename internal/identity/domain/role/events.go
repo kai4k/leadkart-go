@@ -65,3 +65,15 @@ type PermissionRevokedEvent struct {
 }
 
 func (PermissionRevokedEvent) isRoleEvent() {}
+
+// DeletedEvent fires on soft-delete. Subscribers cascade-revoke any
+// active Membership assignments and emit the integration-event V1
+// payload for cross-module reactions (CRM lead-reassignment, etc.).
+type DeletedEvent struct {
+	RoleID    ID
+	TenantID  tenant.ID
+	DeletedBy string
+	At        time.Time
+}
+
+func (DeletedEvent) isRoleEvent() {}

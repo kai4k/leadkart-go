@@ -331,6 +331,117 @@ func TestReplacePermissions_EmptyTargetRevokesAll(t *testing.T) {
 	}
 }
 
+func TestDelete_TransitionsAndEmits(t *testing.T) {
+	t.Parallel()
+	r := newRole(t)
+	_ = r.PullEvents()
+	if err := r.Delete("admin-1"); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if !r.IsDeleted() {
+		t.Fatal("not deleted after Delete")
+	}
+	if r.DeletedBy() != "admin-1" {
+		t.Fatalf("DeletedBy: %q", r.DeletedBy())
+	}
+	if r.DeletedAt().IsZero() {
+		t.Fatal("DeletedAt should be set")
+	}
+	events := r.PullEvents()
+	if len(events) != 1 {
+		t.Fatalf("events: %d", len(events))
+	}
+	if _, ok := events[0].(role.DeletedEvent); !ok {
+		t.Fatalf("event type: %T", events[0])
+	}
+}
+
+func TestDelete_RejectsSystemDefault(t *testing.T) {
+	t.Parallel()
+	r, _ := role.New(role.ID(ids.NewV7().String()), tenant.ID(ids.NewV7().String()),
+		"TenantAdmin", true, 10, false)
+	if err := r.Delete("admin-1"); !errors.Is(err, role.ErrSystemDefault) {
+		t.Fatalf("want ErrSystemDefault got %v", err)
+	}
+}
+
+func TestDelete_Idempotent(t *testing.T) {
+	t.Parallel()
+	r := newRole(t)
+	if err := r.Delete("admin-1"); err != nil {
+		t.Fatalf("first Delete: %v", err)
+	}
+	_ = r.PullEvents()
+	if err := r.Delete("admin-1"); err != nil {
+		t.Fatalf("dup Delete: %v", err)
+	}
+	if events := r.PullEvents(); len(events) != 0 {
+		t.Fatal("dup Delete should emit 0 events")
+	}
+}
+
+func TestMutations_RejectAfterDelete(t *testing.T) {
+	t.Parallel()
+	r := newRole(t)
+	_ = r.Delete("admin-1")
+	p := permission.FromConstant(permission.IdentityPermissions.Users.View)
+	if err := r.Rename("X"); !errors.Is(err, role.ErrDeleted) {
+		t.Fatalf("Rename after delete: %v", err)
+	}
+	if err := r.SetHierarchyLevel(20); !errors.Is(err, role.ErrDeleted) {
+		t.Fatalf("SetHierarchyLevel after delete: %v", err)
+	}
+	if err := r.GrantPermission(p); !errors.Is(err, role.ErrDeleted) {
+		t.Fatalf("Grant after delete: %v", err)
+	}
+	if err := r.RevokePermission(p); !errors.Is(err, role.ErrDeleted) {
+		t.Fatalf("Revoke after delete: %v", err)
+	}
+	if err := r.ReplacePermissions(nil); !errors.Is(err, role.ErrDeleted) {
+		t.Fatalf("Replace after delete: %v", err)
+	}
+}
+
+func TestUnmarshalFromDB_RoundTripsAllFields(t *testing.T) {
+	t.Parallel()
+	view := permission.FromConstant(permission.IdentityPermissions.Users.View)
+	rid := role.ID(ids.NewV7().String())
+	tid := tenant.ID(ids.NewV7().String())
+	r := role.UnmarshalFromDB(role.Snapshot{
+		ID:              rid,
+		TenantID:        tid,
+		Name:            "Hydrated",
+		IsSystemDefault: true,
+		IsSuperAdmin:    false,
+		HierarchyLevel:  25,
+		Permissions:     []*permission.Permission{view},
+		IsDeleted:       false,
+	})
+	if r.ID() != rid || r.TenantID() != tid {
+		t.Fatalf("ids: %q / %q", r.ID(), r.TenantID())
+	}
+	if r.Name() != "Hydrated" || !r.IsSystemDefault() || r.IsSuperAdmin() {
+		t.Fatalf("flags: name=%q sysdef=%v super=%v", r.Name(), r.IsSystemDefault(), r.IsSuperAdmin())
+	}
+	if r.HierarchyLevel() != 25 {
+		t.Fatalf("hierarchy: %d", r.HierarchyLevel())
+	}
+	if !r.HasPermission(view) {
+		t.Fatal("permissions did not round-trip")
+	}
+}
+
+func TestUnmarshalFromDB_DoesNotEmitEvents(t *testing.T) {
+	t.Parallel()
+	r := role.UnmarshalFromDB(role.Snapshot{
+		ID: role.ID(ids.NewV7().String()), TenantID: tenant.ID(ids.NewV7().String()),
+		Name: "Hydrated", HierarchyLevel: 50,
+	})
+	if events := r.PullEvents(); len(events) != 0 {
+		t.Fatalf("UnmarshalFromDB emitted %d events (must be 0 — TDL canon)", len(events))
+	}
+}
+
 
 func TestHierarchyConstants(t *testing.T) {
 	t.Parallel()
