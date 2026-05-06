@@ -17,6 +17,8 @@ func TestStatus_String(t *testing.T) {
 		{tenant.StatusPending, "pending"},
 		{tenant.StatusActive, "active"},
 		{tenant.StatusSuspended, "suspended"},
+		{tenant.StatusPendingDeletion, "pending_deletion"},
+		{tenant.StatusDeleted, "deleted"},
 	}
 	for _, tc := range cases {
 		tc := tc
@@ -40,6 +42,8 @@ func TestParseStatus(t *testing.T) {
 		{"pending", "pending", tenant.StatusPending, false},
 		{"active", "active", tenant.StatusActive, false},
 		{"suspended", "suspended", tenant.StatusSuspended, false},
+		{"pending_deletion", "pending_deletion", tenant.StatusPendingDeletion, false},
+		{"deleted", "deleted", tenant.StatusDeleted, false},
 		{"unknown", "unknown", tenant.StatusUnknown, true},
 		{"empty", "", tenant.StatusUnknown, true},
 		{"junk", "junk", tenant.StatusUnknown, true},

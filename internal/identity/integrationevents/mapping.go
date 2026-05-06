@@ -70,6 +70,27 @@ func FromDomainEvent(d any) (Event, error) {
 			OccurredAtUTC: e.At.UTC(),
 		}, nil
 
+	case tenant.MarkedForDeletionEvent:
+		return TenantMarkedForDeletionV1{
+			TenantID:       mustParseUUID(e.TenantID.String()),
+			Reason:         e.Reason,
+			ScheduledAtUTC: e.ScheduledAt.UTC(),
+			OccurredAtUTC:  e.At.UTC(),
+		}, nil
+
+	case tenant.RestoredEvent:
+		return TenantRestoredV1{
+			TenantID:      mustParseUUID(e.TenantID.String()),
+			OccurredAtUTC: e.At.UTC(),
+		}, nil
+
+	case tenant.DeletedEvent:
+		return TenantDeletedV1{
+			TenantID:      mustParseUUID(e.TenantID.String()),
+			Reason:        e.Reason,
+			OccurredAtUTC: e.At.UTC(),
+		}, nil
+
 	// ----- Person -----------------------------------------------------
 
 	case person.CreatedEvent:

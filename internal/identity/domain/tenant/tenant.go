@@ -48,16 +48,19 @@ const nameMaxLen = 200
 //   - AdminEmail is a validated [email.Address].
 //   - Status follows the documented state machine; transitions emit events.
 type Tenant struct {
-	id          ID
-	slug        slug.Slug
-	legalName   string
-	displayName string
-	adminEmail  email.Address
-	status      Status
-	createdAt   time.Time
-	activatedAt time.Time // zero until first Activate
-	suspendedAt time.Time // zero until first Suspend; reset on subsequent Activate
-	events      []Event
+	id                    ID
+	slug                  slug.Slug
+	legalName             string
+	displayName           string
+	adminEmail            email.Address
+	status                Status
+	createdAt             time.Time
+	activatedAt           time.Time // zero until first Activate
+	suspendedAt           time.Time // zero until first Suspend; reset on subsequent Activate
+	deletionScheduledAt   time.Time // zero until MarkForDeletion; reset on RestoreFromDeletion
+	deletionReason        string    // populated by MarkForDeletion; cleared on Restore
+	hardDeletedAt         time.Time // zero until HardDelete; terminal
+	events                []Event
 }
 
 // New constructs a brand-new tenant in [StatusPending].
@@ -115,15 +118,18 @@ func New(id ID, s slug.Slug, legalName, displayName string, adminEmail email.Add
 // scans DB rows into this struct, then calls UnmarshalFromDB. Keeps the
 // adapter free of internal Tenant field knowledge.
 type Snapshot struct {
-	ID          ID
-	Slug        slug.Slug
-	LegalName   string
-	DisplayName string
-	AdminEmail  email.Address
-	Status      Status
-	CreatedAt   time.Time
-	ActivatedAt time.Time
-	SuspendedAt time.Time
+	ID                  ID
+	Slug                slug.Slug
+	LegalName           string
+	DisplayName         string
+	AdminEmail          email.Address
+	Status              Status
+	CreatedAt           time.Time
+	ActivatedAt         time.Time
+	SuspendedAt         time.Time
+	DeletionScheduledAt time.Time
+	DeletionReason      string
+	HardDeletedAt       time.Time
 }
 
 // UnmarshalFromDB re-hydrates a Tenant from persistence. Used ONLY by the
@@ -134,15 +140,18 @@ type Snapshot struct {
 // tighten in code. Treat re-hydration as trusted I/O.
 func UnmarshalFromDB(s Snapshot) *Tenant {
 	return &Tenant{
-		id:          s.ID,
-		slug:        s.Slug,
-		legalName:   s.LegalName,
-		displayName: s.DisplayName,
-		adminEmail:  s.AdminEmail,
-		status:      s.Status,
-		createdAt:   s.CreatedAt,
-		activatedAt: s.ActivatedAt,
-		suspendedAt: s.SuspendedAt,
+		id:                  s.ID,
+		slug:                s.Slug,
+		legalName:           s.LegalName,
+		displayName:         s.DisplayName,
+		adminEmail:          s.AdminEmail,
+		status:              s.Status,
+		createdAt:           s.CreatedAt,
+		activatedAt:         s.ActivatedAt,
+		suspendedAt:         s.SuspendedAt,
+		deletionScheduledAt: s.DeletionScheduledAt,
+		deletionReason:      s.DeletionReason,
+		hardDeletedAt:       s.HardDeletedAt,
 	}
 }
 
@@ -174,6 +183,19 @@ func (t *Tenant) ActivatedAt() time.Time { return t.activatedAt }
 
 // SuspendedAt returns the most recent suspension timestamp; zero if never suspended.
 func (t *Tenant) SuspendedAt() time.Time { return t.suspendedAt }
+
+// DeletionScheduledAt returns the timestamp at which deletion was
+// scheduled (start of the 30-day grace window). Zero if not pending
+// deletion or if Restore cleared the schedule.
+func (t *Tenant) DeletionScheduledAt() time.Time { return t.deletionScheduledAt }
+
+// DeletionReason returns the audit reason supplied when MarkForDeletion
+// was called. Empty if not in PendingDeletion / Deleted state.
+func (t *Tenant) DeletionReason() string { return t.deletionReason }
+
+// HardDeletedAt returns the terminal hard-delete timestamp. Zero unless
+// status == Deleted.
+func (t *Tenant) HardDeletedAt() time.Time { return t.hardDeletedAt }
 
 // ----- State transitions ----------------------------------------------------
 
@@ -228,9 +250,18 @@ func (t *Tenant) UpdateProfile(legalName, displayName string) error {
 //
 // Idempotent — if already active, returns nil and emits no event. Records
 // the activation timestamp and emits [ActivatedEvent].
+//
+// Rejected from terminal/grace states: PendingDeletion (use
+// RestoreFromDeletion instead) and Deleted (terminal).
 func (t *Tenant) Activate() error {
 	if t.status == StatusActive {
 		return nil // idempotent — TDL canon for already-correct state
+	}
+	if t.status == StatusPendingDeletion {
+		return fmt.Errorf("%w: tenant pending deletion; use RestoreFromDeletion", ErrInvalid)
+	}
+	if t.status == StatusDeleted {
+		return fmt.Errorf("%w: tenant deleted; cannot activate", ErrInvalid)
 	}
 	now := clock.Now()
 	t.status = StatusActive
@@ -246,6 +277,9 @@ func (t *Tenant) Activate() error {
 //
 // reason MUST be non-empty (audit requirement per `data-retention.md`).
 // Idempotent — if already suspended, returns nil with no event.
+//
+// Rejected from terminal/grace states: PendingDeletion (already in
+// the deletion pipeline) and Deleted (terminal).
 func (t *Tenant) Suspend(reason string) error {
 	if strings.TrimSpace(reason) == "" {
 		return fmt.Errorf("%w: suspension reason required for audit", ErrInvalid)
@@ -253,12 +287,129 @@ func (t *Tenant) Suspend(reason string) error {
 	if t.status == StatusSuspended {
 		return nil
 	}
+	if t.status == StatusPendingDeletion {
+		return fmt.Errorf("%w: tenant pending deletion; suspend not allowed", ErrInvalid)
+	}
+	if t.status == StatusDeleted {
+		return fmt.Errorf("%w: tenant deleted; cannot suspend", ErrInvalid)
+	}
 	now := clock.Now()
 	t.status = StatusSuspended
 	t.suspendedAt = now
 	t.recordEvent(SuspendedEvent{
 		TenantID: t.id,
 		Reason:   reason,
+		At:       now,
+	})
+	return nil
+}
+
+// MarkForDeletion enters the 30-day grace window per `data-retention.md`
+// "Tenant deletion saga". Operator action; reason MUST be non-empty
+// for audit (DPDP §12, SOC2 CC4.1).
+//
+// Allowed transitions:
+//   - StatusActive → StatusPendingDeletion
+//   - StatusSuspended → StatusPendingDeletion
+//
+// Rejected:
+//   - StatusPendingDeletion → MarkForDeletion is idempotent only when
+//     reason matches the existing schedule's reason — otherwise rejected
+//     (audit-trail integrity).
+//   - StatusDeleted (terminal) → cannot re-mark.
+//   - StatusPending → tenant never activated; just hard-delete instead.
+//
+// Records the schedule timestamp + reason; emits MarkedForDeletionEvent.
+func (t *Tenant) MarkForDeletion(reason string) error {
+	if strings.TrimSpace(reason) == "" {
+		return fmt.Errorf("%w: deletion reason required for audit", ErrInvalid)
+	}
+	switch t.status {
+	case StatusActive, StatusSuspended:
+		// proceed
+	case StatusPendingDeletion:
+		// idempotent only when reason matches
+		if t.deletionReason == reason {
+			return nil
+		}
+		return fmt.Errorf("%w: tenant already pending deletion (reason: %q)", ErrInvalid, t.deletionReason)
+	case StatusDeleted:
+		return fmt.Errorf("%w: tenant already deleted", ErrInvalid)
+	case StatusPending:
+		return fmt.Errorf("%w: tenant never activated; cannot mark for deletion (use hard delete)", ErrInvalid)
+	default:
+		return fmt.Errorf("%w: invalid status %v", ErrInvalid, t.status)
+	}
+	now := clock.Now()
+	t.status = StatusPendingDeletion
+	t.deletionScheduledAt = now
+	t.deletionReason = reason
+	t.recordEvent(MarkedForDeletionEvent{
+		TenantID:    t.id,
+		Reason:      reason,
+		ScheduledAt: now,
+		At:          now,
+	})
+	return nil
+}
+
+// RestoreFromDeletion cancels a pending deletion within the grace
+// window. Transitions PendingDeletion → Active and clears the
+// scheduled-deletion fields.
+//
+// Idempotent only when status is already Active (no-op). Rejected
+// from any other status — caller can't restore from Pending /
+// Suspended (those aren't "deletion" states) or Deleted (terminal).
+func (t *Tenant) RestoreFromDeletion() error {
+	switch t.status {
+	case StatusActive:
+		return nil // already restored — idempotent
+	case StatusPendingDeletion:
+		// proceed
+	case StatusDeleted:
+		return fmt.Errorf("%w: tenant already hard-deleted; cannot restore", ErrInvalid)
+	default:
+		return fmt.Errorf("%w: cannot restore from status %v", ErrInvalid, t.status)
+	}
+	now := clock.Now()
+	t.status = StatusActive
+	t.deletionScheduledAt = time.Time{}
+	t.deletionReason = ""
+	t.activatedAt = now
+	t.recordEvent(RestoredEvent{
+		TenantID: t.id,
+		At:       now,
+	})
+	return nil
+}
+
+// HardDelete is the terminal transition fired by the data-retention
+// saga after the 30-day grace window expires.
+//
+// Allowed transitions:
+//   - StatusPendingDeletion → StatusDeleted (saga path)
+//   - StatusPending → StatusDeleted (admin abandonment of un-activated
+//     tenant; no grace window needed since tenant never operated)
+//
+// Rejected from Active / Suspended (must MarkForDeletion first) and
+// Deleted (idempotent on terminal state via early return).
+//
+// Emits DeletedEvent; subscribers anonymise PII per `data-retention.md`.
+func (t *Tenant) HardDelete() error {
+	switch t.status {
+	case StatusDeleted:
+		return nil // idempotent terminal
+	case StatusPendingDeletion, StatusPending:
+		// proceed
+	default:
+		return fmt.Errorf("%w: hard delete requires PendingDeletion or Pending status, got %v", ErrInvalid, t.status)
+	}
+	now := clock.Now()
+	t.status = StatusDeleted
+	t.hardDeletedAt = now
+	t.recordEvent(DeletedEvent{
+		TenantID: t.id,
+		Reason:   t.deletionReason,
 		At:       now,
 	})
 	return nil

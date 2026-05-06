@@ -438,6 +438,218 @@ func TestErrInvalid_IsClassified(t *testing.T) {
 	}
 }
 
+// ----- Deletion lifecycle ---------------------------------------------------
+
+func TestMarkForDeletion_FromActive_TransitionsToPendingDeletion(t *testing.T) {
+	t.Cleanup(clock.Reset)
+	clock.Set(time.Date(2026, 5, 7, 12, 0, 0, 0, time.UTC))
+
+	tn := newActiveTenant(t)
+	_ = tn.PullEvents()
+
+	if err := tn.MarkForDeletion("operator-requested-exit"); err != nil {
+		t.Fatalf("MarkForDeletion: %v", err)
+	}
+	if tn.Status() != tenant.StatusPendingDeletion {
+		t.Errorf("Status = %v, want PendingDeletion", tn.Status())
+	}
+	if tn.DeletionReason() != "operator-requested-exit" {
+		t.Errorf("Reason = %q", tn.DeletionReason())
+	}
+	if tn.DeletionScheduledAt().IsZero() {
+		t.Error("DeletionScheduledAt is zero")
+	}
+
+	events := tn.PullEvents()
+	if len(events) != 1 {
+		t.Fatalf("events: %d", len(events))
+	}
+	if _, ok := events[0].(tenant.MarkedForDeletionEvent); !ok {
+		t.Errorf("event[0] = %T, want MarkedForDeletionEvent", events[0])
+	}
+}
+
+func TestMarkForDeletion_FromSuspended_Allowed(t *testing.T) {
+	t.Cleanup(clock.Reset)
+	tn := newSuspendedTenant(t)
+	_ = tn.PullEvents()
+	if err := tn.MarkForDeletion("billing-exit"); err != nil {
+		t.Fatalf("MarkForDeletion suspended: %v", err)
+	}
+	if tn.Status() != tenant.StatusPendingDeletion {
+		t.Errorf("Status = %v", tn.Status())
+	}
+}
+
+func TestMarkForDeletion_FromPending_Rejected(t *testing.T) {
+	t.Cleanup(clock.Reset)
+	tn := newPendingTenant(t)
+	err := tn.MarkForDeletion("never-onboarded")
+	if !errors.Is(err, tenant.ErrInvalid) {
+		t.Errorf("expected ErrInvalid, got %v", err)
+	}
+}
+
+func TestMarkForDeletion_RequiresReason(t *testing.T) {
+	t.Cleanup(clock.Reset)
+	tn := newActiveTenant(t)
+	for _, raw := range []string{"", "   ", "\t"} {
+		if err := tn.MarkForDeletion(raw); !errors.Is(err, tenant.ErrInvalid) {
+			t.Errorf("MarkForDeletion(%q): expected ErrInvalid, got %v", raw, err)
+		}
+	}
+}
+
+func TestMarkForDeletion_IdempotentOnSameReason(t *testing.T) {
+	t.Cleanup(clock.Reset)
+	tn := newActiveTenant(t)
+	_ = tn.MarkForDeletion("exit")
+	_ = tn.PullEvents()
+	if err := tn.MarkForDeletion("exit"); err != nil {
+		t.Errorf("idempotent same reason: %v", err)
+	}
+	if got := tn.PullEvents(); len(got) != 0 {
+		t.Errorf("expected 0 events on idempotent re-mark, got %d", len(got))
+	}
+}
+
+func TestMarkForDeletion_RejectedOnDifferentReason(t *testing.T) {
+	t.Cleanup(clock.Reset)
+	tn := newActiveTenant(t)
+	_ = tn.MarkForDeletion("billing")
+	err := tn.MarkForDeletion("compliance")
+	if !errors.Is(err, tenant.ErrInvalid) {
+		t.Errorf("expected ErrInvalid on conflicting reason, got %v", err)
+	}
+}
+
+func TestRestoreFromDeletion_FromPendingDeletion_TransitionsToActive(t *testing.T) {
+	t.Cleanup(clock.Reset)
+	clock.Set(time.Date(2026, 5, 7, 12, 0, 0, 0, time.UTC))
+
+	tn := newActiveTenant(t)
+	_ = tn.MarkForDeletion("oops-undo-me")
+	_ = tn.PullEvents()
+
+	clock.Set(time.Date(2026, 5, 8, 0, 0, 0, 0, time.UTC))
+	if err := tn.RestoreFromDeletion(); err != nil {
+		t.Fatalf("RestoreFromDeletion: %v", err)
+	}
+	if tn.Status() != tenant.StatusActive {
+		t.Errorf("Status = %v", tn.Status())
+	}
+	if !tn.DeletionScheduledAt().IsZero() {
+		t.Error("DeletionScheduledAt not cleared")
+	}
+	if tn.DeletionReason() != "" {
+		t.Errorf("DeletionReason not cleared: %q", tn.DeletionReason())
+	}
+	events := tn.PullEvents()
+	if len(events) != 1 {
+		t.Fatalf("events: %d", len(events))
+	}
+	if _, ok := events[0].(tenant.RestoredEvent); !ok {
+		t.Errorf("event[0] = %T, want RestoredEvent", events[0])
+	}
+}
+
+func TestRestoreFromDeletion_FromActive_NoOp(t *testing.T) {
+	t.Cleanup(clock.Reset)
+	tn := newActiveTenant(t)
+	_ = tn.PullEvents()
+	if err := tn.RestoreFromDeletion(); err != nil {
+		t.Errorf("idempotent restore from active: %v", err)
+	}
+	if got := tn.PullEvents(); len(got) != 0 {
+		t.Errorf("expected 0 events, got %d", len(got))
+	}
+}
+
+func TestHardDelete_FromPendingDeletion_TransitionsToDeleted(t *testing.T) {
+	t.Cleanup(clock.Reset)
+	clock.Set(time.Date(2026, 5, 7, 12, 0, 0, 0, time.UTC))
+
+	tn := newActiveTenant(t)
+	_ = tn.MarkForDeletion("exit")
+	_ = tn.PullEvents()
+
+	clock.Set(time.Date(2026, 6, 7, 0, 0, 0, 0, time.UTC)) // grace expired
+	if err := tn.HardDelete(); err != nil {
+		t.Fatalf("HardDelete: %v", err)
+	}
+	if tn.Status() != tenant.StatusDeleted {
+		t.Errorf("Status = %v", tn.Status())
+	}
+	if tn.HardDeletedAt().IsZero() {
+		t.Error("HardDeletedAt is zero")
+	}
+
+	events := tn.PullEvents()
+	if len(events) != 1 {
+		t.Fatalf("events: %d", len(events))
+	}
+	ev, ok := events[0].(tenant.DeletedEvent)
+	if !ok {
+		t.Fatalf("event[0] = %T, want DeletedEvent", events[0])
+	}
+	if ev.Reason != "exit" {
+		t.Errorf("Reason = %q, want exit", ev.Reason)
+	}
+}
+
+func TestHardDelete_FromPending_AdminAbandonment(t *testing.T) {
+	// Tenant never activated — admin abandonment hard-deletes directly
+	// without a grace window since tenant never operated.
+	t.Cleanup(clock.Reset)
+	tn := newPendingTenant(t)
+	_ = tn.PullEvents()
+	if err := tn.HardDelete(); err != nil {
+		t.Fatalf("HardDelete on pending: %v", err)
+	}
+	if tn.Status() != tenant.StatusDeleted {
+		t.Errorf("Status = %v", tn.Status())
+	}
+}
+
+func TestHardDelete_FromActive_RejectedWithoutMarking(t *testing.T) {
+	t.Cleanup(clock.Reset)
+	tn := newActiveTenant(t)
+	if err := tn.HardDelete(); !errors.Is(err, tenant.ErrInvalid) {
+		t.Errorf("expected ErrInvalid hard-deleting active tenant, got %v", err)
+	}
+}
+
+func TestHardDelete_Idempotent(t *testing.T) {
+	t.Cleanup(clock.Reset)
+	tn := newPendingTenant(t)
+	_ = tn.HardDelete()
+	_ = tn.PullEvents()
+	if err := tn.HardDelete(); err != nil {
+		t.Errorf("idempotent hard-delete: %v", err)
+	}
+	if got := tn.PullEvents(); len(got) != 0 {
+		t.Errorf("expected 0 events on idempotent terminal, got %d", len(got))
+	}
+}
+
+func TestActivate_RejectedFromPendingDeletion(t *testing.T) {
+	t.Cleanup(clock.Reset)
+	tn := newActiveTenant(t)
+	_ = tn.MarkForDeletion("exit")
+	if err := tn.Activate(); !errors.Is(err, tenant.ErrInvalid) {
+		t.Errorf("expected ErrInvalid activating pending-deletion tenant, got %v", err)
+	}
+}
+
+func TestSuspend_RejectedFromPendingDeletion(t *testing.T) {
+	t.Cleanup(clock.Reset)
+	tn := newActiveTenant(t)
+	_ = tn.MarkForDeletion("exit")
+	if err := tn.Suspend("billing"); !errors.Is(err, tenant.ErrInvalid) {
+		t.Errorf("expected ErrInvalid suspending pending-deletion tenant, got %v", err)
+	}
+}
+
 // ----- Helpers --------------------------------------------------------------
 
 func newPendingTenant(t *testing.T) *tenant.Tenant {
