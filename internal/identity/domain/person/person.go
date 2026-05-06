@@ -43,17 +43,20 @@ const nameMaxLen = 100
 
 // Person is the aggregate root.
 type Person struct {
-	id            ID
-	email         email.Address
-	firstName     string
-	lastName      string
-	passwordHash  PasswordHash
-	securityStamp SecurityStamp
-	isActive      bool
-	isAnonymised  bool
-	createdAt     time.Time
-	anonymisedAt  time.Time
-	events        []Event
+	id                     ID
+	email                  email.Address
+	firstName              string
+	lastName               string
+	passwordHash           PasswordHash
+	securityStamp          SecurityStamp
+	isActive               bool
+	isAnonymised           bool
+	isGloballySuspended    bool      // rare global ban — compliance / fraud / cross-tenant abuse
+	globalSuspensionReason string    // populated when isGloballySuspended; cleared on Lift
+	globallySuspendedAt    time.Time // zero unless suspended; reset on Lift
+	createdAt              time.Time
+	anonymisedAt           time.Time
+	events                 []Event
 }
 
 // New constructs a brand-new Person. Returns [ErrInvalid] (wrapped) on
@@ -106,32 +109,38 @@ func New(id ID, e email.Address, firstName, lastName string, passwordHash Passwo
 
 // Snapshot is the persistence-layer DTO consumed by [UnmarshalFromDB].
 type Snapshot struct {
-	ID            ID
-	Email         email.Address
-	FirstName     string
-	LastName      string
-	PasswordHash  PasswordHash
-	SecurityStamp SecurityStamp
-	IsActive      bool
-	IsAnonymised  bool
-	CreatedAt     time.Time
-	AnonymisedAt  time.Time
+	ID                     ID
+	Email                  email.Address
+	FirstName              string
+	LastName               string
+	PasswordHash           PasswordHash
+	SecurityStamp          SecurityStamp
+	IsActive               bool
+	IsAnonymised           bool
+	IsGloballySuspended    bool
+	GlobalSuspensionReason string
+	GloballySuspendedAt    time.Time
+	CreatedAt              time.Time
+	AnonymisedAt           time.Time
 }
 
 // UnmarshalFromDB re-hydrates a Person from persistence. Used ONLY by
 // the repository on read paths — does NOT re-validate (TDL canon).
 func UnmarshalFromDB(s Snapshot) *Person {
 	return &Person{
-		id:            s.ID,
-		email:         s.Email,
-		firstName:     s.FirstName,
-		lastName:      s.LastName,
-		passwordHash:  s.PasswordHash,
-		securityStamp: s.SecurityStamp,
-		isActive:      s.IsActive,
-		isAnonymised:  s.IsAnonymised,
-		createdAt:     s.CreatedAt,
-		anonymisedAt:  s.AnonymisedAt,
+		id:                     s.ID,
+		email:                  s.Email,
+		firstName:              s.FirstName,
+		lastName:               s.LastName,
+		passwordHash:           s.PasswordHash,
+		securityStamp:          s.SecurityStamp,
+		isActive:               s.IsActive,
+		isAnonymised:           s.IsAnonymised,
+		isGloballySuspended:    s.IsGloballySuspended,
+		globalSuspensionReason: s.GlobalSuspensionReason,
+		globallySuspendedAt:    s.GloballySuspendedAt,
+		createdAt:              s.CreatedAt,
+		anonymisedAt:           s.AnonymisedAt,
 	}
 }
 
@@ -169,6 +178,19 @@ func (p *Person) CreatedAt() time.Time { return p.createdAt }
 
 // AnonymisedAt returns the anonymisation timestamp; zero if not anonymised.
 func (p *Person) AnonymisedAt() time.Time { return p.anonymisedAt }
+
+// IsGloballySuspended reports whether the Person is globally banned
+// (rare — compliance, fraud, cross-tenant abuse). Distinct from
+// [Person.IsActive] (deactivation) and Membership.Status (per-tenant).
+func (p *Person) IsGloballySuspended() bool { return p.isGloballySuspended }
+
+// GlobalSuspensionReason returns the audit reason supplied when
+// GloballySuspend was called. Empty if not globally suspended.
+func (p *Person) GlobalSuspensionReason() string { return p.globalSuspensionReason }
+
+// GloballySuspendedAt returns the timestamp of the most recent global
+// suspension. Zero if not currently suspended.
+func (p *Person) GloballySuspendedAt() time.Time { return p.globallySuspendedAt }
 
 // ----- State transitions ----------------------------------------------------
 
@@ -235,6 +257,68 @@ func (p *Person) UpdateProfile(firstName, lastName string) error {
 		NewFirstName: firstName,
 		NewLastName:  lastName,
 		At:           clock.Now(),
+	})
+	return nil
+}
+
+// GloballySuspend marks the Person as globally banned across every
+// tenant. Rare action — compliance violation, fraud, cross-tenant
+// abuse. Distinct from [Person.Anonymise] (irreversible PII scrub)
+// and Membership.Deactivate (per-tenant; Person can still log into
+// other tenants).
+//
+// Effects:
+//   - isGloballySuspended → true; reason recorded for audit.
+//   - SecurityStamp rotated (invalidates every outstanding JWT
+//     immediately per security.md "SecurityStamp rotation triggers").
+//   - Login flow MUST reject suspended Persons before password verify.
+//
+// reason MUST be non-empty (audit requirement). Idempotent only when
+// reason matches existing suspension; rejected on conflicting reason
+// (audit-trail integrity).
+//
+// Rejected if Person is anonymised (terminal — already scrubbed).
+func (p *Person) GloballySuspend(reason string) error {
+	if strings.TrimSpace(reason) == "" {
+		return fmt.Errorf("%w: global suspension reason required for audit", ErrInvalid)
+	}
+	if p.isAnonymised {
+		return fmt.Errorf("%w: cannot suspend anonymised person", ErrInvalid)
+	}
+	if p.isGloballySuspended {
+		if p.globalSuspensionReason == reason {
+			return nil
+		}
+		return fmt.Errorf("%w: person already suspended (reason: %q)", ErrInvalid, p.globalSuspensionReason)
+	}
+	now := clock.Now()
+	p.isGloballySuspended = true
+	p.globalSuspensionReason = reason
+	p.globallySuspendedAt = now
+	p.securityStamp = NewSecurityStamp()
+	p.recordEvent(GloballySuspendedEvent{
+		PersonID: p.id,
+		Reason:   reason,
+		At:       now,
+	})
+	return nil
+}
+
+// LiftGlobalSuspension reverses a previous global suspension.
+// Operator action; SecurityStamp NOT rotated again on lift (rotation
+// already happened at suspension time; lifting just clears the flag).
+//
+// Idempotent: no-op when not currently suspended.
+func (p *Person) LiftGlobalSuspension() error {
+	if !p.isGloballySuspended {
+		return nil
+	}
+	p.isGloballySuspended = false
+	p.globalSuspensionReason = ""
+	p.globallySuspendedAt = time.Time{}
+	p.recordEvent(GlobalSuspensionLiftedEvent{
+		PersonID: p.id,
+		At:       clock.Now(),
 	})
 	return nil
 }

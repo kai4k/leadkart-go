@@ -118,6 +118,19 @@ func FromDomainEvent(d any) (Event, error) {
 			OccurredAtUTC: e.At.UTC(),
 		}, nil
 
+	case person.GloballySuspendedEvent:
+		return PersonGloballySuspendedV1{
+			PersonID:      mustParseUUID(e.PersonID.String()),
+			Reason:        e.Reason,
+			OccurredAtUTC: e.At.UTC(),
+		}, nil
+
+	case person.GlobalSuspensionLiftedEvent:
+		return PersonGlobalSuspensionLiftedV1{
+			PersonID:      mustParseUUID(e.PersonID.String()),
+			OccurredAtUTC: e.At.UTC(),
+		}, nil
+
 	case person.AnonymisedEvent:
 		return PersonAnonymisedV1{
 			PersonID:      mustParseUUID(e.PersonID.String()),

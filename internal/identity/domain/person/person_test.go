@@ -269,6 +269,127 @@ func TestUpdateProfile_RefusedOnAnonymisedPerson(t *testing.T) {
 	}
 }
 
+// ----- GloballySuspend ------------------------------------------------------
+
+func TestGloballySuspend_FlipsFlagAndRotatesStamp(t *testing.T) {
+	t.Cleanup(clock.Reset)
+	clock.Set(time.Date(2026, 5, 7, 12, 0, 0, 0, time.UTC))
+
+	p := newPerson(t)
+	_ = p.PullEvents()
+	originalStamp := p.SecurityStamp()
+
+	if err := p.GloballySuspend("compliance-violation-PCI-DSS"); err != nil {
+		t.Fatalf("GloballySuspend: %v", err)
+	}
+	if !p.IsGloballySuspended() {
+		t.Error("IsGloballySuspended() = false after suspend")
+	}
+	if p.GlobalSuspensionReason() != "compliance-violation-PCI-DSS" {
+		t.Errorf("Reason = %q", p.GlobalSuspensionReason())
+	}
+	if p.GloballySuspendedAt().IsZero() {
+		t.Error("GloballySuspendedAt is zero")
+	}
+	if p.SecurityStamp().Equal(originalStamp) {
+		t.Error("SecurityStamp did not rotate on global suspend")
+	}
+
+	events := p.PullEvents()
+	if len(events) != 1 {
+		t.Fatalf("events: %d", len(events))
+	}
+	ev, ok := events[0].(person.GloballySuspendedEvent)
+	if !ok {
+		t.Fatalf("event[0] = %T, want GloballySuspendedEvent", events[0])
+	}
+	if ev.Reason != "compliance-violation-PCI-DSS" {
+		t.Errorf("event Reason = %q", ev.Reason)
+	}
+}
+
+func TestGloballySuspend_RequiresReason(t *testing.T) {
+	t.Cleanup(clock.Reset)
+	p := newPerson(t)
+	for _, raw := range []string{"", "   ", "\t"} {
+		if err := p.GloballySuspend(raw); !errors.Is(err, person.ErrInvalid) {
+			t.Errorf("GloballySuspend(%q): expected ErrInvalid, got %v", raw, err)
+		}
+	}
+}
+
+func TestGloballySuspend_IdempotentOnSameReason(t *testing.T) {
+	t.Cleanup(clock.Reset)
+	p := newPerson(t)
+	_ = p.GloballySuspend("fraud")
+	_ = p.PullEvents()
+	if err := p.GloballySuspend("fraud"); err != nil {
+		t.Errorf("idempotent same reason: %v", err)
+	}
+	if got := p.PullEvents(); len(got) != 0 {
+		t.Errorf("expected 0 events on idempotent re-suspend, got %d", len(got))
+	}
+}
+
+func TestGloballySuspend_RejectedOnDifferentReason(t *testing.T) {
+	t.Cleanup(clock.Reset)
+	p := newPerson(t)
+	_ = p.GloballySuspend("fraud")
+	err := p.GloballySuspend("compliance")
+	if !errors.Is(err, person.ErrInvalid) {
+		t.Errorf("expected ErrInvalid on conflicting reason, got %v", err)
+	}
+}
+
+func TestGloballySuspend_RejectedOnAnonymisedPerson(t *testing.T) {
+	t.Cleanup(clock.Reset)
+	p := newPerson(t)
+	_ = p.Anonymise()
+	if err := p.GloballySuspend("fraud"); !errors.Is(err, person.ErrInvalid) {
+		t.Errorf("expected ErrInvalid on anonymised person, got %v", err)
+	}
+}
+
+func TestLiftGlobalSuspension_ClearsFlagAndEmitsEvent(t *testing.T) {
+	t.Cleanup(clock.Reset)
+	p := newPerson(t)
+	_ = p.GloballySuspend("temporary-investigation")
+	_ = p.PullEvents()
+
+	if err := p.LiftGlobalSuspension(); err != nil {
+		t.Fatalf("LiftGlobalSuspension: %v", err)
+	}
+	if p.IsGloballySuspended() {
+		t.Error("still IsGloballySuspended after lift")
+	}
+	if p.GlobalSuspensionReason() != "" {
+		t.Errorf("reason not cleared: %q", p.GlobalSuspensionReason())
+	}
+	if !p.GloballySuspendedAt().IsZero() {
+		t.Error("GloballySuspendedAt not cleared")
+	}
+
+	events := p.PullEvents()
+	if len(events) != 1 {
+		t.Fatalf("events: %d", len(events))
+	}
+	if _, ok := events[0].(person.GlobalSuspensionLiftedEvent); !ok {
+		t.Errorf("event[0] = %T, want GlobalSuspensionLiftedEvent", events[0])
+	}
+}
+
+func TestLiftGlobalSuspension_NoOp_WhenNotSuspended(t *testing.T) {
+	t.Cleanup(clock.Reset)
+	p := newPerson(t)
+	_ = p.PullEvents()
+	if err := p.LiftGlobalSuspension(); err != nil {
+		t.Fatalf("Lift on not-suspended: %v", err)
+	}
+	if got := p.PullEvents(); len(got) != 0 {
+		t.Errorf("expected 0 events on no-op lift, got %d", len(got))
+	}
+}
+
 // ----- Anonymise (DPDP/GDPR) ------------------------------------------------
 
 func TestAnonymise_MarksAnonymisedAndScrubsFields(t *testing.T) {

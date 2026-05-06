@@ -77,3 +77,37 @@ func (AnonymisedEvent) Topic() string { return "identity.person_anonymised.v1" }
 
 // OccurredAt returns the domain timestamp.
 func (e AnonymisedEvent) OccurredAt() time.Time { return e.At }
+
+// GloballySuspendedEvent fires when [Person.GloballySuspend] is called.
+//
+// Rare — compliance / fraud / cross-tenant abuse. Subscribers (auth,
+// every module's session blacklist) MUST treat the Person as
+// completely banned: kill all refresh-token families, block login,
+// reject all authenticated calls.
+type GloballySuspendedEvent struct {
+	PersonID ID
+	Reason   string
+	At       time.Time
+}
+
+// Topic returns the integration-event type.
+func (GloballySuspendedEvent) Topic() string { return "identity.person_globally_suspended.v1" }
+
+// OccurredAt returns the domain timestamp.
+func (e GloballySuspendedEvent) OccurredAt() time.Time { return e.At }
+
+// GlobalSuspensionLiftedEvent fires when [Person.LiftGlobalSuspension]
+// reverses a previous global suspension. Subscribers re-enable login
+// + remove the SIEM block.
+type GlobalSuspensionLiftedEvent struct {
+	PersonID ID
+	At       time.Time
+}
+
+// Topic returns the integration-event type.
+func (GlobalSuspensionLiftedEvent) Topic() string {
+	return "identity.person_global_suspension_lifted.v1"
+}
+
+// OccurredAt returns the domain timestamp.
+func (e GlobalSuspensionLiftedEvent) OccurredAt() time.Time { return e.At }

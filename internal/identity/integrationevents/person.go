@@ -69,6 +69,44 @@ func (PersonProfileUpdatedV1) Topic() string { return "identity.person_profile_u
 // OccurredAt returns the domain timestamp.
 func (e PersonProfileUpdatedV1) OccurredAt() time.Time { return e.OccurredAtUTC }
 
+// PersonGloballySuspendedV1 — Person was globally banned (compliance,
+// fraud, cross-tenant abuse). Distinct from PersonAnonymisedV1
+// (irreversible PII scrub) and Membership.Deactivated (per-tenant).
+//
+// Auth subscribers MUST kill every refresh-token family for this
+// PersonID across tenants AND block login attempts. Notifications +
+// SIEM subscribers may surface alerts.
+type PersonGloballySuspendedV1 struct {
+	platformMarker
+
+	PersonID      uuid.UUID `json:"person_id"`
+	Reason        string    `json:"reason"`
+	OccurredAtUTC time.Time `json:"occurred_at_utc"`
+}
+
+// Topic returns the canonical wire alias.
+func (PersonGloballySuspendedV1) Topic() string { return "identity.person_globally_suspended.v1" }
+
+// OccurredAt returns the domain timestamp.
+func (e PersonGloballySuspendedV1) OccurredAt() time.Time { return e.OccurredAtUTC }
+
+// PersonGlobalSuspensionLiftedV1 — global suspension reversed by
+// operator. Subscribers re-enable login + remove SIEM block.
+type PersonGlobalSuspensionLiftedV1 struct {
+	platformMarker
+
+	PersonID      uuid.UUID `json:"person_id"`
+	OccurredAtUTC time.Time `json:"occurred_at_utc"`
+}
+
+// Topic returns the canonical wire alias.
+func (PersonGlobalSuspensionLiftedV1) Topic() string {
+	return "identity.person_global_suspension_lifted.v1"
+}
+
+// OccurredAt returns the domain timestamp.
+func (e PersonGlobalSuspensionLiftedV1) OccurredAt() time.Time { return e.OccurredAtUTC }
+
 // PersonAnonymisedV1 — DPDP Act §12 / GDPR Art. 17 right-to-erasure
 // completed at the Person aggregate. Cascades to every module touching
 // the Person's PII per `data-retention.md` (CRM lead notes scrub,
@@ -92,10 +130,14 @@ var (
 	_ Platform = PersonCreatedV1{}
 	_ Platform = PersonPasswordChangedV1{}
 	_ Platform = PersonProfileUpdatedV1{}
+	_ Platform = PersonGloballySuspendedV1{}
+	_ Platform = PersonGlobalSuspensionLiftedV1{}
 	_ Platform = PersonAnonymisedV1{}
 
 	_ = register(PersonCreatedV1{})
 	_ = register(PersonPasswordChangedV1{})
 	_ = register(PersonProfileUpdatedV1{})
+	_ = register(PersonGloballySuspendedV1{})
+	_ = register(PersonGlobalSuspensionLiftedV1{})
 	_ = register(PersonAnonymisedV1{})
 )
