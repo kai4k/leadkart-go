@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/leadkart/leadkart-go/internal/common/tenancy"
 	"github.com/leadkart/leadkart-go/internal/identity/app/jwt"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/permission"
 	"github.com/leadkart/leadkart-go/internal/identity/ports/authn"
@@ -33,16 +34,19 @@ func (f *fakeVerifier) Verify(token string) (*jwt.Claims, error) {
 }
 
 // next is the protected handler — records that it was reached and lets
-// tests inspect the claims attached to ctx via authn.ClaimsFromContext.
+// tests inspect the claims attached to ctx via authn.ClaimsFromContext
+// AND the tenant ID bound to ctx via tenancy.FromContext.
 type sentinel struct {
-	called bool
-	claims *jwt.Claims
+	called   bool
+	claims   *jwt.Claims
+	tenantID tenancy.ID
 }
 
 func (s *sentinel) handler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		s.called = true
 		s.claims, _ = authn.ClaimsFromContext(r.Context())
+		s.tenantID, _ = tenancy.FromContext(r.Context())
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
 	})
@@ -59,7 +63,7 @@ func newRequest(t *testing.T, authHeader string) *http.Request {
 
 func TestRequireAuth_MissingHeader_Returns401(t *testing.T) {
 	t.Parallel()
-	v := &fakeVerifier{claims: &jwt.Claims{}}
+	v := &fakeVerifier{claims: &jwt.Claims{TenantID: "tenant-test"}}
 	s := &sentinel{}
 	mw := authn.RequireAuth(v)(s.handler())
 
@@ -143,9 +147,70 @@ func TestRequireAuth_ValidToken_PopulatesClaimsAndCallsNext(t *testing.T) {
 	}
 }
 
+func TestRequireAuth_BindsTenantContextFromClaim(t *testing.T) {
+	// Per multi-tenancy.md: every authenticated request MUST have
+	// tenant ctx bound so downstream repos under TxScopeTenant can
+	// resolve `app.tenant_id` GUC. RequireAuth bridges JWT claim
+	// tenant_id → tenancy.WithID(ctx) so handlers don't have to.
+	t.Parallel()
+	const wantTenant = "019dfe62-d263-7a20-b7de-08df2621c8eb"
+	v := &fakeVerifier{
+		wantToken: "tok",
+		claims:    &jwt.Claims{TenantID: wantTenant},
+	}
+	s := &sentinel{}
+	mw := authn.RequireAuth(v)(s.handler())
+	rec := httptest.NewRecorder()
+	mw.ServeHTTP(rec, newRequest(t, "Bearer tok"))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: got %d want 200", rec.Code)
+	}
+	if !s.called {
+		t.Fatal("next did not run")
+	}
+	if string(s.tenantID) != wantTenant {
+		t.Fatalf("tenant ctx: got %q want %q", s.tenantID, wantTenant)
+	}
+}
+
+func TestRequireAuth_EmptyTenantIDClaim_Returns401(t *testing.T) {
+	// A token with empty tenant_id is a JWT-issuance bug — every
+	// production-issued token populates tenant_id. Treat as
+	// unauthenticated rather than letting the request reach a
+	// handler with an unbound tenant ctx (would fail opaquely at
+	// the repo layer when TxScopeTenant tried to set the GUC).
+	t.Parallel()
+	cases := []struct {
+		name      string
+		tenantID  string
+	}{
+		{"empty", ""},
+		{"whitespace only", "   "},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			v := &fakeVerifier{
+				wantToken: "tok",
+				claims:    &jwt.Claims{TenantID: tc.tenantID},
+			}
+			s := &sentinel{}
+			mw := authn.RequireAuth(v)(s.handler())
+			rec := httptest.NewRecorder()
+			mw.ServeHTTP(rec, newRequest(t, "Bearer tok"))
+			if rec.Code != http.StatusUnauthorized {
+				t.Fatalf("status: got %d want 401", rec.Code)
+			}
+			if s.called {
+				t.Fatal("next ran despite missing tenant_id claim")
+			}
+		})
+	}
+}
+
 func TestRequireAuth_AcceptsCaseInsensitiveScheme(t *testing.T) {
 	t.Parallel()
-	v := &fakeVerifier{wantToken: "tok", claims: &jwt.Claims{}}
+	v := &fakeVerifier{wantToken: "tok", claims: &jwt.Claims{TenantID: "tenant-test"}}
 	s := &sentinel{}
 	mw := authn.RequireAuth(v)(s.handler())
 	rec := httptest.NewRecorder()
@@ -177,6 +242,7 @@ func TestRequirePermission_ClaimsLackPermission_Returns403(t *testing.T) {
 	v := &fakeVerifier{
 		wantToken: "tok",
 		claims: &jwt.Claims{
+			TenantID: "tenant-test",
 			Permissions: []string{permission.IdentityPermissions.Users.View}, // wrong perm
 		},
 	}
@@ -201,6 +267,7 @@ func TestRequirePermission_PermissionPresent_Returns200(t *testing.T) {
 	v := &fakeVerifier{
 		wantToken: "tok",
 		claims: &jwt.Claims{
+			TenantID: "tenant-test",
 			Permissions: []string{
 				permission.IdentityPermissions.Roles.View,
 				permission.IdentityPermissions.Users.View,
@@ -224,6 +291,7 @@ func TestRequirePermission_SuperUser_BypassesCheck(t *testing.T) {
 	v := &fakeVerifier{
 		wantToken: "tok",
 		claims: &jwt.Claims{
+			TenantID:    "tenant-test",
 			IsSuperUser: true,
 			// Empty permissions on purpose: SuperUser short-circuits.
 			Permissions: nil,
@@ -270,6 +338,7 @@ func TestRequireAnyPermission_OneOfManyPresent_Returns200(t *testing.T) {
 	v := &fakeVerifier{
 		wantToken: "tok",
 		claims: &jwt.Claims{
+			TenantID: "tenant-test",
 			Permissions: []string{permission.IdentityPermissions.Roles.View},
 		},
 	}
@@ -290,6 +359,7 @@ func TestRequireAnyPermission_NonePresent_Returns403(t *testing.T) {
 	v := &fakeVerifier{
 		wantToken: "tok",
 		claims: &jwt.Claims{
+			TenantID: "tenant-test",
 			Permissions: []string{permission.IdentityPermissions.Users.View},
 		},
 	}
@@ -309,7 +379,7 @@ func TestRequireAnyPermission_SuperUser_Bypass(t *testing.T) {
 	t.Parallel()
 	v := &fakeVerifier{
 		wantToken: "tok",
-		claims:    &jwt.Claims{IsSuperUser: true},
+		claims:    &jwt.Claims{TenantID: "tenant-test", IsSuperUser: true},
 	}
 	s := &sentinel{}
 	mw := authn.RequireAnyPermission(v,
@@ -339,7 +409,7 @@ func TestRequirePlatform_TokenIsPlatform_Returns200(t *testing.T) {
 	t.Parallel()
 	v := &fakeVerifier{
 		wantToken: "tok",
-		claims:    &jwt.Claims{IsPlatform: true},
+		claims:    &jwt.Claims{TenantID: "tenant-test", IsPlatform: true},
 	}
 	s := &sentinel{}
 	mw := authn.RequirePlatform(v)(s.handler())
@@ -354,7 +424,7 @@ func TestRequirePlatform_TenantToken_Returns403(t *testing.T) {
 	t.Parallel()
 	v := &fakeVerifier{
 		wantToken: "tok",
-		claims:    &jwt.Claims{IsPlatform: false},
+		claims:    &jwt.Claims{TenantID: "tenant-test", IsPlatform: false},
 	}
 	s := &sentinel{}
 	mw := authn.RequirePlatform(v)(s.handler())

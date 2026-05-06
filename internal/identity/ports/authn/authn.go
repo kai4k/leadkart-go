@@ -28,6 +28,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/leadkart/leadkart-go/internal/common/tenancy"
 	"github.com/leadkart/leadkart-go/internal/identity/app/jwt"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/permission"
 )
@@ -138,7 +139,25 @@ func RequireAuth(verifier Verifier) func(http.Handler) http.Handler {
 					"invalid token")
 				return
 			}
-			next.ServeHTTP(w, r.WithContext(WithClaims(r.Context(), claims)))
+			// Bind BOTH the verified claims AND the tenant context onto
+			// the request ctx. Downstream repositories run under
+			// TxScopeTenant which expects `tenancy.FromContext(ctx)` to
+			// resolve — without this bridge, every protected handler
+			// would have to re-extract the tenant from claims manually
+			// (boilerplate that creep into every endpoint = drift risk).
+			//
+			// Empty / missing tenant_id claim is a token-shape bug:
+			// JWT issuance always populates it. Treat as unauthenticated
+			// rather than letting the request reach a handler with an
+			// unbound tenant ctx that fails opaquely at the repo layer.
+			if strings.TrimSpace(claims.TenantID) == "" {
+				writeError(w, http.StatusUnauthorized, errCodeUnauthenticated,
+					"token missing tenant_id claim")
+				return
+			}
+			ctx := WithClaims(r.Context(), claims)
+			ctx = tenancy.WithID(ctx, tenancy.ID(claims.TenantID))
+			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
 }
