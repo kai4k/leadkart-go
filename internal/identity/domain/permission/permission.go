@@ -43,3 +43,68 @@ func (p *Permission) Equal(other *Permission) bool {
 	}
 	return p.name == other.name
 }
+
+type metaPermissions struct{ TenantAdmin string }
+type platformPermissions struct {
+	TenantsView, TenantsCreate, TenantsManage string
+	UsersView, UsersCreate, UsersManage       string
+	RolesView, RolesManage                    string
+}
+type tenantsPermissions struct {
+	View, Update, UpdateSettings, Suspend, Activate, Delete string
+}
+type usersPermissions struct {
+	View, Create, Update, Deactivate, Reactivate, Unlock, Anonymise, UpdatePermissions string
+}
+type rolesPermissions struct {
+	View, Create, Update, Delete, Assign, Revoke string
+}
+
+// IdentityPermissions is the closed catalogue of every permission the
+// system recognises. Mirror of the .NET `IdentityPermissions` static
+// class. Maintain in lockstep with the intern-table list.
+var IdentityPermissions = struct {
+	Meta     metaPermissions
+	Platform platformPermissions
+	Tenants  tenantsPermissions
+	Users    usersPermissions
+	Roles    rolesPermissions
+}{
+	Meta: metaPermissions{TenantAdmin: "tenant.admin"},
+	Platform: platformPermissions{
+		TenantsView:   "platform.tenants.view",
+		TenantsCreate: "platform.tenants.create",
+		TenantsManage: "platform.tenants.manage",
+		UsersView:     "platform.users.view",
+		UsersCreate:   "platform.users.create",
+		UsersManage:   "platform.users.manage",
+		RolesView:     "platform.roles.view",
+		RolesManage:   "platform.roles.manage",
+	},
+	Tenants: tenantsPermissions{
+		View:           "identity.tenants.view",
+		Update:         "identity.tenants.update",
+		UpdateSettings: "identity.tenants.update_settings",
+		Suspend:        "identity.tenants.suspend",
+		Activate:       "identity.tenants.activate",
+		Delete:         "identity.tenants.delete",
+	},
+	Users: usersPermissions{
+		View:              "identity.users.view",
+		Create:            "identity.users.create",
+		Update:            "identity.users.update",
+		Deactivate:        "identity.users.deactivate",
+		Reactivate:        "identity.users.reactivate",
+		Unlock:            "identity.users.unlock",
+		Anonymise:         "identity.users.anonymise",
+		UpdatePermissions: "identity.users.update_permissions",
+	},
+	Roles: rolesPermissions{
+		View:   "identity.roles.view",
+		Create: "identity.roles.create",
+		Update: "identity.roles.update",
+		Delete: "identity.roles.delete",
+		Assign: "identity.roles.assign",
+		Revoke: "identity.roles.revoke",
+	},
+}
