@@ -15,8 +15,8 @@ permissions:
   pull-requests: read
 
 jobs:
-  test:
-    name: Build / Lint / Test / Vuln
+  unit:
+    name: Build / Lint / Unit Tests / Vuln
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -41,13 +41,13 @@ jobs:
           version: v2.12.2
           args: --timeout=5m
 
-      - name: Test (race + shuffle + coverage)
+      - name: Unit tests (race + shuffle + coverage)
         run: go test -race -shuffle=on -coverprofile=coverage.out ./...
 
       - name: Upload coverage artifact
         uses: actions/upload-artifact@v7
         with:
-          name: coverage
+          name: coverage-unit
           path: coverage.out
           retention-days: 7
 
@@ -56,3 +56,46 @@ jobs:
 
       - name: Build all binaries
         run: go build -trimpath -ldflags="-s -w" -o bin/ ./cmd/...
+
+  # Integration tests — testcontainers Postgres + Redis spun per-test.
+  # Files gated by `//go:build integration` are skipped by the unit job;
+  # this job runs them with the build tag enabled.
+  #
+  # GitHub-hosted ubuntu runners have Docker preinstalled — testcontainers-go
+  # picks it up without configuration. Per testcontainers docs canonical
+  # CI setup (https://golang.testcontainers.org/system_requirements/ci/).
+  integration:
+    name: Integration Tests (testcontainers)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # Pre-pull Postgres image — testcontainers does it on first use,
+      # but pre-pulling parallelizes with module download + speeds up
+      # the first test by ~30s on a cold cache.
+      - name: Pre-pull Postgres image
+        run: docker pull postgres:17-alpine
+
+      - name: Verify modules
+        run: go mod download
+
+      # `-tags=integration` enables the //go:build integration files.
+      # `-timeout=15m` accommodates testcontainers cold-start +
+      # multiple per-test container spins; production runs typically
+      # settle under 5min once module + image cache warm.
+      - name: Integration tests
+        run: go test -race -shuffle=on -tags=integration -timeout=15m -coverprofile=coverage-integration.out ./...
+
+      - name: Upload integration coverage artifact
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage-integration
+          path: coverage-integration.out
+          retention-days: 7
