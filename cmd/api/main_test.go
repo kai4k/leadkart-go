@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"io"
 	"log/slog"
 	"net/http"
@@ -28,7 +27,7 @@ func TestPublicServer_DoesNotMountHealth(t *testing.T) {
 		t.Run(path, func(t *testing.T) {
 			t.Parallel()
 			rec := httptest.NewRecorder()
-			req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, path, nil)
+			req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, path, nil)
 			srv.ServeHTTP(rec, req)
 			if rec.Code != http.StatusNotFound {
 				t.Fatalf("public %s: got %d want 404 (probes belong on admin)", path, rec.Code)
@@ -55,7 +54,7 @@ func TestAdminServer_MountsHealthEndpoints(t *testing.T) {
 		t.Run(tc.path, func(t *testing.T) {
 			t.Parallel()
 			rec := httptest.NewRecorder()
-			req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, tc.path, nil)
+			req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, tc.path, nil)
 			adminSrv.Handler.ServeHTTP(rec, req)
 			if rec.Code != tc.want {
 				t.Fatalf("admin %s: got %d want %d", tc.path, rec.Code, tc.want)
@@ -69,7 +68,7 @@ func TestAdminServer_ServesPprof(t *testing.T) {
 	t.Parallel()
 	adminSrv := obs.NewAdminServer(":0", nil)
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/debug/pprof/", nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/debug/pprof/", nil)
 	adminSrv.Handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("/debug/pprof/: got %d want 200", rec.Code)

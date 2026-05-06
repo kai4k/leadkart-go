@@ -191,7 +191,7 @@ func postJSON(t *testing.T, url string, body interface{}) httpResp {
 	if err := json.NewEncoder(buf).Encode(body); err != nil {
 		t.Fatalf("encode body: %v", err)
 	}
-	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, url, buf)
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, url, buf)
 	if err != nil {
 		t.Fatalf("new request: %v", err)
 	}
@@ -213,7 +213,7 @@ func postJSON(t *testing.T, url string, body interface{}) httpResp {
 // role — without exporting the helper across package boundaries.
 func startWiredPostgresForHTTP(t *testing.T) *pgxpool.Pool {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 90*time.Second)
 	defer cancel()
 
 	c, err := postgres.Run(ctx,

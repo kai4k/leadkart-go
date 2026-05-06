@@ -76,7 +76,7 @@ func TestOutboxForwarder_PublishesUnforwardedRows(t *testing.T) {
 	pubsub := gochannel.NewGoChannel(gochannel.Config{}, watermill.NewSlogLogger(silentSlog()))
 	t.Cleanup(func() { _ = pubsub.Close() })
 
-	msgs, err := pubsub.Subscribe(context.Background(), outboxTopic)
+	msgs, err := pubsub.Subscribe(t.Context(), outboxTopic)
 	if err != nil {
 		t.Fatalf("Subscribe: %v", err)
 	}
@@ -97,12 +97,12 @@ func TestOutboxForwarder_PublishesUnforwardedRows(t *testing.T) {
 	if err != nil {
 		t.Fatalf("tenant.New: %v", err)
 	}
-	if err := tenants.Add(context.Background(), tn); err != nil {
+	if err := tenants.Add(t.Context(), tn); err != nil {
 		t.Fatalf("tenant Add: %v", err)
 	}
 
 	// Drain.
-	count, err := forwarder.ForwardOnce(context.Background())
+	count, err := forwarder.ForwardOnce(t.Context())
 	if err != nil {
 		t.Fatalf("ForwardOnce: %v", err)
 	}
@@ -146,7 +146,7 @@ func TestOutboxForwarder_IsIdempotent_OnSecondPass(t *testing.T) {
 	pubsub := gochannel.NewGoChannel(gochannel.Config{}, watermill.NewSlogLogger(silentSlog()))
 	t.Cleanup(func() { _ = pubsub.Close() })
 
-	msgs, err := pubsub.Subscribe(context.Background(), outboxTopic)
+	msgs, err := pubsub.Subscribe(t.Context(), outboxTopic)
 	if err != nil {
 		t.Fatalf("Subscribe: %v", err)
 	}
@@ -159,11 +159,11 @@ func TestOutboxForwarder_IsIdempotent_OnSecondPass(t *testing.T) {
 	registerSlug, _ := slug.New("idempotent-" + full[len(full)-8:])
 	addr, _ := email.New("idempotent@flow.test")
 	tn, _ := tenant.New(tenant.ID(ids.NewV7().String()), registerSlug, "Idempotent Pharma", "IP", addr)
-	if err := tenants.Add(context.Background(), tn); err != nil {
+	if err := tenants.Add(t.Context(), tn); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
 
-	first, err := forwarder.ForwardOnce(context.Background())
+	first, err := forwarder.ForwardOnce(t.Context())
 	if err != nil {
 		t.Fatalf("first ForwardOnce: %v", err)
 	}
@@ -172,7 +172,7 @@ func TestOutboxForwarder_IsIdempotent_OnSecondPass(t *testing.T) {
 	}
 
 	// Second pass: row is now forwarded=true, must skip.
-	second, err := forwarder.ForwardOnce(context.Background())
+	second, err := forwarder.ForwardOnce(t.Context())
 	if err != nil {
 		t.Fatalf("second ForwardOnce: %v", err)
 	}
@@ -189,7 +189,7 @@ func TestOutboxForwarder_RunStopsOnContextCancel(t *testing.T) {
 
 	forwarder := adapters.NewOutboxForwarder(pool, tx, pubsub, outboxTopic, 0)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
+	ctx, cancel := context.WithTimeout(t.Context(), 250*time.Millisecond)
 	defer cancel()
 
 	done := make(chan struct{})

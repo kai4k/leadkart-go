@@ -31,6 +31,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	"github.com/pressly/goose/v3"
@@ -100,10 +101,8 @@ func run(ctx context.Context) error {
 // maskDSN returns the host portion of a DSN for safe logging — never logs
 // the full DSN (passwords + secrets).
 func maskDSN(dsn string) string {
-	for i := 0; i < len(dsn); i++ {
-		if dsn[i] == '@' {
-			return dsn[i+1:]
-		}
+	if i := strings.IndexByte(dsn, '@'); i >= 0 {
+		return dsn[i+1:]
 	}
 	return "<unknown>"
 }

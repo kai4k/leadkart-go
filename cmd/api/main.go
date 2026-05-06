@@ -52,6 +52,38 @@ import (
 // topic; subscribers route by `event_type` metadata header.
 const IdentityEventsTopic = "identity.events"
 
+// HTTP server timeouts — public listener tuning per OWASP API Security
+// Top 10 (API4: Unrestricted Resource Consumption). Values match the
+// stdlib `net/http` recommended defaults adapted for SaaS-style payloads.
+const (
+	// apiReadHeaderTimeout caps slowloris-style request-header reads.
+	apiReadHeaderTimeout = 5 * time.Second
+	// apiReadTimeout is the full-request read budget (headers + body).
+	apiReadTimeout = 30 * time.Second
+	// apiWriteTimeout is the response-write budget. Streaming endpoints
+	// (SSE) override per-handler with `http.ResponseController`.
+	apiWriteTimeout = 30 * time.Second
+	// apiIdleTimeout is the keep-alive idle connection budget.
+	apiIdleTimeout = 120 * time.Second
+	// apiShutdownTimeout caps how long the server waits for in-flight
+	// requests to finish during graceful shutdown (SIGTERM handling).
+	apiShutdownTimeout = 30 * time.Second
+)
+
+// Outbox forwarder + health-probe tunings.
+const (
+	// forwarderPollInterval — how often the forwarder polls the outbox
+	// for unforwarded rows when the previous poll returned nothing.
+	forwarderPollInterval = time.Second
+	// forwarderRetryInterval — backoff after a publish failure before
+	// retrying the same row.
+	forwarderRetryInterval = 50 * time.Millisecond
+	// healthCheckTimeout — per-checker budget on /ready probes.
+	healthCheckTimeout = 2 * time.Second
+	// otelShutdownTimeout — OpenTelemetry exporter flush + close.
+	otelShutdownTimeout = 10 * time.Second
+)
+
 func main() {
 	if err := run(context.Background(), os.Stdout, os.Args[1:]); err != nil {
 		fmt.Fprintf(os.Stderr, "leadkart-api: %v\n", err)
@@ -80,7 +112,7 @@ func run(ctx context.Context, stdout *os.File, _ []string) error {
 		return fmt.Errorf("obs: %w", err)
 	}
 	defer func() {
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), otelShutdownTimeout)
 		defer cancel()
 		if err := otelShutdown(shutdownCtx); err != nil {
 			logger.ErrorContext(ctx, "obs shutdown", "err", err)
@@ -115,30 +147,31 @@ func run(ctx context.Context, stdout *os.File, _ []string) error {
 	forwarderCtx, stopForwarder := context.WithCancel(ctx)
 	defer stopForwarder()
 	var workers sync.WaitGroup
-	workers.Add(1)
-	go func() {
-		defer workers.Done()
-		forwarder.Run(forwarderCtx, time.Second, 50*time.Millisecond, func(err error) {
+	// Go 1.25 wg.Go captures both the goroutine spawn AND the
+	// matching wg.Done() call — strictly cleaner than manual
+	// Add(1) + defer Done().
+	workers.Go(func() {
+		forwarder.Run(forwarderCtx, forwarderPollInterval, forwarderRetryInterval, func(err error) {
 			logger.ErrorContext(forwarderCtx, "outbox forwarder", "err", err)
 		})
-	}()
+	})
 
 	// Three-endpoint health split lives on the admin listener — public
 	// API never carries /alive|/ready|/health (per audit-checklist.md
 	// §12: probes excluded from public-facing caches).
 	health := obs.NewHealth([]obs.HealthChecker{
 		obs.HealthCheckerFunc{N: "postgres", Fn: pool.Ping},
-	}, 2*time.Second)
+	}, healthCheckTimeout)
 	adminSrv := obs.NewAdminServer(cfg.Listen.Admin, health)
 
 	publicHandler := otelhttp.NewHandler(newServer(logger, identityApp), "leadkart-api")
 	srv := &http.Server{
 		Addr:              cfg.Listen.API,
 		Handler:           publicHandler,
-		ReadHeaderTimeout: 5 * time.Second,
-		ReadTimeout:       30 * time.Second,
-		WriteTimeout:      30 * time.Second,
-		IdleTimeout:       120 * time.Second,
+		ReadHeaderTimeout: apiReadHeaderTimeout,
+		ReadTimeout:       apiReadTimeout,
+		WriteTimeout:      apiWriteTimeout,
+		IdleTimeout:       apiIdleTimeout,
 	}
 
 	errCh := make(chan error, 2)
@@ -160,7 +193,7 @@ func run(ctx context.Context, stdout *os.File, _ []string) error {
 	select {
 	case <-ctx.Done():
 		logger.Info("api shutting down")
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), apiShutdownTimeout)
 		defer cancel()
 		stopForwarder()
 		workers.Wait()

@@ -84,7 +84,7 @@ func newWiredApp(t *testing.T) (*pgxpool.Pool, command.RegisterTenantHandler, co
 
 func TestFlow_RegisterLoginRefreshLogout(t *testing.T) {
 	_, register, login, refresh, logout := newWiredApp(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// 1. Register a new tenant + admin person + membership.
 	full := ids.NewV7().String()
@@ -170,7 +170,7 @@ func TestFlow_RegisterLoginRefreshLogout(t *testing.T) {
 
 func TestFlow_LoginUnknownEmail_GenericFailure(t *testing.T) {
 	_, _, login, _, _ := newWiredApp(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	addr, _ := email.New("nobody@example.test")
 	_, err := login.Handle(ctx, command.LoginCommand{
@@ -184,7 +184,7 @@ func TestFlow_LoginUnknownEmail_GenericFailure(t *testing.T) {
 
 func TestFlow_LoginWrongPassword_GenericFailure(t *testing.T) {
 	_, register, login, _, _ := newWiredApp(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	full := ids.NewV7().String()
 	tenantSlug, _ := slug.New("wp-" + full[len(full)-8:])
@@ -212,7 +212,7 @@ func TestFlow_LoginWrongPassword_GenericFailure(t *testing.T) {
 
 func TestFlow_RegisterDuplicateActiveEmail_Blocked(t *testing.T) {
 	_, register, _, _, _ := newWiredApp(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	addr, _ := email.New("dup-active@flow.test")
 	full := ids.NewV7().String()
@@ -256,7 +256,7 @@ func TestFlow_RegisterDuplicateActiveEmail_Blocked(t *testing.T) {
 func startWiredPostgres(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 90*time.Second)
 	defer cancel()
 
 	c, err := postgres.Run(ctx,

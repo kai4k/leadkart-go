@@ -27,7 +27,7 @@ import (
 // doesn't matter for these tests.
 func inboxFixture(t *testing.T) *pgxpool.Pool {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 90*time.Second)
 	defer cancel()
 
 	c, err := postgres.Run(ctx,
@@ -44,6 +44,7 @@ func inboxFixture(t *testing.T) *pgxpool.Pool {
 		t.Fatalf("start postgres: %v", err)
 	}
 	t.Cleanup(func() {
+		// Cleanup runs after t.Context() is cancelled — must use Background.
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		_ = c.Terminate(ctx)
@@ -92,7 +93,7 @@ func TestIdempotentReceiver_FirstCall_RunsHandlerAndRecords(t *testing.T) {
 		return nil
 	})
 
-	if err := wrapped(context.Background(), "11111111-1111-1111-1111-111111111111"); err != nil {
+	if err := wrapped(t.Context(), "11111111-1111-1111-1111-111111111111"); err != nil {
 		t.Fatalf("first: %v", err)
 	}
 	if calls.Load() != 1 {
@@ -101,7 +102,7 @@ func TestIdempotentReceiver_FirstCall_RunsHandlerAndRecords(t *testing.T) {
 
 	// Verify row exists.
 	var n int
-	err := pool.QueryRow(context.Background(), `
+	err := pool.QueryRow(t.Context(), `
 		SELECT count(*) FROM identity.processed_messages
 		WHERE  message_id = $1 AND handler_name = $2
 	`, "11111111-1111-1111-1111-111111111111", "test.handler").Scan(&n)
@@ -125,7 +126,7 @@ func TestIdempotentReceiver_Replay_SkipsHandler(t *testing.T) {
 
 	mid := "22222222-2222-2222-2222-222222222222"
 	for i := 0; i < 5; i++ {
-		if err := wrapped(context.Background(), mid); err != nil {
+		if err := wrapped(t.Context(), mid); err != nil {
 			t.Fatalf("call %d: %v", i, err)
 		}
 	}
@@ -149,12 +150,12 @@ func TestIdempotentReceiver_HandlerError_DoesNotRecord_NextCallRunsAgain(t *test
 	})
 
 	// 1. Handler errors → no dedup row recorded.
-	err := flaky(context.Background(), mid)
+	err := flaky(t.Context(), mid)
 	if err == nil || err.Error() != "transient" {
 		t.Fatalf("first call expected transient err, got %v", err)
 	}
 	var n int
-	if err := pool.QueryRow(context.Background(), `
+	if err := pool.QueryRow(t.Context(), `
 		SELECT count(*) FROM identity.processed_messages
 		WHERE  message_id = $1 AND handler_name = $2
 	`, mid, "test.flaky").Scan(&n); err != nil {
@@ -165,7 +166,7 @@ func TestIdempotentReceiver_HandlerError_DoesNotRecord_NextCallRunsAgain(t *test
 	}
 
 	// 2. Retry succeeds — handler runs again, dedup row recorded.
-	if err := flaky(context.Background(), mid); err != nil {
+	if err := flaky(t.Context(), mid); err != nil {
 		t.Fatalf("retry: %v", err)
 	}
 	if calls.Load() != 2 {
@@ -173,7 +174,7 @@ func TestIdempotentReceiver_HandlerError_DoesNotRecord_NextCallRunsAgain(t *test
 	}
 
 	// 3. Third call replays — handler does NOT run.
-	if err := flaky(context.Background(), mid); err != nil {
+	if err := flaky(t.Context(), mid); err != nil {
 		t.Fatalf("third: %v", err)
 	}
 	if calls.Load() != 2 {
@@ -198,7 +199,7 @@ func TestIdempotentReceiver_ScopedByHandlerName(t *testing.T) {
 
 	mid := "44444444-4444-4444-4444-444444444444"
 	for _, h := range []messaging.HandlerFunc{hA, hB, hA, hB} {
-		if err := h(context.Background(), mid); err != nil {
+		if err := h(t.Context(), mid); err != nil {
 			t.Fatalf("handler: %v", err)
 		}
 	}

@@ -37,7 +37,7 @@ import (
 func repoFixture(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 90*time.Second)
 	defer cancel()
 
 	c, err := postgres.Run(ctx,
@@ -168,7 +168,7 @@ func newTenant(t *testing.T) *tenant.Tenant {
 func TestTenantRepository_Add_PersistsRowAndOutboxEvent(t *testing.T) {
 	pool := repoFixture(t)
 	repo := adapters.NewTenantRepository(pool, pg.NewTransactor(pool))
-	ctx := context.Background()
+	ctx := t.Context()
 
 	tn := newTenant(t)
 	if err := repo.Add(ctx, tn); err != nil {
@@ -213,7 +213,7 @@ func TestTenantRepository_Add_PersistsRowAndOutboxEvent(t *testing.T) {
 func TestTenantRepository_Add_DuplicateSlug_ReturnsErrSlugTaken(t *testing.T) {
 	pool := repoFixture(t)
 	repo := adapters.NewTenantRepository(pool, pg.NewTransactor(pool))
-	ctx := context.Background()
+	ctx := t.Context()
 
 	first := newTenant(t)
 	if err := repo.Add(ctx, first); err != nil {
@@ -237,7 +237,7 @@ func TestTenantRepository_Add_DuplicateSlug_ReturnsErrSlugTaken(t *testing.T) {
 func TestTenantRepository_GetByID_NotFound(t *testing.T) {
 	pool := repoFixture(t)
 	repo := adapters.NewTenantRepository(pool, pg.NewTransactor(pool))
-	ctx := context.Background()
+	ctx := t.Context()
 
 	missing := tenant.ID(ids.NewV7().String())
 	_, err := repo.GetByID(ctx, missing)
@@ -249,7 +249,7 @@ func TestTenantRepository_GetByID_NotFound(t *testing.T) {
 func TestTenantRepository_UpdateByID_ActivatesAndDrainsEvent(t *testing.T) {
 	pool := repoFixture(t)
 	repo := adapters.NewTenantRepository(pool, pg.NewTransactor(pool))
-	ctx := context.Background()
+	ctx := t.Context()
 
 	tn := newTenant(t)
 	if err := repo.Add(ctx, tn); err != nil {
@@ -317,7 +317,7 @@ func TestTenantRepository_UpdateByID_ActivatesAndDrainsEvent(t *testing.T) {
 func TestTenantRepository_UpdateByID_NoOpClosureSkipsPersist(t *testing.T) {
 	pool := repoFixture(t)
 	repo := adapters.NewTenantRepository(pool, pg.NewTransactor(pool))
-	ctx := context.Background()
+	ctx := t.Context()
 
 	tn := newTenant(t)
 	if err := repo.Add(ctx, tn); err != nil {

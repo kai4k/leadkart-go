@@ -25,6 +25,7 @@ package membership
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -300,10 +301,8 @@ func (m *Membership) AssignRole(roleID role.ID) error {
 	if roleID.IsZero() {
 		return fmt.Errorf("%w: roleID required", ErrInvalid)
 	}
-	for _, existing := range m.roleAssignments {
-		if existing == roleID {
-			return nil
-		}
+	if slices.Contains(m.roleAssignments, roleID) {
+		return nil
 	}
 	m.roleAssignments = append(m.roleAssignments, roleID)
 	m.recordEvent(RoleAssignedEvent{
@@ -323,19 +322,18 @@ func (m *Membership) RevokeRole(roleID role.ID) error {
 	if roleID.IsZero() {
 		return fmt.Errorf("%w: roleID required", ErrInvalid)
 	}
-	for i, existing := range m.roleAssignments {
-		if existing == roleID {
-			m.roleAssignments = append(m.roleAssignments[:i], m.roleAssignments[i+1:]...)
-			m.recordEvent(RoleRevokedEvent{
-				MembershipID: m.id,
-				PersonID:     m.personID,
-				TenantID:     m.tenantID,
-				RoleID:       roleID,
-				At:           clock.Now(),
-			})
-			return nil
-		}
+	idx := slices.Index(m.roleAssignments, roleID)
+	if idx < 0 {
+		return nil
 	}
+	m.roleAssignments = slices.Delete(m.roleAssignments, idx, idx+1)
+	m.recordEvent(RoleRevokedEvent{
+		MembershipID: m.id,
+		PersonID:     m.personID,
+		TenantID:     m.tenantID,
+		RoleID:       roleID,
+		At:           clock.Now(),
+	})
 	return nil
 }
 
@@ -351,16 +349,11 @@ func (m *Membership) GrantPermission(p *permission.Permission) error {
 		return fmt.Errorf("%w: permission required", ErrInvalid)
 	}
 	// If currently in revoked overlay, lift the revoke first.
-	for i, r := range m.revokedPermissions {
-		if r.Equal(p) {
-			m.revokedPermissions = append(m.revokedPermissions[:i], m.revokedPermissions[i+1:]...)
-			break
-		}
+	if i := slices.IndexFunc(m.revokedPermissions, p.Equal); i >= 0 {
+		m.revokedPermissions = slices.Delete(m.revokedPermissions, i, i+1)
 	}
-	for _, g := range m.grantedPermissions {
-		if g.Equal(p) {
-			return nil
-		}
+	if slices.ContainsFunc(m.grantedPermissions, p.Equal) {
+		return nil
 	}
 	m.grantedPermissions = append(m.grantedPermissions, p)
 	m.recordEvent(PermissionsUpdatedEvent{
@@ -381,16 +374,11 @@ func (m *Membership) RevokePermission(p *permission.Permission) error {
 		return fmt.Errorf("%w: permission required", ErrInvalid)
 	}
 	// If currently in granted overlay, lift the grant first.
-	for i, g := range m.grantedPermissions {
-		if g.Equal(p) {
-			m.grantedPermissions = append(m.grantedPermissions[:i], m.grantedPermissions[i+1:]...)
-			break
-		}
+	if i := slices.IndexFunc(m.grantedPermissions, p.Equal); i >= 0 {
+		m.grantedPermissions = slices.Delete(m.grantedPermissions, i, i+1)
 	}
-	for _, r := range m.revokedPermissions {
-		if r.Equal(p) {
-			return nil
-		}
+	if slices.ContainsFunc(m.revokedPermissions, p.Equal) {
+		return nil
 	}
 	m.revokedPermissions = append(m.revokedPermissions, p)
 	m.recordEvent(PermissionsUpdatedEvent{

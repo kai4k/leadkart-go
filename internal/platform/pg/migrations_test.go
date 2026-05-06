@@ -36,7 +36,7 @@ func migrationsDir(t *testing.T) string {
 // returns its DSN. Container is auto-cleaned via t.Cleanup.
 func startPostgres(t *testing.T) string {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 90*time.Second)
 	defer cancel()
 
 	c, err := postgres.Run(ctx,
@@ -78,7 +78,7 @@ func applyMigrations(t *testing.T, dsn string) {
 	if err := goose.SetDialect("postgres"); err != nil {
 		t.Fatalf("set dialect: %v", err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 	defer cancel()
 	if err := goose.UpContext(ctx, db, migrationsDir(t)); err != nil {
 		t.Fatalf("goose up: %v", err)
@@ -94,7 +94,7 @@ func applyMigrations(t *testing.T, dsn string) {
 // reconnecting, which is in-session and applies immediately.
 func createAppRole(t *testing.T, db *sql.DB) {
 	t.Helper()
-	ctx := context.Background()
+	ctx := t.Context()
 	stmts := []string{
 		`CREATE ROLE leadkart_app NOSUPERUSER NOINHERIT NOCREATEROLE NOCREATEDB`,
 		`GRANT USAGE ON SCHEMA app, identity TO leadkart_app`,
@@ -242,7 +242,7 @@ func TestRLSIsolatesTenants(t *testing.T) {
 
 	createAppRole(t, db)
 
-	ctx := context.Background()
+	ctx := t.Context()
 	tenantA, tenantB := uuid.New(), uuid.New()
 	personA, personB := uuid.New(), uuid.New()
 
@@ -368,7 +368,7 @@ func TestSingleActiveMembershipInvariant(t *testing.T) {
 	}
 	defer db.Close()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	tenantA, tenantB := uuid.New(), uuid.New()
 	person := uuid.New()
 

@@ -8,6 +8,7 @@ package role
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -225,12 +226,7 @@ func (r *Role) HasPermission(p *permission.Permission) bool {
 	if p == nil {
 		return false
 	}
-	for _, granted := range r.permissions {
-		if granted.Equal(p) {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(r.permissions, p.Equal)
 }
 
 // GrantPermission adds `p` to the role's permission set. Idempotent —
@@ -242,10 +238,8 @@ func (r *Role) GrantPermission(p *permission.Permission) error {
 	if p == nil {
 		return fmt.Errorf("%w: permission required", ErrInvalid)
 	}
-	for _, existing := range r.permissions {
-		if existing.Equal(p) {
-			return nil
-		}
+	if slices.ContainsFunc(r.permissions, p.Equal) {
+		return nil
 	}
 	r.permissions = append(r.permissions, p)
 	r.recordEvent(PermissionGrantedEvent{
@@ -266,18 +260,17 @@ func (r *Role) RevokePermission(p *permission.Permission) error {
 	if p == nil {
 		return fmt.Errorf("%w: permission required", ErrInvalid)
 	}
-	for i, existing := range r.permissions {
-		if existing.Equal(p) {
-			r.permissions = append(r.permissions[:i], r.permissions[i+1:]...)
-			r.recordEvent(PermissionRevokedEvent{
-				RoleID:     r.id,
-				TenantID:   r.tenantID,
-				Permission: p.Name(),
-				At:         clock.Now(),
-			})
-			return nil
-		}
+	idx := slices.IndexFunc(r.permissions, p.Equal)
+	if idx < 0 {
+		return nil
 	}
+	r.permissions = slices.Delete(r.permissions, idx, idx+1)
+	r.recordEvent(PermissionRevokedEvent{
+		RoleID:     r.id,
+		TenantID:   r.tenantID,
+		Permission: p.Name(),
+		At:         clock.Now(),
+	})
 	return nil
 }
 
