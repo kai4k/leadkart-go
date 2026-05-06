@@ -116,6 +116,12 @@ func NewTenantOnboardingService(
 //  6. Membership.AddInTx — emits MembershipCreatedV1.
 //  7. Commit. All three integration events fire from one outbox
 //     batch; subscribers see a consistent post-onboarding state.
+//
+//nolint:cyclop // Multi-aggregate orchestrator: linear branch count is
+// load-bearing (one branch per failure mode) — extracting sub-helpers
+// would obscure the canonical 1-7-step sequence + the per-step err
+// translation. Threshold breach is intentional + audited per
+// `coding-standards.md` "Command handler scope".
 func (s *TenantOnboardingService) Onboard(
 	ctx context.Context,
 	cmd OnboardTenantCommand,

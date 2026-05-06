@@ -20,6 +20,10 @@ import (
 // Returns ErrUnknown for events the mapper hasn't been taught about
 // — surfaces in CI as a clear "you minted a domain event but never
 // wired the integration counterpart" failure.
+//
+//nolint:cyclop // Switch dispatcher — one case per recognised domain
+// event. Cyclomatic complexity scales with catalogue size by
+// definition; refactoring into a registry map costs more than it pays.
 func FromDomainEvent(d any) (Event, error) {
 	switch e := d.(type) {
 
