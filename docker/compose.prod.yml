@@ -183,11 +183,32 @@ services:
   #     resources:
   #       limits: { memory: 512M, cpus: "0.5" }
 
+  # ---- Web (Svelte SPA) — image pulled from a SEPARATE repo per ADR 0025 ---
+  # Per the master plan: frontend lives in its OWN git repo (e.g.
+  # leadkart-web), publishes to GHCR independently, gets composed into the
+  # production stack here via WEB_IMAGE. Go API stays a pure JSON backend
+  # — no co-located frontend code, no Blazor-style server-render coupling,
+  # no CSRF (bearer-token JWT only). Independent FE/BE deploy cycles.
+  #
+  # Uncomment once the leadkart-web repo cuts its first GHCR-published
+  # image; until then operators can deploy api-only and run the SPA via
+  # Vercel / Cloudflare Pages / Netlify pointing at this Caddy frontend.
+  #
+  # web:
+  #   image: ${WEB_IMAGE:-ghcr.io/leadkart/leadkart-web:latest}
+  #   container_name: leadkart-web
+  #   restart: unless-stopped
+  #   ports:
+  #     - "127.0.0.1:8081:8080"
+  #   depends_on:
+  #     api:
+  #       condition: service_healthy
+
   # ---- Caddy (reverse proxy + auto-SSL) — placeholder until Web ships ------
   # The .NET prod compose has Caddy fronting api + web. Go-side waits for
-  # the Svelte SPA (Phase 0 frontend) before this becomes live; until then
-  # `127.0.0.1:8080` is fronted by whatever the host VPS already runs
-  # (typically nginx during initial provisioning, Caddy after).
+  # the SEPARATE leadkart-web repo to cut its first image (per ADR 0025);
+  # until then `127.0.0.1:8080` is fronted by whatever the host VPS
+  # already runs (typically nginx during initial provisioning, Caddy after).
 
 volumes:
   postgres_data:
