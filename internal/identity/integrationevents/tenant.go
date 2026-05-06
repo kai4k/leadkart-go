@@ -182,6 +182,32 @@ func (TenantSettingsUpdatedV1) Topic() string { return "identity.tenant_settings
 // OccurredAt returns the domain timestamp.
 func (e TenantSettingsUpdatedV1) OccurredAt() time.Time { return e.OccurredAtUTC }
 
+// TenantDisplayPreferencesUpdatedV1 — tenant changed UI rendering
+// preferences. Subscribers (web BFF preference cache, notification
+// renderers) consume to invalidate cached preferences.
+type TenantDisplayPreferencesUpdatedV1 struct {
+	platformMarker
+
+	TenantID       uuid.UUID `json:"tenant_id"`
+	OldLocale      string    `json:"old_locale"`
+	OldTimeZone    string    `json:"old_time_zone"`
+	OldDateFormat  string    `json:"old_date_format"`
+	OldCurrency    string    `json:"old_currency"`
+	NewLocale      string    `json:"new_locale"`
+	NewTimeZone    string    `json:"new_time_zone"`
+	NewDateFormat  string    `json:"new_date_format"`
+	NewCurrency    string    `json:"new_currency"`
+	OccurredAtUTC  time.Time `json:"occurred_at_utc"`
+}
+
+// Topic returns the canonical wire alias.
+func (TenantDisplayPreferencesUpdatedV1) Topic() string {
+	return "identity.tenant_display_preferences_updated.v1"
+}
+
+// OccurredAt returns the domain timestamp.
+func (e TenantDisplayPreferencesUpdatedV1) OccurredAt() time.Time { return e.OccurredAtUTC }
+
 // TenantMarkedForDeletionV1 — operator entered the 30-day grace window
 // per `data-retention.md` "Tenant deletion saga". Subscribers MAY
 // block tenant ops immediately or wait for terminal TenantDeletedV1.
@@ -244,6 +270,7 @@ var (
 	_ Platform = TenantStatutoryUpdatedV1{}
 	_ Platform = TenantAdminContactUpdatedV1{}
 	_ Platform = TenantSettingsUpdatedV1{}
+	_ Platform = TenantDisplayPreferencesUpdatedV1{}
 	_ Platform = TenantSuspendedV1{}
 	_ Platform = TenantMarkedForDeletionV1{}
 	_ Platform = TenantRestoredV1{}
@@ -255,6 +282,7 @@ var (
 	_ = register(TenantStatutoryUpdatedV1{})
 	_ = register(TenantAdminContactUpdatedV1{})
 	_ = register(TenantSettingsUpdatedV1{})
+	_ = register(TenantDisplayPreferencesUpdatedV1{})
 	_ = register(TenantSuspendedV1{})
 	_ = register(TenantMarkedForDeletionV1{})
 	_ = register(TenantRestoredV1{})

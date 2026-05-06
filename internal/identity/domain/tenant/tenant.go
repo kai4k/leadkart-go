@@ -56,7 +56,8 @@ type Tenant struct {
 	status              Status
 	statutory           Statutory    // optional Indian statutory IDs (GST/PAN/DrugLicence)
 	adminContact        AdminContact // optional admin phone + postal address
-	settings            Settings     // password policy + future operational settings
+	settings            Settings           // password policy + future operational settings
+	displayPreferences  DisplayPreferences // locale / time zone / date format / currency
 	createdAt           time.Time
 	activatedAt         time.Time // zero until first Activate
 	suspendedAt         time.Time // zero until first Suspend; reset on subsequent Activate
@@ -130,6 +131,7 @@ type Snapshot struct {
 	Statutory           Statutory
 	AdminContact        AdminContact
 	Settings            Settings
+	DisplayPreferences  DisplayPreferences
 	CreatedAt           time.Time
 	ActivatedAt         time.Time
 	SuspendedAt         time.Time
@@ -155,6 +157,7 @@ func UnmarshalFromDB(s Snapshot) *Tenant {
 		statutory:           s.Statutory,
 		adminContact:        s.AdminContact,
 		settings:            s.Settings,
+		displayPreferences:  s.DisplayPreferences,
 		createdAt:           s.CreatedAt,
 		activatedAt:         s.ActivatedAt,
 		suspendedAt:         s.SuspendedAt,
@@ -218,6 +221,11 @@ func (t *Tenant) AdminContact() AdminContact { return t.adminContact }
 // today; expanding over time). Zero value means uninitialised — caller
 // SHOULD treat as DefaultPasswordPolicy at runtime.
 func (t *Tenant) Settings() Settings { return t.settings }
+
+// DisplayPreferences returns the tenant's UI rendering preferences
+// (locale / timezone / date format / currency). Zero value means
+// uninitialised — caller SHOULD treat as DefaultDisplayPreferences.
+func (t *Tenant) DisplayPreferences() DisplayPreferences { return t.displayPreferences }
 
 // ----- State transitions ----------------------------------------------------
 
@@ -417,6 +425,36 @@ func (t *Tenant) UpdateSettings(s Settings) error {
 		OldSettings: old,
 		NewSettings: s,
 		At:          clock.Now(),
+	})
+	return nil
+}
+
+// UpdateDisplayPreferences replaces the tenant's UI display
+// preferences (locale / timezone / date format / currency).
+//
+// Validation already happened inside [NewDisplayPreferences] —
+// this method only enforces tenant-lifecycle rules.
+//
+// Idempotent: no-op + no event when the new value equals the current.
+//
+// Allowed in any non-terminal status. Rejected from StatusDeleted.
+//
+// Subscribers (web BFF, notification renderers, audit-log
+// localisation) consume the event to invalidate cached preferences.
+func (t *Tenant) UpdateDisplayPreferences(d DisplayPreferences) error {
+	if t.status == StatusDeleted {
+		return fmt.Errorf("%w: tenant deleted; cannot update display preferences", ErrInvalid)
+	}
+	if t.displayPreferences.Equal(d) {
+		return nil
+	}
+	old := t.displayPreferences
+	t.displayPreferences = d
+	t.recordEvent(DisplayPreferencesUpdatedEvent{
+		TenantID:              t.id,
+		OldDisplayPreferences: old,
+		NewDisplayPreferences: d,
+		At:                    clock.Now(),
 	})
 	return nil
 }

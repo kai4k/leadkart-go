@@ -137,6 +137,25 @@ func (SettingsUpdatedEvent) Topic() string { return "identity.tenant_settings_up
 // OccurredAt returns the domain timestamp.
 func (e SettingsUpdatedEvent) OccurredAt() time.Time { return e.At }
 
+// DisplayPreferencesUpdatedEvent fires when
+// [Tenant.UpdateDisplayPreferences] changes the tenant's UI rendering
+// preferences. Subscribers (web BFF preference cache, notification
+// renderers) consume to invalidate cached preferences.
+type DisplayPreferencesUpdatedEvent struct {
+	TenantID              ID
+	OldDisplayPreferences DisplayPreferences
+	NewDisplayPreferences DisplayPreferences
+	At                    time.Time
+}
+
+// Topic returns the integration event type.
+func (DisplayPreferencesUpdatedEvent) Topic() string {
+	return "identity.tenant_display_preferences_updated.v1"
+}
+
+// OccurredAt returns the domain timestamp.
+func (e DisplayPreferencesUpdatedEvent) OccurredAt() time.Time { return e.At }
+
 // MarkedForDeletionEvent fires when [Tenant.MarkForDeletion] is called.
 //
 // Per data-retention.md "Tenant deletion saga": entry into the 30-day

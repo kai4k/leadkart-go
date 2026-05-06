@@ -787,6 +787,133 @@ func TestUpdateSettings_RejectedOnDeletedTenant(t *testing.T) {
 	}
 }
 
+// ----- UpdateDisplayPreferences ---------------------------------------------
+
+func TestNewDisplayPreferences_AcceptsValid(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name   string
+		locale string
+		tz     string
+		fmt    string
+		curr   string
+	}{
+		{"india default", "en-IN", "Asia/Kolkata", "DD-MMM-YYYY", "INR"},
+		{"hindi", "hi-IN", "Asia/Kolkata", "DD/MM/YYYY", "INR"},
+		{"us", "en-US", "America/New_York", "MM/DD/YYYY", "USD"},
+		{"locale no region", "en", "UTC", "YYYY-MM-DD", "USD"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			d, err := tenant.NewDisplayPreferences(tc.locale, tc.tz, tc.fmt, tc.curr)
+			if err != nil {
+				t.Fatalf("NewDisplayPreferences(%q,%q,%q,%q): %v", tc.locale, tc.tz, tc.fmt, tc.curr, err)
+			}
+			if d.Locale() != tc.locale || d.TimeZone() != tc.tz || d.DateFormat() != tc.fmt || d.Currency() != tc.curr {
+				t.Errorf("round-trip mismatch: %+v", d)
+			}
+		})
+	}
+}
+
+func TestNewDisplayPreferences_RejectsInvalid(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name   string
+		locale string
+		tz     string
+		fmt    string
+		curr   string
+	}{
+		{"empty locale", "", "Asia/Kolkata", "DD-MMM-YYYY", "INR"},
+		{"empty tz", "en-IN", "", "DD-MMM-YYYY", "INR"},
+		{"empty format", "en-IN", "Asia/Kolkata", "", "INR"},
+		{"empty currency", "en-IN", "Asia/Kolkata", "DD-MMM-YYYY", ""},
+		{"locale uppercase primary", "EN-IN", "Asia/Kolkata", "DD-MMM-YYYY", "INR"},
+		{"locale region lowercase", "en-in", "Asia/Kolkata", "DD-MMM-YYYY", "INR"},
+		{"tz not iana", "en-IN", "Mars/Olympus", "DD-MMM-YYYY", "INR"},
+		{"currency lowercase", "en-IN", "Asia/Kolkata", "DD-MMM-YYYY", "inr"},
+		{"currency 2 letters", "en-IN", "Asia/Kolkata", "DD-MMM-YYYY", "IN"},
+		{"currency 4 letters", "en-IN", "Asia/Kolkata", "DD-MMM-YYYY", "INRX"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := tenant.NewDisplayPreferences(tc.locale, tc.tz, tc.fmt, tc.curr)
+			if !errors.Is(err, tenant.ErrInvalid) {
+				t.Errorf("expected ErrInvalid, got %v", err)
+			}
+		})
+	}
+}
+
+func TestDefaultDisplayPreferences_IsIndiaTuned(t *testing.T) {
+	t.Parallel()
+	d := tenant.DefaultDisplayPreferences()
+	if d.Locale() != "en-IN" || d.TimeZone() != "Asia/Kolkata" || d.Currency() != "INR" {
+		t.Errorf("default preferences not India-tuned: %+v", d)
+	}
+	if d.IsZero() {
+		t.Error("default should not be zero")
+	}
+}
+
+func TestUpdateDisplayPreferences_FirstDeclaration_EmitsEvent(t *testing.T) {
+	t.Cleanup(clock.Reset)
+	clock.Set(time.Date(2026, 5, 7, 12, 0, 0, 0, time.UTC))
+
+	tn := newActiveTenant(t)
+	_ = tn.PullEvents()
+
+	d := tenant.DefaultDisplayPreferences()
+	if err := tn.UpdateDisplayPreferences(d); err != nil {
+		t.Fatalf("UpdateDisplayPreferences: %v", err)
+	}
+	if !tn.DisplayPreferences().Equal(d) {
+		t.Error("DisplayPreferences not stored")
+	}
+
+	events := tn.PullEvents()
+	if len(events) != 1 {
+		t.Fatalf("events: %d", len(events))
+	}
+	ev, ok := events[0].(tenant.DisplayPreferencesUpdatedEvent)
+	if !ok {
+		t.Fatalf("event[0] = %T, want DisplayPreferencesUpdatedEvent", events[0])
+	}
+	if !ev.OldDisplayPreferences.IsZero() {
+		t.Error("Old should be zero on first declaration")
+	}
+	if !ev.NewDisplayPreferences.Equal(d) {
+		t.Error("NewDisplayPreferences mismatch")
+	}
+}
+
+func TestUpdateDisplayPreferences_NoOp_WhenUnchanged(t *testing.T) {
+	t.Cleanup(clock.Reset)
+	tn := newActiveTenant(t)
+	d := tenant.DefaultDisplayPreferences()
+	_ = tn.UpdateDisplayPreferences(d)
+	_ = tn.PullEvents()
+	if err := tn.UpdateDisplayPreferences(d); err != nil {
+		t.Fatalf("UpdateDisplayPreferences noop: %v", err)
+	}
+	if got := tn.PullEvents(); len(got) != 0 {
+		t.Errorf("expected 0 events, got %d", len(got))
+	}
+}
+
+func TestUpdateDisplayPreferences_RejectedOnDeletedTenant(t *testing.T) {
+	t.Cleanup(clock.Reset)
+	tn := newPendingTenant(t)
+	_ = tn.HardDelete()
+	d := tenant.DefaultDisplayPreferences()
+	if err := tn.UpdateDisplayPreferences(d); !errors.Is(err, tenant.ErrInvalid) {
+		t.Errorf("expected ErrInvalid on deleted, got %v", err)
+	}
+}
+
 // ----- Deletion lifecycle ---------------------------------------------------
 
 func TestMarkForDeletion_FromActive_TransitionsToPendingDeletion(t *testing.T) {

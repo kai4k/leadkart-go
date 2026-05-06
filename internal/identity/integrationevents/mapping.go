@@ -75,6 +75,22 @@ func FromDomainEvent(d any) (Event, error) {
 			OccurredAtUTC:  e.At.UTC(),
 		}, nil
 
+	case tenant.DisplayPreferencesUpdatedEvent:
+		old := e.OldDisplayPreferences
+		nu := e.NewDisplayPreferences
+		return TenantDisplayPreferencesUpdatedV1{
+			TenantID:      mustParseUUID(e.TenantID.String()),
+			OldLocale:     old.Locale(),
+			OldTimeZone:   old.TimeZone(),
+			OldDateFormat: old.DateFormat(),
+			OldCurrency:   old.Currency(),
+			NewLocale:     nu.Locale(),
+			NewTimeZone:   nu.TimeZone(),
+			NewDateFormat: nu.DateFormat(),
+			NewCurrency:   nu.Currency(),
+			OccurredAtUTC: e.At.UTC(),
+		}, nil
+
 	case tenant.SettingsUpdatedEvent:
 		oldP := e.OldSettings.PasswordPolicy()
 		newP := e.NewSettings.PasswordPolicy()
