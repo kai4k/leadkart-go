@@ -27,6 +27,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -54,13 +55,13 @@ func run(ctx context.Context) error {
 	slog.SetDefault(logger)
 
 	if len(os.Args) < 2 {
-		return fmt.Errorf("usage: migrate <up|up-to|down|status|version|validate> [args...]")
+		return errors.New("usage: migrate <up|up-to|down|status|version|validate> [args...]")
 	}
 	command := os.Args[1]
 
 	dsn := os.Getenv("DATABASE_URL")
 	if dsn == "" {
-		return fmt.Errorf("DATABASE_URL env var required")
+		return errors.New("DATABASE_URL env var required")
 	}
 
 	migrationsDir := os.Getenv("MIGRATIONS_DIR")

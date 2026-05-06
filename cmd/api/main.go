@@ -107,7 +107,7 @@ func run(ctx context.Context, stdout *os.File, _ []string) error {
 	// to in-binary subscribers. Production swap to Redis Streams or
 	// Kafka happens by replacing this single `Publisher`.
 	pubsub := gochannel.NewGoChannel(gochannel.Config{}, watermill.NewSlogLogger(logger))
-	defer pubsub.Close()
+	defer func() { _ = pubsub.Close() }()
 
 	tx := pg.NewTransactor(pool)
 	forwarder := adapters.NewOutboxForwarder(pool, tx, pubsub, IdentityEventsTopic, 0)

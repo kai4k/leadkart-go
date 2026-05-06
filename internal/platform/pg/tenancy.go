@@ -2,6 +2,7 @@ package pg
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/jackc/pgx/v5"
@@ -23,7 +24,7 @@ import (
 func SetTenantOnTx(ctx context.Context, tx pgx.Tx) error {
 	id, ok := tenancy.FromContext(ctx)
 	if !ok {
-		return fmt.Errorf("pg: tenant context required (use SetPlatformOnTx for cross-tenant flows)")
+		return errors.New("pg: tenant context required (use SetPlatformOnTx for cross-tenant flows)")
 	}
 	if _, err := tx.Exec(ctx, `SELECT set_config('app.tenant_id', $1, true)`, id.String()); err != nil {
 		return fmt.Errorf("pg: bind tenant_id GUC: %w", err)

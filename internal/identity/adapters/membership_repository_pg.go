@@ -161,7 +161,7 @@ func (r *MembershipRepository) GetActiveForPerson(
 // failure beats silent empty result).
 func (r *MembershipRepository) ListForTenant(
 	ctx context.Context,
-	tenantID tenant.ID,
+	_ tenant.ID, // RLS scopes via ctx tenant; explicit param kept for contract symmetry
 ) ([]*membership.Membership, error) {
 	// (No SQL helper for "list all in current tenant" — we go through
 	// ListMembershipsForPerson would be wrong scope. Issue a plain SELECT
