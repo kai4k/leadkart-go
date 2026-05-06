@@ -1,15 +1,44 @@
 // Package role defines the Role aggregate — a tenant-scoped named
-// bundle of [permission.Permission]s. Future tasks add the aggregate
-// struct + factories; this task establishes the package + ID type +
-// hierarchy constants only.
+// bundle of [permission.Permission]s. Mirrors .NET LeadKart's
+// `Modules.Identity.Domain.Roles.Role`: per-tenant catalog, system-
+// default roles refuse mutation, soft-delete with audit, hierarchy
+// level drives `IUserHierarchyQueries` (Phase 7).
 package role
 
+import (
+	"errors"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/leadkart/leadkart-go/internal/common/clock"
+	"github.com/leadkart/leadkart-go/internal/common/errs"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/permission"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
+)
+
+// Hierarchy-level constants. Lower = higher authority. 0 = top
+// (Owner), 99 = bottom OR sentinel for "no role assigned".
 const (
 	HierarchyLevelDefault = 50
 	HierarchyLevelMin     = 0
 	HierarchyLevelMax     = 99
 	HierarchyLevelNoRole  = 99
 )
+
+// ErrInvalid is the sentinel for invariant violations — wrapped via
+// fmt.Errorf("%w: ...", ErrInvalid) at each call site so callers
+// branch via errors.Is(err, role.ErrInvalid).
+var ErrInvalid = errs.New(errs.KindInvalidInput, "role", "invalid role")
+
+// ErrSystemDefault is returned when a mutation targets a system-
+// default role (rename, hierarchy change, delete). System defaults
+// are immutable — tenants must clone them to a custom role to mutate.
+var ErrSystemDefault = errors.New("role: cannot mutate system-default role")
+
+// ErrDeleted is returned when a mutation targets an already-deleted
+// role.
+var ErrDeleted = errors.New("role: cannot mutate deleted role")
 
 // ID is the Role primary key (UUIDv7 string form).
 type ID string
@@ -19,3 +48,129 @@ func (i ID) IsZero() bool { return i == "" }
 
 // String returns the underlying UUID string.
 func (i ID) String() string { return string(i) }
+
+// Role is the aggregate root. Tenant-scoped via `tenantID`.
+//
+// Invariants:
+//   - id, tenantID non-zero.
+//   - name trimmed length in [2, 100].
+//   - hierarchyLevel in [HierarchyLevelMin, HierarchyLevelMax].
+//   - isSuperAdmin set only by trusted seed code (Platform tenant
+//     SuperAdmin role) — drives JWT `is_super_user` claim per
+//     `multi-tenancy.md` "SuperUser god-mode."
+//   - deleted is one-way; UpdateByID rejects mutations after delete.
+type Role struct {
+	id              ID
+	tenantID        tenant.ID
+	name            string
+	isSystemDefault bool
+	isSuperAdmin    bool
+	hierarchyLevel  int
+	permissions     []*permission.Permission
+	createdAt       time.Time
+	deleted         bool
+	deletedAt       time.Time
+	deletedBy       string
+
+	events []Event
+}
+
+// New constructs a brand-new Role. Returns [ErrInvalid] (wrapped) on
+// invariant violation.
+//
+// hierarchyLevel must be in [HierarchyLevelMin, HierarchyLevelMax].
+// Pass [HierarchyLevelDefault] for safe middle-of-band placement.
+//
+// isSuperAdmin: reserved for the seeded SuperAdmin role in the
+// Platform tenant. Set true ONLY by trusted seed code per
+// `multi-tenancy.md` "SuperUser god-mode." Tenant admins cannot
+// promote a custom role to SuperAdmin via HTTP — the field is
+// constructor-only, no setter.
+func New(
+	id ID,
+	tenantID tenant.ID,
+	name string,
+	isSystemDefault bool,
+	hierarchyLevel int,
+	isSuperAdmin bool,
+) (*Role, error) {
+	if id.IsZero() {
+		return nil, fmt.Errorf("%w: id required", ErrInvalid)
+	}
+	if tenantID.IsZero() {
+		return nil, fmt.Errorf("%w: tenantID required", ErrInvalid)
+	}
+	trimmed := strings.TrimSpace(name)
+	if trimmed == "" {
+		return nil, fmt.Errorf("%w: name required", ErrInvalid)
+	}
+	if len(trimmed) < 2 || len(trimmed) > 100 {
+		return nil, fmt.Errorf("%w: name length %d not in [2,100]", ErrInvalid, len(trimmed))
+	}
+	if hierarchyLevel < HierarchyLevelMin || hierarchyLevel > HierarchyLevelMax {
+		return nil, fmt.Errorf("%w: hierarchyLevel %d not in [%d,%d]",
+			ErrInvalid, hierarchyLevel, HierarchyLevelMin, HierarchyLevelMax)
+	}
+
+	now := clock.Now()
+	r := &Role{
+		id:              id,
+		tenantID:        tenantID,
+		name:            trimmed,
+		isSystemDefault: isSystemDefault,
+		isSuperAdmin:    isSuperAdmin,
+		hierarchyLevel:  hierarchyLevel,
+		createdAt:       now,
+	}
+	r.recordEvent(CreatedEvent{
+		RoleID:          id,
+		TenantID:        tenantID,
+		Name:            trimmed,
+		IsSystemDefault: isSystemDefault,
+		HierarchyLevel:  hierarchyLevel,
+		IsSuperAdmin:    isSuperAdmin,
+		At:              now,
+	})
+	return r, nil
+}
+
+// ----- Getters --------------------------------------------------------------
+
+func (r *Role) ID() ID                { return r.id }
+func (r *Role) TenantID() tenant.ID   { return r.tenantID }
+func (r *Role) Name() string          { return r.name }
+func (r *Role) IsSystemDefault() bool { return r.isSystemDefault }
+func (r *Role) IsSuperAdmin() bool    { return r.isSuperAdmin }
+func (r *Role) HierarchyLevel() int   { return r.hierarchyLevel }
+func (r *Role) CreatedAt() time.Time  { return r.createdAt }
+func (r *Role) IsDeleted() bool       { return r.deleted }
+func (r *Role) DeletedAt() time.Time  { return r.deletedAt }
+func (r *Role) DeletedBy() string     { return r.deletedBy }
+
+// Permissions returns a defensive copy of the role's permission set.
+// Callers that mutate the returned slice will not affect the role
+// state — mutations go through [Role.GrantPermission] /
+// [Role.RevokePermission] / [Role.ReplacePermissions] (Task 9).
+func (r *Role) Permissions() []*permission.Permission {
+	out := make([]*permission.Permission, len(r.permissions))
+	copy(out, r.permissions)
+	return out
+}
+
+// ----- Event handling -------------------------------------------------------
+
+// PullEvents drains recorded domain events. Repository calls this
+// after a successful persist, then writes each event into the outbox
+// in the same transaction (TDL UpdateFn pattern per ADR 0004 + 0008).
+func (r *Role) PullEvents() []Event {
+	if len(r.events) == 0 {
+		return nil
+	}
+	out := r.events
+	r.events = nil
+	return out
+}
+
+func (r *Role) recordEvent(e Event) {
+	r.events = append(r.events, e)
+}
