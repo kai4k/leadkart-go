@@ -369,6 +369,56 @@ func (m *Membership) RevokePermission(p *permission.Permission) error {
 	return nil
 }
 
+// EffectivePermissions resolves the Membership's authoritative permission
+// set by combining role-derived grants with the per-Membership overlay:
+//
+//	union(role.Permissions for r in roles)
+//	  ∪ grantedPermissions
+//	  \ revokedPermissions
+//
+// CALLER INVARIANT: `roles` must be the full set of Role aggregates
+// matching `m.RoleAssignments()`. The application service's
+// PermissionResolver (Task 21) loads them in bulk via
+// `RoleRepository.GetByIDs(ctx, m.RoleAssignments())` before calling
+// this method. The aggregate intentionally doesn't reach across
+// aggregates per Vernon ch.10 — caller threads the dependency.
+//
+// Result is order-stable but not sorted; callers needing
+// deterministic ordering (audit log diff, JWT claim emission) sort
+// by `Permission.Name()` themselves. Pointer-equality on interned
+// permissions makes set-membership cheap.
+func (m *Membership) EffectivePermissions(roles []*role.Role) []*permission.Permission {
+	set := map[*permission.Permission]struct{}{}
+	for _, r := range roles {
+		for _, p := range r.Permissions() {
+			set[p] = struct{}{}
+		}
+	}
+	for _, g := range m.grantedPermissions {
+		set[g] = struct{}{}
+	}
+	for _, rev := range m.revokedPermissions {
+		// Pointer-equality first (cheap for interned catalogue entries),
+		// then fall back to name-equality scan for non-interned values
+		// (rare — only Create-fresh paths produce them).
+		if _, found := set[rev]; found {
+			delete(set, rev)
+			continue
+		}
+		for k := range set {
+			if k.Equal(rev) {
+				delete(set, k)
+				break
+			}
+		}
+	}
+	out := make([]*permission.Permission, 0, len(set))
+	for p := range set {
+		out = append(out, p)
+	}
+	return out
+}
+
 // ReplacePermissionOverlays sets both overlay slices atomically.
 // Single PermissionsUpdatedEvent fires regardless of diff size —
 // listeners care about "permissions changed for this Membership",

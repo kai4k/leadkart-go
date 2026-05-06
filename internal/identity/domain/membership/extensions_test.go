@@ -125,6 +125,84 @@ func TestRoleAssignments_DefensiveCopy(t *testing.T) {
 	}
 }
 
+// ----- EffectivePermissions resolver -----------------------------------------
+
+func TestEffectivePermissions_UnionRolesPlusGrantsMinusRevokes(t *testing.T) {
+	t.Parallel()
+	m := freshMembership(t)
+
+	// Build two roles. Manager grants View+Update; Auditor grants View only.
+	managerRole, err := role.New(
+		role.ID(ids.NewV7().String()), m.TenantID(),
+		"Manager", false, role.HierarchyLevelDefault, false,
+	)
+	if err != nil {
+		t.Fatalf("Manager role: %v", err)
+	}
+	_ = managerRole.GrantPermission(permission.FromConstant(permission.IdentityPermissions.Users.View))
+	_ = managerRole.GrantPermission(permission.FromConstant(permission.IdentityPermissions.Users.Update))
+
+	auditorRole, err := role.New(
+		role.ID(ids.NewV7().String()), m.TenantID(),
+		"Auditor", false, 60, false,
+	)
+	if err != nil {
+		t.Fatalf("Auditor role: %v", err)
+	}
+	_ = auditorRole.GrantPermission(permission.FromConstant(permission.IdentityPermissions.Users.View))
+
+	// Membership overlay: grant Anonymise, revoke Update.
+	_ = m.GrantPermission(permission.FromConstant(permission.IdentityPermissions.Users.Anonymise))
+	_ = m.RevokePermission(permission.FromConstant(permission.IdentityPermissions.Users.Update))
+
+	got := m.EffectivePermissions([]*role.Role{managerRole, auditorRole})
+	gotSet := map[string]bool{}
+	for _, p := range got {
+		gotSet[p.Name()] = true
+	}
+
+	if !gotSet["identity.users.view"] {
+		t.Fatal("union missing View (granted by both roles)")
+	}
+	if !gotSet["identity.users.anonymise"] {
+		t.Fatal("union missing overlay-granted Anonymise")
+	}
+	if gotSet["identity.users.update"] {
+		t.Fatal("union should NOT include overlay-revoked Update")
+	}
+}
+
+func TestEffectivePermissions_NoRolesEqualsOverlayOnly(t *testing.T) {
+	t.Parallel()
+	m := freshMembership(t)
+	p := permission.FromConstant(permission.IdentityPermissions.Users.View)
+	_ = m.GrantPermission(p)
+
+	got := m.EffectivePermissions(nil)
+	if len(got) != 1 || !got[0].Equal(p) {
+		t.Fatalf("got %+v want overlay-only [View]", got)
+	}
+}
+
+func TestEffectivePermissions_RevokeWinsOverRoleGrant(t *testing.T) {
+	t.Parallel()
+	m := freshMembership(t)
+	r, err := role.New(role.ID(ids.NewV7().String()), m.TenantID(), "Sales", false, 50, false)
+	if err != nil {
+		t.Fatalf("role.New: %v", err)
+	}
+	view := permission.FromConstant(permission.IdentityPermissions.Users.View)
+	_ = r.GrantPermission(view)
+	_ = m.RevokePermission(view) // overlay revoke beats role grant
+
+	got := m.EffectivePermissions([]*role.Role{r})
+	for _, p := range got {
+		if p.Equal(view) {
+			t.Fatal("overlay revoke should suppress role grant")
+		}
+	}
+}
+
 // ----- Permission overlay (Granted/Revoked) ----------------------------------
 
 func TestGrantPermission_AddsToOverlay(t *testing.T) {
