@@ -26,6 +26,14 @@ const (
 	HierarchyLevelNoRole  = 99
 )
 
+// Role.Name length bounds. Mirror of the .NET parent's Role.cs
+// Create / Rename validators. Exported so admin UI + DTO validation
+// can reuse the same numbers without redefining.
+const (
+	NameMinLength = 2
+	NameMaxLength = 100
+)
+
 // ErrInvalid is the sentinel for invariant violations — wrapped via
 // fmt.Errorf("%w: ...", ErrInvalid) at each call site so callers
 // branch via errors.Is(err, role.ErrInvalid).
@@ -100,12 +108,9 @@ func New(
 	if tenantID.IsZero() {
 		return nil, fmt.Errorf("%w: tenantID required", ErrInvalid)
 	}
-	trimmed := strings.TrimSpace(name)
-	if trimmed == "" {
-		return nil, fmt.Errorf("%w: name required", ErrInvalid)
-	}
-	if len(trimmed) < 2 || len(trimmed) > 100 {
-		return nil, fmt.Errorf("%w: name length %d not in [2,100]", ErrInvalid, len(trimmed))
+	trimmed, err := validateName(name)
+	if err != nil {
+		return nil, err
 	}
 	if hierarchyLevel < HierarchyLevelMin || hierarchyLevel > HierarchyLevelMax {
 		return nil, fmt.Errorf("%w: hierarchyLevel %d not in [%d,%d]",
@@ -170,12 +175,9 @@ func (r *Role) Rename(newName string) error {
 	if r.isSystemDefault {
 		return fmt.Errorf("%w: %s", ErrSystemDefault, r.name)
 	}
-	trimmed := strings.TrimSpace(newName)
-	if trimmed == "" {
-		return fmt.Errorf("%w: name required", ErrInvalid)
-	}
-	if len(trimmed) < 2 || len(trimmed) > 100 {
-		return fmt.Errorf("%w: name length %d not in [2,100]", ErrInvalid, len(trimmed))
+	trimmed, err := validateName(newName)
+	if err != nil {
+		return err
 	}
 	if trimmed == r.name {
 		return nil
@@ -410,6 +412,22 @@ func (r *Role) ensureMutable() error {
 		return fmt.Errorf("%w: %s", ErrDeleted, r.name)
 	}
 	return nil
+}
+
+// validateName trims + bounds-checks the role name. Shared by [New]
+// and [Role.Rename] — single source of truth for the [NameMinLength,
+// NameMaxLength] invariant per `coding-standards.md` "No magic
+// strings — production AND tests" + Effective Go DRY.
+func validateName(raw string) (string, error) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return "", fmt.Errorf("%w: name required", ErrInvalid)
+	}
+	if len(trimmed) < NameMinLength || len(trimmed) > NameMaxLength {
+		return "", fmt.Errorf("%w: name length %d not in [%d,%d]",
+			ErrInvalid, len(trimmed), NameMinLength, NameMaxLength)
+	}
+	return trimmed, nil
 }
 
 // ----- Event handling -------------------------------------------------------

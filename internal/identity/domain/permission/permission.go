@@ -9,6 +9,14 @@ import (
 	"sync"
 )
 
+// Permission name length bounds (mirror of .NET parent's
+// Permission.cs Create validator). Open-format input via [Create]
+// must satisfy NameMinLength ≤ len(trimmed) ≤ NameMaxLength.
+const (
+	NameMinLength = 3
+	NameMaxLength = 100
+)
+
 // ErrUnknown is the sentinel returned when an input string does not
 // match any catalogue entry. HTTP layer maps to 400 with code
 // `permission_unknown`.
@@ -185,12 +193,13 @@ func TryFromConstant(name string) (*Permission, error) {
 // the interned pointer when input matches a catalogue entry; fresh
 // non-interned otherwise.
 func Create(name string) (*Permission, error) {
-	if strings.TrimSpace(name) == "" {
+	trimmed := strings.TrimSpace(name)
+	if trimmed == "" {
 		return nil, ErrEmpty
 	}
-	trimmed := strings.TrimSpace(name)
-	if len(trimmed) < 3 || len(trimmed) > 100 {
-		return nil, fmt.Errorf("%w: length %d not in [3,100]", ErrFormat, len(trimmed))
+	if len(trimmed) < NameMinLength || len(trimmed) > NameMaxLength {
+		return nil, fmt.Errorf("%w: length %d not in [%d,%d]",
+			ErrFormat, len(trimmed), NameMinLength, NameMaxLength)
 	}
 	for _, r := range trimmed {
 		ok := (r >= 'a' && r <= 'z') ||
