@@ -38,7 +38,7 @@ jobs:
       - name: Lint (golangci-lint v2 strict)
         uses: golangci/golangci-lint-action@v9
         with:
-          version: v2.0.2
+          version: v2.4.0
           args: --timeout=5m
 
       - name: Test (race + shuffle + coverage)
