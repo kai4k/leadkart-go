@@ -7,11 +7,15 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/google/uuid"
+
 	"github.com/leadkart/leadkart-go/internal/common/email"
 	"github.com/leadkart/leadkart-go/internal/common/slug"
 	"github.com/leadkart/leadkart-go/internal/identity/app"
 	"github.com/leadkart/leadkart-go/internal/identity/app/command"
+	"github.com/leadkart/leadkart-go/internal/identity/app/query"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/refreshtoken"
 	"github.com/leadkart/leadkart-go/internal/identity/ports/authn"
 )
 
@@ -38,8 +42,11 @@ func AddRoutes(mux *http.ServeMux, log *slog.Logger, a app.Application, verifier
 	mux.Handle("POST /api/v1/auth/refresh", handleRefresh(log, a))
 	mux.Handle("POST /api/v1/auth/logout", handleLogout(log, a))
 	if verifier != nil {
-		mux.Handle("POST /api/v1/auth/change-password",
-			authn.RequireAuth(verifier)(handleChangePassword(log, a)))
+		auth := authn.RequireAuth(verifier)
+		mux.Handle("POST /api/v1/auth/change-password", auth(handleChangePassword(log, a)))
+		mux.Handle("GET /api/v1/auth/sessions", auth(handleListSessions(log, a)))
+		mux.Handle("DELETE /api/v1/auth/sessions/{familyId}", auth(handleRevokeSession(log, a)))
+		mux.Handle("DELETE /api/v1/auth/sessions", auth(handleRevokeAllSessions(log, a)))
 	}
 }
 
@@ -235,6 +242,115 @@ func handleChangePassword(log *slog.Logger, a app.Application) http.Handler {
 		}
 
 		w.WriteHeader(http.StatusNoContent)
+	})
+}
+
+func handleListSessions(log *slog.Logger, a app.Application) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		c, ok := authn.ClaimsFromContext(r.Context())
+		if !ok || strings.TrimSpace(c.Subject) == "" {
+			writeError(w, http.StatusUnauthorized, ErrCodeInvalidCredentials, "")
+			return
+		}
+		views, err := a.Queries.ListSessions.Handle(r.Context(), query.ListSessionsQuery{
+			PersonID: person.ID(c.Subject),
+		})
+		if err != nil {
+			log.ErrorContext(r.Context(), "list sessions failed", "err", err)
+			writeError(w, http.StatusInternalServerError, ErrCodeInternalError, "")
+			return
+		}
+		out := ListSessionsResponse{Sessions: make([]SessionDto, 0, len(views))}
+		for _, v := range views {
+			out.Sessions = append(out.Sessions, SessionDto{
+				FamilyID:    v.FamilyID,
+				TenantID:    v.TenantID,
+				DeviceLabel: v.DeviceLabel,
+				CreatedAt:   v.CreatedAt,
+				LastUsedAt:  v.LastUsedAt,
+			})
+		}
+		writeJSON(w, http.StatusOK, out)
+	})
+}
+
+func handleRevokeSession(log *slog.Logger, a app.Application) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		c, ok := authn.ClaimsFromContext(r.Context())
+		if !ok || strings.TrimSpace(c.Subject) == "" {
+			writeError(w, http.StatusUnauthorized, ErrCodeInvalidCredentials, "")
+			return
+		}
+		raw := r.PathValue("familyId")
+		if _, err := uuid.Parse(raw); err != nil {
+			writeError(w, http.StatusBadRequest, ErrCodeInvalidFamilyID,
+				"familyId path parameter must be a UUID")
+			return
+		}
+		err := a.Commands.RevokeSession.Handle(r.Context(), command.RevokeSessionCommand{
+			PersonID: person.ID(c.Subject),
+			FamilyID: refreshtoken.FamilyID(raw),
+		})
+		switch {
+		case errors.Is(err, command.ErrSessionNotFound):
+			// 404 — collapses "wrong owner" + "doesn't exist" + "already
+			// revoked" per security.md enumeration-safety rule.
+			writeError(w, http.StatusNotFound, ErrCodeSessionNotFound, "")
+			return
+		case err != nil:
+			log.ErrorContext(r.Context(), "revoke session failed", "err", err)
+			writeError(w, http.StatusInternalServerError, ErrCodeInternalError, "")
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+}
+
+func handleRevokeAllSessions(log *slog.Logger, a app.Application) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		c, ok := authn.ClaimsFromContext(r.Context())
+		if !ok || strings.TrimSpace(c.Subject) == "" {
+			writeError(w, http.StatusUnauthorized, ErrCodeInvalidCredentials, "")
+			return
+		}
+
+		// Body is OPTIONAL — empty body == default behaviour (revoke
+		// every active family). Decoding an empty body via stdlib's
+		// json.Decoder returns io.EOF; treat that as "no overrides".
+		var req RevokeAllSessionsRequest
+		if r.Body != nil {
+			_ = json.NewDecoder(r.Body).Decode(&req) // ignore EOF
+		}
+
+		var except refreshtoken.FamilyID
+		if req.ExceptCurrent {
+			// "ExceptCurrent" requires a way to know WHICH family is
+			// the current one. The JWT does not carry the FamilyID
+			// (refresh-token families are session infra; access tokens
+			// don't reveal them). Until the v0.3+ "current device"
+			// header lands, ExceptCurrent is an explicit opt-in that
+			// has no effect — same total-revoke result as omitting
+			// the field. Documented in OpenAPI.
+			//
+			// TODO(v0.3): add `X-Refresh-Family-Id` header carry-over
+			// or thread the family-id through access-token claims if
+			// product wants per-device "sign me out of others".
+			_ = except
+		}
+
+		out, err := a.Commands.RevokeAllSessions.Handle(r.Context(), command.RevokeAllSessionsCommand{
+			PersonID:       person.ID(c.Subject),
+			ExceptFamilyID: except,
+			Reason:         req.Reason,
+		})
+		if err != nil {
+			log.ErrorContext(r.Context(), "revoke all sessions failed", "err", err)
+			writeError(w, http.StatusInternalServerError, ErrCodeInternalError, "")
+			return
+		}
+		writeJSON(w, http.StatusOK, RevokeAllSessionsResponse{
+			RevokedCount: out.RevokedCount,
+		})
 	})
 }
 

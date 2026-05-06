@@ -69,4 +69,14 @@ const (
 	// fails domain-layer validation. 400 surface.
 	//nolint:gosec // G101: error code, not a credential
 	ErrCodeInvalidPassword = "invalid_password"
+
+	// ErrCodeSessionNotFound — DELETE /api/v1/auth/sessions/{familyId}
+	// returned a not-found OR not-owned-by-caller. Same code per
+	// `security.md` enumeration-safety: never tell the attacker which
+	// arm matched. 404 surface.
+	ErrCodeSessionNotFound = "session_not_found"
+
+	// ErrCodeInvalidFamilyID — path parameter `{familyId}` failed
+	// UUID parse. 400 surface.
+	ErrCodeInvalidFamilyID = "invalid_family_id"
 )

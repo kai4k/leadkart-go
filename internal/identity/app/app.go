@@ -13,6 +13,7 @@ package app
 
 import (
 	"github.com/leadkart/leadkart-go/internal/identity/app/command"
+	"github.com/leadkart/leadkart-go/internal/identity/app/query"
 )
 
 // Application is the Identity facade. Every external port (HTTP,
@@ -20,17 +21,24 @@ import (
 // directly into its handler fields.
 type Application struct {
 	Commands Commands
-	// Queries Queries — added when query handlers land
-	// (GetTenant, ListMemberships, etc.); not part of the Week-5 cut.
+	Queries  Queries
 }
 
 // Commands aggregates all Identity command handlers. One field per
 // use case. New use cases extend this struct, never reach into a
 // shared service abstraction.
 type Commands struct {
-	RegisterTenant command.RegisterTenantHandler
-	Login          command.LoginHandler
-	Refresh        command.RefreshHandler
-	Logout         command.LogoutHandler
-	ChangePassword command.ChangePasswordHandler
+	RegisterTenant     command.RegisterTenantHandler
+	Login              command.LoginHandler
+	Refresh            command.RefreshHandler
+	Logout             command.LogoutHandler
+	ChangePassword     command.ChangePasswordHandler
+	RevokeSession      command.RevokeSessionHandler
+	RevokeAllSessions  command.RevokeAllSessionsHandler
+}
+
+// Queries aggregates all Identity query handlers. Read-side only — no
+// state mutation. Mirrors the [Commands] composition shape.
+type Queries struct {
+	ListSessions query.ListSessionsHandler
 }

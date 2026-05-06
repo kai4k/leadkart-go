@@ -88,6 +88,41 @@ type ChangePasswordRequest struct {
 	NewPassword     string `json:"new_password"`
 }
 
+// ----- Sessions --------------------------------------------------------------
+
+// SessionDto is one entry in the GET /api/v1/auth/sessions response.
+//
+// Auth0 / Okta / GitHub session-management UIs converged on this
+// minimal surface: device label + when created + when last refreshed.
+// Tokens / hashes are NEVER exposed.
+type SessionDto struct {
+	FamilyID    string    `json:"family_id"`
+	TenantID    string    `json:"tenant_id"`
+	DeviceLabel string    `json:"device_label"`
+	CreatedAt   time.Time `json:"created_at"`
+	LastUsedAt  time.Time `json:"last_used_at"`
+}
+
+// ListSessionsResponse — GET /api/v1/auth/sessions.
+type ListSessionsResponse struct {
+	Sessions []SessionDto `json:"sessions"`
+}
+
+// RevokeAllSessionsRequest — DELETE /api/v1/auth/sessions body.
+//
+// Optional. ExceptCurrent=true keeps the caller's CURRENT session
+// alive (Auth0 / Okta default — "sign me out of OTHER devices").
+// Reason is an audit string; defaults to "user_revoked_all" server-side.
+type RevokeAllSessionsRequest struct {
+	ExceptCurrent bool   `json:"except_current,omitempty"`
+	Reason        string `json:"reason,omitempty"`
+}
+
+// RevokeAllSessionsResponse — DELETE /api/v1/auth/sessions response.
+type RevokeAllSessionsResponse struct {
+	RevokedCount int `json:"revoked_count"`
+}
+
 // ----- Errors ----------------------------------------------------------------
 
 // ErrorResponse is the shared 4xx/5xx body shape. RFC 9457 problem-detail

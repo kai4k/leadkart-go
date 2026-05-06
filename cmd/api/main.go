@@ -42,6 +42,7 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/app/jwt"
 	"github.com/leadkart/leadkart-go/internal/platform/breach"
 	"github.com/leadkart/leadkart-go/internal/identity/app/permissions"
+	"github.com/leadkart/leadkart-go/internal/identity/app/query"
 	"github.com/leadkart/leadkart-go/internal/identity/app/service"
 	"github.com/leadkart/leadkart-go/internal/identity/ports"
 	"github.com/leadkart/leadkart-go/internal/identity/ports/authn"
@@ -338,11 +339,16 @@ func buildIdentityApp(pool *pgxpool.Pool, cfg config.AppConfig, now func() time.
 
 	return app.Application{
 		Commands: app.Commands{
-			RegisterTenant: command.NewRegisterTenantHandler(onboarding),
-			Login:          command.NewLoginHandler(persons, memberships, families, tenants, permResolver, issuer, now, cfg.Refresh.AbsoluteTTL, dummyHash),
-			Refresh:        command.NewRefreshHandler(families, persons, memberships, tenants, permResolver, issuer, now, cfg.Refresh.AbsoluteTTL),
-			Logout:         command.NewLogoutHandler(families),
-			ChangePassword: command.NewChangePasswordHandler(persons, breachChecker),
+			RegisterTenant:    command.NewRegisterTenantHandler(onboarding),
+			Login:             command.NewLoginHandler(persons, memberships, families, tenants, permResolver, issuer, now, cfg.Refresh.AbsoluteTTL, dummyHash),
+			Refresh:           command.NewRefreshHandler(families, persons, memberships, tenants, permResolver, issuer, now, cfg.Refresh.AbsoluteTTL),
+			Logout:            command.NewLogoutHandler(families),
+			ChangePassword:    command.NewChangePasswordHandler(persons, breachChecker),
+			RevokeSession:     command.NewRevokeSessionHandler(families),
+			RevokeAllSessions: command.NewRevokeAllSessionsHandler(families),
+		},
+		Queries: app.Queries{
+			ListSessions: query.NewListSessionsHandler(families),
 		},
 	}, issuer, nil
 }
