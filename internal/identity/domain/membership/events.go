@@ -106,3 +106,55 @@ func (PermissionsUpdatedEvent) Topic() string { return "identity.membership_perm
 
 // OccurredAt returns the domain timestamp.
 func (e PermissionsUpdatedEvent) OccurredAt() time.Time { return e.At }
+
+// ProfileUpdatedEvent fires when Designation / Department /
+// StatusMessage change. Bundle-update so wire payload reads
+// coherently.
+type ProfileUpdatedEvent struct {
+	MembershipID  ID
+	PersonID      person.ID
+	TenantID      tenant.ID
+	Designation   string
+	Department    string
+	StatusMessage string
+	At            time.Time
+}
+
+// Topic returns the integration-event type.
+func (ProfileUpdatedEvent) Topic() string { return "identity.membership_profile_updated.v1" }
+
+// OccurredAt returns the domain timestamp.
+func (e ProfileUpdatedEvent) OccurredAt() time.Time { return e.At }
+
+// ManagerAssignedEvent fires when ReportsTo is set to a non-zero
+// manager Membership ID. PreviousManager carried for audit-log
+// narrative + hierarchy-cache invalidation.
+type ManagerAssignedEvent struct {
+	MembershipID    ID
+	PersonID        person.ID
+	TenantID        tenant.ID
+	ManagerID       ID
+	PreviousManager ID
+	At              time.Time
+}
+
+// Topic returns the integration-event type.
+func (ManagerAssignedEvent) Topic() string { return "identity.membership_manager_assigned.v1" }
+
+// OccurredAt returns the domain timestamp.
+func (e ManagerAssignedEvent) OccurredAt() time.Time { return e.At }
+
+// ManagerRemovedEvent fires when ReportsTo is cleared (top-of-tree).
+type ManagerRemovedEvent struct {
+	MembershipID    ID
+	PersonID        person.ID
+	TenantID        tenant.ID
+	PreviousManager ID
+	At              time.Time
+}
+
+// Topic returns the integration-event type.
+func (ManagerRemovedEvent) Topic() string { return "identity.membership_manager_removed.v1" }
+
+// OccurredAt returns the domain timestamp.
+func (e ManagerRemovedEvent) OccurredAt() time.Time { return e.At }

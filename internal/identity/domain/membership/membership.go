@@ -86,6 +86,19 @@ type Membership struct {
 	grantedPermissions []*permission.Permission
 	revokedPermissions []*permission.Permission
 
+	// Per-tenant profile fields. Job change → new Membership in new
+	// tenant; old Membership keeps its old profile fields for audit.
+	designation   string // "Sales Manager", "Regional Head", etc.
+	department    string // optional grouping
+	statusMessage string // free-text current-availability blurb
+
+	// reportsTo points at this Membership's manager Membership ID;
+	// zero = top-of-tree. Self-reference rejected at the boundary.
+	// Cycle detection (A reports to B, B reports to A, etc.) lives in
+	// the application service since it requires loading other rows —
+	// the domain only enforces the not-self invariant.
+	reportsTo ID
+
 	events []Event
 }
 
@@ -133,6 +146,10 @@ type Snapshot struct {
 	RoleAssignments    []role.ID
 	GrantedPermissions []*permission.Permission
 	RevokedPermissions []*permission.Permission
+	Designation        string
+	Department         string
+	StatusMessage      string
+	ReportsTo          ID
 }
 
 // UnmarshalFromDB re-hydrates a Membership from persistence.
@@ -148,6 +165,10 @@ func UnmarshalFromDB(s Snapshot) *Membership {
 		roleAssignments:    append([]role.ID(nil), s.RoleAssignments...),
 		grantedPermissions: append([]*permission.Permission(nil), s.GrantedPermissions...),
 		revokedPermissions: append([]*permission.Permission(nil), s.RevokedPermissions...),
+		designation:        s.Designation,
+		department:         s.Department,
+		statusMessage:      s.StatusMessage,
+		reportsTo:          s.ReportsTo,
 	}
 }
 
@@ -197,6 +218,18 @@ func (m *Membership) RevokedPermissions() []*permission.Permission {
 	copy(out, m.revokedPermissions)
 	return out
 }
+
+// Designation returns the per-tenant job-title for this Membership.
+func (m *Membership) Designation() string { return m.designation }
+
+// Department returns the per-tenant department grouping.
+func (m *Membership) Department() string { return m.department }
+
+// StatusMessage returns the free-text current-availability blurb.
+func (m *Membership) StatusMessage() string { return m.statusMessage }
+
+// ReportsTo returns the manager Membership ID; zero = top-of-tree.
+func (m *Membership) ReportsTo() ID { return m.reportsTo }
 
 // ----- State transitions ----------------------------------------------------
 
@@ -448,6 +481,81 @@ func (m *Membership) ReplacePermissionOverlays(
 		PersonID:     m.personID,
 		TenantID:     m.tenantID,
 		At:           clock.Now(),
+	})
+	return nil
+}
+
+// ----- Per-tenant profile + manager hierarchy --------------------------------
+
+// UpdateProfile sets `designation` / `department` / `statusMessage`
+// atomically. Whitespace trimmed on all three. Idempotent: trimmed
+// values matching the current state emit no event.
+//
+// Single ProfileUpdatedEvent fires regardless of which fields
+// changed — listeners care about "profile changed" not per-field
+// deltas.
+func (m *Membership) UpdateProfile(designation, department, statusMessage string) error {
+	d := strings.TrimSpace(designation)
+	dep := strings.TrimSpace(department)
+	sm := strings.TrimSpace(statusMessage)
+	if d == m.designation && dep == m.department && sm == m.statusMessage {
+		return nil
+	}
+	m.designation = d
+	m.department = dep
+	m.statusMessage = sm
+	m.recordEvent(ProfileUpdatedEvent{
+		MembershipID:  m.id,
+		PersonID:      m.personID,
+		TenantID:      m.tenantID,
+		Designation:   d,
+		Department:    dep,
+		StatusMessage: sm,
+		At:            clock.Now(),
+	})
+	return nil
+}
+
+// AssignManager sets the `reportsTo` field. Pass zero ID to clear
+// (top-of-tree). Self-reference rejected. Idempotent — assigning the
+// current manager is a no-op (no event).
+//
+// CALLER INVARIANT: the application service runs cycle detection
+// (recursive CTE on the persisted hierarchy) before calling this.
+// The domain doesn't traverse other Memberships.
+//
+// Manager Membership MUST belong to the same tenant — DB-level FK on
+// `(reports_to, tenant_id) → (id, tenant_id)` enforces this; domain
+// trusts the boundary.
+//
+// Emits ManagerAssignedEvent on set (with PreviousManager carried for
+// audit), ManagerRemovedEvent on clear.
+func (m *Membership) AssignManager(managerID ID) error {
+	if managerID == m.id {
+		return fmt.Errorf("%w: cannot report to self", ErrInvalid)
+	}
+	if m.reportsTo == managerID {
+		return nil
+	}
+	old := m.reportsTo
+	m.reportsTo = managerID
+	if managerID.IsZero() {
+		m.recordEvent(ManagerRemovedEvent{
+			MembershipID:    m.id,
+			PersonID:        m.personID,
+			TenantID:        m.tenantID,
+			PreviousManager: old,
+			At:              clock.Now(),
+		})
+		return nil
+	}
+	m.recordEvent(ManagerAssignedEvent{
+		MembershipID:    m.id,
+		PersonID:        m.personID,
+		TenantID:        m.tenantID,
+		ManagerID:       managerID,
+		PreviousManager: old,
+		At:              clock.Now(),
 	})
 	return nil
 }

@@ -358,6 +358,137 @@ func TestUnmarshalFromDB_OverlayRoundTrip(t *testing.T) {
 	}
 }
 
+// ----- Profile + manager hierarchy -------------------------------------------
+
+func TestUpdateProfile_TransitionsAndEmits(t *testing.T) {
+	t.Parallel()
+	m := freshMembership(t)
+	if err := m.UpdateProfile("Sales Lead", "Sales", "OOO Friday"); err != nil {
+		t.Fatalf("UpdateProfile: %v", err)
+	}
+	if m.Designation() != "Sales Lead" || m.Department() != "Sales" || m.StatusMessage() != "OOO Friday" {
+		t.Fatalf("fields: %q/%q/%q", m.Designation(), m.Department(), m.StatusMessage())
+	}
+	events := m.PullEvents()
+	if len(events) != 1 {
+		t.Fatalf("events: %d", len(events))
+	}
+	ev, ok := events[0].(membership.ProfileUpdatedEvent)
+	if !ok {
+		t.Fatalf("event type: %T", events[0])
+	}
+	if ev.Designation != "Sales Lead" || ev.Department != "Sales" || ev.StatusMessage != "OOO Friday" {
+		t.Fatalf("event payload: %+v", ev)
+	}
+}
+
+func TestUpdateProfile_TrimsAndIsIdempotent(t *testing.T) {
+	t.Parallel()
+	m := freshMembership(t)
+	_ = m.UpdateProfile("Lead", "Sales", "")
+	_ = m.PullEvents()
+	if err := m.UpdateProfile("  Lead  ", "  Sales  ", ""); err != nil {
+		t.Fatalf("UpdateProfile (whitespace): %v", err)
+	}
+	if events := m.PullEvents(); len(events) != 0 {
+		t.Fatalf("idempotent UpdateProfile emitted %d events", len(events))
+	}
+}
+
+func TestAssignManager_TransitionsAndEmits(t *testing.T) {
+	t.Parallel()
+	m := freshMembership(t)
+	mgr := membership.ID(ids.NewV7().String())
+	if err := m.AssignManager(mgr); err != nil {
+		t.Fatalf("AssignManager: %v", err)
+	}
+	if m.ReportsTo() != mgr {
+		t.Fatalf("ReportsTo: %v", m.ReportsTo())
+	}
+	events := m.PullEvents()
+	if len(events) != 1 {
+		t.Fatalf("events: %d", len(events))
+	}
+	ev, ok := events[0].(membership.ManagerAssignedEvent)
+	if !ok {
+		t.Fatalf("event type: %T", events[0])
+	}
+	if ev.ManagerID != mgr {
+		t.Fatalf("event ManagerID: %v", ev.ManagerID)
+	}
+	if !ev.PreviousManager.IsZero() {
+		t.Fatalf("event PreviousManager: %v (want zero)", ev.PreviousManager)
+	}
+}
+
+func TestAssignManager_RejectsSelfReference(t *testing.T) {
+	t.Parallel()
+	m := freshMembership(t)
+	if err := m.AssignManager(m.ID()); !errors.Is(err, membership.ErrInvalid) {
+		t.Fatalf("want ErrInvalid got %v", err)
+	}
+}
+
+func TestAssignManager_ZeroIDClears(t *testing.T) {
+	t.Parallel()
+	m := freshMembership(t)
+	prev := membership.ID(ids.NewV7().String())
+	_ = m.AssignManager(prev)
+	_ = m.PullEvents()
+	if err := m.AssignManager(membership.ID("")); err != nil {
+		t.Fatalf("clear manager: %v", err)
+	}
+	if !m.ReportsTo().IsZero() {
+		t.Fatalf("ReportsTo not cleared: %v", m.ReportsTo())
+	}
+	events := m.PullEvents()
+	if len(events) != 1 {
+		t.Fatalf("events: %d", len(events))
+	}
+	ev, ok := events[0].(membership.ManagerRemovedEvent)
+	if !ok {
+		t.Fatalf("event type: %T (want ManagerRemovedEvent)", events[0])
+	}
+	if ev.PreviousManager != prev {
+		t.Fatalf("event PreviousManager: %v want %v", ev.PreviousManager, prev)
+	}
+}
+
+func TestAssignManager_Idempotent(t *testing.T) {
+	t.Parallel()
+	m := freshMembership(t)
+	mgr := membership.ID(ids.NewV7().String())
+	_ = m.AssignManager(mgr)
+	_ = m.PullEvents()
+	if err := m.AssignManager(mgr); err != nil {
+		t.Fatalf("dup AssignManager: %v", err)
+	}
+	if events := m.PullEvents(); len(events) != 0 {
+		t.Fatalf("dup AssignManager emitted %d events", len(events))
+	}
+}
+
+func TestUnmarshalFromDB_ProfileAndManagerRoundTrip(t *testing.T) {
+	t.Parallel()
+	mgr := membership.ID(ids.NewV7().String())
+	m := membership.UnmarshalFromDB(membership.Snapshot{
+		ID:            membership.ID(ids.NewV7().String()),
+		PersonID:      person.ID(ids.NewV7().String()),
+		TenantID:      tenant.ID(ids.NewV7().String()),
+		Status:        membership.StatusActive,
+		Designation:   "Lead",
+		Department:    "Sales",
+		StatusMessage: "Available",
+		ReportsTo:     mgr,
+	})
+	if m.Designation() != "Lead" || m.Department() != "Sales" || m.StatusMessage() != "Available" {
+		t.Fatalf("profile: %q/%q/%q", m.Designation(), m.Department(), m.StatusMessage())
+	}
+	if m.ReportsTo() != mgr {
+		t.Fatalf("ReportsTo round-trip: %v", m.ReportsTo())
+	}
+}
+
 func TestUnmarshalFromDB_RoleAssignmentsRoundTrip(t *testing.T) {
 	t.Parallel()
 	rid := role.ID(ids.NewV7().String())
