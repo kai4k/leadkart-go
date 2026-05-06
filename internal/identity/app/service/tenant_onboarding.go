@@ -19,10 +19,13 @@ import (
 	"github.com/leadkart/leadkart-go/internal/common/email"
 	"github.com/leadkart/leadkart-go/internal/common/ids"
 	"github.com/leadkart/leadkart-go/internal/common/slug"
+	"github.com/leadkart/leadkart-go/internal/common/tenancy"
 	"github.com/leadkart/leadkart-go/internal/identity/adapters"
 	"github.com/leadkart/leadkart-go/internal/identity/app/argon2"
+	"github.com/leadkart/leadkart-go/internal/identity/app/seed"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/role"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 	"github.com/leadkart/leadkart-go/internal/platform/pg"
 )
@@ -72,9 +75,10 @@ type TenantOnboardingService struct {
 	tenants     *adapters.TenantRepository
 	persons     *adapters.PersonRepository
 	memberships *adapters.MembershipRepository
+	roles       *adapters.RoleRepository
 }
 
-// NewTenantOnboardingService wires the orchestrator. All four
+// NewTenantOnboardingService wires the orchestrator. All five
 // dependencies are concrete — handlers depend on the orchestrator
 // concrete type, not an interface, per Go-canon "accept interfaces
 // at the consumer" + the orchestrator IS the consumer here.
@@ -83,12 +87,14 @@ func NewTenantOnboardingService(
 	tenants *adapters.TenantRepository,
 	persons *adapters.PersonRepository,
 	memberships *adapters.MembershipRepository,
+	roles *adapters.RoleRepository,
 ) *TenantOnboardingService {
 	return &TenantOnboardingService{
 		tx:          tx,
 		tenants:     tenants,
 		persons:     persons,
 		memberships: memberships,
+		roles:       roles,
 	}
 }
 
@@ -211,5 +217,55 @@ func (s *TenantOnboardingService) Onboard(
 	if err != nil {
 		return OnboardTenantResult{}, err
 	}
+
+	// 8. Default-role seeding + admin assignment (post-commit, multi-tx).
+	//
+	// Why split from the orchestrator's main tx:
+	//   - role.Repository.Add opens its own TxScopeTenant tx (per-row).
+	//     Nesting RoleRepository.Add inside the platform-scoped main tx
+	//     would require a tx-aware seed path the repo doesn't yet expose.
+	//   - Each downstream operation is INDEPENDENTLY idempotent:
+	//     ApplyDefaultRoles re-runs are no-ops; AssignRole on Membership
+	//     dedups via the role-assignments PK + the domain's set semantics.
+	//   - Failure surface: if the seed step fails after the main commit,
+	//     the tenant exists without roles (or without the CompanyOwner
+	//     assignment). Operator runbook: re-run the onboarding flow with
+	//     the same TenantID — the idempotent seed completes the work.
+	//
+	// Per `messaging.md` "outbox pattern over distributed transactions":
+	// accept eventual consistency where the recovery path is "operator
+	// re-runs an idempotent step."
+	tenantCtx := tenancy.WithID(ctx, tenancy.ID(result.TenantID.String()))
+	seededRoles, err := seed.ApplyDefaultRoles(tenantCtx, s.roles, result.TenantID)
+	if err != nil {
+		return OnboardTenantResult{}, fmt.Errorf("onboard: seed default roles: %w", err)
+	}
+	owner, ok := findCompanyOwner(seededRoles)
+	if !ok {
+		return OnboardTenantResult{}, fmt.Errorf(
+			"onboard: CompanyOwner not in seeded catalog (catalog drift)",
+		)
+	}
+	err = s.memberships.UpdateByID(tenantCtx, result.MembershipID,
+		func(m *membership.Membership) (bool, error) {
+			return true, m.AssignRole(owner.ID())
+		})
+	if err != nil {
+		return OnboardTenantResult{}, fmt.Errorf(
+			"onboard: assign CompanyOwner to admin membership: %w", err,
+		)
+	}
 	return result, nil
+}
+
+// findCompanyOwner picks the CompanyOwner role from a seeded catalog.
+// Catalog ordering is wire-stable but we look up by name rather than
+// index so a future spec reorder doesn't silently misassign authority.
+func findCompanyOwner(roles []*role.Role) (*role.Role, bool) {
+	for _, r := range roles {
+		if r.Name() == role.SystemRoles.Tenant.CompanyOwner {
+			return r, true
+		}
+	}
+	return nil, false
 }

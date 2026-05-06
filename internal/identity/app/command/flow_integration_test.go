@@ -57,6 +57,7 @@ func newWiredApp(t *testing.T) (*pgxpool.Pool, command.RegisterTenantHandler, co
 	persons := adapters.NewPersonRepository(pool, tx)
 	memberships := adapters.NewMembershipRepository(pool, tx)
 	families := adapters.NewRefreshTokenFamilyRepository(pool, tx)
+	roles := adapters.NewRoleRepository(pool, tx)
 
 	now := func() time.Time { return time.Date(2026, 5, 6, 12, 0, 0, 0, time.UTC) }
 	signingKey := jwt.SigningKey{
@@ -73,7 +74,7 @@ func newWiredApp(t *testing.T) (*pgxpool.Pool, command.RegisterTenantHandler, co
 		t.Fatalf("dummy hash: %v", err)
 	}
 
-	onboarding := service.NewTenantOnboardingService(tx, tenants, persons, memberships)
+	onboarding := service.NewTenantOnboardingService(tx, tenants, persons, memberships, roles)
 	register := command.NewRegisterTenantHandler(onboarding)
 	login := command.NewLoginHandler(persons, memberships, families, tenants, issuer, now, refreshTTL, dummyHash)
 	refresh := command.NewRefreshHandler(families, persons, memberships, tenants, issuer, now, refreshTTL)

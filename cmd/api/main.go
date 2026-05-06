@@ -232,7 +232,8 @@ func buildIdentityApp(pool *pgxpool.Pool, cfg config.AppConfig, now func() time.
 	persons := adapters.NewPersonRepository(pool, tx)
 	memberships := adapters.NewMembershipRepository(pool, tx)
 	families := adapters.NewRefreshTokenFamilyRepository(pool, tx)
-	onboarding := service.NewTenantOnboardingService(tx, tenants, persons, memberships)
+	roles := adapters.NewRoleRepository(pool, tx)
+	onboarding := service.NewTenantOnboardingService(tx, tenants, persons, memberships, roles)
 
 	previous := make([]jwt.SigningKey, len(cfg.JWT.PreviousKeys))
 	for i, p := range cfg.JWT.PreviousKeys {
