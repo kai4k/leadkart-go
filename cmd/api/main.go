@@ -128,8 +128,25 @@ func healthcheck() error {
 	}
 	url := "http://127.0.0.1" + addr + "/alive"
 
-	client := &http.Client{Timeout: healthcheckTimeout}
-	resp, err := client.Get(url)
+	ctx, cancel := context.WithTimeout(context.Background(), healthcheckTimeout)
+	defer cancel()
+
+	// Loopback-only target — host is hardcoded "127.0.0.1", only the
+	// port is env-derived (LEADKART_LISTEN__ADMIN, default ":9090").
+	// gosec's taint analysis can't see through the string concat that
+	// the host literal pins to localhost. SSRF is impossible: an
+	// attacker who controls LEADKART_LISTEN__ADMIN can at most redirect
+	// the probe to a different loopback port in the same container,
+	// which has no privilege impact (no other listeners are reachable).
+	// Annotation lives on NewRequestWithContext (where url enters the
+	// http.Request) AND on Do (where gosec re-checks the request).
+	//nolint:gosec // G107: loopback-only host, env-derived port; not SSRF.
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return fmt.Errorf("build request: %w", err)
+	}
+	//nolint:gosec // G107: loopback-only host (see NewRequestWithContext above).
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("get %s: %w", url, err)
 	}
