@@ -192,6 +192,53 @@ func (p *Person) ChangePassword(newHash PasswordHash) error {
 	return nil
 }
 
+// UpdateProfile changes the Person's display name (FirstName + LastName).
+//
+// Validation mirrors [New]: both fields required, trimmed-non-empty, capped
+// at nameMaxLen. Refused on anonymised Persons (DPDP Art. 17 cascade
+// already replaced the names with "anonymised"; re-personalising would
+// undo the erasure). No-op when both fields equal current values
+// (idempotent — second call with same values emits no event).
+//
+// Emits [ProfileUpdatedEvent] with OLD + NEW values for audit /
+// integration-event subscribers.
+//
+// Does NOT rotate SecurityStamp — profile changes are not a security
+// boundary per `security.md` "SecurityStamp rotation triggers" (only
+// password / role / permission / email / logout-all rotate).
+func (p *Person) UpdateProfile(firstName, lastName string) error {
+	if p.isAnonymised {
+		return fmt.Errorf("%w: cannot update profile of anonymised person", ErrInvalid)
+	}
+	if strings.TrimSpace(firstName) == "" {
+		return fmt.Errorf("%w: first name required", ErrInvalid)
+	}
+	if strings.TrimSpace(lastName) == "" {
+		return fmt.Errorf("%w: last name required", ErrInvalid)
+	}
+	if len(firstName) > nameMaxLen {
+		return fmt.Errorf("%w: first name too long (max %d)", ErrInvalid, nameMaxLen)
+	}
+	if len(lastName) > nameMaxLen {
+		return fmt.Errorf("%w: last name too long (max %d)", ErrInvalid, nameMaxLen)
+	}
+	if firstName == p.firstName && lastName == p.lastName {
+		return nil
+	}
+	old := struct{ first, last string }{p.firstName, p.lastName}
+	p.firstName = firstName
+	p.lastName = lastName
+	p.recordEvent(ProfileUpdatedEvent{
+		PersonID:     p.id,
+		OldFirstName: old.first,
+		OldLastName:  old.last,
+		NewFirstName: firstName,
+		NewLastName:  lastName,
+		At:           clock.Now(),
+	})
+	return nil
+}
+
 // Anonymise scrubs PII per DPDP Act 2023 §12 / GDPR Art. 17 right-to-erasure.
 //
 // Effects:

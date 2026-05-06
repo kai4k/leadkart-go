@@ -46,6 +46,29 @@ func (PersonPasswordChangedV1) Topic() string { return "identity.person_password
 // OccurredAt returns the domain timestamp.
 func (e PersonPasswordChangedV1) OccurredAt() time.Time { return e.OccurredAtUTC }
 
+// PersonProfileUpdatedV1 — Person changed their display name
+// (FirstName + LastName). Platform-scoped per the .NET parent's
+// vocabulary split (Person fields global; Membership profile fields
+// tenant-scoped — see MembershipProfileUpdatedV1 for the tenant-scoped
+// counterpart). Consumed by Notifications (display-name update) +
+// audit.
+type PersonProfileUpdatedV1 struct {
+	platformMarker
+
+	PersonID      uuid.UUID `json:"person_id"`
+	OldFirstName  string    `json:"old_first_name"`
+	OldLastName   string    `json:"old_last_name"`
+	NewFirstName  string    `json:"new_first_name"`
+	NewLastName   string    `json:"new_last_name"`
+	OccurredAtUTC time.Time `json:"occurred_at_utc"`
+}
+
+// Topic returns the canonical wire alias.
+func (PersonProfileUpdatedV1) Topic() string { return "identity.person_profile_updated.v1" }
+
+// OccurredAt returns the domain timestamp.
+func (e PersonProfileUpdatedV1) OccurredAt() time.Time { return e.OccurredAtUTC }
+
 // PersonAnonymisedV1 — DPDP Act §12 / GDPR Art. 17 right-to-erasure
 // completed at the Person aggregate. Cascades to every module touching
 // the Person's PII per `data-retention.md` (CRM lead notes scrub,
@@ -68,9 +91,11 @@ func (e PersonAnonymisedV1) OccurredAt() time.Time { return e.OccurredAtUTC }
 var (
 	_ Platform = PersonCreatedV1{}
 	_ Platform = PersonPasswordChangedV1{}
+	_ Platform = PersonProfileUpdatedV1{}
 	_ Platform = PersonAnonymisedV1{}
 
 	_ = register(PersonCreatedV1{})
 	_ = register(PersonPasswordChangedV1{})
+	_ = register(PersonProfileUpdatedV1{})
 	_ = register(PersonAnonymisedV1{})
 )

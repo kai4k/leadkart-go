@@ -178,6 +178,97 @@ func TestChangePassword_RejectsZeroHash(t *testing.T) {
 	}
 }
 
+// ----- UpdateProfile --------------------------------------------------------
+
+func TestUpdateProfile_ChangesNameAndEmitsEvent(t *testing.T) {
+	t.Cleanup(clock.Reset)
+	clock.Set(time.Date(2026, 5, 7, 12, 0, 0, 0, time.UTC))
+
+	p := newPerson(t)
+	_ = p.PullEvents() // drain CreatedEvent
+
+	if err := p.UpdateProfile("Alice", "Sharma-Khan"); err != nil {
+		t.Fatalf("UpdateProfile: %v", err)
+	}
+	if p.FirstName() != "Alice" {
+		t.Errorf("FirstName = %q, want Alice", p.FirstName())
+	}
+	if p.LastName() != "Sharma-Khan" {
+		t.Errorf("LastName = %q, want Sharma-Khan", p.LastName())
+	}
+
+	events := p.PullEvents()
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(events))
+	}
+	ev, ok := events[0].(person.ProfileUpdatedEvent)
+	if !ok {
+		t.Fatalf("event[0] = %T, want ProfileUpdatedEvent", events[0])
+	}
+	if ev.OldFirstName != "A" || ev.OldLastName != "B" {
+		t.Errorf("OLD = (%q, %q), want (A, B)", ev.OldFirstName, ev.OldLastName)
+	}
+	if ev.NewFirstName != "Alice" || ev.NewLastName != "Sharma-Khan" {
+		t.Errorf("NEW = (%q, %q), want (Alice, Sharma-Khan)", ev.NewFirstName, ev.NewLastName)
+	}
+}
+
+func TestUpdateProfile_NoOp_WhenNamesUnchanged(t *testing.T) {
+	t.Cleanup(clock.Reset)
+	p := newPerson(t)
+	_ = p.PullEvents()
+
+	if err := p.UpdateProfile("A", "B"); err != nil {
+		t.Fatalf("UpdateProfile no-op: %v", err)
+	}
+	if got := p.PullEvents(); len(got) != 0 {
+		t.Errorf("expected 0 events on no-op update, got %d", len(got))
+	}
+}
+
+func TestUpdateProfile_RejectsEmptyAndOverlong(t *testing.T) {
+	t.Cleanup(clock.Reset)
+	cases := []struct {
+		name      string
+		firstName string
+		lastName  string
+	}{
+		{"empty first", "", "B"},
+		{"empty last", "A", ""},
+		{"whitespace first", "   ", "B"},
+		{"whitespace last", "A", "  "},
+		// 101 chars > nameMaxLen (100)
+		{"first too long", string(make([]byte, 101)), "B"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			p := newPerson(t)
+			err := p.UpdateProfile(tc.firstName, tc.lastName)
+			if err == nil {
+				t.Fatal("expected validation error")
+			}
+			if !errors.Is(err, person.ErrInvalid) {
+				t.Errorf("expected errors.Is(_, ErrInvalid), got %v", err)
+			}
+		})
+	}
+}
+
+func TestUpdateProfile_RefusedOnAnonymisedPerson(t *testing.T) {
+	t.Cleanup(clock.Reset)
+	p := newPerson(t)
+	_ = p.Anonymise()
+	_ = p.PullEvents()
+
+	err := p.UpdateProfile("Alice", "Sharma")
+	if err == nil {
+		t.Fatal("expected error updating anonymised person")
+	}
+	if !errors.Is(err, person.ErrInvalid) {
+		t.Errorf("expected errors.Is(_, ErrInvalid), got %v", err)
+	}
+}
+
 // ----- Anonymise (DPDP/GDPR) ------------------------------------------------
 
 func TestAnonymise_MarksAnonymisedAndScrubsFields(t *testing.T) {

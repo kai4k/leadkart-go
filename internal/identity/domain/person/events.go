@@ -42,6 +42,27 @@ func (PasswordChangedEvent) Topic() string { return "identity.password_changed.v
 // OccurredAt returns the domain timestamp.
 func (e PasswordChangedEvent) OccurredAt() time.Time { return e.At }
 
+// ProfileUpdatedEvent fires when [Person.UpdateProfile] is called.
+//
+// Carries the OLD + NEW values so audit subscribers can render
+// "Alice Sharma → Alice Sharma-Khan" diffs without re-hydrating the
+// aggregate. Per .NET parent's MembershipProfileUpdatedEvent shape
+// (with Person fields here, not Membership-tenant-scoped fields).
+type ProfileUpdatedEvent struct {
+	PersonID     ID
+	OldFirstName string
+	OldLastName  string
+	NewFirstName string
+	NewLastName  string
+	At           time.Time
+}
+
+// Topic returns the integration-event type.
+func (ProfileUpdatedEvent) Topic() string { return "identity.person_profile_updated.v1" }
+
+// OccurredAt returns the domain timestamp.
+func (e ProfileUpdatedEvent) OccurredAt() time.Time { return e.At }
+
 // AnonymisedEvent fires when [Person.Anonymise] is called.
 //
 // Cross-module subscribers MUST scrub their own PII (CRM lead notes,

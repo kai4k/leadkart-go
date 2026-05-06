@@ -77,6 +77,16 @@ func FromDomainEvent(d any) (Event, error) {
 			OccurredAtUTC: e.At.UTC(),
 		}, nil
 
+	case person.ProfileUpdatedEvent:
+		return PersonProfileUpdatedV1{
+			PersonID:      mustParseUUID(e.PersonID.String()),
+			OldFirstName:  e.OldFirstName,
+			OldLastName:   e.OldLastName,
+			NewFirstName:  e.NewFirstName,
+			NewLastName:   e.NewLastName,
+			OccurredAtUTC: e.At.UTC(),
+		}, nil
+
 	case person.AnonymisedEvent:
 		return PersonAnonymisedV1{
 			PersonID:      mustParseUUID(e.PersonID.String()),
