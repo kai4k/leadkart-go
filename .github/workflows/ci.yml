@@ -101,7 +101,12 @@ jobs:
           retention-days: 7
 
       - name: Annotate test failures (PR Checks)
-        if: always()
+        # `always()` keeps the reporter running on test failure so failed
+        # cases get annotated. `hashFiles(...) != ''` skips when the
+        # gotestsum step was itself skipped (e.g. lint above failed first)
+        # so there's no junit XML to report against — avoids dorny's
+        # "No test report files were found" CI annotation noise.
+        if: always() && hashFiles('junit-unit.xml') != ''
         uses: dorny/test-reporter@v2
         with:
           name: Unit Tests
@@ -156,7 +161,7 @@ jobs:
           retention-days: 7
 
       - name: Annotate architecture failures (PR Checks)
-        if: always()
+        if: always() && hashFiles('junit-architecture.xml') != ''
         uses: dorny/test-reporter@v2
         with:
           name: Architecture Tests
@@ -229,7 +234,7 @@ jobs:
           retention-days: 7
 
       - name: Annotate integration failures (PR Checks)
-        if: always()
+        if: always() && hashFiles('junit-integration.xml') != ''
         uses: dorny/test-reporter@v2
         with:
           name: Integration Tests
