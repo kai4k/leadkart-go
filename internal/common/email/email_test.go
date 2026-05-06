@@ -2,6 +2,7 @@ package email_test
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/leadkart/leadkart-go/internal/common/email"
@@ -86,11 +87,7 @@ func TestNew_RejectsInvalid(t *testing.T) {
 func TestNew_RejectsTooLong(t *testing.T) {
 	t.Parallel()
 	// RFC 5321 caps at 254 chars; one over.
-	overlong := ""
-	for i := 0; i < 245; i++ {
-		overlong += "a"
-	}
-	overlong += "@example.com" // 245 + 12 = 257, over 254 limit
+	overlong := strings.Repeat("a", 245) + "@example.com" // 245 + 12 = 257, over 254 limit
 	_, err := email.New(overlong)
 	if err == nil {
 		t.Fatal("expected length-cap rejection, got nil")
