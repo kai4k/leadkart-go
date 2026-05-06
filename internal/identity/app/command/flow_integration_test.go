@@ -39,17 +39,22 @@ import (
 	"github.com/leadkart/leadkart-go/internal/common/ids"
 	"github.com/leadkart/leadkart-go/internal/common/slug"
 	"github.com/leadkart/leadkart-go/internal/identity/adapters"
+	"net/http"
+	"net/http/httptest"
+
 	"github.com/leadkart/leadkart-go/internal/identity/app/argon2"
 	"github.com/leadkart/leadkart-go/internal/identity/app/command"
 	"github.com/leadkart/leadkart-go/internal/identity/app/jwt"
 	"github.com/leadkart/leadkart-go/internal/identity/app/permissions"
 	"github.com/leadkart/leadkart-go/internal/identity/app/service"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/permission"
+	"github.com/leadkart/leadkart-go/internal/identity/ports/authn"
 	"github.com/leadkart/leadkart-go/internal/platform/pg"
 )
 
 const refreshTTL = 14 * 24 * time.Hour
 
-func newWiredApp(t *testing.T) (*pgxpool.Pool, command.RegisterTenantHandler, command.LoginHandler, command.RefreshHandler, command.LogoutHandler) {
+func newWiredApp(t *testing.T) (*pgxpool.Pool, command.RegisterTenantHandler, command.LoginHandler, command.RefreshHandler, command.LogoutHandler, *jwt.Issuer) {
 	t.Helper()
 	pool := startWiredPostgres(t)
 	tx := pg.NewTransactor(pool)
@@ -82,11 +87,11 @@ func newWiredApp(t *testing.T) (*pgxpool.Pool, command.RegisterTenantHandler, co
 	refresh := command.NewRefreshHandler(families, persons, memberships, tenants, permResolver, issuer, now, refreshTTL)
 	logout := command.NewLogoutHandler(families)
 
-	return pool, register, login, refresh, logout
+	return pool, register, login, refresh, logout, issuer
 }
 
 func TestFlow_RegisterLoginRefreshLogout(t *testing.T) {
-	_, register, login, refresh, logout := newWiredApp(t)
+	_, register, login, refresh, logout, _ := newWiredApp(t)
 	ctx := t.Context()
 
 	// 1. Register a new tenant + admin person + membership.
@@ -172,7 +177,7 @@ func TestFlow_RegisterLoginRefreshLogout(t *testing.T) {
 }
 
 func TestFlow_LoginUnknownEmail_GenericFailure(t *testing.T) {
-	_, _, login, _, _ := newWiredApp(t)
+	_, _, login, _, _, _ := newWiredApp(t)
 	ctx := t.Context()
 
 	addr, _ := email.New("nobody@example.test")
@@ -186,7 +191,7 @@ func TestFlow_LoginUnknownEmail_GenericFailure(t *testing.T) {
 }
 
 func TestFlow_LoginWrongPassword_GenericFailure(t *testing.T) {
-	_, register, login, _, _ := newWiredApp(t)
+	_, register, login, _, _, _ := newWiredApp(t)
 	ctx := t.Context()
 
 	full := ids.NewV7().String()
@@ -214,7 +219,7 @@ func TestFlow_LoginWrongPassword_GenericFailure(t *testing.T) {
 }
 
 func TestFlow_RegisterDuplicateActiveEmail_Blocked(t *testing.T) {
-	_, register, _, _, _ := newWiredApp(t)
+	_, register, _, _, _, _ := newWiredApp(t)
 	ctx := t.Context()
 
 	addr, _ := email.New("dup-active@flow.test")
@@ -246,6 +251,102 @@ func TestFlow_RegisterDuplicateActiveEmail_Blocked(t *testing.T) {
 	})
 	if !errors.Is(err, command.ErrEmailHasActiveMembership) {
 		t.Fatalf("expected ErrEmailHasActiveMembership, got %v", err)
+	}
+}
+
+// TestE2E_LoginThenRequirePermissionGate is the Task 26 closing test:
+// the full chain — onboard a tenant (CompanyOwner role auto-seeded with
+// Meta.TenantAdmin permission) → login → take the JWT → call a handler
+// guarded by [authn.RequirePermission] → assert the gate passes for
+// the seeded permission and rejects an unrelated one.
+//
+// Proves the load-bearing claim of Phase 1: TenantOnboardingService +
+// PermissionResolver + JWT issuer + authn middleware compose into a
+// working end-to-end authorization flow with no test-only shortcuts.
+func TestE2E_LoginThenRequirePermissionGate(t *testing.T) {
+	_, register, login, _, _, issuer := newWiredApp(t)
+	ctx := t.Context()
+
+	// 1. Onboard. CompanyOwner auto-assigned, carries Meta.TenantAdmin.
+	full := ids.NewV7().String()
+	registerSlug, _ := slug.New("e2e-gate-" + full[len(full)-8:])
+	adminEmail, _ := email.New("e2e-gate@flow.test")
+	if _, err := register.Handle(ctx, command.RegisterTenantCommand{
+		Slug:           registerSlug,
+		LegalName:      "E2E Gate Pharma Pvt Ltd",
+		DisplayName:    "E2E",
+		AdminEmail:     adminEmail,
+		AdminPassword:  "correct horse battery staple",
+		AdminFirstName: "Eve",
+		AdminLastName:  "Admin",
+	}); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+
+	// 2. Login → real JWT signed by the wired Issuer.
+	loginOut, err := login.Handle(ctx, command.LoginCommand{
+		Email:       adminEmail,
+		Password:    "correct horse battery staple",
+		DeviceLabel: "E2E Test Browser",
+	})
+	if err != nil {
+		t.Fatalf("Login: %v", err)
+	}
+	if loginOut.AccessToken == "" {
+		t.Fatal("Login returned empty access token")
+	}
+
+	// 3. Build a sentinel handler — proves middleware passed through.
+	called := false
+	sentinel := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok"))
+	})
+
+	// 4. Guarded by Meta.TenantAdmin — the permission CompanyOwner carries.
+	gateGranted := authn.RequirePermission(issuer,
+		permission.IdentityPermissions.Meta.TenantAdmin)(sentinel)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/admin", nil)
+	req.Header.Set("Authorization", "Bearer "+loginOut.AccessToken)
+	rec := httptest.NewRecorder()
+	gateGranted.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("granted gate: got %d want 200 (body=%s)", rec.Code, rec.Body.String())
+	}
+	if !called {
+		t.Fatal("granted gate: sentinel did not run")
+	}
+
+	// 5. Guarded by a permission CompanyOwner does NOT carry (Tenants.Delete
+	//    is a platform-tier permission). 403, sentinel never runs.
+	called = false
+	gateForbidden := authn.RequirePermission(issuer,
+		permission.IdentityPermissions.Tenants.Delete)(sentinel)
+	req = httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/admin", nil)
+	req.Header.Set("Authorization", "Bearer "+loginOut.AccessToken)
+	rec = httptest.NewRecorder()
+	gateForbidden.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("forbidden gate: got %d want 403 (body=%s)", rec.Code, rec.Body.String())
+	}
+	if called {
+		t.Fatal("forbidden gate: sentinel ran despite missing permission")
+	}
+
+	// 6. Tampered token → 401 (not 403). Mutating one byte invalidates
+	//    the HMAC signature; the verifier rejects before claim inspection.
+	tampered := loginOut.AccessToken[:len(loginOut.AccessToken)-2] + "XX"
+	called = false
+	req = httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/admin", nil)
+	req.Header.Set("Authorization", "Bearer "+tampered)
+	rec = httptest.NewRecorder()
+	gateGranted.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("tampered token: got %d want 401", rec.Code)
+	}
+	if called {
+		t.Fatal("tampered token: sentinel ran")
 	}
 }
 
