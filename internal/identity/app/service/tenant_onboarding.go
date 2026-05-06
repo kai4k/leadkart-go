@@ -242,7 +242,7 @@ func (s *TenantOnboardingService) Onboard(
 	}
 	owner, ok := findCompanyOwner(seededRoles)
 	if !ok {
-		return OnboardTenantResult{}, fmt.Errorf(
+		return OnboardTenantResult{}, errors.New(
 			"onboard: CompanyOwner not in seeded catalog (catalog drift)",
 		)
 	}

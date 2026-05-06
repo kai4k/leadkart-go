@@ -18,6 +18,7 @@ package permissions
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
@@ -84,7 +85,7 @@ func (r *Resolver) ResolveForLoaded(
 	m *membership.Membership,
 ) ([]*permission.Permission, error) {
 	if m == nil {
-		return nil, fmt.Errorf("permissions: membership required")
+		return nil, errors.New("permissions: membership required")
 	}
 	roles, err := r.loadRolesForMembership(ctx, m.RoleAssignments())
 	if err != nil {
@@ -117,7 +118,7 @@ func (r *Resolver) ResolveAuth(
 	m *membership.Membership,
 ) (AuthClaims, error) {
 	if m == nil {
-		return AuthClaims{}, fmt.Errorf("permissions: membership required")
+		return AuthClaims{}, errors.New("permissions: membership required")
 	}
 	roles, err := r.loadRolesForMembership(ctx, m.RoleAssignments())
 	if err != nil {

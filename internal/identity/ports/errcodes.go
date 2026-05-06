@@ -32,7 +32,7 @@ const (
 	// email / suspended-tenant / no-active-membership all collapse
 	// to this code per `security.md` "Login flow — enumeration safety".
 	// NEVER differentiate the cause in the response body.
-	ErrCodeInvalidCredentials = "invalid_credentials"
+	ErrCodeInvalidCredentials = "invalid_credentials" //nolint:gosec // G101: error code, not a credential
 
 	// ErrCodeRefreshRejected — refresh-token rotation refused
 	// (consumed / expired / family revoked / reuse detected). Per

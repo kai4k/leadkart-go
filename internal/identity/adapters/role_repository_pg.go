@@ -260,7 +260,10 @@ func insertRoleRow(ctx context.Context, q *Queries, ro *role.Role) error {
 		Name:            ro.Name(),
 		IsSystemDefault: ro.IsSystemDefault(),
 		IsSuperAdmin:    ro.IsSuperAdmin(),
-		HierarchyLevel:  int32(ro.HierarchyLevel()),
+		// HierarchyLevel is bounded by role.HierarchyLevelMin (0) +
+		// role.HierarchyLevelMax (99) per the aggregate's New + SetHierarchyLevel
+		// invariants. Cast to int32 cannot overflow.
+		HierarchyLevel: int32(ro.HierarchyLevel()), //nolint:gosec // G115: bounded [0,99] by aggregate
 		Permissions:     permsJSON,
 		CreatedAt:       pgRequiredTimestamp(ro.CreatedAt()),
 	})
@@ -303,9 +306,10 @@ func persistRoleState(ctx context.Context, q *Queries, ro *role.Role) error {
 		return err
 	}
 	err = q.UpdateRole(ctx, UpdateRoleParams{
-		ID:             pgUUID(rid),
-		Name:           ro.Name(),
-		HierarchyLevel: int32(ro.HierarchyLevel()),
+		ID:   pgUUID(rid),
+		Name: ro.Name(),
+		// Bounded [0,99] by role aggregate invariants per insertRoleRow.
+		HierarchyLevel: int32(ro.HierarchyLevel()), //nolint:gosec // G115: bounded [0,99] by aggregate
 		Permissions:    permsJSON,
 	})
 	if err != nil {

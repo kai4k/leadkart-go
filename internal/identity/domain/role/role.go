@@ -142,16 +142,45 @@ func New(
 
 // ----- Getters --------------------------------------------------------------
 
-func (r *Role) ID() ID                { return r.id }
-func (r *Role) TenantID() tenant.ID   { return r.tenantID }
-func (r *Role) Name() string          { return r.name }
+// ID returns the Role's primary key.
+func (r *Role) ID() ID { return r.id }
+
+// TenantID returns the FK to [tenant.Tenant] this Role belongs to.
+func (r *Role) TenantID() tenant.ID { return r.tenantID }
+
+// Name returns the user-facing display name.
+func (r *Role) Name() string { return r.name }
+
+// IsSystemDefault reports whether this Role was seeded by
+// [DefaultRoleCatalog] (immutable: refuses Rename / Delete /
+// SetHierarchyLevel).
 func (r *Role) IsSystemDefault() bool { return r.isSystemDefault }
-func (r *Role) IsSuperAdmin() bool    { return r.isSuperAdmin }
-func (r *Role) HierarchyLevel() int   { return r.hierarchyLevel }
-func (r *Role) CreatedAt() time.Time  { return r.createdAt }
-func (r *Role) IsDeleted() bool       { return r.deleted }
-func (r *Role) DeletedAt() time.Time  { return r.deletedAt }
-func (r *Role) DeletedBy() string     { return r.deletedBy }
+
+// IsSuperAdmin reports whether this Role drives the SuperUser
+// authorization short-circuit per `multi-tenancy.md` "SuperUser
+// god-mode". True only on the Platform-tenant SuperAdmin role
+// (constructor-only flag; tenant admins cannot promote).
+func (r *Role) IsSuperAdmin() bool { return r.isSuperAdmin }
+
+// HierarchyLevel returns the numeric authority position
+// (lower = higher authority; bounded [HierarchyLevelMin,
+// HierarchyLevelMax]).
+func (r *Role) HierarchyLevel() int { return r.hierarchyLevel }
+
+// CreatedAt returns the immutable creation timestamp.
+func (r *Role) CreatedAt() time.Time { return r.createdAt }
+
+// IsDeleted reports whether the Role has been soft-deleted.
+// Live read paths (GetByID / ListByTenant / GetByIDs) filter
+// deleted rows; this getter is for forensic / admin tooling.
+func (r *Role) IsDeleted() bool { return r.deleted }
+
+// DeletedAt returns the soft-delete timestamp; zero if live.
+func (r *Role) DeletedAt() time.Time { return r.deletedAt }
+
+// DeletedBy returns the user identifier that performed the
+// soft-delete; empty if live.
+func (r *Role) DeletedBy() string { return r.deletedBy }
 
 // Permissions returns a defensive copy of the role's permission set.
 // Callers that mutate the returned slice will not affect the role
