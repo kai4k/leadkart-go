@@ -1,0 +1,281 @@
+// Package authn hosts the HTTP authentication + authorization middleware
+// stack for Identity-protected routes.
+//
+// Auth posture per `.NET security.md` "Access token" canon, ported:
+//
+//   - Bearer JWT in the `Authorization` header (header form: `Bearer <token>`).
+//     Cookie-based sessions are the BFF concern (LeadKart Web app); the
+//     bearer header is the API path covered here.
+//   - Per-request verification: signature + expiry + nbf + algorithm-pin
+//     (HS256, RFC 8725 §3.1) + kid resolution against the Issuer's
+//     current/previous keys. JWT structural failures => 401.
+//   - Authorisation: the `permission` claim is multi-valued; middleware
+//     factories assert membership of a specific permission name on each
+//     request. SuperUser short-circuit: `is_super_user=true` allows the
+//     request unconditionally per multi-tenancy.md "SuperUser god-mode".
+//   - The verified [jwt.Claims] is stashed on the request context so
+//     downstream handlers read identity without re-parsing.
+//
+// Module placement: lives in `internal/identity/ports/authn` because
+// the middleware translates HTTP-layer artefacts (Authorization header,
+// 401/403 responses) into Identity-layer types (jwt.Claims, permission
+// names) — Mat Ryer 2024 canon for inbound port code.
+package authn
+
+import (
+	"context"
+	"net/http"
+	"slices"
+	"strings"
+
+	"github.com/leadkart/leadkart-go/internal/identity/app/jwt"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/permission"
+)
+
+// ----- Context key + accessor ----------------------------------------------
+
+// ctxKey is the unexported tag used to stash the verified [jwt.Claims]
+// onto the request context. Exported as a method so a future cross-
+// package consumer (e.g. a route handler in another module) can read
+// the claims without seeing the type.
+type ctxKey struct{}
+
+// WithClaims returns a copy of ctx carrying the supplied claims. Used
+// by the verification middleware after a successful JWT parse; tests
+// can also inject a synthetic claims set.
+func WithClaims(ctx context.Context, c *jwt.Claims) context.Context {
+	return context.WithValue(ctx, ctxKey{}, c)
+}
+
+// ClaimsFromContext returns the verified claims attached to ctx by
+// [RequireAuth] or [RequirePermission], plus a presence flag. Returns
+// (nil, false) for unauthenticated paths — the middleware short-circuits
+// before downstream handlers see those, so a `false` here in handler
+// code is a wiring bug.
+func ClaimsFromContext(ctx context.Context) (*jwt.Claims, bool) {
+	c, ok := ctx.Value(ctxKey{}).(*jwt.Claims)
+	if !ok || c == nil {
+		return nil, false
+	}
+	return c, true
+}
+
+// ----- Verifier wrapper ----------------------------------------------------
+
+// Verifier is the interface the middleware needs from [jwt.Issuer]'s
+// Verify path — declared at the consumer side so tests can substitute
+// a fake without spinning a full Issuer with HMAC keys.
+type Verifier interface {
+	Verify(token string) (*jwt.Claims, error)
+}
+
+// ----- Bearer extraction ---------------------------------------------------
+
+const bearerPrefix = "Bearer "
+
+// extractBearer returns the bearer token from the Authorization header,
+// or empty string if absent / malformed. Strict per RFC 6750 §2.1: the
+// scheme is case-insensitive but the trailing space is required.
+func extractBearer(h http.Header) string {
+	auth := h.Get("Authorization")
+	if len(auth) <= len(bearerPrefix) {
+		return ""
+	}
+	// Case-insensitive scheme compare; preserves original token bytes.
+	if !strings.EqualFold(auth[:len(bearerPrefix)], bearerPrefix) {
+		return ""
+	}
+	return strings.TrimSpace(auth[len(bearerPrefix):])
+}
+
+// ----- 401 / 403 helpers ---------------------------------------------------
+
+// errCode constants are the wire-stable identifiers consumed by the
+// SPA + curl-friendly clients. Mirror the existing
+// [internal/identity/ports.ErrCode*] vocabulary; not imported back
+// because that package depends on Application services we don't need
+// here. Keep these in lockstep with ports/errcodes.go.
+const (
+	errCodeUnauthenticated = "unauthenticated"
+	errCodeForbidden       = "forbidden"
+)
+
+func writeError(w http.ResponseWriter, status int, code, message string) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.Header().Set("WWW-Authenticate", `Bearer realm="leadkart"`)
+	w.WriteHeader(status)
+	// {"error":"<code>","message":"<msg>"} — same shape as ports.ErrorResponse.
+	body := `{"error":"` + code + `","message":"` + message + `"}`
+	_, _ = w.Write([]byte(body))
+}
+
+// ----- RequireAuth ---------------------------------------------------------
+
+// RequireAuth verifies the bearer token + stashes the claims on ctx.
+// Use as the outer auth gate when an endpoint needs an authenticated
+// caller but does not gate on a specific permission. Returns 401 on
+// any verification failure (missing header, malformed Bearer, signature
+// failure, expiry, kid-unknown).
+//
+// Logging: deliberately silent on the success path. The verification
+// failure is logged at the caller via the platform middleware stack;
+// repeating it here would double the row count in audit + tracing.
+func RequireAuth(verifier Verifier) func(http.Handler) http.Handler {
+	if verifier == nil {
+		panic("authn: RequireAuth verifier required")
+	}
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			token := extractBearer(r.Header)
+			if token == "" {
+				writeError(w, http.StatusUnauthorized, errCodeUnauthenticated,
+					"missing or malformed Authorization bearer header")
+				return
+			}
+			claims, err := verifier.Verify(token)
+			if err != nil {
+				writeError(w, http.StatusUnauthorized, errCodeUnauthenticated,
+					"invalid token")
+				return
+			}
+			next.ServeHTTP(w, r.WithContext(WithClaims(r.Context(), claims)))
+		})
+	}
+}
+
+// ----- RequirePermission ---------------------------------------------------
+
+// RequirePermission gates a handler on (a) a verified JWT AND (b) the
+// named permission appearing in the token's `permission` claim. Returns
+//
+//   - 401 if the token is missing / invalid (same as RequireAuth)
+//   - 403 if the token is valid but lacks the permission
+//
+// SuperUser short-circuit: a token with `is_super_user=true` allows
+// the request regardless of the permission claim per
+// `multi-tenancy.md` "SuperUser god-mode". The flag is computed once
+// at JWT issuance + audited at the action site, so the runtime check
+// is just a boolean test.
+//
+// permName MUST be a known catalogue entry (validated via
+// [permission.FromConstant] which panics on unknown — programmer error
+// at wiring time, not request time). Pass
+// `permission.IdentityPermissions.X.Y`, never a string literal.
+func RequirePermission(verifier Verifier, permName string) func(http.Handler) http.Handler {
+	if verifier == nil {
+		panic("authn: RequirePermission verifier required")
+	}
+	// Validate the catalogue entry at wiring time — fail-fast.
+	_ = permission.FromConstant(permName)
+
+	auth := RequireAuth(verifier)
+	return func(next http.Handler) http.Handler {
+		return auth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			c, ok := ClaimsFromContext(r.Context())
+			if !ok {
+				// Defensive: RequireAuth should have either populated or
+				// short-circuited; this branch is a wiring bug.
+				writeError(w, http.StatusUnauthorized, errCodeUnauthenticated,
+					"missing claims")
+				return
+			}
+			if c.IsSuperUser {
+				next.ServeHTTP(w, r)
+				return
+			}
+			if !slices.Contains(c.Permissions, permName) {
+				writeError(w, http.StatusForbidden, errCodeForbidden,
+					"missing permission: "+permName)
+				return
+			}
+			next.ServeHTTP(w, r)
+		}))
+	}
+}
+
+// ----- RequireAnyPermission ------------------------------------------------
+
+// RequireAnyPermission gates a handler on (a) a verified JWT AND (b) at
+// least ONE of permNames appearing in the token's `permission` claim.
+// The disjunctive variant of [RequirePermission] — useful when a route
+// is reachable under multiple permission paths (e.g. `view` OR `manage`
+// both grant read access).
+//
+// Returns 401 / 403 on the same shape as [RequirePermission]. SuperUser
+// short-circuit applies. Empty permNames slice panics at wiring time
+// (programmer error — would let every authenticated request through).
+func RequireAnyPermission(verifier Verifier, permNames ...string) func(http.Handler) http.Handler {
+	if verifier == nil {
+		panic("authn: RequireAnyPermission verifier required")
+	}
+	if len(permNames) == 0 {
+		panic("authn: RequireAnyPermission requires ≥1 permission name")
+	}
+	for _, p := range permNames {
+		_ = permission.FromConstant(p)
+	}
+
+	auth := RequireAuth(verifier)
+	return func(next http.Handler) http.Handler {
+		return auth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			c, ok := ClaimsFromContext(r.Context())
+			if !ok {
+				writeError(w, http.StatusUnauthorized, errCodeUnauthenticated,
+					"missing claims")
+				return
+			}
+			if c.IsSuperUser {
+				next.ServeHTTP(w, r)
+				return
+			}
+			for _, p := range permNames {
+				if slices.Contains(c.Permissions, p) {
+					next.ServeHTTP(w, r)
+					return
+				}
+			}
+			writeError(w, http.StatusForbidden, errCodeForbidden,
+				"missing any of: "+strings.Join(permNames, ", "))
+		}))
+	}
+}
+
+// ----- RequirePlatform -----------------------------------------------------
+
+// RequirePlatform gates a handler on (a) a verified JWT AND (b) the
+// `is_platform=true` claim — i.e. the caller's Membership is in the
+// Platform tenant. Drives access to platform-tier endpoints under
+// `/api/v1/platform/...` per `multi-tenancy.md` "Platform admin
+// endpoints" (rate-limited 600/min per operator).
+//
+// This is the simpler sibling of [RequirePermission] for routes that
+// gate on tenant tier rather than per-permission.
+//
+// Returns 401 if the token is missing/invalid; 403 if the token is
+// valid but `is_platform=false`. SuperUser implies platform membership
+// in v0.3+ (SuperAdmin role only seeded on Platform-tenant
+// Memberships); for v0.2 we treat the two flags independently — a
+// SuperUser without is_platform is a configuration error but the
+// middleware doesn't paper over it.
+func RequirePlatform(verifier Verifier) func(http.Handler) http.Handler {
+	if verifier == nil {
+		panic("authn: RequirePlatform verifier required")
+	}
+	auth := RequireAuth(verifier)
+	return func(next http.Handler) http.Handler {
+		return auth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			c, ok := ClaimsFromContext(r.Context())
+			if !ok {
+				writeError(w, http.StatusUnauthorized, errCodeUnauthenticated,
+					"missing claims")
+				return
+			}
+			if !c.IsPlatform {
+				writeError(w, http.StatusForbidden, errCodeForbidden,
+					"platform-tier access required")
+				return
+			}
+			next.ServeHTTP(w, r)
+		}))
+	}
+}

@@ -1,0 +1,381 @@
+package authn_test
+
+import (
+	"errors"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+
+	"github.com/leadkart/leadkart-go/internal/identity/app/jwt"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/permission"
+	"github.com/leadkart/leadkart-go/internal/identity/ports/authn"
+)
+
+// fakeVerifier is a minimal authn.Verifier for middleware tests.
+// Production wires *jwt.Issuer; tests substitute this so they don't
+// need to mint real HMAC-signed tokens.
+type fakeVerifier struct {
+	wantToken string
+	claims    *jwt.Claims
+	err       error
+}
+
+func (f *fakeVerifier) Verify(token string) (*jwt.Claims, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	if f.wantToken != "" && token != f.wantToken {
+		return nil, errors.New("fake: unexpected token")
+	}
+	return f.claims, nil
+}
+
+// next is the protected handler — records that it was reached and lets
+// tests inspect the claims attached to ctx via authn.ClaimsFromContext.
+type sentinel struct {
+	called bool
+	claims *jwt.Claims
+}
+
+func (s *sentinel) handler() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		s.called = true
+		s.claims, _ = authn.ClaimsFromContext(r.Context())
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok"))
+	})
+}
+
+func newRequest(t *testing.T, authHeader string) *http.Request {
+	t.Helper()
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/", nil)
+	if authHeader != "" {
+		req.Header.Set("Authorization", authHeader)
+	}
+	return req
+}
+
+func TestRequireAuth_MissingHeader_Returns401(t *testing.T) {
+	t.Parallel()
+	v := &fakeVerifier{claims: &jwt.Claims{}}
+	s := &sentinel{}
+	mw := authn.RequireAuth(v)(s.handler())
+
+	rec := httptest.NewRecorder()
+	mw.ServeHTTP(rec, newRequest(t, ""))
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status: got %d want 401", rec.Code)
+	}
+	if s.called {
+		t.Fatal("next handler ran despite missing bearer")
+	}
+	if got := rec.Header().Get("WWW-Authenticate"); !strings.Contains(got, "Bearer") {
+		t.Fatalf("WWW-Authenticate: got %q want Bearer challenge", got)
+	}
+}
+
+func TestRequireAuth_MalformedBearer_Returns401(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name, header string
+	}{
+		{"raw token (no scheme)", "abcdef"},
+		{"wrong scheme", "Basic dXNlcjpwYXNz"},
+		{"empty token after scheme", "Bearer "},
+		{"Bearer-only", "Bearer"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			v := &fakeVerifier{}
+			s := &sentinel{}
+			mw := authn.RequireAuth(v)(s.handler())
+			rec := httptest.NewRecorder()
+			mw.ServeHTTP(rec, newRequest(t, tc.header))
+			if rec.Code != http.StatusUnauthorized {
+				t.Fatalf("%s: got %d want 401", tc.name, rec.Code)
+			}
+			if s.called {
+				t.Fatalf("%s: next ran", tc.name)
+			}
+		})
+	}
+}
+
+func TestRequireAuth_VerifierFails_Returns401(t *testing.T) {
+	t.Parallel()
+	v := &fakeVerifier{err: jwt.ErrInvalidToken}
+	s := &sentinel{}
+	mw := authn.RequireAuth(v)(s.handler())
+	rec := httptest.NewRecorder()
+	mw.ServeHTTP(rec, newRequest(t, "Bearer fake.token.here"))
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status: got %d want 401", rec.Code)
+	}
+	if s.called {
+		t.Fatal("next ran despite verify failure")
+	}
+}
+
+func TestRequireAuth_ValidToken_PopulatesClaimsAndCallsNext(t *testing.T) {
+	t.Parallel()
+	want := &jwt.Claims{
+		TenantID:    "tenant-1",
+		IsSuperUser: false,
+		Permissions: []string{permission.IdentityPermissions.Roles.View},
+	}
+	v := &fakeVerifier{wantToken: "good.token", claims: want}
+	s := &sentinel{}
+	mw := authn.RequireAuth(v)(s.handler())
+	rec := httptest.NewRecorder()
+	mw.ServeHTTP(rec, newRequest(t, "Bearer good.token"))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: got %d want 200", rec.Code)
+	}
+	if !s.called {
+		t.Fatal("next did not run")
+	}
+	if s.claims != want {
+		t.Fatalf("claims on ctx: got %+v want %+v", s.claims, want)
+	}
+}
+
+func TestRequireAuth_AcceptsCaseInsensitiveScheme(t *testing.T) {
+	t.Parallel()
+	v := &fakeVerifier{wantToken: "tok", claims: &jwt.Claims{}}
+	s := &sentinel{}
+	mw := authn.RequireAuth(v)(s.handler())
+	rec := httptest.NewRecorder()
+	mw.ServeHTTP(rec, newRequest(t, "bearer tok"))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("lowercase bearer: got %d want 200", rec.Code)
+	}
+	if !s.called {
+		t.Fatal("next did not run on lowercase bearer scheme")
+	}
+}
+
+// ----- RequirePermission ---------------------------------------------------
+
+func TestRequirePermission_NoBearer_Returns401(t *testing.T) {
+	t.Parallel()
+	v := &fakeVerifier{}
+	s := &sentinel{}
+	mw := authn.RequirePermission(v, permission.IdentityPermissions.Roles.View)(s.handler())
+	rec := httptest.NewRecorder()
+	mw.ServeHTTP(rec, newRequest(t, ""))
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status: got %d want 401", rec.Code)
+	}
+}
+
+func TestRequirePermission_ClaimsLackPermission_Returns403(t *testing.T) {
+	t.Parallel()
+	v := &fakeVerifier{
+		wantToken: "tok",
+		claims: &jwt.Claims{
+			Permissions: []string{permission.IdentityPermissions.Users.View}, // wrong perm
+		},
+	}
+	s := &sentinel{}
+	mw := authn.RequirePermission(v, permission.IdentityPermissions.Roles.View)(s.handler())
+	rec := httptest.NewRecorder()
+	mw.ServeHTTP(rec, newRequest(t, "Bearer tok"))
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status: got %d want 403", rec.Code)
+	}
+	if s.called {
+		t.Fatal("next ran despite missing permission")
+	}
+	body, _ := io.ReadAll(rec.Body)
+	if !strings.Contains(string(body), "forbidden") {
+		t.Fatalf("body: got %q want forbidden code", string(body))
+	}
+}
+
+func TestRequirePermission_PermissionPresent_Returns200(t *testing.T) {
+	t.Parallel()
+	v := &fakeVerifier{
+		wantToken: "tok",
+		claims: &jwt.Claims{
+			Permissions: []string{
+				permission.IdentityPermissions.Roles.View,
+				permission.IdentityPermissions.Users.View,
+			},
+		},
+	}
+	s := &sentinel{}
+	mw := authn.RequirePermission(v, permission.IdentityPermissions.Roles.View)(s.handler())
+	rec := httptest.NewRecorder()
+	mw.ServeHTTP(rec, newRequest(t, "Bearer tok"))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: got %d want 200", rec.Code)
+	}
+	if !s.called {
+		t.Fatal("next did not run")
+	}
+}
+
+func TestRequirePermission_SuperUser_BypassesCheck(t *testing.T) {
+	t.Parallel()
+	v := &fakeVerifier{
+		wantToken: "tok",
+		claims: &jwt.Claims{
+			IsSuperUser: true,
+			// Empty permissions on purpose: SuperUser short-circuits.
+			Permissions: nil,
+		},
+	}
+	s := &sentinel{}
+	mw := authn.RequirePermission(v,
+		permission.IdentityPermissions.Tenants.Delete)(s.handler())
+	rec := httptest.NewRecorder()
+	mw.ServeHTTP(rec, newRequest(t, "Bearer tok"))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("SuperUser bypass: got %d want 200", rec.Code)
+	}
+	if !s.called {
+		t.Fatal("SuperUser bypass: next did not run")
+	}
+}
+
+func TestRequirePermission_PanicsOnUnknownPermissionName(t *testing.T) {
+	t.Parallel()
+	v := &fakeVerifier{}
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatal("expected panic on unknown permission name (wiring bug)")
+		}
+	}()
+	_ = authn.RequirePermission(v, "made.up.permission.x")
+}
+
+func TestRequireAuth_PanicsOnNilVerifier(t *testing.T) {
+	t.Parallel()
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatal("expected panic on nil verifier")
+		}
+	}()
+	_ = authn.RequireAuth(nil)
+}
+
+// ----- RequireAnyPermission ------------------------------------------------
+
+func TestRequireAnyPermission_OneOfManyPresent_Returns200(t *testing.T) {
+	t.Parallel()
+	v := &fakeVerifier{
+		wantToken: "tok",
+		claims: &jwt.Claims{
+			Permissions: []string{permission.IdentityPermissions.Roles.View},
+		},
+	}
+	s := &sentinel{}
+	mw := authn.RequireAnyPermission(v,
+		permission.IdentityPermissions.Roles.View,
+		permission.IdentityPermissions.Roles.Update,
+	)(s.handler())
+	rec := httptest.NewRecorder()
+	mw.ServeHTTP(rec, newRequest(t, "Bearer tok"))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: got %d want 200", rec.Code)
+	}
+}
+
+func TestRequireAnyPermission_NonePresent_Returns403(t *testing.T) {
+	t.Parallel()
+	v := &fakeVerifier{
+		wantToken: "tok",
+		claims: &jwt.Claims{
+			Permissions: []string{permission.IdentityPermissions.Users.View},
+		},
+	}
+	s := &sentinel{}
+	mw := authn.RequireAnyPermission(v,
+		permission.IdentityPermissions.Roles.View,
+		permission.IdentityPermissions.Roles.Update,
+	)(s.handler())
+	rec := httptest.NewRecorder()
+	mw.ServeHTTP(rec, newRequest(t, "Bearer tok"))
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status: got %d want 403", rec.Code)
+	}
+}
+
+func TestRequireAnyPermission_SuperUser_Bypass(t *testing.T) {
+	t.Parallel()
+	v := &fakeVerifier{
+		wantToken: "tok",
+		claims:    &jwt.Claims{IsSuperUser: true},
+	}
+	s := &sentinel{}
+	mw := authn.RequireAnyPermission(v,
+		permission.IdentityPermissions.Roles.Delete,
+	)(s.handler())
+	rec := httptest.NewRecorder()
+	mw.ServeHTTP(rec, newRequest(t, "Bearer tok"))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("super-user bypass: got %d want 200", rec.Code)
+	}
+}
+
+func TestRequireAnyPermission_PanicsOnEmptyList(t *testing.T) {
+	t.Parallel()
+	v := &fakeVerifier{}
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatal("expected panic on empty permission list")
+		}
+	}()
+	_ = authn.RequireAnyPermission(v)
+}
+
+// ----- RequirePlatform -----------------------------------------------------
+
+func TestRequirePlatform_TokenIsPlatform_Returns200(t *testing.T) {
+	t.Parallel()
+	v := &fakeVerifier{
+		wantToken: "tok",
+		claims:    &jwt.Claims{IsPlatform: true},
+	}
+	s := &sentinel{}
+	mw := authn.RequirePlatform(v)(s.handler())
+	rec := httptest.NewRecorder()
+	mw.ServeHTTP(rec, newRequest(t, "Bearer tok"))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: got %d want 200", rec.Code)
+	}
+}
+
+func TestRequirePlatform_TenantToken_Returns403(t *testing.T) {
+	t.Parallel()
+	v := &fakeVerifier{
+		wantToken: "tok",
+		claims:    &jwt.Claims{IsPlatform: false},
+	}
+	s := &sentinel{}
+	mw := authn.RequirePlatform(v)(s.handler())
+	rec := httptest.NewRecorder()
+	mw.ServeHTTP(rec, newRequest(t, "Bearer tok"))
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status: got %d want 403", rec.Code)
+	}
+	if s.called {
+		t.Fatal("next ran for non-platform token")
+	}
+}
+
+func TestRequirePlatform_NoBearer_Returns401(t *testing.T) {
+	t.Parallel()
+	v := &fakeVerifier{}
+	s := &sentinel{}
+	mw := authn.RequirePlatform(v)(s.handler())
+	rec := httptest.NewRecorder()
+	mw.ServeHTTP(rec, newRequest(t, ""))
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status: got %d want 401", rec.Code)
+	}
+}
