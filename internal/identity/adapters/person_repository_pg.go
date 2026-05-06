@@ -94,6 +94,42 @@ func (r *PersonRepository) GetByEmail(ctx context.Context, e email.Address) (*pe
 	return rowToPerson(row)
 }
 
+// GetByPasswordResetTokenHash satisfies [person.Repository]. Hash-only
+// lookup powering the confirm-password-reset flow. Backed by partial
+// unique index uq_persons_password_reset_hash.
+func (r *PersonRepository) GetByPasswordResetTokenHash(ctx context.Context, hash person.PasswordResetTokenHash) (*person.Person, error) {
+	if hash.IsZero() {
+		return nil, person.ErrNotFound
+	}
+	hashStr := hash.String()
+	row, err := r.q.GetPersonByPasswordResetTokenHash(ctx, &hashStr)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, person.ErrNotFound
+		}
+		return nil, fmt.Errorf("person repo: get by password_reset_token_hash: %w", err)
+	}
+	return rowToPerson(row)
+}
+
+// GetByEmailChangeTokenHash satisfies [person.Repository]. Hash-only
+// lookup powering the confirm-email-change flow. Backed by partial
+// unique index uq_persons_email_change_hash.
+func (r *PersonRepository) GetByEmailChangeTokenHash(ctx context.Context, hash person.EmailChangeTokenHash) (*person.Person, error) {
+	if hash.IsZero() {
+		return nil, person.ErrNotFound
+	}
+	hashStr := hash.String()
+	row, err := r.q.GetPersonByEmailChangeTokenHash(ctx, &hashStr)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, person.ErrNotFound
+		}
+		return nil, fmt.Errorf("person repo: get by email_change_token_hash: %w", err)
+	}
+	return rowToPerson(row)
+}
+
 // ----- Helpers ---------------------------------------------------------------
 
 func loadPerson(ctx context.Context, q *Queries, id person.ID) (*person.Person, error) {

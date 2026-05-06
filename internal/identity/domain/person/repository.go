@@ -35,4 +35,16 @@ type Repository interface {
 	// GetByEmail returns the Person by globally-unique email or [ErrNotFound].
 	// Used by login + password-reset + email-change flows.
 	GetByEmail(ctx context.Context, e email.Address) (*Person, error)
+
+	// GetByPasswordResetTokenHash returns the Person whose pending
+	// password-reset matches the supplied hash, or [ErrNotFound]. The
+	// caller hashes the user-presented plaintext + queries via this
+	// method; uniqueness enforced by the partial unique index per
+	// migration 20260507000004.
+	GetByPasswordResetTokenHash(ctx context.Context, hash PasswordResetTokenHash) (*Person, error)
+
+	// GetByEmailChangeTokenHash returns the Person whose pending
+	// email-change matches the supplied hash, or [ErrNotFound].
+	// Same hash-only lookup pattern as GetByPasswordResetTokenHash.
+	GetByEmailChangeTokenHash(ctx context.Context, hash EmailChangeTokenHash) (*Person, error)
 }

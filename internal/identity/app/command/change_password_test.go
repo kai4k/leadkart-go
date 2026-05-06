@@ -47,6 +47,14 @@ func (f *fakePersonRepo) GetByEmail(_ context.Context, _ email.Address) (*person
 	return nil, person.ErrNotFound
 }
 
+func (f *fakePersonRepo) GetByPasswordResetTokenHash(_ context.Context, _ person.PasswordResetTokenHash) (*person.Person, error) {
+	return nil, person.ErrNotFound
+}
+
+func (f *fakePersonRepo) GetByEmailChangeTokenHash(_ context.Context, _ person.EmailChangeTokenHash) (*person.Person, error) {
+	return nil, person.ErrNotFound
+}
+
 func (f *fakePersonRepo) UpdateByID(_ context.Context, id person.ID, fn func(*person.Person) (bool, error)) error {
 	if f.person == nil || f.person.ID() != id {
 		return person.ErrNotFound

@@ -74,6 +74,46 @@ type LogoutRequest struct {
 	Reason       string `json:"reason,omitempty"`
 }
 
+// ----- Password reset --------------------------------------------------------
+
+// RequestPasswordResetRequest — POST /api/v1/auth/request-password-reset.
+//
+// Anonymous endpoint. Per Auth0/Okta canon: ALWAYS returns 204 No
+// Content regardless of whether the email is registered — defeats
+// account enumeration.
+type RequestPasswordResetRequest struct {
+	Email string `json:"email"`
+}
+
+// ResetPasswordRequest — POST /api/v1/auth/reset-password.
+//
+// Anonymous endpoint. Caller supplies the plaintext token from the
+// emailed link + their chosen new password.
+type ResetPasswordRequest struct {
+	Token       string `json:"token"`
+	NewPassword string `json:"new_password"`
+}
+
+// ----- Email change ---------------------------------------------------------
+
+// RequestEmailChangeRequest — POST /api/v1/auth/request-email-change.
+//
+// Authenticated route. PersonID comes from JWT Subject; new email
+// arrives in the body. Confirmation link is emailed to the NEW
+// address.
+type RequestEmailChangeRequest struct {
+	NewEmail string `json:"new_email"`
+}
+
+// ConfirmEmailChangeRequest — POST /api/v1/auth/confirm-email-change.
+//
+// Anonymous endpoint (the confirmation link works without a session
+// because the token IS the proof). Caller supplies the plaintext
+// token from the emailed link.
+type ConfirmEmailChangeRequest struct {
+	Token string `json:"token"`
+}
+
 // ----- ChangePassword --------------------------------------------------------
 
 // ChangePasswordRequest — POST /api/v1/auth/change-password.

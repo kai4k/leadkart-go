@@ -41,9 +41,16 @@ func AddRoutes(mux *http.ServeMux, log *slog.Logger, a app.Application, verifier
 	mux.Handle("POST /api/v1/auth/login", handleLogin(log, a))
 	mux.Handle("POST /api/v1/auth/refresh", handleRefresh(log, a))
 	mux.Handle("POST /api/v1/auth/logout", handleLogout(log, a))
+
+	// Anonymous endpoints (no JWT required) — emailed-token flows.
+	mux.Handle("POST /api/v1/auth/request-password-reset", handleRequestPasswordReset(log, a))
+	mux.Handle("POST /api/v1/auth/reset-password", handleResetPassword(log, a))
+	mux.Handle("POST /api/v1/auth/confirm-email-change", handleConfirmEmailChange(log, a))
+
 	if verifier != nil {
 		auth := authn.RequireAuth(verifier)
 		mux.Handle("POST /api/v1/auth/change-password", auth(handleChangePassword(log, a)))
+		mux.Handle("POST /api/v1/auth/request-email-change", auth(handleRequestEmailChange(log, a)))
 		mux.Handle("GET /api/v1/auth/sessions", auth(handleListSessions(log, a)))
 		mux.Handle("DELETE /api/v1/auth/sessions/{familyId}", auth(handleRevokeSession(log, a)))
 		mux.Handle("DELETE /api/v1/auth/sessions", auth(handleRevokeAllSessions(log, a)))
@@ -351,6 +358,132 @@ func handleRevokeAllSessions(log *slog.Logger, a app.Application) http.Handler {
 		writeJSON(w, http.StatusOK, RevokeAllSessionsResponse{
 			RevokedCount: out.RevokedCount,
 		})
+	})
+}
+
+func handleRequestPasswordReset(log *slog.Logger, a app.Application) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req RequestPasswordResetRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, ErrCodeInvalidBody, "request body is not valid JSON")
+			return
+		}
+		// Per Auth0/Okta canon: the EXISTENCE of the email is not
+		// disclosed. Even malformed-email failures collapse into the
+		// same 204 response so the wire shape never reveals "we
+		// rejected your input" vs "no such account".
+		addr, err := email.New(req.Email)
+		if err != nil {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		if err := a.Commands.RequestPasswordReset.Handle(r.Context(), command.RequestPasswordResetCommand{
+			Email: addr,
+		}); err != nil {
+			log.ErrorContext(r.Context(), "request password reset failed", "err", err)
+			// Even on internal error, return 204 to avoid leaking
+			// presence info via differentiated status codes. The
+			// server-side log carries the diagnostic.
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+}
+
+func handleResetPassword(log *slog.Logger, a app.Application) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req ResetPasswordRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, ErrCodeInvalidBody, "request body is not valid JSON")
+			return
+		}
+		err := a.Commands.ConfirmPasswordReset.Handle(r.Context(), command.ConfirmPasswordResetCommand{
+			RawToken:    req.Token,
+			NewPassword: req.NewPassword,
+		})
+		switch {
+		case errors.Is(err, command.ErrResetTokenInvalid):
+			writeError(w, http.StatusBadRequest, ErrCodeResetTokenInvalid, "")
+			return
+		case errors.Is(err, command.ErrPasswordBreached):
+			writeError(w, http.StatusUnprocessableEntity, ErrCodePasswordBreached,
+				"this password appears in known breach databases; choose another")
+			return
+		case errors.Is(err, command.ErrPasswordSameAsCurrent):
+			writeError(w, http.StatusUnprocessableEntity, ErrCodePasswordSameAsCurrent,
+				"new password must differ from current password")
+			return
+		case err != nil && strings.Contains(err.Error(), "new password required"):
+			writeError(w, http.StatusBadRequest, ErrCodeInvalidPassword, err.Error())
+			return
+		case err != nil:
+			log.ErrorContext(r.Context(), "reset password failed", "err", err)
+			writeError(w, http.StatusInternalServerError, ErrCodeInternalError, "")
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+}
+
+func handleRequestEmailChange(log *slog.Logger, a app.Application) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		c, ok := authn.ClaimsFromContext(r.Context())
+		if !ok || strings.TrimSpace(c.Subject) == "" {
+			writeError(w, http.StatusUnauthorized, ErrCodeInvalidCredentials, "")
+			return
+		}
+		var req RequestEmailChangeRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, ErrCodeInvalidBody, "request body is not valid JSON")
+			return
+		}
+		newAddr, err := email.New(req.NewEmail)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, ErrCodeInvalidEmail, err.Error())
+			return
+		}
+		err = a.Commands.RequestEmailChange.Handle(r.Context(), command.RequestEmailChangeCommand{
+			PersonID: person.ID(c.Subject),
+			NewEmail: newAddr,
+		})
+		switch {
+		case errors.Is(err, command.ErrEmailAlreadyTaken):
+			writeError(w, http.StatusConflict, ErrCodeEmailAlreadyTaken,
+				"another account already uses this email")
+			return
+		case errors.Is(err, command.ErrEmailChangeRejected):
+			writeError(w, http.StatusBadRequest, ErrCodeEmailChangeRejected, "")
+			return
+		case err != nil:
+			log.ErrorContext(r.Context(), "request email change failed", "err", err)
+			writeError(w, http.StatusInternalServerError, ErrCodeInternalError, "")
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+}
+
+func handleConfirmEmailChange(log *slog.Logger, a app.Application) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req ConfirmEmailChangeRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, ErrCodeInvalidBody, "request body is not valid JSON")
+			return
+		}
+		err := a.Commands.ConfirmEmailChange.Handle(r.Context(), command.ConfirmEmailChangeCommand{
+			RawToken: req.Token,
+		})
+		switch {
+		case errors.Is(err, command.ErrEmailChangeTokenInvalid):
+			writeError(w, http.StatusBadRequest, ErrCodeEmailChangeTokenInvalid, "")
+			return
+		case err != nil:
+			log.ErrorContext(r.Context(), "confirm email change failed", "err", err)
+			writeError(w, http.StatusInternalServerError, ErrCodeInternalError, "")
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
 	})
 }
 

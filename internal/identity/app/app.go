@@ -28,13 +28,17 @@ type Application struct {
 // use case. New use cases extend this struct, never reach into a
 // shared service abstraction.
 type Commands struct {
-	RegisterTenant     command.RegisterTenantHandler
-	Login              command.LoginHandler
-	Refresh            command.RefreshHandler
-	Logout             command.LogoutHandler
-	ChangePassword     command.ChangePasswordHandler
-	RevokeSession      command.RevokeSessionHandler
-	RevokeAllSessions  command.RevokeAllSessionsHandler
+	RegisterTenant       command.RegisterTenantHandler
+	Login                command.LoginHandler
+	Refresh              command.RefreshHandler
+	Logout               command.LogoutHandler
+	ChangePassword       command.ChangePasswordHandler
+	RevokeSession        command.RevokeSessionHandler
+	RevokeAllSessions    command.RevokeAllSessionsHandler
+	RequestPasswordReset command.RequestPasswordResetHandler
+	ConfirmPasswordReset command.ConfirmPasswordResetHandler
+	RequestEmailChange   command.RequestEmailChangeHandler
+	ConfirmEmailChange   command.ConfirmEmailChangeHandler
 }
 
 // Queries aggregates all Identity query handlers. Read-side only — no

@@ -40,7 +40,9 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/app/argon2"
 	"github.com/leadkart/leadkart-go/internal/identity/app/command"
 	"github.com/leadkart/leadkart-go/internal/identity/app/jwt"
+	commonemail "github.com/leadkart/leadkart-go/internal/common/email"
 	"github.com/leadkart/leadkart-go/internal/platform/breach"
+	platformemail "github.com/leadkart/leadkart-go/internal/platform/email"
 	"github.com/leadkart/leadkart-go/internal/identity/app/permissions"
 	"github.com/leadkart/leadkart-go/internal/identity/app/query"
 	"github.com/leadkart/leadkart-go/internal/identity/app/service"
@@ -337,15 +339,32 @@ func buildIdentityApp(pool *pgxpool.Pool, cfg config.AppConfig, now func() time.
 	// [breach.Checker] interface, not the concrete impl.
 	breachChecker := breach.NewOfflineList()
 
+	// Email gateway. v0.2 wires the in-memory Recorder so the
+	// password-reset / email-change flows persist their pending
+	// state and emit the integration event but skip the actual
+	// SMTP/SES/Msg91 round-trip. Local dev + integration tests use
+	// the recorded messages to assert wire-shape. v0.3 swaps in a
+	// real provider via the [email.Gateway] interface — composition
+	// root change only.
+	emailGateway := platformemail.NewRecorder(now)
+	noReplyAddress, err := commonemail.New("no-reply@leadkart.local")
+	if err != nil {
+		return app.Application{}, nil, fmt.Errorf("no-reply email address: %w", err)
+	}
+
 	return app.Application{
 		Commands: app.Commands{
-			RegisterTenant:    command.NewRegisterTenantHandler(onboarding),
-			Login:             command.NewLoginHandler(persons, memberships, families, tenants, permResolver, issuer, now, cfg.Refresh.AbsoluteTTL, dummyHash),
-			Refresh:           command.NewRefreshHandler(families, persons, memberships, tenants, permResolver, issuer, now, cfg.Refresh.AbsoluteTTL),
-			Logout:            command.NewLogoutHandler(families),
-			ChangePassword:    command.NewChangePasswordHandler(persons, breachChecker),
-			RevokeSession:     command.NewRevokeSessionHandler(families),
-			RevokeAllSessions: command.NewRevokeAllSessionsHandler(families),
+			RegisterTenant:       command.NewRegisterTenantHandler(onboarding),
+			Login:                command.NewLoginHandler(persons, memberships, families, tenants, permResolver, issuer, now, cfg.Refresh.AbsoluteTTL, dummyHash),
+			Refresh:              command.NewRefreshHandler(families, persons, memberships, tenants, permResolver, issuer, now, cfg.Refresh.AbsoluteTTL),
+			Logout:               command.NewLogoutHandler(families),
+			ChangePassword:       command.NewChangePasswordHandler(persons, breachChecker),
+			RevokeSession:        command.NewRevokeSessionHandler(families),
+			RevokeAllSessions:    command.NewRevokeAllSessionsHandler(families),
+			RequestPasswordReset: command.NewRequestPasswordResetHandler(persons, emailGateway, noReplyAddress),
+			ConfirmPasswordReset: command.NewConfirmPasswordResetHandler(persons, breachChecker),
+			RequestEmailChange:   command.NewRequestEmailChangeHandler(persons, emailGateway, noReplyAddress),
+			ConfirmEmailChange:   command.NewConfirmEmailChangeHandler(persons),
 		},
 		Queries: app.Queries{
 			ListSessions: query.NewListSessionsHandler(families),

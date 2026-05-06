@@ -79,4 +79,23 @@ const (
 	// ErrCodeInvalidFamilyID — path parameter `{familyId}` failed
 	// UUID parse. 400 surface.
 	ErrCodeInvalidFamilyID = "invalid_family_id"
+
+	// ErrCodeResetTokenInvalid — confirm-password-reset rejection
+	// (mismatch / expired / no pending). Per security.md "Password
+	// reset" + Auth0/Okta canon: NEVER distinguish causes. 400 surface.
+	//nolint:gosec // G101: error code, not a credential
+	ErrCodeResetTokenInvalid = "reset_token_invalid"
+
+	// ErrCodeEmailChangeRejected — request-email-change rejected
+	// (terminal Person, same-as-current, etc.). 400 surface.
+	ErrCodeEmailChangeRejected = "email_change_rejected"
+
+	// ErrCodeEmailAlreadyTaken — request-email-change rejected because
+	// another Person already owns the new email. 409 surface.
+	ErrCodeEmailAlreadyTaken = "email_already_taken"
+
+	// ErrCodeEmailChangeTokenInvalid — confirm-email-change rejection.
+	// 400 surface, same enumeration-safety rule as reset.
+	//nolint:gosec // G101: error code, not a credential
+	ErrCodeEmailChangeTokenInvalid = "email_change_token_invalid"
 )
