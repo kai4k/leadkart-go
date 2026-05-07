@@ -388,6 +388,7 @@ type identityWiring struct {
 	StampCache     *adapters.SecurityStampCache
 	StampValidator *adapters.SecurityStampValidator
 	Families       *adapters.RefreshTokenFamilyRepository
+	Persons        *adapters.PersonRepository
 }
 
 // ----- Identity wiring -------------------------------------------------------
@@ -462,6 +463,7 @@ func buildIdentityApp(pool *pgxpool.Pool, hybridCache *cache.HybridCache, cfg co
 		StampCache:     stampCache,
 		StampValidator: stampValidator,
 		Families:       families,
+		Persons:        persons,
 		App: app.Application{
 		Commands: app.Commands{
 			RegisterTenant:       command.NewRegisterTenantHandler(tx, tenants, persons, memberships, roles),
