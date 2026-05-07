@@ -1,12 +1,18 @@
 module github.com/leadkart/leadkart-go
 
-go 1.26.2
+go 1.26.3
 
 // Tracks ADR 0034 — Go 1.26+ with quarterly toolchain refresh. The
 // `toolchain` directive auto-fetches the matching toolchain on first
 // build for contributors running an older system Go (Go 1.21+ feature
 // per https://go.dev/doc/toolchain). Build deps via `tool` directive
 // (Go 1.24+) — replaces the older `tools.go` + build-tag hack.
+//
+// 1.26.3 closes 6 stdlib advisories surfaced by govulncheck:
+//   GO-2026-4986 + GO-2026-4977 (net/mail quadratic concat),
+//   GO-2026-4982 + GO-2026-4980 (html/template XSS escaper bypass),
+//   GO-2026-4971 (net Dial/LookupPort NUL-byte panic on Windows),
+//   GO-2026-4918 (net/http2 SETTINGS_MAX_FRAME_SIZE infinite loop).
 //
 // tool (
 //     github.com/sqlc-dev/sqlc/cmd/sqlc
