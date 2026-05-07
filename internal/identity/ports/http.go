@@ -117,6 +117,19 @@ func AddRoutes(mux *http.ServeMux, log *slog.Logger, a app.Application, verifier
 		// "SuperUser god-mode" + identity.users.anonymise permission.
 		mux.Handle("POST /api/v1/users/{userId}/anonymise",
 			platform(handleAnonymiseUser(log, a)))
+
+		// Role management — tenant-RLS scoped via JWT bridge.
+		mux.Handle("GET /api/v1/roles", auth(handleListRoles(log, a)))
+		mux.Handle("GET /api/v1/roles/{roleId}", auth(handleGetRole(log, a)))
+		mux.Handle("POST /api/v1/roles", auth(handleCreateRole(log, a)))
+		mux.Handle("PATCH /api/v1/roles/{roleId}", auth(handleUpdateRole(log, a)))
+		mux.Handle("PUT /api/v1/roles/{roleId}/permissions",
+			auth(handleReplaceRolePermissions(log, a)))
+		mux.Handle("POST /api/v1/roles/{roleId}/permissions/grant",
+			auth(handleGrantRolePermission(log, a)))
+		mux.Handle("POST /api/v1/roles/{roleId}/permissions/revoke",
+			auth(handleRevokeRolePermission(log, a)))
+		mux.Handle("DELETE /api/v1/roles/{roleId}", auth(handleDeleteRole(log, a)))
 	}
 }
 

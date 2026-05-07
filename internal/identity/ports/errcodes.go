@@ -136,4 +136,17 @@ const (
 	// carried a permission name not in [permission.IdentityPermissions].
 	// 422 surface; offending name in message body.
 	ErrCodePermissionUnknown = "permission_unknown"
+
+	// ErrCodeRoleNotFound — role ID has no live row in caller's tenant.
+	// 404 surface.
+	ErrCodeRoleNotFound = "role_not_found"
+
+	// ErrCodeRoleNameTaken — role create / rename collided with an
+	// existing live role name in the tenant. 409 surface.
+	ErrCodeRoleNameTaken = "role_name_taken"
+
+	// ErrCodeRoleInvalid — Role aggregate-level invariant violation
+	// (system-default mutation attempt, hierarchy out of range, etc.).
+	// 422 surface.
+	ErrCodeRoleInvalid = "role_invalid"
 )

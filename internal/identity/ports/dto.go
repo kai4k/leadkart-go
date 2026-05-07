@@ -214,6 +214,60 @@ type CreateUserResponse struct {
 	PersonExisted bool   `json:"person_existed"`
 }
 
+// ----- Role management -------------------------------------------------------
+
+// RoleDto is the wire-shape of a [role.Role] for read endpoints.
+type RoleDto struct {
+	ID              string    `json:"id"`
+	TenantID        string    `json:"tenant_id"`
+	Name            string    `json:"name"`
+	IsSystemDefault bool      `json:"is_system_default"`
+	IsSuperAdmin    bool      `json:"is_super_admin"`
+	HierarchyLevel  int       `json:"hierarchy_level"`
+	Permissions     []string  `json:"permissions"`
+	CreatedAt       time.Time `json:"created_at"`
+}
+
+// ListRolesResponse — GET /api/v1/roles.
+type ListRolesResponse struct {
+	Roles []RoleDto `json:"roles"`
+}
+
+// CreateRoleRequest — POST /api/v1/roles.
+//
+// HierarchyLevel must be in role.HierarchyLevelMin..HierarchyLevelMax.
+// IsSuperAdmin is intentionally absent — see CreateRoleCommand
+// godoc for the seed-only invariant.
+type CreateRoleRequest struct {
+	Name           string `json:"name"`
+	HierarchyLevel int    `json:"hierarchy_level"`
+}
+
+// CreateRoleResponse — POST /api/v1/roles 201 body.
+type CreateRoleResponse struct {
+	RoleID string `json:"role_id"`
+}
+
+// UpdateRoleRequest — PATCH /api/v1/roles/{roleId}.
+//
+// Both fields optional. Empty Name skips rename. HierarchyLevel
+// nil-pointer skips re-level (using a pointer instead of -1 sentinel
+// keeps the wire shape clean).
+type UpdateRoleRequest struct {
+	Name           string `json:"name,omitempty"`
+	HierarchyLevel *int   `json:"hierarchy_level,omitempty"`
+}
+
+// ReplaceRolePermissionsRequest — PUT /api/v1/roles/{roleId}/permissions.
+type ReplaceRolePermissionsRequest struct {
+	Permissions []string `json:"permissions"`
+}
+
+// RolePermissionRequest — POST /api/v1/roles/{roleId}/permissions/{grant,revoke}.
+type RolePermissionRequest struct {
+	Permission string `json:"permission"`
+}
+
 // ----- Tenant management -----------------------------------------------------
 
 // TenantDto is the wire-shape of a Tenant for read endpoints. Mirrors

@@ -387,12 +387,21 @@ func buildIdentityApp(pool *pgxpool.Pool, cfg config.AppConfig, now func() time.
 			RemoveUserManager:              command.NewRemoveUserManagerHandler(memberships),
 			CreateUser:                     command.NewCreateUserHandler(userOnboarding),
 			AnonymiseUser:                  command.NewAnonymiseUserHandler(memberships, persons),
+
+			CreateRole:             command.NewCreateRoleHandler(roles),
+			UpdateRole:             command.NewUpdateRoleHandler(roles),
+			DeleteRole:             command.NewDeleteRoleHandler(roles),
+			ReplaceRolePermissions: command.NewReplaceRolePermissionsHandler(roles),
+			GrantRolePermission:    command.NewGrantRolePermissionHandler(roles),
+			RevokeRolePermission:   command.NewRevokeRolePermissionHandler(roles),
 		},
 		Queries: app.Queries{
 			ListSessions: query.NewListSessionsHandler(families),
 			GetTenant:    query.NewGetTenantHandler(tenants),
 			GetUser:      query.NewGetUserHandler(memberships, persons),
 			ListUsers:    query.NewListUsersHandler(memberships, persons),
+			GetRole:      query.NewGetRoleHandler(roles),
+			ListRoles:    query.NewListRolesHandler(roles),
 		},
 	}, issuer, nil
 }

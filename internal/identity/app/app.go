@@ -62,6 +62,14 @@ type Commands struct {
 	RemoveUserManager              command.RemoveUserManagerHandler
 	CreateUser                     command.CreateUserHandler
 	AnonymiseUser                  command.AnonymiseUserHandler
+
+	// Role management.
+	CreateRole              command.CreateRoleHandler
+	UpdateRole              command.UpdateRoleHandler
+	DeleteRole              command.DeleteRoleHandler
+	ReplaceRolePermissions  command.ReplaceRolePermissionsHandler
+	GrantRolePermission     command.GrantRolePermissionHandler
+	RevokeRolePermission    command.RevokeRolePermissionHandler
 }
 
 // Queries aggregates all Identity query handlers. Read-side only — no
@@ -71,4 +79,6 @@ type Queries struct {
 	GetTenant    query.GetTenantHandler
 	GetUser      query.GetUserHandler
 	ListUsers    query.ListUsersHandler
+	GetRole      query.GetRoleHandler
+	ListRoles    query.ListRolesHandler
 }
