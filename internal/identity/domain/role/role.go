@@ -153,7 +153,7 @@ func (r *Role) Name() string { return r.name }
 
 // IsSystemDefault reports whether this Role was seeded by
 // [DefaultRoleCatalog] (immutable: refuses Rename / Delete /
-// SetHierarchyLevel).
+// ChangeHierarchyLevel).
 func (r *Role) IsSystemDefault() bool { return r.isSystemDefault }
 
 // IsSuperAdmin reports whether this Role drives the SuperUser
@@ -224,12 +224,12 @@ func (r *Role) Rename(newName string) error {
 	return nil
 }
 
-// SetHierarchyLevel updates the numeric authority position. System-
+// ChangeHierarchyLevel updates the numeric authority position. System-
 // default roles refuse change. No domain event emitted — hierarchy
 // changes are operational concerns, not user-facing audit events.
 //
 // Idempotent: setting to the current level is a no-op.
-func (r *Role) SetHierarchyLevel(level int) error {
+func (r *Role) ChangeHierarchyLevel(level int) error {
 	if err := r.ensureMutable(); err != nil {
 		return err
 	}
@@ -427,7 +427,7 @@ func UnmarshalFromDB(s Snapshot) *Role {
 }
 
 // ensureMutable rejects mutations on a deleted role. Internal helper
-// for the state-transition methods (Rename / SetHierarchyLevel /
+// for the state-transition methods (Rename / ChangeHierarchyLevel /
 // GrantPermission / etc.).
 func (r *Role) ensureMutable() error {
 	if r.deleted {

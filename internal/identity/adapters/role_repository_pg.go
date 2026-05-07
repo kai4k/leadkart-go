@@ -261,7 +261,7 @@ func insertRoleRow(ctx context.Context, q *Queries, ro *role.Role) error {
 		IsSystemDefault: ro.IsSystemDefault(),
 		IsSuperAdmin:    ro.IsSuperAdmin(),
 		// HierarchyLevel is bounded by role.HierarchyLevelMin (0) +
-		// role.HierarchyLevelMax (99) per the aggregate's New + SetHierarchyLevel
+		// role.HierarchyLevelMax (99) per the aggregate's New + ChangeHierarchyLevel
 		// invariants. Cast to int32 cannot overflow.
 		HierarchyLevel: int32(ro.HierarchyLevel()), //nolint:gosec // G115: bounded [0,99] by aggregate
 		Permissions:     permsJSON,
