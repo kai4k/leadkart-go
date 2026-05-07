@@ -375,10 +375,16 @@ func buildIdentityApp(pool *pgxpool.Pool, cfg config.AppConfig, now func() time.
 			ActivateTenant:                 command.NewActivateTenantHandler(tenants),
 			MarkTenantForDeletion:          command.NewMarkTenantForDeletionHandler(tenants),
 			RestoreTenant:                  command.NewRestoreTenantHandler(tenants),
+
+			UpdateUserProfile: command.NewUpdateUserProfileHandler(memberships),
+			DeactivateUser:    command.NewDeactivateUserHandler(memberships),
+			ReactivateUser:    command.NewReactivateUserHandler(memberships),
 		},
 		Queries: app.Queries{
 			ListSessions: query.NewListSessionsHandler(families),
 			GetTenant:    query.NewGetTenantHandler(tenants),
+			GetUser:      query.NewGetUserHandler(memberships, persons),
+			ListUsers:    query.NewListUsersHandler(memberships, persons),
 		},
 	}, issuer, nil
 }

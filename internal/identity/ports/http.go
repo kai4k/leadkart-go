@@ -86,6 +86,19 @@ func AddRoutes(mux *http.ServeMux, log *slog.Logger, a app.Application, verifier
 			platform(handleMarkTenantForDeletion(log, a)))
 		mux.Handle("POST /api/v1/tenants/{tenantId}/restore",
 			platform(handleRestoreTenant(log, a)))
+
+		// User (Membership) management — all routes operate within the
+		// caller's tenant scope, enforced by the JWT-bridge middleware
+		// + RLS GUC. Cross-tenant access surfaces as 404 per
+		// security.md enumeration-safety rule.
+		mux.Handle("GET /api/v1/users", auth(handleListUsers(log, a)))
+		mux.Handle("GET /api/v1/users/{userId}", auth(handleGetUser(log, a)))
+		mux.Handle("PATCH /api/v1/users/{userId}/profile",
+			auth(handleUpdateUserProfile(log, a)))
+		mux.Handle("POST /api/v1/users/{userId}/deactivate",
+			auth(handleDeactivateUser(log, a)))
+		mux.Handle("POST /api/v1/users/{userId}/reactivate",
+			auth(handleReactivateUser(log, a)))
 	}
 }
 

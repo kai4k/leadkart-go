@@ -109,4 +109,18 @@ const (
 	// ErrCodeTenantInvalid — aggregate-level invariant violation
 	// (over-length name, terminal-state transition, etc.). 422 surface.
 	ErrCodeTenantInvalid = "tenant_invalid"
+
+	// ErrCodeUserNotFound — membership ID has no row in caller's
+	// tenant. 404 surface; collapses "wrong tenant" + "doesn't exist"
+	// per security.md enumeration safety.
+	ErrCodeUserNotFound = "user_not_found"
+
+	// ErrCodeInvalidUserID — path parameter `{userId}` failed UUID parse.
+	// 400 surface.
+	ErrCodeInvalidUserID = "invalid_user_id"
+
+	// ErrCodeUserInvalid — Membership aggregate-level invariant
+	// violation (deactivate without reason, terminal-state transition,
+	// etc.). 422 surface.
+	ErrCodeUserInvalid = "user_invalid"
 )

@@ -128,6 +128,46 @@ type ChangePasswordRequest struct {
 	NewPassword     string `json:"new_password"`
 }
 
+// ----- User management -------------------------------------------------------
+
+// UserDto is the wire-shape of a Membership composed with its
+// underlying Person's identity fields. "User" in HTTP vocabulary
+// always means one (Person, Tenant) Membership row.
+type UserDto struct {
+	MembershipID  string    `json:"membership_id"`
+	PersonID      string    `json:"person_id"`
+	TenantID      string    `json:"tenant_id"`
+	Email         string    `json:"email"`
+	FirstName     string    `json:"first_name"`
+	LastName      string    `json:"last_name"`
+	Status        string    `json:"status"`
+	Designation   string    `json:"designation,omitempty"`
+	Department    string    `json:"department,omitempty"`
+	StatusMessage string    `json:"status_message,omitempty"`
+	JoinedAt      time.Time `json:"joined_at,omitzero"`
+	LeftAt        time.Time `json:"left_at,omitzero"`
+	ReportsTo     string    `json:"reports_to,omitempty"`
+	RoleIDs       []string  `json:"role_ids"`
+}
+
+// ListUsersResponse — GET /api/v1/users.
+type ListUsersResponse struct {
+	Users []UserDto `json:"users"`
+}
+
+// UpdateUserProfileRequest — PATCH /api/v1/users/{userId}/profile.
+type UpdateUserProfileRequest struct {
+	Designation   string `json:"designation"`
+	Department    string `json:"department"`
+	StatusMessage string `json:"status_message"`
+}
+
+// DeactivateUserRequest — POST /api/v1/users/{userId}/deactivate.
+// Reason MUST be non-empty per data-retention.md audit canon.
+type DeactivateUserRequest struct {
+	Reason string `json:"reason"`
+}
+
 // ----- Tenant management -----------------------------------------------------
 
 // TenantDto is the wire-shape of a Tenant for read endpoints. Mirrors

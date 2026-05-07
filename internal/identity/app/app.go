@@ -50,6 +50,11 @@ type Commands struct {
 	ActivateTenant                 command.ActivateTenantHandler
 	MarkTenantForDeletion          command.MarkTenantForDeletionHandler
 	RestoreTenant                  command.RestoreTenantHandler
+
+	// User (Membership) management.
+	UpdateUserProfile command.UpdateUserProfileHandler
+	DeactivateUser    command.DeactivateUserHandler
+	ReactivateUser    command.ReactivateUserHandler
 }
 
 // Queries aggregates all Identity query handlers. Read-side only — no
@@ -57,4 +62,6 @@ type Commands struct {
 type Queries struct {
 	ListSessions query.ListSessionsHandler
 	GetTenant    query.GetTenantHandler
+	GetUser      query.GetUserHandler
+	ListUsers    query.ListUsersHandler
 }
