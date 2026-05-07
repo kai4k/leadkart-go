@@ -190,16 +190,18 @@ func TestMigrationsApplyCleanly(t *testing.T) {
 		}
 	}
 
-	// buildingblocks schema present + audit_log_entry table; app schema
-	// extended with command_idempotency.
+	// buildingblocks schema present + 2 tables: audit_log_entry (from
+	// 20260507000001_messaging_infra) + admin_impersonation_audit
+	// (from 20260507000006_admin_impersonation_audit, A.7.b
+	// impersonation lifecycle).
 	var bbCount, appCount int
 	if err := db.QueryRow(`
 		SELECT count(*) FROM pg_tables WHERE schemaname = 'buildingblocks'
 	`).Scan(&bbCount); err != nil {
 		t.Fatalf("count buildingblocks tables: %v", err)
 	}
-	if bbCount != 1 {
-		t.Fatalf("buildingblocks tables: got %d want 1", bbCount)
+	if bbCount != 2 {
+		t.Fatalf("buildingblocks tables: got %d want 2", bbCount)
 	}
 	if err := db.QueryRow(`
 		SELECT count(*) FROM pg_tables WHERE schemaname = 'app'
