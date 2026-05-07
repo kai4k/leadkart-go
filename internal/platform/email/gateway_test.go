@@ -1,7 +1,6 @@
 package email_test
 
 import (
-	"context"
 	"errors"
 	"sync"
 	"testing"
@@ -106,10 +105,10 @@ func TestRecorder_CapturesSentMessages(t *testing.T) {
 		mustAddr(t, "noreply@leadkart.io"),
 		"S2", "B2",
 	)
-	if err := r.Send(context.Background(), m1); err != nil {
+	if err := r.Send(t.Context(), m1); err != nil {
 		t.Fatalf("Send: %v", err)
 	}
-	if err := r.Send(context.Background(), m2); err != nil {
+	if err := r.Send(t.Context(), m2); err != nil {
 		t.Fatalf("Send: %v", err)
 	}
 	if r.Count() != 2 {
@@ -132,7 +131,7 @@ func TestRecorder_Reset_ClearsCapture(t *testing.T) {
 		mustAddr(t, "noreply@leadkart.io"),
 		"S", "B",
 	)
-	_ = r.Send(context.Background(), m)
+	_ = r.Send(t.Context(), m)
 	if r.Count() != 1 {
 		t.Fatal("expected 1 captured before reset")
 	}
@@ -150,14 +149,14 @@ func TestRecorder_ConcurrentSafe(t *testing.T) {
 	from := mustAddr(t, "noreply@leadkart.io")
 
 	var wg sync.WaitGroup
-	for i := 0; i < 50; i++ {
+	for range 50 {
 		wg.Go(func() {
 			m, _ := email.NewMessage(
 				mustAddr(t, "a@b.io"),
 				from,
 				"S", "B",
 			)
-			_ = r.Send(context.Background(), m)
+			_ = r.Send(t.Context(), m)
 		})
 	}
 	wg.Wait()

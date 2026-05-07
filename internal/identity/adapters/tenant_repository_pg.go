@@ -430,8 +430,8 @@ func parseTenantID(id tenant.ID) (uuid.UUID, error) {
 // isUniqueViolation reports whether err wraps a Postgres unique-constraint
 // violation (SQLSTATE [pg.SQLStateUniqueViolation]).
 func isUniqueViolation(err error) bool {
-	var pgErr *pgconn.PgError
-	return errors.As(err, &pgErr) && pgErr.Code == pg.SQLStateUniqueViolation
+	pgErr, ok := errors.AsType[*pgconn.PgError](err)
+	return ok && pgErr.Code == pg.SQLStateUniqueViolation
 }
 
 // passwordPolicyInt32 narrows a domain-validated int (always in

@@ -84,7 +84,7 @@ func TestArch_EveryRecordEndingInVNRegistered(t *testing.T) {
 		if err != nil {
 			t.Fatalf("read %s: %v", f, err)
 		}
-		for _, line := range strings.Split(src, "\n") {
+		for line := range strings.SplitSeq(src, "\n") {
 			line = strings.TrimSpace(line)
 			m := versionTyped.FindStringSubmatch(line)
 			if m == nil {

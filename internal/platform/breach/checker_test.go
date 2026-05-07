@@ -1,7 +1,6 @@
 package breach_test
 
 import (
-	"context"
 	"testing"
 
 	"github.com/leadkart/leadkart-go/internal/platform/breach"
@@ -26,7 +25,7 @@ func TestOfflineList_FlagsKnownWeakPasswords(t *testing.T) {
 	for _, raw := range cases {
 		t.Run(raw, func(t *testing.T) {
 			t.Parallel()
-			breached, err := c.IsBreached(context.Background(), raw)
+			breached, err := c.IsBreached(t.Context(), raw)
 			if err != nil {
 				t.Fatalf("IsBreached: %v", err)
 			}
@@ -49,7 +48,7 @@ func TestOfflineList_AcceptsStrongPasswords(t *testing.T) {
 	for _, raw := range cases {
 		t.Run(raw, func(t *testing.T) {
 			t.Parallel()
-			breached, err := c.IsBreached(context.Background(), raw)
+			breached, err := c.IsBreached(t.Context(), raw)
 			if err != nil {
 				t.Fatalf("IsBreached: %v", err)
 			}
@@ -66,7 +65,7 @@ func TestOfflineList_PreservesInternalWhitespace(t *testing.T) {
 	// trims OUTER whitespace only.
 	t.Parallel()
 	c := breach.NewOfflineListWith([]string{"correcthorsebatterystaple"})
-	breached, _ := c.IsBreached(context.Background(), "correct horse battery staple")
+	breached, _ := c.IsBreached(t.Context(), "correct horse battery staple")
 	if breached {
 		t.Error("internal whitespace should produce different canonicalisation")
 	}
@@ -80,7 +79,7 @@ func TestOfflineList_NewOfflineListWith_FiltersEmpty(t *testing.T) {
 	if c.Size() != 1 {
 		t.Errorf("Size = %d, want 1 (empty entries filtered)", c.Size())
 	}
-	breached, _ := c.IsBreached(context.Background(), "anything")
+	breached, _ := c.IsBreached(t.Context(), "anything")
 	if breached {
 		t.Error("non-seeded password reported as breached")
 	}
@@ -100,7 +99,7 @@ func TestNoop_NeverReportsBreached(t *testing.T) {
 	t.Parallel()
 	c := breach.Noop{}
 	for _, raw := range []string{"", "password", "123456", "anything"} {
-		breached, err := c.IsBreached(context.Background(), raw)
+		breached, err := c.IsBreached(t.Context(), raw)
 		if err != nil {
 			t.Errorf("Noop.IsBreached(%q): err = %v", raw, err)
 		}

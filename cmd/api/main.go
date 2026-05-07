@@ -25,13 +25,13 @@ import (
 	"os"
 	"os/signal"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 
 	"github.com/ThreeDotsLabs/watermill"
 	"github.com/ThreeDotsLabs/watermill/pubsub/gochannel"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"golang.org/x/sync/errgroup"
 
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 
@@ -46,7 +46,6 @@ import (
 	"github.com/leadkart/leadkart-go/internal/platform/impersonation"
 	"github.com/leadkart/leadkart-go/internal/identity/app/permissions"
 	"github.com/leadkart/leadkart-go/internal/identity/app/query"
-	"github.com/leadkart/leadkart-go/internal/identity/app/service"
 	"github.com/leadkart/leadkart-go/internal/identity/ports"
 	"github.com/leadkart/leadkart-go/internal/identity/ports/authn"
 	"github.com/leadkart/leadkart-go/internal/platform/config"
@@ -216,18 +215,6 @@ func run(ctx context.Context, stdout *os.File, _ []string) error {
 	tx := pg.NewTransactor(pool)
 	forwarder := adapters.NewOutboxForwarder(pool, tx, pubsub, IdentityEventsTopic, 0)
 
-	forwarderCtx, stopForwarder := context.WithCancel(ctx)
-	defer stopForwarder()
-	var workers sync.WaitGroup
-	// Go 1.25 wg.Go captures both the goroutine spawn AND the
-	// matching wg.Done() call — strictly cleaner than manual
-	// Add(1) + defer Done().
-	workers.Go(func() {
-		forwarder.Run(forwarderCtx, forwarderPollInterval, forwarderRetryInterval, func(err error) {
-			logger.ErrorContext(forwarderCtx, "outbox forwarder", "err", err)
-		})
-	})
-
 	// Three-endpoint health split lives on the admin listener — public
 	// API never carries /alive|/ready|/health (per audit-checklist.md
 	// §12: probes excluded from public-facing caches).
@@ -246,36 +233,48 @@ func run(ctx context.Context, stdout *os.File, _ []string) error {
 		IdleTimeout:       apiIdleTimeout,
 	}
 
-	errCh := make(chan error, 2)
-	go func() {
+	// errgroup orchestrates the four long-running goroutines (forwarder,
+	// admin server, public API server, shutdown coordinator). First-
+	// error-cancels-rest semantics replace the manual select/errCh +
+	// stopForwarder + workers.Wait coordination.
+	g, gctx := errgroup.WithContext(ctx)
+
+	g.Go(func() error {
+		forwarder.Run(gctx, forwarderPollInterval, forwarderRetryInterval, func(err error) {
+			logger.ErrorContext(gctx, "outbox forwarder", "err", err)
+		})
+		return nil
+	})
+
+	g.Go(func() error {
 		logger.Info("admin listening", "addr", cfg.Listen.Admin)
 		if err := adminSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			errCh <- fmt.Errorf("admin: %w", err)
-			return
+			return fmt.Errorf("admin: %w", err)
 		}
-	}()
-	go func() {
+		return nil
+	})
+
+	g.Go(func() error {
 		logger.Info("api listening", "addr", cfg.Listen.API)
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			errCh <- fmt.Errorf("api: %w", err)
-			return
+			return fmt.Errorf("api: %w", err)
 		}
-	}()
+		return nil
+	})
 
-	select {
-	case <-ctx.Done():
+	g.Go(func() error {
+		<-gctx.Done()
 		logger.Info("api shutting down")
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), apiShutdownTimeout)
 		defer cancel()
-		stopForwarder()
-		workers.Wait()
 		_ = adminSrv.Shutdown(shutdownCtx)
 		return srv.Shutdown(shutdownCtx)
-	case err := <-errCh:
-		stopForwarder()
-		workers.Wait()
+	})
+
+	if err := g.Wait(); err != nil && !errors.Is(err, context.Canceled) {
 		return err
 	}
+	return nil
 }
 
 // newServer builds the public HTTP handler tree per Mat Ryer 2024.
@@ -313,8 +312,6 @@ func buildIdentityApp(pool *pgxpool.Pool, cfg config.AppConfig, now func() time.
 	memberships := adapters.NewMembershipRepository(pool, tx)
 	families := adapters.NewRefreshTokenFamilyRepository(pool, tx)
 	roles := adapters.NewRoleRepository(pool, tx)
-	onboarding := service.NewTenantOnboardingService(tx, tenants, persons, memberships, roles)
-	userOnboarding := service.NewUserOnboardingService(tx, persons, memberships)
 	permResolver := permissions.NewResolver(memberships, roles)
 
 	previous := make([]jwt.SigningKey, len(cfg.JWT.PreviousKeys))
@@ -362,7 +359,7 @@ func buildIdentityApp(pool *pgxpool.Pool, cfg config.AppConfig, now func() time.
 
 	return app.Application{
 		Commands: app.Commands{
-			RegisterTenant:       command.NewRegisterTenantHandler(onboarding),
+			RegisterTenant:       command.NewRegisterTenantHandler(tx, tenants, persons, memberships, roles),
 			Login:                command.NewLoginHandler(persons, memberships, families, tenants, permResolver, issuer, now, cfg.Refresh.AbsoluteTTL, dummyHash),
 			Refresh:              command.NewRefreshHandler(families, persons, memberships, tenants, permResolver, issuer, now, cfg.Refresh.AbsoluteTTL),
 			Logout:               command.NewLogoutHandler(families),
@@ -392,7 +389,7 @@ func buildIdentityApp(pool *pgxpool.Pool, cfg config.AppConfig, now func() time.
 			ReplaceUserPermissionOverrides: command.NewReplaceUserPermissionOverridesHandler(memberships),
 			AssignUserManager:              command.NewAssignUserManagerHandler(memberships),
 			RemoveUserManager:              command.NewRemoveUserManagerHandler(memberships),
-			CreateUser:                     command.NewCreateUserHandler(userOnboarding),
+			CreateUser:                     command.NewCreateUserHandler(tx, persons, memberships),
 			AnonymiseUser:                  command.NewAnonymiseUserHandler(memberships, persons),
 
 			CreateRole:             command.NewCreateRoleHandler(roles),

@@ -115,7 +115,7 @@ func (h UpdateRoleHandler) Handle(ctx context.Context, cmd UpdateRoleCommand) er
 			mutated = true
 		}
 		if cmd.HierarchyLevel >= 0 {
-			if err := r.SetHierarchyLevel(cmd.HierarchyLevel); err != nil {
+			if err := r.ChangeHierarchyLevel(cmd.HierarchyLevel); err != nil {
 				return false, err
 			}
 			mutated = true
