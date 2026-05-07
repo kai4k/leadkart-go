@@ -52,9 +52,14 @@ type Commands struct {
 	RestoreTenant                  command.RestoreTenantHandler
 
 	// User (Membership) management.
-	UpdateUserProfile command.UpdateUserProfileHandler
-	DeactivateUser    command.DeactivateUserHandler
-	ReactivateUser    command.ReactivateUserHandler
+	UpdateUserProfile              command.UpdateUserProfileHandler
+	DeactivateUser                 command.DeactivateUserHandler
+	ReactivateUser                 command.ReactivateUserHandler
+	AssignUserRole                 command.AssignUserRoleHandler
+	RevokeUserRole                 command.RevokeUserRoleHandler
+	ReplaceUserPermissionOverrides command.ReplaceUserPermissionOverridesHandler
+	AssignUserManager              command.AssignUserManagerHandler
+	RemoveUserManager              command.RemoveUserManagerHandler
 }
 
 // Queries aggregates all Identity query handlers. Read-side only — no

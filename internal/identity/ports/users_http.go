@@ -13,6 +13,7 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/app/command"
 	"github.com/leadkart/leadkart-go/internal/identity/app/query"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/role"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
 
@@ -121,6 +122,120 @@ func handleReactivateUser(log *slog.Logger, a app.Application) http.Handler {
 		}
 		err := a.Commands.ReactivateUser.Handle(r.Context(), command.ReactivateUserCommand{
 			MembershipID: id,
+		})
+		writeUserMutationResult(w, log, r, err)
+	})
+}
+
+// ----- AssignUserRole -------------------------------------------------------
+
+func handleAssignUserRole(log *slog.Logger, a app.Application) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mid, ok := parseUserIDPath(w, r)
+		if !ok {
+			return
+		}
+		var req AssignUserRoleRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, ErrCodeInvalidBody, "request body is not valid JSON")
+			return
+		}
+		if _, err := uuid.Parse(req.RoleID); err != nil {
+			writeError(w, http.StatusBadRequest, ErrCodeInvalidRoleID, "role_id must be a UUID")
+			return
+		}
+		err := a.Commands.AssignUserRole.Handle(r.Context(), command.AssignUserRoleCommand{
+			MembershipID: mid,
+			RoleID:       role.ID(req.RoleID),
+		})
+		writeUserMutationResult(w, log, r, err)
+	})
+}
+
+// ----- RevokeUserRole -------------------------------------------------------
+
+func handleRevokeUserRole(log *slog.Logger, a app.Application) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mid, ok := parseUserIDPath(w, r)
+		if !ok {
+			return
+		}
+		raw := r.PathValue("roleId")
+		if _, err := uuid.Parse(raw); err != nil {
+			writeError(w, http.StatusBadRequest, ErrCodeInvalidRoleID,
+				"roleId path parameter must be a UUID")
+			return
+		}
+		err := a.Commands.RevokeUserRole.Handle(r.Context(), command.RevokeUserRoleCommand{
+			MembershipID: mid,
+			RoleID:       role.ID(raw),
+		})
+		writeUserMutationResult(w, log, r, err)
+	})
+}
+
+// ----- ReplaceUserPermissionOverrides ---------------------------------------
+
+func handleReplaceUserPermissionOverrides(log *slog.Logger, a app.Application) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mid, ok := parseUserIDPath(w, r)
+		if !ok {
+			return
+		}
+		var req ReplaceUserPermissionOverridesRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, ErrCodeInvalidBody, "request body is not valid JSON")
+			return
+		}
+		err := a.Commands.ReplaceUserPermissionOverrides.Handle(r.Context(),
+			command.ReplaceUserPermissionOverridesCommand{
+				MembershipID: mid,
+				GrantedNames: req.Granted,
+				RevokedNames: req.Revoked,
+			})
+		if errors.Is(err, command.ErrPermissionUnknown) {
+			writeError(w, http.StatusUnprocessableEntity, ErrCodePermissionUnknown, err.Error())
+			return
+		}
+		writeUserMutationResult(w, log, r, err)
+	})
+}
+
+// ----- AssignUserManager ----------------------------------------------------
+
+func handleAssignUserManager(log *slog.Logger, a app.Application) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mid, ok := parseUserIDPath(w, r)
+		if !ok {
+			return
+		}
+		var req AssignUserManagerRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, ErrCodeInvalidBody, "request body is not valid JSON")
+			return
+		}
+		if _, err := uuid.Parse(req.ManagerID); err != nil {
+			writeError(w, http.StatusBadRequest, ErrCodeInvalidManagerID, "manager_id must be a UUID")
+			return
+		}
+		err := a.Commands.AssignUserManager.Handle(r.Context(), command.AssignUserManagerCommand{
+			MembershipID: mid,
+			ManagerID:    membership.ID(req.ManagerID),
+		})
+		writeUserMutationResult(w, log, r, err)
+	})
+}
+
+// ----- RemoveUserManager ----------------------------------------------------
+
+func handleRemoveUserManager(log *slog.Logger, a app.Application) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mid, ok := parseUserIDPath(w, r)
+		if !ok {
+			return
+		}
+		err := a.Commands.RemoveUserManager.Handle(r.Context(), command.RemoveUserManagerCommand{
+			MembershipID: mid,
 		})
 		writeUserMutationResult(w, log, r, err)
 	})

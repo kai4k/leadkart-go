@@ -376,9 +376,14 @@ func buildIdentityApp(pool *pgxpool.Pool, cfg config.AppConfig, now func() time.
 			MarkTenantForDeletion:          command.NewMarkTenantForDeletionHandler(tenants),
 			RestoreTenant:                  command.NewRestoreTenantHandler(tenants),
 
-			UpdateUserProfile: command.NewUpdateUserProfileHandler(memberships),
-			DeactivateUser:    command.NewDeactivateUserHandler(memberships),
-			ReactivateUser:    command.NewReactivateUserHandler(memberships),
+			UpdateUserProfile:              command.NewUpdateUserProfileHandler(memberships),
+			DeactivateUser:                 command.NewDeactivateUserHandler(memberships),
+			ReactivateUser:                 command.NewReactivateUserHandler(memberships),
+			AssignUserRole:                 command.NewAssignUserRoleHandler(memberships),
+			RevokeUserRole:                 command.NewRevokeUserRoleHandler(memberships),
+			ReplaceUserPermissionOverrides: command.NewReplaceUserPermissionOverridesHandler(memberships),
+			AssignUserManager:              command.NewAssignUserManagerHandler(memberships),
+			RemoveUserManager:              command.NewRemoveUserManagerHandler(memberships),
 		},
 		Queries: app.Queries{
 			ListSessions: query.NewListSessionsHandler(families),

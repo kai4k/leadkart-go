@@ -99,6 +99,16 @@ func AddRoutes(mux *http.ServeMux, log *slog.Logger, a app.Application, verifier
 			auth(handleDeactivateUser(log, a)))
 		mux.Handle("POST /api/v1/users/{userId}/reactivate",
 			auth(handleReactivateUser(log, a)))
+		mux.Handle("POST /api/v1/users/{userId}/roles",
+			auth(handleAssignUserRole(log, a)))
+		mux.Handle("DELETE /api/v1/users/{userId}/roles/{roleId}",
+			auth(handleRevokeUserRole(log, a)))
+		mux.Handle("PATCH /api/v1/users/{userId}/permission-overrides",
+			auth(handleReplaceUserPermissionOverrides(log, a)))
+		mux.Handle("PUT /api/v1/users/{userId}/manager",
+			auth(handleAssignUserManager(log, a)))
+		mux.Handle("DELETE /api/v1/users/{userId}/manager",
+			auth(handleRemoveUserManager(log, a)))
 	}
 }
 

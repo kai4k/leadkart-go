@@ -168,6 +168,29 @@ type DeactivateUserRequest struct {
 	Reason string `json:"reason"`
 }
 
+// AssignUserRoleRequest — POST /api/v1/users/{userId}/roles.
+type AssignUserRoleRequest struct {
+	RoleID string `json:"role_id"`
+}
+
+// ReplaceUserPermissionOverridesRequest — PATCH .../permission-overrides.
+//
+// Atomic replacement of both overlays. Empty arrays clear the
+// overlay. Permission names MUST match the closed [permission.
+// IdentityPermissions] catalogue; unknown names → 422.
+type ReplaceUserPermissionOverridesRequest struct {
+	Granted []string `json:"granted"`
+	Revoked []string `json:"revoked"`
+}
+
+// AssignUserManagerRequest — PUT /api/v1/users/{userId}/manager.
+//
+// ManagerID MUST be a Membership in the same tenant — composite FK
+// at the schema level enforces this; cross-tenant ID surfaces as 422.
+type AssignUserManagerRequest struct {
+	ManagerID string `json:"manager_id"`
+}
+
 // ----- Tenant management -----------------------------------------------------
 
 // TenantDto is the wire-shape of a Tenant for read endpoints. Mirrors

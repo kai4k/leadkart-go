@@ -123,4 +123,17 @@ const (
 	// violation (deactivate without reason, terminal-state transition,
 	// etc.). 422 surface.
 	ErrCodeUserInvalid = "user_invalid"
+
+	// ErrCodeInvalidRoleID — path/body role_id failed UUID parse.
+	// 400 surface.
+	ErrCodeInvalidRoleID = "invalid_role_id"
+
+	// ErrCodeInvalidManagerID — body manager_id failed UUID parse.
+	// 400 surface.
+	ErrCodeInvalidManagerID = "invalid_manager_id"
+
+	// ErrCodePermissionUnknown — replace-permission-overrides request
+	// carried a permission name not in [permission.IdentityPermissions].
+	// 422 surface; offending name in message body.
+	ErrCodePermissionUnknown = "permission_unknown"
 )
