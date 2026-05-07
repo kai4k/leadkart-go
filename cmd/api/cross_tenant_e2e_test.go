@@ -597,8 +597,14 @@ func TestE2E_PlatformStats_ReflectsState(t *testing.T) {
 	if stats.TenantsTotal != 2 {
 		t.Errorf("TenantsTotal = %d, want 2", stats.TenantsTotal)
 	}
-	if stats.PersonsTotal != 2 {
-		t.Errorf("PersonsTotal = %d, want 2", stats.PersonsTotal)
+	// Persons: 2 tenant admins + 1 synthetic Platform operator seeded
+	// by mintPlatformToken (operator Person rows are required for the
+	// freshness gate to resolve security_stamp claims). Operators have
+	// no Membership row, so MembershipsActive stays at 2 + TenantsTotal
+	// stays at 2 (mintPlatformToken's TenantID claim is synthetic — no
+	// DB write).
+	if stats.PersonsTotal != 3 {
+		t.Errorf("PersonsTotal = %d, want 3 (2 admins + 1 platform operator)", stats.PersonsTotal)
 	}
 	if stats.MembershipsActive != 2 {
 		t.Errorf("MembershipsActive = %d, want 2", stats.MembershipsActive)
