@@ -43,6 +43,7 @@ import (
 	commonemail "github.com/leadkart/leadkart-go/internal/common/email"
 	"github.com/leadkart/leadkart-go/internal/platform/breach"
 	platformemail "github.com/leadkart/leadkart-go/internal/platform/email"
+	"github.com/leadkart/leadkart-go/internal/platform/impersonation"
 	"github.com/leadkart/leadkart-go/internal/identity/app/permissions"
 	"github.com/leadkart/leadkart-go/internal/identity/app/query"
 	"github.com/leadkart/leadkart-go/internal/identity/app/service"
@@ -353,6 +354,12 @@ func buildIdentityApp(pool *pgxpool.Pool, cfg config.AppConfig, now func() time.
 		return app.Application{}, nil, fmt.Errorf("no-reply email address: %w", err)
 	}
 
+	// Impersonation session store. v0.2 ships in-memory (single-
+	// process / integration-test fit); production multi-replica
+	// drops in a Redis-backed implementation behind the same
+	// [impersonation.Store] interface — composition root change only.
+	impersonationStore := impersonation.NewInMemoryStore(now)
+
 	return app.Application{
 		Commands: app.Commands{
 			RegisterTenant:       command.NewRegisterTenantHandler(onboarding),
@@ -400,17 +407,22 @@ func buildIdentityApp(pool *pgxpool.Pool, cfg config.AppConfig, now func() time.
 			AnonymisePerson:            command.NewAnonymisePersonHandler(persons),
 			UpdatePersonProfile:        command.NewUpdatePersonProfileHandler(persons),
 			HardDeleteTenant:           command.NewHardDeleteTenantHandler(tenants),
+
+			CreateImpersonationSession: command.NewCreateImpersonationSessionHandler(impersonationStore, now),
+			EndImpersonationSession:    command.NewEndImpersonationSessionHandler(impersonationStore),
 		},
 		Queries: app.Queries{
-			ListSessions:          query.NewListSessionsHandler(families),
-			GetTenant:             query.NewGetTenantHandler(tenants),
-			GetUser:               query.NewGetUserHandler(memberships, persons),
-			ListUsers:             query.NewListUsersHandler(memberships, persons),
-			GetRole:               query.NewGetRoleHandler(roles),
-			ListRoles:             query.NewListRolesHandler(roles),
-			GetPerson:             query.NewGetPersonHandler(persons),
-			ListPersonMemberships: query.NewListPersonMembershipsHandler(memberships, persons),
-			ListAllTenants:        query.NewListAllTenantsHandler(tenants),
+			ListSessions:              query.NewListSessionsHandler(families),
+			GetTenant:                 query.NewGetTenantHandler(tenants),
+			GetUser:                   query.NewGetUserHandler(memberships, persons),
+			ListUsers:                 query.NewListUsersHandler(memberships, persons),
+			GetRole:                   query.NewGetRoleHandler(roles),
+			ListRoles:                 query.NewListRolesHandler(roles),
+			GetPerson:                 query.NewGetPersonHandler(persons),
+			ListPersonMemberships:     query.NewListPersonMembershipsHandler(memberships, persons),
+			ListAllTenants:            query.NewListAllTenantsHandler(tenants),
+			ListImpersonationSessions: query.NewListImpersonationSessionsHandler(impersonationStore),
+			PlatformStats:             query.NewPlatformStatsHandler(pool),
 		},
 	}, issuer, nil
 }

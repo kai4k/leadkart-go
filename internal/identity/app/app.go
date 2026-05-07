@@ -77,18 +77,24 @@ type Commands struct {
 	AnonymisePerson             command.AnonymisePersonHandler
 	UpdatePersonProfile         command.UpdatePersonProfileHandler
 	HardDeleteTenant            command.HardDeleteTenantHandler
+
+	// Platform — impersonation sessions.
+	CreateImpersonationSession command.CreateImpersonationSessionHandler
+	EndImpersonationSession    command.EndImpersonationSessionHandler
 }
 
 // Queries aggregates all Identity query handlers. Read-side only — no
 // state mutation. Mirrors the [Commands] composition shape.
 type Queries struct {
-	ListSessions          query.ListSessionsHandler
-	GetTenant             query.GetTenantHandler
-	GetUser               query.GetUserHandler
-	ListUsers             query.ListUsersHandler
-	GetRole               query.GetRoleHandler
-	ListRoles             query.ListRolesHandler
-	GetPerson             query.GetPersonHandler
-	ListPersonMemberships query.ListPersonMembershipsHandler
-	ListAllTenants        query.ListAllTenantsHandler
+	ListSessions              query.ListSessionsHandler
+	GetTenant                 query.GetTenantHandler
+	GetUser                   query.GetUserHandler
+	ListUsers                 query.ListUsersHandler
+	GetRole                   query.GetRoleHandler
+	ListRoles                 query.ListRolesHandler
+	GetPerson                 query.GetPersonHandler
+	ListPersonMemberships     query.ListPersonMembershipsHandler
+	ListAllTenants            query.ListAllTenantsHandler
+	ListImpersonationSessions query.ListImpersonationSessionsHandler
+	PlatformStats             query.PlatformStatsHandler
 }

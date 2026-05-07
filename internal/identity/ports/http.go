@@ -153,6 +153,23 @@ func AddRoutes(mux *http.ServeMux, log *slog.Logger, a app.Application, verifier
 			platform(handleLiftPersonGlobalSuspension(log, a)))
 		mux.Handle("POST /api/v1/platform/persons/{personId}/anonymise",
 			platform(handleAnonymisePerson(log, a)))
+
+		// Impersonation sessions per multi-tenancy.md "Impersonation".
+		// Reason captured ONCE at session creation; subsequent
+		// per-request use carries X-Impersonation-Session-Id (the
+		// resolution middleware lands in a follow-up — for v0.2 these
+		// endpoints manage the session lifecycle but the per-request
+		// header pickup is post-launch operational work).
+		mux.Handle("POST /api/v1/platform/impersonation/sessions",
+			platform(handleCreateImpersonationSession(log, a)))
+		mux.Handle("DELETE /api/v1/platform/impersonation/sessions/{sessionId}",
+			platform(handleEndImpersonationSession(log, a)))
+		mux.Handle("GET /api/v1/platform/impersonation/sessions",
+			platform(handleListImpersonationSessions(log, a)))
+
+		// Operator dashboard at-a-glance stats.
+		mux.Handle("GET /api/v1/platform/stats",
+			platform(handlePlatformStats(log, a)))
 	}
 }
 

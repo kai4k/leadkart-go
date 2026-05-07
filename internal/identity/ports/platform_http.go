@@ -5,6 +5,8 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"strings"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -13,6 +15,7 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/app/query"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
+	"github.com/leadkart/leadkart-go/internal/identity/ports/authn"
 )
 
 // ----- ListAllTenants (Platform) --------------------------------------------
@@ -217,6 +220,138 @@ func projectPersonViewToDto(v query.PersonView) PersonDto {
 		CreatedAt:              v.CreatedAt,
 		AnonymisedAt:           v.AnonymisedAt,
 	}
+}
+
+// ----- CreateImpersonationSession -------------------------------------------
+
+func handleCreateImpersonationSession(log *slog.Logger, a app.Application) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Operator identity comes from the JWT Subject claim — the
+		// session is bound to the operator who created it; subsequent
+		// per-request use must match. Never trust a body-supplied
+		// operator id.
+		c, ok := authn.ClaimsFromContext(r.Context())
+		if !ok || strings.TrimSpace(c.Subject) == "" {
+			writeError(w, http.StatusUnauthorized, ErrCodeInvalidCredentials, "")
+			return
+		}
+		var req CreateImpersonationSessionRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, ErrCodeInvalidBody, "request body is not valid JSON")
+			return
+		}
+		if _, err := uuid.Parse(req.TargetTenantID); err != nil {
+			writeError(w, http.StatusBadRequest, ErrCodeInvalidTenantID,
+				"target_tenant_id must be a UUID")
+			return
+		}
+		var dur time.Duration
+		if req.DurationMinutes > 0 {
+			dur = time.Duration(req.DurationMinutes) * time.Minute
+		}
+		out, err := a.Commands.CreateImpersonationSession.Handle(r.Context(),
+			command.CreateImpersonationSessionCommand{
+				OperatorID:     c.Subject,
+				TargetTenantID: tenant.ID(req.TargetTenantID),
+				Reason:         req.Reason,
+				Duration:       dur,
+			})
+		if errors.Is(err, command.ErrImpersonationInvalid) {
+			writeError(w, http.StatusUnprocessableEntity, ErrCodeImpersonationInvalid, err.Error())
+			return
+		}
+		if err != nil {
+			log.ErrorContext(r.Context(), "create impersonation session failed", "err", err)
+			writeError(w, http.StatusInternalServerError, ErrCodeInternalError, "")
+			return
+		}
+		writeJSON(w, http.StatusCreated, CreateImpersonationSessionResponse{
+			SessionID:    out.SessionID,
+			ExpiresAtUTC: out.ExpiresAtUTC,
+		})
+	})
+}
+
+// ----- EndImpersonationSession ----------------------------------------------
+
+func handleEndImpersonationSession(log *slog.Logger, a app.Application) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		c, ok := authn.ClaimsFromContext(r.Context())
+		if !ok || strings.TrimSpace(c.Subject) == "" {
+			writeError(w, http.StatusUnauthorized, ErrCodeInvalidCredentials, "")
+			return
+		}
+		raw := r.PathValue("sessionId")
+		if _, err := uuid.Parse(raw); err != nil {
+			writeError(w, http.StatusBadRequest, ErrCodeInvalidSessionID,
+				"sessionId path parameter must be a UUID")
+			return
+		}
+		err := a.Commands.EndImpersonationSession.Handle(r.Context(),
+			command.EndImpersonationSessionCommand{
+				OperatorID: c.Subject,
+				SessionID:  raw,
+			})
+		if err != nil {
+			log.ErrorContext(r.Context(), "end impersonation session failed", "err", err)
+			writeError(w, http.StatusInternalServerError, ErrCodeInternalError, "")
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+}
+
+// ----- ListImpersonationSessions --------------------------------------------
+
+func handleListImpersonationSessions(log *slog.Logger, a app.Application) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		c, ok := authn.ClaimsFromContext(r.Context())
+		if !ok || strings.TrimSpace(c.Subject) == "" {
+			writeError(w, http.StatusUnauthorized, ErrCodeInvalidCredentials, "")
+			return
+		}
+		views, err := a.Queries.ListImpersonationSessions.Handle(r.Context(),
+			query.ListImpersonationSessionsQuery{OperatorID: c.Subject})
+		if err != nil {
+			log.ErrorContext(r.Context(), "list impersonation sessions failed", "err", err)
+			writeError(w, http.StatusInternalServerError, ErrCodeInternalError, "")
+			return
+		}
+		out := ListImpersonationSessionsResponse{
+			Sessions: make([]ImpersonationSessionDto, 0, len(views)),
+		}
+		for _, v := range views {
+			out.Sessions = append(out.Sessions, ImpersonationSessionDto{
+				SessionID:      v.SessionID,
+				OperatorID:     v.OperatorID,
+				TargetTenantID: v.TargetTenantID,
+				Reason:         v.Reason,
+				CreatedAt:      v.CreatedAt,
+				ExpiresAt:      v.ExpiresAt,
+			})
+		}
+		writeJSON(w, http.StatusOK, out)
+	})
+}
+
+// ----- PlatformStats --------------------------------------------------------
+
+func handlePlatformStats(log *slog.Logger, a app.Application) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		view, err := a.Queries.PlatformStats.Handle(r.Context())
+		if err != nil {
+			log.ErrorContext(r.Context(), "platform stats failed", "err", err)
+			writeError(w, http.StatusInternalServerError, ErrCodeInternalError, "")
+			return
+		}
+		writeJSON(w, http.StatusOK, PlatformStatsResponse{
+			TenantsTotal:      view.TenantsTotal,
+			TenantsActive:     view.TenantsActive,
+			TenantsSuspended:  view.TenantsSuspended,
+			PersonsTotal:      view.PersonsTotal,
+			MembershipsActive: view.MembershipsActive,
+		})
+	})
 }
 
 // _ guards the unused import stub when only some handlers are wired.

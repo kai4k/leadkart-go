@@ -161,4 +161,13 @@ const (
 	// (terminal-state transition, anonymise-while-not-suspended, etc.).
 	// 422 surface.
 	ErrCodePersonInvalid = "person_invalid"
+
+	// ErrCodeImpersonationInvalid — session-creation validation
+	// rejection (reason too short, duration > 4h, etc.). 422 surface.
+	ErrCodeImpersonationInvalid = "impersonation_invalid"
+
+	// ErrCodeInvalidSessionID — `{sessionId}` path param failed UUID
+	// parse. 400 surface. Distinct from session_not_found which the
+	// session-revoke flow collapses into 204 idempotent no-op anyway.
+	ErrCodeInvalidSessionID = "invalid_session_id"
 )

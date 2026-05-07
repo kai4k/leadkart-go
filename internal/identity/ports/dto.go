@@ -260,6 +260,50 @@ type ListAllTenantsResponse struct {
 	Tenants []TenantDto `json:"tenants"`
 }
 
+// ----- Platform: Impersonation sessions --------------------------------------
+
+// CreateImpersonationSessionRequest — POST /api/v1/platform/impersonation/sessions.
+// Reason MUST be ≥10 chars; DurationMinutes optional (defaults 30,
+// max 240). TargetTenantId is the tenant the operator wants to act as.
+type CreateImpersonationSessionRequest struct {
+	TargetTenantID  string `json:"target_tenant_id"`
+	Reason          string `json:"reason"`
+	DurationMinutes int    `json:"duration_minutes,omitempty"`
+}
+
+// CreateImpersonationSessionResponse — 201 body.
+type CreateImpersonationSessionResponse struct {
+	SessionID    string    `json:"session_id"`
+	ExpiresAtUTC time.Time `json:"expires_at_utc"`
+}
+
+// ImpersonationSessionDto is one entry in the GET response.
+type ImpersonationSessionDto struct {
+	SessionID      string    `json:"session_id"`
+	OperatorID     string    `json:"operator_id"`
+	TargetTenantID string    `json:"target_tenant_id"`
+	Reason         string    `json:"reason"`
+	CreatedAt      time.Time `json:"created_at"`
+	ExpiresAt      time.Time `json:"expires_at"`
+}
+
+// ListImpersonationSessionsResponse — GET .../impersonation/sessions.
+type ListImpersonationSessionsResponse struct {
+	Sessions []ImpersonationSessionDto `json:"sessions"`
+}
+
+// ----- Platform: Stats -------------------------------------------------------
+
+// PlatformStatsResponse — GET /api/v1/platform/stats. Operator
+// dashboard at-a-glance counts. Single round-trip from caller.
+type PlatformStatsResponse struct {
+	TenantsTotal      int `json:"tenants_total"`
+	TenantsActive     int `json:"tenants_active"`
+	TenantsSuspended  int `json:"tenants_suspended"`
+	PersonsTotal      int `json:"persons_total"`
+	MembershipsActive int `json:"memberships_active"`
+}
+
 // ----- Role management -------------------------------------------------------
 
 // RoleDto is the wire-shape of a [role.Role] for read endpoints.
