@@ -140,11 +140,22 @@ func (f *Facade[K, V]) Get(ctx context.Context, key K) (V, error) {
 // Invalidate evicts a single key from BOTH L1 and L2. Domain event
 // subscribers call this after the source-of-truth row mutates.
 //
+// ristretto's Del is asynchronous — it queues the eviction to an
+// internal buffer (per the v2 Cache.Wait godoc: "Wait blocks until
+// all buffered writes have been applied"). Without the Wait, a Get
+// landing immediately after Invalidate races the buffer drain and
+// can still return the stale value. The Wait makes Invalidate
+// synchronous from the caller's perspective so the contract
+// "after Invalidate returns, the next Get does not see the old
+// value" holds. Acceptable cost: Invalidate runs on the rare cascade
+// subscriber path, not the per-request hot path.
+//
 // L1 eviction is best-effort (ristretto returns no error). L2 eviction
 // returns the redis error if any; caller may choose to retry.
 func (f *Facade[K, V]) Invalidate(ctx context.Context, key K) error {
 	keyStr := f.keyer(key)
 	f.cache.L1.Del(keyStr)
+	f.cache.L1.Wait()
 	if err := f.cache.L2.Del(ctx, keyStr).Err(); err != nil {
 		return fmt.Errorf("cache %s: invalidate %q: %w", f.name, keyStr, err)
 	}
@@ -155,6 +166,9 @@ func (f *Facade[K, V]) Invalidate(ctx context.Context, key K) error {
 // via errors.Join. Used for Person-level cascades over per-Membership
 // cached resources (e.g. password change → revoke security stamps for
 // all of that Person's Memberships) — caller pre-enumerates the keys.
+//
+// One Wait() after the Del loop drains the L1 buffer for ALL keys at
+// once — cheaper than waiting per-key.
 func (f *Facade[K, V]) InvalidateMany(ctx context.Context, keys []K) error {
 	if len(keys) == 0 {
 		return nil
@@ -165,6 +179,7 @@ func (f *Facade[K, V]) InvalidateMany(ctx context.Context, keys []K) error {
 		f.cache.L1.Del(s)
 		strs[i] = s
 	}
+	f.cache.L1.Wait()
 	if err := f.cache.L2.Del(ctx, strs...).Err(); err != nil {
 		return fmt.Errorf("cache %s: invalidate %d keys: %w", f.name, len(strs), err)
 	}
