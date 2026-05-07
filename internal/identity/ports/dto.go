@@ -214,6 +214,52 @@ type CreateUserResponse struct {
 	PersonExisted bool   `json:"person_existed"`
 }
 
+// ----- Platform: cross-tenant Person + tenant ops ----------------------------
+
+// PersonDto is the wire-shape of a Person for Platform read endpoints.
+// Returned by GET /api/v1/platform/persons/{personId}. Password hash
+// + security stamp are NEVER exposed.
+type PersonDto struct {
+	ID                     string    `json:"id"`
+	Email                  string    `json:"email"`
+	FirstName              string    `json:"first_name"`
+	LastName               string    `json:"last_name"`
+	IsActive               bool      `json:"is_active"`
+	IsAnonymised           bool      `json:"is_anonymised"`
+	IsGloballySuspended    bool      `json:"is_globally_suspended"`
+	GlobalSuspensionReason string    `json:"global_suspension_reason,omitempty"`
+	GloballySuspendedAt    time.Time `json:"globally_suspended_at,omitzero"`
+	CreatedAt              time.Time `json:"created_at"`
+	AnonymisedAt           time.Time `json:"anonymised_at,omitzero"`
+}
+
+// GlobalSuspendPersonRequest — POST /api/v1/platform/persons/{personId}/global-suspend.
+// Reason MUST be non-empty per data-retention.md audit canon.
+type GlobalSuspendPersonRequest struct {
+	Reason string `json:"reason"`
+}
+
+// UpdatePersonProfileRequest — PATCH /api/v1/platform/persons/{personId}/profile.
+// Updates the GLOBAL Person profile (FirstName, LastName) — distinct
+// from the per-Tenant designation/department/status_message which
+// move via [UpdateUserProfileRequest].
+type UpdatePersonProfileRequest struct {
+	FirstName string `json:"first_name"`
+	LastName  string `json:"last_name"`
+}
+
+// ListPersonMembershipsResponse — GET /api/v1/platform/persons/{personId}/memberships.
+// Cross-tenant view of every Membership the Person holds.
+type ListPersonMembershipsResponse struct {
+	Memberships []UserDto `json:"memberships"`
+}
+
+// ListAllTenantsResponse — GET /api/v1/platform/tenants.
+// Cross-tenant operator dashboard listing.
+type ListAllTenantsResponse struct {
+	Tenants []TenantDto `json:"tenants"`
+}
+
 // ----- Role management -------------------------------------------------------
 
 // RoleDto is the wire-shape of a [role.Role] for read endpoints.

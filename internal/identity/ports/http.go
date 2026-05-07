@@ -130,6 +130,29 @@ func AddRoutes(mux *http.ServeMux, log *slog.Logger, a app.Application, verifier
 		mux.Handle("POST /api/v1/roles/{roleId}/permissions/revoke",
 			auth(handleRevokeRolePermission(log, a)))
 		mux.Handle("DELETE /api/v1/roles/{roleId}", auth(handleDeleteRole(log, a)))
+
+		// Platform admin — all under /api/v1/platform/... gated on
+		// RequirePlatform per multi-tenancy.md "Platform admin endpoints"
+		// (rate-limited to 600/min/operator). Cross-tenant blast
+		// radius lives here; per-request audit trail captured by the
+		// existing platform middleware (impersonation flow lands in
+		// A.7.b — these endpoints don't require an active session).
+		mux.Handle("GET /api/v1/platform/tenants",
+			platform(handleListAllTenants(log, a)))
+		mux.Handle("DELETE /api/v1/platform/tenants/{tenantId}",
+			platform(handleHardDeleteTenant(log, a)))
+		mux.Handle("GET /api/v1/platform/persons/{personId}",
+			platform(handleGetPerson(log, a)))
+		mux.Handle("GET /api/v1/platform/persons/{personId}/memberships",
+			platform(handleListPersonMemberships(log, a)))
+		mux.Handle("PATCH /api/v1/platform/persons/{personId}/profile",
+			platform(handleUpdatePersonProfile(log, a)))
+		mux.Handle("POST /api/v1/platform/persons/{personId}/global-suspend",
+			platform(handleGlobalSuspendPerson(log, a)))
+		mux.Handle("POST /api/v1/platform/persons/{personId}/lift-global-suspension",
+			platform(handleLiftPersonGlobalSuspension(log, a)))
+		mux.Handle("POST /api/v1/platform/persons/{personId}/anonymise",
+			platform(handleAnonymisePerson(log, a)))
 	}
 }
 

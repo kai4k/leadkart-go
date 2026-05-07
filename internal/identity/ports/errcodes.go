@@ -149,4 +149,16 @@ const (
 	// (system-default mutation attempt, hierarchy out of range, etc.).
 	// 422 surface.
 	ErrCodeRoleInvalid = "role_invalid"
+
+	// ErrCodePersonNotFound — Person ID has no row globally. 404 surface.
+	ErrCodePersonNotFound = "person_not_found"
+
+	// ErrCodeInvalidPersonID — path parameter `{personId}` failed UUID parse.
+	// 400 surface.
+	ErrCodeInvalidPersonID = "invalid_person_id"
+
+	// ErrCodePersonInvalid — Person aggregate-level invariant violation
+	// (terminal-state transition, anonymise-while-not-suspended, etc.).
+	// 422 surface.
+	ErrCodePersonInvalid = "person_invalid"
 )

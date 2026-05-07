@@ -70,15 +70,25 @@ type Commands struct {
 	ReplaceRolePermissions  command.ReplaceRolePermissionsHandler
 	GrantRolePermission     command.GrantRolePermissionHandler
 	RevokeRolePermission    command.RevokeRolePermissionHandler
+
+	// Platform — cross-tenant Person + tenant ops.
+	GlobalSuspendPerson         command.GlobalSuspendPersonHandler
+	LiftPersonGlobalSuspension  command.LiftPersonGlobalSuspensionHandler
+	AnonymisePerson             command.AnonymisePersonHandler
+	UpdatePersonProfile         command.UpdatePersonProfileHandler
+	HardDeleteTenant            command.HardDeleteTenantHandler
 }
 
 // Queries aggregates all Identity query handlers. Read-side only — no
 // state mutation. Mirrors the [Commands] composition shape.
 type Queries struct {
-	ListSessions query.ListSessionsHandler
-	GetTenant    query.GetTenantHandler
-	GetUser      query.GetUserHandler
-	ListUsers    query.ListUsersHandler
-	GetRole      query.GetRoleHandler
-	ListRoles    query.ListRolesHandler
+	ListSessions          query.ListSessionsHandler
+	GetTenant             query.GetTenantHandler
+	GetUser               query.GetUserHandler
+	ListUsers             query.ListUsersHandler
+	GetRole               query.GetRoleHandler
+	ListRoles             query.ListRolesHandler
+	GetPerson             query.GetPersonHandler
+	ListPersonMemberships query.ListPersonMembershipsHandler
+	ListAllTenants        query.ListAllTenantsHandler
 }
