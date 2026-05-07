@@ -125,6 +125,135 @@ func (PersonAnonymisedV1) Topic() string { return "identity.person_anonymised.v1
 // OccurredAt returns the domain timestamp.
 func (e PersonAnonymisedV1) OccurredAt() time.Time { return e.OccurredAtUTC }
 
+// PersonPasswordResetRequestedV1 — Person initiated a forgot-password
+// flow. The raw plaintext token is delivered out-of-band by the
+// command handler's email gateway BEFORE this event fires; the event
+// is the audit/observability marker that the request happened. The
+// hash-only column on the Person row is the security-critical state.
+//
+// Email lookup deferred to subscribers via Person.GetByID since the
+// domain event itself doesn't carry the email — keeps the event
+// payload small + avoids stale data if the Person email changed
+// between request + delivery.
+type PersonPasswordResetRequestedV1 struct {
+	platformMarker
+
+	PersonID      uuid.UUID `json:"person_id"`
+	ExpiresAtUTC  time.Time `json:"expires_at_utc"`
+	OccurredAtUTC time.Time `json:"occurred_at_utc"`
+}
+
+// Topic returns the canonical wire alias.
+func (PersonPasswordResetRequestedV1) Topic() string {
+	return "identity.person_password_reset_requested.v1"
+}
+
+// OccurredAt returns the domain timestamp.
+func (e PersonPasswordResetRequestedV1) OccurredAt() time.Time { return e.OccurredAtUTC }
+
+// PersonPasswordResetConfirmedV1 — reset token accepted; password
+// rotated. PersonPasswordChangedV1 ALSO fires (the aggregate emits
+// both — narrower flow-marker + broader security-critical signal).
+// The cascade subscribers (revoke families) react to PasswordChanged;
+// audit / compliance subscribers may distinguish the reset path via
+// this event.
+type PersonPasswordResetConfirmedV1 struct {
+	platformMarker
+
+	PersonID      uuid.UUID `json:"person_id"`
+	OccurredAtUTC time.Time `json:"occurred_at_utc"`
+}
+
+// Topic returns the canonical wire alias.
+func (PersonPasswordResetConfirmedV1) Topic() string {
+	return "identity.person_password_reset_confirmed.v1"
+}
+
+// OccurredAt returns the domain timestamp.
+func (e PersonPasswordResetConfirmedV1) OccurredAt() time.Time { return e.OccurredAtUTC }
+
+// PersonPasswordResetCancelledV1 — pending reset cleared without
+// confirmation (user cancelled, password changed directly, etc.).
+// Audit-only; no cascade.
+type PersonPasswordResetCancelledV1 struct {
+	platformMarker
+
+	PersonID      uuid.UUID `json:"person_id"`
+	Reason        string    `json:"reason"`
+	OccurredAtUTC time.Time `json:"occurred_at_utc"`
+}
+
+// Topic returns the canonical wire alias.
+func (PersonPasswordResetCancelledV1) Topic() string {
+	return "identity.person_password_reset_cancelled.v1"
+}
+
+// OccurredAt returns the domain timestamp.
+func (e PersonPasswordResetCancelledV1) OccurredAt() time.Time { return e.OccurredAtUTC }
+
+// PersonEmailChangeRequestedV1 — Person initiated email change.
+// Notifications subscriber emails the confirmation link to the NEW
+// address. Auth0/Okta canon: confirmation goes to NEW (proves
+// control), informational to OLD post-confirmation. Old-email field
+// is omitted (the domain event doesn't carry it; subscribers that
+// want OLD lookup via Person.GetByID before the change confirms).
+type PersonEmailChangeRequestedV1 struct {
+	platformMarker
+
+	PersonID      uuid.UUID `json:"person_id"`
+	NewEmail      string    `json:"new_email"`
+	ExpiresAtUTC  time.Time `json:"expires_at_utc"`
+	OccurredAtUTC time.Time `json:"occurred_at_utc"`
+}
+
+// Topic returns the canonical wire alias.
+func (PersonEmailChangeRequestedV1) Topic() string {
+	return "identity.person_email_change_requested.v1"
+}
+
+// OccurredAt returns the domain timestamp.
+func (e PersonEmailChangeRequestedV1) OccurredAt() time.Time { return e.OccurredAtUTC }
+
+// PersonEmailChangedV1 — confirmation token accepted; Person email
+// rotated. Email is the global identity primary; changing it
+// invalidates every authenticated session per `security.md`
+// SecurityStamp rotation triggers. Identity subscribers MUST revoke
+// every refresh-token family for this Person across tenants. The
+// SecurityStamp on the Person aggregate is also rotated by the
+// aggregate method.
+type PersonEmailChangedV1 struct {
+	platformMarker
+
+	PersonID      uuid.UUID `json:"person_id"`
+	OldEmail      string    `json:"old_email"`
+	NewEmail      string    `json:"new_email"`
+	OccurredAtUTC time.Time `json:"occurred_at_utc"`
+}
+
+// Topic returns the canonical wire alias.
+func (PersonEmailChangedV1) Topic() string { return "identity.person_email_changed.v1" }
+
+// OccurredAt returns the domain timestamp.
+func (e PersonEmailChangedV1) OccurredAt() time.Time { return e.OccurredAtUTC }
+
+// PersonEmailChangeCancelledV1 — pending email change cleared without
+// confirmation. Audit-only; no cascade.
+type PersonEmailChangeCancelledV1 struct {
+	platformMarker
+
+	PersonID      uuid.UUID `json:"person_id"`
+	Reason        string    `json:"reason"`
+	OccurredAtUTC time.Time `json:"occurred_at_utc"`
+}
+
+// Topic returns the canonical wire alias.
+func (PersonEmailChangeCancelledV1) Topic() string {
+	return "identity.person_email_change_cancelled.v1"
+}
+
+// OccurredAt returns the domain timestamp.
+func (e PersonEmailChangeCancelledV1) OccurredAt() time.Time { return e.OccurredAtUTC }
+
 // Compile-time assertions + registration.
 var (
 	_ Platform = PersonCreatedV1{}
@@ -133,6 +262,12 @@ var (
 	_ Platform = PersonGloballySuspendedV1{}
 	_ Platform = PersonGlobalSuspensionLiftedV1{}
 	_ Platform = PersonAnonymisedV1{}
+	_ Platform = PersonPasswordResetRequestedV1{}
+	_ Platform = PersonPasswordResetConfirmedV1{}
+	_ Platform = PersonPasswordResetCancelledV1{}
+	_ Platform = PersonEmailChangeRequestedV1{}
+	_ Platform = PersonEmailChangedV1{}
+	_ Platform = PersonEmailChangeCancelledV1{}
 
 	_ = register(PersonCreatedV1{})
 	_ = register(PersonPasswordChangedV1{})
@@ -140,4 +275,10 @@ var (
 	_ = register(PersonGloballySuspendedV1{})
 	_ = register(PersonGlobalSuspensionLiftedV1{})
 	_ = register(PersonAnonymisedV1{})
+	_ = register(PersonPasswordResetRequestedV1{})
+	_ = register(PersonPasswordResetConfirmedV1{})
+	_ = register(PersonPasswordResetCancelledV1{})
+	_ = register(PersonEmailChangeRequestedV1{})
+	_ = register(PersonEmailChangedV1{})
+	_ = register(PersonEmailChangeCancelledV1{})
 )

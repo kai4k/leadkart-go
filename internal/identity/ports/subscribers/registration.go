@@ -14,9 +14,12 @@ import (
 // undelivered envelope. Only rename if you intend that behaviour
 // (e.g. fixing a serious bug retroactively).
 const (
-	HandlerRevokeOnPasswordChange  = "identity.subscribers.RevokeFamiliesOnPasswordChange"
-	HandlerRevokeOnAnonymise       = "identity.subscribers.RevokeFamiliesOnAnonymise"
-	HandlerReuseDetectedSIEM       = "identity.subscribers.ReuseDetectedSIEM"
+	HandlerRevokeOnPasswordChange       = "identity.subscribers.RevokeFamiliesOnPasswordChange"
+	HandlerRevokeOnAnonymise            = "identity.subscribers.RevokeFamiliesOnAnonymise"
+	HandlerRevokeOnGloballySuspended    = "identity.subscribers.RevokeFamiliesOnGloballySuspended"
+	HandlerRevokeOnEmailChanged         = "identity.subscribers.RevokeFamiliesOnEmailChanged"
+	HandlerRevokeOnMembershipDeactivate = "identity.subscribers.RevokeFamiliesOnMembershipDeactivate"
+	HandlerReuseDetectedSIEM            = "identity.subscribers.ReuseDetectedSIEM"
 )
 
 // Register wires every Identity in-module subscriber against the
@@ -45,6 +48,21 @@ func Register(
 		HandlerRevokeOnAnonymise,
 		integrationevents.Topic,
 		revoke.HandleAnonymised,
+	)
+	router.AddSubscriber(
+		HandlerRevokeOnGloballySuspended,
+		integrationevents.Topic,
+		revoke.HandleGloballySuspended,
+	)
+	router.AddSubscriber(
+		HandlerRevokeOnEmailChanged,
+		integrationevents.Topic,
+		revoke.HandleEmailChanged,
+	)
+	router.AddSubscriber(
+		HandlerRevokeOnMembershipDeactivate,
+		integrationevents.Topic,
+		revoke.HandleMembershipDeactivated,
 	)
 	router.AddSubscriber(
 		HandlerReuseDetectedSIEM,

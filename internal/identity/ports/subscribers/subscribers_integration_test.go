@@ -385,6 +385,100 @@ func TestRevokeFamilies_OnAnonymised(t *testing.T) {
 	}, 3*time.Second, "anonymise subscriber did not revoke family")
 }
 
+func TestRevokeFamilies_OnGloballySuspended(t *testing.T) {
+	fx := newFixture(t)
+	pubsub, _, stop := wireRouter(t, fx)
+	defer stop()
+
+	p := fx.seedPerson(t, "suspended@flow.test")
+	tn := fx.seedTenant(t)
+	f := fx.seedFamily(t, p, tn)
+
+	pidUUID, _ := uuid.Parse(p.ID().String())
+	publishEvent(t, pubsub, integrationevents.PersonGloballySuspendedV1{
+		PersonID:      pidUUID,
+		Reason:        "compliance: cross-tenant fraud 2026-05-07",
+		OccurredAtUTC: time.Now().UTC(),
+	}, uuid.Nil)
+
+	waitFor(t, func() bool {
+		got, err := fx.families.GetByID(t.Context(), f.ID())
+		if err != nil {
+			return false
+		}
+		return got.IsRevoked() && got.RevokeReason() == "globally_suspended"
+	}, 3*time.Second, "globally-suspended subscriber did not revoke family")
+}
+
+func TestRevokeFamilies_OnEmailChanged(t *testing.T) {
+	fx := newFixture(t)
+	pubsub, _, stop := wireRouter(t, fx)
+	defer stop()
+
+	p := fx.seedPerson(t, "old-email@flow.test")
+	tn := fx.seedTenant(t)
+	f := fx.seedFamily(t, p, tn)
+
+	pidUUID, _ := uuid.Parse(p.ID().String())
+	publishEvent(t, pubsub, integrationevents.PersonEmailChangedV1{
+		PersonID:      pidUUID,
+		OldEmail:      "old-email@flow.test",
+		NewEmail:      "new-email@flow.test",
+		OccurredAtUTC: time.Now().UTC(),
+	}, uuid.Nil)
+
+	waitFor(t, func() bool {
+		got, err := fx.families.GetByID(t.Context(), f.ID())
+		if err != nil {
+			return false
+		}
+		return got.IsRevoked() && got.RevokeReason() == "email_changed"
+	}, 3*time.Second, "email-changed subscriber did not revoke family")
+}
+
+func TestRevokeFamilies_OnMembershipDeactivated_NarrowsToTenantScope(t *testing.T) {
+	// MembershipDeactivated cascade is narrower than the Person-level
+	// events: ONLY families bound to that (PersonID, TenantID) tuple
+	// die. Other-tenant families for the same Person stay alive.
+	fx := newFixture(t)
+	pubsub, _, stop := wireRouter(t, fx)
+	defer stop()
+
+	p := fx.seedPerson(t, "multi-tenant@flow.test")
+	tnA := fx.seedTenant(t)
+	tnB := fx.seedTenant(t)
+	famA := fx.seedFamily(t, p, tnA)
+	famB := fx.seedFamily(t, p, tnB)
+
+	pidUUID, _ := uuid.Parse(p.ID().String())
+	tnAUUID, _ := uuid.Parse(tnA.ID().String())
+	publishEvent(t, pubsub, integrationevents.MembershipDeactivatedV1{
+		MembershipID:  uuid.New(),
+		PersonID:      pidUUID,
+		TenantIDClaim: tnAUUID,
+		Reason:        "left-the-company",
+		OccurredAtUTC: time.Now().UTC(),
+	}, tnAUUID)
+
+	// Family A → revoked; Family B → still active.
+	waitFor(t, func() bool {
+		got, err := fx.families.GetByID(t.Context(), famA.ID())
+		if err != nil {
+			return false
+		}
+		return got.IsRevoked() && got.RevokeReason() == "membership_deactivated"
+	}, 3*time.Second, "tenant-A family not revoked on membership deactivation")
+
+	gotB, err := fx.families.GetByID(t.Context(), famB.ID())
+	if err != nil {
+		t.Fatalf("GetByID famB: %v", err)
+	}
+	if gotB.IsRevoked() {
+		t.Fatalf("tenant-B family revoked but should be untouched: reason=%q",
+			gotB.RevokeReason())
+	}
+}
+
 func TestRevokeFamilies_NoActiveFamilies_NoOp(t *testing.T) {
 	fx := newFixture(t)
 	pubsub, _, stop := wireRouter(t, fx)

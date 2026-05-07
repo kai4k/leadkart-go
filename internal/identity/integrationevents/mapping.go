@@ -209,6 +209,49 @@ func FromDomainEvent(d any) (Event, error) {
 			OccurredAtUTC: e.At.UTC(),
 		}, nil
 
+	case person.PasswordResetRequestedEvent:
+		return PersonPasswordResetRequestedV1{
+			PersonID:      mustParseUUID(e.PersonID.String()),
+			ExpiresAtUTC:  e.ExpiresAt.UTC(),
+			OccurredAtUTC: e.At.UTC(),
+		}, nil
+
+	case person.PasswordResetConfirmedEvent:
+		return PersonPasswordResetConfirmedV1{
+			PersonID:      mustParseUUID(e.PersonID.String()),
+			OccurredAtUTC: e.At.UTC(),
+		}, nil
+
+	case person.PasswordResetCancelledEvent:
+		return PersonPasswordResetCancelledV1{
+			PersonID:      mustParseUUID(e.PersonID.String()),
+			Reason:        e.Reason,
+			OccurredAtUTC: e.At.UTC(),
+		}, nil
+
+	case person.EmailChangeRequestedEvent:
+		return PersonEmailChangeRequestedV1{
+			PersonID:      mustParseUUID(e.PersonID.String()),
+			NewEmail:      e.NewEmail.String(),
+			ExpiresAtUTC:  e.ExpiresAt.UTC(),
+			OccurredAtUTC: e.At.UTC(),
+		}, nil
+
+	case person.EmailChangedEvent:
+		return PersonEmailChangedV1{
+			PersonID:      mustParseUUID(e.PersonID.String()),
+			OldEmail:      e.OldEmail.String(),
+			NewEmail:      e.NewEmail.String(),
+			OccurredAtUTC: e.At.UTC(),
+		}, nil
+
+	case person.EmailChangeCancelledEvent:
+		return PersonEmailChangeCancelledV1{
+			PersonID:      mustParseUUID(e.PersonID.String()),
+			Reason:        e.Reason,
+			OccurredAtUTC: e.At.UTC(),
+		}, nil
+
 	// ----- Membership -------------------------------------------------
 
 	case membership.CreatedEvent:
