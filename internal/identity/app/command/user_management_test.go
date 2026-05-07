@@ -63,6 +63,16 @@ func (r *fakeMembershipRepo) ListForTenant(_ context.Context, tid tenant.ID) ([]
 	return out, nil
 }
 
+func (r *fakeMembershipRepo) ListAllForPerson(_ context.Context, pid person.ID) ([]*membership.Membership, error) {
+	var out []*membership.Membership
+	for _, m := range r.memberships {
+		if m.PersonID() == pid {
+			out = append(out, m)
+		}
+	}
+	return out, nil
+}
+
 var _ membership.Repository = (*fakeMembershipRepo)(nil)
 
 func newMembership(t *testing.T) *membership.Membership {

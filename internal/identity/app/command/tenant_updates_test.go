@@ -51,6 +51,14 @@ func (r *fakeTenantRepo) GetBySlug(_ context.Context, _ slug.Slug) (*tenant.Tena
 	return nil, tenant.ErrNotFound
 }
 
+func (r *fakeTenantRepo) ListAll(_ context.Context) ([]*tenant.Tenant, error) {
+	out := make([]*tenant.Tenant, 0, len(r.tenants))
+	for _, t := range r.tenants {
+		out = append(out, t)
+	}
+	return out, nil
+}
+
 var _ tenant.Repository = (*fakeTenantRepo)(nil)
 
 func newTenant(t *testing.T) *tenant.Tenant {

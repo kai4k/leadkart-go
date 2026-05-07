@@ -60,6 +60,12 @@ type Repository interface {
 	// Used during signup for slug-availability checks + login flows
 	// where the slug appears in the auth-routing index.
 	GetBySlug(ctx context.Context, s slug.Slug) (*Tenant, error)
+
+	// ListAll returns every Tenant in the system, ordered by created_at.
+	// Cross-tenant query — Platform-operator path only. The aggregate
+	// table is non-RLS (each row IS a tenant); no privilege escalation
+	// happens here, the gate lives in the HTTP middleware.
+	ListAll(ctx context.Context) ([]*Tenant, error)
 }
 
 // Compile-time guarantee that the sentinel errors are wrapped-comparable.
