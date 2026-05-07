@@ -422,7 +422,7 @@ func buildIdentityApp(pool *pgxpool.Pool, cfg config.AppConfig, now func() time.
 			ListPersonMemberships:     query.NewListPersonMembershipsHandler(memberships, persons),
 			ListAllTenants:            query.NewListAllTenantsHandler(tenants),
 			ListImpersonationSessions: query.NewListImpersonationSessionsHandler(impersonationStore),
-			PlatformStats:             query.NewPlatformStatsHandler(pool),
+			PlatformStats:             query.NewPlatformStatsHandler(pool, tx),
 		},
 	}, issuer, nil
 }
