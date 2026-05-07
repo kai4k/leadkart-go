@@ -46,7 +46,6 @@ import (
 	"github.com/leadkart/leadkart-go/internal/platform/impersonation"
 	"github.com/leadkart/leadkart-go/internal/identity/app/permissions"
 	"github.com/leadkart/leadkart-go/internal/identity/app/query"
-	"github.com/leadkart/leadkart-go/internal/identity/app/service"
 	"github.com/leadkart/leadkart-go/internal/identity/ports"
 	"github.com/leadkart/leadkart-go/internal/identity/ports/authn"
 	"github.com/leadkart/leadkart-go/internal/platform/config"
@@ -313,8 +312,6 @@ func buildIdentityApp(pool *pgxpool.Pool, cfg config.AppConfig, now func() time.
 	memberships := adapters.NewMembershipRepository(pool, tx)
 	families := adapters.NewRefreshTokenFamilyRepository(pool, tx)
 	roles := adapters.NewRoleRepository(pool, tx)
-	onboarding := service.NewTenantOnboardingService(tx, tenants, persons, memberships, roles)
-	userOnboarding := service.NewUserOnboardingService(tx, persons, memberships)
 	permResolver := permissions.NewResolver(memberships, roles)
 
 	previous := make([]jwt.SigningKey, len(cfg.JWT.PreviousKeys))
@@ -362,7 +359,7 @@ func buildIdentityApp(pool *pgxpool.Pool, cfg config.AppConfig, now func() time.
 
 	return app.Application{
 		Commands: app.Commands{
-			RegisterTenant:       command.NewRegisterTenantHandler(onboarding),
+			RegisterTenant:       command.NewRegisterTenantHandler(tx, tenants, persons, memberships, roles),
 			Login:                command.NewLoginHandler(persons, memberships, families, tenants, permResolver, issuer, now, cfg.Refresh.AbsoluteTTL, dummyHash),
 			Refresh:              command.NewRefreshHandler(families, persons, memberships, tenants, permResolver, issuer, now, cfg.Refresh.AbsoluteTTL),
 			Logout:               command.NewLogoutHandler(families),
@@ -392,7 +389,7 @@ func buildIdentityApp(pool *pgxpool.Pool, cfg config.AppConfig, now func() time.
 			ReplaceUserPermissionOverrides: command.NewReplaceUserPermissionOverridesHandler(memberships),
 			AssignUserManager:              command.NewAssignUserManagerHandler(memberships),
 			RemoveUserManager:              command.NewRemoveUserManagerHandler(memberships),
-			CreateUser:                     command.NewCreateUserHandler(userOnboarding),
+			CreateUser:                     command.NewCreateUserHandler(tx, persons, memberships),
 			AnonymiseUser:                  command.NewAnonymiseUserHandler(memberships, persons),
 
 			CreateRole:             command.NewCreateRoleHandler(roles),

@@ -6,27 +6,37 @@
 // `internal/identity/app/app.go`; HTTP ports call
 // `app.Commands.X.Handle(...)` directly.
 //
-// Handlers stay THIN per `architecture.md` "Command handler scope" —
-// validate → dispatch to service → translate result. Multi-aggregate
-// orchestration lives in [internal/identity/app/service/].
+// Handler IS the orchestrator. Multi-aggregate atomic writes happen
+// inside the handler's `tx.WithinTx` closure — no service abstraction
+// underneath. Per TDL "Introducing Clean Architecture": *"CQRS
+// replaces service interfaces with concrete handler structs."* Wild
+// Workouts handlers run 30-100 lines comfortably; that IS the canon.
 package command
 
 import (
 	"context"
+	"errors"
+	"fmt"
+
+	"github.com/jackc/pgx/v5"
 
 	"github.com/leadkart/leadkart-go/internal/common/email"
+	"github.com/leadkart/leadkart-go/internal/common/ids"
 	"github.com/leadkart/leadkart-go/internal/common/slug"
-	"github.com/leadkart/leadkart-go/internal/identity/app/service"
+	"github.com/leadkart/leadkart-go/internal/common/tenancy"
+	"github.com/leadkart/leadkart-go/internal/identity/adapters"
+	"github.com/leadkart/leadkart-go/internal/identity/app/argon2"
+	"github.com/leadkart/leadkart-go/internal/identity/app/seed"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/role"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
+	"github.com/leadkart/leadkart-go/internal/platform/pg"
 )
 
 // RegisterTenantCommand carries the validated input for the
-// register-tenant use case — a brand-new pharma company onboarding to
-// LeadKart. The handler delegates to [service.TenantOnboardingService]
-// which writes Tenant + admin Person + admin Membership in ONE
-// transaction (no saga; per TDL canon).
+// register-tenant use case — a brand-new pharma company onboarding
+// to LeadKart.
 type RegisterTenantCommand struct {
 	Slug           slug.Slug
 	LegalName      string
@@ -37,55 +47,297 @@ type RegisterTenantCommand struct {
 	AdminLastName  string
 }
 
-// RegisterTenantResult mirrors [service.OnboardTenantResult] —
-// surfaced through the handler boundary so HTTP ports don't import
-// the service package directly.
+// RegisterTenantResult carries the IDs of the three aggregates created
+// during onboarding: Tenant, the admin Person, and the admin
+// Membership that wires them together.
 type RegisterTenantResult struct {
 	TenantID     tenant.ID
 	PersonID     person.ID
 	MembershipID membership.ID
 }
 
-// ErrEmailHasActiveMembership re-exports
-// [service.ErrEmailHasActiveMembership] under the command package's
-// error vocabulary. HTTP ports match on this sentinel for the 409
-// Conflict mapping.
-var ErrEmailHasActiveMembership = service.ErrEmailHasActiveMembership
+// ErrEmailHasActiveMembership — admin email already belongs to a
+// Person who has an Active Membership in some tenant. The single-
+// Active-Membership invariant per `multi-tenancy.md` blocks the
+// onboard; the existing tenant must deactivate the Membership first
+// (e.g. job change), then this Person can re-onboard to a new tenant.
+var ErrEmailHasActiveMembership = errors.New(
+	"register tenant: admin email already has an active membership elsewhere",
+)
 
-// RegisterTenantHandler is a thin dispatcher over
-// [service.TenantOnboardingService]. Per `architecture.md` "Command
-// handler scope" — handler body ≤40 lines, ctor ≤6 deps; orchestration
-// is the service's responsibility.
+// RegisterTenantHandler orchestrates the three-aggregate registration
+// flow: hashes the admin password, finds-or-creates the global Person
+// aggregate, constructs Tenant + admin Membership, persists ALL THREE
+// in ONE transaction, then seeds default roles + assigns CompanyOwner.
+//
+// No saga. The three writes live in one Identity bounded context +
+// one DB; per TDL "if you feel you need a saga between three services,
+// maybe merge them" (plan §G.H.4). Same-tx atomicity is the handler's
+// job per TDL strict.
 type RegisterTenantHandler struct {
-	onboarding *service.TenantOnboardingService
+	tx          *pg.Transactor
+	tenants     *adapters.TenantRepository
+	persons     *adapters.PersonRepository
+	memberships *adapters.MembershipRepository
+	roles       *adapters.RoleRepository
 }
 
-// NewRegisterTenantHandler wires the handler.
-func NewRegisterTenantHandler(onboarding *service.TenantOnboardingService) RegisterTenantHandler {
-	return RegisterTenantHandler{onboarding: onboarding}
+// NewRegisterTenantHandler wires the handler. All five dependencies
+// are concrete adapter types — handlers depend on the concrete
+// repositories they orchestrate per TDL Wild Workouts canon.
+func NewRegisterTenantHandler(
+	tx *pg.Transactor,
+	tenants *adapters.TenantRepository,
+	persons *adapters.PersonRepository,
+	memberships *adapters.MembershipRepository,
+	roles *adapters.RoleRepository,
+) RegisterTenantHandler {
+	return RegisterTenantHandler{
+		tx:          tx,
+		tenants:     tenants,
+		persons:     persons,
+		memberships: memberships,
+		roles:       roles,
+	}
 }
 
-// Handle translates the command into the service-layer command + maps
-// the result. Errors propagate unchanged.
+// Handle executes the multi-aggregate registration flow as a thin
+// narrative — each numbered step delegates to a private method that
+// owns the per-step concern + error translation.
+//
+// Steps:
+//
+//  1. Argon2id-hash the admin password OUTSIDE the tx (CPU-bound;
+//     no reason to hold a connection).
+//  2. Pre-tx existence check: same-email Person already has an Active
+//     Membership? Surfaces ErrEmailHasActiveMembership early so the
+//     caller sees a friendly error, not a SQLSTATE 23505 conflict.
+//     The DB partial unique index is the authoritative gate inside
+//     the tx.
+//  3. Single-tx persist of Tenant + Person (find-or-create) +
+//     Membership. All three integration events fire from one outbox
+//     batch — subscribers see a consistent post-onboarding state.
+//  4. Post-commit: idempotent default-role seeding + CompanyOwner
+//     assignment. Split from main tx because role.Repository.Add
+//     opens its own TxScopeTenant tx; each step is independently
+//     idempotent so partial failure is operator-recoverable per
+//     `messaging.md` "outbox pattern over distributed transactions".
 func (h RegisterTenantHandler) Handle(
 	ctx context.Context,
 	cmd RegisterTenantCommand,
 ) (RegisterTenantResult, error) {
-	out, err := h.onboarding.Onboard(ctx, service.OnboardTenantCommand{
-		Slug:           cmd.Slug,
-		LegalName:      cmd.LegalName,
-		DisplayName:    cmd.DisplayName,
-		AdminEmail:     cmd.AdminEmail,
-		AdminPassword:  cmd.AdminPassword,
-		AdminFirstName: cmd.AdminFirstName,
-		AdminLastName:  cmd.AdminLastName,
+	pwd, err := h.hashAdminPassword(cmd.AdminPassword)
+	if err != nil {
+		return RegisterTenantResult{}, err
+	}
+
+	// Pre-tx existence check: lookup Person by email, then guard the
+	// single-Active-Membership invariant. nil-existing = create-fresh
+	// path inside the tx.
+	existing, err := h.persons.GetByEmail(ctx, cmd.AdminEmail)
+	switch {
+	case errors.Is(err, person.ErrNotFound):
+		existing = nil
+	case err != nil:
+		return RegisterTenantResult{}, fmt.Errorf("register tenant: lookup person: %w", err)
+	}
+	if existing != nil {
+		if err := h.assertNoActiveMembership(ctx, existing.ID()); err != nil {
+			return RegisterTenantResult{}, err
+		}
+	}
+
+	result, err := h.persistAggregatesInTx(ctx, cmd, existing, pwd)
+	if err != nil {
+		return RegisterTenantResult{}, err
+	}
+	if err := h.seedRolesAndAssignOwner(ctx, result); err != nil {
+		return RegisterTenantResult{}, err
+	}
+	return result, nil
+}
+
+// hashAdminPassword runs Argon2id outside the DB tx — pure CPU +
+// crypto/rand, no reason to hold a connection. Wraps the raw PHC
+// string in the [person.PasswordHash] VO so domain validators have
+// already passed by the time we hit the persist step.
+func (h RegisterTenantHandler) hashAdminPassword(plain string) (person.PasswordHash, error) {
+	rawHash, err := argon2.Hash(plain)
+	if err != nil {
+		return person.PasswordHash{}, fmt.Errorf("register tenant: hash password: %w", err)
+	}
+	pwd, err := person.NewPasswordHash(rawHash)
+	if err != nil {
+		return person.PasswordHash{}, fmt.Errorf("register tenant: wrap hash: %w", err)
+	}
+	return pwd, nil
+}
+
+// assertNoActiveMembership guards the single-Active-Membership
+// invariant per `multi-tenancy.md` "Identity model": a Person can hold
+// AT MOST ONE Active Membership across all tenants. The DB partial-
+// unique-index is the authoritative gate inside the onboarding tx;
+// this pre-tx check just produces a friendly typed error rather than
+// a SQLSTATE 23505 surfaced as a generic conflict.
+func (h RegisterTenantHandler) assertNoActiveMembership(
+	ctx context.Context,
+	personID person.ID,
+) error {
+	active, err := h.memberships.GetActiveForPerson(ctx, personID)
+	switch {
+	case errors.Is(err, membership.ErrNotFound):
+		return nil
+	case err != nil:
+		return fmt.Errorf("register tenant: check active membership: %w", err)
+	}
+	if active != nil {
+		return ErrEmailHasActiveMembership
+	}
+	return nil
+}
+
+// persistAggregatesInTx is the load-bearing single-tx step: Tenant +
+// Person (find-or-create) + Membership inserted atomically under
+// TxScopePlatform (the new tenant has no current_tenant context yet).
+// All three aggregates' integration events drain to the outbox same-tx
+// per ADR 0008.
+func (h RegisterTenantHandler) persistAggregatesInTx(
+	ctx context.Context,
+	cmd RegisterTenantCommand,
+	existing *person.Person,
+	pwd person.PasswordHash,
+) (RegisterTenantResult, error) {
+	var result RegisterTenantResult
+	err := h.tx.WithinTx(ctx, pg.TxScopePlatform, func(ctx context.Context, tx pgx.Tx) error {
+		t, terr := tenant.New(
+			tenant.ID(ids.NewV7().String()),
+			cmd.Slug, cmd.LegalName, cmd.DisplayName, cmd.AdminEmail,
+		)
+		if terr != nil {
+			return fmt.Errorf("construct tenant: %w", terr)
+		}
+		if terr := h.tenants.AddInTx(ctx, tx, t); terr != nil {
+			return fmt.Errorf("persist tenant: %w", terr)
+		}
+		p, perr := h.findOrCreatePersonInTx(ctx, tx, cmd, existing, pwd)
+		if perr != nil {
+			return perr
+		}
+		m, merr := h.createMembershipInTx(ctx, tx, p.ID(), t.ID())
+		if merr != nil {
+			return merr
+		}
+		result = RegisterTenantResult{
+			TenantID:     t.ID(),
+			PersonID:     p.ID(),
+			MembershipID: m.ID(),
+		}
+		return nil
 	})
 	if err != nil {
 		return RegisterTenantResult{}, err
 	}
-	return RegisterTenantResult{
-		TenantID:     out.TenantID,
-		PersonID:     out.PersonID,
-		MembershipID: out.MembershipID,
-	}, nil
+	return result, nil
+}
+
+// findOrCreatePersonInTx returns the existing aggregate when the
+// pre-tx check found one, otherwise constructs + persists a fresh
+// Person. Translates the race-loss SQLSTATE-23505 path on duplicate
+// email into the same friendly ErrEmailHasActiveMembership the pre-tx
+// check would have surfaced — concurrent onboarding races resolve to
+// the same observable error shape.
+func (h RegisterTenantHandler) findOrCreatePersonInTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	cmd RegisterTenantCommand,
+	existing *person.Person,
+	pwd person.PasswordHash,
+) (*person.Person, error) {
+	if existing != nil {
+		return existing, nil
+	}
+	p, err := person.New(
+		person.ID(ids.NewV7().String()),
+		cmd.AdminEmail, cmd.AdminFirstName, cmd.AdminLastName, pwd,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("construct person: %w", err)
+	}
+	if err := h.persons.AddInTx(ctx, tx, p); err != nil {
+		if errors.Is(err, person.ErrEmailTaken) {
+			return nil, ErrEmailHasActiveMembership
+		}
+		return nil, fmt.Errorf("persist person: %w", err)
+	}
+	return p, nil
+}
+
+// createMembershipInTx constructs the admin Membership (Active by
+// construction per the [membership.New] factory) + persists it.
+// Translates the partial-unique-index violation into
+// ErrEmailHasActiveMembership for the same race-tolerance reason.
+func (h RegisterTenantHandler) createMembershipInTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	personID person.ID,
+	tenantID tenant.ID,
+) (*membership.Membership, error) {
+	m, err := membership.New(membership.ID(ids.NewV7().String()), personID, tenantID)
+	if err != nil {
+		return nil, fmt.Errorf("construct membership: %w", err)
+	}
+	if err := h.memberships.AddInTx(ctx, tx, m); err != nil {
+		if errors.Is(err, membership.ErrAlreadyActive) {
+			return nil, ErrEmailHasActiveMembership
+		}
+		return nil, fmt.Errorf("persist membership: %w", err)
+	}
+	return m, nil
+}
+
+// seedRolesAndAssignOwner is the post-commit step: idempotent default-
+// role seeding (each role.Repository.Add opens its own TxScopeTenant)
+// + assignment of CompanyOwner to the admin Membership. Per
+// `messaging.md` "outbox pattern over distributed transactions" —
+// partial failure is operator-recoverable: re-run onboarding with the
+// same TenantID, idempotent seed completes the work.
+//
+// Catalog drift surfaces as a 500-class error (CompanyOwner missing
+// from the seeded list); operationally this means
+// [seed.DefaultRoleCatalog] was edited without leaving CompanyOwner
+// in place — caught at unit-test time by
+// `seed.TestDefaultRoleCatalog_CompanyOwnerCarriesTenantAdmin`.
+func (h RegisterTenantHandler) seedRolesAndAssignOwner(
+	ctx context.Context,
+	result RegisterTenantResult,
+) error {
+	tenantCtx := tenancy.WithID(ctx, tenancy.ID(result.TenantID.String()))
+	seededRoles, err := seed.ApplyDefaultRoles(tenantCtx, h.roles, result.TenantID)
+	if err != nil {
+		return fmt.Errorf("register tenant: seed default roles: %w", err)
+	}
+	owner, ok := findCompanyOwner(seededRoles)
+	if !ok {
+		return errors.New("register tenant: CompanyOwner not in seeded catalog (catalog drift)")
+	}
+	err = h.memberships.UpdateByID(tenantCtx, result.MembershipID,
+		func(m *membership.Membership) (bool, error) {
+			return true, m.AssignRole(owner.ID())
+		})
+	if err != nil {
+		return fmt.Errorf("register tenant: assign CompanyOwner to admin membership: %w", err)
+	}
+	return nil
+}
+
+// findCompanyOwner picks the CompanyOwner role from a seeded catalog.
+// Catalog ordering is wire-stable but we look up by name rather than
+// index so a future spec reorder doesn't silently misassign authority.
+func findCompanyOwner(roles []*role.Role) (*role.Role, bool) {
+	for _, r := range roles {
+		if r.Name() == role.SystemRoles.Tenant.CompanyOwner {
+			return r, true
+		}
+	}
+	return nil, false
 }
