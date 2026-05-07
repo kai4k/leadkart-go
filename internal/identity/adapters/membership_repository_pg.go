@@ -269,6 +269,55 @@ func (r *MembershipRepository) ListForTenant(
 	return out, nil
 }
 
+// ListAllForPerson satisfies [membership.Repository]. Platform-only
+// cross-tenant lookup — returns every Membership the Person holds
+// (Active + Inactive) across all tenants. Backed by the existing
+// ListMembershipsForPerson sqlc query which crosses tenant boundaries
+// (the index is non-RLS-filtered per database.md "Single-Active-
+// Membership constraint").
+//
+// Authorization: this method MUST only be called from a path the
+// HTTP layer has gated on Platform tier. The repository itself does
+// no permission check — that's middleware's job.
+func (r *MembershipRepository) ListAllForPerson(
+	ctx context.Context,
+	personID person.ID,
+) ([]*membership.Membership, error) {
+	uid, err := parsePersonIDForMembership(personID)
+	if err != nil {
+		return nil, err
+	}
+	var out []*membership.Membership
+	err = r.tx.WithinTx(ctx, pg.TxScopePlatform, func(ctx context.Context, tx pgx.Tx) error {
+		q := r.q.WithTx(tx)
+		rows, err := q.ListMembershipsForPerson(ctx, pgUUID(uid))
+		if err != nil {
+			return fmt.Errorf("membership repo: list for person: %w", err)
+		}
+		out = make([]*membership.Membership, 0, len(rows))
+		for _, row := range rows {
+			roleIDs, lerr := loadRoleAssignments(ctx, q, uuidFromPg(row.ID))
+			if lerr != nil {
+				return lerr
+			}
+			granted, revoked, lerr := loadPermissionOverrides(ctx, q, uuidFromPg(row.ID))
+			if lerr != nil {
+				return lerr
+			}
+			m, perr := rowToMembership(row, roleIDs, granted, revoked)
+			if perr != nil {
+				return perr
+			}
+			out = append(out, m)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // ----- Helpers ---------------------------------------------------------------
 
 func loadMembership(ctx context.Context, q *Queries, id membership.ID) (*membership.Membership, error) {

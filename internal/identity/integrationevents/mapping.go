@@ -53,8 +53,111 @@ func FromDomainEvent(d any) (Event, error) {
 			OccurredAtUTC: e.At.UTC(),
 		}, nil
 
+	case tenant.ProfileUpdatedEvent:
+		return TenantProfileUpdatedV1{
+			TenantID:       mustParseUUID(e.TenantID.String()),
+			OldLegalName:   e.OldLegalName,
+			OldDisplayName: e.OldDisplayName,
+			NewLegalName:   e.NewLegalName,
+			NewDisplayName: e.NewDisplayName,
+			OccurredAtUTC:  e.At.UTC(),
+		}, nil
+
+	case tenant.StatutoryUpdatedEvent:
+		return TenantStatutoryUpdatedV1{
+			TenantID:       mustParseUUID(e.TenantID.String()),
+			OldGST:         e.OldStatutory.GST().String(),
+			OldPAN:         e.OldStatutory.PAN().String(),
+			OldDrugLicence: e.OldStatutory.DrugLicence().String(),
+			NewGST:         e.NewStatutory.GST().String(),
+			NewPAN:         e.NewStatutory.PAN().String(),
+			NewDrugLicence: e.NewStatutory.DrugLicence().String(),
+			OccurredAtUTC:  e.At.UTC(),
+		}, nil
+
+	case tenant.DisplayPreferencesUpdatedEvent:
+		old := e.OldDisplayPreferences
+		nu := e.NewDisplayPreferences
+		return TenantDisplayPreferencesUpdatedV1{
+			TenantID:      mustParseUUID(e.TenantID.String()),
+			OldLocale:     old.Locale(),
+			OldTimeZone:   old.TimeZone(),
+			OldDateFormat: old.DateFormat(),
+			OldCurrency:   old.Currency(),
+			NewLocale:     nu.Locale(),
+			NewTimeZone:   nu.TimeZone(),
+			NewDateFormat: nu.DateFormat(),
+			NewCurrency:   nu.Currency(),
+			OccurredAtUTC: e.At.UTC(),
+		}, nil
+
+	case tenant.SettingsUpdatedEvent:
+		oldP := e.OldSettings.PasswordPolicy()
+		newP := e.NewSettings.PasswordPolicy()
+		return TenantSettingsUpdatedV1{
+			TenantID:             mustParseUUID(e.TenantID.String()),
+			OldMinLength:         oldP.MinLength(),
+			OldRequireUppercase:  oldP.RequireUppercase(),
+			OldRequireLowercase:  oldP.RequireLowercase(),
+			OldRequireDigit:      oldP.RequireDigit(),
+			OldRequireSymbol:     oldP.RequireSymbol(),
+			OldMaxFailedAttempts: oldP.MaxFailedAttempts(),
+			OldLockoutMinutes:    oldP.LockoutMinutes(),
+			NewMinLength:         newP.MinLength(),
+			NewRequireUppercase:  newP.RequireUppercase(),
+			NewRequireLowercase:  newP.RequireLowercase(),
+			NewRequireDigit:      newP.RequireDigit(),
+			NewRequireSymbol:     newP.RequireSymbol(),
+			NewMaxFailedAttempts: newP.MaxFailedAttempts(),
+			NewLockoutMinutes:    newP.LockoutMinutes(),
+			OccurredAtUTC:        e.At.UTC(),
+		}, nil
+
+	case tenant.AdminContactUpdatedEvent:
+		oldAddr := e.OldAdminContact.Address()
+		newAddr := e.NewAdminContact.Address()
+		return TenantAdminContactUpdatedV1{
+			TenantID:      mustParseUUID(e.TenantID.String()),
+			OldPhone:      e.OldAdminContact.Phone().String(),
+			OldStreet:     oldAddr.Street(),
+			OldCity:       oldAddr.City(),
+			OldDistrict:   oldAddr.District(),
+			OldState:      oldAddr.State(),
+			OldStateCode:  oldAddr.StateCode(),
+			OldPincode:    oldAddr.Pincode(),
+			NewPhone:      e.NewAdminContact.Phone().String(),
+			NewStreet:     newAddr.Street(),
+			NewCity:       newAddr.City(),
+			NewDistrict:   newAddr.District(),
+			NewState:      newAddr.State(),
+			NewStateCode:  newAddr.StateCode(),
+			NewPincode:    newAddr.Pincode(),
+			OccurredAtUTC: e.At.UTC(),
+		}, nil
+
 	case tenant.SuspendedEvent:
 		return TenantSuspendedV1{
+			TenantID:      mustParseUUID(e.TenantID.String()),
+			Reason:        e.Reason,
+			OccurredAtUTC: e.At.UTC(),
+		}, nil
+
+	case tenant.MarkedForDeletionEvent:
+		return TenantMarkedForDeletionV1{
+			TenantID:       mustParseUUID(e.TenantID.String()),
+			Reason:         e.Reason,
+			ScheduledAtUTC: e.ScheduledAt.UTC(),
+			OccurredAtUTC:  e.At.UTC(),
+		}, nil
+
+	case tenant.RestoredEvent:
+		return TenantRestoredV1{
+			TenantID:      mustParseUUID(e.TenantID.String()),
+			OccurredAtUTC: e.At.UTC(),
+		}, nil
+
+	case tenant.DeletedEvent:
+		return TenantDeletedV1{
 			TenantID:      mustParseUUID(e.TenantID.String()),
 			Reason:        e.Reason,
 			OccurredAtUTC: e.At.UTC(),
@@ -77,9 +180,75 @@ func FromDomainEvent(d any) (Event, error) {
 			OccurredAtUTC: e.At.UTC(),
 		}, nil
 
+	case person.ProfileUpdatedEvent:
+		return PersonProfileUpdatedV1{
+			PersonID:      mustParseUUID(e.PersonID.String()),
+			OldFirstName:  e.OldFirstName,
+			OldLastName:   e.OldLastName,
+			NewFirstName:  e.NewFirstName,
+			NewLastName:   e.NewLastName,
+			OccurredAtUTC: e.At.UTC(),
+		}, nil
+
+	case person.GloballySuspendedEvent:
+		return PersonGloballySuspendedV1{
+			PersonID:      mustParseUUID(e.PersonID.String()),
+			Reason:        e.Reason,
+			OccurredAtUTC: e.At.UTC(),
+		}, nil
+
+	case person.GlobalSuspensionLiftedEvent:
+		return PersonGlobalSuspensionLiftedV1{
+			PersonID:      mustParseUUID(e.PersonID.String()),
+			OccurredAtUTC: e.At.UTC(),
+		}, nil
+
 	case person.AnonymisedEvent:
 		return PersonAnonymisedV1{
 			PersonID:      mustParseUUID(e.PersonID.String()),
+			OccurredAtUTC: e.At.UTC(),
+		}, nil
+
+	case person.PasswordResetRequestedEvent:
+		return PersonPasswordResetRequestedV1{
+			PersonID:      mustParseUUID(e.PersonID.String()),
+			ExpiresAtUTC:  e.ExpiresAt.UTC(),
+			OccurredAtUTC: e.At.UTC(),
+		}, nil
+
+	case person.PasswordResetConfirmedEvent:
+		return PersonPasswordResetConfirmedV1{
+			PersonID:      mustParseUUID(e.PersonID.String()),
+			OccurredAtUTC: e.At.UTC(),
+		}, nil
+
+	case person.PasswordResetCancelledEvent:
+		return PersonPasswordResetCancelledV1{
+			PersonID:      mustParseUUID(e.PersonID.String()),
+			Reason:        e.Reason,
+			OccurredAtUTC: e.At.UTC(),
+		}, nil
+
+	case person.EmailChangeRequestedEvent:
+		return PersonEmailChangeRequestedV1{
+			PersonID:      mustParseUUID(e.PersonID.String()),
+			NewEmail:      e.NewEmail.String(),
+			ExpiresAtUTC:  e.ExpiresAt.UTC(),
+			OccurredAtUTC: e.At.UTC(),
+		}, nil
+
+	case person.EmailChangedEvent:
+		return PersonEmailChangedV1{
+			PersonID:      mustParseUUID(e.PersonID.String()),
+			OldEmail:      e.OldEmail.String(),
+			NewEmail:      e.NewEmail.String(),
+			OccurredAtUTC: e.At.UTC(),
+		}, nil
+
+	case person.EmailChangeCancelledEvent:
+		return PersonEmailChangeCancelledV1{
+			PersonID:      mustParseUUID(e.PersonID.String()),
+			Reason:        e.Reason,
 			OccurredAtUTC: e.At.UTC(),
 		}, nil
 

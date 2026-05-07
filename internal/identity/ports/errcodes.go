@@ -44,4 +44,130 @@ const (
 	// slog.ErrorContext server-side; HTTP body stays empty to avoid
 	// leaking stack traces / SQL fragments to clients.
 	ErrCodeInternalError = "internal_error"
+
+	// ErrCodeIncorrectCurrentPassword — change-password verify-current
+	// gate failed. 401 surface — same shape as login's invalid_credentials
+	// per `security.md` "Password change" + Auth0/Okta canon: never
+	// distinguish "wrong current password" from other auth failures.
+	//nolint:gosec // G101: error code, not a credential
+	ErrCodeIncorrectCurrentPassword = "incorrect_current_password"
+
+	// ErrCodePasswordBreached — HIBP-style breach checker rejected the
+	// new password. 422 surface; UI prompts user to choose another.
+	//nolint:gosec // G101: error code, not a credential
+	ErrCodePasswordBreached = "password_breached"
+
+	// ErrCodePasswordSameAsCurrent — change-password caller supplied
+	// new == current. 422 surface. Per Auth0 + Okta canon: reject the
+	// no-op rather than silently committing nothing.
+	//nolint:gosec // G101: error code, not a credential
+	ErrCodePasswordSameAsCurrent = "password_same_as_current"
+
+	// ErrCodeInvalidPassword — generic password-shape rejection
+	// (empty / too short / too long). Used by change-password +
+	// reset-password endpoints when the password is missing or
+	// fails domain-layer validation. 400 surface.
+	//nolint:gosec // G101: error code, not a credential
+	ErrCodeInvalidPassword = "invalid_password"
+
+	// ErrCodeSessionNotFound — DELETE /api/v1/auth/sessions/{familyId}
+	// returned a not-found OR not-owned-by-caller. Same code per
+	// `security.md` enumeration-safety: never tell the attacker which
+	// arm matched. 404 surface.
+	ErrCodeSessionNotFound = "session_not_found"
+
+	// ErrCodeInvalidFamilyID — path parameter `{familyId}` failed
+	// UUID parse. 400 surface.
+	ErrCodeInvalidFamilyID = "invalid_family_id"
+
+	// ErrCodeResetTokenInvalid — confirm-password-reset rejection
+	// (mismatch / expired / no pending). Per security.md "Password
+	// reset" + Auth0/Okta canon: NEVER distinguish causes. 400 surface.
+	//nolint:gosec // G101: error code, not a credential
+	ErrCodeResetTokenInvalid = "reset_token_invalid"
+
+	// ErrCodeEmailChangeRejected — request-email-change rejected
+	// (terminal Person, same-as-current, etc.). 400 surface.
+	ErrCodeEmailChangeRejected = "email_change_rejected"
+
+	// ErrCodeEmailAlreadyTaken — request-email-change rejected because
+	// another Person already owns the new email. 409 surface.
+	ErrCodeEmailAlreadyTaken = "email_already_taken"
+
+	// ErrCodeEmailChangeTokenInvalid — confirm-email-change rejection.
+	// 400 surface, same enumeration-safety rule as reset.
+	//nolint:gosec // G101: error code, not a credential
+	ErrCodeEmailChangeTokenInvalid = "email_change_token_invalid"
+
+	// ErrCodeTenantNotFound — tenant ID has no matching row. 404 surface.
+	ErrCodeTenantNotFound = "tenant_not_found"
+
+	// ErrCodeInvalidTenantID — path parameter `{tenantId}` failed UUID
+	// parse. 400 surface.
+	ErrCodeInvalidTenantID = "invalid_tenant_id"
+
+	// ErrCodeTenantInvalid — aggregate-level invariant violation
+	// (over-length name, terminal-state transition, etc.). 422 surface.
+	ErrCodeTenantInvalid = "tenant_invalid"
+
+	// ErrCodeUserNotFound — membership ID has no row in caller's
+	// tenant. 404 surface; collapses "wrong tenant" + "doesn't exist"
+	// per security.md enumeration safety.
+	ErrCodeUserNotFound = "user_not_found"
+
+	// ErrCodeInvalidUserID — path parameter `{userId}` failed UUID parse.
+	// 400 surface.
+	ErrCodeInvalidUserID = "invalid_user_id"
+
+	// ErrCodeUserInvalid — Membership aggregate-level invariant
+	// violation (deactivate without reason, terminal-state transition,
+	// etc.). 422 surface.
+	ErrCodeUserInvalid = "user_invalid"
+
+	// ErrCodeInvalidRoleID — path/body role_id failed UUID parse.
+	// 400 surface.
+	ErrCodeInvalidRoleID = "invalid_role_id"
+
+	// ErrCodeInvalidManagerID — body manager_id failed UUID parse.
+	// 400 surface.
+	ErrCodeInvalidManagerID = "invalid_manager_id"
+
+	// ErrCodePermissionUnknown — replace-permission-overrides request
+	// carried a permission name not in [permission.IdentityPermissions].
+	// 422 surface; offending name in message body.
+	ErrCodePermissionUnknown = "permission_unknown"
+
+	// ErrCodeRoleNotFound — role ID has no live row in caller's tenant.
+	// 404 surface.
+	ErrCodeRoleNotFound = "role_not_found"
+
+	// ErrCodeRoleNameTaken — role create / rename collided with an
+	// existing live role name in the tenant. 409 surface.
+	ErrCodeRoleNameTaken = "role_name_taken"
+
+	// ErrCodeRoleInvalid — Role aggregate-level invariant violation
+	// (system-default mutation attempt, hierarchy out of range, etc.).
+	// 422 surface.
+	ErrCodeRoleInvalid = "role_invalid"
+
+	// ErrCodePersonNotFound — Person ID has no row globally. 404 surface.
+	ErrCodePersonNotFound = "person_not_found"
+
+	// ErrCodeInvalidPersonID — path parameter `{personId}` failed UUID parse.
+	// 400 surface.
+	ErrCodeInvalidPersonID = "invalid_person_id"
+
+	// ErrCodePersonInvalid — Person aggregate-level invariant violation
+	// (terminal-state transition, anonymise-while-not-suspended, etc.).
+	// 422 surface.
+	ErrCodePersonInvalid = "person_invalid"
+
+	// ErrCodeImpersonationInvalid — session-creation validation
+	// rejection (reason too short, duration > 4h, etc.). 422 surface.
+	ErrCodeImpersonationInvalid = "impersonation_invalid"
+
+	// ErrCodeInvalidSessionID — `{sessionId}` path param failed UUID
+	// parse. 400 surface. Distinct from session_not_found which the
+	// session-revoke flow collapses into 204 idempotent no-op anyway.
+	ErrCodeInvalidSessionID = "invalid_session_id"
 )

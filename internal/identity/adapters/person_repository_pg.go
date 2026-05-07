@@ -94,6 +94,42 @@ func (r *PersonRepository) GetByEmail(ctx context.Context, e email.Address) (*pe
 	return rowToPerson(row)
 }
 
+// GetByPasswordResetTokenHash satisfies [person.Repository]. Hash-only
+// lookup powering the confirm-password-reset flow. Backed by partial
+// unique index uq_persons_password_reset_hash.
+func (r *PersonRepository) GetByPasswordResetTokenHash(ctx context.Context, hash person.PasswordResetTokenHash) (*person.Person, error) {
+	if hash.IsZero() {
+		return nil, person.ErrNotFound
+	}
+	hashStr := hash.String()
+	row, err := r.q.GetPersonByPasswordResetTokenHash(ctx, &hashStr)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, person.ErrNotFound
+		}
+		return nil, fmt.Errorf("person repo: get by password_reset_token_hash: %w", err)
+	}
+	return rowToPerson(row)
+}
+
+// GetByEmailChangeTokenHash satisfies [person.Repository]. Hash-only
+// lookup powering the confirm-email-change flow. Backed by partial
+// unique index uq_persons_email_change_hash.
+func (r *PersonRepository) GetByEmailChangeTokenHash(ctx context.Context, hash person.EmailChangeTokenHash) (*person.Person, error) {
+	if hash.IsZero() {
+		return nil, person.ErrNotFound
+	}
+	hashStr := hash.String()
+	row, err := r.q.GetPersonByEmailChangeTokenHash(ctx, &hashStr)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, person.ErrNotFound
+		}
+		return nil, fmt.Errorf("person repo: get by email_change_token_hash: %w", err)
+	}
+	return rowToPerson(row)
+}
+
 // ----- Helpers ---------------------------------------------------------------
 
 func loadPerson(ctx context.Context, q *Queries, id person.ID) (*person.Person, error) {
@@ -120,24 +156,76 @@ func insertPersonRow(ctx context.Context, q *Queries, p *person.Person) error {
 	if err != nil {
 		return fmt.Errorf("person repo: parse security_stamp: %w", err)
 	}
-	err = q.InsertPerson(ctx, InsertPersonParams{
-		ID:            pgUUID(uid),
-		Email:         p.Email().String(),
-		FirstName:     p.FirstName(),
-		LastName:      p.LastName(),
-		PasswordHash:  p.PasswordHash().String(),
-		SecurityStamp: pgUUID(stampUUID),
-		IsActive:      p.IsActive(),
-		IsAnonymised:  p.IsAnonymised(),
-		CreatedAt:     pgRequiredTimestamp(p.CreatedAt()),
-	})
-	if err != nil {
+	params := InsertPersonParams{
+		ID:                     pgUUID(uid),
+		Email:                  p.Email().String(),
+		FirstName:              p.FirstName(),
+		LastName:               p.LastName(),
+		PasswordHash:           p.PasswordHash().String(),
+		SecurityStamp:          pgUUID(stampUUID),
+		IsActive:               p.IsActive(),
+		IsAnonymised:           p.IsAnonymised(),
+		CreatedAt:              pgRequiredTimestamp(p.CreatedAt()),
+		IsGloballySuspended:    p.IsGloballySuspended(),
+		GlobalSuspensionReason: p.GlobalSuspensionReason(),
+		GloballySuspendedAt:    pgTimestamp(p.GloballySuspendedAt()),
+	}
+	applyPendingResetTo(&params, p.PendingPasswordReset())
+	applyPendingEmailChangeTo(&params, p.PendingEmailChange())
+	if err := q.InsertPerson(ctx, params); err != nil {
 		if isUniqueViolation(err) {
 			return person.ErrEmailTaken
 		}
 		return fmt.Errorf("person repo: insert: %w", err)
 	}
 	return nil
+}
+
+// applyPendingResetTo / applyPendingEmailChangeTo project the Person's
+// pending sub-states onto the params struct. Zero values map to NULL
+// columns; the partial unique indexes only see the populated rows.
+//
+// Implemented as helpers shared by Insert + Update params so the column
+// projection rules live in one place — drift between create + update
+// would otherwise corrupt round-trip semantics silently.
+func applyPendingResetTo(p *InsertPersonParams, pr person.PendingPasswordReset) {
+	if pr.IsZero() {
+		return
+	}
+	hash := pr.Hash().String()
+	p.PasswordResetTokenHash = &hash
+	p.PasswordResetExpiresAt = pgTimestamp(pr.ExpiresAt())
+}
+
+func applyPendingEmailChangeTo(p *InsertPersonParams, ec person.PendingEmailChange) {
+	if ec.IsZero() {
+		return
+	}
+	hash := ec.Hash().String()
+	newEmail := ec.NewEmail().String()
+	p.PendingEmailChangeNewEmail = &newEmail
+	p.PendingEmailChangeTokenHash = &hash
+	p.PendingEmailChangeExpiresAt = pgTimestamp(ec.ExpiresAt())
+}
+
+func applyPendingResetToUpdate(p *UpdatePersonParams, pr person.PendingPasswordReset) {
+	if pr.IsZero() {
+		return
+	}
+	hash := pr.Hash().String()
+	p.PasswordResetTokenHash = &hash
+	p.PasswordResetExpiresAt = pgTimestamp(pr.ExpiresAt())
+}
+
+func applyPendingEmailChangeToUpdate(p *UpdatePersonParams, ec person.PendingEmailChange) {
+	if ec.IsZero() {
+		return
+	}
+	hash := ec.Hash().String()
+	newEmail := ec.NewEmail().String()
+	p.PendingEmailChangeNewEmail = &newEmail
+	p.PendingEmailChangeTokenHash = &hash
+	p.PendingEmailChangeExpiresAt = pgTimestamp(ec.ExpiresAt())
 }
 
 func persistPerson(ctx context.Context, q *Queries, p *person.Person) error {
@@ -149,18 +237,23 @@ func persistPerson(ctx context.Context, q *Queries, p *person.Person) error {
 	if err != nil {
 		return fmt.Errorf("person repo: parse security_stamp: %w", err)
 	}
-	err = q.UpdatePerson(ctx, UpdatePersonParams{
-		ID:            pgUUID(uid),
-		Email:         p.Email().String(),
-		FirstName:     p.FirstName(),
-		LastName:      p.LastName(),
-		PasswordHash:  p.PasswordHash().String(),
-		SecurityStamp: pgUUID(stampUUID),
-		IsActive:      p.IsActive(),
-		IsAnonymised:  p.IsAnonymised(),
-		AnonymisedAt:  pgTimestamp(p.AnonymisedAt()),
-	})
-	if err != nil {
+	params := UpdatePersonParams{
+		ID:                     pgUUID(uid),
+		Email:                  p.Email().String(),
+		FirstName:              p.FirstName(),
+		LastName:               p.LastName(),
+		PasswordHash:           p.PasswordHash().String(),
+		SecurityStamp:          pgUUID(stampUUID),
+		IsActive:               p.IsActive(),
+		IsAnonymised:           p.IsAnonymised(),
+		AnonymisedAt:           pgTimestamp(p.AnonymisedAt()),
+		IsGloballySuspended:    p.IsGloballySuspended(),
+		GlobalSuspensionReason: p.GlobalSuspensionReason(),
+		GloballySuspendedAt:    pgTimestamp(p.GloballySuspendedAt()),
+	}
+	applyPendingResetToUpdate(&params, p.PendingPasswordReset())
+	applyPendingEmailChangeToUpdate(&params, p.PendingEmailChange())
+	if err := q.UpdatePerson(ctx, params); err != nil {
 		return fmt.Errorf("person repo: update: %w", err)
 	}
 	return nil
@@ -207,18 +300,43 @@ func rowToPerson(row IdentityPerson) (*person.Person, error) {
 	if err != nil {
 		return nil, fmt.Errorf("person repo: hydrate security_stamp: %w", err)
 	}
-	return person.UnmarshalFromDB(person.Snapshot{
-		ID:            id,
-		Email:         addr,
-		FirstName:     row.FirstName,
-		LastName:      row.LastName,
-		PasswordHash:  hash,
-		SecurityStamp: stamp,
-		IsActive:      row.IsActive,
-		IsAnonymised:  row.IsAnonymised,
-		CreatedAt:     timeFromPg(row.CreatedAt),
-		AnonymisedAt:  timeFromPg(row.AnonymisedAt),
-	}), nil
+	snap := person.Snapshot{
+		ID:                     id,
+		Email:                  addr,
+		FirstName:              row.FirstName,
+		LastName:               row.LastName,
+		PasswordHash:           hash,
+		SecurityStamp:          stamp,
+		IsActive:               row.IsActive,
+		IsAnonymised:           row.IsAnonymised,
+		IsGloballySuspended:    row.IsGloballySuspended,
+		GlobalSuspensionReason: row.GlobalSuspensionReason,
+		GloballySuspendedAt:    timeFromPg(row.GloballySuspendedAt),
+		CreatedAt:              timeFromPg(row.CreatedAt),
+		AnonymisedAt:           timeFromPg(row.AnonymisedAt),
+	}
+	if row.PasswordResetTokenHash != nil {
+		resetHash, herr := person.NewPasswordResetTokenHash(*row.PasswordResetTokenHash)
+		if herr != nil {
+			return nil, fmt.Errorf("person repo: hydrate password_reset_token_hash: %w", herr)
+		}
+		snap.PasswordResetTokenHash = resetHash
+		snap.PasswordResetExpiresAt = timeFromPg(row.PasswordResetExpiresAt)
+	}
+	if row.PendingEmailChangeTokenHash != nil && row.PendingEmailChangeNewEmail != nil {
+		newAddr, eerr := email.New(*row.PendingEmailChangeNewEmail)
+		if eerr != nil {
+			return nil, fmt.Errorf("person repo: hydrate pending_email_change_new_email: %w", eerr)
+		}
+		ecHash, herr := person.NewEmailChangeTokenHash(*row.PendingEmailChangeTokenHash)
+		if herr != nil {
+			return nil, fmt.Errorf("person repo: hydrate pending_email_change_token_hash: %w", herr)
+		}
+		snap.PendingEmailChangeNewEmail = newAddr
+		snap.PendingEmailChangeHash = ecHash
+		snap.PendingEmailChangeExpiresAt = timeFromPg(row.PendingEmailChangeExpiresAt)
+	}
+	return person.UnmarshalFromDB(snap), nil
 }
 
 func parsePersonID(id person.ID) (uuid.UUID, error) {

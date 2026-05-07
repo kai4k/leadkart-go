@@ -47,6 +47,9 @@ func (f *fakeMembershipRepo) GetActiveForPerson(context.Context, person.ID) (*me
 func (f *fakeMembershipRepo) ListForTenant(context.Context, tenant.ID) ([]*membership.Membership, error) {
 	return nil, errors.New("fake: ListForTenant unused")
 }
+func (f *fakeMembershipRepo) ListAllForPerson(context.Context, person.ID) ([]*membership.Membership, error) {
+	return nil, errors.New("fake: ListAllForPerson unused")
+}
 
 type fakeRoleRepo struct {
 	roles map[role.ID]*role.Role

@@ -63,16 +63,24 @@ type IdentityOutbox struct {
 
 // Person aggregate. Global identity (Auth0/Entra ID pattern). NOT tenant-scoped.
 type IdentityPerson struct {
-	ID            pgtype.UUID
-	Email         string
-	FirstName     string
-	LastName      string
-	PasswordHash  string
-	SecurityStamp pgtype.UUID
-	IsActive      bool
-	IsAnonymised  bool
-	CreatedAt     pgtype.Timestamptz
-	AnonymisedAt  pgtype.Timestamptz
+	ID                          pgtype.UUID
+	Email                       string
+	FirstName                   string
+	LastName                    string
+	PasswordHash                string
+	SecurityStamp               pgtype.UUID
+	IsActive                    bool
+	IsAnonymised                bool
+	CreatedAt                   pgtype.Timestamptz
+	AnonymisedAt                pgtype.Timestamptz
+	IsGloballySuspended         bool
+	GlobalSuspensionReason      string
+	GloballySuspendedAt         pgtype.Timestamptz
+	PasswordResetTokenHash      *string
+	PasswordResetExpiresAt      pgtype.Timestamptz
+	PendingEmailChangeNewEmail  *string
+	PendingEmailChangeTokenHash *string
+	PendingEmailChangeExpiresAt pgtype.Timestamptz
 }
 
 // Per-handler inbox dedup. (message_id, handler_name) PK guarantees at-most-once-per-handler delivery.
@@ -131,15 +139,39 @@ type IdentityRoleAssignment struct {
 
 // Tenant aggregate root. Each row IS a tenant; not tenant-scoped (no RLS).
 type IdentityTenant struct {
-	ID          pgtype.UUID
-	Slug        string
-	LegalName   string
-	DisplayName string
-	AdminEmail  string
-	Status      string
-	CreatedAt   pgtype.Timestamptz
-	ActivatedAt pgtype.Timestamptz
-	SuspendedAt pgtype.Timestamptz
+	ID                        pgtype.UUID
+	Slug                      string
+	LegalName                 string
+	DisplayName               string
+	AdminEmail                string
+	Status                    string
+	CreatedAt                 pgtype.Timestamptz
+	ActivatedAt               pgtype.Timestamptz
+	SuspendedAt               pgtype.Timestamptz
+	GstNumber                 string
+	PanNumber                 string
+	DrugLicenceNumber         string
+	AdminPhone                string
+	AdminAddressStreet        string
+	AdminAddressCity          string
+	AdminAddressDistrict      string
+	AdminAddressState         string
+	AdminAddressStateCode     string
+	AdminAddressPincode       string
+	PasswordMinLength         int32
+	PasswordRequireUppercase  bool
+	PasswordRequireLowercase  bool
+	PasswordRequireDigit      bool
+	PasswordRequireSymbol     bool
+	PasswordMaxFailedAttempts int32
+	PasswordLockoutMinutes    int32
+	Locale                    string
+	TimeZone                  string
+	DateFormat                string
+	Currency                  string
+	DeletionScheduledAt       pgtype.Timestamptz
+	DeletionReason            string
+	HardDeletedAt             pgtype.Timestamptz
 }
 
 // Per-tenant junction (Person ↔ Tenant). Tenant-scoped, FORCE RLS. Single-Active-Membership invariant via partial unique index.

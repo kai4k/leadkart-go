@@ -28,6 +28,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/leadkart/leadkart-go/internal/common/tenancy"
 	"github.com/leadkart/leadkart-go/internal/identity/app/jwt"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/permission"
 )
@@ -138,7 +139,25 @@ func RequireAuth(verifier Verifier) func(http.Handler) http.Handler {
 					"invalid token")
 				return
 			}
-			next.ServeHTTP(w, r.WithContext(WithClaims(r.Context(), claims)))
+			// Bind BOTH the verified claims AND the tenant context onto
+			// the request ctx. Downstream repositories run under
+			// TxScopeTenant which expects `tenancy.FromContext(ctx)` to
+			// resolve — without this bridge, every protected handler
+			// would have to re-extract the tenant from claims manually
+			// (boilerplate that creep into every endpoint = drift risk).
+			//
+			// Empty / missing tenant_id claim is a token-shape bug:
+			// JWT issuance always populates it. Treat as unauthenticated
+			// rather than letting the request reach a handler with an
+			// unbound tenant ctx that fails opaquely at the repo layer.
+			if strings.TrimSpace(claims.TenantID) == "" {
+				writeError(w, http.StatusUnauthorized, errCodeUnauthenticated,
+					"token missing tenant_id claim")
+				return
+			}
+			ctx := WithClaims(r.Context(), claims)
+			ctx = tenancy.WithID(ctx, tenancy.ID(claims.TenantID))
+			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
 }
@@ -236,6 +255,62 @@ func RequireAnyPermission(verifier Verifier, permNames ...string) func(http.Hand
 			}
 			writeError(w, http.StatusForbidden, errCodeForbidden,
 				"missing any of: "+strings.Join(permNames, ", "))
+		}))
+	}
+}
+
+// ----- RequireTenantContext -------------------------------------------------
+
+// RequireTenantContext gates a handler on (a) a verified JWT AND (b)
+// the JWT's tenant_id claim matching the path parameter named pathVar
+// — OR the caller being a Platform / SuperUser operator.
+//
+// Used by tenant-resource endpoints under
+// `/api/v1/tenants/{tenantId}/...`: a tenant Admin can only modify
+// their own tenant; a Platform operator can modify any (post-
+// impersonation per `multi-tenancy.md`).
+//
+// pathVar is the name of the path-parameter to match against. Almost
+// always "tenantId"; surfaced as a parameter so the same factory
+// works for any future per-tenant URL pattern.
+//
+//   - 401 if the token is missing / invalid.
+//   - 403 if neither tenant matches NOR the operator flags are set.
+func RequireTenantContext(verifier Verifier, pathVar string) func(http.Handler) http.Handler {
+	if verifier == nil {
+		panic("authn: RequireTenantContext verifier required")
+	}
+	if strings.TrimSpace(pathVar) == "" {
+		panic("authn: RequireTenantContext pathVar required")
+	}
+	auth := RequireAuth(verifier)
+	return func(next http.Handler) http.Handler {
+		return auth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			c, ok := ClaimsFromContext(r.Context())
+			if !ok {
+				writeError(w, http.StatusUnauthorized, errCodeUnauthenticated, "missing claims")
+				return
+			}
+			// SuperUser / Platform-tier operators bypass — they're
+			// expected to operate cross-tenant under the impersonation
+			// audit trail.
+			if c.IsSuperUser || c.IsPlatform {
+				next.ServeHTTP(w, r)
+				return
+			}
+			urlTenant := strings.TrimSpace(r.PathValue(pathVar))
+			jwtTenant := strings.TrimSpace(c.TenantID)
+			if urlTenant == "" {
+				writeError(w, http.StatusBadRequest, errCodeForbidden,
+					"path missing "+pathVar+" parameter")
+				return
+			}
+			if urlTenant != jwtTenant {
+				writeError(w, http.StatusForbidden, errCodeForbidden,
+					"tenant context does not match url")
+				return
+			}
+			next.ServeHTTP(w, r)
 		}))
 	}
 }

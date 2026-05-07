@@ -77,6 +77,106 @@ func (h *RevokeFamiliesOnSecurityChange) HandleAnonymised(
 	return h.revokeAll(ctx, evt.PersonID.String(), "person_anonymised")
 }
 
+// HandleGloballySuspended is the handler for
+// `identity.person_globally_suspended.v1`. Compliance/fraud bans
+// MUST kill every refresh-token family for that Person across
+// tenants — the global-suspension flag would otherwise leave
+// already-issued tokens valid until expiry, defeating the lockout
+// purpose. Per `security.md` SecurityStamp rotation triggers.
+func (h *RevokeFamiliesOnSecurityChange) HandleGloballySuspended(
+	ctx context.Context, _ string, msg *message.Message,
+) error {
+	expected := integrationevents.PersonGloballySuspendedV1{}.Topic()
+	if msg.Metadata.Get(messaging.HeaderEventType) != expected {
+		return nil
+	}
+	var evt integrationevents.PersonGloballySuspendedV1
+	if err := json.Unmarshal(msg.Payload, &evt); err != nil {
+		return fmt.Errorf("subscribers: decode %s: %w", expected, err)
+	}
+	return h.revokeAll(ctx, evt.PersonID.String(), "globally_suspended")
+}
+
+// HandleEmailChanged is the handler for
+// `identity.person_email_changed.v1`. Email IS the global identity
+// primary; rotating it without invalidating sessions would let stale
+// JWTs continue to authenticate against the new email's account.
+// Auth0/Okta canon: every email change forces a re-login.
+func (h *RevokeFamiliesOnSecurityChange) HandleEmailChanged(
+	ctx context.Context, _ string, msg *message.Message,
+) error {
+	expected := integrationevents.PersonEmailChangedV1{}.Topic()
+	if msg.Metadata.Get(messaging.HeaderEventType) != expected {
+		return nil
+	}
+	var evt integrationevents.PersonEmailChangedV1
+	if err := json.Unmarshal(msg.Payload, &evt); err != nil {
+		return fmt.Errorf("subscribers: decode %s: %w", expected, err)
+	}
+	return h.revokeAll(ctx, evt.PersonID.String(), "email_changed")
+}
+
+// HandleMembershipDeactivated is the narrower (PersonID, TenantID)
+// revoke — when a tenant Admin deactivates a Membership, only THAT
+// tenant's families for that Person should die; the Person may
+// continue to operate under another tenant's still-Active Membership.
+//
+// The single-Active-Membership invariant per `multi-tenancy.md`
+// guarantees at-most-one Active anyway, but a Person can be Inactive
+// in one tenant while still authenticated against an unrevoked
+// session — the deactivation cascade closes that gap.
+func (h *RevokeFamiliesOnSecurityChange) HandleMembershipDeactivated(
+	ctx context.Context, _ string, msg *message.Message,
+) error {
+	expected := integrationevents.MembershipDeactivatedV1{}.Topic()
+	if msg.Metadata.Get(messaging.HeaderEventType) != expected {
+		return nil
+	}
+	var evt integrationevents.MembershipDeactivatedV1
+	if err := json.Unmarshal(msg.Payload, &evt); err != nil {
+		return fmt.Errorf("subscribers: decode %s: %w", expected, err)
+	}
+	return h.revokeForTenant(ctx, evt.PersonID.String(), evt.TenantIDClaim.String(), "membership_deactivated")
+}
+
+// revokeForTenant lists families for the Person + revokes ONLY those
+// bound to the supplied TenantID. Used by the membership-deactivated
+// cascade, distinct from the broader [revokeAll] used by Person-level
+// security events.
+func (h *RevokeFamiliesOnSecurityChange) revokeForTenant(
+	ctx context.Context, personID, tenantID, reason string,
+) error {
+	pid := person.ID(personID)
+	actives, err := h.families.ListActiveForPerson(ctx, pid)
+	if err != nil {
+		return fmt.Errorf("subscribers: list families for %s: %w", personID, err)
+	}
+	count := 0
+	for _, f := range actives {
+		if f.TenantID().String() != tenantID {
+			continue
+		}
+		fid := f.ID()
+		err := h.families.UpdateByID(ctx, fid, func(family *refreshtoken.Family) (bool, error) {
+			if err := family.Revoke(reason); err != nil {
+				return false, err
+			}
+			return true, nil
+		})
+		if err != nil {
+			h.log.ErrorContext(ctx, "revoke family failed",
+				"person_id", personID, "tenant_id", tenantID, "family_id", fid, "reason", reason, "err", err)
+			return fmt.Errorf("revoke family %s: %w", fid, err)
+		}
+		count++
+	}
+	if count > 0 {
+		h.log.InfoContext(ctx, "revoked tenant-scoped families on membership deactivation",
+			"person_id", personID, "tenant_id", tenantID, "count", count)
+	}
+	return nil
+}
+
 // revokeAll lists every NON-revoked family for the Person + revokes
 // each via the UpdateByID UpdateFn pattern. Each revoke emits a
 // [refreshtoken.RevokedEvent] which the repo drains to outbox as a

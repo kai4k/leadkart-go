@@ -40,9 +40,15 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/app/argon2"
 	"github.com/leadkart/leadkart-go/internal/identity/app/command"
 	"github.com/leadkart/leadkart-go/internal/identity/app/jwt"
+	commonemail "github.com/leadkart/leadkart-go/internal/common/email"
+	"github.com/leadkart/leadkart-go/internal/platform/breach"
+	platformemail "github.com/leadkart/leadkart-go/internal/platform/email"
+	"github.com/leadkart/leadkart-go/internal/platform/impersonation"
 	"github.com/leadkart/leadkart-go/internal/identity/app/permissions"
+	"github.com/leadkart/leadkart-go/internal/identity/app/query"
 	"github.com/leadkart/leadkart-go/internal/identity/app/service"
 	"github.com/leadkart/leadkart-go/internal/identity/ports"
+	"github.com/leadkart/leadkart-go/internal/identity/ports/authn"
 	"github.com/leadkart/leadkart-go/internal/platform/config"
 	"github.com/leadkart/leadkart-go/internal/platform/obs"
 	"github.com/leadkart/leadkart-go/internal/platform/pg"
@@ -196,7 +202,7 @@ func run(ctx context.Context, stdout *os.File, _ []string) error {
 	}
 	logger.InfoContext(ctx, "postgres connected")
 
-	identityApp, err := buildIdentityApp(pool, cfg, time.Now)
+	identityApp, issuer, err := buildIdentityApp(pool, cfg, time.Now)
 	if err != nil {
 		return fmt.Errorf("build identity app: %w", err)
 	}
@@ -230,7 +236,7 @@ func run(ctx context.Context, stdout *os.File, _ []string) error {
 	}, healthCheckTimeout)
 	adminSrv := obs.NewAdminServer(cfg.Listen.Admin, health)
 
-	publicHandler := otelhttp.NewHandler(newServer(logger, identityApp), "leadkart-api")
+	publicHandler := otelhttp.NewHandler(newServer(logger, identityApp, issuer), "leadkart-api")
 	srv := &http.Server{
 		Addr:              cfg.Listen.API,
 		Handler:           publicHandler,
@@ -280,9 +286,13 @@ func run(ctx context.Context, stdout *os.File, _ []string) error {
 // All dependencies arrive pre-built — main() owns wiring, this owns
 // route registration. Tests construct identityApp with fakes + pass
 // it directly.
-func newServer(log *slog.Logger, identityApp app.Application) http.Handler {
+//
+// verifier gates authenticated routes (currently change-password). Pass
+// nil to skip wiring those routes — useful for the unit test that only
+// asserts probe-route absence on the public mux.
+func newServer(log *slog.Logger, identityApp app.Application, verifier authn.Verifier) http.Handler {
 	mux := http.NewServeMux()
-	ports.AddRoutes(mux, log, identityApp)
+	ports.AddRoutes(mux, log, identityApp, verifier)
 	return mux
 }
 
@@ -292,7 +302,11 @@ func newServer(log *slog.Logger, identityApp app.Application) http.Handler {
 // config + clock. Extracted from run() so tests construct an
 // Application backed by a testcontainers pool without going through
 // the env-var config path.
-func buildIdentityApp(pool *pgxpool.Pool, cfg config.AppConfig, now func() time.Time) (app.Application, error) {
+//
+// Returns the issuer alongside the Application so the caller can pass
+// it to [newServer] as the [authn.Verifier]; the issuer's Verify method
+// is what gates authenticated routes (change-password and onward).
+func buildIdentityApp(pool *pgxpool.Pool, cfg config.AppConfig, now func() time.Time) (app.Application, *jwt.Issuer, error) {
 	tx := pg.NewTransactor(pool)
 	tenants := adapters.NewTenantRepository(pool, tx)
 	persons := adapters.NewPersonRepository(pool, tx)
@@ -300,6 +314,7 @@ func buildIdentityApp(pool *pgxpool.Pool, cfg config.AppConfig, now func() time.
 	families := adapters.NewRefreshTokenFamilyRepository(pool, tx)
 	roles := adapters.NewRoleRepository(pool, tx)
 	onboarding := service.NewTenantOnboardingService(tx, tenants, persons, memberships, roles)
+	userOnboarding := service.NewUserOnboardingService(tx, persons, memberships)
 	permResolver := permissions.NewResolver(memberships, roles)
 
 	previous := make([]jwt.SigningKey, len(cfg.JWT.PreviousKeys))
@@ -311,20 +326,103 @@ func buildIdentityApp(pool *pgxpool.Pool, cfg config.AppConfig, now func() time.
 		Secret: []byte(cfg.JWT.SigningKey),
 	}, previous, now)
 	if err != nil {
-		return app.Application{}, fmt.Errorf("jwt issuer: %w", err)
+		return app.Application{}, nil, fmt.Errorf("jwt issuer: %w", err)
 	}
 
 	dummyHash, err := argon2.Hash("dummy-for-timing-flatten")
 	if err != nil {
-		return app.Application{}, fmt.Errorf("dummy hash: %w", err)
+		return app.Application{}, nil, fmt.Errorf("dummy hash: %w", err)
 	}
+
+	// Breach checker: offline list seeded with HIBP top-N weakest
+	// passwords. Production swap to k-anonymity API per
+	// `security.md` "Password breach check" is a one-line
+	// constructor change — all consumers depend on the
+	// [breach.Checker] interface, not the concrete impl.
+	breachChecker := breach.NewOfflineList()
+
+	// Email gateway. v0.2 wires the in-memory Recorder so the
+	// password-reset / email-change flows persist their pending
+	// state and emit the integration event but skip the actual
+	// SMTP/SES/Msg91 round-trip. Local dev + integration tests use
+	// the recorded messages to assert wire-shape. v0.3 swaps in a
+	// real provider via the [email.Gateway] interface — composition
+	// root change only.
+	emailGateway := platformemail.NewRecorder(now)
+	noReplyAddress, err := commonemail.New("no-reply@leadkart.local")
+	if err != nil {
+		return app.Application{}, nil, fmt.Errorf("no-reply email address: %w", err)
+	}
+
+	// Impersonation session store. v0.2 ships in-memory (single-
+	// process / integration-test fit); production multi-replica
+	// drops in a Redis-backed implementation behind the same
+	// [impersonation.Store] interface — composition root change only.
+	impersonationStore := impersonation.NewInMemoryStore(now)
 
 	return app.Application{
 		Commands: app.Commands{
-			RegisterTenant: command.NewRegisterTenantHandler(onboarding),
-			Login:          command.NewLoginHandler(persons, memberships, families, tenants, permResolver, issuer, now, cfg.Refresh.AbsoluteTTL, dummyHash),
-			Refresh:        command.NewRefreshHandler(families, persons, memberships, tenants, permResolver, issuer, now, cfg.Refresh.AbsoluteTTL),
-			Logout:         command.NewLogoutHandler(families),
+			RegisterTenant:       command.NewRegisterTenantHandler(onboarding),
+			Login:                command.NewLoginHandler(persons, memberships, families, tenants, permResolver, issuer, now, cfg.Refresh.AbsoluteTTL, dummyHash),
+			Refresh:              command.NewRefreshHandler(families, persons, memberships, tenants, permResolver, issuer, now, cfg.Refresh.AbsoluteTTL),
+			Logout:               command.NewLogoutHandler(families),
+			ChangePassword:       command.NewChangePasswordHandler(persons, breachChecker),
+			RevokeSession:        command.NewRevokeSessionHandler(families),
+			RevokeAllSessions:    command.NewRevokeAllSessionsHandler(families),
+			RequestPasswordReset: command.NewRequestPasswordResetHandler(persons, emailGateway, noReplyAddress),
+			ConfirmPasswordReset: command.NewConfirmPasswordResetHandler(persons, breachChecker),
+			RequestEmailChange:   command.NewRequestEmailChangeHandler(persons, emailGateway, noReplyAddress),
+			ConfirmEmailChange:   command.NewConfirmEmailChangeHandler(persons),
+
+			UpdateTenantProfile:            command.NewUpdateTenantProfileHandler(tenants),
+			UpdateTenantStatutory:          command.NewUpdateTenantStatutoryHandler(tenants),
+			UpdateTenantAdminContact:       command.NewUpdateTenantAdminContactHandler(tenants),
+			UpdateTenantSettings:           command.NewUpdateTenantSettingsHandler(tenants),
+			UpdateTenantDisplayPreferences: command.NewUpdateTenantDisplayPreferencesHandler(tenants),
+			SuspendTenant:                  command.NewSuspendTenantHandler(tenants),
+			ActivateTenant:                 command.NewActivateTenantHandler(tenants),
+			MarkTenantForDeletion:          command.NewMarkTenantForDeletionHandler(tenants),
+			RestoreTenant:                  command.NewRestoreTenantHandler(tenants),
+
+			UpdateUserProfile:              command.NewUpdateUserProfileHandler(memberships),
+			DeactivateUser:                 command.NewDeactivateUserHandler(memberships),
+			ReactivateUser:                 command.NewReactivateUserHandler(memberships),
+			AssignUserRole:                 command.NewAssignUserRoleHandler(memberships),
+			RevokeUserRole:                 command.NewRevokeUserRoleHandler(memberships),
+			ReplaceUserPermissionOverrides: command.NewReplaceUserPermissionOverridesHandler(memberships),
+			AssignUserManager:              command.NewAssignUserManagerHandler(memberships),
+			RemoveUserManager:              command.NewRemoveUserManagerHandler(memberships),
+			CreateUser:                     command.NewCreateUserHandler(userOnboarding),
+			AnonymiseUser:                  command.NewAnonymiseUserHandler(memberships, persons),
+
+			CreateRole:             command.NewCreateRoleHandler(roles),
+			UpdateRole:             command.NewUpdateRoleHandler(roles),
+			DeleteRole:             command.NewDeleteRoleHandler(roles),
+			ReplaceRolePermissions: command.NewReplaceRolePermissionsHandler(roles),
+			GrantRolePermission:    command.NewGrantRolePermissionHandler(roles),
+			RevokeRolePermission:   command.NewRevokeRolePermissionHandler(roles),
+
+			GlobalSuspendPerson:        command.NewGlobalSuspendPersonHandler(persons),
+			LiftPersonGlobalSuspension: command.NewLiftPersonGlobalSuspensionHandler(persons),
+			AnonymisePerson:            command.NewAnonymisePersonHandler(persons),
+			UpdatePersonProfile:        command.NewUpdatePersonProfileHandler(persons),
+			HardDeleteTenant:           command.NewHardDeleteTenantHandler(tenants),
+
+			CreateImpersonationSession: command.NewCreateImpersonationSessionHandler(impersonationStore, now),
+			EndImpersonationSession:    command.NewEndImpersonationSessionHandler(impersonationStore),
 		},
-	}, nil
+		Queries: app.Queries{
+			ListSessions:              query.NewListSessionsHandler(families),
+			GetTenant:                 query.NewGetTenantHandler(tenants),
+			GetUser:                   query.NewGetUserHandler(memberships, persons),
+			ListUsers:                 query.NewListUsersHandler(memberships, persons),
+			GetRole:                   query.NewGetRoleHandler(roles),
+			ListRoles:                 query.NewListRolesHandler(roles),
+			GetPerson:                 query.NewGetPersonHandler(persons),
+			ListPersonMemberships:     query.NewListPersonMembershipsHandler(memberships, persons),
+			ListAllTenants:            query.NewListAllTenantsHandler(tenants),
+			ListImpersonationSessions: query.NewListImpersonationSessionsHandler(impersonationStore),
+			PlatformStats:             query.NewPlatformStatsHandler(pool, tx),
+		},
+	}, issuer, nil
 }

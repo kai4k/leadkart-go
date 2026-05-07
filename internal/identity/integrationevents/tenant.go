@@ -51,6 +51,29 @@ func (TenantActivatedV1) Topic() string { return "identity.tenant_activated.v1" 
 // OccurredAt returns the domain timestamp.
 func (e TenantActivatedV1) OccurredAt() time.Time { return e.OccurredAtUTC }
 
+// TenantProfileUpdatedV1 — tenant changed its display fields
+// (LegalName + DisplayName). Consumed by Notifications + any
+// integration cache that materialises tenant display strings.
+//
+// Other tenant attributes (admin email, statutory IDs, settings) ride
+// dedicated events per the .NET parent's vocabulary split.
+type TenantProfileUpdatedV1 struct {
+	platformMarker
+
+	TenantID       uuid.UUID `json:"tenant_id"`
+	OldLegalName   string    `json:"old_legal_name"`
+	OldDisplayName string    `json:"old_display_name"`
+	NewLegalName   string    `json:"new_legal_name"`
+	NewDisplayName string    `json:"new_display_name"`
+	OccurredAtUTC  time.Time `json:"occurred_at_utc"`
+}
+
+// Topic returns the canonical wire alias.
+func (TenantProfileUpdatedV1) Topic() string { return "identity.tenant_profile_updated.v1" }
+
+// OccurredAt returns the domain timestamp.
+func (e TenantProfileUpdatedV1) OccurredAt() time.Time { return e.OccurredAtUTC }
+
 // TenantSuspendedV1 — operator suspended a tenant (payment overdue,
 // admin action). Consumed by every module that should block ops:
 // CRM stops lead assignments, Orders rejects new orders, etc.
@@ -68,15 +91,200 @@ func (TenantSuspendedV1) Topic() string { return "identity.tenant_suspended.v1" 
 // OccurredAt returns the domain timestamp.
 func (e TenantSuspendedV1) OccurredAt() time.Time { return e.OccurredAtUTC }
 
+// TenantStatutoryUpdatedV1 — tenant changed its declared Indian
+// statutory IDs (GST/PAN/DrugLicence). Subscribers (audit, search-
+// index reindex, compliance reporting) consume the OLD/NEW pair to
+// render diffs.
+//
+// Empty-string fields mean "not declared" — first-time declaration
+// has empty old_*; full clear has empty new_*.
+type TenantStatutoryUpdatedV1 struct {
+	platformMarker
+
+	TenantID         uuid.UUID `json:"tenant_id"`
+	OldGST           string    `json:"old_gst"`
+	OldPAN           string    `json:"old_pan"`
+	OldDrugLicence   string    `json:"old_drug_licence"`
+	NewGST           string    `json:"new_gst"`
+	NewPAN           string    `json:"new_pan"`
+	NewDrugLicence   string    `json:"new_drug_licence"`
+	OccurredAtUTC    time.Time `json:"occurred_at_utc"`
+}
+
+// Topic returns the canonical wire alias.
+func (TenantStatutoryUpdatedV1) Topic() string { return "identity.tenant_statutory_updated.v1" }
+
+// OccurredAt returns the domain timestamp.
+func (e TenantStatutoryUpdatedV1) OccurredAt() time.Time { return e.OccurredAtUTC }
+
+// TenantAdminContactUpdatedV1 — tenant changed its admin phone or
+// postal address. Fields flatten the AdminContact composite to wire-
+// stable primitives. Empty-string fields = "not declared" (first-time
+// declaration: empty old_*; full clear: empty new_*).
+type TenantAdminContactUpdatedV1 struct {
+	platformMarker
+
+	TenantID         uuid.UUID `json:"tenant_id"`
+	OldPhone         string    `json:"old_phone"`
+	OldStreet        string    `json:"old_street"`
+	OldCity          string    `json:"old_city"`
+	OldDistrict      string    `json:"old_district"`
+	OldState         string    `json:"old_state"`
+	OldStateCode     string    `json:"old_state_code"`
+	OldPincode       string    `json:"old_pincode"`
+	NewPhone         string    `json:"new_phone"`
+	NewStreet        string    `json:"new_street"`
+	NewCity          string    `json:"new_city"`
+	NewDistrict      string    `json:"new_district"`
+	NewState         string    `json:"new_state"`
+	NewStateCode     string    `json:"new_state_code"`
+	NewPincode       string    `json:"new_pincode"`
+	OccurredAtUTC    time.Time `json:"occurred_at_utc"`
+}
+
+// Topic returns the canonical wire alias.
+func (TenantAdminContactUpdatedV1) Topic() string { return "identity.tenant_admin_contact_updated.v1" }
+
+// OccurredAt returns the domain timestamp.
+func (e TenantAdminContactUpdatedV1) OccurredAt() time.Time { return e.OccurredAtUTC }
+
+// TenantSettingsUpdatedV1 — tenant changed its operational settings
+// (password policy today; expanding over time). Auth + login-flow
+// caches MUST consume this to invalidate cached policy.
+//
+// Flattens PasswordPolicy + future settings to wire-stable primitives.
+// Zero values mean "uninitialised" — first-declaration has all old_*
+// fields zero (min_length=0).
+type TenantSettingsUpdatedV1 struct {
+	platformMarker
+
+	TenantID                uuid.UUID `json:"tenant_id"`
+	OldMinLength            int       `json:"old_min_length"`
+	OldRequireUppercase     bool      `json:"old_require_uppercase"`
+	OldRequireLowercase     bool      `json:"old_require_lowercase"`
+	OldRequireDigit         bool      `json:"old_require_digit"`
+	OldRequireSymbol        bool      `json:"old_require_symbol"`
+	OldMaxFailedAttempts    int       `json:"old_max_failed_attempts"`
+	OldLockoutMinutes       int       `json:"old_lockout_minutes"`
+	NewMinLength            int       `json:"new_min_length"`
+	NewRequireUppercase     bool      `json:"new_require_uppercase"`
+	NewRequireLowercase     bool      `json:"new_require_lowercase"`
+	NewRequireDigit         bool      `json:"new_require_digit"`
+	NewRequireSymbol        bool      `json:"new_require_symbol"`
+	NewMaxFailedAttempts    int       `json:"new_max_failed_attempts"`
+	NewLockoutMinutes       int       `json:"new_lockout_minutes"`
+	OccurredAtUTC           time.Time `json:"occurred_at_utc"`
+}
+
+// Topic returns the canonical wire alias.
+func (TenantSettingsUpdatedV1) Topic() string { return "identity.tenant_settings_updated.v1" }
+
+// OccurredAt returns the domain timestamp.
+func (e TenantSettingsUpdatedV1) OccurredAt() time.Time { return e.OccurredAtUTC }
+
+// TenantDisplayPreferencesUpdatedV1 — tenant changed UI rendering
+// preferences. Subscribers (web BFF preference cache, notification
+// renderers) consume to invalidate cached preferences.
+type TenantDisplayPreferencesUpdatedV1 struct {
+	platformMarker
+
+	TenantID       uuid.UUID `json:"tenant_id"`
+	OldLocale      string    `json:"old_locale"`
+	OldTimeZone    string    `json:"old_time_zone"`
+	OldDateFormat  string    `json:"old_date_format"`
+	OldCurrency    string    `json:"old_currency"`
+	NewLocale      string    `json:"new_locale"`
+	NewTimeZone    string    `json:"new_time_zone"`
+	NewDateFormat  string    `json:"new_date_format"`
+	NewCurrency    string    `json:"new_currency"`
+	OccurredAtUTC  time.Time `json:"occurred_at_utc"`
+}
+
+// Topic returns the canonical wire alias.
+func (TenantDisplayPreferencesUpdatedV1) Topic() string {
+	return "identity.tenant_display_preferences_updated.v1"
+}
+
+// OccurredAt returns the domain timestamp.
+func (e TenantDisplayPreferencesUpdatedV1) OccurredAt() time.Time { return e.OccurredAtUTC }
+
+// TenantMarkedForDeletionV1 — operator entered the 30-day grace window
+// per `data-retention.md` "Tenant deletion saga". Subscribers MAY
+// block tenant ops immediately or wait for terminal TenantDeletedV1.
+type TenantMarkedForDeletionV1 struct {
+	platformMarker
+
+	TenantID         uuid.UUID `json:"tenant_id"`
+	Reason           string    `json:"reason"`
+	ScheduledAtUTC   time.Time `json:"scheduled_at_utc"`
+	OccurredAtUTC    time.Time `json:"occurred_at_utc"`
+}
+
+// Topic returns the canonical wire alias.
+func (TenantMarkedForDeletionV1) Topic() string { return "identity.tenant_marked_for_deletion.v1" }
+
+// OccurredAt returns the domain timestamp.
+func (e TenantMarkedForDeletionV1) OccurredAt() time.Time { return e.OccurredAtUTC }
+
+// TenantRestoredV1 — pending deletion cancelled within the grace
+// window. Subscribers that blocked ops on TenantMarkedForDeletionV1
+// re-enable.
+type TenantRestoredV1 struct {
+	platformMarker
+
+	TenantID      uuid.UUID `json:"tenant_id"`
+	OccurredAtUTC time.Time `json:"occurred_at_utc"`
+}
+
+// Topic returns the canonical wire alias.
+func (TenantRestoredV1) Topic() string { return "identity.tenant_restored.v1" }
+
+// OccurredAt returns the domain timestamp.
+func (e TenantRestoredV1) OccurredAt() time.Time { return e.OccurredAtUTC }
+
+// TenantDeletedV1 — terminal hard-delete event. Subscribers SHOULD
+// anonymise remaining PII per their module's classification (CRM
+// lead notes, Tasks comments). Audit log retained 7 years per SOC2
+// CC4.1 / DPDP §12; tenant row retained for FK integrity.
+type TenantDeletedV1 struct {
+	platformMarker
+
+	TenantID      uuid.UUID `json:"tenant_id"`
+	Reason        string    `json:"reason"`
+	OccurredAtUTC time.Time `json:"occurred_at_utc"`
+}
+
+// Topic returns the canonical wire alias.
+func (TenantDeletedV1) Topic() string { return "identity.tenant_deleted.v1" }
+
+// OccurredAt returns the domain timestamp.
+func (e TenantDeletedV1) OccurredAt() time.Time { return e.OccurredAtUTC }
+
 // Compile-time assertions: each Tenant-aggregate event is Platform +
 // Event. Build fails if a future field-rename or method drop breaks
 // the contract.
 var (
 	_ Platform = TenantRegisteredV1{}
 	_ Platform = TenantActivatedV1{}
+	_ Platform = TenantProfileUpdatedV1{}
+	_ Platform = TenantStatutoryUpdatedV1{}
+	_ Platform = TenantAdminContactUpdatedV1{}
+	_ Platform = TenantSettingsUpdatedV1{}
+	_ Platform = TenantDisplayPreferencesUpdatedV1{}
 	_ Platform = TenantSuspendedV1{}
+	_ Platform = TenantMarkedForDeletionV1{}
+	_ Platform = TenantRestoredV1{}
+	_ Platform = TenantDeletedV1{}
 
 	_ = register(TenantRegisteredV1{})
 	_ = register(TenantActivatedV1{})
+	_ = register(TenantProfileUpdatedV1{})
+	_ = register(TenantStatutoryUpdatedV1{})
+	_ = register(TenantAdminContactUpdatedV1{})
+	_ = register(TenantSettingsUpdatedV1{})
+	_ = register(TenantDisplayPreferencesUpdatedV1{})
 	_ = register(TenantSuspendedV1{})
+	_ = register(TenantMarkedForDeletionV1{})
+	_ = register(TenantRestoredV1{})
+	_ = register(TenantDeletedV1{})
 )

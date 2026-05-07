@@ -43,17 +43,22 @@ const nameMaxLen = 100
 
 // Person is the aggregate root.
 type Person struct {
-	id            ID
-	email         email.Address
-	firstName     string
-	lastName      string
-	passwordHash  PasswordHash
-	securityStamp SecurityStamp
-	isActive      bool
-	isAnonymised  bool
-	createdAt     time.Time
-	anonymisedAt  time.Time
-	events        []Event
+	id                     ID
+	email                  email.Address
+	firstName              string
+	lastName               string
+	passwordHash           PasswordHash
+	securityStamp          SecurityStamp
+	isActive               bool
+	isAnonymised           bool
+	isGloballySuspended    bool                 // rare global ban — compliance / fraud / cross-tenant abuse
+	globalSuspensionReason string               // populated when isGloballySuspended; cleared on Lift
+	globallySuspendedAt    time.Time            // zero unless suspended; reset on Lift
+	pendingPasswordReset   PendingPasswordReset // zero unless reset requested + pending
+	pendingEmailChange     PendingEmailChange   // zero unless email change requested + pending
+	createdAt              time.Time
+	anonymisedAt           time.Time
+	events                 []Event
 }
 
 // New constructs a brand-new Person. Returns [ErrInvalid] (wrapped) on
@@ -106,33 +111,58 @@ func New(id ID, e email.Address, firstName, lastName string, passwordHash Passwo
 
 // Snapshot is the persistence-layer DTO consumed by [UnmarshalFromDB].
 type Snapshot struct {
-	ID            ID
-	Email         email.Address
-	FirstName     string
-	LastName      string
-	PasswordHash  PasswordHash
-	SecurityStamp SecurityStamp
-	IsActive      bool
-	IsAnonymised  bool
-	CreatedAt     time.Time
-	AnonymisedAt  time.Time
+	ID                          ID
+	Email                       email.Address
+	FirstName                   string
+	LastName                    string
+	PasswordHash                PasswordHash
+	SecurityStamp               SecurityStamp
+	IsActive                    bool
+	IsAnonymised                bool
+	IsGloballySuspended         bool
+	GlobalSuspensionReason      string
+	GloballySuspendedAt         time.Time
+	PasswordResetTokenHash      PasswordResetTokenHash
+	PasswordResetExpiresAt      time.Time
+	PendingEmailChangeNewEmail  email.Address
+	PendingEmailChangeHash      EmailChangeTokenHash
+	PendingEmailChangeExpiresAt time.Time
+	CreatedAt                   time.Time
+	AnonymisedAt                time.Time
 }
 
 // UnmarshalFromDB re-hydrates a Person from persistence. Used ONLY by
 // the repository on read paths — does NOT re-validate (TDL canon).
 func UnmarshalFromDB(s Snapshot) *Person {
-	return &Person{
-		id:            s.ID,
-		email:         s.Email,
-		firstName:     s.FirstName,
-		lastName:      s.LastName,
-		passwordHash:  s.PasswordHash,
-		securityStamp: s.SecurityStamp,
-		isActive:      s.IsActive,
-		isAnonymised:  s.IsAnonymised,
-		createdAt:     s.CreatedAt,
-		anonymisedAt:  s.AnonymisedAt,
+	p := &Person{
+		id:                     s.ID,
+		email:                  s.Email,
+		firstName:              s.FirstName,
+		lastName:               s.LastName,
+		passwordHash:           s.PasswordHash,
+		securityStamp:          s.SecurityStamp,
+		isActive:               s.IsActive,
+		isAnonymised:           s.IsAnonymised,
+		isGloballySuspended:    s.IsGloballySuspended,
+		globalSuspensionReason: s.GlobalSuspensionReason,
+		globallySuspendedAt:    s.GloballySuspendedAt,
+		createdAt:              s.CreatedAt,
+		anonymisedAt:           s.AnonymisedAt,
 	}
+	if !s.PasswordResetTokenHash.IsZero() {
+		p.pendingPasswordReset = PendingPasswordReset{
+			hash:      s.PasswordResetTokenHash,
+			expiresAt: s.PasswordResetExpiresAt,
+		}
+	}
+	if !s.PendingEmailChangeHash.IsZero() {
+		p.pendingEmailChange = PendingEmailChange{
+			newEmail:  s.PendingEmailChangeNewEmail,
+			hash:      s.PendingEmailChangeHash,
+			expiresAt: s.PendingEmailChangeExpiresAt,
+		}
+	}
+	return p
 }
 
 // ----- Getters --------------------------------------------------------------
@@ -170,6 +200,28 @@ func (p *Person) CreatedAt() time.Time { return p.createdAt }
 // AnonymisedAt returns the anonymisation timestamp; zero if not anonymised.
 func (p *Person) AnonymisedAt() time.Time { return p.anonymisedAt }
 
+// IsGloballySuspended reports whether the Person is globally banned
+// (rare — compliance, fraud, cross-tenant abuse). Distinct from
+// [Person.IsActive] (deactivation) and Membership.Status (per-tenant).
+func (p *Person) IsGloballySuspended() bool { return p.isGloballySuspended }
+
+// GlobalSuspensionReason returns the audit reason supplied when
+// GloballySuspend was called. Empty if not globally suspended.
+func (p *Person) GlobalSuspensionReason() string { return p.globalSuspensionReason }
+
+// GloballySuspendedAt returns the timestamp of the most recent global
+// suspension. Zero if not currently suspended.
+func (p *Person) GloballySuspendedAt() time.Time { return p.globallySuspendedAt }
+
+// PendingPasswordReset returns the per-Person reset sub-state. Zero
+// value means no reset is pending. Repository adapter reads
+// `.Hash().IsZero()` to decide whether to write the reset columns.
+func (p *Person) PendingPasswordReset() PendingPasswordReset { return p.pendingPasswordReset }
+
+// PendingEmailChange returns the per-Person email-change sub-state.
+// Zero value means no change is pending.
+func (p *Person) PendingEmailChange() PendingEmailChange { return p.pendingEmailChange }
+
 // ----- State transitions ----------------------------------------------------
 
 // ChangePassword updates the password hash AND rotates the SecurityStamp.
@@ -188,6 +240,410 @@ func (p *Person) ChangePassword(newHash PasswordHash) error {
 	p.recordEvent(PasswordChangedEvent{
 		PersonID: p.id,
 		At:       now,
+	})
+	return nil
+}
+
+// UpdateProfile changes the Person's display name (FirstName + LastName).
+//
+// Validation mirrors [New]: both fields required, trimmed-non-empty, capped
+// at nameMaxLen. Refused on anonymised Persons (DPDP Art. 17 cascade
+// already replaced the names with "anonymised"; re-personalising would
+// undo the erasure). No-op when both fields equal current values
+// (idempotent — second call with same values emits no event).
+//
+// Emits [ProfileUpdatedEvent] with OLD + NEW values for audit /
+// integration-event subscribers.
+//
+// Does NOT rotate SecurityStamp — profile changes are not a security
+// boundary per `security.md` "SecurityStamp rotation triggers" (only
+// password / role / permission / email / logout-all rotate).
+func (p *Person) UpdateProfile(firstName, lastName string) error {
+	if p.isAnonymised {
+		return fmt.Errorf("%w: cannot update profile of anonymised person", ErrInvalid)
+	}
+	if strings.TrimSpace(firstName) == "" {
+		return fmt.Errorf("%w: first name required", ErrInvalid)
+	}
+	if strings.TrimSpace(lastName) == "" {
+		return fmt.Errorf("%w: last name required", ErrInvalid)
+	}
+	if len(firstName) > nameMaxLen {
+		return fmt.Errorf("%w: first name too long (max %d)", ErrInvalid, nameMaxLen)
+	}
+	if len(lastName) > nameMaxLen {
+		return fmt.Errorf("%w: last name too long (max %d)", ErrInvalid, nameMaxLen)
+	}
+	if firstName == p.firstName && lastName == p.lastName {
+		return nil
+	}
+	old := struct{ first, last string }{p.firstName, p.lastName}
+	p.firstName = firstName
+	p.lastName = lastName
+	p.recordEvent(ProfileUpdatedEvent{
+		PersonID:     p.id,
+		OldFirstName: old.first,
+		OldLastName:  old.last,
+		NewFirstName: firstName,
+		NewLastName:  lastName,
+		At:           clock.Now(),
+	})
+	return nil
+}
+
+// RequestPasswordReset opens a one-shot password-reset window. The
+// caller has already minted a high-entropy raw token, hashed it via
+// SHA-256, and supplies the hash + an absolute TTL.
+//
+// Per Auth0 / Okta / Microsoft Entra ID canon: at-most-one pending
+// reset — the most recent request supersedes any prior. The previous
+// emailed token is silently invalidated. This avoids ambiguity when a
+// user clicks "forgot password" twice; without this rule both old +
+// new tokens would validate, expanding the attack window.
+//
+// ttl MUST be positive; spec is caller's choice but security.md
+// recommends 1h for high-traffic SaaS, up to 24h for low-traffic B2B.
+//
+// Rejected on:
+//   - Anonymised Person (cannot reset; the credential is gone)
+//   - Globally-suspended Person (no path back via self-service reset
+//     during suspension; admin must lift first)
+//
+// Allowed on inactive Persons (admin may need to reset before
+// reactivation per Identity workflow).
+//
+// Does NOT rotate SecurityStamp — the reset hasn't happened yet,
+// only the request. SecurityStamp rotates inside ConfirmPasswordReset.
+//
+// Emits [PasswordResetRequestedEvent] without the raw token. The
+// application command handler is responsible for publishing the
+// integration event with the raw token + tenant context for email
+// delivery (per messaging.md "Cascading messages > IMessageBus
+// injection").
+func (p *Person) RequestPasswordReset(tokenHash PasswordResetTokenHash, ttl time.Duration) error {
+	if tokenHash.IsZero() {
+		return fmt.Errorf("%w: reset token hash required", ErrInvalid)
+	}
+	if ttl <= 0 {
+		return fmt.Errorf("%w: reset ttl must be positive (got %v)", ErrInvalid, ttl)
+	}
+	if p.isAnonymised {
+		return fmt.Errorf("%w: cannot reset password for anonymised person", ErrInvalid)
+	}
+	if p.isGloballySuspended {
+		return fmt.Errorf("%w: cannot reset password while globally suspended", ErrInvalid)
+	}
+	now := clock.Now()
+	expiresAt := now.Add(ttl)
+	p.pendingPasswordReset = PendingPasswordReset{
+		hash:      tokenHash,
+		expiresAt: expiresAt,
+	}
+	p.recordEvent(PasswordResetRequestedEvent{
+		PersonID:  p.id,
+		ExpiresAt: expiresAt,
+		At:        now,
+	})
+	return nil
+}
+
+// ConfirmPasswordReset applies a new password by presenting a valid
+// reset token. Caller hashes the user-presented raw token (SHA-256)
+// and supplies the hash; aggregate constant-time-compares against
+// the stored hash.
+//
+// Effects on success:
+//   - passwordHash set to newHash.
+//   - SecurityStamp rotated (kills outstanding JWTs).
+//   - pendingPasswordReset cleared (one-shot — token consumed).
+//   - Both PasswordResetConfirmedEvent + PasswordChangedEvent emitted
+//     (the narrower Confirmed event lets compliance subscribers
+//     distinguish reset-flow from any-other password-change flow;
+//     the broader Changed event is the load-bearing security signal
+//     downstream auth subscribers consume to revoke families).
+//
+// Rejected on:
+//   - No pending reset — caller has nothing to confirm.
+//   - Token hash mismatch — defeats brute-force; same error shape
+//     as expired so attackers can't distinguish "wrong token" from
+//     "expired token" via timing.
+//   - Expired (now > expiresAt at call site).
+//   - Anonymised / globally-suspended Person — same as Request gates.
+//   - Zero newHash.
+//
+// Idempotency: NOT idempotent. Each successful call rotates the
+// SecurityStamp + emits events. The pending reset is single-use.
+func (p *Person) ConfirmPasswordReset(presentedHash PasswordResetTokenHash, newHash PasswordHash) error {
+	if newHash.IsZero() {
+		return fmt.Errorf("%w: new password hash required", ErrInvalid)
+	}
+	if presentedHash.IsZero() {
+		return fmt.Errorf("%w: presented reset token hash required", ErrInvalid)
+	}
+	if p.isAnonymised {
+		return fmt.Errorf("%w: cannot reset password for anonymised person", ErrInvalid)
+	}
+	if p.isGloballySuspended {
+		return fmt.Errorf("%w: cannot reset password while globally suspended", ErrInvalid)
+	}
+	if p.pendingPasswordReset.IsZero() {
+		return fmt.Errorf("%w: no pending password reset", ErrInvalid)
+	}
+	now := clock.Now()
+	if !now.Before(p.pendingPasswordReset.expiresAt) {
+		// Clear the expired token defensively so subsequent calls don't
+		// bother comparing — same resulting state, no event emitted.
+		p.pendingPasswordReset = PendingPasswordReset{}
+		return fmt.Errorf("%w: reset token expired", ErrInvalid)
+	}
+	if !p.pendingPasswordReset.hash.Equal(presentedHash) {
+		return fmt.Errorf("%w: reset token mismatch", ErrInvalid)
+	}
+	// Success — apply, rotate, clear, emit.
+	p.passwordHash = newHash
+	p.securityStamp = NewSecurityStamp()
+	p.pendingPasswordReset = PendingPasswordReset{}
+	p.recordEvent(PasswordResetConfirmedEvent{
+		PersonID: p.id,
+		At:       now,
+	})
+	p.recordEvent(PasswordChangedEvent{
+		PersonID: p.id,
+		At:       now,
+	})
+	return nil
+}
+
+// CancelPasswordReset invalidates a pending reset without applying a
+// new password. Reasons (string supplied by caller, audit-required):
+//   - operator action (admin cleared a stuck reset)
+//   - security-incident response (token leaked, kill the window)
+//   - implicit cancel via direct password change (the change-password
+//     flow calls this before its own update to prevent the pending
+//     emailed token from being usable post-change)
+//
+// Idempotent — no-op when no reset is pending.
+//
+// Does NOT rotate SecurityStamp — the cancel is purely state cleanup;
+// no credential changed. (If the caller is canceling because the
+// account is compromised, they should call ChangePassword which DOES
+// rotate.)
+func (p *Person) CancelPasswordReset(reason string) error {
+	if p.pendingPasswordReset.IsZero() {
+		return nil
+	}
+	if strings.TrimSpace(reason) == "" {
+		return fmt.Errorf("%w: cancel reason required for audit", ErrInvalid)
+	}
+	p.pendingPasswordReset = PendingPasswordReset{}
+	p.recordEvent(PasswordResetCancelledEvent{
+		PersonID: p.id,
+		Reason:   reason,
+		At:       clock.Now(),
+	})
+	return nil
+}
+
+// RequestEmailChange opens an email-change confirmation window. The
+// caller has already minted a high-entropy raw token, hashed it via
+// SHA-256, and supplies the proposed new email + hash + TTL.
+//
+// At-most-one-pending invariant per Person — a fresh request
+// supersedes any prior pending change. Industry canon (Auth0, Stripe,
+// Microsoft Entra ID): most-recent wins, prior emailed token silently
+// invalidated.
+//
+// Validation:
+//   - newEmail MUST be non-zero and DIFFERENT from current email
+//     (no-op rejected — prevents accidental "change to same address"
+//     from emitting a spurious confirmation request)
+//   - tokenHash non-zero
+//   - ttl positive
+//
+// Rejected on:
+//   - Anonymised Person (terminal — email is the FK; cannot rebind)
+//   - Globally-suspended Person (no path forward without operator lift)
+//
+// Does NOT rotate SecurityStamp — change hasn't applied yet, only
+// the request. SecurityStamp rotates inside ConfirmEmailChange.
+//
+// CALLER INVARIANT: the application service MUST verify the proposed
+// new email is not already taken globally before calling this method
+// (per multi-tenancy.md "Email is globally unique system-wide" partial
+// unique index). Domain trusts the boundary check; the Repository
+// will fail the persist if a race materialises a duplicate.
+//
+// Emits [EmailChangeRequestedEvent] without the raw token.
+func (p *Person) RequestEmailChange(newEmail email.Address, tokenHash EmailChangeTokenHash, ttl time.Duration) error {
+	if newEmail.IsZero() {
+		return fmt.Errorf("%w: new email required", ErrInvalid)
+	}
+	if newEmail.String() == p.email.String() {
+		return fmt.Errorf("%w: new email same as current", ErrInvalid)
+	}
+	if tokenHash.IsZero() {
+		return fmt.Errorf("%w: email change token hash required", ErrInvalid)
+	}
+	if ttl <= 0 {
+		return fmt.Errorf("%w: email change ttl must be positive (got %v)", ErrInvalid, ttl)
+	}
+	if p.isAnonymised {
+		return fmt.Errorf("%w: cannot change email of anonymised person", ErrInvalid)
+	}
+	if p.isGloballySuspended {
+		return fmt.Errorf("%w: cannot change email while globally suspended", ErrInvalid)
+	}
+	now := clock.Now()
+	expiresAt := now.Add(ttl)
+	p.pendingEmailChange = PendingEmailChange{
+		newEmail:  newEmail,
+		hash:      tokenHash,
+		expiresAt: expiresAt,
+	}
+	p.recordEvent(EmailChangeRequestedEvent{
+		PersonID:  p.id,
+		NewEmail:  newEmail,
+		ExpiresAt: expiresAt,
+		At:        now,
+	})
+	return nil
+}
+
+// ConfirmEmailChange applies the pending new email by presenting a
+// valid confirmation token. Caller hashes the user-presented raw
+// token (SHA-256) and supplies the hash; aggregate constant-time-
+// compares against the stored hash.
+//
+// Effects on success:
+//   - email rotated to the pending new email.
+//   - SecurityStamp rotated (kills outstanding JWTs — `sub` rebound).
+//   - pendingEmailChange cleared (single-use).
+//   - EmailChangedEvent emitted with OLD + NEW for audit.
+//
+// Rejected on:
+//   - No pending change.
+//   - Token hash mismatch (defensive: pending preserved for retry
+//     within the window — same shape as ConfirmPasswordReset).
+//   - Expired (defensive cleanup: pending cleared so subsequent calls
+//     see "no pending" rather than re-rejecting on expiry).
+//   - Anonymised / globally-suspended.
+//
+// NOT idempotent — single-use token; second call returns "no pending".
+func (p *Person) ConfirmEmailChange(presentedHash EmailChangeTokenHash) error {
+	if presentedHash.IsZero() {
+		return fmt.Errorf("%w: presented email change token hash required", ErrInvalid)
+	}
+	if p.isAnonymised {
+		return fmt.Errorf("%w: cannot change email of anonymised person", ErrInvalid)
+	}
+	if p.isGloballySuspended {
+		return fmt.Errorf("%w: cannot change email while globally suspended", ErrInvalid)
+	}
+	if p.pendingEmailChange.IsZero() {
+		return fmt.Errorf("%w: no pending email change", ErrInvalid)
+	}
+	now := clock.Now()
+	if !now.Before(p.pendingEmailChange.expiresAt) {
+		p.pendingEmailChange = PendingEmailChange{}
+		return fmt.Errorf("%w: email change token expired", ErrInvalid)
+	}
+	if !p.pendingEmailChange.hash.Equal(presentedHash) {
+		return fmt.Errorf("%w: email change token mismatch", ErrInvalid)
+	}
+	oldEmail := p.email
+	p.email = p.pendingEmailChange.newEmail
+	p.securityStamp = NewSecurityStamp()
+	p.pendingEmailChange = PendingEmailChange{}
+	p.recordEvent(EmailChangedEvent{
+		PersonID: p.id,
+		OldEmail: oldEmail,
+		NewEmail: p.email,
+		At:       now,
+	})
+	return nil
+}
+
+// CancelEmailChange invalidates a pending email change without
+// applying it. Reasons: admin action, security incident response,
+// implicit cancel via direct admin email update.
+//
+// Idempotent — no-op when no change is pending. Audit reason
+// required when pending. Does NOT rotate SecurityStamp (no
+// credential changed).
+func (p *Person) CancelEmailChange(reason string) error {
+	if p.pendingEmailChange.IsZero() {
+		return nil
+	}
+	if strings.TrimSpace(reason) == "" {
+		return fmt.Errorf("%w: cancel reason required for audit", ErrInvalid)
+	}
+	p.pendingEmailChange = PendingEmailChange{}
+	p.recordEvent(EmailChangeCancelledEvent{
+		PersonID: p.id,
+		Reason:   reason,
+		At:       clock.Now(),
+	})
+	return nil
+}
+
+// GloballySuspend marks the Person as globally banned across every
+// tenant. Rare action — compliance violation, fraud, cross-tenant
+// abuse. Distinct from [Person.Anonymise] (irreversible PII scrub)
+// and Membership.Deactivate (per-tenant; Person can still log into
+// other tenants).
+//
+// Effects:
+//   - isGloballySuspended → true; reason recorded for audit.
+//   - SecurityStamp rotated (invalidates every outstanding JWT
+//     immediately per security.md "SecurityStamp rotation triggers").
+//   - Login flow MUST reject suspended Persons before password verify.
+//
+// reason MUST be non-empty (audit requirement). Idempotent only when
+// reason matches existing suspension; rejected on conflicting reason
+// (audit-trail integrity).
+//
+// Rejected if Person is anonymised (terminal — already scrubbed).
+func (p *Person) GloballySuspend(reason string) error {
+	if strings.TrimSpace(reason) == "" {
+		return fmt.Errorf("%w: global suspension reason required for audit", ErrInvalid)
+	}
+	if p.isAnonymised {
+		return fmt.Errorf("%w: cannot suspend anonymised person", ErrInvalid)
+	}
+	if p.isGloballySuspended {
+		if p.globalSuspensionReason == reason {
+			return nil
+		}
+		return fmt.Errorf("%w: person already suspended (reason: %q)", ErrInvalid, p.globalSuspensionReason)
+	}
+	now := clock.Now()
+	p.isGloballySuspended = true
+	p.globalSuspensionReason = reason
+	p.globallySuspendedAt = now
+	p.securityStamp = NewSecurityStamp()
+	p.recordEvent(GloballySuspendedEvent{
+		PersonID: p.id,
+		Reason:   reason,
+		At:       now,
+	})
+	return nil
+}
+
+// LiftGlobalSuspension reverses a previous global suspension.
+// Operator action; SecurityStamp NOT rotated again on lift (rotation
+// already happened at suspension time; lifting just clears the flag).
+//
+// Idempotent: no-op when not currently suspended.
+func (p *Person) LiftGlobalSuspension() error {
+	if !p.isGloballySuspended {
+		return nil
+	}
+	p.isGloballySuspended = false
+	p.globalSuspensionReason = ""
+	p.globallySuspendedAt = time.Time{}
+	p.recordEvent(GlobalSuspensionLiftedEvent{
+		PersonID: p.id,
+		At:       clock.Now(),
 	})
 	return nil
 }

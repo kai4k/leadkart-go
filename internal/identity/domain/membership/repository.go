@@ -50,4 +50,19 @@ type Repository interface {
 	// ListForTenant returns all Memberships under the current tenant scope.
 	// Used by tenant admin UIs ("manage users").
 	ListForTenant(ctx context.Context, tenantID tenant.ID) ([]*Membership, error)
+
+	// ListAllForPerson returns every Membership (Active + Inactive) the
+	// supplied Person holds across ALL tenants. Cross-tenant read —
+	// platform-only path. Used by:
+	//   - Platform operator "show all of this user's tenants" UI
+	//   - Person-level cascades (anonymise, global suspend) where the
+	//     handler needs to enumerate the affected memberships before
+	//     dispatching per-tenant fanout events.
+	//
+	// Implementation: backed by the cross-tenant ListMembershipsForPerson
+	// query which Postgres permits because the partial index on
+	// (person_id) is non-RLS-filtered (per database.md "Single-Active-
+	// Membership constraint"). Returns an empty slice (not ErrNotFound)
+	// when the Person has no Memberships.
+	ListAllForPerson(ctx context.Context, personID person.ID) ([]*Membership, error)
 }

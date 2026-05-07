@@ -50,6 +50,26 @@ func (ActivatedEvent) Topic() string { return "identity.tenant_activated.v1" }
 // OccurredAt returns the domain timestamp.
 func (e ActivatedEvent) OccurredAt() time.Time { return e.At }
 
+// ProfileUpdatedEvent fires when [Tenant.UpdateProfile] is called.
+//
+// Carries OLD + NEW values so audit + downstream subscribers can render
+// the diff without re-loading the aggregate. Mirrors the .NET parent's
+// TenantProfileUpdated integration event.
+type ProfileUpdatedEvent struct {
+	TenantID       ID
+	OldLegalName   string
+	OldDisplayName string
+	NewLegalName   string
+	NewDisplayName string
+	At             time.Time
+}
+
+// Topic returns the integration event type.
+func (ProfileUpdatedEvent) Topic() string { return "identity.tenant_profile_updated.v1" }
+
+// OccurredAt returns the domain timestamp.
+func (e ProfileUpdatedEvent) OccurredAt() time.Time { return e.At }
+
 // SuspendedEvent fires when a Tenant transitions to [StatusSuspended].
 type SuspendedEvent struct {
 	TenantID ID
@@ -62,3 +82,129 @@ func (SuspendedEvent) Topic() string { return "identity.tenant_suspended.v1" }
 
 // OccurredAt returns the domain timestamp.
 func (e SuspendedEvent) OccurredAt() time.Time { return e.At }
+
+// StatutoryUpdatedEvent fires when [Tenant.UpdateStatutory] changes
+// any of the declared Indian statutory IDs (GST/PAN/DrugLicence).
+//
+// Carries the OLD and NEW Statutory values so audit subscribers can
+// render diffs. Empty (zero) Statutory in OldStatutory means the
+// tenant declared statutory IDs for the first time.
+type StatutoryUpdatedEvent struct {
+	TenantID      ID
+	OldStatutory  Statutory
+	NewStatutory  Statutory
+	At            time.Time
+}
+
+// Topic returns the integration event type.
+func (StatutoryUpdatedEvent) Topic() string { return "identity.tenant_statutory_updated.v1" }
+
+// OccurredAt returns the domain timestamp.
+func (e StatutoryUpdatedEvent) OccurredAt() time.Time { return e.At }
+
+// AdminContactUpdatedEvent fires when [Tenant.UpdateAdminContact]
+// changes the admin phone or postal address. Carries OLD/NEW for
+// audit-diff rendering. Empty (zero) AdminContact in OldAdminContact
+// means the tenant declared contact details for the first time.
+type AdminContactUpdatedEvent struct {
+	TenantID        ID
+	OldAdminContact AdminContact
+	NewAdminContact AdminContact
+	At              time.Time
+}
+
+// Topic returns the integration event type.
+func (AdminContactUpdatedEvent) Topic() string { return "identity.tenant_admin_contact_updated.v1" }
+
+// OccurredAt returns the domain timestamp.
+func (e AdminContactUpdatedEvent) OccurredAt() time.Time { return e.At }
+
+// SettingsUpdatedEvent fires when [Tenant.UpdateSettings] changes
+// the tenant's operational settings (password policy today).
+//
+// Auth + login-flow caches MUST consume this to invalidate cached
+// policy — incorrect cached policy means stale rules until cache TTL.
+type SettingsUpdatedEvent struct {
+	TenantID    ID
+	OldSettings Settings
+	NewSettings Settings
+	At          time.Time
+}
+
+// Topic returns the integration event type.
+func (SettingsUpdatedEvent) Topic() string { return "identity.tenant_settings_updated.v1" }
+
+// OccurredAt returns the domain timestamp.
+func (e SettingsUpdatedEvent) OccurredAt() time.Time { return e.At }
+
+// DisplayPreferencesUpdatedEvent fires when
+// [Tenant.UpdateDisplayPreferences] changes the tenant's UI rendering
+// preferences. Subscribers (web BFF preference cache, notification
+// renderers) consume to invalidate cached preferences.
+type DisplayPreferencesUpdatedEvent struct {
+	TenantID              ID
+	OldDisplayPreferences DisplayPreferences
+	NewDisplayPreferences DisplayPreferences
+	At                    time.Time
+}
+
+// Topic returns the integration event type.
+func (DisplayPreferencesUpdatedEvent) Topic() string {
+	return "identity.tenant_display_preferences_updated.v1"
+}
+
+// OccurredAt returns the domain timestamp.
+func (e DisplayPreferencesUpdatedEvent) OccurredAt() time.Time { return e.At }
+
+// MarkedForDeletionEvent fires when [Tenant.MarkForDeletion] is called.
+//
+// Per data-retention.md "Tenant deletion saga": entry into the 30-day
+// grace window. Subscribers (CRM, Orders, etc.) MAY block tenant ops
+// immediately or wait for the terminal DeletedEvent — implementation
+// choice per module.
+type MarkedForDeletionEvent struct {
+	TenantID    ID
+	Reason      string
+	ScheduledAt time.Time
+	At          time.Time
+}
+
+// Topic returns the integration event type.
+func (MarkedForDeletionEvent) Topic() string { return "identity.tenant_marked_for_deletion.v1" }
+
+// OccurredAt returns the domain timestamp.
+func (e MarkedForDeletionEvent) OccurredAt() time.Time { return e.At }
+
+// RestoredEvent fires when [Tenant.RestoreFromDeletion] cancels a
+// pending deletion within the grace window.
+//
+// Subscribers that blocked ops on MarkedForDeletionEvent re-enable.
+type RestoredEvent struct {
+	TenantID ID
+	At       time.Time
+}
+
+// Topic returns the integration event type.
+func (RestoredEvent) Topic() string { return "identity.tenant_restored.v1" }
+
+// OccurredAt returns the domain timestamp.
+func (e RestoredEvent) OccurredAt() time.Time { return e.At }
+
+// DeletedEvent fires when [Tenant.HardDelete] is called by the
+// data-retention saga after the grace window expires.
+//
+// Per data-retention.md: terminal state. Subscribers SHOULD anonymise
+// remaining PII per their module's classification (CRM lead notes,
+// Tasks comments). Audit log retained 7 years; tenant row retained
+// for FK integrity.
+type DeletedEvent struct {
+	TenantID ID
+	Reason   string
+	At       time.Time
+}
+
+// Topic returns the integration event type.
+func (DeletedEvent) Topic() string { return "identity.tenant_deleted.v1" }
+
+// OccurredAt returns the domain timestamp.
+func (e DeletedEvent) OccurredAt() time.Time { return e.At }

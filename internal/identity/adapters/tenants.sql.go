@@ -13,7 +13,16 @@ import (
 
 const getTenantByID = `-- name: GetTenantByID :one
 SELECT id, slug, legal_name, display_name, admin_email, status,
-       created_at, activated_at, suspended_at
+       created_at, activated_at, suspended_at,
+       gst_number, pan_number, drug_licence_number,
+       admin_phone, admin_address_street, admin_address_city,
+       admin_address_district, admin_address_state, admin_address_state_code,
+       admin_address_pincode,
+       password_min_length, password_require_uppercase, password_require_lowercase,
+       password_require_digit, password_require_symbol,
+       password_max_failed_attempts, password_lockout_minutes,
+       locale, time_zone, date_format, currency,
+       deletion_scheduled_at, deletion_reason, hard_deleted_at
 FROM   identity.tenants
 WHERE  id = $1
 `
@@ -31,13 +40,46 @@ func (q *Queries) GetTenantByID(ctx context.Context, id pgtype.UUID) (IdentityTe
 		&i.CreatedAt,
 		&i.ActivatedAt,
 		&i.SuspendedAt,
+		&i.GstNumber,
+		&i.PanNumber,
+		&i.DrugLicenceNumber,
+		&i.AdminPhone,
+		&i.AdminAddressStreet,
+		&i.AdminAddressCity,
+		&i.AdminAddressDistrict,
+		&i.AdminAddressState,
+		&i.AdminAddressStateCode,
+		&i.AdminAddressPincode,
+		&i.PasswordMinLength,
+		&i.PasswordRequireUppercase,
+		&i.PasswordRequireLowercase,
+		&i.PasswordRequireDigit,
+		&i.PasswordRequireSymbol,
+		&i.PasswordMaxFailedAttempts,
+		&i.PasswordLockoutMinutes,
+		&i.Locale,
+		&i.TimeZone,
+		&i.DateFormat,
+		&i.Currency,
+		&i.DeletionScheduledAt,
+		&i.DeletionReason,
+		&i.HardDeletedAt,
 	)
 	return i, err
 }
 
 const getTenantBySlug = `-- name: GetTenantBySlug :one
 SELECT id, slug, legal_name, display_name, admin_email, status,
-       created_at, activated_at, suspended_at
+       created_at, activated_at, suspended_at,
+       gst_number, pan_number, drug_licence_number,
+       admin_phone, admin_address_street, admin_address_city,
+       admin_address_district, admin_address_state, admin_address_state_code,
+       admin_address_pincode,
+       password_min_length, password_require_uppercase, password_require_lowercase,
+       password_require_digit, password_require_symbol,
+       password_max_failed_attempts, password_lockout_minutes,
+       locale, time_zone, date_format, currency,
+       deletion_scheduled_at, deletion_reason, hard_deleted_at
 FROM   identity.tenants
 WHERE  slug = $1
 `
@@ -55,25 +97,103 @@ func (q *Queries) GetTenantBySlug(ctx context.Context, slug string) (IdentityTen
 		&i.CreatedAt,
 		&i.ActivatedAt,
 		&i.SuspendedAt,
+		&i.GstNumber,
+		&i.PanNumber,
+		&i.DrugLicenceNumber,
+		&i.AdminPhone,
+		&i.AdminAddressStreet,
+		&i.AdminAddressCity,
+		&i.AdminAddressDistrict,
+		&i.AdminAddressState,
+		&i.AdminAddressStateCode,
+		&i.AdminAddressPincode,
+		&i.PasswordMinLength,
+		&i.PasswordRequireUppercase,
+		&i.PasswordRequireLowercase,
+		&i.PasswordRequireDigit,
+		&i.PasswordRequireSymbol,
+		&i.PasswordMaxFailedAttempts,
+		&i.PasswordLockoutMinutes,
+		&i.Locale,
+		&i.TimeZone,
+		&i.DateFormat,
+		&i.Currency,
+		&i.DeletionScheduledAt,
+		&i.DeletionReason,
+		&i.HardDeletedAt,
 	)
 	return i, err
+}
+
+const hardDeleteTenant = `-- name: HardDeleteTenant :exec
+DELETE FROM identity.tenants WHERE id = $1
+`
+
+// Operator-only physical row delete. Per data-retention.md
+// "Tenant deletion saga": HardDelete is the final step after the
+// 30-day grace window expires AND every module has acknowledged the
+// deletion event. The aggregate's HardDelete() method gates this on
+// StatusPendingDeletion + grace expiry; the SQL is unconditional.
+func (q *Queries) HardDeleteTenant(ctx context.Context, id pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, hardDeleteTenant, id)
+	return err
 }
 
 const insertTenant = `-- name: InsertTenant :exec
 
 INSERT INTO identity.tenants (
-    id, slug, legal_name, display_name, admin_email, status, created_at
-) VALUES ($1, $2, $3, $4, $5, $6, $7)
+    id, slug, legal_name, display_name, admin_email, status, created_at,
+    gst_number, pan_number, drug_licence_number,
+    admin_phone, admin_address_street, admin_address_city,
+    admin_address_district, admin_address_state, admin_address_state_code,
+    admin_address_pincode,
+    password_min_length, password_require_uppercase, password_require_lowercase,
+    password_require_digit, password_require_symbol,
+    password_max_failed_attempts, password_lockout_minutes,
+    locale, time_zone, date_format, currency,
+    deletion_scheduled_at, deletion_reason, hard_deleted_at
+) VALUES (
+    $1, $2, $3, $4, $5, $6, $7,
+    $8, $9, $10,
+    $11, $12, $13, $14, $15, $16, $17,
+    $18, $19, $20, $21, $22, $23, $24,
+    $25, $26, $27, $28,
+    $29, $30, $31
+)
 `
 
 type InsertTenantParams struct {
-	ID          pgtype.UUID
-	Slug        string
-	LegalName   string
-	DisplayName string
-	AdminEmail  string
-	Status      string
-	CreatedAt   pgtype.Timestamptz
+	ID                        pgtype.UUID
+	Slug                      string
+	LegalName                 string
+	DisplayName               string
+	AdminEmail                string
+	Status                    string
+	CreatedAt                 pgtype.Timestamptz
+	GstNumber                 string
+	PanNumber                 string
+	DrugLicenceNumber         string
+	AdminPhone                string
+	AdminAddressStreet        string
+	AdminAddressCity          string
+	AdminAddressDistrict      string
+	AdminAddressState         string
+	AdminAddressStateCode     string
+	AdminAddressPincode       string
+	PasswordMinLength         int32
+	PasswordRequireUppercase  bool
+	PasswordRequireLowercase  bool
+	PasswordRequireDigit      bool
+	PasswordRequireSymbol     bool
+	PasswordMaxFailedAttempts int32
+	PasswordLockoutMinutes    int32
+	Locale                    string
+	TimeZone                  string
+	DateFormat                string
+	Currency                  string
+	DeletionScheduledAt       pgtype.Timestamptz
+	DeletionReason            string
+	HardDeletedAt             pgtype.Timestamptz
 }
 
 // Tenant queries — identity.tenants is non-RLS (each row IS a tenant).
@@ -88,31 +208,214 @@ func (q *Queries) InsertTenant(ctx context.Context, arg InsertTenantParams) erro
 		arg.AdminEmail,
 		arg.Status,
 		arg.CreatedAt,
+		arg.GstNumber,
+		arg.PanNumber,
+		arg.DrugLicenceNumber,
+		arg.AdminPhone,
+		arg.AdminAddressStreet,
+		arg.AdminAddressCity,
+		arg.AdminAddressDistrict,
+		arg.AdminAddressState,
+		arg.AdminAddressStateCode,
+		arg.AdminAddressPincode,
+		arg.PasswordMinLength,
+		arg.PasswordRequireUppercase,
+		arg.PasswordRequireLowercase,
+		arg.PasswordRequireDigit,
+		arg.PasswordRequireSymbol,
+		arg.PasswordMaxFailedAttempts,
+		arg.PasswordLockoutMinutes,
+		arg.Locale,
+		arg.TimeZone,
+		arg.DateFormat,
+		arg.Currency,
+		arg.DeletionScheduledAt,
+		arg.DeletionReason,
+		arg.HardDeletedAt,
 	)
 	return err
 }
 
-const updateTenantStatus = `-- name: UpdateTenantStatus :exec
+const listAllTenants = `-- name: ListAllTenants :many
+SELECT id, slug, legal_name, display_name, admin_email, status,
+       created_at, activated_at, suspended_at,
+       gst_number, pan_number, drug_licence_number,
+       admin_phone, admin_address_street, admin_address_city,
+       admin_address_district, admin_address_state, admin_address_state_code,
+       admin_address_pincode,
+       password_min_length, password_require_uppercase, password_require_lowercase,
+       password_require_digit, password_require_symbol,
+       password_max_failed_attempts, password_lockout_minutes,
+       locale, time_zone, date_format, currency,
+       deletion_scheduled_at, deletion_reason, hard_deleted_at
+FROM   identity.tenants
+ORDER  BY created_at DESC
+`
+
+// Cross-tenant listing — Platform-operator path only. The aggregate
+// table is non-RLS, so this returns every row regardless of the
+// caller's tenant context. The HTTP layer gates on RequirePlatform
+// before dispatching here.
+func (q *Queries) ListAllTenants(ctx context.Context) ([]IdentityTenant, error) {
+	rows, err := q.db.Query(ctx, listAllTenants)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []IdentityTenant
+	for rows.Next() {
+		var i IdentityTenant
+		if err := rows.Scan(
+			&i.ID,
+			&i.Slug,
+			&i.LegalName,
+			&i.DisplayName,
+			&i.AdminEmail,
+			&i.Status,
+			&i.CreatedAt,
+			&i.ActivatedAt,
+			&i.SuspendedAt,
+			&i.GstNumber,
+			&i.PanNumber,
+			&i.DrugLicenceNumber,
+			&i.AdminPhone,
+			&i.AdminAddressStreet,
+			&i.AdminAddressCity,
+			&i.AdminAddressDistrict,
+			&i.AdminAddressState,
+			&i.AdminAddressStateCode,
+			&i.AdminAddressPincode,
+			&i.PasswordMinLength,
+			&i.PasswordRequireUppercase,
+			&i.PasswordRequireLowercase,
+			&i.PasswordRequireDigit,
+			&i.PasswordRequireSymbol,
+			&i.PasswordMaxFailedAttempts,
+			&i.PasswordLockoutMinutes,
+			&i.Locale,
+			&i.TimeZone,
+			&i.DateFormat,
+			&i.Currency,
+			&i.DeletionScheduledAt,
+			&i.DeletionReason,
+			&i.HardDeletedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const updateTenant = `-- name: UpdateTenant :exec
 UPDATE identity.tenants
-SET    status       = $2,
-       activated_at = $3,
-       suspended_at = $4
+SET    legal_name                  = $2,
+       display_name                 = $3,
+       admin_email                  = $4,
+       status                       = $5,
+       activated_at                 = $6,
+       suspended_at                 = $7,
+       gst_number                   = $8,
+       pan_number                   = $9,
+       drug_licence_number          = $10,
+       admin_phone                  = $11,
+       admin_address_street         = $12,
+       admin_address_city           = $13,
+       admin_address_district       = $14,
+       admin_address_state          = $15,
+       admin_address_state_code     = $16,
+       admin_address_pincode        = $17,
+       password_min_length          = $18,
+       password_require_uppercase   = $19,
+       password_require_lowercase   = $20,
+       password_require_digit       = $21,
+       password_require_symbol      = $22,
+       password_max_failed_attempts = $23,
+       password_lockout_minutes     = $24,
+       locale                       = $25,
+       time_zone                    = $26,
+       date_format                  = $27,
+       currency                     = $28,
+       deletion_scheduled_at        = $29,
+       deletion_reason              = $30,
+       hard_deleted_at              = $31
 WHERE  id = $1
 `
 
-type UpdateTenantStatusParams struct {
-	ID          pgtype.UUID
-	Status      string
-	ActivatedAt pgtype.Timestamptz
-	SuspendedAt pgtype.Timestamptz
+type UpdateTenantParams struct {
+	ID                        pgtype.UUID
+	LegalName                 string
+	DisplayName               string
+	AdminEmail                string
+	Status                    string
+	ActivatedAt               pgtype.Timestamptz
+	SuspendedAt               pgtype.Timestamptz
+	GstNumber                 string
+	PanNumber                 string
+	DrugLicenceNumber         string
+	AdminPhone                string
+	AdminAddressStreet        string
+	AdminAddressCity          string
+	AdminAddressDistrict      string
+	AdminAddressState         string
+	AdminAddressStateCode     string
+	AdminAddressPincode       string
+	PasswordMinLength         int32
+	PasswordRequireUppercase  bool
+	PasswordRequireLowercase  bool
+	PasswordRequireDigit      bool
+	PasswordRequireSymbol     bool
+	PasswordMaxFailedAttempts int32
+	PasswordLockoutMinutes    int32
+	Locale                    string
+	TimeZone                  string
+	DateFormat                string
+	Currency                  string
+	DeletionScheduledAt       pgtype.Timestamptz
+	DeletionReason            string
+	HardDeletedAt             pgtype.Timestamptz
 }
 
-func (q *Queries) UpdateTenantStatus(ctx context.Context, arg UpdateTenantStatusParams) error {
-	_, err := q.db.Exec(ctx, updateTenantStatus,
+// General-purpose update covering UpdateProfile + UpdateStatutory +
+// UpdateAdminContact + UpdateSettings + UpdateDisplayPreferences +
+// Activate + Suspend + MarkForDeletion + RestoreFromDeletion +
+// HardDelete. Repository writes whatever the aggregate currently says.
+func (q *Queries) UpdateTenant(ctx context.Context, arg UpdateTenantParams) error {
+	_, err := q.db.Exec(ctx, updateTenant,
 		arg.ID,
+		arg.LegalName,
+		arg.DisplayName,
+		arg.AdminEmail,
 		arg.Status,
 		arg.ActivatedAt,
 		arg.SuspendedAt,
+		arg.GstNumber,
+		arg.PanNumber,
+		arg.DrugLicenceNumber,
+		arg.AdminPhone,
+		arg.AdminAddressStreet,
+		arg.AdminAddressCity,
+		arg.AdminAddressDistrict,
+		arg.AdminAddressState,
+		arg.AdminAddressStateCode,
+		arg.AdminAddressPincode,
+		arg.PasswordMinLength,
+		arg.PasswordRequireUppercase,
+		arg.PasswordRequireLowercase,
+		arg.PasswordRequireDigit,
+		arg.PasswordRequireSymbol,
+		arg.PasswordMaxFailedAttempts,
+		arg.PasswordLockoutMinutes,
+		arg.Locale,
+		arg.TimeZone,
+		arg.DateFormat,
+		arg.Currency,
+		arg.DeletionScheduledAt,
+		arg.DeletionReason,
+		arg.HardDeletedAt,
 	)
 	return err
 }
