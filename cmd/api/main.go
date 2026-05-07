@@ -278,7 +278,7 @@ func run(ctx context.Context, stdout *os.File, _ []string) error {
 	if err != nil {
 		return fmt.Errorf("messaging router: %w", err)
 	}
-	subscribers.Register(router, wiring.Families, logger)
+	subscribers.Register(router, wiring.Families, wiring.StampCache, logger)
 
 	// Three-endpoint health split lives on the admin listener — public
 	// API never carries /alive|/ready|/health (per audit-checklist.md
