@@ -652,8 +652,8 @@ const constraintMembershipsPersonActive = "uq_memberships_person_active"
 // Other unique violations (e.g. (person_id, tenant_id) duplicate) bubble
 // as raw errors — they indicate a different bug class.
 func isMembershipActiveCollision(err error) bool {
-	var pgErr *pgconn.PgError
-	if !errors.As(err, &pgErr) {
+	pgErr, ok := errors.AsType[*pgconn.PgError](err)
+	if !ok {
 		return false
 	}
 	if pgErr.Code != pg.SQLStateUniqueViolation {

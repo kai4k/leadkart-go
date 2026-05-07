@@ -122,8 +122,7 @@ func KindOf(err error) Kind {
 	if err == nil {
 		return KindUnknown
 	}
-	var e *Error
-	if errors.As(err, &e) {
+	if e, ok := errors.AsType[*Error](err); ok {
 		return e.kind
 	}
 	return KindUnknown

@@ -150,7 +150,7 @@ func TestRecorder_ConcurrentSafe(t *testing.T) {
 	from := mustAddr(t, "noreply@leadkart.io")
 
 	var wg sync.WaitGroup
-	for i := 0; i < 50; i++ {
+	for range 50 {
 		wg.Go(func() {
 			m, _ := email.NewMessage(
 				mustAddr(t, "a@b.io"),

@@ -155,7 +155,7 @@ type MembershipManagerAssignedV1 struct {
 	PersonID        uuid.UUID `json:"person_id"`
 	TenantIDClaim   uuid.UUID `json:"tenant_id"`
 	ManagerID       uuid.UUID `json:"manager_id"`
-	PreviousManager uuid.UUID `json:"previous_manager,omitempty"`
+	PreviousManager uuid.UUID `json:"previous_manager,omitzero"`
 	OccurredAtUTC   time.Time `json:"occurred_at_utc"`
 }
 
