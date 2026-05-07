@@ -61,7 +61,7 @@ func New(raw string) (Number, error) {
 		return Number{}, fmt.Errorf("%w: %q does not match GSTIN format", ErrInvalid, raw)
 	}
 	state := int(raw[0]-'0')*10 + int(raw[1]-'0')
-	if !(state >= minStateCode && state <= maxStateCode) && state != otherTerritoryStateCode {
+	if (state < minStateCode || state > maxStateCode) && state != otherTerritoryStateCode {
 		return Number{}, fmt.Errorf("%w: state code %02d out of range", ErrInvalid, state)
 	}
 	return Number{value: raw}, nil

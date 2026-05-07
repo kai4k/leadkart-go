@@ -182,13 +182,13 @@ func insertTenantRow(ctx context.Context, q *Queries, t *tenant.Tenant) error {
 		AdminAddressState:         addr.State(),
 		AdminAddressStateCode:     addr.StateCode(),
 		AdminAddressPincode:       addr.Pincode(),
-		PasswordMinLength:         int32(policy.MinLength()),
+		PasswordMinLength:         passwordPolicyInt32(policy.MinLength()),
 		PasswordRequireUppercase:  policy.RequireUppercase(),
 		PasswordRequireLowercase:  policy.RequireLowercase(),
 		PasswordRequireDigit:      policy.RequireDigit(),
 		PasswordRequireSymbol:     policy.RequireSymbol(),
-		PasswordMaxFailedAttempts: int32(policy.MaxFailedAttempts()),
-		PasswordLockoutMinutes:    int32(policy.LockoutMinutes()),
+		PasswordMaxFailedAttempts: passwordPolicyInt32(policy.MaxFailedAttempts()),
+		PasswordLockoutMinutes:    passwordPolicyInt32(policy.LockoutMinutes()),
 		Locale:                    prefs.Locale(),
 		TimeZone:                  prefs.TimeZone(),
 		DateFormat:                prefs.DateFormat(),
@@ -234,13 +234,13 @@ func persistTenant(ctx context.Context, q *Queries, t *tenant.Tenant) error {
 		AdminAddressState:         addr.State(),
 		AdminAddressStateCode:     addr.StateCode(),
 		AdminAddressPincode:       addr.Pincode(),
-		PasswordMinLength:         int32(policy.MinLength()),
+		PasswordMinLength:         passwordPolicyInt32(policy.MinLength()),
 		PasswordRequireUppercase:  policy.RequireUppercase(),
 		PasswordRequireLowercase:  policy.RequireLowercase(),
 		PasswordRequireDigit:      policy.RequireDigit(),
 		PasswordRequireSymbol:     policy.RequireSymbol(),
-		PasswordMaxFailedAttempts: int32(policy.MaxFailedAttempts()),
-		PasswordLockoutMinutes:    int32(policy.LockoutMinutes()),
+		PasswordMaxFailedAttempts: passwordPolicyInt32(policy.MaxFailedAttempts()),
+		PasswordLockoutMinutes:    passwordPolicyInt32(policy.LockoutMinutes()),
 		Locale:                    prefs.Locale(),
 		TimeZone:                  prefs.TimeZone(),
 		DateFormat:                prefs.DateFormat(),
@@ -432,4 +432,20 @@ func parseTenantID(id tenant.ID) (uuid.UUID, error) {
 func isUniqueViolation(err error) bool {
 	var pgErr *pgconn.PgError
 	return errors.As(err, &pgErr) && pgErr.Code == pg.SQLStateUniqueViolation
+}
+
+// passwordPolicyInt32 narrows a domain-validated int (always in
+// [0, 1440] per [tenant.NewPasswordPolicy] bounds — min length is
+// small, max-failed-attempts ≤ 50, lockout-minutes ≤ 24h) into the
+// int32 the sqlc-generated params struct uses. The aggregate VO has
+// already enforced the ranges, so out-of-range values here mean
+// in-process corruption rather than user input — panic is the right
+// behaviour. Mirrors stdlib precedent (e.g. regexp.MustCompile)
+// where a "host is broken" branch panics rather than poisoning the
+// signature with an error return at every call site.
+func passwordPolicyInt32(v int) int32 {
+	if v < 0 || v > 1<<30 {
+		panic(fmt.Sprintf("tenant repo: password policy int %d out of bounds — domain VO invariant violated", v))
+	}
+	return int32(v)
 }

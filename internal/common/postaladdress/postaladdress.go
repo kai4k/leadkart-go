@@ -161,13 +161,23 @@ func (a Address) IsZero() bool {
 	return a.pincode == "" && a.city == "" && a.state == "" && a.street == ""
 }
 
-// Field accessors.
-func (a Address) Street() string    { return a.street }
-func (a Address) City() string      { return a.city }
-func (a Address) District() string  { return a.district }
-func (a Address) State() string     { return a.state }
+// Street returns the optional street/line-1 component.
+func (a Address) Street() string { return a.street }
+
+// City returns the city/town component.
+func (a Address) City() string { return a.city }
+
+// District returns the district / administrative subdivision.
+func (a Address) District() string { return a.district }
+
+// State returns the full state name (e.g. "Maharashtra").
+func (a Address) State() string { return a.state }
+
+// StateCode returns the 2-3 letter state code (e.g. "MH").
 func (a Address) StateCode() string { return a.stateCode }
-func (a Address) Pincode() string   { return a.pincode }
+
+// Pincode returns the 6-digit Indian pincode.
+func (a Address) Pincode() string { return a.pincode }
 
 // Equal compares two addresses by all fields.
 func (a Address) Equal(other Address) bool {

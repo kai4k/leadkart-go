@@ -61,7 +61,7 @@ func (h CreateImpersonationSessionHandler) Handle(ctx context.Context, cmd Creat
 	}
 	sess, err := impersonation.NewSession(cmd.OperatorID, cmd.TargetTenantID.String(), cmd.Reason, cmd.Duration, h.now())
 	if err != nil {
-		return CreateImpersonationSessionResult{}, fmt.Errorf("%w: %v", ErrImpersonationInvalid, err)
+		return CreateImpersonationSessionResult{}, fmt.Errorf("%w: %w", ErrImpersonationInvalid, err)
 	}
 	if err := h.store.Put(ctx, sess); err != nil {
 		return CreateImpersonationSessionResult{}, fmt.Errorf("create_impersonation_session: persist: %w", err)

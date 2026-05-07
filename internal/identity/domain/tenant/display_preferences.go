@@ -59,7 +59,7 @@ func NewDisplayPreferences(locale, timeZone, dateFormat, currency string) (Displ
 		return DisplayPreferences{}, fmt.Errorf("%w: timeZone required", ErrInvalid)
 	}
 	if _, err := time.LoadLocation(timeZone); err != nil {
-		return DisplayPreferences{}, fmt.Errorf("%w: timeZone %q not in IANA tz database: %v", ErrInvalid, timeZone, err)
+		return DisplayPreferences{}, fmt.Errorf("%w: timeZone %q not in IANA tz database: %w", ErrInvalid, timeZone, err)
 	}
 	if dateFormat == "" {
 		return DisplayPreferences{}, fmt.Errorf("%w: dateFormat required", ErrInvalid)
@@ -128,7 +128,7 @@ func isBCP47Like(s string) bool {
 	}
 	for i := 1; i < len(parts); i++ {
 		p := parts[i]
-		if !(allUpperAlpha(p, 2, 2) || allDigits(p, 3, 3)) {
+		if !allUpperAlpha(p, 2, 2) && !allDigits(p, 3, 3) {
 			return false
 		}
 	}

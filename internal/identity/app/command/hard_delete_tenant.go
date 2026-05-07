@@ -36,7 +36,7 @@ func NewHardDeleteTenantHandler(tenants *adapters.TenantRepository) HardDeleteTe
 	return HardDeleteTenantHandler{tenants: tenants}
 }
 
-// Handle:
+// Handle runs the two-phase delete:
 //
 //  1. UpdateByID with Tenant.HardDelete() — aggregate enforces grace
 //     window + records the terminal-state event.

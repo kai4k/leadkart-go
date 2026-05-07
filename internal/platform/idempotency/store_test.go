@@ -14,18 +14,6 @@ import (
 
 func hashOf(s string) [32]byte { return sha256.Sum256([]byte(s)) }
 
-func freshRecord(key uuid.UUID, body, status int, expiresAt time.Time) idempotency.Record {
-	return idempotency.Record{
-		Key:             key,
-		BodyHash:        hashOf("body" + string(rune(body))),
-		ResponseStatus:  status,
-		ResponseBody:    []byte("ok"),
-		ResponseHeaders: map[string]string{"Content-Type": "application/json"},
-		CreatedAt:       time.Now(),
-		ExpiresAt:       expiresAt,
-	}
-}
-
 func TestInMemoryStore_PutGet_RoundTrip(t *testing.T) {
 	t.Parallel()
 	store := idempotency.NewInMemoryStore(nil)

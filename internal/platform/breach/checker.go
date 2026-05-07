@@ -34,7 +34,6 @@ package breach
 import (
 	"context"
 	"errors"
-	"fmt"
 	"strings"
 )
 
@@ -112,7 +111,7 @@ func NewOfflineListWith(passwords []string) *OfflineList {
 // the offline set.
 func (c *OfflineList) IsBreached(_ context.Context, plaintext string) (bool, error) {
 	if c == nil {
-		return false, fmt.Errorf("breach: OfflineList is nil")
+		return false, errors.New("breach: OfflineList is nil")
 	}
 	_, breached := c.set[normalise(plaintext)]
 	return breached, nil
