@@ -23,11 +23,19 @@ import (
 // ports own request/response translation, not the routing scheme — the
 // composition root chooses the URL space.
 //
-// verifier is the [authn.Verifier] used by [authn.RequireAuth] to gate
-// authenticated routes (currently change-password); pass nil ONLY if
-// the caller wires NO authenticated routes (test fixtures may opt out).
-// Production wiring always provides the [jwt.Issuer] which satisfies
-// [authn.Verifier] via its Verify method.
+// verifier + stampValidator gate authenticated routes:
+//   - verifier is the [authn.Verifier] used to validate the bearer JWT
+//     (production wires *jwt.Issuer).
+//   - stampValidator is the [authn.StampValidator] used to assert that
+//     the JWT's security_stamp claim still matches the source-of-truth
+//     stamp on the Person — i.e. the session has not been revoked
+//     since the token was minted (per audit-checklist.md §12b cache
+//     facade canon + security.md SecurityStamp rotation triggers).
+//
+// Both MUST be non-nil for the auth-route block to register; pass
+// (nil, nil) ONLY in test fixtures that exercise the unauthenticated
+// surface only (probe routes / login / refresh / logout / emailed-token
+// flows).
 //
 // Routes registered here:
 //
@@ -36,7 +44,7 @@ import (
 //	POST /api/v1/auth/refresh              rotate refresh token + reissue access
 //	POST /api/v1/auth/logout               revoke a refresh-token family
 //	POST /api/v1/auth/change-password      authenticated; rotate own password
-func AddRoutes(mux *http.ServeMux, log *slog.Logger, a app.Application, verifier authn.Verifier) {
+func AddRoutes(mux *http.ServeMux, log *slog.Logger, a app.Application, verifier authn.Verifier, stampValidator authn.StampValidator) {
 	mux.Handle("POST /api/v1/tenants", handleRegisterTenant(log, a))
 	mux.Handle("POST /api/v1/auth/login", handleLogin(log, a))
 	mux.Handle("POST /api/v1/auth/refresh", handleRefresh(log, a))
@@ -47,8 +55,14 @@ func AddRoutes(mux *http.ServeMux, log *slog.Logger, a app.Application, verifier
 	mux.Handle("POST /api/v1/auth/reset-password", handleResetPassword(log, a))
 	mux.Handle("POST /api/v1/auth/confirm-email-change", handleConfirmEmailChange(log, a))
 
-	if verifier != nil {
-		auth := authn.RequireAuth(verifier)
+	if verifier != nil && stampValidator != nil {
+		// Every authenticated route runs RequireFreshStamp — JWT signature
+		// + expiry + tenant_id binding + security_stamp freshness check.
+		// A token whose underlying Person has rotated its stamp (via
+		// password/email change, anonymisation, global suspend) fails
+		// 401 stale_token within ~30s of the rotation, even before the
+		// outbox-driven cascade subscriber has invalidated the cache.
+		auth := authn.RequireFreshStamp(verifier, stampValidator)
 		mux.Handle("POST /api/v1/auth/change-password", auth(handleChangePassword(log, a)))
 		mux.Handle("POST /api/v1/auth/request-email-change", auth(handleRequestEmailChange(log, a)))
 		mux.Handle("GET /api/v1/auth/sessions", auth(handleListSessions(log, a)))
@@ -59,7 +73,7 @@ func AddRoutes(mux *http.ServeMux, log *slog.Logger, a app.Application, verifier
 		// authn.RequireTenantContext. A tenant Admin can manage their
 		// own tenant; Platform / SuperUser operators can manage any
 		// (post-impersonation per multi-tenancy.md).
-		tenantCtx := authn.RequireTenantContext(verifier, "tenantId")
+		tenantCtx := authn.RequireTenantContext(verifier, stampValidator, "tenantId")
 		mux.Handle("GET /api/v1/tenants/{tenantId}",
 			tenantCtx(handleGetTenant(log, a)))
 		mux.Handle("PATCH /api/v1/tenants/{tenantId}/profile",
@@ -77,7 +91,7 @@ func AddRoutes(mux *http.ServeMux, log *slog.Logger, a app.Application, verifier
 		// god-mode" + identity.tenants.{suspend,activate,delete}
 		// permissions. Tenants do NOT self-suspend / self-restore via
 		// these routes; those flows go through Platform-tier APIs.
-		platform := authn.RequirePlatform(verifier)
+		platform := authn.RequirePlatform(verifier, stampValidator)
 		mux.Handle("POST /api/v1/tenants/{tenantId}/suspend",
 			platform(handleSuspendTenant(log, a)))
 		mux.Handle("POST /api/v1/tenants/{tenantId}/activate",

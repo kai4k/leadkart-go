@@ -69,13 +69,14 @@ func newE2EFixture(t *testing.T) e2eFixture {
 		},
 	}
 	now := func() time.Time { return time.Date(2026, 5, 7, 12, 0, 0, 0, time.UTC) }
-	identityApp, issuer, err := buildIdentityApp(pool, cfg, now)
+	hybrid := newTestHybridCache(t)
+	wiring, err := buildIdentityApp(pool, hybrid, cfg, now)
 	if err != nil {
 		t.Fatalf("buildIdentityApp: %v", err)
 	}
-	srv := httptest.NewServer(newServer(silentLogger(), identityApp, issuer))
+	srv := httptest.NewServer(newServer(silentLogger(), wiring.App, wiring.Issuer, wiring.StampValidator))
 	t.Cleanup(srv.Close)
-	return e2eFixture{URL: srv.URL, Issuer: issuer, Pool: pool, app: identityApp}
+	return e2eFixture{URL: srv.URL, Issuer: wiring.Issuer, Pool: pool, app: wiring.App}
 }
 
 // registeredTenant captures the IDs + access token of a freshly-

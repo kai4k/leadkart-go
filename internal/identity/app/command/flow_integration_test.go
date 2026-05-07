@@ -23,14 +23,20 @@ package command_test
 import (
 	"context"
 	"errors"
+	"io"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"runtime"
 	"testing"
 	"time"
 
+	"github.com/alicebob/miniredis/v2"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/pressly/goose/v3"
+	"github.com/redis/go-redis/v9"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
 	"github.com/testcontainers/testcontainers-go/wait"
@@ -39,21 +45,33 @@ import (
 	"github.com/leadkart/leadkart-go/internal/common/ids"
 	"github.com/leadkart/leadkart-go/internal/common/slug"
 	"github.com/leadkart/leadkart-go/internal/identity/adapters"
-	"net/http"
-	"net/http/httptest"
-
 	"github.com/leadkart/leadkart-go/internal/identity/app/argon2"
 	"github.com/leadkart/leadkart-go/internal/identity/app/command"
 	"github.com/leadkart/leadkart-go/internal/identity/app/jwt"
 	"github.com/leadkart/leadkart-go/internal/identity/app/permissions"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/permission"
 	"github.com/leadkart/leadkart-go/internal/identity/ports/authn"
+	"github.com/leadkart/leadkart-go/internal/platform/cache"
 	"github.com/leadkart/leadkart-go/internal/platform/pg"
 )
 
 const refreshTTL = 14 * 24 * time.Hour
 
-func newWiredApp(t *testing.T) (*pgxpool.Pool, command.RegisterTenantHandler, command.LoginHandler, command.RefreshHandler, command.LogoutHandler, *jwt.Issuer) {
+// wiredApp groups the Identity composition outputs the integration
+// tests need. Returned as a struct (not a positional tuple) because
+// the post-A.7 surface — login + refresh + permission gate + stamp
+// validator — pushed the tuple past readable arity.
+type wiredApp struct {
+	pool     *pgxpool.Pool
+	register command.RegisterTenantHandler
+	login    command.LoginHandler
+	refresh  command.RefreshHandler
+	logout   command.LogoutHandler
+	issuer   *jwt.Issuer
+	stamps   *adapters.SecurityStampValidator
+}
+
+func newWiredApp(t *testing.T) wiredApp {
 	t.Helper()
 	pool := startWiredPostgres(t)
 	tx := pg.NewTransactor(pool)
@@ -79,17 +97,44 @@ func newWiredApp(t *testing.T) (*pgxpool.Pool, command.RegisterTenantHandler, co
 		t.Fatalf("dummy hash: %v", err)
 	}
 
+	// Real HybridCache + SecurityStampCache + Validator wired against
+	// miniredis. Required by the post-A.7 [authn.RequirePermission]
+	// surface (which composes RequireFreshStamp internally).
+	store := miniredis.RunT(t)
+	redisCli := redis.NewClient(&redis.Options{Addr: store.Addr()})
+	t.Cleanup(func() { _ = redisCli.Close() })
+	hc, err := cache.New(cache.Config{
+		L1MaxItems: 1000,
+		L2:         redisCli,
+		Logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
+	})
+	if err != nil {
+		t.Fatalf("cache.New: %v", err)
+	}
+	t.Cleanup(hc.Close)
+	stampCache := adapters.NewSecurityStampCache(hc, persons)
+	stamps := adapters.NewSecurityStampValidator(stampCache)
+
 	permResolver := permissions.NewResolver(memberships, roles)
 	register := command.NewRegisterTenantHandler(tx, tenants, persons, memberships, roles)
 	login := command.NewLoginHandler(persons, memberships, families, tenants, permResolver, issuer, now, refreshTTL, dummyHash)
 	refresh := command.NewRefreshHandler(families, persons, memberships, tenants, permResolver, issuer, now, refreshTTL)
 	logout := command.NewLogoutHandler(families)
 
-	return pool, register, login, refresh, logout, issuer
+	return wiredApp{
+		pool:     pool,
+		register: register,
+		login:    login,
+		refresh:  refresh,
+		logout:   logout,
+		issuer:   issuer,
+		stamps:   stamps,
+	}
 }
 
 func TestFlow_RegisterLoginRefreshLogout(t *testing.T) {
-	_, register, login, refresh, logout, _ := newWiredApp(t)
+	app := newWiredApp(t)
+	register, login, refresh, logout := app.register, app.login, app.refresh, app.logout
 	ctx := t.Context()
 
 	// 1. Register a new tenant + admin person + membership.
@@ -175,7 +220,7 @@ func TestFlow_RegisterLoginRefreshLogout(t *testing.T) {
 }
 
 func TestFlow_LoginUnknownEmail_GenericFailure(t *testing.T) {
-	_, _, login, _, _, _ := newWiredApp(t)
+	login := newWiredApp(t).login
 	ctx := t.Context()
 
 	addr, _ := email.New("nobody@example.test")
@@ -189,7 +234,8 @@ func TestFlow_LoginUnknownEmail_GenericFailure(t *testing.T) {
 }
 
 func TestFlow_LoginWrongPassword_GenericFailure(t *testing.T) {
-	_, register, login, _, _, _ := newWiredApp(t)
+	app := newWiredApp(t)
+	register, login := app.register, app.login
 	ctx := t.Context()
 
 	full := ids.NewV7().String()
@@ -217,7 +263,7 @@ func TestFlow_LoginWrongPassword_GenericFailure(t *testing.T) {
 }
 
 func TestFlow_RegisterDuplicateActiveEmail_Blocked(t *testing.T) {
-	_, register, _, _, _, _ := newWiredApp(t)
+	register := newWiredApp(t).register
 	ctx := t.Context()
 
 	addr, _ := email.New("dup-active@flow.test")
@@ -262,7 +308,8 @@ func TestFlow_RegisterDuplicateActiveEmail_Blocked(t *testing.T) {
 // PermissionResolver + JWT issuer + authn middleware compose into a
 // working end-to-end authorization flow with no test-only shortcuts.
 func TestE2E_LoginThenRequirePermissionGate(t *testing.T) {
-	_, register, login, _, _, issuer := newWiredApp(t)
+	app := newWiredApp(t)
+	register, login, issuer, stamps := app.register, app.login, app.issuer, app.stamps
 	ctx := t.Context()
 
 	// 1. Onboard. CompanyOwner auto-assigned, carries Meta.TenantAdmin.
@@ -303,7 +350,7 @@ func TestE2E_LoginThenRequirePermissionGate(t *testing.T) {
 	})
 
 	// 4. Guarded by Meta.TenantAdmin — the permission CompanyOwner carries.
-	gateGranted := authn.RequirePermission(issuer,
+	gateGranted := authn.RequirePermission(issuer, stamps,
 		permission.IdentityPermissions.Meta.TenantAdmin)(sentinel)
 	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/admin", nil)
 	req.Header.Set("Authorization", "Bearer "+loginOut.AccessToken)
@@ -319,7 +366,7 @@ func TestE2E_LoginThenRequirePermissionGate(t *testing.T) {
 	// 5. Guarded by a permission CompanyOwner does NOT carry (Tenants.Delete
 	//    is a platform-tier permission). 403, sentinel never runs.
 	called = false
-	gateForbidden := authn.RequirePermission(issuer,
+	gateForbidden := authn.RequirePermission(issuer, stamps,
 		permission.IdentityPermissions.Tenants.Delete)(sentinel)
 	req = httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/admin", nil)
 	req.Header.Set("Authorization", "Bearer "+loginOut.AccessToken)

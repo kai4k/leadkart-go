@@ -31,6 +31,7 @@ import (
 	"github.com/ThreeDotsLabs/watermill"
 	"github.com/ThreeDotsLabs/watermill/pubsub/gochannel"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/redis/go-redis/v9"
 	"golang.org/x/sync/errgroup"
 
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
@@ -48,7 +49,11 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/app/query"
 	"github.com/leadkart/leadkart-go/internal/identity/ports"
 	"github.com/leadkart/leadkart-go/internal/identity/ports/authn"
+	"github.com/leadkart/leadkart-go/internal/identity/ports/subscribers"
+	"github.com/leadkart/leadkart-go/internal/platform/audit"
+	"github.com/leadkart/leadkart-go/internal/platform/cache"
 	"github.com/leadkart/leadkart-go/internal/platform/config"
+	"github.com/leadkart/leadkart-go/internal/platform/messaging"
 	"github.com/leadkart/leadkart-go/internal/platform/obs"
 	"github.com/leadkart/leadkart-go/internal/platform/pg"
 )
@@ -89,6 +94,17 @@ const (
 	healthCheckTimeout = 2 * time.Second
 	// otelShutdownTimeout — OpenTelemetry exporter flush + close.
 	otelShutdownTimeout = 10 * time.Second
+	// redisPingTimeout caps the boot-time Redis reachability check.
+	// Distinct from request-time deadlines: a slow PING at boot is a
+	// fail-fast crash, not a tail-latency concern.
+	redisPingTimeout = 5 * time.Second
+	// hybridCacheL1MaxItems sizes ristretto's MaxCost (entry budget).
+	// 10k SecurityStamp entries occupy ~1MB on a 36-char value; well
+	// under the 256MB-per-pod default container limit.
+	hybridCacheL1MaxItems = 10_000
+	// routerCloseTimeout caps how long messaging.Router waits for
+	// in-flight subscriber handlers on shutdown.
+	routerCloseTimeout = 30 * time.Second
 )
 
 func main() {
@@ -201,7 +217,36 @@ func run(ctx context.Context, stdout *os.File, _ []string) error {
 	}
 	logger.InfoContext(ctx, "postgres connected")
 
-	identityApp, issuer, err := buildIdentityApp(pool, cfg, time.Now)
+	// Redis client is the single broker for the HybridCache L2 layer
+	// (SecurityStamp + future per-resource facades) AND will host the
+	// JWT blacklist + impersonation session store + idempotency inbox
+	// in v0.3+. Singleton per ADR 0015 + audit-checklist.md §12b
+	// "Redis singleton rule" — never per-request, defeats pooling.
+	redisCli := redis.NewClient(&redis.Options{
+		Addr:     cfg.Redis.Addr,
+		Password: cfg.Redis.Password,
+		DB:       cfg.Redis.DB,
+	})
+	defer func() { _ = redisCli.Close() }()
+	pingCtx, pingCancel := context.WithTimeout(ctx, redisPingTimeout)
+	if err := redisCli.Ping(pingCtx).Err(); err != nil {
+		pingCancel()
+		return fmt.Errorf("redis ping %s: %w", cfg.Redis.Addr, err)
+	}
+	pingCancel()
+	logger.InfoContext(ctx, "redis connected", "addr", cfg.Redis.Addr)
+
+	hybridCache, err := cache.New(cache.Config{
+		L1MaxItems: hybridCacheL1MaxItems,
+		L2:         redisCli,
+		Logger:     logger,
+	})
+	if err != nil {
+		return fmt.Errorf("hybrid cache: %w", err)
+	}
+	defer hybridCache.Close()
+
+	wiring, err := buildIdentityApp(pool, hybridCache, cfg, time.Now)
 	if err != nil {
 		return fmt.Errorf("build identity app: %w", err)
 	}
@@ -215,15 +260,41 @@ func run(ctx context.Context, stdout *os.File, _ []string) error {
 	tx := pg.NewTransactor(pool)
 	forwarder := adapters.NewOutboxForwarder(pool, tx, pubsub, IdentityEventsTopic, 0)
 
+	// Subscriber router — consumes the gochannel topic the forwarder
+	// publishes to. Without this, every integration event is dropped on
+	// the floor: the cascade subscribers (RevokeFamiliesOnSecurityChange,
+	// ReuseDetectedSIEM) become production no-ops + the EDA layer is
+	// theatre. Per messaging.md "Subscribers without a producer (or
+	// producers without a consumer) = dead code that lies about
+	// behaviour" — both halves wire here.
+	router, err := messaging.NewRouter(messaging.Deps{
+		Subscriber:       pubsub,
+		Logger:           logger,
+		IdempotencyInbox: messaging.NewIdempotentReceiver(pool),
+		AuditWriter:      audit.NewWriter(pool, logger),
+		CloseTimeout:     routerCloseTimeout,
+		Retry:            messaging.DefaultRetry,
+	})
+	if err != nil {
+		return fmt.Errorf("messaging router: %w", err)
+	}
+	subscribers.Register(router, wiring.Families, logger)
+
 	// Three-endpoint health split lives on the admin listener — public
 	// API never carries /alive|/ready|/health (per audit-checklist.md
 	// §12: probes excluded from public-facing caches).
 	health := obs.NewHealth([]obs.HealthChecker{
 		obs.HealthCheckerFunc{N: "postgres", Fn: pool.Ping},
+		obs.HealthCheckerFunc{N: "redis", Fn: func(ctx context.Context) error {
+			return redisCli.Ping(ctx).Err()
+		}},
 	}, healthCheckTimeout)
 	adminSrv := obs.NewAdminServer(cfg.Listen.Admin, health)
 
-	publicHandler := otelhttp.NewHandler(newServer(logger, identityApp, issuer), "leadkart-api")
+	publicHandler := otelhttp.NewHandler(
+		newServer(logger, wiring.App, wiring.Issuer, wiring.StampValidator),
+		"leadkart-api",
+	)
 	srv := &http.Server{
 		Addr:              cfg.Listen.API,
 		Handler:           publicHandler,
@@ -233,16 +304,24 @@ func run(ctx context.Context, stdout *os.File, _ []string) error {
 		IdleTimeout:       apiIdleTimeout,
 	}
 
-	// errgroup orchestrates the four long-running goroutines (forwarder,
-	// admin server, public API server, shutdown coordinator). First-
-	// error-cancels-rest semantics replace the manual select/errCh +
-	// stopForwarder + workers.Wait coordination.
+	// errgroup orchestrates the long-running goroutines (forwarder,
+	// router, admin server, public API server, shutdown coordinator).
+	// First-error-cancels-rest semantics replace the manual select/errCh
+	// + stopForwarder + workers.Wait coordination.
 	g, gctx := errgroup.WithContext(ctx)
 
 	g.Go(func() error {
 		forwarder.Run(gctx, forwarderPollInterval, forwarderRetryInterval, func(err error) {
 			logger.ErrorContext(gctx, "outbox forwarder", "err", err)
 		})
+		return nil
+	})
+
+	g.Go(func() error {
+		logger.Info("subscriber router starting")
+		if err := router.Run(gctx); err != nil && !errors.Is(err, context.Canceled) {
+			return fmt.Errorf("router: %w", err)
+		}
 		return nil
 	})
 
@@ -286,26 +365,44 @@ func run(ctx context.Context, stdout *os.File, _ []string) error {
 // route registration. Tests construct identityApp with fakes + pass
 // it directly.
 //
-// verifier gates authenticated routes (currently change-password). Pass
-// nil to skip wiring those routes — useful for the unit test that only
-// asserts probe-route absence on the public mux.
-func newServer(log *slog.Logger, identityApp app.Application, verifier authn.Verifier) http.Handler {
+// verifier + validator gate authenticated routes. Both must be non-nil
+// for the auth-route block to register; the test that only asserts
+// probe-route absence on the public mux passes (nil, nil).
+func newServer(log *slog.Logger, identityApp app.Application, verifier authn.Verifier, validator authn.StampValidator) http.Handler {
 	mux := http.NewServeMux()
-	ports.AddRoutes(mux, log, identityApp, verifier)
+	ports.AddRoutes(mux, log, identityApp, verifier, validator)
 	return mux
+}
+
+// identityWiring groups the Identity composition outputs that main()
+// threads into the HTTP server (validator, app, issuer) AND the
+// subscriber router (families repo + cache for invalidation hookup
+// landing in the next commit).
+//
+// Returned from [buildIdentityApp] so test fixtures + production share
+// the same construction path; tests substitute miniredis-backed
+// HybridCache to exercise the full stack.
+type identityWiring struct {
+	App            app.Application
+	Issuer         *jwt.Issuer
+	StampCache     *adapters.SecurityStampCache
+	StampValidator *adapters.SecurityStampValidator
+	Families       *adapters.RefreshTokenFamilyRepository
 }
 
 // ----- Identity wiring -------------------------------------------------------
 
 // buildIdentityApp wires the Identity Application from a pgxpool +
-// config + clock. Extracted from run() so tests construct an
-// Application backed by a testcontainers pool without going through
-// the env-var config path.
+// HybridCache + config + clock. Extracted from run() so tests construct
+// an Application backed by a testcontainers pool + miniredis without
+// going through the env-var config path.
 //
-// Returns the issuer alongside the Application so the caller can pass
-// it to [newServer] as the [authn.Verifier]; the issuer's Verify method
-// is what gates authenticated routes (change-password and onward).
-func buildIdentityApp(pool *pgxpool.Pool, cfg config.AppConfig, now func() time.Time) (app.Application, *jwt.Issuer, error) {
+// Returns an [identityWiring] carrying every output the composition
+// root needs: Application (HTTP handler graph), Issuer (Verifier for
+// the authn middleware), StampCache + StampValidator (route freshness
+// gate + subscriber-side invalidation), Families (subscriber
+// dependency).
+func buildIdentityApp(pool *pgxpool.Pool, hybridCache *cache.HybridCache, cfg config.AppConfig, now func() time.Time) (identityWiring, error) {
 	tx := pg.NewTransactor(pool)
 	tenants := adapters.NewTenantRepository(pool, tx)
 	persons := adapters.NewPersonRepository(pool, tx)
@@ -313,6 +410,9 @@ func buildIdentityApp(pool *pgxpool.Pool, cfg config.AppConfig, now func() time.
 	families := adapters.NewRefreshTokenFamilyRepository(pool, tx)
 	roles := adapters.NewRoleRepository(pool, tx)
 	permResolver := permissions.NewResolver(memberships, roles)
+
+	stampCache := adapters.NewSecurityStampCache(hybridCache, persons)
+	stampValidator := adapters.NewSecurityStampValidator(stampCache)
 
 	previous := make([]jwt.SigningKey, len(cfg.JWT.PreviousKeys))
 	for i, p := range cfg.JWT.PreviousKeys {
@@ -323,12 +423,12 @@ func buildIdentityApp(pool *pgxpool.Pool, cfg config.AppConfig, now func() time.
 		Secret: []byte(cfg.JWT.SigningKey),
 	}, previous, now)
 	if err != nil {
-		return app.Application{}, nil, fmt.Errorf("jwt issuer: %w", err)
+		return identityWiring{}, fmt.Errorf("jwt issuer: %w", err)
 	}
 
 	dummyHash, err := argon2.Hash("dummy-for-timing-flatten")
 	if err != nil {
-		return app.Application{}, nil, fmt.Errorf("dummy hash: %w", err)
+		return identityWiring{}, fmt.Errorf("dummy hash: %w", err)
 	}
 
 	// Breach checker: offline list seeded with HIBP top-N weakest
@@ -348,7 +448,7 @@ func buildIdentityApp(pool *pgxpool.Pool, cfg config.AppConfig, now func() time.
 	emailGateway := platformemail.NewRecorder(now)
 	noReplyAddress, err := commonemail.New("no-reply@leadkart.local")
 	if err != nil {
-		return app.Application{}, nil, fmt.Errorf("no-reply email address: %w", err)
+		return identityWiring{}, fmt.Errorf("no-reply email address: %w", err)
 	}
 
 	// Impersonation session store. v0.2 ships in-memory (single-
@@ -357,7 +457,12 @@ func buildIdentityApp(pool *pgxpool.Pool, cfg config.AppConfig, now func() time.
 	// [impersonation.Store] interface — composition root change only.
 	impersonationStore := impersonation.NewInMemoryStore(now)
 
-	return app.Application{
+	return identityWiring{
+		Issuer:         issuer,
+		StampCache:     stampCache,
+		StampValidator: stampValidator,
+		Families:       families,
+		App: app.Application{
 		Commands: app.Commands{
 			RegisterTenant:       command.NewRegisterTenantHandler(tx, tenants, persons, memberships, roles),
 			Login:                command.NewLoginHandler(persons, memberships, families, tenants, permResolver, issuer, now, cfg.Refresh.AbsoluteTTL, dummyHash),
@@ -421,5 +526,6 @@ func buildIdentityApp(pool *pgxpool.Pool, cfg config.AppConfig, now func() time.
 			ListImpersonationSessions: query.NewListImpersonationSessionsHandler(impersonationStore),
 			PlatformStats:             query.NewPlatformStatsHandler(pool, tx),
 		},
-	}, issuer, nil
+		},
+	}, nil
 }
