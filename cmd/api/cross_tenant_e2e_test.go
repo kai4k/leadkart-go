@@ -580,13 +580,27 @@ func TestE2E_PlatformOperator_ListsAllTenants(t *testing.T) {
 
 // TestE2E_PlatformStats_ReflectsState — counts match the registered
 // tenants + memberships.
+//
+// Per-helper contribution to the stats counters (encoded as a contract
+// the helpers + assertions share, not magic numbers in the test body):
+//
+//   registerAndLogin → +1 tenant, +1 person, +1 active membership
+//   mintPlatformToken → +1 person (the synthetic operator Person);
+//                       no tenant, no membership (TenantID claim is
+//                       synthetic, no DB row)
 func TestE2E_PlatformStats_ReflectsState(t *testing.T) {
 	f := newE2EFixture(t)
-	_ = f.registerAndLogin(t, "acme")
-	_ = f.registerAndLogin(t, "globex")
-	platformTok := f.mintPlatformToken(t, "")
+	admins := []registeredTenant{
+		f.registerAndLogin(t, "acme"),
+		f.registerAndLogin(t, "globex"),
+	}
+	operators := []string{f.mintPlatformToken(t, "")}
 
-	resp := f.authedJSON(t, http.MethodGet, "/api/v1/platform/stats", platformTok, nil)
+	wantTenants := len(admins)
+	wantPersons := len(admins) + len(operators)
+	wantActiveMemberships := len(admins)
+
+	resp := f.authedJSON(t, http.MethodGet, "/api/v1/platform/stats", operators[0], nil)
 	if resp.status != http.StatusOK {
 		t.Fatalf("stats: status %d body %s", resp.status, resp.body)
 	}
@@ -594,20 +608,17 @@ func TestE2E_PlatformStats_ReflectsState(t *testing.T) {
 	if err := json.Unmarshal(resp.body, &stats); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if stats.TenantsTotal != 2 {
-		t.Errorf("TenantsTotal = %d, want 2", stats.TenantsTotal)
+	if stats.TenantsTotal != wantTenants {
+		t.Errorf("TenantsTotal = %d, want %d (registerAndLogin × %d)",
+			stats.TenantsTotal, wantTenants, len(admins))
 	}
-	// Persons: 2 tenant admins + 1 synthetic Platform operator seeded
-	// by mintPlatformToken (operator Person rows are required for the
-	// freshness gate to resolve security_stamp claims). Operators have
-	// no Membership row, so MembershipsActive stays at 2 + TenantsTotal
-	// stays at 2 (mintPlatformToken's TenantID claim is synthetic — no
-	// DB write).
-	if stats.PersonsTotal != 3 {
-		t.Errorf("PersonsTotal = %d, want 3 (2 admins + 1 platform operator)", stats.PersonsTotal)
+	if stats.PersonsTotal != wantPersons {
+		t.Errorf("PersonsTotal = %d, want %d (registerAndLogin × %d + mintPlatformToken × %d)",
+			stats.PersonsTotal, wantPersons, len(admins), len(operators))
 	}
-	if stats.MembershipsActive != 2 {
-		t.Errorf("MembershipsActive = %d, want 2", stats.MembershipsActive)
+	if stats.MembershipsActive != wantActiveMemberships {
+		t.Errorf("MembershipsActive = %d, want %d (registerAndLogin × %d)",
+			stats.MembershipsActive, wantActiveMemberships, len(admins))
 	}
 }
 
