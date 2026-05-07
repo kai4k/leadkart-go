@@ -1,7 +1,6 @@
 package impersonation_test
 
 import (
-	"context"
 	"errors"
 	"testing"
 	"time"
@@ -53,10 +52,10 @@ func TestInMemoryStore_PutGet_RoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
-	if err := store.Put(context.Background(), sess); err != nil {
+	if err := store.Put(t.Context(), sess); err != nil {
 		t.Fatalf("Put: %v", err)
 	}
-	got, err := store.Get(context.Background(), sess.ID())
+	got, err := store.Get(t.Context(), sess.ID())
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
@@ -76,12 +75,12 @@ func TestInMemoryStore_Get_ExpiredSession_TreatedAsAbsent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
-	_ = store.Put(context.Background(), sess)
+	_ = store.Put(t.Context(), sess)
 
 	// Advance past expiry.
 	clock = now.Add(2 * time.Minute)
 
-	_, err = store.Get(context.Background(), sess.ID())
+	_, err = store.Get(t.Context(), sess.ID())
 	if !errors.Is(err, impersonation.ErrSessionNotFound) {
 		t.Fatalf("err = %v, want ErrSessionNotFound", err)
 	}
@@ -90,7 +89,7 @@ func TestInMemoryStore_Get_ExpiredSession_TreatedAsAbsent(t *testing.T) {
 func TestInMemoryStore_Delete_Idempotent(t *testing.T) {
 	t.Parallel()
 	store := impersonation.NewInMemoryStore(time.Now)
-	if err := store.Delete(context.Background(), "non-existent"); err != nil {
+	if err := store.Delete(t.Context(), "non-existent"); err != nil {
 		t.Errorf("Delete on absent: %v", err)
 	}
 }
@@ -103,10 +102,10 @@ func TestInMemoryStore_ListByOperator_FiltersByOwner(t *testing.T) {
 		"audit: investigating ticket TICKET-1", 30*time.Minute, now)
 	other, _ := impersonation.NewSession("op-2", "tenant-1",
 		"audit: investigating ticket TICKET-2", 30*time.Minute, now)
-	_ = store.Put(context.Background(), mine)
-	_ = store.Put(context.Background(), other)
+	_ = store.Put(t.Context(), mine)
+	_ = store.Put(t.Context(), other)
 
-	got, err := store.ListByOperator(context.Background(), "op-1")
+	got, err := store.ListByOperator(t.Context(), "op-1")
 	if err != nil {
 		t.Fatalf("ListByOperator: %v", err)
 	}
