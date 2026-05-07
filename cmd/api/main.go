@@ -313,6 +313,7 @@ func buildIdentityApp(pool *pgxpool.Pool, cfg config.AppConfig, now func() time.
 	families := adapters.NewRefreshTokenFamilyRepository(pool, tx)
 	roles := adapters.NewRoleRepository(pool, tx)
 	onboarding := service.NewTenantOnboardingService(tx, tenants, persons, memberships, roles)
+	userOnboarding := service.NewUserOnboardingService(tx, persons, memberships)
 	permResolver := permissions.NewResolver(memberships, roles)
 
 	previous := make([]jwt.SigningKey, len(cfg.JWT.PreviousKeys))
@@ -384,6 +385,8 @@ func buildIdentityApp(pool *pgxpool.Pool, cfg config.AppConfig, now func() time.
 			ReplaceUserPermissionOverrides: command.NewReplaceUserPermissionOverridesHandler(memberships),
 			AssignUserManager:              command.NewAssignUserManagerHandler(memberships),
 			RemoveUserManager:              command.NewRemoveUserManagerHandler(memberships),
+			CreateUser:                     command.NewCreateUserHandler(userOnboarding),
+			AnonymiseUser:                  command.NewAnonymiseUserHandler(memberships, persons),
 		},
 		Queries: app.Queries{
 			ListSessions: query.NewListSessionsHandler(families),

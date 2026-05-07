@@ -191,6 +191,29 @@ type AssignUserManagerRequest struct {
 	ManagerID string `json:"manager_id"`
 }
 
+// CreateUserRequest — POST /api/v1/users. Find-or-create-by-email
+// server-side per Auth0/Microsoft Entra ID canon: caller supplies
+// email + password + names; server decides whether to attach to an
+// existing global Person or create a new one.
+type CreateUserRequest struct {
+	Email     string `json:"email"`
+	Password  string `json:"password"`
+	FirstName string `json:"first_name"`
+	LastName  string `json:"last_name"`
+}
+
+// CreateUserResponse — POST /api/v1/users 201 body.
+//
+// PersonExisted lets the UI distinguish "we attached you to an
+// existing global identity" from "we created a fresh Person record" —
+// useful for the admin who entered the email so they understand the
+// new user already had an account elsewhere.
+type CreateUserResponse struct {
+	PersonID      string `json:"person_id"`
+	MembershipID  string `json:"membership_id"`
+	PersonExisted bool   `json:"person_existed"`
+}
+
 // ----- Tenant management -----------------------------------------------------
 
 // TenantDto is the wire-shape of a Tenant for read endpoints. Mirrors

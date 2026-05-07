@@ -60,6 +60,8 @@ type Commands struct {
 	ReplaceUserPermissionOverrides command.ReplaceUserPermissionOverridesHandler
 	AssignUserManager              command.AssignUserManagerHandler
 	RemoveUserManager              command.RemoveUserManagerHandler
+	CreateUser                     command.CreateUserHandler
+	AnonymiseUser                  command.AnonymiseUserHandler
 }
 
 // Queries aggregates all Identity query handlers. Read-side only — no

@@ -109,6 +109,14 @@ func AddRoutes(mux *http.ServeMux, log *slog.Logger, a app.Application, verifier
 			auth(handleAssignUserManager(log, a)))
 		mux.Handle("DELETE /api/v1/users/{userId}/manager",
 			auth(handleRemoveUserManager(log, a)))
+		mux.Handle("POST /api/v1/users", auth(handleCreateUser(log, a)))
+
+		// Anonymise — DPDP §12 / GDPR Art. 17 right-to-erasure cascade.
+		// Cross-tenant blast radius (one Person ⇒ many Memberships)
+		// gates this on Platform tier per multi-tenancy.md
+		// "SuperUser god-mode" + identity.users.anonymise permission.
+		mux.Handle("POST /api/v1/users/{userId}/anonymise",
+			platform(handleAnonymiseUser(log, a)))
 	}
 }
 

@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/leadkart/leadkart-go/internal/common/email"
 	"github.com/leadkart/leadkart-go/internal/common/tenancy"
 	"github.com/leadkart/leadkart-go/internal/identity/app"
 	"github.com/leadkart/leadkart-go/internal/identity/app/command"
@@ -235,6 +236,72 @@ func handleRemoveUserManager(log *slog.Logger, a app.Application) http.Handler {
 			return
 		}
 		err := a.Commands.RemoveUserManager.Handle(r.Context(), command.RemoveUserManagerCommand{
+			MembershipID: mid,
+		})
+		writeUserMutationResult(w, log, r, err)
+	})
+}
+
+// ----- CreateUser -----------------------------------------------------------
+
+func handleCreateUser(log *slog.Logger, a app.Application) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Tenant scope is the caller's JWT tenant_id (bridged onto ctx
+		// by RequireAuth). The handler trusts that scope rather than
+		// taking a tenant ID in the body — matches the per-tenant
+		// nature of Membership creation.
+		tid, ok := tenancy.FromContext(r.Context())
+		if !ok || tid == "" {
+			writeError(w, http.StatusUnauthorized, ErrCodeInvalidCredentials, "")
+			return
+		}
+		var req CreateUserRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, ErrCodeInvalidBody, "request body is not valid JSON")
+			return
+		}
+		addr, err := email.New(req.Email)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, ErrCodeInvalidEmail, err.Error())
+			return
+		}
+		out, err := a.Commands.CreateUser.Handle(r.Context(), command.CreateUserCommand{
+			TenantID:  tenant.ID(tid),
+			Email:     addr,
+			Password:  req.Password,
+			FirstName: req.FirstName,
+			LastName:  req.LastName,
+		})
+		switch {
+		case errors.Is(err, command.ErrEmailHasActiveMembership):
+			writeError(w, http.StatusConflict, ErrCodeEmailHasActiveMembership,
+				"this email already has an active membership in another tenant")
+			return
+		case errors.Is(err, membership.ErrInvalid):
+			writeError(w, http.StatusUnprocessableEntity, ErrCodeUserInvalid, err.Error())
+			return
+		case err != nil:
+			log.ErrorContext(r.Context(), "create user failed", "err", err)
+			writeError(w, http.StatusInternalServerError, ErrCodeInternalError, "")
+			return
+		}
+		writeJSON(w, http.StatusCreated, CreateUserResponse{
+			PersonID:      out.PersonID.String(),
+			MembershipID:  out.MembershipID.String(),
+			PersonExisted: out.PersonExisted,
+		})
+	})
+}
+
+// ----- AnonymiseUser --------------------------------------------------------
+
+func handleAnonymiseUser(log *slog.Logger, a app.Application) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mid, ok := parseUserIDPath(w, r)
+		if !ok {
+			return
+		}
+		err := a.Commands.AnonymiseUser.Handle(r.Context(), command.AnonymiseUserCommand{
 			MembershipID: mid,
 		})
 		writeUserMutationResult(w, log, r, err)
