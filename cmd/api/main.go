@@ -25,13 +25,13 @@ import (
 	"os"
 	"os/signal"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 
 	"github.com/ThreeDotsLabs/watermill"
 	"github.com/ThreeDotsLabs/watermill/pubsub/gochannel"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"golang.org/x/sync/errgroup"
 
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 
@@ -215,18 +215,6 @@ func run(ctx context.Context, stdout *os.File, _ []string) error {
 	tx := pg.NewTransactor(pool)
 	forwarder := adapters.NewOutboxForwarder(pool, tx, pubsub, IdentityEventsTopic, 0)
 
-	forwarderCtx, stopForwarder := context.WithCancel(ctx)
-	defer stopForwarder()
-	var workers sync.WaitGroup
-	// Go 1.25 wg.Go captures both the goroutine spawn AND the
-	// matching wg.Done() call — strictly cleaner than manual
-	// Add(1) + defer Done().
-	workers.Go(func() {
-		forwarder.Run(forwarderCtx, forwarderPollInterval, forwarderRetryInterval, func(err error) {
-			logger.ErrorContext(forwarderCtx, "outbox forwarder", "err", err)
-		})
-	})
-
 	// Three-endpoint health split lives on the admin listener — public
 	// API never carries /alive|/ready|/health (per audit-checklist.md
 	// §12: probes excluded from public-facing caches).
@@ -245,36 +233,48 @@ func run(ctx context.Context, stdout *os.File, _ []string) error {
 		IdleTimeout:       apiIdleTimeout,
 	}
 
-	errCh := make(chan error, 2)
-	go func() {
+	// errgroup orchestrates the four long-running goroutines (forwarder,
+	// admin server, public API server, shutdown coordinator). First-
+	// error-cancels-rest semantics replace the manual select/errCh +
+	// stopForwarder + workers.Wait coordination.
+	g, gctx := errgroup.WithContext(ctx)
+
+	g.Go(func() error {
+		forwarder.Run(gctx, forwarderPollInterval, forwarderRetryInterval, func(err error) {
+			logger.ErrorContext(gctx, "outbox forwarder", "err", err)
+		})
+		return nil
+	})
+
+	g.Go(func() error {
 		logger.Info("admin listening", "addr", cfg.Listen.Admin)
 		if err := adminSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			errCh <- fmt.Errorf("admin: %w", err)
-			return
+			return fmt.Errorf("admin: %w", err)
 		}
-	}()
-	go func() {
+		return nil
+	})
+
+	g.Go(func() error {
 		logger.Info("api listening", "addr", cfg.Listen.API)
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			errCh <- fmt.Errorf("api: %w", err)
-			return
+			return fmt.Errorf("api: %w", err)
 		}
-	}()
+		return nil
+	})
 
-	select {
-	case <-ctx.Done():
+	g.Go(func() error {
+		<-gctx.Done()
 		logger.Info("api shutting down")
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), apiShutdownTimeout)
 		defer cancel()
-		stopForwarder()
-		workers.Wait()
 		_ = adminSrv.Shutdown(shutdownCtx)
 		return srv.Shutdown(shutdownCtx)
-	case err := <-errCh:
-		stopForwarder()
-		workers.Wait()
+	})
+
+	if err := g.Wait(); err != nil && !errors.Is(err, context.Canceled) {
 		return err
 	}
+	return nil
 }
 
 // newServer builds the public HTTP handler tree per Mat Ryer 2024.
