@@ -128,6 +128,104 @@ type ChangePasswordRequest struct {
 	NewPassword     string `json:"new_password"`
 }
 
+// ----- Tenant management -----------------------------------------------------
+
+// TenantDto is the wire-shape of a Tenant for read endpoints. Mirrors
+// the .NET LeadKart `TenantDto` — full profile + statutory + contact +
+// settings + display preferences + lifecycle timestamps.
+type TenantDto struct {
+	ID                  string             `json:"id"`
+	Slug                string             `json:"slug"`
+	LegalName           string             `json:"legal_name"`
+	DisplayName         string             `json:"display_name"`
+	AdminEmail          string             `json:"admin_email"`
+	Status              string             `json:"status"`
+	CreatedAt           time.Time          `json:"created_at"`
+	ActivatedAt         time.Time          `json:"activated_at,omitzero"`
+	SuspendedAt         time.Time          `json:"suspended_at,omitzero"`
+	DeletionScheduledAt time.Time          `json:"deletion_scheduled_at,omitzero"`
+	DeletionReason      string             `json:"deletion_reason,omitempty"`
+	GSTNumber           string             `json:"gst_number,omitempty"`
+	PANNumber           string             `json:"pan_number,omitempty"`
+	DrugLicenceNumber   string             `json:"drug_licence_number,omitempty"`
+	AdminPhone          string             `json:"admin_phone,omitempty"`
+	AdminAddress        AdminAddressDto    `json:"admin_address"`
+	PasswordPolicy      PasswordPolicyDto  `json:"password_policy"`
+	Locale              string             `json:"locale,omitempty"`
+	TimeZone            string             `json:"time_zone,omitempty"`
+	DateFormat          string             `json:"date_format,omitempty"`
+	Currency            string             `json:"currency,omitempty"`
+}
+
+// AdminAddressDto is the postal-address slice of [TenantDto].
+type AdminAddressDto struct {
+	Street    string `json:"street,omitempty"`
+	City      string `json:"city,omitempty"`
+	District  string `json:"district,omitempty"`
+	State     string `json:"state,omitempty"`
+	StateCode string `json:"state_code,omitempty"`
+	Pincode   string `json:"pincode,omitempty"`
+}
+
+// PasswordPolicyDto is the password-policy slice of [TenantDto].
+type PasswordPolicyDto struct {
+	MinLength         int  `json:"min_length"`
+	RequireUppercase  bool `json:"require_uppercase"`
+	RequireLowercase  bool `json:"require_lowercase"`
+	RequireDigit      bool `json:"require_digit"`
+	RequireSymbol     bool `json:"require_symbol"`
+	MaxFailedAttempts int  `json:"max_failed_attempts"`
+	LockoutMinutes    int  `json:"lockout_minutes"`
+}
+
+// UpdateTenantProfileRequest — PATCH /api/v1/tenants/{tenantId}/profile.
+type UpdateTenantProfileRequest struct {
+	LegalName   string `json:"legal_name"`
+	DisplayName string `json:"display_name"`
+}
+
+// UpdateTenantStatutoryRequest — PATCH /api/v1/tenants/{tenantId}/statutory.
+//
+// Empty strings clear the corresponding declaration; the aggregate
+// accepts a zero [tenant.Statutory] for tenants that haven't yet
+// onboarded their compliance IDs.
+type UpdateTenantStatutoryRequest struct {
+	GSTNumber         string `json:"gst_number"`
+	PANNumber         string `json:"pan_number"`
+	DrugLicenceNumber string `json:"drug_licence_number"`
+}
+
+// UpdateTenantAdminContactRequest — PATCH .../admin-contact.
+type UpdateTenantAdminContactRequest struct {
+	Phone   string          `json:"phone"`
+	Address AdminAddressDto `json:"address"`
+}
+
+// UpdateTenantSettingsRequest — PATCH .../settings.
+type UpdateTenantSettingsRequest struct {
+	PasswordPolicy PasswordPolicyDto `json:"password_policy"`
+}
+
+// UpdateTenantDisplayPreferencesRequest — PATCH .../display-preferences.
+type UpdateTenantDisplayPreferencesRequest struct {
+	Locale     string `json:"locale"`
+	TimeZone   string `json:"time_zone"`
+	DateFormat string `json:"date_format"`
+	Currency   string `json:"currency"`
+}
+
+// SuspendTenantRequest — POST .../suspend. Reason MUST be non-empty
+// (audit requirement per data-retention.md).
+type SuspendTenantRequest struct {
+	Reason string `json:"reason"`
+}
+
+// MarkTenantForDeletionRequest — POST .../mark-for-deletion. Reason
+// MUST be non-empty (DPDP §12 + SOC2 CC4.1 audit requirement).
+type MarkTenantForDeletionRequest struct {
+	Reason string `json:"reason"`
+}
+
 // ----- Sessions --------------------------------------------------------------
 
 // SessionDto is one entry in the GET /api/v1/auth/sessions response.

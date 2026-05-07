@@ -39,10 +39,22 @@ type Commands struct {
 	ConfirmPasswordReset command.ConfirmPasswordResetHandler
 	RequestEmailChange   command.RequestEmailChangeHandler
 	ConfirmEmailChange   command.ConfirmEmailChangeHandler
+
+	// Tenant management.
+	UpdateTenantProfile            command.UpdateTenantProfileHandler
+	UpdateTenantStatutory          command.UpdateTenantStatutoryHandler
+	UpdateTenantAdminContact       command.UpdateTenantAdminContactHandler
+	UpdateTenantSettings           command.UpdateTenantSettingsHandler
+	UpdateTenantDisplayPreferences command.UpdateTenantDisplayPreferencesHandler
+	SuspendTenant                  command.SuspendTenantHandler
+	ActivateTenant                 command.ActivateTenantHandler
+	MarkTenantForDeletion          command.MarkTenantForDeletionHandler
+	RestoreTenant                  command.RestoreTenantHandler
 }
 
 // Queries aggregates all Identity query handlers. Read-side only — no
 // state mutation. Mirrors the [Commands] composition shape.
 type Queries struct {
 	ListSessions query.ListSessionsHandler
+	GetTenant    query.GetTenantHandler
 }

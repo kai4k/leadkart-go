@@ -365,9 +365,20 @@ func buildIdentityApp(pool *pgxpool.Pool, cfg config.AppConfig, now func() time.
 			ConfirmPasswordReset: command.NewConfirmPasswordResetHandler(persons, breachChecker),
 			RequestEmailChange:   command.NewRequestEmailChangeHandler(persons, emailGateway, noReplyAddress),
 			ConfirmEmailChange:   command.NewConfirmEmailChangeHandler(persons),
+
+			UpdateTenantProfile:            command.NewUpdateTenantProfileHandler(tenants),
+			UpdateTenantStatutory:          command.NewUpdateTenantStatutoryHandler(tenants),
+			UpdateTenantAdminContact:       command.NewUpdateTenantAdminContactHandler(tenants),
+			UpdateTenantSettings:           command.NewUpdateTenantSettingsHandler(tenants),
+			UpdateTenantDisplayPreferences: command.NewUpdateTenantDisplayPreferencesHandler(tenants),
+			SuspendTenant:                  command.NewSuspendTenantHandler(tenants),
+			ActivateTenant:                 command.NewActivateTenantHandler(tenants),
+			MarkTenantForDeletion:          command.NewMarkTenantForDeletionHandler(tenants),
+			RestoreTenant:                  command.NewRestoreTenantHandler(tenants),
 		},
 		Queries: app.Queries{
 			ListSessions: query.NewListSessionsHandler(families),
+			GetTenant:    query.NewGetTenantHandler(tenants),
 		},
 	}, issuer, nil
 }

@@ -54,6 +54,38 @@ func AddRoutes(mux *http.ServeMux, log *slog.Logger, a app.Application, verifier
 		mux.Handle("GET /api/v1/auth/sessions", auth(handleListSessions(log, a)))
 		mux.Handle("DELETE /api/v1/auth/sessions/{familyId}", auth(handleRevokeSession(log, a)))
 		mux.Handle("DELETE /api/v1/auth/sessions", auth(handleRevokeAllSessions(log, a)))
+
+		// Tenant management — same-tenant-or-platform gate per
+		// authn.RequireTenantContext. A tenant Admin can manage their
+		// own tenant; Platform / SuperUser operators can manage any
+		// (post-impersonation per multi-tenancy.md).
+		tenantCtx := authn.RequireTenantContext(verifier, "tenantId")
+		mux.Handle("GET /api/v1/tenants/{tenantId}",
+			tenantCtx(handleGetTenant(log, a)))
+		mux.Handle("PATCH /api/v1/tenants/{tenantId}/profile",
+			tenantCtx(handleUpdateTenantProfile(log, a)))
+		mux.Handle("PATCH /api/v1/tenants/{tenantId}/statutory",
+			tenantCtx(handleUpdateTenantStatutory(log, a)))
+		mux.Handle("PATCH /api/v1/tenants/{tenantId}/admin-contact",
+			tenantCtx(handleUpdateTenantAdminContact(log, a)))
+		mux.Handle("PATCH /api/v1/tenants/{tenantId}/settings",
+			tenantCtx(handleUpdateTenantSettings(log, a)))
+		mux.Handle("PATCH /api/v1/tenants/{tenantId}/display-preferences",
+			tenantCtx(handleUpdateTenantDisplayPreferences(log, a)))
+
+		// Lifecycle — Platform-only per multi-tenancy.md "SuperUser
+		// god-mode" + identity.tenants.{suspend,activate,delete}
+		// permissions. Tenants do NOT self-suspend / self-restore via
+		// these routes; those flows go through Platform-tier APIs.
+		platform := authn.RequirePlatform(verifier)
+		mux.Handle("POST /api/v1/tenants/{tenantId}/suspend",
+			platform(handleSuspendTenant(log, a)))
+		mux.Handle("POST /api/v1/tenants/{tenantId}/activate",
+			platform(handleActivateTenant(log, a)))
+		mux.Handle("POST /api/v1/tenants/{tenantId}/mark-for-deletion",
+			platform(handleMarkTenantForDeletion(log, a)))
+		mux.Handle("POST /api/v1/tenants/{tenantId}/restore",
+			platform(handleRestoreTenant(log, a)))
 	}
 }
 

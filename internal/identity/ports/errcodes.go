@@ -98,4 +98,15 @@ const (
 	// 400 surface, same enumeration-safety rule as reset.
 	//nolint:gosec // G101: error code, not a credential
 	ErrCodeEmailChangeTokenInvalid = "email_change_token_invalid"
+
+	// ErrCodeTenantNotFound — tenant ID has no matching row. 404 surface.
+	ErrCodeTenantNotFound = "tenant_not_found"
+
+	// ErrCodeInvalidTenantID — path parameter `{tenantId}` failed UUID
+	// parse. 400 surface.
+	ErrCodeInvalidTenantID = "invalid_tenant_id"
+
+	// ErrCodeTenantInvalid — aggregate-level invariant violation
+	// (over-length name, terminal-state transition, etc.). 422 surface.
+	ErrCodeTenantInvalid = "tenant_invalid"
 )
