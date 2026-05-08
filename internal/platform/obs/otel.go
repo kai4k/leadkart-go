@@ -18,9 +18,12 @@ import (
 	"time"
 
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploggrpc"
 	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
+	"go.opentelemetry.io/otel/log/global"
 	"go.opentelemetry.io/otel/propagation"
+	sdklog "go.opentelemetry.io/otel/sdk/log"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
@@ -63,22 +66,24 @@ func Setup(ctx context.Context, cfg config.OTelConfig) (Shutdown, error) {
 	}
 
 	// No-op exporters in dev — global providers still install so the
-	// otel.Tracer / otel.Meter calls everywhere work. Production
-	// flips OTLP_ENDPOINT to ship spans to Tempo / Jaeger / etc.
+	// otel.Tracer / otel.Meter / global.Logger calls everywhere work.
+	// Production flips OTLP_ENDPOINT to ship spans to Tempo / Jaeger
+	// / OTel Collector + log records to the same OTLP target.
 	if cfg.OTLPEndpoint == "" {
 		tp := sdktrace.NewTracerProvider(
 			sdktrace.WithResource(res),
 			sdktrace.WithSampler(sdktrace.TraceIDRatioBased(cfg.SampleRatio)),
 		)
 		mp := sdkmetric.NewMeterProvider(sdkmetric.WithResource(res))
+		lp := sdklog.NewLoggerProvider(sdklog.WithResource(res))
 		otel.SetTracerProvider(tp)
 		otel.SetMeterProvider(mp)
+		global.SetLoggerProvider(lp)
 		otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(
 			propagation.TraceContext{}, propagation.Baggage{},
 		))
 		return func(ctx context.Context) error {
-			err := errors.Join(tp.Shutdown(ctx), mp.Shutdown(ctx))
-			return err
+			return errors.Join(tp.Shutdown(ctx), mp.Shutdown(ctx), lp.Shutdown(ctx))
 		}, nil
 	}
 
@@ -113,8 +118,25 @@ func Setup(ctx context.Context, cfg config.OTelConfig) (Shutdown, error) {
 		)),
 	)
 
+	logExp, err := otlploggrpc.New(ctx,
+		otlploggrpc.WithEndpoint(cfg.OTLPEndpoint),
+		otlploggrpc.WithDialOption(grpc.WithTransportCredentials(insecure.NewCredentials())),
+	)
+	if err != nil {
+		_ = tp.Shutdown(ctx)
+		_ = mp.Shutdown(ctx)
+		return nil, fmt.Errorf("obs: log exporter: %w", err)
+	}
+	lp := sdklog.NewLoggerProvider(
+		sdklog.WithResource(res),
+		sdklog.WithProcessor(sdklog.NewBatchProcessor(logExp,
+			sdklog.WithExportInterval(5*time.Second),
+		)),
+	)
+
 	otel.SetTracerProvider(tp)
 	otel.SetMeterProvider(mp)
+	global.SetLoggerProvider(lp)
 	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(
 		propagation.TraceContext{}, propagation.Baggage{},
 	))
@@ -122,7 +144,7 @@ func Setup(ctx context.Context, cfg config.OTelConfig) (Shutdown, error) {
 	shutdown := func(ctx context.Context) error {
 		ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 		defer cancel()
-		return errors.Join(tp.Shutdown(ctx), mp.Shutdown(ctx))
+		return errors.Join(tp.Shutdown(ctx), mp.Shutdown(ctx), lp.Shutdown(ctx))
 	}
 	return shutdown, nil
 }
