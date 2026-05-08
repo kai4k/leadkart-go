@@ -58,12 +58,15 @@ type AppConfig struct {
 }
 
 // ListenConfig holds network bind addresses for the API + admin
-// (pprof + metrics) listeners. Admin is a separate port so probes
-// + diagnostics don't share the public listener (per
-// [observability] doctrine — pprof never on the public port).
+// (pprof + metrics) listeners + the cmd/worker admin probe listener.
+// Admin is a separate port so probes + diagnostics don't share the
+// public listener (per [observability] doctrine — pprof never on the
+// public port). WorkerAdmin is the cmd/worker process's equivalent —
+// the worker exposes no public API, only its admin probes.
 type ListenConfig struct {
-	API   string `koanf:"api"`   // ":8080"
-	Admin string `koanf:"admin"` // ":9090"
+	API         string `koanf:"api"`          // ":8080"
+	Admin       string `koanf:"admin"`        // ":9090"
+	WorkerAdmin string `koanf:"worker_admin"` // ":9091"
 }
 
 // PostgresConfig carries the leadkart_app role DSN. Migrations run as
@@ -121,8 +124,9 @@ func Defaults() AppConfig {
 	return AppConfig{
 		Env: "dev",
 		Listen: ListenConfig{
-			API:   ":8080",
-			Admin: ":9090",
+			API:         ":8080",
+			Admin:       ":9090",
+			WorkerAdmin: ":9091",
 		},
 		Refresh: RefreshConfig{
 			AbsoluteTTL: 14 * 24 * time.Hour,
@@ -214,8 +218,9 @@ func structToMap(cfg AppConfig) map[string]any {
 	return map[string]any{
 		"env": cfg.Env,
 		"listen": map[string]any{
-			"api":   cfg.Listen.API,
-			"admin": cfg.Listen.Admin,
+			"api":          cfg.Listen.API,
+			"admin":        cfg.Listen.Admin,
+			"worker_admin": cfg.Listen.WorkerAdmin,
 		},
 		"postgres": map[string]any{"dsn": cfg.Postgres.DSN},
 		"redis": map[string]any{

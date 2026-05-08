@@ -4,6 +4,13 @@
 // after 13 years": big positional NewServer constructor, manual
 // dependency wiring, returns http.Handler. No DI container.
 //
+// Scope: REQUEST PATH ONLY. The API host writes integration events to
+// the per-module outbox table; it does NOT poll the outbox or run
+// subscribers. Event processing lives in cmd/worker — both the
+// outbox forwarder and the subscriber router. Production deploys both
+// binaries; dev environments run them as separate processes against a
+// shared Postgres + Redis pair.
+//
 // Required environment (see internal/platform/config/AppConfig):
 //
 //	LEADKART_POSTGRES__DSN        postgres DSN (leadkart_app role)
@@ -28,8 +35,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/ThreeDotsLabs/watermill"
-	"github.com/ThreeDotsLabs/watermill/pubsub/gochannel"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
 	"golang.org/x/sync/errgroup"
@@ -49,20 +54,11 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/app/query"
 	"github.com/leadkart/leadkart-go/internal/identity/ports"
 	"github.com/leadkart/leadkart-go/internal/identity/ports/authn"
-	"github.com/leadkart/leadkart-go/internal/identity/ports/subscribers"
-	"github.com/leadkart/leadkart-go/internal/platform/audit"
 	"github.com/leadkart/leadkart-go/internal/platform/cache"
 	"github.com/leadkart/leadkart-go/internal/platform/config"
-	"github.com/leadkart/leadkart-go/internal/platform/messaging"
 	"github.com/leadkart/leadkart-go/internal/platform/obs"
 	"github.com/leadkart/leadkart-go/internal/platform/pg"
 )
-
-// IdentityEventsTopic is the Watermill destination used by both the
-// outbox forwarder (publish) and downstream module subscribers
-// (consume). All identity.* domain events flow through this single
-// topic; subscribers route by `event_type` metadata header.
-const IdentityEventsTopic = "identity.events"
 
 // HTTP server timeouts — public listener tuning per OWASP API Security
 // Top 10 (API4: Unrestricted Resource Consumption). Values match the
@@ -82,14 +78,8 @@ const (
 	apiShutdownTimeout = 30 * time.Second
 )
 
-// Outbox forwarder + health-probe tunings.
+// Health-probe + cache + OTel tunings.
 const (
-	// forwarderPollInterval — how often the forwarder polls the outbox
-	// for unforwarded rows when the previous poll returned nothing.
-	forwarderPollInterval = time.Second
-	// forwarderRetryInterval — backoff after a publish failure before
-	// retrying the same row.
-	forwarderRetryInterval = 50 * time.Millisecond
 	// healthCheckTimeout — per-checker budget on /ready probes.
 	healthCheckTimeout = 2 * time.Second
 	// otelShutdownTimeout — OpenTelemetry exporter flush + close.
@@ -102,9 +92,6 @@ const (
 	// 10k SecurityStamp entries occupy ~1MB on a 36-char value; well
 	// under the 256MB-per-pod default container limit.
 	hybridCacheL1MaxItems = 10_000
-	// routerCloseTimeout caps how long messaging.Router waits for
-	// in-flight subscriber handlers on shutdown.
-	routerCloseTimeout = 30 * time.Second
 )
 
 func main() {
@@ -251,34 +238,11 @@ func run(ctx context.Context, stdout *os.File, _ []string) error {
 		return fmt.Errorf("build identity app: %w", err)
 	}
 
-	// In-process Watermill GoChannel pub/sub — drains identity.outbox
-	// to in-binary subscribers. Production swap to Redis Streams or
-	// Kafka happens by replacing this single `Publisher`.
-	pubsub := gochannel.NewGoChannel(gochannel.Config{}, watermill.NewSlogLogger(logger))
-	defer func() { _ = pubsub.Close() }()
-
-	tx := pg.NewTransactor(pool)
-	forwarder := adapters.NewOutboxForwarder(pool, tx, pubsub, IdentityEventsTopic, 0)
-
-	// Subscriber router — consumes the gochannel topic the forwarder
-	// publishes to. Without this, every integration event is dropped on
-	// the floor: the cascade subscribers (RevokeFamiliesOnSecurityChange,
-	// ReuseDetectedSIEM) become production no-ops + the EDA layer is
-	// theatre. Per messaging.md "Subscribers without a producer (or
-	// producers without a consumer) = dead code that lies about
-	// behaviour" — both halves wire here.
-	router, err := messaging.NewRouter(messaging.Deps{
-		Subscriber:       pubsub,
-		Logger:           logger,
-		IdempotencyInbox: messaging.NewIdempotentReceiver(pool),
-		AuditWriter:      audit.NewWriter(pool, logger),
-		CloseTimeout:     routerCloseTimeout,
-		Retry:            messaging.DefaultRetry,
-	})
-	if err != nil {
-		return fmt.Errorf("messaging router: %w", err)
-	}
-	subscribers.Register(router, wiring.Families, wiring.StampCache, logger)
+	// NOTE: outbox forwarder + messaging.Router + subscribers.Register
+	// live in cmd/worker — see that binary's package doc. The API host
+	// only writes integration events (via the per-handler outbox writes
+	// inside each command handler); it does NOT poll the outbox or run
+	// subscribers. Production deploys both binaries.
 
 	// Three-endpoint health split lives on the admin listener — public
 	// API never carries /alive|/ready|/health (per audit-checklist.md
@@ -304,26 +268,12 @@ func run(ctx context.Context, stdout *os.File, _ []string) error {
 		IdleTimeout:       apiIdleTimeout,
 	}
 
-	// errgroup orchestrates the long-running goroutines (forwarder,
-	// router, admin server, public API server, shutdown coordinator).
-	// First-error-cancels-rest semantics replace the manual select/errCh
-	// + stopForwarder + workers.Wait coordination.
+	// errgroup orchestrates the long-running goroutines (admin server,
+	// public API server, shutdown coordinator). First-error-cancels-rest
+	// semantics replace the manual select/errCh + workers.Wait
+	// coordination. Outbox forwarder + subscriber router live in
+	// cmd/worker.
 	g, gctx := errgroup.WithContext(ctx)
-
-	g.Go(func() error {
-		forwarder.Run(gctx, forwarderPollInterval, forwarderRetryInterval, func(err error) {
-			logger.ErrorContext(gctx, "outbox forwarder", "err", err)
-		})
-		return nil
-	})
-
-	g.Go(func() error {
-		logger.Info("subscriber router starting")
-		if err := router.Run(gctx); err != nil && !errors.Is(err, context.Canceled) {
-			return fmt.Errorf("router: %w", err)
-		}
-		return nil
-	})
 
 	g.Go(func() error {
 		logger.Info("admin listening", "addr", cfg.Listen.Admin)
