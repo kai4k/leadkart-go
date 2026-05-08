@@ -38,6 +38,22 @@ type SecurityStampCache struct {
 // HybridCache + read-through person reader. The reader is consulted
 // only on cache miss (singleflight-coalesced when concurrent misses
 // race).
+//
+// L2-only ([cache.WithOmitL1]): SecurityStamp lookups are per-Person
+// with traffic fanned out across the keyspace — the L1 in-process
+// hit ratio is too low to earn ristretto's complexity. More
+// importantly, the L1+L2 pattern has an inherent eventual-consistency
+// race on Invalidate (a concurrent Get's L2.Get can race
+// Invalidate's L2.Del + then refill L1 from L2 with the stale value
+// before the Del completes; the L1 entry then persists for up to
+// the L1 TTL, defeating the point of explicit invalidation). For a
+// security-bearing facade where revocation must propagate within
+// the next request, single-tier L2 is the canonical shape (Stripe /
+// GitHub PAT / banking session-validation patterns). Per-request
+// cost: one Redis roundtrip (~0.5-1ms within the same DC).
+//
+// HybridCache (L1+L2) remains the right shape for high-cache-hit-
+// ratio reference data (future TenantSettings / Pincode / etc.).
 func NewSecurityStampCache(hybrid *cache.HybridCache, persons PersonStampReader) *SecurityStampCache {
 	if hybrid == nil {
 		panic("adapters: NewSecurityStampCache hybrid cache required")
@@ -57,6 +73,7 @@ func NewSecurityStampCache(hybrid *cache.HybridCache, persons PersonStampReader)
 			return p.SecurityStamp().String(), nil
 		},
 		cache.WithTTL(cache.SecurityStampTTL),
+		cache.WithOmitL1(),
 	)
 	return &SecurityStampCache{facade: facade}
 }

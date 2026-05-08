@@ -44,6 +44,10 @@ type Facade[K comparable, V any] struct {
 	ttl     TTL
 	name    string
 
+	// omitL1 disables the in-process ristretto layer for this facade.
+	// See [WithOmitL1] for the rationale + when to use it.
+	omitL1 bool
+
 	// gen monotonically increases on every Invalidate / InvalidateMany
 	// / Set. Read by the Get-miss factory closure to decide whether
 	// its result is still safe to commit to the cache. See the
@@ -55,12 +59,47 @@ type Facade[K comparable, V any] struct {
 type FacadeOption func(opts *facadeOptions)
 
 type facadeOptions struct {
-	ttl TTL
+	ttl    TTL
+	omitL1 bool
 }
 
 // WithTTL overrides the per-facade TTL. Default is [DefaultTTL].
 func WithTTL(ttl TTL) FacadeOption {
 	return func(o *facadeOptions) { o.ttl = ttl }
+}
+
+// WithOmitL1 makes the facade single-tier (L2-only): no in-process
+// ristretto L1, every Get round-trips to Redis (L2), every Invalidate
+// is one Redis Del.
+//
+// Use this for facades where:
+//
+//   - The cache hit ratio per process is low (e.g., per-Person or
+//     per-User keys with traffic fanned out across the keyspace).
+//     L1 doesn't earn its keep — most lookups miss L1 anyway.
+//   - Real-time invalidation matters more than the µs-class L1 hit
+//     latency. The L1+L2 pattern has an inherent eventual-
+//     consistency window when concurrent Get races Invalidate's
+//     L2.Del + then refills L1 from L2 with the stale value
+//     (per Microsoft Learn HybridCache RemoveAsync caveats:
+//     "RemoveAsync is best-effort").
+//   - The data is security-sensitive and the per-request Redis
+//     cost (~0.5-1ms within the same DC) is acceptable.
+//
+// SecurityStampCache is the canonical user — per-Person stamps
+// where revocation must propagate without the L1 race window.
+// HybridCache (L1+L2) remains the default for high-hit-ratio
+// reference data (tenant settings, pincode lookups, etc.).
+//
+// Industry parallels:
+//   - Stripe API key validation: server-side state, no in-process L1.
+//   - GitHub PAT validation: same.
+//   - Microsoft HybridCache with tags: alternative L1+L2 shape that
+//     fences the read path via per-entry version tags. We don't
+//     implement tags; OmitL1 is the simpler fix when the L1 layer
+//     isn't earning its complexity.
+func WithOmitL1() FacadeOption {
+	return func(o *facadeOptions) { o.omitL1 = true }
 }
 
 // NewFacade wires a typed facade.
@@ -89,6 +128,7 @@ func NewFacade[K comparable, V any](
 		factory: factory,
 		ttl:     o.ttl,
 		name:    name,
+		omitL1:  o.omitL1,
 	}
 }
 
@@ -107,15 +147,17 @@ func NewFacade[K comparable, V any](
 func (f *Facade[K, V]) Get(ctx context.Context, key K) (V, error) {
 	keyStr := f.keyer(key)
 
-	// L1 hit?
-	if raw, found := f.cache.L1.Get(keyStr); found {
-		var v V
-		if err := f.cache.Codec.Decode(raw, &v); err == nil {
-			return v, nil
+	// L1 hit? (skipped entirely when omitL1).
+	if !f.omitL1 {
+		if raw, found := f.cache.L1.Get(keyStr); found {
+			var v V
+			if err := f.cache.Codec.Decode(raw, &v); err == nil {
+				return v, nil
+			}
+			// Decode failure on L1 is unexpected — value was encoded by
+			// us. Log + fall through to L2 + factory.
+			f.cache.Logger.Warn("cache: L1 decode failed", "facade", f.name, "key", keyStr)
 		}
-		// Decode failure on L1 is unexpected — value was encoded by
-		// us. Log + fall through to L2 + factory.
-		f.cache.Logger.Warn("cache: L1 decode failed", "facade", f.name, "key", keyStr)
 	}
 
 	// L2 hit?
@@ -127,7 +169,9 @@ func (f *Facade[K, V]) Get(ctx context.Context, key K) (V, error) {
 				"facade", f.name, "key", keyStr, "err", decodeErr)
 			break
 		}
-		f.cache.L1.SetWithTTL(keyStr, raw, int64(len(raw)), f.ttl.L1)
+		if !f.omitL1 {
+			f.cache.L1.SetWithTTL(keyStr, raw, int64(len(raw)), f.ttl.L1)
+		}
 		return v, nil
 	case !errors.Is(err, redis.Nil):
 		f.cache.Logger.Warn("cache: L2 read failed",
@@ -167,7 +211,9 @@ func (f *Facade[K, V]) Get(ctx context.Context, key K) (V, error) {
 			f.cache.Logger.Warn("cache: L2 write failed",
 				"facade", f.name, "key", keyStr, "err", err)
 		}
-		f.cache.L1.SetWithTTL(keyStr, raw, int64(len(raw)), f.ttl.L1)
+		if !f.omitL1 {
+			f.cache.L1.SetWithTTL(keyStr, raw, int64(len(raw)), f.ttl.L1)
+		}
 		return v, nil
 	})
 	if err != nil {
@@ -203,8 +249,10 @@ func (f *Facade[K, V]) Get(ctx context.Context, key K) (V, error) {
 func (f *Facade[K, V]) Invalidate(ctx context.Context, key K) error {
 	f.gen.Add(1)
 	keyStr := f.keyer(key)
-	f.cache.L1.Del(keyStr)
-	f.cache.L1.Wait()
+	if !f.omitL1 {
+		f.cache.L1.Del(keyStr)
+		f.cache.L1.Wait()
+	}
 	if err := f.cache.L2.Del(ctx, keyStr).Err(); err != nil {
 		return fmt.Errorf("cache %s: invalidate %q: %w", f.name, keyStr, err)
 	}
@@ -229,10 +277,14 @@ func (f *Facade[K, V]) InvalidateMany(ctx context.Context, keys []K) error {
 	strs := make([]string, len(keys))
 	for i, k := range keys {
 		s := f.keyer(k)
-		f.cache.L1.Del(s)
+		if !f.omitL1 {
+			f.cache.L1.Del(s)
+		}
 		strs[i] = s
 	}
-	f.cache.L1.Wait()
+	if !f.omitL1 {
+		f.cache.L1.Wait()
+	}
 	if err := f.cache.L2.Del(ctx, strs...).Err(); err != nil {
 		return fmt.Errorf("cache %s: invalidate %d keys: %w", f.name, len(strs), err)
 	}
@@ -257,8 +309,10 @@ func (f *Facade[K, V]) Set(ctx context.Context, key K, value V) error {
 	if err := f.cache.L2.Set(ctx, keyStr, raw, f.ttl.L2).Err(); err != nil {
 		return fmt.Errorf("cache %s: L2 set: %w", f.name, err)
 	}
-	f.cache.L1.SetWithTTL(keyStr, raw, int64(len(raw)), f.ttl.L1)
-	f.cache.L1.Wait()
+	if !f.omitL1 {
+		f.cache.L1.SetWithTTL(keyStr, raw, int64(len(raw)), f.ttl.L1)
+		f.cache.L1.Wait()
+	}
 	return nil
 }
 

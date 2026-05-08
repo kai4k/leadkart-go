@@ -51,12 +51,15 @@ import (
 	"github.com/leadkart/leadkart-go/internal/platform/pg"
 )
 
-// invalidationFastPathBudget is the wall-clock budget the test allows
-// for steps 4 + 5 combined: forwarder publish + subscriber drain +
-// the second sessions request. The cache's natural TTL is 30s — any
-// value comfortably under that proves the invalidation is the close
-// mechanism, not the TTL.
-const invalidationFastPathBudget = 5 * time.Second
+// invalidationFastPathBudget is the wall-clock budget for the
+// forwarder→router→subscriber→Invalidate→family-revoke chain. The
+// subscriber's Watermill retry middleware recovers transient
+// Invalidate failures (5 attempts, 200ms→5s exponential, ~5-10s
+// max worst case). 15s tolerates that retry envelope on busy CI
+// runners while still being well under the 30s SecurityStampCache
+// TTL — the assertion still distinguishes "cache-invalidation
+// cascade ran" from "TTL fallback masked the failure."
+const invalidationFastPathBudget = 15 * time.Second
 
 func TestSecurityStampInvalidation_PasswordChange_Returns401WithinFastPath(t *testing.T) {
 	pool := startWiredPostgresForHTTP(t)
@@ -175,8 +178,8 @@ func TestSecurityStampInvalidation_PasswordChange_Returns401WithinFastPath(t *te
 
 	// 4. ChangePassword rotates the Person's stamp + emits
 	//    PersonPasswordChangedV1 to the outbox. Per the EDA cascade,
-	//    forwarder → router → subscriber.Invalidate within ~5s well-
-	//    under the 30s cache TTL.
+	//    forwarder → router → subscriber.Invalidate(cache) → revoke
+	//    families. Both halves complete well under the 30s cache TTL.
 	cpResp := postJSONWithBearer(t, srv.URL+"/api/v1/auth/change-password", login.AccessToken,
 		ports.ChangePasswordRequest{
 			CurrentPassword: password,
@@ -187,8 +190,13 @@ func TestSecurityStampInvalidation_PasswordChange_Returns401WithinFastPath(t *te
 	}
 
 	// 5. Poll: the SAME T1 should start failing 401 stale_token within
-	//    the fast-path budget. Pre-invalidation, T1 still passes the
-	//    cached freshness check; post-invalidation, it fails.
+	//    the fast-path budget. The subscriber's all-or-nothing
+	//    semantics (return error on Invalidate failure → Watermill
+	//    retry) guarantees the cache is reliably clean by the time
+	//    family revocation runs; once families are revoked, the
+	//    handler returns nil and the message is acked. The next
+	//    /sessions request post-ack hits cache miss → factory → S2 →
+	//    IsFresh(S1, S2) = false → 401 stale_token.
 	deadline := time.Now().Add(invalidationFastPathBudget)
 	var sawStale bool
 	var lastStatus int
@@ -209,9 +217,9 @@ func TestSecurityStampInvalidation_PasswordChange_Returns401WithinFastPath(t *te
 	if !sawStale {
 		t.Fatalf(
 			"expected 401 stale_token within %s of password change "+
-				"(invalidation cascade broken — cache TTL fallback would still pass after 30s, "+
-				"but the fast path is what proves the cache-invalidation cascade is wired). "+
-				"last status %d body %s",
+				"(invalidation cascade broken — TTL fallback would still pass after 30s, "+
+				"but the fast path is what proves the subscriber's all-or-nothing "+
+				"Invalidate→retry→family-revoke contract). last status %d body %s",
 			invalidationFastPathBudget, lastStatus, lastBody)
 	}
 }

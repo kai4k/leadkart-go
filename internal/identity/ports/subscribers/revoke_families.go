@@ -17,59 +17,48 @@ import (
 
 // RevokeFamiliesOnSecurityChange is the choreographed reaction to
 // Person-level security mutations: any change that rotates the
-// SecurityStamp (password change, anonymisation, future global
-// suspend) MUST revoke every refresh-token family for that Person
-// across tenants AND invalidate the cached SecurityStamp so any
-// in-flight access token fails the freshness gate immediately rather
-// than waiting up to 30s for the cache TTL to expire.
+// SecurityStamp (password change, anonymisation, global suspend,
+// email change) MUST revoke every refresh-token family for that
+// Person across tenants. Plus the narrower membership-deactivation
+// cascade which only kills families bound to that (PersonID,
+// TenantID) tuple.
 //
 // Per `security.md` "SecurityStamp rotation triggers": revoke families
 // on password/email/role change + logout-all + admin password reset +
 // anonymisation. v0.2 wires the password-change + anonymise +
-// globally-suspended + email-changed reactions; future steps add
-// role-change.
+// globally-suspended + email-changed + membership-deactivated
+// reactions; future steps add role-change.
 //
-// Cascade ordering — invalidate cache BEFORE revoking families:
+// Single responsibility: family revocation only. The companion
+// [InvalidateSecurityStampCache] subscriber handles the cache
+// invalidation concern independently — same events, separate
+// subscriber, separate retry policy. See the `Concurrency contract`
+// docstring on that type for why the two concerns are split rather
+// than coupled inside one handler.
 //
-//   - Cache invalidation is fast (L1 ristretto Del + L2 Redis Del,
-//     both ~µs). Doing it first means the freshness gate trips on
-//     the very next request (next handler call → cache miss → fresh
-//     read from Postgres → stamp mismatch → 401 stale_token).
-//   - Refresh-family revocation is heavier (one transaction per
-//     family, plus outbox event row per revoke). If the cache
-//     invalidate happened AFTER, a request landing during the
-//     revocation tx would still see the old (matching) stamp until
-//     TTL expiry.
-//
-// The handler is idempotent by domain construction: Family.Revoke is
-// no-op on already-revoked families. Cache.Invalidate is unconditional
-// Del — safe to re-run. Re-delivery of the same event (despite the
-// inbox dedup) is safe.
+// Failure mode: must-succeed. Family revocation is server-side state
+// that the rest of the system depends on (refresh-token reuse
+// detection, audit, SIEM downstream subscribers). On error this
+// handler RETURNS the error so the router's retry middleware re-runs
+// it (DefaultRetry: 5 attempts, 200ms→5s exponential) until the DB
+// confirms revocation. Idempotent — Family.Revoke is no-op on
+// already-revoked families.
 type RevokeFamiliesOnSecurityChange struct {
-	families   *adapters.RefreshTokenFamilyRepository
-	stampCache *adapters.SecurityStampCache
-	log        *slog.Logger
+	families *adapters.RefreshTokenFamilyRepository
+	log      *slog.Logger
 }
 
 // NewRevokeFamiliesOnSecurityChange wires the subscriber.
-//
-// stampCache is the typed cache facade for (PersonID → SecurityStamp);
-// the handler calls Invalidate against it on every cascade. Pass nil
-// ONLY when the calling fixture intentionally exercises the family-
-// revocation path in isolation; production wiring (cmd/api) always
-// passes a real *SecurityStampCache.
 func NewRevokeFamiliesOnSecurityChange(
 	families *adapters.RefreshTokenFamilyRepository,
-	stampCache *adapters.SecurityStampCache,
 	log *slog.Logger,
 ) *RevokeFamiliesOnSecurityChange {
 	if log == nil {
 		log = slog.Default()
 	}
 	return &RevokeFamiliesOnSecurityChange{
-		families:   families,
-		stampCache: stampCache,
-		log:        log,
+		families: families,
+		log:      log,
 	}
 }
 
@@ -211,23 +200,19 @@ func (h *RevokeFamiliesOnSecurityChange) revokeForTenant(
 // [integrationevents.RefreshTokenFamilyRevokedV1] — downstream SIEM
 // + audit subscribers see the cascade.
 //
-// Invalidates the cached SecurityStamp BEFORE the family-revocation
-// loop so any in-flight access token fails the freshness gate on its
-// next request (cache miss → fresh stamp from Postgres → mismatch →
-// 401 stale_token), rather than waiting up to 30s for the cache TTL.
+// Failure mode: any non-nil return triggers Watermill retry until
+// every active family is confirmed revoked. Cache invalidation is
+// NOT this subscriber's concern — see [InvalidateSecurityStampCache]
+// running in parallel against the same events with its own
+// (opportunistic, TTL-bound) failure semantics.
+//
+// Idempotency: Family.Revoke is no-op on already-revoked families,
+// so re-delivery of the same event (despite the inbox dedup) + any
+// retry are both safe.
 func (h *RevokeFamiliesOnSecurityChange) revokeAll(
 	ctx context.Context, personID string, reason string,
 ) error {
 	pid := person.ID(personID)
-	if h.stampCache != nil {
-		if err := h.stampCache.Invalidate(ctx, pid); err != nil {
-			// Cache transport failure is NOT fatal — TTL fallback (~30s)
-			// still closes the window. Log + continue so the family
-			// revocation still happens.
-			h.log.WarnContext(ctx, "security stamp cache invalidate failed",
-				"person_id", personID, "reason", reason, "err", err)
-		}
-	}
 	actives, err := h.families.ListActiveForPerson(ctx, pid)
 	if err != nil {
 		return fmt.Errorf("subscribers: list families for %s: %w", personID, err)

@@ -17,9 +17,13 @@ One decision per file, Michael Nygard format (Context / Decision / Consequences 
 | 0009 | Command dispatch — Application{Commands, Queries} facade | Accepted |
 | 0010 | Background jobs — river | Accepted |
 | 0027 | Audit log — outbox doubles as audit | Accepted |
+| 0028 | SecurityStampCache + stale-write fence | Accepted |
+| 0029 | Two-binary deploy: cmd/api + cmd/worker | Accepted |
+| 0030 | Canonical public-API HTTP middleware chain | Accepted |
+| 0031 | HTTP idempotency via `X-Command-Id` | Accepted |
 | 0033 | Tenant context — `tenant.FromContext(ctx)` package func | Accepted |
 | 0034 | Go version — 1.26.2 (post Phase 1 dep-bump) | Accepted |
 | 0035 | Event sourcing scope — zero modules at v0.1 | Accepted |
 | 0036 | Permission model — closed-set catalog + Role + per-Membership overlay | Accepted |
 
-ADRs 0011–0026 + 0028–0032 + 0037+ land as the relevant code lands per the master plan.
+ADRs 0011–0026 + 0032 + 0037+ land as the relevant code lands per the master plan.
