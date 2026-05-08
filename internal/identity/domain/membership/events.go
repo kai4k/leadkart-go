@@ -8,10 +8,18 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
 
-// Event is the marker interface for Membership domain events.
+// Event is the SEALED marker interface for Membership domain events.
+// Sealed via the unexported isMembershipEvent() method so only types
+// in this package can satisfy it — same shape as role.Event.
+//
+// Domain events deliberately do NOT carry wire concerns (Topic / V1
+// alias / occurred-at-as-method). Wire-versioning lives in
+// integrationevents.*V1 per Vernon IDDD ch. 8 ("Domain Events vs.
+// Integration Events"): a v2 wire rename must NOT force a domain edit.
+// The integration mapper in internal/identity/integrationevents/
+// type-switches on these structs and emits the canonical V1 envelope.
 type Event interface {
-	Topic() string
-	OccurredAt() time.Time
+	isMembershipEvent()
 }
 
 // CreatedEvent fires on [New].
@@ -22,11 +30,7 @@ type CreatedEvent struct {
 	At           time.Time
 }
 
-// Topic returns the integration-event type.
-func (CreatedEvent) Topic() string { return "identity.membership_created.v1" }
-
-// OccurredAt returns the domain timestamp.
-func (e CreatedEvent) OccurredAt() time.Time { return e.At }
+func (CreatedEvent) isMembershipEvent() {}
 
 // DeactivatedEvent fires when a Membership transitions Active → Inactive.
 type DeactivatedEvent struct {
@@ -37,11 +41,7 @@ type DeactivatedEvent struct {
 	At           time.Time
 }
 
-// Topic returns the integration-event type.
-func (DeactivatedEvent) Topic() string { return "identity.membership_deactivated.v1" }
-
-// OccurredAt returns the domain timestamp.
-func (e DeactivatedEvent) OccurredAt() time.Time { return e.At }
+func (DeactivatedEvent) isMembershipEvent() {}
 
 // ReactivatedEvent fires when a Membership transitions Inactive → Active.
 type ReactivatedEvent struct {
@@ -51,11 +51,7 @@ type ReactivatedEvent struct {
 	At           time.Time
 }
 
-// Topic returns the integration-event type.
-func (ReactivatedEvent) Topic() string { return "identity.membership_reactivated.v1" }
-
-// OccurredAt returns the domain timestamp.
-func (e ReactivatedEvent) OccurredAt() time.Time { return e.At }
+func (ReactivatedEvent) isMembershipEvent() {}
 
 // RoleAssignedEvent fires when a Role is assigned to the Membership.
 // Subscribers: SecurityStamp invalidator (rotation triggers per
@@ -68,11 +64,7 @@ type RoleAssignedEvent struct {
 	At           time.Time
 }
 
-// Topic returns the integration-event type.
-func (RoleAssignedEvent) Topic() string { return "identity.membership_role_assigned.v1" }
-
-// OccurredAt returns the domain timestamp.
-func (e RoleAssignedEvent) OccurredAt() time.Time { return e.At }
+func (RoleAssignedEvent) isMembershipEvent() {}
 
 // RoleRevokedEvent fires when a Role is removed from the Membership.
 type RoleRevokedEvent struct {
@@ -83,11 +75,7 @@ type RoleRevokedEvent struct {
 	At           time.Time
 }
 
-// Topic returns the integration-event type.
-func (RoleRevokedEvent) Topic() string { return "identity.membership_role_revoked.v1" }
-
-// OccurredAt returns the domain timestamp.
-func (e RoleRevokedEvent) OccurredAt() time.Time { return e.At }
+func (RoleRevokedEvent) isMembershipEvent() {}
 
 // PermissionsUpdatedEvent fires when the per-Membership Granted /
 // Revoked overlay changes. Single event per mutation regardless of
@@ -101,11 +89,7 @@ type PermissionsUpdatedEvent struct {
 	At           time.Time
 }
 
-// Topic returns the integration-event type.
-func (PermissionsUpdatedEvent) Topic() string { return "identity.membership_permissions_updated.v1" }
-
-// OccurredAt returns the domain timestamp.
-func (e PermissionsUpdatedEvent) OccurredAt() time.Time { return e.At }
+func (PermissionsUpdatedEvent) isMembershipEvent() {}
 
 // ProfileUpdatedEvent fires when Designation / Department /
 // StatusMessage change. Bundle-update so wire payload reads
@@ -120,11 +104,7 @@ type ProfileUpdatedEvent struct {
 	At            time.Time
 }
 
-// Topic returns the integration-event type.
-func (ProfileUpdatedEvent) Topic() string { return "identity.membership_profile_updated.v1" }
-
-// OccurredAt returns the domain timestamp.
-func (e ProfileUpdatedEvent) OccurredAt() time.Time { return e.At }
+func (ProfileUpdatedEvent) isMembershipEvent() {}
 
 // ManagerAssignedEvent fires when ReportsTo is set to a non-zero
 // manager Membership ID. PreviousManager carried for audit-log
@@ -138,11 +118,7 @@ type ManagerAssignedEvent struct {
 	At              time.Time
 }
 
-// Topic returns the integration-event type.
-func (ManagerAssignedEvent) Topic() string { return "identity.membership_manager_assigned.v1" }
-
-// OccurredAt returns the domain timestamp.
-func (e ManagerAssignedEvent) OccurredAt() time.Time { return e.At }
+func (ManagerAssignedEvent) isMembershipEvent() {}
 
 // ManagerRemovedEvent fires when ReportsTo is cleared (top-of-tree).
 type ManagerRemovedEvent struct {
@@ -153,8 +129,4 @@ type ManagerRemovedEvent struct {
 	At              time.Time
 }
 
-// Topic returns the integration-event type.
-func (ManagerRemovedEvent) Topic() string { return "identity.membership_manager_removed.v1" }
-
-// OccurredAt returns the domain timestamp.
-func (e ManagerRemovedEvent) OccurredAt() time.Time { return e.At }
+func (ManagerRemovedEvent) isMembershipEvent() {}

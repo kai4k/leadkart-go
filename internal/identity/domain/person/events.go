@@ -6,10 +6,18 @@ import (
 	"github.com/leadkart/leadkart-go/internal/common/email"
 )
 
-// Event is the marker interface for Person domain events.
+// Event is the SEALED marker interface for Person domain events.
+// Sealed via the unexported isPersonEvent() method so only types in
+// this package can satisfy it — same shape as role.Event.
+//
+// Domain events deliberately do NOT carry wire concerns (Topic / V1
+// alias / occurred-at-as-method). Wire-versioning lives in
+// integrationevents.*V1 per Vernon IDDD ch. 8 ("Domain Events vs.
+// Integration Events"): a v2 wire rename must NOT force a domain edit.
+// The integration mapper in internal/identity/integrationevents/
+// type-switches on these structs and emits the canonical V1 envelope.
 type Event interface {
-	Topic() string
-	OccurredAt() time.Time
+	isPersonEvent()
 }
 
 // CreatedEvent fires when a new Person is created via [New].
@@ -21,11 +29,7 @@ type CreatedEvent struct {
 	At        time.Time
 }
 
-// Topic returns the integration-event type.
-func (CreatedEvent) Topic() string { return "identity.person_created.v1" }
-
-// OccurredAt returns the domain timestamp.
-func (e CreatedEvent) OccurredAt() time.Time { return e.At }
+func (CreatedEvent) isPersonEvent() {}
 
 // PasswordChangedEvent fires when [Person.ChangePassword] is called.
 //
@@ -36,11 +40,7 @@ type PasswordChangedEvent struct {
 	At       time.Time
 }
 
-// Topic returns the integration-event type.
-func (PasswordChangedEvent) Topic() string { return "identity.password_changed.v1" }
-
-// OccurredAt returns the domain timestamp.
-func (e PasswordChangedEvent) OccurredAt() time.Time { return e.At }
+func (PasswordChangedEvent) isPersonEvent() {}
 
 // ProfileUpdatedEvent fires when [Person.UpdateProfile] is called.
 //
@@ -57,11 +57,7 @@ type ProfileUpdatedEvent struct {
 	At           time.Time
 }
 
-// Topic returns the integration-event type.
-func (ProfileUpdatedEvent) Topic() string { return "identity.person_profile_updated.v1" }
-
-// OccurredAt returns the domain timestamp.
-func (e ProfileUpdatedEvent) OccurredAt() time.Time { return e.At }
+func (ProfileUpdatedEvent) isPersonEvent() {}
 
 // AnonymisedEvent fires when [Person.Anonymise] is called.
 //
@@ -72,11 +68,7 @@ type AnonymisedEvent struct {
 	At       time.Time
 }
 
-// Topic returns the integration-event type.
-func (AnonymisedEvent) Topic() string { return "identity.person_anonymised.v1" }
-
-// OccurredAt returns the domain timestamp.
-func (e AnonymisedEvent) OccurredAt() time.Time { return e.At }
+func (AnonymisedEvent) isPersonEvent() {}
 
 // EmailChangeRequestedEvent fires when [Person.RequestEmailChange]
 // is called. Carries the proposed new email + expiry — but NOT the
@@ -93,11 +85,7 @@ type EmailChangeRequestedEvent struct {
 	At        time.Time
 }
 
-// Topic returns the integration-event type.
-func (EmailChangeRequestedEvent) Topic() string { return "identity.email_change_requested.v1" }
-
-// OccurredAt returns the domain timestamp.
-func (e EmailChangeRequestedEvent) OccurredAt() time.Time { return e.At }
+func (EmailChangeRequestedEvent) isPersonEvent() {}
 
 // EmailChangedEvent fires when [Person.ConfirmEmailChange] successfully
 // applies a new email via a valid confirmation token.
@@ -117,11 +105,7 @@ type EmailChangedEvent struct {
 	At       time.Time
 }
 
-// Topic returns the integration-event type.
-func (EmailChangedEvent) Topic() string { return "identity.email_changed.v1" }
-
-// OccurredAt returns the domain timestamp.
-func (e EmailChangedEvent) OccurredAt() time.Time { return e.At }
+func (EmailChangedEvent) isPersonEvent() {}
 
 // EmailChangeCancelledEvent fires when [Person.CancelEmailChange]
 // invalidates a pending change without applying it (admin action,
@@ -133,11 +117,7 @@ type EmailChangeCancelledEvent struct {
 	At       time.Time
 }
 
-// Topic returns the integration-event type.
-func (EmailChangeCancelledEvent) Topic() string { return "identity.email_change_cancelled.v1" }
-
-// OccurredAt returns the domain timestamp.
-func (e EmailChangeCancelledEvent) OccurredAt() time.Time { return e.At }
+func (EmailChangeCancelledEvent) isPersonEvent() {}
 
 // GloballySuspendedEvent fires when [Person.GloballySuspend] is called.
 //
@@ -151,11 +131,7 @@ type GloballySuspendedEvent struct {
 	At       time.Time
 }
 
-// Topic returns the integration-event type.
-func (GloballySuspendedEvent) Topic() string { return "identity.person_globally_suspended.v1" }
-
-// OccurredAt returns the domain timestamp.
-func (e GloballySuspendedEvent) OccurredAt() time.Time { return e.At }
+func (GloballySuspendedEvent) isPersonEvent() {}
 
 // PasswordResetRequestedEvent fires when [Person.RequestPasswordReset]
 // is called. Carries the expiry timestamp for downstream subscribers
@@ -171,11 +147,7 @@ type PasswordResetRequestedEvent struct {
 	At        time.Time
 }
 
-// Topic returns the integration-event type.
-func (PasswordResetRequestedEvent) Topic() string { return "identity.password_reset_requested.v1" }
-
-// OccurredAt returns the domain timestamp.
-func (e PasswordResetRequestedEvent) OccurredAt() time.Time { return e.At }
+func (PasswordResetRequestedEvent) isPersonEvent() {}
 
 // PasswordResetConfirmedEvent fires when [Person.ConfirmPasswordReset]
 // successfully applies a new password via a valid reset token.
@@ -190,11 +162,7 @@ type PasswordResetConfirmedEvent struct {
 	At       time.Time
 }
 
-// Topic returns the integration-event type.
-func (PasswordResetConfirmedEvent) Topic() string { return "identity.password_reset_confirmed.v1" }
-
-// OccurredAt returns the domain timestamp.
-func (e PasswordResetConfirmedEvent) OccurredAt() time.Time { return e.At }
+func (PasswordResetConfirmedEvent) isPersonEvent() {}
 
 // PasswordResetCancelledEvent fires when [Person.CancelPasswordReset]
 // invalidates a pending reset (admin action, security-incident
@@ -206,11 +174,7 @@ type PasswordResetCancelledEvent struct {
 	At       time.Time
 }
 
-// Topic returns the integration-event type.
-func (PasswordResetCancelledEvent) Topic() string { return "identity.password_reset_cancelled.v1" }
-
-// OccurredAt returns the domain timestamp.
-func (e PasswordResetCancelledEvent) OccurredAt() time.Time { return e.At }
+func (PasswordResetCancelledEvent) isPersonEvent() {}
 
 // GlobalSuspensionLiftedEvent fires when [Person.LiftGlobalSuspension]
 // reverses a previous global suspension. Subscribers re-enable login
@@ -220,10 +184,4 @@ type GlobalSuspensionLiftedEvent struct {
 	At       time.Time
 }
 
-// Topic returns the integration-event type.
-func (GlobalSuspensionLiftedEvent) Topic() string {
-	return "identity.person_global_suspension_lifted.v1"
-}
-
-// OccurredAt returns the domain timestamp.
-func (e GlobalSuspensionLiftedEvent) OccurredAt() time.Time { return e.At }
+func (GlobalSuspensionLiftedEvent) isPersonEvent() {}
