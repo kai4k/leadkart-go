@@ -164,10 +164,12 @@ func RequireAuth(verifier Verifier) func(http.Handler) http.Handler {
 
 // ----- RequirePermission ---------------------------------------------------
 
-// RequirePermission gates a handler on (a) a verified JWT AND (b) the
-// named permission appearing in the token's `permission` claim. Returns
+// RequirePermission gates a handler on (a) a verified + freshness-
+// checked JWT AND (b) the named permission appearing in the token's
+// `permission` claim. Returns
 //
-//   - 401 if the token is missing / invalid (same as RequireAuth)
+//   - 401 if the token is missing / invalid / stale
+//     (delegated to [RequireFreshStamp])
 //   - 403 if the token is valid but lacks the permission
 //
 // SuperUser short-circuit: a token with `is_super_user=true` allows
@@ -180,14 +182,21 @@ func RequireAuth(verifier Verifier) func(http.Handler) http.Handler {
 // [permission.FromConstant] which panics on unknown — programmer error
 // at wiring time, not request time). Pass
 // `permission.IdentityPermissions.X.Y`, never a string literal.
-func RequirePermission(verifier Verifier, permName string) func(http.Handler) http.Handler {
+//
+// The freshness gate runs BEFORE the permission gate so a revoked
+// session can never satisfy a permission check, even in the SuperUser
+// short-circuit path.
+func RequirePermission(verifier Verifier, validator StampValidator, permName string) func(http.Handler) http.Handler {
 	if verifier == nil {
 		panic("authn: RequirePermission verifier required")
+	}
+	if validator == nil {
+		panic("authn: RequirePermission validator required")
 	}
 	// Validate the catalogue entry at wiring time — fail-fast.
 	_ = permission.FromConstant(permName)
 
-	auth := RequireAuth(verifier)
+	auth := RequireFreshStamp(verifier, validator)
 	return func(next http.Handler) http.Handler {
 		return auth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			c, ok := ClaimsFromContext(r.Context())
@@ -214,18 +223,21 @@ func RequirePermission(verifier Verifier, permName string) func(http.Handler) ht
 
 // ----- RequireAnyPermission ------------------------------------------------
 
-// RequireAnyPermission gates a handler on (a) a verified JWT AND (b) at
-// least ONE of permNames appearing in the token's `permission` claim.
-// The disjunctive variant of [RequirePermission] — useful when a route
-// is reachable under multiple permission paths (e.g. `view` OR `manage`
-// both grant read access).
+// RequireAnyPermission gates a handler on (a) a verified + freshness-
+// checked JWT AND (b) at least ONE of permNames appearing in the
+// token's `permission` claim. The disjunctive variant of
+// [RequirePermission] — useful when a route is reachable under multiple
+// permission paths (e.g. `view` OR `manage` both grant read access).
 //
 // Returns 401 / 403 on the same shape as [RequirePermission]. SuperUser
 // short-circuit applies. Empty permNames slice panics at wiring time
 // (programmer error — would let every authenticated request through).
-func RequireAnyPermission(verifier Verifier, permNames ...string) func(http.Handler) http.Handler {
+func RequireAnyPermission(verifier Verifier, validator StampValidator, permNames ...string) func(http.Handler) http.Handler {
 	if verifier == nil {
 		panic("authn: RequireAnyPermission verifier required")
+	}
+	if validator == nil {
+		panic("authn: RequireAnyPermission validator required")
 	}
 	if len(permNames) == 0 {
 		panic("authn: RequireAnyPermission requires ≥1 permission name")
@@ -234,7 +246,7 @@ func RequireAnyPermission(verifier Verifier, permNames ...string) func(http.Hand
 		_ = permission.FromConstant(p)
 	}
 
-	auth := RequireAuth(verifier)
+	auth := RequireFreshStamp(verifier, validator)
 	return func(next http.Handler) http.Handler {
 		return auth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			c, ok := ClaimsFromContext(r.Context())
@@ -261,9 +273,10 @@ func RequireAnyPermission(verifier Verifier, permNames ...string) func(http.Hand
 
 // ----- RequireTenantContext -------------------------------------------------
 
-// RequireTenantContext gates a handler on (a) a verified JWT AND (b)
-// the JWT's tenant_id claim matching the path parameter named pathVar
-// — OR the caller being a Platform / SuperUser operator.
+// RequireTenantContext gates a handler on (a) a verified + freshness-
+// checked JWT AND (b) the JWT's tenant_id claim matching the path
+// parameter named pathVar — OR the caller being a Platform / SuperUser
+// operator.
 //
 // Used by tenant-resource endpoints under
 // `/api/v1/tenants/{tenantId}/...`: a tenant Admin can only modify
@@ -274,16 +287,19 @@ func RequireAnyPermission(verifier Verifier, permNames ...string) func(http.Hand
 // always "tenantId"; surfaced as a parameter so the same factory
 // works for any future per-tenant URL pattern.
 //
-//   - 401 if the token is missing / invalid.
+//   - 401 if the token is missing / invalid / stale.
 //   - 403 if neither tenant matches NOR the operator flags are set.
-func RequireTenantContext(verifier Verifier, pathVar string) func(http.Handler) http.Handler {
+func RequireTenantContext(verifier Verifier, validator StampValidator, pathVar string) func(http.Handler) http.Handler {
 	if verifier == nil {
 		panic("authn: RequireTenantContext verifier required")
+	}
+	if validator == nil {
+		panic("authn: RequireTenantContext validator required")
 	}
 	if strings.TrimSpace(pathVar) == "" {
 		panic("authn: RequireTenantContext pathVar required")
 	}
-	auth := RequireAuth(verifier)
+	auth := RequireFreshStamp(verifier, validator)
 	return func(next http.Handler) http.Handler {
 		return auth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			c, ok := ClaimsFromContext(r.Context())
@@ -317,26 +333,29 @@ func RequireTenantContext(verifier Verifier, pathVar string) func(http.Handler) 
 
 // ----- RequirePlatform -----------------------------------------------------
 
-// RequirePlatform gates a handler on (a) a verified JWT AND (b) the
-// `is_platform=true` claim — i.e. the caller's Membership is in the
-// Platform tenant. Drives access to platform-tier endpoints under
-// `/api/v1/platform/...` per `multi-tenancy.md` "Platform admin
-// endpoints" (rate-limited 600/min per operator).
+// RequirePlatform gates a handler on (a) a verified + freshness-
+// checked JWT AND (b) the `is_platform=true` claim — i.e. the caller's
+// Membership is in the Platform tenant. Drives access to platform-tier
+// endpoints under `/api/v1/platform/...` per `multi-tenancy.md`
+// "Platform admin endpoints" (rate-limited 600/min per operator).
 //
 // This is the simpler sibling of [RequirePermission] for routes that
 // gate on tenant tier rather than per-permission.
 //
-// Returns 401 if the token is missing/invalid; 403 if the token is
-// valid but `is_platform=false`. SuperUser implies platform membership
-// in v0.3+ (SuperAdmin role only seeded on Platform-tenant
+// Returns 401 if the token is missing/invalid/stale; 403 if the token
+// is valid but `is_platform=false`. SuperUser implies platform
+// membership in v0.3+ (SuperAdmin role only seeded on Platform-tenant
 // Memberships); for v0.2 we treat the two flags independently — a
 // SuperUser without is_platform is a configuration error but the
 // middleware doesn't paper over it.
-func RequirePlatform(verifier Verifier) func(http.Handler) http.Handler {
+func RequirePlatform(verifier Verifier, validator StampValidator) func(http.Handler) http.Handler {
 	if verifier == nil {
 		panic("authn: RequirePlatform verifier required")
 	}
-	auth := RequireAuth(verifier)
+	if validator == nil {
+		panic("authn: RequirePlatform validator required")
+	}
+	auth := RequireFreshStamp(verifier, validator)
 	return func(next http.Handler) http.Handler {
 		return auth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			c, ok := ClaimsFromContext(r.Context())

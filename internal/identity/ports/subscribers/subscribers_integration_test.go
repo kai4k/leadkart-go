@@ -20,10 +20,12 @@ import (
 	"github.com/ThreeDotsLabs/watermill"
 	"github.com/ThreeDotsLabs/watermill/message"
 	"github.com/ThreeDotsLabs/watermill/pubsub/gochannel"
+	"github.com/alicebob/miniredis/v2"
 	"github.com/google/uuid"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/pressly/goose/v3"
+	"github.com/redis/go-redis/v9"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
 	"github.com/testcontainers/testcontainers-go/wait"
@@ -38,6 +40,7 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/integrationevents"
 	"github.com/leadkart/leadkart-go/internal/identity/ports/subscribers"
 	"github.com/leadkart/leadkart-go/internal/platform/audit"
+	"github.com/leadkart/leadkart-go/internal/platform/cache"
 	"github.com/leadkart/leadkart-go/internal/platform/messaging"
 	"github.com/leadkart/leadkart-go/internal/platform/pg"
 )
@@ -52,6 +55,8 @@ type fixture struct {
 	tenants     *adapters.TenantRepository
 	persons     *adapters.PersonRepository
 	families    *adapters.RefreshTokenFamilyRepository
+	stampCache  *adapters.SecurityStampCache
+	miniredis   *miniredis.Miniredis
 }
 
 func newFixture(t *testing.T) *fixture {
@@ -128,11 +133,31 @@ func newFixture(t *testing.T) *fixture {
 	t.Cleanup(pool.Close)
 
 	tx := pg.NewTransactor(pool)
+	persons := adapters.NewPersonRepository(pool, tx)
+
+	// Real HybridCache + SecurityStampCache against miniredis so the
+	// cascade subscriber's invalidation step runs end-to-end against
+	// the same facade production wires (audit-checklist.md §12b).
+	store := miniredis.RunT(t)
+	redisCli := redis.NewClient(&redis.Options{Addr: store.Addr()})
+	t.Cleanup(func() { _ = redisCli.Close() })
+	hc, err := cache.New(cache.Config{
+		L1MaxItems: 1000,
+		L2:         redisCli,
+		Logger:     silentLog(),
+	})
+	if err != nil {
+		t.Fatalf("cache.New: %v", err)
+	}
+	t.Cleanup(hc.Close)
+
 	return &fixture{
-		pool:     pool,
-		tenants:  adapters.NewTenantRepository(pool, tx),
-		persons:  adapters.NewPersonRepository(pool, tx),
-		families: adapters.NewRefreshTokenFamilyRepository(pool, tx),
+		pool:       pool,
+		tenants:    adapters.NewTenantRepository(pool, tx),
+		persons:    persons,
+		families:   adapters.NewRefreshTokenFamilyRepository(pool, tx),
+		stampCache: adapters.NewSecurityStampCache(hc, persons),
+		miniredis:  store,
 	}
 }
 
@@ -304,7 +329,7 @@ func wireRouter(t *testing.T, fx *fixture) (*gochannel.GoChannel, *messaging.Rou
 	if err != nil {
 		t.Fatalf("NewRouter: %v", err)
 	}
-	subscribers.Register(router, fx.families, silentLog())
+	subscribers.Register(router, fx.families, fx.stampCache, silentLog())
 	stop := runRouter(t, router)
 	return pubsub, router, stop
 }
@@ -530,7 +555,7 @@ func TestReuseDetectedSIEM_LogsOnReuseRevocation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRouter: %v", err)
 	}
-	subscribers.Register(router, fx.families, siemLog)
+	subscribers.Register(router, fx.families, fx.stampCache, siemLog)
 	stop := runRouter(t, router)
 	defer stop()
 
@@ -570,7 +595,7 @@ func TestReuseDetectedSIEM_IgnoresNonReuseRevocations(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRouter: %v", err)
 	}
-	subscribers.Register(router, fx.families, siemLog)
+	subscribers.Register(router, fx.families, fx.stampCache, siemLog)
 	stop := runRouter(t, router)
 	defer stop()
 

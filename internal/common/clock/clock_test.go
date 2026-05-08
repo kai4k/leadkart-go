@@ -57,6 +57,10 @@ func TestReset_RestoresWallClock(t *testing.T) {
 
 // Concurrent reads while Set/Reset run must not race.
 // Run with `-race` in CI.
+//
+// Pairs Set with Reset in each goroutine so the refcount returns to
+// zero by Wait(). An unpaired stress would leave the activeFreezes
+// counter positive + leak into subsequent serial tests in this file.
 func TestSet_IsThreadSafe(t *testing.T) {
 
 	t.Cleanup(clock.Reset)
@@ -68,6 +72,7 @@ func TestSet_IsThreadSafe(t *testing.T) {
 		})
 		wg.Go(func() {
 			clock.Set(time.Date(2026, 5, 5, 0, 0, i, 0, time.UTC))
+			clock.Reset()
 		})
 	}
 	wg.Wait()

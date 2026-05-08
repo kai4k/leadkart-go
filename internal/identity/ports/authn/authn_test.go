@@ -1,6 +1,7 @@
 package authn_test
 
 import (
+	"context"
 	"errors"
 	"io"
 	"net/http"
@@ -31,6 +32,33 @@ func (f *fakeVerifier) Verify(token string) (*jwt.Claims, error) {
 		return nil, errors.New("fake: unexpected token")
 	}
 	return f.claims, nil
+}
+
+// alwaysFresh satisfies [authn.StampValidator] by reporting every
+// stamp as fresh. Used by the perm/tenant-context/platform tests
+// here that focus on authorization branches; freshness behaviour is
+// covered exhaustively in security_stamp_test.go.
+type alwaysFresh struct{}
+
+func (alwaysFresh) IsFresh(_ context.Context, _, _ string) (bool, error) {
+	return true, nil
+}
+
+// withFreshness fills in Subject + SecurityStamp on a Claims literal
+// when the test focuses on a NON-freshness branch (permission /
+// tenant-context / platform). RequireFreshStamp guards against empty
+// Subject or SecurityStamp before consulting the validator (defense-
+// in-depth against claim-stripping); this helper supplies non-empty
+// placeholders so those guards don't fire and the test-under-attention
+// reaches its assertion.
+func withFreshness(c *jwt.Claims) *jwt.Claims {
+	if c.Subject == "" {
+		c.Subject = "01999999-aaaa-7000-8000-aaaaaaaaaaaa"
+	}
+	if c.SecurityStamp == "" {
+		c.SecurityStamp = "00000000-0000-7000-8000-000000000001"
+	}
+	return c
 }
 
 // next is the protected handler — records that it was reached and lets
@@ -229,7 +257,7 @@ func TestRequirePermission_NoBearer_Returns401(t *testing.T) {
 	t.Parallel()
 	v := &fakeVerifier{}
 	s := &sentinel{}
-	mw := authn.RequirePermission(v, permission.IdentityPermissions.Roles.View)(s.handler())
+	mw := authn.RequirePermission(v, alwaysFresh{}, permission.IdentityPermissions.Roles.View)(s.handler())
 	rec := httptest.NewRecorder()
 	mw.ServeHTTP(rec, newRequest(t, ""))
 	if rec.Code != http.StatusUnauthorized {
@@ -241,13 +269,13 @@ func TestRequirePermission_ClaimsLackPermission_Returns403(t *testing.T) {
 	t.Parallel()
 	v := &fakeVerifier{
 		wantToken: "tok",
-		claims: &jwt.Claims{
-			TenantID: "tenant-test",
+		claims: withFreshness(&jwt.Claims{
+			TenantID:    "tenant-test",
 			Permissions: []string{permission.IdentityPermissions.Users.View}, // wrong perm
-		},
+		}),
 	}
 	s := &sentinel{}
-	mw := authn.RequirePermission(v, permission.IdentityPermissions.Roles.View)(s.handler())
+	mw := authn.RequirePermission(v, alwaysFresh{}, permission.IdentityPermissions.Roles.View)(s.handler())
 	rec := httptest.NewRecorder()
 	mw.ServeHTTP(rec, newRequest(t, "Bearer tok"))
 	if rec.Code != http.StatusForbidden {
@@ -266,16 +294,16 @@ func TestRequirePermission_PermissionPresent_Returns200(t *testing.T) {
 	t.Parallel()
 	v := &fakeVerifier{
 		wantToken: "tok",
-		claims: &jwt.Claims{
+		claims: withFreshness(&jwt.Claims{
 			TenantID: "tenant-test",
 			Permissions: []string{
 				permission.IdentityPermissions.Roles.View,
 				permission.IdentityPermissions.Users.View,
 			},
-		},
+		}),
 	}
 	s := &sentinel{}
-	mw := authn.RequirePermission(v, permission.IdentityPermissions.Roles.View)(s.handler())
+	mw := authn.RequirePermission(v, alwaysFresh{}, permission.IdentityPermissions.Roles.View)(s.handler())
 	rec := httptest.NewRecorder()
 	mw.ServeHTTP(rec, newRequest(t, "Bearer tok"))
 	if rec.Code != http.StatusOK {
@@ -290,15 +318,15 @@ func TestRequirePermission_SuperUser_BypassesCheck(t *testing.T) {
 	t.Parallel()
 	v := &fakeVerifier{
 		wantToken: "tok",
-		claims: &jwt.Claims{
+		claims: withFreshness(&jwt.Claims{
 			TenantID:    "tenant-test",
 			IsSuperUser: true,
 			// Empty permissions on purpose: SuperUser short-circuits.
 			Permissions: nil,
-		},
+		}),
 	}
 	s := &sentinel{}
-	mw := authn.RequirePermission(v,
+	mw := authn.RequirePermission(v, alwaysFresh{},
 		permission.IdentityPermissions.Tenants.Delete)(s.handler())
 	rec := httptest.NewRecorder()
 	mw.ServeHTTP(rec, newRequest(t, "Bearer tok"))
@@ -318,7 +346,7 @@ func TestRequirePermission_PanicsOnUnknownPermissionName(t *testing.T) {
 			t.Fatal("expected panic on unknown permission name (wiring bug)")
 		}
 	}()
-	_ = authn.RequirePermission(v, "made.up.permission.x")
+	_ = authn.RequirePermission(v, alwaysFresh{}, "made.up.permission.x")
 }
 
 func TestRequireAuth_PanicsOnNilVerifier(t *testing.T) {
@@ -337,13 +365,13 @@ func TestRequireAnyPermission_OneOfManyPresent_Returns200(t *testing.T) {
 	t.Parallel()
 	v := &fakeVerifier{
 		wantToken: "tok",
-		claims: &jwt.Claims{
-			TenantID: "tenant-test",
+		claims: withFreshness(&jwt.Claims{
+			TenantID:    "tenant-test",
 			Permissions: []string{permission.IdentityPermissions.Roles.View},
-		},
+		}),
 	}
 	s := &sentinel{}
-	mw := authn.RequireAnyPermission(v,
+	mw := authn.RequireAnyPermission(v, alwaysFresh{},
 		permission.IdentityPermissions.Roles.View,
 		permission.IdentityPermissions.Roles.Update,
 	)(s.handler())
@@ -358,13 +386,13 @@ func TestRequireAnyPermission_NonePresent_Returns403(t *testing.T) {
 	t.Parallel()
 	v := &fakeVerifier{
 		wantToken: "tok",
-		claims: &jwt.Claims{
-			TenantID: "tenant-test",
+		claims: withFreshness(&jwt.Claims{
+			TenantID:    "tenant-test",
 			Permissions: []string{permission.IdentityPermissions.Users.View},
-		},
+		}),
 	}
 	s := &sentinel{}
-	mw := authn.RequireAnyPermission(v,
+	mw := authn.RequireAnyPermission(v, alwaysFresh{},
 		permission.IdentityPermissions.Roles.View,
 		permission.IdentityPermissions.Roles.Update,
 	)(s.handler())
@@ -379,10 +407,10 @@ func TestRequireAnyPermission_SuperUser_Bypass(t *testing.T) {
 	t.Parallel()
 	v := &fakeVerifier{
 		wantToken: "tok",
-		claims:    &jwt.Claims{TenantID: "tenant-test", IsSuperUser: true},
+		claims:    withFreshness(&jwt.Claims{TenantID: "tenant-test", IsSuperUser: true}),
 	}
 	s := &sentinel{}
-	mw := authn.RequireAnyPermission(v,
+	mw := authn.RequireAnyPermission(v, alwaysFresh{},
 		permission.IdentityPermissions.Roles.Delete,
 	)(s.handler())
 	rec := httptest.NewRecorder()
@@ -400,7 +428,7 @@ func TestRequireAnyPermission_PanicsOnEmptyList(t *testing.T) {
 			t.Fatal("expected panic on empty permission list")
 		}
 	}()
-	_ = authn.RequireAnyPermission(v)
+	_ = authn.RequireAnyPermission(v, alwaysFresh{})
 }
 
 // ----- RequirePlatform -----------------------------------------------------
@@ -409,10 +437,10 @@ func TestRequirePlatform_TokenIsPlatform_Returns200(t *testing.T) {
 	t.Parallel()
 	v := &fakeVerifier{
 		wantToken: "tok",
-		claims:    &jwt.Claims{TenantID: "tenant-test", IsPlatform: true},
+		claims:    withFreshness(&jwt.Claims{TenantID: "tenant-test", IsPlatform: true}),
 	}
 	s := &sentinel{}
-	mw := authn.RequirePlatform(v)(s.handler())
+	mw := authn.RequirePlatform(v, alwaysFresh{})(s.handler())
 	rec := httptest.NewRecorder()
 	mw.ServeHTTP(rec, newRequest(t, "Bearer tok"))
 	if rec.Code != http.StatusOK {
@@ -424,10 +452,10 @@ func TestRequirePlatform_TenantToken_Returns403(t *testing.T) {
 	t.Parallel()
 	v := &fakeVerifier{
 		wantToken: "tok",
-		claims:    &jwt.Claims{TenantID: "tenant-test", IsPlatform: false},
+		claims:    withFreshness(&jwt.Claims{TenantID: "tenant-test", IsPlatform: false}),
 	}
 	s := &sentinel{}
-	mw := authn.RequirePlatform(v)(s.handler())
+	mw := authn.RequirePlatform(v, alwaysFresh{})(s.handler())
 	rec := httptest.NewRecorder()
 	mw.ServeHTTP(rec, newRequest(t, "Bearer tok"))
 	if rec.Code != http.StatusForbidden {
@@ -442,7 +470,7 @@ func TestRequirePlatform_NoBearer_Returns401(t *testing.T) {
 	t.Parallel()
 	v := &fakeVerifier{}
 	s := &sentinel{}
-	mw := authn.RequirePlatform(v)(s.handler())
+	mw := authn.RequirePlatform(v, alwaysFresh{})(s.handler())
 	rec := httptest.NewRecorder()
 	mw.ServeHTTP(rec, newRequest(t, ""))
 	if rec.Code != http.StatusUnauthorized {

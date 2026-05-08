@@ -25,6 +25,20 @@ import (
 // for reads.
 var fixed atomic.Pointer[time.Time] //nolint:gochecknoglobals // canonical singleton clock
 
+// activeFreezes counts the number of in-flight Set calls that have not
+// yet been paired with a Reset. Refcounting protects parallel tests:
+// when test A and test B both call Set concurrently and one finishes
+// + runs its t.Cleanup(Reset) early, the other test's freeze must
+// survive until ITS own Reset runs. Without this, A's Cleanup would
+// silently un-freeze the clock under B's feet — observed as
+// time-sensitive token validations failing intermittently when run
+// with `-count=N` or `-shuffle=on`.
+//
+// Reads are NOT lock-free against Set/Reset interleavings: Now() reads
+// `fixed` only, which atomic.Pointer keeps consistent. The counter
+// only gates Reset's pointer-clearing decision.
+var activeFreezes atomic.Int64 //nolint:gochecknoglobals // pairs with fixed
+
 // Now returns the current time. Always UTC.
 //
 // Returns the wall clock unless Set has been called; then returns the
@@ -39,14 +53,38 @@ func Now() time.Time {
 // Set freezes the clock at t (canonicalised to UTC) for tests.
 //
 // Subsequent Now() calls return t until Reset is invoked.
-// Safe for concurrent use.
+// Safe for concurrent use; multiple concurrent freezes compose — see
+// [activeFreezes] for the parallel-test contract.
 func Set(t time.Time) {
 	utc := t.UTC()
 	fixed.Store(&utc)
+	activeFreezes.Add(1)
 }
 
-// Reset restores the wall clock as the source of Now().
+// Reset releases ONE freeze. The wall clock resumes only when every
+// outstanding Set has been paired with a Reset (i.e. the in-flight
+// freeze count returns to zero). Idempotent when called without a
+// prior Set — safe for tests that defensively Reset at startup.
+//
 // Always pair Set() with t.Cleanup(clock.Reset) in tests.
 func Reset() {
-	fixed.Store(nil)
+	for {
+		old := activeFreezes.Load()
+		if old <= 0 {
+			// No active freezes; treat as idempotent reset of stale state.
+			fixed.Store(nil)
+			// Cap counter at 0 — defensive against stray Resets so the
+			// next Set+Reset pair lands on a clean baseline.
+			if old < 0 {
+				activeFreezes.CompareAndSwap(old, 0)
+			}
+			return
+		}
+		if activeFreezes.CompareAndSwap(old, old-1) {
+			if old == 1 {
+				fixed.Store(nil)
+			}
+			return
+		}
+	}
 }

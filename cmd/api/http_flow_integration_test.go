@@ -14,6 +14,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -21,17 +22,42 @@ import (
 	"testing"
 	"time"
 
+	"github.com/alicebob/miniredis/v2"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/pressly/goose/v3"
+	"github.com/redis/go-redis/v9"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
 	"github.com/testcontainers/testcontainers-go/wait"
 
 	"github.com/leadkart/leadkart-go/internal/common/ids"
 	"github.com/leadkart/leadkart-go/internal/identity/ports"
+	"github.com/leadkart/leadkart-go/internal/platform/cache"
 	"github.com/leadkart/leadkart-go/internal/platform/config"
 )
+
+// newTestHybridCache spins an in-process miniredis + wires the
+// LeadKart [cache.HybridCache] against it. Lets cmd/api integration
+// tests exercise the same composition root [buildIdentityApp] uses in
+// production (HybridCache + SecurityStampCache + Validator) without
+// needing a real Redis container.
+func newTestHybridCache(t *testing.T) *cache.HybridCache {
+	t.Helper()
+	store := miniredis.RunT(t)
+	cli := redis.NewClient(&redis.Options{Addr: store.Addr()})
+	t.Cleanup(func() { _ = cli.Close() })
+	hc, err := cache.New(cache.Config{
+		L1MaxItems: 1000,
+		L2:         cli,
+		Logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
+	})
+	if err != nil {
+		t.Fatalf("cache.New: %v", err)
+	}
+	t.Cleanup(hc.Close)
+	return hc
+}
 
 func TestHTTPFlow_RegisterLoginRefreshLogout(t *testing.T) {
 	pool := startWiredPostgresForHTTP(t)
@@ -47,12 +73,13 @@ func TestHTTPFlow_RegisterLoginRefreshLogout(t *testing.T) {
 	}
 	now := func() time.Time { return time.Date(2026, 5, 6, 12, 0, 0, 0, time.UTC) }
 
-	identityApp, issuer, err := buildIdentityApp(pool, cfg, now)
+	hybrid := newTestHybridCache(t)
+	wiring, err := buildIdentityApp(pool, hybrid, cfg, now)
 	if err != nil {
 		t.Fatalf("buildIdentityApp: %v", err)
 	}
 
-	srv := httptest.NewServer(newServer(silentLogger(), identityApp, issuer))
+	srv := httptest.NewServer(newServer(silentLogger(), wiring.App, wiring.Issuer, wiring.StampValidator))
 	t.Cleanup(srv.Close)
 
 	full := ids.NewV7().String()
@@ -155,11 +182,12 @@ func TestHTTPFlow_LoginInvalidCredentials_Returns401(t *testing.T) {
 		},
 	}
 	now := func() time.Time { return time.Date(2026, 5, 6, 12, 0, 0, 0, time.UTC) }
-	identityApp, issuer, err := buildIdentityApp(pool, cfg, now)
+	hybrid := newTestHybridCache(t)
+	wiring, err := buildIdentityApp(pool, hybrid, cfg, now)
 	if err != nil {
 		t.Fatalf("buildIdentityApp: %v", err)
 	}
-	srv := httptest.NewServer(newServer(silentLogger(), identityApp, issuer))
+	srv := httptest.NewServer(newServer(silentLogger(), wiring.App, wiring.Issuer, wiring.StampValidator))
 	t.Cleanup(srv.Close)
 
 	resp := postJSON(t, srv.URL+"/api/v1/auth/login", ports.LoginRequest{

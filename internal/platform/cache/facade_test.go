@@ -377,3 +377,204 @@ func TestFacade_TTL_L1ExpiryFallsThroughToL2(t *testing.T) {
 	}
 }
 
+
+// TestFacade_Invalidate_DuringFactory_DoesNotRePoisonCache pins the
+// stale-write fence: a factory call that captures the source BEFORE
+// an Invalidate must NOT commit its result to L1+L2 after the
+// Invalidate clears them. Without the per-facade generation counter,
+// the factory's post-clear write would re-poison the cache with the
+// pre-mutation value — the bug audit-checklist.md §12b cache-facade
+// canon protects against.
+func TestFacade_Invalidate_DuringFactory_DoesNotRePoisonCache(t *testing.T) {
+	t.Parallel()
+
+	store := miniredis.RunT(t)
+	cli := redis.NewClient(&redis.Options{Addr: store.Addr()})
+	hc, err := cache.New(cache.Config{
+		L1MaxItems: 1000,
+		L2:         cli,
+		Logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
+	})
+	if err != nil {
+		t.Fatalf("cache.New: %v", err)
+	}
+	t.Cleanup(hc.Close)
+
+	// First-call signalling is one-shot: subsequent factory calls run
+	// straight through. The blocking dance only matters for the in-
+	// flight Get the test races against an Invalidate.
+	source := atomic.Pointer[person]{}
+	source.Store(&person{ID: "p1", Email: "stale@source.test"})
+	factoryEntered := make(chan struct{})
+	releaseFactory := make(chan struct{})
+	var firstCallOnce sync.Once
+
+	factory := func(context.Context, string) (person, error) {
+		v := *source.Load()
+		firstCallOnce.Do(func() {
+			close(factoryEntered)
+			<-releaseFactory
+		})
+		return v, nil
+	}
+	keyer := func(s string) string { return "race:" + s }
+	f := cache.NewFacade(hc, "race-facade", keyer, factory)
+
+	// Background Get — captures genBefore + source view, then blocks
+	// on releaseFactory before attempting to commit.
+	type getResult struct {
+		v   person
+		err error
+	}
+	resultCh := make(chan getResult, 1)
+	go func() {
+		v, err := f.Get(t.Context(), "p1")
+		resultCh <- getResult{v: v, err: err}
+	}()
+
+	<-factoryEntered
+
+	// Mutate source + Invalidate. This bumps gen — the Get's pending
+	// factory MUST detect this and skip its cache write.
+	source.Store(&person{ID: "p1", Email: "fresh@source.test"})
+	if err := f.Invalidate(t.Context(), "p1"); err != nil {
+		t.Fatalf("Invalidate: %v", err)
+	}
+
+	close(releaseFactory)
+	got := <-resultCh
+	if got.err != nil {
+		t.Fatalf("Get during invalidate: %v", got.err)
+	}
+	// The factory's stale snapshot is still returned to its caller
+	// (they asked "what's the source-of-truth?", and at the time we
+	// read it that WAS this value). The cache, however, must NOT be
+	// poisoned with this value after Invalidate.
+	if got.v.Email != "stale@source.test" {
+		t.Fatalf("Get factory result: got %q want stale snapshot %q", got.v.Email, "stale@source.test")
+	}
+
+	// Drain ristretto's async buffer so any race-window L1 writes are
+	// applied (or skipped, if the gen check caught them).
+	hc.L1.Wait()
+
+	// Crucial assertion: NEXT Get must not return the stale value.
+	next, err := f.Get(t.Context(), "p1")
+	if err != nil {
+		t.Fatalf("post-invalidate Get: %v", err)
+	}
+	if next.Email == "stale@source.test" {
+		t.Fatalf("cache served stale value after Invalidate during factory: got %q", next.Email)
+	}
+	if next.Email != "fresh@source.test" {
+		t.Fatalf("post-invalidate Get: got %q want %q", next.Email, "fresh@source.test")
+	}
+}
+
+// TestFacade_Invalidate_AfterMutation_NextGetSeesFreshValue is the
+// canonical sequential proof-of-cache-invalidation: warm cache,
+// mutate source, Invalidate, Get → fresh value. Without the
+// ristretto L1 Wait drain in Invalidate, the next Get could still
+// hit the stale L1 entry that hasn't been processed yet.
+func TestFacade_Invalidate_AfterMutation_NextGetSeesFreshValue(t *testing.T) {
+	t.Parallel()
+
+	store := miniredis.RunT(t)
+	cli := redis.NewClient(&redis.Options{Addr: store.Addr()})
+	hc, err := cache.New(cache.Config{
+		L1MaxItems: 1000,
+		L2:         cli,
+		Logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
+	})
+	if err != nil {
+		t.Fatalf("cache.New: %v", err)
+	}
+	t.Cleanup(hc.Close)
+
+	source := atomic.Pointer[person]{}
+	source.Store(&person{ID: "p1", Email: "v1@source.test"})
+	factory := func(_ context.Context, _ string) (person, error) {
+		return *source.Load(), nil
+	}
+	keyer := func(s string) string { return "seq:" + s }
+	f := cache.NewFacade(hc, "seq-facade", keyer, factory)
+
+	// Warm.
+	if got, err := f.Get(t.Context(), "p1"); err != nil || got.Email != "v1@source.test" {
+		t.Fatalf("warm: got %+v err=%v", got, err)
+	}
+
+	// Mutate source bypassing the cache.
+	source.Store(&person{ID: "p1", Email: "v2@source.test"})
+
+	if err := f.Invalidate(t.Context(), "p1"); err != nil {
+		t.Fatalf("Invalidate: %v", err)
+	}
+
+	got, err := f.Get(t.Context(), "p1")
+	if err != nil {
+		t.Fatalf("post-invalidate Get: %v", err)
+	}
+	if got.Email != "v2@source.test" {
+		t.Fatalf("post-invalidate Get returned stale value %q (Wait-drain or gen fence broken)", got.Email)
+	}
+}
+
+// TestFacade_Set_FencesInFlightFactory mirrors the Invalidate race
+// proof, but for explicit Set: a factory call that captured an older
+// source view must not overwrite a Set that landed during its run.
+func TestFacade_Set_FencesInFlightFactory(t *testing.T) {
+	t.Parallel()
+
+	store := miniredis.RunT(t)
+	cli := redis.NewClient(&redis.Options{Addr: store.Addr()})
+	hc, err := cache.New(cache.Config{
+		L1MaxItems: 1000,
+		L2:         cli,
+		Logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
+	})
+	if err != nil {
+		t.Fatalf("cache.New: %v", err)
+	}
+	t.Cleanup(hc.Close)
+
+	factoryEntered := make(chan struct{})
+	releaseFactory := make(chan struct{})
+	var once sync.Once
+	factory := func(context.Context, string) (person, error) {
+		once.Do(func() {
+			close(factoryEntered)
+			<-releaseFactory
+		})
+		return person{ID: "p1", Email: "factory-stale@source.test"}, nil
+	}
+	keyer := func(s string) string { return "set-race:" + s }
+	f := cache.NewFacade(hc, "set-race-facade", keyer, factory)
+
+	type getResult struct {
+		v   person
+		err error
+	}
+	resultCh := make(chan getResult, 1)
+	go func() {
+		v, err := f.Get(t.Context(), "p1")
+		resultCh <- getResult{v: v, err: err}
+	}()
+
+	<-factoryEntered
+	if err := f.Set(t.Context(), "p1", person{ID: "p1", Email: "explicit@source.test"}); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	close(releaseFactory)
+	<-resultCh
+
+	hc.L1.Wait()
+	got, err := f.Get(t.Context(), "p1")
+	if err != nil {
+		t.Fatalf("post-Set Get: %v", err)
+	}
+	if got.Email != "explicit@source.test" {
+		t.Fatalf("Set was overwritten by stale factory: got %q want %q",
+			got.Email, "explicit@source.test")
+	}
+}

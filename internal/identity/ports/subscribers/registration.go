@@ -31,12 +31,20 @@ const (
 // the canonical middleware stack (Recoverer + CorrelationID +
 // TenantContext globally, then Idempotency + Audit + Retry per
 // handler) — subscribers only worry about the action.
+//
+// stampCache is the [adapters.SecurityStampCache] threaded into
+// [RevokeFamiliesOnSecurityChange] so cascade events invalidate the
+// cached SecurityStamp BEFORE revoking refresh-token families,
+// closing the eventual-consistency window faster than the 30s TTL
+// would. Pass nil only in legacy fixtures that pre-date the cache
+// wiring; production passes a real *SecurityStampCache.
 func Register(
 	router *messaging.Router,
 	families *adapters.RefreshTokenFamilyRepository,
+	stampCache *adapters.SecurityStampCache,
 	log *slog.Logger,
 ) {
-	revoke := NewRevokeFamiliesOnSecurityChange(families, log)
+	revoke := NewRevokeFamiliesOnSecurityChange(families, stampCache, log)
 	siem := NewReuseDetectedSIEM(log)
 
 	router.AddSubscriber(

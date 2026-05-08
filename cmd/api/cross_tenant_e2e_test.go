@@ -33,10 +33,13 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	commonemail "github.com/leadkart/leadkart-go/internal/common/email"
 	"github.com/leadkart/leadkart-go/internal/common/ids"
+	"github.com/leadkart/leadkart-go/internal/identity/adapters"
 	"github.com/leadkart/leadkart-go/internal/identity/app"
 	"github.com/leadkart/leadkart-go/internal/identity/app/jwt"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/permission"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
 	"github.com/leadkart/leadkart-go/internal/identity/ports"
 	"github.com/leadkart/leadkart-go/internal/platform/config"
 )
@@ -50,10 +53,11 @@ import (
 //     endpoint exists — operators are seeded operationally).
 //   - Pool: for DB-level assertions when needed.
 type e2eFixture struct {
-	URL    string
-	Issuer *jwt.Issuer
-	Pool   *pgxpool.Pool
-	app    app.Application
+	URL     string
+	Issuer  *jwt.Issuer
+	Pool    *pgxpool.Pool
+	app     app.Application
+	persons *adapters.PersonRepository
 }
 
 func newE2EFixture(t *testing.T) e2eFixture {
@@ -69,13 +73,20 @@ func newE2EFixture(t *testing.T) e2eFixture {
 		},
 	}
 	now := func() time.Time { return time.Date(2026, 5, 7, 12, 0, 0, 0, time.UTC) }
-	identityApp, issuer, err := buildIdentityApp(pool, cfg, now)
+	hybrid := newTestHybridCache(t)
+	wiring, err := buildIdentityApp(pool, hybrid, cfg, now)
 	if err != nil {
 		t.Fatalf("buildIdentityApp: %v", err)
 	}
-	srv := httptest.NewServer(newServer(silentLogger(), identityApp, issuer))
+	srv := httptest.NewServer(newServer(silentLogger(), wiring.App, wiring.Issuer, wiring.StampValidator))
 	t.Cleanup(srv.Close)
-	return e2eFixture{URL: srv.URL, Issuer: issuer, Pool: pool, app: identityApp}
+	return e2eFixture{
+		URL:     srv.URL,
+		Issuer:  wiring.Issuer,
+		Pool:    pool,
+		app:     wiring.App,
+		persons: wiring.Persons,
+	}
 }
 
 // registeredTenant captures the IDs + access token of a freshly-
@@ -148,22 +159,53 @@ func (f e2eFixture) registerAndLogin(t *testing.T, namePrefix string) registered
 // in production (no HTTP endpoint provisions them — see A.7
 // "Deferred"); for testing we mint directly via the issuer.
 //
-// The token's Subject is a fresh UUIDv7 that doesn't correspond to
-// any Person row — fine for routes that only read JWT claims, but
-// platform Person-mutation endpoints will 404 if asked to look up
-// the operator themselves. Tests that need a real operator Person
-// row should pass an existing PersonID.
+// The operator Person is inserted into the persons table with a
+// freshly-generated SecurityStamp; the JWT's `security_stamp` claim
+// is bound to that stamp so [authn.RequireFreshStamp] (which the v0.2
+// route stack composes) lets the request through. Without the real
+// row, the SecurityStampValidator's read-through factory would 404
+// on cache miss + the middleware would 401 — the freshness gate is
+// not bypassable for synthetic operators.
+//
+// Pass operatorPersonID="" to auto-generate a UUIDv7. For tests that
+// need a stable ID across calls (e.g. operator-isolation scenarios),
+// pass an explicit ID; the helper still inserts a Person under that ID.
 func (f e2eFixture) mintPlatformToken(t *testing.T, operatorPersonID string) string {
 	t.Helper()
 	if operatorPersonID == "" {
 		operatorPersonID = ids.NewV7().String()
 	}
+
+	// Seed the operator Person row so the freshness validator can
+	// resolve the security_stamp claim. Email + name are synthetic;
+	// the password hash is a fixed-shape placeholder (operators don't
+	// authenticate via password in v0.2 — they're seeded via JWT).
+	suffix := operatorPersonID[len(operatorPersonID)-12:]
+	addr, err := commonemail.New("operator-" + suffix + "@platform.test")
+	if err != nil {
+		t.Fatalf("operator email: %v", err)
+	}
+	pwHash, err := person.NewPasswordHash(
+		"$argon2id$v=19$m=19456,t=2,p=1$c2FsdHkx$abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+	)
+	if err != nil {
+		t.Fatalf("operator pw hash: %v", err)
+	}
+	op, err := person.New(person.ID(operatorPersonID), addr, "Platform", "Operator", pwHash)
+	if err != nil {
+		t.Fatalf("operator person.New: %v", err)
+	}
+	if err := f.persons.Add(t.Context(), op); err != nil {
+		t.Fatalf("operator persons.Add: %v", err)
+	}
+
 	tok, err := f.Issuer.Issue(jwt.IssueArgs{
-		PersonID:     operatorPersonID,
-		TenantID:     ids.NewV7().String(), // synthetic — Platform doesn't bind to a real tenant for these tests
-		TenantSlug:   "platform",
-		MembershipID: ids.NewV7().String(),
-		IsPlatform:   true,
+		PersonID:      operatorPersonID,
+		TenantID:      ids.NewV7().String(), // synthetic — Platform doesn't bind to a real tenant for these tests
+		TenantSlug:    "platform",
+		MembershipID:  ids.NewV7().String(),
+		SecurityStamp: op.SecurityStamp().String(),
+		IsPlatform:    true,
 		Permissions: []string{
 			permission.IdentityPermissions.Platform.TenantsView,
 			permission.IdentityPermissions.Platform.TenantsManage,
@@ -538,13 +580,27 @@ func TestE2E_PlatformOperator_ListsAllTenants(t *testing.T) {
 
 // TestE2E_PlatformStats_ReflectsState — counts match the registered
 // tenants + memberships.
+//
+// Per-helper contribution to the stats counters (encoded as a contract
+// the helpers + assertions share, not magic numbers in the test body):
+//
+//   registerAndLogin → +1 tenant, +1 person, +1 active membership
+//   mintPlatformToken → +1 person (the synthetic operator Person);
+//                       no tenant, no membership (TenantID claim is
+//                       synthetic, no DB row)
 func TestE2E_PlatformStats_ReflectsState(t *testing.T) {
 	f := newE2EFixture(t)
-	_ = f.registerAndLogin(t, "acme")
-	_ = f.registerAndLogin(t, "globex")
-	platformTok := f.mintPlatformToken(t, "")
+	admins := []registeredTenant{
+		f.registerAndLogin(t, "acme"),
+		f.registerAndLogin(t, "globex"),
+	}
+	operators := []string{f.mintPlatformToken(t, "")}
 
-	resp := f.authedJSON(t, http.MethodGet, "/api/v1/platform/stats", platformTok, nil)
+	wantTenants := len(admins)
+	wantPersons := len(admins) + len(operators)
+	wantActiveMemberships := len(admins)
+
+	resp := f.authedJSON(t, http.MethodGet, "/api/v1/platform/stats", operators[0], nil)
 	if resp.status != http.StatusOK {
 		t.Fatalf("stats: status %d body %s", resp.status, resp.body)
 	}
@@ -552,14 +608,17 @@ func TestE2E_PlatformStats_ReflectsState(t *testing.T) {
 	if err := json.Unmarshal(resp.body, &stats); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if stats.TenantsTotal != 2 {
-		t.Errorf("TenantsTotal = %d, want 2", stats.TenantsTotal)
+	if stats.TenantsTotal != wantTenants {
+		t.Errorf("TenantsTotal = %d, want %d (registerAndLogin × %d)",
+			stats.TenantsTotal, wantTenants, len(admins))
 	}
-	if stats.PersonsTotal != 2 {
-		t.Errorf("PersonsTotal = %d, want 2", stats.PersonsTotal)
+	if stats.PersonsTotal != wantPersons {
+		t.Errorf("PersonsTotal = %d, want %d (registerAndLogin × %d + mintPlatformToken × %d)",
+			stats.PersonsTotal, wantPersons, len(admins), len(operators))
 	}
-	if stats.MembershipsActive != 2 {
-		t.Errorf("MembershipsActive = %d, want 2", stats.MembershipsActive)
+	if stats.MembershipsActive != wantActiveMemberships {
+		t.Errorf("MembershipsActive = %d, want %d (registerAndLogin × %d)",
+			stats.MembershipsActive, wantActiveMemberships, len(admins))
 	}
 }
 
