@@ -6,11 +6,14 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/leadkart/leadkart-go/internal/common/tenancy"
 )
 
 // CommandIDHeader is the wire-stable header name. Mirrors Stripe's
@@ -44,12 +47,41 @@ const (
 	errCodeKeyReuse         = "idempotency.key_reuse"
 )
 
+// CallerKeyer extracts the caller-scope identifier for idempotency
+// records — Stripe's "scoped to API key" canon. Empty return forces a
+// 400 idempotency.invalid_command_id (the middleware refuses to store
+// records without a caller scope; otherwise tenant A could collide
+// with tenant B's response cache).
+//
+// The default keyer ([DefaultCallerKeyer]) prefers the authenticated
+// tenant ID from ctx via [tenancy.FromContext]; if absent, falls back
+// to "anon:<remote-ip>" which is a defense-in-depth scope (callers
+// SHOULD only run this middleware on authenticated routes).
+type CallerKeyer func(r *http.Request) string
+
+// DefaultCallerKeyer scopes by tenant from ctx, falling back to remote
+// IP. Wired by [Middleware] when no explicit keyer is supplied.
+func DefaultCallerKeyer(r *http.Request) string {
+	if id, ok := tenancy.FromContext(r.Context()); ok && !id.IsZero() {
+		return "tenant:" + id.String()
+	}
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil || host == "" {
+		host = strings.TrimSpace(r.RemoteAddr)
+	}
+	if host == "" {
+		return ""
+	}
+	return "anon:" + host
+}
+
 // Middleware wraps next in idempotency handling per [CommandIDHeader].
 //
 // Behaviour:
 //
 //   - Header absent → call next directly (opt-in).
 //   - Header malformed (not a UUID) → 400 idempotency.invalid_command_id.
+//   - Caller scope missing → 400 idempotency.invalid_command_id.
 //   - Cached match → replay stored response with X-Idempotent-Replay: true.
 //   - Cached mismatch (same key, different body hash) → 422
 //     idempotency.key_reuse.
@@ -64,7 +96,8 @@ const (
 //
 // `now` is the clock function (testable via clock.Set in tests).
 // `ttl` is the per-record retention; 0 means [DefaultTTL].
-func Middleware(store Store, now func() time.Time, ttl time.Duration) func(http.Handler) http.Handler {
+// `keyer` extracts the per-caller scope; nil → [DefaultCallerKeyer].
+func Middleware(store Store, now func() time.Time, ttl time.Duration, keyer CallerKeyer) func(http.Handler) http.Handler {
 	if store == nil {
 		panic("idempotency: Middleware store required")
 	}
@@ -73,6 +106,9 @@ func Middleware(store Store, now func() time.Time, ttl time.Duration) func(http.
 	}
 	if ttl <= 0 {
 		ttl = DefaultTTL
+	}
+	if keyer == nil {
+		keyer = DefaultCallerKeyer
 	}
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -86,6 +122,17 @@ func Middleware(store Store, now func() time.Time, ttl time.Duration) func(http.
 			if err != nil {
 				writeJSONError(w, http.StatusBadRequest, errCodeInvalidCommandID,
 					"X-Command-Id must be a UUID")
+				return
+			}
+			callerID := keyer(r)
+			if callerID == "" {
+				writeJSONError(w, http.StatusBadRequest, errCodeInvalidCommandID,
+					"X-Command-Id requires an authenticated caller scope")
+				return
+			}
+			if len(callerID) > MaxCallerIDLen {
+				writeJSONError(w, http.StatusBadRequest, errCodeInvalidCommandID,
+					"caller scope too long")
 				return
 			}
 
@@ -111,7 +158,7 @@ func Middleware(store Store, now func() time.Time, ttl time.Duration) func(http.
 			bodyHash := sha256.Sum256(body)
 
 			// Check cache.
-			rec, err := store.Get(r.Context(), key, bodyHash)
+			rec, err := store.Get(r.Context(), callerID, key, bodyHash)
 			switch {
 			case errors.Is(err, ErrBodyMismatch):
 				writeJSONError(w, http.StatusUnprocessableEntity, errCodeKeyReuse,
@@ -154,6 +201,7 @@ func Middleware(store Store, now func() time.Time, ttl time.Duration) func(http.
 			}
 			n := now()
 			_ = store.Put(r.Context(), Record{
+				CallerID:        callerID,
 				Key:             key,
 				BodyHash:        bodyHash,
 				ResponseStatus:  rec2.status,

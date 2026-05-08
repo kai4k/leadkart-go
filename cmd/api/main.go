@@ -286,9 +286,12 @@ func run(ctx context.Context, stdout *os.File, _ []string) error {
 	// unauthenticated brute-force attempt should hit the limiter
 	// before we burn cycles on JWT verification) but before
 	// idempotency cache lookups (which are tenant-scoped).
+	// PostgresStore is durable across restarts + safe across replicas.
+	// InMemoryStore (the previous default) loses every record on
+	// rollout, defeating the idempotency contract during deploys.
 	mwChain := httpmw.PublicChain(httpmw.PublicChainConfig{
 		Logger:           logger,
-		IdempotencyStore: idempotency.NewInMemoryStore(time.Now),
+		IdempotencyStore: idempotency.NewPostgresStore(pool),
 		Now:              time.Now,
 		IPRateLimit: httpmw.LimiterConfig{
 			RatePerSecond: apiIPRatePerSecond,
