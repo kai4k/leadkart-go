@@ -334,13 +334,26 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
+      # docker/compose.yml uses ${VAR:?required} substitution so the
+      # stack refuses to start without an explicit JWT signing key + key
+      # ID (canon — secrets must NOT have placeholder defaults). Mint
+      # an ephemeral pair per CI run from /dev/urandom; the smoke run
+      # is throwaway so a fresh key is fine. The .env file path is
+      # docker/.env per docker compose's project-dir lookup.
+      - name: Mint ephemeral JWT secrets for smoke
+        run: |
+          {
+            echo "LEADKART_JWT__KEY_ID=ci-smoke-$(date +%s)"
+            echo "LEADKART_JWT__SIGNING_KEY=$(openssl rand -hex 32)"
+          } > docker/.env
+
       # Compose --profile full builds api + migrate locally. cache-from
       # the docker-build job's GHA scope so we re-use already-warmed
       # buildx layers instead of re-downloading the toolchain.
       - name: Bring up full stack
         run: |
-          docker compose -f docker/compose.yml --profile full up -d --build
-          docker compose -f docker/compose.yml --profile full ps
+          docker compose --env-file docker/.env -f docker/compose.yml --profile full up -d --build
+          docker compose --env-file docker/.env -f docker/compose.yml --profile full ps
 
       - name: Wait for api healthy (max 60s)
         run: |
@@ -351,7 +364,7 @@ jobs:
             sleep 2
           done
           echo "api never reached healthy"
-          docker compose -f docker/compose.yml --profile full logs api --tail=100
+          docker compose --env-file docker/.env -f docker/compose.yml --profile full logs api --tail=100
           exit 1
 
       - name: Run smoke script
@@ -359,8 +372,8 @@ jobs:
 
       - name: Dump api logs on failure
         if: failure()
-        run: docker compose -f docker/compose.yml --profile full logs --tail=200
+        run: docker compose --env-file docker/.env -f docker/compose.yml --profile full logs --tail=200
 
       - name: Tear down
         if: always()
-        run: docker compose -f docker/compose.yml --profile full down -v
+        run: docker compose --env-file docker/.env -f docker/compose.yml --profile full down -v

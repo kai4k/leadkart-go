@@ -39,6 +39,7 @@ func newFixture(t *testing.T, factory func(ctx context.Context, key string) (per
 
 	store := miniredis.RunT(t)
 	cli := redis.NewClient(&redis.Options{Addr: store.Addr()})
+	t.Cleanup(func() { _ = cli.Close() })
 
 	hc, err := cache.New(cache.Config{
 		L1MaxItems: 1000,
@@ -339,6 +340,7 @@ func TestFacade_TTL_L1ExpiryFallsThroughToL2(t *testing.T) {
 
 	store := miniredis.RunT(t)
 	cli := redis.NewClient(&redis.Options{Addr: store.Addr()})
+	t.Cleanup(func() { _ = cli.Close() })
 	hc, err := cache.New(cache.Config{L1MaxItems: 100, L2: cli, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
 	if err != nil {
 		t.Fatalf("cache.New: %v", err)
@@ -390,6 +392,7 @@ func TestFacade_Invalidate_DuringFactory_DoesNotRePoisonCache(t *testing.T) {
 
 	store := miniredis.RunT(t)
 	cli := redis.NewClient(&redis.Options{Addr: store.Addr()})
+	t.Cleanup(func() { _ = cli.Close() })
 	hc, err := cache.New(cache.Config{
 		L1MaxItems: 1000,
 		L2:         cli,
@@ -481,6 +484,7 @@ func TestFacade_Invalidate_AfterMutation_NextGetSeesFreshValue(t *testing.T) {
 
 	store := miniredis.RunT(t)
 	cli := redis.NewClient(&redis.Options{Addr: store.Addr()})
+	t.Cleanup(func() { _ = cli.Close() })
 	hc, err := cache.New(cache.Config{
 		L1MaxItems: 1000,
 		L2:         cli,
@@ -528,6 +532,7 @@ func TestFacade_Set_FencesInFlightFactory(t *testing.T) {
 
 	store := miniredis.RunT(t)
 	cli := redis.NewClient(&redis.Options{Addr: store.Addr()})
+	t.Cleanup(func() { _ = cli.Close() })
 	hc, err := cache.New(cache.Config{
 		L1MaxItems: 1000,
 		L2:         cli,
