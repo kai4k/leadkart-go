@@ -44,6 +44,18 @@ FROM   identity.refresh_tokens
 WHERE  family_id = $1
 ORDER  BY generation;
 
+-- name: ListActiveFamiliesForPerson :many
+-- Lists every non-revoked refresh-token family for a Person across
+-- tenants. Used by the post-security-event revocation cascade
+-- (RevokeFamiliesOnSecurityChange) and the user "manage sessions" UI.
+-- Cross-tenant query; non-RLS table per refresh_token canon.
+SELECT id, person_id, tenant_id, device_label,
+       created_at, last_used_at, revoked_at, revoke_reason
+FROM   identity.refresh_token_families
+WHERE  person_id  = $1
+  AND  revoked_at IS NULL
+ORDER  BY created_at;
+
 -- name: UpdateRefreshTokenFamily :exec
 -- Persists family-level mutable state: last_used_at on every rotate;
 -- revoked_at + revoke_reason on Revoke or reuse-detected.

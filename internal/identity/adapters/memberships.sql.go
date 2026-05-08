@@ -218,6 +218,47 @@ func (q *Queries) ListMembershipsForPerson(ctx context.Context, personID pgtype.
 	return items, nil
 }
 
+const listMembershipsInCurrentTenant = `-- name: ListMembershipsInCurrentTenant :many
+SELECT id, person_id, tenant_id, status, joined_at, left_at,
+       designation, department, status_message, reports_to
+FROM   identity.tenant_memberships
+ORDER  BY joined_at
+`
+
+// Cross-membership query under tenant scope — RLS filters to the
+// current tenant via SET LOCAL app.tenant_id. Used by tenant-admin
+// "manage users" UIs.
+func (q *Queries) ListMembershipsInCurrentTenant(ctx context.Context) ([]IdentityTenantMembership, error) {
+	rows, err := q.db.Query(ctx, listMembershipsInCurrentTenant)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []IdentityTenantMembership
+	for rows.Next() {
+		var i IdentityTenantMembership
+		if err := rows.Scan(
+			&i.ID,
+			&i.PersonID,
+			&i.TenantID,
+			&i.Status,
+			&i.JoinedAt,
+			&i.LeftAt,
+			&i.Designation,
+			&i.Department,
+			&i.StatusMessage,
+			&i.ReportsTo,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listPermissionOverridesByMembership = `-- name: ListPermissionOverridesByMembership :many
 SELECT membership_id, permission_name, kind, tenant_id, updated_at
 FROM   identity.membership_permission_overrides

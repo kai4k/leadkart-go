@@ -32,6 +32,15 @@ FROM   identity.tenant_memberships
 WHERE  person_id = $1
 ORDER  BY joined_at;
 
+-- name: ListMembershipsInCurrentTenant :many
+-- Cross-membership query under tenant scope — RLS filters to the
+-- current tenant via SET LOCAL app.tenant_id. Used by tenant-admin
+-- "manage users" UIs.
+SELECT id, person_id, tenant_id, status, joined_at, left_at,
+       designation, department, status_message, reports_to
+FROM   identity.tenant_memberships
+ORDER  BY joined_at;
+
 -- name: UpdateMembershipStatus :exec
 UPDATE identity.tenant_memberships
 SET    status  = $2,
