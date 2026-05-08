@@ -29,7 +29,6 @@ package main
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
@@ -40,7 +39,6 @@ import (
 
 	"github.com/ThreeDotsLabs/watermill"
 	"github.com/ThreeDotsLabs/watermill/pubsub/gochannel"
-	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/leadkart/leadkart-go/internal/common/ids"
 	"github.com/leadkart/leadkart-go/internal/identity/adapters"
@@ -53,15 +51,15 @@ import (
 	"github.com/leadkart/leadkart-go/internal/platform/pg"
 )
 
-// cascadeBudget is the wall-clock budget for the outbox-forwarder
-// + subscriber-router pipeline to complete: pickup + publish +
-// idempotency check + audit row + Invalidate + family revoke. Under
-// -race + busy CI Docker daemons this can climb past a naive 5s
-// estimate; 15s is comfortable on the slowest CI runners observed
-// while still being well under the 30s SecurityStampCache TTL — i.e.
-// the assertion still distinguishes "invalidation cascade ran" from
-// "TTL fallback masked the failure."
-const cascadeBudget = 15 * time.Second
+// invalidationFastPathBudget is the wall-clock budget for the
+// forwarder→router→subscriber→Invalidate→family-revoke chain. The
+// subscriber's Watermill retry middleware recovers transient
+// Invalidate failures (5 attempts, 200ms→5s exponential, ~5-10s
+// max worst case). 15s tolerates that retry envelope on busy CI
+// runners while still being well under the 30s SecurityStampCache
+// TTL — the assertion still distinguishes "cache-invalidation
+// cascade ran" from "TTL fallback masked the failure."
+const invalidationFastPathBudget = 15 * time.Second
 
 func TestSecurityStampInvalidation_PasswordChange_Returns401WithinFastPath(t *testing.T) {
 	pool := startWiredPostgresForHTTP(t)
@@ -191,115 +189,39 @@ func TestSecurityStampInvalidation_PasswordChange_Returns401WithinFastPath(t *te
 		t.Fatalf("change-password: status %d body %s", cpResp.status, cpResp.body)
 	}
 
-	// 5. Wait for the cascade to complete via the deterministic DB-level
-	//    signal (Person's stamp rotated in the persons table). The
-	//    subscriber's Invalidate happens BEFORE family revocation in
-	//    revokeAll, so once we observe the DB stamp != warm stamp the
-	//    cache invalidation has already run. Polling /sessions for an
-	//    INFERRED state ({"sessions":[]} = families revoked but cache
-	//    unobservable) was racy on busy CI runners — the polled request
-	//    could race with an in-flight cascade and observe families
-	//    revoked while the freshness check still hit a yet-to-be-
-	//    invalidated cache entry.
-	personID := decodeJWTSubject(t, login.AccessToken)
-	waitForCascadeComplete(t, pool, personID, cascadeBudget)
-
-	// 6. Now make ONE /sessions request with the original T1. After the
-	//    cascade is fully drained, the cache MUST be invalidated and
-	//    the next Get repopulates from Postgres which now holds S2.
-	//    IsFresh(S1, S2) → false → 401 stale_token. This is the actual
-	//    contract assertion.
-	got := getWithBearer(t, srv.URL+"/api/v1/auth/sessions", login.AccessToken)
-	if got.status != http.StatusUnauthorized {
-		t.Fatalf("post-cascade /sessions: status %d body %s — expected 401 stale_token "+
-			"(invalidation cascade broken: cache returned a stale entry that should have been evicted)",
-			got.status, got.body)
-	}
-	var er ports.ErrorResponse
-	if err := json.Unmarshal(got.body, &er); err != nil {
-		t.Fatalf("decode error response: %v body %s", err, got.body)
-	}
-	if er.Error != "stale_token" {
-		t.Fatalf("error code: got %q want stale_token (body %s)", er.Error, got.body)
-	}
-}
-
-// decodeJWTSubject pulls the `sub` claim out of a JWT without
-// signature verification. Tests need the PersonID for direct DB
-// queries; round-tripping through JSON-decoding the JWT body is
-// simpler than threading the registered PersonID through the test.
-func decodeJWTSubject(t *testing.T, token string) string {
-	t.Helper()
-	parts := bytes.Split([]byte(token), []byte("."))
-	if len(parts) != 3 {
-		t.Fatalf("decodeJWTSubject: token has %d parts, want 3", len(parts))
-	}
-	body, err := base64URLDecode(parts[1])
-	if err != nil {
-		t.Fatalf("decodeJWTSubject: base64: %v", err)
-	}
-	var claims struct {
-		Sub string `json:"sub"`
-	}
-	if err := json.Unmarshal(body, &claims); err != nil {
-		t.Fatalf("decodeJWTSubject: json: %v", err)
-	}
-	if claims.Sub == "" {
-		t.Fatalf("decodeJWTSubject: empty sub claim")
-	}
-	return claims.Sub
-}
-
-// base64URLDecode handles JWT's RFC 7515 base64url-without-padding.
-func base64URLDecode(s []byte) ([]byte, error) {
-	// Add padding back — JWT spec strips it but encoding/base64
-	// requires it for non-RawURLEncoding decoders.
-	pad := (4 - len(s)%4) % 4
-	for range pad {
-		s = append(s, '=')
-	}
-	return base64.URLEncoding.DecodeString(string(s))
-}
-
-// waitForCascadeComplete polls the refresh_token_families table for
-// personID until every active family has been revoked — that's the
-// LAST step in revokeAll, so once we observe zero active families
-// the cascade has fully drained: the change-password tx committed,
-// the outbox row was forwarded, the subscriber processed it,
-// SecurityStampCache.Invalidate ran (BEFORE family revocation per
-// revokeAll's cascade order), and each family was Revoke()'d.
-//
-// The earlier shape of this test polled /sessions and inferred state
-// from the response body. That conflated two signals (cache state +
-// family state) and was racy on busy CI runners — the polled request
-// could observe families revoked while the freshness check still hit
-// a yet-to-be-invalidated cache entry, since the cache invalidate
-// and the family revoke are sequential but the next request lands
-// concurrently with the cascade.
-//
-// budget caps the wait — under -race + busy CI Docker daemons the
-// cascade can take 5-10s; 15s is generous while still well under the
-// 30s SecurityStampCache TTL (which would mask the failure if we
-// waited that long).
-func waitForCascadeComplete(t *testing.T, pool *pgxpool.Pool, personID string, budget time.Duration) {
-	t.Helper()
-	deadline := time.Now().Add(budget)
+	// 5. Poll: the SAME T1 should start failing 401 stale_token within
+	//    the fast-path budget. The subscriber's all-or-nothing
+	//    semantics (return error on Invalidate failure → Watermill
+	//    retry) guarantees the cache is reliably clean by the time
+	//    family revocation runs; once families are revoked, the
+	//    handler returns nil and the message is acked. The next
+	//    /sessions request post-ack hits cache miss → factory → S2 →
+	//    IsFresh(S1, S2) = false → 401 stale_token.
+	deadline := time.Now().Add(invalidationFastPathBudget)
+	var sawStale bool
+	var lastStatus int
+	var lastBody []byte
 	for time.Now().Before(deadline) {
-		var activeFamilies int
-		if err := pool.QueryRow(t.Context(), `
-			SELECT count(*)
-			FROM   identity.refresh_token_families
-			WHERE  person_id = $1
-			  AND  revoked_at IS NULL
-		`, personID).Scan(&activeFamilies); err != nil {
-			t.Fatalf("read family count: %v", err)
-		}
-		if activeFamilies == 0 {
-			return
+		got := getWithBearer(t, srv.URL+"/api/v1/auth/sessions", login.AccessToken)
+		lastStatus = got.status
+		lastBody = got.body
+		if got.status == http.StatusUnauthorized {
+			var er ports.ErrorResponse
+			if err := json.Unmarshal(got.body, &er); err == nil && er.Error == "stale_token" {
+				sawStale = true
+				break
+			}
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
-	t.Fatalf("waitForCascadeComplete: cascade did not revoke families within %s", budget)
+	if !sawStale {
+		t.Fatalf(
+			"expected 401 stale_token within %s of password change "+
+				"(invalidation cascade broken — TTL fallback would still pass after 30s, "+
+				"but the fast path is what proves the subscriber's all-or-nothing "+
+				"Invalidate→retry→family-revoke contract). last status %d body %s",
+			invalidationFastPathBudget, lastStatus, lastBody)
+	}
 }
 
 // getWithBearer issues a GET with the bearer token and returns the

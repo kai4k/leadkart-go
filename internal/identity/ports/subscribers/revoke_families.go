@@ -211,21 +211,43 @@ func (h *RevokeFamiliesOnSecurityChange) revokeForTenant(
 // [integrationevents.RefreshTokenFamilyRevokedV1] — downstream SIEM
 // + audit subscribers see the cascade.
 //
-// Invalidates the cached SecurityStamp BEFORE the family-revocation
-// loop so any in-flight access token fails the freshness gate on its
-// next request (cache miss → fresh stamp from Postgres → mismatch →
-// 401 stale_token), rather than waiting up to 30s for the cache TTL.
+// Step ordering — all-or-nothing per Watermill canon:
+//
+//  1. Invalidate the cached SecurityStamp. If this fails, RETURN
+//     the error so the router's retry middleware re-runs the whole
+//     handler with exponential backoff (DefaultRetry = 5 attempts,
+//     200ms→5s exponential). Family revocation does NOT proceed —
+//     the message stays unacked + the operation retries until the
+//     cache is reliably cleared.
+//  2. List active families + revoke each.
+//
+// Why fail-loudly instead of WARN-and-continue: the SecurityStampCache
+// contract is "after Invalidate returns nil, no subsequent Get
+// observes the pre-mutation value." Swallowing the error silently
+// breaks that contract — L2 may retain the stale entry, the next
+// Get takes the L2-hit branch (which doesn't gen-fence) and re-
+// poisons L1, and the freshness gate keeps passing for up to 30s
+// (cache TTL) instead of within the retry window.
+//
+// Watermill's retry + idempotency middleware compose correctly:
+// re-runs Invalidate (idempotent — Del a non-existent key is a
+// no-op) + re-lists families (idempotent — already-revoked are
+// skipped at the Family.Revoke domain level). Eventually the
+// handler returns nil and the message is acked.
+//
+// Idempotency: Family.Revoke is no-op on already-revoked families.
+// Re-delivery of the same event (despite the inbox dedup) is safe.
 func (h *RevokeFamiliesOnSecurityChange) revokeAll(
 	ctx context.Context, personID string, reason string,
 ) error {
 	pid := person.ID(personID)
 	if h.stampCache != nil {
 		if err := h.stampCache.Invalidate(ctx, pid); err != nil {
-			// Cache transport failure is NOT fatal — TTL fallback (~30s)
-			// still closes the window. Log + continue so the family
-			// revocation still happens.
-			h.log.WarnContext(ctx, "security stamp cache invalidate failed",
-				"person_id", personID, "reason", reason, "err", err)
+			// Fail loud — let Watermill retry. Family revocation
+			// MUST NOT run until the cache is confirmed clean,
+			// otherwise the freshness gate keeps serving the stale
+			// stamp from L2 even after families are revoked.
+			return fmt.Errorf("subscribers: invalidate security stamp for %s: %w", personID, err)
 		}
 	}
 	actives, err := h.families.ListActiveForPerson(ctx, pid)
