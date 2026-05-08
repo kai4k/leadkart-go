@@ -146,20 +146,29 @@ func run(ctx context.Context, stdout *os.File) error {
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	logger := slog.New(slog.NewJSONHandler(stdout, &slog.HandlerOptions{
-		Level: slog.LevelInfo,
-	}))
-	slog.SetDefault(logger)
-
 	cfg, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("config: %w", err)
 	}
 
+	// OTel install BEFORE the slog logger — see cmd/api/main.go for
+	// the rationale (otelslog binds the LoggerProvider at handler
+	// construction, not at Handle time).
 	otelShutdown, err := obs.Setup(ctx, cfg.OTel)
 	if err != nil {
 		return fmt.Errorf("obs: %w", err)
 	}
+
+	// Worker uses a distinct service name so OTel backends can split
+	// API vs. worker telemetry. cfg.OTel.ServiceName is "leadkart-api"
+	// by default; override locally for the worker process.
+	const workerServiceName = "leadkart-worker"
+	logger := slog.New(obs.NewSlogHandler(
+		slog.NewJSONHandler(stdout, &slog.HandlerOptions{Level: slog.LevelInfo}),
+		workerServiceName,
+	))
+	slog.SetDefault(logger)
+
 	defer func() {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), otelShutdownTimeout)
 		defer cancel()
@@ -168,7 +177,7 @@ func run(ctx context.Context, stdout *os.File) error {
 		}
 	}()
 
-	pool, err := pgxpool.New(ctx, cfg.Postgres.DSN)
+	pool, err := pg.NewPool(ctx, cfg.Postgres.DSN)
 	if err != nil {
 		return fmt.Errorf("pgxpool: %w", err)
 	}

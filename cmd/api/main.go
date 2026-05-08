@@ -181,20 +181,27 @@ func run(ctx context.Context, stdout *os.File, _ []string) error {
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	logger := slog.New(slog.NewJSONHandler(stdout, &slog.HandlerOptions{
-		Level: slog.LevelInfo,
-	}))
-	slog.SetDefault(logger)
-
 	cfg, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("config: %w", err)
 	}
 
+	// OTel SDK install BEFORE the slog logger — obs.NewSlogHandler
+	// bridges via otelslog.NewHandler which consults the global
+	// LoggerProvider that obs.Setup installs. Wrong order = otelslog
+	// binds to the no-op provider + every log record after the bind
+	// is dropped from OTLP output even after Setup runs.
 	otelShutdown, err := obs.Setup(ctx, cfg.OTel)
 	if err != nil {
 		return fmt.Errorf("obs: %w", err)
 	}
+
+	logger := slog.New(obs.NewSlogHandler(
+		slog.NewJSONHandler(stdout, &slog.HandlerOptions{Level: slog.LevelInfo}),
+		cfg.OTel.ServiceName,
+	))
+	slog.SetDefault(logger)
+
 	defer func() {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), otelShutdownTimeout)
 		defer cancel()
@@ -203,7 +210,7 @@ func run(ctx context.Context, stdout *os.File, _ []string) error {
 		}
 	}()
 
-	pool, err := pgxpool.New(ctx, cfg.Postgres.DSN)
+	pool, err := pg.NewPool(ctx, cfg.Postgres.DSN)
 	if err != nil {
 		return fmt.Errorf("pgxpool: %w", err)
 	}
