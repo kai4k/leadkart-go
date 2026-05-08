@@ -27,6 +27,17 @@ const ReplayHeader = "X-Idempotent-Replay"
 // outage, short enough that the storage doesn't bloat.
 const DefaultTTL = 24 * time.Hour
 
+// MaxBodyBytes caps the per-request body size the middleware will
+// buffer for hashing. Per OWASP API4 (Unrestricted Resource
+// Consumption): an unbounded io.ReadAll on the request body is a
+// trivial soft-DoS vector — a 10 GiB upload is fully buffered into
+// memory before any application logic runs. 1 MiB is the canonical
+// Stripe / GitHub API ceiling for JSON-shaped POST/PUT/DELETE
+// bodies. Routes that need larger bodies (file uploads) MUST opt
+// out of the idempotency middleware OR negotiate a larger ceiling
+// in a follow-up.
+const MaxBodyBytes = 1 << 20 // 1 MiB
+
 // Wire-stable error codes for the body shape.
 const (
 	errCodeInvalidCommandID = "idempotency.invalid_command_id"
@@ -78,15 +89,21 @@ func Middleware(store Store, now func() time.Time, ttl time.Duration) func(http.
 				return
 			}
 
-			// Read + hash the request body. We always rebuild
+			// Read + hash the request body. Bounded by MaxBodyBytes
+			// (OWASP API4 — http.MaxBytesReader returns a 413
+			// Request Entity Too Large via its sentinel error so
+			// the response shape stays correct). We always rebuild
 			// r.Body afterwards so downstream handlers can decode it.
+			r.Body = http.MaxBytesReader(w, r.Body, MaxBodyBytes)
 			body, err := io.ReadAll(r.Body)
 			if err != nil {
-				// Body read failure is unusual; return 400 + don't
-				// cache. (Caching with empty body on read-failure
-				// would later replay the empty body as if it succeeded.)
-				writeJSONError(w, http.StatusBadRequest, errCodeInvalidCommandID,
-					"unable to read request body")
+				// MaxBytesReader's sentinel produces a 413 on the
+				// underlying ResponseWriter as a side-effect of Read
+				// — but only if WriteHeader hasn't been called. We
+				// emit our own structured 413 either way so the
+				// shape matches the rest of the API.
+				writeJSONError(w, http.StatusRequestEntityTooLarge, errCodeInvalidCommandID,
+					"request body too large or unreadable")
 				return
 			}
 			_ = r.Body.Close()

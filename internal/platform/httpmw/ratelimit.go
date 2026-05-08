@@ -3,6 +3,7 @@ package httpmw
 import (
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -113,9 +114,13 @@ func (l *RateLimiter) limiterFor(key LimiterKey) *rate.Limiter {
 // (keyer returned "") skips the limit — the request flows through.
 //
 // 429 response shape mirrors other LeadKart errors: JSON body with
-// error code + message; no Retry-After header for v0.2 (rate-limited
-// callers don't need precise scheduling at this layer; they just need
-// to back off).
+// error code + message PLUS a `Retry-After` header (RFC 6585 §4
+// + RFC 7231 §7.1.3 — well-behaved clients back off intelligently
+// rather than retrying immediately). The seconds count is computed
+// from the bucket's reservation: rate.Limiter.Reserve() returns
+// the wait until the next token + we round up to whole seconds for
+// the header value. This is the canonical Stripe / GitHub / AWS
+// shape ("Retry-After: 12").
 func (l *RateLimiter) Middleware() func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -124,8 +129,21 @@ func (l *RateLimiter) Middleware() func(http.Handler) http.Handler {
 				next.ServeHTTP(w, r)
 				return
 			}
-			if !l.limiterFor(key).Allow() {
+			limiter := l.limiterFor(key)
+			if !limiter.Allow() {
+				// Compute Retry-After from the bucket's reservation.
+				// Reserve() reserves a token regardless of allow/deny,
+				// so we Cancel() right after to put it back — the
+				// 429 path doesn't consume a token.
+				reservation := limiter.Reserve()
+				wait := reservation.Delay()
+				reservation.Cancel()
+				retryAfter := int(wait.Seconds())
+				if retryAfter < 1 {
+					retryAfter = 1
+				}
 				w.Header().Set("Content-Type", "application/json; charset=utf-8")
+				w.Header().Set("Retry-After", strconv.Itoa(retryAfter))
 				w.WriteHeader(http.StatusTooManyRequests)
 				_, _ = w.Write([]byte(`{"error":"` + errCodeRateLimited + `","message":"too many requests"}`))
 				return

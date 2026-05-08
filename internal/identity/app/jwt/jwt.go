@@ -33,6 +33,21 @@ const AccessTokenTTL = 10 * time.Minute
 // security.md (Auth0/Okta canon — tolerate small server-clock drift).
 const ClockSkew = 60 * time.Second
 
+// IssuerClaim + AudienceClaim are the wire-stable iss + aud values
+// pinned per RFC 7519 §4.1.1 (iss) + §4.1.3 (aud) and required by
+// RFC 8725 §3.10/§3.11 ("Always Validate Issuer and Audience"). A
+// token signed by a different LeadKart deployment / environment /
+// sibling service that happens to share the HS256 secret would
+// otherwise verify here — pinning iss + aud to LeadKart's own
+// identifier closes the cross-environment confusion vector.
+//
+// Named *Claim (vs Issuer / Audience plain) so they don't clash
+// with the [Issuer] struct type.
+const (
+	IssuerClaim   = "leadkart-identity"
+	AudienceClaim = "leadkart-api"
+)
+
 // ErrInvalidToken is returned by [Issuer.Verify] when the token is
 // expired, signature-invalid, kid-unknown, or any other shape failure.
 // Caller maps to HTTP 401; intentionally generic to avoid leaking which
@@ -118,6 +133,8 @@ func (i *Issuer) Issue(args IssueArgs) (string, error) {
 	}
 	claims := Claims{
 		RegisteredClaims: jwtv5.RegisteredClaims{
+			Issuer:    IssuerClaim,
+			Audience:  jwtv5.ClaimStrings{AudienceClaim},
 			Subject:   args.PersonID,
 			ID:        jti,
 			IssuedAt:  jwtv5.NewNumericDate(now),
@@ -149,11 +166,15 @@ func (i *Issuer) Issue(args IssueArgs) (string, error) {
 //   - Algorithm MUST be HS256 (RFC 8725 §3.1 alg confusion mitigation).
 //   - exp + nbf checked with ClockSkew leeway.
 //   - kid header MUST match a known key id (current OR previous).
+//   - iss MUST equal [IssuerClaim] (RFC 7519 §4.1.1 + RFC 8725 §3.10).
+//   - aud MUST contain [AudienceClaim] (RFC 7519 §4.1.3 + RFC 8725 §3.11).
 func (i *Issuer) Verify(token string) (*Claims, error) {
 	parser := jwtv5.NewParser(
 		jwtv5.WithValidMethods([]string{"HS256"}),
 		jwtv5.WithLeeway(ClockSkew),
 		jwtv5.WithTimeFunc(i.now),
+		jwtv5.WithIssuer(IssuerClaim),
+		jwtv5.WithAudience(AudienceClaim),
 	)
 	claims := &Claims{}
 	_, err := parser.ParseWithClaims(token, claims, func(t *jwtv5.Token) (interface{}, error) {
