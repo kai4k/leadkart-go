@@ -290,7 +290,9 @@ func (s *PostgresStore) Put(ctx context.Context, r Record) error {
 		r.CallerID,
 		r.Key.String(),
 		hex.EncodeToString(r.BodyHash[:]),
-		int32(r.ResponseStatus),
+		// validateRecord bounds ResponseStatus to [100, 599] per RFC 9110,
+		// so the int→int32 cast cannot overflow.
+		int32(r.ResponseStatus), //nolint:gosec // G115: bounded by validateRecord
 		r.ResponseBody,
 		headersJSON,
 		r.CreatedAt,
@@ -323,6 +325,12 @@ func validateRecord(r Record) error {
 	}
 	if r.ExpiresAt.IsZero() {
 		return fmt.Errorf("%w: ExpiresAt required", ErrInvalid)
+	}
+	// RFC 9110 §15: status codes are 1xx–5xx (100–599). Reject anything
+	// outside that range — both rules out programmer errors and proves
+	// the int→int32 cast in PostgresStore.Put cannot overflow.
+	if r.ResponseStatus < 100 || r.ResponseStatus > 599 {
+		return fmt.Errorf("%w: ResponseStatus %d outside RFC 9110 range", ErrInvalid, r.ResponseStatus)
 	}
 	return nil
 }
