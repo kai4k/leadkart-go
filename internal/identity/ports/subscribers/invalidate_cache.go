@@ -8,11 +8,19 @@ import (
 
 	"github.com/ThreeDotsLabs/watermill/message"
 
-	"github.com/leadkart/leadkart-go/internal/identity/adapters"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
 	"github.com/leadkart/leadkart-go/internal/identity/integrationevents"
 	"github.com/leadkart/leadkart-go/internal/platform/messaging"
 )
+
+// SecurityStampInvalidator is the single capability this subscriber
+// needs from the cache facade. Declared at the consumer (Cheney "accept
+// interfaces, return structs") rather than importing the concrete
+// *adapters.SecurityStampCache — keeps the subscriber decoupled from
+// the cache impl, lets tests inject a fake without spinning up Redis.
+type SecurityStampInvalidator interface {
+	Invalidate(ctx context.Context, id person.ID) error
+}
 
 // InvalidateSecurityStampCache evicts the cached SecurityStamp for a
 // Person whenever a stamp-rotation event fires
@@ -55,14 +63,15 @@ import (
 //     each carries its own retry/failure semantics matching its
 //     correctness profile.
 type InvalidateSecurityStampCache struct {
-	stampCache *adapters.SecurityStampCache
+	stampCache SecurityStampInvalidator
 	log        *slog.Logger
 }
 
 // NewInvalidateSecurityStampCache wires the subscriber against the
-// shared *SecurityStampCache facade.
+// shared cache facade. Production passes *adapters.SecurityStampCache;
+// tests pass a fake that implements [SecurityStampInvalidator].
 func NewInvalidateSecurityStampCache(
-	stampCache *adapters.SecurityStampCache,
+	stampCache SecurityStampInvalidator,
 	log *slog.Logger,
 ) *InvalidateSecurityStampCache {
 	if stampCache == nil {

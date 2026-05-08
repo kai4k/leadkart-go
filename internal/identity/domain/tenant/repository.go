@@ -66,6 +66,16 @@ type Repository interface {
 	// table is non-RLS (each row IS a tenant); no privilege escalation
 	// happens here, the gate lives in the HTTP middleware.
 	ListAll(ctx context.Context) ([]*Tenant, error)
+
+	// HardDeleteRow physically removes the tenant row after the
+	// 30-day grace window has elapsed (per data-retention.md "Tenant
+	// deletion saga"). The grace-window pre-check lives in
+	// Tenant.HardDelete() — callers MUST run that aggregate transition
+	// via UpdateByID FIRST so the audit trail records the terminal-
+	// state event; HardDeleteRow then physically deletes.
+	//
+	// Idempotent: deleting an already-deleted row no-ops without error.
+	HardDeleteRow(ctx context.Context, id ID) error
 }
 
 // Compile-time guarantee that the sentinel errors are wrapped-comparable.
