@@ -46,12 +46,15 @@ import (
 	"github.com/redis/go-redis/v9"
 	"golang.org/x/sync/errgroup"
 
+	"github.com/riverqueue/river"
+
 	"github.com/leadkart/leadkart-go/internal/identity/adapters"
 	"github.com/leadkart/leadkart-go/internal/identity/integrationevents"
 	"github.com/leadkart/leadkart-go/internal/identity/ports/subscribers"
 	"github.com/leadkart/leadkart-go/internal/platform/audit"
 	"github.com/leadkart/leadkart-go/internal/platform/cache"
 	"github.com/leadkart/leadkart-go/internal/platform/config"
+	"github.com/leadkart/leadkart-go/internal/platform/jobs"
 	"github.com/leadkart/leadkart-go/internal/platform/messaging"
 	"github.com/leadkart/leadkart-go/internal/platform/obs"
 	"github.com/leadkart/leadkart-go/internal/platform/pg"
@@ -232,6 +235,36 @@ func run(ctx context.Context, stdout *os.File) error {
 	}
 	subscribers.Register(router, subWiring.Families, subWiring.StampCache, logger)
 
+	// River background-job pool. v0.2 ships one job — AuditLogPurgeJob —
+	// running daily to enforce the 7-year audit retention. River's
+	// migrations run in-process at boot for the v0.2 single-replica
+	// shape; v0.3 splits this into a dedicated cmd/migrate invocation.
+	if err := jobs.Migrate(ctx, pool); err != nil {
+		return fmt.Errorf("river migrate: %w", err)
+	}
+	workers := river.NewWorkers()
+	if err := river.AddWorkerSafely(workers, audit.NewPurgeWorker(pool, logger)); err != nil {
+		return fmt.Errorf("register audit purge worker: %w", err)
+	}
+	periodics := []*river.PeriodicJob{
+		river.NewPeriodicJob(
+			river.PeriodicInterval(audit.PurgeInterval),
+			func() (river.JobArgs, *river.InsertOpts) {
+				return audit.PurgeJob{}, nil
+			},
+			&river.PeriodicJobOpts{RunOnStart: false},
+		),
+	}
+	riverClient, err := jobs.NewClient(jobs.Config{
+		Pool:         pool,
+		Workers:      workers,
+		PeriodicJobs: periodics,
+		Logger:       logger,
+	})
+	if err != nil {
+		return fmt.Errorf("river client: %w", err)
+	}
+
 	health := obs.NewHealth([]obs.HealthChecker{
 		obs.HealthCheckerFunc{N: "postgres", Fn: pool.Ping},
 		obs.HealthCheckerFunc{N: "redis", Fn: func(ctx context.Context) error {
@@ -253,6 +286,23 @@ func run(ctx context.Context, stdout *os.File) error {
 		logger.Info("subscriber router starting")
 		if err := router.Run(gctx); err != nil && !errors.Is(err, context.Canceled) {
 			return fmt.Errorf("router: %w", err)
+		}
+		return nil
+	})
+
+	g.Go(func() error {
+		logger.Info("river client starting")
+		if err := riverClient.Start(gctx); err != nil {
+			return fmt.Errorf("river start: %w", err)
+		}
+		// Block until ctx cancels; Start spawns its own background
+		// goroutines so we just need to wait for the shutdown signal
+		// + then drive Stop on the returned client below.
+		<-gctx.Done()
+		stopCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+		defer cancel()
+		if err := riverClient.Stop(stopCtx); err != nil {
+			return fmt.Errorf("river stop: %w", err)
 		}
 		return nil
 	})
