@@ -16,7 +16,6 @@ package audit
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log/slog"
 	"time"
 
@@ -115,10 +114,16 @@ func (w *Writer) Write(ctx context.Context, e Entry) error {
 		payloadArg,
 	)
 	if err != nil {
-		// Audit-log outage MUST NOT cascade. Log + swallow.
+		// Audit-log outage MUST NOT cascade. Log + swallow per
+		// audit-checklist.md §12. Returning the error here would 500
+		// every authenticated request the moment the audit table /
+		// Postgres has a transient blip — which is the exact failure
+		// mode the doctrine forbids. Caller can inspect the WARN log
+		// + the buildingblocks.audit_log_entry row count metric to
+		// detect outage; it MUST NOT branch on the return value.
 		w.log.WarnContext(ctx, "audit: write failed (swallowed)",
 			"action", e.Action, "err", err)
-		return fmt.Errorf("audit: write %s: %w", e.Action, err)
+		return nil
 	}
 	return nil
 }

@@ -16,6 +16,24 @@ type AppCommandIdempotency struct {
 	ResponseBody   []byte
 	CreatedAt      pgtype.Timestamptz
 	ExpiresAt      pgtype.Timestamptz
+	// Per-caller scoping per Stripe Idempotency-Key canon. Tenant ID for tenant requests, "platform:<user>" for operator paths, "anon:<ip>" for unauth (defense-in-depth — middleware should not be on unauth routes).
+	CallerID string
+	// Captured response headers for verbatim replay (Content-Type minimum; ETag / X-Request-Id when set).
+	ResponseHeaders []byte
+}
+
+// Per-request operator impersonation activity. Indexed on operator + target tenant for forensic queries. 7-year retention per SOC2 CC4.1 / DPDP §12.
+type BuildingblocksAdminImpersonationAudit struct {
+	ID             pgtype.UUID
+	SessionID      pgtype.UUID
+	OperatorUserID pgtype.UUID
+	TargetTenantID pgtype.UUID
+	CorrelationID  string
+	HttpRoute      string
+	HttpMethod     string
+	Reason         string
+	StartedAtUtc   pgtype.Timestamptz
+	IsGodMode      bool
 }
 
 // Auto-written per command via Watermill AuditLoggingMiddleware. 7-year retention; daily purge.

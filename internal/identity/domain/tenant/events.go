@@ -7,18 +7,23 @@ import (
 	"github.com/leadkart/leadkart-go/internal/common/slug"
 )
 
-// Event is the marker interface for tenant domain events.
+// Event is the SEALED marker interface for tenant domain events.
+// Sealed via the unexported isTenantEvent() method so only types in
+// this package can satisfy it — same shape as role.Event.
+//
+// Domain events deliberately do NOT carry wire concerns (Topic / V1
+// alias / occurred-at-as-method). Wire-versioning lives in
+// integrationevents.*V1 per Vernon IDDD ch. 8 ("Domain Events vs.
+// Integration Events"): a v2 wire rename must NOT force a domain edit.
+// The integration mapper in internal/identity/integrationevents/
+// type-switches on these structs and emits the canonical V1 envelope.
 //
 // Domain events are recorded by aggregate methods and drained by
 // repositories on persist. The repository's UpdateByID closure pattern
 // (per ADR 0004 + TDL Sep 2024) writes events to the outbox table in
 // the same transaction as the state mutation.
-//
-// Each event carries `Topic()` (event_type metadata) and `OccurredAt()`
-// (domain-time, distinct from row creation time).
 type Event interface {
-	Topic() string
-	OccurredAt() time.Time
+	isTenantEvent()
 }
 
 // RegisteredEvent fires when a Tenant is created via [New].
@@ -31,12 +36,7 @@ type RegisteredEvent struct {
 	At          time.Time
 }
 
-// Topic returns the integration event type. Versioned per `messaging.md`
-// canon — bump to .v2 on any breaking field change.
-func (RegisteredEvent) Topic() string { return "identity.tenant_registered.v1" }
-
-// OccurredAt returns the domain timestamp when registration happened.
-func (e RegisteredEvent) OccurredAt() time.Time { return e.At }
+func (RegisteredEvent) isTenantEvent() {}
 
 // ActivatedEvent fires when a Tenant transitions to [StatusActive].
 type ActivatedEvent struct {
@@ -44,11 +44,7 @@ type ActivatedEvent struct {
 	At       time.Time
 }
 
-// Topic returns the integration event type.
-func (ActivatedEvent) Topic() string { return "identity.tenant_activated.v1" }
-
-// OccurredAt returns the domain timestamp.
-func (e ActivatedEvent) OccurredAt() time.Time { return e.At }
+func (ActivatedEvent) isTenantEvent() {}
 
 // ProfileUpdatedEvent fires when [Tenant.UpdateProfile] is called.
 //
@@ -64,11 +60,7 @@ type ProfileUpdatedEvent struct {
 	At             time.Time
 }
 
-// Topic returns the integration event type.
-func (ProfileUpdatedEvent) Topic() string { return "identity.tenant_profile_updated.v1" }
-
-// OccurredAt returns the domain timestamp.
-func (e ProfileUpdatedEvent) OccurredAt() time.Time { return e.At }
+func (ProfileUpdatedEvent) isTenantEvent() {}
 
 // SuspendedEvent fires when a Tenant transitions to [StatusSuspended].
 type SuspendedEvent struct {
@@ -77,11 +69,7 @@ type SuspendedEvent struct {
 	At       time.Time
 }
 
-// Topic returns the integration event type.
-func (SuspendedEvent) Topic() string { return "identity.tenant_suspended.v1" }
-
-// OccurredAt returns the domain timestamp.
-func (e SuspendedEvent) OccurredAt() time.Time { return e.At }
+func (SuspendedEvent) isTenantEvent() {}
 
 // StatutoryUpdatedEvent fires when [Tenant.UpdateStatutory] changes
 // any of the declared Indian statutory IDs (GST/PAN/DrugLicence).
@@ -90,17 +78,13 @@ func (e SuspendedEvent) OccurredAt() time.Time { return e.At }
 // render diffs. Empty (zero) Statutory in OldStatutory means the
 // tenant declared statutory IDs for the first time.
 type StatutoryUpdatedEvent struct {
-	TenantID      ID
-	OldStatutory  Statutory
-	NewStatutory  Statutory
-	At            time.Time
+	TenantID     ID
+	OldStatutory Statutory
+	NewStatutory Statutory
+	At           time.Time
 }
 
-// Topic returns the integration event type.
-func (StatutoryUpdatedEvent) Topic() string { return "identity.tenant_statutory_updated.v1" }
-
-// OccurredAt returns the domain timestamp.
-func (e StatutoryUpdatedEvent) OccurredAt() time.Time { return e.At }
+func (StatutoryUpdatedEvent) isTenantEvent() {}
 
 // AdminContactUpdatedEvent fires when [Tenant.UpdateAdminContact]
 // changes the admin phone or postal address. Carries OLD/NEW for
@@ -113,11 +97,7 @@ type AdminContactUpdatedEvent struct {
 	At              time.Time
 }
 
-// Topic returns the integration event type.
-func (AdminContactUpdatedEvent) Topic() string { return "identity.tenant_admin_contact_updated.v1" }
-
-// OccurredAt returns the domain timestamp.
-func (e AdminContactUpdatedEvent) OccurredAt() time.Time { return e.At }
+func (AdminContactUpdatedEvent) isTenantEvent() {}
 
 // SettingsUpdatedEvent fires when [Tenant.UpdateSettings] changes
 // the tenant's operational settings (password policy today).
@@ -131,11 +111,7 @@ type SettingsUpdatedEvent struct {
 	At          time.Time
 }
 
-// Topic returns the integration event type.
-func (SettingsUpdatedEvent) Topic() string { return "identity.tenant_settings_updated.v1" }
-
-// OccurredAt returns the domain timestamp.
-func (e SettingsUpdatedEvent) OccurredAt() time.Time { return e.At }
+func (SettingsUpdatedEvent) isTenantEvent() {}
 
 // DisplayPreferencesUpdatedEvent fires when
 // [Tenant.UpdateDisplayPreferences] changes the tenant's UI rendering
@@ -148,13 +124,7 @@ type DisplayPreferencesUpdatedEvent struct {
 	At                    time.Time
 }
 
-// Topic returns the integration event type.
-func (DisplayPreferencesUpdatedEvent) Topic() string {
-	return "identity.tenant_display_preferences_updated.v1"
-}
-
-// OccurredAt returns the domain timestamp.
-func (e DisplayPreferencesUpdatedEvent) OccurredAt() time.Time { return e.At }
+func (DisplayPreferencesUpdatedEvent) isTenantEvent() {}
 
 // MarkedForDeletionEvent fires when [Tenant.MarkForDeletion] is called.
 //
@@ -169,11 +139,7 @@ type MarkedForDeletionEvent struct {
 	At          time.Time
 }
 
-// Topic returns the integration event type.
-func (MarkedForDeletionEvent) Topic() string { return "identity.tenant_marked_for_deletion.v1" }
-
-// OccurredAt returns the domain timestamp.
-func (e MarkedForDeletionEvent) OccurredAt() time.Time { return e.At }
+func (MarkedForDeletionEvent) isTenantEvent() {}
 
 // RestoredEvent fires when [Tenant.RestoreFromDeletion] cancels a
 // pending deletion within the grace window.
@@ -184,11 +150,7 @@ type RestoredEvent struct {
 	At       time.Time
 }
 
-// Topic returns the integration event type.
-func (RestoredEvent) Topic() string { return "identity.tenant_restored.v1" }
-
-// OccurredAt returns the domain timestamp.
-func (e RestoredEvent) OccurredAt() time.Time { return e.At }
+func (RestoredEvent) isTenantEvent() {}
 
 // DeletedEvent fires when [Tenant.HardDelete] is called by the
 // data-retention saga after the grace window expires.
@@ -203,8 +165,4 @@ type DeletedEvent struct {
 	At       time.Time
 }
 
-// Topic returns the integration event type.
-func (DeletedEvent) Topic() string { return "identity.tenant_deleted.v1" }
-
-// OccurredAt returns the domain timestamp.
-func (e DeletedEvent) OccurredAt() time.Time { return e.At }
+func (DeletedEvent) isTenantEvent() {}

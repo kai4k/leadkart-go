@@ -147,34 +147,11 @@ func (r *RefreshTokenFamilyRepository) ListActiveForPerson(ctx context.Context, 
 		// Two-pass: drain family rows into a slice (releasing the
 		// connection's iteration cursor), THEN load each family's
 		// tokens. pgx forbids multiplexed queries on one connection.
-		rows, err := tx.Query(ctx, `
-			SELECT id, person_id, tenant_id, device_label,
-			       created_at, last_used_at, revoked_at, revoke_reason
-			FROM   identity.refresh_token_families
-			WHERE  person_id = $1
-			  AND  revoked_at IS NULL
-			ORDER  BY created_at
-		`, pgUUID(uid))
+		q := r.q.WithTx(tx)
+		familyRows, err := q.ListActiveFamiliesForPerson(ctx, pgUUID(uid))
 		if err != nil {
 			return fmt.Errorf("refresh token repo: list active: %w", err)
 		}
-		var familyRows []IdentityRefreshTokenFamily
-		for rows.Next() {
-			var row IdentityRefreshTokenFamily
-			if err := rows.Scan(
-				&row.ID, &row.PersonID, &row.TenantID, &row.DeviceLabel,
-				&row.CreatedAt, &row.LastUsedAt, &row.RevokedAt, &row.RevokeReason,
-			); err != nil {
-				rows.Close()
-				return fmt.Errorf("refresh token repo: scan: %w", err)
-			}
-			familyRows = append(familyRows, row)
-		}
-		rows.Close()
-		if err := rows.Err(); err != nil {
-			return err
-		}
-		q := r.q.WithTx(tx)
 		for _, row := range familyRows {
 			f, herr := hydrateFamily(ctx, q, row)
 			if herr != nil {

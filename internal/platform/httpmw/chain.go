@@ -66,6 +66,11 @@ type PublicChainConfig struct {
 	// pre-auth traffic. Zero values panic — rate limiting is required
 	// per security.md.
 	IPRateLimit LimiterConfig
+
+	// IdempotencyKeyer overrides the default tenant→IP fallback used by
+	// the idempotency middleware to scope X-Command-Id keys per caller.
+	// Nil → idempotency.DefaultCallerKeyer.
+	IdempotencyKeyer idempotency.CallerKeyer
 }
 
 // PublicChain returns the canonical middleware chain for the public
@@ -102,6 +107,6 @@ func PublicChain(cfg PublicChainConfig) Middleware {
 		RequestLog(cfg.Logger),
 		Recover(cfg.Logger),
 		ipLimiter.Middleware(),
-		idempotency.Middleware(cfg.IdempotencyStore, cfg.Now, cfg.IdempotencyTTL),
+		idempotency.Middleware(cfg.IdempotencyStore, cfg.Now, cfg.IdempotencyTTL, cfg.IdempotencyKeyer),
 	)
 }

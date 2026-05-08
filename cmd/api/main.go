@@ -37,6 +37,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
+	"github.com/redis/go-redis/v9/maintnotifications"
 	"golang.org/x/sync/errgroup"
 
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
@@ -210,7 +211,14 @@ func run(ctx context.Context, stdout *os.File, _ []string) error {
 		}
 	}()
 
-	pool, err := pg.NewPool(ctx, cfg.Postgres.DSN)
+	pool, err := pg.NewPool(ctx, cfg.Postgres.DSN, pg.PoolConfig{
+		// Production keeps query parameters OFF traces (PII /
+		// secret material in identity.persons +
+		// refresh_token_families bound args). Per OTel semconv
+		// §db.statement.parameters: "MUST NOT be captured by
+		// default."
+		IncludeQueryParameters: false,
+	})
 	if err != nil {
 		return fmt.Errorf("pgxpool: %w", err)
 	}
@@ -226,10 +234,18 @@ func run(ctx context.Context, stdout *os.File, _ []string) error {
 	// JWT blacklist + impersonation session store + idempotency inbox
 	// in v0.3+. Singleton per ADR 0015 + audit-checklist.md §12b
 	// "Redis singleton rule" — never per-request, defeats pooling.
+	// MaintNotificationsConfig.Mode=Disabled opts out of go-redis 9.19's
+	// CLIENT MAINT_NOTIFICATIONS feature (a Redis Enterprise / ElastiCache
+	// upgrade-coordination protocol we do not deploy against). The default
+	// "auto" mode unconditionally spawns a CircuitBreakerManager goroutine
+	// that goleak flags + that we have no use for. Per Redis docs §
+	// "Client maintenance notifications" — opt-out for non-Enterprise
+	// deployments is the canonical posture.
 	redisCli := redis.NewClient(&redis.Options{
-		Addr:     cfg.Redis.Addr,
-		Password: cfg.Redis.Password,
-		DB:       cfg.Redis.DB,
+		Addr:                     cfg.Redis.Addr,
+		Password:                 cfg.Redis.Password,
+		DB:                       cfg.Redis.DB,
+		MaintNotificationsConfig: &maintnotifications.Config{Mode: maintnotifications.ModeDisabled},
 	})
 	defer func() { _ = redisCli.Close() }()
 	pingCtx, pingCancel := context.WithTimeout(ctx, redisPingTimeout)
@@ -279,9 +295,12 @@ func run(ctx context.Context, stdout *os.File, _ []string) error {
 	// unauthenticated brute-force attempt should hit the limiter
 	// before we burn cycles on JWT verification) but before
 	// idempotency cache lookups (which are tenant-scoped).
+	// PostgresStore is durable across restarts + safe across replicas.
+	// InMemoryStore (the previous default) loses every record on
+	// rollout, defeating the idempotency contract during deploys.
 	mwChain := httpmw.PublicChain(httpmw.PublicChainConfig{
 		Logger:           logger,
-		IdempotencyStore: idempotency.NewInMemoryStore(time.Now),
+		IdempotencyStore: idempotency.NewPostgresStore(pool),
 		Now:              time.Now,
 		IPRateLimit: httpmw.LimiterConfig{
 			RatePerSecond: apiIPRatePerSecond,

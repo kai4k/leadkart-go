@@ -8,6 +8,10 @@ import (
 
 	"github.com/ThreeDotsLabs/watermill/message"
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/propagation"
+	semconv "go.opentelemetry.io/otel/semconv/v1.27.0"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/leadkart/leadkart-go/internal/common/tenancy"
 	"github.com/leadkart/leadkart-go/internal/platform/audit"
@@ -37,6 +41,53 @@ func TenantContextMiddleware(h message.HandlerFunc) message.HandlerFunc {
 			msg.SetContext(tenancy.WithID(msg.Context(), tenancy.ID(tid)))
 		}
 		return h(msg)
+	}
+}
+
+// tracerName is the OTel tracer used by [TraceContextMiddleware]. One
+// tracer per package is the OTel canon; "messaging.consumer" matches
+// the OpenTelemetry messaging semantic conventions §"Messaging spans"
+// (operation name "process" on the receive side).
+const tracerName = "github.com/leadkart/leadkart-go/internal/platform/messaging"
+
+// TraceContextMiddleware extracts the W3C Trace Context the producer
+// stamped on the message metadata + opens a per-message "process" span
+// rooted at that remote parent. Without this the consumer side of every
+// outbox edge starts a NEW root span — the trace tree fragments at
+// every async hop + distributed tracing collapses to per-process slices.
+//
+// OTel semantic conventions for messaging (v1.27): the receive-side
+// span MUST be named `<destination> process` and tagged with
+// messaging.system + messaging.destination.name. Span ends when the
+// handler returns; errors are recorded on the span.
+//
+// Pairs with the inject in [adapters.OutboxForwarder.ForwardOnce].
+func TraceContextMiddleware(h message.HandlerFunc) message.HandlerFunc {
+	tracer := otel.Tracer(tracerName)
+	propagator := otel.GetTextMapPropagator()
+	return func(msg *message.Message) ([]*message.Message, error) {
+		parentCtx := propagator.Extract(msg.Context(), propagation.MapCarrier(msg.Metadata))
+		eventType := msg.Metadata.Get(HeaderEventType)
+		spanName := eventType + " process"
+		if eventType == "" {
+			spanName = "watermill process"
+		}
+		ctx, span := tracer.Start(parentCtx, spanName,
+			trace.WithSpanKind(trace.SpanKindConsumer),
+			trace.WithAttributes(
+				semconv.MessagingSystemKey.String("watermill"),
+				semconv.MessagingOperationTypeProcess,
+				semconv.MessagingDestinationName(eventType),
+				semconv.MessagingMessageID(msg.UUID),
+			),
+		)
+		defer span.End()
+		msg.SetContext(ctx)
+		out, err := h(msg)
+		if err != nil {
+			span.RecordError(err)
+		}
+		return out, err
 	}
 }
 

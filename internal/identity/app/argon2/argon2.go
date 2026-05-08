@@ -89,6 +89,33 @@ func Verify(password, stored string) error {
 	return nil
 }
 
+// NeedsRehash reports whether stored uses cost parameters BELOW the
+// current [Memory] / [Iterations] / [Parallel] floor. Returns true on
+// any old-cost hash so the login flow can re-hash the user's password
+// (with the now-current floor) and persist the result on the next
+// successful Verify.
+//
+// Returns false on parse errors (the caller already saw ErrFormat
+// from Verify and surfaced it) and on hashes that meet or exceed
+// the current floor.
+//
+// Per OWASP Password Storage Cheat Sheet 2025 §"Upgrading hashes":
+// "If a higher cost factor is now available, you should re-hash the
+// user's password the next time they log in." Without this, every
+// user keeps verifying at whatever cost was in place when they
+// originally registered — a 2026 user with the 2026 floor stays
+// stuck at the 2026 floor through 2030+.
+//
+// Auth0 / Microsoft Entra ID / Stripe all implement this rehash-on-
+// login pattern.
+func NeedsRehash(stored string) bool {
+	memory, iterations, parallel, _, _, err := parsePHC(stored)
+	if err != nil {
+		return false
+	}
+	return memory < Memory || iterations < Iterations || parallel < Parallel
+}
+
 // parsePHC decodes a `$argon2id$v=19$m=...,t=...,p=...$salt$hash` string.
 // Returns the cost parameters + raw salt + raw hash. Strict — extra
 // segments, unknown variants, or wrong version → [ErrFormat].

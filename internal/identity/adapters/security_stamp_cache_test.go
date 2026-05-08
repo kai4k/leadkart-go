@@ -74,6 +74,7 @@ func newHybridFixture(t *testing.T, personID person.ID, initialStamp string) *hy
 	t.Helper()
 	store := miniredis.RunT(t)
 	cli := redis.NewClient(&redis.Options{Addr: store.Addr()})
+	t.Cleanup(func() { _ = cli.Close() })
 	hc, err := cache.New(cache.Config{
 		L1MaxItems: 1000,
 		L2:         cli,

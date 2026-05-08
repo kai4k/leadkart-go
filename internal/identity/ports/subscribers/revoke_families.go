@@ -8,7 +8,6 @@ import (
 
 	"github.com/ThreeDotsLabs/watermill/message"
 
-	"github.com/leadkart/leadkart-go/internal/identity/adapters"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/refreshtoken"
 	"github.com/leadkart/leadkart-go/internal/identity/integrationevents"
@@ -44,13 +43,15 @@ import (
 // confirms revocation. Idempotent — Family.Revoke is no-op on
 // already-revoked families.
 type RevokeFamiliesOnSecurityChange struct {
-	families *adapters.RefreshTokenFamilyRepository
+	families refreshtoken.Repository
 	log      *slog.Logger
 }
 
-// NewRevokeFamiliesOnSecurityChange wires the subscriber.
+// NewRevokeFamiliesOnSecurityChange wires the subscriber. Depends on
+// the domain interface (Cheney "accept interfaces, return structs") —
+// the production wiring point passes *adapters.RefreshTokenFamilyRepository.
 func NewRevokeFamiliesOnSecurityChange(
-	families *adapters.RefreshTokenFamilyRepository,
+	families refreshtoken.Repository,
 	log *slog.Logger,
 ) *RevokeFamiliesOnSecurityChange {
 	if log == nil {

@@ -44,6 +44,7 @@ import (
 	"github.com/ThreeDotsLabs/watermill/pubsub/gochannel"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
+	"github.com/redis/go-redis/v9/maintnotifications"
 	"golang.org/x/sync/errgroup"
 
 	"github.com/riverqueue/river"
@@ -180,7 +181,9 @@ func run(ctx context.Context, stdout *os.File) error {
 		}
 	}()
 
-	pool, err := pg.NewPool(ctx, cfg.Postgres.DSN)
+	pool, err := pg.NewPool(ctx, cfg.Postgres.DSN, pg.PoolConfig{
+		IncludeQueryParameters: false, // PII guard — see cmd/api/main.go.
+	})
 	if err != nil {
 		return fmt.Errorf("pgxpool: %w", err)
 	}
@@ -190,10 +193,15 @@ func run(ctx context.Context, stdout *os.File) error {
 	}
 	logger.InfoContext(ctx, "postgres connected")
 
+	// See cmd/api/main.go for the MaintNotificationsConfig rationale —
+	// opt-out of the Redis Enterprise / ElastiCache CLIENT MAINT_NOTIFICATIONS
+	// protocol we do not deploy against (go-redis 9.19's "auto" default
+	// otherwise spawns a CircuitBreakerManager cleanup goroutine).
 	redisCli := redis.NewClient(&redis.Options{
-		Addr:     cfg.Redis.Addr,
-		Password: cfg.Redis.Password,
-		DB:       cfg.Redis.DB,
+		Addr:                     cfg.Redis.Addr,
+		Password:                 cfg.Redis.Password,
+		DB:                       cfg.Redis.DB,
+		MaintNotificationsConfig: &maintnotifications.Config{Mode: maintnotifications.ModeDisabled},
 	})
 	defer func() { _ = redisCli.Close() }()
 	pingCtx, pingCancel := context.WithTimeout(ctx, redisPingTimeout)

@@ -215,36 +215,14 @@ func (r *MembershipRepository) ListForTenant(
 	// via the transactor; sqlc adds nothing here.)
 	var out []*membership.Membership
 	err := r.tx.WithinTx(ctx, pg.TxScopeTenant, func(ctx context.Context, tx pgx.Tx) error {
-		// Pull every column the IdentityTenantMembership model carries so
-		// the row→aggregate mapping stays consistent with GetMembershipByID.
-		rows, err := tx.Query(ctx, `
-			SELECT id, person_id, tenant_id, status, joined_at, left_at,
-			       designation, department, status_message, reports_to
-			FROM   identity.tenant_memberships
-		`)
+		q := r.q.WithTx(tx)
+		hydrated, err := q.ListMembershipsInCurrentTenant(ctx)
 		if err != nil {
 			return fmt.Errorf("membership repo: list for tenant: %w", err)
 		}
-		defer rows.Close()
-		var hydrated []IdentityTenantMembership
-		for rows.Next() {
-			var row IdentityTenantMembership
-			if err := rows.Scan(
-				&row.ID, &row.PersonID, &row.TenantID,
-				&row.Status, &row.JoinedAt, &row.LeftAt,
-				&row.Designation, &row.Department, &row.StatusMessage, &row.ReportsTo,
-			); err != nil {
-				return fmt.Errorf("membership repo: scan: %w", err)
-			}
-			hydrated = append(hydrated, row)
-		}
-		if err := rows.Err(); err != nil {
-			return err
-		}
 		// Hydrate child-table state for each row. ListForTenant is an admin
 		// path; the N+2 round-trips per row are acceptable until a hot
-		// path needs the bulk join (Task 21+ benchmark before adopting).
-		q := r.q.WithTx(tx)
+		// path needs the bulk json_agg join (benchmark first).
 		out = make([]*membership.Membership, 0, len(hydrated))
 		for _, row := range hydrated {
 			roleIDs, lerr := loadRoleAssignments(ctx, q, uuidFromPg(row.ID))

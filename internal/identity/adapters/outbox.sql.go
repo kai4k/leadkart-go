@@ -95,10 +95,22 @@ FROM   identity.outbox
 WHERE  forwarded = false
 ORDER  BY created_at
 LIMIT  $1
+FOR    UPDATE SKIP LOCKED
 `
 
 // Forwarder polls this. Caller MUST run under app.is_platform=true so
 // RLS policy outbox_select returns rows from every tenant.
+//
+// FOR UPDATE SKIP LOCKED (Postgres 9.5+) lets multiple forwarder
+// replicas drain the outbox concurrently without double-publishing.
+// During a Kubernetes rolling deploy the old + new pod overlap; a
+// plain SELECT here would let both pick up the same rows + both
+// publish + both UPDATE forwarded=true (one win, one duplicate
+// downstream). SKIP LOCKED makes Postgres skip rows already row-
+// locked by a sibling tx, so each in-flight forwarder sees a
+// disjoint slice. Canonical Watermill SQL outbox shape +
+// river-queue + Brandur Leach "Transactionally staged job drains
+// in Postgres" use the same primitive.
 func (q *Queries) ListUnforwardedOutboxEvents(ctx context.Context, limit int32) ([]IdentityOutbox, error) {
 	rows, err := q.db.Query(ctx, listUnforwardedOutboxEvents, limit)
 	if err != nil {
