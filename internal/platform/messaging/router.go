@@ -96,8 +96,14 @@ const defaultRouterCloseTimeout = 30 * time.Second
 //
 // Global middleware (in declaration order — outermost first):
 //   - watermill.Recoverer        panic → error
+//   - TraceContextMiddleware     extract W3C trace ctx → consumer span
 //   - CorrelationIDMiddleware    propagate / generate correlation_id
 //   - TenantContextMiddleware    metadata → ctx via tenancy.WithID
+//
+// Trace middleware sits second-outermost (just inside Recoverer) so the
+// per-message span surrounds every other middleware + the handler body
+// — panic recovery still needs to be outermost so a recovered panic
+// doesn't escape the trace boundary.
 //
 // Per-handler middleware (Idempotency + Audit + Retry) is applied at
 // [Router.AddSubscriber] time so each handler's name participates in
@@ -135,6 +141,7 @@ func NewRouter(deps Deps) (*Router, error) {
 	// Global middleware — outermost wraps innermost.
 	r.AddMiddleware(
 		wmw.Recoverer,
+		TraceContextMiddleware,
 		CorrelationIDMiddleware,
 		TenantContextMiddleware,
 	)

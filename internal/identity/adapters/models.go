@@ -18,6 +18,20 @@ type AppCommandIdempotency struct {
 	ExpiresAt      pgtype.Timestamptz
 }
 
+// Per-request operator impersonation activity. Indexed on operator + target tenant for forensic queries. 7-year retention per SOC2 CC4.1 / DPDP §12.
+type BuildingblocksAdminImpersonationAudit struct {
+	ID             pgtype.UUID
+	SessionID      pgtype.UUID
+	OperatorUserID pgtype.UUID
+	TargetTenantID pgtype.UUID
+	CorrelationID  string
+	HttpRoute      string
+	HttpMethod     string
+	Reason         string
+	StartedAtUtc   pgtype.Timestamptz
+	IsGodMode      bool
+}
+
 // Auto-written per command via Watermill AuditLoggingMiddleware. 7-year retention; daily purge.
 type BuildingblocksAuditLogEntry struct {
 	ID            pgtype.UUID

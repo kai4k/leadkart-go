@@ -8,6 +8,8 @@ import (
 	"github.com/ThreeDotsLabs/watermill/message"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/propagation"
 
 	"github.com/leadkart/leadkart-go/internal/common/clock"
 	"github.com/leadkart/leadkart-go/internal/platform/pg"
@@ -69,11 +71,20 @@ func (f *OutboxForwarder) ForwardOnce(ctx context.Context) (int, error) {
 			return fmt.Errorf("forwarder: list unforwarded: %w", err)
 		}
 		now := clock.Now()
+		propagator := otel.GetTextMapPropagator()
 		for _, row := range rows {
 			msg := message.NewMessage(uuidFromPg(row.ID).String(), row.Payload)
 			msg.Metadata.Set("event_type", row.Topic)
 			msg.Metadata.Set("tenant_id", uuidFromPg(row.TenantID).String())
 			msg.Metadata.Set("occurred_at", timeFromPg(row.OccurredAt).Format(time.RFC3339Nano))
+			// W3C Trace Context propagation across the broker. The forwarder
+			// runs in a separate process from the producing handler (cmd/api
+			// → cmd/worker over Postgres-backed broker in v0.3); without
+			// inject the consumer span has no parent and the trace tree
+			// breaks at every async edge. OTel canon: every async hop must
+			// inject on send + extract on receive. Subscriber-side extract
+			// lives in messaging.TraceContextMiddleware.
+			propagator.Inject(ctx, propagation.MapCarrier(msg.Metadata))
 			msg.SetContext(ctx)
 
 			if err := f.publisher.Publish(f.topic, msg); err != nil {
