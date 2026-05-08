@@ -180,7 +180,9 @@ func run(ctx context.Context, stdout *os.File) error {
 		}
 	}()
 
-	pool, err := pg.NewPool(ctx, cfg.Postgres.DSN)
+	pool, err := pg.NewPool(ctx, cfg.Postgres.DSN, pg.PoolConfig{
+		IncludeQueryParameters: false, // PII guard — see cmd/api/main.go.
+	})
 	if err != nil {
 		return fmt.Errorf("pgxpool: %w", err)
 	}

@@ -3,10 +3,9 @@ module github.com/leadkart/leadkart-go
 go 1.26.3
 
 // Tracks ADR 0034 — Go 1.26+ with quarterly toolchain refresh. The
-// `toolchain` directive auto-fetches the matching toolchain on first
-// build for contributors running an older system Go (Go 1.21+ feature
-// per https://go.dev/doc/toolchain). Build deps via `tool` directive
-// (Go 1.24+) — replaces the older `tools.go` + build-tag hack.
+// `toolchain` directive above auto-fetches the matching toolchain on
+// first build for contributors running an older system Go (Go 1.21+
+// feature per https://go.dev/doc/toolchain).
 //
 // 1.26.3 closes 6 stdlib advisories surfaced by govulncheck:
 //   GO-2026-4986 + GO-2026-4977 (net/mail quadratic concat),
@@ -14,14 +13,9 @@ go 1.26.3
 //   GO-2026-4971 (net Dial/LookupPort NUL-byte panic on Windows),
 //   GO-2026-4918 (net/http2 SETTINGS_MAX_FRAME_SIZE infinite loop).
 //
-// tool (
-//     github.com/sqlc-dev/sqlc/cmd/sqlc
-//     github.com/pressly/goose/v3/cmd/goose
-//     github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen
-//     go.uber.org/mock/mockgen
-//     golang.org/x/vuln/cmd/govulncheck
-//     mvdan.cc/gofumpt
-// )
+// Build-time tools pinned via the `tool` directive below
+// (Go 1.24+) — replaces the older `tools.go` + build-tag hack.
+// Invoke via `go tool <name>` (e.g. `go tool govulncheck ./...`).
 
 require (
 	github.com/ThreeDotsLabs/watermill v1.5.1
@@ -132,12 +126,18 @@ require (
 	go.uber.org/goleak v1.3.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
 	go.yaml.in/yaml/v3 v3.0.4 // indirect
+	golang.org/x/mod v0.35.0 // indirect
 	golang.org/x/net v0.53.0 // indirect
 	golang.org/x/sys v0.43.0 // indirect
+	golang.org/x/telemetry v0.0.0-20260421165255-392afab6f40e // indirect
 	golang.org/x/text v0.36.0 // indirect
 	golang.org/x/time v0.15.0 // indirect
+	golang.org/x/tools v0.44.0 // indirect
+	golang.org/x/vuln v1.3.0 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20260401024825-9d38bb4040a9 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260420184626-e10c466a9529 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
+
+tool golang.org/x/vuln/cmd/govulncheck

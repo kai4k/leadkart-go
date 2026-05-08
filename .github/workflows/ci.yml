@@ -115,7 +115,11 @@ jobs:
           fail-on-error: false
 
       - name: Vulnerability scan (govulncheck)
-        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+        # Pinned via the `tool` directive in go.mod (Go 1.24+); previous
+        # `go run @latest` pulled an unpinned version every CI run, a
+        # supply-chain surface SLSA L3 explicitly forbids. `go tool`
+        # uses the version + sum baked into go.mod / go.sum.
+        run: go tool govulncheck ./...
 
       - name: Build all binaries
         run: go build -trimpath -ldflags="-s -w" -o bin/ ./cmd/...

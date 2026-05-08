@@ -64,12 +64,18 @@ services:
       target: migrate
     container_name: leadkart-migrate
     environment:
-      DATABASE_URL: "postgres://leadkart:leadkart_dev@postgres:5432/leadkart?sslmode=disable"
+      LEADKART_POSTGRES__DSN: "${LEADKART_POSTGRES__DSN:-postgres://leadkart:leadkart_dev@postgres:5432/leadkart?sslmode=disable}"
     command: ["up"]
     depends_on:
       postgres:
         condition: service_healthy
     restart: "no"
+    # Hardening — same as the api service. Migrate is short-lived
+    # but still benefits from the reduced attack surface.
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
 
   # ---- API + outbox forwarder ----------------------------------------------
   # Profile-gated; depends on migrate completing successfully so RLS-enabled
@@ -88,14 +94,19 @@ services:
       - "8080:8080"   # public API
       - "9090:9090"   # admin (probes + pprof)
     environment:
-      LEADKART_POSTGRES__DSN: "postgres://leadkart:leadkart_dev@postgres:5432/leadkart?sslmode=disable"
+      LEADKART_POSTGRES__DSN: "${LEADKART_POSTGRES__DSN:-postgres://leadkart:leadkart_dev@postgres:5432/leadkart?sslmode=disable}"
       LEADKART_REDIS__ADDR: "redis:6379"
       LEADKART_LISTEN__API: ":8080"
       LEADKART_LISTEN__ADMIN: ":9090"
-      LEADKART_JWT__KEY_ID: "k1-dev"
-      # Dev-only signing key — production compose injects from secrets store.
-      # >32 bytes per JwtOptions validator floor.
-      LEADKART_JWT__SIGNING_KEY: "dev-only-do-not-ship-this-32byte-secret-x"
+      LEADKART_JWT__KEY_ID: "${LEADKART_JWT__KEY_ID:?missing JWT key id; set in .env}"
+      # JWT signing key MUST come from the environment (or .env file).
+      # No literal value lives in this checked-in compose to prevent
+      # the dev-fixture from being copy-pasted into production —
+      # validator's substring-Contains placeholder check would
+      # historically REFUSE BOOT on the prior literal anyway, but
+      # explicit ${VAR:?...} substitution gives compose-up its own
+      # immediate failure mode at apply-time rather than at runtime.
+      LEADKART_JWT__SIGNING_KEY: "${LEADKART_JWT__SIGNING_KEY:?missing JWT signing key; set in .env}"
     healthcheck:
       test: ["CMD", "/api", "-healthcheck"]
       interval: 30s
@@ -110,6 +121,12 @@ services:
       migrate:
         condition: service_completed_successfully
     restart: unless-stopped
+    # Hardening per Docker security cheat sheet + CIS Docker §4:
+    # distroless static base buys 90%, these flags close the rest.
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
 
 volumes:
   leadkart_pg_data:

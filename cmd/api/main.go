@@ -210,7 +210,14 @@ func run(ctx context.Context, stdout *os.File, _ []string) error {
 		}
 	}()
 
-	pool, err := pg.NewPool(ctx, cfg.Postgres.DSN)
+	pool, err := pg.NewPool(ctx, cfg.Postgres.DSN, pg.PoolConfig{
+		// Production keeps query parameters OFF traces (PII /
+		// secret material in identity.persons +
+		// refresh_token_families bound args). Per OTel semconv
+		// §db.statement.parameters: "MUST NOT be captured by
+		// default."
+		IncludeQueryParameters: false,
+	})
 	if err != nil {
 		return fmt.Errorf("pgxpool: %w", err)
 	}

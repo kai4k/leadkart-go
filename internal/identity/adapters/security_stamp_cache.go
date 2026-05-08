@@ -72,7 +72,7 @@ func NewSecurityStampCache(hybrid *cache.HybridCache, persons PersonStampReader)
 			}
 			return p.SecurityStamp().String(), nil
 		},
-		cache.WithTTL(cache.SecurityStampTTL),
+		cache.WithTTL(cache.SecurityStampTTL()),
 		cache.WithOmitL1(),
 	)
 	return &SecurityStampCache{facade: facade}

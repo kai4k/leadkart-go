@@ -8,6 +8,8 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/riverqueue/river"
+
+	"github.com/leadkart/leadkart-go/internal/common/clock"
 )
 
 // PurgeRetention is the retention window enforced by [PurgeJob].
@@ -61,7 +63,10 @@ func NewPurgeWorker(pool *pgxpool.Pool, log *slog.Logger) *PurgeWorker {
 // doesn't justify the codegen ceremony. Per `coding-standards.md`
 // "raw SQL acceptable for ops queries against admin tables".
 func (w *PurgeWorker) Work(ctx context.Context, _ *river.Job[PurgeJob]) error {
-	cutoff := time.Now().Add(-PurgeRetention)
+	// clock.Now (vs time.Now) so freezeClock-based tests can pin
+	// the cutoff deterministically; production goes through the
+	// wall-clock branch.
+	cutoff := clock.Now().Add(-PurgeRetention)
 	tag, err := w.pool.Exec(ctx, `
 		DELETE FROM buildingblocks.audit_log_entry
 		WHERE occurred_at_utc < $1
