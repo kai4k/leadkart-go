@@ -21,13 +21,28 @@ name: CI
 # ============================================================================
 
 on:
+  # PR events drive feature-branch CI: pre-merge validation runs
+  # exactly once per push-to-PR. The previous `push` trigger on
+  # `feature/**` etc. caused a duplicate run alongside `pull_request`
+  # on every PR-targeted commit (push.ref=refs/heads/feature/X +
+  # pull_request.ref=refs/pull/N/merge → distinct concurrency keys
+  # → no dedup). Dropping push for feature branches kills the
+  # duplicate.
   pull_request:
+  # Push trigger restricted to main — runs the full pipeline against
+  # the post-merge tip so anything that slipped through the PR gate
+  # still gets caught + the `main` branch protection has fresh
+  # required-status-check signal. Industry default — kubernetes,
+  # terraform, prometheus, GitHub itself all do this shape.
   push:
-    branches: [main, "feature/**", "fix/**", "ci/**", "refactor/**"]
+    branches: [main]
 
 # Cancel in-progress runs on the same ref to save CI minutes.
+# group keys on (workflow, PR-number-or-ref) so push-to-main and
+# pull_request runs for the same head are coalesced when they
+# overlap (e.g., a fast merge after a still-running PR run).
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 permissions:
