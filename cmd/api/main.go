@@ -56,6 +56,8 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/ports/authn"
 	"github.com/leadkart/leadkart-go/internal/platform/cache"
 	"github.com/leadkart/leadkart-go/internal/platform/config"
+	"github.com/leadkart/leadkart-go/internal/platform/httpmw"
+	"github.com/leadkart/leadkart-go/internal/platform/idempotency"
 	"github.com/leadkart/leadkart-go/internal/platform/obs"
 	"github.com/leadkart/leadkart-go/internal/platform/pg"
 )
@@ -92,6 +94,14 @@ const (
 	// 10k SecurityStamp entries occupy ~1MB on a 36-char value; well
 	// under the 256MB-per-pod default container limit.
 	hybridCacheL1MaxItems = 10_000
+
+	// IP rate-limit defaults — per-source-IP token bucket on the
+	// public listener. Mirrors security.md "Rate limiting on every
+	// mutating endpoint": 10 rps sustained / 60-burst handles legitimate
+	// browser bursts (page load fans out to a few endpoints) while
+	// throttling brute-force credential stuffing.
+	apiIPRatePerSecond = 10.0
+	apiIPRateBurst     = 60
 )
 
 func main() {
@@ -255,8 +265,24 @@ func run(ctx context.Context, stdout *os.File, _ []string) error {
 	}, healthCheckTimeout)
 	adminSrv := obs.NewAdminServer(cfg.Listen.Admin, health)
 
+	// Canonical public middleware chain (per httpmw doc):
+	//   correlation → requestlog → recover → ip-ratelimit → idempotency
+	// Per-route auth (RequireFreshStamp) lives inside the mux that
+	// PublicChain wraps — auth must run after IP rate-limiting (an
+	// unauthenticated brute-force attempt should hit the limiter
+	// before we burn cycles on JWT verification) but before
+	// idempotency cache lookups (which are tenant-scoped).
+	mwChain := httpmw.PublicChain(httpmw.PublicChainConfig{
+		Logger:           logger,
+		IdempotencyStore: idempotency.NewInMemoryStore(time.Now),
+		Now:              time.Now,
+		IPRateLimit: httpmw.LimiterConfig{
+			RatePerSecond: apiIPRatePerSecond,
+			Burst:          apiIPRateBurst,
+		},
+	})
 	publicHandler := otelhttp.NewHandler(
-		newServer(logger, wiring.App, wiring.Issuer, wiring.StampValidator),
+		mwChain(newServer(logger, wiring.App, wiring.Issuer, wiring.StampValidator)),
 		"leadkart-api",
 	)
 	srv := &http.Server{
