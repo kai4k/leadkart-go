@@ -283,14 +283,17 @@ tasks:
   # =====================================================================
 
   docker:env:
-    desc: 'Mint docker/.env via scripts/devenv (idempotent — skips if file exists with a non-empty JWT key).'
-    # Skip-condition: file present AND JWT signing key line has a
-    # non-empty value. Catches the prior bash-heredoc failure mode
+    desc: 'Mint docker/.env via scripts/devenv (idempotent — skips if file exists with a real-looking JWT key).'
+    # Skip-condition: file present AND JWT signing key line is a
+    # real hex string of at least 32 chars. Tighter than just
+    # "non-empty" — catches the prior bash-heredoc failure mode
     # where openssl wasn't in PATH + the file ended up with empty
-    # KEY=VALUE lines that compose treats as "unset".
+    # values OR literal `$(openssl...)` strings (CRLF line endings
+    # on Windows fooled a looser regex). The hex-only constraint
+    # also makes "compose treats it as missing" impossible.
     status:
       - test -f docker/.env
-      - 'grep -q ''^LEADKART_JWT__SIGNING_KEY=..*'' docker/.env'
+      - 'grep -Eq ''^LEADKART_JWT__SIGNING_KEY=[a-f0-9]{32,}\s*$'' docker/.env'
     cmds:
       - mkdir -p docker
       - go run ./scripts/devenv > docker/.env
