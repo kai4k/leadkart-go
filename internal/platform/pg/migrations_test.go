@@ -259,8 +259,8 @@ func TestRLSIsolatesTenants(t *testing.T) {
 	}
 	for _, tid := range []uuid.UUID{tenantA, tenantB} {
 		if _, err := seedTx.ExecContext(ctx, `
-			INSERT INTO identity.tenants (id, slug, legal_name, display_name, admin_email, status, created_at)
-			VALUES ($1, $2, 'Acme Pharma', 'Acme', 'admin@acme.test', 'active', now())
+			INSERT INTO identity.tenants (id, slug, legal_name, display_name, status, created_at)
+			VALUES ($1, $2, 'Acme Pharma', 'Acme', 'active', now())
 		`, tid, "tenant-"+tid.String()[:8]); err != nil {
 			t.Fatalf("insert tenant: %v", err)
 		}
@@ -385,8 +385,8 @@ func TestSingleActiveMembershipInvariant(t *testing.T) {
 	}
 	for _, tid := range []uuid.UUID{tenantA, tenantB} {
 		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO identity.tenants (id, slug, legal_name, display_name, admin_email, status, created_at)
-			VALUES ($1, $2, 'X', 'X', 'a@x.test', 'active', now())
+			INSERT INTO identity.tenants (id, slug, legal_name, display_name, status, created_at)
+			VALUES ($1, $2, 'X', 'X', 'active', now())
 		`, tid, "t-"+tid.String()[:8]); err != nil {
 			t.Fatalf("insert tenant: %v", err)
 		}
