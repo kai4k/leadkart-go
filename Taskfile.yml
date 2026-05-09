@@ -80,9 +80,9 @@ tasks:
       - bash scripts/smoke.sh
 
   test:all:
-    desc: Run unit + arch + integration sequentially (full local CI)
+    desc: Run unit + arch + integration sequentially (matches CI's go-only chain)
     cmds:
-      - task: test
+      - task: test:race
       - task: test:arch
       - task: test:int
 
@@ -97,9 +97,9 @@ tasks:
   # =====================================================================
 
   lint:
-    desc: Run golangci-lint v2 strict profile
+    desc: Run golangci-lint v2 strict profile (5-minute timeout — matches CI)
     cmds:
-      - golangci-lint run
+      - golangci-lint run --timeout=5m
 
   fmt:
     desc: Format all Go files (gofmt)
@@ -112,9 +112,9 @@ tasks:
       - go vet ./...
 
   vuln:
-    desc: Scan for known vulnerabilities (govulncheck)
+    desc: Scan for known vulnerabilities (govulncheck pinned via go.mod tool directive)
     cmds:
-      - go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+      - go tool govulncheck ./...
 
   tidy:
     desc: go mod tidy + verify
@@ -128,13 +128,46 @@ tasks:
       - go generate ./...
 
   ci:
-    desc: Full CI pipeline locally (vet + lint + test + arch + vuln)
+    desc: Mirror of the GH Actions `unit` job (vet + lint + test:race + arch + vuln + build)
     cmds:
       - task: vet
       - task: lint
-      - task: test
+      - task: test:race
       - task: test:arch
       - task: vuln
+      - task: build
+
+  ci:full:
+    desc: Mirror of the entire GH Actions pipeline (unit + integration + smoke). Requires Docker.
+    cmds:
+      - task: ci
+      - task: test:int
+      - task: ci:smoke
+
+  ci:smoke:
+    desc: 'Mints ephemeral JWT key + runs full compose smoke (matches GH Actions container-smoke job).'
+    cmds:
+      - mkdir -p docker
+      - |
+        cat > docker/.env <<EOF
+        LEADKART_JWT__KEY_ID=local-smoke-$(date +%s)
+        LEADKART_JWT__SIGNING_KEY=$(openssl rand -hex 32)
+        EOF
+      - defer: docker compose --env-file docker/.env -f {{.COMPOSE_FILE}} --profile full down -v
+      - defer: rm -f docker/.env
+      - docker compose --env-file docker/.env -f {{.COMPOSE_FILE}} --profile full up -d --build
+      # Probe the admin /ready endpoint instead of `docker inspect` so we
+      # avoid escaping Go template braces inside Taskfile's own template.
+      # Same readiness signal the container's HEALTHCHECK uses.
+      - |
+        for i in $(seq 1 30); do
+          if curl -fsS http://localhost:9090/ready >/dev/null 2>&1; then
+            echo "api ready after ${i} attempts"
+            break
+          fi
+          sleep 2
+        done
+      - bash scripts/smoke.sh
 
   # =====================================================================
   # Migrations — wraps goose (the canon migration tool, ADR 0005)
