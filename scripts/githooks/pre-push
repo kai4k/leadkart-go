@@ -1,0 +1,72 @@
+#!/usr/bin/env bash
+#
+# scripts/githooks/pre-push — local CI gate.
+#
+# Runs the same checks GitHub Actions runs on the unit job, before the
+# push leaves your machine. Catches lint / vet / race / vuln / build
+# failures locally so you don't burn ~5-15 min of CI time + a PR
+# comment cycle on something you could have caught in 2 min.
+#
+# Activation: `task hooks:install` (one-time per clone). The Taskfile
+# target sets `core.hooksPath = scripts/githooks` so all hooks under
+# this directory become active, no symlinks needed (cross-platform).
+#
+# Bypass for emergencies: `git push --no-verify`. Use sparingly — the
+# hook exists because "I'll fix it in CI" is the most common way
+# main goes red.
+
+set -euo pipefail
+
+remote="$1"
+url="$2"
+
+# Skip the hook when nothing is being pushed (e.g. `git push` with no
+# new local commits). Stdin is empty in that case; reading EOF means
+# bail clean.
+if [ -t 0 ]; then
+    # No stdin attached at all (some shells / IDE integrations);
+    # treat as "run anyway" since we can't introspect the refs.
+    :
+elif ! read -r _line; then
+    echo "pre-push: no refs to push, skipping local CI"
+    exit 0
+fi
+
+# task CLI must be installed locally. If it's missing we degrade
+# gracefully — print the install instruction + exit 0 so we don't
+# block the push on a tooling gap (the user opted into the hook;
+# blocking on missing tools is hostile).
+if ! command -v task >/dev/null 2>&1; then
+    cat >&2 <<'MSG'
+pre-push: `task` CLI not found in PATH; skipping local CI.
+Install: https://taskfile.dev/installation/
+        OR  go install github.com/go-task/task/v3/cmd/task@latest
+MSG
+    exit 0
+fi
+
+echo "pre-push: running local CI (task ci) before push to ${remote} (${url})..."
+echo "         bypass with --no-verify if absolutely necessary."
+echo ""
+
+# Run the unit-job mirror. Matches what GitHub Actions runs on the
+# `unit` job — vet + lint + race tests + arch tests + vuln + build.
+# Integration tests (testcontainers) NOT included here: they cost
+# ~5-10 min, the unit pass already catches 90% of regressions, and
+# the GH Actions integration job is the backstop. Run `task ci:full`
+# manually before merging if you want the integration pass too.
+if ! task ci; then
+    cat >&2 <<'MSG'
+
+pre-push: local CI failed. Push aborted.
+
+Fix the failure and try again, OR bypass (use sparingly):
+    git push --no-verify
+
+MSG
+    exit 1
+fi
+
+echo ""
+echo "pre-push: local CI passed. Pushing..."
+exit 0

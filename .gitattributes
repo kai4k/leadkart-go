@@ -1,0 +1,17 @@
+# Force LF line endings on shell scripts and git hooks. Bash on Linux
+# refuses to execute files with CRLF line endings ("bad interpreter:
+# /bin/bash^M"); Windows checkouts that touch these files would
+# otherwise corrupt them via core.autocrlf=true.
+*.sh        text eol=lf
+scripts/githooks/*  text eol=lf
+
+# Go canonical line endings.
+*.go        text eol=lf
+go.mod      text eol=lf
+go.sum      text eol=lf
+
+# YAML / SQL / Markdown — LF everywhere for consistency.
+*.yml       text eol=lf
+*.yaml      text eol=lf
+*.sql       text eol=lf
+*.md        text eol=lf

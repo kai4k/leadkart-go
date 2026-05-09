@@ -80,9 +80,9 @@ tasks:
       - bash scripts/smoke.sh
 
   test:all:
-    desc: Run unit + arch + integration sequentially (full local CI)
+    desc: Run unit + arch + integration sequentially (matches CI's go-only chain)
     cmds:
-      - task: test
+      - task: test:race
       - task: test:arch
       - task: test:int
 
@@ -97,9 +97,9 @@ tasks:
   # =====================================================================
 
   lint:
-    desc: Run golangci-lint v2 strict profile
+    desc: Run golangci-lint v2 strict profile (5-minute timeout — matches CI)
     cmds:
-      - golangci-lint run
+      - golangci-lint run --timeout=5m
 
   fmt:
     desc: Format all Go files (gofmt)
@@ -112,9 +112,9 @@ tasks:
       - go vet ./...
 
   vuln:
-    desc: Scan for known vulnerabilities (govulncheck)
+    desc: Scan for known vulnerabilities (govulncheck pinned via go.mod tool directive)
     cmds:
-      - go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+      - go tool govulncheck ./...
 
   tidy:
     desc: go mod tidy + verify
@@ -128,13 +128,56 @@ tasks:
       - go generate ./...
 
   ci:
-    desc: Full CI pipeline locally (vet + lint + test + arch + vuln)
+    desc: Fast pre-push gate (vet + lint + test + arch + vuln + build). No CGO/Docker needed.
     cmds:
       - task: vet
       - task: lint
       - task: test
       - task: test:arch
       - task: vuln
+      - task: build
+
+  ci:race:
+    desc: CI's race-detector pass (matches the GH Actions unit job exactly). Requires CGO + gcc.
+    cmds:
+      - task: vet
+      - task: lint
+      - task: test:race
+      - task: test:arch
+      - task: vuln
+      - task: build
+
+  ci:full:
+    desc: Full GH Actions pipeline mirror (race + integration + smoke). Requires CGO + Docker.
+    cmds:
+      - task: ci:race
+      - task: test:int
+      - task: ci:smoke
+
+  ci:smoke:
+    desc: 'Mints ephemeral JWT key + runs full compose smoke (matches GH Actions container-smoke job).'
+    cmds:
+      - mkdir -p docker
+      - |
+        cat > docker/.env <<EOF
+        LEADKART_JWT__KEY_ID=local-smoke-$(date +%s)
+        LEADKART_JWT__SIGNING_KEY=$(openssl rand -hex 32)
+        EOF
+      - defer: docker compose --env-file docker/.env -f {{.COMPOSE_FILE}} --profile full down -v
+      - defer: rm -f docker/.env
+      - docker compose --env-file docker/.env -f {{.COMPOSE_FILE}} --profile full up -d --build
+      # Probe the admin /ready endpoint instead of `docker inspect` so we
+      # avoid escaping Go template braces inside Taskfile's own template.
+      # Same readiness signal the container's HEALTHCHECK uses.
+      - |
+        for i in $(seq 1 30); do
+          if curl -fsS http://localhost:9090/ready >/dev/null 2>&1; then
+            echo "api ready after ${i} attempts"
+            break
+          fi
+          sleep 2
+        done
+      - bash scripts/smoke.sh
 
   # =====================================================================
   # Migrations — wraps goose (the canon migration tool, ADR 0005)
@@ -195,6 +238,31 @@ tasks:
     preconditions:
       - sh: command -v goose
         msg: 'goose CLI required. Install: go install github.com/pressly/goose/v3/cmd/goose@latest'
+
+  # =====================================================================
+  # Dev workflow — fast inner loop. `task dev` is the canonical
+  # "I'm coding now" command. Pre-push hook acts as the local gate
+  # before code leaves your machine; GitHub Actions remains the backstop.
+  # =====================================================================
+
+  dev:
+    desc: Start full dev stack + tail api logs (the canonical "I'm coding now" command)
+    cmds:
+      - task: docker:up:full
+      - task: docker:logs
+
+  hooks:install:
+    desc: Activate the tracked git hooks under scripts/githooks (one-time per clone)
+    cmds:
+      - git config core.hooksPath scripts/githooks
+      - 'echo "git hooks active. pre-push will run task ci before every push."'
+      - 'echo "uninstall with: task hooks:uninstall. one-shot bypass with: git push --no-verify"'
+
+  hooks:uninstall:
+    desc: Stop running tracked git hooks (reverts core.hooksPath to default)
+    cmds:
+      - git config --unset core.hooksPath
+      - 'echo "git hooks deactivated. push will no longer run local CI."'
 
   # =====================================================================
   # Docker (dev stack via compose --profile full)
