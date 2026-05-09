@@ -37,6 +37,56 @@ SELECT id, email, first_name, last_name, password_hash, security_stamp,
 FROM   identity.persons
 WHERE  email = $1;
 
+-- name: GetPersonAndActiveMembershipByEmail :one
+-- Single-roundtrip auth-routing lookup for the login flow. Joins
+-- identity.persons (global, non-RLS) to the Person's at-most-one
+-- Active Membership via the partial-unique index
+-- `uq_memberships_person_active`. LEFT JOIN so a Person without an
+-- Active Membership still surfaces — the login handler maps that
+-- to the same generic invalid_credentials response.
+--
+-- All membership_* columns are nullable in the result; sqlc maps
+-- those to *pgtype.UUID / *pgtype.Text via emit_pointers_for_null_types.
+--
+-- Roles + permission overrides are fetched separately by the caller
+-- (different access pattern, different caching story). This query
+-- saves the persons→memberships network roundtrip — the dominant
+-- modern-canon optimisation per Brandon Mitchell / Brandur Leach
+-- "Postgres scales further than you think". Materialised views or
+-- denormalised auth_routing tables (Stripe-2014 / Auth0 patterns)
+-- are the next escalation; we don't need them at this scale.
+SELECT p.id                              AS person_id,
+       p.email,
+       p.first_name,
+       p.last_name,
+       p.password_hash,
+       p.security_stamp,
+       p.is_active,
+       p.is_anonymised,
+       p.created_at                      AS person_created_at,
+       p.anonymised_at,
+       p.is_globally_suspended,
+       p.global_suspension_reason,
+       p.globally_suspended_at,
+       p.password_reset_token_hash,
+       p.password_reset_expires_at,
+       p.pending_email_change_new_email,
+       p.pending_email_change_token_hash,
+       p.pending_email_change_expires_at,
+       m.id                              AS membership_id,
+       m.tenant_id,
+       m.status                          AS membership_status,
+       m.joined_at,
+       m.left_at,
+       m.designation,
+       m.department,
+       m.status_message,
+       m.reports_to
+FROM   identity.persons p
+LEFT   JOIN identity.tenant_memberships m
+       ON  m.person_id = p.id AND m.status = 'active'
+WHERE  p.email = $1;
+
 -- name: GetPersonByPasswordResetTokenHash :one
 -- Hash-only lookup for the confirm-password-reset flow.
 -- Caller hashes the plaintext + queries here; UNIQUE index makes this

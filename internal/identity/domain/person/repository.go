@@ -16,9 +16,16 @@ var ErrEmailTaken = errs.New(errs.KindAlreadyExists, "person", "email already ta
 
 // Repository persists Person aggregates.
 //
-// Person is NOT tenant-scoped — the underlying table has no RLS. Cross-
-// tenant lookups (login flow: email → tenant resolution) hit the
-// auth_routing index per ADR 0006.
+// Person is NOT tenant-scoped — the underlying table has no RLS.
+// Cross-tenant lookups go through dedicated paths: this repo's
+// GetByEmail handles single-Person resolution; the login flow uses
+// [command.AuthRouter] (postgres impl
+// `internal/identity/adapters/auth_router_pg.go`) which JOINs
+// persons + tenant_memberships in one indexed roundtrip — current
+// canon per Brandur Leach / DHH "Postgres scales further than you
+// think." Earlier comments in this codebase referenced an
+// "auth_routing index" as a future denormalised table; that
+// 2014-era escalation is no longer the canon, the JOIN is.
 type Repository interface {
 	// Add persists a brand-new Person from [New]. Returns [ErrEmailTaken]
 	// on duplicate email (DB unique constraint surfaces as this typed error).

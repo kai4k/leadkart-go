@@ -412,6 +412,7 @@ func buildIdentityApp(pool *pgxpool.Pool, hybridCache *cache.HybridCache, cfg co
 	memberships := adapters.NewMembershipRepository(pool, tx)
 	families := adapters.NewRefreshTokenFamilyRepository(pool, tx)
 	roles := adapters.NewRoleRepository(pool, tx)
+	authRouter := adapters.NewAuthRouterPG(pool, tx)
 	permResolver := permissions.NewResolver(memberships, roles)
 
 	stampCache := adapters.NewSecurityStampCache(hybridCache, persons)
@@ -469,7 +470,7 @@ func buildIdentityApp(pool *pgxpool.Pool, hybridCache *cache.HybridCache, cfg co
 		App: app.Application{
 		Commands: app.Commands{
 			RegisterTenant:       command.NewRegisterTenantHandler(tx, tenants, persons, memberships, roles),
-			Login:                command.NewLoginHandler(persons, memberships, families, tenants, permResolver, issuer, now, cfg.Refresh.AbsoluteTTL, dummyHash),
+			Login:                command.NewLoginHandler(authRouter, families, tenants, permResolver, issuer, now, cfg.Refresh.AbsoluteTTL, dummyHash),
 			Refresh:              command.NewRefreshHandler(families, persons, memberships, tenants, permResolver, issuer, now, cfg.Refresh.AbsoluteTTL),
 			Logout:               command.NewLogoutHandler(families),
 			ChangePassword:       command.NewChangePasswordHandler(persons, breachChecker),

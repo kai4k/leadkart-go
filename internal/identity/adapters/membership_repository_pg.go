@@ -32,11 +32,22 @@ const (
 // write/read except GetActiveForPerson runs under TxScopeTenant — the
 // caller MUST have placed the appropriate tenant on context first.
 //
-// GetActiveForPerson is the documented carve-out (login flow needs to
-// resolve a Person's home tenant before any tenant context exists). It
-// runs under TxScopePlatform to bypass RLS and queries by PersonID
-// directly. When the auth_routing index ships, this method swaps to
-// the index lookup with no caller change.
+// GetActiveForPerson is the documented carve-out for non-login
+// callers that need to resolve "what tenant does this Person belong
+// to" without prior tenant context (cascade subscribers, audit
+// reports, platform-operator UIs). Runs under TxScopePlatform to
+// bypass RLS + queries by PersonID through the partial-unique index
+// `uq_memberships_person_active`.
+//
+// The login flow does NOT use this method. Per current canon
+// (Brandur Leach / DHH "Postgres scales further than you think")
+// login goes through [adapters.AuthRouterPG] which JOINs persons +
+// tenant_memberships in one roundtrip — saves the persons-by-email
+// + memberships-by-person-id pair into a single indexed lookup.
+// Materialised views / denormalised auth_routing tables (the
+// 2014-era Stripe / Auth0 patterns) are no longer the canon — modern
+// Postgres + JWT + cache layers shifted the cost surface away from
+// this query.
 type MembershipRepository struct {
 	pool *pgxpool.Pool
 	tx   *pg.Transactor

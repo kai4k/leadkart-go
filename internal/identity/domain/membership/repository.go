@@ -23,8 +23,12 @@ var ErrAlreadyActive = errs.New(errs.KindConflict, "membership", "person already
 //
 // Membership IS tenant-scoped — RLS policies on `identity.tenant_memberships`
 // (per ADR 0006) restrict reads to the current tenant's membership rows.
-// Cross-tenant lookups (login flow finding the Active Membership for a given
-// PersonID) hit the auth_routing index per ADR 0006.
+// Cross-tenant resolution for the login path lives in
+// [command.AuthRouter] (a separate concern that JOINs persons +
+// tenant_memberships in one indexed roundtrip — current canon over
+// the legacy denormalised auth_routing-table approach).
+// GetActiveForPerson on this repo serves non-login cross-tenant
+// callers (subscribers, audit, platform-operator UIs).
 type Repository interface {
 	// Add persists a brand-new Membership from [New]. Returns
 	// [ErrAlreadyActive] if the PersonID already has an Active Membership.
@@ -38,13 +42,16 @@ type Repository interface {
 	// only Memberships visible under the current tenant context.
 	GetByID(ctx context.Context, id ID) (*Membership, error)
 
-	// GetActiveForPerson returns the (single) Active Membership for a Person
-	// across all tenants. Used during login when resolving "which tenant
-	// scope does this user belong to?".
+	// GetActiveForPerson returns the (single) Active Membership for a
+	// Person across all tenants. Used by NON-login cross-tenant callers
+	// (cascade subscribers, audit, platform-operator UIs). The login
+	// flow uses [command.AuthRouter] instead — single JOIN persons +
+	// tenant_memberships, one fewer roundtrip.
 	//
-	// Implemented against the non-RLS auth_routing index — the only path
-	// that legitimately reads across tenants. Returns [ErrNotFound] if the
-	// Person has no Active Membership (treated as auth failure upstream).
+	// Backed by the partial-unique index `uq_memberships_person_active`
+	// (`person_id WHERE status='active'`) — single-row lookup, runs
+	// under TxScopePlatform to bypass RLS. Returns [ErrNotFound] if
+	// the Person has no Active Membership.
 	GetActiveForPerson(ctx context.Context, personID person.ID) (*Membership, error)
 
 	// ListForTenant returns all Memberships under the current tenant scope.

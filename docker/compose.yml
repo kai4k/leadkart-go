@@ -77,6 +77,43 @@ services:
     security_opt:
       - no-new-privileges:true
 
+  # ---- Bootstrap (one-shot data seeder) ------------------------------------
+  # Per canon split (Stripe / Plaid / GitHub): migrations carry schema
+  # only; data seeding lives in a separate CLI. Bootstrap idempotently
+  # provisions the platform tenant + SuperAdmin Person + role +
+  # membership, then exits. ON CONFLICT branches make re-runs free.
+  #
+  # Runs after migrate exits 0; api waits for bootstrap exit 0 before
+  # starting. Production orchestrators can also run this as a
+  # standalone Job (kubectl run / docker compose run --rm bootstrap)
+  # decoupled from the deploy.
+  bootstrap:
+    profiles: [full]
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      target: bootstrap
+    container_name: leadkart-bootstrap
+    environment:
+      LEADKART_POSTGRES__DSN: "${LEADKART_POSTGRES__DSN:-postgres://leadkart:leadkart_dev@postgres:5432/leadkart?sslmode=disable}"
+      # SuperAdmin envs forwarded ONLY to bootstrap. The api service
+      # never sees the password — once hashed into identity.persons,
+      # the cred is no longer needed by anything.
+      LEADKART_SUPERADMIN__EMAIL: "${LEADKART_SUPERADMIN__EMAIL:-}"
+      LEADKART_SUPERADMIN__PASSWORD: "${LEADKART_SUPERADMIN__PASSWORD:-}"
+      LEADKART_SUPERADMIN__FIRST_NAME: "${LEADKART_SUPERADMIN__FIRST_NAME:-}"
+      LEADKART_SUPERADMIN__LAST_NAME: "${LEADKART_SUPERADMIN__LAST_NAME:-}"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    restart: "no"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+
   # ---- API + outbox forwarder ----------------------------------------------
   # Profile-gated; depends on migrate completing successfully so RLS-enabled
   # schemas exist before the leadkart_app role tries to query them.
@@ -119,6 +156,8 @@ services:
       redis:
         condition: service_healthy
       migrate:
+        condition: service_completed_successfully
+      bootstrap:
         condition: service_completed_successfully
     restart: unless-stopped
     # Hardening per Docker security cheat sheet + CIS Docker §4:
