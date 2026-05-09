@@ -5,8 +5,42 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
+
+// ----- Errors ---------------------------------------------------------------
+
+// ErrTenantNotFound is the public-facing 404 surface for any tenant
+// lifecycle command. Mirrors the Auth0/Okta pattern of collapsing
+// "wrong owner" + "doesn't exist" into a single error to defeat
+// tenant-id enumeration.
+var ErrTenantNotFound = errors.New("tenant: not found")
+
+// ErrPlatformTenantUndeletable is returned when a destructive
+// lifecycle command (Suspend / MarkForDeletion / HardDelete) targets
+// a tenant that holds an active SuperAdmin role-holder. The platform
+// would lose its operator god-mode if accidentally deleted; this guard
+// short-circuits before any aggregate transition fires.
+//
+// Surfaces as HTTP 422 with a clear message — operators must first
+// move SuperAdmin role-holders off the tenant (or rotate to a
+// different platform tenant) before deletion is permitted.
+var ErrPlatformTenantUndeletable = errors.New("tenant: cannot delete a tenant that holds an active SuperAdmin role")
+
+// ensureNotPlatformTenant runs the shared deletion-guard check before
+// any destructive lifecycle transition. Returns ErrPlatformTenantUndeletable
+// if the supplied tenant has any active SuperAdmin role-holder.
+func ensureNotPlatformTenant(ctx context.Context, members membership.Repository, tid tenant.ID) error {
+	has, err := members.HasActiveSuperAdmin(ctx, tid)
+	if err != nil {
+		return fmt.Errorf("platform-tenant guard: %w", err)
+	}
+	if has {
+		return ErrPlatformTenantUndeletable
+	}
+	return nil
+}
 
 // ----- SuspendTenant --------------------------------------------------------
 
@@ -18,29 +52,32 @@ type SuspendTenantCommand struct {
 	Reason   string
 }
 
-// ErrTenantNotFound is the public-facing 404 surface for any tenant
-// lifecycle command. Mirrors the Auth0/Okta pattern of collapsing
-// "wrong owner" + "doesn't exist" into a single error to defeat
-// tenant-id enumeration.
-var ErrTenantNotFound = errors.New("tenant: not found")
-
 // SuspendTenantHandler runs the suspend flow.
 type SuspendTenantHandler struct {
-	tenants tenant.Repository
+	tenants     tenant.Repository
+	memberships membership.Repository
 }
 
-// NewSuspendTenantHandler wires the handler.
-func NewSuspendTenantHandler(tenants tenant.Repository) SuspendTenantHandler {
+// NewSuspendTenantHandler wires the handler. memberships is used to
+// run the platform-tenant deletion guard before transitioning.
+func NewSuspendTenantHandler(tenants tenant.Repository, memberships membership.Repository) SuspendTenantHandler {
 	if tenants == nil {
 		panic("command: NewSuspendTenantHandler tenants repository required")
 	}
-	return SuspendTenantHandler{tenants: tenants}
+	if memberships == nil {
+		panic("command: NewSuspendTenantHandler memberships repository required")
+	}
+	return SuspendTenantHandler{tenants: tenants, memberships: memberships}
 }
 
-// Handle dispatches to [Tenant.Suspend].
+// Handle dispatches to [Tenant.Suspend]. Refuses tenants holding any
+// active SuperAdmin role-holder per [ErrPlatformTenantUndeletable].
 func (h SuspendTenantHandler) Handle(ctx context.Context, cmd SuspendTenantCommand) error {
 	if cmd.TenantID.IsZero() {
 		return errors.New("suspend_tenant: tenant id required")
+	}
+	if err := ensureNotPlatformTenant(ctx, h.memberships, cmd.TenantID); err != nil {
+		return err
 	}
 	err := h.tenants.UpdateByID(ctx, cmd.TenantID, func(t *tenant.Tenant) (bool, error) {
 		if err := t.Suspend(cmd.Reason); err != nil {
@@ -110,23 +147,32 @@ type MarkTenantForDeletionCommand struct {
 
 // MarkTenantForDeletionHandler runs the mark-for-deletion flow.
 type MarkTenantForDeletionHandler struct {
-	tenants tenant.Repository
+	tenants     tenant.Repository
+	memberships membership.Repository
 }
 
-// NewMarkTenantForDeletionHandler wires the handler.
-func NewMarkTenantForDeletionHandler(tenants tenant.Repository) MarkTenantForDeletionHandler {
+// NewMarkTenantForDeletionHandler wires the handler. memberships is
+// used to run the platform-tenant deletion guard before transitioning.
+func NewMarkTenantForDeletionHandler(tenants tenant.Repository, memberships membership.Repository) MarkTenantForDeletionHandler {
 	if tenants == nil {
 		panic("command: NewMarkTenantForDeletionHandler tenants repository required")
 	}
-	return MarkTenantForDeletionHandler{tenants: tenants}
+	if memberships == nil {
+		panic("command: NewMarkTenantForDeletionHandler memberships repository required")
+	}
+	return MarkTenantForDeletionHandler{tenants: tenants, memberships: memberships}
 }
 
 // Handle dispatches to [Tenant.MarkForDeletion]. Aggregate enforces:
 // only Active/Suspended → PendingDeletion; idempotent only if reason
-// matches the existing schedule's reason.
+// matches the existing schedule's reason. Refuses tenants holding any
+// active SuperAdmin role-holder per [ErrPlatformTenantUndeletable].
 func (h MarkTenantForDeletionHandler) Handle(ctx context.Context, cmd MarkTenantForDeletionCommand) error {
 	if cmd.TenantID.IsZero() {
 		return errors.New("mark_tenant_for_deletion: tenant id required")
+	}
+	if err := ensureNotPlatformTenant(ctx, h.memberships, cmd.TenantID); err != nil {
+		return err
 	}
 	err := h.tenants.UpdateByID(ctx, cmd.TenantID, func(t *tenant.Tenant) (bool, error) {
 		if err := t.MarkForDeletion(cmd.Reason); err != nil {

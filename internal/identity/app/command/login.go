@@ -212,13 +212,19 @@ func (h LoginHandler) Handle(ctx context.Context, cmd LoginCommand) (LoginResult
 	}
 
 	// 8. Issue JWT — embed PersonId as `sub`, per-Membership claims.
+	//
+	// IsPlatform is anchored to the tenant slug — matches the
+	// authn.PlatformTenantSlug constant (= "platform"). Defense-in-
+	// depth: a tenant impersonating "platform" via a different slug
+	// can never get is_platform=true minted into its JWT. Pairs with
+	// the matching slug check in authn.RequirePlatform.
 	access, err := h.jwt.Issue(jwt.IssueArgs{
 		PersonID:      p.ID().String(),
 		TenantID:      tn.ID().String(),
 		TenantSlug:    tn.Slug().String(),
 		MembershipID:  m.ID().String(),
 		SecurityStamp: p.SecurityStamp().String(),
-		IsPlatform:    false, // Platform tenant lands in v0.3
+		IsPlatform:    tn.Slug().String() == "platform",
 		IsSuperUser:   authClaims.IsSuperUser,
 		Permissions:   permissionNames(authClaims.Permissions),
 	})

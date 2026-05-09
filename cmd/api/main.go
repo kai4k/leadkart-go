@@ -486,9 +486,9 @@ func buildIdentityApp(pool *pgxpool.Pool, hybridCache *cache.HybridCache, cfg co
 			UpdateTenantAdminContact:       command.NewUpdateTenantAdminContactHandler(tenants),
 			UpdateTenantSettings:           command.NewUpdateTenantSettingsHandler(tenants),
 			UpdateTenantDisplayPreferences: command.NewUpdateTenantDisplayPreferencesHandler(tenants),
-			SuspendTenant:                  command.NewSuspendTenantHandler(tenants),
+			SuspendTenant:                  command.NewSuspendTenantHandler(tenants, memberships),
 			ActivateTenant:                 command.NewActivateTenantHandler(tenants),
-			MarkTenantForDeletion:          command.NewMarkTenantForDeletionHandler(tenants),
+			MarkTenantForDeletion:          command.NewMarkTenantForDeletionHandler(tenants, memberships),
 			RestoreTenant:                  command.NewRestoreTenantHandler(tenants),
 
 			UpdateUserProfile:              command.NewUpdateUserProfileHandler(memberships),
@@ -513,7 +513,7 @@ func buildIdentityApp(pool *pgxpool.Pool, hybridCache *cache.HybridCache, cfg co
 			LiftPersonGlobalSuspension: command.NewLiftPersonGlobalSuspensionHandler(persons),
 			AnonymisePerson:            command.NewAnonymisePersonHandler(persons),
 			UpdatePersonProfile:        command.NewUpdatePersonProfileHandler(persons),
-			HardDeleteTenant:           command.NewHardDeleteTenantHandler(tenants),
+			HardDeleteTenant:           command.NewHardDeleteTenantHandler(tenants, memberships),
 
 			CreateImpersonationSession: command.NewCreateImpersonationSessionHandler(impersonationStore, now),
 			EndImpersonationSession:    command.NewEndImpersonationSessionHandler(impersonationStore),

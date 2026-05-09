@@ -72,4 +72,17 @@ type Repository interface {
 	// Membership constraint"). Returns an empty slice (not ErrNotFound)
 	// when the Person has no Memberships.
 	ListAllForPerson(ctx context.Context, personID person.ID) ([]*Membership, error)
+
+	// HasActiveSuperAdmin reports whether the supplied tenant has any
+	// active Membership holding a role flagged is_super_admin=true.
+	//
+	// Backstop for the platform-tenant deletion guard: tenants holding
+	// any SuperAdmin role-holder cannot be Suspended, MarkedForDeletion,
+	// or HardDeleted via the standard lifecycle commands — the platform
+	// would lose its god-mode operator surface if accidentally deleted.
+	//
+	// Cross-tenant query — runs under TxScopePlatform. Uses the partial
+	// index idx_roles_super_admin (O(1) where-clause) so the call is
+	// cheap enough to execute on every lifecycle command.
+	HasActiveSuperAdmin(ctx context.Context, tenantID tenant.ID) (bool, error)
 }

@@ -309,8 +309,10 @@ func RequireTenantContext(verifier Verifier, validator StampValidator, pathVar s
 			}
 			// SuperUser / Platform-tier operators bypass — they're
 			// expected to operate cross-tenant under the impersonation
-			// audit trail.
-			if c.IsSuperUser || c.IsPlatform {
+			// audit trail. Platform bypass requires BOTH the
+			// is_platform flag AND the tenant_slug anchor (defense-
+			// in-depth — see [RequirePlatform] godoc).
+			if c.IsSuperUser || (c.IsPlatform && c.TenantSlug == PlatformTenantSlug) {
 				next.ServeHTTP(w, r)
 				return
 			}
@@ -333,21 +335,31 @@ func RequireTenantContext(verifier Verifier, validator StampValidator, pathVar s
 
 // ----- RequirePlatform -----------------------------------------------------
 
+// PlatformTenantSlug is the canonical slug for the platform tenant.
+// Mirrors cmd/bootstrap's platformTenantSlug + the .NET parent's
+// SuperUser god-mode convention. Used as a defense-in-depth anchor
+// for platform-tier middleware (see [RequirePlatform]).
+const PlatformTenantSlug = "platform"
+
 // RequirePlatform gates a handler on (a) a verified + freshness-
-// checked JWT AND (b) the `is_platform=true` claim — i.e. the caller's
-// Membership is in the Platform tenant. Drives access to platform-tier
-// endpoints under `/api/v1/platform/...` per `multi-tenancy.md`
-// "Platform admin endpoints" (rate-limited 600/min per operator).
+// checked JWT AND (b) the `is_platform=true` claim AND (c) the
+// `tenant_slug == "platform"` claim — i.e. the caller's Membership is
+// in the Platform tenant. Drives access to platform-tier endpoints
+// under `/api/v1/platform/...` per `multi-tenancy.md` "Platform admin
+// endpoints" (rate-limited 600/min per operator).
 //
-// This is the simpler sibling of [RequirePermission] for routes that
-// gate on tenant tier rather than per-permission.
+// The slug anchor is defense-in-depth (per migration 20260507000008
+// audit-pass discussion): even if a buggy code path mints a JWT with
+// is_platform=true for a non-platform tenant, the slug check catches
+// it before the handler runs. Login MUST set tenant_slug honestly —
+// it does, since the slug is read from identity.tenants where slug is
+// UNIQUE.
 //
-// Returns 401 if the token is missing/invalid/stale; 403 if the token
-// is valid but `is_platform=false`. SuperUser implies platform
-// membership in v0.3+ (SuperAdmin role only seeded on Platform-tenant
-// Memberships); for v0.2 we treat the two flags independently — a
-// SuperUser without is_platform is a configuration error but the
-// middleware doesn't paper over it.
+// Returns 401 if the token is missing/invalid/stale; 403 if any of
+// the three checks fail (collapsed into one error to avoid leaking
+// which gate failed). SuperUser implies platform membership in
+// v0.3+ (SuperAdmin role only seeded on the platform tenant); for
+// v0.2 the two flags are checked independently.
 func RequirePlatform(verifier Verifier, validator StampValidator) func(http.Handler) http.Handler {
 	if verifier == nil {
 		panic("authn: RequirePlatform verifier required")
@@ -364,7 +376,11 @@ func RequirePlatform(verifier Verifier, validator StampValidator) func(http.Hand
 					"missing claims")
 				return
 			}
-			if !c.IsPlatform {
+			// Defense-in-depth: BOTH the is_platform flag AND the
+			// slug anchor must agree. Either-or would let an attacker
+			// who can forge a JWT (or a buggy issuer path) bypass with
+			// just one of the two.
+			if !c.IsPlatform || c.TenantSlug != PlatformTenantSlug {
 				writeError(w, http.StatusForbidden, errCodeForbidden,
 					"platform-tier access required")
 				return

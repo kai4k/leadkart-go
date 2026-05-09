@@ -110,6 +110,13 @@ const (
 	// (over-length name, terminal-state transition, etc.). 422 surface.
 	ErrCodeTenantInvalid = "tenant_invalid"
 
+	// ErrCodePlatformTenantUndeletable — destructive lifecycle command
+	// (Suspend / MarkForDeletion / HardDelete) targeted a tenant that
+	// holds an active SuperAdmin role-holder. 422 surface. Operators
+	// must rotate SuperAdmins off the tenant first per migration
+	// 20260507000008's deletion guard.
+	ErrCodePlatformTenantUndeletable = "platform_tenant_undeletable"
+
 	// ErrCodeUserNotFound — membership ID has no row in caller's
 	// tenant. 404 surface; collapses "wrong tenant" + "doesn't exist"
 	// per security.md enumeration safety.

@@ -259,6 +259,34 @@ func (r *MembershipRepository) ListForTenant(
 	return out, nil
 }
 
+// HasActiveSuperAdmin satisfies [membership.Repository]. Platform-
+// scope query against ListSuperAdminMembershipsInTenant — returns
+// true if the supplied tenant has at least one active Membership
+// holding a role flagged is_super_admin=true.
+func (r *MembershipRepository) HasActiveSuperAdmin(
+	ctx context.Context,
+	tenantID tenant.ID,
+) (bool, error) {
+	tid, err := parseTenantIDForMembership(tenantID)
+	if err != nil {
+		return false, err
+	}
+	var found bool
+	err = r.tx.WithinTx(ctx, pg.TxScopePlatform, func(ctx context.Context, tx pgx.Tx) error {
+		q := r.q.WithTx(tx)
+		rows, err := q.ListSuperAdminMembershipsInTenant(ctx, pgUUID(tid))
+		if err != nil {
+			return fmt.Errorf("membership repo: list super-admin in tenant: %w", err)
+		}
+		found = len(rows) > 0
+		return nil
+	})
+	if err != nil {
+		return false, err
+	}
+	return found, nil
+}
+
 // ListAllForPerson satisfies [membership.Repository]. Platform-only
 // cross-tenant lookup — returns every Membership the Person holds
 // (Active + Inactive) across all tenants. Backed by the existing

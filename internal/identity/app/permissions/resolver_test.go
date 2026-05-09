@@ -50,6 +50,9 @@ func (f *fakeMembershipRepo) ListForTenant(context.Context, tenant.ID) ([]*membe
 func (f *fakeMembershipRepo) ListAllForPerson(context.Context, person.ID) ([]*membership.Membership, error) {
 	return nil, errors.New("fake: ListAllForPerson unused")
 }
+func (f *fakeMembershipRepo) HasActiveSuperAdmin(context.Context, tenant.ID) (bool, error) {
+	return false, nil
+}
 
 type fakeRoleRepo struct {
 	roles map[role.ID]*role.Role

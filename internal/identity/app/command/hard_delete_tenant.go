@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
 
@@ -23,32 +24,42 @@ type HardDeleteTenantCommand struct {
 
 // HardDeleteTenantHandler runs the two-phase delete.
 type HardDeleteTenantHandler struct {
-	tenants tenant.Repository
+	tenants     tenant.Repository
+	memberships membership.Repository
 }
 
-// NewHardDeleteTenantHandler wires the handler. Depends on the domain
-// interface (Cheney "accept interfaces, return structs"); HardDeleteRow
-// is on the [tenant.Repository] contract because grace-window expiry
-// is a domain operation, not adapter-only.
-func NewHardDeleteTenantHandler(tenants tenant.Repository) HardDeleteTenantHandler {
+// NewHardDeleteTenantHandler wires the handler. memberships is used
+// to run the platform-tenant deletion guard (refuse hard-delete on
+// tenants holding any active SuperAdmin role-holder) BEFORE any row
+// is touched. HardDeleteRow lives on [tenant.Repository] because
+// grace-window expiry is a domain operation, not adapter-only.
+func NewHardDeleteTenantHandler(tenants tenant.Repository, memberships membership.Repository) HardDeleteTenantHandler {
 	if tenants == nil {
 		panic("command: NewHardDeleteTenantHandler tenants repository required")
 	}
-	return HardDeleteTenantHandler{tenants: tenants}
+	if memberships == nil {
+		panic("command: NewHardDeleteTenantHandler memberships repository required")
+	}
+	return HardDeleteTenantHandler{tenants: tenants, memberships: memberships}
 }
 
 // Handle runs the two-phase delete:
 //
-//  1. UpdateByID with Tenant.HardDelete() — aggregate enforces grace
+//  1. Platform-tenant guard — refuse if any active SuperAdmin role
+//     exists in this tenant. Per [ErrPlatformTenantUndeletable].
+//  2. UpdateByID with Tenant.HardDelete() — aggregate enforces grace
 //     window + records the terminal-state event.
-//  2. SQL DELETE the row.
+//  3. SQL DELETE the row.
 //
-// Step 2 fires only if step 1 succeeds — a grace-window-not-elapsed
+// Step 3 fires only if step 2 succeeds — a grace-window-not-elapsed
 // rejection short-circuits with the audit-friendly aggregate error
 // before the row is touched.
 func (h HardDeleteTenantHandler) Handle(ctx context.Context, cmd HardDeleteTenantCommand) error {
 	if cmd.TenantID.IsZero() {
 		return errors.New("hard_delete_tenant: tenant id required")
+	}
+	if err := ensureNotPlatformTenant(ctx, h.memberships, cmd.TenantID); err != nil {
+		return err
 	}
 	err := h.tenants.UpdateByID(ctx, cmd.TenantID, func(t *tenant.Tenant) (bool, error) {
 		if err := t.HardDelete(); err != nil {
