@@ -30,9 +30,9 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 
 	"github.com/pressly/goose/v3"
@@ -60,9 +60,16 @@ func run(ctx context.Context) error {
 	}
 	command := os.Args[1]
 
-	dsn := os.Getenv("DATABASE_URL")
+	// Read the canonical project-namespaced env var first; fall back
+	// to bare DATABASE_URL for one-off scripts + legacy CI compat. The
+	// fall-back will be dropped in v0.3 when every binary is on the
+	// LEADKART_* namespace per CLAUDE.md "Env naming" doctrine.
+	dsn := os.Getenv("LEADKART_POSTGRES__DSN")
 	if dsn == "" {
-		return errors.New("DATABASE_URL env var required")
+		dsn = os.Getenv("DATABASE_URL")
+	}
+	if dsn == "" {
+		return errors.New("LEADKART_POSTGRES__DSN env var required (DATABASE_URL also accepted)")
 	}
 
 	migrationsDir := os.Getenv("MIGRATIONS_DIR")
@@ -99,11 +106,19 @@ func run(ctx context.Context) error {
 	return nil
 }
 
-// maskDSN returns the host portion of a DSN for safe logging — never logs
-// the full DSN (passwords + secrets).
+// maskDSN returns the host:port + database portion of a DSN for safe
+// logging — strips userinfo (username + password) entirely. Uses
+// net/url.Parse for correctness against passwords containing `@` or
+// `:` (which the previous IndexByte('@') heuristic mishandled, e.g.
+// "postgres://u:p@ssword@host/db" would log "ssword@host/db").
 func maskDSN(dsn string) string {
-	if i := strings.IndexByte(dsn, '@'); i >= 0 {
-		return dsn[i+1:]
+	u, err := url.Parse(dsn)
+	if err != nil || u.Host == "" {
+		return "<unknown>"
 	}
-	return "<unknown>"
+	host := u.Host
+	if u.Path != "" {
+		host += u.Path
+	}
+	return host
 }

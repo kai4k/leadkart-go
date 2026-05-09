@@ -7,10 +7,19 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
 
-// Event is the marker interface for refresh-token-family domain events.
+// Event is the SEALED marker interface for refresh-token-family
+// domain events. Sealed via the unexported isFamilyEvent() method so
+// only types in this package can satisfy it — same shape as
+// role.Event.
+//
+// Domain events deliberately do NOT carry wire concerns (Topic / V1
+// alias / occurred-at-as-method). Wire-versioning lives in
+// integrationevents.*V1 per Vernon IDDD ch. 8 ("Domain Events vs.
+// Integration Events"): a v2 wire rename must NOT force a domain edit.
+// The integration mapper in internal/identity/integrationevents/
+// type-switches on these structs and emits the canonical V1 envelope.
 type Event interface {
-	Topic() string
-	OccurredAt() time.Time
+	isFamilyEvent()
 }
 
 // FamilyCreatedEvent fires when a new family is issued via [NewFamily].
@@ -22,11 +31,7 @@ type FamilyCreatedEvent struct {
 	At          time.Time
 }
 
-// Topic returns the integration-event type.
-func (FamilyCreatedEvent) Topic() string { return "identity.refresh_token_family_created.v1" }
-
-// OccurredAt returns the domain timestamp.
-func (e FamilyCreatedEvent) OccurredAt() time.Time { return e.At }
+func (FamilyCreatedEvent) isFamilyEvent() {}
 
 // RotatedEvent fires on successful rotation. Carries PersonID + TenantID
 // so downstream subscribers can react without calling back to the
@@ -41,11 +46,7 @@ type RotatedEvent struct {
 	At                 time.Time
 }
 
-// Topic returns the integration-event type.
-func (RotatedEvent) Topic() string { return "identity.refresh_token_rotated.v1" }
-
-// OccurredAt returns the domain timestamp.
-func (e RotatedEvent) OccurredAt() time.Time { return e.At }
+func (RotatedEvent) isFamilyEvent() {}
 
 // RevokedEvent fires when a family is revoked — by [Revoke], by reuse
 // detection in [Rotate], or by family-cap eviction. Reason disambiguates;
@@ -61,8 +62,4 @@ type RevokedEvent struct {
 	At       time.Time
 }
 
-// Topic returns the integration-event type.
-func (RevokedEvent) Topic() string { return "identity.refresh_token_family_revoked.v1" }
-
-// OccurredAt returns the domain timestamp.
-func (e RevokedEvent) OccurredAt() time.Time { return e.At }
+func (RevokedEvent) isFamilyEvent() {}

@@ -7,6 +7,7 @@ import (
 	"sync/atomic"
 
 	"github.com/redis/go-redis/v9"
+	"golang.org/x/sync/singleflight"
 )
 
 // Facade is the typed read-through cache facade per
@@ -43,6 +44,14 @@ type Facade[K comparable, V any] struct {
 	factory func(ctx context.Context, key K) (V, error)
 	ttl     TTL
 	name    string
+
+	// flight is the per-facade singleflight Group. PER-FACADE (vs
+	// the shared HybridCache.Group) so two facades on the same
+	// HybridCache can't accidentally coalesce concurrent misses
+	// across different K/V types — a type-cast panic at the
+	// `val.(V)` site would result. Per-facade Group costs ~24 bytes
+	// + a sync.Map; cheap.
+	flight singleflight.Group
 
 	// omitL1 disables the in-process ristretto layer for this facade.
 	// See [WithOmitL1] for the rationale + when to use it.
@@ -118,7 +127,7 @@ func NewFacade[K comparable, V any](
 	factory func(ctx context.Context, key K) (V, error),
 	opts ...FacadeOption,
 ) *Facade[K, V] {
-	o := facadeOptions{ttl: DefaultTTL}
+	o := facadeOptions{ttl: DefaultTTL()}
 	for _, opt := range opts {
 		opt(&o)
 	}
@@ -179,7 +188,11 @@ func (f *Facade[K, V]) Get(ctx context.Context, key K) (V, error) {
 	}
 
 	// Miss → singleflight to coalesce concurrent factory invocations.
-	val, err, _ := f.cache.Group.Do(f.name+":"+keyStr, func() (any, error) {
+	// Per-facade Group (f.flight, not the shared HybridCache.Group)
+	// — see Facade.flight godoc for the type-safety rationale. Key
+	// is just keyStr; the per-facade scoping is implicit in the
+	// Group choice.
+	val, err, _ := f.flight.Do(keyStr, func() (any, error) {
 		// Stale-write fence: capture the generation BEFORE the source
 		// read so any concurrent Invalidate/Set after this point causes
 		// us to skip the cache write below. See the "Concurrency

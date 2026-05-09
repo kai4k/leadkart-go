@@ -59,6 +59,11 @@ func (r *fakeTenantRepo) ListAll(_ context.Context) ([]*tenant.Tenant, error) {
 	return out, nil
 }
 
+func (r *fakeTenantRepo) HardDeleteRow(_ context.Context, id tenant.ID) error {
+	delete(r.tenants, id)
+	return nil
+}
+
 var _ tenant.Repository = (*fakeTenantRepo)(nil)
 
 func newTenant(t *testing.T) *tenant.Tenant {

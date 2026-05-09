@@ -3,7 +3,7 @@ package subscribers
 import (
 	"log/slog"
 
-	"github.com/leadkart/leadkart-go/internal/identity/adapters"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/refreshtoken"
 	"github.com/leadkart/leadkart-go/internal/identity/integrationevents"
 	"github.com/leadkart/leadkart-go/internal/platform/messaging"
 )
@@ -53,16 +53,20 @@ const (
 // TenantContext globally, then Idempotency + Audit + Retry per
 // handler) — subscribers only worry about the action.
 //
-// stampCache is the [adapters.SecurityStampCache] threaded into the
-// [InvalidateSecurityStampCache] subscriber. The two subscribers
-// (cache-evict + family-revoke) ride the same events but carry
-// independent retry/failure policies — see each type's docstring.
-// stampCache is required (Register panics otherwise); production +
-// every test fixture wires a real *SecurityStampCache.
+// stampCache is threaded into the [InvalidateSecurityStampCache]
+// subscriber. The two subscribers (cache-evict + family-revoke) ride
+// the same events but carry independent retry/failure policies — see
+// each type's docstring. stampCache is required (NewInvalidateSecurityStampCache
+// panics otherwise); production wires *adapters.SecurityStampCache,
+// tests inject a [SecurityStampInvalidator] fake.
+//
+// families depends on the domain interface [refreshtoken.Repository]
+// (Cheney "accept interfaces, return structs") — production wires
+// *adapters.RefreshTokenFamilyRepository.
 func Register(
 	router *messaging.Router,
-	families *adapters.RefreshTokenFamilyRepository,
-	stampCache *adapters.SecurityStampCache,
+	families refreshtoken.Repository,
+	stampCache SecurityStampInvalidator,
 	log *slog.Logger,
 ) {
 	invalidate := NewInvalidateSecurityStampCache(stampCache, log)

@@ -110,15 +110,25 @@ type TTL struct {
 	L2 time.Duration
 }
 
-// DefaultTTL — global default per ADR 0015.
-var DefaultTTL = TTL{
-	L1: 1 * time.Minute,
-	L2: 5 * time.Minute,
-}
+// Per-tier duration constants. Composed into [TTL] structs by the
+// accessor functions below. Constants (vs package-level vars) make
+// these genuinely immutable — a misbehaving caller can't redefine
+// the security-stamp TTL at runtime.
+const (
+	defaultTTLL1 = 1 * time.Minute
+	defaultTTLL2 = 5 * time.Minute
 
-// SecurityStampTTL — Auth0/Okta session-validation refresh window.
-// Faster invalidation on the hot security path.
-var SecurityStampTTL = TTL{
-	L1: 30 * time.Second,
-	L2: 30 * time.Second,
-}
+	// Auth0 / Okta session-validation refresh window. Tight on the
+	// hot security path so revocation propagates within ~30s even
+	// when the explicit invalidation cascade has a transient blip.
+	securityStampTTL = 30 * time.Second
+)
+
+// DefaultTTL is the standard L1+L2 retention per ADR 0015. Returned
+// by-value so callers can't mutate a shared instance.
+func DefaultTTL() TTL { return TTL{L1: defaultTTLL1, L2: defaultTTLL2} }
+
+// SecurityStampTTL is the Auth0/Okta session-validation refresh
+// window — faster invalidation on the security-bearing freshness
+// path. Returned by-value so callers can't mutate a shared instance.
+func SecurityStampTTL() TTL { return TTL{L1: securityStampTTL, L2: securityStampTTL} }

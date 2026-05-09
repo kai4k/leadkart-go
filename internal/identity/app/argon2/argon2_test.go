@@ -96,3 +96,34 @@ func TestVerify_ConstantTime_DummyHashTakesSimilarTime(t *testing.T) {
 		t.Fatalf("dummy verify wrong password: got %v want ErrMismatch", err)
 	}
 }
+
+func TestNeedsRehash_FreshHashDoesNot(t *testing.T) {
+	t.Parallel()
+	stored, err := argon2.Hash("hunter2")
+	if err != nil {
+		t.Fatalf("hash: %v", err)
+	}
+	if argon2.NeedsRehash(stored) {
+		t.Fatal("a freshly-minted hash at the current floor should NOT need rehash")
+	}
+}
+
+func TestNeedsRehash_BelowFloorDoes(t *testing.T) {
+	t.Parallel()
+	// Hand-rolled PHC string with memory below the current floor
+	// (m=8192 < 19456). The salt + hash bytes are arbitrary —
+	// NeedsRehash only inspects the cost segment.
+	belowFloor := "$argon2id$v=19$m=8192,t=2,p=1$c2FsdHkx$abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
+	if !argon2.NeedsRehash(belowFloor) {
+		t.Fatal("hash below the OWASP 2025 floor should need rehash")
+	}
+}
+
+func TestNeedsRehash_MalformedReturnsFalse(t *testing.T) {
+	t.Parallel()
+	// Verify returns ErrFormat; NeedsRehash returns false (the caller
+	// has already seen the error and surfaced it).
+	if argon2.NeedsRehash("garbage") {
+		t.Fatal("malformed PHC should return false (caller already handled the error)")
+	}
+}

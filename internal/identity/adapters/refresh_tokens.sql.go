@@ -96,6 +96,48 @@ func (q *Queries) InsertRefreshTokenFamily(ctx context.Context, arg InsertRefres
 	return err
 }
 
+const listActiveFamiliesForPerson = `-- name: ListActiveFamiliesForPerson :many
+SELECT id, person_id, tenant_id, device_label,
+       created_at, last_used_at, revoked_at, revoke_reason
+FROM   identity.refresh_token_families
+WHERE  person_id  = $1
+  AND  revoked_at IS NULL
+ORDER  BY created_at
+`
+
+// Lists every non-revoked refresh-token family for a Person across
+// tenants. Used by the post-security-event revocation cascade
+// (RevokeFamiliesOnSecurityChange) and the user "manage sessions" UI.
+// Cross-tenant query; non-RLS table per refresh_token canon.
+func (q *Queries) ListActiveFamiliesForPerson(ctx context.Context, personID pgtype.UUID) ([]IdentityRefreshTokenFamily, error) {
+	rows, err := q.db.Query(ctx, listActiveFamiliesForPerson, personID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []IdentityRefreshTokenFamily
+	for rows.Next() {
+		var i IdentityRefreshTokenFamily
+		if err := rows.Scan(
+			&i.ID,
+			&i.PersonID,
+			&i.TenantID,
+			&i.DeviceLabel,
+			&i.CreatedAt,
+			&i.LastUsedAt,
+			&i.RevokedAt,
+			&i.RevokeReason,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listRefreshTokensInFamily = `-- name: ListRefreshTokensInFamily :many
 SELECT id, family_id, token_hash, generation,
        issued_at, expires_at, consumed_at, replaced_by_id

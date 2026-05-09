@@ -2,6 +2,7 @@ package config_test
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -86,6 +87,14 @@ func TestValidate_RejectsPlaceholderSecrets(t *testing.T) {
 		"REPLACE_ME",
 		"<set-via-env>",
 		"dev-jwt-signing-key-please-change-in-production",
+		// Substring-match cases (post-A4 hardening): the marker can
+		// appear anywhere inside the value, not just as the whole
+		// string. These would have slipped through the previous
+		// exact-match list.
+		"prefix-CHANGE_ME-suffix",
+		"my-do-not-ship-key-32-bytes-long-x",
+		"dev-only-do-not-ship-this-32byte-secret-x", // the docker compose dev literal
+		"yourkeyhere-padded-to-32-bytes-okx",
 	}
 	for _, val := range cases {
 		val := val
@@ -166,5 +175,60 @@ func TestDefaults_PassValidationWithRequiredFieldsAdded(t *testing.T) {
 	c.JWT.SigningKey = validJWTKey
 	if err := config.Validate(c); err != nil {
 		t.Fatalf("Defaults + required scalars should validate: %v", err)
+	}
+}
+
+// TestValidate_RejectsLowEntropyStrongSecret pins the entropy floor
+// added in the secrets-validator hardening. A 32-byte key of 'a'
+// passes the RFC 7518 §3.2 length gate but trivially loses to a
+// dictionary attack — the Shannon-entropy check catches it.
+func TestValidate_RejectsLowEntropyStrongSecret(t *testing.T) {
+	t.Parallel()
+	c := validBaseConfig()
+	// 32 bytes, entropy = 0 (single symbol).
+	c.JWT.SigningKey = strings.Repeat("a", 32)
+	err := config.Validate(c)
+	if err == nil {
+		t.Fatal("expected entropy-floor error, got nil")
+	}
+	if !strings.Contains(err.Error(), "entropy too low") {
+		t.Fatalf("expected entropy error, got: %v", err)
+	}
+}
+
+// TestValidate_RejectsPlaceholderInPostgresDSN pins the
+// connection-string-tier scan: a DSN with a placeholder embedded
+// in the password segment fails boot.
+func TestValidate_RejectsPlaceholderInPostgresDSN(t *testing.T) {
+	t.Parallel()
+	c := validBaseConfig()
+	c.Postgres.DSN = "postgres://user:CHANGE_ME@localhost:5432/leadkart"
+	err := config.Validate(c)
+	if !errors.Is(err, config.ErrPlaceholderSecret) {
+		t.Fatalf("expected ErrPlaceholderSecret on DSN, got %v", err)
+	}
+}
+
+// TestValidate_RejectsPlaceholderInRedisPassword pins the weak-tier
+// scan.
+func TestValidate_RejectsPlaceholderInRedisPassword(t *testing.T) {
+	t.Parallel()
+	c := validBaseConfig()
+	c.Redis.Password = "redis-changeme-please"
+	err := config.Validate(c)
+	if !errors.Is(err, config.ErrPlaceholderSecret) {
+		t.Fatalf("expected ErrPlaceholderSecret on Redis.Password, got %v", err)
+	}
+}
+
+// TestValidate_AcceptsHighEntropyJWTKey confirms the entropy floor
+// doesn't false-positive on a typical 32-byte hex key (16-symbol
+// alphabet, ~128 bits of entropy — well above the 60-bit floor).
+func TestValidate_AcceptsHighEntropyJWTKey(t *testing.T) {
+	t.Parallel()
+	c := validBaseConfig()
+	c.JWT.SigningKey = "0123456789abcdef0123456789abcdef" // 128 bits
+	if err := config.Validate(c); err != nil {
+		t.Fatalf("hex 32-byte key should pass: %v", err)
 	}
 }

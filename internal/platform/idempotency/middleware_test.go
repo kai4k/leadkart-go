@@ -55,7 +55,7 @@ func TestMiddleware_NoCommandIDHeader_PassesThrough(t *testing.T) {
 	calls := &atomic.Int32{}
 	d := &downstream{calls: calls, status: 200, body: `{"ok":true}`}
 	store := idempotency.NewInMemoryStore(nil)
-	mw := idempotency.Middleware(store, nil, 0)(d.handler())
+	mw := idempotency.Middleware(store, nil, 0, nil)(d.handler())
 
 	rec := httptest.NewRecorder()
 	mw.ServeHTTP(rec, newPOST(t, `{"x":1}`, ""))
@@ -76,7 +76,7 @@ func TestMiddleware_FirstCall_CachesAndReturns2xx(t *testing.T) {
 	calls := &atomic.Int32{}
 	d := &downstream{calls: calls, status: 201, body: `{"id":"abc"}`}
 	store := idempotency.NewInMemoryStore(nil)
-	mw := idempotency.Middleware(store, nil, 0)(d.handler())
+	mw := idempotency.Middleware(store, nil, 0, nil)(d.handler())
 
 	cmdID := uuid.NewString()
 	rec := httptest.NewRecorder()
@@ -104,7 +104,7 @@ func TestMiddleware_ReplaySameKeyAndBody_ReturnsCached(t *testing.T) {
 	calls := &atomic.Int32{}
 	d := &downstream{calls: calls, status: 201, body: `{"id":"abc"}`}
 	store := idempotency.NewInMemoryStore(nil)
-	mw := idempotency.Middleware(store, nil, 0)(d.handler())
+	mw := idempotency.Middleware(store, nil, 0, nil)(d.handler())
 
 	cmdID := uuid.NewString()
 	body := `{"x":1}`
@@ -139,7 +139,7 @@ func TestMiddleware_ReplayDifferentBody_Returns422(t *testing.T) {
 	calls := &atomic.Int32{}
 	d := &downstream{calls: calls, status: 201, body: `{"id":"abc"}`}
 	store := idempotency.NewInMemoryStore(nil)
-	mw := idempotency.Middleware(store, nil, 0)(d.handler())
+	mw := idempotency.Middleware(store, nil, 0, nil)(d.handler())
 
 	cmdID := uuid.NewString()
 	rec1 := httptest.NewRecorder()
@@ -164,7 +164,7 @@ func TestMiddleware_MalformedCommandID_Returns400(t *testing.T) {
 	calls := &atomic.Int32{}
 	d := &downstream{calls: calls, status: 200}
 	store := idempotency.NewInMemoryStore(nil)
-	mw := idempotency.Middleware(store, nil, 0)(d.handler())
+	mw := idempotency.Middleware(store, nil, 0, nil)(d.handler())
 
 	rec := httptest.NewRecorder()
 	mw.ServeHTTP(rec, newPOST(t, `{}`, "not-a-uuid"))
@@ -187,7 +187,7 @@ func TestMiddleware_NonSuccess_NotCached(t *testing.T) {
 	calls := &atomic.Int32{}
 	d := &downstream{calls: calls, status: 500, body: `{"error":"internal"}`}
 	store := idempotency.NewInMemoryStore(nil)
-	mw := idempotency.Middleware(store, nil, 0)(d.handler())
+	mw := idempotency.Middleware(store, nil, 0, nil)(d.handler())
 
 	cmdID := uuid.NewString()
 	rec1 := httptest.NewRecorder()
@@ -207,6 +207,72 @@ func TestMiddleware_NonSuccess_NotCached(t *testing.T) {
 	}
 }
 
+// TestMiddleware_PerCallerScoping_DoesNotLeakAcrossCallers asserts the
+// load-bearing security property the audit-fix migration enforces: two
+// callers picking the same X-Command-Id MUST NOT see each other's
+// cached response.
+func TestMiddleware_PerCallerScoping_DoesNotLeakAcrossCallers(t *testing.T) {
+	t.Parallel()
+	calls := &atomic.Int32{}
+	d := &downstream{calls: calls, status: 201, body: `{"id":"abc"}`}
+	store := idempotency.NewInMemoryStore(nil)
+
+	// Inject a deterministic test keyer that flips between two callers
+	// based on a header; this isolates the scoping semantics from any
+	// auth-stack assumptions.
+	keyer := func(r *http.Request) string {
+		return "test:" + r.Header.Get("X-Test-Caller")
+	}
+	mw := idempotency.Middleware(store, nil, 0, keyer)(d.handler())
+
+	cmdID := uuid.NewString()
+	body := `{"x":1}`
+
+	// Caller A — first call populates cache.
+	rec1 := httptest.NewRecorder()
+	req1 := newPOST(t, body, cmdID)
+	req1.Header.Set("X-Test-Caller", "A")
+	mw.ServeHTTP(rec1, req1)
+	if rec1.Code != 201 {
+		t.Fatalf("caller A status = %d", rec1.Code)
+	}
+
+	// Caller B — same X-Command-Id, same body, different caller scope.
+	// MUST execute downstream (no replay), MUST NOT see A's response.
+	rec2 := httptest.NewRecorder()
+	req2 := newPOST(t, body, cmdID)
+	req2.Header.Set("X-Test-Caller", "B")
+	mw.ServeHTTP(rec2, req2)
+
+	if calls.Load() != 2 {
+		t.Errorf("downstream called %d times, want 2 (per-caller scoping must isolate)", calls.Load())
+	}
+	if rec2.Header().Get(idempotency.ReplayHeader) != "" {
+		t.Error("X-Idempotent-Replay set on cross-caller request — scoping leak")
+	}
+}
+
+// TestMiddleware_OverSizedBody_Returns413 covers the OWASP API4 cap.
+func TestMiddleware_OverSizedBody_Returns413(t *testing.T) {
+	t.Parallel()
+	calls := &atomic.Int32{}
+	d := &downstream{calls: calls, status: 200, body: `ok`}
+	store := idempotency.NewInMemoryStore(nil)
+	mw := idempotency.Middleware(store, nil, 0, nil)(d.handler())
+
+	// 2 MiB > MaxBodyBytes (1 MiB)
+	huge := strings.Repeat("a", 2<<20)
+	rec := httptest.NewRecorder()
+	mw.ServeHTTP(rec, newPOST(t, huge, uuid.NewString()))
+
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Errorf("status = %d, want 413", rec.Code)
+	}
+	if calls.Load() != 0 {
+		t.Errorf("downstream called %d times, want 0", calls.Load())
+	}
+}
+
 func TestMiddleware_TTLExpiry_RetriesDownstream(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 5, 7, 12, 0, 0, 0, time.UTC)
@@ -214,7 +280,7 @@ func TestMiddleware_TTLExpiry_RetriesDownstream(t *testing.T) {
 	store := idempotency.NewInMemoryStore(func() time.Time { return clock })
 	calls := &atomic.Int32{}
 	d := &downstream{calls: calls, status: 201, body: `{"id":"abc"}`}
-	mw := idempotency.Middleware(store, func() time.Time { return clock }, time.Hour)(d.handler())
+	mw := idempotency.Middleware(store, func() time.Time { return clock }, time.Hour, nil)(d.handler())
 
 	cmdID := uuid.NewString()
 	body := `{}`

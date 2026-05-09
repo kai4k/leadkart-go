@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/leadkart/leadkart-go/internal/identity/adapters"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
 
@@ -24,12 +23,14 @@ type HardDeleteTenantCommand struct {
 
 // HardDeleteTenantHandler runs the two-phase delete.
 type HardDeleteTenantHandler struct {
-	tenants *adapters.TenantRepository
+	tenants tenant.Repository
 }
 
-// NewHardDeleteTenantHandler wires the handler. Concrete repo type
-// because HardDeleteRow is platform-specific and not on the contract.
-func NewHardDeleteTenantHandler(tenants *adapters.TenantRepository) HardDeleteTenantHandler {
+// NewHardDeleteTenantHandler wires the handler. Depends on the domain
+// interface (Cheney "accept interfaces, return structs"); HardDeleteRow
+// is on the [tenant.Repository] contract because grace-window expiry
+// is a domain operation, not adapter-only.
+func NewHardDeleteTenantHandler(tenants tenant.Repository) HardDeleteTenantHandler {
 	if tenants == nil {
 		panic("command: NewHardDeleteTenantHandler tenants repository required")
 	}

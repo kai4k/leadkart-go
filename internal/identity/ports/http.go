@@ -579,15 +579,36 @@ func handleRequestEmailChange(log *slog.Logger, a app.Application) http.Handler 
 		})
 		switch {
 		case errors.Is(err, command.ErrEmailAlreadyTaken):
-			writeError(w, http.StatusConflict, ErrCodeEmailAlreadyTaken,
-				"another account already uses this email")
+			// Anti-enumeration: collapse to 204 (same shape as
+			// successful submission). A 409 here would let any
+			// authenticated user probe the email space (try every
+			// candidate, observe 204 vs 409). Auth0 / Okta /
+			// Microsoft Entra ID canon: change-email flows MUST NOT
+			// disclose target-email registration status. The
+			// confirmation step (POST /confirm-email-change) still
+			// fails on the unique-index constraint at apply time —
+			// the user just learns later, not during enumeration.
+			// The originating request is silently dropped + audit
+			// logged for SIEM forensics.
+			log.WarnContext(r.Context(), "email-change request collapsed to 204 (target already taken)",
+				"person_id", c.Subject)
+			w.WriteHeader(http.StatusNoContent)
 			return
 		case errors.Is(err, command.ErrEmailChangeRejected):
-			writeError(w, http.StatusBadRequest, ErrCodeEmailChangeRejected, "")
+			// Same anti-enumeration policy: a request rejected
+			// (e.g. trying to set the same email already on the
+			// account) collapses to 204. Domain-shape errors are
+			// not user-facing here.
+			log.WarnContext(r.Context(), "email-change request collapsed to 204 (rejected)",
+				"person_id", c.Subject)
+			w.WriteHeader(http.StatusNoContent)
 			return
 		case err != nil:
 			log.ErrorContext(r.Context(), "request email change failed", "err", err)
-			writeError(w, http.StatusInternalServerError, ErrCodeInternalError, "")
+			// Even on internal errors, return 204 to avoid
+			// revealing failure-shape differentially. Server-side
+			// log carries the diagnostic.
+			w.WriteHeader(http.StatusNoContent)
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
