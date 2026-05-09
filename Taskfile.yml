@@ -269,32 +269,28 @@ tasks:
   # =====================================================================
 
   docker:env:
-    desc: 'Mint a local docker/.env with random JWT key + fixed-memorable SuperAdmin creds (idempotent — skips if file exists).'
+    desc: 'Mint docker/.env via scripts/devenv (idempotent — skips if file exists with a non-empty JWT key).'
+    # Skip-condition: file present AND JWT signing key line has a
+    # non-empty value. Catches the prior bash-heredoc failure mode
+    # where openssl wasn't in PATH + the file ended up with empty
+    # KEY=VALUE lines that compose treats as "unset".
     status:
       - test -f docker/.env
+      - 'grep -q ''^LEADKART_JWT__SIGNING_KEY=..*'' docker/.env'
     cmds:
       - mkdir -p docker
-      # Fixed dev SuperAdmin creds per repo convention. Never reach
-      # production: the JWT signing-key entropy gate + the secrets
-      # validator's placeholder check would refuse a non-prod boot
-      # before this hash matters. Rotate via the platform admin UI
-      # post-boot for any environment that's not your laptop.
-      - |
-        cat > docker/.env <<EOF
-        # Auto-minted by \`task docker:env\` for local dev. Throwaway creds.
-        # Rotate via the platform admin UI before any non-dev use.
-        LEADKART_JWT__KEY_ID=local-dev-$(date +%s)
-        LEADKART_JWT__SIGNING_KEY=$(openssl rand -hex 32)
-        LEADKART_SUPERADMIN__EMAIL=superadmin@leadkart.local
-        LEADKART_SUPERADMIN__PASSWORD=LeadKart!Dev2026
-        LEADKART_SUPERADMIN__FIRST_NAME=Platform
-        LEADKART_SUPERADMIN__LAST_NAME=SuperAdmin
-        EOF
+      - go run ./scripts/devenv > docker/.env
       - 'echo ""'
       - 'echo "  wrote docker/.env"'
       - 'echo "  superadmin email:    superadmin@leadkart.local"'
       - 'echo "  superadmin password: LeadKart!Dev2026"'
       - 'echo ""'
+
+  docker:env:reset:
+    desc: 'Force-regenerate docker/.env (use when JWT key got corrupted or you want a fresh signing key).'
+    cmds:
+      - rm -f docker/.env
+      - task: docker:env
 
   docker:build:
     desc: Build api + migrate images locally via docker buildx
