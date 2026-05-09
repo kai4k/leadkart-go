@@ -128,7 +128,17 @@ tasks:
       - go generate ./...
 
   ci:
-    desc: Mirror of the GH Actions `unit` job (vet + lint + test:race + arch + vuln + build)
+    desc: Fast pre-push gate (vet + lint + test + arch + vuln + build). No CGO/Docker needed.
+    cmds:
+      - task: vet
+      - task: lint
+      - task: test
+      - task: test:arch
+      - task: vuln
+      - task: build
+
+  ci:race:
+    desc: CI's race-detector pass (matches the GH Actions unit job exactly). Requires CGO + gcc.
     cmds:
       - task: vet
       - task: lint
@@ -138,9 +148,9 @@ tasks:
       - task: build
 
   ci:full:
-    desc: Mirror of the entire GH Actions pipeline (unit + integration + smoke). Requires Docker.
+    desc: Full GH Actions pipeline mirror (race + integration + smoke). Requires CGO + Docker.
     cmds:
-      - task: ci
+      - task: ci:race
       - task: test:int
       - task: ci:smoke
 
@@ -228,6 +238,31 @@ tasks:
     preconditions:
       - sh: command -v goose
         msg: 'goose CLI required. Install: go install github.com/pressly/goose/v3/cmd/goose@latest'
+
+  # =====================================================================
+  # Dev workflow — fast inner loop. `task dev` is the canonical
+  # "I'm coding now" command. Pre-push hook acts as the local gate
+  # before code leaves your machine; GitHub Actions remains the backstop.
+  # =====================================================================
+
+  dev:
+    desc: Start full dev stack + tail api logs (the canonical "I'm coding now" command)
+    cmds:
+      - task: docker:up:full
+      - task: docker:logs
+
+  hooks:install:
+    desc: Activate the tracked git hooks under scripts/githooks (one-time per clone)
+    cmds:
+      - git config core.hooksPath scripts/githooks
+      - 'echo "git hooks active. pre-push will run task ci before every push."'
+      - 'echo "uninstall with: task hooks:uninstall. one-shot bypass with: git push --no-verify"'
+
+  hooks:uninstall:
+    desc: Stop running tracked git hooks (reverts core.hooksPath to default)
+    cmds:
+      - git config --unset core.hooksPath
+      - 'echo "git hooks deactivated. push will no longer run local CI."'
 
   # =====================================================================
   # Docker (dev stack via compose --profile full)
