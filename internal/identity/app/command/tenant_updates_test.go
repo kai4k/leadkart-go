@@ -189,7 +189,7 @@ func TestSuspendTenant_RequiresReason(t *testing.T) {
 	tn.PullEvents()
 	_ = repo.Add(t.Context(), tn)
 
-	h := command.NewSuspendTenantHandler(repo)
+	h := command.NewSuspendTenantHandler(repo, newFakeMembershipRepo())
 	err := h.Handle(t.Context(), command.SuspendTenantCommand{TenantID: tn.ID()})
 	if !errors.Is(err, tenant.ErrInvalid) {
 		t.Fatalf("err = %v, want wraps tenant.ErrInvalid (empty reason)", err)
@@ -205,7 +205,7 @@ func TestSuspendTenant_Succeeds(t *testing.T) {
 	}
 	tn.PullEvents()
 	_ = repo.Add(t.Context(), tn)
-	h := command.NewSuspendTenantHandler(repo)
+	h := command.NewSuspendTenantHandler(repo, newFakeMembershipRepo())
 	err := h.Handle(t.Context(), command.SuspendTenantCommand{
 		TenantID: tn.ID(),
 		Reason:   "billing-overdue-30d",
@@ -239,7 +239,7 @@ func TestMarkTenantForDeletion_HappyPath(t *testing.T) {
 	tn.PullEvents()
 	_ = repo.Add(t.Context(), tn)
 
-	h := command.NewMarkTenantForDeletionHandler(repo)
+	h := command.NewMarkTenantForDeletionHandler(repo, newFakeMembershipRepo())
 	if err := h.Handle(t.Context(), command.MarkTenantForDeletionCommand{
 		TenantID: tn.ID(),
 		Reason:   "operator: tenant-requested-closure",

@@ -16,6 +16,7 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/role"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
+	"github.com/leadkart/leadkart-go/internal/identity/ports/authn"
 )
 
 // ----- GetUser --------------------------------------------------------------
@@ -265,12 +266,23 @@ func handleCreateUser(log *slog.Logger, a app.Application) http.Handler {
 			writeError(w, http.StatusBadRequest, ErrCodeInvalidEmail, err.Error())
 			return
 		}
+		// Audit chain — caller's MembershipID stamps the new user's
+		// `created_by_membership_id` (migration 20260507000008).
+		// Claims are guaranteed present here by the auth middleware
+		// upstream of this route; defensive fallback to zero ID
+		// keeps the command deterministic if a future code path
+		// invokes the handler without auth.
+		callerMembership := membership.ID("")
+		if claims, ok := authn.ClaimsFromContext(r.Context()); ok && claims != nil {
+			callerMembership = membership.ID(claims.MembershipID)
+		}
 		out, err := a.Commands.CreateUser.Handle(r.Context(), command.CreateUserCommand{
-			TenantID:  tenant.ID(tid),
-			Email:     addr,
-			Password:  req.Password,
-			FirstName: req.FirstName,
-			LastName:  req.LastName,
+			TenantID:              tenant.ID(tid),
+			Email:                 addr,
+			Password:              req.Password,
+			FirstName:             req.FirstName,
+			LastName:              req.LastName,
+			CreatedByMembershipID: callerMembership,
 		})
 		switch {
 		case errors.Is(err, command.ErrEmailHasActiveMembership):

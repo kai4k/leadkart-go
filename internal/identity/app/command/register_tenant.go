@@ -282,7 +282,10 @@ func (h RegisterTenantHandler) createMembershipInTx(
 	personID person.ID,
 	tenantID tenant.ID,
 ) (*membership.Membership, error) {
-	m, err := membership.New(membership.ID(ids.NewV7().String()), personID, tenantID)
+	// createdBy = zero — RegisterTenant's first admin is self-bootstrapped
+	// (no pre-existing Membership invited them). Distinguishes
+	// onboarding-time admin from later-invited users in audit queries.
+	m, err := membership.New(membership.ID(ids.NewV7().String()), personID, tenantID, membership.ID(""))
 	if err != nil {
 		return nil, fmt.Errorf("construct membership: %w", err)
 	}

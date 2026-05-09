@@ -152,16 +152,17 @@ func (r *AuthRouterPG) ResolveByEmail(
 		// empty strings, which the membership aggregate hydrator
 		// already tolerates for these informational fields.
 		membershipRow := IdentityTenantMembership{
-			ID:            row.MembershipID,
-			PersonID:      row.PersonID,
-			TenantID:      row.TenantID,
-			Status:        derefStr(row.MembershipStatus),
-			JoinedAt:      row.JoinedAt,
-			LeftAt:        row.LeftAt,
-			Designation:   derefStr(row.Designation),
-			Department:    derefStr(row.Department),
-			StatusMessage: derefStr(row.StatusMessage),
-			ReportsTo:     row.ReportsTo,
+			ID:                    row.MembershipID,
+			PersonID:              row.PersonID,
+			TenantID:              row.TenantID,
+			Status:                derefStr(row.MembershipStatus),
+			JoinedAt:              row.JoinedAt,
+			LeftAt:                row.LeftAt,
+			Designation:           derefStr(row.Designation),
+			Department:            derefStr(row.Department),
+			StatusMessage:         derefStr(row.StatusMessage),
+			ReportsTo:             row.ReportsTo,
+			CreatedByMembershipID: row.CreatedByMembershipID,
 		}
 
 		mid := uuidFromPg(row.MembershipID)

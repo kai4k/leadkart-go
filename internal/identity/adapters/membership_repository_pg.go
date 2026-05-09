@@ -8,6 +8,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/leadkart/leadkart-go/internal/common/clock"
@@ -258,6 +259,34 @@ func (r *MembershipRepository) ListForTenant(
 	return out, nil
 }
 
+// HasActiveSuperAdmin satisfies [membership.Repository]. Platform-
+// scope query against ListSuperAdminMembershipsInTenant — returns
+// true if the supplied tenant has at least one active Membership
+// holding a role flagged is_super_admin=true.
+func (r *MembershipRepository) HasActiveSuperAdmin(
+	ctx context.Context,
+	tenantID tenant.ID,
+) (bool, error) {
+	tid, err := parseTenantIDForMembership(tenantID)
+	if err != nil {
+		return false, err
+	}
+	var found bool
+	err = r.tx.WithinTx(ctx, pg.TxScopePlatform, func(ctx context.Context, tx pgx.Tx) error {
+		q := r.q.WithTx(tx)
+		rows, err := q.ListSuperAdminMembershipsInTenant(ctx, pgUUID(tid))
+		if err != nil {
+			return fmt.Errorf("membership repo: list super-admin in tenant: %w", err)
+		}
+		found = len(rows) > 0
+		return nil
+	})
+	if err != nil {
+		return false, err
+	}
+	return found, nil
+}
+
 // ListAllForPerson satisfies [membership.Repository]. Platform-only
 // cross-tenant lookup — returns every Membership the Person holds
 // (Active + Inactive) across all tenants. Backed by the existing
@@ -392,12 +421,25 @@ func insertMembershipRow(ctx context.Context, q *Queries, m *membership.Membersh
 	if err != nil {
 		return err
 	}
+	// CreatedBy is the audit chain — caller's Membership ID, or zero
+	// for self-bootstrapped paths. Zero ID maps to a NULL pgtype.UUID
+	// (Valid:false), which the column accepts via migration
+	// 20260507000008's NULL allowance.
+	createdBy := pgtype.UUID{}
+	if cb := m.CreatedBy(); !cb.IsZero() {
+		cbUUID, perr := uuid.Parse(cb.String())
+		if perr != nil {
+			return fmt.Errorf("membership repo: parse createdBy %q: %w", cb, perr)
+		}
+		createdBy = pgUUID(cbUUID)
+	}
 	err = q.InsertMembership(ctx, InsertMembershipParams{
-		ID:       pgUUID(mid),
-		PersonID: pgUUID(pid),
-		TenantID: pgUUID(tid),
-		Status:   m.Status().String(),
-		JoinedAt: pgRequiredTimestamp(m.JoinedAt()),
+		ID:                    pgUUID(mid),
+		PersonID:              pgUUID(pid),
+		TenantID:              pgUUID(tid),
+		Status:                m.Status().String(),
+		JoinedAt:              pgRequiredTimestamp(m.JoinedAt()),
+		CreatedByMembershipID: createdBy,
 	})
 	if err != nil {
 		if isMembershipActiveCollision(err) {
@@ -468,6 +510,10 @@ func rowToMembership(
 	if reports := uuidFromPg(row.ReportsTo); reports != uuid.Nil {
 		reportsTo = membership.ID(reports.String())
 	}
+	createdBy := membership.ID("")
+	if cb := uuidFromPg(row.CreatedByMembershipID); cb != uuid.Nil {
+		createdBy = membership.ID(cb.String())
+	}
 	return membership.UnmarshalFromDB(membership.Snapshot{
 		ID:                 id,
 		PersonID:           personID,
@@ -482,6 +528,7 @@ func rowToMembership(
 		Department:         row.Department,
 		StatusMessage:      row.StatusMessage,
 		ReportsTo:          reportsTo,
+		CreatedBy:          createdBy,
 	}), nil
 }
 

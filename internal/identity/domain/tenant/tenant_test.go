@@ -70,9 +70,10 @@ func TestNewTenant_AcceptsValidInputs(t *testing.T) {
 	if tn.DisplayName() != "Acme Pharma" {
 		t.Errorf("DisplayName() = %q", tn.DisplayName())
 	}
-	if !tn.AdminEmail().Equal(e) {
-		t.Errorf("AdminEmail() mismatch")
-	}
+	// AdminEmail accessor removed in migration 20260507000008 — admin
+	// email is no longer stored on the aggregate. The RegisteredEvent
+	// still carries it (covered by TestNewTenant_EmitsTenantRegisteredEvent).
+	_ = e
 	if tn.Status() != tenant.StatusPending {
 		t.Errorf("Status() = %v, want StatusPending", tn.Status())
 	}
@@ -405,7 +406,6 @@ func TestUnmarshalFromDB_DoesNotValidate(t *testing.T) {
 		Slug:        slug.Slug{},                  // factory would reject
 		LegalName:   "",                           // factory would reject
 		DisplayName: "",                           // factory would reject
-		AdminEmail:  email.Address{},              // factory would reject
 		Status:      tenant.StatusActive,
 		CreatedAt:   time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC),
 	})
@@ -424,7 +424,6 @@ func TestUnmarshalFromDB_DoesNotEmitEvents(t *testing.T) {
 		Slug:        slug.Slug{},
 		LegalName:   "Acme",
 		DisplayName: "Acme",
-		AdminEmail:  email.Address{},
 		Status:      tenant.StatusActive,
 		CreatedAt:   time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC),
 	})

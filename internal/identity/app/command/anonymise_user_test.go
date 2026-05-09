@@ -6,6 +6,7 @@ import (
 
 	"github.com/leadkart/leadkart-go/internal/identity/app/command"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
 
 func TestAnonymiseUser_Cascades(t *testing.T) {
@@ -17,7 +18,8 @@ func TestAnonymiseUser_Cascades(t *testing.T) {
 	m, err := membership.New(
 		membership.ID("11111111-1111-1111-1111-111111111111"),
 		pRepo.person.ID(),
-		"33333333-3333-3333-3333-333333333333",
+		tenant.ID("33333333-3333-3333-3333-333333333333"),
+		membership.ID(""),
 	)
 	if err != nil {
 		t.Fatalf("membership.New: %v", err)

@@ -31,6 +31,15 @@ type CreateUserCommand struct {
 	Password  string
 	FirstName string
 	LastName  string
+
+	// CreatedByMembershipID is the calling user's Membership in the
+	// same tenant — populated by the HTTP handler from the JWT
+	// principal. Stored on the new Membership as the audit chain
+	// "who invited this user" per migration 20260507000008. Zero
+	// means the call came from a system path with no human caller
+	// (currently only the bootstrap CLI; HTTP routes always have
+	// an authenticated caller, so HTTP callers always supply this).
+	CreatedByMembershipID membership.ID
 }
 
 // CreateUserResult carries the IDs of the (Person, Membership) pair
@@ -116,7 +125,7 @@ func (h CreateUserHandler) Handle(
 		if perr != nil {
 			return perr
 		}
-		m, merr := h.createMembershipInTx(ctx, tx, p.ID(), cmd.TenantID)
+		m, merr := h.createMembershipInTx(ctx, tx, p.ID(), cmd.TenantID, cmd.CreatedByMembershipID)
 		if merr != nil {
 			return merr
 		}
@@ -180,8 +189,9 @@ func (h CreateUserHandler) createMembershipInTx(
 	tx pgx.Tx,
 	personID person.ID,
 	tenantID tenant.ID,
+	createdBy membership.ID,
 ) (*membership.Membership, error) {
-	m, err := membership.New(membership.ID(ids.NewV7().String()), personID, tenantID)
+	m, err := membership.New(membership.ID(ids.NewV7().String()), personID, tenantID, createdBy)
 	if err != nil {
 		return nil, fmt.Errorf("create user: construct membership: %w", err)
 	}

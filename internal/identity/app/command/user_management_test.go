@@ -73,6 +73,10 @@ func (r *fakeMembershipRepo) ListAllForPerson(_ context.Context, pid person.ID) 
 	return out, nil
 }
 
+func (r *fakeMembershipRepo) HasActiveSuperAdmin(_ context.Context, _ tenant.ID) (bool, error) {
+	return false, nil
+}
+
 var _ membership.Repository = (*fakeMembershipRepo)(nil)
 
 func newMembership(t *testing.T) *membership.Membership {
@@ -83,6 +87,7 @@ func newMembership(t *testing.T) *membership.Membership {
 		membership.ID("11111111-1111-1111-1111-111111111111"),
 		person.ID("22222222-2222-2222-2222-222222222222"),
 		tenant.ID("33333333-3333-3333-3333-333333333333"),
+		membership.ID(""),
 	)
 	if err != nil {
 		t.Fatalf("membership.New: %v", err)

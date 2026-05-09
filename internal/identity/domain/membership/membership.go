@@ -100,15 +100,28 @@ type Membership struct {
 	// the domain only enforces the not-self invariant.
 	reportsTo ID
 
+	// createdBy is the audit chain — the Membership that created this
+	// row. Zero value = system-bootstrapped (RegisterTenant first
+	// admin, SuperAdmin via cmd/bootstrap). Set ONCE at construction;
+	// immutable for the row's lifetime. Distinct from reportsTo (which
+	// is the org-chart hierarchy + mutable). Per migration
+	// 20260507000008.
+	createdBy ID
+
 	events []Event
 }
 
 // New constructs a brand-new TenantMembership in [StatusActive].
 //
+// createdBy carries the audit chain — the Membership that invited /
+// created this user. Pass the zero ID for system-bootstrapped paths
+// (RegisterTenant first admin, SuperAdmin via cmd/bootstrap); pass
+// the caller's MembershipID for invited / created users.
+//
 // Returns [ErrInvalid] (wrapped) on invariant violation. The aggregate
 // emits [CreatedEvent] which the repository drains via [PullEvents] when
 // persisting + appends to the outbox same-tx (per ADR 0004 + ADR 0008).
-func New(id ID, personID person.ID, tenantID tenant.ID) (*Membership, error) {
+func New(id ID, personID person.ID, tenantID tenant.ID, createdBy ID) (*Membership, error) {
 	if id.IsZero() {
 		return nil, fmt.Errorf("%w: id required", ErrInvalid)
 	}
@@ -118,14 +131,20 @@ func New(id ID, personID person.ID, tenantID tenant.ID) (*Membership, error) {
 	if tenantID.IsZero() {
 		return nil, fmt.Errorf("%w: tenantID required", ErrInvalid)
 	}
+	// Self-creation makes no sense — a row can't be its own creator.
+	// (Sentinel zero ID for bootstrap rows is the right NULL signal.)
+	if !createdBy.IsZero() && createdBy == id {
+		return nil, fmt.Errorf("%w: createdBy cannot equal id", ErrInvalid)
+	}
 
 	now := clock.Now()
 	m := &Membership{
-		id:       id,
-		personID: personID,
-		tenantID: tenantID,
-		status:   StatusActive,
-		joinedAt: now,
+		id:        id,
+		personID:  personID,
+		tenantID:  tenantID,
+		status:    StatusActive,
+		joinedAt:  now,
+		createdBy: createdBy,
 	}
 	m.recordEvent(CreatedEvent{
 		MembershipID: id,
@@ -151,6 +170,7 @@ type Snapshot struct {
 	Department         string
 	StatusMessage      string
 	ReportsTo          ID
+	CreatedBy          ID // audit chain (zero = system-bootstrapped)
 }
 
 // UnmarshalFromDB re-hydrates a Membership from persistence.
@@ -170,8 +190,15 @@ func UnmarshalFromDB(s Snapshot) *Membership {
 		department:         s.Department,
 		statusMessage:      s.StatusMessage,
 		reportsTo:          s.ReportsTo,
+		createdBy:          s.CreatedBy,
 	}
 }
+
+// CreatedBy returns the Membership that invited / created this row.
+// Zero ID = system-bootstrapped (RegisterTenant first admin,
+// SuperAdmin via cmd/bootstrap). Distinct from ReportsTo (org-chart
+// hierarchy, mutable) — createdBy is the immutable audit fact.
+func (m *Membership) CreatedBy() ID { return m.createdBy }
 
 // ----- Getters --------------------------------------------------------------
 

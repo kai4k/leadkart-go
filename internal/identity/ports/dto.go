@@ -364,11 +364,13 @@ type RolePermissionRequest struct {
 // the .NET LeadKart `TenantDto` — full profile + statutory + contact +
 // settings + display preferences + lifecycle timestamps.
 type TenantDto struct {
-	ID                  string             `json:"id"`
-	Slug                string             `json:"slug"`
-	LegalName           string             `json:"legal_name"`
-	DisplayName         string             `json:"display_name"`
-	AdminEmail          string             `json:"admin_email"`
+	ID          string `json:"id"`
+	Slug        string `json:"slug"`
+	LegalName   string `json:"legal_name"`
+	DisplayName string `json:"display_name"`
+	// admin_email removed in migration 20260507000008 — derived value
+	// (CompanyOwner-role membership → person.email). Use the
+	// /v1/users endpoints to discover current admin contacts.
 	Status              string             `json:"status"`
 	CreatedAt           time.Time          `json:"created_at"`
 	ActivatedAt         time.Time          `json:"activated_at,omitzero"`

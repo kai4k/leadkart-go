@@ -435,9 +435,15 @@ func TestRequireAnyPermission_PanicsOnEmptyList(t *testing.T) {
 
 func TestRequirePlatform_TokenIsPlatform_Returns200(t *testing.T) {
 	t.Parallel()
+	// Slug-anchor + IsPlatform flag together — defense-in-depth check
+	// per migration 20260507000008.
 	v := &fakeVerifier{
 		wantToken: "tok",
-		claims:    withFreshness(&jwt.Claims{TenantID: "tenant-test", IsPlatform: true}),
+		claims: withFreshness(&jwt.Claims{
+			TenantID:   "tenant-test",
+			TenantSlug: authn.PlatformTenantSlug,
+			IsPlatform: true,
+		}),
 	}
 	s := &sentinel{}
 	mw := authn.RequirePlatform(v, alwaysFresh{})(s.handler())
@@ -445,6 +451,27 @@ func TestRequirePlatform_TokenIsPlatform_Returns200(t *testing.T) {
 	mw.ServeHTTP(rec, newRequest(t, "Bearer tok"))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status: got %d want 200", rec.Code)
+	}
+}
+
+func TestRequirePlatform_IsPlatformWithoutSlug_Returns403(t *testing.T) {
+	// Spoofed/bug case: JWT carries is_platform=true but tenant_slug
+	// is NOT 'platform'. Slug anchor catches it — defense-in-depth.
+	t.Parallel()
+	v := &fakeVerifier{
+		wantToken: "tok",
+		claims: withFreshness(&jwt.Claims{
+			TenantID:   "tenant-test",
+			TenantSlug: "some-other-slug",
+			IsPlatform: true,
+		}),
+	}
+	s := &sentinel{}
+	mw := authn.RequirePlatform(v, alwaysFresh{})(s.handler())
+	rec := httptest.NewRecorder()
+	mw.ServeHTTP(rec, newRequest(t, "Bearer tok"))
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status: got %d want 403 (slug anchor must reject IsPlatform without matching slug)", rec.Code)
 	}
 }
 

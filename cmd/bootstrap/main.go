@@ -159,16 +159,18 @@ func run(ctx context.Context) error {
 func seedSuperAdmin(ctx context.Context, tx *sql.Tx, email, password, firstName, lastName string, logger *slog.Logger) error {
 	now := time.Now().UTC()
 
-	// 1. Platform tenant.
+	// 1. Platform tenant. admin_email column was dropped in migration
+	// 20260507000008 — current admin email is derived at read time
+	// via JOIN through CompanyOwner role → person.email.
 	tenantID := ids.NewV7().String()
 	if err := tx.QueryRowContext(ctx, `
 		INSERT INTO identity.tenants (
-		    id, slug, legal_name, display_name, admin_email, status,
+		    id, slug, legal_name, display_name, status,
 		    created_at, activated_at
-		) VALUES ($1, $2, $3, $4, $5, 'active', $6, $6)
+		) VALUES ($1, $2, $3, $4, 'active', $5, $5)
 		ON CONFLICT (slug) DO UPDATE SET slug = EXCLUDED.slug
 		RETURNING id
-	`, tenantID, platformTenantSlug, platformLegalName, platformDispName, email, now).
+	`, tenantID, platformTenantSlug, platformLegalName, platformDispName, now).
 		Scan(&tenantID); err != nil {
 		return fmt.Errorf("upsert platform tenant: %w", err)
 	}

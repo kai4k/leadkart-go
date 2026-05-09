@@ -4,7 +4,7 @@
 
 ---
 
-## Current state (updated 2026-05-06)
+## Current state (updated 2026-05-10)
 
 **Tagged releases on `main`:**
 - `v0.1.0` — Phase 0 / foundation baseline. Identity domain layer + sqlc adapters + JWT issuer + outbox forwarder.
@@ -23,14 +23,21 @@
   - ADR 0036 — Permission model
 - Audit sweep: Go 1.26.2 + golangci-lint v2.12.2 + 31 anti-pattern fixes (modern stdlib idioms + LeadKart doctrine bans).
 
+**Phase 1.5 hardening shipped (post-Phase-1, pre-Phase-2; merged via PRs through 2026-05-10):**
+- `cmd/bootstrap` CLI — env-driven SuperAdmin + platform-tenant seed (Stripe/Plaid canon: data seeding lives outside migrations). Idempotent ON CONFLICT.
+- Single-JOIN auth-routing in login (Brandon Mitchell / DHH 2024-2026 canon over the legacy denormalised auth_routing-table approach). Saves one network roundtrip per login.
+- Migration 20260507000007 — per-caller idempotency scoping.
+- Migration 20260507000008 — DROP `tenants.admin_email` (denormalised, never auto-synced); ADD `tenant_memberships.created_by_membership_id` + `persons.created_by_person_id` audit-chain columns.
+- `command.ErrPlatformTenantUndeletable` — Suspend/MarkForDeletion/HardDelete refuse tenants holding any active SuperAdmin role.
+- `authn.RequirePlatform` slug-anchored — defense-in-depth check that JWT `is_platform=true` + `tenant_slug == "platform"` agree.
+- `authn.PlatformTenantSlug` constant + Login mints `is_platform` from `tenant.Slug() == "platform"`.
+- CI optimisation: single workflow + `dorny/paths-filter@v3`, pre-push hook (`task ci`), Taskfile `task dev` + `task hooks:install`.
+
 **Active branches:**
 - `main` — production; protected via PR-only merge.
 - `archive/vibe-phase1-attempt` — reference-only (the original vibe-coded Phase 1 attempt; never merged, lives forever for archaeology).
 
-**Open work-in-progress at handoff:**
-- `ci/run-integration-tests` (PR open) — adds a second CI job that runs the 10 `//go:build integration` test files (testcontainers Postgres). They were silently dormant in CI before this PR. Phase 2 should not start until that PR merges + we know the actual test posture.
-
-**Up next (Phase 2 — Platform module, ~5-6 weeks):** marketplace + lead credits + verification calls + Platform-tenant detection + SuperAdmin seed (deferred from Phase 1). Off `main` after the CI fix lands. See `BRD.md` + the master plan §"Phase 2".
+**Up next (Phase 2 — Platform module, ~5-6 weeks):** marketplace + lead credits + verification calls. Platform-tenant detection + SuperAdmin seed are NOW SHIPPED in 1.5 (above) — Phase 2 builds on them. See `BRD.md` + the master plan §"Phase 2".
 
 **Sibling .NET repo:** `d:\Development\LeadKart\` is the source-of-truth reference. Doctrine in its `.claude/rules/` is the canonical text the Go rebuild ports faithfully — when uncertain, that's the tiebreaker.
 

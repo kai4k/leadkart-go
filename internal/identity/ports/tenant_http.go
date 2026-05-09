@@ -263,6 +263,9 @@ func writeTenantMutationResult(w http.ResponseWriter, log *slog.Logger, r *http.
 	case errors.Is(err, tenant.ErrNotFound),
 		errors.Is(err, command.ErrTenantNotFound):
 		writeError(w, http.StatusNotFound, ErrCodeTenantNotFound, "")
+	case errors.Is(err, command.ErrPlatformTenantUndeletable):
+		writeError(w, http.StatusUnprocessableEntity, ErrCodePlatformTenantUndeletable,
+			"this tenant holds an active SuperAdmin role and cannot be deleted via the standard lifecycle API")
 	case errors.Is(err, tenant.ErrInvalid):
 		writeError(w, http.StatusUnprocessableEntity, ErrCodeTenantInvalid, err.Error())
 	default:
@@ -280,7 +283,6 @@ func projectViewToDto(v query.TenantView) TenantDto {
 		Slug:                v.Slug,
 		LegalName:           v.LegalName,
 		DisplayName:         v.DisplayName,
-		AdminEmail:          v.AdminEmail,
 		Status:              v.Status,
 		CreatedAt:           v.CreatedAt,
 		ActivatedAt:         v.ActivatedAt,
