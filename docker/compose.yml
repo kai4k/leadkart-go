@@ -65,6 +65,15 @@ services:
     container_name: leadkart-migrate
     environment:
       LEADKART_POSTGRES__DSN: "${LEADKART_POSTGRES__DSN:-postgres://leadkart:leadkart_dev@postgres:5432/leadkart?sslmode=disable}"
+      # SuperAdmin bootstrap envs forwarded ONLY to the migrate
+      # container — the long-running api service never sees them.
+      # Migration's seed_superadmin.go reads these at apply-time +
+      # skips with WARN if absent. Per security canon: short-lived
+      # job sees the cred, the long-lived service does not.
+      LEADKART_SUPERADMIN__EMAIL: "${LEADKART_SUPERADMIN__EMAIL:-}"
+      LEADKART_SUPERADMIN__PASSWORD: "${LEADKART_SUPERADMIN__PASSWORD:-}"
+      LEADKART_SUPERADMIN__FIRST_NAME: "${LEADKART_SUPERADMIN__FIRST_NAME:-}"
+      LEADKART_SUPERADMIN__LAST_NAME: "${LEADKART_SUPERADMIN__LAST_NAME:-}"
     command: ["up"]
     depends_on:
       postgres:
