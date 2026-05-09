@@ -269,23 +269,32 @@ tasks:
   # =====================================================================
 
   docker:env:
-    desc: 'Mint a local docker/.env with random JWT key + SuperAdmin creds (idempotent — skips if file exists).'
+    desc: 'Mint a local docker/.env with random JWT key + fixed-memorable SuperAdmin creds (idempotent — skips if file exists).'
     status:
       - test -f docker/.env
     cmds:
       - mkdir -p docker
+      # Fixed dev SuperAdmin creds per repo convention. Never reach
+      # production: the JWT signing-key entropy gate + the secrets
+      # validator's placeholder check would refuse a non-prod boot
+      # before this hash matters. Rotate via the platform admin UI
+      # post-boot for any environment that's not your laptop.
       - |
         cat > docker/.env <<EOF
-        # Auto-minted by `task docker:env` for local dev. Throwaway creds.
+        # Auto-minted by \`task docker:env\` for local dev. Throwaway creds.
         # Rotate via the platform admin UI before any non-dev use.
         LEADKART_JWT__KEY_ID=local-dev-$(date +%s)
         LEADKART_JWT__SIGNING_KEY=$(openssl rand -hex 32)
         LEADKART_SUPERADMIN__EMAIL=superadmin@leadkart.local
-        LEADKART_SUPERADMIN__PASSWORD=$(openssl rand -hex 16)
+        LEADKART_SUPERADMIN__PASSWORD=LeadKart!Dev2026
         LEADKART_SUPERADMIN__FIRST_NAME=Platform
         LEADKART_SUPERADMIN__LAST_NAME=SuperAdmin
         EOF
-      - 'echo "wrote docker/.env (SuperAdmin creds inside; cat docker/.env to read)"'
+      - 'echo ""'
+      - 'echo "  wrote docker/.env"'
+      - 'echo "  superadmin email:    superadmin@leadkart.local"'
+      - 'echo "  superadmin password: LeadKart!Dev2026"'
+      - 'echo ""'
 
   docker:build:
     desc: Build api + migrate images locally via docker buildx
