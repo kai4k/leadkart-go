@@ -24,9 +24,9 @@ import (
 // facade actually caches (not just calls the factory twice and gets
 // the same value).
 type fakePersonReader struct {
-	id     person.ID
-	stamp  *atomic.Value // string
-	calls  *atomic.Int64
+	id      person.ID
+	stamp   *atomic.Value // string
+	calls   *atomic.Int64
 	missing bool
 }
 

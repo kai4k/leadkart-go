@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/leadkart/leadkart-go/internal/identity/adapters/db"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/refreshtoken"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
@@ -28,12 +29,12 @@ import (
 type RefreshTokenFamilyRepository struct {
 	pool *pgxpool.Pool
 	tx   *pg.Transactor
-	q    *Queries
+	q    *db.Queries
 }
 
 // NewRefreshTokenFamilyRepository wires the repository.
 func NewRefreshTokenFamilyRepository(pool *pgxpool.Pool, tx *pg.Transactor) *RefreshTokenFamilyRepository {
-	return &RefreshTokenFamilyRepository{pool: pool, tx: tx, q: New(pool)}
+	return &RefreshTokenFamilyRepository{pool: pool, tx: tx, q: db.New(pool)}
 }
 
 // Add persists a brand-new family + its first token from [refreshtoken.NewFamily].
@@ -169,7 +170,7 @@ func (r *RefreshTokenFamilyRepository) ListActiveForPerson(ctx context.Context, 
 
 // ----- Helpers ---------------------------------------------------------------
 
-func insertFamilyRow(ctx context.Context, q *Queries, f *refreshtoken.Family) error {
+func insertFamilyRow(ctx context.Context, q *db.Queries, f *refreshtoken.Family) error {
 	uid, err := parseFamilyID(f.ID())
 	if err != nil {
 		return err
@@ -182,7 +183,7 @@ func insertFamilyRow(ctx context.Context, q *Queries, f *refreshtoken.Family) er
 	if err != nil {
 		return err
 	}
-	err = q.InsertRefreshTokenFamily(ctx, InsertRefreshTokenFamilyParams{
+	err = q.InsertRefreshTokenFamily(ctx, db.InsertRefreshTokenFamilyParams{
 		ID:           pgUUID(uid),
 		PersonID:     pgUUID(pid),
 		TenantID:     pgUUID(tid),
@@ -198,12 +199,12 @@ func insertFamilyRow(ctx context.Context, q *Queries, f *refreshtoken.Family) er
 	return nil
 }
 
-func persistFamilyState(ctx context.Context, q *Queries, f *refreshtoken.Family) error {
+func persistFamilyState(ctx context.Context, q *db.Queries, f *refreshtoken.Family) error {
 	uid, err := parseFamilyID(f.ID())
 	if err != nil {
 		return err
 	}
-	err = q.UpdateRefreshTokenFamily(ctx, UpdateRefreshTokenFamilyParams{
+	err = q.UpdateRefreshTokenFamily(ctx, db.UpdateRefreshTokenFamilyParams{
 		ID:           pgUUID(uid),
 		LastUsedAt:   pgRequiredTimestamp(f.LastUsedAt()),
 		RevokedAt:    pgTimestamp(f.RevokedAt()),
@@ -215,7 +216,7 @@ func persistFamilyState(ctx context.Context, q *Queries, f *refreshtoken.Family)
 	return nil
 }
 
-func upsertFamilyTokens(ctx context.Context, q *Queries, f *refreshtoken.Family) error {
+func upsertFamilyTokens(ctx context.Context, q *db.Queries, f *refreshtoken.Family) error {
 	fid, err := parseFamilyID(f.ID())
 	if err != nil {
 		return err
@@ -240,7 +241,7 @@ func upsertFamilyTokens(ctx context.Context, q *Queries, f *refreshtoken.Family)
 			}
 			replacedBy = pgUUIDOpt(rb)
 		}
-		err = q.UpsertRefreshToken(ctx, UpsertRefreshTokenParams{
+		err = q.UpsertRefreshToken(ctx, db.UpsertRefreshTokenParams{
 			ID:           pgUUID(tid),
 			FamilyID:     pgUUID(fid),
 			TokenHash:    t.Hash().String(),
@@ -277,7 +278,7 @@ func drainFamilyEvents(ctx context.Context, tx pgx.Tx, f *refreshtoken.Family) e
 	return writeOutboxEvents(ctx, tx, tid, mapped)
 }
 
-func loadFamilyByID(ctx context.Context, q *Queries, id refreshtoken.FamilyID) (*refreshtoken.Family, error) {
+func loadFamilyByID(ctx context.Context, q *db.Queries, id refreshtoken.FamilyID) (*refreshtoken.Family, error) {
 	uid, err := parseFamilyID(id)
 	if err != nil {
 		return nil, err
@@ -292,7 +293,7 @@ func loadFamilyByID(ctx context.Context, q *Queries, id refreshtoken.FamilyID) (
 	return hydrateFamily(ctx, q, row)
 }
 
-func hydrateFamily(ctx context.Context, q *Queries, row IdentityRefreshTokenFamily) (*refreshtoken.Family, error) {
+func hydrateFamily(ctx context.Context, q *db.Queries, row db.IdentityRefreshTokenFamily) (*refreshtoken.Family, error) {
 	tokens, err := q.ListRefreshTokensInFamily(ctx, row.ID)
 	if err != nil {
 		return nil, fmt.Errorf("refresh token repo: list tokens: %w", err)

@@ -3,7 +3,7 @@
 //   sqlc v1.30.0
 // source: memberships.sql
 
-package adapters
+package db
 
 import (
 	"context"
@@ -28,7 +28,7 @@ WHERE  membership_id = $1
 
 // Full clear. UpdateByID's persist step uses this + per-role InsertRoleAssignment
 // to project the aggregate's current RoleAssignments slice (replace-all
-// semantics — simpler than per-row diff tracking, idempotent).
+// semantics â€” simpler than per-row diff tracking, idempotent).
 func (q *Queries) DeleteRoleAssignmentsByMembership(ctx context.Context, membershipID pgtype.UUID) error {
 	_, err := q.db.Exec(ctx, deleteRoleAssignmentsByMembership, membershipID)
 	return err
@@ -111,13 +111,13 @@ type InsertMembershipParams struct {
 	CreatedByMembershipID pgtype.UUID
 }
 
-// Membership queries — identity.tenant_memberships is RLS+FORCE.
+// Membership queries â€” identity.tenant_memberships is RLS+FORCE.
 // Reads through this query path see only the current tenant's rows
 // unless app.is_platform=true. Cross-tenant login resolution goes
 // through GetPersonAndActiveMembershipByEmail (in persons.sql) under
-// TxScopePlatform — single-roundtrip JOIN against the partial-unique
+// TxScopePlatform â€” single-roundtrip JOIN against the partial-unique
 // index uq_memberships_person_active.
-// created_by_membership_id is the audit chain — who invited this
+// created_by_membership_id is the audit chain â€” who invited this
 // user. NULL for self-bootstrapped paths (RegisterTenant first
 // admin, SuperAdmin via cmd/bootstrap). Composite FK to
 // (id, tenant_id) prevents cross-tenant audit-chain spoofing per
@@ -148,7 +148,7 @@ type InsertPermissionOverrideParams struct {
 	UpdatedAt      pgtype.Timestamptz
 }
 
-// Per-Membership permission overlay. kind ∈ {'granted', 'revoked'} —
+// Per-Membership permission overlay. kind âˆˆ {'granted', 'revoked'} â€”
 // the domain layer guarantees a permission_name appears at most once
 // per Membership (see Membership.GrantPermission / RevokePermission
 // auto-suppression).
@@ -177,7 +177,7 @@ type InsertRoleAssignmentParams struct {
 }
 
 // Junction row. Caller MUST guarantee role.tenant_id == membership.tenant_id;
-// the composite FK on (membership_id, tenant_id) → tenant_memberships(id, tenant_id)
+// the composite FK on (membership_id, tenant_id) â†’ tenant_memberships(id, tenant_id)
 // enforces this at the schema level.
 func (q *Queries) InsertRoleAssignment(ctx context.Context, arg InsertRoleAssignmentParams) error {
 	_, err := q.db.Exec(ctx, insertRoleAssignment,
@@ -241,7 +241,7 @@ FROM   identity.tenant_memberships
 ORDER  BY joined_at
 `
 
-// Cross-membership query under tenant scope — RLS filters to the
+// Cross-membership query under tenant scope â€” RLS filters to the
 // current tenant via SET LOCAL app.tenant_id. Used by tenant-admin
 // "manage users" UIs.
 func (q *Queries) ListMembershipsInCurrentTenant(ctx context.Context) ([]IdentityTenantMembership, error) {
@@ -410,8 +410,8 @@ type UpdateMembershipProfileParams struct {
 }
 
 // Per-tenant profile fields. designation/department/status_message default
-// to ” (NOT NULL DEFAULT ”); reports_to is NULLable (top-of-tree). Caller
-// (UpdateByID) writes the aggregate's current state — no per-field diff.
+// to â€ (NOT NULL DEFAULT â€); reports_to is NULLable (top-of-tree). Caller
+// (UpdateByID) writes the aggregate's current state â€” no per-field diff.
 func (q *Queries) UpdateMembershipProfile(ctx context.Context, arg UpdateMembershipProfileParams) error {
 	_, err := q.db.Exec(ctx, updateMembershipProfile,
 		arg.ID,

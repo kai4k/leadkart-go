@@ -3,7 +3,7 @@
 //   sqlc v1.30.0
 // source: persons.sql
 
-package adapters
+package db
 
 import (
 	"context"
@@ -83,7 +83,7 @@ type GetPersonAndActiveMembershipByEmailRow struct {
 // identity.persons (global, non-RLS) to the Person's at-most-one
 // Active Membership via the partial-unique index
 // `uq_memberships_person_active`. LEFT JOIN so a Person without an
-// Active Membership still surfaces — the login handler maps that
+// Active Membership still surfaces â€” the login handler maps that
 // to the same generic invalid_credentials response.
 //
 // All membership_* columns are nullable in the result; sqlc maps
@@ -91,7 +91,7 @@ type GetPersonAndActiveMembershipByEmailRow struct {
 //
 // Roles + permission overrides are fetched separately by the caller
 // (different access pattern, different caching story). This query
-// saves the persons→memberships network roundtrip — the dominant
+// saves the personsâ†’memberships network roundtrip â€” the dominant
 // modern-canon optimisation per Brandon Mitchell / Brandur Leach
 // "Postgres scales further than you think". Materialised views or
 // denormalised auth_routing tables (Stripe-2014 / Auth0 patterns)
@@ -333,7 +333,7 @@ type InsertPersonParams struct {
 	CreatedByPersonID           pgtype.UUID
 }
 
-// Person queries — identity.persons is non-RLS (global identity).
+// Person queries â€” identity.persons is non-RLS (global identity).
 // Email is globally unique; lookup by email is the entry point for login
 // + password-reset + email-change flows per multi-tenancy.md "Identity model".
 func (q *Queries) InsertPerson(ctx context.Context, arg InsertPersonParams) error {

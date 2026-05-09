@@ -3,7 +3,7 @@
 //   sqlc v1.30.0
 // source: outbox.sql
 
-package adapters
+package db
 
 import (
 	"context"
@@ -26,7 +26,7 @@ type InsertOutboxEventParams struct {
 	OccurredAt pgtype.Timestamptz
 }
 
-// Outbox queries — identity.outbox is RLS+FORCE per ADR 0027 ("outbox
+// Outbox queries â€” identity.outbox is RLS+FORCE per ADR 0027 ("outbox
 // table doubles as audit log"). Insert happens inside the same tx as
 // aggregate state (Brandur "events table" pattern). Forwarder runs
 // under platform-bypass to drain.

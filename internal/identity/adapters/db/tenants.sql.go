@@ -3,7 +3,7 @@
 //   sqlc v1.30.0
 // source: tenants.sql
 
-package adapters
+package db
 
 import (
 	"context"
@@ -193,7 +193,7 @@ type InsertTenantParams struct {
 	HardDeletedAt             pgtype.Timestamptz
 }
 
-// Tenant queries — identity.tenants is non-RLS (each row IS a tenant).
+// Tenant queries â€” identity.tenants is non-RLS (each row IS a tenant).
 // Lookups are unscoped; tenant resolution is the load-bearing isolation
 // elsewhere (membership lookup binds the tenant_id GUC for RLS).
 func (q *Queries) InsertTenant(ctx context.Context, arg InsertTenantParams) error {
@@ -248,7 +248,7 @@ FROM   identity.tenants
 ORDER  BY created_at DESC
 `
 
-// Cross-tenant listing — Platform-operator path only. The aggregate
+// Cross-tenant listing â€” Platform-operator path only. The aggregate
 // table is non-RLS, so this returns every row regardless of the
 // caller's tenant context. The HTTP layer gates on RequirePlatform
 // before dispatching here.
@@ -377,7 +377,7 @@ type UpdateTenantParams struct {
 // Activate + Suspend + MarkForDeletion + RestoreFromDeletion +
 // HardDelete. Repository writes whatever the aggregate currently says.
 //
-// admin_email removed in migration 20260507000008 — current admin
+// admin_email removed in migration 20260507000008 â€” current admin
 // email is derived at read-time via JOIN through CompanyOwner role.
 func (q *Queries) UpdateTenant(ctx context.Context, arg UpdateTenantParams) error {
 	_, err := q.db.Exec(ctx, updateTenant,

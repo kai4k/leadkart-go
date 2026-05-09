@@ -16,6 +16,7 @@ import (
 	"github.com/leadkart/leadkart-go/internal/common/phone"
 	"github.com/leadkart/leadkart-go/internal/common/postaladdress"
 	"github.com/leadkart/leadkart-go/internal/common/slug"
+	"github.com/leadkart/leadkart-go/internal/identity/adapters/db"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 	"github.com/leadkart/leadkart-go/internal/platform/pg"
 )
@@ -26,18 +27,18 @@ import (
 // outbox table's RLS WITH CHECK policy. Reads bypass the transactor
 // since the tenants table has no policies attached.
 //
-// The repository owns domain↔row mapping; sqlc-generated *Queries hold
+// The repository owns domain↔row mapping; sqlc-generated *db.Queries hold
 // the SQL. Aggregates stay framework-free.
 type TenantRepository struct {
 	pool *pgxpool.Pool
 	tx   *pg.Transactor
-	q    *Queries // direct (read path); writes go through tx.WithinTx + WithTx
+	q    *db.Queries // direct (read path); writes go through tx.WithinTx + WithTx
 }
 
 // NewTenantRepository wires the repository against a connection pool +
 // transactor.
 func NewTenantRepository(pool *pgxpool.Pool, tx *pg.Transactor) *TenantRepository {
-	return &TenantRepository{pool: pool, tx: tx, q: New(pool)}
+	return &TenantRepository{pool: pool, tx: tx, q: db.New(pool)}
 }
 
 // Add satisfies [tenant.Repository].
@@ -138,7 +139,7 @@ func (r *TenantRepository) HardDeleteRow(ctx context.Context, id tenant.ID) erro
 
 // ----- Helpers ---------------------------------------------------------------
 
-func loadTenant(ctx context.Context, q *Queries, id tenant.ID) (*tenant.Tenant, error) {
+func loadTenant(ctx context.Context, q *db.Queries, id tenant.ID) (*tenant.Tenant, error) {
 	uid, err := parseTenantID(id)
 	if err != nil {
 		return nil, err
@@ -153,7 +154,7 @@ func loadTenant(ctx context.Context, q *Queries, id tenant.ID) (*tenant.Tenant, 
 	return rowToTenant(row)
 }
 
-func insertTenantRow(ctx context.Context, q *Queries, t *tenant.Tenant) error {
+func insertTenantRow(ctx context.Context, q *db.Queries, t *tenant.Tenant) error {
 	uid, err := parseTenantID(t.ID())
 	if err != nil {
 		return err
@@ -163,7 +164,7 @@ func insertTenantRow(ctx context.Context, q *Queries, t *tenant.Tenant) error {
 	addr := contact.Address()
 	policy := t.Settings().PasswordPolicy()
 	prefs := t.DisplayPreferences()
-	err = q.InsertTenant(ctx, InsertTenantParams{
+	err = q.InsertTenant(ctx, db.InsertTenantParams{
 		ID:                        pgUUID(uid),
 		Slug:                      t.Slug().String(),
 		LegalName:                 t.LegalName(),
@@ -204,7 +205,7 @@ func insertTenantRow(ctx context.Context, q *Queries, t *tenant.Tenant) error {
 	return nil
 }
 
-func persistTenant(ctx context.Context, q *Queries, t *tenant.Tenant) error {
+func persistTenant(ctx context.Context, q *db.Queries, t *tenant.Tenant) error {
 	uid, err := parseTenantID(t.ID())
 	if err != nil {
 		return err
@@ -214,7 +215,7 @@ func persistTenant(ctx context.Context, q *Queries, t *tenant.Tenant) error {
 	addr := contact.Address()
 	policy := t.Settings().PasswordPolicy()
 	prefs := t.DisplayPreferences()
-	err = q.UpdateTenant(ctx, UpdateTenantParams{
+	err = q.UpdateTenant(ctx, db.UpdateTenantParams{
 		ID:                        pgUUID(uid),
 		LegalName:                 t.LegalName(),
 		DisplayName:               t.DisplayName(),
@@ -275,13 +276,13 @@ func drainTenantEvents(ctx context.Context, tx pgx.Tx, t *tenant.Tenant) error {
 	return writeOutboxEvents(ctx, tx, uid, mapped)
 }
 
-// rowToTenant projects a sqlc-generated [IdentityTenant] row into the
+// rowToTenant projects a sqlc-generated [db.IdentityTenant] row into the
 // domain aggregate. sqlc unifies the row type across GetTenantByID +
 // GetTenantBySlug + ListAllTenants because the SELECT column lists
 // match — one projector handles all three call sites.
 //
 //nolint:gocyclo // Mechanical projection — readability beats helper-function indirection here.
-func rowToTenant(row IdentityTenant) (*tenant.Tenant, error) {
+func rowToTenant(row db.IdentityTenant) (*tenant.Tenant, error) {
 	tID := tenant.ID(uuidFromPg(row.ID).String())
 	s, err := slug.New(row.Slug)
 	if err != nil {
@@ -345,9 +346,9 @@ func buildStatutory(gstStr, panStr, drugLicenceStr string) (tenant.Statutory, er
 		return tenant.Statutory{}, nil
 	}
 	var (
-		g  gst.Number
-		p  pan.Number
-		dl druglicence.Number
+		g   gst.Number
+		p   pan.Number
+		dl  druglicence.Number
 		err error
 	)
 	if gstStr != "" {
@@ -375,9 +376,9 @@ func buildAdminContact(phoneStr, street, city, district, state, stateCode, pinco
 		return tenant.AdminContact{}, nil
 	}
 	var (
-		ph     phone.Number
-		addr   postaladdress.Address
-		err    error
+		ph   phone.Number
+		addr postaladdress.Address
+		err  error
 	)
 	if phoneStr != "" {
 		if ph, err = phone.New(phoneStr); err != nil {

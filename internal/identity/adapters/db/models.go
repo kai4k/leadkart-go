@@ -2,7 +2,7 @@
 // versions:
 //   sqlc v1.30.0
 
-package adapters
+package db
 
 import (
 	"github.com/jackc/pgx/v5/pgtype"
@@ -16,13 +16,13 @@ type AppCommandIdempotency struct {
 	ResponseBody   []byte
 	CreatedAt      pgtype.Timestamptz
 	ExpiresAt      pgtype.Timestamptz
-	// Per-caller scoping per Stripe Idempotency-Key canon. Tenant ID for tenant requests, "platform:<user>" for operator paths, "anon:<ip>" for unauth (defense-in-depth — middleware should not be on unauth routes).
+	// Per-caller scoping per Stripe Idempotency-Key canon. Tenant ID for tenant requests, "platform:<user>" for operator paths, "anon:<ip>" for unauth (defense-in-depth â€” middleware should not be on unauth routes).
 	CallerID string
 	// Captured response headers for verbatim replay (Content-Type minimum; ETag / X-Request-Id when set).
 	ResponseHeaders []byte
 }
 
-// Per-request operator impersonation activity. Indexed on operator + target tenant for forensic queries. 7-year retention per SOC2 CC4.1 / DPDP §12.
+// Per-request operator impersonation activity. Indexed on operator + target tenant for forensic queries. 7-year retention per SOC2 CC4.1 / DPDP Â§12.
 type BuildingblocksAdminImpersonationAudit struct {
 	ID             pgtype.UUID
 	SessionID      pgtype.UUID
@@ -50,7 +50,7 @@ type BuildingblocksAuditLogEntry struct {
 	Payload       []byte
 }
 
-// Cross-tenant email→tenant index for login. NOT RLS-scoped (intentional — login flow predates tenant context). Maintained via Watermill events.
+// Cross-tenant emailâ†’tenant index for login. NOT RLS-scoped (intentional â€” login flow predates tenant context). Maintained via Watermill events.
 type IdentityAuthRouting struct {
 	Email          string
 	PersonID       pgtype.UUID
@@ -58,7 +58,7 @@ type IdentityAuthRouting struct {
 	UpdatedAt      pgtype.Timestamptz
 }
 
-// Per-Membership permission overlay. Effective set = role union ∪ granted \ revoked.
+// Per-Membership permission overlay. Effective set = role union âˆª granted \ revoked.
 type IdentityMembershipPermissionOverride struct {
 	MembershipID   pgtype.UUID
 	PermissionName string
@@ -99,7 +99,7 @@ type IdentityPerson struct {
 	PendingEmailChangeNewEmail  *string
 	PendingEmailChangeTokenHash *string
 	PendingEmailChangeExpiresAt pgtype.Timestamptz
-	// Audit chain — Person of the user who created this row globally. NULL = system-bootstrapped (SuperAdmin, first-admin via RegisterTenant). Allows cross-tenant lookup of "who originally onboarded this user."
+	// Audit chain â€” Person of the user who created this row globally. NULL = system-bootstrapped (SuperAdmin, first-admin via RegisterTenant). Allows cross-tenant lookup of "who originally onboarded this user."
 	CreatedByPersonID pgtype.UUID
 }
 
@@ -122,7 +122,7 @@ type IdentityRefreshToken struct {
 	ReplacedByID pgtype.UUID
 }
 
-// Refresh-token family per RFC 9700 §4.13 + ADR 0011. NOT tenant-scoped — session-management infrastructure.
+// Refresh-token family per RFC 9700 Â§4.13 + ADR 0011. NOT tenant-scoped â€” session-management infrastructure.
 type IdentityRefreshTokenFamily struct {
 	ID           pgtype.UUID
 	PersonID     pgtype.UUID
@@ -149,7 +149,7 @@ type IdentityRole struct {
 	DeletedBy       *string
 }
 
-// Membership ↔ Role junction with denormalised tenant_id. Composite FK ensures no cross-tenant role assignment.
+// Membership â†” Role junction with denormalised tenant_id. Composite FK ensures no cross-tenant role assignment.
 type IdentityRoleAssignment struct {
 	MembershipID pgtype.UUID
 	RoleID       pgtype.UUID
@@ -193,7 +193,7 @@ type IdentityTenant struct {
 	HardDeletedAt             pgtype.Timestamptz
 }
 
-// Per-tenant junction (Person ↔ Tenant). Tenant-scoped, FORCE RLS. Single-Active-Membership invariant via partial unique index.
+// Per-tenant junction (Person â†” Tenant). Tenant-scoped, FORCE RLS. Single-Active-Membership invariant via partial unique index.
 type IdentityTenantMembership struct {
 	ID            pgtype.UUID
 	PersonID      pgtype.UUID
@@ -205,6 +205,6 @@ type IdentityTenantMembership struct {
 	Department    string
 	StatusMessage string
 	ReportsTo     pgtype.UUID
-	// Audit chain — Membership of the user who created this row. NULL = system-bootstrapped (SuperAdmin, first-admin during tenant onboarding). Composite FK to (id, tenant_id) prevents cross-tenant spoofing.
+	// Audit chain â€” Membership of the user who created this row. NULL = system-bootstrapped (SuperAdmin, first-admin during tenant onboarding). Composite FK to (id, tenant_id) prevents cross-tenant spoofing.
 	CreatedByMembershipID pgtype.UUID
 }

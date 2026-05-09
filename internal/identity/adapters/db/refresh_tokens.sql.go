@@ -3,7 +3,7 @@
 //   sqlc v1.30.0
 // source: refresh_tokens.sql
 
-package adapters
+package db
 
 import (
 	"context"
@@ -18,7 +18,7 @@ FROM   identity.refresh_tokens
 WHERE  token_hash = $1
 `
 
-// Single indexed lookup by token hash — the rotation flow's entry point.
+// Single indexed lookup by token hash â€” the rotation flow's entry point.
 // Returns the token row; caller resolves the family via family_id.
 func (q *Queries) GetRefreshTokenByHash(ctx context.Context, tokenHash string) (IdentityRefreshToken, error) {
 	row := q.db.QueryRow(ctx, getRefreshTokenByHash, tokenHash)
@@ -78,7 +78,7 @@ type InsertRefreshTokenFamilyParams struct {
 	RevokeReason *string
 }
 
-// Refresh-token queries — both family and child-token tables are non-RLS
+// Refresh-token queries â€” both family and child-token tables are non-RLS
 // (session-management infrastructure). Token-hash uniqueness is the
 // load-bearing isolation per Auth0/Okta canon. tenant_id travels as
 // data column for context, not as RLS scope.
