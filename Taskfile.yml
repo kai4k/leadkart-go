@@ -268,40 +268,62 @@ tasks:
   # Docker (dev stack via compose --profile full)
   # =====================================================================
 
+  docker:env:
+    desc: 'Mint a local docker/.env with random JWT key + SuperAdmin creds (idempotent — skips if file exists).'
+    status:
+      - test -f docker/.env
+    cmds:
+      - mkdir -p docker
+      - |
+        cat > docker/.env <<EOF
+        # Auto-minted by `task docker:env` for local dev. Throwaway creds.
+        # Rotate via the platform admin UI before any non-dev use.
+        LEADKART_JWT__KEY_ID=local-dev-$(date +%s)
+        LEADKART_JWT__SIGNING_KEY=$(openssl rand -hex 32)
+        LEADKART_SUPERADMIN__EMAIL=superadmin@leadkart.local
+        LEADKART_SUPERADMIN__PASSWORD=$(openssl rand -hex 16)
+        LEADKART_SUPERADMIN__FIRST_NAME=Platform
+        LEADKART_SUPERADMIN__LAST_NAME=SuperAdmin
+        EOF
+      - 'echo "wrote docker/.env (SuperAdmin creds inside; cat docker/.env to read)"'
+
   docker:build:
     desc: Build api + migrate images locally via docker buildx
+    deps: [docker:env]
     cmds:
-      - docker compose -f {{.COMPOSE_FILE}} --profile full build
+      - docker compose --env-file docker/.env -f {{.COMPOSE_FILE}} --profile full build
 
   docker:up:
     desc: Start postgres + redis only (host-side `air` workflow)
+    deps: [docker:env]
     cmds:
-      - docker compose -f {{.COMPOSE_FILE}} up -d
+      - docker compose --env-file docker/.env -f {{.COMPOSE_FILE}} up -d
 
   docker:up:full:
     desc: Start full stack (postgres + redis + migrate + api built locally)
+    deps: [docker:env]
     cmds:
-      - docker compose -f {{.COMPOSE_FILE}} --profile full up -d --build
+      - docker compose --env-file docker/.env -f {{.COMPOSE_FILE}} --profile full up -d --build
 
   docker:down:
     desc: Stop and remove all containers (preserves volumes)
     cmds:
-      - docker compose -f {{.COMPOSE_FILE}} --profile full down
+      - docker compose --env-file docker/.env -f {{.COMPOSE_FILE}} --profile full down
 
   docker:wipe:
     desc: Stop + remove containers AND volumes (full reset)
     cmds:
-      - docker compose -f {{.COMPOSE_FILE}} --profile full down -v
+      - docker compose --env-file docker/.env -f {{.COMPOSE_FILE}} --profile full down -v
 
   docker:logs:
     desc: 'Tail logs from a service: task docker:logs -- api  (default: api)'
     cmds:
-      - 'docker compose -f {{.COMPOSE_FILE}} --profile full logs -f --tail=200 {{.CLI_ARGS | default "api"}}'
+      - 'docker compose --env-file docker/.env -f {{.COMPOSE_FILE}} --profile full logs -f --tail=200 {{.CLI_ARGS | default "api"}}'
 
   docker:ps:
     desc: Show stack status
     cmds:
-      - docker compose -f {{.COMPOSE_FILE}} --profile full ps
+      - docker compose --env-file docker/.env -f {{.COMPOSE_FILE}} --profile full ps
 
   # =====================================================================
   # Release (canon: GitHub Actions builds + signs; this just tags)
