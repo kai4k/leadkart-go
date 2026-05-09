@@ -117,7 +117,8 @@ func newWiredApp(t *testing.T) wiredApp {
 
 	permResolver := permissions.NewResolver(memberships, roles)
 	register := command.NewRegisterTenantHandler(tx, tenants, persons, memberships, roles)
-	login := command.NewLoginHandler(persons, memberships, families, tenants, permResolver, issuer, now, refreshTTL, dummyHash)
+	authRouter := adapters.NewAuthRouterPG(pool, tx)
+	login := command.NewLoginHandler(authRouter, families, tenants, permResolver, issuer, now, refreshTTL, dummyHash)
 	refresh := command.NewRefreshHandler(families, persons, memberships, tenants, permResolver, issuer, now, refreshTTL)
 	logout := command.NewLogoutHandler(families)
 

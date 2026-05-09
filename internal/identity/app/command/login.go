@@ -57,18 +57,40 @@ var ErrInvalidCredentials = errors.New("login: invalid credentials")
 
 // ----- Handler ---------------------------------------------------------------
 
+// AuthRouter resolves a Person + their at-most-one Active Membership
+// in a single backend roundtrip. Consumer-defined per Cheney "accept
+// interfaces, return structs"; the postgres-backed implementation
+// lives in `internal/identity/adapters/auth_router_pg.go`.
+//
+// Why this is a separate concern (not a method on person.Repository
+// or membership.Repository): the JOIN crosses two domain aggregates'
+// query surfaces. Putting the method on either repository forces a
+// cross-domain import the existing structure deliberately avoids.
+//
+// Returns:
+//
+//   - (*Person, *Membership, nil) — Person exists AND has Active Membership
+//   - (*Person, nil, nil)         — Person exists but no Active Membership
+//   - (nil, nil, person.ErrNotFound) — no Person matches the email
+//
+// The Membership returned is fully hydrated (role assignments +
+// permission overrides loaded) so the resolver can compute auth
+// claims without an additional roundtrip.
+type AuthRouter interface {
+	ResolveByEmail(ctx context.Context, e email.Address) (*person.Person, *membership.Membership, error)
+}
+
 // LoginHandler verifies credentials + issues a JWT + opens a refresh
 // token family for the resolved (Person, Tenant) Membership. Per
 // security.md "Login flow."
 type LoginHandler struct {
-	persons     person.Repository
-	memberships membership.Repository
-	families    refreshtoken.Repository
-	tenants     tenant.Repository
-	resolver    *permissions.Resolver
-	jwt         *jwt.Issuer
-	now         func() time.Time
-	refreshTTL  time.Duration
+	authRouter AuthRouter
+	families   refreshtoken.Repository
+	tenants    tenant.Repository
+	resolver   *permissions.Resolver
+	jwt        *jwt.Issuer
+	now        func() time.Time
+	refreshTTL time.Duration
 
 	// dummyHash flattens timing on the unknown-email branch. Computed
 	// once at handler construction — Argon2id verify takes ~50-200ms,
@@ -82,9 +104,15 @@ type LoginHandler struct {
 // argon2id PHC string of any throwaway password — Login uses it on the
 // unknown-email branch to flatten timing. Production wiring computes
 // it once at startup; tests may pass a precomputed constant.
+//
+// authRouter is the single-roundtrip persons+memberships JOIN
+// component (consumer-defined `AuthRouter` interface, postgres impl
+// in `internal/identity/adapters/auth_router_pg.go`). Replaces the
+// legacy two-call pair (persons.GetByEmail + memberships.GetActiveForPerson)
+// per current canon (Brandur Leach / DHH "Postgres scales further than
+// you think" — single JOIN over denormalised auth tables).
 func NewLoginHandler(
-	persons person.Repository,
-	memberships membership.Repository,
+	authRouter AuthRouter,
 	families refreshtoken.Repository,
 	tenants tenant.Repository,
 	resolver *permissions.Resolver,
@@ -97,51 +125,48 @@ func NewLoginHandler(
 		now = time.Now
 	}
 	return LoginHandler{
-		persons:     persons,
-		memberships: memberships,
-		families:    families,
-		tenants:     tenants,
-		resolver:    resolver,
-		jwt:         jwtIssuer,
-		now:         now,
-		refreshTTL:  refreshTTL,
-		dummyHash:   dummyHash,
+		authRouter: authRouter,
+		families:   families,
+		tenants:    tenants,
+		resolver:   resolver,
+		jwt:        jwtIssuer,
+		now:        now,
+		refreshTTL: refreshTTL,
+		dummyHash:  dummyHash,
 	}
 }
 
 // Handle executes the login flow per security.md "Login flow":
 //
-//  1. Lookup Person by email globally.
-//     - null: dummy Argon2 verify → ErrInvalidCredentials.
+//  1. Single-roundtrip resolve: Person + Active Membership by email.
+//     - no Person:        dummy Argon2 verify → ErrInvalidCredentials.
+//     - no Active Member: dummy Argon2 verify → ErrInvalidCredentials.
 //  2. Verify password against Person.Credential.
 //     - mismatch: ErrInvalidCredentials.
 //  3. Reject anonymised + inactive Persons → ErrInvalidCredentials.
-//  4. Find unique Active Membership for the Person.
-//     - none: ErrInvalidCredentials.
-//  5. Resolve Tenant for tenant_slug claim.
-//  6. Mint refresh token plaintext + hash; create RefreshTokenFamily.
-//  7. Issue JWT with per-Membership claims.
-//  8. Return both tokens.
+//  4. Resolve Tenant for tenant_slug claim.
+//  5. Mint refresh token plaintext + hash; create RefreshTokenFamily.
+//  6. Issue JWT with per-Membership claims.
+//  7. Return both tokens.
 //
 // The unknown-email and zero-Active-Membership paths return identical
-// errors AND take similar wall-clock time (the dummy verify covers it).
+// errors AND take similar wall-clock time (the dummy verify covers
+// both via the single resolveAndVerify helper).
+//
+// Network roundtrips: 4 in the success path (auth-routing JOIN +
+// role_assignments + permission_overrides + tenant). The auth-routing
+// JOIN replaces the historical persons-by-email + memberships-by-
+// person-id pair — see [AuthRouter] godoc for the canonical-path
+// rationale.
 func (h LoginHandler) Handle(ctx context.Context, cmd LoginCommand) (LoginResult, error) {
-	// 1+2. Lookup Person + verify password (unified branch).
-	p, err := h.resolveAndVerify(ctx, cmd)
+	// 1-3. Resolve Person + Active Membership in one roundtrip;
+	//      verify password + active/anonymised state with timing flattened.
+	p, m, err := h.resolveAndVerify(ctx, cmd)
 	if err != nil {
 		return LoginResult{}, err
 	}
 
-	// 4. Find Active Membership.
-	m, err := h.memberships.GetActiveForPerson(ctx, p.ID())
-	if err != nil {
-		if errors.Is(err, membership.ErrNotFound) {
-			return LoginResult{}, ErrInvalidCredentials
-		}
-		return LoginResult{}, fmt.Errorf("login: lookup active membership: %w", err)
-	}
-
-	// 5. Resolve tenant for slug claim.
+	// 4. Resolve tenant for slug claim.
 	tn, err := h.tenants.GetByID(ctx, m.TenantID())
 	if err != nil {
 		return LoginResult{}, fmt.Errorf("login: resolve tenant: %w", err)
@@ -230,36 +255,52 @@ func permissionNames(perms []*permission.Permission) []string {
 	return out
 }
 
-// resolveAndVerify covers steps 1-3: lookup Person, verify password,
-// reject inactive/anonymised. Unified into one helper because the
-// timing-flattening path needs to run argon2.Verify against the
-// pre-computed dummyHash on the not-found branch.
-func (h LoginHandler) resolveAndVerify(ctx context.Context, cmd LoginCommand) (*person.Person, error) {
-	p, err := h.persons.GetByEmail(ctx, cmd.Email)
+// resolveAndVerify covers steps 1-3: lookup (Person + Active
+// Membership), verify password, reject inactive/anonymised/no-active-
+// membership. Returns both aggregates so Handle can avoid the
+// separate memberships.GetActiveForPerson call.
+//
+// Every "auth failure" branch runs argon2.Verify against the
+// precomputed dummyHash before returning ErrInvalidCredentials —
+// matches wrong-password wall-clock time so an attacker can't
+// distinguish unknown-email / no-membership / anonymised /
+// suspended from wrong-password by timing.
+func (h LoginHandler) resolveAndVerify(ctx context.Context, cmd LoginCommand) (*person.Person, *membership.Membership, error) {
+	p, m, err := h.authRouter.ResolveByEmail(ctx, cmd.Email)
 	switch {
 	case errors.Is(err, person.ErrNotFound):
-		// Dummy verify — same wall-clock as the wrong-password path.
-		// Returned error is intentionally swallowed; this is a timing
-		// flattener only.
+		// Unknown email. Dummy verify keeps timing aligned with the
+		// wrong-password path. Swallow the verify error — timing is
+		// the only product here.
 		_ = argon2.Verify(cmd.Password, h.dummyHash)
-		return nil, ErrInvalidCredentials
+		return nil, nil, ErrInvalidCredentials
 	case err != nil:
-		return nil, fmt.Errorf("login: lookup person: %w", err)
+		return nil, nil, fmt.Errorf("login: resolve auth routing: %w", err)
 	}
 
 	if !p.IsActive() || p.IsAnonymised() {
 		// Same dummy timing for terminal-Person paths.
 		_ = argon2.Verify(cmd.Password, h.dummyHash)
-		return nil, ErrInvalidCredentials
+		return nil, nil, ErrInvalidCredentials
+	}
+
+	if m == nil {
+		// Person exists but has no Active Membership — same surface as
+		// unknown email per OWASP "Authentication Cheat Sheet"
+		// enumeration-safety. Real verify (not dummy) so even this
+		// branch's timing tracks the wrong-password path exactly,
+		// since the JOIN returned the actual password_hash.
+		_ = argon2.Verify(cmd.Password, p.PasswordHash().String())
+		return nil, nil, ErrInvalidCredentials
 	}
 
 	if err := argon2.Verify(cmd.Password, p.PasswordHash().String()); err != nil {
 		if errors.Is(err, argon2.ErrMismatch) || errors.Is(err, argon2.ErrFormat) {
-			return nil, ErrInvalidCredentials
+			return nil, nil, ErrInvalidCredentials
 		}
-		return nil, fmt.Errorf("login: verify password: %w", err)
+		return nil, nil, fmt.Errorf("login: verify password: %w", err)
 	}
 
-	return p, nil
+	return p, m, nil
 }
 

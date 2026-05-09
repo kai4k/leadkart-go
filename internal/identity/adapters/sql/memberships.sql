@@ -1,7 +1,9 @@
 -- Membership queries — identity.tenant_memberships is RLS+FORCE.
 -- Reads through this query path see only the current tenant's rows
--- unless app.is_platform=true. Cross-tenant resolution lives on the
--- non-RLS auth_routing index (TBD), not here.
+-- unless app.is_platform=true. Cross-tenant login resolution goes
+-- through GetPersonAndActiveMembershipByEmail (in persons.sql) under
+-- TxScopePlatform — single-roundtrip JOIN against the partial-unique
+-- index uq_memberships_person_active.
 
 -- name: InsertMembership :exec
 INSERT INTO identity.tenant_memberships (

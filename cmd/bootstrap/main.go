@@ -61,8 +61,10 @@ import (
 )
 
 const (
-	envSuperAdminEmail     = "LEADKART_SUPERADMIN__EMAIL"
-	envSuperAdminPassword  = "LEADKART_SUPERADMIN__PASSWORD"
+	envSuperAdminEmail = "LEADKART_SUPERADMIN__EMAIL"
+	// gosec G101 false positive: this is the NAME of an env var read
+	// at runtime, not a hardcoded password value.
+	envSuperAdminPassword  = "LEADKART_SUPERADMIN__PASSWORD" //nolint:gosec // G101: env var name, not a credential
 	envSuperAdminFirstName = "LEADKART_SUPERADMIN__FIRST_NAME"
 	envSuperAdminLastName  = "LEADKART_SUPERADMIN__LAST_NAME"
 
