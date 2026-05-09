@@ -77,6 +77,10 @@ RUN --mount=type=cache,target=/go/pkg/mod \
         CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
             go build -trimpath -ldflags="-s -w -X main.version=$VERSION" -o /out/migrate ./cmd/migrate; \
     fi && \
+    if [ -d ./cmd/bootstrap ]; then \
+        CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
+            go build -trimpath -ldflags="-s -w -X main.version=$VERSION" -o /out/bootstrap ./cmd/bootstrap; \
+    fi && \
     cp -r migrations /out/migrations
 # `cp -r migrations /out/migrations` — bind-mount layers don't persist
 # past the RUN, so the migrate target's `COPY --from=build /src/migrations`
@@ -165,3 +169,26 @@ COPY --from=build /out/migrations /migrations
 USER nonroot:nonroot
 ENTRYPOINT ["/migrate"]
 CMD ["up"]
+
+# ===========================================================================
+# Stage 5 — Final stage: Bootstrap (one-shot data seeder)
+# ===========================================================================
+# Idempotent SuperAdmin / platform-tenant provisioning. Runs ONCE per
+# environment (or every deploy — ON CONFLICT branches make re-runs free).
+# Per the canon split (Stripe / Plaid / GitHub): migrations stay
+# pure-SQL + data-free; data seeding happens through this CLI run by
+# the operator at deploy time.
+FROM cgr.dev/chainguard/static:latest AS bootstrap
+
+ARG VERSION=dev
+LABEL org.opencontainers.image.title="leadkart-go-bootstrap"
+LABEL org.opencontainers.image.description="LeadKart Go data-seed CLI — provisions platform tenant + SuperAdmin"
+LABEL org.opencontainers.image.source="https://github.com/kai4k/leadkart-go"
+LABEL org.opencontainers.image.licenses="Proprietary"
+LABEL org.opencontainers.image.version=$VERSION
+
+ENV TZ="UTC"
+
+COPY --from=build /out/bootstrap /bootstrap
+USER nonroot:nonroot
+ENTRYPOINT ["/bootstrap"]

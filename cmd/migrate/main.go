@@ -39,12 +39,6 @@ import (
 
 	// register pgx with database/sql
 	_ "github.com/jackc/pgx/v5/stdlib"
-
-	// Blank-import the platform Go-shaped migrations so their init()
-	// blocks register with goose's global registry before
-	// goose.RunContext collects migrations to apply. SQL files in
-	// `migrations/` are picked up alongside; goose merges by version.
-	_ "github.com/leadkart/leadkart-go/internal/platform/migrations"
 )
 
 func main() {

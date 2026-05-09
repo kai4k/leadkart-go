@@ -199,6 +199,20 @@ tasks:
       DATABASE_URL: '{{.DATABASE_URL}}'
       MIGRATIONS_DIR: '{{.MIGRATIONS_DIR}}'
 
+  bootstrap:
+    desc: 'Provision platform tenant + SuperAdmin (idempotent; reads LEADKART_SUPERADMIN__* env).'
+    cmds:
+      - go run ./cmd/bootstrap
+    env:
+      LEADKART_POSTGRES__DSN: '{{.DATABASE_URL}}'
+
+  bootstrap:status:
+    desc: 'Report bootstrap state (read-only — does not write).'
+    cmds:
+      - go run ./cmd/bootstrap --status
+    env:
+      LEADKART_POSTGRES__DSN: '{{.DATABASE_URL}}'
+
   migrate:down:
     desc: Roll back the most recent migration
     cmds:
