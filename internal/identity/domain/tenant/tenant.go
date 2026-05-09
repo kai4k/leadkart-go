@@ -45,14 +45,18 @@ const nameMaxLen = 200
 // Invariants (enforced by [New] + state transition methods):
 //   - ID and Slug are non-zero.
 //   - LegalName and DisplayName are non-empty + ≤ nameMaxLen.
-//   - AdminEmail is a validated [email.Address].
 //   - Status follows the documented state machine; transitions emit events.
+//
+// Per migration 20260507000008: the admin email is NOT stored on this
+// aggregate. The current admin email is a derived value — query the
+// CompanyOwner-role membership for this tenant + JOIN to person.email.
+// Putting it here would re-introduce the two-source-of-truth bug
+// (the field would silently drift after request-email-change flows).
 type Tenant struct {
 	id                  ID
 	slug                slug.Slug
 	legalName           string
 	displayName         string
-	adminEmail          email.Address
 	status              Status
 	statutory           Statutory    // optional Indian statutory IDs (GST/PAN/DrugLicence)
 	adminContact        AdminContact // optional admin phone + postal address
@@ -68,6 +72,12 @@ type Tenant struct {
 }
 
 // New constructs a brand-new tenant in [StatusPending].
+//
+// adminEmail is required to populate the RegisteredEvent payload
+// (downstream subscribers such as welcome-email need it as a
+// point-in-time fact). It is NOT stored on the aggregate — current
+// admin email is a derived value via the CompanyOwner-role membership
+// per migration 20260507000008.
 //
 // Returns [ErrInvalid] (wrapped with the specific failure) on invariant
 // violation. On success, the tenant has emitted a [RegisteredEvent] which
@@ -92,7 +102,7 @@ func New(id ID, s slug.Slug, legalName, displayName string, adminEmail email.Add
 		return nil, fmt.Errorf("%w: display name too long (max %d, got %d)", ErrInvalid, nameMaxLen, len(displayName))
 	}
 	if adminEmail.IsZero() {
-		return nil, fmt.Errorf("%w: admin email required", ErrInvalid)
+		return nil, fmt.Errorf("%w: admin email required for RegisteredEvent payload", ErrInvalid)
 	}
 
 	now := clock.Now()
@@ -101,7 +111,6 @@ func New(id ID, s slug.Slug, legalName, displayName string, adminEmail email.Add
 		slug:        s,
 		legalName:   legalName,
 		displayName: displayName,
-		adminEmail:  adminEmail,
 		status:      StatusPending,
 		createdAt:   now,
 	}
@@ -126,7 +135,6 @@ type Snapshot struct {
 	Slug                slug.Slug
 	LegalName           string
 	DisplayName         string
-	AdminEmail          email.Address
 	Status              Status
 	Statutory           Statutory
 	AdminContact        AdminContact
@@ -152,7 +160,6 @@ func UnmarshalFromDB(s Snapshot) *Tenant {
 		slug:                s.Slug,
 		legalName:           s.LegalName,
 		displayName:         s.DisplayName,
-		adminEmail:          s.AdminEmail,
 		status:              s.Status,
 		statutory:           s.Statutory,
 		adminContact:        s.AdminContact,
@@ -180,9 +187,6 @@ func (t *Tenant) LegalName() string { return t.legalName }
 
 // DisplayName returns the friendly name shown in UI.
 func (t *Tenant) DisplayName() string { return t.displayName }
-
-// AdminEmail returns the primary admin contact email.
-func (t *Tenant) AdminEmail() email.Address { return t.adminEmail }
 
 // Status returns the current lifecycle state.
 func (t *Tenant) Status() Status { return t.status }

@@ -63,7 +63,7 @@ func TestMembershipRepository_Add_PersistsRowAndOutboxEvent(t *testing.T) {
 	p := seedPerson(t, persons, "member@example.test")
 
 	id := membership.ID(ids.NewV7().String())
-	m, err := membership.New(id, p.ID(), tn.ID())
+	m, err := membership.New(id, p.ID(), tn.ID(), membership.ID(""))
 	if err != nil {
 		t.Fatalf("membership.New: %v", err)
 	}
@@ -103,7 +103,7 @@ func TestMembershipRepository_Add_SecondActive_ReturnsErrAlreadyActive(t *testin
 	p := seedPerson(t, persons, "switch@example.test")
 
 	// First Active Membership in tenant A.
-	mA, _ := membership.New(membership.ID(ids.NewV7().String()), p.ID(), tnA.ID())
+	mA, _ := membership.New(membership.ID(ids.NewV7().String()), p.ID(), tnA.ID(), membership.ID(""))
 	ctxA := tenancy.WithID(t.Context(), tenancy.ID(tnA.ID().String()))
 	if err := memberships.Add(ctxA, mA); err != nil {
 		t.Fatalf("first Add: %v", err)
@@ -111,7 +111,7 @@ func TestMembershipRepository_Add_SecondActive_ReturnsErrAlreadyActive(t *testin
 
 	// Second concurrent Active Membership in tenant B — partial unique
 	// index uq_memberships_person_active blocks it.
-	mB, _ := membership.New(membership.ID(ids.NewV7().String()), p.ID(), tnB.ID())
+	mB, _ := membership.New(membership.ID(ids.NewV7().String()), p.ID(), tnB.ID(), membership.ID(""))
 	ctxB := tenancy.WithID(t.Context(), tenancy.ID(tnB.ID().String()))
 	err := memberships.Add(ctxB, mB)
 	if !errors.Is(err, membership.ErrAlreadyActive) {
@@ -130,7 +130,7 @@ func TestMembershipRepository_GetByID_OutsideTenantScope_NotFound(t *testing.T) 
 	tnB := seedTenant(t, tenants)
 	p := seedPerson(t, persons, "isolation@example.test")
 
-	mA, _ := membership.New(membership.ID(ids.NewV7().String()), p.ID(), tnA.ID())
+	mA, _ := membership.New(membership.ID(ids.NewV7().String()), p.ID(), tnA.ID(), membership.ID(""))
 	ctxA := tenancy.WithID(t.Context(), tenancy.ID(tnA.ID().String()))
 	if err := memberships.Add(ctxA, mA); err != nil {
 		t.Fatalf("Add: %v", err)
@@ -156,7 +156,7 @@ func TestMembershipRepository_UpdateByID_DeactivateClearsActiveSlot(t *testing.T
 	p := seedPerson(t, persons, "rotate@example.test")
 
 	// Active in tenant A.
-	mA, _ := membership.New(membership.ID(ids.NewV7().String()), p.ID(), tnA.ID())
+	mA, _ := membership.New(membership.ID(ids.NewV7().String()), p.ID(), tnA.ID(), membership.ID(""))
 	ctxA := tenancy.WithID(t.Context(), tenancy.ID(tnA.ID().String()))
 	if err := memberships.Add(ctxA, mA); err != nil {
 		t.Fatalf("Add A: %v", err)
@@ -174,7 +174,7 @@ func TestMembershipRepository_UpdateByID_DeactivateClearsActiveSlot(t *testing.T
 	}
 
 	// Now adding an Active in B is allowed (single-Active slot freed).
-	mB, _ := membership.New(membership.ID(ids.NewV7().String()), p.ID(), tnB.ID())
+	mB, _ := membership.New(membership.ID(ids.NewV7().String()), p.ID(), tnB.ID(), membership.ID(""))
 	ctxB := tenancy.WithID(t.Context(), tenancy.ID(tnB.ID().String()))
 	if err := memberships.Add(ctxB, mB); err != nil {
 		t.Fatalf("Add B after deactivate: %v", err)
@@ -191,7 +191,7 @@ func TestMembershipRepository_GetActiveForPerson_BypassesRLS(t *testing.T) {
 	tn := seedTenant(t, tenants)
 	p := seedPerson(t, persons, "login@example.test")
 
-	mA, _ := membership.New(membership.ID(ids.NewV7().String()), p.ID(), tn.ID())
+	mA, _ := membership.New(membership.ID(ids.NewV7().String()), p.ID(), tn.ID(), membership.ID(""))
 	ctx := tenancy.WithID(t.Context(), tenancy.ID(tn.ID().String()))
 	if err := memberships.Add(ctx, mA); err != nil {
 		t.Fatalf("Add: %v", err)
@@ -247,8 +247,7 @@ func TestMembershipRepository_Add_PersistsRoleAssignmentsAndOverrides(t *testing
 
 	// Build a Membership carrying role assignments + a granted + a revoked
 	// permission overlay + non-empty profile.
-	m, err := membership.New(
-		membership.ID(ids.NewV7().String()), p.ID(), tn.ID())
+	m, err := membership.New(membership.ID(ids.NewV7().String()), p.ID(), tn.ID(), membership.ID(""))
 	if err != nil {
 		t.Fatalf("membership.New: %v", err)
 	}
@@ -322,7 +321,7 @@ func TestMembershipRepository_UpdateByID_ReplacesRoleAssignmentsAndOverrides(t *
 		}
 	}
 
-	m, _ := membership.New(membership.ID(ids.NewV7().String()), p.ID(), tn.ID())
+	m, _ := membership.New(membership.ID(ids.NewV7().String()), p.ID(), tn.ID(), membership.ID(""))
 	_ = m.AssignRole(r1.ID())
 	_ = m.AssignRole(r2.ID())
 	_ = m.GrantPermission(permission.FromConstant(permission.IdentityPermissions.Roles.View))
@@ -383,7 +382,7 @@ func TestMembershipRepository_Add_RejectsCrossTenantRoleAssignment(t *testing.T)
 		t.Fatalf("Add rB: %v", err)
 	}
 
-	m, _ := membership.New(membership.ID(ids.NewV7().String()), p.ID(), tnA.ID())
+	m, _ := membership.New(membership.ID(ids.NewV7().String()), p.ID(), tnA.ID(), membership.ID(""))
 	_ = m.AssignRole(rB.ID())
 
 	ctxA := tenancy.WithID(t.Context(), tenancy.ID(tnA.ID().String()))

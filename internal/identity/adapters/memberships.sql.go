@@ -36,7 +36,8 @@ func (q *Queries) DeleteRoleAssignmentsByMembership(ctx context.Context, members
 
 const getActiveMembershipByPersonAndTenant = `-- name: GetActiveMembershipByPersonAndTenant :one
 SELECT id, person_id, tenant_id, status, joined_at, left_at,
-       designation, department, status_message, reports_to
+       designation, department, status_message, reports_to,
+       created_by_membership_id
 FROM   identity.tenant_memberships
 WHERE  person_id = $1
   AND  tenant_id = $2
@@ -62,13 +63,15 @@ func (q *Queries) GetActiveMembershipByPersonAndTenant(ctx context.Context, arg 
 		&i.Department,
 		&i.StatusMessage,
 		&i.ReportsTo,
+		&i.CreatedByMembershipID,
 	)
 	return i, err
 }
 
 const getMembershipByID = `-- name: GetMembershipByID :one
 SELECT id, person_id, tenant_id, status, joined_at, left_at,
-       designation, department, status_message, reports_to
+       designation, department, status_message, reports_to,
+       created_by_membership_id
 FROM   identity.tenant_memberships
 WHERE  id = $1
 `
@@ -87,6 +90,7 @@ func (q *Queries) GetMembershipByID(ctx context.Context, id pgtype.UUID) (Identi
 		&i.Department,
 		&i.StatusMessage,
 		&i.ReportsTo,
+		&i.CreatedByMembershipID,
 	)
 	return i, err
 }
@@ -94,22 +98,30 @@ func (q *Queries) GetMembershipByID(ctx context.Context, id pgtype.UUID) (Identi
 const insertMembership = `-- name: InsertMembership :exec
 
 INSERT INTO identity.tenant_memberships (
-    id, person_id, tenant_id, status, joined_at
-) VALUES ($1, $2, $3, $4, $5)
+    id, person_id, tenant_id, status, joined_at, created_by_membership_id
+) VALUES ($1, $2, $3, $4, $5, $6)
 `
 
 type InsertMembershipParams struct {
-	ID       pgtype.UUID
-	PersonID pgtype.UUID
-	TenantID pgtype.UUID
-	Status   string
-	JoinedAt pgtype.Timestamptz
+	ID                    pgtype.UUID
+	PersonID              pgtype.UUID
+	TenantID              pgtype.UUID
+	Status                string
+	JoinedAt              pgtype.Timestamptz
+	CreatedByMembershipID pgtype.UUID
 }
 
 // Membership queries — identity.tenant_memberships is RLS+FORCE.
 // Reads through this query path see only the current tenant's rows
-// unless app.is_platform=true. Cross-tenant resolution lives on the
-// non-RLS auth_routing index (TBD), not here.
+// unless app.is_platform=true. Cross-tenant login resolution goes
+// through GetPersonAndActiveMembershipByEmail (in persons.sql) under
+// TxScopePlatform — single-roundtrip JOIN against the partial-unique
+// index uq_memberships_person_active.
+// created_by_membership_id is the audit chain — who invited this
+// user. NULL for self-bootstrapped paths (RegisterTenant first
+// admin, SuperAdmin via cmd/bootstrap). Composite FK to
+// (id, tenant_id) prevents cross-tenant audit-chain spoofing per
+// migration 20260507000008.
 func (q *Queries) InsertMembership(ctx context.Context, arg InsertMembershipParams) error {
 	_, err := q.db.Exec(ctx, insertMembership,
 		arg.ID,
@@ -117,6 +129,7 @@ func (q *Queries) InsertMembership(ctx context.Context, arg InsertMembershipPara
 		arg.TenantID,
 		arg.Status,
 		arg.JoinedAt,
+		arg.CreatedByMembershipID,
 	)
 	return err
 }
@@ -178,7 +191,8 @@ func (q *Queries) InsertRoleAssignment(ctx context.Context, arg InsertRoleAssign
 
 const listMembershipsForPerson = `-- name: ListMembershipsForPerson :many
 SELECT id, person_id, tenant_id, status, joined_at, left_at,
-       designation, department, status_message, reports_to
+       designation, department, status_message, reports_to,
+       created_by_membership_id
 FROM   identity.tenant_memberships
 WHERE  person_id = $1
 ORDER  BY joined_at
@@ -207,6 +221,7 @@ func (q *Queries) ListMembershipsForPerson(ctx context.Context, personID pgtype.
 			&i.Department,
 			&i.StatusMessage,
 			&i.ReportsTo,
+			&i.CreatedByMembershipID,
 		); err != nil {
 			return nil, err
 		}
@@ -220,7 +235,8 @@ func (q *Queries) ListMembershipsForPerson(ctx context.Context, personID pgtype.
 
 const listMembershipsInCurrentTenant = `-- name: ListMembershipsInCurrentTenant :many
 SELECT id, person_id, tenant_id, status, joined_at, left_at,
-       designation, department, status_message, reports_to
+       designation, department, status_message, reports_to,
+       created_by_membership_id
 FROM   identity.tenant_memberships
 ORDER  BY joined_at
 `
@@ -248,6 +264,7 @@ func (q *Queries) ListMembershipsInCurrentTenant(ctx context.Context) ([]Identit
 			&i.Department,
 			&i.StatusMessage,
 			&i.ReportsTo,
+			&i.CreatedByMembershipID,
 		); err != nil {
 			return nil, err
 		}
@@ -313,6 +330,57 @@ func (q *Queries) ListRoleAssignmentsByMembership(ctx context.Context, membershi
 			&i.RoleID,
 			&i.TenantID,
 			&i.AssignedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listSuperAdminMembershipsInTenant = `-- name: ListSuperAdminMembershipsInTenant :many
+SELECT m.id, m.person_id, m.tenant_id, m.status, m.joined_at,
+       m.left_at, m.designation, m.department, m.status_message,
+       m.reports_to, m.created_by_membership_id
+FROM   identity.tenant_memberships m
+JOIN   identity.role_assignments  ra ON ra.membership_id = m.id
+JOIN   identity.roles             r  ON r.id = ra.role_id
+WHERE  m.tenant_id     = $1
+  AND  m.status        = 'active'
+  AND  r.is_super_admin = true
+  AND  NOT r.is_deleted
+`
+
+// Returns the active Memberships in the supplied tenant that hold a
+// role flagged is_super_admin=true. Powers the platform-tenant
+// deletion guard (cmd 20260507000008): a tenant containing any
+// SuperAdmin role-holder cannot be soft-deleted via the standard
+// tenant lifecycle commands. Queryable in O(1) via the partial index
+// idx_roles_super_admin.
+func (q *Queries) ListSuperAdminMembershipsInTenant(ctx context.Context, tenantID pgtype.UUID) ([]IdentityTenantMembership, error) {
+	rows, err := q.db.Query(ctx, listSuperAdminMembershipsInTenant, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []IdentityTenantMembership
+	for rows.Next() {
+		var i IdentityTenantMembership
+		if err := rows.Scan(
+			&i.ID,
+			&i.PersonID,
+			&i.TenantID,
+			&i.Status,
+			&i.JoinedAt,
+			&i.LeftAt,
+			&i.Designation,
+			&i.Department,
+			&i.StatusMessage,
+			&i.ReportsTo,
+			&i.CreatedByMembershipID,
 		); err != nil {
 			return nil, err
 		}

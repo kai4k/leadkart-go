@@ -280,7 +280,6 @@ func projectViewToDto(v query.TenantView) TenantDto {
 		Slug:                v.Slug,
 		LegalName:           v.LegalName,
 		DisplayName:         v.DisplayName,
-		AdminEmail:          v.AdminEmail,
 		Status:              v.Status,
 		CreatedAt:           v.CreatedAt,
 		ActivatedAt:         v.ActivatedAt,

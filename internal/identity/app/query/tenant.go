@@ -25,11 +25,14 @@ type GetTenantQuery struct {
 // Empty/zero fields surface as JSON nulls or defaults; the wire shape
 // stays stable regardless of which fields the tenant has populated.
 type TenantView struct {
-	ID                  string
-	Slug                string
-	LegalName           string
-	DisplayName         string
-	AdminEmail          string
+	ID          string
+	Slug        string
+	LegalName   string
+	DisplayName string
+	// AdminEmail removed in migration 20260507000008 — current admin
+	// is derived via the CompanyOwner-role membership. Use the
+	// ListUsers / GetMembership query path to retrieve the current
+	// admin Person + their email.
 	Status              string
 	CreatedAt           time.Time
 	ActivatedAt         time.Time
@@ -119,7 +122,6 @@ func projectTenant(t *tenant.Tenant) TenantView {
 		Slug:                t.Slug().String(),
 		LegalName:           t.LegalName(),
 		DisplayName:         t.DisplayName(),
-		AdminEmail:          t.AdminEmail().String(),
 		Status:              t.Status().String(),
 		CreatedAt:           t.CreatedAt().UTC(),
 		ActivatedAt:         t.ActivatedAt().UTC(),

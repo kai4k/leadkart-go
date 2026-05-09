@@ -99,6 +99,8 @@ type IdentityPerson struct {
 	PendingEmailChangeNewEmail  *string
 	PendingEmailChangeTokenHash *string
 	PendingEmailChangeExpiresAt pgtype.Timestamptz
+	// Audit chain — Person of the user who created this row globally. NULL = system-bootstrapped (SuperAdmin, first-admin via RegisterTenant). Allows cross-tenant lookup of "who originally onboarded this user."
+	CreatedByPersonID pgtype.UUID
 }
 
 // Per-handler inbox dedup. (message_id, handler_name) PK guarantees at-most-once-per-handler delivery.
@@ -161,7 +163,6 @@ type IdentityTenant struct {
 	Slug                      string
 	LegalName                 string
 	DisplayName               string
-	AdminEmail                string
 	Status                    string
 	CreatedAt                 pgtype.Timestamptz
 	ActivatedAt               pgtype.Timestamptz
@@ -204,4 +205,6 @@ type IdentityTenantMembership struct {
 	Department    string
 	StatusMessage string
 	ReportsTo     pgtype.UUID
+	// Audit chain — Membership of the user who created this row. NULL = system-bootstrapped (SuperAdmin, first-admin during tenant onboarding). Composite FK to (id, tenant_id) prevents cross-tenant spoofing.
+	CreatedByMembershipID pgtype.UUID
 }

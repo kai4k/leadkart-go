@@ -6,19 +6,26 @@
 -- index uq_memberships_person_active.
 
 -- name: InsertMembership :exec
+-- created_by_membership_id is the audit chain — who invited this
+-- user. NULL for self-bootstrapped paths (RegisterTenant first
+-- admin, SuperAdmin via cmd/bootstrap). Composite FK to
+-- (id, tenant_id) prevents cross-tenant audit-chain spoofing per
+-- migration 20260507000008.
 INSERT INTO identity.tenant_memberships (
-    id, person_id, tenant_id, status, joined_at
-) VALUES ($1, $2, $3, $4, $5);
+    id, person_id, tenant_id, status, joined_at, created_by_membership_id
+) VALUES ($1, $2, $3, $4, $5, $6);
 
 -- name: GetMembershipByID :one
 SELECT id, person_id, tenant_id, status, joined_at, left_at,
-       designation, department, status_message, reports_to
+       designation, department, status_message, reports_to,
+       created_by_membership_id
 FROM   identity.tenant_memberships
 WHERE  id = $1;
 
 -- name: GetActiveMembershipByPersonAndTenant :one
 SELECT id, person_id, tenant_id, status, joined_at, left_at,
-       designation, department, status_message, reports_to
+       designation, department, status_message, reports_to,
+       created_by_membership_id
 FROM   identity.tenant_memberships
 WHERE  person_id = $1
   AND  tenant_id = $2
@@ -29,7 +36,8 @@ WHERE  person_id = $1
 -- tenant unless platform-bypass is set; cross-tenant enumeration runs
 -- under platform context (anonymise / global-suspend cascade flows).
 SELECT id, person_id, tenant_id, status, joined_at, left_at,
-       designation, department, status_message, reports_to
+       designation, department, status_message, reports_to,
+       created_by_membership_id
 FROM   identity.tenant_memberships
 WHERE  person_id = $1
 ORDER  BY joined_at;
@@ -39,9 +47,28 @@ ORDER  BY joined_at;
 -- current tenant via SET LOCAL app.tenant_id. Used by tenant-admin
 -- "manage users" UIs.
 SELECT id, person_id, tenant_id, status, joined_at, left_at,
-       designation, department, status_message, reports_to
+       designation, department, status_message, reports_to,
+       created_by_membership_id
 FROM   identity.tenant_memberships
 ORDER  BY joined_at;
+
+-- name: ListSuperAdminMembershipsInTenant :many
+-- Returns the active Memberships in the supplied tenant that hold a
+-- role flagged is_super_admin=true. Powers the platform-tenant
+-- deletion guard (cmd 20260507000008): a tenant containing any
+-- SuperAdmin role-holder cannot be soft-deleted via the standard
+-- tenant lifecycle commands. Queryable in O(1) via the partial index
+-- idx_roles_super_admin.
+SELECT m.id, m.person_id, m.tenant_id, m.status, m.joined_at,
+       m.left_at, m.designation, m.department, m.status_message,
+       m.reports_to, m.created_by_membership_id
+FROM   identity.tenant_memberships m
+JOIN   identity.role_assignments  ra ON ra.membership_id = m.id
+JOIN   identity.roles             r  ON r.id = ra.role_id
+WHERE  m.tenant_id     = $1
+  AND  m.status        = 'active'
+  AND  r.is_super_admin = true
+  AND  NOT r.is_deleted;
 
 -- name: UpdateMembershipStatus :exec
 UPDATE identity.tenant_memberships

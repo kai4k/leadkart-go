@@ -92,7 +92,7 @@ func newMembership(t *testing.T, tid tenant.ID) *membership.Membership {
 	t.Helper()
 	pid := person.ID(ids.NewV7().String())
 	mid := membership.ID(ids.NewV7().String())
-	m, err := membership.New(mid, pid, tid)
+	m, err := membership.New(mid, pid, tid, membership.ID(""))
 	if err != nil {
 		t.Fatalf("membership.New: %v", err)
 	}

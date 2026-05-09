@@ -39,7 +39,7 @@ func TestNewMembership_AcceptsValid_StartsActive(t *testing.T) {
 	pid := newPersonID(t)
 	tid := newTenantID(t)
 
-	m, err := membership.New(id, pid, tid)
+	m, err := membership.New(id, pid, tid, membership.ID(""))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -73,7 +73,7 @@ func TestNewMembership_EmitsCreatedEvent(t *testing.T) {
 	id := newMembershipID(t)
 	pid := newPersonID(t)
 	tid := newTenantID(t)
-	m, err := membership.New(id, pid, tid)
+	m, err := membership.New(id, pid, tid, membership.ID(""))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -113,7 +113,7 @@ func TestNewMembership_RejectsInvalid(t *testing.T) {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			_, err := membership.New(tc.id, tc.pid, tc.tid)
+			_, err := membership.New(tc.id, tc.pid, tc.tid, membership.ID(""))
 			if err == nil {
 				t.Fatal("expected error")
 			}
@@ -254,7 +254,7 @@ func TestUnmarshalFromDB_DoesNotEmitEvents(t *testing.T) {
 
 func newMembership(t *testing.T) *membership.Membership {
 	t.Helper()
-	m, err := membership.New(newMembershipID(t), newPersonID(t), newTenantID(t))
+	m, err := membership.New(newMembershipID(t), newPersonID(t), newTenantID(t), membership.ID(""))
 	if err != nil {
 		t.Fatalf("newMembership: %v", err)
 	}

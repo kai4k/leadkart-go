@@ -20,6 +20,7 @@ func freshMembership(t *testing.T) *membership.Membership {
 		membership.ID(ids.NewV7().String()),
 		person.ID(ids.NewV7().String()),
 		tenant.ID(ids.NewV7().String()),
+		membership.ID(""),
 	)
 	if err != nil {
 		t.Fatalf("membership.New: %v", err)

@@ -11,7 +11,6 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/leadkart/leadkart-go/internal/common/druglicence"
-	"github.com/leadkart/leadkart-go/internal/common/email"
 	"github.com/leadkart/leadkart-go/internal/common/gst"
 	"github.com/leadkart/leadkart-go/internal/common/pan"
 	"github.com/leadkart/leadkart-go/internal/common/phone"
@@ -169,7 +168,6 @@ func insertTenantRow(ctx context.Context, q *Queries, t *tenant.Tenant) error {
 		Slug:                      t.Slug().String(),
 		LegalName:                 t.LegalName(),
 		DisplayName:               t.DisplayName(),
-		AdminEmail:                t.AdminEmail().String(),
 		Status:                    t.Status().String(),
 		CreatedAt:                 pgRequiredTimestamp(t.CreatedAt()),
 		GstNumber:                 stat.GST().String(),
@@ -220,7 +218,6 @@ func persistTenant(ctx context.Context, q *Queries, t *tenant.Tenant) error {
 		ID:                        pgUUID(uid),
 		LegalName:                 t.LegalName(),
 		DisplayName:               t.DisplayName(),
-		AdminEmail:                t.AdminEmail().String(),
 		Status:                    t.Status().String(),
 		ActivatedAt:               pgTimestamp(t.ActivatedAt()),
 		SuspendedAt:               pgTimestamp(t.SuspendedAt()),
@@ -290,10 +287,6 @@ func rowToTenant(row IdentityTenant) (*tenant.Tenant, error) {
 	if err != nil {
 		return nil, fmt.Errorf("tenant repo: hydrate slug %q: %w", row.Slug, err)
 	}
-	addr, err := email.New(row.AdminEmail)
-	if err != nil {
-		return nil, fmt.Errorf("tenant repo: hydrate admin_email %q: %w", row.AdminEmail, err)
-	}
 	status, err := tenant.ParseStatus(row.Status)
 	if err != nil {
 		return nil, fmt.Errorf("tenant repo: hydrate status %q: %w", row.Status, err)
@@ -329,7 +322,6 @@ func rowToTenant(row IdentityTenant) (*tenant.Tenant, error) {
 		Slug:                s,
 		LegalName:           row.LegalName,
 		DisplayName:         row.DisplayName,
-		AdminEmail:          addr,
 		Status:              status,
 		Statutory:           stat,
 		AdminContact:        contact,

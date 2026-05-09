@@ -12,7 +12,7 @@ import (
 )
 
 const getTenantByID = `-- name: GetTenantByID :one
-SELECT id, slug, legal_name, display_name, admin_email, status,
+SELECT id, slug, legal_name, display_name, status,
        created_at, activated_at, suspended_at,
        gst_number, pan_number, drug_licence_number,
        admin_phone, admin_address_street, admin_address_city,
@@ -35,7 +35,6 @@ func (q *Queries) GetTenantByID(ctx context.Context, id pgtype.UUID) (IdentityTe
 		&i.Slug,
 		&i.LegalName,
 		&i.DisplayName,
-		&i.AdminEmail,
 		&i.Status,
 		&i.CreatedAt,
 		&i.ActivatedAt,
@@ -69,7 +68,7 @@ func (q *Queries) GetTenantByID(ctx context.Context, id pgtype.UUID) (IdentityTe
 }
 
 const getTenantBySlug = `-- name: GetTenantBySlug :one
-SELECT id, slug, legal_name, display_name, admin_email, status,
+SELECT id, slug, legal_name, display_name, status,
        created_at, activated_at, suspended_at,
        gst_number, pan_number, drug_licence_number,
        admin_phone, admin_address_street, admin_address_city,
@@ -92,7 +91,6 @@ func (q *Queries) GetTenantBySlug(ctx context.Context, slug string) (IdentityTen
 		&i.Slug,
 		&i.LegalName,
 		&i.DisplayName,
-		&i.AdminEmail,
 		&i.Status,
 		&i.CreatedAt,
 		&i.ActivatedAt,
@@ -142,7 +140,7 @@ func (q *Queries) HardDeleteTenant(ctx context.Context, id pgtype.UUID) error {
 const insertTenant = `-- name: InsertTenant :exec
 
 INSERT INTO identity.tenants (
-    id, slug, legal_name, display_name, admin_email, status, created_at,
+    id, slug, legal_name, display_name, status, created_at,
     gst_number, pan_number, drug_licence_number,
     admin_phone, admin_address_street, admin_address_city,
     admin_address_district, admin_address_state, admin_address_state_code,
@@ -153,12 +151,12 @@ INSERT INTO identity.tenants (
     locale, time_zone, date_format, currency,
     deletion_scheduled_at, deletion_reason, hard_deleted_at
 ) VALUES (
-    $1, $2, $3, $4, $5, $6, $7,
-    $8, $9, $10,
-    $11, $12, $13, $14, $15, $16, $17,
-    $18, $19, $20, $21, $22, $23, $24,
-    $25, $26, $27, $28,
-    $29, $30, $31
+    $1, $2, $3, $4, $5, $6,
+    $7, $8, $9,
+    $10, $11, $12, $13, $14, $15, $16,
+    $17, $18, $19, $20, $21, $22, $23,
+    $24, $25, $26, $27,
+    $28, $29, $30
 )
 `
 
@@ -167,7 +165,6 @@ type InsertTenantParams struct {
 	Slug                      string
 	LegalName                 string
 	DisplayName               string
-	AdminEmail                string
 	Status                    string
 	CreatedAt                 pgtype.Timestamptz
 	GstNumber                 string
@@ -205,7 +202,6 @@ func (q *Queries) InsertTenant(ctx context.Context, arg InsertTenantParams) erro
 		arg.Slug,
 		arg.LegalName,
 		arg.DisplayName,
-		arg.AdminEmail,
 		arg.Status,
 		arg.CreatedAt,
 		arg.GstNumber,
@@ -237,7 +233,7 @@ func (q *Queries) InsertTenant(ctx context.Context, arg InsertTenantParams) erro
 }
 
 const listAllTenants = `-- name: ListAllTenants :many
-SELECT id, slug, legal_name, display_name, admin_email, status,
+SELECT id, slug, legal_name, display_name, status,
        created_at, activated_at, suspended_at,
        gst_number, pan_number, drug_licence_number,
        admin_phone, admin_address_street, admin_address_city,
@@ -270,7 +266,6 @@ func (q *Queries) ListAllTenants(ctx context.Context) ([]IdentityTenant, error) 
 			&i.Slug,
 			&i.LegalName,
 			&i.DisplayName,
-			&i.AdminEmail,
 			&i.Status,
 			&i.CreatedAt,
 			&i.ActivatedAt,
@@ -314,34 +309,33 @@ const updateTenant = `-- name: UpdateTenant :exec
 UPDATE identity.tenants
 SET    legal_name                  = $2,
        display_name                 = $3,
-       admin_email                  = $4,
-       status                       = $5,
-       activated_at                 = $6,
-       suspended_at                 = $7,
-       gst_number                   = $8,
-       pan_number                   = $9,
-       drug_licence_number          = $10,
-       admin_phone                  = $11,
-       admin_address_street         = $12,
-       admin_address_city           = $13,
-       admin_address_district       = $14,
-       admin_address_state          = $15,
-       admin_address_state_code     = $16,
-       admin_address_pincode        = $17,
-       password_min_length          = $18,
-       password_require_uppercase   = $19,
-       password_require_lowercase   = $20,
-       password_require_digit       = $21,
-       password_require_symbol      = $22,
-       password_max_failed_attempts = $23,
-       password_lockout_minutes     = $24,
-       locale                       = $25,
-       time_zone                    = $26,
-       date_format                  = $27,
-       currency                     = $28,
-       deletion_scheduled_at        = $29,
-       deletion_reason              = $30,
-       hard_deleted_at              = $31
+       status                       = $4,
+       activated_at                 = $5,
+       suspended_at                 = $6,
+       gst_number                   = $7,
+       pan_number                   = $8,
+       drug_licence_number          = $9,
+       admin_phone                  = $10,
+       admin_address_street         = $11,
+       admin_address_city           = $12,
+       admin_address_district       = $13,
+       admin_address_state          = $14,
+       admin_address_state_code     = $15,
+       admin_address_pincode        = $16,
+       password_min_length          = $17,
+       password_require_uppercase   = $18,
+       password_require_lowercase   = $19,
+       password_require_digit       = $20,
+       password_require_symbol      = $21,
+       password_max_failed_attempts = $22,
+       password_lockout_minutes     = $23,
+       locale                       = $24,
+       time_zone                    = $25,
+       date_format                  = $26,
+       currency                     = $27,
+       deletion_scheduled_at        = $28,
+       deletion_reason              = $29,
+       hard_deleted_at              = $30
 WHERE  id = $1
 `
 
@@ -349,7 +343,6 @@ type UpdateTenantParams struct {
 	ID                        pgtype.UUID
 	LegalName                 string
 	DisplayName               string
-	AdminEmail                string
 	Status                    string
 	ActivatedAt               pgtype.Timestamptz
 	SuspendedAt               pgtype.Timestamptz
@@ -383,12 +376,14 @@ type UpdateTenantParams struct {
 // UpdateAdminContact + UpdateSettings + UpdateDisplayPreferences +
 // Activate + Suspend + MarkForDeletion + RestoreFromDeletion +
 // HardDelete. Repository writes whatever the aggregate currently says.
+//
+// admin_email removed in migration 20260507000008 — current admin
+// email is derived at read-time via JOIN through CompanyOwner role.
 func (q *Queries) UpdateTenant(ctx context.Context, arg UpdateTenantParams) error {
 	_, err := q.db.Exec(ctx, updateTenant,
 		arg.ID,
 		arg.LegalName,
 		arg.DisplayName,
-		arg.AdminEmail,
 		arg.Status,
 		arg.ActivatedAt,
 		arg.SuspendedAt,

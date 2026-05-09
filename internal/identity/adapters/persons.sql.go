@@ -30,6 +30,7 @@ SELECT p.id                              AS person_id,
        p.pending_email_change_new_email,
        p.pending_email_change_token_hash,
        p.pending_email_change_expires_at,
+       p.created_by_person_id,
        m.id                              AS membership_id,
        m.tenant_id,
        m.status                          AS membership_status,
@@ -38,7 +39,8 @@ SELECT p.id                              AS person_id,
        m.designation,
        m.department,
        m.status_message,
-       m.reports_to
+       m.reports_to,
+       m.created_by_membership_id
 FROM   identity.persons p
 LEFT   JOIN identity.tenant_memberships m
        ON  m.person_id = p.id AND m.status = 'active'
@@ -64,6 +66,7 @@ type GetPersonAndActiveMembershipByEmailRow struct {
 	PendingEmailChangeNewEmail  *string
 	PendingEmailChangeTokenHash *string
 	PendingEmailChangeExpiresAt pgtype.Timestamptz
+	CreatedByPersonID           pgtype.UUID
 	MembershipID                pgtype.UUID
 	TenantID                    pgtype.UUID
 	MembershipStatus            *string
@@ -73,6 +76,7 @@ type GetPersonAndActiveMembershipByEmailRow struct {
 	Department                  *string
 	StatusMessage               *string
 	ReportsTo                   pgtype.UUID
+	CreatedByMembershipID       pgtype.UUID
 }
 
 // Single-roundtrip auth-routing lookup for the login flow. Joins
@@ -114,6 +118,7 @@ func (q *Queries) GetPersonAndActiveMembershipByEmail(ctx context.Context, email
 		&i.PendingEmailChangeNewEmail,
 		&i.PendingEmailChangeTokenHash,
 		&i.PendingEmailChangeExpiresAt,
+		&i.CreatedByPersonID,
 		&i.MembershipID,
 		&i.TenantID,
 		&i.MembershipStatus,
@@ -123,6 +128,7 @@ func (q *Queries) GetPersonAndActiveMembershipByEmail(ctx context.Context, email
 		&i.Department,
 		&i.StatusMessage,
 		&i.ReportsTo,
+		&i.CreatedByMembershipID,
 	)
 	return i, err
 }
@@ -133,7 +139,8 @@ SELECT id, email, first_name, last_name, password_hash, security_stamp,
        is_globally_suspended, global_suspension_reason, globally_suspended_at,
        password_reset_token_hash, password_reset_expires_at,
        pending_email_change_new_email, pending_email_change_token_hash,
-       pending_email_change_expires_at
+       pending_email_change_expires_at,
+       created_by_person_id
 FROM   identity.persons
 WHERE  email = $1
 `
@@ -160,6 +167,7 @@ func (q *Queries) GetPersonByEmail(ctx context.Context, email string) (IdentityP
 		&i.PendingEmailChangeNewEmail,
 		&i.PendingEmailChangeTokenHash,
 		&i.PendingEmailChangeExpiresAt,
+		&i.CreatedByPersonID,
 	)
 	return i, err
 }
@@ -170,7 +178,8 @@ SELECT id, email, first_name, last_name, password_hash, security_stamp,
        is_globally_suspended, global_suspension_reason, globally_suspended_at,
        password_reset_token_hash, password_reset_expires_at,
        pending_email_change_new_email, pending_email_change_token_hash,
-       pending_email_change_expires_at
+       pending_email_change_expires_at,
+       created_by_person_id
 FROM   identity.persons
 WHERE  pending_email_change_token_hash = $1
 `
@@ -198,6 +207,7 @@ func (q *Queries) GetPersonByEmailChangeTokenHash(ctx context.Context, pendingEm
 		&i.PendingEmailChangeNewEmail,
 		&i.PendingEmailChangeTokenHash,
 		&i.PendingEmailChangeExpiresAt,
+		&i.CreatedByPersonID,
 	)
 	return i, err
 }
@@ -208,7 +218,8 @@ SELECT id, email, first_name, last_name, password_hash, security_stamp,
        is_globally_suspended, global_suspension_reason, globally_suspended_at,
        password_reset_token_hash, password_reset_expires_at,
        pending_email_change_new_email, pending_email_change_token_hash,
-       pending_email_change_expires_at
+       pending_email_change_expires_at,
+       created_by_person_id
 FROM   identity.persons
 WHERE  id = $1
 `
@@ -235,6 +246,7 @@ func (q *Queries) GetPersonByID(ctx context.Context, id pgtype.UUID) (IdentityPe
 		&i.PendingEmailChangeNewEmail,
 		&i.PendingEmailChangeTokenHash,
 		&i.PendingEmailChangeExpiresAt,
+		&i.CreatedByPersonID,
 	)
 	return i, err
 }
@@ -245,7 +257,8 @@ SELECT id, email, first_name, last_name, password_hash, security_stamp,
        is_globally_suspended, global_suspension_reason, globally_suspended_at,
        password_reset_token_hash, password_reset_expires_at,
        pending_email_change_new_email, pending_email_change_token_hash,
-       pending_email_change_expires_at
+       pending_email_change_expires_at,
+       created_by_person_id
 FROM   identity.persons
 WHERE  password_reset_token_hash = $1
 `
@@ -275,6 +288,7 @@ func (q *Queries) GetPersonByPasswordResetTokenHash(ctx context.Context, passwor
 		&i.PendingEmailChangeNewEmail,
 		&i.PendingEmailChangeTokenHash,
 		&i.PendingEmailChangeExpiresAt,
+		&i.CreatedByPersonID,
 	)
 	return i, err
 }
@@ -287,12 +301,14 @@ INSERT INTO identity.persons (
     is_globally_suspended, global_suspension_reason, globally_suspended_at,
     password_reset_token_hash, password_reset_expires_at,
     pending_email_change_new_email, pending_email_change_token_hash,
-    pending_email_change_expires_at
+    pending_email_change_expires_at,
+    created_by_person_id
 ) VALUES (
     $1, $2, $3, $4, $5, $6, $7, $8, $9,
     $10, $11, $12,
     $13, $14,
-    $15, $16, $17
+    $15, $16, $17,
+    $18
 )
 `
 
@@ -314,6 +330,7 @@ type InsertPersonParams struct {
 	PendingEmailChangeNewEmail  *string
 	PendingEmailChangeTokenHash *string
 	PendingEmailChangeExpiresAt pgtype.Timestamptz
+	CreatedByPersonID           pgtype.UUID
 }
 
 // Person queries — identity.persons is non-RLS (global identity).
@@ -338,6 +355,7 @@ func (q *Queries) InsertPerson(ctx context.Context, arg InsertPersonParams) erro
 		arg.PendingEmailChangeNewEmail,
 		arg.PendingEmailChangeTokenHash,
 		arg.PendingEmailChangeExpiresAt,
+		arg.CreatedByPersonID,
 	)
 	return err
 }
