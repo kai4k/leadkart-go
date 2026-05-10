@@ -235,6 +235,41 @@ func handleRegisterTenant(log *slog.Logger, a app.Application) http.Handler {
 	})
 }
 
+// resolveDeviceLabel derives a humane device label for the
+// refresh-token family. Fallback chain when the client doesn't supply
+// `device_label`:
+//
+//  1. trimmed `device_label` from the request body
+//  2. trimmed User-Agent header (truncated to 128 chars)
+//  3. RemoteAddr
+//  4. literal "Unknown device"
+//
+// Matches Auth0 / Stripe / GitHub UX where the API derives the label so
+// every client doesn't have to compute its own. The domain still
+// requires a non-empty label per refreshtoken.NewFamily — the boundary
+// is responsible for guaranteeing that invariant before the call.
+const deviceLabelMaxLen = 128
+
+func resolveDeviceLabel(supplied string, r *http.Request) string {
+	if v := strings.TrimSpace(supplied); v != "" {
+		return truncateLabel(v)
+	}
+	if ua := strings.TrimSpace(r.UserAgent()); ua != "" {
+		return truncateLabel(ua)
+	}
+	if r.RemoteAddr != "" {
+		return r.RemoteAddr
+	}
+	return "Unknown device"
+}
+
+func truncateLabel(s string) string {
+	if len(s) <= deviceLabelMaxLen {
+		return s
+	}
+	return s[:deviceLabelMaxLen]
+}
+
 func handleLogin(log *slog.Logger, a app.Application) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req LoginRequest
@@ -254,7 +289,7 @@ func handleLogin(log *slog.Logger, a app.Application) http.Handler {
 		out, err := a.Commands.Login.Handle(r.Context(), command.LoginCommand{
 			Email:       addr,
 			Password:    req.Password,
-			DeviceLabel: req.DeviceLabel,
+			DeviceLabel: resolveDeviceLabel(req.DeviceLabel, r),
 		})
 		switch {
 		case errors.Is(err, command.ErrInvalidCredentials):
