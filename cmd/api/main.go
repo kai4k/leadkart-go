@@ -372,8 +372,29 @@ func run(ctx context.Context, stdout *os.File, _ []string) error {
 // probe-route absence on the public mux passes (nil, nil).
 func newServer(log *slog.Logger, identityApp app.Application, verifier authn.Verifier, validator authn.StampValidator) http.Handler {
 	mux := http.NewServeMux()
+	addRootHelpers(mux)
 	ports.AddRoutes(mux, log, identityApp, verifier, validator)
 	return mux
+}
+
+// addRootHelpers registers humane handlers for the two endpoints every
+// browser hits unprompted (root + favicon) so casual probes don't
+// generate WARN-level "http request 404" log noise. Cross-cutting,
+// not domain-owned — lives in the composition root per Mat Ryer
+// "the host owns URL structure decisions" canon.
+//
+//   - GET /             → 200 JSON pointing the caller at /api/v1/...
+//   - GET /favicon.ico  → 204 No Content (Stripe / Auth0 convention —
+//                         browsers stop asking after the first 204)
+func addRootHelpers(mux *http.ServeMux) {
+	mux.Handle("GET /{$}", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"name":"LeadKart API","api_base":"/api/v1","docs":"see api/openapi.yaml in the repo (Scalar UI at /docs lands in a follow-up PR)"}` + "\n"))
+	}))
+	mux.Handle("GET /favicon.ico", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
 }
 
 // identityWiring groups the Identity composition outputs that main()

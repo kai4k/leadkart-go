@@ -41,9 +41,16 @@ type RegisterTenantResponse struct {
 // implicitly. Same shape as the .NET version after the Identity-model
 // rebuild.
 type LoginRequest struct {
-	Email        string `json:"email"`
-	Password     string `json:"password"`
-	DeviceLabel  string `json:"device_label,omitempty"`
+	Email    string `json:"email"`
+	Password string `json:"password"`
+	// DeviceLabel is optional from the client. When empty, the handler
+	// derives it from User-Agent (truncated to 128 chars), then
+	// RemoteAddr, then "Unknown device" — see resolveDeviceLabel in
+	// http.go. The domain (refreshtoken.NewFamily) requires a non-empty
+	// label; the boundary guarantees that invariant before the call.
+	// Auth0 / Stripe / GitHub all do this so clients don't have to
+	// compute their own labels.
+	DeviceLabel string `json:"device_label,omitempty"`
 }
 
 // LoginResponse / RefreshResponse are identical structurally.
