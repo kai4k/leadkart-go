@@ -32,6 +32,7 @@
 - `authn.RequirePlatform` slug-anchored — defense-in-depth check that JWT `is_platform=true` + `tenant_slug == "platform"` agree.
 - `authn.PlatformTenantSlug` constant + Login mints `is_platform` from `tenant.Slug() == "platform"`.
 - CI optimisation: single workflow + `dorny/paths-filter@v3`, pre-push hook (`task ci`), Taskfile `task dev` + `task hooks:install`.
+- sqlc layout — generated code split into `internal/identity/adapters/db/` (`package db`); hand-written `*_pg.go` adapters import + qualify (`db.Queries`, `db.IdentityPerson`). Brandur / river-queue canon. ADR 0037.
 
 **Active branches:**
 - `main` — production; protected via PR-only merge.
