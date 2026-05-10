@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/leadkart/leadkart-go/internal/common/clock"
+	"github.com/leadkart/leadkart-go/internal/identity/adapters/db"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/permission"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
@@ -52,12 +53,12 @@ const (
 type MembershipRepository struct {
 	pool *pgxpool.Pool
 	tx   *pg.Transactor
-	q    *Queries
+	q    *db.Queries
 }
 
 // NewMembershipRepository wires the repository against a pool + transactor.
 func NewMembershipRepository(pool *pgxpool.Pool, tx *pg.Transactor) *MembershipRepository {
-	return &MembershipRepository{pool: pool, tx: tx, q: New(pool)}
+	return &MembershipRepository{pool: pool, tx: tx, q: db.New(pool)}
 }
 
 // Add satisfies [membership.Repository] — persists a new Active Membership
@@ -338,7 +339,7 @@ func (r *MembershipRepository) ListAllForPerson(
 
 // ----- Helpers ---------------------------------------------------------------
 
-func loadMembership(ctx context.Context, q *Queries, id membership.ID) (*membership.Membership, error) {
+func loadMembership(ctx context.Context, q *db.Queries, id membership.ID) (*membership.Membership, error) {
 	uid, err := parseMembershipID(id)
 	if err != nil {
 		return nil, err
@@ -364,7 +365,7 @@ func loadMembership(ctx context.Context, q *Queries, id membership.ID) (*members
 // loadRoleAssignments fetches the Membership's projected role-id list.
 // Order: assigned_at, role_id (matches the SQL query) — domain treats
 // the slice as a set, so ordering is informational only.
-func loadRoleAssignments(ctx context.Context, q *Queries, mid uuid.UUID) ([]role.ID, error) {
+func loadRoleAssignments(ctx context.Context, q *db.Queries, mid uuid.UUID) ([]role.ID, error) {
 	rows, err := q.ListRoleAssignmentsByMembership(ctx, pgUUID(mid))
 	if err != nil {
 		return nil, fmt.Errorf("membership repo: list role assignments: %w", err)
@@ -383,7 +384,7 @@ func loadRoleAssignments(ctx context.Context, q *Queries, mid uuid.UUID) ([]role
 // construction"); fail-loud beats silent privilege-loss.
 func loadPermissionOverrides(
 	ctx context.Context,
-	q *Queries,
+	q *db.Queries,
 	mid uuid.UUID,
 ) (granted, revoked []*permission.Permission, err error) {
 	rows, err := q.ListPermissionOverridesByMembership(ctx, pgUUID(mid))
@@ -408,7 +409,7 @@ func loadPermissionOverrides(
 	return granted, revoked, nil
 }
 
-func insertMembershipRow(ctx context.Context, q *Queries, m *membership.Membership) error {
+func insertMembershipRow(ctx context.Context, q *db.Queries, m *membership.Membership) error {
 	mid, err := parseMembershipID(m.ID())
 	if err != nil {
 		return err
@@ -433,7 +434,7 @@ func insertMembershipRow(ctx context.Context, q *Queries, m *membership.Membersh
 		}
 		createdBy = pgUUID(cbUUID)
 	}
-	err = q.InsertMembership(ctx, InsertMembershipParams{
+	err = q.InsertMembership(ctx, db.InsertMembershipParams{
 		ID:                    pgUUID(mid),
 		PersonID:              pgUUID(pid),
 		TenantID:              pgUUID(tid),
@@ -450,12 +451,12 @@ func insertMembershipRow(ctx context.Context, q *Queries, m *membership.Membersh
 	return nil
 }
 
-func persistMembershipStatus(ctx context.Context, q *Queries, m *membership.Membership) error {
+func persistMembershipStatus(ctx context.Context, q *db.Queries, m *membership.Membership) error {
 	mid, err := parseMembershipID(m.ID())
 	if err != nil {
 		return err
 	}
-	err = q.UpdateMembershipStatus(ctx, UpdateMembershipStatusParams{
+	err = q.UpdateMembershipStatus(ctx, db.UpdateMembershipStatusParams{
 		ID:     pgUUID(mid),
 		Status: m.Status().String(),
 		LeftAt: pgTimestamp(m.LeftAt()),
@@ -494,7 +495,7 @@ func drainMembershipEvents(ctx context.Context, tx pgx.Tx, m *membership.Members
 // permission overrides). Caller (loadMembership) batches the child reads
 // in one tx so RLS scope stays consistent across all four tables.
 func rowToMembership(
-	row IdentityTenantMembership,
+	row db.IdentityTenantMembership,
 	roleAssignments []role.ID,
 	granted, revoked []*permission.Permission,
 ) (*membership.Membership, error) {
@@ -533,9 +534,9 @@ func rowToMembership(
 }
 
 // persistMembershipProfile writes the per-tenant profile fields. Always
-// runs (no diff check) — the columns are NOT NULL DEFAULT '' in schema,
+// runs (no diff check) — the columns are NOT NULL DEFAULT ” in schema,
 // so writing the aggregate's current values is always safe.
-func persistMembershipProfile(ctx context.Context, q *Queries, m *membership.Membership) error {
+func persistMembershipProfile(ctx context.Context, q *db.Queries, m *membership.Membership) error {
 	mid, err := parseMembershipID(m.ID())
 	if err != nil {
 		return err
@@ -548,7 +549,7 @@ func persistMembershipProfile(ctx context.Context, q *Queries, m *membership.Mem
 		}
 		reportsTo = parsed
 	}
-	err = q.UpdateMembershipProfile(ctx, UpdateMembershipProfileParams{
+	err = q.UpdateMembershipProfile(ctx, db.UpdateMembershipProfileParams{
 		ID:            pgUUID(mid),
 		Designation:   m.Designation(),
 		Department:    m.Department(),
@@ -570,7 +571,7 @@ func persistMembershipProfile(ctx context.Context, q *Queries, m *membership.Mem
 // rejects cross-tenant role IDs at the schema layer; the domain's
 // `multi-tenancy.md` "Identity model" CALLER INVARIANT (every assigned
 // Role MUST belong to the Membership's TenantID) is the upstream guard.
-func replaceRoleAssignments(ctx context.Context, q *Queries, m *membership.Membership) error {
+func replaceRoleAssignments(ctx context.Context, q *db.Queries, m *membership.Membership) error {
 	mid, err := parseMembershipID(m.ID())
 	if err != nil {
 		return err
@@ -588,7 +589,7 @@ func replaceRoleAssignments(ctx context.Context, q *Queries, m *membership.Membe
 		if err != nil {
 			return fmt.Errorf("membership repo: parse role id %q: %w", rid, err)
 		}
-		err = q.InsertRoleAssignment(ctx, InsertRoleAssignmentParams{
+		err = q.InsertRoleAssignment(ctx, db.InsertRoleAssignmentParams{
 			MembershipID: pgUUID(mid),
 			RoleID:       pgUUID(ruid),
 			TenantID:     pgUUID(tid),
@@ -607,7 +608,7 @@ func replaceRoleAssignments(ctx context.Context, q *Queries, m *membership.Membe
 // permission_name appears at most once across both slices for a given
 // Membership; the table's PK (membership_id, permission_name) defends
 // against any drift.
-func replacePermissionOverrides(ctx context.Context, q *Queries, m *membership.Membership) error {
+func replacePermissionOverrides(ctx context.Context, q *db.Queries, m *membership.Membership) error {
 	mid, err := parseMembershipID(m.ID())
 	if err != nil {
 		return err
@@ -624,7 +625,7 @@ func replacePermissionOverrides(ctx context.Context, q *Queries, m *membership.M
 		if p == nil {
 			continue
 		}
-		err := q.InsertPermissionOverride(ctx, InsertPermissionOverrideParams{
+		err := q.InsertPermissionOverride(ctx, db.InsertPermissionOverrideParams{
 			MembershipID:   pgUUID(mid),
 			PermissionName: p.Name(),
 			Kind:           overrideKindGranted,
@@ -639,7 +640,7 @@ func replacePermissionOverrides(ctx context.Context, q *Queries, m *membership.M
 		if p == nil {
 			continue
 		}
-		err := q.InsertPermissionOverride(ctx, InsertPermissionOverrideParams{
+		err := q.InsertPermissionOverride(ctx, db.InsertPermissionOverrideParams{
 			MembershipID:   pgUUID(mid),
 			PermissionName: p.Name(),
 			Kind:           overrideKindRevoked,

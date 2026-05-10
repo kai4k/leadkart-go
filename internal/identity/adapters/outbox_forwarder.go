@@ -12,6 +12,7 @@ import (
 	"go.opentelemetry.io/otel/propagation"
 
 	"github.com/leadkart/leadkart-go/internal/common/clock"
+	"github.com/leadkart/leadkart-go/internal/identity/adapters/db"
 	"github.com/leadkart/leadkart-go/internal/platform/pg"
 )
 
@@ -65,7 +66,7 @@ func NewOutboxForwarder(
 func (f *OutboxForwarder) ForwardOnce(ctx context.Context) (int, error) {
 	count := 0
 	err := f.tx.WithinTx(ctx, pg.TxScopePlatform, func(ctx context.Context, tx pgx.Tx) error {
-		q := New(tx)
+		q := db.New(tx)
 		rows, err := q.ListUnforwardedOutboxEvents(ctx, f.batchSize)
 		if err != nil {
 			return fmt.Errorf("forwarder: list unforwarded: %w", err)
@@ -90,7 +91,7 @@ func (f *OutboxForwarder) ForwardOnce(ctx context.Context) (int, error) {
 			if err := f.publisher.Publish(f.topic, msg); err != nil {
 				return fmt.Errorf("forwarder: publish %s: %w", row.Topic, err)
 			}
-			if err := q.MarkOutboxEventForwarded(ctx, MarkOutboxEventForwardedParams{
+			if err := q.MarkOutboxEventForwarded(ctx, db.MarkOutboxEventForwardedParams{
 				ID:          row.ID,
 				ForwardedAt: pgRequiredTimestamp(now),
 			}); err != nil {

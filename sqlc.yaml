@@ -2,10 +2,15 @@ version: "2"
 
 # LeadKart sqlc config — per ADR 0004 (sqlc + pgx/v5 + squirrel + goose).
 #
-# One sqlc invocation generates per-module typed query packages. The .sql
-# files (queries) and migrations/ (schema) live in the repo; the generated
-# *.sql.go files are committed alongside the adapter so the build never
-# depends on sqlc being installed at compile time.
+# Generated query types live in their own dedicated `db` subpackage
+# (Brandur Leach / river-queue canon — `internal/dbsqlc` style). The
+# hand-written adapter (repository structs, domain↔row mappers) imports
+# `db` and qualifies references as `db.Queries`, `db.IdentityPerson`,
+# etc. This gives a hard import boundary preventing app/domain code from
+# accidentally pulling in generated query types.
+#
+# Generated files are committed so the build never depends on sqlc being
+# installed at compile time.
 #
 # Run: `sqlc generate` (or `task generate` once the tool directive is on).
 
@@ -15,8 +20,8 @@ sql:
     schema: migrations
     gen:
       go:
-        package: adapters
-        out: internal/identity/adapters
+        package: db
+        out: internal/identity/adapters/db
         sql_package: pgx/v5
         emit_pointers_for_null_types: true
         emit_json_tags: false
@@ -26,8 +31,9 @@ sql:
         emit_enum_valid_method: true
         emit_all_enum_values: false
         # Generated files: db.go, models.go, querier.go (if emit_interface),
-        # plus per-input-file *.sql.go siblings. Hand-written adapter code
-        # (repository structs, domain↔row mappers) lives in *_pg.go siblings.
+        # plus per-input-file *.sql.go siblings — all under the `db`
+        # subpackage. Hand-written adapter code lives in the parent
+        # `adapters` package as *_pg.go files importing `db`.
         output_db_file_name: db.go
         output_models_file_name: models.go
         # uuid + timestamptz mapped to typed Go via pgx/v5 native types

@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/leadkart/leadkart-go/internal/common/ids"
+	"github.com/leadkart/leadkart-go/internal/identity/adapters/db"
 	"github.com/leadkart/leadkart-go/internal/identity/integrationevents"
 )
 
@@ -44,13 +45,13 @@ func writeOutboxEvents(
 	if len(events) == 0 {
 		return nil
 	}
-	q := New(tx)
+	q := db.New(tx)
 	for _, e := range events {
 		payload, err := json.Marshal(e)
 		if err != nil {
 			return fmt.Errorf("outbox: marshal %s: %w", e.Topic(), err)
 		}
-		err = q.InsertOutboxEvent(ctx, InsertOutboxEventParams{
+		err = q.InsertOutboxEvent(ctx, db.InsertOutboxEventParams{
 			ID:         pgUUID(ids.NewV7()),
 			TenantID:   pgUUID(tenantID),
 			Topic:      e.Topic(),

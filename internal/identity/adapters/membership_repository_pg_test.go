@@ -391,4 +391,3 @@ func TestMembershipRepository_Add_RejectsCrossTenantRoleAssignment(t *testing.T)
 		t.Fatalf("Add: expected schema-level rejection of cross-tenant role assignment")
 	}
 }
-

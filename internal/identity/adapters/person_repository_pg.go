@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/leadkart/leadkart-go/internal/common/email"
+	"github.com/leadkart/leadkart-go/internal/identity/adapters/db"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
 	"github.com/leadkart/leadkart-go/internal/platform/pg"
 )
@@ -22,12 +23,12 @@ import (
 type PersonRepository struct {
 	pool *pgxpool.Pool
 	tx   *pg.Transactor
-	q    *Queries
+	q    *db.Queries
 }
 
 // NewPersonRepository wires the repository against a pool + transactor.
 func NewPersonRepository(pool *pgxpool.Pool, tx *pg.Transactor) *PersonRepository {
-	return &PersonRepository{pool: pool, tx: tx, q: New(pool)}
+	return &PersonRepository{pool: pool, tx: tx, q: db.New(pool)}
 }
 
 // Add satisfies [person.Repository] — persists a new Person + drains
@@ -132,7 +133,7 @@ func (r *PersonRepository) GetByEmailChangeTokenHash(ctx context.Context, hash p
 
 // ----- Helpers ---------------------------------------------------------------
 
-func loadPerson(ctx context.Context, q *Queries, id person.ID) (*person.Person, error) {
+func loadPerson(ctx context.Context, q *db.Queries, id person.ID) (*person.Person, error) {
 	uid, err := parsePersonID(id)
 	if err != nil {
 		return nil, err
@@ -147,7 +148,7 @@ func loadPerson(ctx context.Context, q *Queries, id person.ID) (*person.Person, 
 	return rowToPerson(row)
 }
 
-func insertPersonRow(ctx context.Context, q *Queries, p *person.Person) error {
+func insertPersonRow(ctx context.Context, q *db.Queries, p *person.Person) error {
 	uid, err := parsePersonID(p.ID())
 	if err != nil {
 		return err
@@ -156,7 +157,7 @@ func insertPersonRow(ctx context.Context, q *Queries, p *person.Person) error {
 	if err != nil {
 		return fmt.Errorf("person repo: parse security_stamp: %w", err)
 	}
-	params := InsertPersonParams{
+	params := db.InsertPersonParams{
 		ID:                     pgUUID(uid),
 		Email:                  p.Email().String(),
 		FirstName:              p.FirstName(),
@@ -188,7 +189,7 @@ func insertPersonRow(ctx context.Context, q *Queries, p *person.Person) error {
 // Implemented as helpers shared by Insert + Update params so the column
 // projection rules live in one place — drift between create + update
 // would otherwise corrupt round-trip semantics silently.
-func applyPendingResetTo(p *InsertPersonParams, pr person.PendingPasswordReset) {
+func applyPendingResetTo(p *db.InsertPersonParams, pr person.PendingPasswordReset) {
 	if pr.IsZero() {
 		return
 	}
@@ -197,7 +198,7 @@ func applyPendingResetTo(p *InsertPersonParams, pr person.PendingPasswordReset) 
 	p.PasswordResetExpiresAt = pgTimestamp(pr.ExpiresAt())
 }
 
-func applyPendingEmailChangeTo(p *InsertPersonParams, ec person.PendingEmailChange) {
+func applyPendingEmailChangeTo(p *db.InsertPersonParams, ec person.PendingEmailChange) {
 	if ec.IsZero() {
 		return
 	}
@@ -208,7 +209,7 @@ func applyPendingEmailChangeTo(p *InsertPersonParams, ec person.PendingEmailChan
 	p.PendingEmailChangeExpiresAt = pgTimestamp(ec.ExpiresAt())
 }
 
-func applyPendingResetToUpdate(p *UpdatePersonParams, pr person.PendingPasswordReset) {
+func applyPendingResetToUpdate(p *db.UpdatePersonParams, pr person.PendingPasswordReset) {
 	if pr.IsZero() {
 		return
 	}
@@ -217,7 +218,7 @@ func applyPendingResetToUpdate(p *UpdatePersonParams, pr person.PendingPasswordR
 	p.PasswordResetExpiresAt = pgTimestamp(pr.ExpiresAt())
 }
 
-func applyPendingEmailChangeToUpdate(p *UpdatePersonParams, ec person.PendingEmailChange) {
+func applyPendingEmailChangeToUpdate(p *db.UpdatePersonParams, ec person.PendingEmailChange) {
 	if ec.IsZero() {
 		return
 	}
@@ -228,7 +229,7 @@ func applyPendingEmailChangeToUpdate(p *UpdatePersonParams, ec person.PendingEma
 	p.PendingEmailChangeExpiresAt = pgTimestamp(ec.ExpiresAt())
 }
 
-func persistPerson(ctx context.Context, q *Queries, p *person.Person) error {
+func persistPerson(ctx context.Context, q *db.Queries, p *person.Person) error {
 	uid, err := parsePersonID(p.ID())
 	if err != nil {
 		return err
@@ -237,7 +238,7 @@ func persistPerson(ctx context.Context, q *Queries, p *person.Person) error {
 	if err != nil {
 		return fmt.Errorf("person repo: parse security_stamp: %w", err)
 	}
-	params := UpdatePersonParams{
+	params := db.UpdatePersonParams{
 		ID:                     pgUUID(uid),
 		Email:                  p.Email().String(),
 		FirstName:              p.FirstName(),
@@ -283,7 +284,7 @@ func drainPersonEvents(ctx context.Context, tx pgx.Tx, p *person.Person) error {
 	return writeOutboxEvents(ctx, tx, uuid.Nil, mapped)
 }
 
-func rowToPerson(row IdentityPerson) (*person.Person, error) {
+func rowToPerson(row db.IdentityPerson) (*person.Person, error) {
 	id := person.ID(uuidFromPg(row.ID).String())
 
 	addr, err := email.New(row.Email)

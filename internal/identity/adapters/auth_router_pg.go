@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/leadkart/leadkart-go/internal/common/email"
+	"github.com/leadkart/leadkart-go/internal/identity/adapters/db"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
 	"github.com/leadkart/leadkart-go/internal/platform/pg"
@@ -45,16 +46,16 @@ import (
 // internal architectures.
 type AuthRouterPG struct {
 	tx *pg.Transactor
-	q  *Queries
+	q  *db.Queries
 }
 
 // NewAuthRouterPG wires the adapter against a *pgxpool.Pool +
 // Transactor — same constructor shape as every other identity repo
 // (NewPersonRepository / NewMembershipRepository / etc.). The
-// internal *Queries handle is built from the pool here so callers
-// don't have to thread a Queries instance around.
+// internal *db.Queries handle is built from the pool here so callers
+// don't have to thread a db.Queries instance around.
 func NewAuthRouterPG(pool *pgxpool.Pool, tx *pg.Transactor) *AuthRouterPG {
-	return &AuthRouterPG{tx: tx, q: New(pool)}
+	return &AuthRouterPG{tx: tx, q: db.New(pool)}
 }
 
 // derefStr unwraps the *string pointers sqlc emits for LEFT JOIN
@@ -111,7 +112,7 @@ func (r *AuthRouterPG) ResolveByEmail(
 
 		// Hydrate the Person aggregate first — always present when the
 		// outer query returned a row.
-		personRow := IdentityPerson{
+		personRow := db.IdentityPerson{
 			ID:                          row.PersonID,
 			Email:                       row.Email,
 			FirstName:                   row.FirstName,
@@ -151,7 +152,7 @@ func (r *AuthRouterPG) ResolveByEmail(
 		// is NOT NULL. Deref via the local helper; nil columns become
 		// empty strings, which the membership aggregate hydrator
 		// already tolerates for these informational fields.
-		membershipRow := IdentityTenantMembership{
+		membershipRow := db.IdentityTenantMembership{
 			ID:                    row.MembershipID,
 			PersonID:              row.PersonID,
 			TenantID:              row.TenantID,

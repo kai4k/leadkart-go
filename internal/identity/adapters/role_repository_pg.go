@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/leadkart/leadkart-go/internal/identity/adapters/db"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/permission"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/role"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
@@ -27,18 +28,18 @@ import (
 // platform analytics) MUST use a platform-scoped transactor at a
 // higher layer; this repo refuses to bypass RLS itself.
 //
-// Domain↔row mapping lives here; sqlc-generated *Queries hold the SQL.
+// Domain↔row mapping lives here; sqlc-generated *db.Queries hold the SQL.
 type RoleRepository struct {
 	pool *pgxpool.Pool
 	tx   *pg.Transactor
-	q    *Queries
+	q    *db.Queries
 }
 
 // NewRoleRepository wires the repository against a pool + transactor
 // (same pool as the transactor — composing distinct pools would split
 // the connection state the GUC binds to).
 func NewRoleRepository(pool *pgxpool.Pool, tx *pg.Transactor) *RoleRepository {
-	return &RoleRepository{pool: pool, tx: tx, q: New(pool)}
+	return &RoleRepository{pool: pool, tx: tx, q: db.New(pool)}
 }
 
 // Add satisfies [role.Repository] — persists a brand-new Role from
@@ -88,7 +89,7 @@ func (r *RoleRepository) GetByTenantAndName(
 	var out *role.Role
 	err = r.tx.WithinTx(ctx, pg.TxScopeTenant, func(ctx context.Context, tx pgx.Tx) error {
 		q := r.q.WithTx(tx)
-		row, err := q.GetRoleByTenantAndName(ctx, GetRoleByTenantAndNameParams{
+		row, err := q.GetRoleByTenantAndName(ctx, db.GetRoleByTenantAndNameParams{
 			TenantID: pgUUID(tid),
 			Name:     name,
 		})
@@ -222,7 +223,7 @@ func (r *RoleRepository) UpdateByID(
 
 // ----- Helpers ---------------------------------------------------------------
 
-func loadRole(ctx context.Context, q *Queries, id role.ID) (*role.Role, error) {
+func loadRole(ctx context.Context, q *db.Queries, id role.ID) (*role.Role, error) {
 	uid, err := uuid.Parse(id.String())
 	if err != nil {
 		return nil, fmt.Errorf("role repo: parse id %q: %w", id, err)
@@ -241,7 +242,7 @@ func loadRole(ctx context.Context, q *Queries, id role.ID) (*role.Role, error) {
 	return rowToRole(row)
 }
 
-func insertRoleRow(ctx context.Context, q *Queries, ro *role.Role) error {
+func insertRoleRow(ctx context.Context, q *db.Queries, ro *role.Role) error {
 	rid, err := uuid.Parse(ro.ID().String())
 	if err != nil {
 		return fmt.Errorf("role repo: parse id %q: %w", ro.ID(), err)
@@ -254,7 +255,7 @@ func insertRoleRow(ctx context.Context, q *Queries, ro *role.Role) error {
 	if err != nil {
 		return err
 	}
-	err = q.InsertRole(ctx, InsertRoleParams{
+	err = q.InsertRole(ctx, db.InsertRoleParams{
 		ID:              pgUUID(rid),
 		TenantID:        pgUUID(tid),
 		Name:            ro.Name(),
@@ -264,8 +265,8 @@ func insertRoleRow(ctx context.Context, q *Queries, ro *role.Role) error {
 		// role.HierarchyLevelMax (99) per the aggregate's New + ChangeHierarchyLevel
 		// invariants. Cast to int32 cannot overflow.
 		HierarchyLevel: int32(ro.HierarchyLevel()), //nolint:gosec // G115: bounded [0,99] by aggregate
-		Permissions:     permsJSON,
-		CreatedAt:       pgRequiredTimestamp(ro.CreatedAt()),
+		Permissions:    permsJSON,
+		CreatedAt:      pgRequiredTimestamp(ro.CreatedAt()),
 	})
 	if err != nil {
 		if isRoleNameUniqueViolation(err) {
@@ -279,7 +280,7 @@ func insertRoleRow(ctx context.Context, q *Queries, ro *role.Role) error {
 // persistRoleState writes the mutable Role state — name, hierarchy_level,
 // permissions OR soft-delete flags — under the aggregate's current
 // shape. Caller (UpdateByID) owns the tx + chose to persist.
-func persistRoleState(ctx context.Context, q *Queries, ro *role.Role) error {
+func persistRoleState(ctx context.Context, q *db.Queries, ro *role.Role) error {
 	rid, err := uuid.Parse(ro.ID().String())
 	if err != nil {
 		return fmt.Errorf("role repo: parse id %q: %w", ro.ID(), err)
@@ -291,7 +292,7 @@ func persistRoleState(ctx context.Context, q *Queries, ro *role.Role) error {
 		if by := ro.DeletedBy(); by != "" {
 			deletedBy = &by
 		}
-		err = q.SoftDeleteRole(ctx, SoftDeleteRoleParams{
+		err = q.SoftDeleteRole(ctx, db.SoftDeleteRoleParams{
 			ID:        pgUUID(rid),
 			DeletedAt: pgRequiredTimestamp(ro.DeletedAt()),
 			DeletedBy: deletedBy,
@@ -305,7 +306,7 @@ func persistRoleState(ctx context.Context, q *Queries, ro *role.Role) error {
 	if err != nil {
 		return err
 	}
-	err = q.UpdateRole(ctx, UpdateRoleParams{
+	err = q.UpdateRole(ctx, db.UpdateRoleParams{
 		ID:   pgUUID(rid),
 		Name: ro.Name(),
 		// Bounded [0,99] by role aggregate invariants per insertRoleRow.
@@ -347,7 +348,7 @@ func drainRoleEvents(ctx context.Context, tx pgx.Tx, ro *role.Role) error {
 
 // rowToRole hydrates the aggregate from the sqlc row. UnmarshalFromDB
 // trusts the data — no re-validation per TDL canon.
-func rowToRole(row IdentityRole) (*role.Role, error) {
+func rowToRole(row db.IdentityRole) (*role.Role, error) {
 	id := role.ID(uuidFromPg(row.ID).String())
 	tid := tenant.ID(uuidFromPg(row.TenantID).String())
 	perms, err := decodePermissions(row.Permissions)
