@@ -33,6 +33,16 @@
 - `authn.PlatformTenantSlug` constant + Login mints `is_platform` from `tenant.Slug() == "platform"`.
 - CI optimisation: single workflow + `dorny/paths-filter@v3`, pre-push hook (`task ci`), Taskfile `task dev` + `task hooks:install`.
 - sqlc layout — generated code split into `internal/identity/adapters/db/` (`package db`); hand-written `*_pg.go` adapters import + qualify (`db.Queries`, `db.IdentityPerson`). Brandur / river-queue canon. ADR 0037.
+- Pagination + search + cache foundation (Wave 1 of the frontend backend wishlist):
+  - ADR 0038 — cursor (keyset) pagination over offset; opaque base64 tokens; `has_more`/`next_cursor`; no total counts.
+  - ADR 0039 — per-request scope selection (JWT.is_platform + `X-Tenant-Id` header decision tree) for the unified-surface spec.
+  - ADR 0040 — search strategy: `pg_trgm` now, Postgres FTS at Phase 4, defer dedicated infrastructure.
+  - ADR 0041 — CQRS read models via outbox subscribers; pattern for Phase 2 lead-search projection.
+  - Migration 20260518000001 — `pg_trgm` extension + GIN search indexes on persons/tenants/memberships + composite keyset indexes for pagination + partial-index sweep.
+  - `internal/common/pagination` — generic `Page[T]`, `Cursor` opaque base64 token, `ClampPageSize` helper. Zero project-internal imports.
+  - `GET /v1/auth/me/capabilities` — JWT-resident projection (no DB hit) so the frontend stops decoding tokens to drive nav/tier/buttons. Auth0 /userinfo canon.
+  - `GET /v1/platform/stats?delta_window=24h|7d|30d` — closed-set delta window per ADR 0040 (cache-key-explosion prevention); cache wrapping via HybridCache facade ready to wire.
+  - `GET /v1/users` cursor-paginated — `?cursor=&page_size=` (default 50, cap 200). Backed by new `ListActiveMembershipsInTenantPage` sqlc query + composite partial index. Active-only; inactive listing is a follow-up `?status=inactive` endpoint.
 
 **Active branches:**
 - `main` — production; protected via PR-only merge.

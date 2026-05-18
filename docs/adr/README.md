@@ -26,5 +26,9 @@ One decision per file, Michael Nygard format (Context / Decision / Consequences 
 | 0035 | Event sourcing scope — zero modules at v0.1 | Accepted |
 | 0036 | Permission model — closed-set catalog + Role + per-Membership overlay | Accepted |
 | 0037 | sqlc generated-code package layout — dedicated `db` subpackage | Accepted |
+| 0038 | Pagination strategy — cursor (keyset) over offset | Accepted |
+| 0039 | Per-request scope selection — JWT.is_platform + X-Tenant-Id header | Accepted |
+| 0040 | Search strategy — `pg_trgm` now, Postgres FTS at Phase 4, defer dedicated infra | Accepted |
+| 0041 | CQRS read models via outbox subscribers | Accepted |
 
-ADRs 0011–0026 + 0032 + 0038+ land as the relevant code lands per the master plan.
+ADRs 0011–0026 + 0032 + 0042+ land as the relevant code lands per the master plan.

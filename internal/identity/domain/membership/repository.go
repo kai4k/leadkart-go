@@ -2,6 +2,7 @@ package membership
 
 import (
 	"context"
+	"time"
 
 	"github.com/leadkart/leadkart-go/internal/common/errs"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
@@ -57,6 +58,27 @@ type Repository interface {
 	// ListForTenant returns all Memberships under the current tenant scope.
 	// Used by tenant admin UIs ("manage users").
 	ListForTenant(ctx context.Context, tenantID tenant.ID) ([]*Membership, error)
+
+	// ListForTenantPage returns the next keyset-paginated slice of ACTIVE
+	// Memberships under the current tenant scope, per ADR 0038.
+	//
+	// Cursor semantics: (beforeJoinedAt, beforeID) is the previous-page
+	// boundary. First page supplies sentinels — a future timestamp +
+	// the all-ones UUID — so the tuple comparison admits every row.
+	//
+	// limit MUST be the caller's desired page_size + 1 (the "peek one
+	// extra" trick from ADR 0038); the caller drops the extra row when
+	// present + uses it to set next_cursor.
+	//
+	// Returns only Memberships with status='active' — matches the
+	// partial composite index idx_memberships_tenant_active_joined.
+	// Inactive listing path is a future ?status=inactive query.
+	//
+	// Primitive types here (time.Time + string + int) keep the domain
+	// layer free of pagination-package coupling per ADR 0002. The
+	// application-layer query handler is responsible for cursor
+	// encode/decode + sentinel construction.
+	ListForTenantPage(ctx context.Context, beforeJoinedAt time.Time, beforeID string, limit int) ([]*Membership, error)
 
 	// ListAllForPerson returns every Membership (Active + Inactive) the
 	// supplied Person holds across ALL tenants. Cross-tenant read —

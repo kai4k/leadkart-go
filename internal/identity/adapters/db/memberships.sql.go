@@ -276,6 +276,68 @@ func (q *Queries) ListMembershipsInCurrentTenant(ctx context.Context) ([]Identit
 	return items, nil
 }
 
+const listActiveMembershipsInTenantPage = `-- name: ListActiveMembershipsInTenantPage :many
+SELECT id, person_id, tenant_id, status, joined_at, left_at,
+       designation, department, status_message, reports_to,
+       created_by_membership_id
+FROM   identity.tenant_memberships
+WHERE  status = 'active'
+  AND  (joined_at, id) < ($1::timestamptz, $2::uuid)
+ORDER  BY joined_at DESC, id DESC
+LIMIT  $3
+`
+
+type ListActiveMembershipsInTenantPageParams struct {
+	BeforeJoinedAt pgtype.Timestamptz
+	BeforeID       pgtype.UUID
+	Limit          int32
+}
+
+// Keyset-paginated active-only listing per ADR 0038. Backed by the
+// partial composite index idx_memberships_tenant_active_joined
+// (tenant_id, joined_at DESC, id DESC) WHERE status = 'active' â€”
+// planner emits Index Scan, not Seq Scan + Filter, when the cursor
+// predicate uses tuple-comparison.
+//
+// Cursor semantics: (BeforeJoinedAt, BeforeID) is the previous-page
+// boundary. First page passes (now() + 1 day, '00000000-...') so the
+// tuple comparison admits every row.
+//
+// LIMIT is page_size+1 (the "peek one extra" trick from ADR 0038);
+// the caller drops the extra row when present + uses it to set
+// next_cursor.
+func (q *Queries) ListActiveMembershipsInTenantPage(ctx context.Context, arg ListActiveMembershipsInTenantPageParams) ([]IdentityTenantMembership, error) {
+	rows, err := q.db.Query(ctx, listActiveMembershipsInTenantPage, arg.BeforeJoinedAt, arg.BeforeID, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []IdentityTenantMembership
+	for rows.Next() {
+		var i IdentityTenantMembership
+		if err := rows.Scan(
+			&i.ID,
+			&i.PersonID,
+			&i.TenantID,
+			&i.Status,
+			&i.JoinedAt,
+			&i.LeftAt,
+			&i.Designation,
+			&i.Department,
+			&i.StatusMessage,
+			&i.ReportsTo,
+			&i.CreatedByMembershipID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listPermissionOverridesByMembership = `-- name: ListPermissionOverridesByMembership :many
 SELECT membership_id, permission_name, kind, tenant_id, updated_at
 FROM   identity.membership_permission_overrides

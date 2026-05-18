@@ -52,6 +52,34 @@ SELECT id, person_id, tenant_id, status, joined_at, left_at,
 FROM   identity.tenant_memberships
 ORDER  BY joined_at;
 
+-- name: ListActiveMembershipsInTenantPage :many
+-- Keyset-paginated active-only listing per ADR 0038. Backed by the
+-- partial composite index idx_memberships_tenant_active_joined
+-- (tenant_id, joined_at DESC, id DESC) WHERE status = 'active' —
+-- planner emits Index Scan, not Seq Scan + Filter, when the cursor
+-- predicate uses tuple-comparison.
+--
+-- Cursor semantics: (sqlc.arg(before_joined_at), sqlc.arg(before_id))
+-- is the previous-page boundary. First page passes the sentinel
+-- (now() + 1 day, '00000000-0000-0000-0000-000000000000') so the
+-- tuple comparison admits every row.
+--
+-- LIMIT is page_size+1 (the "peek one extra" trick from ADR 0038);
+-- the caller drops the extra row when present + uses it to set
+-- next_cursor.
+--
+-- Status filter is hard-coded to 'active' to match the partial index;
+-- inactive listing path (?status=inactive) lands as a separate query
+-- when frontend asks.
+SELECT id, person_id, tenant_id, status, joined_at, left_at,
+       designation, department, status_message, reports_to,
+       created_by_membership_id
+FROM   identity.tenant_memberships
+WHERE  status = 'active'
+  AND  (joined_at, id) < ($1::timestamptz, $2::uuid)
+ORDER  BY joined_at DESC, id DESC
+LIMIT  $3;
+
 -- name: ListSuperAdminMembershipsInTenant :many
 -- Returns the active Memberships in the supplied tenant that hold a
 -- role flagged is_super_admin=true. Powers the platform-tenant

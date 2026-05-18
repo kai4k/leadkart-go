@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -236,6 +237,68 @@ func (r *MembershipRepository) ListForTenant(
 		// Hydrate child-table state for each row. ListForTenant is an admin
 		// path; the N+2 round-trips per row are acceptable until a hot
 		// path needs the bulk json_agg join (benchmark first).
+		out = make([]*membership.Membership, 0, len(hydrated))
+		for _, row := range hydrated {
+			roleIDs, lerr := loadRoleAssignments(ctx, q, uuidFromPg(row.ID))
+			if lerr != nil {
+				return lerr
+			}
+			granted, revoked, lerr := loadPermissionOverrides(ctx, q, uuidFromPg(row.ID))
+			if lerr != nil {
+				return lerr
+			}
+			m, perr := rowToMembership(row, roleIDs, granted, revoked)
+			if perr != nil {
+				return perr
+			}
+			out = append(out, m)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// ListForTenantPage satisfies [membership.Repository]. Keyset-
+// paginated active-only listing per ADR 0038. Backed by the
+// partial composite index idx_memberships_tenant_active_joined
+// shipped in migration 20260518000001.
+//
+// limit is page_size + 1 (the "peek one extra" pattern); the
+// application-layer query handler drops the extra row when present
+// and uses it to set next_cursor.
+func (r *MembershipRepository) ListForTenantPage(
+	ctx context.Context,
+	beforeJoinedAt time.Time,
+	beforeID string,
+	limit int,
+) ([]*membership.Membership, error) {
+	beforeUUID, err := uuid.Parse(beforeID)
+	if err != nil {
+		return nil, fmt.Errorf("membership repo: list-page: parse before id: %w", err)
+	}
+	if limit <= 0 {
+		return nil, fmt.Errorf("membership repo: list-page: limit must be positive (got %d)", limit)
+	}
+
+	var out []*membership.Membership
+	err = r.tx.WithinTx(ctx, pg.TxScopeTenant, func(ctx context.Context, tx pgx.Tx) error {
+		q := r.q.WithTx(tx)
+		hydrated, qerr := q.ListActiveMembershipsInTenantPage(ctx, db.ListActiveMembershipsInTenantPageParams{
+			BeforeJoinedAt: pgRequiredTimestamp(beforeJoinedAt),
+			BeforeID:       pgUUID(beforeUUID),
+			Limit:          int32(limit), //nolint:gosec // page_size capped at 200 well within int32
+		})
+		if qerr != nil {
+			return fmt.Errorf("membership repo: list-page: %w", qerr)
+		}
+		// Hydrate child-table state for each row — same N+2 round-trip
+		// pattern as ListForTenant. With page_size capped at 200 + the
+		// partial-index seek + composite, the per-page cost is bounded.
+		// Future optimization: bulk-fetch role_assignments + overrides
+		// in a single query keyed by IN(membership_ids).
 		out = make([]*membership.Membership, 0, len(hydrated))
 		for _, row := range hydrated {
 			roleIDs, lerr := loadRoleAssignments(ctx, q, uuidFromPg(row.ID))

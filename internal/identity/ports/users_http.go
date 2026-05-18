@@ -5,10 +5,12 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"strconv"
 
 	"github.com/google/uuid"
 
 	"github.com/leadkart/leadkart-go/internal/common/email"
+	"github.com/leadkart/leadkart-go/internal/common/pagination"
 	"github.com/leadkart/leadkart-go/internal/common/tenancy"
 	"github.com/leadkart/leadkart-go/internal/identity/app"
 	"github.com/leadkart/leadkart-go/internal/identity/app/command"
@@ -43,6 +45,14 @@ func handleGetUser(log *slog.Logger, a app.Application) http.Handler {
 
 // ----- ListUsers ------------------------------------------------------------
 
+// handleListUsers serves GET /api/v1/users with cursor pagination per
+// ADR 0038. Query params:
+//
+//   - ?cursor=<opaque base64>  — empty / absent = first page
+//   - ?page_size=<int>         — clamped to [1, 200]; default 50
+//
+// Returns ACTIVE memberships only (status='active'). Inactive listing
+// is a future ?status=inactive endpoint.
 func handleListUsers(log *slog.Logger, a app.Application) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Tenant scope is the caller's JWT tenant_id (bridged onto ctx
@@ -54,16 +64,32 @@ func handleListUsers(log *slog.Logger, a app.Application) http.Handler {
 			writeError(w, http.StatusUnauthorized, ErrCodeInvalidCredentials, "")
 			return
 		}
-		views, err := a.Queries.ListUsers.Handle(r.Context(), query.ListUsersQuery{
+
+		cursor, err := pagination.Decode(r.URL.Query().Get("cursor"))
+		if err != nil {
+			writeError(w, http.StatusBadRequest, ErrCodeInvalidCursor,
+				"cursor failed to decode; retry without it to fetch first page")
+			return
+		}
+		pageSize, _ := strconv.Atoi(r.URL.Query().Get("page_size"))
+
+		page, err := a.Queries.ListUsersPaged.Handle(r.Context(), query.ListUsersPagedQuery{
 			TenantID: tenant.ID(tid),
+			Cursor:   cursor,
+			PageSize: pageSize,
 		})
 		if err != nil {
 			log.ErrorContext(r.Context(), "list users failed", "err", err)
 			writeError(w, http.StatusInternalServerError, ErrCodeInternalError, "")
 			return
 		}
-		out := ListUsersResponse{Users: make([]UserDto, 0, len(views))}
-		for _, v := range views {
+
+		out := ListUsersResponse{
+			Users:      make([]UserDto, 0, len(page.Items)),
+			HasMore:    page.HasMore,
+			NextCursor: page.NextCursor,
+		}
+		for _, v := range page.Items {
 			out.Users = append(out.Users, projectUserViewToDto(v))
 		}
 		writeJSON(w, http.StatusOK, out)
