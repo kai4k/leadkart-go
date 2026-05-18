@@ -66,6 +66,12 @@ func AddRoutes(mux *http.ServeMux, log *slog.Logger, a app.Application, verifier
 		mux.Handle("POST /api/v1/auth/change-password", auth(handleChangePassword(log, a)))
 		mux.Handle("POST /api/v1/auth/request-email-change", auth(handleRequestEmailChange(log, a)))
 		mux.Handle("GET /api/v1/auth/sessions", auth(handleListSessions(log, a)))
+		// /me/capabilities — frontend nav/tier/button-visibility driver.
+		// JWT-resident fields only (sub-millisecond, no DB hit). Per
+		// ADR 0036 + Phase 1.5 — the JWT carries the resolved permission
+		// bundle; this endpoint is a thin projection so the frontend
+		// stops base64-decoding tokens to drive UI logic.
+		mux.Handle("GET /api/v1/auth/me/capabilities", auth(handleGetCapabilities(log)))
 		mux.Handle("DELETE /api/v1/auth/sessions/{familyId}", auth(handleRevokeSession(log, a)))
 		mux.Handle("DELETE /api/v1/auth/sessions", auth(handleRevokeAllSessions(log, a)))
 

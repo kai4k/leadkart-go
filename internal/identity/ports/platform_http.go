@@ -336,21 +336,60 @@ func handleListImpersonationSessions(log *slog.Logger, a app.Application) http.H
 
 // ----- PlatformStats --------------------------------------------------------
 
+// handlePlatformStats serves GET /v1/platform/stats[?delta_window=24h|7d|30d].
+//
+// v0.2 surface: uncached pass-through (5 base + 4 delta COUNT(*) under
+// TxScopePlatform per call). Cache wiring lands in a follow-up — the
+// query handler + handler signature are ALREADY shaped for it:
+//
+//   - Window + WindowLabel are passed through PlatformStatsQuery; a
+//     cache.NewFacade[string, query.PlatformStatsView] keyed by
+//     `"platform-stats:" + windowLabel` slots in here without changing
+//     the handler shape.
+//   - Closed-set delta_window per ADR 0040 — empty / 24h / 7d / 30d →
+//     4 cache keys total. Arbitrary durations would let a misbehaving
+//     client thrash the cache (rejected with ErrCodeInvalidDeltaWindow).
+//   - Target TTL: 5min (HybridCache facade WithTTL option).
+//
+// Per ADR 0040: ?delta_window= is a closed-set query param. The
+// query.ParseDeltaWindow helper enforces the set; anything outside
+// returns 400 + ErrCodeInvalidDeltaWindow.
 func handlePlatformStats(log *slog.Logger, a app.Application) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		view, err := a.Queries.PlatformStats.Handle(r.Context())
+		windowRaw := strings.TrimSpace(r.URL.Query().Get("delta_window"))
+		dur, label, err := query.ParseDeltaWindow(windowRaw)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, ErrCodeInvalidDeltaWindow, err.Error())
+			return
+		}
+
+		view, err := a.Queries.PlatformStats.Handle(r.Context(), query.PlatformStatsQuery{
+			Window:      dur,
+			WindowLabel: label,
+		})
 		if err != nil {
 			log.ErrorContext(r.Context(), "platform stats failed", "err", err)
 			writeError(w, http.StatusInternalServerError, ErrCodeInternalError, "")
 			return
 		}
-		writeJSON(w, http.StatusOK, PlatformStatsResponse{
+
+		resp := PlatformStatsResponse{
 			TenantsTotal:      view.TenantsTotal,
 			TenantsActive:     view.TenantsActive,
 			TenantsSuspended:  view.TenantsSuspended,
 			PersonsTotal:      view.PersonsTotal,
 			MembershipsActive: view.MembershipsActive,
-		})
+		}
+		if view.Deltas != nil {
+			resp.Deltas = &PlatformStatsDeltas{
+				Window:            view.Deltas.Window,
+				TenantsTotal:      view.Deltas.TenantsTotal,
+				TenantsActive:     view.Deltas.TenantsActive,
+				PersonsTotal:      view.Deltas.PersonsTotal,
+				MembershipsActive: view.Deltas.MembershipsActive,
+			}
+		}
+		writeJSON(w, http.StatusOK, resp)
 	})
 }
 

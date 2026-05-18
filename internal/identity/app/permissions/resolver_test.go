@@ -5,6 +5,7 @@ import (
 	"errors"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/leadkart/leadkart-go/internal/common/ids"
 	"github.com/leadkart/leadkart-go/internal/identity/app/permissions"
@@ -49,6 +50,9 @@ func (f *fakeMembershipRepo) ListForTenant(context.Context, tenant.ID) ([]*membe
 }
 func (f *fakeMembershipRepo) ListAllForPerson(context.Context, person.ID) ([]*membership.Membership, error) {
 	return nil, errors.New("fake: ListAllForPerson unused")
+}
+func (f *fakeMembershipRepo) ListForTenantPage(context.Context, time.Time, string, int) ([]*membership.Membership, error) {
+	return nil, errors.New("fake: ListForTenantPage unused")
 }
 func (f *fakeMembershipRepo) HasActiveSuperAdmin(context.Context, tenant.ID) (bool, error) {
 	return false, nil

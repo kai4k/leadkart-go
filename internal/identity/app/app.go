@@ -90,6 +90,7 @@ type Queries struct {
 	GetTenant                 query.GetTenantHandler
 	GetUser                   query.GetUserHandler
 	ListUsers                 query.ListUsersHandler
+	ListUsersPaged            query.ListUsersPagedHandler
 	GetRole                   query.GetRoleHandler
 	ListRoles                 query.ListRolesHandler
 	GetPerson                 query.GetPersonHandler

@@ -177,4 +177,14 @@ const (
 	// parse. 400 surface. Distinct from session_not_found which the
 	// session-revoke flow collapses into 204 idempotent no-op anyway.
 	ErrCodeInvalidSessionID = "invalid_session_id"
+
+	// ErrCodeInvalidDeltaWindow — ?delta_window= on GET /v1/platform/stats
+	// wasn't in the closed set {24h, 7d, 30d}. 400 surface; closed-set
+	// enforced to prevent cache-key explosion per ADR 0040.
+	ErrCodeInvalidDeltaWindow = "invalid_delta_window"
+
+	// ErrCodeInvalidCursor — paginated list endpoint received a cursor
+	// that couldn't be base64-decoded or didn't carry valid JSON. 400
+	// surface; clients should retry without the cursor (loads page 1).
+	ErrCodeInvalidCursor = "invalid_cursor"
 )

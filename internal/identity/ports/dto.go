@@ -135,6 +135,38 @@ type ChangePasswordRequest struct {
 	NewPassword     string `json:"new_password"`
 }
 
+// ----- Capabilities (GET /v1/auth/me/capabilities) ---------------------------
+
+// CapabilitiesDto is the wire shape of GET /v1/auth/me/capabilities.
+//
+// Mirrors Auth0 /userinfo + Microsoft Graph /me semantics — returns
+// the resolved permission/role bundle for the calling membership so
+// the frontend never has to decode the JWT to drive nav / tier /
+// button-visibility.
+//
+// v0.2 surface: JWT-resident fields only (zero DB hit). Profile
+// enrichment (email + first/last name + role NAMES alongside the
+// permission strings) is a v0.3 follow-up gated on a HybridCache
+// keyed by (membership_id, security_stamp) — the cache invalidates
+// implicitly when the stamp rotates (password change, role grant,
+// global suspend) per ADR 0028.
+//
+// Caller derivation rules (see handler godoc):
+//   - All fields populated from the verified JWT claims.
+//   - is_platform IS the slug-anchored claim per Phase 1.5 hardening —
+//     true iff (claim.is_platform AND tenant_slug == "platform").
+//   - permissions is the closed-set catalogue list (always returned,
+//     [] for a fresh member with no role-driven permissions).
+type CapabilitiesDto struct {
+	PersonID     string   `json:"person_id"`
+	MembershipID string   `json:"membership_id"`
+	TenantID     string   `json:"tenant_id"`
+	TenantSlug   string   `json:"tenant_slug"`
+	IsPlatform   bool     `json:"is_platform"`
+	IsSuperUser  bool     `json:"is_super_user"`
+	Permissions  []string `json:"permissions"`
+}
+
 // ----- User management -------------------------------------------------------
 
 // UserDto is the wire-shape of a Membership composed with its
@@ -158,8 +190,16 @@ type UserDto struct {
 }
 
 // ListUsersResponse — GET /api/v1/users.
+//
+// Paginated wire shape per ADR 0038 — cursor (keyset) over offset.
+// `users` is the canonical resource-name key the frontend already
+// expects from v0.1; `has_more` + `next_cursor` are the pagination
+// metadata. Total count intentionally omitted (O(n) under RLS;
+// frontend uses has_more for "load more" UX per ADR 0038 non-goals).
 type ListUsersResponse struct {
-	Users []UserDto `json:"users"`
+	Users      []UserDto `json:"users"`
+	HasMore    bool      `json:"has_more"`
+	NextCursor string    `json:"next_cursor,omitempty"`
 }
 
 // UpdateUserProfileRequest — PATCH /api/v1/users/{userId}/profile.
@@ -303,12 +343,33 @@ type ListImpersonationSessionsResponse struct {
 
 // PlatformStatsResponse — GET /api/v1/platform/stats. Operator
 // dashboard at-a-glance counts. Single round-trip from caller.
+//
+// Deltas is populated when the request specifies ?delta_window=24h|7d|30d
+// (closed set per ADR 0040 — cache-key-explosion prevention). Each
+// delta count is "new rows since now() - window" for the matching
+// base metric. Omitted from the wire shape when no delta was asked
+// for (omitempty + pointer-to-struct).
+//
+// Cached server-side via HybridCache facade keyed by (delta_window)
+// with 5min TTL per ADR 0040.
 type PlatformStatsResponse struct {
-	TenantsTotal      int `json:"tenants_total"`
-	TenantsActive     int `json:"tenants_active"`
-	TenantsSuspended  int `json:"tenants_suspended"`
-	PersonsTotal      int `json:"persons_total"`
-	MembershipsActive int `json:"memberships_active"`
+	TenantsTotal      int                  `json:"tenants_total"`
+	TenantsActive     int                  `json:"tenants_active"`
+	TenantsSuspended  int                  `json:"tenants_suspended"`
+	PersonsTotal      int                  `json:"persons_total"`
+	MembershipsActive int                  `json:"memberships_active"`
+	Deltas            *PlatformStatsDeltas `json:"deltas,omitempty"`
+}
+
+// PlatformStatsDeltas carries the "Δ in the last <window>" widget data.
+// Same metric names as the base counts so the frontend can render a
+// "<base> (+<delta> this <window>)" UI uniformly.
+type PlatformStatsDeltas struct {
+	Window            string `json:"window"` // "24h" | "7d" | "30d"
+	TenantsTotal      int    `json:"tenants_total"`
+	TenantsActive     int    `json:"tenants_active"`
+	PersonsTotal      int    `json:"persons_total"`
+	MembershipsActive int    `json:"memberships_active"`
 }
 
 // ----- Role management -------------------------------------------------------

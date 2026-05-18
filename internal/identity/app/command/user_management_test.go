@@ -77,6 +77,13 @@ func (r *fakeMembershipRepo) HasActiveSuperAdmin(_ context.Context, _ tenant.ID)
 	return false, nil
 }
 
+func (r *fakeMembershipRepo) ListForTenantPage(_ context.Context, _ time.Time, _ string, _ int) ([]*membership.Membership, error) {
+	// Tests in this package exercise the command path, not the paginated
+	// list query. Empty page is the safe stub — query-layer tests live
+	// in the query package against a real testcontainers DB.
+	return nil, nil
+}
+
 var _ membership.Repository = (*fakeMembershipRepo)(nil)
 
 func newMembership(t *testing.T) *membership.Membership {
