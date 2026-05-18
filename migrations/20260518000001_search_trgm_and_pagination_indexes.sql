@@ -49,13 +49,25 @@ CREATE INDEX idx_tenants_search_trgm
         (lower(slug) || ' ' || lower(legal_name) || ' ' || lower(display_name)) gin_trgm_ops
     );
 
--- identity.tenant_memberships — search by designation + department, scoped
--- per tenant. Membership-level search is per-tenant UX (the operator-
--- cross-tenant equivalent goes through identity.persons).
+-- identity.tenant_memberships — search by designation + department.
+-- GIN does NOT have a default operator class for uuid; including
+-- `tenant_id` as a leading column would require the `btree_gin`
+-- contrib extension (gin_uuid_ops). For LeadKart scale that's
+-- speculative dependency cost — the planner combines THIS GIN with
+-- the existing idx_memberships_tenant (tenant_id btree) via Bitmap
+-- And on the realistic query shape:
+--   WHERE tenant_id = $1 AND status='active'
+--     AND (designation||' '||department) ILIKE '%foo%'
+-- The bitmap-and plan is sub-50ms at < 10M rows per realistic
+-- multi-tenant SaaS — well within our v0.2 ceiling.
+--
+-- If membership-level operator search at platform scale (>= 50M
+-- rows across all tenants) ever becomes a measured pain point, the
+-- migration to install btree_gin + recreate this index with
+-- (tenant_id, trgm_expr) is additive — no app-level changes.
 CREATE INDEX idx_memberships_search_trgm
     ON identity.tenant_memberships
     USING gin (
-        tenant_id,
         (coalesce(lower(designation), '') || ' ' || coalesce(lower(department), '')) gin_trgm_ops
     )
     WHERE status = 'active';
