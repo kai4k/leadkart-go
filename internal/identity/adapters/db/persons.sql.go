@@ -427,3 +427,62 @@ func (q *Queries) UpdatePerson(ctx context.Context, arg UpdatePersonParams) erro
 	)
 	return err
 }
+
+const searchPersonsByText = `-- name: SearchPersonsByText :many
+SELECT id, email, first_name, last_name, created_at,
+       similarity(
+           lower(email) || ' ' || lower(first_name) || ' ' || lower(last_name),
+           lower($1)
+       ) AS rank
+FROM   identity.persons
+WHERE  is_active AND NOT is_anonymised
+AND    (lower(email) || ' ' || lower(first_name) || ' ' || lower(last_name))
+       ILIKE '%' || lower($1) || '%'
+ORDER  BY rank DESC, id DESC
+LIMIT  $2
+`
+
+type SearchPersonsByTextParams struct {
+	Query string
+	Limit int32
+}
+
+type SearchPersonsByTextRow struct {
+	ID        pgtype.UUID
+	Email     string
+	FirstName string
+	LastName  string
+	CreatedAt pgtype.Timestamptz
+	Rank      float32
+}
+
+// Cross-tenant person search per ADR 0040 (pg_trgm). Backed by
+// idx_persons_search_trgm. Operator-only path (caller must run
+// under TxScopePlatform). similarity() ranking surfaces closer
+// trigram overlap first.
+func (q *Queries) SearchPersonsByText(ctx context.Context, arg SearchPersonsByTextParams) ([]SearchPersonsByTextRow, error) {
+	rows, err := q.db.Query(ctx, searchPersonsByText, arg.Query, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []SearchPersonsByTextRow
+	for rows.Next() {
+		var i SearchPersonsByTextRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Email,
+			&i.FirstName,
+			&i.LastName,
+			&i.CreatedAt,
+			&i.Rank,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}

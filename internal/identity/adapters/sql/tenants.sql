@@ -119,3 +119,25 @@ WHERE  id = $1;
 -- deletion event. The aggregate's HardDelete() method gates this on
 -- StatusPendingDeletion + grace expiry; the SQL is unconditional.
 DELETE FROM identity.tenants WHERE id = $1;
+
+
+-- name: SearchTenantsByText :many
+-- Cross-tenant tenants search per ADR 0040 (pg_trgm). Backed by
+-- idx_tenants_search_trgm (GIN over lower(slug||' '||legal_name||
+-- ' '||display_name)).
+--
+-- Tenants is non-RLS so this runs in any scope; the HTTP layer
+-- gates on RequirePlatform anyway. similarity() ranking surfaces
+-- closer matches first. Caller MUST bound query length at the
+-- boundary (2-100 chars).
+SELECT id, slug, legal_name, display_name, status, created_at,
+       similarity(
+           lower(slug) || ' ' || lower(legal_name) || ' ' || lower(display_name),
+           lower($1)
+       ) AS rank
+FROM   identity.tenants
+WHERE  status != 'hard_deleted'
+AND    (lower(slug) || ' ' || lower(legal_name) || ' ' || lower(display_name))
+       ILIKE '%' || lower($1) || '%'
+ORDER  BY rank DESC, id DESC
+LIMIT  $2;

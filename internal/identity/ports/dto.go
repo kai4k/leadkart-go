@@ -4,7 +4,10 @@
 // handler calls.
 package ports
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 // ----- RegisterTenant --------------------------------------------------------
 
@@ -135,36 +138,115 @@ type ChangePasswordRequest struct {
 	NewPassword     string `json:"new_password"`
 }
 
+// ----- Audit-log reads (GET /v1/auth/me/activity, GET /v1/tenants/{id}/activity) ----
+
+// AuditEventDto is one row of the audit-log read shape per
+// ADR 0027 (outbox doubles as audit). Per-event minimum: action +
+// timestamp + outcome; payload is raw JSON the frontend can render
+// per-action as needed.
+type AuditEventDto struct {
+	ID            string          `json:"id"`
+	Action        string          `json:"action"`
+	ActorID       string          `json:"actor_id,omitempty"`
+	TenantID      string          `json:"tenant_id,omitempty"`
+	CorrelationID string          `json:"correlation_id,omitempty"`
+	OccurredAt    time.Time       `json:"occurred_at"`
+	DurationMs    int64           `json:"duration_ms"`
+	Succeeded     bool            `json:"succeeded"`
+	FailureReason string          `json:"failure_reason,omitempty"`
+	Payload       json.RawMessage `json:"payload,omitempty"`
+}
+
+// ListAuditEventsResponse — keyset-paginated wire shape per ADR
+// 0038. events[] always non-nil; next_cursor empty when last page.
+type ListAuditEventsResponse struct {
+	Events     []AuditEventDto `json:"events"`
+	HasMore    bool            `json:"has_more"`
+	NextCursor string          `json:"next_cursor,omitempty"`
+}
+
+// ----- Omni-search (GET /v1/search) ------------------------------------------
+
+// SearchResponse — GET /v1/search?q=&limit=&include=
+//
+// Operator omni-search wire shape per ADR 0040. Two categories
+// returned; both slices always non-nil (empty when no matches).
+// has_partial=true signals a sub-query exceeded its per-category
+// timeout (200ms) — frontend renders what's there and may show a
+// "partial results" hint.
+type SearchResponse struct {
+	Persons    []SearchPersonHit `json:"persons"`
+	Tenants    []SearchTenantHit `json:"tenants"`
+	HasPartial bool              `json:"has_partial"`
+}
+
+// SearchPersonHit is one persons-category match.
+type SearchPersonHit struct {
+	ID        string    `json:"id"`
+	Email     string    `json:"email"`
+	FirstName string    `json:"first_name"`
+	LastName  string    `json:"last_name"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// SearchTenantHit is one tenants-category match.
+type SearchTenantHit struct {
+	ID          string    `json:"id"`
+	Slug        string    `json:"slug"`
+	LegalName   string    `json:"legal_name"`
+	DisplayName string    `json:"display_name"`
+	Status      string    `json:"status"`
+	CreatedAt   time.Time `json:"created_at"`
+}
+
 // ----- Capabilities (GET /v1/auth/me/capabilities) ---------------------------
 
 // CapabilitiesDto is the wire shape of GET /v1/auth/me/capabilities.
 //
 // Mirrors Auth0 /userinfo + Microsoft Graph /me semantics — returns
-// the resolved permission/role bundle for the calling membership so
-// the frontend never has to decode the JWT to drive nav / tier /
-// button-visibility.
+// the resolved permission/role/profile bundle for the calling
+// membership so the frontend never has to decode the JWT to drive
+// nav / tier / button-visibility.
 //
-// v0.2 surface: JWT-resident fields only (zero DB hit). Profile
-// enrichment (email + first/last name + role NAMES alongside the
-// permission strings) is a v0.3 follow-up gated on a HybridCache
-// keyed by (membership_id, security_stamp) — the cache invalidates
-// implicitly when the stamp rotates (password change, role grant,
-// global suspend) per ADR 0028.
+// Field provenance:
+//   - JWT-resident (zero DB hit): person_id, membership_id, tenant_id,
+//     tenant_slug, is_platform, is_super_user, permissions[].
+//   - Enriched (cached via cache.CapabilitiesTTL — 2min L1 / 15min L2;
+//     ADR 0042): email, first_name, last_name, roles[]. Cache key
+//     includes the security_stamp so stamp rotation invalidates
+//     implicitly per ADR 0028.
 //
 // Caller derivation rules (see handler godoc):
-//   - All fields populated from the verified JWT claims.
 //   - is_platform IS the slug-anchored claim per Phase 1.5 hardening —
 //     true iff (claim.is_platform AND tenant_slug == "platform").
 //   - permissions is the closed-set catalogue list (always returned,
 //     [] for a fresh member with no role-driven permissions).
+//   - roles always returned ([] for fresh member); each entry carries
+//     is_super_admin so the frontend can render the SuperAdmin chip
+//     without re-parsing the permissions array.
 type CapabilitiesDto struct {
-	PersonID     string   `json:"person_id"`
-	MembershipID string   `json:"membership_id"`
-	TenantID     string   `json:"tenant_id"`
-	TenantSlug   string   `json:"tenant_slug"`
-	IsPlatform   bool     `json:"is_platform"`
-	IsSuperUser  bool     `json:"is_super_user"`
-	Permissions  []string `json:"permissions"`
+	PersonID     string              `json:"person_id"`
+	MembershipID string              `json:"membership_id"`
+	TenantID     string              `json:"tenant_id"`
+	TenantSlug   string              `json:"tenant_slug"`
+	Email        string              `json:"email,omitempty"`
+	FirstName    string              `json:"first_name,omitempty"`
+	LastName     string              `json:"last_name,omitempty"`
+	IsPlatform   bool                `json:"is_platform"`
+	IsSuperUser  bool                `json:"is_super_user"`
+	Permissions  []string            `json:"permissions"`
+	Roles        []CapabilityRoleDto `json:"roles"`
+}
+
+// CapabilityRoleDto is one resolved Role surface inside the
+// capabilities bundle. Carries display name (drives the UI
+// "your role: X" widget) plus is_super_admin so the frontend can
+// render the SuperAdmin chip / unlock special UX without
+// re-parsing the permissions array.
+type CapabilityRoleDto struct {
+	ID           string `json:"id"`
+	Name         string `json:"name"`
+	IsSuperAdmin bool   `json:"is_super_admin"`
 }
 
 // ----- User management -------------------------------------------------------

@@ -43,6 +43,12 @@
   - `GET /v1/auth/me/capabilities` — JWT-resident projection (no DB hit) so the frontend stops decoding tokens to drive nav/tier/buttons. Auth0 /userinfo canon.
   - `GET /v1/platform/stats?delta_window=24h|7d|30d` — closed-set delta window per ADR 0040 (cache-key-explosion prevention); cache wrapping via HybridCache facade ready to wire.
   - `GET /v1/users` cursor-paginated — `?cursor=&page_size=` (default 50, cap 200). Backed by new `ListActiveMembershipsInTenantPage` sqlc query + composite partial index. Active-only; inactive listing is a follow-up `?status=inactive` endpoint.
+- Wave 2 — cache wiring + omni-search + audit-log reads + EXPLAIN test:
+  - ADR 0042 — cache TTL strategy. Five profiles (Default / SecurityStamp / Capabilities / SearchResults / Dashboard) with research-grounded TTLs + jitter discipline (±10% on dashboard + search). Microsoft HybridCache canon.
+  - `HybridCache` facade wired for `/v1/platform/stats` (DashboardTTL — 1min L1 / 5min L2 + jitter) and `/v1/auth/me/capabilities` profile enrichment (CapabilitiesTTL — 2min L1 / 15min L2; security_stamp keyed for implicit invalidation).
+  - `GET /v1/search` omni-search — parallel pg_trgm fanout (persons + tenants) with per-category timeout + `has_partial` flag. Platform-only. Cached via SearchResultsTTL.
+  - `GET /v1/auth/me/activity` + `GET /v1/tenants/{tenantId}/activity` — keyset-paginated audit-log reads against `buildingblocks.audit_log_entry`. Self-read always allowed; tenant-scoped goes through `RequireTenantContext`.
+  - EXPLAIN-under-RLS integration test (`keyset_explain_integration_test.go`) — load 200 memberships, assert keyset query uses `idx_memberships_tenant_active_joined` (Index Scan, not Seq Scan). ADR 0038 discipline as a CI gate.
 
 **Active branches:**
 - `main` — production; protected via PR-only merge.

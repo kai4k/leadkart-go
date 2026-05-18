@@ -220,7 +220,7 @@ func (f *Facade[K, V]) Get(ctx context.Context, key K) (V, error) {
 		}
 		// L2 first (durable across L1 evictions); L1 populated even on
 		// L2 set failure so a single Redis blip doesn't spam factory.
-		if err := f.cache.L2.Set(ctx, keyStr, raw, f.ttl.L2).Err(); err != nil {
+		if err := f.cache.L2.Set(ctx, keyStr, raw, f.ttl.L2WithJitter()).Err(); err != nil {
 			f.cache.Logger.Warn("cache: L2 write failed",
 				"facade", f.name, "key", keyStr, "err", err)
 		}
@@ -319,7 +319,7 @@ func (f *Facade[K, V]) Set(ctx context.Context, key K, value V) error {
 		return fmt.Errorf("cache %s: encode: %w", f.name, err)
 	}
 	f.gen.Add(1)
-	if err := f.cache.L2.Set(ctx, keyStr, raw, f.ttl.L2).Err(); err != nil {
+	if err := f.cache.L2.Set(ctx, keyStr, raw, f.ttl.L2WithJitter()).Err(); err != nil {
 		return fmt.Errorf("cache %s: L2 set: %w", f.name, err)
 	}
 	if !f.omitL1 {

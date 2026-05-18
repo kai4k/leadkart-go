@@ -34,3 +34,6 @@ Thumbs.db
 
 # Claude
 .claude/local/
+
+# Claude Code per-user permission settings — NEVER commit
+.claude/settings.local.json

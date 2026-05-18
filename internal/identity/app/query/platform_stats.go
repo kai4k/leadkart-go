@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/leadkart/leadkart-go/internal/platform/cache"
 	"github.com/leadkart/leadkart-go/internal/platform/pg"
 )
 
@@ -109,6 +110,59 @@ func NewPlatformStatsHandler(pool *pgxpool.Pool, tx *pg.Transactor) PlatformStat
 		panic("query: NewPlatformStatsHandler transactor required")
 	}
 	return PlatformStatsHandler{pool: pool, tx: tx}
+}
+
+// CachedPlatformStatsHandler is the cache-wrapped facade in front of
+// the un-cached [PlatformStatsHandler]. Per ADR 0042 — keyed by
+// delta_window label ("" / "24h" / "7d" / "30d" — closed set);
+// uses [cache.DashboardTTL] (1min L1 / 5min L2 + ±10% jitter).
+//
+// Cache facade construction happens at the composition root
+// (cmd/api/main.go); this wrapper just dispatches calls through it.
+// The HTTP handler talks to this type via Application.Queries —
+// the un-cached PlatformStatsHandler is the factory backing the
+// facade, not the surface the HTTP layer sees.
+type CachedPlatformStatsHandler struct {
+	facade *cache.Facade[string, PlatformStatsView]
+}
+
+// NewCachedPlatformStatsHandler builds the facade-wrapped handler.
+// Cache key incorporates the delta_window label; the factory
+// reconstructs the Duration via ParseDeltaWindow + dispatches to
+// the inner un-cached Handle.
+func NewCachedPlatformStatsHandler(inner PlatformStatsHandler, hc *cache.HybridCache) CachedPlatformStatsHandler {
+	if hc == nil {
+		panic("query: NewCachedPlatformStatsHandler hybrid cache required")
+	}
+	facade := cache.NewFacade[string, PlatformStatsView](
+		hc, "platform-stats",
+		func(k string) string { return "leadkart:platform-stats:window=" + k },
+		func(ctx context.Context, k string) (PlatformStatsView, error) {
+			dur, label, err := ParseDeltaWindow(k)
+			if err != nil {
+				// Defensive: callers SHOULD only ever pass closed-set
+				// labels (ParseDeltaWindow is the validator at the
+				// HTTP boundary). A bad key reaching here is a wiring
+				// bug; fail loudly rather than caching the error.
+				return PlatformStatsView{}, fmt.Errorf("platform_stats: cached facade: invalid window key %q: %w", k, err)
+			}
+			return inner.Handle(ctx, PlatformStatsQuery{Window: dur, WindowLabel: label})
+		},
+		cache.WithTTL(cache.DashboardTTL()),
+	)
+	return CachedPlatformStatsHandler{facade: facade}
+}
+
+// Handle returns the cached dashboard view. Falls through to the
+// inner handler on miss, populates L1+L2 on success per the standard
+// cache.Facade contract.
+//
+// Cache key derives from q.WindowLabel only — the time.Duration
+// Window is reconstructed inside the factory via ParseDeltaWindow.
+// HTTP handler MUST pass the canonical label string (validated at
+// the boundary by ParseDeltaWindow).
+func (h CachedPlatformStatsHandler) Handle(ctx context.Context, q PlatformStatsQuery) (PlatformStatsView, error) {
+	return h.facade.Get(ctx, q.WindowLabel)
 }
 
 // Handle returns the dashboard view.

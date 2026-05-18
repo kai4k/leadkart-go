@@ -87,6 +87,7 @@ type Commands struct {
 // state mutation. Mirrors the [Commands] composition shape.
 type Queries struct {
 	ListSessions              query.ListSessionsHandler
+	GetCapabilities           query.CachedGetCapabilitiesHandler
 	GetTenant                 query.GetTenantHandler
 	GetUser                   query.GetUserHandler
 	ListUsers                 query.ListUsersHandler
@@ -97,5 +98,8 @@ type Queries struct {
 	ListPersonMemberships     query.ListPersonMembershipsHandler
 	ListAllTenants            query.ListAllTenantsHandler
 	ListImpersonationSessions query.ListImpersonationSessionsHandler
-	PlatformStats             query.PlatformStatsHandler
+	PlatformStats             query.CachedPlatformStatsHandler
+	Search                    query.CachedSearchHandler
+	ListAuditEventsByTenant   query.ListAuditEventsByTenantHandler
+	ListAuditEventsByUser     query.ListAuditEventsByUserHandler
 }

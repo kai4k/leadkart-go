@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math/rand/v2"
 	"time"
 
 	ristretto "github.com/dgraph-io/ristretto/v2"
@@ -103,17 +104,33 @@ func (h *HybridCache) Close() {
 	h.L1.Close()
 }
 
-// TTL groups L1 + L2 expiry. Per ADR 0015 default 1 min L1 / 5 min L2;
-// per-facade overrides via [WithTTL].
+// TTL groups L1 + L2 expiry plus optional jitter percent. Per
+// ADR 0042 — per-use-case TTL profiles with documented rationale.
+// Per-facade overrides via [WithTTL].
+//
+// JitterPercent applies to L2 only (L1 is per-process; no cross-
+// replica stampede risk). 0 = no jitter; 10 = ±10% randomized. The
+// jitter ranges from 0 to +JitterPercent — actual L2 TTL is
+// baseL2 + rand(0, baseL2 * JitterPercent / 100). Enough to
+// desynchronize replica expiries without making lifetime
+// unpredictable for debugging.
 type TTL struct {
-	L1 time.Duration
-	L2 time.Duration
+	L1            time.Duration
+	L2            time.Duration
+	JitterPercent int
 }
 
 // Per-tier duration constants. Composed into [TTL] structs by the
 // accessor functions below. Constants (vs package-level vars) make
 // these genuinely immutable — a misbehaving caller can't redefine
 // the security-stamp TTL at runtime.
+//
+// Profile choices follow ADR 0042 (research-grounded canon):
+//   - Microsoft HybridCache typical pattern: 1 min L1 / 10 min L2.
+//   - Auth0 / Okta session refresh: 30 sec for security-bearing.
+//   - Stripe / Datadog dashboard caching: 5 min L2 with jitter.
+//   - JWT-bound capabilities: 15 min L2 (stamp rotation invalidates).
+//   - Search results: 5 min L2 with jitter (canonical Loki/Stripe).
 const (
 	defaultTTLL1 = 1 * time.Minute
 	defaultTTLL2 = 5 * time.Minute
@@ -122,13 +139,97 @@ const (
 	// hot security path so revocation propagates within ~30s even
 	// when the explicit invalidation cascade has a transient blip.
 	securityStampTTL = 30 * time.Second
+
+	// Capabilities profile — bound to (membership, security_stamp);
+	// stamp rotation is the invalidation mechanism, so TTL is a
+	// memory bound, not a freshness boundary.
+	capabilitiesTTLL1 = 2 * time.Minute
+	capabilitiesTTLL2 = 15 * time.Minute
+
+	// Search-results profile — typing-burst tolerant; cross-replica
+	// stampede mitigated by jitter.
+	searchResultsTTLL1 = 30 * time.Second
+	searchResultsTTLL2 = 5 * time.Minute
+
+	// Dashboard profile — operator dashboards; slightly stale OK;
+	// jitter mandatory at >1 replica.
+	dashboardTTLL1 = 1 * time.Minute
+	dashboardTTLL2 = 5 * time.Minute
+
+	// Default jitter percent for cache profiles that use it. ±10%
+	// is enough to desynchronize replica expiries without making
+	// TTL behavior unpredictable for debugging.
+	defaultJitterPercent = 10
 )
 
 // DefaultTTL is the standard L1+L2 retention per ADR 0015. Returned
 // by-value so callers can't mutate a shared instance.
+//
+// Used by: generic reference data, lookups, configuration values.
+// No jitter — minor TTL drift on commodity reads doesn't pay rent
+// for the unpredictability cost.
 func DefaultTTL() TTL { return TTL{L1: defaultTTLL1, L2: defaultTTLL2} }
 
 // SecurityStampTTL is the Auth0/Okta session-validation refresh
 // window — faster invalidation on the security-bearing freshness
 // path. Returned by-value so callers can't mutate a shared instance.
+//
+// Used by: SecurityStampCache (the canonical caller). No jitter —
+// single-tier (WithOmitL1) facade; no cross-replica stampede surface.
 func SecurityStampTTL() TTL { return TTL{L1: securityStampTTL, L2: securityStampTTL} }
+
+// CapabilitiesTTL is the per-(membership, security_stamp) cache
+// profile for /v1/auth/me/capabilities profile enrichment. Per
+// ADR 0042 — longer L2 (15min) because the security_stamp IS the
+// invalidation mechanism; TTL is a memory bound, not a correctness
+// one.
+//
+// No jitter — cache key is per-membership (low cross-replica
+// collision rate); invalidation is event-driven via stamp rotation.
+func CapabilitiesTTL() TTL { return TTL{L1: capabilitiesTTLL1, L2: capabilitiesTTLL2} }
+
+// SearchResultsTTL is the cache profile for paginated search result
+// lists (?q= queries). Per ADR 0042 — short L1 (typing-burst
+// tolerant) + 5min L2 with jitter (canonical Stripe Dashboard /
+// Loki Results Cache value).
+//
+// Jitter ±10% — search-keyed across many strokes per session; at
+// >1 replica, identical TTLs would synchronize expiries. Jitter
+// desynchronizes; mandatory.
+func SearchResultsTTL() TTL {
+	return TTL{L1: searchResultsTTLL1, L2: searchResultsTTLL2, JitterPercent: defaultJitterPercent}
+}
+
+// DashboardTTL is the cache profile for operator-dashboard counts /
+// stats / deltas. Per ADR 0042 — 5min L2 with jitter; matches
+// Datadog / Stripe Dashboard cadence.
+//
+// Jitter ±10% — operators refresh dashboards on similar wall-clock
+// boundaries; identical TTLs would stampede.
+func DashboardTTL() TTL {
+	return TTL{L1: dashboardTTLL1, L2: dashboardTTLL2, JitterPercent: defaultJitterPercent}
+}
+
+// L2WithJitter returns the L2 duration with the configured jitter
+// percent applied additively in the [0, +JitterPercent%] band. Per
+// ADR 0042 — desynchronizes replica expiries without making lifetime
+// unpredictable for debugging.
+//
+// Math: actualL2 = baseL2 + rand(0, baseL2 * JitterPercent / 100).
+// JitterPercent == 0 returns baseL2 unchanged.
+//
+// math/rand/v2 (Go 1.22+) is goroutine-safe + seeded automatically;
+// no rand.Seed setup needed.
+func (t TTL) L2WithJitter() time.Duration {
+	if t.JitterPercent <= 0 {
+		return t.L2
+	}
+	maxBoost := int64(t.L2) * int64(t.JitterPercent) / 100
+	if maxBoost <= 0 {
+		return t.L2
+	}
+	// Intentionally math/rand/v2 (not crypto/rand): jitter is for
+	// replica desynchronization, not security. crypto/rand here
+	// would burn entropy on a non-security-sensitive code path.
+	return t.L2 + time.Duration(rand.Int64N(maxBoost)) //nolint:gosec // G404: jitter is not security-sensitive
+}
