@@ -71,7 +71,7 @@ func AddRoutes(mux *http.ServeMux, log *slog.Logger, a app.Application, verifier
 		// ADR 0036 + Phase 1.5 — the JWT carries the resolved permission
 		// bundle; this endpoint is a thin projection so the frontend
 		// stops base64-decoding tokens to drive UI logic.
-		mux.Handle("GET /api/v1/auth/me/capabilities", auth(handleGetCapabilities(log)))
+		mux.Handle("GET /api/v1/auth/me/capabilities", auth(handleGetCapabilities(log, a)))
 		mux.Handle("DELETE /api/v1/auth/sessions/{familyId}", auth(handleRevokeSession(log, a)))
 		mux.Handle("DELETE /api/v1/auth/sessions", auth(handleRevokeAllSessions(log, a)))
 
@@ -190,6 +190,21 @@ func AddRoutes(mux *http.ServeMux, log *slog.Logger, a app.Application, verifier
 		// Operator dashboard at-a-glance stats.
 		mux.Handle("GET /api/v1/platform/stats",
 			platform(handlePlatformStats(log, a)))
+
+		// Operator omni-search (Cmd+K) — parallel pg_trgm fanout
+		// across persons + tenants per ADR 0040. Platform-only at
+		// v0.2; tenant-scoped variant lands in a follow-up.
+		mux.Handle("GET /api/v1/search",
+			platform(handleSearch(log, a)))
+
+		// Audit-log reads per ADR 0027 (outbox doubles as audit) +
+		// ADR 0038 (keyset pagination). Self-read is always allowed
+		// (privacy default); tenant-scoped read goes through the
+		// same RequireTenantContext gate as the rest of /tenants/{id}.
+		mux.Handle("GET /api/v1/auth/me/activity",
+			auth(handleListMyAuditEvents(log, a)))
+		mux.Handle("GET /api/v1/tenants/{tenantId}/activity",
+			tenantCtx(handleListTenantAuditEvents(log, a)))
 	}
 }
 

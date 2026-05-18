@@ -414,3 +414,63 @@ func (q *Queries) UpdateTenant(ctx context.Context, arg UpdateTenantParams) erro
 	)
 	return err
 }
+
+const searchTenantsByText = `-- name: SearchTenantsByText :many
+SELECT id, slug, legal_name, display_name, status, created_at,
+       similarity(
+           lower(slug) || ' ' || lower(legal_name) || ' ' || lower(display_name),
+           lower($1)
+       ) AS rank
+FROM   identity.tenants
+WHERE  status != 'hard_deleted'
+AND    (lower(slug) || ' ' || lower(legal_name) || ' ' || lower(display_name))
+       ILIKE '%' || lower($1) || '%'
+ORDER  BY rank DESC, id DESC
+LIMIT  $2
+`
+
+type SearchTenantsByTextParams struct {
+	Query string
+	Limit int32
+}
+
+type SearchTenantsByTextRow struct {
+	ID          pgtype.UUID
+	Slug        string
+	LegalName   string
+	DisplayName string
+	Status      string
+	CreatedAt   pgtype.Timestamptz
+	Rank        float32
+}
+
+// Cross-tenant tenants search per ADR 0040 (pg_trgm). Backed by
+// idx_tenants_search_trgm. Tenants table is non-RLS so this runs
+// in any scope; HTTP layer gates on RequirePlatform.
+func (q *Queries) SearchTenantsByText(ctx context.Context, arg SearchTenantsByTextParams) ([]SearchTenantsByTextRow, error) {
+	rows, err := q.db.Query(ctx, searchTenantsByText, arg.Query, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []SearchTenantsByTextRow
+	for rows.Next() {
+		var i SearchTenantsByTextRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Slug,
+			&i.LegalName,
+			&i.DisplayName,
+			&i.Status,
+			&i.CreatedAt,
+			&i.Rank,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}

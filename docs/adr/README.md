@@ -30,5 +30,6 @@ One decision per file, Michael Nygard format (Context / Decision / Consequences 
 | 0039 | Per-request scope selection — JWT.is_platform + X-Tenant-Id header | Accepted |
 | 0040 | Search strategy — `pg_trgm` now, Postgres FTS at Phase 4, defer dedicated infra | Accepted |
 | 0041 | CQRS read models via outbox subscribers | Accepted |
+| 0042 | Cache TTL strategy — per-use-case profiles with jitter | Accepted |
 
-ADRs 0011–0026 + 0032 + 0042+ land as the relevant code lands per the master plan.
+ADRs 0011–0026 + 0032 + 0043+ land as the relevant code lands per the master plan.

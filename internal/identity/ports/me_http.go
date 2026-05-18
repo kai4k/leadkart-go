@@ -4,47 +4,50 @@ import (
 	"log/slog"
 	"net/http"
 
+	"github.com/leadkart/leadkart-go/internal/identity/app"
+	"github.com/leadkart/leadkart-go/internal/identity/app/query"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 	"github.com/leadkart/leadkart-go/internal/identity/ports/authn"
 )
 
 // handleGetCapabilities serves GET /v1/auth/me/capabilities.
 //
-// Returns the resolved permission/role bundle for the calling
-// membership so the frontend never has to decode the JWT to drive nav
-// / tier / button-visibility. Auth0 /userinfo + Microsoft Graph /me
-// canonical shape.
+// Returns the resolved permission/role/profile bundle for the calling
+// membership so the frontend never has to decode the JWT to drive
+// nav / tier / button-visibility. Auth0 /userinfo + Microsoft Graph
+// /me canonical shape.
 //
-// Implementation note (ADR 0036 + Phase 1.5 hardening):
-//
-// Every field returned here comes from the verified JWT claims —
-// zero DB hit on the read path. The JWT carries:
+// JWT-resident fields (no DB hit):
 //   - sub                  → person_id
 //   - membership_id        → membership_id
 //   - tenant_id            → tenant_id
 //   - tenant_slug          → tenant_slug
-//   - is_platform          → is_platform (already slug-anchored at issuance per
-//                            Phase 1.5 — is_platform=true only if
-//                            tenant_slug == "platform" at login mint)
+//   - is_platform          → is_platform (slug-anchored at issuance
+//                            per Phase 1.5 — true only if
+//                            tenant_slug == "platform")
 //   - is_super_user        → is_super_user
-//   - permission           → permissions[] (closed-set catalogue strings)
+//   - permission           → permissions[] (closed-set catalogue)
 //
-// Why this is correct without re-resolving from DB:
+// Enriched fields (cached via CapabilitiesTTL — per ADR 0042):
+//   - email, first_name, last_name (from Person)
+//   - roles[] {id, name, is_super_admin} (from Membership +
+//     RoleRepo.GetByIDs)
 //
-//   - Permissions on the JWT are PermissionResolver.ResolveAuth output
-//     at login + every refresh. Rotation triggers (role grant/revoke,
-//     suspend, anonymise) rotate security_stamp, which forces a refresh
-//     ≤ 30s later via the existing RequireFreshStamp middleware. So
-//     stale claims here are bounded by the same SLA the rest of the
-//     authorization surface uses.
-//   - Profile enrichment (email, first_name, last_name, role NAMES
-//     instead of just permission strings) lands in v0.3 — gated on a
-//     HybridCache keyed by (membership_id, security_stamp) so the
-//     enrichment is sub-1ms cached + auto-invalidates on stamp
-//     rotation.
+// Cache key includes the security_stamp so any rotation trigger
+// (role grant/revoke, password change, anonymise, global suspend)
+// invalidates the entry by changing the key — TTL is just a memory
+// bound. Stale enrichment is bounded by the same security_stamp
+// freshness contract the rest of the authorization surface uses.
 //
-// Auth: REQUIRES freshness-checked JWT (RequireFreshStamp). Anonymous
-// callers don't have a membership.
-func handleGetCapabilities(log *slog.Logger) http.Handler {
+// On enrichment-resolver failure the handler degrades to the
+// JWT-only projection (no email/name/roles) rather than 500ing the
+// request — capabilities is a UX driver, not load-bearing for
+// authorization (which is permissions[], straight from the JWT).
+//
+// Auth: REQUIRES freshness-checked JWT (RequireFreshStamp).
+func handleGetCapabilities(log *slog.Logger, a app.Application) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		c, ok := authn.ClaimsFromContext(r.Context())
 		if !ok {
@@ -68,7 +71,7 @@ func handleGetCapabilities(log *slog.Logger) http.Handler {
 		perms := make([]string, len(c.Permissions))
 		copy(perms, c.Permissions)
 
-		writeJSON(w, http.StatusOK, CapabilitiesDto{
+		dto := CapabilitiesDto{
 			PersonID:     c.Subject,
 			MembershipID: c.MembershipID,
 			TenantID:     c.TenantID,
@@ -76,6 +79,40 @@ func handleGetCapabilities(log *slog.Logger) http.Handler {
 			IsPlatform:   c.IsPlatform,
 			IsSuperUser:  c.IsSuperUser,
 			Permissions:  perms,
+			Roles:        []CapabilityRoleDto{}, // non-nil; populated below
+		}
+
+		// Enrichment via the cached query handler — populates email +
+		// first_name + last_name + role names. Cache hit returns
+		// sub-millisecond; miss runs the Person + Membership +
+		// Roles.GetByIDs hydration.
+		view, err := a.Queries.GetCapabilities.Handle(r.Context(), query.GetCapabilitiesQuery{
+			PersonID:      person.ID(c.Subject),
+			MembershipID:  membership.ID(c.MembershipID),
+			TenantID:      tenant.ID(c.TenantID),
+			SecurityStamp: c.SecurityStamp,
 		})
+		if err != nil {
+			// Degraded path — log + return the JWT-only projection.
+			// The frontend still gets the load-bearing authorization
+			// surface (permissions[]); only the cosmetic enrichment
+			// is missing. Operators see the failure in logs.
+			log.WarnContext(r.Context(), "capabilities: enrichment failed, returning JWT-only projection", "err", err)
+		} else {
+			dto.Email = view.Email
+			dto.FirstName = view.FirstName
+			dto.LastName = view.LastName
+			roles := make([]CapabilityRoleDto, 0, len(view.Roles))
+			for _, role := range view.Roles {
+				roles = append(roles, CapabilityRoleDto{
+					ID:           role.ID,
+					Name:         role.Name,
+					IsSuperAdmin: role.IsSuperAdmin,
+				})
+			}
+			dto.Roles = roles
+		}
+
+		writeJSON(w, http.StatusOK, dto)
 	})
 }

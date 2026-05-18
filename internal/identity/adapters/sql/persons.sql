@@ -142,3 +142,27 @@ SET    email                            = $2,
        pending_email_change_token_hash  = $16,
        pending_email_change_expires_at  = $17
 WHERE  id = $1;
+
+
+-- name: SearchPersonsByText :many
+-- Cross-tenant person search per ADR 0040 (pg_trgm). Backed by
+-- idx_persons_search_trgm (GIN over lower(email||' '||first_name||
+-- ' '||last_name) WHERE is_active AND NOT is_anonymised).
+--
+-- Operator-only path (caller must run under TxScopePlatform).
+-- similarity() ranking — closer trigram overlap surfaces first.
+-- Caller-supplied query string is the raw operator input;
+-- callers MUST bound length at the HTTP boundary (2-100 chars
+-- per the omni-search contract) — anything outside is rejected
+-- 400 before reaching this query.
+SELECT id, email, first_name, last_name, created_at,
+       similarity(
+           lower(email) || ' ' || lower(first_name) || ' ' || lower(last_name),
+           lower($1)
+       ) AS rank
+FROM   identity.persons
+WHERE  is_active AND NOT is_anonymised
+AND    (lower(email) || ' ' || lower(first_name) || ' ' || lower(last_name))
+       ILIKE '%' || lower($1) || '%'
+ORDER  BY rank DESC, id DESC
+LIMIT  $2;

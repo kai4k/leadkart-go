@@ -187,4 +187,18 @@ const (
 	// that couldn't be base64-decoded or didn't carry valid JSON. 400
 	// surface; clients should retry without the cursor (loads page 1).
 	ErrCodeInvalidCursor = "invalid_cursor"
+
+	// ErrCodeSearchQueryTooShort — GET /v1/search ?q= was empty or
+	// fewer than 2 characters after trim. 400 surface.
+	ErrCodeSearchQueryTooShort = "search_query_too_short"
+
+	// ErrCodeInvalidSearchInclude — GET /v1/search ?include= cleared
+	// all categories. 400 surface — at least one of persons|tenants
+	// must be requested.
+	ErrCodeInvalidSearchInclude = "invalid_search_include"
+
+	// ErrCodeAuditEventsRangeInvalid — audit-log read endpoints
+	// received an invalid since/until range (since > until or
+	// non-RFC-3339 timestamp). 400 surface.
+	ErrCodeAuditEventsRangeInvalid = "audit_events_range_invalid"
 )

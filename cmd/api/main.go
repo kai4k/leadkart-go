@@ -540,7 +540,12 @@ func buildIdentityApp(pool *pgxpool.Pool, hybridCache *cache.HybridCache, cfg co
 			EndImpersonationSession:    command.NewEndImpersonationSessionHandler(impersonationStore),
 		},
 		Queries: app.Queries{
-			ListSessions:              query.NewListSessionsHandler(families),
+			ListSessions: query.NewListSessionsHandler(families),
+			GetCapabilities: query.NewCachedGetCapabilitiesHandler(
+				query.NewGetCapabilitiesHandler(persons, memberships, roles),
+				hybridCache,
+				memberships,
+			),
 			GetTenant:                 query.NewGetTenantHandler(tenants),
 			GetUser:                   query.NewGetUserHandler(memberships, persons),
 			ListUsers:                 query.NewListUsersHandler(memberships, persons),
@@ -551,7 +556,16 @@ func buildIdentityApp(pool *pgxpool.Pool, hybridCache *cache.HybridCache, cfg co
 			ListPersonMemberships:     query.NewListPersonMembershipsHandler(memberships, persons),
 			ListAllTenants:            query.NewListAllTenantsHandler(tenants),
 			ListImpersonationSessions: query.NewListImpersonationSessionsHandler(impersonationStore),
-			PlatformStats:             query.NewPlatformStatsHandler(pool, tx),
+			PlatformStats: query.NewCachedPlatformStatsHandler(
+				query.NewPlatformStatsHandler(pool, tx),
+				hybridCache,
+			),
+			Search: query.NewCachedSearchHandler(
+				query.NewSearchHandler(pool, tx),
+				hybridCache,
+			),
+			ListAuditEventsByTenant: query.NewListAuditEventsByTenantHandler(pool, tx),
+			ListAuditEventsByUser:   query.NewListAuditEventsByUserHandler(pool, tx),
 		},
 		},
 	}, nil
