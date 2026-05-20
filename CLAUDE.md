@@ -49,6 +49,7 @@
   - `GET /v1/search` omni-search — parallel pg_trgm fanout (persons + tenants) with per-category timeout + `has_partial` flag. Platform-only. Cached via SearchResultsTTL.
   - `GET /v1/auth/me/activity` + `GET /v1/tenants/{tenantId}/audit/events` — keyset-paginated audit-log reads against `buildingblocks.audit_log_entry`. Self-read always allowed; tenant-scoped goes through `RequireTenantContext`. Sub-resource path (`/audit/events`) avoids Go 1.22 ServeMux conflict with `/tenants/by-slug/{slug}` per Wave 7 hotfix.
   - EXPLAIN-under-RLS integration test (`keyset_explain_integration_test.go`) — load 200 memberships, assert keyset query uses `idx_memberships_tenant_active_joined` (Index Scan, not Seq Scan). ADR 0038 discipline as a CI gate.
+- ADR 0043 — frontend topology target: SvelteKit BFF (adapter-node) + Go API. Canonical for production-scale orgs (Stripe / LinkedIn / Netflix / Airbnb / Walmart / PayPal / Etsy / Slack). Browser holds HttpOnly cookie; SvelteKit server runtime IS the BFF; Go API stays pure bearer. **Zero Go-side code changes** — the BFF migration is entirely frontend-repo work.
 - Wave 3 — slug/email lookup hardening + RFC 9457 errors + migration gate + scoped-JWT design:
   - ADR 0044 — Enumeration safety. 404 (not 403) on no-access for guessable identifiers (slugs / emails / handles). GitHub / Stripe / Auth0 / Twilio canon; OWASP API Top 10 §A01:2023 anti-pattern when 403 leaks existence.
   - `GET /v1/tenants/by-slug/{slug}` with handler-inline authz + enumeration-safe 404 + byte-equality test (`TestE2E_TenantBySlug_ResponseShapesIdentical` proves cross-tenant 404 ≡ missing-slug 404).
@@ -107,6 +108,24 @@ Go rebuild of LeadKart (.NET 10 modular monolith). Multi-tenant SaaS for Indian 
 8 bounded contexts: Identity, Platform, CRM, Orders, Inventory, Dispatch, Tasks, Notifications.
 
 Reference port from the .NET implementation at `d:\Development\LeadKart\`. BRD.md + .NET aggregates are the spec; **Go canon drives shape** (no 1:1 translation).
+
+---
+
+## Frontend topology — SvelteKit BFF + Go API (production canon)
+
+LeadKart targets the canonical multi-tier web architecture used by Stripe / LinkedIn / Netflix / Airbnb / Walmart / PayPal / Etsy / Slack: **Node-runtime BFF (Backend-For-Frontend) wraps a non-Node API**. Per ADR 0043:
+
+```
+Browser  ←─ HttpOnly cookies ─→  SvelteKit (adapter-node)  ←─ Bearer ─→  Go /api/v1/*
+```
+
+- **Browser** never sees raw tokens — only HttpOnly + Secure + SameSite=Lax session cookie.
+- **SvelteKit server runtime** IS the BFF (no separate Go BFF binary needed): `hooks.server.ts` reads cookie, refreshes access token, attaches `Authorization: Bearer` to outbound fetches; `+page.server.ts` handles form actions + SSR data loads.
+- **Go API** stays pure bearer — no cookies, no CSRF, no HTML rendering. Same surface also serves mobile apps + partner integrations identically.
+
+**The Go API does NOT change to support the BFF.** This is the load-bearing property: the BFF is a layer above, not a refactor below. The migration is entirely frontend-repo work (~1 week) — Go side is already correctly shaped.
+
+**Deployment shape (v0.2-Phase 5):** co-located on the same host; one front-door (Caddy / nginx / Cloudflare) terminates TLS; `/` → SvelteKit Node server, optional `/api/v1/*` allowlist for external bearer clients. Federated (separate hosts + mTLS) lands at Phase 6+ when teams scale.
 
 ---
 
