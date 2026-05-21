@@ -79,6 +79,13 @@ func AddRoutes(mux *http.ServeMux, log *slog.Logger, a app.Application, verifier
 		// authn.RequireTenantContext. A tenant Admin can manage their
 		// own tenant; Platform / SuperUser operators can manage any
 		// (post-impersonation per multi-tenancy.md).
+		// Slug lookup — enumeration-safe 404 inline authz per ADR 0044.
+		// Uses `auth` (RequireFreshStamp), NOT tenantCtx, because the
+		// slug-vs-JWT comparison needs a DB lookup first; the handler
+		// does the authz gate after the resolve.
+		mux.Handle("GET /api/v1/tenants/by-slug/{slug}",
+			auth(handleGetTenantBySlug(log, a)))
+
 		tenantCtx := authn.RequireTenantContext(verifier, stampValidator, "tenantId")
 		mux.Handle("GET /api/v1/tenants/{tenantId}",
 			tenantCtx(handleGetTenant(log, a)))

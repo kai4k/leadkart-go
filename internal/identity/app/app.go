@@ -89,6 +89,7 @@ type Queries struct {
 	ListSessions              query.ListSessionsHandler
 	GetCapabilities           query.CachedGetCapabilitiesHandler
 	GetTenant                 query.GetTenantHandler
+	GetTenantBySlug           query.GetTenantBySlugHandler
 	GetUser                   query.GetUserHandler
 	ListUsers                 query.ListUsersHandler
 	ListUsersPaged            query.ListUsersPagedHandler

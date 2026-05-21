@@ -547,6 +547,7 @@ func buildIdentityApp(pool *pgxpool.Pool, hybridCache *cache.HybridCache, cfg co
 				memberships,
 			),
 			GetTenant:                 query.NewGetTenantHandler(tenants),
+			GetTenantBySlug:           query.NewGetTenantBySlugHandler(tenants),
 			GetUser:                   query.NewGetUserHandler(memberships, persons),
 			ListUsers:                 query.NewListUsersHandler(memberships, persons),
 			ListUsersPaged:            query.NewListUsersPagedHandler(memberships, persons),

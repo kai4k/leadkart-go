@@ -8,11 +8,95 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/leadkart/leadkart-go/internal/common/slug"
 	"github.com/leadkart/leadkart-go/internal/identity/app"
 	"github.com/leadkart/leadkart-go/internal/identity/app/command"
 	"github.com/leadkart/leadkart-go/internal/identity/app/query"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
+	"github.com/leadkart/leadkart-go/internal/identity/ports/authn"
 )
+
+// ----- GetTenantBySlug ------------------------------------------------------
+
+// handleGetTenantBySlug serves GET /api/v1/tenants/by-slug/{slug}.
+//
+// The endpoint resolves a human-readable slug to a tenant. Because
+// slugs are guessable (low-entropy, often the company name), the
+// authz model MUST be enumeration-safe: callers who lack access to
+// the resolved tenant see 404, NOT 403 — indistinguishable from
+// "slug doesn't exist" (security.md enumeration-safety canon; ADR 0044).
+//
+// The mounting middleware is `auth` (RequireFreshStamp), NOT
+// `RequireTenantContext` — the tenant identity isn't in the path as
+// a UUID; it's a slug that needs DB resolution before the authz
+// comparison. The handler does the gate inline:
+//
+//	caller can see this tenant IFF:
+//	   caller.JWT.is_platform=true (+ slug-anchored)  OR
+//	   caller.JWT.tenant_id == resolved tenant.ID
+//	otherwise → 404
+//
+// Vs the existing GET /api/v1/tenants/{tenantId} route which uses
+// RequireTenantContext middleware and returns 403 on mismatch.
+// 403-vs-404 is acceptable for UUID paths (UUIDs aren't guessable, so
+// enumeration is infeasible); slugs need 404 for the same security
+// property. This is the standard GitHub / Stripe / Auth0 pattern for
+// natural-key resource lookups.
+//
+// Status code matrix:
+//
+//	| Caller             | Slug exists, theirs | Slug exists, others' | Slug missing | Invalid slug |
+//	|--------------------|---------------------|----------------------|--------------|--------------|
+//	| Tenant admin       | 200 + TenantDto     | 404 (tenant_not_found) | 404         | 400 (invalid_slug) |
+//	| Platform operator  | 200 + TenantDto     | 200 + TenantDto      | 404         | 400 |
+//	| Unauthenticated    | 401 (caught by middleware before this handler) |   |   |   |
+func handleGetTenantBySlug(log *slog.Logger, a app.Application) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		s, err := slug.New(r.PathValue("slug"))
+		if err != nil {
+			writeError(w, http.StatusBadRequest, ErrCodeInvalidSlug, err.Error())
+			return
+		}
+
+		view, err := a.Queries.GetTenantBySlug.Handle(r.Context(), query.GetTenantBySlugQuery{Slug: s})
+		switch {
+		case errors.Is(err, tenant.ErrNotFound):
+			// Real 404 — slug doesn't resolve to any tenant.
+			writeError(w, http.StatusNotFound, ErrCodeTenantNotFound, "")
+			return
+		case err != nil:
+			log.ErrorContext(r.Context(), "get tenant by slug failed", "err", err)
+			writeError(w, http.StatusInternalServerError, ErrCodeInternalError, "")
+			return
+		}
+
+		// Inline authz gate per ADR 0044 enumeration safety.
+		// RequireFreshStamp populated claims; missing-claims here is a
+		// wiring bug (defensive 500).
+		c, ok := authn.ClaimsFromContext(r.Context())
+		if !ok {
+			log.ErrorContext(r.Context(), "get tenant by slug: missing claims in authenticated handler")
+			writeError(w, http.StatusInternalServerError, ErrCodeInternalError, "")
+			return
+		}
+
+		// Operator bypass — slug-anchored, mirrors RequireTenantContext +
+		// RequirePlatform discipline. Defense-in-depth: is_platform=true
+		// AND tenant_slug=="platform" must BOTH hold.
+		operator := c.IsSuperUser || (c.IsPlatform && c.TenantSlug == authn.PlatformTenantSlug)
+
+		if !operator && c.TenantID != view.ID {
+			// Tenant exists, caller can't see it. Same 404 surface as
+			// "slug doesn't exist" — enumeration-safe per ADR 0044.
+			// NOTE: NOT 403 — that would confirm "this slug is real,
+			// you just can't access it" to the attacker.
+			writeError(w, http.StatusNotFound, ErrCodeTenantNotFound, "")
+			return
+		}
+
+		writeJSON(w, http.StatusOK, projectViewToDto(view))
+	})
+}
 
 // ----- GetTenant ------------------------------------------------------------
 

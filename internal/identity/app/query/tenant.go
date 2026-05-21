@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/leadkart/leadkart-go/internal/common/slug"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
 
@@ -105,6 +106,58 @@ func (h GetTenantHandler) Handle(ctx context.Context, q GetTenantQuery) (TenantV
 	t, err := h.tenants.GetByID(ctx, q.TenantID)
 	if err != nil {
 		return TenantView{}, fmt.Errorf("get_tenant: %w", err)
+	}
+	return projectTenant(t), nil
+}
+
+// ----- GetTenantBySlugQuery -------------------------------------------------
+
+// GetTenantBySlugQuery returns the full Tenant view for the supplied
+// slug. Per ADR 0044 (enumeration safety): the AUTHZ gate is the
+// caller's responsibility — this handler returns the tenant whenever
+// the slug resolves; the HTTP layer compares the resolved tenant.ID
+// against the caller's JWT.tenant_id and emits the enumeration-safe
+// 404 on mismatch (NOT 403).
+//
+// Rationale: slugs are human-readable + low-entropy ("acme-pharma" is
+// guessable; UUIDs are not). The 403-vs-404 distinction matters only
+// when the identifier is guessable — for UUIDs, both are safe; for
+// slugs, only 404 prevents enumeration. The query handler stays
+// scope-agnostic so the same handler serves both tenant-admin (with
+// authz check) and platform-operator (no check) paths.
+type GetTenantBySlugQuery struct {
+	Slug slug.Slug
+}
+
+// GetTenantBySlugHandler runs the slug read. Returns
+// [tenant.ErrNotFound] when no row matches.
+type GetTenantBySlugHandler struct {
+	tenants tenant.Repository
+}
+
+// NewGetTenantBySlugHandler wires the handler.
+func NewGetTenantBySlugHandler(tenants tenant.Repository) GetTenantBySlugHandler {
+	if tenants == nil {
+		panic("query: NewGetTenantBySlugHandler tenants repository required")
+	}
+	return GetTenantBySlugHandler{tenants: tenants}
+}
+
+// Handle returns the TenantView for the slug or [tenant.ErrNotFound].
+// Runs under platform scope (the tenants table is non-RLS; slug
+// uniqueness is enforced by the partial unique index uq_tenants_slug).
+//
+// The slug VO is already validated at construction; this handler does
+// not re-validate. Empty slug returns an error (defensive — shouldn't
+// happen if HTTP boundary validated, but guards against future
+// internal callers).
+func (h GetTenantBySlugHandler) Handle(ctx context.Context, q GetTenantBySlugQuery) (TenantView, error) {
+	if q.Slug.String() == "" {
+		return TenantView{}, errors.New("get_tenant_by_slug: slug required")
+	}
+	t, err := h.tenants.GetBySlug(ctx, q.Slug)
+	if err != nil {
+		return TenantView{}, fmt.Errorf("get_tenant_by_slug: %w", err)
 	}
 	return projectTenant(t), nil
 }
