@@ -66,6 +66,13 @@
   - No refresh-token-for-impersonation in v0.2 — AWS STS canon: re-AssumeRole if you need longer than the session. Reduces Wave 4 scope ~1 day; can layer on if measured pain.
   - Audit-log enrichment (writing the new act_* columns) deferred to Wave 4.1 — requires propagating impersonation context through outbox → Watermill subscriber boundary. Schema shipped; population NULL until 4.1.
   - E2E integration tests covering: scoped-token issuance + claim shape verification + downgraded-scope blocks `/v1/platform/*` + sub-impersonation rejected + target-not-found → 404.
+- Wave 5 — OpenAPI 3.1 spec-first contract + Scalar `/docs`:
+  - ADR 0046 — spec-first over code-first (Stripe / GitHub / Anthropic canon). Hand-written `api/openapi.yaml` is the canonical contract; Go handlers conform to it. Scalar UI over Swagger UI / Redoc (Anthropic / Resend / Hono use Scalar).
+  - `api/openapi.yaml` — ~50 operations covering Auth / Capabilities / Sessions / Tenants / Users / Roles / Platform / Search / Audit. Versioned `info.version: 0.2.0`; tags reflect URL groups.
+  - `internal/platform/openapi/` package — `//go:embed all_routes.yaml` makes the spec a build-baked binary asset (ADR 0024 distroless static fit; no external file dependency). `SpecHandler()` serves the YAML at `GET /openapi.yaml`; `ScalarHandler()` serves the Scalar UI HTML at `GET /docs` + `GET /docs/`.
+  - Root `GET /` now 302-redirects to `/docs` so bare `localhost:8080` lands engineers + PMs on the interactive docs instead of a JSON-pointing-elsewhere body.
+  - Frontend now runs `openapi-typescript` against `/openapi.yaml` → fully-typed TS clients instead of hand-maintained DTO interfaces (the Wave 5 frontend-pain motivator).
+  - Drift-prevention follow-ups (NOT in Wave 5; explicit tracked work): `task ci:openapi` (spectral lint) + `TestArch_RouteHasSpecOperation` (Go arch test asserting every `mux.Handle` has a matching operation in the spec).
 
 **Active branches:**
 - `main` — production; protected via PR-only merge.

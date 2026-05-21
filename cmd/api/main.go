@@ -60,6 +60,7 @@ import (
 	"github.com/leadkart/leadkart-go/internal/platform/httpmw"
 	"github.com/leadkart/leadkart-go/internal/platform/idempotency"
 	"github.com/leadkart/leadkart-go/internal/platform/obs"
+	"github.com/leadkart/leadkart-go/internal/platform/openapi"
 	"github.com/leadkart/leadkart-go/internal/platform/pg"
 )
 
@@ -377,24 +378,28 @@ func newServer(log *slog.Logger, identityApp app.Application, verifier authn.Ver
 	return mux
 }
 
-// addRootHelpers registers humane handlers for the two endpoints every
-// browser hits unprompted (root + favicon) so casual probes don't
-// generate WARN-level "http request 404" log noise. Cross-cutting,
-// not domain-owned — lives in the composition root per Mat Ryer
-// "the host owns URL structure decisions" canon.
+// addRootHelpers registers humane handlers for the cross-cutting URLs
+// every browser + tooling client hits unprompted (root + favicon + spec
+// + docs UI). Not domain-owned — lives in the composition root per
+// Mat Ryer "the host owns URL structure decisions" canon.
 //
-//   - GET /             → 200 JSON pointing the caller at /api/v1/...
-//   - GET /favicon.ico  → 204 No Content (Stripe / Auth0 convention —
-//                         browsers stop asking after the first 204)
+//   - GET /              → 302 redirect to /docs (Scalar UI is the
+//                          discoverable entrypoint for humans + AI)
+//   - GET /favicon.ico   → 204 No Content (Stripe / Auth0 convention —
+//                          browsers stop asking after the first 204)
+//   - GET /openapi.yaml  → embedded OpenAPI 3.1 spec (ADR 0046)
+//   - GET /docs          → Scalar UI HTML page (renders the spec)
+//   - GET /docs/         → same handler (trailing-slash tolerance)
 func addRootHelpers(mux *http.ServeMux) {
-	mux.Handle("GET /{$}", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json; charset=utf-8")
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`{"name":"LeadKart API","api_base":"/api/v1","docs":"see api/openapi.yaml in the repo (Scalar UI at /docs lands in a follow-up PR)"}` + "\n"))
+	mux.Handle("GET /{$}", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/docs", http.StatusFound)
 	}))
 	mux.Handle("GET /favicon.ico", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	}))
+	mux.Handle("GET /openapi.yaml", openapi.SpecHandler())
+	mux.Handle("GET /docs", openapi.ScalarHandler())
+	mux.Handle("GET /docs/", openapi.ScalarHandler())
 }
 
 // identityWiring groups the Identity composition outputs that main()
