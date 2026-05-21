@@ -400,10 +400,20 @@ type CreateImpersonationSessionRequest struct {
 	DurationMinutes int    `json:"duration_minutes,omitempty"`
 }
 
-// CreateImpersonationSessionResponse — 201 body.
+// CreateImpersonationSessionResponse — 201 body. Per ADR 0045
+// (Wave 4): includes the scoped access token + its expiry. Operator's
+// frontend uses this token for the session lifetime (no refresh
+// path — AWS STS AssumeRole canon; re-open the session if you need
+// longer than the duration).
+//
+// The token's `aud` is `leadkart-impersonation`; routes that don't
+// accept impersonation tokens reject it server-side.
 type CreateImpersonationSessionResponse struct {
-	SessionID    string    `json:"session_id"`
-	ExpiresAtUTC time.Time `json:"expires_at_utc"`
+	SessionID               string    `json:"session_id"`
+	ExpiresAtUTC            time.Time `json:"expires_at_utc"`
+	AccessToken             string    `json:"access_token"`
+	AccessTokenExpiresAtUTC time.Time `json:"access_token_expires_at_utc"`
+	TokenType               string    `json:"token_type"` // always "Bearer"
 }
 
 // ImpersonationSessionDto is one entry in the GET response.

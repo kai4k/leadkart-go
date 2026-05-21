@@ -31,16 +31,27 @@ import (
 // UserID / TenantID / CorrelationID use uuid.Nil for "absent" (NULL
 // in the column) — keeps the API signature simple without sprinkling
 // pointers everywhere. The writer translates Nil → SQL NULL.
+//
+// ActOperatorID / ActSessionID / ActReason are the RFC 8693 actor-
+// chain columns (per ADR 0045 + migration 20260524000001). Populated
+// ONLY for rows emitted under a scoped impersonation token; nil/zero
+// for regular rows. Translates to SQL NULL the same way.
 type Entry struct {
-	Action         string
-	UserID         uuid.UUID
-	TenantID       uuid.UUID
-	CorrelationID  uuid.UUID
-	OccurredAtUTC  time.Time
-	Duration       time.Duration
-	Succeeded      bool
-	FailureReason  string
-	Payload        []byte // optional jsonb; nil = SQL NULL
+	Action        string
+	UserID        uuid.UUID
+	TenantID      uuid.UUID
+	CorrelationID uuid.UUID
+	OccurredAtUTC time.Time
+	Duration      time.Duration
+	Succeeded     bool
+	FailureReason string
+	Payload       []byte // optional jsonb; nil = SQL NULL
+
+	// Impersonation actor chain (RFC 8693 act claim) — populated by
+	// AuditLoggingMiddleware when the request's JWT carries Claims.Act.
+	ActOperatorID uuid.UUID // uuid.Nil for non-impersonation rows
+	ActSessionID  uuid.UUID // uuid.Nil for non-impersonation rows
+	ActReason     string    // empty for non-impersonation rows
 }
 
 // Writer persists [Entry] rows. Concrete implementation; constructed
@@ -74,11 +85,14 @@ func (w *Writer) Write(ctx context.Context, e Entry) error {
 	}
 
 	var (
-		userIDArg        any = nil
-		tenantIDArg      any = nil
-		correlationIDArg any = nil
-		failureReasonArg any = nil
-		payloadArg       any = nil
+		userIDArg         any = nil
+		tenantIDArg       any = nil
+		correlationIDArg  any = nil
+		failureReasonArg  any = nil
+		payloadArg        any = nil
+		actOperatorIDArg  any = nil
+		actSessionIDArg   any = nil
+		actReasonArg      any = nil
 	)
 	if e.UserID != uuid.Nil {
 		userIDArg = e.UserID
@@ -95,12 +109,22 @@ func (w *Writer) Write(ctx context.Context, e Entry) error {
 	if len(e.Payload) > 0 {
 		payloadArg = e.Payload
 	}
+	if e.ActOperatorID != uuid.Nil {
+		actOperatorIDArg = e.ActOperatorID
+	}
+	if e.ActSessionID != uuid.Nil {
+		actSessionIDArg = e.ActSessionID
+	}
+	if e.ActReason != "" {
+		actReasonArg = e.ActReason
+	}
 
 	_, err := w.pool.Exec(ctx, `
 		INSERT INTO buildingblocks.audit_log_entry
 			(id, action, user_id, tenant_id, correlation_id,
-			 occurred_at_utc, duration_ms, succeeded, failure_reason, payload)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+			 occurred_at_utc, duration_ms, succeeded, failure_reason, payload,
+			 act_operator_id, act_session_id, act_reason)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
 	`,
 		ids.NewV7(),
 		e.Action,
@@ -112,6 +136,9 @@ func (w *Writer) Write(ctx context.Context, e Entry) error {
 		e.Succeeded,
 		failureReasonArg,
 		payloadArg,
+		actOperatorIDArg,
+		actSessionIDArg,
+		actReasonArg,
 	)
 	if err != nil {
 		// Audit-log outage MUST NOT cascade. Log + swallow per

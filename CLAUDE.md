@@ -57,6 +57,15 @@
   - A.8 `writeMutationResult` helper — 200 + DTO when supplied, 204 when nil. Per-handler adoption is incremental + non-breaking.
   - Migration CI gate — new `task ci:migrations` (local) + GitHub Actions `migrations-check` job (cloud) applies all migrations to ephemeral Postgres on every PR touching `migrations/`. Catches the GIN-on-uuid bug class permanently.
   - ADR 0045 — Scoped JWT impersonation design (companion to Wave 4 impl). AWS STS AssumeRole pattern + RFC 8693 `act` claim + downgraded scope + `aud: "impersonation"` discrimination + actor-chain audit-log columns.
+- Wave 4 — scoped JWT impersonation IMPLEMENTATION (ADR 0045):
+  - Migration 20260524000001 — `audit_log_entry` gains `act_operator_id` + `act_session_id` + `act_reason` nullable columns + partial indexes for forensic queries.
+  - `jwt.Claims` gains `Act *ActClaim` (RFC 8693 §4.1); `jwt.Issuer.Issue` accepts `Audience` override + `TTL` override + `Act` for the impersonation path; `Verify` accepts multi-audience closed set (`AudienceClaim` + `ImpersonationAudienceClaim`).
+  - `CreateImpersonationSessionHandler` extended — resolves target tenant, mints scoped JWT with `is_platform=false` + `is_super_user=false` (DOWNGRADED), `permissions=[Meta.TenantAdmin]`, `aud="leadkart-impersonation"`, TTL = session lifetime. Returns `access_token` in the 201 response.
+  - `CreateImpersonationSessionResponse` DTO gains `access_token` + `access_token_expires_at_utc` + `token_type`.
+  - Synthetic membership_id derived deterministically from session_id (SHA-256 truncated, v4-shaped). Handlers expecting a real membership row get ErrNotFound; tolerated per ADR 0045.
+  - No refresh-token-for-impersonation in v0.2 — AWS STS canon: re-AssumeRole if you need longer than the session. Reduces Wave 4 scope ~1 day; can layer on if measured pain.
+  - Audit-log enrichment (writing the new act_* columns) deferred to Wave 4.1 — requires propagating impersonation context through outbox → Watermill subscriber boundary. Schema shipped; population NULL until 4.1.
+  - E2E integration tests covering: scoped-token issuance + claim shape verification + downgraded-scope blocks `/v1/platform/*` + sub-impersonation rejected + target-not-found → 404.
 
 **Active branches:**
 - `main` — production; protected via PR-only merge.

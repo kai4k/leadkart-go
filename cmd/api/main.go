@@ -536,7 +536,7 @@ func buildIdentityApp(pool *pgxpool.Pool, hybridCache *cache.HybridCache, cfg co
 			UpdatePersonProfile:        command.NewUpdatePersonProfileHandler(persons),
 			HardDeleteTenant:           command.NewHardDeleteTenantHandler(tenants, memberships),
 
-			CreateImpersonationSession: command.NewCreateImpersonationSessionHandler(impersonationStore, now),
+			CreateImpersonationSession: command.NewCreateImpersonationSessionHandler(impersonationStore, tenants, issuer, now),
 			EndImpersonationSession:    command.NewEndImpersonationSessionHandler(impersonationStore),
 		},
 		Queries: app.Queries{

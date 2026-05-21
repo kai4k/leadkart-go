@@ -308,13 +308,18 @@ func handleCreateImpersonationSession(log *slog.Logger, a app.Application) http.
 		}
 		out, err := a.Commands.CreateImpersonationSession.Handle(r.Context(),
 			command.CreateImpersonationSessionCommand{
-				OperatorID:     c.Subject,
-				TargetTenantID: tenant.ID(req.TargetTenantID),
-				Reason:         req.Reason,
-				Duration:       dur,
+				OperatorID:            c.Subject,
+				OperatorSecurityStamp: c.SecurityStamp, // NEW (Wave 4) — pass operator's stamp into scoped token
+				TargetTenantID:        tenant.ID(req.TargetTenantID),
+				Reason:                req.Reason,
+				Duration:              dur,
 			})
 		if errors.Is(err, command.ErrImpersonationInvalid) {
 			writeError(w, http.StatusUnprocessableEntity, ErrCodeImpersonationInvalid, err.Error())
+			return
+		}
+		if errors.Is(err, command.ErrImpersonationTargetMissing) {
+			writeError(w, http.StatusNotFound, ErrCodeTenantNotFound, "")
 			return
 		}
 		if err != nil {
@@ -323,8 +328,11 @@ func handleCreateImpersonationSession(log *slog.Logger, a app.Application) http.
 			return
 		}
 		writeJSON(w, http.StatusCreated, CreateImpersonationSessionResponse{
-			SessionID:    out.SessionID,
-			ExpiresAtUTC: out.ExpiresAtUTC,
+			SessionID:               out.SessionID,
+			ExpiresAtUTC:            out.ExpiresAtUTC,
+			AccessToken:             out.AccessToken,
+			AccessTokenExpiresAtUTC: out.AccessTokenExpiresAtUTC,
+			TokenType:               "Bearer",
 		})
 	})
 }
