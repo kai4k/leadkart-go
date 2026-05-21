@@ -554,6 +554,7 @@ func buildIdentityApp(pool *pgxpool.Pool, hybridCache *cache.HybridCache, cfg co
 			GetRole:                   query.NewGetRoleHandler(roles),
 			ListRoles:                 query.NewListRolesHandler(roles),
 			GetPerson:                 query.NewGetPersonHandler(persons),
+			GetPersonByEmail:          query.NewGetPersonByEmailHandler(persons),
 			ListPersonMemberships:     query.NewListPersonMembershipsHandler(memberships, persons),
 			ListAllTenants:            query.NewListAllTenantsHandler(tenants),
 			ListImpersonationSessions: query.NewListImpersonationSessionsHandler(impersonationStore),

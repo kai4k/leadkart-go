@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	commonemail "github.com/leadkart/leadkart-go/internal/common/email"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
@@ -57,6 +58,47 @@ func (h GetPersonHandler) Handle(ctx context.Context, q GetPersonQuery) (PersonV
 	p, err := h.persons.GetByID(ctx, q.PersonID)
 	if err != nil {
 		return PersonView{}, fmt.Errorf("get_person: %w", err)
+	}
+	return projectPerson(p), nil
+}
+
+// ----- GetPersonByEmailQuery ------------------------------------------------
+
+// GetPersonByEmailQuery returns the global Person view by email.
+// PLATFORM-ONLY path — emails are sensitive + globally unique;
+// tenant admins do NOT have a cross-tenant email-probe surface
+// (they can search within their own tenant via /v1/users?q= which
+// joins with the tenant_memberships table per RLS scope).
+//
+// Per ADR 0044 enumeration safety + ADR 0039 scope rules. HTTP layer
+// gates on RequirePlatform before dispatch; this handler does NOT
+// perform additional authz (the route-level gate already established
+// it).
+type GetPersonByEmailQuery struct {
+	Email commonemail.Address
+}
+
+// GetPersonByEmailHandler runs the read.
+type GetPersonByEmailHandler struct {
+	persons person.Repository
+}
+
+// NewGetPersonByEmailHandler wires the handler.
+func NewGetPersonByEmailHandler(p person.Repository) GetPersonByEmailHandler {
+	if p == nil {
+		panic("query: NewGetPersonByEmailHandler persons repository required")
+	}
+	return GetPersonByEmailHandler{persons: p}
+}
+
+// Handle returns the [PersonView] or [person.ErrNotFound].
+func (h GetPersonByEmailHandler) Handle(ctx context.Context, q GetPersonByEmailQuery) (PersonView, error) {
+	if q.Email.IsZero() {
+		return PersonView{}, errors.New("get_person_by_email: email required")
+	}
+	p, err := h.persons.GetByEmail(ctx, q.Email)
+	if err != nil {
+		return PersonView{}, fmt.Errorf("get_person_by_email: %w", err)
 	}
 	return projectPerson(p), nil
 }

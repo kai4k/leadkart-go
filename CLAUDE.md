@@ -49,6 +49,14 @@
   - `GET /v1/search` omni-search — parallel pg_trgm fanout (persons + tenants) with per-category timeout + `has_partial` flag. Platform-only. Cached via SearchResultsTTL.
   - `GET /v1/auth/me/activity` + `GET /v1/tenants/{tenantId}/activity` — keyset-paginated audit-log reads against `buildingblocks.audit_log_entry`. Self-read always allowed; tenant-scoped goes through `RequireTenantContext`.
   - EXPLAIN-under-RLS integration test (`keyset_explain_integration_test.go`) — load 200 memberships, assert keyset query uses `idx_memberships_tenant_active_joined` (Index Scan, not Seq Scan). ADR 0038 discipline as a CI gate.
+- Wave 3 — slug/email lookup hardening + RFC 9457 errors + migration gate + scoped-JWT design:
+  - ADR 0044 — Enumeration safety. 404 (not 403) on no-access for guessable identifiers (slugs / emails / handles). GitHub / Stripe / Auth0 / Twilio canon; OWASP API Top 10 §A01:2023 anti-pattern when 403 leaks existence.
+  - `GET /v1/tenants/by-slug/{slug}` with handler-inline authz + enumeration-safe 404 + byte-equality test (`TestE2E_TenantBySlug_ResponseShapesIdentical` proves cross-tenant 404 ≡ missing-slug 404).
+  - `GET /v1/platform/persons?email=` — Platform-only cross-tenant identity probe by email (Stripe / Auth0 canon — query param, not path).
+  - RFC 9457 Problem Details error shape — `ErrorResponse` now carries `type`/`title`/`status`/`detail`/`errors{}` per the spec while keeping legacy `error`/`message` for backward compat. `writeValidationError` helper for field-level validation rejection (422 + `errors: {field: [msgs]}`).
+  - A.8 `writeMutationResult` helper — 200 + DTO when supplied, 204 when nil. Per-handler adoption is incremental + non-breaking.
+  - Migration CI gate — new `task ci:migrations` (local) + GitHub Actions `migrations-check` job (cloud) applies all migrations to ephemeral Postgres on every PR touching `migrations/`. Catches the GIN-on-uuid bug class permanently.
+  - ADR 0045 — Scoped JWT impersonation design (companion to Wave 4 impl). AWS STS AssumeRole pattern + RFC 8693 `act` claim + downgraded scope + `aud: "impersonation"` discrimination + actor-chain audit-log columns.
 
 **Active branches:**
 - `main` — production; protected via PR-only merge.

@@ -96,6 +96,7 @@ type Queries struct {
 	GetRole                   query.GetRoleHandler
 	ListRoles                 query.ListRolesHandler
 	GetPerson                 query.GetPersonHandler
+	GetPersonByEmail          query.GetPersonByEmailHandler
 	ListPersonMemberships     query.ListPersonMembershipsHandler
 	ListAllTenants            query.ListAllTenantsHandler
 	ListImpersonationSessions query.ListImpersonationSessionsHandler

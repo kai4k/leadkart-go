@@ -645,10 +645,46 @@ type RevokeAllSessionsResponse struct {
 
 // ----- Errors ----------------------------------------------------------------
 
-// ErrorResponse is the shared 4xx/5xx body shape. RFC 9457 problem-detail
-// canon would add `type`/`title`/`detail`; this v0.1 cut keeps it
-// minimal. Upgrade in Phase 6 when the .NET ProblemDetails port lands.
+// ErrorResponse is the shared 4xx/5xx body shape — RFC 9457 Problem
+// Details for HTTP APIs (https://datatracker.ietf.org/doc/html/rfc9457),
+// extended with LeadKart-canonical fields.
+//
+// Backward-compat: the legacy `error` + `message` fields stay populated
+// so existing clients branching on `error` keep working unchanged.
+// New field-level errors arrive via the `errors` map (RFC 9457 §3.1
+// extension fields convention).
+//
+// Per ADR 0044 enumeration safety: empty Message + nil Errors when the
+// caller lacks access. The status code identifies the failure class;
+// the body MUST NOT leak existence information.
+//
+// Wire shape:
+//
+//	{
+//	  "type":    "https://leadkart.api/errors/validation",   // RFC 9457 §3.1.1
+//	  "title":   "Validation failed",                          // §3.1.2
+//	  "status":  422,                                          // §3.1.3
+//	  "detail":  "One or more fields are invalid",             // §3.1.4
+//	  "error":   "validation_failed",                          // LeadKart legacy
+//	  "message": "One or more fields are invalid",             // LeadKart legacy
+//	  "errors": {                                              // RFC 9457 ext
+//	    "email":    ["must be a valid email address"],
+//	    "password": ["must be at least 12 characters", "must contain a digit"]
+//	  }
+//	}
 type ErrorResponse struct {
-	Error   string `json:"error"`              // machine-parseable code
-	Message string `json:"message,omitempty"`  // human-readable
+	// RFC 9457 Problem Details fields.
+	Type   string `json:"type,omitempty"`
+	Title  string `json:"title,omitempty"`
+	Status int    `json:"status,omitempty"`
+	Detail string `json:"detail,omitempty"`
+
+	// LeadKart legacy fields (kept for backward compat).
+	Error   string `json:"error"`             // machine-parseable code
+	Message string `json:"message,omitempty"` // human-readable
+
+	// Field-level errors (RFC 9457 §3.1 extension; key = JSON field
+	// name, value = list of error messages). Populated by validation
+	// failures; nil for non-validation errors.
+	Errors map[string][]string `json:"errors,omitempty"`
 }

@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 
+	commonemail "github.com/leadkart/leadkart-go/internal/common/email"
 	"github.com/leadkart/leadkart-go/internal/identity/app"
 	"github.com/leadkart/leadkart-go/internal/identity/app/command"
 	"github.com/leadkart/leadkart-go/internal/identity/app/query"
@@ -17,6 +18,62 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 	"github.com/leadkart/leadkart-go/internal/identity/ports/authn"
 )
+
+// ----- GetPersonByEmail (Platform) ------------------------------------------
+
+// handleGetPersonByEmail serves GET /api/v1/platform/persons?email=...
+//
+// PLATFORM-ONLY (gated by RequirePlatform at the route table). Cross-
+// tenant identity probe by email — operator UX equivalent of clicking
+// "Find user by email" in the platform-admin dashboard.
+//
+// Per ADR 0044 enumeration safety + ADR 0039 scope rules: emails are
+// sensitive PII; tenant admins do NOT have an analogous endpoint
+// (they search their own tenant via /v1/users?q=). The Platform gate
+// already establishes authority; no inline 404 mismatch check needed.
+//
+// Response codes:
+//   - 200 + PersonDto — found
+//   - 400 invalid_email — malformed email input
+//   - 404 person_not_found — no Person with that email
+//   - 403 — handled by RequirePlatform middleware (caller not platform)
+//   - 401 — handled by RequireFreshStamp middleware (no/stale JWT)
+//
+// Query-param mode (not path) because emails contain "@" and "." which
+// some URL routers + access-log grep tools mangle in path positions.
+// Stripe / Auth0 / GitHub all use ?email= for the same reason.
+func handleGetPersonByEmail(log *slog.Logger, a app.Application) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw := strings.TrimSpace(r.URL.Query().Get("email"))
+		if raw == "" {
+			writeError(w, http.StatusBadRequest, ErrCodeInvalidEmail,
+				"email query parameter is required")
+			return
+		}
+		addr, err := commonemail.New(raw)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, ErrCodeInvalidEmail, err.Error())
+			return
+		}
+
+		view, err := a.Queries.GetPersonByEmail.Handle(r.Context(),
+			query.GetPersonByEmailQuery{Email: addr})
+		switch {
+		case errors.Is(err, person.ErrNotFound):
+			// Platform-tier route — operator can probe legitimately;
+			// the 404 here is just "no Person with that email". No
+			// enumeration concern at this layer (the gate is
+			// RequirePlatform, not slug-guessability).
+			writeError(w, http.StatusNotFound, ErrCodePersonNotFound, "")
+			return
+		case err != nil:
+			log.ErrorContext(r.Context(), "get person by email failed", "err", err)
+			writeError(w, http.StatusInternalServerError, ErrCodeInternalError, "")
+			return
+		}
+		writeJSON(w, http.StatusOK, projectPersonViewToDto(view))
+	})
+}
 
 // ----- ListAllTenants (Platform) --------------------------------------------
 

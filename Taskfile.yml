@@ -154,6 +154,22 @@ tasks:
       - task: test:int
       - task: ci:smoke
 
+  ci:migrations:
+    desc: 'Apply all migrations to ephemeral Postgres + tear down. Catches schema errors (GIN opclass, FK shape, RLS policy syntax, etc.) before push. Requires Docker.'
+    # Reuses the compose `migrate` service — same container that runs
+    # in prod. --abort-on-container-exit makes the command return the
+    # migrate container's exit code; postgres tears down via `down -v`
+    # in the deferred command (runs even on migration failure).
+    #
+    # Pre-push hook intentionally does NOT call this (Docker dependency
+    # would slow push for non-schema changes). Developers touching
+    # migrations/ MUST run this locally OR rely on cloud CI's
+    # migrations-check job per .github/workflows/ci.yml.
+    cmds:
+      - task: docker:env
+      - defer: docker compose --env-file docker/.env -f {{.COMPOSE_FILE}} down -v
+      - docker compose --env-file docker/.env -f {{.COMPOSE_FILE}} up --build --abort-on-container-exit --remove-orphans migrate
+
   ci:smoke:
     desc: 'Mints ephemeral JWT key + runs full compose smoke (matches GH Actions container-smoke job).'
     cmds:

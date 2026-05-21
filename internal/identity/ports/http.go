@@ -170,6 +170,12 @@ func AddRoutes(mux *http.ServeMux, log *slog.Logger, a app.Application, verifier
 			platform(handleHardDeleteTenant(log, a)))
 		mux.Handle("GET /api/v1/platform/persons/{personId}",
 			platform(handleGetPerson(log, a)))
+		// Platform-only cross-tenant identity probe by email. Query-
+		// param keyed (NOT path) — emails contain `@` + `.` which
+		// confuse some URL parsers + access-log greps. Stripe/Auth0/
+		// GitHub all do ?email= here for the same reason.
+		mux.Handle("GET /api/v1/platform/persons",
+			platform(handleGetPersonByEmail(log, a)))
 		mux.Handle("GET /api/v1/platform/persons/{personId}/memberships",
 			platform(handleListPersonMemberships(log, a)))
 		mux.Handle("PATCH /api/v1/platform/persons/{personId}/profile",
@@ -715,7 +721,90 @@ func writeJSON(w http.ResponseWriter, status int, body interface{}) {
 // writeError emits the canonical error shape. message is optional —
 // many error paths return an empty string to avoid leaking details
 // (e.g. invalid_credentials NEVER says "wrong password" vs "no such
-// user").
+// user"; ADR 0044 enumeration safety).
+//
+// The wire shape is RFC 9457 Problem Details + LeadKart legacy
+// fields. Title + Type are auto-derived from the code for HTTP-level
+// consistency; clients on the new shape can branch on `type`/`status`/
+// `errors`; clients on the legacy shape continue to branch on `error`.
 func writeError(w http.ResponseWriter, status int, code, message string) {
-	writeJSON(w, status, ErrorResponse{Error: code, Message: message})
+	writeJSON(w, status, ErrorResponse{
+		Type:    problemType(code),
+		Title:   http.StatusText(status),
+		Status:  status,
+		Detail:  message,
+		Error:   code,
+		Message: message,
+	})
+}
+
+// writeValidationError emits a 422 Unprocessable Entity with field-
+// level errors per RFC 9457 §3.1 extension fields.
+//
+// fields maps wire-shape JSON field names (snake_case) to a list of
+// validation messages. Multiple messages per field are common
+// (password rules: "too short" + "no digit" + "no symbol").
+//
+// Use this from handlers that perform multi-field validation
+// (RegisterTenant, ChangePassword, UpdateTenantStatutory, CreateUser).
+// Single-field validation failures (e.g. invalid slug, invalid email)
+// continue to use writeError — there's no field-level structure to
+// surface.
+//
+// detail is the top-level human-readable summary ("One or more fields
+// are invalid"); per-field detail goes in the fields map.
+//
+//nolint:unused // RFC 9457 infrastructure; incremental per-handler adoption in follow-up PRs
+func writeValidationError(w http.ResponseWriter, detail string, fields map[string][]string) {
+	writeJSON(w, http.StatusUnprocessableEntity, ErrorResponse{
+		Type:    problemType(ErrCodeValidationFailed),
+		Title:   http.StatusText(http.StatusUnprocessableEntity),
+		Status:  http.StatusUnprocessableEntity,
+		Detail:  detail,
+		Error:   ErrCodeValidationFailed,
+		Message: detail,
+		Errors:  fields,
+	})
+}
+
+// problemType returns the canonical Problem Details `type` URI for an
+// error code per RFC 9457 §3.1.1. Convention: opaque slug under the
+// LeadKart API base. Clients should treat the URI as an opaque
+// identifier; not a deref-able link in v0.2.
+func problemType(code string) string {
+	if code == "" {
+		return ""
+	}
+	return "https://leadkart.api/errors/" + code
+}
+
+// writeMutationResult is the canonical "mutation succeeded" response
+// emitter. When body is nil → 204 No Content (the current default).
+// When body is non-nil → 200 OK + body — matches Stripe / GitHub /
+// Auth0 canon where mutations return the updated resource so the
+// frontend doesn't need a follow-up GET.
+//
+// Migration plan (incremental per ADR 0046 — to land in a follow-up
+// PR): each PATCH/POST mutation handler is upgraded to load the
+// post-state + pass it here. Existing handlers calling the old
+// shape (writeJSON with status 204) keep working — this is purely
+// additive.
+//
+// Example future adoption:
+//
+//	// After the command succeeds:
+//	updated, err := a.Queries.GetTenant.Handle(ctx, query.GetTenantQuery{TenantID: id})
+//	if err != nil { ... }
+//	writeMutationResult(w, projectViewToDto(updated))
+//
+// The 200+body shape is the canonical mutation response for SPAs that
+// do optimistic updates and need server-canonical post-state.
+//
+//nolint:unused // A.8 infrastructure; incremental per-handler adoption in follow-up PRs
+func writeMutationResult(w http.ResponseWriter, body interface{}) {
+	if body == nil {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	writeJSON(w, http.StatusOK, body)
 }
