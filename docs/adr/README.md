@@ -38,5 +38,6 @@ One decision per file, Michael Nygard format (Context / Decision / Consequences 
 | 0047 | Layer-boundary discipline — `app/` cannot import DB driver / sqlc / concrete adapter | Accepted |
 | 0048 | `internal/platform/` merged into `internal/common/` (TDL strict-canon alignment) | Accepted |
 | 0049 | URL design rules + route-registration arch gate + integration-tag compile gate | Accepted |
+| 0050 | OpenAPI as code-of-record + spec/code drift CI gates | Accepted |
 
-ADRs 0011–0026 + 0032 + 0050+ land as the relevant code lands per the master plan.
+ADRs 0011–0026 + 0032 + 0051+ land as the relevant code lands per the master plan.

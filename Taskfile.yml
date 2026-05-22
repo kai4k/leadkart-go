@@ -164,6 +164,11 @@ tasks:
       - task: test:int
       - task: ci:smoke
 
+  ci:openapi:
+    desc: 'OpenAPI spec lint via Spectral (requires npx / node). Mirrors the openapi-lint job in .github/workflows/ci.yml — per ADR 0050.'
+    cmds:
+      - npx --yes @stoplight/spectral-cli@latest lint api/openapi.yaml --ruleset .spectral.yaml --fail-severity=error
+
   ci:migrations:
     desc: 'Apply all migrations to ephemeral Postgres + tear down. Catches schema errors (GIN opclass, FK shape, RLS policy syntax, etc.) before push. Requires Docker.'
     # Reuses the compose `migrate` service — same container that runs

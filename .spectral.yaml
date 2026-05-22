@@ -1,0 +1,98 @@
+# .spectral.yaml — LeadKart Go OpenAPI lint ruleset.
+#
+# Extends spectral:oas (the canonical OpenAPI 3.x ruleset shipped with
+# @stoplight/spectral-cli) — adds LeadKart-specific design rules per
+# ADR 0049 (URL design canon) + ADR 0046 (spec-first contract).
+#
+# Run locally: `task ci:openapi`
+# Run in CI:   the `openapi-lint` job in .github/workflows/ci.yml
+#
+# Both gates run only when api/openapi.yaml (or this file, or the
+# embed at internal/common/openapi/all_routes.yaml) changes. Other PRs
+# skip the spectral cost.
+
+extends:
+  - spectral:oas
+
+rules:
+  # ============================================================
+  # Hygiene — surfaces missing metadata that breaks tooling
+  # ============================================================
+
+  # Every operation MUST have a summary so Scalar + openapi-typescript
+  # produce navigable docs + identifier names.
+  operation-summary:
+    description: Every operation must have a `summary` for docs + codegen
+    severity: error
+    given: $.paths.*[get,post,put,patch,delete,head,options]
+    then:
+      field: summary
+      function: truthy
+
+  # Every operation MUST be tagged so the Scalar sidebar groups them
+  # correctly (auth, tenants, users, roles, platform, search, audit,
+  # impersonation).
+  operation-tag-defined:
+    description: Every operation must declare at least one tag
+    severity: error
+    given: $.paths.*[get,post,put,patch,delete,head,options]
+    then:
+      field: tags
+      function: schema
+      functionOptions:
+        schema:
+          type: array
+          minItems: 1
+
+  # Every non-204 response with a body MUST reference a schema. Catches
+  # "200" responses that say nothing about what comes back.
+  response-2xx-content-schema:
+    description: 2xx responses (except 204) should declare a content schema
+    severity: warn
+    given: $.paths.*[get,post,put,patch,delete].responses['200','201']
+    then:
+      field: content
+      function: truthy
+
+  # ============================================================
+  # LeadKart canon — codified design rules (ADR 0049)
+  # ============================================================
+
+  # Per ADR 0049: lookups by non-primary-key use query params, not
+  # path segments. `/by-slug/{slug}` shape is forbidden for new
+  # additions (the existing one is grandfathered for v0.2 FE-contract
+  # compatibility — that's why this is `warn`, not `error`).
+  no-by-x-path-lookups:
+    description: |
+      ADR 0049: lookups by non-primary-key (slug, email, handle) MUST use
+      query params (?slug=, ?email=), NOT path segments (/by-slug/{slug}).
+      The grandfathered /v1/tenants/by-slug/{slug} is the ONLY allowed
+      exception; new routes must follow the canonical shape.
+    severity: warn
+    given: $.paths
+    then:
+      field: '@key'
+      function: pattern
+      functionOptions:
+        notMatch: '/by-(?!slug/\\{slug\\}$).*/'
+
+  # Per ADR 0046: all operations sit under /api/v1/* (no other prefix).
+  # Catches accidental `/v1/...` or `/api/...` typos.
+  paths-api-v1-prefix:
+    description: All paths must start with /api/v1/
+    severity: error
+    given: $.paths
+    then:
+      field: '@key'
+      function: pattern
+      functionOptions:
+        match: '^/api/v1/'
+
+  # ============================================================
+  # Quiet noisy spectral:oas defaults — we ship `summary` only; codegen
+  # operationIds are a v0.3 concern (current openapi-typescript codegen
+  # doesn't require them).
+  # ============================================================
+
+  operation-description: off
+  operation-operationId: off

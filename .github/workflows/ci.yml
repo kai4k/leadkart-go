@@ -95,6 +95,7 @@ jobs:
       go: ${{ steps.filter.outputs.go }}
       docker: ${{ steps.filter.outputs.docker }}
       migrations: ${{ steps.filter.outputs.migrations }}
+      openapi: ${{ steps.filter.outputs.openapi }}
     steps:
       - uses: actions/checkout@v6
 
@@ -122,6 +123,11 @@ jobs:
               - 'migrations/**'
               - 'go.mod'
               - 'go.sum'
+              - '.github/workflows/ci.yml'
+            openapi:
+              - 'api/openapi.yaml'
+              - 'internal/common/openapi/all_routes.yaml'
+              - '.spectral.yaml'
               - '.github/workflows/ci.yml'
 
   # ---------------------------------------------------------------------------
@@ -236,15 +242,25 @@ jobs:
       - name: Install gotestsum
         run: go install gotest.tools/gotestsum@latest
 
-      # Run ONLY TestArch_* — the build-time package compile already covers
-      # the rest of the integrationevents package surface.
+      # Run ONLY TestArch_* across every package that hosts arch tests.
+      # Local `task test:arch` is the source of truth — keep this list in
+      # sync. Currently three sites:
+      #   - internal/identity/integrationevents — event-marker + alias-regex hygiene
+      #   - internal/identity/app                — layer-boundary discipline (ADR 0047)
+      #   - internal/identity/ports              — route-registration conflict (ADR 0049/Wave 8)
+      #                                            + OpenAPI ↔ code drift (ADR 0050/Wave 9.3)
+      # PRE-WAVE-9.3 BUG: this job listed only `integrationevents/...` so the
+      # boundary + route arch tests silently never ran on cloud CI even though
+      # local pre-push gated them. Wave 9.3 brought them into the gate.
       - name: Run architecture tests
         run: |
           gotestsum \
             --junitfile=junit-architecture.xml \
             --format=testname \
             -- -run "^TestArch_" -shuffle=on \
-               ./internal/identity/integrationevents/...
+               ./internal/identity/integrationevents/... \
+               ./internal/identity/app/... \
+               ./internal/identity/ports/...
 
       - name: Upload architecture test results (JUnit)
         if: always()
@@ -262,6 +278,38 @@ jobs:
           path: junit-architecture.xml
           reporter: java-junit
           fail-on-error: false
+
+  # ---------------------------------------------------------------------------
+  # OpenAPI spec gate — Spectral lint on api/openapi.yaml.
+  #
+  # Two gates protect the spec:
+  #   1. THIS job — Spectral lints the YAML for design hygiene (missing
+  #      summary, untagged operations, schema-less responses, etc.).
+  #   2. `architecture` job — TestArch_RouteHasSpecOperation asserts every
+  #      mux.Handle has a matching spec operation + vice versa.
+  # Per ADR 0050: the spec is the canonical contract (ADR 0046 spec-first);
+  # both gates run on every PR that touches api/openapi.yaml.
+  #
+  # Spectral installs via npx (zero-config; ~5s on a warm cache). The
+  # ruleset lives at .spectral.yaml — a thin extension of spectral:oas
+  # (the canonical OpenAPI 3.x ruleset) with project-specific rules
+  # codified in ADR 0049 (URL design canon).
+  # ---------------------------------------------------------------------------
+  openapi-lint:
+    name: OpenAPI Spec Lint (Spectral)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: changes
+    if: needs.changes.outputs.openapi == 'true' || github.event_name == 'push'
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+
+      - name: Run Spectral
+        run: npx --yes @stoplight/spectral-cli@latest lint api/openapi.yaml --ruleset .spectral.yaml --fail-severity=error
 
   # ---------------------------------------------------------------------------
   # Migrations check — apply all migrations to an ephemeral Postgres on every
