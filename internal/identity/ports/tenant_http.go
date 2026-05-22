@@ -16,7 +16,78 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/ports/authn"
 )
 
-// ----- GetTenantBySlug ------------------------------------------------------
+// ----- ListTenants (query-filter shape; canonical slug lookup) --------------
+
+// handleListTenantsByFilter serves GET /api/v1/tenants?slug=acme.
+//
+// Per ADR 0049 + ADR 0052 (Wave 9.1c): canonical replacement for the
+// grandfathered GET /api/v1/tenants/by-slug/{slug} path-segment
+// lookup. Stripe / Auth0 / GitHub canon: "find by alternate key" uses
+// a query param on the listing endpoint and returns a list of 0-1
+// matches (NOT a 404). The frontend checks `result.tenants.length`.
+//
+// Enumeration safety preserved: callers who lack access to the
+// matched tenant get `{tenants: []}` — indistinguishable from
+// "no tenant has this slug." Per ADR 0044.
+//
+// Status code matrix:
+//
+//	| Caller             | Slug exists, theirs   | Slug exists, others'    | Slug missing | Invalid slug |
+//	|--------------------|-----------------------|-------------------------|--------------|--------------|
+//	| Tenant admin       | 200 + {tenants: [T]} | 200 + {tenants: []}     | 200 + {tenants: []} | 400 |
+//	| Platform operator  | 200 + {tenants: [T]} | 200 + {tenants: [T]}    | 200 + {tenants: []} | 400 |
+//	| Unauthenticated    | 401 (middleware)     |                         |              |              |
+//
+// Future: support other filters (?status=, ?created_after=) per
+// Stripe listing-endpoint canon. v0.2 ships slug only.
+func handleListTenantsByFilter(log *slog.Logger, a app.Application) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		slugParam := r.URL.Query().Get("slug")
+		if slugParam == "" {
+			// v0.2: slug is the only supported filter; no slug = no
+			// query intent. 400 (caller didn't say what they wanted).
+			// When other filters land, change this to an empty list +
+			// pagination.
+			writeError(w, http.StatusBadRequest, ErrCodeInvalidQuery, "slug query parameter required")
+			return
+		}
+		s, err := slug.New(slugParam)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, ErrCodeInvalidSlug, err.Error())
+			return
+		}
+
+		view, err := a.Queries.GetTenantBySlug.Handle(r.Context(), query.GetTenantBySlugQuery{Slug: s})
+		switch {
+		case errors.Is(err, tenant.ErrNotFound):
+			// No match → empty list (Stripe canon; NOT 404).
+			writeJSON(w, http.StatusOK, ListTenantsResponse{Tenants: []TenantDto{}})
+			return
+		case err != nil:
+			log.ErrorContext(r.Context(), "list tenants by slug failed", "err", err)
+			writeError(w, http.StatusInternalServerError, ErrCodeInternalError, "")
+			return
+		}
+
+		// Inline authz — same as handleGetTenantBySlug; enumeration-safe.
+		c, ok := authn.ClaimsFromContext(r.Context())
+		if !ok {
+			log.ErrorContext(r.Context(), "list tenants: missing claims in authenticated handler")
+			writeError(w, http.StatusInternalServerError, ErrCodeInternalError, "")
+			return
+		}
+		operator := c.IsSuperUser || (c.IsPlatform && c.TenantSlug == authn.PlatformTenantSlug)
+		if !operator && c.TenantID != view.ID {
+			// No access → empty list (NOT 200-with-result + NOT 404).
+			writeJSON(w, http.StatusOK, ListTenantsResponse{Tenants: []TenantDto{}})
+			return
+		}
+
+		writeJSON(w, http.StatusOK, ListTenantsResponse{Tenants: []TenantDto{projectViewToDto(view)}})
+	})
+}
+
+// ----- GetTenantBySlug (deprecated; superseded by ?slug= filter) -----------
 
 // handleGetTenantBySlug serves GET /api/v1/tenants/by-slug/{slug}.
 //

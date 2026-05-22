@@ -15,6 +15,10 @@ const (
 	// ErrCodeInvalidBody — POST/PUT/PATCH body fails JSON decode.
 	ErrCodeInvalidBody = "invalid_body"
 
+	// ErrCodeInvalidQuery — required query parameter missing or
+	// malformed (e.g. `?slug=` missing on GET /v1/tenants).
+	ErrCodeInvalidQuery = "invalid_query"
+
 	// ErrCodeInvalidSlug — slug VO factory rejected the input
 	// (length / charset / reserved-name fail).
 	ErrCodeInvalidSlug = "invalid_slug"

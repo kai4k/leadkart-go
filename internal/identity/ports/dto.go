@@ -389,6 +389,18 @@ type ListAllTenantsResponse struct {
 	Tenants []TenantDto `json:"tenants"`
 }
 
+// ListTenantsResponse — GET /api/v1/tenants?slug=acme.
+//
+// Per ADR 0052 (Wave 9.1c): canonical replacement for the
+// grandfathered GET /api/v1/tenants/by-slug/{slug} path-segment
+// lookup. Stripe/Auth0 canon: "find by alternate key" returns a list
+// of 0-1 matches (NOT 404). Caller-visibility filtered (enumeration-
+// safe per ADR 0044); empty Tenants[] means either "no such slug"
+// OR "you can't see it" — indistinguishable by design.
+type ListTenantsResponse struct {
+	Tenants []TenantDto `json:"tenants"`
+}
+
 // ----- Platform: Impersonation sessions --------------------------------------
 
 // CreateImpersonationSessionRequest — POST /api/v1/platform/impersonation/sessions.

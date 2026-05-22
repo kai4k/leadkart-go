@@ -287,6 +287,36 @@ paths:
 
   # ===== TENANTS ========================================================
   /api/v1/tenants:
+    get:
+      tags: [tenants]
+      summary: List tenants matching a filter (Stripe-style query lookup)
+      description: |
+        Canonical slug-lookup per ADR 0052. Returns `{tenants: [0..1 match]}`.
+        Enumeration-safe per ADR 0044 — callers who lack access to the matched
+        tenant see an empty list, indistinguishable from "no such slug."
+
+        Supersedes `GET /api/v1/tenants/by-slug/{slug}` (deprecated; grandfathered
+        for v0.2 frontend-contract compatibility per ADR 0049).
+
+        v0.2 supports `slug` only; future filters (`status`, `created_after`)
+        land per Stripe listing-endpoint canon.
+      parameters:
+        - name: slug
+          in: query
+          required: true
+          description: Tenant slug to look up (URL-safe; lowercase + digits + hyphens).
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 64
+      responses:
+        '200':
+          description: List of matching tenants (length 0 or 1)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ListTenantsResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+
     post:
       tags: [tenants]
       summary: Register a new tenant + initial admin user
@@ -460,8 +490,14 @@ paths:
   /api/v1/tenants/by-slug/{slug}:
     get:
       tags: [tenants]
-      summary: Get tenant by slug (enumeration-safe per ADR 0044)
+      summary: '[DEPRECATED] Get tenant by slug — use GET /api/v1/tenants?slug='
+      deprecated: true
       description: |
+        **DEPRECATED per ADR 0052.** Use `GET /api/v1/tenants?slug=acme`
+        instead — the canonical Stripe / Auth0 listing-with-filter shape.
+        This path-segment lookup is grandfathered for v0.2 frontend-contract
+        compatibility per ADR 0049; removed in v0.4+ once frontend migrates.
+
         Returns 404 for both "slug doesn't exist" AND "caller lacks
         access to this tenant" (response bodies byte-identical). Per
         ADR 0044 enumeration safety; same canon as GitHub
@@ -1498,6 +1534,18 @@ components:
 
     ListAllTenantsResponse:
       type: object
+      required: [tenants]
+      properties:
+        tenants:
+          type: array
+          items: { $ref: '#/components/schemas/TenantDto' }
+
+    ListTenantsResponse:
+      type: object
+      description: |
+        Filtered tenant lookup result per GET /api/v1/tenants?slug=...
+        Stripe-canon shape: list of 0-1 matches (enumeration-safe; empty
+        list when no match OR caller lacks access, indistinguishable).
       required: [tenants]
       properties:
         tenants:
