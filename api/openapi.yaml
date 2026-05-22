@@ -69,6 +69,8 @@ tags:
     description: Operator omni-search (Cmd+K)
   - name: audit
     description: Audit-log read endpoints
+  - name: permission-requests
+    description: Permission-elevation approval workflow (ADR 0055)
 
 security:
   - BearerAuth: []
@@ -1080,6 +1082,155 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
 
+  # ===== PERMISSION REQUESTS (ADR 0055) =================================
+  /api/v1/permission-requests:
+    post:
+      tags: [permission-requests]
+      summary: Submit a permission-elevation request
+      description: |
+        Caller (the requester) asks for a time-bound elevated permission.
+        The named approver is the requester's current manager
+        (`tenant_memberships.reports_to`). If the requester has no
+        manager, only Platform operators can approve.
+        At most one pending request per (membership, permission) tuple.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreatePermissionRequestRequest' }
+      responses:
+        '201':
+          description: Request submitted
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CreatePermissionRequestResponse' }
+        '409':
+          description: Another pending request already exists for this (membership, permission) tuple
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+    get:
+      tags: [permission-requests]
+      summary: List the caller's requests (?role=requester|approver)
+      description: |
+        Default `role=requester` returns the caller's own history (all states).
+        `role=approver` returns the Pending queue waiting on the caller's
+        decision. Keyset-paginated per ADR 0038.
+      parameters:
+        - name: role
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [requester, approver]
+            default: requester
+        - { $ref: '#/components/parameters/Cursor' }
+        - { $ref: '#/components/parameters/PageSize' }
+      responses:
+        '200':
+          description: Page of requests
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ListPermissionRequestsResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+
+  /api/v1/permission-requests/{requestId}:
+    get:
+      tags: [permission-requests]
+      summary: Get a single permission request
+      description: |
+        Returns the request if the caller is either the requester, the
+        named approver, OR a Platform operator. Cross-caller reads
+        collapse to 404 per ADR 0044 enumeration-safety canon.
+      parameters:
+        - { $ref: '#/components/parameters/PermissionRequestId' }
+      responses:
+        '200':
+          description: The request
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PermissionRequestDto' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/v1/permission-requests/{requestId}/approve:
+    post:
+      tags: [permission-requests]
+      summary: Approve a pending request (manager or platform operator)
+      description: |
+        Transitions Pending → Approved AND lands a time-bound grant on
+        the requester's membership overlay (single transaction). Caller
+        MUST be either the requester's manager OR carry `is_platform=true`.
+      parameters:
+        - { $ref: '#/components/parameters/PermissionRequestId' }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ApprovePermissionRequestRequest' }
+      responses:
+        '204': { description: Approved + grant created }
+        '403':
+          description: Caller is not the manager and not a Platform operator
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: Request is not in pending state
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+
+  /api/v1/permission-requests/{requestId}/deny:
+    post:
+      tags: [permission-requests]
+      summary: Deny a pending request (manager or platform operator)
+      description: |
+        Transitions Pending → Denied. `decision_reason` is REQUIRED on
+        Deny per ADR 0055 audit canon. Same caller-authorization as Approve.
+      parameters:
+        - { $ref: '#/components/parameters/PermissionRequestId' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DenyPermissionRequestRequest' }
+      responses:
+        '204': { description: Denied }
+        '403':
+          description: Caller is not the manager and not a Platform operator
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: Request is not in pending state
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+
+  /api/v1/permission-requests/{requestId}/cancel:
+    post:
+      tags: [permission-requests]
+      summary: Cancel a pending request (requester only)
+      description: |
+        Withdraws a pending request. Caller MUST be the original
+        requester; cross-caller cancel collapses to 404 per
+        ADR 0044 enumeration-safety canon.
+      parameters:
+        - { $ref: '#/components/parameters/PermissionRequestId' }
+      responses:
+        '204': { description: Cancelled }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: Request is not in pending state
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
 components:
   securitySchemes:
     BearerAuth:
@@ -1120,6 +1271,11 @@ components:
       schema: { type: string, format: uuid }
     PersonId:
       name: personId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    PermissionRequestId:
+      name: requestId
       in: path
       required: true
       schema: { type: string, format: uuid }
@@ -1765,5 +1921,77 @@ components:
         events:
           type: array
           items: { $ref: '#/components/schemas/AuditEventDto' }
+        has_more:    { type: boolean }
+        next_cursor: { type: string }
+
+    # ===== Permission requests (ADR 0055) ==============================
+    CreatePermissionRequestRequest:
+      type: object
+      required: [permission, reason]
+      properties:
+        permission:
+          type: string
+          description: Closed-set IdentityPermissions constant (e.g. "identity.users.create")
+        duration_days:
+          type: integer
+          minimum: 1
+          maximum: 90
+          description: JIT window length in days. Omit to use default (7).
+        reason:
+          type: string
+          minLength: 10
+          maxLength: 1024
+
+    CreatePermissionRequestResponse:
+      type: object
+      required: [request_id, status]
+      properties:
+        request_id:               { type: string, format: uuid }
+        approver_membership_id:   { type: string, format: uuid, description: 'Requester current manager. Empty when the requester has no manager — only Platform operators can approve.' }
+        status:                   { type: string, enum: [pending] }
+
+    ApprovePermissionRequestRequest:
+      type: object
+      properties:
+        decision_reason:
+          type: string
+          maxLength: 1024
+          description: Optional context for the approval.
+
+    DenyPermissionRequestRequest:
+      type: object
+      required: [decision_reason]
+      properties:
+        decision_reason:
+          type: string
+          minLength: 1
+          maxLength: 1024
+          description: REQUIRED on Deny per ADR 0055 audit canon.
+
+    PermissionRequestDto:
+      type: object
+      required: [id, tenant_id, requester_membership_id, permission, duration_days, reason, state, created_at, updated_at]
+      properties:
+        id:                       { type: string, format: uuid }
+        tenant_id:                { type: string, format: uuid }
+        requester_membership_id:  { type: string, format: uuid }
+        permission:               { type: string }
+        duration_days:            { type: integer }
+        reason:                   { type: string }
+        state:                    { type: string, enum: [pending, approved, denied, cancelled] }
+        approver_membership_id:   { type: string, format: uuid }
+        decided_at:               { type: string, format: date-time }
+        decision_reason:          { type: string }
+        expires_at:               { type: string, format: date-time, description: 'When the bounded grant expires. Set only after Approve.' }
+        created_at:               { type: string, format: date-time }
+        updated_at:               { type: string, format: date-time }
+
+    ListPermissionRequestsResponse:
+      type: object
+      required: [requests, has_more]
+      properties:
+        requests:
+          type: array
+          items: { $ref: '#/components/schemas/PermissionRequestDto' }
         has_more:    { type: boolean }
         next_cursor: { type: string }

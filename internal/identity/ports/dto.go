@@ -690,6 +690,74 @@ type RevokeAllSessionsResponse struct {
 	RevokedCount int `json:"revoked_count"`
 }
 
+// ----- Permission-elevation approval workflow (ADR 0055) --------------------
+
+// CreatePermissionRequestRequest — POST /api/v1/permission-requests body.
+//
+// `permission` MUST be one of the closed-set [permission.IdentityPermissions]
+// constants; unknown names → 422. `duration_days` is optional; omit (or
+// pass 0) to use the default 7-day window. `reason` MUST be ≥10 chars.
+type CreatePermissionRequestRequest struct {
+	Permission   string `json:"permission"`
+	DurationDays int    `json:"duration_days,omitempty"`
+	Reason       string `json:"reason"`
+}
+
+// CreatePermissionRequestResponse — POST /api/v1/permission-requests 201 body.
+//
+// ApproverMembershipID is the requester's current manager — the
+// frontend can render "your manager X must approve". Empty when the
+// requester has no manager (then only Platform operators can approve).
+type CreatePermissionRequestResponse struct {
+	RequestID            string `json:"request_id"`
+	ApproverMembershipID string `json:"approver_membership_id,omitempty"`
+	Status               string `json:"status"` // always "pending" on the 201 path
+}
+
+// ApprovePermissionRequestRequest — POST /api/v1/permission-requests/{id}/approve.
+//
+// `decision_reason` is OPTIONAL on Approve (audit-friendly when set,
+// not required). Max length 1024 chars per the DB CHECK.
+type ApprovePermissionRequestRequest struct {
+	DecisionReason string `json:"decision_reason,omitempty"`
+}
+
+// DenyPermissionRequestRequest — POST /api/v1/permission-requests/{id}/deny.
+//
+// `decision_reason` is REQUIRED on Deny per ADR 0055 audit canon.
+type DenyPermissionRequestRequest struct {
+	DecisionReason string `json:"decision_reason"`
+}
+
+// PermissionRequestDto is the read shape of a permission-elevation
+// request. Wire-stable; ADR 0055 reserves expansion via new optional
+// fields with default zero values.
+type PermissionRequestDto struct {
+	ID                    string    `json:"id"`
+	TenantID              string    `json:"tenant_id"`
+	RequesterMembershipID string    `json:"requester_membership_id"`
+	Permission            string    `json:"permission"`
+	DurationDays          int       `json:"duration_days"`
+	Reason                string    `json:"reason"`
+	State                 string    `json:"state"`
+	ApproverMembershipID  string    `json:"approver_membership_id,omitempty"`
+	DecidedAt             time.Time `json:"decided_at,omitzero"`
+	DecisionReason        string    `json:"decision_reason,omitempty"`
+	ExpiresAt             time.Time `json:"expires_at,omitzero"`
+	CreatedAt             time.Time `json:"created_at"`
+	UpdatedAt             time.Time `json:"updated_at"`
+}
+
+// ListPermissionRequestsResponse — paginated GET response.
+//
+// `requests` always non-nil; `has_more` + `next_cursor` follow ADR 0038
+// cursor semantics.
+type ListPermissionRequestsResponse struct {
+	Requests   []PermissionRequestDto `json:"requests"`
+	HasMore    bool                   `json:"has_more"`
+	NextCursor string                 `json:"next_cursor,omitempty"`
+}
+
 // ----- Errors ----------------------------------------------------------------
 
 // ErrorResponse is the shared 4xx/5xx body shape — RFC 9457 Problem

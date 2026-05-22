@@ -141,16 +141,21 @@ ORDER  BY assigned_at, role_id;
 -- the domain layer guarantees a permission_name appears at most once
 -- per Membership (see Membership.GrantPermission / RevokePermission
 -- auto-suppression).
+--
+-- expires_at NULL = perpetual (default). Set to a future timestamp by
+-- the approval-workflow grant path per ADR 0055 — the resolver filters
+-- expired entries at resolve time. Revoked-kind rows MUST pass NULL
+-- (revocations are permanent until re-granted).
 INSERT INTO identity.membership_permission_overrides (
-    membership_id, permission_name, kind, tenant_id, updated_at
-) VALUES ($1, $2, $3, $4, $5);
+    membership_id, permission_name, kind, tenant_id, updated_at, expires_at
+) VALUES ($1, $2, $3, $4, $5, $6);
 
 -- name: DeletePermissionOverridesByMembership :exec
 DELETE FROM identity.membership_permission_overrides
 WHERE  membership_id = $1;
 
 -- name: ListPermissionOverridesByMembership :many
-SELECT membership_id, permission_name, kind, tenant_id, updated_at
+SELECT membership_id, permission_name, kind, tenant_id, updated_at, expires_at
 FROM   identity.membership_permission_overrides
 WHERE  membership_id = $1
 ORDER  BY permission_name;

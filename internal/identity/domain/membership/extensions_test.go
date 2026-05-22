@@ -3,6 +3,7 @@ package membership_test
 import (
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/leadkart/leadkart-go/internal/common/ids"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
@@ -153,10 +154,10 @@ func TestEffectivePermissions_UnionRolesPlusGrantsMinusRevokes(t *testing.T) {
 	_ = auditorRole.GrantPermission(permission.FromConstant(permission.IdentityPermissions.Users.View))
 
 	// Membership overlay: grant Anonymise, revoke Update.
-	_ = m.GrantPermission(permission.FromConstant(permission.IdentityPermissions.Users.Anonymise))
+	_ = m.GrantPermission(permission.FromConstant(permission.IdentityPermissions.Users.Anonymise), time.Time{})
 	_ = m.RevokePermission(permission.FromConstant(permission.IdentityPermissions.Users.Update))
 
-	got := m.EffectivePermissions([]*role.Role{managerRole, auditorRole})
+	got := m.EffectivePermissions([]*role.Role{managerRole, auditorRole}, time.Now())
 	gotSet := map[string]bool{}
 	for _, p := range got {
 		gotSet[p.Name()] = true
@@ -177,9 +178,9 @@ func TestEffectivePermissions_NoRolesEqualsOverlayOnly(t *testing.T) {
 	t.Parallel()
 	m := freshMembership(t)
 	p := permission.FromConstant(permission.IdentityPermissions.Users.View)
-	_ = m.GrantPermission(p)
+	_ = m.GrantPermission(p, time.Time{})
 
-	got := m.EffectivePermissions(nil)
+	got := m.EffectivePermissions(nil, time.Now())
 	if len(got) != 1 || !got[0].Equal(p) {
 		t.Fatalf("got %+v want overlay-only [View]", got)
 	}
@@ -196,7 +197,7 @@ func TestEffectivePermissions_RevokeWinsOverRoleGrant(t *testing.T) {
 	_ = r.GrantPermission(view)
 	_ = m.RevokePermission(view) // overlay revoke beats role grant
 
-	got := m.EffectivePermissions([]*role.Role{r})
+	got := m.EffectivePermissions([]*role.Role{r}, time.Now())
 	for _, p := range got {
 		if p.Equal(view) {
 			t.Fatal("overlay revoke should suppress role grant")
@@ -210,11 +211,11 @@ func TestGrantPermission_AddsToOverlay(t *testing.T) {
 	t.Parallel()
 	m := freshMembership(t)
 	p := permission.FromConstant(permission.IdentityPermissions.Users.Anonymise)
-	if err := m.GrantPermission(p); err != nil {
+	if err := m.GrantPermission(p, time.Time{}); err != nil {
 		t.Fatalf("Grant: %v", err)
 	}
 	got := m.GrantedPermissions()
-	if len(got) != 1 || !got[0].Equal(p) {
+	if len(got) != 1 || !got[0].Permission.Equal(p) {
 		t.Fatalf("GrantedPermissions: %+v", got)
 	}
 	events := m.PullEvents()
@@ -233,7 +234,7 @@ func TestGrantPermission_RemovesFromRevokedIfPreviouslyRevoked(t *testing.T) {
 	_ = m.RevokePermission(p)
 	_ = m.PullEvents()
 
-	if err := m.GrantPermission(p); err != nil {
+	if err := m.GrantPermission(p, time.Time{}); err != nil {
 		t.Fatalf("Grant: %v", err)
 	}
 	if len(m.RevokedPermissions()) != 0 {
@@ -248,7 +249,7 @@ func TestRevokePermission_RemovesFromGrantedIfPreviouslyGranted(t *testing.T) {
 	t.Parallel()
 	m := freshMembership(t)
 	p := permission.FromConstant(permission.IdentityPermissions.Users.Anonymise)
-	_ = m.GrantPermission(p)
+	_ = m.GrantPermission(p, time.Time{})
 	_ = m.PullEvents()
 
 	if err := m.RevokePermission(p); err != nil {
@@ -266,9 +267,9 @@ func TestGrantPermission_Idempotent(t *testing.T) {
 	t.Parallel()
 	m := freshMembership(t)
 	p := permission.FromConstant(permission.IdentityPermissions.Users.Anonymise)
-	_ = m.GrantPermission(p)
+	_ = m.GrantPermission(p, time.Time{})
 	_ = m.PullEvents()
-	if err := m.GrantPermission(p); err != nil {
+	if err := m.GrantPermission(p, time.Time{}); err != nil {
 		t.Fatalf("dup Grant: %v", err)
 	}
 	if events := m.PullEvents(); len(events) != 0 {
@@ -293,7 +294,7 @@ func TestRevokePermission_Idempotent(t *testing.T) {
 func TestGrantPermission_RejectsNil(t *testing.T) {
 	t.Parallel()
 	m := freshMembership(t)
-	if err := m.GrantPermission(nil); !errors.Is(err, membership.ErrInvalid) {
+	if err := m.GrantPermission(nil, time.Time{}); !errors.Is(err, membership.ErrInvalid) {
 		t.Fatalf("want ErrInvalid got %v", err)
 	}
 }
@@ -306,13 +307,80 @@ func TestRevokePermission_RejectsNil(t *testing.T) {
 	}
 }
 
+// ADR 0055 — time-bound overlay grants. GrantPermission accepts an
+// optional expiry; the resolver filters expired entries at resolve time.
+func TestGrantPermission_WithExpiresAt(t *testing.T) {
+	t.Parallel()
+	m := freshMembership(t)
+	p := permission.FromConstant(permission.IdentityPermissions.Users.Anonymise)
+	expiresAt := time.Date(2026, 6, 23, 12, 0, 0, 0, time.UTC)
+
+	if err := m.GrantPermission(p, expiresAt); err != nil {
+		t.Fatalf("GrantPermission with expiry: %v", err)
+	}
+	got := m.GrantedPermissions()
+	if len(got) != 1 {
+		t.Fatalf("granted len = %d, want 1", len(got))
+	}
+	if !got[0].ExpiresAt.Equal(expiresAt) {
+		t.Errorf("ExpiresAt = %v, want %v", got[0].ExpiresAt, expiresAt)
+	}
+}
+
+func TestEffectivePermissions_FiltersExpiredOverrides(t *testing.T) {
+	t.Parallel()
+	m := freshMembership(t)
+	p := permission.FromConstant(permission.IdentityPermissions.Users.Anonymise)
+	// Grant with an expiry 1 hour ago — already expired.
+	expiredAt := time.Date(2026, 5, 23, 11, 0, 0, 0, time.UTC)
+	now := time.Date(2026, 5, 23, 12, 0, 0, 0, time.UTC)
+	_ = m.GrantPermission(p, expiredAt)
+
+	got := m.EffectivePermissions(nil, now)
+	for _, gp := range got {
+		if gp.Equal(p) {
+			t.Fatalf("expired overlay grant should be filtered out at resolve time")
+		}
+	}
+}
+
+func TestEffectivePermissions_KeepsUnexpiredOverrides(t *testing.T) {
+	t.Parallel()
+	m := freshMembership(t)
+	p := permission.FromConstant(permission.IdentityPermissions.Users.Anonymise)
+	// Grant with an expiry 1 hour in the future — still active.
+	expiresAt := time.Date(2026, 5, 23, 13, 0, 0, 0, time.UTC)
+	now := time.Date(2026, 5, 23, 12, 0, 0, 0, time.UTC)
+	_ = m.GrantPermission(p, expiresAt)
+
+	got := m.EffectivePermissions(nil, now)
+	if len(got) != 1 || !got[0].Equal(p) {
+		t.Fatalf("unexpired overlay grant should be present; got %+v", got)
+	}
+}
+
+func TestEffectivePermissions_PerpetualOverridesNeverExpire(t *testing.T) {
+	t.Parallel()
+	m := freshMembership(t)
+	p := permission.FromConstant(permission.IdentityPermissions.Users.Anonymise)
+	// time.Time{} = perpetual per ADR 0055.
+	_ = m.GrantPermission(p, time.Time{})
+
+	// Even with `now` at the heat-death-of-the-universe the grant holds.
+	now := time.Date(9999, 12, 31, 23, 59, 59, 0, time.UTC)
+	got := m.EffectivePermissions(nil, now)
+	if len(got) != 1 || !got[0].Equal(p) {
+		t.Fatalf("perpetual overlay grant should always be present; got %+v", got)
+	}
+}
+
 func TestReplacePermissionOverlays_SetsAtomically(t *testing.T) {
 	t.Parallel()
 	m := freshMembership(t)
 	view := permission.FromConstant(permission.IdentityPermissions.Users.View)
 	create := permission.FromConstant(permission.IdentityPermissions.Users.Create)
 	anonymise := permission.FromConstant(permission.IdentityPermissions.Users.Anonymise)
-	_ = m.GrantPermission(view) // pre-existing state
+	_ = m.GrantPermission(view, time.Time{}) // pre-existing state
 	_ = m.PullEvents()
 
 	if err := m.ReplacePermissionOverlays(
@@ -345,10 +413,10 @@ func TestUnmarshalFromDB_OverlayRoundTrip(t *testing.T) {
 		PersonID:           person.ID(ids.NewV7().String()),
 		TenantID:           tenant.ID(ids.NewV7().String()),
 		Status:             membership.StatusActive,
-		GrantedPermissions: []*permission.Permission{g},
+		GrantedPermissions: []membership.GrantedOverride{{Permission: g}},
 		RevokedPermissions: []*permission.Permission{r},
 	})
-	if got := m.GrantedPermissions(); len(got) != 1 || !got[0].Equal(g) {
+	if got := m.GrantedPermissions(); len(got) != 1 || !got[0].Permission.Equal(g) {
 		t.Fatalf("granted round-trip: %+v", got)
 	}
 	if got := m.RevokedPermissions(); len(got) != 1 || !got[0].Equal(r) {

@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/leadkart/leadkart-go/internal/common/clock"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/permission"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/role"
@@ -71,7 +72,7 @@ func (r *Resolver) Resolve(
 	if err != nil {
 		return nil, err
 	}
-	return m.EffectivePermissions(roles), nil
+	return m.EffectivePermissions(roles, clock.Now()), nil
 }
 
 // ResolveForLoaded skips the membership load — use this when the
@@ -91,7 +92,7 @@ func (r *Resolver) ResolveForLoaded(
 	if err != nil {
 		return nil, err
 	}
-	return m.EffectivePermissions(roles), nil
+	return m.EffectivePermissions(roles, clock.Now()), nil
 }
 
 // AuthClaims is the bundled output of [Resolver.ResolveAuth] — the two
@@ -132,7 +133,7 @@ func (r *Resolver) ResolveAuth(
 		}
 	}
 	return AuthClaims{
-		Permissions: m.EffectivePermissions(roles),
+		Permissions: m.EffectivePermissions(roles, clock.Now()),
 		IsSuperUser: isSuper,
 	}, nil
 }

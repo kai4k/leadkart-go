@@ -6,6 +6,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/permissionrequest"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/refreshtoken"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/role"
@@ -427,6 +428,44 @@ func FromDomainEvent(d any) (Event, error) {
 			RoleID:        mustParseUUID(e.RoleID.String()),
 			TenantIDClaim: mustParseUUID(e.TenantID.String()),
 			DeletedBy:     e.DeletedBy,
+			OccurredAtUTC: e.At.UTC(),
+		}, nil
+
+	// ----- Permission requests (ADR 0055) ----------------------------
+
+	case permissionrequest.RequestedEvent:
+		return PermissionRequestSubmittedV1{
+			RequestID:             mustParseUUID(e.RequestID.String()),
+			TenantIDClaim:         mustParseUUID(e.TenantID.String()),
+			RequesterMembershipID: mustParseUUID(e.RequesterMembershipID.String()),
+			Permission:            e.Permission,
+			DurationDays:          e.DurationDays,
+			Reason:                e.Reason,
+			OccurredAtUTC:         e.At.UTC(),
+		}, nil
+
+	case permissionrequest.ApprovedEvent:
+		return PermissionRequestApprovedV1{
+			RequestID:            mustParseUUID(e.RequestID.String()),
+			TenantIDClaim:        mustParseUUID(e.TenantID.String()),
+			ApproverMembershipID: mustParseUUID(e.ApproverMembershipID.String()),
+			ExpiresAtUTC:         e.ExpiresAt.UTC(),
+			OccurredAtUTC:        e.At.UTC(),
+		}, nil
+
+	case permissionrequest.DeniedEvent:
+		return PermissionRequestDeniedV1{
+			RequestID:            mustParseUUID(e.RequestID.String()),
+			TenantIDClaim:        mustParseUUID(e.TenantID.String()),
+			ApproverMembershipID: mustParseUUID(e.ApproverMembershipID.String()),
+			Reason:               e.Reason,
+			OccurredAtUTC:        e.At.UTC(),
+		}, nil
+
+	case permissionrequest.CancelledEvent:
+		return PermissionRequestCancelledV1{
+			RequestID:     mustParseUUID(e.RequestID.String()),
+			TenantIDClaim: mustParseUUID(e.TenantID.String()),
 			OccurredAtUTC: e.At.UTC(),
 		}, nil
 

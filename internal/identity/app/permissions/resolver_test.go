@@ -222,7 +222,7 @@ func TestResolve_OverlayGrantedExtendsBaseline(t *testing.T) {
 		t.Fatalf("AssignRole: %v", err)
 	}
 	overlayP := permission.FromConstant(permission.IdentityPermissions.Users.Anonymise)
-	if err := m.GrantPermission(overlayP); err != nil {
+	if err := m.GrantPermission(overlayP, time.Time{}); err != nil {
 		t.Fatalf("GrantPermission overlay: %v", err)
 	}
 

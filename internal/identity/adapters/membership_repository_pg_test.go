@@ -5,6 +5,7 @@ package adapters_test
 import (
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/leadkart/leadkart-go/internal/common/email"
 	"github.com/leadkart/leadkart-go/internal/common/ids"
@@ -259,7 +260,7 @@ func TestMembershipRepository_Add_PersistsRoleAssignmentsAndOverrides(t *testing
 	}
 	grantP := permission.FromConstant(permission.IdentityPermissions.Roles.Assign)
 	revokeP := permission.FromConstant(permission.IdentityPermissions.Users.Anonymise)
-	if err := m.GrantPermission(grantP); err != nil {
+	if err := m.GrantPermission(grantP, time.Time{}); err != nil {
 		t.Fatalf("GrantPermission: %v", err)
 	}
 	if err := m.RevokePermission(revokeP); err != nil {
@@ -282,7 +283,7 @@ func TestMembershipRepository_Add_PersistsRoleAssignmentsAndOverrides(t *testing
 		t.Fatalf("RoleAssignments: got %d want 2", len(got.RoleAssignments()))
 	}
 	if len(got.GrantedPermissions()) != 1 ||
-		got.GrantedPermissions()[0].Name() != permission.IdentityPermissions.Roles.Assign {
+		got.GrantedPermissions()[0].Permission.Name() != permission.IdentityPermissions.Roles.Assign {
 		t.Fatalf("Granted: got %v", got.GrantedPermissions())
 	}
 	if len(got.RevokedPermissions()) != 1 ||
@@ -324,7 +325,7 @@ func TestMembershipRepository_UpdateByID_ReplacesRoleAssignmentsAndOverrides(t *
 	m, _ := membership.New(membership.ID(ids.NewV7().String()), p.ID(), tn.ID(), membership.ID(""))
 	_ = m.AssignRole(r1.ID())
 	_ = m.AssignRole(r2.ID())
-	_ = m.GrantPermission(permission.FromConstant(permission.IdentityPermissions.Roles.View))
+	_ = m.GrantPermission(permission.FromConstant(permission.IdentityPermissions.Roles.View), time.Time{})
 	if err := memberships.Add(ctx, m); err != nil {
 		t.Fatalf("Add: %v", err)
 	}

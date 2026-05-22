@@ -229,4 +229,40 @@ const (
 	// per RFC 9457 + ADR 0044. 422 surface; response body carries
 	// the field-level errors map. Emitted by writeValidationError.
 	ErrCodeValidationFailed = "validation_failed"
+
+	// ----- Permission-elevation approval workflow (ADR 0055) ---------------
+
+	// ErrCodePermissionRequestNotFound — request ID has no row in the
+	// caller's tenant. 404 surface; enumeration-safe per ADR 0044.
+	ErrCodePermissionRequestNotFound = "permission_request_not_found"
+
+	// ErrCodeInvalidPermissionRequestID — `{requestId}` path failed UUID
+	// parse. 400 surface.
+	ErrCodeInvalidPermissionRequestID = "invalid_permission_request_id"
+
+	// ErrCodePermissionRequestInvalid — aggregate invariant violation
+	// (short reason, out-of-bounds duration, malformed input). 422.
+	ErrCodePermissionRequestInvalid = "permission_request_invalid"
+
+	// ErrCodePermissionRequestPendingExists — at-most-one-pending
+	// invariant rejected the submission. 409 Conflict.
+	ErrCodePermissionRequestPendingExists = "permission_request_pending_exists"
+
+	// ErrCodePermissionRequestNotPending — Approve/Deny/Cancel hit a
+	// terminal-state request. 409 Conflict.
+	ErrCodePermissionRequestNotPending = "permission_request_not_pending"
+
+	// ErrCodePermissionRequestSelfApproval — approver matched requester.
+	// 422 — domain invariant breach.
+	ErrCodePermissionRequestSelfApproval = "permission_request_self_approval"
+
+	// ErrCodePermissionRequestForbidden — caller is not the requester's
+	// manager AND not a Platform operator (Approve/Deny path); OR caller
+	// is not the requester (Cancel path collapses to 404 enumeration-safe).
+	// 403 surface for Approve/Deny.
+	ErrCodePermissionRequestForbidden = "permission_request_forbidden"
+
+	// ErrCodePermissionRequestRoleQuery — list endpoint's ?role= query
+	// param was outside the closed set {requester, approver}. 400 surface.
+	ErrCodePermissionRequestRoleQuery = "permission_request_role_query"
 )

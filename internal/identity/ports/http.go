@@ -222,6 +222,28 @@ func AddRoutes(mux *http.ServeMux, log *slog.Logger, a app.Application, verifier
 		mux.Handle("GET /api/v1/search",
 			platform(handleSearch(log, a)))
 
+		// Permission-elevation approval workflow (ADR 0055).
+		//
+		// Submit / list-my-requests / list-pending-for-approver / get /
+		// cancel — RequireFreshStamp (auth) is sufficient; the handlers
+		// inline-check requester / approver / platform-operator authz.
+		// Approve / Deny use the same auth() middleware + handler-inline
+		// manager-or-platform decision tree (the manager-tree lookup
+		// requires loading the requester membership which we can't do
+		// in middleware).
+		mux.Handle("POST /api/v1/permission-requests",
+			auth(handleCreatePermissionRequest(log, a)))
+		mux.Handle("GET /api/v1/permission-requests",
+			auth(handleListPermissionRequests(log, a)))
+		mux.Handle("GET /api/v1/permission-requests/{requestId}",
+			auth(handleGetPermissionRequest(log, a)))
+		mux.Handle("POST /api/v1/permission-requests/{requestId}/approve",
+			auth(handleApprovePermissionRequest(log, a)))
+		mux.Handle("POST /api/v1/permission-requests/{requestId}/deny",
+			auth(handleDenyPermissionRequest(log, a)))
+		mux.Handle("POST /api/v1/permission-requests/{requestId}/cancel",
+			auth(handleCancelPermissionRequest(log, a)))
+
 		// Audit-log reads per ADR 0027 (outbox doubles as audit) +
 		// ADR 0038 (keyset pagination). Self-read is always allowed
 		// (privacy default); tenant-scoped read goes through the

@@ -40,6 +40,18 @@ import (
 // ErrInvalid is the sentinel for membership invariant violations.
 var ErrInvalid = errs.New(errs.KindInvalidInput, "membership", "invalid membership")
 
+// GrantedOverride is one entry in the per-Membership permission overlay
+// GRANT slice. ExpiresAt zero = perpetual; otherwise the resolver filters
+// the entry out once now >= ExpiresAt per ADR 0055.
+//
+// Filtering happens at resolve time (NOT via a cron sweep) — the row
+// stays in the DB until re-replaced by a Membership write; the
+// PermissionResolver carries the clock so tests can pin it.
+type GrantedOverride struct {
+	Permission *permission.Permission
+	ExpiresAt  time.Time
+}
+
 // ID is the Membership primary key (UUIDv7).
 type ID string
 
@@ -74,17 +86,22 @@ type Membership struct {
 
 	// grantedPermissions / revokedPermissions form the per-Membership
 	// overlay ON TOP of role-derived permissions. Effective set
-	// (computed by Task 13's resolver):
+	// (computed by [Membership.EffectivePermissions]):
 	//
 	//   union(role.Permissions for r in roleAssignments)
-	//     ∪ grantedPermissions
+	//     ∪ grantedPermissions (filtered by ExpiresAt)
 	//     \ revokedPermissions
 	//
 	// The overlay supports per-user customisation without role
 	// explosion (every "X but with Y disabled" doesn't need a clone of
 	// X). Persistence layer projects to
 	// identity.membership_permission_overrides (kind ∈ {granted, revoked}).
-	grantedPermissions []*permission.Permission
+	//
+	// granted entries carry an optional ExpiresAt (zero = perpetual);
+	// revoked entries do NOT (revocations are permanent until re-granted).
+	// ADR 0055 — approval workflow grants time-bound overlay entries
+	// per AWS STS / Microsoft Entra ID JIT-access canon.
+	grantedPermissions []GrantedOverride
 	revokedPermissions []*permission.Permission
 
 	// Per-tenant profile fields. Job change → new Membership in new
@@ -156,6 +173,10 @@ func New(id ID, personID person.ID, tenantID tenant.ID, createdBy ID) (*Membersh
 }
 
 // Snapshot is the persistence DTO consumed by [UnmarshalFromDB].
+//
+// GrantedPermissions carries the time-bound overlay shape per ADR 0055.
+// Each entry's ExpiresAt is zero for perpetual grants (default), set for
+// approval-workflow-issued time-bound grants.
 type Snapshot struct {
 	ID                 ID
 	PersonID           person.ID
@@ -164,7 +185,7 @@ type Snapshot struct {
 	JoinedAt           time.Time
 	LeftAt             time.Time
 	RoleAssignments    []role.ID
-	GrantedPermissions []*permission.Permission
+	GrantedPermissions []GrantedOverride
 	RevokedPermissions []*permission.Permission
 	Designation        string
 	Department         string
@@ -184,7 +205,7 @@ func UnmarshalFromDB(s Snapshot) *Membership {
 		joinedAt:           s.JoinedAt,
 		leftAt:             s.LeftAt,
 		roleAssignments:    append([]role.ID(nil), s.RoleAssignments...),
-		grantedPermissions: append([]*permission.Permission(nil), s.GrantedPermissions...),
+		grantedPermissions: append([]GrantedOverride(nil), s.GrantedPermissions...),
 		revokedPermissions: append([]*permission.Permission(nil), s.RevokedPermissions...),
 		designation:        s.Designation,
 		department:         s.Department,
@@ -230,10 +251,11 @@ func (m *Membership) RoleAssignments() []role.ID {
 }
 
 // GrantedPermissions returns a defensive copy of the per-Membership
-// overlay-grant list. Effective set computed by Task 13's resolver:
-// union(roles) ∪ Granted \ Revoked.
-func (m *Membership) GrantedPermissions() []*permission.Permission {
-	out := make([]*permission.Permission, len(m.grantedPermissions))
+// overlay-grant entries (permission + ExpiresAt). Effective set computed
+// by [Membership.EffectivePermissions]:
+// union(roles) ∪ unexpired(Granted) \ Revoked.
+func (m *Membership) GrantedPermissions() []GrantedOverride {
+	out := make([]GrantedOverride, len(m.grantedPermissions))
 	copy(out, m.grantedPermissions)
 	return out
 }
@@ -366,12 +388,21 @@ func (m *Membership) RevokeRole(roleID role.ID) error {
 
 // ----- Authorisation: per-Membership permission overlay ---------------------
 
-// GrantPermission adds an overlay-grant entry. If the permission was
-// previously overlay-revoked (suppressing a role-derived grant), the
-// revoke entry is removed first — overlay grants and revokes never
-// coexist for the same permission. Idempotent — granting an already-
-// granted overlay is a no-op (no event).
-func (m *Membership) GrantPermission(p *permission.Permission) error {
+// GrantPermission adds an overlay-grant entry with an optional expiry.
+// expiresAt zero = perpetual; otherwise the resolver filters it out
+// after the timestamp. ADR 0055 — approval-workflow grants are time-
+// bound (AWS STS / Microsoft Entra ID JIT-access canon); the existing
+// "forever" admin path passes time.Time{}.
+//
+// If the permission was previously overlay-revoked (suppressing a
+// role-derived grant), the revoke entry is removed first — overlay
+// grants and revokes never coexist for the same permission. If an
+// overlay-grant already exists, this call REPLACES its ExpiresAt
+// (lets approval workflows refresh / shorten an existing grant) and
+// emits PermissionsUpdatedEvent so cache invalidators trigger.
+// True idempotence (same permission + identical ExpiresAt) emits no
+// event.
+func (m *Membership) GrantPermission(p *permission.Permission, expiresAt time.Time) error {
 	if p == nil {
 		return fmt.Errorf("%w: permission required", ErrInvalid)
 	}
@@ -379,10 +410,23 @@ func (m *Membership) GrantPermission(p *permission.Permission) error {
 	if i := slices.IndexFunc(m.revokedPermissions, p.Equal); i >= 0 {
 		m.revokedPermissions = slices.Delete(m.revokedPermissions, i, i+1)
 	}
-	if slices.ContainsFunc(m.grantedPermissions, p.Equal) {
+	if i := slices.IndexFunc(m.grantedPermissions, func(g GrantedOverride) bool {
+		return g.Permission.Equal(p)
+	}); i >= 0 {
+		// True no-op when ExpiresAt unchanged.
+		if m.grantedPermissions[i].ExpiresAt.Equal(expiresAt) {
+			return nil
+		}
+		m.grantedPermissions[i].ExpiresAt = expiresAt
+		m.recordEvent(PermissionsUpdatedEvent{
+			MembershipID: m.id,
+			PersonID:     m.personID,
+			TenantID:     m.tenantID,
+			At:           clock.Now(),
+		})
 		return nil
 	}
-	m.grantedPermissions = append(m.grantedPermissions, p)
+	m.grantedPermissions = append(m.grantedPermissions, GrantedOverride{Permission: p, ExpiresAt: expiresAt})
 	m.recordEvent(PermissionsUpdatedEvent{
 		MembershipID: m.id,
 		PersonID:     m.personID,
@@ -401,7 +445,9 @@ func (m *Membership) RevokePermission(p *permission.Permission) error {
 		return fmt.Errorf("%w: permission required", ErrInvalid)
 	}
 	// If currently in granted overlay, lift the grant first.
-	if i := slices.IndexFunc(m.grantedPermissions, p.Equal); i >= 0 {
+	if i := slices.IndexFunc(m.grantedPermissions, func(g GrantedOverride) bool {
+		return g.Permission.Equal(p)
+	}); i >= 0 {
 		m.grantedPermissions = slices.Delete(m.grantedPermissions, i, i+1)
 	}
 	if slices.ContainsFunc(m.revokedPermissions, p.Equal) {
@@ -421,7 +467,7 @@ func (m *Membership) RevokePermission(p *permission.Permission) error {
 // set by combining role-derived grants with the per-Membership overlay:
 //
 //	union(role.Permissions for r in roles)
-//	  ∪ grantedPermissions
+//	  ∪ unexpired(grantedPermissions, now)
 //	  \ revokedPermissions
 //
 // CALLER INVARIANT: `roles` must be the full set of Role aggregates
@@ -431,11 +477,16 @@ func (m *Membership) RevokePermission(p *permission.Permission) error {
 // this method. The aggregate intentionally doesn't reach across
 // aggregates per Vernon ch.10 — caller threads the dependency.
 //
+// now is the wall-clock used to filter expired overlay grants per
+// ADR 0055. Pass [clock.Now]() in production (or pin via clock.Set in
+// tests). Time-bound grants whose ExpiresAt is in the past are simply
+// dropped from the set — no DB cleanup runs at this layer.
+//
 // Result is order-stable but not sorted; callers needing
 // deterministic ordering (audit log diff, JWT claim emission) sort
 // by `Permission.Name()` themselves. Pointer-equality on interned
 // permissions makes set-membership cheap.
-func (m *Membership) EffectivePermissions(roles []*role.Role) []*permission.Permission {
+func (m *Membership) EffectivePermissions(roles []*role.Role, now time.Time) []*permission.Permission {
 	set := map[*permission.Permission]struct{}{}
 	for _, r := range roles {
 		for _, p := range r.Permissions() {
@@ -443,7 +494,10 @@ func (m *Membership) EffectivePermissions(roles []*role.Role) []*permission.Perm
 		}
 	}
 	for _, g := range m.grantedPermissions {
-		set[g] = struct{}{}
+		if !g.ExpiresAt.IsZero() && !now.Before(g.ExpiresAt) {
+			continue // expired — resolver-time filtered per ADR 0055
+		}
+		set[g.Permission] = struct{}{}
 	}
 	for _, rev := range m.revokedPermissions {
 		// Pointer-equality first (cheap for interned catalogue entries),
@@ -472,15 +526,25 @@ func (m *Membership) EffectivePermissions(roles []*role.Role) []*permission.Perm
 // listeners care about "permissions changed for this Membership",
 // not per-permission deltas.
 //
-// nil entries in either slice are silently dropped.
+// nil entries in either slice are silently dropped. The granted slice
+// accepts perpetual permissions only via this entry point (every
+// permission becomes a GrantedOverride with zero ExpiresAt) — admin
+// bulk-replace flows never set time-bound grants. ADR 0055 approval-
+// workflow grants use [Membership.GrantPermission] with a non-zero
+// expiry; they survive ReplacePermissionOverlays calls by virtue of
+// being applied separately AFTER an admin bulk-replace.
+//
+// CALLER NOTE: if a future flow needs bulk-replace WITH time-bound
+// grants, take a `[]GrantedOverride` shape instead. v0.2 has no such
+// caller, so this convenience signature stays.
 func (m *Membership) ReplacePermissionOverlays(
 	granted []*permission.Permission,
 	revoked []*permission.Permission,
 ) error {
-	g := make([]*permission.Permission, 0, len(granted))
+	g := make([]GrantedOverride, 0, len(granted))
 	for _, p := range granted {
 		if p != nil {
-			g = append(g, p)
+			g = append(g, GrantedOverride{Permission: p})
 		}
 	}
 	r := make([]*permission.Permission, 0, len(revoked))

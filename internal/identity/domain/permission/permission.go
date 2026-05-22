@@ -57,7 +57,14 @@ func (p *Permission) Equal(other *Permission) bool {
 	return p.name == other.name
 }
 
-type metaPermissions struct{ TenantAdmin string }
+type metaPermissions struct {
+	TenantAdmin string
+	// RequestPermissionElevation lets a Membership submit an ADR 0055
+	// permission-elevation request. Granted to every regular user by
+	// default — the act of asking carries no authority by itself; the
+	// approval flow is where authority is conferred.
+	RequestPermissionElevation string
+}
 type platformPermissions struct {
 	TenantsView, TenantsCreate, TenantsManage string
 	UsersView, UsersCreate, UsersManage       string
@@ -70,7 +77,12 @@ type usersPermissions struct {
 	View, Create, Update, Deactivate, Reactivate, Unlock, Anonymise, UpdatePermissions string
 }
 type rolesPermissions struct {
-	View, Create, Update, Delete, Assign, Revoke string
+	// Approve is the manager-approval permission introduced in ADR 0055.
+	// Held by managers / role-leads so they can approve permission-
+	// elevation requests submitted by their direct reports. Platform
+	// operators ALSO satisfy this gate via is_platform=true so they
+	// can approve requests for orphan / root memberships with no manager.
+	View, Create, Update, Delete, Assign, Revoke, Approve string
 }
 
 // IdentityPermissions is the closed catalogue of every permission the
@@ -83,7 +95,10 @@ var IdentityPermissions = struct {
 	Users    usersPermissions
 	Roles    rolesPermissions
 }{
-	Meta: metaPermissions{TenantAdmin: "tenant.admin"},
+	Meta: metaPermissions{
+		TenantAdmin:                "tenant.admin",
+		RequestPermissionElevation: "identity.meta.request_permission_elevation",
+	},
 	Platform: platformPermissions{
 		TenantsView:   "platform.tenants.view",
 		TenantsCreate: "platform.tenants.create",
@@ -113,19 +128,20 @@ var IdentityPermissions = struct {
 		UpdatePermissions: "identity.users.update_permissions",
 	},
 	Roles: rolesPermissions{
-		View:   "identity.roles.view",
-		Create: "identity.roles.create",
-		Update: "identity.roles.update",
-		Delete: "identity.roles.delete",
-		Assign: "identity.roles.assign",
-		Revoke: "identity.roles.revoke",
+		View:    "identity.roles.view",
+		Create:  "identity.roles.create",
+		Update:  "identity.roles.update",
+		Delete:  "identity.roles.delete",
+		Assign:  "identity.roles.assign",
+		Revoke:  "identity.roles.revoke",
+		Approve: "identity.roles.approve",
 	},
 }
 
 func allNames() []string {
 	p := IdentityPermissions
 	return []string{
-		p.Meta.TenantAdmin,
+		p.Meta.TenantAdmin, p.Meta.RequestPermissionElevation,
 		p.Platform.TenantsView, p.Platform.TenantsCreate, p.Platform.TenantsManage,
 		p.Platform.UsersView, p.Platform.UsersCreate, p.Platform.UsersManage,
 		p.Platform.RolesView, p.Platform.RolesManage,
@@ -135,7 +151,7 @@ func allNames() []string {
 		p.Users.Deactivate, p.Users.Reactivate, p.Users.Unlock,
 		p.Users.Anonymise, p.Users.UpdatePermissions,
 		p.Roles.View, p.Roles.Create, p.Roles.Update, p.Roles.Delete,
-		p.Roles.Assign, p.Roles.Revoke,
+		p.Roles.Assign, p.Roles.Revoke, p.Roles.Approve,
 	}
 }
 

@@ -82,6 +82,12 @@ type Commands struct {
 	// Platform — impersonation sessions.
 	CreateImpersonationSession command.CreateImpersonationSessionHandler
 	EndImpersonationSession    command.EndImpersonationSessionHandler
+
+	// Permission-elevation approval workflow (ADR 0055).
+	RequestPermissionElevation command.RequestPermissionElevationHandler
+	ApprovePermissionRequest   command.ApprovePermissionRequestHandler
+	DenyPermissionRequest      command.DenyPermissionRequestHandler
+	CancelPermissionRequest    command.CancelPermissionRequestHandler
 }
 
 // Queries aggregates all Identity query handlers. Read-side only — no
@@ -105,4 +111,9 @@ type Queries struct {
 	Search                    query.CachedSearchHandler
 	ListAuditEventsByTenant   query.ListAuditEventsByTenantHandler
 	ListAuditEventsByUser     query.ListAuditEventsByUserHandler
+
+	// Permission-elevation approval workflow (ADR 0055).
+	GetPermissionRequest         query.GetPermissionRequestHandler
+	ListMyPermissionRequests     query.ListMyPermissionRequestsHandler
+	ListPendingForApprover       query.ListPendingForApproverHandler
 }

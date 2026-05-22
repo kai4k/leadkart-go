@@ -71,6 +71,26 @@ type IdentityMembershipPermissionOverride struct {
 	Kind           string
 	TenantID       pgtype.UUID
 	UpdatedAt      pgtype.Timestamptz
+	// ADR 0055 — time-bound overlay grant. NULL = perpetual. Resolver filters expired entries at resolve time; no cron sweep at v0.2 scale.
+	ExpiresAt pgtype.Timestamptz
+}
+
+// ADR 0055 — permission-elevation approval workflow. Stores Requested → Approved/Denied/Cancelled history; approved grants land on identity.membership_permission_overrides with expires_at bounded.
+type IdentityPermissionRequest struct {
+	ID                    pgtype.UUID
+	TenantID              pgtype.UUID
+	RequesterMembershipID pgtype.UUID
+	PermissionConstant    string
+	DurationDays          int32
+	Reason                string
+	State                 string
+	ApproverMembershipID  pgtype.UUID
+	DecidedAt             pgtype.Timestamptz
+	DecisionReason        *string
+	GrantedOverrideID     pgtype.UUID
+	ExpiresAt             pgtype.Timestamptz
+	CreatedAt             pgtype.Timestamptz
+	UpdatedAt             pgtype.Timestamptz
 }
 
 // Domain events written same-tx as aggregate state. Watermill SQL forwarder polls + republishes. Doubles as audit log per ADR 0027.

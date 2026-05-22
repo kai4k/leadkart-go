@@ -436,6 +436,7 @@ func buildIdentityApp(pool *pgxpool.Pool, hybridCache *cache.HybridCache, cfg co
 	memberships := adapters.NewMembershipRepository(pool, tx)
 	families := adapters.NewRefreshTokenFamilyRepository(pool, tx)
 	roles := adapters.NewRoleRepository(pool, tx)
+	permissionRequests := adapters.NewPermissionRequestRepository(pool, tx)
 	authRouter := adapters.NewAuthRouterPG(pool, tx)
 	permResolver := permissions.NewResolver(memberships, roles)
 
@@ -550,6 +551,12 @@ func buildIdentityApp(pool *pgxpool.Pool, hybridCache *cache.HybridCache, cfg co
 
 			CreateImpersonationSession: command.NewCreateImpersonationSessionHandler(impersonationStore, tenants, issuer, now),
 			EndImpersonationSession:    command.NewEndImpersonationSessionHandler(impersonationStore),
+
+			// Permission-elevation approval workflow (ADR 0055).
+			RequestPermissionElevation: command.NewRequestPermissionElevationHandler(permissionRequests, memberships, now),
+			ApprovePermissionRequest:   command.NewApprovePermissionRequestHandler(permissionRequests, memberships, now),
+			DenyPermissionRequest:      command.NewDenyPermissionRequestHandler(permissionRequests, memberships, now),
+			CancelPermissionRequest:    command.NewCancelPermissionRequestHandler(permissionRequests, now),
 		},
 		Queries: app.Queries{
 			ListSessions: query.NewListSessionsHandler(families),
@@ -580,6 +587,11 @@ func buildIdentityApp(pool *pgxpool.Pool, hybridCache *cache.HybridCache, cfg co
 			),
 			ListAuditEventsByTenant: query.NewListAuditEventsByTenantHandler(auditReader),
 			ListAuditEventsByUser:   query.NewListAuditEventsByUserHandler(auditReader),
+
+			// Permission-elevation approval workflow (ADR 0055).
+			GetPermissionRequest:     query.NewGetPermissionRequestHandler(permissionRequests),
+			ListMyPermissionRequests: query.NewListMyPermissionRequestsHandler(permissionRequests),
+			ListPendingForApprover:   query.NewListPendingForApproverHandler(permissionRequests),
 		},
 		},
 	}, nil
