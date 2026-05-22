@@ -5,7 +5,9 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -339,6 +341,13 @@ func handleLogin(log *slog.Logger, a app.Application) http.Handler {
 			DeviceLabel: resolveDeviceLabel(req.DeviceLabel, r),
 		})
 		switch {
+		case errors.Is(err, command.ErrAccountLocked):
+			// 423 Locked per RFC 4918 §11.3 + ADR 0053. Retry-After
+			// header carries integer seconds until unlock per RFC 7231
+			// §7.1.3 (the "delta-seconds" form, not the HTTP-date form
+			// — easier for SPAs to consume).
+			writeLockoutError(w, command.LockedUntilFromError(err))
+			return
 		case errors.Is(err, command.ErrInvalidCredentials):
 			writeError(w, http.StatusUnauthorized, ErrCodeInvalidCredentials, "")
 			return
@@ -353,8 +362,27 @@ func handleLogin(log *slog.Logger, a app.Application) http.Handler {
 			RefreshToken:         out.RefreshTokenPlain,
 			AccessTokenExpiresAt: out.AccessTokenExpiresAt,
 			TokenType:            "Bearer",
+			MustChangePassword:   out.MustChangePassword,
 		})
 	})
+}
+
+// writeLockoutError emits the 423 Locked surface for Login's lockout
+// branch per ADR 0053. Retry-After carries the seconds-until-unlock
+// per RFC 7231 §7.1.3 delta-seconds form. lockedUntil may be zero
+// (defensive — when LockedUntilFromError can't extract it); we still
+// emit 423 + a default Retry-After equal to person.LockoutDuration to
+// avoid leaking handler state.
+func writeLockoutError(w http.ResponseWriter, lockedUntil time.Time) {
+	retrySeconds := int(time.Until(lockedUntil).Seconds())
+	if retrySeconds <= 0 {
+		// Defensive — locked-until is in the past or zero. Use a
+		// reasonable default so the client backs off instead of
+		// retrying immediately + producing the same 423.
+		retrySeconds = int((15 * time.Minute).Seconds())
+	}
+	w.Header().Set("Retry-After", strconv.Itoa(retrySeconds))
+	writeError(w, http.StatusLocked, ErrCodeAccountLocked, "")
 }
 
 func handleRefresh(log *slog.Logger, a app.Application) http.Handler {

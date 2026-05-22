@@ -252,6 +252,20 @@ func FromDomainEvent(d any) (Event, error) {
 			OccurredAtUTC: e.At.UTC(),
 		}, nil
 
+	case person.AccountLockedEvent:
+		return PersonAccountLockedV1{
+			PersonID:       mustParseUUID(e.PersonID.String()),
+			LockedUntilUTC: e.LockedUntil.UTC(),
+			FailedCount:    e.FailedCount,
+			OccurredAtUTC:  e.At.UTC(),
+		}, nil
+
+	case person.AccountUnlockedEvent:
+		return PersonAccountUnlockedV1{
+			PersonID:      mustParseUUID(e.PersonID.String()),
+			OccurredAtUTC: e.At.UTC(),
+		}, nil
+
 	// ----- Membership -------------------------------------------------
 
 	case membership.CreatedEvent:

@@ -86,6 +86,44 @@ func (r *PersonRepository) GetByID(ctx context.Context, id person.ID) (*person.P
 	return loadPerson(ctx, r.q, id)
 }
 
+// UpdateLockoutState satisfies [person.Repository]. Hot-path direct
+// update for the Login flow's wrong-password + lockout-clear branches
+// per Wave 9.2 (lockout). Touches ONLY the four lockout columns +
+// drains any events the aggregate recorded (PersonAccountLockedEvent
+// on threshold crossing; PersonAccountUnlockedEvent on success-after-
+// failure). Cheaper than UpdateByID's full-aggregate UPDATE on every
+// failed-login attempt — high frequency under brute-force.
+//
+// Runs under TxScopePlatform (persons is non-RLS but outbox is, and
+// the V1 events are platform-scoped); joins a parent UoW tx via
+// pg.TxFromContext when one is in flight.
+func (r *PersonRepository) UpdateLockoutState(ctx context.Context, p *person.Person) error {
+	if tx, ok := pg.TxFromContext(ctx); ok {
+		return r.updateLockoutOnTx(ctx, tx, p)
+	}
+	return r.tx.WithinTxPgx(ctx, pg.TxScopePlatform, func(ctx context.Context, tx pgx.Tx) error {
+		return r.updateLockoutOnTx(ctx, tx, p)
+	})
+}
+
+func (r *PersonRepository) updateLockoutOnTx(ctx context.Context, tx pgx.Tx, p *person.Person) error {
+	q := r.q.WithTx(tx)
+	uid, err := parsePersonID(p.ID())
+	if err != nil {
+		return err
+	}
+	params := db.UpdatePersonLockoutStateParams{
+		ID:                pgUUID(uid),
+		FailedLoginCount:  int32(p.FailedLoginCount()), //nolint:gosec // bounded by MaxFailedLogins (=10)
+		LockedUntil:       pgTimestamp(p.LockedUntil()),
+		LastFailedLoginAt: pgTimestamp(p.LastFailedLoginAt()),
+	}
+	if err := q.UpdatePersonLockoutState(ctx, params); err != nil {
+		return fmt.Errorf("person repo: update lockout state: %w", err)
+	}
+	return drainPersonEvents(ctx, tx, p)
+}
+
 // GetByEmail satisfies [person.Repository]. Cross-tenant lookup by
 // globally-unique email; consumed by login flow + password-reset.
 func (r *PersonRepository) GetByEmail(ctx context.Context, e email.Address) (*person.Person, error) {
@@ -174,6 +212,10 @@ func insertPersonRow(ctx context.Context, q *db.Queries, p *person.Person) error
 		IsGloballySuspended:    p.IsGloballySuspended(),
 		GlobalSuspensionReason: p.GlobalSuspensionReason(),
 		GloballySuspendedAt:    pgTimestamp(p.GloballySuspendedAt()),
+		MustChangePassword:     p.MustChangePassword(),
+		FailedLoginCount:       int32(p.FailedLoginCount()), //nolint:gosec // bounded by MaxFailedLogins (=10)
+		LockedUntil:            pgTimestamp(p.LockedUntil()),
+		LastFailedLoginAt:      pgTimestamp(p.LastFailedLoginAt()),
 	}
 	applyPendingResetTo(&params, p.PendingPasswordReset())
 	applyPendingEmailChangeTo(&params, p.PendingEmailChange())
@@ -255,6 +297,10 @@ func persistPerson(ctx context.Context, q *db.Queries, p *person.Person) error {
 		IsGloballySuspended:    p.IsGloballySuspended(),
 		GlobalSuspensionReason: p.GlobalSuspensionReason(),
 		GloballySuspendedAt:    pgTimestamp(p.GloballySuspendedAt()),
+		MustChangePassword:     p.MustChangePassword(),
+		FailedLoginCount:       int32(p.FailedLoginCount()), //nolint:gosec // bounded by MaxFailedLogins (=10)
+		LockedUntil:            pgTimestamp(p.LockedUntil()),
+		LastFailedLoginAt:      pgTimestamp(p.LastFailedLoginAt()),
 	}
 	applyPendingResetToUpdate(&params, p.PendingPasswordReset())
 	applyPendingEmailChangeToUpdate(&params, p.PendingEmailChange())
@@ -317,6 +363,10 @@ func rowToPerson(row db.IdentityPerson) (*person.Person, error) {
 		IsGloballySuspended:    row.IsGloballySuspended,
 		GlobalSuspensionReason: row.GlobalSuspensionReason,
 		GloballySuspendedAt:    timeFromPg(row.GloballySuspendedAt),
+		MustChangePassword:     row.MustChangePassword,
+		FailedLoginCount:       int(row.FailedLoginCount),
+		LockedUntil:            timeFromPg(row.LockedUntil),
+		LastFailedLoginAt:      timeFromPg(row.LastFailedLoginAt),
 		CreatedAt:              timeFromPg(row.CreatedAt),
 		AnonymisedAt:           timeFromPg(row.AnonymisedAt),
 	}

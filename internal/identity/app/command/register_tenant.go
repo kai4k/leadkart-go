@@ -262,7 +262,11 @@ func (h RegisterTenantHandler) findOrCreatePerson(
 	if existing != nil {
 		return existing, nil
 	}
-	p, err := person.New(
+	// BRD line 241 + ADR 0053 — admin/operator-provisioned credential.
+	// The admin chose this initial password during tenant onboarding;
+	// force the new admin Person through the change-password flow on
+	// first login. Cleared on self-change / self-reset paths.
+	p, err := person.NewWithMustChangePassword(
 		person.ID(ids.NewV7().String()),
 		cmd.AdminEmail, cmd.AdminFirstName, cmd.AdminLastName, pwd,
 	)

@@ -185,3 +185,31 @@ type GlobalSuspensionLiftedEvent struct {
 }
 
 func (GlobalSuspensionLiftedEvent) isPersonEvent() {}
+
+// AccountLockedEvent fires when [Person.RegisterFailedLogin]
+// crosses the [MaxFailedLogins] threshold and sets [Person.LockedUntil].
+//
+// Per NIST 800-63B §5.2.2 + OWASP Authentication Cheat Sheet 2025 §7.4
+// brute-force defense — SIEM subscribers correlate the lockout with
+// the calling IP / device label to spot enumeration sweeps. Auth
+// subscribers do NOT need to revoke refresh-token families on lockout
+// (no credential change); the lockout self-expires per LockoutDuration.
+type AccountLockedEvent struct {
+	PersonID    ID
+	LockedUntil time.Time
+	FailedCount int
+	At          time.Time
+}
+
+func (AccountLockedEvent) isPersonEvent() {}
+
+// AccountUnlockedEvent fires when [Person.RegisterSuccessfulLogin]
+// runs against a previously-locked OR positive-failure-counter account.
+// Marks the recovery; audit + SIEM subscribers use this to close out
+// the lockout correlation window.
+type AccountUnlockedEvent struct {
+	PersonID ID
+	At       time.Time
+}
+
+func (AccountUnlockedEvent) isPersonEvent() {}

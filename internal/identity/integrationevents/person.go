@@ -254,6 +254,47 @@ func (PersonEmailChangeCancelledV1) Topic() string {
 // OccurredAt returns the domain timestamp.
 func (e PersonEmailChangeCancelledV1) OccurredAt() time.Time { return e.OccurredAtUTC }
 
+// PersonAccountLockedV1 — Person hit the [person.MaxFailedLogins]
+// threshold; account is now locked until LockedUntilUTC. Platform-
+// scoped (account is global; lockout doesn't carry a tenant).
+//
+// Per NIST 800-63B §5.2.2 + OWASP Authentication Cheat Sheet 2025
+// §7.4 brute-force defense — SIEM subscribers correlate with the
+// calling IP / device label to spot enumeration sweeps. Notifications
+// MAY send "your account was locked" email (Auth0 / Okta default; the
+// .NET parent enables this by default).
+type PersonAccountLockedV1 struct {
+	platformMarker
+
+	PersonID        uuid.UUID `json:"person_id"`
+	LockedUntilUTC  time.Time `json:"locked_until_utc"`
+	FailedCount     int       `json:"failed_count"`
+	OccurredAtUTC   time.Time `json:"occurred_at_utc"`
+}
+
+// Topic returns the canonical wire alias.
+func (PersonAccountLockedV1) Topic() string { return "identity.person_account_locked.v1" }
+
+// OccurredAt returns the domain timestamp.
+func (e PersonAccountLockedV1) OccurredAt() time.Time { return e.OccurredAtUTC }
+
+// PersonAccountUnlockedV1 — Person logged in successfully after one
+// or more failed attempts (or after a prior lockout). Closes out the
+// SIEM correlation window opened by [PersonAccountLockedV1].
+// Platform-scoped (account is global).
+type PersonAccountUnlockedV1 struct {
+	platformMarker
+
+	PersonID      uuid.UUID `json:"person_id"`
+	OccurredAtUTC time.Time `json:"occurred_at_utc"`
+}
+
+// Topic returns the canonical wire alias.
+func (PersonAccountUnlockedV1) Topic() string { return "identity.person_account_unlocked.v1" }
+
+// OccurredAt returns the domain timestamp.
+func (e PersonAccountUnlockedV1) OccurredAt() time.Time { return e.OccurredAtUTC }
+
 // Compile-time assertions + registration.
 var (
 	_ Platform = PersonCreatedV1{}
@@ -268,6 +309,8 @@ var (
 	_ Platform = PersonEmailChangeRequestedV1{}
 	_ Platform = PersonEmailChangedV1{}
 	_ Platform = PersonEmailChangeCancelledV1{}
+	_ Platform = PersonAccountLockedV1{}
+	_ Platform = PersonAccountUnlockedV1{}
 
 	_ = register(PersonCreatedV1{})
 	_ = register(PersonPasswordChangedV1{})
@@ -281,4 +324,6 @@ var (
 	_ = register(PersonEmailChangeRequestedV1{})
 	_ = register(PersonEmailChangedV1{})
 	_ = register(PersonEmailChangeCancelledV1{})
+	_ = register(PersonAccountLockedV1{})
+	_ = register(PersonAccountUnlockedV1{})
 )

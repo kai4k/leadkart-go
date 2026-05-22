@@ -10,13 +10,15 @@ INSERT INTO identity.persons (
     password_reset_token_hash, password_reset_expires_at,
     pending_email_change_new_email, pending_email_change_token_hash,
     pending_email_change_expires_at,
-    created_by_person_id
+    created_by_person_id,
+    must_change_password, failed_login_count, locked_until, last_failed_login_at
 ) VALUES (
     $1, $2, $3, $4, $5, $6, $7, $8, $9,
     $10, $11, $12,
     $13, $14,
     $15, $16, $17,
-    $18
+    $18,
+    $19, $20, $21, $22
 );
 
 -- name: GetPersonByID :one
@@ -26,7 +28,8 @@ SELECT id, email, first_name, last_name, password_hash, security_stamp,
        password_reset_token_hash, password_reset_expires_at,
        pending_email_change_new_email, pending_email_change_token_hash,
        pending_email_change_expires_at,
-       created_by_person_id
+       created_by_person_id,
+       must_change_password, failed_login_count, locked_until, last_failed_login_at
 FROM   identity.persons
 WHERE  id = $1;
 
@@ -37,7 +40,8 @@ SELECT id, email, first_name, last_name, password_hash, security_stamp,
        password_reset_token_hash, password_reset_expires_at,
        pending_email_change_new_email, pending_email_change_token_hash,
        pending_email_change_expires_at,
-       created_by_person_id
+       created_by_person_id,
+       must_change_password, failed_login_count, locked_until, last_failed_login_at
 FROM   identity.persons
 WHERE  email = $1;
 
@@ -78,6 +82,10 @@ SELECT p.id                              AS person_id,
        p.pending_email_change_token_hash,
        p.pending_email_change_expires_at,
        p.created_by_person_id,
+       p.must_change_password,
+       p.failed_login_count,
+       p.locked_until,
+       p.last_failed_login_at,
        m.id                              AS membership_id,
        m.tenant_id,
        m.status                          AS membership_status,
@@ -103,7 +111,8 @@ SELECT id, email, first_name, last_name, password_hash, security_stamp,
        password_reset_token_hash, password_reset_expires_at,
        pending_email_change_new_email, pending_email_change_token_hash,
        pending_email_change_expires_at,
-       created_by_person_id
+       created_by_person_id,
+       must_change_password, failed_login_count, locked_until, last_failed_login_at
 FROM   identity.persons
 WHERE  password_reset_token_hash = $1;
 
@@ -115,15 +124,17 @@ SELECT id, email, first_name, last_name, password_hash, security_stamp,
        password_reset_token_hash, password_reset_expires_at,
        pending_email_change_new_email, pending_email_change_token_hash,
        pending_email_change_expires_at,
-       created_by_person_id
+       created_by_person_id,
+       must_change_password, failed_login_count, locked_until, last_failed_login_at
 FROM   identity.persons
 WHERE  pending_email_change_token_hash = $1;
 
 -- name: UpdatePerson :exec
 -- General-purpose update covering ChangePassword + Anonymise + global
 -- suspension / lift + password-reset request/confirm/cancel + email-
--- change request/confirm/cancel + future mutations. Repository writes
--- whatever the aggregate currently says.
+-- change request/confirm/cancel + lockout-state transitions on the
+-- self-contained Login success path + future mutations. Repository
+-- writes whatever the aggregate currently says.
 UPDATE identity.persons
 SET    email                            = $2,
        first_name                       = $3,
@@ -140,7 +151,29 @@ SET    email                            = $2,
        password_reset_expires_at        = $14,
        pending_email_change_new_email   = $15,
        pending_email_change_token_hash  = $16,
-       pending_email_change_expires_at  = $17
+       pending_email_change_expires_at  = $17,
+       must_change_password             = $18,
+       failed_login_count               = $19,
+       locked_until                     = $20,
+       last_failed_login_at             = $21
+WHERE  id = $1;
+
+-- name: UpdatePersonLockoutState :exec
+-- Hot-path lockout-counter update used by the Login flow's
+-- wrong-password + lockout-cleared branches. Cheaper than running the
+-- whole UpdatePerson when only the four lockout columns change — saves
+-- a row-rewrite on every failed-login attempt (high frequency under
+-- brute-force).
+--
+-- Does NOT touch security_stamp / password_hash / anonymisation state
+-- — those go through UpdateByID + UpdatePerson to ensure event drain.
+-- This query is event-less by design (the domain event is recorded on
+-- the aggregate and drained by the calling repository before the
+-- write).
+UPDATE identity.persons
+SET    failed_login_count   = $2,
+       locked_until         = $3,
+       last_failed_login_at = $4
 WHERE  id = $1;
 
 

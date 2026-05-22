@@ -70,6 +70,13 @@ func (f *fakePersonRepo) UpdateByID(_ context.Context, id person.ID, fn func(*pe
 	return nil
 }
 
+func (f *fakePersonRepo) UpdateLockoutState(_ context.Context, _ *person.Person) error {
+	// Unused by ChangePassword tests — the lockout hot-path is owned
+	// by the Login flow. Keep the implementation stub-true so the
+	// person.Repository compile-time assertion below stays valid.
+	return nil
+}
+
 var _ person.Repository = (*fakePersonRepo)(nil)
 
 func newPersonWithPassword(t *testing.T, plain string) *person.Person {

@@ -62,11 +62,17 @@ type LoginRequest struct {
 // JWT-bearer clients (mobile, integrations). The future Blazor BFF
 // will sit in front and convert the body refresh-token to an HttpOnly
 // cookie + ITicketStore session per security.md "BFF cookie".
+//
+// MustChangePassword surfaces the BRD-line-241 forced-rotation flag —
+// frontend MUST redirect to the change-password screen when true.
+// omitempty keeps the wire shape clean on the common path (self-
+// rotated credentials never carry the flag).
 type LoginResponse struct {
 	AccessToken          string    `json:"access_token"`
 	RefreshToken         string    `json:"refresh_token"`
 	AccessTokenExpiresAt time.Time `json:"access_token_expires_at"`
 	TokenType            string    `json:"token_type"` // always "Bearer"
+	MustChangePassword   bool      `json:"must_change_password,omitempty"`
 }
 
 // ----- Refresh ---------------------------------------------------------------

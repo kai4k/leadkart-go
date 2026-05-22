@@ -38,6 +38,16 @@ const (
 	// NEVER differentiate the cause in the response body.
 	ErrCodeInvalidCredentials = "invalid_credentials" //nolint:gosec // G101: error code, not a credential
 
+	// ErrCodeAccountLocked — Person hit the [person.MaxFailedLogins]
+	// threshold + is inside the [person.LockoutDuration] cool-off per
+	// NIST 800-63B §5.2.2 + ADR 0053. 423 Locked surface (RFC 4918
+	// §11.3); Retry-After header carries seconds-until-unlock. Distinct
+	// from invalid_credentials per OWASP Authentication Cheat Sheet
+	// 2025 §7.7 — UX needs "wait + retry", not "try a different
+	// password". Enumeration-safe (existence already revealed upstream
+	// by the unknown-email path's collapse to invalid_credentials).
+	ErrCodeAccountLocked = "account_locked"
+
 	// ErrCodeRefreshRejected — refresh-token rotation refused
 	// (consumed / expired / family revoked / reuse detected). Per
 	// RFC 9700 §4.13: never disclose which arm failed — could leak

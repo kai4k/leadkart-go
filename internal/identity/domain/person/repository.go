@@ -36,6 +36,20 @@ type Repository interface {
 	// (true, nil) to commit; (false, nil) for no-op; (_, err) to rollback.
 	UpdateByID(ctx context.Context, id ID, updateFn func(*Person) (bool, error)) error
 
+	// UpdateLockoutState is the hot-path direct-update for the Login
+	// flow's wrong-password + lockout-clear branches per Wave 9.2 +
+	// ADR 0053. Touches ONLY the four lockout columns
+	// (failed_login_count / locked_until / last_failed_login_at /
+	// must_change_password unchanged) + drains any recorded
+	// [PersonAccountLockedEvent] / [PersonAccountUnlockedEvent] to
+	// the outbox.
+	//
+	// Caller is responsible for invoking [Person.RegisterFailedLogin]
+	// / [Person.RegisterSuccessfulLogin] BEFORE this method —
+	// repository writes whatever the aggregate currently says (TDL
+	// canon).
+	UpdateLockoutState(ctx context.Context, p *Person) error
+
 	// GetByID returns the Person or [ErrNotFound]. Read-only path.
 	GetByID(ctx context.Context, id ID) (*Person, error)
 
