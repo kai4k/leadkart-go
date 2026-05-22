@@ -11,7 +11,7 @@ import (
 	"github.com/leadkart/leadkart-go/internal/common/pagination"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
-	"github.com/leadkart/leadkart-go/internal/platform/audit"
+	"github.com/leadkart/leadkart-go/internal/common/audit"
 )
 
 // AuditEventView is one row of the audit-log read shape per

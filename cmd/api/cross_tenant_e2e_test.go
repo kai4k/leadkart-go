@@ -33,7 +33,6 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	commonemail "github.com/leadkart/leadkart-go/internal/common/email"
 	"github.com/leadkart/leadkart-go/internal/common/ids"
 	"github.com/leadkart/leadkart-go/internal/identity/adapters"
 	"github.com/leadkart/leadkart-go/internal/identity/app"
@@ -41,7 +40,7 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/domain/permission"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
 	"github.com/leadkart/leadkart-go/internal/identity/ports"
-	"github.com/leadkart/leadkart-go/internal/platform/config"
+	"github.com/leadkart/leadkart-go/internal/common/config"
 )
 
 // ----- Fixture --------------------------------------------------------------
@@ -181,7 +180,7 @@ func (f e2eFixture) mintPlatformToken(t *testing.T, operatorPersonID string) str
 	// the password hash is a fixed-shape placeholder (operators don't
 	// authenticate via password in v0.2 — they're seeded via JWT).
 	suffix := operatorPersonID[len(operatorPersonID)-12:]
-	addr, err := commonemail.New("operator-" + suffix + "@platform.test")
+	addr, err := email.New("operator-" + suffix + "@platform.test")
 	if err != nil {
 		t.Fatalf("operator email: %v", err)
 	}

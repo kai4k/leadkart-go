@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	"github.com/leadkart/leadkart-go/internal/identity/app"
-	"github.com/leadkart/leadkart-go/internal/platform/obs"
+	"github.com/leadkart/leadkart-go/internal/common/obs"
 )
 
 // silentLogger discards log output so test runs stay quiet.

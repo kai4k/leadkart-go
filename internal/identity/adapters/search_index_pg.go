@@ -16,7 +16,7 @@ import (
 
 	"github.com/leadkart/leadkart-go/internal/identity/adapters/db"
 	"github.com/leadkart/leadkart-go/internal/identity/app/query"
-	"github.com/leadkart/leadkart-go/internal/platform/pg"
+	"github.com/leadkart/leadkart-go/internal/common/pg"
 )
 
 // SearchIndexPG implements [query.SearchIndex] over pg_trgm GIN

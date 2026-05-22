@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/leadkart/leadkart-go/internal/platform/cache"
+	"github.com/leadkart/leadkart-go/internal/common/cache"
 )
 
 // PlatformStatsView is the operator-dashboard at-a-glance shape.

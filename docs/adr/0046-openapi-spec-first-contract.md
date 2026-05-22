@@ -26,7 +26,7 @@ Constraints inherited from preceding ADRs:
 - **ADR 0007** — stdlib `net/http` ServeMux. No framework-coupled annotation systems.
 - **ADR 0018** — Manual NewServer composition, no DI container. The Scalar UI integration is a plain `http.Handler` registration, no middleware ceremony.
 - **ADR 0024** — Chainguard distroless static binary. The OpenAPI spec MUST be embedded into the binary (no external file dependency).
-- **CLAUDE.md `cmd/api/main.go` thin host rule** — no business logic in main; the spec embed + Scalar HTML lives in a dedicated `internal/platform/openapi/` package.
+- **CLAUDE.md `cmd/api/main.go` thin host rule** — no business logic in main; the spec embed + Scalar HTML lives in a dedicated `internal/common/openapi/` package.
 
 Non-goals:
 
@@ -57,14 +57,14 @@ Stripe / GitHub / Anthropic all chose spec-first after starting code-first; the 
 api/
 └── openapi.yaml              # canonical spec — hand-edited
 
-internal/platform/openapi/
+internal/common/openapi/
 ├── openapi.go                # //go:embed openapi.yaml + Handler() (serves spec)
 └── scalar.go                 # Scalar UI handler (single HTML page)
 
 cmd/api/main.go               # mounts /openapi.yaml + /docs at the mux
 ```
 
-The spec lives in `api/` (per README convention) rather than inside `internal/platform/openapi/` so it can be reviewed without exposing internal-package paths. The embed is one level up.
+The spec lives in `api/` (per README convention) rather than inside `internal/common/openapi/` so it can be reviewed without exposing internal-package paths. The embed is one level up.
 
 ### Spec coverage
 

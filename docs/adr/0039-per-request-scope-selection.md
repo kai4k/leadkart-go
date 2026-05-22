@@ -5,7 +5,7 @@
 
 ## Context
 
-Phase 1.5 shipped two scope mechanisms ([internal/platform/pg/transactor.go](../../internal/platform/pg/transactor.go)):
+Phase 1.5 shipped two scope mechanisms ([internal/common/pg/transactor.go](../../internal/common/pg/transactor.go)):
 
 - **`TxScopeTenant`** — sets `app.tenant_id` GUC; RLS policies admit rows where `tenant_id = app.current_tenant()`. The default for regular tenant-admin / CompanyOwner requests.
 - **`TxScopePlatform`** — sets `app.is_platform = true` GUC; RLS policies have `OR app.is_platform()` bypass. Used by `PlatformStatsHandler` + the outbox forwarder for cross-tenant queries.
@@ -73,7 +73,7 @@ When `is_platform=true` JWT hits a mutating verb without scope (no `X-Tenant-Id`
 
 ### Audit log shape under scope decisions
 
-Every request flows through the existing audit-log middleware (per [internal/platform/audit/](../../internal/platform/audit/)). Scope decisions add structured fields:
+Every request flows through the existing audit-log middleware (per [internal/common/audit/](../../internal/common/audit/)). Scope decisions add structured fields:
 
 | Field | Value |
 |---|---|

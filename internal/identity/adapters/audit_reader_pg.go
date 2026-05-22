@@ -3,7 +3,7 @@
 // Lives in the adapters package (where the sqlc-generated db.* package
 // is allowed to be imported) per ADR 0047 boundary discipline. The
 // consumer-side interface [audit.Reader] is defined in
-// internal/platform/audit/reader.go.
+// internal/common/audit/reader.go.
 
 package adapters
 
@@ -17,8 +17,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/leadkart/leadkart-go/internal/identity/adapters/db"
-	"github.com/leadkart/leadkart-go/internal/platform/audit"
-	"github.com/leadkart/leadkart-go/internal/platform/pg"
+	"github.com/leadkart/leadkart-go/internal/common/audit"
+	"github.com/leadkart/leadkart-go/internal/common/pg"
 )
 
 // AuditReaderPG is the concrete pg-backed implementation of

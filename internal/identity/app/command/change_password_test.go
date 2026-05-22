@@ -12,7 +12,7 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/app/argon2"
 	"github.com/leadkart/leadkart-go/internal/identity/app/command"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
-	"github.com/leadkart/leadkart-go/internal/platform/breach"
+	"github.com/leadkart/leadkart-go/internal/common/breach"
 )
 
 // fakePersonRepo is the minimum [person.Repository] surface the

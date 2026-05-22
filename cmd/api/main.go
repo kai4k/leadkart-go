@@ -11,7 +11,7 @@
 // binaries; dev environments run them as separate processes against a
 // shared Postgres + Redis pair.
 //
-// Required environment (see internal/platform/config/AppConfig):
+// Required environment (see internal/common/config/AppConfig):
 //
 //	LEADKART_POSTGRES__DSN        postgres DSN (leadkart_app role)
 //	LEADKART_REDIS__ADDR          redis "host:port" (HybridCache L2 + sessions)
@@ -47,22 +47,21 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/app/argon2"
 	"github.com/leadkart/leadkart-go/internal/identity/app/command"
 	"github.com/leadkart/leadkart-go/internal/identity/app/jwt"
-	commonemail "github.com/leadkart/leadkart-go/internal/common/email"
-	"github.com/leadkart/leadkart-go/internal/platform/audit"
-	"github.com/leadkart/leadkart-go/internal/platform/breach"
-	platformemail "github.com/leadkart/leadkart-go/internal/platform/email"
-	"github.com/leadkart/leadkart-go/internal/platform/impersonation"
+	"github.com/leadkart/leadkart-go/internal/common/audit"
+	"github.com/leadkart/leadkart-go/internal/common/breach"
+	"github.com/leadkart/leadkart-go/internal/common/email"
+	"github.com/leadkart/leadkart-go/internal/common/impersonation"
 	"github.com/leadkart/leadkart-go/internal/identity/app/permissions"
 	"github.com/leadkart/leadkart-go/internal/identity/app/query"
 	"github.com/leadkart/leadkart-go/internal/identity/ports"
 	"github.com/leadkart/leadkart-go/internal/identity/ports/authn"
-	"github.com/leadkart/leadkart-go/internal/platform/cache"
-	"github.com/leadkart/leadkart-go/internal/platform/config"
-	"github.com/leadkart/leadkart-go/internal/platform/httpmw"
-	"github.com/leadkart/leadkart-go/internal/platform/idempotency"
-	"github.com/leadkart/leadkart-go/internal/platform/obs"
-	"github.com/leadkart/leadkart-go/internal/platform/openapi"
-	"github.com/leadkart/leadkart-go/internal/platform/pg"
+	"github.com/leadkart/leadkart-go/internal/common/cache"
+	"github.com/leadkart/leadkart-go/internal/common/config"
+	"github.com/leadkart/leadkart-go/internal/common/httpmw"
+	"github.com/leadkart/leadkart-go/internal/common/idempotency"
+	"github.com/leadkart/leadkart-go/internal/common/obs"
+	"github.com/leadkart/leadkart-go/internal/common/openapi"
+	"github.com/leadkart/leadkart-go/internal/common/pg"
 )
 
 // HTTP server timeouts — public listener tuning per OWASP API Security
@@ -444,7 +443,7 @@ func buildIdentityApp(pool *pgxpool.Pool, hybridCache *cache.HybridCache, cfg co
 
 	// Read-side adapters per ADR 00xx boundary discipline (app/query/
 	// depends on the interface; concrete sqlc-aware impl lives in
-	// adapters/). [audit.Reader] is declared in internal/platform/audit/
+	// adapters/). [audit.Reader] is declared in internal/common/audit/
 	// next to its writer counterpart.
 	var auditReader audit.Reader = adapters.NewAuditReaderPG(pool, tx)
 	var searchIndex query.SearchIndex = adapters.NewSearchIndexPG(pool, tx)
@@ -484,8 +483,8 @@ func buildIdentityApp(pool *pgxpool.Pool, hybridCache *cache.HybridCache, cfg co
 	// the recorded messages to assert wire-shape. v0.3 swaps in a
 	// real provider via the [email.Gateway] interface — composition
 	// root change only.
-	emailGateway := platformemail.NewRecorder(now)
-	noReplyAddress, err := commonemail.New("no-reply@leadkart.local")
+	emailGateway := email.NewRecorder(now)
+	noReplyAddress, err := email.New("no-reply@leadkart.local")
 	if err != nil {
 		return identityWiring{}, fmt.Errorf("no-reply email address: %w", err)
 	}

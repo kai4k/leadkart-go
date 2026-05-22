@@ -6,11 +6,10 @@ import (
 	"testing"
 	"time"
 
-	commonemail "github.com/leadkart/leadkart-go/internal/common/email"
+	"github.com/leadkart/leadkart-go/internal/common/breach"
+	"github.com/leadkart/leadkart-go/internal/common/email"
 	"github.com/leadkart/leadkart-go/internal/identity/app/command"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
-	"github.com/leadkart/leadkart-go/internal/platform/breach"
-	platformemail "github.com/leadkart/leadkart-go/internal/platform/email"
 )
 
 // resettableRepo extends the existing fakePersonRepo behaviour with a
@@ -24,7 +23,7 @@ func newResettableRepo(p *person.Person) *resettableRepo {
 	return &resettableRepo{fakePersonRepo: &fakePersonRepo{person: p}}
 }
 
-func (r *resettableRepo) GetByEmail(_ context.Context, e commonemail.Address) (*person.Person, error) {
+func (r *resettableRepo) GetByEmail(_ context.Context, e email.Address) (*person.Person, error) {
 	if r.person == nil || r.person.Email().String() != e.String() {
 		return nil, person.ErrNotFound
 	}
@@ -46,14 +45,14 @@ func TestRequestPasswordReset_HappyPath_PersistsAndSendsEmail(t *testing.T) {
 	t.Parallel()
 	freezeClock(t)
 
-	addr, err := commonemail.New("alice@example.test")
+	addr, err := email.New("alice@example.test")
 	if err != nil {
 		t.Fatalf("email.New: %v", err)
 	}
 	repo := newResettableRepo(newPersonWithPassword(t, "current-pw"))
-	rec := platformemail.NewRecorder(time.Now)
+	rec := email.NewRecorder(time.Now)
 
-	from, _ := commonemail.New("no-reply@leadkart.test")
+	from, _ := email.New("no-reply@leadkart.test")
 	h := command.NewRequestPasswordResetHandler(repo, rec, from)
 
 	if err := h.Handle(t.Context(), command.RequestPasswordResetCommand{Email: addr}); err != nil {
@@ -71,11 +70,11 @@ func TestRequestPasswordReset_UnknownEmail_SilentSuccess(t *testing.T) {
 	t.Parallel()
 	freezeClock(t)
 	repo := newResettableRepo(nil) // no Person seeded
-	rec := platformemail.NewRecorder(time.Now)
-	from, _ := commonemail.New("no-reply@leadkart.test")
+	rec := email.NewRecorder(time.Now)
+	from, _ := email.New("no-reply@leadkart.test")
 	h := command.NewRequestPasswordResetHandler(repo, rec, from)
 
-	addr, _ := commonemail.New("unknown@example.test")
+	addr, _ := email.New("unknown@example.test")
 	if err := h.Handle(t.Context(), command.RequestPasswordResetCommand{Email: addr}); err != nil {
 		t.Fatalf("expected silent success, got %v", err)
 	}
@@ -88,11 +87,11 @@ func TestConfirmPasswordReset_HappyPath_RotatesPasswordAndStamp(t *testing.T) {
 	t.Parallel()
 	freezeClock(t)
 
-	addr, _ := commonemail.New("alice@example.test")
+	addr, _ := email.New("alice@example.test")
 	p := newPersonWithPassword(t, "current-pw")
 	repo := newResettableRepo(p)
-	rec := platformemail.NewRecorder(time.Now)
-	from, _ := commonemail.New("no-reply@leadkart.test")
+	rec := email.NewRecorder(time.Now)
+	from, _ := email.New("no-reply@leadkart.test")
 
 	reqHandler := command.NewRequestPasswordResetHandler(repo, rec, from)
 	if err := reqHandler.Handle(t.Context(), command.RequestPasswordResetCommand{Email: addr}); err != nil {

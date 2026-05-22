@@ -10,7 +10,7 @@ import (
 
 	"github.com/google/uuid"
 
-	commonemail "github.com/leadkart/leadkart-go/internal/common/email"
+	"github.com/leadkart/leadkart-go/internal/common/email"
 	"github.com/leadkart/leadkart-go/internal/identity/app"
 	"github.com/leadkart/leadkart-go/internal/identity/app/command"
 	"github.com/leadkart/leadkart-go/internal/identity/app/query"
@@ -50,7 +50,7 @@ func handleGetPersonByEmail(log *slog.Logger, a app.Application) http.Handler {
 				"email query parameter is required")
 			return
 		}
-		addr, err := commonemail.New(raw)
+		addr, err := email.New(raw)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, ErrCodeInvalidEmail, err.Error())
 			return

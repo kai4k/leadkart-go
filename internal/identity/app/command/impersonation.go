@@ -11,7 +11,7 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/app/jwt"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/permission"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
-	"github.com/leadkart/leadkart-go/internal/platform/impersonation"
+	"github.com/leadkart/leadkart-go/internal/common/impersonation"
 )
 
 // ----- CreateImpersonationSession -------------------------------------------

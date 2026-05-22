@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	commonemail "github.com/leadkart/leadkart-go/internal/common/email"
+	"github.com/leadkart/leadkart-go/internal/common/email"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
@@ -75,7 +75,7 @@ func (h GetPersonHandler) Handle(ctx context.Context, q GetPersonQuery) (PersonV
 // perform additional authz (the route-level gate already established
 // it).
 type GetPersonByEmailQuery struct {
-	Email commonemail.Address
+	Email email.Address
 }
 
 // GetPersonByEmailHandler runs the read.

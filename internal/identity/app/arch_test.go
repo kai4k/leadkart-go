@@ -1,8 +1,10 @@
 // arch_test.go — architectural boundary discipline as a CI gate.
 //
-// Per ADR 0047: the app/ layer is a pure-Go region that depends on
-// domain interfaces + a handful of platform-cross-cutting interfaces
-// (pg.UnitOfWork, audit.Reader, etc.) but MUST NOT depend on:
+// Per ADR 0047 (boundary discipline) + ADR 0048 (Wave 7: `platform/`
+// merged into `common/` for TDL canon alignment): the app/ layer is a
+// pure-Go region that depends on domain interfaces + a handful of
+// cross-cutting infra interfaces (pg.UnitOfWork, audit.Reader, etc.)
+// — all now living under `internal/common/`. It MUST NOT depend on:
 //
 //   - github.com/leadkart/leadkart-go/internal/identity/adapters/db
 //     (sqlc-generated row types — DB-shape leaks the persistence model

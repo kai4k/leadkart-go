@@ -9,7 +9,7 @@ import (
 
 	"golang.org/x/sync/errgroup"
 
-	"github.com/leadkart/leadkart-go/internal/platform/cache"
+	"github.com/leadkart/leadkart-go/internal/common/cache"
 )
 
 // SearchView is the omni-search response (GET /v1/search?q=).

@@ -35,9 +35,9 @@ Without a CI gate, the drift WILL recur — Phase 2 work on Platform / CRM / Ord
 
 - `internal/.../domain/` — domain entities, value objects, repository INTERFACES, sentinel errors
 - `internal/common/*` — pure substrates (clock, ids, slug, email, errs, pagination, tenancy)
-- `internal/platform/cache` — the HybridCache facade interface
-- `internal/platform/pg` — the `pg.UnitOfWork` INTERFACE + `pg.TxScope` enum + `pg.TxFromContext` (read-only — adapter-internal helpers)
-- `internal/platform/audit` — the `audit.Reader` interface + `audit.Entry` value type
+- `internal/common/cache` — the HybridCache facade interface
+- `internal/common/pg` — the `pg.UnitOfWork` INTERFACE + `pg.TxScope` enum + `pg.TxFromContext` (read-only — adapter-internal helpers)
+- `internal/common/audit` — the `audit.Reader` interface + `audit.Entry` value type
 - `internal/identity/integrationevents` — integration-event V1 records (wire-shape constants)
 - stdlib + `github.com/google/uuid` + `golang.org/x/sync/*`
 
@@ -55,7 +55,7 @@ Without a CI gate, the drift WILL recur — Phase 2 work on Platform / CRM / Ord
 When a query handler needs cross-aggregate or audit-log reads, define the interface NEXT TO the consuming handler (Cheney), with a concrete pg-backed implementation in `adapters/`:
 
 ```go
-// internal/platform/audit/reader.go — interface
+// internal/common/audit/reader.go — interface
 type Reader interface {
     ListByTenant(ctx context.Context, tenantID uuid.UUID, before time.Time, beforeID uuid.UUID, limit int32) ([]Entry, error)
     ListByUser(ctx context.Context, userID uuid.UUID, before time.Time, beforeID uuid.UUID, limit int32) ([]Entry, error)
@@ -73,7 +73,7 @@ Same pattern applied to `query.SearchIndex` + `query.PlatformStatsReader` in thi
 
 #### 2. UnitOfWork interface for multi-aggregate same-tx writes
 
-`pg.UnitOfWork` lives in `internal/platform/pg/uow.go`:
+`pg.UnitOfWork` lives in `internal/common/pg/uow.go`:
 
 ```go
 type UnitOfWork interface {

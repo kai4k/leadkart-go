@@ -13,7 +13,7 @@ import (
 
 	"github.com/leadkart/leadkart-go/internal/common/clock"
 	"github.com/leadkart/leadkart-go/internal/identity/adapters/db"
-	"github.com/leadkart/leadkart-go/internal/platform/pg"
+	"github.com/leadkart/leadkart-go/internal/common/pg"
 )
 
 // OutboxForwarder polls identity.outbox + republishes unforwarded rows

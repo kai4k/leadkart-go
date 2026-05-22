@@ -11,7 +11,7 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/refreshtoken"
 	"github.com/leadkart/leadkart-go/internal/identity/integrationevents"
-	"github.com/leadkart/leadkart-go/internal/platform/messaging"
+	"github.com/leadkart/leadkart-go/internal/common/messaging"
 )
 
 // RevokeFamiliesOnSecurityChange is the choreographed reaction to

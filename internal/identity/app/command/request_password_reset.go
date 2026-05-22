@@ -10,9 +10,8 @@ import (
 	"fmt"
 	"time"
 
-	commonemail "github.com/leadkart/leadkart-go/internal/common/email"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
-	"github.com/leadkart/leadkart-go/internal/platform/email"
+	"github.com/leadkart/leadkart-go/internal/common/email"
 )
 
 // RequestPasswordResetCommand initiates the forgot-password flow.
@@ -22,7 +21,7 @@ import (
 // disclosure vector. Behavioural difference happens only on the
 // downstream side-effect (email sent vs not).
 type RequestPasswordResetCommand struct {
-	Email commonemail.Address
+	Email email.Address
 }
 
 // PasswordResetTokenTTL is the default validity window for a reset
@@ -42,7 +41,7 @@ type RequestPasswordResetHandler struct {
 
 	// resetEmailFromAddress is the From: header on the outgoing reset
 	// email; supplied by composition root from config.
-	resetEmailFromAddress commonemail.Address
+	resetEmailFromAddress email.Address
 }
 
 // NewRequestPasswordResetHandler wires the handler.
@@ -52,7 +51,7 @@ type RequestPasswordResetHandler struct {
 func NewRequestPasswordResetHandler(
 	persons person.Repository,
 	emailGateway email.Gateway,
-	fromAddress commonemail.Address,
+	fromAddress email.Address,
 ) RequestPasswordResetHandler {
 	if persons == nil {
 		panic("command: NewRequestPasswordResetHandler persons repository required")

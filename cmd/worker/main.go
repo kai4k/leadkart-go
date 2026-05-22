@@ -16,7 +16,7 @@
 // own (N replicas of cmd/worker against the same Postgres outbox)
 // without provisioning extra API capacity.
 //
-// Required environment (subset of internal/platform/config/AppConfig):
+// Required environment (subset of internal/common/config/AppConfig):
 //
 //	LEADKART_POSTGRES__DSN              postgres DSN (leadkart_app role)
 //	LEADKART_REDIS__ADDR                redis "host:port" (HybridCache L2)
@@ -52,13 +52,13 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/adapters"
 	"github.com/leadkart/leadkart-go/internal/identity/integrationevents"
 	"github.com/leadkart/leadkart-go/internal/identity/ports/subscribers"
-	"github.com/leadkart/leadkart-go/internal/platform/audit"
-	"github.com/leadkart/leadkart-go/internal/platform/cache"
-	"github.com/leadkart/leadkart-go/internal/platform/config"
-	"github.com/leadkart/leadkart-go/internal/platform/jobs"
-	"github.com/leadkart/leadkart-go/internal/platform/messaging"
-	"github.com/leadkart/leadkart-go/internal/platform/obs"
-	"github.com/leadkart/leadkart-go/internal/platform/pg"
+	"github.com/leadkart/leadkart-go/internal/common/audit"
+	"github.com/leadkart/leadkart-go/internal/common/cache"
+	"github.com/leadkart/leadkart-go/internal/common/config"
+	"github.com/leadkart/leadkart-go/internal/common/jobs"
+	"github.com/leadkart/leadkart-go/internal/common/messaging"
+	"github.com/leadkart/leadkart-go/internal/common/obs"
+	"github.com/leadkart/leadkart-go/internal/common/pg"
 )
 
 // Tunings — same shape as cmd/api/main.go so the two binaries' admin

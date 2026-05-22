@@ -45,10 +45,10 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/integrationevents"
 	"github.com/leadkart/leadkart-go/internal/identity/ports"
 	"github.com/leadkart/leadkart-go/internal/identity/ports/subscribers"
-	"github.com/leadkart/leadkart-go/internal/platform/audit"
-	"github.com/leadkart/leadkart-go/internal/platform/config"
-	"github.com/leadkart/leadkart-go/internal/platform/messaging"
-	"github.com/leadkart/leadkart-go/internal/platform/pg"
+	"github.com/leadkart/leadkart-go/internal/common/audit"
+	"github.com/leadkart/leadkart-go/internal/common/config"
+	"github.com/leadkart/leadkart-go/internal/common/messaging"
+	"github.com/leadkart/leadkart-go/internal/common/pg"
 )
 
 // invalidationFastPathBudget is the wall-clock budget for the

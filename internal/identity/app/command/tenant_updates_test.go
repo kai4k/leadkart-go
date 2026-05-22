@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	commonemail "github.com/leadkart/leadkart-go/internal/common/email"
 	"github.com/leadkart/leadkart-go/internal/common/clock"
+	"github.com/leadkart/leadkart-go/internal/common/email"
 	"github.com/leadkart/leadkart-go/internal/common/slug"
 	"github.com/leadkart/leadkart-go/internal/identity/app/command"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
@@ -75,7 +75,7 @@ func newTenant(t *testing.T) *tenant.Tenant {
 	if err != nil {
 		t.Fatalf("slug.New: %v", err)
 	}
-	addr, _ := commonemail.New("admin@acme.test")
+	addr, _ := email.New("admin@acme.test")
 	tn, err := tenant.New(
 		tenant.ID("11111111-1111-1111-1111-111111111111"),
 		tenantSlug, "Acme Pharma Pvt Ltd", "Acme Pharma", addr,
