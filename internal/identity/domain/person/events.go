@@ -71,9 +71,12 @@ type AnonymisedEvent struct {
 func (AnonymisedEvent) isPersonEvent() {}
 
 // EmailChangeRequestedEvent fires when [Person.RequestEmailChange]
-// is called. Carries the proposed new email + expiry — but NOT the
-// raw token (raw leaves via the application-layer integration event
-// for delivery to the new address).
+// is called. Carries the proposed new email + expiry — the AUDIT-side
+// signal of the change flow.
+//
+// Action-side delivery (the confirmation link emailed to the NEW
+// address) rides on the SIBLING [EmailChangeConfirmationRequestedEvent]
+// per ADR 0057 — same two-event split as the password-reset path.
 //
 // Per Auth0 / Stripe / Microsoft Entra ID canon: the most recent
 // request supersedes any prior pending email change. The previous
@@ -86,6 +89,27 @@ type EmailChangeRequestedEvent struct {
 }
 
 func (EmailChangeRequestedEvent) isPersonEvent() {}
+
+// EmailChangeConfirmationRequestedEvent is the ACTION-side counterpart
+// to [EmailChangeRequestedEvent] per ADR 0057 — carries the plaintext
+// confirmation token + new+old addresses so the email subscriber can
+// build + deliver the confirmation link asynchronously.
+//
+// Confirmation goes to the NEW address (proves user controls the
+// destination) per Auth0 / Okta canon. OldEmail is carried for the
+// "informational notify to old" follow-up subscriber (currently
+// deferred — see ADR 0057 §"Deferred work").
+type EmailChangeConfirmationRequestedEvent struct {
+	PersonID       ID
+	NewEmail       email.Address
+	OldEmail       email.Address
+	PlaintextToken string
+	ExpiresAt      time.Time
+	RecipientName  string
+	At             time.Time
+}
+
+func (EmailChangeConfirmationRequestedEvent) isPersonEvent() {}
 
 // EmailChangedEvent fires when [Person.ConfirmEmailChange] successfully
 // applies a new email via a valid confirmation token.
@@ -135,8 +159,13 @@ func (GloballySuspendedEvent) isPersonEvent() {}
 
 // PasswordResetRequestedEvent fires when [Person.RequestPasswordReset]
 // is called. Carries the expiry timestamp for downstream subscribers
-// (audit, SIEM) but NOT the raw token — the raw leaves the domain via
-// the application-layer integration event for email delivery only.
+// (audit, SIEM) but NOT the raw token — the AUDIT-side signal of the
+// reset flow.
+//
+// Action-side delivery (sending the email with the link) rides on the
+// SIBLING [PasswordResetEmailRequestedEvent] per ADR 0057 — same
+// trigger, two events, two consumers: audit reads this; the email
+// subscriber reads the sibling.
 //
 // Per security.md "Password reset" + Auth0 / Okta canon: the most
 // recent request supersedes any prior pending reset. Subscribers MAY
@@ -148,6 +177,37 @@ type PasswordResetRequestedEvent struct {
 }
 
 func (PasswordResetRequestedEvent) isPersonEvent() {}
+
+// PasswordResetEmailRequestedEvent is the ACTION-side counterpart to
+// [PasswordResetRequestedEvent] per ADR 0057 — fires from the same
+// aggregate method but carries the plaintext token + recipient details
+// so a Watermill subscriber can deliver the email asynchronously.
+//
+// Why two events at the same trigger:
+//   - PasswordResetRequestedEvent  = AUDIT signal (no plaintext; broad
+//                                    consumer set: SIEM, audit-log,
+//                                    forensics).
+//   - PasswordResetEmailRequestedEvent = ACTION signal (plaintext;
+//     single consumer = email subscriber).
+//
+// Security boundary on the plaintext: outbox is RLS-scoped + tenant-
+// isolated + the forwarder drains within ~1s, so the plaintext window
+// at-rest is short (≤1s typical, ≤token TTL bound). Same boundary
+// Stripe / Auth0 use for short-lived OTP delivery via async queues.
+//
+// Email is NOT delivered to non-existent persons (silent-success at
+// the command handler — see security.md "Enumeration safety"); the
+// aggregate only emits this event when a real Person exists.
+type PasswordResetEmailRequestedEvent struct {
+	PersonID       ID
+	Email          email.Address
+	PlaintextToken string
+	ExpiresAt      time.Time
+	RecipientName  string // FirstName at time of event — UI display, falls back to local-part
+	At             time.Time
+}
+
+func (PasswordResetEmailRequestedEvent) isPersonEvent() {}
 
 // PasswordResetConfirmedEvent fires when [Person.ConfirmPasswordReset]
 // successfully applies a new password via a valid reset token.

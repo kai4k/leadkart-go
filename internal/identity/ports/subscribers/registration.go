@@ -41,6 +41,11 @@ const (
 
 	// SIEM subscriber.
 	HandlerReuseDetectedSIEM = "identity.subscribers.ReuseDetectedSIEM"
+
+	// Email-dispatch subscribers (Subscriber pattern per ADR 0057 —
+	// must-succeed; Watermill retries on transient gateway failure).
+	HandlerSendPasswordResetEmail       = "identity.subscribers.SendPasswordResetEmail"
+	HandlerSendEmailChangeConfirmation  = "identity.subscribers.SendEmailChangeConfirmation"
 )
 
 // Register wires every Identity in-module subscriber against the
@@ -67,6 +72,7 @@ func Register(
 	router *messaging.Router,
 	families refreshtoken.Repository,
 	stampCache SecurityStampInvalidator,
+	emailSender *EmailSender,
 	log *slog.Logger,
 ) {
 	invalidate := NewInvalidateSecurityStampCache(stampCache, log)
@@ -128,4 +134,20 @@ func Register(
 		integrationevents.Topic,
 		siem.Handle,
 	)
+
+	// Email-dispatch subscribers (ADR 0057). Skipped if emailSender is
+	// nil — tests that don't exercise the email path may pass nil to
+	// avoid wiring a Recorder.
+	if emailSender != nil {
+		router.AddSubscriber(
+			HandlerSendPasswordResetEmail,
+			integrationevents.Topic,
+			emailSender.HandlePasswordResetEmail,
+		)
+		router.AddSubscriber(
+			HandlerSendEmailChangeConfirmation,
+			integrationevents.Topic,
+			emailSender.HandleEmailChangeConfirmation,
+		)
+	}
 }

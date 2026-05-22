@@ -10,8 +10,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
 	"github.com/leadkart/leadkart-go/internal/common/email"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
 )
 
 // RequestPasswordResetCommand initiates the forgot-password flow.
@@ -35,55 +35,43 @@ const PasswordResetTokenTTL = 1 * time.Hour
 const passwordResetTokenBytes = 32
 
 // RequestPasswordResetHandler runs the request-side of the reset flow.
+//
+// Per ADR 0057: the SYNCHRONOUS email-gateway dependency has moved out
+// of this handler. The aggregate now records BOTH the audit event AND
+// the email-dispatch event (carrying the plaintext token); a Watermill
+// subscriber consumes the dispatch event and delivers the email. This
+// handler is now a thin orchestrator over the aggregate — TDL EDA canon.
 type RequestPasswordResetHandler struct {
-	persons      person.Repository
-	emailGateway email.Gateway
-
-	// resetEmailFromAddress is the From: header on the outgoing reset
-	// email; supplied by composition root from config.
-	resetEmailFromAddress email.Address
+	persons person.Repository
 }
 
 // NewRequestPasswordResetHandler wires the handler.
-//
-// emailGateway MUST NOT be nil — a nil gateway silently breaks the
-// "we sent you a link" UX promise.
-func NewRequestPasswordResetHandler(
-	persons person.Repository,
-	emailGateway email.Gateway,
-	fromAddress email.Address,
-) RequestPasswordResetHandler {
+func NewRequestPasswordResetHandler(persons person.Repository) RequestPasswordResetHandler {
 	if persons == nil {
 		panic("command: NewRequestPasswordResetHandler persons repository required")
 	}
-	if emailGateway == nil {
-		panic("command: NewRequestPasswordResetHandler email gateway required (use email.Recorder in tests)")
-	}
-	if fromAddress.IsZero() {
-		panic("command: NewRequestPasswordResetHandler from-address required")
-	}
-	return RequestPasswordResetHandler{
-		persons:               persons,
-		emailGateway:          emailGateway,
-		resetEmailFromAddress: fromAddress,
-	}
+	return RequestPasswordResetHandler{persons: persons}
 }
 
 // Handle runs the request flow.
 //
-// Flow per security.md "Password reset" + Auth0/Okta canon:
+// Flow per security.md "Password reset" + Auth0/Okta canon + ADR 0057:
 //
 //  1. Lookup Person by email globally.
 //  2. If not found / anonymised / globally-suspended: SUCCEED SILENTLY.
-//     No email sent, no aggregate write. Return nil so the wire-shape
+//     No event recorded, no email sent. Return nil so the wire-shape
 //     is identical to the success path.
 //  3. Mint a fresh ⟨plaintext, hash⟩ pair via crypto/rand + SHA-256.
-//  4. UpdateByID closure: Person.RequestPasswordReset(hash, ttl).
-//  5. Email gateway publishes the plaintext to the user's inbox.
+//  4. UpdateByID closure: Person.RequestPasswordReset(plaintext, hash, ttl).
+//     The aggregate records the AUDIT event AND the EMAIL-DISPATCH
+//     event (carrying the plaintext). Both ride the same outbox tx.
+//  5. Return — no synchronous send. The email subscriber drains the
+//     outbox + delivers.
 //
-// The plaintext NEVER hits Postgres — only the hash. Confirm flow
-// hashes the user-supplied plaintext + looks up by hash via
-// uq_persons_password_reset_hash unique index.
+// The plaintext NEVER hits Postgres's persons table — only the hash.
+// The dispatch-event payload carries plaintext through identity.outbox
+// briefly (≤1s typical) for async delivery; see ADR 0057 for the
+// security analysis of that window.
 func (h RequestPasswordResetHandler) Handle(ctx context.Context, cmd RequestPasswordResetCommand) error {
 	if cmd.Email.IsZero() {
 		// Boundary-layer validation; HTTP layer should reject malformed
@@ -117,33 +105,12 @@ func (h RequestPasswordResetHandler) Handle(ctx context.Context, cmd RequestPass
 	}
 
 	if err := h.persons.UpdateByID(ctx, p.ID(), func(loaded *person.Person) (bool, error) {
-		if err := loaded.RequestPasswordReset(tokenHash, PasswordResetTokenTTL); err != nil {
+		if err := loaded.RequestPasswordReset(plaintext, tokenHash, PasswordResetTokenTTL); err != nil {
 			return false, err
 		}
 		return true, nil
 	}); err != nil {
 		return fmt.Errorf("request_password_reset: persist: %w", err)
-	}
-
-	// Send the email. Failure to send IS surfaced — the user expects
-	// "we sent you a link" UX. Aggregate state already persisted (the
-	// pending reset is durable); a re-request supersedes naturally.
-	msg, err := email.NewMessage(
-		cmd.Email,
-		h.resetEmailFromAddress,
-		"Reset your LeadKart password",
-		"You (or someone) requested a password reset for your LeadKart account. "+
-			"To choose a new password, open the link below within "+
-			PasswordResetTokenTTL.String()+":\n\n"+
-			"https://app.leadkart.example/reset-password?token="+plaintext+"\n\n"+
-			"If you did not request this, you can safely ignore this email — "+
-			"the token will expire automatically.",
-	)
-	if err != nil {
-		return fmt.Errorf("request_password_reset: build message: %w", err)
-	}
-	if err := h.emailGateway.Send(ctx, msg); err != nil {
-		return fmt.Errorf("request_password_reset: send: %w", err)
 	}
 	return nil
 }

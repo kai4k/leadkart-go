@@ -255,7 +255,7 @@ func TestPerson_ConfirmPasswordReset_ClearsMustChangePassword(t *testing.T) {
 		t.Fatalf("NewWithMustChangePassword: %v", err)
 	}
 	tokenHash := mustResetHash(t, validResetHash)
-	if err := p.RequestPasswordReset(tokenHash, time.Hour); err != nil {
+	if err := p.RequestPasswordReset("plaintext", tokenHash, time.Hour); err != nil {
 		t.Fatalf("RequestPasswordReset: %v", err)
 	}
 	_ = p.PullEvents()

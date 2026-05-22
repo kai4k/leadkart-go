@@ -402,12 +402,21 @@ func (p *Person) UpdateProfile(firstName, lastName string) error {
 // Does NOT rotate SecurityStamp — the reset hasn't happened yet,
 // only the request. SecurityStamp rotates inside ConfirmPasswordReset.
 //
-// Emits [PasswordResetRequestedEvent] without the raw token. The
-// application command handler is responsible for publishing the
-// integration event with the raw token + tenant context for email
-// delivery (per messaging.md "Cascading messages > IMessageBus
-// injection").
-func (p *Person) RequestPasswordReset(tokenHash PasswordResetTokenHash, ttl time.Duration) error {
+// Emits TWO events per ADR 0057:
+//
+//   - [PasswordResetRequestedEvent]  — AUDIT signal (no plaintext).
+//   - [PasswordResetEmailRequestedEvent] — ACTION signal carrying the
+//     plaintext token + recipient details for the async email
+//     subscriber. The plaintext NEVER hits the row state; it lives in
+//     the recordEvent transient buffer + the outbox payload exactly
+//     once.
+//
+// plaintextToken MUST be the same plaintext the caller hashed into
+// tokenHash — the aggregate cannot verify this invariant (one-way
+// hash); the application service is the boundary that guarantees
+// consistency. Empty plaintextToken means "no email needed" (admin
+// hotwire path); the AUDIT event still fires.
+func (p *Person) RequestPasswordReset(plaintextToken string, tokenHash PasswordResetTokenHash, ttl time.Duration) error {
 	if tokenHash.IsZero() {
 		return fmt.Errorf("%w: reset token hash required", ErrInvalid)
 	}
@@ -431,6 +440,16 @@ func (p *Person) RequestPasswordReset(tokenHash PasswordResetTokenHash, ttl time
 		ExpiresAt: expiresAt,
 		At:        now,
 	})
+	if plaintextToken != "" {
+		p.recordEvent(PasswordResetEmailRequestedEvent{
+			PersonID:       p.id,
+			Email:          p.email,
+			PlaintextToken: plaintextToken,
+			ExpiresAt:      expiresAt,
+			RecipientName:  p.firstName,
+			At:             now,
+		})
+	}
 	return nil
 }
 
@@ -563,8 +582,13 @@ func (p *Person) CancelPasswordReset(reason string) error {
 // unique index). Domain trusts the boundary check; the Repository
 // will fail the persist if a race materialises a duplicate.
 //
-// Emits [EmailChangeRequestedEvent] without the raw token.
-func (p *Person) RequestEmailChange(newEmail email.Address, tokenHash EmailChangeTokenHash, ttl time.Duration) error {
+// Emits TWO events per ADR 0057:
+//
+//   - [EmailChangeRequestedEvent]  — AUDIT signal (no plaintext).
+//   - [EmailChangeConfirmationRequestedEvent] — ACTION signal carrying
+//     the plaintext token + new + old addresses for the email
+//     subscriber. Same two-event pattern as RequestPasswordReset.
+func (p *Person) RequestEmailChange(newEmail email.Address, plaintextToken string, tokenHash EmailChangeTokenHash, ttl time.Duration) error {
 	if newEmail.IsZero() {
 		return fmt.Errorf("%w: new email required", ErrInvalid)
 	}
@@ -596,6 +620,17 @@ func (p *Person) RequestEmailChange(newEmail email.Address, tokenHash EmailChang
 		ExpiresAt: expiresAt,
 		At:        now,
 	})
+	if plaintextToken != "" {
+		p.recordEvent(EmailChangeConfirmationRequestedEvent{
+			PersonID:       p.id,
+			NewEmail:       newEmail,
+			OldEmail:       p.email,
+			PlaintextToken: plaintextToken,
+			ExpiresAt:      expiresAt,
+			RecipientName:  p.firstName,
+			At:             now,
+		})
+	}
 	return nil
 }
 

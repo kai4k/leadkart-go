@@ -254,6 +254,71 @@ func (PersonEmailChangeCancelledV1) Topic() string {
 // OccurredAt returns the domain timestamp.
 func (e PersonEmailChangeCancelledV1) OccurredAt() time.Time { return e.OccurredAtUTC }
 
+// PersonPasswordResetEmailRequestedV1 is the ACTION-side counterpart
+// to [PersonPasswordResetRequestedV1] per ADR 0057 — carries the
+// plaintext reset token + recipient address so a Watermill subscriber
+// (the email sender) can deliver the link asynchronously.
+//
+// Why a separate event with plaintext:
+//   - PersonPasswordResetRequestedV1   = audit/SIEM signal (no plaintext).
+//   - PersonPasswordResetEmailRequestedV1 = single-consumer action signal.
+//
+// Security boundary on the plaintext: outbox is RLS+FORCE + tenant-
+// isolated; forwarder drains within ~1s; token TTL is 1h. The
+// at-rest window for plaintext is ≤1s typical, ≤1h bound. Same
+// boundary Stripe / Auth0 use for short-lived OTP-style delivery via
+// async queues (per ADR 0057 §"Plaintext-in-outbox security analysis").
+//
+// Platform-scoped: the operation is global identity (no per-tenant
+// context).
+type PersonPasswordResetEmailRequestedV1 struct {
+	platformMarker
+
+	PersonID       uuid.UUID `json:"person_id"`
+	Email          string    `json:"email"`
+	PlaintextToken string    `json:"plaintext_token"`
+	ExpiresAtUTC   time.Time `json:"expires_at_utc"`
+	RecipientName  string    `json:"recipient_name"`
+	OccurredAtUTC  time.Time `json:"occurred_at_utc"`
+}
+
+// Topic returns the canonical wire alias.
+func (PersonPasswordResetEmailRequestedV1) Topic() string {
+	return "identity.person_password_reset_email_requested.v1"
+}
+
+// OccurredAt returns the domain timestamp.
+func (e PersonPasswordResetEmailRequestedV1) OccurredAt() time.Time { return e.OccurredAtUTC }
+
+// PersonEmailChangeConfirmationRequestedV1 is the ACTION-side
+// counterpart to [PersonEmailChangeRequestedV1] per ADR 0057 — carries
+// the plaintext confirmation token + new+old addresses so the email
+// subscriber can deliver the confirmation link asynchronously to the
+// NEW address (Auth0/Okta canon).
+//
+// OldEmail is carried for a future "inform the OLD address" subscriber
+// (deferred per ADR 0057 §"Deferred work"); current shape is plaintext-
+// only to the NEW address.
+type PersonEmailChangeConfirmationRequestedV1 struct {
+	platformMarker
+
+	PersonID       uuid.UUID `json:"person_id"`
+	NewEmail       string    `json:"new_email"`
+	OldEmail       string    `json:"old_email"`
+	PlaintextToken string    `json:"plaintext_token"`
+	ExpiresAtUTC   time.Time `json:"expires_at_utc"`
+	RecipientName  string    `json:"recipient_name"`
+	OccurredAtUTC  time.Time `json:"occurred_at_utc"`
+}
+
+// Topic returns the canonical wire alias.
+func (PersonEmailChangeConfirmationRequestedV1) Topic() string {
+	return "identity.person_email_change_confirmation_requested.v1"
+}
+
+// OccurredAt returns the domain timestamp.
+func (e PersonEmailChangeConfirmationRequestedV1) OccurredAt() time.Time { return e.OccurredAtUTC }
+
 // PersonAccountLockedV1 — Person hit the [person.MaxFailedLogins]
 // threshold; account is now locked until LockedUntilUTC. Platform-
 // scoped (account is global; lockout doesn't carry a tenant).
@@ -306,9 +371,11 @@ var (
 	_ Platform = PersonPasswordResetRequestedV1{}
 	_ Platform = PersonPasswordResetConfirmedV1{}
 	_ Platform = PersonPasswordResetCancelledV1{}
+	_ Platform = PersonPasswordResetEmailRequestedV1{}
 	_ Platform = PersonEmailChangeRequestedV1{}
 	_ Platform = PersonEmailChangedV1{}
 	_ Platform = PersonEmailChangeCancelledV1{}
+	_ Platform = PersonEmailChangeConfirmationRequestedV1{}
 	_ Platform = PersonAccountLockedV1{}
 	_ Platform = PersonAccountUnlockedV1{}
 
@@ -321,9 +388,11 @@ var (
 	_ = register(PersonPasswordResetRequestedV1{})
 	_ = register(PersonPasswordResetConfirmedV1{})
 	_ = register(PersonPasswordResetCancelledV1{})
+	_ = register(PersonPasswordResetEmailRequestedV1{})
 	_ = register(PersonEmailChangeRequestedV1{})
 	_ = register(PersonEmailChangedV1{})
 	_ = register(PersonEmailChangeCancelledV1{})
+	_ = register(PersonEmailChangeConfirmationRequestedV1{})
 	_ = register(PersonAccountLockedV1{})
 	_ = register(PersonAccountUnlockedV1{})
 )

@@ -55,6 +55,7 @@ import (
 	"github.com/leadkart/leadkart-go/internal/common/audit"
 	"github.com/leadkart/leadkart-go/internal/common/cache"
 	"github.com/leadkart/leadkart-go/internal/common/config"
+	"github.com/leadkart/leadkart-go/internal/common/email"
 	"github.com/leadkart/leadkart-go/internal/common/jobs"
 	"github.com/leadkart/leadkart-go/internal/common/messaging"
 	"github.com/leadkart/leadkart-go/internal/common/obs"
@@ -86,6 +87,10 @@ const (
 	forwarderRetryInterval = 50 * time.Millisecond
 	// healthcheckTimeout caps the distroless self-probe HTTP call.
 	healthcheckTimeout = 3 * time.Second
+	// defaultEmailLinkBaseURL is the base URL the email subscriber
+	// uses for reset / confirmation links. v0.2 default pending real
+	// frontend deploy. v0.3 wires LEADKART_EMAIL__APP_URL via config.
+	defaultEmailLinkBaseURL = "https://app.leadkart.example"
 )
 
 func main() {
@@ -241,7 +246,11 @@ func run(ctx context.Context, stdout *os.File) error {
 	if err != nil {
 		return fmt.Errorf("messaging router: %w", err)
 	}
-	subscribers.Register(router, subWiring.Families, subWiring.StampCache, logger)
+	// Email-dispatch subscriber (ADR 0057). buildEmailSender panics on
+	// malformed no-reply address — string literal, init-time only, so
+	// fail-fast at boot is the right shape per CLAUDE.md "MustNewX
+	// init-time only".
+	subscribers.Register(router, subWiring.Families, subWiring.StampCache, buildEmailSender(logger), logger)
 
 	// River background-job pool. v0.2 ships one job — AuditLogPurgeJob —
 	// running daily to enforce the 7-year audit retention. River's
@@ -346,6 +355,25 @@ type subscriberWiring struct {
 	Persons    *adapters.PersonRepository
 	Families   *adapters.RefreshTokenFamilyRepository
 	StampCache *adapters.SecurityStampCache
+}
+
+// buildEmailSender wires the ADR 0057 email-dispatch subscriber. v0.2
+// stays Recorder-backed in dev/integration — production (v0.3+) swaps
+// in a real provider via the same email.Gateway interface (composition-
+// root change only). The from-address + frontend URL live HERE, not in
+// cmd/api, because the SUBSCRIBER (not the command handler) is the
+// boundary that actually builds the outbound message.
+//
+// Panics on malformed no-reply literal — init-time only, per CLAUDE.md
+// "MustNewX init-time + tests only" canon. A malformed compile-time
+// literal is a programmer error, not a runtime condition.
+func buildEmailSender(logger *slog.Logger) *subscribers.EmailSender {
+	noReplyAddress, err := email.New("no-reply@leadkart.local")
+	if err != nil {
+		panic(fmt.Sprintf("worker: no-reply email address: %v", err))
+	}
+	gateway := email.NewRecorder(time.Now)
+	return subscribers.NewEmailSender(gateway, noReplyAddress, defaultEmailLinkBaseURL, logger)
 }
 
 // buildSubscriberWiring constructs the minimal wiring set the

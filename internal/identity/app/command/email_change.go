@@ -8,8 +8,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
 	"github.com/leadkart/leadkart-go/internal/common/email"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
 )
 
 // ----- RequestEmailChange ---------------------------------------------------
@@ -41,43 +41,32 @@ var ErrEmailChangeRejected = errors.New("request_email_change: rejected")
 var ErrEmailAlreadyTaken = errors.New("request_email_change: email already in use")
 
 // RequestEmailChangeHandler runs the request-side of the flow.
+//
+// Per ADR 0057: SYNCHRONOUS email-gateway dependency has moved out —
+// the aggregate records BOTH the audit event AND the email-dispatch
+// event; a Watermill subscriber delivers the confirmation link.
 type RequestEmailChangeHandler struct {
-	persons      person.Repository
-	emailGateway email.Gateway
-	fromAddress  email.Address
+	persons person.Repository
 }
 
 // NewRequestEmailChangeHandler wires the handler.
-func NewRequestEmailChangeHandler(
-	persons person.Repository,
-	emailGateway email.Gateway,
-	fromAddress email.Address,
-) RequestEmailChangeHandler {
+func NewRequestEmailChangeHandler(persons person.Repository) RequestEmailChangeHandler {
 	if persons == nil {
 		panic("command: NewRequestEmailChangeHandler persons repository required")
 	}
-	if emailGateway == nil {
-		panic("command: NewRequestEmailChangeHandler email gateway required")
-	}
-	if fromAddress.IsZero() {
-		panic("command: NewRequestEmailChangeHandler from-address required")
-	}
-	return RequestEmailChangeHandler{
-		persons:      persons,
-		emailGateway: emailGateway,
-		fromAddress:  fromAddress,
-	}
+	return RequestEmailChangeHandler{persons: persons}
 }
 
-// Handle runs the request flow.
+// Handle runs the request flow per ADR 0057:
 //
 //  1. Load Person by ID (caller's authenticated identity).
 //  2. Reject anonymised / globally-suspended.
 //  3. Reject if NewEmail equals current email (no-op).
 //  4. Reject if NewEmail already belongs to another Person (409).
 //  5. Mint ⟨plaintext, hash⟩ pair via crypto/rand + SHA-256.
-//  6. UpdateByID: Person.RequestEmailChange(newEmail, hash, ttl).
-//  7. Send confirmation email to the NEW address.
+//  6. UpdateByID: Person.RequestEmailChange(newEmail, plaintext, hash, ttl).
+//     The aggregate records the AUDIT event AND the EMAIL-DISPATCH
+//     event (plaintext) — outbox subscriber delivers.
 func (h RequestEmailChangeHandler) Handle(ctx context.Context, cmd RequestEmailChangeCommand) error {
 	if cmd.PersonID.IsZero() {
 		return errors.New("request_email_change: person id required")
@@ -122,33 +111,12 @@ func (h RequestEmailChangeHandler) Handle(ctx context.Context, cmd RequestEmailC
 	}
 
 	if err := h.persons.UpdateByID(ctx, cmd.PersonID, func(loaded *person.Person) (bool, error) {
-		if err := loaded.RequestEmailChange(cmd.NewEmail, tokenHash, EmailChangeTokenTTL); err != nil {
+		if err := loaded.RequestEmailChange(cmd.NewEmail, plaintext, tokenHash, EmailChangeTokenTTL); err != nil {
 			return false, err
 		}
 		return true, nil
 	}); err != nil {
 		return fmt.Errorf("request_email_change: persist: %w", err)
-	}
-
-	// Confirmation goes to the NEW address — Auth0/Okta canon. The
-	// CURRENT address gets a separate informational email after
-	// confirmation (not implemented here; deferred to a downstream
-	// Notifications subscriber when the integration event lands).
-	msg, err := email.NewMessage(
-		cmd.NewEmail,
-		h.fromAddress,
-		"Confirm your new LeadKart email",
-		"You requested to change your LeadKart account email to this address. "+
-			"To confirm, open the link below within "+EmailChangeTokenTTL.String()+":\n\n"+
-			"https://app.leadkart.example/confirm-email-change?token="+plaintext+"\n\n"+
-			"If you did not make this request, ignore this email — the request "+
-			"will expire automatically.",
-	)
-	if err != nil {
-		return fmt.Errorf("request_email_change: build message: %w", err)
-	}
-	if err := h.emailGateway.Send(ctx, msg); err != nil {
-		return fmt.Errorf("request_email_change: send: %w", err)
 	}
 	return nil
 }

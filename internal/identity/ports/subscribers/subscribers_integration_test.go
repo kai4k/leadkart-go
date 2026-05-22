@@ -329,7 +329,7 @@ func wireRouter(t *testing.T, fx *fixture) (*gochannel.GoChannel, *messaging.Rou
 	if err != nil {
 		t.Fatalf("NewRouter: %v", err)
 	}
-	subscribers.Register(router, fx.families, fx.stampCache, silentLog())
+	subscribers.Register(router, fx.families, fx.stampCache, nil, silentLog())
 	stop := runRouter(t, router)
 	return pubsub, router, stop
 }
@@ -555,7 +555,7 @@ func TestReuseDetectedSIEM_LogsOnReuseRevocation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRouter: %v", err)
 	}
-	subscribers.Register(router, fx.families, fx.stampCache, siemLog)
+	subscribers.Register(router, fx.families, fx.stampCache, nil, siemLog)
 	stop := runRouter(t, router)
 	defer stop()
 
@@ -595,7 +595,7 @@ func TestReuseDetectedSIEM_IgnoresNonReuseRevocations(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRouter: %v", err)
 	}
-	subscribers.Register(router, fx.families, fx.stampCache, siemLog)
+	subscribers.Register(router, fx.families, fx.stampCache, nil, siemLog)
 	stop := runRouter(t, router)
 	defer stop()
 

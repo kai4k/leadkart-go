@@ -290,7 +290,7 @@ func TestRequestPasswordReset_StoresPendingAndEmitsEvent(t *testing.T) {
 	_ = p.PullEvents()
 
 	h := mustResetHash(t, validResetHash)
-	if err := p.RequestPasswordReset(h, time.Hour); err != nil {
+	if err := p.RequestPasswordReset("plaintext", h, time.Hour); err != nil {
 		t.Fatalf("RequestPasswordReset: %v", err)
 	}
 	pending := p.PendingPasswordReset()
@@ -306,8 +306,11 @@ func TestRequestPasswordReset_StoresPendingAndEmitsEvent(t *testing.T) {
 	}
 
 	events := p.PullEvents()
-	if len(events) != 1 {
-		t.Fatalf("events: %d", len(events))
+	// Per ADR 0057: TWO events fire — the AUDIT signal
+	// (PasswordResetRequestedEvent, no plaintext) AND the ACTION
+	// signal (PasswordResetEmailRequestedEvent, carries plaintext).
+	if len(events) != 2 {
+		t.Fatalf("events: %d, want 2", len(events))
 	}
 	ev, ok := events[0].(person.PasswordResetRequestedEvent)
 	if !ok {
@@ -316,17 +319,27 @@ func TestRequestPasswordReset_StoresPendingAndEmitsEvent(t *testing.T) {
 	if !ev.ExpiresAt.Equal(expectedExpiry) {
 		t.Errorf("event ExpiresAt mismatch")
 	}
+	emailEv, ok := events[1].(person.PasswordResetEmailRequestedEvent)
+	if !ok {
+		t.Fatalf("event[1] = %T, want PasswordResetEmailRequestedEvent", events[1])
+	}
+	if emailEv.PlaintextToken != "plaintext" {
+		t.Errorf("dispatch plaintext = %q, want %q", emailEv.PlaintextToken, "plaintext")
+	}
+	if !emailEv.ExpiresAt.Equal(expectedExpiry) {
+		t.Errorf("dispatch ExpiresAt mismatch")
+	}
 }
 
 func TestRequestPasswordReset_RejectsZeroHashAndZeroTTL(t *testing.T) {
 	t.Cleanup(clock.Reset)
 	p := newPerson(t)
-	if err := p.RequestPasswordReset(person.PasswordResetTokenHash{}, time.Hour); !errors.Is(err, person.ErrInvalid) {
+	if err := p.RequestPasswordReset("plaintext", person.PasswordResetTokenHash{}, time.Hour); !errors.Is(err, person.ErrInvalid) {
 		t.Errorf("zero hash: expected ErrInvalid, got %v", err)
 	}
 	h := mustResetHash(t, validResetHash)
 	for _, ttl := range []time.Duration{0, -1 * time.Second} {
-		if err := p.RequestPasswordReset(h, ttl); !errors.Is(err, person.ErrInvalid) {
+		if err := p.RequestPasswordReset("plaintext", h, ttl); !errors.Is(err, person.ErrInvalid) {
 			t.Errorf("ttl %v: expected ErrInvalid, got %v", ttl, err)
 		}
 	}
@@ -338,13 +351,13 @@ func TestRequestPasswordReset_RejectedOnAnonymisedAndSuspended(t *testing.T) {
 
 	pAnon := newPerson(t)
 	_ = pAnon.Anonymise()
-	if err := pAnon.RequestPasswordReset(h, time.Hour); !errors.Is(err, person.ErrInvalid) {
+	if err := pAnon.RequestPasswordReset("plaintext", h, time.Hour); !errors.Is(err, person.ErrInvalid) {
 		t.Errorf("anonymised: expected ErrInvalid, got %v", err)
 	}
 
 	pSusp := newPerson(t)
 	_ = pSusp.GloballySuspend("fraud")
-	if err := pSusp.RequestPasswordReset(h, time.Hour); !errors.Is(err, person.ErrInvalid) {
+	if err := pSusp.RequestPasswordReset("plaintext", h, time.Hour); !errors.Is(err, person.ErrInvalid) {
 		t.Errorf("suspended: expected ErrInvalid, got %v", err)
 	}
 }
@@ -355,12 +368,12 @@ func TestRequestPasswordReset_NewRequestSupersedesOld(t *testing.T) {
 	p := newPerson(t)
 
 	first := mustResetHash(t, validResetHash)
-	_ = p.RequestPasswordReset(first, time.Hour)
+	_ = p.RequestPasswordReset("plaintext-first", first, time.Hour)
 	_ = p.PullEvents()
 
 	clock.Set(time.Date(2026, 5, 7, 12, 30, 0, 0, time.UTC))
 	second := mustResetHash(t, "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210")
-	if err := p.RequestPasswordReset(second, 30*time.Minute); err != nil {
+	if err := p.RequestPasswordReset("plaintext-second", second, 30*time.Minute); err != nil {
 		t.Fatalf("second request: %v", err)
 	}
 	pending := p.PendingPasswordReset()
@@ -382,7 +395,7 @@ func TestConfirmPasswordReset_AppliesNewPasswordAndRotatesStamp(t *testing.T) {
 	originalHash := p.PasswordHash()
 
 	h := mustResetHash(t, validResetHash)
-	_ = p.RequestPasswordReset(h, time.Hour)
+	_ = p.RequestPasswordReset("plaintext", h, time.Hour)
 	_ = p.PullEvents()
 
 	clock.Set(time.Date(2026, 5, 7, 12, 30, 0, 0, time.UTC))
@@ -418,7 +431,7 @@ func TestConfirmPasswordReset_RejectsExpiredToken(t *testing.T) {
 
 	p := newPerson(t)
 	h := mustResetHash(t, validResetHash)
-	_ = p.RequestPasswordReset(h, time.Hour)
+	_ = p.RequestPasswordReset("plaintext", h, time.Hour)
 
 	// Past expiry
 	clock.Set(time.Date(2026, 5, 7, 14, 0, 0, 0, time.UTC))
@@ -436,7 +449,7 @@ func TestConfirmPasswordReset_RejectsMismatchedHash(t *testing.T) {
 	t.Cleanup(clock.Reset)
 	p := newPerson(t)
 	stored := mustResetHash(t, validResetHash)
-	_ = p.RequestPasswordReset(stored, time.Hour)
+	_ = p.RequestPasswordReset("plaintext", stored, time.Hour)
 
 	wrong := mustResetHash(t, "0000000000000000000000000000000000000000000000000000000000000000")
 	newHash, _ := person.NewPasswordHash("$argon2id$v=19$m=19456,t=2,p=1$bmV3c2FsdG5ld3NhbHQ$bmV3aGFzaG5ld2hhc2huZXc")
@@ -463,7 +476,7 @@ func TestCancelPasswordReset_ClearsPendingAndEmitsEvent(t *testing.T) {
 	t.Cleanup(clock.Reset)
 	p := newPerson(t)
 	h := mustResetHash(t, validResetHash)
-	_ = p.RequestPasswordReset(h, time.Hour)
+	_ = p.RequestPasswordReset("plaintext", h, time.Hour)
 	_ = p.PullEvents()
 
 	if err := p.CancelPasswordReset("operator-cleared-stuck-reset"); err != nil {
@@ -501,7 +514,7 @@ func TestCancelPasswordReset_RequiresReason_WhenPending(t *testing.T) {
 	t.Cleanup(clock.Reset)
 	p := newPerson(t)
 	h := mustResetHash(t, validResetHash)
-	_ = p.RequestPasswordReset(h, time.Hour)
+	_ = p.RequestPasswordReset("plaintext", h, time.Hour)
 	if err := p.CancelPasswordReset(""); !errors.Is(err, person.ErrInvalid) {
 		t.Errorf("expected ErrInvalid on empty reason, got %v", err)
 	}
@@ -529,7 +542,7 @@ func TestRequestEmailChange_StoresPendingAndEmitsEvent(t *testing.T) {
 
 	newE := mustEmail(t, "new@b.io")
 	h := mustEmailChangeHash(t, validEmailChangeHash)
-	if err := p.RequestEmailChange(newE, h, time.Hour); err != nil {
+	if err := p.RequestEmailChange(newE, "plaintext", h, time.Hour); err != nil {
 		t.Fatalf("RequestEmailChange: %v", err)
 	}
 	pending := p.PendingEmailChange()
@@ -548,8 +561,9 @@ func TestRequestEmailChange_StoresPendingAndEmitsEvent(t *testing.T) {
 	}
 
 	events := p.PullEvents()
-	if len(events) != 1 {
-		t.Fatalf("events: %d", len(events))
+	// Per ADR 0057: TWO events fire — audit + email-dispatch.
+	if len(events) != 2 {
+		t.Fatalf("events: %d, want 2", len(events))
 	}
 	ev, ok := events[0].(person.EmailChangeRequestedEvent)
 	if !ok {
@@ -558,13 +572,23 @@ func TestRequestEmailChange_StoresPendingAndEmitsEvent(t *testing.T) {
 	if ev.NewEmail.String() != "new@b.io" {
 		t.Errorf("event NewEmail = %q", ev.NewEmail)
 	}
+	confirmEv, ok := events[1].(person.EmailChangeConfirmationRequestedEvent)
+	if !ok {
+		t.Fatalf("event[1] = %T, want EmailChangeConfirmationRequestedEvent", events[1])
+	}
+	if confirmEv.PlaintextToken != "plaintext" {
+		t.Errorf("dispatch plaintext = %q, want %q", confirmEv.PlaintextToken, "plaintext")
+	}
+	if confirmEv.NewEmail.String() != "new@b.io" {
+		t.Errorf("dispatch NewEmail = %q", confirmEv.NewEmail)
+	}
 }
 
 func TestRequestEmailChange_RejectsSameAddress(t *testing.T) {
 	t.Cleanup(clock.Reset)
 	p := newPerson(t)
 	h := mustEmailChangeHash(t, validEmailChangeHash)
-	if err := p.RequestEmailChange(p.Email(), h, time.Hour); !errors.Is(err, person.ErrInvalid) {
+	if err := p.RequestEmailChange(p.Email(), "plaintext", h, time.Hour); !errors.Is(err, person.ErrInvalid) {
 		t.Errorf("same email: expected ErrInvalid, got %v", err)
 	}
 }
@@ -574,13 +598,13 @@ func TestRequestEmailChange_RejectsZeroAndInvalid(t *testing.T) {
 	p := newPerson(t)
 	h := mustEmailChangeHash(t, validEmailChangeHash)
 
-	if err := p.RequestEmailChange(email.Address{}, h, time.Hour); !errors.Is(err, person.ErrInvalid) {
+	if err := p.RequestEmailChange(email.Address{}, "plaintext", h, time.Hour); !errors.Is(err, person.ErrInvalid) {
 		t.Errorf("zero email: %v", err)
 	}
-	if err := p.RequestEmailChange(mustEmail(t, "new@b.io"), person.EmailChangeTokenHash{}, time.Hour); !errors.Is(err, person.ErrInvalid) {
+	if err := p.RequestEmailChange(mustEmail(t, "new@b.io"), "plaintext", person.EmailChangeTokenHash{}, time.Hour); !errors.Is(err, person.ErrInvalid) {
 		t.Errorf("zero hash: %v", err)
 	}
-	if err := p.RequestEmailChange(mustEmail(t, "new@b.io"), h, 0); !errors.Is(err, person.ErrInvalid) {
+	if err := p.RequestEmailChange(mustEmail(t, "new@b.io"), "plaintext", h, 0); !errors.Is(err, person.ErrInvalid) {
 		t.Errorf("zero ttl: %v", err)
 	}
 }
@@ -591,12 +615,12 @@ func TestRequestEmailChange_NewSupersedesOld(t *testing.T) {
 	p := newPerson(t)
 
 	first := mustEmailChangeHash(t, validEmailChangeHash)
-	_ = p.RequestEmailChange(mustEmail(t, "first@b.io"), first, time.Hour)
+	_ = p.RequestEmailChange(mustEmail(t, "first@b.io"), "plaintext-first", first, time.Hour)
 	_ = p.PullEvents()
 
 	clock.Set(time.Date(2026, 5, 7, 12, 30, 0, 0, time.UTC))
 	second := mustEmailChangeHash(t, "00000000aaaaaaaa00000000aaaaaaaa00000000aaaaaaaa00000000aaaaaaaa")
-	if err := p.RequestEmailChange(mustEmail(t, "second@b.io"), second, time.Hour); err != nil {
+	if err := p.RequestEmailChange(mustEmail(t, "second@b.io"), "plaintext-second", second, time.Hour); err != nil {
 		t.Fatalf("second: %v", err)
 	}
 	pending := p.PendingEmailChange()
@@ -618,7 +642,7 @@ func TestConfirmEmailChange_AppliesNewEmailAndRotatesStamp(t *testing.T) {
 
 	newE := mustEmail(t, "rotated@b.io")
 	h := mustEmailChangeHash(t, validEmailChangeHash)
-	_ = p.RequestEmailChange(newE, h, time.Hour)
+	_ = p.RequestEmailChange(newE, "plaintext", h, time.Hour)
 	_ = p.PullEvents()
 
 	clock.Set(time.Date(2026, 5, 7, 12, 30, 0, 0, time.UTC))
@@ -656,7 +680,7 @@ func TestConfirmEmailChange_RejectsExpired(t *testing.T) {
 	clock.Set(time.Date(2026, 5, 7, 12, 0, 0, 0, time.UTC))
 	p := newPerson(t)
 	h := mustEmailChangeHash(t, validEmailChangeHash)
-	_ = p.RequestEmailChange(mustEmail(t, "new@b.io"), h, time.Hour)
+	_ = p.RequestEmailChange(mustEmail(t, "new@b.io"), "plaintext", h, time.Hour)
 
 	clock.Set(time.Date(2026, 5, 7, 14, 0, 0, 0, time.UTC))
 	if err := p.ConfirmEmailChange(h); !errors.Is(err, person.ErrInvalid) {
@@ -671,7 +695,7 @@ func TestConfirmEmailChange_RejectsMismatch(t *testing.T) {
 	t.Cleanup(clock.Reset)
 	p := newPerson(t)
 	stored := mustEmailChangeHash(t, validEmailChangeHash)
-	_ = p.RequestEmailChange(mustEmail(t, "new@b.io"), stored, time.Hour)
+	_ = p.RequestEmailChange(mustEmail(t, "new@b.io"), "plaintext", stored, time.Hour)
 
 	wrong := mustEmailChangeHash(t, "fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffe")
 	if err := p.ConfirmEmailChange(wrong); !errors.Is(err, person.ErrInvalid) {
@@ -695,7 +719,7 @@ func TestCancelEmailChange_ClearsPendingAndEmitsEvent(t *testing.T) {
 	t.Cleanup(clock.Reset)
 	p := newPerson(t)
 	h := mustEmailChangeHash(t, validEmailChangeHash)
-	_ = p.RequestEmailChange(mustEmail(t, "new@b.io"), h, time.Hour)
+	_ = p.RequestEmailChange(mustEmail(t, "new@b.io"), "plaintext", h, time.Hour)
 	_ = p.PullEvents()
 
 	if err := p.CancelEmailChange("operator-cleared"); err != nil {

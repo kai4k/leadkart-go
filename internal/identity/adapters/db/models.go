@@ -75,6 +75,24 @@ type IdentityMembershipPermissionOverride struct {
 	ExpiresAt pgtype.Timestamptz
 }
 
+// Domain events written same-tx as aggregate state. Watermill SQL forwarder polls + republishes. Doubles as audit log per ADR 0027.
+type IdentityOutbox struct {
+	ID          pgtype.UUID
+	TenantID    pgtype.UUID
+	Topic       string
+	Payload     []byte
+	OccurredAt  pgtype.Timestamptz
+	CreatedAt   pgtype.Timestamptz
+	Forwarded   bool
+	ForwardedAt pgtype.Timestamptz
+	// RFC 8693 act.sub — operator who initiated the impersonation session under which this event was emitted. NULL for non-impersonation rows. Stamped by the outbox writer from authn.ClaimsFromContext(ctx).Act.Sub; the forwarder propagates onto Watermill message metadata so the subscriber-side AuditMiddleware can populate audit_log_entry.act_operator_id.
+	ActOperatorID pgtype.UUID
+	// Impersonation session ID — same propagation path as act_operator_id. NULL for non-impersonation rows.
+	ActSessionID pgtype.UUID
+	// Denormalised reason from the impersonation session — same propagation path. NULL for non-impersonation rows.
+	ActReason *string
+}
+
 // ADR 0055 — permission-elevation approval workflow. Stores Requested → Approved/Denied/Cancelled history; approved grants land on identity.membership_permission_overrides with expires_at bounded.
 type IdentityPermissionRequest struct {
 	ID                    pgtype.UUID
@@ -91,18 +109,6 @@ type IdentityPermissionRequest struct {
 	ExpiresAt             pgtype.Timestamptz
 	CreatedAt             pgtype.Timestamptz
 	UpdatedAt             pgtype.Timestamptz
-}
-
-// Domain events written same-tx as aggregate state. Watermill SQL forwarder polls + republishes. Doubles as audit log per ADR 0027.
-type IdentityOutbox struct {
-	ID          pgtype.UUID
-	TenantID    pgtype.UUID
-	Topic       string
-	Payload     []byte
-	OccurredAt  pgtype.Timestamptz
-	CreatedAt   pgtype.Timestamptz
-	Forwarded   bool
-	ForwardedAt pgtype.Timestamptz
 }
 
 // Person aggregate. Global identity (Auth0/Entra ID pattern). NOT tenant-scoped.

@@ -29,6 +29,7 @@ import (
 	"strings"
 
 	"github.com/leadkart/leadkart-go/internal/common/tenancy"
+	"github.com/leadkart/leadkart-go/internal/identity/app/actclaim"
 	"github.com/leadkart/leadkart-go/internal/identity/app/jwt"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/permission"
 )
@@ -157,6 +158,17 @@ func RequireAuth(verifier Verifier) func(http.Handler) http.Handler {
 			}
 			ctx := WithClaims(r.Context(), claims)
 			ctx = tenancy.WithID(ctx, tenancy.ID(claims.TenantID))
+			// Stash the RFC 8693 actor claim on ctx for downstream
+			// outbox-writer propagation per ADR 0056. Zero claim
+			// (non-impersonation hot path) is a no-op inside
+			// actclaim.WithContext — ctx chains stay minimal.
+			if claims.Act != nil {
+				ctx = actclaim.WithContext(ctx, actclaim.Claim{
+					OperatorID: claims.Act.Sub,
+					SessionID:  claims.Act.SessionID,
+					Reason:     claims.Act.Reason,
+				})
+			}
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}

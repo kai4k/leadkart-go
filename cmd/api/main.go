@@ -48,7 +48,6 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/app/command"
 	"github.com/leadkart/leadkart-go/internal/identity/app/jwt"
 	"github.com/leadkart/leadkart-go/internal/common/audit"
-	"github.com/leadkart/leadkart-go/internal/common/email"
 	"github.com/leadkart/leadkart-go/internal/identity/app/permissions"
 	"github.com/leadkart/leadkart-go/internal/identity/app/query"
 	"github.com/leadkart/leadkart-go/internal/identity/ports"
@@ -475,18 +474,13 @@ func buildIdentityApp(pool *pgxpool.Pool, hybridCache *cache.HybridCache, cfg co
 	// [passwordpolicy.Checker] interface, not the concrete impl.
 	breachChecker := adapters.NewOfflinePasswordList()
 
-	// Email gateway. v0.2 wires the in-memory Recorder so the
-	// password-reset / email-change flows persist their pending
-	// state and emit the integration event but skip the actual
-	// SMTP/SES/Msg91 round-trip. Local dev + integration tests use
-	// the recorded messages to assert wire-shape. v0.3 swaps in a
-	// real provider via the [email.Gateway] interface — composition
-	// root change only.
-	emailGateway := email.NewRecorder(now)
-	noReplyAddress, err := email.New("no-reply@leadkart.local")
-	if err != nil {
-		return identityWiring{}, fmt.Errorf("no-reply email address: %w", err)
-	}
+	// Per ADR 0057 — email delivery moved to cmd/worker subscriber.
+	// cmd/api no longer holds an email.Gateway; the command handlers
+	// emit the dispatch event onto the outbox + return immediately.
+	// The Watermill subscriber (in cmd/worker) drains + sends.
+	//
+	// Composition-root simplification: no recorder + no no-reply
+	// address wiring here; that's the worker's concern.
 
 	// Impersonation session store. v0.2 ships in-memory (single-
 	// process / integration-test fit); production multi-replica
@@ -509,9 +503,9 @@ func buildIdentityApp(pool *pgxpool.Pool, hybridCache *cache.HybridCache, cfg co
 			ChangePassword:       command.NewChangePasswordHandler(persons, breachChecker),
 			RevokeSession:        command.NewRevokeSessionHandler(families),
 			RevokeAllSessions:    command.NewRevokeAllSessionsHandler(families),
-			RequestPasswordReset: command.NewRequestPasswordResetHandler(persons, emailGateway, noReplyAddress),
+			RequestPasswordReset: command.NewRequestPasswordResetHandler(persons),
 			ConfirmPasswordReset: command.NewConfirmPasswordResetHandler(persons, breachChecker),
-			RequestEmailChange:   command.NewRequestEmailChangeHandler(persons, emailGateway, noReplyAddress),
+			RequestEmailChange:   command.NewRequestEmailChangeHandler(persons),
 			ConfirmEmailChange:   command.NewConfirmEmailChangeHandler(persons),
 
 			UpdateTenantProfile:            command.NewUpdateTenantProfileHandler(tenants),

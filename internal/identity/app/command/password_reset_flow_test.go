@@ -4,19 +4,25 @@ import (
 	"context"
 	"errors"
 	"testing"
-	"time"
 
-	"github.com/leadkart/leadkart-go/internal/identity/domain/passwordpolicy"
 	"github.com/leadkart/leadkart-go/internal/common/email"
 	"github.com/leadkart/leadkart-go/internal/identity/app/command"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/passwordpolicy"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
 )
 
 // resettableRepo extends the existing fakePersonRepo behaviour with a
 // hash → Person index so the confirm flow's GetByPasswordResetTokenHash
 // lookup works against in-memory state.
+//
+// drainedEvents captures the aggregate's pulled events after each
+// successful UpdateByID closure — gives tests post-EDA visibility into
+// the [person.PasswordResetEmailRequestedEvent] payload (carrying the
+// plaintext token per ADR 0057) since the email gateway no longer
+// records the body inline.
 type resettableRepo struct {
 	*fakePersonRepo
+	drainedEvents []person.Event
 }
 
 func newResettableRepo(p *person.Person) *resettableRepo {
@@ -41,7 +47,37 @@ func (r *resettableRepo) GetByPasswordResetTokenHash(_ context.Context, h person
 	return r.person, nil
 }
 
-func TestRequestPasswordReset_HappyPath_PersistsAndSendsEmail(t *testing.T) {
+// UpdateByID overrides the embedded fake's variant to additionally
+// drain events on commit — mirrors the pg adapter's drainPersonEvents
+// path so the test sees the same shape production sees post-Wave-9.2d.
+func (r *resettableRepo) UpdateByID(_ context.Context, id person.ID, fn func(*person.Person) (bool, error)) error {
+	if r.person == nil || r.person.ID() != id {
+		return person.ErrNotFound
+	}
+	commit, err := fn(r.person)
+	if err != nil {
+		return err
+	}
+	if commit {
+		r.drainedEvents = append(r.drainedEvents, r.person.PullEvents()...)
+	}
+	return nil
+}
+
+// emailRequestedToken extracts the plaintext from the most recent
+// PasswordResetEmailRequestedEvent captured by drainedEvents.
+func (r *resettableRepo) emailRequestedToken(t *testing.T) string {
+	t.Helper()
+	for _, e := range r.drainedEvents {
+		if ev, ok := e.(person.PasswordResetEmailRequestedEvent); ok {
+			return ev.PlaintextToken
+		}
+	}
+	t.Fatal("no PasswordResetEmailRequestedEvent captured")
+	return ""
+}
+
+func TestRequestPasswordReset_HappyPath_PersistsAndEmitsEmailEvent(t *testing.T) {
 	t.Parallel()
 	freezeClock(t)
 
@@ -50,10 +86,8 @@ func TestRequestPasswordReset_HappyPath_PersistsAndSendsEmail(t *testing.T) {
 		t.Fatalf("email.New: %v", err)
 	}
 	repo := newResettableRepo(newPersonWithPassword(t, "current-pw"))
-	rec := email.NewRecorder(time.Now)
 
-	from, _ := email.New("no-reply@leadkart.test")
-	h := command.NewRequestPasswordResetHandler(repo, rec, from)
+	h := command.NewRequestPasswordResetHandler(repo)
 
 	if err := h.Handle(t.Context(), command.RequestPasswordResetCommand{Email: addr}); err != nil {
 		t.Fatalf("Handle: %v", err)
@@ -61,8 +95,12 @@ func TestRequestPasswordReset_HappyPath_PersistsAndSendsEmail(t *testing.T) {
 	if repo.person.PendingPasswordReset().IsZero() {
 		t.Error("expected pending password reset to be persisted")
 	}
-	if got := len(rec.Sent()); got != 1 {
-		t.Errorf("recorder Sent() = %d, want 1", got)
+	// Per ADR 0057: the email is delivered async via a Watermill
+	// subscriber. The handler's contract is "emit the dispatch event";
+	// the subscriber-side test in ports/subscribers covers the actual
+	// gateway.Send. Assert the event was recorded.
+	if tok := repo.emailRequestedToken(t); tok == "" {
+		t.Error("expected non-empty plaintext token on dispatch event")
 	}
 }
 
@@ -70,16 +108,14 @@ func TestRequestPasswordReset_UnknownEmail_SilentSuccess(t *testing.T) {
 	t.Parallel()
 	freezeClock(t)
 	repo := newResettableRepo(nil) // no Person seeded
-	rec := email.NewRecorder(time.Now)
-	from, _ := email.New("no-reply@leadkart.test")
-	h := command.NewRequestPasswordResetHandler(repo, rec, from)
+	h := command.NewRequestPasswordResetHandler(repo)
 
 	addr, _ := email.New("unknown@example.test")
 	if err := h.Handle(t.Context(), command.RequestPasswordResetCommand{Email: addr}); err != nil {
 		t.Fatalf("expected silent success, got %v", err)
 	}
-	if got := len(rec.Sent()); got != 0 {
-		t.Errorf("recorder Sent() = %d, want 0 (silent — no enumeration)", got)
+	if got := len(repo.drainedEvents); got != 0 {
+		t.Errorf("drained events = %d, want 0 (silent — no enumeration, no dispatch event)", got)
 	}
 }
 
@@ -90,19 +126,14 @@ func TestConfirmPasswordReset_HappyPath_RotatesPasswordAndStamp(t *testing.T) {
 	addr, _ := email.New("alice@example.test")
 	p := newPersonWithPassword(t, "current-pw")
 	repo := newResettableRepo(p)
-	rec := email.NewRecorder(time.Now)
-	from, _ := email.New("no-reply@leadkart.test")
 
-	reqHandler := command.NewRequestPasswordResetHandler(repo, rec, from)
+	reqHandler := command.NewRequestPasswordResetHandler(repo)
 	if err := reqHandler.Handle(t.Context(), command.RequestPasswordResetCommand{Email: addr}); err != nil {
 		t.Fatalf("Request: %v", err)
 	}
-	// Recover the plaintext from the recorded email link.
-	if len(rec.Sent()) != 1 {
-		t.Fatalf("expected 1 sent email, got %d", len(rec.Sent()))
-	}
-	body := rec.Sent()[0].BodyText()
-	rawToken := extractTokenFromLink(t, body)
+	// Recover the plaintext from the captured dispatch event (the
+	// async subscriber would receive the same payload).
+	rawToken := repo.emailRequestedToken(t)
 	stampBefore := p.SecurityStamp()
 
 	confirmHandler := command.NewConfirmPasswordResetHandler(repo, passwordpolicy.Noop{})
@@ -134,28 +165,3 @@ func TestConfirmPasswordReset_BadToken_ReturnsTokenInvalid(t *testing.T) {
 	}
 }
 
-// extractTokenFromLink scans the email body for the
-// "?token=..." query value and returns it.
-func extractTokenFromLink(t *testing.T, body string) string {
-	t.Helper()
-	const marker = "?token="
-	i := indexOfMarker(body, marker)
-	if i < 0 {
-		t.Fatalf("token marker not found in body: %s", body)
-	}
-	rest := body[i+len(marker):]
-	end := indexOfMarker(rest, "\n")
-	if end < 0 {
-		end = len(rest)
-	}
-	return rest[:end]
-}
-
-func indexOfMarker(s, m string) int {
-	for i := 0; i+len(m) <= len(s); i++ {
-		if s[i:i+len(m)] == m {
-			return i
-		}
-	}
-	return -1
-}

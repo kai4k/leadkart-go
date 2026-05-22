@@ -217,6 +217,16 @@ func FromDomainEvent(d any) (Event, error) {
 			OccurredAtUTC: e.At.UTC(),
 		}, nil
 
+	case person.PasswordResetEmailRequestedEvent:
+		return PersonPasswordResetEmailRequestedV1{
+			PersonID:       mustParseUUID(e.PersonID.String()),
+			Email:          e.Email.String(),
+			PlaintextToken: e.PlaintextToken,
+			ExpiresAtUTC:   e.ExpiresAt.UTC(),
+			RecipientName:  e.RecipientName,
+			OccurredAtUTC:  e.At.UTC(),
+		}, nil
+
 	case person.PasswordResetConfirmedEvent:
 		return PersonPasswordResetConfirmedV1{
 			PersonID:      mustParseUUID(e.PersonID.String()),
@@ -236,6 +246,17 @@ func FromDomainEvent(d any) (Event, error) {
 			NewEmail:      e.NewEmail.String(),
 			ExpiresAtUTC:  e.ExpiresAt.UTC(),
 			OccurredAtUTC: e.At.UTC(),
+		}, nil
+
+	case person.EmailChangeConfirmationRequestedEvent:
+		return PersonEmailChangeConfirmationRequestedV1{
+			PersonID:       mustParseUUID(e.PersonID.String()),
+			NewEmail:       e.NewEmail.String(),
+			OldEmail:       e.OldEmail.String(),
+			PlaintextToken: e.PlaintextToken,
+			ExpiresAtUTC:   e.ExpiresAt.UTC(),
+			RecipientName:  e.RecipientName,
+			OccurredAtUTC:  e.At.UTC(),
 		}, nil
 
 	case person.EmailChangedEvent:

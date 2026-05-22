@@ -20,11 +20,20 @@ import (
 // Middleware metadata header names, kept stable across producers +
 // consumers so the chain reads consistent metadata regardless of
 // publisher origin (forwarder, direct publish, etc.).
+//
+// HeaderActOperatorID / HeaderActSessionID / HeaderActReason carry the
+// RFC 8693 actor claim across the outbox → subscriber boundary per
+// ADR 0056. Stamped by the OutboxForwarder when the row carries an
+// act_* column; consumed by [AuditMiddleware] to populate
+// audit_log_entry.act_*. Empty on the non-impersonation hot path.
 const (
 	HeaderTenantID      = "tenant_id"
 	HeaderEventType     = "event_type"
 	HeaderCorrelationID = "correlation_id"
 	HeaderOccurredAt    = "occurred_at"
+	HeaderActOperatorID = "act_operator_id"
+	HeaderActSessionID  = "act_session_id"
+	HeaderActReason     = "act_reason"
 )
 
 // TenantContextMiddleware bridges the tenant_id metadata header into
@@ -128,6 +137,13 @@ func AuditMiddleware(writer *audit.Writer, log *slog.Logger) message.HandlerMidd
 				OccurredAtUTC: parseTimeHeader(msg.Metadata.Get(HeaderOccurredAt)),
 				Duration:      duration,
 				Succeeded:     err == nil,
+				// Per ADR 0056: propagate the RFC 8693 actor claim from
+				// Watermill metadata onto the audit row. Malformed
+				// UUIDs are dropped to uuid.Nil — audit-log outage MUST
+				// NOT cascade per audit-checklist.md §12.
+				ActOperatorID: parseUUIDHeader(msg.Metadata.Get(HeaderActOperatorID)),
+				ActSessionID:  parseUUIDHeader(msg.Metadata.Get(HeaderActSessionID)),
+				ActReason:     msg.Metadata.Get(HeaderActReason),
 			}
 			if err != nil {
 				entry.FailureReason = err.Error()

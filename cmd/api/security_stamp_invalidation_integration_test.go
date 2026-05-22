@@ -104,7 +104,7 @@ func TestSecurityStampInvalidation_PasswordChange_Returns401WithinFastPath(t *te
 	if err != nil {
 		t.Fatalf("messaging.NewRouter: %v", err)
 	}
-	subscribers.Register(router, wiring.Families, wiring.StampCache, silentLogger())
+	subscribers.Register(router, wiring.Families, wiring.StampCache, nil, silentLogger())
 
 	stackCtx, stackCancel := context.WithCancel(t.Context())
 	t.Cleanup(stackCancel)
