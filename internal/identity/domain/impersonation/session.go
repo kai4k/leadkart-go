@@ -1,5 +1,12 @@
 // Package impersonation provides the platform-operator impersonation
-// session primitives — value type + storage contract.
+// session primitives — Session value type + Store interface +
+// validation constants.
+//
+// Per ADR 0051 (Wave 9.1b): MOVED from `internal/common/impersonation/`
+// to `internal/identity/domain/impersonation/` because the surface is
+// Identity-only (consumed by CreateImpersonationSession / End /
+// ListSessions handlers exclusively). TDL single-module rule: domain
+// types + ports live with the consuming module.
 //
 // Per LeadKart .NET `multi-tenancy.md` "Impersonation": session-based
 // flow modelled on AWS IAM AssumeRole + Stripe Connect Stripe-Account
@@ -8,17 +15,15 @@
 // X-Impersonation-Session-Id header carries the session into each
 // downstream request.
 //
-// The hot-path store is Redis in production (TTL-evicted); v0.2
-// ships an in-memory implementation suitable for single-process
-// deployments + integration tests. The persistent audit record
-// lives on a separate table (buildingblocks.admin_impersonation_
-// audit) — this package owns ONLY the runtime session.
+// The Store implementation hot-path is Redis in production
+// (TTL-evicted); v0.2 ships an in-memory adapter at
+// `internal/identity/adapters/impersonation_inmemory_store.go`
+// suitable for single-process deployments + integration tests.
 package impersonation
 
 import (
 	"context"
 	"errors"
-	"sync"
 	"time"
 
 	"github.com/leadkart/leadkart-go/internal/common/ids"
@@ -68,8 +73,8 @@ const MaxDuration = 4 * time.Hour
 // radius if an operator abandons the session.
 const DefaultDuration = 30 * time.Minute
 
-// NewSession constructs a fresh impersonation session. The session
-// ID is a UUIDv7 (locality + ordering for audit-trail lookups).
+// NewSession constructs a fresh impersonation session. The session ID
+// is a UUIDv7 (locality + ordering for audit-trail lookups).
 //
 // duration <= 0 is treated as DefaultDuration. duration > MaxDuration
 // is rejected.
@@ -99,6 +104,21 @@ func NewSession(operatorID, targetTenantID, reason string, duration time.Duratio
 	}, nil
 }
 
+// UnmarshalSession rehydrates a [Session] from persisted fields —
+// used by adapters loading from Redis / in-memory store. Direct
+// construction skips invariant validation; callers MUST source from
+// trusted storage.
+func UnmarshalSession(id, operatorID, targetTenantID, reason string, createdAt, expiresAt time.Time) Session {
+	return Session{
+		id:             id,
+		operatorID:     operatorID,
+		targetTenantID: targetTenantID,
+		reason:         reason,
+		createdAt:      createdAt.UTC(),
+		expiresAt:      expiresAt.UTC(),
+	}
+}
+
 // ID returns the session UUIDv7.
 func (s Session) ID() string { return s.id }
 
@@ -126,10 +146,11 @@ func (s Session) IsExpired(now time.Time) bool {
 
 // Store is the impersonation-session persistence contract. Production
 // adapter is Redis-backed (TTL-evicted); v0.2 ships an in-memory
-// implementation suitable for single-process deployments + tests.
+// implementation at
+// `internal/identity/adapters/impersonation_inmemory_store.go` for
+// single-process deployments + tests.
 type Store interface {
-	// Put persists a fresh session. Returns the session unchanged for
-	// caller-side handler ergonomics (write + return shape).
+	// Put persists a fresh session.
 	Put(ctx context.Context, s Session) error
 
 	// Get retrieves a session by ID, or [ErrSessionNotFound] if
@@ -142,87 +163,7 @@ type Store interface {
 	Delete(ctx context.Context, id string) error
 
 	// ListByOperator returns every active (non-expired) session for
-	// the supplied operator. Used by GET .../impersonation/sessions
-	// — operators see their OWN sessions only.
+	// the supplied operator. Used by GET .../impersonation/sessions —
+	// operators see their OWN sessions only.
 	ListByOperator(ctx context.Context, operatorID string) ([]Session, error)
 }
-
-// ----- InMemoryStore --------------------------------------------------------
-
-// InMemoryStore is a process-local map-backed [Store]. Adequate for
-// single-instance deployments + integration tests; production
-// multi-replica needs a Redis-backed implementation.
-//
-// The store auto-evicts expired sessions inside Get/ListByOperator
-// — no separate sweep goroutine needed.
-type InMemoryStore struct {
-	mu       sync.Mutex
-	sessions map[string]Session
-	now      func() time.Time
-}
-
-// NewInMemoryStore constructs an empty store. now is the clock
-// source; pass time.Now in production, a fixed clock in tests.
-func NewInMemoryStore(now func() time.Time) *InMemoryStore {
-	if now == nil {
-		now = time.Now
-	}
-	return &InMemoryStore{
-		sessions: make(map[string]Session),
-		now:      now,
-	}
-}
-
-// Put satisfies [Store].
-func (s *InMemoryStore) Put(_ context.Context, sess Session) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.sessions[sess.ID()] = sess
-	return nil
-}
-
-// Get satisfies [Store]. Expired sessions are auto-evicted + return
-// ErrSessionNotFound.
-func (s *InMemoryStore) Get(_ context.Context, id string) (Session, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	sess, ok := s.sessions[id]
-	if !ok {
-		return Session{}, ErrSessionNotFound
-	}
-	if sess.IsExpired(s.now()) {
-		delete(s.sessions, id)
-		return Session{}, ErrSessionNotFound
-	}
-	return sess, nil
-}
-
-// Delete satisfies [Store]. Idempotent.
-func (s *InMemoryStore) Delete(_ context.Context, id string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	delete(s.sessions, id)
-	return nil
-}
-
-// ListByOperator satisfies [Store]. Skips + evicts expired sessions
-// it encounters.
-func (s *InMemoryStore) ListByOperator(_ context.Context, operatorID string) ([]Session, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	now := s.now()
-	out := make([]Session, 0, len(s.sessions))
-	for id, sess := range s.sessions {
-		if sess.IsExpired(now) {
-			delete(s.sessions, id)
-			continue
-		}
-		if sess.OperatorID() == operatorID {
-			out = append(out, sess)
-		}
-	}
-	return out, nil
-}
-
-// Compile-time assertion: *InMemoryStore satisfies [Store].
-var _ Store = (*InMemoryStore)(nil)

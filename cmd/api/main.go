@@ -49,7 +49,6 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/app/jwt"
 	"github.com/leadkart/leadkart-go/internal/common/audit"
 	"github.com/leadkart/leadkart-go/internal/common/email"
-	"github.com/leadkart/leadkart-go/internal/common/impersonation"
 	"github.com/leadkart/leadkart-go/internal/identity/app/permissions"
 	"github.com/leadkart/leadkart-go/internal/identity/app/query"
 	"github.com/leadkart/leadkart-go/internal/identity/ports"
@@ -492,7 +491,7 @@ func buildIdentityApp(pool *pgxpool.Pool, hybridCache *cache.HybridCache, cfg co
 	// process / integration-test fit); production multi-replica
 	// drops in a Redis-backed implementation behind the same
 	// [impersonation.Store] interface — composition root change only.
-	impersonationStore := impersonation.NewInMemoryStore(now)
+	impersonationStore := adapters.NewImpersonationInMemoryStore(now)
 
 	return identityWiring{
 		Issuer:         issuer,

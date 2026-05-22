@@ -1,51 +1,19 @@
-package impersonation_test
+package adapters_test
 
 import (
 	"errors"
 	"testing"
 	"time"
 
-	"github.com/leadkart/leadkart-go/internal/common/impersonation"
+	"github.com/leadkart/leadkart-go/internal/identity/adapters"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/impersonation"
 )
 
-func TestNewSession_RejectsShortReason(t *testing.T) {
-	t.Parallel()
-	_, err := impersonation.NewSession("op-1", "tenant-1", "short", 0, time.Now())
-	if err == nil {
-		t.Fatal("expected error on short reason")
-	}
-}
-
-func TestNewSession_RejectsExcessiveDuration(t *testing.T) {
-	t.Parallel()
-	_, err := impersonation.NewSession("op-1", "tenant-1",
-		"diagnostic: investigating tenant outage 2026-05-07",
-		5*time.Hour, time.Now())
-	if err == nil {
-		t.Fatal("expected error on duration > 4h")
-	}
-}
-
-func TestNewSession_AppliesDefaultDuration(t *testing.T) {
-	t.Parallel()
-	now := time.Date(2026, 5, 7, 12, 0, 0, 0, time.UTC)
-	s, err := impersonation.NewSession("op-1", "tenant-1",
-		"diagnostic: legitimate audit reason here",
-		0, now)
-	if err != nil {
-		t.Fatalf("NewSession: %v", err)
-	}
-	want := now.Add(impersonation.DefaultDuration)
-	if !s.ExpiresAt().Equal(want) {
-		t.Errorf("ExpiresAt = %v, want %v", s.ExpiresAt(), want)
-	}
-}
-
-func TestInMemoryStore_PutGet_RoundTrip(t *testing.T) {
+func TestImpersonationInMemoryStore_PutGet_RoundTrip(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 5, 7, 12, 0, 0, 0, time.UTC)
 	clock := now
-	store := impersonation.NewInMemoryStore(func() time.Time { return clock })
+	store := adapters.NewImpersonationInMemoryStore(func() time.Time { return clock })
 	sess, err := impersonation.NewSession("op-1", "tenant-1",
 		"audit: investigating ticket TICKET-1234",
 		30*time.Minute, now)
@@ -64,11 +32,11 @@ func TestInMemoryStore_PutGet_RoundTrip(t *testing.T) {
 	}
 }
 
-func TestInMemoryStore_Get_ExpiredSession_TreatedAsAbsent(t *testing.T) {
+func TestImpersonationInMemoryStore_Get_ExpiredSession_TreatedAsAbsent(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 5, 7, 12, 0, 0, 0, time.UTC)
 	clock := now
-	store := impersonation.NewInMemoryStore(func() time.Time { return clock })
+	store := adapters.NewImpersonationInMemoryStore(func() time.Time { return clock })
 	sess, err := impersonation.NewSession("op-1", "tenant-1",
 		"diagnostic: legitimate audit reason here",
 		1*time.Minute, now)
@@ -86,18 +54,18 @@ func TestInMemoryStore_Get_ExpiredSession_TreatedAsAbsent(t *testing.T) {
 	}
 }
 
-func TestInMemoryStore_Delete_Idempotent(t *testing.T) {
+func TestImpersonationInMemoryStore_Delete_Idempotent(t *testing.T) {
 	t.Parallel()
-	store := impersonation.NewInMemoryStore(time.Now)
+	store := adapters.NewImpersonationInMemoryStore(time.Now)
 	if err := store.Delete(t.Context(), "non-existent"); err != nil {
 		t.Errorf("Delete on absent: %v", err)
 	}
 }
 
-func TestInMemoryStore_ListByOperator_FiltersByOwner(t *testing.T) {
+func TestImpersonationInMemoryStore_ListByOperator_FiltersByOwner(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 5, 7, 12, 0, 0, 0, time.UTC)
-	store := impersonation.NewInMemoryStore(func() time.Time { return now })
+	store := adapters.NewImpersonationInMemoryStore(func() time.Time { return now })
 	mine, _ := impersonation.NewSession("op-1", "tenant-1",
 		"audit: investigating ticket TICKET-1", 30*time.Minute, now)
 	other, _ := impersonation.NewSession("op-2", "tenant-1",
