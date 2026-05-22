@@ -9,7 +9,7 @@ import (
 
 	"github.com/leadkart/leadkart-go/internal/identity/app/argon2"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
-	"github.com/leadkart/leadkart-go/internal/platform/breach"
+	"github.com/leadkart/leadkart-go/internal/common/breach"
 )
 
 // ConfirmPasswordResetCommand carries the user-presented plaintext

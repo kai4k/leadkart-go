@@ -37,7 +37,7 @@ LEADKART_SUPERADMIN__LAST_NAME=SuperAdmin
 func main() {
 	// 32 bytes = 256 bits — RFC 7519 / RFC 7518 minimum for HS256
 	// (HMAC-SHA-256). Application's own validator
-	// (internal/platform/config/validate.go) requires ≥ 32 bytes.
+	// (internal/common/config/validate.go) requires ≥ 32 bytes.
 	keyBytes := make([]byte, 32)
 	if _, err := rand.Read(keyBytes); err != nil {
 		fmt.Fprintln(os.Stderr, "devenv: crypto/rand:", err)

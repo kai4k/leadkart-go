@@ -16,7 +16,7 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/role"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
-	"github.com/leadkart/leadkart-go/internal/platform/pg"
+	"github.com/leadkart/leadkart-go/internal/common/pg"
 )
 
 // seedTenant + seedPerson are convenience helpers — repos are wired the

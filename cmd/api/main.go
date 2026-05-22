@@ -11,7 +11,7 @@
 // binaries; dev environments run them as separate processes against a
 // shared Postgres + Redis pair.
 //
-// Required environment (see internal/platform/config/AppConfig):
+// Required environment (see internal/common/config/AppConfig):
 //
 //	LEADKART_POSTGRES__DSN        postgres DSN (leadkart_app role)
 //	LEADKART_REDIS__ADDR          redis "host:port" (HybridCache L2 + sessions)
@@ -47,20 +47,21 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/app/argon2"
 	"github.com/leadkart/leadkart-go/internal/identity/app/command"
 	"github.com/leadkart/leadkart-go/internal/identity/app/jwt"
-	commonemail "github.com/leadkart/leadkart-go/internal/common/email"
-	"github.com/leadkart/leadkart-go/internal/platform/breach"
-	platformemail "github.com/leadkart/leadkart-go/internal/platform/email"
-	"github.com/leadkart/leadkart-go/internal/platform/impersonation"
+	"github.com/leadkart/leadkart-go/internal/common/audit"
+	"github.com/leadkart/leadkart-go/internal/common/breach"
+	"github.com/leadkart/leadkart-go/internal/common/email"
+	"github.com/leadkart/leadkart-go/internal/common/impersonation"
 	"github.com/leadkart/leadkart-go/internal/identity/app/permissions"
 	"github.com/leadkart/leadkart-go/internal/identity/app/query"
 	"github.com/leadkart/leadkart-go/internal/identity/ports"
 	"github.com/leadkart/leadkart-go/internal/identity/ports/authn"
-	"github.com/leadkart/leadkart-go/internal/platform/cache"
-	"github.com/leadkart/leadkart-go/internal/platform/config"
-	"github.com/leadkart/leadkart-go/internal/platform/httpmw"
-	"github.com/leadkart/leadkart-go/internal/platform/idempotency"
-	"github.com/leadkart/leadkart-go/internal/platform/obs"
-	"github.com/leadkart/leadkart-go/internal/platform/pg"
+	"github.com/leadkart/leadkart-go/internal/common/cache"
+	"github.com/leadkart/leadkart-go/internal/common/config"
+	"github.com/leadkart/leadkart-go/internal/common/httpmw"
+	"github.com/leadkart/leadkart-go/internal/common/idempotency"
+	"github.com/leadkart/leadkart-go/internal/common/obs"
+	"github.com/leadkart/leadkart-go/internal/common/openapi"
+	"github.com/leadkart/leadkart-go/internal/common/pg"
 )
 
 // HTTP server timeouts — public listener tuning per OWASP API Security
@@ -377,24 +378,28 @@ func newServer(log *slog.Logger, identityApp app.Application, verifier authn.Ver
 	return mux
 }
 
-// addRootHelpers registers humane handlers for the two endpoints every
-// browser hits unprompted (root + favicon) so casual probes don't
-// generate WARN-level "http request 404" log noise. Cross-cutting,
-// not domain-owned — lives in the composition root per Mat Ryer
-// "the host owns URL structure decisions" canon.
+// addRootHelpers registers humane handlers for the cross-cutting URLs
+// every browser + tooling client hits unprompted (root + favicon + spec
+// + docs UI). Not domain-owned — lives in the composition root per
+// Mat Ryer "the host owns URL structure decisions" canon.
 //
-//   - GET /             → 200 JSON pointing the caller at /api/v1/...
-//   - GET /favicon.ico  → 204 No Content (Stripe / Auth0 convention —
-//                         browsers stop asking after the first 204)
+//   - GET /              → 302 redirect to /docs (Scalar UI is the
+//                          discoverable entrypoint for humans + AI)
+//   - GET /favicon.ico   → 204 No Content (Stripe / Auth0 convention —
+//                          browsers stop asking after the first 204)
+//   - GET /openapi.yaml  → embedded OpenAPI 3.1 spec (ADR 0046)
+//   - GET /docs          → Scalar UI HTML page (renders the spec)
+//   - GET /docs/         → same handler (trailing-slash tolerance)
 func addRootHelpers(mux *http.ServeMux) {
-	mux.Handle("GET /{$}", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json; charset=utf-8")
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`{"name":"LeadKart API","api_base":"/api/v1","docs":"see api/openapi.yaml in the repo (Scalar UI at /docs lands in a follow-up PR)"}` + "\n"))
+	mux.Handle("GET /{$}", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/docs", http.StatusFound)
 	}))
 	mux.Handle("GET /favicon.ico", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	}))
+	mux.Handle("GET /openapi.yaml", openapi.SpecHandler())
+	mux.Handle("GET /docs", openapi.ScalarHandler())
+	mux.Handle("GET /docs/", openapi.ScalarHandler())
 }
 
 // identityWiring groups the Identity composition outputs that main()
@@ -436,6 +441,14 @@ func buildIdentityApp(pool *pgxpool.Pool, hybridCache *cache.HybridCache, cfg co
 	authRouter := adapters.NewAuthRouterPG(pool, tx)
 	permResolver := permissions.NewResolver(memberships, roles)
 
+	// Read-side adapters per ADR 00xx boundary discipline (app/query/
+	// depends on the interface; concrete sqlc-aware impl lives in
+	// adapters/). [audit.Reader] is declared in internal/common/audit/
+	// next to its writer counterpart.
+	var auditReader audit.Reader = adapters.NewAuditReaderPG(pool, tx)
+	var searchIndex query.SearchIndex = adapters.NewSearchIndexPG(pool, tx)
+	var statsReader query.PlatformStatsReader = adapters.NewPlatformStatsReaderPG(pool, tx)
+
 	stampCache := adapters.NewSecurityStampCache(hybridCache, persons)
 	stampValidator := adapters.NewSecurityStampValidator(stampCache)
 
@@ -470,8 +483,8 @@ func buildIdentityApp(pool *pgxpool.Pool, hybridCache *cache.HybridCache, cfg co
 	// the recorded messages to assert wire-shape. v0.3 swaps in a
 	// real provider via the [email.Gateway] interface — composition
 	// root change only.
-	emailGateway := platformemail.NewRecorder(now)
-	noReplyAddress, err := commonemail.New("no-reply@leadkart.local")
+	emailGateway := email.NewRecorder(now)
+	noReplyAddress, err := email.New("no-reply@leadkart.local")
 	if err != nil {
 		return identityWiring{}, fmt.Errorf("no-reply email address: %w", err)
 	}
@@ -536,7 +549,7 @@ func buildIdentityApp(pool *pgxpool.Pool, hybridCache *cache.HybridCache, cfg co
 			UpdatePersonProfile:        command.NewUpdatePersonProfileHandler(persons),
 			HardDeleteTenant:           command.NewHardDeleteTenantHandler(tenants, memberships),
 
-			CreateImpersonationSession: command.NewCreateImpersonationSessionHandler(impersonationStore, now),
+			CreateImpersonationSession: command.NewCreateImpersonationSessionHandler(impersonationStore, tenants, issuer, now),
 			EndImpersonationSession:    command.NewEndImpersonationSessionHandler(impersonationStore),
 		},
 		Queries: app.Queries{
@@ -547,25 +560,27 @@ func buildIdentityApp(pool *pgxpool.Pool, hybridCache *cache.HybridCache, cfg co
 				memberships,
 			),
 			GetTenant:                 query.NewGetTenantHandler(tenants),
+			GetTenantBySlug:           query.NewGetTenantBySlugHandler(tenants),
 			GetUser:                   query.NewGetUserHandler(memberships, persons),
 			ListUsers:                 query.NewListUsersHandler(memberships, persons),
 			ListUsersPaged:            query.NewListUsersPagedHandler(memberships, persons),
 			GetRole:                   query.NewGetRoleHandler(roles),
 			ListRoles:                 query.NewListRolesHandler(roles),
 			GetPerson:                 query.NewGetPersonHandler(persons),
+			GetPersonByEmail:          query.NewGetPersonByEmailHandler(persons),
 			ListPersonMemberships:     query.NewListPersonMembershipsHandler(memberships, persons),
 			ListAllTenants:            query.NewListAllTenantsHandler(tenants),
 			ListImpersonationSessions: query.NewListImpersonationSessionsHandler(impersonationStore),
 			PlatformStats: query.NewCachedPlatformStatsHandler(
-				query.NewPlatformStatsHandler(pool, tx),
+				query.NewPlatformStatsHandler(statsReader),
 				hybridCache,
 			),
 			Search: query.NewCachedSearchHandler(
-				query.NewSearchHandler(pool, tx),
+				query.NewSearchHandler(searchIndex),
 				hybridCache,
 			),
-			ListAuditEventsByTenant: query.NewListAuditEventsByTenantHandler(pool, tx),
-			ListAuditEventsByUser:   query.NewListAuditEventsByUserHandler(pool, tx),
+			ListAuditEventsByTenant: query.NewListAuditEventsByTenantHandler(auditReader),
+			ListAuditEventsByUser:   query.NewListAuditEventsByUserHandler(auditReader),
 		},
 		},
 	}, nil

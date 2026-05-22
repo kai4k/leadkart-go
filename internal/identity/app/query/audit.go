@@ -7,15 +7,11 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
-	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/leadkart/leadkart-go/internal/common/pagination"
-	"github.com/leadkart/leadkart-go/internal/identity/adapters/db"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
-	"github.com/leadkart/leadkart-go/internal/platform/pg"
+	"github.com/leadkart/leadkart-go/internal/common/audit"
 )
 
 // AuditEventView is one row of the audit-log read shape per
@@ -55,24 +51,20 @@ type ListAuditEventsByTenantQuery struct {
 	PageSize int
 }
 
-// ListAuditEventsByTenantHandler runs the keyset query under
-// platform scope (the audit table has no RLS but cross-tenant
-// access surface is gated above this layer).
+// ListAuditEventsByTenantHandler depends on [audit.Reader] only. No
+// pgxpool / pgx / sqlc imports — boundary discipline per ADR 0047
+// (app/ may NOT depend on the database driver or generated row types;
+// adapter implementations live behind the audit.Reader interface).
 type ListAuditEventsByTenantHandler struct {
-	pool *pgxpool.Pool
-	tx   *pg.Transactor
-	q    *db.Queries
+	reader audit.Reader
 }
 
 // NewListAuditEventsByTenantHandler wires the handler.
-func NewListAuditEventsByTenantHandler(pool *pgxpool.Pool, tx *pg.Transactor) ListAuditEventsByTenantHandler {
-	if pool == nil {
-		panic("query: NewListAuditEventsByTenantHandler pool required")
+func NewListAuditEventsByTenantHandler(reader audit.Reader) ListAuditEventsByTenantHandler {
+	if reader == nil {
+		panic("query: NewListAuditEventsByTenantHandler reader required")
 	}
-	if tx == nil {
-		panic("query: NewListAuditEventsByTenantHandler transactor required")
-	}
-	return ListAuditEventsByTenantHandler{pool: pool, tx: tx, q: db.New(pool)}
+	return ListAuditEventsByTenantHandler{reader: reader}
 }
 
 // Handle returns one page of tenant-scoped events.
@@ -81,32 +73,20 @@ func (h ListAuditEventsByTenantHandler) Handle(ctx context.Context, q ListAuditE
 		return pagination.Page[AuditEventView]{}, errors.New("list_audit_by_tenant: tenant id required")
 	}
 	pageSize := pagination.ClampPageSize(q.PageSize)
-	beforeAt, beforeID := cursorOrSentinel(q.Cursor)
+	beforeAt, beforeID := cursorOrAuditSentinel(q.Cursor)
 
 	tenantUUID, err := uuid.Parse(q.TenantID.String())
 	if err != nil {
 		return pagination.Page[AuditEventView]{}, fmt.Errorf("list_audit_by_tenant: parse tenant id: %w", err)
 	}
 
-	var rows []db.BuildingblocksAuditLogEntry
-	err = h.tx.WithinTx(ctx, pg.TxScopePlatform, func(ctx context.Context, tx pgx.Tx) error {
-		out, qerr := h.q.WithTx(tx).ListAuditEventsByTenantPage(ctx, db.ListAuditEventsByTenantPageParams{
-			TenantID:       pgtype.UUID{Bytes: tenantUUID, Valid: true},
-			BeforeOccurred: pgtype.Timestamptz{Time: beforeAt, Valid: true},
-			BeforeID:       pgtype.UUID{Bytes: beforeID, Valid: true},
-			Limit:          int32(pageSize + 1), //nolint:gosec // pageSize capped at 200
-		})
-		if qerr != nil {
-			return qerr
-		}
-		rows = out
-		return nil
-	})
+	//nolint:gosec // pageSize capped at 200 by ClampPageSize
+	entries, err := h.reader.ListByTenant(ctx, tenantUUID, beforeAt, beforeID, int32(pageSize+1))
 	if err != nil {
 		return pagination.Page[AuditEventView]{}, fmt.Errorf("list_audit_by_tenant: %w", err)
 	}
 
-	views := projectAuditRows(rows)
+	views := entriesToViews(entries)
 	return pagination.BuildPage(views, pageSize, func(v AuditEventView) pagination.Cursor {
 		return pagination.Cursor{SortValue: v.OccurredAt, ID: v.ID}
 	}), nil
@@ -123,24 +103,17 @@ type ListAuditEventsByUserQuery struct {
 	PageSize int
 }
 
-// ListAuditEventsByUserHandler runs the keyset query under
-// platform scope (the table has no RLS; cross-user access surface
-// is gated above this layer).
+// ListAuditEventsByUserHandler depends on [audit.Reader] only.
 type ListAuditEventsByUserHandler struct {
-	pool *pgxpool.Pool
-	tx   *pg.Transactor
-	q    *db.Queries
+	reader audit.Reader
 }
 
 // NewListAuditEventsByUserHandler wires the handler.
-func NewListAuditEventsByUserHandler(pool *pgxpool.Pool, tx *pg.Transactor) ListAuditEventsByUserHandler {
-	if pool == nil {
-		panic("query: NewListAuditEventsByUserHandler pool required")
+func NewListAuditEventsByUserHandler(reader audit.Reader) ListAuditEventsByUserHandler {
+	if reader == nil {
+		panic("query: NewListAuditEventsByUserHandler reader required")
 	}
-	if tx == nil {
-		panic("query: NewListAuditEventsByUserHandler transactor required")
-	}
-	return ListAuditEventsByUserHandler{pool: pool, tx: tx, q: db.New(pool)}
+	return ListAuditEventsByUserHandler{reader: reader}
 }
 
 // Handle returns one page of person-scoped events.
@@ -149,32 +122,20 @@ func (h ListAuditEventsByUserHandler) Handle(ctx context.Context, q ListAuditEve
 		return pagination.Page[AuditEventView]{}, errors.New("list_audit_by_user: user id required")
 	}
 	pageSize := pagination.ClampPageSize(q.PageSize)
-	beforeAt, beforeID := cursorOrSentinel(q.Cursor)
+	beforeAt, beforeID := cursorOrAuditSentinel(q.Cursor)
 
 	userUUID, err := uuid.Parse(q.UserID.String())
 	if err != nil {
 		return pagination.Page[AuditEventView]{}, fmt.Errorf("list_audit_by_user: parse user id: %w", err)
 	}
 
-	var rows []db.BuildingblocksAuditLogEntry
-	err = h.tx.WithinTx(ctx, pg.TxScopePlatform, func(ctx context.Context, tx pgx.Tx) error {
-		out, qerr := h.q.WithTx(tx).ListAuditEventsByUserPage(ctx, db.ListAuditEventsByUserPageParams{
-			UserID:         pgtype.UUID{Bytes: userUUID, Valid: true},
-			BeforeOccurred: pgtype.Timestamptz{Time: beforeAt, Valid: true},
-			BeforeID:       pgtype.UUID{Bytes: beforeID, Valid: true},
-			Limit:          int32(pageSize + 1), //nolint:gosec // pageSize capped at 200
-		})
-		if qerr != nil {
-			return qerr
-		}
-		rows = out
-		return nil
-	})
+	//nolint:gosec // pageSize capped at 200 by ClampPageSize
+	entries, err := h.reader.ListByUser(ctx, userUUID, beforeAt, beforeID, int32(pageSize+1))
 	if err != nil {
 		return pagination.Page[AuditEventView]{}, fmt.Errorf("list_audit_by_user: %w", err)
 	}
 
-	views := projectAuditRows(rows)
+	views := entriesToViews(entries)
 	return pagination.BuildPage(views, pageSize, func(v AuditEventView) pagination.Cursor {
 		return pagination.Cursor{SortValue: v.OccurredAt, ID: v.ID}
 	}), nil
@@ -182,47 +143,46 @@ func (h ListAuditEventsByUserHandler) Handle(ctx context.Context, q ListAuditEve
 
 // ----- helpers --------------------------------------------------------------
 
-// auditCursorSentinel is the first-page sentinel for the
-// (occurred_at_utc, id) keyset predicate. A future timestamp + the
-// all-ones UUID admits every existing row through the strict-less-
-// than tuple comparison.
-var (
-	auditCursorSentinelTime = time.Date(9999, 12, 31, 23, 59, 59, 0, time.UTC)
-	auditCursorSentinelID   = uuid.MustParse("ffffffff-ffff-ffff-ffff-ffffffffffff")
-)
-
-func cursorOrSentinel(c pagination.Cursor) (time.Time, uuid.UUID) {
+// cursorOrAuditSentinel decodes the keyset cursor into (occurred_at, id)
+// tuple, falling back to the first-page sentinel from the audit
+// package when the cursor is empty or malformed.
+func cursorOrAuditSentinel(c pagination.Cursor) (time.Time, uuid.UUID) {
 	if c.ID == "" && c.SortValue.IsZero() {
-		return auditCursorSentinelTime, auditCursorSentinelID
+		return audit.FirstPageBefore, audit.FirstPageBeforeID
 	}
 	id, err := uuid.Parse(c.ID)
 	if err != nil {
-		// Malformed cursor ID — fall back to sentinel. The
-		// HTTP boundary should have already rejected invalid
-		// cursors via pagination.Decode; this is belt-and-braces.
-		return auditCursorSentinelTime, auditCursorSentinelID
+		// Malformed cursor ID — fall back to sentinel. HTTP boundary
+		// should have already rejected invalid cursors via
+		// pagination.Decode; this is belt-and-braces.
+		return audit.FirstPageBefore, audit.FirstPageBeforeID
 	}
 	return c.SortValue, id
 }
 
-func projectAuditRows(rows []db.BuildingblocksAuditLogEntry) []AuditEventView {
-	out := make([]AuditEventView, 0, len(rows))
-	for _, r := range rows {
+func entriesToViews(entries []audit.Entry) []AuditEventView {
+	out := make([]AuditEventView, 0, len(entries))
+	for _, e := range entries {
 		v := AuditEventView{
-			ID:            uuidString(r.ID),
-			Action:        r.Action,
-			ActorID:       uuidString(r.UserID),
-			TenantID:      uuidString(r.TenantID),
-			CorrelationID: uuidString(r.CorrelationID),
-			OccurredAt:    r.OccurredAtUtc.Time.UTC(),
-			DurationMs:    r.DurationMs,
-			Succeeded:     r.Succeeded,
-			PayloadRaw:    r.Payload,
-		}
-		if r.FailureReason != nil {
-			v.FailureReason = *r.FailureReason
+			ID:            uuidStringOrEmpty(e.ID),
+			Action:        e.Action,
+			ActorID:       uuidStringOrEmpty(e.UserID),
+			TenantID:      uuidStringOrEmpty(e.TenantID),
+			CorrelationID: uuidStringOrEmpty(e.CorrelationID),
+			OccurredAt:    e.OccurredAtUTC,
+			DurationMs:    e.Duration.Milliseconds(),
+			Succeeded:     e.Succeeded,
+			FailureReason: e.FailureReason,
+			PayloadRaw:    e.Payload,
 		}
 		out = append(out, v)
 	}
 	return out
+}
+
+func uuidStringOrEmpty(id uuid.UUID) string {
+	if id == uuid.Nil {
+		return ""
+	}
+	return id.String()
 }

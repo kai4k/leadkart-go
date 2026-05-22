@@ -13,7 +13,7 @@ There's also an order-of-application question: a panic-recovery middleware that 
 
 ## Decision
 
-**One canonical middleware chain composed in `internal/platform/httpmw.PublicChain`**, applied as a single call in `cmd/api/main.go` inside the existing `otelhttp` wrapper.
+**One canonical middleware chain composed in `internal/common/httpmw.PublicChain`**, applied as a single call in `cmd/api/main.go` inside the existing `otelhttp` wrapper.
 
 Order (outer → inner, after `otelhttp`):
 

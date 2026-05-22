@@ -51,8 +51,8 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/app/permissions"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/permission"
 	"github.com/leadkart/leadkart-go/internal/identity/ports/authn"
-	"github.com/leadkart/leadkart-go/internal/platform/cache"
-	"github.com/leadkart/leadkart-go/internal/platform/pg"
+	"github.com/leadkart/leadkart-go/internal/common/cache"
+	"github.com/leadkart/leadkart-go/internal/common/pg"
 )
 
 const refreshTTL = 14 * 24 * time.Hour

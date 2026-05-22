@@ -39,10 +39,10 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 	"github.com/leadkart/leadkart-go/internal/identity/integrationevents"
 	"github.com/leadkart/leadkart-go/internal/identity/ports/subscribers"
-	"github.com/leadkart/leadkart-go/internal/platform/audit"
-	"github.com/leadkart/leadkart-go/internal/platform/cache"
-	"github.com/leadkart/leadkart-go/internal/platform/messaging"
-	"github.com/leadkart/leadkart-go/internal/platform/pg"
+	"github.com/leadkart/leadkart-go/internal/common/audit"
+	"github.com/leadkart/leadkart-go/internal/common/cache"
+	"github.com/leadkart/leadkart-go/internal/common/messaging"
+	"github.com/leadkart/leadkart-go/internal/common/pg"
 )
 
 // fixture spins ephemeral Postgres + applies migrations + provisions

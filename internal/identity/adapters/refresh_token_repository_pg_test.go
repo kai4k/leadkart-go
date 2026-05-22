@@ -12,7 +12,7 @@ import (
 	"github.com/leadkart/leadkart-go/internal/common/ids"
 	"github.com/leadkart/leadkart-go/internal/identity/adapters"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/refreshtoken"
-	"github.com/leadkart/leadkart-go/internal/platform/pg"
+	"github.com/leadkart/leadkart-go/internal/common/pg"
 )
 
 const tokenTTL = 14 * 24 * time.Hour

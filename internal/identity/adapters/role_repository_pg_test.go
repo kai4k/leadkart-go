@@ -12,7 +12,7 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/domain/permission"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/role"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
-	"github.com/leadkart/leadkart-go/internal/platform/pg"
+	"github.com/leadkart/leadkart-go/internal/common/pg"
 )
 
 // newRole is a tiny factory the role-repo tests share — gives a brand-new

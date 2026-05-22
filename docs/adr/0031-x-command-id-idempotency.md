@@ -14,7 +14,7 @@ Two layers of dedup are already shipped in the codebase:
 
 Neither addresses the HTTP layer. A client that POSTs `/api/v1/tenants` twice with identical bodies sees two `201`s with two distinct tenant IDs — the aggregate invariant doesn't fire because each POST creates a *different* aggregate.
 
-`messaging.md` "X-Command-Id accepted on mutating HTTP commands" specifies the contract; the implementation existed in `internal/platform/idempotency` but was never wired into `cmd/api`.
+`messaging.md` "X-Command-Id accepted on mutating HTTP commands" specifies the contract; the implementation existed in `internal/common/idempotency` but was never wired into `cmd/api`.
 
 ## Decision
 
@@ -22,7 +22,7 @@ Neither addresses the HTTP layer. A client that POSTs `/api/v1/tenants` twice wi
 
 Header name: `X-Command-Id` (LeadKart-canonical, mirrors Stripe's `Idempotency-Key`). Value: client-supplied UUID.
 
-Behaviour (per `internal/platform/idempotency.Middleware`):
+Behaviour (per `internal/common/idempotency.Middleware`):
 
 - **Header absent** → middleware passes through. Idempotency is opt-in per request; clients without retry semantics don't pay the lookup cost.
 - **Header malformed** (not a UUID) → 400 `idempotency.invalid_command_id`.

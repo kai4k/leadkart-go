@@ -5,7 +5,7 @@ import (
 
 	"github.com/leadkart/leadkart-go/internal/identity/domain/refreshtoken"
 	"github.com/leadkart/leadkart-go/internal/identity/integrationevents"
-	"github.com/leadkart/leadkart-go/internal/platform/messaging"
+	"github.com/leadkart/leadkart-go/internal/common/messaging"
 )
 
 // Identity subscriber-handler names (CI-stable). Changing one of these

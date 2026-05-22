@@ -94,6 +94,7 @@ jobs:
     outputs:
       go: ${{ steps.filter.outputs.go }}
       docker: ${{ steps.filter.outputs.docker }}
+      migrations: ${{ steps.filter.outputs.migrations }}
     steps:
       - uses: actions/checkout@v6
 
@@ -109,6 +110,10 @@ jobs:
               - 'internal/identity/adapters/sql/**'
               - 'sqlc.yaml'
               - '.golangci.yml'
+              - '.github/workflows/ci.yml'
+            migrations:
+              - 'migrations/**'
+              - 'cmd/migrate/**'
               - '.github/workflows/ci.yml'
             docker:
               - 'docker/**'
@@ -257,6 +262,64 @@ jobs:
           path: junit-architecture.xml
           reporter: java-junit
           fail-on-error: false
+
+  # ---------------------------------------------------------------------------
+  # Migrations check — apply all migrations to an ephemeral Postgres on every
+  # PR that touches migrations/ OR cmd/migrate/. Catches schema-level errors
+  # (GIN opclass mismatches, bad FK shapes, RLS policy syntax, type
+  # incompatibilities) BEFORE they hit integration tests.
+  #
+  # Justification: the GIN-on-uuid bug shipped in Wave 1 because task ci
+  # (pre-push) doesn't apply migrations — only cloud CI did via the
+  # integration job. By then the bug was already pushed. This job runs in
+  # < 30s + fails fast on schema errors so the rest of the pipeline doesn't
+  # waste time. Per ADR-implicit "fail fast at the smallest possible gate".
+  # ---------------------------------------------------------------------------
+  migrations-check:
+    name: Migrations Apply Cleanly
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: changes
+    if: needs.changes.outputs.migrations == 'true' || github.event_name == 'push'
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: leadkart
+          POSTGRES_PASSWORD: leadkart_test
+          POSTGRES_DB: leadkart_migcheck
+        ports:
+          - 5432:5432
+        # Health gate so the migrate run doesn't race the readiness probe.
+        options: >-
+          --health-cmd "pg_isready -U leadkart -d leadkart_migcheck"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 15
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Apply all migrations via cmd/migrate
+        env:
+          LEADKART_POSTGRES__DSN: postgres://leadkart:leadkart_test@localhost:5432/leadkart_migcheck?sslmode=disable
+        run: go run ./cmd/migrate up
+
+      - name: Sanity probe — verify the canonical extensions/tables exist
+        env:
+          PGPASSWORD: leadkart_test
+        run: |
+          # Confirm pg_trgm extension is loaded (caught by the Wave 1 GIN bug
+          # IF it had been wired correctly).
+          psql -h localhost -U leadkart -d leadkart_migcheck -c "SELECT 1 FROM pg_extension WHERE extname = 'pg_trgm'" | grep -q "1 row" \
+            || (echo "pg_trgm extension missing" && exit 1)
+          # Confirm core tables present after up.
+          psql -h localhost -U leadkart -d leadkart_migcheck -c "\dt identity.*" | grep -q "tenant_memberships" \
+            || (echo "identity.tenant_memberships missing" && exit 1)
 
   # ---------------------------------------------------------------------------
   # Integration tests — //go:build integration files. Per testcontainers-go

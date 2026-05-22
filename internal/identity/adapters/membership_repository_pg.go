@@ -19,7 +19,7 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/role"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
-	"github.com/leadkart/leadkart-go/internal/platform/pg"
+	"github.com/leadkart/leadkart-go/internal/common/pg"
 )
 
 // permission-override kind constants. Mirror of the
@@ -62,30 +62,30 @@ func NewMembershipRepository(pool *pgxpool.Pool, tx *pg.Transactor) *MembershipR
 	return &MembershipRepository{pool: pool, tx: tx, q: db.New(pool)}
 }
 
-// Add satisfies [membership.Repository] — persists a new Active Membership
-// + drains CreatedEvent. Runs under TxScopeTenant; caller must have set
-// tenancy.WithID(ctx, m.TenantID()) before invoking.
+// Add satisfies [membership.Repository] — persists a new Active
+// Membership + drains CreatedEvent. When ctx carries an active tx (a
+// parent [pg.UnitOfWork] is in flight, including the RegisterTenant
+// platform-scope path), Add joins that tx rather than opening its own.
+// Standalone Add (no parent tx) runs under TxScopeTenant; caller must
+// have set tenancy.WithID(ctx, m.TenantID()) before invoking.
 //
 // Surfaces the partial-unique-index violation (single-Active-Membership
 // invariant) as [membership.ErrAlreadyActive].
 func (r *MembershipRepository) Add(ctx context.Context, m *membership.Membership) error {
-	return r.tx.WithinTx(ctx, pg.TxScopeTenant, func(ctx context.Context, tx pgx.Tx) error {
-		return r.AddInTx(ctx, tx, m)
+	if tx, ok := pg.TxFromContext(ctx); ok {
+		return r.addOnTx(ctx, tx, m)
+	}
+	return r.tx.WithinTxPgx(ctx, pg.TxScopeTenant, func(ctx context.Context, tx pgx.Tx) error {
+		return r.addOnTx(ctx, tx, m)
 	})
 }
 
-// AddInTx persists a new Active Membership under an EXISTING
-// transaction. Scope-agnostic: caller chooses TxScopeTenant (in-tenant
-// admin onboards a user) OR TxScopePlatform (orchestrator creates the
-// admin Membership during tenant-registration when no tenant context
-// exists yet).
+// addOnTx persists the aggregate against the supplied tx — Active row
+// + profile + role_assignments + permission_overrides — then drains
+// events. Unexported.
 //
 // Surfaces ErrAlreadyActive on partial-unique-index violation.
-//
-// Projects the full aggregate state to all four tables: tenant_memberships
-// (row + profile fields), role_assignments (one row per RoleAssignment),
-// membership_permission_overrides (one row per granted/revoked permission).
-func (r *MembershipRepository) AddInTx(ctx context.Context, tx pgx.Tx, m *membership.Membership) error {
+func (r *MembershipRepository) addOnTx(ctx context.Context, tx pgx.Tx, m *membership.Membership) error {
 	q := r.q.WithTx(tx)
 	if err := insertMembershipRow(ctx, q, m); err != nil {
 		return err
@@ -114,7 +114,7 @@ func (r *MembershipRepository) UpdateByID(
 	id membership.ID,
 	updateFn func(*membership.Membership) (bool, error),
 ) error {
-	return r.tx.WithinTx(ctx, pg.TxScopeTenant, func(ctx context.Context, tx pgx.Tx) error {
+	return r.tx.WithinTxPgx(ctx, pg.TxScopeTenant, func(ctx context.Context, tx pgx.Tx) error {
 		q := r.q.WithTx(tx)
 		m, err := loadMembership(ctx, q, id)
 		if err != nil {
@@ -149,7 +149,7 @@ func (r *MembershipRepository) UpdateByID(
 // — same observable behaviour as truly missing).
 func (r *MembershipRepository) GetByID(ctx context.Context, id membership.ID) (*membership.Membership, error) {
 	var out *membership.Membership
-	err := r.tx.WithinTx(ctx, pg.TxScopeTenant, func(ctx context.Context, tx pgx.Tx) error {
+	err := r.tx.WithinTxPgx(ctx, pg.TxScopeTenant, func(ctx context.Context, tx pgx.Tx) error {
 		m, err := loadMembership(ctx, r.q.WithTx(tx), id)
 		if err != nil {
 			return err
@@ -178,7 +178,7 @@ func (r *MembershipRepository) GetActiveForPerson(
 		return nil, err
 	}
 	var out *membership.Membership
-	err = r.tx.WithinTx(ctx, pg.TxScopePlatform, func(ctx context.Context, tx pgx.Tx) error {
+	err = r.tx.WithinTxPgx(ctx, pg.TxScopePlatform, func(ctx context.Context, tx pgx.Tx) error {
 		q := r.q.WithTx(tx)
 		// ListMembershipsForPerson returns all (active + inactive) rows
 		// across tenants. The partial-unique index guarantees at most one
@@ -228,7 +228,7 @@ func (r *MembershipRepository) ListForTenant(
 	// ListMembershipsForPerson would be wrong scope. Issue a plain SELECT
 	// via the transactor; sqlc adds nothing here.)
 	var out []*membership.Membership
-	err := r.tx.WithinTx(ctx, pg.TxScopeTenant, func(ctx context.Context, tx pgx.Tx) error {
+	err := r.tx.WithinTxPgx(ctx, pg.TxScopeTenant, func(ctx context.Context, tx pgx.Tx) error {
 		q := r.q.WithTx(tx)
 		hydrated, err := q.ListMembershipsInCurrentTenant(ctx)
 		if err != nil {
@@ -284,7 +284,7 @@ func (r *MembershipRepository) ListForTenantPage(
 	}
 
 	var out []*membership.Membership
-	err = r.tx.WithinTx(ctx, pg.TxScopeTenant, func(ctx context.Context, tx pgx.Tx) error {
+	err = r.tx.WithinTxPgx(ctx, pg.TxScopeTenant, func(ctx context.Context, tx pgx.Tx) error {
 		q := r.q.WithTx(tx)
 		hydrated, qerr := q.ListActiveMembershipsInTenantPage(ctx, db.ListActiveMembershipsInTenantPageParams{
 			BeforeJoinedAt: pgRequiredTimestamp(beforeJoinedAt),
@@ -336,7 +336,7 @@ func (r *MembershipRepository) HasActiveSuperAdmin(
 		return false, err
 	}
 	var found bool
-	err = r.tx.WithinTx(ctx, pg.TxScopePlatform, func(ctx context.Context, tx pgx.Tx) error {
+	err = r.tx.WithinTxPgx(ctx, pg.TxScopePlatform, func(ctx context.Context, tx pgx.Tx) error {
 		q := r.q.WithTx(tx)
 		rows, err := q.ListSuperAdminMembershipsInTenant(ctx, pgUUID(tid))
 		if err != nil {
@@ -370,7 +370,7 @@ func (r *MembershipRepository) ListAllForPerson(
 		return nil, err
 	}
 	var out []*membership.Membership
-	err = r.tx.WithinTx(ctx, pg.TxScopePlatform, func(ctx context.Context, tx pgx.Tx) error {
+	err = r.tx.WithinTxPgx(ctx, pg.TxScopePlatform, func(ctx context.Context, tx pgx.Tx) error {
 		q := r.q.WithTx(tx)
 		rows, err := q.ListMembershipsForPerson(ctx, pgUUID(uid))
 		if err != nil {

@@ -8,9 +8,8 @@ import (
 	"fmt"
 	"time"
 
-	commonemail "github.com/leadkart/leadkart-go/internal/common/email"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
-	"github.com/leadkart/leadkart-go/internal/platform/email"
+	"github.com/leadkart/leadkart-go/internal/common/email"
 )
 
 // ----- RequestEmailChange ---------------------------------------------------
@@ -24,7 +23,7 @@ import (
 // commits.
 type RequestEmailChangeCommand struct {
 	PersonID person.ID
-	NewEmail commonemail.Address
+	NewEmail email.Address
 }
 
 // EmailChangeTokenTTL — same 1h floor as password reset.
@@ -45,14 +44,14 @@ var ErrEmailAlreadyTaken = errors.New("request_email_change: email already in us
 type RequestEmailChangeHandler struct {
 	persons      person.Repository
 	emailGateway email.Gateway
-	fromAddress  commonemail.Address
+	fromAddress  email.Address
 }
 
 // NewRequestEmailChangeHandler wires the handler.
 func NewRequestEmailChangeHandler(
 	persons person.Repository,
 	emailGateway email.Gateway,
-	fromAddress commonemail.Address,
+	fromAddress email.Address,
 ) RequestEmailChangeHandler {
 	if persons == nil {
 		panic("command: NewRequestEmailChangeHandler persons repository required")

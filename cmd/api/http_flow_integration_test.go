@@ -33,8 +33,8 @@ import (
 
 	"github.com/leadkart/leadkart-go/internal/common/ids"
 	"github.com/leadkart/leadkart-go/internal/identity/ports"
-	"github.com/leadkart/leadkart-go/internal/platform/cache"
-	"github.com/leadkart/leadkart-go/internal/platform/config"
+	"github.com/leadkart/leadkart-go/internal/common/cache"
+	"github.com/leadkart/leadkart-go/internal/common/config"
 )
 
 // newTestHybridCache spins an in-process miniredis + wires the

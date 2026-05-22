@@ -7,26 +7,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"golang.org/x/sync/errgroup"
 
-	"github.com/leadkart/leadkart-go/internal/identity/adapters/db"
-	"github.com/leadkart/leadkart-go/internal/platform/cache"
-	"github.com/leadkart/leadkart-go/internal/platform/pg"
+	"github.com/leadkart/leadkart-go/internal/common/cache"
 )
-
-// uuidString unwraps a pgtype.UUID into a canonical UUID string.
-// Local to query layer; the adapters package has its own helper
-// but importing adapters here would invert the dependency direction.
-func uuidString(p pgtype.UUID) string {
-	if !p.Valid {
-		return ""
-	}
-	return uuid.UUID(p.Bytes).String()
-}
 
 // SearchView is the omni-search response (GET /v1/search?q=).
 //
@@ -93,30 +77,33 @@ const (
 	searchPerCategoryTimeout = 200 * time.Millisecond
 )
 
-// SearchHandler executes the omni-search via parallel pg_trgm
-// fanout. Reads run under TxScopePlatform so the operator-only
-// path sees rows across every tenant for the persons category +
-// every tenant in the tenants list.
+// SearchIndex is the consumer-defined contract for the parallel
+// pg_trgm fanout. Defined here (next to its sole consumer
+// [SearchHandler]) per Cheney "accept interfaces"; concrete pg-backed
+// implementation lives in internal/identity/adapters/ where db.* is
+// permitted. This layer carries NO pgx, pgxpool, or sqlc imports.
 //
-// No repository indirection: this is a cross-cutting read path
-// that doesn't fit a single aggregate's contract; per ADR 0041
-// pattern justification ("inline SQL for one-caller operator
-// reporting beats speculative repository methods").
+// Each method runs under platform-scope tx with the supplied
+// per-category timeout. On context.DeadlineExceeded the implementation
+// MUST return ([], context.DeadlineExceeded) — the handler turns that
+// into HasPartial=true rather than a hard failure.
+type SearchIndex interface {
+	SearchPersons(ctx context.Context, q string, limit int32) ([]SearchPersonHit, error)
+	SearchTenants(ctx context.Context, q string, limit int32) ([]SearchTenantHit, error)
+}
+
+// SearchHandler depends on [SearchIndex] only — no pgxpool, no pgx,
+// no sqlc. Boundary discipline per ADR 0047.
 type SearchHandler struct {
-	pool *pgxpool.Pool
-	tx   *pg.Transactor
-	q    *db.Queries
+	index SearchIndex
 }
 
 // NewSearchHandler wires the un-cached handler.
-func NewSearchHandler(pool *pgxpool.Pool, tx *pg.Transactor) SearchHandler {
-	if pool == nil {
-		panic("query: NewSearchHandler pool required")
+func NewSearchHandler(index SearchIndex) SearchHandler {
+	if index == nil {
+		panic("query: NewSearchHandler search index required")
 	}
-	if tx == nil {
-		panic("query: NewSearchHandler transactor required")
-	}
-	return SearchHandler{pool: pool, tx: tx, q: db.New(pool)}
+	return SearchHandler{index: index}
 }
 
 // Handle runs the fanout. errgroup coordinates the parallel sub-
@@ -127,7 +114,7 @@ func NewSearchHandler(pool *pgxpool.Pool, tx *pg.Transactor) SearchHandler {
 //
 //  1. Validate q (length 2-100 chars; reject early on too-short).
 //  2. Clamp per-category limit.
-//  3. Fan out (persons + tenants) in parallel under TxScopePlatform.
+//  3. Fan out (persons + tenants) in parallel.
 //  4. Each sub-query has its own timeout-bounded ctx; on timeout the
 //     handler returns partial results with HasPartial=true.
 //  5. Compose + return.
@@ -151,75 +138,47 @@ func (h SearchHandler) Handle(ctx context.Context, q SearchQuery) (SearchView, e
 	if limit > searchMaxCategoryLimit {
 		limit = searchMaxCategoryLimit
 	}
+	//nolint:gosec // limit clamped at 20 above
+	limit32 := int32(limit)
 
 	view := SearchView{}
 
-	err := h.tx.WithinTx(ctx, pg.TxScopePlatform, func(ctx context.Context, tx pgx.Tx) error {
-		g, gctx := errgroup.WithContext(ctx)
-		txq := h.q.WithTx(tx)
-
-		if q.IncludePersons {
-			g.Go(func() error {
-				subCtx, cancel := context.WithTimeout(gctx, searchPerCategoryTimeout)
-				defer cancel()
-				rows, err := txq.SearchPersonsByText(subCtx, db.SearchPersonsByTextParams{
-					Query: q.Q,
-					Limit: int32(limit), //nolint:gosec // limit capped at 20
-				})
-				if errors.Is(err, context.DeadlineExceeded) {
-					view.HasPartial = true
-					return nil
-				}
-				if err != nil {
-					return fmt.Errorf("search: persons: %w", err)
-				}
-				view.Persons = make([]SearchPersonHit, 0, len(rows))
-				for _, r := range rows {
-					view.Persons = append(view.Persons, SearchPersonHit{
-						ID:        uuidString(r.ID),
-						Email:     r.Email,
-						FirstName: r.FirstName,
-						LastName:  r.LastName,
-						CreatedAt: r.CreatedAt.Time.UTC(),
-					})
-				}
+	g, gctx := errgroup.WithContext(ctx)
+	if q.IncludePersons {
+		g.Go(func() error {
+			subCtx, cancel := context.WithTimeout(gctx, searchPerCategoryTimeout)
+			defer cancel()
+			rows, err := h.index.SearchPersons(subCtx, q.Q, limit32)
+			if errors.Is(err, context.DeadlineExceeded) {
+				view.HasPartial = true
 				return nil
-			})
-		}
+			}
+			if err != nil {
+				return fmt.Errorf("search: persons: %w", err)
+			}
+			view.Persons = rows
+			return nil
+		})
+	}
 
-		if q.IncludeTenants {
-			g.Go(func() error {
-				subCtx, cancel := context.WithTimeout(gctx, searchPerCategoryTimeout)
-				defer cancel()
-				rows, err := txq.SearchTenantsByText(subCtx, db.SearchTenantsByTextParams{
-					Query: q.Q,
-					Limit: int32(limit), //nolint:gosec // limit capped at 20
-				})
-				if errors.Is(err, context.DeadlineExceeded) {
-					view.HasPartial = true
-					return nil
-				}
-				if err != nil {
-					return fmt.Errorf("search: tenants: %w", err)
-				}
-				view.Tenants = make([]SearchTenantHit, 0, len(rows))
-				for _, r := range rows {
-					view.Tenants = append(view.Tenants, SearchTenantHit{
-						ID:          uuidString(r.ID),
-						Slug:        r.Slug,
-						LegalName:   r.LegalName,
-						DisplayName: r.DisplayName,
-						Status:      r.Status,
-						CreatedAt:   r.CreatedAt.Time.UTC(),
-					})
-				}
+	if q.IncludeTenants {
+		g.Go(func() error {
+			subCtx, cancel := context.WithTimeout(gctx, searchPerCategoryTimeout)
+			defer cancel()
+			rows, err := h.index.SearchTenants(subCtx, q.Q, limit32)
+			if errors.Is(err, context.DeadlineExceeded) {
+				view.HasPartial = true
 				return nil
-			})
-		}
+			}
+			if err != nil {
+				return fmt.Errorf("search: tenants: %w", err)
+			}
+			view.Tenants = rows
+			return nil
+		})
+	}
 
-		return g.Wait()
-	})
-	if err != nil {
+	if err := g.Wait(); err != nil {
 		return SearchView{}, err
 	}
 	return view, nil

@@ -9,7 +9,7 @@ import (
 	"github.com/ThreeDotsLabs/watermill/message"
 
 	"github.com/leadkart/leadkart-go/internal/identity/integrationevents"
-	"github.com/leadkart/leadkart-go/internal/platform/messaging"
+	"github.com/leadkart/leadkart-go/internal/common/messaging"
 )
 
 // ReuseDetectedSIEM is the security-incident subscriber for RFC 9700

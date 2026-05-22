@@ -31,5 +31,11 @@ One decision per file, Michael Nygard format (Context / Decision / Consequences 
 | 0040 | Search strategy — `pg_trgm` now, Postgres FTS at Phase 4, defer dedicated infra | Accepted |
 | 0041 | CQRS read models via outbox subscribers | Accepted |
 | 0042 | Cache TTL strategy — per-use-case profiles with jitter | Accepted |
+| 0043 | Frontend topology — SvelteKit BFF (adapter-node) + Go API | Accepted |
+| 0044 | Enumeration safety — 404 on no-access for guessable identifiers | Accepted |
+| 0045 | Scoped JWT impersonation — AWS STS AssumeRole + RFC 8693 `act` claim (design; impl in Wave 4) | Accepted |
+| 0046 | OpenAPI spec-first contract + Scalar `/docs` | Accepted |
+| 0047 | Layer-boundary discipline — `app/` cannot import DB driver / sqlc / concrete adapter | Accepted |
+| 0048 | `internal/platform/` merged into `internal/common/` (TDL strict-canon alignment) | Accepted |
 
-ADRs 0011–0026 + 0032 + 0043+ land as the relevant code lands per the master plan.
+ADRs 0011–0026 + 0032 + 0049+ land as the relevant code lands per the master plan.

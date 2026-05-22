@@ -1,0 +1,1111 @@
+# LeadKart Go — Canonical HTTP API contract per ADR 0046.
+#
+# Source of truth for: TypeScript client generation (openapi-typescript),
+# interactive docs (Scalar @ /docs), Postman/Insomnia import, mock servers
+# (Prism / Mockoon), partner-integration handshakes.
+#
+# Maintenance: every PR touching internal/identity/ports/*.go MUST update
+# this file if the change affects wire shape. Future arch test will enforce.
+#
+# Versioning: info.version follows semver. v1 paths stay stable; breaking
+# changes land as a parallel v2.yaml per separate API-versioning ADR.
+
+openapi: 3.1.0
+
+info:
+  title: LeadKart API
+  version: 0.2.0
+  description: |
+    LeadKart Identity + Platform API. Multi-tenant SaaS for Indian PCD pharma.
+
+    **Auth:** Bearer JWT in `Authorization` header. Tokens obtained via
+    `POST /api/v1/auth/login`. Access tokens TTL ~10 minutes; refresh via
+    `POST /api/v1/auth/refresh` with the refresh token from the login body.
+
+    **Multi-tenant scope:** every authenticated call carries the caller's
+    `tenant_id` claim implicitly. Platform operators (`is_platform=true` JWT)
+    can override scope via the `X-Tenant-Id` header on reads, or open an
+    impersonation session for sustained tenant-scoped work (see
+    `POST /api/v1/platform/impersonation/sessions`).
+
+    **Errors:** RFC 9457 Problem Details shape with LeadKart legacy
+    `error`/`message` fields preserved for backward compat. See
+    [ErrorResponse](#/components/schemas/ErrorResponse).
+
+    **Pagination:** cursor (keyset) per ADR 0038. Lists return
+    `{ items, has_more, next_cursor }`; pass `cursor=<opaque>` to fetch
+    next page. No total counts.
+
+    **Enumeration safety:** guessable-key lookups (`/by-slug/`, `?email=`)
+    return 404 indistinguishably whether the resource doesn't exist OR
+    the caller lacks access. Per ADR 0044.
+  contact:
+    name: LeadKart Engineering
+  license:
+    name: Proprietary
+
+servers:
+  - url: https://api.leadkart.io
+    description: Production
+  - url: http://localhost:8080
+    description: Local dev
+
+tags:
+  - name: auth
+    description: Login, refresh, logout, password + email change flows
+  - name: capabilities
+    description: Caller-self introspection (`/me/*`)
+  - name: sessions
+    description: Refresh-token family management (per-device sign-out)
+  - name: tenants
+    description: Tenant CRUD + lifecycle (same-tenant or platform operator)
+  - name: users
+    description: Tenant membership management
+  - name: roles
+    description: Per-tenant role + permission assignment
+  - name: platform
+    description: Cross-tenant operator surface (Platform-only)
+  - name: search
+    description: Operator omni-search (Cmd+K)
+  - name: audit
+    description: Audit-log read endpoints
+
+security:
+  - BearerAuth: []
+
+paths:
+  # ===== AUTH ============================================================
+  /api/v1/auth/login:
+    post:
+      tags: [auth]
+      summary: Exchange credentials for ⟨access, refresh⟩ tokens
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LoginRequest' }
+      responses:
+        '200':
+          description: Tokens issued
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LoginResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '500': { $ref: '#/components/responses/InternalServerError' }
+
+  /api/v1/auth/refresh:
+    post:
+      tags: [auth]
+      summary: Rotate refresh token + reissue access token
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RefreshRequest' }
+      responses:
+        '200':
+          description: Rotated tokens
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LoginResponse' }
+        '401':
+          description: Refresh rejected (consumed / expired / family revoked)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /api/v1/auth/logout:
+    post:
+      tags: [auth]
+      summary: Revoke a refresh-token family
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LogoutRequest' }
+      responses:
+        '204': { description: Logged out (idempotent) }
+
+  /api/v1/auth/request-password-reset:
+    post:
+      tags: [auth]
+      summary: Request password reset email
+      description: ALWAYS returns 204 regardless of whether the email is registered (Auth0/Okta canon — defeats account enumeration).
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RequestPasswordResetRequest' }
+      responses:
+        '204': { description: Reset request accepted (silent success) }
+
+  /api/v1/auth/reset-password:
+    post:
+      tags: [auth]
+      summary: Confirm password reset using emailed token
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ResetPasswordRequest' }
+      responses:
+        '204': { description: Password reset complete }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+
+  /api/v1/auth/change-password:
+    post:
+      tags: [auth]
+      summary: Change own password (authenticated)
+      description: Current password verified even when authenticated (security.md "Password change").
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ChangePasswordRequest' }
+      responses:
+        '204': { description: Password changed }
+        '401':
+          description: Incorrect current password
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+
+  # ===== CAPABILITIES + ACTIVITY ========================================
+  /api/v1/auth/me/capabilities:
+    get:
+      tags: [capabilities]
+      summary: Resolved permission/role/profile bundle for the calling membership
+      description: |
+        Auth0 `/userinfo` canon. Returns JWT-resident fields (no DB hit) plus
+        cached profile enrichment (email + name + role names). The frontend
+        uses this to drive nav / tier / button-visibility without decoding
+        the JWT.
+      responses:
+        '200':
+          description: Capabilities
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CapabilitiesDto' }
+
+  /api/v1/auth/me/activity:
+    get:
+      tags: [audit]
+      summary: Caller's own audit-event feed (keyset-paginated)
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          description: Activity page
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ListAuditEventsResponse' }
+
+  # ===== SESSIONS =======================================================
+  /api/v1/auth/sessions:
+    get:
+      tags: [sessions]
+      summary: List active sessions for the caller
+      responses:
+        '200':
+          description: Sessions
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ListSessionsResponse' }
+    delete:
+      tags: [sessions]
+      summary: Revoke all sessions (optionally excluding current)
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RevokeAllSessionsRequest' }
+      responses:
+        '200':
+          description: Sessions revoked
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RevokeAllSessionsResponse' }
+
+  /api/v1/auth/sessions/{familyId}:
+    delete:
+      tags: [sessions]
+      summary: Revoke a specific session (refresh-token family)
+      parameters:
+        - name: familyId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '204': { description: Session revoked (idempotent) }
+
+  # ===== TENANTS ========================================================
+  /api/v1/tenants:
+    post:
+      tags: [tenants]
+      summary: Register a new tenant + initial admin user
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RegisterTenantRequest' }
+      responses:
+        '201':
+          description: Tenant registered
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RegisterTenantResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '409':
+          description: Email already has an active membership in another tenant
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /api/v1/tenants/{tenantId}:
+    get:
+      tags: [tenants]
+      summary: Get tenant by UUID
+      parameters: [{ $ref: '#/components/parameters/TenantId' }]
+      responses:
+        '200':
+          description: Tenant
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TenantDto' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/v1/tenants/by-slug/{slug}:
+    get:
+      tags: [tenants]
+      summary: Get tenant by slug (enumeration-safe per ADR 0044)
+      description: |
+        Returns 404 for both "slug doesn't exist" AND "caller lacks
+        access to this tenant" (response bodies byte-identical). Per
+        ADR 0044 enumeration safety; same canon as GitHub
+        `/orgs/{slug}`, Stripe customer lookup, Auth0 user lookup.
+      parameters:
+        - name: slug
+          in: path
+          required: true
+          schema: { type: string, minLength: 2, maxLength: 100, pattern: '^[a-z0-9-]+$' }
+      responses:
+        '200':
+          description: Tenant
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TenantDto' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/v1/tenants/{tenantId}/audit/events:
+    get:
+      tags: [audit]
+      summary: Tenant-scoped audit-event feed (keyset-paginated)
+      parameters:
+        - $ref: '#/components/parameters/TenantId'
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          description: Activity page
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ListAuditEventsResponse' }
+
+  # ===== USERS ==========================================================
+  /api/v1/users:
+    get:
+      tags: [users]
+      summary: List active members of the caller's tenant (cursor-paginated)
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          description: Users page
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ListUsersResponse' }
+    post:
+      tags: [users]
+      summary: Create a user (find-or-create-by-email, per Auth0/Entra ID canon)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateUserRequest' }
+      responses:
+        '201':
+          description: User created (or attached to existing global Person)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CreateUserResponse' }
+
+  /api/v1/users/{userId}:
+    get:
+      tags: [users]
+      summary: Get one user (membership) by ID
+      parameters: [{ $ref: '#/components/parameters/UserId' }]
+      responses:
+        '200':
+          description: User
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UserDto' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/v1/users/{userId}/profile:
+    patch:
+      tags: [users]
+      summary: Update user designation + department + status message
+      parameters: [{ $ref: '#/components/parameters/UserId' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UpdateUserProfileRequest' }
+      responses:
+        '204': { description: Profile updated }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+
+  /api/v1/users/{userId}/deactivate:
+    post:
+      tags: [users]
+      summary: Deactivate a user (reason required)
+      parameters: [{ $ref: '#/components/parameters/UserId' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DeactivateUserRequest' }
+      responses:
+        '204': { description: Deactivated }
+
+  /api/v1/users/{userId}/reactivate:
+    post:
+      tags: [users]
+      summary: Reactivate a deactivated user
+      parameters: [{ $ref: '#/components/parameters/UserId' }]
+      responses:
+        '204': { description: Reactivated }
+
+  /api/v1/users/{userId}/roles:
+    post:
+      tags: [users]
+      summary: Assign a role to a user
+      parameters: [{ $ref: '#/components/parameters/UserId' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AssignUserRoleRequest' }
+      responses:
+        '204': { description: Role assigned }
+
+  # ===== ROLES ==========================================================
+  /api/v1/roles:
+    get:
+      tags: [roles]
+      summary: List roles in the caller's tenant
+      responses:
+        '200':
+          description: Roles
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ListRolesResponse' }
+    post:
+      tags: [roles]
+      summary: Create a custom role
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateRoleRequest' }
+      responses:
+        '201':
+          description: Role created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CreateRoleResponse' }
+
+  /api/v1/roles/{roleId}:
+    get:
+      tags: [roles]
+      summary: Get role by ID
+      parameters: [{ $ref: '#/components/parameters/RoleId' }]
+      responses:
+        '200':
+          description: Role
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RoleDto' }
+    delete:
+      tags: [roles]
+      summary: Soft-delete a role
+      parameters: [{ $ref: '#/components/parameters/RoleId' }]
+      responses:
+        '204': { description: Role deleted }
+
+  # ===== PLATFORM =======================================================
+  /api/v1/platform/tenants:
+    get:
+      tags: [platform]
+      summary: List all tenants (operator dashboard)
+      responses:
+        '200':
+          description: Tenants
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ListAllTenantsResponse' }
+
+  /api/v1/platform/persons/{personId}:
+    get:
+      tags: [platform]
+      summary: Get person by UUID (cross-tenant operator probe)
+      parameters: [{ $ref: '#/components/parameters/PersonId' }]
+      responses:
+        '200':
+          description: Person
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PersonDto' }
+
+  /api/v1/platform/persons:
+    get:
+      tags: [platform]
+      summary: Get person by email (cross-tenant operator probe)
+      parameters:
+        - name: email
+          in: query
+          required: true
+          schema: { type: string, format: email }
+      responses:
+        '200':
+          description: Person
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PersonDto' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/v1/platform/stats:
+    get:
+      tags: [platform]
+      summary: Operator dashboard counts (with optional time-window deltas)
+      parameters:
+        - name: delta_window
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: ['', '24h', '7d', '30d']
+            default: ''
+          description: |
+            Closed-set per ADR 0040 (cache-key-explosion prevention).
+            Empty = no deltas; otherwise emit `deltas` field with "new
+            rows since now() - window" for each counter.
+      responses:
+        '200':
+          description: Stats
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PlatformStatsResponse' }
+
+  /api/v1/platform/impersonation/sessions:
+    post:
+      tags: [platform]
+      summary: Open scoped impersonation session (AWS STS AssumeRole pattern; ADR 0045)
+      description: |
+        Returns a scoped JWT (`aud=leadkart-impersonation`,
+        `is_platform=false`, `is_super_user=false`, `permissions=[tenant.admin]`)
+        pinned to the target tenant. Frontend uses this token for the
+        session lifetime (≤4h). The original operator's regular JWT is
+        unaffected.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateImpersonationSessionRequest' }
+      responses:
+        '201':
+          description: Session opened
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CreateImpersonationSessionResponse' }
+        '404':
+          description: Target tenant not found
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+    get:
+      tags: [platform]
+      summary: List impersonation sessions
+      responses:
+        '200':
+          description: Sessions
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ListImpersonationSessionsResponse' }
+
+  # ===== SEARCH =========================================================
+  /api/v1/search:
+    get:
+      tags: [search]
+      summary: Operator omni-search (parallel pg_trgm fanout)
+      parameters:
+        - name: q
+          in: query
+          required: true
+          schema: { type: string, minLength: 2, maxLength: 100 }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 20, default: 5 }
+        - name: include
+          in: query
+          required: false
+          schema: { type: string, default: 'persons,tenants' }
+          description: Comma-separated category list. Currently `persons`, `tenants`.
+      responses:
+        '200':
+          description: Search results
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SearchResponse' }
+        '400':
+          description: Query too short or invalid include list
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: |
+        JWT access token from POST /api/v1/auth/login.
+        Audience `leadkart-api` for regular tokens or `leadkart-impersonation`
+        for scoped impersonation tokens.
+
+  parameters:
+    Cursor:
+      name: cursor
+      in: query
+      required: false
+      schema: { type: string }
+      description: Opaque base64-encoded keyset cursor. Omit for first page.
+    PageSize:
+      name: page_size
+      in: query
+      required: false
+      schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
+    TenantId:
+      name: tenantId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    UserId:
+      name: userId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    RoleId:
+      name: roleId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    PersonId:
+      name: personId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+
+  responses:
+    BadRequest:
+      description: Malformed request (invalid body, bad param shape)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+    Unauthorized:
+      description: Missing or invalid bearer token
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+    NotFound:
+      description: Resource not found (per ADR 0044, enumeration-safe — may also mean "exists but no access")
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+    Unprocessable:
+      description: Validation failure (RFC 9457 with field-level errors map)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+    InternalServerError:
+      description: Server error
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  schemas:
+    # ===== Errors ======================================================
+    ErrorResponse:
+      type: object
+      description: |
+        RFC 9457 Problem Details + LeadKart legacy fields. Legacy `error`/
+        `message` stay populated for backward compat. Validation failures
+        carry the `errors` map (field name → list of messages).
+      properties:
+        type:   { type: string, description: 'RFC 9457 §3.1.1 — canonical type URI' }
+        title:  { type: string, description: 'RFC 9457 §3.1.2 — human-readable summary' }
+        status: { type: integer, description: 'RFC 9457 §3.1.3 — HTTP status code' }
+        detail: { type: string, description: 'RFC 9457 §3.1.4 — human-readable detail' }
+        error:  { type: string, description: 'machine-parseable code (LeadKart legacy)' }
+        message: { type: string, description: 'human-readable message (LeadKart legacy)' }
+        errors:
+          type: object
+          description: 'Field-level errors (RFC 9457 §3.1 extension). Key = JSON field name; value = list of error strings.'
+          additionalProperties:
+            type: array
+            items: { type: string }
+      required: [error]
+
+    # ===== Auth ========================================================
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email:    { type: string, format: email }
+        password: { type: string, format: password }
+        device_label:
+          type: string
+          description: 'Optional. When empty, derived from User-Agent → RemoteAddr → "Unknown device".'
+
+    LoginResponse:
+      type: object
+      required: [access_token, refresh_token, access_token_expires_at, token_type]
+      properties:
+        access_token:   { type: string }
+        refresh_token:  { type: string }
+        access_token_expires_at: { type: string, format: date-time }
+        token_type:     { type: string, enum: [Bearer] }
+
+    RefreshRequest:
+      type: object
+      required: [refresh_token]
+      properties:
+        refresh_token: { type: string }
+
+    LogoutRequest:
+      type: object
+      required: [refresh_token]
+      properties:
+        refresh_token: { type: string }
+        reason:        { type: string }
+
+    RequestPasswordResetRequest:
+      type: object
+      required: [email]
+      properties:
+        email: { type: string, format: email }
+
+    ResetPasswordRequest:
+      type: object
+      required: [token, new_password]
+      properties:
+        token:        { type: string }
+        new_password: { type: string, format: password, minLength: 12 }
+
+    ChangePasswordRequest:
+      type: object
+      required: [current_password, new_password]
+      properties:
+        current_password: { type: string, format: password }
+        new_password:     { type: string, format: password, minLength: 12 }
+
+    # ===== Capabilities ================================================
+    CapabilitiesDto:
+      type: object
+      required: [person_id, membership_id, tenant_id, tenant_slug, is_platform, is_super_user, permissions, roles]
+      properties:
+        person_id:     { type: string, format: uuid }
+        membership_id: { type: string, format: uuid }
+        tenant_id:     { type: string, format: uuid }
+        tenant_slug:   { type: string }
+        email:         { type: string, format: email }
+        first_name:    { type: string }
+        last_name:     { type: string }
+        is_platform:   { type: boolean }
+        is_super_user: { type: boolean }
+        permissions:
+          type: array
+          items: { type: string }
+        roles:
+          type: array
+          items: { $ref: '#/components/schemas/CapabilityRoleDto' }
+
+    CapabilityRoleDto:
+      type: object
+      required: [id, name, is_super_admin]
+      properties:
+        id:             { type: string, format: uuid }
+        name:           { type: string }
+        is_super_admin: { type: boolean }
+
+    # ===== Sessions ====================================================
+    SessionDto:
+      type: object
+      required: [family_id, tenant_id, device_label, created_at, last_used_at]
+      properties:
+        family_id:    { type: string, format: uuid }
+        tenant_id:    { type: string, format: uuid }
+        device_label: { type: string }
+        created_at:   { type: string, format: date-time }
+        last_used_at: { type: string, format: date-time }
+
+    ListSessionsResponse:
+      type: object
+      required: [sessions]
+      properties:
+        sessions:
+          type: array
+          items: { $ref: '#/components/schemas/SessionDto' }
+
+    RevokeAllSessionsRequest:
+      type: object
+      properties:
+        except_current: { type: boolean }
+        reason:         { type: string }
+
+    RevokeAllSessionsResponse:
+      type: object
+      required: [revoked_count]
+      properties:
+        revoked_count: { type: integer }
+
+    # ===== Tenants =====================================================
+    RegisterTenantRequest:
+      type: object
+      required: [slug, legal_name, display_name, admin_email, admin_password, admin_first_name, admin_last_name]
+      properties:
+        slug:             { type: string, pattern: '^[a-z0-9-]+$', minLength: 2, maxLength: 100 }
+        legal_name:       { type: string, maxLength: 200 }
+        display_name:     { type: string, maxLength: 200 }
+        admin_email:      { type: string, format: email }
+        admin_password:   { type: string, format: password, minLength: 12 }
+        admin_first_name: { type: string }
+        admin_last_name:  { type: string }
+
+    RegisterTenantResponse:
+      type: object
+      required: [tenant_id, person_id, membership_id]
+      properties:
+        tenant_id:     { type: string, format: uuid }
+        person_id:     { type: string, format: uuid }
+        membership_id: { type: string, format: uuid }
+
+    TenantDto:
+      type: object
+      required: [id, slug, legal_name, display_name, status, created_at, admin_address, password_policy]
+      properties:
+        id:           { type: string, format: uuid }
+        slug:         { type: string }
+        legal_name:   { type: string }
+        display_name: { type: string }
+        status:       { type: string, enum: [pending, active, suspended, marked_for_deletion, hard_deleted] }
+        created_at:   { type: string, format: date-time }
+        activated_at: { type: string, format: date-time }
+        suspended_at: { type: string, format: date-time }
+        deletion_scheduled_at: { type: string, format: date-time }
+        deletion_reason: { type: string }
+        gst_number:           { type: string }
+        pan_number:           { type: string }
+        drug_licence_number:  { type: string }
+        admin_phone:          { type: string }
+        admin_address: { $ref: '#/components/schemas/AdminAddressDto' }
+        password_policy: { $ref: '#/components/schemas/PasswordPolicyDto' }
+        locale:      { type: string }
+        time_zone:   { type: string }
+        date_format: { type: string }
+        currency:    { type: string }
+
+    AdminAddressDto:
+      type: object
+      properties:
+        street:    { type: string }
+        city:      { type: string }
+        district:  { type: string }
+        state:     { type: string }
+        state_code: { type: string }
+        pincode:   { type: string }
+
+    PasswordPolicyDto:
+      type: object
+      required: [min_length, require_uppercase, require_lowercase, require_digit, require_symbol, max_failed_attempts, lockout_minutes]
+      properties:
+        min_length:           { type: integer }
+        require_uppercase:    { type: boolean }
+        require_lowercase:    { type: boolean }
+        require_digit:        { type: boolean }
+        require_symbol:       { type: boolean }
+        max_failed_attempts:  { type: integer }
+        lockout_minutes:      { type: integer }
+
+    # ===== Users =======================================================
+    UserDto:
+      type: object
+      required: [membership_id, person_id, tenant_id, email, first_name, last_name, status, role_ids]
+      properties:
+        membership_id:   { type: string, format: uuid }
+        person_id:       { type: string, format: uuid }
+        tenant_id:       { type: string, format: uuid }
+        email:           { type: string, format: email }
+        first_name:      { type: string }
+        last_name:       { type: string }
+        status:          { type: string, enum: [active, inactive] }
+        designation:     { type: string }
+        department:      { type: string }
+        status_message:  { type: string }
+        joined_at:       { type: string, format: date-time }
+        left_at:         { type: string, format: date-time }
+        reports_to:      { type: string, format: uuid }
+        role_ids:
+          type: array
+          items: { type: string, format: uuid }
+
+    ListUsersResponse:
+      type: object
+      required: [users, has_more]
+      properties:
+        users:
+          type: array
+          items: { $ref: '#/components/schemas/UserDto' }
+        has_more:    { type: boolean }
+        next_cursor: { type: string }
+
+    CreateUserRequest:
+      type: object
+      required: [email, password, first_name, last_name]
+      properties:
+        email:      { type: string, format: email }
+        password:   { type: string, format: password, minLength: 12 }
+        first_name: { type: string }
+        last_name:  { type: string }
+
+    CreateUserResponse:
+      type: object
+      required: [person_id, membership_id, person_existed]
+      properties:
+        person_id:       { type: string, format: uuid }
+        membership_id:   { type: string, format: uuid }
+        person_existed:  { type: boolean }
+
+    UpdateUserProfileRequest:
+      type: object
+      properties:
+        designation:    { type: string }
+        department:     { type: string }
+        status_message: { type: string }
+
+    DeactivateUserRequest:
+      type: object
+      required: [reason]
+      properties:
+        reason: { type: string, minLength: 1 }
+
+    AssignUserRoleRequest:
+      type: object
+      required: [role_id]
+      properties:
+        role_id: { type: string, format: uuid }
+
+    # ===== Roles =======================================================
+    RoleDto:
+      type: object
+      required: [id, tenant_id, name, is_system_default, is_super_admin, hierarchy_level, permissions, created_at]
+      properties:
+        id:               { type: string, format: uuid }
+        tenant_id:        { type: string, format: uuid }
+        name:             { type: string }
+        is_system_default: { type: boolean }
+        is_super_admin:   { type: boolean }
+        hierarchy_level:  { type: integer }
+        permissions:
+          type: array
+          items: { type: string }
+        created_at:       { type: string, format: date-time }
+
+    ListRolesResponse:
+      type: object
+      required: [roles]
+      properties:
+        roles:
+          type: array
+          items: { $ref: '#/components/schemas/RoleDto' }
+
+    CreateRoleRequest:
+      type: object
+      required: [name, hierarchy_level]
+      properties:
+        name:             { type: string, minLength: 2, maxLength: 100 }
+        hierarchy_level:  { type: integer, minimum: 0, maximum: 99 }
+
+    CreateRoleResponse:
+      type: object
+      required: [role_id]
+      properties:
+        role_id: { type: string, format: uuid }
+
+    # ===== Platform ====================================================
+    PersonDto:
+      type: object
+      required: [id, email, first_name, last_name, is_active, is_anonymised, is_globally_suspended, created_at]
+      properties:
+        id:                       { type: string, format: uuid }
+        email:                    { type: string, format: email }
+        first_name:               { type: string }
+        last_name:                { type: string }
+        is_active:                { type: boolean }
+        is_anonymised:            { type: boolean }
+        is_globally_suspended:    { type: boolean }
+        global_suspension_reason: { type: string }
+        globally_suspended_at:    { type: string, format: date-time }
+        created_at:               { type: string, format: date-time }
+        anonymised_at:            { type: string, format: date-time }
+
+    ListAllTenantsResponse:
+      type: object
+      required: [tenants]
+      properties:
+        tenants:
+          type: array
+          items: { $ref: '#/components/schemas/TenantDto' }
+
+    PlatformStatsResponse:
+      type: object
+      required: [tenants_total, tenants_active, tenants_suspended, persons_total, memberships_active]
+      properties:
+        tenants_total:      { type: integer }
+        tenants_active:     { type: integer }
+        tenants_suspended:  { type: integer }
+        persons_total:      { type: integer }
+        memberships_active: { type: integer }
+        deltas: { $ref: '#/components/schemas/PlatformStatsDeltas' }
+
+    PlatformStatsDeltas:
+      type: object
+      required: [window, tenants_total, tenants_active, persons_total, memberships_active]
+      properties:
+        window:             { type: string, enum: ['24h', '7d', '30d'] }
+        tenants_total:      { type: integer }
+        tenants_active:     { type: integer }
+        persons_total:      { type: integer }
+        memberships_active: { type: integer }
+
+    CreateImpersonationSessionRequest:
+      type: object
+      required: [target_tenant_id, reason]
+      properties:
+        target_tenant_id: { type: string, format: uuid }
+        reason:           { type: string, minLength: 10 }
+        duration_minutes: { type: integer, minimum: 1, maximum: 240, default: 30 }
+
+    CreateImpersonationSessionResponse:
+      type: object
+      required: [session_id, expires_at_utc, access_token, access_token_expires_at_utc, token_type]
+      properties:
+        session_id:                  { type: string, format: uuid }
+        expires_at_utc:              { type: string, format: date-time }
+        access_token:                { type: string, description: 'Scoped JWT (aud=leadkart-impersonation; is_platform=false). Bound to session lifetime.' }
+        access_token_expires_at_utc: { type: string, format: date-time }
+        token_type:                  { type: string, enum: [Bearer] }
+
+    ImpersonationSessionDto:
+      type: object
+      required: [session_id, operator_id, target_tenant_id, reason, created_at, expires_at]
+      properties:
+        session_id:       { type: string, format: uuid }
+        operator_id:      { type: string, format: uuid }
+        target_tenant_id: { type: string, format: uuid }
+        reason:           { type: string }
+        created_at:       { type: string, format: date-time }
+        expires_at:       { type: string, format: date-time }
+
+    ListImpersonationSessionsResponse:
+      type: object
+      required: [sessions]
+      properties:
+        sessions:
+          type: array
+          items: { $ref: '#/components/schemas/ImpersonationSessionDto' }
+
+    # ===== Search ======================================================
+    SearchResponse:
+      type: object
+      required: [persons, tenants, has_partial]
+      properties:
+        persons:
+          type: array
+          items: { $ref: '#/components/schemas/SearchPersonHit' }
+        tenants:
+          type: array
+          items: { $ref: '#/components/schemas/SearchTenantHit' }
+        has_partial: { type: boolean }
+
+    SearchPersonHit:
+      type: object
+      required: [id, email, first_name, last_name, created_at]
+      properties:
+        id:         { type: string, format: uuid }
+        email:      { type: string, format: email }
+        first_name: { type: string }
+        last_name:  { type: string }
+        created_at: { type: string, format: date-time }
+
+    SearchTenantHit:
+      type: object
+      required: [id, slug, legal_name, display_name, status, created_at]
+      properties:
+        id:           { type: string, format: uuid }
+        slug:         { type: string }
+        legal_name:   { type: string }
+        display_name: { type: string }
+        status:       { type: string }
+        created_at:   { type: string, format: date-time }
+
+    # ===== Audit =======================================================
+    AuditEventDto:
+      type: object
+      required: [id, action, occurred_at, duration_ms, succeeded]
+      properties:
+        id:             { type: string, format: uuid }
+        action:         { type: string }
+        actor_id:       { type: string, format: uuid }
+        tenant_id:      { type: string, format: uuid }
+        correlation_id: { type: string, format: uuid }
+        occurred_at:    { type: string, format: date-time }
+        duration_ms:    { type: integer, format: int64 }
+        succeeded:      { type: boolean }
+        failure_reason: { type: string }
+        payload:        { type: object, description: 'jsonb payload from the original command. Free-form per action.' }
+
+    ListAuditEventsResponse:
+      type: object
+      required: [events, has_more]
+      properties:
+        events:
+          type: array
+          items: { $ref: '#/components/schemas/AuditEventDto' }
+        has_more:    { type: boolean }
+        next_cursor: { type: string }

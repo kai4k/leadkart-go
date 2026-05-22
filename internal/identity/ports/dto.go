@@ -138,7 +138,7 @@ type ChangePasswordRequest struct {
 	NewPassword     string `json:"new_password"`
 }
 
-// ----- Audit-log reads (GET /v1/auth/me/activity, GET /v1/tenants/{id}/activity) ----
+// ----- Audit-log reads (GET /v1/auth/me/activity, GET /v1/tenants/{id}/audit/events) ----
 
 // AuditEventDto is one row of the audit-log read shape per
 // ADR 0027 (outbox doubles as audit). Per-event minimum: action +
@@ -400,10 +400,20 @@ type CreateImpersonationSessionRequest struct {
 	DurationMinutes int    `json:"duration_minutes,omitempty"`
 }
 
-// CreateImpersonationSessionResponse — 201 body.
+// CreateImpersonationSessionResponse — 201 body. Per ADR 0045
+// (Wave 4): includes the scoped access token + its expiry. Operator's
+// frontend uses this token for the session lifetime (no refresh
+// path — AWS STS AssumeRole canon; re-open the session if you need
+// longer than the duration).
+//
+// The token's `aud` is `leadkart-impersonation`; routes that don't
+// accept impersonation tokens reject it server-side.
 type CreateImpersonationSessionResponse struct {
-	SessionID    string    `json:"session_id"`
-	ExpiresAtUTC time.Time `json:"expires_at_utc"`
+	SessionID               string    `json:"session_id"`
+	ExpiresAtUTC            time.Time `json:"expires_at_utc"`
+	AccessToken             string    `json:"access_token"`
+	AccessTokenExpiresAtUTC time.Time `json:"access_token_expires_at_utc"`
+	TokenType               string    `json:"token_type"` // always "Bearer"
 }
 
 // ImpersonationSessionDto is one entry in the GET response.
@@ -645,10 +655,46 @@ type RevokeAllSessionsResponse struct {
 
 // ----- Errors ----------------------------------------------------------------
 
-// ErrorResponse is the shared 4xx/5xx body shape. RFC 9457 problem-detail
-// canon would add `type`/`title`/`detail`; this v0.1 cut keeps it
-// minimal. Upgrade in Phase 6 when the .NET ProblemDetails port lands.
+// ErrorResponse is the shared 4xx/5xx body shape — RFC 9457 Problem
+// Details for HTTP APIs (https://datatracker.ietf.org/doc/html/rfc9457),
+// extended with LeadKart-canonical fields.
+//
+// Backward-compat: the legacy `error` + `message` fields stay populated
+// so existing clients branching on `error` keep working unchanged.
+// New field-level errors arrive via the `errors` map (RFC 9457 §3.1
+// extension fields convention).
+//
+// Per ADR 0044 enumeration safety: empty Message + nil Errors when the
+// caller lacks access. The status code identifies the failure class;
+// the body MUST NOT leak existence information.
+//
+// Wire shape:
+//
+//	{
+//	  "type":    "https://leadkart.api/errors/validation",   // RFC 9457 §3.1.1
+//	  "title":   "Validation failed",                          // §3.1.2
+//	  "status":  422,                                          // §3.1.3
+//	  "detail":  "One or more fields are invalid",             // §3.1.4
+//	  "error":   "validation_failed",                          // LeadKart legacy
+//	  "message": "One or more fields are invalid",             // LeadKart legacy
+//	  "errors": {                                              // RFC 9457 ext
+//	    "email":    ["must be a valid email address"],
+//	    "password": ["must be at least 12 characters", "must contain a digit"]
+//	  }
+//	}
 type ErrorResponse struct {
-	Error   string `json:"error"`              // machine-parseable code
-	Message string `json:"message,omitempty"`  // human-readable
+	// RFC 9457 Problem Details fields.
+	Type   string `json:"type,omitempty"`
+	Title  string `json:"title,omitempty"`
+	Status int    `json:"status,omitempty"`
+	Detail string `json:"detail,omitempty"`
+
+	// LeadKart legacy fields (kept for backward compat).
+	Error   string `json:"error"`             // machine-parseable code
+	Message string `json:"message,omitempty"` // human-readable
+
+	// Field-level errors (RFC 9457 §3.1 extension; key = JSON field
+	// name, value = list of error messages). Populated by validation
+	// failures; nil for non-validation errors.
+	Errors map[string][]string `json:"errors,omitempty"`
 }

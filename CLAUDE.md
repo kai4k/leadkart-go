@@ -47,8 +47,44 @@
   - ADR 0042 — cache TTL strategy. Five profiles (Default / SecurityStamp / Capabilities / SearchResults / Dashboard) with research-grounded TTLs + jitter discipline (±10% on dashboard + search). Microsoft HybridCache canon.
   - `HybridCache` facade wired for `/v1/platform/stats` (DashboardTTL — 1min L1 / 5min L2 + jitter) and `/v1/auth/me/capabilities` profile enrichment (CapabilitiesTTL — 2min L1 / 15min L2; security_stamp keyed for implicit invalidation).
   - `GET /v1/search` omni-search — parallel pg_trgm fanout (persons + tenants) with per-category timeout + `has_partial` flag. Platform-only. Cached via SearchResultsTTL.
-  - `GET /v1/auth/me/activity` + `GET /v1/tenants/{tenantId}/activity` — keyset-paginated audit-log reads against `buildingblocks.audit_log_entry`. Self-read always allowed; tenant-scoped goes through `RequireTenantContext`.
+  - `GET /v1/auth/me/activity` + `GET /v1/tenants/{tenantId}/audit/events` — keyset-paginated audit-log reads against `buildingblocks.audit_log_entry`. Self-read always allowed; tenant-scoped goes through `RequireTenantContext`. Sub-resource path (`/audit/events`) avoids Go 1.22 ServeMux conflict with `/tenants/by-slug/{slug}` per Wave 7 hotfix.
   - EXPLAIN-under-RLS integration test (`keyset_explain_integration_test.go`) — load 200 memberships, assert keyset query uses `idx_memberships_tenant_active_joined` (Index Scan, not Seq Scan). ADR 0038 discipline as a CI gate.
+- Wave 3 — slug/email lookup hardening + RFC 9457 errors + migration gate + scoped-JWT design:
+  - ADR 0044 — Enumeration safety. 404 (not 403) on no-access for guessable identifiers (slugs / emails / handles). GitHub / Stripe / Auth0 / Twilio canon; OWASP API Top 10 §A01:2023 anti-pattern when 403 leaks existence.
+  - `GET /v1/tenants/by-slug/{slug}` with handler-inline authz + enumeration-safe 404 + byte-equality test (`TestE2E_TenantBySlug_ResponseShapesIdentical` proves cross-tenant 404 ≡ missing-slug 404).
+  - `GET /v1/platform/persons?email=` — Platform-only cross-tenant identity probe by email (Stripe / Auth0 canon — query param, not path).
+  - RFC 9457 Problem Details error shape — `ErrorResponse` now carries `type`/`title`/`status`/`detail`/`errors{}` per the spec while keeping legacy `error`/`message` for backward compat. `writeValidationError` helper for field-level validation rejection (422 + `errors: {field: [msgs]}`).
+  - A.8 `writeMutationResult` helper — 200 + DTO when supplied, 204 when nil. Per-handler adoption is incremental + non-breaking.
+  - Migration CI gate — new `task ci:migrations` (local) + GitHub Actions `migrations-check` job (cloud) applies all migrations to ephemeral Postgres on every PR touching `migrations/`. Catches the GIN-on-uuid bug class permanently.
+  - ADR 0045 — Scoped JWT impersonation design (companion to Wave 4 impl). AWS STS AssumeRole pattern + RFC 8693 `act` claim + downgraded scope + `aud: "impersonation"` discrimination + actor-chain audit-log columns.
+- Wave 4 — scoped JWT impersonation IMPLEMENTATION (ADR 0045):
+  - Migration 20260524000001 — `audit_log_entry` gains `act_operator_id` + `act_session_id` + `act_reason` nullable columns + partial indexes for forensic queries.
+  - `jwt.Claims` gains `Act *ActClaim` (RFC 8693 §4.1); `jwt.Issuer.Issue` accepts `Audience` override + `TTL` override + `Act` for the impersonation path; `Verify` accepts multi-audience closed set (`AudienceClaim` + `ImpersonationAudienceClaim`).
+  - `CreateImpersonationSessionHandler` extended — resolves target tenant, mints scoped JWT with `is_platform=false` + `is_super_user=false` (DOWNGRADED), `permissions=[Meta.TenantAdmin]`, `aud="leadkart-impersonation"`, TTL = session lifetime. Returns `access_token` in the 201 response.
+  - `CreateImpersonationSessionResponse` DTO gains `access_token` + `access_token_expires_at_utc` + `token_type`.
+  - Synthetic membership_id derived deterministically from session_id (SHA-256 truncated, v4-shaped). Handlers expecting a real membership row get ErrNotFound; tolerated per ADR 0045.
+  - No refresh-token-for-impersonation in v0.2 — AWS STS canon: re-AssumeRole if you need longer than the session. Reduces Wave 4 scope ~1 day; can layer on if measured pain.
+  - Audit-log enrichment (writing the new act_* columns) deferred to Wave 4.1 — requires propagating impersonation context through outbox → Watermill subscriber boundary. Schema shipped; population NULL until 4.1.
+  - E2E integration tests covering: scoped-token issuance + claim shape verification + downgraded-scope blocks `/v1/platform/*` + sub-impersonation rejected + target-not-found → 404.
+- Wave 7 — `internal/platform/` merged into `internal/common/` (ADR 0048):
+  - TDL strict-canon alignment. TDL Wild Workouts (named Tier 1 reference in CLAUDE.md) uses ONE shared root: `internal/common/`. The previous two-tier split (`common/` pure + `platform/` infra) was a LeadKart-Go invention; the merge brings the layout in line with TDL + Microsoft eShop + Vernon IDDD canon (all use single "BuildingBlocks" root).
+  - 13 sub-packages moved: `audit, breach, cache, config, email, httpmw, idempotency, impersonation, jobs, messaging, obs, openapi, pg` → `internal/common/`. Email merged with the existing `common/email` VO package (`ErrInvalid` → Address VO; new `ErrInvalidMessage` → gateway Message).
+  - `internal/platform/` namespace now AVAILABLE for the Phase 2 Platform bounded context (marketplace + lead credits + verification calls). No more name collision.
+  - Boundary enforcement unchanged — `TestArch_AppDoesNotImportForbidden` (ADR 0047) bans substrate imports by import path, not by folder name; merge is a no-op for the gate.
+- Wave 6 — Layer-boundary discipline + CI gate (ADR 0047):
+  - ADR 0047 — `app/` may NOT import `adapters/db` (sqlc-generated rows), `jackc/pgx/v5` / `pgxpool` / `pgtype` (driver), or `internal/identity/adapters` (concrete repository structs). TDL Wild Workouts canon + Cheney "accept interfaces, return structs" + Khorikov pragmatic clean-architecture + Brandur ctx-tx pattern.
+  - Read-side interfaces — `audit.Reader` (in `internal/common/audit/`), `query.SearchIndex` + `query.PlatformStatsReader` (in `internal/identity/app/query/`). Concrete pg-backed impls live in `adapters/` (`AuditReaderPG`, `SearchIndexPG`, `PlatformStatsReaderPG`).
+  - `pg.UnitOfWork` interface for multi-aggregate same-tx writes. The active `pgx.Tx` is stashed in ctx via `pg.contextWithTx` (unexported) + retrieved by adapter code via `pg.TxFromContext(ctx)`. Handlers (`RegisterTenant`, `CreateUser`) depend ONLY on `pg.UnitOfWork` + domain repository interfaces — no pgx, no concrete adapters.
+  - Adapter `Add(ctx, agg)` methods now check `pg.TxFromContext(ctx)` — if a parent UoW is in flight, join its tx; otherwise open own. Canonical `addOnTx` unexported helper replaces the previous exported `AddInTx`.
+  - `Transactor.WithinTx` renamed to `WithinTxPgx` for the low-level adapter-facing variant; new `WithinTx(ctx, scope, fn func(ctx) error)` on `*Transactor` is the UoW-shaped boundary-clean variant.
+  - `TestArch_AppDoesNotImportForbidden` — arch test in `internal/identity/app/` walks every non-test `.go` file under `app/` and fails CI on any import of the forbidden list. Drift becomes impossible at PR time. `task test:arch` runs it alongside the integration-event arch tests.
+- Wave 5 — OpenAPI 3.1 spec-first contract + Scalar `/docs`:
+  - ADR 0046 — spec-first over code-first (Stripe / GitHub / Anthropic canon). Hand-written `api/openapi.yaml` is the canonical contract; Go handlers conform to it. Scalar UI over Swagger UI / Redoc (Anthropic / Resend / Hono use Scalar).
+  - `api/openapi.yaml` — ~50 operations covering Auth / Capabilities / Sessions / Tenants / Users / Roles / Platform / Search / Audit. Versioned `info.version: 0.2.0`; tags reflect URL groups.
+  - `internal/common/openapi/` package — `//go:embed all_routes.yaml` makes the spec a build-baked binary asset (ADR 0024 distroless static fit; no external file dependency). `SpecHandler()` serves the YAML at `GET /openapi.yaml`; `ScalarHandler()` serves the Scalar UI HTML at `GET /docs` + `GET /docs/`.
+  - Root `GET /` now 302-redirects to `/docs` so bare `localhost:8080` lands engineers + PMs on the interactive docs instead of a JSON-pointing-elsewhere body.
+  - Frontend now runs `openapi-typescript` against `/openapi.yaml` → fully-typed TS clients instead of hand-maintained DTO interfaces (the Wave 5 frontend-pain motivator).
+  - Drift-prevention follow-ups (NOT in Wave 5; explicit tracked work): `task ci:openapi` (spectral lint) + `TestArch_RouteHasSpecOperation` (Go arch test asserting every `mux.Handle` has a matching operation in the spec).
 
 **Active branches:**
 - `main` — production; protected via PR-only merge.

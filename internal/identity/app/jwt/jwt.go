@@ -43,9 +43,17 @@ const ClockSkew = 60 * time.Second
 //
 // Named *Claim (vs Issuer / Audience plain) so they don't clash
 // with the [Issuer] struct type.
+//
+// ImpersonationAudienceClaim distinguishes scoped impersonation
+// tokens (per ADR 0045) from regular API tokens. Both audiences are
+// accepted by [Verify]; the audience is preserved in the parsed
+// claims so route-level middleware can REJECT impersonation tokens
+// at endpoints that shouldn't accept them (e.g. opening a sub-
+// impersonation from inside an impersonation session).
 const (
-	IssuerClaim   = "leadkart-identity"
-	AudienceClaim = "leadkart-api"
+	IssuerClaim                = "leadkart-identity"
+	AudienceClaim              = "leadkart-api"
+	ImpersonationAudienceClaim = "leadkart-impersonation"
 )
 
 // ErrInvalidToken is returned by [Issuer.Verify] when the token is
@@ -65,22 +73,65 @@ type SigningKey struct {
 // Claims is the LeadKart-shaped JWT payload. Marshals into the standard
 // `RegisteredClaims` JSON object (jti=Iss, sub, exp, nbf, iat) plus our
 // custom claims with snake_case names matching the .NET version.
+//
+// Act is the RFC 8693 §4.1 actor claim — non-nil ONLY for scoped
+// impersonation tokens per ADR 0045. When set, it identifies the
+// ORIGINAL operator (the one who started the impersonation session);
+// Subject + TenantID identify the IMPERSONATED context.
 type Claims struct {
 	jwtv5.RegisteredClaims
 
-	TenantID     string `json:"tenant_id"`
-	TenantSlug   string `json:"tenant_slug"`
-	MembershipID string `json:"membership_id"`
-	SecurityStamp string `json:"security_stamp"`
-	IsPlatform   bool   `json:"is_platform"`
-	IsSuperUser  bool   `json:"is_super_user"`
-	Permissions  []string `json:"permission,omitempty"` // multi-valued
+	TenantID      string   `json:"tenant_id"`
+	TenantSlug    string   `json:"tenant_slug"`
+	MembershipID  string   `json:"membership_id"`
+	SecurityStamp string   `json:"security_stamp"`
+	IsPlatform    bool     `json:"is_platform"`
+	IsSuperUser   bool     `json:"is_super_user"`
+	Permissions   []string `json:"permission,omitempty"` // multi-valued
+
+	// Act carries the RFC 8693 actor claim for impersonation tokens.
+	// Nil for regular tokens. Read-only at the verification layer;
+	// only the Issue() path populates it.
+	Act *ActClaim `json:"act,omitempty"`
 }
+
+// ActClaim is the RFC 8693 §4.1 actor claim payload — identifies the
+// original operator + session under which a scoped impersonation
+// token was minted. Audit middleware consumes this to populate the
+// act_operator_id + act_session_id + act_reason columns on
+// audit_log_entry per ADR 0045.
+//
+// The shape mirrors RFC 8693's nested-act recommendation: `sub` is
+// the actor's identifier; LeadKart-canonical extension fields
+// (session_id, reason) carry the operational context.
+type ActClaim struct {
+	Sub       string `json:"sub"`        // RFC 8693 §4.1 — actor's subject
+	SessionID string `json:"session_id"` // impersonation session ID (links to store)
+	Reason    string `json:"reason"`     // denormalised from session — at-rest queryable
+}
+
+// IsImpersonation reports whether these claims came from an
+// impersonation token. Convenience over Claims.Act != nil — route-
+// level middleware uses this to reject impersonation tokens at
+// endpoints that don't accept them (e.g. POST /v1/platform/
+// impersonation/sessions — no sub-impersonation allowed).
+func (c *Claims) IsImpersonation() bool { return c != nil && c.Act != nil }
 
 // IssueArgs are the per-call inputs to [Issuer.Issue]. Each value is
 // pre-resolved by the application service; this package does no DB work.
+//
+// Audience overrides the default [AudienceClaim] — used by the
+// impersonation flow to mint tokens with [ImpersonationAudienceClaim].
+// Empty Audience falls back to AudienceClaim.
+//
+// TTL overrides [AccessTokenTTL] — used by the impersonation flow
+// to bound the scoped token to the session lifetime. Zero TTL falls
+// back to AccessTokenTTL.
+//
+// Act is the RFC 8693 actor claim — populated ONLY for impersonation
+// tokens. Nil for regular tokens.
 type IssueArgs struct {
-	PersonID      string   // sub claim
+	PersonID      string // sub claim
 	TenantID      string
 	TenantSlug    string
 	MembershipID  string
@@ -88,6 +139,11 @@ type IssueArgs struct {
 	IsPlatform    bool
 	IsSuperUser   bool
 	Permissions   []string
+
+	// Optional overrides for the impersonation path (ADR 0045).
+	Audience string        // default AudienceClaim
+	TTL      time.Duration // default AccessTokenTTL
+	Act      *ActClaim     // default nil
 }
 
 // Issuer signs new tokens with the current key and verifies against
@@ -131,15 +187,25 @@ func (i *Issuer) Issue(args IssueArgs) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	// Audience + TTL default to the regular API token shape; the
+	// impersonation flow overrides both via IssueArgs (ADR 0045).
+	aud := args.Audience
+	if aud == "" {
+		aud = AudienceClaim
+	}
+	ttl := args.TTL
+	if ttl <= 0 {
+		ttl = AccessTokenTTL
+	}
 	claims := Claims{
 		RegisteredClaims: jwtv5.RegisteredClaims{
 			Issuer:    IssuerClaim,
-			Audience:  jwtv5.ClaimStrings{AudienceClaim},
+			Audience:  jwtv5.ClaimStrings{aud},
 			Subject:   args.PersonID,
 			ID:        jti,
 			IssuedAt:  jwtv5.NewNumericDate(now),
 			NotBefore: jwtv5.NewNumericDate(now),
-			ExpiresAt: jwtv5.NewNumericDate(now.Add(AccessTokenTTL)),
+			ExpiresAt: jwtv5.NewNumericDate(now.Add(ttl)),
 		},
 		TenantID:      args.TenantID,
 		TenantSlug:    args.TenantSlug,
@@ -148,6 +214,7 @@ func (i *Issuer) Issue(args IssueArgs) (string, error) {
 		IsPlatform:    args.IsPlatform,
 		IsSuperUser:   args.IsSuperUser,
 		Permissions:   args.Permissions,
+		Act:           args.Act,
 	}
 	tok := jwtv5.NewWithClaims(jwtv5.SigningMethodHS256, claims)
 	tok.Header["kid"] = i.current.KeyID
@@ -167,14 +234,21 @@ func (i *Issuer) Issue(args IssueArgs) (string, error) {
 //   - exp + nbf checked with ClockSkew leeway.
 //   - kid header MUST match a known key id (current OR previous).
 //   - iss MUST equal [IssuerClaim] (RFC 7519 §4.1.1 + RFC 8725 §3.10).
-//   - aud MUST contain [AudienceClaim] (RFC 7519 §4.1.3 + RFC 8725 §3.11).
+//   - aud MUST contain [AudienceClaim] OR [ImpersonationAudienceClaim]
+//     (RFC 7519 §4.1.3 + RFC 8725 §3.11). The accepted set is closed —
+//     any other audience fails. Route-level middleware inspects the
+//     parsed Claims.Audience to enforce per-route audience policy
+//     (e.g. /v1/platform/impersonation/sessions rejects impersonation
+//     tokens to prevent sub-impersonation).
 func (i *Issuer) Verify(token string) (*Claims, error) {
 	parser := jwtv5.NewParser(
 		jwtv5.WithValidMethods([]string{"HS256"}),
 		jwtv5.WithLeeway(ClockSkew),
 		jwtv5.WithTimeFunc(i.now),
 		jwtv5.WithIssuer(IssuerClaim),
-		jwtv5.WithAudience(AudienceClaim),
+		// Audience checked post-parse — see closed-set assertion below.
+		// Multi-audience needs manual validation since jwtv5 only
+		// supports a single WithAudience.
 	)
 	claims := &Claims{}
 	_, err := parser.ParseWithClaims(token, claims, func(t *jwtv5.Token) (interface{}, error) {
@@ -199,7 +273,26 @@ func (i *Issuer) Verify(token string) (*Claims, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrInvalidToken, err)
 	}
+	// Closed-set audience enforcement — RFC 8725 §3.11. Reject any
+	// token whose audience isn't in our known set. Per-route policy
+	// (which audience is acceptable AT THIS ENDPOINT) is enforced by
+	// the calling middleware via Claims.Audience inspection.
+	if !audienceAccepted(claims.Audience) {
+		return nil, fmt.Errorf("%w: unexpected audience %v", ErrInvalidToken, claims.Audience)
+	}
 	return claims, nil
+}
+
+// audienceAccepted reports whether a token's aud claim is in the
+// LeadKart-accepted set (regular API tokens + impersonation tokens).
+// Anything else is treated as ErrInvalidToken.
+func audienceAccepted(aud jwtv5.ClaimStrings) bool {
+	for _, a := range aud {
+		if a == AudienceClaim || a == ImpersonationAudienceClaim {
+			return true
+		}
+	}
+	return false
 }
 
 // newJTI returns a 32-char hex-encoded random id — entropy source is

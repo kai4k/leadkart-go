@@ -201,4 +201,9 @@ const (
 	// received an invalid since/until range (since > until or
 	// non-RFC-3339 timestamp). 400 surface.
 	ErrCodeAuditEventsRangeInvalid = "audit_events_range_invalid"
+
+	// ErrCodeValidationFailed — multi-field validation rejection
+	// per RFC 9457 + ADR 0044. 422 surface; response body carries
+	// the field-level errors map. Emitted by writeValidationError.
+	ErrCodeValidationFailed = "validation_failed"
 )

@@ -5,7 +5,7 @@
 
 ## Context
 
-[ADR 0015](0015-caching-ristretto-redis-singleflight.md) locked the cache stack — ristretto (L1 in-process) + redis/go-redis/v9 (L2 distributed) + singleflight coalescing, wrapped behind a typed [`cache.Facade[K,V]`](../../internal/platform/cache/facade.go). It did NOT specify TTL policies — those were left to per-facade decisions with a `DefaultTTL` fallback of `L1 = 1min / L2 = 5min`.
+[ADR 0015](0015-caching-ristretto-redis-singleflight.md) locked the cache stack — ristretto (L1 in-process) + redis/go-redis/v9 (L2 distributed) + singleflight coalescing, wrapped behind a typed [`cache.Facade[K,V]`](../../internal/common/cache/facade.go). It did NOT specify TTL policies — those were left to per-facade decisions with a `DefaultTTL` fallback of `L1 = 1min / L2 = 5min`.
 
 The Wave 1 pagination + capabilities work introduced multiple cache callers (platform stats, /me/capabilities, future search results, future ETag responses) that each have different freshness vs cost trade-offs. Picking TTLs ad-hoc per caller leads to:
 
@@ -32,7 +32,7 @@ Non-goals:
 
 ## Decision
 
-**Five TTL profiles, each pre-named in [`internal/platform/cache/hybrid.go`](../../internal/platform/cache/hybrid.go), chosen per use-case rather than per-caller-ad-hoc.**
+**Five TTL profiles, each pre-named in [`internal/common/cache/hybrid.go`](../../internal/common/cache/hybrid.go), chosen per use-case rather than per-caller-ad-hoc.**
 
 ### The TTL groups
 
