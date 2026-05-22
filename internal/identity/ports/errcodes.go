@@ -171,6 +171,15 @@ const (
 	// 422 surface.
 	ErrCodeRoleInvalid = "role_invalid"
 
+	// ErrCodeRoleHierarchyCycle — SetRoleParent / CreateRole rejected
+	// because the proposed parent_role_id (or any of its ancestors) is
+	// the role itself. 422 surface. ADR 0054 — three-layer cycle gate.
+	ErrCodeRoleHierarchyCycle = "role_hierarchy_cycle"
+
+	// ErrCodeRoleHierarchyCrossTenant — DB-trigger surfaced a parent
+	// pointing at another tenant's role. 422 surface. ADR 0054.
+	ErrCodeRoleHierarchyCrossTenant = "role_hierarchy_cross_tenant"
+
 	// ErrCodePersonNotFound — Person ID has no row globally. 404 surface.
 	ErrCodePersonNotFound = "person_not_found"
 

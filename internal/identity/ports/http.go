@@ -164,6 +164,10 @@ func AddRoutes(mux *http.ServeMux, log *slog.Logger, a app.Application, verifier
 			auth(handleGrantRolePermission(log, a)))
 		mux.Handle("POST /api/v1/roles/{roleId}/permissions/revoke",
 			auth(handleRevokeRolePermission(log, a)))
+		// ADR 0054 — hierarchy sub-resource. Null/empty parent_role_id
+		// in the body clears the parent (role becomes a root).
+		mux.Handle("PATCH /api/v1/roles/{roleId}/parent",
+			auth(handleSetRoleParent(log, a)))
 		mux.Handle("DELETE /api/v1/roles/{roleId}", auth(handleDeleteRole(log, a)))
 
 		// Platform admin — all under /api/v1/platform/... gated on

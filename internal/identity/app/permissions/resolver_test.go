@@ -72,6 +72,30 @@ func (f *fakeRoleRepo) GetByIDs(_ context.Context, ids []role.ID) ([]*role.Role,
 	return out, nil
 }
 
+// GetAncestors walks parent chain upward; excludes the seed; ADR 0054.
+func (f *fakeRoleRepo) GetAncestors(_ context.Context, id role.ID) ([]*role.Role, error) {
+	r, ok := f.roles[id]
+	if !ok {
+		return nil, nil
+	}
+	var out []*role.Role
+	seen := map[role.ID]struct{}{id: {}}
+	cur := r.ParentRoleID()
+	for !cur.IsZero() {
+		if _, dup := seen[cur]; dup {
+			break
+		}
+		nxt, ok := f.roles[cur]
+		if !ok {
+			break
+		}
+		seen[cur] = struct{}{}
+		out = append(out, nxt)
+		cur = nxt.ParentRoleID()
+	}
+	return out, nil
+}
+
 func (f *fakeRoleRepo) Add(context.Context, *role.Role) error {
 	return errors.New("fake: Add unused")
 }
@@ -375,5 +399,39 @@ func TestResolveAuth_RejectsNil(t *testing.T) {
 	_, err := res.ResolveAuth(t.Context(), nil)
 	if err == nil {
 		t.Fatal("ResolveAuth(nil) expected error")
+	}
+}
+
+// ----- Hierarchy resolution (ADR 0054 Option A) ------------------------------
+
+// ADR 0054 Option A: hierarchy is ORGANIZATIONAL only (no permission
+// inheritance). Permission resolution remains flat-per-role; the
+// parent_role_id chain is consumed by approval workflows (ADR 0055),
+// NOT by the resolver. The inheritance-semantic tests were removed
+// with the resolver's transitive walk.
+func TestResolve_NoParent_FallsBackToFlatBehavior(t *testing.T) {
+	// Regression check: roles with no parent_role_id MUST behave
+	// identically to the pre-ADR-0054 flat union semantics.
+	t.Parallel()
+	tid := freshTenantID(t)
+
+	view := permission.FromConstant(permission.IdentityPermissions.Roles.View)
+	flat := newRoleWith(t, tid, "Viewer", view) // no parent
+
+	m := newMembership(t, tid)
+	if err := m.AssignRole(flat.ID()); err != nil {
+		t.Fatalf("AssignRole: %v", err)
+	}
+
+	mems := &fakeMembershipRepo{memberships: map[membership.ID]*membership.Membership{m.ID(): m}}
+	roles := &fakeRoleRepo{roles: map[role.ID]*role.Role{flat.ID(): flat}}
+	res := permissions.NewResolver(mems, roles)
+
+	got, err := res.Resolve(t.Context(), m.ID())
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if !slices.Equal(names(got), []string{permission.IdentityPermissions.Roles.View}) {
+		t.Fatalf("Resolve flat: got %v want [Roles.View]", names(got))
 	}
 }

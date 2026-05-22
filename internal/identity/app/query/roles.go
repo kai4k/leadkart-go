@@ -11,6 +11,8 @@ import (
 )
 
 // RoleView is the wire-shape of a [role.Role] for read endpoints.
+//
+// ParentRoleID (ADR 0054) — empty when the role is a root.
 type RoleView struct {
 	ID              string
 	TenantID        string
@@ -20,6 +22,7 @@ type RoleView struct {
 	HierarchyLevel  int
 	Permissions     []string
 	CreatedAt       time.Time
+	ParentRoleID    string
 }
 
 // ----- GetRoleQuery --------------------------------------------------------
@@ -98,6 +101,10 @@ func projectRole(r *role.Role) RoleView {
 	for i, p := range perms {
 		names[i] = p.Name()
 	}
+	parentID := ""
+	if !r.ParentRoleID().IsZero() {
+		parentID = r.ParentRoleID().String()
+	}
 	return RoleView{
 		ID:              r.ID().String(),
 		TenantID:        r.TenantID().String(),
@@ -107,5 +114,6 @@ func projectRole(r *role.Role) RoleView {
 		HierarchyLevel:  r.HierarchyLevel(),
 		Permissions:     names,
 		CreatedAt:       r.CreatedAt().UTC(),
+		ParentRoleID:    parentID,
 	}
 }

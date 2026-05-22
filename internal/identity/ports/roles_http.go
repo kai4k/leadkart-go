@@ -78,15 +78,33 @@ func handleCreateRole(log *slog.Logger, a app.Application) http.Handler {
 			writeError(w, http.StatusBadRequest, ErrCodeInvalidBody, "request body is not valid JSON")
 			return
 		}
+		var parent role.ID
+		if req.ParentRoleID != "" {
+			if _, perr := uuid.Parse(req.ParentRoleID); perr != nil {
+				writeError(w, http.StatusBadRequest, ErrCodeInvalidRoleID,
+					"parent_role_id must be a UUID")
+				return
+			}
+			parent = role.ID(req.ParentRoleID)
+		}
 		out, err := a.Commands.CreateRole.Handle(r.Context(), command.CreateRoleCommand{
 			TenantID:       tenant.ID(tid),
 			Name:           req.Name,
 			HierarchyLevel: req.HierarchyLevel,
+			ParentRoleID:   parent,
 		})
 		switch {
 		case errors.Is(err, command.ErrRoleNameTaken):
 			writeError(w, http.StatusConflict, ErrCodeRoleNameTaken,
 				"a role with this name already exists")
+			return
+		case errors.Is(err, role.ErrHierarchyCycle):
+			writeError(w, http.StatusUnprocessableEntity, ErrCodeRoleHierarchyCycle,
+				"parent_role_id creates a cycle in the role hierarchy")
+			return
+		case errors.Is(err, role.ErrHierarchyCrossTenant):
+			writeError(w, http.StatusUnprocessableEntity, ErrCodeRoleHierarchyCrossTenant,
+				"parent_role_id belongs to a different tenant")
 			return
 		case errors.Is(err, role.ErrInvalid):
 			writeError(w, http.StatusUnprocessableEntity, ErrCodeRoleInvalid, err.Error())
@@ -97,6 +115,36 @@ func handleCreateRole(log *slog.Logger, a app.Application) http.Handler {
 			return
 		}
 		writeJSON(w, http.StatusCreated, CreateRoleResponse{RoleID: out.RoleID.String()})
+	})
+}
+
+// ----- SetRoleParent (ADR 0054) ---------------------------------------------
+
+func handleSetRoleParent(log *slog.Logger, a app.Application) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		id, ok := parseRoleIDPath(w, r)
+		if !ok {
+			return
+		}
+		var req SetRoleParentRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, ErrCodeInvalidBody, "request body is not valid JSON")
+			return
+		}
+		var newParent role.ID
+		if req.ParentRoleID != nil && *req.ParentRoleID != "" {
+			if _, perr := uuid.Parse(*req.ParentRoleID); perr != nil {
+				writeError(w, http.StatusBadRequest, ErrCodeInvalidRoleID,
+					"parent_role_id must be a UUID or null")
+				return
+			}
+			newParent = role.ID(*req.ParentRoleID)
+		}
+		err := a.Commands.SetRoleParent.Handle(r.Context(), command.SetRoleParentCommand{
+			RoleID:      id,
+			NewParentID: newParent,
+		})
+		writeRoleMutationResult(w, log, r, err)
 	})
 }
 
@@ -249,6 +297,12 @@ func writeRoleMutationResult(w http.ResponseWriter, log *slog.Logger, r *http.Re
 		errors.Is(err, command.ErrRoleNameTaken):
 		writeError(w, http.StatusConflict, ErrCodeRoleNameTaken,
 			"a role with this name already exists")
+	case errors.Is(err, role.ErrHierarchyCycle):
+		writeError(w, http.StatusUnprocessableEntity, ErrCodeRoleHierarchyCycle,
+			"parent_role_id creates a cycle in the role hierarchy")
+	case errors.Is(err, role.ErrHierarchyCrossTenant):
+		writeError(w, http.StatusUnprocessableEntity, ErrCodeRoleHierarchyCrossTenant,
+			"parent_role_id belongs to a different tenant")
 	case errors.Is(err, role.ErrInvalid):
 		writeError(w, http.StatusUnprocessableEntity, ErrCodeRoleInvalid, err.Error())
 	default:
@@ -267,5 +321,6 @@ func projectRoleViewToDto(v query.RoleView) RoleDto {
 		HierarchyLevel:  v.HierarchyLevel,
 		Permissions:     v.Permissions,
 		CreatedAt:       v.CreatedAt,
+		ParentRoleID:    v.ParentRoleID,
 	}
 }

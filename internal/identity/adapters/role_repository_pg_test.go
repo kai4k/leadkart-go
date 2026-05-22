@@ -389,6 +389,127 @@ func TestRoleRepository_UpdateByID_Rollback_WhenUpdateFnErrors(t *testing.T) {
 	}
 }
 
+// ----- ADR 0054 hierarchy --------------------------------------------------
+
+// TestRoleRepository_Hierarchy_TriggerRejectsCycle proves the DB-level
+// cycle gate fires when a parent_role_id link would close a loop:
+// create A → B (B parents to A), then attempt A → B (A parents to B) =
+// cycle. ADR 0054 — defense-in-depth strict gate even when the domain
+// guard is bypassed.
+func TestRoleRepository_Hierarchy_TriggerRejectsCycle(t *testing.T) {
+	pool := repoFixture(t)
+	tenants := adapters.NewTenantRepository(pool, pg.NewTransactor(pool))
+	roles := adapters.NewRoleRepository(pool, pg.NewTransactor(pool))
+
+	tn := seedTenant(t, tenants)
+	ctx := tenancy.WithID(t.Context(), tenancy.ID(tn.ID().String()))
+
+	a := newRole(t, tn.ID(), "A")
+	b := newRole(t, tn.ID(), "B")
+	if err := roles.Add(ctx, a); err != nil {
+		t.Fatalf("Add A: %v", err)
+	}
+	if err := roles.Add(ctx, b); err != nil {
+		t.Fatalf("Add B: %v", err)
+	}
+
+	// B parents to A (legal).
+	if err := roles.UpdateByID(ctx, b.ID(), func(loaded *role.Role) (bool, error) {
+		return true, loaded.ChangeParent(a.ID(), func(role.ID) ([]role.ID, error) { return nil, nil })
+	}); err != nil {
+		t.Fatalf("B → A: %v", err)
+	}
+
+	// A parents to B would close the loop A → B → A. The domain guard
+	// catches it first via ancestor lookup, but to prove the DB trigger
+	// is the strict gate we drive ChangeParent with an EMPTY ancestor
+	// lookup — that bypasses the domain check, leaving only the trigger.
+	err := roles.UpdateByID(ctx, a.ID(), func(loaded *role.Role) (bool, error) {
+		return true, loaded.ChangeParent(b.ID(), func(role.ID) ([]role.ID, error) { return nil, nil })
+	})
+	if !errors.Is(err, role.ErrHierarchyCycle) {
+		t.Fatalf("expected ErrHierarchyCycle from DB trigger, got %v", err)
+	}
+}
+
+// TestRoleRepository_Hierarchy_TriggerRejectsCrossTenant proves the
+// DB-level cross-tenant gate fires when parent_role_id references a
+// role in a different tenant. ADR 0054.
+func TestRoleRepository_Hierarchy_TriggerRejectsCrossTenant(t *testing.T) {
+	pool := repoFixture(t)
+	tenants := adapters.NewTenantRepository(pool, pg.NewTransactor(pool))
+	roles := adapters.NewRoleRepository(pool, pg.NewTransactor(pool))
+
+	tnA := seedTenant(t, tenants)
+	tnB := seedTenant(t, tenants)
+	ctxA := tenancy.WithID(t.Context(), tenancy.ID(tnA.ID().String()))
+	ctxB := tenancy.WithID(t.Context(), tenancy.ID(tnB.ID().String()))
+
+	rA := newRole(t, tnA.ID(), "A")
+	rB := newRole(t, tnB.ID(), "B")
+	if err := roles.Add(ctxA, rA); err != nil {
+		t.Fatalf("Add A: %v", err)
+	}
+	if err := roles.Add(ctxB, rB); err != nil {
+		t.Fatalf("Add B: %v", err)
+	}
+
+	// rB attempts to parent to rA — cross-tenant. The domain guard
+	// doesn't see rA under tenant B's RLS scope, so ancestor lookup
+	// returns nothing — the cycle check passes, but the trigger
+	// rejects on tenant mismatch. (Platform-scoped writer would hit
+	// the same path.)
+	err := roles.UpdateByID(ctxB, rB.ID(), func(loaded *role.Role) (bool, error) {
+		return true, loaded.ChangeParent(rA.ID(), func(role.ID) ([]role.ID, error) { return nil, nil })
+	})
+	if !errors.Is(err, role.ErrHierarchyCrossTenant) {
+		t.Fatalf("expected ErrHierarchyCrossTenant from DB trigger, got %v", err)
+	}
+}
+
+// TestRoleRepository_GetAncestors_WalksUpward proves the recursive CTE
+// returns the full ancestor chain in depth order.
+func TestRoleRepository_GetAncestors_WalksUpward(t *testing.T) {
+	pool := repoFixture(t)
+	tenants := adapters.NewTenantRepository(pool, pg.NewTransactor(pool))
+	roles := adapters.NewRoleRepository(pool, pg.NewTransactor(pool))
+
+	tn := seedTenant(t, tenants)
+	ctx := tenancy.WithID(t.Context(), tenancy.ID(tn.ID().String()))
+
+	gp := newRole(t, tn.ID(), "GP")
+	p := newRole(t, tn.ID(), "P")
+	c := newRole(t, tn.ID(), "C")
+	for _, r := range []*role.Role{gp, p, c} {
+		if err := roles.Add(ctx, r); err != nil {
+			t.Fatalf("Add %s: %v", r.Name(), err)
+		}
+	}
+	// Link p → gp, c → p.
+	link := func(child *role.Role, parent role.ID) {
+		if err := roles.UpdateByID(ctx, child.ID(), func(loaded *role.Role) (bool, error) {
+			return true, loaded.ChangeParent(parent, func(role.ID) ([]role.ID, error) { return nil, nil })
+		}); err != nil {
+			t.Fatalf("link %s: %v", child.Name(), err)
+		}
+	}
+	link(p, gp.ID())
+	link(c, p.ID())
+
+	ancs, err := roles.GetAncestors(ctx, c.ID())
+	if err != nil {
+		t.Fatalf("GetAncestors: %v", err)
+	}
+	if len(ancs) != 2 {
+		t.Fatalf("ancestors: got %d want 2", len(ancs))
+	}
+	// First entry = parent (P), second = grandparent (GP).
+	if ancs[0].ID() != p.ID() || ancs[1].ID() != gp.ID() {
+		t.Fatalf("ancestor order: got [%s, %s] want [%s, %s]",
+			ancs[0].Name(), ancs[1].Name(), p.Name(), gp.Name())
+	}
+}
+
 func TestRoleRepository_UpdateByID_RLS_RefusesCrossTenantUpdate(t *testing.T) {
 	pool := repoFixture(t)
 	tenants := adapters.NewTenantRepository(pool, pg.NewTransactor(pool))

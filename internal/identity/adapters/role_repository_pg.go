@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -152,6 +153,42 @@ func (r *RoleRepository) GetByIDs(ctx context.Context, ids []role.ID) ([]*role.R
 	return out, nil
 }
 
+// GetAncestors satisfies [role.Repository] — walks parent_role_id chain
+// UPWARD from `id` via recursive CTE. Returns the ancestors in
+// depth-order (parent → grandparent → … root); empty when role has no
+// parent. Soft-deleted ancestors are STILL included per ADR 0054.
+//
+// Used by [Role.ChangeParent]'s cycle-detection closure + by
+// SetRoleParentHandler's pre-validation pass.
+func (r *RoleRepository) GetAncestors(ctx context.Context, id role.ID) ([]*role.Role, error) {
+	rid, err := uuid.Parse(id.String())
+	if err != nil {
+		return nil, fmt.Errorf("role repo: parse id %q: %w", id, err)
+	}
+	var out []*role.Role
+	err = r.tx.WithinTxPgx(ctx, pg.TxScopeTenant, func(ctx context.Context, tx pgx.Tx) error {
+		q := r.q.WithTx(tx)
+		rows, err := q.GetRoleAncestors(ctx, pgUUID(rid))
+		if err != nil {
+			return fmt.Errorf("role repo: get ancestors: %w", err)
+		}
+		out = make([]*role.Role, 0, len(rows))
+		for _, row := range rows {
+			got, perr := rowToRole(row)
+			if perr != nil {
+				return perr
+			}
+			out = append(out, got)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+
 // ListByTenant satisfies [role.Repository] — full live catalog for the
 // supplied tenant, ordered hierarchy_level then name. RLS-scoped.
 func (r *RoleRepository) ListByTenant(
@@ -255,6 +292,10 @@ func insertRoleRow(ctx context.Context, q *db.Queries, ro *role.Role) error {
 	if err != nil {
 		return err
 	}
+	parentPg, err := parseOptionalRoleID(ro.ParentRoleID())
+	if err != nil {
+		return err
+	}
 	err = q.InsertRole(ctx, db.InsertRoleParams{
 		ID:              pgUUID(rid),
 		TenantID:        pgUUID(tid),
@@ -267,10 +308,14 @@ func insertRoleRow(ctx context.Context, q *db.Queries, ro *role.Role) error {
 		HierarchyLevel: int32(ro.HierarchyLevel()), //nolint:gosec // G115: bounded [0,99] by aggregate
 		Permissions:    permsJSON,
 		CreatedAt:      pgRequiredTimestamp(ro.CreatedAt()),
+		ParentRoleID:   parentPg,
 	})
 	if err != nil {
 		if isRoleNameUniqueViolation(err) {
 			return role.ErrNameTaken
+		}
+		if hErr := translateRoleHierarchyError(err); hErr != nil {
+			return hErr
 		}
 		return fmt.Errorf("role repo: insert: %w", err)
 	}
@@ -306,17 +351,25 @@ func persistRoleState(ctx context.Context, q *db.Queries, ro *role.Role) error {
 	if err != nil {
 		return err
 	}
+	parentPg, err := parseOptionalRoleID(ro.ParentRoleID())
+	if err != nil {
+		return err
+	}
 	err = q.UpdateRole(ctx, db.UpdateRoleParams{
 		ID:   pgUUID(rid),
 		Name: ro.Name(),
 		// Bounded [0,99] by role aggregate invariants per insertRoleRow.
 		HierarchyLevel: int32(ro.HierarchyLevel()), //nolint:gosec // G115: bounded [0,99] by aggregate
 		Permissions:    permsJSON,
+		ParentRoleID:   parentPg,
 	})
 	if err != nil {
 		if isRoleNameUniqueViolation(err) {
 			// Rename collided with another live role's name in the same tenant.
 			return role.ErrNameTaken
+		}
+		if hErr := translateRoleHierarchyError(err); hErr != nil {
+			return hErr
 		}
 		return fmt.Errorf("role repo: update: %w", err)
 	}
@@ -359,6 +412,10 @@ func rowToRole(row db.IdentityRole) (*role.Role, error) {
 	if row.DeletedBy != nil {
 		deletedBy = *row.DeletedBy
 	}
+	parentID := role.ID("")
+	if row.ParentRoleID.Valid {
+		parentID = role.ID(uuidFromPg(row.ParentRoleID).String())
+	}
 	return role.UnmarshalFromDB(role.Snapshot{
 		ID:              id,
 		TenantID:        tid,
@@ -371,6 +428,7 @@ func rowToRole(row db.IdentityRole) (*role.Role, error) {
 		IsDeleted:       row.IsDeleted,
 		DeletedAt:       timeFromPg(row.DeletedAt),
 		DeletedBy:       deletedBy,
+		ParentRoleID:    parentID,
 	}), nil
 }
 
@@ -445,4 +503,51 @@ func isRoleNameUniqueViolation(err error) bool {
 		return false
 	}
 	return pgErr.ConstraintName == constraintRoleTenantName
+}
+
+// parseOptionalRoleID converts a (possibly zero) role.ID into the
+// pgtype.UUID nullable form used by the InsertRole / UpdateRole params.
+// Zero ID = NULL parent (root). ADR 0054.
+func parseOptionalRoleID(id role.ID) (pgtype.UUID, error) {
+	if id.IsZero() {
+		return pgtype.UUID{}, nil
+	}
+	parsed, err := uuid.Parse(id.String())
+	if err != nil {
+		return pgtype.UUID{}, fmt.Errorf("role repo: parse parent id %q: %w", id, err)
+	}
+	return pgUUIDOpt(parsed), nil
+}
+
+// hierarchyErrorSubstrings are the marker phrases raised by the
+// identity.role_check_hierarchy() trigger (migration 20260523000002).
+// Matching on the message text is the canonical way pgx surfaces
+// RAISE-EXCEPTION errors — they carry SQLSTATE check_violation but no
+// constraint name, so substring is the discriminator.
+const (
+	hierarchyErrorCycle       = "role hierarchy: cycle detected"
+	hierarchyErrorCrossTenant = "role hierarchy: parent role belongs to a different tenant"
+)
+
+// translateRoleHierarchyError maps the trigger's RAISE EXCEPTION to a
+// typed domain sentinel. Returns nil when err is not a hierarchy
+// trigger violation; the caller falls through to its default wrap.
+//
+// ADR 0054 — defense-in-depth: the domain ChangeParent already detects
+// the same cycle in-memory, but a platform-scoped writer skipping the
+// domain path (admin tooling, future bulk reseed) still gets the
+// strict gate.
+func translateRoleHierarchyError(err error) error {
+	pgErr, ok := errors.AsType[*pgconn.PgError](err)
+	if !ok {
+		return nil
+	}
+	msg := pgErr.Message
+	switch {
+	case strings.Contains(msg, hierarchyErrorCycle):
+		return role.ErrHierarchyCycle
+	case strings.Contains(msg, hierarchyErrorCrossTenant):
+		return role.ErrHierarchyCrossTenant
+	}
+	return nil
 }

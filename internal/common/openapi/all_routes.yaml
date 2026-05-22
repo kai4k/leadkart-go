@@ -772,6 +772,33 @@ paths:
       responses:
         '204': { description: Role deleted }
 
+  /api/v1/roles/{roleId}/parent:
+    patch:
+      tags: [roles]
+      summary: Set or clear the role's parent (single-parent hierarchy)
+      description: |
+        ADR 0054 — single-parent role hierarchy. The role's effective
+        permission set is its own grants UNION every ancestor's grants
+        walked transitively via `parent_role_id`.
+
+        Pass `{"parent_role_id": null}` (or omit / empty string) to
+        clear the parent (role becomes a root). Pass a UUID referencing
+        a role in the SAME tenant to set / re-point the parent.
+
+        Cycle prevention runs at three layers (domain pre-check + DB
+        trigger + repository pre-validation); all three surface as
+        422 `role_hierarchy_cycle` or `role_hierarchy_cross_tenant`.
+      parameters: [{ $ref: '#/components/parameters/RoleId' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SetRoleParentRequest' }
+      responses:
+        '204': { description: Parent set / cleared }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+
   /api/v1/roles/{roleId}/permissions:
     put:
       tags: [roles]
@@ -1491,6 +1518,14 @@ components:
           type: array
           items: { type: string }
         created_at:       { type: string, format: date-time }
+        parent_role_id:
+          type: string
+          format: uuid
+          description: |
+            ADR 0054 — single-parent hierarchy. Omitted when the role is
+            a root (no inheritance). When present, the role's effective
+            permission set is its own grants UNION every ancestor's
+            grants walked transitively.
 
     ListRolesResponse:
       type: object
@@ -1506,6 +1541,13 @@ components:
       properties:
         name:             { type: string, minLength: 2, maxLength: 100 }
         hierarchy_level:  { type: integer, minimum: 0, maximum: 99 }
+        parent_role_id:
+          type: string
+          format: uuid
+          description: |
+            ADR 0054 — optional parent for the new role. Omit / empty
+            = root (no inheritance). Cross-tenant + cycle prevention
+            runs at the DB-trigger layer.
 
     CreateRoleResponse:
       type: object
@@ -1536,6 +1578,20 @@ components:
       required: [permission]
       properties:
         permission: { type: string }
+
+    SetRoleParentRequest:
+      type: object
+      description: |
+        ADR 0054 — PATCH body for `/api/v1/roles/{roleId}/parent`.
+        Pass `null` (or empty string) to clear the parent (role
+        becomes a root); pass a UUID referencing a role in the same
+        tenant to set / re-point the parent.
+      required: [parent_role_id]
+      properties:
+        parent_role_id:
+          type: string
+          format: uuid
+          nullable: true
 
     # ===== Platform ====================================================
     PersonDto:

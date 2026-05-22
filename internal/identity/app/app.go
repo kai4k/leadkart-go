@@ -70,6 +70,7 @@ type Commands struct {
 	ReplaceRolePermissions  command.ReplaceRolePermissionsHandler
 	GrantRolePermission     command.GrantRolePermissionHandler
 	RevokeRolePermission    command.RevokeRolePermissionHandler
+	SetRoleParent           command.SetRoleParentHandler // ADR 0054
 
 	// Platform — cross-tenant Person + tenant ops.
 	GlobalSuspendPerson         command.GlobalSuspendPersonHandler

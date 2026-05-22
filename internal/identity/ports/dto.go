@@ -485,6 +485,10 @@ type PlatformStatsDeltas struct {
 // ----- Role management -------------------------------------------------------
 
 // RoleDto is the wire-shape of a [role.Role] for read endpoints.
+//
+// ParentRoleID (ADR 0054) — empty when the role is a root. The
+// frontend uses this to render the hierarchy tree + permission-
+// inheritance preview.
 type RoleDto struct {
 	ID              string    `json:"id"`
 	TenantID        string    `json:"tenant_id"`
@@ -494,6 +498,7 @@ type RoleDto struct {
 	HierarchyLevel  int       `json:"hierarchy_level"`
 	Permissions     []string  `json:"permissions"`
 	CreatedAt       time.Time `json:"created_at"`
+	ParentRoleID    string    `json:"parent_role_id,omitempty"`
 }
 
 // ListRolesResponse — GET /api/v1/roles.
@@ -506,9 +511,14 @@ type ListRolesResponse struct {
 // HierarchyLevel must be in role.HierarchyLevelMin..HierarchyLevelMax.
 // IsSuperAdmin is intentionally absent — see CreateRoleCommand
 // godoc for the seed-only invariant.
+//
+// ParentRoleID (ADR 0054) — optional. Omit / empty / null = root role.
+// Must reference a role in the same tenant; cross-tenant + cycle
+// prevention runs at the DB-trigger layer.
 type CreateRoleRequest struct {
 	Name           string `json:"name"`
 	HierarchyLevel int    `json:"hierarchy_level"`
+	ParentRoleID   string `json:"parent_role_id,omitempty"`
 }
 
 // CreateRoleResponse — POST /api/v1/roles 201 body.
@@ -534,6 +544,15 @@ type ReplaceRolePermissionsRequest struct {
 // RolePermissionRequest — POST /api/v1/roles/{roleId}/permissions/{grant,revoke}.
 type RolePermissionRequest struct {
 	Permission string `json:"permission"`
+}
+
+// SetRoleParentRequest — PATCH /api/v1/roles/{roleId}/parent.
+//
+// ADR 0054 — pointer-string so JSON `null` clears the parent (role
+// becomes a root). Empty string treated identically. Non-empty must
+// be a valid UUID referencing a role in the same tenant.
+type SetRoleParentRequest struct {
+	ParentRoleID *string `json:"parent_role_id"`
 }
 
 // ----- Tenant management -----------------------------------------------------

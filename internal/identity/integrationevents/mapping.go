@@ -429,6 +429,24 @@ func FromDomainEvent(d any) (Event, error) {
 			DeletedBy:     e.DeletedBy,
 			OccurredAtUTC: e.At.UTC(),
 		}, nil
+
+	case role.ParentChangedEvent:
+		// Old/New may be zero — emit zero UUID accordingly; mustParseUUID
+		// requires a valid string so we branch on IsZero.
+		var oldP, newP uuid.UUID
+		if !e.OldParentID.IsZero() {
+			oldP = mustParseUUID(e.OldParentID.String())
+		}
+		if !e.NewParentID.IsZero() {
+			newP = mustParseUUID(e.NewParentID.String())
+		}
+		return RoleParentChangedV1{
+			RoleID:        mustParseUUID(e.RoleID.String()),
+			TenantIDClaim: mustParseUUID(e.TenantID.String()),
+			OldParentID:   oldP,
+			NewParentID:   newP,
+			OccurredAtUTC: e.At.UTC(),
+		}, nil
 	}
 
 	return nil, fmt.Errorf("integrationevents: %w: %T", ErrUnknownDomainEvent, d)

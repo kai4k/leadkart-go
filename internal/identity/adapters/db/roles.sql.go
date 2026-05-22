@@ -11,10 +11,71 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const getRoleAncestors = `-- name: GetRoleAncestors :many
+WITH RECURSIVE ancestor_chain AS (
+    SELECT seed.id            AS rid,
+           seed.parent_role_id AS pid,
+           0                  AS depth
+    FROM   identity.roles seed
+    WHERE  seed.id = $1
+    UNION ALL
+    SELECT step.id, step.parent_role_id, ac.depth + 1
+    FROM   identity.roles step
+    INNER JOIN ancestor_chain ac ON step.id = ac.pid
+    WHERE  ac.depth < 32
+)
+SELECT roles.id, roles.tenant_id, roles.name,
+       roles.is_system_default, roles.is_super_admin,
+       roles.hierarchy_level, roles.permissions, roles.created_at,
+       roles.is_deleted, roles.deleted_at, roles.deleted_by,
+       roles.parent_role_id
+FROM   identity.roles roles
+INNER JOIN ancestor_chain ON ancestor_chain.rid = roles.id
+WHERE  roles.id != $1
+ORDER  BY ancestor_chain.depth
+`
+
+// ADR 0054 — recursive CTE walking parent_role_id chain UPWARD from $1.
+// The seed row ($1) is excluded from the result; only ancestors are
+// returned. Soft-deleted ancestors are STILL included (ON DELETE SET NULL
+// on the FK + the cycle check cares about set-membership, not liveness).
+func (q *Queries) GetRoleAncestors(ctx context.Context, id pgtype.UUID) ([]IdentityRole, error) {
+	rows, err := q.db.Query(ctx, getRoleAncestors, id)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []IdentityRole
+	for rows.Next() {
+		var i IdentityRole
+		if err := rows.Scan(
+			&i.ID,
+			&i.TenantID,
+			&i.Name,
+			&i.IsSystemDefault,
+			&i.IsSuperAdmin,
+			&i.HierarchyLevel,
+			&i.Permissions,
+			&i.CreatedAt,
+			&i.IsDeleted,
+			&i.DeletedAt,
+			&i.DeletedBy,
+			&i.ParentRoleID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const getRoleByID = `-- name: GetRoleByID :one
 SELECT id, tenant_id, name, is_system_default, is_super_admin,
        hierarchy_level, permissions, created_at,
-       is_deleted, deleted_at, deleted_by
+       is_deleted, deleted_at, deleted_by, parent_role_id
 FROM   identity.roles
 WHERE  id = $1
 `
@@ -34,6 +95,7 @@ func (q *Queries) GetRoleByID(ctx context.Context, id pgtype.UUID) (IdentityRole
 		&i.IsDeleted,
 		&i.DeletedAt,
 		&i.DeletedBy,
+		&i.ParentRoleID,
 	)
 	return i, err
 }
@@ -41,7 +103,7 @@ func (q *Queries) GetRoleByID(ctx context.Context, id pgtype.UUID) (IdentityRole
 const getRoleByTenantAndName = `-- name: GetRoleByTenantAndName :one
 SELECT id, tenant_id, name, is_system_default, is_super_admin,
        hierarchy_level, permissions, created_at,
-       is_deleted, deleted_at, deleted_by
+       is_deleted, deleted_at, deleted_by, parent_role_id
 FROM   identity.roles
 WHERE  tenant_id = $1
   AND  name      = $2
@@ -70,6 +132,7 @@ func (q *Queries) GetRoleByTenantAndName(ctx context.Context, arg GetRoleByTenan
 		&i.IsDeleted,
 		&i.DeletedAt,
 		&i.DeletedBy,
+		&i.ParentRoleID,
 	)
 	return i, err
 }
@@ -77,13 +140,13 @@ func (q *Queries) GetRoleByTenantAndName(ctx context.Context, arg GetRoleByTenan
 const getRolesByIDs = `-- name: GetRolesByIDs :many
 SELECT id, tenant_id, name, is_system_default, is_super_admin,
        hierarchy_level, permissions, created_at,
-       is_deleted, deleted_at, deleted_by
+       is_deleted, deleted_at, deleted_by, parent_role_id
 FROM   identity.roles
 WHERE  id = ANY($1::uuid[])
   AND  NOT is_deleted
 `
 
-// Bulk load for the PermissionResolver (Task 21) â€” given a Membership's
+// Bulk load for the PermissionResolver (Task 21) — given a Membership's
 // RoleAssignments, hydrate each Role's permission set in one query.
 // RLS still applies; cross-tenant lookups must run under platform.
 func (q *Queries) GetRolesByIDs(ctx context.Context, dollar_1 []pgtype.UUID) ([]IdentityRole, error) {
@@ -107,6 +170,7 @@ func (q *Queries) GetRolesByIDs(ctx context.Context, dollar_1 []pgtype.UUID) ([]
 			&i.IsDeleted,
 			&i.DeletedAt,
 			&i.DeletedBy,
+			&i.ParentRoleID,
 		); err != nil {
 			return nil, err
 		}
@@ -122,8 +186,8 @@ const insertRole = `-- name: InsertRole :exec
 
 INSERT INTO identity.roles (
     id, tenant_id, name, is_system_default, is_super_admin,
-    hierarchy_level, permissions, created_at
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+    hierarchy_level, permissions, created_at, parent_role_id
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 `
 
 type InsertRoleParams struct {
@@ -135,13 +199,18 @@ type InsertRoleParams struct {
 	HierarchyLevel  int32
 	Permissions     []byte
 	CreatedAt       pgtype.Timestamptz
+	ParentRoleID    pgtype.UUID
 }
 
-// Role queries â€” identity.roles is RLS+FORCE per multi-tenancy.md.
+// Role queries — identity.roles is RLS+FORCE per multi-tenancy.md.
 // Reads/writes flow through RLS: only the current tenant's rows are
 // visible unless app.is_platform=true. Seeded SuperAdmin + custom
 // per-tenant roles share the same table; isolation is enforced by RLS,
 // not by the application layer.
+//
+// parent_role_id (ADR 0054) — single-parent hierarchy. NULL = root.
+// Cycle + cross-tenant prevention lives in the DB trigger
+// identity.role_check_hierarchy().
 func (q *Queries) InsertRole(ctx context.Context, arg InsertRoleParams) error {
 	_, err := q.db.Exec(ctx, insertRole,
 		arg.ID,
@@ -152,6 +221,7 @@ func (q *Queries) InsertRole(ctx context.Context, arg InsertRoleParams) error {
 		arg.HierarchyLevel,
 		arg.Permissions,
 		arg.CreatedAt,
+		arg.ParentRoleID,
 	)
 	return err
 }
@@ -159,7 +229,7 @@ func (q *Queries) InsertRole(ctx context.Context, arg InsertRoleParams) error {
 const listRolesByTenant = `-- name: ListRolesByTenant :many
 SELECT id, tenant_id, name, is_system_default, is_super_admin,
        hierarchy_level, permissions, created_at,
-       is_deleted, deleted_at, deleted_by
+       is_deleted, deleted_at, deleted_by, parent_role_id
 FROM   identity.roles
 WHERE  tenant_id  = $1
   AND  NOT is_deleted
@@ -190,6 +260,7 @@ func (q *Queries) ListRolesByTenant(ctx context.Context, tenantID pgtype.UUID) (
 			&i.IsDeleted,
 			&i.DeletedAt,
 			&i.DeletedBy,
+			&i.ParentRoleID,
 		); err != nil {
 			return nil, err
 		}
@@ -227,7 +298,8 @@ const updateRole = `-- name: UpdateRole :exec
 UPDATE identity.roles
 SET    name            = $2,
        hierarchy_level = $3,
-       permissions     = $4
+       permissions     = $4,
+       parent_role_id  = $5
 WHERE  id = $1
 `
 
@@ -236,18 +308,20 @@ type UpdateRoleParams struct {
 	Name           string
 	HierarchyLevel int32
 	Permissions    []byte
+	ParentRoleID   pgtype.UUID
 }
 
-// Persists the mutable Role state â€” name, hierarchy_level, permissions
-// â€” under the UpdateFn pattern (Task 17). is_system_default + is_super_admin
-// + tenant_id + created_at are aggregate-immutable; soft-delete uses
-// SoftDeleteRole below.
+// Persists the mutable Role state — name, hierarchy_level, permissions,
+// parent_role_id — under the UpdateFn pattern (Task 17).
+// is_system_default + is_super_admin + tenant_id + created_at are
+// aggregate-immutable; soft-delete uses SoftDeleteRole below.
 func (q *Queries) UpdateRole(ctx context.Context, arg UpdateRoleParams) error {
 	_, err := q.db.Exec(ctx, updateRole,
 		arg.ID,
 		arg.Name,
 		arg.HierarchyLevel,
 		arg.Permissions,
+		arg.ParentRoleID,
 	)
 	return err
 }

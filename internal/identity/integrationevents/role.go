@@ -107,6 +107,30 @@ func (e RoleDeletedV1) OccurredAt() time.Time { return e.OccurredAtUTC }
 // TenantID satisfies [TenantScoped].
 func (e RoleDeletedV1) TenantID() uuid.UUID { return e.TenantIDClaim }
 
+// RoleParentChangedV1 — a Role's parent_role_id was set, cleared, or
+// re-pointed per ADR 0054. Subscribers invalidate any cached effective-
+// permission projections for every Membership holding this role (the
+// inherited slice shifted).
+//
+// OldParentID / NewParentID may be the zero UUID (root); the (zero, X)
+// shape means "promoted into hierarchy", (X, zero) means "moved to root".
+type RoleParentChangedV1 struct {
+	RoleID        uuid.UUID `json:"role_id"`
+	TenantIDClaim uuid.UUID `json:"tenant_id"`
+	OldParentID   uuid.UUID `json:"old_parent_id"`
+	NewParentID   uuid.UUID `json:"new_parent_id"`
+	OccurredAtUTC time.Time `json:"occurred_at_utc"`
+}
+
+// Topic returns the canonical wire alias.
+func (RoleParentChangedV1) Topic() string { return "identity.role_parent_changed.v1" }
+
+// OccurredAt returns the domain timestamp.
+func (e RoleParentChangedV1) OccurredAt() time.Time { return e.OccurredAtUTC }
+
+// TenantID satisfies [TenantScoped].
+func (e RoleParentChangedV1) TenantID() uuid.UUID { return e.TenantIDClaim }
+
 // Compile-time + runtime registration.
 var (
 	_ TenantScoped = RoleCreatedV1{}
@@ -114,10 +138,12 @@ var (
 	_ TenantScoped = RolePermissionGrantedV1{}
 	_ TenantScoped = RolePermissionRevokedV1{}
 	_ TenantScoped = RoleDeletedV1{}
+	_ TenantScoped = RoleParentChangedV1{}
 
 	_ = register(RoleCreatedV1{})
 	_ = register(RoleRenamedV1{})
 	_ = register(RolePermissionGrantedV1{})
 	_ = register(RolePermissionRevokedV1{})
 	_ = register(RoleDeletedV1{})
+	_ = register(RoleParentChangedV1{})
 )

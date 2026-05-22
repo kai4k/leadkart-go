@@ -29,10 +29,17 @@ var ErrRoleNameTaken = errors.New("role: name already taken in this tenant")
 // IsSuperAdmin is intentionally NOT exposed: the SuperAdmin role is
 // seed-only per multi-tenancy.md "SuperUser god-mode". Tenant admins
 // cannot promote a custom role to SuperAdmin via HTTP.
+//
+// ParentRoleID (ADR 0054) — optional parent for the new role. Zero
+// value = root (no inheritance). Cross-tenant + cycle prevention runs
+// at the DB-trigger layer; the domain accepts it as a constructor-time
+// hint (we don't fetch ancestors here because the role doesn't exist
+// yet — a fresh role can't be in its own ancestor chain).
 type CreateRoleCommand struct {
 	TenantID       tenant.ID
 	Name           string
 	HierarchyLevel int
+	ParentRoleID   role.ID
 }
 
 // CreateRoleResult returns the new role's ID for the caller.
@@ -55,6 +62,12 @@ func NewCreateRoleHandler(r role.Repository) CreateRoleHandler {
 
 // Handle constructs a custom role + persists it. isSystemDefault +
 // isSuperAdmin are always false from this entry point.
+//
+// ADR 0054 — when ParentRoleID is set, the aggregate's [role.Role.ChangeParent]
+// is invoked before Add, using the repo's GetAncestors to detect cycles.
+// A fresh role can't appear in its own ancestor chain (it doesn't exist
+// yet), so the only failure mode is "parent doesn't exist" / cross-tenant
+// parent — surfaced by the DB trigger on Add as ErrHierarchyCrossTenant.
 func (h CreateRoleHandler) Handle(ctx context.Context, cmd CreateRoleCommand) (CreateRoleResult, error) {
 	if cmd.TenantID.IsZero() {
 		return CreateRoleResult{}, errors.New("create_role: tenant id required")
@@ -64,9 +77,30 @@ func (h CreateRoleHandler) Handle(ctx context.Context, cmd CreateRoleCommand) (C
 	if err != nil {
 		return CreateRoleResult{}, err
 	}
+	if !cmd.ParentRoleID.IsZero() {
+		// New role can't be a cycle of itself; the lookup closure still
+		// has to satisfy the aggregate's non-nil contract.
+		if err := r.ChangeParent(cmd.ParentRoleID, func(id role.ID) ([]role.ID, error) {
+			ancs, lerr := h.roles.GetAncestors(ctx, id)
+			if lerr != nil {
+				return nil, lerr
+			}
+			out := make([]role.ID, 0, len(ancs))
+			for _, a := range ancs {
+				out = append(out, a.ID())
+			}
+			return out, nil
+		}); err != nil {
+			return CreateRoleResult{}, err
+		}
+	}
 	if err := h.roles.Add(ctx, r); err != nil {
 		if errors.Is(err, role.ErrNameTaken) {
 			return CreateRoleResult{}, ErrRoleNameTaken
+		}
+		if errors.Is(err, role.ErrHierarchyCycle) ||
+			errors.Is(err, role.ErrHierarchyCrossTenant) {
+			return CreateRoleResult{}, err
 		}
 		return CreateRoleResult{}, fmt.Errorf("create_role: %w", err)
 	}
@@ -311,6 +345,67 @@ func (h DeleteRoleHandler) Handle(ctx context.Context, cmd DeleteRoleCommand) er
 	}
 	if err != nil {
 		return fmt.Errorf("delete_role: %w", err)
+	}
+	return nil
+}
+
+// ----- SetRoleParent (ADR 0054) ---------------------------------------------
+
+// SetRoleParentCommand carries the validated set-parent input.
+//
+// NewParentID == zero clears the parent (role becomes a root). The
+// handler runs in-memory cycle detection via GetAncestors before the
+// aggregate mutation; the DB trigger is the final strict gate.
+type SetRoleParentCommand struct {
+	RoleID      role.ID
+	NewParentID role.ID
+}
+
+// SetRoleParentHandler runs the set-parent flow.
+type SetRoleParentHandler struct {
+	roles role.Repository
+}
+
+// NewSetRoleParentHandler wires the handler.
+func NewSetRoleParentHandler(r role.Repository) SetRoleParentHandler {
+	if r == nil {
+		panic("command: NewSetRoleParentHandler roles repository required")
+	}
+	return SetRoleParentHandler{roles: r}
+}
+
+// Handle dispatches to [Role.ChangeParent] inside the repo's UpdateByID
+// transaction. Pre-validates the parent's ancestor chain so the best
+// ergonomic error message wins; the DB trigger is the strict-gate
+// fallback per ADR 0054.
+func (h SetRoleParentHandler) Handle(ctx context.Context, cmd SetRoleParentCommand) error {
+	if cmd.RoleID.IsZero() {
+		return errors.New("set_role_parent: role id required")
+	}
+	err := h.roles.UpdateByID(ctx, cmd.RoleID, func(r *role.Role) (bool, error) {
+		if err := r.ChangeParent(cmd.NewParentID, func(id role.ID) ([]role.ID, error) {
+			ancs, lerr := h.roles.GetAncestors(ctx, id)
+			if lerr != nil {
+				return nil, lerr
+			}
+			out := make([]role.ID, 0, len(ancs))
+			for _, a := range ancs {
+				out = append(out, a.ID())
+			}
+			return out, nil
+		}); err != nil {
+			return false, err
+		}
+		return true, nil
+	})
+	switch {
+	case errors.Is(err, role.ErrNotFound):
+		return ErrRoleNotFound
+	case errors.Is(err, role.ErrHierarchyCycle),
+		errors.Is(err, role.ErrHierarchyCrossTenant):
+		return err
+	case err != nil:
+		return fmt.Errorf("set_role_parent: %w", err)
 	}
 	return nil
 }

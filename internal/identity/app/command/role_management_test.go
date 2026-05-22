@@ -88,6 +88,30 @@ func (r *fakeRoleRepo) ListByTenant(_ context.Context, tid tenant.ID) ([]*role.R
 	return out, nil
 }
 
+// GetAncestors walks parent_role_id chain in-memory; ADR 0054.
+func (r *fakeRoleRepo) GetAncestors(_ context.Context, id role.ID) ([]*role.Role, error) {
+	x, ok := r.roles[id]
+	if !ok {
+		return nil, nil
+	}
+	var out []*role.Role
+	seen := map[role.ID]struct{}{id: {}}
+	cur := x.ParentRoleID()
+	for !cur.IsZero() {
+		if _, dup := seen[cur]; dup {
+			break
+		}
+		seen[cur] = struct{}{}
+		nxt, ok := r.roles[cur]
+		if !ok {
+			break
+		}
+		out = append(out, nxt)
+		cur = nxt.ParentRoleID()
+	}
+	return out, nil
+}
+
 var _ role.Repository = (*fakeRoleRepo)(nil)
 
 func newCustomRole(t *testing.T, repo *fakeRoleRepo, name string) *role.Role {

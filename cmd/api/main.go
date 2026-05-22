@@ -540,6 +540,7 @@ func buildIdentityApp(pool *pgxpool.Pool, hybridCache *cache.HybridCache, cfg co
 			ReplaceRolePermissions: command.NewReplaceRolePermissionsHandler(roles),
 			GrantRolePermission:    command.NewGrantRolePermissionHandler(roles),
 			RevokeRolePermission:   command.NewRevokeRolePermissionHandler(roles),
+			SetRoleParent:          command.NewSetRoleParentHandler(roles), // ADR 0054
 
 			GlobalSuspendPerson:        command.NewGlobalSuspendPersonHandler(persons),
 			LiftPersonGlobalSuspension: command.NewLiftPersonGlobalSuspensionHandler(persons),
