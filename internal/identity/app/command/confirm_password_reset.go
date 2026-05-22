@@ -9,7 +9,7 @@ import (
 
 	"github.com/leadkart/leadkart-go/internal/identity/app/argon2"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
-	"github.com/leadkart/leadkart-go/internal/common/breach"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/passwordpolicy"
 )
 
 // ConfirmPasswordResetCommand carries the user-presented plaintext
@@ -35,11 +35,11 @@ var ErrResetTokenInvalid = errors.New("confirm_password_reset: token invalid or 
 // ConfirmPasswordResetHandler runs the confirm-side of the reset flow.
 type ConfirmPasswordResetHandler struct {
 	persons       person.Repository
-	breachChecker breach.Checker
+	breachChecker passwordpolicy.Checker
 }
 
 // NewConfirmPasswordResetHandler wires the handler.
-func NewConfirmPasswordResetHandler(persons person.Repository, breachChecker breach.Checker) ConfirmPasswordResetHandler {
+func NewConfirmPasswordResetHandler(persons person.Repository, breachChecker passwordpolicy.Checker) ConfirmPasswordResetHandler {
 	if persons == nil {
 		panic("command: NewConfirmPasswordResetHandler persons repository required")
 	}

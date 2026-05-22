@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/leadkart/leadkart-go/internal/common/breach"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/passwordpolicy"
 	"github.com/leadkart/leadkart-go/internal/common/email"
 	"github.com/leadkart/leadkart-go/internal/identity/app/command"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
@@ -105,7 +105,7 @@ func TestConfirmPasswordReset_HappyPath_RotatesPasswordAndStamp(t *testing.T) {
 	rawToken := extractTokenFromLink(t, body)
 	stampBefore := p.SecurityStamp()
 
-	confirmHandler := command.NewConfirmPasswordResetHandler(repo, breach.Noop{})
+	confirmHandler := command.NewConfirmPasswordResetHandler(repo, passwordpolicy.Noop{})
 	if err := confirmHandler.Handle(t.Context(), command.ConfirmPasswordResetCommand{
 		RawToken:    rawToken,
 		NewPassword: "Tr0ub4dor&3-newly-strong",
@@ -124,7 +124,7 @@ func TestConfirmPasswordReset_BadToken_ReturnsTokenInvalid(t *testing.T) {
 	t.Parallel()
 	freezeClock(t)
 	repo := newResettableRepo(newPersonWithPassword(t, "current-pw"))
-	h := command.NewConfirmPasswordResetHandler(repo, breach.Noop{})
+	h := command.NewConfirmPasswordResetHandler(repo, passwordpolicy.Noop{})
 	err := h.Handle(t.Context(), command.ConfirmPasswordResetCommand{
 		RawToken:    "totally-bogus-token",
 		NewPassword: "anything",

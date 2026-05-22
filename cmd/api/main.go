@@ -48,7 +48,6 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/app/command"
 	"github.com/leadkart/leadkart-go/internal/identity/app/jwt"
 	"github.com/leadkart/leadkart-go/internal/common/audit"
-	"github.com/leadkart/leadkart-go/internal/common/breach"
 	"github.com/leadkart/leadkart-go/internal/common/email"
 	"github.com/leadkart/leadkart-go/internal/common/impersonation"
 	"github.com/leadkart/leadkart-go/internal/identity/app/permissions"
@@ -473,8 +472,8 @@ func buildIdentityApp(pool *pgxpool.Pool, hybridCache *cache.HybridCache, cfg co
 	// passwords. Production swap to k-anonymity API per
 	// `security.md` "Password breach check" is a one-line
 	// constructor change — all consumers depend on the
-	// [breach.Checker] interface, not the concrete impl.
-	breachChecker := breach.NewOfflineList()
+	// [passwordpolicy.Checker] interface, not the concrete impl.
+	breachChecker := adapters.NewOfflinePasswordList()
 
 	// Email gateway. v0.2 wires the in-memory Recorder so the
 	// password-reset / email-change flows persist their pending

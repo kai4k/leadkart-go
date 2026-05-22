@@ -7,7 +7,7 @@ import (
 
 	"github.com/leadkart/leadkart-go/internal/identity/app/argon2"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
-	"github.com/leadkart/leadkart-go/internal/common/breach"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/passwordpolicy"
 )
 
 // ChangePasswordCommand carries the plaintext credentials. Per
@@ -33,7 +33,7 @@ type ChangePasswordCommand struct {
 // security.md "Login flow" enumeration-resistance posture.
 var ErrIncorrectCurrentPassword = errors.New("change_password: current password incorrect")
 
-// ErrPasswordBreached surfaces when [breach.Checker.IsBreached] reports
+// ErrPasswordBreached surfaces when [passwordpolicy.Checker.IsBreached] reports
 // the new password has appeared in known breaches. Per security.md
 // "HIBP+Argon2id+JWT" — every new password is checked.
 var ErrPasswordBreached = errors.New("change_password: new password has appeared in known breaches")
@@ -61,17 +61,17 @@ var ErrPasswordSameAsCurrent = errors.New("change_password: new password same as
 //     tenants (logout-all-sessions choreography).
 type ChangePasswordHandler struct {
 	persons        person.Repository
-	breachChecker  breach.Checker
+	breachChecker  passwordpolicy.Checker
 }
 
 // NewChangePasswordHandler wires the handler. breachChecker MUST be
 // non-nil — a nil checker silently weakens security per security.md.
-func NewChangePasswordHandler(persons person.Repository, breachChecker breach.Checker) ChangePasswordHandler {
+func NewChangePasswordHandler(persons person.Repository, breachChecker passwordpolicy.Checker) ChangePasswordHandler {
 	if persons == nil {
 		panic("command: NewChangePasswordHandler persons repository required")
 	}
 	if breachChecker == nil {
-		panic("command: NewChangePasswordHandler breach checker required (use breach.Noop only in tests)")
+		panic("command: NewChangePasswordHandler breach checker required (use passwordpolicy.Noop only in tests)")
 	}
 	return ChangePasswordHandler{
 		persons:       persons,
