@@ -47,7 +47,7 @@
   - ADR 0042 — cache TTL strategy. Five profiles (Default / SecurityStamp / Capabilities / SearchResults / Dashboard) with research-grounded TTLs + jitter discipline (±10% on dashboard + search). Microsoft HybridCache canon.
   - `HybridCache` facade wired for `/v1/platform/stats` (DashboardTTL — 1min L1 / 5min L2 + jitter) and `/v1/auth/me/capabilities` profile enrichment (CapabilitiesTTL — 2min L1 / 15min L2; security_stamp keyed for implicit invalidation).
   - `GET /v1/search` omni-search — parallel pg_trgm fanout (persons + tenants) with per-category timeout + `has_partial` flag. Platform-only. Cached via SearchResultsTTL.
-  - `GET /v1/auth/me/activity` + `GET /v1/tenants/{tenantId}/activity` — keyset-paginated audit-log reads against `buildingblocks.audit_log_entry`. Self-read always allowed; tenant-scoped goes through `RequireTenantContext`.
+  - `GET /v1/auth/me/activity` + `GET /v1/tenants/{tenantId}/audit/events` — keyset-paginated audit-log reads against `buildingblocks.audit_log_entry`. Self-read always allowed; tenant-scoped goes through `RequireTenantContext`. Sub-resource path (`/audit/events`) avoids Go 1.22 ServeMux conflict with `/tenants/by-slug/{slug}` per Wave 7 hotfix.
   - EXPLAIN-under-RLS integration test (`keyset_explain_integration_test.go`) — load 200 memberships, assert keyset query uses `idx_memberships_tenant_active_joined` (Index Scan, not Seq Scan). ADR 0038 discipline as a CI gate.
 - Wave 3 — slug/email lookup hardening + RFC 9457 errors + migration gate + scoped-JWT design:
   - ADR 0044 — Enumeration safety. 404 (not 403) on no-access for guessable identifiers (slugs / emails / handles). GitHub / Stripe / Auth0 / Twilio canon; OWASP API Top 10 §A01:2023 anti-pattern when 403 leaks existence.

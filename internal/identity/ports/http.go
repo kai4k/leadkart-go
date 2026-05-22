@@ -216,7 +216,14 @@ func AddRoutes(mux *http.ServeMux, log *slog.Logger, a app.Application, verifier
 		// same RequireTenantContext gate as the rest of /tenants/{id}.
 		mux.Handle("GET /api/v1/auth/me/activity",
 			auth(handleListMyAuditEvents(log, a)))
-		mux.Handle("GET /api/v1/tenants/{tenantId}/activity",
+		// Sub-resource path (`/audit/events`) deliberately ≠ the by-slug
+		// lookup's shape (`/by-slug/{slug}`) — both 2-segment tails would
+		// trigger a Go 1.22 ServeMux pattern conflict (literal+wildcard
+		// vs wildcard+literal in the same positions = ambiguous). Splitting
+		// into `/audit/events` adds the literal "audit" segment at position
+		// 5, making this route 6 segments deep — structurally distinct
+		// from /by-slug/{slug}.
+		mux.Handle("GET /api/v1/tenants/{tenantId}/audit/events",
 			tenantCtx(handleListTenantAuditEvents(log, a)))
 	}
 }

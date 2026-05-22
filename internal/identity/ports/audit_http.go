@@ -58,7 +58,7 @@ func handleListMyAuditEvents(log *slog.Logger, a app.Application) http.Handler {
 }
 
 // handleListTenantAuditEvents serves
-// GET /api/v1/tenants/{tenantId}/activity.
+// GET /api/v1/tenants/{tenantId}/audit/events.
 //
 // Returns the audit-event feed scoped to one tenant. Caller MUST be
 // either a same-tenant admin (RequireTenantContext middleware

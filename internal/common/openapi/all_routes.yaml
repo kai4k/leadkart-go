@@ -306,7 +306,7 @@ paths:
         '400': { $ref: '#/components/responses/BadRequest' }
         '404': { $ref: '#/components/responses/NotFound' }
 
-  /api/v1/tenants/{tenantId}/activity:
+  /api/v1/tenants/{tenantId}/audit/events:
     get:
       tags: [audit]
       summary: Tenant-scoped audit-event feed (keyset-paginated)

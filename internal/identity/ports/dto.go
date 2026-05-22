@@ -138,7 +138,7 @@ type ChangePasswordRequest struct {
 	NewPassword     string `json:"new_password"`
 }
 
-// ----- Audit-log reads (GET /v1/auth/me/activity, GET /v1/tenants/{id}/activity) ----
+// ----- Audit-log reads (GET /v1/auth/me/activity, GET /v1/tenants/{id}/audit/events) ----
 
 // AuditEventDto is one row of the audit-log read shape per
 // ADR 0027 (outbox doubles as audit). Per-event minimum: action +
