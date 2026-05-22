@@ -39,7 +39,7 @@ func NewRefreshTokenFamilyRepository(pool *pgxpool.Pool, tx *pg.Transactor) *Ref
 
 // Add persists a brand-new family + its first token from [refreshtoken.NewFamily].
 func (r *RefreshTokenFamilyRepository) Add(ctx context.Context, f *refreshtoken.Family) error {
-	return r.tx.WithinTx(ctx, pg.TxScopePlatform, func(ctx context.Context, tx pgx.Tx) error {
+	return r.tx.WithinTxPgx(ctx, pg.TxScopePlatform, func(ctx context.Context, tx pgx.Tx) error {
 		q := r.q.WithTx(tx)
 		if err := insertFamilyRow(ctx, q, f); err != nil {
 			return err
@@ -61,7 +61,7 @@ func (r *RefreshTokenFamilyRepository) UpdateByID(
 	id refreshtoken.FamilyID,
 	updateFn func(*refreshtoken.Family) (bool, error),
 ) error {
-	return r.tx.WithinTx(ctx, pg.TxScopePlatform, func(ctx context.Context, tx pgx.Tx) error {
+	return r.tx.WithinTxPgx(ctx, pg.TxScopePlatform, func(ctx context.Context, tx pgx.Tx) error {
 		q := r.q.WithTx(tx)
 		f, err := loadFamilyByID(ctx, q, id)
 		if err != nil {
@@ -87,7 +87,7 @@ func (r *RefreshTokenFamilyRepository) UpdateByID(
 // GetByID returns the family + all its tokens, or [refreshtoken.ErrNotFound].
 func (r *RefreshTokenFamilyRepository) GetByID(ctx context.Context, id refreshtoken.FamilyID) (*refreshtoken.Family, error) {
 	var out *refreshtoken.Family
-	err := r.tx.WithinTx(ctx, pg.TxScopePlatform, func(ctx context.Context, tx pgx.Tx) error {
+	err := r.tx.WithinTxPgx(ctx, pg.TxScopePlatform, func(ctx context.Context, tx pgx.Tx) error {
 		f, err := loadFamilyByID(ctx, r.q.WithTx(tx), id)
 		if err != nil {
 			return err
@@ -106,7 +106,7 @@ func (r *RefreshTokenFamilyRepository) GetByID(ctx context.Context, id refreshto
 // the given hash.
 func (r *RefreshTokenFamilyRepository) GetByTokenHash(ctx context.Context, hash refreshtoken.TokenHash) (*refreshtoken.Family, error) {
 	var out *refreshtoken.Family
-	err := r.tx.WithinTx(ctx, pg.TxScopePlatform, func(ctx context.Context, tx pgx.Tx) error {
+	err := r.tx.WithinTxPgx(ctx, pg.TxScopePlatform, func(ctx context.Context, tx pgx.Tx) error {
 		q := r.q.WithTx(tx)
 		row, err := q.GetRefreshTokenByHash(ctx, hash.String())
 		if err != nil {
@@ -144,7 +144,7 @@ func (r *RefreshTokenFamilyRepository) ListActiveForPerson(ctx context.Context, 
 		return nil, err
 	}
 	var out []*refreshtoken.Family
-	err = r.tx.WithinTx(ctx, pg.TxScopePlatform, func(ctx context.Context, tx pgx.Tx) error {
+	err = r.tx.WithinTxPgx(ctx, pg.TxScopePlatform, func(ctx context.Context, tx pgx.Tx) error {
 		// Two-pass: drain family rows into a slice (releasing the
 		// connection's iteration cursor), THEN load each family's
 		// tokens. pgx forbids multiplexed queries on one connection.

@@ -47,15 +47,21 @@ func NewTransactor(pool *pgxpool.Pool) *Transactor {
 	return &Transactor{pool: pool}
 }
 
-// WithinTx opens a transaction, binds tenant context per scope, runs fn,
-// and commits if fn returns nil (rolls back otherwise). If fn returns a
-// non-nil error, the rollback error is intentionally discarded — the
-// returned error is the original failure.
+// WithinTxPgx opens a transaction, binds tenant context per scope,
+// runs fn, and commits if fn returns nil (rolls back otherwise). If
+// fn returns a non-nil error, the rollback error is intentionally
+// discarded — the returned error is the original failure.
 //
 // Default isolation is pgx default (READ COMMITTED). Repositories that
-// need REPEATABLE READ or SERIALIZABLE wrap WithinTx with their own
+// need REPEATABLE READ or SERIALIZABLE wrap WithinTxPgx with their own
 // retry loop on `40001` serialization failures.
-func (t *Transactor) WithinTx(
+//
+// WithinTxPgx is the LOW-LEVEL adapter-facing primitive — the fn
+// closure receives the pgx.Tx directly. App-layer handlers depend on
+// [UnitOfWork] instead (see uow.go); UnitOfWork.WithinTx is the
+// boundary-clean variant that propagates the tx through ctx so the
+// handler never imports pgx.
+func (t *Transactor) WithinTxPgx(
 	ctx context.Context,
 	scope TxScope,
 	fn func(ctx context.Context, tx pgx.Tx) error,

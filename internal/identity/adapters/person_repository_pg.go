@@ -32,17 +32,21 @@ func NewPersonRepository(pool *pgxpool.Pool, tx *pg.Transactor) *PersonRepositor
 }
 
 // Add satisfies [person.Repository] — persists a new Person + drains
-// CreatedEvent into the outbox in one tx under platform scope.
+// CreatedEvent into the outbox. When ctx carries an active tx (a
+// parent [pg.UnitOfWork] is in flight), Add joins that tx rather than
+// opening its own — canonical multi-aggregate composition path.
 func (r *PersonRepository) Add(ctx context.Context, p *person.Person) error {
-	return r.tx.WithinTx(ctx, pg.TxScopePlatform, func(ctx context.Context, tx pgx.Tx) error {
-		return r.AddInTx(ctx, tx, p)
+	if tx, ok := pg.TxFromContext(ctx); ok {
+		return r.addOnTx(ctx, tx, p)
+	}
+	return r.tx.WithinTxPgx(ctx, pg.TxScopePlatform, func(ctx context.Context, tx pgx.Tx) error {
+		return r.addOnTx(ctx, tx, p)
 	})
 }
 
-// AddInTx persists a new Person under an EXISTING transaction. See the
-// TenantRepository.AddInTx godoc for the orchestrator-composition
-// rationale (TDL TransactionProvider escape hatch).
-func (r *PersonRepository) AddInTx(ctx context.Context, tx pgx.Tx, p *person.Person) error {
+// addOnTx persists the aggregate against the supplied tx + drains
+// events to the outbox. Unexported.
+func (r *PersonRepository) addOnTx(ctx context.Context, tx pgx.Tx, p *person.Person) error {
 	q := r.q.WithTx(tx)
 	if err := insertPersonRow(ctx, q, p); err != nil {
 		return err
@@ -57,7 +61,7 @@ func (r *PersonRepository) UpdateByID(
 	id person.ID,
 	updateFn func(*person.Person) (bool, error),
 ) error {
-	return r.tx.WithinTx(ctx, pg.TxScopePlatform, func(ctx context.Context, tx pgx.Tx) error {
+	return r.tx.WithinTxPgx(ctx, pg.TxScopePlatform, func(ctx context.Context, tx pgx.Tx) error {
 		q := r.q.WithTx(tx)
 		p, err := loadPerson(ctx, q, id)
 		if err != nil {

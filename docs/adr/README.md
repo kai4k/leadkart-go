@@ -35,5 +35,6 @@ One decision per file, Michael Nygard format (Context / Decision / Consequences 
 | 0044 | Enumeration safety — 404 on no-access for guessable identifiers | Accepted |
 | 0045 | Scoped JWT impersonation — AWS STS AssumeRole + RFC 8693 `act` claim (design; impl in Wave 4) | Accepted |
 | 0046 | OpenAPI spec-first contract + Scalar `/docs` | Accepted |
+| 0047 | Layer-boundary discipline — `app/` cannot import DB driver / sqlc / concrete adapter | Accepted |
 
-ADRs 0011–0026 + 0032 + 0047+ land as the relevant code lands per the master plan.
+ADRs 0011–0026 + 0032 + 0048+ land as the relevant code lands per the master plan.

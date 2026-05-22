@@ -6,11 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
-
 	"github.com/leadkart/leadkart-go/internal/platform/cache"
-	"github.com/leadkart/leadkart-go/internal/platform/pg"
 )
 
 // PlatformStatsView is the operator-dashboard at-a-glance shape.
@@ -76,11 +72,42 @@ func ParseDeltaWindow(s string) (time.Duration, string, error) {
 	}
 }
 
-// PlatformStatsHandler runs the dashboard query under TxScopePlatform
-// so the COUNT(*) on tenant_memberships (RLS-scoped table) sees every
-// tenant's rows — without the platform scope the connection's
-// app.tenant_id GUC would filter to whatever tenant the JWT carries
-// (a synthetic operator UUID with zero rows).
+// PlatformStatsBase is the 5-count base shape returned by
+// [PlatformStatsReader.Base]. App layer composes [PlatformStatsView]
+// from this (+ optional [PlatformStatsDeltas] from the deltas branch).
+type PlatformStatsBase struct {
+	TenantsTotal      int
+	TenantsActive     int
+	TenantsSuspended  int
+	PersonsTotal      int
+	MembershipsActive int
+}
+
+// PlatformStatsDeltaCounts is the 4-count delta shape returned by
+// [PlatformStatsReader.Deltas]. Window-label sidecar lives in the
+// caller; the adapter just answers the "rows in last interval" question.
+type PlatformStatsDeltaCounts struct {
+	TenantsTotal      int
+	TenantsActive     int
+	PersonsTotal      int
+	MembershipsActive int
+}
+
+// PlatformStatsReader is the consumer-defined contract for cross-
+// tenant dashboard reads. Defined here next to its sole consumer
+// [PlatformStatsHandler]; concrete pg-backed implementation lives in
+// internal/identity/adapters/ where db.* / pgx.* are permitted.
+// App layer carries NO pgx, pgxpool, or sqlc imports.
+//
+// Both methods run under platform-scope tx so the COUNT(*) on
+// tenant_memberships (RLS-scoped) sees every tenant's rows.
+type PlatformStatsReader interface {
+	Base(ctx context.Context) (PlatformStatsBase, error)
+	Deltas(ctx context.Context, intervalLabel string) (PlatformStatsDeltaCounts, error)
+}
+
+// PlatformStatsHandler depends on [PlatformStatsReader] only —
+// boundary discipline per ADR 0047.
 //
 // Cache discipline (ADR 0040 + ADR 0015 HybridCache canon):
 //
@@ -91,45 +118,27 @@ func ParseDeltaWindow(s string) (time.Duration, string, error) {
 //     read-from-Postgres function, easier to test + integration-
 //     verify. Cache is a side-channel that doesn't change the
 //     handler's contract.
-//
-// Repository contracts aren't extended with COUNT methods because
-// this is operator reporting, not domain state — keeping the SQL
-// inline avoids speculative methods with one caller.
 type PlatformStatsHandler struct {
-	pool *pgxpool.Pool
-	tx   *pg.Transactor
+	reader PlatformStatsReader
 }
 
-// NewPlatformStatsHandler wires the handler. tx is required to lift
-// the connection into TxScopePlatform for the cross-tenant counts.
-func NewPlatformStatsHandler(pool *pgxpool.Pool, tx *pg.Transactor) PlatformStatsHandler {
-	if pool == nil {
-		panic("query: NewPlatformStatsHandler pool required")
+// NewPlatformStatsHandler wires the handler.
+func NewPlatformStatsHandler(reader PlatformStatsReader) PlatformStatsHandler {
+	if reader == nil {
+		panic("query: NewPlatformStatsHandler reader required")
 	}
-	if tx == nil {
-		panic("query: NewPlatformStatsHandler transactor required")
-	}
-	return PlatformStatsHandler{pool: pool, tx: tx}
+	return PlatformStatsHandler{reader: reader}
 }
 
 // CachedPlatformStatsHandler is the cache-wrapped facade in front of
 // the un-cached [PlatformStatsHandler]. Per ADR 0042 — keyed by
 // delta_window label ("" / "24h" / "7d" / "30d" — closed set);
 // uses [cache.DashboardTTL] (1min L1 / 5min L2 + ±10% jitter).
-//
-// Cache facade construction happens at the composition root
-// (cmd/api/main.go); this wrapper just dispatches calls through it.
-// The HTTP handler talks to this type via Application.Queries —
-// the un-cached PlatformStatsHandler is the factory backing the
-// facade, not the surface the HTTP layer sees.
 type CachedPlatformStatsHandler struct {
 	facade *cache.Facade[string, PlatformStatsView]
 }
 
 // NewCachedPlatformStatsHandler builds the facade-wrapped handler.
-// Cache key incorporates the delta_window label; the factory
-// reconstructs the Duration via ParseDeltaWindow + dispatches to
-// the inner un-cached Handle.
 func NewCachedPlatformStatsHandler(inner PlatformStatsHandler, hc *cache.HybridCache) CachedPlatformStatsHandler {
 	if hc == nil {
 		panic("query: NewCachedPlatformStatsHandler hybrid cache required")
@@ -140,10 +149,6 @@ func NewCachedPlatformStatsHandler(inner PlatformStatsHandler, hc *cache.HybridC
 		func(ctx context.Context, k string) (PlatformStatsView, error) {
 			dur, label, err := ParseDeltaWindow(k)
 			if err != nil {
-				// Defensive: callers SHOULD only ever pass closed-set
-				// labels (ParseDeltaWindow is the validator at the
-				// HTTP boundary). A bad key reaching here is a wiring
-				// bug; fail loudly rather than caching the error.
 				return PlatformStatsView{}, fmt.Errorf("platform_stats: cached facade: invalid window key %q: %w", k, err)
 			}
 			return inner.Handle(ctx, PlatformStatsQuery{Window: dur, WindowLabel: label})
@@ -153,91 +158,55 @@ func NewCachedPlatformStatsHandler(inner PlatformStatsHandler, hc *cache.HybridC
 	return CachedPlatformStatsHandler{facade: facade}
 }
 
-// Handle returns the cached dashboard view. Falls through to the
-// inner handler on miss, populates L1+L2 on success per the standard
-// cache.Facade contract.
-//
-// Cache key derives from q.WindowLabel only — the time.Duration
-// Window is reconstructed inside the factory via ParseDeltaWindow.
-// HTTP handler MUST pass the canonical label string (validated at
-// the boundary by ParseDeltaWindow).
+// Handle returns the cached dashboard view.
 func (h CachedPlatformStatsHandler) Handle(ctx context.Context, q PlatformStatsQuery) (PlatformStatsView, error) {
 	return h.facade.Get(ctx, q.WindowLabel)
 }
 
 // Handle returns the dashboard view.
-//
-// Base: 5 COUNT(*) queries inside a single TxScopePlatform read tx.
-// With deltas: +4 COUNT(*) queries with WHERE created_at > now() -
-// window (or activated_at / joined_at for the lifecycle-specific
-// counts). Both branches reuse the same tx so the row counts are
-// consistent against the same snapshot.
 func (h PlatformStatsHandler) Handle(ctx context.Context, q PlatformStatsQuery) (PlatformStatsView, error) {
-	var view PlatformStatsView
-	base := []struct {
-		name string
-		sql  string
-		dst  *int
-	}{
-		{"tenants_total", `SELECT COUNT(*) FROM identity.tenants`, &view.TenantsTotal},
-		{"tenants_active", `SELECT COUNT(*) FROM identity.tenants WHERE status = 'active'`, &view.TenantsActive},
-		{"tenants_suspended", `SELECT COUNT(*) FROM identity.tenants WHERE status = 'suspended'`, &view.TenantsSuspended},
-		{"persons_total", `SELECT COUNT(*) FROM identity.persons WHERE NOT is_anonymised`, &view.PersonsTotal},
-		{"memberships_active", `SELECT COUNT(*) FROM identity.tenant_memberships WHERE status = 'active'`, &view.MembershipsActive},
+	base, err := h.reader.Base(ctx)
+	if err != nil {
+		return PlatformStatsView{}, fmt.Errorf("platform_stats: base: %w", err)
+	}
+	view := PlatformStatsView{
+		TenantsTotal:      base.TenantsTotal,
+		TenantsActive:     base.TenantsActive,
+		TenantsSuspended:  base.TenantsSuspended,
+		PersonsTotal:      base.PersonsTotal,
+		MembershipsActive: base.MembershipsActive,
+	}
+	if q.Window <= 0 {
+		return view, nil
 	}
 
-	err := h.tx.WithinTx(ctx, pg.TxScopePlatform, func(ctx context.Context, tx pgx.Tx) error {
-		for _, query := range base {
-			if err := tx.QueryRow(ctx, query.sql).Scan(query.dst); err != nil {
-				return fmt.Errorf("platform_stats: %s: %w", query.name, err)
-			}
-		}
-		if q.Window <= 0 {
-			return nil
-		}
-
-		// Deltas branch — 4 extra COUNT(*) queries with a created/
-		// activated/joined-in-window predicate. The lifecycle-specific
-		// timestamps (activated_at, joined_at) are NULLable on rows
-		// that haven't yet been activated/joined; COUNT(*) treats NULL
-		// timestamps as "out of window" (the comparison evaluates to
-		// NULL → row excluded).
-		deltas := &PlatformStatsDeltas{Window: q.WindowLabel}
-		view.Deltas = deltas
-		deltaQueries := []struct {
-			name string
-			sql  string
-			dst  *int
-		}{
-			{"delta_tenants_total", `SELECT COUNT(*) FROM identity.tenants WHERE created_at > now() - $1::interval`, &deltas.TenantsTotal},
-			{"delta_tenants_active", `SELECT COUNT(*) FROM identity.tenants WHERE activated_at > now() - $1::interval`, &deltas.TenantsActive},
-			{"delta_persons_total", `SELECT COUNT(*) FROM identity.persons WHERE created_at > now() - $1::interval AND NOT is_anonymised`, &deltas.PersonsTotal},
-			{"delta_memberships_active", `SELECT COUNT(*) FROM identity.tenant_memberships WHERE joined_at > now() - $1::interval AND status = 'active'`, &deltas.MembershipsActive},
-		}
-		// Postgres accepts a string like "24 hours" as an interval cast.
-		// Format the duration into a Postgres-friendly form via the
-		// human-readable label rather than time.Duration.String() (which
-		// can emit microseconds for fractional values).
-		var intervalStr string
-		switch q.WindowLabel {
-		case "24h":
-			intervalStr = "24 hours"
-		case "7d":
-			intervalStr = "7 days"
-		case "30d":
-			intervalStr = "30 days"
-		default:
-			intervalStr = q.WindowLabel
-		}
-		for _, query := range deltaQueries {
-			if err := tx.QueryRow(ctx, query.sql, intervalStr).Scan(query.dst); err != nil {
-				return fmt.Errorf("platform_stats: %s: %w", query.name, err)
-			}
-		}
-		return nil
-	})
+	intervalStr := windowLabelToInterval(q.WindowLabel)
+	dc, err := h.reader.Deltas(ctx, intervalStr)
 	if err != nil {
-		return PlatformStatsView{}, err
+		return PlatformStatsView{}, fmt.Errorf("platform_stats: deltas: %w", err)
+	}
+	view.Deltas = &PlatformStatsDeltas{
+		Window:            q.WindowLabel,
+		TenantsTotal:      dc.TenantsTotal,
+		TenantsActive:     dc.TenantsActive,
+		PersonsTotal:      dc.PersonsTotal,
+		MembershipsActive: dc.MembershipsActive,
 	}
 	return view, nil
+}
+
+// windowLabelToInterval maps the closed-set wire label to a Postgres
+// interval string. Out-of-set labels fall through verbatim — the
+// caller validated at the HTTP boundary, so this is the trust edge.
+func windowLabelToInterval(label string) string {
+	switch label {
+	case "24h":
+		return "24 hours"
+	case "7d":
+		return "7 days"
+	case "30d":
+		return "30 days"
+	default:
+		return label
+	}
 }

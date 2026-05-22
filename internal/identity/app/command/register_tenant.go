@@ -18,13 +18,10 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/jackc/pgx/v5"
-
 	"github.com/leadkart/leadkart-go/internal/common/email"
 	"github.com/leadkart/leadkart-go/internal/common/ids"
 	"github.com/leadkart/leadkart-go/internal/common/slug"
 	"github.com/leadkart/leadkart-go/internal/common/tenancy"
-	"github.com/leadkart/leadkart-go/internal/identity/adapters"
 	"github.com/leadkart/leadkart-go/internal/identity/app/argon2"
 	"github.com/leadkart/leadkart-go/internal/identity/app/seed"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
@@ -74,26 +71,34 @@ var ErrEmailHasActiveMembership = errors.New(
 // one DB; per TDL "if you feel you need a saga between three services,
 // maybe merge them" (plan §G.H.4). Same-tx atomicity is the handler's
 // job per TDL strict.
+//
+// Boundary discipline (ADR 0047): handler depends on the domain
+// repository INTERFACES + [pg.UnitOfWork] only. No pgx, no pgxpool,
+// no concrete adapter struct. The UnitOfWork stashes the active
+// pgx.Tx in ctx; repository .Add automatically joins the surrounding
+// tx via [pg.TxFromContext] — multi-aggregate atomicity preserved
+// without leaking the driver into the handler.
 type RegisterTenantHandler struct {
-	tx          *pg.Transactor
-	tenants     *adapters.TenantRepository
-	persons     *adapters.PersonRepository
-	memberships *adapters.MembershipRepository
-	roles       *adapters.RoleRepository
+	uow         pg.UnitOfWork
+	tenants     tenant.Repository
+	persons     person.Repository
+	memberships membership.Repository
+	roles       role.Repository
 }
 
-// NewRegisterTenantHandler wires the handler. All five dependencies
-// are concrete adapter types — handlers depend on the concrete
-// repositories they orchestrate per TDL Wild Workouts canon.
+// NewRegisterTenantHandler wires the handler against domain
+// repository interfaces + a UnitOfWork. Cheney "accept interfaces,
+// return structs" — adapters implement the interfaces; this handler
+// has no compile-time knowledge of pgx / sqlc.
 func NewRegisterTenantHandler(
-	tx *pg.Transactor,
-	tenants *adapters.TenantRepository,
-	persons *adapters.PersonRepository,
-	memberships *adapters.MembershipRepository,
-	roles *adapters.RoleRepository,
+	uow pg.UnitOfWork,
+	tenants tenant.Repository,
+	persons person.Repository,
+	memberships membership.Repository,
+	roles role.Repository,
 ) RegisterTenantHandler {
 	return RegisterTenantHandler{
-		tx:          tx,
+		uow:         uow,
 		tenants:     tenants,
 		persons:     persons,
 		memberships: memberships,
@@ -208,7 +213,7 @@ func (h RegisterTenantHandler) persistAggregatesInTx(
 	pwd person.PasswordHash,
 ) (RegisterTenantResult, error) {
 	var result RegisterTenantResult
-	err := h.tx.WithinTx(ctx, pg.TxScopePlatform, func(ctx context.Context, tx pgx.Tx) error {
+	err := h.uow.WithinTx(ctx, pg.TxScopePlatform, func(ctx context.Context) error {
 		t, terr := tenant.New(
 			tenant.ID(ids.NewV7().String()),
 			cmd.Slug, cmd.LegalName, cmd.DisplayName, cmd.AdminEmail,
@@ -216,14 +221,16 @@ func (h RegisterTenantHandler) persistAggregatesInTx(
 		if terr != nil {
 			return fmt.Errorf("construct tenant: %w", terr)
 		}
-		if terr := h.tenants.AddInTx(ctx, tx, t); terr != nil {
+		// ctx carries the active tx — repository .Add joins it via
+		// pg.TxFromContext. Boundary stays clean of pgx.
+		if terr := h.tenants.Add(ctx, t); terr != nil {
 			return fmt.Errorf("persist tenant: %w", terr)
 		}
-		p, perr := h.findOrCreatePersonInTx(ctx, tx, cmd, existing, pwd)
+		p, perr := h.findOrCreatePerson(ctx, cmd, existing, pwd)
 		if perr != nil {
 			return perr
 		}
-		m, merr := h.createMembershipInTx(ctx, tx, p.ID(), t.ID())
+		m, merr := h.createMembership(ctx, p.ID(), t.ID())
 		if merr != nil {
 			return merr
 		}
@@ -240,15 +247,14 @@ func (h RegisterTenantHandler) persistAggregatesInTx(
 	return result, nil
 }
 
-// findOrCreatePersonInTx returns the existing aggregate when the
-// pre-tx check found one, otherwise constructs + persists a fresh
-// Person. Translates the race-loss SQLSTATE-23505 path on duplicate
-// email into the same friendly ErrEmailHasActiveMembership the pre-tx
-// check would have surfaced — concurrent onboarding races resolve to
-// the same observable error shape.
-func (h RegisterTenantHandler) findOrCreatePersonInTx(
+// findOrCreatePerson returns the existing aggregate when the pre-tx
+// check found one, otherwise constructs + persists a fresh Person on
+// the surrounding UnitOfWork tx. Translates the race-loss SQLSTATE-
+// 23505 path on duplicate email into ErrEmailHasActiveMembership —
+// concurrent onboarding races resolve to the same observable error
+// shape.
+func (h RegisterTenantHandler) findOrCreatePerson(
 	ctx context.Context,
-	tx pgx.Tx,
 	cmd RegisterTenantCommand,
 	existing *person.Person,
 	pwd person.PasswordHash,
@@ -263,7 +269,7 @@ func (h RegisterTenantHandler) findOrCreatePersonInTx(
 	if err != nil {
 		return nil, fmt.Errorf("construct person: %w", err)
 	}
-	if err := h.persons.AddInTx(ctx, tx, p); err != nil {
+	if err := h.persons.Add(ctx, p); err != nil {
 		if errors.Is(err, person.ErrEmailTaken) {
 			return nil, ErrEmailHasActiveMembership
 		}
@@ -272,13 +278,12 @@ func (h RegisterTenantHandler) findOrCreatePersonInTx(
 	return p, nil
 }
 
-// createMembershipInTx constructs the admin Membership (Active by
-// construction per the [membership.New] factory) + persists it.
-// Translates the partial-unique-index violation into
-// ErrEmailHasActiveMembership for the same race-tolerance reason.
-func (h RegisterTenantHandler) createMembershipInTx(
+// createMembership constructs the admin Membership (Active by
+// construction per the [membership.New] factory) + persists it on the
+// surrounding UnitOfWork tx. Translates partial-unique-index violation
+// into ErrEmailHasActiveMembership for the same race-tolerance reason.
+func (h RegisterTenantHandler) createMembership(
 	ctx context.Context,
-	tx pgx.Tx,
 	personID person.ID,
 	tenantID tenant.ID,
 ) (*membership.Membership, error) {
@@ -289,7 +294,7 @@ func (h RegisterTenantHandler) createMembershipInTx(
 	if err != nil {
 		return nil, fmt.Errorf("construct membership: %w", err)
 	}
-	if err := h.memberships.AddInTx(ctx, tx, m); err != nil {
+	if err := h.memberships.Add(ctx, m); err != nil {
 		if errors.Is(err, membership.ErrAlreadyActive) {
 			return nil, ErrEmailHasActiveMembership
 		}

@@ -48,6 +48,7 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/app/command"
 	"github.com/leadkart/leadkart-go/internal/identity/app/jwt"
 	commonemail "github.com/leadkart/leadkart-go/internal/common/email"
+	"github.com/leadkart/leadkart-go/internal/platform/audit"
 	"github.com/leadkart/leadkart-go/internal/platform/breach"
 	platformemail "github.com/leadkart/leadkart-go/internal/platform/email"
 	"github.com/leadkart/leadkart-go/internal/platform/impersonation"
@@ -441,6 +442,14 @@ func buildIdentityApp(pool *pgxpool.Pool, hybridCache *cache.HybridCache, cfg co
 	authRouter := adapters.NewAuthRouterPG(pool, tx)
 	permResolver := permissions.NewResolver(memberships, roles)
 
+	// Read-side adapters per ADR 00xx boundary discipline (app/query/
+	// depends on the interface; concrete sqlc-aware impl lives in
+	// adapters/). [audit.Reader] is declared in internal/platform/audit/
+	// next to its writer counterpart.
+	var auditReader audit.Reader = adapters.NewAuditReaderPG(pool, tx)
+	var searchIndex query.SearchIndex = adapters.NewSearchIndexPG(pool, tx)
+	var statsReader query.PlatformStatsReader = adapters.NewPlatformStatsReaderPG(pool, tx)
+
 	stampCache := adapters.NewSecurityStampCache(hybridCache, persons)
 	stampValidator := adapters.NewSecurityStampValidator(stampCache)
 
@@ -564,15 +573,15 @@ func buildIdentityApp(pool *pgxpool.Pool, hybridCache *cache.HybridCache, cfg co
 			ListAllTenants:            query.NewListAllTenantsHandler(tenants),
 			ListImpersonationSessions: query.NewListImpersonationSessionsHandler(impersonationStore),
 			PlatformStats: query.NewCachedPlatformStatsHandler(
-				query.NewPlatformStatsHandler(pool, tx),
+				query.NewPlatformStatsHandler(statsReader),
 				hybridCache,
 			),
 			Search: query.NewCachedSearchHandler(
-				query.NewSearchHandler(pool, tx),
+				query.NewSearchHandler(searchIndex),
 				hybridCache,
 			),
-			ListAuditEventsByTenant: query.NewListAuditEventsByTenantHandler(pool, tx),
-			ListAuditEventsByUser:   query.NewListAuditEventsByUserHandler(pool, tx),
+			ListAuditEventsByTenant: query.NewListAuditEventsByTenantHandler(auditReader),
+			ListAuditEventsByUser:   query.NewListAuditEventsByUserHandler(auditReader),
 		},
 		},
 	}, nil

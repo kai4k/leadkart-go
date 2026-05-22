@@ -66,6 +66,13 @@
   - No refresh-token-for-impersonation in v0.2 — AWS STS canon: re-AssumeRole if you need longer than the session. Reduces Wave 4 scope ~1 day; can layer on if measured pain.
   - Audit-log enrichment (writing the new act_* columns) deferred to Wave 4.1 — requires propagating impersonation context through outbox → Watermill subscriber boundary. Schema shipped; population NULL until 4.1.
   - E2E integration tests covering: scoped-token issuance + claim shape verification + downgraded-scope blocks `/v1/platform/*` + sub-impersonation rejected + target-not-found → 404.
+- Wave 6 — Layer-boundary discipline + CI gate (ADR 0047):
+  - ADR 0047 — `app/` may NOT import `adapters/db` (sqlc-generated rows), `jackc/pgx/v5` / `pgxpool` / `pgtype` (driver), or `internal/identity/adapters` (concrete repository structs). TDL Wild Workouts canon + Cheney "accept interfaces, return structs" + Khorikov pragmatic clean-architecture + Brandur ctx-tx pattern.
+  - Read-side interfaces — `audit.Reader` (in `internal/platform/audit/`), `query.SearchIndex` + `query.PlatformStatsReader` (in `internal/identity/app/query/`). Concrete pg-backed impls live in `adapters/` (`AuditReaderPG`, `SearchIndexPG`, `PlatformStatsReaderPG`).
+  - `pg.UnitOfWork` interface for multi-aggregate same-tx writes. The active `pgx.Tx` is stashed in ctx via `pg.contextWithTx` (unexported) + retrieved by adapter code via `pg.TxFromContext(ctx)`. Handlers (`RegisterTenant`, `CreateUser`) depend ONLY on `pg.UnitOfWork` + domain repository interfaces — no pgx, no concrete adapters.
+  - Adapter `Add(ctx, agg)` methods now check `pg.TxFromContext(ctx)` — if a parent UoW is in flight, join its tx; otherwise open own. Canonical `addOnTx` unexported helper replaces the previous exported `AddInTx`.
+  - `Transactor.WithinTx` renamed to `WithinTxPgx` for the low-level adapter-facing variant; new `WithinTx(ctx, scope, fn func(ctx) error)` on `*Transactor` is the UoW-shaped boundary-clean variant.
+  - `TestArch_AppDoesNotImportForbidden` — arch test in `internal/identity/app/` walks every non-test `.go` file under `app/` and fails CI on any import of the forbidden list. Drift becomes impossible at PR time. `task test:arch` runs it alongside the integration-event arch tests.
 - Wave 5 — OpenAPI 3.1 spec-first contract + Scalar `/docs`:
   - ADR 0046 — spec-first over code-first (Stripe / GitHub / Anthropic canon). Hand-written `api/openapi.yaml` is the canonical contract; Go handlers conform to it. Scalar UI over Swagger UI / Redoc (Anthropic / Resend / Hono use Scalar).
   - `api/openapi.yaml` — ~50 operations covering Auth / Capabilities / Sessions / Tenants / Users / Roles / Platform / Search / Audit. Versioned `info.version: 0.2.0`; tags reflect URL groups.

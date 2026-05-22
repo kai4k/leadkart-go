@@ -48,7 +48,7 @@ func NewRoleRepository(pool *pgxpool.Pool, tx *pg.Transactor) *RoleRepository {
 // index `uq_roles_tenant_name WHERE NOT is_deleted` into
 // [role.ErrNameTaken].
 func (r *RoleRepository) Add(ctx context.Context, ro *role.Role) error {
-	return r.tx.WithinTx(ctx, pg.TxScopeTenant, func(ctx context.Context, tx pgx.Tx) error {
+	return r.tx.WithinTxPgx(ctx, pg.TxScopeTenant, func(ctx context.Context, tx pgx.Tx) error {
 		q := r.q.WithTx(tx)
 		if err := insertRoleRow(ctx, q, ro); err != nil {
 			return err
@@ -60,7 +60,7 @@ func (r *RoleRepository) Add(ctx context.Context, ro *role.Role) error {
 // GetByID satisfies [role.Repository]. RLS-scoped read.
 func (r *RoleRepository) GetByID(ctx context.Context, id role.ID) (*role.Role, error) {
 	var out *role.Role
-	err := r.tx.WithinTx(ctx, pg.TxScopeTenant, func(ctx context.Context, tx pgx.Tx) error {
+	err := r.tx.WithinTxPgx(ctx, pg.TxScopeTenant, func(ctx context.Context, tx pgx.Tx) error {
 		q := r.q.WithTx(tx)
 		got, err := loadRole(ctx, q, id)
 		if err != nil {
@@ -87,7 +87,7 @@ func (r *RoleRepository) GetByTenantAndName(
 		return nil, err
 	}
 	var out *role.Role
-	err = r.tx.WithinTx(ctx, pg.TxScopeTenant, func(ctx context.Context, tx pgx.Tx) error {
+	err = r.tx.WithinTxPgx(ctx, pg.TxScopeTenant, func(ctx context.Context, tx pgx.Tx) error {
 		q := r.q.WithTx(tx)
 		row, err := q.GetRoleByTenantAndName(ctx, db.GetRoleByTenantAndNameParams{
 			TenantID: pgUUID(tid),
@@ -130,7 +130,7 @@ func (r *RoleRepository) GetByIDs(ctx context.Context, ids []role.ID) ([]*role.R
 		pgIDs = append(pgIDs, pgUUID(uid))
 	}
 	var out []*role.Role
-	err := r.tx.WithinTx(ctx, pg.TxScopeTenant, func(ctx context.Context, tx pgx.Tx) error {
+	err := r.tx.WithinTxPgx(ctx, pg.TxScopeTenant, func(ctx context.Context, tx pgx.Tx) error {
 		q := r.q.WithTx(tx)
 		rows, err := q.GetRolesByIDs(ctx, pgIDs)
 		if err != nil {
@@ -163,7 +163,7 @@ func (r *RoleRepository) ListByTenant(
 		return nil, err
 	}
 	var out []*role.Role
-	err = r.tx.WithinTx(ctx, pg.TxScopeTenant, func(ctx context.Context, tx pgx.Tx) error {
+	err = r.tx.WithinTxPgx(ctx, pg.TxScopeTenant, func(ctx context.Context, tx pgx.Tx) error {
 		q := r.q.WithTx(tx)
 		rows, err := q.ListRolesByTenant(ctx, pgUUID(tid))
 		if err != nil {
@@ -201,7 +201,7 @@ func (r *RoleRepository) UpdateByID(
 	id role.ID,
 	updateFn func(*role.Role) (bool, error),
 ) error {
-	return r.tx.WithinTx(ctx, pg.TxScopeTenant, func(ctx context.Context, tx pgx.Tx) error {
+	return r.tx.WithinTxPgx(ctx, pg.TxScopeTenant, func(ctx context.Context, tx pgx.Tx) error {
 		q := r.q.WithTx(tx)
 		ro, err := loadRole(ctx, q, id)
 		if err != nil {

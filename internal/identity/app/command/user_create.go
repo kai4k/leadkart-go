@@ -5,11 +5,8 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/jackc/pgx/v5"
-
 	"github.com/leadkart/leadkart-go/internal/common/email"
 	"github.com/leadkart/leadkart-go/internal/common/ids"
-	"github.com/leadkart/leadkart-go/internal/identity/adapters"
 	"github.com/leadkart/leadkart-go/internal/identity/app/argon2"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
@@ -57,22 +54,27 @@ type CreateUserResult struct {
 // handler IS the orchestrator per TDL strict — same shape as
 // [RegisterTenantHandler] but smaller (Tenant already exists; only
 // Person + Membership writes).
+//
+// Boundary discipline (ADR 0047): depends on domain repository
+// INTERFACES + [pg.UnitOfWork] only. No pgx, no pgxpool, no concrete
+// adapter struct. The UnitOfWork stashes the tx in ctx; repository
+// .Add joins automatically via pg.TxFromContext.
 type CreateUserHandler struct {
-	tx          *pg.Transactor
-	persons     *adapters.PersonRepository
-	memberships *adapters.MembershipRepository
+	uow         pg.UnitOfWork
+	persons     person.Repository
+	memberships membership.Repository
 }
 
-// NewCreateUserHandler wires the handler.
+// NewCreateUserHandler wires the handler against interfaces only.
 func NewCreateUserHandler(
-	tx *pg.Transactor,
-	persons *adapters.PersonRepository,
-	memberships *adapters.MembershipRepository,
+	uow pg.UnitOfWork,
+	persons person.Repository,
+	memberships membership.Repository,
 ) CreateUserHandler {
-	if tx == nil || persons == nil || memberships == nil {
+	if uow == nil || persons == nil || memberships == nil {
 		panic("command: NewCreateUserHandler all dependencies required")
 	}
-	return CreateUserHandler{tx: tx, persons: persons, memberships: memberships}
+	return CreateUserHandler{uow: uow, persons: persons, memberships: memberships}
 }
 
 // Handle runs the flow:
@@ -120,12 +122,12 @@ func (h CreateUserHandler) Handle(
 	}
 
 	var result CreateUserResult
-	err = h.tx.WithinTx(ctx, pg.TxScopePlatform, func(ctx context.Context, tx pgx.Tx) error {
-		p, perr := h.findOrCreatePersonInTx(ctx, tx, cmd, existing, pwd)
+	err = h.uow.WithinTx(ctx, pg.TxScopePlatform, func(ctx context.Context) error {
+		p, perr := h.findOrCreatePerson(ctx, cmd, existing, pwd)
 		if perr != nil {
 			return perr
 		}
-		m, merr := h.createMembershipInTx(ctx, tx, p.ID(), cmd.TenantID, cmd.CreatedByMembershipID)
+		m, merr := h.createMembership(ctx, p.ID(), cmd.TenantID, cmd.CreatedByMembershipID)
 		if merr != nil {
 			return merr
 		}
@@ -157,9 +159,8 @@ func (h CreateUserHandler) hashPassword(plain string) (person.PasswordHash, erro
 	return pwd, nil
 }
 
-func (h CreateUserHandler) findOrCreatePersonInTx(
+func (h CreateUserHandler) findOrCreatePerson(
 	ctx context.Context,
-	tx pgx.Tx,
 	cmd CreateUserCommand,
 	existing *person.Person,
 	pwd person.PasswordHash,
@@ -172,7 +173,7 @@ func (h CreateUserHandler) findOrCreatePersonInTx(
 	if err != nil {
 		return nil, fmt.Errorf("create user: construct person: %w", err)
 	}
-	if err := h.persons.AddInTx(ctx, tx, p); err != nil {
+	if err := h.persons.Add(ctx, p); err != nil {
 		// Race-loss: another concurrent create-user committed first.
 		// Surface as the same friendly error the pre-tx check would
 		// have produced if it had won the race.
@@ -184,9 +185,8 @@ func (h CreateUserHandler) findOrCreatePersonInTx(
 	return p, nil
 }
 
-func (h CreateUserHandler) createMembershipInTx(
+func (h CreateUserHandler) createMembership(
 	ctx context.Context,
-	tx pgx.Tx,
 	personID person.ID,
 	tenantID tenant.ID,
 	createdBy membership.ID,
@@ -195,7 +195,7 @@ func (h CreateUserHandler) createMembershipInTx(
 	if err != nil {
 		return nil, fmt.Errorf("create user: construct membership: %w", err)
 	}
-	if err := h.memberships.AddInTx(ctx, tx, m); err != nil {
+	if err := h.memberships.Add(ctx, m); err != nil {
 		if errors.Is(err, membership.ErrAlreadyActive) {
 			return nil, ErrEmailHasActiveMembership
 		}

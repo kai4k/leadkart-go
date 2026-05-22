@@ -26,7 +26,9 @@ import (
 	"github.com/leadkart/leadkart-go/internal/common/ids"
 )
 
-// Entry is the row shape written to buildingblocks.audit_log_entry.
+// Entry is the row shape of buildingblocks.audit_log_entry — used by
+// both [Writer.Write] (caller leaves ID zero; writer generates) and
+// [Reader] (read-back populates ID from the row).
 //
 // UserID / TenantID / CorrelationID use uuid.Nil for "absent" (NULL
 // in the column) — keeps the API signature simple without sprinkling
@@ -37,6 +39,7 @@ import (
 // ONLY for rows emitted under a scoped impersonation token; nil/zero
 // for regular rows. Translates to SQL NULL the same way.
 type Entry struct {
+	ID            uuid.UUID // populated on read; ignored on write (writer mints v7)
 	Action        string
 	UserID        uuid.UUID
 	TenantID      uuid.UUID

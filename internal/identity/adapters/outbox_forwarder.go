@@ -65,7 +65,7 @@ func NewOutboxForwarder(
 // poll loop with backoff.
 func (f *OutboxForwarder) ForwardOnce(ctx context.Context) (int, error) {
 	count := 0
-	err := f.tx.WithinTx(ctx, pg.TxScopePlatform, func(ctx context.Context, tx pgx.Tx) error {
+	err := f.tx.WithinTxPgx(ctx, pg.TxScopePlatform, func(ctx context.Context, tx pgx.Tx) error {
 		q := db.New(tx)
 		rows, err := q.ListUnforwardedOutboxEvents(ctx, f.batchSize)
 		if err != nil {

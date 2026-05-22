@@ -100,7 +100,7 @@ func (r *AuthRouterPG) ResolveByEmail(
 		p *person.Person
 		m *membership.Membership
 	)
-	err := r.tx.WithinTx(ctx, pg.TxScopePlatform, func(ctx context.Context, tx pgx.Tx) error {
+	err := r.tx.WithinTxPgx(ctx, pg.TxScopePlatform, func(ctx context.Context, tx pgx.Tx) error {
 		q := r.q.WithTx(tx)
 		row, err := q.GetPersonAndActiveMembershipByEmail(ctx, e.String())
 		if err != nil {

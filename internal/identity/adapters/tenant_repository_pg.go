@@ -41,15 +41,23 @@ func NewTenantRepository(pool *pgxpool.Pool, tx *pg.Transactor) *TenantRepositor
 	return &TenantRepository{pool: pool, tx: tx, q: db.New(pool)}
 }
 
-// Add satisfies [tenant.Repository].
+// Add satisfies [tenant.Repository]. When the supplied ctx carries an
+// active tx (a parent [pg.UnitOfWork] is in flight), Add joins that tx
+// rather than opening its own — this is the canonical multi-aggregate
+// composition path used by RegisterTenant.
 func (r *TenantRepository) Add(ctx context.Context, t *tenant.Tenant) error {
-	return r.tx.WithinTx(ctx, pg.TxScopePlatform, func(ctx context.Context, tx pgx.Tx) error {
-		return r.AddInTx(ctx, tx, t)
+	if tx, ok := pg.TxFromContext(ctx); ok {
+		return r.addOnTx(ctx, tx, t)
+	}
+	return r.tx.WithinTxPgx(ctx, pg.TxScopePlatform, func(ctx context.Context, tx pgx.Tx) error {
+		return r.addOnTx(ctx, tx, t)
 	})
 }
 
-// AddInTx persists a brand-new tenant under an EXISTING transaction.
-func (r *TenantRepository) AddInTx(ctx context.Context, tx pgx.Tx, t *tenant.Tenant) error {
+// addOnTx persists the aggregate against the supplied tx + drains
+// events to the outbox. Unexported — callers must use [Add] or the
+// surrounding [pg.UnitOfWork].
+func (r *TenantRepository) addOnTx(ctx context.Context, tx pgx.Tx, t *tenant.Tenant) error {
 	q := r.q.WithTx(tx)
 	if err := insertTenantRow(ctx, q, t); err != nil {
 		return err
@@ -63,7 +71,7 @@ func (r *TenantRepository) UpdateByID(
 	id tenant.ID,
 	updateFn func(*tenant.Tenant) (bool, error),
 ) error {
-	return r.tx.WithinTx(ctx, pg.TxScopePlatform, func(ctx context.Context, tx pgx.Tx) error {
+	return r.tx.WithinTxPgx(ctx, pg.TxScopePlatform, func(ctx context.Context, tx pgx.Tx) error {
 		q := r.q.WithTx(tx)
 		t, err := loadTenant(ctx, q, id)
 		if err != nil {
