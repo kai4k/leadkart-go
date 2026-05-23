@@ -11,7 +11,6 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/propagation"
 
-	"github.com/leadkart/leadkart-go/internal/common/clock"
 	"github.com/leadkart/leadkart-go/internal/common/messaging"
 	"github.com/leadkart/leadkart-go/internal/common/pg"
 	"github.com/leadkart/leadkart-go/internal/crm/adapters/db"
@@ -30,18 +29,24 @@ type OutboxForwarder struct {
 	publisher message.Publisher
 	topic     string // Watermill destination — usually "crm.events"
 	batchSize int32
+	now       func() time.Time
 }
 
-// NewOutboxForwarder wires the forwarder. batchSize 0 → 100.
+// NewOutboxForwarder wires the forwarder. batchSize 0 → 100. `now`
+// is the injected clock (Pure Domain canon — ADR 0047). Nil → time.Now.
 func NewOutboxForwarder(
 	pool *pgxpool.Pool,
 	tx *pg.Transactor,
 	publisher message.Publisher,
 	topic string,
 	batchSize int32,
+	now func() time.Time,
 ) *OutboxForwarder {
 	if batchSize <= 0 {
 		batchSize = 100
+	}
+	if now == nil {
+		now = time.Now
 	}
 	return &OutboxForwarder{
 		pool:      pool,
@@ -49,6 +54,7 @@ func NewOutboxForwarder(
 		publisher: publisher,
 		topic:     topic,
 		batchSize: batchSize,
+		now:       now,
 	}
 }
 
@@ -62,7 +68,7 @@ func (f *OutboxForwarder) ForwardOnce(ctx context.Context) (int, error) {
 		if err != nil {
 			return fmt.Errorf("crm forwarder: list unforwarded: %w", err)
 		}
-		now := clock.Now()
+		now := f.now()
 		propagator := otel.GetTextMapPropagator()
 		for _, row := range rows {
 			msg := message.NewMessage(uuidFromPg(row.ID).String(), row.Payload)

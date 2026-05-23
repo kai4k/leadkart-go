@@ -49,6 +49,10 @@ import (
 
 	"github.com/riverqueue/river"
 
+	crmadapters "github.com/leadkart/leadkart-go/internal/crm/adapters"
+	crmcommand "github.com/leadkart/leadkart-go/internal/crm/app/command"
+	crmintegrationevents "github.com/leadkart/leadkart-go/internal/crm/integrationevents"
+	crmsubscribers "github.com/leadkart/leadkart-go/internal/crm/ports/subscribers"
 	"github.com/leadkart/leadkart-go/internal/identity/adapters"
 	"github.com/leadkart/leadkart-go/internal/identity/integrationevents"
 	"github.com/leadkart/leadkart-go/internal/identity/ports/subscribers"
@@ -239,11 +243,11 @@ func run(ctx context.Context, stdout *os.File) error {
 
 	tx := pg.NewTransactor(pool)
 	forwarder := adapters.NewOutboxForwarder(pool, tx, pubsub, integrationevents.Topic, 0, time.Now)
+
 	// Per-module outbox forwarder: each bounded context owns its own
 	// outbox table (CLAUDE.md §"Each module owns its Postgres schema"),
 	// so each needs its own forwarder bound to the schema-specific sqlc
-	// Queries. Inventory's forwarder polls inventory.outbox and publishes
-	// onto the inventory.events Watermill topic.
+	// Queries.
 	inventoryForwarder := inventoryadapters.NewOutboxForwarder(pool, tx, pubsub, inventoryintegrationevents.Topic, 0, time.Now)
 
 	// Platform-module outbox forwarder (ADR 0059). Sibling of the
@@ -251,6 +255,14 @@ func run(ctx context.Context, stdout *os.File) error {
 	// has no in-process subscriber for platform events; the topic is
 	// still drained so audit-log shape stays consistent.
 	platformForwarder := platformadapters.NewOutboxForwarder(pool, tx, pubsub, platformintegrationevents.Topic, 0, time.Now)
+
+	// CRM-module outbox forwarder (ADR 0060). Drains crm.outbox to the
+	// crm.events Watermill topic. Slice 1 CRM also subscribes to the
+	// platform.events topic for the lead-purchased ingest.
+	crmForwarder := crmadapters.NewOutboxForwarder(pool, tx, pubsub, crmintegrationevents.Topic, 0, time.Now)
+	crmLeads := crmadapters.NewCrmLeadRepository(pool, tx)
+	crmIngest := crmsubscribers.NewPurchasedLeadIngestor(
+		crmcommand.NewIngestPurchasedLeadHandler(crmLeads), logger)
 
 	router, err := messaging.NewRouter(messaging.Deps{
 		Subscriber:       pubsub,
@@ -268,6 +280,12 @@ func run(ctx context.Context, stdout *os.File) error {
 	// fail-fast at boot is the right shape per CLAUDE.md "MustNewX
 	// init-time only".
 	subscribers.Register(router, subWiring.Families, subWiring.StampCache, buildEmailSender(logger), logger, time.Now)
+
+	// CRM module subscribers (ADR 0060). The lead-purchased subscriber
+	// rides the Platform module's `platform.events` topic — handler-side
+	// event_type filtering routes only `platform.lead-purchased.v1` to
+	// the ingest handler.
+	crmsubscribers.Register(router, crmIngest, "platform.events", logger)
 
 	// River background-job pool. v0.2 ships one job — AuditLogPurgeJob —
 	// running daily to enforce the 7-year audit retention. River's
@@ -326,6 +344,13 @@ func run(ctx context.Context, stdout *os.File) error {
 	g.Go(func() error {
 		inventoryForwarder.Run(gctx, forwarderPollInterval, forwarderRetryInterval, func(err error) {
 			logger.ErrorContext(gctx, "inventory outbox forwarder", "err", err)
+		})
+		return nil
+	})
+
+	g.Go(func() error {
+		crmForwarder.Run(gctx, forwarderPollInterval, forwarderRetryInterval, func(err error) {
+			logger.ErrorContext(gctx, "crm outbox forwarder", "err", err)
 		})
 		return nil
 	})

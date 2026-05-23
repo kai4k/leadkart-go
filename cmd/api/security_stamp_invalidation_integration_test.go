@@ -51,6 +51,7 @@ import (
 	"github.com/ThreeDotsLabs/watermill/pubsub/gochannel"
 
 	"github.com/leadkart/leadkart-go/internal/common/ids"
+	crmapp "github.com/leadkart/leadkart-go/internal/crm/app"
 	"github.com/leadkart/leadkart-go/internal/identity/adapters"
 	"github.com/leadkart/leadkart-go/internal/identity/integrationevents"
 	"github.com/leadkart/leadkart-go/internal/identity/ports"
@@ -145,7 +146,7 @@ func TestSecurityStampInvalidation_PasswordChange_Returns401WithinFastPath(t *te
 		t.Fatal("router did not start within 2s")
 	}
 
-	srv := httptest.NewServer(newServer(silentLogger(), wiring.App, platformapp.Application{}, buildInventoryApp(pool), wiring.Issuer, wiring.StampValidator))
+	srv := httptest.NewServer(newServer(silentLogger(), wiring.App, platformapp.Application{}, buildInventoryApp(pool), crmapp.Application{}, wiring.Issuer, wiring.StampValidator))
 	t.Cleanup(srv.Close)
 
 	// 1. Register tenant.

@@ -86,6 +86,12 @@ import (
 	"github.com/leadkart/leadkart-go/internal/platform/domain/platformlead"
 	"github.com/leadkart/leadkart-go/internal/platform/domain/unverifiedcontact"
 	"github.com/leadkart/leadkart-go/internal/platform/domain/verificationcall"
+
+	crmadapters "github.com/leadkart/leadkart-go/internal/crm/adapters"
+	crmapp "github.com/leadkart/leadkart-go/internal/crm/app"
+	crmcommand "github.com/leadkart/leadkart-go/internal/crm/app/command"
+	crmquery "github.com/leadkart/leadkart-go/internal/crm/app/query"
+	crmports "github.com/leadkart/leadkart-go/internal/crm/ports"
 )
 
 // HTTP server timeouts — public listener tuning per OWASP API Security
@@ -306,6 +312,11 @@ func run(ctx context.Context, stdout *os.File, _ []string) error {
 	// pool + transactor + middleware story as Platform.
 	inventoryAppInstance := buildInventoryApp(pool)
 
+	// CRM module wiring (ADR 0060 — Phase 2 Slice 1). Same pattern as
+	// Platform: shares the pool + transactor; HTTP routes gate on
+	// identity.authn via the shared verifier + stamp validator.
+	crmWiring := buildCrmApp(pool, time.Now)
+
 	// NOTE: outbox forwarder + messaging.Router + subscribers.Register
 	// live in cmd/worker — see that binary's package doc. The API host
 	// only writes integration events (via the per-handler outbox writes
@@ -343,7 +354,7 @@ func run(ctx context.Context, stdout *os.File, _ []string) error {
 		},
 	})
 	publicHandler := otelhttp.NewHandler(
-		mwChain(newServer(logger, wiring.App, platformWiring.App, inventoryAppInstance, wiring.Issuer, wiring.StampValidator)),
+		mwChain(newServer(logger, wiring.App, platformWiring.App, inventoryAppInstance, crmWiring.App, wiring.Issuer, wiring.StampValidator)),
 		"leadkart-api",
 	)
 	srv := &http.Server{
@@ -410,6 +421,7 @@ func newServer(
 	identityApp app.Application,
 	platformApp platformapp.Application,
 	inventoryAppInstance inventoryapp.Application,
+	crmApp crmapp.Application,
 	verifier authn.Verifier,
 	validator authn.StampValidator,
 ) http.Handler {
@@ -418,6 +430,7 @@ func newServer(
 	ports.AddRoutes(mux, log, identityApp, verifier, validator)
 	platformports.AddRoutes(mux, log, platformApp, verifier, validator)
 	inventoryports.AddRoutes(mux, log, inventoryAppInstance, verifier, validator)
+	crmports.AddRoutes(mux, log, crmApp, verifier, validator)
 	return mux
 }
 
@@ -737,6 +750,44 @@ func buildInventoryApp(pool *pgxpool.Pool) inventoryapp.Application {
 			GetBatch:               inventoryquery.NewGetBatchHandler(batches),
 			ListBatchesByProduct:   inventoryquery.NewListBatchesByProductHandler(batches),
 			ListBatchMovementsPage: inventoryquery.NewListBatchMovementsPageHandler(movements),
+		},
+	}
+}
+
+// ----- CRM wiring ------------------------------------------------------------
+
+// crmWiringResult is the output of buildCrmApp — used by run to attach
+// the CRM routes. The worker side (subscriber + outbox forwarder) lives
+// in cmd/worker/main.go.
+type crmWiringResult struct {
+	App crmapp.Application
+}
+
+// buildCrmApp wires the CRM module per ADR 0060. Reuses the same
+// pgxpool + transactor as Identity / Platform — single DB,
+// schema-per-module per ADR 0001.
+func buildCrmApp(pool *pgxpool.Pool, now func() time.Time) crmWiringResult {
+	tx := pg.NewTransactor(pool)
+
+	leads := crmadapters.NewCrmLeadRepository(pool, tx)
+	calls := crmadapters.NewCallLogRepository(pool, tx)
+	history := crmadapters.NewAssignmentHistoryRepository(pool, tx)
+
+	return crmWiringResult{
+		App: crmapp.Application{
+			Commands: crmapp.Commands{
+				IngestPurchasedLead:   crmcommand.NewIngestPurchasedLeadHandler(leads),
+				AssignLead:            crmcommand.NewAssignLeadHandler(leads, history, tx, now),
+				ChangeLeadStage:       crmcommand.NewChangeLeadStageHandler(leads),
+				ChangeLeadTemperature: crmcommand.NewChangeLeadTemperatureHandler(leads),
+				LogCall:               crmcommand.NewLogCallHandler(leads, calls, now),
+				ConvertLead:           crmcommand.NewConvertLeadHandler(leads),
+				LoseLead:              crmcommand.NewLoseLeadHandler(leads),
+			},
+			Queries: crmapp.Queries{
+				GetLead:   crmquery.NewGetLeadHandler(leads),
+				ListLeads: crmquery.NewListLeadsHandler(leads),
+			},
 		},
 	}
 }

@@ -37,6 +37,7 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/ports"
 	"github.com/leadkart/leadkart-go/internal/common/cache"
 	"github.com/leadkart/leadkart-go/internal/common/config"
+	crmapp "github.com/leadkart/leadkart-go/internal/crm/app"
 	platformapp "github.com/leadkart/leadkart-go/internal/platform/app"
 )
 
@@ -82,7 +83,7 @@ func TestHTTPFlow_RegisterLoginRefreshLogout(t *testing.T) {
 		t.Fatalf("buildIdentityApp: %v", err)
 	}
 
-	srv := httptest.NewServer(newServer(silentLogger(), wiring.App, platformapp.Application{}, buildInventoryApp(pool), wiring.Issuer, wiring.StampValidator))
+	srv := httptest.NewServer(newServer(silentLogger(), wiring.App, platformapp.Application{}, buildInventoryApp(pool), crmapp.Application{}, wiring.Issuer, wiring.StampValidator))
 	t.Cleanup(srv.Close)
 
 	full := ids.NewV7().String()
@@ -190,7 +191,7 @@ func TestHTTPFlow_LoginInvalidCredentials_Returns401(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildIdentityApp: %v", err)
 	}
-	srv := httptest.NewServer(newServer(silentLogger(), wiring.App, platformapp.Application{}, buildInventoryApp(pool), wiring.Issuer, wiring.StampValidator))
+	srv := httptest.NewServer(newServer(silentLogger(), wiring.App, platformapp.Application{}, buildInventoryApp(pool), crmapp.Application{}, wiring.Issuer, wiring.StampValidator))
 	t.Cleanup(srv.Close)
 
 	resp := postJSON(t, srv.URL+"/api/v1/auth/login", ports.LoginRequest{
