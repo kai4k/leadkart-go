@@ -7,9 +7,11 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/leadkart/leadkart-go/internal/common/ids"
 	"github.com/leadkart/leadkart-go/internal/identity/adapters/db"
+	"github.com/leadkart/leadkart-go/internal/identity/app/actclaim"
 	"github.com/leadkart/leadkart-go/internal/identity/integrationevents"
 )
 
@@ -45,6 +47,14 @@ func writeOutboxEvents(
 	if len(events) == 0 {
 		return nil
 	}
+	// Per ADR 0056: stamp the RFC 8693 actor claim onto every outbox
+	// row emitted while the request runs under a scoped impersonation
+	// token. NULL on the non-impersonation hot path (the overwhelming
+	// majority of rows). The forwarder propagates these onto the
+	// Watermill message metadata so the subscriber-side
+	// AuditMiddleware can populate audit_log_entry.act_*.
+	actOperatorID, actSessionID, actReason := outboxActParams(ctx)
+
 	q := db.New(tx)
 	for _, e := range events {
 		payload, err := json.Marshal(e)
@@ -52,17 +62,51 @@ func writeOutboxEvents(
 			return fmt.Errorf("outbox: marshal %s: %w", e.Topic(), err)
 		}
 		err = q.InsertOutboxEvent(ctx, db.InsertOutboxEventParams{
-			ID:         pgUUID(ids.NewV7()),
-			TenantID:   pgUUID(tenantID),
-			Topic:      e.Topic(),
-			Payload:    payload,
-			OccurredAt: pgRequiredTimestamp(e.OccurredAt()),
+			ID:            pgUUID(ids.NewV7()),
+			TenantID:      pgUUID(tenantID),
+			Topic:         e.Topic(),
+			Payload:       payload,
+			OccurredAt:    pgRequiredTimestamp(e.OccurredAt()),
+			ActOperatorID: actOperatorID,
+			ActSessionID:  actSessionID,
+			ActReason:     actReason,
 		})
 		if err != nil {
 			return fmt.Errorf("outbox: insert %s: %w", e.Topic(), err)
 		}
 	}
 	return nil
+}
+
+// outboxActParams projects the per-request actclaim ctx (set by the
+// authn middleware after JWT verification) onto the three sqlc param
+// slots. Defensive: malformed OperatorID/SessionID (non-UUID) is
+// dropped to NULL rather than failing the outbox write — audit-log
+// outage MUST NOT cascade per audit-checklist.md §12.
+//
+// Returns three NULL pgtype values when ctx carries no actclaim — the
+// non-impersonation hot path (the overwhelming majority of requests).
+func outboxActParams(ctx context.Context) (pgtype.UUID, pgtype.UUID, *string) {
+	c, ok := actclaim.FromContext(ctx)
+	if !ok || c.IsZero() {
+		return pgtype.UUID{}, pgtype.UUID{}, nil
+	}
+	var (
+		opID  pgtype.UUID
+		sesID pgtype.UUID
+	)
+	if parsed, err := uuid.Parse(c.OperatorID); err == nil {
+		opID = pgUUID(parsed)
+	}
+	if parsed, err := uuid.Parse(c.SessionID); err == nil {
+		sesID = pgUUID(parsed)
+	}
+	var reason *string
+	if c.Reason != "" {
+		r := c.Reason
+		reason = &r
+	}
+	return opID, sesID, reason
 }
 
 // mapDomainEvents translates a slice of domain events into the

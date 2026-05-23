@@ -1,7 +1,9 @@
 # ADR 0045 — Scoped JWT impersonation: AWS STS AssumeRole pattern + RFC 8693 `act` claim
 
-**Status:** Accepted (design — implementation lands in Wave 4 PR per the ADR section "Implementation phasing")
+**Status:** Accepted (Wave 4 implementation shipped; Wave 4.1 audit-log enrichment shipped in Wave 9.2c per ADR 0056)
 **Date:** 2026-05-22
+
+> **Wave 9.2c update (2026-05-23):** the "Wave 4.1 follow-up" referenced throughout this ADR — populating `audit_log_entry.act_operator_id` / `act_session_id` / `act_reason` from outbox-driven subscribers — has shipped per ADR 0056. Propagation path: HTTP `authn` middleware → ctx → outbox act_* columns → forwarder → Watermill `message.Metadata` → `AuditLoggingMiddleware` → audit row. The schema columns added by migration 20260524000001 are now populated for operator-impersonation actions.
 
 ## Context
 

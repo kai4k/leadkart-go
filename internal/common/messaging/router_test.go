@@ -174,6 +174,172 @@ func TestRouter_FullStack_TenantContextAndAuditAndIdempotency(t *testing.T) {
 	}
 }
 
+// TestRouter_AuditMiddleware_PopulatesActFields_WhenMessageMetadataCarriesActClaim
+// verifies the ADR 0056 propagation path: when the OutboxForwarder
+// stamps act_operator_id / act_session_id / act_reason on Watermill
+// metadata, the AuditMiddleware projects them onto the corresponding
+// audit_log_entry columns.
+func TestRouter_AuditMiddleware_PopulatesActFields_WhenMessageMetadataCarriesActClaim(t *testing.T) {
+	pool := inboxFixture(t)
+	receiver := messaging.NewIdempotentReceiver(pool)
+	auditW := audit.NewWriter(pool, silentLog())
+
+	pubsub := gochannel.NewGoChannel(gochannel.Config{}, watermill.NewSlogLogger(silentLog()))
+	t.Cleanup(func() { _ = pubsub.Close() })
+
+	r, err := messaging.NewRouter(messaging.Deps{
+		Subscriber:       pubsub,
+		Logger:           silentLog(),
+		IdempotencyInbox: receiver,
+		AuditWriter:      auditW,
+		CloseTimeout:     2 * time.Second,
+		Retry: messaging.RetryConfig{
+			MaxRetries:      1,
+			InitialInterval: 10 * time.Millisecond,
+			MaxInterval:     50 * time.Millisecond,
+			Multiplier:      2.0,
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewRouter: %v", err)
+	}
+	t.Cleanup(func() { _ = r.Close() })
+
+	r.AddSubscriber("test.act", "test.act.topic",
+		func(_ context.Context, _ string, _ *message.Message) error { return nil })
+
+	stop := runRouter(t, r)
+	defer stop()
+
+	operatorID := uuid.New()
+	sessionID := uuid.New()
+	const reason = "ops:debug:ABC-1234"
+
+	msg := message.NewMessage(uuid.NewString(), []byte(`{}`))
+	msg.Metadata.Set(messaging.HeaderEventType, "test.act.v1")
+	msg.Metadata.Set(messaging.HeaderActOperatorID, operatorID.String())
+	msg.Metadata.Set(messaging.HeaderActSessionID, sessionID.String())
+	msg.Metadata.Set(messaging.HeaderActReason, reason)
+	if err := pubsub.Publish("test.act.topic", msg); err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		var n int
+		_ = pool.QueryRow(t.Context(), `
+			SELECT count(*) FROM buildingblocks.audit_log_entry
+			WHERE  action = 'test.act.v1'
+		`).Scan(&n)
+		if n == 1 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	var (
+		gotOperator uuid.UUID
+		gotSession  uuid.UUID
+		gotReason   *string
+	)
+	err = pool.QueryRow(t.Context(), `
+		SELECT act_operator_id, act_session_id, act_reason
+		FROM   buildingblocks.audit_log_entry
+		WHERE  action = 'test.act.v1'
+	`).Scan(&gotOperator, &gotSession, &gotReason)
+	if err != nil {
+		t.Fatalf("audit row: %v", err)
+	}
+	if gotOperator != operatorID {
+		t.Errorf("act_operator_id = %s, want %s", gotOperator, operatorID)
+	}
+	if gotSession != sessionID {
+		t.Errorf("act_session_id = %s, want %s", gotSession, sessionID)
+	}
+	if gotReason == nil || *gotReason != reason {
+		t.Errorf("act_reason = %v, want %q", gotReason, reason)
+	}
+}
+
+// TestRouter_AuditMiddleware_LeavesActFieldsEmpty_WhenNoMetadata is the
+// backward-compat guard — non-impersonation messages (the overwhelming
+// hot path) must not leak NULL → uuid.Nil round-trips into the audit
+// columns.
+func TestRouter_AuditMiddleware_LeavesActFieldsEmpty_WhenNoMetadata(t *testing.T) {
+	pool := inboxFixture(t)
+	receiver := messaging.NewIdempotentReceiver(pool)
+	auditW := audit.NewWriter(pool, silentLog())
+
+	pubsub := gochannel.NewGoChannel(gochannel.Config{}, watermill.NewSlogLogger(silentLog()))
+	t.Cleanup(func() { _ = pubsub.Close() })
+
+	r, err := messaging.NewRouter(messaging.Deps{
+		Subscriber:       pubsub,
+		Logger:           silentLog(),
+		IdempotencyInbox: receiver,
+		AuditWriter:      auditW,
+		CloseTimeout:     2 * time.Second,
+		Retry: messaging.RetryConfig{
+			MaxRetries:      1,
+			InitialInterval: 10 * time.Millisecond,
+			MaxInterval:     50 * time.Millisecond,
+			Multiplier:      2.0,
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewRouter: %v", err)
+	}
+	t.Cleanup(func() { _ = r.Close() })
+
+	r.AddSubscriber("test.noact", "test.noact.topic",
+		func(_ context.Context, _ string, _ *message.Message) error { return nil })
+
+	stop := runRouter(t, r)
+	defer stop()
+
+	msg := message.NewMessage(uuid.NewString(), []byte(`{}`))
+	msg.Metadata.Set(messaging.HeaderEventType, "test.noact.v1")
+	if err := pubsub.Publish("test.noact.topic", msg); err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		var n int
+		_ = pool.QueryRow(t.Context(), `
+			SELECT count(*) FROM buildingblocks.audit_log_entry
+			WHERE  action = 'test.noact.v1'
+		`).Scan(&n)
+		if n == 1 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	var (
+		gotOperator *string
+		gotSession  *string
+		gotReason   *string
+	)
+	err = pool.QueryRow(t.Context(), `
+		SELECT act_operator_id::text, act_session_id::text, act_reason
+		FROM   buildingblocks.audit_log_entry
+		WHERE  action = 'test.noact.v1'
+	`).Scan(&gotOperator, &gotSession, &gotReason)
+	if err != nil {
+		t.Fatalf("audit row: %v", err)
+	}
+	if gotOperator != nil {
+		t.Errorf("act_operator_id = %v, want NULL", *gotOperator)
+	}
+	if gotSession != nil {
+		t.Errorf("act_session_id = %v, want NULL", *gotSession)
+	}
+	if gotReason != nil {
+		t.Errorf("act_reason = %v, want NULL", *gotReason)
+	}
+}
+
 func TestRouter_HandlerError_DoesNotRecordInbox_AuditMarksFailure(t *testing.T) {
 	pool := inboxFixture(t)
 	receiver := messaging.NewIdempotentReceiver(pool)

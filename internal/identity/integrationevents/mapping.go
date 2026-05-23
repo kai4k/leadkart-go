@@ -6,9 +6,11 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/permissionrequest"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/refreshtoken"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/role"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/rolehierarchy"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
 
@@ -216,6 +218,16 @@ func FromDomainEvent(d any) (Event, error) {
 			OccurredAtUTC: e.At.UTC(),
 		}, nil
 
+	case person.PasswordResetEmailRequestedEvent:
+		return PersonPasswordResetEmailRequestedV1{
+			PersonID:       mustParseUUID(e.PersonID.String()),
+			Email:          e.Email.String(),
+			PlaintextToken: e.PlaintextToken,
+			ExpiresAtUTC:   e.ExpiresAt.UTC(),
+			RecipientName:  e.RecipientName,
+			OccurredAtUTC:  e.At.UTC(),
+		}, nil
+
 	case person.PasswordResetConfirmedEvent:
 		return PersonPasswordResetConfirmedV1{
 			PersonID:      mustParseUUID(e.PersonID.String()),
@@ -237,6 +249,17 @@ func FromDomainEvent(d any) (Event, error) {
 			OccurredAtUTC: e.At.UTC(),
 		}, nil
 
+	case person.EmailChangeConfirmationRequestedEvent:
+		return PersonEmailChangeConfirmationRequestedV1{
+			PersonID:       mustParseUUID(e.PersonID.String()),
+			NewEmail:       e.NewEmail.String(),
+			OldEmail:       e.OldEmail.String(),
+			PlaintextToken: e.PlaintextToken,
+			ExpiresAtUTC:   e.ExpiresAt.UTC(),
+			RecipientName:  e.RecipientName,
+			OccurredAtUTC:  e.At.UTC(),
+		}, nil
+
 	case person.EmailChangedEvent:
 		return PersonEmailChangedV1{
 			PersonID:      mustParseUUID(e.PersonID.String()),
@@ -249,6 +272,20 @@ func FromDomainEvent(d any) (Event, error) {
 		return PersonEmailChangeCancelledV1{
 			PersonID:      mustParseUUID(e.PersonID.String()),
 			Reason:        e.Reason,
+			OccurredAtUTC: e.At.UTC(),
+		}, nil
+
+	case person.AccountLockedEvent:
+		return PersonAccountLockedV1{
+			PersonID:       mustParseUUID(e.PersonID.String()),
+			LockedUntilUTC: e.LockedUntil.UTC(),
+			FailedCount:    e.FailedCount,
+			OccurredAtUTC:  e.At.UTC(),
+		}, nil
+
+	case person.AccountUnlockedEvent:
+		return PersonAccountUnlockedV1{
+			PersonID:      mustParseUUID(e.PersonID.String()),
 			OccurredAtUTC: e.At.UTC(),
 		}, nil
 
@@ -414,6 +451,76 @@ func FromDomainEvent(d any) (Event, error) {
 			TenantIDClaim: mustParseUUID(e.TenantID.String()),
 			DeletedBy:     e.DeletedBy,
 			OccurredAtUTC: e.At.UTC(),
+		}, nil
+
+	// ----- Permission requests (ADR 0055) ----------------------------
+
+	case permissionrequest.RequestedEvent:
+		return PermissionRequestSubmittedV1{
+			RequestID:             mustParseUUID(e.RequestID.String()),
+			TenantIDClaim:         mustParseUUID(e.TenantID.String()),
+			RequesterMembershipID: mustParseUUID(e.RequesterMembershipID.String()),
+			Permission:            e.Permission,
+			DurationDays:          e.DurationDays,
+			Reason:                e.Reason,
+			OccurredAtUTC:         e.At.UTC(),
+		}, nil
+
+	case permissionrequest.ApprovedEvent:
+		return PermissionRequestApprovedV1{
+			RequestID:            mustParseUUID(e.RequestID.String()),
+			TenantIDClaim:        mustParseUUID(e.TenantID.String()),
+			ApproverMembershipID: mustParseUUID(e.ApproverMembershipID.String()),
+			ExpiresAtUTC:         e.ExpiresAt.UTC(),
+			OccurredAtUTC:        e.At.UTC(),
+		}, nil
+
+	case permissionrequest.DeniedEvent:
+		return PermissionRequestDeniedV1{
+			RequestID:            mustParseUUID(e.RequestID.String()),
+			TenantIDClaim:        mustParseUUID(e.TenantID.String()),
+			ApproverMembershipID: mustParseUUID(e.ApproverMembershipID.String()),
+			Reason:               e.Reason,
+			OccurredAtUTC:        e.At.UTC(),
+		}, nil
+
+	case permissionrequest.CancelledEvent:
+		return PermissionRequestCancelledV1{
+			RequestID:     mustParseUUID(e.RequestID.String()),
+			TenantIDClaim: mustParseUUID(e.TenantID.String()),
+			OccurredAtUTC: e.At.UTC(),
+		}, nil
+
+	// ----- Role hierarchy edges (ADR 0058 — Wave 9.4) ----------------
+
+	case rolehierarchy.EstablishedEvent:
+		var establishedBy uuid.UUID
+		if !e.EstablishedByMembershipID.IsZero() {
+			establishedBy = mustParseUUID(e.EstablishedByMembershipID.String())
+		}
+		return RoleHierarchyEdgeEstablishedV1{
+			EdgeID:                    mustParseUUID(e.ID.String()),
+			TenantIDClaim:             mustParseUUID(e.TenantID.String()),
+			ChildRoleID:               mustParseUUID(e.ChildRoleID.String()),
+			ParentRoleID:              mustParseUUID(e.ParentRoleID.String()),
+			EstablishedByMembershipID: establishedBy,
+			Reason:                    e.Reason,
+			OccurredAtUTC:             e.At.UTC(),
+		}, nil
+
+	case rolehierarchy.RemovedEvent:
+		var removedBy uuid.UUID
+		if !e.RemovedByMembershipID.IsZero() {
+			removedBy = mustParseUUID(e.RemovedByMembershipID.String())
+		}
+		return RoleHierarchyEdgeRemovedV1{
+			EdgeID:                mustParseUUID(e.ID.String()),
+			TenantIDClaim:         mustParseUUID(e.TenantID.String()),
+			ChildRoleID:           mustParseUUID(e.ChildRoleID.String()),
+			ParentRoleID:          mustParseUUID(e.ParentRoleID.String()),
+			RemovedByMembershipID: removedBy,
+			RemovalReason:         e.Reason,
+			OccurredAtUTC:         e.At.UTC(),
 		}, nil
 	}
 

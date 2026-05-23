@@ -3,6 +3,13 @@
 **Status:** Accepted
 **Date:** 2026-05-22
 **Supersedes:** the two-tier `common/` (pure) + `platform/` (infra) split from ADR 0047 prose
+**Extended by:** ADR 0051 (single-module types move out of `common/`)
+
+> **Wave 9.1a+b update (2026-05-23):** two of the 13 sub-packages listed below as moved to `internal/common/` have SINCE moved out again per ADR 0051:
+> - `internal/common/breach/` → `internal/identity/{domain/passwordpolicy,adapters}/`
+> - `internal/common/impersonation/` → `internal/identity/{domain,adapters}/`
+>
+> Both were Identity-only consumers; per the TDL single-module rule + Vernon IDDD "Shared Kernel minimalism," domain policy + per-module ports belong in their owning bounded context, not the cross-cutting kernel. ADR 0051 documents the rationale. The 11 remaining packages (`audit, cache, config, email, httpmw, idempotency, jobs, messaging, obs, openapi, pg`) are genuinely cross-cutting and stay in `internal/common/`.
 
 ## Context
 

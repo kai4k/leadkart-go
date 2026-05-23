@@ -69,6 +69,8 @@ tags:
     description: Operator omni-search (Cmd+K)
   - name: audit
     description: Audit-log read endpoints
+  - name: permission-requests
+    description: Permission-elevation approval workflow (ADR 0055)
 
 security:
   - BearerAuth: []
@@ -93,6 +95,21 @@ paths:
               schema: { $ref: '#/components/schemas/LoginResponse' }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
+        '423':
+          description: |
+            Account locked after [person.MaxFailedLogins] consecutive
+            failed login attempts within [person.LockoutWindow] per
+            NIST 800-63B §5.2.2 + ADR 0053. Retry-After header carries
+            integer seconds until unlock (RFC 7231 §7.1.3 delta-seconds).
+          headers:
+            Retry-After:
+              description: Seconds until the account unlocks.
+              schema:
+                type: integer
+                minimum: 1
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
         '500': { $ref: '#/components/responses/InternalServerError' }
 
   /api/v1/auth/refresh:
@@ -178,6 +195,45 @@ paths:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
         '422': { $ref: '#/components/responses/Unprocessable' }
 
+  /api/v1/auth/request-email-change:
+    post:
+      tags: [auth]
+      summary: Request email-change confirmation link (authenticated)
+      description: |
+        Authenticated route — PersonID derived from JWT Subject; new email
+        in the body. Confirmation link is emailed to the NEW address.
+        Per Auth0 / Okta / Microsoft Entra ID canon: ALWAYS returns 204
+        regardless of whether the target email is already taken — defeats
+        account enumeration. The unique-index at apply time enforces the
+        actual constraint via POST /api/v1/auth/confirm-email-change.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RequestEmailChangeRequest' }
+      responses:
+        '204': { description: Email-change request accepted (silent on collision) }
+        '400': { $ref: '#/components/responses/BadRequest' }
+
+  /api/v1/auth/confirm-email-change:
+    post:
+      tags: [auth]
+      summary: Confirm email change via emailed token
+      description: |
+        Anonymous endpoint (the confirmation token IS the proof). The
+        uniqueness check on the target email happens here; a 400 with
+        `email_change_token_invalid` covers both expired tokens AND
+        target-email collisions.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ConfirmEmailChangeRequest' }
+      responses:
+        '204': { description: Email changed }
+        '400': { $ref: '#/components/responses/BadRequest' }
+
   # ===== CAPABILITIES + ACTIVITY ========================================
   /api/v1/auth/me/capabilities:
     get:
@@ -248,6 +304,36 @@ paths:
 
   # ===== TENANTS ========================================================
   /api/v1/tenants:
+    get:
+      tags: [tenants]
+      summary: List tenants matching a filter (Stripe-style query lookup)
+      description: |
+        Canonical slug-lookup per ADR 0052. Returns `{tenants: [0..1 match]}`.
+        Enumeration-safe per ADR 0044 — callers who lack access to the matched
+        tenant see an empty list, indistinguishable from "no such slug."
+
+        Supersedes `GET /api/v1/tenants/by-slug/{slug}` (deprecated; grandfathered
+        for v0.2 frontend-contract compatibility per ADR 0049).
+
+        v0.2 supports `slug` only; future filters (`status`, `created_after`)
+        land per Stripe listing-endpoint canon.
+      parameters:
+        - name: slug
+          in: query
+          required: true
+          description: Tenant slug to look up (URL-safe; lowercase + digits + hyphens).
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 64
+      responses:
+        '200':
+          description: List of matching tenants (length 0 or 1)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ListTenantsResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+
     post:
       tags: [tenants]
       summary: Register a new tenant + initial admin user
@@ -283,11 +369,152 @@ paths:
               schema: { $ref: '#/components/schemas/TenantDto' }
         '404': { $ref: '#/components/responses/NotFound' }
 
+  /api/v1/tenants/{tenantId}/profile:
+    patch:
+      tags: [tenants]
+      summary: Update tenant legal + display name
+      parameters: [{ $ref: '#/components/parameters/TenantId' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UpdateTenantProfileRequest' }
+      responses:
+        '204': { description: Profile updated }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+
+  /api/v1/tenants/{tenantId}/statutory:
+    patch:
+      tags: [tenants]
+      summary: Update tenant statutory IDs (GST / PAN / drug licence)
+      description: |
+        Empty strings clear the corresponding declaration; the aggregate
+        accepts a zero Statutory VO for tenants that haven't yet
+        onboarded their compliance IDs.
+      parameters: [{ $ref: '#/components/parameters/TenantId' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UpdateTenantStatutoryRequest' }
+      responses:
+        '204': { description: Statutory updated }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+
+  /api/v1/tenants/{tenantId}/admin-contact:
+    patch:
+      tags: [tenants]
+      summary: Update tenant admin phone + postal address
+      parameters: [{ $ref: '#/components/parameters/TenantId' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UpdateTenantAdminContactRequest' }
+      responses:
+        '204': { description: Admin contact updated }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+
+  /api/v1/tenants/{tenantId}/settings:
+    patch:
+      tags: [tenants]
+      summary: Update tenant password policy
+      parameters: [{ $ref: '#/components/parameters/TenantId' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UpdateTenantSettingsRequest' }
+      responses:
+        '204': { description: Settings updated }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+
+  /api/v1/tenants/{tenantId}/display-preferences:
+    patch:
+      tags: [tenants]
+      summary: Update tenant locale / time zone / date format / currency
+      parameters: [{ $ref: '#/components/parameters/TenantId' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UpdateTenantDisplayPreferencesRequest' }
+      responses:
+        '204': { description: Display preferences updated }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+
+  /api/v1/tenants/{tenantId}/suspend:
+    post:
+      tags: [tenants]
+      summary: Suspend a tenant (Platform-only)
+      description: Reason is mandatory per data-retention.md audit canon.
+      parameters: [{ $ref: '#/components/parameters/TenantId' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SuspendTenantRequest' }
+      responses:
+        '204': { description: Tenant suspended }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+
+  /api/v1/tenants/{tenantId}/activate:
+    post:
+      tags: [tenants]
+      summary: Activate a pending or suspended tenant (Platform-only)
+      parameters: [{ $ref: '#/components/parameters/TenantId' }]
+      responses:
+        '204': { description: Tenant activated }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+
+  /api/v1/tenants/{tenantId}/mark-for-deletion:
+    post:
+      tags: [tenants]
+      summary: Mark tenant for deletion (Platform-only)
+      description: |
+        Schedules the tenant for hard-deletion after the retention window.
+        Reason is mandatory (DPDP §12 + SOC2 CC4.1 audit requirement).
+        Tenants holding an active SuperAdmin role refuse the transition
+        with 422 (`platform_tenant_undeletable`).
+      parameters: [{ $ref: '#/components/parameters/TenantId' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MarkTenantForDeletionRequest' }
+      responses:
+        '204': { description: Tenant marked for deletion }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+
+  /api/v1/tenants/{tenantId}/restore:
+    post:
+      tags: [tenants]
+      summary: Restore a tenant from marked-for-deletion (Platform-only)
+      parameters: [{ $ref: '#/components/parameters/TenantId' }]
+      responses:
+        '204': { description: Tenant restored }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+
   /api/v1/tenants/by-slug/{slug}:
     get:
       tags: [tenants]
-      summary: Get tenant by slug (enumeration-safe per ADR 0044)
+      summary: '[DEPRECATED] Get tenant by slug — use GET /api/v1/tenants?slug='
+      deprecated: true
       description: |
+        **DEPRECATED per ADR 0052.** Use `GET /api/v1/tenants?slug=acme`
+        instead — the canonical Stripe / Auth0 listing-with-filter shape.
+        This path-segment lookup is grandfathered for v0.2 frontend-contract
+        compatibility per ADR 0049; removed in v0.4+ once frontend migrates.
+
         Returns 404 for both "slug doesn't exist" AND "caller lacks
         access to this tenant" (response bodies byte-identical). Per
         ADR 0044 enumeration safety; same canon as GitHub
@@ -411,6 +638,76 @@ paths:
       responses:
         '204': { description: Role assigned }
 
+  /api/v1/users/{userId}/roles/{roleId}:
+    delete:
+      tags: [users]
+      summary: Revoke a role from a user
+      parameters:
+        - $ref: '#/components/parameters/UserId'
+        - $ref: '#/components/parameters/RoleId'
+      responses:
+        '204': { description: Role revoked }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+
+  /api/v1/users/{userId}/permission-overrides:
+    patch:
+      tags: [users]
+      summary: Replace user's granted + revoked permission overlays atomically
+      description: |
+        Empty arrays clear the corresponding overlay. Permission names
+        MUST match the closed `permission.IdentityPermissions` catalogue;
+        unknown names surface as 422 (`permission_unknown`).
+      parameters: [{ $ref: '#/components/parameters/UserId' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ReplaceUserPermissionOverridesRequest' }
+      responses:
+        '204': { description: Overrides replaced }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+
+  /api/v1/users/{userId}/manager:
+    put:
+      tags: [users]
+      summary: Assign user's reporting manager
+      description: |
+        ManagerID MUST be a Membership in the same tenant — composite FK
+        at the schema layer enforces this; cross-tenant ID surfaces as 422.
+      parameters: [{ $ref: '#/components/parameters/UserId' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AssignUserManagerRequest' }
+      responses:
+        '204': { description: Manager assigned }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+    delete:
+      tags: [users]
+      summary: Remove user's reporting manager
+      parameters: [{ $ref: '#/components/parameters/UserId' }]
+      responses:
+        '204': { description: Manager removed }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/v1/users/{userId}/anonymise:
+    post:
+      tags: [users]
+      summary: Anonymise a user (DPDP §12 / GDPR Art. 17 right-to-erasure; Platform-only)
+      description: |
+        Cross-tenant blast radius — one Person can hold many Memberships;
+        the cascade is gated on Platform tier per multi-tenancy.md
+        "SuperUser god-mode" + `identity.users.anonymise` permission.
+      parameters: [{ $ref: '#/components/parameters/UserId' }]
+      responses:
+        '204': { description: User anonymised }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+
   # ===== ROLES ==========================================================
   /api/v1/roles:
     get:
@@ -448,12 +745,127 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/RoleDto' }
+    patch:
+      tags: [roles]
+      summary: Rename a role and/or change its hierarchy level
+      description: |
+        Both fields optional. Empty `name` skips rename. Omitting
+        `hierarchy_level` (or sending `null`) skips re-level — using a
+        pointer field instead of a -1 sentinel keeps the wire shape clean.
+      parameters: [{ $ref: '#/components/parameters/RoleId' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UpdateRoleRequest' }
+      responses:
+        '204': { description: Role updated }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: Role name already taken in this tenant
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
     delete:
       tags: [roles]
       summary: Soft-delete a role
       parameters: [{ $ref: '#/components/parameters/RoleId' }]
       responses:
         '204': { description: Role deleted }
+
+  /api/v1/roles/{roleId}/parent:
+    patch:
+      tags: [roles]
+      summary: Set or clear the role's parent (single-parent hierarchy)
+      description: |
+        ADR 0058 (Wave 9.4, supersedes ADR 0054) — single-parent
+        organizational hierarchy backed by a dedicated
+        `identity.role_hierarchy_edges` aggregate. Permission
+        resolution stays flat per role; the hierarchy is consumed by
+        approval workflows + reporting.
+
+        Pass `{"parent_role_id": null}` (or omit / empty string) to
+        clear the parent (role becomes a root). Pass a UUID referencing
+        a role in the SAME tenant to set / re-point the parent.
+
+        Cycle prevention + cross-tenant safety are declarative at the
+        DB layer (composite FK + cycle trigger). Surfaces as 422
+        `role_hierarchy_cycle` / `role_hierarchy_cross_tenant`, 400
+        `role_hierarchy_self_reference`, 409
+        `role_hierarchy_edge_already_exists`.
+
+        Optional `reason` (10-1024 chars) is recorded onto the new
+        edge OR the cleared edge for audit.
+      parameters: [{ $ref: '#/components/parameters/RoleId' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SetRoleParentRequest' }
+      responses:
+        '204': { description: Parent set / cleared }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: |
+            Role already has an active parent edge (single-parent
+            invariant: at most one active edge per child). Caller
+            should reload to discover the existing edge before
+            retrying.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+
+  /api/v1/roles/{roleId}/permissions:
+    put:
+      tags: [roles]
+      summary: Replace the role's permission set atomically
+      description: |
+        Permission names MUST match the closed
+        `permission.IdentityPermissions` catalogue; unknown names surface
+        as 422 (`permission_unknown`).
+      parameters: [{ $ref: '#/components/parameters/RoleId' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ReplaceRolePermissionsRequest' }
+      responses:
+        '204': { description: Permissions replaced }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+
+  /api/v1/roles/{roleId}/permissions/grant:
+    post:
+      tags: [roles]
+      summary: Grant a single permission to the role
+      parameters: [{ $ref: '#/components/parameters/RoleId' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RolePermissionRequest' }
+      responses:
+        '204': { description: Permission granted }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+
+  /api/v1/roles/{roleId}/permissions/revoke:
+    post:
+      tags: [roles]
+      summary: Revoke a single permission from the role
+      parameters: [{ $ref: '#/components/parameters/RoleId' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RolePermissionRequest' }
+      responses:
+        '204': { description: Permission revoked }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
 
   # ===== PLATFORM =======================================================
   /api/v1/platform/tenants:
@@ -467,6 +879,20 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/ListAllTenantsResponse' }
 
+  /api/v1/platform/tenants/{tenantId}:
+    delete:
+      tags: [platform]
+      summary: Hard-delete a tenant (irrecoverable; Platform-only)
+      description: |
+        Bypasses the marked-for-deletion lifecycle. Tenants holding an
+        active SuperAdmin role refuse with 422
+        (`platform_tenant_undeletable`).
+      parameters: [{ $ref: '#/components/parameters/TenantId' }]
+      responses:
+        '204': { description: Tenant hard-deleted }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+
   /api/v1/platform/persons/{personId}:
     get:
       tags: [platform]
@@ -478,6 +904,74 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/PersonDto' }
+
+  /api/v1/platform/persons/{personId}/memberships:
+    get:
+      tags: [platform]
+      summary: List every Membership a Person holds across tenants
+      parameters: [{ $ref: '#/components/parameters/PersonId' }]
+      responses:
+        '200':
+          description: Memberships
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ListPersonMembershipsResponse' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/v1/platform/persons/{personId}/profile:
+    patch:
+      tags: [platform]
+      summary: Update the GLOBAL Person profile (first + last name)
+      description: |
+        Updates Person.FirstName / Person.LastName — distinct from the
+        per-Tenant designation/department/status_message which move via
+        PATCH /api/v1/users/{userId}/profile.
+      parameters: [{ $ref: '#/components/parameters/PersonId' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UpdatePersonProfileRequest' }
+      responses:
+        '204': { description: Profile updated }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+
+  /api/v1/platform/persons/{personId}/global-suspend:
+    post:
+      tags: [platform]
+      summary: Globally suspend a Person across all tenants
+      description: Reason is mandatory per data-retention.md audit canon.
+      parameters: [{ $ref: '#/components/parameters/PersonId' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/GlobalSuspendPersonRequest' }
+      responses:
+        '204': { description: Person globally suspended }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+
+  /api/v1/platform/persons/{personId}/lift-global-suspension:
+    post:
+      tags: [platform]
+      summary: Lift a previously applied global suspension
+      parameters: [{ $ref: '#/components/parameters/PersonId' }]
+      responses:
+        '204': { description: Suspension lifted }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+
+  /api/v1/platform/persons/{personId}/anonymise:
+    post:
+      tags: [platform]
+      summary: Anonymise a Person record directly (DPDP §12 / GDPR Art. 17)
+      parameters: [{ $ref: '#/components/parameters/PersonId' }]
+      responses:
+        '204': { description: Person anonymised }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
 
   /api/v1/platform/persons:
     get:
@@ -556,6 +1050,24 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/ListImpersonationSessionsResponse' }
 
+  /api/v1/platform/impersonation/sessions/{sessionId}:
+    delete:
+      tags: [platform]
+      summary: End an impersonation session (revoke scoped token)
+      description: |
+        Ends the session before its natural TTL. The scoped token issued
+        by POST /api/v1/platform/impersonation/sessions is invalidated
+        on the next request (security_stamp comparison via the
+        impersonation-session resolver).
+      parameters:
+        - name: sessionId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '204': { description: Session ended }
+        '400': { $ref: '#/components/responses/BadRequest' }
+
   # ===== SEARCH =========================================================
   /api/v1/search:
     get:
@@ -583,6 +1095,155 @@ paths:
               schema: { $ref: '#/components/schemas/SearchResponse' }
         '400':
           description: Query too short or invalid include list
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  # ===== PERMISSION REQUESTS (ADR 0055) =================================
+  /api/v1/permission-requests:
+    post:
+      tags: [permission-requests]
+      summary: Submit a permission-elevation request
+      description: |
+        Caller (the requester) asks for a time-bound elevated permission.
+        The named approver is the requester's current manager
+        (`tenant_memberships.reports_to`). If the requester has no
+        manager, only Platform operators can approve.
+        At most one pending request per (membership, permission) tuple.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreatePermissionRequestRequest' }
+      responses:
+        '201':
+          description: Request submitted
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CreatePermissionRequestResponse' }
+        '409':
+          description: Another pending request already exists for this (membership, permission) tuple
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+    get:
+      tags: [permission-requests]
+      summary: List the caller's requests (?role=requester|approver)
+      description: |
+        Default `role=requester` returns the caller's own history (all states).
+        `role=approver` returns the Pending queue waiting on the caller's
+        decision. Keyset-paginated per ADR 0038.
+      parameters:
+        - name: role
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [requester, approver]
+            default: requester
+        - { $ref: '#/components/parameters/Cursor' }
+        - { $ref: '#/components/parameters/PageSize' }
+      responses:
+        '200':
+          description: Page of requests
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ListPermissionRequestsResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+
+  /api/v1/permission-requests/{requestId}:
+    get:
+      tags: [permission-requests]
+      summary: Get a single permission request
+      description: |
+        Returns the request if the caller is either the requester, the
+        named approver, OR a Platform operator. Cross-caller reads
+        collapse to 404 per ADR 0044 enumeration-safety canon.
+      parameters:
+        - { $ref: '#/components/parameters/PermissionRequestId' }
+      responses:
+        '200':
+          description: The request
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PermissionRequestDto' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/v1/permission-requests/{requestId}/approve:
+    post:
+      tags: [permission-requests]
+      summary: Approve a pending request (manager or platform operator)
+      description: |
+        Transitions Pending → Approved AND lands a time-bound grant on
+        the requester's membership overlay (single transaction). Caller
+        MUST be either the requester's manager OR carry `is_platform=true`.
+      parameters:
+        - { $ref: '#/components/parameters/PermissionRequestId' }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ApprovePermissionRequestRequest' }
+      responses:
+        '204': { description: Approved + grant created }
+        '403':
+          description: Caller is not the manager and not a Platform operator
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: Request is not in pending state
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+
+  /api/v1/permission-requests/{requestId}/deny:
+    post:
+      tags: [permission-requests]
+      summary: Deny a pending request (manager or platform operator)
+      description: |
+        Transitions Pending → Denied. `decision_reason` is REQUIRED on
+        Deny per ADR 0055 audit canon. Same caller-authorization as Approve.
+      parameters:
+        - { $ref: '#/components/parameters/PermissionRequestId' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DenyPermissionRequestRequest' }
+      responses:
+        '204': { description: Denied }
+        '403':
+          description: Caller is not the manager and not a Platform operator
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: Request is not in pending state
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+
+  /api/v1/permission-requests/{requestId}/cancel:
+    post:
+      tags: [permission-requests]
+      summary: Cancel a pending request (requester only)
+      description: |
+        Withdraws a pending request. Caller MUST be the original
+        requester; cross-caller cancel collapses to 404 per
+        ADR 0044 enumeration-safety canon.
+      parameters:
+        - { $ref: '#/components/parameters/PermissionRequestId' }
+      responses:
+        '204': { description: Cancelled }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: Request is not in pending state
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
@@ -627,6 +1288,11 @@ components:
       schema: { type: string, format: uuid }
     PersonId:
       name: personId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    PermissionRequestId:
+      name: requestId
       in: path
       required: true
       schema: { type: string, format: uuid }
@@ -700,6 +1366,13 @@ components:
         refresh_token:  { type: string }
         access_token_expires_at: { type: string, format: date-time }
         token_type:     { type: string, enum: [Bearer] }
+        must_change_password:
+          type: boolean
+          description: |
+            BRD line 241 + ADR 0053 — when true, the credential was
+            provisioned by an admin/operator and the frontend MUST
+            redirect to the change-password screen on first login.
+            Omitted from the wire shape when false.
 
     RefreshRequest:
       type: object
@@ -733,6 +1406,18 @@ components:
       properties:
         current_password: { type: string, format: password }
         new_password:     { type: string, format: password, minLength: 12 }
+
+    RequestEmailChangeRequest:
+      type: object
+      required: [new_email]
+      properties:
+        new_email: { type: string, format: email }
+
+    ConfirmEmailChangeRequest:
+      type: object
+      required: [token]
+      properties:
+        token: { type: string }
 
     # ===== Capabilities ================================================
     CapabilitiesDto:
@@ -862,6 +1547,51 @@ components:
         max_failed_attempts:  { type: integer }
         lockout_minutes:      { type: integer }
 
+    UpdateTenantProfileRequest:
+      type: object
+      properties:
+        legal_name:   { type: string, maxLength: 200 }
+        display_name: { type: string, maxLength: 200 }
+
+    UpdateTenantStatutoryRequest:
+      type: object
+      properties:
+        gst_number:           { type: string }
+        pan_number:           { type: string }
+        drug_licence_number:  { type: string }
+
+    UpdateTenantAdminContactRequest:
+      type: object
+      properties:
+        phone:   { type: string }
+        address: { $ref: '#/components/schemas/AdminAddressDto' }
+
+    UpdateTenantSettingsRequest:
+      type: object
+      required: [password_policy]
+      properties:
+        password_policy: { $ref: '#/components/schemas/PasswordPolicyDto' }
+
+    UpdateTenantDisplayPreferencesRequest:
+      type: object
+      properties:
+        locale:      { type: string }
+        time_zone:   { type: string }
+        date_format: { type: string }
+        currency:    { type: string }
+
+    SuspendTenantRequest:
+      type: object
+      required: [reason]
+      properties:
+        reason: { type: string, minLength: 1 }
+
+    MarkTenantForDeletionRequest:
+      type: object
+      required: [reason]
+      properties:
+        reason: { type: string, minLength: 1 }
+
     # ===== Users =======================================================
     UserDto:
       type: object
@@ -930,6 +1660,22 @@ components:
       properties:
         role_id: { type: string, format: uuid }
 
+    AssignUserManagerRequest:
+      type: object
+      required: [manager_id]
+      properties:
+        manager_id: { type: string, format: uuid }
+
+    ReplaceUserPermissionOverridesRequest:
+      type: object
+      properties:
+        granted:
+          type: array
+          items: { type: string }
+        revoked:
+          type: array
+          items: { type: string }
+
     # ===== Roles =======================================================
     RoleDto:
       type: object
@@ -945,6 +1691,15 @@ components:
           type: array
           items: { type: string }
         created_at:       { type: string, format: date-time }
+        parent_role_id:
+          type: string
+          format: uuid
+          description: |
+            ADR 0058 (Wave 9.4) — populated from the active edge in
+            `identity.role_hierarchy_edges` via JOIN at read time.
+            Omitted when the role is a root (no active edge). Permission
+            resolution stays flat per role; the hierarchy is consumed
+            by approval workflows + reporting, NOT by the resolver.
 
     ListRolesResponse:
       type: object
@@ -960,12 +1715,68 @@ components:
       properties:
         name:             { type: string, minLength: 2, maxLength: 100 }
         hierarchy_level:  { type: integer, minimum: 0, maximum: 99 }
+        parent_role_id:
+          type: string
+          format: uuid
+          description: |
+            ADR 0058 (Wave 9.4) — optional parent for the new role.
+            Omit / empty = root (no edge created). When set the role
+            + the rolehierarchy.Edge are inserted in one transaction;
+            cross-tenant + self-reference + cycle prevention runs at
+            the DB layer (composite FK + check + cycle trigger).
 
     CreateRoleResponse:
       type: object
       required: [role_id]
       properties:
         role_id: { type: string, format: uuid }
+
+    UpdateRoleRequest:
+      type: object
+      description: |
+        Both fields optional. Empty `name` skips rename. Omitting
+        `hierarchy_level` (or sending `null`) skips re-level — using a
+        pointer field instead of a -1 sentinel keeps the wire shape clean.
+      properties:
+        name:            { type: string, minLength: 2, maxLength: 100 }
+        hierarchy_level: { type: integer, minimum: 0, maximum: 99, nullable: true }
+
+    ReplaceRolePermissionsRequest:
+      type: object
+      required: [permissions]
+      properties:
+        permissions:
+          type: array
+          items: { type: string }
+
+    RolePermissionRequest:
+      type: object
+      required: [permission]
+      properties:
+        permission: { type: string }
+
+    SetRoleParentRequest:
+      type: object
+      description: |
+        ADR 0058 (Wave 9.4) — PATCH body for
+        `/api/v1/roles/{roleId}/parent`. Pass `null` (or empty string)
+        to clear the parent (role becomes a root by soft-deleting any
+        active edge); pass a UUID referencing a role in the same
+        tenant to atomically replace any existing edge.
+      required: [parent_role_id]
+      properties:
+        parent_role_id:
+          type: string
+          format: uuid
+          nullable: true
+        reason:
+          type: string
+          minLength: 10
+          maxLength: 1024
+          description: |
+            Optional audit text recorded on the new edge (when setting)
+            OR the cleared edge (when clearing). When supplied must be
+            10-1024 characters per the DB CHECK constraint.
 
     # ===== Platform ====================================================
     PersonDto:
@@ -991,6 +1802,38 @@ components:
         tenants:
           type: array
           items: { $ref: '#/components/schemas/TenantDto' }
+
+    ListTenantsResponse:
+      type: object
+      description: |
+        Filtered tenant lookup result per GET /api/v1/tenants?slug=...
+        Stripe-canon shape: list of 0-1 matches (enumeration-safe; empty
+        list when no match OR caller lacks access, indistinguishable).
+      required: [tenants]
+      properties:
+        tenants:
+          type: array
+          items: { $ref: '#/components/schemas/TenantDto' }
+
+    ListPersonMembershipsResponse:
+      type: object
+      required: [memberships]
+      properties:
+        memberships:
+          type: array
+          items: { $ref: '#/components/schemas/UserDto' }
+
+    GlobalSuspendPersonRequest:
+      type: object
+      required: [reason]
+      properties:
+        reason: { type: string, minLength: 1 }
+
+    UpdatePersonProfileRequest:
+      type: object
+      properties:
+        first_name: { type: string }
+        last_name:  { type: string }
 
     PlatformStatsResponse:
       type: object
@@ -1107,5 +1950,77 @@ components:
         events:
           type: array
           items: { $ref: '#/components/schemas/AuditEventDto' }
+        has_more:    { type: boolean }
+        next_cursor: { type: string }
+
+    # ===== Permission requests (ADR 0055) ==============================
+    CreatePermissionRequestRequest:
+      type: object
+      required: [permission, reason]
+      properties:
+        permission:
+          type: string
+          description: Closed-set IdentityPermissions constant (e.g. "identity.users.create")
+        duration_days:
+          type: integer
+          minimum: 1
+          maximum: 90
+          description: JIT window length in days. Omit to use default (7).
+        reason:
+          type: string
+          minLength: 10
+          maxLength: 1024
+
+    CreatePermissionRequestResponse:
+      type: object
+      required: [request_id, status]
+      properties:
+        request_id:               { type: string, format: uuid }
+        approver_membership_id:   { type: string, format: uuid, description: 'Requester current manager. Empty when the requester has no manager — only Platform operators can approve.' }
+        status:                   { type: string, enum: [pending] }
+
+    ApprovePermissionRequestRequest:
+      type: object
+      properties:
+        decision_reason:
+          type: string
+          maxLength: 1024
+          description: Optional context for the approval.
+
+    DenyPermissionRequestRequest:
+      type: object
+      required: [decision_reason]
+      properties:
+        decision_reason:
+          type: string
+          minLength: 1
+          maxLength: 1024
+          description: REQUIRED on Deny per ADR 0055 audit canon.
+
+    PermissionRequestDto:
+      type: object
+      required: [id, tenant_id, requester_membership_id, permission, duration_days, reason, state, created_at, updated_at]
+      properties:
+        id:                       { type: string, format: uuid }
+        tenant_id:                { type: string, format: uuid }
+        requester_membership_id:  { type: string, format: uuid }
+        permission:               { type: string }
+        duration_days:            { type: integer }
+        reason:                   { type: string }
+        state:                    { type: string, enum: [pending, approved, denied, cancelled] }
+        approver_membership_id:   { type: string, format: uuid }
+        decided_at:               { type: string, format: date-time }
+        decision_reason:          { type: string }
+        expires_at:               { type: string, format: date-time, description: 'When the bounded grant expires. Set only after Approve.' }
+        created_at:               { type: string, format: date-time }
+        updated_at:               { type: string, format: date-time }
+
+    ListPermissionRequestsResponse:
+      type: object
+      required: [requests, has_more]
+      properties:
+        requests:
+          type: array
+          items: { $ref: '#/components/schemas/PermissionRequestDto' }
         has_more:    { type: boolean }
         next_cursor: { type: string }

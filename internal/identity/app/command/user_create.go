@@ -168,7 +168,10 @@ func (h CreateUserHandler) findOrCreatePerson(
 	if existing != nil {
 		return existing, nil
 	}
-	p, err := person.New(person.ID(ids.NewV7().String()),
+	// BRD line 241 + ADR 0053 — admin-provisioned credential. The
+	// inviting admin chose this initial password; force the new
+	// Person through the change-password flow on first login.
+	p, err := person.NewWithMustChangePassword(person.ID(ids.NewV7().String()),
 		cmd.Email, cmd.FirstName, cmd.LastName, pwd)
 	if err != nil {
 		return nil, fmt.Errorf("create user: construct person: %w", err)

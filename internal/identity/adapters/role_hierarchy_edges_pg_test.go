@@ -1,0 +1,312 @@
+//go:build integration
+
+package adapters_test
+
+import (
+	"errors"
+	"testing"
+	"time"
+
+	"github.com/leadkart/leadkart-go/internal/common/ids"
+	"github.com/leadkart/leadkart-go/internal/common/pg"
+	"github.com/leadkart/leadkart-go/internal/common/tenancy"
+	"github.com/leadkart/leadkart-go/internal/identity/adapters"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/role"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/rolehierarchy"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
+)
+
+// freshEdge mints an Edge with a stable test timestamp.
+func freshEdge(t *testing.T, tid tenant.ID, child, parent role.ID) *rolehierarchy.Edge {
+	t.Helper()
+	e, err := rolehierarchy.New(
+		rolehierarchy.ID(ids.NewV7().String()),
+		tid,
+		child,
+		parent,
+		membership.ID(""),
+		"integration test edge — seeded by adapter test fixture",
+		time.Date(2026, 5, 23, 12, 0, 0, 0, time.UTC),
+	)
+	if err != nil {
+		t.Fatalf("rolehierarchy.New: %v", err)
+	}
+	return e
+}
+
+func TestEdgeRepository_Add_HappyPath(t *testing.T) {
+	pool := repoFixture(t)
+	tenants := adapters.NewTenantRepository(pool, pg.NewTransactor(pool))
+	roles := adapters.NewRoleRepository(pool, pg.NewTransactor(pool))
+	edges := adapters.NewRoleHierarchyEdgeRepository(pool, pg.NewTransactor(pool))
+
+	tn := seedTenant(t, tenants)
+	ctx := tenancy.WithID(t.Context(), tenancy.ID(tn.ID().String()))
+
+	parent := newRole(t, tn.ID(), "Manager")
+	child := newRole(t, tn.ID(), "Junior")
+	if err := roles.Add(ctx, parent); err != nil {
+		t.Fatalf("seed parent: %v", err)
+	}
+	if err := roles.Add(ctx, child); err != nil {
+		t.Fatalf("seed child: %v", err)
+	}
+
+	e := freshEdge(t, tn.ID(), child.ID(), parent.ID())
+	if err := edges.Add(ctx, e); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+
+	got, err := edges.GetActiveByChild(ctx, child.ID())
+	if err != nil {
+		t.Fatalf("GetActiveByChild: %v", err)
+	}
+	if got.ID() != e.ID() {
+		t.Fatalf("id: got %q want %q", got.ID(), e.ID())
+	}
+	if got.ParentRoleID() != parent.ID() {
+		t.Fatalf("ParentRoleID: got %q want %q", got.ParentRoleID(), parent.ID())
+	}
+	if !got.IsActive() {
+		t.Fatal("IsActive: got false want true")
+	}
+}
+
+func TestEdgeRepository_Add_RejectsDuplicateActiveChildEdge(t *testing.T) {
+	pool := repoFixture(t)
+	tenants := adapters.NewTenantRepository(pool, pg.NewTransactor(pool))
+	roles := adapters.NewRoleRepository(pool, pg.NewTransactor(pool))
+	edges := adapters.NewRoleHierarchyEdgeRepository(pool, pg.NewTransactor(pool))
+
+	tn := seedTenant(t, tenants)
+	ctx := tenancy.WithID(t.Context(), tenancy.ID(tn.ID().String()))
+
+	p1 := newRole(t, tn.ID(), "Parent1")
+	p2 := newRole(t, tn.ID(), "Parent2")
+	child := newRole(t, tn.ID(), "Junior")
+	for _, r := range []*role.Role{p1, p2, child} {
+		if err := roles.Add(ctx, r); err != nil {
+			t.Fatalf("seed %s: %v", r.Name(), err)
+		}
+	}
+	if err := edges.Add(ctx, freshEdge(t, tn.ID(), child.ID(), p1.ID())); err != nil {
+		t.Fatalf("Add first: %v", err)
+	}
+	err := edges.Add(ctx, freshEdge(t, tn.ID(), child.ID(), p2.ID()))
+	if !errors.Is(err, rolehierarchy.ErrEdgeAlreadyExists) {
+		t.Fatalf("Add duplicate: got %v want ErrEdgeAlreadyExists", err)
+	}
+}
+
+func TestEdgeRepository_Add_RejectsCycle(t *testing.T) {
+	pool := repoFixture(t)
+	tenants := adapters.NewTenantRepository(pool, pg.NewTransactor(pool))
+	roles := adapters.NewRoleRepository(pool, pg.NewTransactor(pool))
+	edges := adapters.NewRoleHierarchyEdgeRepository(pool, pg.NewTransactor(pool))
+
+	tn := seedTenant(t, tenants)
+	ctx := tenancy.WithID(t.Context(), tenancy.ID(tn.ID().String()))
+
+	a := newRole(t, tn.ID(), "RoleA")
+	b := newRole(t, tn.ID(), "RoleB")
+	for _, r := range []*role.Role{a, b} {
+		if err := roles.Add(ctx, r); err != nil {
+			t.Fatalf("seed %s: %v", r.Name(), err)
+		}
+	}
+	// b → a (legal).
+	if err := edges.Add(ctx, freshEdge(t, tn.ID(), b.ID(), a.ID())); err != nil {
+		t.Fatalf("b → a: %v", err)
+	}
+	// a → b would close the cycle — DB trigger fires.
+	err := edges.Add(ctx, freshEdge(t, tn.ID(), a.ID(), b.ID()))
+	if !errors.Is(err, rolehierarchy.ErrCycle) {
+		t.Fatalf("expected ErrCycle, got %v", err)
+	}
+}
+
+func TestEdgeRepository_Add_RejectsCrossTenant(t *testing.T) {
+	pool := repoFixture(t)
+	tenants := adapters.NewTenantRepository(pool, pg.NewTransactor(pool))
+	roles := adapters.NewRoleRepository(pool, pg.NewTransactor(pool))
+	edges := adapters.NewRoleHierarchyEdgeRepository(pool, pg.NewTransactor(pool))
+
+	tnA := seedTenant(t, tenants)
+	tnB := seedTenant(t, tenants)
+	ctxA := tenancy.WithID(t.Context(), tenancy.ID(tnA.ID().String()))
+	ctxB := tenancy.WithID(t.Context(), tenancy.ID(tnB.ID().String()))
+
+	rA := newRole(t, tnA.ID(), "RoleA")
+	rB := newRole(t, tnB.ID(), "RoleB")
+	if err := roles.Add(ctxA, rA); err != nil {
+		t.Fatalf("Add A: %v", err)
+	}
+	if err := roles.Add(ctxB, rB); err != nil {
+		t.Fatalf("Add B: %v", err)
+	}
+
+	// Attempt to add an edge in tenant A whose parent is rB (tenant B).
+	// Composite FK fk_edges_parent_same_tenant fires — declarative
+	// replacement for the Wave 9.1d SECURITY DEFINER trigger per ADR 0058.
+	bad, err := rolehierarchy.New(
+		rolehierarchy.ID(ids.NewV7().String()),
+		tnA.ID(),
+		rA.ID(),
+		rB.ID(),
+		membership.ID(""),
+		"",
+		time.Now(),
+	)
+	if err != nil {
+		t.Fatalf("New (should succeed at aggregate; DB rejects): %v", err)
+	}
+	addErr := edges.Add(ctxA, bad)
+	if !errors.Is(addErr, rolehierarchy.ErrCrossTenant) {
+		t.Fatalf("expected ErrCrossTenant, got %v", addErr)
+	}
+}
+
+func TestEdgeRepository_GetActiveByChild_ReturnsActiveOnly(t *testing.T) {
+	pool := repoFixture(t)
+	tenants := adapters.NewTenantRepository(pool, pg.NewTransactor(pool))
+	roles := adapters.NewRoleRepository(pool, pg.NewTransactor(pool))
+	edges := adapters.NewRoleHierarchyEdgeRepository(pool, pg.NewTransactor(pool))
+
+	tn := seedTenant(t, tenants)
+	ctx := tenancy.WithID(t.Context(), tenancy.ID(tn.ID().String()))
+
+	p := newRole(t, tn.ID(), "Manager")
+	c := newRole(t, tn.ID(), "Junior")
+	for _, r := range []*role.Role{p, c} {
+		if err := roles.Add(ctx, r); err != nil {
+			t.Fatalf("seed %s: %v", r.Name(), err)
+		}
+	}
+	e := freshEdge(t, tn.ID(), c.ID(), p.ID())
+	if err := edges.Add(ctx, e); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	// Remove → must not appear in GetActiveByChild.
+	rmErr := edges.UpdateByID(ctx, e.ID(), func(loaded *rolehierarchy.Edge) (bool, error) {
+		return true, loaded.Remove(membership.ID(""), "removal for the active-only check", time.Now())
+	})
+	if rmErr != nil {
+		t.Fatalf("Remove: %v", rmErr)
+	}
+	_, err := edges.GetActiveByChild(ctx, c.ID())
+	if !errors.Is(err, rolehierarchy.ErrEdgeNotFound) {
+		t.Fatalf("expected ErrEdgeNotFound after soft-delete, got %v", err)
+	}
+}
+
+func TestEdgeRepository_GetAncestorsByChild_WalksUpward(t *testing.T) {
+	pool := repoFixture(t)
+	tenants := adapters.NewTenantRepository(pool, pg.NewTransactor(pool))
+	roles := adapters.NewRoleRepository(pool, pg.NewTransactor(pool))
+	edges := adapters.NewRoleHierarchyEdgeRepository(pool, pg.NewTransactor(pool))
+
+	tn := seedTenant(t, tenants)
+	ctx := tenancy.WithID(t.Context(), tenancy.ID(tn.ID().String()))
+
+	gp := newRole(t, tn.ID(), "GrandParent")
+	p := newRole(t, tn.ID(), "Parent")
+	c := newRole(t, tn.ID(), "Child")
+	for _, r := range []*role.Role{gp, p, c} {
+		if err := roles.Add(ctx, r); err != nil {
+			t.Fatalf("seed %s: %v", r.Name(), err)
+		}
+	}
+	// p → gp, c → p.
+	if err := edges.Add(ctx, freshEdge(t, tn.ID(), p.ID(), gp.ID())); err != nil {
+		t.Fatalf("p → gp: %v", err)
+	}
+	if err := edges.Add(ctx, freshEdge(t, tn.ID(), c.ID(), p.ID())); err != nil {
+		t.Fatalf("c → p: %v", err)
+	}
+
+	ancs, err := edges.GetAncestorsByChild(ctx, c.ID())
+	if err != nil {
+		t.Fatalf("GetAncestorsByChild: %v", err)
+	}
+	if len(ancs) != 2 {
+		t.Fatalf("ancestors: got %d want 2", len(ancs))
+	}
+	// Depth-first: c's own edge (c→p) first, then p's edge (p→gp).
+	if ancs[0].ChildRoleID() != c.ID() || ancs[0].ParentRoleID() != p.ID() {
+		t.Errorf("ancestor[0]: got (%s→%s) want (%s→%s)",
+			ancs[0].ChildRoleID(), ancs[0].ParentRoleID(), c.ID(), p.ID())
+	}
+	if ancs[1].ChildRoleID() != p.ID() || ancs[1].ParentRoleID() != gp.ID() {
+		t.Errorf("ancestor[1]: got (%s→%s) want (%s→%s)",
+			ancs[1].ChildRoleID(), ancs[1].ParentRoleID(), p.ID(), gp.ID())
+	}
+}
+
+func TestEdgeRepository_UpdateByID_SoftDeleteSucceeds(t *testing.T) {
+	pool := repoFixture(t)
+	tenants := adapters.NewTenantRepository(pool, pg.NewTransactor(pool))
+	roles := adapters.NewRoleRepository(pool, pg.NewTransactor(pool))
+	edges := adapters.NewRoleHierarchyEdgeRepository(pool, pg.NewTransactor(pool))
+
+	tn := seedTenant(t, tenants)
+	ctx := tenancy.WithID(t.Context(), tenancy.ID(tn.ID().String()))
+
+	p := newRole(t, tn.ID(), "Manager")
+	c := newRole(t, tn.ID(), "Junior")
+	for _, r := range []*role.Role{p, c} {
+		if err := roles.Add(ctx, r); err != nil {
+			t.Fatalf("seed %s: %v", r.Name(), err)
+		}
+	}
+	e := freshEdge(t, tn.ID(), c.ID(), p.ID())
+	if err := edges.Add(ctx, e); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	upErr := edges.UpdateByID(ctx, e.ID(), func(loaded *rolehierarchy.Edge) (bool, error) {
+		return true, loaded.Remove(membership.ID(""), "soft-delete test path", time.Now())
+	})
+	if upErr != nil {
+		t.Fatalf("UpdateByID: %v", upErr)
+	}
+	// Single-parent invariant freed — adding a new edge for the same
+	// child must now succeed.
+	p2 := newRole(t, tn.ID(), "NewManager")
+	if err := roles.Add(ctx, p2); err != nil {
+		t.Fatalf("seed p2: %v", err)
+	}
+	if err := edges.Add(ctx, freshEdge(t, tn.ID(), c.ID(), p2.ID())); err != nil {
+		t.Fatalf("re-add after soft-delete: %v", err)
+	}
+}
+
+func TestEdgeRepository_Add_RejectsSelfReference(t *testing.T) {
+	pool := repoFixture(t)
+	tenants := adapters.NewTenantRepository(pool, pg.NewTransactor(pool))
+	roles := adapters.NewRoleRepository(pool, pg.NewTransactor(pool))
+	edges := adapters.NewRoleHierarchyEdgeRepository(pool, pg.NewTransactor(pool))
+
+	tn := seedTenant(t, tenants)
+	ctx := tenancy.WithID(t.Context(), tenancy.ID(tn.ID().String()))
+
+	r := newRole(t, tn.ID(), "RoleSelf")
+	if err := roles.Add(ctx, r); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	// Aggregate would reject this; bypass via direct construction is
+	// blocked by ErrSelfReference. So instead we prove the DB CHECK
+	// constraint is a backstop by constructing via UnmarshalFromDB
+	// (which doesn't re-validate) and shipping straight to Add — the
+	// adapter must translate the resulting check_violation to
+	// ErrSelfReference.
+	bad := rolehierarchy.UnmarshalFromDB(rolehierarchy.Snapshot{
+		ID:           rolehierarchy.ID(ids.NewV7().String()),
+		TenantID:     tn.ID(),
+		ChildRoleID:  r.ID(),
+		ParentRoleID: r.ID(),
+	})
+	addErr := edges.Add(ctx, bad)
+	if !errors.Is(addErr, rolehierarchy.ErrSelfReference) {
+		t.Fatalf("expected ErrSelfReference, got %v", addErr)
+	}
+}

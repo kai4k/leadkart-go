@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/leadkart/leadkart-go/internal/common/impersonation"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/impersonation"
 )
 
 // ImpersonationSessionView is the wire-shape of an active session

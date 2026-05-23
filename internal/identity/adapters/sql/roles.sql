@@ -3,6 +3,11 @@
 -- visible unless app.is_platform=true. Seeded SuperAdmin + custom
 -- per-tenant roles share the same table; isolation is enforced by RLS,
 -- not by the application layer.
+--
+-- Hierarchy moved OUT of this table per ADR 0058 (Wave 9.4) into
+-- identity.role_hierarchy_edges (its own aggregate). The
+-- parent_role_id column + its DB trigger + its recursive ancestor CTE
+-- all live in role_hierarchy_edges.sql / the rolehierarchy package now.
 
 -- name: InsertRole :exec
 INSERT INTO identity.roles (
@@ -53,9 +58,9 @@ WHERE  id = ANY($1::uuid[])
 
 -- name: UpdateRole :exec
 -- Persists the mutable Role state — name, hierarchy_level, permissions
--- — under the UpdateFn pattern (Task 17). is_system_default + is_super_admin
--- + tenant_id + created_at are aggregate-immutable; soft-delete uses
--- SoftDeleteRole below.
+-- — under the UpdateFn pattern (Task 17). is_system_default +
+-- is_super_admin + tenant_id + created_at are aggregate-immutable;
+-- soft-delete uses SoftDeleteRole below.
 UPDATE identity.roles
 SET    name            = $2,
        hierarchy_level = $3,

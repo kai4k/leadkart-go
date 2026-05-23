@@ -114,11 +114,11 @@ The `info.version` field on the spec follows semver — `0.2.0` at v0.2.x, `0.3.
 
 ### Maintenance discipline
 
-Three rules to keep the spec from rotting:
+Three rules to keep the spec from rotting (all three SHIPPED — see ADR 0050 for the gates):
 
-1. **Every PR that touches `internal/identity/ports/*.go` MUST update `api/openapi.yaml`** if the change affects wire shape. Reviewer-enforced; arch test eventually.
-2. **`task ci:openapi`** (future) — lints the spec via `spectral` or `redocly cli`. Not in Wave 5.
-3. **`TestArch_RouteHasSpecOperation`** (future) — Go arch test that walks `mux.Handle` registrations + asserts each has a matching operation in the spec. Not in Wave 5; explicit follow-up.
+1. **Every PR that touches `internal/identity/ports/*.go` MUST update `api/openapi.yaml`** if the change affects wire shape. Reviewer-enforced AND arch-test-enforced per ADR 0050 (`TestArch_RouteHasSpecOperation` bijective drift gate; <50ms; joins `task test:arch`).
+2. **`task ci:openapi`** — lints the spec via Spectral with the LeadKart ruleset at `.spectral.yaml` (extends `spectral:oas` + project rules per ADR 0049 URL design canon). Local target + cloud CI job both gated by `dorny/paths-filter@v4` on `api/openapi.yaml` changes. Shipped Wave 9.3 per ADR 0050.
+3. **`TestArch_RouteHasSpecOperation`** — Go arch test that walks `mux.Handle` registrations + asserts each has a matching operation in the spec, AND vice versa. Shipped Wave 9.3 per ADR 0050.
 
 ## Consequences
 
@@ -164,7 +164,7 @@ Three rules to keep the spec from rotting:
 - [Anthropic API documentation](https://docs.anthropic.com) — Scalar-rendered.
 - [Scalar GitHub](https://github.com/scalar/scalar) — the UI tool.
 - [openapi-typescript](https://github.com/openapi-ts/openapi-typescript) — auto-generates frontend types from the spec.
-- [Spectral](https://stoplight.io/open-source/spectral) — spec linter (future `task ci:openapi` target).
+- [Spectral](https://stoplight.io/open-source/spectral) — spec linter; wired into `task ci:openapi` per ADR 0050.
 - README.md:80 — the v0.1 declaration of `api/openapi.yaml` as "single source of truth".
 - ADR 0007 — stdlib net/http ServeMux (the substrate this spec describes).
 - ADR 0024 — Chainguard distroless static (the embed-into-binary constraint).

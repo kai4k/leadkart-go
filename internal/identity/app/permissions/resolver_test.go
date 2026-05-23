@@ -18,7 +18,8 @@ import (
 
 // fakeMembershipRepo / fakeRoleRepo are minimal in-memory impls of the
 // domain Repository contracts. They cover the specific call shapes the
-// Resolver uses; full repo behaviour (AddInTx, etc.) lives in the
+// Resolver uses; full repo behaviour (UnitOfWork tx-joining via
+// pg.TxFromContext + outbox event drain — see ADR 0047) lives in the
 // adapter integration tests.
 type fakeMembershipRepo struct {
 	memberships map[membership.ID]*membership.Membership
@@ -198,7 +199,7 @@ func TestResolve_OverlayGrantedExtendsBaseline(t *testing.T) {
 		t.Fatalf("AssignRole: %v", err)
 	}
 	overlayP := permission.FromConstant(permission.IdentityPermissions.Users.Anonymise)
-	if err := m.GrantPermission(overlayP); err != nil {
+	if err := m.GrantPermission(overlayP, time.Time{}); err != nil {
 		t.Fatalf("GrantPermission overlay: %v", err)
 	}
 
@@ -375,5 +376,39 @@ func TestResolveAuth_RejectsNil(t *testing.T) {
 	_, err := res.ResolveAuth(t.Context(), nil)
 	if err == nil {
 		t.Fatal("ResolveAuth(nil) expected error")
+	}
+}
+
+// ----- Hierarchy resolution (ADR 0054 Option A) ------------------------------
+
+// ADR 0054 Option A: hierarchy is ORGANIZATIONAL only (no permission
+// inheritance). Permission resolution remains flat-per-role; the
+// parent_role_id chain is consumed by approval workflows (ADR 0055),
+// NOT by the resolver. The inheritance-semantic tests were removed
+// with the resolver's transitive walk.
+func TestResolve_NoParent_FallsBackToFlatBehavior(t *testing.T) {
+	// Regression check: roles with no parent_role_id MUST behave
+	// identically to the pre-ADR-0054 flat union semantics.
+	t.Parallel()
+	tid := freshTenantID(t)
+
+	view := permission.FromConstant(permission.IdentityPermissions.Roles.View)
+	flat := newRoleWith(t, tid, "Viewer", view) // no parent
+
+	m := newMembership(t, tid)
+	if err := m.AssignRole(flat.ID()); err != nil {
+		t.Fatalf("AssignRole: %v", err)
+	}
+
+	mems := &fakeMembershipRepo{memberships: map[membership.ID]*membership.Membership{m.ID(): m}}
+	roles := &fakeRoleRepo{roles: map[role.ID]*role.Role{flat.ID(): flat}}
+	res := permissions.NewResolver(mems, roles)
+
+	got, err := res.Resolve(t.Context(), m.ID())
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if !slices.Equal(names(got), []string{permission.IdentityPermissions.Roles.View}) {
+		t.Fatalf("Resolve flat: got %v want [Roles.View]", names(got))
 	}
 }

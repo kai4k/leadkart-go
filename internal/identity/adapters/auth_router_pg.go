@@ -131,6 +131,10 @@ func (r *AuthRouterPG) ResolveByEmail(
 			PendingEmailChangeNewEmail:  row.PendingEmailChangeNewEmail,
 			PendingEmailChangeTokenHash: row.PendingEmailChangeTokenHash,
 			PendingEmailChangeExpiresAt: row.PendingEmailChangeExpiresAt,
+			MustChangePassword:          row.MustChangePassword,
+			FailedLoginCount:            row.FailedLoginCount,
+			LockedUntil:                 row.LockedUntil,
+			LastFailedLoginAt:           row.LastFailedLoginAt,
 		}
 		hp, err := rowToPerson(personRow)
 		if err != nil {

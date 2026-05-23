@@ -107,6 +107,11 @@ func (e RoleDeletedV1) OccurredAt() time.Time { return e.OccurredAtUTC }
 // TenantID satisfies [TenantScoped].
 func (e RoleDeletedV1) TenantID() uuid.UUID { return e.TenantIDClaim }
 
+// Note: RoleParentChangedV1 retired in Wave 9.4 (ADR 0058 supersedes
+// ADR 0054). The rolehierarchy aggregate now emits
+// RoleHierarchyEdgeEstablishedV1 / RoleHierarchyEdgeRemovedV1 — see
+// role_hierarchy.go.
+
 // Compile-time + runtime registration.
 var (
 	_ TenantScoped = RoleCreatedV1{}

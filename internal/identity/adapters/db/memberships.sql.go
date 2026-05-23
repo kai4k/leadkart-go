@@ -136,8 +136,8 @@ func (q *Queries) InsertMembership(ctx context.Context, arg InsertMembershipPara
 
 const insertPermissionOverride = `-- name: InsertPermissionOverride :exec
 INSERT INTO identity.membership_permission_overrides (
-    membership_id, permission_name, kind, tenant_id, updated_at
-) VALUES ($1, $2, $3, $4, $5)
+    membership_id, permission_name, kind, tenant_id, updated_at, expires_at
+) VALUES ($1, $2, $3, $4, $5, $6)
 `
 
 type InsertPermissionOverrideParams struct {
@@ -146,12 +146,17 @@ type InsertPermissionOverrideParams struct {
 	Kind           string
 	TenantID       pgtype.UUID
 	UpdatedAt      pgtype.Timestamptz
+	ExpiresAt      pgtype.Timestamptz
 }
 
 // Per-Membership permission overlay. kind âˆˆ {'granted', 'revoked'} â€”
 // the domain layer guarantees a permission_name appears at most once
 // per Membership (see Membership.GrantPermission / RevokePermission
 // auto-suppression).
+//
+// expires_at NULL = perpetual (default). Set by the approval-workflow
+// grant path per ADR 0055; resolver filters expired entries at resolve
+// time.
 func (q *Queries) InsertPermissionOverride(ctx context.Context, arg InsertPermissionOverrideParams) error {
 	_, err := q.db.Exec(ctx, insertPermissionOverride,
 		arg.MembershipID,
@@ -159,6 +164,7 @@ func (q *Queries) InsertPermissionOverride(ctx context.Context, arg InsertPermis
 		arg.Kind,
 		arg.TenantID,
 		arg.UpdatedAt,
+		arg.ExpiresAt,
 	)
 	return err
 }
@@ -339,7 +345,7 @@ func (q *Queries) ListActiveMembershipsInTenantPage(ctx context.Context, arg Lis
 }
 
 const listPermissionOverridesByMembership = `-- name: ListPermissionOverridesByMembership :many
-SELECT membership_id, permission_name, kind, tenant_id, updated_at
+SELECT membership_id, permission_name, kind, tenant_id, updated_at, expires_at
 FROM   identity.membership_permission_overrides
 WHERE  membership_id = $1
 ORDER  BY permission_name
@@ -360,6 +366,7 @@ func (q *Queries) ListPermissionOverridesByMembership(ctx context.Context, membe
 			&i.Kind,
 			&i.TenantID,
 			&i.UpdatedAt,
+			&i.ExpiresAt,
 		); err != nil {
 			return nil, err
 		}

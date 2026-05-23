@@ -77,3 +77,8 @@ type DeletedEvent struct {
 }
 
 func (DeletedEvent) isRoleEvent() {}
+
+// Note: ParentChangedEvent was retired in Wave 9.4 (ADR 0058). The
+// rolehierarchy aggregate now owns parent→child relationships +
+// emits its own EstablishedEvent / RemovedEvent through the same
+// integration-event pipeline.

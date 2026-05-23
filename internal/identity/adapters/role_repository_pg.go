@@ -12,11 +12,11 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/leadkart/leadkart-go/internal/common/pg"
 	"github.com/leadkart/leadkart-go/internal/identity/adapters/db"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/permission"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/role"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
-	"github.com/leadkart/leadkart-go/internal/common/pg"
 )
 
 // RoleRepository is the pgx/sqlc-backed implementation of
@@ -27,6 +27,10 @@ import (
 // Cross-tenant operations (SuperAdmin admin UI, support tooling,
 // platform analytics) MUST use a platform-scoped transactor at a
 // higher layer; this repo refuses to bypass RLS itself.
+//
+// Hierarchy (parent→child) was extracted into the [rolehierarchy]
+// aggregate per ADR 0058 (Wave 9.4); this repo no longer touches
+// parent_role_id (the column is gone from identity.roles).
 //
 // Domain↔row mapping lives here; sqlc-generated *db.Queries hold the SQL.
 type RoleRepository struct {
@@ -48,13 +52,20 @@ func NewRoleRepository(pool *pgxpool.Pool, tx *pg.Transactor) *RoleRepository {
 // index `uq_roles_tenant_name WHERE NOT is_deleted` into
 // [role.ErrNameTaken].
 func (r *RoleRepository) Add(ctx context.Context, ro *role.Role) error {
+	if tx, ok := pg.TxFromContext(ctx); ok {
+		return r.addOnTx(ctx, tx, ro)
+	}
 	return r.tx.WithinTxPgx(ctx, pg.TxScopeTenant, func(ctx context.Context, tx pgx.Tx) error {
-		q := r.q.WithTx(tx)
-		if err := insertRoleRow(ctx, q, ro); err != nil {
-			return err
-		}
-		return drainRoleEvents(ctx, tx, ro)
+		return r.addOnTx(ctx, tx, ro)
 	})
+}
+
+func (r *RoleRepository) addOnTx(ctx context.Context, tx pgx.Tx, ro *role.Role) error {
+	q := r.q.WithTx(tx)
+	if err := insertRoleRow(ctx, q, ro); err != nil {
+		return err
+	}
+	return drainRoleEvents(ctx, tx, ro)
 }
 
 // GetByID satisfies [role.Repository]. RLS-scoped read.
@@ -201,24 +212,36 @@ func (r *RoleRepository) UpdateByID(
 	id role.ID,
 	updateFn func(*role.Role) (bool, error),
 ) error {
+	if tx, ok := pg.TxFromContext(ctx); ok {
+		return r.updateOnTx(ctx, tx, id, updateFn)
+	}
 	return r.tx.WithinTxPgx(ctx, pg.TxScopeTenant, func(ctx context.Context, tx pgx.Tx) error {
-		q := r.q.WithTx(tx)
-		ro, err := loadRole(ctx, q, id)
-		if err != nil {
-			return err
-		}
-		shouldPersist, err := updateFn(ro)
-		if err != nil {
-			return err
-		}
-		if !shouldPersist {
-			return nil
-		}
-		if err := persistRoleState(ctx, q, ro); err != nil {
-			return err
-		}
-		return drainRoleEvents(ctx, tx, ro)
+		return r.updateOnTx(ctx, tx, id, updateFn)
 	})
+}
+
+func (r *RoleRepository) updateOnTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	id role.ID,
+	updateFn func(*role.Role) (bool, error),
+) error {
+	q := r.q.WithTx(tx)
+	ro, err := loadRole(ctx, q, id)
+	if err != nil {
+		return err
+	}
+	shouldPersist, err := updateFn(ro)
+	if err != nil {
+		return err
+	}
+	if !shouldPersist {
+		return nil
+	}
+	if err := persistRoleState(ctx, q, ro); err != nil {
+		return err
+	}
+	return drainRoleEvents(ctx, tx, ro)
 }
 
 // ----- Helpers ---------------------------------------------------------------

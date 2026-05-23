@@ -445,11 +445,15 @@ func loadRoleAssignments(ctx context.Context, q *db.Queries, mid uuid.UUID) ([]r
 // — unknown permission_name in storage = data corruption (catalogue is
 // closed-set per coding-standards.md "Permissions — closed-set
 // construction"); fail-loud beats silent privilege-loss.
+//
+// granted entries carry an optional ExpiresAt (zero = perpetual);
+// revoked entries do not (revocation is permanent until re-granted).
+// ADR 0055 — approval workflow.
 func loadPermissionOverrides(
 	ctx context.Context,
 	q *db.Queries,
 	mid uuid.UUID,
-) (granted, revoked []*permission.Permission, err error) {
+) (granted []membership.GrantedOverride, revoked []*permission.Permission, err error) {
 	rows, err := q.ListPermissionOverridesByMembership(ctx, pgUUID(mid))
 	if err != nil {
 		return nil, nil, fmt.Errorf("membership repo: list permission overrides: %w", err)
@@ -462,7 +466,12 @@ func loadPermissionOverrides(
 		}
 		switch row.Kind {
 		case overrideKindGranted:
-			granted = append(granted, p)
+			// ADR 0055 — ExpiresAt zero (NULL in column) = perpetual;
+			// non-zero = JIT-bounded grant filtered at resolve time.
+			granted = append(granted, membership.GrantedOverride{
+				Permission: p,
+				ExpiresAt:  timeFromPg(row.ExpiresAt),
+			})
 		case overrideKindRevoked:
 			revoked = append(revoked, p)
 		default:
@@ -560,7 +569,8 @@ func drainMembershipEvents(ctx context.Context, tx pgx.Tx, m *membership.Members
 func rowToMembership(
 	row db.IdentityTenantMembership,
 	roleAssignments []role.ID,
-	granted, revoked []*permission.Permission,
+	granted []membership.GrantedOverride,
+	revoked []*permission.Permission,
 ) (*membership.Membership, error) {
 	id := membership.ID(uuidFromPg(row.ID).String())
 	personID := person.ID(uuidFromPg(row.PersonID).String())
@@ -684,19 +694,20 @@ func replacePermissionOverrides(ctx context.Context, q *db.Queries, m *membershi
 		return fmt.Errorf("membership repo: clear permission overrides: %w", err)
 	}
 	now := pgRequiredTimestamp(clock.Now())
-	for _, p := range m.GrantedPermissions() {
-		if p == nil {
+	for _, g := range m.GrantedPermissions() {
+		if g.Permission == nil {
 			continue
 		}
 		err := q.InsertPermissionOverride(ctx, db.InsertPermissionOverrideParams{
 			MembershipID:   pgUUID(mid),
-			PermissionName: p.Name(),
+			PermissionName: g.Permission.Name(),
 			Kind:           overrideKindGranted,
 			TenantID:       pgUUID(tid),
 			UpdatedAt:      now,
+			ExpiresAt:      pgTimestamp(g.ExpiresAt), // nil → NULL = perpetual
 		})
 		if err != nil {
-			return fmt.Errorf("membership repo: insert granted override %q: %w", p.Name(), err)
+			return fmt.Errorf("membership repo: insert granted override %q: %w", g.Permission.Name(), err)
 		}
 	}
 	for _, p := range m.RevokedPermissions() {
@@ -709,6 +720,7 @@ func replacePermissionOverrides(ctx context.Context, q *db.Queries, m *membershi
 			Kind:           overrideKindRevoked,
 			TenantID:       pgUUID(tid),
 			UpdatedAt:      now,
+			// Revocations are permanent until re-granted; ExpiresAt stays NULL.
 		})
 		if err != nil {
 			return fmt.Errorf("membership repo: insert revoked override %q: %w", p.Name(), err)

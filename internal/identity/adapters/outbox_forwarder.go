@@ -78,6 +78,20 @@ func (f *OutboxForwarder) ForwardOnce(ctx context.Context) (int, error) {
 			msg.Metadata.Set("event_type", row.Topic)
 			msg.Metadata.Set("tenant_id", uuidFromPg(row.TenantID).String())
 			msg.Metadata.Set("occurred_at", timeFromPg(row.OccurredAt).Format(time.RFC3339Nano))
+			// Per ADR 0056: propagate the RFC 8693 actor claim from the
+			// outbox row onto Watermill message metadata. Subscriber-side
+			// AuditMiddleware reads these back to populate
+			// audit_log_entry.act_*. Empty metadata for non-impersonation
+			// rows — the AuditMiddleware path is presence-checked.
+			if row.ActOperatorID.Valid {
+				msg.Metadata.Set("act_operator_id", uuidFromPg(row.ActOperatorID).String())
+			}
+			if row.ActSessionID.Valid {
+				msg.Metadata.Set("act_session_id", uuidFromPg(row.ActSessionID).String())
+			}
+			if row.ActReason != nil && *row.ActReason != "" {
+				msg.Metadata.Set("act_reason", *row.ActReason)
+			}
 			// W3C Trace Context propagation across the broker. The forwarder
 			// runs in a separate process from the producing handler (cmd/api
 			// → cmd/worker over Postgres-backed broker in v0.3); without

@@ -16,13 +16,13 @@ type AppCommandIdempotency struct {
 	ResponseBody   []byte
 	CreatedAt      pgtype.Timestamptz
 	ExpiresAt      pgtype.Timestamptz
-	// Per-caller scoping per Stripe Idempotency-Key canon. Tenant ID for tenant requests, "platform:<user>" for operator paths, "anon:<ip>" for unauth (defense-in-depth â€” middleware should not be on unauth routes).
+	// Per-caller scoping per Stripe Idempotency-Key canon. Tenant ID for tenant requests, "platform:<user>" for operator paths, "anon:<ip>" for unauth (defense-in-depth — middleware should not be on unauth routes).
 	CallerID string
 	// Captured response headers for verbatim replay (Content-Type minimum; ETag / X-Request-Id when set).
 	ResponseHeaders []byte
 }
 
-// Per-request operator impersonation activity. Indexed on operator + target tenant for forensic queries. 7-year retention per SOC2 CC4.1 / DPDP Â§12.
+// Per-request operator impersonation activity. Indexed on operator + target tenant for forensic queries. 7-year retention per SOC2 CC4.1 / DPDP §12.
 type BuildingblocksAdminImpersonationAudit struct {
 	ID             pgtype.UUID
 	SessionID      pgtype.UUID
@@ -48,9 +48,15 @@ type BuildingblocksAuditLogEntry struct {
 	Succeeded     bool
 	FailureReason *string
 	Payload       []byte
+	// RFC 8693 act.sub — the original operator who initiated the impersonation session. NULL for non-impersonation rows.
+	ActOperatorID pgtype.UUID
+	// Impersonation session ID — joins to the impersonation store (Redis). NULL for non-impersonation rows.
+	ActSessionID pgtype.UUID
+	// Denormalised reason from the impersonation session — captured at-rest for forensic queryability without needing to re-resolve the session record. NULL for non-impersonation rows.
+	ActReason *string
 }
 
-// Cross-tenant emailâ†’tenant index for login. NOT RLS-scoped (intentional â€” login flow predates tenant context). Maintained via Watermill events.
+// Cross-tenant email→tenant index for login. NOT RLS-scoped (intentional — login flow predates tenant context). Maintained via Watermill events.
 type IdentityAuthRouting struct {
 	Email          string
 	PersonID       pgtype.UUID
@@ -58,13 +64,15 @@ type IdentityAuthRouting struct {
 	UpdatedAt      pgtype.Timestamptz
 }
 
-// Per-Membership permission overlay. Effective set = role union âˆª granted \ revoked.
+// Per-Membership permission overlay. Effective set = role union ∪ granted \ revoked.
 type IdentityMembershipPermissionOverride struct {
 	MembershipID   pgtype.UUID
 	PermissionName string
 	Kind           string
 	TenantID       pgtype.UUID
 	UpdatedAt      pgtype.Timestamptz
+	// ADR 0055 — time-bound overlay grant. NULL = perpetual. Resolver filters expired entries at resolve time; no cron sweep at v0.2 scale.
+	ExpiresAt pgtype.Timestamptz
 }
 
 // Domain events written same-tx as aggregate state. Watermill SQL forwarder polls + republishes. Doubles as audit log per ADR 0027.
@@ -77,6 +85,30 @@ type IdentityOutbox struct {
 	CreatedAt   pgtype.Timestamptz
 	Forwarded   bool
 	ForwardedAt pgtype.Timestamptz
+	// RFC 8693 act.sub — operator who initiated the impersonation session under which this event was emitted. NULL for non-impersonation rows. Stamped by the outbox writer from authn.ClaimsFromContext(ctx).Act.Sub; the forwarder propagates onto Watermill message metadata so the subscriber-side AuditMiddleware can populate audit_log_entry.act_operator_id.
+	ActOperatorID pgtype.UUID
+	// Impersonation session ID — same propagation path as act_operator_id. NULL for non-impersonation rows.
+	ActSessionID pgtype.UUID
+	// Denormalised reason from the impersonation session — same propagation path. NULL for non-impersonation rows.
+	ActReason *string
+}
+
+// ADR 0055 — permission-elevation approval workflow. Stores Requested → Approved/Denied/Cancelled history; approved grants land on identity.membership_permission_overrides with expires_at bounded.
+type IdentityPermissionRequest struct {
+	ID                    pgtype.UUID
+	TenantID              pgtype.UUID
+	RequesterMembershipID pgtype.UUID
+	PermissionConstant    string
+	DurationDays          int32
+	Reason                string
+	State                 string
+	ApproverMembershipID  pgtype.UUID
+	DecidedAt             pgtype.Timestamptz
+	DecisionReason        *string
+	GrantedOverrideID     pgtype.UUID
+	ExpiresAt             pgtype.Timestamptz
+	CreatedAt             pgtype.Timestamptz
+	UpdatedAt             pgtype.Timestamptz
 }
 
 // Person aggregate. Global identity (Auth0/Entra ID pattern). NOT tenant-scoped.
@@ -99,8 +131,16 @@ type IdentityPerson struct {
 	PendingEmailChangeNewEmail  *string
 	PendingEmailChangeTokenHash *string
 	PendingEmailChangeExpiresAt pgtype.Timestamptz
-	// Audit chain â€” Person of the user who created this row globally. NULL = system-bootstrapped (SuperAdmin, first-admin via RegisterTenant). Allows cross-tenant lookup of "who originally onboarded this user."
+	// Audit chain — Person of the user who created this row globally. NULL = system-bootstrapped (SuperAdmin, first-admin via RegisterTenant). Allows cross-tenant lookup of "who originally onboarded this user."
 	CreatedByPersonID pgtype.UUID
+	// BRD line 241 — true when admin/operator provisioned the credential; cleared on self-change/self-reset. Login still succeeds (frontend redirects); strict middleware enforcement is a v0.3 follow-up.
+	MustChangePassword bool
+	// NIST 800-63B §5.2.2 — count of consecutive failed login attempts in the current sliding window. Reset to 0 on successful login OR when LockoutWindow elapses since last_failed_login_at.
+	FailedLoginCount int32
+	// NIST 800-63B §5.2.2 — set to now+LockoutDuration when failed_login_count reaches MaxFailedLogins. NULL once login has succeeded (or never been locked).
+	LockedUntil pgtype.Timestamptz
+	// Timestamp of the most recent failed login; drives the sliding-window counter reset. NULL when failed_login_count = 0.
+	LastFailedLoginAt pgtype.Timestamptz
 }
 
 // Per-handler inbox dedup. (message_id, handler_name) PK guarantees at-most-once-per-handler delivery.
@@ -122,7 +162,7 @@ type IdentityRefreshToken struct {
 	ReplacedByID pgtype.UUID
 }
 
-// Refresh-token family per RFC 9700 Â§4.13 + ADR 0011. NOT tenant-scoped â€” session-management infrastructure.
+// Refresh-token family per RFC 9700 §4.13 + ADR 0011. NOT tenant-scoped — session-management infrastructure.
 type IdentityRefreshTokenFamily struct {
 	ID           pgtype.UUID
 	PersonID     pgtype.UUID
@@ -149,12 +189,26 @@ type IdentityRole struct {
 	DeletedBy       *string
 }
 
-// Membership â†” Role junction with denormalised tenant_id. Composite FK ensures no cross-tenant role assignment.
+// Membership ↔ Role junction with denormalised tenant_id. Composite FK ensures no cross-tenant role assignment.
 type IdentityRoleAssignment struct {
 	MembershipID pgtype.UUID
 	RoleID       pgtype.UUID
 	TenantID     pgtype.UUID
 	AssignedAt   pgtype.Timestamptz
+}
+
+// ADR 0058 — role-hierarchy aggregate (Wave 9.4). One row per directed parent→child edge. Soft-delete preserves history. Single-parent invariant via partial unique index uq_role_hierarchy_active_edge_per_child.
+type IdentityRoleHierarchyEdge struct {
+	ID                        pgtype.UUID
+	TenantID                  pgtype.UUID
+	ChildRoleID               pgtype.UUID
+	ParentRoleID              pgtype.UUID
+	EstablishedAt             pgtype.Timestamptz
+	EstablishedByMembershipID pgtype.UUID
+	Reason                    *string
+	RemovedAt                 pgtype.Timestamptz
+	RemovedByMembershipID     pgtype.UUID
+	RemovalReason             *string
 }
 
 // Tenant aggregate root. Each row IS a tenant; not tenant-scoped (no RLS).
@@ -193,7 +247,7 @@ type IdentityTenant struct {
 	HardDeletedAt             pgtype.Timestamptz
 }
 
-// Per-tenant junction (Person â†” Tenant). Tenant-scoped, FORCE RLS. Single-Active-Membership invariant via partial unique index.
+// Per-tenant junction (Person ↔ Tenant). Tenant-scoped, FORCE RLS. Single-Active-Membership invariant via partial unique index.
 type IdentityTenantMembership struct {
 	ID            pgtype.UUID
 	PersonID      pgtype.UUID
@@ -205,6 +259,6 @@ type IdentityTenantMembership struct {
 	Department    string
 	StatusMessage string
 	ReportsTo     pgtype.UUID
-	// Audit chain â€” Membership of the user who created this row. NULL = system-bootstrapped (SuperAdmin, first-admin during tenant onboarding). Composite FK to (id, tenant_id) prevents cross-tenant spoofing.
+	// Audit chain — Membership of the user who created this row. NULL = system-bootstrapped (SuperAdmin, first-admin during tenant onboarding). Composite FK to (id, tenant_id) prevents cross-tenant spoofing.
 	CreatedByMembershipID pgtype.UUID
 }

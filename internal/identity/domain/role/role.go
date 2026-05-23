@@ -3,6 +3,13 @@
 // `Modules.Identity.Domain.Roles.Role`: per-tenant catalog, system-
 // default roles refuse mutation, soft-delete with audit, hierarchy
 // level drives `IUserHierarchyQueries` (Phase 7).
+//
+// Hierarchy (parent→child organizational tree) is owned by the
+// SEPARATE [rolehierarchy] aggregate per ADR 0058 (Wave 9.4 —
+// supersedes ADR 0054). The Role aggregate stays focused on its own
+// state (name, permissions, hierarchy_level, soft-delete). The
+// previous `parent_role_id` field + its `ChangeParent` method moved
+// out wholesale.
 package role
 
 import (
@@ -68,6 +75,9 @@ func (i ID) String() string { return string(i) }
 //     SuperAdmin role) — drives JWT `is_super_user` claim per
 //     `multi-tenancy.md` "SuperUser god-mode."
 //   - deleted is one-way; UpdateByID rejects mutations after delete.
+//
+// Hierarchy/parent links live in the [rolehierarchy] aggregate per
+// ADR 0058 — they're NOT a property of Role.
 type Role struct {
 	id              ID
 	tenantID        tenant.ID

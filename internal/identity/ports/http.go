@@ -5,7 +5,9 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -79,10 +81,16 @@ func AddRoutes(mux *http.ServeMux, log *slog.Logger, a app.Application, verifier
 		// authn.RequireTenantContext. A tenant Admin can manage their
 		// own tenant; Platform / SuperUser operators can manage any
 		// (post-impersonation per multi-tenancy.md).
-		// Slug lookup — enumeration-safe 404 inline authz per ADR 0044.
-		// Uses `auth` (RequireFreshStamp), NOT tenantCtx, because the
-		// slug-vs-JWT comparison needs a DB lookup first; the handler
-		// does the authz gate after the resolve.
+		// Canonical slug lookup — Stripe/Auth0 listing-with-filter shape
+		// per ADR 0052 (Wave 9.1c). Returns {tenants: [0|1 match]}.
+		// Enumeration-safe per ADR 0044 (no-access = empty list).
+		mux.Handle("GET /api/v1/tenants",
+			auth(handleListTenantsByFilter(log, a)))
+
+		// Slug lookup (deprecated — superseded by GET /tenants?slug=).
+		// Kept for v0.2 frontend-contract compatibility per ADR 0049
+		// grandfather rule. Remove in v0.4+ once frontend migrates.
+		// Enumeration-safe 404 inline authz per ADR 0044.
 		mux.Handle("GET /api/v1/tenants/by-slug/{slug}",
 			auth(handleGetTenantBySlug(log, a)))
 
@@ -156,6 +164,10 @@ func AddRoutes(mux *http.ServeMux, log *slog.Logger, a app.Application, verifier
 			auth(handleGrantRolePermission(log, a)))
 		mux.Handle("POST /api/v1/roles/{roleId}/permissions/revoke",
 			auth(handleRevokeRolePermission(log, a)))
+		// ADR 0054 — hierarchy sub-resource. Null/empty parent_role_id
+		// in the body clears the parent (role becomes a root).
+		mux.Handle("PATCH /api/v1/roles/{roleId}/parent",
+			auth(handleSetRoleParent(log, a)))
 		mux.Handle("DELETE /api/v1/roles/{roleId}", auth(handleDeleteRole(log, a)))
 
 		// Platform admin — all under /api/v1/platform/... gated on
@@ -209,6 +221,28 @@ func AddRoutes(mux *http.ServeMux, log *slog.Logger, a app.Application, verifier
 		// v0.2; tenant-scoped variant lands in a follow-up.
 		mux.Handle("GET /api/v1/search",
 			platform(handleSearch(log, a)))
+
+		// Permission-elevation approval workflow (ADR 0055).
+		//
+		// Submit / list-my-requests / list-pending-for-approver / get /
+		// cancel — RequireFreshStamp (auth) is sufficient; the handlers
+		// inline-check requester / approver / platform-operator authz.
+		// Approve / Deny use the same auth() middleware + handler-inline
+		// manager-or-platform decision tree (the manager-tree lookup
+		// requires loading the requester membership which we can't do
+		// in middleware).
+		mux.Handle("POST /api/v1/permission-requests",
+			auth(handleCreatePermissionRequest(log, a)))
+		mux.Handle("GET /api/v1/permission-requests",
+			auth(handleListPermissionRequests(log, a)))
+		mux.Handle("GET /api/v1/permission-requests/{requestId}",
+			auth(handleGetPermissionRequest(log, a)))
+		mux.Handle("POST /api/v1/permission-requests/{requestId}/approve",
+			auth(handleApprovePermissionRequest(log, a)))
+		mux.Handle("POST /api/v1/permission-requests/{requestId}/deny",
+			auth(handleDenyPermissionRequest(log, a)))
+		mux.Handle("POST /api/v1/permission-requests/{requestId}/cancel",
+			auth(handleCancelPermissionRequest(log, a)))
 
 		// Audit-log reads per ADR 0027 (outbox doubles as audit) +
 		// ADR 0038 (keyset pagination). Self-read is always allowed
@@ -333,6 +367,13 @@ func handleLogin(log *slog.Logger, a app.Application) http.Handler {
 			DeviceLabel: resolveDeviceLabel(req.DeviceLabel, r),
 		})
 		switch {
+		case errors.Is(err, command.ErrAccountLocked):
+			// 423 Locked per RFC 4918 §11.3 + ADR 0053. Retry-After
+			// header carries integer seconds until unlock per RFC 7231
+			// §7.1.3 (the "delta-seconds" form, not the HTTP-date form
+			// — easier for SPAs to consume).
+			writeLockoutError(w, command.LockedUntilFromError(err))
+			return
 		case errors.Is(err, command.ErrInvalidCredentials):
 			writeError(w, http.StatusUnauthorized, ErrCodeInvalidCredentials, "")
 			return
@@ -347,8 +388,27 @@ func handleLogin(log *slog.Logger, a app.Application) http.Handler {
 			RefreshToken:         out.RefreshTokenPlain,
 			AccessTokenExpiresAt: out.AccessTokenExpiresAt,
 			TokenType:            "Bearer",
+			MustChangePassword:   out.MustChangePassword,
 		})
 	})
+}
+
+// writeLockoutError emits the 423 Locked surface for Login's lockout
+// branch per ADR 0053. Retry-After carries the seconds-until-unlock
+// per RFC 7231 §7.1.3 delta-seconds form. lockedUntil may be zero
+// (defensive — when LockedUntilFromError can't extract it); we still
+// emit 423 + a default Retry-After equal to person.LockoutDuration to
+// avoid leaking handler state.
+func writeLockoutError(w http.ResponseWriter, lockedUntil time.Time) {
+	retrySeconds := int(time.Until(lockedUntil).Seconds())
+	if retrySeconds <= 0 {
+		// Defensive — locked-until is in the past or zero. Use a
+		// reasonable default so the client backs off instead of
+		// retrying immediately + producing the same 423.
+		retrySeconds = int((15 * time.Minute).Seconds())
+	}
+	w.Header().Set("Retry-After", strconv.Itoa(retrySeconds))
+	writeError(w, http.StatusLocked, ErrCodeAccountLocked, "")
 }
 
 func handleRefresh(log *slog.Logger, a app.Application) http.Handler {

@@ -389,6 +389,10 @@ func TestRoleRepository_UpdateByID_Rollback_WhenUpdateFnErrors(t *testing.T) {
 	}
 }
 
+// Hierarchy integration tests moved to
+// role_hierarchy_edges_pg_test.go per ADR 0058 (Wave 9.4) — the
+// edge aggregate owns parent→child relationships now.
+
 func TestRoleRepository_UpdateByID_RLS_RefusesCrossTenantUpdate(t *testing.T) {
 	pool := repoFixture(t)
 	tenants := adapters.NewTenantRepository(pool, pg.NewTransactor(pool))

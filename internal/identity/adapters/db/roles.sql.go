@@ -83,7 +83,7 @@ WHERE  id = ANY($1::uuid[])
   AND  NOT is_deleted
 `
 
-// Bulk load for the PermissionResolver (Task 21) â€” given a Membership's
+// Bulk load for the PermissionResolver (Task 21) — given a Membership's
 // RoleAssignments, hydrate each Role's permission set in one query.
 // RLS still applies; cross-tenant lookups must run under platform.
 func (q *Queries) GetRolesByIDs(ctx context.Context, dollar_1 []pgtype.UUID) ([]IdentityRole, error) {
@@ -137,11 +137,16 @@ type InsertRoleParams struct {
 	CreatedAt       pgtype.Timestamptz
 }
 
-// Role queries â€” identity.roles is RLS+FORCE per multi-tenancy.md.
+// Role queries — identity.roles is RLS+FORCE per multi-tenancy.md.
 // Reads/writes flow through RLS: only the current tenant's rows are
 // visible unless app.is_platform=true. Seeded SuperAdmin + custom
 // per-tenant roles share the same table; isolation is enforced by RLS,
 // not by the application layer.
+//
+// Hierarchy moved OUT of this table per ADR 0058 (Wave 9.4) into
+// identity.role_hierarchy_edges (its own aggregate). The
+// parent_role_id column + its DB trigger + its recursive ancestor CTE
+// all live in role_hierarchy_edges.sql / the rolehierarchy package now.
 func (q *Queries) InsertRole(ctx context.Context, arg InsertRoleParams) error {
 	_, err := q.db.Exec(ctx, insertRole,
 		arg.ID,
@@ -238,10 +243,10 @@ type UpdateRoleParams struct {
 	Permissions    []byte
 }
 
-// Persists the mutable Role state â€” name, hierarchy_level, permissions
-// â€” under the UpdateFn pattern (Task 17). is_system_default + is_super_admin
-// + tenant_id + created_at are aggregate-immutable; soft-delete uses
-// SoftDeleteRole below.
+// Persists the mutable Role state — name, hierarchy_level, permissions
+// — under the UpdateFn pattern (Task 17). is_system_default +
+// is_super_admin + tenant_id + created_at are aggregate-immutable;
+// soft-delete uses SoftDeleteRole below.
 func (q *Queries) UpdateRole(ctx context.Context, arg UpdateRoleParams) error {
 	_, err := q.db.Exec(ctx, updateRole,
 		arg.ID,

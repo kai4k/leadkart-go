@@ -38,13 +38,21 @@ type LoginCommand struct {
 // the response DTO; the access-token jwt is returned in body, the
 // refresh-token plaintext goes into an HttpOnly cookie (per security.md
 // "BFF cookie" canon — Web is a BFF, mobile/integrations bear-token).
+//
+// MustChangePassword surfaces the Person's [person.MustChangePassword]
+// flag so the HTTP port can include it in the response — frontend
+// redirects to the change-password screen on first login per BRD line
+// 241 (admin/operator-provisioned credentials). Login itself succeeds;
+// strict middleware enforcement (block all other endpoints until the
+// flag clears) is a v0.3 follow-up per ADR 0053.
 type LoginResult struct {
-	AccessToken         string // signed JWT
-	RefreshTokenPlain   string // base64url; client stores opaquely
+	AccessToken          string // signed JWT
+	RefreshTokenPlain    string // base64url; client stores opaquely
 	AccessTokenExpiresAt time.Time
-	PersonID            person.ID
-	TenantID            tenant.ID
-	MembershipID        membership.ID
+	PersonID             person.ID
+	TenantID             tenant.ID
+	MembershipID         membership.ID
+	MustChangePassword   bool
 }
 
 // ----- Handler errors --------------------------------------------------------
@@ -54,6 +62,42 @@ type LoginResult struct {
 // Active Membership, anonymised Person. Identical shape defeats user
 // enumeration per OWASP "Authentication Cheat Sheet" + RFC 6749 §5.2.
 var ErrInvalidCredentials = errors.New("login: invalid credentials")
+
+// ErrAccountLocked surfaces when the calling Person hit the
+// [person.MaxFailedLogins] threshold within [person.LockoutWindow] and
+// is currently inside the [person.LockoutDuration] cool-off. HTTP layer
+// maps to 423 Locked (RFC 4918 §11.3) + Retry-After header per ADR
+// 0053. Per OWASP Authentication Cheat Sheet 2025 §7.7: locked-account
+// surface IS distinguishable from invalid_credentials — the user-
+// facing UX needs to direct them to "wait + retry" instead of "try a
+// different password". Account-existence enumeration is already
+// defeated upstream (unknown-email + wrong-password collapse to
+// ErrInvalidCredentials), so revealing "you're locked out" leaks no
+// new information about which email exists.
+var ErrAccountLocked = errors.New("login: account locked")
+
+// LockedUntilFromError extracts the lockout-expiry timestamp from an
+// [ErrAccountLocked] error chain. Returns zero when the error is not
+// a lockout. Used by the HTTP layer to compute the Retry-After header.
+func LockedUntilFromError(err error) time.Time {
+	var le *lockedError
+	if errors.As(err, &le) {
+		return le.lockedUntil
+	}
+	return time.Time{}
+}
+
+// lockedError wraps [ErrAccountLocked] with the LockedUntil timestamp
+// so the HTTP layer can populate Retry-After without re-loading the
+// Person. Internal — callers branch via errors.Is(err, ErrAccountLocked).
+type lockedError struct {
+	lockedUntil time.Time
+}
+
+func (e *lockedError) Error() string                { return ErrAccountLocked.Error() }
+func (e *lockedError) Unwrap() error                { return ErrAccountLocked }
+func (e *lockedError) Is(target error) bool         { return target == ErrAccountLocked }
+func newLockedError(lockedUntil time.Time) *lockedError { return &lockedError{lockedUntil: lockedUntil} }
 
 // ----- Handler ---------------------------------------------------------------
 
@@ -87,6 +131,7 @@ type LoginHandler struct {
 	authRouter AuthRouter
 	families   refreshtoken.Repository
 	tenants    tenant.Repository
+	persons    person.Repository
 	resolver   *permissions.Resolver
 	jwt        *jwt.Issuer
 	now        func() time.Time
@@ -111,10 +156,16 @@ type LoginHandler struct {
 // legacy two-call pair (persons.GetByEmail + memberships.GetActiveForPerson)
 // per current canon (Brandur Leach / DHH "Postgres scales further than
 // you think" — single JOIN over denormalised auth tables).
+//
+// persons is the [person.Repository] used by the Wave 9.2 lockout flow
+// to persist the FailedLoginCount + LockedUntil counters via the
+// dedicated UpdateLockoutState hot-path (cheaper than UpdateByID for
+// the high-frequency wrong-password branch).
 func NewLoginHandler(
 	authRouter AuthRouter,
 	families refreshtoken.Repository,
 	tenants tenant.Repository,
+	persons person.Repository,
 	resolver *permissions.Resolver,
 	jwtIssuer *jwt.Issuer,
 	now func() time.Time,
@@ -128,6 +179,7 @@ func NewLoginHandler(
 		authRouter: authRouter,
 		families:   families,
 		tenants:    tenants,
+		persons:    persons,
 		resolver:   resolver,
 		jwt:        jwtIssuer,
 		now:        now,
@@ -239,6 +291,7 @@ func (h LoginHandler) Handle(ctx context.Context, cmd LoginCommand) (LoginResult
 		PersonID:             p.ID(),
 		TenantID:             tn.ID(),
 		MembershipID:         m.ID(),
+		MustChangePassword:   p.MustChangePassword(),
 	}, nil
 }
 
@@ -261,10 +314,13 @@ func permissionNames(perms []*permission.Permission) []string {
 	return out
 }
 
-// resolveAndVerify covers steps 1-3: lookup (Person + Active
-// Membership), verify password, reject inactive/anonymised/no-active-
-// membership. Returns both aggregates so Handle can avoid the
-// separate memberships.GetActiveForPerson call.
+// resolveAndVerify covers steps 1-4: lookup (Person + Active
+// Membership), check lockout BEFORE password verify (NIST 800-63B
+// §5.2.2 + ADR 0053 — avoid timing leak), verify password, reject
+// inactive/anonymised/no-active-membership. On wrong password,
+// increment the FailedLoginCount + persist via UpdateLockoutState;
+// on correct, clear via the same. Returns both aggregates so Handle
+// can avoid the separate memberships.GetActiveForPerson call.
 //
 // Every "auth failure" branch runs argon2.Verify against the
 // precomputed dummyHash before returning ErrInvalidCredentials —
@@ -284,8 +340,21 @@ func (h LoginHandler) resolveAndVerify(ctx context.Context, cmd LoginCommand) (*
 		return nil, nil, fmt.Errorf("login: resolve auth routing: %w", err)
 	}
 
+	// Lockout gate — runs BEFORE password verify per NIST 800-63B §5.2.2
+	// + ADR 0053. Bcrypt verify is ~50-200ms; gating after would let
+	// an attacker distinguish locked-vs-unlocked accounts by timing.
+	// Surface IS distinct from invalid_credentials per OWASP
+	// Authentication Cheat Sheet 2025 §7.7 — user UX needs "wait + retry"
+	// not "try a different password". Email-existence enumeration is
+	// already defeated upstream.
+	if p.IsLocked(h.now()) {
+		return nil, nil, newLockedError(p.LockedUntil())
+	}
+
 	if !p.IsActive() || p.IsAnonymised() {
-		// Same dummy timing for terminal-Person paths.
+		// Same dummy timing for terminal-Person paths. Do NOT increment
+		// the failed-login counter — these are admin-controlled terminal
+		// states, not credential attempts the user can recover from.
 		_ = argon2.Verify(cmd.Password, h.dummyHash)
 		return nil, nil, ErrInvalidCredentials
 	}
@@ -295,18 +364,59 @@ func (h LoginHandler) resolveAndVerify(ctx context.Context, cmd LoginCommand) (*
 		// unknown email per OWASP "Authentication Cheat Sheet"
 		// enumeration-safety. Real verify (not dummy) so even this
 		// branch's timing tracks the wrong-password path exactly,
-		// since the JOIN returned the actual password_hash.
-		_ = argon2.Verify(cmd.Password, p.PasswordHash().String())
+		// since the JOIN returned the actual password_hash. We do
+		// count this as a failed attempt — same observable as wrong-
+		// password from the caller's POV.
+		match := argon2.Verify(cmd.Password, p.PasswordHash().String()) == nil
+		if !match {
+			h.registerFailedLoginBestEffort(ctx, p)
+		}
 		return nil, nil, ErrInvalidCredentials
 	}
 
 	if err := argon2.Verify(cmd.Password, p.PasswordHash().String()); err != nil {
 		if errors.Is(err, argon2.ErrMismatch) || errors.Is(err, argon2.ErrFormat) {
+			h.registerFailedLoginBestEffort(ctx, p)
+			// Re-check IsLocked post-increment so the threshold-crossing
+			// attempt surfaces ErrAccountLocked instead of "wrong
+			// password, try again" — Auth0/Okta UX canon.
+			if p.IsLocked(h.now()) {
+				return nil, nil, newLockedError(p.LockedUntil())
+			}
 			return nil, nil, ErrInvalidCredentials
 		}
 		return nil, nil, fmt.Errorf("login: verify password: %w", err)
 	}
 
+	// Successful credential verify — clear counter + lockout in the
+	// SAME tx the rest of the login flow runs in (caller persists via
+	// UpdateLockoutState below, before refresh-family creation, so a
+	// late failure leaves the unlock visible).
+	h.registerSuccessfulLoginBestEffort(ctx, p)
+
 	return p, m, nil
+}
+
+// registerFailedLoginBestEffort applies [Person.RegisterFailedLogin]
+// + persists via [person.Repository.UpdateLockoutState]. Errors are
+// logged-and-swallowed: a transient DB hiccup MUST NOT prevent the
+// caller from returning ErrInvalidCredentials, and the worst case is
+// a single missed increment (the next attempt will re-increment;
+// brute-force protection is statistical, not transactional).
+//
+// Per ADR 0053: persist-best-effort beats fail-the-login-on-persist-
+// error because the latter creates a denial-of-service vector
+// (attacker flaps DB; legitimate users see 500s).
+func (h LoginHandler) registerFailedLoginBestEffort(ctx context.Context, p *person.Person) {
+	p.RegisterFailedLogin(h.now())
+	_ = h.persons.UpdateLockoutState(ctx, p)
+}
+
+// registerSuccessfulLoginBestEffort applies [Person.RegisterSuccessfulLogin]
+// + persists via [person.Repository.UpdateLockoutState]. Same
+// best-effort posture as the failed-login path.
+func (h LoginHandler) registerSuccessfulLoginBestEffort(ctx context.Context, p *person.Person) {
+	p.RegisterSuccessfulLogin()
+	_ = h.persons.UpdateLockoutState(ctx, p)
 }
 

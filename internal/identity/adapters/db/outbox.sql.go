@@ -14,22 +14,29 @@ import (
 const insertOutboxEvent = `-- name: InsertOutboxEvent :exec
 
 INSERT INTO identity.outbox (
-    id, tenant_id, topic, payload, occurred_at
-) VALUES ($1, $2, $3, $4, $5)
+    id, tenant_id, topic, payload, occurred_at,
+    act_operator_id, act_session_id, act_reason
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 `
 
 type InsertOutboxEventParams struct {
-	ID         pgtype.UUID
-	TenantID   pgtype.UUID
-	Topic      string
-	Payload    []byte
-	OccurredAt pgtype.Timestamptz
+	ID            pgtype.UUID
+	TenantID      pgtype.UUID
+	Topic         string
+	Payload       []byte
+	OccurredAt    pgtype.Timestamptz
+	ActOperatorID pgtype.UUID
+	ActSessionID  pgtype.UUID
+	ActReason     *string
 }
 
-// Outbox queries â€” identity.outbox is RLS+FORCE per ADR 0027 ("outbox
+// Outbox queries — identity.outbox is RLS+FORCE per ADR 0027 ("outbox
 // table doubles as audit log"). Insert happens inside the same tx as
 // aggregate state (Brandur "events table" pattern). Forwarder runs
 // under platform-bypass to drain.
+// act_operator_id / act_session_id / act_reason carry impersonation
+// context (RFC 8693 act claim) per ADR 0056. NULL for non-impersonation
+// events; populated when the emitting handler ran under a scoped JWT.
 func (q *Queries) InsertOutboxEvent(ctx context.Context, arg InsertOutboxEventParams) error {
 	_, err := q.db.Exec(ctx, insertOutboxEvent,
 		arg.ID,
@@ -37,13 +44,17 @@ func (q *Queries) InsertOutboxEvent(ctx context.Context, arg InsertOutboxEventPa
 		arg.Topic,
 		arg.Payload,
 		arg.OccurredAt,
+		arg.ActOperatorID,
+		arg.ActSessionID,
+		arg.ActReason,
 	)
 	return err
 }
 
 const listAuditEventsForTenant = `-- name: ListAuditEventsForTenant :many
 SELECT id, tenant_id, topic, payload, occurred_at, created_at,
-       forwarded, forwarded_at
+       forwarded, forwarded_at,
+       act_operator_id, act_session_id, act_reason
 FROM   identity.outbox
 WHERE  topic = $1
   AND  occurred_at >= $2
@@ -77,6 +88,9 @@ func (q *Queries) ListAuditEventsForTenant(ctx context.Context, arg ListAuditEve
 			&i.CreatedAt,
 			&i.Forwarded,
 			&i.ForwardedAt,
+			&i.ActOperatorID,
+			&i.ActSessionID,
+			&i.ActReason,
 		); err != nil {
 			return nil, err
 		}
@@ -90,7 +104,8 @@ func (q *Queries) ListAuditEventsForTenant(ctx context.Context, arg ListAuditEve
 
 const listUnforwardedOutboxEvents = `-- name: ListUnforwardedOutboxEvents :many
 SELECT id, tenant_id, topic, payload, occurred_at, created_at,
-       forwarded, forwarded_at
+       forwarded, forwarded_at,
+       act_operator_id, act_session_id, act_reason
 FROM   identity.outbox
 WHERE  forwarded = false
 ORDER  BY created_at
@@ -129,6 +144,9 @@ func (q *Queries) ListUnforwardedOutboxEvents(ctx context.Context, limit int32) 
 			&i.CreatedAt,
 			&i.Forwarded,
 			&i.ForwardedAt,
+			&i.ActOperatorID,
+			&i.ActSessionID,
+			&i.ActReason,
 		); err != nil {
 			return nil, err
 		}

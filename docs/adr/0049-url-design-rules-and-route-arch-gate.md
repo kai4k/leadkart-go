@@ -102,7 +102,7 @@ This complements (does NOT replace) `task test:int`, which actually runs integra
 
 **Negative:**
 
-- **One grandfathered violation.** `GET /v1/tenants/by-slug/{slug}` from ADR 0044 stays for v0.2 frontend-contract compatibility. The arch test passes today because no OTHER route currently has the conflicting shape; a future canonical migration would move slug lookup to `GET /v1/tenants?slug=acme` (ListAllTenants endpoint with a filter). Documented as known debt; not blocking.
+- **One grandfathered violation.** `GET /v1/tenants/by-slug/{slug}` from ADR 0044 stays for v0.2 frontend-contract compatibility. The arch test passes today because no OTHER route currently has the conflicting shape. **Wave 9.1c update (ADR 0052):** the canonical replacement `GET /v1/tenants?slug=acme` has shipped — both endpoints operational through v0.3 (frontend migrates at its own cadence); the path-segment route now marked `deprecated: true` in the spec; removal v0.4+.
 - **Pre-push gate gets slightly slower.** `task test:int:compile` adds ~3-5s to local `task ci`. Acceptable cost for the failure-surfacing benefit.
 - **Two new files for new contributors to understand.** `route_registration_test.go` + the updated Taskfile. Both have explanatory docstrings + ADR pointers.
 

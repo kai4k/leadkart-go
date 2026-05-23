@@ -62,11 +62,17 @@ type LoginRequest struct {
 // JWT-bearer clients (mobile, integrations). The future Blazor BFF
 // will sit in front and convert the body refresh-token to an HttpOnly
 // cookie + ITicketStore session per security.md "BFF cookie".
+//
+// MustChangePassword surfaces the BRD-line-241 forced-rotation flag —
+// frontend MUST redirect to the change-password screen when true.
+// omitempty keeps the wire shape clean on the common path (self-
+// rotated credentials never carry the flag).
 type LoginResponse struct {
 	AccessToken          string    `json:"access_token"`
 	RefreshToken         string    `json:"refresh_token"`
 	AccessTokenExpiresAt time.Time `json:"access_token_expires_at"`
 	TokenType            string    `json:"token_type"` // always "Bearer"
+	MustChangePassword   bool      `json:"must_change_password,omitempty"`
 }
 
 // ----- Refresh ---------------------------------------------------------------
@@ -389,6 +395,18 @@ type ListAllTenantsResponse struct {
 	Tenants []TenantDto `json:"tenants"`
 }
 
+// ListTenantsResponse — GET /api/v1/tenants?slug=acme.
+//
+// Per ADR 0052 (Wave 9.1c): canonical replacement for the
+// grandfathered GET /api/v1/tenants/by-slug/{slug} path-segment
+// lookup. Stripe/Auth0 canon: "find by alternate key" returns a list
+// of 0-1 matches (NOT 404). Caller-visibility filtered (enumeration-
+// safe per ADR 0044); empty Tenants[] means either "no such slug"
+// OR "you can't see it" — indistinguishable by design.
+type ListTenantsResponse struct {
+	Tenants []TenantDto `json:"tenants"`
+}
+
 // ----- Platform: Impersonation sessions --------------------------------------
 
 // CreateImpersonationSessionRequest — POST /api/v1/platform/impersonation/sessions.
@@ -467,6 +485,10 @@ type PlatformStatsDeltas struct {
 // ----- Role management -------------------------------------------------------
 
 // RoleDto is the wire-shape of a [role.Role] for read endpoints.
+//
+// ParentRoleID (ADR 0054) — empty when the role is a root. The
+// frontend uses this to render the hierarchy tree + permission-
+// inheritance preview.
 type RoleDto struct {
 	ID              string    `json:"id"`
 	TenantID        string    `json:"tenant_id"`
@@ -476,6 +498,7 @@ type RoleDto struct {
 	HierarchyLevel  int       `json:"hierarchy_level"`
 	Permissions     []string  `json:"permissions"`
 	CreatedAt       time.Time `json:"created_at"`
+	ParentRoleID    string    `json:"parent_role_id,omitempty"`
 }
 
 // ListRolesResponse — GET /api/v1/roles.
@@ -488,9 +511,14 @@ type ListRolesResponse struct {
 // HierarchyLevel must be in role.HierarchyLevelMin..HierarchyLevelMax.
 // IsSuperAdmin is intentionally absent — see CreateRoleCommand
 // godoc for the seed-only invariant.
+//
+// ParentRoleID (ADR 0054) — optional. Omit / empty / null = root role.
+// Must reference a role in the same tenant; cross-tenant + cycle
+// prevention runs at the DB-trigger layer.
 type CreateRoleRequest struct {
 	Name           string `json:"name"`
 	HierarchyLevel int    `json:"hierarchy_level"`
+	ParentRoleID   string `json:"parent_role_id,omitempty"`
 }
 
 // CreateRoleResponse — POST /api/v1/roles 201 body.
@@ -516,6 +544,21 @@ type ReplaceRolePermissionsRequest struct {
 // RolePermissionRequest — POST /api/v1/roles/{roleId}/permissions/{grant,revoke}.
 type RolePermissionRequest struct {
 	Permission string `json:"permission"`
+}
+
+// SetRoleParentRequest — PATCH /api/v1/roles/{roleId}/parent.
+//
+// ADR 0058 (Wave 9.4) — pointer-string so JSON `null` clears the
+// parent (role becomes a root by soft-deleting any active edge).
+// Empty string treated identically. Non-empty must be a valid UUID
+// referencing a role in the same tenant; the DB rejects cross-tenant
+// + cycle declaratively.
+//
+// `reason` is OPTIONAL audit text propagated onto the new edge OR
+// onto the cleared edge. When supplied must be 10-1024 chars.
+type SetRoleParentRequest struct {
+	ParentRoleID *string `json:"parent_role_id"`
+	Reason       string  `json:"reason,omitempty"`
 }
 
 // ----- Tenant management -----------------------------------------------------
@@ -651,6 +694,74 @@ type RevokeAllSessionsRequest struct {
 // RevokeAllSessionsResponse — DELETE /api/v1/auth/sessions response.
 type RevokeAllSessionsResponse struct {
 	RevokedCount int `json:"revoked_count"`
+}
+
+// ----- Permission-elevation approval workflow (ADR 0055) --------------------
+
+// CreatePermissionRequestRequest — POST /api/v1/permission-requests body.
+//
+// `permission` MUST be one of the closed-set [permission.IdentityPermissions]
+// constants; unknown names → 422. `duration_days` is optional; omit (or
+// pass 0) to use the default 7-day window. `reason` MUST be ≥10 chars.
+type CreatePermissionRequestRequest struct {
+	Permission   string `json:"permission"`
+	DurationDays int    `json:"duration_days,omitempty"`
+	Reason       string `json:"reason"`
+}
+
+// CreatePermissionRequestResponse — POST /api/v1/permission-requests 201 body.
+//
+// ApproverMembershipID is the requester's current manager — the
+// frontend can render "your manager X must approve". Empty when the
+// requester has no manager (then only Platform operators can approve).
+type CreatePermissionRequestResponse struct {
+	RequestID            string `json:"request_id"`
+	ApproverMembershipID string `json:"approver_membership_id,omitempty"`
+	Status               string `json:"status"` // always "pending" on the 201 path
+}
+
+// ApprovePermissionRequestRequest — POST /api/v1/permission-requests/{id}/approve.
+//
+// `decision_reason` is OPTIONAL on Approve (audit-friendly when set,
+// not required). Max length 1024 chars per the DB CHECK.
+type ApprovePermissionRequestRequest struct {
+	DecisionReason string `json:"decision_reason,omitempty"`
+}
+
+// DenyPermissionRequestRequest — POST /api/v1/permission-requests/{id}/deny.
+//
+// `decision_reason` is REQUIRED on Deny per ADR 0055 audit canon.
+type DenyPermissionRequestRequest struct {
+	DecisionReason string `json:"decision_reason"`
+}
+
+// PermissionRequestDto is the read shape of a permission-elevation
+// request. Wire-stable; ADR 0055 reserves expansion via new optional
+// fields with default zero values.
+type PermissionRequestDto struct {
+	ID                    string    `json:"id"`
+	TenantID              string    `json:"tenant_id"`
+	RequesterMembershipID string    `json:"requester_membership_id"`
+	Permission            string    `json:"permission"`
+	DurationDays          int       `json:"duration_days"`
+	Reason                string    `json:"reason"`
+	State                 string    `json:"state"`
+	ApproverMembershipID  string    `json:"approver_membership_id,omitempty"`
+	DecidedAt             time.Time `json:"decided_at,omitzero"`
+	DecisionReason        string    `json:"decision_reason,omitempty"`
+	ExpiresAt             time.Time `json:"expires_at,omitzero"`
+	CreatedAt             time.Time `json:"created_at"`
+	UpdatedAt             time.Time `json:"updated_at"`
+}
+
+// ListPermissionRequestsResponse — paginated GET response.
+//
+// `requests` always non-nil; `has_more` + `next_cursor` follow ADR 0038
+// cursor semantics.
+type ListPermissionRequestsResponse struct {
+	Requests   []PermissionRequestDto `json:"requests"`
+	HasMore    bool                   `json:"has_more"`
+	NextCursor string                 `json:"next_cursor,omitempty"`
 }
 
 // ----- Errors ----------------------------------------------------------------

@@ -76,5 +76,9 @@ type Repository interface {
 	ListByTenant(ctx context.Context, tenantID tenant.ID) ([]*Role, error)
 }
 
+// Note: GetAncestors retired in Wave 9.4 (ADR 0058). The
+// rolehierarchy.Repository.GetAncestorsByChild method now owns
+// ancestor walks against the dedicated edges table.
+
 // Compile-time guarantee that the sentinel errors are wrapped-comparable.
 var _ = errors.Is

@@ -15,6 +15,10 @@ const (
 	// ErrCodeInvalidBody — POST/PUT/PATCH body fails JSON decode.
 	ErrCodeInvalidBody = "invalid_body"
 
+	// ErrCodeInvalidQuery — required query parameter missing or
+	// malformed (e.g. `?slug=` missing on GET /v1/tenants).
+	ErrCodeInvalidQuery = "invalid_query"
+
 	// ErrCodeInvalidSlug — slug VO factory rejected the input
 	// (length / charset / reserved-name fail).
 	ErrCodeInvalidSlug = "invalid_slug"
@@ -33,6 +37,16 @@ const (
 	// to this code per `security.md` "Login flow — enumeration safety".
 	// NEVER differentiate the cause in the response body.
 	ErrCodeInvalidCredentials = "invalid_credentials" //nolint:gosec // G101: error code, not a credential
+
+	// ErrCodeAccountLocked — Person hit the [person.MaxFailedLogins]
+	// threshold + is inside the [person.LockoutDuration] cool-off per
+	// NIST 800-63B §5.2.2 + ADR 0053. 423 Locked surface (RFC 4918
+	// §11.3); Retry-After header carries seconds-until-unlock. Distinct
+	// from invalid_credentials per OWASP Authentication Cheat Sheet
+	// 2025 §7.7 — UX needs "wait + retry", not "try a different
+	// password". Enumeration-safe (existence already revealed upstream
+	// by the unknown-email path's collapse to invalid_credentials).
+	ErrCodeAccountLocked = "account_locked"
 
 	// ErrCodeRefreshRejected — refresh-token rotation refused
 	// (consumed / expired / family revoked / reuse detected). Per
@@ -157,6 +171,32 @@ const (
 	// 422 surface.
 	ErrCodeRoleInvalid = "role_invalid"
 
+	// ErrCodeRoleHierarchyCycle — SetRoleParent / CreateRole rejected
+	// because the proposed parent_role_id (or any of its ancestors) is
+	// the role itself. 422 surface. ADR 0058 (Wave 9.4) — declarative
+	// DB cycle trigger on identity.role_hierarchy_edges.
+	ErrCodeRoleHierarchyCycle = "role_hierarchy_cycle"
+
+	// ErrCodeRoleHierarchyCrossTenant — composite FK rejected an edge
+	// whose child + parent live in different tenants. 422 surface.
+	// ADR 0058 — declarative replacement for the Wave 9.1d SECURITY
+	// DEFINER trigger.
+	ErrCodeRoleHierarchyCrossTenant = "role_hierarchy_cross_tenant"
+
+	// ErrCodeRoleHierarchySelfReference — child == parent. 400
+	// surface; the aggregate guards + the DB CHECK chk_edge_no_self_loop
+	// is the strict-gate fallback.
+	ErrCodeRoleHierarchySelfReference = "role_hierarchy_self_reference"
+
+	// ErrCodeRoleHierarchyEdgeExists — single-parent invariant
+	// violated. 409 surface. ADR 0058 — partial unique index
+	// uq_role_hierarchy_active_edge_per_child.
+	ErrCodeRoleHierarchyEdgeExists = "role_hierarchy_edge_already_exists"
+
+	// ErrCodeRoleHierarchyInvalidReason — supplied reason length
+	// outside [10, 1024]. 422 surface. ADR 0058.
+	ErrCodeRoleHierarchyInvalidReason = "role_hierarchy_invalid_reason"
+
 	// ErrCodePersonNotFound — Person ID has no row globally. 404 surface.
 	ErrCodePersonNotFound = "person_not_found"
 
@@ -206,4 +246,40 @@ const (
 	// per RFC 9457 + ADR 0044. 422 surface; response body carries
 	// the field-level errors map. Emitted by writeValidationError.
 	ErrCodeValidationFailed = "validation_failed"
+
+	// ----- Permission-elevation approval workflow (ADR 0055) ---------------
+
+	// ErrCodePermissionRequestNotFound — request ID has no row in the
+	// caller's tenant. 404 surface; enumeration-safe per ADR 0044.
+	ErrCodePermissionRequestNotFound = "permission_request_not_found"
+
+	// ErrCodeInvalidPermissionRequestID — `{requestId}` path failed UUID
+	// parse. 400 surface.
+	ErrCodeInvalidPermissionRequestID = "invalid_permission_request_id"
+
+	// ErrCodePermissionRequestInvalid — aggregate invariant violation
+	// (short reason, out-of-bounds duration, malformed input). 422.
+	ErrCodePermissionRequestInvalid = "permission_request_invalid"
+
+	// ErrCodePermissionRequestPendingExists — at-most-one-pending
+	// invariant rejected the submission. 409 Conflict.
+	ErrCodePermissionRequestPendingExists = "permission_request_pending_exists"
+
+	// ErrCodePermissionRequestNotPending — Approve/Deny/Cancel hit a
+	// terminal-state request. 409 Conflict.
+	ErrCodePermissionRequestNotPending = "permission_request_not_pending"
+
+	// ErrCodePermissionRequestSelfApproval — approver matched requester.
+	// 422 — domain invariant breach.
+	ErrCodePermissionRequestSelfApproval = "permission_request_self_approval"
+
+	// ErrCodePermissionRequestForbidden — caller is not the requester's
+	// manager AND not a Platform operator (Approve/Deny path); OR caller
+	// is not the requester (Cancel path collapses to 404 enumeration-safe).
+	// 403 surface for Approve/Deny.
+	ErrCodePermissionRequestForbidden = "permission_request_forbidden"
+
+	// ErrCodePermissionRequestRoleQuery — list endpoint's ?role= query
+	// param was outside the closed set {requester, approver}. 400 surface.
+	ErrCodePermissionRequestRoleQuery = "permission_request_role_query"
 )
