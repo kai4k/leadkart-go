@@ -404,28 +404,29 @@ func TestRoleRepository_Hierarchy_TriggerRejectsCycle(t *testing.T) {
 	tn := seedTenant(t, tenants)
 	ctx := tenancy.WithID(t.Context(), tenancy.ID(tn.ID().String()))
 
-	a := newRole(t, tn.ID(), "A")
-	b := newRole(t, tn.ID(), "B")
-	if err := roles.Add(ctx, a); err != nil {
-		t.Fatalf("Add A: %v", err)
+	roleA := newRole(t, tn.ID(), "RoleA")
+	roleB := newRole(t, tn.ID(), "RoleB")
+	if err := roles.Add(ctx, roleA); err != nil {
+		t.Fatalf("Add RoleA: %v", err)
 	}
-	if err := roles.Add(ctx, b); err != nil {
-		t.Fatalf("Add B: %v", err)
+	if err := roles.Add(ctx, roleB); err != nil {
+		t.Fatalf("Add RoleB: %v", err)
 	}
 
-	// B parents to A (legal).
-	if err := roles.UpdateByID(ctx, b.ID(), func(loaded *role.Role) (bool, error) {
-		return true, loaded.ChangeParent(a.ID(), func(role.ID) ([]role.ID, error) { return nil, nil })
+	// RoleB parents to RoleA (legal).
+	if err := roles.UpdateByID(ctx, roleB.ID(), func(loaded *role.Role) (bool, error) {
+		return true, loaded.ChangeParent(roleA.ID(), func(role.ID) ([]role.ID, error) { return nil, nil })
 	}); err != nil {
-		t.Fatalf("B → A: %v", err)
+		t.Fatalf("RoleB → RoleA: %v", err)
 	}
 
-	// A parents to B would close the loop A → B → A. The domain guard
-	// catches it first via ancestor lookup, but to prove the DB trigger
-	// is the strict gate we drive ChangeParent with an EMPTY ancestor
-	// lookup — that bypasses the domain check, leaving only the trigger.
-	err := roles.UpdateByID(ctx, a.ID(), func(loaded *role.Role) (bool, error) {
-		return true, loaded.ChangeParent(b.ID(), func(role.ID) ([]role.ID, error) { return nil, nil })
+	// RoleA parents to RoleB would close the loop RoleA → RoleB → RoleA.
+	// The domain guard catches it first via ancestor lookup, but to prove
+	// the DB trigger is the strict gate we drive ChangeParent with an
+	// EMPTY ancestor lookup — that bypasses the domain check, leaving
+	// only the trigger.
+	err := roles.UpdateByID(ctx, roleA.ID(), func(loaded *role.Role) (bool, error) {
+		return true, loaded.ChangeParent(roleB.ID(), func(role.ID) ([]role.ID, error) { return nil, nil })
 	})
 	if !errors.Is(err, role.ErrHierarchyCycle) {
 		t.Fatalf("expected ErrHierarchyCycle from DB trigger, got %v", err)
@@ -445,13 +446,13 @@ func TestRoleRepository_Hierarchy_TriggerRejectsCrossTenant(t *testing.T) {
 	ctxA := tenancy.WithID(t.Context(), tenancy.ID(tnA.ID().String()))
 	ctxB := tenancy.WithID(t.Context(), tenancy.ID(tnB.ID().String()))
 
-	rA := newRole(t, tnA.ID(), "A")
-	rB := newRole(t, tnB.ID(), "B")
+	rA := newRole(t, tnA.ID(), "RoleA")
+	rB := newRole(t, tnB.ID(), "RoleB")
 	if err := roles.Add(ctxA, rA); err != nil {
-		t.Fatalf("Add A: %v", err)
+		t.Fatalf("Add RoleA: %v", err)
 	}
 	if err := roles.Add(ctxB, rB); err != nil {
-		t.Fatalf("Add B: %v", err)
+		t.Fatalf("Add RoleB: %v", err)
 	}
 
 	// rB attempts to parent to rA — cross-tenant. The domain guard
@@ -477,15 +478,15 @@ func TestRoleRepository_GetAncestors_WalksUpward(t *testing.T) {
 	tn := seedTenant(t, tenants)
 	ctx := tenancy.WithID(t.Context(), tenancy.ID(tn.ID().String()))
 
-	gp := newRole(t, tn.ID(), "GP")
-	p := newRole(t, tn.ID(), "P")
-	c := newRole(t, tn.ID(), "C")
+	gp := newRole(t, tn.ID(), "GrandParent")
+	p := newRole(t, tn.ID(), "Parent")
+	c := newRole(t, tn.ID(), "Child")
 	for _, r := range []*role.Role{gp, p, c} {
 		if err := roles.Add(ctx, r); err != nil {
 			t.Fatalf("Add %s: %v", r.Name(), err)
 		}
 	}
-	// Link p → gp, c → p.
+	// Link Parent → GrandParent, Child → Parent.
 	link := func(child *role.Role, parent role.ID) {
 		if err := roles.UpdateByID(ctx, child.ID(), func(loaded *role.Role) (bool, error) {
 			return true, loaded.ChangeParent(parent, func(role.ID) ([]role.ID, error) { return nil, nil })
@@ -503,7 +504,7 @@ func TestRoleRepository_GetAncestors_WalksUpward(t *testing.T) {
 	if len(ancs) != 2 {
 		t.Fatalf("ancestors: got %d want 2", len(ancs))
 	}
-	// First entry = parent (P), second = grandparent (GP).
+	// First entry = parent (Parent), second = grandparent (GrandParent).
 	if ancs[0].ID() != p.ID() || ancs[1].ID() != gp.ID() {
 		t.Fatalf("ancestor order: got [%s, %s] want [%s, %s]",
 			ancs[0].Name(), ancs[1].Name(), p.Name(), gp.Name())

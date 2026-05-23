@@ -128,8 +128,9 @@ func TestMigrationsApplyCleanly(t *testing.T) {
 		"tenants", "persons", "tenant_memberships",
 		"refresh_token_families", "refresh_tokens", "auth_routing",
 		"outbox",
-		"processed_messages",                                 // 20260507000001
+		"processed_messages",                                           // 20260507000001
 		"roles", "role_assignments", "membership_permission_overrides", // 20260507000002
+		"permission_requests",                                          // 20260523000003 (Wave 9.1e / ADR 0055)
 	}
 	var count int
 	if err := db.QueryRow(`
