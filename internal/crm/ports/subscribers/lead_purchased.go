@@ -60,7 +60,7 @@ func (h *PurchasedLeadIngestor) Handle(ctx context.Context, _ string, msg *messa
 	}
 	out, err := h.cmd.Handle(ctx, command.IngestPurchasedLeadCommand{
 		PurchaseID:              evt.PurchaseID,
-		TenantID:                evt.TenantID.String(),
+		TenantID:                evt.TenantID,
 		PlatformLeadID:          evt.PlatformLeadID,
 		PurchasedByMembershipID: evt.PurchasedByMembershipID,
 		Snapshot:                snapshotFromV1(evt),
@@ -75,7 +75,7 @@ func (h *PurchasedLeadIngestor) Handle(ctx context.Context, _ string, msg *messa
 	}
 	h.log.InfoContext(ctx, "crm: lead ingested",
 		"purchase_id", evt.PurchaseID, "lead_id", out.LeadID.String(),
-		"tenant_id", evt.TenantID.String())
+		"tenant_id", evt.TenantID)
 	return nil
 }
 

@@ -79,11 +79,11 @@ func buildEnvelope(t *testing.T, evt subscribers.LeadPurchasedV1) *message.Messa
 	}
 	msg := message.NewMessage(uuid.NewString(), body)
 	msg.Metadata.Set(messaging.HeaderEventType, subscribers.LeadPurchasedTopic)
-	msg.Metadata.Set(messaging.HeaderTenantID, evt.TenantID.String())
+	msg.Metadata.Set(messaging.HeaderTenantID, evt.TenantID)
 	return msg
 }
 
-func validEvent(tenantID uuid.UUID, purchase string) subscribers.LeadPurchasedV1 {
+func validEvent(tenantID string, purchase string) subscribers.LeadPurchasedV1 {
 	return subscribers.LeadPurchasedV1{
 		PurchaseID:              purchase,
 		TenantID:                tenantID,
@@ -113,7 +113,7 @@ func TestPurchasedLeadIngestor_HappyPath(t *testing.T) {
 	t.Parallel()
 	leads := newFakeLeads()
 	h := subscribers.NewPurchasedLeadIngestor(command.NewIngestPurchasedLeadHandler(leads), nil)
-	tenantID := uuid.New()
+	tenantID := uuid.NewString()
 	purchase := uuid.NewString()
 	if err := h.Handle(t.Context(), "", buildEnvelope(t, validEvent(tenantID, purchase))); err != nil {
 		t.Fatalf("Handle: %v", err)
@@ -122,7 +122,7 @@ func TestPurchasedLeadIngestor_HappyPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetBySourcePurchaseID: %v", err)
 	}
-	if got.TenantID() != tenantID.String() {
+	if got.TenantID() != tenantID {
 		t.Fatalf("tenant: %q", got.TenantID())
 	}
 }
@@ -131,7 +131,7 @@ func TestPurchasedLeadIngestor_IdempotentOnReplay(t *testing.T) {
 	t.Parallel()
 	leads := newFakeLeads()
 	h := subscribers.NewPurchasedLeadIngestor(command.NewIngestPurchasedLeadHandler(leads), nil)
-	tenantID := uuid.New()
+	tenantID := uuid.NewString()
 	purchase := uuid.NewString()
 	env := buildEnvelope(t, validEvent(tenantID, purchase))
 
@@ -151,7 +151,7 @@ func TestPurchasedLeadIngestor_WrongTopicShortCircuits(t *testing.T) {
 	t.Parallel()
 	leads := newFakeLeads()
 	h := subscribers.NewPurchasedLeadIngestor(command.NewIngestPurchasedLeadHandler(leads), nil)
-	msg := buildEnvelope(t, validEvent(uuid.New(), uuid.NewString()))
+	msg := buildEnvelope(t, validEvent(uuid.NewString(), uuid.NewString()))
 	msg.Metadata.Set(messaging.HeaderEventType, "platform.unrelated.v1")
 	if err := h.Handle(t.Context(), "", msg); err != nil {
 		t.Fatalf("Handle wrong topic: %v", err)
@@ -169,5 +169,83 @@ func TestPurchasedLeadIngestor_MalformedPayloadErrors(t *testing.T) {
 	msg.Metadata.Set(messaging.HeaderEventType, subscribers.LeadPurchasedTopic)
 	if err := h.Handle(t.Context(), "", msg); err == nil {
 		t.Fatal("want decode error")
+	}
+}
+
+// TestLeadPurchasedV1_FrozenWireContract pins the field types of the
+// LeadPurchasedV1 mirror against the brief's canonical JSON shape.
+//
+// The fixture below IS the canonical wire payload — every field type
+// (string IDs, RFC3339 timestamp, int64 paisa) reflects what the
+// Platform publisher will produce. The test asserts our mirror decodes
+// every field WITHOUT any in-flight type coercion and re-encodes to
+// byte-equal canonical JSON. Drift in either direction (string→uuid,
+// missing field, renamed json tag) fails the round-trip equality
+// check.
+//
+// Earlier draft had TenantID typed uuid.UUID — works at runtime but
+// re-encodes through Go's uuid.MarshalJSON which is a different code
+// path from the publisher's strconv-style string emit. A defensive
+// contract test prevents that drift class.
+func TestLeadPurchasedV1_FrozenWireContract(t *testing.T) {
+	t.Parallel()
+
+	// Canonical wire payload per the brief. Field order must match the
+	// struct's json tag order so re-encode produces byte-equal output.
+	const canonical = `{` +
+		`"purchase_id":"01HN8ZN3X4Y5MN0PQR7VWXY8Z3",` +
+		`"tenant_id":"7f7b0e6a-3c52-4f25-9c1d-7e8f44b1c001",` +
+		`"platform_lead_id":"01HN8ZN3X4Y5MN0PQR7VWXY8Z9",` +
+		`"purchased_at":"2026-06-02T12:00:00Z",` +
+		`"purchased_by_membership_id":"01HN8ZN3X4Y5MN0PQR7VWXY8Z4",` +
+		`"amount_paisa":50000,` +
+		`"lead_snapshot":{` +
+		`"contact_name":"Test Pharma",` +
+		`"mobile_e164":"+919812345678",` +
+		`"email":"x@example.com",` +
+		`"pin_code":"411001",` +
+		`"city":"Pune",` +
+		`"district":"Pune",` +
+		`"state":"Maharashtra",` +
+		`"street":"",` +
+		`"has_drug_licence":true,` +
+		`"has_gst":true,` +
+		`"gst_number":"",` +
+		`"has_pan":false,` +
+		`"pan_number":"",` +
+		`"business_type":"PCD",` +
+		`"medicine_system":"Allopathic",` +
+		`"product_ranges":["Antibiotic","Cardiac"],` +
+		`"dosage_forms":["Tablet","Syrup"],` +
+		`"order_value":"Upto25000",` +
+		`"buy_timeline":"WithinWeek"` +
+		`}}`
+
+	var got subscribers.LeadPurchasedV1
+	if err := json.Unmarshal([]byte(canonical), &got); err != nil {
+		t.Fatalf("decode canonical: %v", err)
+	}
+
+	// Pin specific field types — TenantID MUST be a string with the
+	// exact value, NOT a parsed-then-restringified uuid (which would
+	// drop hyphenless input, normalise case, etc).
+	if got.TenantID != "7f7b0e6a-3c52-4f25-9c1d-7e8f44b1c001" {
+		t.Fatalf("TenantID drift: got %q", got.TenantID)
+	}
+	if got.PurchaseID != "01HN8ZN3X4Y5MN0PQR7VWXY8Z3" {
+		t.Fatalf("PurchaseID drift: got %q", got.PurchaseID)
+	}
+	if got.AmountPaisa != 50000 {
+		t.Fatalf("AmountPaisa drift: got %d", got.AmountPaisa)
+	}
+
+	// Round-trip MUST be byte-equal to the canonical payload. If
+	// anyone changes a field type or json tag, this fails loudly.
+	out, err := json.Marshal(got)
+	if err != nil {
+		t.Fatalf("re-encode: %v", err)
+	}
+	if string(out) != canonical {
+		t.Fatalf("round-trip drift:\n got: %s\nwant: %s", string(out), canonical)
 	}
 }

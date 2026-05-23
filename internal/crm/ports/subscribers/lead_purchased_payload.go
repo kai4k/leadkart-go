@@ -20,16 +20,25 @@ package subscribers
 
 import (
 	"time"
-
-	"github.com/google/uuid"
 )
 
 // LeadPurchasedV1 mirrors `platform.lead-purchased.v1` per the slice
 // brief. Tenant-scoped. Replace this struct with the Platform-module
 // import when both branches merge.
+//
+// FIELD-SHAPE CONTRACT: every field type matches the frozen brief
+// VERBATIM. TenantID is a JSON STRING (not uuid.UUID), because the
+// brief specifies a UUID encoded as RFC 4122 lowercase canonical form,
+// which JSON-decodes into Go as `string`. Earlier drafts decoded into
+// uuid.UUID then stringified at the boundary — works at runtime but
+// breaks the round-trip equality the contract demands (uuid.UUID
+// re-encodes WITHOUT braces / hyphens preserved as input, and
+// stripping/rewriting a wire-stable field is a CI smell). All other
+// IDs (PurchaseID, PlatformLeadID, PurchasedByMembershipID) are
+// already string per the brief.
 type LeadPurchasedV1 struct {
 	PurchaseID              string         `json:"purchase_id"`
-	TenantID                uuid.UUID      `json:"tenant_id"`
+	TenantID                string         `json:"tenant_id"`
 	PlatformLeadID          string         `json:"platform_lead_id"`
 	PurchasedAt             time.Time      `json:"purchased_at"`
 	PurchasedByMembershipID string         `json:"purchased_by_membership_id"`
