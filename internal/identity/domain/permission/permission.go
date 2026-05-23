@@ -85,6 +85,22 @@ type rolesPermissions struct {
 	View, Create, Update, Delete, Assign, Revoke, Approve string
 }
 
+// crmLeadsPermissions cover the CRM lead-management surface introduced
+// in ADR 0060 (CRM Slice 1). Per BRD §6.3 + §4.9: Read held by every
+// sales-tier role; Assign by SalesManager/CompanyOwner/OfficeAdministrator;
+// Manage by the assigned SalesExecutive + SalesManager + CompanyOwner;
+// ReadAll overrides the per-handler "only my assigned leads" filter
+// (Auth0 "read:any" canon) — held by SalesManager + CompanyOwner.
+type crmLeadsPermissions struct{ Read, Assign, Manage, ReadAll string }
+
+// crmPermissions groups the CRM bounded context surface. Slice 1 only
+// ships the Leads namespace; CallLogs / Reminders / AssignmentHistory
+// aggregates are gated through these four (no per-aggregate permission
+// proliferation per ADR 0036 closed-set discipline).
+type crmPermissions struct {
+	Leads crmLeadsPermissions
+}
+
 // platformUnverifiedContactsPermissions, platformMarketplacePermissions,
 // and platformLeadCreditsPermissions cover the Platform bounded context
 // surface added in ADR 0059. The Platform module ports gate on these
@@ -111,7 +127,6 @@ type inventoryPermissions struct {
 	Catalog inventoryCatalogPermissions
 	Stock   inventoryStockPermissions
 }
-
 // IdentityPermissions is the closed catalogue of every permission the
 // system recognises. Mirror of the .NET `IdentityPermissions` static
 // class. Maintain in lockstep with the intern-table list.
@@ -131,6 +146,10 @@ var IdentityPermissions = struct {
 	Tenants  tenantsPermissions
 	Users    usersPermissions
 	Roles    rolesPermissions
+
+	// CRM bounded context (ADR 0060) — CrmLead / CallLog /
+	// AssignmentHistory aggregates per BRD §6.3.
+	Crm crmPermissions
 
 	// Platform bounded context (ADR 0059) — verification pipeline +
 	// marketplace + lead credits.
@@ -184,6 +203,15 @@ var IdentityPermissions = struct {
 		Approve: "identity.roles.approve",
 	},
 
+	Crm: crmPermissions{
+		Leads: crmLeadsPermissions{
+			Read:    "crm.leads.read",
+			Assign:  "crm.leads.assign",
+			Manage:  "crm.leads.manage",
+			ReadAll: "crm.leads.read_all",
+		},
+	},
+
 	PlatformUnverifiedContacts: platformUnverifiedContactsPermissions{
 		Manage: "platform.unverified_contacts.manage",
 	},
@@ -221,6 +249,9 @@ func allNames() []string {
 		p.Users.Anonymise, p.Users.UpdatePermissions,
 		p.Roles.View, p.Roles.Create, p.Roles.Update, p.Roles.Delete,
 		p.Roles.Assign, p.Roles.Revoke, p.Roles.Approve,
+
+		// CRM bounded context (ADR 0060).
+		p.Crm.Leads.Read, p.Crm.Leads.Assign, p.Crm.Leads.Manage, p.Crm.Leads.ReadAll,
 
 		// Platform bounded context (ADR 0059).
 		p.PlatformUnverifiedContacts.Manage,
