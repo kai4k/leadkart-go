@@ -67,7 +67,7 @@ tasks:
   test:arch:
     desc: 'Architecture tests (TestArch_*) — integration-events hygiene + layer-boundary discipline (ADR 0047) + route-registration conflict gate (ADR 0049). Covers identity + inventory (ADR 0061).'
     cmds:
-      - go test -shuffle=on -run "^TestArch_" ./internal/identity/integrationevents/... ./internal/identity/app/... ./internal/identity/ports/... ./internal/inventory/integrationevents/... ./internal/inventory/app/... ./internal/inventory/ports/...
+      - go test -shuffle=on -run "^TestArch_" ./internal/identity/integrationevents/... ./internal/identity/app/... ./internal/identity/ports/... ./internal/inventory/integrationevents/... ./internal/inventory/app/... ./internal/inventory/ports/... ./internal/inventory/adapters/...
 
   test:int:
     desc: Integration tests (testcontainers Postgres; requires Docker)
