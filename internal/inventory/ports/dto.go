@@ -12,6 +12,12 @@ import (
 
 // ProductDto is the wire shape for a single Product. snake_case
 // fields per the rest of the LeadKart API.
+//
+// Manufacturer uses `omitzero` (Go 1.24+ encoding/json tag) — sends the
+// field when set, omits when empty. `omitempty` would also omit the
+// JSON string `""` even if the domain explicitly set it; `omitzero`
+// matches the domain's "empty manufacturer = absent" semantic without
+// the cross-talk per ADR 0061 amendment 1 (M5).
 type ProductDto struct {
 	ID           string    `json:"id"`
 	TenantID     string    `json:"tenant_id"`
@@ -21,7 +27,7 @@ type ProductDto struct {
 	PackSize     string    `json:"pack_size"`
 	HSNCode      string    `json:"hsn_code"`
 	GSTRateBps   int       `json:"gst_rate_bps"`
-	Manufacturer string    `json:"manufacturer,omitempty"`
+	Manufacturer string    `json:"manufacturer,omitzero"`
 	IsActive     bool      `json:"is_active"`
 	CreatedAt    time.Time `json:"created_at"`
 	UpdatedAt    time.Time `json:"updated_at"`
@@ -44,8 +50,17 @@ type CreateProductResponse struct {
 }
 
 // UpdateProductRequest — PATCH /api/v1/inventory/products/{productId}.
-// All fields optional; only those present (non-null in JSON terms) are
-// applied per BRD §6.5 + RFC 7396 merge semantics.
+// Sparse partial-update payload: only OMITTED fields are skipped; all
+// supplied fields (including explicit null in JSON) are applied. Slice 1
+// uses Go's nilable-pointer decode which CANNOT distinguish JSON null
+// from a missing field — both arrive as `nil` here. Per ADR 0061
+// amendment 1, this is documented as "supplied-key partial update"
+// rather than true RFC 7396 merge-patch (which requires null = clear).
+//
+// Practical impact: callers who want to CLEAR `manufacturer` send the
+// empty string `""`, not JSON null. Callers who want to LEAVE the field
+// unchanged omit it entirely. Slice 2 may add a `json.RawMessage`-based
+// decoder if a true null-clears semantic becomes required.
 type UpdateProductRequest struct {
 	Name         *string `json:"name,omitempty"`
 	GSTRateBps   *int    `json:"gst_rate_bps,omitempty"`
@@ -106,6 +121,12 @@ type ListBatchesResponse struct {
 // ----- StockMovement ---------------------------------------------------------
 
 // MovementDto is the wire shape for a single ledger row.
+//
+// SourceReference is `*string` (not `string` + `omitempty`) so the
+// round-trip preserves the distinction between "absent" (nil) and
+// "explicit empty" (a non-nil empty string) — required by the domain
+// which stores it as `*string` per ADR 0061. Empty-string semantics
+// differ from absent-pointer semantics on the JSON wire.
 type MovementDto struct {
 	ID                  string    `json:"id"`
 	BatchID             string    `json:"batch_id"`
@@ -116,7 +137,7 @@ type MovementDto struct {
 	QuantityOnHandAfter int64     `json:"quantity_on_hand_after"`
 	Reason              string    `json:"reason"`
 	ActorMembershipID   string    `json:"actor_membership_id"`
-	SourceReference     string    `json:"source_reference,omitempty"`
+	SourceReference     *string   `json:"source_reference,omitempty"`
 	OccurredAt          time.Time `json:"occurred_at"`
 }
 

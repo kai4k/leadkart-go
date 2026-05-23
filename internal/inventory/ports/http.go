@@ -502,7 +502,7 @@ func parsePageSize(raw string) int {
 }
 
 // writeJSON encodes body to w with status code.
-func writeJSON(w http.ResponseWriter, status int, body interface{}) {
+func writeJSON(w http.ResponseWriter, status int, body any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(body)
@@ -568,7 +568,7 @@ func batchToDto(b *batch.Batch) BatchDto {
 }
 
 func movementToDto(m *stockmovement.Movement) MovementDto {
-	dto := MovementDto{
+	return MovementDto{
 		ID:                  m.ID().String(),
 		BatchID:             m.BatchID().String(),
 		ProductID:           m.ProductID().String(),
@@ -578,10 +578,9 @@ func movementToDto(m *stockmovement.Movement) MovementDto {
 		QuantityOnHandAfter: m.QuantityOnHandAfter(),
 		Reason:              m.Reason(),
 		ActorMembershipID:   m.ActorMembershipID().String(),
-		OccurredAt:          m.OccurredAt(),
+		// *string round-trip preserves absent-vs-empty distinction per
+		// ADR 0061 amendment 1 (M3) — domain stores *string.
+		SourceReference: m.SourceReference(),
+		OccurredAt:      m.OccurredAt(),
 	}
-	if m.SourceReference() != nil {
-		dto.SourceReference = *m.SourceReference()
-	}
-	return dto
 }
