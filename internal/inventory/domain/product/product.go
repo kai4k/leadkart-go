@@ -329,12 +329,36 @@ func (p *Product) Activate(actorID membership.ID) error {
 	return p.Update(actorID, UpdateSpec{IsActive: &t})
 }
 
-// Deactivate sets is_active = false. Convenience wrapper around Update.
+// Deactivate sets is_active = false. Convenience wrapper around Update
+// that ADDITIONALLY emits a DeactivatedEvent so downstream consumers
+// (search index, picker UI) can react without scanning UpdatedEvent
+// payloads for a `is_active` field-change marker.
+//
 // Distinct from SoftDelete — deactivated products are still visible to
-// admins + reports + historical orders; deleted products are not.
+// admins + reports + historical orders; soft-deleted products are not.
+// Per ADR 0061 amendment 1 (event-name semantic split).
+//
+// Idempotent: if already inactive, no Update event drains and no
+// DeactivatedEvent is emitted (matches Update's no-op-on-no-change
+// canon).
 func (p *Product) Deactivate(actorID membership.ID) error {
+	if !p.isActive {
+		return nil // no-op — Update would have no-op'd anyway
+	}
 	f := false
-	return p.Update(actorID, UpdateSpec{IsActive: &f})
+	if err := p.Update(actorID, UpdateSpec{IsActive: &f}); err != nil {
+		return err
+	}
+	// Update emitted UpdatedEvent with ChangedFields=["is_active"];
+	// additionally record the dedicated DeactivatedEvent for consumers
+	// that route on the lifecycle signal rather than the diff.
+	p.recordEvent(DeactivatedEvent{
+		ProductID: p.id,
+		TenantID:  p.tenantID,
+		ActorID:   actorID,
+		At:        p.updatedAt,
+	})
+	return nil
 }
 
 // SoftDelete marks the product deleted, recording who did it for audit.
@@ -356,7 +380,7 @@ func (p *Product) SoftDelete(actorID membership.ID) error {
 	p.deletedAt = now
 	p.deletedBy = actorID.String()
 	p.updatedAt = now
-	p.recordEvent(DeactivatedEvent{
+	p.recordEvent(SoftDeletedEvent{
 		ProductID: p.id,
 		TenantID:  p.tenantID,
 		ActorID:   actorID,

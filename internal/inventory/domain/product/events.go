@@ -51,10 +51,17 @@ type UpdatedEvent struct {
 
 func (UpdatedEvent) isProductEvent() {}
 
-// DeactivatedEvent fires on [Product.SoftDelete]. "Deactivated" mirrors
-// the BRD vocabulary for the soft-delete state — the row is invisible
-// to live reads but kept for foreign-key + audit integrity. The
-// integration-event counterpart is ProductDeactivatedV1.
+// DeactivatedEvent fires on [Product.Deactivate] — i.e. when is_active
+// transitions to false (the product becomes invisible on order forms
+// but stays selectable in admin + historical-order queries). Distinct
+// from SoftDeletedEvent (terminal soft-delete). Maps to
+// ProductDeactivatedV1.
+//
+// Per ADR 0061 amendment 1: the earlier conflation of SoftDelete and
+// Deactivate into a single DeactivatedEvent was a semantic mismatch —
+// downstream consumers (search index, picker UI) treat "deactivated"
+// (still visible to admins) and "soft-deleted" (invisible everywhere)
+// differently, and a single event lost the distinction.
 type DeactivatedEvent struct {
 	ProductID ID
 	TenantID  tenant.ID
@@ -63,3 +70,16 @@ type DeactivatedEvent struct {
 }
 
 func (DeactivatedEvent) isProductEvent() {}
+
+// SoftDeletedEvent fires on [Product.SoftDelete] — terminal hide. The
+// row is invisible to LIVE reads but kept for foreign-key + audit
+// integrity. Distinct from DeactivatedEvent. Maps to
+// ProductSoftDeletedV1.
+type SoftDeletedEvent struct {
+	ProductID ID
+	TenantID  tenant.ID
+	ActorID   membership.ID
+	At        time.Time
+}
+
+func (SoftDeletedEvent) isProductEvent() {}

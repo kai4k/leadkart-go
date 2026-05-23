@@ -260,7 +260,11 @@ func TestUpdate_RejectsAfterSoftDelete(t *testing.T) {
 	}
 }
 
-func TestSoftDelete_IdempotentAndEmitsDeactivatedEventOnce(t *testing.T) {
+// TestSoftDelete_EmitsSoftDeletedEventOnce — per ADR 0061 amendment 1,
+// SoftDelete emits a dedicated SoftDeletedEvent (not the older
+// DeactivatedEvent — the two were semantically conflated). Idempotent:
+// second call no-ops + emits nothing.
+func TestSoftDelete_EmitsSoftDeletedEventOnce(t *testing.T) {
 	t.Parallel()
 	p := freshProduct(t)
 	actor := membership.ID(ids.NewV7().String())
@@ -277,12 +281,12 @@ func TestSoftDelete_IdempotentAndEmitsDeactivatedEventOnce(t *testing.T) {
 	if len(evs) != 1 {
 		t.Fatalf("events first: %d", len(evs))
 	}
-	deact, ok := evs[0].(product.DeactivatedEvent)
+	softDel, ok := evs[0].(product.SoftDeletedEvent)
 	if !ok {
-		t.Fatalf("type: %T", evs[0])
+		t.Fatalf("type: %T (want SoftDeletedEvent)", evs[0])
 	}
-	if deact.ActorID != actor {
-		t.Fatalf("actor: got %q want %q", deact.ActorID, actor)
+	if softDel.ActorID != actor {
+		t.Fatalf("actor: got %q want %q", softDel.ActorID, actor)
 	}
 	// Second call is idempotent — no event.
 	if err := p.SoftDelete(actor); err != nil {
@@ -290,6 +294,44 @@ func TestSoftDelete_IdempotentAndEmitsDeactivatedEventOnce(t *testing.T) {
 	}
 	if len(p.PullEvents()) != 0 {
 		t.Fatal("second SoftDelete should be no-op")
+	}
+}
+
+// TestDeactivate_EmitsBothUpdatedAndDeactivatedEvents — per ADR 0061
+// amendment 1: Deactivate transitions is_active=false AND emits a
+// dedicated DeactivatedEvent in addition to the UpdatedEvent. Consumers
+// can route either on the diff (UpdatedEvent.ChangedFields contains
+// "is_active") or on the lifecycle signal (DeactivatedEvent). Distinct
+// from SoftDelete (terminal hide).
+func TestDeactivate_EmitsBothUpdatedAndDeactivatedEvents(t *testing.T) {
+	t.Parallel()
+	p := freshProduct(t)
+	actor := membership.ID(ids.NewV7().String())
+	if err := p.Deactivate(actor); err != nil {
+		t.Fatalf("Deactivate: %v", err)
+	}
+	if p.IsActive() {
+		t.Fatal("IsActive should be false after Deactivate")
+	}
+	if p.IsDeleted() {
+		t.Fatal("IsDeleted should be false (Deactivate != SoftDelete)")
+	}
+	evs := p.PullEvents()
+	if len(evs) != 2 {
+		t.Fatalf("event count: got %d want 2 (Updated + Deactivated)", len(evs))
+	}
+	if _, ok := evs[0].(product.UpdatedEvent); !ok {
+		t.Fatalf("first event: %T (want UpdatedEvent)", evs[0])
+	}
+	if _, ok := evs[1].(product.DeactivatedEvent); !ok {
+		t.Fatalf("second event: %T (want DeactivatedEvent)", evs[1])
+	}
+	// Second Deactivate on an already-inactive product is a no-op.
+	if err := p.Deactivate(actor); err != nil {
+		t.Fatalf("second Deactivate: %v", err)
+	}
+	if len(p.PullEvents()) != 0 {
+		t.Fatal("second Deactivate on inactive product should be no-op")
 	}
 }
 
@@ -304,13 +346,17 @@ func TestActivate_Deactivate_TogglesAndEmitsEvent(t *testing.T) {
 		t.Fatal("IsActive should be false")
 	}
 	evs := p.PullEvents()
-	if len(evs) != 1 {
-		t.Fatalf("events: %d", len(evs))
+	// Deactivate emits BOTH UpdatedEvent (with ChangedFields=["is_active"])
+	// AND a dedicated DeactivatedEvent per ADR 0061 amendment 1.
+	if len(evs) != 2 {
+		t.Fatalf("events: got %d want 2 (UpdatedEvent + DeactivatedEvent)", len(evs))
 	}
-	// Deactivate flag flip via is_active=false is part of UpdatedEvent.
 	upd, ok := evs[0].(product.UpdatedEvent)
 	if !ok || len(upd.ChangedFields) != 1 || upd.ChangedFields[0] != "is_active" {
 		t.Fatalf("type/changed: %T %v", evs[0], evs[0])
+	}
+	if _, ok := evs[1].(product.DeactivatedEvent); !ok {
+		t.Fatalf("second event: %T (want DeactivatedEvent)", evs[1])
 	}
 	if err := p.Activate(actor); err != nil {
 		t.Fatalf("Activate: %v", err)
