@@ -3,6 +3,8 @@
 **Status:** Accepted
 **Date:** 2026-05-22
 
+> **Wave 9.1c update (2026-05-23):** the `GET /v1/tenants/by-slug/{slug}` endpoint shipped by this ADR has been superseded for new clients by `GET /v1/tenants?slug=acme` per ADR 0052 (Stripe-canon query-param shape; returns `{tenants: [0..1 match]}` instead of 404). The path-segment endpoint stays operational through v0.3 for frontend-contract compatibility (grandfathered per ADR 0049). The enumeration-safety property is preserved on both surfaces — empty list vs 404 are equally non-disclosing.
+
 ## Context
 
 Phase 1.5 shipped the `RequireTenantContext` middleware ([authn.go:292](../../internal/identity/ports/authn/authn.go)) which gates `/api/v1/tenants/{tenantId}/...` routes on JWT.tenant_id matching the path-supplied UUID. It returns **403 Forbidden** when the caller's tenant claim does not match the URL.
