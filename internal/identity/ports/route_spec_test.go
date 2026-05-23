@@ -200,14 +200,12 @@ func extractSpecRoutes(path string) ([]routeKey, error) {
 		if !strings.HasPrefix(specPath, "/api/v1/") {
 			continue
 		}
-		// Sibling bounded contexts also live under /api/v1/* (e.g. the
-		// Platform module's verification + marketplace + credits routes
-		// under /api/v1/platform/{unverified-contacts,marketplace,
-		// lead-credits}/...). Identity's drift gate covers identity-
-		// owned routes only; each sibling module ships its own scoped
+		// Sibling bounded contexts also live under /api/v1/* (Platform,
+		// Inventory, CRM). Identity's drift gate covers identity-owned
+		// routes only; each sibling module ships its own scoped
 		// route_spec_test.go (per ADR 0050 — drift gates are PER-MODULE
 		// since each module owns its corner of the URL space).
-		if isPlatformModuleOwnedPath(specPath) {
+		if foreignModulePath(specPath) {
 			continue
 		}
 		for verb := range ops {
@@ -223,20 +221,37 @@ func extractSpecRoutes(path string) ([]routeKey, error) {
 	return out, nil
 }
 
-// isPlatformModuleOwnedPath reports whether p belongs to the Platform
-// bounded context's sub-namespace (ADR 0059). Identity owns the
-// `/api/v1/platform/{tenants,persons,impersonation,stats}/...` operator
-// surface; Platform owns the listed sub-resources. Each module's own
-// route_spec_test.go covers ITS scope; this guard excludes the
-// platform-module space from identity's gate.
-func isPlatformModuleOwnedPath(p string) bool {
-	switch {
-	case p == "/api/v1/platform/unverified-contacts",
-		strings.HasPrefix(p, "/api/v1/platform/unverified-contacts/"),
-		strings.HasPrefix(p, "/api/v1/platform/marketplace/"),
-		p == "/api/v1/platform/lead-credits",
-		strings.HasPrefix(p, "/api/v1/platform/lead-credits/"):
+// foreignModulePath reports whether the supplied /api/v1/* path lives
+// under a non-identity-module prefix. Those paths are owned by per-
+// module route_spec_tests (internal/platform/ports/route_spec_test.go,
+// internal/inventory/ports/route_spec_test.go, internal/crm/ports/
+// route_spec_test.go) — identity's test must not claim them, otherwise
+// the test fails on legitimately-owned routes the identity module
+// doesn't ship.
+//
+// Maintenance: add a new module's prefix(es) here when the module's
+// own route_spec_test.go lands.
+func foreignModulePath(p string) bool {
+	// CRM module (ADR 0060).
+	if strings.HasPrefix(p, "/api/v1/crm/") {
 		return true
+	}
+	// Inventory module (ADR 0061) — owns the entire /inventory/ subtree.
+	if strings.HasPrefix(p, "/api/v1/inventory/") {
+		return true
+	}
+	// Platform module (ADR 0059) — three owned sub-namespaces.
+	// Identity-owned `/platform/{tenants,persons,impersonation,stats}`
+	// remain visible.
+	platformOwned := []string{
+		"/api/v1/platform/unverified-contacts",
+		"/api/v1/platform/marketplace/",
+		"/api/v1/platform/lead-credits",
+	}
+	for _, pref := range platformOwned {
+		if p == pref || strings.HasPrefix(p, pref+"/") || strings.HasPrefix(p, pref) {
+			return true
+		}
 	}
 	return false
 }

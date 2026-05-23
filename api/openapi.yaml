@@ -75,6 +75,8 @@ tags:
     description: Platform bounded context (ADR 0059) — verification pipeline, marketplace, lead credits
   - name: inventory
     description: Product / Batch / StockMovement aggregates per BRD §6.5 (ADR 0061)
+  - name: crm
+    description: CRM lead lifecycle — assignment, stage/temperature, calls, convert/lose (ADR 0060)
 
 security:
   - BearerAuth: []
@@ -1803,6 +1805,254 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/ListMovementsResponse' }
         '400': { $ref: '#/components/responses/BadRequest' }
+  # ===== CRM ============================================================
+  /api/v1/crm/leads:
+    get:
+      tags: [crm]
+      summary: List CRM leads (cursor-paginated, filterable)
+      description: |
+        Returns a cursor-paginated page of CRM leads in the caller's tenant.
+
+        Filters (all optional): stage, temperature, assignee, city, pincode,
+        business_type, medicine_system, name (pg_trgm partial match),
+        product_range (repeatable — AND semantics on text[] GIN), dosage_form
+        (repeatable).
+
+        Callers WITHOUT `crm.leads.read_all` see only leads assigned to
+        themselves; callers WITH it see the full tenant set per ADR 0060.
+      parameters:
+        - { $ref: '#/components/parameters/Cursor' }
+        - { $ref: '#/components/parameters/PageSize' }
+        - name: stage
+          in: query
+          required: false
+          schema: { type: string, enum: [new, contacted, interested, negotiation, converted, lost] }
+        - name: temperature
+          in: query
+          required: false
+          schema: { type: string, enum: [hot, warm, cold, dead] }
+        - name: assignee
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+        - name: city
+          in: query
+          required: false
+          schema: { type: string }
+        - name: pincode
+          in: query
+          required: false
+          schema: { type: string }
+        - name: business_type
+          in: query
+          required: false
+          schema: { type: string, enum: [PCD, ThirdParty] }
+        - name: medicine_system
+          in: query
+          required: false
+          schema: { type: string, enum: [Allopathic, Ayurvedic] }
+        - name: name
+          in: query
+          required: false
+          schema: { type: string }
+          description: 'pg_trgm partial-match on contact_name'
+        - name: product_range
+          in: query
+          required: false
+          schema: { type: array, items: { type: string } }
+          style: form
+          explode: true
+        - name: dosage_form
+          in: query
+          required: false
+          schema: { type: array, items: { type: string } }
+          style: form
+          explode: true
+      responses:
+        '200':
+          description: Cursor-paginated lead page
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ListLeadsResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '500': { $ref: '#/components/responses/InternalServerError' }
+
+  /api/v1/crm/leads/{leadId}:
+    get:
+      tags: [crm]
+      summary: Get one CRM lead by ID
+      parameters:
+        - { $ref: '#/components/parameters/LeadId' }
+      responses:
+        '200':
+          description: The lead
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CrmLeadDto' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/v1/crm/leads/{leadId}/assign:
+    post:
+      tags: [crm]
+      summary: Assign or reassign a lead
+      description: |
+        Sets the lead's current assignee. Atomic with an append to the
+        AssignmentHistory audit table. Emits `crm.lead-assigned.v1`.
+      parameters:
+        - { $ref: '#/components/parameters/LeadId' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AssignLeadRequest' }
+      responses:
+        '200':
+          description: Assigned
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AssignLeadResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: Lead is in a terminal stage (converted / lost)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /api/v1/crm/leads/{leadId}/stage:
+    post:
+      tags: [crm]
+      summary: Advance lead through the stage state machine
+      description: |
+        Non-terminal transitions only: New → Contacted → Interested →
+        Negotiation. Use `/convert` or `/lose` for terminal transitions.
+        Emits `crm.lead-stage-changed.v1`.
+      parameters:
+        - { $ref: '#/components/parameters/LeadId' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ChangeStageRequest' }
+      responses:
+        '204': { description: Stage updated }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: Lead is in a terminal stage OR transition is not allowed
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+
+  /api/v1/crm/leads/{leadId}/temperature:
+    post:
+      tags: [crm]
+      summary: Change the lead's qualitative temperature axis
+      description: |
+        Independent of stage — Hot/Warm/Cold/Dead transition at any
+        non-terminal stage. Emits `crm.lead-temperature-changed.v1`.
+      parameters:
+        - { $ref: '#/components/parameters/LeadId' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ChangeTemperatureRequest' }
+      responses:
+        '204': { description: Temperature updated }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: Lead is in a terminal stage
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /api/v1/crm/leads/{leadId}/calls:
+    post:
+      tags: [crm]
+      summary: Log a call against a lead
+      description: |
+        Creates a CallLog row + emits `crm.call-logged.v1`. Refused on
+        terminal leads (converted / lost).
+      parameters:
+        - { $ref: '#/components/parameters/LeadId' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LogCallRequest' }
+      responses:
+        '201':
+          description: Call logged
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LogCallResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: Lead is in a terminal stage
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /api/v1/crm/leads/{leadId}/convert:
+    post:
+      tags: [crm]
+      summary: Terminal-convert a lead (won)
+      description: |
+        Sets the lead to `converted`. Emits `crm.lead-converted.v1` —
+        this is the future Orders module's create-trigger per ADR 0060.
+      parameters:
+        - { $ref: '#/components/parameters/LeadId' }
+      responses:
+        '204': { description: Converted }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: Lead is already in a terminal stage
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /api/v1/crm/leads/{leadId}/lose:
+    post:
+      tags: [crm]
+      summary: Terminal-lose a lead (with required reason)
+      description: |
+        Sets the lead to `lost`. `reason` is REQUIRED (audit doctrine).
+        Emits `crm.lead-lost.v1`.
+      parameters:
+        - { $ref: '#/components/parameters/LeadId' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LoseLeadRequest' }
+      responses:
+        '204': { description: Lost }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: Lead is already in a terminal stage
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '422':
+          description: Reason missing
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
 
 components:
   securitySchemes:
@@ -1870,6 +2120,11 @@ components:
       required: true
       schema: { type: string, format: uuid }
       description: Generic resource path-parameter (Platform module routes).
+    LeadId:
+      name: leadId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
 
     ProductId:
       name: productId
@@ -2676,6 +2931,93 @@ components:
         callback_window_end_at:    { type: string, format: date-time, description: 'Required when outcome=busy' }
 
     LogVerificationCallResponse:
+    # ===== CRM (ADR 0060) ==============================================
+    CrmLeadDto:
+      type: object
+      required: [id, tenant_id, stage, temperature, contact_name, phone_e164, has_drug_licence, has_gst, gst_verified, created_at]
+      properties:
+        id:                          { type: string, format: uuid }
+        tenant_id:                   { type: string, format: uuid }
+        stage:                       { type: string, enum: [new, contacted, interested, negotiation, converted, lost] }
+        temperature:                 { type: string, enum: [hot, warm, cold, dead] }
+        contact_name:                { type: string }
+        phone_e164:                  { type: string, description: 'BRD §5 — +91 followed by 10 digits' }
+        city:                        { type: string }
+        district:                    { type: string }
+        state:                       { type: string }
+        pincode:                     { type: string }
+        business_type:               { type: string, enum: ['', PCD, ThirdParty] }
+        medicine_system:             { type: string, enum: ['', Allopathic, Ayurvedic] }
+        order_value:                 { type: string, enum: ['', Below5000, Upto25000, Upto50000, Above50000] }
+        buy_timeline:                { type: string, enum: ['', WithinWeek, Within15Days, WithinMonth] }
+        has_drug_licence:            { type: boolean }
+        has_gst:                     { type: boolean }
+        gst_verified:                { type: boolean }
+        product_ranges:              { type: array, items: { type: string } }
+        dosage_forms:                { type: array, items: { type: string } }
+        extra_profile:
+          type: object
+          additionalProperties: true
+          description: 'Non-filterable supplementary fields per BRD §6.3 (street, gst_number, pan_number, email, notes). Never used in WHERE clauses.'
+        assignee_membership_id:      { type: string, format: uuid }
+        assigned_at:                 { type: string, format: date-time }
+        source_purchase_id:          { type: string, format: uuid, description: 'platform.lead-purchased.v1 idempotency key' }
+        source_platform_lead_id:     { type: string, format: uuid }
+        converted_at:                { type: string, format: date-time }
+        converted_by_membership_id:  { type: string, format: uuid }
+        lost_at:                     { type: string, format: date-time }
+        lost_by_membership_id:       { type: string, format: uuid }
+        lost_reason:                 { type: string }
+        created_at:                  { type: string, format: date-time }
+        created_by_membership_id:    { type: string, format: uuid }
+
+    ListLeadsResponse:
+      type: object
+      required: [items, has_more]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/CrmLeadDto' }
+        has_more:    { type: boolean }
+        next_cursor: { type: string }
+
+    AssignLeadRequest:
+      type: object
+      required: [assignee_membership_id]
+      properties:
+        assignee_membership_id: { type: string, format: uuid }
+        reason:                 { type: string }
+
+    AssignLeadResponse:
+      type: object
+      required: [assignee_membership_id]
+      properties:
+        assignment_id:          { type: string, format: uuid }
+        assignee_membership_id: { type: string, format: uuid }
+
+    ChangeStageRequest:
+      type: object
+      required: [new_stage]
+      properties:
+        new_stage: { type: string, enum: [new, contacted, interested, negotiation] }
+        reason:    { type: string }
+
+    ChangeTemperatureRequest:
+      type: object
+      required: [new_temperature]
+      properties:
+        new_temperature: { type: string, enum: [hot, warm, cold, dead] }
+
+    LogCallRequest:
+      type: object
+      required: [outcome]
+      properties:
+        outcome:
+          type: string
+          enum: [connected, no_answer, busy, wrong_number, not_interested, interested, callback_requested, converted, other]
+        notes: { type: string }
+
+    LogCallResponse:
       type: object
       required: [call_id]
       properties:
@@ -2939,3 +3281,8 @@ components:
           items: { $ref: '#/components/schemas/MovementDto' }
         has_more:    { type: boolean }
         next_cursor: { type: string }
+    LoseLeadRequest:
+      type: object
+      required: [reason]
+      properties:
+        reason: { type: string }

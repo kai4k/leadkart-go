@@ -65,9 +65,9 @@ tasks:
       - CGO_ENABLED=1 go test -race -shuffle=on -skip "^Test(Arch|Meta)_" ./...
 
   test:arch:
-    desc: 'Architecture tests (TestArch_* + TestMeta_*) — integration-events hygiene + layer-boundary discipline (ADR 0047) + route-registration conflict gate (ADR 0049) + cross-module fitness-function suite under internal/architecture/ (Ford / Parsons / Kua canon). Covers identity + inventory + platform.'
+    desc: 'Architecture tests (TestArch_* + TestMeta_*) — integration-events hygiene + layer-boundary discipline (ADR 0047) + route-registration conflict gate (ADR 0049) + spec drift (ADR 0050) + cross-module fitness-function suite under internal/architecture/ (Ford / Parsons / Kua canon). Covers identity + inventory + platform + CRM.'
     cmds:
-      - go test -shuffle=on -run "^Test(Arch|Meta)_" ./internal/identity/integrationevents/... ./internal/identity/app/... ./internal/identity/ports/... ./internal/inventory/integrationevents/... ./internal/inventory/app/... ./internal/inventory/ports/... ./internal/inventory/adapters/... ./internal/platform/integrationevents/... ./internal/platform/app/... ./internal/platform/ports/... ./internal/architecture/...
+      - go test -shuffle=on -run "^Test(Arch|Meta)_" ./internal/identity/integrationevents/... ./internal/identity/app/... ./internal/identity/ports/... ./internal/inventory/integrationevents/... ./internal/inventory/app/... ./internal/inventory/ports/... ./internal/inventory/adapters/... ./internal/platform/integrationevents/... ./internal/platform/app/... ./internal/platform/ports/... ./internal/crm/integrationevents/... ./internal/crm/app/... ./internal/crm/ports/... ./internal/architecture/...
 
   test:int:
     desc: Integration tests (testcontainers Postgres; requires Docker)
