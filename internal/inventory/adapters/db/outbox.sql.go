@@ -35,3 +35,72 @@ func (q *Queries) InsertOutboxEvent(ctx context.Context, arg InsertOutboxEventPa
 	)
 	return err
 }
+
+const listUnforwardedOutboxEvents = `-- name: ListUnforwardedOutboxEvents :many
+SELECT id, tenant_id, topic, payload, occurred_at, created_at,
+       forwarded, forwarded_at,
+       act_operator_id, act_session_id, act_reason
+FROM   inventory.outbox
+WHERE  forwarded = false
+ORDER  BY created_at
+LIMIT  $1
+FOR    UPDATE SKIP LOCKED
+`
+
+// Forwarder polls this. Caller MUST run under app.is_platform=true so
+// RLS policy inventory_outbox_select returns rows from every tenant.
+//
+// FOR UPDATE SKIP LOCKED — Postgres 9.5+; canonical Watermill SQL
+// outbox / river-queue / Brandur "Transactionally staged job drains in
+// Postgres" shape. Multiple forwarder replicas drain concurrently
+// without double-publishing.
+func (q *Queries) ListUnforwardedOutboxEvents(ctx context.Context, limit int32) ([]InventoryOutbox, error) {
+	rows, err := q.db.Query(ctx, listUnforwardedOutboxEvents, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []InventoryOutbox
+	for rows.Next() {
+		var i InventoryOutbox
+		if err := rows.Scan(
+			&i.ID,
+			&i.TenantID,
+			&i.Topic,
+			&i.Payload,
+			&i.OccurredAt,
+			&i.CreatedAt,
+			&i.Forwarded,
+			&i.ForwardedAt,
+			&i.ActOperatorID,
+			&i.ActSessionID,
+			&i.ActReason,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const markOutboxEventForwarded = `-- name: MarkOutboxEventForwarded :exec
+UPDATE inventory.outbox
+SET    forwarded    = true,
+       forwarded_at = $2
+WHERE  id = $1
+`
+
+type MarkOutboxEventForwardedParams struct {
+	ID          pgtype.UUID
+	ForwardedAt pgtype.Timestamptz
+}
+
+// Forwarder writes this AFTER successful publish to the broker. Policy
+// inventory_outbox_modify requires app.is_platform=true.
+func (q *Queries) MarkOutboxEventForwarded(ctx context.Context, arg MarkOutboxEventForwardedParams) error {
+	_, err := q.db.Exec(ctx, markOutboxEventForwarded, arg.ID, arg.ForwardedAt)
+	return err
+}

@@ -52,6 +52,8 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/adapters"
 	"github.com/leadkart/leadkart-go/internal/identity/integrationevents"
 	"github.com/leadkart/leadkart-go/internal/identity/ports/subscribers"
+	inventoryadapters "github.com/leadkart/leadkart-go/internal/inventory/adapters"
+	inventoryintegrationevents "github.com/leadkart/leadkart-go/internal/inventory/integrationevents"
 	"github.com/leadkart/leadkart-go/internal/common/audit"
 	"github.com/leadkart/leadkart-go/internal/common/cache"
 	"github.com/leadkart/leadkart-go/internal/common/config"
@@ -234,6 +236,12 @@ func run(ctx context.Context, stdout *os.File) error {
 
 	tx := pg.NewTransactor(pool)
 	forwarder := adapters.NewOutboxForwarder(pool, tx, pubsub, integrationevents.Topic, 0)
+	// Per-module outbox forwarder: each bounded context owns its own
+	// outbox table (CLAUDE.md §"Each module owns its Postgres schema"),
+	// so each needs its own forwarder bound to the schema-specific sqlc
+	// Queries. Inventory's forwarder polls inventory.outbox and publishes
+	// onto the inventory.events Watermill topic.
+	inventoryForwarder := inventoryadapters.NewOutboxForwarder(pool, tx, pubsub, inventoryintegrationevents.Topic, 0)
 
 	router, err := messaging.NewRouter(messaging.Deps{
 		Subscriber:       pubsub,
@@ -295,6 +303,13 @@ func run(ctx context.Context, stdout *os.File) error {
 	g.Go(func() error {
 		forwarder.Run(gctx, forwarderPollInterval, forwarderRetryInterval, func(err error) {
 			logger.ErrorContext(gctx, "outbox forwarder", "err", err)
+		})
+		return nil
+	})
+
+	g.Go(func() error {
+		inventoryForwarder.Run(gctx, forwarderPollInterval, forwarderRetryInterval, func(err error) {
+			logger.ErrorContext(gctx, "inventory outbox forwarder", "err", err)
 		})
 		return nil
 	})
