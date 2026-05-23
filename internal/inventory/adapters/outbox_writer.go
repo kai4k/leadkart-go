@@ -10,8 +10,8 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/leadkart/leadkart-go/internal/common/ids"
-	"github.com/leadkart/leadkart-go/internal/identity/app/actclaim"
 	"github.com/leadkart/leadkart-go/internal/inventory/adapters/db"
+	"github.com/leadkart/leadkart-go/internal/inventory/app/actclaim"
 	"github.com/leadkart/leadkart-go/internal/inventory/integrationevents"
 )
 

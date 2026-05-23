@@ -31,6 +31,18 @@ var forbiddenAppImports = map[string]string{
 	"github.com/jackc/pgx/v5":                                        "pgx driver is a substrate concern; use pg.UnitOfWork or domain interfaces",
 	"github.com/jackc/pgx/v5/pgxpool":                                "pgxpool is a substrate concern; use pg.UnitOfWork or domain interfaces",
 	"github.com/jackc/pgx/v5/pgtype":                                 "pgtype is a sqlc/driver concern; should never appear in app/ — domain VOs carry strong types",
+
+	// Per CLAUDE.md "Architecture rule 1: modules NEVER reference each
+	// other's domain/app/ports/adapters" — inventory app/ MUST NOT
+	// reach into identity's substrate either. Identity domain types
+	// (tenant.ID, membership.ID) are allowed because they're VO-shaped
+	// strings carried across module boundaries on integration events;
+	// adapters + app + db packages are NOT.
+	"github.com/leadkart/leadkart-go/internal/identity/adapters":    "cross-module: inventory app/ MUST NOT import another module's concrete adapters (CLAUDE.md §Architecture rule 1)",
+	"github.com/leadkart/leadkart-go/internal/identity/adapters/db": "cross-module: inventory app/ MUST NOT import another module's sqlc-generated row types (CLAUDE.md §Architecture rule 1)",
+	"github.com/leadkart/leadkart-go/internal/identity/app":         "cross-module: inventory app/ MUST NOT import another module's application layer; use events on the bus (CLAUDE.md §Architecture rule 1)",
+	"github.com/leadkart/leadkart-go/internal/identity/app/actclaim": "cross-module: actclaim is duplicated locally per ADR 0061 amendment 1 (H5); identity's actclaim stays in identity's bounded context",
+	"github.com/leadkart/leadkart-go/internal/identity/ports":       "cross-module: inventory app/ MUST NOT import another module's HTTP ports / subscribers (CLAUDE.md §Architecture rule 1)",
 }
 
 func TestArch_AppDoesNotImportForbidden(t *testing.T) {
