@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/leadkart/leadkart-go/internal/identity/app"
+	inventoryapp "github.com/leadkart/leadkart-go/internal/inventory/app"
 	"github.com/leadkart/leadkart-go/internal/common/obs"
 )
 
@@ -21,7 +22,7 @@ func silentLogger() *slog.Logger {
 // A request to /health on the public mux returns 404.
 func TestPublicServer_DoesNotMountHealth(t *testing.T) {
 	t.Parallel()
-	srv := newServer(silentLogger(), app.Application{}, nil, nil)
+	srv := newServer(silentLogger(), app.Application{}, inventoryapp.Application{}, nil, nil)
 	for _, path := range []string{"/alive", "/ready", "/health"} {
 		t.Run(path, func(t *testing.T) {
 			t.Parallel()

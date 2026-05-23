@@ -78,7 +78,7 @@ func newE2EFixture(t *testing.T) e2eFixture {
 	if err != nil {
 		t.Fatalf("buildIdentityApp: %v", err)
 	}
-	srv := httptest.NewServer(newServer(silentLogger(), wiring.App, wiring.Issuer, wiring.StampValidator))
+	srv := httptest.NewServer(newServer(silentLogger(), wiring.App, buildInventoryApp(pool), wiring.Issuer, wiring.StampValidator))
 	t.Cleanup(srv.Close)
 	return e2eFixture{
 		URL:     srv.URL,

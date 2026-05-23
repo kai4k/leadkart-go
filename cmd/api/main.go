@@ -59,6 +59,11 @@ import (
 	"github.com/leadkart/leadkart-go/internal/common/obs"
 	"github.com/leadkart/leadkart-go/internal/common/openapi"
 	"github.com/leadkart/leadkart-go/internal/common/pg"
+	inventoryadapters "github.com/leadkart/leadkart-go/internal/inventory/adapters"
+	inventoryapp "github.com/leadkart/leadkart-go/internal/inventory/app"
+	inventorycommand "github.com/leadkart/leadkart-go/internal/inventory/app/command"
+	inventoryquery "github.com/leadkart/leadkart-go/internal/inventory/app/query"
+	inventoryports "github.com/leadkart/leadkart-go/internal/inventory/ports"
 )
 
 // HTTP server timeouts — public listener tuning per OWASP API Security
@@ -269,6 +274,8 @@ func run(ctx context.Context, stdout *os.File, _ []string) error {
 		return fmt.Errorf("build identity app: %w", err)
 	}
 
+	inventoryAppInstance := buildInventoryApp(pool)
+
 	// NOTE: outbox forwarder + messaging.Router + subscribers.Register
 	// live in cmd/worker — see that binary's package doc. The API host
 	// only writes integration events (via the per-handler outbox writes
@@ -306,7 +313,7 @@ func run(ctx context.Context, stdout *os.File, _ []string) error {
 		},
 	})
 	publicHandler := otelhttp.NewHandler(
-		mwChain(newServer(logger, wiring.App, wiring.Issuer, wiring.StampValidator)),
+		mwChain(newServer(logger, wiring.App, inventoryAppInstance, wiring.Issuer, wiring.StampValidator)),
 		"leadkart-api",
 	)
 	srv := &http.Server{
@@ -368,10 +375,11 @@ func run(ctx context.Context, stdout *os.File, _ []string) error {
 // verifier + validator gate authenticated routes. Both must be non-nil
 // for the auth-route block to register; the test that only asserts
 // probe-route absence on the public mux passes (nil, nil).
-func newServer(log *slog.Logger, identityApp app.Application, verifier authn.Verifier, validator authn.StampValidator) http.Handler {
+func newServer(log *slog.Logger, identityApp app.Application, inventoryAppInstance inventoryapp.Application, verifier authn.Verifier, validator authn.StampValidator) http.Handler {
 	mux := http.NewServeMux()
 	addRootHelpers(mux)
 	ports.AddRoutes(mux, log, identityApp, verifier, validator)
+	inventoryports.AddRoutes(mux, log, inventoryAppInstance, verifier, validator)
 	return mux
 }
 
@@ -590,4 +598,36 @@ func buildIdentityApp(pool *pgxpool.Pool, hybridCache *cache.HybridCache, cfg co
 		},
 		},
 	}, nil
+}
+
+// ----- Inventory wiring (ADR 0061 — Slice 1) -------------------------------
+
+// buildInventoryApp wires the Inventory Application from a pgxpool.
+// Mirror of buildIdentityApp at a smaller scale — single bounded context,
+// no JWT issuance / cache concerns.
+//
+// All inventory adapters share the same pgxpool + Transactor as identity
+// per CLAUDE.md "Each module owns its Postgres schema. No cross-schema
+// joins" — same connection pool, distinct schemas, distinct outboxes.
+func buildInventoryApp(pool *pgxpool.Pool) inventoryapp.Application {
+	tx := pg.NewTransactor(pool)
+	products := inventoryadapters.NewProductRepository(pool, tx)
+	batches := inventoryadapters.NewBatchRepository(pool, tx)
+	movements := inventoryadapters.NewStockMovementRepository(pool, tx)
+	return inventoryapp.Application{
+		Commands: inventoryapp.Commands{
+			CreateProduct:    inventorycommand.NewCreateProductHandler(products),
+			UpdateProduct:    inventorycommand.NewUpdateProductHandler(products),
+			DeleteProduct:    inventorycommand.NewDeleteProductHandler(products, batches),
+			AddBatch:         inventorycommand.NewAddBatchHandler(products, batches),
+			LogStockMovement: inventorycommand.NewLogStockMovementHandler(tx, batches, movements),
+		},
+		Queries: inventoryapp.Queries{
+			GetProduct:             inventoryquery.NewGetProductHandler(products),
+			ListProductsPage:       inventoryquery.NewListProductsPageHandler(products),
+			GetBatch:               inventoryquery.NewGetBatchHandler(batches),
+			ListBatchesByProduct:   inventoryquery.NewListBatchesByProductHandler(batches),
+			ListBatchMovementsPage: inventoryquery.NewListBatchMovementsPageHandler(movements),
+		},
+	}
 }

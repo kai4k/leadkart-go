@@ -134,7 +134,7 @@ func TestSecurityStampInvalidation_PasswordChange_Returns401WithinFastPath(t *te
 		t.Fatal("router did not start within 2s")
 	}
 
-	srv := httptest.NewServer(newServer(silentLogger(), wiring.App, wiring.Issuer, wiring.StampValidator))
+	srv := httptest.NewServer(newServer(silentLogger(), wiring.App, buildInventoryApp(pool), wiring.Issuer, wiring.StampValidator))
 	t.Cleanup(srv.Close)
 
 	// 1. Register tenant.

@@ -40,9 +40,16 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// codeRoutesPath is the source file whose mux.Handle calls are the
-// code-side truth.
-const codeRoutesPath = "http.go"
+// codeRoutesPaths are the source files whose mux.Handle calls are the
+// code-side truth. Every module that registers /api/v1/* routes via
+// its `ports.AddRoutes` MUST have its http.go listed here, otherwise
+// the drift gate silently misses cross-module routes.
+//
+// Per ADR 0050 (Wave 9.3) + ADR 0061 (inventory slice 1):
+var codeRoutesPaths = []string{
+	"http.go",
+	"../../inventory/ports/http.go",
+}
 
 // specPath is the canonical OpenAPI spec.
 const specPath = "../../../api/openapi.yaml"
@@ -62,9 +69,13 @@ func (r routeKey) String() string { return r.method + " " + r.path }
 func TestArch_RouteHasSpecOperation(t *testing.T) {
 	t.Parallel()
 
-	codeRoutes, err := extractCodeRoutes(codeRoutesPath)
-	if err != nil {
-		t.Fatalf("extract code routes: %v", err)
+	var codeRoutes []routeKey
+	for _, p := range codeRoutesPaths {
+		got, err := extractCodeRoutes(p)
+		if err != nil {
+			t.Fatalf("extract code routes from %s: %v", p, err)
+		}
+		codeRoutes = append(codeRoutes, got...)
 	}
 
 	specRoutes, err := extractSpecRoutes(specPath)
