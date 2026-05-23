@@ -17,9 +17,40 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/leadkart/leadkart-go/internal/common/clock"
 	"github.com/leadkart/leadkart-go/internal/common/errs"
 )
+
+// validateUUIDString returns ErrInvalid wrapping a clear message when
+// `val` is not a RFC 9562 UUID. Empty input is REJECTED (caller is
+// responsible for "optional field" handling — pass the empty-string
+// through validateOptionalUUID instead).
+//
+// Per ADR 0060 + reviewer finding H6: every domain ID stored on a
+// CrmLead must parse as a UUID at AGGREGATE-CONSTRUCTION time, not
+// later at the outbox boundary. This prevents the previous footgun
+// where mustParseUUID(...) panicked from the request path on a
+// malformed ID that snuck past command validation.
+func validateUUIDString(name, val string) error {
+	if val == "" {
+		return fmt.Errorf("%w: %s required", ErrInvalid, name)
+	}
+	if _, err := uuid.Parse(val); err != nil {
+		return fmt.Errorf("%w: %s not a valid uuid", ErrInvalid, name)
+	}
+	return nil
+}
+
+// validateOptionalUUID is the empty-allowed variant. Returns nil if
+// val is empty; otherwise validates per validateUUIDString.
+func validateOptionalUUID(name, val string) error {
+	if val == "" {
+		return nil
+	}
+	return validateUUIDString(name, val)
+}
 
 // ErrInvalid is the sentinel returned (wrapped via %w) by [New] +
 // transition methods on invariant violation. Callers branch via
@@ -143,8 +174,14 @@ func New(id ID, tenantID string, p Profile, createdByMembershipID string) (*CrmL
 	if id.IsZero() {
 		return nil, fmt.Errorf("%w: id required", ErrInvalid)
 	}
-	if strings.TrimSpace(tenantID) == "" {
-		return nil, fmt.Errorf("%w: tenant id required", ErrInvalid)
+	if err := validateUUIDString("id", id.String()); err != nil {
+		return nil, err
+	}
+	if err := validateUUIDString("tenant id", strings.TrimSpace(tenantID)); err != nil {
+		return nil, err
+	}
+	if err := validateOptionalUUID("created by membership id", createdByMembershipID); err != nil {
+		return nil, err
 	}
 	if err := validateProfile(p); err != nil {
 		return nil, err
@@ -214,11 +251,17 @@ func NewFromPurchaseSnapshot(id ID, tenantID string, s PurchaseSnapshot) (*CrmLe
 	if id.IsZero() {
 		return nil, fmt.Errorf("%w: id required", ErrInvalid)
 	}
-	if strings.TrimSpace(tenantID) == "" {
-		return nil, fmt.Errorf("%w: tenant id required", ErrInvalid)
+	if err := validateUUIDString("id", id.String()); err != nil {
+		return nil, err
 	}
-	if strings.TrimSpace(s.PurchaseID) == "" {
-		return nil, fmt.Errorf("%w: snapshot purchase id required", ErrInvalid)
+	if err := validateUUIDString("tenant id", strings.TrimSpace(tenantID)); err != nil {
+		return nil, err
+	}
+	if err := validateUUIDString("snapshot purchase id", strings.TrimSpace(s.PurchaseID)); err != nil {
+		return nil, err
+	}
+	if err := validateOptionalUUID("snapshot purchased by membership id", s.PurchasedByMembershipID); err != nil {
+		return nil, err
 	}
 	p := Profile{
 		ContactName:    s.ContactName,
@@ -390,11 +433,11 @@ func (l *CrmLead) CreatedByMembershipID() string { return l.createdByMembershipI
 // `reason` is optional — empty is allowed for the first assignment;
 // reassignments SHOULD carry one for audit (the App layer can enforce).
 func (l *CrmLead) Assign(newAssignee, assignedBy, reason string) error {
-	if strings.TrimSpace(newAssignee) == "" {
-		return fmt.Errorf("%w: assignee membership id required", ErrInvalid)
+	if err := validateUUIDString("assignee membership id", strings.TrimSpace(newAssignee)); err != nil {
+		return err
 	}
-	if strings.TrimSpace(assignedBy) == "" {
-		return fmt.Errorf("%w: assigned-by membership id required", ErrInvalid)
+	if err := validateUUIDString("assigned-by membership id", strings.TrimSpace(assignedBy)); err != nil {
+		return err
 	}
 	if l.stage.IsTerminal() {
 		return fmt.Errorf("%w: stage=%s; assignment not allowed", ErrTerminal, l.stage)
@@ -433,8 +476,8 @@ func (l *CrmLead) ChangeStage(newStage Stage, changedBy, reason string) error {
 	if newStage == StageConverted || newStage == StageLost {
 		return fmt.Errorf("%w: use Convert / Lose for terminal transitions", ErrInvalid)
 	}
-	if strings.TrimSpace(changedBy) == "" {
-		return fmt.Errorf("%w: changed-by membership id required", ErrInvalid)
+	if err := validateUUIDString("changed-by membership id", strings.TrimSpace(changedBy)); err != nil {
+		return err
 	}
 	if l.stage.IsTerminal() {
 		return fmt.Errorf("%w: stage=%s; stage change not allowed", ErrTerminal, l.stage)
@@ -466,8 +509,8 @@ func (l *CrmLead) ChangeTemperature(newTemp Temperature, changedBy string) error
 	if !newTemp.IsValid() {
 		return fmt.Errorf("%w: target temperature %q invalid", ErrInvalid, newTemp)
 	}
-	if strings.TrimSpace(changedBy) == "" {
-		return fmt.Errorf("%w: changed-by membership id required", ErrInvalid)
+	if err := validateUUIDString("changed-by membership id", strings.TrimSpace(changedBy)); err != nil {
+		return err
 	}
 	if l.stage.IsTerminal() {
 		return fmt.Errorf("%w: stage=%s; temperature change not allowed", ErrTerminal, l.stage)
@@ -496,8 +539,8 @@ func (l *CrmLead) ChangeTemperature(newTemp Temperature, changedBy string) error
 // timestamp + actor, and emits [ConvertedEvent] (which is the future
 // Orders module's create-trigger per ADR 0060).
 func (l *CrmLead) Convert(convertedBy string) error {
-	if strings.TrimSpace(convertedBy) == "" {
-		return fmt.Errorf("%w: converted-by membership id required", ErrInvalid)
+	if err := validateUUIDString("converted-by membership id", strings.TrimSpace(convertedBy)); err != nil {
+		return err
 	}
 	if l.stage.IsTerminal() {
 		return fmt.Errorf("%w: stage=%s; conversion not allowed", ErrTerminal, l.stage)
@@ -521,8 +564,8 @@ func (l *CrmLead) Convert(convertedBy string) error {
 // `reason` is REQUIRED (audit doctrine — `data-retention.md`); empty
 // returns [ErrInvalid].
 func (l *CrmLead) Lose(lostBy, reason string) error {
-	if strings.TrimSpace(lostBy) == "" {
-		return fmt.Errorf("%w: lost-by membership id required", ErrInvalid)
+	if err := validateUUIDString("lost-by membership id", strings.TrimSpace(lostBy)); err != nil {
+		return err
 	}
 	if strings.TrimSpace(reason) == "" {
 		return fmt.Errorf("%w: lose reason required for audit", ErrInvalid)

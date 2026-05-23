@@ -1,7 +1,7 @@
 package integrationevents_test
 
 import (
-	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -150,11 +150,48 @@ func TestFromDomainEvent_CallLogged(t *testing.T) {
 	}
 }
 
-func TestFromDomainEvent_UnknownReturnsErr(t *testing.T) {
+// TestFromDomainEvent_UnknownPanics pins reviewer H5: an unmapped
+// domain event MUST fail-loud (panic), not silently return nil. The
+// previous "(nil, ErrUnknownDomainEvent)" shape combined with the
+// outbox writer's tolerant nil-skip path could silently drop new
+// domain events whose integration counterpart was forgotten.
+func TestFromDomainEvent_UnknownPanics(t *testing.T) {
 	t.Parallel()
 	type unknown struct{}
-	_, err := integrationevents.FromDomainEvent(unknown{})
-	if !errors.Is(err, integrationevents.ErrUnknownDomainEvent) {
-		t.Fatalf("want ErrUnknownDomainEvent, got %v", err)
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatal("FromDomainEvent(unknown): expected panic, got none")
+		}
+		msg, ok := r.(string)
+		if !ok {
+			t.Fatalf("panic payload: %T %v", r, r)
+		}
+		if !strings.Contains(msg, "unmapped domain event") {
+			t.Fatalf("panic msg: %q", msg)
+		}
+	}()
+	_, _ = integrationevents.FromDomainEvent(unknown{})
+}
+
+// TestFromDomainEvent_MalformedUUIDReturnsErr pins reviewer H6: a
+// malformed UUID in a domain event must surface as ErrInvalidUUID
+// (not a panic) so the outbox writer can map it back to a clean
+// error path. Normally impossible because aggregate constructors
+// validate at construction time; this is defense-in-depth.
+func TestFromDomainEvent_MalformedUUIDReturnsErr(t *testing.T) {
+	t.Parallel()
+	in := crmlead.CreatedEvent{
+		LeadID:                crmlead.ID(leadID.String()),
+		TenantID:              "not-a-uuid",
+		CreatedByMembershipID: memberA.String(),
+		At:                    at,
+	}
+	_, err := integrationevents.FromDomainEvent(in)
+	if err == nil {
+		t.Fatal("want error, got nil")
+	}
+	if !strings.Contains(err.Error(), "invalid uuid") {
+		t.Fatalf("error: %v", err)
 	}
 }

@@ -97,8 +97,16 @@ func outboxActParams(ctx context.Context) (pgtype.UUID, pgtype.UUID, *string) {
 }
 
 // mapDomainEvents translates a slice of CRM domain events into V1
-// integration events for outbox storage. Surfaces a clear error if the
-// mapper hasn't been taught a new domain-event type.
+// integration events for outbox storage. Surfaces a clear error if a
+// UUID inside an event fails to parse (per reviewer H6); panics if
+// the mapper hasn't been taught a new domain-event type (per reviewer
+// H5 — fail-loud rather than silent-skip).
+//
+// Returns a non-nil slice (possibly empty) on success. NEVER returns
+// (nil, nil) for a non-empty input that had every event mapped — the
+// previous defensive `if ie == nil { continue }` was removed because
+// FromDomainEvent now panics on unknowns (so nil result is impossible)
+// + the defensive branch hid the H5 silent-skip bug class.
 func mapDomainEvents(domainEvents []any) ([]integrationevents.Event, error) {
 	if len(domainEvents) == 0 {
 		return nil, nil
@@ -108,9 +116,6 @@ func mapDomainEvents(domainEvents []any) ([]integrationevents.Event, error) {
 		ie, err := integrationevents.FromDomainEvent(d)
 		if err != nil {
 			return nil, err
-		}
-		if ie == nil {
-			continue
 		}
 		out = append(out, ie)
 	}

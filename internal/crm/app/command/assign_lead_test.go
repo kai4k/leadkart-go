@@ -20,7 +20,7 @@ func TestAssignLead_FirstAssignment(t *testing.T) {
 	id := seedLead(t, leads)
 	h := command.NewAssignLeadHandler(leads, history, fakeUoW{}, fixedTime)
 	out, err := h.Handle(context.Background(), command.AssignLeadCommand{
-		LeadID: id, AssigneeMembershipID: "mem-A", AssignedByMembershipID: "mem-manager",
+		LeadID: id, AssigneeMembershipID: "01923400-0000-7000-8000-cccccccc0004", AssignedByMembershipID: "01923400-0000-7000-8000-cccccccc0006",
 	})
 	if err != nil {
 		t.Fatalf("Handle: %v", err)
@@ -30,7 +30,7 @@ func TestAssignLead_FirstAssignment(t *testing.T) {
 	}
 	// Lead's mirrored assignee should match.
 	got, _ := leads.GetByID(context.Background(), id)
-	if got.AssigneeMembershipID() != "mem-A" {
+	if got.AssigneeMembershipID() != "01923400-0000-7000-8000-cccccccc0004" {
 		t.Fatalf("lead.assignee: %q", got.AssigneeMembershipID())
 	}
 	// History row written.
@@ -38,7 +38,7 @@ func TestAssignLead_FirstAssignment(t *testing.T) {
 	if len(rows) != 1 {
 		t.Fatalf("history rows: %d", len(rows))
 	}
-	if rows[0].AssigneeMembershipID() != "mem-A" || rows[0].PreviousAssignee() != "" {
+	if rows[0].AssigneeMembershipID() != "01923400-0000-7000-8000-cccccccc0004" || rows[0].PreviousAssignee() != "" {
 		t.Fatalf("history row fields: %+v", rows[0])
 	}
 }
@@ -50,13 +50,13 @@ func TestAssignLead_IdempotentSelfAssignWritesNoHistory(t *testing.T) {
 	id := seedLead(t, leads)
 	h := command.NewAssignLeadHandler(leads, history, fakeUoW{}, fixedTime)
 	if _, err := h.Handle(context.Background(), command.AssignLeadCommand{
-		LeadID: id, AssigneeMembershipID: "mem-A", AssignedByMembershipID: "mem-manager",
+		LeadID: id, AssigneeMembershipID: "01923400-0000-7000-8000-cccccccc0004", AssignedByMembershipID: "01923400-0000-7000-8000-cccccccc0006",
 	}); err != nil {
 		t.Fatalf("first: %v", err)
 	}
 	// Self-assign — must NOT write a new history row.
 	out, err := h.Handle(context.Background(), command.AssignLeadCommand{
-		LeadID: id, AssigneeMembershipID: "mem-A", AssignedByMembershipID: "mem-manager",
+		LeadID: id, AssigneeMembershipID: "01923400-0000-7000-8000-cccccccc0004", AssignedByMembershipID: "01923400-0000-7000-8000-cccccccc0006",
 	})
 	if err != nil {
 		t.Fatalf("self: %v", err)
@@ -77,12 +77,12 @@ func TestAssignLead_Reassignment(t *testing.T) {
 	id := seedLead(t, leads)
 	h := command.NewAssignLeadHandler(leads, history, fakeUoW{}, fixedTime)
 	if _, err := h.Handle(context.Background(), command.AssignLeadCommand{
-		LeadID: id, AssigneeMembershipID: "mem-A", AssignedByMembershipID: "mgr",
+		LeadID: id, AssigneeMembershipID: "01923400-0000-7000-8000-cccccccc0004", AssignedByMembershipID: "01923400-0000-7000-8000-cccccccc0006",
 	}); err != nil {
 		t.Fatalf("first: %v", err)
 	}
 	if _, err := h.Handle(context.Background(), command.AssignLeadCommand{
-		LeadID: id, AssigneeMembershipID: "mem-B", AssignedByMembershipID: "mgr", Reason: "rebalance",
+		LeadID: id, AssigneeMembershipID: "01923400-0000-7000-8000-cccccccc0005", AssignedByMembershipID: "01923400-0000-7000-8000-cccccccc0006", Reason: "rebalance",
 	}); err != nil {
 		t.Fatalf("second: %v", err)
 	}
@@ -93,11 +93,11 @@ func TestAssignLead_Reassignment(t *testing.T) {
 	// Find the second-write row + assert previous_assignee is mem-A.
 	var reassign *struct{ prev, assignee, reason string }
 	for _, r := range rows {
-		if r.AssigneeMembershipID() == "mem-B" {
+		if r.AssigneeMembershipID() == "01923400-0000-7000-8000-cccccccc0005" {
 			reassign = &struct{ prev, assignee, reason string }{r.PreviousAssignee(), r.AssigneeMembershipID(), r.Reason()}
 		}
 	}
-	if reassign == nil || reassign.prev != "mem-A" || reassign.reason != "rebalance" {
+	if reassign == nil || reassign.prev != "01923400-0000-7000-8000-cccccccc0004" || reassign.reason != "rebalance" {
 		t.Fatalf("reassign row: %+v", reassign)
 	}
 }
@@ -108,7 +108,7 @@ func TestAssignLead_NotFound(t *testing.T) {
 	history := newFakeHistory()
 	h := command.NewAssignLeadHandler(leads, history, fakeUoW{}, fixedTime)
 	_, err := h.Handle(context.Background(), command.AssignLeadCommand{
-		LeadID: "nope", AssigneeMembershipID: "mem-A", AssignedByMembershipID: "mgr",
+		LeadID: "nope", AssigneeMembershipID: "01923400-0000-7000-8000-cccccccc0004", AssignedByMembershipID: "01923400-0000-7000-8000-cccccccc0006",
 	})
 	if !errors.Is(err, command.ErrLeadNotFound) {
 		t.Fatalf("want ErrLeadNotFound, got %v", err)
@@ -121,12 +121,12 @@ func TestAssignLead_Terminal(t *testing.T) {
 	history := newFakeHistory()
 	id := seedLead(t, leads)
 	convert := command.NewConvertLeadHandler(leads)
-	if err := convert.Handle(context.Background(), command.ConvertLeadCommand{LeadID: id, ConvertedByMembershipID: "mem"}); err != nil {
+	if err := convert.Handle(context.Background(), command.ConvertLeadCommand{LeadID: id, ConvertedByMembershipID: "01923400-0000-7000-8000-cccccccc000a"}); err != nil {
 		t.Fatalf("convert: %v", err)
 	}
 	h := command.NewAssignLeadHandler(leads, history, fakeUoW{}, fixedTime)
 	_, err := h.Handle(context.Background(), command.AssignLeadCommand{
-		LeadID: id, AssigneeMembershipID: "mem-A", AssignedByMembershipID: "mgr",
+		LeadID: id, AssigneeMembershipID: "01923400-0000-7000-8000-cccccccc0004", AssignedByMembershipID: "01923400-0000-7000-8000-cccccccc0006",
 	})
 	if !errors.Is(err, command.ErrLeadTerminal) {
 		t.Fatalf("want ErrLeadTerminal, got %v", err)

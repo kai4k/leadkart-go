@@ -22,7 +22,7 @@ func seedLead(t *testing.T, r *fakeLeads) crmlead.ID {
 		crmlead.ID(ids.NewV7().String()),
 		"01923400-0000-7000-8000-000000000001",
 		crmlead.Profile{ContactName: "X", PhoneE164: "+919812345678"},
-		"mem-creator",
+		"01923400-0000-7000-8000-cccccccc0001",
 	)
 	if err != nil {
 		t.Fatalf("seed: %v", err)
@@ -39,7 +39,7 @@ func TestChangeStage_HappyPath(t *testing.T) {
 	id := seedLead(t, leads)
 	h := command.NewChangeLeadStageHandler(leads)
 	if err := h.Handle(context.Background(), command.ChangeLeadStageCommand{
-		LeadID: id, NewStage: crmlead.StageContacted, ChangedByMembershipID: "mem", Reason: "first call",
+		LeadID: id, NewStage: crmlead.StageContacted, ChangedByMembershipID: "01923400-0000-7000-8000-cccccccc000a", Reason: "first call",
 	}); err != nil {
 		t.Fatalf("Handle: %v", err)
 	}
@@ -55,7 +55,7 @@ func TestChangeStage_RejectsSkip(t *testing.T) {
 	id := seedLead(t, leads)
 	h := command.NewChangeLeadStageHandler(leads)
 	err := h.Handle(context.Background(), command.ChangeLeadStageCommand{
-		LeadID: id, NewStage: crmlead.StageNegotiation, ChangedByMembershipID: "mem",
+		LeadID: id, NewStage: crmlead.StageNegotiation, ChangedByMembershipID: "01923400-0000-7000-8000-cccccccc000a",
 	})
 	if !errors.Is(err, crmlead.ErrInvalid) {
 		t.Fatalf("want ErrInvalid, got %v", err)
@@ -67,7 +67,7 @@ func TestChangeStage_NotFound(t *testing.T) {
 	leads := newFakeLeads()
 	h := command.NewChangeLeadStageHandler(leads)
 	err := h.Handle(context.Background(), command.ChangeLeadStageCommand{
-		LeadID: "nope", NewStage: crmlead.StageContacted, ChangedByMembershipID: "mem",
+		LeadID: "nope", NewStage: crmlead.StageContacted, ChangedByMembershipID: "01923400-0000-7000-8000-cccccccc000a",
 	})
 	if !errors.Is(err, command.ErrLeadNotFound) {
 		t.Fatalf("want ErrLeadNotFound, got %v", err)
@@ -79,12 +79,12 @@ func TestChangeStage_Terminal(t *testing.T) {
 	leads := newFakeLeads()
 	id := seedLead(t, leads)
 	convert := command.NewConvertLeadHandler(leads)
-	if err := convert.Handle(context.Background(), command.ConvertLeadCommand{LeadID: id, ConvertedByMembershipID: "mem"}); err != nil {
+	if err := convert.Handle(context.Background(), command.ConvertLeadCommand{LeadID: id, ConvertedByMembershipID: "01923400-0000-7000-8000-cccccccc000a"}); err != nil {
 		t.Fatalf("convert: %v", err)
 	}
 	h := command.NewChangeLeadStageHandler(leads)
 	err := h.Handle(context.Background(), command.ChangeLeadStageCommand{
-		LeadID: id, NewStage: crmlead.StageContacted, ChangedByMembershipID: "mem",
+		LeadID: id, NewStage: crmlead.StageContacted, ChangedByMembershipID: "01923400-0000-7000-8000-cccccccc000a",
 	})
 	if !errors.Is(err, command.ErrLeadTerminal) {
 		t.Fatalf("want ErrLeadTerminal, got %v", err)
@@ -97,7 +97,7 @@ func TestChangeTemperature_HappyPath(t *testing.T) {
 	id := seedLead(t, leads)
 	h := command.NewChangeLeadTemperatureHandler(leads)
 	if err := h.Handle(context.Background(), command.ChangeLeadTemperatureCommand{
-		LeadID: id, NewTemperature: crmlead.TemperatureHot, ChangedByMembershipID: "mem",
+		LeadID: id, NewTemperature: crmlead.TemperatureHot, ChangedByMembershipID: "01923400-0000-7000-8000-cccccccc000a",
 	}); err != nil {
 		t.Fatalf("Handle: %v", err)
 	}
@@ -112,7 +112,7 @@ func TestConvertLead_HappyPath(t *testing.T) {
 	leads := newFakeLeads()
 	id := seedLead(t, leads)
 	h := command.NewConvertLeadHandler(leads)
-	if err := h.Handle(context.Background(), command.ConvertLeadCommand{LeadID: id, ConvertedByMembershipID: "mem"}); err != nil {
+	if err := h.Handle(context.Background(), command.ConvertLeadCommand{LeadID: id, ConvertedByMembershipID: "01923400-0000-7000-8000-cccccccc000a"}); err != nil {
 		t.Fatalf("Handle: %v", err)
 	}
 	got, _ := leads.GetByID(context.Background(), id)
@@ -126,7 +126,7 @@ func TestLoseLead_RequiresReason(t *testing.T) {
 	leads := newFakeLeads()
 	id := seedLead(t, leads)
 	h := command.NewLoseLeadHandler(leads)
-	err := h.Handle(context.Background(), command.LoseLeadCommand{LeadID: id, LostByMembershipID: "mem"})
+	err := h.Handle(context.Background(), command.LoseLeadCommand{LeadID: id, LostByMembershipID: "01923400-0000-7000-8000-cccccccc000a"})
 	if err == nil {
 		t.Fatal("want error on missing reason")
 	}
@@ -137,7 +137,7 @@ func TestLoseLead_HappyPath(t *testing.T) {
 	leads := newFakeLeads()
 	id := seedLead(t, leads)
 	h := command.NewLoseLeadHandler(leads)
-	if err := h.Handle(context.Background(), command.LoseLeadCommand{LeadID: id, LostByMembershipID: "mem", Reason: "no budget"}); err != nil {
+	if err := h.Handle(context.Background(), command.LoseLeadCommand{LeadID: id, LostByMembershipID: "01923400-0000-7000-8000-cccccccc000a", Reason: "no budget"}); err != nil {
 		t.Fatalf("Handle: %v", err)
 	}
 	got, _ := leads.GetByID(context.Background(), id)

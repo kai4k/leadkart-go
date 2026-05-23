@@ -13,6 +13,33 @@ import (
 // the emitted-event timestamps are predictable.
 var fixedNow = time.Date(2026, 6, 2, 9, 0, 0, 0, time.UTC)
 
+// Test fixture UUIDs. All aggregate IDs / tenant IDs / membership IDs
+// MUST parse as RFC 9562 UUIDs (per reviewer H6 — aggregate
+// construction validates UUIDness). The deterministic suffix below
+// makes the test events trivially diffable.
+const (
+	tidLead1         = "01923400-0000-7000-8000-aaaaaaaa0001"
+	tidLead2         = "01923400-0000-7000-8000-aaaaaaaa0002"
+	tidLeadX         = "01923400-0000-7000-8000-aaaaaaaa0009"
+	tidLeadState     = "01923400-0000-7000-8000-aaaaaaaa0010"
+	tidTenant1       = "01923400-0000-7000-8000-bbbbbbbb0001"
+	tidTenant2       = "01923400-0000-7000-8000-bbbbbbbb0002"
+	tidMemCreator    = "01923400-0000-7000-8000-cccccccc0001"
+	tidMemActor      = "01923400-0000-7000-8000-cccccccc0002"
+	tidMemSales      = "01923400-0000-7000-8000-cccccccc0003"
+	tidMemSalesA     = "01923400-0000-7000-8000-cccccccc0004"
+	tidMemSalesB     = "01923400-0000-7000-8000-cccccccc0005"
+	tidMemManager    = "01923400-0000-7000-8000-cccccccc0006"
+	tidMemCloser     = "01923400-0000-7000-8000-cccccccc0007"
+	tidMemNew        = "01923400-0000-7000-8000-cccccccc0008"
+	tidMemA          = "01923400-0000-7000-8000-cccccccc0009"
+	tidMem           = "01923400-0000-7000-8000-cccccccc000a"
+	tidActor         = "01923400-0000-7000-8000-cccccccc000b"
+	tidPurchase1     = "01923400-0000-7000-8000-dddddddd0001"
+	tidPlatformLead1 = "01923400-0000-7000-8000-eeeeeeee0001"
+	tidBuyer1        = "01923400-0000-7000-8000-cccccccc000c"
+)
+
 func withFixedClock(t *testing.T) {
 	t.Helper()
 	clock.Set(fixedNow)
@@ -49,11 +76,11 @@ func TestNew_HappyPath(t *testing.T) {
 	t.Parallel()
 	withFixedClock(t)
 
-	l, err := crmlead.New("lead-1", "tenant-1", validProfile(), "mem-creator")
+	l, err := crmlead.New(crmlead.ID(tidLead1), tidTenant1, validProfile(), tidMemCreator)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	if l.ID() != "lead-1" {
+	if l.ID() != crmlead.ID(tidLead1) {
 		t.Fatalf("ID: %q", l.ID())
 	}
 	if l.Stage() != crmlead.StageNew {
@@ -74,7 +101,7 @@ func TestNew_HappyPath(t *testing.T) {
 	if !ok {
 		t.Fatalf("event type: %T", evs[0])
 	}
-	if created.LeadID != "lead-1" || created.TenantID != "tenant-1" || created.CreatedByMembershipID != "mem-creator" {
+	if created.LeadID != crmlead.ID(tidLead1) || created.TenantID != tidTenant1 || created.CreatedByMembershipID != tidMemCreator {
 		t.Fatalf("event fields: %+v", created)
 	}
 	if created.SourcePurchaseID != "" {
@@ -95,21 +122,23 @@ func TestNew_InvariantViolations(t *testing.T) {
 		id   crmlead.ID
 		tid  string
 	}{
-		{name: "missing id", mut: func(*crmlead.Profile) {}, id: "", tid: "t"},
-		{name: "missing tenant", mut: func(*crmlead.Profile) {}, id: "id", tid: ""},
-		{name: "missing contact_name", mut: func(p *crmlead.Profile) { p.ContactName = "" }, id: "id", tid: "t"},
-		{name: "bad phone format", mut: func(p *crmlead.Profile) { p.PhoneE164 = "9876543210" }, id: "id", tid: "t"},
-		{name: "bad phone length", mut: func(p *crmlead.Profile) { p.PhoneE164 = "+91987" }, id: "id", tid: "t"},
-		{name: "bad pincode length", mut: func(p *crmlead.Profile) { p.Pincode = "12345" }, id: "id", tid: "t"},
-		{name: "bad business_type", mut: func(p *crmlead.Profile) { p.BusinessType = "Wholesale" }, id: "id", tid: "t"},
-		{name: "bad medicine_system", mut: func(p *crmlead.Profile) { p.MedicineSystem = "Homeopathic" }, id: "id", tid: "t"},
+		{name: "missing id", mut: func(*crmlead.Profile) {}, id: "", tid: tidTenant1},
+		{name: "non-uuid id", mut: func(*crmlead.Profile) {}, id: crmlead.ID("not-a-uuid"), tid: tidTenant1},
+		{name: "missing tenant", mut: func(*crmlead.Profile) {}, id: crmlead.ID(tidLead1), tid: ""},
+		{name: "non-uuid tenant", mut: func(*crmlead.Profile) {}, id: crmlead.ID(tidLead1), tid: "not-a-uuid"},
+		{name: "missing contact_name", mut: func(p *crmlead.Profile) { p.ContactName = "" }, id: crmlead.ID(tidLead1), tid: tidTenant1},
+		{name: "bad phone format", mut: func(p *crmlead.Profile) { p.PhoneE164 = "9876543210" }, id: crmlead.ID(tidLead1), tid: tidTenant1},
+		{name: "bad phone length", mut: func(p *crmlead.Profile) { p.PhoneE164 = "+91987" }, id: crmlead.ID(tidLead1), tid: tidTenant1},
+		{name: "bad pincode length", mut: func(p *crmlead.Profile) { p.Pincode = "12345" }, id: crmlead.ID(tidLead1), tid: tidTenant1},
+		{name: "bad business_type", mut: func(p *crmlead.Profile) { p.BusinessType = "Wholesale" }, id: crmlead.ID(tidLead1), tid: tidTenant1},
+		{name: "bad medicine_system", mut: func(p *crmlead.Profile) { p.MedicineSystem = "Homeopathic" }, id: crmlead.ID(tidLead1), tid: tidTenant1},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			p := validProfile()
 			tc.mut(&p)
-			_, err := crmlead.New(tc.id, tc.tid, p, "actor")
+			_, err := crmlead.New(tc.id, tc.tid, p, tidActor)
 			if err == nil {
 				t.Fatalf("want error")
 			}
@@ -124,9 +153,9 @@ func TestNewFromPurchaseSnapshot_HappyPath(t *testing.T) {
 	t.Parallel()
 	withFixedClock(t)
 	snap := crmlead.PurchaseSnapshot{
-		PurchaseID:              "purchase-1",
-		PlatformLeadID:          "pl-1",
-		PurchasedByMembershipID: "buyer-1",
+		PurchaseID:              tidPurchase1,
+		PlatformLeadID:          tidPlatformLead1,
+		PurchasedByMembershipID: tidBuyer1,
 		ContactName:             "Naresh Pharma",
 		MobileE164:              "+919812345678",
 		Email:                   "naresh@example.com",
@@ -147,14 +176,14 @@ func TestNewFromPurchaseSnapshot_HappyPath(t *testing.T) {
 		OrderValue:              "Above50000",
 		BuyTimeline:             "Within15Days",
 	}
-	l, err := crmlead.NewFromPurchaseSnapshot("lead-2", "tenant-2", snap)
+	l, err := crmlead.NewFromPurchaseSnapshot(crmlead.ID(tidLead2), tidTenant2, snap)
 	if err != nil {
 		t.Fatalf("NewFromPurchaseSnapshot: %v", err)
 	}
-	if l.SourcePurchaseID() != "purchase-1" {
+	if l.SourcePurchaseID() != tidPurchase1 {
 		t.Fatalf("SourcePurchaseID: %q", l.SourcePurchaseID())
 	}
-	if l.SourcePlatformLeadID() != "pl-1" {
+	if l.SourcePlatformLeadID() != tidPlatformLead1 {
 		t.Fatalf("SourcePlatformLeadID: %q", l.SourcePlatformLeadID())
 	}
 	if l.Profile().Extra.Email != "naresh@example.com" {
@@ -164,7 +193,7 @@ func TestNewFromPurchaseSnapshot_HappyPath(t *testing.T) {
 	if len(evs) != 1 {
 		t.Fatalf("events: %d", len(evs))
 	}
-	if got := evs[0].(crmlead.CreatedEvent).SourcePurchaseID; got != "purchase-1" {
+	if got := evs[0].(crmlead.CreatedEvent).SourcePurchaseID; got != tidPurchase1 {
 		t.Fatalf("CreatedEvent.SourcePurchaseID: %q", got)
 	}
 }
@@ -175,7 +204,7 @@ func TestNewFromPurchaseSnapshot_RejectsMissingPurchaseID(t *testing.T) {
 	snap := crmlead.PurchaseSnapshot{
 		ContactName: "X", MobileE164: "+919812345678",
 	}
-	_, err := crmlead.NewFromPurchaseSnapshot("lead-x", "t", snap)
+	_, err := crmlead.NewFromPurchaseSnapshot(crmlead.ID(tidLeadX), tidTenant1, snap)
 	if !errors.Is(err, crmlead.ErrInvalid) {
 		t.Fatalf("want ErrInvalid, got %v", err)
 	}
@@ -186,7 +215,7 @@ func TestNewFromPurchaseSnapshot_RejectsMissingPurchaseID(t *testing.T) {
 func newLead(t *testing.T) *crmlead.CrmLead {
 	t.Helper()
 	withFixedClock(t)
-	l, err := crmlead.New("lead-state", "tenant", validProfile(), "mem-actor")
+	l, err := crmlead.New(crmlead.ID(tidLeadState), tidTenant1, validProfile(), tidMemActor)
 	if err != nil {
 		t.Fatalf("seed New: %v", err)
 	}
@@ -198,7 +227,7 @@ func TestChangeStage_HappyForwardChain(t *testing.T) {
 	t.Parallel()
 	l := newLead(t)
 	for _, target := range []crmlead.Stage{crmlead.StageContacted, crmlead.StageInterested, crmlead.StageNegotiation} {
-		if err := l.ChangeStage(target, "mem-sales", "advancing"); err != nil {
+		if err := l.ChangeStage(target, tidMemSales, "advancing"); err != nil {
 			t.Fatalf("ChangeStage %s: %v", target, err)
 		}
 		if l.Stage() != target {
@@ -218,7 +247,7 @@ func TestChangeStage_HappyForwardChain(t *testing.T) {
 func TestChangeStage_IdempotentSelfTransition(t *testing.T) {
 	t.Parallel()
 	l := newLead(t)
-	if err := l.ChangeStage(crmlead.StageNew, "mem-sales", ""); err != nil {
+	if err := l.ChangeStage(crmlead.StageNew, tidMemSales, ""); err != nil {
 		t.Fatalf("self ChangeStage: %v", err)
 	}
 	if evs := l.PullEvents(); len(evs) != 0 {
@@ -229,7 +258,7 @@ func TestChangeStage_IdempotentSelfTransition(t *testing.T) {
 func TestChangeStage_RejectsSkip(t *testing.T) {
 	t.Parallel()
 	l := newLead(t)
-	err := l.ChangeStage(crmlead.StageNegotiation, "mem-sales", "")
+	err := l.ChangeStage(crmlead.StageNegotiation, tidMemSales, "")
 	if !errors.Is(err, crmlead.ErrInvalid) {
 		t.Fatalf("want ErrInvalid, got %v", err)
 	}
@@ -238,11 +267,11 @@ func TestChangeStage_RejectsSkip(t *testing.T) {
 func TestChangeStage_RejectsBacktrack(t *testing.T) {
 	t.Parallel()
 	l := newLead(t)
-	if err := l.ChangeStage(crmlead.StageContacted, "mem-sales", ""); err != nil {
+	if err := l.ChangeStage(crmlead.StageContacted, tidMemSales, ""); err != nil {
 		t.Fatalf("setup: %v", err)
 	}
 	_ = l.PullEvents()
-	err := l.ChangeStage(crmlead.StageNew, "mem-sales", "")
+	err := l.ChangeStage(crmlead.StageNew, tidMemSales, "")
 	if !errors.Is(err, crmlead.ErrInvalid) {
 		t.Fatalf("want ErrInvalid, got %v", err)
 	}
@@ -252,7 +281,7 @@ func TestChangeStage_RejectsDirectConvertOrLose(t *testing.T) {
 	t.Parallel()
 	l := newLead(t)
 	for _, target := range []crmlead.Stage{crmlead.StageConverted, crmlead.StageLost} {
-		if err := l.ChangeStage(target, "mem", ""); !errors.Is(err, crmlead.ErrInvalid) {
+		if err := l.ChangeStage(target, tidMem, ""); !errors.Is(err, crmlead.ErrInvalid) {
 			t.Fatalf("target %s: want ErrInvalid, got %v", target, err)
 		}
 	}
@@ -261,11 +290,11 @@ func TestChangeStage_RejectsDirectConvertOrLose(t *testing.T) {
 func TestChangeStage_TerminalRefused(t *testing.T) {
 	t.Parallel()
 	l := newLead(t)
-	if err := l.Convert("mem-closer"); err != nil {
+	if err := l.Convert(tidMemCloser); err != nil {
 		t.Fatalf("Convert: %v", err)
 	}
 	_ = l.PullEvents()
-	err := l.ChangeStage(crmlead.StageContacted, "mem", "")
+	err := l.ChangeStage(crmlead.StageContacted, tidMem, "")
 	if !errors.Is(err, crmlead.ErrTerminal) {
 		t.Fatalf("want ErrTerminal, got %v", err)
 	}
@@ -277,7 +306,7 @@ func TestChangeTemperature_FreeTransition(t *testing.T) {
 	t.Parallel()
 	l := newLead(t)
 	for _, target := range []crmlead.Temperature{crmlead.TemperatureHot, crmlead.TemperatureCold, crmlead.TemperatureDead, crmlead.TemperatureWarm} {
-		if err := l.ChangeTemperature(target, "mem"); err != nil {
+		if err := l.ChangeTemperature(target, tidMem); err != nil {
 			t.Fatalf("ChangeTemperature %s: %v", target, err)
 		}
 		if l.Temperature() != target {
@@ -289,7 +318,7 @@ func TestChangeTemperature_FreeTransition(t *testing.T) {
 func TestChangeTemperature_IdempotentSelf(t *testing.T) {
 	t.Parallel()
 	l := newLead(t)
-	if err := l.ChangeTemperature(crmlead.TemperatureWarm, "mem"); err != nil {
+	if err := l.ChangeTemperature(crmlead.TemperatureWarm, tidMem); err != nil {
 		t.Fatalf("err: %v", err)
 	}
 	if evs := l.PullEvents(); len(evs) != 0 {
@@ -300,11 +329,11 @@ func TestChangeTemperature_IdempotentSelf(t *testing.T) {
 func TestChangeTemperature_RejectsTerminal(t *testing.T) {
 	t.Parallel()
 	l := newLead(t)
-	if err := l.Lose("mem", "no budget"); err != nil {
+	if err := l.Lose(tidMem, "no budget"); err != nil {
 		t.Fatalf("Lose: %v", err)
 	}
 	_ = l.PullEvents()
-	err := l.ChangeTemperature(crmlead.TemperatureHot, "mem")
+	err := l.ChangeTemperature(crmlead.TemperatureHot, tidMem)
 	if !errors.Is(err, crmlead.ErrTerminal) {
 		t.Fatalf("want ErrTerminal, got %v", err)
 	}
@@ -315,7 +344,7 @@ func TestChangeTemperature_RejectsTerminal(t *testing.T) {
 func TestConvert_Terminal(t *testing.T) {
 	t.Parallel()
 	l := newLead(t)
-	if err := l.Convert("mem-closer"); err != nil {
+	if err := l.Convert(tidMemCloser); err != nil {
 		t.Fatalf("Convert: %v", err)
 	}
 	if l.Stage() != crmlead.StageConverted {
@@ -324,7 +353,7 @@ func TestConvert_Terminal(t *testing.T) {
 	if !l.ConvertedAt().Equal(fixedNow) {
 		t.Fatalf("ConvertedAt: %v", l.ConvertedAt())
 	}
-	if l.ConvertedByMembershipID() != "mem-closer" {
+	if l.ConvertedByMembershipID() != tidMemCloser {
 		t.Fatalf("ConvertedByMembershipID: %q", l.ConvertedByMembershipID())
 	}
 	evs := l.PullEvents()
@@ -332,11 +361,11 @@ func TestConvert_Terminal(t *testing.T) {
 		t.Fatalf("events: %d", len(evs))
 	}
 	got, ok := evs[0].(crmlead.ConvertedEvent)
-	if !ok || got.ConvertedByMembershipID != "mem-closer" {
+	if !ok || got.ConvertedByMembershipID != tidMemCloser {
 		t.Fatalf("event: %+v", evs[0])
 	}
 	// Second Convert is refused.
-	if err := l.Convert("mem-closer"); !errors.Is(err, crmlead.ErrTerminal) {
+	if err := l.Convert(tidMemCloser); !errors.Is(err, crmlead.ErrTerminal) {
 		t.Fatalf("second Convert: want ErrTerminal, got %v", err)
 	}
 }
@@ -344,7 +373,7 @@ func TestConvert_Terminal(t *testing.T) {
 func TestLose_TerminalWithReason(t *testing.T) {
 	t.Parallel()
 	l := newLead(t)
-	if err := l.Lose("mem-closer", "competitor won pricing"); err != nil {
+	if err := l.Lose(tidMemCloser, "competitor won pricing"); err != nil {
 		t.Fatalf("Lose: %v", err)
 	}
 	if l.Stage() != crmlead.StageLost {
@@ -361,7 +390,7 @@ func TestLose_TerminalWithReason(t *testing.T) {
 func TestLose_RequiresReason(t *testing.T) {
 	t.Parallel()
 	l := newLead(t)
-	if err := l.Lose("mem", ""); !errors.Is(err, crmlead.ErrInvalid) {
+	if err := l.Lose(tidMem, ""); !errors.Is(err, crmlead.ErrInvalid) {
 		t.Fatalf("want ErrInvalid, got %v", err)
 	}
 }
@@ -369,11 +398,11 @@ func TestLose_RequiresReason(t *testing.T) {
 func TestLose_RejectsAfterConvert(t *testing.T) {
 	t.Parallel()
 	l := newLead(t)
-	if err := l.Convert("mem"); err != nil {
+	if err := l.Convert(tidMem); err != nil {
 		t.Fatalf("Convert: %v", err)
 	}
 	_ = l.PullEvents()
-	err := l.Lose("mem", "too late")
+	err := l.Lose(tidMem, "too late")
 	if !errors.Is(err, crmlead.ErrTerminal) {
 		t.Fatalf("want ErrTerminal, got %v", err)
 	}
@@ -384,10 +413,10 @@ func TestLose_RejectsAfterConvert(t *testing.T) {
 func TestAssign_FirstAssignment(t *testing.T) {
 	t.Parallel()
 	l := newLead(t)
-	if err := l.Assign("mem-sales-A", "mem-manager", "initial routing"); err != nil {
+	if err := l.Assign(tidMemSalesA, tidMemManager, "initial routing"); err != nil {
 		t.Fatalf("Assign: %v", err)
 	}
-	if l.AssigneeMembershipID() != "mem-sales-A" {
+	if l.AssigneeMembershipID() != tidMemSalesA {
 		t.Fatalf("AssigneeMembershipID: %q", l.AssigneeMembershipID())
 	}
 	evs := l.PullEvents()
@@ -395,7 +424,7 @@ func TestAssign_FirstAssignment(t *testing.T) {
 		t.Fatalf("events: %d", len(evs))
 	}
 	got, ok := evs[0].(crmlead.AssignedEvent)
-	if !ok || got.PreviousAssignee != "" || got.AssigneeMembershipID != "mem-sales-A" {
+	if !ok || got.PreviousAssignee != "" || got.AssigneeMembershipID != tidMemSalesA {
 		t.Fatalf("event: %+v", evs[0])
 	}
 }
@@ -403,11 +432,11 @@ func TestAssign_FirstAssignment(t *testing.T) {
 func TestAssign_Reassignment(t *testing.T) {
 	t.Parallel()
 	l := newLead(t)
-	if err := l.Assign("mem-sales-A", "mem-manager", "initial"); err != nil {
+	if err := l.Assign(tidMemSalesA, tidMemManager, "initial"); err != nil {
 		t.Fatalf("Assign 1: %v", err)
 	}
 	_ = l.PullEvents()
-	if err := l.Assign("mem-sales-B", "mem-manager", "rebalance"); err != nil {
+	if err := l.Assign(tidMemSalesB, tidMemManager, "rebalance"); err != nil {
 		t.Fatalf("Assign 2: %v", err)
 	}
 	evs := l.PullEvents()
@@ -415,7 +444,7 @@ func TestAssign_Reassignment(t *testing.T) {
 		t.Fatalf("events: %d", len(evs))
 	}
 	got := evs[0].(crmlead.AssignedEvent)
-	if got.PreviousAssignee != "mem-sales-A" || got.AssigneeMembershipID != "mem-sales-B" {
+	if got.PreviousAssignee != tidMemSalesA || got.AssigneeMembershipID != tidMemSalesB {
 		t.Fatalf("event: %+v", got)
 	}
 }
@@ -423,11 +452,11 @@ func TestAssign_Reassignment(t *testing.T) {
 func TestAssign_IdempotentSame(t *testing.T) {
 	t.Parallel()
 	l := newLead(t)
-	if err := l.Assign("mem-A", "mem-manager", ""); err != nil {
+	if err := l.Assign(tidMemA, tidMemManager, ""); err != nil {
 		t.Fatalf("Assign: %v", err)
 	}
 	_ = l.PullEvents()
-	if err := l.Assign("mem-A", "mem-manager", "ignored"); err != nil {
+	if err := l.Assign(tidMemA, tidMemManager, "ignored"); err != nil {
 		t.Fatalf("Assign idempotent: %v", err)
 	}
 	if evs := l.PullEvents(); len(evs) != 0 {
@@ -438,11 +467,11 @@ func TestAssign_IdempotentSame(t *testing.T) {
 func TestAssign_RejectsTerminal(t *testing.T) {
 	t.Parallel()
 	l := newLead(t)
-	if err := l.Convert("mem"); err != nil {
+	if err := l.Convert(tidMem); err != nil {
 		t.Fatalf("Convert: %v", err)
 	}
 	_ = l.PullEvents()
-	err := l.Assign("mem-new", "mem-manager", "tried")
+	err := l.Assign(tidMemNew, tidMemManager, "tried")
 	if !errors.Is(err, crmlead.ErrTerminal) {
 		t.Fatalf("want ErrTerminal, got %v", err)
 	}
@@ -499,8 +528,8 @@ func TestUnmarshalFromDB_RoundTrip(t *testing.T) {
 		Stage:                   crmlead.StageNegotiation,
 		Temperature:             crmlead.TemperatureHot,
 		SourcePurchaseID:        "p-1",
-		SourcePlatformLeadID:    "pl-1",
-		AssigneeMembershipID:    "mem-A",
+		SourcePlatformLeadID:    tidPlatformLead1,
+		AssigneeMembershipID:    tidMemA,
 		AssignedAt:              fixedNow,
 		CreatedAt:               fixedNow,
 		CreatedByMembershipID:   "mem-buyer",
@@ -509,10 +538,10 @@ func TestUnmarshalFromDB_RoundTrip(t *testing.T) {
 	if l.Stage() != crmlead.StageNegotiation || l.Temperature() != crmlead.TemperatureHot {
 		t.Fatalf("stage/temp: %s %s", l.Stage(), l.Temperature())
 	}
-	if l.SourcePurchaseID() != "p-1" || l.SourcePlatformLeadID() != "pl-1" {
+	if l.SourcePurchaseID() != "p-1" || l.SourcePlatformLeadID() != tidPlatformLead1 {
 		t.Fatalf("source: %q %q", l.SourcePurchaseID(), l.SourcePlatformLeadID())
 	}
-	if l.AssigneeMembershipID() != "mem-A" {
+	if l.AssigneeMembershipID() != tidMemA {
 		t.Fatalf("assignee: %q", l.AssigneeMembershipID())
 	}
 	if l.PullEvents() != nil {

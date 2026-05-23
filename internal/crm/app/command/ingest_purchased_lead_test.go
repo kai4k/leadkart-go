@@ -37,11 +37,11 @@ func TestIngest_HappyPath(t *testing.T) {
 	leads := newFakeLeads()
 	h := command.NewIngestPurchasedLeadHandler(leads)
 	out, err := h.Handle(context.Background(), command.IngestPurchasedLeadCommand{
-		PurchaseID:              "purchase-1",
-		TenantID:                "tenant-1",
-		PlatformLeadID:          "pl-1",
-		PurchasedByMembershipID: "mem-buyer",
-		Snapshot:                validSnapshot("purchase-1"),
+		PurchaseID:              "01923400-0000-7000-8000-dddddddd0001",
+		TenantID:                "01923400-0000-7000-8000-bbbbbbbb0001",
+		PlatformLeadID:          "01923400-0000-7000-8000-eeeeeeee0001",
+		PurchasedByMembershipID: "01923400-0000-7000-8000-cccccccc000d",
+		Snapshot:                validSnapshot("01923400-0000-7000-8000-dddddddd0001"),
 	})
 	if err != nil {
 		t.Fatalf("Handle: %v", err)
@@ -59,8 +59,8 @@ func TestIngest_IdempotentOnSamePurchaseID(t *testing.T) {
 	leads := newFakeLeads()
 	h := command.NewIngestPurchasedLeadHandler(leads)
 	cmd := command.IngestPurchasedLeadCommand{
-		PurchaseID: "purchase-2", TenantID: "tenant-1",
-		Snapshot: validSnapshot("purchase-2"),
+		PurchaseID: "01923400-0000-7000-8000-dddddddd0002", TenantID: "01923400-0000-7000-8000-bbbbbbbb0001",
+		Snapshot: validSnapshot("01923400-0000-7000-8000-dddddddd0002"),
 	}
 	first, err := h.Handle(context.Background(), cmd)
 	if err != nil {
@@ -94,15 +94,15 @@ func TestIngest_NormalisesProvenanceOnSnapshot(t *testing.T) {
 	h := command.NewIngestPurchasedLeadHandler(leads)
 	// Snapshot fields left blank — handler should fill them from the
 	// command top-level so the persisted aggregate carries source info.
-	snap := validSnapshot("purchase-3")
+	snap := validSnapshot("01923400-0000-7000-8000-dddddddd0003")
 	snap.PurchaseID = ""
 	snap.PlatformLeadID = ""
 	snap.PurchasedByMembershipID = ""
 	out, err := h.Handle(context.Background(), command.IngestPurchasedLeadCommand{
-		PurchaseID:              "purchase-3",
-		TenantID:                "tenant-1",
-		PlatformLeadID:          "pl-3",
-		PurchasedByMembershipID: "mem-buyer-3",
+		PurchaseID:              "01923400-0000-7000-8000-dddddddd0003",
+		TenantID:                "01923400-0000-7000-8000-bbbbbbbb0001",
+		PlatformLeadID:          "01923400-0000-7000-8000-eeeeeeee0003",
+		PurchasedByMembershipID: "01923400-0000-7000-8000-cccccccc000e",
 		Snapshot:                snap,
 	})
 	if err != nil {
@@ -112,7 +112,7 @@ func TestIngest_NormalisesProvenanceOnSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetByID: %v", err)
 	}
-	if l.SourcePurchaseID() != "purchase-3" || l.SourcePlatformLeadID() != "pl-3" {
+	if l.SourcePurchaseID() != "01923400-0000-7000-8000-dddddddd0003" || l.SourcePlatformLeadID() != "01923400-0000-7000-8000-eeeeeeee0003" {
 		t.Fatalf("provenance not normalised: purchase=%q platform=%q", l.SourcePurchaseID(), l.SourcePlatformLeadID())
 	}
 }

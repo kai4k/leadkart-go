@@ -14,10 +14,26 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/leadkart/leadkart-go/internal/common/clock"
 	"github.com/leadkart/leadkart-go/internal/common/errs"
 	"github.com/leadkart/leadkart-go/internal/crm/domain/crmlead"
 )
+
+// validateUUIDString returns ErrInvalid wrapping a clear message when
+// `val` is not a RFC 9562 UUID. Per ADR 0060 + reviewer finding H6:
+// validation lives at AGGREGATE-CONSTRUCTION time, not later at the
+// outbox boundary.
+func validateUUIDString(name, val string) error {
+	if val == "" {
+		return fmt.Errorf("%w: %s required", ErrInvalid, name)
+	}
+	if _, err := uuid.Parse(val); err != nil {
+		return fmt.Errorf("%w: %s not a valid uuid", ErrInvalid, name)
+	}
+	return nil
+}
 
 // ErrInvalid is the sentinel returned (wrapped via %w) by [New] on
 // invariant violation.
@@ -107,17 +123,23 @@ func New(id ID, tenantID string, leadID crmlead.ID, outcome Outcome, notes, logg
 	if id.IsZero() {
 		return nil, fmt.Errorf("%w: id required", ErrInvalid)
 	}
-	if strings.TrimSpace(tenantID) == "" {
-		return nil, fmt.Errorf("%w: tenant id required", ErrInvalid)
+	if err := validateUUIDString("id", string(id)); err != nil {
+		return nil, err
+	}
+	if err := validateUUIDString("tenant id", strings.TrimSpace(tenantID)); err != nil {
+		return nil, err
 	}
 	if leadID.IsZero() {
 		return nil, fmt.Errorf("%w: lead id required", ErrInvalid)
 	}
+	if err := validateUUIDString("lead id", leadID.String()); err != nil {
+		return nil, err
+	}
 	if !outcome.IsValid() {
 		return nil, fmt.Errorf("%w: outcome %q invalid", ErrInvalid, outcome)
 	}
-	if strings.TrimSpace(loggedBy) == "" {
-		return nil, fmt.Errorf("%w: logged-by membership id required", ErrInvalid)
+	if err := validateUUIDString("logged-by membership id", strings.TrimSpace(loggedBy)); err != nil {
+		return nil, err
 	}
 	if len(notes) > notesMaxLen {
 		return nil, fmt.Errorf("%w: notes too long (max %d, got %d)", ErrInvalid, notesMaxLen, len(notes))
