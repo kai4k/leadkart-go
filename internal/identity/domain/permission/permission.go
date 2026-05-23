@@ -85,15 +85,47 @@ type rolesPermissions struct {
 	View, Create, Update, Delete, Assign, Revoke, Approve string
 }
 
+// inventoryCatalogPermissions cover Product master reads + writes
+// (name, SKU, dosage form, pack size, HSN, gst_rate_bps, is_active,
+// soft-delete). Per BRD §6.5 + ADR 0061 (Inventory Slice 1).
+type inventoryCatalogPermissions struct{ Read, Manage string }
+
+// inventoryStockPermissions cover Batch + StockMovement reads + writes.
+// Manage gates POST /v1/inventory/batches + POST .../movements; Read
+// gates GET .../batches + .../movements + .../products/{id}/batches.
+type inventoryStockPermissions struct{ Read, Manage string }
+
+// inventoryPermissions groups the Inventory bounded context surface —
+// paired Catalog (product master) + Stock (batches + movements) per
+// BRD §6.5. Slice 1 ships these four; future slices (Reservation,
+// LowStockAlerts) extend.
+type inventoryPermissions struct {
+	Catalog inventoryCatalogPermissions
+	Stock   inventoryStockPermissions
+}
+
 // IdentityPermissions is the closed catalogue of every permission the
 // system recognises. Mirror of the .NET `IdentityPermissions` static
 // class. Maintain in lockstep with the intern-table list.
+//
+// Inventory permissions live here (despite being owned by the Inventory
+// bounded context) per the ADR 0036 closed-catalogue rule + ADR 0051
+// "single-module type placement" carve-out: the catalogue is the one
+// place where every recognised permission name is enumerated, so the
+// PermissionResolver + middleware see them as a single closed set.
+// Adding a new module-owned permission = append to this catalogue +
+// the [allNames] slice. Drift caught at test time
+// (TestAll_NoDuplicates + TestIdentityPermissions_Catalogue).
 var IdentityPermissions = struct {
 	Meta     metaPermissions
 	Platform platformPermissions
 	Tenants  tenantsPermissions
 	Users    usersPermissions
 	Roles    rolesPermissions
+
+	// Inventory bounded context (ADR 0061) — Product / Batch /
+	// StockMovement aggregates per BRD §6.5.
+	Inventory inventoryPermissions
 }{
 	Meta: metaPermissions{
 		TenantAdmin:                "tenant.admin",
@@ -136,6 +168,17 @@ var IdentityPermissions = struct {
 		Revoke:  "identity.roles.revoke",
 		Approve: "identity.roles.approve",
 	},
+
+	Inventory: inventoryPermissions{
+		Catalog: inventoryCatalogPermissions{
+			Read:   "inventory.catalog.read",
+			Manage: "inventory.catalog.manage",
+		},
+		Stock: inventoryStockPermissions{
+			Read:   "inventory.stock.read",
+			Manage: "inventory.stock.manage",
+		},
+	},
 }
 
 func allNames() []string {
@@ -152,6 +195,10 @@ func allNames() []string {
 		p.Users.Anonymise, p.Users.UpdatePermissions,
 		p.Roles.View, p.Roles.Create, p.Roles.Update, p.Roles.Delete,
 		p.Roles.Assign, p.Roles.Revoke, p.Roles.Approve,
+
+		// Inventory bounded context (ADR 0061).
+		p.Inventory.Catalog.Read, p.Inventory.Catalog.Manage,
+		p.Inventory.Stock.Read, p.Inventory.Stock.Manage,
 	}
 }
 

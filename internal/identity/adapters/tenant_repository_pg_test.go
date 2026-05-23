@@ -106,8 +106,9 @@ func bootstrapTestDB(ctx context.Context, ownerDSN, migrationsDir string) error 
 
 	stmts := []string{
 		`CREATE ROLE leadkart_app LOGIN PASSWORD 'leadkart_app_pw' NOSUPERUSER NOINHERIT NOCREATEROLE NOCREATEDB`,
-		`GRANT USAGE ON SCHEMA app, identity TO leadkart_app`,
+		`GRANT USAGE ON SCHEMA app, identity, inventory TO leadkart_app`,
 		`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA identity TO leadkart_app`,
+		`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA inventory TO leadkart_app`,
 		`GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA app TO leadkart_app`,
 	}
 	for _, s := range stmts {
