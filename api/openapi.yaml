@@ -1338,9 +1338,12 @@ paths:
       tags: [inventory]
       summary: Update a Product
       description: |
-        Requires `inventory.catalog.manage`. Partial-merge per RFC 7396 —
-        only fields present in the body are applied. 422 on invariant
-        failure (out-of-range GST bps, oversized name, etc).
+        Requires `inventory.catalog.manage`. Supplied-key partial update —
+        only fields present in the JSON body are applied (omitted fields
+        retain their prior value). JSON `null` is NOT distinguishable from
+        omission on the wire, so clearing a field is not supported; this
+        deliberately differs from RFC 7396 merge-patch semantics. 422 on
+        invariant failure (out-of-range GST bps, oversized name, etc).
       parameters:
         - { $ref: '#/components/parameters/ProductId' }
       requestBody:
@@ -2331,7 +2334,7 @@ components:
 
     UpdateProductRequest:
       type: object
-      description: 'Partial-update payload (RFC 7396) — only present fields applied.'
+      description: 'Partial-update payload — only fields present in the JSON body are applied (omitted fields retain prior value). JSON null is treated as omission; field clearing is not supported. Deliberately NOT RFC 7396 merge-patch semantics.'
       properties:
         name:          { type: string, minLength: 1, maxLength: 200 }
         gst_rate_bps:  { type: integer, minimum: 0, maximum: 10000 }
