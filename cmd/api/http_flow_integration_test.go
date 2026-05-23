@@ -35,6 +35,7 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/ports"
 	"github.com/leadkart/leadkart-go/internal/common/cache"
 	"github.com/leadkart/leadkart-go/internal/common/config"
+	platformapp "github.com/leadkart/leadkart-go/internal/platform/app"
 )
 
 // newTestHybridCache spins an in-process miniredis + wires the
@@ -79,7 +80,7 @@ func TestHTTPFlow_RegisterLoginRefreshLogout(t *testing.T) {
 		t.Fatalf("buildIdentityApp: %v", err)
 	}
 
-	srv := httptest.NewServer(newServer(silentLogger(), wiring.App, wiring.Issuer, wiring.StampValidator))
+	srv := httptest.NewServer(newServer(silentLogger(), wiring.App, platformapp.Application{}, wiring.Issuer, wiring.StampValidator))
 	t.Cleanup(srv.Close)
 
 	full := ids.NewV7().String()
@@ -187,7 +188,7 @@ func TestHTTPFlow_LoginInvalidCredentials_Returns401(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildIdentityApp: %v", err)
 	}
-	srv := httptest.NewServer(newServer(silentLogger(), wiring.App, wiring.Issuer, wiring.StampValidator))
+	srv := httptest.NewServer(newServer(silentLogger(), wiring.App, platformapp.Application{}, wiring.Issuer, wiring.StampValidator))
 	t.Cleanup(srv.Close)
 
 	resp := postJSON(t, srv.URL+"/api/v1/auth/login", ports.LoginRequest{

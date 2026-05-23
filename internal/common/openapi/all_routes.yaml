@@ -71,6 +71,8 @@ tags:
     description: Audit-log read endpoints
   - name: permission-requests
     description: Permission-elevation approval workflow (ADR 0055)
+  - name: Platform
+    description: Platform bounded context (ADR 0059) — verification pipeline, marketplace, lead credits
 
 security:
   - BearerAuth: []
@@ -1248,6 +1250,205 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
 
+  # ============================================================================
+  # Platform bounded context (ADR 0059) — Slice 1
+  # Verification pipeline + marketplace + lead credits.
+  # ============================================================================
+
+  /api/v1/platform/unverified-contacts:
+    post:
+      tags: [Platform]
+      summary: Create a raw unverified contact
+      description: Lead Agent registers a new prospect for verification.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateUnverifiedContactRequest' }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CreateUnverifiedContactResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+    get:
+      tags: [Platform]
+      summary: List unverified contacts (Platform-only)
+      description: Cursor-paginated list of contacts. Optional `status` filter.
+      parameters:
+        - name: status
+          in: query
+          required: false
+          schema: { type: string, enum: [new, in_call, verified, rejected, busy] }
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ListUnverifiedContactsResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /api/v1/platform/unverified-contacts/{id}/calls:
+    post:
+      tags: [Platform]
+      summary: Log a verification call outcome
+      description: |
+        Records one call attempt against the contact. When `outcome=busy`,
+        callback window fields are required; otherwise they MUST be omitted.
+      parameters:
+        - $ref: '#/components/parameters/PathID'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LogVerificationCallRequest' }
+      responses:
+        '201':
+          description: Logged
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LogVerificationCallResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /api/v1/platform/unverified-contacts/{id}/verify:
+    post:
+      tags: [Platform]
+      summary: Promote contact to a marketplace PlatformLead
+      parameters:
+        - $ref: '#/components/parameters/PathID'
+      responses:
+        '201':
+          description: Promoted; new PlatformLead ID returned
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/VerifyUnverifiedContactResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /api/v1/platform/unverified-contacts/{id}/reject:
+    post:
+      tags: [Platform]
+      summary: Terminally reject an unverified contact
+      parameters:
+        - $ref: '#/components/parameters/PathID'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RejectUnverifiedContactRequest' }
+      responses:
+        '204': { description: Rejected }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /api/v1/platform/marketplace/leads:
+    get:
+      tags: [Platform]
+      summary: Browse marketplace leads (tenant-facing)
+      description: |
+        Cursor-paginated list of UNSOLD platform leads. All filters optional.
+        `product_ranges` + `dosage_forms` are CSV (`?product_ranges=Cardiac,Diabetic`)
+        and match ANY-overlap via GIN.
+      parameters:
+        - { name: state,            in: query, required: false, schema: { type: string } }
+        - { name: city,             in: query, required: false, schema: { type: string } }
+        - { name: district,         in: query, required: false, schema: { type: string } }
+        - { name: pincode,          in: query, required: false, schema: { type: string } }
+        - { name: business_type,    in: query, required: false, schema: { type: string, enum: [PCD, ThirdParty] } }
+        - { name: medicine_system,  in: query, required: false, schema: { type: string, enum: [Allopathic, Ayurvedic] } }
+        - { name: order_value,      in: query, required: false, schema: { type: string, enum: [Below5000, Upto25000, Upto50000, Above50000] } }
+        - { name: buy_timeline,     in: query, required: false, schema: { type: string, enum: [WithinWeek, Within15Days, WithinMonth] } }
+        - { name: has_drug_licence, in: query, required: false, schema: { type: boolean } }
+        - { name: has_gst,          in: query, required: false, schema: { type: boolean } }
+        - { name: gst_verified,     in: query, required: false, schema: { type: boolean } }
+        - { name: product_ranges,   in: query, required: false, schema: { type: string }, description: 'Comma-separated' }
+        - { name: dosage_forms,     in: query, required: false, schema: { type: string }, description: 'Comma-separated' }
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BrowseMarketplaceResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /api/v1/platform/marketplace/leads/{id}/purchase:
+    post:
+      tags: [Platform]
+      summary: Purchase a marketplace lead with credits
+      description: |
+        Debits 1 credit from the caller's tenant lead-credit balance + transfers
+        the lead to the tenant's CRM (via the LeadPurchasedV1 event consumed by CRM).
+      parameters:
+        - $ref: '#/components/parameters/PathID'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PurchaseLeadRequest' }
+      responses:
+        '201':
+          description: Purchased
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PurchaseLeadResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: Lead already sold OR credit-row concurrency conflict
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /api/v1/platform/lead-credits/topup:
+    post:
+      tags: [Platform]
+      summary: Top up a tenant's lead-credit balance (Platform-only)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TopupLeadCreditsRequest' }
+      responses:
+        '200':
+          description: Topped up
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TopupLeadCreditsResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /api/v1/platform/lead-credits/balance:
+    get:
+      tags: [Platform]
+      summary: Get current tenant's lead-credit balance
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LeadCreditBalanceResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
 components:
   securitySchemes:
     BearerAuth:
@@ -1296,6 +1497,12 @@ components:
       in: path
       required: true
       schema: { type: string, format: uuid }
+    PathID:
+      name: id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+      description: Generic resource path-parameter (Platform module routes).
 
   responses:
     BadRequest:
@@ -1315,6 +1522,16 @@ components:
           schema: { $ref: '#/components/schemas/ErrorResponse' }
     Unprocessable:
       description: Validation failure (RFC 9457 with field-level errors map)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+    Forbidden:
+      description: Authenticated but missing the required permission
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+    ValidationError:
+      description: Field-level validation failure (RFC 9457 with `errors` map)
       content:
         application/json:
           schema: { $ref: '#/components/schemas/ErrorResponse' }
@@ -2024,3 +2241,182 @@ components:
           items: { $ref: '#/components/schemas/PermissionRequestDto' }
         has_more:    { type: boolean }
         next_cursor: { type: string }
+
+    # =========================================================================
+    # Platform bounded context (ADR 0059)
+    # =========================================================================
+
+    CreateUnverifiedContactRequest:
+      type: object
+      required:
+        - contact_name
+        - mobile_e164
+        - pincode
+        - city
+        - district
+        - state
+        - has_drug_licence
+        - has_gst
+        - has_pan
+        - business_type
+        - medicine_system
+        - order_value
+        - buy_timeline
+      properties:
+        contact_name:      { type: string, minLength: 2, maxLength: 200 }
+        mobile_e164:       { type: string, pattern: '^\+91[0-9]{10}$' }
+        email:             { type: string }
+        pincode:           { type: string, pattern: '^[0-9]{6}$' }
+        city:              { type: string }
+        district:          { type: string }
+        state:             { type: string }
+        street:            { type: string }
+        has_drug_licence:  { type: boolean }
+        has_gst:           { type: boolean }
+        gst_number:        { type: string, description: 'Required when has_gst=true; GSTIN format' }
+        has_pan:           { type: boolean }
+        pan_number:        { type: string, description: 'Required when has_pan=true; PAN format' }
+        business_type:     { type: string, enum: [PCD, ThirdParty] }
+        medicine_system:   { type: string, enum: [Allopathic, Ayurvedic] }
+        product_ranges:    { type: array, items: { type: string } }
+        dosage_forms:      { type: array, items: { type: string } }
+        order_value:       { type: string, enum: [Below5000, Upto25000, Upto50000, Above50000] }
+        buy_timeline:      { type: string, enum: [WithinWeek, Within15Days, WithinMonth] }
+
+    CreateUnverifiedContactResponse:
+      type: object
+      required: [contact_id]
+      properties:
+        contact_id: { type: string, format: uuid }
+
+    LogVerificationCallRequest:
+      type: object
+      required: [outcome]
+      properties:
+        outcome:                   { type: string, enum: [verified, rejected, busy, no_answer, wrong_number] }
+        notes:                     { type: string }
+        callback_window_start_at:  { type: string, format: date-time, description: 'Required when outcome=busy' }
+        callback_window_end_at:    { type: string, format: date-time, description: 'Required when outcome=busy' }
+
+    LogVerificationCallResponse:
+      type: object
+      required: [call_id]
+      properties:
+        call_id: { type: string, format: uuid }
+
+    VerifyUnverifiedContactResponse:
+      type: object
+      required: [platform_lead_id]
+      properties:
+        platform_lead_id: { type: string, format: uuid }
+
+    RejectUnverifiedContactRequest:
+      type: object
+      required: [reason]
+      properties:
+        reason: { type: string, minLength: 1 }
+
+    UnverifiedContactDto:
+      type: object
+      required: [id, state, contact_name, mobile_e164, created_at, created_by_membership_id]
+      properties:
+        id:                        { type: string, format: uuid }
+        state:                     { type: string, enum: [new, in_call, verified, rejected, busy] }
+        contact_name:              { type: string }
+        mobile_e164:               { type: string }
+        city:                      { type: string }
+        state_geo:                 { type: string }
+        created_at:                { type: string, format: date-time }
+        created_by_membership_id:  { type: string, format: uuid }
+
+    ListUnverifiedContactsResponse:
+      type: object
+      required: [items, has_more]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/UnverifiedContactDto' }
+        has_more:    { type: boolean }
+        next_cursor: { type: string }
+
+    MarketplaceLeadDto:
+      type: object
+      required:
+        - id
+        - contact_name
+        - city
+        - district
+        - state
+        - pincode
+        - has_drug_licence
+        - has_gst
+        - gst_verified
+        - has_pan
+        - business_type
+        - medicine_system
+        - order_value
+        - buy_timeline
+        - verified_at
+      properties:
+        id:                { type: string, format: uuid }
+        contact_name:      { type: string }
+        city:              { type: string }
+        district:          { type: string }
+        state:             { type: string }
+        pincode:           { type: string }
+        has_drug_licence:  { type: boolean }
+        has_gst:           { type: boolean }
+        gst_verified:      { type: boolean }
+        has_pan:           { type: boolean }
+        business_type:     { type: string }
+        medicine_system:   { type: string }
+        product_ranges:    { type: array, items: { type: string } }
+        dosage_forms:      { type: array, items: { type: string } }
+        order_value:       { type: string }
+        buy_timeline:      { type: string }
+        verified_at:       { type: string, format: date-time }
+
+    BrowseMarketplaceResponse:
+      type: object
+      required: [items, has_more]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/MarketplaceLeadDto' }
+        has_more:    { type: boolean }
+        next_cursor: { type: string }
+
+    PurchaseLeadRequest:
+      type: object
+      required: [amount_paisa]
+      properties:
+        amount_paisa: { type: integer, format: int64, minimum: 1, description: 'INR paise. Forensic price field. Slice 1 always charges 1 credit per lead.' }
+
+    PurchaseLeadResponse:
+      type: object
+      required: [purchase_id, platform_lead_id]
+      properties:
+        purchase_id:      { type: string, format: uuid, description: 'Correlation ID also carried on LeadPurchasedV1' }
+        platform_lead_id: { type: string, format: uuid }
+
+    TopupLeadCreditsRequest:
+      type: object
+      required: [tenant_id, delta, reason]
+      properties:
+        tenant_id: { type: string, format: uuid }
+        delta:     { type: integer, format: int64, minimum: 1 }
+        reason:    { type: string, minLength: 1 }
+
+    TopupLeadCreditsResponse:
+      type: object
+      required: [tenant_id, new_balance]
+      properties:
+        tenant_id:   { type: string, format: uuid }
+        new_balance: { type: integer, format: int64 }
+
+    LeadCreditBalanceResponse:
+      type: object
+      required: [tenant_id, balance]
+      properties:
+        tenant_id: { type: string, format: uuid }
+        balance:   { type: integer, format: int64 }
