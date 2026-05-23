@@ -619,7 +619,7 @@ func buildInventoryApp(pool *pgxpool.Pool) inventoryapp.Application {
 			CreateProduct:    inventorycommand.NewCreateProductHandler(products),
 			UpdateProduct:    inventorycommand.NewUpdateProductHandler(products),
 			DeleteProduct:    inventorycommand.NewDeleteProductHandler(products, batches),
-			AddBatch:         inventorycommand.NewAddBatchHandler(products, batches),
+			AddBatch:         inventorycommand.NewAddBatchHandler(tx, products, batches),
 			LogStockMovement: inventorycommand.NewLogStockMovementHandler(tx, batches, movements),
 		},
 		Queries: inventoryapp.Queries{
