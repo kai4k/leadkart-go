@@ -82,6 +82,17 @@ func wireCrmRouter(t *testing.T, pool *pgxpool.Pool, topic string) (*gochannel.G
 	done := make(chan error, 1)
 	go func() { done <- router.Run(ctx) }()
 
+	// Wait for router to subscribe before letting the caller publish —
+	// avoids the "No subscribers to send message" race where Publish
+	// fires before the consumer attaches. Watermill canon: router.Running()
+	// closes once all handlers are subscribed.
+	select {
+	case <-router.Running():
+	case <-time.After(3 * time.Second):
+		cancel()
+		t.Fatal("router did not become ready within 3s")
+	}
+
 	stop := func() {
 		cancel()
 		select {
@@ -117,8 +128,11 @@ func publishLeadPurchased(t *testing.T, pubsub *gochannel.GoChannel, topic strin
 			State:          "Maharashtra",
 			HasDrugLicence: true,
 			HasGst:         true,
+			GstNumber:      "27AAAPL1234C1Z5",
 			BusinessType:   "PCD",
 			MedicineSystem: "Allopathic",
+			ProductRanges:  []string{"Cardiology"},
+			DosageForms:    []string{"Tablet"},
 			OrderValue:     "Upto25000",
 			BuyTimeline:    "WithinWeek",
 		},
