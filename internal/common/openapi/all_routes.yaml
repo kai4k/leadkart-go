@@ -779,17 +779,24 @@ paths:
       tags: [roles]
       summary: Set or clear the role's parent (single-parent hierarchy)
       description: |
-        ADR 0054 — single-parent role hierarchy. The role's effective
-        permission set is its own grants UNION every ancestor's grants
-        walked transitively via `parent_role_id`.
+        ADR 0058 (Wave 9.4, supersedes ADR 0054) — single-parent
+        organizational hierarchy backed by a dedicated
+        `identity.role_hierarchy_edges` aggregate. Permission
+        resolution stays flat per role; the hierarchy is consumed by
+        approval workflows + reporting.
 
         Pass `{"parent_role_id": null}` (or omit / empty string) to
         clear the parent (role becomes a root). Pass a UUID referencing
         a role in the SAME tenant to set / re-point the parent.
 
-        Cycle prevention runs at three layers (domain pre-check + DB
-        trigger + repository pre-validation); all three surface as
-        422 `role_hierarchy_cycle` or `role_hierarchy_cross_tenant`.
+        Cycle prevention + cross-tenant safety are declarative at the
+        DB layer (composite FK + cycle trigger). Surfaces as 422
+        `role_hierarchy_cycle` / `role_hierarchy_cross_tenant`, 400
+        `role_hierarchy_self_reference`, 409
+        `role_hierarchy_edge_already_exists`.
+
+        Optional `reason` (10-1024 chars) is recorded onto the new
+        edge OR the cleared edge for audit.
       parameters: [{ $ref: '#/components/parameters/RoleId' }]
       requestBody:
         required: true
@@ -798,7 +805,17 @@ paths:
             schema: { $ref: '#/components/schemas/SetRoleParentRequest' }
       responses:
         '204': { description: Parent set / cleared }
+        '400': { $ref: '#/components/responses/BadRequest' }
         '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: |
+            Role already has an active parent edge (single-parent
+            invariant: at most one active edge per child). Caller
+            should reload to discover the existing edge before
+            retrying.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
         '422': { $ref: '#/components/responses/Unprocessable' }
 
   /api/v1/roles/{roleId}/permissions:
@@ -1678,10 +1695,11 @@ components:
           type: string
           format: uuid
           description: |
-            ADR 0054 — single-parent hierarchy. Omitted when the role is
-            a root (no inheritance). When present, the role's effective
-            permission set is its own grants UNION every ancestor's
-            grants walked transitively.
+            ADR 0058 (Wave 9.4) — populated from the active edge in
+            `identity.role_hierarchy_edges` via JOIN at read time.
+            Omitted when the role is a root (no active edge). Permission
+            resolution stays flat per role; the hierarchy is consumed
+            by approval workflows + reporting, NOT by the resolver.
 
     ListRolesResponse:
       type: object
@@ -1701,9 +1719,11 @@ components:
           type: string
           format: uuid
           description: |
-            ADR 0054 — optional parent for the new role. Omit / empty
-            = root (no inheritance). Cross-tenant + cycle prevention
-            runs at the DB-trigger layer.
+            ADR 0058 (Wave 9.4) — optional parent for the new role.
+            Omit / empty = root (no edge created). When set the role
+            + the rolehierarchy.Edge are inserted in one transaction;
+            cross-tenant + self-reference + cycle prevention runs at
+            the DB layer (composite FK + check + cycle trigger).
 
     CreateRoleResponse:
       type: object
@@ -1738,16 +1758,25 @@ components:
     SetRoleParentRequest:
       type: object
       description: |
-        ADR 0054 — PATCH body for `/api/v1/roles/{roleId}/parent`.
-        Pass `null` (or empty string) to clear the parent (role
-        becomes a root); pass a UUID referencing a role in the same
-        tenant to set / re-point the parent.
+        ADR 0058 (Wave 9.4) — PATCH body for
+        `/api/v1/roles/{roleId}/parent`. Pass `null` (or empty string)
+        to clear the parent (role becomes a root by soft-deleting any
+        active edge); pass a UUID referencing a role in the same
+        tenant to atomically replace any existing edge.
       required: [parent_role_id]
       properties:
         parent_role_id:
           type: string
           format: uuid
           nullable: true
+        reason:
+          type: string
+          minLength: 10
+          maxLength: 1024
+          description: |
+            Optional audit text recorded on the new edge (when setting)
+            OR the cleared edge (when clearing). When supplied must be
+            10-1024 characters per the DB CHECK constraint.
 
     # ===== Platform ====================================================
     PersonDto:

@@ -548,11 +548,17 @@ type RolePermissionRequest struct {
 
 // SetRoleParentRequest — PATCH /api/v1/roles/{roleId}/parent.
 //
-// ADR 0054 — pointer-string so JSON `null` clears the parent (role
-// becomes a root). Empty string treated identically. Non-empty must
-// be a valid UUID referencing a role in the same tenant.
+// ADR 0058 (Wave 9.4) — pointer-string so JSON `null` clears the
+// parent (role becomes a root by soft-deleting any active edge).
+// Empty string treated identically. Non-empty must be a valid UUID
+// referencing a role in the same tenant; the DB rejects cross-tenant
+// + cycle declaratively.
+//
+// `reason` is OPTIONAL audit text propagated onto the new edge OR
+// onto the cleared edge. When supplied must be 10-1024 chars.
 type SetRoleParentRequest struct {
 	ParentRoleID *string `json:"parent_role_id"`
+	Reason       string  `json:"reason,omitempty"`
 }
 
 // ----- Tenant management -----------------------------------------------------

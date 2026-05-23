@@ -78,19 +78,7 @@ type DeletedEvent struct {
 
 func (DeletedEvent) isRoleEvent() {}
 
-// ParentChangedEvent fires when [Role.ChangeParent] sets a different
-// parent_role_id (clears OR re-points). Per ADR 0054 — subscribers
-// invalidate any cached effective-permission projections for every
-// Membership holding this role (the inherited slice shifted).
-//
-// OldParentID / NewParentID may be zero (root); the (zero, X) shape
-// = "promoted into hierarchy", (X, zero) = "moved to root".
-type ParentChangedEvent struct {
-	RoleID      ID
-	TenantID    tenant.ID
-	OldParentID ID
-	NewParentID ID
-	At          time.Time
-}
-
-func (ParentChangedEvent) isRoleEvent() {}
+// Note: ParentChangedEvent was retired in Wave 9.4 (ADR 0058). The
+// rolehierarchy aggregate now owns parent→child relationships +
+// emits its own EstablishedEvent / RemovedEvent through the same
+// integration-event pipeline.

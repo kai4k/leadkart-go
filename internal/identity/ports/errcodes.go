@@ -173,12 +173,29 @@ const (
 
 	// ErrCodeRoleHierarchyCycle — SetRoleParent / CreateRole rejected
 	// because the proposed parent_role_id (or any of its ancestors) is
-	// the role itself. 422 surface. ADR 0054 — three-layer cycle gate.
+	// the role itself. 422 surface. ADR 0058 (Wave 9.4) — declarative
+	// DB cycle trigger on identity.role_hierarchy_edges.
 	ErrCodeRoleHierarchyCycle = "role_hierarchy_cycle"
 
-	// ErrCodeRoleHierarchyCrossTenant — DB-trigger surfaced a parent
-	// pointing at another tenant's role. 422 surface. ADR 0054.
+	// ErrCodeRoleHierarchyCrossTenant — composite FK rejected an edge
+	// whose child + parent live in different tenants. 422 surface.
+	// ADR 0058 — declarative replacement for the Wave 9.1d SECURITY
+	// DEFINER trigger.
 	ErrCodeRoleHierarchyCrossTenant = "role_hierarchy_cross_tenant"
+
+	// ErrCodeRoleHierarchySelfReference — child == parent. 400
+	// surface; the aggregate guards + the DB CHECK chk_edge_no_self_loop
+	// is the strict-gate fallback.
+	ErrCodeRoleHierarchySelfReference = "role_hierarchy_self_reference"
+
+	// ErrCodeRoleHierarchyEdgeExists — single-parent invariant
+	// violated. 409 surface. ADR 0058 — partial unique index
+	// uq_role_hierarchy_active_edge_per_child.
+	ErrCodeRoleHierarchyEdgeExists = "role_hierarchy_edge_already_exists"
+
+	// ErrCodeRoleHierarchyInvalidReason — supplied reason length
+	// outside [10, 1024]. 422 surface. ADR 0058.
+	ErrCodeRoleHierarchyInvalidReason = "role_hierarchy_invalid_reason"
 
 	// ErrCodePersonNotFound — Person ID has no row globally. 404 surface.
 	ErrCodePersonNotFound = "person_not_found"

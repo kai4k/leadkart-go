@@ -148,33 +148,6 @@ func (f *fakeRoleRepo) ListByTenant(_ context.Context, tenantID tenant.ID) ([]*r
 	return out, nil
 }
 
-// GetAncestors walks parent chain upward for organizational hierarchy
-// queries (ADR 0054 Option A — hierarchy used by approval workflows,
-// NOT by permission resolution). Default seed catalog leaves all
-// parent_role_id NULL → returns empty for every call.
-func (f *fakeRoleRepo) GetAncestors(_ context.Context, id role.ID) ([]*role.Role, error) {
-	var out []*role.Role
-	r, ok := f.roles[id]
-	if !ok {
-		return out, nil
-	}
-	cur := r.ParentRoleID()
-	seen := map[role.ID]struct{}{r.ID(): {}}
-	for !cur.IsZero() {
-		if _, dup := seen[cur]; dup {
-			break
-		}
-		seen[cur] = struct{}{}
-		next, ok := f.roles[cur]
-		if !ok {
-			break
-		}
-		out = append(out, next)
-		cur = next.ParentRoleID()
-	}
-	return out, nil
-}
-
 func freshTenantID(t *testing.T) tenant.ID {
 	t.Helper()
 	return tenant.ID(ids.NewV7().String())

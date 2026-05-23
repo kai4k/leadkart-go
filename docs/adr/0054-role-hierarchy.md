@@ -1,6 +1,6 @@
 # ADR 0054 — Role hierarchy (organizational tree; NO permission inheritance)
 
-**Status:** Accepted
+**Status:** Superseded by ADR 0058 (Wave 9.4) — hierarchy moved out of the `Role` aggregate into a dedicated `rolehierarchy.Edge` aggregate backed by a join table; `parent_role_id` column + the SECURITY DEFINER trigger are gone. The wire contract stays the same.
 **Date:** 2026-05-23
 
 ## Context

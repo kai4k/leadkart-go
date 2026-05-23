@@ -435,6 +435,7 @@ func buildIdentityApp(pool *pgxpool.Pool, hybridCache *cache.HybridCache, cfg co
 	memberships := adapters.NewMembershipRepository(pool, tx)
 	families := adapters.NewRefreshTokenFamilyRepository(pool, tx)
 	roles := adapters.NewRoleRepository(pool, tx)
+	roleHierarchyEdges := adapters.NewRoleHierarchyEdgeRepository(pool, tx)
 	permissionRequests := adapters.NewPermissionRequestRepository(pool, tx)
 	authRouter := adapters.NewAuthRouterPG(pool, tx)
 	permResolver := permissions.NewResolver(memberships, roles)
@@ -529,13 +530,13 @@ func buildIdentityApp(pool *pgxpool.Pool, hybridCache *cache.HybridCache, cfg co
 			CreateUser:                     command.NewCreateUserHandler(tx, persons, memberships),
 			AnonymiseUser:                  command.NewAnonymiseUserHandler(memberships, persons),
 
-			CreateRole:             command.NewCreateRoleHandler(roles),
+			CreateRole:             command.NewCreateRoleHandler(roles, roleHierarchyEdges, tx, now),
 			UpdateRole:             command.NewUpdateRoleHandler(roles),
 			DeleteRole:             command.NewDeleteRoleHandler(roles),
 			ReplaceRolePermissions: command.NewReplaceRolePermissionsHandler(roles),
 			GrantRolePermission:    command.NewGrantRolePermissionHandler(roles),
 			RevokeRolePermission:   command.NewRevokeRolePermissionHandler(roles),
-			SetRoleParent:          command.NewSetRoleParentHandler(roles), // ADR 0054
+			SetRoleParent:          command.NewSetRoleParentHandler(roleHierarchyEdges, tx, now), // ADR 0058
 
 			GlobalSuspendPerson:        command.NewGlobalSuspendPersonHandler(persons),
 			LiftPersonGlobalSuspension: command.NewLiftPersonGlobalSuspensionHandler(persons),
@@ -564,8 +565,8 @@ func buildIdentityApp(pool *pgxpool.Pool, hybridCache *cache.HybridCache, cfg co
 			GetUser:                   query.NewGetUserHandler(memberships, persons),
 			ListUsers:                 query.NewListUsersHandler(memberships, persons),
 			ListUsersPaged:            query.NewListUsersPagedHandler(memberships, persons),
-			GetRole:                   query.NewGetRoleHandler(roles),
-			ListRoles:                 query.NewListRolesHandler(roles),
+			GetRole:                   query.NewGetRoleHandler(roles, roleHierarchyEdges),
+			ListRoles:                 query.NewListRolesHandler(roles, roleHierarchyEdges),
 			GetPerson:                 query.NewGetPersonHandler(persons),
 			GetPersonByEmail:          query.NewGetPersonByEmailHandler(persons),
 			ListPersonMemberships:     query.NewListPersonMembershipsHandler(memberships, persons),

@@ -12,7 +12,9 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/app"
 	"github.com/leadkart/leadkart-go/internal/identity/app/command"
 	"github.com/leadkart/leadkart-go/internal/identity/app/query"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/role"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/rolehierarchy"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 	"github.com/leadkart/leadkart-go/internal/identity/ports/authn"
 )
@@ -87,24 +89,34 @@ func handleCreateRole(log *slog.Logger, a app.Application) http.Handler {
 			}
 			parent = role.ID(req.ParentRoleID)
 		}
+		actor := actorMembershipFromContext(r)
 		out, err := a.Commands.CreateRole.Handle(r.Context(), command.CreateRoleCommand{
-			TenantID:       tenant.ID(tid),
-			Name:           req.Name,
-			HierarchyLevel: req.HierarchyLevel,
-			ParentRoleID:   parent,
+			TenantID:          tenant.ID(tid),
+			Name:              req.Name,
+			HierarchyLevel:    req.HierarchyLevel,
+			ParentRoleID:      parent,
+			ActorMembershipID: actor,
 		})
 		switch {
 		case errors.Is(err, command.ErrRoleNameTaken):
 			writeError(w, http.StatusConflict, ErrCodeRoleNameTaken,
 				"a role with this name already exists")
 			return
-		case errors.Is(err, role.ErrHierarchyCycle):
+		case errors.Is(err, rolehierarchy.ErrCycle):
 			writeError(w, http.StatusUnprocessableEntity, ErrCodeRoleHierarchyCycle,
 				"parent_role_id creates a cycle in the role hierarchy")
 			return
-		case errors.Is(err, role.ErrHierarchyCrossTenant):
+		case errors.Is(err, rolehierarchy.ErrCrossTenant):
 			writeError(w, http.StatusUnprocessableEntity, ErrCodeRoleHierarchyCrossTenant,
 				"parent_role_id belongs to a different tenant")
+			return
+		case errors.Is(err, rolehierarchy.ErrSelfReference):
+			writeError(w, http.StatusBadRequest, ErrCodeRoleHierarchySelfReference,
+				"a role cannot be its own parent")
+			return
+		case errors.Is(err, rolehierarchy.ErrEdgeAlreadyExists):
+			writeError(w, http.StatusConflict, ErrCodeRoleHierarchyEdgeExists,
+				"role already has an active parent edge")
 			return
 		case errors.Is(err, role.ErrInvalid):
 			writeError(w, http.StatusUnprocessableEntity, ErrCodeRoleInvalid, err.Error())
@@ -118,10 +130,15 @@ func handleCreateRole(log *slog.Logger, a app.Application) http.Handler {
 	})
 }
 
-// ----- SetRoleParent (ADR 0054) ---------------------------------------------
+// ----- SetRoleParent (ADR 0058 — Wave 9.4) ----------------------------------
 
 func handleSetRoleParent(log *slog.Logger, a app.Application) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		tid, ok := tenancy.FromContext(r.Context())
+		if !ok || tid == "" {
+			writeError(w, http.StatusUnauthorized, ErrCodeInvalidCredentials, "")
+			return
+		}
 		id, ok := parseRoleIDPath(w, r)
 		if !ok {
 			return
@@ -140,9 +157,13 @@ func handleSetRoleParent(log *slog.Logger, a app.Application) http.Handler {
 			}
 			newParent = role.ID(*req.ParentRoleID)
 		}
+		actor := actorMembershipFromContext(r)
 		err := a.Commands.SetRoleParent.Handle(r.Context(), command.SetRoleParentCommand{
-			RoleID:      id,
-			NewParentID: newParent,
+			TenantID:          tenant.ID(tid),
+			RoleID:            id,
+			NewParentID:       newParent,
+			ActorMembershipID: actor,
+			Reason:            req.Reason,
 		})
 		writeRoleMutationResult(w, log, r, err)
 	})
@@ -286,6 +307,19 @@ func parseRoleIDPath(w http.ResponseWriter, r *http.Request) (role.ID, bool) {
 	return role.ID(raw), true
 }
 
+// actorMembershipFromContext extracts the caller's MembershipID from
+// the JWT claims so command handlers can populate audit columns.
+// Returns zero when no claims OR no membership claim is present
+// (system / bootstrap paths). HTTP callers under RequireFreshStamp
+// always have one.
+func actorMembershipFromContext(r *http.Request) membership.ID {
+	c, ok := authn.ClaimsFromContext(r.Context())
+	if !ok {
+		return membership.ID("")
+	}
+	return membership.ID(c.MembershipID)
+}
+
 func writeRoleMutationResult(w http.ResponseWriter, log *slog.Logger, r *http.Request, err error) {
 	switch {
 	case err == nil:
@@ -297,12 +331,21 @@ func writeRoleMutationResult(w http.ResponseWriter, log *slog.Logger, r *http.Re
 		errors.Is(err, command.ErrRoleNameTaken):
 		writeError(w, http.StatusConflict, ErrCodeRoleNameTaken,
 			"a role with this name already exists")
-	case errors.Is(err, role.ErrHierarchyCycle):
+	case errors.Is(err, rolehierarchy.ErrCycle):
 		writeError(w, http.StatusUnprocessableEntity, ErrCodeRoleHierarchyCycle,
 			"parent_role_id creates a cycle in the role hierarchy")
-	case errors.Is(err, role.ErrHierarchyCrossTenant):
+	case errors.Is(err, rolehierarchy.ErrCrossTenant):
 		writeError(w, http.StatusUnprocessableEntity, ErrCodeRoleHierarchyCrossTenant,
 			"parent_role_id belongs to a different tenant")
+	case errors.Is(err, rolehierarchy.ErrSelfReference):
+		writeError(w, http.StatusBadRequest, ErrCodeRoleHierarchySelfReference,
+			"a role cannot be its own parent")
+	case errors.Is(err, rolehierarchy.ErrEdgeAlreadyExists):
+		writeError(w, http.StatusConflict, ErrCodeRoleHierarchyEdgeExists,
+			"role already has an active parent edge")
+	case errors.Is(err, rolehierarchy.ErrInvalidReason):
+		writeError(w, http.StatusUnprocessableEntity, ErrCodeRoleHierarchyInvalidReason,
+			"reason must be 10-1024 characters when supplied")
 	case errors.Is(err, role.ErrInvalid):
 		writeError(w, http.StatusUnprocessableEntity, ErrCodeRoleInvalid, err.Error())
 	default:

@@ -10,6 +10,7 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/refreshtoken"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/role"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/rolehierarchy"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
 
@@ -490,22 +491,36 @@ func FromDomainEvent(d any) (Event, error) {
 			OccurredAtUTC: e.At.UTC(),
 		}, nil
 
-	case role.ParentChangedEvent:
-		// Old/New may be zero — emit zero UUID accordingly; mustParseUUID
-		// requires a valid string so we branch on IsZero.
-		var oldP, newP uuid.UUID
-		if !e.OldParentID.IsZero() {
-			oldP = mustParseUUID(e.OldParentID.String())
+	// ----- Role hierarchy edges (ADR 0058 — Wave 9.4) ----------------
+
+	case rolehierarchy.EstablishedEvent:
+		var establishedBy uuid.UUID
+		if !e.EstablishedByMembershipID.IsZero() {
+			establishedBy = mustParseUUID(e.EstablishedByMembershipID.String())
 		}
-		if !e.NewParentID.IsZero() {
-			newP = mustParseUUID(e.NewParentID.String())
+		return RoleHierarchyEdgeEstablishedV1{
+			EdgeID:                    mustParseUUID(e.ID.String()),
+			TenantIDClaim:             mustParseUUID(e.TenantID.String()),
+			ChildRoleID:               mustParseUUID(e.ChildRoleID.String()),
+			ParentRoleID:              mustParseUUID(e.ParentRoleID.String()),
+			EstablishedByMembershipID: establishedBy,
+			Reason:                    e.Reason,
+			OccurredAtUTC:             e.At.UTC(),
+		}, nil
+
+	case rolehierarchy.RemovedEvent:
+		var removedBy uuid.UUID
+		if !e.RemovedByMembershipID.IsZero() {
+			removedBy = mustParseUUID(e.RemovedByMembershipID.String())
 		}
-		return RoleParentChangedV1{
-			RoleID:        mustParseUUID(e.RoleID.String()),
-			TenantIDClaim: mustParseUUID(e.TenantID.String()),
-			OldParentID:   oldP,
-			NewParentID:   newP,
-			OccurredAtUTC: e.At.UTC(),
+		return RoleHierarchyEdgeRemovedV1{
+			EdgeID:                mustParseUUID(e.ID.String()),
+			TenantIDClaim:         mustParseUUID(e.TenantID.String()),
+			ChildRoleID:           mustParseUUID(e.ChildRoleID.String()),
+			ParentRoleID:          mustParseUUID(e.ParentRoleID.String()),
+			RemovedByMembershipID: removedBy,
+			RemovalReason:         e.Reason,
+			OccurredAtUTC:         e.At.UTC(),
 		}, nil
 	}
 

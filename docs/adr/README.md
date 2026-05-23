@@ -42,9 +42,10 @@ One decision per file, Michael Nygard format (Context / Decision / Consequences 
 | 0051 | Single-module types move out of `internal/common/` to `internal/identity/` | Accepted |
 | 0052 | Canonical slug lookup via `?slug=` query param | Accepted |
 | 0053 | `MustChangePassword` flag + account lockout (NIST 800-63B §5.2.2) | Accepted |
-| 0054 | Role hierarchy — organizational tree (NO permission inheritance) | Accepted |
+| 0054 | Role hierarchy — organizational tree (NO permission inheritance) | Superseded by 0058 |
 | 0055 | Permission-elevation approval workflow | Accepted |
 | 0056 | Impersonation context propagation via outbox metadata | Accepted |
 | 0057 | Email decoupling via subscribers (outbox-driven send) | Accepted |
+| 0058 | Role hierarchy as join-table aggregate (supersedes 0054) | Accepted |
 
-ADRs 0011–0026 + 0032 + 0058+ land as the relevant code lands per the master plan.
+ADRs 0011–0026 + 0032 + 0059+ land as the relevant code lands per the master plan.

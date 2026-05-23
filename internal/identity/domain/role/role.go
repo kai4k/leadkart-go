@@ -3,6 +3,13 @@
 // `Modules.Identity.Domain.Roles.Role`: per-tenant catalog, system-
 // default roles refuse mutation, soft-delete with audit, hierarchy
 // level drives `IUserHierarchyQueries` (Phase 7).
+//
+// Hierarchy (parent→child organizational tree) is owned by the
+// SEPARATE [rolehierarchy] aggregate per ADR 0058 (Wave 9.4 —
+// supersedes ADR 0054). The Role aggregate stays focused on its own
+// state (name, permissions, hierarchy_level, soft-delete). The
+// previous `parent_role_id` field + its `ChangeParent` method moved
+// out wholesale.
 package role
 
 import (
@@ -49,16 +56,6 @@ var ErrSystemDefault = errors.New("role: cannot mutate system-default role")
 // role.
 var ErrDeleted = errors.New("role: cannot mutate deleted role")
 
-// ErrHierarchyCycle is returned by [Role.ChangeParent] when the proposed
-// parent_role_id (or any of its ancestors) is the role itself. Surfaced
-// to HTTP as 422 unprocessable. ADR 0054 — three-layer cycle prevention.
-var ErrHierarchyCycle = errs.New(errs.KindInvalidInput, "role", "role hierarchy: cycle detected")
-
-// ErrHierarchyCrossTenant is returned by the adapter when the DB-level
-// trigger refuses a parent_role_id pointing at another tenant's role.
-// 422 unprocessable. ADR 0054.
-var ErrHierarchyCrossTenant = errs.New(errs.KindInvalidInput, "role", "role hierarchy: parent role belongs to a different tenant")
-
 // ID is the Role primary key (UUIDv7 string form).
 type ID string
 
@@ -78,6 +75,9 @@ func (i ID) String() string { return string(i) }
 //     SuperAdmin role) — drives JWT `is_super_user` claim per
 //     `multi-tenancy.md` "SuperUser god-mode."
 //   - deleted is one-way; UpdateByID rejects mutations after delete.
+//
+// Hierarchy/parent links live in the [rolehierarchy] aggregate per
+// ADR 0058 — they're NOT a property of Role.
 type Role struct {
 	id              ID
 	tenantID        tenant.ID
@@ -90,13 +90,6 @@ type Role struct {
 	deleted         bool
 	deletedAt       time.Time
 	deletedBy       string
-
-	// parentRoleID is the SINGLE-PARENT hierarchy link per ADR 0054.
-	// Zero value = root (no inheritance). MUST point to a role in the
-	// same tenant (DB trigger enforces; domain ChangeParent guards via
-	// caller-supplied ancestor lookup). Effective permission set is
-	// own grants ∪ transitive ancestor grants.
-	parentRoleID ID
 
 	events []Event
 }
@@ -184,14 +177,6 @@ func (r *Role) IsSuperAdmin() bool { return r.isSuperAdmin }
 // HierarchyLevelMax]).
 func (r *Role) HierarchyLevel() int { return r.hierarchyLevel }
 
-// ParentRoleID returns the single-parent hierarchy link per ADR 0054.
-// Zero value = root (no inheritance). The PermissionResolver walks
-// this transitively to compute the effective permission set.
-func (r *Role) ParentRoleID() ID { return r.parentRoleID }
-
-// HasParent reports whether the role has a non-root parent_role_id.
-func (r *Role) HasParent() bool { return !r.parentRoleID.IsZero() }
-
 // CreatedAt returns the immutable creation timestamp.
 func (r *Role) CreatedAt() time.Time { return r.createdAt }
 
@@ -269,67 +254,6 @@ func (r *Role) ChangeHierarchyLevel(level int) error {
 		return nil
 	}
 	r.hierarchyLevel = level
-	return nil
-}
-
-// ChangeParent sets the role's parent_role_id, enforcing the
-// no-cycle invariant per ADR 0054.
-//
-// newParentID == zero ID clears the parent (role becomes a root).
-// Direct self-reference (newParentID == r.id) is rejected immediately.
-//
-// ancestorLookup is the caller-supplied closure that returns the
-// full ancestor chain of newParentID (root-first OR any order — only
-// set-membership matters here). The application service (typically
-// SetRoleParentHandler) walks the repository to provide this. Passing
-// nil is allowed for the clear-parent path; otherwise required.
-//
-// Returns [ErrHierarchyCycle] when:
-//   - newParentID == r.id (direct cycle), OR
-//   - r.id appears anywhere in newParentID's ancestor chain (indirect).
-//
-// Emits [ParentChangedEvent] on success; idempotent (setting the
-// current parent is a no-op, no event).
-//
-// Cross-tenant prevention lives at the DB-trigger layer (ADR 0054
-// triple-layer guard); the domain only enforces self-cycle invariants.
-func (r *Role) ChangeParent(
-	newParentID ID,
-	ancestorLookup func(ID) ([]ID, error),
-) error {
-	if err := r.ensureMutable(); err != nil {
-		return err
-	}
-	if newParentID == r.parentRoleID {
-		return nil
-	}
-	if !newParentID.IsZero() {
-		if newParentID == r.id {
-			return fmt.Errorf("%w: role %s cannot be its own parent", ErrHierarchyCycle, r.id)
-		}
-		if ancestorLookup == nil {
-			return fmt.Errorf("%w: ancestorLookup required for non-clear parent change", ErrInvalid)
-		}
-		ancestors, err := ancestorLookup(newParentID)
-		if err != nil {
-			return fmt.Errorf("role: lookup ancestors of proposed parent: %w", err)
-		}
-		for _, anc := range ancestors {
-			if anc == r.id {
-				return fmt.Errorf("%w: proposed parent %s descends from role %s",
-					ErrHierarchyCycle, newParentID, r.id)
-			}
-		}
-	}
-	old := r.parentRoleID
-	r.parentRoleID = newParentID
-	r.recordEvent(ParentChangedEvent{
-		RoleID:      r.id,
-		TenantID:    r.tenantID,
-		OldParentID: old,
-		NewParentID: newParentID,
-		At:          clock.Now(),
-	})
 	return nil
 }
 
@@ -489,7 +413,6 @@ type Snapshot struct {
 	IsDeleted       bool
 	DeletedAt       time.Time
 	DeletedBy       string
-	ParentRoleID    ID // ADR 0054 — zero = root
 }
 
 // UnmarshalFromDB rehydrates a Role from persistence. Repository-only
@@ -510,7 +433,6 @@ func UnmarshalFromDB(s Snapshot) *Role {
 		deleted:         s.IsDeleted,
 		deletedAt:       s.DeletedAt,
 		deletedBy:       s.DeletedBy,
-		parentRoleID:    s.ParentRoleID,
 	}
 }
 

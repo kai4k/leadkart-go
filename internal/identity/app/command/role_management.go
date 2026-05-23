@@ -4,10 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/leadkart/leadkart-go/internal/common/ids"
+	"github.com/leadkart/leadkart-go/internal/common/pg"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/permission"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/role"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/rolehierarchy"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
 
@@ -30,16 +34,21 @@ var ErrRoleNameTaken = errors.New("role: name already taken in this tenant")
 // seed-only per multi-tenancy.md "SuperUser god-mode". Tenant admins
 // cannot promote a custom role to SuperAdmin via HTTP.
 //
-// ParentRoleID (ADR 0054) — optional parent for the new role. Zero
-// value = root (no inheritance). Cross-tenant + cycle prevention runs
-// at the DB-trigger layer; the domain accepts it as a constructor-time
-// hint (we don't fetch ancestors here because the role doesn't exist
-// yet — a fresh role can't be in its own ancestor chain).
+// ParentRoleID (ADR 0058 — Wave 9.4) — optional parent for the new
+// role. Zero value = root (no edge created). When set, the handler
+// creates the Role + the rolehierarchy.Edge in one UoW transaction.
+// Cross-tenant + cycle prevention runs declaratively at the DB layer
+// (composite FK + cycle trigger).
+//
+// ActorMembershipID is injected from the JWT — recorded on the edge
+// for audit. Zero is tolerated (system / bootstrap paths).
 type CreateRoleCommand struct {
-	TenantID       tenant.ID
-	Name           string
-	HierarchyLevel int
-	ParentRoleID   role.ID
+	TenantID          tenant.ID
+	Name              string
+	HierarchyLevel    int
+	ParentRoleID      role.ID
+	ActorMembershipID membership.ID
+	Reason            string
 }
 
 // CreateRoleResult returns the new role's ID for the caller.
@@ -50,24 +59,31 @@ type CreateRoleResult struct {
 // CreateRoleHandler runs the create flow.
 type CreateRoleHandler struct {
 	roles role.Repository
+	edges rolehierarchy.Repository
+	uow   pg.UnitOfWork
+	now   func() time.Time
 }
 
-// NewCreateRoleHandler wires the handler.
-func NewCreateRoleHandler(r role.Repository) CreateRoleHandler {
+// NewCreateRoleHandler wires the handler. `edges` may be nil when the
+// caller knows ParentRoleID will always be zero (test fixtures); the
+// handler refuses to seed an edge in that case.
+func NewCreateRoleHandler(r role.Repository, edges rolehierarchy.Repository, uow pg.UnitOfWork, now func() time.Time) CreateRoleHandler {
 	if r == nil {
 		panic("command: NewCreateRoleHandler roles repository required")
 	}
-	return CreateRoleHandler{roles: r}
+	if now == nil {
+		now = time.Now
+	}
+	return CreateRoleHandler{roles: r, edges: edges, uow: uow, now: now}
 }
 
 // Handle constructs a custom role + persists it. isSystemDefault +
 // isSuperAdmin are always false from this entry point.
 //
-// ADR 0054 — when ParentRoleID is set, the aggregate's [role.Role.ChangeParent]
-// is invoked before Add, using the repo's GetAncestors to detect cycles.
-// A fresh role can't appear in its own ancestor chain (it doesn't exist
-// yet), so the only failure mode is "parent doesn't exist" / cross-tenant
-// parent — surfaced by the DB trigger on Add as ErrHierarchyCrossTenant.
+// When ParentRoleID is set, BOTH the role insert + the edge insert
+// run inside one [pg.UnitOfWork] transaction so partial failure (e.g.
+// the edge insert hits a cycle/cross-tenant DB rejection) rolls back
+// the role insert too. ADR 0058.
 func (h CreateRoleHandler) Handle(ctx context.Context, cmd CreateRoleCommand) (CreateRoleResult, error) {
 	if cmd.TenantID.IsZero() {
 		return CreateRoleResult{}, errors.New("create_role: tenant id required")
@@ -77,32 +93,55 @@ func (h CreateRoleHandler) Handle(ctx context.Context, cmd CreateRoleCommand) (C
 	if err != nil {
 		return CreateRoleResult{}, err
 	}
-	if !cmd.ParentRoleID.IsZero() {
-		// New role can't be a cycle of itself; the lookup closure still
-		// has to satisfy the aggregate's non-nil contract.
-		if err := r.ChangeParent(cmd.ParentRoleID, func(id role.ID) ([]role.ID, error) {
-			ancs, lerr := h.roles.GetAncestors(ctx, id)
-			if lerr != nil {
-				return nil, lerr
+
+	// Plain-role-no-parent path: single Add, no UoW required.
+	if cmd.ParentRoleID.IsZero() {
+		if err := h.roles.Add(ctx, r); err != nil {
+			if errors.Is(err, role.ErrNameTaken) {
+				return CreateRoleResult{}, ErrRoleNameTaken
 			}
-			out := make([]role.ID, 0, len(ancs))
-			for _, a := range ancs {
-				out = append(out, a.ID())
-			}
-			return out, nil
-		}); err != nil {
-			return CreateRoleResult{}, err
+			return CreateRoleResult{}, fmt.Errorf("create_role: %w", err)
 		}
+		return CreateRoleResult{RoleID: r.ID()}, nil
 	}
-	if err := h.roles.Add(ctx, r); err != nil {
-		if errors.Is(err, role.ErrNameTaken) {
+
+	// Role + parent-edge path: atomic UoW. Cycle is impossible
+	// (fresh role can't already be an ancestor), but cross-tenant +
+	// parent-not-found still need the DB to reject — surfaces via
+	// translateHierarchyEdgeError.
+	if h.edges == nil || h.uow == nil {
+		return CreateRoleResult{}, errors.New("create_role: parent edge requires edges repo + uow wiring")
+	}
+	edge, err := rolehierarchy.New(
+		rolehierarchy.ID(ids.NewV7().String()),
+		cmd.TenantID,
+		r.ID(),
+		cmd.ParentRoleID,
+		cmd.ActorMembershipID,
+		cmd.Reason,
+		h.now(),
+	)
+	if err != nil {
+		return CreateRoleResult{}, err
+	}
+
+	txErr := h.uow.WithinTx(ctx, pg.TxScopeTenant, func(ctx context.Context) error {
+		if err := h.roles.Add(ctx, r); err != nil {
+			return err
+		}
+		return h.edges.Add(ctx, edge)
+	})
+	if txErr != nil {
+		if errors.Is(txErr, role.ErrNameTaken) {
 			return CreateRoleResult{}, ErrRoleNameTaken
 		}
-		if errors.Is(err, role.ErrHierarchyCycle) ||
-			errors.Is(err, role.ErrHierarchyCrossTenant) {
-			return CreateRoleResult{}, err
+		if errors.Is(txErr, rolehierarchy.ErrCycle) ||
+			errors.Is(txErr, rolehierarchy.ErrCrossTenant) ||
+			errors.Is(txErr, rolehierarchy.ErrSelfReference) ||
+			errors.Is(txErr, rolehierarchy.ErrEdgeAlreadyExists) {
+			return CreateRoleResult{}, txErr
 		}
-		return CreateRoleResult{}, fmt.Errorf("create_role: %w", err)
+		return CreateRoleResult{}, fmt.Errorf("create_role: %w", txErr)
 	}
 	return CreateRoleResult{RoleID: r.ID()}, nil
 }
@@ -349,63 +388,141 @@ func (h DeleteRoleHandler) Handle(ctx context.Context, cmd DeleteRoleCommand) er
 	return nil
 }
 
-// ----- SetRoleParent (ADR 0054) ---------------------------------------------
+// ----- SetRoleParent (ADR 0058 — Wave 9.4) ----------------------------------
 
 // SetRoleParentCommand carries the validated set-parent input.
 //
-// NewParentID == zero clears the parent (role becomes a root). The
-// handler runs in-memory cycle detection via GetAncestors before the
-// aggregate mutation; the DB trigger is the final strict gate.
+// NewParentID == zero clears the parent (role becomes a root) by
+// soft-deleting any existing active edge. When non-zero the handler
+// atomically replaces any existing active edge: soft-delete old +
+// insert new in one UoW transaction so the single-parent invariant
+// holds without a window where the partial unique index would
+// reject the insert.
+//
+// TenantID is the caller's tenant scope (injected from JWT context
+// by the HTTP layer); composite FKs reject cross-tenant inserts.
+//
+// ActorMembershipID is the caller's membership — recorded on both
+// the establish + remove sides for audit. Zero is tolerated (system /
+// bootstrap paths) but HTTP callers always have one.
+//
+// Reason is optional; when supplied propagates onto the new edge
+// (establishment) OR onto the cleared edge (removal). Subject to
+// [rolehierarchy.MinReasonLength].
 type SetRoleParentCommand struct {
-	RoleID      role.ID
-	NewParentID role.ID
+	TenantID          tenant.ID
+	RoleID            role.ID
+	NewParentID       role.ID
+	ActorMembershipID membership.ID
+	Reason            string
 }
 
 // SetRoleParentHandler runs the set-parent flow.
 type SetRoleParentHandler struct {
-	roles role.Repository
+	edges rolehierarchy.Repository
+	uow   pg.UnitOfWork
+	now   func() time.Time
 }
 
-// NewSetRoleParentHandler wires the handler.
-func NewSetRoleParentHandler(r role.Repository) SetRoleParentHandler {
-	if r == nil {
-		panic("command: NewSetRoleParentHandler roles repository required")
+// NewSetRoleParentHandler wires the handler. uow may be nil only in
+// the rare case where the caller is already inside a uow tx (test
+// fixtures); production wiring always supplies one.
+func NewSetRoleParentHandler(edges rolehierarchy.Repository, uow pg.UnitOfWork, now func() time.Time) SetRoleParentHandler {
+	if edges == nil {
+		panic("command: NewSetRoleParentHandler edges repository required")
 	}
-	return SetRoleParentHandler{roles: r}
+	if uow == nil {
+		panic("command: NewSetRoleParentHandler uow required")
+	}
+	if now == nil {
+		now = time.Now
+	}
+	return SetRoleParentHandler{edges: edges, uow: uow, now: now}
 }
 
-// Handle dispatches to [Role.ChangeParent] inside the repo's UpdateByID
-// transaction. Pre-validates the parent's ancestor chain so the best
-// ergonomic error message wins; the DB trigger is the strict-gate
-// fallback per ADR 0054.
+// Handle replaces the active parent edge for cmd.RoleID. Atomic via
+// pg.UnitOfWork. Self-reference rejected at the aggregate; cycle +
+// cross-tenant rejected at the DB layer (cycle trigger + composite
+// FK fire on insert).
 func (h SetRoleParentHandler) Handle(ctx context.Context, cmd SetRoleParentCommand) error {
 	if cmd.RoleID.IsZero() {
 		return errors.New("set_role_parent: role id required")
 	}
-	err := h.roles.UpdateByID(ctx, cmd.RoleID, func(r *role.Role) (bool, error) {
-		if err := r.ChangeParent(cmd.NewParentID, func(id role.ID) ([]role.ID, error) {
-			ancs, lerr := h.roles.GetAncestors(ctx, id)
-			if lerr != nil {
-				return nil, lerr
-			}
-			out := make([]role.ID, 0, len(ancs))
-			for _, a := range ancs {
-				out = append(out, a.ID())
-			}
-			return out, nil
-		}); err != nil {
+	if cmd.NewParentID.IsZero() {
+		// Clear-parent path: only soft-delete; no new edge to insert.
+		return h.clearParent(ctx, cmd)
+	}
+	if cmd.TenantID.IsZero() {
+		return errors.New("set_role_parent: tenant id required for non-clear path")
+	}
+
+	return h.uow.WithinTx(ctx, pg.TxScopeTenant, func(ctx context.Context) error {
+		// Step 1: soft-delete any existing active edge for this child.
+		// Idempotent — when the child has no parent, GetActiveByChild
+		// returns ErrEdgeNotFound + we move on.
+		if rmErr := h.removeExistingEdge(ctx, cmd); rmErr != nil {
+			return rmErr
+		}
+
+		// Step 2: insert the new edge. Aggregate rejects self-reference;
+		// DB rejects cycle + cross-tenant via composite FK / cycle trigger.
+		edge, err := rolehierarchy.New(
+			rolehierarchy.ID(ids.NewV7().String()),
+			cmd.TenantID,
+			cmd.RoleID,
+			cmd.NewParentID,
+			cmd.ActorMembershipID,
+			cmd.Reason,
+			h.now(),
+		)
+		if err != nil {
+			return err
+		}
+		return h.edges.Add(ctx, edge)
+	})
+}
+
+// clearParent handles the NewParentID-is-zero branch. Single
+// soft-delete — no need to open a UoW since there's only one write.
+func (h SetRoleParentHandler) clearParent(ctx context.Context, cmd SetRoleParentCommand) error {
+	existing, gErr := h.edges.GetActiveByChild(ctx, cmd.RoleID)
+	if errors.Is(gErr, rolehierarchy.ErrEdgeNotFound) {
+		// Already a root — idempotent no-op.
+		return nil
+	}
+	if gErr != nil {
+		return fmt.Errorf("set_role_parent: load existing edge: %w", gErr)
+	}
+	now := h.now()
+	rmErr := h.edges.UpdateByID(ctx, existing.ID(), func(e *rolehierarchy.Edge) (bool, error) {
+		if err := e.Remove(cmd.ActorMembershipID, cmd.Reason, now); err != nil {
 			return false, err
 		}
 		return true, nil
 	})
-	switch {
-	case errors.Is(err, role.ErrNotFound):
-		return ErrRoleNotFound
-	case errors.Is(err, role.ErrHierarchyCycle),
-		errors.Is(err, role.ErrHierarchyCrossTenant):
-		return err
-	case err != nil:
-		return fmt.Errorf("set_role_parent: %w", err)
+	if rmErr != nil {
+		return fmt.Errorf("set_role_parent: soft-delete existing: %w", rmErr)
 	}
 	return nil
+}
+
+// removeExistingEdge soft-deletes the current active edge (if any).
+// Runs inside an open UoW tx (the soft-delete + the subsequent
+// insert must commit atomically to preserve the single-parent
+// invariant without a transient window where both rows are active).
+func (h SetRoleParentHandler) removeExistingEdge(ctx context.Context, cmd SetRoleParentCommand) error {
+	existing, gErr := h.edges.GetActiveByChild(ctx, cmd.RoleID)
+	if errors.Is(gErr, rolehierarchy.ErrEdgeNotFound) {
+		return nil
+	}
+	if gErr != nil {
+		return fmt.Errorf("set_role_parent: load existing edge: %w", gErr)
+	}
+	now := h.now()
+	return h.edges.UpdateByID(ctx, existing.ID(), func(e *rolehierarchy.Edge) (bool, error) {
+		if err := e.Remove(cmd.ActorMembershipID, cmd.Reason, now); err != nil {
+			return false, err
+		}
+		return true, nil
+	})
 }

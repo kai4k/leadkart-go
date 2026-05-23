@@ -8,9 +8,13 @@ import (
 
 	"github.com/leadkart/leadkart-go/internal/common/clock"
 	"github.com/leadkart/leadkart-go/internal/common/ids"
+	"github.com/leadkart/leadkart-go/internal/common/pagination"
+	"github.com/leadkart/leadkart-go/internal/common/pg"
 	"github.com/leadkart/leadkart-go/internal/identity/app/command"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/permission"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/role"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/rolehierarchy"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
 
@@ -88,31 +92,144 @@ func (r *fakeRoleRepo) ListByTenant(_ context.Context, tid tenant.ID) ([]*role.R
 	return out, nil
 }
 
-// GetAncestors walks parent_role_id chain in-memory; ADR 0054.
-func (r *fakeRoleRepo) GetAncestors(_ context.Context, id role.ID) ([]*role.Role, error) {
-	x, ok := r.roles[id]
-	if !ok {
-		return nil, nil
+var _ role.Repository = (*fakeRoleRepo)(nil)
+
+// fakeEdgeRepo is the minimum [rolehierarchy.Repository] surface the
+// SetRoleParent + CreateRole-with-parent handlers exercise. Per-tenant
+// in-memory map; enforces single-parent invariant (mirroring the
+// partial unique index) + multi-hop cycle detection (mirroring the DB
+// trigger) so the unit tests cover the same failure modes the adapter
+// translates from SQL.
+type fakeEdgeRepo struct {
+	edges map[rolehierarchy.ID]*rolehierarchy.Edge
+}
+
+func newFakeEdgeRepo() *fakeEdgeRepo {
+	return &fakeEdgeRepo{edges: make(map[rolehierarchy.ID]*rolehierarchy.Edge)}
+}
+
+func (f *fakeEdgeRepo) Add(_ context.Context, e *rolehierarchy.Edge) error {
+	// Single-parent invariant — refuse a second active edge for the
+	// same child (mirrors uq_role_hierarchy_active_edge_per_child).
+	for _, existing := range f.edges {
+		if existing.IsActive() && existing.ChildRoleID() == e.ChildRoleID() {
+			return rolehierarchy.ErrEdgeAlreadyExists
+		}
 	}
-	var out []*role.Role
-	seen := map[role.ID]struct{}{id: {}}
-	cur := x.ParentRoleID()
-	for !cur.IsZero() {
-		if _, dup := seen[cur]; dup {
-			break
+	// Multi-hop cycle detection — walking child's proposed parent
+	// upward, would we ever land back on the child? (mirrors
+	// edge_check_cycle trigger).
+	if hasCycle(f.edges, e.ChildRoleID(), e.ParentRoleID()) {
+		return rolehierarchy.ErrCycle
+	}
+	f.edges[e.ID()] = e
+	return nil
+}
+
+func (f *fakeEdgeRepo) GetActiveByChild(_ context.Context, child role.ID) (*rolehierarchy.Edge, error) {
+	for _, e := range f.edges {
+		if e.IsActive() && e.ChildRoleID() == child {
+			return e, nil
 		}
-		seen[cur] = struct{}{}
-		nxt, ok := r.roles[cur]
-		if !ok {
-			break
+	}
+	return nil, rolehierarchy.ErrEdgeNotFound
+}
+
+func (f *fakeEdgeRepo) UpdateByID(_ context.Context, id rolehierarchy.ID, fn func(*rolehierarchy.Edge) (bool, error)) error {
+	e, ok := f.edges[id]
+	if !ok {
+		return rolehierarchy.ErrEdgeNotFound
+	}
+	commit, err := fn(e)
+	if err != nil {
+		return err
+	}
+	_ = commit
+	return nil
+}
+
+func (f *fakeEdgeRepo) GetAncestorsByChild(_ context.Context, child role.ID) ([]*rolehierarchy.Edge, error) {
+	var out []*rolehierarchy.Edge
+	cur := child
+	seen := map[role.ID]struct{}{child: {}}
+	for {
+		var step *rolehierarchy.Edge
+		for _, e := range f.edges {
+			if e.IsActive() && e.ChildRoleID() == cur {
+				step = e
+				break
+			}
 		}
-		out = append(out, nxt)
-		cur = nxt.ParentRoleID()
+		if step == nil {
+			return out, nil
+		}
+		if _, dup := seen[step.ParentRoleID()]; dup {
+			return out, nil
+		}
+		seen[step.ParentRoleID()] = struct{}{}
+		out = append(out, step)
+		cur = step.ParentRoleID()
+	}
+}
+
+func (f *fakeEdgeRepo) ListActiveByParent(_ context.Context, parent role.ID) ([]*rolehierarchy.Edge, error) {
+	var out []*rolehierarchy.Edge
+	for _, e := range f.edges {
+		if e.IsActive() && e.ParentRoleID() == parent {
+			out = append(out, e)
+		}
 	}
 	return out, nil
 }
 
-var _ role.Repository = (*fakeRoleRepo)(nil)
+var _ rolehierarchy.Repository = (*fakeEdgeRepo)(nil)
+
+// hasCycle reports whether adding edge child→parent would close a
+// loop given the existing edge set.
+func hasCycle(edges map[rolehierarchy.ID]*rolehierarchy.Edge, child, parent role.ID) bool {
+	cur := parent
+	seen := map[role.ID]struct{}{child: {}}
+	for {
+		if _, dup := seen[cur]; dup {
+			return true
+		}
+		seen[cur] = struct{}{}
+		var step *rolehierarchy.Edge
+		for _, e := range edges {
+			if e.IsActive() && e.ChildRoleID() == cur {
+				step = e
+				break
+			}
+		}
+		if step == nil {
+			return false
+		}
+		cur = step.ParentRoleID()
+	}
+}
+
+// fakeUoW is a no-op UnitOfWork — calls fn directly without ctx
+// propagation. The fake repos don't use TxFromContext, so this is
+// sufficient for unit-test coverage. Adapter integration tests are
+// the source of truth for real-tx atomicity.
+type fakeUoW struct{}
+
+func (fakeUoW) WithinTx(ctx context.Context, _ pg.TxScope, fn func(context.Context) error) error {
+	return fn(ctx)
+}
+
+// nowFunc returns a stable wall-clock for deterministic tests.
+func nowFunc() time.Time {
+	return time.Date(2026, 5, 23, 12, 0, 0, 0, time.UTC)
+}
+
+// silence unused-imports linter when only some tests reference
+// pagination indirectly; helps tighten the import set if it drifts.
+var _ = pagination.Cursor{}
+
+// silence unused-imports linter if membership.ID isn't referenced in
+// every test.
+var _ = membership.ID("")
 
 func newCustomRole(t *testing.T, repo *fakeRoleRepo, name string) *role.Role {
 	t.Helper()
@@ -133,7 +250,7 @@ func TestCreateRole_Succeeds(t *testing.T) {
 	clock.Set(time.Date(2026, 5, 7, 12, 0, 0, 0, time.UTC))
 	t.Cleanup(clock.Reset)
 	repo := newFakeRoleRepo()
-	h := command.NewCreateRoleHandler(repo)
+	h := command.NewCreateRoleHandler(repo, newFakeEdgeRepo(), fakeUoW{}, nowFunc)
 	out, err := h.Handle(t.Context(), command.CreateRoleCommand{
 		TenantID:       tenant.ID("33333333-3333-3333-3333-333333333333"),
 		Name:           "Sales Lead",
@@ -153,7 +270,7 @@ func TestCreateRole_RejectsDuplicateName(t *testing.T) {
 	t.Cleanup(clock.Reset)
 	repo := newFakeRoleRepo()
 	_ = newCustomRole(t, repo, "Sales Manager")
-	h := command.NewCreateRoleHandler(repo)
+	h := command.NewCreateRoleHandler(repo, newFakeEdgeRepo(), fakeUoW{}, nowFunc)
 	_, err := h.Handle(t.Context(), command.CreateRoleCommand{
 		TenantID:       tenant.ID("33333333-3333-3333-3333-333333333333"),
 		Name:           "Sales Manager",
@@ -256,5 +373,134 @@ func TestDeleteRole_Succeeds(t *testing.T) {
 	}
 	if !r.IsDeleted() {
 		t.Error("expected role marked deleted")
+	}
+}
+
+// ----- SetRoleParent (ADR 0058) --------------------------------------------
+
+func TestSetRoleParent_SetsParentOnRootChild(t *testing.T) {
+	t.Parallel()
+	repo := newFakeRoleRepo()
+	edges := newFakeEdgeRepo()
+	tid := tenant.ID("33333333-3333-3333-3333-333333333333")
+	child := newCustomRole(t, repo, "Junior")
+	parent := newCustomRole(t, repo, "Manager")
+
+	h := command.NewSetRoleParentHandler(edges, fakeUoW{}, nowFunc)
+	if err := h.Handle(t.Context(), command.SetRoleParentCommand{
+		TenantID:    tid,
+		RoleID:      child.ID(),
+		NewParentID: parent.ID(),
+	}); err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	got, err := edges.GetActiveByChild(t.Context(), child.ID())
+	if err != nil {
+		t.Fatalf("GetActiveByChild: %v", err)
+	}
+	if got.ParentRoleID() != parent.ID() {
+		t.Errorf("ParentRoleID = %s, want %s", got.ParentRoleID(), parent.ID())
+	}
+}
+
+func TestSetRoleParent_ReplacesExistingParent(t *testing.T) {
+	t.Parallel()
+	repo := newFakeRoleRepo()
+	edges := newFakeEdgeRepo()
+	tid := tenant.ID("33333333-3333-3333-3333-333333333333")
+	child := newCustomRole(t, repo, "Junior")
+	oldParent := newCustomRole(t, repo, "OldManager")
+	newParent := newCustomRole(t, repo, "NewManager")
+
+	h := command.NewSetRoleParentHandler(edges, fakeUoW{}, nowFunc)
+	// Seed initial parent.
+	if err := h.Handle(t.Context(), command.SetRoleParentCommand{
+		TenantID:    tid,
+		RoleID:      child.ID(),
+		NewParentID: oldParent.ID(),
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	// Replace.
+	if err := h.Handle(t.Context(), command.SetRoleParentCommand{
+		TenantID:    tid,
+		RoleID:      child.ID(),
+		NewParentID: newParent.ID(),
+	}); err != nil {
+		t.Fatalf("replace: %v", err)
+	}
+	got, err := edges.GetActiveByChild(t.Context(), child.ID())
+	if err != nil {
+		t.Fatalf("GetActiveByChild: %v", err)
+	}
+	if got.ParentRoleID() != newParent.ID() {
+		t.Errorf("ParentRoleID = %s, want %s", got.ParentRoleID(), newParent.ID())
+	}
+}
+
+func TestSetRoleParent_ClearsParent(t *testing.T) {
+	t.Parallel()
+	repo := newFakeRoleRepo()
+	edges := newFakeEdgeRepo()
+	tid := tenant.ID("33333333-3333-3333-3333-333333333333")
+	child := newCustomRole(t, repo, "Junior")
+	parent := newCustomRole(t, repo, "Manager")
+
+	h := command.NewSetRoleParentHandler(edges, fakeUoW{}, nowFunc)
+	if err := h.Handle(t.Context(), command.SetRoleParentCommand{
+		TenantID: tid, RoleID: child.ID(), NewParentID: parent.ID(),
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	// Clear by passing zero parent + reason long enough for the audit floor.
+	if err := h.Handle(t.Context(), command.SetRoleParentCommand{
+		TenantID: tid,
+		RoleID:   child.ID(),
+		Reason:   "promotion to root role for org restructure",
+	}); err != nil {
+		t.Fatalf("clear: %v", err)
+	}
+	if _, err := edges.GetActiveByChild(t.Context(), child.ID()); !errors.Is(err, rolehierarchy.ErrEdgeNotFound) {
+		t.Fatalf("expected no active edge after clear, got: %v", err)
+	}
+}
+
+func TestSetRoleParent_RejectsSelfReference(t *testing.T) {
+	t.Parallel()
+	repo := newFakeRoleRepo()
+	edges := newFakeEdgeRepo()
+	tid := tenant.ID("33333333-3333-3333-3333-333333333333")
+	child := newCustomRole(t, repo, "Junior")
+
+	h := command.NewSetRoleParentHandler(edges, fakeUoW{}, nowFunc)
+	err := h.Handle(t.Context(), command.SetRoleParentCommand{
+		TenantID: tid, RoleID: child.ID(), NewParentID: child.ID(),
+	})
+	if !errors.Is(err, rolehierarchy.ErrSelfReference) {
+		t.Fatalf("err = %v, want ErrSelfReference", err)
+	}
+}
+
+func TestSetRoleParent_RejectsMultiHopCycle(t *testing.T) {
+	t.Parallel()
+	repo := newFakeRoleRepo()
+	edges := newFakeEdgeRepo()
+	tid := tenant.ID("33333333-3333-3333-3333-333333333333")
+	a := newCustomRole(t, repo, "RoleA")
+	b := newCustomRole(t, repo, "RoleB")
+
+	h := command.NewSetRoleParentHandler(edges, fakeUoW{}, nowFunc)
+	// b → a (legal).
+	if err := h.Handle(t.Context(), command.SetRoleParentCommand{
+		TenantID: tid, RoleID: b.ID(), NewParentID: a.ID(),
+	}); err != nil {
+		t.Fatalf("b → a: %v", err)
+	}
+	// a → b would close the loop.
+	err := h.Handle(t.Context(), command.SetRoleParentCommand{
+		TenantID: tid, RoleID: a.ID(), NewParentID: b.ID(),
+	})
+	if !errors.Is(err, rolehierarchy.ErrCycle) {
+		t.Fatalf("expected ErrCycle, got: %v", err)
 	}
 }

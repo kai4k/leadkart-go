@@ -187,8 +187,6 @@ type IdentityRole struct {
 	IsDeleted       bool
 	DeletedAt       pgtype.Timestamptz
 	DeletedBy       *string
-	// ADR 0054 — single-parent hierarchy. NULL = root (no inheritance). Effective permission set walks the chain upward + unions grants. Cycle + cross-tenant prevented by identity.role_check_hierarchy() trigger.
-	ParentRoleID pgtype.UUID
 }
 
 // Membership ↔ Role junction with denormalised tenant_id. Composite FK ensures no cross-tenant role assignment.
@@ -197,6 +195,20 @@ type IdentityRoleAssignment struct {
 	RoleID       pgtype.UUID
 	TenantID     pgtype.UUID
 	AssignedAt   pgtype.Timestamptz
+}
+
+// ADR 0058 — role-hierarchy aggregate (Wave 9.4). One row per directed parent→child edge. Soft-delete preserves history. Single-parent invariant via partial unique index uq_role_hierarchy_active_edge_per_child.
+type IdentityRoleHierarchyEdge struct {
+	ID                        pgtype.UUID
+	TenantID                  pgtype.UUID
+	ChildRoleID               pgtype.UUID
+	ParentRoleID              pgtype.UUID
+	EstablishedAt             pgtype.Timestamptz
+	EstablishedByMembershipID pgtype.UUID
+	Reason                    *string
+	RemovedAt                 pgtype.Timestamptz
+	RemovedByMembershipID     pgtype.UUID
+	RemovalReason             *string
 }
 
 // Tenant aggregate root. Each row IS a tenant; not tenant-scoped (no RLS).

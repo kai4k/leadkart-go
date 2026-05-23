@@ -74,19 +74,11 @@ type Repository interface {
 	// ordered by hierarchy_level, name. Used by admin role-management
 	// UI + the DefaultRoleCatalog idempotency check.
 	ListByTenant(ctx context.Context, tenantID tenant.ID) ([]*Role, error)
-
-	// GetAncestors returns the ancestor chain of `id` (parent → grandparent
-	// → … root). The role itself is NOT included; empty result = root role
-	// (no parent). ADR 0054 — used by [Role.ChangeParent]'s cycle-detection
-	// closure + by `SetRoleParentHandler`'s pre-validation pass to provide
-	// the best ergonomic error message before the DB trigger fires.
-	//
-	// Soft-deleted ancestors are still returned (parent_role_id FK uses
-	// ON DELETE SET NULL — a soft-deleted parent looks deleted but the
-	// chain itself is intact until a hard delete; for the cycle check we
-	// only care about set-membership, not liveness).
-	GetAncestors(ctx context.Context, id ID) ([]*Role, error)
 }
+
+// Note: GetAncestors retired in Wave 9.4 (ADR 0058). The
+// rolehierarchy.Repository.GetAncestorsByChild method now owns
+// ancestor walks against the dedicated edges table.
 
 // Compile-time guarantee that the sentinel errors are wrapped-comparable.
 var _ = errors.Is

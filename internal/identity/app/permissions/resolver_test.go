@@ -73,30 +73,6 @@ func (f *fakeRoleRepo) GetByIDs(_ context.Context, ids []role.ID) ([]*role.Role,
 	return out, nil
 }
 
-// GetAncestors walks parent chain upward; excludes the seed; ADR 0054.
-func (f *fakeRoleRepo) GetAncestors(_ context.Context, id role.ID) ([]*role.Role, error) {
-	r, ok := f.roles[id]
-	if !ok {
-		return nil, nil
-	}
-	var out []*role.Role
-	seen := map[role.ID]struct{}{id: {}}
-	cur := r.ParentRoleID()
-	for !cur.IsZero() {
-		if _, dup := seen[cur]; dup {
-			break
-		}
-		nxt, ok := f.roles[cur]
-		if !ok {
-			break
-		}
-		seen[cur] = struct{}{}
-		out = append(out, nxt)
-		cur = nxt.ParentRoleID()
-	}
-	return out, nil
-}
-
 func (f *fakeRoleRepo) Add(context.Context, *role.Role) error {
 	return errors.New("fake: Add unused")
 }
