@@ -105,6 +105,20 @@ func handleListLeads(log *slog.Logger, a app.Application) http.Handler {
 			selfFilter = c.MembershipID
 		}
 
+		// Per reviewer H8: when SelfFilter is active, a caller-supplied
+		// ?assignee=X that points at a DIFFERENT membership is a
+		// privilege probe — they're trying to filter on someone else's
+		// caseload despite lacking ReadAll. The SQL AND-combines both
+		// filters (intersection), so historically these returned an
+		// empty page silently. 403 with a clear code surfaces intent.
+		// Same-membership ?assignee=self is harmless + the SQL collapses
+		// to a single predicate.
+		if selfFilter != "" && filter.AssigneeMembershipID != "" && filter.AssigneeMembershipID != selfFilter {
+			writeError(w, http.StatusForbidden, errCodeForbidden,
+				"caller lacks crm.leads.read_all; ?assignee must equal the caller's own membership")
+			return
+		}
+
 		page, err := a.Queries.ListLeads.Handle(r.Context(), query.ListLeadsQuery{
 			Cursor: cursor, PageSize: pageSize, Filter: filter, SelfFilter: selfFilter,
 		})
