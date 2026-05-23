@@ -178,6 +178,57 @@ CrmLeads created via the lead-purchased subscriber have a non-null `source_purch
 
 6. **Reminders aggregate inside CRM.** Rejected per BRD §6.6 (Reminders are a Notifications-module concern). CRM is the EMITTER of "I want a reminder for this lead at this time" (slice 2 event); Notifications hosts the cron + delivery. Mixing them duplicates state.
 
+## Deferred follow-ups (CRM Slice 1 review findings)
+
+The following review findings (2026-05-24) are intentionally NOT
+addressed in Slice 1 and tracked here as Slice 2+ work:
+
+- **M11 — `CrmLead.Profile.GstVerified` missing from `PurchaseSnapshot`.**
+  Defaulted to `false` at ingest. The Platform-side verification call
+  (Phase 2 Slice 2) emits a separate `platform.unverified-contact.verified.v1`
+  event that carries the verification outcome; CRM will subscribe and
+  flip the flag via a new `crm.lead.verification-noted.v1` command path.
+  Adding the field to LeadPurchasedV1 NOW would require a wire-contract
+  amendment for a value the Platform doesn't yet emit.
+
+- **M12 — `CrmLeadConvertedV1` missing `AssigneeMembershipID`.** The
+  Orders module's create-trigger needs the at-conversion-time assignee
+  to attribute the order's owning sales executive. v0.2 ships without
+  the field because no Orders consumer yet exists; the field will be
+  added in Phase 2 Slice 2 alongside the first Orders subscriber. A
+  `v2` event suffix avoids breaking any speculative external consumer.
+
+- **M14 — Temperature partial index excludes `dead`.** Intentional:
+  the `dead` cohort is operationally read via the archival
+  "/v1/crm/leads?temperature=dead" path which expects seq-scan latency
+  (cold-storage queries are an SLA-tolerant batch concern). EXPLAIN
+  shows the partial index covers warm/hot/cold; dead falls through.
+  Documented in the migration's column-level comment.
+
+- **M16 — No adapter integration tests for CallLog / AssignmentHistory.**
+  Slice 1 ships only the CrmLead happy-path adapter coverage. CallLog +
+  AssignmentHistory tests are queued for Slice 2 alongside the Reminders
+  cross-module event scaffolding that exercises them naturally.
+
+- **M17 — `extra_profile` JSONB `omitzero` semantics.** Booleans inside
+  the nested struct serialise to `false` (not omitted) under Go's
+  encoding/json. Intentional: a present-but-false PAN-not-provided flag
+  is semantically different from a missing one; the wire shape preserves
+  the distinction.
+
+- **M18 — `CrmCallLoggedV1` missing `Notes`.** Intentional per
+  data-retention.md §3 ("downstream consumers must not depend on
+  free-text call notes — they're audit-retention-bound + may be
+  redacted under DPDP request"). Notes stay in the source aggregate;
+  consumers (analytics, audit) project from the aggregate row, not
+  the integration event.
+
+- **M19 — `CrmLead.Lose` reason DB column has no length CHECK.** All
+  writes route through the aggregate (`Lose(lostBy, reason)`) which
+  enforces the 500-char cap via `lostReasonMax`. A DB-side CHECK would
+  add deploy churn for zero practical value (no other write path
+  exists). Will revisit if Slice 2 adds a direct admin SQL ingest path.
+
 ## Sources
 
 - ADR 0001 (modular monolith); ADR 0002 (hexagonal + DDD); ADR 0008 (Watermill + outbox); ADR 0036 (permission catalog); ADR 0038 (keyset pagination); ADR 0041 (CQRS read models); ADR 0044 (enum safety); ADR 0046 (spec-first OpenAPI); ADR 0047 (layer-boundary); ADR 0049 (URL + route arch); ADR 0050 (OpenAPI as code-of-record); ADR 0056 (impersonation propagation).
