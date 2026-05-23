@@ -139,7 +139,84 @@ Arch tests mirror identity's:
 - Lot tracking beyond batch (per-pack-serial isn't on the slice 1 roadmap).
 - Low-stock alerts (Notifications module owns the trigger).
 - CSV bulk product upload (operator UX concern; ships when product asks for it).
-- Per-role default Inventory permission grants in `DefaultRoleCatalog` — Slice 1 adds the permission strings; wiring lands once the seed test relaxes its "non-Owner ships empty" rule via a per-module overlay.
+
+## Amendment 1 (2026-05-24) — Slice 1 fix-pass closures
+
+Round-1 review of the slice-1 PR surfaced findings that the original draft
+had under-specified. Closures landed in the fix-pass; documenting them
+here so a future reader sees the seal.
+
+**Closed in fix-pass:**
+
+- **Per-module outbox forwarder.** The original wiring reused the identity
+  forwarder against `inventory.outbox`; identity's `ForwardOnce` hardcodes
+  `identity.outbox` via its `db.Queries`, silently orphaning every inventory
+  event. Fix: shipped `internal/inventory/adapters/OutboxForwarder` (mirror
+  of identity's, bound to inventory's sqlc Queries) + wired in
+  `cmd/worker/main.go` as a second forwarder goroutine.
+
+- **DefaultRoleCatalog inventory grants.** Slice 1 added the four
+  permission strings to the catalogue but `DefaultRoleCatalog` granted
+  none to any tenant-tier role except CompanyOwner (who short-circuits
+  via `Meta.TenantAdmin`). Every non-Owner membership on a fresh tenant
+  received 403 on all 11 new endpoints. Fix: extended the catalog so
+  PurchaseManager + SalesManager + OfficeAdministrator carry the
+  Inventory grants their role implies (purchase chain → manage;
+  sales chain → read-stock; admins → both catalog read + stock read).
+  The Slice 1 deferral note above is superseded — wiring shipped.
+
+- **Event-name semantic split.** `ProductDeactivatedV1` was emitted only
+  on SoftDelete (which is "soft-deleted", not "deactivated"). Fix: new
+  `ProductSoftDeletedV1` event maps from `product.SoftDeleted` domain
+  event; `ProductDeactivatedV1` retained and now mapped from a new
+  `product.DeactivatedEvent` emitted by `Product.Deactivate()` when
+  `is_active` transitions false (BRD §6.5 distinction between
+  deactivation — temporary — and soft-delete — terminal).
+
+- **AddBatch UoW + re-check.** Original handler called `products.GetByID`
+  then `batches.Add` as two separate txs, leaving a window where the
+  parent product could be soft-deleted between read and write. Fix:
+  handler now takes `pg.UnitOfWork`, wraps both calls in `WithinTx`,
+  and re-reads the product inside the tx (under `FOR SHARE` lock via
+  the standard load path) before the batch insert.
+
+- **Optimistic-concurrency CONTENTION test.** The slice-1 test was renamed
+  to "SequentialUpdates" by the original author with a self-admitted
+  deferral to slice 2. ADR 0061 §3 declares contention testing in
+  slice-1 scope; fix shipped a goroutine-racing contention test that
+  asserts (a) eventual success of every racer, (b) retry path exercised
+  (rows-affected = 0 surfaced for at least one attempt), (c) final
+  `quantity_on_hand` = sum of inbounds — proving the retry loop's
+  re-read-and-re-apply branch under real contention.
+
+**Deferred-with-rationale:**
+
+- **`actclaim` lift to `internal/common/`.** Slice 1 duplicated the
+  ~40 LOC actclaim package into `internal/inventory/app/actclaim/`
+  rather than importing identity's. Per CLAUDE.md "Architecture rule 1:
+  modules NEVER reference each other's domain/app/ports/adapters" the
+  cross-module import was a boundary violation. The duplicate stays
+  in place per Fowler "rule of three" (Refactoring ch.12 §"Three strikes
+  and you refactor") — early duplication beats premature abstraction.
+  When a THIRD bounded context (CRM is next) needs act-claim
+  propagation, lift to `internal/common/actclaim/` and switch all three
+  to the shared package. Tracking issue: lift on Phase 2 CRM slice.
+
+- **Domain cross-aggregate coupling (`batch` ⇒ `product`,
+  `stockmovement` ⇒ both).** Acceptable per ADR 0061 §3 — batch and
+  movement carry `product.ID` for type safety + integration-event
+  payload mapping. Compounds future-refactor pain only when a batch or
+  movement needs to leave the inventory bounded context; for slice 1
+  the type-safety value outweighs the cost. Rule-of-three not hit.
+
+- **Composite-index direction (`idx_batches_product`).** Index was
+  declared `(product_id, expiry_date ASC, id DESC)` while the query
+  orders `(expiry_date DESC, id DESC)`. Postgres can backward-scan
+  ASC indexes for DESC ORDER BY at full cost (B-tree is symmetrically
+  walkable) so this is a documentation drift, not a perf regression.
+  Fix shipped: corrected the index direction to match the query +
+  added an EXPLAIN-under-RLS integration test to catch future drift
+  (mirror of identity's `keyset_explain_integration_test.go`).
 
 ## References
 
