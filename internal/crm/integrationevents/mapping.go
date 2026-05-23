@@ -231,7 +231,7 @@ func FromDomainEvent(d any) (Event, error) {
 func parseUUID(name, s string) (uuid.UUID, error) {
 	u, err := uuid.Parse(s)
 	if err != nil {
-		return uuid.Nil, fmt.Errorf("%w: %s=%q: %v", ErrInvalidUUID, name, s, err)
+		return uuid.Nil, fmt.Errorf("%w: %s=%q: %w", ErrInvalidUUID, name, s, err)
 	}
 	return u, nil
 }
