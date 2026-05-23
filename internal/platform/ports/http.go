@@ -58,20 +58,46 @@ func AddRoutes(
 		return
 	}
 
+	// Per-route gate composers — `chain` wraps an outer middleware
+	// around an inner middleware-wrapped handler. Used to layer
+	// RequirePlatform (defense-in-depth tenant=Platform check) atop
+	// the RequirePermission gate on Platform-only routes.
+	chain := func(outer, inner func(http.Handler) http.Handler) func(http.Handler) http.Handler {
+		return func(h http.Handler) http.Handler {
+			return outer(inner(h))
+		}
+	}
+
+	// requirePlatform: defense-in-depth gate for Platform-only routes
+	// per `multi-tenancy.md` "Platform admin endpoints" + Identity's
+	// `/v1/platform/*` pattern. The middleware enforces BOTH
+	// `is_platform=true` AND `tenant_slug == "platform"` on the JWT —
+	// a tenant role that was (mis-)granted Platform.* permissions still
+	// cannot reach the Platform queue / topup endpoints because their
+	// JWT carries `is_platform=false`.
+	requirePlatform := authn.RequirePlatform(verifier, stampValidator)
+
 	// UnverifiedContacts — Platform.UnverifiedContacts.Manage gate.
+	// Write-side endpoints (POST /create, /calls, /verify, /reject) AND
+	// the Platform-only LIST endpoint all require RequirePlatform
+	// in addition to the permission gate (defense-in-depth — a tenant
+	// role granted Manage by misconfiguration must not reach the
+	// queue). The LIST endpoint is the most sensitive — it reveals
+	// every contact in the platform pipeline including PII.
 	manageContacts := authn.RequirePermission(verifier, stampValidator,
 		permission.IdentityPermissions.PlatformUnverifiedContacts.Manage)
 
+	platformContactsGate := chain(requirePlatform, manageContacts)
 	mux.Handle("POST /api/v1/platform/unverified-contacts",
-		manageContacts(handleCreateUnverifiedContact(log, a)))
+		platformContactsGate(handleCreateUnverifiedContact(log, a)))
 	mux.Handle("POST /api/v1/platform/unverified-contacts/{id}/calls",
-		manageContacts(handleLogVerificationCall(log, a)))
+		platformContactsGate(handleLogVerificationCall(log, a)))
 	mux.Handle("POST /api/v1/platform/unverified-contacts/{id}/verify",
-		manageContacts(handleVerifyUnverifiedContact(log, a)))
+		platformContactsGate(handleVerifyUnverifiedContact(log, a)))
 	mux.Handle("POST /api/v1/platform/unverified-contacts/{id}/reject",
-		manageContacts(handleRejectUnverifiedContact(log, a)))
+		platformContactsGate(handleRejectUnverifiedContact(log, a)))
 	mux.Handle("GET /api/v1/platform/unverified-contacts",
-		manageContacts(handleListUnverifiedContacts(log, a)))
+		platformContactsGate(handleListUnverifiedContacts(log, a)))
 
 	// Marketplace browse — held by every tenant role.
 	browse := authn.RequirePermission(verifier, stampValidator,
@@ -79,17 +105,21 @@ func AddRoutes(
 	mux.Handle("GET /api/v1/platform/marketplace/leads",
 		browse(handleBrowseMarketplace(log, a)))
 
-	// Marketplace purchase — purchase permission.
+	// Marketplace purchase — purchase permission. Tenant-facing
+	// (NOT RequirePlatform — tenants buy leads, not Platform operators).
 	purchase := authn.RequirePermission(verifier, stampValidator,
 		permission.IdentityPermissions.PlatformMarketplace.Purchase)
 	mux.Handle("POST /api/v1/platform/marketplace/leads/{id}/purchase",
 		purchase(handlePurchaseLead(log, a)))
 
-	// LeadCredits topup — Platform-tier only.
+	// LeadCredits topup — Platform-tier ONLY. Defense-in-depth:
+	// RequirePlatform layered atop the topup permission so a tenant
+	// role with the topup permission (misconfiguration) still cannot
+	// credit balances.
 	topup := authn.RequirePermission(verifier, stampValidator,
 		permission.IdentityPermissions.PlatformLeadCredits.Topup)
 	mux.Handle("POST /api/v1/platform/lead-credits/topup",
-		topup(handleTopupLeadCredits(log, a)))
+		chain(requirePlatform, topup)(handleTopupLeadCredits(log, a)))
 
 	// LeadCredits read — held by every tenant role + Platform.
 	read := authn.RequirePermission(verifier, stampValidator,
@@ -222,6 +252,13 @@ func handleVerifyUnverifiedContact(log *slog.Logger, a app.Application) http.Han
 		switch {
 		case errors.Is(err, command.ErrContactNotFound):
 			writeError(w, http.StatusNotFound, ErrCodeContactNotFound, "")
+			return
+		case errors.Is(err, command.ErrContactAlreadyTerminal):
+			// H11 — contact already Verified or Rejected; refuse a
+			// duplicate verify to avoid emitting a second
+			// LeadVerifiedV1 + creating a phantom PlatformLead.
+			writeError(w, http.StatusConflict, ErrCodeContactAlreadyTerminal,
+				"contact is already in a terminal state")
 			return
 		case errors.Is(err, unverifiedcontact.ErrInvalid):
 			writeError(w, http.StatusUnprocessableEntity, ErrCodeInvalidCallOutcome, err.Error())
@@ -534,7 +571,7 @@ func handleGetLeadCreditBalance(log *slog.Logger, a app.Application) http.Handle
 
 // ----- Helpers --------------------------------------------------------------
 
-func writeJSON(w http.ResponseWriter, status int, body interface{}) {
+func writeJSON(w http.ResponseWriter, status int, body any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(body)

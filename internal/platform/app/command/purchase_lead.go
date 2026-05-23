@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math/rand/v2"
 	"time"
 
 	"github.com/leadkart/leadkart-go/internal/common/ids"
@@ -88,6 +89,13 @@ const purchaseChargeCredits int64 = 1
 // the LeadCredit row per ADR 0059.
 const purchaseMaxRetries = 3
 
+// purchaseRetryJitterMax bounds the per-attempt random sleep on
+// ErrConflict per ADR 0059 ("retries up to 3 times with a small jitter
+// ~10ms"). Goal: spread the thundering-herd of contending writers so
+// retry attempts don't immediately re-collide; without it the loop
+// burns CPU + re-locks under load.
+const purchaseRetryJitterMax = 10 * time.Millisecond
+
 // Handle runs the purchase flow with optimistic-version retry on the
 // lead-credit row.
 func (h PurchaseLeadHandler) Handle(
@@ -100,7 +108,7 @@ func (h PurchaseLeadHandler) Handle(
 	purchaseID := ids.NewV7().String()
 
 	var lastErr error
-	for attempt := 0; attempt < purchaseMaxRetries; attempt++ {
+	for attempt := range purchaseMaxRetries {
 		err := h.runOnce(ctx, cmd, purchaseID)
 		if err == nil {
 			return PurchaseLeadResult{PurchaseID: purchaseID}, nil
@@ -111,8 +119,49 @@ func (h PurchaseLeadHandler) Handle(
 			return PurchaseLeadResult{}, err
 		}
 		lastErr = err
+		// Jittered sleep between retries (per ADR 0059). Skip the
+		// final wait since the loop is about to exit anyway.
+		if attempt+1 < purchaseMaxRetries {
+			if waitErr := sleepJitter(ctx, purchaseRetryJitterMax); waitErr != nil {
+				return PurchaseLeadResult{}, waitErr
+			}
+		}
 	}
 	return PurchaseLeadResult{}, fmt.Errorf("purchase lead: exhausted retries: %w", lastErr)
+}
+
+// sleepJitter blocks for a uniformly-random duration in (0, max].
+// Cancels early on ctx done. Test seam: production rng is
+// [math/rand/v2.N]; tests swap [jitterDuration] when timing-sensitive.
+//
+//nolint:gochecknoglobals // test seam — swappable in tests.
+var jitterDuration = func(max time.Duration) time.Duration {
+	if max <= 0 {
+		return 0
+	}
+	// Weak randomness is fine here — this is BACKOFF jitter, not a
+	// security primitive. The goal is "spread retries across a small
+	// window so they don't immediately re-collide" — even a constant
+	// integer would be marginally useful. crypto/rand would be a
+	// 100x perf regression for zero security gain.
+	//
+	//nolint:gosec // G404: backoff jitter is not security-sensitive.
+	return rand.N(max)
+}
+
+func sleepJitter(ctx context.Context, max time.Duration) error {
+	d := jitterDuration(max)
+	if d <= 0 {
+		return nil
+	}
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-t.C:
+		return nil
+	}
 }
 
 // runOnce is one attempt at the purchase. Pulled out so the retry loop
@@ -181,13 +230,14 @@ func (h PurchaseLeadHandler) runOnce(
 		}
 
 		// Step 4: emit LeadPurchasedV1 (TenantScoped — to the
-		// purchaser) — full snapshot for CRM autonomy.
+		// purchaser) — full snapshot for CRM autonomy. UUIDs travel
+		// the wire as strings per ADR 0059 frozen brief.
 		purchasedEv := integrationevents.LeadPurchasedV1{
-			PurchaseID:              mustParseUUID(purchaseID),
-			TenantIDValue:           tenantUUID(cmd.PurchasingTenantID),
-			PlatformLeadID:          leadIDUUID(cmd.PlatformLeadID),
+			PurchaseID:              purchaseID,
+			TenantID:                cmd.PurchasingTenantID.String(),
+			PlatformLeadID:          cmd.PlatformLeadID.String(),
 			PurchasedAt:             now.UTC(),
-			PurchasedByMembershipID: membershipUUID(cmd.PurchasingMembershipID),
+			PurchasedByMembershipID: cmd.PurchasingMembershipID.String(),
 			AmountPaisa:             cmd.AmountPaisa,
 			LeadSnapshot:            integrationevents.SnapshotFromForm(lead.Form()),
 		}

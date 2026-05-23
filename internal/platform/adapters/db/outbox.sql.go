@@ -34,7 +34,7 @@ const insertLeadCredit = `-- name: InsertLeadCredit :exec
 INSERT INTO platform.lead_credits (
     tenant_id, balance, version, created_at, updated_at
 ) VALUES (
-    $1, $2, 0, $3, $4
+    $1, $2, 1, $3, $4
 )
 `
 

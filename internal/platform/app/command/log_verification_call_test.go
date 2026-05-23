@@ -33,7 +33,7 @@ func TestLogVerificationCall_NoAnswerLeavesContactInCall(t *testing.T) {
 
 	contacts := platformtest.NewFakeUnverifiedContactRepository()
 	calls := platformtest.NewFakeVerificationCallRepository()
-	uow := platformtest.FakeUnitOfWork{}
+	uow := platformtest.NewFakeUnitOfWork()
 
 	cID, agentID := seedNewContact(t, contacts)
 
@@ -62,7 +62,7 @@ func TestLogVerificationCall_BusyMarksContactBusyWithWindow(t *testing.T) {
 
 	contacts := platformtest.NewFakeUnverifiedContactRepository()
 	calls := platformtest.NewFakeVerificationCallRepository()
-	uow := platformtest.FakeUnitOfWork{}
+	uow := platformtest.NewFakeUnitOfWork()
 
 	cID, agentID := seedNewContact(t, contacts)
 
@@ -95,7 +95,7 @@ func TestLogVerificationCall_ContactNotFound(t *testing.T) {
 
 	contacts := platformtest.NewFakeUnverifiedContactRepository()
 	calls := platformtest.NewFakeVerificationCallRepository()
-	uow := platformtest.FakeUnitOfWork{}
+	uow := platformtest.NewFakeUnitOfWork()
 
 	h := command.NewLogVerificationCallHandler(uow, calls, contacts, nowFunc)
 	_, err := h.Handle(context.Background(), command.LogVerificationCallCommand{

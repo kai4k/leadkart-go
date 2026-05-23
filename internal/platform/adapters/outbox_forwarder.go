@@ -61,7 +61,14 @@ func (f *OutboxForwarder) ForwardOnce(ctx context.Context) (int, error) {
 		for _, row := range rows {
 			msg := message.NewMessage(uuidFromPg(row.ID).String(), row.Payload)
 			msg.Metadata.Set("event_type", row.Topic)
-			msg.Metadata.Set("tenant_id", uuidFromPg(row.TenantID).String())
+			// tenant_id metadata is set only when the row carries a
+			// real tenant FK. Platform-scoped events (tenant_id NULL,
+			// per migration 20260601000002) ship without the header,
+			// matching the on-wire shape downstream subscribers
+			// expect (Watermill envelope.TenantId stays empty).
+			if row.TenantID.Valid {
+				msg.Metadata.Set("tenant_id", uuidFromPg(row.TenantID).String())
+			}
 			msg.Metadata.Set("occurred_at", timeFromPg(row.OccurredAt).Format(time.RFC3339Nano))
 			if row.ActOperatorID.Valid {
 				msg.Metadata.Set("act_operator_id", uuidFromPg(row.ActOperatorID).String())

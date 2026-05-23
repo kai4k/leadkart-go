@@ -1323,6 +1323,12 @@ paths:
     post:
       tags: [Platform]
       summary: Promote contact to a marketplace PlatformLead
+      description: |
+        Refuses with 409 (`contact_already_terminal`) when the contact
+        is already in a terminal state (Verified or Rejected) — the
+        handler will NOT emit a duplicate `LeadVerifiedV1` /
+        fabricate a phantom PlatformLead. Per ADR 0059 review-pass
+        H11.
       parameters:
         - $ref: '#/components/parameters/PathID'
       responses:
@@ -1334,6 +1340,11 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: Contact already in a terminal state (Verified or Rejected)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
         '422': { $ref: '#/components/responses/ValidationError' }
 
   /api/v1/platform/unverified-contacts/{id}/reject:

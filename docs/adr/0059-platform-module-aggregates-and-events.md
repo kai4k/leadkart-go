@@ -185,6 +185,126 @@ abstract "outbox table" — premature in the two-module state.
 - External GST status verification API call on `MarkVerified`
   (BRD Appendix B.2 — Phase 2 enhancement).
 
+## Amendment — review-pass (2026-06-01)
+
+Independent reviewer flagged 5 CRITICAL + 7 HIGH + 6 MEDIUM findings on
+the first-pass Slice 1 implementation. Fix-pass closure:
+
+### Wire-contract drift (CRITICAL — frozen by amendment)
+
+The frozen brief specified `TenantID string`. First-pass shipped
+`TenantIDValue uuid.UUID` because Go-idiomatic typing felt cleaner.
+Cross-language consumers (CRM subscriber's local mirror, future
+non-Go subscribers) need the bare wire string. **All UUID-shaped
+fields on Platform integration events are typed as `string` on the
+wire AND in Go.** The runtime conversion + outbox metadata layer
+handles real `uuid.UUID` round-trips.
+
+Field renames:
+- `LeadPurchasedV1.TenantIDValue → LeadPurchasedV1.TenantID`
+- `LeadCreditAdjustedV1.TenantIDValue → LeadCreditAdjustedV1.TenantID`
+
+The `TenantScoped` interface accessor is `TenantIDString()` (was
+`TenantID()` → uuid.UUID) — the wire field's name (`tenant_id`) is
+unchanged.
+
+### Optimistic-concurrency retry backoff (CRITICAL)
+
+The ADR said "retries up to 3 times with a small jitter (~10ms)".
+First-pass shipped a tight loop with NO sleep — defeating
+thundering-herd protection. Fix-pass adds
+`time.Sleep(rand.N(10*time.Millisecond))` between attempts in both
+`PurchaseLeadHandler.Handle` and `TopupLeadCreditsHandler.Handle`
+(`internal/platform/app/command/{purchase_lead,topup_lead_credits}.go`).
+Test seam: `jitterDuration` package-level var swappable in tests.
+
+### `platform.outbox.tenant_id` becomes NULLABLE (CRITICAL — C3)
+
+The first-pass schema declared `tenant_id uuid NOT NULL` + the writer
+passed `uuid.Nil` for Platform-scoped events. That fabricates a
+sentinel UUID downstream subscribers cannot distinguish from a real
+tenant FK. **Migration 20260601000002** drops the NOT NULL constraint,
+backfills existing `uuid.Nil` rows to NULL, and adjusts the RLS
+policies (SELECT + INSERT) to allow `tenant_id IS NULL AND
+app.is_platform()`. The forwarder reads the column's `Valid` flag +
+omits the `tenant_id` Watermill metadata header when NULL — matching
+the wire shape downstream subscribers expect.
+
+### Defense-in-depth `RequirePlatform` on platform-only routes (CRITICAL — C5)
+
+First-pass shipped `RequirePermission(Manage)` alone on
+`POST /api/v1/platform/unverified-contacts`, the LIST endpoint, and
+`POST /api/v1/platform/lead-credits/topup`. A tenant role with the
+Manage permission (misconfiguration) could reach the platform pipeline.
+Fix-pass layers `RequirePlatform` OUTSIDE the permission gate on all
+five `/unverified-contacts/*` routes + the topup route — mirroring
+identity's `/v1/platform/*` pattern.
+
+### Verify-handler terminal-state guard (HIGH — H11)
+
+First-pass let a double-verify against an already-Verified contact
+quietly emit a SECOND `LeadVerifiedV1` (with a fresh `leadID` →
+phantom PlatformLead in CRM). New `command.ErrContactAlreadyTerminal`
+sentinel; handler refuses with HTTP 409. Verify-after-reject also
+maps to the same sentinel (refuse rather than mask as `ErrInvalid`).
+
+### Marketplace SELECT omits PII (HIGH — H12)
+
+`MarketplaceBrowse` SELECT list now excludes `email`, `mobile_e164`,
+`gst_number`, `pan_number`, `street`. The PII columns remain on the
+row + remain readable via `GetByID` post-purchase under the buyer's
+tenant scope (the only legitimate consumer post-sale). The browse
+SELECT list is tested via
+`TestPlatformLeadRepository_MarketplaceBrowse_OmitsPII` — a
+regression that adds a `SELECT *` (or re-introduces a PII column)
+fails CI.
+
+### Event-suppression mapper contract (HIGH — H6)
+
+The mechanical mapper `integrationevents.FromDomainEvent` returns
+`(nil, nil)` for 5 domain event types whose integration counterparts
+are emitted directly by handlers (see mapping.go godoc). Contract is
+now bijectively enforced via
+`TestArch_FromDomainEvent_HandlesAllRegisteredDomainEvents` — adding
+a new domain event without a mapper case (or documented suppression)
+fails CI.
+
+### Modern-Go sweep (HIGH — H7, H8)
+
+`for attempt := 0; attempt < N; attempt++` → `for range N` (Go 1.22+)
+across `purchase_lead.go` + `topup_lead_credits.go`. `interface{}`
+→ `any` in `ports/http.go:writeJSON`.
+
+### `mustParseUUID` removed from request path (MEDIUM — M13)
+
+`internal/platform/app/command/helpers.go` deleted — the panic-on-
+malformed-UUID helper was an anti-pattern per CLAUDE.md
+"MustNewX init-time + tests only". Handlers now emit string-shaped
+domain IDs onto wire events directly (matches the C4 wire-contract
+amendment above; no parse step needed).
+
+### Deferred / acknowledged
+
+- **M15** — `platform_leads.created_by_membership_id` audit column is
+  not shipped in Slice 1. The verified-by + the source contact's
+  created-by chain together cover the audit trail; explicit
+  `created_by` lands when a "manually-created lead" flow opens
+  (Slice 3+).
+- **M16** — Outbox `Topic = "platform.events"` is the canonical
+  Watermill destination; route is by `event_type` metadata header,
+  not topic-per-event-type. Mirrors identity's pattern; no change.
+- **M18 / per-module outbox** — Rule-of-three deferral honored. The
+  duplication will land in a shared substrate when the CRM module's
+  forwarder ships (Phase 2.2).
+
+### Test fixture rollback semantics
+
+`platformtest.NewFakeUnitOfWork(fakes...)` now snapshots each
+registered fake's state at WithinTx entry + restores on closure
+error — modelling Postgres ROLLBACK so unit tests catch
+"loser-was-debited" regressions (H10). The zero-value
+`FakeUnitOfWork{}` continues to work for closure-only flows.
+
 ## References
 
 - `BRD.md` §3 (Roles), §4.2-4.5 (Marketplace, Stages, Callback),

@@ -13,8 +13,6 @@ package integrationevents
 
 import (
 	"time"
-
-	"github.com/google/uuid"
 )
 
 // Topic is the canonical Watermill destination for ALL Platform
@@ -32,15 +30,18 @@ type Event interface {
 }
 
 // TenantScoped tags events that belong to ONE tenant. Wire shape
-// carries TenantID; the runtime pipeline reads it onto Watermill's
-// envelope.TenantId so subscribers see a per-tenant scope.
+// carries `tenant_id` (UUID-shaped STRING per ADR 0059 frozen brief —
+// cross-language consumers don't need a uuid codec, matches CRM
+// subscriber's local mirror byte-for-byte). The runtime pipeline reads
+// it onto Watermill's envelope.TenantId so subscribers see a per-
+// tenant scope.
 //
 // Compile-time assertion shape in each record file:
 //
 //	var _ TenantScoped = LeadPurchasedV1{}
 type TenantScoped interface {
 	Event
-	TenantID() uuid.UUID
+	TenantIDString() string
 }
 
 // Platform tags events with NO tenant scope. Three classes apply:

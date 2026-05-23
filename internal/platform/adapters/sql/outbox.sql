@@ -27,10 +27,15 @@ SET    forwarded    = true,
 WHERE  id = $1;
 
 -- name: InsertLeadCredit :exec
+-- Inserts a fresh row with version=1 so post-INSERT reads return
+-- Version=1. The repository's optimistic-version UPDATE path can
+-- then unambiguously detect "fresh aggregate, no DB row" by checking
+-- in-memory Version==0 (only NewForTenant emits 0; every loaded
+-- aggregate carries >=1).
 INSERT INTO platform.lead_credits (
     tenant_id, balance, version, created_at, updated_at
 ) VALUES (
-    $1, $2, 0, $3, $4
+    $1, $2, 1, $3, $4
 );
 
 -- name: GetLeadCredit :one

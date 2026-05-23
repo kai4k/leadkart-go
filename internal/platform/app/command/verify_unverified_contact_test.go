@@ -44,7 +44,7 @@ func TestVerifyUnverifiedContact_HappyPath(t *testing.T) {
 	contacts := platformtest.NewFakeUnverifiedContactRepository()
 	leads := platformtest.NewFakePlatformLeadRepository()
 	outbox := platformtest.NewFakeOutbox()
-	uow := platformtest.FakeUnitOfWork{}
+	uow := platformtest.NewFakeUnitOfWork()
 
 	// Seed: existing in-call contact.
 	agentID := unverifiedcontact.MembershipID(ids.NewV7().String())
@@ -105,7 +105,7 @@ func TestVerifyUnverifiedContact_PromoteFromNew(t *testing.T) {
 	contacts := platformtest.NewFakeUnverifiedContactRepository()
 	leads := platformtest.NewFakePlatformLeadRepository()
 	outbox := platformtest.NewFakeOutbox()
-	uow := platformtest.FakeUnitOfWork{}
+	uow := platformtest.NewFakeUnitOfWork()
 
 	agentID := unverifiedcontact.MembershipID(ids.NewV7().String())
 	cID := unverifiedcontact.ID(ids.NewV7().String())
@@ -128,7 +128,7 @@ func TestVerifyUnverifiedContact_ContactNotFound(t *testing.T) {
 	contacts := platformtest.NewFakeUnverifiedContactRepository()
 	leads := platformtest.NewFakePlatformLeadRepository()
 	outbox := platformtest.NewFakeOutbox()
-	uow := platformtest.FakeUnitOfWork{}
+	uow := platformtest.NewFakeUnitOfWork()
 
 	h := command.NewVerifyUnverifiedContactHandler(uow, contacts, leads, outbox, nowFunc)
 	_, err := h.Handle(context.Background(), command.VerifyUnverifiedContactCommand{
@@ -140,5 +140,117 @@ func TestVerifyUnverifiedContact_ContactNotFound(t *testing.T) {
 	}
 	if !errors.Is(err, command.ErrContactNotFound) {
 		t.Errorf("expected ErrContactNotFound, got %v", err)
+	}
+}
+
+// TestVerifyUnverifiedContact_AlreadyVerified_Idempotent — verifying a
+// contact that's ALREADY in Verified state is a no-op at the domain
+// layer (UnverifiedContact.MarkVerified short-circuits with nil). The
+// handler swallows the no-op + returns successfully without spawning a
+// second PlatformLead row. H11 — review-pass failure-mode coverage.
+func TestVerifyUnverifiedContact_AlreadyVerified_Idempotent(t *testing.T) {
+	t.Parallel()
+
+	contacts := platformtest.NewFakeUnverifiedContactRepository()
+	leads := platformtest.NewFakePlatformLeadRepository()
+	outbox := platformtest.NewFakeOutbox()
+	uow := platformtest.NewFakeUnitOfWork()
+
+	// Seed: a contact that's already InCall.
+	agentID := unverifiedcontact.MembershipID(ids.NewV7().String())
+	cID := unverifiedcontact.ID(ids.NewV7().String())
+	c, err := unverifiedcontact.New(cID, sampleForm(t), agentID, nowFunc())
+	if err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if err := c.StartCall(nowFunc()); err != nil {
+		t.Fatalf("seed start call: %v", err)
+	}
+	if err := contacts.Add(context.Background(), c); err != nil {
+		t.Fatalf("seed add: %v", err)
+	}
+
+	h := command.NewVerifyUnverifiedContactHandler(uow, contacts, leads, outbox, nowFunc)
+
+	// First verify → success, lead created.
+	out1, err := h.Handle(context.Background(), command.VerifyUnverifiedContactCommand{
+		ContactID:  cID,
+		VerifiedBy: agentID,
+	})
+	if err != nil {
+		t.Fatalf("first verify: %v", err)
+	}
+
+	// Second verify on the now-Verified contact. Aggregate short-
+	// circuits (idempotent terminal); the handler will not add a
+	// SECOND PlatformLead. The handler currently DOES still attempt
+	// the second lead Add because UpdateByID is called with
+	// shouldPersist=true regardless — this assertion locks the
+	// EXPECTED post-fix behaviour: second verify either succeeds
+	// idempotently (no NEW lead) OR returns a typed sentinel.
+	//
+	// Production note: handler invokes leads.Add inside the closure
+	// AFTER the (now-idempotent) MarkVerified. With fakes, leads.Add
+	// is unconditional — so we expect the handler to skip the second
+	// Add when the contact's StateBefore == StateVerified. This test
+	// asserts no second lead leaks. If it fails, the handler needs a
+	// "skip lead-creation when contact already verified" guard.
+	_, err = h.Handle(context.Background(), command.VerifyUnverifiedContactCommand{
+		ContactID:  cID,
+		VerifiedBy: agentID,
+	})
+	// Either success (idempotent) or a typed sentinel is acceptable;
+	// silently corrupting state with a second lead is NOT.
+	if err != nil && !errors.Is(err, command.ErrContactAlreadyTerminal) {
+		t.Fatalf("second verify: got %v; want nil OR ErrContactAlreadyTerminal", err)
+	}
+
+	if len(leads.Store) != 1 {
+		t.Errorf("expected exactly 1 lead row after double verify, got %d", len(leads.Store))
+	}
+	if _, ok := leads.Store[out1.PlatformLeadID]; !ok {
+		t.Errorf("first lead missing from store")
+	}
+}
+
+// TestVerifyUnverifiedContact_AlreadyRejected_Refused — once a contact
+// is in the terminal Rejected state, verify MUST fail (not silently
+// flip to Verified). The aggregate enforces this via the
+// `verify requires in_call state` guard. H11 — review-pass.
+func TestVerifyUnverifiedContact_AlreadyRejected_Refused(t *testing.T) {
+	t.Parallel()
+
+	contacts := platformtest.NewFakeUnverifiedContactRepository()
+	leads := platformtest.NewFakePlatformLeadRepository()
+	outbox := platformtest.NewFakeOutbox()
+	uow := platformtest.NewFakeUnitOfWork()
+
+	// Seed: a contact that's already InCall + Rejected.
+	agentID := unverifiedcontact.MembershipID(ids.NewV7().String())
+	cID := unverifiedcontact.ID(ids.NewV7().String())
+	c, err := unverifiedcontact.New(cID, sampleForm(t), agentID, nowFunc())
+	if err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if err := c.StartCall(nowFunc()); err != nil {
+		t.Fatalf("seed start call: %v", err)
+	}
+	if err := c.MarkRejected("test data", agentID, nowFunc()); err != nil {
+		t.Fatalf("seed reject: %v", err)
+	}
+	if err := contacts.Add(context.Background(), c); err != nil {
+		t.Fatalf("seed add: %v", err)
+	}
+
+	h := command.NewVerifyUnverifiedContactHandler(uow, contacts, leads, outbox, nowFunc)
+	_, err = h.Handle(context.Background(), command.VerifyUnverifiedContactCommand{
+		ContactID:  cID,
+		VerifiedBy: agentID,
+	})
+	if !errors.Is(err, command.ErrContactAlreadyTerminal) {
+		t.Fatalf("expected ErrContactAlreadyTerminal (verify-after-reject), got %v", err)
+	}
+	if len(leads.Store) != 0 {
+		t.Errorf("expected no lead created on verify-after-reject, got %d", len(leads.Store))
 	}
 }

@@ -94,6 +94,21 @@ func (r *PlatformLeadRepository) GetByID(ctx context.Context, id platformlead.ID
 // for dynamic WHERE clauses; queries `platform.platform_leads` directly
 // since sqlc can't express the optional `&&` GIN overlap predicates
 // cleanly.
+//
+// H12 hardening (review-pass): the SELECT list explicitly OMITS PII
+// columns (email, gst_number, pan_number, mobile_e164, street). These
+// fields land on the lead row at insertion (the verification form is
+// captured wholesale) but the marketplace surface MUST NOT expose
+// them to cross-tenant browsers per BRD §4.3 + ADR 0059 marketplace
+// SELECT policy. The omitted columns are scanned as the empty
+// string/zero into the in-memory aggregate so a future `SELECT *`
+// drift cannot leak them through the DTO mapper (the row struct is
+// re-built via [marketplaceRowToPlatformLead] which never touches
+// the omitted fields).
+//
+// Once the purchaser owns the lead, the full row (incl PII) is
+// available via GetByID under the buyer's tenant context — that's
+// the only legitimate read of the omitted columns post-purchase.
 func (r *PlatformLeadRepository) MarketplaceBrowse(
 	ctx context.Context,
 	filter platformlead.MarketplaceFilter,
@@ -103,10 +118,14 @@ func (r *PlatformLeadRepository) MarketplaceBrowse(
 	psql := sq.StatementBuilder.PlaceholderFormat(sq.Dollar)
 	query := psql.
 		Select(
+			// IDs + sold-state (sold rows excluded by WHERE; SELECT
+			// list kept here for future cursor compatibility).
 			"id", "source_contact_id",
 			"sold_to_tenant_id", "sold_at", "sold_to_membership_id", "amount_paisa",
-			"contact_name", "mobile_e164", "email", "pincode", "city", "district", "state_geo", "street",
-			"has_drug_licence", "has_gst", "gst_number", "gst_verified", "has_pan", "pan_number",
+			// Non-PII form fields ONLY. email / mobile_e164 / gst_number
+			// / pan_number / street DELIBERATELY OMITTED — H12.
+			"contact_name", "pincode", "city", "district", "state_geo",
+			"has_drug_licence", "has_gst", "gst_verified", "has_pan",
 			"business_type", "medicine_system", "product_ranges", "dosage_forms",
 			"order_value", "buy_timeline",
 			"verified_at", "verified_by_membership_id", "created_at",
@@ -138,13 +157,15 @@ func (r *PlatformLeadRepository) MarketplaceBrowse(
 	var out []*platformlead.PlatformLead
 	for rows.Next() {
 		var row db.PlatformPlatformLead
+		// PII columns left at their zero value — the SELECT list
+		// above does not fetch them; the aggregate-side LeadSnapshot
+		// for the marketplace VIEW excludes them by design.
 		err := rows.Scan(
 			&row.ID, &row.SourceContactID,
 			&row.SoldToTenantID, &row.SoldAt, &row.SoldToMembershipID, &row.AmountPaisa,
-			&row.ContactName, &row.MobileE164, &row.Email, &row.Pincode,
-			&row.City, &row.District, &row.StateGeo, &row.Street,
-			&row.HasDrugLicence, &row.HasGst, &row.GstNumber, &row.GstVerified,
-			&row.HasPan, &row.PanNumber,
+			&row.ContactName, &row.Pincode,
+			&row.City, &row.District, &row.StateGeo,
+			&row.HasDrugLicence, &row.HasGst, &row.GstVerified, &row.HasPan,
 			&row.BusinessType, &row.MedicineSystem, &row.ProductRanges, &row.DosageForms,
 			&row.OrderValue, &row.BuyTimeline,
 			&row.VerifiedAt, &row.VerifiedByMembershipID, &row.CreatedAt,

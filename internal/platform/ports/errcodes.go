@@ -14,6 +14,7 @@ const (
 	ErrCodeInvalidPageSize             = "invalid_page_size"
 	ErrCodeInvalidCursor               = "invalid_cursor"
 	ErrCodeContactNotFound             = "contact_not_found"
+	ErrCodeContactAlreadyTerminal      = "contact_already_terminal"
 	ErrCodeLeadNotFound                = "lead_not_found"
 	ErrCodeLeadAlreadySold             = "lead_already_sold"
 	ErrCodeInsufficientCredits         = "insufficient_credits"

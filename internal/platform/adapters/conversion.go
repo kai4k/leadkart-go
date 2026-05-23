@@ -15,6 +15,17 @@ func pgUUID(id uuid.UUID) pgtype.UUID {
 	return pgtype.UUID{Bytes: id, Valid: true}
 }
 
+// pgUUIDOrNull wraps a uuid.UUID into pgtype.UUID. uuid.Nil maps to
+// Valid=false (NULL) — used by the outbox writer to mark
+// platform-scoped events whose tenant_id column is nullable per
+// migration 20260601000002 + ADR 0059 fix C3.
+func pgUUIDOrNull(id uuid.UUID) pgtype.UUID {
+	if id == uuid.Nil {
+		return pgtype.UUID{}
+	}
+	return pgtype.UUID{Bytes: id, Valid: true}
+}
+
 // pgTimestamp wraps a time.Time into pgtype.Timestamptz. Zero time
 // maps to Valid=false (NULL).
 func pgTimestamp(t time.Time) pgtype.Timestamptz {

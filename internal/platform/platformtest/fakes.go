@@ -22,14 +22,60 @@ import (
 	"github.com/leadkart/leadkart-go/internal/platform/integrationevents"
 )
 
-// FakeUnitOfWork runs fn immediately — no real transactional semantics
-// (callers' adapters in tests are in-memory). Matches the
-// pg.UnitOfWork contract.
-type FakeUnitOfWork struct{}
+// FakeUnitOfWork runs fn synchronously + models transactional rollback
+// against any registered fake. Production: Postgres rolls back the
+// debit when the platformlead UPDATE returns ErrAlreadySold inside the
+// same WithinTx closure. The fake must mirror that semantic — without
+// it, tests would silently miss "loser was debited" regressions
+// (review-pass finding H10).
+//
+// Usage pattern:
+//
+//	credits := platformtest.NewFakeLeadCreditRepository()
+//	leads   := platformtest.NewFakePlatformLeadRepository()
+//	uow := platformtest.NewFakeUnitOfWork(credits, leads)
+//	// any fake that mutates state across WithinTx boundaries must
+//	// implement TransactionalFake + be registered.
+//
+// The zero-value [FakeUnitOfWork] continues to work for single-write
+// flows that don't need rollback semantics (no fakes registered =
+// closure-only, current behaviour).
+type FakeUnitOfWork struct {
+	fakes []TransactionalFake
+}
 
-// WithinTx satisfies [pg.UnitOfWork].
-func (FakeUnitOfWork) WithinTx(ctx context.Context, _ pg.TxScope, fn func(ctx context.Context) error) error {
-	return fn(ctx)
+// TransactionalFake is the rollback-aware contract a fake repository
+// implements when it wants the FakeUoW to undo its mutations on
+// closure error. Snapshot captures pre-tx state; Restore puts it
+// back.
+type TransactionalFake interface {
+	// Snapshot captures the fake's pre-tx state. Returned closure
+	// MUST be safe to invoke at most once (the UoW calls it iff
+	// the closure errors).
+	Snapshot() (restore func())
+}
+
+// NewFakeUnitOfWork constructs a UoW that snapshots each registered
+// fake at WithinTx entry + restores them on closure error.
+func NewFakeUnitOfWork(fakes ...TransactionalFake) *FakeUnitOfWork {
+	return &FakeUnitOfWork{fakes: fakes}
+}
+
+// WithinTx satisfies [pg.UnitOfWork]. Snapshots all registered fakes
+// before fn runs; on closure error, restores every fake to its
+// pre-tx state (modelling Postgres ROLLBACK).
+func (u *FakeUnitOfWork) WithinTx(ctx context.Context, _ pg.TxScope, fn func(ctx context.Context) error) error {
+	restores := make([]func(), 0, len(u.fakes))
+	for _, f := range u.fakes {
+		restores = append(restores, f.Snapshot())
+	}
+	err := fn(ctx)
+	if err != nil {
+		for _, r := range restores {
+			r()
+		}
+	}
+	return err
 }
 
 // FakeOutbox captures enqueued events for assertions. Goroutine-safe.
@@ -325,6 +371,69 @@ func (r *FakeLeadCreditRepository) UpsertWithVersion(
 	return nil
 }
 
+// ----- TransactionalFake implementations -----------------------------------
+
+// Snapshot satisfies [TransactionalFake]. Captures the full balance/
+// version map + DrainedEvents slice so a rolled-back closure looks
+// like it never ran.
+func (r *FakeLeadCreditRepository) Snapshot() func() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	store := make(map[leadcredit.TenantID]*leadcredit.LeadCredit, len(r.Store))
+	for k, v := range r.Store {
+		store[k] = v
+	}
+	versions := make(map[leadcredit.TenantID]int64, len(r.versions))
+	for k, v := range r.versions {
+		versions[k] = v
+	}
+	drained := make([]leadcredit.Event, len(r.DrainedEvents))
+	copy(drained, r.DrainedEvents)
+	forceConflict := r.ForceConflictOnce
+	return func() {
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		r.Store = store
+		r.versions = versions
+		r.DrainedEvents = drained
+		r.ForceConflictOnce = forceConflict
+	}
+}
+
+// Snapshot satisfies [TransactionalFake] for the lead repository.
+// Captures the store map + DrainedEvents.
+func (r *FakePlatformLeadRepository) Snapshot() func() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	// Deep-copy the aggregate pointers via UnmarshalFromDB so closures
+	// that mutated the aggregate in-place (e.g. Purchase) don't leak
+	// past the rollback.
+	store := make(map[platformlead.ID]*platformlead.PlatformLead, len(r.Store))
+	for k, v := range r.Store {
+		store[k] = platformlead.UnmarshalFromDB(platformlead.Snapshot{
+			ID:                     v.ID(),
+			SourceContactID:        v.SourceContactID(),
+			Form:                   v.Form(),
+			GstVerified:            v.GstVerified(),
+			SoldToTenantID:         v.SoldToTenantID(),
+			SoldAt:                 v.SoldAt(),
+			SoldToMembershipID:     v.SoldToMembershipID(),
+			AmountPaisa:            v.AmountPaisa(),
+			VerifiedAt:             v.VerifiedAt(),
+			VerifiedByMembershipID: v.VerifiedByMembershipID(),
+			CreatedAt:              v.CreatedAt(),
+		})
+	}
+	drained := make([]platformlead.Event, len(r.DrainedEvents))
+	copy(drained, r.DrainedEvents)
+	return func() {
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		r.Store = store
+		r.DrainedEvents = drained
+	}
+}
+
 // Compile-time interface assertions — keep fakes in step with domain
 // interface drift.
 var (
@@ -332,6 +441,9 @@ var (
 	_ verificationcall.Repository  = (*FakeVerificationCallRepository)(nil)
 	_ platformlead.Repository      = (*FakePlatformLeadRepository)(nil)
 	_ leadcredit.Repository        = (*FakeLeadCreditRepository)(nil)
+	_ pg.UnitOfWork                = (*FakeUnitOfWork)(nil)
+	_ TransactionalFake            = (*FakeLeadCreditRepository)(nil)
+	_ TransactionalFake            = (*FakePlatformLeadRepository)(nil)
 )
 
 // Quiet the unused-import linter on query types when fakes ship before

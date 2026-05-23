@@ -46,6 +46,12 @@ func NewTopupLeadCreditsHandler(
 
 const topupMaxRetries = 3
 
+// topupRetryJitterMax bounds the per-attempt random sleep on
+// ErrConflict per ADR 0059 ("retries up to 3 times with a small jitter
+// ~10ms"). Same shape as purchaseRetryJitterMax — keeps the platform's
+// optimistic-concurrency retries thundering-herd-safe.
+const topupRetryJitterMax = 10 * time.Millisecond
+
 // Handle runs the topup with optimistic-version retry. Either INSERTs
 // a fresh row (when GetByTenant returns ErrNotFound) or UPDATEs the
 // existing row.
@@ -57,11 +63,8 @@ func (h TopupLeadCreditsHandler) Handle(
 		return TopupLeadCreditsResult{}, fmt.Errorf("topup: delta must be positive (got %d)", cmd.Delta)
 	}
 
-	var (
-		result  TopupLeadCreditsResult
-		lastErr error
-	)
-	for attempt := 0; attempt < topupMaxRetries; attempt++ {
+	var lastErr error
+	for attempt := range topupMaxRetries {
 		r, err := h.runOnce(ctx, cmd)
 		if err == nil {
 			return r, nil
@@ -70,8 +73,14 @@ func (h TopupLeadCreditsHandler) Handle(
 			return TopupLeadCreditsResult{}, err
 		}
 		lastErr = err
+		// Jittered sleep between retries (per ADR 0059). Skip the
+		// final wait since the loop is about to exit anyway.
+		if attempt+1 < topupMaxRetries {
+			if waitErr := sleepJitter(ctx, topupRetryJitterMax); waitErr != nil {
+				return TopupLeadCreditsResult{}, waitErr
+			}
+		}
 	}
-	_ = result
 	return TopupLeadCreditsResult{}, fmt.Errorf("topup: exhausted retries: %w", lastErr)
 }
 

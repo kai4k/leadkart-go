@@ -1,6 +1,7 @@
 package integrationevents
 
 import (
+	"errors"
 	"go/build"
 	"os"
 	"path/filepath"
@@ -9,6 +10,11 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/leadkart/leadkart-go/internal/platform/domain/leadcredit"
+	"github.com/leadkart/leadkart-go/internal/platform/domain/platformlead"
+	"github.com/leadkart/leadkart-go/internal/platform/domain/unverifiedcontact"
+	"github.com/leadkart/leadkart-go/internal/platform/domain/verificationcall"
 )
 
 // aliasRegex enforces the canonical wire-alias shape per messaging.md
@@ -136,8 +142,9 @@ func TestArch_NoFrameworkImports(t *testing.T) {
 }
 
 // TestArch_TenantScopedRecordsExposeTenantID verifies TenantScoped
-// records actually return their TenantID() property; smoke check that
-// the interface contract is honoured.
+// records actually return their TenantIDString() property; smoke check
+// that the interface contract is honoured. UUIDs travel the wire as
+// strings per ADR 0059 frozen brief.
 func TestArch_TenantScopedRecordsExposeTenantID(t *testing.T) {
 	t.Parallel()
 	for _, e := range all() {
@@ -145,7 +152,60 @@ func TestArch_TenantScopedRecordsExposeTenantID(t *testing.T) {
 		if !ok {
 			continue
 		}
-		_ = ts.TenantID() // smoke — interface satisfaction is the load-bearing check
+		_ = ts.TenantIDString() // smoke — interface satisfaction is the load-bearing check
+	}
+}
+
+// TestArch_FromDomainEvent_HandlesAllRegisteredDomainEvents asserts
+// that FromDomainEvent recognises every Platform domain-event TYPE
+// in the system. Each must return either a non-nil Event (mapped) OR
+// (nil, nil) (intentional suppression, documented in mapping.go). A
+// return of (nil, ErrUnknown) fails CI — it means a new domain event
+// was added without a matching mapper case (or a suppression note).
+//
+// This is the H6 fix from the Slice 1 review punch list: future event
+// additions can no longer silently double or vanish — the test fails
+// at the boundary, citing the missing type.
+//
+// Maintenance contract: when a new domain event TYPE is added under
+// internal/platform/domain/*, append a zero-value sample below AND
+// add the matching case to FromDomainEvent. The test then proves the
+// mapper covers it (or explicitly suppresses with a documented why).
+func TestArch_FromDomainEvent_HandlesAllRegisteredDomainEvents(t *testing.T) {
+	t.Parallel()
+
+	// One zero-value sample per recognised domain event TYPE. The
+	// PullEvents → drainEventsToOutbox pipeline only ever feeds
+	// FromDomainEvent values whose TYPE is in this list; the values'
+	// fields are NOT inspected — only the type switch fires.
+	samples := []any{
+		unverifiedcontact.CreatedEvent{},
+		unverifiedcontact.CallStartedEvent{},
+		unverifiedcontact.VerifiedEvent{},
+		unverifiedcontact.RejectedEvent{},
+		unverifiedcontact.MarkedBusyEvent{},
+		verificationcall.LoggedEvent{},
+		platformlead.VerifiedEvent{},
+		platformlead.PurchasedEvent{},
+		leadcredit.AdjustedEvent{},
+	}
+
+	for _, s := range samples {
+		s := s // capture for parallel subtest
+		name := reflect.TypeOf(s).String()
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			ie, err := FromDomainEvent(s)
+			if errors.Is(err, ErrUnknown) {
+				t.Fatalf("%s: FromDomainEvent returned ErrUnknown — add a case (or documented suppression) in mapping.go", name)
+			}
+			if err != nil {
+				t.Fatalf("%s: FromDomainEvent unexpected error: %v", name, err)
+			}
+			// (ie may be nil — intentional suppression — that's
+			// acceptable per the contract documented in mapping.go.)
+			_ = ie
+		})
 	}
 }
 

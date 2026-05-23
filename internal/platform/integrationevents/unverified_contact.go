@@ -2,21 +2,20 @@ package integrationevents
 
 import (
 	"time"
-
-	"github.com/google/uuid"
 )
 
 // UnverifiedContactCreatedV1 — a Lead Agent registered a new raw
 // contact in the Platform work queue. Platform-scoped (no tenant).
 //
+// All UUID fields wire-shaped as strings per ADR 0059 frozen brief.
 // Slice 1 consumers: none (reserved for future analytics + audit
 // projection in Slice 2). Wire shape frozen here per ADR 0059.
 type UnverifiedContactCreatedV1 struct {
 	platformMarker
 
-	ContactID             uuid.UUID `json:"contact_id"`
+	ContactID             string    `json:"contact_id"`
 	CreatedAt             time.Time `json:"created_at"`
-	CreatedByMembershipID uuid.UUID `json:"created_by_membership_id"`
+	CreatedByMembershipID string    `json:"created_by_membership_id"`
 	MobileE164            string    `json:"mobile_e164"`
 }
 

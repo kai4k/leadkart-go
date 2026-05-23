@@ -51,6 +51,10 @@ func (e *OutboxEnqueuer) EnqueueInTx(ctx context.Context, events ...integratione
 // writeOutboxEvents persists the supplied batch under the supplied tx.
 // Unexported — repositories call this from their Add / UpdateByID
 // methods to drain aggregate-side events.
+//
+// tenantID == uuid.Nil writes NULL into platform.outbox.tenant_id —
+// the column is NULLABLE post-migration 20260601000002 (ADR 0059 fix
+// C3). NULL signals "platform-scoped event, no owning tenant".
 func writeOutboxEvents(
 	ctx context.Context,
 	tx pgx.Tx,
@@ -70,7 +74,7 @@ func writeOutboxEvents(
 		}
 		err = q.InsertPlatformOutboxEvent(ctx, db.InsertPlatformOutboxEventParams{
 			ID:            pgUUID(ids.NewV7()),
-			TenantID:      pgUUID(tenantID),
+			TenantID:      pgUUIDOrNull(tenantID),
 			Topic:         ev.Topic(),
 			Payload:       payload,
 			OccurredAt:    pgRequiredTimestamp(ev.OccurredAt()),
@@ -87,15 +91,31 @@ func writeOutboxEvents(
 
 // tenantOfEvents picks the tenant FK to stamp on the outbox row. For
 // a single-event batch we read from the event itself when it's
-// TenantScoped; for Platform events we use uuid.Nil. For a mixed batch
-// we use the first TenantScoped's tenant — handlers SHOULD NOT mix
+// TenantScoped; for Platform events we return uuid.Nil — the writer
+// then INSERTs NULL into the (now nullable) tenant_id column per
+// migration 20260601000002 + ADR 0059 amendment. For a mixed batch we
+// use the first TenantScoped's tenant — handlers SHOULD NOT mix
 // platform + tenant-scoped events in one EnqueueInTx call (each call is
 // idempotent + cheap, separate them).
+//
+// Malformed TenantID (non-UUID string) is treated as Platform-scoped
+// (Nil) — defensive vs corrupt domain state; the outbox write MUST NOT
+// fail on a misshapen identifier (audit-log outage doctrine).
 func tenantOfEvents(events []integrationevents.Event) uuid.UUID {
 	for _, ev := range events {
-		if ts, ok := ev.(integrationevents.TenantScoped); ok {
-			return ts.TenantID()
+		ts, ok := ev.(integrationevents.TenantScoped)
+		if !ok {
+			continue
 		}
+		raw := ts.TenantIDString()
+		if raw == "" {
+			continue
+		}
+		parsed, err := uuid.Parse(raw)
+		if err != nil {
+			continue
+		}
+		return parsed
 	}
 	return uuid.Nil
 }

@@ -284,8 +284,9 @@ func startWiredPostgresForHTTP(t *testing.T) *pgxpool.Pool {
 	}
 	for _, s := range []string{
 		`CREATE ROLE leadkart_app LOGIN PASSWORD 'leadkart_app_pw' NOSUPERUSER NOINHERIT NOCREATEROLE NOCREATEDB`,
-		`GRANT USAGE ON SCHEMA app, identity TO leadkart_app`,
+		`GRANT USAGE ON SCHEMA app, identity, platform TO leadkart_app`,
 		`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA identity TO leadkart_app`,
+		`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA platform TO leadkart_app`,
 		`GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA app TO leadkart_app`,
 	} {
 		if _, err := gooseDB.ExecContext(ctx, s); err != nil {

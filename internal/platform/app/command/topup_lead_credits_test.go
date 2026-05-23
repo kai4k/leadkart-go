@@ -14,7 +14,7 @@ func TestTopupLeadCredits_CreatesRowOnFirstTopup(t *testing.T) {
 	t.Parallel()
 
 	credits := platformtest.NewFakeLeadCreditRepository()
-	uow := platformtest.FakeUnitOfWork{}
+	uow := platformtest.NewFakeUnitOfWork()
 
 	tenantID := leadcredit.TenantID(ids.NewV7().String())
 	op := leadcredit.MembershipID(ids.NewV7().String())
@@ -52,7 +52,7 @@ func TestTopupLeadCredits_RejectsNonPositiveDelta(t *testing.T) {
 	t.Parallel()
 
 	credits := platformtest.NewFakeLeadCreditRepository()
-	uow := platformtest.FakeUnitOfWork{}
+	uow := platformtest.NewFakeUnitOfWork()
 
 	h := command.NewTopupLeadCreditsHandler(uow, credits, nowFunc)
 	_, err := h.Handle(context.Background(), command.TopupLeadCreditsCommand{
@@ -70,7 +70,7 @@ func TestTopupLeadCredits_RetriesOnConflict(t *testing.T) {
 	t.Parallel()
 
 	credits := platformtest.NewFakeLeadCreditRepository()
-	uow := platformtest.FakeUnitOfWork{}
+	uow := platformtest.NewFakeUnitOfWork()
 
 	credits.ForceConflictOnce = true
 

@@ -15,19 +15,35 @@ import (
 // ErrUnknown surfaces from FromDomainEvent when the input is not a
 // recognised domain event in this module — usually means a new
 // aggregate method emitted an event without wiring the integration
-// counterpart. Caught at CI time by adapter-side tests.
+// counterpart. Caught at CI time by adapter-side tests + the
+// TestArch_FromDomainEvent_HandlesAllRegisteredDomainEvents arch test.
 var ErrUnknown = errors.New("platform.integrationevents: unrecognised domain event")
 
-// FromDomainEvent translates ANY recognised Platform domain event into
-// its canonical integration event. Used by repository adapters via the
-// shared drain helper.
+// FromDomainEvent enforces the event-suppression contract — READ
+// BEFORE TOUCHING.
 //
-// Returns (nil, nil) to deliberately suppress an event (e.g.
-// PlatformLead.VerifiedEvent — emitted via the dedicated handler-driven
-// path so the LeadSnapshot can be populated from the aggregate's Form
-// VO; not via this mechanical mapper).
+// `FromDomainEvent` recognises every Platform domain-event TYPE the
+// arch test [TestArch_FromDomainEvent_HandlesAllRegisteredDomainEvents]
+// enumerates. For each input the mapper returns one of:
 //
-// Returns ([wrapped] ErrUnknown) for unknown types.
+//  1. (Event, nil)   — translate this domain event into an integration
+//                      event; outbox writer persists it.
+//  2. (nil,   nil)   — INTENTIONAL suppression. The handler emits the
+//                      corresponding integration event directly because
+//                      the wire shape needs data the domain event does
+//                      NOT carry (e.g. LeadSnapshot, which lives on the
+//                      PlatformLead aggregate's Form VO; the domain
+//                      VerifiedEvent only carries IDs + timestamps).
+//                      Skipping the mechanical mapper here prevents
+//                      a duplicate emit when the handler runs.
+//  3. (nil,   err)   — typed `ErrUnknown` wrap. New domain event added
+//                      without a mapper case — arch test fails CI.
+//
+// Adding a new domain event:
+//   - ALWAYS add a case here (or the arch test fails).
+//   - To map it: build the integration event + `return (event, nil)`.
+//   - To suppress it: `return nil, nil` + a comment explaining WHY
+//     (handler emits directly? audit-only via outbox row itself? etc.)
 //
 //nolint:cyclop // Switch dispatcher — one case per recognised domain event.
 // Cyclomatic complexity scales with catalogue size by definition.
@@ -38,9 +54,9 @@ func FromDomainEvent(d any) (Event, error) {
 
 	case unverifiedcontact.CreatedEvent:
 		return UnverifiedContactCreatedV1{
-			ContactID:             mustParseUUID(e.ContactID.String()),
+			ContactID:             e.ContactID.String(),
 			CreatedAt:             e.CreatedAt.UTC(),
-			CreatedByMembershipID: mustParseUUID(e.CreatedByMembershipID.String()),
+			CreatedByMembershipID: e.CreatedByMembershipID.String(),
 			MobileE164:            e.MobileE164,
 		}, nil
 
@@ -73,11 +89,11 @@ func FromDomainEvent(d any) (Event, error) {
 
 	case verificationcall.LoggedEvent:
 		return VerificationCallLoggedV1{
-			CallID:               mustParseUUID(e.CallID.String()),
-			ContactID:            mustParseUUID(e.ContactID.String()),
+			CallID:               e.CallID.String(),
+			ContactID:            e.ContactID.String(),
 			OutcomeCode:          string(e.OutcomeCode),
 			LoggedAt:             e.LoggedAt.UTC(),
-			LoggedByMembershipID: mustParseUUID(e.LoggedByMembershipID.String()),
+			LoggedByMembershipID: e.LoggedByMembershipID.String(),
 		}, nil
 
 	// ----- PlatformLead ------------------------------------------------
@@ -109,41 +125,30 @@ func FromDomainEvent(d any) (Event, error) {
 		// adjustment was this" anchor; envelope ID is the
 		// "have I already processed this delivery" anchor.
 		return LeadCreditAdjustedV1{
-			TenantIDValue:          mustParseUUID(e.TenantID.String()),
+			TenantID:               e.TenantID.String(),
 			AdjustmentID:           newAdjustmentID(),
 			DeltaCredits:           e.Delta,
 			NewBalanceCredits:      e.NewBalance,
 			Reason:                 e.Reason,
 			AdjustedAt:             e.AdjustedAt.UTC(),
-			AdjustedByMembershipID: mustParseUUID(e.AdjustedByMembershipID.String()),
+			AdjustedByMembershipID: e.AdjustedByMembershipID.String(),
 		}, nil
 	}
 
 	return nil, fmt.Errorf("%w: %T", ErrUnknown, d)
 }
 
-// mustParseUUID converts a string UUID into [uuid.UUID]. Panics on
-// invalid input — domain IDs are always valid UUIDv7 strings at this
-// boundary (the aggregate factories generate them via ids.NewV7).
-// Panic is the right escalation: malformed input here means
-// in-process corruption, not user error.
-func mustParseUUID(s string) uuid.UUID {
-	u, err := uuid.Parse(s)
-	if err != nil {
-		panic(fmt.Sprintf("platform.integrationevents: malformed UUID %q: %v", s, err))
-	}
-	return u
-}
-
-// newAdjustmentID returns a fresh UUIDv7 for LeadCreditAdjustedV1's
-// natural-key field. Decoupled into a variable so tests can swap a
-// deterministic source.
+// newAdjustmentID returns a fresh UUIDv7 string for
+// LeadCreditAdjustedV1's natural-key field. Decoupled into a variable
+// so tests can swap a deterministic source.
 //
 //nolint:gochecknoglobals // test seam — swappable in tests via package-level assignment.
-var newAdjustmentID = func() uuid.UUID {
+var newAdjustmentID = func() string {
 	u, err := uuid.NewV7()
 	if err != nil {
+		// uuid.NewV7 only errors when the crypto/rand source is
+		// broken — fail loudly, this is an init-time-class failure.
 		panic(fmt.Sprintf("platform.integrationevents: NewV7: %v", err))
 	}
-	return u
+	return u.String()
 }
