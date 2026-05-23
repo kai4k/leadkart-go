@@ -18,7 +18,8 @@ import (
 
 // fakeMembershipRepo / fakeRoleRepo are minimal in-memory impls of the
 // domain Repository contracts. They cover the specific call shapes the
-// Resolver uses; full repo behaviour (AddInTx, etc.) lives in the
+// Resolver uses; full repo behaviour (UnitOfWork tx-joining via
+// pg.TxFromContext + outbox event drain — see ADR 0047) lives in the
 // adapter integration tests.
 type fakeMembershipRepo struct {
 	memberships map[membership.ID]*membership.Membership
