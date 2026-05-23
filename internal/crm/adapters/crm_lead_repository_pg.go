@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -21,6 +22,12 @@ import (
 // tenantUUIDFromCtx parses the tenant ID stashed in ctx via the
 // tenancy.WithID HTTP middleware. Returns (uuid.Nil, false) when no
 // tenant is present OR the stored string is not a UUID.
+//
+// Per reviewer M13: a parse failure here is a PROGRAMMER ERROR (the
+// HTTP middleware always inserts a validated UUID); we still log it
+// rather than silently dropping the request to a "tenant required"
+// 4xx with no operator trail. The callers already surface a clear
+// "tenant required in context" error to the operator.
 func tenantUUIDFromCtx(ctx context.Context) (uuid.UUID, bool) {
 	id, ok := tenancy.FromContext(ctx)
 	if !ok || id.IsZero() {
@@ -28,6 +35,8 @@ func tenantUUIDFromCtx(ctx context.Context) (uuid.UUID, bool) {
 	}
 	parsed, err := uuid.Parse(id.String())
 	if err != nil {
+		slog.ErrorContext(ctx, "crm: tenancy ctx carries non-UUID id (middleware bypass?)",
+			"raw", id.String(), "err", err)
 		return uuid.Nil, false
 	}
 	return parsed, true

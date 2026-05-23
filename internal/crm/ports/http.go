@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -21,6 +22,13 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/domain/permission"
 	"github.com/leadkart/leadkart-go/internal/identity/ports/authn"
 )
+
+// pincodeRE mirrors the CHECK constraint on crm.crm_leads.pincode
+// (Indian PIN code = 6 digits). Per reviewer M15, the HTTP handler
+// MUST validate caller-supplied ?pincode= input rather than letting
+// arbitrary strings reach the SQL exact-match filter (where they'd
+// silently return zero rows + waste a query).
+var pincodeRE = regexp.MustCompile(`^[1-9][0-9]{5}$`)
 
 // AddRoutes registers CRM HTTP handlers on mux per Mat Ryer 2024 canon.
 //
@@ -355,9 +363,13 @@ func parseLeadID(w http.ResponseWriter, r *http.Request) (crmlead.ID, bool) {
 }
 
 func parseListFilter(params url.Values) (crmlead.ListFilter, error) {
+	pincode := strings.TrimSpace(params.Get("pincode"))
+	if pincode != "" && !pincodeRE.MatchString(pincode) {
+		return crmlead.ListFilter{}, errors.New("pincode must be a 6-digit Indian PIN code")
+	}
 	f := crmlead.ListFilter{
 		City:           strings.TrimSpace(params.Get("city")),
-		Pincode:        strings.TrimSpace(params.Get("pincode")),
+		Pincode:        pincode,
 		BusinessType:   strings.TrimSpace(params.Get("business_type")),
 		MedicineSystem: strings.TrimSpace(params.Get("medicine_system")),
 		NameQuery:      strings.TrimSpace(params.Get("name")),
