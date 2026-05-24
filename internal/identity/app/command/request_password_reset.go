@@ -43,14 +43,19 @@ const passwordResetTokenBytes = 32
 // handler is now a thin orchestrator over the aggregate — TDL EDA canon.
 type RequestPasswordResetHandler struct {
 	persons person.Repository
+	now     func() time.Time
 }
 
-// NewRequestPasswordResetHandler wires the handler.
-func NewRequestPasswordResetHandler(persons person.Repository) RequestPasswordResetHandler {
+// NewRequestPasswordResetHandler wires the handler. `now` is the
+// explicit time source per the clock-injection refactor. Nil → time.Now.
+func NewRequestPasswordResetHandler(persons person.Repository, now func() time.Time) RequestPasswordResetHandler {
 	if persons == nil {
 		panic("command: NewRequestPasswordResetHandler persons repository required")
 	}
-	return RequestPasswordResetHandler{persons: persons}
+	if now == nil {
+		now = time.Now
+	}
+	return RequestPasswordResetHandler{persons: persons, now: now}
 }
 
 // Handle runs the request flow.
@@ -104,8 +109,9 @@ func (h RequestPasswordResetHandler) Handle(ctx context.Context, cmd RequestPass
 		return fmt.Errorf("request_password_reset: wrap hash: %w", err)
 	}
 
+	now := h.now()
 	if err := h.persons.UpdateByID(ctx, p.ID(), func(loaded *person.Person) (bool, error) {
-		if err := loaded.RequestPasswordReset(plaintext, tokenHash, PasswordResetTokenTTL); err != nil {
+		if err := loaded.RequestPasswordReset(plaintext, tokenHash, PasswordResetTokenTTL, now); err != nil {
 			return false, err
 		}
 		return true, nil

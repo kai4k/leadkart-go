@@ -1,6 +1,8 @@
 package command_test
 
 import (
+	"time"
+
 	"errors"
 	"testing"
 
@@ -8,11 +10,11 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
 )
 
+
 func TestGlobalSuspendPerson_Succeeds(t *testing.T) {
 	t.Parallel()
-	freezeClock(t)
 	repo := &fakePersonRepo{person: newPersonWithPassword(t, "irrelevant")}
-	h := command.NewGlobalSuspendPersonHandler(repo)
+	h := command.NewGlobalSuspendPersonHandler(repo, func() time.Time { return testNow })
 	err := h.Handle(t.Context(), command.GlobalSuspendPersonCommand{
 		PersonID: repo.person.ID(),
 		Reason:   "compliance: cross-tenant abuse 2026-05-07",
@@ -27,9 +29,8 @@ func TestGlobalSuspendPerson_Succeeds(t *testing.T) {
 
 func TestGlobalSuspendPerson_RequiresReason(t *testing.T) {
 	t.Parallel()
-	freezeClock(t)
 	repo := &fakePersonRepo{person: newPersonWithPassword(t, "irrelevant")}
-	h := command.NewGlobalSuspendPersonHandler(repo)
+	h := command.NewGlobalSuspendPersonHandler(repo, func() time.Time { return testNow })
 	err := h.Handle(t.Context(), command.GlobalSuspendPersonCommand{
 		PersonID: repo.person.ID(),
 	})
@@ -40,15 +41,14 @@ func TestGlobalSuspendPerson_RequiresReason(t *testing.T) {
 
 func TestLiftPersonGlobalSuspension_RoundTrip(t *testing.T) {
 	t.Parallel()
-	freezeClock(t)
 	p := newPersonWithPassword(t, "irrelevant")
-	if err := p.GloballySuspend("temp-ban"); err != nil {
+	if err := p.GloballySuspend("temp-ban", testNow); err != nil {
 		t.Fatalf("setup GloballySuspend: %v", err)
 	}
 	p.PullEvents()
 	repo := &fakePersonRepo{person: p}
 
-	h := command.NewLiftPersonGlobalSuspensionHandler(repo)
+	h := command.NewLiftPersonGlobalSuspensionHandler(repo, func() time.Time { return testNow })
 	if err := h.Handle(t.Context(), command.LiftPersonGlobalSuspensionCommand{
 		PersonID: p.ID(),
 	}); err != nil {
@@ -61,9 +61,8 @@ func TestLiftPersonGlobalSuspension_RoundTrip(t *testing.T) {
 
 func TestAnonymisePerson_Succeeds(t *testing.T) {
 	t.Parallel()
-	freezeClock(t)
 	repo := &fakePersonRepo{person: newPersonWithPassword(t, "irrelevant")}
-	h := command.NewAnonymisePersonHandler(repo)
+	h := command.NewAnonymisePersonHandler(repo, func() time.Time { return testNow })
 	if err := h.Handle(t.Context(), command.AnonymisePersonCommand{
 		PersonID: repo.person.ID(),
 	}); err != nil {
@@ -76,9 +75,8 @@ func TestAnonymisePerson_Succeeds(t *testing.T) {
 
 func TestUpdatePersonProfile_Succeeds(t *testing.T) {
 	t.Parallel()
-	freezeClock(t)
 	repo := &fakePersonRepo{person: newPersonWithPassword(t, "irrelevant")}
-	h := command.NewUpdatePersonProfileHandler(repo)
+	h := command.NewUpdatePersonProfileHandler(repo, func() time.Time { return testNow })
 	if err := h.Handle(t.Context(), command.UpdatePersonProfileCommand{
 		PersonID:  repo.person.ID(),
 		FirstName: "Renamed",
@@ -103,19 +101,19 @@ func TestPersonPlatformHandlers_NotFound(t *testing.T) {
 		fn   func() error
 	}{
 		{"GlobalSuspend", func() error {
-			return command.NewGlobalSuspendPersonHandler(repo).Handle(t.Context(),
+			return command.NewGlobalSuspendPersonHandler(repo, func() time.Time { return testNow }).Handle(t.Context(),
 				command.GlobalSuspendPersonCommand{PersonID: bad, Reason: "x"})
 		}},
 		{"LiftSuspension", func() error {
-			return command.NewLiftPersonGlobalSuspensionHandler(repo).Handle(t.Context(),
+			return command.NewLiftPersonGlobalSuspensionHandler(repo, func() time.Time { return testNow }).Handle(t.Context(),
 				command.LiftPersonGlobalSuspensionCommand{PersonID: bad})
 		}},
 		{"Anonymise", func() error {
-			return command.NewAnonymisePersonHandler(repo).Handle(t.Context(),
+			return command.NewAnonymisePersonHandler(repo, func() time.Time { return testNow }).Handle(t.Context(),
 				command.AnonymisePersonCommand{PersonID: bad})
 		}},
 		{"UpdateProfile", func() error {
-			return command.NewUpdatePersonProfileHandler(repo).Handle(t.Context(),
+			return command.NewUpdatePersonProfileHandler(repo, func() time.Time { return testNow }).Handle(t.Context(),
 				command.UpdatePersonProfileCommand{PersonID: bad, FirstName: "x", LastName: "y"})
 		}},
 	}

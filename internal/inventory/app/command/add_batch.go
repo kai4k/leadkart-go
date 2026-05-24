@@ -56,11 +56,17 @@ type AddBatchHandler struct {
 	uow      pg.UnitOfWork
 	products product.Repository
 	batches  batch.Repository
+	now      func() time.Time
 }
 
-// NewAddBatchHandler wires the handler.
-func NewAddBatchHandler(uow pg.UnitOfWork, products product.Repository, batches batch.Repository) AddBatchHandler {
-	return AddBatchHandler{uow: uow, products: products, batches: batches}
+// NewAddBatchHandler wires the handler. `now` is the explicit time
+// source per the clock-injection refactor — composition root wires
+// `time.Now`; tests inject a fixed-time closure. Nil → time.Now.
+func NewAddBatchHandler(uow pg.UnitOfWork, products product.Repository, batches batch.Repository, now func() time.Time) AddBatchHandler {
+	if now == nil {
+		now = time.Now
+	}
+	return AddBatchHandler{uow: uow, products: products, batches: batches, now: now}
 }
 
 // Handle adds a batch to the given product inside one tenant-scoped UoW.
@@ -72,6 +78,7 @@ func NewAddBatchHandler(uow pg.UnitOfWork, products product.Repository, batches 
 // Returns batch.ErrBatchNumberTaken on (product_id, batch_number)
 // unique-violation.
 func (h AddBatchHandler) Handle(ctx context.Context, cmd AddBatchCommand) (AddBatchResult, error) {
+	now := h.now()
 	var result AddBatchResult
 	err := h.uow.WithinTx(ctx, pg.TxScopeTenant, func(ctx context.Context) error {
 		p, err := h.products.GetByID(ctx, cmd.ProductID)
@@ -102,6 +109,7 @@ func (h AddBatchHandler) Handle(ctx context.Context, cmd AddBatchCommand) (AddBa
 				MRPPaise:                   cmd.MRPPaise,
 				PurchasePricePaise:         cmd.PurchasePricePaise,
 			},
+			now,
 		)
 		if err != nil {
 			return fmt.Errorf("add batch: construct: %w", err)

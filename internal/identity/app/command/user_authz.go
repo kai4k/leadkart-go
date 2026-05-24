@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/permission"
@@ -26,14 +27,19 @@ type AssignUserRoleCommand struct {
 // AssignUserRoleHandler runs the assignment.
 type AssignUserRoleHandler struct {
 	memberships membership.Repository
+	now         func() time.Time
 }
 
-// NewAssignUserRoleHandler wires the handler.
-func NewAssignUserRoleHandler(m membership.Repository) AssignUserRoleHandler {
+// NewAssignUserRoleHandler wires the handler. `now` is the explicit
+// time source per the clock-injection refactor. Nil → time.Now.
+func NewAssignUserRoleHandler(m membership.Repository, now func() time.Time) AssignUserRoleHandler {
 	if m == nil {
 		panic("command: NewAssignUserRoleHandler memberships repository required")
 	}
-	return AssignUserRoleHandler{memberships: m}
+	if now == nil {
+		now = time.Now
+	}
+	return AssignUserRoleHandler{memberships: m, now: now}
 }
 
 // Handle dispatches to [Membership.AssignRole].
@@ -44,8 +50,9 @@ func (h AssignUserRoleHandler) Handle(ctx context.Context, cmd AssignUserRoleCom
 	if cmd.RoleID.IsZero() {
 		return errors.New("assign_user_role: role id required")
 	}
+	now := h.now()
 	err := h.memberships.UpdateByID(ctx, cmd.MembershipID, func(m *membership.Membership) (bool, error) {
-		if err := m.AssignRole(cmd.RoleID); err != nil {
+		if err := m.AssignRole(cmd.RoleID, now); err != nil {
 			return false, err
 		}
 		return true, nil
@@ -70,14 +77,19 @@ type RevokeUserRoleCommand struct {
 // RevokeUserRoleHandler runs the revocation.
 type RevokeUserRoleHandler struct {
 	memberships membership.Repository
+	now         func() time.Time
 }
 
-// NewRevokeUserRoleHandler wires the handler.
-func NewRevokeUserRoleHandler(m membership.Repository) RevokeUserRoleHandler {
+// NewRevokeUserRoleHandler wires the handler. `now` is the explicit
+// time source per the clock-injection refactor. Nil → time.Now.
+func NewRevokeUserRoleHandler(m membership.Repository, now func() time.Time) RevokeUserRoleHandler {
 	if m == nil {
 		panic("command: NewRevokeUserRoleHandler memberships repository required")
 	}
-	return RevokeUserRoleHandler{memberships: m}
+	if now == nil {
+		now = time.Now
+	}
+	return RevokeUserRoleHandler{memberships: m, now: now}
 }
 
 // Handle dispatches to [Membership.RevokeRole].
@@ -88,8 +100,9 @@ func (h RevokeUserRoleHandler) Handle(ctx context.Context, cmd RevokeUserRoleCom
 	if cmd.RoleID.IsZero() {
 		return errors.New("revoke_user_role: role id required")
 	}
+	now := h.now()
 	err := h.memberships.UpdateByID(ctx, cmd.MembershipID, func(m *membership.Membership) (bool, error) {
-		if err := m.RevokeRole(cmd.RoleID); err != nil {
+		if err := m.RevokeRole(cmd.RoleID, now); err != nil {
 			return false, err
 		}
 		return true, nil
@@ -124,14 +137,19 @@ var ErrPermissionUnknown = errors.New("user: unknown permission")
 // ReplaceUserPermissionOverridesHandler runs the overlay replacement.
 type ReplaceUserPermissionOverridesHandler struct {
 	memberships membership.Repository
+	now         func() time.Time
 }
 
-// NewReplaceUserPermissionOverridesHandler wires the handler.
-func NewReplaceUserPermissionOverridesHandler(m membership.Repository) ReplaceUserPermissionOverridesHandler {
+// NewReplaceUserPermissionOverridesHandler wires the handler. `now` is
+// the explicit time source per the clock-injection refactor. Nil → time.Now.
+func NewReplaceUserPermissionOverridesHandler(m membership.Repository, now func() time.Time) ReplaceUserPermissionOverridesHandler {
 	if m == nil {
 		panic("command: NewReplaceUserPermissionOverridesHandler memberships repository required")
 	}
-	return ReplaceUserPermissionOverridesHandler{memberships: m}
+	if now == nil {
+		now = time.Now
+	}
+	return ReplaceUserPermissionOverridesHandler{memberships: m, now: now}
 }
 
 // Handle resolves each permission name through the closed catalogue
@@ -148,8 +166,9 @@ func (h ReplaceUserPermissionOverridesHandler) Handle(ctx context.Context, cmd R
 	if err != nil {
 		return err
 	}
+	now := h.now()
 	upErr := h.memberships.UpdateByID(ctx, cmd.MembershipID, func(m *membership.Membership) (bool, error) {
-		if err := m.ReplacePermissionOverlays(granted, revoked); err != nil {
+		if err := m.ReplacePermissionOverlays(granted, revoked, now); err != nil {
 			return false, err
 		}
 		return true, nil
@@ -192,14 +211,19 @@ type AssignUserManagerCommand struct {
 // AssignUserManagerHandler runs the manager assignment.
 type AssignUserManagerHandler struct {
 	memberships membership.Repository
+	now         func() time.Time
 }
 
-// NewAssignUserManagerHandler wires the handler.
-func NewAssignUserManagerHandler(m membership.Repository) AssignUserManagerHandler {
+// NewAssignUserManagerHandler wires the handler. `now` is the explicit
+// time source per the clock-injection refactor. Nil → time.Now.
+func NewAssignUserManagerHandler(m membership.Repository, now func() time.Time) AssignUserManagerHandler {
 	if m == nil {
 		panic("command: NewAssignUserManagerHandler memberships repository required")
 	}
-	return AssignUserManagerHandler{memberships: m}
+	if now == nil {
+		now = time.Now
+	}
+	return AssignUserManagerHandler{memberships: m, now: now}
 }
 
 // Handle dispatches to [Membership.AssignManager]. Self-management
@@ -211,8 +235,9 @@ func (h AssignUserManagerHandler) Handle(ctx context.Context, cmd AssignUserMana
 	if cmd.ManagerID.IsZero() {
 		return errors.New("assign_user_manager: manager id required")
 	}
+	now := h.now()
 	err := h.memberships.UpdateByID(ctx, cmd.MembershipID, func(m *membership.Membership) (bool, error) {
-		if err := m.AssignManager(cmd.ManagerID); err != nil {
+		if err := m.AssignManager(cmd.ManagerID, now); err != nil {
 			return false, err
 		}
 		return true, nil
@@ -236,14 +261,19 @@ type RemoveUserManagerCommand struct {
 // RemoveUserManagerHandler runs the manager removal.
 type RemoveUserManagerHandler struct {
 	memberships membership.Repository
+	now         func() time.Time
 }
 
-// NewRemoveUserManagerHandler wires the handler.
-func NewRemoveUserManagerHandler(m membership.Repository) RemoveUserManagerHandler {
+// NewRemoveUserManagerHandler wires the handler. `now` is the explicit
+// time source per the clock-injection refactor. Nil → time.Now.
+func NewRemoveUserManagerHandler(m membership.Repository, now func() time.Time) RemoveUserManagerHandler {
 	if m == nil {
 		panic("command: NewRemoveUserManagerHandler memberships repository required")
 	}
-	return RemoveUserManagerHandler{memberships: m}
+	if now == nil {
+		now = time.Now
+	}
+	return RemoveUserManagerHandler{memberships: m, now: now}
 }
 
 // Handle dispatches to [Membership.RemoveManager]. Idempotent —
@@ -252,8 +282,9 @@ func (h RemoveUserManagerHandler) Handle(ctx context.Context, cmd RemoveUserMana
 	if cmd.MembershipID.IsZero() {
 		return errors.New("remove_user_manager: membership id required")
 	}
+	now := h.now()
 	err := h.memberships.UpdateByID(ctx, cmd.MembershipID, func(m *membership.Membership) (bool, error) {
-		if err := m.RemoveManager(); err != nil {
+		if err := m.RemoveManager(now); err != nil {
 			return false, err
 		}
 		return true, nil

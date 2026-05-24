@@ -4,6 +4,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/leadkart/leadkart-go/internal/common/ids"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
@@ -12,6 +13,11 @@ import (
 	"github.com/leadkart/leadkart-go/internal/inventory/domain/product"
 	"github.com/leadkart/leadkart-go/internal/inventory/domain/stockmovement"
 )
+
+// fixedNow is the deterministic timestamp every test passes to
+// stockmovement.New. Avoids any reliance on a package-level clock —
+// each test fixes the instant explicitly per the clock-injection refactor.
+var fixedNow = time.Date(2026, 5, 24, 12, 0, 0, 0, time.UTC)
 
 func freshIDs(t *testing.T) (stockmovement.ID, batch.ID, product.ID, tenant.ID, membership.ID) {
 	t.Helper()
@@ -36,7 +42,7 @@ func TestNew_InboundHappyPath(t *testing.T) {
 		Reason:              "Initial stock-in",
 		ActorMembershipID:   actor,
 		SourceReference:     &src,
-	})
+	}, fixedNow)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -76,7 +82,7 @@ func TestNew_NilSourceReference_OK(t *testing.T) {
 		QuantityOnHandAfter: 95,
 		Reason:              "shrinkage",
 		ActorMembershipID:   actor,
-	})
+	}, fixedNow)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -134,7 +140,7 @@ func TestNew_InvalidInputs(t *testing.T) {
 			if tc.zid {
 				id = stockmovement.ID("")
 			}
-			if _, err := stockmovement.New(id, spec); !errors.Is(err, stockmovement.ErrInvalid) {
+			if _, err := stockmovement.New(id, spec, fixedNow); !errors.Is(err, stockmovement.ErrInvalid) {
 				t.Fatalf("want ErrInvalid, got %v", err)
 			}
 		})
@@ -157,7 +163,7 @@ func TestNew_OutboundQuantityIsStoredAsSignedNegative(t *testing.T) {
 		QuantityOnHandAfter: 70,
 		Reason:              "order fulfilment",
 		ActorMembershipID:   actor,
-	})
+	}, fixedNow)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -181,7 +187,7 @@ func TestNew_AdjustmentAcceptsAnyNonZero(t *testing.T) {
 			QuantityOnHandAfter: base + q,
 			Reason:              "adj",
 			ActorMembershipID:   actor,
-		})
+		}, fixedNow)
 		if err != nil {
 			t.Fatalf("Adjustment qty=%d: %v", q, err)
 		}

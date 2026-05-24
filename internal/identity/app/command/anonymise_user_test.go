@@ -1,6 +1,8 @@
 package command_test
 
 import (
+	"time"
+
 	"errors"
 	"testing"
 
@@ -9,9 +11,12 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
 
+// testNow is the deterministic instant test fixtures pass to domain
+// factories + mutators per the clock-injection refactor.
+var testNow = time.Date(2026, 5, 24, 12, 0, 0, 0, time.UTC)
+
 func TestAnonymiseUser_Cascades(t *testing.T) {
 	t.Parallel()
-	freezeClock(t)
 	mRepo := newFakeMembershipRepo()
 	pRepo := &fakePersonRepo{person: newPersonWithPassword(t, "irrelevant")}
 
@@ -20,6 +25,7 @@ func TestAnonymiseUser_Cascades(t *testing.T) {
 		pRepo.person.ID(),
 		tenant.ID("33333333-3333-3333-3333-333333333333"),
 		membership.ID(""),
+		testNow,
 	)
 	if err != nil {
 		t.Fatalf("membership.New: %v", err)
@@ -27,7 +33,7 @@ func TestAnonymiseUser_Cascades(t *testing.T) {
 	m.PullEvents()
 	_ = mRepo.Add(t.Context(), m)
 
-	h := command.NewAnonymiseUserHandler(mRepo, pRepo)
+	h := command.NewAnonymiseUserHandler(mRepo, pRepo, func() time.Time { return testNow })
 	if err := h.Handle(t.Context(), command.AnonymiseUserCommand{MembershipID: m.ID()}); err != nil {
 		t.Fatalf("Handle: %v", err)
 	}
@@ -40,7 +46,7 @@ func TestAnonymiseUser_NotFound(t *testing.T) {
 	t.Parallel()
 	mRepo := newFakeMembershipRepo()
 	pRepo := &fakePersonRepo{}
-	h := command.NewAnonymiseUserHandler(mRepo, pRepo)
+	h := command.NewAnonymiseUserHandler(mRepo, pRepo, func() time.Time { return testNow })
 	err := h.Handle(t.Context(), command.AnonymiseUserCommand{
 		MembershipID: membership.ID("99999999-9999-9999-9999-999999999999"),
 	})

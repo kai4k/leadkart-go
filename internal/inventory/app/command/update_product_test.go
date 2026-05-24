@@ -3,6 +3,7 @@ package command_test
 import (
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/leadkart/leadkart-go/internal/inventory/app/command"
 	"github.com/leadkart/leadkart-go/internal/inventory/domain/product"
@@ -14,7 +15,7 @@ func TestUpdateProductHandler_HappyPath_AppliesPartial(t *testing.T) {
 	tid := newTenantID(t)
 	actor := newMembershipID(t)
 	p := seedProduct(t, repo, tid, actor, "UPD-1")
-	h := command.NewUpdateProductHandler(repo)
+	h := command.NewUpdateProductHandler(repo, func() time.Time { return fixedNow })
 
 	newName := "Renamed"
 	err := h.Handle(t.Context(), command.UpdateProductCommand{
@@ -34,7 +35,7 @@ func TestUpdateProductHandler_HappyPath_AppliesPartial(t *testing.T) {
 func TestUpdateProductHandler_MissingProduct_ReturnsErrNotFound(t *testing.T) {
 	t.Parallel()
 	repo := newFakeProductRepo()
-	h := command.NewUpdateProductHandler(repo)
+	h := command.NewUpdateProductHandler(repo, func() time.Time { return fixedNow })
 	actor := newMembershipID(t)
 
 	newName := "x"
@@ -55,7 +56,7 @@ func TestUpdateProductHandler_InvalidGSTRate_ReturnsErrInvalid(t *testing.T) {
 	tid := newTenantID(t)
 	actor := newMembershipID(t)
 	p := seedProduct(t, repo, tid, actor, "GST-1")
-	h := command.NewUpdateProductHandler(repo)
+	h := command.NewUpdateProductHandler(repo, func() time.Time { return fixedNow })
 
 	bad := 99999 // > 10000 ceiling
 	err := h.Handle(t.Context(), command.UpdateProductCommand{
@@ -77,11 +78,11 @@ func TestUpdateProductHandler_DeletedProduct_ReturnsErrDeleted(t *testing.T) {
 	// Soft-delete the product through the domain so the repo stays in
 	// sync (fakeProductRepo's GetByID filters IsDeleted, so we
 	// short-circuit that here by mutating directly).
-	if err := p.SoftDelete(actor); err != nil {
+	if err := p.SoftDelete(actor, fixedNow); err != nil {
 		t.Fatalf("SoftDelete: %v", err)
 	}
 	_ = p.PullEvents()
-	h := command.NewUpdateProductHandler(repo)
+	h := command.NewUpdateProductHandler(repo, func() time.Time { return fixedNow })
 
 	newName := "Late"
 	err := h.Handle(t.Context(), command.UpdateProductCommand{

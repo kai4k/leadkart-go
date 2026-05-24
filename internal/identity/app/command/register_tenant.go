@@ -17,9 +17,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/leadkart/leadkart-go/internal/common/email"
 	"github.com/leadkart/leadkart-go/internal/common/ids"
+	"github.com/leadkart/leadkart-go/internal/common/pg"
 	"github.com/leadkart/leadkart-go/internal/common/slug"
 	"github.com/leadkart/leadkart-go/internal/common/tenancy"
 	"github.com/leadkart/leadkart-go/internal/identity/app/argon2"
@@ -28,7 +30,6 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/role"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
-	"github.com/leadkart/leadkart-go/internal/common/pg"
 )
 
 // RegisterTenantCommand carries the validated input for the
@@ -84,25 +85,34 @@ type RegisterTenantHandler struct {
 	persons     person.Repository
 	memberships membership.Repository
 	roles       role.Repository
+	now         func() time.Time
 }
 
 // NewRegisterTenantHandler wires the handler against domain
 // repository interfaces + a UnitOfWork. Cheney "accept interfaces,
 // return structs" — adapters implement the interfaces; this handler
 // has no compile-time knowledge of pgx / sqlc.
+//
+// `now` is the explicit time source per the clock-injection refactor —
+// composition root wires `time.Now`. Nil → time.Now.
 func NewRegisterTenantHandler(
 	uow pg.UnitOfWork,
 	tenants tenant.Repository,
 	persons person.Repository,
 	memberships membership.Repository,
 	roles role.Repository,
+	now func() time.Time,
 ) RegisterTenantHandler {
+	if now == nil {
+		now = time.Now
+	}
 	return RegisterTenantHandler{
 		uow:         uow,
 		tenants:     tenants,
 		persons:     persons,
 		memberships: memberships,
 		roles:       roles,
+		now:         now,
 	}
 }
 
@@ -152,11 +162,12 @@ func (h RegisterTenantHandler) Handle(
 		}
 	}
 
-	result, err := h.persistAggregatesInTx(ctx, cmd, existing, pwd)
+	now := h.now()
+	result, err := h.persistAggregatesInTx(ctx, cmd, existing, pwd, now)
 	if err != nil {
 		return RegisterTenantResult{}, err
 	}
-	if err := h.seedRolesAndAssignOwner(ctx, result); err != nil {
+	if err := h.seedRolesAndAssignOwner(ctx, result, now); err != nil {
 		return RegisterTenantResult{}, err
 	}
 	return result, nil
@@ -211,12 +222,14 @@ func (h RegisterTenantHandler) persistAggregatesInTx(
 	cmd RegisterTenantCommand,
 	existing *person.Person,
 	pwd person.PasswordHash,
+	now time.Time,
 ) (RegisterTenantResult, error) {
 	var result RegisterTenantResult
 	err := h.uow.WithinTx(ctx, pg.TxScopePlatform, func(ctx context.Context) error {
 		t, terr := tenant.New(
 			tenant.ID(ids.NewV7().String()),
 			cmd.Slug, cmd.LegalName, cmd.DisplayName, cmd.AdminEmail,
+			now,
 		)
 		if terr != nil {
 			return fmt.Errorf("construct tenant: %w", terr)
@@ -226,11 +239,11 @@ func (h RegisterTenantHandler) persistAggregatesInTx(
 		if terr := h.tenants.Add(ctx, t); terr != nil {
 			return fmt.Errorf("persist tenant: %w", terr)
 		}
-		p, perr := h.findOrCreatePerson(ctx, cmd, existing, pwd)
+		p, perr := h.findOrCreatePerson(ctx, cmd, existing, pwd, now)
 		if perr != nil {
 			return perr
 		}
-		m, merr := h.createMembership(ctx, p.ID(), t.ID())
+		m, merr := h.createMembership(ctx, p.ID(), t.ID(), now)
 		if merr != nil {
 			return merr
 		}
@@ -258,6 +271,7 @@ func (h RegisterTenantHandler) findOrCreatePerson(
 	cmd RegisterTenantCommand,
 	existing *person.Person,
 	pwd person.PasswordHash,
+	now time.Time,
 ) (*person.Person, error) {
 	if existing != nil {
 		return existing, nil
@@ -269,6 +283,7 @@ func (h RegisterTenantHandler) findOrCreatePerson(
 	p, err := person.NewWithMustChangePassword(
 		person.ID(ids.NewV7().String()),
 		cmd.AdminEmail, cmd.AdminFirstName, cmd.AdminLastName, pwd,
+		now,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("construct person: %w", err)
@@ -290,11 +305,12 @@ func (h RegisterTenantHandler) createMembership(
 	ctx context.Context,
 	personID person.ID,
 	tenantID tenant.ID,
+	now time.Time,
 ) (*membership.Membership, error) {
 	// createdBy = zero — RegisterTenant's first admin is self-bootstrapped
 	// (no pre-existing Membership invited them). Distinguishes
 	// onboarding-time admin from later-invited users in audit queries.
-	m, err := membership.New(membership.ID(ids.NewV7().String()), personID, tenantID, membership.ID(""))
+	m, err := membership.New(membership.ID(ids.NewV7().String()), personID, tenantID, membership.ID(""), now)
 	if err != nil {
 		return nil, fmt.Errorf("construct membership: %w", err)
 	}
@@ -322,9 +338,10 @@ func (h RegisterTenantHandler) createMembership(
 func (h RegisterTenantHandler) seedRolesAndAssignOwner(
 	ctx context.Context,
 	result RegisterTenantResult,
+	now time.Time,
 ) error {
 	tenantCtx := tenancy.WithID(ctx, tenancy.ID(result.TenantID.String()))
-	seededRoles, err := seed.ApplyDefaultRoles(tenantCtx, h.roles, result.TenantID)
+	seededRoles, err := seed.ApplyDefaultRoles(tenantCtx, h.roles, result.TenantID, now)
 	if err != nil {
 		return fmt.Errorf("register tenant: seed default roles: %w", err)
 	}
@@ -334,7 +351,7 @@ func (h RegisterTenantHandler) seedRolesAndAssignOwner(
 	}
 	err = h.memberships.UpdateByID(tenantCtx, result.MembershipID,
 		func(m *membership.Membership) (bool, error) {
-			return true, m.AssignRole(owner.ID())
+			return true, m.AssignRole(owner.ID(), now)
 		})
 	if err != nil {
 		return fmt.Errorf("register tenant: assign CompanyOwner to admin membership: %w", err)

@@ -20,8 +20,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
-	"github.com/leadkart/leadkart-go/internal/common/clock"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/permission"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/role"
@@ -35,13 +35,20 @@ import (
 type Resolver struct {
 	memberships membership.Repository
 	roles       role.Repository
+	now         func() time.Time
 }
 
 // NewResolver wires the orchestrator. Both deps are interfaces (the
 // domain-layer Repository contracts) so tests + cache decorators can
 // substitute fakes without reaching into infrastructure.
-func NewResolver(memberships membership.Repository, roles role.Repository) *Resolver {
-	return &Resolver{memberships: memberships, roles: roles}
+//
+// `now` is the explicit time source for evaluating time-bound permission
+// overlays per ADR 0055. Composition root wires `time.Now`. Nil → time.Now.
+func NewResolver(memberships membership.Repository, roles role.Repository, now func() time.Time) *Resolver {
+	if now == nil {
+		now = time.Now
+	}
+	return &Resolver{memberships: memberships, roles: roles, now: now}
 }
 
 // Resolve returns the Membership's effective permission set per
@@ -72,7 +79,7 @@ func (r *Resolver) Resolve(
 	if err != nil {
 		return nil, err
 	}
-	return m.EffectivePermissions(roles, clock.Now()), nil
+	return m.EffectivePermissions(roles, r.now()), nil
 }
 
 // ResolveForLoaded skips the membership load — use this when the
@@ -92,7 +99,7 @@ func (r *Resolver) ResolveForLoaded(
 	if err != nil {
 		return nil, err
 	}
-	return m.EffectivePermissions(roles, clock.Now()), nil
+	return m.EffectivePermissions(roles, r.now()), nil
 }
 
 // AuthClaims is the bundled output of [Resolver.ResolveAuth] — the two
@@ -133,7 +140,7 @@ func (r *Resolver) ResolveAuth(
 		}
 	}
 	return AuthClaims{
-		Permissions: m.EffectivePermissions(roles, clock.Now()),
+		Permissions: m.EffectivePermissions(roles, r.now()),
 		IsSuperUser: isSuper,
 	}, nil
 }

@@ -4,9 +4,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/leadkart/leadkart-go/internal/common/clock"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
 )
+
 
 // Lockout-policy + must-change-password tests per ADR 0053. Pure
 // aggregate-level coverage — repository / login-flow integration
@@ -111,7 +111,7 @@ func TestPerson_RegisterSuccessfulLogin_ClearsCounter(t *testing.T) {
 	}
 	_ = p.PullEvents() // drain any incidental events
 
-	p.RegisterSuccessfulLogin()
+	p.RegisterSuccessfulLogin(testNow)
 	if got := p.FailedLoginCount(); got != 0 {
 		t.Errorf("FailedLoginCount = %d, want 0", got)
 	}
@@ -124,15 +124,13 @@ func TestPerson_RegisterSuccessfulLogin_ClearsCounter(t *testing.T) {
 }
 
 func TestPerson_RegisterSuccessfulLogin_AfterFailures_EmitsUnlockEvent(t *testing.T) {
-	t.Cleanup(clock.Reset)
-	clock.Set(time.Date(2026, 5, 23, 13, 0, 0, 0, time.UTC))
 	p := newPerson(t)
 	_ = p.PullEvents()
 
 	p.RegisterFailedLogin(time.Date(2026, 5, 23, 12, 30, 0, 0, time.UTC))
 	_ = p.PullEvents()
 
-	p.RegisterSuccessfulLogin()
+	p.RegisterSuccessfulLogin(testNow)
 	events := p.PullEvents()
 	var found bool
 	for _, e := range events {
@@ -153,7 +151,7 @@ func TestPerson_RegisterSuccessfulLogin_Clean_NoEvent(t *testing.T) {
 
 	// No prior failures — successful login should be a silent no-op
 	// (clean accounts don't emit unlock events).
-	p.RegisterSuccessfulLogin()
+	p.RegisterSuccessfulLogin(testNow)
 	if got := p.PullEvents(); len(got) != 0 {
 		t.Errorf("expected 0 events on clean success, got %d", len(got))
 	}
@@ -197,11 +195,9 @@ func TestPerson_IsLocked_ZeroLockedUntil_IsNotLocked(t *testing.T) {
 // ----- MustChangePassword (BRD line 241) ------------------------------------
 
 func TestPerson_NewWithMustChangePassword_SetsFlag(t *testing.T) {
-	t.Cleanup(clock.Reset)
-	clock.Set(time.Date(2026, 5, 23, 12, 0, 0, 0, time.UTC))
 
 	id := newID(t)
-	p, err := person.NewWithMustChangePassword(id, mustEmail(t, "x@y.io"), "X", "Y", mustHash(t))
+	p, err := person.NewWithMustChangePassword(id, mustEmail(t, "x@y.io"), "X", "Y", mustHash(t), testNow)
 	if err != nil {
 		t.Fatalf("NewWithMustChangePassword: %v", err)
 	}
@@ -211,8 +207,6 @@ func TestPerson_NewWithMustChangePassword_SetsFlag(t *testing.T) {
 }
 
 func TestPerson_New_DefaultsMustChangePasswordFalse(t *testing.T) {
-	t.Cleanup(clock.Reset)
-	clock.Set(time.Date(2026, 5, 23, 12, 0, 0, 0, time.UTC))
 	p := newPerson(t)
 	if p.MustChangePassword() {
 		t.Error("MustChangePassword should default false for self-rotated path")
@@ -220,10 +214,8 @@ func TestPerson_New_DefaultsMustChangePasswordFalse(t *testing.T) {
 }
 
 func TestPerson_ChangePassword_ClearsMustChangePassword(t *testing.T) {
-	t.Cleanup(clock.Reset)
-	clock.Set(time.Date(2026, 5, 23, 12, 0, 0, 0, time.UTC))
 
-	p, err := person.NewWithMustChangePassword(newID(t), mustEmail(t, "z@q.io"), "Z", "Q", mustHash(t))
+	p, err := person.NewWithMustChangePassword(newID(t), mustEmail(t, "z@q.io"), "Z", "Q", mustHash(t), testNow)
 	if err != nil {
 		t.Fatalf("NewWithMustChangePassword: %v", err)
 	}
@@ -238,7 +230,7 @@ func TestPerson_ChangePassword_ClearsMustChangePassword(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewPasswordHash: %v", err)
 	}
-	if err := p.ChangePassword(newHash); err != nil {
+	if err := p.ChangePassword(newHash, testNow); err != nil {
 		t.Fatalf("ChangePassword: %v", err)
 	}
 	if p.MustChangePassword() {
@@ -247,15 +239,13 @@ func TestPerson_ChangePassword_ClearsMustChangePassword(t *testing.T) {
 }
 
 func TestPerson_ConfirmPasswordReset_ClearsMustChangePassword(t *testing.T) {
-	t.Cleanup(clock.Reset)
-	clock.Set(time.Date(2026, 5, 23, 12, 0, 0, 0, time.UTC))
 
-	p, err := person.NewWithMustChangePassword(newID(t), mustEmail(t, "r@s.io"), "R", "S", mustHash(t))
+	p, err := person.NewWithMustChangePassword(newID(t), mustEmail(t, "r@s.io"), "R", "S", mustHash(t), testNow)
 	if err != nil {
 		t.Fatalf("NewWithMustChangePassword: %v", err)
 	}
 	tokenHash := mustResetHash(t, validResetHash)
-	if err := p.RequestPasswordReset("plaintext", tokenHash, time.Hour); err != nil {
+	if err := p.RequestPasswordReset("plaintext", tokenHash, time.Hour, testNow); err != nil {
 		t.Fatalf("RequestPasswordReset: %v", err)
 	}
 	_ = p.PullEvents()
@@ -270,7 +260,7 @@ func TestPerson_ConfirmPasswordReset_ClearsMustChangePassword(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewPasswordHash: %v", err)
 	}
-	if err := p.ConfirmPasswordReset(tokenHash, newHash); err != nil {
+	if err := p.ConfirmPasswordReset(tokenHash, newHash, testNow); err != nil {
 		t.Fatalf("ConfirmPasswordReset: %v", err)
 	}
 	if p.MustChangePassword() {
@@ -279,10 +269,8 @@ func TestPerson_ConfirmPasswordReset_ClearsMustChangePassword(t *testing.T) {
 }
 
 func TestPerson_MarkPasswordChanged_ClearsFlag_NoEvent(t *testing.T) {
-	t.Cleanup(clock.Reset)
-	clock.Set(time.Date(2026, 5, 23, 12, 0, 0, 0, time.UTC))
 
-	p, err := person.NewWithMustChangePassword(newID(t), mustEmail(t, "m@n.io"), "M", "N", mustHash(t))
+	p, err := person.NewWithMustChangePassword(newID(t), mustEmail(t, "m@n.io"), "M", "N", mustHash(t), testNow)
 	if err != nil {
 		t.Fatalf("NewWithMustChangePassword: %v", err)
 	}

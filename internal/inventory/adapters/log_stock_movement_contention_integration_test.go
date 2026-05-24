@@ -49,7 +49,7 @@ func TestLogStockMovement_Concurrent_NoLostUpdate(t *testing.T) {
 	// Seed Product + Batch.
 	p, _ := product.New(product.ID(ids.NewV7().String()), tid, actor,
 		product.Spec{SKU: "RACE-1", Name: "Race", DosageForm: "Tablet",
-			PackSize: "10", HSNCode: "3004", GSTRateBps: 1200})
+			PackSize: "10", HSNCode: "3004", GSTRateBps: 1200}, fixedNow)
 	if err := products.Add(ctx, p); err != nil {
 		t.Fatalf("Add product: %v", err)
 	}
@@ -60,7 +60,7 @@ func TestLogStockMovement_Concurrent_NoLostUpdate(t *testing.T) {
 			BatchNumber: "LOT-RACE", ManufactureDate: mfg, ExpiryDate: exp,
 			ManufacturerName: "A", ManufacturingLicenceNumber: "ML-1",
 			MRPPaise: 100, PurchasePricePaise: 50,
-		})
+		}, fixedNow)
 	if err := batches.Add(ctx, b); err != nil {
 		t.Fatalf("Add batch: %v", err)
 	}
@@ -82,7 +82,7 @@ func TestLogStockMovement_Concurrent_NoLostUpdate(t *testing.T) {
 	var totalEntries atomic.Int64
 	instrumentedUoW := &countingUoW{inner: tx, counter: &totalEntries}
 
-	h := command.NewLogStockMovementHandler(instrumentedUoW, batches, movements)
+	h := command.NewLogStockMovementHandler(instrumentedUoW, batches, movements, func() time.Time { return fixedNow })
 
 	// Channel-based barrier so every goroutine releases inside the same
 	// Postgres tick — maximises lock-acquisition pressure.

@@ -8,8 +8,6 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/riverqueue/river"
-
-	"github.com/leadkart/leadkart-go/internal/common/clock"
 )
 
 // PurgeRetention is the retention window enforced by [PurgeJob].
@@ -40,18 +38,24 @@ type PurgeWorker struct {
 	river.WorkerDefaults[PurgeJob]
 	pool *pgxpool.Pool
 	log  *slog.Logger
+	now  func() time.Time
 }
 
 // NewPurgeWorker wires the worker against pool. log is required for
-// the run-summary log line.
-func NewPurgeWorker(pool *pgxpool.Pool, log *slog.Logger) *PurgeWorker {
+// the run-summary log line. `now` is the explicit time source per
+// the clock-injection refactor — composition root wires `time.Now`.
+// Nil → time.Now.
+func NewPurgeWorker(pool *pgxpool.Pool, log *slog.Logger, now func() time.Time) *PurgeWorker {
 	if pool == nil {
 		panic("audit: NewPurgeWorker pool required")
 	}
 	if log == nil {
 		log = slog.Default()
 	}
-	return &PurgeWorker{pool: pool, log: log}
+	if now == nil {
+		now = time.Now
+	}
+	return &PurgeWorker{pool: pool, log: log, now: now}
 }
 
 // Work executes the DELETE. Returns the row count via a structured
@@ -63,10 +67,10 @@ func NewPurgeWorker(pool *pgxpool.Pool, log *slog.Logger) *PurgeWorker {
 // doesn't justify the codegen ceremony. Per `coding-standards.md`
 // "raw SQL acceptable for ops queries against admin tables".
 func (w *PurgeWorker) Work(ctx context.Context, _ *river.Job[PurgeJob]) error {
-	// clock.Now (vs time.Now) so freezeClock-based tests can pin
-	// the cutoff deterministically; production goes through the
-	// wall-clock branch.
-	cutoff := clock.Now().Add(-PurgeRetention)
+	// Injected clock per the post-Wave-9 clock-injection refactor:
+	// production wires time.Now; tests inject a fixed-time closure
+	// so the cutoff stays deterministic.
+	cutoff := w.now().Add(-PurgeRetention)
 	tag, err := w.pool.Exec(ctx, `
 		DELETE FROM buildingblocks.audit_log_entry
 		WHERE occurred_at_utc < $1

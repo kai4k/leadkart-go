@@ -3,6 +3,7 @@ package command
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/leadkart/leadkart-go/internal/common/ids"
 	"github.com/leadkart/leadkart-go/internal/common/pg"
@@ -66,11 +67,17 @@ type LogStockMovementHandler struct {
 	uow       pg.UnitOfWork
 	batches   batch.Repository
 	movements stockmovement.Repository
+	now       func() time.Time
 }
 
-// NewLogStockMovementHandler wires the handler.
-func NewLogStockMovementHandler(uow pg.UnitOfWork, batches batch.Repository, movements stockmovement.Repository) LogStockMovementHandler {
-	return LogStockMovementHandler{uow: uow, batches: batches, movements: movements}
+// NewLogStockMovementHandler wires the handler. `now` is the explicit
+// time source — composition root passes `time.Now`; tests inject a
+// fixed-time closure for deterministic assertions. Nil → time.Now.
+func NewLogStockMovementHandler(uow pg.UnitOfWork, batches batch.Repository, movements stockmovement.Repository, now func() time.Time) LogStockMovementHandler {
+	if now == nil {
+		now = time.Now
+	}
+	return LogStockMovementHandler{uow: uow, batches: batches, movements: movements, now: now}
 }
 
 // Handle persists a stock movement against the supplied batch.
@@ -87,18 +94,22 @@ func (h LogStockMovementHandler) Handle(ctx context.Context, cmd LogStockMovemen
 	if magnitude < 0 {
 		return LogStockMovementResult{}, fmt.Errorf("%w: quantity must be a positive magnitude (got %d)", batch.ErrInvalid, magnitude)
 	}
-	return h.persist(ctx, cmd, magnitude)
+	return h.persist(ctx, cmd, magnitude, h.now())
 }
 
 // persist runs the multi-aggregate single-tx write inside one UoW.
 // The batch repository's UpdateByID acquires SELECT FOR UPDATE — the
 // concurrency story lives in [BatchRepository.updateOnTx], NOT here.
-func (h LogStockMovementHandler) persist(ctx context.Context, cmd LogStockMovementCommand, magnitude int64) (LogStockMovementResult, error) {
+//
+// `now` is the shared instant captured once at the top of Handle so the
+// Batch.ApplyMovement updatedAt + StockMovement.occurredAt line up
+// byte-for-byte in audit / ledger queries.
+func (h LogStockMovementHandler) persist(ctx context.Context, cmd LogStockMovementCommand, magnitude int64, now time.Time) (LogStockMovementResult, error) {
 	var result LogStockMovementResult
 	err := h.uow.WithinTx(ctx, pg.TxScopeTenant, func(ctx context.Context) error {
 		var loaded *batch.Batch
 		updateErr := h.batches.UpdateByID(ctx, cmd.BatchID, func(b *batch.Batch) (bool, error) {
-			if err := b.ApplyMovement(cmd.Type, magnitude); err != nil {
+			if err := b.ApplyMovement(cmd.Type, magnitude, now); err != nil {
 				return false, err
 			}
 			loaded = b
@@ -123,7 +134,7 @@ func (h LogStockMovementHandler) persist(ctx context.Context, cmd LogStockMoveme
 			Reason:              cmd.Reason,
 			ActorMembershipID:   cmd.ActorMembershipID,
 			SourceReference:     cmd.SourceReference,
-		})
+		}, now)
 		if err != nil {
 			return fmt.Errorf("log stock movement: construct: %w", err)
 		}

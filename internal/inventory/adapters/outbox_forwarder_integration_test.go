@@ -87,7 +87,7 @@ func TestInventoryOutboxForwarder_PublishesProductCreated(t *testing.T) {
 	drain := &invDrainSubscriber{}
 	go drain.record(msgs)
 
-	forwarder := adapters.NewOutboxForwarder(pool, tx, pubsub, integrationevents.Topic, 0)
+	forwarder := adapters.NewOutboxForwarder(pool, tx, pubsub, integrationevents.Topic, 0, func() time.Time { return fixedNow })
 
 	// Drive the application: create a product. Same-tx outbox write
 	// per ADR 0008.
@@ -100,6 +100,7 @@ func TestInventoryOutboxForwarder_PublishesProductCreated(t *testing.T) {
 			DosageForm: "Tablet", PackSize: "10",
 			HSNCode: "3004", GSTRateBps: 1200,
 		},
+		fixedNow,
 	)
 	if err != nil {
 		t.Fatalf("product.New: %v", err)
@@ -164,12 +165,12 @@ func TestInventoryOutboxForwarder_IsIdempotent_OnSecondPass(t *testing.T) {
 	drain := &invDrainSubscriber{}
 	go drain.record(msgs)
 
-	forwarder := adapters.NewOutboxForwarder(pool, tx, pubsub, integrationevents.Topic, 0)
+	forwarder := adapters.NewOutboxForwarder(pool, tx, pubsub, integrationevents.Topic, 0, func() time.Time { return fixedNow })
 
 	actor := membership.ID(ids.NewV7().String())
 	p, _ := product.New(product.ID(ids.NewV7().String()), tid, actor,
 		product.Spec{SKU: "IDEM-1", Name: "Idem", DosageForm: "Tablet",
-			PackSize: "10", HSNCode: "3004", GSTRateBps: 1200})
+			PackSize: "10", HSNCode: "3004", GSTRateBps: 1200}, fixedNow)
 	if err := products.Add(ctx, p); err != nil {
 		t.Fatalf("Add: %v", err)
 	}

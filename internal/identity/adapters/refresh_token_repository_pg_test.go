@@ -39,7 +39,7 @@ func seedFamily(t *testing.T, persons *adapters.PersonRepository, tenants *adapt
 
 	fid := refreshtoken.FamilyID(ids.NewV7().String())
 	hash := hashOf(t, secret)
-	f, err := refreshtoken.NewFamily(fid, p.ID(), tn.ID(), "iPhone 15 / Safari", hash, tokenTTL)
+	f, err := refreshtoken.NewFamily(fid, p.ID(), tn.ID(), "iPhone 15 / Safari", hash, tokenTTL, time.Now().UTC())
 	if err != nil {
 		t.Fatalf("NewFamily: %v", err)
 	}
@@ -120,7 +120,7 @@ func TestRefreshTokenFamilyRepository_UpdateByID_RotatePersistsNewTokenAndConsum
 	newHash := hashOf(t, newSecret)
 
 	err := families.UpdateByID(t.Context(), f.ID(), func(f2 *refreshtoken.Family) (bool, error) {
-		if err := f2.Rotate(originalHash, newHash, tokenTTL); err != nil {
+		if err := f2.Rotate(originalHash, newHash, tokenTTL, time.Now().UTC()); err != nil {
 			return false, err
 		}
 		return true, nil
@@ -164,7 +164,7 @@ func TestRefreshTokenFamilyRepository_UpdateByID_ReuseDetectionRevokesFamily(t *
 
 	// Legitimate rotate → consumes generation 0.
 	err := families.UpdateByID(t.Context(), f.ID(), func(f2 *refreshtoken.Family) (bool, error) {
-		if err := f2.Rotate(originalHash, hashOf(t, "first-rotate"), tokenTTL); err != nil {
+		if err := f2.Rotate(originalHash, hashOf(t, "first-rotate"), tokenTTL, time.Now().UTC()); err != nil {
 			return false, err
 		}
 		return true, nil
@@ -176,7 +176,7 @@ func TestRefreshTokenFamilyRepository_UpdateByID_ReuseDetectionRevokesFamily(t *
 	// Attacker presents the now-consumed original — RFC 9700 §4.13
 	// reuse-detection MUST revoke entire family.
 	err = families.UpdateByID(t.Context(), f.ID(), func(f2 *refreshtoken.Family) (bool, error) {
-		err := f2.Rotate(originalHash, hashOf(t, "would-be-second"), tokenTTL)
+		err := f2.Rotate(originalHash, hashOf(t, "would-be-second"), tokenTTL, time.Now().UTC())
 		if errors.Is(err, refreshtoken.ErrReuseDetected) {
 			// The aggregate revoked itself + emitted RevokedEvent — persist that state.
 			return true, err
@@ -219,7 +219,7 @@ func TestRefreshTokenFamilyRepository_UpdateByID_RevokePersistsState(t *testing.
 	f := seedFamily(t, persons, tenants, families, "logout-flow")
 
 	err := families.UpdateByID(t.Context(), f.ID(), func(f2 *refreshtoken.Family) (bool, error) {
-		if err := f2.Revoke("user-logout"); err != nil {
+		if err := f2.Revoke("user-logout", time.Now().UTC()); err != nil {
 			return false, err
 		}
 		return true, nil
@@ -256,7 +256,7 @@ func TestRefreshTokenFamilyRepository_ListActiveForPerson_ExcludesRevoked(t *tes
 	// Two families: one active, one revoked.
 	mkFamily := func(secret, label string, revoke bool) *refreshtoken.Family {
 		fid := refreshtoken.FamilyID(ids.NewV7().String())
-		f, err := refreshtoken.NewFamily(fid, p.ID(), tn.ID(), label, hashOf(t, secret), tokenTTL)
+		f, err := refreshtoken.NewFamily(fid, p.ID(), tn.ID(), label, hashOf(t, secret), tokenTTL, time.Now().UTC())
 		if err != nil {
 			t.Fatalf("NewFamily: %v", err)
 		}
@@ -265,7 +265,7 @@ func TestRefreshTokenFamilyRepository_ListActiveForPerson_ExcludesRevoked(t *tes
 		}
 		if revoke {
 			if err := families.UpdateByID(t.Context(), fid, func(f2 *refreshtoken.Family) (bool, error) {
-				return true, f2.Revoke("admin-revoke")
+				return true, f2.Revoke("admin-revoke", time.Now().UTC())
 			}); err != nil {
 				t.Fatalf("Revoke: %v", err)
 			}

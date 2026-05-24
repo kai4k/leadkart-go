@@ -5,6 +5,7 @@ import (
 	"errors"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/leadkart/leadkart-go/internal/common/ids"
 	"github.com/leadkart/leadkart-go/internal/common/pagination"
@@ -15,6 +16,10 @@ import (
 	"github.com/leadkart/leadkart-go/internal/inventory/domain/product"
 	"github.com/leadkart/leadkart-go/internal/inventory/domain/stockmovement"
 )
+
+// fixedNow is the deterministic instant query tests pass to domain
+// factories per the clock-injection refactor.
+var fixedNow = time.Date(2026, 5, 24, 12, 0, 0, 0, time.UTC)
 
 // ----- minimal fakes mirroring the command-side shape ----------------------
 
@@ -142,7 +147,8 @@ func TestGetProductHandler_HappyPath(t *testing.T) {
 	actor := newMembershipID(t)
 	p, _ := product.New(product.ID(ids.NewV7().String()), tid, actor,
 		product.Spec{SKU: "GP-1", Name: "X", DosageForm: "Tablet",
-			PackSize: "10", HSNCode: "3004", GSTRateBps: 1200})
+			PackSize: "10", HSNCode: "3004", GSTRateBps: 1200},
+		fixedNow)
 	repo.products[p.ID()] = p
 	_ = p.PullEvents()
 

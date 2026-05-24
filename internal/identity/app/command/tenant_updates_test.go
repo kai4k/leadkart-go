@@ -7,12 +7,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/leadkart/leadkart-go/internal/common/clock"
 	"github.com/leadkart/leadkart-go/internal/common/email"
 	"github.com/leadkart/leadkart-go/internal/common/slug"
 	"github.com/leadkart/leadkart-go/internal/identity/app/command"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
+
 
 // fakeTenantRepo is the minimum [tenant.Repository] surface the
 // tenant-update / lifecycle handlers exercise.
@@ -68,8 +68,6 @@ var _ tenant.Repository = (*fakeTenantRepo)(nil)
 
 func newTenant(t *testing.T) *tenant.Tenant {
 	t.Helper()
-	clock.Set(time.Date(2026, 5, 7, 12, 0, 0, 0, time.UTC))
-	t.Cleanup(clock.Reset)
 
 	tenantSlug, err := slug.New("acme-pharma")
 	if err != nil {
@@ -79,6 +77,7 @@ func newTenant(t *testing.T) *tenant.Tenant {
 	tn, err := tenant.New(
 		tenant.ID("11111111-1111-1111-1111-111111111111"),
 		tenantSlug, "Acme Pharma Pvt Ltd", "Acme Pharma", addr,
+		testNow,
 	)
 	if err != nil {
 		t.Fatalf("tenant.Register: %v", err)
@@ -93,7 +92,7 @@ func TestUpdateTenantProfile_Succeeds(t *testing.T) {
 	tn := newTenant(t)
 	_ = repo.Add(t.Context(), tn)
 
-	h := command.NewUpdateTenantProfileHandler(repo)
+	h := command.NewUpdateTenantProfileHandler(repo, func() time.Time { return testNow })
 	err := h.Handle(t.Context(), command.UpdateTenantProfileCommand{
 		TenantID:    tn.ID(),
 		LegalName:   "Acme Pharma Limited",
@@ -113,7 +112,7 @@ func TestUpdateTenantProfile_Succeeds(t *testing.T) {
 func TestUpdateTenantProfile_NotFound(t *testing.T) {
 	t.Parallel()
 	repo := newFakeTenantRepo()
-	h := command.NewUpdateTenantProfileHandler(repo)
+	h := command.NewUpdateTenantProfileHandler(repo, func() time.Time { return testNow })
 	err := h.Handle(t.Context(), command.UpdateTenantProfileCommand{
 		TenantID:    tenant.ID("99999999-9999-9999-9999-999999999999"),
 		LegalName:   "x",
@@ -129,7 +128,7 @@ func TestUpdateTenantProfile_AggregateRejection_WrapsErrInvalid(t *testing.T) {
 	repo := newFakeTenantRepo()
 	tn := newTenant(t)
 	_ = repo.Add(t.Context(), tn)
-	h := command.NewUpdateTenantProfileHandler(repo)
+	h := command.NewUpdateTenantProfileHandler(repo, func() time.Time { return testNow })
 	err := h.Handle(t.Context(), command.UpdateTenantProfileCommand{
 		TenantID:    tn.ID(),
 		LegalName:   "",
@@ -145,7 +144,7 @@ func TestUpdateTenantStatutory_RejectsBadGST(t *testing.T) {
 	repo := newFakeTenantRepo()
 	tn := newTenant(t)
 	_ = repo.Add(t.Context(), tn)
-	h := command.NewUpdateTenantStatutoryHandler(repo)
+	h := command.NewUpdateTenantStatutoryHandler(repo, func() time.Time { return testNow })
 	err := h.Handle(t.Context(), command.UpdateTenantStatutoryCommand{
 		TenantID:  tn.ID(),
 		GSTNumber: "not-a-gst",
@@ -160,7 +159,7 @@ func TestUpdateTenantSettings_Succeeds(t *testing.T) {
 	repo := newFakeTenantRepo()
 	tn := newTenant(t)
 	_ = repo.Add(t.Context(), tn)
-	h := command.NewUpdateTenantSettingsHandler(repo)
+	h := command.NewUpdateTenantSettingsHandler(repo, func() time.Time { return testNow })
 	err := h.Handle(t.Context(), command.UpdateTenantSettingsCommand{
 		TenantID:          tn.ID(),
 		MinLength:         12,
@@ -183,13 +182,13 @@ func TestSuspendTenant_RequiresReason(t *testing.T) {
 	t.Parallel()
 	repo := newFakeTenantRepo()
 	tn := newTenant(t)
-	if err := tn.Activate(); err != nil {
+	if err := tn.Activate(testNow); err != nil {
 		t.Fatalf("Activate: %v", err)
 	}
 	tn.PullEvents()
 	_ = repo.Add(t.Context(), tn)
 
-	h := command.NewSuspendTenantHandler(repo, newFakeMembershipRepo())
+	h := command.NewSuspendTenantHandler(repo, newFakeMembershipRepo(), func() time.Time { return testNow })
 	err := h.Handle(t.Context(), command.SuspendTenantCommand{TenantID: tn.ID()})
 	if !errors.Is(err, tenant.ErrInvalid) {
 		t.Fatalf("err = %v, want wraps tenant.ErrInvalid (empty reason)", err)
@@ -200,12 +199,12 @@ func TestSuspendTenant_Succeeds(t *testing.T) {
 	t.Parallel()
 	repo := newFakeTenantRepo()
 	tn := newTenant(t)
-	if err := tn.Activate(); err != nil {
+	if err := tn.Activate(testNow); err != nil {
 		t.Fatalf("Activate: %v", err)
 	}
 	tn.PullEvents()
 	_ = repo.Add(t.Context(), tn)
-	h := command.NewSuspendTenantHandler(repo, newFakeMembershipRepo())
+	h := command.NewSuspendTenantHandler(repo, newFakeMembershipRepo(), func() time.Time { return testNow })
 	err := h.Handle(t.Context(), command.SuspendTenantCommand{
 		TenantID: tn.ID(),
 		Reason:   "billing-overdue-30d",
@@ -222,10 +221,10 @@ func TestActivateTenant_Idempotent(t *testing.T) {
 	t.Parallel()
 	repo := newFakeTenantRepo()
 	tn := newTenant(t)
-	_ = tn.Activate()
+	_ = tn.Activate(testNow)
 	tn.PullEvents()
 	_ = repo.Add(t.Context(), tn)
-	h := command.NewActivateTenantHandler(repo)
+	h := command.NewActivateTenantHandler(repo, func() time.Time { return testNow })
 	if err := h.Handle(t.Context(), command.ActivateTenantCommand{TenantID: tn.ID()}); err != nil {
 		t.Fatalf("Handle (already active): %v", err)
 	}
@@ -235,11 +234,11 @@ func TestMarkTenantForDeletion_HappyPath(t *testing.T) {
 	t.Parallel()
 	repo := newFakeTenantRepo()
 	tn := newTenant(t)
-	_ = tn.Activate()
+	_ = tn.Activate(testNow)
 	tn.PullEvents()
 	_ = repo.Add(t.Context(), tn)
 
-	h := command.NewMarkTenantForDeletionHandler(repo, newFakeMembershipRepo())
+	h := command.NewMarkTenantForDeletionHandler(repo, newFakeMembershipRepo(), func() time.Time { return testNow })
 	if err := h.Handle(t.Context(), command.MarkTenantForDeletionCommand{
 		TenantID: tn.ID(),
 		Reason:   "operator: tenant-requested-closure",
@@ -255,12 +254,12 @@ func TestRestoreTenant_FromPendingDeletion(t *testing.T) {
 	t.Parallel()
 	repo := newFakeTenantRepo()
 	tn := newTenant(t)
-	_ = tn.Activate()
-	_ = tn.MarkForDeletion("test-reason")
+	_ = tn.Activate(testNow)
+	_ = tn.MarkForDeletion("test-reason", testNow)
 	tn.PullEvents()
 	_ = repo.Add(t.Context(), tn)
 
-	h := command.NewRestoreTenantHandler(repo)
+	h := command.NewRestoreTenantHandler(repo, func() time.Time { return testNow })
 	if err := h.Handle(t.Context(), command.RestoreTenantCommand{TenantID: tn.ID()}); err != nil {
 		t.Fatalf("Handle: %v", err)
 	}
@@ -272,7 +271,7 @@ func TestRestoreTenant_FromPendingDeletion(t *testing.T) {
 func TestRestoreTenant_NotFound(t *testing.T) {
 	t.Parallel()
 	repo := newFakeTenantRepo()
-	h := command.NewRestoreTenantHandler(repo)
+	h := command.NewRestoreTenantHandler(repo, func() time.Time { return testNow })
 	err := h.Handle(t.Context(), command.RestoreTenantCommand{
 		TenantID: tenant.ID("99999999-9999-9999-9999-999999999999"),
 	})

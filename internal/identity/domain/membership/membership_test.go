@@ -5,7 +5,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/leadkart/leadkart-go/internal/common/clock"
 	"github.com/leadkart/leadkart-go/internal/common/errs"
 	"github.com/leadkart/leadkart-go/internal/common/ids"
 	"github.com/leadkart/leadkart-go/internal/common/tenancy"
@@ -13,6 +12,10 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
+
+// testNow is the deterministic instant test fixtures pass to domain
+// factories + mutators per the clock-injection refactor.
+var testNow = time.Date(2026, 5, 24, 12, 0, 0, 0, time.UTC)
 
 func newMembershipID(t *testing.T) membership.ID {
 	t.Helper()
@@ -32,14 +35,12 @@ func newTenantID(t *testing.T) tenant.ID {
 // ----- Factory: New ---------------------------------------------------------
 
 func TestNewMembership_AcceptsValid_StartsActive(t *testing.T) {
-	t.Cleanup(clock.Reset)
-	clock.Set(time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC))
 
 	id := newMembershipID(t)
 	pid := newPersonID(t)
 	tid := newTenantID(t)
 
-	m, err := membership.New(id, pid, tid, membership.ID(""))
+	m, err := membership.New(id, pid, tid, membership.ID(""), testNow)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -58,7 +59,7 @@ func TestNewMembership_AcceptsValid_StartsActive(t *testing.T) {
 	if m.Status() != membership.StatusActive {
 		t.Errorf("Status() = %v, want StatusActive", m.Status())
 	}
-	if !m.JoinedAt().Equal(time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC)) {
+	if !m.JoinedAt().Equal(testNow) {
 		t.Errorf("JoinedAt = %v", m.JoinedAt())
 	}
 	if !m.LeftAt().IsZero() {
@@ -67,13 +68,11 @@ func TestNewMembership_AcceptsValid_StartsActive(t *testing.T) {
 }
 
 func TestNewMembership_EmitsCreatedEvent(t *testing.T) {
-	t.Cleanup(clock.Reset)
-	clock.Set(time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC))
 
 	id := newMembershipID(t)
 	pid := newPersonID(t)
 	tid := newTenantID(t)
-	m, err := membership.New(id, pid, tid, membership.ID(""))
+	m, err := membership.New(id, pid, tid, membership.ID(""), testNow)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -113,7 +112,7 @@ func TestNewMembership_RejectsInvalid(t *testing.T) {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			_, err := membership.New(tc.id, tc.pid, tc.tid, membership.ID(""))
+			_, err := membership.New(tc.id, tc.pid, tc.tid, membership.ID(""), testNow)
 			if err == nil {
 				t.Fatal("expected error")
 			}
@@ -130,20 +129,17 @@ func TestNewMembership_RejectsInvalid(t *testing.T) {
 // ----- Deactivate -----------------------------------------------------------
 
 func TestDeactivate_FromActive_TransitionsToInactive(t *testing.T) {
-	t.Cleanup(clock.Reset)
-	clock.Set(time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC))
 
 	m := newMembership(t)
 	_ = m.PullEvents()
 
-	clock.Set(time.Date(2026, 5, 6, 0, 0, 0, 0, time.UTC))
-	if err := m.Deactivate("job change"); err != nil {
+	if err := m.Deactivate("job change", testNow); err != nil {
 		t.Fatalf("Deactivate: %v", err)
 	}
 	if m.Status() != membership.StatusInactive {
 		t.Errorf("Status = %v, want StatusInactive", m.Status())
 	}
-	if !m.LeftAt().Equal(time.Date(2026, 5, 6, 0, 0, 0, 0, time.UTC)) {
+	if !m.LeftAt().Equal(testNow) {
 		t.Errorf("LeftAt = %v", m.LeftAt())
 	}
 
@@ -161,17 +157,15 @@ func TestDeactivate_FromActive_TransitionsToInactive(t *testing.T) {
 }
 
 func TestDeactivate_FromInactive_NoOp(t *testing.T) {
-	t.Cleanup(clock.Reset)
-	clock.Set(time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC))
 
 	m := newMembership(t)
 	_ = m.PullEvents()
-	if err := m.Deactivate("first"); err != nil {
+	if err := m.Deactivate("first", testNow); err != nil {
 		t.Fatalf("first Deactivate: %v", err)
 	}
 	_ = m.PullEvents()
 
-	if err := m.Deactivate("repeat"); err != nil {
+	if err := m.Deactivate("repeat", testNow); err != nil {
 		t.Fatalf("idempotent Deactivate: %v", err)
 	}
 	if got := m.PullEvents(); len(got) != 0 {
@@ -180,9 +174,8 @@ func TestDeactivate_FromInactive_NoOp(t *testing.T) {
 }
 
 func TestDeactivate_RequiresReason(t *testing.T) {
-	t.Cleanup(clock.Reset)
 	m := newMembership(t)
-	if err := m.Deactivate(""); err == nil {
+	if err := m.Deactivate("", testNow); err == nil {
 		t.Fatal("expected error on empty reason")
 	}
 }
@@ -190,16 +183,13 @@ func TestDeactivate_RequiresReason(t *testing.T) {
 // ----- Reactivate -----------------------------------------------------------
 
 func TestReactivate_FromInactive_TransitionsToActive(t *testing.T) {
-	t.Cleanup(clock.Reset)
-	clock.Set(time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC))
 
 	m := newMembership(t)
 	_ = m.PullEvents()
-	_ = m.Deactivate("paused")
+	_ = m.Deactivate("paused", testNow)
 	_ = m.PullEvents()
 
-	clock.Set(time.Date(2026, 5, 7, 0, 0, 0, 0, time.UTC))
-	if err := m.Reactivate(); err != nil {
+	if err := m.Reactivate(testNow); err != nil {
 		t.Fatalf("Reactivate: %v", err)
 	}
 	if m.Status() != membership.StatusActive {
@@ -219,11 +209,10 @@ func TestReactivate_FromInactive_TransitionsToActive(t *testing.T) {
 }
 
 func TestReactivate_FromActive_NoOp(t *testing.T) {
-	t.Cleanup(clock.Reset)
 	m := newMembership(t)
 	_ = m.PullEvents()
 
-	if err := m.Reactivate(); err != nil {
+	if err := m.Reactivate(testNow); err != nil {
 		t.Fatalf("Reactivate: %v", err)
 	}
 	if got := m.PullEvents(); len(got) != 0 {
@@ -254,7 +243,7 @@ func TestUnmarshalFromDB_DoesNotEmitEvents(t *testing.T) {
 
 func newMembership(t *testing.T) *membership.Membership {
 	t.Helper()
-	m, err := membership.New(newMembershipID(t), newPersonID(t), newTenantID(t), membership.ID(""))
+	m, err := membership.New(newMembershipID(t), newPersonID(t), newTenantID(t), membership.ID(""), testNow)
 	if err != nil {
 		t.Fatalf("newMembership: %v", err)
 	}

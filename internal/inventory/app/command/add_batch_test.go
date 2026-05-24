@@ -18,7 +18,7 @@ func TestAddBatchHandler_HappyPath_AddsBatch(t *testing.T) {
 	tid := newTenantID(t)
 	actor := newMembershipID(t)
 	p := seedProduct(t, productRepo, tid, actor, "AB-1")
-	h := command.NewAddBatchHandler(uow, productRepo, batchRepo)
+	h := command.NewAddBatchHandler(uow, productRepo, batchRepo, func() time.Time { return fixedNow })
 
 	out, err := h.Handle(t.Context(), command.AddBatchCommand{
 		ProductID:                  p.ID(),
@@ -51,7 +51,7 @@ func TestAddBatchHandler_MissingProduct_ReturnsErrNotFound(t *testing.T) {
 	productRepo := newFakeProductRepo()
 	batchRepo := newFakeBatchRepo()
 	uow := &fakeUoW{}
-	h := command.NewAddBatchHandler(uow, productRepo, batchRepo)
+	h := command.NewAddBatchHandler(uow, productRepo, batchRepo, func() time.Time { return fixedNow })
 	actor := newMembershipID(t)
 
 	_, err := h.Handle(t.Context(), command.AddBatchCommand{
@@ -89,11 +89,11 @@ func TestAddBatchHandler_SoftDeletedParent_ReturnsErrNotFound(t *testing.T) {
 	actor := newMembershipID(t)
 	p := seedProduct(t, productRepo, tid, actor, "AB-2")
 	// Soft-delete BEFORE the handler runs.
-	if err := p.SoftDelete(actor); err != nil {
+	if err := p.SoftDelete(actor, fixedNow); err != nil {
 		t.Fatalf("SoftDelete: %v", err)
 	}
 	_ = p.PullEvents()
-	h := command.NewAddBatchHandler(uow, productRepo, batchRepo)
+	h := command.NewAddBatchHandler(uow, productRepo, batchRepo, func() time.Time { return fixedNow })
 
 	_, err := h.Handle(t.Context(), command.AddBatchCommand{
 		ProductID:                  p.ID(),
@@ -124,7 +124,7 @@ func TestAddBatchHandler_DuplicateBatchNumber_ReturnsErrBatchNumberTaken(t *test
 	actor := newMembershipID(t)
 	p := seedProduct(t, productRepo, tid, actor, "AB-3")
 	_ = seedBatch(t, batchRepo, p, actor, "DUP-LOT")
-	h := command.NewAddBatchHandler(uow, productRepo, batchRepo)
+	h := command.NewAddBatchHandler(uow, productRepo, batchRepo, func() time.Time { return fixedNow })
 
 	_, err := h.Handle(t.Context(), command.AddBatchCommand{
 		ProductID:                  p.ID(),
@@ -152,7 +152,7 @@ func TestAddBatchHandler_InvalidSpec_ReturnsErrInvalid(t *testing.T) {
 	tid := newTenantID(t)
 	actor := newMembershipID(t)
 	p := seedProduct(t, productRepo, tid, actor, "AB-4")
-	h := command.NewAddBatchHandler(uow, productRepo, batchRepo)
+	h := command.NewAddBatchHandler(uow, productRepo, batchRepo, func() time.Time { return fixedNow })
 	sameDay := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 
 	_, err := h.Handle(t.Context(), command.AddBatchCommand{

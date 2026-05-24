@@ -22,7 +22,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/leadkart/leadkart-go/internal/common/clock"
 	"github.com/leadkart/leadkart-go/internal/common/errs"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
@@ -126,7 +125,11 @@ type Product struct {
 // CreatedEvent.ActorID so the integration mapper can stamp
 // `created_by_membership_id` on the wire event without re-deriving from
 // ctx.
-func New(id ID, tenantID tenant.ID, actorID membership.ID, spec Spec) (*Product, error) {
+//
+// `now` is the explicit instant for createdAt/updatedAt/event timestamp.
+// Per the clock-injection refactor (post-Wave-9), the aggregate carries
+// NO temporal dependency — time flows in at every call site.
+func New(id ID, tenantID tenant.ID, actorID membership.ID, spec Spec, now time.Time) (*Product, error) {
 	if id.IsZero() {
 		return nil, fmt.Errorf("%w: id required", ErrInvalid)
 	}
@@ -165,7 +168,7 @@ func New(id ID, tenantID tenant.ID, actorID membership.ID, spec Spec) (*Product,
 		return nil, fmt.Errorf("%w: manufacturer too long (max %d, got %d)",
 			ErrInvalid, ManufacturerMaxLen, len(manufacturer))
 	}
-	now := clock.Now()
+	now = now.UTC()
 	p := &Product{
 		id:           id,
 		tenantID:     tenantID,
@@ -259,9 +262,13 @@ func (p *Product) UpdatedAt() time.Time { return p.updatedAt }
 // actorID is the membership that initiated the change — populates
 // UpdatedEvent.ActorID.
 //
+// `now` is the explicit instant for updatedAt + the emitted event's
+// `At`. Caller supplies it once per handler invocation so all aggregates
+// touched in the same operation share a single timestamp.
+//
 // Returns ErrDeleted if the Product was soft-deleted.
 // Returns ErrInvalid (wrapped) on field-validation failure.
-func (p *Product) Update(actorID membership.ID, spec UpdateSpec) error {
+func (p *Product) Update(actorID membership.ID, spec UpdateSpec, now time.Time) error {
 	if p.deleted {
 		return fmt.Errorf("%w: cannot update deleted product", ErrDeleted)
 	}
@@ -311,7 +318,7 @@ func (p *Product) Update(actorID membership.ID, spec UpdateSpec) error {
 		return nil
 	}
 	slices.Sort(changed)
-	now := clock.Now()
+	now = now.UTC()
 	p.updatedAt = now
 	p.recordEvent(UpdatedEvent{
 		ProductID:     p.id,
@@ -324,9 +331,9 @@ func (p *Product) Update(actorID membership.ID, spec UpdateSpec) error {
 }
 
 // Activate sets is_active = true. Convenience wrapper around Update.
-func (p *Product) Activate(actorID membership.ID) error {
-	t := true
-	return p.Update(actorID, UpdateSpec{IsActive: &t})
+func (p *Product) Activate(actorID membership.ID, now time.Time) error {
+	tr := true
+	return p.Update(actorID, UpdateSpec{IsActive: &tr}, now)
 }
 
 // Deactivate sets is_active = false. Convenience wrapper around Update
@@ -341,12 +348,12 @@ func (p *Product) Activate(actorID membership.ID) error {
 // Idempotent: if already inactive, no Update event drains and no
 // DeactivatedEvent is emitted (matches Update's no-op-on-no-change
 // canon).
-func (p *Product) Deactivate(actorID membership.ID) error {
+func (p *Product) Deactivate(actorID membership.ID, now time.Time) error {
 	if !p.isActive {
 		return nil // no-op — Update would have no-op'd anyway
 	}
 	f := false
-	if err := p.Update(actorID, UpdateSpec{IsActive: &f}); err != nil {
+	if err := p.Update(actorID, UpdateSpec{IsActive: &f}, now); err != nil {
 		return err
 	}
 	// Update emitted UpdatedEvent with ChangedFields=["is_active"];
@@ -368,14 +375,14 @@ func (p *Product) Deactivate(actorID membership.ID) error {
 // when any live Batch with quantity_on_hand > 0 exists for this
 // product. The domain refuses cross-aggregate reaches per Vernon
 // ch.10; the SoftDeleteProductHandler enforces this rule.
-func (p *Product) SoftDelete(actorID membership.ID) error {
+func (p *Product) SoftDelete(actorID membership.ID, now time.Time) error {
 	if p.deleted {
 		return nil
 	}
 	if actorID.IsZero() {
 		return fmt.Errorf("%w: actorID required for audit", ErrInvalid)
 	}
-	now := clock.Now()
+	now = now.UTC()
 	p.deleted = true
 	p.deletedAt = now
 	p.deletedBy = actorID.String()

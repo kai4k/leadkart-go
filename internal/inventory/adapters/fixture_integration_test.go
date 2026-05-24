@@ -27,6 +27,17 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
 
+// fixedNow is the deterministic timestamp inventory integration tests
+// pass to domain factories and mutators. Replaces the prior
+// package-global clock per the clock-injection refactor — each test
+// supplies the instant explicitly so no two parallel test files can
+// race on a shared mutable clock.
+var fixedNow = time.Date(2026, 5, 24, 12, 0, 0, 0, time.UTC)
+
+// testNow is an alias for fixedNow, used by aggregate factories that the
+// shared rewrite script standardised on testNow.
+var testNow = fixedNow
+
 // repoFixture spins an ephemeral Postgres + applies migrations + creates
 // the non-superuser leadkart_app role with grants for the inventory
 // schema (plus identity for the tenant FK).
@@ -149,7 +160,7 @@ func seedTenant(t *testing.T, pool *pgxpool.Pool) tenant.ID {
 		t.Fatalf("slug: %v", err)
 	}
 	addr, _ := email.New("admin@inv.test")
-	tn, err := tenant.New(id, s, "Inv Pharma Pvt Ltd", "Inv", addr)
+	tn, err := tenant.New(id, s, "Inv Pharma Pvt Ltd", "Inv", addr, testNow)
 	if err != nil {
 		t.Fatalf("tenant.New: %v", err)
 	}

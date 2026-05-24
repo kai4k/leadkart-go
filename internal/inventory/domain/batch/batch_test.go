@@ -13,6 +13,12 @@ import (
 	"github.com/leadkart/leadkart-go/internal/inventory/domain/product"
 )
 
+// fixedNow is the deterministic timestamp every batch domain test
+// passes to factories + mutators per the clock-injection refactor.
+// Chosen to be BEFORE the test fixture's exp = 2028-01-01 so
+// IsExpired(fixedNow) is false on a happy-path batch.
+var fixedNow = time.Date(2026, 5, 24, 12, 0, 0, 0, time.UTC)
+
 func freshIDs(t *testing.T) (batch.ID, product.ID, tenant.ID, membership.ID) {
 	t.Helper()
 	return batch.ID(ids.NewV7().String()),
@@ -43,7 +49,7 @@ func validBatchSpec() batch.Spec {
 func freshBatch(t *testing.T) *batch.Batch {
 	t.Helper()
 	bid, pid, tid, actor := freshIDs(t)
-	b, err := batch.New(bid, pid, tid, actor, validBatchSpec())
+	b, err := batch.New(bid, pid, tid, actor, validBatchSpec(), fixedNow)
 	if err != nil {
 		t.Fatalf("batch.New: %v", err)
 	}
@@ -54,7 +60,7 @@ func freshBatch(t *testing.T) *batch.Batch {
 func TestNew_HappyPath(t *testing.T) {
 	t.Parallel()
 	bid, pid, tid, actor := freshIDs(t)
-	b, err := batch.New(bid, pid, tid, actor, validBatchSpec())
+	b, err := batch.New(bid, pid, tid, actor, validBatchSpec(), fixedNow)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -141,7 +147,7 @@ func TestNew_InvalidInputs(t *testing.T) {
 			if tc.zeroA {
 				a = membership.ID("")
 			}
-			if _, err := batch.New(b, p, tn, a, spec); !errors.Is(err, batch.ErrInvalid) {
+			if _, err := batch.New(b, p, tn, a, spec, fixedNow); !errors.Is(err, batch.ErrInvalid) {
 				t.Fatalf("want ErrInvalid, got %v", err)
 			}
 		})
@@ -151,7 +157,7 @@ func TestNew_InvalidInputs(t *testing.T) {
 func TestApplyMovement_InboundIncrements(t *testing.T) {
 	t.Parallel()
 	b := freshBatch(t)
-	if err := b.ApplyMovement(batch.MovementInbound, 100); err != nil {
+	if err := b.ApplyMovement(batch.MovementInbound, 100, fixedNow); err != nil {
 		t.Fatalf("Inbound: %v", err)
 	}
 	if b.QuantityOnHand() != 100 {
@@ -165,10 +171,10 @@ func TestApplyMovement_InboundIncrements(t *testing.T) {
 func TestApplyMovement_OutboundDecrements(t *testing.T) {
 	t.Parallel()
 	b := freshBatch(t)
-	if err := b.ApplyMovement(batch.MovementInbound, 100); err != nil {
+	if err := b.ApplyMovement(batch.MovementInbound, 100, fixedNow); err != nil {
 		t.Fatalf("seed Inbound: %v", err)
 	}
-	if err := b.ApplyMovement(batch.MovementOutbound, 30); err != nil {
+	if err := b.ApplyMovement(batch.MovementOutbound, 30, fixedNow); err != nil {
 		t.Fatalf("Outbound: %v", err)
 	}
 	if b.QuantityOnHand() != 70 {
@@ -182,10 +188,10 @@ func TestApplyMovement_OutboundDecrements(t *testing.T) {
 func TestApplyMovement_OutboundOverdraftRejected(t *testing.T) {
 	t.Parallel()
 	b := freshBatch(t)
-	if err := b.ApplyMovement(batch.MovementInbound, 50); err != nil {
+	if err := b.ApplyMovement(batch.MovementInbound, 50, fixedNow); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	err := b.ApplyMovement(batch.MovementOutbound, 51)
+	err := b.ApplyMovement(batch.MovementOutbound, 51, fixedNow)
 	if !errors.Is(err, batch.ErrInsufficientStock) {
 		t.Fatalf("want ErrInsufficientStock, got %v", err)
 	}
@@ -212,12 +218,12 @@ func TestApplyMovement_InboundRejectedAfterExpiry(t *testing.T) {
 		ManufacturingLicenceNumber: "ML-1",
 		MRPPaise:                   10000,
 		PurchasePricePaise:         8000,
-	})
+	}, fixedNow)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
 	_ = b.PullEvents()
-	if err := b.ApplyMovement(batch.MovementInbound, 10); !errors.Is(err, batch.ErrExpired) {
+	if err := b.ApplyMovement(batch.MovementInbound, 10, fixedNow); !errors.Is(err, batch.ErrExpired) {
 		t.Fatalf("want ErrExpired, got %v", err)
 	}
 	// Outbound from an expired batch IS allowed (write-off / disposal).
@@ -229,16 +235,16 @@ func TestApplyMovement_InboundRejectedAfterExpiry(t *testing.T) {
 func TestApplyMovement_AdjustmentIsSigned(t *testing.T) {
 	t.Parallel()
 	b := freshBatch(t)
-	if err := b.ApplyMovement(batch.MovementInbound, 100); err != nil {
+	if err := b.ApplyMovement(batch.MovementInbound, 100, fixedNow); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	if err := b.ApplyMovement(batch.MovementAdjustment, -5); err != nil {
+	if err := b.ApplyMovement(batch.MovementAdjustment, -5, fixedNow); err != nil {
 		t.Fatalf("neg adj: %v", err)
 	}
 	if b.QuantityOnHand() != 95 {
 		t.Fatalf("on-hand: %d", b.QuantityOnHand())
 	}
-	if err := b.ApplyMovement(batch.MovementAdjustment, 3); err != nil {
+	if err := b.ApplyMovement(batch.MovementAdjustment, 3, fixedNow); err != nil {
 		t.Fatalf("pos adj: %v", err)
 	}
 	if b.QuantityOnHand() != 98 {
@@ -249,16 +255,16 @@ func TestApplyMovement_AdjustmentIsSigned(t *testing.T) {
 func TestApplyMovement_ReservationAndReleaseNonMutating(t *testing.T) {
 	t.Parallel()
 	b := freshBatch(t)
-	if err := b.ApplyMovement(batch.MovementInbound, 100); err != nil {
+	if err := b.ApplyMovement(batch.MovementInbound, 100, fixedNow); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	if err := b.ApplyMovement(batch.MovementReservation, 25); err != nil {
+	if err := b.ApplyMovement(batch.MovementReservation, 25, fixedNow); err != nil {
 		t.Fatalf("reservation: %v", err)
 	}
 	if b.QuantityOnHand() != 100 {
 		t.Fatalf("reservation must NOT mutate on-hand: %d", b.QuantityOnHand())
 	}
-	if err := b.ApplyMovement(batch.MovementRelease, 25); err != nil {
+	if err := b.ApplyMovement(batch.MovementRelease, 25, fixedNow); err != nil {
 		t.Fatalf("release: %v", err)
 	}
 	if b.QuantityOnHand() != 100 {
@@ -270,10 +276,10 @@ func TestApplyMovement_RejectsAfterSoftDelete(t *testing.T) {
 	t.Parallel()
 	b := freshBatch(t)
 	actor := membership.ID(ids.NewV7().String())
-	if err := b.SoftDelete(actor); err != nil {
+	if err := b.SoftDelete(actor, fixedNow); err != nil {
 		t.Fatalf("SoftDelete: %v", err)
 	}
-	if err := b.ApplyMovement(batch.MovementInbound, 1); !errors.Is(err, batch.ErrDeleted) {
+	if err := b.ApplyMovement(batch.MovementInbound, 1, fixedNow); !errors.Is(err, batch.ErrDeleted) {
 		t.Fatalf("want ErrDeleted, got %v", err)
 	}
 }
@@ -283,7 +289,7 @@ func TestApplyMovement_RejectsZeroQuantityForMutatingTypes(t *testing.T) {
 	b := freshBatch(t)
 	for _, tp := range []batch.MovementType{batch.MovementInbound, batch.MovementOutbound, batch.MovementAdjustment} {
 		t.Run(string(tp), func(t *testing.T) {
-			if err := b.ApplyMovement(tp, 0); !errors.Is(err, batch.ErrInvalid) {
+			if err := b.ApplyMovement(tp, 0, fixedNow); !errors.Is(err, batch.ErrInvalid) {
 				t.Fatalf("%v: want ErrInvalid, got %v", tp, err)
 			}
 		})
@@ -294,7 +300,7 @@ func TestSoftDelete_IsIdempotent(t *testing.T) {
 	t.Parallel()
 	b := freshBatch(t)
 	actor := membership.ID(ids.NewV7().String())
-	if err := b.SoftDelete(actor); err != nil {
+	if err := b.SoftDelete(actor, fixedNow); err != nil {
 		t.Fatalf("first SoftDelete: %v", err)
 	}
 	if !b.IsDeleted() {
@@ -304,7 +310,7 @@ func TestSoftDelete_IsIdempotent(t *testing.T) {
 		t.Fatalf("DeletedBy: got %q want %q", b.DeletedBy(), actor.String())
 	}
 	pulled := b.PullEvents()
-	if err := b.SoftDelete(actor); err != nil {
+	if err := b.SoftDelete(actor, fixedNow); err != nil {
 		t.Fatalf("second SoftDelete: %v", err)
 	}
 	if len(b.PullEvents()) != 0 {
@@ -315,7 +321,7 @@ func TestSoftDelete_IsIdempotent(t *testing.T) {
 func TestSoftDelete_RejectsZeroActor(t *testing.T) {
 	t.Parallel()
 	b := freshBatch(t)
-	if err := b.SoftDelete(membership.ID("")); !errors.Is(err, batch.ErrInvalid) {
+	if err := b.SoftDelete(membership.ID(""), fixedNow); !errors.Is(err, batch.ErrInvalid) {
 		t.Fatalf("want ErrInvalid, got %v", err)
 	}
 }

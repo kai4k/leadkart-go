@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
@@ -30,17 +31,22 @@ type AnonymiseUserCommand struct {
 type AnonymiseUserHandler struct {
 	memberships membership.Repository
 	persons     person.Repository
+	now         func() time.Time
 }
 
-// NewAnonymiseUserHandler wires the handler.
-func NewAnonymiseUserHandler(m membership.Repository, p person.Repository) AnonymiseUserHandler {
+// NewAnonymiseUserHandler wires the handler. `now` is the explicit
+// time source per the clock-injection refactor. Nil → time.Now.
+func NewAnonymiseUserHandler(m membership.Repository, p person.Repository, now func() time.Time) AnonymiseUserHandler {
 	if m == nil {
 		panic("command: NewAnonymiseUserHandler memberships repository required")
 	}
 	if p == nil {
 		panic("command: NewAnonymiseUserHandler persons repository required")
 	}
-	return AnonymiseUserHandler{memberships: m, persons: p}
+	if now == nil {
+		now = time.Now
+	}
+	return AnonymiseUserHandler{memberships: m, persons: p, now: now}
 }
 
 // Handle resolves Membership → PersonID → Person.Anonymise(). The
@@ -59,8 +65,9 @@ func (h AnonymiseUserHandler) Handle(ctx context.Context, cmd AnonymiseUserComma
 		return fmt.Errorf("anonymise_user: load membership: %w", err)
 	}
 	personID := m.PersonID()
+	now := h.now()
 	err = h.persons.UpdateByID(ctx, personID, func(p *person.Person) (bool, error) {
-		if err := p.Anonymise(); err != nil {
+		if err := p.Anonymise(now); err != nil {
 			return false, err
 		}
 		return true, nil

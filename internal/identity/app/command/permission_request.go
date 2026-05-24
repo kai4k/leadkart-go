@@ -286,7 +286,7 @@ func (h ApprovePermissionRequestHandler) Handle(
 
 	// Step 2 — grant the bounded permission on the requester's overlay.
 	if err := h.memberships.UpdateByID(ctx, req.RequesterMembershipID(), func(m *membership.Membership) (bool, error) {
-		if err := m.GrantPermission(req.Permission(), expiresAt); err != nil {
+		if err := m.GrantPermission(req.Permission(), expiresAt, now); err != nil {
 			return false, err
 		}
 		return true, nil

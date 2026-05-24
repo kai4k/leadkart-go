@@ -15,6 +15,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/leadkart/leadkart-go/internal/common/ids"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/permission"
@@ -129,6 +130,7 @@ func ApplyDefaultRoles(
 	ctx context.Context,
 	repo role.Repository,
 	tenantID tenant.ID,
+	now time.Time,
 ) ([]*role.Role, error) {
 	if tenantID.IsZero() {
 		return nil, errors.New("seed: tenantID required")
@@ -155,6 +157,7 @@ func ApplyDefaultRoles(
 			spec.IsSystemDefault,
 			spec.HierarchyLevel,
 			spec.IsSuperAdmin,
+			now,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("seed: build role %q: %w", spec.Name, err)
@@ -165,7 +168,7 @@ func ApplyDefaultRoles(
 				return nil, fmt.Errorf("seed: unknown permission %q in spec %q: %w",
 					pname, spec.Name, perr)
 			}
-			if err := r.GrantPermission(p); err != nil {
+			if err := r.GrantPermission(p, now); err != nil {
 				return nil, fmt.Errorf("seed: grant %q on %q: %w", pname, spec.Name, err)
 			}
 		}

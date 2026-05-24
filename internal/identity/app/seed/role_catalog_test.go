@@ -1,6 +1,8 @@
 package seed_test
 
 import (
+	"time"
+
 	"context"
 	"errors"
 	"slices"
@@ -12,6 +14,10 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/domain/role"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
+
+// testNow is the deterministic instant test fixtures pass to domain
+// factories + mutators per the clock-injection refactor.
+var testNow = time.Date(2026, 5, 24, 12, 0, 0, 0, time.UTC)
 
 func TestDefaultRoleCatalog_ContainsExpectedNames(t *testing.T) {
 	t.Parallel()
@@ -185,7 +191,7 @@ func TestApplyDefaultRoles_FreshTenant_CreatesAllSpecs(t *testing.T) {
 	repo := newFakeRoleRepo()
 	tid := freshTenantID(t)
 
-	roles, err := seed.ApplyDefaultRoles(t.Context(), repo, tid)
+	roles, err := seed.ApplyDefaultRoles(t.Context(), repo, tid, testNow)
 	if err != nil {
 		t.Fatalf("ApplyDefaultRoles: %v", err)
 	}
@@ -215,11 +221,11 @@ func TestApplyDefaultRoles_Idempotent_SecondCallNoOps(t *testing.T) {
 	repo := newFakeRoleRepo()
 	tid := freshTenantID(t)
 
-	first, err := seed.ApplyDefaultRoles(t.Context(), repo, tid)
+	first, err := seed.ApplyDefaultRoles(t.Context(), repo, tid, testNow)
 	if err != nil {
 		t.Fatalf("first apply: %v", err)
 	}
-	second, err := seed.ApplyDefaultRoles(t.Context(), repo, tid)
+	second, err := seed.ApplyDefaultRoles(t.Context(), repo, tid, testNow)
 	if err != nil {
 		t.Fatalf("second apply (idempotent): %v", err)
 	}
@@ -236,7 +242,7 @@ func TestApplyDefaultRoles_Idempotent_SecondCallNoOps(t *testing.T) {
 func TestApplyDefaultRoles_RejectsZeroTenantID(t *testing.T) {
 	t.Parallel()
 	repo := newFakeRoleRepo()
-	if _, err := seed.ApplyDefaultRoles(t.Context(), repo, tenant.ID("")); err == nil {
+	if _, err := seed.ApplyDefaultRoles(t.Context(), repo, tenant.ID(""), testNow); err == nil {
 		t.Fatal("ApplyDefaultRoles with zero tenantID: expected error")
 	}
 }

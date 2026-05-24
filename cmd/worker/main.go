@@ -238,25 +238,25 @@ func run(ctx context.Context, stdout *os.File) error {
 	defer func() { _ = pubsub.Close() }()
 
 	tx := pg.NewTransactor(pool)
-	forwarder := adapters.NewOutboxForwarder(pool, tx, pubsub, integrationevents.Topic, 0)
+	forwarder := adapters.NewOutboxForwarder(pool, tx, pubsub, integrationevents.Topic, 0, time.Now)
 	// Per-module outbox forwarder: each bounded context owns its own
 	// outbox table (CLAUDE.md §"Each module owns its Postgres schema"),
 	// so each needs its own forwarder bound to the schema-specific sqlc
 	// Queries. Inventory's forwarder polls inventory.outbox and publishes
 	// onto the inventory.events Watermill topic.
-	inventoryForwarder := inventoryadapters.NewOutboxForwarder(pool, tx, pubsub, inventoryintegrationevents.Topic, 0)
+	inventoryForwarder := inventoryadapters.NewOutboxForwarder(pool, tx, pubsub, inventoryintegrationevents.Topic, 0, time.Now)
 
 	// Platform-module outbox forwarder (ADR 0059). Sibling of the
 	// identity forwarder — own table, own topic, own goroutine. Slice 1
 	// has no in-process subscriber for platform events; the topic is
 	// still drained so audit-log shape stays consistent.
-	platformForwarder := platformadapters.NewOutboxForwarder(pool, tx, pubsub, platformintegrationevents.Topic, 0)
+	platformForwarder := platformadapters.NewOutboxForwarder(pool, tx, pubsub, platformintegrationevents.Topic, 0, time.Now)
 
 	router, err := messaging.NewRouter(messaging.Deps{
 		Subscriber:       pubsub,
 		Logger:           logger,
 		IdempotencyInbox: messaging.NewIdempotentReceiver(pool),
-		AuditWriter:      audit.NewWriter(pool, logger),
+		AuditWriter:      audit.NewWriter(pool, logger, time.Now),
 		CloseTimeout:     routerCloseTimeout,
 		Retry:            messaging.DefaultRetry,
 	})
@@ -267,7 +267,7 @@ func run(ctx context.Context, stdout *os.File) error {
 	// malformed no-reply address — string literal, init-time only, so
 	// fail-fast at boot is the right shape per CLAUDE.md "MustNewX
 	// init-time only".
-	subscribers.Register(router, subWiring.Families, subWiring.StampCache, buildEmailSender(logger), logger)
+	subscribers.Register(router, subWiring.Families, subWiring.StampCache, buildEmailSender(logger), logger, time.Now)
 
 	// River background-job pool. v0.2 ships one job — AuditLogPurgeJob —
 	// running daily to enforce the 7-year audit retention. River's
@@ -277,7 +277,7 @@ func run(ctx context.Context, stdout *os.File) error {
 		return fmt.Errorf("river migrate: %w", err)
 	}
 	workers := river.NewWorkers()
-	if err := river.AddWorkerSafely(workers, audit.NewPurgeWorker(pool, logger)); err != nil {
+	if err := river.AddWorkerSafely(workers, audit.NewPurgeWorker(pool, logger, time.Now)); err != nil {
 		return fmt.Errorf("register audit purge worker: %w", err)
 	}
 	periodics := []*river.PeriodicJob{

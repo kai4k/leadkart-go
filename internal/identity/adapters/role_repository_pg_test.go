@@ -5,14 +5,15 @@ package adapters_test
 import (
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/leadkart/leadkart-go/internal/common/ids"
+	"github.com/leadkart/leadkart-go/internal/common/pg"
 	"github.com/leadkart/leadkart-go/internal/common/tenancy"
 	"github.com/leadkart/leadkart-go/internal/identity/adapters"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/permission"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/role"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
-	"github.com/leadkart/leadkart-go/internal/common/pg"
 )
 
 // newRole is a tiny factory the role-repo tests share — gives a brand-new
@@ -26,13 +27,14 @@ func newRole(t *testing.T, tenantID tenant.ID, name string) *role.Role {
 		name,
 		false, // not a system default
 		role.HierarchyLevelDefault,
-		false, // not super-admin
+		false, // not super-admin,
+		testNow,
 	)
 	if err != nil {
 		t.Fatalf("role.New: %v", err)
 	}
 	view := permission.FromConstant(permission.IdentityPermissions.Roles.View)
-	if err := r.GrantPermission(view); err != nil {
+	if err := r.GrantPermission(view, testNow); err != nil {
 		t.Fatalf("GrantPermission: %v", err)
 	}
 	return r
@@ -230,7 +232,7 @@ func TestRoleRepository_UpdateByID_Rename_Persists(t *testing.T) {
 	}
 
 	err := roles.UpdateByID(ctx, r.ID(), func(loaded *role.Role) (bool, error) {
-		return true, loaded.Rename("Senior Sales")
+		return true, loaded.Rename("Senior Sales", testNow)
 	})
 	if err != nil {
 		t.Fatalf("UpdateByID: %v", err)
@@ -259,7 +261,7 @@ func TestRoleRepository_UpdateByID_GrantPermission_Persists(t *testing.T) {
 
 	rolesAssign := permission.FromConstant(permission.IdentityPermissions.Roles.Assign)
 	err := roles.UpdateByID(ctx, r.ID(), func(loaded *role.Role) (bool, error) {
-		return true, loaded.GrantPermission(rolesAssign)
+		return true, loaded.GrantPermission(rolesAssign, testNow)
 	})
 	if err != nil {
 		t.Fatalf("UpdateByID grant: %v", err)
@@ -301,7 +303,7 @@ func TestRoleRepository_UpdateByID_Delete_PersistsSoftDeleteAndHidesFromGetByID(
 	}
 
 	err := roles.UpdateByID(ctx, r.ID(), func(loaded *role.Role) (bool, error) {
-		return true, loaded.Delete("admin@example.test")
+		return true, loaded.Delete("admin@example.test", time.Now().UTC())
 	})
 	if err != nil {
 		t.Fatalf("UpdateByID delete: %v", err)
@@ -343,7 +345,7 @@ func TestRoleRepository_UpdateByID_NoOp_WhenUpdateFnReturnsFalse(t *testing.T) {
 
 	// Mutate the loaded aggregate but instruct the repo NOT to persist.
 	err := roles.UpdateByID(ctx, r.ID(), func(loaded *role.Role) (bool, error) {
-		_ = loaded.Rename("ShouldNotStick")
+		_ = loaded.Rename("ShouldNotStick", testNow)
 		return false, nil
 	})
 	if err != nil {
@@ -373,7 +375,7 @@ func TestRoleRepository_UpdateByID_Rollback_WhenUpdateFnErrors(t *testing.T) {
 
 	sentinel := errors.New("update intentionally failed")
 	err := roles.UpdateByID(ctx, r.ID(), func(loaded *role.Role) (bool, error) {
-		_ = loaded.Rename("ShouldRollBack")
+		_ = loaded.Rename("ShouldRollBack", testNow)
 		return true, sentinel
 	})
 	if !errors.Is(err, sentinel) {

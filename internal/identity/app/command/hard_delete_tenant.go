@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
@@ -26,6 +27,7 @@ type HardDeleteTenantCommand struct {
 type HardDeleteTenantHandler struct {
 	tenants     tenant.Repository
 	memberships membership.Repository
+	now         func() time.Time
 }
 
 // NewHardDeleteTenantHandler wires the handler. memberships is used
@@ -33,14 +35,20 @@ type HardDeleteTenantHandler struct {
 // tenants holding any active SuperAdmin role-holder) BEFORE any row
 // is touched. HardDeleteRow lives on [tenant.Repository] because
 // grace-window expiry is a domain operation, not adapter-only.
-func NewHardDeleteTenantHandler(tenants tenant.Repository, memberships membership.Repository) HardDeleteTenantHandler {
+//
+// `now` is the explicit time source per the clock-injection refactor.
+// Nil → time.Now.
+func NewHardDeleteTenantHandler(tenants tenant.Repository, memberships membership.Repository, now func() time.Time) HardDeleteTenantHandler {
 	if tenants == nil {
 		panic("command: NewHardDeleteTenantHandler tenants repository required")
 	}
 	if memberships == nil {
 		panic("command: NewHardDeleteTenantHandler memberships repository required")
 	}
-	return HardDeleteTenantHandler{tenants: tenants, memberships: memberships}
+	if now == nil {
+		now = time.Now
+	}
+	return HardDeleteTenantHandler{tenants: tenants, memberships: memberships, now: now}
 }
 
 // Handle runs the two-phase delete:
@@ -61,8 +69,9 @@ func (h HardDeleteTenantHandler) Handle(ctx context.Context, cmd HardDeleteTenan
 	if err := ensureNotPlatformTenant(ctx, h.memberships, cmd.TenantID); err != nil {
 		return err
 	}
+	now := h.now()
 	err := h.tenants.UpdateByID(ctx, cmd.TenantID, func(t *tenant.Tenant) (bool, error) {
-		if err := t.HardDelete(); err != nil {
+		if err := t.HardDelete(now); err != nil {
 			return false, err
 		}
 		return true, nil

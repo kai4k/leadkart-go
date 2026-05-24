@@ -29,7 +29,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/leadkart/leadkart-go/internal/common/clock"
 	"github.com/leadkart/leadkart-go/internal/common/errs"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/permission"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
@@ -138,7 +137,7 @@ type Membership struct {
 // Returns [ErrInvalid] (wrapped) on invariant violation. The aggregate
 // emits [CreatedEvent] which the repository drains via [PullEvents] when
 // persisting + appends to the outbox same-tx (per ADR 0004 + ADR 0008).
-func New(id ID, personID person.ID, tenantID tenant.ID, createdBy ID) (*Membership, error) {
+func New(id ID, personID person.ID, tenantID tenant.ID, createdBy ID, now time.Time) (*Membership, error) {
 	if id.IsZero() {
 		return nil, fmt.Errorf("%w: id required", ErrInvalid)
 	}
@@ -154,7 +153,7 @@ func New(id ID, personID person.ID, tenantID tenant.ID, createdBy ID) (*Membersh
 		return nil, fmt.Errorf("%w: createdBy cannot equal id", ErrInvalid)
 	}
 
-	now := clock.Now()
+	now = now.UTC()
 	m := &Membership{
 		id:        id,
 		personID:  personID,
@@ -289,14 +288,14 @@ func (m *Membership) ReportsTo() ID { return m.reportsTo }
 // Reason MUST be non-empty (audit requirement per `data-retention.md`).
 //
 // Idempotent — second Deactivate on already-inactive Membership is no-op.
-func (m *Membership) Deactivate(reason string) error {
+func (m *Membership) Deactivate(reason string, now time.Time) error {
 	if strings.TrimSpace(reason) == "" {
 		return fmt.Errorf("%w: deactivation reason required for audit", ErrInvalid)
 	}
 	if m.status == StatusInactive {
 		return nil
 	}
-	now := clock.Now()
+	now = now.UTC()
 	m.status = StatusInactive
 	m.leftAt = now
 	m.recordEvent(DeactivatedEvent{
@@ -320,11 +319,11 @@ func (m *Membership) Deactivate(reason string) error {
 // CALLER INVARIANT: the application service MUST verify the Person has no
 // other Active Membership before calling Reactivate (the DB partial unique
 // index will reject otherwise; surface as ErrAlreadyActive in the service).
-func (m *Membership) Reactivate() error {
+func (m *Membership) Reactivate(now time.Time) error {
 	if m.status == StatusActive {
 		return nil
 	}
-	now := clock.Now()
+	now = now.UTC()
 	m.status = StatusActive
 	m.leftAt = time.Time{} // clear
 	m.recordEvent(ReactivatedEvent{
@@ -346,7 +345,7 @@ func (m *Membership) Reactivate() error {
 // equal this Membership's TenantID. Cross-tenant role assignment is
 // a doctrine violation per `multi-tenancy.md`. The DB-level composite
 // FK `(membership_id, tenant_id) → (id, tenant_id)` rejects mismatch.
-func (m *Membership) AssignRole(roleID role.ID) error {
+func (m *Membership) AssignRole(roleID role.ID, now time.Time) error {
 	if roleID.IsZero() {
 		return fmt.Errorf("%w: roleID required", ErrInvalid)
 	}
@@ -359,7 +358,7 @@ func (m *Membership) AssignRole(roleID role.ID) error {
 		PersonID:     m.personID,
 		TenantID:     m.tenantID,
 		RoleID:       roleID,
-		At:           clock.Now(),
+		At:           now.UTC(),
 	})
 	return nil
 }
@@ -367,7 +366,7 @@ func (m *Membership) AssignRole(roleID role.ID) error {
 // RevokeRole removes the supplied Role ID from the Membership's
 // assignment list. Idempotent — revoking a non-assigned role is a
 // no-op (no event).
-func (m *Membership) RevokeRole(roleID role.ID) error {
+func (m *Membership) RevokeRole(roleID role.ID, now time.Time) error {
 	if roleID.IsZero() {
 		return fmt.Errorf("%w: roleID required", ErrInvalid)
 	}
@@ -381,7 +380,7 @@ func (m *Membership) RevokeRole(roleID role.ID) error {
 		PersonID:     m.personID,
 		TenantID:     m.tenantID,
 		RoleID:       roleID,
-		At:           clock.Now(),
+		At:           now.UTC(),
 	})
 	return nil
 }
@@ -402,7 +401,7 @@ func (m *Membership) RevokeRole(roleID role.ID) error {
 // emits PermissionsUpdatedEvent so cache invalidators trigger.
 // True idempotence (same permission + identical ExpiresAt) emits no
 // event.
-func (m *Membership) GrantPermission(p *permission.Permission, expiresAt time.Time) error {
+func (m *Membership) GrantPermission(p *permission.Permission, expiresAt time.Time, now time.Time) error {
 	if p == nil {
 		return fmt.Errorf("%w: permission required", ErrInvalid)
 	}
@@ -422,7 +421,7 @@ func (m *Membership) GrantPermission(p *permission.Permission, expiresAt time.Ti
 			MembershipID: m.id,
 			PersonID:     m.personID,
 			TenantID:     m.tenantID,
-			At:           clock.Now(),
+			At:           now.UTC(),
 		})
 		return nil
 	}
@@ -431,7 +430,7 @@ func (m *Membership) GrantPermission(p *permission.Permission, expiresAt time.Ti
 		MembershipID: m.id,
 		PersonID:     m.personID,
 		TenantID:     m.tenantID,
-		At:           clock.Now(),
+		At:           now.UTC(),
 	})
 	return nil
 }
@@ -440,7 +439,7 @@ func (m *Membership) GrantPermission(p *permission.Permission, expiresAt time.Ti
 // was previously overlay-granted, the grant entry is removed first.
 // Idempotent — revoking an already-revoked overlay is a no-op
 // (no event).
-func (m *Membership) RevokePermission(p *permission.Permission) error {
+func (m *Membership) RevokePermission(p *permission.Permission, now time.Time) error {
 	if p == nil {
 		return fmt.Errorf("%w: permission required", ErrInvalid)
 	}
@@ -458,7 +457,7 @@ func (m *Membership) RevokePermission(p *permission.Permission) error {
 		MembershipID: m.id,
 		PersonID:     m.personID,
 		TenantID:     m.tenantID,
-		At:           clock.Now(),
+		At:           now.UTC(),
 	})
 	return nil
 }
@@ -478,9 +477,11 @@ func (m *Membership) RevokePermission(p *permission.Permission) error {
 // aggregates per Vernon ch.10 — caller threads the dependency.
 //
 // now is the wall-clock used to filter expired overlay grants per
-// ADR 0055. Pass [clock.Now]() in production (or pin via clock.Set in
-// tests). Time-bound grants whose ExpiresAt is in the past are simply
-// dropped from the set — no DB cleanup runs at this layer.
+// ADR 0055. Pass the resolver-injected time source in production
+// (composition root wires `time.Now`); tests inject a fixed instant
+// closure for deterministic assertions. Time-bound grants whose
+// ExpiresAt is in the past are simply dropped from the set — no DB
+// cleanup runs at this layer.
 //
 // Result is order-stable but not sorted; callers needing
 // deterministic ordering (audit log diff, JWT claim emission) sort
@@ -540,6 +541,7 @@ func (m *Membership) EffectivePermissions(roles []*role.Role, now time.Time) []*
 func (m *Membership) ReplacePermissionOverlays(
 	granted []*permission.Permission,
 	revoked []*permission.Permission,
+	now time.Time,
 ) error {
 	g := make([]GrantedOverride, 0, len(granted))
 	for _, p := range granted {
@@ -559,7 +561,7 @@ func (m *Membership) ReplacePermissionOverlays(
 		MembershipID: m.id,
 		PersonID:     m.personID,
 		TenantID:     m.tenantID,
-		At:           clock.Now(),
+		At:           now.UTC(),
 	})
 	return nil
 }
@@ -573,7 +575,7 @@ func (m *Membership) ReplacePermissionOverlays(
 // Single ProfileUpdatedEvent fires regardless of which fields
 // changed — listeners care about "profile changed" not per-field
 // deltas.
-func (m *Membership) UpdateProfile(designation, department, statusMessage string) error {
+func (m *Membership) UpdateProfile(designation, department, statusMessage string, now time.Time) error {
 	d := strings.TrimSpace(designation)
 	dep := strings.TrimSpace(department)
 	sm := strings.TrimSpace(statusMessage)
@@ -590,7 +592,7 @@ func (m *Membership) UpdateProfile(designation, department, statusMessage string
 		Designation:   d,
 		Department:    dep,
 		StatusMessage: sm,
-		At:            clock.Now(),
+		At:            now.UTC(),
 	})
 	return nil
 }
@@ -609,7 +611,7 @@ func (m *Membership) UpdateProfile(designation, department, statusMessage string
 //
 // Emits ManagerAssignedEvent on set (with PreviousManager carried for
 // audit), ManagerRemovedEvent on clear.
-func (m *Membership) AssignManager(managerID ID) error {
+func (m *Membership) AssignManager(managerID ID, now time.Time) error {
 	if managerID == m.id {
 		return fmt.Errorf("%w: cannot report to self", ErrInvalid)
 	}
@@ -618,13 +620,14 @@ func (m *Membership) AssignManager(managerID ID) error {
 	}
 	old := m.reportsTo
 	m.reportsTo = managerID
+	at := now.UTC()
 	if managerID.IsZero() {
 		m.recordEvent(ManagerRemovedEvent{
 			MembershipID:    m.id,
 			PersonID:        m.personID,
 			TenantID:        m.tenantID,
 			PreviousManager: old,
-			At:              clock.Now(),
+			At:              at,
 		})
 		return nil
 	}
@@ -634,7 +637,7 @@ func (m *Membership) AssignManager(managerID ID) error {
 		TenantID:        m.tenantID,
 		ManagerID:       managerID,
 		PreviousManager: old,
-		At:              clock.Now(),
+		At:              at,
 	})
 	return nil
 }
@@ -648,8 +651,8 @@ func (m *Membership) AssignManager(managerID ID) error {
 // Mirrors the .NET LeadKart MembershipManager remove command per
 // messaging.md "Identity event vocabulary" — keeps the read site free
 // of the "AssignManager(zero)" idiom which reads as a smell.
-func (m *Membership) RemoveManager() error {
-	return m.AssignManager(ID(""))
+func (m *Membership) RemoveManager(now time.Time) error {
+	return m.AssignManager(ID(""), now)
 }
 
 // ----- Event handling -------------------------------------------------------

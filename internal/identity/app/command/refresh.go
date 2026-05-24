@@ -125,9 +125,10 @@ func (h RefreshHandler) Handle(ctx context.Context, cmd RefreshCommand) (Refresh
 	//    the entire family + emits RevokedEvent; the closure MUST
 	//    return shouldPersist=true to commit that state, but the outer
 	//    Handle returns ErrRefreshRejected.
+	now := h.now()
 	var rotateErr error
 	uerr := h.families.UpdateByID(ctx, family.ID(), func(f *refreshtoken.Family) (bool, error) {
-		err := f.Rotate(presentedHash, mintPair.Hash, h.refreshTTL)
+		err := f.Rotate(presentedHash, mintPair.Hash, h.refreshTTL, now)
 		if err == nil {
 			return true, nil
 		}
@@ -159,7 +160,7 @@ func (h RefreshHandler) Handle(ctx context.Context, cmd RefreshCommand) (Refresh
 		// Person was deactivated/anonymised AFTER family creation —
 		// kill the family + reject.
 		_ = h.families.UpdateByID(ctx, family.ID(), func(f *refreshtoken.Family) (bool, error) {
-			return true, f.Revoke("person-no-longer-active")
+			return true, f.Revoke("person-no-longer-active", now)
 		})
 		return RefreshResult{}, ErrRefreshRejected
 	}
@@ -174,7 +175,7 @@ func (h RefreshHandler) Handle(ctx context.Context, cmd RefreshCommand) (Refresh
 		// No Active Membership AT ALL → reject + revoke. Person changed
 		// jobs and the new tenant's onboarding hasn't completed.
 		_ = h.families.UpdateByID(ctx, family.ID(), func(f *refreshtoken.Family) (bool, error) {
-			return true, f.Revoke("no-active-membership")
+			return true, f.Revoke("no-active-membership", now)
 		})
 		return RefreshResult{}, ErrRefreshRejected
 	}
@@ -182,7 +183,7 @@ func (h RefreshHandler) Handle(ctx context.Context, cmd RefreshCommand) (Refresh
 		// Active Membership moved to a DIFFERENT tenant — old family
 		// must die; client must re-login under new tenant scope.
 		_ = h.families.UpdateByID(ctx, family.ID(), func(f *refreshtoken.Family) (bool, error) {
-			return true, f.Revoke("active-membership-changed-tenant")
+			return true, f.Revoke("active-membership-changed-tenant", now)
 		})
 		return RefreshResult{}, ErrRefreshRejected
 	}

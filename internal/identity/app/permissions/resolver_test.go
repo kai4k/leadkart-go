@@ -16,6 +16,10 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
 
+// testNow is the deterministic instant test fixtures pass to domain
+// factories + mutators per the clock-injection refactor.
+var testNow = time.Date(2026, 5, 24, 12, 0, 0, 0, time.UTC)
+
 // fakeMembershipRepo / fakeRoleRepo are minimal in-memory impls of the
 // domain Repository contracts. They cover the specific call shapes the
 // Resolver uses; full repo behaviour (UnitOfWork tx-joining via
@@ -100,7 +104,7 @@ func newMembership(t *testing.T, tid tenant.ID) *membership.Membership {
 	t.Helper()
 	pid := person.ID(ids.NewV7().String())
 	mid := membership.ID(ids.NewV7().String())
-	m, err := membership.New(mid, pid, tid, membership.ID(""))
+	m, err := membership.New(mid, pid, tid, membership.ID(""), testNow)
 	if err != nil {
 		t.Fatalf("membership.New: %v", err)
 	}
@@ -116,12 +120,12 @@ func newRoleWith(
 	t.Helper()
 	r, err := role.New(
 		role.ID(ids.NewV7().String()), tid, name,
-		false, role.HierarchyLevelDefault, false)
+		false, role.HierarchyLevelDefault, false, testNow)
 	if err != nil {
 		t.Fatalf("role.New: %v", err)
 	}
 	for _, p := range perms {
-		if err := r.GrantPermission(p); err != nil {
+		if err := r.GrantPermission(p, testNow); err != nil {
 			t.Fatalf("GrantPermission: %v", err)
 		}
 	}
@@ -145,7 +149,7 @@ func TestResolve_NoRoles_NoOverlay_ReturnsEmpty(t *testing.T) {
 	m := newMembership(t, tid)
 	mems := &fakeMembershipRepo{memberships: map[membership.ID]*membership.Membership{m.ID(): m}}
 	roles := &fakeRoleRepo{roles: map[role.ID]*role.Role{}}
-	r := permissions.NewResolver(mems, roles)
+	r := permissions.NewResolver(mems, roles, time.Now)
 
 	got, err := r.Resolve(t.Context(), m.ID())
 	if err != nil {
@@ -165,16 +169,16 @@ func TestResolve_UnionsRolePermissions(t *testing.T) {
 	assign := permission.FromConstant(permission.IdentityPermissions.Roles.Assign)
 	r1 := newRoleWith(t, tid, "Viewer", view)
 	r2 := newRoleWith(t, tid, "Assigner", assign)
-	if err := m.AssignRole(r1.ID()); err != nil {
+	if err := m.AssignRole(r1.ID(), testNow); err != nil {
 		t.Fatalf("AssignRole r1: %v", err)
 	}
-	if err := m.AssignRole(r2.ID()); err != nil {
+	if err := m.AssignRole(r2.ID(), testNow); err != nil {
 		t.Fatalf("AssignRole r2: %v", err)
 	}
 
 	mems := &fakeMembershipRepo{memberships: map[membership.ID]*membership.Membership{m.ID(): m}}
 	roles := &fakeRoleRepo{roles: map[role.ID]*role.Role{r1.ID(): r1, r2.ID(): r2}}
-	res := permissions.NewResolver(mems, roles)
+	res := permissions.NewResolver(mems, roles, time.Now)
 
 	got, err := res.Resolve(t.Context(), m.ID())
 	if err != nil {
@@ -195,17 +199,17 @@ func TestResolve_OverlayGrantedExtendsBaseline(t *testing.T) {
 	m := newMembership(t, tid)
 	view := permission.FromConstant(permission.IdentityPermissions.Roles.View)
 	r1 := newRoleWith(t, tid, "Viewer", view)
-	if err := m.AssignRole(r1.ID()); err != nil {
+	if err := m.AssignRole(r1.ID(), testNow); err != nil {
 		t.Fatalf("AssignRole: %v", err)
 	}
 	overlayP := permission.FromConstant(permission.IdentityPermissions.Users.Anonymise)
-	if err := m.GrantPermission(overlayP, time.Time{}); err != nil {
+	if err := m.GrantPermission(overlayP, time.Time{}, testNow); err != nil {
 		t.Fatalf("GrantPermission overlay: %v", err)
 	}
 
 	mems := &fakeMembershipRepo{memberships: map[membership.ID]*membership.Membership{m.ID(): m}}
 	roles := &fakeRoleRepo{roles: map[role.ID]*role.Role{r1.ID(): r1}}
-	res := permissions.NewResolver(mems, roles)
+	res := permissions.NewResolver(mems, roles, time.Now)
 
 	got, err := res.Resolve(t.Context(), m.ID())
 	if err != nil {
@@ -228,16 +232,16 @@ func TestResolve_OverlayRevokedSuppressesRoleGrant(t *testing.T) {
 	view := permission.FromConstant(permission.IdentityPermissions.Roles.View)
 	assign := permission.FromConstant(permission.IdentityPermissions.Roles.Assign)
 	r1 := newRoleWith(t, tid, "Both", view, assign)
-	if err := m.AssignRole(r1.ID()); err != nil {
+	if err := m.AssignRole(r1.ID(), testNow); err != nil {
 		t.Fatalf("AssignRole: %v", err)
 	}
-	if err := m.RevokePermission(view); err != nil {
+	if err := m.RevokePermission(view, testNow); err != nil {
 		t.Fatalf("RevokePermission overlay: %v", err)
 	}
 
 	mems := &fakeMembershipRepo{memberships: map[membership.ID]*membership.Membership{m.ID(): m}}
 	roles := &fakeRoleRepo{roles: map[role.ID]*role.Role{r1.ID(): r1}}
-	res := permissions.NewResolver(mems, roles)
+	res := permissions.NewResolver(mems, roles, time.Now)
 
 	got, err := res.Resolve(t.Context(), m.ID())
 	if err != nil {
@@ -255,7 +259,7 @@ func TestResolve_PropagatesGetByIDError(t *testing.T) {
 		memberships: map[membership.ID]*membership.Membership{},
 		getErr:      sentinel,
 	}
-	res := permissions.NewResolver(mems, &fakeRoleRepo{})
+	res := permissions.NewResolver(mems, &fakeRoleRepo{}, time.Now)
 	_, err := res.Resolve(t.Context(), membership.ID(ids.NewV7().String()))
 	if !errors.Is(err, sentinel) {
 		t.Fatalf("Resolve: got %v want sentinel", err)
@@ -268,7 +272,7 @@ func TestResolveForLoaded_SkipsMembershipFetch(t *testing.T) {
 	m := newMembership(t, tid)
 	view := permission.FromConstant(permission.IdentityPermissions.Roles.View)
 	r1 := newRoleWith(t, tid, "Viewer", view)
-	if err := m.AssignRole(r1.ID()); err != nil {
+	if err := m.AssignRole(r1.ID(), testNow); err != nil {
 		t.Fatalf("AssignRole: %v", err)
 	}
 
@@ -276,7 +280,7 @@ func TestResolveForLoaded_SkipsMembershipFetch(t *testing.T) {
 	roles := &fakeRoleRepo{roles: map[role.ID]*role.Role{r1.ID(): r1}}
 	res := permissions.NewResolver(&fakeMembershipRepo{
 		memberships: map[membership.ID]*membership.Membership{},
-	}, roles)
+	}, roles, time.Now)
 
 	got, err := res.ResolveForLoaded(t.Context(), m)
 	if err != nil {
@@ -289,7 +293,7 @@ func TestResolveForLoaded_SkipsMembershipFetch(t *testing.T) {
 
 func TestResolveForLoaded_RejectsNil(t *testing.T) {
 	t.Parallel()
-	res := permissions.NewResolver(&fakeMembershipRepo{}, &fakeRoleRepo{})
+	res := permissions.NewResolver(&fakeMembershipRepo{}, &fakeRoleRepo{}, time.Now)
 	_, err := res.ResolveForLoaded(t.Context(), nil)
 	if err == nil {
 		t.Fatal("ResolveForLoaded(nil) expected error")
@@ -309,7 +313,8 @@ func newSuperAdminRole(t *testing.T, tid tenant.ID) *role.Role {
 		role.SystemRoles.Platform.SuperAdmin,
 		true,                       // IsSystemDefault
 		role.HierarchyLevelMin,     // top of tree
-		true,                       // IsSuperAdmin — the load-bearing flag
+		true,                       // IsSuperAdmin — the load-bearing flag,
+		testNow,
 	)
 	if err != nil {
 		t.Fatalf("role.New super-admin: %v", err)
@@ -323,13 +328,13 @@ func TestResolveAuth_NoSuperRole_IsSuperUserFalse(t *testing.T) {
 	m := newMembership(t, tid)
 	view := permission.FromConstant(permission.IdentityPermissions.Roles.View)
 	r1 := newRoleWith(t, tid, "Viewer", view)
-	if err := m.AssignRole(r1.ID()); err != nil {
+	if err := m.AssignRole(r1.ID(), testNow); err != nil {
 		t.Fatalf("AssignRole: %v", err)
 	}
 
 	mems := &fakeMembershipRepo{memberships: map[membership.ID]*membership.Membership{m.ID(): m}}
 	roles := &fakeRoleRepo{roles: map[role.ID]*role.Role{r1.ID(): r1}}
-	res := permissions.NewResolver(mems, roles)
+	res := permissions.NewResolver(mems, roles, time.Now)
 
 	got, err := res.ResolveAuth(t.Context(), m)
 	if err != nil {
@@ -350,16 +355,16 @@ func TestResolveAuth_AnySuperRoleAssigned_IsSuperUserTrue(t *testing.T) {
 	regular := newRoleWith(t, tid, "Sales",
 		permission.FromConstant(permission.IdentityPermissions.Roles.View))
 	super := newSuperAdminRole(t, tid)
-	if err := m.AssignRole(regular.ID()); err != nil {
+	if err := m.AssignRole(regular.ID(), testNow); err != nil {
 		t.Fatalf("AssignRole regular: %v", err)
 	}
-	if err := m.AssignRole(super.ID()); err != nil {
+	if err := m.AssignRole(super.ID(), testNow); err != nil {
 		t.Fatalf("AssignRole super: %v", err)
 	}
 
 	mems := &fakeMembershipRepo{memberships: map[membership.ID]*membership.Membership{m.ID(): m}}
 	roles := &fakeRoleRepo{roles: map[role.ID]*role.Role{regular.ID(): regular, super.ID(): super}}
-	res := permissions.NewResolver(mems, roles)
+	res := permissions.NewResolver(mems, roles, time.Now)
 
 	got, err := res.ResolveAuth(t.Context(), m)
 	if err != nil {
@@ -372,7 +377,7 @@ func TestResolveAuth_AnySuperRoleAssigned_IsSuperUserTrue(t *testing.T) {
 
 func TestResolveAuth_RejectsNil(t *testing.T) {
 	t.Parallel()
-	res := permissions.NewResolver(&fakeMembershipRepo{}, &fakeRoleRepo{})
+	res := permissions.NewResolver(&fakeMembershipRepo{}, &fakeRoleRepo{}, time.Now)
 	_, err := res.ResolveAuth(t.Context(), nil)
 	if err == nil {
 		t.Fatal("ResolveAuth(nil) expected error")
@@ -396,13 +401,13 @@ func TestResolve_NoParent_FallsBackToFlatBehavior(t *testing.T) {
 	flat := newRoleWith(t, tid, "Viewer", view) // no parent
 
 	m := newMembership(t, tid)
-	if err := m.AssignRole(flat.ID()); err != nil {
+	if err := m.AssignRole(flat.ID(), testNow); err != nil {
 		t.Fatalf("AssignRole: %v", err)
 	}
 
 	mems := &fakeMembershipRepo{memberships: map[membership.ID]*membership.Membership{m.ID(): m}}
 	roles := &fakeRoleRepo{roles: map[role.ID]*role.Role{flat.ID(): flat}}
-	res := permissions.NewResolver(mems, roles)
+	res := permissions.NewResolver(mems, roles, time.Now)
 
 	got, err := res.Resolve(t.Context(), m.ID())
 	if err != nil {

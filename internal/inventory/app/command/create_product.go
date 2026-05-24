@@ -13,6 +13,7 @@ package command
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/leadkart/leadkart-go/internal/common/ids"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
@@ -44,11 +45,18 @@ type CreateProductResult struct {
 // Wire-contract: ErrSKUTaken surfaces as HTTP 409.
 type CreateProductHandler struct {
 	products product.Repository
+	now      func() time.Time
 }
 
-// NewCreateProductHandler wires the handler.
-func NewCreateProductHandler(products product.Repository) CreateProductHandler {
-	return CreateProductHandler{products: products}
+// NewCreateProductHandler wires the handler. `now` is the explicit time
+// source per the clock-injection refactor — composition root wires
+// `time.Now`; tests inject a fixed-time closure for deterministic
+// timestamps. Nil → time.Now.
+func NewCreateProductHandler(products product.Repository, now func() time.Time) CreateProductHandler {
+	if now == nil {
+		now = time.Now
+	}
+	return CreateProductHandler{products: products, now: now}
 }
 
 // Handle constructs + persists the Product. Outbox event drain rides
@@ -67,6 +75,7 @@ func (h CreateProductHandler) Handle(ctx context.Context, cmd CreateProductComma
 			GSTRateBps:   cmd.GSTRateBps,
 			Manufacturer: cmd.Manufacturer,
 		},
+		h.now(),
 	)
 	if err != nil {
 		return CreateProductResult{}, fmt.Errorf("create product: construct: %w", err)

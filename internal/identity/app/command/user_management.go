@@ -16,6 +16,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
 )
@@ -43,14 +44,19 @@ type UpdateUserProfileCommand struct {
 // UpdateUserProfileHandler runs the profile update.
 type UpdateUserProfileHandler struct {
 	memberships membership.Repository
+	now         func() time.Time
 }
 
-// NewUpdateUserProfileHandler wires the handler.
-func NewUpdateUserProfileHandler(m membership.Repository) UpdateUserProfileHandler {
+// NewUpdateUserProfileHandler wires the handler. `now` is the explicit
+// time source per the clock-injection refactor. Nil → time.Now.
+func NewUpdateUserProfileHandler(m membership.Repository, now func() time.Time) UpdateUserProfileHandler {
 	if m == nil {
 		panic("command: NewUpdateUserProfileHandler memberships repository required")
 	}
-	return UpdateUserProfileHandler{memberships: m}
+	if now == nil {
+		now = time.Now
+	}
+	return UpdateUserProfileHandler{memberships: m, now: now}
 }
 
 // Handle dispatches to [Membership.UpdateProfile].
@@ -58,8 +64,9 @@ func (h UpdateUserProfileHandler) Handle(ctx context.Context, cmd UpdateUserProf
 	if cmd.MembershipID.IsZero() {
 		return errors.New("update_user_profile: membership id required")
 	}
+	now := h.now()
 	err := h.memberships.UpdateByID(ctx, cmd.MembershipID, func(m *membership.Membership) (bool, error) {
-		if err := m.UpdateProfile(cmd.Designation, cmd.Department, cmd.StatusMessage); err != nil {
+		if err := m.UpdateProfile(cmd.Designation, cmd.Department, cmd.StatusMessage, now); err != nil {
 			return false, err
 		}
 		return true, nil
@@ -88,14 +95,19 @@ type DeactivateUserCommand struct {
 // DeactivateUserHandler runs the deactivate flow.
 type DeactivateUserHandler struct {
 	memberships membership.Repository
+	now         func() time.Time
 }
 
-// NewDeactivateUserHandler wires the handler.
-func NewDeactivateUserHandler(m membership.Repository) DeactivateUserHandler {
+// NewDeactivateUserHandler wires the handler. `now` is the explicit
+// time source per the clock-injection refactor. Nil → time.Now.
+func NewDeactivateUserHandler(m membership.Repository, now func() time.Time) DeactivateUserHandler {
 	if m == nil {
 		panic("command: NewDeactivateUserHandler memberships repository required")
 	}
-	return DeactivateUserHandler{memberships: m}
+	if now == nil {
+		now = time.Now
+	}
+	return DeactivateUserHandler{memberships: m, now: now}
 }
 
 // Handle dispatches to [Membership.Deactivate].
@@ -103,8 +115,9 @@ func (h DeactivateUserHandler) Handle(ctx context.Context, cmd DeactivateUserCom
 	if cmd.MembershipID.IsZero() {
 		return errors.New("deactivate_user: membership id required")
 	}
+	now := h.now()
 	err := h.memberships.UpdateByID(ctx, cmd.MembershipID, func(m *membership.Membership) (bool, error) {
-		if err := m.Deactivate(cmd.Reason); err != nil {
+		if err := m.Deactivate(cmd.Reason, now); err != nil {
 			return false, err
 		}
 		return true, nil
@@ -135,14 +148,19 @@ type ReactivateUserCommand struct {
 // ReactivateUserHandler runs the reactivate flow.
 type ReactivateUserHandler struct {
 	memberships membership.Repository
+	now         func() time.Time
 }
 
-// NewReactivateUserHandler wires the handler.
-func NewReactivateUserHandler(m membership.Repository) ReactivateUserHandler {
+// NewReactivateUserHandler wires the handler. `now` is the explicit
+// time source per the clock-injection refactor. Nil → time.Now.
+func NewReactivateUserHandler(m membership.Repository, now func() time.Time) ReactivateUserHandler {
 	if m == nil {
 		panic("command: NewReactivateUserHandler memberships repository required")
 	}
-	return ReactivateUserHandler{memberships: m}
+	if now == nil {
+		now = time.Now
+	}
+	return ReactivateUserHandler{memberships: m, now: now}
 }
 
 // Handle dispatches to [Membership.Reactivate]. Idempotent — already-
@@ -151,8 +169,9 @@ func (h ReactivateUserHandler) Handle(ctx context.Context, cmd ReactivateUserCom
 	if cmd.MembershipID.IsZero() {
 		return errors.New("reactivate_user: membership id required")
 	}
+	now := h.now()
 	err := h.memberships.UpdateByID(ctx, cmd.MembershipID, func(m *membership.Membership) (bool, error) {
-		if err := m.Reactivate(); err != nil {
+		if err := m.Reactivate(now); err != nil {
 			return false, err
 		}
 		return true, nil

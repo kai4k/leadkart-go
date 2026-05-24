@@ -34,7 +34,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/leadkart/leadkart-go/internal/common/clock"
 	"github.com/leadkart/leadkart-go/internal/common/errs"
 	"github.com/leadkart/leadkart-go/internal/common/pagination"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
@@ -97,6 +96,11 @@ type Movement struct {
 // New constructs a new ledger row. Returns ErrInvalid on invariant
 // violation. Emits LoggedEvent on success.
 //
+// `now` is the explicit timestamp — caller supplies a single `time.Time`
+// per operation so all aggregates touched in one handler invocation
+// share the same instant (audit consistency). No package-global clock
+// dependency per the post-Wave-9 clock-injection refactor.
+//
 // Invariants:
 //   - id + batchID + productID + tenantID + actorMembershipID non-zero
 //   - Type is in the closed catalogue (batch.MovementType.IsValid())
@@ -108,7 +112,7 @@ type Movement struct {
 //   - SourceReference, when supplied, <=200 chars
 //
 //nolint:gocyclo,cyclop // straight-line guard cascade per coding-standards "validation = sequential guard list"
-func New(id ID, spec Spec) (*Movement, error) {
+func New(id ID, spec Spec, now time.Time) (*Movement, error) {
 	if id.IsZero() {
 		return nil, fmt.Errorf("%w: id required", ErrInvalid)
 	}
@@ -152,7 +156,7 @@ func New(id ID, spec Spec) (*Movement, error) {
 			sr = &ref
 		}
 	}
-	now := clock.Now()
+	now = now.UTC()
 	m := &Movement{
 		id:                  id,
 		batchID:             spec.BatchID,

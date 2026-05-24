@@ -37,7 +37,7 @@ func TestKeysetBatchesPage_UsesIndexUnderRLS(t *testing.T) {
 
 	p, _ := product.New(product.ID(ids.NewV7().String()), tid, actor,
 		product.Spec{SKU: "EXPL-1", Name: "Expl", DosageForm: "Tablet",
-			PackSize: "10", HSNCode: "3004", GSTRateBps: 1200})
+			PackSize: "10", HSNCode: "3004", GSTRateBps: 1200}, fixedNow)
 	if err := products.Add(ctx, p); err != nil {
 		t.Fatalf("Add product: %v", err)
 	}
@@ -55,7 +55,7 @@ func TestKeysetBatchesPage_UsesIndexUnderRLS(t *testing.T) {
 				ManufacturingLicenceNumber: "ML-1",
 				MRPPaise:                   100,
 				PurchasePricePaise:         50,
-			})
+			}, fixedNow)
 		if err := batches.Add(ctx, b); err != nil {
 			t.Fatalf("seed batch %d: %v", i, err)
 		}

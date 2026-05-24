@@ -4,14 +4,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/leadkart/leadkart-go/internal/common/email"
 	"github.com/leadkart/leadkart-go/internal/common/ids"
+	"github.com/leadkart/leadkart-go/internal/common/pg"
 	"github.com/leadkart/leadkart-go/internal/identity/app/argon2"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
-	"github.com/leadkart/leadkart-go/internal/common/pg"
 )
 
 // CreateUserCommand carries the validated input for adding a user to
@@ -63,18 +64,25 @@ type CreateUserHandler struct {
 	uow         pg.UnitOfWork
 	persons     person.Repository
 	memberships membership.Repository
+	now         func() time.Time
 }
 
-// NewCreateUserHandler wires the handler against interfaces only.
+// NewCreateUserHandler wires the handler against interfaces only. `now`
+// is the explicit time source per the clock-injection refactor. Nil →
+// time.Now.
 func NewCreateUserHandler(
 	uow pg.UnitOfWork,
 	persons person.Repository,
 	memberships membership.Repository,
+	now func() time.Time,
 ) CreateUserHandler {
 	if uow == nil || persons == nil || memberships == nil {
 		panic("command: NewCreateUserHandler all dependencies required")
 	}
-	return CreateUserHandler{uow: uow, persons: persons, memberships: memberships}
+	if now == nil {
+		now = time.Now
+	}
+	return CreateUserHandler{uow: uow, persons: persons, memberships: memberships, now: now}
 }
 
 // Handle runs the flow:
@@ -121,13 +129,14 @@ func (h CreateUserHandler) Handle(
 		}
 	}
 
+	now := h.now()
 	var result CreateUserResult
 	err = h.uow.WithinTx(ctx, pg.TxScopePlatform, func(ctx context.Context) error {
-		p, perr := h.findOrCreatePerson(ctx, cmd, existing, pwd)
+		p, perr := h.findOrCreatePerson(ctx, cmd, existing, pwd, now)
 		if perr != nil {
 			return perr
 		}
-		m, merr := h.createMembership(ctx, p.ID(), cmd.TenantID, cmd.CreatedByMembershipID)
+		m, merr := h.createMembership(ctx, p.ID(), cmd.TenantID, cmd.CreatedByMembershipID, now)
 		if merr != nil {
 			return merr
 		}
@@ -164,6 +173,7 @@ func (h CreateUserHandler) findOrCreatePerson(
 	cmd CreateUserCommand,
 	existing *person.Person,
 	pwd person.PasswordHash,
+	now time.Time,
 ) (*person.Person, error) {
 	if existing != nil {
 		return existing, nil
@@ -172,7 +182,7 @@ func (h CreateUserHandler) findOrCreatePerson(
 	// inviting admin chose this initial password; force the new
 	// Person through the change-password flow on first login.
 	p, err := person.NewWithMustChangePassword(person.ID(ids.NewV7().String()),
-		cmd.Email, cmd.FirstName, cmd.LastName, pwd)
+		cmd.Email, cmd.FirstName, cmd.LastName, pwd, now)
 	if err != nil {
 		return nil, fmt.Errorf("create user: construct person: %w", err)
 	}
@@ -193,8 +203,9 @@ func (h CreateUserHandler) createMembership(
 	personID person.ID,
 	tenantID tenant.ID,
 	createdBy membership.ID,
+	now time.Time,
 ) (*membership.Membership, error) {
-	m, err := membership.New(membership.ID(ids.NewV7().String()), personID, tenantID, createdBy)
+	m, err := membership.New(membership.ID(ids.NewV7().String()), personID, tenantID, createdBy, now)
 	if err != nil {
 		return nil, fmt.Errorf("create user: construct membership: %w", err)
 	}

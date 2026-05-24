@@ -3,6 +3,7 @@ package command_test
 import (
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/leadkart/leadkart-go/internal/inventory/app/command"
 	"github.com/leadkart/leadkart-go/internal/inventory/domain/product"
@@ -11,7 +12,7 @@ import (
 func TestCreateProductHandler_HappyPath_Persists(t *testing.T) {
 	t.Parallel()
 	repo := newFakeProductRepo()
-	h := command.NewCreateProductHandler(repo)
+	h := command.NewCreateProductHandler(repo, func() time.Time { return fixedNow })
 	tid := newTenantID(t)
 	actor := newMembershipID(t)
 
@@ -37,7 +38,7 @@ func TestCreateProductHandler_HappyPath_Persists(t *testing.T) {
 func TestCreateProductHandler_RejectsInvalidSpec(t *testing.T) {
 	t.Parallel()
 	repo := newFakeProductRepo()
-	h := command.NewCreateProductHandler(repo)
+	h := command.NewCreateProductHandler(repo, func() time.Time { return fixedNow })
 	tid := newTenantID(t)
 	actor := newMembershipID(t)
 
@@ -59,7 +60,7 @@ func TestCreateProductHandler_RejectsInvalidSpec(t *testing.T) {
 func TestCreateProductHandler_DuplicateSKU_ReturnsErrSKUTaken(t *testing.T) {
 	t.Parallel()
 	repo := newFakeProductRepo()
-	h := command.NewCreateProductHandler(repo)
+	h := command.NewCreateProductHandler(repo, func() time.Time { return fixedNow })
 	tid := newTenantID(t)
 	actor := newMembershipID(t)
 	_ = seedProduct(t, repo, tid, actor, "DUP-1")
@@ -81,7 +82,7 @@ func TestCreateProductHandler_RepoAddError_Propagates(t *testing.T) {
 	t.Parallel()
 	repo := newFakeProductRepo()
 	repo.addErr = errSentinel
-	h := command.NewCreateProductHandler(repo)
+	h := command.NewCreateProductHandler(repo, func() time.Time { return fixedNow })
 	tid := newTenantID(t)
 	actor := newMembershipID(t)
 

@@ -40,6 +40,7 @@ func TestProductRepository_AddGetUpdate_RoundTripsViaOutbox(t *testing.T) {
 			HSNCode: "30049099", GSTRateBps: 1200,
 			Manufacturer: "Acme",
 		},
+		fixedNow,
 	)
 	if err != nil {
 		t.Fatalf("product.New: %v", err)
@@ -62,7 +63,7 @@ func TestProductRepository_AddGetUpdate_RoundTripsViaOutbox(t *testing.T) {
 	// Update via UpdateByID closure.
 	newName := "Amoxicillin 500 mg Capsules"
 	err = products.UpdateByID(ctx, p.ID(), func(p *product.Product) (bool, error) {
-		return true, p.Update(actor, product.UpdateSpec{Name: &newName})
+		return true, p.Update(actor, product.UpdateSpec{Name: &newName}, fixedNow)
 	})
 	if err != nil {
 		t.Fatalf("UpdateByID: %v", err)
@@ -113,11 +114,11 @@ func TestProductRepository_Add_DuplicateSKU_ReturnsErrSKUTaken(t *testing.T) {
 		DosageForm: "Tablet", PackSize: "10",
 		HSNCode: "3004", GSTRateBps: 1200,
 	}
-	first, _ := product.New(product.ID(ids.NewV7().String()), tid, actor, spec)
+	first, _ := product.New(product.ID(ids.NewV7().String()), tid, actor, spec, fixedNow)
 	if err := products.Add(ctx, first); err != nil {
 		t.Fatalf("first Add: %v", err)
 	}
-	second, _ := product.New(product.ID(ids.NewV7().String()), tid, actor, spec)
+	second, _ := product.New(product.ID(ids.NewV7().String()), tid, actor, spec, fixedNow)
 	err := products.Add(ctx, second)
 	if !errors.Is(err, product.ErrSKUTaken) {
 		t.Fatalf("want ErrSKUTaken, got %v", err)
@@ -147,6 +148,7 @@ func TestBatchRepository_FullStockMovementFlow_HappyPath(t *testing.T) {
 			DosageForm: "Tablet", PackSize: "10",
 			HSNCode: "3004", GSTRateBps: 1200,
 		},
+		fixedNow,
 	)
 	if err := products.Add(ctx, p); err != nil {
 		t.Fatalf("Add product: %v", err)
@@ -167,6 +169,7 @@ func TestBatchRepository_FullStockMovementFlow_HappyPath(t *testing.T) {
 			MRPPaise:                   25000,
 			PurchasePricePaise:         18000,
 		},
+		fixedNow,
 	)
 	if err := batches.Add(ctx, b); err != nil {
 		t.Fatalf("Add batch: %v", err)
@@ -175,7 +178,7 @@ func TestBatchRepository_FullStockMovementFlow_HappyPath(t *testing.T) {
 	// Inbound 100 via UpdateByID + Movement insert in one UoW tx.
 	err := tx.WithinTx(ctx, pg.TxScopeTenant, func(ctx2 context.Context) error {
 		updErr := batches.UpdateByID(ctx2, b.ID(), func(b *batch.Batch) (bool, error) {
-			return true, b.ApplyMovement(batch.MovementInbound, 100)
+			return true, b.ApplyMovement(batch.MovementInbound, 100, fixedNow)
 		})
 		if updErr != nil {
 			return updErr
@@ -189,7 +192,7 @@ func TestBatchRepository_FullStockMovementFlow_HappyPath(t *testing.T) {
 			QuantityOnHandAfter: 100,
 			Reason:              "initial inbound",
 			ActorMembershipID:   actor,
-		})
+		}, fixedNow)
 		if mErr != nil {
 			return mErr
 		}
@@ -244,7 +247,7 @@ func TestBatchRepository_SequentialUpdates_BumpVersionMonotonically(t *testing.T
 
 	p, _ := product.New(product.ID(ids.NewV7().String()), tid, actor,
 		product.Spec{SKU: "CON-1", Name: "Con", DosageForm: "Tablet",
-			PackSize: "10", HSNCode: "3004", GSTRateBps: 1200})
+			PackSize: "10", HSNCode: "3004", GSTRateBps: 1200}, fixedNow)
 	if err := products.Add(ctx, p); err != nil {
 		t.Fatalf("Add product: %v", err)
 	}
@@ -254,7 +257,7 @@ func TestBatchRepository_SequentialUpdates_BumpVersionMonotonically(t *testing.T
 	b, _ := batch.New(batch.ID(ids.NewV7().String()), p.ID(), tid, actor,
 		batch.Spec{BatchNumber: "L1", ManufactureDate: mfg, ExpiryDate: exp,
 			ManufacturerName: "A", ManufacturingLicenceNumber: "ML-1",
-			MRPPaise: 100, PurchasePricePaise: 50})
+			MRPPaise: 100, PurchasePricePaise: 50}, fixedNow)
 	if err := batches.Add(ctx, b); err != nil {
 		t.Fatalf("Add batch: %v", err)
 	}
@@ -264,7 +267,7 @@ func TestBatchRepository_SequentialUpdates_BumpVersionMonotonically(t *testing.T
 		if b.Version() != 0 {
 			t.Errorf("v0 load: got %d want 0", b.Version())
 		}
-		return true, b.ApplyMovement(batch.MovementInbound, 10)
+		return true, b.ApplyMovement(batch.MovementInbound, 10, fixedNow)
 	})
 	if err != nil {
 		t.Fatalf("first UpdateByID: %v", err)
@@ -277,7 +280,7 @@ func TestBatchRepository_SequentialUpdates_BumpVersionMonotonically(t *testing.T
 		if b.Version() != 1 {
 			t.Errorf("v1 load: got %d want 1", b.Version())
 		}
-		return true, b.ApplyMovement(batch.MovementInbound, 5)
+		return true, b.ApplyMovement(batch.MovementInbound, 5, fixedNow)
 	})
 	if err != nil {
 		t.Fatalf("second UpdateByID: %v", err)
@@ -310,7 +313,7 @@ func TestBatchRepository_AnyLiveWithStockForProduct_GatesProductDelete(t *testin
 
 	p, _ := product.New(product.ID(ids.NewV7().String()), tid, actor,
 		product.Spec{SKU: "GUARD-1", Name: "Guard", DosageForm: "Tablet",
-			PackSize: "10", HSNCode: "3004", GSTRateBps: 1200})
+			PackSize: "10", HSNCode: "3004", GSTRateBps: 1200}, fixedNow)
 	if err := products.Add(ctx, p); err != nil {
 		t.Fatalf("Add product: %v", err)
 	}
@@ -330,7 +333,7 @@ func TestBatchRepository_AnyLiveWithStockForProduct_GatesProductDelete(t *testin
 	b, _ := batch.New(batch.ID(ids.NewV7().String()), p.ID(), tid, actor,
 		batch.Spec{BatchNumber: "B1", ManufactureDate: mfg, ExpiryDate: exp,
 			ManufacturerName: "A", ManufacturingLicenceNumber: "ML-1",
-			MRPPaise: 100, PurchasePricePaise: 50})
+			MRPPaise: 100, PurchasePricePaise: 50}, fixedNow)
 	if err := batches.Add(ctx, b); err != nil {
 		t.Fatalf("Add batch: %v", err)
 	}
@@ -341,7 +344,7 @@ func TestBatchRepository_AnyLiveWithStockForProduct_GatesProductDelete(t *testin
 
 	// Inbound 10 → must return true.
 	err = batches.UpdateByID(ctx, b.ID(), func(b *batch.Batch) (bool, error) {
-		return true, b.ApplyMovement(batch.MovementInbound, 10)
+		return true, b.ApplyMovement(batch.MovementInbound, 10, fixedNow)
 	})
 	if err != nil {
 		t.Fatalf("inbound: %v", err)
@@ -371,7 +374,7 @@ func TestProductRepository_ListPage_PaginatesByCreatedAtKeyset(t *testing.T) {
 				SKU: fmt.Sprintf("PG-%d", i), Name: "PG",
 				DosageForm: "Tablet", PackSize: "10",
 				HSNCode: "3004", GSTRateBps: 1200,
-			})
+			}, fixedNow)
 		if err := products.Add(ctx, p); err != nil {
 			t.Fatalf("seed Add %d: %v", i, err)
 		}

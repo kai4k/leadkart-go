@@ -116,12 +116,12 @@ func newWiredApp(t *testing.T) wiredApp {
 	stampCache := adapters.NewSecurityStampCache(hc, persons)
 	stamps := adapters.NewSecurityStampValidator(stampCache)
 
-	permResolver := permissions.NewResolver(memberships, roles)
-	register := command.NewRegisterTenantHandler(tx, tenants, persons, memberships, roles)
+	permResolver := permissions.NewResolver(memberships, roles, now)
+	register := command.NewRegisterTenantHandler(tx, tenants, persons, memberships, roles, now)
 	authRouter := adapters.NewAuthRouterPG(pool, tx)
 	login := command.NewLoginHandler(authRouter, families, tenants, persons, permResolver, issuer, now, refreshTTL, dummyHash)
 	refresh := command.NewRefreshHandler(families, persons, memberships, tenants, permResolver, issuer, now, refreshTTL)
-	logout := command.NewLogoutHandler(families)
+	logout := command.NewLogoutHandler(families, now)
 
 	return wiredApp{
 		pool:     pool,

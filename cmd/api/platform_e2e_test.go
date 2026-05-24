@@ -169,7 +169,7 @@ func (f platformE2E) mintPlatformOperatorToken(t *testing.T) string {
 	if err != nil {
 		t.Fatalf("pw hash: %v", err)
 	}
-	op, err := person.New(person.ID(personID), addr, "Platform", "Operator", pwHash)
+	op, err := person.New(person.ID(personID), addr, "Platform", "Operator", pwHash, testNow)
 	if err != nil {
 		t.Fatalf("person.New: %v", err)
 	}

@@ -20,6 +20,10 @@ import (
 	"github.com/leadkart/leadkart-go/internal/common/pg"
 )
 
+// testNow is the deterministic instant test fixtures pass to domain
+// factories + mutators per the clock-injection refactor.
+var testNow = time.Date(2026, 5, 24, 12, 0, 0, 0, time.UTC)
+
 // seedTenant + seedPerson are convenience helpers — repos are wired the
 // same way the production composition root will wire them.
 func seedTenant(t *testing.T, repo *adapters.TenantRepository) *tenant.Tenant {
@@ -34,7 +38,7 @@ func seedTenant(t *testing.T, repo *adapters.TenantRepository) *tenant.Tenant {
 		t.Fatalf("slug: %v", err)
 	}
 	addr, _ := email.New("admin@example.test")
-	tn, err := tenant.New(id, s, "Acme Pharma Pvt Ltd", "Acme", addr)
+	tn, err := tenant.New(id, s, "Acme Pharma Pvt Ltd", "Acme", addr, testNow)
 	if err != nil {
 		t.Fatalf("tenant.New: %v", err)
 	}
@@ -64,7 +68,7 @@ func TestMembershipRepository_Add_PersistsRowAndOutboxEvent(t *testing.T) {
 	p := seedPerson(t, persons, "member@example.test")
 
 	id := membership.ID(ids.NewV7().String())
-	m, err := membership.New(id, p.ID(), tn.ID(), membership.ID(""))
+	m, err := membership.New(id, p.ID(), tn.ID(), membership.ID(""), testNow)
 	if err != nil {
 		t.Fatalf("membership.New: %v", err)
 	}
@@ -104,7 +108,7 @@ func TestMembershipRepository_Add_SecondActive_ReturnsErrAlreadyActive(t *testin
 	p := seedPerson(t, persons, "switch@example.test")
 
 	// First Active Membership in tenant A.
-	mA, _ := membership.New(membership.ID(ids.NewV7().String()), p.ID(), tnA.ID(), membership.ID(""))
+	mA, _ := membership.New(membership.ID(ids.NewV7().String()), p.ID(), tnA.ID(), membership.ID(""), testNow)
 	ctxA := tenancy.WithID(t.Context(), tenancy.ID(tnA.ID().String()))
 	if err := memberships.Add(ctxA, mA); err != nil {
 		t.Fatalf("first Add: %v", err)
@@ -112,7 +116,7 @@ func TestMembershipRepository_Add_SecondActive_ReturnsErrAlreadyActive(t *testin
 
 	// Second concurrent Active Membership in tenant B — partial unique
 	// index uq_memberships_person_active blocks it.
-	mB, _ := membership.New(membership.ID(ids.NewV7().String()), p.ID(), tnB.ID(), membership.ID(""))
+	mB, _ := membership.New(membership.ID(ids.NewV7().String()), p.ID(), tnB.ID(), membership.ID(""), testNow)
 	ctxB := tenancy.WithID(t.Context(), tenancy.ID(tnB.ID().String()))
 	err := memberships.Add(ctxB, mB)
 	if !errors.Is(err, membership.ErrAlreadyActive) {
@@ -131,7 +135,7 @@ func TestMembershipRepository_GetByID_OutsideTenantScope_NotFound(t *testing.T) 
 	tnB := seedTenant(t, tenants)
 	p := seedPerson(t, persons, "isolation@example.test")
 
-	mA, _ := membership.New(membership.ID(ids.NewV7().String()), p.ID(), tnA.ID(), membership.ID(""))
+	mA, _ := membership.New(membership.ID(ids.NewV7().String()), p.ID(), tnA.ID(), membership.ID(""), testNow)
 	ctxA := tenancy.WithID(t.Context(), tenancy.ID(tnA.ID().String()))
 	if err := memberships.Add(ctxA, mA); err != nil {
 		t.Fatalf("Add: %v", err)
@@ -157,7 +161,7 @@ func TestMembershipRepository_UpdateByID_DeactivateClearsActiveSlot(t *testing.T
 	p := seedPerson(t, persons, "rotate@example.test")
 
 	// Active in tenant A.
-	mA, _ := membership.New(membership.ID(ids.NewV7().String()), p.ID(), tnA.ID(), membership.ID(""))
+	mA, _ := membership.New(membership.ID(ids.NewV7().String()), p.ID(), tnA.ID(), membership.ID(""), testNow)
 	ctxA := tenancy.WithID(t.Context(), tenancy.ID(tnA.ID().String()))
 	if err := memberships.Add(ctxA, mA); err != nil {
 		t.Fatalf("Add A: %v", err)
@@ -165,7 +169,7 @@ func TestMembershipRepository_UpdateByID_DeactivateClearsActiveSlot(t *testing.T
 
 	// Deactivate in A.
 	err := memberships.UpdateByID(ctxA, mA.ID(), func(m *membership.Membership) (bool, error) {
-		if err := m.Deactivate("job change"); err != nil {
+		if err := m.Deactivate("job change", testNow); err != nil {
 			return false, err
 		}
 		return true, nil
@@ -175,7 +179,7 @@ func TestMembershipRepository_UpdateByID_DeactivateClearsActiveSlot(t *testing.T
 	}
 
 	// Now adding an Active in B is allowed (single-Active slot freed).
-	mB, _ := membership.New(membership.ID(ids.NewV7().String()), p.ID(), tnB.ID(), membership.ID(""))
+	mB, _ := membership.New(membership.ID(ids.NewV7().String()), p.ID(), tnB.ID(), membership.ID(""), testNow)
 	ctxB := tenancy.WithID(t.Context(), tenancy.ID(tnB.ID().String()))
 	if err := memberships.Add(ctxB, mB); err != nil {
 		t.Fatalf("Add B after deactivate: %v", err)
@@ -192,7 +196,7 @@ func TestMembershipRepository_GetActiveForPerson_BypassesRLS(t *testing.T) {
 	tn := seedTenant(t, tenants)
 	p := seedPerson(t, persons, "login@example.test")
 
-	mA, _ := membership.New(membership.ID(ids.NewV7().String()), p.ID(), tn.ID(), membership.ID(""))
+	mA, _ := membership.New(membership.ID(ids.NewV7().String()), p.ID(), tn.ID(), membership.ID(""), testNow)
 	ctx := tenancy.WithID(t.Context(), tenancy.ID(tn.ID().String()))
 	if err := memberships.Add(ctx, mA); err != nil {
 		t.Fatalf("Add: %v", err)
@@ -248,25 +252,25 @@ func TestMembershipRepository_Add_PersistsRoleAssignmentsAndOverrides(t *testing
 
 	// Build a Membership carrying role assignments + a granted + a revoked
 	// permission overlay + non-empty profile.
-	m, err := membership.New(membership.ID(ids.NewV7().String()), p.ID(), tn.ID(), membership.ID(""))
+	m, err := membership.New(membership.ID(ids.NewV7().String()), p.ID(), tn.ID(), membership.ID(""), testNow)
 	if err != nil {
 		t.Fatalf("membership.New: %v", err)
 	}
-	if err := m.AssignRole(r1.ID()); err != nil {
+	if err := m.AssignRole(r1.ID(), testNow); err != nil {
 		t.Fatalf("AssignRole r1: %v", err)
 	}
-	if err := m.AssignRole(r2.ID()); err != nil {
+	if err := m.AssignRole(r2.ID(), testNow); err != nil {
 		t.Fatalf("AssignRole r2: %v", err)
 	}
 	grantP := permission.FromConstant(permission.IdentityPermissions.Roles.Assign)
 	revokeP := permission.FromConstant(permission.IdentityPermissions.Users.Anonymise)
-	if err := m.GrantPermission(grantP, time.Time{}); err != nil {
+	if err := m.GrantPermission(grantP, time.Time{}, testNow); err != nil {
 		t.Fatalf("GrantPermission: %v", err)
 	}
-	if err := m.RevokePermission(revokeP); err != nil {
+	if err := m.RevokePermission(revokeP, testNow); err != nil {
 		t.Fatalf("RevokePermission: %v", err)
 	}
-	if err := m.UpdateProfile("Senior Sales Lead", "South Region", "On call"); err != nil {
+	if err := m.UpdateProfile("Senior Sales Lead", "South Region", "On call", testNow); err != nil {
 		t.Fatalf("UpdateProfile: %v", err)
 	}
 
@@ -322,20 +326,20 @@ func TestMembershipRepository_UpdateByID_ReplacesRoleAssignmentsAndOverrides(t *
 		}
 	}
 
-	m, _ := membership.New(membership.ID(ids.NewV7().String()), p.ID(), tn.ID(), membership.ID(""))
-	_ = m.AssignRole(r1.ID())
-	_ = m.AssignRole(r2.ID())
-	_ = m.GrantPermission(permission.FromConstant(permission.IdentityPermissions.Roles.View), time.Time{})
+	m, _ := membership.New(membership.ID(ids.NewV7().String()), p.ID(), tn.ID(), membership.ID(""), testNow)
+	_ = m.AssignRole(r1.ID(), testNow)
+	_ = m.AssignRole(r2.ID(), testNow)
+	_ = m.GrantPermission(permission.FromConstant(permission.IdentityPermissions.Roles.View), time.Time{}, testNow)
 	if err := memberships.Add(ctx, m); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
 
 	// Replace state via UpdateByID: drop r1, add r3, drop the grant, add a revoke.
 	err := memberships.UpdateByID(ctx, m.ID(), func(loaded *membership.Membership) (bool, error) {
-		_ = loaded.RevokeRole(r1.ID())
-		_ = loaded.AssignRole(r3.ID())
+		_ = loaded.RevokeRole(r1.ID(), testNow)
+		_ = loaded.AssignRole(r3.ID(), testNow)
 		// flipping the same permission from granted to revoked auto-suppresses.
-		_ = loaded.RevokePermission(permission.FromConstant(permission.IdentityPermissions.Roles.View))
+		_ = loaded.RevokePermission(permission.FromConstant(permission.IdentityPermissions.Roles.View), testNow)
 		return true, nil
 	})
 	if err != nil {
@@ -383,8 +387,8 @@ func TestMembershipRepository_Add_RejectsCrossTenantRoleAssignment(t *testing.T)
 		t.Fatalf("Add rB: %v", err)
 	}
 
-	m, _ := membership.New(membership.ID(ids.NewV7().String()), p.ID(), tnA.ID(), membership.ID(""))
-	_ = m.AssignRole(rB.ID())
+	m, _ := membership.New(membership.ID(ids.NewV7().String()), p.ID(), tnA.ID(), membership.ID(""), testNow)
+	_ = m.AssignRole(rB.ID(), testNow)
 
 	ctxA := tenancy.WithID(t.Context(), tenancy.ID(tnA.ID().String()))
 	err := memberships.Add(ctxA, m)

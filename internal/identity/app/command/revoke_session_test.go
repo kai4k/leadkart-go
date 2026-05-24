@@ -6,12 +6,16 @@ import (
 	"testing"
 	"time"
 
-	"github.com/leadkart/leadkart-go/internal/common/clock"
 	"github.com/leadkart/leadkart-go/internal/identity/app/command"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/refreshtoken"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
+
+// revokeNow is the deterministic instant the revoke_session_test suite
+// passes to every handler + aggregate call per the clock-injection
+// refactor. Replaces the prior package-global clock.Set helper.
+var revokeNow = time.Date(2026, 5, 7, 12, 0, 0, 0, time.UTC)
 
 // fakeFamilyRepo is the minimum [refreshtoken.Repository] surface
 // the revoke-session handlers exercise.
@@ -78,6 +82,7 @@ func newFamily(t *testing.T, personID person.ID, deviceLabel string) *refreshtok
 		deviceLabel,
 		hash,
 		14*24*time.Hour,
+		revokeNow,
 	)
 	if err != nil {
 		t.Fatalf("NewFamily: %v", err)
@@ -85,23 +90,16 @@ func newFamily(t *testing.T, personID person.ID, deviceLabel string) *refreshtok
 	return f
 }
 
-func setRevokeClock(t *testing.T) {
-	t.Helper()
-	clock.Set(time.Date(2026, 5, 7, 12, 0, 0, 0, time.UTC))
-	t.Cleanup(clock.Reset)
-}
-
 // ----- RevokeSession ----------------------------------------------------------
 
 func TestRevokeSession_Succeeds(t *testing.T) {
 	t.Parallel()
-	setRevokeClock(t)
 	repo := newFakeFamilyRepo()
 	pid := person.ID("p1")
 	f := newFamily(t, pid, "iphone-15")
 	_ = repo.Add(t.Context(), f)
 
-	h := command.NewRevokeSessionHandler(repo)
+	h := command.NewRevokeSessionHandler(repo, func() time.Time { return revokeNow })
 	err := h.Handle(t.Context(), command.RevokeSessionCommand{
 		PersonID: pid,
 		FamilyID: f.ID(),
@@ -121,14 +119,13 @@ func TestRevokeSession_CrossPerson_ReturnsNotFound(t *testing.T) {
 	// Per security.md: "wrong owner" collapses to "not found" to defeat
 	// FamilyID enumeration via ownership probing.
 	t.Parallel()
-	setRevokeClock(t)
 	repo := newFakeFamilyRepo()
 	owner := person.ID("p-owner")
 	attacker := person.ID("p-attacker")
 	f := newFamily(t, owner, "iphone-15")
 	_ = repo.Add(t.Context(), f)
 
-	h := command.NewRevokeSessionHandler(repo)
+	h := command.NewRevokeSessionHandler(repo, func() time.Time { return revokeNow })
 	err := h.Handle(t.Context(), command.RevokeSessionCommand{
 		PersonID: attacker,
 		FamilyID: f.ID(),
@@ -143,16 +140,15 @@ func TestRevokeSession_CrossPerson_ReturnsNotFound(t *testing.T) {
 
 func TestRevokeSession_AlreadyRevoked_IsIdempotent(t *testing.T) {
 	t.Parallel()
-	setRevokeClock(t)
 	repo := newFakeFamilyRepo()
 	pid := person.ID("p1")
 	f := newFamily(t, pid, "iphone-15")
-	if err := f.Revoke("logout"); err != nil {
+	if err := f.Revoke("logout", revokeNow); err != nil {
 		t.Fatalf("pre-revoke: %v", err)
 	}
 	_ = repo.Add(t.Context(), f)
 
-	h := command.NewRevokeSessionHandler(repo)
+	h := command.NewRevokeSessionHandler(repo, func() time.Time { return revokeNow })
 	err := h.Handle(t.Context(), command.RevokeSessionCommand{
 		PersonID: pid,
 		FamilyID: f.ID(),
@@ -168,7 +164,7 @@ func TestRevokeSession_AlreadyRevoked_IsIdempotent(t *testing.T) {
 func TestRevokeSession_NotFound_ReturnsErrSessionNotFound(t *testing.T) {
 	t.Parallel()
 	repo := newFakeFamilyRepo()
-	h := command.NewRevokeSessionHandler(repo)
+	h := command.NewRevokeSessionHandler(repo, func() time.Time { return revokeNow })
 	err := h.Handle(t.Context(), command.RevokeSessionCommand{
 		PersonID: person.ID("p1"),
 		FamilyID: refreshtoken.FamilyID("99999999-9999-9999-9999-999999999999"),
@@ -181,7 +177,7 @@ func TestRevokeSession_NotFound_ReturnsErrSessionNotFound(t *testing.T) {
 func TestRevokeSession_RejectsZeroPersonOrFamily(t *testing.T) {
 	t.Parallel()
 	repo := newFakeFamilyRepo()
-	h := command.NewRevokeSessionHandler(repo)
+	h := command.NewRevokeSessionHandler(repo, func() time.Time { return revokeNow })
 
 	if err := h.Handle(t.Context(), command.RevokeSessionCommand{}); err == nil {
 		t.Error("expected error on zero person + family")
@@ -192,7 +188,6 @@ func TestRevokeSession_RejectsZeroPersonOrFamily(t *testing.T) {
 
 func TestRevokeAllSessions_RevokesAll(t *testing.T) {
 	t.Parallel()
-	setRevokeClock(t)
 	repo := newFakeFamilyRepo()
 	pid := person.ID("p1")
 	f1 := newFamily(t, pid, "device-a")
@@ -200,7 +195,7 @@ func TestRevokeAllSessions_RevokesAll(t *testing.T) {
 	_ = repo.Add(t.Context(), f1)
 	_ = repo.Add(t.Context(), f2)
 
-	h := command.NewRevokeAllSessionsHandler(repo)
+	h := command.NewRevokeAllSessionsHandler(repo, func() time.Time { return revokeNow })
 	out, err := h.Handle(t.Context(), command.RevokeAllSessionsCommand{
 		PersonID: pid,
 	})
@@ -217,7 +212,6 @@ func TestRevokeAllSessions_RevokesAll(t *testing.T) {
 
 func TestRevokeAllSessions_ExceptKeepsOneAlive(t *testing.T) {
 	t.Parallel()
-	setRevokeClock(t)
 	repo := newFakeFamilyRepo()
 	pid := person.ID("p1")
 	current := newFamily(t, pid, "current-device")
@@ -225,7 +219,7 @@ func TestRevokeAllSessions_ExceptKeepsOneAlive(t *testing.T) {
 	_ = repo.Add(t.Context(), current)
 	_ = repo.Add(t.Context(), other)
 
-	h := command.NewRevokeAllSessionsHandler(repo)
+	h := command.NewRevokeAllSessionsHandler(repo, func() time.Time { return revokeNow })
 	out, err := h.Handle(t.Context(), command.RevokeAllSessionsCommand{
 		PersonID:       pid,
 		ExceptFamilyID: current.ID(),
@@ -247,7 +241,7 @@ func TestRevokeAllSessions_ExceptKeepsOneAlive(t *testing.T) {
 func TestRevokeAllSessions_ZeroSessions_ReturnsZero(t *testing.T) {
 	t.Parallel()
 	repo := newFakeFamilyRepo()
-	h := command.NewRevokeAllSessionsHandler(repo)
+	h := command.NewRevokeAllSessionsHandler(repo, func() time.Time { return revokeNow })
 	out, err := h.Handle(t.Context(), command.RevokeAllSessionsCommand{
 		PersonID: person.ID("p-no-sessions"),
 	})
@@ -266,7 +260,7 @@ func TestNewRevokeSessionHandler_PanicsOnNilRepo(t *testing.T) {
 			t.Error("expected panic on nil families repo")
 		}
 	}()
-	_ = command.NewRevokeSessionHandler(nil)
+	_ = command.NewRevokeSessionHandler(nil, nil)
 }
 
 func TestNewRevokeAllSessionsHandler_PanicsOnNilRepo(t *testing.T) {
@@ -276,7 +270,7 @@ func TestNewRevokeAllSessionsHandler_PanicsOnNilRepo(t *testing.T) {
 			t.Error("expected panic on nil families repo")
 		}
 	}()
-	_ = command.NewRevokeAllSessionsHandler(nil)
+	_ = command.NewRevokeAllSessionsHandler(nil, nil)
 }
 
 func mustFamily(t *testing.T, id refreshtoken.FamilyID, personID person.ID, deviceLabel string) *refreshtoken.Family {
@@ -292,6 +286,7 @@ func mustFamily(t *testing.T, id refreshtoken.FamilyID, personID person.ID, devi
 		deviceLabel,
 		hash,
 		14*24*time.Hour,
+		revokeNow,
 	)
 	if err != nil {
 		t.Fatalf("NewFamily: %v", err)

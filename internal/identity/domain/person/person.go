@@ -24,7 +24,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/leadkart/leadkart-go/internal/common/clock"
 	"github.com/leadkart/leadkart-go/internal/common/email"
 )
 
@@ -88,7 +87,10 @@ type Person struct {
 // New constructs a brand-new Person. Returns [ErrInvalid] (wrapped) on
 // invariant violation. The aggregate emits [CreatedEvent] which the
 // repository drains via [PullEvents] when persisting.
-func New(id ID, e email.Address, firstName, lastName string, passwordHash PasswordHash) (*Person, error) {
+//
+// `now` is the explicit instant for createdAt + event timestamp per the
+// clock-injection refactor.
+func New(id ID, e email.Address, firstName, lastName string, passwordHash PasswordHash, now time.Time) (*Person, error) {
 	if id.IsZero() {
 		return nil, fmt.Errorf("%w: id required", ErrInvalid)
 	}
@@ -111,7 +113,7 @@ func New(id ID, e email.Address, firstName, lastName string, passwordHash Passwo
 		return nil, fmt.Errorf("%w: password hash required", ErrInvalid)
 	}
 
-	now := clock.Now()
+	now = now.UTC()
 	p := &Person{
 		id:            id,
 		email:         e,
@@ -144,8 +146,8 @@ func New(id ID, e email.Address, firstName, lastName string, passwordHash Passwo
 //
 // Wraps [New] so all invariant validation flows through one path —
 // the only difference is the trailing flag.
-func NewWithMustChangePassword(id ID, e email.Address, firstName, lastName string, passwordHash PasswordHash) (*Person, error) {
-	p, err := New(id, e, firstName, lastName, passwordHash)
+func NewWithMustChangePassword(id ID, e email.Address, firstName, lastName string, passwordHash PasswordHash, now time.Time) (*Person, error) {
+	p, err := New(id, e, firstName, lastName, passwordHash, now)
 	if err != nil {
 		return nil, err
 	}
@@ -316,11 +318,11 @@ func (p *Person) IsLocked(now time.Time) bool {
 // password change satisfies the BRD-line-241 forced-rotation gate.
 //
 // Idempotency: NOT idempotent. Each call rotates the stamp + emits an event.
-func (p *Person) ChangePassword(newHash PasswordHash) error {
+func (p *Person) ChangePassword(newHash PasswordHash, now time.Time) error {
 	if newHash.IsZero() {
 		return fmt.Errorf("%w: new password hash required", ErrInvalid)
 	}
-	now := clock.Now()
+	now = now.UTC()
 	p.passwordHash = newHash
 	p.securityStamp = NewSecurityStamp()
 	p.mustChangePassword = false
@@ -345,7 +347,7 @@ func (p *Person) ChangePassword(newHash PasswordHash) error {
 // Does NOT rotate SecurityStamp — profile changes are not a security
 // boundary per `security.md` "SecurityStamp rotation triggers" (only
 // password / role / permission / email / logout-all rotate).
-func (p *Person) UpdateProfile(firstName, lastName string) error {
+func (p *Person) UpdateProfile(firstName, lastName string, now time.Time) error {
 	if p.isAnonymised {
 		return fmt.Errorf("%w: cannot update profile of anonymised person", ErrInvalid)
 	}
@@ -373,7 +375,7 @@ func (p *Person) UpdateProfile(firstName, lastName string) error {
 		OldLastName:  old.last,
 		NewFirstName: firstName,
 		NewLastName:  lastName,
-		At:           clock.Now(),
+		At:           now.UTC(),
 	})
 	return nil
 }
@@ -416,7 +418,7 @@ func (p *Person) UpdateProfile(firstName, lastName string) error {
 // hash); the application service is the boundary that guarantees
 // consistency. Empty plaintextToken means "no email needed" (admin
 // hotwire path); the AUDIT event still fires.
-func (p *Person) RequestPasswordReset(plaintextToken string, tokenHash PasswordResetTokenHash, ttl time.Duration) error {
+func (p *Person) RequestPasswordReset(plaintextToken string, tokenHash PasswordResetTokenHash, ttl time.Duration, now time.Time) error {
 	if tokenHash.IsZero() {
 		return fmt.Errorf("%w: reset token hash required", ErrInvalid)
 	}
@@ -429,7 +431,7 @@ func (p *Person) RequestPasswordReset(plaintextToken string, tokenHash PasswordR
 	if p.isGloballySuspended {
 		return fmt.Errorf("%w: cannot reset password while globally suspended", ErrInvalid)
 	}
-	now := clock.Now()
+	now = now.UTC()
 	expiresAt := now.Add(ttl)
 	p.pendingPasswordReset = PendingPasswordReset{
 		hash:      tokenHash,
@@ -479,7 +481,7 @@ func (p *Person) RequestPasswordReset(plaintextToken string, tokenHash PasswordR
 //
 // Idempotency: NOT idempotent. Each successful call rotates the
 // SecurityStamp + emits events. The pending reset is single-use.
-func (p *Person) ConfirmPasswordReset(presentedHash PasswordResetTokenHash, newHash PasswordHash) error {
+func (p *Person) ConfirmPasswordReset(presentedHash PasswordResetTokenHash, newHash PasswordHash, now time.Time) error {
 	if newHash.IsZero() {
 		return fmt.Errorf("%w: new password hash required", ErrInvalid)
 	}
@@ -495,7 +497,7 @@ func (p *Person) ConfirmPasswordReset(presentedHash PasswordResetTokenHash, newH
 	if p.pendingPasswordReset.IsZero() {
 		return fmt.Errorf("%w: no pending password reset", ErrInvalid)
 	}
-	now := clock.Now()
+	now = now.UTC()
 	if !now.Before(p.pendingPasswordReset.expiresAt) {
 		// Clear the expired token defensively so subsequent calls don't
 		// bother comparing — same resulting state, no event emitted.
@@ -537,7 +539,7 @@ func (p *Person) ConfirmPasswordReset(presentedHash PasswordResetTokenHash, newH
 // no credential changed. (If the caller is canceling because the
 // account is compromised, they should call ChangePassword which DOES
 // rotate.)
-func (p *Person) CancelPasswordReset(reason string) error {
+func (p *Person) CancelPasswordReset(reason string, now time.Time) error {
 	if p.pendingPasswordReset.IsZero() {
 		return nil
 	}
@@ -548,7 +550,7 @@ func (p *Person) CancelPasswordReset(reason string) error {
 	p.recordEvent(PasswordResetCancelledEvent{
 		PersonID: p.id,
 		Reason:   reason,
-		At:       clock.Now(),
+		At:       now.UTC(),
 	})
 	return nil
 }
@@ -588,7 +590,7 @@ func (p *Person) CancelPasswordReset(reason string) error {
 //   - [EmailChangeConfirmationRequestedEvent] — ACTION signal carrying
 //     the plaintext token + new + old addresses for the email
 //     subscriber. Same two-event pattern as RequestPasswordReset.
-func (p *Person) RequestEmailChange(newEmail email.Address, plaintextToken string, tokenHash EmailChangeTokenHash, ttl time.Duration) error {
+func (p *Person) RequestEmailChange(newEmail email.Address, plaintextToken string, tokenHash EmailChangeTokenHash, ttl time.Duration, now time.Time) error {
 	if newEmail.IsZero() {
 		return fmt.Errorf("%w: new email required", ErrInvalid)
 	}
@@ -607,7 +609,7 @@ func (p *Person) RequestEmailChange(newEmail email.Address, plaintextToken strin
 	if p.isGloballySuspended {
 		return fmt.Errorf("%w: cannot change email while globally suspended", ErrInvalid)
 	}
-	now := clock.Now()
+	now = now.UTC()
 	expiresAt := now.Add(ttl)
 	p.pendingEmailChange = PendingEmailChange{
 		newEmail:  newEmail,
@@ -654,7 +656,7 @@ func (p *Person) RequestEmailChange(newEmail email.Address, plaintextToken strin
 //   - Anonymised / globally-suspended.
 //
 // NOT idempotent — single-use token; second call returns "no pending".
-func (p *Person) ConfirmEmailChange(presentedHash EmailChangeTokenHash) error {
+func (p *Person) ConfirmEmailChange(presentedHash EmailChangeTokenHash, now time.Time) error {
 	if presentedHash.IsZero() {
 		return fmt.Errorf("%w: presented email change token hash required", ErrInvalid)
 	}
@@ -667,7 +669,7 @@ func (p *Person) ConfirmEmailChange(presentedHash EmailChangeTokenHash) error {
 	if p.pendingEmailChange.IsZero() {
 		return fmt.Errorf("%w: no pending email change", ErrInvalid)
 	}
-	now := clock.Now()
+	now = now.UTC()
 	if !now.Before(p.pendingEmailChange.expiresAt) {
 		p.pendingEmailChange = PendingEmailChange{}
 		return fmt.Errorf("%w: email change token expired", ErrInvalid)
@@ -695,7 +697,7 @@ func (p *Person) ConfirmEmailChange(presentedHash EmailChangeTokenHash) error {
 // Idempotent — no-op when no change is pending. Audit reason
 // required when pending. Does NOT rotate SecurityStamp (no
 // credential changed).
-func (p *Person) CancelEmailChange(reason string) error {
+func (p *Person) CancelEmailChange(reason string, now time.Time) error {
 	if p.pendingEmailChange.IsZero() {
 		return nil
 	}
@@ -706,7 +708,7 @@ func (p *Person) CancelEmailChange(reason string) error {
 	p.recordEvent(EmailChangeCancelledEvent{
 		PersonID: p.id,
 		Reason:   reason,
-		At:       clock.Now(),
+		At:       now.UTC(),
 	})
 	return nil
 }
@@ -728,7 +730,7 @@ func (p *Person) CancelEmailChange(reason string) error {
 // (audit-trail integrity).
 //
 // Rejected if Person is anonymised (terminal — already scrubbed).
-func (p *Person) GloballySuspend(reason string) error {
+func (p *Person) GloballySuspend(reason string, now time.Time) error {
 	if strings.TrimSpace(reason) == "" {
 		return fmt.Errorf("%w: global suspension reason required for audit", ErrInvalid)
 	}
@@ -741,7 +743,7 @@ func (p *Person) GloballySuspend(reason string) error {
 		}
 		return fmt.Errorf("%w: person already suspended (reason: %q)", ErrInvalid, p.globalSuspensionReason)
 	}
-	now := clock.Now()
+	now = now.UTC()
 	p.isGloballySuspended = true
 	p.globalSuspensionReason = reason
 	p.globallySuspendedAt = now
@@ -759,7 +761,7 @@ func (p *Person) GloballySuspend(reason string) error {
 // already happened at suspension time; lifting just clears the flag).
 //
 // Idempotent: no-op when not currently suspended.
-func (p *Person) LiftGlobalSuspension() error {
+func (p *Person) LiftGlobalSuspension(now time.Time) error {
 	if !p.isGloballySuspended {
 		return nil
 	}
@@ -768,7 +770,7 @@ func (p *Person) LiftGlobalSuspension() error {
 	p.globallySuspendedAt = time.Time{}
 	p.recordEvent(GlobalSuspensionLiftedEvent{
 		PersonID: p.id,
-		At:       clock.Now(),
+		At:       now.UTC(),
 	})
 	return nil
 }
@@ -788,11 +790,11 @@ func (p *Person) LiftGlobalSuspension() error {
 // NOTE: This is the aggregate-level scrub. A separate orchestrator
 // fans out [AnonymisedEvent] to other modules so they scrub their own
 // PII (CRM lead notes, Tasks comments, etc.).
-func (p *Person) Anonymise() error {
+func (p *Person) Anonymise(now time.Time) error {
 	if p.isAnonymised {
 		return nil
 	}
-	now := clock.Now()
+	now = now.UTC()
 	p.firstName = "anonymised"
 	p.lastName = "anonymised"
 	p.isActive = false
@@ -872,7 +874,7 @@ func (p *Person) RegisterFailedLogin(now time.Time) {
 //
 // Idempotency: callable any number of times; no-op when the counter
 // + lockout state is already clear.
-func (p *Person) RegisterSuccessfulLogin() {
+func (p *Person) RegisterSuccessfulLogin(now time.Time) {
 	hadFailures := p.failedLoginCount > 0 || !p.lockedUntil.IsZero()
 	p.failedLoginCount = 0
 	p.lockedUntil = time.Time{}
@@ -880,7 +882,7 @@ func (p *Person) RegisterSuccessfulLogin() {
 	if hadFailures {
 		p.recordEvent(AccountUnlockedEvent{
 			PersonID: p.id,
-			At:       clock.Now(),
+			At:       now.UTC(),
 		})
 	}
 }

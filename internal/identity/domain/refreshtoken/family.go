@@ -27,7 +27,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/leadkart/leadkart-go/internal/common/clock"
 	"github.com/leadkart/leadkart-go/internal/common/errs"
 	"github.com/leadkart/leadkart-go/internal/common/ids"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
@@ -97,6 +96,7 @@ func NewFamily(
 	deviceLabel string,
 	firstHash TokenHash,
 	ttl time.Duration,
+	now time.Time,
 ) (*Family, error) {
 	if id.IsZero() {
 		return nil, fmt.Errorf("%w: family id required", ErrInvalid)
@@ -117,7 +117,7 @@ func NewFamily(
 		return nil, fmt.Errorf("%w: ttl must be positive (got %v)", ErrInvalid, ttl)
 	}
 
-	now := clock.Now()
+	now = now.UTC()
 	first := Token{
 		id:         TokenID(ids.NewV7().String()),
 		hash:       firstHash,
@@ -246,7 +246,12 @@ func (f *Family) AllTokens() []Token {
 //   - [ErrExpired]: presented token has passed its absolute expiry.
 //
 // On success, emits [RotatedEvent].
-func (f *Family) Rotate(presentedHash TokenHash, newHash TokenHash, ttl time.Duration) error {
+//
+// `now` is the explicit instant — caller supplies a single value so the
+// consumed-at on the old token, issued-at on the new token, lastUsedAt
+// on the family, and (on reuse-detect) revokedAt all share the same
+// moment. Per the clock-injection refactor.
+func (f *Family) Rotate(presentedHash TokenHash, newHash TokenHash, ttl time.Duration, now time.Time) error {
 	if f.IsRevoked() {
 		return fmt.Errorf("%w", ErrRevoked)
 	}
@@ -262,9 +267,9 @@ func (f *Family) Rotate(presentedHash TokenHash, newHash TokenHash, ttl time.Dur
 		return fmt.Errorf("%w", ErrUnknownToken)
 	}
 
+	now = now.UTC()
 	if f.tokens[idx].IsConsumed() {
 		// REUSE DETECTED — revoke entire family per RFC 9700 §4.13.
-		now := clock.Now()
 		f.revokedAt = now
 		f.revokeReason = "reuse_detected"
 		f.recordEvent(RevokedEvent{
@@ -277,7 +282,6 @@ func (f *Family) Rotate(presentedHash TokenHash, newHash TokenHash, ttl time.Dur
 		return fmt.Errorf("%w", ErrReuseDetected)
 	}
 
-	now := clock.Now()
 	if f.tokens[idx].IsExpired(now) {
 		return fmt.Errorf("%w: token expired at %v", ErrExpired, f.tokens[idx].ExpiresAt())
 	}
@@ -316,14 +320,18 @@ func (f *Family) Rotate(presentedHash TokenHash, newHash TokenHash, ttl time.Dur
 // reason MUST be non-empty (audit requirement). Subsequent [Rotate] calls
 // return [ErrRevoked]. Idempotent — second Revoke on already-revoked family
 // is no-op.
-func (f *Family) Revoke(reason string) error {
+//
+// `now` is the explicit revocation instant per the clock-injection
+// refactor — caller supplies the same value used for any sibling
+// aggregate transitions in the operation.
+func (f *Family) Revoke(reason string, now time.Time) error {
 	if strings.TrimSpace(reason) == "" {
 		return fmt.Errorf("%w: revoke reason required for audit", ErrInvalid)
 	}
 	if f.IsRevoked() {
 		return nil
 	}
-	now := clock.Now()
+	now = now.UTC()
 	f.revokedAt = now
 	f.revokeReason = reason
 	f.recordEvent(RevokedEvent{

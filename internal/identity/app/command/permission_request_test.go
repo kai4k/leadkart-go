@@ -6,7 +6,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/leadkart/leadkart-go/internal/common/clock"
 	"github.com/leadkart/leadkart-go/internal/common/ids"
 	"github.com/leadkart/leadkart-go/internal/common/pagination"
 	"github.com/leadkart/leadkart-go/internal/identity/app/command"
@@ -16,6 +15,7 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
+
 
 // fakePermissionRequestRepo is the minimum [permissionrequest.Repository]
 // surface the elevation handlers exercise. Tracks Pending uniqueness
@@ -187,6 +187,7 @@ func freshMembershipForPermReq(t *testing.T) *membership.Membership {
 		person.ID(ids.NewV7().String()),
 		tenant.ID(ids.NewV7().String()),
 		membership.ID(""),
+		testNow,
 	)
 	if err != nil {
 		t.Fatalf("membership.New: %v", err)
@@ -204,14 +205,12 @@ func fixedTimeFn() func() time.Time {
 
 func TestRequestPermissionElevation_HappyPath(t *testing.T) {
 	t.Parallel()
-	clock.Set(time.Date(2026, 5, 23, 12, 0, 0, 0, time.UTC))
-	t.Cleanup(clock.Reset)
 
 	reqs := newFakePermissionRequestRepo()
 	mems := newFakeMembershipRepoForPermReq()
 	requester := freshMembershipForPermReq(t)
 	managerID := membership.ID(ids.NewV7().String())
-	_ = requester.AssignManager(managerID)
+	_ = requester.AssignManager(managerID, testNow)
 	_ = requester.PullEvents()
 	_ = mems.Add(t.Context(), requester)
 
@@ -250,8 +249,6 @@ func TestRequestPermissionElevation_NonExistentMembership(t *testing.T) {
 
 func TestRequestPermissionElevation_RejectsDuplicatePending(t *testing.T) {
 	t.Parallel()
-	clock.Set(time.Date(2026, 5, 23, 12, 0, 0, 0, time.UTC))
-	t.Cleanup(clock.Reset)
 
 	reqs := newFakePermissionRequestRepo()
 	mems := newFakeMembershipRepoForPermReq()
@@ -277,14 +274,12 @@ func TestRequestPermissionElevation_RejectsDuplicatePending(t *testing.T) {
 
 func TestApprovePermissionRequest_HappyPath(t *testing.T) {
 	t.Parallel()
-	clock.Set(time.Date(2026, 5, 23, 12, 0, 0, 0, time.UTC))
-	t.Cleanup(clock.Reset)
 
 	reqs := newFakePermissionRequestRepo()
 	mems := newFakeMembershipRepoForPermReq()
 	requester := freshMembershipForPermReq(t)
 	manager := freshMembershipForPermReq(t)
-	_ = requester.AssignManager(manager.ID())
+	_ = requester.AssignManager(manager.ID(), testNow)
 	_ = requester.PullEvents()
 	_ = mems.Add(t.Context(), requester)
 	_ = mems.Add(t.Context(), manager)
@@ -329,8 +324,6 @@ func TestApprovePermissionRequest_HappyPath(t *testing.T) {
 
 func TestApprovePermissionRequest_BlocksSelfApproval(t *testing.T) {
 	t.Parallel()
-	clock.Set(time.Date(2026, 5, 23, 12, 0, 0, 0, time.UTC))
-	t.Cleanup(clock.Reset)
 
 	reqs := newFakePermissionRequestRepo()
 	mems := newFakeMembershipRepoForPermReq()
@@ -356,8 +349,6 @@ func TestApprovePermissionRequest_BlocksSelfApproval(t *testing.T) {
 
 func TestApprovePermissionRequest_MissingManagerRequiresPlatform(t *testing.T) {
 	t.Parallel()
-	clock.Set(time.Date(2026, 5, 23, 12, 0, 0, 0, time.UTC))
-	t.Cleanup(clock.Reset)
 
 	reqs := newFakePermissionRequestRepo()
 	mems := newFakeMembershipRepoForPermReq()
@@ -397,14 +388,12 @@ func TestApprovePermissionRequest_MissingManagerRequiresPlatform(t *testing.T) {
 
 func TestDenyPermissionRequest_HappyPath(t *testing.T) {
 	t.Parallel()
-	clock.Set(time.Date(2026, 5, 23, 12, 0, 0, 0, time.UTC))
-	t.Cleanup(clock.Reset)
 
 	reqs := newFakePermissionRequestRepo()
 	mems := newFakeMembershipRepoForPermReq()
 	requester := freshMembershipForPermReq(t)
 	manager := freshMembershipForPermReq(t)
-	_ = requester.AssignManager(manager.ID())
+	_ = requester.AssignManager(manager.ID(), testNow)
 	_ = requester.PullEvents()
 	_ = mems.Add(t.Context(), requester)
 	_ = mems.Add(t.Context(), manager)
@@ -434,8 +423,6 @@ func TestDenyPermissionRequest_HappyPath(t *testing.T) {
 
 func TestCancelPermissionRequest_OnlyRequesterCanCancel(t *testing.T) {
 	t.Parallel()
-	clock.Set(time.Date(2026, 5, 23, 12, 0, 0, 0, time.UTC))
-	t.Cleanup(clock.Reset)
 
 	reqs := newFakePermissionRequestRepo()
 	mems := newFakeMembershipRepoForPermReq()

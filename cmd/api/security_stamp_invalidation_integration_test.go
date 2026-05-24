@@ -88,12 +88,12 @@ func TestSecurityStampInvalidation_PasswordChange_Returns401WithinFastPath(t *te
 	pubsub := gochannel.NewGoChannel(gochannel.Config{}, watermill.NewSlogLogger(silentLogger()))
 	t.Cleanup(func() { _ = pubsub.Close() })
 
-	forwarder := adapters.NewOutboxForwarder(pool, tx, pubsub, integrationevents.Topic, 0)
+	forwarder := adapters.NewOutboxForwarder(pool, tx, pubsub, integrationevents.Topic, 0, time.Now)
 	router, err := messaging.NewRouter(messaging.Deps{
 		Subscriber:       pubsub,
 		Logger:           silentLogger(),
 		IdempotencyInbox: messaging.NewIdempotentReceiver(pool),
-		AuditWriter:      audit.NewWriter(pool, silentLogger()),
+		AuditWriter:      audit.NewWriter(pool, silentLogger(), time.Now),
 		CloseTimeout:     2 * time.Second,
 		Retry: messaging.RetryConfig{
 			MaxRetries:      1,
@@ -105,7 +105,7 @@ func TestSecurityStampInvalidation_PasswordChange_Returns401WithinFastPath(t *te
 	if err != nil {
 		t.Fatalf("messaging.NewRouter: %v", err)
 	}
-	subscribers.Register(router, wiring.Families, wiring.StampCache, nil, silentLogger())
+	subscribers.Register(router, wiring.Families, wiring.StampCache, nil, silentLogger(), time.Now)
 
 	stackCtx, stackCancel := context.WithCancel(t.Context())
 	t.Cleanup(stackCancel)

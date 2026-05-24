@@ -1,6 +1,8 @@
 package role_test
 
 import (
+	"time"
+
 	"errors"
 	"testing"
 
@@ -9,6 +11,10 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/domain/role"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
+
+// testNow is the deterministic instant test fixtures pass to domain
+// factories + mutators per the clock-injection refactor.
+var testNow = time.Date(2026, 5, 24, 12, 0, 0, 0, time.UTC)
 
 // newRole builds a fresh Role with reasonable defaults — keeps the
 // per-test arrange section short. Used by tests downstream of Task 6
@@ -22,6 +28,7 @@ func newRole(t *testing.T) *role.Role {
 		false,
 		role.HierarchyLevelDefault,
 		false,
+		testNow,
 	)
 	if err != nil {
 		t.Fatalf("role.New: %v", err)
@@ -36,6 +43,7 @@ func TestNew_AcceptsValidInputs(t *testing.T) {
 		tenant.ID(ids.NewV7().String()),
 		"Sales Manager",
 		false, role.HierarchyLevelDefault, false,
+		testNow,
 	)
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -54,7 +62,7 @@ func TestNew_AcceptsValidInputs(t *testing.T) {
 
 func TestNew_RejectsZeroID(t *testing.T) {
 	t.Parallel()
-	_, err := role.New(role.ID(""), tenant.ID(ids.NewV7().String()), "X", false, 50, false)
+	_, err := role.New(role.ID(""), tenant.ID(ids.NewV7().String()), "X", false, 50, false, testNow)
 	if !errors.Is(err, role.ErrInvalid) {
 		t.Fatalf("want ErrInvalid got %v", err)
 	}
@@ -62,7 +70,7 @@ func TestNew_RejectsZeroID(t *testing.T) {
 
 func TestNew_RejectsZeroTenantID(t *testing.T) {
 	t.Parallel()
-	_, err := role.New(role.ID(ids.NewV7().String()), tenant.ID(""), "X", false, 50, false)
+	_, err := role.New(role.ID(ids.NewV7().String()), tenant.ID(""), "X", false, 50, false, testNow)
 	if !errors.Is(err, role.ErrInvalid) {
 		t.Fatalf("want ErrInvalid got %v", err)
 	}
@@ -71,7 +79,7 @@ func TestNew_RejectsZeroTenantID(t *testing.T) {
 func TestNew_RejectsBadName(t *testing.T) {
 	t.Parallel()
 	for _, n := range []string{"", " ", "a"} {
-		_, err := role.New(role.ID(ids.NewV7().String()), tenant.ID(ids.NewV7().String()), n, false, 50, false)
+		_, err := role.New(role.ID(ids.NewV7().String()), tenant.ID(ids.NewV7().String()), n, false, 50, false, testNow)
 		if !errors.Is(err, role.ErrInvalid) {
 			t.Fatalf("name=%q want ErrInvalid got %v", n, err)
 		}
@@ -81,7 +89,7 @@ func TestNew_RejectsBadName(t *testing.T) {
 func TestNew_RejectsHierarchyOutOfRange(t *testing.T) {
 	t.Parallel()
 	for _, lvl := range []int{-1, 100, 200} {
-		_, err := role.New(role.ID(ids.NewV7().String()), tenant.ID(ids.NewV7().String()), "X", false, lvl, false)
+		_, err := role.New(role.ID(ids.NewV7().String()), tenant.ID(ids.NewV7().String()), "X", false, lvl, false, testNow)
 		if !errors.Is(err, role.ErrInvalid) {
 			t.Fatalf("lvl=%d should reject", lvl)
 		}
@@ -92,7 +100,7 @@ func TestRename_TransitionsAndEmits(t *testing.T) {
 	t.Parallel()
 	r := newRole(t)
 	_ = r.PullEvents() // drop CreatedEvent
-	if err := r.Rename("Senior Manager"); err != nil {
+	if err := r.Rename("Senior Manager", testNow); err != nil {
 		t.Fatalf("Rename: %v", err)
 	}
 	if r.Name() != "Senior Manager" {
@@ -115,7 +123,7 @@ func TestRename_IdempotentNoEvent(t *testing.T) {
 	t.Parallel()
 	r := newRole(t)
 	_ = r.PullEvents()
-	if err := r.Rename("Sales Manager"); err != nil {
+	if err := r.Rename("Sales Manager", testNow); err != nil {
 		t.Fatalf("Rename same: %v", err)
 	}
 	if events := r.PullEvents(); len(events) != 0 {
@@ -127,7 +135,7 @@ func TestRename_TrimsWhitespaceBeforeCompare(t *testing.T) {
 	t.Parallel()
 	r := newRole(t)
 	_ = r.PullEvents()
-	if err := r.Rename("  Sales Manager  "); err != nil {
+	if err := r.Rename("  Sales Manager  ", testNow); err != nil {
 		t.Fatalf("Rename trimmed-same: %v", err)
 	}
 	if events := r.PullEvents(); len(events) != 0 {
@@ -141,11 +149,12 @@ func TestRename_RejectsSystemDefault(t *testing.T) {
 		role.ID(ids.NewV7().String()),
 		tenant.ID(ids.NewV7().String()),
 		"TenantAdmin", true, 10, false,
+		testNow,
 	)
 	if err != nil {
 		t.Fatalf("New system-default: %v", err)
 	}
-	if err := r.Rename("Renamed"); !errors.Is(err, role.ErrSystemDefault) {
+	if err := r.Rename("Renamed", testNow); !errors.Is(err, role.ErrSystemDefault) {
 		t.Fatalf("want ErrSystemDefault, got %v", err)
 	}
 }
@@ -154,7 +163,7 @@ func TestRename_RejectsBadName(t *testing.T) {
 	t.Parallel()
 	r := newRole(t)
 	for _, n := range []string{"", " ", "a"} {
-		if err := r.Rename(n); !errors.Is(err, role.ErrInvalid) {
+		if err := r.Rename(n, testNow); !errors.Is(err, role.ErrInvalid) {
 			t.Fatalf("name=%q: want ErrInvalid got %v", n, err)
 		}
 	}
@@ -195,7 +204,7 @@ func TestChangeHierarchyLevel_RejectsOutOfRange(t *testing.T) {
 func TestChangeHierarchyLevel_RejectsSystemDefault(t *testing.T) {
 	t.Parallel()
 	r, _ := role.New(role.ID(ids.NewV7().String()), tenant.ID(ids.NewV7().String()),
-		"TenantAdmin", true, 10, false)
+		"TenantAdmin", true, 10, false, testNow)
 	if err := r.ChangeHierarchyLevel(20); !errors.Is(err, role.ErrSystemDefault) {
 		t.Fatalf("want ErrSystemDefault got %v", err)
 	}
@@ -206,7 +215,7 @@ func TestGrantPermission_AddsAndEmits(t *testing.T) {
 	r := newRole(t)
 	_ = r.PullEvents()
 	p := permission.FromConstant(permission.IdentityPermissions.Users.View)
-	if err := r.GrantPermission(p); err != nil {
+	if err := r.GrantPermission(p, testNow); err != nil {
 		t.Fatalf("Grant: %v", err)
 	}
 	if !r.HasPermission(p) {
@@ -229,9 +238,9 @@ func TestGrantPermission_Idempotent(t *testing.T) {
 	t.Parallel()
 	r := newRole(t)
 	p := permission.FromConstant(permission.IdentityPermissions.Users.View)
-	_ = r.GrantPermission(p)
+	_ = r.GrantPermission(p, testNow)
 	_ = r.PullEvents()
-	if err := r.GrantPermission(p); err != nil {
+	if err := r.GrantPermission(p, testNow); err != nil {
 		t.Fatalf("dup Grant: %v", err)
 	}
 	if events := r.PullEvents(); len(events) != 0 {
@@ -242,7 +251,7 @@ func TestGrantPermission_Idempotent(t *testing.T) {
 func TestGrantPermission_RejectsNil(t *testing.T) {
 	t.Parallel()
 	r := newRole(t)
-	if err := r.GrantPermission(nil); !errors.Is(err, role.ErrInvalid) {
+	if err := r.GrantPermission(nil, testNow); !errors.Is(err, role.ErrInvalid) {
 		t.Fatalf("want ErrInvalid got %v", err)
 	}
 }
@@ -251,9 +260,9 @@ func TestRevokePermission_RemovesAndEmits(t *testing.T) {
 	t.Parallel()
 	r := newRole(t)
 	p := permission.FromConstant(permission.IdentityPermissions.Users.View)
-	_ = r.GrantPermission(p)
+	_ = r.GrantPermission(p, testNow)
 	_ = r.PullEvents()
-	if err := r.RevokePermission(p); err != nil {
+	if err := r.RevokePermission(p, testNow); err != nil {
 		t.Fatalf("Revoke: %v", err)
 	}
 	if r.HasPermission(p) {
@@ -273,7 +282,7 @@ func TestRevokePermission_NotPresentNoEvent(t *testing.T) {
 	r := newRole(t)
 	_ = r.PullEvents()
 	p := permission.FromConstant(permission.IdentityPermissions.Users.View)
-	if err := r.RevokePermission(p); err != nil {
+	if err := r.RevokePermission(p, testNow); err != nil {
 		t.Fatalf("Revoke missing: %v", err)
 	}
 	if events := r.PullEvents(); len(events) != 0 {
@@ -286,10 +295,10 @@ func TestReplacePermissions_DiffEvents(t *testing.T) {
 	r := newRole(t)
 	view := permission.FromConstant(permission.IdentityPermissions.Users.View)
 	create := permission.FromConstant(permission.IdentityPermissions.Users.Create)
-	_ = r.GrantPermission(view)
+	_ = r.GrantPermission(view, testNow)
 	_ = r.PullEvents()
 
-	if err := r.ReplacePermissions([]*permission.Permission{create}); err != nil {
+	if err := r.ReplacePermissions([]*permission.Permission{create}, testNow); err != nil {
 		t.Fatalf("Replace: %v", err)
 	}
 	if r.HasPermission(view) {
@@ -315,11 +324,11 @@ func TestReplacePermissions_EmptyTargetRevokesAll(t *testing.T) {
 	r := newRole(t)
 	view := permission.FromConstant(permission.IdentityPermissions.Users.View)
 	create := permission.FromConstant(permission.IdentityPermissions.Users.Create)
-	_ = r.GrantPermission(view)
-	_ = r.GrantPermission(create)
+	_ = r.GrantPermission(view, testNow)
+	_ = r.GrantPermission(create, testNow)
 	_ = r.PullEvents()
 
-	if err := r.ReplacePermissions(nil); err != nil {
+	if err := r.ReplacePermissions(nil, testNow); err != nil {
 		t.Fatalf("Replace nil: %v", err)
 	}
 	if len(r.Permissions()) != 0 {
@@ -335,7 +344,7 @@ func TestDelete_TransitionsAndEmits(t *testing.T) {
 	t.Parallel()
 	r := newRole(t)
 	_ = r.PullEvents()
-	if err := r.Delete("admin-1"); err != nil {
+	if err := r.Delete("admin-1", testNow); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
 	if !r.IsDeleted() {
@@ -359,8 +368,8 @@ func TestDelete_TransitionsAndEmits(t *testing.T) {
 func TestDelete_RejectsSystemDefault(t *testing.T) {
 	t.Parallel()
 	r, _ := role.New(role.ID(ids.NewV7().String()), tenant.ID(ids.NewV7().String()),
-		"TenantAdmin", true, 10, false)
-	if err := r.Delete("admin-1"); !errors.Is(err, role.ErrSystemDefault) {
+		"TenantAdmin", true, 10, false, testNow)
+	if err := r.Delete("admin-1", testNow); !errors.Is(err, role.ErrSystemDefault) {
 		t.Fatalf("want ErrSystemDefault got %v", err)
 	}
 }
@@ -368,11 +377,11 @@ func TestDelete_RejectsSystemDefault(t *testing.T) {
 func TestDelete_Idempotent(t *testing.T) {
 	t.Parallel()
 	r := newRole(t)
-	if err := r.Delete("admin-1"); err != nil {
+	if err := r.Delete("admin-1", testNow); err != nil {
 		t.Fatalf("first Delete: %v", err)
 	}
 	_ = r.PullEvents()
-	if err := r.Delete("admin-1"); err != nil {
+	if err := r.Delete("admin-1", testNow); err != nil {
 		t.Fatalf("dup Delete: %v", err)
 	}
 	if events := r.PullEvents(); len(events) != 0 {
@@ -383,21 +392,21 @@ func TestDelete_Idempotent(t *testing.T) {
 func TestMutations_RejectAfterDelete(t *testing.T) {
 	t.Parallel()
 	r := newRole(t)
-	_ = r.Delete("admin-1")
+	_ = r.Delete("admin-1", testNow)
 	p := permission.FromConstant(permission.IdentityPermissions.Users.View)
-	if err := r.Rename("X"); !errors.Is(err, role.ErrDeleted) {
+	if err := r.Rename("X", testNow); !errors.Is(err, role.ErrDeleted) {
 		t.Fatalf("Rename after delete: %v", err)
 	}
 	if err := r.ChangeHierarchyLevel(20); !errors.Is(err, role.ErrDeleted) {
 		t.Fatalf("ChangeHierarchyLevel after delete: %v", err)
 	}
-	if err := r.GrantPermission(p); !errors.Is(err, role.ErrDeleted) {
+	if err := r.GrantPermission(p, testNow); !errors.Is(err, role.ErrDeleted) {
 		t.Fatalf("Grant after delete: %v", err)
 	}
-	if err := r.RevokePermission(p); !errors.Is(err, role.ErrDeleted) {
+	if err := r.RevokePermission(p, testNow); !errors.Is(err, role.ErrDeleted) {
 		t.Fatalf("Revoke after delete: %v", err)
 	}
-	if err := r.ReplacePermissions(nil); !errors.Is(err, role.ErrDeleted) {
+	if err := r.ReplacePermissions(nil, testNow); !errors.Is(err, role.ErrDeleted) {
 		t.Fatalf("Replace after delete: %v", err)
 	}
 }

@@ -27,7 +27,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/leadkart/leadkart-go/internal/common/clock"
 	"github.com/leadkart/leadkart-go/internal/common/errs"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
@@ -158,7 +157,13 @@ type Batch struct {
 //
 // actorID is the membership that added the batch — populates
 // AddedEvent.ActorID for the integration mapper.
-func New(id ID, productID product.ID, tenantID tenant.ID, actorID membership.ID, spec Spec) (*Batch, error) {
+//
+// `now` is the explicit instant for createdAt + updatedAt + event
+// timestamp. Per the clock-injection refactor (post-Wave-9), the
+// aggregate carries NO temporal dependency — time flows in at every
+// call site so multiple aggregates touched in one handler share the
+// same instant for audit consistency.
+func New(id ID, productID product.ID, tenantID tenant.ID, actorID membership.ID, spec Spec, now time.Time) (*Batch, error) {
 	if id.IsZero() {
 		return nil, fmt.Errorf("%w: id required", ErrInvalid)
 	}
@@ -208,7 +213,7 @@ func New(id ID, productID product.ID, tenantID tenant.ID, actorID membership.ID,
 	if !spec.ExpiryDate.After(spec.ManufactureDate) {
 		return nil, fmt.Errorf("%w: expiry_date must be after manufacture_date", ErrInvalid)
 	}
-	now := clock.Now()
+	now = now.UTC()
 	b := &Batch{
 		id:                         id,
 		productID:                  productID,
@@ -298,9 +303,11 @@ func (b *Batch) CreatedAt() time.Time { return b.createdAt }
 func (b *Batch) UpdatedAt() time.Time { return b.updatedAt }
 
 // IsExpired reports whether the batch's expiry date is in the past
-// relative to clock.Now().
-func (b *Batch) IsExpired() bool {
-	return !b.expiryDate.After(clock.Now())
+// relative to the supplied `now`. Caller passes the same instant used
+// for the surrounding operation so expiry decisions stay deterministic
+// inside a multi-aggregate handler invocation.
+func (b *Batch) IsExpired(now time.Time) bool {
+	return !b.expiryDate.After(now)
 }
 
 // ----- State transitions ----------------------------------------------------
@@ -325,7 +332,12 @@ func (b *Batch) IsExpired() bool {
 // No domain event emitted from ApplyMovement — the StockMovement
 // aggregate emits the canonical movement event. Batch just updates its
 // own state inside the same tx the StockMovement insert runs under.
-func (b *Batch) ApplyMovement(movement MovementType, quantity int64) error {
+//
+// `now` is the explicit instant for the expiry comparison + the
+// updatedAt timestamp — caller threads the same value into the paired
+// StockMovement.New so the ledger row + the batch row share one moment
+// in audit / reconciliation queries.
+func (b *Batch) ApplyMovement(movement MovementType, quantity int64, now time.Time) error {
 	if b.deleted {
 		return fmt.Errorf("%w: %s", ErrDeleted, b.id)
 	}
@@ -337,7 +349,7 @@ func (b *Batch) ApplyMovement(movement MovementType, quantity int64) error {
 		if quantity <= 0 {
 			return fmt.Errorf("%w: inbound quantity must be > 0 (got %d)", ErrInvalid, quantity)
 		}
-		if b.IsExpired() {
+		if b.IsExpired(now) {
 			return fmt.Errorf("%w: expired %s", ErrExpired, b.expiryDate.Format("2006-01-02"))
 		}
 		b.quantityOnHand += quantity
@@ -368,7 +380,7 @@ func (b *Batch) ApplyMovement(movement MovementType, quantity int64) error {
 		// surface the conflict.
 	}
 	b.version++
-	b.updatedAt = clock.Now()
+	b.updatedAt = now.UTC()
 	return nil
 }
 
@@ -378,14 +390,14 @@ func (b *Batch) ApplyMovement(movement MovementType, quantity int64) error {
 // when quantity_on_hand > 0. The domain doesn't enforce that — the
 // SoftDeleteBatchHandler does (so the handler can return a friendly
 // 409 message rather than the bare invariant).
-func (b *Batch) SoftDelete(actorID membership.ID) error {
+func (b *Batch) SoftDelete(actorID membership.ID, now time.Time) error {
 	if b.deleted {
 		return nil
 	}
 	if actorID.IsZero() {
 		return fmt.Errorf("%w: actor_id required for audit", ErrInvalid)
 	}
-	now := clock.Now()
+	now = now.UTC()
 	b.deleted = true
 	b.deletedAt = now
 	b.deletedBy = actorID.String()

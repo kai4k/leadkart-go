@@ -4,12 +4,17 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/leadkart/leadkart-go/internal/common/ids"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 	"github.com/leadkart/leadkart-go/internal/inventory/domain/product"
 )
+
+// fixedNow is the deterministic timestamp every product domain test
+// passes to factories + mutators per the clock-injection refactor.
+var fixedNow = time.Date(2026, 5, 24, 12, 0, 0, 0, time.UTC)
 
 // freshIDs is a tiny helper — random Product ID, Tenant ID, Actor ID per test.
 func freshIDs(t *testing.T) (product.ID, tenant.ID, membership.ID) {
@@ -37,7 +42,7 @@ func validSpec() product.Spec {
 func freshProduct(t *testing.T) *product.Product {
 	t.Helper()
 	pid, tid, actor := freshIDs(t)
-	p, err := product.New(pid, tid, actor, validSpec())
+	p, err := product.New(pid, tid, actor, validSpec(), fixedNow)
 	if err != nil {
 		t.Fatalf("product.New: %v", err)
 	}
@@ -49,7 +54,7 @@ func freshProduct(t *testing.T) *product.Product {
 func TestNew_HappyPath_SetsFieldsAndEmitsCreated(t *testing.T) {
 	t.Parallel()
 	pid, tid, actor := freshIDs(t)
-	p, err := product.New(pid, tid, actor, validSpec())
+	p, err := product.New(pid, tid, actor, validSpec(), fixedNow)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -93,7 +98,7 @@ func TestNew_TrimsAndNormalizesSKU(t *testing.T) {
 	spec := validSpec()
 	spec.SKU = "  amox-500  "
 	spec.Name = " Amoxicillin "
-	p, err := product.New(pid, tid, actor, spec)
+	p, err := product.New(pid, tid, actor, spec, fixedNow)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -151,7 +156,7 @@ func TestNew_InvalidInputs(t *testing.T) {
 			if tc.zeroA {
 				a = membership.ID("")
 			}
-			if _, err := product.New(id, tid, a, spec); !errors.Is(err, product.ErrInvalid) {
+			if _, err := product.New(id, tid, a, spec, fixedNow); !errors.Is(err, product.ErrInvalid) {
 				t.Fatalf("want ErrInvalid, got %v", err)
 			}
 		})
@@ -166,7 +171,7 @@ func TestUpdate_PartialUpdate_EmitsUpdatedEventWithChangedFields(t *testing.T) {
 	if err := p.Update(actor, product.UpdateSpec{
 		Name:       strPtr("Amoxicillin 500 mg Capsules"),
 		GSTRateBps: intPtr(1800),
-	}); err != nil {
+	}, fixedNow.Add(time.Second)); err != nil {
 		t.Fatalf("Update: %v", err)
 	}
 	if p.Name() != "Amoxicillin 500 mg Capsules" {
@@ -206,7 +211,7 @@ func TestUpdate_NoOp_NoEvent(t *testing.T) {
 	p := freshProduct(t)
 	actor := membership.ID(ids.NewV7().String())
 	// Update with all fields nil = no-op.
-	if err := p.Update(actor, product.UpdateSpec{}); err != nil {
+	if err := p.Update(actor, product.UpdateSpec{}, fixedNow); err != nil {
 		t.Fatalf("Update: %v", err)
 	}
 	if len(p.PullEvents()) != 0 {
@@ -219,7 +224,7 @@ func TestUpdate_SameValue_NoEvent(t *testing.T) {
 	p := freshProduct(t)
 	actor := membership.ID(ids.NewV7().String())
 	same := p.Name()
-	if err := p.Update(actor, product.UpdateSpec{Name: &same}); err != nil {
+	if err := p.Update(actor, product.UpdateSpec{Name: &same}, fixedNow); err != nil {
 		t.Fatalf("Update: %v", err)
 	}
 	if len(p.PullEvents()) != 0 {
@@ -232,7 +237,7 @@ func TestUpdate_RejectsInvalidField(t *testing.T) {
 	p := freshProduct(t)
 	actor := membership.ID(ids.NewV7().String())
 	bad := ""
-	if err := p.Update(actor, product.UpdateSpec{Name: &bad}); !errors.Is(err, product.ErrInvalid) {
+	if err := p.Update(actor, product.UpdateSpec{Name: &bad}, fixedNow); !errors.Is(err, product.ErrInvalid) {
 		t.Fatalf("want ErrInvalid, got %v", err)
 	}
 }
@@ -241,7 +246,7 @@ func TestUpdate_RejectsZeroActor(t *testing.T) {
 	t.Parallel()
 	p := freshProduct(t)
 	n := "X"
-	if err := p.Update(membership.ID(""), product.UpdateSpec{Name: &n}); !errors.Is(err, product.ErrInvalid) {
+	if err := p.Update(membership.ID(""), product.UpdateSpec{Name: &n}, fixedNow); !errors.Is(err, product.ErrInvalid) {
 		t.Fatalf("want ErrInvalid, got %v", err)
 	}
 }
@@ -250,12 +255,12 @@ func TestUpdate_RejectsAfterSoftDelete(t *testing.T) {
 	t.Parallel()
 	p := freshProduct(t)
 	actor := membership.ID(ids.NewV7().String())
-	if err := p.SoftDelete(actor); err != nil {
+	if err := p.SoftDelete(actor, fixedNow); err != nil {
 		t.Fatalf("SoftDelete: %v", err)
 	}
 	_ = p.PullEvents()
 	n := "X"
-	if err := p.Update(actor, product.UpdateSpec{Name: &n}); !errors.Is(err, product.ErrDeleted) {
+	if err := p.Update(actor, product.UpdateSpec{Name: &n}, fixedNow); !errors.Is(err, product.ErrDeleted) {
 		t.Fatalf("want ErrDeleted, got %v", err)
 	}
 }
@@ -268,7 +273,7 @@ func TestSoftDelete_EmitsSoftDeletedEventOnce(t *testing.T) {
 	t.Parallel()
 	p := freshProduct(t)
 	actor := membership.ID(ids.NewV7().String())
-	if err := p.SoftDelete(actor); err != nil {
+	if err := p.SoftDelete(actor, fixedNow); err != nil {
 		t.Fatalf("SoftDelete: %v", err)
 	}
 	if !p.IsDeleted() {
@@ -289,7 +294,7 @@ func TestSoftDelete_EmitsSoftDeletedEventOnce(t *testing.T) {
 		t.Fatalf("actor: got %q want %q", softDel.ActorID, actor)
 	}
 	// Second call is idempotent — no event.
-	if err := p.SoftDelete(actor); err != nil {
+	if err := p.SoftDelete(actor, fixedNow); err != nil {
 		t.Fatalf("second SoftDelete: %v", err)
 	}
 	if len(p.PullEvents()) != 0 {
@@ -307,7 +312,7 @@ func TestDeactivate_EmitsBothUpdatedAndDeactivatedEvents(t *testing.T) {
 	t.Parallel()
 	p := freshProduct(t)
 	actor := membership.ID(ids.NewV7().String())
-	if err := p.Deactivate(actor); err != nil {
+	if err := p.Deactivate(actor, fixedNow); err != nil {
 		t.Fatalf("Deactivate: %v", err)
 	}
 	if p.IsActive() {
@@ -327,7 +332,7 @@ func TestDeactivate_EmitsBothUpdatedAndDeactivatedEvents(t *testing.T) {
 		t.Fatalf("second event: %T (want DeactivatedEvent)", evs[1])
 	}
 	// Second Deactivate on an already-inactive product is a no-op.
-	if err := p.Deactivate(actor); err != nil {
+	if err := p.Deactivate(actor, fixedNow); err != nil {
 		t.Fatalf("second Deactivate: %v", err)
 	}
 	if len(p.PullEvents()) != 0 {
@@ -339,7 +344,7 @@ func TestActivate_Deactivate_TogglesAndEmitsEvent(t *testing.T) {
 	t.Parallel()
 	p := freshProduct(t)
 	actor := membership.ID(ids.NewV7().String())
-	if err := p.Deactivate(actor); err != nil {
+	if err := p.Deactivate(actor, fixedNow); err != nil {
 		t.Fatalf("Deactivate: %v", err)
 	}
 	if p.IsActive() {
@@ -358,7 +363,7 @@ func TestActivate_Deactivate_TogglesAndEmitsEvent(t *testing.T) {
 	if _, ok := evs[1].(product.DeactivatedEvent); !ok {
 		t.Fatalf("second event: %T (want DeactivatedEvent)", evs[1])
 	}
-	if err := p.Activate(actor); err != nil {
+	if err := p.Activate(actor, fixedNow); err != nil {
 		t.Fatalf("Activate: %v", err)
 	}
 	if !p.IsActive() {

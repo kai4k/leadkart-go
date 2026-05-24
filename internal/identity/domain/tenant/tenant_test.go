@@ -5,7 +5,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/leadkart/leadkart-go/internal/common/clock"
 	"github.com/leadkart/leadkart-go/internal/common/druglicence"
 	"github.com/leadkart/leadkart-go/internal/common/email"
 	"github.com/leadkart/leadkart-go/internal/common/errs"
@@ -17,6 +16,10 @@ import (
 	"github.com/leadkart/leadkart-go/internal/common/slug"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
+
+// testNow is the deterministic instant test fixtures pass to domain
+// factories + mutators per the clock-injection refactor.
+var testNow = time.Date(2026, 5, 24, 12, 0, 0, 0, time.UTC)
 
 func mustEmail(t *testing.T, raw string) email.Address {
 	t.Helper()
@@ -44,14 +47,12 @@ func newID(t *testing.T) tenant.ID {
 // ----- Factory: NewTenant ---------------------------------------------------
 
 func TestNewTenant_AcceptsValidInputs(t *testing.T) {
-	t.Cleanup(clock.Reset)
-	clock.Set(time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC))
 
 	id := newID(t)
 	s := mustSlug(t, "acme-pharma")
 	e := mustEmail(t, "admin@acme.example")
 
-	tn, err := tenant.New(id, s, "Acme Pharma Pvt Ltd", "Acme Pharma", e)
+	tn, err := tenant.New(id, s, "Acme Pharma Pvt Ltd", "Acme Pharma", e, testNow)
 	if err != nil {
 		t.Fatalf("New: unexpected error %v", err)
 	}
@@ -77,17 +78,15 @@ func TestNewTenant_AcceptsValidInputs(t *testing.T) {
 	if tn.Status() != tenant.StatusPending {
 		t.Errorf("Status() = %v, want StatusPending", tn.Status())
 	}
-	if !tn.CreatedAt().Equal(time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC)) {
-		t.Errorf("CreatedAt() = %v, want clock.Now()", tn.CreatedAt())
+	if !tn.CreatedAt().Equal(testNow) {
+		t.Errorf("CreatedAt() = %v, want testNow", tn.CreatedAt())
 	}
 }
 
 func TestNewTenant_EmitsTenantRegisteredEvent(t *testing.T) {
-	t.Cleanup(clock.Reset)
-	clock.Set(time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC))
 
 	id := newID(t)
-	tn, err := tenant.New(id, mustSlug(t, "acme"), "Acme", "Acme", mustEmail(t, "a@b.io"))
+	tn, err := tenant.New(id, mustSlug(t, "acme"), "Acme", "Acme", mustEmail(t, "a@b.io"), testNow)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -107,7 +106,7 @@ func TestNewTenant_EmitsTenantRegisteredEvent(t *testing.T) {
 
 func TestNewTenant_RejectsZeroID(t *testing.T) {
 	t.Parallel()
-	_, err := tenant.New(tenant.ID(""), mustSlug(t, "acme"), "L", "D", mustEmail(t, "a@b.io"))
+	_, err := tenant.New(tenant.ID(""), mustSlug(t, "acme"), "L", "D", mustEmail(t, "a@b.io"), testNow)
 	if err == nil {
 		t.Fatal("expected error on zero ID")
 	}
@@ -118,7 +117,7 @@ func TestNewTenant_RejectsZeroID(t *testing.T) {
 
 func TestNewTenant_RejectsZeroSlug(t *testing.T) {
 	t.Parallel()
-	_, err := tenant.New(newID(t), slug.Slug{}, "L", "D", mustEmail(t, "a@b.io"))
+	_, err := tenant.New(newID(t), slug.Slug{}, "L", "D", mustEmail(t, "a@b.io"), testNow)
 	if err == nil {
 		t.Fatal("expected error on zero slug")
 	}
@@ -126,7 +125,7 @@ func TestNewTenant_RejectsZeroSlug(t *testing.T) {
 
 func TestNewTenant_RejectsEmptyLegalName(t *testing.T) {
 	t.Parallel()
-	_, err := tenant.New(newID(t), mustSlug(t, "acme"), "", "D", mustEmail(t, "a@b.io"))
+	_, err := tenant.New(newID(t), mustSlug(t, "acme"), "", "D", mustEmail(t, "a@b.io"), testNow)
 	if err == nil {
 		t.Fatal("expected error on empty legal name")
 	}
@@ -134,7 +133,7 @@ func TestNewTenant_RejectsEmptyLegalName(t *testing.T) {
 
 func TestNewTenant_RejectsEmptyDisplayName(t *testing.T) {
 	t.Parallel()
-	_, err := tenant.New(newID(t), mustSlug(t, "acme"), "L", "", mustEmail(t, "a@b.io"))
+	_, err := tenant.New(newID(t), mustSlug(t, "acme"), "L", "", mustEmail(t, "a@b.io"), testNow)
 	if err == nil {
 		t.Fatal("expected error on empty display name")
 	}
@@ -143,7 +142,7 @@ func TestNewTenant_RejectsEmptyDisplayName(t *testing.T) {
 func TestNewTenant_RejectsLegalNameTooLong(t *testing.T) {
 	t.Parallel()
 	long := string(make([]byte, 300))
-	_, err := tenant.New(newID(t), mustSlug(t, "acme"), long, "D", mustEmail(t, "a@b.io"))
+	_, err := tenant.New(newID(t), mustSlug(t, "acme"), long, "D", mustEmail(t, "a@b.io"), testNow)
 	if err == nil {
 		t.Fatal("expected error on overlong legal name")
 	}
@@ -151,7 +150,7 @@ func TestNewTenant_RejectsLegalNameTooLong(t *testing.T) {
 
 func TestNewTenant_RejectsZeroEmail(t *testing.T) {
 	t.Parallel()
-	_, err := tenant.New(newID(t), mustSlug(t, "acme"), "L", "D", email.Address{})
+	_, err := tenant.New(newID(t), mustSlug(t, "acme"), "L", "D", email.Address{}, testNow)
 	if err == nil {
 		t.Fatal("expected error on zero email")
 	}
@@ -162,13 +161,11 @@ func TestNewTenant_RejectsZeroEmail(t *testing.T) {
 // ----- UpdateProfile --------------------------------------------------------
 
 func TestUpdateProfile_ChangesNamesAndEmits(t *testing.T) {
-	t.Cleanup(clock.Reset)
-	clock.Set(time.Date(2026, 5, 7, 12, 0, 0, 0, time.UTC))
 
 	tn := newPendingTenant(t)
 	_ = tn.PullEvents()
 
-	if err := tn.UpdateProfile("New Acme Pharma Pvt Ltd", "Acme New"); err != nil {
+	if err := tn.UpdateProfile("New Acme Pharma Pvt Ltd", "Acme New", testNow); err != nil {
 		t.Fatalf("UpdateProfile: %v", err)
 	}
 	if tn.LegalName() != "New Acme Pharma Pvt Ltd" {
@@ -195,10 +192,9 @@ func TestUpdateProfile_ChangesNamesAndEmits(t *testing.T) {
 }
 
 func TestUpdateProfile_NoOp_WhenUnchanged(t *testing.T) {
-	t.Cleanup(clock.Reset)
 	tn := newPendingTenant(t)
 	_ = tn.PullEvents()
-	if err := tn.UpdateProfile(tn.LegalName(), tn.DisplayName()); err != nil {
+	if err := tn.UpdateProfile(tn.LegalName(), tn.DisplayName(), testNow); err != nil {
 		t.Fatalf("UpdateProfile noop: %v", err)
 	}
 	if got := tn.PullEvents(); len(got) != 0 {
@@ -207,7 +203,6 @@ func TestUpdateProfile_NoOp_WhenUnchanged(t *testing.T) {
 }
 
 func TestUpdateProfile_RejectsEmptyAndOverlong(t *testing.T) {
-	t.Cleanup(clock.Reset)
 	cases := []struct {
 		name        string
 		legalName   string
@@ -222,7 +217,7 @@ func TestUpdateProfile_RejectsEmptyAndOverlong(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			tn := newPendingTenant(t)
-			err := tn.UpdateProfile(tc.legalName, tc.displayName)
+			err := tn.UpdateProfile(tc.legalName, tc.displayName, testNow)
 			if !errors.Is(err, tenant.ErrInvalid) {
 				t.Errorf("expected ErrInvalid, got %v", err)
 			}
@@ -231,30 +226,26 @@ func TestUpdateProfile_RejectsEmptyAndOverlong(t *testing.T) {
 }
 
 func TestUpdateProfile_AllowedOnSuspendedTenant(t *testing.T) {
-	t.Cleanup(clock.Reset)
 	tn := newSuspendedTenant(t)
 	_ = tn.PullEvents()
-	if err := tn.UpdateProfile("Renamed Pharma", "Renamed"); err != nil {
+	if err := tn.UpdateProfile("Renamed Pharma", "Renamed", testNow); err != nil {
 		t.Errorf("UpdateProfile on suspended tenant: %v", err)
 	}
 }
 
 func TestActivate_FromPending_TransitionsToActive(t *testing.T) {
-	t.Cleanup(clock.Reset)
-	clock.Set(time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC))
 
 	tn := newPendingTenant(t)
 	_ = tn.PullEvents()
 
-	clock.Set(time.Date(2026, 5, 5, 13, 0, 0, 0, time.UTC))
-	if err := tn.Activate(); err != nil {
+	if err := tn.Activate(testNow); err != nil {
 		t.Fatalf("Activate: %v", err)
 	}
 	if tn.Status() != tenant.StatusActive {
 		t.Errorf("Status() = %v, want StatusActive", tn.Status())
 	}
-	if !tn.ActivatedAt().Equal(time.Date(2026, 5, 5, 13, 0, 0, 0, time.UTC)) {
-		t.Errorf("ActivatedAt() = %v, want 13:00", tn.ActivatedAt())
+	if !tn.ActivatedAt().Equal(testNow) {
+		t.Errorf("ActivatedAt() = %v, want testNow", tn.ActivatedAt())
 	}
 
 	events := tn.PullEvents()
@@ -267,13 +258,11 @@ func TestActivate_FromPending_TransitionsToActive(t *testing.T) {
 }
 
 func TestActivate_FromActive_NoOp(t *testing.T) {
-	t.Cleanup(clock.Reset)
-	clock.Set(time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC))
 
 	tn := newActiveTenant(t)
 	_ = tn.PullEvents()
 
-	if err := tn.Activate(); err != nil {
+	if err := tn.Activate(testNow); err != nil {
 		t.Fatalf("Activate (idempotent): %v", err)
 	}
 	if got := tn.PullEvents(); len(got) != 0 {
@@ -282,13 +271,11 @@ func TestActivate_FromActive_NoOp(t *testing.T) {
 }
 
 func TestActivate_FromSuspended_TransitionsToActive(t *testing.T) {
-	t.Cleanup(clock.Reset)
-	clock.Set(time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC))
 
 	tn := newSuspendedTenant(t)
 	_ = tn.PullEvents()
 
-	if err := tn.Activate(); err != nil {
+	if err := tn.Activate(testNow); err != nil {
 		t.Fatalf("Activate: %v", err)
 	}
 	if tn.Status() != tenant.StatusActive {
@@ -306,21 +293,18 @@ func TestActivate_FromSuspended_TransitionsToActive(t *testing.T) {
 // ----- State transitions: Suspend -------------------------------------------
 
 func TestSuspend_FromActive_TransitionsToSuspended(t *testing.T) {
-	t.Cleanup(clock.Reset)
-	clock.Set(time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC))
 
 	tn := newActiveTenant(t)
 	_ = tn.PullEvents()
 
-	clock.Set(time.Date(2026, 5, 5, 14, 0, 0, 0, time.UTC))
-	if err := tn.Suspend("payment overdue 30 days"); err != nil {
+	if err := tn.Suspend("payment overdue 30 days", testNow); err != nil {
 		t.Fatalf("Suspend: %v", err)
 	}
 	if tn.Status() != tenant.StatusSuspended {
 		t.Errorf("Status() = %v, want StatusSuspended", tn.Status())
 	}
-	if !tn.SuspendedAt().Equal(time.Date(2026, 5, 5, 14, 0, 0, 0, time.UTC)) {
-		t.Errorf("SuspendedAt() = %v, want 14:00", tn.SuspendedAt())
+	if !tn.SuspendedAt().Equal(testNow) {
+		t.Errorf("SuspendedAt() = %v, want testNow", tn.SuspendedAt())
 	}
 
 	events := tn.PullEvents()
@@ -337,13 +321,11 @@ func TestSuspend_FromActive_TransitionsToSuspended(t *testing.T) {
 }
 
 func TestSuspend_FromPending_TransitionsToSuspended(t *testing.T) {
-	t.Cleanup(clock.Reset)
-	clock.Set(time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC))
 
 	tn := newPendingTenant(t)
 	_ = tn.PullEvents()
 
-	if err := tn.Suspend("flagged at signup"); err != nil {
+	if err := tn.Suspend("flagged at signup", testNow); err != nil {
 		t.Fatalf("Suspend: %v", err)
 	}
 	if tn.Status() != tenant.StatusSuspended {
@@ -352,13 +334,11 @@ func TestSuspend_FromPending_TransitionsToSuspended(t *testing.T) {
 }
 
 func TestSuspend_FromSuspended_NoOp(t *testing.T) {
-	t.Cleanup(clock.Reset)
-	clock.Set(time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC))
 
 	tn := newSuspendedTenant(t)
 	_ = tn.PullEvents()
 
-	if err := tn.Suspend("repeat"); err != nil {
+	if err := tn.Suspend("repeat", testNow); err != nil {
 		t.Fatalf("Suspend (idempotent): %v", err)
 	}
 	if got := tn.PullEvents(); len(got) != 0 {
@@ -367,11 +347,9 @@ func TestSuspend_FromSuspended_NoOp(t *testing.T) {
 }
 
 func TestSuspend_RejectsEmptyReason(t *testing.T) {
-	t.Cleanup(clock.Reset)
-	clock.Set(time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC))
 
 	tn := newActiveTenant(t)
-	if err := tn.Suspend(""); err == nil {
+	if err := tn.Suspend("", testNow); err == nil {
 		t.Fatal("expected error on empty reason")
 	}
 }
@@ -379,8 +357,6 @@ func TestSuspend_RejectsEmptyReason(t *testing.T) {
 // ----- PullEvents -----------------------------------------------------------
 
 func TestPullEvents_DrainsAndClears(t *testing.T) {
-	t.Cleanup(clock.Reset)
-	clock.Set(time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC))
 
 	tn := newPendingTenant(t)
 	first := tn.PullEvents()
@@ -436,7 +412,7 @@ func TestUnmarshalFromDB_DoesNotEmitEvents(t *testing.T) {
 
 func TestErrInvalid_IsClassified(t *testing.T) {
 	t.Parallel()
-	_, err := tenant.New(tenant.ID(""), mustSlug(t, "acme"), "L", "D", mustEmail(t, "a@b.io"))
+	_, err := tenant.New(tenant.ID(""), mustSlug(t, "acme"), "L", "D", mustEmail(t, "a@b.io"), testNow)
 	if !errors.Is(err, tenant.ErrInvalid) {
 		t.Fatalf("expected errors.Is(_, ErrInvalid), got %v", err)
 	}
@@ -498,8 +474,6 @@ func TestNewStatutory_AcceptsMatchedGSTPAN(t *testing.T) {
 }
 
 func TestUpdateStatutory_FirstDeclaration_EmitsEvent(t *testing.T) {
-	t.Cleanup(clock.Reset)
-	clock.Set(time.Date(2026, 5, 7, 12, 0, 0, 0, time.UTC))
 
 	tn := newActiveTenant(t)
 	_ = tn.PullEvents()
@@ -509,7 +483,7 @@ func TestUpdateStatutory_FirstDeclaration_EmitsEvent(t *testing.T) {
 		mustPAN(t, "ABCPE1234F"),
 		mustDL(t, "KA-W-22B-12345"),
 	)
-	if err := tn.UpdateStatutory(s); err != nil {
+	if err := tn.UpdateStatutory(s, testNow); err != nil {
 		t.Fatalf("UpdateStatutory: %v", err)
 	}
 	if !tn.Statutory().Equal(s) {
@@ -533,17 +507,16 @@ func TestUpdateStatutory_FirstDeclaration_EmitsEvent(t *testing.T) {
 }
 
 func TestUpdateStatutory_NoOp_WhenUnchanged(t *testing.T) {
-	t.Cleanup(clock.Reset)
 	tn := newActiveTenant(t)
 	s, _ := tenant.NewStatutory(
 		mustGST(t, "29ABCPE1234F1Z5"),
 		mustPAN(t, "ABCPE1234F"),
 		druglicence.Number{},
 	)
-	_ = tn.UpdateStatutory(s)
+	_ = tn.UpdateStatutory(s, testNow)
 	_ = tn.PullEvents()
 
-	if err := tn.UpdateStatutory(s); err != nil {
+	if err := tn.UpdateStatutory(s, testNow); err != nil {
 		t.Fatalf("UpdateStatutory noop: %v", err)
 	}
 	if got := tn.PullEvents(); len(got) != 0 {
@@ -552,7 +525,6 @@ func TestUpdateStatutory_NoOp_WhenUnchanged(t *testing.T) {
 }
 
 func TestUpdateStatutory_AllowedInAllNonTerminalStatuses(t *testing.T) {
-	t.Cleanup(clock.Reset)
 	s, _ := tenant.NewStatutory(mustGST(t, "29ABCPE1234F1Z5"), mustPAN(t, "ABCPE1234F"), druglicence.Number{})
 	for _, factory := range []struct {
 		name string
@@ -564,7 +536,7 @@ func TestUpdateStatutory_AllowedInAllNonTerminalStatuses(t *testing.T) {
 	} {
 		t.Run(factory.name, func(t *testing.T) {
 			tn := factory.fn(t)
-			if err := tn.UpdateStatutory(s); err != nil {
+			if err := tn.UpdateStatutory(s, testNow); err != nil {
 				t.Errorf("UpdateStatutory on %s tenant: %v", factory.name, err)
 			}
 		})
@@ -572,11 +544,10 @@ func TestUpdateStatutory_AllowedInAllNonTerminalStatuses(t *testing.T) {
 }
 
 func TestUpdateStatutory_RejectedOnDeletedTenant(t *testing.T) {
-	t.Cleanup(clock.Reset)
 	tn := newPendingTenant(t)
-	_ = tn.HardDelete()
+	_ = tn.HardDelete(testNow)
 	s, _ := tenant.NewStatutory(mustGST(t, "29ABCPE1234F1Z5"), mustPAN(t, "ABCPE1234F"), druglicence.Number{})
-	if err := tn.UpdateStatutory(s); !errors.Is(err, tenant.ErrInvalid) {
+	if err := tn.UpdateStatutory(s, testNow); !errors.Is(err, tenant.ErrInvalid) {
 		t.Errorf("expected ErrInvalid on deleted tenant, got %v", err)
 	}
 }
@@ -602,14 +573,12 @@ func mustAddress(t *testing.T) postaladdress.Address {
 }
 
 func TestUpdateAdminContact_FirstDeclaration_EmitsEvent(t *testing.T) {
-	t.Cleanup(clock.Reset)
-	clock.Set(time.Date(2026, 5, 7, 12, 0, 0, 0, time.UTC))
 
 	tn := newActiveTenant(t)
 	_ = tn.PullEvents()
 
 	c := tenant.NewAdminContact(mustPhone(t, "+919876543210"), mustAddress(t))
-	if err := tn.UpdateAdminContact(c); err != nil {
+	if err := tn.UpdateAdminContact(c, testNow); err != nil {
 		t.Fatalf("UpdateAdminContact: %v", err)
 	}
 	if !tn.AdminContact().Equal(c) {
@@ -633,13 +602,12 @@ func TestUpdateAdminContact_FirstDeclaration_EmitsEvent(t *testing.T) {
 }
 
 func TestUpdateAdminContact_NoOp_WhenUnchanged(t *testing.T) {
-	t.Cleanup(clock.Reset)
 	tn := newActiveTenant(t)
 	c := tenant.NewAdminContact(mustPhone(t, "+919876543210"), mustAddress(t))
-	_ = tn.UpdateAdminContact(c)
+	_ = tn.UpdateAdminContact(c, testNow)
 	_ = tn.PullEvents()
 
-	if err := tn.UpdateAdminContact(c); err != nil {
+	if err := tn.UpdateAdminContact(c, testNow); err != nil {
 		t.Fatalf("UpdateAdminContact noop: %v", err)
 	}
 	if got := tn.PullEvents(); len(got) != 0 {
@@ -648,11 +616,10 @@ func TestUpdateAdminContact_NoOp_WhenUnchanged(t *testing.T) {
 }
 
 func TestUpdateAdminContact_RejectedOnDeletedTenant(t *testing.T) {
-	t.Cleanup(clock.Reset)
 	tn := newPendingTenant(t)
-	_ = tn.HardDelete()
+	_ = tn.HardDelete(testNow)
 	c := tenant.NewAdminContact(mustPhone(t, "+919876543210"), mustAddress(t))
-	if err := tn.UpdateAdminContact(c); !errors.Is(err, tenant.ErrInvalid) {
+	if err := tn.UpdateAdminContact(c, testNow); !errors.Is(err, tenant.ErrInvalid) {
 		t.Errorf("expected ErrInvalid on deleted tenant, got %v", err)
 	}
 }
@@ -660,10 +627,9 @@ func TestUpdateAdminContact_RejectedOnDeletedTenant(t *testing.T) {
 func TestUpdateAdminContact_PartialUpdate(t *testing.T) {
 	// Only phone, no address (address is zero) — still a valid contact
 	// declaration; tenant's address is just "not declared".
-	t.Cleanup(clock.Reset)
 	tn := newActiveTenant(t)
 	c := tenant.NewAdminContact(mustPhone(t, "+919876543210"), postaladdress.Address{})
-	if err := tn.UpdateAdminContact(c); err != nil {
+	if err := tn.UpdateAdminContact(c, testNow); err != nil {
 		t.Fatalf("UpdateAdminContact phone-only: %v", err)
 	}
 	if !tn.AdminContact().Phone().Equal(mustPhone(t, "+919876543210")) {
@@ -731,15 +697,13 @@ func TestDefaultPasswordPolicy_MeetsAllFloors(t *testing.T) {
 }
 
 func TestUpdateSettings_FirstDeclaration_EmitsEvent(t *testing.T) {
-	t.Cleanup(clock.Reset)
-	clock.Set(time.Date(2026, 5, 7, 12, 0, 0, 0, time.UTC))
 
 	tn := newActiveTenant(t)
 	_ = tn.PullEvents()
 
 	pol := tenant.DefaultPasswordPolicy()
 	s := tenant.NewSettings(pol)
-	if err := tn.UpdateSettings(s); err != nil {
+	if err := tn.UpdateSettings(s, testNow); err != nil {
 		t.Fatalf("UpdateSettings: %v", err)
 	}
 	if !tn.Settings().Equal(s) {
@@ -763,12 +727,11 @@ func TestUpdateSettings_FirstDeclaration_EmitsEvent(t *testing.T) {
 }
 
 func TestUpdateSettings_NoOp_WhenUnchanged(t *testing.T) {
-	t.Cleanup(clock.Reset)
 	tn := newActiveTenant(t)
 	s := tenant.NewSettings(tenant.DefaultPasswordPolicy())
-	_ = tn.UpdateSettings(s)
+	_ = tn.UpdateSettings(s, testNow)
 	_ = tn.PullEvents()
-	if err := tn.UpdateSettings(s); err != nil {
+	if err := tn.UpdateSettings(s, testNow); err != nil {
 		t.Fatalf("UpdateSettings noop: %v", err)
 	}
 	if got := tn.PullEvents(); len(got) != 0 {
@@ -777,11 +740,10 @@ func TestUpdateSettings_NoOp_WhenUnchanged(t *testing.T) {
 }
 
 func TestUpdateSettings_RejectedOnDeletedTenant(t *testing.T) {
-	t.Cleanup(clock.Reset)
 	tn := newPendingTenant(t)
-	_ = tn.HardDelete()
+	_ = tn.HardDelete(testNow)
 	s := tenant.NewSettings(tenant.DefaultPasswordPolicy())
-	if err := tn.UpdateSettings(s); !errors.Is(err, tenant.ErrInvalid) {
+	if err := tn.UpdateSettings(s, testNow); !errors.Is(err, tenant.ErrInvalid) {
 		t.Errorf("expected ErrInvalid on deleted, got %v", err)
 	}
 }
@@ -859,14 +821,12 @@ func TestDefaultDisplayPreferences_IsIndiaTuned(t *testing.T) {
 }
 
 func TestUpdateDisplayPreferences_FirstDeclaration_EmitsEvent(t *testing.T) {
-	t.Cleanup(clock.Reset)
-	clock.Set(time.Date(2026, 5, 7, 12, 0, 0, 0, time.UTC))
 
 	tn := newActiveTenant(t)
 	_ = tn.PullEvents()
 
 	d := tenant.DefaultDisplayPreferences()
-	if err := tn.UpdateDisplayPreferences(d); err != nil {
+	if err := tn.UpdateDisplayPreferences(d, testNow); err != nil {
 		t.Fatalf("UpdateDisplayPreferences: %v", err)
 	}
 	if !tn.DisplayPreferences().Equal(d) {
@@ -890,12 +850,11 @@ func TestUpdateDisplayPreferences_FirstDeclaration_EmitsEvent(t *testing.T) {
 }
 
 func TestUpdateDisplayPreferences_NoOp_WhenUnchanged(t *testing.T) {
-	t.Cleanup(clock.Reset)
 	tn := newActiveTenant(t)
 	d := tenant.DefaultDisplayPreferences()
-	_ = tn.UpdateDisplayPreferences(d)
+	_ = tn.UpdateDisplayPreferences(d, testNow)
 	_ = tn.PullEvents()
-	if err := tn.UpdateDisplayPreferences(d); err != nil {
+	if err := tn.UpdateDisplayPreferences(d, testNow); err != nil {
 		t.Fatalf("UpdateDisplayPreferences noop: %v", err)
 	}
 	if got := tn.PullEvents(); len(got) != 0 {
@@ -904,11 +863,10 @@ func TestUpdateDisplayPreferences_NoOp_WhenUnchanged(t *testing.T) {
 }
 
 func TestUpdateDisplayPreferences_RejectedOnDeletedTenant(t *testing.T) {
-	t.Cleanup(clock.Reset)
 	tn := newPendingTenant(t)
-	_ = tn.HardDelete()
+	_ = tn.HardDelete(testNow)
 	d := tenant.DefaultDisplayPreferences()
-	if err := tn.UpdateDisplayPreferences(d); !errors.Is(err, tenant.ErrInvalid) {
+	if err := tn.UpdateDisplayPreferences(d, testNow); !errors.Is(err, tenant.ErrInvalid) {
 		t.Errorf("expected ErrInvalid on deleted, got %v", err)
 	}
 }
@@ -916,13 +874,11 @@ func TestUpdateDisplayPreferences_RejectedOnDeletedTenant(t *testing.T) {
 // ----- Deletion lifecycle ---------------------------------------------------
 
 func TestMarkForDeletion_FromActive_TransitionsToPendingDeletion(t *testing.T) {
-	t.Cleanup(clock.Reset)
-	clock.Set(time.Date(2026, 5, 7, 12, 0, 0, 0, time.UTC))
 
 	tn := newActiveTenant(t)
 	_ = tn.PullEvents()
 
-	if err := tn.MarkForDeletion("operator-requested-exit"); err != nil {
+	if err := tn.MarkForDeletion("operator-requested-exit", testNow); err != nil {
 		t.Fatalf("MarkForDeletion: %v", err)
 	}
 	if tn.Status() != tenant.StatusPendingDeletion {
@@ -945,10 +901,9 @@ func TestMarkForDeletion_FromActive_TransitionsToPendingDeletion(t *testing.T) {
 }
 
 func TestMarkForDeletion_FromSuspended_Allowed(t *testing.T) {
-	t.Cleanup(clock.Reset)
 	tn := newSuspendedTenant(t)
 	_ = tn.PullEvents()
-	if err := tn.MarkForDeletion("billing-exit"); err != nil {
+	if err := tn.MarkForDeletion("billing-exit", testNow); err != nil {
 		t.Fatalf("MarkForDeletion suspended: %v", err)
 	}
 	if tn.Status() != tenant.StatusPendingDeletion {
@@ -957,30 +912,27 @@ func TestMarkForDeletion_FromSuspended_Allowed(t *testing.T) {
 }
 
 func TestMarkForDeletion_FromPending_Rejected(t *testing.T) {
-	t.Cleanup(clock.Reset)
 	tn := newPendingTenant(t)
-	err := tn.MarkForDeletion("never-onboarded")
+	err := tn.MarkForDeletion("never-onboarded", testNow)
 	if !errors.Is(err, tenant.ErrInvalid) {
 		t.Errorf("expected ErrInvalid, got %v", err)
 	}
 }
 
 func TestMarkForDeletion_RequiresReason(t *testing.T) {
-	t.Cleanup(clock.Reset)
 	tn := newActiveTenant(t)
 	for _, raw := range []string{"", "   ", "\t"} {
-		if err := tn.MarkForDeletion(raw); !errors.Is(err, tenant.ErrInvalid) {
+		if err := tn.MarkForDeletion(raw, testNow); !errors.Is(err, tenant.ErrInvalid) {
 			t.Errorf("MarkForDeletion(%q): expected ErrInvalid, got %v", raw, err)
 		}
 	}
 }
 
 func TestMarkForDeletion_IdempotentOnSameReason(t *testing.T) {
-	t.Cleanup(clock.Reset)
 	tn := newActiveTenant(t)
-	_ = tn.MarkForDeletion("exit")
+	_ = tn.MarkForDeletion("exit", testNow)
 	_ = tn.PullEvents()
-	if err := tn.MarkForDeletion("exit"); err != nil {
+	if err := tn.MarkForDeletion("exit", testNow); err != nil {
 		t.Errorf("idempotent same reason: %v", err)
 	}
 	if got := tn.PullEvents(); len(got) != 0 {
@@ -989,25 +941,21 @@ func TestMarkForDeletion_IdempotentOnSameReason(t *testing.T) {
 }
 
 func TestMarkForDeletion_RejectedOnDifferentReason(t *testing.T) {
-	t.Cleanup(clock.Reset)
 	tn := newActiveTenant(t)
-	_ = tn.MarkForDeletion("billing")
-	err := tn.MarkForDeletion("compliance")
+	_ = tn.MarkForDeletion("billing", testNow)
+	err := tn.MarkForDeletion("compliance", testNow)
 	if !errors.Is(err, tenant.ErrInvalid) {
 		t.Errorf("expected ErrInvalid on conflicting reason, got %v", err)
 	}
 }
 
 func TestRestoreFromDeletion_FromPendingDeletion_TransitionsToActive(t *testing.T) {
-	t.Cleanup(clock.Reset)
-	clock.Set(time.Date(2026, 5, 7, 12, 0, 0, 0, time.UTC))
 
 	tn := newActiveTenant(t)
-	_ = tn.MarkForDeletion("oops-undo-me")
+	_ = tn.MarkForDeletion("oops-undo-me", testNow)
 	_ = tn.PullEvents()
 
-	clock.Set(time.Date(2026, 5, 8, 0, 0, 0, 0, time.UTC))
-	if err := tn.RestoreFromDeletion(); err != nil {
+	if err := tn.RestoreFromDeletion(testNow); err != nil {
 		t.Fatalf("RestoreFromDeletion: %v", err)
 	}
 	if tn.Status() != tenant.StatusActive {
@@ -1029,10 +977,9 @@ func TestRestoreFromDeletion_FromPendingDeletion_TransitionsToActive(t *testing.
 }
 
 func TestRestoreFromDeletion_FromActive_NoOp(t *testing.T) {
-	t.Cleanup(clock.Reset)
 	tn := newActiveTenant(t)
 	_ = tn.PullEvents()
-	if err := tn.RestoreFromDeletion(); err != nil {
+	if err := tn.RestoreFromDeletion(testNow); err != nil {
 		t.Errorf("idempotent restore from active: %v", err)
 	}
 	if got := tn.PullEvents(); len(got) != 0 {
@@ -1041,15 +988,12 @@ func TestRestoreFromDeletion_FromActive_NoOp(t *testing.T) {
 }
 
 func TestHardDelete_FromPendingDeletion_TransitionsToDeleted(t *testing.T) {
-	t.Cleanup(clock.Reset)
-	clock.Set(time.Date(2026, 5, 7, 12, 0, 0, 0, time.UTC))
 
 	tn := newActiveTenant(t)
-	_ = tn.MarkForDeletion("exit")
+	_ = tn.MarkForDeletion("exit", testNow)
 	_ = tn.PullEvents()
 
-	clock.Set(time.Date(2026, 6, 7, 0, 0, 0, 0, time.UTC)) // grace expired
-	if err := tn.HardDelete(); err != nil {
+	if err := tn.HardDelete(testNow); err != nil {
 		t.Fatalf("HardDelete: %v", err)
 	}
 	if tn.Status() != tenant.StatusDeleted {
@@ -1075,10 +1019,9 @@ func TestHardDelete_FromPendingDeletion_TransitionsToDeleted(t *testing.T) {
 func TestHardDelete_FromPending_AdminAbandonment(t *testing.T) {
 	// Tenant never activated — admin abandonment hard-deletes directly
 	// without a grace window since tenant never operated.
-	t.Cleanup(clock.Reset)
 	tn := newPendingTenant(t)
 	_ = tn.PullEvents()
-	if err := tn.HardDelete(); err != nil {
+	if err := tn.HardDelete(testNow); err != nil {
 		t.Fatalf("HardDelete on pending: %v", err)
 	}
 	if tn.Status() != tenant.StatusDeleted {
@@ -1087,19 +1030,17 @@ func TestHardDelete_FromPending_AdminAbandonment(t *testing.T) {
 }
 
 func TestHardDelete_FromActive_RejectedWithoutMarking(t *testing.T) {
-	t.Cleanup(clock.Reset)
 	tn := newActiveTenant(t)
-	if err := tn.HardDelete(); !errors.Is(err, tenant.ErrInvalid) {
+	if err := tn.HardDelete(testNow); !errors.Is(err, tenant.ErrInvalid) {
 		t.Errorf("expected ErrInvalid hard-deleting active tenant, got %v", err)
 	}
 }
 
 func TestHardDelete_Idempotent(t *testing.T) {
-	t.Cleanup(clock.Reset)
 	tn := newPendingTenant(t)
-	_ = tn.HardDelete()
+	_ = tn.HardDelete(testNow)
 	_ = tn.PullEvents()
-	if err := tn.HardDelete(); err != nil {
+	if err := tn.HardDelete(testNow); err != nil {
 		t.Errorf("idempotent hard-delete: %v", err)
 	}
 	if got := tn.PullEvents(); len(got) != 0 {
@@ -1108,19 +1049,17 @@ func TestHardDelete_Idempotent(t *testing.T) {
 }
 
 func TestActivate_RejectedFromPendingDeletion(t *testing.T) {
-	t.Cleanup(clock.Reset)
 	tn := newActiveTenant(t)
-	_ = tn.MarkForDeletion("exit")
-	if err := tn.Activate(); !errors.Is(err, tenant.ErrInvalid) {
+	_ = tn.MarkForDeletion("exit", testNow)
+	if err := tn.Activate(testNow); !errors.Is(err, tenant.ErrInvalid) {
 		t.Errorf("expected ErrInvalid activating pending-deletion tenant, got %v", err)
 	}
 }
 
 func TestSuspend_RejectedFromPendingDeletion(t *testing.T) {
-	t.Cleanup(clock.Reset)
 	tn := newActiveTenant(t)
-	_ = tn.MarkForDeletion("exit")
-	if err := tn.Suspend("billing"); !errors.Is(err, tenant.ErrInvalid) {
+	_ = tn.MarkForDeletion("exit", testNow)
+	if err := tn.Suspend("billing", testNow); !errors.Is(err, tenant.ErrInvalid) {
 		t.Errorf("expected ErrInvalid suspending pending-deletion tenant, got %v", err)
 	}
 }
@@ -1129,7 +1068,7 @@ func TestSuspend_RejectedFromPendingDeletion(t *testing.T) {
 
 func newPendingTenant(t *testing.T) *tenant.Tenant {
 	t.Helper()
-	tn, err := tenant.New(newID(t), mustSlug(t, "acme"), "Acme Pharma", "Acme", mustEmail(t, "a@acme.io"))
+	tn, err := tenant.New(newID(t), mustSlug(t, "acme"), "Acme Pharma", "Acme", mustEmail(t, "a@acme.io"), testNow)
 	if err != nil {
 		t.Fatalf("newPendingTenant: %v", err)
 	}
@@ -1139,7 +1078,7 @@ func newPendingTenant(t *testing.T) *tenant.Tenant {
 func newActiveTenant(t *testing.T) *tenant.Tenant {
 	t.Helper()
 	tn := newPendingTenant(t)
-	if err := tn.Activate(); err != nil {
+	if err := tn.Activate(testNow); err != nil {
 		t.Fatalf("newActiveTenant.Activate: %v", err)
 	}
 	return tn
@@ -1148,7 +1087,7 @@ func newActiveTenant(t *testing.T) *tenant.Tenant {
 func newSuspendedTenant(t *testing.T) *tenant.Tenant {
 	t.Helper()
 	tn := newActiveTenant(t)
-	if err := tn.Suspend("test"); err != nil {
+	if err := tn.Suspend("test", testNow); err != nil {
 		t.Fatalf("newSuspendedTenant.Suspend: %v", err)
 	}
 	return tn

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
@@ -56,18 +57,24 @@ type SuspendTenantCommand struct {
 type SuspendTenantHandler struct {
 	tenants     tenant.Repository
 	memberships membership.Repository
+	now         func() time.Time
 }
 
 // NewSuspendTenantHandler wires the handler. memberships is used to
 // run the platform-tenant deletion guard before transitioning.
-func NewSuspendTenantHandler(tenants tenant.Repository, memberships membership.Repository) SuspendTenantHandler {
+// `now` is the explicit time source per the clock-injection refactor.
+// Nil → time.Now.
+func NewSuspendTenantHandler(tenants tenant.Repository, memberships membership.Repository, now func() time.Time) SuspendTenantHandler {
 	if tenants == nil {
 		panic("command: NewSuspendTenantHandler tenants repository required")
 	}
 	if memberships == nil {
 		panic("command: NewSuspendTenantHandler memberships repository required")
 	}
-	return SuspendTenantHandler{tenants: tenants, memberships: memberships}
+	if now == nil {
+		now = time.Now
+	}
+	return SuspendTenantHandler{tenants: tenants, memberships: memberships, now: now}
 }
 
 // Handle dispatches to [Tenant.Suspend]. Refuses tenants holding any
@@ -79,8 +86,9 @@ func (h SuspendTenantHandler) Handle(ctx context.Context, cmd SuspendTenantComma
 	if err := ensureNotPlatformTenant(ctx, h.memberships, cmd.TenantID); err != nil {
 		return err
 	}
+	now := h.now()
 	err := h.tenants.UpdateByID(ctx, cmd.TenantID, func(t *tenant.Tenant) (bool, error) {
-		if err := t.Suspend(cmd.Reason); err != nil {
+		if err := t.Suspend(cmd.Reason, now); err != nil {
 			return false, err
 		}
 		return true, nil
@@ -104,14 +112,19 @@ type ActivateTenantCommand struct {
 // ActivateTenantHandler runs the activate flow.
 type ActivateTenantHandler struct {
 	tenants tenant.Repository
+	now     func() time.Time
 }
 
-// NewActivateTenantHandler wires the handler.
-func NewActivateTenantHandler(tenants tenant.Repository) ActivateTenantHandler {
+// NewActivateTenantHandler wires the handler. `now` is the explicit
+// time source per the clock-injection refactor. Nil → time.Now.
+func NewActivateTenantHandler(tenants tenant.Repository, now func() time.Time) ActivateTenantHandler {
 	if tenants == nil {
 		panic("command: NewActivateTenantHandler tenants repository required")
 	}
-	return ActivateTenantHandler{tenants: tenants}
+	if now == nil {
+		now = time.Now
+	}
+	return ActivateTenantHandler{tenants: tenants, now: now}
 }
 
 // Handle dispatches to [Tenant.Activate]. Idempotent — already-active
@@ -120,8 +133,9 @@ func (h ActivateTenantHandler) Handle(ctx context.Context, cmd ActivateTenantCom
 	if cmd.TenantID.IsZero() {
 		return errors.New("activate_tenant: tenant id required")
 	}
+	now := h.now()
 	err := h.tenants.UpdateByID(ctx, cmd.TenantID, func(t *tenant.Tenant) (bool, error) {
-		if err := t.Activate(); err != nil {
+		if err := t.Activate(now); err != nil {
 			return false, err
 		}
 		return true, nil
@@ -149,18 +163,24 @@ type MarkTenantForDeletionCommand struct {
 type MarkTenantForDeletionHandler struct {
 	tenants     tenant.Repository
 	memberships membership.Repository
+	now         func() time.Time
 }
 
 // NewMarkTenantForDeletionHandler wires the handler. memberships is
 // used to run the platform-tenant deletion guard before transitioning.
-func NewMarkTenantForDeletionHandler(tenants tenant.Repository, memberships membership.Repository) MarkTenantForDeletionHandler {
+// `now` is the explicit time source per the clock-injection refactor.
+// Nil → time.Now.
+func NewMarkTenantForDeletionHandler(tenants tenant.Repository, memberships membership.Repository, now func() time.Time) MarkTenantForDeletionHandler {
 	if tenants == nil {
 		panic("command: NewMarkTenantForDeletionHandler tenants repository required")
 	}
 	if memberships == nil {
 		panic("command: NewMarkTenantForDeletionHandler memberships repository required")
 	}
-	return MarkTenantForDeletionHandler{tenants: tenants, memberships: memberships}
+	if now == nil {
+		now = time.Now
+	}
+	return MarkTenantForDeletionHandler{tenants: tenants, memberships: memberships, now: now}
 }
 
 // Handle dispatches to [Tenant.MarkForDeletion]. Aggregate enforces:
@@ -174,8 +194,9 @@ func (h MarkTenantForDeletionHandler) Handle(ctx context.Context, cmd MarkTenant
 	if err := ensureNotPlatformTenant(ctx, h.memberships, cmd.TenantID); err != nil {
 		return err
 	}
+	now := h.now()
 	err := h.tenants.UpdateByID(ctx, cmd.TenantID, func(t *tenant.Tenant) (bool, error) {
-		if err := t.MarkForDeletion(cmd.Reason); err != nil {
+		if err := t.MarkForDeletion(cmd.Reason, now); err != nil {
 			return false, err
 		}
 		return true, nil
@@ -200,14 +221,19 @@ type RestoreTenantCommand struct {
 // RestoreTenantHandler runs the restore flow.
 type RestoreTenantHandler struct {
 	tenants tenant.Repository
+	now     func() time.Time
 }
 
-// NewRestoreTenantHandler wires the handler.
-func NewRestoreTenantHandler(tenants tenant.Repository) RestoreTenantHandler {
+// NewRestoreTenantHandler wires the handler. `now` is the explicit
+// time source per the clock-injection refactor. Nil → time.Now.
+func NewRestoreTenantHandler(tenants tenant.Repository, now func() time.Time) RestoreTenantHandler {
 	if tenants == nil {
 		panic("command: NewRestoreTenantHandler tenants repository required")
 	}
-	return RestoreTenantHandler{tenants: tenants}
+	if now == nil {
+		now = time.Now
+	}
+	return RestoreTenantHandler{tenants: tenants, now: now}
 }
 
 // Handle dispatches to [Tenant.RestoreFromDeletion]. Aggregate
@@ -216,8 +242,9 @@ func (h RestoreTenantHandler) Handle(ctx context.Context, cmd RestoreTenantComma
 	if cmd.TenantID.IsZero() {
 		return errors.New("restore_tenant: tenant id required")
 	}
+	now := h.now()
 	err := h.tenants.UpdateByID(ctx, cmd.TenantID, func(t *tenant.Tenant) (bool, error) {
-		if err := t.RestoreFromDeletion(); err != nil {
+		if err := t.RestoreFromDeletion(now); err != nil {
 			return false, err
 		}
 		return true, nil

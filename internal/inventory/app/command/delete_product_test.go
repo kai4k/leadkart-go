@@ -3,6 +3,7 @@ package command_test
 import (
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/leadkart/leadkart-go/internal/inventory/app/command"
 	"github.com/leadkart/leadkart-go/internal/inventory/domain/batch"
@@ -16,7 +17,7 @@ func TestDeleteProductHandler_HappyPath_SoftDeletes(t *testing.T) {
 	tid := newTenantID(t)
 	actor := newMembershipID(t)
 	p := seedProduct(t, productRepo, tid, actor, "DEL-1")
-	h := command.NewDeleteProductHandler(productRepo, batchRepo)
+	h := command.NewDeleteProductHandler(productRepo, batchRepo, func() time.Time { return fixedNow })
 
 	if err := h.Handle(t.Context(), command.DeleteProductCommand{
 		ProductID: p.ID(), ActorMembershipID: actor,
@@ -36,7 +37,7 @@ func TestDeleteProductHandler_MissingProduct_ReturnsErrNotFound(t *testing.T) {
 	t.Parallel()
 	productRepo := newFakeProductRepo()
 	batchRepo := newFakeBatchRepo()
-	h := command.NewDeleteProductHandler(productRepo, batchRepo)
+	h := command.NewDeleteProductHandler(productRepo, batchRepo, func() time.Time { return fixedNow })
 	actor := newMembershipID(t)
 
 	err := h.Handle(t.Context(), command.DeleteProductCommand{
@@ -57,7 +58,7 @@ func TestDeleteProductHandler_HasLiveStock_ReturnsErrAnyLiveStock(t *testing.T) 
 	p := seedProduct(t, productRepo, tid, actor, "STOCK-1")
 	batchRepo.anyLiveStockFor = p.ID()
 	batchRepo.anyLiveStockOn = true
-	h := command.NewDeleteProductHandler(productRepo, batchRepo)
+	h := command.NewDeleteProductHandler(productRepo, batchRepo, func() time.Time { return fixedNow })
 
 	err := h.Handle(t.Context(), command.DeleteProductCommand{
 		ProductID: p.ID(), ActorMembershipID: actor,

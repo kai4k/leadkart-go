@@ -11,6 +11,11 @@ import (
 	"github.com/leadkart/leadkart-go/internal/inventory/domain/product"
 )
 
+// fixedNow is the deterministic instant inventory command tests pass to
+// every domain factory + mutator. Replaces the prior package-global
+// clock per the clock-injection refactor.
+var fixedNow = time.Date(2026, 5, 24, 12, 0, 0, 0, time.UTC)
+
 func newTenantID(t *testing.T) tenant.ID {
 	t.Helper()
 	return tenant.ID(ids.NewV7().String())
@@ -33,6 +38,7 @@ func seedProduct(t *testing.T, repo *fakeProductRepo, tid tenant.ID, actor membe
 			DosageForm: "Tablet", PackSize: "10",
 			HSNCode: "3004", GSTRateBps: 1200,
 		},
+		fixedNow,
 	)
 	if err != nil {
 		t.Fatalf("product.New: %v", err)
@@ -61,6 +67,7 @@ func seedBatch(t *testing.T, repo *fakeBatchRepo, p *product.Product, actor memb
 			MRPPaise:                   25000,
 			PurchasePricePaise:         18000,
 		},
+		fixedNow,
 	)
 	if err != nil {
 		t.Fatalf("batch.New: %v", err)

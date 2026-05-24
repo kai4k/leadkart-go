@@ -3,6 +3,7 @@ package command
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
 	"github.com/leadkart/leadkart-go/internal/inventory/domain/batch"
@@ -27,11 +28,17 @@ type DeleteProductCommand struct {
 type DeleteProductHandler struct {
 	products product.Repository
 	batches  batch.Repository
+	now      func() time.Time
 }
 
-// NewDeleteProductHandler wires the handler.
-func NewDeleteProductHandler(products product.Repository, batches batch.Repository) DeleteProductHandler {
-	return DeleteProductHandler{products: products, batches: batches}
+// NewDeleteProductHandler wires the handler. `now` is the explicit time
+// source per the clock-injection refactor — composition root wires
+// `time.Now`; tests inject a fixed-time closure. Nil → time.Now.
+func NewDeleteProductHandler(products product.Repository, batches batch.Repository, now func() time.Time) DeleteProductHandler {
+	if now == nil {
+		now = time.Now
+	}
+	return DeleteProductHandler{products: products, batches: batches, now: now}
 }
 
 // Handle runs the stock guard, then soft-deletes the product.
@@ -52,8 +59,9 @@ func (h DeleteProductHandler) Handle(ctx context.Context, cmd DeleteProductComma
 	if hasStock {
 		return batch.ErrAnyLiveStock
 	}
+	now := h.now()
 	err = h.products.UpdateByID(ctx, cmd.ProductID, func(p *product.Product) (bool, error) {
-		if err := p.SoftDelete(cmd.ActorMembershipID); err != nil {
+		if err := p.SoftDelete(cmd.ActorMembershipID, now); err != nil {
 			return false, err
 		}
 		return true, nil
