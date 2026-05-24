@@ -20,7 +20,6 @@ import (
 	"time"
 
 	"github.com/leadkart/leadkart-go/internal/common/email"
-	"github.com/leadkart/leadkart-go/internal/common/ids"
 	"github.com/leadkart/leadkart-go/internal/common/pg"
 	"github.com/leadkart/leadkart-go/internal/common/slug"
 	"github.com/leadkart/leadkart-go/internal/common/tenancy"
@@ -80,12 +79,15 @@ var ErrEmailHasActiveMembership = errors.New(
 // tx via [pg.TxFromContext] — multi-aggregate atomicity preserved
 // without leaking the driver into the handler.
 type RegisterTenantHandler struct {
-	uow         pg.UnitOfWork
-	tenants     tenant.Repository
-	persons     person.Repository
-	memberships membership.Repository
-	roles       role.Repository
-	now         func() time.Time
+	uow             pg.UnitOfWork
+	tenants         tenant.Repository
+	persons         person.Repository
+	memberships     membership.Repository
+	roles           role.Repository
+	now             func() time.Time
+	newTenantID     func() tenant.ID
+	newPersonID     func() person.ID
+	newMembershipID func() membership.ID
 }
 
 // NewRegisterTenantHandler wires the handler against domain
@@ -95,6 +97,12 @@ type RegisterTenantHandler struct {
 //
 // `now` is the explicit time source per the clock-injection refactor —
 // composition root wires `time.Now`. Nil → time.Now.
+//
+// newTenantID / newPersonID / newMembershipID are the aggregate-ID
+// factories per the `TestArch_HandlersInjectIDFactory` discipline.
+// Production passes
+// `func() <T>.ID { return <T>.ID(ids.NewV7().String()) }`; tests
+// inject deterministic counters so the minted IDs are pinnable.
 func NewRegisterTenantHandler(
 	uow pg.UnitOfWork,
 	tenants tenant.Repository,
@@ -102,17 +110,32 @@ func NewRegisterTenantHandler(
 	memberships membership.Repository,
 	roles role.Repository,
 	now func() time.Time,
+	newTenantID func() tenant.ID,
+	newPersonID func() person.ID,
+	newMembershipID func() membership.ID,
 ) RegisterTenantHandler {
+	if newTenantID == nil {
+		panic("command: NewRegisterTenantHandler newTenantID required")
+	}
+	if newPersonID == nil {
+		panic("command: NewRegisterTenantHandler newPersonID required")
+	}
+	if newMembershipID == nil {
+		panic("command: NewRegisterTenantHandler newMembershipID required")
+	}
 	if now == nil {
 		now = time.Now
 	}
 	return RegisterTenantHandler{
-		uow:         uow,
-		tenants:     tenants,
-		persons:     persons,
-		memberships: memberships,
-		roles:       roles,
-		now:         now,
+		uow:             uow,
+		tenants:         tenants,
+		persons:         persons,
+		memberships:     memberships,
+		roles:           roles,
+		now:             now,
+		newTenantID:     newTenantID,
+		newPersonID:     newPersonID,
+		newMembershipID: newMembershipID,
 	}
 }
 
@@ -227,7 +250,7 @@ func (h RegisterTenantHandler) persistAggregatesInTx(
 	var result RegisterTenantResult
 	err := h.uow.WithinTx(ctx, pg.TxScopePlatform, func(ctx context.Context) error {
 		t, terr := tenant.New(
-			tenant.ID(ids.NewV7().String()),
+			h.newTenantID(),
 			cmd.Slug, cmd.LegalName, cmd.DisplayName, cmd.AdminEmail,
 			now,
 		)
@@ -281,7 +304,7 @@ func (h RegisterTenantHandler) findOrCreatePerson(
 	// force the new admin Person through the change-password flow on
 	// first login. Cleared on self-change / self-reset paths.
 	p, err := person.NewWithMustChangePassword(
-		person.ID(ids.NewV7().String()),
+		h.newPersonID(),
 		cmd.AdminEmail, cmd.AdminFirstName, cmd.AdminLastName, pwd,
 		now,
 	)
@@ -310,7 +333,7 @@ func (h RegisterTenantHandler) createMembership(
 	// createdBy = zero — RegisterTenant's first admin is self-bootstrapped
 	// (no pre-existing Membership invited them). Distinguishes
 	// onboarding-time admin from later-invited users in audit queries.
-	m, err := membership.New(membership.ID(ids.NewV7().String()), personID, tenantID, membership.ID(""), now)
+	m, err := membership.New(h.newMembershipID(), personID, tenantID, membership.ID(""), now)
 	if err != nil {
 		return nil, fmt.Errorf("construct membership: %w", err)
 	}

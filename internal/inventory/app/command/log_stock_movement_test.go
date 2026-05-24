@@ -19,7 +19,7 @@ func TestLogStockMovementHandler_HappyPath_Inbound(t *testing.T) {
 	actor := newMembershipID(t)
 	p := seedProduct(t, productRepo, tid, actor, "MV-1")
 	b := seedBatch(t, batchRepo, p, actor, "LOT-1")
-	h := command.NewLogStockMovementHandler(uow, batchRepo, movementRepo, func() time.Time { return fixedNow })
+	h := command.NewLogStockMovementHandler(uow, batchRepo, movementRepo, func() time.Time { return fixedNow }, testNewMovementID)
 
 	out, err := h.Handle(t.Context(), command.LogStockMovementCommand{
 		BatchID:           b.ID(),
@@ -59,7 +59,7 @@ func TestLogStockMovementHandler_OutboundSignsQuantityNegative(t *testing.T) {
 	}
 	_ = b.PullEvents()
 
-	h := command.NewLogStockMovementHandler(uow, batchRepo, movementRepo, func() time.Time { return fixedNow })
+	h := command.NewLogStockMovementHandler(uow, batchRepo, movementRepo, func() time.Time { return fixedNow }, testNewMovementID)
 	_, err := h.Handle(t.Context(), command.LogStockMovementCommand{
 		BatchID:           b.ID(),
 		ActorMembershipID: actor,
@@ -93,7 +93,7 @@ func TestLogStockMovementHandler_InvalidType_ReturnsErrInvalid(t *testing.T) {
 	p := seedProduct(t, productRepo, tid, actor, "MV-BADTYPE")
 	b := seedBatch(t, batchRepo, p, actor, "LOT-BT")
 
-	h := command.NewLogStockMovementHandler(uow, batchRepo, movementRepo, func() time.Time { return fixedNow })
+	h := command.NewLogStockMovementHandler(uow, batchRepo, movementRepo, func() time.Time { return fixedNow }, testNewMovementID)
 	_, err := h.Handle(t.Context(), command.LogStockMovementCommand{
 		BatchID:           b.ID(),
 		ActorMembershipID: actor,
@@ -121,7 +121,7 @@ func TestLogStockMovementHandler_ZeroQuantity_ReturnsErrInvalid(t *testing.T) {
 	p := seedProduct(t, productRepo, tid, actor, "MV-ZERO")
 	b := seedBatch(t, batchRepo, p, actor, "LOT-Z")
 
-	h := command.NewLogStockMovementHandler(uow, batchRepo, movementRepo, func() time.Time { return fixedNow })
+	h := command.NewLogStockMovementHandler(uow, batchRepo, movementRepo, func() time.Time { return fixedNow }, testNewMovementID)
 	_, err := h.Handle(t.Context(), command.LogStockMovementCommand{
 		BatchID:           b.ID(),
 		ActorMembershipID: actor,
@@ -150,7 +150,7 @@ func TestLogStockMovementHandler_InsufficientStock_NoRetry(t *testing.T) {
 	p := seedProduct(t, productRepo, tid, actor, "MV-LOW")
 	b := seedBatch(t, batchRepo, p, actor, "LOT-LOW") // on-hand = 0
 
-	h := command.NewLogStockMovementHandler(uow, batchRepo, movementRepo, func() time.Time { return fixedNow })
+	h := command.NewLogStockMovementHandler(uow, batchRepo, movementRepo, func() time.Time { return fixedNow }, testNewMovementID)
 	_, err := h.Handle(t.Context(), command.LogStockMovementCommand{
 		BatchID:           b.ID(),
 		ActorMembershipID: actor,
@@ -183,7 +183,7 @@ func TestLogStockMovementHandler_NegativeMagnitude_ReturnsErrInvalid(t *testing.
 	p := seedProduct(t, productRepo, tid, actor, "MV-NEG")
 	b := seedBatch(t, batchRepo, p, actor, "LOT-NEG")
 
-	h := command.NewLogStockMovementHandler(uow, batchRepo, movementRepo, func() time.Time { return fixedNow })
+	h := command.NewLogStockMovementHandler(uow, batchRepo, movementRepo, func() time.Time { return fixedNow }, testNewMovementID)
 	_, err := h.Handle(t.Context(), command.LogStockMovementCommand{
 		BatchID:           b.ID(),
 		ActorMembershipID: actor,

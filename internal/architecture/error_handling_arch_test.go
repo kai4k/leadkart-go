@@ -271,14 +271,6 @@ func TestArch_NoPanicString(t *testing.T) {
 func TestArch_NoMessageStringMatching(t *testing.T) {
 	t.Parallel()
 
-	// Known violation: identity/ports/http.go matches on domain text
-	// for the change-password flow ("new password required" /
-	// "person id required"). Proper fix is to lift those into typed
-	// sentinels in identity/app/command/. Tracked in
-	// KNOWN_VIOLATIONS.md ("message-string matching") — closure ETA
-	// alongside the next change_password.go test sweep.
-	t.Skip("known violation: identity/ports/http.go matches change-password domain text — tracked in KNOWN_VIOLATIONS.md")
-
 	root := internalDir(t)
 	matchRE := regexp.MustCompile(`strings\.Contains\(\s*\w*[Ee]rr\w*\.Error\(\)`)
 	var bad []string
@@ -368,7 +360,7 @@ func TestArch_PackageExportsErrSentinels(t *testing.T) {
 			}
 			pkgDir := filepath.Join(domainDir, e.Name())
 			hasErr := false
-			walkGoFiles(t, pkgDir, false, func(path string, src []byte) {
+			walkGoFiles(t, pkgDir, false, func(_ string, src []byte) {
 				body := stripGoComments(string(src))
 				if regexp.MustCompile(`(?m)^(?:var\s+)?Err\w+\s*=`).MatchString(body) {
 					hasErr = true
@@ -433,21 +425,3 @@ func TestArch_DomainErrorsNoUserStrings(t *testing.T) {
 	}
 }
 
-// stripInitBodies replaces `func init() { ... }` bodies with empty
-// braces so M4 can ignore init-time fail-fast panics.
-func stripInitBodies(body string) string {
-	re := regexp.MustCompile(`(?s)func\s+init\(\)\s*\{.*?\n\}`)
-	return re.ReplaceAllString(body, "func init() {}")
-}
-
-// stripConstructorBodies replaces `func NewX(...) ... { ... }` /
-// `func RequireX(...) ... { ... }` / `func MustNewX(...) ... { ... }`
-// bodies with empty braces so M4 can ignore composition-root nil-dep
-// assertions (panic("X required") is canonical for those).
-//
-// Also strips package-level `func init()` and `func TestMain` since
-// they share the fail-fast idiom.
-func stripConstructorBodies(body string) string {
-	re := regexp.MustCompile(`(?s)func\s+(?:New|Require|Must|Build|Init)\w*\s*\([^)]*\)[^{]*\{.*?\n\}`)
-	return re.ReplaceAllString(body, "func ctorStripped() {}")
-}

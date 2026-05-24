@@ -16,6 +16,7 @@ import (
 	"github.com/leadkart/leadkart-go/internal/inventory/app/command"
 	"github.com/leadkart/leadkart-go/internal/inventory/domain/batch"
 	"github.com/leadkart/leadkart-go/internal/inventory/domain/product"
+	"github.com/leadkart/leadkart-go/internal/inventory/domain/stockmovement"
 )
 
 // TestLogStockMovement_Concurrent_NoLostUpdate fires N goroutines
@@ -82,7 +83,7 @@ func TestLogStockMovement_Concurrent_NoLostUpdate(t *testing.T) {
 	var totalEntries atomic.Int64
 	instrumentedUoW := &countingUoW{inner: tx, counter: &totalEntries}
 
-	h := command.NewLogStockMovementHandler(instrumentedUoW, batches, movements, func() time.Time { return fixedNow })
+	h := command.NewLogStockMovementHandler(instrumentedUoW, batches, movements, func() time.Time { return fixedNow }, func() stockmovement.ID { return stockmovement.ID(ids.NewV7().String()) })
 
 	// Channel-based barrier so every goroutine releases inside the same
 	// Postgres tick — maximises lock-acquisition pressure.

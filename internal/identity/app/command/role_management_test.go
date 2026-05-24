@@ -246,7 +246,7 @@ func newCustomRole(t *testing.T, repo *fakeRoleRepo, name string) *role.Role {
 func TestCreateRole_Succeeds(t *testing.T) {
 	t.Parallel()
 	repo := newFakeRoleRepo()
-	h := command.NewCreateRoleHandler(repo, newFakeEdgeRepo(), fakeUoW{}, nowFunc)
+	h := command.NewCreateRoleHandler(repo, newFakeEdgeRepo(), fakeUoW{}, nowFunc, func() role.ID { return role.ID(ids.NewV7().String()) }, func() rolehierarchy.ID { return rolehierarchy.ID(ids.NewV7().String()) })
 	out, err := h.Handle(t.Context(), command.CreateRoleCommand{
 		TenantID:       tenant.ID("33333333-3333-3333-3333-333333333333"),
 		Name:           "Sales Lead",
@@ -264,7 +264,7 @@ func TestCreateRole_RejectsDuplicateName(t *testing.T) {
 	t.Parallel()
 	repo := newFakeRoleRepo()
 	_ = newCustomRole(t, repo, "Sales Manager")
-	h := command.NewCreateRoleHandler(repo, newFakeEdgeRepo(), fakeUoW{}, nowFunc)
+	h := command.NewCreateRoleHandler(repo, newFakeEdgeRepo(), fakeUoW{}, nowFunc, func() role.ID { return role.ID(ids.NewV7().String()) }, func() rolehierarchy.ID { return rolehierarchy.ID(ids.NewV7().String()) })
 	_, err := h.Handle(t.Context(), command.CreateRoleCommand{
 		TenantID:       tenant.ID("33333333-3333-3333-3333-333333333333"),
 		Name:           "Sales Manager",
@@ -380,7 +380,7 @@ func TestSetRoleParent_SetsParentOnRootChild(t *testing.T) {
 	child := newCustomRole(t, repo, "Junior")
 	parent := newCustomRole(t, repo, "Manager")
 
-	h := command.NewSetRoleParentHandler(edges, fakeUoW{}, nowFunc)
+	h := command.NewSetRoleParentHandler(edges, fakeUoW{}, nowFunc, func() rolehierarchy.ID { return rolehierarchy.ID(ids.NewV7().String()) })
 	if err := h.Handle(t.Context(), command.SetRoleParentCommand{
 		TenantID:    tid,
 		RoleID:      child.ID(),
@@ -406,7 +406,7 @@ func TestSetRoleParent_ReplacesExistingParent(t *testing.T) {
 	oldParent := newCustomRole(t, repo, "OldManager")
 	newParent := newCustomRole(t, repo, "NewManager")
 
-	h := command.NewSetRoleParentHandler(edges, fakeUoW{}, nowFunc)
+	h := command.NewSetRoleParentHandler(edges, fakeUoW{}, nowFunc, func() rolehierarchy.ID { return rolehierarchy.ID(ids.NewV7().String()) })
 	// Seed initial parent.
 	if err := h.Handle(t.Context(), command.SetRoleParentCommand{
 		TenantID:    tid,
@@ -440,7 +440,7 @@ func TestSetRoleParent_ClearsParent(t *testing.T) {
 	child := newCustomRole(t, repo, "Junior")
 	parent := newCustomRole(t, repo, "Manager")
 
-	h := command.NewSetRoleParentHandler(edges, fakeUoW{}, nowFunc)
+	h := command.NewSetRoleParentHandler(edges, fakeUoW{}, nowFunc, func() rolehierarchy.ID { return rolehierarchy.ID(ids.NewV7().String()) })
 	if err := h.Handle(t.Context(), command.SetRoleParentCommand{
 		TenantID: tid, RoleID: child.ID(), NewParentID: parent.ID(),
 	}); err != nil {
@@ -466,7 +466,7 @@ func TestSetRoleParent_RejectsSelfReference(t *testing.T) {
 	tid := tenant.ID("33333333-3333-3333-3333-333333333333")
 	child := newCustomRole(t, repo, "Junior")
 
-	h := command.NewSetRoleParentHandler(edges, fakeUoW{}, nowFunc)
+	h := command.NewSetRoleParentHandler(edges, fakeUoW{}, nowFunc, func() rolehierarchy.ID { return rolehierarchy.ID(ids.NewV7().String()) })
 	err := h.Handle(t.Context(), command.SetRoleParentCommand{
 		TenantID: tid, RoleID: child.ID(), NewParentID: child.ID(),
 	})
@@ -483,7 +483,7 @@ func TestSetRoleParent_RejectsMultiHopCycle(t *testing.T) {
 	a := newCustomRole(t, repo, "RoleA")
 	b := newCustomRole(t, repo, "RoleB")
 
-	h := command.NewSetRoleParentHandler(edges, fakeUoW{}, nowFunc)
+	h := command.NewSetRoleParentHandler(edges, fakeUoW{}, nowFunc, func() rolehierarchy.ID { return rolehierarchy.ID(ids.NewV7().String()) })
 	// b → a (legal).
 	if err := h.Handle(t.Context(), command.SetRoleParentCommand{
 		TenantID: tid, RoleID: b.ID(), NewParentID: a.ID(),

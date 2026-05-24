@@ -37,7 +37,7 @@ func TestLogVerificationCall_NoAnswerLeavesContactInCall(t *testing.T) {
 
 	cID, agentID := seedNewContact(t, contacts)
 
-	h := command.NewLogVerificationCallHandler(uow, calls, contacts, nowFunc)
+	h := command.NewLogVerificationCallHandler(uow, calls, contacts, nowFunc, func() verificationcall.ID { return verificationcall.ID(ids.NewV7().String()) })
 	out, err := h.Handle(context.Background(), command.LogVerificationCallCommand{
 		ContactID: cID,
 		Outcome:   verificationcall.OutcomeNoAnswer,
@@ -69,7 +69,7 @@ func TestLogVerificationCall_BusyMarksContactBusyWithWindow(t *testing.T) {
 	cbStart := nowFunc().Add(time.Hour)
 	cbEnd := cbStart.Add(30 * time.Minute)
 
-	h := command.NewLogVerificationCallHandler(uow, calls, contacts, nowFunc)
+	h := command.NewLogVerificationCallHandler(uow, calls, contacts, nowFunc, func() verificationcall.ID { return verificationcall.ID(ids.NewV7().String()) })
 	_, err := h.Handle(context.Background(), command.LogVerificationCallCommand{
 		ContactID:             cID,
 		Outcome:               verificationcall.OutcomeBusy,
@@ -97,7 +97,7 @@ func TestLogVerificationCall_ContactNotFound(t *testing.T) {
 	calls := platformtest.NewFakeVerificationCallRepository()
 	uow := platformtest.NewFakeUnitOfWork()
 
-	h := command.NewLogVerificationCallHandler(uow, calls, contacts, nowFunc)
+	h := command.NewLogVerificationCallHandler(uow, calls, contacts, nowFunc, func() verificationcall.ID { return verificationcall.ID(ids.NewV7().String()) })
 	_, err := h.Handle(context.Background(), command.LogVerificationCallCommand{
 		ContactID: unverifiedcontact.ID("01900000-0000-7000-8000-000000000999"),
 		Outcome:   verificationcall.OutcomeNoAnswer,

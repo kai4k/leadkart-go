@@ -23,6 +23,7 @@ import (
 	"github.com/leadkart/leadkart-go/internal/platform/domain/leadform"
 	"github.com/leadkart/leadkart-go/internal/platform/domain/platformlead"
 	"github.com/leadkart/leadkart-go/internal/platform/domain/unverifiedcontact"
+	"github.com/leadkart/leadkart-go/internal/platform/domain/verificationcall"
 	"github.com/leadkart/leadkart-go/internal/platform/platformtest"
 	"github.com/leadkart/leadkart-go/internal/platform/ports"
 )
@@ -113,11 +114,11 @@ func buildApp(t *testing.T) (app.Application, *platformtest.FakeUnverifiedContac
 
 	return app.Application{
 		Commands: app.Commands{
-			CreateUnverifiedContact: command.NewCreateUnverifiedContactHandler(contacts, now),
-			LogVerificationCall:     command.NewLogVerificationCallHandler(uow, calls, contacts, now),
-			VerifyUnverifiedContact: command.NewVerifyUnverifiedContactHandler(uow, contacts, leads, outbox, now),
+			CreateUnverifiedContact: command.NewCreateUnverifiedContactHandler(contacts, now, func() unverifiedcontact.ID { return unverifiedcontact.ID(ids.NewV7().String()) }),
+			LogVerificationCall:     command.NewLogVerificationCallHandler(uow, calls, contacts, now, func() verificationcall.ID { return verificationcall.ID(ids.NewV7().String()) }),
+			VerifyUnverifiedContact: command.NewVerifyUnverifiedContactHandler(uow, contacts, leads, outbox, now, func() platformlead.ID { return platformlead.ID(ids.NewV7().String()) }),
 			RejectUnverifiedContact: command.NewRejectUnverifiedContactHandler(contacts, now),
-			PurchaseLead:            command.NewPurchaseLeadHandler(uow, leads, credits, outbox, now),
+			PurchaseLead:            command.NewPurchaseLeadHandler(uow, leads, credits, outbox, now, func() string { return ids.NewV7().String() }),
 			TopupLeadCredits:        command.NewTopupLeadCreditsHandler(uow, credits, now),
 		},
 		Queries: app.Queries{
@@ -326,11 +327,11 @@ func TestHandlePurchaseLead_Tenant_HappyPath(t *testing.T) {
 
 	a := app.Application{
 		Commands: app.Commands{
-			CreateUnverifiedContact: command.NewCreateUnverifiedContactHandler(contacts, now),
-			LogVerificationCall:     command.NewLogVerificationCallHandler(uow, calls, contacts, now),
-			VerifyUnverifiedContact: command.NewVerifyUnverifiedContactHandler(uow, contacts, leads, outbox, now),
+			CreateUnverifiedContact: command.NewCreateUnverifiedContactHandler(contacts, now, func() unverifiedcontact.ID { return unverifiedcontact.ID(ids.NewV7().String()) }),
+			LogVerificationCall:     command.NewLogVerificationCallHandler(uow, calls, contacts, now, func() verificationcall.ID { return verificationcall.ID(ids.NewV7().String()) }),
+			VerifyUnverifiedContact: command.NewVerifyUnverifiedContactHandler(uow, contacts, leads, outbox, now, func() platformlead.ID { return platformlead.ID(ids.NewV7().String()) }),
 			RejectUnverifiedContact: command.NewRejectUnverifiedContactHandler(contacts, now),
-			PurchaseLead:            command.NewPurchaseLeadHandler(uow, leads, credits, outbox, now),
+			PurchaseLead:            command.NewPurchaseLeadHandler(uow, leads, credits, outbox, now, func() string { return ids.NewV7().String() }),
 			TopupLeadCredits:        command.NewTopupLeadCreditsHandler(uow, credits, now),
 		},
 		Queries: app.Queries{
@@ -396,11 +397,11 @@ func TestHandleVerify_AlreadyTerminal_409(t *testing.T) {
 
 	a := app.Application{
 		Commands: app.Commands{
-			CreateUnverifiedContact: command.NewCreateUnverifiedContactHandler(contacts, now),
-			LogVerificationCall:     command.NewLogVerificationCallHandler(uow, calls, contacts, now),
-			VerifyUnverifiedContact: command.NewVerifyUnverifiedContactHandler(uow, contacts, leads, outbox, now),
+			CreateUnverifiedContact: command.NewCreateUnverifiedContactHandler(contacts, now, func() unverifiedcontact.ID { return unverifiedcontact.ID(ids.NewV7().String()) }),
+			LogVerificationCall:     command.NewLogVerificationCallHandler(uow, calls, contacts, now, func() verificationcall.ID { return verificationcall.ID(ids.NewV7().String()) }),
+			VerifyUnverifiedContact: command.NewVerifyUnverifiedContactHandler(uow, contacts, leads, outbox, now, func() platformlead.ID { return platformlead.ID(ids.NewV7().String()) }),
 			RejectUnverifiedContact: command.NewRejectUnverifiedContactHandler(contacts, now),
-			PurchaseLead:            command.NewPurchaseLeadHandler(uow, leads, credits, outbox, now),
+			PurchaseLead:            command.NewPurchaseLeadHandler(uow, leads, credits, outbox, now, func() string { return ids.NewV7().String() }),
 			TopupLeadCredits:        command.NewTopupLeadCreditsHandler(uow, credits, now),
 		},
 		Queries: app.Queries{

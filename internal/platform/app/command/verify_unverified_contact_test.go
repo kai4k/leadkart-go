@@ -9,6 +9,7 @@ import (
 	"github.com/leadkart/leadkart-go/internal/common/ids"
 	"github.com/leadkart/leadkart-go/internal/platform/app/command"
 	"github.com/leadkart/leadkart-go/internal/platform/domain/leadform"
+	"github.com/leadkart/leadkart-go/internal/platform/domain/platformlead"
 	"github.com/leadkart/leadkart-go/internal/platform/domain/unverifiedcontact"
 	"github.com/leadkart/leadkart-go/internal/platform/integrationevents"
 	"github.com/leadkart/leadkart-go/internal/platform/platformtest"
@@ -60,7 +61,7 @@ func TestVerifyUnverifiedContact_HappyPath(t *testing.T) {
 		t.Fatalf("seed add: %v", err)
 	}
 
-	h := command.NewVerifyUnverifiedContactHandler(uow, contacts, leads, outbox, nowFunc)
+	h := command.NewVerifyUnverifiedContactHandler(uow, contacts, leads, outbox, nowFunc, func() platformlead.ID { return platformlead.ID(ids.NewV7().String()) })
 	out, err := h.Handle(context.Background(), command.VerifyUnverifiedContactCommand{
 		ContactID:  cID,
 		VerifiedBy: agentID,
@@ -112,7 +113,7 @@ func TestVerifyUnverifiedContact_PromoteFromNew(t *testing.T) {
 	c, _ := unverifiedcontact.New(cID, sampleForm(t), agentID, nowFunc())
 	_ = contacts.Add(context.Background(), c)
 
-	h := command.NewVerifyUnverifiedContactHandler(uow, contacts, leads, outbox, nowFunc)
+	h := command.NewVerifyUnverifiedContactHandler(uow, contacts, leads, outbox, nowFunc, func() platformlead.ID { return platformlead.ID(ids.NewV7().String()) })
 	_, err := h.Handle(context.Background(), command.VerifyUnverifiedContactCommand{
 		ContactID:  cID,
 		VerifiedBy: agentID,
@@ -130,7 +131,7 @@ func TestVerifyUnverifiedContact_ContactNotFound(t *testing.T) {
 	outbox := platformtest.NewFakeOutbox()
 	uow := platformtest.NewFakeUnitOfWork()
 
-	h := command.NewVerifyUnverifiedContactHandler(uow, contacts, leads, outbox, nowFunc)
+	h := command.NewVerifyUnverifiedContactHandler(uow, contacts, leads, outbox, nowFunc, func() platformlead.ID { return platformlead.ID(ids.NewV7().String()) })
 	_, err := h.Handle(context.Background(), command.VerifyUnverifiedContactCommand{
 		ContactID:  unverifiedcontact.ID("01900000-0000-7000-8000-000000000999"),
 		VerifiedBy: unverifiedcontact.MembershipID(ids.NewV7().String()),
@@ -170,7 +171,7 @@ func TestVerifyUnverifiedContact_AlreadyVerified_Idempotent(t *testing.T) {
 		t.Fatalf("seed add: %v", err)
 	}
 
-	h := command.NewVerifyUnverifiedContactHandler(uow, contacts, leads, outbox, nowFunc)
+	h := command.NewVerifyUnverifiedContactHandler(uow, contacts, leads, outbox, nowFunc, func() platformlead.ID { return platformlead.ID(ids.NewV7().String()) })
 
 	// First verify → success, lead created.
 	out1, err := h.Handle(context.Background(), command.VerifyUnverifiedContactCommand{
@@ -242,7 +243,7 @@ func TestVerifyUnverifiedContact_AlreadyRejected_Refused(t *testing.T) {
 		t.Fatalf("seed add: %v", err)
 	}
 
-	h := command.NewVerifyUnverifiedContactHandler(uow, contacts, leads, outbox, nowFunc)
+	h := command.NewVerifyUnverifiedContactHandler(uow, contacts, leads, outbox, nowFunc, func() platformlead.ID { return platformlead.ID(ids.NewV7().String()) })
 	_, err = h.Handle(context.Background(), command.VerifyUnverifiedContactCommand{
 		ContactID:  cID,
 		VerifiedBy: agentID,

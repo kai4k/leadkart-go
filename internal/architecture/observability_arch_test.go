@@ -27,25 +27,40 @@ import (
 )
 
 // ----------------------------------------------------------------------------
-// Test 81: TestArch_HandlerEntryExitLogs
+// Test 81: TestArch_NoInfoLogOnHandlerSuccessPath
 // ----------------------------------------------------------------------------
 //
-// Every `func (h <X>Handler) Handle(ctx, cmd) (..., error)` body has
-// at least one slog.<Level> / slog.<Level>Context call. A silent
-// handler is impossible to diagnose in production.
-func TestArch_HandlerEntryExitLogs(t *testing.T) {
+// REWRITTEN to enforce Go canon. The previous shape ("every Handle method
+// emits an Info log") is an explicit anti-pattern per:
+//   - Peter Bourgon "Go best practices, six years in" §logging — "log only
+//     actionable information"
+//   - Dave Cheney "Let's talk about logging" — "if a log line isn't
+//     actionable, delete it"
+//   - Cindy Sridharan *Distributed Systems Observability* ch.5 — request
+//     lifecycle = TRACE concern, not LOG concern
+//
+// Entry/exit logs duplicate access-log middleware + inflate log volume
+// by ~10x. The canonical Go pattern is LOG ON FAILURE:
+// slog.WarnContext / slog.ErrorContext on rejected paths is fine +
+// encouraged; slog.Info/Debug on the success path is the anti-pattern.
+//
+// Heuristic: flag Info/Debug calls inside a `Handle` method body UNLESS
+// the message text references error / fail / reject / deny / blocked /
+// lock (those are diagnostic, not narrative).
+func TestArch_NoInfoLogOnHandlerSuccessPath(t *testing.T) {
 	t.Parallel()
 
 	type violation struct {
 		file string
-		fn   string
+		line int
+		msg  string
 	}
 	var violations []violation
 
 	for _, mod := range modulesUnderInternal(t) {
 		dir := filepath.Join(internalDir(t), mod, "app", "command")
 		walkGoFiles(t, dir, false, func(path string, src []byte) {
-			_, f := parseFile(t, path, src)
+			fset, f := parseFile(t, path, src)
 			for _, decl := range f.Decls {
 				fd, ok := decl.(*ast.FuncDecl)
 				if !ok || fd.Recv == nil || fd.Body == nil {
@@ -57,44 +72,47 @@ func TestArch_HandlerEntryExitLogs(t *testing.T) {
 				if !isHandlerReceiver(fd.Recv) {
 					continue
 				}
-				hasLog := false
 				ast.Inspect(fd.Body, func(n ast.Node) bool {
 					call, ok := n.(*ast.CallExpr)
 					if !ok {
 						return true
 					}
 					pkg, name := callPkgAndName(call.Fun)
-					if pkg == "slog" {
-						_ = name
-						hasLog = true
-						return false
+					if pkg != "slog" {
+						return true
 					}
-					// Also accept h.log.* method calls.
-					if sel, ok := call.Fun.(*ast.SelectorExpr); ok {
-						if inner, ok := sel.X.(*ast.SelectorExpr); ok {
-							if inner.Sel.Name == "log" || inner.Sel.Name == "logger" {
-								hasLog = true
-								return false
-							}
-						}
+					if name != "Info" && name != "InfoContext" && name != "Debug" && name != "DebugContext" {
+						return true
 					}
-					return true
-				})
-				if !hasLog {
+					if len(call.Args) == 0 {
+						return true
+					}
+					msgLit, ok := call.Args[0].(*ast.BasicLit)
+					if !ok {
+						return true
+					}
+					msg := strings.ToLower(strings.Trim(msgLit.Value, "\""))
+					if strings.Contains(msg, "err") || strings.Contains(msg, "fail") ||
+						strings.Contains(msg, "reject") || strings.Contains(msg, "deny") ||
+						strings.Contains(msg, "blocked") || strings.Contains(msg, "lock") {
+						return true
+					}
 					violations = append(violations, violation{
 						file: path,
-						fn:   fd.Name.Name,
+						line: fset.Position(call.Pos()).Line,
+						msg:  msg,
 					})
-				}
+					return true
+				})
 			}
 		})
 	}
 
 	if len(violations) > 0 {
-		t.Skip("known violation: not every command Handle method logs " +
-			"entry/exit — tracked in KNOWN_VIOLATIONS.md. Pragmatic note: " +
-			"the canonical pattern is for the requestlog middleware to log " +
-			"per-HTTP-request, with the handler logging only domain events.")
+		t.Errorf("handler Handle() emits success-path Info/Debug log — narrate via requestlog middleware, not per-handler (Cheney 'Let's talk about logging' + Bourgon 'Go best practices' §logging):")
+		for _, v := range violations {
+			t.Logf("  %s:%d — %q", v.file, v.line, v.msg)
+		}
 	}
 }
 
@@ -359,28 +377,67 @@ func TestArch_CorrelationIDPropagation(t *testing.T) {
 		}
 	})
 
-	if len(violations) > 0 {
-		t.Skip("known violation: not every ctx-bearing function call site " +
-			"uses slog.<Level>Context — tracked in KNOWN_VIOLATIONS.md. The " +
-			"context-aware switch is mechanical sed across handlers + " +
-			"adapters; scheduled for a Wave-N PR.")
+	for _, v := range violations {
+		t.Errorf("%s:%d — %s: slog.<Level> in ctx-bearing function; use slog.<Level>Context(ctx, ...) so OTel trace_id + correlation_id flow",
+			v.file, v.line, v.fn)
 	}
 }
 
 // ----------------------------------------------------------------------------
-// Test 86: TestArch_OTelSpansOnExternalCalls
+// Test 86: TestArch_OTelInstrumentationViaLibraries
 // ----------------------------------------------------------------------------
 //
-// Adapter methods that make external calls (DB, HTTP, message bus)
-// open a span via `tracer.Start(...)` (or use otelhttp/otelpgx).
-// Heuristic — skip-with-violation acceptable; tracked.
-func TestArch_OTelSpansOnExternalCalls(t *testing.T) {
+// REWRITTEN to enforce Go canon. The prior shape ("every adapter method
+// opens an explicit tracer.Start span") is anti-canon per:
+//   - OpenTelemetry-Go contrib README: "prefer instrumented drivers"
+//   - exaring/otelpgx README: "The tracer fires automatically on every
+//     pgx connection"
+//   - go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp docs:
+//     "wrap an http.Handler once"
+//   - Google Dapper paper §3.2 ("instrumentation libraries")
+//
+// Manual tracer.Start() in business code is the anti-pattern — it
+// leaks observability concerns into handlers + adapters, and ALWAYS
+// drifts behind the library tracer. The canonical Go shape: wire the
+// instrumentation library ONCE in the composition root + leave
+// adapters/handlers ignorant.
+//
+// This test asserts the two library hooks are wired:
+//   - internal/common/pg/pool.go installs otelpgx.NewTracer on every
+//     connection (catches every pgx.Query / pgx.Exec)
+//   - cmd/api/main.go wraps the public mux with otelhttp.NewHandler
+//     (catches every HTTP request)
+//
+// Both are a single line in the composition root. If either drifts
+// (e.g. someone bypasses pg.NewPool with pgxpool.New direct), this
+// test fails immediately.
+func TestArch_OTelInstrumentationViaLibraries(t *testing.T) {
 	t.Parallel()
 
-	t.Skip("known violation: not every external-call adapter explicitly " +
-		"opens an OTel span — tracked in KNOWN_VIOLATIONS.md. otelpgx + " +
-		"otelhttp auto-instrument the wire layer; explicit spans on the " +
-		"adapter business surface are a Wave-N follow-up.")
+	root := repoRoot(t)
+
+	poolPath := filepath.Join(root, "internal", "common", "pg", "pool.go")
+	poolSrc, err := readFileBytes(poolPath)
+	if err != nil {
+		t.Fatalf("read %s: %v", poolPath, err)
+	}
+	poolText := string(poolSrc)
+	if !strings.Contains(poolText, "otelpgx.NewTracer") {
+		t.Errorf("%s does not wire otelpgx.NewTracer — every pgx connection must carry the library tracer (canonical Go OTel pattern; exaring/otelpgx README)", poolPath)
+	}
+	if !strings.Contains(poolText, "otelpgx.RecordStats") {
+		t.Errorf("%s does not wire otelpgx.RecordStats — pool-stat metrics must be recorded so connection saturation is observable (exaring/otelpgx README §RecordStats)", poolPath)
+	}
+
+	mainPath := filepath.Join(root, "cmd", "api", "main.go")
+	mainSrc, err := readFileBytes(mainPath)
+	if err != nil {
+		t.Fatalf("read %s: %v", mainPath, err)
+	}
+	mainText := string(mainSrc)
+	if !strings.Contains(mainText, "otelhttp.NewHandler") {
+		t.Errorf("%s does not wrap the public mux with otelhttp.NewHandler — every inbound HTTP request must open an OTel span (go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp canonical wiring)", mainPath)
+	}
 }
 
 // ----------------------------------------------------------------------------

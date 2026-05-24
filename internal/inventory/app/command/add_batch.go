@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/leadkart/leadkart-go/internal/common/ids"
 	"github.com/leadkart/leadkart-go/internal/common/pg"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
 	"github.com/leadkart/leadkart-go/internal/inventory/domain/batch"
@@ -53,20 +52,29 @@ type AddBatchResult struct {
 // on the products row's xmin (Postgres MVCC — the loser surfaces as a
 // fresh GetByID returning the deleted row on its retry).
 type AddBatchHandler struct {
-	uow      pg.UnitOfWork
-	products product.Repository
-	batches  batch.Repository
-	now      func() time.Time
+	uow        pg.UnitOfWork
+	products   product.Repository
+	batches    batch.Repository
+	now        func() time.Time
+	newBatchID func() batch.ID
 }
 
 // NewAddBatchHandler wires the handler. `now` is the explicit time
 // source per the clock-injection refactor — composition root wires
 // `time.Now`; tests inject a fixed-time closure. Nil → time.Now.
-func NewAddBatchHandler(uow pg.UnitOfWork, products product.Repository, batches batch.Repository, now func() time.Time) AddBatchHandler {
+//
+// newBatchID is the aggregate-ID factory per the
+// `TestArch_HandlersInjectIDFactory` discipline. Production passes
+// `func() batch.ID { return batch.ID(ids.NewV7().String()) }`;
+// tests inject a deterministic counter so the minted ID is pinnable.
+func NewAddBatchHandler(uow pg.UnitOfWork, products product.Repository, batches batch.Repository, now func() time.Time, newBatchID func() batch.ID) AddBatchHandler {
+	if newBatchID == nil {
+		panic("command: NewAddBatchHandler newBatchID required")
+	}
 	if now == nil {
 		now = time.Now
 	}
-	return AddBatchHandler{uow: uow, products: products, batches: batches, now: now}
+	return AddBatchHandler{uow: uow, products: products, batches: batches, now: now, newBatchID: newBatchID}
 }
 
 // Handle adds a batch to the given product inside one tenant-scoped UoW.
@@ -96,7 +104,7 @@ func (h AddBatchHandler) Handle(ctx context.Context, cmd AddBatchCommand) (AddBa
 			return product.ErrNotFound
 		}
 		b, err := batch.New(
-			batch.ID(ids.NewV7().String()),
+			h.newBatchID(),
 			p.ID(),
 			p.TenantID(),
 			cmd.ActorMembershipID,

@@ -1,0 +1,137 @@
+//go:build integration
+
+package adapters_test
+
+import (
+	"encoding/json"
+	"fmt"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/leadkart/leadkart-go/internal/common/ids"
+	"github.com/leadkart/leadkart-go/internal/common/pg"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
+	"github.com/leadkart/leadkart-go/internal/inventory/adapters"
+	"github.com/leadkart/leadkart-go/internal/inventory/domain/product"
+)
+
+// TestKeysetProductsPage_UsesIndexUnderRLS mirrors the identity keyset
+// EXPLAIN gate (per ADR 0038) for inventory.products.
+//
+// Asserts the per-tenant keyset query plans as an Index Scan against the
+// composite partial index idx_products_tenant_created_keyset declared in
+// migration 20260603000001 as
+// `(tenant_id, created_at DESC, id DESC) WHERE NOT is_deleted` — which
+// matches the query's `WHERE tenant_id = $1 AND NOT is_deleted ORDER BY
+// created_at DESC, id DESC` keyset shape.
+//
+// Test shape (canonical):
+//
+//  1. Reuse the testcontainers Postgres + migrations fixture.
+//  2. Seed 200 active products under one tenant (well above the planner's
+//     seq-scan threshold).
+//  3. ANALYZE so the planner has fresh statistics.
+//  4. Bind the tenant GUC so RLS admits rows.
+//  5. EXPLAIN the same SQL shape sqlc emits (ListProductsByTenantPage).
+//  6. Assert the plan contains Index Scan (any flavour) AND does NOT
+//     fall back to Seq Scan on inventory.products.
+//
+// If this test regresses, either (a) the planner gained a regression,
+// or (b) the partial-index predicate drifted out of alignment with the
+// query predicate. Either warrants a manual EXPLAIN review.
+func TestKeysetProductsPage_UsesIndexUnderRLS(t *testing.T) {
+	pool := repoFixture(t)
+	tid := seedTenant(t, pool)
+	ctx := tenantCtx(t, tid)
+
+	tx := pg.NewTransactor(pool)
+	products := adapters.NewProductRepository(pool, tx)
+	actor := membership.ID(ids.NewV7().String())
+
+	const seedCount = 200
+	for i := range seedCount {
+		p, err := product.New(product.ID(ids.NewV7().String()), tid, actor,
+			product.Spec{
+				SKU:        fmt.Sprintf("SKU-%03d", i),
+				Name:       fmt.Sprintf("Product %03d", i),
+				DosageForm: "Tablet",
+				PackSize:   "10",
+				HSNCode:    "3004",
+				GSTRateBps: 1200,
+			}, fixedNow)
+		if err != nil {
+			t.Fatalf("product.New %d: %v", i, err)
+		}
+		if err := products.Add(ctx, p); err != nil {
+			t.Fatalf("seed product %d: %v", i, err)
+		}
+	}
+
+	if _, err := pool.Exec(ctx, `ANALYZE inventory.products`); err != nil {
+		t.Fatalf("analyze: %v", err)
+	}
+
+	conn, err := pool.Acquire(ctx)
+	if err != nil {
+		t.Fatalf("acquire: %v", err)
+	}
+	defer conn.Release()
+
+	if _, err := conn.Exec(ctx, `SELECT set_config('app.tenant_id', $1, false)`, tid.String()); err != nil {
+		t.Fatalf("set tenant: %v", err)
+	}
+
+	// Same predicate shape as sqlc's ListProductsByTenantPage. First-page
+	// sentinel cursor (max time + max uuid) admits every row.
+	const explainSQL = `
+		EXPLAIN (FORMAT JSON, ANALYZE, BUFFERS)
+		SELECT id, tenant_id, sku, name, dosage_form, pack_size, hsn_code,
+		       gst_rate_bps, manufacturer, is_active,
+		       created_at, updated_at,
+		       is_deleted, deleted_at, deleted_by
+		FROM   inventory.products
+		WHERE  tenant_id = $1::uuid
+		AND    NOT is_deleted
+		AND    (NOT $4::boolean OR is_active = true)
+		AND    ($5::text = ''
+		        OR (lower(sku) || ' ' || lower(name)) ILIKE '%' || lower($5) || '%')
+		AND    (created_at, id) < ($2::timestamptz, $3::uuid)
+		ORDER  BY created_at DESC, id DESC
+		LIMIT  51
+	`
+
+	// Mirror of internal/inventory/adapters/cursor.go sentinels — far-
+	// future timestamp + all-FF UUID make `(created_at, id) < ($, $)`
+	// match every row on the first page.
+	sentinelTime := time.Date(9999, 12, 31, 23, 59, 59, 0, time.UTC)
+	sentinelID := "ffffffff-ffff-ffff-ffff-ffffffffffff"
+
+	var rawPlan []byte
+	if err := conn.QueryRow(ctx, explainSQL,
+		tid.String(), sentinelTime, sentinelID, false, "",
+	).Scan(&rawPlan); err != nil {
+		t.Fatalf("explain: %v", err)
+	}
+
+	planText := string(rawPlan)
+	t.Logf("EXPLAIN plan:\n%s", planText)
+
+	// Primary regression guard: any Index Scan flavour (Index Scan,
+	// Index Scan Backward, Index Only Scan, Bitmap Index Scan) is
+	// acceptable. The bug class we are guarding is "planner ignored
+	// every index + scanned the table".
+	if !strings.Contains(planText, "Index Scan") &&
+		!strings.Contains(planText, "Bitmap Index Scan") {
+		t.Errorf("expected plan to contain Index Scan (any flavour); got:\n%s", planText)
+	}
+	if strings.Contains(planText, `"Node Type": "Seq Scan"`) &&
+		strings.Contains(planText, `"Relation Name": "products"`) {
+		t.Errorf("planner fell back to Seq Scan on inventory.products:\n%s", planText)
+	}
+
+	var parsed []map[string]any
+	if err := json.Unmarshal(rawPlan, &parsed); err != nil {
+		t.Fatalf("plan JSON malformed: %v", err)
+	}
+}

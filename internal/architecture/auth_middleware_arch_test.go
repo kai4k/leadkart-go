@@ -389,7 +389,15 @@ func TestArch_IdempotencyOnMutationEndpoints(t *testing.T) {
 			hasXCmdID := false
 			for _, p := range params {
 				pm, _ := p.(map[string]any)
+				// Inline form: `{ name: X-Command-Id, in: header, ... }`.
 				if name, _ := pm["name"].(string); strings.EqualFold(name, "X-Command-Id") {
+					hasXCmdID = true
+					break
+				}
+				// $ref form: `{ $ref: '#/components/parameters/XCommandId' }`.
+				// Stripe / Auth0 canon: shared parameter components are reused
+				// across operations via $ref, NOT inlined on every op.
+				if ref, _ := pm["$ref"].(string); strings.HasSuffix(ref, "/parameters/XCommandId") {
 					hasXCmdID = true
 					break
 				}
@@ -401,11 +409,10 @@ func TestArch_IdempotencyOnMutationEndpoints(t *testing.T) {
 	}
 
 	if len(violations) > 0 {
-		t.Skip("known violation: openapi.yaml mutation endpoints do not yet " +
-			"document X-Command-Id as a parameter (the middleware enforces it " +
-			"at runtime per ADR 0031 but the spec lags). Tracked in " +
-			"KNOWN_VIOLATIONS.md — close by adding `parameters: [$ref: " +
-			"'#/components/parameters/XCommandId']` to each operation.")
+		t.Errorf("openapi.yaml: %d POST/PUT/PATCH op(s) missing X-Command-Id parameter — add `parameters: [{$ref: '#/components/parameters/XCommandId'}]` (Stripe canon + ADR 0031):", len(violations))
+		for _, v := range violations {
+			t.Logf("  %s", v.op)
+		}
 	}
 }
 

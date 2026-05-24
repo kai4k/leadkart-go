@@ -9,7 +9,14 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 	"github.com/leadkart/leadkart-go/internal/inventory/domain/batch"
 	"github.com/leadkart/leadkart-go/internal/inventory/domain/product"
+	"github.com/leadkart/leadkart-go/internal/inventory/domain/stockmovement"
 )
+
+// Test-local aggregate-ID factories — mirror the production wiring
+// shape (composition root passes `func() <T>.ID { ... }`).
+func testNewProductID() product.ID        { return product.ID(ids.NewV7().String()) }
+func testNewBatchID() batch.ID            { return batch.ID(ids.NewV7().String()) }
+func testNewMovementID() stockmovement.ID { return stockmovement.ID(ids.NewV7().String()) }
 
 // fixedNow is the deterministic instant inventory command tests pass to
 // every domain factory + mutator. Replaces the prior package-global

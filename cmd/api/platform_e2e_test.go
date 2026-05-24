@@ -37,6 +37,9 @@ import (
 	platformcommand "github.com/leadkart/leadkart-go/internal/platform/app/command"
 	platformquery "github.com/leadkart/leadkart-go/internal/platform/app/query"
 	platformports "github.com/leadkart/leadkart-go/internal/platform/ports"
+	"github.com/leadkart/leadkart-go/internal/platform/domain/platformlead"
+	"github.com/leadkart/leadkart-go/internal/platform/domain/unverifiedcontact"
+	"github.com/leadkart/leadkart-go/internal/platform/domain/verificationcall"
 
 	"net/http/httptest"
 )
@@ -80,11 +83,11 @@ func newPlatformE2E(t *testing.T) platformE2E {
 
 	platformApp := platformapp.Application{
 		Commands: platformapp.Commands{
-			CreateUnverifiedContact: platformcommand.NewCreateUnverifiedContactHandler(contacts, now),
-			LogVerificationCall:     platformcommand.NewLogVerificationCallHandler(tx, calls, contacts, now),
-			VerifyUnverifiedContact: platformcommand.NewVerifyUnverifiedContactHandler(tx, contacts, leads, outboxEnq, now),
+			CreateUnverifiedContact: platformcommand.NewCreateUnverifiedContactHandler(contacts, now, func() unverifiedcontact.ID { return unverifiedcontact.ID(ids.NewV7().String()) }),
+			LogVerificationCall:     platformcommand.NewLogVerificationCallHandler(tx, calls, contacts, now, func() verificationcall.ID { return verificationcall.ID(ids.NewV7().String()) }),
+			VerifyUnverifiedContact: platformcommand.NewVerifyUnverifiedContactHandler(tx, contacts, leads, outboxEnq, now, func() platformlead.ID { return platformlead.ID(ids.NewV7().String()) }),
 			RejectUnverifiedContact: platformcommand.NewRejectUnverifiedContactHandler(contacts, now),
-			PurchaseLead:            platformcommand.NewPurchaseLeadHandler(tx, leads, credits, outboxEnq, now),
+			PurchaseLead:            platformcommand.NewPurchaseLeadHandler(tx, leads, credits, outboxEnq, now, func() string { return ids.NewV7().String() }),
 			TopupLeadCredits:        platformcommand.NewTopupLeadCreditsHandler(tx, credits, now),
 		},
 		Queries: platformapp.Queries{

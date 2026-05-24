@@ -123,7 +123,11 @@ func TestArch_NoTODOWithoutTicket(t *testing.T) {
 			if !strings.Contains(ln, "//") {
 				continue
 			}
-			comment := ln[strings.Index(ln, "//"):]
+			idx := strings.Index(ln, "//")
+			if idx < 0 {
+				continue
+			}
+			comment := ln[idx:]
 			m := todoRE.FindStringSubmatch(comment)
 			if m == nil {
 				continue

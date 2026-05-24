@@ -216,7 +216,7 @@ func TestArch_SingleflightWrapsExpensiveMisses(t *testing.T) {
 
 	dir := filepath.Join(internalDir(t), "common", "cache")
 	found := false
-	walkGoFiles(t, dir, false, func(path string, src []byte) {
+	walkGoFiles(t, dir, false, func(_ string, src []byte) {
 		body := string(src)
 		if strings.Contains(body, "singleflight.Group") ||
 			strings.Contains(body, "singleflight.DoChan") {

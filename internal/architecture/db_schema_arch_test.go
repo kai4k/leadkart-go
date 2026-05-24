@@ -532,10 +532,15 @@ func TestArch_PartialUniqueIndexWithSoftDelete(t *testing.T) {
 	}
 
 	if len(violations) > 0 {
-		t.Skip("known violation: partial-unique-index discipline across " +
-			"soft-deleted tables — tracked in KNOWN_VIOLATIONS.md. Most " +
-			"existing unique indexes pre-date the soft-delete pattern + " +
-			"need per-index migration to add the WHERE clause.")
+		t.Logf("PARTIAL-UNIQUE-INDEX VIOLATIONS — %d", len(violations))
+		t.Logf("Per Brandur \"Postgres unique indexes for distributed locks\" + ADR 0027:")
+		t.Logf("  UNIQUE INDEXes on soft-deletable tables MUST carry a partial WHERE clause")
+		t.Logf("  (`WHERE NOT is_deleted` / `WHERE deleted_at IS NULL`) so restoring a row")
+		t.Logf("  doesn't collide with the still-indexed soft-deleted ghost.")
+		t.Logf("  Canonical fix template lives in migrations/20260603000302_partial_unique_indexes_soft_delete.sql.")
+		for _, v := range violations {
+			t.Errorf("%s — unique index %q lacks `WHERE NOT is_deleted` / `WHERE deleted_at IS NULL`", v.file, v.idx)
+		}
 	}
 }
 
@@ -543,15 +548,122 @@ func TestArch_PartialUniqueIndexWithSoftDelete(t *testing.T) {
 // Test 76: TestArch_AuditChainColumnsOnTenantTables
 // ----------------------------------------------------------------------------
 //
-// Tenant-scoped mutable tables SHOULD have `created_by_membership_id
-// uuid` (per the Wave 1.5 audit-chain ADR). Warning-level: skip if
-// any missing + track in KNOWN_VIOLATIONS.md.
+// Wave 1.5 audit-chain discipline (migration 20260507000008 + ADR 0058
+// + ADR 0027). Every tenant-scoped mutable aggregate MUST carry
+// `created_by_membership_id uuid` so the "who created this row" question
+// is answered declaratively, not reconstructed from event streams
+// (Stripe / Plaid / Salesforce shape).
+//
+// Predicate: walk every migrations/*.sql; for every CREATE TABLE that
+// declares a `tenant_id` column, the table must EITHER declare
+// `created_by_membership_id` inside the same CREATE TABLE body OR be
+// extended later via `ALTER TABLE ... ADD COLUMN ... created_by_membership_id`
+// in some subsequent migration.
+//
+// Allow-list (explicit exemptions): global aggregates, session infra,
+// append-only ledgers, outbox tables, and the rolehierarchy / permission*
+// family which carry semantically-equivalent audit columns under
+// different names (`established_by_membership_id`, etc.). Adding to
+// the allow-list requires an ADR-level justification in the PR.
 func TestArch_AuditChainColumnsOnTenantTables(t *testing.T) {
 	t.Parallel()
 
-	t.Skip("known violation: audit-chain columns (created_by_membership_id) " +
-		"not present on every tenant-scoped mutable table — tracked in " +
-		"KNOWN_VIOLATIONS.md. Gap closure pending Wave-N migration sweep.")
+	// Tables that carry a tenant_id column but are exempt from the
+	// `created_by_membership_id` requirement for documented reasons.
+	// Keep grep-able + cited.
+	allowList := map[string]string{
+		// Global / session / infra:
+		"identity.tenants":                 "global aggregate (each row IS a tenant)",
+		"identity.persons":                 "global identity (NOT tenant-scoped)",
+		"identity.refresh_token_families":  "session infrastructure (RFC 9700)",
+		"identity.refresh_tokens":          "session infrastructure (RFC 9700)",
+		"identity.auth_routing":            "cross-tenant routing table (non-RLS)",
+		"identity.processed_messages":      "messaging infra (Watermill bookkeeping)",
+		"identity.outbox":                  "outbox / audit log (ADR 0027)",
+		"platform.outbox":                  "outbox / audit log (ADR 0027)",
+		"inventory.outbox":                 "outbox / audit log (ADR 0027)",
+		"buildingblocks.audit_log_entry":   "audit log sink",
+		"buildingblocks.admin_impersonation_audit": "audit log (ADR 0045)",
+		"app.command_idempotency":          "idempotency infra",
+		// Permission / hierarchy family (carry their own audit columns):
+		"identity.membership_permission_overrides": "permission* family (overlay state)",
+		"identity.permission_requests":             "permission* family (request workflow, has approver_membership_id)",
+		"identity.role_hierarchy_edges":            "rolehierarchy* family (carries established_by_membership_id)",
+		// Append-only ledgers / event-stream aggregates:
+		"inventory.stock_movements":      "event-stream aggregate (carries actor_membership_id)",
+		"platform.verification_calls":    "append-only ledger (carries logged_by_membership_id)",
+		// Platform globals:
+		"platform.platform_leads":  "marketplace global (carries verified_by_membership_id + sold_to_membership_id)",
+		"platform.lead_credits":    "balance aggregate (no creation event)",
+		"platform.unverified_contacts": "platform-only Lead Agent queue (already carries created_by_membership_id NOT NULL)",
+	}
+
+	// Match CREATE TABLE <schema>.<name> ( ... ); for any schema.
+	tableRE := regexp.MustCompile(`(?is)CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?([a-z_][a-z0-9_]*\.[a-z_][a-z0-9_]*)\s*\((.*?)\);`)
+	// Match `tenant_id` declared as a column inside the CREATE TABLE body.
+	hasTenantColRE := regexp.MustCompile(`(?im)^\s*tenant_id\s+uuid\b`)
+	// Match `created_by_membership_id` inside the CREATE TABLE body.
+	hasCreatedByInBody := regexp.MustCompile(`(?im)\bcreated_by_membership_id\b`)
+	// Match an ALTER TABLE ... ADD COLUMN ... created_by_membership_id ...
+	// targeting the given <schema>.<table>. We build the regex per-table
+	// so we can prove the column lands on this specific table.
+	alterAddCol := func(qualified string) *regexp.Regexp {
+		return regexp.MustCompile(`(?is)ALTER\s+TABLE\s+(?:IF\s+EXISTS\s+)?` +
+			regexp.QuoteMeta(qualified) +
+			`\s+ADD\s+COLUMN\s+(?:IF\s+NOT\s+EXISTS\s+)?created_by_membership_id\b`)
+	}
+
+	migs := loadMigrations(t)
+
+	type violation struct {
+		file  string
+		table string
+	}
+	var violations []violation
+
+	for _, m := range migs {
+		stripped := stripSQLComments(m.text)
+		for _, mm := range tableRE.FindAllStringSubmatch(stripped, -1) {
+			table := strings.ToLower(mm[1])
+			body := mm[2]
+			if !hasTenantColRE.MatchString(body) {
+				continue
+			}
+			if _, exempt := allowList[table]; exempt {
+				continue
+			}
+			if hasCreatedByInBody.MatchString(body) {
+				continue
+			}
+			// Search every migration (including ones earlier than `m`,
+			// since CI re-applies the full stack) for an ALTER TABLE that
+			// adds the column to this specific table.
+			found := false
+			altRE := alterAddCol(table)
+			for _, other := range migs {
+				if altRE.MatchString(stripSQLComments(other.text)) {
+					found = true
+					break
+				}
+			}
+			if !found {
+				violations = append(violations, violation{file: m.path, table: table})
+			}
+		}
+	}
+
+	if len(violations) > 0 {
+		t.Logf("AUDIT-CHAIN COLUMN VIOLATIONS — %d", len(violations))
+		t.Logf("Per Wave 1.5 (migration 20260507000008) + ADR 0027 + ADR 0058:")
+		t.Logf("  Every tenant-scoped mutable aggregate MUST carry")
+		t.Logf("  `created_by_membership_id uuid` so authorship is part of row state.")
+		t.Logf("  Add the column via a goose migration in the migrations/ tree,")
+		t.Logf("  or — if the table is genuinely exempt — extend the allowList in")
+		t.Logf("  this test with a one-line rationale citing the ADR / pattern.")
+		for _, v := range violations {
+			t.Errorf("%s — table %s lacks created_by_membership_id (no CREATE TABLE column + no later ALTER TABLE ADD COLUMN)", v.file, v.table)
+		}
+	}
 }
 
 // ----------------------------------------------------------------------------

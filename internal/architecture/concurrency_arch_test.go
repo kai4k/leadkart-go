@@ -217,9 +217,10 @@ func TestArch_GoleakInIntegrationTests(t *testing.T) {
 	}
 
 	if len(violations) > 0 {
-		t.Skip("known violation: not every integration-test package wires " +
-			"goleak.VerifyTestMain — tracked in KNOWN_VIOLATIONS.md. The " +
-			"per-package TestMain refactor is a Wave-N PR.")
+		t.Errorf("integration-test package does not wire goleak.VerifyTestMain — add testmain_integration_test.go (Uber goleak README + ADR 0019):")
+		for _, v := range violations {
+			t.Logf("  %s", v.dir)
+		}
 	}
 }
 

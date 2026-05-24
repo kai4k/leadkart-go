@@ -19,6 +19,7 @@
 package architecture_test
 
 import (
+	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -696,13 +697,21 @@ func TestArch_NoIoReadAllOnRequestBody(t *testing.T) {
 func TestArch_SecurityHeadersMiddlewarePresent(t *testing.T) {
 	t.Parallel()
 
-	// Look for the headers in cmd/api/main.go or in the public
-	// httpmw chain definition. Pragmatic: any file in the wider
-	// httpmw + composition substrate mentioning these headers.
+	// Look for the headers anywhere in the httpmw package (where the
+	// SecurityHeaders middleware lives) or in cmd/api/main.go (the
+	// composition root where they could also be set inline). Substring-
+	// match on the header name string is sufficient; we don't try to
+	// parse the value beyond presence.
 	root := repoRoot(t)
-	candidates := []string{
-		filepath.Join(root, "cmd", "api", "main.go"),
-		filepath.Join(root, "internal", "common", "httpmw", "chain.go"),
+	candidates := []string{filepath.Join(root, "cmd", "api", "main.go")}
+	httpmwDir := filepath.Join(root, "internal", "common", "httpmw")
+	if entries, err := os.ReadDir(httpmwDir); err == nil {
+		for _, e := range entries {
+			if e.IsDir() || !strings.HasSuffix(e.Name(), ".go") || strings.HasSuffix(e.Name(), "_test.go") {
+				continue
+			}
+			candidates = append(candidates, filepath.Join(httpmwDir, e.Name()))
+		}
 	}
 	headers := []string{
 		"X-Content-Type-Options",
@@ -728,7 +737,7 @@ func TestArch_SecurityHeadersMiddlewarePresent(t *testing.T) {
 	}
 
 	if len(missing) > 0 {
-		t.Skipf("composition root missing security headers — tracked in KNOWN_VIOLATIONS.md: %s",
+		t.Errorf("composition root missing OWASP security headers — wire SecurityHeaders() in httpmw.PublicChain (or set the header explicitly): %s",
 			strings.Join(missing, ", "))
 	}
 }

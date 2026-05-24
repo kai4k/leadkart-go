@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/leadkart/leadkart-go/internal/common/ids"
 	"github.com/leadkart/leadkart-go/internal/common/pg"
 	"github.com/leadkart/leadkart-go/internal/platform/domain/platformlead"
 	"github.com/leadkart/leadkart-go/internal/platform/domain/unverifiedcontact"
@@ -39,26 +38,37 @@ type VerifyUnverifiedContactResult struct {
 // domain VerifiedEvent precisely so this handler can drive the wire
 // shape.
 type VerifyUnverifiedContactHandler struct {
-	uow          pg.UnitOfWork
-	contacts     unverifiedcontact.Repository
-	leads        platformlead.Repository
-	outboxEnq    OutboxEnqueuer
-	now          func() time.Time
+	uow       pg.UnitOfWork
+	contacts  unverifiedcontact.Repository
+	leads     platformlead.Repository
+	outboxEnq OutboxEnqueuer
+	now       func() time.Time
+	newLeadID func() platformlead.ID
 }
 
 // NewVerifyUnverifiedContactHandler wires the handler.
+//
+// newLeadID is the PlatformLead-ID factory per the
+// `TestArch_HandlersInjectIDFactory` discipline. Production passes
+// `func() platformlead.ID { return platformlead.ID(ids.NewV7().String()) }`;
+// tests inject a deterministic counter so the minted ID is pinnable.
 func NewVerifyUnverifiedContactHandler(
 	uow pg.UnitOfWork,
 	contacts unverifiedcontact.Repository,
 	leads platformlead.Repository,
 	outboxEnq OutboxEnqueuer,
 	now func() time.Time,
+	newLeadID func() platformlead.ID,
 ) VerifyUnverifiedContactHandler {
+	if newLeadID == nil {
+		panic("command: NewVerifyUnverifiedContactHandler newLeadID required")
+	}
 	if now == nil {
 		now = time.Now
 	}
 	return VerifyUnverifiedContactHandler{
-		uow: uow, contacts: contacts, leads: leads, outboxEnq: outboxEnq, now: now,
+		uow: uow, contacts: contacts, leads: leads, outboxEnq: outboxEnq,
+		now: now, newLeadID: newLeadID,
 	}
 }
 
@@ -80,7 +90,7 @@ func (h VerifyUnverifiedContactHandler) Handle(
 		return VerifyUnverifiedContactResult{}, errors.New("verify: verifiedBy required")
 	}
 
-	leadID := platformlead.ID(ids.NewV7().String())
+	leadID := h.newLeadID()
 	now := h.now()
 
 	err := h.uow.WithinTx(ctx, pg.TxScopePlatform, func(ctx context.Context) error {

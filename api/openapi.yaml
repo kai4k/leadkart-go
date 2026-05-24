@@ -153,6 +153,8 @@ paths:
 
   /api/v1/auth/request-password-reset:
     post:
+      parameters:
+        - $ref: '#/components/parameters/XCommandId'
       tags: [auth]
       summary: Request password reset email
       description: ALWAYS returns 204 regardless of whether the email is registered (Auth0/Okta canon — defeats account enumeration).
@@ -167,6 +169,8 @@ paths:
 
   /api/v1/auth/reset-password:
     post:
+      parameters:
+        - $ref: '#/components/parameters/XCommandId'
       tags: [auth]
       summary: Confirm password reset using emailed token
       security: []
@@ -182,6 +186,8 @@ paths:
 
   /api/v1/auth/change-password:
     post:
+      parameters:
+        - $ref: '#/components/parameters/XCommandId'
       tags: [auth]
       summary: Change own password (authenticated)
       description: Current password verified even when authenticated (security.md "Password change").
@@ -201,6 +207,8 @@ paths:
 
   /api/v1/auth/request-email-change:
     post:
+      parameters:
+        - $ref: '#/components/parameters/XCommandId'
       tags: [auth]
       summary: Request email-change confirmation link (authenticated)
       description: |
@@ -221,6 +229,8 @@ paths:
 
   /api/v1/auth/confirm-email-change:
     post:
+      parameters:
+        - $ref: '#/components/parameters/XCommandId'
       tags: [auth]
       summary: Confirm email change via emailed token
       description: |
@@ -339,6 +349,8 @@ paths:
         '400': { $ref: '#/components/responses/BadRequest' }
 
     post:
+      parameters:
+        - $ref: '#/components/parameters/XCommandId'
       tags: [tenants]
       summary: Register a new tenant + initial admin user
       security: []
@@ -377,7 +389,9 @@ paths:
     patch:
       tags: [tenants]
       summary: Update tenant legal + display name
-      parameters: [{ $ref: '#/components/parameters/TenantId' }]
+      parameters:
+        - $ref: '#/components/parameters/XCommandId'
+        - { $ref: '#/components/parameters/TenantId' }
       requestBody:
         required: true
         content:
@@ -396,7 +410,9 @@ paths:
         Empty strings clear the corresponding declaration; the aggregate
         accepts a zero Statutory VO for tenants that haven't yet
         onboarded their compliance IDs.
-      parameters: [{ $ref: '#/components/parameters/TenantId' }]
+      parameters:
+        - $ref: '#/components/parameters/XCommandId'
+        - { $ref: '#/components/parameters/TenantId' }
       requestBody:
         required: true
         content:
@@ -411,7 +427,9 @@ paths:
     patch:
       tags: [tenants]
       summary: Update tenant admin phone + postal address
-      parameters: [{ $ref: '#/components/parameters/TenantId' }]
+      parameters:
+        - $ref: '#/components/parameters/XCommandId'
+        - { $ref: '#/components/parameters/TenantId' }
       requestBody:
         required: true
         content:
@@ -426,7 +444,9 @@ paths:
     patch:
       tags: [tenants]
       summary: Update tenant password policy
-      parameters: [{ $ref: '#/components/parameters/TenantId' }]
+      parameters:
+        - $ref: '#/components/parameters/XCommandId'
+        - { $ref: '#/components/parameters/TenantId' }
       requestBody:
         required: true
         content:
@@ -441,7 +461,9 @@ paths:
     patch:
       tags: [tenants]
       summary: Update tenant locale / time zone / date format / currency
-      parameters: [{ $ref: '#/components/parameters/TenantId' }]
+      parameters:
+        - $ref: '#/components/parameters/XCommandId'
+        - { $ref: '#/components/parameters/TenantId' }
       requestBody:
         required: true
         content:
@@ -457,7 +479,9 @@ paths:
       tags: [tenants]
       summary: Suspend a tenant (Platform-only)
       description: Reason is mandatory per data-retention.md audit canon.
-      parameters: [{ $ref: '#/components/parameters/TenantId' }]
+      parameters:
+        - $ref: '#/components/parameters/XCommandId'
+        - { $ref: '#/components/parameters/TenantId' }
       requestBody:
         required: true
         content:
@@ -472,7 +496,9 @@ paths:
     post:
       tags: [tenants]
       summary: Activate a pending or suspended tenant (Platform-only)
-      parameters: [{ $ref: '#/components/parameters/TenantId' }]
+      parameters:
+        - $ref: '#/components/parameters/XCommandId'
+        - { $ref: '#/components/parameters/TenantId' }
       responses:
         '204': { description: Tenant activated }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -487,7 +513,9 @@ paths:
         Reason is mandatory (DPDP §12 + SOC2 CC4.1 audit requirement).
         Tenants holding an active SuperAdmin role refuse the transition
         with 422 (`platform_tenant_undeletable`).
-      parameters: [{ $ref: '#/components/parameters/TenantId' }]
+      parameters:
+        - $ref: '#/components/parameters/XCommandId'
+        - { $ref: '#/components/parameters/TenantId' }
       requestBody:
         required: true
         content:
@@ -502,7 +530,9 @@ paths:
     post:
       tags: [tenants]
       summary: Restore a tenant from marked-for-deletion (Platform-only)
-      parameters: [{ $ref: '#/components/parameters/TenantId' }]
+      parameters:
+        - $ref: '#/components/parameters/XCommandId'
+        - { $ref: '#/components/parameters/TenantId' }
       responses:
         '204': { description: Tenant restored }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -567,6 +597,8 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/ListUsersResponse' }
     post:
+      parameters:
+        - $ref: '#/components/parameters/XCommandId'
       tags: [users]
       summary: Create a user (find-or-create-by-email, per Auth0/Entra ID canon)
       requestBody:
@@ -598,7 +630,9 @@ paths:
     patch:
       tags: [users]
       summary: Update user designation + department + status message
-      parameters: [{ $ref: '#/components/parameters/UserId' }]
+      parameters:
+        - $ref: '#/components/parameters/XCommandId'
+        - { $ref: '#/components/parameters/UserId' }
       requestBody:
         required: true
         content:
@@ -612,7 +646,9 @@ paths:
     post:
       tags: [users]
       summary: Deactivate a user (reason required)
-      parameters: [{ $ref: '#/components/parameters/UserId' }]
+      parameters:
+        - $ref: '#/components/parameters/XCommandId'
+        - { $ref: '#/components/parameters/UserId' }
       requestBody:
         required: true
         content:
@@ -625,7 +661,9 @@ paths:
     post:
       tags: [users]
       summary: Reactivate a deactivated user
-      parameters: [{ $ref: '#/components/parameters/UserId' }]
+      parameters:
+        - $ref: '#/components/parameters/XCommandId'
+        - { $ref: '#/components/parameters/UserId' }
       responses:
         '204': { description: Reactivated }
 
@@ -633,7 +671,9 @@ paths:
     post:
       tags: [users]
       summary: Assign a role to a user
-      parameters: [{ $ref: '#/components/parameters/UserId' }]
+      parameters:
+        - $ref: '#/components/parameters/XCommandId'
+        - { $ref: '#/components/parameters/UserId' }
       requestBody:
         required: true
         content:
@@ -662,7 +702,9 @@ paths:
         Empty arrays clear the corresponding overlay. Permission names
         MUST match the closed `permission.IdentityPermissions` catalogue;
         unknown names surface as 422 (`permission_unknown`).
-      parameters: [{ $ref: '#/components/parameters/UserId' }]
+      parameters:
+        - $ref: '#/components/parameters/XCommandId'
+        - { $ref: '#/components/parameters/UserId' }
       requestBody:
         required: true
         content:
@@ -680,7 +722,9 @@ paths:
       description: |
         ManagerID MUST be a Membership in the same tenant — composite FK
         at the schema layer enforces this; cross-tenant ID surfaces as 422.
-      parameters: [{ $ref: '#/components/parameters/UserId' }]
+      parameters:
+        - $ref: '#/components/parameters/XCommandId'
+        - { $ref: '#/components/parameters/UserId' }
       requestBody:
         required: true
         content:
@@ -706,7 +750,9 @@ paths:
         Cross-tenant blast radius — one Person can hold many Memberships;
         the cascade is gated on Platform tier per multi-tenancy.md
         "SuperUser god-mode" + `identity.users.anonymise` permission.
-      parameters: [{ $ref: '#/components/parameters/UserId' }]
+      parameters:
+        - $ref: '#/components/parameters/XCommandId'
+        - { $ref: '#/components/parameters/UserId' }
       responses:
         '204': { description: User anonymised }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -724,6 +770,8 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/ListRolesResponse' }
     post:
+      parameters:
+        - $ref: '#/components/parameters/XCommandId'
       tags: [roles]
       summary: Create a custom role
       requestBody:
@@ -756,7 +804,9 @@ paths:
         Both fields optional. Empty `name` skips rename. Omitting
         `hierarchy_level` (or sending `null`) skips re-level — using a
         pointer field instead of a -1 sentinel keeps the wire shape clean.
-      parameters: [{ $ref: '#/components/parameters/RoleId' }]
+      parameters:
+        - $ref: '#/components/parameters/XCommandId'
+        - { $ref: '#/components/parameters/RoleId' }
       requestBody:
         required: true
         content:
@@ -801,7 +851,9 @@ paths:
 
         Optional `reason` (10-1024 chars) is recorded onto the new
         edge OR the cleared edge for audit.
-      parameters: [{ $ref: '#/components/parameters/RoleId' }]
+      parameters:
+        - $ref: '#/components/parameters/XCommandId'
+        - { $ref: '#/components/parameters/RoleId' }
       requestBody:
         required: true
         content:
@@ -830,7 +882,9 @@ paths:
         Permission names MUST match the closed
         `permission.IdentityPermissions` catalogue; unknown names surface
         as 422 (`permission_unknown`).
-      parameters: [{ $ref: '#/components/parameters/RoleId' }]
+      parameters:
+        - $ref: '#/components/parameters/XCommandId'
+        - { $ref: '#/components/parameters/RoleId' }
       requestBody:
         required: true
         content:
@@ -845,7 +899,9 @@ paths:
     post:
       tags: [roles]
       summary: Grant a single permission to the role
-      parameters: [{ $ref: '#/components/parameters/RoleId' }]
+      parameters:
+        - $ref: '#/components/parameters/XCommandId'
+        - { $ref: '#/components/parameters/RoleId' }
       requestBody:
         required: true
         content:
@@ -860,7 +916,9 @@ paths:
     post:
       tags: [roles]
       summary: Revoke a single permission from the role
-      parameters: [{ $ref: '#/components/parameters/RoleId' }]
+      parameters:
+        - $ref: '#/components/parameters/XCommandId'
+        - { $ref: '#/components/parameters/RoleId' }
       requestBody:
         required: true
         content:
@@ -930,7 +988,9 @@ paths:
         Updates Person.FirstName / Person.LastName — distinct from the
         per-Tenant designation/department/status_message which move via
         PATCH /api/v1/users/{userId}/profile.
-      parameters: [{ $ref: '#/components/parameters/PersonId' }]
+      parameters:
+        - $ref: '#/components/parameters/XCommandId'
+        - { $ref: '#/components/parameters/PersonId' }
       requestBody:
         required: true
         content:
@@ -946,7 +1006,9 @@ paths:
       tags: [platform]
       summary: Globally suspend a Person across all tenants
       description: Reason is mandatory per data-retention.md audit canon.
-      parameters: [{ $ref: '#/components/parameters/PersonId' }]
+      parameters:
+        - $ref: '#/components/parameters/XCommandId'
+        - { $ref: '#/components/parameters/PersonId' }
       requestBody:
         required: true
         content:
@@ -961,7 +1023,9 @@ paths:
     post:
       tags: [platform]
       summary: Lift a previously applied global suspension
-      parameters: [{ $ref: '#/components/parameters/PersonId' }]
+      parameters:
+        - $ref: '#/components/parameters/XCommandId'
+        - { $ref: '#/components/parameters/PersonId' }
       responses:
         '204': { description: Suspension lifted }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -971,7 +1035,9 @@ paths:
     post:
       tags: [platform]
       summary: Anonymise a Person record directly (DPDP §12 / GDPR Art. 17)
-      parameters: [{ $ref: '#/components/parameters/PersonId' }]
+      parameters:
+        - $ref: '#/components/parameters/XCommandId'
+        - { $ref: '#/components/parameters/PersonId' }
       responses:
         '204': { description: Person anonymised }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -1019,6 +1085,8 @@ paths:
 
   /api/v1/platform/impersonation/sessions:
     post:
+      parameters:
+        - $ref: '#/components/parameters/XCommandId'
       tags: [platform]
       summary: Open scoped impersonation session (AWS STS AssumeRole pattern; ADR 0045)
       description: |
@@ -1106,6 +1174,8 @@ paths:
   # ===== PERMISSION REQUESTS (ADR 0055) =================================
   /api/v1/permission-requests:
     post:
+      parameters:
+        - $ref: '#/components/parameters/XCommandId'
       tags: [permission-requests]
       summary: Submit a permission-elevation request
       description: |
@@ -1183,6 +1253,7 @@ paths:
         the requester's membership overlay (single transaction). Caller
         MUST be either the requester's manager OR carry `is_platform=true`.
       parameters:
+        - $ref: '#/components/parameters/XCommandId'
         - { $ref: '#/components/parameters/PermissionRequestId' }
       requestBody:
         required: false
@@ -1212,6 +1283,7 @@ paths:
         Transitions Pending → Denied. `decision_reason` is REQUIRED on
         Deny per ADR 0055 audit canon. Same caller-authorization as Approve.
       parameters:
+        - $ref: '#/components/parameters/XCommandId'
         - { $ref: '#/components/parameters/PermissionRequestId' }
       requestBody:
         required: true
@@ -1242,6 +1314,7 @@ paths:
         requester; cross-caller cancel collapses to 404 per
         ADR 0044 enumeration-safety canon.
       parameters:
+        - $ref: '#/components/parameters/XCommandId'
         - { $ref: '#/components/parameters/PermissionRequestId' }
       responses:
         '204': { description: Cancelled }
@@ -1259,6 +1332,8 @@ paths:
 
   /api/v1/platform/unverified-contacts:
     post:
+      parameters:
+        - $ref: '#/components/parameters/XCommandId'
       tags: [Platform]
       summary: Create a raw unverified contact
       description: Lead Agent registers a new prospect for verification.
@@ -1304,6 +1379,7 @@ paths:
         Records one call attempt against the contact. When `outcome=busy`,
         callback window fields are required; otherwise they MUST be omitted.
       parameters:
+        - $ref: '#/components/parameters/XCommandId'
         - $ref: '#/components/parameters/PathID'
       requestBody:
         required: true
@@ -1332,6 +1408,7 @@ paths:
         fabricate a phantom PlatformLead. Per ADR 0059 review-pass
         H11.
       parameters:
+        - $ref: '#/components/parameters/XCommandId'
         - $ref: '#/components/parameters/PathID'
       responses:
         '201':
@@ -1354,6 +1431,7 @@ paths:
       tags: [Platform]
       summary: Terminally reject an unverified contact
       parameters:
+        - $ref: '#/components/parameters/XCommandId'
         - $ref: '#/components/parameters/PathID'
       requestBody:
         required: true
@@ -1408,6 +1486,7 @@ paths:
         Debits 1 credit from the caller's tenant lead-credit balance + transfers
         the lead to the tenant's CRM (via the LeadPurchasedV1 event consumed by CRM).
       parameters:
+        - $ref: '#/components/parameters/XCommandId'
         - $ref: '#/components/parameters/PathID'
       requestBody:
         required: true
@@ -1432,6 +1511,8 @@ paths:
 
   /api/v1/platform/lead-credits/topup:
     post:
+      parameters:
+        - $ref: '#/components/parameters/XCommandId'
       tags: [Platform]
       summary: Top up a tenant's lead-credit balance (Platform-only)
       requestBody:
@@ -1464,6 +1545,8 @@ paths:
 
   /api/v1/inventory/products:
     post:
+      parameters:
+        - $ref: '#/components/parameters/XCommandId'
       tags: [inventory]
       summary: Create a Product
       description: |
@@ -1555,6 +1638,7 @@ paths:
         deliberately differs from RFC 7396 merge-patch semantics. 422 on
         invariant failure (out-of-range GST bps, oversized name, etc).
       parameters:
+        - $ref: '#/components/parameters/XCommandId'
         - { $ref: '#/components/parameters/ProductId' }
       requestBody:
         required: true
@@ -1597,6 +1681,7 @@ paths:
         in the caller's tenant scope (cross-tenant or missing → 404).
         batch_number is unique per product on live rows.
       parameters:
+        - $ref: '#/components/parameters/XCommandId'
         - { $ref: '#/components/parameters/ProductId' }
       requestBody:
         required: true
@@ -1673,6 +1758,7 @@ paths:
         batch_expired (Inbound on expired batch), conflict (concurrent
         modification after retry cap).
       parameters:
+        - $ref: '#/components/parameters/XCommandId'
         - { $ref: '#/components/parameters/BatchId' }
       requestBody:
         required: true
@@ -1730,6 +1816,18 @@ components:
         for scoped impersonation tokens.
 
   parameters:
+    XCommandId:
+      name: X-Command-Id
+      in: header
+      required: false
+      description: |
+        Per-caller idempotency key (UUIDv4/v7, lowercase). When supplied
+        the server replays the original response within the
+        idempotency-store retention window (24h, Stripe canon). Per
+        ADR 0031 — required by every state-mutating endpoint (POST /
+        PUT / PATCH) except auth/login, auth/refresh, auth/logout
+        (token operations are idempotent at the token-family level).
+      schema: { type: string, format: uuid, minLength: 36, maxLength: 36 }
     Cursor:
       name: cursor
       in: query
