@@ -102,7 +102,7 @@ func bootstrapTestDB(ctx context.Context, ownerDSN, migrationsDir string) error 
 	}
 	defer gooseDB.Close()
 
-	if err := goose.SetDialect("postgres"); err != nil {
+	if err := pg.EnsureGooseDialect(); err != nil {
 		return fmt.Errorf("set dialect: %w", err)
 	}
 	if err := goose.UpContext(ctx, gooseDB, migrationsDir); err != nil {

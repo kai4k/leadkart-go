@@ -37,6 +37,8 @@ import (
 
 	"github.com/pressly/goose/v3"
 
+	"github.com/leadkart/leadkart-go/internal/common/pg"
+
 	// register pgx with database/sql
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
@@ -90,7 +92,7 @@ func run(ctx context.Context) error {
 	if tbl := os.Getenv("GOOSE_TABLE"); tbl != "" {
 		goose.SetTableName(tbl)
 	}
-	if err := goose.SetDialect("postgres"); err != nil {
+	if err := pg.EnsureGooseDialect(); err != nil {
 		return fmt.Errorf("set dialect: %w", err)
 	}
 

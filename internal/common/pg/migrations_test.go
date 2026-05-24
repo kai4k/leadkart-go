@@ -14,6 +14,8 @@ import (
 	"github.com/google/uuid"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/pressly/goose/v3"
+
+	"github.com/leadkart/leadkart-go/internal/common/pg"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
 	"github.com/testcontainers/testcontainers-go/wait"
@@ -75,7 +77,7 @@ func applyMigrations(t *testing.T, dsn string) {
 	}
 	defer db.Close()
 
-	if err := goose.SetDialect("postgres"); err != nil {
+	if err := pg.EnsureGooseDialect(); err != nil {
 		t.Fatalf("set dialect: %v", err)
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)

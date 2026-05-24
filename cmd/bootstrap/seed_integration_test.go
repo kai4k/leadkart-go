@@ -12,6 +12,8 @@ import (
 
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/pressly/goose/v3"
+
+	"github.com/leadkart/leadkart-go/internal/common/pg"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
 	"github.com/testcontainers/testcontainers-go/wait"
@@ -247,7 +249,7 @@ func startTestDB(t *testing.T, ctx context.Context) *sql.DB {
 	if err != nil {
 		t.Fatalf("goose open: %v", err)
 	}
-	if err := goose.SetDialect("postgres"); err != nil {
+	if err := pg.EnsureGooseDialect(); err != nil {
 		_ = gooseDB.Close()
 		t.Fatalf("set dialect: %v", err)
 	}

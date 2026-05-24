@@ -14,6 +14,8 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/pressly/goose/v3"
+
+	"github.com/leadkart/leadkart-go/internal/common/pg"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
 	"github.com/testcontainers/testcontainers-go/wait"
@@ -59,7 +61,7 @@ func inboxFixture(t *testing.T) *pgxpool.Pool {
 		t.Fatalf("goose open: %v", err)
 	}
 	defer gooseDB.Close()
-	if err := goose.SetDialect("postgres"); err != nil {
+	if err := pg.EnsureGooseDialect(); err != nil {
 		t.Fatalf("set dialect: %v", err)
 	}
 	if err := goose.UpContext(ctx, gooseDB, migrationsDir(t)); err != nil {
