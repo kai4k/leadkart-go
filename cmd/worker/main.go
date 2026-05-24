@@ -62,6 +62,9 @@ import (
 	"github.com/leadkart/leadkart-go/internal/common/messaging"
 	"github.com/leadkart/leadkart-go/internal/common/obs"
 	"github.com/leadkart/leadkart-go/internal/common/pg"
+
+	platformadapters "github.com/leadkart/leadkart-go/internal/platform/adapters"
+	platformintegrationevents "github.com/leadkart/leadkart-go/internal/platform/integrationevents"
 )
 
 // Tunings — same shape as cmd/api/main.go so the two binaries' admin
@@ -243,6 +246,12 @@ func run(ctx context.Context, stdout *os.File) error {
 	// onto the inventory.events Watermill topic.
 	inventoryForwarder := inventoryadapters.NewOutboxForwarder(pool, tx, pubsub, inventoryintegrationevents.Topic, 0)
 
+	// Platform-module outbox forwarder (ADR 0059). Sibling of the
+	// identity forwarder — own table, own topic, own goroutine. Slice 1
+	// has no in-process subscriber for platform events; the topic is
+	// still drained so audit-log shape stays consistent.
+	platformForwarder := platformadapters.NewOutboxForwarder(pool, tx, pubsub, platformintegrationevents.Topic, 0)
+
 	router, err := messaging.NewRouter(messaging.Deps{
 		Subscriber:       pubsub,
 		Logger:           logger,
@@ -303,6 +312,13 @@ func run(ctx context.Context, stdout *os.File) error {
 	g.Go(func() error {
 		forwarder.Run(gctx, forwarderPollInterval, forwarderRetryInterval, func(err error) {
 			logger.ErrorContext(gctx, "outbox forwarder", "err", err)
+		})
+		return nil
+	})
+
+	g.Go(func() error {
+		platformForwarder.Run(gctx, forwarderPollInterval, forwarderRetryInterval, func(err error) {
+			logger.ErrorContext(gctx, "platform outbox forwarder", "err", err)
 		})
 		return nil
 	})

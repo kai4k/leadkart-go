@@ -35,6 +35,7 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/ports"
 	"github.com/leadkart/leadkart-go/internal/common/cache"
 	"github.com/leadkart/leadkart-go/internal/common/config"
+	platformapp "github.com/leadkart/leadkart-go/internal/platform/app"
 )
 
 // newTestHybridCache spins an in-process miniredis + wires the
@@ -79,7 +80,7 @@ func TestHTTPFlow_RegisterLoginRefreshLogout(t *testing.T) {
 		t.Fatalf("buildIdentityApp: %v", err)
 	}
 
-	srv := httptest.NewServer(newServer(silentLogger(), wiring.App, buildInventoryApp(pool), wiring.Issuer, wiring.StampValidator))
+	srv := httptest.NewServer(newServer(silentLogger(), wiring.App, platformapp.Application{}, buildInventoryApp(pool), wiring.Issuer, wiring.StampValidator))
 	t.Cleanup(srv.Close)
 
 	full := ids.NewV7().String()
@@ -187,7 +188,7 @@ func TestHTTPFlow_LoginInvalidCredentials_Returns401(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildIdentityApp: %v", err)
 	}
-	srv := httptest.NewServer(newServer(silentLogger(), wiring.App, buildInventoryApp(pool), wiring.Issuer, wiring.StampValidator))
+	srv := httptest.NewServer(newServer(silentLogger(), wiring.App, platformapp.Application{}, buildInventoryApp(pool), wiring.Issuer, wiring.StampValidator))
 	t.Cleanup(srv.Close)
 
 	resp := postJSON(t, srv.URL+"/api/v1/auth/login", ports.LoginRequest{
@@ -283,8 +284,9 @@ func startWiredPostgresForHTTP(t *testing.T) *pgxpool.Pool {
 	}
 	for _, s := range []string{
 		`CREATE ROLE leadkart_app LOGIN PASSWORD 'leadkart_app_pw' NOSUPERUSER NOINHERIT NOCREATEROLE NOCREATEDB`,
-		`GRANT USAGE ON SCHEMA app, identity TO leadkart_app`,
+		`GRANT USAGE ON SCHEMA app, identity, platform TO leadkart_app`,
 		`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA identity TO leadkart_app`,
+		`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA platform TO leadkart_app`,
 		`GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA app TO leadkart_app`,
 	} {
 		if _, err := gooseDB.ExecContext(ctx, s); err != nil {

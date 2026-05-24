@@ -200,6 +200,16 @@ func extractSpecRoutes(path string) ([]routeKey, error) {
 		if !strings.HasPrefix(specPath, "/api/v1/") {
 			continue
 		}
+		// Sibling bounded contexts also live under /api/v1/* (e.g. the
+		// Platform module's verification + marketplace + credits routes
+		// under /api/v1/platform/{unverified-contacts,marketplace,
+		// lead-credits}/...). Identity's drift gate covers identity-
+		// owned routes only; each sibling module ships its own scoped
+		// route_spec_test.go (per ADR 0050 — drift gates are PER-MODULE
+		// since each module owns its corner of the URL space).
+		if isPlatformModuleOwnedPath(specPath) {
+			continue
+		}
 		for verb := range ops {
 			if _, ok := verbs[strings.ToLower(verb)]; !ok {
 				continue
@@ -211,4 +221,22 @@ func extractSpecRoutes(path string) ([]routeKey, error) {
 		}
 	}
 	return out, nil
+}
+
+// isPlatformModuleOwnedPath reports whether p belongs to the Platform
+// bounded context's sub-namespace (ADR 0059). Identity owns the
+// `/api/v1/platform/{tenants,persons,impersonation,stats}/...` operator
+// surface; Platform owns the listed sub-resources. Each module's own
+// route_spec_test.go covers ITS scope; this guard excludes the
+// platform-module space from identity's gate.
+func isPlatformModuleOwnedPath(p string) bool {
+	switch {
+	case p == "/api/v1/platform/unverified-contacts",
+		strings.HasPrefix(p, "/api/v1/platform/unverified-contacts/"),
+		strings.HasPrefix(p, "/api/v1/platform/marketplace/"),
+		p == "/api/v1/platform/lead-credits",
+		strings.HasPrefix(p, "/api/v1/platform/lead-credits/"):
+		return true
+	}
+	return false
 }

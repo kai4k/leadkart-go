@@ -85,6 +85,14 @@ type rolesPermissions struct {
 	View, Create, Update, Delete, Assign, Revoke, Approve string
 }
 
+// platformUnverifiedContactsPermissions, platformMarketplacePermissions,
+// and platformLeadCreditsPermissions cover the Platform bounded context
+// surface added in ADR 0059. The Platform module ports gate on these
+// strings via authn.RequirePermission / RequireAnyPermission.
+type platformUnverifiedContactsPermissions struct{ Manage string }
+type platformMarketplacePermissions struct{ Browse, Purchase string }
+type platformLeadCreditsPermissions struct{ Read, Topup string }
+
 // inventoryCatalogPermissions cover Product master reads + writes
 // (name, SKU, dosage form, pack size, HSN, gst_rate_bps, is_active,
 // soft-delete). Per BRD §6.5 + ADR 0061 (Inventory Slice 1).
@@ -108,11 +116,12 @@ type inventoryPermissions struct {
 // system recognises. Mirror of the .NET `IdentityPermissions` static
 // class. Maintain in lockstep with the intern-table list.
 //
-// Inventory permissions live here (despite being owned by the Inventory
-// bounded context) per the ADR 0036 closed-catalogue rule + ADR 0051
-// "single-module type placement" carve-out: the catalogue is the one
-// place where every recognised permission name is enumerated, so the
-// PermissionResolver + middleware see them as a single closed set.
+// Module-owned permission groups (Platform-context groups +
+// Inventory) are declared here per ADR 0051 "single-module type
+// placement" carve-out: the closed catalogue is the one place where
+// every recognised permission name is enumerated, so the
+// PermissionResolver + middleware see them as a single closed set
+// regardless of which bounded context owns the named action.
 // Adding a new module-owned permission = append to this catalogue +
 // the [allNames] slice. Drift caught at test time
 // (TestAll_NoDuplicates + TestIdentityPermissions_Catalogue).
@@ -122,6 +131,12 @@ var IdentityPermissions = struct {
 	Tenants  tenantsPermissions
 	Users    usersPermissions
 	Roles    rolesPermissions
+
+	// Platform bounded context (ADR 0059) — verification pipeline +
+	// marketplace + lead credits.
+	PlatformUnverifiedContacts platformUnverifiedContactsPermissions
+	PlatformMarketplace        platformMarketplacePermissions
+	PlatformLeadCredits        platformLeadCreditsPermissions
 
 	// Inventory bounded context (ADR 0061) — Product / Batch /
 	// StockMovement aggregates per BRD §6.5.
@@ -169,6 +184,17 @@ var IdentityPermissions = struct {
 		Approve: "identity.roles.approve",
 	},
 
+	PlatformUnverifiedContacts: platformUnverifiedContactsPermissions{
+		Manage: "platform.unverified_contacts.manage",
+	},
+	PlatformMarketplace: platformMarketplacePermissions{
+		Browse:   "platform.marketplace.browse",
+		Purchase: "platform.marketplace.purchase",
+	},
+	PlatformLeadCredits: platformLeadCreditsPermissions{
+		Read:  "platform.lead_credits.read",
+		Topup: "platform.lead_credits.topup",
+	},
 	Inventory: inventoryPermissions{
 		Catalog: inventoryCatalogPermissions{
 			Read:   "inventory.catalog.read",
@@ -195,6 +221,11 @@ func allNames() []string {
 		p.Users.Anonymise, p.Users.UpdatePermissions,
 		p.Roles.View, p.Roles.Create, p.Roles.Update, p.Roles.Delete,
 		p.Roles.Assign, p.Roles.Revoke, p.Roles.Approve,
+
+		// Platform bounded context (ADR 0059).
+		p.PlatformUnverifiedContacts.Manage,
+		p.PlatformMarketplace.Browse, p.PlatformMarketplace.Purchase,
+		p.PlatformLeadCredits.Read, p.PlatformLeadCredits.Topup,
 
 		// Inventory bounded context (ADR 0061).
 		p.Inventory.Catalog.Read, p.Inventory.Catalog.Manage,
