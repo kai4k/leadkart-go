@@ -2,17 +2,18 @@ version: "2"
 
 # LeadKart sqlc config — per ADR 0004 (sqlc + pgx/v5 + squirrel + goose).
 #
-# Generated query types live in their own dedicated `db` subpackage
-# (Brandur Leach / river-queue canon — `internal/dbsqlc` style). The
-# hand-written adapter (repository structs, domain↔row mappers) imports
-# `db` and qualifies references as `db.Queries`, `db.IdentityPerson`,
-# etc. This gives a hard import boundary preventing app/domain code from
-# accidentally pulling in generated query types.
+# Generated query types live in their own dedicated `db` subpackage per
+# bounded context (Brandur Leach / river-queue canon — `internal/dbsqlc`
+# style). The hand-written adapter (repository structs, domain↔row
+# mappers) imports `db` and qualifies references as `db.Queries`,
+# `db.IdentityPerson`, etc. This gives a hard import boundary preventing
+# app/domain code from accidentally pulling in generated query types.
 #
-# Generated files are committed so the build never depends on sqlc being
-# installed at compile time.
+# Each bounded context gets its OWN sqlc target — schema-per-module
+# canon per ADR 0001.
 #
-# Run: `sqlc generate` (or `task generate` once the tool directive is on).
+# Generated files are committed so the build never depends on sqlc
+# being installed at compile time.
 
 sql:
   - engine: postgresql
@@ -30,12 +31,24 @@ sql:
         emit_exact_table_names: false
         emit_enum_valid_method: true
         emit_all_enum_values: false
-        # Generated files: db.go, models.go, querier.go (if emit_interface),
-        # plus per-input-file *.sql.go siblings — all under the `db`
-        # subpackage. Hand-written adapter code lives in the parent
-        # `adapters` package as *_pg.go files importing `db`.
         output_db_file_name: db.go
         output_models_file_name: models.go
-        # uuid + timestamptz mapped to typed Go via pgx/v5 native types
-        # (uuid.UUID + time.Time). No custom overrides needed since each
-        # repo adapter does the domain↔row mapping anyway.
+
+  # Platform bounded context — ADR 0059 (Slice 1).
+  - engine: postgresql
+    queries: internal/platform/adapters/sql
+    schema: migrations
+    gen:
+      go:
+        package: db
+        out: internal/platform/adapters/db
+        sql_package: pgx/v5
+        emit_pointers_for_null_types: true
+        emit_json_tags: false
+        emit_prepared_queries: false
+        emit_interface: false
+        emit_exact_table_names: false
+        emit_enum_valid_method: true
+        emit_all_enum_values: false
+        output_db_file_name: db.go
+        output_models_file_name: models.go

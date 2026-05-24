@@ -59,6 +59,12 @@ import (
 	"github.com/leadkart/leadkart-go/internal/common/obs"
 	"github.com/leadkart/leadkart-go/internal/common/openapi"
 	"github.com/leadkart/leadkart-go/internal/common/pg"
+
+	platformadapters "github.com/leadkart/leadkart-go/internal/platform/adapters"
+	platformapp "github.com/leadkart/leadkart-go/internal/platform/app"
+	platformcommand "github.com/leadkart/leadkart-go/internal/platform/app/command"
+	platformquery "github.com/leadkart/leadkart-go/internal/platform/app/query"
+	platformports "github.com/leadkart/leadkart-go/internal/platform/ports"
 )
 
 // HTTP server timeouts — public listener tuning per OWASP API Security
@@ -269,6 +275,12 @@ func run(ctx context.Context, stdout *os.File, _ []string) error {
 		return fmt.Errorf("build identity app: %w", err)
 	}
 
+	// Platform module wiring (ADR 0059 — Phase 2 Slice 1). Reuses the
+	// same pool + transactor as Identity. Platform HTTP routes use
+	// identity.authn middleware via the verifier + stamp validator
+	// passed from Identity wiring.
+	platformWiring := buildPlatformApp(pool, time.Now)
+
 	// NOTE: outbox forwarder + messaging.Router + subscribers.Register
 	// live in cmd/worker — see that binary's package doc. The API host
 	// only writes integration events (via the per-handler outbox writes
@@ -306,7 +318,7 @@ func run(ctx context.Context, stdout *os.File, _ []string) error {
 		},
 	})
 	publicHandler := otelhttp.NewHandler(
-		mwChain(newServer(logger, wiring.App, wiring.Issuer, wiring.StampValidator)),
+		mwChain(newServer(logger, wiring.App, platformWiring.App, wiring.Issuer, wiring.StampValidator)),
 		"leadkart-api",
 	)
 	srv := &http.Server{
@@ -368,10 +380,17 @@ func run(ctx context.Context, stdout *os.File, _ []string) error {
 // verifier + validator gate authenticated routes. Both must be non-nil
 // for the auth-route block to register; the test that only asserts
 // probe-route absence on the public mux passes (nil, nil).
-func newServer(log *slog.Logger, identityApp app.Application, verifier authn.Verifier, validator authn.StampValidator) http.Handler {
+func newServer(
+	log *slog.Logger,
+	identityApp app.Application,
+	platformApp platformapp.Application,
+	verifier authn.Verifier,
+	validator authn.StampValidator,
+) http.Handler {
 	mux := http.NewServeMux()
 	addRootHelpers(mux)
 	ports.AddRoutes(mux, log, identityApp, verifier, validator)
+	platformports.AddRoutes(mux, log, platformApp, verifier, validator)
 	return mux
 }
 
@@ -590,4 +609,47 @@ func buildIdentityApp(pool *pgxpool.Pool, hybridCache *cache.HybridCache, cfg co
 		},
 		},
 	}, nil
+}
+
+// ----- Platform wiring -------------------------------------------------------
+
+// platformWiringResult is the output of buildPlatformApp — used by run
+// to attach the Platform routes. cmd/worker wires the platform-side
+// outbox forwarder + subscriber router via its own buildPlatformWorker.
+type platformWiringResult struct {
+	App platformapp.Application
+}
+
+// buildPlatformApp wires the Platform module per ADR 0059. Reuses the
+// same pgxpool + transactor as Identity (single DB, schema-per-module
+// per ADR 0001). Returns an Application + the concrete repository
+// pointers — main()'s newServer threads the Application into the HTTP
+// handler tree.
+func buildPlatformApp(pool *pgxpool.Pool, now func() time.Time) platformWiringResult {
+	tx := pg.NewTransactor(pool)
+
+	contacts := platformadapters.NewUnverifiedContactRepository(pool, tx)
+	calls := platformadapters.NewVerificationCallRepository(pool, tx)
+	leads := platformadapters.NewPlatformLeadRepository(pool, tx)
+	credits := platformadapters.NewLeadCreditRepository(pool, tx)
+	contactReader := platformadapters.NewUnverifiedContactReader(pool, tx)
+	outboxEnq := platformadapters.NewOutboxEnqueuer()
+
+	return platformWiringResult{
+		App: platformapp.Application{
+			Commands: platformapp.Commands{
+				CreateUnverifiedContact: platformcommand.NewCreateUnverifiedContactHandler(contacts, now),
+				LogVerificationCall:     platformcommand.NewLogVerificationCallHandler(tx, calls, contacts, now),
+				VerifyUnverifiedContact: platformcommand.NewVerifyUnverifiedContactHandler(tx, contacts, leads, outboxEnq, now),
+				RejectUnverifiedContact: platformcommand.NewRejectUnverifiedContactHandler(contacts, now),
+				PurchaseLead:            platformcommand.NewPurchaseLeadHandler(tx, leads, credits, outboxEnq, now),
+				TopupLeadCredits:        platformcommand.NewTopupLeadCreditsHandler(tx, credits, now),
+			},
+			Queries: platformapp.Queries{
+				ListUnverifiedContacts: platformquery.NewListUnverifiedContactsHandler(contactReader),
+				BrowseMarketplace:      platformquery.NewBrowseMarketplaceHandler(leads),
+				GetLeadCreditBalance:   platformquery.NewGetLeadCreditBalanceHandler(credits),
+			},
+		},
+	}
 }

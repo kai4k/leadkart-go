@@ -49,6 +49,7 @@ import (
 	"github.com/leadkart/leadkart-go/internal/common/config"
 	"github.com/leadkart/leadkart-go/internal/common/messaging"
 	"github.com/leadkart/leadkart-go/internal/common/pg"
+	platformapp "github.com/leadkart/leadkart-go/internal/platform/app"
 )
 
 // invalidationFastPathBudget is the wall-clock budget for the
@@ -134,7 +135,7 @@ func TestSecurityStampInvalidation_PasswordChange_Returns401WithinFastPath(t *te
 		t.Fatal("router did not start within 2s")
 	}
 
-	srv := httptest.NewServer(newServer(silentLogger(), wiring.App, wiring.Issuer, wiring.StampValidator))
+	srv := httptest.NewServer(newServer(silentLogger(), wiring.App, platformapp.Application{}, wiring.Issuer, wiring.StampValidator))
 	t.Cleanup(srv.Close)
 
 	// 1. Register tenant.
