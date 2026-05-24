@@ -28,6 +28,9 @@ func NewRejectUnverifiedContactHandler(
 	contacts unverifiedcontact.Repository,
 	now func() time.Time,
 ) RejectUnverifiedContactHandler {
+	if now == nil {
+		now = time.Now
+	}
 	return RejectUnverifiedContactHandler{contacts: contacts, now: now}
 }
 

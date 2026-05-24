@@ -54,6 +54,9 @@ func NewVerifyUnverifiedContactHandler(
 	outboxEnq OutboxEnqueuer,
 	now func() time.Time,
 ) VerifyUnverifiedContactHandler {
+	if now == nil {
+		now = time.Now
+	}
 	return VerifyUnverifiedContactHandler{
 		uow: uow, contacts: contacts, leads: leads, outboxEnq: outboxEnq, now: now,
 	}

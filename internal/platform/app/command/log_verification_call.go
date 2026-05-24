@@ -56,6 +56,9 @@ func NewLogVerificationCallHandler(
 	contacts unverifiedcontact.Repository,
 	now func() time.Time,
 ) LogVerificationCallHandler {
+	if now == nil {
+		now = time.Now
+	}
 	return LogVerificationCallHandler{uow: uow, calls: calls, contacts: contacts, now: now}
 }
 

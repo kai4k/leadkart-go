@@ -36,6 +36,9 @@ func NewCreateUnverifiedContactHandler(
 	contacts unverifiedcontact.Repository,
 	now func() time.Time,
 ) CreateUnverifiedContactHandler {
+	if now == nil {
+		now = time.Now
+	}
 	return CreateUnverifiedContactHandler{contacts: contacts, now: now}
 }
 

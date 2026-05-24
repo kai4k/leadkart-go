@@ -221,7 +221,7 @@ func (h RefreshHandler) Handle(ctx context.Context, cmd RefreshCommand) (Refresh
 	return RefreshResult{
 		AccessToken:          access,
 		RefreshTokenPlain:    mintPair.Plaintext,
-		AccessTokenExpiresAt: h.now().Add(jwt.AccessTokenTTL),
+		AccessTokenExpiresAt: now.Add(jwt.AccessTokenTTL),
 		PersonID:             p.ID(),
 		TenantID:             tn.ID(),
 		MembershipID:         m.ID(),
