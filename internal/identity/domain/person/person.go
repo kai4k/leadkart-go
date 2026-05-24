@@ -829,7 +829,7 @@ func (p *Person) MarkPasswordChanged() {
 // RegisterFailedLogin records a failed login attempt + applies the
 // NIST 800-63B §5.2.2 lockout rule. Caller supplies `now` so the
 // sliding-window arithmetic stays deterministic + testable (no
-// clock.Now() inside the aggregate for hot-path counters).
+// wall-clock lookup inside the aggregate for hot-path counters).
 //
 // Sliding-window semantics:
 //   - If `now` is more than [LockoutWindow] after the last failure,
