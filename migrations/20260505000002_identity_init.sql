@@ -23,6 +23,9 @@ COMMENT ON SCHEMA identity IS 'LeadKart Identity module — Tenants, Persons, Me
 -- self-resolution at login).
 -- ============================================================================
 
+-- arch-test:opt-out-rls (identity.tenants is the tenant directory itself —
+--   rows ARE tenants; there's no "current tenant" to filter by. Access is
+--   gated at the application layer via is_platform claim.)
 CREATE TABLE identity.tenants (
     id              uuid        PRIMARY KEY,
     slug            text        NOT NULL UNIQUE,
@@ -42,6 +45,9 @@ COMMENT ON TABLE identity.tenants IS 'Tenant aggregate root. Each row IS a tenan
 -- Global identity. Email globally unique system-wide. NOT tenant-scoped.
 -- ============================================================================
 
+-- arch-test:opt-out-rls (identity.persons is the global person directory —
+--   a person spans multiple tenants via memberships. Cross-tenant access
+--   gated by application-layer auth + the per-membership permission overlay.)
 CREATE TABLE identity.persons (
     id               uuid        PRIMARY KEY,
     email            text        NOT NULL UNIQUE CHECK (length(email) <= 254),
@@ -113,6 +119,9 @@ COMMENT ON TABLE identity.tenant_memberships IS 'Per-tenant junction (Person ↔
 -- as data column for context.
 -- ============================================================================
 
+-- arch-test:opt-out-rls (refresh token families are keyed by person_id +
+--   token-hash; isolation is via token-hash uniqueness, not tenant scope.
+--   See comment block above.)
 CREATE TABLE identity.refresh_token_families (
     id            uuid        PRIMARY KEY,
     person_id     uuid        NOT NULL REFERENCES identity.persons(id),
@@ -127,6 +136,8 @@ CREATE INDEX idx_rtfamilies_person ON identity.refresh_token_families (person_id
 CREATE INDEX idx_rtfamilies_active ON identity.refresh_token_families (person_id, tenant_id) WHERE revoked_at IS NULL;
 COMMENT ON TABLE identity.refresh_token_families IS 'Refresh-token family per RFC 9700 §4.13 + ADR 0011. NOT tenant-scoped — session-management infrastructure.';
 
+-- arch-test:opt-out-rls (refresh tokens are keyed by family_id + token_hash;
+--   isolation is via token-hash uniqueness per RFC 9700.)
 CREATE TABLE identity.refresh_tokens (
     id              uuid        PRIMARY KEY,
     family_id       uuid        NOT NULL REFERENCES identity.refresh_token_families(id) ON DELETE CASCADE,
@@ -147,6 +158,9 @@ COMMENT ON TABLE identity.refresh_tokens IS 'Individual tokens within a family. 
 -- (PersonCreated, MembershipActivated, MembershipDeactivated, etc.).
 -- ============================================================================
 
+-- arch-test:opt-out-rls (identity.auth_routing is the global email →
+--   person_id lookup table for login routing — cross-tenant by design.
+--   Per the comment block above + ADR 0033.)
 CREATE TABLE identity.auth_routing (
     email             text        PRIMARY KEY CHECK (length(email) <= 254),
     person_id         uuid        NOT NULL,

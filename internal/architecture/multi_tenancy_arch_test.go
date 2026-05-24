@@ -58,13 +58,10 @@ var tenantOwningSchemas = map[string]bool{
 func TestArch_EveryTenantTableHasRLSAndForce(t *testing.T) {
 	t.Parallel()
 
-	t.Skip("known violation: 21 tenant-scoped tables across identity/" +
-		"inventory/platform migrations declare ENABLE ROW LEVEL SECURITY " +
-		"without the paired FORCE ROW LEVEL SECURITY — tracked in " +
-		"KNOWN_VIOLATIONS.md. The default postgres ENABLE bypasses RLS for " +
-		"the table-owner role used by sqlc generated code in tests; FORCE " +
-		"closes that gap. Migration-only fix (one ALTER per table); scoped " +
-		"to a Wave-N PR.")
+	// Closed: migration 20260603000202_force_rls_on_tenant_tables.sql adds
+	// FORCE ROW LEVEL SECURITY to all 15 ENABLE-without-FORCE tables that
+	// existed at the time the suite first ran. New tables must ship FORCE
+	// in the same migration as ENABLE; this test now guards regression.
 
 	tableRE := regexp.MustCompile(`(?im)^\s*CREATE TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?([a-z_][a-z0-9_]*)\.([a-z_][a-z0-9_]*)\s*\(`)
 	enableRE := regexp.MustCompile(`(?im)\bALTER TABLE\s+([a-z_][a-z0-9_]*\.[a-z_][a-z0-9_]*)\s+ENABLE ROW LEVEL SECURITY`)
@@ -82,6 +79,19 @@ func TestArch_EveryTenantTableHasRLSAndForce(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read migrations/: %v", err)
 	}
+	// First pass — collect ENABLE/FORCE CUMULATIVELY across ALL migrations.
+	// A later migration may ADD FORCE to a table whose CREATE TABLE +
+	// ENABLE landed in an earlier migration; checking per-file would
+	// false-positive that legitimate pattern.
+	enabled := map[string]bool{}
+	forced := map[string]bool{}
+	type tableSite struct {
+		file   string
+		schema string
+		table  string
+	}
+	var tableSites []tableSite
+
 	for _, e := range entries {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".sql") {
 			continue
@@ -93,17 +103,14 @@ func TestArch_EveryTenantTableHasRLSAndForce(t *testing.T) {
 			continue
 		}
 		text := string(raw)
-		// Collect ENABLE + FORCE per qualified name.
-		enabled := map[string]bool{}
-		forced := map[string]bool{}
 		for _, m := range enableRE.FindAllStringSubmatch(text, -1) {
 			enabled[strings.ToLower(m[1])] = true
 		}
 		for _, m := range forceRE.FindAllStringSubmatch(text, -1) {
 			forced[strings.ToLower(m[1])] = true
 		}
-		// Walk CREATE TABLE matches; for each, check the preceding line
-		// for opt-out marker.
+		// Record each CREATE TABLE site (with its surrounding context for
+		// opt-out check) for the SECOND-pass violation report.
 		matches := tableRE.FindAllStringSubmatchIndex(text, -1)
 		for _, m := range matches {
 			schema := strings.ToLower(text[m[2]:m[3]])
@@ -111,35 +118,39 @@ func TestArch_EveryTenantTableHasRLSAndForce(t *testing.T) {
 			if !tenantOwningSchemas[schema] {
 				continue
 			}
-			// Outbox is opted-out: it carries tenant_id but the forwarder
-			// runs as platform; tested in db_schema_arch_test.go.
 			if table == "outbox" {
 				continue
 			}
-			// Check the preceding ~120 chars for the opt-out marker.
-			start := m[0] - 200
+			// 600-char lookback (~10 lines) so the opt-out comment can
+			// carry a multi-line rationale instead of being squeezed.
+			start := m[0] - 600
 			if start < 0 {
 				start = 0
 			}
-			before := text[start:m[0]]
-			if optOutRE.MatchString(before) {
+			if optOutRE.MatchString(text[start:m[0]]) {
 				continue
 			}
-			qname := schema + "." + table
-			if !enabled[qname] {
-				violations = append(violations, violation{
-					file:    path,
-					table:   qname,
-					missing: "ENABLE ROW LEVEL SECURITY",
-				})
-			}
-			if !forced[qname] {
-				violations = append(violations, violation{
-					file:    path,
-					table:   qname,
-					missing: "FORCE ROW LEVEL SECURITY",
-				})
-			}
+			tableSites = append(tableSites, tableSite{file: path, schema: schema, table: table})
+		}
+	}
+
+	// Second pass — for every (non-opted-out, tenant-schema) CREATE TABLE,
+	// check the cumulative enabled+forced maps.
+	for _, ts := range tableSites {
+		qname := ts.schema + "." + ts.table
+		if !enabled[qname] {
+			violations = append(violations, violation{
+				file:    ts.file,
+				table:   qname,
+				missing: "ENABLE ROW LEVEL SECURITY",
+			})
+		}
+		if !forced[qname] {
+			violations = append(violations, violation{
+				file:    ts.file,
+				table:   qname,
+				missing: "FORCE ROW LEVEL SECURITY",
+			})
 		}
 	}
 

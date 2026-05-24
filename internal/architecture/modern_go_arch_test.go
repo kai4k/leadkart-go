@@ -396,11 +396,6 @@ func TestArch_NoFloat64ForMoney(t *testing.T) {
 func TestArch_OmitzeroNotOmitempty(t *testing.T) {
 	t.Parallel()
 
-	t.Skip("known violation: 14 slice/map/pointer fields across identity/" +
-		"inventory/platform DTOs still tag ,omitempty (the pre-Go-1.24 idiom). " +
-		"Tracked in KNOWN_VIOLATIONS.md — mechanical sed-style cleanup PR " +
-		"scheduled for Wave-N.")
-
 	// Match `json:"...,omitempty"` on slice/map/pointer fields.
 	jsonTagRE := regexp.MustCompile(`json:"[^"]*,omitempty"`)
 

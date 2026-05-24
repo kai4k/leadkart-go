@@ -53,7 +53,7 @@ type LoginRequest struct {
 	// label; the boundary guarantees that invariant before the call.
 	// Auth0 / Stripe / GitHub all do this so clients don't have to
 	// compute their own labels.
-	DeviceLabel string `json:"device_label,omitempty"`
+	DeviceLabel string `json:"device_label,omitzero"`
 }
 
 // LoginResponse / RefreshResponse are identical structurally.
@@ -72,7 +72,7 @@ type LoginResponse struct {
 	RefreshToken         string    `json:"refresh_token"`
 	AccessTokenExpiresAt time.Time `json:"access_token_expires_at"`
 	TokenType            string    `json:"token_type"` // always "Bearer"
-	MustChangePassword   bool      `json:"must_change_password,omitempty"`
+	MustChangePassword   bool      `json:"must_change_password,omitzero"`
 }
 
 // ----- Refresh ---------------------------------------------------------------
@@ -87,7 +87,7 @@ type RefreshRequest struct {
 // LogoutRequest — POST /api/v1/auth/logout. Idempotent.
 type LogoutRequest struct {
 	RefreshToken string `json:"refresh_token"`
-	Reason       string `json:"reason,omitempty"`
+	Reason       string `json:"reason,omitzero"`
 }
 
 // ----- Password reset --------------------------------------------------------
@@ -153,14 +153,14 @@ type ChangePasswordRequest struct {
 type AuditEventDto struct {
 	ID            string          `json:"id"`
 	Action        string          `json:"action"`
-	ActorID       string          `json:"actor_id,omitempty"`
-	TenantID      string          `json:"tenant_id,omitempty"`
-	CorrelationID string          `json:"correlation_id,omitempty"`
+	ActorID       string          `json:"actor_id,omitzero"`
+	TenantID      string          `json:"tenant_id,omitzero"`
+	CorrelationID string          `json:"correlation_id,omitzero"`
 	OccurredAt    time.Time       `json:"occurred_at"`
 	DurationMs    int64           `json:"duration_ms"`
 	Succeeded     bool            `json:"succeeded"`
-	FailureReason string          `json:"failure_reason,omitempty"`
-	Payload       json.RawMessage `json:"payload,omitempty"`
+	FailureReason string          `json:"failure_reason,omitzero"`
+	Payload       json.RawMessage `json:"payload,omitzero"`
 }
 
 // ListAuditEventsResponse — keyset-paginated wire shape per ADR
@@ -168,7 +168,7 @@ type AuditEventDto struct {
 type ListAuditEventsResponse struct {
 	Events     []AuditEventDto `json:"events"`
 	HasMore    bool            `json:"has_more"`
-	NextCursor string          `json:"next_cursor,omitempty"`
+	NextCursor string          `json:"next_cursor,omitzero"`
 }
 
 // ----- Omni-search (GET /v1/search) ------------------------------------------
@@ -235,9 +235,9 @@ type CapabilitiesDto struct {
 	MembershipID string              `json:"membership_id"`
 	TenantID     string              `json:"tenant_id"`
 	TenantSlug   string              `json:"tenant_slug"`
-	Email        string              `json:"email,omitempty"`
-	FirstName    string              `json:"first_name,omitempty"`
-	LastName     string              `json:"last_name,omitempty"`
+	Email        string              `json:"email,omitzero"`
+	FirstName    string              `json:"first_name,omitzero"`
+	LastName     string              `json:"last_name,omitzero"`
 	IsPlatform   bool                `json:"is_platform"`
 	IsSuperUser  bool                `json:"is_super_user"`
 	Permissions  []string            `json:"permissions"`
@@ -268,12 +268,12 @@ type UserDto struct {
 	FirstName     string    `json:"first_name"`
 	LastName      string    `json:"last_name"`
 	Status        string    `json:"status"`
-	Designation   string    `json:"designation,omitempty"`
-	Department    string    `json:"department,omitempty"`
-	StatusMessage string    `json:"status_message,omitempty"`
+	Designation   string    `json:"designation,omitzero"`
+	Department    string    `json:"department,omitzero"`
+	StatusMessage string    `json:"status_message,omitzero"`
 	JoinedAt      time.Time `json:"joined_at,omitzero"`
 	LeftAt        time.Time `json:"left_at,omitzero"`
-	ReportsTo     string    `json:"reports_to,omitempty"`
+	ReportsTo     string    `json:"reports_to,omitzero"`
 	RoleIDs       []string  `json:"role_ids"`
 }
 
@@ -287,7 +287,7 @@ type UserDto struct {
 type ListUsersResponse struct {
 	Users      []UserDto `json:"users"`
 	HasMore    bool      `json:"has_more"`
-	NextCursor string    `json:"next_cursor,omitempty"`
+	NextCursor string    `json:"next_cursor,omitzero"`
 }
 
 // UpdateUserProfileRequest — PATCH /api/v1/users/{userId}/profile.
@@ -362,7 +362,7 @@ type PersonDto struct {
 	IsActive               bool      `json:"is_active"`
 	IsAnonymised           bool      `json:"is_anonymised"`
 	IsGloballySuspended    bool      `json:"is_globally_suspended"`
-	GlobalSuspensionReason string    `json:"global_suspension_reason,omitempty"`
+	GlobalSuspensionReason string    `json:"global_suspension_reason,omitzero"`
 	GloballySuspendedAt    time.Time `json:"globally_suspended_at,omitzero"`
 	CreatedAt              time.Time `json:"created_at"`
 	AnonymisedAt           time.Time `json:"anonymised_at,omitzero"`
@@ -415,7 +415,7 @@ type ListTenantsResponse struct {
 type CreateImpersonationSessionRequest struct {
 	TargetTenantID  string `json:"target_tenant_id"`
 	Reason          string `json:"reason"`
-	DurationMinutes int    `json:"duration_minutes,omitempty"`
+	DurationMinutes int    `json:"duration_minutes,omitzero"`
 }
 
 // CreateImpersonationSessionResponse — 201 body. Per ADR 0045
@@ -468,7 +468,7 @@ type PlatformStatsResponse struct {
 	TenantsSuspended  int                  `json:"tenants_suspended"`
 	PersonsTotal      int                  `json:"persons_total"`
 	MembershipsActive int                  `json:"memberships_active"`
-	Deltas            *PlatformStatsDeltas `json:"deltas,omitempty"`
+	Deltas            *PlatformStatsDeltas `json:"deltas,omitzero"`
 }
 
 // PlatformStatsDeltas carries the "Δ in the last <window>" widget data.
@@ -498,7 +498,7 @@ type RoleDto struct {
 	HierarchyLevel  int       `json:"hierarchy_level"`
 	Permissions     []string  `json:"permissions"`
 	CreatedAt       time.Time `json:"created_at"`
-	ParentRoleID    string    `json:"parent_role_id,omitempty"`
+	ParentRoleID    string    `json:"parent_role_id,omitzero"`
 }
 
 // ListRolesResponse — GET /api/v1/roles.
@@ -518,7 +518,7 @@ type ListRolesResponse struct {
 type CreateRoleRequest struct {
 	Name           string `json:"name"`
 	HierarchyLevel int    `json:"hierarchy_level"`
-	ParentRoleID   string `json:"parent_role_id,omitempty"`
+	ParentRoleID   string `json:"parent_role_id,omitzero"`
 }
 
 // CreateRoleResponse — POST /api/v1/roles 201 body.
@@ -532,8 +532,8 @@ type CreateRoleResponse struct {
 // nil-pointer skips re-level (using a pointer instead of -1 sentinel
 // keeps the wire shape clean).
 type UpdateRoleRequest struct {
-	Name           string `json:"name,omitempty"`
-	HierarchyLevel *int   `json:"hierarchy_level,omitempty"`
+	Name           string `json:"name,omitzero"`
+	HierarchyLevel *int   `json:"hierarchy_level,omitzero"`
 }
 
 // ReplaceRolePermissionsRequest — PUT /api/v1/roles/{roleId}/permissions.
@@ -558,7 +558,7 @@ type RolePermissionRequest struct {
 // onto the cleared edge. When supplied must be 10-1024 chars.
 type SetRoleParentRequest struct {
 	ParentRoleID *string `json:"parent_role_id"`
-	Reason       string  `json:"reason,omitempty"`
+	Reason       string  `json:"reason,omitzero"`
 }
 
 // ----- Tenant management -----------------------------------------------------
@@ -579,27 +579,27 @@ type TenantDto struct {
 	ActivatedAt         time.Time          `json:"activated_at,omitzero"`
 	SuspendedAt         time.Time          `json:"suspended_at,omitzero"`
 	DeletionScheduledAt time.Time          `json:"deletion_scheduled_at,omitzero"`
-	DeletionReason      string             `json:"deletion_reason,omitempty"`
-	GSTNumber           string             `json:"gst_number,omitempty"`
-	PANNumber           string             `json:"pan_number,omitempty"`
-	DrugLicenceNumber   string             `json:"drug_licence_number,omitempty"`
-	AdminPhone          string             `json:"admin_phone,omitempty"`
+	DeletionReason      string             `json:"deletion_reason,omitzero"`
+	GSTNumber           string             `json:"gst_number,omitzero"`
+	PANNumber           string             `json:"pan_number,omitzero"`
+	DrugLicenceNumber   string             `json:"drug_licence_number,omitzero"`
+	AdminPhone          string             `json:"admin_phone,omitzero"`
 	AdminAddress        AdminAddressDto    `json:"admin_address"`
 	PasswordPolicy      PasswordPolicyDto  `json:"password_policy"`
-	Locale              string             `json:"locale,omitempty"`
-	TimeZone            string             `json:"time_zone,omitempty"`
-	DateFormat          string             `json:"date_format,omitempty"`
-	Currency            string             `json:"currency,omitempty"`
+	Locale              string             `json:"locale,omitzero"`
+	TimeZone            string             `json:"time_zone,omitzero"`
+	DateFormat          string             `json:"date_format,omitzero"`
+	Currency            string             `json:"currency,omitzero"`
 }
 
 // AdminAddressDto is the postal-address slice of [TenantDto].
 type AdminAddressDto struct {
-	Street    string `json:"street,omitempty"`
-	City      string `json:"city,omitempty"`
-	District  string `json:"district,omitempty"`
-	State     string `json:"state,omitempty"`
-	StateCode string `json:"state_code,omitempty"`
-	Pincode   string `json:"pincode,omitempty"`
+	Street    string `json:"street,omitzero"`
+	City      string `json:"city,omitzero"`
+	District  string `json:"district,omitzero"`
+	State     string `json:"state,omitzero"`
+	StateCode string `json:"state_code,omitzero"`
+	Pincode   string `json:"pincode,omitzero"`
 }
 
 // PasswordPolicyDto is the password-policy slice of [TenantDto].
@@ -687,8 +687,8 @@ type ListSessionsResponse struct {
 // alive (Auth0 / Okta default — "sign me out of OTHER devices").
 // Reason is an audit string; defaults to "user_revoked_all" server-side.
 type RevokeAllSessionsRequest struct {
-	ExceptCurrent bool   `json:"except_current,omitempty"`
-	Reason        string `json:"reason,omitempty"`
+	ExceptCurrent bool   `json:"except_current,omitzero"`
+	Reason        string `json:"reason,omitzero"`
 }
 
 // RevokeAllSessionsResponse — DELETE /api/v1/auth/sessions response.
@@ -705,7 +705,7 @@ type RevokeAllSessionsResponse struct {
 // pass 0) to use the default 7-day window. `reason` MUST be ≥10 chars.
 type CreatePermissionRequestRequest struct {
 	Permission   string `json:"permission"`
-	DurationDays int    `json:"duration_days,omitempty"`
+	DurationDays int    `json:"duration_days,omitzero"`
 	Reason       string `json:"reason"`
 }
 
@@ -716,7 +716,7 @@ type CreatePermissionRequestRequest struct {
 // requester has no manager (then only Platform operators can approve).
 type CreatePermissionRequestResponse struct {
 	RequestID            string `json:"request_id"`
-	ApproverMembershipID string `json:"approver_membership_id,omitempty"`
+	ApproverMembershipID string `json:"approver_membership_id,omitzero"`
 	Status               string `json:"status"` // always "pending" on the 201 path
 }
 
@@ -725,7 +725,7 @@ type CreatePermissionRequestResponse struct {
 // `decision_reason` is OPTIONAL on Approve (audit-friendly when set,
 // not required). Max length 1024 chars per the DB CHECK.
 type ApprovePermissionRequestRequest struct {
-	DecisionReason string `json:"decision_reason,omitempty"`
+	DecisionReason string `json:"decision_reason,omitzero"`
 }
 
 // DenyPermissionRequestRequest — POST /api/v1/permission-requests/{id}/deny.
@@ -746,9 +746,9 @@ type PermissionRequestDto struct {
 	DurationDays          int       `json:"duration_days"`
 	Reason                string    `json:"reason"`
 	State                 string    `json:"state"`
-	ApproverMembershipID  string    `json:"approver_membership_id,omitempty"`
+	ApproverMembershipID  string    `json:"approver_membership_id,omitzero"`
 	DecidedAt             time.Time `json:"decided_at,omitzero"`
-	DecisionReason        string    `json:"decision_reason,omitempty"`
+	DecisionReason        string    `json:"decision_reason,omitzero"`
 	ExpiresAt             time.Time `json:"expires_at,omitzero"`
 	CreatedAt             time.Time `json:"created_at"`
 	UpdatedAt             time.Time `json:"updated_at"`
@@ -761,7 +761,7 @@ type PermissionRequestDto struct {
 type ListPermissionRequestsResponse struct {
 	Requests   []PermissionRequestDto `json:"requests"`
 	HasMore    bool                   `json:"has_more"`
-	NextCursor string                 `json:"next_cursor,omitempty"`
+	NextCursor string                 `json:"next_cursor,omitzero"`
 }
 
 // ----- Errors ----------------------------------------------------------------
@@ -795,17 +795,17 @@ type ListPermissionRequestsResponse struct {
 //	}
 type ErrorResponse struct {
 	// RFC 9457 Problem Details fields.
-	Type   string `json:"type,omitempty"`
-	Title  string `json:"title,omitempty"`
-	Status int    `json:"status,omitempty"`
-	Detail string `json:"detail,omitempty"`
+	Type   string `json:"type,omitzero"`
+	Title  string `json:"title,omitzero"`
+	Status int    `json:"status,omitzero"`
+	Detail string `json:"detail,omitzero"`
 
 	// LeadKart legacy fields (kept for backward compat).
 	Error   string `json:"error"`             // machine-parseable code
-	Message string `json:"message,omitempty"` // human-readable
+	Message string `json:"message,omitzero"` // human-readable
 
 	// Field-level errors (RFC 9457 §3.1 extension; key = JSON field
 	// name, value = list of error messages). Populated by validation
 	// failures; nil for non-validation errors.
-	Errors map[string][]string `json:"errors,omitempty"`
+	Errors map[string][]string `json:"errors,omitzero"`
 }

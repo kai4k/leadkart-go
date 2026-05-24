@@ -41,7 +41,7 @@ type CreateProductRequest struct {
 	PackSize     string `json:"pack_size"`
 	HSNCode      string `json:"hsn_code"`
 	GSTRateBps   int    `json:"gst_rate_bps"`
-	Manufacturer string `json:"manufacturer,omitempty"`
+	Manufacturer string `json:"manufacturer,omitzero"`
 }
 
 // CreateProductResponse — 201 body.
@@ -62,17 +62,17 @@ type CreateProductResponse struct {
 // unchanged omit it entirely. Slice 2 may add a `json.RawMessage`-based
 // decoder if a true null-clears semantic becomes required.
 type UpdateProductRequest struct {
-	Name         *string `json:"name,omitempty"`
-	GSTRateBps   *int    `json:"gst_rate_bps,omitempty"`
-	IsActive     *bool   `json:"is_active,omitempty"`
-	Manufacturer *string `json:"manufacturer,omitempty"`
+	Name         *string `json:"name,omitzero"`
+	GSTRateBps   *int    `json:"gst_rate_bps,omitzero"`
+	IsActive     *bool   `json:"is_active,omitzero"`
+	Manufacturer *string `json:"manufacturer,omitzero"`
 }
 
 // ListProductsResponse — GET /api/v1/inventory/products page.
 type ListProductsResponse struct {
 	Items      []ProductDto `json:"items"`
 	HasMore    bool         `json:"has_more"`
-	NextCursor string       `json:"next_cursor,omitempty"`
+	NextCursor string       `json:"next_cursor,omitzero"`
 }
 
 // ----- Batch -----------------------------------------------------------------
@@ -115,7 +115,7 @@ type AddBatchResponse struct {
 type ListBatchesResponse struct {
 	Items      []BatchDto `json:"items"`
 	HasMore    bool       `json:"has_more"`
-	NextCursor string     `json:"next_cursor,omitempty"`
+	NextCursor string     `json:"next_cursor,omitzero"`
 }
 
 // ----- StockMovement ---------------------------------------------------------
@@ -137,7 +137,7 @@ type MovementDto struct {
 	QuantityOnHandAfter int64     `json:"quantity_on_hand_after"`
 	Reason              string    `json:"reason"`
 	ActorMembershipID   string    `json:"actor_membership_id"`
-	SourceReference     *string   `json:"source_reference,omitempty"`
+	SourceReference     *string   `json:"source_reference,omitzero"`
 	OccurredAt          time.Time `json:"occurred_at"`
 }
 
@@ -150,7 +150,7 @@ type LogMovementRequest struct {
 	Type            string  `json:"type"`
 	Quantity        int64   `json:"quantity"`
 	Reason          string  `json:"reason"`
-	SourceReference *string `json:"source_reference,omitempty"`
+	SourceReference *string `json:"source_reference,omitzero"`
 }
 
 // LogMovementResponse — 201 body. Returns the new MovementID + the
@@ -164,7 +164,7 @@ type LogMovementResponse struct {
 type ListMovementsResponse struct {
 	Items      []MovementDto `json:"items"`
 	HasMore    bool          `json:"has_more"`
-	NextCursor string        `json:"next_cursor,omitempty"`
+	NextCursor string        `json:"next_cursor,omitzero"`
 }
 
 // ----- Error envelope --------------------------------------------------------
@@ -174,14 +174,14 @@ type ListMovementsResponse struct {
 // per-module decouples wire-shape iterations between bounded contexts.
 type ErrorResponse struct {
 	// RFC 9457 fields
-	Type   string `json:"type,omitempty"`
-	Title  string `json:"title,omitempty"`
-	Status int    `json:"status,omitempty"`
-	Detail string `json:"detail,omitempty"`
+	Type   string `json:"type,omitzero"`
+	Title  string `json:"title,omitzero"`
+	Status int    `json:"status,omitzero"`
+	Detail string `json:"detail,omitzero"`
 	// LeadKart legacy fields
-	Error   string              `json:"error,omitempty"`
-	Message string              `json:"message,omitempty"`
-	Errors  map[string][]string `json:"errors,omitempty"`
+	Error   string              `json:"error,omitzero"`
+	Message string              `json:"message,omitzero"`
+	Errors  map[string][]string `json:"errors,omitzero"`
 }
 
 // Error codes — snake_case enum surfaced in the legacy `error` field.

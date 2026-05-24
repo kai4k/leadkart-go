@@ -23,7 +23,7 @@ type StockMovementLoggedV1 struct {
 	Quantity          int64     `json:"quantity"`
 	NewQuantityOnHand int64     `json:"new_quantity_on_hand"`
 	ActorMembershipID uuid.UUID `json:"actor_membership_id"`
-	SourceReference   *string   `json:"source_reference,omitempty"`
+	SourceReference   *string   `json:"source_reference,omitzero"`
 	OccurredAtUTC     time.Time `json:"occurred_at_utc"`
 }
 

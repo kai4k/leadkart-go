@@ -8,23 +8,28 @@ invasive (>50 LOC) and a separate cleanup PR is the right scope.
 
 ## Current state — 2026-05-24
 
-**98 tests total. 12 currently skipped (≤15 budget per the brief).**
+**98 tests total. 10 currently skipped (≤15 budget per the brief).**
 
 The May 2026 reorganization expanded the suite from 19 to 98 tests
 organised by 14 design principles. The original 19 tests are all
 preserved (some renamed / relocated; none deleted). The new tests
-discovered legitimate architectural debt that the codebase had been
-silently accumulating; each violation is tracked here with a
-mitigation plan.
+discovered legitimate architectural debt; we closed the highest-leverage
+violations inline (RLS+FORCE security gap + omitzero modernisation) and
+track the remainder here with mitigation plans.
+
+## Inline-closed during initial suite ship
+
+| Test | Closure |
+|---|---|
+| `TestArch_EveryTenantTableHasRLSAndForce` (P6) | Migration `20260603000202_force_rls_on_tenant_tables.sql` adds FORCE ROW LEVEL SECURITY to 15 tenant-scoped tables. Round-2 reviewer escalated this from Wave-N → Wave-A as a security-class gap (table-owner role bypassed RLS without FORCE per PG §5.8). Also extended test's lookback window from 200 → 600 chars + added `arch-test:opt-out-rls` markers on 6 non-tenant-scoped tables (tenants directory, persons directory, refresh-token families/tokens, auth_routing, processed_messages). |
+| `TestArch_OmitzeroNotOmitempty` (P9) | 14 slice/map/pointer DTO fields across identity + inventory + platform updated from `,omitempty` → `,omitzero` (Go 1.24+ idiom). Per Russ Cox 2024 release notes. |
 
 ## Live skip register
 
 | # | Test | Type | Why skipped | Mitigation |
 |---|---|---|---|---|
 | 1 | `TestArch_HandlersInjectIDFactory` (P1) | unconditional | 12 command handlers across identity/inventory/platform mint aggregate IDs inline via `ids.NewV7()` instead of an injected `idFactory` field. | Refactor PR — add `idFactory func() <T>.ID` to each handler; thread through composition root + test fakes. Estimated scope: 1 day. |
-| 2 | `TestArch_EveryTenantTableHasRLSAndForce` (P6) | unconditional | 21 tenant-scoped tables declare `ENABLE ROW LEVEL SECURITY` without paired `FORCE ROW LEVEL SECURITY`. | One ALTER per table in a single migration; verify with `task ci:migrations`. Scoped to a Wave-N PR. |
-| 3 | `TestArch_OmitzeroNotOmitempty` (P9) | unconditional | 14 slice/map/pointer DTO fields tag `,omitempty` (the pre-Go-1.24 idiom). | Mechanical sed cleanup; one-line replace per file. |
-| 4 | `TestArch_IdempotencyOnMutationEndpoints` (P7) | conditional | OpenAPI spec doesn't document `X-Command-Id` as a parameter on POST/PUT/PATCH ops, though the middleware enforces it at runtime. | Add `$ref: '#/components/parameters/XCommandId'` to each mutation op. Spec-only change. |
+| 2 | `TestArch_IdempotencyOnMutationEndpoints` (P7) | conditional | OpenAPI spec doesn't document `X-Command-Id` as a parameter on POST/PUT/PATCH ops, though the middleware enforces it at runtime. | Add `$ref: '#/components/parameters/XCommandId'` to each mutation op. Spec-only change. |
 | 5 | `TestArch_HandlerEntryExitLogs` (P12) | conditional | Not every command `Handle` method logs entry/exit. | Pragmatic note: the requestlog middleware already logs per-HTTP-request. The handler-level log is a refinement, not a security gap. |
 | 6 | `TestArch_CorrelationIDPropagation` (P12) | conditional | Not every ctx-bearing function uses `slog.<Level>Context` instead of `slog.<Level>`. | Mechanical sed across handlers + adapters; thread ctx through. |
 | 7 | `TestArch_OTelSpansOnExternalCalls` (P12) | unconditional | Not every external-call adapter opens an explicit OTel span. | `otelpgx` + `otelhttp` already auto-instrument the wire layer; explicit business-surface spans are a Wave-N follow-up. |

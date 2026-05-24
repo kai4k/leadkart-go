@@ -87,12 +87,12 @@ type Claims struct {
 	SecurityStamp string   `json:"security_stamp"`
 	IsPlatform    bool     `json:"is_platform"`
 	IsSuperUser   bool     `json:"is_super_user"`
-	Permissions   []string `json:"permission,omitempty"` // multi-valued
+	Permissions   []string `json:"permission,omitzero"` // multi-valued
 
 	// Act carries the RFC 8693 actor claim for impersonation tokens.
 	// Nil for regular tokens. Read-only at the verification layer;
 	// only the Issue() path populates it.
-	Act *ActClaim `json:"act,omitempty"`
+	Act *ActClaim `json:"act,omitzero"`
 }
 
 // ActClaim is the RFC 8693 §4.1 actor claim payload — identifies the
