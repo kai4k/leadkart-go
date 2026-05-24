@@ -235,3 +235,6 @@ This ADR seals the design. Code lands in **Wave 4 PR** (separate, ~3 days work):
 - ADR 0039 — Per-request scope selection (the canonical scope mechanism; this ADR ships the "sustained" path).
 - ADR 0042 — Cache TTL strategy (CapabilitiesTTL keyed by stamp — impersonation tokens reuse the same key shape).
 - ADR 0044 — Enumeration safety (the impersonation endpoint inherits the platform-only protection).
+
+
+**Fitness function:** convention-only — not mechanically expressible. Scoped-JWT shape is enforced inside the impersonation handler's unit tests + the RFC 8693 act-claim integration test.

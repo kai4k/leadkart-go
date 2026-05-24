@@ -104,3 +104,6 @@ This pattern applies to every module that adopts sqlc going forward — Platform
 - [ThreeDotsLabs Wild Workouts — `internal/trainings/adapters/`](https://github.com/ThreeDotsLabs/wild-workouts-go-ddd-example/tree/master/internal/trainings/adapters) — TDL canonical adapter shape; co-locates generated gRPC stubs with hand-written repositories. Considered as Pattern A's strongest reference but rejected because Wild Workouts doesn't use sqlc + the gRPC analogue is structural-only.
 - [TDL blog — The Repository pattern in Go](https://threedots.tech/post/repository-pattern-in-go/) — endorses sqlc for new projects but explicitly does not prescribe a layout.
 - ADR 0004 — `sqlc + pgx/v5 + squirrel + goose` (locks the stack; this ADR refines the layout).
+
+
+**Fitness function:** convention-only — not mechanically expressible. sqlc generates into `internal/<module>/adapters/db/`; layout is enforced by `sqlc.yaml`.

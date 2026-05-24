@@ -145,3 +145,6 @@ Only when the cost/freshness profile genuinely differs from existing groups. Don
 - ADR 0015 — Caching: ristretto + redis/go-redis/v9 + singleflight (the substrate this ADR layers TTL policy onto).
 - ADR 0028 — SecurityStampCache + stale-write fence (the canonical caller using SecurityStampTTL).
 - ADR 0040 — Search strategy (cite-back: `?delta_window` closed-set rule prevents cache-key explosion; this ADR adds the TTL for the chosen keys).
+
+
+**Fitness function:** convention-only — not mechanically expressible. Per-profile TTLs live as constants in `internal/common/cache`; runtime behaviour exercised by unit tests.

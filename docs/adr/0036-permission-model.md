@@ -119,3 +119,6 @@ The `is_platform` claim and `is_super_user` claim are independent in v0.2. The P
 - LeadKart .NET — `IdentityPermissions` static class, `IdentityPermissionResolver`, `RequirePermissionFilter` (mirror reference for Go port).
 - LeadKart .NET — `multi-tenancy.md` "SuperUser god-mode" + `security.md` "Access token" + "SecurityStamp rotation triggers".
 - Phase 1 implementation tasks 1-26: closed-set catalog (Tasks 1-4), Role aggregate (5-10), Membership overlay + EffectivePermissions resolver (11-14), persistence (15-18), seed (19-20), Resolver service (21), JWT wiring (22), middleware (23-24), V1 events (25), E2E proof (26).
+
+
+**Fitness function:** convention-only — not mechanically expressible. Closed-set catalog + permission overlay shape is a domain-modelling decision; tested via the permission-resolver unit tests.

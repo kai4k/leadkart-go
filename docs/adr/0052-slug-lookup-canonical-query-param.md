@@ -112,3 +112,6 @@ OpenAPI marks it `deprecated: true` with a description pointing at the canonical
 - Anthropic API docs — listing-with-filter shape
 - Microsoft Graph API — query-shaped lookups via $filter
 - GitHub REST API — search endpoints (query-shaped)
+
+
+**Fitness function:** convention-only — not mechanically expressible. URL design rule — observed in the OpenAPI spec + per-handler routing.

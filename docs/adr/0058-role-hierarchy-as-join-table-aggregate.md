@@ -113,3 +113,10 @@ The DOWN step is lossless for the dominant case — re-populates `roles.parent_r
 - ADR 0054 — Role hierarchy (superseded).
 - ADR 0047 — Layer-boundary discipline (handler depends on `rolehierarchy.Repository` interface only).
 - PostgreSQL docs §38.7 — SECURITY DEFINER footguns (motivates moving away from it).
+
+
+## Fitness function
+
+`TestArch_AggregatesHaveFactoryAndUnmarshal + TestArch_RepositoriesHaveUpdateByIDFn` (in `internal/architecture/`).
+
+`rolehierarchy.Edge` is an aggregate with the canonical New/UnmarshalFromDB pair + Repository.UpdateByID.

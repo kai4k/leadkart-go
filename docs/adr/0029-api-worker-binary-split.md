@@ -55,3 +55,6 @@ The split is a deploy-shape change only. v0.2 single-replica dev environments ru
 - LeadKart `.NET .claude/rules/messaging.md` — "subscribers without a producer (or producers without a consumer) = dead code that lies about behaviour" — the canon that flagged the silent-prod-gap failure mode.
 - [Mat Ryer 2024 — "How I write HTTP services in Go after 13 years"](https://grafana.com/blog/2024/02/09/how-i-write-http-services-in-go-after-13-years/) — `NewServer` composition pattern preserved on both binaries.
 - ADR 0008 (Watermill messaging) + ADR 0010 (river jobs) + ADR 0014 (OTel) — all extend cleanly to two binaries.
+
+
+**Fitness function:** convention-only — not mechanically expressible. Binary split is a build-time decision verified by `task build` producing two distinct artifacts.

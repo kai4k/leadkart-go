@@ -177,3 +177,6 @@ On Approve, the membership overlay changes → `PermissionsUpdatedEvent` fires �
 - ADR 0045 — Scoped JWT impersonation (related JIT pattern in a different plane).
 - ADR 0049 — URL design rules (sub-resource verbs for state transitions).
 - ADR 0054 — Role hierarchy (the org tree this ADR's approver-discovery rule consumes via `Membership.ReportsTo()`).
+
+
+**Fitness function:** convention-only — not mechanically expressible. Workflow state machine + invariants tested at the aggregate level (`permissionrequest_test.go`).

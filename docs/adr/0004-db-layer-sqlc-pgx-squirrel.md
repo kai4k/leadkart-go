@@ -78,3 +78,10 @@ If, mid-execution:
 - [Glukhov — Comparing Go ORMs Sept 2025](https://www.glukhov.org/post/2025/09/comparing-go-orms-gorm-ent-bun-sqlc/).
 - [Bytebase — Choose the Right Go ORM 2025](https://www.bytebase.com/blog/golang-orm-query-builder/).
 - [efectn/go-orm-benchmarks](https://github.com/efectn/go-orm-benchmarks/blob/master/results.md) — benchmark numbers.
+
+
+## Fitness function
+
+`TestArch_NoBannedDeps + TestArch_RepositoriesHaveUpdateByIDFn` (in `internal/architecture/`).
+
+`gorm.io/*` / `entgo.io/*` / `bob.io/*` blocked as direct go.mod requires; every aggregate Repository declares the TDL `UpdateByID(ctx, id, fn)` closure (append-only exceptions documented in the test).

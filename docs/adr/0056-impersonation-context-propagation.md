@@ -189,3 +189,10 @@ Same naming canon as the existing `HeaderTenantID` / `HeaderEventType`.
 - ADR 0047 — Layer-boundary discipline (drove the `app/actclaim` placement decision).
 - LeadKart `.NET .claude/rules/audit-checklist.md §12` — audit-log outage MUST NOT cascade.
 - ThreeDotsLabs Watermill — message metadata vs payload conventions.
+
+
+## Fitness function
+
+`TestArch_OutboxTableSchema` (in `internal/architecture/`).
+
+Outbox tables MUST carry the act_operator_id / act_session_id / act_reason columns (verified columnset in TestArch_OutboxTableSchema accepts these as expected-but-optional; the audit-log enrichment is exercised by the impersonation integration test).

@@ -185,3 +185,10 @@ Test files are exempt — fixtures may wire real adapters against testcontainers
 - Brandur Leach — *"Implementing Stripe-like Idempotency Keys in Postgres"* + river-queue source (ctx-propagated tx pattern as canonical Go shape).
 - Dave Cheney — *"Practical Go: Real-world advice for writing maintainable Go programs"* §"Accept interfaces, return structs."
 - Russ Cox — Go blog "Codebase Refactoring (with help from Go)" (the principle of consumer-defined interfaces).
+
+
+## Fitness function
+
+`TestArch_AppDoesntImportPorts + TestArch_PortsAdaptersDontDefineInterfaces` (in `internal/architecture/`).
+
+app/ may not import ports/; interfaces live with their consumer (domain/app) not their implementation (adapters/ports).

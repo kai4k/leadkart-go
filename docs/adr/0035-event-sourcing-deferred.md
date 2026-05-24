@@ -60,3 +60,6 @@ When considering ES for a specific aggregate in v0.2+:
 - [Brandur Leach — There's always an events table](https://brandur.org/fragments/events) — explicitly rejects ES for typical SaaS.
 - [TDL esja library](https://github.com/ThreeDotsLabs/esja) — reference for if/when ES becomes justified per-aggregate.
 - LeadKart .NET — `architecture.md` Greg Young rules section (mirror reference).
+
+
+**Fitness function:** convention-only — not mechanically expressible. "No event sourcing at v0.1" is the negative of a presence assertion; nothing to mechanically detect.

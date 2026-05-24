@@ -151,3 +151,6 @@ Content-Type: application/json
 - Auth0 anti-brute-force docs — 10/15min/15min defaults + per-account lock model.
 - Okta password-policy lockout — same defaults as Auth0.
 - Stripe API error model — distinct 423 surface for account-suspended states.
+
+
+**Fitness function:** convention-only — not mechanically expressible. MustChangePassword flag + NIST 800-63B §5.2.2 lockout policy are covered by the lockout unit tests + login integration tests.

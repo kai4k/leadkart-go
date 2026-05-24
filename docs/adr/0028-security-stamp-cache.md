@@ -67,3 +67,6 @@ Cascade-side invalidation: `RevokeFamiliesOnSecurityChange` (Watermill subscribe
 - [`golang.org/x/sync/singleflight` godoc](https://pkg.go.dev/golang.org/x/sync/singleflight) — concurrent-miss coalescing.
 - [Auth0 — "Session Management" canon](https://auth0.com/docs/secure/tokens/access-tokens) — ~30s session-validation refresh window.
 - LeadKart `.NET .claude/rules/audit-checklist.md §12b` "Cache facade per concern" + "Proof-of-cache test" rules — same canon Go ports.
+
+
+**Fitness function:** convention-only — not mechanically expressible. SecurityStampCache invalidation is a runtime behaviour exercised by the integration tests; the cache's interface (`PersonStampReader`) is observed in code review.

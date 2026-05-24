@@ -64,3 +64,6 @@ Auditing: every replay attempt is recorded via `audit.Writer.Write` so operators
 - LeadKart `.NET .claude/rules/messaging.md` "X-Command-Id accepted on mutating HTTP commands."
 - ADR 0030 (canonical middleware chain) — composition placement.
 - ADR 0008 (Watermill) + ADR 0027 (audit log outbox) — sibling dedup layers; this ADR defines the HTTP layer above them.
+
+
+**Fitness function:** convention-only — not mechanically expressible. `X-Command-Id` handling lives inside the `internal/common/idempotency` middleware + is covered by its unit tests.

@@ -57,3 +57,6 @@ CREATE POLICY tenant_isolation ON identity.tenants
 - [pressly/goose v3 docs](https://github.com/pressly/goose).
 - [Ent versioned migrations doc](https://entgo.io/docs/versioned-migrations/) — confirms goose as supported migration tool option.
 - [Brandur Leach — All In on sqlc/pgx](https://brandur.org/sqlc) — Crunchy Bridge production reference (uses similar SQL-file migration pattern).
+
+
+**Fitness function:** convention-only — not mechanically expressible. Migration tool choice is a build-time decision; the migration runner (`cmd/migrate`) is the load-bearing piece + already covered by `task ci:migrations`.

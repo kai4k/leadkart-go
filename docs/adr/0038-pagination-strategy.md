@@ -155,3 +155,6 @@ Each endpoint declares its sort tuple. Initial tuples for the realistic paginate
 - [Google AIP-158 — Pagination](https://google.aip.dev/158) — `next_page_token` opaque cursor canon.
 - [GitHub REST API — Using pagination](https://docs.github.com/en/rest/guides/using-pagination-in-the-rest-api) — Link header style; deferred-total approach.
 - [PostgreSQL planner notes on RLS predicate pushdown](https://www.postgresql.org/docs/current/sql-createpolicy.html) — required reading for the "EXPLAIN under RLS" discipline.
+
+
+**Fitness function:** convention-only — not mechanically expressible. Cursor pagination shape (Page[T] + opaque base64 Cursor) is covered by the EXPLAIN-under-RLS integration test (`keyset_explain_integration_test.go`).

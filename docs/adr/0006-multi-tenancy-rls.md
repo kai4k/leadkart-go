@@ -60,3 +60,6 @@ Mechanism:
 - [Logto blog — Implement multi-tenancy](https://blog.logto.io/implement-multi-tenancy).
 - [Atlas Cloud GopherCon 2025 — Building Scalable Multi-tenant Apps in Go](https://atlasgo.io/blog/2025/05/26/gophercon-scalable-multi-tenant-apps-in-go) — schema-per-tenant regret post-mortem.
 - LeadKart .NET — `multi-tenancy.md` doctrine (mirror reference for Go port).
+
+
+**Fitness function:** convention-only — not mechanically expressible. RLS policies live at the Postgres layer + are exercised by the integration-test suite (`task test:int`); mechanically asserting the policy from Go would require an actual DB connection.

@@ -61,3 +61,10 @@ internal/{module}/
 - Mat Ryer — ["How I write HTTP services in Go after 13 years"](https://grafana.com/blog/2024/02/09/how-i-write-http-services-in-go-after-13-years/) (Grafana, Feb 2024).
 - Vaughn Vernon — *Implementing Domain-Driven Design* (2013) — strategic + tactical patterns.
 - Alistair Cockburn — [Hexagonal Architecture](https://alistair.cockburn.us/hexagonal-architecture/) (original 2005, republished 2024).
+
+
+## Fitness function
+
+`TestArch_DomainHasNoInfraImports + TestArch_DomainEventsSealed + TestArch_AggregatesHaveFactoryAndUnmarshal` (in `internal/architecture/`).
+
+Domain purity (no infra imports), sealed event interfaces, and the canonical `New` + `UnmarshalFromDB` factory pair are all asserted at PR time.

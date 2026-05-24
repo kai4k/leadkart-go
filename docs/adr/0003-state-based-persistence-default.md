@@ -52,3 +52,6 @@ Event sourcing reserved as a **per-aggregate decision** when load-bearing: tempo
 - Three Dots Labs — [Database Transactions in Go with Layered Architecture](https://threedots.tech/post/database-transactions-in-go/) (Sep 2024) — UpdateFn pattern for outbox-in-tx.
 - Greg Young — *CQRS Documents* (2010) — original ES decision criteria; cost vs benefit.
 - Chris Richardson — *Microservices Patterns* ch.3 (Outbox).
+
+
+**Fitness function:** convention-only — not mechanically expressible. State-vs-event-sourcing is a doctrine choice; mechanically asserting "state-based" requires walking every aggregate's persistence path. Re-evaluate if event sourcing ever lands.

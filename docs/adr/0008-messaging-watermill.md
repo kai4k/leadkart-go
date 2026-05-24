@@ -63,3 +63,10 @@ Architecture per [TDL "Distributed Transactions in Go" (Oct 2024)](https://three
 - [TDL — Distributed Transactions in Go: Read Before You Try (Oct 2024)](https://threedots.tech/post/distributed-transactions-in-go/).
 - [TDL — Database Transactions in Go with Layered Architecture (Sep 2024)](https://threedots.tech/post/database-transactions-in-go/) — UpdateFn pattern.
 - Chris Richardson — *Microservices Patterns* ch.3 (Outbox).
+
+
+## Fitness function
+
+`TestArch_SubscribersInPortsSubscribers + TestArch_OutboxTableSchema` (in `internal/architecture/`).
+
+Subscribers live only in `ports/subscribers/`; every outbox table declares the canonical column set (id, occurred_at, topic, payload, forwarded_at).

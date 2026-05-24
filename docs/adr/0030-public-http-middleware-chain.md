@@ -73,3 +73,6 @@ Rate limiter shape: in-memory token bucket via `golang.org/x/time/rate`, keyed b
 - LeadKart `.NET .claude/rules/audit-checklist.md §12` (Observability), `security.md` (Rate limiting + auth ordering), `messaging.md` (X-Command-Id mandatory on writes).
 - [`golang.org/x/time/rate`](https://pkg.go.dev/golang.org/x/time/rate) — token-bucket reference.
 - [OWASP "Token Theft & Replay"](https://owasp.org/www-project-api-security/) — reason `X-Forwarded-For` is NOT trusted without an upstream proxy allowlist.
+
+
+**Fitness function:** convention-only — not mechanically expressible. Middleware chain order is asserted by the route-registration arch test in `internal/identity/ports/route_registration_test.go` per ADR 0049 (per-module location, not whole-suite).

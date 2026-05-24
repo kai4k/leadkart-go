@@ -106,3 +106,10 @@ A NEW `UnmarshalSession` factory is added to the domain package so adapters can 
 - Vaughn Vernon, *Implementing Domain-Driven Design* — Shared Kernel discipline (ch. 14)
 - Eric Evans, *Domain-Driven Design* — "Beware the Shared Kernel" (p.354)
 - Vladimir Khorikov, *Pragmatic Clean Architecture* — Aggregate-related types belong with their aggregate (§11)
+
+
+## Fitness function
+
+`TestArch_NoCrossModuleImports` (in `internal/architecture/`).
+
+Cross-module imports allow-list documents the shared-kernel exceptions (identity/domain/{tenant,membership,permission}, identity/ports/authn, identity/app/actclaim) — the closed set defined here.

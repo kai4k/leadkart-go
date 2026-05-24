@@ -79,3 +79,6 @@ func MustFromContext(ctx context.Context) ID {
 - [Bryan C. Mills — Rethinking Classical Concurrency Patterns (GopherCon 2018)](https://www.youtube.com/watch?v=5zXAHh5tJqQ).
 - [Peter Bourgon — context isn't for everything (2017)](https://peter.bourgon.org/blog/2018/04/04/context-package-and-go-language.html).
 - LeadKart .NET — `multi-tenancy.md` "Identity model" + ADR 0006 (this repo) for the RLS mechanism this powers.
+
+
+**Fitness function:** convention-only — not mechanically expressible. `tenant.FromContext(ctx)` is a single-package API surface; usage discipline is observed in code review.

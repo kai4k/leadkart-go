@@ -210,3 +210,6 @@ The "no read-your-writes" property is fine for search/list UIs; it's not fine fo
 - ADR 0027 — Outbox doubles as audit log (same events feed projections).
 - ADR 0035 — Event sourcing scope = zero modules at v0.1 (state-based, not ES).
 - ADR 0040 — Search strategy: pg_trgm now, FTS later (read-model indexes follow this).
+
+
+**Fitness function:** convention-only — not mechanically expressible. Pattern observed in the subscriber files under `ports/subscribers/`; behaviour exercised by integration tests.

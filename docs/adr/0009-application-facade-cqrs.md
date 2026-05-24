@@ -96,3 +96,6 @@ func handleRegisterTenant(app identity.Application) http.Handler {
 - [TDL — Combining DDD, CQRS, and Clean Architecture](https://threedots.tech/post/ddd-cqrs-clean-architecture-combined/).
 - [TDL go-cqrs library](https://github.com/ThreeDotsLabs/go-cqrs) — decorator chain + handler generics.
 - Greg Young — *CQRS Documents* (2010) — original separation rationale.
+
+
+**Fitness function:** convention-only — not mechanically expressible. The `Application{Commands, Queries}` facade shape is a naming convention; the per-module integration tests exercise the facade end-to-end.

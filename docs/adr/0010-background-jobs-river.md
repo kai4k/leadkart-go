@@ -50,3 +50,6 @@ Use cases planned for v0.1:
 - [Brandur Leach — Introducing river](https://brandur.org/river) (2023).
 - [River docs](https://riverqueue.com/docs).
 - [Brandur Leach — Crunchy Bridge architecture (Postgres-only stack)](https://www.crunchydata.com/blog/author/brandur-leach).
+
+
+**Fitness function:** convention-only — not mechanically expressible. River wiring is a composition-root decision; affirmative use is observed in `cmd/worker`.

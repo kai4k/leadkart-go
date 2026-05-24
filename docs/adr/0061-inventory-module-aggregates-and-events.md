@@ -291,3 +291,10 @@ updates). 8 racers / no scheduling assumptions / deterministic.
 - ADR 0056 — Impersonation context propagation (act_* columns).
 - ADR 0058 — Role hierarchy as join-table aggregate (precedent for ledger-as-its-own-aggregate).
 - Stripe API docs — money as integer minor units canon (`amount: int64` in cents/paise/etc).
+
+
+## Fitness function
+
+`TestArch_AggregatesHaveFactoryAndUnmarshal + TestArch_RepositoriesHaveUpdateByIDFn` (in `internal/architecture/`).
+
+Inventory aggregates (batch, product, stockmovement) satisfy the factory pattern; stockmovement append-only exception is documented in the UpdateByID test.
