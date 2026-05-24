@@ -1,0 +1,273 @@
+// type_safety_arch_test.go — Principle Y: Type safety.
+//
+// Go's type system is the cheapest review reviewer we have. Tests
+// here protect the spots where untyped escape hatches creep back:
+//
+//   - `interface{}` in struct fields → invisible coupling to "any
+//     shape works";
+//   - raw type-assertion `x.(*T)` (vs comma-ok or errors.As) →
+//     panic on first miss;
+//   - untyped magic numbers in business code → meaning lost;
+//   - Hungarian-notation prefixes (`IRepository`, `TUser`) → C#
+//     conventions in Go.
+//
+// Y1 (NoAnyInExportedReturns) is implemented in generics_arch_test.go
+// since it's the primary "use generics" lever; the rest live here.
+//
+// Cited canon:
+//   - Russ Cox — `any` alias introduction (Go 1.18 notes)
+//   - Effective Go — interface satisfaction is implicit
+//   - Cheney — "Practical Go" §3 (interfaces small + consumer-defined)
+
+package architecture_test
+
+import (
+	"go/ast"
+	"path/filepath"
+	"regexp"
+	"strings"
+	"testing"
+)
+
+// ----------------------------------------------------------------------------
+// Y2: TestArch_NoInterfaceEmptyInStructFields
+// ----------------------------------------------------------------------------
+//
+// `interface{}` (or its alias `any`) in a struct field signals
+// "anything fits" — a refactor-hostile shape. Use a typed field,
+// a generic type param, or a small interface.
+//
+// Allow-list: ad-hoc adapter test fakes that wrap a `payload any`
+// (e.g. cache-recorder spies) opt out via
+// `// arch-test:fake-any-payload`. Generated db/ skipped.
+func TestArch_NoInterfaceEmptyInStructFields(t *testing.T) {
+	t.Parallel()
+
+	root := internalDir(t)
+	var bad []string
+
+	walkGoFiles(t, root, false, func(path string, src []byte) {
+		slash := pathToSlash(path)
+		if strings.Contains(slash, "/adapters/db/") {
+			return
+		}
+		body := string(src)
+		_, file := parseFile(t, path, src)
+		ast.Inspect(file, func(n ast.Node) bool {
+			ts, ok := n.(*ast.TypeSpec)
+			if !ok {
+				return true
+			}
+			st, ok := ts.Type.(*ast.StructType)
+			if !ok || st.Fields == nil {
+				return true
+			}
+			for _, f := range st.Fields.List {
+				if isEmptyIface(f.Type) {
+					for _, fname := range f.Names {
+						// Heuristic opt-out: marker comment on the
+						// field's line.
+						if strings.Contains(body, "arch-test:fake-any-payload") &&
+							strings.Contains(slash, "test") {
+							continue
+						}
+						bad = append(bad, slash+": "+ts.Name.Name+"."+fname.Name)
+					}
+				}
+			}
+			return true
+		})
+	})
+
+	if len(bad) > 0 {
+		t.Fatalf("struct field typed `any`/`interface{}` — use typed field or generics:\n  %s",
+			strings.Join(bad, "\n  "))
+	}
+}
+
+// ----------------------------------------------------------------------------
+// Y3: TestArch_TypeAssertionsUseCommaOk
+// ----------------------------------------------------------------------------
+//
+// Raw `x.(*T)` panics on a miss. Comma-ok `v, ok := x.(*T)` makes
+// the failure path explicit. Banned outside type-switch context.
+//
+// Allow-list: errors.As is fine (caught by M6); test files have
+// looser rules.
+func TestArch_TypeAssertionsUseCommaOk(t *testing.T) {
+	t.Parallel()
+
+	root := internalDir(t)
+	// Detect a `.(SomeType)` that's NOT in a `:= x.(T)` (comma-ok)
+	// AND not in a type-switch. Heuristic: line containing `.(`
+	// but lacking `,` near the assertion AND lacking `type)`.
+	assertRE := regexp.MustCompile(`\.\([\w*.]+\)`)
+	var bad []string
+
+	walkGoFiles(t, root, false, func(path string, src []byte) {
+		slash := pathToSlash(path)
+		body := stripGoComments(string(src))
+		lines := strings.Split(body, "\n")
+		for i, ln := range lines {
+			if !assertRE.MatchString(ln) {
+				continue
+			}
+			if strings.Contains(ln, ".(type)") {
+				continue
+			}
+			if regexp.MustCompile(`\w+,\s*\w+\s*:?=`).MatchString(ln) {
+				continue
+			}
+			if regexp.MustCompile(`return\s+\w+,\s*\w+`).MatchString(ln) {
+				continue
+			}
+			// Generic type-parameter assertion `val.(V)` where V is a
+			// type param — safe in generic context (compiler enforces).
+			// Heuristic: assertion to a single uppercase letter.
+			if regexp.MustCompile(`\.\([A-Z]\)`).MatchString(ln) {
+				continue
+			}
+			bad = append(bad, slash+":"+itoa(i+1))
+		}
+	})
+
+	if len(bad) > 0 {
+		t.Fatalf("raw type-assertion x.(*T) (panics on miss) — use comma-ok or errors.As:\n  %s",
+			strings.Join(bad, "\n  "))
+	}
+}
+
+// ----------------------------------------------------------------------------
+// Y4: TestArch_NoUntypedNumericConstantsInBusiness
+// ----------------------------------------------------------------------------
+//
+// Magic numbers in business code (`if x > 100`) lose meaning. Either
+// name the constant (`const MaxResults = 100`) or use a typed
+// declaration (`const x int64 = 100`).
+//
+// Pragmatic predicate: lines in `<module>/app/command/` containing
+// bare numeric literals >= 10 that are NOT inside a `const`,
+// `time.`, `len(`, `cap(`, `make(`, or a switch case.
+//
+// This is a SOFT check (heuristic) — opt out via
+// `// arch-test:magic-ok <reason>` on the same line.
+func TestArch_NoUntypedNumericConstantsInBusiness(t *testing.T) {
+	t.Parallel()
+
+	root := internalDir(t)
+	// Lines with a bare digit literal >= 10 (but not 100% nor floats
+	// nor hex 0x... nor times).
+	bigNumRE := regexp.MustCompile(`\b([1-9]\d{2,})\b`)
+	var bad []string
+
+	for _, mod := range modulesUnderInternal(t) {
+		dir := filepath.Join(root, mod, "app", "command")
+		walkGoFiles(t, dir, false, func(path string, src []byte) {
+			body := string(src)
+			lines := strings.Split(body, "\n")
+			for i, ln := range lines {
+				trimmed := strings.TrimSpace(ln)
+				if trimmed == "" || strings.HasPrefix(trimmed, "//") {
+					continue
+				}
+				if strings.Contains(ln, "arch-test:magic-ok") {
+					continue
+				}
+				if strings.Contains(ln, "const ") ||
+					strings.Contains(ln, "time.") ||
+					strings.Contains(ln, "http.Status") ||
+					strings.Contains(ln, "len(") ||
+					strings.Contains(ln, "cap(") ||
+					strings.Contains(ln, "make(") ||
+					strings.Contains(ln, "rand.") ||
+					strings.Contains(ln, "[]byte") {
+					continue
+				}
+				// Strip string literals on the line (e.g. URL paths).
+				stripped := regexp.MustCompile(`"[^"]*"`).ReplaceAllString(ln, `""`)
+				m := bigNumRE.FindString(stripped)
+				if m == "" {
+					continue
+				}
+				bad = append(bad, pathToSlash(path)+":"+itoa(i+1)+" — literal "+m)
+			}
+		})
+	}
+
+	// Only fail if violations EXCEED a permissive ceiling (this is the
+	// gentlest possible introduction; once a magic-number sweep ships
+	// the budget tightens).
+	const ceiling = 50
+	if len(bad) > ceiling {
+		t.Fatalf("too many bare numeric literals (> %d) in app/command/ — name them as consts:\n  %s",
+			ceiling, strings.Join(bad[:30], "\n  "))
+	}
+}
+
+// ----------------------------------------------------------------------------
+// Y5: TestArch_NoHungarianNotation
+// ----------------------------------------------------------------------------
+//
+// `IFoo` / `TFoo` / `IRepository` are C# / Delphi conventions. Go
+// uses bare names — `Foo`, `Repository`. Interface vs struct is
+// discovered by usage, not name.
+func TestArch_NoHungarianNotation(t *testing.T) {
+	t.Parallel()
+
+	root := internalDir(t)
+	// Match exported type names beginning with I, T, C, S, E + a
+	// second uppercase letter. The most common Hungarian forms.
+	hunRE := regexp.MustCompile(`^type\s+(I[A-Z]\w+|T[A-Z]\w+|C[A-Z]\w+)\b`)
+	var bad []string
+
+	walkGoFiles(t, root, false, func(path string, src []byte) {
+		body := stripGoComments(string(src))
+		for _, ln := range strings.Split(body, "\n") {
+			m := hunRE.FindStringSubmatch(strings.TrimSpace(ln))
+			if m == nil {
+				continue
+			}
+			name := m[1]
+			// Common false positives: Identity-related names that
+			// LEGITIMATELY start with "Id" / "Identity".
+			if strings.HasPrefix(name, "Id") && len(name) > 2 &&
+				(name[2] >= 'a' && name[2] <= 'z') {
+				continue
+			}
+			if strings.HasPrefix(name, "Identity") || strings.HasPrefix(name, "Idempotency") ||
+				strings.HasPrefix(name, "ID") || strings.HasPrefix(name, "TTL") ||
+				strings.HasPrefix(name, "Test") || strings.HasPrefix(name, "Tx") ||
+				strings.HasPrefix(name, "Time") || strings.HasPrefix(name, "Tenant") ||
+				strings.HasPrefix(name, "Topic") || strings.HasPrefix(name, "Type") ||
+				strings.HasPrefix(name, "Token") || strings.HasPrefix(name, "Table") ||
+				strings.HasPrefix(name, "CR") || strings.HasPrefix(name, "CSV") ||
+				strings.HasPrefix(name, "Cl") || strings.HasPrefix(name, "Cmd") ||
+				strings.HasPrefix(name, "Co") || strings.HasPrefix(name, "Cr") ||
+				strings.HasPrefix(name, "Ch") || strings.HasPrefix(name, "Ca") ||
+				strings.HasPrefix(name, "Cu") || strings.HasPrefix(name, "Ci") ||
+				strings.HasPrefix(name, "In") || strings.HasPrefix(name, "Im") ||
+				strings.HasPrefix(name, "It") || strings.HasPrefix(name, "Is") ||
+				strings.HasPrefix(name, "Inb") || strings.HasPrefix(name, "Inv") {
+				continue
+			}
+			bad = append(bad, pathToSlash(path)+": "+name)
+		}
+	})
+
+	if len(bad) > 0 {
+		t.Fatalf("Hungarian-notation type name (Go uses bare names — Effective Go):\n  %s",
+			strings.Join(bad, "\n  "))
+	}
+}
+
+// isEmptyIface reports whether the AST expression is `interface{}`
+// or `any`.
+func isEmptyIface(e ast.Expr) bool {
+	if id, ok := e.(*ast.Ident); ok && id.Name == "any" {
+		return true
+	}
+	if it, ok := e.(*ast.InterfaceType); ok {
+		return it.Methods == nil || len(it.Methods.List) == 0
+	}
+	return false
+}

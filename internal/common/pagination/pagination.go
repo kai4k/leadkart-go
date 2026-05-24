@@ -39,7 +39,7 @@ import (
 // has_more / next_cursor are the only two pieces of metadata exposed.
 // Total counts are intentionally NOT included per ADR 0038 (computing
 // total under RLS is an O(n) scan that doesn't pay rent).
-type Page[T any] struct {
+type Page[T any] struct { // arch-test:bare-any-generic — pure container; T need not be comparable.
 	Items      []T    `json:"items"`
 	HasMore    bool   `json:"has_more"`
 	NextCursor string `json:"next_cursor,omitempty"`
@@ -140,7 +140,7 @@ func ClampPageSize(supplied int) int {
 //
 // The slice argument may be mutated (peek row dropped); callers
 // should treat it as consumed.
-func BuildPage[T any](items []T, pageSize int, cursorFn func(T) Cursor) Page[T] {
+func BuildPage[T any](items []T, pageSize int, cursorFn func(T) Cursor) Page[T] { // arch-test:bare-any-generic — pure container builder.
 	if len(items) > pageSize {
 		last := items[pageSize-1]
 		return Page[T]{
