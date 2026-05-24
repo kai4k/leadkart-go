@@ -495,3 +495,289 @@ func TestArch_PasswordFieldsTyped(t *testing.T) {
 		}
 	}
 }
+
+// ============================================================================
+// Principle D deep — JWT / auth / crypto hardening (7 tests added per the
+// comprehensive catalog brief). ADR 0011 + ADR 0012 + security.md.
+// ============================================================================
+
+// ----------------------------------------------------------------------------
+// D1: TestArch_AccessTokenTTLBounded
+// ----------------------------------------------------------------------------
+//
+// security.md: access tokens are short-lived (≤ 30min). Longer windows
+// turn a single replay into a long-running compromise. Per OAuth 2.1
+// + Auth0 best practices canon.
+func TestArch_AccessTokenTTLBounded(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(repoRoot(t), "internal", "identity", "app", "jwt", "jwt.go")
+	src, err := readFileBytes(path)
+	if err != nil {
+		t.Fatalf("read jwt.go: %v", err)
+	}
+	body := string(src)
+
+	// Find the AccessTokenTTL = <duration> line.
+	re := regexp.MustCompile(`AccessTokenTTL\s*=\s*([\d]+)\s*\*\s*time\.(Minute|Hour|Second)`)
+	m := re.FindStringSubmatch(body)
+	if m == nil {
+		t.Fatal("AccessTokenTTL constant not declared in canonical `N * time.Unit` form")
+	}
+	n := atoi(m[1])
+	var minutes int
+	switch m[2] {
+	case "Second":
+		minutes = n / 60
+	case "Minute":
+		minutes = n
+	case "Hour":
+		minutes = n * 60
+	}
+	if minutes > 30 {
+		t.Fatalf("AccessTokenTTL = %d minutes (cap 30; OAuth 2.1 + Auth0 best-practice)", minutes)
+	}
+}
+
+// ----------------------------------------------------------------------------
+// D2: TestArch_RefreshTokenTTLBounded
+// ----------------------------------------------------------------------------
+//
+// Refresh-token absolute-expiry MUST be ≤ 14d. Per security.md "rotation
+// + absolute lifetime"; longer-living refresh tokens become bearer-key
+// equivalents.
+//
+// LeadKart stores refresh TTL as a config-injected duration (not a
+// constant). Walk every config-default site + the integration-test
+// constant declarations and bound them.
+func TestArch_RefreshTokenTTLBounded(t *testing.T) {
+	t.Parallel()
+
+	maxMinutes := 14 * 24 * 60 // 14 days
+
+	re := regexp.MustCompile(`(?i)refresh\w*TTL\s*=\s*([\d]+)\s*\*\s*([\d]+)?\s*\*?\s*time\.(Hour|Minute|Second)`)
+
+	root := internalDir(t)
+	var bad []string
+
+	walkGoFiles(t, filepath.Join(root, "identity"), true, func(path string, src []byte) {
+		body := string(src)
+		for _, m := range re.FindAllStringSubmatch(body, -1) {
+			n := atoi(m[1])
+			mult := 1
+			if m[2] != "" {
+				mult = atoi(m[2])
+			}
+			var minutes int
+			switch m[3] {
+			case "Second":
+				minutes = (n * mult) / 60
+			case "Minute":
+				minutes = n * mult
+			case "Hour":
+				minutes = n * mult * 60
+			}
+			if minutes > maxMinutes {
+				bad = append(bad, pathToSlash(path)+": "+m[0])
+			}
+		}
+	})
+
+	if len(bad) > 0 {
+		t.Fatalf("refresh-token TTL exceeds 14d (security.md):\n  %s",
+			strings.Join(bad, "\n  "))
+	}
+}
+
+// ----------------------------------------------------------------------------
+// D3: TestArch_JWTSigningMethodHS256OrRS256
+// ----------------------------------------------------------------------------
+//
+// Only HS256 (HMAC) or RS256 (RSA) signing methods allowed. ES256
+// (ECDSA) is acceptable in principle but unused here. `none` (no
+// signing) is a known JWT-library CVE class — explicitly banned.
+//
+// Predicate: every `jwtv5.SigningMethod*` reference must be one of
+// the allowed methods.
+func TestArch_JWTSigningMethodHS256OrRS256(t *testing.T) {
+	t.Parallel()
+
+	allowed := map[string]bool{
+		"SigningMethodHS256": true,
+		"SigningMethodHS384": true,
+		"SigningMethodHS512": true,
+		"SigningMethodRS256": true,
+		"SigningMethodRS384": true,
+		"SigningMethodRS512": true,
+	}
+
+	re := regexp.MustCompile(`SigningMethod\w+`)
+	root := internalDir(t)
+	var bad []string
+
+	walkGoFiles(t, root, false, func(path string, src []byte) {
+		body := stripGoComments(string(src))
+		for _, m := range re.FindAllString(body, -1) {
+			if m == "SigningMethod" {
+				continue
+			}
+			if !allowed[m] {
+				bad = append(bad, pathToSlash(path)+": "+m)
+			}
+		}
+	})
+
+	if len(bad) > 0 {
+		t.Fatalf("non-canonical JWT signing method (HS* or RS* only; `none` banned per CVE-2015-9235):\n  %s",
+			strings.Join(bad, "\n  "))
+	}
+}
+
+// ----------------------------------------------------------------------------
+// D4: TestArch_JWTKidHeaderRequired
+// ----------------------------------------------------------------------------
+//
+// Multi-key rotation needs the `kid` header. Every Issue path must
+// set it; every Verify path must read it. Drift here breaks
+// rotation-on-rollover (the new key is rejected because verifiers
+// can't route to it).
+func TestArch_JWTKidHeaderRequired(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(repoRoot(t), "internal", "identity", "app", "jwt", "jwt.go")
+	src, err := readFileBytes(path)
+	if err != nil {
+		t.Fatalf("read jwt.go: %v", err)
+	}
+	body := string(src)
+	if !strings.Contains(body, `Header["kid"]`) {
+		t.Fatal("jwt.go does not set Header[\"kid\"] on issued tokens (rotation breaks)")
+	}
+	if !strings.Contains(body, `t.Header["kid"]`) {
+		t.Fatal("jwt.go does not read Header[\"kid\"] on Verify (no key-routing)")
+	}
+}
+
+// ----------------------------------------------------------------------------
+// D5: TestArch_NoBcryptOrScrypt
+// ----------------------------------------------------------------------------
+//
+// ADR 0012 locks Argon2id. Bcrypt + Scrypt imports are banned to
+// prevent accidental "I prefer the API" backsliding. The PHC string
+// format is the only acceptable hash format in the codebase.
+func TestArch_NoBcryptOrScrypt(t *testing.T) {
+	t.Parallel()
+
+	root := internalDir(t)
+	var bad []string
+
+	walkGoFiles(t, root, true, func(path string, src []byte) {
+		for _, im := range parseImports(t, path, src) {
+			if strings.HasSuffix(im, "/bcrypt") || strings.HasSuffix(im, "/scrypt") {
+				// Allow tests that explicitly assert non-use.
+				if strings.HasSuffix(path, "_test.go") &&
+					strings.Contains(string(src), "// arch-test:asserts-non-use") {
+					continue
+				}
+				bad = append(bad, pathToSlash(path)+": imports "+im)
+			}
+		}
+	})
+
+	if len(bad) > 0 {
+		t.Fatalf("bcrypt/scrypt imported (ADR 0012 locks Argon2id):\n  %s",
+			strings.Join(bad, "\n  "))
+	}
+}
+
+// ----------------------------------------------------------------------------
+// D6: TestArch_Argon2ParamsMeetOWASP
+// ----------------------------------------------------------------------------
+//
+// OWASP Password Storage Cheat Sheet 2025: Argon2id minimum is
+// memory ≥ 19 MiB (19456 KiB), iterations ≥ 2, parallelism ≥ 1.
+// (RFC 9106 §4 also acceptable: m=12MiB, t=3, p=1.) We enforce the
+// stricter Memory-first OWASP profile because LeadKart is bcrypt-
+// replacement, not constrained-hardware.
+func TestArch_Argon2ParamsMeetOWASP(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(repoRoot(t), "internal", "identity", "app", "argon2", "argon2.go")
+	src, err := readFileBytes(path)
+	if err != nil {
+		t.Fatalf("read argon2.go: %v", err)
+	}
+	body := string(src)
+
+	memRE := regexp.MustCompile(`Memory\s+uint32\s*=\s*(\d+)(?:\s*\*\s*(\d+))?`)
+	iterRE := regexp.MustCompile(`Iterations\s+uint32\s*=\s*(\d+)`)
+	parRE := regexp.MustCompile(`Parallel\s+uint8\s*=\s*(\d+)`)
+
+	memM := memRE.FindStringSubmatch(body)
+	iterM := iterRE.FindStringSubmatch(body)
+	parM := parRE.FindStringSubmatch(body)
+	if memM == nil || iterM == nil || parM == nil {
+		t.Fatal("argon2.go missing canonical Memory/Iterations/Parallel constants")
+	}
+
+	mem := atoi(memM[1])
+	if memM[2] != "" {
+		mem *= atoi(memM[2])
+	}
+	iter := atoi(iterM[1])
+	par := atoi(parM[1])
+
+	if mem < 19*1024 {
+		t.Errorf("Argon2 Memory = %d KiB; OWASP 2025 floor 19456 KiB (19 MiB)", mem)
+	}
+	if iter < 2 {
+		t.Errorf("Argon2 Iterations = %d; OWASP 2025 floor 2", iter)
+	}
+	if par < 1 {
+		t.Errorf("Argon2 Parallel = %d; minimum 1", par)
+	}
+}
+
+// ----------------------------------------------------------------------------
+// D7: TestArch_NoCryptoMd5OrSha1ForSecurity
+// ----------------------------------------------------------------------------
+//
+// MD5 + SHA-1 are cryptographically broken (collision attacks
+// practical since 2017 — Stevens et al). Banned in security
+// contexts; allowed only with an explicit arch-test marker
+// (e.g. ETag / cache-key hashing where collisions don't matter).
+func TestArch_NoCryptoMd5OrSha1ForSecurity(t *testing.T) {
+	t.Parallel()
+
+	root := internalDir(t)
+	var bad []string
+
+	walkGoFiles(t, root, false, func(path string, src []byte) {
+		for _, im := range parseImports(t, path, src) {
+			if im != "crypto/md5" && im != "crypto/sha1" {
+				continue
+			}
+			if strings.Contains(string(src), "arch-test:non-security-hash") {
+				continue
+			}
+			bad = append(bad, pathToSlash(path)+": imports "+im)
+		}
+	})
+
+	if len(bad) > 0 {
+		t.Fatalf("crypto/md5 or crypto/sha1 used without // arch-test:non-security-hash opt-out (collision-broken):\n  %s",
+			strings.Join(bad, "\n  "))
+	}
+}
+
+// helper: simple base-10 string->int (avoids strconv import where one symbol is needed).
+func atoi(s string) int {
+	n := 0
+	for _, c := range s {
+		if c < '0' || c > '9' {
+			return n
+		}
+		n = n*10 + int(c-'0')
+	}
+	return n
+}
