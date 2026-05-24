@@ -2,7 +2,6 @@ package command
 
 import (
 	"context"
-	"errors"
 	"fmt"
 
 	"github.com/leadkart/leadkart-go/internal/common/ids"
@@ -40,20 +39,25 @@ type LogStockMovementResult struct {
 //
 // Multi-aggregate single-tx write per ADR 0008 + Vernon ch.10:
 //   1. Open UoW tx (TxScopeTenant — RLS-bound to caller's tenant)
-//   2. UpdateByID the Batch (loads → ApplyMovement → persists with
-//      optimistic-concurrency check → drains AddedEvent — but Batch
-//      doesn't emit a new event on ApplyMovement; that's the
-//      Movement's job)
+//   2. UpdateByID the Batch — the adapter acquires a pessimistic row
+//      lock (SELECT ... FOR UPDATE) before the load, so concurrent
+//      writers serialize at the DB layer; the in-memory ApplyMovement
+//      then runs against the latest committed state, and the row is
+//      persisted with version-bump as a defense-in-depth signal.
 //   3. Add a new StockMovement row inside the SAME tx (joins via
 //      pg.TxFromContext) — emits LoggedEvent → outbox.
 //
-// Optimistic-concurrency retry: on batch.ErrConcurrencyConflict we
-// retry up to maxConcurrencyRetries times. Each retry re-reads the
-// batch + re-applies the movement. The handler's ApplyMovement guards
-// (insufficient stock, expired) re-evaluate against the fresh state —
-// a movement that was valid against the stale read may now be
-// rejected, which surfaces as the more-specific error (e.g.
-// ErrInsufficientStock) without further retry.
+// No retry loop: by construction the pessimistic lock makes
+// batch.ErrConcurrencyConflict unreachable in production. Concurrent
+// LogStockMovement calls against the same batch block at the row lock
+// (typical wait < 1ms in the LogStockMovement hot path) and run in a
+// serial-order schedule. ApplyMovement guards (insufficient stock,
+// expired) ALWAYS evaluate against the latest committed state —
+// there is no stale-snapshot path.
+//
+// Canon: Postgres §13.3.2 explicit locking + Stripe ledger pattern +
+// DDIA Ch.7 — pessimistic locks beat optimistic retries for hot-row
+// counters where contention is the norm, not the exception.
 //
 // Idempotency: per ADR 0031, the X-Command-Id middleware catches
 // duplicate requests at the HTTP boundary; this handler does NOT
@@ -69,13 +73,6 @@ func NewLogStockMovementHandler(uow pg.UnitOfWork, batches batch.Repository, mov
 	return LogStockMovementHandler{uow: uow, batches: batches, movements: movements}
 }
 
-// maxConcurrencyRetries caps the optimistic-concurrency retry loop.
-// 3 attempts handles realistic burst contention (concurrent Order
-// fulfilment racing the same batch) without burning resources on a
-// pathological hot-row scenario — that signals "you need pessimistic
-// locking or a queue" which is outside slice 1.
-const maxConcurrencyRetries = 3
-
 // Handle persists a stock movement against the supplied batch.
 func (h LogStockMovementHandler) Handle(ctx context.Context, cmd LogStockMovementCommand) (LogStockMovementResult, error) {
 	if !cmd.Type.IsValid() {
@@ -90,27 +87,13 @@ func (h LogStockMovementHandler) Handle(ctx context.Context, cmd LogStockMovemen
 	if magnitude < 0 {
 		return LogStockMovementResult{}, fmt.Errorf("%w: quantity must be a positive magnitude (got %d)", batch.ErrInvalid, magnitude)
 	}
-
-	var result LogStockMovementResult
-	var lastErr error
-	for range maxConcurrencyRetries {
-		result, lastErr = h.attemptOnce(ctx, cmd, magnitude)
-		if lastErr == nil {
-			return result, nil
-		}
-		if !errors.Is(lastErr, batch.ErrConcurrencyConflict) {
-			return LogStockMovementResult{}, lastErr
-		}
-		// loop and retry — fresh read picks up the racer's update
-	}
-	return LogStockMovementResult{}, fmt.Errorf("log stock movement: gave up after %d retries: %w",
-		maxConcurrencyRetries, lastErr)
+	return h.persist(ctx, cmd, magnitude)
 }
 
-// attemptOnce performs ONE try of the multi-aggregate single-tx write.
-// On ErrConcurrencyConflict the caller's loop retries; on any other
-// error we abort.
-func (h LogStockMovementHandler) attemptOnce(ctx context.Context, cmd LogStockMovementCommand, magnitude int64) (LogStockMovementResult, error) {
+// persist runs the multi-aggregate single-tx write inside one UoW.
+// The batch repository's UpdateByID acquires SELECT FOR UPDATE — the
+// concurrency story lives in [BatchRepository.updateOnTx], NOT here.
+func (h LogStockMovementHandler) persist(ctx context.Context, cmd LogStockMovementCommand, magnitude int64) (LogStockMovementResult, error) {
 	var result LogStockMovementResult
 	err := h.uow.WithinTx(ctx, pg.TxScopeTenant, func(ctx context.Context) error {
 		var loaded *batch.Batch

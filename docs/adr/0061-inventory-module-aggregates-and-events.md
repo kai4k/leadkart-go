@@ -218,6 +218,63 @@ here so a future reader sees the seal.
   added an EXPLAIN-under-RLS integration test to catch future drift
   (mirror of identity's `keyset_explain_integration_test.go`).
 
+## Amendment 2 (2026-05-24) — Pessimistic locking on Batch (supersedes §3 retry strategy)
+
+The original §3 chose optimistic concurrency for Batch + a 3-attempt
+retry loop in `LogStockMovementHandler`. Slice-1 cloud CI exposed the
+flaw: the retry-path integration test asserted "retry must fire under
+concurrent racers" but the assertion is fundamentally non-deterministic
+— on CPU-constrained runners (GOMAXPROCS ≤ 2) Go's scheduler serialises
+the racers so no version collisions occur, no retry fires, the test
+fails. The test was reflecting a real architectural mismatch: optimistic
+concurrency is the wrong primitive for a HOT-ROW COUNTER like
+`quantity_on_hand` where contention is the access pattern, not the edge
+case.
+
+**Decision:** `BatchRepository.UpdateByID` now acquires a pessimistic
+row-level lock (`SELECT ... FOR UPDATE`) before loading the aggregate.
+Concurrent transactions block at the lock until the holding tx commits
+or rolls back; the DB serializes them by construction. The application
+handler has NO retry loop.
+
+**What's retained:** the `version` column + `WHERE version = $expected`
+predicate stay in place as defense-in-depth audit signals — if the
+check ever fails post-lock, it indicates a programmer error (external
+SQL bypass, lock leak) rather than a real race; we still surface
+`ErrConcurrencyConflict` so the failure is visible rather than silent.
+
+**Canon:**
+- Postgres docs §13.3.2 "Explicit Locking" — row-level locks are the
+  canonical primitive for "concurrent access to a single row".
+- Stripe payment-ledger pattern — balance updates acquire row locks;
+  no optimistic-retry on the hot path.
+- DDIA Ch.7 "Transactions" — pessimistic locks beat optimistic retries
+  for high-contention workloads where retries thrash without forward
+  progress.
+- Khorikov, *Pragmatic Clean Architecture* §11 — pessimistic for
+  high-contention writes; optimistic for collaborative reads.
+
+**Trade-offs accepted:**
+- Writers hold the lock for the duration of the surrounding UoW tx
+  (sub-millisecond on the `LogStockMovement` hot path). A crashed
+  writer releases the lock on session disconnect — no operator action.
+- If a future cross-aggregate UoW holds the batch lock + then waits
+  on an external resource, lock duration grows. Mitigation: keep
+  cross-aggregate UoW txs short + audited.
+
+**Scope:** This decision applies to `Batch` ONLY. `Product` retains
+optimistic concurrency (low-contention catalog rows). Future hot-row
+aggregates (Order line items, Lead credit balance) should also lock;
+ADR 0059's `LeadCredit` already uses the same pattern (UPSERT under
+RLS — different shape, same intent).
+
+**Tests:** the integration test
+(`log_stock_movement_contention_integration_test.go`) now asserts:
+(a) every racer succeeds, (b) total UoW entries == racers (no retries
+possible by construction; assertion catches future regressions),
+(c) final `quantity_on_hand` == sum of inbound magnitudes (zero lost
+updates). 8 racers / no scheduling assumptions / deterministic.
+
 ## References
 
 - BRD §6.5 — Inventory Module spec.

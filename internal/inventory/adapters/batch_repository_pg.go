@@ -20,9 +20,27 @@ import (
 )
 
 // BatchRepository is the pgx/sqlc-backed implementation of
-// [batch.Repository]. Tenant-scoped. Optimistic-concurrency UPDATEs
-// surface rows-affected=0 as batch.ErrConcurrencyConflict — the
-// application handler (LogStockMovement) implements the retry loop.
+// [batch.Repository]. Tenant-scoped.
+//
+// Concurrency: UpdateByID acquires a pessimistic row-level lock
+// (SELECT ... FOR UPDATE) before the in-memory aggregate load.
+// Concurrent transactions block at lock acquisition until the holding
+// tx commits or rolls back — Postgres serializes them at the DB layer
+// so the application handler does NOT need an optimistic-retry loop.
+//
+// Canon: Postgres docs §13.3.2 (Explicit Locking) + Stripe ledger
+// pattern + DDIA Ch.7 — pessimistic locking is the right primitive
+// for hot-row counters (stock_on_hand here, balance there) where
+// optimistic-retry under high contention thrashes without making
+// forward progress. The `version` column is retained as a defense-
+// in-depth + audit signal; the UPDATE's `version = $expected`
+// predicate is now never expected to fail because the lock makes it
+// impossible for two writers to share the same expected version.
+//
+// The lock is held only for the duration of the surrounding
+// pg.UnitOfWork tx — typically sub-millisecond for the
+// LogStockMovement path. If a writer crashes mid-tx, Postgres
+// releases the lock on session disconnect (no operator action needed).
 type BatchRepository struct {
 	pool *pgxpool.Pool
 	tx   *pg.Transactor
@@ -52,7 +70,10 @@ func (r *BatchRepository) addOnTx(ctx context.Context, tx pgx.Tx, b *batch.Batch
 	return drainBatchEvents(ctx, tx, b)
 }
 
-// UpdateByID satisfies [batch.Repository] with optimistic-concurrency check.
+// UpdateByID satisfies [batch.Repository]. Acquires a pessimistic
+// row-level lock (SELECT ... FOR UPDATE) before loading the aggregate
+// so concurrent updaters serialize at the DB layer; see [BatchRepository]
+// doc for the rationale.
 func (r *BatchRepository) UpdateByID(ctx context.Context, id batch.ID, updateFn func(*batch.Batch) (bool, error)) error {
 	if tx, ok := pg.TxFromContext(ctx); ok {
 		return r.updateOnTx(ctx, tx, id, updateFn)
@@ -62,7 +83,41 @@ func (r *BatchRepository) UpdateByID(ctx context.Context, id batch.ID, updateFn 
 	})
 }
 
+// lockBatchRowForUpdate acquires a pessimistic row-level lock on the
+// batches row identified by id, within the supplied tx. Concurrent
+// callers block here until this tx commits or rolls back. Returns
+// batch.ErrNotFound if the row is missing or soft-deleted (same
+// semantics as the subsequent loadBatch read).
+//
+// The lock is released automatically by Postgres on tx commit/rollback
+// or connection drop; no application-level release is required.
+func (r *BatchRepository) lockBatchRowForUpdate(ctx context.Context, tx pgx.Tx, id batch.ID) error {
+	bid, err := uuid.Parse(id.String())
+	if err != nil {
+		return fmt.Errorf("batch repo: parse id %q: %w", id, err)
+	}
+	var locked uuid.UUID
+	scanErr := tx.QueryRow(ctx,
+		`SELECT id FROM inventory.batches WHERE id = $1 AND NOT is_deleted FOR UPDATE`,
+		bid,
+	).Scan(&locked)
+	if scanErr != nil {
+		if errors.Is(scanErr, pgx.ErrNoRows) {
+			return batch.ErrNotFound
+		}
+		return fmt.Errorf("batch repo: lock for update: %w", scanErr)
+	}
+	return nil
+}
+
 func (r *BatchRepository) updateOnTx(ctx context.Context, tx pgx.Tx, id batch.ID, updateFn func(*batch.Batch) (bool, error)) error {
+	// Acquire pessimistic row lock first — concurrent updaters block
+	// here until our tx commits, so the optimistic-version check below
+	// can never fail in production. Lock-then-read is the standard
+	// SELECT-FOR-UPDATE-with-snapshot pattern (Postgres §13.3.2).
+	if err := r.lockBatchRowForUpdate(ctx, tx, id); err != nil {
+		return err
+	}
 	q := r.q.WithTx(tx)
 	b, err := loadBatch(ctx, q, id)
 	if err != nil {
@@ -76,10 +131,11 @@ func (r *BatchRepository) updateOnTx(ctx context.Context, tx pgx.Tx, id batch.ID
 	if !shouldPersist {
 		return nil
 	}
-	// Persist with WHERE version = $expected. The aggregate already
-	// bumped the in-memory version on each mutator; we pass the
-	// pre-mutation value to the predicate + the post-mutation value
-	// to the SET clause.
+	// Persist with WHERE version = $expected as defense-in-depth. The
+	// row lock above already prevents concurrent writers from sharing
+	// our expected version — rowsAffected==0 here would signal a
+	// programmer error (e.g. an external SQL bypass) rather than a
+	// real race. Treat it as ErrConcurrencyConflict for clear surfacing.
 	rowsAffected, err := persistBatchState(ctx, q, b, expectedVersion)
 	if err != nil {
 		return err
