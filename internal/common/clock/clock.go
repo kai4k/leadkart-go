@@ -55,6 +55,23 @@ func Now() time.Time {
 // Subsequent Now() calls return t until Reset is invoked.
 // Safe for concurrent use; multiple concurrent freezes compose — see
 // [activeFreezes] for the parallel-test contract.
+//
+// IMPORTANT — global-clock hazard: Set OVERWRITES any existing frozen
+// time. Tests in the same package that t.Parallel() AND call Set with
+// DIFFERENT times will race — whoever Sets last wins for the duration,
+// silently corrupting the others' time-sensitive assertions
+// (observed as a cloud-CI flake on TestConfirmPasswordReset).
+//
+// Test-authoring rules to avoid the hazard:
+//
+//   - If a test uses Set inside a t.Parallel block, every parallel
+//     sibling in the same package MUST use the same frozen time.
+//   - In-test time progression (Set t1 → do work → Set t2) is supported
+//     within a SINGLE test goroutine but mutually-excludes any other
+//     parallel sibling — sequentialise such tests via t.Parallel
+//     removal.
+//   - Long-term fix tracked in ADR backlog: inject clock as a
+//     constructor dependency to eliminate the global entirely.
 func Set(t time.Time) {
 	utc := t.UTC()
 	fixed.Store(&utc)

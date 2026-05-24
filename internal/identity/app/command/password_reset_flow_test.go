@@ -78,7 +78,9 @@ func (r *resettableRepo) emailRequestedToken(t *testing.T) string {
 }
 
 func TestRequestPasswordReset_HappyPath_PersistsAndEmitsEmailEvent(t *testing.T) {
-	t.Parallel()
+	// NOT t.Parallel — freezeClock(t) sets a different time than
+	// permission_request_test.go's tests; concurrent runs race on the
+	// global clock. See clock.Set doc-comment "global-clock hazard".
 	freezeClock(t)
 
 	addr, err := email.New("alice@example.test")
@@ -105,7 +107,7 @@ func TestRequestPasswordReset_HappyPath_PersistsAndEmitsEmailEvent(t *testing.T)
 }
 
 func TestRequestPasswordReset_UnknownEmail_SilentSuccess(t *testing.T) {
-	t.Parallel()
+	// NOT t.Parallel — see global-clock hazard note above.
 	freezeClock(t)
 	repo := newResettableRepo(nil) // no Person seeded
 	h := command.NewRequestPasswordResetHandler(repo)
@@ -120,7 +122,10 @@ func TestRequestPasswordReset_UnknownEmail_SilentSuccess(t *testing.T) {
 }
 
 func TestConfirmPasswordReset_HappyPath_RotatesPasswordAndStamp(t *testing.T) {
-	t.Parallel()
+	// NOT t.Parallel — see global-clock hazard note above. This was the
+	// cloud-CI flake's primary surface: a parallel permission_request
+	// test's freezeClock to 2026-05-23 overwrote this test's 2026-05-07,
+	// pushing the just-minted reset token past its 1h expiry window.
 	freezeClock(t)
 
 	addr, _ := email.New("alice@example.test")
@@ -152,7 +157,7 @@ func TestConfirmPasswordReset_HappyPath_RotatesPasswordAndStamp(t *testing.T) {
 }
 
 func TestConfirmPasswordReset_BadToken_ReturnsTokenInvalid(t *testing.T) {
-	t.Parallel()
+	// NOT t.Parallel — see global-clock hazard note above.
 	freezeClock(t)
 	repo := newResettableRepo(newPersonWithPassword(t, "current-pw"))
 	h := command.NewConfirmPasswordResetHandler(repo, passwordpolicy.Noop{})
