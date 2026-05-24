@@ -73,6 +73,8 @@ tags:
     description: Permission-elevation approval workflow (ADR 0055)
   - name: Platform
     description: Platform bounded context (ADR 0059) — verification pipeline, marketplace, lead credits
+  - name: inventory
+    description: Product / Batch / StockMovement aggregates per BRD §6.5 (ADR 0061)
 
 security:
   - BearerAuth: []
@@ -1460,6 +1462,262 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
 
+  /api/v1/inventory/products:
+    post:
+      tags: [inventory]
+      summary: Create a Product
+      description: |
+        Requires `inventory.catalog.manage`. SKU is canonicalised
+        upper-case + trimmed before per-tenant uniqueness check. 409 on
+        SKU collision. 422 on field-validation failure.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateProductRequest' }
+      responses:
+        '201':
+          description: Product created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CreateProductResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '409':
+          description: SKU already exists in this tenant
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+
+    get:
+      tags: [inventory]
+      summary: List Products (cursor-paginated)
+      description: |
+        Requires `inventory.catalog.read` OR `inventory.catalog.manage`.
+        Returns the live (non-deleted) products for the caller's tenant
+        ordered (created_at, id) DESC. Filters narrow the result set.
+      parameters:
+        - { $ref: '#/components/parameters/Cursor' }
+        - { $ref: '#/components/parameters/PageSize' }
+        - name: active
+          in: query
+          required: false
+          schema: { type: string, enum: ['true', 'false'] }
+          description: When 'true', restricts to is_active products.
+        - name: dosage_form
+          in: query
+          required: false
+          schema: { type: string }
+        - name: manufacturer
+          in: query
+          required: false
+          schema: { type: string }
+        - name: search
+          in: query
+          required: false
+          schema: { type: string }
+          description: pg_trgm fuzzy match on (sku || name) per ADR 0040.
+      responses:
+        '200':
+          description: Page of products
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ListProductsResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /api/v1/inventory/products/{productId}:
+    get:
+      tags: [inventory]
+      summary: Get a Product by ID
+      description: |
+        Requires `inventory.catalog.read`. Cross-tenant access surfaces
+        as 404 per ADR 0044 enumeration-safety.
+      parameters:
+        - { $ref: '#/components/parameters/ProductId' }
+      responses:
+        '200':
+          description: Product view
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ProductDto' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+    patch:
+      tags: [inventory]
+      summary: Update a Product
+      description: |
+        Requires `inventory.catalog.manage`. Supplied-key partial update —
+        only fields present in the JSON body are applied (omitted fields
+        retain their prior value). JSON `null` is NOT distinguishable from
+        omission on the wire, so clearing a field is not supported; this
+        deliberately differs from RFC 7396 merge-patch semantics. 422 on
+        invariant failure (out-of-range GST bps, oversized name, etc).
+      parameters:
+        - { $ref: '#/components/parameters/ProductId' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UpdateProductRequest' }
+      responses:
+        '204': { description: Updated }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: Product is deleted
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+
+    delete:
+      tags: [inventory]
+      summary: Soft-delete a Product
+      description: |
+        Requires `inventory.catalog.manage`. Idempotent — repeat calls
+        return 204. REJECTED with 409 `product_has_live_stock` if any
+        live batch with quantity_on_hand > 0 exists.
+      parameters:
+        - { $ref: '#/components/parameters/ProductId' }
+      responses:
+        '204': { description: Deleted (or already deleted) }
+        '409':
+          description: Product has live batches with non-zero stock
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /api/v1/inventory/products/{productId}/batches:
+    post:
+      tags: [inventory]
+      summary: Add a Batch to a Product
+      description: |
+        Requires `inventory.stock.manage`. The parent product MUST exist
+        in the caller's tenant scope (cross-tenant or missing → 404).
+        batch_number is unique per product on live rows.
+      parameters:
+        - { $ref: '#/components/parameters/ProductId' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AddBatchRequest' }
+      responses:
+        '201':
+          description: Batch added
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AddBatchResponse' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: batch_number already exists for this product
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+
+    get:
+      tags: [inventory]
+      summary: List Batches for a Product (cursor-paginated, FEFO-ordered)
+      description: |
+        Requires `inventory.stock.read` OR `inventory.stock.manage`.
+        Returns live batches ordered by expiry_date DESC. Expired batches
+        excluded by default (pass `include_expired=true` to include).
+      parameters:
+        - { $ref: '#/components/parameters/ProductId' }
+        - { $ref: '#/components/parameters/Cursor' }
+        - { $ref: '#/components/parameters/PageSize' }
+        - name: include_expired
+          in: query
+          required: false
+          schema: { type: string, enum: ['true', 'false'] }
+      responses:
+        '200':
+          description: Page of batches
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ListBatchesResponse' }
+
+  /api/v1/inventory/batches/{batchId}:
+    get:
+      tags: [inventory]
+      summary: Get a Batch by ID
+      description: |
+        Requires `inventory.stock.read` OR `inventory.stock.manage`.
+        Cross-tenant access surfaces as 404 per ADR 0044.
+      parameters:
+        - { $ref: '#/components/parameters/BatchId' }
+      responses:
+        '200':
+          description: Batch view
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BatchDto' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/v1/inventory/batches/{batchId}/movements:
+    post:
+      tags: [inventory]
+      summary: Log a Stock Movement
+      description: |
+        Requires `inventory.stock.manage`. Persists the movement + bumps
+        the batch's quantity_on_hand atomically (single tx). Idempotency
+        via `X-Command-Id` per ADR 0031.
+
+        Quantity is the POSITIVE magnitude — direction is implicit in
+        Type (Outbound subtracts). Adjustment writes the positive
+        magnitude in slice 1; future `direction` field for up/down.
+
+        Rejections (409): insufficient_stock (Outbound > on-hand),
+        batch_expired (Inbound on expired batch), conflict (concurrent
+        modification after retry cap).
+      parameters:
+        - { $ref: '#/components/parameters/BatchId' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LogMovementRequest' }
+      responses:
+        '201':
+          description: Movement logged
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LogMovementResponse' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: Insufficient stock / batch expired / concurrency conflict
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+
+    get:
+      tags: [inventory]
+      summary: List Stock Movements for a Batch (cursor-paginated)
+      description: |
+        Requires `inventory.stock.read` OR `inventory.stock.manage`.
+        Append-only ledger ordered (occurred_at, id) DESC. Optional
+        `type` filter narrows to one movement type.
+      parameters:
+        - { $ref: '#/components/parameters/BatchId' }
+        - { $ref: '#/components/parameters/Cursor' }
+        - { $ref: '#/components/parameters/PageSize' }
+        - name: type
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [inbound, outbound, adjustment, reservation, release]
+      responses:
+        '200':
+          description: Page of movements
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ListMovementsResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+
 components:
   securitySchemes:
     BearerAuth:
@@ -1515,6 +1773,16 @@ components:
       schema: { type: string, format: uuid }
       description: Generic resource path-parameter (Platform module routes).
 
+    ProductId:
+      name: productId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    BatchId:
+      name: batchId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
   responses:
     BadRequest:
       description: Malformed request (invalid body, bad param shape)
@@ -2431,3 +2699,145 @@ components:
       properties:
         tenant_id: { type: string, format: uuid }
         balance:   { type: integer, format: int64 }
+    ProductDto:
+      type: object
+      required: [id, tenant_id, sku, name, dosage_form, pack_size, hsn_code, gst_rate_bps, is_active, created_at, updated_at]
+      properties:
+        id:            { type: string, format: uuid }
+        tenant_id:     { type: string, format: uuid }
+        sku:           { type: string, minLength: 1, maxLength: 64 }
+        name:          { type: string, minLength: 1, maxLength: 200 }
+        dosage_form:   { type: string, minLength: 1, maxLength: 50 }
+        pack_size:     { type: string, minLength: 1, maxLength: 100 }
+        hsn_code:      { type: string, minLength: 4, maxLength: 10, description: 'Indian HSN code; 4..10 digits' }
+        gst_rate_bps:  { type: integer, minimum: 0, maximum: 10000, description: 'GST rate in basis points (1200 = 12%)' }
+        manufacturer:  { type: string, maxLength: 200 }
+        is_active:     { type: boolean }
+        created_at:    { type: string, format: date-time }
+        updated_at:    { type: string, format: date-time }
+
+    CreateProductRequest:
+      type: object
+      required: [sku, name, dosage_form, pack_size, hsn_code, gst_rate_bps]
+      properties:
+        sku:           { type: string, minLength: 1, maxLength: 64 }
+        name:          { type: string, minLength: 1, maxLength: 200 }
+        dosage_form:   { type: string, minLength: 1, maxLength: 50 }
+        pack_size:     { type: string, minLength: 1, maxLength: 100 }
+        hsn_code:      { type: string, minLength: 4, maxLength: 10 }
+        gst_rate_bps:  { type: integer, minimum: 0, maximum: 10000 }
+        manufacturer:  { type: string, maxLength: 200 }
+
+    CreateProductResponse:
+      type: object
+      required: [product_id]
+      properties:
+        product_id: { type: string, format: uuid }
+
+    UpdateProductRequest:
+      type: object
+      description: 'Partial-update payload — only fields present in the JSON body are applied (omitted fields retain prior value). JSON null is treated as omission; field clearing is not supported. Deliberately NOT RFC 7396 merge-patch semantics.'
+      properties:
+        name:          { type: string, minLength: 1, maxLength: 200 }
+        gst_rate_bps:  { type: integer, minimum: 0, maximum: 10000 }
+        is_active:     { type: boolean }
+        manufacturer:  { type: string, maxLength: 200 }
+
+    ListProductsResponse:
+      type: object
+      required: [items, has_more]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/ProductDto' }
+        has_more:    { type: boolean }
+        next_cursor: { type: string }
+
+    BatchDto:
+      type: object
+      required: [id, product_id, tenant_id, batch_number, manufacture_date, expiry_date, manufacturer_name, manufacturing_licence_number, mrp_paise, purchase_price_paise, quantity_on_hand, version, created_at, updated_at]
+      properties:
+        id:                            { type: string, format: uuid }
+        product_id:                    { type: string, format: uuid }
+        tenant_id:                     { type: string, format: uuid }
+        batch_number:                  { type: string, minLength: 1, maxLength: 100 }
+        manufacture_date:              { type: string, format: date-time }
+        expiry_date:                   { type: string, format: date-time }
+        manufacturer_name:             { type: string, minLength: 1, maxLength: 200 }
+        manufacturing_licence_number:  { type: string, minLength: 1, maxLength: 100 }
+        mrp_paise:                     { type: integer, format: int64, minimum: 0, description: 'Maximum Retail Price in paise (1 INR = 100 paise; Stripe canon)' }
+        purchase_price_paise:          { type: integer, format: int64, minimum: 0 }
+        quantity_on_hand:              { type: integer, format: int64, minimum: 0 }
+        version:                       { type: integer, format: int64, description: 'Optimistic-concurrency token (Vernon IDDD ch.10)' }
+        created_at:                    { type: string, format: date-time }
+        updated_at:                    { type: string, format: date-time }
+
+    AddBatchRequest:
+      type: object
+      required: [batch_number, manufacture_date, expiry_date, manufacturer_name, manufacturing_licence_number, mrp_paise, purchase_price_paise]
+      properties:
+        batch_number:                  { type: string, minLength: 1, maxLength: 100 }
+        manufacture_date:              { type: string, format: date-time }
+        expiry_date:                   { type: string, format: date-time }
+        manufacturer_name:             { type: string, minLength: 1, maxLength: 200 }
+        manufacturing_licence_number:  { type: string, minLength: 1, maxLength: 100 }
+        mrp_paise:                     { type: integer, format: int64, minimum: 0 }
+        purchase_price_paise:          { type: integer, format: int64, minimum: 0 }
+
+    AddBatchResponse:
+      type: object
+      required: [batch_id]
+      properties:
+        batch_id: { type: string, format: uuid }
+
+    ListBatchesResponse:
+      type: object
+      required: [items, has_more]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/BatchDto' }
+        has_more:    { type: boolean }
+        next_cursor: { type: string }
+
+    MovementDto:
+      type: object
+      required: [id, batch_id, product_id, tenant_id, type, quantity, quantity_on_hand_after, reason, actor_membership_id, occurred_at]
+      properties:
+        id:                       { type: string, format: uuid }
+        batch_id:                 { type: string, format: uuid }
+        product_id:               { type: string, format: uuid }
+        tenant_id:                { type: string, format: uuid }
+        type:                     { type: string, enum: [inbound, outbound, adjustment, reservation, release] }
+        quantity:                 { type: integer, format: int64, description: 'Signed delta; Outbound is negative.' }
+        quantity_on_hand_after:   { type: integer, format: int64, minimum: 0 }
+        reason:                   { type: string, minLength: 1, maxLength: 500 }
+        actor_membership_id:      { type: string, format: uuid }
+        source_reference:         { type: string, maxLength: 200, description: 'Optional opaque external reference (future OrderID, PurchaseOrderID).' }
+        occurred_at:              { type: string, format: date-time }
+
+    LogMovementRequest:
+      type: object
+      required: [type, quantity, reason]
+      properties:
+        type:             { type: string, enum: [inbound, outbound, adjustment, reservation, release] }
+        quantity:         { type: integer, format: int64, minimum: 1, description: 'Positive magnitude; direction implicit in type.' }
+        reason:           { type: string, minLength: 1, maxLength: 500 }
+        source_reference: { type: string, maxLength: 200 }
+
+    LogMovementResponse:
+      type: object
+      required: [movement_id, quantity_on_hand_after]
+      properties:
+        movement_id:            { type: string, format: uuid }
+        quantity_on_hand_after: { type: integer, format: int64, minimum: 0 }
+
+    ListMovementsResponse:
+      type: object
+      required: [items, has_more]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/MovementDto' }
+        has_more:    { type: boolean }
+        next_cursor: { type: string }

@@ -65,3 +65,6 @@ handler = withRateLimit(handler)
 - [Eli Bendersky — Better HTTP routing in Go 1.22](https://eli.thegreenplace.net/2023/better-http-server-routing-in-go-122/).
 - [Alex Edwards — Which Go Router Should I Use?](https://www.alexedwards.net/blog/which-go-router-should-i-use).
 - [JetBrains Go Ecosystem 2025 Trends](https://blog.jetbrains.com/go/2025/11/10/go-language-trends-ecosystem-2025/).
+
+
+**Fitness function:** convention-only — not mechanically expressible. "Use stdlib net/http" is enforced by `TestArch_NoBannedDeps` indirectly (no chi/gin in go.mod), but the affirmative use is observed in code review rather than a fitness function.

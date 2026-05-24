@@ -85,3 +85,10 @@ The outbox captures **domain events** (state-change facts). For non-state-change
 - [TDL — Distributed Transactions in Go (Oct 2024)](https://threedots.tech/post/distributed-transactions-in-go/) — outbox + audit unification.
 - [DPDP Act 2023 §12 + SOC2 CC4.1](https://www.meity.gov.in/digital-personal-data-protection-act-2023) — 7-year retention requirements.
 - LeadKart .NET — `data-retention.md` doctrine (mirror reference for Go port).
+
+
+## Fitness function
+
+`TestArch_OutboxTableSchema` (in `internal/architecture/`).
+
+Outbox table column set is fixed — the audit reader assumes id / occurred_at / topic / payload / forwarded_at + the act_* columns per ADR 0056.

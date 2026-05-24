@@ -106,8 +106,9 @@ func bootstrapTestDB(ctx context.Context, ownerDSN, migrationsDir string) error 
 
 	stmts := []string{
 		`CREATE ROLE leadkart_app LOGIN PASSWORD 'leadkart_app_pw' NOSUPERUSER NOINHERIT NOCREATEROLE NOCREATEDB`,
-		`GRANT USAGE ON SCHEMA app, identity TO leadkart_app`,
+		`GRANT USAGE ON SCHEMA app, identity, inventory TO leadkart_app`,
 		`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA identity TO leadkart_app`,
+		`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA inventory TO leadkart_app`,
 		`GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA app TO leadkart_app`,
 	}
 	for _, s := range stmts {
@@ -158,7 +159,7 @@ func newTenant(t *testing.T) *tenant.Tenant {
 	if err != nil {
 		t.Fatalf("email: %v", err)
 	}
-	tn, err := tenant.New(id, s, "Acme Pharma Pvt Ltd", "Acme", addr)
+	tn, err := tenant.New(id, s, "Acme Pharma Pvt Ltd", "Acme", addr, testNow)
 	if err != nil {
 		t.Fatalf("tenant.New: %v", err)
 	}
@@ -223,7 +224,7 @@ func TestTenantRepository_Add_DuplicateSlug_ReturnsErrSlugTaken(t *testing.T) {
 	// Build a second tenant with a colliding slug.
 	id2 := tenant.ID(ids.NewV7().String())
 	addr, _ := email.New("other@acme.test")
-	dup, err := tenant.New(id2, first.Slug(), "Other Pharma Ltd", "Other", addr)
+	dup, err := tenant.New(id2, first.Slug(), "Other Pharma Ltd", "Other", addr, testNow)
 	if err != nil {
 		t.Fatalf("tenant.New dup: %v", err)
 	}
@@ -258,7 +259,7 @@ func TestTenantRepository_UpdateByID_ActivatesAndDrainsEvent(t *testing.T) {
 
 	// Activate via UpdateFn closure.
 	err := repo.UpdateByID(ctx, tn.ID(), func(t2 *tenant.Tenant) (bool, error) {
-		if err := t2.Activate(); err != nil {
+		if err := t2.Activate(testNow); err != nil {
 			return false, err
 		}
 		return true, nil

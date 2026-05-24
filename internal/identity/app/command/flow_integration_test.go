@@ -29,6 +29,7 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -115,12 +116,12 @@ func newWiredApp(t *testing.T) wiredApp {
 	stampCache := adapters.NewSecurityStampCache(hc, persons)
 	stamps := adapters.NewSecurityStampValidator(stampCache)
 
-	permResolver := permissions.NewResolver(memberships, roles)
-	register := command.NewRegisterTenantHandler(tx, tenants, persons, memberships, roles)
+	permResolver := permissions.NewResolver(memberships, roles, now)
+	register := command.NewRegisterTenantHandler(tx, tenants, persons, memberships, roles, now)
 	authRouter := adapters.NewAuthRouterPG(pool, tx)
 	login := command.NewLoginHandler(authRouter, families, tenants, persons, permResolver, issuer, now, refreshTTL, dummyHash)
 	refresh := command.NewRefreshHandler(families, persons, memberships, tenants, permResolver, issuer, now, refreshTTL)
-	logout := command.NewLogoutHandler(families)
+	logout := command.NewLogoutHandler(families, now)
 
 	return wiredApp{
 		pool:     pool,
@@ -380,9 +381,27 @@ func TestE2E_LoginThenRequirePermissionGate(t *testing.T) {
 		t.Fatal("forbidden gate: sentinel ran despite missing permission")
 	}
 
-	// 6. Tampered token → 401 (not 403). Mutating one byte invalidates
-	//    the HMAC signature; the verifier rejects before claim inspection.
-	tampered := loginOut.AccessToken[:len(loginOut.AccessToken)-2] + "XX"
+	// 6. Tampered token → 401 (not 403). Mutating one byte of the
+	//    signature segment invalidates the HMAC; the verifier rejects
+	//    before claim inspection.
+	//
+	//    The previous form (`[:len-2] + "XX"`) is non-deterministic — if
+	//    the random signature happens to end with "XX" (≈1 in 4096) the
+	//    tamper is a no-op and the verifier accepts the token. Split on
+	//    "." so we know we're touching the signature segment, then flip
+	//    one char to a guaranteed-different base64url value. This makes
+	//    the test robust without weakening the HMAC-rejection intent.
+	parts := strings.Split(loginOut.AccessToken, ".")
+	if len(parts) != 3 || len(parts[2]) == 0 {
+		t.Fatalf("token shape: want header.payload.signature, got %d parts", len(parts))
+	}
+	sig := []byte(parts[2])
+	if sig[0] == 'A' {
+		sig[0] = 'B'
+	} else {
+		sig[0] = 'A'
+	}
+	tampered := parts[0] + "." + parts[1] + "." + string(sig)
 	called = false
 	req = httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/admin", nil)
 	req.Header.Set("Authorization", "Bearer "+tampered)

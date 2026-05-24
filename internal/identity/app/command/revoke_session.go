@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/refreshtoken"
@@ -34,14 +35,19 @@ var ErrSessionNotFound = errors.New("revoke_session: session not found")
 // RevokeSessionHandler revokes a single family.
 type RevokeSessionHandler struct {
 	families refreshtoken.Repository
+	now      func() time.Time
 }
 
-// NewRevokeSessionHandler wires the handler.
-func NewRevokeSessionHandler(families refreshtoken.Repository) RevokeSessionHandler {
+// NewRevokeSessionHandler wires the handler. `now` is the explicit time
+// source per the clock-injection refactor. Nil → time.Now.
+func NewRevokeSessionHandler(families refreshtoken.Repository, now func() time.Time) RevokeSessionHandler {
 	if families == nil {
 		panic("command: NewRevokeSessionHandler families repository required")
 	}
-	return RevokeSessionHandler{families: families}
+	if now == nil {
+		now = time.Now
+	}
+	return RevokeSessionHandler{families: families, now: now}
 }
 
 // Handle runs the revoke flow.
@@ -56,6 +62,7 @@ func (h RevokeSessionHandler) Handle(ctx context.Context, cmd RevokeSessionComma
 	if reason == "" {
 		reason = "user_revoked"
 	}
+	now := h.now()
 
 	err := h.families.UpdateByID(ctx, cmd.FamilyID, func(f *refreshtoken.Family) (bool, error) {
 		// Ownership gate: the caller's PersonID MUST match the family's.
@@ -70,7 +77,7 @@ func (h RevokeSessionHandler) Handle(ctx context.Context, cmd RevokeSessionComma
 		if f.IsRevoked() {
 			return false, nil
 		}
-		if err := f.Revoke(reason); err != nil {
+		if err := f.Revoke(reason, now); err != nil {
 			return false, err
 		}
 		return true, nil
@@ -110,14 +117,19 @@ type RevokeAllSessionsResult struct {
 // RevokeAllSessionsHandler revokes the caller's active families.
 type RevokeAllSessionsHandler struct {
 	families refreshtoken.Repository
+	now      func() time.Time
 }
 
-// NewRevokeAllSessionsHandler wires the handler.
-func NewRevokeAllSessionsHandler(families refreshtoken.Repository) RevokeAllSessionsHandler {
+// NewRevokeAllSessionsHandler wires the handler. `now` is the explicit
+// time source per the clock-injection refactor. Nil → time.Now.
+func NewRevokeAllSessionsHandler(families refreshtoken.Repository, now func() time.Time) RevokeAllSessionsHandler {
 	if families == nil {
 		panic("command: NewRevokeAllSessionsHandler families repository required")
 	}
-	return RevokeAllSessionsHandler{families: families}
+	if now == nil {
+		now = time.Now
+	}
+	return RevokeAllSessionsHandler{families: families, now: now}
 }
 
 // Handle revokes all (or all-except-one) active families.
@@ -135,6 +147,7 @@ func (h RevokeAllSessionsHandler) Handle(ctx context.Context, cmd RevokeAllSessi
 	if reason == "" {
 		reason = "user_revoked_all"
 	}
+	now := h.now()
 
 	families, err := h.families.ListActiveForPerson(ctx, cmd.PersonID)
 	if err != nil {
@@ -151,7 +164,7 @@ func (h RevokeAllSessionsHandler) Handle(ctx context.Context, cmd RevokeAllSessi
 			if loaded.IsRevoked() {
 				return false, nil
 			}
-			if err := loaded.Revoke(reason); err != nil {
+			if err := loaded.Revoke(reason, now); err != nil {
 				return false, err
 			}
 			return true, nil

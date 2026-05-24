@@ -26,6 +26,11 @@ import (
 
 const outboxTopic = "identity.events"
 
+// forwarderFixedNow is the deterministic instant identity outbox-forwarder
+// integration tests pass into NewOutboxForwarder per the clock-injection
+// refactor — replaces the prior implicit clock.Now() reliance.
+var forwarderFixedNow = time.Date(2026, 5, 24, 12, 0, 0, 0, time.UTC)
+
 // drainSubscriber records every received message into a slice. Unlike
 // the production subscriber which persists state, this one is purely
 // in-memory + assertion-friendly.
@@ -83,7 +88,7 @@ func TestOutboxForwarder_PublishesUnforwardedRows(t *testing.T) {
 	drain := &drainSubscriber{}
 	go drain.record(msgs)
 
-	forwarder := adapters.NewOutboxForwarder(pool, tx, pubsub, outboxTopic, 0)
+	forwarder := adapters.NewOutboxForwarder(pool, tx, pubsub, outboxTopic, 0, func() time.Time { return forwarderFixedNow })
 
 	// Drive the application: register a tenant — this writes one outbox
 	// row (TenantRegisteredEvent → identity.tenant_registered.v1).
@@ -93,7 +98,7 @@ func TestOutboxForwarder_PublishesUnforwardedRows(t *testing.T) {
 		t.Fatalf("slug: %v", err)
 	}
 	addr, _ := email.New("forward@flow.test")
-	tn, err := tenant.New(tenant.ID(ids.NewV7().String()), registerSlug, "Forward Pharma", "FP", addr)
+	tn, err := tenant.New(tenant.ID(ids.NewV7().String()), registerSlug, "Forward Pharma", "FP", addr, testNow)
 	if err != nil {
 		t.Fatalf("tenant.New: %v", err)
 	}
@@ -153,12 +158,12 @@ func TestOutboxForwarder_IsIdempotent_OnSecondPass(t *testing.T) {
 	drain := &drainSubscriber{}
 	go drain.record(msgs)
 
-	forwarder := adapters.NewOutboxForwarder(pool, tx, pubsub, outboxTopic, 0)
+	forwarder := adapters.NewOutboxForwarder(pool, tx, pubsub, outboxTopic, 0, func() time.Time { return forwarderFixedNow })
 
 	full := ids.NewV7().String()
 	registerSlug, _ := slug.New("idempotent-" + full[len(full)-8:])
 	addr, _ := email.New("idempotent@flow.test")
-	tn, _ := tenant.New(tenant.ID(ids.NewV7().String()), registerSlug, "Idempotent Pharma", "IP", addr)
+	tn, _ := tenant.New(tenant.ID(ids.NewV7().String()), registerSlug, "Idempotent Pharma", "IP", addr, testNow)
 	if err := tenants.Add(t.Context(), tn); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
@@ -187,7 +192,7 @@ func TestOutboxForwarder_RunStopsOnContextCancel(t *testing.T) {
 	pubsub := gochannel.NewGoChannel(gochannel.Config{}, watermill.NewSlogLogger(silentSlog()))
 	t.Cleanup(func() { _ = pubsub.Close() })
 
-	forwarder := adapters.NewOutboxForwarder(pool, tx, pubsub, outboxTopic, 0)
+	forwarder := adapters.NewOutboxForwarder(pool, tx, pubsub, outboxTopic, 0, func() time.Time { return forwarderFixedNow })
 
 	ctx, cancel := context.WithTimeout(t.Context(), 250*time.Millisecond)
 	defer cancel()

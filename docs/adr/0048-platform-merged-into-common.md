@@ -140,3 +140,6 @@ CLAUDE.md "When in doubt" guidance: "Trust `.claude/rules/` over this map. Trust
 - **ADR 0001** — Modular monolith topology (the BC structure this merge respects).
 - **ADR 0047** — Layer-boundary discipline (the arch test that does the real enforcement; merge doesn't relax it).
 - **CLAUDE.md** § "When in doubt" — "Trust the actual code [TDL's repo] over both [rules + ADRs]" — directly justifies aligning to TDL's actual layout.
+
+
+**Fitness function:** convention-only — not mechanically expressible. A one-time directory move; structural rule is now subsumed by ADR 0051.

@@ -31,7 +31,7 @@ func newPerson(t *testing.T, addr string) *person.Person {
 	if err != nil {
 		t.Fatalf("hash: %v", err)
 	}
-	p, err := person.New(id, e, "Alice", "Acme", hash)
+	p, err := person.New(id, e, "Alice", "Acme", hash, testNow)
 	if err != nil {
 		t.Fatalf("person.New: %v", err)
 	}
@@ -131,7 +131,7 @@ func TestPersonRepository_UpdateByID_ChangePasswordRotatesStamp(t *testing.T) {
 
 	newHash, _ := person.NewPasswordHash(strings.Replace(strongHash, "abcdef", "fedcba", 1))
 	err := repo.UpdateByID(ctx, p.ID(), func(p2 *person.Person) (bool, error) {
-		if err := p2.ChangePassword(newHash); err != nil {
+		if err := p2.ChangePassword(newHash, testNow); err != nil {
 			return false, err
 		}
 		return true, nil
@@ -163,7 +163,7 @@ func TestPersonRepository_UpdateByID_AnonymiseScrubs(t *testing.T) {
 	}
 
 	err := repo.UpdateByID(ctx, p.ID(), func(p2 *person.Person) (bool, error) {
-		if err := p2.Anonymise(); err != nil {
+		if err := p2.Anonymise(testNow); err != nil {
 			return false, err
 		}
 		return true, nil

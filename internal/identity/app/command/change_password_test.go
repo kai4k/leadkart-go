@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/leadkart/leadkart-go/internal/common/clock"
 	"github.com/leadkart/leadkart-go/internal/common/email"
 	"github.com/leadkart/leadkart-go/internal/identity/adapters"
 	"github.com/leadkart/leadkart-go/internal/identity/app/argon2"
@@ -15,6 +14,7 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/domain/passwordpolicy"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
 )
+
 
 // fakePersonRepo is the minimum [person.Repository] surface the
 // ChangePasswordHandler exercises — GetByID + UpdateByID. Add /
@@ -94,25 +94,19 @@ func newPersonWithPassword(t *testing.T, plain string) *person.Person {
 		t.Fatalf("email.New: %v", err)
 	}
 	pid := person.ID("p-test-123")
-	p, err := person.New(pid, addr, "Alice", "Test", hash)
+	p, err := person.New(pid, addr, "Alice", "Test", hash, testNow)
 	if err != nil {
 		t.Fatalf("person.New: %v", err)
 	}
 	return p
 }
 
-func freezeClock(t *testing.T) {
-	t.Helper()
-	clock.Set(time.Date(2026, 5, 7, 12, 0, 0, 0, time.UTC))
-	t.Cleanup(clock.Reset)
-}
 
 func TestChangePassword_Succeeds(t *testing.T) {
 	t.Parallel()
-	freezeClock(t)
 	currentPlain := "correct horse battery staple"
 	repo := &fakePersonRepo{person: newPersonWithPassword(t, currentPlain)}
-	h := command.NewChangePasswordHandler(repo, passwordpolicy.Noop{})
+	h := command.NewChangePasswordHandler(repo, passwordpolicy.Noop{}, func() time.Time { return testNow })
 
 	err := h.Handle(t.Context(), command.ChangePasswordCommand{
 		PersonID:        repo.person.ID(),
@@ -136,9 +130,8 @@ func TestChangePassword_Succeeds(t *testing.T) {
 
 func TestChangePassword_RejectsIncorrectCurrentPassword(t *testing.T) {
 	t.Parallel()
-	freezeClock(t)
 	repo := &fakePersonRepo{person: newPersonWithPassword(t, "real-current-pw")}
-	h := command.NewChangePasswordHandler(repo, passwordpolicy.Noop{})
+	h := command.NewChangePasswordHandler(repo, passwordpolicy.Noop{}, func() time.Time { return testNow })
 
 	err := h.Handle(t.Context(), command.ChangePasswordCommand{
 		PersonID:        repo.person.ID(),
@@ -158,9 +151,8 @@ func TestChangePassword_PersonNotFound_ReturnsIncorrectCurrentPassword(t *testin
 	// "no such person" + "wrong password" into the same error to
 	// defeat ID-enumeration via change-password timing/error shape.
 	t.Parallel()
-	freezeClock(t)
 	repo := &fakePersonRepo{} // no Person seeded
-	h := command.NewChangePasswordHandler(repo, passwordpolicy.Noop{})
+	h := command.NewChangePasswordHandler(repo, passwordpolicy.Noop{}, func() time.Time { return testNow })
 
 	err := h.Handle(t.Context(), command.ChangePasswordCommand{
 		PersonID:        person.ID("p-does-not-exist"),
@@ -174,11 +166,10 @@ func TestChangePassword_PersonNotFound_ReturnsIncorrectCurrentPassword(t *testin
 
 func TestChangePassword_RejectsBreachedPassword(t *testing.T) {
 	t.Parallel()
-	freezeClock(t)
 	currentPlain := "real-current-pw"
 	repo := &fakePersonRepo{person: newPersonWithPassword(t, currentPlain)}
 	// Use offline list — "password" is in defaultBreachedSet.
-	h := command.NewChangePasswordHandler(repo, adapters.NewOfflinePasswordList())
+	h := command.NewChangePasswordHandler(repo, adapters.NewOfflinePasswordList(), func() time.Time { return testNow })
 
 	err := h.Handle(t.Context(), command.ChangePasswordCommand{
 		PersonID:        repo.person.ID(),
@@ -195,10 +186,9 @@ func TestChangePassword_RejectsBreachedPassword(t *testing.T) {
 
 func TestChangePassword_RejectsSameAsCurrent(t *testing.T) {
 	t.Parallel()
-	freezeClock(t)
 	plain := "exact-same-passphrase"
 	repo := &fakePersonRepo{person: newPersonWithPassword(t, plain)}
-	h := command.NewChangePasswordHandler(repo, passwordpolicy.Noop{})
+	h := command.NewChangePasswordHandler(repo, passwordpolicy.Noop{}, func() time.Time { return testNow })
 
 	err := h.Handle(t.Context(), command.ChangePasswordCommand{
 		PersonID:        repo.person.ID(),
@@ -218,14 +208,13 @@ func TestChangePassword_AnonymisedPerson_ReturnsIncorrectCurrentPassword(t *test
 	// authenticate. Surface as "incorrect current password" rather
 	// than "anonymised" to avoid leaking account state.
 	t.Parallel()
-	freezeClock(t)
 	currentPlain := "irrelevant"
 	p := newPersonWithPassword(t, currentPlain)
-	if err := p.Anonymise(); err != nil {
+	if err := p.Anonymise(testNow); err != nil {
 		t.Fatalf("Anonymise: %v", err)
 	}
 	repo := &fakePersonRepo{person: p}
-	h := command.NewChangePasswordHandler(repo, passwordpolicy.Noop{})
+	h := command.NewChangePasswordHandler(repo, passwordpolicy.Noop{}, func() time.Time { return testNow })
 
 	err := h.Handle(t.Context(), command.ChangePasswordCommand{
 		PersonID:        p.ID(),
@@ -240,7 +229,7 @@ func TestChangePassword_AnonymisedPerson_ReturnsIncorrectCurrentPassword(t *test
 func TestChangePassword_RejectsZeroPersonID(t *testing.T) {
 	t.Parallel()
 	repo := &fakePersonRepo{}
-	h := command.NewChangePasswordHandler(repo, passwordpolicy.Noop{})
+	h := command.NewChangePasswordHandler(repo, passwordpolicy.Noop{}, func() time.Time { return testNow })
 
 	err := h.Handle(t.Context(), command.ChangePasswordCommand{
 		PersonID:        person.ID(""),
@@ -254,9 +243,8 @@ func TestChangePassword_RejectsZeroPersonID(t *testing.T) {
 
 func TestChangePassword_RejectsEmptyNewPassword(t *testing.T) {
 	t.Parallel()
-	freezeClock(t)
 	repo := &fakePersonRepo{person: newPersonWithPassword(t, "real-current-pw")}
-	h := command.NewChangePasswordHandler(repo, passwordpolicy.Noop{})
+	h := command.NewChangePasswordHandler(repo, passwordpolicy.Noop{}, func() time.Time { return testNow })
 
 	err := h.Handle(t.Context(), command.ChangePasswordCommand{
 		PersonID:        repo.person.ID(),
@@ -276,7 +264,7 @@ func TestNewChangePasswordHandler_PanicsOnNilDeps(t *testing.T) {
 				t.Error("expected panic on nil persons repo")
 			}
 		}()
-		_ = command.NewChangePasswordHandler(nil, passwordpolicy.Noop{})
+		_ = command.NewChangePasswordHandler(nil, passwordpolicy.Noop{}, func() time.Time { return testNow })
 	})
 	t.Run("nil breach checker", func(t *testing.T) {
 		defer func() {
@@ -284,6 +272,6 @@ func TestNewChangePasswordHandler_PanicsOnNilDeps(t *testing.T) {
 				t.Error("expected panic on nil breach checker")
 			}
 		}()
-		_ = command.NewChangePasswordHandler(&fakePersonRepo{}, nil)
+		_ = command.NewChangePasswordHandler(&fakePersonRepo{}, nil, func() time.Time { return testNow })
 	})
 }

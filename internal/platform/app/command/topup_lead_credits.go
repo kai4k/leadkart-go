@@ -41,6 +41,9 @@ func NewTopupLeadCreditsHandler(
 	credits leadcredit.Repository,
 	now func() time.Time,
 ) TopupLeadCreditsHandler {
+	if now == nil {
+		now = time.Now
+	}
 	return TopupLeadCreditsHandler{uow: uow, credits: credits, now: now}
 }
 

@@ -58,7 +58,7 @@ func runRouter(t *testing.T, r *messaging.Router) func() {
 func TestRouter_FullStack_TenantContextAndAuditAndIdempotency(t *testing.T) {
 	pool := inboxFixture(t)
 	receiver := messaging.NewIdempotentReceiver(pool)
-	auditW := audit.NewWriter(pool, silentLog())
+	auditW := audit.NewWriter(pool, silentLog(), time.Now)
 
 	pubsub := gochannel.NewGoChannel(gochannel.Config{}, watermill.NewSlogLogger(silentLog()))
 	t.Cleanup(func() { _ = pubsub.Close() })
@@ -182,7 +182,7 @@ func TestRouter_FullStack_TenantContextAndAuditAndIdempotency(t *testing.T) {
 func TestRouter_AuditMiddleware_PopulatesActFields_WhenMessageMetadataCarriesActClaim(t *testing.T) {
 	pool := inboxFixture(t)
 	receiver := messaging.NewIdempotentReceiver(pool)
-	auditW := audit.NewWriter(pool, silentLog())
+	auditW := audit.NewWriter(pool, silentLog(), time.Now)
 
 	pubsub := gochannel.NewGoChannel(gochannel.Config{}, watermill.NewSlogLogger(silentLog()))
 	t.Cleanup(func() { _ = pubsub.Close() })
@@ -268,7 +268,7 @@ func TestRouter_AuditMiddleware_PopulatesActFields_WhenMessageMetadataCarriesAct
 func TestRouter_AuditMiddleware_LeavesActFieldsEmpty_WhenNoMetadata(t *testing.T) {
 	pool := inboxFixture(t)
 	receiver := messaging.NewIdempotentReceiver(pool)
-	auditW := audit.NewWriter(pool, silentLog())
+	auditW := audit.NewWriter(pool, silentLog(), time.Now)
 
 	pubsub := gochannel.NewGoChannel(gochannel.Config{}, watermill.NewSlogLogger(silentLog()))
 	t.Cleanup(func() { _ = pubsub.Close() })
@@ -343,7 +343,7 @@ func TestRouter_AuditMiddleware_LeavesActFieldsEmpty_WhenNoMetadata(t *testing.T
 func TestRouter_HandlerError_DoesNotRecordInbox_AuditMarksFailure(t *testing.T) {
 	pool := inboxFixture(t)
 	receiver := messaging.NewIdempotentReceiver(pool)
-	auditW := audit.NewWriter(pool, silentLog())
+	auditW := audit.NewWriter(pool, silentLog(), time.Now)
 
 	pubsub := gochannel.NewGoChannel(gochannel.Config{}, watermill.NewSlogLogger(silentLog()))
 	t.Cleanup(func() { _ = pubsub.Close() })

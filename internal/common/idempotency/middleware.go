@@ -94,7 +94,8 @@ func DefaultCallerKeyer(r *http.Request) string {
 // caching only successful responses lets transient failures (network,
 // upstream timeout) be retried legitimately.
 //
-// `now` is the clock function (testable via clock.Set in tests).
+// `now` is the explicit time source — composition root wires `time.Now`;
+// tests inject a fixed-instant closure for deterministic assertions.
 // `ttl` is the per-record retention; 0 means [DefaultTTL].
 // `keyer` extracts the per-caller scope; nil → [DefaultCallerKeyer].
 func Middleware(store Store, now func() time.Time, ttl time.Duration, keyer CallerKeyer) func(http.Handler) http.Handler {

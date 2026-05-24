@@ -179,3 +179,10 @@ River is for **scheduled or fire-and-forget jobs** (the existing `AuditLogPurgeJ
 - Vladimir Khorikov §10 — Application services as the boundary between command + subscriber.
 - Stripe / Auth0 OTP delivery — at-rest plaintext window canon for short-lived tokens.
 - LeadKart `.NET .claude/rules/messaging.md` — "Cascading messages > IMessageBus injection" (the .NET parent's analogous pattern).
+
+
+## Fitness function
+
+`TestArch_SubscribersInPortsSubscribers` (in `internal/architecture/`).
+
+Email sender is wired as a subscriber under `ports/subscribers/email_sender.go`; the test enforces the location.

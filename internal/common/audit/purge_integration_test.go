@@ -43,7 +43,7 @@ func TestPurgeWorker_DeletesOlderThanRetention(t *testing.T) {
 		Duration:      time.Millisecond,
 		Succeeded:     true,
 	}
-	w := audit.NewWriter(pool, silentLogger())
+	w := audit.NewWriter(pool, silentLogger(), time.Now)
 	if err := w.Write(t.Context(), old); err != nil {
 		t.Fatalf("write old: %v", err)
 	}
@@ -53,7 +53,7 @@ func TestPurgeWorker_DeletesOlderThanRetention(t *testing.T) {
 
 	// Run the purge worker directly — the river client is integration
 	// scaffolding here; we assert the SQL contract of Work itself.
-	purger := audit.NewPurgeWorker(pool, silentLogger())
+	purger := audit.NewPurgeWorker(pool, silentLogger(), time.Now)
 	if err := purger.Work(t.Context(), &river.Job[audit.PurgeJob]{Args: audit.PurgeJob{}}); err != nil {
 		t.Fatalf("Work: %v", err)
 	}

@@ -60,6 +60,12 @@ import (
 	"github.com/leadkart/leadkart-go/internal/common/openapi"
 	"github.com/leadkart/leadkart-go/internal/common/pg"
 
+	inventoryadapters "github.com/leadkart/leadkart-go/internal/inventory/adapters"
+	inventoryapp "github.com/leadkart/leadkart-go/internal/inventory/app"
+	inventorycommand "github.com/leadkart/leadkart-go/internal/inventory/app/command"
+	inventoryquery "github.com/leadkart/leadkart-go/internal/inventory/app/query"
+	inventoryports "github.com/leadkart/leadkart-go/internal/inventory/ports"
+
 	platformadapters "github.com/leadkart/leadkart-go/internal/platform/adapters"
 	platformapp "github.com/leadkart/leadkart-go/internal/platform/app"
 	platformcommand "github.com/leadkart/leadkart-go/internal/platform/app/command"
@@ -281,6 +287,10 @@ func run(ctx context.Context, stdout *os.File, _ []string) error {
 	// passed from Identity wiring.
 	platformWiring := buildPlatformApp(pool, time.Now)
 
+	// Inventory module wiring (ADR 0061 — Phase 2 Slice 1). Same
+	// pool + transactor + middleware story as Platform.
+	inventoryAppInstance := buildInventoryApp(pool)
+
 	// NOTE: outbox forwarder + messaging.Router + subscribers.Register
 	// live in cmd/worker — see that binary's package doc. The API host
 	// only writes integration events (via the per-handler outbox writes
@@ -318,7 +328,7 @@ func run(ctx context.Context, stdout *os.File, _ []string) error {
 		},
 	})
 	publicHandler := otelhttp.NewHandler(
-		mwChain(newServer(logger, wiring.App, platformWiring.App, wiring.Issuer, wiring.StampValidator)),
+		mwChain(newServer(logger, wiring.App, platformWiring.App, inventoryAppInstance, wiring.Issuer, wiring.StampValidator)),
 		"leadkart-api",
 	)
 	srv := &http.Server{
@@ -384,6 +394,7 @@ func newServer(
 	log *slog.Logger,
 	identityApp app.Application,
 	platformApp platformapp.Application,
+	inventoryAppInstance inventoryapp.Application,
 	verifier authn.Verifier,
 	validator authn.StampValidator,
 ) http.Handler {
@@ -391,6 +402,7 @@ func newServer(
 	addRootHelpers(mux)
 	ports.AddRoutes(mux, log, identityApp, verifier, validator)
 	platformports.AddRoutes(mux, log, platformApp, verifier, validator)
+	inventoryports.AddRoutes(mux, log, inventoryAppInstance, verifier, validator)
 	return mux
 }
 
@@ -457,7 +469,7 @@ func buildIdentityApp(pool *pgxpool.Pool, hybridCache *cache.HybridCache, cfg co
 	roleHierarchyEdges := adapters.NewRoleHierarchyEdgeRepository(pool, tx)
 	permissionRequests := adapters.NewPermissionRequestRepository(pool, tx)
 	authRouter := adapters.NewAuthRouterPG(pool, tx)
-	permResolver := permissions.NewResolver(memberships, roles)
+	permResolver := permissions.NewResolver(memberships, roles, time.Now)
 
 	// Read-side adapters per ADR 00xx boundary discipline (app/query/
 	// depends on the interface; concrete sqlc-aware impl lives in
@@ -516,52 +528,52 @@ func buildIdentityApp(pool *pgxpool.Pool, hybridCache *cache.HybridCache, cfg co
 		Persons:        persons,
 		App: app.Application{
 		Commands: app.Commands{
-			RegisterTenant:       command.NewRegisterTenantHandler(tx, tenants, persons, memberships, roles),
+			RegisterTenant:       command.NewRegisterTenantHandler(tx, tenants, persons, memberships, roles, now),
 			Login:                command.NewLoginHandler(authRouter, families, tenants, persons, permResolver, issuer, now, cfg.Refresh.AbsoluteTTL, dummyHash),
 			Refresh:              command.NewRefreshHandler(families, persons, memberships, tenants, permResolver, issuer, now, cfg.Refresh.AbsoluteTTL),
-			Logout:               command.NewLogoutHandler(families),
-			ChangePassword:       command.NewChangePasswordHandler(persons, breachChecker),
-			RevokeSession:        command.NewRevokeSessionHandler(families),
-			RevokeAllSessions:    command.NewRevokeAllSessionsHandler(families),
-			RequestPasswordReset: command.NewRequestPasswordResetHandler(persons),
-			ConfirmPasswordReset: command.NewConfirmPasswordResetHandler(persons, breachChecker),
-			RequestEmailChange:   command.NewRequestEmailChangeHandler(persons),
-			ConfirmEmailChange:   command.NewConfirmEmailChangeHandler(persons),
+			Logout:               command.NewLogoutHandler(families, now),
+			ChangePassword:       command.NewChangePasswordHandler(persons, breachChecker, now),
+			RevokeSession:        command.NewRevokeSessionHandler(families, now),
+			RevokeAllSessions:    command.NewRevokeAllSessionsHandler(families, now),
+			RequestPasswordReset: command.NewRequestPasswordResetHandler(persons, now),
+			ConfirmPasswordReset: command.NewConfirmPasswordResetHandler(persons, breachChecker, now),
+			RequestEmailChange:   command.NewRequestEmailChangeHandler(persons, now),
+			ConfirmEmailChange:   command.NewConfirmEmailChangeHandler(persons, now),
 
-			UpdateTenantProfile:            command.NewUpdateTenantProfileHandler(tenants),
-			UpdateTenantStatutory:          command.NewUpdateTenantStatutoryHandler(tenants),
-			UpdateTenantAdminContact:       command.NewUpdateTenantAdminContactHandler(tenants),
-			UpdateTenantSettings:           command.NewUpdateTenantSettingsHandler(tenants),
-			UpdateTenantDisplayPreferences: command.NewUpdateTenantDisplayPreferencesHandler(tenants),
-			SuspendTenant:                  command.NewSuspendTenantHandler(tenants, memberships),
-			ActivateTenant:                 command.NewActivateTenantHandler(tenants),
-			MarkTenantForDeletion:          command.NewMarkTenantForDeletionHandler(tenants, memberships),
-			RestoreTenant:                  command.NewRestoreTenantHandler(tenants),
+			UpdateTenantProfile:            command.NewUpdateTenantProfileHandler(tenants, now),
+			UpdateTenantStatutory:          command.NewUpdateTenantStatutoryHandler(tenants, now),
+			UpdateTenantAdminContact:       command.NewUpdateTenantAdminContactHandler(tenants, now),
+			UpdateTenantSettings:           command.NewUpdateTenantSettingsHandler(tenants, now),
+			UpdateTenantDisplayPreferences: command.NewUpdateTenantDisplayPreferencesHandler(tenants, now),
+			SuspendTenant:                  command.NewSuspendTenantHandler(tenants, memberships, now),
+			ActivateTenant:                 command.NewActivateTenantHandler(tenants, now),
+			MarkTenantForDeletion:          command.NewMarkTenantForDeletionHandler(tenants, memberships, now),
+			RestoreTenant:                  command.NewRestoreTenantHandler(tenants, now),
 
-			UpdateUserProfile:              command.NewUpdateUserProfileHandler(memberships),
-			DeactivateUser:                 command.NewDeactivateUserHandler(memberships),
-			ReactivateUser:                 command.NewReactivateUserHandler(memberships),
-			AssignUserRole:                 command.NewAssignUserRoleHandler(memberships),
-			RevokeUserRole:                 command.NewRevokeUserRoleHandler(memberships),
-			ReplaceUserPermissionOverrides: command.NewReplaceUserPermissionOverridesHandler(memberships),
-			AssignUserManager:              command.NewAssignUserManagerHandler(memberships),
-			RemoveUserManager:              command.NewRemoveUserManagerHandler(memberships),
-			CreateUser:                     command.NewCreateUserHandler(tx, persons, memberships),
-			AnonymiseUser:                  command.NewAnonymiseUserHandler(memberships, persons),
+			UpdateUserProfile:              command.NewUpdateUserProfileHandler(memberships, now),
+			DeactivateUser:                 command.NewDeactivateUserHandler(memberships, now),
+			ReactivateUser:                 command.NewReactivateUserHandler(memberships, now),
+			AssignUserRole:                 command.NewAssignUserRoleHandler(memberships, now),
+			RevokeUserRole:                 command.NewRevokeUserRoleHandler(memberships, now),
+			ReplaceUserPermissionOverrides: command.NewReplaceUserPermissionOverridesHandler(memberships, now),
+			AssignUserManager:              command.NewAssignUserManagerHandler(memberships, now),
+			RemoveUserManager:              command.NewRemoveUserManagerHandler(memberships, now),
+			CreateUser:                     command.NewCreateUserHandler(tx, persons, memberships, now),
+			AnonymiseUser:                  command.NewAnonymiseUserHandler(memberships, persons, now),
 
 			CreateRole:             command.NewCreateRoleHandler(roles, roleHierarchyEdges, tx, now),
-			UpdateRole:             command.NewUpdateRoleHandler(roles),
-			DeleteRole:             command.NewDeleteRoleHandler(roles),
-			ReplaceRolePermissions: command.NewReplaceRolePermissionsHandler(roles),
-			GrantRolePermission:    command.NewGrantRolePermissionHandler(roles),
-			RevokeRolePermission:   command.NewRevokeRolePermissionHandler(roles),
+			UpdateRole:             command.NewUpdateRoleHandler(roles, now),
+			DeleteRole:             command.NewDeleteRoleHandler(roles, now),
+			ReplaceRolePermissions: command.NewReplaceRolePermissionsHandler(roles, now),
+			GrantRolePermission:    command.NewGrantRolePermissionHandler(roles, now),
+			RevokeRolePermission:   command.NewRevokeRolePermissionHandler(roles, now),
 			SetRoleParent:          command.NewSetRoleParentHandler(roleHierarchyEdges, tx, now), // ADR 0058
 
-			GlobalSuspendPerson:        command.NewGlobalSuspendPersonHandler(persons),
-			LiftPersonGlobalSuspension: command.NewLiftPersonGlobalSuspensionHandler(persons),
-			AnonymisePerson:            command.NewAnonymisePersonHandler(persons),
-			UpdatePersonProfile:        command.NewUpdatePersonProfileHandler(persons),
-			HardDeleteTenant:           command.NewHardDeleteTenantHandler(tenants, memberships),
+			GlobalSuspendPerson:        command.NewGlobalSuspendPersonHandler(persons, now),
+			LiftPersonGlobalSuspension: command.NewLiftPersonGlobalSuspensionHandler(persons, now),
+			AnonymisePerson:            command.NewAnonymisePersonHandler(persons, now),
+			UpdatePersonProfile:        command.NewUpdatePersonProfileHandler(persons, now),
+			HardDeleteTenant:           command.NewHardDeleteTenantHandler(tenants, memberships, now),
 
 			CreateImpersonationSession: command.NewCreateImpersonationSessionHandler(impersonationStore, tenants, issuer, now),
 			EndImpersonationSession:    command.NewEndImpersonationSessionHandler(impersonationStore),
@@ -611,7 +623,7 @@ func buildIdentityApp(pool *pgxpool.Pool, hybridCache *cache.HybridCache, cfg co
 	}, nil
 }
 
-// ----- Platform wiring -------------------------------------------------------
+// ----- Platform wiring (ADR 0059 — Slice 1) -------------------------------
 
 // platformWiringResult is the output of buildPlatformApp — used by run
 // to attach the Platform routes. cmd/worker wires the platform-side
@@ -650,6 +662,38 @@ func buildPlatformApp(pool *pgxpool.Pool, now func() time.Time) platformWiringRe
 				BrowseMarketplace:      platformquery.NewBrowseMarketplaceHandler(leads),
 				GetLeadCreditBalance:   platformquery.NewGetLeadCreditBalanceHandler(credits),
 			},
+		},
+	}
+}
+
+// ----- Inventory wiring (ADR 0061 — Slice 1) -------------------------------
+
+// buildInventoryApp wires the Inventory Application from a pgxpool.
+// Mirror of buildIdentityApp at a smaller scale — single bounded context,
+// no JWT issuance / cache concerns.
+//
+// All inventory adapters share the same pgxpool + Transactor as identity
+// per CLAUDE.md "Each module owns its Postgres schema. No cross-schema
+// joins" — same connection pool, distinct schemas, distinct outboxes.
+func buildInventoryApp(pool *pgxpool.Pool) inventoryapp.Application {
+	tx := pg.NewTransactor(pool)
+	products := inventoryadapters.NewProductRepository(pool, tx)
+	batches := inventoryadapters.NewBatchRepository(pool, tx)
+	movements := inventoryadapters.NewStockMovementRepository(pool, tx)
+	return inventoryapp.Application{
+		Commands: inventoryapp.Commands{
+			CreateProduct:    inventorycommand.NewCreateProductHandler(products, time.Now),
+			UpdateProduct:    inventorycommand.NewUpdateProductHandler(products, time.Now),
+			DeleteProduct:    inventorycommand.NewDeleteProductHandler(products, batches, time.Now),
+			AddBatch:         inventorycommand.NewAddBatchHandler(tx, products, batches, time.Now),
+			LogStockMovement: inventorycommand.NewLogStockMovementHandler(tx, batches, movements, time.Now),
+		},
+		Queries: inventoryapp.Queries{
+			GetProduct:             inventoryquery.NewGetProductHandler(products),
+			ListProductsPage:       inventoryquery.NewListProductsPageHandler(products),
+			GetBatch:               inventoryquery.NewGetBatchHandler(batches),
+			ListBatchesByProduct:   inventoryquery.NewListBatchesByProductHandler(batches),
+			ListBatchMovementsPage: inventoryquery.NewListBatchMovementsPageHandler(movements),
 		},
 	}
 }

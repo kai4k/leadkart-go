@@ -22,7 +22,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/leadkart/leadkart-go/internal/common/clock"
 	"github.com/leadkart/leadkart-go/internal/common/ids"
 )
 
@@ -62,14 +61,20 @@ type Entry struct {
 type Writer struct {
 	pool *pgxpool.Pool
 	log  *slog.Logger
+	now  func() time.Time
 }
 
-// NewWriter wires the writer.
-func NewWriter(pool *pgxpool.Pool, log *slog.Logger) *Writer {
+// NewWriter wires the writer. `now` is the explicit time source per
+// the clock-injection refactor — composition root wires `time.Now`.
+// Nil → time.Now.
+func NewWriter(pool *pgxpool.Pool, log *slog.Logger, now func() time.Time) *Writer {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Writer{pool: pool, log: log}
+	if now == nil {
+		now = time.Now
+	}
+	return &Writer{pool: pool, log: log, now: now}
 }
 
 // Write inserts an audit row. Returns nil on success.
@@ -80,7 +85,7 @@ func NewWriter(pool *pgxpool.Pool, log *slog.Logger) *Writer {
 // return; it exists for tests + observability.
 func (w *Writer) Write(ctx context.Context, e Entry) error {
 	if e.OccurredAtUTC.IsZero() {
-		e.OccurredAtUTC = clock.Now()
+		e.OccurredAtUTC = w.now()
 	}
 	e.OccurredAtUTC = e.OccurredAtUTC.UTC()
 	if e.Action == "" {

@@ -19,7 +19,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/leadkart/leadkart-go/internal/common/clock"
 	"github.com/leadkart/leadkart-go/internal/common/errs"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/permission"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
@@ -105,6 +104,10 @@ type Role struct {
 // `multi-tenancy.md` "SuperUser god-mode." Tenant admins cannot
 // promote a custom role to SuperAdmin via HTTP — the field is
 // constructor-only, no setter.
+//
+// `now` is the explicit creation instant per the clock-injection
+// refactor — caller threads the same value used for any sibling
+// aggregate transitions in the operation.
 func New(
 	id ID,
 	tenantID tenant.ID,
@@ -112,6 +115,7 @@ func New(
 	isSystemDefault bool,
 	hierarchyLevel int,
 	isSuperAdmin bool,
+	now time.Time,
 ) (*Role, error) {
 	if id.IsZero() {
 		return nil, fmt.Errorf("%w: id required", ErrInvalid)
@@ -128,7 +132,7 @@ func New(
 			ErrInvalid, hierarchyLevel, HierarchyLevelMin, HierarchyLevelMax)
 	}
 
-	now := clock.Now()
+	now = now.UTC()
 	r := &Role{
 		id:              id,
 		tenantID:        tenantID,
@@ -208,7 +212,9 @@ func (r *Role) Permissions() []*permission.Permission {
 // rename per `multi-tenancy.md` doctrine.
 //
 // Idempotent: renaming to the (trimmed) same name is a no-op (no event).
-func (r *Role) Rename(newName string) error {
+//
+// `now` is the explicit instant for the emitted event's `At`.
+func (r *Role) Rename(newName string, now time.Time) error {
 	if err := r.ensureMutable(); err != nil {
 		return err
 	}
@@ -229,7 +235,7 @@ func (r *Role) Rename(newName string) error {
 		TenantID: r.tenantID,
 		OldName:  old,
 		NewName:  trimmed,
-		At:       clock.Now(),
+		At:       now.UTC(),
 	})
 	return nil
 }
@@ -270,7 +276,9 @@ func (r *Role) HasPermission(p *permission.Permission) bool {
 
 // GrantPermission adds `p` to the role's permission set. Idempotent —
 // granting an already-granted permission is a no-op (no event).
-func (r *Role) GrantPermission(p *permission.Permission) error {
+//
+// `now` is the explicit instant for the emitted event's `At`.
+func (r *Role) GrantPermission(p *permission.Permission, now time.Time) error {
 	if err := r.ensureMutable(); err != nil {
 		return err
 	}
@@ -285,14 +293,16 @@ func (r *Role) GrantPermission(p *permission.Permission) error {
 		RoleID:     r.id,
 		TenantID:   r.tenantID,
 		Permission: p.Name(),
-		At:         clock.Now(),
+		At:         now.UTC(),
 	})
 	return nil
 }
 
 // RevokePermission removes `p` from the role's permission set.
 // Idempotent — revoking a non-present permission is a no-op (no event).
-func (r *Role) RevokePermission(p *permission.Permission) error {
+//
+// `now` is the explicit instant for the emitted event's `At`.
+func (r *Role) RevokePermission(p *permission.Permission, now time.Time) error {
 	if err := r.ensureMutable(); err != nil {
 		return err
 	}
@@ -308,7 +318,7 @@ func (r *Role) RevokePermission(p *permission.Permission) error {
 		RoleID:     r.id,
 		TenantID:   r.tenantID,
 		Permission: p.Name(),
-		At:         clock.Now(),
+		At:         now.UTC(),
 	})
 	return nil
 }
@@ -320,11 +330,15 @@ func (r *Role) RevokePermission(p *permission.Permission) error {
 //
 // Nil entries in `target` are silently dropped (defensive — callers
 // shouldn't pass nils, but we don't crash if they do).
-func (r *Role) ReplacePermissions(target []*permission.Permission) error {
+//
+// `now` is the explicit instant shared by every emitted Revoked/Granted
+// event so audit consumers see one timestamp per ReplacePermissions
+// operation.
+func (r *Role) ReplacePermissions(target []*permission.Permission, now time.Time) error {
 	if err := r.ensureMutable(); err != nil {
 		return err
 	}
-	now := clock.Now()
+	now = now.UTC()
 	wantSet := make(map[*permission.Permission]struct{}, len(target))
 	for _, p := range target {
 		if p != nil {
@@ -375,14 +389,16 @@ func (r *Role) ReplacePermissions(target []*permission.Permission) error {
 // must mass-revoke first via the role-assignment subscriber). The
 // domain doesn't reach across aggregates — that's an application-tier
 // concern per Vernon ch.10.
-func (r *Role) Delete(deletedBy string) error {
+//
+// `now` is the explicit soft-delete instant.
+func (r *Role) Delete(deletedBy string, now time.Time) error {
 	if r.deleted {
 		return nil
 	}
 	if r.isSystemDefault {
 		return fmt.Errorf("%w: %s", ErrSystemDefault, r.name)
 	}
-	now := clock.Now()
+	now = now.UTC()
 	r.deleted = true
 	r.deletedAt = now
 	r.deletedBy = deletedBy

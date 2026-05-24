@@ -47,14 +47,19 @@ var ErrEmailAlreadyTaken = errors.New("request_email_change: email already in us
 // event; a Watermill subscriber delivers the confirmation link.
 type RequestEmailChangeHandler struct {
 	persons person.Repository
+	now     func() time.Time
 }
 
-// NewRequestEmailChangeHandler wires the handler.
-func NewRequestEmailChangeHandler(persons person.Repository) RequestEmailChangeHandler {
+// NewRequestEmailChangeHandler wires the handler. `now` is the explicit
+// time source per the clock-injection refactor. Nil → time.Now.
+func NewRequestEmailChangeHandler(persons person.Repository, now func() time.Time) RequestEmailChangeHandler {
 	if persons == nil {
 		panic("command: NewRequestEmailChangeHandler persons repository required")
 	}
-	return RequestEmailChangeHandler{persons: persons}
+	if now == nil {
+		now = time.Now
+	}
+	return RequestEmailChangeHandler{persons: persons, now: now}
 }
 
 // Handle runs the request flow per ADR 0057:
@@ -110,8 +115,9 @@ func (h RequestEmailChangeHandler) Handle(ctx context.Context, cmd RequestEmailC
 		return fmt.Errorf("request_email_change: wrap hash: %w", err)
 	}
 
+	now := h.now()
 	if err := h.persons.UpdateByID(ctx, cmd.PersonID, func(loaded *person.Person) (bool, error) {
-		if err := loaded.RequestEmailChange(cmd.NewEmail, plaintext, tokenHash, EmailChangeTokenTTL); err != nil {
+		if err := loaded.RequestEmailChange(cmd.NewEmail, plaintext, tokenHash, EmailChangeTokenTTL, now); err != nil {
 			return false, err
 		}
 		return true, nil
@@ -134,14 +140,19 @@ var ErrEmailChangeTokenInvalid = errors.New("confirm_email_change: token invalid
 // ConfirmEmailChangeHandler runs the confirm flow.
 type ConfirmEmailChangeHandler struct {
 	persons person.Repository
+	now     func() time.Time
 }
 
-// NewConfirmEmailChangeHandler wires the handler.
-func NewConfirmEmailChangeHandler(persons person.Repository) ConfirmEmailChangeHandler {
+// NewConfirmEmailChangeHandler wires the handler. `now` is the explicit
+// time source per the clock-injection refactor. Nil → time.Now.
+func NewConfirmEmailChangeHandler(persons person.Repository, now func() time.Time) ConfirmEmailChangeHandler {
 	if persons == nil {
 		panic("command: NewConfirmEmailChangeHandler persons repository required")
 	}
-	return ConfirmEmailChangeHandler{persons: persons}
+	if now == nil {
+		now = time.Now
+	}
+	return ConfirmEmailChangeHandler{persons: persons, now: now}
 }
 
 // Handle runs the confirm flow.
@@ -167,8 +178,9 @@ func (h ConfirmEmailChangeHandler) Handle(ctx context.Context, cmd ConfirmEmailC
 		return ErrEmailChangeTokenInvalid
 	}
 
+	now := h.now()
 	if err := h.persons.UpdateByID(ctx, p.ID(), func(loaded *person.Person) (bool, error) {
-		if err := loaded.ConfirmEmailChange(tokenHash); err != nil {
+		if err := loaded.ConfirmEmailChange(tokenHash, now); err != nil {
 			return false, err
 		}
 		return true, nil

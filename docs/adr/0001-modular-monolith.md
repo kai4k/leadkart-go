@@ -39,3 +39,10 @@ Module isolation enforced compile-time by Go's `internal/` rule: `internal/order
 - Brandur Leach — [microservices essay](https://github.com/brandur/microservices); Crunchy Bridge runs as Go + Postgres monolith.
 - Kamil Grzybek — [Modular Monolith: Domain-Centric Design](https://www.kamilgrzybek.com/blog/posts/modular-monolith-domain-centric-design).
 - Industry consensus — [Foojay 2025](https://foojay.io/today/monolith-vs-microservices-2025/), [DZone post-monolith 2025](https://dzone.com/articles/post-monolith-architecture-2025), [Leapcell 2025](https://leapcell.io/blog/why-monolithic-architecture-reigns-supreme-for-new-projects-in-2025).
+
+
+## Fitness function
+
+`TestArch_NoCrossModuleImports` (in `internal/architecture/`).
+
+Module boundaries enforced — no module imports another module's private `domain/app/ports/adapters/` packages (allow-listed shared-kernel exceptions documented in the test).

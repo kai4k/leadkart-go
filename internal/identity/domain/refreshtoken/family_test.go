@@ -6,13 +6,16 @@ import (
 	"testing"
 	"time"
 
-	"github.com/leadkart/leadkart-go/internal/common/clock"
 	"github.com/leadkart/leadkart-go/internal/common/errs"
 	"github.com/leadkart/leadkart-go/internal/common/ids"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/refreshtoken"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
+
+// baseTime is the deterministic instant every refreshtoken test passes
+// to factories + mutators per the clock-injection refactor.
+var baseTime = time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC)
 
 func newFamilyID(t *testing.T) refreshtoken.FamilyID {
 	t.Helper()
@@ -40,23 +43,17 @@ func hash(s string) refreshtoken.TokenHash {
 	return h
 }
 
-func freezeClock(t *testing.T, base time.Time) {
-	t.Helper()
-	clock.Set(base)
-	t.Cleanup(clock.Reset)
-}
-
 // ----- Factory: NewFamily ---------------------------------------------------
 
 func TestNewFamily_AcceptsValid(t *testing.T) {
-	freezeClock(t, time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC))
+	t.Parallel()
 
 	id := newFamilyID(t)
 	pid := newPersonID(t)
 	tid := newTenantID(t)
 	tokenHash := hash("first")
 
-	f, err := refreshtoken.NewFamily(id, pid, tid, "Chrome on MacBook", tokenHash, 14*24*time.Hour)
+	f, err := refreshtoken.NewFamily(id, pid, tid, "Chrome on MacBook", tokenHash, 14*24*time.Hour, baseTime)
 	if err != nil {
 		t.Fatalf("NewFamily: %v", err)
 	}
@@ -93,9 +90,9 @@ func TestNewFamily_AcceptsValid(t *testing.T) {
 }
 
 func TestNewFamily_EmitsCreatedEvent(t *testing.T) {
-	freezeClock(t, time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC))
+	t.Parallel()
 
-	f, err := refreshtoken.NewFamily(newFamilyID(t), newPersonID(t), newTenantID(t), "Chrome", hash("a"), 14*24*time.Hour)
+	f, err := refreshtoken.NewFamily(newFamilyID(t), newPersonID(t), newTenantID(t), "Chrome", hash("a"), 14*24*time.Hour, baseTime)
 	if err != nil {
 		t.Fatalf("NewFamily: %v", err)
 	}
@@ -128,7 +125,7 @@ func TestNewFamily_RejectsInvalid(t *testing.T) {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			_, err := refreshtoken.NewFamily(tc.id, tc.pid, tc.tid, tc.deviceLabel, tc.hash, 14*24*time.Hour)
+			_, err := refreshtoken.NewFamily(tc.id, tc.pid, tc.tid, tc.deviceLabel, tc.hash, 14*24*time.Hour, baseTime)
 			if err == nil {
 				t.Fatal("expected error")
 			}
@@ -141,11 +138,11 @@ func TestNewFamily_RejectsInvalid(t *testing.T) {
 
 func TestNewFamily_RejectsZeroOrNegativeTTL(t *testing.T) {
 	t.Parallel()
-	_, err := refreshtoken.NewFamily(newFamilyID(t), newPersonID(t), newTenantID(t), "Chrome", hash("a"), 0)
+	_, err := refreshtoken.NewFamily(newFamilyID(t), newPersonID(t), newTenantID(t), "Chrome", hash("a"), 0, baseTime)
 	if err == nil {
 		t.Fatal("expected error on zero TTL")
 	}
-	_, err = refreshtoken.NewFamily(newFamilyID(t), newPersonID(t), newTenantID(t), "Chrome", hash("a"), -time.Second)
+	_, err = refreshtoken.NewFamily(newFamilyID(t), newPersonID(t), newTenantID(t), "Chrome", hash("a"), -time.Second, baseTime)
 	if err == nil {
 		t.Fatal("expected error on negative TTL")
 	}
@@ -154,16 +151,16 @@ func TestNewFamily_RejectsZeroOrNegativeTTL(t *testing.T) {
 // ----- Rotate ---------------------------------------------------------------
 
 func TestRotate_HappyPath_ConsumeCurrent_IssueNext(t *testing.T) {
-	freezeClock(t, time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC))
+	t.Parallel()
 
 	f := newFamily(t)
 	_ = f.PullEvents()
 
-	clock.Set(time.Date(2026, 5, 5, 13, 0, 0, 0, time.UTC))
 	original := f.CurrentToken()
 	newHash := hash("second")
+	rotateAt := baseTime.Add(1 * time.Hour)
 
-	if err := f.Rotate(original.Hash(), newHash, 14*24*time.Hour); err != nil {
+	if err := f.Rotate(original.Hash(), newHash, 14*24*time.Hour, rotateAt); err != nil {
 		t.Fatalf("Rotate: %v", err)
 	}
 
@@ -198,13 +195,13 @@ func TestRotate_HappyPath_ConsumeCurrent_IssueNext(t *testing.T) {
 }
 
 func TestRotate_PresentingNonCurrentToken_DoesNothing_ReturnsError(t *testing.T) {
-	freezeClock(t, time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC))
+	t.Parallel()
 
 	f := newFamily(t)
 	_ = f.PullEvents()
 
 	bogus := hash("not-in-family")
-	err := f.Rotate(bogus, hash("new"), 14*24*time.Hour)
+	err := f.Rotate(bogus, hash("new"), 14*24*time.Hour, baseTime)
 	if err == nil {
 		t.Fatal("expected ErrUnknownToken")
 	}
@@ -217,20 +214,20 @@ func TestRotate_PresentingNonCurrentToken_DoesNothing_ReturnsError(t *testing.T)
 }
 
 func TestRotate_PresentingConsumedToken_RevokesFamily_ReuseDetected(t *testing.T) {
-	freezeClock(t, time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC))
+	t.Parallel()
 
 	f := newFamily(t)
 	_ = f.PullEvents()
 
 	original := f.CurrentToken()
-	if err := f.Rotate(original.Hash(), hash("second"), 14*24*time.Hour); err != nil {
+	if err := f.Rotate(original.Hash(), hash("second"), 14*24*time.Hour, baseTime); err != nil {
 		t.Fatalf("first rotate: %v", err)
 	}
 	_ = f.PullEvents()
 
 	// Now an attacker (or a buggy client) presents the ALREADY CONSUMED gen-0
 	// token. RFC 9700 §4.13: REUSE DETECTED → revoke entire family.
-	err := f.Rotate(original.Hash(), hash("third"), 14*24*time.Hour)
+	err := f.Rotate(original.Hash(), hash("third"), 14*24*time.Hour, baseTime.Add(time.Second))
 	if err == nil {
 		t.Fatal("expected ErrReuseDetected")
 	}
@@ -254,14 +251,14 @@ func TestRotate_PresentingConsumedToken_RevokesFamily_ReuseDetected(t *testing.T
 }
 
 func TestRotate_AfterRevoke_Fails(t *testing.T) {
-	freezeClock(t, time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC))
+	t.Parallel()
 
 	f := newFamily(t)
 	_ = f.PullEvents()
-	_ = f.Revoke("user_revoked")
+	_ = f.Revoke("user_revoked", baseTime)
 	_ = f.PullEvents()
 
-	err := f.Rotate(f.CurrentToken().Hash(), hash("new"), 14*24*time.Hour)
+	err := f.Rotate(f.CurrentToken().Hash(), hash("new"), 14*24*time.Hour, baseTime)
 	if err == nil {
 		t.Fatal("expected error rotating revoked family")
 	}
@@ -271,14 +268,14 @@ func TestRotate_AfterRevoke_Fails(t *testing.T) {
 }
 
 func TestRotate_AfterTokenExpiry_Fails(t *testing.T) {
-	freezeClock(t, time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC))
+	t.Parallel()
 
 	f := newFamily(t)
 	_ = f.PullEvents()
 
-	// Advance past TTL.
-	clock.Set(time.Date(2026, 6, 5, 12, 0, 0, 0, time.UTC))
-	err := f.Rotate(f.CurrentToken().Hash(), hash("new"), 14*24*time.Hour)
+	// One month past the family's baseTime — well past the 14-day TTL.
+	expired := baseTime.AddDate(0, 1, 0)
+	err := f.Rotate(f.CurrentToken().Hash(), hash("new"), 14*24*time.Hour, expired)
 	if err == nil {
 		t.Fatal("expected error rotating expired token")
 	}
@@ -290,12 +287,12 @@ func TestRotate_AfterTokenExpiry_Fails(t *testing.T) {
 // ----- Revoke ---------------------------------------------------------------
 
 func TestRevoke_TransitionsToRevoked(t *testing.T) {
-	freezeClock(t, time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC))
+	t.Parallel()
 
 	f := newFamily(t)
 	_ = f.PullEvents()
 
-	if err := f.Revoke("user_revoked"); err != nil {
+	if err := f.Revoke("user_revoked", baseTime); err != nil {
 		t.Fatalf("Revoke: %v", err)
 	}
 	if !f.IsRevoked() {
@@ -312,22 +309,22 @@ func TestRevoke_TransitionsToRevoked(t *testing.T) {
 }
 
 func TestRevoke_RequiresReason(t *testing.T) {
-	freezeClock(t, time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC))
+	t.Parallel()
 	f := newFamily(t)
-	if err := f.Revoke(""); err == nil {
+	if err := f.Revoke("", baseTime); err == nil {
 		t.Fatal("expected error on empty reason")
 	}
 }
 
 func TestRevoke_Idempotent(t *testing.T) {
-	freezeClock(t, time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC))
+	t.Parallel()
 
 	f := newFamily(t)
 	_ = f.PullEvents()
-	_ = f.Revoke("first")
+	_ = f.Revoke("first", baseTime)
 	_ = f.PullEvents()
 
-	if err := f.Revoke("repeat"); err != nil {
+	if err := f.Revoke("repeat", baseTime.Add(time.Second)); err != nil {
 		t.Fatalf("idempotent revoke: %v", err)
 	}
 	if got := f.PullEvents(); len(got) != 0 {
@@ -372,7 +369,7 @@ func TestUnmarshalFromDB_DoesNotEmitEvents(t *testing.T) {
 
 func newFamily(t *testing.T) *refreshtoken.Family {
 	t.Helper()
-	f, err := refreshtoken.NewFamily(newFamilyID(t), newPersonID(t), newTenantID(t), "Chrome", hash("a"), 14*24*time.Hour)
+	f, err := refreshtoken.NewFamily(newFamilyID(t), newPersonID(t), newTenantID(t), "Chrome", hash("a"), 14*24*time.Hour, baseTime)
 	if err != nil {
 		t.Fatalf("newFamily: %v", err)
 	}

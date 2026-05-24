@@ -16,17 +16,17 @@ import "time"
 type CreateUnverifiedContactRequest struct {
 	ContactName    string   `json:"contact_name"`
 	MobileE164     string   `json:"mobile_e164"`
-	Email          string   `json:"email,omitempty"`
+	Email          string   `json:"email,omitzero"`
 	Pincode        string   `json:"pincode"`
 	City           string   `json:"city"`
 	District       string   `json:"district"`
 	State          string   `json:"state"`
-	Street         string   `json:"street,omitempty"`
+	Street         string   `json:"street,omitzero"`
 	HasDrugLicence bool     `json:"has_drug_licence"`
 	HasGst         bool     `json:"has_gst"`
-	GstNumber      string   `json:"gst_number,omitempty"`
+	GstNumber      string   `json:"gst_number,omitzero"`
 	HasPan         bool     `json:"has_pan"`
-	PanNumber      string   `json:"pan_number,omitempty"`
+	PanNumber      string   `json:"pan_number,omitzero"`
 	BusinessType   string   `json:"business_type"`
 	MedicineSystem string   `json:"medicine_system"`
 	ProductRanges  []string `json:"product_ranges"`
@@ -44,9 +44,9 @@ type CreateUnverifiedContactResponse struct {
 // .../unverified-contacts/{id}/calls.
 type LogVerificationCallRequest struct {
 	Outcome               string    `json:"outcome"`
-	Notes                 string    `json:"notes,omitempty"`
-	CallbackWindowStartAt time.Time `json:"callback_window_start_at,omitempty"`
-	CallbackWindowEndAt   time.Time `json:"callback_window_end_at,omitempty"`
+	Notes                 string    `json:"notes,omitzero"`
+	CallbackWindowStartAt time.Time `json:"callback_window_start_at,omitzero"`
+	CallbackWindowEndAt   time.Time `json:"callback_window_end_at,omitzero"`
 }
 
 // LogVerificationCallResponse — 201 body, call ID.
@@ -85,7 +85,7 @@ type UnverifiedContactDto struct {
 type ListUnverifiedContactsResponse struct {
 	Items      []UnverifiedContactDto `json:"items"`
 	HasMore    bool                   `json:"has_more"`
-	NextCursor string                 `json:"next_cursor,omitempty"`
+	NextCursor string                 `json:"next_cursor,omitzero"`
 }
 
 // ----- Marketplace ----------------------------------------------------------
@@ -117,7 +117,7 @@ type MarketplaceLeadDto struct {
 type BrowseMarketplaceResponse struct {
 	Items      []MarketplaceLeadDto `json:"items"`
 	HasMore    bool                 `json:"has_more"`
-	NextCursor string               `json:"next_cursor,omitempty"`
+	NextCursor string               `json:"next_cursor,omitzero"`
 }
 
 // PurchaseLeadRequest carries the price the tenant agreed to pay. The
@@ -160,11 +160,11 @@ type LeadCreditBalanceResponse struct {
 // Mirror of identity.ports.ErrorResponse (RFC 9457 Problem Details +
 // legacy fields).
 type ErrorResponse struct {
-	Type    string              `json:"type,omitempty"`
-	Title   string              `json:"title,omitempty"`
-	Status  int                 `json:"status,omitempty"`
-	Detail  string              `json:"detail,omitempty"`
+	Type    string              `json:"type,omitzero"`
+	Title   string              `json:"title,omitzero"`
+	Status  int                 `json:"status,omitzero"`
+	Detail  string              `json:"detail,omitzero"`
 	Error   string              `json:"error"`
-	Message string              `json:"message,omitempty"`
-	Errors  map[string][]string `json:"errors,omitempty"`
+	Message string              `json:"message,omitzero"`
+	Errors  map[string][]string `json:"errors,omitzero"`
 }

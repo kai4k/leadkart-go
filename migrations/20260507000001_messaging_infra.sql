@@ -108,6 +108,8 @@ COMMENT ON TABLE buildingblocks.audit_log_entry IS
 -- Per `messaging.md` "Idempotency — inbox-side required" Layer 2.
 -- ===========================================================================
 
+-- arch-test:opt-out-rls (message-bus inbox dedup — cross-tenant by design.
+--   Keyed by message_id+handler_name; isolation via natural-key uniqueness.)
 CREATE TABLE identity.processed_messages (
     message_id       uuid        NOT NULL,
     handler_name     text        NOT NULL CHECK (length(handler_name) > 0 AND length(handler_name) <= 200),

@@ -3,6 +3,7 @@ package command_test
 import (
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/leadkart/leadkart-go/internal/identity/app/command"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
@@ -17,7 +18,7 @@ func TestAssignUserRole_AddsAssignment(t *testing.T) {
 	_ = repo.Add(t.Context(), m)
 	rid := role.ID("44444444-4444-4444-4444-444444444444")
 
-	h := command.NewAssignUserRoleHandler(repo)
+	h := command.NewAssignUserRoleHandler(repo, func() time.Time { return testNow })
 	if err := h.Handle(t.Context(), command.AssignUserRoleCommand{
 		MembershipID: m.ID(),
 		RoleID:       rid,
@@ -34,11 +35,11 @@ func TestRevokeUserRole_RemovesAssignment(t *testing.T) {
 	repo := newFakeMembershipRepo()
 	m := newMembership(t)
 	rid := role.ID("44444444-4444-4444-4444-444444444444")
-	_ = m.AssignRole(rid)
+	_ = m.AssignRole(rid, testNow)
 	m.PullEvents()
 	_ = repo.Add(t.Context(), m)
 
-	h := command.NewRevokeUserRoleHandler(repo)
+	h := command.NewRevokeUserRoleHandler(repo, func() time.Time { return testNow })
 	if err := h.Handle(t.Context(), command.RevokeUserRoleCommand{
 		MembershipID: m.ID(),
 		RoleID:       rid,
@@ -55,7 +56,7 @@ func TestReplaceUserPermissionOverrides_RejectsUnknownPermission(t *testing.T) {
 	repo := newFakeMembershipRepo()
 	m := newMembership(t)
 	_ = repo.Add(t.Context(), m)
-	h := command.NewReplaceUserPermissionOverridesHandler(repo)
+	h := command.NewReplaceUserPermissionOverridesHandler(repo, func() time.Time { return testNow })
 	err := h.Handle(t.Context(), command.ReplaceUserPermissionOverridesCommand{
 		MembershipID: m.ID(),
 		GrantedNames: []string{"identity.totally.fake"},
@@ -70,7 +71,7 @@ func TestReplaceUserPermissionOverrides_HappyPath(t *testing.T) {
 	repo := newFakeMembershipRepo()
 	m := newMembership(t)
 	_ = repo.Add(t.Context(), m)
-	h := command.NewReplaceUserPermissionOverridesHandler(repo)
+	h := command.NewReplaceUserPermissionOverridesHandler(repo, func() time.Time { return testNow })
 	err := h.Handle(t.Context(), command.ReplaceUserPermissionOverridesCommand{
 		MembershipID: m.ID(),
 		GrantedNames: []string{permission.IdentityPermissions.Tenants.View},
@@ -94,7 +95,7 @@ func TestAssignUserManager_Succeeds(t *testing.T) {
 	_ = repo.Add(t.Context(), m)
 	managerID := membership.ID("55555555-5555-5555-5555-555555555555")
 
-	h := command.NewAssignUserManagerHandler(repo)
+	h := command.NewAssignUserManagerHandler(repo, func() time.Time { return testNow })
 	if err := h.Handle(t.Context(), command.AssignUserManagerCommand{
 		MembershipID: m.ID(),
 		ManagerID:    managerID,
@@ -111,7 +112,7 @@ func TestAssignUserManager_RejectsSelfManagement(t *testing.T) {
 	repo := newFakeMembershipRepo()
 	m := newMembership(t)
 	_ = repo.Add(t.Context(), m)
-	h := command.NewAssignUserManagerHandler(repo)
+	h := command.NewAssignUserManagerHandler(repo, func() time.Time { return testNow })
 	err := h.Handle(t.Context(), command.AssignUserManagerCommand{
 		MembershipID: m.ID(),
 		ManagerID:    m.ID(),
@@ -126,11 +127,11 @@ func TestRemoveUserManager_RoundTrip(t *testing.T) {
 	repo := newFakeMembershipRepo()
 	m := newMembership(t)
 	managerID := membership.ID("55555555-5555-5555-5555-555555555555")
-	_ = m.AssignManager(managerID)
+	_ = m.AssignManager(managerID, testNow)
 	m.PullEvents()
 	_ = repo.Add(t.Context(), m)
 
-	h := command.NewRemoveUserManagerHandler(repo)
+	h := command.NewRemoveUserManagerHandler(repo, func() time.Time { return testNow })
 	if err := h.Handle(t.Context(), command.RemoveUserManagerCommand{MembershipID: m.ID()}); err != nil {
 		t.Fatalf("Handle: %v", err)
 	}
@@ -151,23 +152,23 @@ func TestAuthzHandlers_NotFound(t *testing.T) {
 		fn   func() error
 	}{
 		{"AssignRole", func() error {
-			return command.NewAssignUserRoleHandler(repo).Handle(t.Context(),
+			return command.NewAssignUserRoleHandler(repo, func() time.Time { return testNow }).Handle(t.Context(),
 				command.AssignUserRoleCommand{MembershipID: bad, RoleID: rid})
 		}},
 		{"RevokeRole", func() error {
-			return command.NewRevokeUserRoleHandler(repo).Handle(t.Context(),
+			return command.NewRevokeUserRoleHandler(repo, func() time.Time { return testNow }).Handle(t.Context(),
 				command.RevokeUserRoleCommand{MembershipID: bad, RoleID: rid})
 		}},
 		{"ReplaceOverrides", func() error {
-			return command.NewReplaceUserPermissionOverridesHandler(repo).Handle(t.Context(),
+			return command.NewReplaceUserPermissionOverridesHandler(repo, func() time.Time { return testNow }).Handle(t.Context(),
 				command.ReplaceUserPermissionOverridesCommand{MembershipID: bad})
 		}},
 		{"AssignManager", func() error {
-			return command.NewAssignUserManagerHandler(repo).Handle(t.Context(),
+			return command.NewAssignUserManagerHandler(repo, func() time.Time { return testNow }).Handle(t.Context(),
 				command.AssignUserManagerCommand{MembershipID: bad, ManagerID: mid})
 		}},
 		{"RemoveManager", func() error {
-			return command.NewRemoveUserManagerHandler(repo).Handle(t.Context(),
+			return command.NewRemoveUserManagerHandler(repo, func() time.Time { return testNow }).Handle(t.Context(),
 				command.RemoveUserManagerCommand{MembershipID: bad})
 		}},
 	}

@@ -93,14 +93,38 @@ type platformUnverifiedContactsPermissions struct{ Manage string }
 type platformMarketplacePermissions struct{ Browse, Purchase string }
 type platformLeadCreditsPermissions struct{ Read, Topup string }
 
+// inventoryCatalogPermissions cover Product master reads + writes
+// (name, SKU, dosage form, pack size, HSN, gst_rate_bps, is_active,
+// soft-delete). Per BRD §6.5 + ADR 0061 (Inventory Slice 1).
+type inventoryCatalogPermissions struct{ Read, Manage string }
+
+// inventoryStockPermissions cover Batch + StockMovement reads + writes.
+// Manage gates POST /v1/inventory/batches + POST .../movements; Read
+// gates GET .../batches + .../movements + .../products/{id}/batches.
+type inventoryStockPermissions struct{ Read, Manage string }
+
+// inventoryPermissions groups the Inventory bounded context surface —
+// paired Catalog (product master) + Stock (batches + movements) per
+// BRD §6.5. Slice 1 ships these four; future slices (Reservation,
+// LowStockAlerts) extend.
+type inventoryPermissions struct {
+	Catalog inventoryCatalogPermissions
+	Stock   inventoryStockPermissions
+}
+
 // IdentityPermissions is the closed catalogue of every permission the
 // system recognises. Mirror of the .NET `IdentityPermissions` static
 // class. Maintain in lockstep with the intern-table list.
 //
-// The Platform-context groups (UnverifiedContacts, Marketplace,
-// LeadCredits) are declared here per ADR 0051 "single-module type
-// placement" carve-out: the closed catalogue lives with the Permission
-// VO regardless of which bounded context owns the named action.
+// Module-owned permission groups (Platform-context groups +
+// Inventory) are declared here per ADR 0051 "single-module type
+// placement" carve-out: the closed catalogue is the one place where
+// every recognised permission name is enumerated, so the
+// PermissionResolver + middleware see them as a single closed set
+// regardless of which bounded context owns the named action.
+// Adding a new module-owned permission = append to this catalogue +
+// the [allNames] slice. Drift caught at test time
+// (TestAll_NoDuplicates + TestIdentityPermissions_Catalogue).
 var IdentityPermissions = struct {
 	Meta     metaPermissions
 	Platform platformPermissions
@@ -113,6 +137,10 @@ var IdentityPermissions = struct {
 	PlatformUnverifiedContacts platformUnverifiedContactsPermissions
 	PlatformMarketplace        platformMarketplacePermissions
 	PlatformLeadCredits        platformLeadCreditsPermissions
+
+	// Inventory bounded context (ADR 0061) — Product / Batch /
+	// StockMovement aggregates per BRD §6.5.
+	Inventory inventoryPermissions
 }{
 	Meta: metaPermissions{
 		TenantAdmin:                "tenant.admin",
@@ -167,6 +195,16 @@ var IdentityPermissions = struct {
 		Read:  "platform.lead_credits.read",
 		Topup: "platform.lead_credits.topup",
 	},
+	Inventory: inventoryPermissions{
+		Catalog: inventoryCatalogPermissions{
+			Read:   "inventory.catalog.read",
+			Manage: "inventory.catalog.manage",
+		},
+		Stock: inventoryStockPermissions{
+			Read:   "inventory.stock.read",
+			Manage: "inventory.stock.manage",
+		},
+	},
 }
 
 func allNames() []string {
@@ -188,6 +226,10 @@ func allNames() []string {
 		p.PlatformUnverifiedContacts.Manage,
 		p.PlatformMarketplace.Browse, p.PlatformMarketplace.Purchase,
 		p.PlatformLeadCredits.Read, p.PlatformLeadCredits.Topup,
+
+		// Inventory bounded context (ADR 0061).
+		p.Inventory.Catalog.Read, p.Inventory.Catalog.Manage,
+		p.Inventory.Stock.Read, p.Inventory.Stock.Manage,
 	}
 }
 

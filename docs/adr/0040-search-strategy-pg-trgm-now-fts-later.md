@@ -191,3 +191,6 @@ Until ≥1 of those fires, **stay in Postgres**.
 - ADR 0004 — DB layer (sqlc + pgx + squirrel + goose).
 - ADR 0006 — Multi-tenancy via Postgres RLS (search must compose with RLS).
 - ADR 0041 — CQRS read models via outbox subscribers (the projection pattern search will use at Phase 2+).
+
+
+**Fitness function:** convention-only — not mechanically expressible. "Defer FTS until Phase 4" is a deferral decision; nothing to mechanically detect.

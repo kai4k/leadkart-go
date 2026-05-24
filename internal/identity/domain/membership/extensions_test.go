@@ -13,6 +13,7 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
 
+
 // freshMembership builds a brand-new Active Membership and drains the
 // CreatedEvent so per-test event assertions start from a clean slate.
 func freshMembership(t *testing.T) *membership.Membership {
@@ -22,6 +23,7 @@ func freshMembership(t *testing.T) *membership.Membership {
 		person.ID(ids.NewV7().String()),
 		tenant.ID(ids.NewV7().String()),
 		membership.ID(""),
+		testNow,
 	)
 	if err != nil {
 		t.Fatalf("membership.New: %v", err)
@@ -36,7 +38,7 @@ func TestAssignRole_AddsAndEmits(t *testing.T) {
 	t.Parallel()
 	m := freshMembership(t)
 	rid := role.ID(ids.NewV7().String())
-	if err := m.AssignRole(rid); err != nil {
+	if err := m.AssignRole(rid, testNow); err != nil {
 		t.Fatalf("AssignRole: %v", err)
 	}
 	got := m.RoleAssignments()
@@ -60,9 +62,9 @@ func TestAssignRole_Idempotent(t *testing.T) {
 	t.Parallel()
 	m := freshMembership(t)
 	rid := role.ID(ids.NewV7().String())
-	_ = m.AssignRole(rid)
+	_ = m.AssignRole(rid, testNow)
 	_ = m.PullEvents()
-	if err := m.AssignRole(rid); err != nil {
+	if err := m.AssignRole(rid, testNow); err != nil {
 		t.Fatalf("dup AssignRole: %v", err)
 	}
 	if events := m.PullEvents(); len(events) != 0 {
@@ -76,7 +78,7 @@ func TestAssignRole_Idempotent(t *testing.T) {
 func TestAssignRole_RejectsZeroID(t *testing.T) {
 	t.Parallel()
 	m := freshMembership(t)
-	if err := m.AssignRole(role.ID("")); !errors.Is(err, membership.ErrInvalid) {
+	if err := m.AssignRole(role.ID(""), testNow); !errors.Is(err, membership.ErrInvalid) {
 		t.Fatalf("want ErrInvalid got %v", err)
 	}
 }
@@ -85,10 +87,10 @@ func TestRevokeRole_RemovesAndEmits(t *testing.T) {
 	t.Parallel()
 	m := freshMembership(t)
 	rid := role.ID(ids.NewV7().String())
-	_ = m.AssignRole(rid)
+	_ = m.AssignRole(rid, testNow)
 	_ = m.PullEvents()
 
-	if err := m.RevokeRole(rid); err != nil {
+	if err := m.RevokeRole(rid, testNow); err != nil {
 		t.Fatalf("RevokeRole: %v", err)
 	}
 	if got := m.RoleAssignments(); len(got) != 0 {
@@ -107,7 +109,7 @@ func TestRevokeRole_NotPresentNoEvent(t *testing.T) {
 	t.Parallel()
 	m := freshMembership(t)
 	rid := role.ID(ids.NewV7().String())
-	if err := m.RevokeRole(rid); err != nil {
+	if err := m.RevokeRole(rid, testNow); err != nil {
 		t.Fatalf("RevokeRole missing: %v", err)
 	}
 	if events := m.PullEvents(); len(events) != 0 {
@@ -119,7 +121,7 @@ func TestRoleAssignments_DefensiveCopy(t *testing.T) {
 	t.Parallel()
 	m := freshMembership(t)
 	rid := role.ID(ids.NewV7().String())
-	_ = m.AssignRole(rid)
+	_ = m.AssignRole(rid, testNow)
 	got := m.RoleAssignments()
 	got[0] = role.ID("mutated")
 	if m.RoleAssignments()[0] == "mutated" {
@@ -137,25 +139,27 @@ func TestEffectivePermissions_UnionRolesPlusGrantsMinusRevokes(t *testing.T) {
 	managerRole, err := role.New(
 		role.ID(ids.NewV7().String()), m.TenantID(),
 		"Manager", false, role.HierarchyLevelDefault, false,
+		testNow,
 	)
 	if err != nil {
 		t.Fatalf("Manager role: %v", err)
 	}
-	_ = managerRole.GrantPermission(permission.FromConstant(permission.IdentityPermissions.Users.View))
-	_ = managerRole.GrantPermission(permission.FromConstant(permission.IdentityPermissions.Users.Update))
+	_ = managerRole.GrantPermission(permission.FromConstant(permission.IdentityPermissions.Users.View), testNow)
+	_ = managerRole.GrantPermission(permission.FromConstant(permission.IdentityPermissions.Users.Update), testNow)
 
 	auditorRole, err := role.New(
 		role.ID(ids.NewV7().String()), m.TenantID(),
 		"Auditor", false, 60, false,
+		testNow,
 	)
 	if err != nil {
 		t.Fatalf("Auditor role: %v", err)
 	}
-	_ = auditorRole.GrantPermission(permission.FromConstant(permission.IdentityPermissions.Users.View))
+	_ = auditorRole.GrantPermission(permission.FromConstant(permission.IdentityPermissions.Users.View), testNow)
 
 	// Membership overlay: grant Anonymise, revoke Update.
-	_ = m.GrantPermission(permission.FromConstant(permission.IdentityPermissions.Users.Anonymise), time.Time{})
-	_ = m.RevokePermission(permission.FromConstant(permission.IdentityPermissions.Users.Update))
+	_ = m.GrantPermission(permission.FromConstant(permission.IdentityPermissions.Users.Anonymise), time.Time{}, testNow)
+	_ = m.RevokePermission(permission.FromConstant(permission.IdentityPermissions.Users.Update), testNow)
 
 	got := m.EffectivePermissions([]*role.Role{managerRole, auditorRole}, time.Now())
 	gotSet := map[string]bool{}
@@ -178,7 +182,7 @@ func TestEffectivePermissions_NoRolesEqualsOverlayOnly(t *testing.T) {
 	t.Parallel()
 	m := freshMembership(t)
 	p := permission.FromConstant(permission.IdentityPermissions.Users.View)
-	_ = m.GrantPermission(p, time.Time{})
+	_ = m.GrantPermission(p, time.Time{}, testNow)
 
 	got := m.EffectivePermissions(nil, time.Now())
 	if len(got) != 1 || !got[0].Equal(p) {
@@ -189,13 +193,13 @@ func TestEffectivePermissions_NoRolesEqualsOverlayOnly(t *testing.T) {
 func TestEffectivePermissions_RevokeWinsOverRoleGrant(t *testing.T) {
 	t.Parallel()
 	m := freshMembership(t)
-	r, err := role.New(role.ID(ids.NewV7().String()), m.TenantID(), "Sales", false, 50, false)
+	r, err := role.New(role.ID(ids.NewV7().String()), m.TenantID(), "Sales", false, 50, false, testNow)
 	if err != nil {
 		t.Fatalf("role.New: %v", err)
 	}
 	view := permission.FromConstant(permission.IdentityPermissions.Users.View)
-	_ = r.GrantPermission(view)
-	_ = m.RevokePermission(view) // overlay revoke beats role grant
+	_ = r.GrantPermission(view, testNow)
+	_ = m.RevokePermission(view, testNow) // overlay revoke beats role grant
 
 	got := m.EffectivePermissions([]*role.Role{r}, time.Now())
 	for _, p := range got {
@@ -211,7 +215,7 @@ func TestGrantPermission_AddsToOverlay(t *testing.T) {
 	t.Parallel()
 	m := freshMembership(t)
 	p := permission.FromConstant(permission.IdentityPermissions.Users.Anonymise)
-	if err := m.GrantPermission(p, time.Time{}); err != nil {
+	if err := m.GrantPermission(p, time.Time{}, testNow); err != nil {
 		t.Fatalf("Grant: %v", err)
 	}
 	got := m.GrantedPermissions()
@@ -231,10 +235,10 @@ func TestGrantPermission_RemovesFromRevokedIfPreviouslyRevoked(t *testing.T) {
 	t.Parallel()
 	m := freshMembership(t)
 	p := permission.FromConstant(permission.IdentityPermissions.Users.Anonymise)
-	_ = m.RevokePermission(p)
+	_ = m.RevokePermission(p, testNow)
 	_ = m.PullEvents()
 
-	if err := m.GrantPermission(p, time.Time{}); err != nil {
+	if err := m.GrantPermission(p, time.Time{}, testNow); err != nil {
 		t.Fatalf("Grant: %v", err)
 	}
 	if len(m.RevokedPermissions()) != 0 {
@@ -249,10 +253,10 @@ func TestRevokePermission_RemovesFromGrantedIfPreviouslyGranted(t *testing.T) {
 	t.Parallel()
 	m := freshMembership(t)
 	p := permission.FromConstant(permission.IdentityPermissions.Users.Anonymise)
-	_ = m.GrantPermission(p, time.Time{})
+	_ = m.GrantPermission(p, time.Time{}, testNow)
 	_ = m.PullEvents()
 
-	if err := m.RevokePermission(p); err != nil {
+	if err := m.RevokePermission(p, testNow); err != nil {
 		t.Fatalf("Revoke: %v", err)
 	}
 	if len(m.GrantedPermissions()) != 0 {
@@ -267,9 +271,9 @@ func TestGrantPermission_Idempotent(t *testing.T) {
 	t.Parallel()
 	m := freshMembership(t)
 	p := permission.FromConstant(permission.IdentityPermissions.Users.Anonymise)
-	_ = m.GrantPermission(p, time.Time{})
+	_ = m.GrantPermission(p, time.Time{}, testNow)
 	_ = m.PullEvents()
-	if err := m.GrantPermission(p, time.Time{}); err != nil {
+	if err := m.GrantPermission(p, time.Time{}, testNow); err != nil {
 		t.Fatalf("dup Grant: %v", err)
 	}
 	if events := m.PullEvents(); len(events) != 0 {
@@ -281,9 +285,9 @@ func TestRevokePermission_Idempotent(t *testing.T) {
 	t.Parallel()
 	m := freshMembership(t)
 	p := permission.FromConstant(permission.IdentityPermissions.Users.Anonymise)
-	_ = m.RevokePermission(p)
+	_ = m.RevokePermission(p, testNow)
 	_ = m.PullEvents()
-	if err := m.RevokePermission(p); err != nil {
+	if err := m.RevokePermission(p, testNow); err != nil {
 		t.Fatalf("dup Revoke: %v", err)
 	}
 	if events := m.PullEvents(); len(events) != 0 {
@@ -294,7 +298,7 @@ func TestRevokePermission_Idempotent(t *testing.T) {
 func TestGrantPermission_RejectsNil(t *testing.T) {
 	t.Parallel()
 	m := freshMembership(t)
-	if err := m.GrantPermission(nil, time.Time{}); !errors.Is(err, membership.ErrInvalid) {
+	if err := m.GrantPermission(nil, time.Time{}, testNow); !errors.Is(err, membership.ErrInvalid) {
 		t.Fatalf("want ErrInvalid got %v", err)
 	}
 }
@@ -302,7 +306,7 @@ func TestGrantPermission_RejectsNil(t *testing.T) {
 func TestRevokePermission_RejectsNil(t *testing.T) {
 	t.Parallel()
 	m := freshMembership(t)
-	if err := m.RevokePermission(nil); !errors.Is(err, membership.ErrInvalid) {
+	if err := m.RevokePermission(nil, testNow); !errors.Is(err, membership.ErrInvalid) {
 		t.Fatalf("want ErrInvalid got %v", err)
 	}
 }
@@ -315,7 +319,7 @@ func TestGrantPermission_WithExpiresAt(t *testing.T) {
 	p := permission.FromConstant(permission.IdentityPermissions.Users.Anonymise)
 	expiresAt := time.Date(2026, 6, 23, 12, 0, 0, 0, time.UTC)
 
-	if err := m.GrantPermission(p, expiresAt); err != nil {
+	if err := m.GrantPermission(p, expiresAt, testNow); err != nil {
 		t.Fatalf("GrantPermission with expiry: %v", err)
 	}
 	got := m.GrantedPermissions()
@@ -334,7 +338,7 @@ func TestEffectivePermissions_FiltersExpiredOverrides(t *testing.T) {
 	// Grant with an expiry 1 hour ago — already expired.
 	expiredAt := time.Date(2026, 5, 23, 11, 0, 0, 0, time.UTC)
 	now := time.Date(2026, 5, 23, 12, 0, 0, 0, time.UTC)
-	_ = m.GrantPermission(p, expiredAt)
+	_ = m.GrantPermission(p, expiredAt, testNow)
 
 	got := m.EffectivePermissions(nil, now)
 	for _, gp := range got {
@@ -351,7 +355,7 @@ func TestEffectivePermissions_KeepsUnexpiredOverrides(t *testing.T) {
 	// Grant with an expiry 1 hour in the future — still active.
 	expiresAt := time.Date(2026, 5, 23, 13, 0, 0, 0, time.UTC)
 	now := time.Date(2026, 5, 23, 12, 0, 0, 0, time.UTC)
-	_ = m.GrantPermission(p, expiresAt)
+	_ = m.GrantPermission(p, expiresAt, testNow)
 
 	got := m.EffectivePermissions(nil, now)
 	if len(got) != 1 || !got[0].Equal(p) {
@@ -364,7 +368,7 @@ func TestEffectivePermissions_PerpetualOverridesNeverExpire(t *testing.T) {
 	m := freshMembership(t)
 	p := permission.FromConstant(permission.IdentityPermissions.Users.Anonymise)
 	// time.Time{} = perpetual per ADR 0055.
-	_ = m.GrantPermission(p, time.Time{})
+	_ = m.GrantPermission(p, time.Time{}, testNow)
 
 	// Even with `now` at the heat-death-of-the-universe the grant holds.
 	now := time.Date(9999, 12, 31, 23, 59, 59, 0, time.UTC)
@@ -380,12 +384,13 @@ func TestReplacePermissionOverlays_SetsAtomically(t *testing.T) {
 	view := permission.FromConstant(permission.IdentityPermissions.Users.View)
 	create := permission.FromConstant(permission.IdentityPermissions.Users.Create)
 	anonymise := permission.FromConstant(permission.IdentityPermissions.Users.Anonymise)
-	_ = m.GrantPermission(view, time.Time{}) // pre-existing state
+	_ = m.GrantPermission(view, time.Time{}, testNow) // pre-existing state
 	_ = m.PullEvents()
 
 	if err := m.ReplacePermissionOverlays(
 		[]*permission.Permission{create, anonymise},
 		[]*permission.Permission{view},
+		testNow,
 	); err != nil {
 		t.Fatalf("Replace: %v", err)
 	}
@@ -432,7 +437,7 @@ func TestUnmarshalFromDB_OverlayRoundTrip(t *testing.T) {
 func TestUpdateProfile_TransitionsAndEmits(t *testing.T) {
 	t.Parallel()
 	m := freshMembership(t)
-	if err := m.UpdateProfile("Sales Lead", "Sales", "OOO Friday"); err != nil {
+	if err := m.UpdateProfile("Sales Lead", "Sales", "OOO Friday", testNow); err != nil {
 		t.Fatalf("UpdateProfile: %v", err)
 	}
 	if m.Designation() != "Sales Lead" || m.Department() != "Sales" || m.StatusMessage() != "OOO Friday" {
@@ -454,9 +459,9 @@ func TestUpdateProfile_TransitionsAndEmits(t *testing.T) {
 func TestUpdateProfile_TrimsAndIsIdempotent(t *testing.T) {
 	t.Parallel()
 	m := freshMembership(t)
-	_ = m.UpdateProfile("Lead", "Sales", "")
+	_ = m.UpdateProfile("Lead", "Sales", "", testNow)
 	_ = m.PullEvents()
-	if err := m.UpdateProfile("  Lead  ", "  Sales  ", ""); err != nil {
+	if err := m.UpdateProfile("  Lead  ", "  Sales  ", "", testNow); err != nil {
 		t.Fatalf("UpdateProfile (whitespace): %v", err)
 	}
 	if events := m.PullEvents(); len(events) != 0 {
@@ -468,7 +473,7 @@ func TestAssignManager_TransitionsAndEmits(t *testing.T) {
 	t.Parallel()
 	m := freshMembership(t)
 	mgr := membership.ID(ids.NewV7().String())
-	if err := m.AssignManager(mgr); err != nil {
+	if err := m.AssignManager(mgr, testNow); err != nil {
 		t.Fatalf("AssignManager: %v", err)
 	}
 	if m.ReportsTo() != mgr {
@@ -493,7 +498,7 @@ func TestAssignManager_TransitionsAndEmits(t *testing.T) {
 func TestAssignManager_RejectsSelfReference(t *testing.T) {
 	t.Parallel()
 	m := freshMembership(t)
-	if err := m.AssignManager(m.ID()); !errors.Is(err, membership.ErrInvalid) {
+	if err := m.AssignManager(m.ID(), testNow); !errors.Is(err, membership.ErrInvalid) {
 		t.Fatalf("want ErrInvalid got %v", err)
 	}
 }
@@ -502,9 +507,9 @@ func TestAssignManager_ZeroIDClears(t *testing.T) {
 	t.Parallel()
 	m := freshMembership(t)
 	prev := membership.ID(ids.NewV7().String())
-	_ = m.AssignManager(prev)
+	_ = m.AssignManager(prev, testNow)
 	_ = m.PullEvents()
-	if err := m.AssignManager(membership.ID("")); err != nil {
+	if err := m.AssignManager(membership.ID(""), testNow); err != nil {
 		t.Fatalf("clear manager: %v", err)
 	}
 	if !m.ReportsTo().IsZero() {
@@ -531,10 +536,10 @@ func TestRemoveManager_ClearsReportsTo_AndEmitsManagerRemovedEvent(t *testing.T)
 	t.Parallel()
 	m := freshMembership(t)
 	prev := membership.ID(ids.NewV7().String())
-	_ = m.AssignManager(prev)
+	_ = m.AssignManager(prev, testNow)
 	_ = m.PullEvents()
 
-	if err := m.RemoveManager(); err != nil {
+	if err := m.RemoveManager(testNow); err != nil {
 		t.Fatalf("RemoveManager: %v", err)
 	}
 	if !m.ReportsTo().IsZero() {
@@ -558,7 +563,7 @@ func TestRemoveManager_NoOp_WhenNoManagerSet(t *testing.T) {
 	m := freshMembership(t)
 	// Fresh membership has no manager. RemoveManager must succeed
 	// silently and emit no event (idempotent like AssignManager).
-	if err := m.RemoveManager(); err != nil {
+	if err := m.RemoveManager(testNow); err != nil {
 		t.Fatalf("RemoveManager on cleared: %v", err)
 	}
 	if events := m.PullEvents(); len(events) != 0 {
@@ -570,9 +575,9 @@ func TestAssignManager_Idempotent(t *testing.T) {
 	t.Parallel()
 	m := freshMembership(t)
 	mgr := membership.ID(ids.NewV7().String())
-	_ = m.AssignManager(mgr)
+	_ = m.AssignManager(mgr, testNow)
 	_ = m.PullEvents()
-	if err := m.AssignManager(mgr); err != nil {
+	if err := m.AssignManager(mgr, testNow); err != nil {
 		t.Fatalf("dup AssignManager: %v", err)
 	}
 	if events := m.PullEvents(); len(events) != 0 {

@@ -320,3 +320,10 @@ error — modelling Postgres ROLLBACK so unit tests catch
   (Layer-boundary discipline), ADR 0049 (URL design + route arch gate),
   ADR 0050 (OpenAPI as code-of-record + drift gates), ADR 0051
   (Single-module type placement)
+
+
+## Fitness function
+
+`TestArch_AggregatesHaveFactoryAndUnmarshal + TestArch_RepositoriesHaveUpdateByIDFn` (in `internal/architecture/`).
+
+Platform aggregates (leadcredit, platformlead, unverifiedcontact, verificationcall) satisfy the factory pattern; leadcredit + verificationcall append-only exceptions are documented in the UpdateByID test.

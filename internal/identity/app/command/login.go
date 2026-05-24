@@ -236,6 +236,7 @@ func (h LoginHandler) Handle(ctx context.Context, cmd LoginCommand) (LoginResult
 		cmd.DeviceLabel,
 		mintPair.Hash,
 		h.refreshTTL,
+		h.now(),
 	)
 	if err != nil {
 		return LoginResult{}, fmt.Errorf("login: construct family: %w", err)
@@ -416,7 +417,7 @@ func (h LoginHandler) registerFailedLoginBestEffort(ctx context.Context, p *pers
 // + persists via [person.Repository.UpdateLockoutState]. Same
 // best-effort posture as the failed-login path.
 func (h LoginHandler) registerSuccessfulLoginBestEffort(ctx context.Context, p *person.Person) {
-	p.RegisterSuccessfulLogin()
+	p.RegisterSuccessfulLogin(h.now())
 	_ = h.persons.UpdateLockoutState(ctx, p)
 }
 

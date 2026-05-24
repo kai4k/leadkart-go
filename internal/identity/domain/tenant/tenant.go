@@ -16,7 +16,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/leadkart/leadkart-go/internal/common/clock"
 	"github.com/leadkart/leadkart-go/internal/common/email"
 	"github.com/leadkart/leadkart-go/internal/common/errs"
 	"github.com/leadkart/leadkart-go/internal/common/slug"
@@ -82,7 +81,7 @@ type Tenant struct {
 // Returns [ErrInvalid] (wrapped with the specific failure) on invariant
 // violation. On success, the tenant has emitted a [RegisteredEvent] which
 // the repository drains via [PullEvents] when persisting.
-func New(id ID, s slug.Slug, legalName, displayName string, adminEmail email.Address) (*Tenant, error) {
+func New(id ID, s slug.Slug, legalName, displayName string, adminEmail email.Address, now time.Time) (*Tenant, error) {
 	if id.IsZero() {
 		return nil, fmt.Errorf("%w: id required", ErrInvalid)
 	}
@@ -105,7 +104,7 @@ func New(id ID, s slug.Slug, legalName, displayName string, adminEmail email.Add
 		return nil, fmt.Errorf("%w: admin email required for RegisteredEvent payload", ErrInvalid)
 	}
 
-	now := clock.Now()
+	now = now.UTC()
 	t := &Tenant{
 		id:          id,
 		slug:        s,
@@ -250,7 +249,7 @@ func (t *Tenant) DisplayPreferences() DisplayPreferences { return t.displayPrefe
 // Allowed in any status — Suspended tenants can still rename for legal
 // reasons (renamed entity, transferred ownership) without an Activate
 // round-trip.
-func (t *Tenant) UpdateProfile(legalName, displayName string) error {
+func (t *Tenant) UpdateProfile(legalName, displayName string, now time.Time) error {
 	if strings.TrimSpace(legalName) == "" {
 		return fmt.Errorf("%w: legal name required", ErrInvalid)
 	}
@@ -275,7 +274,7 @@ func (t *Tenant) UpdateProfile(legalName, displayName string) error {
 		OldDisplayName: old.display,
 		NewLegalName:   legalName,
 		NewDisplayName: displayName,
-		At:             clock.Now(),
+		At:             now.UTC(),
 	})
 	return nil
 }
@@ -287,7 +286,7 @@ func (t *Tenant) UpdateProfile(legalName, displayName string) error {
 //
 // Rejected from terminal/grace states: PendingDeletion (use
 // RestoreFromDeletion instead) and Deleted (terminal).
-func (t *Tenant) Activate() error {
+func (t *Tenant) Activate(now time.Time) error {
 	if t.status == StatusActive {
 		return nil // idempotent — TDL canon for already-correct state
 	}
@@ -297,7 +296,7 @@ func (t *Tenant) Activate() error {
 	if t.status == StatusDeleted {
 		return fmt.Errorf("%w: tenant deleted; cannot activate", ErrInvalid)
 	}
-	now := clock.Now()
+	now = now.UTC()
 	t.status = StatusActive
 	t.activatedAt = now
 	t.recordEvent(ActivatedEvent{
@@ -314,7 +313,7 @@ func (t *Tenant) Activate() error {
 //
 // Rejected from terminal/grace states: PendingDeletion (already in
 // the deletion pipeline) and Deleted (terminal).
-func (t *Tenant) Suspend(reason string) error {
+func (t *Tenant) Suspend(reason string, now time.Time) error {
 	if strings.TrimSpace(reason) == "" {
 		return fmt.Errorf("%w: suspension reason required for audit", ErrInvalid)
 	}
@@ -327,7 +326,7 @@ func (t *Tenant) Suspend(reason string) error {
 	if t.status == StatusDeleted {
 		return fmt.Errorf("%w: tenant deleted; cannot suspend", ErrInvalid)
 	}
-	now := clock.Now()
+	now = now.UTC()
 	t.status = StatusSuspended
 	t.suspendedAt = now
 	t.recordEvent(SuspendedEvent{
@@ -351,7 +350,7 @@ func (t *Tenant) Suspend(reason string) error {
 //
 // Allowed in any non-terminal status (Pending, Active, Suspended,
 // PendingDeletion). Rejected from StatusDeleted (terminal).
-func (t *Tenant) UpdateStatutory(s Statutory) error {
+func (t *Tenant) UpdateStatutory(s Statutory, now time.Time) error {
 	if t.status == StatusDeleted {
 		return fmt.Errorf("%w: tenant deleted; cannot update statutory", ErrInvalid)
 	}
@@ -364,7 +363,7 @@ func (t *Tenant) UpdateStatutory(s Statutory) error {
 		TenantID:     t.id,
 		OldStatutory: old,
 		NewStatutory: s,
-		At:           clock.Now(),
+		At:           now.UTC(),
 	})
 	return nil
 }
@@ -384,7 +383,7 @@ func (t *Tenant) UpdateStatutory(s Statutory) error {
 // Distinct from [Tenant.UpdateProfile] (display fields) and
 // [Tenant.UpdateStatutory] (compliance IDs) — narrow events let
 // subscribers react to the specific concern.
-func (t *Tenant) UpdateAdminContact(c AdminContact) error {
+func (t *Tenant) UpdateAdminContact(c AdminContact, now time.Time) error {
 	if t.status == StatusDeleted {
 		return fmt.Errorf("%w: tenant deleted; cannot update admin contact", ErrInvalid)
 	}
@@ -397,7 +396,7 @@ func (t *Tenant) UpdateAdminContact(c AdminContact) error {
 		TenantID:        t.id,
 		OldAdminContact: old,
 		NewAdminContact: c,
-		At:              clock.Now(),
+		At:              now.UTC(),
 	})
 	return nil
 }
@@ -415,7 +414,7 @@ func (t *Tenant) UpdateAdminContact(c AdminContact) error {
 // Settings is a security-sensitive concern (password policy floor +
 // lockout) — auth + login-flow caches MUST react to
 // SettingsUpdatedEvent to invalidate cached policy.
-func (t *Tenant) UpdateSettings(s Settings) error {
+func (t *Tenant) UpdateSettings(s Settings, now time.Time) error {
 	if t.status == StatusDeleted {
 		return fmt.Errorf("%w: tenant deleted; cannot update settings", ErrInvalid)
 	}
@@ -428,7 +427,7 @@ func (t *Tenant) UpdateSettings(s Settings) error {
 		TenantID:    t.id,
 		OldSettings: old,
 		NewSettings: s,
-		At:          clock.Now(),
+		At:          now.UTC(),
 	})
 	return nil
 }
@@ -445,7 +444,7 @@ func (t *Tenant) UpdateSettings(s Settings) error {
 //
 // Subscribers (web BFF, notification renderers, audit-log
 // localisation) consume the event to invalidate cached preferences.
-func (t *Tenant) UpdateDisplayPreferences(d DisplayPreferences) error {
+func (t *Tenant) UpdateDisplayPreferences(d DisplayPreferences, now time.Time) error {
 	if t.status == StatusDeleted {
 		return fmt.Errorf("%w: tenant deleted; cannot update display preferences", ErrInvalid)
 	}
@@ -458,7 +457,7 @@ func (t *Tenant) UpdateDisplayPreferences(d DisplayPreferences) error {
 		TenantID:              t.id,
 		OldDisplayPreferences: old,
 		NewDisplayPreferences: d,
-		At:                    clock.Now(),
+		At:                    now.UTC(),
 	})
 	return nil
 }
@@ -479,7 +478,7 @@ func (t *Tenant) UpdateDisplayPreferences(d DisplayPreferences) error {
 //   - StatusPending → tenant never activated; just hard-delete instead.
 //
 // Records the schedule timestamp + reason; emits MarkedForDeletionEvent.
-func (t *Tenant) MarkForDeletion(reason string) error {
+func (t *Tenant) MarkForDeletion(reason string, now time.Time) error {
 	if strings.TrimSpace(reason) == "" {
 		return fmt.Errorf("%w: deletion reason required for audit", ErrInvalid)
 	}
@@ -499,7 +498,7 @@ func (t *Tenant) MarkForDeletion(reason string) error {
 	default:
 		return fmt.Errorf("%w: invalid status %v", ErrInvalid, t.status)
 	}
-	now := clock.Now()
+	now = now.UTC()
 	t.status = StatusPendingDeletion
 	t.deletionScheduledAt = now
 	t.deletionReason = reason
@@ -519,7 +518,7 @@ func (t *Tenant) MarkForDeletion(reason string) error {
 // Idempotent only when status is already Active (no-op). Rejected
 // from any other status — caller can't restore from Pending /
 // Suspended (those aren't "deletion" states) or Deleted (terminal).
-func (t *Tenant) RestoreFromDeletion() error {
+func (t *Tenant) RestoreFromDeletion(now time.Time) error {
 	switch t.status {
 	case StatusActive:
 		return nil // already restored — idempotent
@@ -530,7 +529,7 @@ func (t *Tenant) RestoreFromDeletion() error {
 	default:
 		return fmt.Errorf("%w: cannot restore from status %v", ErrInvalid, t.status)
 	}
-	now := clock.Now()
+	now = now.UTC()
 	t.status = StatusActive
 	t.deletionScheduledAt = time.Time{}
 	t.deletionReason = ""
@@ -554,7 +553,7 @@ func (t *Tenant) RestoreFromDeletion() error {
 // Deleted (idempotent on terminal state via early return).
 //
 // Emits DeletedEvent; subscribers anonymise PII per `data-retention.md`.
-func (t *Tenant) HardDelete() error {
+func (t *Tenant) HardDelete(now time.Time) error {
 	switch t.status {
 	case StatusDeleted:
 		return nil // idempotent terminal
@@ -563,7 +562,7 @@ func (t *Tenant) HardDelete() error {
 	default:
 		return fmt.Errorf("%w: hard delete requires PendingDeletion or Pending status, got %v", ErrInvalid, t.status)
 	}
-	now := clock.Now()
+	now = now.UTC()
 	t.status = StatusDeleted
 	t.hardDeletedAt = now
 	t.recordEvent(DeletedEvent{

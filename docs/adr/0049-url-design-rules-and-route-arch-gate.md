@@ -134,3 +134,6 @@ This complements (does NOT replace) `task test:int`, which actually runs integra
 - **ADR 0047** — Layer-boundary discipline (the precedent for arch-test-as-CI-gate)
 - **ADR 0048** — `platform/` → `common/` merge (the rename that surfaced both bugs)
 - **CLAUDE.md** § "Testing rules" — arch tests as drift gates
+
+
+**Fitness function:** convention-only — not mechanically expressible. Route-conflict gate lives at `internal/<module>/ports/route_registration_test.go` per the ADR itself.

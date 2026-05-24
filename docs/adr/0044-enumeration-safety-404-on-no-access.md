@@ -178,3 +178,6 @@ The pattern is universal at scale. Returning 403 on guessable-key access denial 
 - ADR 0039 — Per-request scope selection: `is_platform=true` semantics, slug-anchored.
 - ADR 0040 — Search strategy: pg_trgm GIN indexes back the slug lookups; this ADR specifies the auth surface above them.
 - `security.md` — "Login flow — enumeration safety" rule (existing project doctrine; this ADR extends it from auth to all guessable-key reads).
+
+
+**Fitness function:** convention-only — not mechanically expressible. Enumeration-safety is per-handler discipline (byte-equality test in `TestE2E_TenantBySlug_ResponseShapesIdentical`); a whole-suite test would require shape-comparing every error path.

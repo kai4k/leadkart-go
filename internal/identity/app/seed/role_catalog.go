@@ -15,6 +15,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/leadkart/leadkart-go/internal/common/ids"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/permission"
@@ -45,26 +46,61 @@ type RoleSpec struct {
 // Returns a fresh slice on each call (callers may mutate without
 // worrying about poisoning a shared package var).
 //
-// CompanyOwner is the only role with a permission grant out of the
-// box — Meta.TenantAdmin acts as the "this person is the tenant
-// admin" bundle. Other tenant-tier roles ship empty; product UX +
-// admins populate them with the per-module permissions their workflow
-// actually needs.
+// CompanyOwner carries the `Meta.TenantAdmin` bundle as the "this
+// person is the tenant admin" short-circuit. Per ADR 0061 amendment 1
+// (Inventory Slice 1 fix-pass), the operational tenant-tier roles
+// (PurchaseManager / SalesManager / OfficeAdministrator) ALSO ship with
+// the Inventory permissions their workflow implies — without those
+// grants every non-Owner membership received 403 on the 11 inventory
+// endpoints. The grant policy:
+//
+//   - PurchaseManager       → Catalog.Manage + Stock.Manage (full inventory write)
+//   - SalesManager          → Catalog.Read + Stock.Read (read-only for order context)
+//   - OfficeAdministrator   → Catalog.Read + Stock.Read (read-only for back-office)
+//
+// Other tenant-tier roles (Executives, HR, Dispatch) ship empty —
+// product UX + admins populate per-membership overlays when their
+// workflow actually needs inventory access. As new modules add their
+// permission catalogues this pattern extends per the same rule of
+// thumb (managers in the relevant chain get Manage; cross-chain
+// admin-tier gets Read).
 func DefaultRoleCatalog() []RoleSpec {
+	p := permission.IdentityPermissions
 	return []RoleSpec{
 		{
 			Name:            role.SystemRoles.Tenant.CompanyOwner,
 			IsSystemDefault: true,
 			HierarchyLevel:  0,
-			Permissions:     []string{permission.IdentityPermissions.Meta.TenantAdmin},
+			Permissions:     []string{p.Meta.TenantAdmin},
 		},
 		{Name: role.SystemRoles.Tenant.Administrator, HierarchyLevel: 10},
 		{Name: role.SystemRoles.Tenant.SeniorManager, HierarchyLevel: 20},
-		{Name: role.SystemRoles.Tenant.OfficeAdministrator, HierarchyLevel: role.HierarchyLevelDefault},
+		{
+			Name:           role.SystemRoles.Tenant.OfficeAdministrator,
+			HierarchyLevel: role.HierarchyLevelDefault,
+			Permissions: []string{
+				p.Inventory.Catalog.Read,
+				p.Inventory.Stock.Read,
+			},
+		},
 		{Name: role.SystemRoles.Tenant.OfficeExecutive, HierarchyLevel: role.HierarchyLevelDefault},
-		{Name: role.SystemRoles.Tenant.SalesManager, HierarchyLevel: role.HierarchyLevelDefault},
+		{
+			Name:           role.SystemRoles.Tenant.SalesManager,
+			HierarchyLevel: role.HierarchyLevelDefault,
+			Permissions: []string{
+				p.Inventory.Catalog.Read,
+				p.Inventory.Stock.Read,
+			},
+		},
 		{Name: role.SystemRoles.Tenant.SalesExecutive, HierarchyLevel: role.HierarchyLevelDefault},
-		{Name: role.SystemRoles.Tenant.PurchaseManager, HierarchyLevel: role.HierarchyLevelDefault},
+		{
+			Name:           role.SystemRoles.Tenant.PurchaseManager,
+			HierarchyLevel: role.HierarchyLevelDefault,
+			Permissions: []string{
+				p.Inventory.Catalog.Manage,
+				p.Inventory.Stock.Manage,
+			},
+		},
 		{Name: role.SystemRoles.Tenant.PurchaseExecutive, HierarchyLevel: role.HierarchyLevelDefault},
 		{Name: role.SystemRoles.Tenant.DispatchManager, HierarchyLevel: role.HierarchyLevelDefault},
 		{Name: role.SystemRoles.Tenant.DispatchExecutive, HierarchyLevel: role.HierarchyLevelDefault},
@@ -94,6 +130,7 @@ func ApplyDefaultRoles(
 	ctx context.Context,
 	repo role.Repository,
 	tenantID tenant.ID,
+	now time.Time,
 ) ([]*role.Role, error) {
 	if tenantID.IsZero() {
 		return nil, errors.New("seed: tenantID required")
@@ -120,6 +157,7 @@ func ApplyDefaultRoles(
 			spec.IsSystemDefault,
 			spec.HierarchyLevel,
 			spec.IsSuperAdmin,
+			now,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("seed: build role %q: %w", spec.Name, err)
@@ -130,7 +168,7 @@ func ApplyDefaultRoles(
 				return nil, fmt.Errorf("seed: unknown permission %q in spec %q: %w",
 					pname, spec.Name, perr)
 			}
-			if err := r.GrantPermission(p); err != nil {
+			if err := r.GrantPermission(p, now); err != nil {
 				return nil, fmt.Errorf("seed: grant %q on %q: %w", pname, spec.Name, err)
 			}
 		}

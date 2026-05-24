@@ -168,3 +168,6 @@ Three rules to keep the spec from rotting (all three SHIPPED — see ADR 0050 fo
 - README.md:80 — the v0.1 declaration of `api/openapi.yaml` as "single source of truth".
 - ADR 0007 — stdlib net/http ServeMux (the substrate this spec describes).
 - ADR 0024 — Chainguard distroless static (the embed-into-binary constraint).
+
+
+**Fitness function:** convention-only — not mechanically expressible. Spec-first contract is gated by `TestArch_RouteHasSpecOperation` (per-module location in `ports/route_spec_test.go`) per ADR 0050.

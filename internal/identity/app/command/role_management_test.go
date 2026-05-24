@@ -6,7 +6,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/leadkart/leadkart-go/internal/common/clock"
 	"github.com/leadkart/leadkart-go/internal/common/ids"
 	"github.com/leadkart/leadkart-go/internal/common/pagination"
 	"github.com/leadkart/leadkart-go/internal/common/pg"
@@ -17,6 +16,7 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/domain/rolehierarchy"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
+
 
 // fakeRoleRepo is the minimum [role.Repository] surface the role
 // management handlers exercise.
@@ -233,10 +233,8 @@ var _ = membership.ID("")
 
 func newCustomRole(t *testing.T, repo *fakeRoleRepo, name string) *role.Role {
 	t.Helper()
-	clock.Set(time.Date(2026, 5, 7, 12, 0, 0, 0, time.UTC))
-	t.Cleanup(clock.Reset)
 	tid := tenant.ID("33333333-3333-3333-3333-333333333333")
-	r, err := role.New(role.ID(ids.NewV7().String()), tid, name, false, 50, false)
+	r, err := role.New(role.ID(ids.NewV7().String()), tid, name, false, 50, false, testNow)
 	if err != nil {
 		t.Fatalf("role.New: %v", err)
 	}
@@ -247,8 +245,6 @@ func newCustomRole(t *testing.T, repo *fakeRoleRepo, name string) *role.Role {
 
 func TestCreateRole_Succeeds(t *testing.T) {
 	t.Parallel()
-	clock.Set(time.Date(2026, 5, 7, 12, 0, 0, 0, time.UTC))
-	t.Cleanup(clock.Reset)
 	repo := newFakeRoleRepo()
 	h := command.NewCreateRoleHandler(repo, newFakeEdgeRepo(), fakeUoW{}, nowFunc)
 	out, err := h.Handle(t.Context(), command.CreateRoleCommand{
@@ -266,8 +262,6 @@ func TestCreateRole_Succeeds(t *testing.T) {
 
 func TestCreateRole_RejectsDuplicateName(t *testing.T) {
 	t.Parallel()
-	clock.Set(time.Date(2026, 5, 7, 12, 0, 0, 0, time.UTC))
-	t.Cleanup(clock.Reset)
 	repo := newFakeRoleRepo()
 	_ = newCustomRole(t, repo, "Sales Manager")
 	h := command.NewCreateRoleHandler(repo, newFakeEdgeRepo(), fakeUoW{}, nowFunc)
@@ -285,7 +279,7 @@ func TestUpdateRole_RenameSucceeds(t *testing.T) {
 	t.Parallel()
 	repo := newFakeRoleRepo()
 	r := newCustomRole(t, repo, "Old Name")
-	h := command.NewUpdateRoleHandler(repo)
+	h := command.NewUpdateRoleHandler(repo, func() time.Time { return testNow })
 	if err := h.Handle(t.Context(), command.UpdateRoleCommand{
 		RoleID:         r.ID(),
 		Name:           "New Name",
@@ -301,7 +295,7 @@ func TestUpdateRole_RenameSucceeds(t *testing.T) {
 func TestUpdateRole_NotFound(t *testing.T) {
 	t.Parallel()
 	repo := newFakeRoleRepo()
-	h := command.NewUpdateRoleHandler(repo)
+	h := command.NewUpdateRoleHandler(repo, func() time.Time { return testNow })
 	err := h.Handle(t.Context(), command.UpdateRoleCommand{
 		RoleID: role.ID("99999999-9999-9999-9999-999999999999"),
 		Name:   "x",
@@ -315,7 +309,7 @@ func TestReplaceRolePermissions_RejectsUnknown(t *testing.T) {
 	t.Parallel()
 	repo := newFakeRoleRepo()
 	r := newCustomRole(t, repo, "Sales Manager")
-	h := command.NewReplaceRolePermissionsHandler(repo)
+	h := command.NewReplaceRolePermissionsHandler(repo, func() time.Time { return testNow })
 	err := h.Handle(t.Context(), command.ReplaceRolePermissionsCommand{
 		RoleID:          r.ID(),
 		PermissionNames: []string{"identity.totally.fake"},
@@ -329,7 +323,7 @@ func TestGrantRolePermission_AddsPermission(t *testing.T) {
 	t.Parallel()
 	repo := newFakeRoleRepo()
 	r := newCustomRole(t, repo, "Sales Manager")
-	h := command.NewGrantRolePermissionHandler(repo)
+	h := command.NewGrantRolePermissionHandler(repo, func() time.Time { return testNow })
 	if err := h.Handle(t.Context(), command.GrantRolePermissionCommand{
 		RoleID:         r.ID(),
 		PermissionName: permission.IdentityPermissions.Tenants.View,
@@ -345,10 +339,10 @@ func TestRevokeRolePermission_RoundTrip(t *testing.T) {
 	t.Parallel()
 	repo := newFakeRoleRepo()
 	r := newCustomRole(t, repo, "Sales Manager")
-	_ = r.GrantPermission(permission.FromConstant(permission.IdentityPermissions.Tenants.View))
+	_ = r.GrantPermission(permission.FromConstant(permission.IdentityPermissions.Tenants.View), testNow)
 	r.PullEvents()
 
-	h := command.NewRevokeRolePermissionHandler(repo)
+	h := command.NewRevokeRolePermissionHandler(repo, func() time.Time { return testNow })
 	if err := h.Handle(t.Context(), command.RevokeRolePermissionCommand{
 		RoleID:         r.ID(),
 		PermissionName: permission.IdentityPermissions.Tenants.View,
@@ -364,7 +358,7 @@ func TestDeleteRole_Succeeds(t *testing.T) {
 	t.Parallel()
 	repo := newFakeRoleRepo()
 	r := newCustomRole(t, repo, "Sales Manager")
-	h := command.NewDeleteRoleHandler(repo)
+	h := command.NewDeleteRoleHandler(repo, func() time.Time { return testNow })
 	if err := h.Handle(t.Context(), command.DeleteRoleCommand{
 		RoleID:    r.ID(),
 		DeletedBy: "11111111-1111-1111-1111-111111111111",

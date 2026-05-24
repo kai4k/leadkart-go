@@ -74,6 +74,9 @@ func NewPurchaseLeadHandler(
 	outboxEnq OutboxEnqueuer,
 	now func() time.Time,
 ) PurchaseLeadHandler {
+	if now == nil {
+		now = time.Now
+	}
 	return PurchaseLeadHandler{
 		uow: uow, leads: leads, credits: credits, outboxEnq: outboxEnq, now: now,
 	}

@@ -6,7 +6,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/leadkart/leadkart-go/internal/common/clock"
 	"github.com/leadkart/leadkart-go/internal/identity/app/query"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/refreshtoken"
@@ -36,8 +35,7 @@ var _ refreshtoken.Repository = (*stubFamilyRepo)(nil)
 
 func TestListSessions_ReturnsViews(t *testing.T) {
 	t.Parallel()
-	clock.Set(time.Date(2026, 5, 7, 12, 0, 0, 0, time.UTC))
-	t.Cleanup(clock.Reset)
+	fixedAt := time.Date(2026, 5, 7, 12, 0, 0, 0, time.UTC)
 
 	hash, err := refreshtoken.NewTokenHash("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
 	if err != nil {
@@ -50,6 +48,7 @@ func TestListSessions_ReturnsViews(t *testing.T) {
 		"iphone-15",
 		hash,
 		14*24*time.Hour,
+		fixedAt,
 	)
 	if err != nil {
 		t.Fatalf("NewFamily: %v", err)

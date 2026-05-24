@@ -57,6 +57,18 @@ func TestIdentityPermissions_Catalogue(t *testing.T) {
 	if permission.IdentityPermissions.Roles.Assign != "identity.roles.assign" {
 		t.Fatalf("Roles.Assign: %q", permission.IdentityPermissions.Roles.Assign)
 	}
+	if permission.IdentityPermissions.Inventory.Catalog.Read != "inventory.catalog.read" {
+		t.Fatalf("Inventory.Catalog.Read: %q", permission.IdentityPermissions.Inventory.Catalog.Read)
+	}
+	if permission.IdentityPermissions.Inventory.Catalog.Manage != "inventory.catalog.manage" {
+		t.Fatalf("Inventory.Catalog.Manage: %q", permission.IdentityPermissions.Inventory.Catalog.Manage)
+	}
+	if permission.IdentityPermissions.Inventory.Stock.Read != "inventory.stock.read" {
+		t.Fatalf("Inventory.Stock.Read: %q", permission.IdentityPermissions.Inventory.Stock.Read)
+	}
+	if permission.IdentityPermissions.Inventory.Stock.Manage != "inventory.stock.manage" {
+		t.Fatalf("Inventory.Stock.Manage: %q", permission.IdentityPermissions.Inventory.Stock.Manage)
+	}
 }
 
 func TestFromConstant_ReturnsInternedInstance(t *testing.T) {

@@ -11,9 +11,8 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/propagation"
 
-	"github.com/leadkart/leadkart-go/internal/common/clock"
-	"github.com/leadkart/leadkart-go/internal/identity/adapters/db"
 	"github.com/leadkart/leadkart-go/internal/common/pg"
+	"github.com/leadkart/leadkart-go/internal/identity/adapters/db"
 )
 
 // OutboxForwarder polls identity.outbox + republishes unforwarded rows
@@ -33,6 +32,7 @@ type OutboxForwarder struct {
 	publisher message.Publisher
 	topic     string // Watermill destination — usually "identity.events"
 	batchSize int32
+	now       func() time.Time
 }
 
 // NewOutboxForwarder wires the forwarder against a pool + publisher.
@@ -41,15 +41,23 @@ type OutboxForwarder struct {
 // by event_type without a separate topic per event kind.
 //
 // batchSize 0 → 100. Production tunes higher under load.
+//
+// `now` is the explicit time source per the clock-injection refactor —
+// composition root wires `time.Now`; tests inject a fixed-time closure
+// for deterministic forwarded_at assertions. Nil → time.Now.
 func NewOutboxForwarder(
 	pool *pgxpool.Pool,
 	tx *pg.Transactor,
 	publisher message.Publisher,
 	topic string,
 	batchSize int32,
+	now func() time.Time,
 ) *OutboxForwarder {
 	if batchSize <= 0 {
 		batchSize = 100
+	}
+	if now == nil {
+		now = time.Now
 	}
 	return &OutboxForwarder{
 		pool:      pool,
@@ -57,6 +65,7 @@ func NewOutboxForwarder(
 		publisher: publisher,
 		topic:     topic,
 		batchSize: batchSize,
+		now:       now,
 	}
 }
 
@@ -71,7 +80,7 @@ func (f *OutboxForwarder) ForwardOnce(ctx context.Context) (int, error) {
 		if err != nil {
 			return fmt.Errorf("forwarder: list unforwarded: %w", err)
 		}
-		now := clock.Now()
+		now := f.now()
 		propagator := otel.GetTextMapPropagator()
 		for _, row := range rows {
 			msg := message.NewMessage(uuidFromPg(row.ID).String(), row.Payload)

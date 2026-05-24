@@ -779,7 +779,7 @@ func handleConfirmEmailChange(log *slog.Logger, a app.Application) http.Handler 
 // writeJSON encodes body to w with status code. Sets Content-Type +
 // best-effort-encodes; errors at this point are unrecoverable (partial
 // body already on the wire), so we log nothing.
-func writeJSON(w http.ResponseWriter, status int, body interface{}) {
+func writeJSON(w http.ResponseWriter, status int, body any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(body)
@@ -868,7 +868,7 @@ func problemType(code string) string {
 // do optimistic updates and need server-canonical post-state.
 //
 //nolint:unused // A.8 infrastructure; incremental per-handler adoption in follow-up PRs
-func writeMutationResult(w http.ResponseWriter, body interface{}) {
+func writeMutationResult(w http.ResponseWriter, body any) {
 	if body == nil {
 		w.WriteHeader(http.StatusNoContent)
 		return

@@ -2,10 +2,11 @@ package subscribers
 
 import (
 	"log/slog"
+	"time"
 
+	"github.com/leadkart/leadkart-go/internal/common/messaging"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/refreshtoken"
 	"github.com/leadkart/leadkart-go/internal/identity/integrationevents"
-	"github.com/leadkart/leadkart-go/internal/common/messaging"
 )
 
 // Identity subscriber-handler names (CI-stable). Changing one of these
@@ -74,9 +75,13 @@ func Register(
 	stampCache SecurityStampInvalidator,
 	emailSender *EmailSender,
 	log *slog.Logger,
+	now func() time.Time,
 ) {
+	if now == nil {
+		now = time.Now
+	}
 	invalidate := NewInvalidateSecurityStampCache(stampCache, log)
-	revoke := NewRevokeFamiliesOnSecurityChange(families, log)
+	revoke := NewRevokeFamiliesOnSecurityChange(families, log, now)
 	siem := NewReuseDetectedSIEM(log)
 
 	// Cache-evict subscribers (opportunistic; WARN+continue on failure).

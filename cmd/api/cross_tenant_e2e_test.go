@@ -45,6 +45,10 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/ports"
 )
 
+// testNow is the deterministic instant test fixtures pass to domain
+// factories + mutators per the clock-injection refactor.
+var testNow = time.Date(2026, 5, 24, 12, 0, 0, 0, time.UTC)
+
 // ----- Fixture --------------------------------------------------------------
 
 // e2eFixture wires the full HTTP surface against a fresh testcontainers
@@ -79,7 +83,7 @@ func newE2EFixture(t *testing.T) e2eFixture {
 	if err != nil {
 		t.Fatalf("buildIdentityApp: %v", err)
 	}
-	srv := httptest.NewServer(newServer(silentLogger(), wiring.App, platformapp.Application{}, wiring.Issuer, wiring.StampValidator))
+	srv := httptest.NewServer(newServer(silentLogger(), wiring.App, platformapp.Application{}, buildInventoryApp(pool), wiring.Issuer, wiring.StampValidator))
 	t.Cleanup(srv.Close)
 	return e2eFixture{
 		URL:     srv.URL,
@@ -192,7 +196,7 @@ func (f e2eFixture) mintPlatformToken(t *testing.T, operatorPersonID string) str
 	if err != nil {
 		t.Fatalf("operator pw hash: %v", err)
 	}
-	op, err := person.New(person.ID(operatorPersonID), addr, "Platform", "Operator", pwHash)
+	op, err := person.New(person.ID(operatorPersonID), addr, "Platform", "Operator", pwHash, testNow)
 	if err != nil {
 		t.Fatalf("operator person.New: %v", err)
 	}

@@ -5,13 +5,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/ThreeDotsLabs/watermill/message"
 
+	"github.com/leadkart/leadkart-go/internal/common/messaging"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/refreshtoken"
 	"github.com/leadkart/leadkart-go/internal/identity/integrationevents"
-	"github.com/leadkart/leadkart-go/internal/common/messaging"
 )
 
 // RevokeFamiliesOnSecurityChange is the choreographed reaction to
@@ -45,21 +46,30 @@ import (
 type RevokeFamiliesOnSecurityChange struct {
 	families refreshtoken.Repository
 	log      *slog.Logger
+	now      func() time.Time
 }
 
 // NewRevokeFamiliesOnSecurityChange wires the subscriber. Depends on
 // the domain interface (Cheney "accept interfaces, return structs") —
 // the production wiring point passes *adapters.RefreshTokenFamilyRepository.
+//
+// `now` is the explicit time source per the clock-injection refactor —
+// composition root wires `time.Now`. Nil → time.Now.
 func NewRevokeFamiliesOnSecurityChange(
 	families refreshtoken.Repository,
 	log *slog.Logger,
+	now func() time.Time,
 ) *RevokeFamiliesOnSecurityChange {
 	if log == nil {
 		log = slog.Default()
 	}
+	if now == nil {
+		now = time.Now
+	}
 	return &RevokeFamiliesOnSecurityChange{
 		families: families,
 		log:      log,
+		now:      now,
 	}
 }
 
@@ -169,6 +179,7 @@ func (h *RevokeFamiliesOnSecurityChange) revokeForTenant(
 	if err != nil {
 		return fmt.Errorf("subscribers: list families for %s: %w", personID, err)
 	}
+	now := h.now()
 	count := 0
 	for _, f := range actives {
 		if f.TenantID().String() != tenantID {
@@ -176,7 +187,7 @@ func (h *RevokeFamiliesOnSecurityChange) revokeForTenant(
 		}
 		fid := f.ID()
 		err := h.families.UpdateByID(ctx, fid, func(family *refreshtoken.Family) (bool, error) {
-			if err := family.Revoke(reason); err != nil {
+			if err := family.Revoke(reason, now); err != nil {
 				return false, err
 			}
 			return true, nil
@@ -221,9 +232,10 @@ func (h *RevokeFamiliesOnSecurityChange) revokeAll(
 	if len(actives) == 0 {
 		return nil
 	}
+	now := h.now()
 	for _, f := range actives {
 		err := h.families.UpdateByID(ctx, f.ID(), func(family *refreshtoken.Family) (bool, error) {
-			if err := family.Revoke(reason); err != nil {
+			if err := family.Revoke(reason, now); err != nil {
 				return false, err
 			}
 			return true, nil

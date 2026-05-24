@@ -135,3 +135,6 @@ This is intentional cost-saving CI design (matches Kubernetes, Terraform, golang
 - Spectral docs — stoplight.io/open-source/spectral
 - Cloudflare API engineering — public ref of Spectral usage in their CI
 - ThreeDotsLabs Wild Workouts — arch-test pattern (the boundary-discipline ancestor of this trio)
+
+
+**Fitness function:** convention-only — not mechanically expressible. Bijective drift gate lives at `internal/<module>/ports/route_spec_test.go` per the ADR; `task ci:openapi` is the Spectral lint gate.

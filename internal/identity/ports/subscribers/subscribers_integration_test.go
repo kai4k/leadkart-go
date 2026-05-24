@@ -45,6 +45,10 @@ import (
 	"github.com/leadkart/leadkart-go/internal/common/pg"
 )
 
+// testNow is the deterministic instant test fixtures pass to domain
+// factories + mutators per the clock-injection refactor.
+var testNow = time.Date(2026, 5, 24, 12, 0, 0, 0, time.UTC)
+
 // fixture spins ephemeral Postgres + applies migrations + provisions
 // non-superuser leadkart_app role. Returns a pgxpool connected as
 // leadkart_app so RLS actually fires for the tenant_memberships
@@ -182,7 +186,7 @@ func (fx *fixture) seedPerson(t *testing.T, addr string) *person.Person {
 	if err != nil {
 		t.Fatalf("hash: %v", err)
 	}
-	p, err := person.New(person.ID(ids.NewV7().String()), e, "Alice", "Acme", hash)
+	p, err := person.New(person.ID(ids.NewV7().String()), e, "Alice", "Acme", hash, testNow)
 	if err != nil {
 		t.Fatalf("person.New: %v", err)
 	}
@@ -197,7 +201,7 @@ func (fx *fixture) seedTenant(t *testing.T) *tenant.Tenant {
 	full := ids.NewV7().String()
 	s, _ := slug.New("sub-" + full[len(full)-8:])
 	addr, _ := email.New("admin@example.test")
-	tn, err := tenant.New(tenant.ID(ids.NewV7().String()), s, "Acme Pharma Pvt Ltd", "Acme", addr)
+	tn, err := tenant.New(tenant.ID(ids.NewV7().String()), s, "Acme Pharma Pvt Ltd", "Acme", addr, testNow)
 	if err != nil {
 		t.Fatalf("tenant.New: %v", err)
 	}
@@ -217,6 +221,7 @@ func (fx *fixture) seedFamily(t *testing.T, p *person.Person, tn *tenant.Tenant)
 	f, err := refreshtoken.NewFamily(
 		refreshtoken.FamilyID(ids.NewV7().String()),
 		p.ID(), tn.ID(), "iPhone 15 / Safari", hash, 14*24*time.Hour,
+		time.Now().UTC(),
 	)
 	if err != nil {
 		t.Fatalf("NewFamily: %v", err)
@@ -312,7 +317,7 @@ func wireRouter(t *testing.T, fx *fixture) (*gochannel.GoChannel, *messaging.Rou
 	t.Cleanup(func() { _ = pubsub.Close() })
 
 	receiver := messaging.NewIdempotentReceiver(fx.pool)
-	auditW := audit.NewWriter(fx.pool, silentLog())
+	auditW := audit.NewWriter(fx.pool, silentLog(), time.Now)
 	router, err := messaging.NewRouter(messaging.Deps{
 		Subscriber:       pubsub,
 		Logger:           silentLog(),
@@ -329,7 +334,7 @@ func wireRouter(t *testing.T, fx *fixture) (*gochannel.GoChannel, *messaging.Rou
 	if err != nil {
 		t.Fatalf("NewRouter: %v", err)
 	}
-	subscribers.Register(router, fx.families, fx.stampCache, nil, silentLog())
+	subscribers.Register(router, fx.families, fx.stampCache, nil, silentLog(), time.Now)
 	stop := runRouter(t, router)
 	return pubsub, router, stop
 }
@@ -541,7 +546,7 @@ func TestReuseDetectedSIEM_LogsOnReuseRevocation(t *testing.T) {
 	pubsub := gochannel.NewGoChannel(gochannel.Config{}, watermill.NewSlogLogger(silentLog()))
 	t.Cleanup(func() { _ = pubsub.Close() })
 	receiver := messaging.NewIdempotentReceiver(fx.pool)
-	auditW := audit.NewWriter(fx.pool, silentLog())
+	auditW := audit.NewWriter(fx.pool, silentLog(), time.Now)
 	router, err := messaging.NewRouter(messaging.Deps{
 		Subscriber:       pubsub,
 		Logger:           silentLog(),
@@ -555,7 +560,7 @@ func TestReuseDetectedSIEM_LogsOnReuseRevocation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRouter: %v", err)
 	}
-	subscribers.Register(router, fx.families, fx.stampCache, nil, siemLog)
+	subscribers.Register(router, fx.families, fx.stampCache, nil, siemLog, time.Now)
 	stop := runRouter(t, router)
 	defer stop()
 
@@ -581,7 +586,7 @@ func TestReuseDetectedSIEM_IgnoresNonReuseRevocations(t *testing.T) {
 	pubsub := gochannel.NewGoChannel(gochannel.Config{}, watermill.NewSlogLogger(silentLog()))
 	t.Cleanup(func() { _ = pubsub.Close() })
 	receiver := messaging.NewIdempotentReceiver(fx.pool)
-	auditW := audit.NewWriter(fx.pool, silentLog())
+	auditW := audit.NewWriter(fx.pool, silentLog(), time.Now)
 	router, err := messaging.NewRouter(messaging.Deps{
 		Subscriber:       pubsub,
 		Logger:           silentLog(),
@@ -595,7 +600,7 @@ func TestReuseDetectedSIEM_IgnoresNonReuseRevocations(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRouter: %v", err)
 	}
-	subscribers.Register(router, fx.families, fx.stampCache, nil, siemLog)
+	subscribers.Register(router, fx.families, fx.stampCache, nil, siemLog, time.Now)
 	stop := runRouter(t, router)
 	defer stop()
 

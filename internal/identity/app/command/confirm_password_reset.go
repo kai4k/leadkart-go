@@ -6,10 +6,11 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/leadkart/leadkart-go/internal/identity/app/argon2"
-	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/passwordpolicy"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
 )
 
 // ConfirmPasswordResetCommand carries the user-presented plaintext
@@ -36,19 +37,25 @@ var ErrResetTokenInvalid = errors.New("confirm_password_reset: token invalid or 
 type ConfirmPasswordResetHandler struct {
 	persons       person.Repository
 	breachChecker passwordpolicy.Checker
+	now           func() time.Time
 }
 
-// NewConfirmPasswordResetHandler wires the handler.
-func NewConfirmPasswordResetHandler(persons person.Repository, breachChecker passwordpolicy.Checker) ConfirmPasswordResetHandler {
+// NewConfirmPasswordResetHandler wires the handler. `now` is the
+// explicit time source per the clock-injection refactor. Nil → time.Now.
+func NewConfirmPasswordResetHandler(persons person.Repository, breachChecker passwordpolicy.Checker, now func() time.Time) ConfirmPasswordResetHandler {
 	if persons == nil {
 		panic("command: NewConfirmPasswordResetHandler persons repository required")
 	}
 	if breachChecker == nil {
 		panic("command: NewConfirmPasswordResetHandler breach checker required")
 	}
+	if now == nil {
+		now = time.Now
+	}
 	return ConfirmPasswordResetHandler{
 		persons:       persons,
 		breachChecker: breachChecker,
+		now:           now,
 	}
 }
 
@@ -118,8 +125,9 @@ func (h ConfirmPasswordResetHandler) Handle(ctx context.Context, cmd ConfirmPass
 		return fmt.Errorf("confirm_password_reset: wrap new hash: %w", err)
 	}
 
+	now := h.now()
 	if err := h.persons.UpdateByID(ctx, p.ID(), func(loaded *person.Person) (bool, error) {
-		if err := loaded.ConfirmPasswordReset(tokenHash, newHash); err != nil {
+		if err := loaded.ConfirmPasswordReset(tokenHash, newHash, now); err != nil {
 			return false, err
 		}
 		return true, nil

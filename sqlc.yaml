@@ -33,6 +33,9 @@ sql:
         emit_all_enum_values: false
         output_db_file_name: db.go
         output_models_file_name: models.go
+        # uuid + timestamptz mapped to typed Go via pgx/v5 native types
+        # (uuid.UUID + time.Time). No custom overrides needed since each
+        # repo adapter does the domain↔row mapping anyway.
 
   # Platform bounded context — ADR 0059 (Slice 1).
   - engine: postgresql
@@ -42,6 +45,25 @@ sql:
       go:
         package: db
         out: internal/platform/adapters/db
+        sql_package: pgx/v5
+        emit_pointers_for_null_types: true
+        emit_json_tags: false
+        emit_prepared_queries: false
+        emit_interface: false
+        emit_exact_table_names: false
+        emit_enum_valid_method: true
+        emit_all_enum_values: false
+        output_db_file_name: db.go
+        output_models_file_name: models.go
+
+  # Inventory bounded context — ADR 0061 (Slice 1).
+  - engine: postgresql
+    queries: internal/inventory/adapters/sql
+    schema: migrations
+    gen:
+      go:
+        package: db
+        out: internal/inventory/adapters/db
         sql_package: pgx/v5
         emit_pointers_for_null_types: true
         emit_json_tags: false

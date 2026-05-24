@@ -88,8 +88,9 @@ func (h CreateRoleHandler) Handle(ctx context.Context, cmd CreateRoleCommand) (C
 	if cmd.TenantID.IsZero() {
 		return CreateRoleResult{}, errors.New("create_role: tenant id required")
 	}
+	now := h.now()
 	r, err := role.New(role.ID(ids.NewV7().String()), cmd.TenantID, cmd.Name,
-		false /* isSystemDefault */, cmd.HierarchyLevel, false /* isSuperAdmin */)
+		false /* isSystemDefault */, cmd.HierarchyLevel, false /* isSuperAdmin */, now)
 	if err != nil {
 		return CreateRoleResult{}, err
 	}
@@ -163,14 +164,19 @@ type UpdateRoleCommand struct {
 // UpdateRoleHandler runs the update flow.
 type UpdateRoleHandler struct {
 	roles role.Repository
+	now   func() time.Time
 }
 
-// NewUpdateRoleHandler wires the handler.
-func NewUpdateRoleHandler(r role.Repository) UpdateRoleHandler {
+// NewUpdateRoleHandler wires the handler. `now` is the explicit time
+// source per the clock-injection refactor. Nil → time.Now.
+func NewUpdateRoleHandler(r role.Repository, now func() time.Time) UpdateRoleHandler {
 	if r == nil {
 		panic("command: NewUpdateRoleHandler roles repository required")
 	}
-	return UpdateRoleHandler{roles: r}
+	if now == nil {
+		now = time.Now
+	}
+	return UpdateRoleHandler{roles: r, now: now}
 }
 
 // Handle dispatches to the aggregate. System-default roles +
@@ -179,10 +185,11 @@ func (h UpdateRoleHandler) Handle(ctx context.Context, cmd UpdateRoleCommand) er
 	if cmd.RoleID.IsZero() {
 		return errors.New("update_role: role id required")
 	}
+	now := h.now()
 	err := h.roles.UpdateByID(ctx, cmd.RoleID, func(r *role.Role) (bool, error) {
 		mutated := false
 		if cmd.Name != "" {
-			if err := r.Rename(cmd.Name); err != nil {
+			if err := r.Rename(cmd.Name, now); err != nil {
 				return false, err
 			}
 			mutated = true
@@ -219,14 +226,19 @@ type ReplaceRolePermissionsCommand struct {
 // ReplaceRolePermissionsHandler runs the replace flow.
 type ReplaceRolePermissionsHandler struct {
 	roles role.Repository
+	now   func() time.Time
 }
 
-// NewReplaceRolePermissionsHandler wires the handler.
-func NewReplaceRolePermissionsHandler(r role.Repository) ReplaceRolePermissionsHandler {
+// NewReplaceRolePermissionsHandler wires the handler. `now` is the
+// explicit time source per the clock-injection refactor. Nil → time.Now.
+func NewReplaceRolePermissionsHandler(r role.Repository, now func() time.Time) ReplaceRolePermissionsHandler {
 	if r == nil {
 		panic("command: NewReplaceRolePermissionsHandler roles repository required")
 	}
-	return ReplaceRolePermissionsHandler{roles: r}
+	if now == nil {
+		now = time.Now
+	}
+	return ReplaceRolePermissionsHandler{roles: r, now: now}
 }
 
 // Handle resolves names + dispatches to [Role.ReplacePermissions].
@@ -238,8 +250,9 @@ func (h ReplaceRolePermissionsHandler) Handle(ctx context.Context, cmd ReplaceRo
 	if err != nil {
 		return err
 	}
+	now := h.now()
 	upErr := h.roles.UpdateByID(ctx, cmd.RoleID, func(r *role.Role) (bool, error) {
-		if err := r.ReplacePermissions(target); err != nil {
+		if err := r.ReplacePermissions(target, now); err != nil {
 			return false, err
 		}
 		return true, nil
@@ -264,14 +277,19 @@ type GrantRolePermissionCommand struct {
 // GrantRolePermissionHandler runs the grant flow.
 type GrantRolePermissionHandler struct {
 	roles role.Repository
+	now   func() time.Time
 }
 
-// NewGrantRolePermissionHandler wires the handler.
-func NewGrantRolePermissionHandler(r role.Repository) GrantRolePermissionHandler {
+// NewGrantRolePermissionHandler wires the handler. `now` is the
+// explicit time source per the clock-injection refactor. Nil → time.Now.
+func NewGrantRolePermissionHandler(r role.Repository, now func() time.Time) GrantRolePermissionHandler {
 	if r == nil {
 		panic("command: NewGrantRolePermissionHandler roles repository required")
 	}
-	return GrantRolePermissionHandler{roles: r}
+	if now == nil {
+		now = time.Now
+	}
+	return GrantRolePermissionHandler{roles: r, now: now}
 }
 
 // Handle dispatches to [Role.GrantPermission].
@@ -283,8 +301,9 @@ func (h GrantRolePermissionHandler) Handle(ctx context.Context, cmd GrantRolePer
 	if err != nil {
 		return fmt.Errorf("%w: %q", ErrPermissionUnknown, cmd.PermissionName)
 	}
+	now := h.now()
 	upErr := h.roles.UpdateByID(ctx, cmd.RoleID, func(r *role.Role) (bool, error) {
-		if err := r.GrantPermission(p); err != nil {
+		if err := r.GrantPermission(p, now); err != nil {
 			return false, err
 		}
 		return true, nil
@@ -309,14 +328,19 @@ type RevokeRolePermissionCommand struct {
 // RevokeRolePermissionHandler runs the revoke flow.
 type RevokeRolePermissionHandler struct {
 	roles role.Repository
+	now   func() time.Time
 }
 
-// NewRevokeRolePermissionHandler wires the handler.
-func NewRevokeRolePermissionHandler(r role.Repository) RevokeRolePermissionHandler {
+// NewRevokeRolePermissionHandler wires the handler. `now` is the
+// explicit time source per the clock-injection refactor. Nil → time.Now.
+func NewRevokeRolePermissionHandler(r role.Repository, now func() time.Time) RevokeRolePermissionHandler {
 	if r == nil {
 		panic("command: NewRevokeRolePermissionHandler roles repository required")
 	}
-	return RevokeRolePermissionHandler{roles: r}
+	if now == nil {
+		now = time.Now
+	}
+	return RevokeRolePermissionHandler{roles: r, now: now}
 }
 
 // Handle dispatches to [Role.RevokePermission].
@@ -328,8 +352,9 @@ func (h RevokeRolePermissionHandler) Handle(ctx context.Context, cmd RevokeRoleP
 	if err != nil {
 		return fmt.Errorf("%w: %q", ErrPermissionUnknown, cmd.PermissionName)
 	}
+	now := h.now()
 	upErr := h.roles.UpdateByID(ctx, cmd.RoleID, func(r *role.Role) (bool, error) {
-		if err := r.RevokePermission(p); err != nil {
+		if err := r.RevokePermission(p, now); err != nil {
 			return false, err
 		}
 		return true, nil
@@ -358,14 +383,19 @@ type DeleteRoleCommand struct {
 // DeleteRoleHandler runs the delete flow.
 type DeleteRoleHandler struct {
 	roles role.Repository
+	now   func() time.Time
 }
 
-// NewDeleteRoleHandler wires the handler.
-func NewDeleteRoleHandler(r role.Repository) DeleteRoleHandler {
+// NewDeleteRoleHandler wires the handler. `now` is the explicit time
+// source per the clock-injection refactor. Nil → time.Now.
+func NewDeleteRoleHandler(r role.Repository, now func() time.Time) DeleteRoleHandler {
 	if r == nil {
 		panic("command: NewDeleteRoleHandler roles repository required")
 	}
-	return DeleteRoleHandler{roles: r}
+	if now == nil {
+		now = time.Now
+	}
+	return DeleteRoleHandler{roles: r, now: now}
 }
 
 // Handle dispatches to [Role.Delete].
@@ -373,8 +403,9 @@ func (h DeleteRoleHandler) Handle(ctx context.Context, cmd DeleteRoleCommand) er
 	if cmd.RoleID.IsZero() {
 		return errors.New("delete_role: role id required")
 	}
+	now := h.now()
 	err := h.roles.UpdateByID(ctx, cmd.RoleID, func(r *role.Role) (bool, error) {
-		if err := r.Delete(cmd.DeletedBy); err != nil {
+		if err := r.Delete(cmd.DeletedBy, now); err != nil {
 			return false, err
 		}
 		return true, nil

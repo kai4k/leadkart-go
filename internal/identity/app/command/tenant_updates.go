@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/leadkart/leadkart-go/internal/common/druglicence"
 	"github.com/leadkart/leadkart-go/internal/common/gst"
@@ -31,14 +32,19 @@ type UpdateTenantProfileCommand struct {
 // UpdateTenantProfileHandler runs the profile update.
 type UpdateTenantProfileHandler struct {
 	tenants tenant.Repository
+	now     func() time.Time
 }
 
-// NewUpdateTenantProfileHandler wires the handler.
-func NewUpdateTenantProfileHandler(tenants tenant.Repository) UpdateTenantProfileHandler {
+// NewUpdateTenantProfileHandler wires the handler. `now` is the
+// explicit time source per the clock-injection refactor. Nil → time.Now.
+func NewUpdateTenantProfileHandler(tenants tenant.Repository, now func() time.Time) UpdateTenantProfileHandler {
 	if tenants == nil {
 		panic("command: NewUpdateTenantProfileHandler tenants repository required")
 	}
-	return UpdateTenantProfileHandler{tenants: tenants}
+	if now == nil {
+		now = time.Now
+	}
+	return UpdateTenantProfileHandler{tenants: tenants, now: now}
 }
 
 // Handle dispatches to [Tenant.UpdateProfile]. ErrNotFound surfaces
@@ -48,8 +54,9 @@ func (h UpdateTenantProfileHandler) Handle(ctx context.Context, cmd UpdateTenant
 	if cmd.TenantID.IsZero() {
 		return errors.New("update_tenant_profile: tenant id required")
 	}
+	now := h.now()
 	return h.tenants.UpdateByID(ctx, cmd.TenantID, func(t *tenant.Tenant) (bool, error) {
-		if err := t.UpdateProfile(cmd.LegalName, cmd.DisplayName); err != nil {
+		if err := t.UpdateProfile(cmd.LegalName, cmd.DisplayName, now); err != nil {
 			return false, err
 		}
 		return true, nil
@@ -74,14 +81,19 @@ type UpdateTenantStatutoryCommand struct {
 // UpdateTenantStatutoryHandler runs the statutory update.
 type UpdateTenantStatutoryHandler struct {
 	tenants tenant.Repository
+	now     func() time.Time
 }
 
-// NewUpdateTenantStatutoryHandler wires the handler.
-func NewUpdateTenantStatutoryHandler(tenants tenant.Repository) UpdateTenantStatutoryHandler {
+// NewUpdateTenantStatutoryHandler wires the handler. `now` is the
+// explicit time source per the clock-injection refactor. Nil → time.Now.
+func NewUpdateTenantStatutoryHandler(tenants tenant.Repository, now func() time.Time) UpdateTenantStatutoryHandler {
 	if tenants == nil {
 		panic("command: NewUpdateTenantStatutoryHandler tenants repository required")
 	}
-	return UpdateTenantStatutoryHandler{tenants: tenants}
+	if now == nil {
+		now = time.Now
+	}
+	return UpdateTenantStatutoryHandler{tenants: tenants, now: now}
 }
 
 // Handle constructs the Statutory VO + dispatches to the aggregate.
@@ -120,8 +132,9 @@ func (h UpdateTenantStatutoryHandler) Handle(ctx context.Context, cmd UpdateTena
 		return fmt.Errorf("update_tenant_statutory: compose: %w", err)
 	}
 
+	now := h.now()
 	return h.tenants.UpdateByID(ctx, cmd.TenantID, func(t *tenant.Tenant) (bool, error) {
-		if err := t.UpdateStatutory(statutory); err != nil {
+		if err := t.UpdateStatutory(statutory, now); err != nil {
 			return false, err
 		}
 		return true, nil
@@ -145,14 +158,19 @@ type UpdateTenantAdminContactCommand struct {
 // UpdateTenantAdminContactHandler runs the contact update.
 type UpdateTenantAdminContactHandler struct {
 	tenants tenant.Repository
+	now     func() time.Time
 }
 
-// NewUpdateTenantAdminContactHandler wires the handler.
-func NewUpdateTenantAdminContactHandler(tenants tenant.Repository) UpdateTenantAdminContactHandler {
+// NewUpdateTenantAdminContactHandler wires the handler. `now` is the
+// explicit time source per the clock-injection refactor. Nil → time.Now.
+func NewUpdateTenantAdminContactHandler(tenants tenant.Repository, now func() time.Time) UpdateTenantAdminContactHandler {
 	if tenants == nil {
 		panic("command: NewUpdateTenantAdminContactHandler tenants repository required")
 	}
-	return UpdateTenantAdminContactHandler{tenants: tenants}
+	if now == nil {
+		now = time.Now
+	}
+	return UpdateTenantAdminContactHandler{tenants: tenants, now: now}
 }
 
 // Handle builds phone + postaladdress VOs + dispatches.
@@ -184,8 +202,9 @@ func (h UpdateTenantAdminContactHandler) Handle(ctx context.Context, cmd UpdateT
 
 	contact := tenant.NewAdminContact(phoneVO, addrVO)
 
+	now := h.now()
 	return h.tenants.UpdateByID(ctx, cmd.TenantID, func(t *tenant.Tenant) (bool, error) {
-		if err := t.UpdateAdminContact(contact); err != nil {
+		if err := t.UpdateAdminContact(contact, now); err != nil {
 			return false, err
 		}
 		return true, nil
@@ -209,14 +228,19 @@ type UpdateTenantSettingsCommand struct {
 // UpdateTenantSettingsHandler runs the settings update.
 type UpdateTenantSettingsHandler struct {
 	tenants tenant.Repository
+	now     func() time.Time
 }
 
-// NewUpdateTenantSettingsHandler wires the handler.
-func NewUpdateTenantSettingsHandler(tenants tenant.Repository) UpdateTenantSettingsHandler {
+// NewUpdateTenantSettingsHandler wires the handler. `now` is the
+// explicit time source per the clock-injection refactor. Nil → time.Now.
+func NewUpdateTenantSettingsHandler(tenants tenant.Repository, now func() time.Time) UpdateTenantSettingsHandler {
 	if tenants == nil {
 		panic("command: NewUpdateTenantSettingsHandler tenants repository required")
 	}
-	return UpdateTenantSettingsHandler{tenants: tenants}
+	if now == nil {
+		now = time.Now
+	}
+	return UpdateTenantSettingsHandler{tenants: tenants, now: now}
 }
 
 // Handle constructs Settings + dispatches.
@@ -234,8 +258,9 @@ func (h UpdateTenantSettingsHandler) Handle(ctx context.Context, cmd UpdateTenan
 	}
 	settings := tenant.NewSettings(policy)
 
+	now := h.now()
 	return h.tenants.UpdateByID(ctx, cmd.TenantID, func(t *tenant.Tenant) (bool, error) {
-		if err := t.UpdateSettings(settings); err != nil {
+		if err := t.UpdateSettings(settings, now); err != nil {
 			return false, err
 		}
 		return true, nil
@@ -256,14 +281,19 @@ type UpdateTenantDisplayPreferencesCommand struct {
 // UpdateTenantDisplayPreferencesHandler runs the prefs update.
 type UpdateTenantDisplayPreferencesHandler struct {
 	tenants tenant.Repository
+	now     func() time.Time
 }
 
-// NewUpdateTenantDisplayPreferencesHandler wires the handler.
-func NewUpdateTenantDisplayPreferencesHandler(tenants tenant.Repository) UpdateTenantDisplayPreferencesHandler {
+// NewUpdateTenantDisplayPreferencesHandler wires the handler. `now` is
+// the explicit time source per the clock-injection refactor. Nil → time.Now.
+func NewUpdateTenantDisplayPreferencesHandler(tenants tenant.Repository, now func() time.Time) UpdateTenantDisplayPreferencesHandler {
 	if tenants == nil {
 		panic("command: NewUpdateTenantDisplayPreferencesHandler tenants repository required")
 	}
-	return UpdateTenantDisplayPreferencesHandler{tenants: tenants}
+	if now == nil {
+		now = time.Now
+	}
+	return UpdateTenantDisplayPreferencesHandler{tenants: tenants, now: now}
 }
 
 // Handle constructs DisplayPreferences + dispatches.
@@ -275,8 +305,9 @@ func (h UpdateTenantDisplayPreferencesHandler) Handle(ctx context.Context, cmd U
 	if err != nil {
 		return fmt.Errorf("update_tenant_display_preferences: compose: %w", err)
 	}
+	now := h.now()
 	return h.tenants.UpdateByID(ctx, cmd.TenantID, func(t *tenant.Tenant) (bool, error) {
-		if err := t.UpdateDisplayPreferences(prefs); err != nil {
+		if err := t.UpdateDisplayPreferences(prefs, now); err != nil {
 			return false, err
 		}
 		return true, nil

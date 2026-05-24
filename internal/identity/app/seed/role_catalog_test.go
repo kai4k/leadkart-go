@@ -1,6 +1,8 @@
 package seed_test
 
 import (
+	"time"
+
 	"context"
 	"errors"
 	"slices"
@@ -12,6 +14,10 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/domain/role"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
+
+// testNow is the deterministic instant test fixtures pass to domain
+// factories + mutators per the clock-injection refactor.
+var testNow = time.Date(2026, 5, 24, 12, 0, 0, 0, time.UTC)
 
 func TestDefaultRoleCatalog_ContainsExpectedNames(t *testing.T) {
 	t.Parallel()
@@ -62,19 +68,46 @@ func TestDefaultRoleCatalog_CompanyOwnerCarriesTenantAdmin(t *testing.T) {
 	}
 }
 
-func TestDefaultRoleCatalog_OtherRolesShipEmpty(t *testing.T) {
+// TestDefaultRoleCatalog_OperationalRolesCarryInventoryGrants pins the
+// ADR 0061 amendment 1 grant policy: PurchaseManager gets Inventory
+// Manage, SalesManager + OfficeAdministrator get Inventory Read.
+// Non-operational roles (Executives, HR, Dispatch, the top-tier
+// Administrator + SeniorManager) ship empty placeholders for product
+// UX to populate per-membership.
+func TestDefaultRoleCatalog_OperationalRolesCarryInventoryGrants(t *testing.T) {
 	t.Parallel()
 	specs := seed.DefaultRoleCatalog()
+	want := map[string][]string{
+		role.SystemRoles.Tenant.PurchaseManager: {
+			permission.IdentityPermissions.Inventory.Catalog.Manage,
+			permission.IdentityPermissions.Inventory.Stock.Manage,
+		},
+		role.SystemRoles.Tenant.SalesManager: {
+			permission.IdentityPermissions.Inventory.Catalog.Read,
+			permission.IdentityPermissions.Inventory.Stock.Read,
+		},
+		role.SystemRoles.Tenant.OfficeAdministrator: {
+			permission.IdentityPermissions.Inventory.Catalog.Read,
+			permission.IdentityPermissions.Inventory.Stock.Read,
+		},
+	}
 	for _, s := range specs {
 		if s.Name == role.SystemRoles.Tenant.CompanyOwner {
 			continue
 		}
-		if len(s.Permissions) != 0 {
-			t.Fatalf("non-Owner role %q ships with permissions: %v "+
-				"(other roles MUST be empty placeholders for product UX)", s.Name, s.Permissions)
-		}
 		if s.IsSystemDefault {
-			t.Fatalf("non-Owner role %q is system-default — only CompanyOwner should be", s.Name)
+			t.Errorf("non-Owner role %q is system-default — only CompanyOwner should be", s.Name)
+		}
+		if wantPerms, ok := want[s.Name]; ok {
+			if !slices.Equal(s.Permissions, wantPerms) {
+				t.Errorf("role %q permissions: got %v want %v", s.Name, s.Permissions, wantPerms)
+			}
+			continue
+		}
+		if len(s.Permissions) != 0 {
+			t.Errorf("non-operational role %q ships with permissions: %v "+
+				"(only PurchaseManager/SalesManager/OfficeAdministrator carry inventory grants per ADR 0061)",
+				s.Name, s.Permissions)
 		}
 	}
 }
@@ -158,7 +191,7 @@ func TestApplyDefaultRoles_FreshTenant_CreatesAllSpecs(t *testing.T) {
 	repo := newFakeRoleRepo()
 	tid := freshTenantID(t)
 
-	roles, err := seed.ApplyDefaultRoles(t.Context(), repo, tid)
+	roles, err := seed.ApplyDefaultRoles(t.Context(), repo, tid, testNow)
 	if err != nil {
 		t.Fatalf("ApplyDefaultRoles: %v", err)
 	}
@@ -188,11 +221,11 @@ func TestApplyDefaultRoles_Idempotent_SecondCallNoOps(t *testing.T) {
 	repo := newFakeRoleRepo()
 	tid := freshTenantID(t)
 
-	first, err := seed.ApplyDefaultRoles(t.Context(), repo, tid)
+	first, err := seed.ApplyDefaultRoles(t.Context(), repo, tid, testNow)
 	if err != nil {
 		t.Fatalf("first apply: %v", err)
 	}
-	second, err := seed.ApplyDefaultRoles(t.Context(), repo, tid)
+	second, err := seed.ApplyDefaultRoles(t.Context(), repo, tid, testNow)
 	if err != nil {
 		t.Fatalf("second apply (idempotent): %v", err)
 	}
@@ -209,7 +242,7 @@ func TestApplyDefaultRoles_Idempotent_SecondCallNoOps(t *testing.T) {
 func TestApplyDefaultRoles_RejectsZeroTenantID(t *testing.T) {
 	t.Parallel()
 	repo := newFakeRoleRepo()
-	if _, err := seed.ApplyDefaultRoles(t.Context(), repo, tenant.ID("")); err == nil {
+	if _, err := seed.ApplyDefaultRoles(t.Context(), repo, tenant.ID(""), testNow); err == nil {
 		t.Fatal("ApplyDefaultRoles with zero tenantID: expected error")
 	}
 }

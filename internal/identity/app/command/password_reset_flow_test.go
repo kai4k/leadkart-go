@@ -1,6 +1,8 @@
 package command_test
 
 import (
+	"time"
+
 	"context"
 	"errors"
 	"testing"
@@ -10,6 +12,7 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/domain/passwordpolicy"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
 )
+
 
 // resettableRepo extends the existing fakePersonRepo behaviour with a
 // hash → Person index so the confirm flow's GetByPasswordResetTokenHash
@@ -78,8 +81,10 @@ func (r *resettableRepo) emailRequestedToken(t *testing.T) string {
 }
 
 func TestRequestPasswordReset_HappyPath_PersistsAndEmitsEmailEvent(t *testing.T) {
+	// Safe to parallelise post-clock-injection: each handler carries its
+	// own `now func() time.Time` closure so different tests can use
+	// different instants concurrently without racing on a global.
 	t.Parallel()
-	freezeClock(t)
 
 	addr, err := email.New("alice@example.test")
 	if err != nil {
@@ -87,7 +92,7 @@ func TestRequestPasswordReset_HappyPath_PersistsAndEmitsEmailEvent(t *testing.T)
 	}
 	repo := newResettableRepo(newPersonWithPassword(t, "current-pw"))
 
-	h := command.NewRequestPasswordResetHandler(repo)
+	h := command.NewRequestPasswordResetHandler(repo, func() time.Time { return testNow })
 
 	if err := h.Handle(t.Context(), command.RequestPasswordResetCommand{Email: addr}); err != nil {
 		t.Fatalf("Handle: %v", err)
@@ -106,9 +111,8 @@ func TestRequestPasswordReset_HappyPath_PersistsAndEmitsEmailEvent(t *testing.T)
 
 func TestRequestPasswordReset_UnknownEmail_SilentSuccess(t *testing.T) {
 	t.Parallel()
-	freezeClock(t)
 	repo := newResettableRepo(nil) // no Person seeded
-	h := command.NewRequestPasswordResetHandler(repo)
+	h := command.NewRequestPasswordResetHandler(repo, func() time.Time { return testNow })
 
 	addr, _ := email.New("unknown@example.test")
 	if err := h.Handle(t.Context(), command.RequestPasswordResetCommand{Email: addr}); err != nil {
@@ -120,14 +124,20 @@ func TestRequestPasswordReset_UnknownEmail_SilentSuccess(t *testing.T) {
 }
 
 func TestConfirmPasswordReset_HappyPath_RotatesPasswordAndStamp(t *testing.T) {
+	// Safe to parallelise post-clock-injection — this test was the
+	// cloud-CI flake's primary surface (a parallel permission_request
+	// test's freezeClock to 2026-05-23 overwrote this test's 2026-05-07,
+	// pushing the just-minted reset token past its 1h expiry window).
+	// With explicit-time injection, each test threads its own instant
+	// through the handler; cross-test interference is structurally
+	// impossible.
 	t.Parallel()
-	freezeClock(t)
 
 	addr, _ := email.New("alice@example.test")
 	p := newPersonWithPassword(t, "current-pw")
 	repo := newResettableRepo(p)
 
-	reqHandler := command.NewRequestPasswordResetHandler(repo)
+	reqHandler := command.NewRequestPasswordResetHandler(repo, func() time.Time { return testNow })
 	if err := reqHandler.Handle(t.Context(), command.RequestPasswordResetCommand{Email: addr}); err != nil {
 		t.Fatalf("Request: %v", err)
 	}
@@ -136,7 +146,7 @@ func TestConfirmPasswordReset_HappyPath_RotatesPasswordAndStamp(t *testing.T) {
 	rawToken := repo.emailRequestedToken(t)
 	stampBefore := p.SecurityStamp()
 
-	confirmHandler := command.NewConfirmPasswordResetHandler(repo, passwordpolicy.Noop{})
+	confirmHandler := command.NewConfirmPasswordResetHandler(repo, passwordpolicy.Noop{}, func() time.Time { return testNow })
 	if err := confirmHandler.Handle(t.Context(), command.ConfirmPasswordResetCommand{
 		RawToken:    rawToken,
 		NewPassword: "Tr0ub4dor&3-newly-strong",
@@ -153,9 +163,8 @@ func TestConfirmPasswordReset_HappyPath_RotatesPasswordAndStamp(t *testing.T) {
 
 func TestConfirmPasswordReset_BadToken_ReturnsTokenInvalid(t *testing.T) {
 	t.Parallel()
-	freezeClock(t)
 	repo := newResettableRepo(newPersonWithPassword(t, "current-pw"))
-	h := command.NewConfirmPasswordResetHandler(repo, passwordpolicy.Noop{})
+	h := command.NewConfirmPasswordResetHandler(repo, passwordpolicy.Noop{}, func() time.Time { return testNow })
 	err := h.Handle(t.Context(), command.ConfirmPasswordResetCommand{
 		RawToken:    "totally-bogus-token",
 		NewPassword: "anything",

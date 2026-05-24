@@ -51,7 +51,7 @@ func TestKeysetMembershipsPage_UsesIndexUnderRLS(t *testing.T) {
 
 	addr, _ := email.New("admin@keyset-test.com")
 	s, _ := slug.New("keyset-test-tenant")
-	tn, _ := tenant.New(tenant.ID(ids.NewV7().String()), s, "Keyset Test Ltd", "Keyset", addr)
+	tn, _ := tenant.New(tenant.ID(ids.NewV7().String()), s, "Keyset Test Ltd", "Keyset", addr, testNow)
 	if err := tenants.Add(ctx, tn); err != nil {
 		t.Fatalf("seed tenant: %v", err)
 	}
@@ -62,11 +62,11 @@ func TestKeysetMembershipsPage_UsesIndexUnderRLS(t *testing.T) {
 	const seedCount = 200
 	for i := 0; i < seedCount; i++ {
 		paddr, _ := email.New(personEmailFor(i))
-		p, _ := person.New(person.ID(ids.NewV7().String()), paddr, "User", string(rune('A'+i%26)), hash)
+		p, _ := person.New(person.ID(ids.NewV7().String()), paddr, "User", string(rune('A'+i%26)), hash, testNow)
 		if err := persons.Add(ctx, p); err != nil {
 			t.Fatalf("seed person %d: %v", i, err)
 		}
-		m, _ := membership.New(membership.ID(ids.NewV7().String()), p.ID(), tn.ID(), membership.ID(""))
+		m, _ := membership.New(membership.ID(ids.NewV7().String()), p.ID(), tn.ID(), membership.ID(""), testNow)
 		ctxWithTenant := tenancy.WithID(ctx, tenancy.ID(tn.ID().String()))
 		if err := memberships.Add(ctxWithTenant, m); err != nil {
 			t.Fatalf("seed membership %d: %v", i, err)

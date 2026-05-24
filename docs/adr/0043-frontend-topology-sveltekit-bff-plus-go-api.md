@@ -359,3 +359,6 @@ Estimated 1 week of work for a single engineer fluent in SvelteKit.
 - ADR 0011 — Auth: golang-jwt/jwt/v5 + refresh-token families (the bearer-only contract)
 - ADR 0039 — Per-request scope selection: JWT.is_platform + X-Tenant-Id header (the scope mechanism the BFF forwards through)
 - ADR 0042 — Cache TTL strategy (CapabilitiesTTL keyed by security_stamp; the BFF benefits from this for its server-side `/me/capabilities` load)
+
+
+**Fitness function:** convention-only — not mechanically expressible. Frontend topology — the Go API is unchanged; the BFF is a separate-repo concern.

@@ -31,6 +31,7 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/domain/permission"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
 	identityports "github.com/leadkart/leadkart-go/internal/identity/ports"
+	inventoryapp "github.com/leadkart/leadkart-go/internal/inventory/app"
 	platformadapters "github.com/leadkart/leadkart-go/internal/platform/adapters"
 	platformapp "github.com/leadkart/leadkart-go/internal/platform/app"
 	platformcommand "github.com/leadkart/leadkart-go/internal/platform/app/command"
@@ -93,7 +94,7 @@ func newPlatformE2E(t *testing.T) platformE2E {
 		},
 	}
 
-	srv := httptest.NewServer(newServer(silentLogger(), wiring.App, platformApp, wiring.Issuer, wiring.StampValidator))
+	srv := httptest.NewServer(newServer(silentLogger(), wiring.App, platformApp, inventoryapp.Application{}, wiring.Issuer, wiring.StampValidator))
 	t.Cleanup(srv.Close)
 
 	return platformE2E{
@@ -168,7 +169,7 @@ func (f platformE2E) mintPlatformOperatorToken(t *testing.T) string {
 	if err != nil {
 		t.Fatalf("pw hash: %v", err)
 	}
-	op, err := person.New(person.ID(personID), addr, "Platform", "Operator", pwHash)
+	op, err := person.New(person.ID(personID), addr, "Platform", "Operator", pwHash, testNow)
 	if err != nil {
 		t.Fatalf("person.New: %v", err)
 	}

@@ -121,3 +121,6 @@ These let forensic queries answer "every cross-tenant read this operator perform
 - ADR 0011 — Auth: golang-jwt/jwt/v5 + refresh-token families (JWT claim surface).
 - ADR 0036 — Permission model (closed-set catalog, SuperAdmin flag mechanics).
 - Frontend backend wishlist (`fbca944` in this repo) — unified-surface spec motivating this ADR.
+
+
+**Fitness function:** convention-only — not mechanically expressible. Scope-selection decision tree lives inside `tenancy.FromRequest`; behaviour covered by unit + integration tests.

@@ -12,14 +12,13 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/leadkart/leadkart-go/internal/common/clock"
+	"github.com/leadkart/leadkart-go/internal/common/pg"
 	"github.com/leadkart/leadkart-go/internal/identity/adapters/db"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/permission"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/role"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
-	"github.com/leadkart/leadkart-go/internal/common/pg"
 )
 
 // permission-override kind constants. Mirror of the
@@ -656,7 +655,7 @@ func replaceRoleAssignments(ctx context.Context, q *db.Queries, m *membership.Me
 	if err := q.DeleteRoleAssignmentsByMembership(ctx, pgUUID(mid)); err != nil {
 		return fmt.Errorf("membership repo: clear role assignments: %w", err)
 	}
-	now := pgRequiredTimestamp(clock.Now())
+	now := pgRequiredTimestamp(time.Now().UTC())
 	for _, rid := range m.RoleAssignments() {
 		ruid, err := uuid.Parse(rid.String())
 		if err != nil {
@@ -693,7 +692,7 @@ func replacePermissionOverrides(ctx context.Context, q *db.Queries, m *membershi
 	if err := q.DeletePermissionOverridesByMembership(ctx, pgUUID(mid)); err != nil {
 		return fmt.Errorf("membership repo: clear permission overrides: %w", err)
 	}
-	now := pgRequiredTimestamp(clock.Now())
+	now := pgRequiredTimestamp(time.Now().UTC())
 	for _, g := range m.GrantedPermissions() {
 		if g.Permission == nil {
 			continue

@@ -66,3 +66,10 @@ This is a **temporary state** until Go 1.26 toolchain is pulled locally. Mitigat
 - [Go 1.24 release notes](https://go.dev/blog/go1.24).
 - [Go toolchain docs](https://go.dev/doc/toolchain).
 - [Go release policy](https://go.dev/doc/devel/release).
+
+
+## Fitness function
+
+`TestArch_NoInterfaceEmpty + TestArch_NoBannedDeps` (in `internal/architecture/`).
+
+`interface{}` literals blocked in favour of `any` (Go 1.18+); banned dependency list enforced.
