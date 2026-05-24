@@ -62,7 +62,7 @@ func TestPurchaseLead_HappyPath(t *testing.T) {
 	leadID := seedAvailableLead(t, leads)
 	seedCreditedTenant(t, credits, leadcredit.TenantID(tenantID.String()), 10)
 
-	h := command.NewPurchaseLeadHandler(uow, leads, credits, outbox, nowFunc)
+	h := command.NewPurchaseLeadHandler(uow, leads, credits, outbox, nowFunc, func() string { return ids.NewV7().String() })
 	out, err := h.Handle(context.Background(), command.PurchaseLeadCommand{
 		PlatformLeadID:         leadID,
 		PurchasingTenantID:     tenantID,
@@ -122,7 +122,7 @@ func TestPurchaseLead_InsufficientCredits(t *testing.T) {
 	leadID := seedAvailableLead(t, leads)
 	seedCreditedTenant(t, credits, leadcredit.TenantID(tenantID.String()), 0)
 
-	h := command.NewPurchaseLeadHandler(uow, leads, credits, outbox, nowFunc)
+	h := command.NewPurchaseLeadHandler(uow, leads, credits, outbox, nowFunc, func() string { return ids.NewV7().String() })
 	_, err := h.Handle(context.Background(), command.PurchaseLeadCommand{
 		PlatformLeadID:         leadID,
 		PurchasingTenantID:     tenantID,
@@ -151,7 +151,7 @@ func TestPurchaseLead_NoCreditRowYet(t *testing.T) {
 	leadID := seedAvailableLead(t, leads)
 	// No credit row at all.
 
-	h := command.NewPurchaseLeadHandler(uow, leads, credits, outbox, nowFunc)
+	h := command.NewPurchaseLeadHandler(uow, leads, credits, outbox, nowFunc, func() string { return ids.NewV7().String() })
 	_, err := h.Handle(context.Background(), command.PurchaseLeadCommand{
 		PlatformLeadID:         leadID,
 		PurchasingTenantID:     tenantID,
@@ -180,7 +180,7 @@ func TestPurchaseLead_AlreadySold(t *testing.T) {
 	seedCreditedTenant(t, credits, leadcredit.TenantID(tenantA.String()), 10)
 	seedCreditedTenant(t, credits, leadcredit.TenantID(tenantB.String()), 10)
 
-	h := command.NewPurchaseLeadHandler(uow, leads, credits, outbox, nowFunc)
+	h := command.NewPurchaseLeadHandler(uow, leads, credits, outbox, nowFunc, func() string { return ids.NewV7().String() })
 
 	// First purchase succeeds.
 	_, err := h.Handle(context.Background(), command.PurchaseLeadCommand{
@@ -238,7 +238,7 @@ func TestPurchaseLead_RetriesOnConflict(t *testing.T) {
 	// First attempt returns ErrConflict; second succeeds.
 	credits.ForceConflictOnce = true
 
-	h := command.NewPurchaseLeadHandler(uow, leads, credits, outbox, nowFunc)
+	h := command.NewPurchaseLeadHandler(uow, leads, credits, outbox, nowFunc, func() string { return ids.NewV7().String() })
 	_, err := h.Handle(context.Background(), command.PurchaseLeadCommand{
 		PlatformLeadID:         leadID,
 		PurchasingTenantID:     tenantID,

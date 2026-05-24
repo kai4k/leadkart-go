@@ -1,4 +1,7 @@
 -- LeadKart Go — Tenant aggregate persistence catch-up.
+-- ADR 0003 (state-based persistence — every aggregate field must
+-- round-trip through the adapter) + ADR 0001 (modular monolith —
+-- identity owns its schema).
 --
 -- Closes the schema gap that the A.4 work exposed: the Tenant
 -- aggregate carries Statutory + AdminContact + Settings +

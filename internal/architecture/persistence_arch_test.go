@@ -23,6 +23,7 @@ package architecture_test
 import (
 	"go/ast"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -660,5 +661,132 @@ func TestArch_DomainAndAppDontImportPgxDriver(t *testing.T) {
 		for _, v := range violations {
 			t.Errorf("%s — imports %s", v.file, v.imp)
 		}
+	}
+}
+
+// ============================================================================
+// Principle S — CQRS discipline (3 tests added per the comprehensive catalog
+// brief). ADR 0009 + Vernon IDDD ch. 4 (CQRS as a tactical separator).
+// ============================================================================
+
+// ----------------------------------------------------------------------------
+// S1: TestArch_AppCommandDoesNotImportAppQuery
+// ----------------------------------------------------------------------------
+//
+// CQRS: commands write state; queries read state. The two surfaces
+// share NO code (they have different scaling shapes, different
+// caching shapes). Commands importing query types signals a
+// "command returns a projection" anti-pattern; do the read in a
+// follow-up call.
+func TestArch_AppCommandDoesNotImportAppQuery(t *testing.T) {
+	t.Parallel()
+
+	root := internalDir(t)
+	var bad []string
+
+	for _, mod := range modulesUnderInternal(t) {
+		cmdDir := filepath.Join(root, mod, "app", "command")
+		walkGoFiles(t, cmdDir, false, func(path string, src []byte) {
+			imports := parseImports(t, path, src)
+			for _, im := range imports {
+				if strings.Contains(im, "/app/query") {
+					bad = append(bad, pathToSlash(path)+": imports "+im)
+				}
+			}
+		})
+	}
+
+	if len(bad) > 0 {
+		t.Fatalf("app/command/ imports app/query/ — CQRS write side can't read its own projections (ADR 0009):\n  %s",
+			strings.Join(bad, "\n  "))
+	}
+}
+
+// ----------------------------------------------------------------------------
+// S2: TestArch_CommandHandlersReturnResult
+// ----------------------------------------------------------------------------
+//
+// Command handlers return either `(*Result, error)` for state-
+// reporting commands or `error` for void commands. Returning a
+// raw domain entity (`(*Person, error)`) leaks the aggregate into
+// the wire layer; the *Result DTO is the boundary.
+//
+// Allow-list: handlers explicitly returning `(string, error)` for
+// new-ID commands; the resource ID is canonical wire payload (not
+// a domain leak).
+func TestArch_CommandHandlersReturnResult(t *testing.T) {
+	t.Parallel()
+
+	root := internalDir(t)
+	var bad []string
+
+	for _, mod := range modulesUnderInternal(t) {
+		cmdDir := filepath.Join(root, mod, "app", "command")
+		walkGoFiles(t, cmdDir, false, func(path string, src []byte) {
+			_, file := parseFile(t, path, src)
+			ast.Inspect(file, func(n ast.Node) bool {
+				fd, ok := n.(*ast.FuncDecl)
+				if !ok || fd.Name.Name != "Handle" {
+					return true
+				}
+				if fd.Recv == nil || !isHandlerReceiver(fd.Recv) {
+					return true
+				}
+				if fd.Type.Results == nil {
+					return true
+				}
+				results := fd.Type.Results.List
+				if len(results) == 1 {
+					// error-only return — fine.
+					return true
+				}
+				if len(results) != 2 {
+					bad = append(bad, pathToSlash(path)+": Handle returns "+itoa(len(results))+" results")
+					return true
+				}
+				// First result should be a pointer or a typed value.
+				switch results[0].Type.(type) {
+				case *ast.StarExpr, *ast.Ident, *ast.SelectorExpr:
+					// OK
+				default:
+					bad = append(bad, pathToSlash(path)+": Handle first return is unusual shape")
+				}
+				return true
+			})
+		})
+	}
+
+	if len(bad) > 0 {
+		t.Fatalf("command handler Handle method return shape non-canonical:\n  %s",
+			strings.Join(bad, "\n  "))
+	}
+}
+
+// ----------------------------------------------------------------------------
+// S3: TestArch_QueryHandlersDontMutate
+// ----------------------------------------------------------------------------
+//
+// Query handlers MUST NOT write — no `.Add(`, `.Update*(`, `.Delete(`
+// calls in app/query/ files. Reads side is for projections only.
+func TestArch_QueryHandlersDontMutate(t *testing.T) {
+	t.Parallel()
+
+	root := internalDir(t)
+	mutRE := regexp.MustCompile(`\.(?:Add|UpdateByID|UpdateBy\w+|Delete|Insert|Save)\(`)
+	var bad []string
+
+	for _, mod := range modulesUnderInternal(t) {
+		qDir := filepath.Join(root, mod, "app", "query")
+		walkGoFiles(t, qDir, false, func(path string, src []byte) {
+			body := stripGoComments(string(src))
+			if mutRE.MatchString(body) {
+				bad = append(bad, pathToSlash(path))
+			}
+		})
+	}
+
+	if len(bad) > 0 {
+		t.Fatalf("query handler calls a mutator (.Add/.UpdateBy/.Delete) — reads MUST be side-effect-free (ADR 0009):\n  %s",
+			strings.Join(bad, "\n  "))
 	}
 }

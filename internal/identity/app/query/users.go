@@ -139,11 +139,25 @@ func (h ListUsersHandler) Handle(ctx context.Context, q ListUsersQuery) ([]UserV
 	if err != nil {
 		return nil, fmt.Errorf("list_users: list memberships: %w", err)
 	}
+	// Batched hydration — one query for N persons, not N queries
+	// (Brandur "Postgres at Scale"; per the runtime QueryCounter gate
+	// in [pg.QueryCounter] this brings the per-request query budget
+	// from O(N) to O(1)).
+	pIDs := make([]person.ID, 0, len(mems))
+	for _, m := range mems {
+		pIDs = append(pIDs, m.PersonID())
+	}
+	personByID, err := h.persons.GetByIDs(ctx, pIDs)
+	if err != nil {
+		return nil, fmt.Errorf("list_users: hydrate persons: %w", err)
+	}
 	out := make([]UserView, 0, len(mems))
 	for _, m := range mems {
-		p, perr := h.persons.GetByID(ctx, m.PersonID())
-		if perr != nil {
-			return nil, fmt.Errorf("list_users: load person %s: %w", m.PersonID(), perr)
+		p, ok := personByID[m.PersonID()]
+		if !ok {
+			// Race with soft-delete is the only legal absence; treat
+			// as the same opaque load error the prior shape returned.
+			return nil, fmt.Errorf("list_users: load person %s: %w", m.PersonID(), person.ErrNotFound)
 		}
 		out = append(out, composeUserView(m, p))
 	}
@@ -211,11 +225,20 @@ func (h ListUsersPagedHandler) Handle(ctx context.Context, q ListUsersPagedQuery
 		return pagination.Page[UserView]{}, fmt.Errorf("list_users_paged: list memberships: %w", err)
 	}
 
+	// Batched hydration — one query for N persons, not N queries.
+	pIDs := make([]person.ID, 0, len(mems))
+	for _, m := range mems {
+		pIDs = append(pIDs, m.PersonID())
+	}
+	personByID, err := h.persons.GetByIDs(ctx, pIDs)
+	if err != nil {
+		return pagination.Page[UserView]{}, fmt.Errorf("list_users_paged: hydrate persons: %w", err)
+	}
 	views := make([]UserView, 0, len(mems))
 	for _, m := range mems {
-		p, perr := h.persons.GetByID(ctx, m.PersonID())
-		if perr != nil {
-			return pagination.Page[UserView]{}, fmt.Errorf("list_users_paged: load person %s: %w", m.PersonID(), perr)
+		p, ok := personByID[m.PersonID()]
+		if !ok {
+			return pagination.Page[UserView]{}, fmt.Errorf("list_users_paged: load person %s: %w", m.PersonID(), person.ErrNotFound)
 		}
 		views = append(views, composeUserView(m, p))
 	}

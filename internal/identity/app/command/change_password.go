@@ -45,6 +45,20 @@ var ErrPasswordBreached = errors.New("change_password: new password has appeared
 // reject; some products allow.) Per LeadKart parent canon: reject.
 var ErrPasswordSameAsCurrent = errors.New("change_password: new password same as current")
 
+// ErrNewPasswordRequired surfaces when a password-mutating command
+// (change-password or confirm-password-reset) is dispatched without
+// a NewPassword. HTTP layer maps to 400 / invalid_password. Typed so
+// callers can errors.Is on it instead of string-matching on a wrapped
+// fmt.Errorf — Russ Cox "Working with Errors in Go 1.13" canon.
+var ErrNewPasswordRequired = errors.New("change_password: new password required")
+
+// ErrPersonIDRequired surfaces when a Person-targeted command is
+// dispatched with a zero PersonID. Hitting this is a wiring bug
+// (RequireAuth + Subject guard should have short-circuited at the
+// HTTP boundary); HTTP layer still maps to 400 / invalid_password
+// to avoid leaking server-state. Typed sentinel for errors.Is.
+var ErrPersonIDRequired = errors.New("change_password: person id required")
+
 // ----- Handler ---------------------------------------------------------------
 
 // ChangePasswordHandler applies a new password to a Person via the
@@ -90,13 +104,13 @@ func NewChangePasswordHandler(persons person.Repository, breachChecker passwordp
 // Handle executes the change-password flow.
 func (h ChangePasswordHandler) Handle(ctx context.Context, cmd ChangePasswordCommand) error {
 	if cmd.PersonID.IsZero() {
-		return errors.New("change_password: person id required")
+		return ErrPersonIDRequired
 	}
 	if cmd.CurrentPassword == "" {
 		return ErrIncorrectCurrentPassword
 	}
 	if cmd.NewPassword == "" {
-		return errors.New("change_password: new password required")
+		return ErrNewPasswordRequired
 	}
 
 	// 1. Load person — read path so we can verify the current

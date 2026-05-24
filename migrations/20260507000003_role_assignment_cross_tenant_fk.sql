@@ -1,4 +1,6 @@
 -- LeadKart Go — Cross-tenant role-assignment FK enforcement.
+-- ADR 0006 (multi-tenancy RLS + composite-FK pattern) + ADR 0036
+-- (permission model — role + assignment topology).
 -- Per LeadKart .NET database.md "Referential integrity for denormalised
 -- tenant_id" + multi-tenancy.md "Composite FK pattern".
 --

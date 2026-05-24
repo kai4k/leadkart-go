@@ -535,3 +535,261 @@ func TestArch_ModernForRange(t *testing.T) {
 	}
 }
 
+// ============================================================================
+// Principle X — Pure-domain channel-shape (1 test added per the comprehensive
+// catalog brief).
+// ============================================================================
+
+// ----------------------------------------------------------------------------
+// X1: TestArch_NoMakeChannelWithoutSize
+// ----------------------------------------------------------------------------
+//
+// `make(chan T)` (unbuffered) blocks the sender until a receiver is
+// ready — that's a coordination tool, not a data-flow tool. Drift
+// signal: an accidental unbuffered chan in a producer/consumer
+// shape silently turns the producer into the consumer's
+// latency-buddy.
+//
+// Allow-list: explicit `// arch-test:signal-channel <reason>` for
+// the legitimate "wake-up signal" pattern.
+func TestArch_NoMakeChannelWithoutSize(t *testing.T) {
+	t.Parallel()
+
+	root := internalDir(t)
+	unbufRE := regexp.MustCompile(`make\(\s*chan\s+\w+\s*\)`)
+	var bad []string
+
+	walkGoFiles(t, root, false, func(path string, src []byte) {
+		body := string(src)
+		lines := strings.Split(body, "\n")
+		for i, ln := range lines {
+			if !unbufRE.MatchString(ln) {
+				continue
+			}
+			if strings.Contains(ln, "arch-test:signal-channel") {
+				continue
+			}
+			// Check the prior line for the marker too.
+			if i > 0 && strings.Contains(lines[i-1], "arch-test:signal-channel") {
+				continue
+			}
+			bad = append(bad, pathToSlash(path)+":"+itoa(i+1))
+		}
+	})
+
+	if len(bad) > 0 {
+		t.Fatalf("make(chan T) without buffer size (unbuffered = coordination, not flow). Opt out: arch-test:signal-channel:\n  %s",
+			strings.Join(bad, "\n  "))
+	}
+}
+
+// ============================================================================
+// Principles Q + R — Numeric precision + Timezone discipline (5 tests added).
+// Q catches money-as-int64 violations; R catches accidental local-tz reads.
+// ============================================================================
+
+// ----------------------------------------------------------------------------
+// Q1: TestArch_PercentagesAsBasisPoints
+// ----------------------------------------------------------------------------
+//
+// Percentage fields (e.g. tax_rate) MUST be expressed as basis
+// points (integer; 1bp = 0.01%). Stripe canon: floats in money
+// shapes are silent rounding bugs.
+//
+// Predicate: struct fields with names ending `_rate`, `_pct`,
+// `_percent` flagged unless renamed to `_bps` AND typed as an int
+// kind. Soft (opt-out via marker).
+func TestArch_PercentagesAsBasisPoints(t *testing.T) {
+	t.Parallel()
+
+	root := internalDir(t)
+	var bad []string
+
+	walkGoFiles(t, root, false, func(path string, src []byte) {
+		slash := pathToSlash(path)
+		if strings.Contains(slash, "/adapters/db/") {
+			return
+		}
+		body := stripGoComments(string(src))
+		// Find struct-field decls with the offending suffix.
+		fieldRE := regexp.MustCompile(`(\w+(?:_rate|_pct|_percent))\s+(\w+)`)
+		for _, m := range fieldRE.FindAllStringSubmatch(body, -1) {
+			// Allow if explicitly opt-out.
+			if strings.Contains(body, "arch-test:non-bps-percentage") {
+				continue
+			}
+			bad = append(bad, slash+": "+m[1]+" "+m[2]+" (use *_bps + int)")
+		}
+	})
+
+	if len(bad) > 0 {
+		t.Fatalf("percentage field doesn't use *_bps (basis-points) naming (Stripe canon):\n  %s",
+			strings.Join(bad, "\n  "))
+	}
+}
+
+// ----------------------------------------------------------------------------
+// Q2: TestArch_NoFloatInPersistedDecimals
+// ----------------------------------------------------------------------------
+//
+// float32 / float64 in struct fields tagged for DB persistence is
+// a known rounding-bug source for money. Use int64 (smallest unit)
+// or pgtype.Numeric.
+func TestArch_NoFloatInPersistedDecimals(t *testing.T) {
+	t.Parallel()
+
+	root := internalDir(t)
+	var bad []string
+
+	walkGoFiles(t, root, false, func(path string, src []byte) {
+		slash := pathToSlash(path)
+		if strings.Contains(slash, "/adapters/db/") {
+			return
+		}
+		body := stripGoComments(string(src))
+		// Field decl like `Amount float64 \`db:"amount"\`` — look for
+		// `float32` / `float64` followed by a backtick `db:"`.
+		floatDBRE := regexp.MustCompile(`(\w+)\s+(?:float32|float64)\s+\x60[^\x60]*db:"`)
+		for _, m := range floatDBRE.FindAllStringSubmatch(body, -1) {
+			bad = append(bad, slash+": "+m[1])
+		}
+	})
+
+	if len(bad) > 0 {
+		t.Fatalf("float field tagged for DB persistence — use int64 (smallest unit) or pgtype.Numeric:\n  %s",
+			strings.Join(bad, "\n  "))
+	}
+}
+
+// ----------------------------------------------------------------------------
+// R1: TestArch_NoTimeLocalInBusiness
+// ----------------------------------------------------------------------------
+//
+// `time.Local` / `time.LoadLocation` outside UTC-formatting helpers
+// is an accidental-local-timezone hazard. LeadKart serves Indian
+// pharma but stores UTC end-to-end (BRD canon).
+//
+// Allow-list: cmd/ binaries that legitimately format for user
+// display.
+func TestArch_NoTimeLocalInBusiness(t *testing.T) {
+	t.Parallel()
+
+	root := internalDir(t)
+	var bad []string
+
+	walkGoFiles(t, root, false, func(path string, src []byte) {
+		body := stripGoComments(string(src))
+		// `time.LoadLocation` is legitimate for VALIDATION (testing
+		// that a user-supplied IANA tz string is parseable). We flag
+		// only assignments / variable captures from it: `loc :=
+		// time.LoadLocation(...)` followed by a use that ISN'T `_`.
+		if strings.Contains(body, "time.Local") {
+			bad = append(bad, pathToSlash(path)+": time.Local")
+		}
+		loadRE := regexp.MustCompile(`(\w+),\s*err\s*:?=\s*time\.LoadLocation\(`)
+		for _, m := range loadRE.FindAllStringSubmatch(body, -1) {
+			if m[1] != "_" {
+				bad = append(bad, pathToSlash(path)+": captures time.LoadLocation result into "+m[1])
+			}
+		}
+	})
+
+	if len(bad) > 0 {
+		t.Fatalf("time.Local / captured time.LoadLocation in business code — UTC end-to-end (BRD canon):\n  %s",
+			strings.Join(bad, "\n  "))
+	}
+}
+
+// ----------------------------------------------------------------------------
+// R2: TestArch_TimeParsedAsUTCAtBoundary
+// ----------------------------------------------------------------------------
+//
+// `time.Parse(layout, s)` returns a Time without an explicit Location
+// when the layout has no zone segment. Every `time.Parse` call MUST
+// either be followed by `.UTC()` OR use a layout that includes a
+// timezone token (Z, -07:00, etc.).
+func TestArch_TimeParsedAsUTCAtBoundary(t *testing.T) {
+	t.Parallel()
+
+	root := internalDir(t)
+	parseRE := regexp.MustCompile(`time\.Parse\(\s*("[^"]+")`)
+	var bad []string
+
+	walkGoFiles(t, root, false, func(path string, src []byte) {
+		body := string(src)
+		for _, m := range parseRE.FindAllStringSubmatchIndex(body, -1) {
+			layout := body[m[2]:m[3]]
+			// Layout that includes a TZ token is OK.
+			if strings.Contains(layout, "Z") || strings.Contains(layout, "MST") ||
+				strings.Contains(layout, "-07") || strings.Contains(layout, "-0700") {
+				continue
+			}
+			// Look for `.UTC()` within 80 chars of the call.
+			end := m[1] + 80
+			if end > len(body) {
+				end = len(body)
+			}
+			window := body[m[1]:end]
+			if strings.Contains(window, ".UTC()") {
+				continue
+			}
+			bad = append(bad, pathToSlash(path)+":"+itoa(lineNumberAt(body, m[0])))
+		}
+	})
+
+	if len(bad) > 0 {
+		t.Fatalf("time.Parse without TZ-bearing layout or .UTC() follow-up:\n  %s",
+			strings.Join(bad, "\n  "))
+	}
+}
+
+// ----------------------------------------------------------------------------
+// R3: TestArch_NoNewTimeFormatStrings
+// ----------------------------------------------------------------------------
+//
+// `time.Format` argument must be a stdlib layout constant
+// (RFC3339Nano, RFC3339, Kitchen, etc.) or a constant declared at
+// package level — never a string literal. Bare layout strings drift
+// across the codebase + break interop.
+//
+// Soft predicate: bare-string literals in time.Format calls
+// outside test code.
+func TestArch_NoNewTimeFormatStrings(t *testing.T) {
+	t.Parallel()
+
+	root := internalDir(t)
+	formatRE := regexp.MustCompile(`\.Format\(\s*"([^"]+)"\s*\)`)
+	var bad []string
+
+	// Layouts that have a stdlib constant equivalent — using the
+	// literal is fine (the constant maps to the same string).
+	stdlibLayouts := map[string]bool{
+		"2006-01-02":                    true, // time.DateOnly
+		"15:04:05":                      true, // time.TimeOnly
+		"2006-01-02 15:04:05":           true, // time.DateTime
+		"2006-01-02T15:04:05Z07:00":     true, // time.RFC3339
+		"2006-01-02T15:04:05.999999999Z07:00": true, // time.RFC3339Nano
+	}
+
+	walkGoFiles(t, root, false, func(path string, src []byte) {
+		if strings.HasSuffix(path, "_test.go") {
+			return
+		}
+		body := stripGoComments(string(src))
+		for _, m := range formatRE.FindAllStringSubmatch(body, -1) {
+			layout := m[1]
+			if !regexp.MustCompile(`(01|02|2006|15:04|Mon|Jan)`).MatchString(layout) {
+				continue
+			}
+			if stdlibLayouts[layout] {
+				continue
+			}
+			bad = append(bad, pathToSlash(path)+": "+layout)
+		}
+	})
+
+	if len(bad) > 0 {
+		t.Fatalf("time.Format with non-stdlib inline layout literal — use a constant:\n  %s",
+			strings.Join(bad, "\n  "))
+	}
+}

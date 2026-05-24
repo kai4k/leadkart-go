@@ -1,0 +1,167 @@
+//go:build integration
+
+package adapters_test
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/leadkart/leadkart-go/internal/common/ids"
+	"github.com/leadkart/leadkart-go/internal/common/pg"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
+	"github.com/leadkart/leadkart-go/internal/inventory/adapters"
+	"github.com/leadkart/leadkart-go/internal/inventory/domain/batch"
+	"github.com/leadkart/leadkart-go/internal/inventory/domain/product"
+	"github.com/leadkart/leadkart-go/internal/inventory/domain/stockmovement"
+)
+
+// TestKeysetStockMovementsPage_UsesIndexUnderRLS mirrors the identity
+// keyset EXPLAIN gate (per ADR 0038) for inventory.stock_movements.
+//
+// Asserts the per-batch ledger keyset query plans as an Index Scan
+// against idx_movements_batch_keyset declared in migration
+// 20260603000001 as `(batch_id, occurred_at DESC, id DESC)` — matching
+// the query's `WHERE batch_id = $1 ORDER BY occurred_at DESC, id DESC`
+// keyset shape.
+//
+// Append-only ledger — the seed loop appends Inbound movements (positive
+// quantity, ApplyMovement on the parent batch each turn) so the planner
+// sees enough rows that index lookup beats Seq Scan.
+func TestKeysetStockMovementsPage_UsesIndexUnderRLS(t *testing.T) {
+	pool := repoFixture(t)
+	tid := seedTenant(t, pool)
+	ctx := tenantCtx(t, tid)
+
+	tx := pg.NewTransactor(pool)
+	products := adapters.NewProductRepository(pool, tx)
+	batches := adapters.NewBatchRepository(pool, tx)
+	movements := adapters.NewStockMovementRepository(pool, tx)
+	actor := membership.ID(ids.NewV7().String())
+
+	p, err := product.New(product.ID(ids.NewV7().String()), tid, actor,
+		product.Spec{SKU: "MOV-EXPL", Name: "MovExpl", DosageForm: "Tablet",
+			PackSize: "10", HSNCode: "3004", GSTRateBps: 1200}, fixedNow)
+	if err != nil {
+		t.Fatalf("product.New: %v", err)
+	}
+	if err := products.Add(ctx, p); err != nil {
+		t.Fatalf("Add product: %v", err)
+	}
+
+	b, err := batch.New(batch.ID(ids.NewV7().String()), p.ID(), tid, actor,
+		batch.Spec{
+			BatchNumber:                "LOT-MOV",
+			ManufactureDate:            time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+			ExpiryDate:                 time.Date(2028, 1, 1, 0, 0, 0, 0, time.UTC),
+			ManufacturerName:           "Acme",
+			ManufacturingLicenceNumber: "ML-1",
+			MRPPaise:                   100,
+			PurchasePricePaise:         50,
+		}, fixedNow)
+	if err != nil {
+		t.Fatalf("batch.New: %v", err)
+	}
+	if err := batches.Add(ctx, b); err != nil {
+		t.Fatalf("Add batch: %v", err)
+	}
+
+	const seedCount = 200
+	for i := range seedCount {
+		// Tick occurred_at so each row has a distinct (occurred_at, id)
+		// — keeps the keyset index discriminating, mirrors prod traffic.
+		occurredAt := fixedNow.Add(time.Duration(i) * time.Second)
+		err := tx.WithinTx(ctx, pg.TxScopeTenant, func(ctx context.Context) error {
+			// Reload batch + apply movement under one tx so the version
+			// check + outbox write stay consistent.
+			return batches.UpdateByID(ctx, b.ID(), func(bb *batch.Batch) (bool, error) {
+				if err := bb.ApplyMovement(batch.MovementInbound, 1, occurredAt); err != nil {
+					return false, err
+				}
+				m, err := stockmovement.New(
+					stockmovement.ID(ids.NewV7().String()),
+					stockmovement.Spec{
+						BatchID:             b.ID(),
+						ProductID:           p.ID(),
+						TenantID:            tid,
+						Type:                batch.MovementInbound,
+						Quantity:            1,
+						QuantityOnHandAfter: bb.QuantityOnHand(),
+						Reason:              fmt.Sprintf("seed-%d", i),
+						ActorMembershipID:   actor,
+					}, occurredAt)
+				if err != nil {
+					return false, err
+				}
+				if err := movements.Add(ctx, m); err != nil {
+					return false, err
+				}
+				return true, nil
+			})
+		})
+		if err != nil {
+			t.Fatalf("seed movement %d: %v", i, err)
+		}
+	}
+
+	if _, err := pool.Exec(ctx, `ANALYZE inventory.stock_movements`); err != nil {
+		t.Fatalf("analyze: %v", err)
+	}
+
+	conn, err := pool.Acquire(ctx)
+	if err != nil {
+		t.Fatalf("acquire: %v", err)
+	}
+	defer conn.Release()
+
+	if _, err := conn.Exec(ctx, `SELECT set_config('app.tenant_id', $1, false)`, tid.String()); err != nil {
+		t.Fatalf("set tenant: %v", err)
+	}
+
+	// Same predicate shape as sqlc's ListMovementsByBatchPage. Sentinel
+	// cursor admits every row.
+	const explainSQL = `
+		EXPLAIN (FORMAT JSON, ANALYZE, BUFFERS)
+		SELECT id, batch_id, product_id, tenant_id,
+		       type, quantity, quantity_on_hand_after,
+		       reason, actor_membership_id, source_reference,
+		       occurred_at
+		FROM   inventory.stock_movements
+		WHERE  batch_id = $1::uuid
+		AND    ($4::text = '' OR type = $4::text)
+		AND    (occurred_at, id) < ($2::timestamptz, $3::uuid)
+		ORDER  BY occurred_at DESC, id DESC
+		LIMIT  51
+	`
+
+	// Mirror of internal/inventory/adapters/cursor.go sentinels.
+	sentinelTime := time.Date(9999, 12, 31, 23, 59, 59, 0, time.UTC)
+	sentinelID := "ffffffff-ffff-ffff-ffff-ffffffffffff"
+
+	var rawPlan []byte
+	if err := conn.QueryRow(ctx, explainSQL,
+		b.ID().String(), sentinelTime, sentinelID, "",
+	).Scan(&rawPlan); err != nil {
+		t.Fatalf("explain: %v", err)
+	}
+
+	planText := string(rawPlan)
+	t.Logf("EXPLAIN plan:\n%s", planText)
+
+	if !strings.Contains(planText, "Index Scan") &&
+		!strings.Contains(planText, "Bitmap Index Scan") {
+		t.Errorf("expected plan to contain Index Scan (any flavour); got:\n%s", planText)
+	}
+	if strings.Contains(planText, `"Node Type": "Seq Scan"`) &&
+		strings.Contains(planText, `"Relation Name": "stock_movements"`) {
+		t.Errorf("planner fell back to Seq Scan on inventory.stock_movements:\n%s", planText)
+	}
+
+	var parsed []map[string]any
+	if err := json.Unmarshal(rawPlan, &parsed); err != nil {
+		t.Fatalf("plan JSON malformed: %v", err)
+	}
+}

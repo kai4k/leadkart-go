@@ -42,6 +42,8 @@ import (
 
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 
+	"github.com/leadkart/leadkart-go/internal/common/ids"
+
 	"github.com/leadkart/leadkart-go/internal/identity/adapters"
 	"github.com/leadkart/leadkart-go/internal/identity/app"
 	"github.com/leadkart/leadkart-go/internal/identity/app/argon2"
@@ -50,6 +52,13 @@ import (
 	"github.com/leadkart/leadkart-go/internal/common/audit"
 	"github.com/leadkart/leadkart-go/internal/identity/app/permissions"
 	"github.com/leadkart/leadkart-go/internal/identity/app/query"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/permissionrequest"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/refreshtoken"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/role"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/rolehierarchy"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 	"github.com/leadkart/leadkart-go/internal/identity/ports"
 	"github.com/leadkart/leadkart-go/internal/identity/ports/authn"
 	"github.com/leadkart/leadkart-go/internal/common/cache"
@@ -65,12 +74,18 @@ import (
 	inventorycommand "github.com/leadkart/leadkart-go/internal/inventory/app/command"
 	inventoryquery "github.com/leadkart/leadkart-go/internal/inventory/app/query"
 	inventoryports "github.com/leadkart/leadkart-go/internal/inventory/ports"
+	"github.com/leadkart/leadkart-go/internal/inventory/domain/batch"
+	"github.com/leadkart/leadkart-go/internal/inventory/domain/product"
+	"github.com/leadkart/leadkart-go/internal/inventory/domain/stockmovement"
 
 	platformadapters "github.com/leadkart/leadkart-go/internal/platform/adapters"
 	platformapp "github.com/leadkart/leadkart-go/internal/platform/app"
 	platformcommand "github.com/leadkart/leadkart-go/internal/platform/app/command"
 	platformquery "github.com/leadkart/leadkart-go/internal/platform/app/query"
 	platformports "github.com/leadkart/leadkart-go/internal/platform/ports"
+	"github.com/leadkart/leadkart-go/internal/platform/domain/platformlead"
+	"github.com/leadkart/leadkart-go/internal/platform/domain/unverifiedcontact"
+	"github.com/leadkart/leadkart-go/internal/platform/domain/verificationcall"
 )
 
 // HTTP server timeouts — public listener tuning per OWASP API Security
@@ -520,6 +535,21 @@ func buildIdentityApp(pool *pgxpool.Pool, hybridCache *cache.HybridCache, cfg co
 	// [impersonation.Store] interface — composition root change only.
 	impersonationStore := adapters.NewImpersonationInMemoryStore(now)
 
+	// Aggregate-ID factories per the Pure Domain refactor (ADR 0047 +
+	// Khorikov §8). Handlers depend on `func() <T>.ID` injected at
+	// composition; production wires UUIDv7 via the `ids` package, tests
+	// pin deterministic counters. Function-type (not interface) per the
+	// Go stdlib pattern (http.HandlerFunc, sort.Slice less-func) and
+	// mirrors our `now func() time.Time` injection.
+	newTenantID := func() tenant.ID { return tenant.ID(ids.NewV7().String()) }
+	newPersonID := func() person.ID { return person.ID(ids.NewV7().String()) }
+	newMembershipID := func() membership.ID { return membership.ID(ids.NewV7().String()) }
+	newFamilyID := func() refreshtoken.FamilyID { return refreshtoken.FamilyID(ids.NewV7().String()) }
+	newPermissionRequestID := func() permissionrequest.ID { return permissionrequest.ID(ids.NewV7().String()) }
+	newOverrideID := ids.NewV7
+	newRoleID := func() role.ID { return role.ID(ids.NewV7().String()) }
+	newRoleHierarchyEdgeID := func() rolehierarchy.ID { return rolehierarchy.ID(ids.NewV7().String()) }
+
 	return identityWiring{
 		Issuer:         issuer,
 		StampCache:     stampCache,
@@ -528,8 +558,8 @@ func buildIdentityApp(pool *pgxpool.Pool, hybridCache *cache.HybridCache, cfg co
 		Persons:        persons,
 		App: app.Application{
 		Commands: app.Commands{
-			RegisterTenant:       command.NewRegisterTenantHandler(tx, tenants, persons, memberships, roles, now),
-			Login:                command.NewLoginHandler(authRouter, families, tenants, persons, permResolver, issuer, now, cfg.Refresh.AbsoluteTTL, dummyHash),
+			RegisterTenant:       command.NewRegisterTenantHandler(tx, tenants, persons, memberships, roles, now, newTenantID, newPersonID, newMembershipID),
+			Login:                command.NewLoginHandler(authRouter, families, tenants, persons, permResolver, issuer, now, cfg.Refresh.AbsoluteTTL, dummyHash, newFamilyID),
 			Refresh:              command.NewRefreshHandler(families, persons, memberships, tenants, permResolver, issuer, now, cfg.Refresh.AbsoluteTTL),
 			Logout:               command.NewLogoutHandler(families, now),
 			ChangePassword:       command.NewChangePasswordHandler(persons, breachChecker, now),
@@ -558,16 +588,16 @@ func buildIdentityApp(pool *pgxpool.Pool, hybridCache *cache.HybridCache, cfg co
 			ReplaceUserPermissionOverrides: command.NewReplaceUserPermissionOverridesHandler(memberships, now),
 			AssignUserManager:              command.NewAssignUserManagerHandler(memberships, now),
 			RemoveUserManager:              command.NewRemoveUserManagerHandler(memberships, now),
-			CreateUser:                     command.NewCreateUserHandler(tx, persons, memberships, now),
+			CreateUser:                     command.NewCreateUserHandler(tx, persons, memberships, now, newPersonID, newMembershipID),
 			AnonymiseUser:                  command.NewAnonymiseUserHandler(memberships, persons, now),
 
-			CreateRole:             command.NewCreateRoleHandler(roles, roleHierarchyEdges, tx, now),
+			CreateRole:             command.NewCreateRoleHandler(roles, roleHierarchyEdges, tx, now, newRoleID, newRoleHierarchyEdgeID),
 			UpdateRole:             command.NewUpdateRoleHandler(roles, now),
 			DeleteRole:             command.NewDeleteRoleHandler(roles, now),
 			ReplaceRolePermissions: command.NewReplaceRolePermissionsHandler(roles, now),
 			GrantRolePermission:    command.NewGrantRolePermissionHandler(roles, now),
 			RevokeRolePermission:   command.NewRevokeRolePermissionHandler(roles, now),
-			SetRoleParent:          command.NewSetRoleParentHandler(roleHierarchyEdges, tx, now), // ADR 0058
+			SetRoleParent:          command.NewSetRoleParentHandler(roleHierarchyEdges, tx, now, newRoleHierarchyEdgeID), // ADR 0058
 
 			GlobalSuspendPerson:        command.NewGlobalSuspendPersonHandler(persons, now),
 			LiftPersonGlobalSuspension: command.NewLiftPersonGlobalSuspensionHandler(persons, now),
@@ -579,8 +609,8 @@ func buildIdentityApp(pool *pgxpool.Pool, hybridCache *cache.HybridCache, cfg co
 			EndImpersonationSession:    command.NewEndImpersonationSessionHandler(impersonationStore),
 
 			// Permission-elevation approval workflow (ADR 0055).
-			RequestPermissionElevation: command.NewRequestPermissionElevationHandler(permissionRequests, memberships, now),
-			ApprovePermissionRequest:   command.NewApprovePermissionRequestHandler(permissionRequests, memberships, now),
+			RequestPermissionElevation: command.NewRequestPermissionElevationHandler(permissionRequests, memberships, now, newPermissionRequestID),
+			ApprovePermissionRequest:   command.NewApprovePermissionRequestHandler(permissionRequests, memberships, now, newOverrideID),
 			DenyPermissionRequest:      command.NewDenyPermissionRequestHandler(permissionRequests, memberships, now),
 			CancelPermissionRequest:    command.NewCancelPermissionRequestHandler(permissionRequests, now),
 		},
@@ -647,14 +677,21 @@ func buildPlatformApp(pool *pgxpool.Pool, now func() time.Time) platformWiringRe
 	contactReader := platformadapters.NewUnverifiedContactReader(pool, tx)
 	outboxEnq := platformadapters.NewOutboxEnqueuer()
 
+	// Platform aggregate-ID factories (Pure Domain refactor — see
+	// buildIdentityApp for the canon).
+	newContactID := func() unverifiedcontact.ID { return unverifiedcontact.ID(ids.NewV7().String()) }
+	newCallID := func() verificationcall.ID { return verificationcall.ID(ids.NewV7().String()) }
+	newLeadID := func() platformlead.ID { return platformlead.ID(ids.NewV7().String()) }
+	newPurchaseID := func() string { return ids.NewV7().String() }
+
 	return platformWiringResult{
 		App: platformapp.Application{
 			Commands: platformapp.Commands{
-				CreateUnverifiedContact: platformcommand.NewCreateUnverifiedContactHandler(contacts, now),
-				LogVerificationCall:     platformcommand.NewLogVerificationCallHandler(tx, calls, contacts, now),
-				VerifyUnverifiedContact: platformcommand.NewVerifyUnverifiedContactHandler(tx, contacts, leads, outboxEnq, now),
+				CreateUnverifiedContact: platformcommand.NewCreateUnverifiedContactHandler(contacts, now, newContactID),
+				LogVerificationCall:     platformcommand.NewLogVerificationCallHandler(tx, calls, contacts, now, newCallID),
+				VerifyUnverifiedContact: platformcommand.NewVerifyUnverifiedContactHandler(tx, contacts, leads, outboxEnq, now, newLeadID),
 				RejectUnverifiedContact: platformcommand.NewRejectUnverifiedContactHandler(contacts, now),
-				PurchaseLead:            platformcommand.NewPurchaseLeadHandler(tx, leads, credits, outboxEnq, now),
+				PurchaseLead:            platformcommand.NewPurchaseLeadHandler(tx, leads, credits, outboxEnq, now, newPurchaseID),
 				TopupLeadCredits:        platformcommand.NewTopupLeadCreditsHandler(tx, credits, now),
 			},
 			Queries: platformapp.Queries{
@@ -680,13 +717,19 @@ func buildInventoryApp(pool *pgxpool.Pool) inventoryapp.Application {
 	products := inventoryadapters.NewProductRepository(pool, tx)
 	batches := inventoryadapters.NewBatchRepository(pool, tx)
 	movements := inventoryadapters.NewStockMovementRepository(pool, tx)
+
+	// Inventory aggregate-ID factories (Pure Domain refactor).
+	newProductID := func() product.ID { return product.ID(ids.NewV7().String()) }
+	newBatchID := func() batch.ID { return batch.ID(ids.NewV7().String()) }
+	newMovementID := func() stockmovement.ID { return stockmovement.ID(ids.NewV7().String()) }
+
 	return inventoryapp.Application{
 		Commands: inventoryapp.Commands{
-			CreateProduct:    inventorycommand.NewCreateProductHandler(products, time.Now),
+			CreateProduct:    inventorycommand.NewCreateProductHandler(products, time.Now, newProductID),
 			UpdateProduct:    inventorycommand.NewUpdateProductHandler(products, time.Now),
 			DeleteProduct:    inventorycommand.NewDeleteProductHandler(products, batches, time.Now),
-			AddBatch:         inventorycommand.NewAddBatchHandler(tx, products, batches, time.Now),
-			LogStockMovement: inventorycommand.NewLogStockMovementHandler(tx, batches, movements, time.Now),
+			AddBatch:         inventorycommand.NewAddBatchHandler(tx, products, batches, time.Now, newBatchID),
+			LogStockMovement: inventorycommand.NewLogStockMovementHandler(tx, batches, movements, time.Now, newMovementID),
 		},
 		Queries: inventoryapp.Queries{
 			GetProduct:             inventoryquery.NewGetProductHandler(products),

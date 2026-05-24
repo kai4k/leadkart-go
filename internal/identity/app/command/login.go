@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/leadkart/leadkart-go/internal/common/email"
-	"github.com/leadkart/leadkart-go/internal/common/ids"
 	"github.com/leadkart/leadkart-go/internal/common/tenancy"
 	"github.com/leadkart/leadkart-go/internal/identity/app/argon2"
 	"github.com/leadkart/leadkart-go/internal/identity/app/jwt"
@@ -137,6 +136,12 @@ type LoginHandler struct {
 	now        func() time.Time
 	refreshTTL time.Duration
 
+	// newFamilyID mints the refresh-token family ID per the
+	// `TestArch_HandlersInjectIDFactory` discipline. Production wires
+	// `func() refreshtoken.FamilyID { return refreshtoken.FamilyID(ids.NewV7().String()) }`;
+	// tests inject a deterministic counter so the family-id is pinnable.
+	newFamilyID func() refreshtoken.FamilyID
+
 	// dummyHash flattens timing on the unknown-email branch. Computed
 	// once at handler construction — Argon2id verify takes ~50-200ms,
 	// so without a parallel verify on the dummy path the unknown-email
@@ -171,20 +176,25 @@ func NewLoginHandler(
 	now func() time.Time,
 	refreshTTL time.Duration,
 	dummyHash string,
+	newFamilyID func() refreshtoken.FamilyID,
 ) LoginHandler {
+	if newFamilyID == nil {
+		panic("command: NewLoginHandler newFamilyID required")
+	}
 	if now == nil {
 		now = time.Now
 	}
 	return LoginHandler{
-		authRouter: authRouter,
-		families:   families,
-		tenants:    tenants,
-		persons:    persons,
-		resolver:   resolver,
-		jwt:        jwtIssuer,
-		now:        now,
-		refreshTTL: refreshTTL,
-		dummyHash:  dummyHash,
+		authRouter:  authRouter,
+		families:    families,
+		tenants:     tenants,
+		persons:     persons,
+		resolver:    resolver,
+		jwt:         jwtIssuer,
+		now:         now,
+		refreshTTL:  refreshTTL,
+		dummyHash:   dummyHash,
+		newFamilyID: newFamilyID,
 	}
 }
 
@@ -230,7 +240,7 @@ func (h LoginHandler) Handle(ctx context.Context, cmd LoginCommand) (LoginResult
 		return LoginResult{}, fmt.Errorf("login: mint refresh: %w", err)
 	}
 	family, err := refreshtoken.NewFamily(
-		refreshtoken.FamilyID(ids.NewV7().String()),
+		h.newFamilyID(),
 		p.ID(),
 		tn.ID(),
 		cmd.DeviceLabel,

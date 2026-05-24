@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/leadkart/leadkart-go/internal/common/ids"
 	"github.com/leadkart/leadkart-go/internal/common/pg"
 	"github.com/leadkart/leadkart-go/internal/platform/domain/unverifiedcontact"
 	"github.com/leadkart/leadkart-go/internal/platform/domain/verificationcall"
@@ -43,23 +42,35 @@ var ErrContactNotFound = errors.New("log verification call: contact not found")
 // to drive the terminal transition. Slice 1 treats this endpoint as
 // log-only — terminal transitions don't auto-fire from outcome.
 type LogVerificationCallHandler struct {
-	uow      pg.UnitOfWork
-	calls    verificationcall.Repository
-	contacts unverifiedcontact.Repository
-	now      func() time.Time
+	uow       pg.UnitOfWork
+	calls     verificationcall.Repository
+	contacts  unverifiedcontact.Repository
+	now       func() time.Time
+	newCallID func() verificationcall.ID
 }
 
 // NewLogVerificationCallHandler wires the handler.
+//
+// newCallID is the call-row ID factory per the
+// `TestArch_HandlersInjectIDFactory` discipline. Production passes
+// `func() verificationcall.ID { return verificationcall.ID(ids.NewV7().String()) }`;
+// tests inject a deterministic counter so the minted ID is pinnable.
 func NewLogVerificationCallHandler(
 	uow pg.UnitOfWork,
 	calls verificationcall.Repository,
 	contacts unverifiedcontact.Repository,
 	now func() time.Time,
+	newCallID func() verificationcall.ID,
 ) LogVerificationCallHandler {
+	if newCallID == nil {
+		panic("command: NewLogVerificationCallHandler newCallID required")
+	}
 	if now == nil {
 		now = time.Now
 	}
-	return LogVerificationCallHandler{uow: uow, calls: calls, contacts: contacts, now: now}
+	return LogVerificationCallHandler{
+		uow: uow, calls: calls, contacts: contacts, now: now, newCallID: newCallID,
+	}
 }
 
 // Handle persists the call + transitions the contact's state when the
@@ -74,7 +85,7 @@ func (h LogVerificationCallHandler) Handle(
 	ctx context.Context,
 	cmd LogVerificationCallCommand,
 ) (LogVerificationCallResult, error) {
-	callID := verificationcall.ID(ids.NewV7().String())
+	callID := h.newCallID()
 	now := h.now()
 
 	var out LogVerificationCallResult

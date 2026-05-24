@@ -619,21 +619,6 @@ func TestArch_NoSlogDefault(t *testing.T) {
 func TestArch_HandlersInjectIDFactory(t *testing.T) {
 	t.Parallel()
 
-	t.Skip("known violation: 12 command handlers across identity/inventory/" +
-		"platform mint aggregate IDs inline via ids.NewV7() instead of an " +
-		"injected `idFactory func() <T>.ID` field — tracked in " +
-		"KNOWN_VIOLATIONS.md (refactor scoped to a Wave-N PR). The bare-mint " +
-		"pattern is safe per ADR 0008 (outbox replay is keyed on idempotency, " +
-		"not aggregate ID) but blocks test-time ID pinning.")
-
-	// Allow-list reserved for future use after the refactor lands; kept
-	// here so the test body has no dead-code surface when the t.Skip
-	// is removed.
-	allowList := []string{
-		// Populated by the refactor PR.
-	}
-	_ = allowList
-
 	type violation struct {
 		file string
 		line int

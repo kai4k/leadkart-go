@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/leadkart/leadkart-go/internal/common/ids"
 	"github.com/leadkart/leadkart-go/internal/common/pg"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
 	"github.com/leadkart/leadkart-go/internal/inventory/domain/batch"
@@ -64,20 +63,32 @@ type LogStockMovementResult struct {
 // duplicate requests at the HTTP boundary; this handler does NOT
 // re-check.
 type LogStockMovementHandler struct {
-	uow       pg.UnitOfWork
-	batches   batch.Repository
-	movements stockmovement.Repository
-	now       func() time.Time
+	uow           pg.UnitOfWork
+	batches       batch.Repository
+	movements     stockmovement.Repository
+	now           func() time.Time
+	newMovementID func() stockmovement.ID
 }
 
 // NewLogStockMovementHandler wires the handler. `now` is the explicit
 // time source — composition root passes `time.Now`; tests inject a
 // fixed-time closure for deterministic assertions. Nil → time.Now.
-func NewLogStockMovementHandler(uow pg.UnitOfWork, batches batch.Repository, movements stockmovement.Repository, now func() time.Time) LogStockMovementHandler {
+//
+// newMovementID is the StockMovement-ID factory per the
+// `TestArch_HandlersInjectIDFactory` discipline. Production passes
+// `func() stockmovement.ID { return stockmovement.ID(ids.NewV7().String()) }`;
+// tests inject a deterministic counter so the minted ID is pinnable.
+func NewLogStockMovementHandler(uow pg.UnitOfWork, batches batch.Repository, movements stockmovement.Repository, now func() time.Time, newMovementID func() stockmovement.ID) LogStockMovementHandler {
+	if newMovementID == nil {
+		panic("command: NewLogStockMovementHandler newMovementID required")
+	}
 	if now == nil {
 		now = time.Now
 	}
-	return LogStockMovementHandler{uow: uow, batches: batches, movements: movements, now: now}
+	return LogStockMovementHandler{
+		uow: uow, batches: batches, movements: movements,
+		now: now, newMovementID: newMovementID,
+	}
 }
 
 // Handle persists a stock movement against the supplied batch.
@@ -124,7 +135,7 @@ func (h LogStockMovementHandler) persist(ctx context.Context, cmd LogStockMoveme
 		// loaded is the post-ApplyMovement state. Construct the
 		// StockMovement with the SIGNED quantity + new on-hand snapshot.
 		signed := signedQuantityForType(cmd.Type, magnitude)
-		m, err := stockmovement.New(stockmovement.ID(ids.NewV7().String()), stockmovement.Spec{
+		m, err := stockmovement.New(h.newMovementID(), stockmovement.Spec{
 			BatchID:             loaded.ID(),
 			ProductID:           loaded.ProductID(),
 			TenantID:            loaded.TenantID(),

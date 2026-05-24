@@ -500,12 +500,12 @@ func handleChangePassword(log *slog.Logger, a app.Application) http.Handler {
 			writeError(w, http.StatusUnprocessableEntity, ErrCodePasswordSameAsCurrent,
 				"new password must differ from current password")
 			return
-		case err != nil && (strings.Contains(err.Error(), "new password required") ||
-			strings.Contains(err.Error(), "person id required")):
+		case errors.Is(err, command.ErrNewPasswordRequired) || errors.Is(err, command.ErrPersonIDRequired):
 			// Domain-layer shape rejections — 400. PersonID-required
 			// hitting here would be a wiring bug (RequireAuth + Subject
 			// guard above should have short-circuited), but treat it as
-			// invalid_body to avoid leaking server-state.
+			// invalid_body to avoid leaking server-state. Typed-sentinel
+			// match per Russ Cox "Working with Errors in Go 1.13".
 			writeError(w, http.StatusBadRequest, ErrCodeInvalidPassword, err.Error())
 			return
 		case err != nil:
@@ -680,7 +680,8 @@ func handleResetPassword(log *slog.Logger, a app.Application) http.Handler {
 			writeError(w, http.StatusUnprocessableEntity, ErrCodePasswordSameAsCurrent,
 				"new password must differ from current password")
 			return
-		case err != nil && strings.Contains(err.Error(), "new password required"):
+		case errors.Is(err, command.ErrNewPasswordRequired):
+			// Typed-sentinel match per Russ Cox "Working with Errors in Go 1.13".
 			writeError(w, http.StatusBadRequest, ErrCodeInvalidPassword, err.Error())
 			return
 		case err != nil:

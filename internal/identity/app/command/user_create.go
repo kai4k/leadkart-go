@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/leadkart/leadkart-go/internal/common/email"
-	"github.com/leadkart/leadkart-go/internal/common/ids"
 	"github.com/leadkart/leadkart-go/internal/common/pg"
 	"github.com/leadkart/leadkart-go/internal/identity/app/argon2"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
@@ -61,28 +60,52 @@ type CreateUserResult struct {
 // adapter struct. The UnitOfWork stashes the tx in ctx; repository
 // .Add joins automatically via pg.TxFromContext.
 type CreateUserHandler struct {
-	uow         pg.UnitOfWork
-	persons     person.Repository
-	memberships membership.Repository
-	now         func() time.Time
+	uow             pg.UnitOfWork
+	persons         person.Repository
+	memberships     membership.Repository
+	now             func() time.Time
+	newPersonID     func() person.ID
+	newMembershipID func() membership.ID
 }
 
 // NewCreateUserHandler wires the handler against interfaces only. `now`
 // is the explicit time source per the clock-injection refactor. Nil →
 // time.Now.
+//
+// newPersonID / newMembershipID are the aggregate-ID factories per the
+// Pure Domain refactor (ADR 0047 + Khorikov §8 — handlers are pure
+// transforms over (ctx, cmd, deps) → (event, err); random sources are
+// HIDDEN INPUTS unless injected). Production wiring passes
+// `func() <T>.ID { return <T>.ID(ids.NewV7().String()) }`; tests pin
+// deterministic values.
 func NewCreateUserHandler(
 	uow pg.UnitOfWork,
 	persons person.Repository,
 	memberships membership.Repository,
 	now func() time.Time,
+	newPersonID func() person.ID,
+	newMembershipID func() membership.ID,
 ) CreateUserHandler {
 	if uow == nil || persons == nil || memberships == nil {
 		panic("command: NewCreateUserHandler all dependencies required")
 	}
+	if newPersonID == nil {
+		panic("command: NewCreateUserHandler newPersonID required")
+	}
+	if newMembershipID == nil {
+		panic("command: NewCreateUserHandler newMembershipID required")
+	}
 	if now == nil {
 		now = time.Now
 	}
-	return CreateUserHandler{uow: uow, persons: persons, memberships: memberships, now: now}
+	return CreateUserHandler{
+		uow:             uow,
+		persons:         persons,
+		memberships:     memberships,
+		now:             now,
+		newPersonID:     newPersonID,
+		newMembershipID: newMembershipID,
+	}
 }
 
 // Handle runs the flow:
@@ -181,7 +204,7 @@ func (h CreateUserHandler) findOrCreatePerson(
 	// BRD line 241 + ADR 0053 — admin-provisioned credential. The
 	// inviting admin chose this initial password; force the new
 	// Person through the change-password flow on first login.
-	p, err := person.NewWithMustChangePassword(person.ID(ids.NewV7().String()),
+	p, err := person.NewWithMustChangePassword(h.newPersonID(),
 		cmd.Email, cmd.FirstName, cmd.LastName, pwd, now)
 	if err != nil {
 		return nil, fmt.Errorf("create user: construct person: %w", err)
@@ -205,7 +228,7 @@ func (h CreateUserHandler) createMembership(
 	createdBy membership.ID,
 	now time.Time,
 ) (*membership.Membership, error) {
-	m, err := membership.New(membership.ID(ids.NewV7().String()), personID, tenantID, createdBy, now)
+	m, err := membership.New(h.newMembershipID(), personID, tenantID, createdBy, now)
 	if err != nil {
 		return nil, fmt.Errorf("create user: construct membership: %w", err)
 	}

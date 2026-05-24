@@ -50,7 +50,11 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/app/command"
 	"github.com/leadkart/leadkart-go/internal/identity/app/jwt"
 	"github.com/leadkart/leadkart-go/internal/identity/app/permissions"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/permission"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/refreshtoken"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 	"github.com/leadkart/leadkart-go/internal/identity/ports/authn"
 	"github.com/leadkart/leadkart-go/internal/common/cache"
 	"github.com/leadkart/leadkart-go/internal/common/pg"
@@ -117,9 +121,17 @@ func newWiredApp(t *testing.T) wiredApp {
 	stamps := adapters.NewSecurityStampValidator(stampCache)
 
 	permResolver := permissions.NewResolver(memberships, roles, now)
-	register := command.NewRegisterTenantHandler(tx, tenants, persons, memberships, roles, now)
+	register := command.NewRegisterTenantHandler(
+		tx, tenants, persons, memberships, roles, now,
+		func() tenant.ID { return tenant.ID(ids.NewV7().String()) },
+		func() person.ID { return person.ID(ids.NewV7().String()) },
+		func() membership.ID { return membership.ID(ids.NewV7().String()) },
+	)
 	authRouter := adapters.NewAuthRouterPG(pool, tx)
-	login := command.NewLoginHandler(authRouter, families, tenants, persons, permResolver, issuer, now, refreshTTL, dummyHash)
+	login := command.NewLoginHandler(
+		authRouter, families, tenants, persons, permResolver, issuer, now, refreshTTL, dummyHash,
+		func() refreshtoken.FamilyID { return refreshtoken.FamilyID(ids.NewV7().String()) },
+	)
 	refresh := command.NewRefreshHandler(families, persons, memberships, tenants, permResolver, issuer, now, refreshTTL)
 	logout := command.NewLogoutHandler(families, now)
 

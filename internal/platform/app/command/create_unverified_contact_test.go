@@ -22,7 +22,7 @@ func TestCreateUnverifiedContact_PersistsAndDrainsCreatedEvent(t *testing.T) {
 	t.Parallel()
 
 	contacts := platformtest.NewFakeUnverifiedContactRepository()
-	h := command.NewCreateUnverifiedContactHandler(contacts, nowFunc)
+	h := command.NewCreateUnverifiedContactHandler(contacts, nowFunc, func() unverifiedcontact.ID { return unverifiedcontact.ID(ids.NewV7().String()) })
 
 	agentID := unverifiedcontact.MembershipID(ids.NewV7().String())
 	out, err := h.Handle(context.Background(), command.CreateUnverifiedContactCommand{
@@ -74,6 +74,6 @@ func TestCreateUnverifiedContact_RepositoryErrorBubbles(t *testing.T) {
 	// `if err != nil { return fmt.Errorf(...) }` shape is covered
 	// by the wider integration suite. This stub-test pins the
 	// constructor signature.
-	h := command.NewCreateUnverifiedContactHandler(platformtest.NewFakeUnverifiedContactRepository(), nowFunc)
+	h := command.NewCreateUnverifiedContactHandler(platformtest.NewFakeUnverifiedContactRepository(), nowFunc, func() unverifiedcontact.ID { return unverifiedcontact.ID(ids.NewV7().String()) })
 	_ = h
 }

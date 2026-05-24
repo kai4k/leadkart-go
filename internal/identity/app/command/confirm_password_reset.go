@@ -77,7 +77,7 @@ func (h ConfirmPasswordResetHandler) Handle(ctx context.Context, cmd ConfirmPass
 		return ErrResetTokenInvalid
 	}
 	if cmd.NewPassword == "" {
-		return errors.New("confirm_password_reset: new password required")
+		return ErrNewPasswordRequired
 	}
 
 	hashHex := hashResetToken(cmd.RawToken)

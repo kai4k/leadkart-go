@@ -214,7 +214,7 @@ func TestRequestPermissionElevation_HappyPath(t *testing.T) {
 	_ = requester.PullEvents()
 	_ = mems.Add(t.Context(), requester)
 
-	h := command.NewRequestPermissionElevationHandler(reqs, mems, fixedTimeFn())
+	h := command.NewRequestPermissionElevationHandler(reqs, mems, fixedTimeFn(), func() permissionrequest.ID { return permissionrequest.ID(ids.NewV7().String()) })
 	out, err := h.Handle(t.Context(), command.RequestPermissionElevationCommand{
 		RequesterMembershipID: requester.ID(),
 		Permission:            permission.FromConstant(permission.IdentityPermissions.Users.Create),
@@ -235,7 +235,7 @@ func TestRequestPermissionElevation_NonExistentMembership(t *testing.T) {
 	t.Parallel()
 	reqs := newFakePermissionRequestRepo()
 	mems := newFakeMembershipRepoForPermReq()
-	h := command.NewRequestPermissionElevationHandler(reqs, mems, fixedTimeFn())
+	h := command.NewRequestPermissionElevationHandler(reqs, mems, fixedTimeFn(), func() permissionrequest.ID { return permissionrequest.ID(ids.NewV7().String()) })
 
 	_, err := h.Handle(t.Context(), command.RequestPermissionElevationCommand{
 		RequesterMembershipID: membership.ID(ids.NewV7().String()),
@@ -254,7 +254,7 @@ func TestRequestPermissionElevation_RejectsDuplicatePending(t *testing.T) {
 	mems := newFakeMembershipRepoForPermReq()
 	requester := freshMembershipForPermReq(t)
 	_ = mems.Add(t.Context(), requester)
-	h := command.NewRequestPermissionElevationHandler(reqs, mems, fixedTimeFn())
+	h := command.NewRequestPermissionElevationHandler(reqs, mems, fixedTimeFn(), func() permissionrequest.ID { return permissionrequest.ID(ids.NewV7().String()) })
 
 	cmd := command.RequestPermissionElevationCommand{
 		RequesterMembershipID: requester.ID(),
@@ -284,7 +284,7 @@ func TestApprovePermissionRequest_HappyPath(t *testing.T) {
 	_ = mems.Add(t.Context(), requester)
 	_ = mems.Add(t.Context(), manager)
 
-	submitH := command.NewRequestPermissionElevationHandler(reqs, mems, fixedTimeFn())
+	submitH := command.NewRequestPermissionElevationHandler(reqs, mems, fixedTimeFn(), func() permissionrequest.ID { return permissionrequest.ID(ids.NewV7().String()) })
 	out, err := submitH.Handle(t.Context(), command.RequestPermissionElevationCommand{
 		RequesterMembershipID: requester.ID(),
 		Permission:            permission.FromConstant(permission.IdentityPermissions.Users.Create),
@@ -294,7 +294,7 @@ func TestApprovePermissionRequest_HappyPath(t *testing.T) {
 		t.Fatalf("submit: %v", err)
 	}
 
-	approveH := command.NewApprovePermissionRequestHandler(reqs, mems, fixedTimeFn())
+	approveH := command.NewApprovePermissionRequestHandler(reqs, mems, fixedTimeFn(), ids.NewV7)
 	if err := approveH.Handle(t.Context(), command.ApprovePermissionRequestCommand{
 		RequestID:            out.RequestID,
 		ApproverMembershipID: manager.ID(),
@@ -330,14 +330,14 @@ func TestApprovePermissionRequest_BlocksSelfApproval(t *testing.T) {
 	requester := freshMembershipForPermReq(t)
 	_ = mems.Add(t.Context(), requester)
 
-	submitH := command.NewRequestPermissionElevationHandler(reqs, mems, fixedTimeFn())
+	submitH := command.NewRequestPermissionElevationHandler(reqs, mems, fixedTimeFn(), func() permissionrequest.ID { return permissionrequest.ID(ids.NewV7().String()) })
 	out, _ := submitH.Handle(t.Context(), command.RequestPermissionElevationCommand{
 		RequesterMembershipID: requester.ID(),
 		Permission:            permission.FromConstant(permission.IdentityPermissions.Users.Create),
 		Reason:                "need to onboard 5 users for monthly sales drive",
 	})
 
-	approveH := command.NewApprovePermissionRequestHandler(reqs, mems, fixedTimeFn())
+	approveH := command.NewApprovePermissionRequestHandler(reqs, mems, fixedTimeFn(), ids.NewV7)
 	err := approveH.Handle(t.Context(), command.ApprovePermissionRequestCommand{
 		RequestID:            out.RequestID,
 		ApproverMembershipID: requester.ID(), // self-approval
@@ -356,14 +356,14 @@ func TestApprovePermissionRequest_MissingManagerRequiresPlatform(t *testing.T) {
 	// NO manager assigned — orphan / root membership.
 	_ = mems.Add(t.Context(), requester)
 
-	submitH := command.NewRequestPermissionElevationHandler(reqs, mems, fixedTimeFn())
+	submitH := command.NewRequestPermissionElevationHandler(reqs, mems, fixedTimeFn(), func() permissionrequest.ID { return permissionrequest.ID(ids.NewV7().String()) })
 	out, _ := submitH.Handle(t.Context(), command.RequestPermissionElevationCommand{
 		RequesterMembershipID: requester.ID(),
 		Permission:            permission.FromConstant(permission.IdentityPermissions.Users.Create),
 		Reason:                "need to onboard 5 users for monthly sales drive",
 	})
 
-	approveH := command.NewApprovePermissionRequestHandler(reqs, mems, fixedTimeFn())
+	approveH := command.NewApprovePermissionRequestHandler(reqs, mems, fixedTimeFn(), ids.NewV7)
 	// Non-platform random approver should be Forbidden.
 	err := approveH.Handle(t.Context(), command.ApprovePermissionRequestCommand{
 		RequestID:            out.RequestID,
@@ -398,7 +398,7 @@ func TestDenyPermissionRequest_HappyPath(t *testing.T) {
 	_ = mems.Add(t.Context(), requester)
 	_ = mems.Add(t.Context(), manager)
 
-	submitH := command.NewRequestPermissionElevationHandler(reqs, mems, fixedTimeFn())
+	submitH := command.NewRequestPermissionElevationHandler(reqs, mems, fixedTimeFn(), func() permissionrequest.ID { return permissionrequest.ID(ids.NewV7().String()) })
 	out, _ := submitH.Handle(t.Context(), command.RequestPermissionElevationCommand{
 		RequesterMembershipID: requester.ID(),
 		Permission:            permission.FromConstant(permission.IdentityPermissions.Users.Create),
@@ -429,7 +429,7 @@ func TestCancelPermissionRequest_OnlyRequesterCanCancel(t *testing.T) {
 	requester := freshMembershipForPermReq(t)
 	_ = mems.Add(t.Context(), requester)
 
-	submitH := command.NewRequestPermissionElevationHandler(reqs, mems, fixedTimeFn())
+	submitH := command.NewRequestPermissionElevationHandler(reqs, mems, fixedTimeFn(), func() permissionrequest.ID { return permissionrequest.ID(ids.NewV7().String()) })
 	out, _ := submitH.Handle(t.Context(), command.RequestPermissionElevationCommand{
 		RequesterMembershipID: requester.ID(),
 		Permission:            permission.FromConstant(permission.IdentityPermissions.Users.Create),

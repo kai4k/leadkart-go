@@ -8,7 +8,6 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/leadkart/leadkart-go/internal/common/ids"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/permission"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/permissionrequest"
@@ -72,24 +71,36 @@ type RequestPermissionElevationResult struct {
 // RequestPermissionElevationHandler depends on the two repositories +
 // a clock. Per ADR 0047 — interfaces only, no pgx / concrete adapters.
 type RequestPermissionElevationHandler struct {
-	requests    permissionrequest.Repository
-	memberships membership.Repository
-	now         func() time.Time
+	requests     permissionrequest.Repository
+	memberships  membership.Repository
+	now          func() time.Time
+	newRequestID func() permissionrequest.ID
 }
 
 // NewRequestPermissionElevationHandler wires the handler.
+//
+// newRequestID is the Request-aggregate-ID factory per the
+// `TestArch_HandlersInjectIDFactory` discipline. Production passes
+// `func() permissionrequest.ID { return permissionrequest.ID(ids.NewV7().String()) }`;
+// tests inject a deterministic counter so the minted ID is pinnable.
 func NewRequestPermissionElevationHandler(
 	requests permissionrequest.Repository,
 	memberships membership.Repository,
 	now func() time.Time,
+	newRequestID func() permissionrequest.ID,
 ) RequestPermissionElevationHandler {
 	if requests == nil || memberships == nil {
 		panic("command: NewRequestPermissionElevationHandler all dependencies required")
 	}
+	if newRequestID == nil {
+		panic("command: NewRequestPermissionElevationHandler newRequestID required")
+	}
 	if now == nil {
 		now = time.Now
 	}
-	return RequestPermissionElevationHandler{requests: requests, memberships: memberships, now: now}
+	return RequestPermissionElevationHandler{
+		requests: requests, memberships: memberships, now: now, newRequestID: newRequestID,
+	}
 }
 
 // Handle constructs + persists the Pending Request. The at-most-one-
@@ -132,7 +143,7 @@ func (h RequestPermissionElevationHandler) Handle(
 
 	now := h.now()
 	req, err := permissionrequest.New(
-		permissionrequest.ID(ids.NewV7().String()),
+		h.newRequestID(),
 		requester.TenantID(),
 		requester.ID(),
 		cmd.Permission,
@@ -189,24 +200,36 @@ type ApprovePermissionRequestCommand struct {
 // Both writes share the SAME pg.UnitOfWork tx so either both succeed
 // or both fail — no orphan Approved-without-grant rows.
 type ApprovePermissionRequestHandler struct {
-	requests    permissionrequest.Repository
-	memberships membership.Repository
-	now         func() time.Time
+	requests      permissionrequest.Repository
+	memberships   membership.Repository
+	now           func() time.Time
+	newOverrideID func() uuid.UUID
 }
 
 // NewApprovePermissionRequestHandler wires the handler.
+//
+// newOverrideID is the membership_permission_overrides row-ID factory
+// per the `TestArch_HandlersInjectIDFactory` discipline. Production
+// passes `func() uuid.UUID { return ids.NewV7() }`; tests inject a
+// deterministic counter so the minted ID is pinnable.
 func NewApprovePermissionRequestHandler(
 	requests permissionrequest.Repository,
 	memberships membership.Repository,
 	now func() time.Time,
+	newOverrideID func() uuid.UUID,
 ) ApprovePermissionRequestHandler {
 	if requests == nil || memberships == nil {
 		panic("command: NewApprovePermissionRequestHandler all dependencies required")
 	}
+	if newOverrideID == nil {
+		panic("command: NewApprovePermissionRequestHandler newOverrideID required")
+	}
 	if now == nil {
 		now = time.Now
 	}
-	return ApprovePermissionRequestHandler{requests: requests, memberships: memberships, now: now}
+	return ApprovePermissionRequestHandler{
+		requests: requests, memberships: memberships, now: now, newOverrideID: newOverrideID,
+	}
 }
 
 // Handle approves the request + grants the time-bound permission.
@@ -263,7 +286,7 @@ func (h ApprovePermissionRequestHandler) Handle(
 
 	now := h.now()
 	expiresAt := now.Add(time.Duration(req.DurationDays()) * 24 * time.Hour)
-	overrideID := ids.NewV7()
+	overrideID := h.newOverrideID()
 
 	// Step 1 — flip Request to Approved + record grant linkage.
 	if err := h.requests.UpdateByID(ctx, cmd.RequestID, func(loaded *permissionrequest.Request) (bool, error) {

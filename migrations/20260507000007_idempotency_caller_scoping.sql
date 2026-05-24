@@ -1,4 +1,6 @@
 -- LeadKart Go — per-caller idempotency key scoping + response-header capture.
+-- ADR 0031 (X-Command-Id idempotency surface) — per-caller scoping
+-- closes the cross-tenant key-collision class.
 --
 -- Stripe canon (https://stripe.com/blog/idempotency 2018): "An idempotency
 -- key is scoped to the API key" — which is to say *per caller*, not

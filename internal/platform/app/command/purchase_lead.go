@@ -7,7 +7,6 @@ import (
 	"math/rand/v2"
 	"time"
 
-	"github.com/leadkart/leadkart-go/internal/common/ids"
 	"github.com/leadkart/leadkart-go/internal/common/pg"
 	"github.com/leadkart/leadkart-go/internal/platform/domain/leadcredit"
 	"github.com/leadkart/leadkart-go/internal/platform/domain/platformlead"
@@ -59,26 +58,37 @@ var ErrInsufficientCredits = errors.New("purchase lead: insufficient credits")
 // The lead-charge amount is 1 credit per lead in Slice 1; AmountPaisa
 // is the price the tenant paid (forensic field).
 type PurchaseLeadHandler struct {
-	uow       pg.UnitOfWork
-	leads     platformlead.Repository
-	credits   leadcredit.Repository
-	outboxEnq OutboxEnqueuer
-	now       func() time.Time
+	uow           pg.UnitOfWork
+	leads         platformlead.Repository
+	credits       leadcredit.Repository
+	outboxEnq     OutboxEnqueuer
+	now           func() time.Time
+	newPurchaseID func() string
 }
 
 // NewPurchaseLeadHandler wires the handler.
+//
+// newPurchaseID is the purchase-ID factory per the
+// `TestArch_HandlersInjectIDFactory` discipline. Production passes
+// `func() string { return ids.NewV7().String() }`; tests inject a
+// deterministic counter so the minted ID is pinnable.
 func NewPurchaseLeadHandler(
 	uow pg.UnitOfWork,
 	leads platformlead.Repository,
 	credits leadcredit.Repository,
 	outboxEnq OutboxEnqueuer,
 	now func() time.Time,
+	newPurchaseID func() string,
 ) PurchaseLeadHandler {
+	if newPurchaseID == nil {
+		panic("command: NewPurchaseLeadHandler newPurchaseID required")
+	}
 	if now == nil {
 		now = time.Now
 	}
 	return PurchaseLeadHandler{
-		uow: uow, leads: leads, credits: credits, outboxEnq: outboxEnq, now: now,
+		uow: uow, leads: leads, credits: credits, outboxEnq: outboxEnq,
+		now: now, newPurchaseID: newPurchaseID,
 	}
 }
 
@@ -108,7 +118,7 @@ func (h PurchaseLeadHandler) Handle(
 	if cmd.AmountPaisa <= 0 {
 		return PurchaseLeadResult{}, errors.New("purchase lead: amount must be positive")
 	}
-	purchaseID := ids.NewV7().String()
+	purchaseID := h.newPurchaseID()
 
 	var lastErr error
 	for attempt := range purchaseMaxRetries {

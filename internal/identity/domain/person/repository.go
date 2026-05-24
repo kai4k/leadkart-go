@@ -53,6 +53,19 @@ type Repository interface {
 	// GetByID returns the Person or [ErrNotFound]. Read-only path.
 	GetByID(ctx context.Context, id ID) (*Person, error)
 
+	// GetByIDs is the batched form for hydration sweeps (e.g. list-users
+	// rendering N memberships → N persons in ONE query instead of N).
+	// Replaces the per-loop GetByID N+1 pattern per Brandur "What I
+	// learned running Postgres at scale" + the project's runtime
+	// QueryCounter gate in [pg.QueryCounter].
+	//
+	// Returns a map[ID]*Person keyed by the input ID (NOT in input order
+	// — caller iterates the originating Membership slice + does its own
+	// composition). Missing IDs are simply absent from the map; this is
+	// NOT an error condition (race-with-soft-delete is possible). Pass
+	// an empty slice → returns an empty map.
+	GetByIDs(ctx context.Context, ids []ID) (map[ID]*Person, error)
+
 	// GetByEmail returns the Person by globally-unique email or [ErrNotFound].
 	// Used by login + password-reset + email-change flows.
 	GetByEmail(ctx context.Context, e email.Address) (*Person, error)

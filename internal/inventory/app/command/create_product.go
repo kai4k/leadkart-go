@@ -15,7 +15,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/leadkart/leadkart-go/internal/common/ids"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 	"github.com/leadkart/leadkart-go/internal/inventory/domain/product"
@@ -44,26 +43,35 @@ type CreateProductResult struct {
 // CreateProductHandler — single-aggregate insert + outbox drain.
 // Wire-contract: ErrSKUTaken surfaces as HTTP 409.
 type CreateProductHandler struct {
-	products product.Repository
-	now      func() time.Time
+	products     product.Repository
+	now          func() time.Time
+	newProductID func() product.ID
 }
 
 // NewCreateProductHandler wires the handler. `now` is the explicit time
 // source per the clock-injection refactor — composition root wires
 // `time.Now`; tests inject a fixed-time closure for deterministic
 // timestamps. Nil → time.Now.
-func NewCreateProductHandler(products product.Repository, now func() time.Time) CreateProductHandler {
+//
+// newProductID is the aggregate-ID factory per the
+// `TestArch_HandlersInjectIDFactory` discipline. Production passes
+// `func() product.ID { return product.ID(ids.NewV7().String()) }`;
+// tests inject a deterministic counter so the minted ID is pinnable.
+func NewCreateProductHandler(products product.Repository, now func() time.Time, newProductID func() product.ID) CreateProductHandler {
+	if newProductID == nil {
+		panic("command: NewCreateProductHandler newProductID required")
+	}
 	if now == nil {
 		now = time.Now
 	}
-	return CreateProductHandler{products: products, now: now}
+	return CreateProductHandler{products: products, now: now, newProductID: newProductID}
 }
 
 // Handle constructs + persists the Product. Outbox event drain rides
 // the adapter's Add path (one-tx with the row insert per ADR 0008).
 func (h CreateProductHandler) Handle(ctx context.Context, cmd CreateProductCommand) (CreateProductResult, error) {
 	p, err := product.New(
-		product.ID(ids.NewV7().String()),
+		h.newProductID(),
 		cmd.TenantID,
 		cmd.ActorMembershipID,
 		product.Spec{

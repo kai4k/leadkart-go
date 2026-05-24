@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/leadkart/leadkart-go/internal/common/ids"
 	"github.com/leadkart/leadkart-go/internal/common/pg"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/permission"
@@ -58,23 +57,33 @@ type CreateRoleResult struct {
 
 // CreateRoleHandler runs the create flow.
 type CreateRoleHandler struct {
-	roles role.Repository
-	edges rolehierarchy.Repository
-	uow   pg.UnitOfWork
-	now   func() time.Time
+	roles     role.Repository
+	edges     rolehierarchy.Repository
+	uow       pg.UnitOfWork
+	now       func() time.Time
+	newRoleID func() role.ID
+	newEdgeID func() rolehierarchy.ID
 }
 
 // NewCreateRoleHandler wires the handler. `edges` may be nil when the
 // caller knows ParentRoleID will always be zero (test fixtures); the
-// handler refuses to seed an edge in that case.
-func NewCreateRoleHandler(r role.Repository, edges rolehierarchy.Repository, uow pg.UnitOfWork, now func() time.Time) CreateRoleHandler {
+// handler refuses to seed an edge in that case. newRoleID + newEdgeID
+// are the Pure Domain ID factories per ADR 0047 — production wires
+// UUIDv7, tests pin deterministic values.
+func NewCreateRoleHandler(r role.Repository, edges rolehierarchy.Repository, uow pg.UnitOfWork, now func() time.Time, newRoleID func() role.ID, newEdgeID func() rolehierarchy.ID) CreateRoleHandler {
 	if r == nil {
 		panic("command: NewCreateRoleHandler roles repository required")
+	}
+	if newRoleID == nil {
+		panic("command: NewCreateRoleHandler newRoleID required")
+	}
+	if newEdgeID == nil {
+		panic("command: NewCreateRoleHandler newEdgeID required")
 	}
 	if now == nil {
 		now = time.Now
 	}
-	return CreateRoleHandler{roles: r, edges: edges, uow: uow, now: now}
+	return CreateRoleHandler{roles: r, edges: edges, uow: uow, now: now, newRoleID: newRoleID, newEdgeID: newEdgeID}
 }
 
 // Handle constructs a custom role + persists it. isSystemDefault +
@@ -89,7 +98,7 @@ func (h CreateRoleHandler) Handle(ctx context.Context, cmd CreateRoleCommand) (C
 		return CreateRoleResult{}, errors.New("create_role: tenant id required")
 	}
 	now := h.now()
-	r, err := role.New(role.ID(ids.NewV7().String()), cmd.TenantID, cmd.Name,
+	r, err := role.New(h.newRoleID(), cmd.TenantID, cmd.Name,
 		false /* isSystemDefault */, cmd.HierarchyLevel, false /* isSuperAdmin */, now)
 	if err != nil {
 		return CreateRoleResult{}, err
@@ -114,7 +123,7 @@ func (h CreateRoleHandler) Handle(ctx context.Context, cmd CreateRoleCommand) (C
 		return CreateRoleResult{}, errors.New("create_role: parent edge requires edges repo + uow wiring")
 	}
 	edge, err := rolehierarchy.New(
-		rolehierarchy.ID(ids.NewV7().String()),
+		h.newEdgeID(),
 		cmd.TenantID,
 		r.ID(),
 		cmd.ParentRoleID,
@@ -450,25 +459,30 @@ type SetRoleParentCommand struct {
 
 // SetRoleParentHandler runs the set-parent flow.
 type SetRoleParentHandler struct {
-	edges rolehierarchy.Repository
-	uow   pg.UnitOfWork
-	now   func() time.Time
+	edges     rolehierarchy.Repository
+	uow       pg.UnitOfWork
+	now       func() time.Time
+	newEdgeID func() rolehierarchy.ID
 }
 
 // NewSetRoleParentHandler wires the handler. uow may be nil only in
 // the rare case where the caller is already inside a uow tx (test
-// fixtures); production wiring always supplies one.
-func NewSetRoleParentHandler(edges rolehierarchy.Repository, uow pg.UnitOfWork, now func() time.Time) SetRoleParentHandler {
+// fixtures); production wiring always supplies one. newEdgeID is the
+// Pure Domain ID factory (ADR 0047).
+func NewSetRoleParentHandler(edges rolehierarchy.Repository, uow pg.UnitOfWork, now func() time.Time, newEdgeID func() rolehierarchy.ID) SetRoleParentHandler {
 	if edges == nil {
 		panic("command: NewSetRoleParentHandler edges repository required")
 	}
 	if uow == nil {
 		panic("command: NewSetRoleParentHandler uow required")
 	}
+	if newEdgeID == nil {
+		panic("command: NewSetRoleParentHandler newEdgeID required")
+	}
 	if now == nil {
 		now = time.Now
 	}
-	return SetRoleParentHandler{edges: edges, uow: uow, now: now}
+	return SetRoleParentHandler{edges: edges, uow: uow, now: now, newEdgeID: newEdgeID}
 }
 
 // Handle replaces the active parent edge for cmd.RoleID. Atomic via
@@ -498,7 +512,7 @@ func (h SetRoleParentHandler) Handle(ctx context.Context, cmd SetRoleParentComma
 		// Step 2: insert the new edge. Aggregate rejects self-reference;
 		// DB rejects cycle + cross-tenant via composite FK / cycle trigger.
 		edge, err := rolehierarchy.New(
-			rolehierarchy.ID(ids.NewV7().String()),
+			h.newEdgeID(),
 			cmd.TenantID,
 			cmd.RoleID,
 			cmd.NewParentID,

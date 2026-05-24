@@ -532,10 +532,15 @@ func TestArch_PartialUniqueIndexWithSoftDelete(t *testing.T) {
 	}
 
 	if len(violations) > 0 {
-		t.Skip("known violation: partial-unique-index discipline across " +
-			"soft-deleted tables — tracked in KNOWN_VIOLATIONS.md. Most " +
-			"existing unique indexes pre-date the soft-delete pattern + " +
-			"need per-index migration to add the WHERE clause.")
+		t.Logf("PARTIAL-UNIQUE-INDEX VIOLATIONS — %d", len(violations))
+		t.Logf("Per Brandur \"Postgres unique indexes for distributed locks\" + ADR 0027:")
+		t.Logf("  UNIQUE INDEXes on soft-deletable tables MUST carry a partial WHERE clause")
+		t.Logf("  (`WHERE NOT is_deleted` / `WHERE deleted_at IS NULL`) so restoring a row")
+		t.Logf("  doesn't collide with the still-indexed soft-deleted ghost.")
+		t.Logf("  Canonical fix template lives in migrations/20260603000302_partial_unique_indexes_soft_delete.sql.")
+		for _, v := range violations {
+			t.Errorf("%s — unique index %q lacks `WHERE NOT is_deleted` / `WHERE deleted_at IS NULL`", v.file, v.idx)
+		}
 	}
 }
 
@@ -543,15 +548,122 @@ func TestArch_PartialUniqueIndexWithSoftDelete(t *testing.T) {
 // Test 76: TestArch_AuditChainColumnsOnTenantTables
 // ----------------------------------------------------------------------------
 //
-// Tenant-scoped mutable tables SHOULD have `created_by_membership_id
-// uuid` (per the Wave 1.5 audit-chain ADR). Warning-level: skip if
-// any missing + track in KNOWN_VIOLATIONS.md.
+// Wave 1.5 audit-chain discipline (migration 20260507000008 + ADR 0058
+// + ADR 0027). Every tenant-scoped mutable aggregate MUST carry
+// `created_by_membership_id uuid` so the "who created this row" question
+// is answered declaratively, not reconstructed from event streams
+// (Stripe / Plaid / Salesforce shape).
+//
+// Predicate: walk every migrations/*.sql; for every CREATE TABLE that
+// declares a `tenant_id` column, the table must EITHER declare
+// `created_by_membership_id` inside the same CREATE TABLE body OR be
+// extended later via `ALTER TABLE ... ADD COLUMN ... created_by_membership_id`
+// in some subsequent migration.
+//
+// Allow-list (explicit exemptions): global aggregates, session infra,
+// append-only ledgers, outbox tables, and the rolehierarchy / permission*
+// family which carry semantically-equivalent audit columns under
+// different names (`established_by_membership_id`, etc.). Adding to
+// the allow-list requires an ADR-level justification in the PR.
 func TestArch_AuditChainColumnsOnTenantTables(t *testing.T) {
 	t.Parallel()
 
-	t.Skip("known violation: audit-chain columns (created_by_membership_id) " +
-		"not present on every tenant-scoped mutable table — tracked in " +
-		"KNOWN_VIOLATIONS.md. Gap closure pending Wave-N migration sweep.")
+	// Tables that carry a tenant_id column but are exempt from the
+	// `created_by_membership_id` requirement for documented reasons.
+	// Keep grep-able + cited.
+	allowList := map[string]string{
+		// Global / session / infra:
+		"identity.tenants":                 "global aggregate (each row IS a tenant)",
+		"identity.persons":                 "global identity (NOT tenant-scoped)",
+		"identity.refresh_token_families":  "session infrastructure (RFC 9700)",
+		"identity.refresh_tokens":          "session infrastructure (RFC 9700)",
+		"identity.auth_routing":            "cross-tenant routing table (non-RLS)",
+		"identity.processed_messages":      "messaging infra (Watermill bookkeeping)",
+		"identity.outbox":                  "outbox / audit log (ADR 0027)",
+		"platform.outbox":                  "outbox / audit log (ADR 0027)",
+		"inventory.outbox":                 "outbox / audit log (ADR 0027)",
+		"buildingblocks.audit_log_entry":   "audit log sink",
+		"buildingblocks.admin_impersonation_audit": "audit log (ADR 0045)",
+		"app.command_idempotency":          "idempotency infra",
+		// Permission / hierarchy family (carry their own audit columns):
+		"identity.membership_permission_overrides": "permission* family (overlay state)",
+		"identity.permission_requests":             "permission* family (request workflow, has approver_membership_id)",
+		"identity.role_hierarchy_edges":            "rolehierarchy* family (carries established_by_membership_id)",
+		// Append-only ledgers / event-stream aggregates:
+		"inventory.stock_movements":      "event-stream aggregate (carries actor_membership_id)",
+		"platform.verification_calls":    "append-only ledger (carries logged_by_membership_id)",
+		// Platform globals:
+		"platform.platform_leads":  "marketplace global (carries verified_by_membership_id + sold_to_membership_id)",
+		"platform.lead_credits":    "balance aggregate (no creation event)",
+		"platform.unverified_contacts": "platform-only Lead Agent queue (already carries created_by_membership_id NOT NULL)",
+	}
+
+	// Match CREATE TABLE <schema>.<name> ( ... ); for any schema.
+	tableRE := regexp.MustCompile(`(?is)CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?([a-z_][a-z0-9_]*\.[a-z_][a-z0-9_]*)\s*\((.*?)\);`)
+	// Match `tenant_id` declared as a column inside the CREATE TABLE body.
+	hasTenantColRE := regexp.MustCompile(`(?im)^\s*tenant_id\s+uuid\b`)
+	// Match `created_by_membership_id` inside the CREATE TABLE body.
+	hasCreatedByInBody := regexp.MustCompile(`(?im)\bcreated_by_membership_id\b`)
+	// Match an ALTER TABLE ... ADD COLUMN ... created_by_membership_id ...
+	// targeting the given <schema>.<table>. We build the regex per-table
+	// so we can prove the column lands on this specific table.
+	alterAddCol := func(qualified string) *regexp.Regexp {
+		return regexp.MustCompile(`(?is)ALTER\s+TABLE\s+(?:IF\s+EXISTS\s+)?` +
+			regexp.QuoteMeta(qualified) +
+			`\s+ADD\s+COLUMN\s+(?:IF\s+NOT\s+EXISTS\s+)?created_by_membership_id\b`)
+	}
+
+	migs := loadMigrations(t)
+
+	type violation struct {
+		file  string
+		table string
+	}
+	var violations []violation
+
+	for _, m := range migs {
+		stripped := stripSQLComments(m.text)
+		for _, mm := range tableRE.FindAllStringSubmatch(stripped, -1) {
+			table := strings.ToLower(mm[1])
+			body := mm[2]
+			if !hasTenantColRE.MatchString(body) {
+				continue
+			}
+			if _, exempt := allowList[table]; exempt {
+				continue
+			}
+			if hasCreatedByInBody.MatchString(body) {
+				continue
+			}
+			// Search every migration (including ones earlier than `m`,
+			// since CI re-applies the full stack) for an ALTER TABLE that
+			// adds the column to this specific table.
+			found := false
+			altRE := alterAddCol(table)
+			for _, other := range migs {
+				if altRE.MatchString(stripSQLComments(other.text)) {
+					found = true
+					break
+				}
+			}
+			if !found {
+				violations = append(violations, violation{file: m.path, table: table})
+			}
+		}
+	}
+
+	if len(violations) > 0 {
+		t.Logf("AUDIT-CHAIN COLUMN VIOLATIONS — %d", len(violations))
+		t.Logf("Per Wave 1.5 (migration 20260507000008) + ADR 0027 + ADR 0058:")
+		t.Logf("  Every tenant-scoped mutable aggregate MUST carry")
+		t.Logf("  `created_by_membership_id uuid` so authorship is part of row state.")
+		t.Logf("  Add the column via a goose migration in the migrations/ tree,")
+		t.Logf("  or — if the table is genuinely exempt — extend the allowList in")
+		t.Logf("  this test with a one-line rationale citing the ADR / pattern.")
+		for _, v := range violations {
+			t.Errorf("%s — table %s lacks created_by_membership_id (no CREATE TABLE column + no later ALTER TABLE ADD COLUMN)", v.file, v.table)
+		}
+	}
 }
 
 // ----------------------------------------------------------------------------
@@ -706,4 +818,286 @@ func TestArch_NoTextWhereVarcharSufficient(t *testing.T) {
 			t.Errorf("%s — column %s typed bare text", v.file, v.col)
 		}
 	}
+}
+
+// ============================================================================
+// Principle B: goose-migration discipline (6 tests added per the comprehensive
+// catalog brief).
+//
+// goose's idioms are subtle and easy to violate silently — multi-statement
+// DDL needs `+goose StatementBegin/End`, nested transactions break the
+// implicit migration tx, and destructive ops (DROP COLUMN / DROP CONSTRAINT)
+// without an ADR reference are accident-class events.
+// ============================================================================
+
+// ----------------------------------------------------------------------------
+// B1: TestArch_MigrationUsesStatementBegin
+// ----------------------------------------------------------------------------
+//
+// goose runs each top-level statement separately unless wrapped in
+// `+goose StatementBegin / +goose StatementEnd`. Multi-statement DDL
+// blocks (DO $$ ... $$, CREATE FUNCTION ... LANGUAGE plpgsql AS $$
+// ... $$;) MUST use the wrapper or goose splits them on the first
+// semicolon and the migration explodes.
+//
+// Predicate: every `DO $$` or `LANGUAGE plpgsql` block in any migration
+// must be preceded within 5 lines by `-- +goose StatementBegin`.
+func TestArch_MigrationUsesStatementBegin(t *testing.T) {
+	t.Parallel()
+
+	type violation struct {
+		file string
+		line int
+	}
+	var violations []violation
+
+	for _, m := range loadMigrations(t) {
+		lines := strings.Split(m.text, "\n")
+		// Walk the file once tracking the most-recent StatementBegin /
+		// StatementEnd. A multi-statement DDL site (DO $$ /
+		// LANGUAGE plpgsql) is in a wrapped block iff the most recent
+		// marker BEFORE that line is a Begin (not an End).
+		inBlock := false
+		for i, ln := range lines {
+			if strings.Contains(ln, "+goose StatementBegin") {
+				inBlock = true
+				continue
+			}
+			if strings.Contains(ln, "+goose StatementEnd") {
+				inBlock = false
+				continue
+			}
+			lower := strings.ToLower(ln)
+			needsWrap := strings.Contains(lower, "do $$") ||
+				strings.Contains(lower, "language plpgsql")
+			if !needsWrap {
+				continue
+			}
+			if !inBlock {
+				violations = append(violations, violation{file: m.path, line: i + 1})
+			}
+		}
+	}
+	if len(violations) > 0 {
+		for _, v := range violations {
+			t.Errorf("%s:%d — multi-statement DDL missing +goose StatementBegin/End wrapper",
+				filepath.Base(v.file), v.line)
+		}
+	}
+}
+
+// ----------------------------------------------------------------------------
+// B2: TestArch_NoNestedTransactionsInMigrations
+// ----------------------------------------------------------------------------
+//
+// goose wraps each migration in an implicit transaction (unless
+// `-- +goose NO TRANSACTION` is declared). Explicit BEGIN / COMMIT
+// inside a migration body breaks the implicit tx and produces
+// surprising partial-apply behaviour.
+//
+// Allow-list: the literal token `BEGIN` may appear inside `EXCEPTION
+// WHEN ... THEN BEGIN ... END` blocks (PL/pgSQL exception handlers)
+// or `START TRANSACTION` — but bare `BEGIN;` on its own line is
+// banned.
+func TestArch_NoNestedTransactionsInMigrations(t *testing.T) {
+	t.Parallel()
+
+	// Bare BEGIN; on its own line (any leading whitespace). Excludes
+	// inline BEGIN inside DO blocks where it's PL/pgSQL syntax.
+	bareBeginRE := regexp.MustCompile(`(?im)^\s*BEGIN\s*;\s*$`)
+	bareCommitRE := regexp.MustCompile(`(?im)^\s*COMMIT\s*;\s*$`)
+
+	var violations []string
+	for _, m := range loadMigrations(t) {
+		body := stripSQLComments(m.text)
+		if bareBeginRE.MatchString(body) || bareCommitRE.MatchString(body) {
+			violations = append(violations, filepath.Base(m.path))
+		}
+	}
+	if len(violations) > 0 {
+		t.Fatalf("migration declares explicit BEGIN/COMMIT — goose already wraps in tx (ADR 0005):\n  %s",
+			strings.Join(violations, "\n  "))
+	}
+}
+
+// ----------------------------------------------------------------------------
+// B3: TestArch_NoDropColumnWithoutADRRef
+// ----------------------------------------------------------------------------
+//
+// DROP COLUMN is destructive + irreversible against production data.
+// Every occurrence MUST reference the ADR justifying the removal
+// (Brandur "schema changes" canon — a paper trail is non-optional).
+//
+// Looks for an `ADR-NNNN` token in the same migration file as any
+// `DROP COLUMN` (case-insensitive). Only `-- +goose Up` block
+// occurrences are flagged; Down sections legitimately drop the
+// columns the Up section added.
+func TestArch_NoDropColumnWithoutADRRef(t *testing.T) {
+	t.Parallel()
+
+	dropRE := regexp.MustCompile(`(?i)DROP\s+COLUMN`)
+	adrRE := regexp.MustCompile(`(?i)ADR[\s-]?\d{3,4}`)
+
+	var violations []string
+	for _, m := range loadMigrations(t) {
+		up, _ := splitGooseUpDown(m.text)
+		stripped := stripSQLComments(up)
+		if !dropRE.MatchString(stripped) {
+			continue
+		}
+		// ADR ref check uses the whole file body (header comment is
+		// the canonical place to cite).
+		if !adrRE.MatchString(m.text) {
+			violations = append(violations, filepath.Base(m.path))
+		}
+	}
+	if len(violations) > 0 {
+		t.Fatalf("DROP COLUMN without ADR reference (paper-trail required):\n  %s",
+			strings.Join(violations, "\n  "))
+	}
+}
+
+// ----------------------------------------------------------------------------
+// B4: TestArch_NoDropConstraintWithoutADRRef
+// ----------------------------------------------------------------------------
+//
+// Same canon as B3 but for DROP CONSTRAINT: removing FKs / unique
+// indexes / check constraints is invariant-breaking — must cite ADR.
+func TestArch_NoDropConstraintWithoutADRRef(t *testing.T) {
+	t.Parallel()
+
+	dropRE := regexp.MustCompile(`(?i)DROP\s+CONSTRAINT`)
+	adrRE := regexp.MustCompile(`(?i)ADR[\s-]?\d{3,4}`)
+
+	var violations []string
+	for _, m := range loadMigrations(t) {
+		up, _ := splitGooseUpDown(m.text)
+		stripped := stripSQLComments(up)
+		if !dropRE.MatchString(stripped) {
+			continue
+		}
+		if !adrRE.MatchString(m.text) {
+			violations = append(violations, filepath.Base(m.path))
+		}
+	}
+	if len(violations) > 0 {
+		t.Fatalf("DROP CONSTRAINT without ADR reference (paper-trail required):\n  %s",
+			strings.Join(violations, "\n  "))
+	}
+}
+
+// ----------------------------------------------------------------------------
+// B5: TestArch_DataLiftHasRollbackPath
+// ----------------------------------------------------------------------------
+//
+// Migrations that perform a data-lift in the Up section (INSERT INTO
+// new_table SELECT ... FROM old_table) MUST have a corresponding
+// reversal in the Down section. If we revert the schema, the data
+// has to come back too — otherwise rollback is silent data loss.
+//
+// Heuristic: Up contains `INSERT INTO ... SELECT ... FROM` AND Down
+// contains neither `INSERT INTO` nor an explicit
+// `-- arch-test:data-lift-irreversible <reason>` opt-out.
+func TestArch_DataLiftHasRollbackPath(t *testing.T) {
+	t.Parallel()
+
+	liftRE := regexp.MustCompile(`(?is)INSERT\s+INTO\s+\S+\s*\([^)]*\)\s*SELECT`)
+
+	var violations []string
+	for _, m := range loadMigrations(t) {
+		up, down := splitGooseUpDown(m.text)
+		upBody := stripSQLComments(up)
+		if !liftRE.MatchString(upBody) {
+			continue
+		}
+		if strings.Contains(m.text, "arch-test:data-lift-irreversible") {
+			continue
+		}
+		downBody := stripSQLComments(down)
+		if !strings.Contains(strings.ToUpper(downBody), "INSERT INTO") &&
+			!strings.Contains(strings.ToUpper(downBody), "UPDATE ") {
+			violations = append(violations, filepath.Base(m.path))
+		}
+	}
+	if len(violations) > 0 {
+		t.Fatalf("migration data-lift has no rollback path in Down section (silent data loss on revert):\n  %s",
+			strings.Join(violations, "\n  "))
+	}
+}
+
+// ----------------------------------------------------------------------------
+// B6: TestArch_ConcurrentIndexOnHotTables
+// ----------------------------------------------------------------------------
+//
+// Tables tagged `-- arch-test:hot-table` (high-write tables where a
+// CREATE INDEX would lock-out writes) must use `CREATE INDEX
+// CONCURRENTLY`. Brandur "Postgres for everything" canon — for any
+// table large enough to matter, concurrent is the default.
+//
+// Predicate: every CREATE INDEX in a migration that ALSO creates a
+// table carrying the `-- arch-test:hot-table` marker must use
+// CONCURRENTLY.
+func TestArch_ConcurrentIndexOnHotTables(t *testing.T) {
+	t.Parallel()
+
+	createIdxRE := regexp.MustCompile(`(?i)CREATE\s+(?:UNIQUE\s+)?INDEX\s+(?:CONCURRENTLY\s+)?(?:IF\s+NOT\s+EXISTS\s+)?(\w+)\s+ON\s+([\w.]+)`)
+	hotMarker := "arch-test:hot-table"
+
+	// Build set of hot tables (any table whose CREATE TABLE block in
+	// any migration carries the marker comment on the prior 3 lines).
+	tableRE := regexp.MustCompile(`(?im)^\s*CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?([\w.]+)`)
+	hot := map[string]struct{}{}
+	for _, m := range loadMigrations(t) {
+		lines := strings.Split(m.text, "\n")
+		for i, ln := range lines {
+			mm := tableRE.FindStringSubmatch(ln)
+			if mm == nil {
+				continue
+			}
+			// Look back 4 lines for the marker.
+			for j := i - 1; j >= 0 && j > i-5; j-- {
+				if strings.Contains(lines[j], hotMarker) {
+					hot[strings.ToLower(mm[1])] = struct{}{}
+					break
+				}
+			}
+		}
+	}
+
+	if len(hot) == 0 {
+		// No hot-table markers in the codebase yet — test is satisfied
+		// vacuously. The presence of the test is the institutional
+		// lever: as soon as one CRM lead-table gets the marker the
+		// gate is live.
+		return
+	}
+
+	var bad []string
+	for _, m := range loadMigrations(t) {
+		for _, mm := range createIdxRE.FindAllStringSubmatch(m.text, -1) {
+			tbl := strings.ToLower(mm[2])
+			if _, ok := hot[tbl]; !ok {
+				continue
+			}
+			whole := mm[0]
+			if !strings.Contains(strings.ToUpper(whole), "CONCURRENTLY") {
+				bad = append(bad, filepath.Base(m.path)+": "+mm[1]+" on "+tbl)
+			}
+		}
+	}
+	if len(bad) > 0 {
+		t.Fatalf("CREATE INDEX on hot-table missing CONCURRENTLY (would lock writers):\n  %s",
+			strings.Join(bad, "\n  "))
+	}
+}
+
+// splitGooseUpDown splits a goose migration body into Up + Down
+// halves at the `-- +goose Down` marker. Returns (up, down).
+func splitGooseUpDown(body string) (string, string) {
+	downRE := regexp.MustCompile(`(?im)^\s*--\s*\+goose\s+Down\s*$`)
+	loc := downRE.FindStringIndex(body)
+	if loc == nil {
+		return body, ""
+	}
+	return body[:loc[0]], body[loc[0]:]
 }

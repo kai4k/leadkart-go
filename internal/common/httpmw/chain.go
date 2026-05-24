@@ -77,11 +77,16 @@ type PublicChainConfig struct {
 // HTTP API host. Order (outer → inner):
 //
 //	Correlation       — mint/echo X-Correlation-ID
+//	SecurityHeaders   — OWASP Secure Headers floor on every response
 //	RequestLog        — start/end structured log line
 //	Recover           — catch panics → 500
 //	IPRateLimit       — per-IP token bucket
 //	Idempotency       — X-Command-Id replay protection
 //	(per-route auth + handler — wired by ports.AddRoutes)
+//
+// SecurityHeaders sits OUTSIDE Recover so panic-derived 500s also carry
+// the OWASP floor (X-Content-Type-Options, X-Frame-Options, HSTS,
+// Referrer-Policy).
 //
 // otelhttp wraps THIS chain — see cmd/api/main.go. Putting otelhttp
 // outside makes the OTel span cover the entire request lifecycle
@@ -104,6 +109,7 @@ func PublicChain(cfg PublicChainConfig) Middleware {
 
 	return Chain(
 		Correlation(),
+		SecurityHeaders(),
 		RequestLog(cfg.Logger),
 		Recover(cfg.Logger),
 		ipLimiter.Middleware(),

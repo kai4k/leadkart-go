@@ -3,7 +3,6 @@ package command_test
 import (
 	"context"
 	"errors"
-	"strings"
 	"testing"
 	"time"
 
@@ -42,6 +41,19 @@ func (f *fakePersonRepo) GetByID(_ context.Context, id person.ID) (*person.Perso
 		return nil, person.ErrNotFound
 	}
 	return f.person, nil
+}
+
+func (f *fakePersonRepo) GetByIDs(_ context.Context, ids []person.ID) (map[person.ID]*person.Person, error) {
+	out := make(map[person.ID]*person.Person, len(ids))
+	if f.person == nil {
+		return out, nil
+	}
+	for _, id := range ids {
+		if id == f.person.ID() {
+			out[id] = f.person
+		}
+	}
+	return out, nil
 }
 
 func (f *fakePersonRepo) GetByEmail(_ context.Context, _ email.Address) (*person.Person, error) {
@@ -236,8 +248,8 @@ func TestChangePassword_RejectsZeroPersonID(t *testing.T) {
 		CurrentPassword: "x",
 		NewPassword:     "y",
 	})
-	if err == nil || !strings.Contains(err.Error(), "person id required") {
-		t.Fatalf("err = %v, want 'person id required'", err)
+	if !errors.Is(err, command.ErrPersonIDRequired) {
+		t.Fatalf("err = %v, want ErrPersonIDRequired", err)
 	}
 }
 
@@ -251,8 +263,8 @@ func TestChangePassword_RejectsEmptyNewPassword(t *testing.T) {
 		CurrentPassword: "real-current-pw",
 		NewPassword:     "",
 	})
-	if err == nil || !strings.Contains(err.Error(), "new password required") {
-		t.Fatalf("err = %v, want 'new password required'", err)
+	if !errors.Is(err, command.ErrNewPasswordRequired) {
+		t.Fatalf("err = %v, want ErrNewPasswordRequired", err)
 	}
 }
 
