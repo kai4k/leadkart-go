@@ -206,7 +206,7 @@ func TestMeta_EveryFitnessFunctionHasNegativeFixture(t *testing.T) {
 	archDir := filepath.Join(internalDir(t), "architecture")
 	testNames := []string{}
 	declRE := regexp.MustCompile(`(?m)^func\s+(TestArch_[A-Z]\w*)\s*\(`)
-	walkGoFiles(t, archDir, true, func(path string, src []byte) {
+	walkGoFiles(t, archDir, true, func(_ string, src []byte) {
 		for _, m := range declRE.FindAllStringSubmatch(string(src), -1) {
 			testNames = append(testNames, m[1])
 		}

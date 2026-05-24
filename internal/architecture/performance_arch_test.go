@@ -39,7 +39,7 @@ func TestArch_KeysetQueryEXPLAINTest(t *testing.T) {
 	_ = pageMethodRE
 	for _, mod := range modulesUnderInternal(t) {
 		adaptersDir := filepath.Join(internalDir(t), mod, "adapters")
-		walkGoFiles(t, adaptersDir, true, func(path string, src []byte) {
+		walkGoFiles(t, adaptersDir, true, func(path string, _ []byte) {
 			if strings.HasSuffix(pathToSlash(path), "_explain_integration_test.go") {
 				hasExplain[filepath.Dir(path)] = true
 			}

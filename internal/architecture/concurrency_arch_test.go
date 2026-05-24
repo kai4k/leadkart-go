@@ -133,11 +133,11 @@ func TestArch_BoundedChannelBuffers(t *testing.T) {
 			if lit.Kind != token.INT {
 				return true
 			}
-			n_, err := strconv.Atoi(lit.Value)
+			bufSize, err := strconv.Atoi(lit.Value)
 			if err != nil {
 				return true
 			}
-			if n_ > 1024 {
+			if bufSize > 1024 {
 				violations = append(violations, violation{
 					file: path,
 					line: pos.Line,

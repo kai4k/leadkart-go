@@ -407,7 +407,6 @@ func TestArch_OmitzeroNotOmitempty(t *testing.T) {
 	type violation struct {
 		file string
 		line int
-		typ  string
 		fld  string
 	}
 	var violations []violation
