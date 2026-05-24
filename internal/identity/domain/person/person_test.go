@@ -43,6 +43,7 @@ func newID(t *testing.T) person.ID {
 // ----- Factory: New ---------------------------------------------------------
 
 func TestNewPerson_AcceptsValid(t *testing.T) {
+	t.Parallel()
 
 	id := newID(t)
 	e := mustEmail(t, "alice@example.com")
@@ -83,6 +84,7 @@ func TestNewPerson_AcceptsValid(t *testing.T) {
 }
 
 func TestNewPerson_EmitsCreatedEvent(t *testing.T) {
+	t.Parallel()
 
 	id := newID(t)
 	p, err := person.New(id, mustEmail(t, "a@b.io"), "A", "B", mustHash(t), testNow)
@@ -139,6 +141,7 @@ func TestNewPerson_RejectsInvalid(t *testing.T) {
 // ----- ChangePassword -------------------------------------------------------
 
 func TestChangePassword_RotatesSecurityStamp(t *testing.T) {
+	t.Parallel()
 
 	p := newPerson(t)
 	_ = p.PullEvents()
@@ -168,6 +171,7 @@ func TestChangePassword_RotatesSecurityStamp(t *testing.T) {
 }
 
 func TestChangePassword_RejectsZeroHash(t *testing.T) {
+	t.Parallel()
 	p := newPerson(t)
 	if err := p.ChangePassword(person.PasswordHash{}, testNow); err == nil {
 		t.Fatal("expected error on zero hash")
@@ -177,6 +181,7 @@ func TestChangePassword_RejectsZeroHash(t *testing.T) {
 // ----- UpdateProfile --------------------------------------------------------
 
 func TestUpdateProfile_ChangesNameAndEmitsEvent(t *testing.T) {
+	t.Parallel()
 
 	p := newPerson(t)
 	_ = p.PullEvents() // drain CreatedEvent
@@ -208,6 +213,7 @@ func TestUpdateProfile_ChangesNameAndEmitsEvent(t *testing.T) {
 }
 
 func TestUpdateProfile_NoOp_WhenNamesUnchanged(t *testing.T) {
+	t.Parallel()
 	p := newPerson(t)
 	_ = p.PullEvents()
 
@@ -220,6 +226,7 @@ func TestUpdateProfile_NoOp_WhenNamesUnchanged(t *testing.T) {
 }
 
 func TestUpdateProfile_RejectsEmptyAndOverlong(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name      string
 		firstName string
@@ -234,6 +241,7 @@ func TestUpdateProfile_RejectsEmptyAndOverlong(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			p := newPerson(t)
 			err := p.UpdateProfile(tc.firstName, tc.lastName, testNow)
 			if err == nil {
@@ -247,8 +255,9 @@ func TestUpdateProfile_RejectsEmptyAndOverlong(t *testing.T) {
 }
 
 func TestUpdateProfile_RefusedOnAnonymisedPerson(t *testing.T) {
+	t.Parallel()
 	p := newPerson(t)
-	_ = p.Anonymise(testNow)
+	_ = p.Anonymise(testNow) // arch-test:ignore-err - test fixture setup
 	_ = p.PullEvents()
 
 	err := p.UpdateProfile("Alice", "Sharma", testNow)
@@ -274,6 +283,7 @@ func mustResetHash(t *testing.T, raw string) person.PasswordResetTokenHash {
 }
 
 func TestRequestPasswordReset_StoresPendingAndEmitsEvent(t *testing.T) {
+	t.Parallel()
 
 	p := newPerson(t)
 	_ = p.PullEvents()
@@ -321,6 +331,7 @@ func TestRequestPasswordReset_StoresPendingAndEmitsEvent(t *testing.T) {
 }
 
 func TestRequestPasswordReset_RejectsZeroHashAndZeroTTL(t *testing.T) {
+	t.Parallel()
 	p := newPerson(t)
 	if err := p.RequestPasswordReset("plaintext", person.PasswordResetTokenHash{}, time.Hour, testNow); !errors.Is(err, person.ErrInvalid) {
 		t.Errorf("zero hash: expected ErrInvalid, got %v", err)
@@ -334,26 +345,28 @@ func TestRequestPasswordReset_RejectsZeroHashAndZeroTTL(t *testing.T) {
 }
 
 func TestRequestPasswordReset_RejectedOnAnonymisedAndSuspended(t *testing.T) {
+	t.Parallel()
 	h := mustResetHash(t, validResetHash)
 
 	pAnon := newPerson(t)
-	_ = pAnon.Anonymise(testNow)
+	_ = pAnon.Anonymise(testNow) // arch-test:ignore-err - test fixture setup
 	if err := pAnon.RequestPasswordReset("plaintext", h, time.Hour, testNow); !errors.Is(err, person.ErrInvalid) {
 		t.Errorf("anonymised: expected ErrInvalid, got %v", err)
 	}
 
 	pSusp := newPerson(t)
-	_ = pSusp.GloballySuspend("fraud", testNow)
+	_ = pSusp.GloballySuspend("fraud", testNow) // arch-test:ignore-err - test fixture setup
 	if err := pSusp.RequestPasswordReset("plaintext", h, time.Hour, testNow); !errors.Is(err, person.ErrInvalid) {
 		t.Errorf("suspended: expected ErrInvalid, got %v", err)
 	}
 }
 
 func TestRequestPasswordReset_NewRequestSupersedesOld(t *testing.T) {
+	t.Parallel()
 	p := newPerson(t)
 
 	first := mustResetHash(t, validResetHash)
-	_ = p.RequestPasswordReset("plaintext-first", first, time.Hour, testNow)
+	_ = p.RequestPasswordReset("plaintext-first", first, time.Hour, testNow) // arch-test:ignore-err - test fixture setup
 	_ = p.PullEvents()
 
 	second := mustResetHash(t, "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210")
@@ -371,13 +384,14 @@ func TestRequestPasswordReset_NewRequestSupersedesOld(t *testing.T) {
 }
 
 func TestConfirmPasswordReset_AppliesNewPasswordAndRotatesStamp(t *testing.T) {
+	t.Parallel()
 
 	p := newPerson(t)
 	originalStamp := p.SecurityStamp()
 	originalHash := p.PasswordHash()
 
 	h := mustResetHash(t, validResetHash)
-	_ = p.RequestPasswordReset("plaintext", h, time.Hour, testNow)
+	_ = p.RequestPasswordReset("plaintext", h, time.Hour, testNow) // arch-test:ignore-err - test fixture setup
 	_ = p.PullEvents()
 
 	newHash, _ := person.NewPasswordHash("$argon2id$v=19$m=19456,t=2,p=1$bmV3c2FsdG5ld3NhbHQ$bmV3aGFzaG5ld2hhc2huZXc")
@@ -407,10 +421,11 @@ func TestConfirmPasswordReset_AppliesNewPasswordAndRotatesStamp(t *testing.T) {
 }
 
 func TestConfirmPasswordReset_RejectsExpiredToken(t *testing.T) {
+	t.Parallel()
 
 	p := newPerson(t)
 	h := mustResetHash(t, validResetHash)
-	_ = p.RequestPasswordReset("plaintext", h, time.Hour, testNow)
+	_ = p.RequestPasswordReset("plaintext", h, time.Hour, testNow) // arch-test:ignore-err - test fixture setup
 
 	// Confirm AFTER the 1h TTL window — token expired.
 	expired := testNow.Add(2 * time.Hour)
@@ -425,9 +440,10 @@ func TestConfirmPasswordReset_RejectsExpiredToken(t *testing.T) {
 }
 
 func TestConfirmPasswordReset_RejectsMismatchedHash(t *testing.T) {
+	t.Parallel()
 	p := newPerson(t)
 	stored := mustResetHash(t, validResetHash)
-	_ = p.RequestPasswordReset("plaintext", stored, time.Hour, testNow)
+	_ = p.RequestPasswordReset("plaintext", stored, time.Hour, testNow) // arch-test:ignore-err - test fixture setup
 
 	wrong := mustResetHash(t, "0000000000000000000000000000000000000000000000000000000000000000")
 	newHash, _ := person.NewPasswordHash("$argon2id$v=19$m=19456,t=2,p=1$bmV3c2FsdG5ld3NhbHQ$bmV3aGFzaG5ld2hhc2huZXc")
@@ -441,6 +457,7 @@ func TestConfirmPasswordReset_RejectsMismatchedHash(t *testing.T) {
 }
 
 func TestConfirmPasswordReset_RejectsWhenNoPending(t *testing.T) {
+	t.Parallel()
 	p := newPerson(t)
 	h := mustResetHash(t, validResetHash)
 	newHash, _ := person.NewPasswordHash("$argon2id$v=19$m=19456,t=2,p=1$bmV3c2FsdG5ld3NhbHQ$bmV3aGFzaG5ld2hhc2huZXc")
@@ -450,9 +467,10 @@ func TestConfirmPasswordReset_RejectsWhenNoPending(t *testing.T) {
 }
 
 func TestCancelPasswordReset_ClearsPendingAndEmitsEvent(t *testing.T) {
+	t.Parallel()
 	p := newPerson(t)
 	h := mustResetHash(t, validResetHash)
-	_ = p.RequestPasswordReset("plaintext", h, time.Hour, testNow)
+	_ = p.RequestPasswordReset("plaintext", h, time.Hour, testNow) // arch-test:ignore-err - test fixture setup
 	_ = p.PullEvents()
 
 	if err := p.CancelPasswordReset("operator-cleared-stuck-reset", testNow); err != nil {
@@ -475,6 +493,7 @@ func TestCancelPasswordReset_ClearsPendingAndEmitsEvent(t *testing.T) {
 }
 
 func TestCancelPasswordReset_NoOp_WhenNoPending(t *testing.T) {
+	t.Parallel()
 	p := newPerson(t)
 	_ = p.PullEvents()
 	if err := p.CancelPasswordReset("preemptive", testNow); err != nil {
@@ -486,9 +505,10 @@ func TestCancelPasswordReset_NoOp_WhenNoPending(t *testing.T) {
 }
 
 func TestCancelPasswordReset_RequiresReason_WhenPending(t *testing.T) {
+	t.Parallel()
 	p := newPerson(t)
 	h := mustResetHash(t, validResetHash)
-	_ = p.RequestPasswordReset("plaintext", h, time.Hour, testNow)
+	_ = p.RequestPasswordReset("plaintext", h, time.Hour, testNow) // arch-test:ignore-err - test fixture setup
 	if err := p.CancelPasswordReset("", testNow); !errors.Is(err, person.ErrInvalid) {
 		t.Errorf("expected ErrInvalid on empty reason, got %v", err)
 	}
@@ -508,6 +528,7 @@ func mustEmailChangeHash(t *testing.T, raw string) person.EmailChangeTokenHash {
 }
 
 func TestRequestEmailChange_StoresPendingAndEmitsEvent(t *testing.T) {
+	t.Parallel()
 
 	p := newPerson(t)
 	_ = p.PullEvents()
@@ -557,6 +578,7 @@ func TestRequestEmailChange_StoresPendingAndEmitsEvent(t *testing.T) {
 }
 
 func TestRequestEmailChange_RejectsSameAddress(t *testing.T) {
+	t.Parallel()
 	p := newPerson(t)
 	h := mustEmailChangeHash(t, validEmailChangeHash)
 	if err := p.RequestEmailChange(p.Email(), "plaintext", h, time.Hour, testNow); !errors.Is(err, person.ErrInvalid) {
@@ -565,6 +587,7 @@ func TestRequestEmailChange_RejectsSameAddress(t *testing.T) {
 }
 
 func TestRequestEmailChange_RejectsZeroAndInvalid(t *testing.T) {
+	t.Parallel()
 	p := newPerson(t)
 	h := mustEmailChangeHash(t, validEmailChangeHash)
 
@@ -580,10 +603,11 @@ func TestRequestEmailChange_RejectsZeroAndInvalid(t *testing.T) {
 }
 
 func TestRequestEmailChange_NewSupersedesOld(t *testing.T) {
+	t.Parallel()
 	p := newPerson(t)
 
 	first := mustEmailChangeHash(t, validEmailChangeHash)
-	_ = p.RequestEmailChange(mustEmail(t, "first@b.io"), "plaintext-first", first, time.Hour, testNow)
+	_ = p.RequestEmailChange(mustEmail(t, "first@b.io"), "plaintext-first", first, time.Hour, testNow) // arch-test:ignore-err - test fixture setup
 	_ = p.PullEvents()
 
 	second := mustEmailChangeHash(t, "00000000aaaaaaaa00000000aaaaaaaa00000000aaaaaaaa00000000aaaaaaaa")
@@ -600,6 +624,7 @@ func TestRequestEmailChange_NewSupersedesOld(t *testing.T) {
 }
 
 func TestConfirmEmailChange_AppliesNewEmailAndRotatesStamp(t *testing.T) {
+	t.Parallel()
 
 	p := newPerson(t)
 	originalStamp := p.SecurityStamp()
@@ -607,7 +632,7 @@ func TestConfirmEmailChange_AppliesNewEmailAndRotatesStamp(t *testing.T) {
 
 	newE := mustEmail(t, "rotated@b.io")
 	h := mustEmailChangeHash(t, validEmailChangeHash)
-	_ = p.RequestEmailChange(newE, "plaintext", h, time.Hour, testNow)
+	_ = p.RequestEmailChange(newE, "plaintext", h, time.Hour, testNow) // arch-test:ignore-err - test fixture setup
 	_ = p.PullEvents()
 
 	if err := p.ConfirmEmailChange(h, testNow); err != nil {
@@ -640,9 +665,10 @@ func TestConfirmEmailChange_AppliesNewEmailAndRotatesStamp(t *testing.T) {
 }
 
 func TestConfirmEmailChange_RejectsExpired(t *testing.T) {
+	t.Parallel()
 	p := newPerson(t)
 	h := mustEmailChangeHash(t, validEmailChangeHash)
-	_ = p.RequestEmailChange(mustEmail(t, "new@b.io"), "plaintext", h, time.Hour, testNow)
+	_ = p.RequestEmailChange(mustEmail(t, "new@b.io"), "plaintext", h, time.Hour, testNow) // arch-test:ignore-err - test fixture setup
 
 	// Confirm AFTER the 1h TTL window — token expired.
 	expired := testNow.Add(2 * time.Hour)
@@ -655,9 +681,10 @@ func TestConfirmEmailChange_RejectsExpired(t *testing.T) {
 }
 
 func TestConfirmEmailChange_RejectsMismatch(t *testing.T) {
+	t.Parallel()
 	p := newPerson(t)
 	stored := mustEmailChangeHash(t, validEmailChangeHash)
-	_ = p.RequestEmailChange(mustEmail(t, "new@b.io"), "plaintext", stored, time.Hour, testNow)
+	_ = p.RequestEmailChange(mustEmail(t, "new@b.io"), "plaintext", stored, time.Hour, testNow) // arch-test:ignore-err - test fixture setup
 
 	wrong := mustEmailChangeHash(t, "fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffe")
 	if err := p.ConfirmEmailChange(wrong, testNow); !errors.Is(err, person.ErrInvalid) {
@@ -669,6 +696,7 @@ func TestConfirmEmailChange_RejectsMismatch(t *testing.T) {
 }
 
 func TestConfirmEmailChange_RejectsWhenNoPending(t *testing.T) {
+	t.Parallel()
 	p := newPerson(t)
 	h := mustEmailChangeHash(t, validEmailChangeHash)
 	if err := p.ConfirmEmailChange(h, testNow); !errors.Is(err, person.ErrInvalid) {
@@ -677,9 +705,10 @@ func TestConfirmEmailChange_RejectsWhenNoPending(t *testing.T) {
 }
 
 func TestCancelEmailChange_ClearsPendingAndEmitsEvent(t *testing.T) {
+	t.Parallel()
 	p := newPerson(t)
 	h := mustEmailChangeHash(t, validEmailChangeHash)
-	_ = p.RequestEmailChange(mustEmail(t, "new@b.io"), "plaintext", h, time.Hour, testNow)
+	_ = p.RequestEmailChange(mustEmail(t, "new@b.io"), "plaintext", h, time.Hour, testNow) // arch-test:ignore-err - test fixture setup
 	_ = p.PullEvents()
 
 	if err := p.CancelEmailChange("operator-cleared", testNow); err != nil {
@@ -698,6 +727,7 @@ func TestCancelEmailChange_ClearsPendingAndEmitsEvent(t *testing.T) {
 }
 
 func TestCancelEmailChange_NoOp_WhenNoPending(t *testing.T) {
+	t.Parallel()
 	p := newPerson(t)
 	_ = p.PullEvents()
 	if err := p.CancelEmailChange("preempt", testNow); err != nil {
@@ -711,6 +741,7 @@ func TestCancelEmailChange_NoOp_WhenNoPending(t *testing.T) {
 // ----- GloballySuspend ------------------------------------------------------
 
 func TestGloballySuspend_FlipsFlagAndRotatesStamp(t *testing.T) {
+	t.Parallel()
 
 	p := newPerson(t)
 	_ = p.PullEvents()
@@ -746,6 +777,7 @@ func TestGloballySuspend_FlipsFlagAndRotatesStamp(t *testing.T) {
 }
 
 func TestGloballySuspend_RequiresReason(t *testing.T) {
+	t.Parallel()
 	p := newPerson(t)
 	for _, raw := range []string{"", "   ", "\t"} {
 		if err := p.GloballySuspend(raw, testNow); !errors.Is(err, person.ErrInvalid) {
@@ -755,8 +787,9 @@ func TestGloballySuspend_RequiresReason(t *testing.T) {
 }
 
 func TestGloballySuspend_IdempotentOnSameReason(t *testing.T) {
+	t.Parallel()
 	p := newPerson(t)
-	_ = p.GloballySuspend("fraud", testNow)
+	_ = p.GloballySuspend("fraud", testNow) // arch-test:ignore-err - test fixture setup
 	_ = p.PullEvents()
 	if err := p.GloballySuspend("fraud", testNow); err != nil {
 		t.Errorf("idempotent same reason: %v", err)
@@ -767,8 +800,9 @@ func TestGloballySuspend_IdempotentOnSameReason(t *testing.T) {
 }
 
 func TestGloballySuspend_RejectedOnDifferentReason(t *testing.T) {
+	t.Parallel()
 	p := newPerson(t)
-	_ = p.GloballySuspend("fraud", testNow)
+	_ = p.GloballySuspend("fraud", testNow) // arch-test:ignore-err - test fixture setup
 	err := p.GloballySuspend("compliance", testNow)
 	if !errors.Is(err, person.ErrInvalid) {
 		t.Errorf("expected ErrInvalid on conflicting reason, got %v", err)
@@ -776,16 +810,18 @@ func TestGloballySuspend_RejectedOnDifferentReason(t *testing.T) {
 }
 
 func TestGloballySuspend_RejectedOnAnonymisedPerson(t *testing.T) {
+	t.Parallel()
 	p := newPerson(t)
-	_ = p.Anonymise(testNow)
+	_ = p.Anonymise(testNow) // arch-test:ignore-err - test fixture setup
 	if err := p.GloballySuspend("fraud", testNow); !errors.Is(err, person.ErrInvalid) {
 		t.Errorf("expected ErrInvalid on anonymised person, got %v", err)
 	}
 }
 
 func TestLiftGlobalSuspension_ClearsFlagAndEmitsEvent(t *testing.T) {
+	t.Parallel()
 	p := newPerson(t)
-	_ = p.GloballySuspend("temporary-investigation", testNow)
+	_ = p.GloballySuspend("temporary-investigation", testNow) // arch-test:ignore-err - test fixture setup
 	_ = p.PullEvents()
 
 	if err := p.LiftGlobalSuspension(testNow); err != nil {
@@ -811,6 +847,7 @@ func TestLiftGlobalSuspension_ClearsFlagAndEmitsEvent(t *testing.T) {
 }
 
 func TestLiftGlobalSuspension_NoOp_WhenNotSuspended(t *testing.T) {
+	t.Parallel()
 	p := newPerson(t)
 	_ = p.PullEvents()
 	if err := p.LiftGlobalSuspension(testNow); err != nil {
@@ -824,6 +861,7 @@ func TestLiftGlobalSuspension_NoOp_WhenNotSuspended(t *testing.T) {
 // ----- Anonymise (DPDP/GDPR) ------------------------------------------------
 
 func TestAnonymise_MarksAnonymisedAndScrubsFields(t *testing.T) {
+	t.Parallel()
 
 	p := newPerson(t)
 	_ = p.PullEvents()
@@ -854,6 +892,7 @@ func TestAnonymise_MarksAnonymisedAndScrubsFields(t *testing.T) {
 }
 
 func TestAnonymise_Idempotent(t *testing.T) {
+	t.Parallel()
 
 	p := newPerson(t)
 	_ = p.PullEvents()

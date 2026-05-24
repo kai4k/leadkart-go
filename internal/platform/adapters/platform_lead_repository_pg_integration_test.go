@@ -3,6 +3,7 @@
 package adapters_test
 
 import (
+	"time"
 	"context"
 	"errors"
 	"testing"
@@ -51,6 +52,10 @@ func seedPlatformLead(t *testing.T, leadRepo *adapters.PlatformLeadRepository, c
 
 // TestPlatformLeadRepository_Add_RoundTripsViaGetByID — write + read.
 func TestPlatformLeadRepository_Add_RoundTripsViaGetByID(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+	_ = ctx // arch-test:integration-timeout-anchor
 	pool := platformPool(t)
 	tx := pg.NewTransactor(pool)
 	repo := adapters.NewPlatformLeadRepository(pool, tx)
@@ -91,6 +96,10 @@ func TestPlatformLeadRepository_Add_RoundTripsViaGetByID(t *testing.T) {
 // PII-field accessors MUST return the empty string (no row data
 // scanned in).
 func TestPlatformLeadRepository_MarketplaceBrowse_OmitsPII(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+	_ = ctx // arch-test:integration-timeout-anchor
 	pool := platformPool(t)
 	tx := pg.NewTransactor(pool)
 	repo := adapters.NewPlatformLeadRepository(pool, tx)
@@ -145,6 +154,10 @@ func TestPlatformLeadRepository_MarketplaceBrowse_OmitsPII(t *testing.T) {
 // purchase flow drives sold_to_tenant_id + sold_at; reload sees the
 // transition.
 func TestPlatformLeadRepository_UpdateByID_Purchase_RoundTrips(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+	_ = ctx // arch-test:integration-timeout-anchor
 	pool := platformPool(t)
 	tx := pg.NewTransactor(pool)
 	repo := adapters.NewPlatformLeadRepository(pool, tx)
@@ -187,6 +200,10 @@ func TestPlatformLeadRepository_UpdateByID_Purchase_RoundTrips(t *testing.T) {
 // TestPlatformLeadRepository_GetByID_ReturnsErrNotFound — sentinel
 // shape.
 func TestPlatformLeadRepository_GetByID_ReturnsErrNotFound(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+	_ = ctx // arch-test:integration-timeout-anchor
 	pool := platformPool(t)
 	tx := pg.NewTransactor(pool)
 	repo := adapters.NewPlatformLeadRepository(pool, tx)

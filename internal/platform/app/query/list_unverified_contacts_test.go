@@ -83,7 +83,7 @@ func TestListUnverifiedContacts_HappyPath(t *testing.T) {
 	}
 
 	h := query.NewListUnverifiedContactsHandler(reader)
-	page, err := h.Handle(context.Background(), query.ListUnverifiedContactsQuery{
+	page, err := h.Handle(t.Context(), query.ListUnverifiedContactsQuery{
 		PageSize: 50,
 	})
 	if err != nil {
@@ -112,7 +112,7 @@ func TestListUnverifiedContacts_StateFilter(t *testing.T) {
 	}
 
 	h := query.NewListUnverifiedContactsHandler(reader)
-	page, err := h.Handle(context.Background(), query.ListUnverifiedContactsQuery{
+	page, err := h.Handle(t.Context(), query.ListUnverifiedContactsQuery{
 		State:    "new",
 		PageSize: 50,
 	})
@@ -141,7 +141,7 @@ func TestListUnverifiedContacts_PaginationHasMore(t *testing.T) {
 	reader := &fakeListReader{rows: rows}
 
 	h := query.NewListUnverifiedContactsHandler(reader)
-	page, err := h.Handle(context.Background(), query.ListUnverifiedContactsQuery{
+	page, err := h.Handle(t.Context(), query.ListUnverifiedContactsQuery{
 		PageSize: 3,
 	})
 	if err != nil {

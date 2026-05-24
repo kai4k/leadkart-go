@@ -3,6 +3,7 @@
 package adapters_test
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -26,9 +27,12 @@ import (
 // `(product_id, expiry_date DESC, id DESC) WHERE NOT is_deleted` —
 // matching the query's `ORDER BY expiry_date DESC, id DESC`).
 func TestKeysetBatchesPage_UsesIndexUnderRLS(t *testing.T) {
+	t.Parallel()
 	pool := repoFixture(t)
 	tid := seedTenant(t, pool)
 	ctx := tenantCtx(t, tid)
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
 
 	tx := pg.NewTransactor(pool)
 	products := adapters.NewProductRepository(pool, tx)

@@ -3,6 +3,7 @@
 package adapters_test
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -41,9 +42,12 @@ import (
 // or (b) the partial-index predicate drifted out of alignment with the
 // query predicate. Either warrants a manual EXPLAIN review.
 func TestKeysetProductsPage_UsesIndexUnderRLS(t *testing.T) {
+	t.Parallel()
 	pool := repoFixture(t)
 	tid := seedTenant(t, pool)
 	ctx := tenantCtx(t, tid)
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
 
 	tx := pg.NewTransactor(pool)
 	products := adapters.NewProductRepository(pool, tx)

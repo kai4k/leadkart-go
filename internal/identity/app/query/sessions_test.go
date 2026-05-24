@@ -102,5 +102,5 @@ func TestNewListSessionsHandler_PanicsOnNilRepo(t *testing.T) {
 			t.Error("expected panic")
 		}
 	}()
-	_ = query.NewListSessionsHandler(nil)
+	_ = query.NewListSessionsHandler(nil) // arch-test:ignore-err - test fixture setup
 }

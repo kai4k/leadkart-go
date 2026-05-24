@@ -1,7 +1,6 @@
 package query_test
 
 import (
-	"context"
 	"errors"
 	"testing"
 
@@ -28,12 +27,12 @@ func TestGetLeadCreditBalance_HappyPath(t *testing.T) {
 	if err := c.Topup(250, "seed", op, qNow()); err != nil {
 		t.Fatalf("topup: %v", err)
 	}
-	if err := credits.UpsertWithVersion(context.Background(), c); err != nil {
+	if err := credits.UpsertWithVersion(t.Context(), c); err != nil {
 		t.Fatalf("persist: %v", err)
 	}
 
 	h := query.NewGetLeadCreditBalanceHandler(credits)
-	out, err := h.Handle(context.Background(), query.GetLeadCreditBalanceQuery{
+	out, err := h.Handle(t.Context(), query.GetLeadCreditBalanceQuery{
 		TenantID: tenantID,
 	})
 	if err != nil {
@@ -55,7 +54,7 @@ func TestGetLeadCreditBalance_NoRowYet_TypedSentinel(t *testing.T) {
 	credits := platformtest.NewFakeLeadCreditRepository()
 	h := query.NewGetLeadCreditBalanceHandler(credits)
 
-	_, err := h.Handle(context.Background(), query.GetLeadCreditBalanceQuery{
+	_, err := h.Handle(t.Context(), query.GetLeadCreditBalanceQuery{
 		TenantID: leadcredit.TenantID(ids.NewV7().String()),
 	})
 	if !errors.Is(err, query.ErrCreditRowNotFound) {

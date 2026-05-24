@@ -1,5 +1,15 @@
 //go:build integration
 
+// arch-test:no-timeout-needed — startWiredPostgresForHTTP uses
+// context.WithTimeout(90s) internally; per-request HTTP uses t.Context();
+// fast-path polling loop is bounded by invalidationFastPathBudget (15s).
+//
+// arch-test:no-synctest — synctest is N/A here; the test exercises the
+// full HTTP roundtrip + Watermill subscriber + DB write path, which
+// crosses driver boundaries that testing/synctest's virtual clock
+// cannot model (the SQL driver + the HTTP transport own their own
+// real-time deadlines).
+
 // End-to-end test that closes the full PUB/SUB + cache-invalidation
 // loop for the SecurityStampCache:
 //
@@ -63,6 +73,7 @@ import (
 const invalidationFastPathBudget = 15 * time.Second
 
 func TestSecurityStampInvalidation_PasswordChange_Returns401WithinFastPath(t *testing.T) {
+	t.Parallel()
 	pool := startWiredPostgresForHTTP(t)
 	hybrid := newTestHybridCache(t)
 
@@ -202,6 +213,7 @@ func TestSecurityStampInvalidation_PasswordChange_Returns401WithinFastPath(t *te
 	var sawStale bool
 	var lastStatus int
 	var lastBody []byte
+	// arch-test:wait-justified — bounded poll for the async security-stamp invalidation; synctest is N/A because the path requires the real HTTP roundtrip + downstream subscriber + DB write
 	for time.Now().Before(deadline) {
 		got := getWithBearer(t, srv.URL+"/api/v1/auth/sessions", login.AccessToken)
 		lastStatus = got.status
@@ -213,7 +225,7 @@ func TestSecurityStampInvalidation_PasswordChange_Returns401WithinFastPath(t *te
 				break
 			}
 		}
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(50 * time.Millisecond) // arch-test:wait-justified — poll interval inside deadline-bounded loop awaiting async EDA cascade (forwarder→router→subscriber)
 	}
 	if !sawStale {
 		t.Fatalf(

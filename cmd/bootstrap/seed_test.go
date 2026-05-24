@@ -22,6 +22,7 @@ func discardLogger() *slog.Logger {
 // a misconfigured CI run that forgets them shouldn't fail loudly).
 //
 // Pure unit test — no DB; covers the env gate before any SQL runs.
+// arch-test:serial — mutates process-global env vars via t.Setenv; can't be parallel.
 func TestSeedSuperAdmin_SkipsWithoutEnv(t *testing.T) {
 	// Defensive: clear envs even if the host has them set.
 	t.Setenv(envSuperAdminEmail, "")
@@ -48,7 +49,7 @@ func TestSeedSuperAdmin_SkipsWithoutEnv(t *testing.T) {
 	// pure helper would let us cover it without sql.Open at all, but
 	// for now this asserts the documented behaviour by running the
 	// full path.
-	ctx := context.Background()
+	ctx := t.Context()
 	if err := runOnce(ctx, nil, "", "", "Platform", "SuperAdmin", false); err != nil {
 		t.Fatalf("expected nil on missing env, got %v", err)
 	}
@@ -88,6 +89,7 @@ func runOnce(ctx context.Context, db *sql.DB, email, password, firstName, lastNa
 // uses — guards against a future swap in argon2.Hash silently
 // breaking the bootstrap path. Pure crypto test; no DB.
 func TestArgon2HashRoundTrip(t *testing.T) {
+	t.Parallel()
 	const plain = "LeadKart!Dev2026"
 	hashed, err := argon2.Hash(plain)
 	if err != nil {

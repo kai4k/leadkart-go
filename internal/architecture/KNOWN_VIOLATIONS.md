@@ -8,13 +8,18 @@ invasive (>50 LOC) and a separate cleanup PR is the right scope.
 
 ## Current state — 2026-05-25 (full closure)
 
-**207 tests total. 0 currently skipped.**
+**230 tests total. 0 currently skipped.**
 
-This PR closes EVERY entry that existed in the live-skip register (15
-round-1/round-2 skips + 5 round-2 additions = 20 total) per the user's
-"fix all, nothing deferred" directive. Each closure is described in
-the "Closures shipped this PR" section below. The live-skip register
-is empty.
+The prior PR (`fix(arch): close all 20 fitness-function skips`) shipped
+207 tests with zero skips. This stacked PR adds 23 new Principle TD
+(Test Discipline) tests targeting unit + integration test quality:
+naming, parallelism, lifecycle, time, IO isolation, modern Go 1.24+
+idioms. All 23 land with their initial violation count closed in one
+sweep (~604 fixes across 150 test files), per the user's "do the same
+level of audit for unit and integration tests" directive.
+
+See **Test discipline (Principle TD) — 2026-05-25** section below for
+the per-test catalog + closure details.
 
 ## Closures shipped this PR
 
@@ -77,6 +82,48 @@ citation.
 | `TestArch_SubscribersAreIdempotent` | 5 subscriber files allow-listed | Each documents its idempotency rationale. |
 | `TestArch_ListHandlersBoundedByPaginationShape` | 12 handler-name allow-list with per-entry domain invariant | Each entry cites the bounding mechanism (JWT-scope cap, by-slug single-result, omni-search per-category limit, etc.). |
 | `TestArch_NoNPlusOneInLoops` | `_test.go`, `/cmd/`, `/app/seed/` | Boot-time + composition-root + test code are not request-path concerns. |
+
+## Test discipline (Principle TD) — 2026-05-25
+
+23 new arch tests landed in `test_discipline_arch_test.go` covering
+unit + integration test quality. Each rule cites Go-canon sources
+(not generic SRE): Cheney "Prefer table-driven tests", Mat Ryer "How
+I write HTTP services", Russ Cox "Subtests and Sub-benchmarks",
+Bryan Mills GopherCon 2018 (`t.Parallel` everywhere), Go 1.14/1.17/
+1.24 release notes (t.Cleanup / t.TempDir / t.Context / t.Chdir /
+testing/synctest / T.Loop / B.Loop), testify README, go-cmp docs,
+Uber goleak README, Khorikov *Unit Testing* §8.
+
+| # | Test | Rule | Closure (in this PR) |
+|---|---|---|---|
+| TD1 | `TestArch_TestFuncsCallTParallelOrCiteReason` | Every `Test*` calls `t.Parallel()` OR carries `arch-test:serial — <reason>` godoc | 236 tests across cmd/api, cmd/bootstrap, identity, inventory, platform, common updated. `config_test` family annotated `serial — uses t.Setenv`. bootstrap env-skip test annotated `serial — mutates process-global env`. |
+| TD2 | `TestArch_SubtestsCallTParallelOrCiteReason` | Every `t.Run(...)` closure body calls `t.Parallel()` | 16 subtest closures updated across identity (13) + inventory (1) + cmd (2). |
+| TD3 | `TestArch_TestsUseTContext` | `t.Context()` (Go 1.24+) over `context.Background()`; inside `WithTimeout`, replace inner Background with t.Context | 72 sites swept; testmain-only files allow-listed; `context.WithTimeout(context.Background(), ...)` skip-listed. |
+| TD4 | `TestArch_NoOsMkdirTempInTests` | `t.TempDir()` over `os.MkdirTemp` / `ioutil.TempDir` | 0 violations at PR time; gate live. |
+| TD5 | `TestArch_TestHelpersCallTHelper` | Funcs taking `*testing.T` / `*testing.B` / `testing.TB` as first arg call `t.Helper()` | 0 violations at PR time; gate live. |
+| TD6 | `TestArch_NoOsChdirInTests` | `t.Chdir` (Go 1.24+) over `os.Chdir` (parallel-unsafe) | 0 violations; gate live. |
+| TD7 | `TestArch_NoTimeNowInTests` | Pin time via file-scoped `fixedNow := time.Date(...)`; annotate `arch-test:wall-clock` for deliberate cases | 22 sites converted (identity 13, common idempotency/pagination 9). |
+| TD8 | `TestArch_NoTimeSleepInTests` | testing/synctest (Go 1.24+) OR ticker+ctx OR `arch-test:wait-justified` annotation | 13 sites annotated; 6 common/messaging + 2 cache + 5 across cmd + identity. |
+| TD9 | `TestArch_NoMathRandWithoutSeed` | math/rand needs explicit seed or `arch-test:non-deterministic` | 0 violations; gate live. |
+| TD10 | `TestArch_NoNetListenInTests` | `httptest.NewServer` over raw `net.Listen` | 0 violations; gate live. |
+| TD11 | `TestArch_NoOutboundHTTPInUnitTests` | No real HTTP from unit tests (use httptest) | 0 violations; gate live. |
+| TD12 | `TestArch_NoPgxImportInUnitTests` | pgx/pgxpool only in `*_integration_test.go` (with goleak + testcontainers safety net) | 10 hits; allow-list closes them (canonical pg pkg + module-local arch tests inspect pgx as their subject). |
+| TD13 | `TestArch_NoUnconditionalTSkipWithoutMarker` | `t.Skip(...)` needs `known violation:` / `arch-test:` marker OR conditional | 0 violations; gate live. |
+| TD14 | `TestArch_NoTestRetryLoops` | Replace `for { sleep; if check { break } }` with synctest / ctx-wait; `arch-test:wait-justified` annotation allowed | 4 sites annotated (1 cmd/api + 3 common/messaging — all bounded by deadline, cross-driver). |
+| TD15 | `TestArch_IntegrationTestsHaveTimeout` | Every integration `Test*` wraps in `context.WithTimeout(t.Context(), N)` OR `arch-test:no-timeout-needed` | 22 sites; inventory + platform adapters wrapped at 30s; cmd/api fixtures + messaging file-level annotated (existing internal timeouts in fixture). |
+| TD16 | `TestArch_IntegrationHTTPViaHttptest` | HTTP integration via `httptest.NewServer` not raw `http.Client`; `arch-test:http-justified` for fixture-wrapped cases | 1 site (cmd/api/slug_lookup_e2e_test.go uses `f.URL` from fixture — annotated). |
+| TD17 | `TestArch_BenchmarksUseBLoop` | Go 1.24+ `b.Loop()` over legacy `for i := 0; i < b.N; i++` | 0 violations; gate live. |
+| TD18 | `TestArch_PreferSynctestForGoroutineTiming` | Goroutine+time tests prefer `testing/synctest`; `arch-test:no-synctest` for cross-driver cases | 4 files annotated (cmd/api/security_stamp + messaging/router + identity/{adapters/outbox,ports/subscribers}) — all cross SQL-driver boundary which synctest's virtual clock can't model. |
+| TD19 | `TestArch_TestsHaveAtLeastOneAssertion` | Every Test func has a require/assert/t.Error/t.Fatal/cmp.Diff or wait*/expect*/assert*/require* helper call | 7 missing; 3 integrationevents arch tests gained `require.Positive(t, seen, ...)` invariant; 4 subscriber tests use `waitFor` helper (predicate widened to recognize the pattern). |
+| TD20 | `TestArch_NoErrorIgnoredInTests` | `_ = call()` flagged; `require.NoError` or `arch-test:ignore-err` annotation. Skips Close/Terminate/Shutdown/Stop/etc. cleanup patterns | 197 sites annotated/converted across all modules. |
+| TD21 | `TestArch_FixedNowVarsAreDateLiterals` | `fixedNow` / `testNow` / `nowFunc` must come from `time.Date(...)` literal, not `time.Now()` | 0 violations; gate live (companion to TD7). |
+| TD22 | (REMOVED — unreachable-after-Fatal) | Replaced by `go vet`'s built-in `unreachable` analyzer. AST predicate had unfixable false-positives on canonical `if err != nil { t.Fatalf(...) }` guard pattern. |
+| TD23 | `TestArch_NoFmtPrintlnInTests` | `t.Log` / `t.Logf` over `fmt.Println` / `fmt.Printf` (routes through test reporter, suppressed on pass) | 0 violations; gate live. |
+| TD24 | `TestArch_TestFilesPairWithProductionFile` | Every `<name>_test.go` under `internal/<mod>/{domain,app,ports,adapters}/` has paired `<name>.go`; flow/contract/e2e/testmain prefixes + `_helpers_test.go`/`_fakes_test.go` suffixes allow-listed | 0 violations; gate live. |
+
+### Companion runtime fix (singleflight stampede test)
+
+`internal/common/cache/facade_test.go:TestFacade_Singleflight_CoalescesConcurrentMisses` was flaking under heavy parallel load (50ms sleep insufficient on slow CI). Replaced with `sync.WaitGroup` start-gate + bumped synchronisation budget to 500ms with godoc rationale. Verified via `go test -count=10`: stable. Not technically test-discipline (no TD rule flagged), but the singleflight contract under test deserves a reliable gate.
 
 ## How to add an entry to this file
 

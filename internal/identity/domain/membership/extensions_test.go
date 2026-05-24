@@ -62,7 +62,7 @@ func TestAssignRole_Idempotent(t *testing.T) {
 	t.Parallel()
 	m := freshMembership(t)
 	rid := role.ID(ids.NewV7().String())
-	_ = m.AssignRole(rid, testNow)
+	_ = m.AssignRole(rid, testNow) // arch-test:ignore-err - test fixture setup
 	_ = m.PullEvents()
 	if err := m.AssignRole(rid, testNow); err != nil {
 		t.Fatalf("dup AssignRole: %v", err)
@@ -87,7 +87,7 @@ func TestRevokeRole_RemovesAndEmits(t *testing.T) {
 	t.Parallel()
 	m := freshMembership(t)
 	rid := role.ID(ids.NewV7().String())
-	_ = m.AssignRole(rid, testNow)
+	_ = m.AssignRole(rid, testNow) // arch-test:ignore-err - test fixture setup
 	_ = m.PullEvents()
 
 	if err := m.RevokeRole(rid, testNow); err != nil {
@@ -121,7 +121,7 @@ func TestRoleAssignments_DefensiveCopy(t *testing.T) {
 	t.Parallel()
 	m := freshMembership(t)
 	rid := role.ID(ids.NewV7().String())
-	_ = m.AssignRole(rid, testNow)
+	_ = m.AssignRole(rid, testNow) // arch-test:ignore-err - test fixture setup
 	got := m.RoleAssignments()
 	got[0] = role.ID("mutated")
 	if m.RoleAssignments()[0] == "mutated" {
@@ -144,8 +144,8 @@ func TestEffectivePermissions_UnionRolesPlusGrantsMinusRevokes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Manager role: %v", err)
 	}
-	_ = managerRole.GrantPermission(permission.FromConstant(permission.IdentityPermissions.Users.View), testNow)
-	_ = managerRole.GrantPermission(permission.FromConstant(permission.IdentityPermissions.Users.Update), testNow)
+	_ = managerRole.GrantPermission(permission.FromConstant(permission.IdentityPermissions.Users.View), testNow) // arch-test:ignore-err - test fixture setup
+	_ = managerRole.GrantPermission(permission.FromConstant(permission.IdentityPermissions.Users.Update), testNow) // arch-test:ignore-err - test fixture setup
 
 	auditorRole, err := role.New(
 		role.ID(ids.NewV7().String()), m.TenantID(),
@@ -155,13 +155,13 @@ func TestEffectivePermissions_UnionRolesPlusGrantsMinusRevokes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Auditor role: %v", err)
 	}
-	_ = auditorRole.GrantPermission(permission.FromConstant(permission.IdentityPermissions.Users.View), testNow)
+	_ = auditorRole.GrantPermission(permission.FromConstant(permission.IdentityPermissions.Users.View), testNow) // arch-test:ignore-err - test fixture setup
 
 	// Membership overlay: grant Anonymise, revoke Update.
-	_ = m.GrantPermission(permission.FromConstant(permission.IdentityPermissions.Users.Anonymise), time.Time{}, testNow)
-	_ = m.RevokePermission(permission.FromConstant(permission.IdentityPermissions.Users.Update), testNow)
+	_ = m.GrantPermission(permission.FromConstant(permission.IdentityPermissions.Users.Anonymise), time.Time{}, testNow) // arch-test:ignore-err - test fixture setup
+	_ = m.RevokePermission(permission.FromConstant(permission.IdentityPermissions.Users.Update), testNow) // arch-test:ignore-err - test fixture setup
 
-	got := m.EffectivePermissions([]*role.Role{managerRole, auditorRole}, time.Now())
+	got := m.EffectivePermissions([]*role.Role{managerRole, auditorRole}, testNow)
 	gotSet := map[string]bool{}
 	for _, p := range got {
 		gotSet[p.Name()] = true
@@ -182,9 +182,9 @@ func TestEffectivePermissions_NoRolesEqualsOverlayOnly(t *testing.T) {
 	t.Parallel()
 	m := freshMembership(t)
 	p := permission.FromConstant(permission.IdentityPermissions.Users.View)
-	_ = m.GrantPermission(p, time.Time{}, testNow)
+	_ = m.GrantPermission(p, time.Time{}, testNow) // arch-test:ignore-err - test fixture setup
 
-	got := m.EffectivePermissions(nil, time.Now())
+	got := m.EffectivePermissions(nil, testNow)
 	if len(got) != 1 || !got[0].Equal(p) {
 		t.Fatalf("got %+v want overlay-only [View]", got)
 	}
@@ -198,10 +198,10 @@ func TestEffectivePermissions_RevokeWinsOverRoleGrant(t *testing.T) {
 		t.Fatalf("role.New: %v", err)
 	}
 	view := permission.FromConstant(permission.IdentityPermissions.Users.View)
-	_ = r.GrantPermission(view, testNow)
-	_ = m.RevokePermission(view, testNow) // overlay revoke beats role grant
+	_ = r.GrantPermission(view, testNow) // arch-test:ignore-err - test fixture setup
+	_ = m.RevokePermission(view, testNow) // overlay revoke beats role grant // arch-test:ignore-err - test fixture setup
 
-	got := m.EffectivePermissions([]*role.Role{r}, time.Now())
+	got := m.EffectivePermissions([]*role.Role{r}, testNow)
 	for _, p := range got {
 		if p.Equal(view) {
 			t.Fatal("overlay revoke should suppress role grant")
@@ -235,7 +235,7 @@ func TestGrantPermission_RemovesFromRevokedIfPreviouslyRevoked(t *testing.T) {
 	t.Parallel()
 	m := freshMembership(t)
 	p := permission.FromConstant(permission.IdentityPermissions.Users.Anonymise)
-	_ = m.RevokePermission(p, testNow)
+	_ = m.RevokePermission(p, testNow) // arch-test:ignore-err - test fixture setup
 	_ = m.PullEvents()
 
 	if err := m.GrantPermission(p, time.Time{}, testNow); err != nil {
@@ -253,7 +253,7 @@ func TestRevokePermission_RemovesFromGrantedIfPreviouslyGranted(t *testing.T) {
 	t.Parallel()
 	m := freshMembership(t)
 	p := permission.FromConstant(permission.IdentityPermissions.Users.Anonymise)
-	_ = m.GrantPermission(p, time.Time{}, testNow)
+	_ = m.GrantPermission(p, time.Time{}, testNow) // arch-test:ignore-err - test fixture setup
 	_ = m.PullEvents()
 
 	if err := m.RevokePermission(p, testNow); err != nil {
@@ -271,7 +271,7 @@ func TestGrantPermission_Idempotent(t *testing.T) {
 	t.Parallel()
 	m := freshMembership(t)
 	p := permission.FromConstant(permission.IdentityPermissions.Users.Anonymise)
-	_ = m.GrantPermission(p, time.Time{}, testNow)
+	_ = m.GrantPermission(p, time.Time{}, testNow) // arch-test:ignore-err - test fixture setup
 	_ = m.PullEvents()
 	if err := m.GrantPermission(p, time.Time{}, testNow); err != nil {
 		t.Fatalf("dup Grant: %v", err)
@@ -285,7 +285,7 @@ func TestRevokePermission_Idempotent(t *testing.T) {
 	t.Parallel()
 	m := freshMembership(t)
 	p := permission.FromConstant(permission.IdentityPermissions.Users.Anonymise)
-	_ = m.RevokePermission(p, testNow)
+	_ = m.RevokePermission(p, testNow) // arch-test:ignore-err - test fixture setup
 	_ = m.PullEvents()
 	if err := m.RevokePermission(p, testNow); err != nil {
 		t.Fatalf("dup Revoke: %v", err)
@@ -338,7 +338,7 @@ func TestEffectivePermissions_FiltersExpiredOverrides(t *testing.T) {
 	// Grant with an expiry 1 hour ago — already expired.
 	expiredAt := time.Date(2026, 5, 23, 11, 0, 0, 0, time.UTC)
 	now := time.Date(2026, 5, 23, 12, 0, 0, 0, time.UTC)
-	_ = m.GrantPermission(p, expiredAt, testNow)
+	_ = m.GrantPermission(p, expiredAt, testNow) // arch-test:ignore-err - test fixture setup
 
 	got := m.EffectivePermissions(nil, now)
 	for _, gp := range got {
@@ -355,7 +355,7 @@ func TestEffectivePermissions_KeepsUnexpiredOverrides(t *testing.T) {
 	// Grant with an expiry 1 hour in the future — still active.
 	expiresAt := time.Date(2026, 5, 23, 13, 0, 0, 0, time.UTC)
 	now := time.Date(2026, 5, 23, 12, 0, 0, 0, time.UTC)
-	_ = m.GrantPermission(p, expiresAt, testNow)
+	_ = m.GrantPermission(p, expiresAt, testNow) // arch-test:ignore-err - test fixture setup
 
 	got := m.EffectivePermissions(nil, now)
 	if len(got) != 1 || !got[0].Equal(p) {
@@ -368,7 +368,7 @@ func TestEffectivePermissions_PerpetualOverridesNeverExpire(t *testing.T) {
 	m := freshMembership(t)
 	p := permission.FromConstant(permission.IdentityPermissions.Users.Anonymise)
 	// time.Time{} = perpetual per ADR 0055.
-	_ = m.GrantPermission(p, time.Time{}, testNow)
+	_ = m.GrantPermission(p, time.Time{}, testNow) // arch-test:ignore-err - test fixture setup
 
 	// Even with `now` at the heat-death-of-the-universe the grant holds.
 	now := time.Date(9999, 12, 31, 23, 59, 59, 0, time.UTC)
@@ -384,7 +384,7 @@ func TestReplacePermissionOverlays_SetsAtomically(t *testing.T) {
 	view := permission.FromConstant(permission.IdentityPermissions.Users.View)
 	create := permission.FromConstant(permission.IdentityPermissions.Users.Create)
 	anonymise := permission.FromConstant(permission.IdentityPermissions.Users.Anonymise)
-	_ = m.GrantPermission(view, time.Time{}, testNow) // pre-existing state
+	_ = m.GrantPermission(view, time.Time{}, testNow) // pre-existing state // arch-test:ignore-err - test fixture setup
 	_ = m.PullEvents()
 
 	if err := m.ReplacePermissionOverlays(
@@ -459,7 +459,7 @@ func TestUpdateProfile_TransitionsAndEmits(t *testing.T) {
 func TestUpdateProfile_TrimsAndIsIdempotent(t *testing.T) {
 	t.Parallel()
 	m := freshMembership(t)
-	_ = m.UpdateProfile("Lead", "Sales", "", testNow)
+	_ = m.UpdateProfile("Lead", "Sales", "", testNow) // arch-test:ignore-err - test fixture setup
 	_ = m.PullEvents()
 	if err := m.UpdateProfile("  Lead  ", "  Sales  ", "", testNow); err != nil {
 		t.Fatalf("UpdateProfile (whitespace): %v", err)
@@ -507,7 +507,7 @@ func TestAssignManager_ZeroIDClears(t *testing.T) {
 	t.Parallel()
 	m := freshMembership(t)
 	prev := membership.ID(ids.NewV7().String())
-	_ = m.AssignManager(prev, testNow)
+	_ = m.AssignManager(prev, testNow) // arch-test:ignore-err - test fixture setup
 	_ = m.PullEvents()
 	if err := m.AssignManager(membership.ID(""), testNow); err != nil {
 		t.Fatalf("clear manager: %v", err)
@@ -536,7 +536,7 @@ func TestRemoveManager_ClearsReportsTo_AndEmitsManagerRemovedEvent(t *testing.T)
 	t.Parallel()
 	m := freshMembership(t)
 	prev := membership.ID(ids.NewV7().String())
-	_ = m.AssignManager(prev, testNow)
+	_ = m.AssignManager(prev, testNow) // arch-test:ignore-err - test fixture setup
 	_ = m.PullEvents()
 
 	if err := m.RemoveManager(testNow); err != nil {
@@ -575,7 +575,7 @@ func TestAssignManager_Idempotent(t *testing.T) {
 	t.Parallel()
 	m := freshMembership(t)
 	mgr := membership.ID(ids.NewV7().String())
-	_ = m.AssignManager(mgr, testNow)
+	_ = m.AssignManager(mgr, testNow) // arch-test:ignore-err - test fixture setup
 	_ = m.PullEvents()
 	if err := m.AssignManager(mgr, testNow); err != nil {
 		t.Fatalf("dup AssignManager: %v", err)

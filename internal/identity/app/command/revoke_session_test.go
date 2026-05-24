@@ -97,7 +97,7 @@ func TestRevokeSession_Succeeds(t *testing.T) {
 	repo := newFakeFamilyRepo()
 	pid := person.ID("p1")
 	f := newFamily(t, pid, "iphone-15")
-	_ = repo.Add(t.Context(), f)
+	_ = repo.Add(t.Context(), f) // arch-test:ignore-err - test fixture setup
 
 	h := command.NewRevokeSessionHandler(repo, func() time.Time { return revokeNow })
 	err := h.Handle(t.Context(), command.RevokeSessionCommand{
@@ -123,7 +123,7 @@ func TestRevokeSession_CrossPerson_ReturnsNotFound(t *testing.T) {
 	owner := person.ID("p-owner")
 	attacker := person.ID("p-attacker")
 	f := newFamily(t, owner, "iphone-15")
-	_ = repo.Add(t.Context(), f)
+	_ = repo.Add(t.Context(), f) // arch-test:ignore-err - test fixture setup
 
 	h := command.NewRevokeSessionHandler(repo, func() time.Time { return revokeNow })
 	err := h.Handle(t.Context(), command.RevokeSessionCommand{
@@ -146,7 +146,7 @@ func TestRevokeSession_AlreadyRevoked_IsIdempotent(t *testing.T) {
 	if err := f.Revoke("logout", revokeNow); err != nil {
 		t.Fatalf("pre-revoke: %v", err)
 	}
-	_ = repo.Add(t.Context(), f)
+	_ = repo.Add(t.Context(), f) // arch-test:ignore-err - test fixture setup
 
 	h := command.NewRevokeSessionHandler(repo, func() time.Time { return revokeNow })
 	err := h.Handle(t.Context(), command.RevokeSessionCommand{
@@ -192,8 +192,8 @@ func TestRevokeAllSessions_RevokesAll(t *testing.T) {
 	pid := person.ID("p1")
 	f1 := newFamily(t, pid, "device-a")
 	f2 := mustFamily(t, refreshtoken.FamilyID("33333333-3333-3333-3333-333333333333"), pid, "device-b")
-	_ = repo.Add(t.Context(), f1)
-	_ = repo.Add(t.Context(), f2)
+	_ = repo.Add(t.Context(), f1) // arch-test:ignore-err - test fixture setup
+	_ = repo.Add(t.Context(), f2) // arch-test:ignore-err - test fixture setup
 
 	h := command.NewRevokeAllSessionsHandler(repo, func() time.Time { return revokeNow })
 	out, err := h.Handle(t.Context(), command.RevokeAllSessionsCommand{
@@ -216,8 +216,8 @@ func TestRevokeAllSessions_ExceptKeepsOneAlive(t *testing.T) {
 	pid := person.ID("p1")
 	current := newFamily(t, pid, "current-device")
 	other := mustFamily(t, refreshtoken.FamilyID("33333333-3333-3333-3333-333333333333"), pid, "other-device")
-	_ = repo.Add(t.Context(), current)
-	_ = repo.Add(t.Context(), other)
+	_ = repo.Add(t.Context(), current) // arch-test:ignore-err - test fixture setup
+	_ = repo.Add(t.Context(), other) // arch-test:ignore-err - test fixture setup
 
 	h := command.NewRevokeAllSessionsHandler(repo, func() time.Time { return revokeNow })
 	out, err := h.Handle(t.Context(), command.RevokeAllSessionsCommand{
@@ -260,7 +260,7 @@ func TestNewRevokeSessionHandler_PanicsOnNilRepo(t *testing.T) {
 			t.Error("expected panic on nil families repo")
 		}
 	}()
-	_ = command.NewRevokeSessionHandler(nil, nil)
+	_ = command.NewRevokeSessionHandler(nil, nil) // arch-test:ignore-err - test fixture setup
 }
 
 func TestNewRevokeAllSessionsHandler_PanicsOnNilRepo(t *testing.T) {
@@ -270,7 +270,7 @@ func TestNewRevokeAllSessionsHandler_PanicsOnNilRepo(t *testing.T) {
 			t.Error("expected panic on nil families repo")
 		}
 	}()
-	_ = command.NewRevokeAllSessionsHandler(nil, nil)
+	_ = command.NewRevokeAllSessionsHandler(nil, nil) // arch-test:ignore-err - test fixture setup
 }
 
 func mustFamily(t *testing.T, id refreshtoken.FamilyID, personID person.ID, deviceLabel string) *refreshtoken.Family {

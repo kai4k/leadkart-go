@@ -1,7 +1,6 @@
 package command_test
 
 import (
-	"context"
 	"errors"
 	"testing"
 	"time"
@@ -22,7 +21,7 @@ func seedNewContact(t *testing.T, contacts *platformtest.FakeUnverifiedContactRe
 	if err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	if err := contacts.Add(context.Background(), c); err != nil {
+	if err := contacts.Add(t.Context(), c); err != nil {
 		t.Fatalf("seed add: %v", err)
 	}
 	return cID, agentID
@@ -38,7 +37,7 @@ func TestLogVerificationCall_NoAnswerLeavesContactInCall(t *testing.T) {
 	cID, agentID := seedNewContact(t, contacts)
 
 	h := command.NewLogVerificationCallHandler(uow, calls, contacts, nowFunc, func() verificationcall.ID { return verificationcall.ID(ids.NewV7().String()) })
-	out, err := h.Handle(context.Background(), command.LogVerificationCallCommand{
+	out, err := h.Handle(t.Context(), command.LogVerificationCallCommand{
 		ContactID: cID,
 		Outcome:   verificationcall.OutcomeNoAnswer,
 		Notes:     "Rang out",
@@ -51,7 +50,7 @@ func TestLogVerificationCall_NoAnswerLeavesContactInCall(t *testing.T) {
 		t.Error("expected CallID")
 	}
 	// Contact promoted to InCall by the handler's StartCall promotion.
-	loaded, _ := contacts.GetByID(context.Background(), cID)
+	loaded, _ := contacts.GetByID(t.Context(), cID)
 	if loaded.State() != unverifiedcontact.StateInCall {
 		t.Errorf("state=%q want in_call", loaded.State())
 	}
@@ -70,7 +69,7 @@ func TestLogVerificationCall_BusyMarksContactBusyWithWindow(t *testing.T) {
 	cbEnd := cbStart.Add(30 * time.Minute)
 
 	h := command.NewLogVerificationCallHandler(uow, calls, contacts, nowFunc, func() verificationcall.ID { return verificationcall.ID(ids.NewV7().String()) })
-	_, err := h.Handle(context.Background(), command.LogVerificationCallCommand{
+	_, err := h.Handle(t.Context(), command.LogVerificationCallCommand{
 		ContactID:             cID,
 		Outcome:               verificationcall.OutcomeBusy,
 		Notes:                 "Customer asked to call later",
@@ -81,7 +80,7 @@ func TestLogVerificationCall_BusyMarksContactBusyWithWindow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("handle: %v", err)
 	}
-	loaded, _ := contacts.GetByID(context.Background(), cID)
+	loaded, _ := contacts.GetByID(t.Context(), cID)
 	if loaded.State() != unverifiedcontact.StateBusy {
 		t.Errorf("state=%q want busy", loaded.State())
 	}
@@ -98,7 +97,7 @@ func TestLogVerificationCall_ContactNotFound(t *testing.T) {
 	uow := platformtest.NewFakeUnitOfWork()
 
 	h := command.NewLogVerificationCallHandler(uow, calls, contacts, nowFunc, func() verificationcall.ID { return verificationcall.ID(ids.NewV7().String()) })
-	_, err := h.Handle(context.Background(), command.LogVerificationCallCommand{
+	_, err := h.Handle(t.Context(), command.LogVerificationCallCommand{
 		ContactID: unverifiedcontact.ID("01900000-0000-7000-8000-000000000999"),
 		Outcome:   verificationcall.OutcomeNoAnswer,
 		LoggedBy:  unverifiedcontact.MembershipID(ids.NewV7().String()),

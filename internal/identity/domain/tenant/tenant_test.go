@@ -47,6 +47,7 @@ func newID(t *testing.T) tenant.ID {
 // ----- Factory: NewTenant ---------------------------------------------------
 
 func TestNewTenant_AcceptsValidInputs(t *testing.T) {
+	t.Parallel()
 
 	id := newID(t)
 	s := mustSlug(t, "acme-pharma")
@@ -84,6 +85,7 @@ func TestNewTenant_AcceptsValidInputs(t *testing.T) {
 }
 
 func TestNewTenant_EmitsTenantRegisteredEvent(t *testing.T) {
+	t.Parallel()
 
 	id := newID(t)
 	tn, err := tenant.New(id, mustSlug(t, "acme"), "Acme", "Acme", mustEmail(t, "a@b.io"), testNow)
@@ -161,6 +163,7 @@ func TestNewTenant_RejectsZeroEmail(t *testing.T) {
 // ----- UpdateProfile --------------------------------------------------------
 
 func TestUpdateProfile_ChangesNamesAndEmits(t *testing.T) {
+	t.Parallel()
 
 	tn := newPendingTenant(t)
 	_ = tn.PullEvents()
@@ -192,6 +195,7 @@ func TestUpdateProfile_ChangesNamesAndEmits(t *testing.T) {
 }
 
 func TestUpdateProfile_NoOp_WhenUnchanged(t *testing.T) {
+	t.Parallel()
 	tn := newPendingTenant(t)
 	_ = tn.PullEvents()
 	if err := tn.UpdateProfile(tn.LegalName(), tn.DisplayName(), testNow); err != nil {
@@ -203,6 +207,7 @@ func TestUpdateProfile_NoOp_WhenUnchanged(t *testing.T) {
 }
 
 func TestUpdateProfile_RejectsEmptyAndOverlong(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name        string
 		legalName   string
@@ -216,6 +221,7 @@ func TestUpdateProfile_RejectsEmptyAndOverlong(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			tn := newPendingTenant(t)
 			err := tn.UpdateProfile(tc.legalName, tc.displayName, testNow)
 			if !errors.Is(err, tenant.ErrInvalid) {
@@ -226,6 +232,7 @@ func TestUpdateProfile_RejectsEmptyAndOverlong(t *testing.T) {
 }
 
 func TestUpdateProfile_AllowedOnSuspendedTenant(t *testing.T) {
+	t.Parallel()
 	tn := newSuspendedTenant(t)
 	_ = tn.PullEvents()
 	if err := tn.UpdateProfile("Renamed Pharma", "Renamed", testNow); err != nil {
@@ -234,6 +241,7 @@ func TestUpdateProfile_AllowedOnSuspendedTenant(t *testing.T) {
 }
 
 func TestActivate_FromPending_TransitionsToActive(t *testing.T) {
+	t.Parallel()
 
 	tn := newPendingTenant(t)
 	_ = tn.PullEvents()
@@ -258,6 +266,7 @@ func TestActivate_FromPending_TransitionsToActive(t *testing.T) {
 }
 
 func TestActivate_FromActive_NoOp(t *testing.T) {
+	t.Parallel()
 
 	tn := newActiveTenant(t)
 	_ = tn.PullEvents()
@@ -271,6 +280,7 @@ func TestActivate_FromActive_NoOp(t *testing.T) {
 }
 
 func TestActivate_FromSuspended_TransitionsToActive(t *testing.T) {
+	t.Parallel()
 
 	tn := newSuspendedTenant(t)
 	_ = tn.PullEvents()
@@ -293,6 +303,7 @@ func TestActivate_FromSuspended_TransitionsToActive(t *testing.T) {
 // ----- State transitions: Suspend -------------------------------------------
 
 func TestSuspend_FromActive_TransitionsToSuspended(t *testing.T) {
+	t.Parallel()
 
 	tn := newActiveTenant(t)
 	_ = tn.PullEvents()
@@ -321,6 +332,7 @@ func TestSuspend_FromActive_TransitionsToSuspended(t *testing.T) {
 }
 
 func TestSuspend_FromPending_TransitionsToSuspended(t *testing.T) {
+	t.Parallel()
 
 	tn := newPendingTenant(t)
 	_ = tn.PullEvents()
@@ -334,6 +346,7 @@ func TestSuspend_FromPending_TransitionsToSuspended(t *testing.T) {
 }
 
 func TestSuspend_FromSuspended_NoOp(t *testing.T) {
+	t.Parallel()
 
 	tn := newSuspendedTenant(t)
 	_ = tn.PullEvents()
@@ -347,6 +360,7 @@ func TestSuspend_FromSuspended_NoOp(t *testing.T) {
 }
 
 func TestSuspend_RejectsEmptyReason(t *testing.T) {
+	t.Parallel()
 
 	tn := newActiveTenant(t)
 	if err := tn.Suspend("", testNow); err == nil {
@@ -357,6 +371,7 @@ func TestSuspend_RejectsEmptyReason(t *testing.T) {
 // ----- PullEvents -----------------------------------------------------------
 
 func TestPullEvents_DrainsAndClears(t *testing.T) {
+	t.Parallel()
 
 	tn := newPendingTenant(t)
 	first := tn.PullEvents()
@@ -474,6 +489,7 @@ func TestNewStatutory_AcceptsMatchedGSTPAN(t *testing.T) {
 }
 
 func TestUpdateStatutory_FirstDeclaration_EmitsEvent(t *testing.T) {
+	t.Parallel()
 
 	tn := newActiveTenant(t)
 	_ = tn.PullEvents()
@@ -507,13 +523,14 @@ func TestUpdateStatutory_FirstDeclaration_EmitsEvent(t *testing.T) {
 }
 
 func TestUpdateStatutory_NoOp_WhenUnchanged(t *testing.T) {
+	t.Parallel()
 	tn := newActiveTenant(t)
 	s, _ := tenant.NewStatutory(
 		mustGST(t, "29ABCPE1234F1Z5"),
 		mustPAN(t, "ABCPE1234F"),
 		druglicence.Number{},
 	)
-	_ = tn.UpdateStatutory(s, testNow)
+	_ = tn.UpdateStatutory(s, testNow) // arch-test:ignore-err - test fixture setup
 	_ = tn.PullEvents()
 
 	if err := tn.UpdateStatutory(s, testNow); err != nil {
@@ -525,6 +542,7 @@ func TestUpdateStatutory_NoOp_WhenUnchanged(t *testing.T) {
 }
 
 func TestUpdateStatutory_AllowedInAllNonTerminalStatuses(t *testing.T) {
+	t.Parallel()
 	s, _ := tenant.NewStatutory(mustGST(t, "29ABCPE1234F1Z5"), mustPAN(t, "ABCPE1234F"), druglicence.Number{})
 	for _, factory := range []struct {
 		name string
@@ -535,6 +553,7 @@ func TestUpdateStatutory_AllowedInAllNonTerminalStatuses(t *testing.T) {
 		{"suspended", newSuspendedTenant},
 	} {
 		t.Run(factory.name, func(t *testing.T) {
+			t.Parallel()
 			tn := factory.fn(t)
 			if err := tn.UpdateStatutory(s, testNow); err != nil {
 				t.Errorf("UpdateStatutory on %s tenant: %v", factory.name, err)
@@ -544,8 +563,9 @@ func TestUpdateStatutory_AllowedInAllNonTerminalStatuses(t *testing.T) {
 }
 
 func TestUpdateStatutory_RejectedOnDeletedTenant(t *testing.T) {
+	t.Parallel()
 	tn := newPendingTenant(t)
-	_ = tn.HardDelete(testNow)
+	_ = tn.HardDelete(testNow) // arch-test:ignore-err - test fixture setup
 	s, _ := tenant.NewStatutory(mustGST(t, "29ABCPE1234F1Z5"), mustPAN(t, "ABCPE1234F"), druglicence.Number{})
 	if err := tn.UpdateStatutory(s, testNow); !errors.Is(err, tenant.ErrInvalid) {
 		t.Errorf("expected ErrInvalid on deleted tenant, got %v", err)
@@ -573,6 +593,7 @@ func mustAddress(t *testing.T) postaladdress.Address {
 }
 
 func TestUpdateAdminContact_FirstDeclaration_EmitsEvent(t *testing.T) {
+	t.Parallel()
 
 	tn := newActiveTenant(t)
 	_ = tn.PullEvents()
@@ -602,9 +623,10 @@ func TestUpdateAdminContact_FirstDeclaration_EmitsEvent(t *testing.T) {
 }
 
 func TestUpdateAdminContact_NoOp_WhenUnchanged(t *testing.T) {
+	t.Parallel()
 	tn := newActiveTenant(t)
 	c := tenant.NewAdminContact(mustPhone(t, "+919876543210"), mustAddress(t))
-	_ = tn.UpdateAdminContact(c, testNow)
+	_ = tn.UpdateAdminContact(c, testNow) // arch-test:ignore-err - test fixture setup
 	_ = tn.PullEvents()
 
 	if err := tn.UpdateAdminContact(c, testNow); err != nil {
@@ -616,8 +638,9 @@ func TestUpdateAdminContact_NoOp_WhenUnchanged(t *testing.T) {
 }
 
 func TestUpdateAdminContact_RejectedOnDeletedTenant(t *testing.T) {
+	t.Parallel()
 	tn := newPendingTenant(t)
-	_ = tn.HardDelete(testNow)
+	_ = tn.HardDelete(testNow) // arch-test:ignore-err - test fixture setup
 	c := tenant.NewAdminContact(mustPhone(t, "+919876543210"), mustAddress(t))
 	if err := tn.UpdateAdminContact(c, testNow); !errors.Is(err, tenant.ErrInvalid) {
 		t.Errorf("expected ErrInvalid on deleted tenant, got %v", err)
@@ -625,6 +648,7 @@ func TestUpdateAdminContact_RejectedOnDeletedTenant(t *testing.T) {
 }
 
 func TestUpdateAdminContact_PartialUpdate(t *testing.T) {
+	t.Parallel()
 	// Only phone, no address (address is zero) — still a valid contact
 	// declaration; tenant's address is just "not declared".
 	tn := newActiveTenant(t)
@@ -697,6 +721,7 @@ func TestDefaultPasswordPolicy_MeetsAllFloors(t *testing.T) {
 }
 
 func TestUpdateSettings_FirstDeclaration_EmitsEvent(t *testing.T) {
+	t.Parallel()
 
 	tn := newActiveTenant(t)
 	_ = tn.PullEvents()
@@ -727,9 +752,10 @@ func TestUpdateSettings_FirstDeclaration_EmitsEvent(t *testing.T) {
 }
 
 func TestUpdateSettings_NoOp_WhenUnchanged(t *testing.T) {
+	t.Parallel()
 	tn := newActiveTenant(t)
 	s := tenant.NewSettings(tenant.DefaultPasswordPolicy())
-	_ = tn.UpdateSettings(s, testNow)
+	_ = tn.UpdateSettings(s, testNow) // arch-test:ignore-err - test fixture setup
 	_ = tn.PullEvents()
 	if err := tn.UpdateSettings(s, testNow); err != nil {
 		t.Fatalf("UpdateSettings noop: %v", err)
@@ -740,8 +766,9 @@ func TestUpdateSettings_NoOp_WhenUnchanged(t *testing.T) {
 }
 
 func TestUpdateSettings_RejectedOnDeletedTenant(t *testing.T) {
+	t.Parallel()
 	tn := newPendingTenant(t)
-	_ = tn.HardDelete(testNow)
+	_ = tn.HardDelete(testNow) // arch-test:ignore-err - test fixture setup
 	s := tenant.NewSettings(tenant.DefaultPasswordPolicy())
 	if err := tn.UpdateSettings(s, testNow); !errors.Is(err, tenant.ErrInvalid) {
 		t.Errorf("expected ErrInvalid on deleted, got %v", err)
@@ -821,6 +848,7 @@ func TestDefaultDisplayPreferences_IsIndiaTuned(t *testing.T) {
 }
 
 func TestUpdateDisplayPreferences_FirstDeclaration_EmitsEvent(t *testing.T) {
+	t.Parallel()
 
 	tn := newActiveTenant(t)
 	_ = tn.PullEvents()
@@ -850,9 +878,10 @@ func TestUpdateDisplayPreferences_FirstDeclaration_EmitsEvent(t *testing.T) {
 }
 
 func TestUpdateDisplayPreferences_NoOp_WhenUnchanged(t *testing.T) {
+	t.Parallel()
 	tn := newActiveTenant(t)
 	d := tenant.DefaultDisplayPreferences()
-	_ = tn.UpdateDisplayPreferences(d, testNow)
+	_ = tn.UpdateDisplayPreferences(d, testNow) // arch-test:ignore-err - test fixture setup
 	_ = tn.PullEvents()
 	if err := tn.UpdateDisplayPreferences(d, testNow); err != nil {
 		t.Fatalf("UpdateDisplayPreferences noop: %v", err)
@@ -863,8 +892,9 @@ func TestUpdateDisplayPreferences_NoOp_WhenUnchanged(t *testing.T) {
 }
 
 func TestUpdateDisplayPreferences_RejectedOnDeletedTenant(t *testing.T) {
+	t.Parallel()
 	tn := newPendingTenant(t)
-	_ = tn.HardDelete(testNow)
+	_ = tn.HardDelete(testNow) // arch-test:ignore-err - test fixture setup
 	d := tenant.DefaultDisplayPreferences()
 	if err := tn.UpdateDisplayPreferences(d, testNow); !errors.Is(err, tenant.ErrInvalid) {
 		t.Errorf("expected ErrInvalid on deleted, got %v", err)
@@ -874,6 +904,7 @@ func TestUpdateDisplayPreferences_RejectedOnDeletedTenant(t *testing.T) {
 // ----- Deletion lifecycle ---------------------------------------------------
 
 func TestMarkForDeletion_FromActive_TransitionsToPendingDeletion(t *testing.T) {
+	t.Parallel()
 
 	tn := newActiveTenant(t)
 	_ = tn.PullEvents()
@@ -901,6 +932,7 @@ func TestMarkForDeletion_FromActive_TransitionsToPendingDeletion(t *testing.T) {
 }
 
 func TestMarkForDeletion_FromSuspended_Allowed(t *testing.T) {
+	t.Parallel()
 	tn := newSuspendedTenant(t)
 	_ = tn.PullEvents()
 	if err := tn.MarkForDeletion("billing-exit", testNow); err != nil {
@@ -912,6 +944,7 @@ func TestMarkForDeletion_FromSuspended_Allowed(t *testing.T) {
 }
 
 func TestMarkForDeletion_FromPending_Rejected(t *testing.T) {
+	t.Parallel()
 	tn := newPendingTenant(t)
 	err := tn.MarkForDeletion("never-onboarded", testNow)
 	if !errors.Is(err, tenant.ErrInvalid) {
@@ -920,6 +953,7 @@ func TestMarkForDeletion_FromPending_Rejected(t *testing.T) {
 }
 
 func TestMarkForDeletion_RequiresReason(t *testing.T) {
+	t.Parallel()
 	tn := newActiveTenant(t)
 	for _, raw := range []string{"", "   ", "\t"} {
 		if err := tn.MarkForDeletion(raw, testNow); !errors.Is(err, tenant.ErrInvalid) {
@@ -929,8 +963,9 @@ func TestMarkForDeletion_RequiresReason(t *testing.T) {
 }
 
 func TestMarkForDeletion_IdempotentOnSameReason(t *testing.T) {
+	t.Parallel()
 	tn := newActiveTenant(t)
-	_ = tn.MarkForDeletion("exit", testNow)
+	_ = tn.MarkForDeletion("exit", testNow) // arch-test:ignore-err - test fixture setup
 	_ = tn.PullEvents()
 	if err := tn.MarkForDeletion("exit", testNow); err != nil {
 		t.Errorf("idempotent same reason: %v", err)
@@ -941,8 +976,9 @@ func TestMarkForDeletion_IdempotentOnSameReason(t *testing.T) {
 }
 
 func TestMarkForDeletion_RejectedOnDifferentReason(t *testing.T) {
+	t.Parallel()
 	tn := newActiveTenant(t)
-	_ = tn.MarkForDeletion("billing", testNow)
+	_ = tn.MarkForDeletion("billing", testNow) // arch-test:ignore-err - test fixture setup
 	err := tn.MarkForDeletion("compliance", testNow)
 	if !errors.Is(err, tenant.ErrInvalid) {
 		t.Errorf("expected ErrInvalid on conflicting reason, got %v", err)
@@ -950,9 +986,10 @@ func TestMarkForDeletion_RejectedOnDifferentReason(t *testing.T) {
 }
 
 func TestRestoreFromDeletion_FromPendingDeletion_TransitionsToActive(t *testing.T) {
+	t.Parallel()
 
 	tn := newActiveTenant(t)
-	_ = tn.MarkForDeletion("oops-undo-me", testNow)
+	_ = tn.MarkForDeletion("oops-undo-me", testNow) // arch-test:ignore-err - test fixture setup
 	_ = tn.PullEvents()
 
 	if err := tn.RestoreFromDeletion(testNow); err != nil {
@@ -977,6 +1014,7 @@ func TestRestoreFromDeletion_FromPendingDeletion_TransitionsToActive(t *testing.
 }
 
 func TestRestoreFromDeletion_FromActive_NoOp(t *testing.T) {
+	t.Parallel()
 	tn := newActiveTenant(t)
 	_ = tn.PullEvents()
 	if err := tn.RestoreFromDeletion(testNow); err != nil {
@@ -988,9 +1026,10 @@ func TestRestoreFromDeletion_FromActive_NoOp(t *testing.T) {
 }
 
 func TestHardDelete_FromPendingDeletion_TransitionsToDeleted(t *testing.T) {
+	t.Parallel()
 
 	tn := newActiveTenant(t)
-	_ = tn.MarkForDeletion("exit", testNow)
+	_ = tn.MarkForDeletion("exit", testNow) // arch-test:ignore-err - test fixture setup
 	_ = tn.PullEvents()
 
 	if err := tn.HardDelete(testNow); err != nil {
@@ -1017,6 +1056,7 @@ func TestHardDelete_FromPendingDeletion_TransitionsToDeleted(t *testing.T) {
 }
 
 func TestHardDelete_FromPending_AdminAbandonment(t *testing.T) {
+	t.Parallel()
 	// Tenant never activated — admin abandonment hard-deletes directly
 	// without a grace window since tenant never operated.
 	tn := newPendingTenant(t)
@@ -1030,6 +1070,7 @@ func TestHardDelete_FromPending_AdminAbandonment(t *testing.T) {
 }
 
 func TestHardDelete_FromActive_RejectedWithoutMarking(t *testing.T) {
+	t.Parallel()
 	tn := newActiveTenant(t)
 	if err := tn.HardDelete(testNow); !errors.Is(err, tenant.ErrInvalid) {
 		t.Errorf("expected ErrInvalid hard-deleting active tenant, got %v", err)
@@ -1037,8 +1078,9 @@ func TestHardDelete_FromActive_RejectedWithoutMarking(t *testing.T) {
 }
 
 func TestHardDelete_Idempotent(t *testing.T) {
+	t.Parallel()
 	tn := newPendingTenant(t)
-	_ = tn.HardDelete(testNow)
+	_ = tn.HardDelete(testNow) // arch-test:ignore-err - test fixture setup
 	_ = tn.PullEvents()
 	if err := tn.HardDelete(testNow); err != nil {
 		t.Errorf("idempotent hard-delete: %v", err)
@@ -1049,16 +1091,18 @@ func TestHardDelete_Idempotent(t *testing.T) {
 }
 
 func TestActivate_RejectedFromPendingDeletion(t *testing.T) {
+	t.Parallel()
 	tn := newActiveTenant(t)
-	_ = tn.MarkForDeletion("exit", testNow)
+	_ = tn.MarkForDeletion("exit", testNow) // arch-test:ignore-err - test fixture setup
 	if err := tn.Activate(testNow); !errors.Is(err, tenant.ErrInvalid) {
 		t.Errorf("expected ErrInvalid activating pending-deletion tenant, got %v", err)
 	}
 }
 
 func TestSuspend_RejectedFromPendingDeletion(t *testing.T) {
+	t.Parallel()
 	tn := newActiveTenant(t)
-	_ = tn.MarkForDeletion("exit", testNow)
+	_ = tn.MarkForDeletion("exit", testNow) // arch-test:ignore-err - test fixture setup
 	if err := tn.Suspend("billing", testNow); !errors.Is(err, tenant.ErrInvalid) {
 		t.Errorf("expected ErrInvalid suspending pending-deletion tenant, got %v", err)
 	}

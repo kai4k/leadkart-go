@@ -111,6 +111,7 @@ func createAppRole(t *testing.T, db *sql.DB) {
 // TestMigrationsApplyCleanly verifies the migration set lands without error
 // against a fresh Postgres 17 instance — the floor for everything else.
 func TestMigrationsApplyCleanly(t *testing.T) {
+	t.Parallel()
 	dsn := startPostgres(t)
 	applyMigrations(t, dsn)
 
@@ -235,6 +236,7 @@ func TestMigrationsApplyCleanly(t *testing.T) {
 // multi-tenancy model: with `app.tenant_id = X`, SELECT against
 // identity.tenant_memberships returns ONLY tenant X's rows.
 func TestRLSIsolatesTenants(t *testing.T) {
+	t.Parallel()
 	dsn := startPostgres(t)
 	applyMigrations(t, dsn)
 
@@ -321,7 +323,7 @@ func TestRLSIsolatesTenants(t *testing.T) {
 	if seenTenant != tenantA {
 		t.Fatalf("tenantA saw tenant_id %s, want %s", seenTenant, tenantA)
 	}
-	_ = tx.Rollback()
+	_ = tx.Rollback() // arch-test:ignore-err — cleanup; tx scope ends here
 
 	// Platform context (under leadkart_app role): see both rows.
 	tx, err = db.BeginTx(ctx, nil)
@@ -340,7 +342,7 @@ func TestRLSIsolatesTenants(t *testing.T) {
 	if seen != 2 {
 		t.Fatalf("platform scope: saw %d memberships, want 2", seen)
 	}
-	_ = tx.Rollback()
+	_ = tx.Rollback() // arch-test:ignore-err — cleanup; tx scope ends here
 
 	// No GUC set, leadkart_app role: zero rows (fail-closed).
 	tx, err = db.BeginTx(ctx, nil)
@@ -356,13 +358,14 @@ func TestRLSIsolatesTenants(t *testing.T) {
 	if seen != 0 {
 		t.Fatalf("neutral scope: saw %d memberships, want 0 (fail-closed)", seen)
 	}
-	_ = tx.Rollback()
+	_ = tx.Rollback() // arch-test:ignore-err — cleanup; tx scope ends here
 }
 
 // TestSingleActiveMembershipInvariant verifies the partial unique index
 // blocks a Person from holding two concurrent Active Memberships across
 // tenants — the database-level enforcement of the login-flow invariant.
 func TestSingleActiveMembershipInvariant(t *testing.T) {
+	t.Parallel()
 	dsn := startPostgres(t)
 	applyMigrations(t, dsn)
 

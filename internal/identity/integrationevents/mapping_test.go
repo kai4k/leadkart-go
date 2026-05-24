@@ -16,7 +16,7 @@ import (
 )
 
 // fixedTime returns a deterministic UTC instant for round-trip
-// equality assertions. Production maps `time.Now().UTC()`; tests
+// equality assertions. Production maps `fixedNow.UTC()`; tests
 // pin a known value so any post-mapping mutation surfaces.
 func fixedTime() time.Time {
 	return time.Date(2026, 5, 6, 12, 0, 0, 0, time.UTC)

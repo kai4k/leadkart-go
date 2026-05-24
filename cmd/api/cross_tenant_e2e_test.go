@@ -1,5 +1,9 @@
 //go:build integration
 
+// arch-test:no-timeout-needed — newE2EFixture → startWiredPostgresForHTTP uses
+// context.WithTimeout(90s) internally + testcontainers wait strategy bounds
+// container startup; per-request HTTP uses t.Context() (auto-canceled on test end).
+
 // Cross-tenant + platform-gate end-to-end tests for the post-A.3 HTTP
 // surface. Wires the FULL Identity Application against testcontainers
 // Postgres + the real ServeMux via httptest, then exercises the
@@ -285,6 +289,7 @@ func decodeError(t *testing.T, body []byte) ports.ErrorResponse {
 // repository sees the request — the JWT tenant_id claim doesn't
 // match the URL path tenant.
 func TestE2E_CrossTenant_TenantRouteRejectedAsForbidden(t *testing.T) {
+	t.Parallel()
 	f := newE2EFixture(t)
 	tenantA := f.registerAndLogin(t, "acme")
 	tenantB := f.registerAndLogin(t, "globex")
@@ -311,6 +316,7 @@ func TestE2E_CrossTenant_TenantRouteRejectedAsForbidden(t *testing.T) {
 // silently filters at the DB level; the handler can't distinguish
 // "wrong tenant" from "doesn't exist").
 func TestE2E_CrossTenant_UserRouteHiddenAsNotFound(t *testing.T) {
+	t.Parallel()
 	f := newE2EFixture(t)
 	tenantA := f.registerAndLogin(t, "acme")
 	tenantB := f.registerAndLogin(t, "globex")
@@ -364,6 +370,7 @@ func TestE2E_CrossTenant_UserRouteHiddenAsNotFound(t *testing.T) {
 // TestE2E_CrossTenant_RoleRouteHiddenAsNotFound — Tenant A trying to
 // read or mutate Tenant B's roles. Same RLS-collapse-to-404 rule.
 func TestE2E_CrossTenant_RoleRouteHiddenAsNotFound(t *testing.T) {
+	t.Parallel()
 	f := newE2EFixture(t)
 	tenantA := f.registerAndLogin(t, "acme")
 	tenantB := f.registerAndLogin(t, "globex")
@@ -417,6 +424,7 @@ func TestE2E_CrossTenant_RoleRouteHiddenAsNotFound(t *testing.T) {
 // collapses to 404 (NOT 403 — defeats family-id enumeration via
 // ownership probing).
 func TestE2E_CrossTenant_SessionRevokeBlocked(t *testing.T) {
+	t.Parallel()
 	f := newE2EFixture(t)
 	tenantA := f.registerAndLogin(t, "acme")
 	tenantB := f.registerAndLogin(t, "globex")
@@ -445,7 +453,7 @@ func TestE2E_CrossTenant_SessionRevokeBlocked(t *testing.T) {
 	// Tenant A's family must STILL be active (B's attempt was a no-op).
 	listAAgain := f.authedJSON(t, http.MethodGet, "/api/v1/auth/sessions", tenantA.AccessToken, nil)
 	var sessA2 ports.ListSessionsResponse
-	_ = json.Unmarshal(listAAgain.body, &sessA2)
+	_ = json.Unmarshal(listAAgain.body, &sessA2) // arch-test:ignore-err — best-effort decode; len assertion below catches body shape failures
 	if len(sessA2.Sessions) != 1 {
 		t.Errorf("Tenant A's session count after attack = %d, want 1", len(sessA2.Sessions))
 	}
@@ -457,6 +465,7 @@ func TestE2E_CrossTenant_SessionRevokeBlocked(t *testing.T) {
 // route MUST return 403 to a tenant-Admin token. Sweeps the most
 // important platform endpoints in one test for breadth.
 func TestE2E_PlatformGate_TenantAdminBlocked(t *testing.T) {
+	t.Parallel()
 	f := newE2EFixture(t)
 	tenantA := f.registerAndLogin(t, "acme")
 
@@ -486,6 +495,7 @@ func TestE2E_PlatformGate_TenantAdminBlocked(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
 			resp := f.authedJSON(t, c.method, c.path, tenantA.AccessToken, c.body)
 			if resp.status != http.StatusForbidden {
 				t.Errorf("%s %s: status %d, want 403; body=%s",
@@ -498,6 +508,7 @@ func TestE2E_PlatformGate_TenantAdminBlocked(t *testing.T) {
 // TestE2E_Auth_NoToken_Returns401 — authenticated routes without a
 // Bearer token return 401, not 404 or 200.
 func TestE2E_Auth_NoToken_Returns401(t *testing.T) {
+	t.Parallel()
 	f := newE2EFixture(t)
 	cases := []struct {
 		method, path string
@@ -509,6 +520,7 @@ func TestE2E_Auth_NoToken_Returns401(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.method+" "+c.path, func(t *testing.T) {
+			t.Parallel()
 			resp := f.authedJSON(t, c.method, c.path, "", nil)
 			if resp.status != http.StatusUnauthorized {
 				t.Errorf("status: got %d, want 401; body=%s", resp.status, resp.body)
@@ -524,6 +536,7 @@ func TestE2E_Auth_NoToken_Returns401(t *testing.T) {
 // routes. This is the "is_platform=true" bypass the
 // RequireTenantContext middleware honours.
 func TestE2E_PlatformOperator_BypassesTenantGate(t *testing.T) {
+	t.Parallel()
 	f := newE2EFixture(t)
 	tenantA := f.registerAndLogin(t, "acme")
 	platformTok := f.mintPlatformToken(t, "")
@@ -556,6 +569,7 @@ func TestE2E_PlatformOperator_BypassesTenantGate(t *testing.T) {
 // TestE2E_PlatformOperator_ListsAllTenants — operator's
 // /api/v1/platform/tenants returns BOTH tenants (cross-tenant view).
 func TestE2E_PlatformOperator_ListsAllTenants(t *testing.T) {
+	t.Parallel()
 	f := newE2EFixture(t)
 	tenantA := f.registerAndLogin(t, "acme")
 	tenantB := f.registerAndLogin(t, "globex")
@@ -594,6 +608,7 @@ func TestE2E_PlatformOperator_ListsAllTenants(t *testing.T) {
 //                       no tenant, no membership (TenantID claim is
 //                       synthetic, no DB row)
 func TestE2E_PlatformStats_ReflectsState(t *testing.T) {
+	t.Parallel()
 	f := newE2EFixture(t)
 	admins := []registeredTenant{
 		f.registerAndLogin(t, "acme"),
@@ -635,6 +650,7 @@ func TestE2E_PlatformStats_ReflectsState(t *testing.T) {
 // multi-tenancy.md "Identity model: at most one Active Membership
 // per Person" + the partial unique index.
 func TestE2E_RegisterTenant_SameAdminEmailRejected(t *testing.T) {
+	t.Parallel()
 	f := newE2EFixture(t)
 	tenantA := f.registerAndLogin(t, "acme")
 
@@ -665,6 +681,7 @@ func TestE2E_RegisterTenant_SameAdminEmailRejected(t *testing.T) {
 // proves the new endpoints work end-to-end through real DB +
 // adapter, not just unit-test fakes.
 func TestE2E_TenantAdmin_SelfServicePath(t *testing.T) {
+	t.Parallel()
 	f := newE2EFixture(t)
 	tenantA := f.registerAndLogin(t, "acme")
 
@@ -716,6 +733,7 @@ func TestE2E_TenantAdmin_SelfServicePath(t *testing.T) {
 // TestE2E_Impersonation_Lifecycle — create + list + end. Single
 // operator, single session.
 func TestE2E_Impersonation_Lifecycle(t *testing.T) {
+	t.Parallel()
 	f := newE2EFixture(t)
 	tenantA := f.registerAndLogin(t, "acme")
 	platformTok := f.mintPlatformToken(t, "")
@@ -773,7 +791,7 @@ func TestE2E_Impersonation_Lifecycle(t *testing.T) {
 	list2 := f.authedJSON(t, http.MethodGet,
 		"/api/v1/platform/impersonation/sessions", platformTok, nil)
 	var lr2 ports.ListImpersonationSessionsResponse
-	_ = json.Unmarshal(list2.body, &lr2)
+	_ = json.Unmarshal(list2.body, &lr2) // arch-test:ignore-err — best-effort decode; loop below tolerates empty slice
 	for _, s := range lr2.Sessions {
 		if s.SessionID == cr.SessionID {
 			t.Error("ended session still appears in list")
@@ -785,6 +803,7 @@ func TestE2E_Impersonation_Lifecycle(t *testing.T) {
 // must fail at 422 impersonation_invalid per the session VO's
 // audit gate.
 func TestE2E_Impersonation_RejectsShortReason(t *testing.T) {
+	t.Parallel()
 	f := newE2EFixture(t)
 	tenantA := f.registerAndLogin(t, "acme")
 	platformTok := f.mintPlatformToken(t, "")
@@ -808,6 +827,7 @@ func TestE2E_Impersonation_RejectsShortReason(t *testing.T) {
 // TestE2E_Impersonation_OperatorIsolation — operator A creates a
 // session; operator B lists their own → does NOT see A's session.
 func TestE2E_Impersonation_OperatorIsolation(t *testing.T) {
+	t.Parallel()
 	f := newE2EFixture(t)
 	tenantA := f.registerAndLogin(t, "acme")
 	operatorA := f.mintPlatformToken(t, ids.NewV7().String())
@@ -825,7 +845,7 @@ func TestE2E_Impersonation_OperatorIsolation(t *testing.T) {
 		t.Fatalf("create: %d body %s", create.status, create.body)
 	}
 	var cr ports.CreateImpersonationSessionResponse
-	_ = json.Unmarshal(create.body, &cr)
+	_ = json.Unmarshal(create.body, &cr) // arch-test:ignore-err — best-effort decode; create.status checked above
 
 	// B lists their sessions — must not see A's.
 	list := f.authedJSON(t, http.MethodGet,
@@ -834,7 +854,7 @@ func TestE2E_Impersonation_OperatorIsolation(t *testing.T) {
 		t.Fatalf("list: %d body %s", list.status, list.body)
 	}
 	var lr ports.ListImpersonationSessionsResponse
-	_ = json.Unmarshal(list.body, &lr)
+	_ = json.Unmarshal(list.body, &lr) // arch-test:ignore-err — best-effort decode; list.status checked above
 	for _, s := range lr.Sessions {
 		if s.SessionID == cr.SessionID {
 			t.Errorf("operator B saw operator A's session %s", s.SessionID)
@@ -847,6 +867,7 @@ func TestE2E_Impersonation_OperatorIsolation(t *testing.T) {
 // TestE2E_ChangePassword_RejectsWrongCurrent — authenticated, but
 // supplies wrong current password → 401 incorrect_current_password.
 func TestE2E_ChangePassword_RejectsWrongCurrent(t *testing.T) {
+	t.Parallel()
 	f := newE2EFixture(t)
 	tenantA := f.registerAndLogin(t, "acme")
 
@@ -868,6 +889,7 @@ func TestE2E_ChangePassword_RejectsWrongCurrent(t *testing.T) {
 // TestE2E_ResetPassword_BadTokenRejected — submitting reset-password
 // with an invalid token → 400 reset_token_invalid. Anonymous endpoint.
 func TestE2E_ResetPassword_BadTokenRejected(t *testing.T) {
+	t.Parallel()
 	f := newE2EFixture(t)
 	resp := f.postJSON(t, "/api/v1/auth/reset-password", ports.ResetPasswordRequest{
 		Token:       "totally-bogus-token-not-issued-by-us",
@@ -886,6 +908,7 @@ func TestE2E_ResetPassword_BadTokenRejected(t *testing.T) {
 // (Auth0/Okta canon: never disclose account existence). Same wire
 // shape as known-email path.
 func TestE2E_RequestPasswordReset_SilentSuccess(t *testing.T) {
+	t.Parallel()
 	f := newE2EFixture(t)
 	resp := f.postJSON(t, "/api/v1/auth/request-password-reset",
 		ports.RequestPasswordResetRequest{

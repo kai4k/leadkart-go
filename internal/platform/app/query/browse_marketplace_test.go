@@ -1,7 +1,6 @@
 package query_test
 
 import (
-	"context"
 	"testing"
 	"time"
 
@@ -48,7 +47,7 @@ func seedLead(t *testing.T, leads *platformtest.FakePlatformLeadRepository) plat
 	if err != nil {
 		t.Fatalf("seed lead: %v", err)
 	}
-	if err := leads.Add(context.Background(), l); err != nil {
+	if err := leads.Add(t.Context(), l); err != nil {
 		t.Fatalf("seed persist: %v", err)
 	}
 	return leadID
@@ -64,7 +63,7 @@ func TestBrowseMarketplace_ReturnsUnsoldLeads_NoPII(t *testing.T) {
 	leadID := seedLead(t, leads)
 
 	h := query.NewBrowseMarketplaceHandler(leads)
-	page, err := h.Handle(context.Background(), query.BrowseMarketplaceQuery{
+	page, err := h.Handle(t.Context(), query.BrowseMarketplaceQuery{
 		Filter:   platformlead.MarketplaceFilter{},
 		Cursor:   pagination.Cursor{},
 		PageSize: 50,
@@ -105,7 +104,7 @@ func TestBrowseMarketplace_ExcludesSoldLeads(t *testing.T) {
 	// Mark sold via direct UpdateByID — bypassing the handler.
 	tenantID := platformlead.TenantID(ids.NewV7().String())
 	memberID := unverifiedcontact.MembershipID(ids.NewV7().String())
-	err := leads.UpdateByID(context.Background(), leadID, func(l *platformlead.PlatformLead) (bool, error) {
+	err := leads.UpdateByID(t.Context(), leadID, func(l *platformlead.PlatformLead) (bool, error) {
 		return true, l.Purchase(tenantID, memberID, 50000, qNow())
 	})
 	if err != nil {
@@ -113,7 +112,7 @@ func TestBrowseMarketplace_ExcludesSoldLeads(t *testing.T) {
 	}
 
 	h := query.NewBrowseMarketplaceHandler(leads)
-	page, err := h.Handle(context.Background(), query.BrowseMarketplaceQuery{
+	page, err := h.Handle(t.Context(), query.BrowseMarketplaceQuery{
 		PageSize: 50,
 	})
 	if err != nil {
@@ -135,7 +134,7 @@ func TestBrowseMarketplace_PageSizeClampedAndPaginated(t *testing.T) {
 	}
 
 	h := query.NewBrowseMarketplaceHandler(leads)
-	page, err := h.Handle(context.Background(), query.BrowseMarketplaceQuery{
+	page, err := h.Handle(t.Context(), query.BrowseMarketplaceQuery{
 		PageSize: 2,
 	})
 	if err != nil {

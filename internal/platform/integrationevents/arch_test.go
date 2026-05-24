@@ -15,6 +15,8 @@ import (
 	"github.com/leadkart/leadkart-go/internal/platform/domain/platformlead"
 	"github.com/leadkart/leadkart-go/internal/platform/domain/unverifiedcontact"
 	"github.com/leadkart/leadkart-go/internal/platform/domain/verificationcall"
+
+	"github.com/stretchr/testify/require"
 )
 
 // aliasRegex enforces the canonical wire-alias shape per messaging.md
@@ -147,13 +149,16 @@ func TestArch_NoFrameworkImports(t *testing.T) {
 // strings per ADR 0059 frozen brief.
 func TestArch_TenantScopedRecordsExposeTenantID(t *testing.T) {
 	t.Parallel()
+	seen := 0
 	for _, e := range all() {
 		ts, ok := e.(TenantScoped)
 		if !ok {
 			continue
 		}
-		_ = ts.TenantIDString() // smoke — interface satisfaction is the load-bearing check
+		_ = ts.TenantIDString() // arch-test:ignore-err — smoke check; interface satisfaction is the load-bearing surface
+		seen++
 	}
+	require.Positive(t, seen, "no TenantScoped records discovered; the TenantScoped contract has zero implementers")
 }
 
 // TestArch_FromDomainEvent_HandlesAllRegisteredDomainEvents asserts

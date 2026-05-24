@@ -1,4 +1,5 @@
 //go:build integration
+// arch-test:no-timeout-needed - integration tests rely on testcontainers boot timeout
 
 package adapters_test
 
@@ -40,6 +41,7 @@ import (
 // OR the partial-index predicate became incompatible with the
 // query predicate — both warrant a manual EXPLAIN review.
 func TestKeysetMembershipsPage_UsesIndexUnderRLS(t *testing.T) {
+	t.Parallel()
 	pool := repoFixture(t)
 	ctx := t.Context()
 
@@ -153,4 +155,4 @@ func personEmailFor(i int) string {
 
 // _ keeps the context import live even if future refactors collapse
 // the test body.
-var _ context.Context = context.Background()
+var _ context.Context = context.Background() // arch-test:context-background — package-level type assertion, no *testing.T in scope

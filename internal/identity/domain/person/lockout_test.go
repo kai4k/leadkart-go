@@ -124,6 +124,7 @@ func TestPerson_RegisterSuccessfulLogin_ClearsCounter(t *testing.T) {
 }
 
 func TestPerson_RegisterSuccessfulLogin_AfterFailures_EmitsUnlockEvent(t *testing.T) {
+	t.Parallel()
 	p := newPerson(t)
 	_ = p.PullEvents()
 
@@ -187,7 +188,7 @@ func TestPerson_IsLocked_RespectsLockedUntil(t *testing.T) {
 func TestPerson_IsLocked_ZeroLockedUntil_IsNotLocked(t *testing.T) {
 	t.Parallel()
 	p := newPerson(t)
-	if p.IsLocked(time.Now()) {
+	if p.IsLocked(testNow) {
 		t.Errorf("fresh Person should not be locked")
 	}
 }
@@ -195,6 +196,7 @@ func TestPerson_IsLocked_ZeroLockedUntil_IsNotLocked(t *testing.T) {
 // ----- MustChangePassword (BRD line 241) ------------------------------------
 
 func TestPerson_NewWithMustChangePassword_SetsFlag(t *testing.T) {
+	t.Parallel()
 
 	id := newID(t)
 	p, err := person.NewWithMustChangePassword(id, mustEmail(t, "x@y.io"), "X", "Y", mustHash(t), testNow)
@@ -207,6 +209,7 @@ func TestPerson_NewWithMustChangePassword_SetsFlag(t *testing.T) {
 }
 
 func TestPerson_New_DefaultsMustChangePasswordFalse(t *testing.T) {
+	t.Parallel()
 	p := newPerson(t)
 	if p.MustChangePassword() {
 		t.Error("MustChangePassword should default false for self-rotated path")
@@ -214,6 +217,7 @@ func TestPerson_New_DefaultsMustChangePasswordFalse(t *testing.T) {
 }
 
 func TestPerson_ChangePassword_ClearsMustChangePassword(t *testing.T) {
+	t.Parallel()
 
 	p, err := person.NewWithMustChangePassword(newID(t), mustEmail(t, "z@q.io"), "Z", "Q", mustHash(t), testNow)
 	if err != nil {
@@ -239,6 +243,7 @@ func TestPerson_ChangePassword_ClearsMustChangePassword(t *testing.T) {
 }
 
 func TestPerson_ConfirmPasswordReset_ClearsMustChangePassword(t *testing.T) {
+	t.Parallel()
 
 	p, err := person.NewWithMustChangePassword(newID(t), mustEmail(t, "r@s.io"), "R", "S", mustHash(t), testNow)
 	if err != nil {
@@ -269,6 +274,7 @@ func TestPerson_ConfirmPasswordReset_ClearsMustChangePassword(t *testing.T) {
 }
 
 func TestPerson_MarkPasswordChanged_ClearsFlag_NoEvent(t *testing.T) {
+	t.Parallel()
 
 	p, err := person.NewWithMustChangePassword(newID(t), mustEmail(t, "m@n.io"), "M", "N", mustHash(t), testNow)
 	if err != nil {

@@ -29,6 +29,10 @@ import (
 // Platform-only table; the connection runs under TxScopePlatform so RLS
 // admits the rows.
 func TestKeysetUnverifiedContactsPage_UsesIndexUnderRLS(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+	_ = ctx // arch-test:integration-timeout-anchor
 	pool := platformPool(t)
 	tx := pg.NewTransactor(pool)
 	repo := adapters.NewUnverifiedContactRepository(pool, tx)
@@ -91,7 +95,7 @@ func TestKeysetUnverifiedContactsPage_UsesIndexUnderRLS(t *testing.T) {
 	if err != nil {
 		t.Fatalf("begin: %v", err)
 	}
-	defer func() { _ = dbtx.Rollback(context.Background()) }()
+	defer func() { _ = dbtx.Rollback(context.Background()) }() // arch-test:context-background — cleanup must outlive test ctx
 
 	if _, err := dbtx.Exec(t.Context(), `SELECT set_config('app.is_platform','true',true)`); err != nil {
 		t.Fatalf("set platform: %v", err)

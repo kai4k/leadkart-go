@@ -1,7 +1,6 @@
 package actclaim_test
 
 import (
-	"context"
 	"testing"
 
 	"github.com/leadkart/leadkart-go/internal/identity/app/actclaim"
@@ -33,7 +32,7 @@ func TestClaim_IsZero(t *testing.T) {
 func TestWithContext_RoundTrip(t *testing.T) {
 	t.Parallel()
 	c := actclaim.Claim{OperatorID: "op", SessionID: "ses", Reason: "why"}
-	ctx := actclaim.WithContext(context.Background(), c)
+	ctx := actclaim.WithContext(t.Context(), c)
 
 	got, ok := actclaim.FromContext(ctx)
 	if !ok {
@@ -46,7 +45,7 @@ func TestWithContext_RoundTrip(t *testing.T) {
 
 func TestWithContext_Zero_IsNoOp(t *testing.T) {
 	t.Parallel()
-	parent := context.Background()
+	parent := t.Context()
 	ctx := actclaim.WithContext(parent, actclaim.Claim{})
 	// Same parent — zero claim is a no-op.
 	if ctx != parent {
@@ -59,7 +58,7 @@ func TestWithContext_Zero_IsNoOp(t *testing.T) {
 
 func TestFromContext_Absent(t *testing.T) {
 	t.Parallel()
-	got, ok := actclaim.FromContext(context.Background())
+	got, ok := actclaim.FromContext(t.Context())
 	if ok {
 		t.Errorf("ok = true on bare ctx; got %+v", got)
 	}

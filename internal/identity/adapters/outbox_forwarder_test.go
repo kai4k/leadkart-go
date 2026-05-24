@@ -1,5 +1,10 @@
 //go:build integration
 
+// arch-test:no-synctest — exercises the outbox-forwarder pump goroutine
+// against a real Postgres testcontainer; the polling waits cross the SQL
+// driver + Watermill subscriber boundary, neither of which testing/
+// synctest's virtual clock can model.
+
 package adapters_test
 
 import (
@@ -65,13 +70,14 @@ func waitForCount(t *testing.T, drain *drainSubscriber, want int, timeout time.D
 		if got := drain.snapshot(); len(got) >= want {
 			return got
 		}
-		time.Sleep(20 * time.Millisecond)
+		time.Sleep(20 * time.Millisecond) // arch-test:wait-justified - async event-driven test wait
 	}
 	t.Fatalf("subscriber: timed out waiting for %d messages, got %d", want, len(drain.snapshot()))
 	return nil
 }
 
 func TestOutboxForwarder_PublishesUnforwardedRows(t *testing.T) {
+	t.Parallel()
 	pool := repoFixture(t)
 	tx := pg.NewTransactor(pool)
 	tenants := adapters.NewTenantRepository(pool, tx)
@@ -144,6 +150,7 @@ func TestOutboxForwarder_PublishesUnforwardedRows(t *testing.T) {
 }
 
 func TestOutboxForwarder_IsIdempotent_OnSecondPass(t *testing.T) {
+	t.Parallel()
 	pool := repoFixture(t)
 	tx := pg.NewTransactor(pool)
 	tenants := adapters.NewTenantRepository(pool, tx)
@@ -187,6 +194,7 @@ func TestOutboxForwarder_IsIdempotent_OnSecondPass(t *testing.T) {
 }
 
 func TestOutboxForwarder_RunStopsOnContextCancel(t *testing.T) {
+	t.Parallel()
 	pool := repoFixture(t)
 	tx := pg.NewTransactor(pool)
 	pubsub := gochannel.NewGoChannel(gochannel.Config{}, watermill.NewSlogLogger(silentSlog()))

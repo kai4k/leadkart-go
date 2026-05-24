@@ -1,5 +1,6 @@
 package command_test
 
+
 import (
 	"time"
 
@@ -119,6 +120,7 @@ func TestPersonPlatformHandlers_NotFound(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
 			err := c.fn()
 			if !errors.Is(err, command.ErrPersonNotFound) {
 				t.Errorf("err = %v, want ErrPersonNotFound", err)

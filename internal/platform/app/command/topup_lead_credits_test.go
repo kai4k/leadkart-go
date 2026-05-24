@@ -1,7 +1,6 @@
 package command_test
 
 import (
-	"context"
 	"testing"
 
 	"github.com/leadkart/leadkart-go/internal/common/ids"
@@ -20,7 +19,7 @@ func TestTopupLeadCredits_CreatesRowOnFirstTopup(t *testing.T) {
 	op := leadcredit.MembershipID(ids.NewV7().String())
 
 	h := command.NewTopupLeadCreditsHandler(uow, credits, nowFunc)
-	out, err := h.Handle(context.Background(), command.TopupLeadCreditsCommand{
+	out, err := h.Handle(t.Context(), command.TopupLeadCreditsCommand{
 		TenantID:   tenantID,
 		Delta:      100,
 		Reason:     "Q3 marketing budget",
@@ -34,7 +33,7 @@ func TestTopupLeadCredits_CreatesRowOnFirstTopup(t *testing.T) {
 	}
 
 	// Subsequent topup increments.
-	out, err = h.Handle(context.Background(), command.TopupLeadCreditsCommand{
+	out, err = h.Handle(t.Context(), command.TopupLeadCreditsCommand{
 		TenantID:   tenantID,
 		Delta:      50,
 		Reason:     "extra",
@@ -55,7 +54,7 @@ func TestTopupLeadCredits_RejectsNonPositiveDelta(t *testing.T) {
 	uow := platformtest.NewFakeUnitOfWork()
 
 	h := command.NewTopupLeadCreditsHandler(uow, credits, nowFunc)
-	_, err := h.Handle(context.Background(), command.TopupLeadCreditsCommand{
+	_, err := h.Handle(t.Context(), command.TopupLeadCreditsCommand{
 		TenantID:   leadcredit.TenantID(ids.NewV7().String()),
 		Delta:      0,
 		Reason:     "x",
@@ -75,7 +74,7 @@ func TestTopupLeadCredits_RetriesOnConflict(t *testing.T) {
 	credits.ForceConflictOnce = true
 
 	h := command.NewTopupLeadCreditsHandler(uow, credits, nowFunc)
-	out, err := h.Handle(context.Background(), command.TopupLeadCreditsCommand{
+	out, err := h.Handle(t.Context(), command.TopupLeadCreditsCommand{
 		TenantID:   leadcredit.TenantID(ids.NewV7().String()),
 		Delta:      100,
 		Reason:     "retry test",

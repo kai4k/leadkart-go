@@ -1,5 +1,8 @@
 //go:build integration
 
+// arch-test:no-timeout-needed — newPlatformE2E → startWiredPostgresForHTTP uses
+// context.WithTimeout(90s) internally; per-request HTTP uses t.Context().
+
 // Platform-module end-to-end test (ADR 0059 / review-pass C2). Drives
 // the full HTTP surface against a testcontainers Postgres + the real
 // ServeMux via httptest:
@@ -203,6 +206,7 @@ func (f platformE2E) mintPlatformOperatorToken(t *testing.T) string {
 // TestE2E_Platform_FullFlow_CreateVerifyBrowsePurchase — drives the
 // canonical Lead Agent → Buyer flow end-to-end. C2 review-pass.
 func TestE2E_Platform_FullFlow_CreateVerifyBrowsePurchase(t *testing.T) {
+	t.Parallel()
 	f := newPlatformE2E(t)
 	opToken := f.mintPlatformOperatorToken(t)
 
@@ -326,7 +330,7 @@ func TestE2E_Platform_FullFlow_CreateVerifyBrowsePurchase(t *testing.T) {
 	buyer2.AccessToken = f.mintBuyerToken(t, buyer2)
 	browse2 := f.id.authedJSON(t, http.MethodGet, "/api/v1/platform/marketplace/leads", buyer2.AccessToken, nil)
 	var browse2Resp platformports.BrowseMarketplaceResponse
-	_ = json.Unmarshal(browse2.body, &browse2Resp)
+	_ = json.Unmarshal(browse2.body, &browse2Resp) // arch-test:ignore-err — best-effort decode; loop below tolerates empty Items slice
 	for _, item := range browse2Resp.Items {
 		if item.ID == verified.PlatformLeadID {
 			t.Errorf("sold lead %q must NOT appear in marketplace; items=%+v",
@@ -338,6 +342,7 @@ func TestE2E_Platform_FullFlow_CreateVerifyBrowsePurchase(t *testing.T) {
 // TestE2E_Platform_TenantClaim_RefusedByRequirePlatform — C5: tenant
 // claims with the Manage permission still get 403 from RequirePlatform.
 func TestE2E_Platform_TenantClaim_RefusedByRequirePlatform(t *testing.T) {
+	t.Parallel()
 	f := newPlatformE2E(t)
 	tenant := f.id.registerAndLogin(t, "tenant-c5")
 

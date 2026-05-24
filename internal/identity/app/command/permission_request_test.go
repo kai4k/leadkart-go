@@ -210,9 +210,9 @@ func TestRequestPermissionElevation_HappyPath(t *testing.T) {
 	mems := newFakeMembershipRepoForPermReq()
 	requester := freshMembershipForPermReq(t)
 	managerID := membership.ID(ids.NewV7().String())
-	_ = requester.AssignManager(managerID, testNow)
+	_ = requester.AssignManager(managerID, testNow) // arch-test:ignore-err - test fixture setup
 	_ = requester.PullEvents()
-	_ = mems.Add(t.Context(), requester)
+	_ = mems.Add(t.Context(), requester) // arch-test:ignore-err - test fixture setup
 
 	h := command.NewRequestPermissionElevationHandler(reqs, mems, fixedTimeFn(), func() permissionrequest.ID { return permissionrequest.ID(ids.NewV7().String()) })
 	out, err := h.Handle(t.Context(), command.RequestPermissionElevationCommand{
@@ -253,7 +253,7 @@ func TestRequestPermissionElevation_RejectsDuplicatePending(t *testing.T) {
 	reqs := newFakePermissionRequestRepo()
 	mems := newFakeMembershipRepoForPermReq()
 	requester := freshMembershipForPermReq(t)
-	_ = mems.Add(t.Context(), requester)
+	_ = mems.Add(t.Context(), requester) // arch-test:ignore-err - test fixture setup
 	h := command.NewRequestPermissionElevationHandler(reqs, mems, fixedTimeFn(), func() permissionrequest.ID { return permissionrequest.ID(ids.NewV7().String()) })
 
 	cmd := command.RequestPermissionElevationCommand{
@@ -279,10 +279,10 @@ func TestApprovePermissionRequest_HappyPath(t *testing.T) {
 	mems := newFakeMembershipRepoForPermReq()
 	requester := freshMembershipForPermReq(t)
 	manager := freshMembershipForPermReq(t)
-	_ = requester.AssignManager(manager.ID(), testNow)
+	_ = requester.AssignManager(manager.ID(), testNow) // arch-test:ignore-err - test fixture setup
 	_ = requester.PullEvents()
-	_ = mems.Add(t.Context(), requester)
-	_ = mems.Add(t.Context(), manager)
+	_ = mems.Add(t.Context(), requester) // arch-test:ignore-err - test fixture setup
+	_ = mems.Add(t.Context(), manager) // arch-test:ignore-err - test fixture setup
 
 	submitH := command.NewRequestPermissionElevationHandler(reqs, mems, fixedTimeFn(), func() permissionrequest.ID { return permissionrequest.ID(ids.NewV7().String()) })
 	out, err := submitH.Handle(t.Context(), command.RequestPermissionElevationCommand{
@@ -328,7 +328,7 @@ func TestApprovePermissionRequest_BlocksSelfApproval(t *testing.T) {
 	reqs := newFakePermissionRequestRepo()
 	mems := newFakeMembershipRepoForPermReq()
 	requester := freshMembershipForPermReq(t)
-	_ = mems.Add(t.Context(), requester)
+	_ = mems.Add(t.Context(), requester) // arch-test:ignore-err - test fixture setup
 
 	submitH := command.NewRequestPermissionElevationHandler(reqs, mems, fixedTimeFn(), func() permissionrequest.ID { return permissionrequest.ID(ids.NewV7().String()) })
 	out, _ := submitH.Handle(t.Context(), command.RequestPermissionElevationCommand{
@@ -354,7 +354,7 @@ func TestApprovePermissionRequest_MissingManagerRequiresPlatform(t *testing.T) {
 	mems := newFakeMembershipRepoForPermReq()
 	requester := freshMembershipForPermReq(t)
 	// NO manager assigned — orphan / root membership.
-	_ = mems.Add(t.Context(), requester)
+	_ = mems.Add(t.Context(), requester) // arch-test:ignore-err - test fixture setup
 
 	submitH := command.NewRequestPermissionElevationHandler(reqs, mems, fixedTimeFn(), func() permissionrequest.ID { return permissionrequest.ID(ids.NewV7().String()) })
 	out, _ := submitH.Handle(t.Context(), command.RequestPermissionElevationCommand{
@@ -393,10 +393,10 @@ func TestDenyPermissionRequest_HappyPath(t *testing.T) {
 	mems := newFakeMembershipRepoForPermReq()
 	requester := freshMembershipForPermReq(t)
 	manager := freshMembershipForPermReq(t)
-	_ = requester.AssignManager(manager.ID(), testNow)
+	_ = requester.AssignManager(manager.ID(), testNow) // arch-test:ignore-err - test fixture setup
 	_ = requester.PullEvents()
-	_ = mems.Add(t.Context(), requester)
-	_ = mems.Add(t.Context(), manager)
+	_ = mems.Add(t.Context(), requester) // arch-test:ignore-err - test fixture setup
+	_ = mems.Add(t.Context(), manager) // arch-test:ignore-err - test fixture setup
 
 	submitH := command.NewRequestPermissionElevationHandler(reqs, mems, fixedTimeFn(), func() permissionrequest.ID { return permissionrequest.ID(ids.NewV7().String()) })
 	out, _ := submitH.Handle(t.Context(), command.RequestPermissionElevationCommand{
@@ -427,7 +427,7 @@ func TestCancelPermissionRequest_OnlyRequesterCanCancel(t *testing.T) {
 	reqs := newFakePermissionRequestRepo()
 	mems := newFakeMembershipRepoForPermReq()
 	requester := freshMembershipForPermReq(t)
-	_ = mems.Add(t.Context(), requester)
+	_ = mems.Add(t.Context(), requester) // arch-test:ignore-err - test fixture setup
 
 	submitH := command.NewRequestPermissionElevationHandler(reqs, mems, fixedTimeFn(), func() permissionrequest.ID { return permissionrequest.ID(ids.NewV7().String()) })
 	out, _ := submitH.Handle(t.Context(), command.RequestPermissionElevationCommand{

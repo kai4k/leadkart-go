@@ -1,5 +1,8 @@
 //go:build integration
 
+// arch-test:no-timeout-needed — newE2EFixture → startWiredPostgresForHTTP uses
+// context.WithTimeout(90s) internally; per-request HTTP uses t.Context().
+
 // GET /api/v1/tenants/by-slug/{slug} enumeration-safety matrix.
 //
 // Slugs are human-readable + guessable (the company name); the
@@ -33,6 +36,7 @@ import (
 // TestE2E_TenantBySlug_OwnSlug_Returns200 baseline happy path.
 // Tenant admin reads their own tenant by slug.
 func TestE2E_TenantBySlug_OwnSlug_Returns200(t *testing.T) {
+	t.Parallel()
 	f := newE2EFixture(t)
 	tenantA := f.registerAndLogin(t, "acme")
 
@@ -60,6 +64,7 @@ func TestE2E_TenantBySlug_OwnSlug_Returns200(t *testing.T) {
 //
 // ADR 0044 enumeration safety. GitHub / Stripe / Auth0 canon.
 func TestE2E_TenantBySlug_OthersSlug_Returns404(t *testing.T) {
+	t.Parallel()
 	f := newE2EFixture(t)
 	tenantA := f.registerAndLogin(t, "acme")
 	tenantB := f.registerAndLogin(t, "globex")
@@ -88,6 +93,7 @@ func TestE2E_TenantBySlug_OthersSlug_Returns404(t *testing.T) {
 // shape MUST be identical to "exists but no access". Together these
 // two tests prove enumeration safety.
 func TestE2E_TenantBySlug_MissingSlug_Returns404(t *testing.T) {
+	t.Parallel()
 	f := newE2EFixture(t)
 	tenantA := f.registerAndLogin(t, "acme")
 
@@ -111,6 +117,7 @@ func TestE2E_TenantBySlug_MissingSlug_Returns404(t *testing.T) {
 // from the 404 path because "invalid format" is a client bug that
 // should surface as a client error, not security-hide.
 func TestE2E_TenantBySlug_InvalidSlug_Returns400(t *testing.T) {
+	t.Parallel()
 	f := newE2EFixture(t)
 	tenantA := f.registerAndLogin(t, "acme")
 
@@ -131,6 +138,7 @@ func TestE2E_TenantBySlug_InvalidSlug_Returns400(t *testing.T) {
 // the same-tenant gate (ADR 0039). Probing any real slug returns the
 // full DTO; probing a non-existent slug still returns 404.
 func TestE2E_TenantBySlug_PlatformOperator_SeesAnySlug(t *testing.T) {
+	t.Parallel()
 	f := newE2EFixture(t)
 	tenantA := f.registerAndLogin(t, "acme")
 	tenantB := f.registerAndLogin(t, "globex")
@@ -178,9 +186,11 @@ func TestE2E_TenantBySlug_PlatformOperator_SeesAnySlug(t *testing.T) {
 // handler runs. Sanity check that the middleware is wired on this
 // route.
 func TestE2E_TenantBySlug_Unauthenticated_Returns401(t *testing.T) {
+	t.Parallel()
 	f := newE2EFixture(t)
 	tenantA := f.registerAndLogin(t, "acme")
 
+	// arch-test:http-justified — http.DefaultClient.Do hits f.URL which IS the httptest.NewServer.URL set up in newE2EFixture; the real mux + full middleware chain is exercised, just via the fixture's wrapper.
 	req, _ := http.NewRequest(http.MethodGet, f.URL+"/api/v1/tenants/by-slug/"+tenantA.Slug, nil)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -202,6 +212,7 @@ func TestE2E_TenantBySlug_Unauthenticated_Returns401(t *testing.T) {
 //   - status code identical
 //   - body bytes identical (no length / whitespace / field-order leak)
 func TestE2E_TenantBySlug_ResponseShapesIdentical(t *testing.T) {
+	t.Parallel()
 	f := newE2EFixture(t)
 	tenantA := f.registerAndLogin(t, "acme")
 	tenantB := f.registerAndLogin(t, "globex")

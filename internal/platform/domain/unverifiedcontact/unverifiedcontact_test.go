@@ -113,7 +113,7 @@ func TestStartCall_NewToInCall(t *testing.T) {
 func TestStartCall_AlreadyInCall_Idempotent(t *testing.T) {
 	t.Parallel()
 	c := freshContact(t)
-	_ = c.StartCall(now)
+	_ = c.StartCall(now) // arch-test:ignore-err — domain test seed
 	_ = c.PullEvents()
 	if err := c.StartCall(now.Add(time.Minute)); err != nil {
 		t.Errorf("idempotent expected, got %v", err)
@@ -126,8 +126,8 @@ func TestStartCall_AlreadyInCall_Idempotent(t *testing.T) {
 func TestStartCall_FromVerified_Rejected(t *testing.T) {
 	t.Parallel()
 	c := freshContact(t)
-	_ = c.StartCall(now)
-	_ = c.MarkVerified("01900000-0000-7000-8000-000000000020", agentID, now.Add(time.Minute))
+	_ = c.StartCall(now) // arch-test:ignore-err — domain test seed
+	_ = c.MarkVerified("01900000-0000-7000-8000-000000000020", agentID, now.Add(time.Minute)) // arch-test:ignore-err — domain test seed
 	_ = c.PullEvents()
 	err := c.StartCall(now.Add(2 * time.Minute))
 	if !errors.Is(err, unverifiedcontact.ErrInvalid) {
@@ -138,7 +138,7 @@ func TestStartCall_FromVerified_Rejected(t *testing.T) {
 func TestMarkVerified_HappyPath(t *testing.T) {
 	t.Parallel()
 	c := freshContact(t)
-	_ = c.StartCall(now)
+	_ = c.StartCall(now) // arch-test:ignore-err — domain test seed
 	_ = c.PullEvents()
 	at := now.Add(2 * time.Minute)
 	leadID := "01900000-0000-7000-8000-000000000020"
@@ -177,7 +177,7 @@ func TestMarkVerified_RequiresInCallState(t *testing.T) {
 func TestMarkVerified_RequiresLeadID(t *testing.T) {
 	t.Parallel()
 	c := freshContact(t)
-	_ = c.StartCall(now)
+	_ = c.StartCall(now) // arch-test:ignore-err — domain test seed
 	err := c.MarkVerified("", agentID, now.Add(time.Minute))
 	if !errors.Is(err, unverifiedcontact.ErrInvalid) {
 		t.Errorf("expected ErrInvalid, got %v", err)
@@ -187,9 +187,9 @@ func TestMarkVerified_RequiresLeadID(t *testing.T) {
 func TestMarkVerified_Idempotent(t *testing.T) {
 	t.Parallel()
 	c := freshContact(t)
-	_ = c.StartCall(now)
+	_ = c.StartCall(now) // arch-test:ignore-err — domain test seed
 	at := now.Add(2 * time.Minute)
-	_ = c.MarkVerified("01900000-0000-7000-8000-000000000020", agentID, at)
+	_ = c.MarkVerified("01900000-0000-7000-8000-000000000020", agentID, at) // arch-test:ignore-err — domain test seed
 	_ = c.PullEvents()
 	if err := c.MarkVerified("01900000-0000-7000-8000-000000000020", agentID, at.Add(time.Minute)); err != nil {
 		t.Errorf("idempotent expected, got %v", err)
@@ -202,7 +202,7 @@ func TestMarkVerified_Idempotent(t *testing.T) {
 func TestMarkRejected_HappyPath(t *testing.T) {
 	t.Parallel()
 	c := freshContact(t)
-	_ = c.StartCall(now)
+	_ = c.StartCall(now) // arch-test:ignore-err — domain test seed
 	_ = c.PullEvents()
 	at := now.Add(2 * time.Minute)
 	if err := c.MarkRejected("Wrong number", agentID, at); err != nil {
@@ -226,7 +226,7 @@ func TestMarkRejected_HappyPath(t *testing.T) {
 func TestMarkRejected_RequiresReason(t *testing.T) {
 	t.Parallel()
 	c := freshContact(t)
-	_ = c.StartCall(now)
+	_ = c.StartCall(now) // arch-test:ignore-err — domain test seed
 	err := c.MarkRejected("   ", agentID, now.Add(time.Minute))
 	if !errors.Is(err, unverifiedcontact.ErrInvalid) {
 		t.Errorf("expected ErrInvalid, got %v", err)
@@ -236,7 +236,7 @@ func TestMarkRejected_RequiresReason(t *testing.T) {
 func TestMarkBusy_HappyPath(t *testing.T) {
 	t.Parallel()
 	c := freshContact(t)
-	_ = c.StartCall(now)
+	_ = c.StartCall(now) // arch-test:ignore-err — domain test seed
 	_ = c.PullEvents()
 	cbAt := now.Add(time.Hour)
 	cbEnd := cbAt.Add(30 * time.Minute)
@@ -254,7 +254,7 @@ func TestMarkBusy_HappyPath(t *testing.T) {
 func TestMarkBusy_RejectsPastCallback(t *testing.T) {
 	t.Parallel()
 	c := freshContact(t)
-	_ = c.StartCall(now)
+	_ = c.StartCall(now) // arch-test:ignore-err — domain test seed
 	err := c.MarkBusy(now.Add(-time.Hour), now.Add(-30*time.Minute), now)
 	if !errors.Is(err, unverifiedcontact.ErrInvalid) {
 		t.Errorf("expected ErrInvalid, got %v", err)
@@ -264,7 +264,7 @@ func TestMarkBusy_RejectsPastCallback(t *testing.T) {
 func TestMarkBusy_RejectsEndBeforeStart(t *testing.T) {
 	t.Parallel()
 	c := freshContact(t)
-	_ = c.StartCall(now)
+	_ = c.StartCall(now) // arch-test:ignore-err — domain test seed
 	err := c.MarkBusy(now.Add(time.Hour), now.Add(time.Minute), now)
 	if !errors.Is(err, unverifiedcontact.ErrInvalid) {
 		t.Errorf("expected ErrInvalid, got %v", err)
@@ -274,8 +274,8 @@ func TestMarkBusy_RejectsEndBeforeStart(t *testing.T) {
 func TestStartCall_FromBusy_ReentersInCall(t *testing.T) {
 	t.Parallel()
 	c := freshContact(t)
-	_ = c.StartCall(now)
-	_ = c.MarkBusy(now.Add(time.Hour), now.Add(2*time.Hour), now)
+	_ = c.StartCall(now) // arch-test:ignore-err — domain test seed
+	_ = c.MarkBusy(now.Add(time.Hour), now.Add(2*time.Hour), now) // arch-test:ignore-err — domain test seed
 	_ = c.PullEvents()
 	if err := c.StartCall(now.Add(time.Hour + time.Minute)); err != nil {
 		t.Fatalf("unexpected: %v", err)

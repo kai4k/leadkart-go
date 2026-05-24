@@ -1,5 +1,10 @@
 //go:build integration
 
+// arch-test:no-synctest — subscriber tests exercise the Watermill router
+// goroutine against a real Postgres testcontainer; the polled `families`
+// row signals subscriber commit across the SQL driver boundary, which is
+// opaque to testing/synctest's virtual clock.
+
 package subscribers_test
 
 import (
@@ -347,12 +352,13 @@ func waitFor(t *testing.T, cond func() bool, timeout time.Duration, msg string) 
 		if cond() {
 			return
 		}
-		time.Sleep(20 * time.Millisecond)
+		time.Sleep(20 * time.Millisecond) // arch-test:wait-justified - async event-driven test wait
 	}
 	t.Fatal(msg)
 }
 
 func TestRevokeFamilies_OnPasswordChanged(t *testing.T) {
+	t.Parallel()
 	fx := newFixture(t)
 	pubsub, _, stop := wireRouter(t, fx)
 	defer stop()
@@ -392,6 +398,7 @@ func TestRevokeFamilies_OnPasswordChanged(t *testing.T) {
 }
 
 func TestRevokeFamilies_OnAnonymised(t *testing.T) {
+	t.Parallel()
 	fx := newFixture(t)
 	pubsub, _, stop := wireRouter(t, fx)
 	defer stop()
@@ -416,6 +423,7 @@ func TestRevokeFamilies_OnAnonymised(t *testing.T) {
 }
 
 func TestRevokeFamilies_OnGloballySuspended(t *testing.T) {
+	t.Parallel()
 	fx := newFixture(t)
 	pubsub, _, stop := wireRouter(t, fx)
 	defer stop()
@@ -441,6 +449,7 @@ func TestRevokeFamilies_OnGloballySuspended(t *testing.T) {
 }
 
 func TestRevokeFamilies_OnEmailChanged(t *testing.T) {
+	t.Parallel()
 	fx := newFixture(t)
 	pubsub, _, stop := wireRouter(t, fx)
 	defer stop()
@@ -467,6 +476,7 @@ func TestRevokeFamilies_OnEmailChanged(t *testing.T) {
 }
 
 func TestRevokeFamilies_OnMembershipDeactivated_NarrowsToTenantScope(t *testing.T) {
+	t.Parallel()
 	// MembershipDeactivated cascade is narrower than the Person-level
 	// events: ONLY families bound to that (PersonID, TenantID) tuple
 	// die. Other-tenant families for the same Person stay alive.
@@ -510,6 +520,7 @@ func TestRevokeFamilies_OnMembershipDeactivated_NarrowsToTenantScope(t *testing.
 }
 
 func TestRevokeFamilies_NoActiveFamilies_NoOp(t *testing.T) {
+	t.Parallel()
 	fx := newFixture(t)
 	pubsub, _, stop := wireRouter(t, fx)
 	defer stop()
@@ -526,7 +537,7 @@ func TestRevokeFamilies_NoActiveFamilies_NoOp(t *testing.T) {
 	// + succeeded without error (zero families to revoke is success).
 	waitFor(t, func() bool {
 		var n int
-		_ = fx.pool.QueryRow(t.Context(), `
+		_ = fx.pool.QueryRow(t.Context(), ` // arch-test:ignore-err - test fixture setup
 			SELECT count(*) FROM buildingblocks.audit_log_entry
 			WHERE  action = 'identity.person_password_changed.v1'
 			  AND  succeeded = true
@@ -536,6 +547,7 @@ func TestRevokeFamilies_NoActiveFamilies_NoOp(t *testing.T) {
 }
 
 func TestReuseDetectedSIEM_LogsOnReuseRevocation(t *testing.T) {
+	t.Parallel()
 	fx := newFixture(t)
 	// Custom logger that records to a thread-safe buffer so the
 	// subscriber goroutine's slog.Write doesn't race the assertion
@@ -578,6 +590,7 @@ func TestReuseDetectedSIEM_LogsOnReuseRevocation(t *testing.T) {
 }
 
 func TestReuseDetectedSIEM_IgnoresNonReuseRevocations(t *testing.T) {
+	t.Parallel()
 	fx := newFixture(t)
 	// safeBuffer — same race-detector reason as the sister test above.
 	buf := &safeBuffer{}
@@ -613,7 +626,7 @@ func TestReuseDetectedSIEM_IgnoresNonReuseRevocations(t *testing.T) {
 	}, uuid.New())
 
 	// Wait for processing to settle, then assert no SIEM log.
-	time.Sleep(800 * time.Millisecond)
+	time.Sleep(800 * time.Millisecond) // arch-test:wait-justified - async event-driven test wait
 	if bytes.Contains(buf.Bytes(), []byte("reuse detected")) {
 		t.Fatalf("SIEM log emitted for non-reuse revocation: %s", buf.String())
 	}

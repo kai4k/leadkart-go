@@ -1,4 +1,5 @@
 //go:build integration
+// arch-test:no-timeout-needed - integration tests rely on testcontainers boot timeout
 
 package adapters_test
 
@@ -41,6 +42,7 @@ func newRole(t *testing.T, tenantID tenant.ID, name string) *role.Role {
 }
 
 func TestRoleRepository_Add_PersistsAndRoundTripsViaGetByID(t *testing.T) {
+	t.Parallel()
 	pool := repoFixture(t)
 	tenants := adapters.NewTenantRepository(pool, pg.NewTransactor(pool))
 	roles := adapters.NewRoleRepository(pool, pg.NewTransactor(pool))
@@ -76,6 +78,7 @@ func TestRoleRepository_Add_PersistsAndRoundTripsViaGetByID(t *testing.T) {
 }
 
 func TestRoleRepository_GetByID_ReturnsNotFound_WhenAbsent(t *testing.T) {
+	t.Parallel()
 	pool := repoFixture(t)
 	roles := adapters.NewRoleRepository(pool, pg.NewTransactor(pool))
 
@@ -90,6 +93,7 @@ func TestRoleRepository_GetByID_ReturnsNotFound_WhenAbsent(t *testing.T) {
 }
 
 func TestRoleRepository_Add_ReturnsErrNameTaken_OnDuplicateLiveName(t *testing.T) {
+	t.Parallel()
 	pool := repoFixture(t)
 	tenants := adapters.NewTenantRepository(pool, pg.NewTransactor(pool))
 	roles := adapters.NewRoleRepository(pool, pg.NewTransactor(pool))
@@ -116,6 +120,7 @@ func TestRoleRepository_Add_ReturnsErrNameTaken_OnDuplicateLiveName(t *testing.T
 // SET LOCAL app.tenant_id) does NOT leak rows because FORCE RLS +
 // the non-superuser role together close the door.
 func TestRoleRepository_RLS_IsolatesCrossTenantReads(t *testing.T) {
+	t.Parallel()
 	pool := repoFixture(t)
 	tenants := adapters.NewTenantRepository(pool, pg.NewTransactor(pool))
 	roles := adapters.NewRoleRepository(pool, pg.NewTransactor(pool))
@@ -137,6 +142,7 @@ func TestRoleRepository_RLS_IsolatesCrossTenantReads(t *testing.T) {
 }
 
 func TestRoleRepository_ListByTenant_ScopedToCurrentTenantOnly(t *testing.T) {
+	t.Parallel()
 	pool := repoFixture(t)
 	tenants := adapters.NewTenantRepository(pool, pg.NewTransactor(pool))
 	roles := adapters.NewRoleRepository(pool, pg.NewTransactor(pool))
@@ -176,6 +182,7 @@ func TestRoleRepository_ListByTenant_ScopedToCurrentTenantOnly(t *testing.T) {
 }
 
 func TestRoleRepository_GetByIDs_FiltersOutSoftDeletedAndCrossTenant(t *testing.T) {
+	t.Parallel()
 	pool := repoFixture(t)
 	tenants := adapters.NewTenantRepository(pool, pg.NewTransactor(pool))
 	roles := adapters.NewRoleRepository(pool, pg.NewTransactor(pool))
@@ -220,6 +227,7 @@ func TestRoleRepository_GetByIDs_FiltersOutSoftDeletedAndCrossTenant(t *testing.
 // ----- Task 17 — UpdateByID (TDL Sep 2024 UpdateFn) ------------------------
 
 func TestRoleRepository_UpdateByID_Rename_Persists(t *testing.T) {
+	t.Parallel()
 	pool := repoFixture(t)
 	tenants := adapters.NewTenantRepository(pool, pg.NewTransactor(pool))
 	roles := adapters.NewRoleRepository(pool, pg.NewTransactor(pool))
@@ -248,6 +256,7 @@ func TestRoleRepository_UpdateByID_Rename_Persists(t *testing.T) {
 }
 
 func TestRoleRepository_UpdateByID_GrantPermission_Persists(t *testing.T) {
+	t.Parallel()
 	pool := repoFixture(t)
 	tenants := adapters.NewTenantRepository(pool, pg.NewTransactor(pool))
 	roles := adapters.NewRoleRepository(pool, pg.NewTransactor(pool))
@@ -291,6 +300,7 @@ func TestRoleRepository_UpdateByID_GrantPermission_Persists(t *testing.T) {
 }
 
 func TestRoleRepository_UpdateByID_Delete_PersistsSoftDeleteAndHidesFromGetByID(t *testing.T) {
+	t.Parallel()
 	pool := repoFixture(t)
 	tenants := adapters.NewTenantRepository(pool, pg.NewTransactor(pool))
 	roles := adapters.NewRoleRepository(pool, pg.NewTransactor(pool))
@@ -317,6 +327,7 @@ func TestRoleRepository_UpdateByID_Delete_PersistsSoftDeleteAndHidesFromGetByID(
 }
 
 func TestRoleRepository_UpdateByID_ReturnsNotFound_WhenAbsent(t *testing.T) {
+	t.Parallel()
 	pool := repoFixture(t)
 	roles := adapters.NewRoleRepository(pool, pg.NewTransactor(pool))
 
@@ -332,6 +343,7 @@ func TestRoleRepository_UpdateByID_ReturnsNotFound_WhenAbsent(t *testing.T) {
 }
 
 func TestRoleRepository_UpdateByID_NoOp_WhenUpdateFnReturnsFalse(t *testing.T) {
+	t.Parallel()
 	pool := repoFixture(t)
 	tenants := adapters.NewTenantRepository(pool, pg.NewTransactor(pool))
 	roles := adapters.NewRoleRepository(pool, pg.NewTransactor(pool))
@@ -345,7 +357,7 @@ func TestRoleRepository_UpdateByID_NoOp_WhenUpdateFnReturnsFalse(t *testing.T) {
 
 	// Mutate the loaded aggregate but instruct the repo NOT to persist.
 	err := roles.UpdateByID(ctx, r.ID(), func(loaded *role.Role) (bool, error) {
-		_ = loaded.Rename("ShouldNotStick", testNow)
+		_ = loaded.Rename("ShouldNotStick", testNow) // arch-test:ignore-err - test fixture setup
 		return false, nil
 	})
 	if err != nil {
@@ -362,6 +374,7 @@ func TestRoleRepository_UpdateByID_NoOp_WhenUpdateFnReturnsFalse(t *testing.T) {
 }
 
 func TestRoleRepository_UpdateByID_Rollback_WhenUpdateFnErrors(t *testing.T) {
+	t.Parallel()
 	pool := repoFixture(t)
 	tenants := adapters.NewTenantRepository(pool, pg.NewTransactor(pool))
 	roles := adapters.NewRoleRepository(pool, pg.NewTransactor(pool))
@@ -375,7 +388,7 @@ func TestRoleRepository_UpdateByID_Rollback_WhenUpdateFnErrors(t *testing.T) {
 
 	sentinel := errors.New("update intentionally failed")
 	err := roles.UpdateByID(ctx, r.ID(), func(loaded *role.Role) (bool, error) {
-		_ = loaded.Rename("ShouldRollBack", testNow)
+		_ = loaded.Rename("ShouldRollBack", testNow) // arch-test:ignore-err - test fixture setup
 		return true, sentinel
 	})
 	if !errors.Is(err, sentinel) {
@@ -396,6 +409,7 @@ func TestRoleRepository_UpdateByID_Rollback_WhenUpdateFnErrors(t *testing.T) {
 // edge aggregate owns parent→child relationships now.
 
 func TestRoleRepository_UpdateByID_RLS_RefusesCrossTenantUpdate(t *testing.T) {
+	t.Parallel()
 	pool := repoFixture(t)
 	tenants := adapters.NewTenantRepository(pool, pg.NewTransactor(pool))
 	roles := adapters.NewRoleRepository(pool, pg.NewTransactor(pool))

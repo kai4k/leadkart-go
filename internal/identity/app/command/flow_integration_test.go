@@ -147,6 +147,7 @@ func newWiredApp(t *testing.T) wiredApp {
 }
 
 func TestFlow_RegisterLoginRefreshLogout(t *testing.T) {
+	t.Parallel()
 	app := newWiredApp(t)
 	register, login, refresh, logout := app.register, app.login, app.refresh, app.logout
 	ctx := t.Context()
@@ -234,6 +235,7 @@ func TestFlow_RegisterLoginRefreshLogout(t *testing.T) {
 }
 
 func TestFlow_LoginUnknownEmail_GenericFailure(t *testing.T) {
+	t.Parallel()
 	login := newWiredApp(t).login
 	ctx := t.Context()
 
@@ -248,6 +250,7 @@ func TestFlow_LoginUnknownEmail_GenericFailure(t *testing.T) {
 }
 
 func TestFlow_LoginWrongPassword_GenericFailure(t *testing.T) {
+	t.Parallel()
 	app := newWiredApp(t)
 	register, login := app.register, app.login
 	ctx := t.Context()
@@ -277,6 +280,7 @@ func TestFlow_LoginWrongPassword_GenericFailure(t *testing.T) {
 }
 
 func TestFlow_RegisterDuplicateActiveEmail_Blocked(t *testing.T) {
+	t.Parallel()
 	register := newWiredApp(t).register
 	ctx := t.Context()
 
@@ -322,6 +326,7 @@ func TestFlow_RegisterDuplicateActiveEmail_Blocked(t *testing.T) {
 // PermissionResolver + JWT issuer + authn middleware compose into a
 // working end-to-end authorization flow with no test-only shortcuts.
 func TestE2E_LoginThenRequirePermissionGate(t *testing.T) {
+	t.Parallel()
 	app := newWiredApp(t)
 	register, login, issuer, stamps := app.register, app.login, app.issuer, app.stamps
 	ctx := t.Context()

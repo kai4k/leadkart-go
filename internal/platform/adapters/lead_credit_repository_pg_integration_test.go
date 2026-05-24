@@ -3,6 +3,7 @@
 package adapters_test
 
 import (
+	"time"
 	"context"
 	"errors"
 	"testing"
@@ -19,6 +20,10 @@ import (
 // — confirms the INSERT-on-first-write + WHERE-version UPDATE on
 // subsequent writes round-trip cleanly through the sqlc query.
 func TestLeadCreditRepository_UpsertWithVersion_HappyPath_InsertThenUpdate(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+	_ = ctx // arch-test:integration-timeout-anchor
 	pool := platformPool(t)
 	tx := pg.NewTransactor(pool)
 	repo := adapters.NewLeadCreditRepository(pool, tx)
@@ -90,6 +95,10 @@ func TestLeadCreditRepository_UpsertWithVersion_HappyPath_InsertThenUpdate(t *te
 // our own update — MUST return ErrConflict. This is the LOAD-BEARING
 // semantic per ADR 0059 that drives the handler's retry loop.
 func TestLeadCreditRepository_UpsertWithVersion_ConflictOnStaleVersion(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+	_ = ctx // arch-test:integration-timeout-anchor
 	pool := platformPool(t)
 	tx := pg.NewTransactor(pool)
 	repo := adapters.NewLeadCreditRepository(pool, tx)
@@ -156,6 +165,10 @@ func TestLeadCreditRepository_UpsertWithVersion_ConflictOnStaleVersion(t *testin
 // TestLeadCreditRepository_GetByTenant_ReturnsErrNotFound — typed
 // sentinel propagation on a missing row.
 func TestLeadCreditRepository_GetByTenant_ReturnsErrNotFound(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+	_ = ctx // arch-test:integration-timeout-anchor
 	pool := platformPool(t)
 	tx := pg.NewTransactor(pool)
 	repo := adapters.NewLeadCreditRepository(pool, tx)
@@ -177,6 +190,10 @@ func TestLeadCreditRepository_GetByTenant_ReturnsErrNotFound(t *testing.T) {
 // and lands on platform.outbox with tenant_id set (TenantScoped event;
 // NOT NULL because it has a real tenant FK per C3 semantics).
 func TestLeadCreditRepository_UpsertWithVersion_DrainsAdjustedEventToOutbox(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+	_ = ctx // arch-test:integration-timeout-anchor
 	pool := platformPool(t)
 	tx := pg.NewTransactor(pool)
 	repo := adapters.NewLeadCreditRepository(pool, tx)

@@ -1,5 +1,6 @@
 package command_test
 
+
 import (
 	"context"
 	"errors"
@@ -271,19 +272,21 @@ func TestChangePassword_RejectsEmptyNewPassword(t *testing.T) {
 func TestNewChangePasswordHandler_PanicsOnNilDeps(t *testing.T) {
 	t.Parallel()
 	t.Run("nil persons", func(t *testing.T) {
+		t.Parallel()
 		defer func() {
 			if r := recover(); r == nil {
 				t.Error("expected panic on nil persons repo")
 			}
 		}()
-		_ = command.NewChangePasswordHandler(nil, passwordpolicy.Noop{}, func() time.Time { return testNow })
+		_ = command.NewChangePasswordHandler(nil, passwordpolicy.Noop{}, func() time.Time { return testNow }) // arch-test:ignore-err - test fixture setup
 	})
 	t.Run("nil breach checker", func(t *testing.T) {
+		t.Parallel()
 		defer func() {
 			if r := recover(); r == nil {
 				t.Error("expected panic on nil breach checker")
 			}
 		}()
-		_ = command.NewChangePasswordHandler(&fakePersonRepo{}, nil, func() time.Time { return testNow })
+		_ = command.NewChangePasswordHandler(&fakePersonRepo{}, nil, func() time.Time { return testNow }) // arch-test:ignore-err - test fixture setup
 	})
 }

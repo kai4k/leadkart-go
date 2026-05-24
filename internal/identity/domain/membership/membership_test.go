@@ -35,6 +35,7 @@ func newTenantID(t *testing.T) tenant.ID {
 // ----- Factory: New ---------------------------------------------------------
 
 func TestNewMembership_AcceptsValid_StartsActive(t *testing.T) {
+	t.Parallel()
 
 	id := newMembershipID(t)
 	pid := newPersonID(t)
@@ -68,6 +69,7 @@ func TestNewMembership_AcceptsValid_StartsActive(t *testing.T) {
 }
 
 func TestNewMembership_EmitsCreatedEvent(t *testing.T) {
+	t.Parallel()
 
 	id := newMembershipID(t)
 	pid := newPersonID(t)
@@ -129,6 +131,7 @@ func TestNewMembership_RejectsInvalid(t *testing.T) {
 // ----- Deactivate -----------------------------------------------------------
 
 func TestDeactivate_FromActive_TransitionsToInactive(t *testing.T) {
+	t.Parallel()
 
 	m := newMembership(t)
 	_ = m.PullEvents()
@@ -157,6 +160,7 @@ func TestDeactivate_FromActive_TransitionsToInactive(t *testing.T) {
 }
 
 func TestDeactivate_FromInactive_NoOp(t *testing.T) {
+	t.Parallel()
 
 	m := newMembership(t)
 	_ = m.PullEvents()
@@ -174,6 +178,7 @@ func TestDeactivate_FromInactive_NoOp(t *testing.T) {
 }
 
 func TestDeactivate_RequiresReason(t *testing.T) {
+	t.Parallel()
 	m := newMembership(t)
 	if err := m.Deactivate("", testNow); err == nil {
 		t.Fatal("expected error on empty reason")
@@ -183,10 +188,11 @@ func TestDeactivate_RequiresReason(t *testing.T) {
 // ----- Reactivate -----------------------------------------------------------
 
 func TestReactivate_FromInactive_TransitionsToActive(t *testing.T) {
+	t.Parallel()
 
 	m := newMembership(t)
 	_ = m.PullEvents()
-	_ = m.Deactivate("paused", testNow)
+	_ = m.Deactivate("paused", testNow) // arch-test:ignore-err - test fixture setup
 	_ = m.PullEvents()
 
 	if err := m.Reactivate(testNow); err != nil {
@@ -209,6 +215,7 @@ func TestReactivate_FromInactive_TransitionsToActive(t *testing.T) {
 }
 
 func TestReactivate_FromActive_NoOp(t *testing.T) {
+	t.Parallel()
 	m := newMembership(t)
 	_ = m.PullEvents()
 

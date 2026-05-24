@@ -1,5 +1,14 @@
 //go:build integration
 
+// arch-test:no-timeout-needed — Tests use bounded deadlines via runRouter()
+// (context.WithCancel + 5s done-channel timeout) + tight per-step time.After
+// guards. testcontainers spin-up timeout lives in shared inbox_test.go fixture.
+//
+// arch-test:no-synctest — testing/synctest's virtual clock cannot model the
+// pgx wire protocol nor the Watermill subscriber goroutine pump; the polled
+// `processed_messages` row signals subscriber commit across the SQL driver
+// boundary which is opaque to synctest.
+
 package messaging_test
 
 import (
@@ -56,6 +65,7 @@ func runRouter(t *testing.T, r *messaging.Router) func() {
 }
 
 func TestRouter_FullStack_TenantContextAndAuditAndIdempotency(t *testing.T) {
+	t.Parallel()
 	pool := inboxFixture(t)
 	receiver := messaging.NewIdempotentReceiver(pool)
 	auditW := audit.NewWriter(pool, silentLog(), time.Now)
@@ -118,16 +128,18 @@ func TestRouter_FullStack_TenantContextAndAuditAndIdempotency(t *testing.T) {
 
 	// Wait for first handler completion + dedup record.
 	deadline := time.Now().Add(3 * time.Second)
+	// arch-test:wait-justified — polling a Postgres inbox row inserted by an async subscriber; bounded by `deadline`; synctest is N/A across the SQL driver boundary
 	for time.Now().Before(deadline) {
 		var n int
-		_ = pool.QueryRow(t.Context(), `
+		const q = `
 			SELECT count(*) FROM identity.processed_messages
 			WHERE  message_id = $1 AND handler_name = 'test.handler'
-		`, msgID).Scan(&n)
+		`
+		_ = pool.QueryRow(t.Context(), q, msgID).Scan(&n) // arch-test:ignore-err — poll loop; non-1 count just keeps polling until deadline
 		if n == 1 {
 			break
 		}
-		time.Sleep(20 * time.Millisecond)
+		time.Sleep(20 * time.Millisecond) // arch-test:wait-justified — wait-until poll for async router dispatch
 	}
 
 	// Sequential replays: with dedup row already committed, subsequent
@@ -137,7 +149,7 @@ func TestRouter_FullStack_TenantContextAndAuditAndIdempotency(t *testing.T) {
 			t.Fatalf("publish replay %d: %v", i, err)
 		}
 	}
-	time.Sleep(300 * time.Millisecond) // let the no-op replays settle
+	time.Sleep(300 * time.Millisecond) // arch-test:wait-justified — let async no-op replays settle through router
 
 	o.mu.Lock()
 	if o.calls != 1 {
@@ -180,6 +192,7 @@ func TestRouter_FullStack_TenantContextAndAuditAndIdempotency(t *testing.T) {
 // metadata, the AuditMiddleware projects them onto the corresponding
 // audit_log_entry columns.
 func TestRouter_AuditMiddleware_PopulatesActFields_WhenMessageMetadataCarriesActClaim(t *testing.T) {
+	t.Parallel()
 	pool := inboxFixture(t)
 	receiver := messaging.NewIdempotentReceiver(pool)
 	auditW := audit.NewWriter(pool, silentLog(), time.Now)
@@ -225,16 +238,18 @@ func TestRouter_AuditMiddleware_PopulatesActFields_WhenMessageMetadataCarriesAct
 	}
 
 	deadline := time.Now().Add(3 * time.Second)
+	// arch-test:wait-justified — polling a Postgres inbox row inserted by an async subscriber; bounded by `deadline`; synctest is N/A across the SQL driver boundary
 	for time.Now().Before(deadline) {
 		var n int
-		_ = pool.QueryRow(t.Context(), `
+		const q = `
 			SELECT count(*) FROM buildingblocks.audit_log_entry
 			WHERE  action = 'test.act.v1'
-		`).Scan(&n)
+		`
+		_ = pool.QueryRow(t.Context(), q).Scan(&n) // arch-test:ignore-err — poll loop; non-1 count just keeps polling until deadline
 		if n == 1 {
 			break
 		}
-		time.Sleep(20 * time.Millisecond)
+		time.Sleep(20 * time.Millisecond) // arch-test:wait-justified — wait-until poll for async audit write
 	}
 
 	var (
@@ -266,6 +281,7 @@ func TestRouter_AuditMiddleware_PopulatesActFields_WhenMessageMetadataCarriesAct
 // hot path) must not leak NULL → uuid.Nil round-trips into the audit
 // columns.
 func TestRouter_AuditMiddleware_LeavesActFieldsEmpty_WhenNoMetadata(t *testing.T) {
+	t.Parallel()
 	pool := inboxFixture(t)
 	receiver := messaging.NewIdempotentReceiver(pool)
 	auditW := audit.NewWriter(pool, silentLog(), time.Now)
@@ -304,16 +320,18 @@ func TestRouter_AuditMiddleware_LeavesActFieldsEmpty_WhenNoMetadata(t *testing.T
 	}
 
 	deadline := time.Now().Add(3 * time.Second)
+	// arch-test:wait-justified — polling a Postgres inbox row inserted by an async subscriber; bounded by `deadline`; synctest is N/A across the SQL driver boundary
 	for time.Now().Before(deadline) {
 		var n int
-		_ = pool.QueryRow(t.Context(), `
+		const q = `
 			SELECT count(*) FROM buildingblocks.audit_log_entry
 			WHERE  action = 'test.noact.v1'
-		`).Scan(&n)
+		`
+		_ = pool.QueryRow(t.Context(), q).Scan(&n) // arch-test:ignore-err — poll loop; non-1 count just keeps polling until deadline
 		if n == 1 {
 			break
 		}
-		time.Sleep(20 * time.Millisecond)
+		time.Sleep(20 * time.Millisecond) // arch-test:wait-justified — wait-until poll for async audit write
 	}
 
 	var (
@@ -341,6 +359,7 @@ func TestRouter_AuditMiddleware_LeavesActFieldsEmpty_WhenNoMetadata(t *testing.T
 }
 
 func TestRouter_HandlerError_DoesNotRecordInbox_AuditMarksFailure(t *testing.T) {
+	t.Parallel()
 	pool := inboxFixture(t)
 	receiver := messaging.NewIdempotentReceiver(pool)
 	auditW := audit.NewWriter(pool, silentLog(), time.Now)
@@ -387,7 +406,7 @@ func TestRouter_HandlerError_DoesNotRecordInbox_AuditMarksFailure(t *testing.T) 
 
 	// Wait for retries to exhaust (1 retry @ 10ms-50ms ≈ <100ms total)
 	// + the audit row to be written. 1.5s is a comfortable bound.
-	time.Sleep(1500 * time.Millisecond)
+	time.Sleep(1500 * time.Millisecond) // arch-test:wait-justified — bounded wait for retry-exhaustion + audit write
 	if calls.Load() < 2 {
 		t.Fatalf("handler call count: got %d want ≥2 (initial + ≥1 retry)", calls.Load())
 	}

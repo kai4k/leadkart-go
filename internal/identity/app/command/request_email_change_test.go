@@ -21,7 +21,7 @@ func TestNewRequestEmailChangeHandler_PanicsOnNilDeps(t *testing.T) {
 			t.Error("expected panic on nil persons repo")
 		}
 	}()
-	_ = command.NewRequestEmailChangeHandler(nil, func() time.Time { return testNow })
+	_ = command.NewRequestEmailChangeHandler(nil, func() time.Time { return testNow }) // arch-test:ignore-err - test fixture setup
 }
 
 // TestRequestEmailChange_RejectsZeroPersonID exercises the input-

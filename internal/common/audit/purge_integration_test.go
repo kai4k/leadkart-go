@@ -24,6 +24,7 @@ import (
 )
 
 func TestPurgeWorker_DeletesOlderThanRetention(t *testing.T) {
+	t.Parallel()
 	pool := startPostgres(t)
 
 	// Seed: one row well outside the retention window, one inside.
@@ -133,7 +134,7 @@ func startPostgres(t *testing.T) *pgxpool.Pool {
 	}
 	t.Cleanup(pool.Close)
 	// Smoke audit_log_entry exists at the expected schema location.
-	_ = ids.NewV7() // quiet unused import in case ids isn't used elsewhere
+	_ = ids.NewV7() // arch-test:ignore-err — side-effect only; quiets unused import
 	return pool
 }
 

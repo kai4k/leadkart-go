@@ -1,4 +1,5 @@
 //go:build integration
+// arch-test:no-timeout-needed - integration tests rely on testcontainers boot timeout
 
 package adapters_test
 
@@ -58,6 +59,7 @@ func seedPerson(t *testing.T, repo *adapters.PersonRepository, addr string) *per
 }
 
 func TestMembershipRepository_Add_PersistsRowAndOutboxEvent(t *testing.T) {
+	t.Parallel()
 	pool := repoFixture(t)
 	tx := pg.NewTransactor(pool)
 	tenants := adapters.NewTenantRepository(pool, tx)
@@ -97,6 +99,7 @@ func TestMembershipRepository_Add_PersistsRowAndOutboxEvent(t *testing.T) {
 }
 
 func TestMembershipRepository_Add_SecondActive_ReturnsErrAlreadyActive(t *testing.T) {
+	t.Parallel()
 	pool := repoFixture(t)
 	tx := pg.NewTransactor(pool)
 	tenants := adapters.NewTenantRepository(pool, tx)
@@ -125,6 +128,7 @@ func TestMembershipRepository_Add_SecondActive_ReturnsErrAlreadyActive(t *testin
 }
 
 func TestMembershipRepository_GetByID_OutsideTenantScope_NotFound(t *testing.T) {
+	t.Parallel()
 	pool := repoFixture(t)
 	tx := pg.NewTransactor(pool)
 	tenants := adapters.NewTenantRepository(pool, tx)
@@ -150,6 +154,7 @@ func TestMembershipRepository_GetByID_OutsideTenantScope_NotFound(t *testing.T) 
 }
 
 func TestMembershipRepository_UpdateByID_DeactivateClearsActiveSlot(t *testing.T) {
+	t.Parallel()
 	pool := repoFixture(t)
 	tx := pg.NewTransactor(pool)
 	tenants := adapters.NewTenantRepository(pool, tx)
@@ -187,6 +192,7 @@ func TestMembershipRepository_UpdateByID_DeactivateClearsActiveSlot(t *testing.T
 }
 
 func TestMembershipRepository_GetActiveForPerson_BypassesRLS(t *testing.T) {
+	t.Parallel()
 	pool := repoFixture(t)
 	tx := pg.NewTransactor(pool)
 	tenants := adapters.NewTenantRepository(pool, tx)
@@ -214,6 +220,7 @@ func TestMembershipRepository_GetActiveForPerson_BypassesRLS(t *testing.T) {
 }
 
 func TestMembershipRepository_GetActiveForPerson_NoActive_NotFound(t *testing.T) {
+	t.Parallel()
 	pool := repoFixture(t)
 	tx := pg.NewTransactor(pool)
 	persons := adapters.NewPersonRepository(pool, tx)
@@ -229,6 +236,7 @@ func TestMembershipRepository_GetActiveForPerson_NoActive_NotFound(t *testing.T)
 // ----- Task 18 — child-table state (roles + overrides + profile) ------------
 
 func TestMembershipRepository_Add_PersistsRoleAssignmentsAndOverrides(t *testing.T) {
+	t.Parallel()
 	pool := repoFixture(t)
 	tx := pg.NewTransactor(pool)
 	persons := adapters.NewPersonRepository(pool, tx)
@@ -306,6 +314,7 @@ func TestMembershipRepository_Add_PersistsRoleAssignmentsAndOverrides(t *testing
 }
 
 func TestMembershipRepository_UpdateByID_ReplacesRoleAssignmentsAndOverrides(t *testing.T) {
+	t.Parallel()
 	pool := repoFixture(t)
 	tx := pg.NewTransactor(pool)
 	persons := adapters.NewPersonRepository(pool, tx)
@@ -327,19 +336,19 @@ func TestMembershipRepository_UpdateByID_ReplacesRoleAssignmentsAndOverrides(t *
 	}
 
 	m, _ := membership.New(membership.ID(ids.NewV7().String()), p.ID(), tn.ID(), membership.ID(""), testNow)
-	_ = m.AssignRole(r1.ID(), testNow)
-	_ = m.AssignRole(r2.ID(), testNow)
-	_ = m.GrantPermission(permission.FromConstant(permission.IdentityPermissions.Roles.View), time.Time{}, testNow)
+	_ = m.AssignRole(r1.ID(), testNow) // arch-test:ignore-err - test fixture setup
+	_ = m.AssignRole(r2.ID(), testNow) // arch-test:ignore-err - test fixture setup
+	_ = m.GrantPermission(permission.FromConstant(permission.IdentityPermissions.Roles.View), time.Time{}, testNow) // arch-test:ignore-err - test fixture setup
 	if err := memberships.Add(ctx, m); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
 
 	// Replace state via UpdateByID: drop r1, add r3, drop the grant, add a revoke.
 	err := memberships.UpdateByID(ctx, m.ID(), func(loaded *membership.Membership) (bool, error) {
-		_ = loaded.RevokeRole(r1.ID(), testNow)
-		_ = loaded.AssignRole(r3.ID(), testNow)
+		_ = loaded.RevokeRole(r1.ID(), testNow) // arch-test:ignore-err - test fixture setup
+		_ = loaded.AssignRole(r3.ID(), testNow) // arch-test:ignore-err - test fixture setup
 		// flipping the same permission from granted to revoked auto-suppresses.
-		_ = loaded.RevokePermission(permission.FromConstant(permission.IdentityPermissions.Roles.View), testNow)
+		_ = loaded.RevokePermission(permission.FromConstant(permission.IdentityPermissions.Roles.View), testNow) // arch-test:ignore-err - test fixture setup
 		return true, nil
 	})
 	if err != nil {
@@ -369,6 +378,7 @@ func TestMembershipRepository_UpdateByID_ReplacesRoleAssignmentsAndOverrides(t *
 }
 
 func TestMembershipRepository_Add_RejectsCrossTenantRoleAssignment(t *testing.T) {
+	t.Parallel()
 	pool := repoFixture(t)
 	tx := pg.NewTransactor(pool)
 	persons := adapters.NewPersonRepository(pool, tx)
@@ -388,7 +398,7 @@ func TestMembershipRepository_Add_RejectsCrossTenantRoleAssignment(t *testing.T)
 	}
 
 	m, _ := membership.New(membership.ID(ids.NewV7().String()), p.ID(), tnA.ID(), membership.ID(""), testNow)
-	_ = m.AssignRole(rB.ID(), testNow)
+	_ = m.AssignRole(rB.ID(), testNow) // arch-test:ignore-err - test fixture setup
 
 	ctxA := tenancy.WithID(t.Context(), tenancy.ID(tnA.ID().String()))
 	err := memberships.Add(ctxA, m)

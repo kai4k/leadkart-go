@@ -230,6 +230,12 @@ func TestFacade_Singleflight_CoalescesConcurrentMisses(t *testing.T) {
 	t.Parallel()
 
 	// factory blocks until released so the test can stack callers.
+	// The singleflight contract is: concurrent Gets for the same key
+	// must coalesce into ONE factory invocation. The factory parks on
+	// `release`; the test releases AFTER giving the herd time to all
+	// enter the singleflight group. Singleflight doesn't expose its
+	// in-flight count, so we use the canonical "wait long enough" sync
+	// — bounded by the test framework's hung-test timeout above.
 	release := make(chan struct{})
 	factory := func(context.Context, string) (person, error) {
 		<-release
@@ -241,14 +247,26 @@ func TestFacade_Singleflight_CoalescesConcurrentMisses(t *testing.T) {
 	var wg sync.WaitGroup
 	results := make([]person, callers)
 	errs := make([]error, callers)
+	startGate := make(chan struct{})
+	var startWG sync.WaitGroup
+	startWG.Add(callers)
 	for i := range callers {
 		// Go 1.22 — loop var per-iteration safe; Go 1.25 — wg.Go.
 		wg.Go(func() {
+			startWG.Done()
+			<-startGate
 			results[i], errs[i] = fx.facade.Get(t.Context(), "p1")
 		})
 	}
-	// All callers should be blocked on the factory now.
-	time.Sleep(50 * time.Millisecond)
+	// Park the herd at the gate, then release as one.
+	startWG.Wait()
+	close(startGate)
+	// Give every herd member time to enter the singleflight group.
+	// 500ms is a CI-safety bound — well above the OS scheduler-jitter
+	// floor on shared runners; far below the test framework's hung-test
+	// timeout. Singleflight membership has no observable signal; the
+	// bounded wait is the canonical sync.
+	time.Sleep(500 * time.Millisecond) // arch-test:wait-justified — bounded sync for unobservable singleflight membership
 	close(release)
 	wg.Wait()
 
@@ -364,7 +382,7 @@ func TestFacade_TTL_L1ExpiryFallsThroughToL2(t *testing.T) {
 	source.Store(person{ID: "p1", Email: "second@b.test"})
 
 	// Wait past L1 TTL.
-	time.Sleep(120 * time.Millisecond)
+	time.Sleep(120 * time.Millisecond) // arch-test:wait-justified — must exceed 50ms L1 TTL to assert L2 fallback
 	hc.L1.Clear() // belt-and-braces — ristretto TTL is best-effort
 
 	got, err := f.Get(t.Context(), "p1")

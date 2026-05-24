@@ -1,4 +1,5 @@
 //go:build integration
+// arch-test:no-timeout-needed - integration tests rely on testcontainers boot timeout
 
 package adapters_test
 
@@ -39,6 +40,7 @@ func newPerson(t *testing.T, addr string) *person.Person {
 }
 
 func TestPersonRepository_Add_PersistsRowAndOutboxEvent(t *testing.T) {
+	t.Parallel()
 	pool := repoFixture(t)
 	repo := adapters.NewPersonRepository(pool, pg.NewTransactor(pool))
 	ctx := t.Context()
@@ -82,6 +84,7 @@ func TestPersonRepository_Add_PersistsRowAndOutboxEvent(t *testing.T) {
 }
 
 func TestPersonRepository_Add_DuplicateEmail_ReturnsErrEmailTaken(t *testing.T) {
+	t.Parallel()
 	pool := repoFixture(t)
 	repo := adapters.NewPersonRepository(pool, pg.NewTransactor(pool))
 	ctx := t.Context()
@@ -99,6 +102,7 @@ func TestPersonRepository_Add_DuplicateEmail_ReturnsErrEmailTaken(t *testing.T) 
 }
 
 func TestPersonRepository_GetByEmail_ResolvesGlobally(t *testing.T) {
+	t.Parallel()
 	pool := repoFixture(t)
 	repo := adapters.NewPersonRepository(pool, pg.NewTransactor(pool))
 	ctx := t.Context()
@@ -119,6 +123,7 @@ func TestPersonRepository_GetByEmail_ResolvesGlobally(t *testing.T) {
 }
 
 func TestPersonRepository_UpdateByID_ChangePasswordRotatesStamp(t *testing.T) {
+	t.Parallel()
 	pool := repoFixture(t)
 	repo := adapters.NewPersonRepository(pool, pg.NewTransactor(pool))
 	ctx := t.Context()
@@ -153,6 +158,7 @@ func TestPersonRepository_UpdateByID_ChangePasswordRotatesStamp(t *testing.T) {
 }
 
 func TestPersonRepository_UpdateByID_AnonymiseScrubs(t *testing.T) {
+	t.Parallel()
 	pool := repoFixture(t)
 	repo := adapters.NewPersonRepository(pool, pg.NewTransactor(pool))
 	ctx := t.Context()
@@ -191,6 +197,7 @@ func TestPersonRepository_UpdateByID_AnonymiseScrubs(t *testing.T) {
 }
 
 func TestPersonRepository_GetByID_NotFound(t *testing.T) {
+	t.Parallel()
 	pool := repoFixture(t)
 	repo := adapters.NewPersonRepository(pool, pg.NewTransactor(pool))
 	ctx := t.Context()

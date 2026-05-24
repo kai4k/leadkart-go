@@ -271,7 +271,7 @@ func TestHandleTopupLeadCredits_Platform_OK(t *testing.T) {
 	if out.NewBalance != 250 {
 		t.Errorf("NewBalance=%d want 250", out.NewBalance)
 	}
-	c, err := credits.GetByTenant(context.Background(), leadcredit.TenantID(tenantID))
+	c, err := credits.GetByTenant(t.Context(), leadcredit.TenantID(tenantID))
 	if err != nil {
 		t.Fatalf("GetByTenant: %v", err)
 	}
@@ -309,7 +309,7 @@ func TestHandlePurchaseLead_Tenant_HappyPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("seed lead: %v", err)
 	}
-	if err := leads.Add(context.Background(), l); err != nil {
+	if err := leads.Add(t.Context(), l); err != nil {
 		t.Fatalf("seed persist: %v", err)
 	}
 
@@ -321,7 +321,7 @@ func TestHandlePurchaseLead_Tenant_HappyPath(t *testing.T) {
 	if err := cr.Topup(10, "seed", leadcredit.MembershipID(claims.MembershipID), now()); err != nil {
 		t.Fatalf("topup: %v", err)
 	}
-	if err := credits.UpsertWithVersion(context.Background(), cr); err != nil {
+	if err := credits.UpsertWithVersion(t.Context(), cr); err != nil {
 		t.Fatalf("persist credit: %v", err)
 	}
 
@@ -391,7 +391,7 @@ func TestHandleVerify_AlreadyTerminal_409(t *testing.T) {
 	if err := c.MarkRejected("test", agentID, now()); err != nil {
 		t.Fatalf("reject: %v", err)
 	}
-	if err := contacts.Add(context.Background(), c); err != nil {
+	if err := contacts.Add(t.Context(), c); err != nil {
 		t.Fatalf("add: %v", err)
 	}
 

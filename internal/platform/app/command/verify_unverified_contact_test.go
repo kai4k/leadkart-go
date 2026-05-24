@@ -1,7 +1,6 @@
 package command_test
 
 import (
-	"context"
 	"errors"
 	"testing"
 	"time"
@@ -57,12 +56,12 @@ func TestVerifyUnverifiedContact_HappyPath(t *testing.T) {
 	if err := c.StartCall(nowFunc()); err != nil {
 		t.Fatalf("seed start call: %v", err)
 	}
-	if err := contacts.Add(context.Background(), c); err != nil {
+	if err := contacts.Add(t.Context(), c); err != nil {
 		t.Fatalf("seed add: %v", err)
 	}
 
 	h := command.NewVerifyUnverifiedContactHandler(uow, contacts, leads, outbox, nowFunc, func() platformlead.ID { return platformlead.ID(ids.NewV7().String()) })
-	out, err := h.Handle(context.Background(), command.VerifyUnverifiedContactCommand{
+	out, err := h.Handle(t.Context(), command.VerifyUnverifiedContactCommand{
 		ContactID:  cID,
 		VerifiedBy: agentID,
 	})
@@ -74,11 +73,11 @@ func TestVerifyUnverifiedContact_HappyPath(t *testing.T) {
 	}
 
 	// Assert the contact transitioned + lead was created.
-	loaded, _ := contacts.GetByID(context.Background(), cID)
+	loaded, _ := contacts.GetByID(t.Context(), cID)
 	if loaded.State() != unverifiedcontact.StateVerified {
 		t.Errorf("contact state=%q want verified", loaded.State())
 	}
-	if _, err := leads.GetByID(context.Background(), out.PlatformLeadID); err != nil {
+	if _, err := leads.GetByID(t.Context(), out.PlatformLeadID); err != nil {
 		t.Errorf("expected lead persisted, got %v", err)
 	}
 
@@ -111,10 +110,10 @@ func TestVerifyUnverifiedContact_PromoteFromNew(t *testing.T) {
 	agentID := unverifiedcontact.MembershipID(ids.NewV7().String())
 	cID := unverifiedcontact.ID(ids.NewV7().String())
 	c, _ := unverifiedcontact.New(cID, sampleForm(t), agentID, nowFunc())
-	_ = contacts.Add(context.Background(), c)
+	_ = contacts.Add(t.Context(), c) // arch-test:ignore-err — fake repo Add cannot fail by construction
 
 	h := command.NewVerifyUnverifiedContactHandler(uow, contacts, leads, outbox, nowFunc, func() platformlead.ID { return platformlead.ID(ids.NewV7().String()) })
-	_, err := h.Handle(context.Background(), command.VerifyUnverifiedContactCommand{
+	_, err := h.Handle(t.Context(), command.VerifyUnverifiedContactCommand{
 		ContactID:  cID,
 		VerifiedBy: agentID,
 	})
@@ -132,7 +131,7 @@ func TestVerifyUnverifiedContact_ContactNotFound(t *testing.T) {
 	uow := platformtest.NewFakeUnitOfWork()
 
 	h := command.NewVerifyUnverifiedContactHandler(uow, contacts, leads, outbox, nowFunc, func() platformlead.ID { return platformlead.ID(ids.NewV7().String()) })
-	_, err := h.Handle(context.Background(), command.VerifyUnverifiedContactCommand{
+	_, err := h.Handle(t.Context(), command.VerifyUnverifiedContactCommand{
 		ContactID:  unverifiedcontact.ID("01900000-0000-7000-8000-000000000999"),
 		VerifiedBy: unverifiedcontact.MembershipID(ids.NewV7().String()),
 	})
@@ -167,14 +166,14 @@ func TestVerifyUnverifiedContact_AlreadyVerified_Idempotent(t *testing.T) {
 	if err := c.StartCall(nowFunc()); err != nil {
 		t.Fatalf("seed start call: %v", err)
 	}
-	if err := contacts.Add(context.Background(), c); err != nil {
+	if err := contacts.Add(t.Context(), c); err != nil {
 		t.Fatalf("seed add: %v", err)
 	}
 
 	h := command.NewVerifyUnverifiedContactHandler(uow, contacts, leads, outbox, nowFunc, func() platformlead.ID { return platformlead.ID(ids.NewV7().String()) })
 
 	// First verify → success, lead created.
-	out1, err := h.Handle(context.Background(), command.VerifyUnverifiedContactCommand{
+	out1, err := h.Handle(t.Context(), command.VerifyUnverifiedContactCommand{
 		ContactID:  cID,
 		VerifiedBy: agentID,
 	})
@@ -196,7 +195,7 @@ func TestVerifyUnverifiedContact_AlreadyVerified_Idempotent(t *testing.T) {
 	// Add when the contact's StateBefore == StateVerified. This test
 	// asserts no second lead leaks. If it fails, the handler needs a
 	// "skip lead-creation when contact already verified" guard.
-	_, err = h.Handle(context.Background(), command.VerifyUnverifiedContactCommand{
+	_, err = h.Handle(t.Context(), command.VerifyUnverifiedContactCommand{
 		ContactID:  cID,
 		VerifiedBy: agentID,
 	})
@@ -239,12 +238,12 @@ func TestVerifyUnverifiedContact_AlreadyRejected_Refused(t *testing.T) {
 	if err := c.MarkRejected("test data", agentID, nowFunc()); err != nil {
 		t.Fatalf("seed reject: %v", err)
 	}
-	if err := contacts.Add(context.Background(), c); err != nil {
+	if err := contacts.Add(t.Context(), c); err != nil {
 		t.Fatalf("seed add: %v", err)
 	}
 
 	h := command.NewVerifyUnverifiedContactHandler(uow, contacts, leads, outbox, nowFunc, func() platformlead.ID { return platformlead.ID(ids.NewV7().String()) })
-	_, err = h.Handle(context.Background(), command.VerifyUnverifiedContactCommand{
+	_, err = h.Handle(t.Context(), command.VerifyUnverifiedContactCommand{
 		ContactID:  cID,
 		VerifiedBy: agentID,
 	})

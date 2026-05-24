@@ -61,6 +61,7 @@ func newTestHybridCache(t *testing.T) *cache.HybridCache {
 }
 
 func TestHTTPFlow_RegisterLoginRefreshLogout(t *testing.T) {
+	t.Parallel()
 	pool := startWiredPostgresForHTTP(t)
 
 	cfg := config.AppConfig{
@@ -172,6 +173,7 @@ func TestHTTPFlow_RegisterLoginRefreshLogout(t *testing.T) {
 }
 
 func TestHTTPFlow_LoginInvalidCredentials_Returns401(t *testing.T) {
+	t.Parallel()
 	pool := startWiredPostgresForHTTP(t)
 	cfg := config.AppConfig{
 		JWT: config.JWTConfig{

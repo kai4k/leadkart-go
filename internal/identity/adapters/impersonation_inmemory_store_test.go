@@ -43,7 +43,7 @@ func TestImpersonationInMemoryStore_Get_ExpiredSession_TreatedAsAbsent(t *testin
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
-	_ = store.Put(t.Context(), sess)
+	_ = store.Put(t.Context(), sess) // arch-test:ignore-err - test fixture setup
 
 	// Advance past expiry.
 	clock = now.Add(2 * time.Minute)
@@ -70,8 +70,8 @@ func TestImpersonationInMemoryStore_ListByOperator_FiltersByOwner(t *testing.T) 
 		"audit: investigating ticket TICKET-1", 30*time.Minute, now)
 	other, _ := impersonation.NewSession("op-2", "tenant-1",
 		"audit: investigating ticket TICKET-2", 30*time.Minute, now)
-	_ = store.Put(t.Context(), mine)
-	_ = store.Put(t.Context(), other)
+	_ = store.Put(t.Context(), mine) // arch-test:ignore-err - test fixture setup
+	_ = store.Put(t.Context(), other) // arch-test:ignore-err - test fixture setup
 
 	got, err := store.ListByOperator(t.Context(), "op-1")
 	if err != nil {

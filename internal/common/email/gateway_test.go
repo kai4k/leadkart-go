@@ -130,7 +130,7 @@ func TestRecorder_Reset_ClearsCapture(t *testing.T) {
 		mustAddr(t, "noreply@leadkart.io"),
 		"S", "B",
 	)
-	_ = r.Send(t.Context(), m)
+	_ = r.Send(t.Context(), m) // arch-test:ignore-err — Recorder.Send is in-mem; test asserts Count after
 	if r.Count() != 1 {
 		t.Fatal("expected 1 captured before reset")
 	}
@@ -155,7 +155,7 @@ func TestRecorder_ConcurrentSafe(t *testing.T) {
 				from,
 				"S", "B",
 			)
-			_ = r.Send(t.Context(), m)
+			_ = r.Send(t.Context(), m) // arch-test:ignore-err — concurrent stress; asserts final Count
 		})
 	}
 	wg.Wait()

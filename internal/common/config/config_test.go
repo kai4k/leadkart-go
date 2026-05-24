@@ -29,6 +29,7 @@ func minRequired() map[string]string {
 	}
 }
 
+// arch-test:serial — uses t.Setenv (incompatible with t.Parallel)
 func TestLoad_DefaultsApplied(t *testing.T) {
 	setEnv(t, minRequired())
 	cfg, err := config.Load()
@@ -49,6 +50,7 @@ func TestLoad_DefaultsApplied(t *testing.T) {
 	}
 }
 
+// arch-test:serial — uses t.Setenv (incompatible with t.Parallel)
 func TestLoad_EnvOverridesDefault(t *testing.T) {
 	setEnv(t, minRequired())
 	t.Setenv("LEADKART_LISTEN__API", ":9000")
@@ -66,6 +68,7 @@ func TestLoad_EnvOverridesDefault(t *testing.T) {
 	}
 }
 
+// arch-test:serial — uses t.Setenv (incompatible with t.Parallel)
 func TestLoad_FileThenEnv(t *testing.T) {
 	dir := t.TempDir()
 	yamlFile := filepath.Join(dir, "leadkart.yaml")
@@ -101,6 +104,7 @@ otel:
 	}
 }
 
+// arch-test:serial — uses t.Setenv (incompatible with t.Parallel)
 func TestLoad_RejectsMissingPostgres(t *testing.T) {
 	required := minRequired()
 	delete(required, "LEADKART_POSTGRES__DSN")
@@ -111,6 +115,7 @@ func TestLoad_RejectsMissingPostgres(t *testing.T) {
 	}
 }
 
+// arch-test:serial — uses t.Setenv (incompatible with t.Parallel)
 func TestLoad_RejectsShortJWTKey(t *testing.T) {
 	required := minRequired()
 	required["LEADKART_JWT__SIGNING_KEY"] = "too-short"
@@ -121,6 +126,7 @@ func TestLoad_RejectsShortJWTKey(t *testing.T) {
 	}
 }
 
+// arch-test:serial — uses t.Setenv (incompatible with t.Parallel)
 func TestLoad_RejectsBadConfigFile(t *testing.T) {
 	setEnv(t, minRequired())
 	t.Setenv("LEADKART_CONFIG_FILE", "/no/such/file.yaml")

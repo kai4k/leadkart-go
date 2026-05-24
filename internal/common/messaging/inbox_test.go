@@ -84,6 +84,7 @@ func migrationsDir(t *testing.T) string {
 }
 
 func TestIdempotentReceiver_FirstCall_RunsHandlerAndRecords(t *testing.T) {
+	t.Parallel()
 	pool := inboxFixture(t)
 	receiver := messaging.NewIdempotentReceiver(pool)
 
@@ -115,6 +116,7 @@ func TestIdempotentReceiver_FirstCall_RunsHandlerAndRecords(t *testing.T) {
 }
 
 func TestIdempotentReceiver_Replay_SkipsHandler(t *testing.T) {
+	t.Parallel()
 	pool := inboxFixture(t)
 	receiver := messaging.NewIdempotentReceiver(pool)
 
@@ -136,6 +138,7 @@ func TestIdempotentReceiver_Replay_SkipsHandler(t *testing.T) {
 }
 
 func TestIdempotentReceiver_HandlerError_DoesNotRecord_NextCallRunsAgain(t *testing.T) {
+	t.Parallel()
 	pool := inboxFixture(t)
 	receiver := messaging.NewIdempotentReceiver(pool)
 
@@ -183,6 +186,7 @@ func TestIdempotentReceiver_HandlerError_DoesNotRecord_NextCallRunsAgain(t *test
 }
 
 func TestIdempotentReceiver_ScopedByHandlerName(t *testing.T) {
+	t.Parallel()
 	// Same message_id processed by two distinct handlers — both run.
 	pool := inboxFixture(t)
 	receiver := messaging.NewIdempotentReceiver(pool)
@@ -216,5 +220,5 @@ func TestIdempotentReceiver_Wrap_PanicsOnEmptyName(t *testing.T) {
 			t.Fatal("expected panic on empty handlerName")
 		}
 	}()
-	_ = receiver.Wrap("", func(context.Context, string) error { return nil })
+	_ = receiver.Wrap("", func(context.Context, string) error { return nil }) // arch-test:ignore-err — asserts panic; return value unreachable
 }
