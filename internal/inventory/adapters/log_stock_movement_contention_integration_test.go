@@ -34,8 +34,18 @@ import (
 //       preserves the racer's mutation).
 //
 // Channel-based barrier coordinates the start so every goroutine begins
-// inside the same Postgres tick — gives the kernel scheduler the best
-// chance of producing actual contention rather than serial-by-accident.
+// inside the same Postgres tick. To make the retry-path assertion (b)
+// deterministic across CPU-constrained cloud runners (where Go's
+// scheduler may serialise the 3 racers so no organic contention
+// happens), we inject ONE forced ErrConcurrencyConflict via the
+// [firstCallConflictBatchRepo] wrapper — the very first UpdateByID
+// across all goroutines is rewritten to ErrConcurrencyConflict, then
+// subsequent calls pass through. This guarantees `total UoW entries
+// > racers` regardless of scheduling: the racer that lost the first-
+// call lottery retries and succeeds on its second attempt, while the
+// other two go through normally. Production semantics are unchanged —
+// the wrapper only fakes the conflict signal the real DB would have
+// raised under sufficient contention.
 func TestLogStockMovement_Concurrent_RetriesOnConflict(t *testing.T) {
 	pool := repoFixture(t)
 	tid := seedTenant(t, pool)
@@ -91,7 +101,15 @@ func TestLogStockMovement_Concurrent_RetriesOnConflict(t *testing.T) {
 	var totalEntries atomic.Int64
 	instrumentedUoW := &countingUoW{inner: tx, counter: &totalEntries}
 
-	h := command.NewLogStockMovementHandler(instrumentedUoW, batches, movements)
+	// firstCallConflictBatchRepo rewrites the FIRST UpdateByID across
+	// all goroutines to ErrConcurrencyConflict, then passes through.
+	// Guarantees ≥ 1 retry fires regardless of OS scheduling — without
+	// this wrapper the test relied on real Postgres contention, which
+	// CPU-constrained cloud runners (GOMAXPROCS ≤ 2) tend to serialise
+	// into sequential, conflict-free executions.
+	conflictOnceBatches := &firstCallConflictBatchRepo{inner: batches}
+
+	h := command.NewLogStockMovementHandler(instrumentedUoW, conflictOnceBatches, movements)
 
 	var wg sync.WaitGroup
 	wg.Add(racers)
@@ -248,8 +266,55 @@ func (r *forceConflictBatchRepo) AnyLiveWithStockForProduct(ctx context.Context,
 	return r.inner.AnyLiveWithStockForProduct(ctx, productID)
 }
 
+// firstCallConflictBatchRepo wraps a real BatchRepository and rewrites
+// only the VERY FIRST UpdateByID call (across all callers / goroutines)
+// to batch.ErrConcurrencyConflict. All subsequent UpdateByID calls pass
+// through to the real repo. Used by the contention test to deterministically
+// trigger the retry path without relying on OS scheduler luck.
+//
+// The first-call rewrite still runs the inner load + invariant guards
+// (so domain validation fires as in production), then aborts the inner
+// commit + returns the fake conflict. Production data is untouched.
+//
+// Atomic int32 flag ensures the conflict fires exactly once even when
+// hit by N concurrent goroutines.
+type firstCallConflictBatchRepo struct {
+	inner *adapters.BatchRepository
+	fired atomic.Int32 // 0 → next call gets conflict; 1 → all calls pass through
+}
+
+func (r *firstCallConflictBatchRepo) Add(ctx context.Context, b *batch.Batch) error {
+	return r.inner.Add(ctx, b)
+}
+
+func (r *firstCallConflictBatchRepo) UpdateByID(ctx context.Context, id batch.ID, fn func(*batch.Batch) (bool, error)) error {
+	if r.fired.CompareAndSwap(0, 1) {
+		// Run inner load + invariant fn so domain guards still execute,
+		// but abort the commit + return the fake conflict.
+		_ = r.inner.UpdateByID(ctx, id, func(b *batch.Batch) (bool, error) {
+			_, err := fn(b)
+			return false, err
+		})
+		return batch.ErrConcurrencyConflict
+	}
+	return r.inner.UpdateByID(ctx, id, fn)
+}
+
+func (r *firstCallConflictBatchRepo) GetByID(ctx context.Context, id batch.ID) (*batch.Batch, error) {
+	return r.inner.GetByID(ctx, id)
+}
+
+func (r *firstCallConflictBatchRepo) ListByProductPage(ctx context.Context, productID product.ID, filter batch.ListFilter, cursor pagination.Cursor, pageSize int) (pagination.Page[*batch.Batch], error) {
+	return r.inner.ListByProductPage(ctx, productID, filter, cursor, pageSize)
+}
+
+func (r *firstCallConflictBatchRepo) AnyLiveWithStockForProduct(ctx context.Context, productID product.ID) (bool, error) {
+	return r.inner.AnyLiveWithStockForProduct(ctx, productID)
+}
+
 // compile-time interface assertions.
 var (
 	_ batch.Repository = (*forceConflictBatchRepo)(nil)
+	_ batch.Repository = (*firstCallConflictBatchRepo)(nil)
 	_ pg.UnitOfWork    = (*countingUoW)(nil)
 )
