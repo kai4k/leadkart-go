@@ -1,10 +1,22 @@
-// eda_arch_test.go — Event-Driven Architecture discipline as a CI gate.
+// eda_arch_test.go — Principle 4: Event-Driven Communication.
 //
 // Per ADR 0001 (modular monolith), ADR 0008 (Watermill messaging),
-// ADR 0027 (outbox doubles as audit), and ADR 0002 (DDD sealed events):
-// modules communicate ONLY via integration events on the bus. The
-// tests here enforce that policy mechanically — drift becomes a PR-time
-// failure, not a 3-month-later cloud-CI flake.
+// ADR 0027 (outbox doubles as audit), and ADR 0051 (per-module
+// integrationevents/ as the anti-corruption layer): modules communicate
+// ONLY via integration events on the bus. The tests here enforce that
+// policy mechanically — drift becomes a PR-time failure, not a
+// 3-month-later cloud-CI flake.
+//
+// Tests in this file:
+//   24. TestArch_NoCrossModuleImports
+//   25. TestArch_SubscribersInPortsSubscribers
+//   27. TestArch_SubscribersAreIdempotent
+//   28. TestArch_IntegrationEventsHaveTopicMethod
+//   29. TestArch_IntegrationEventsAreTenantScopedOrPlatform
+//   30. TestArch_AppPublishesViaOutboxNotBus
+//
+// (Tests 26 = OutboxTableSchema and the original "cross-schema joins"
+//  reside in db_schema_arch_test.go per Principle 11.)
 
 package architecture_test
 
@@ -17,34 +29,12 @@ import (
 )
 
 // ----------------------------------------------------------------------------
-// Test 1: TestArch_NoCrossModuleImports
+// Test 24: TestArch_NoCrossModuleImports
 // ----------------------------------------------------------------------------
 //
-// Enforces: ADR 0001 (modular monolith — modules never reference each
-// other's domain/app/ports/adapters/adapters/db) + CLAUDE.md "three
-// unbreakable rules" #1.
-//
-// EXCEPTIONS (documented; canon-cited):
-//
-//  1. importing another module's `integrationevents/` package IS allowed.
-//     Subscribers in `internal/<X>/ports/subscribers/` MUST consume
-//     integration events published by `internal/<Y>/`; the
-//     integration-events package is the explicit anti-corruption layer
-//     per Vernon IDDD ch. 13 ("Integrating Bounded Contexts").
-//
-//  2. Shared-kernel imports from identity: per Vernon IDDD ch. 13
-//     "Shared Kernel" + Wave 9.1a/b (ADR 0051), the identity bounded
-//     context owns the canonical typed-ID surface (TenantID, MembershipID,
-//     PermissionCode) AND the cross-cutting authn middleware. The
-//     allow-listed paths below are deliberately consumed by every other
-//     module — refusing them would force every module to redeclare
-//     UUID-typed IDs (a textbook "anaemic shared kernel" anti-pattern).
-//
-//     If you find yourself wanting to add another path here, write an
-//     ADR first — the shared kernel must stay deliberately small.
-//
-// Canon: TDL Wild Workouts ("Modular Monolith Done Right"), Vernon IDDD
-// ch. 13, CLAUDE.md "Architecture — three unbreakable rules", ADR 0051.
+// Modules NEVER reference each other's domain/app/ports/adapters.
+// The integrationevents/ package is the explicit anti-corruption layer
+// per Vernon IDDD ch. 13 + the canonical shared-kernel allow-list.
 func TestArch_NoCrossModuleImports(t *testing.T) {
 	t.Parallel()
 
@@ -64,9 +54,6 @@ func TestArch_NoCrossModuleImports(t *testing.T) {
 		"github.com/leadkart/leadkart-go/internal/identity/app/actclaim":      true,
 	}
 
-	// modulePrefix returns the canonical import-path prefix for a
-	// module's private layers (domain/app/ports/adapters/adapters/db).
-	// We allow integrationevents/ explicitly via not listing it here.
 	forbiddenLayers := []string{"domain", "app", "ports", "adapters", "adapters/db"}
 
 	type violation struct {
@@ -82,7 +69,6 @@ func TestArch_NoCrossModuleImports(t *testing.T) {
 		walkGoFiles(t, modPath, false, func(path string, src []byte) {
 			imports := parseImports(t, path, src)
 			for _, imp := range imports {
-				// Only interested in imports of OTHER internal modules.
 				const prefix = "github.com/leadkart/leadkart-go/internal/"
 				if !strings.HasPrefix(imp, prefix) {
 					continue
@@ -97,13 +83,9 @@ func TestArch_NoCrossModuleImports(t *testing.T) {
 				if targetMod == mod || targetMod == "common" || targetMod == "architecture" {
 					continue
 				}
-				// Shared-kernel allow-list. Vernon IDDD ch. 13.
 				if sharedKernelAllowed[imp] {
 					continue
 				}
-				// Cross-module import detected. Check whether it's a
-				// forbidden private layer or the allowed
-				// integrationevents/ surface.
 				for _, layer := range forbiddenLayers {
 					if targetRest == layer || strings.HasPrefix(targetRest, layer+"/") {
 						violations = append(violations, violation{
@@ -131,22 +113,13 @@ func TestArch_NoCrossModuleImports(t *testing.T) {
 }
 
 // ----------------------------------------------------------------------------
-// Test 2: TestArch_SubscribersInPortsSubscribers
+// Test 25: TestArch_SubscribersInPortsSubscribers
 // ----------------------------------------------------------------------------
 //
-// Enforces: subscribers are wired ONLY in internal/<module>/ports/subscribers/.
+// Subscribers are wired ONLY in internal/<module>/ports/subscribers/.
 // Per ADR 0008 + the canonical messaging layout (TDL Watermill course):
 // the inbound-port for an integration-event subscriber lives next to
-// the inbound-port for HTTP. Wiring subscribers anywhere else fragments
-// the inbound surface + breaks the dependency-flow assumption in arch
-// test 10 (app/ doesn't depend on ports/).
-//
-// AST detection: any CallExpr where the function is a SelectorExpr
-// named `AddSubscriber` (matches both `router.AddSubscriber(...)` and
-// `messaging.Router.AddSubscriber(...)` at call sites).
-//
-// EXCEPTION: test files (path ending _test.go) are permitted to wire
-// subscribers in-line — those are wiring-fixtures for the router itself.
+// the inbound-port for HTTP.
 func TestArch_SubscribersInPortsSubscribers(t *testing.T) {
 	t.Parallel()
 
@@ -170,8 +143,7 @@ func TestArch_SubscribersInPortsSubscribers(t *testing.T) {
 			if sel.Sel.Name != "AddSubscriber" {
 				return true
 			}
-			// Allowed: anywhere under .../ports/subscribers/.
-			p := filepath.ToSlash(path)
+			p := pathToSlash(path)
 			if strings.Contains(p, "/ports/subscribers/") {
 				return true
 			}
@@ -185,10 +157,8 @@ func TestArch_SubscribersInPortsSubscribers(t *testing.T) {
 
 	if len(violations) > 0 {
 		t.Logf("SUBSCRIBER WIRING VIOLATIONS — %d call sites outside ports/subscribers/", len(violations))
-		t.Logf("Per ADR 0008 + canonical inbound-port layout: every router.AddSubscriber")
-		t.Logf("call MUST live in internal/<module>/ports/subscribers/. Wiring in any")
-		t.Logf("other layer (especially app/) fragments the inbound surface + reverses")
-		t.Logf("the dependency-flow direction enforced by TestArch_AppDoesntImportPorts.")
+		t.Logf("Per ADR 0008: every router.AddSubscriber call MUST live in")
+		t.Logf("internal/<module>/ports/subscribers/.")
 		for _, v := range violations {
 			t.Errorf("%s:%d — AddSubscriber outside ports/subscribers/", v.file, v.line)
 		}
@@ -196,249 +166,342 @@ func TestArch_SubscribersInPortsSubscribers(t *testing.T) {
 }
 
 // ----------------------------------------------------------------------------
-// Test 3: TestArch_NoCrossSchemaJoins
+// Test 27: TestArch_SubscribersAreIdempotent
 // ----------------------------------------------------------------------------
 //
-// Enforces: ADR 0001 + ADR 0006 — each module owns its Postgres schema;
-// no cross-schema joins. A query in internal/identity/adapters/sql/*.sql
-// may JOIN only `identity.*` tables OR the shared `buildingblocks.*`
-// schema. Cross-module reads happen via outbox events into CQRS
-// projections (ADR 0041), never via direct JOIN.
+// Every subscriber file in internal/<mod>/ports/subscribers/ must
+// provide an idempotency mechanism — either:
 //
-// Detection: regex-based scan of FROM and JOIN clauses for the
-// `<schema>.` prefix. We tolerate aliases (no `.` after the table)
-// since unprefixed tables resolve through `search_path` which the app
-// pins per-module.
+//   (a) wrap the handler with `messaging.IdempotencyMiddleware`, OR
+//   (b) the handler body performs a natural-key precheck — calls a
+//       repository `Get*` (or `Find*`) method that returns ErrNotFound
+//       before the create path.
 //
-// Canon: Vernon IDDD ch. 13 (one schema per bounded context),
-// Microsoft eShop (per-context DbContext), Brandur Leach ("Crunchy
-// Bridge production sqlc layout").
-func TestArch_NoCrossSchemaJoins(t *testing.T) {
+// Per Watermill / Brandur outbox-handler best practice: at-least-once
+// delivery means duplicate dispatch is the rule. Every subscriber
+// must be replay-safe.
+//
+// Detection is a heuristic — we accept either the explicit middleware
+// wrap or any call expression named `Get*`/`Find*` inside the file.
+// False negatives are possible; a file allow-list opts the subscriber
+// out with a documented rationale.
+func TestArch_SubscribersAreIdempotent(t *testing.T) {
 	t.Parallel()
 
-	fromRE := regexp.MustCompile(`(?i)\bFROM\s+([a-zA-Z_][a-zA-Z0-9_]*)\.[a-zA-Z_][a-zA-Z0-9_]*`)
-	joinRE := regexp.MustCompile(`(?i)\bJOIN\s+([a-zA-Z_][a-zA-Z0-9_]*)\.[a-zA-Z_][a-zA-Z0-9_]*`)
-	// Strip SQL-style comments before scanning to avoid false positives
-	// on commentary referring to other schemas.
-	lineCommentRE := regexp.MustCompile(`--[^\n]*`)
-	blockCommentRE := regexp.MustCompile(`(?s)/\*.*?\*/`)
-
-	allowedNonModule := map[string]bool{
-		"buildingblocks": true, // shared kernel per ADR 0006/0027
-		"app":            true, // app.current_tenant() / app.is_platform() helpers
-		"pg_catalog":     true, // system catalogs
-		"information_schema": true,
-		"public":         true, // default; extensions
+	// Files that are inherently idempotent without explicit wrap or
+	// repo precheck (each with documented rationale in the file godoc).
+	allowList := []string{
+		"internal/identity/ports/subscribers/reuse_detected_siem.go", // append-only audit log; duplicate-safe
+		"internal/identity/ports/subscribers/invalidate_cache.go",    // cache delete is idempotent by definition
+		"internal/identity/ports/subscribers/registration.go",        // router-config helper; idempotency middleware wired at router level
+		"internal/identity/ports/subscribers/revoke_families.go",     // Family.Revoke is no-op on already-revoked families (godoc cited)
+		"internal/identity/ports/subscribers/email_sender.go",        // email provider enforces dedup at gateway; ADR 0057
 	}
 
+	getRE := regexp.MustCompile(`\b(Get|Find|Lookup|Exists)[A-Z]\w*\(`)
+	idempMiddlewareRE := regexp.MustCompile(`\bIdempotency(Middleware|Decorator|Wrapper)\b`)
+
 	type violation struct {
-		file   string
-		schema string
-		clause string
+		file string
 	}
 	var violations []violation
 
 	for _, mod := range modulesUnderInternal(t) {
-		sqlDir := filepath.Join(internalDir(t), mod, "adapters", "sql")
-		// Walk if dir exists.
-		entries, err := readDirSafe(sqlDir)
-		if err != nil {
-			continue // module has no sql/ dir
-		}
-		for _, e := range entries {
-			if e.IsDir() || !strings.HasSuffix(e.Name(), ".sql") {
-				continue
+		subDir := filepath.Join(internalDir(t), mod, "ports", "subscribers")
+		walkGoFiles(t, subDir, false, func(path string, src []byte) {
+			slashPath := pathToSlash(path)
+			if strings.HasSuffix(slashPath, "/doc.go") {
+				return
 			}
-			path := filepath.Join(sqlDir, e.Name())
-			raw, rerr := readFileBytes(path)
-			if rerr != nil {
-				t.Errorf("read %s: %v", path, rerr)
-				continue
-			}
-			// Strip comments.
-			s := lineCommentRE.ReplaceAllString(string(raw), "")
-			s = blockCommentRE.ReplaceAllString(s, "")
-
-			for _, m := range fromRE.FindAllStringSubmatch(s, -1) {
-				schema := strings.ToLower(m[1])
-				if schema != mod && !allowedNonModule[schema] {
-					violations = append(violations, violation{file: path, schema: m[1], clause: "FROM"})
+			for _, allowed := range allowList {
+				if strings.HasSuffix(slashPath, allowed) {
+					return
 				}
 			}
-			for _, m := range joinRE.FindAllStringSubmatch(s, -1) {
-				schema := strings.ToLower(m[1])
-				if schema != mod && !allowedNonModule[schema] {
-					violations = append(violations, violation{file: path, schema: m[1], clause: "JOIN"})
-				}
+			text := string(src)
+			if idempMiddlewareRE.MatchString(text) {
+				return
 			}
-		}
+			if getRE.MatchString(text) {
+				return
+			}
+			violations = append(violations, violation{file: path})
+		})
 	}
 
 	if len(violations) > 0 {
-		t.Logf("CROSS-SCHEMA JOIN VIOLATIONS — %d", len(violations))
-		t.Logf("Per ADR 0001 + ADR 0006: each module owns its Postgres schema.")
-		t.Logf("Cross-module reads MUST flow through outbox → subscriber → projection")
-		t.Logf("(ADR 0041), never via direct JOIN. Allowed extra-module schemas:")
-		t.Logf("buildingblocks (shared kernel), app (RLS helpers), pg_catalog,")
-		t.Logf("information_schema, public.")
+		t.Logf("SUBSCRIBER IDEMPOTENCY VIOLATIONS — %d", len(violations))
+		t.Logf("Watermill at-least-once delivery means every subscriber may")
+		t.Logf("see the same event twice. Either wrap with")
+		t.Logf("messaging.IdempotencyMiddleware OR perform a natural-key")
+		t.Logf("precheck (Get*/Find* returning ErrNotFound before create).")
 		for _, v := range violations {
-			t.Errorf("%s — %s clause references schema %q (not owned by this module + not in allowed-list)", v.file, v.clause, v.schema)
+			t.Errorf("%s — no IdempotencyMiddleware wrap + no Get/Find precheck", v.file)
 		}
 	}
 }
 
 // ----------------------------------------------------------------------------
-// Test 4: TestArch_OutboxTableSchema
+// Test 28: TestArch_IntegrationEventsHaveTopicMethod
 // ----------------------------------------------------------------------------
 //
-// Enforces: every CREATE TABLE <schema>.outbox in migrations/ MUST
-// declare the canonical column set so the in-process forwarder + the
-// Watermill SQL subscriber + the audit reader all stay drop-in
-// compatible across modules.
+// Every concrete event struct under internal/<mod>/integrationevents/
+// (file ending V<N>.go or matching the canonical event naming) must
+// expose a `Topic()` method returning a string — the canonical wire
+// alias under the registry. Without Topic() the event cannot be
+// registered + routed.
 //
-// Required columns per ADR 0027 (outbox doubles as audit log):
-//   id, occurred_at, topic (a.k.a. event_type), payload, forwarded_at.
-//
-// Note on "topic" vs "event_type": the canonical LeadKart-Go column
-// name is `topic` (matches Watermill's pub/sub vocabulary). The task
-// brief lists "event_type" — accept either to stay tolerant of the
-// historical naming.
-//
-// Expected-but-optional: tenant_id (per ADR 0059 amendment),
-// act_operator_id / act_session_id / act_reason (per ADR 0056).
-//
-// Canon: Brandur Leach "Transactionally staged job drains in Postgres",
-// Watermill SQL outbox README, ADR 0008 + 0027 + 0056.
-func TestArch_OutboxTableSchema(t *testing.T) {
+// Detection: per module, parse every non-test .go file in
+// integrationevents/; collect every exported struct type whose name
+// ends in `V<digit>+`; assert a method declaration on (T or *T) named
+// `Topic` exists.
+func TestArch_IntegrationEventsHaveTopicMethod(t *testing.T) {
 	t.Parallel()
 
-	// Match `CREATE TABLE <schema>.outbox (` followed by everything
-	// up to the matching closing paren on its own line. Migrations
-	// use the convention of one column per indented line.
-	tableRE := regexp.MustCompile(`(?is)CREATE TABLE\s+(\w+)\.outbox\s*\((.*?)\);`)
-	required := []string{"id", "occurred_at", "topic", "payload", "forwarded_at"}
+	eventNameRE := regexp.MustCompile(`^[A-Z]\w*V\d+$`)
+	// Topic() may live on the type directly OR on an embedded marker
+	// struct (e.g. platformMarker / tenantMarker). We accept either by
+	// also recognising compile-time `var _ TopicProvider = X{}` or by
+	// detecting embedded type names that we know declare Topic().
+	embeddedTopicProviders := map[string]bool{
+		"platformMarker":      true,
+		"tenantScopedMarker":  true,
+		"tenantMarker":        true,
+	}
 
 	type violation struct {
-		file    string
-		schema  string
-		missing []string
-	}
-	var violations []violation
-
-	entries, err := readDirSafe(migrationsDir(t))
-	if err != nil {
-		t.Fatalf("read migrations/: %v", err)
-	}
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".sql") {
-			continue
-		}
-		path := filepath.Join(migrationsDir(t), e.Name())
-		raw, rerr := readFileBytes(path)
-		if rerr != nil {
-			t.Errorf("read %s: %v", path, rerr)
-			continue
-		}
-		matches := tableRE.FindAllStringSubmatch(string(raw), -1)
-		for _, m := range matches {
-			schema := m[1]
-			body := strings.ToLower(m[2])
-			var missing []string
-			for _, col := range required {
-				// Each column name should appear as a token followed by
-				// whitespace (the type). Use word-boundary regex per col.
-				colRE := regexp.MustCompile(`(?m)\b` + col + `\b`)
-				if !colRE.MatchString(body) {
-					missing = append(missing, col)
-				}
-			}
-			if len(missing) > 0 {
-				violations = append(violations, violation{
-					file:    path,
-					schema:  schema,
-					missing: missing,
-				})
-			}
-		}
-	}
-
-	if len(violations) > 0 {
-		t.Logf("OUTBOX SCHEMA VIOLATIONS — %d table definitions missing canonical columns", len(violations))
-		t.Logf("Per ADR 0008 + 0027: every module's outbox table MUST declare:")
-		t.Logf("  id, occurred_at, topic, payload, forwarded_at")
-		t.Logf("(The forwarder + Watermill SQL subscriber + audit reader assume these.)")
-		for _, v := range violations {
-			t.Errorf("%s — CREATE TABLE %s.outbox missing columns: %v", v.file, v.schema, v.missing)
-		}
-	}
-}
-
-// ----------------------------------------------------------------------------
-// Test 5: TestArch_DomainEventsSealed
-// ----------------------------------------------------------------------------
-//
-// Enforces: every domain Event interface uses the SEALED marker pattern.
-// Per Vernon IDDD ch. 8 + Wild Workouts canon: domain events form a
-// closed set per aggregate; an external package adding its own type
-// to the marker interface would be a domain-modelling escape hatch.
-// The seal is an unexported method (e.g. `isTenantEvent()`) — only
-// types in the same package can implement it.
-//
-// Detection: AST walk every `internal/<module>/domain/<agg>/events.go`
-// OR aggregate file containing `type Event interface`; assert the
-// interface has exactly one method, the method name starts with `is`,
-// and that name is unexported.
-//
-// Per CLAUDE.md "Architecture — three unbreakable rules" + canonical
-// shape in internal/identity/domain/tenant/events.go.
-func TestArch_DomainEventsSealed(t *testing.T) {
-	t.Parallel()
-
-	type violation struct {
-		file   string
-		typ    string
-		reason string
+		file string
+		typ  string
 	}
 	var violations []violation
 
 	for _, mod := range modulesUnderInternal(t) {
-		domainDir := filepath.Join(internalDir(t), mod, "domain")
-		walkGoFiles(t, domainDir, false, func(path string, src []byte) {
+		ieDir := filepath.Join(internalDir(t), mod, "integrationevents")
+		types := map[string]ast.Node{} // typeName -> the *ast.StructType for embed inspection
+		typesFiles := map[string]string{}
+		hasTopic := map[string]bool{}
+		typeEmbeds := map[string][]string{}
+
+		walkGoFiles(t, ieDir, false, func(path string, src []byte) {
 			_, f := parseFile(t, path, src)
-			ast.Inspect(f, func(n ast.Node) bool {
-				ts, ok := n.(*ast.TypeSpec)
-				if !ok {
-					return true
-				}
-				if ts.Name.Name != "Event" {
-					return true
-				}
-				iface, ok := ts.Type.(*ast.InterfaceType)
-				if !ok {
-					return true
-				}
-				// Require exactly one method, unexported, name starts with "is".
-				if iface.Methods == nil || len(iface.Methods.List) == 0 {
-					violations = append(violations, violation{
-						file:   path,
-						typ:    ts.Name.Name,
-						reason: "Event interface has no seal method (expected unexported `is<Agg>Event()`)",
-					})
-					return true
-				}
-				sealed := false
-				for _, m := range iface.Methods.List {
-					for _, name := range m.Names {
-						if strings.HasPrefix(name.Name, "is") && !ast.IsExported(name.Name) {
-							sealed = true
+			for _, decl := range f.Decls {
+				switch d := decl.(type) {
+				case *ast.GenDecl:
+					for _, spec := range d.Specs {
+						ts, ok := spec.(*ast.TypeSpec)
+						if !ok {
+							continue
+						}
+						st, ok := ts.Type.(*ast.StructType)
+						if !ok {
+							continue
+						}
+						if !eventNameRE.MatchString(ts.Name.Name) {
+							continue
+						}
+						types[ts.Name.Name] = st
+						typesFiles[ts.Name.Name] = path
+						// Collect embedded type names.
+						for _, field := range st.Fields.List {
+							if len(field.Names) == 0 { // embedded
+								if id, ok := field.Type.(*ast.Ident); ok {
+									typeEmbeds[ts.Name.Name] = append(typeEmbeds[ts.Name.Name], id.Name)
+								}
+							}
 						}
 					}
+				case *ast.FuncDecl:
+					if d.Name.Name != "Topic" || d.Recv == nil || len(d.Recv.List) == 0 {
+						continue
+					}
+					rt := d.Recv.List[0].Type
+					if star, ok := rt.(*ast.StarExpr); ok {
+						rt = star.X
+					}
+					if id, ok := rt.(*ast.Ident); ok {
+						hasTopic[id.Name] = true
+					}
 				}
-				if !sealed {
+			}
+		})
+
+		for typ := range types {
+			if hasTopic[typ] {
+				continue
+			}
+			// Embedded marker that provides Topic() is acceptable.
+			satisfied := false
+			for _, emb := range typeEmbeds[typ] {
+				if embeddedTopicProviders[emb] || hasTopic[emb] {
+					satisfied = true
+					break
+				}
+			}
+			if !satisfied {
+				violations = append(violations, violation{file: typesFiles[typ], typ: typ})
+			}
+		}
+	}
+
+	if len(violations) > 0 {
+		t.Logf("INTEGRATION-EVENT Topic() VIOLATIONS — %d", len(violations))
+		t.Logf("Every <Name>V<N> struct must declare (or inherit via an")
+		t.Logf("embedded marker) `Topic() string`. Without Topic() the registry")
+		t.Logf("cannot route the event.")
+		for _, v := range violations {
+			t.Errorf("%s — type %s missing Topic() method (direct or via embed)", v.file, v.typ)
+		}
+	}
+}
+
+// ----------------------------------------------------------------------------
+// Test 29: TestArch_IntegrationEventsAreTenantScopedOrPlatform
+// ----------------------------------------------------------------------------
+//
+// Every concrete event in internal/<mod>/integrationevents/ must
+// implement EXACTLY ONE of the marker interfaces TenantScoped or
+// Platform. The marker drives routing + audit-log enrichment.
+//
+// Per per-module integrationevents/arch_test.go (cross-promoted): the
+// rule has been per-module; this fitness function ensures NEW modules
+// (CRM, orders, dispatch, etc.) carry the same discipline by walking
+// them all from the architecture/ package.
+//
+// Detection: AST-walk every event struct; require a method named
+// `IsTenantScoped` or `IsPlatform` to exist on the type. The per-
+// module suite asserts EXCLUSIVE OR via the interface marker; this
+// cross-cutting test asserts at-least-one (drift floor).
+func TestArch_IntegrationEventsAreTenantScopedOrPlatform(t *testing.T) {
+	t.Parallel()
+
+	eventNameRE := regexp.MustCompile(`^[A-Z]\w*V\d+$`)
+	// Compile-time assertion regex matches both shapes:
+	//   var _ Platform     = TenantRegisteredV1{}
+	//   var _ TenantScoped = MembershipCreatedV1{}
+	assertionRE := regexp.MustCompile(`\b_\s+(TenantScoped|Platform)\s*=\s*(\*?)([A-Z]\w*V\d+)\b`)
+
+	type violation struct {
+		file string
+		typ  string
+	}
+	var violations []violation
+
+	for _, mod := range modulesUnderInternal(t) {
+		ieDir := filepath.Join(internalDir(t), mod, "integrationevents")
+		types := map[string]bool{}
+		typesFiles := map[string]string{}
+		hasMarker := map[string]bool{}
+
+		walkGoFiles(t, ieDir, false, func(path string, src []byte) {
+			_, f := parseFile(t, path, src)
+			for _, decl := range f.Decls {
+				gd, ok := decl.(*ast.GenDecl)
+				if !ok {
+					continue
+				}
+				for _, spec := range gd.Specs {
+					ts, ok := spec.(*ast.TypeSpec)
+					if !ok {
+						continue
+					}
+					if _, ok := ts.Type.(*ast.StructType); !ok {
+						continue
+					}
+					if eventNameRE.MatchString(ts.Name.Name) {
+						types[ts.Name.Name] = true
+						typesFiles[ts.Name.Name] = path
+					}
+				}
+			}
+			// Scan textually for compile-time interface assertions.
+			for _, m := range assertionRE.FindAllStringSubmatch(string(src), -1) {
+				hasMarker[m[3]] = true
+			}
+		})
+
+		for typ := range types {
+			if !hasMarker[typ] {
+				violations = append(violations, violation{file: typesFiles[typ], typ: typ})
+			}
+		}
+	}
+
+	if len(violations) > 0 {
+		t.Logf("INTEGRATION-EVENT SCOPE-MARKER VIOLATIONS — %d", len(violations))
+		t.Logf("Every event must declare a compile-time interface assertion:")
+		t.Logf("  var _ TenantScoped = <Event>V<N>{}  // or")
+		t.Logf("  var _ Platform     = <Event>V<N>{}")
+		t.Logf("The marker drives routing + audit-log enrichment.")
+		for _, v := range violations {
+			t.Errorf("%s — type %s missing var-assert against TenantScoped or Platform", v.file, v.typ)
+		}
+	}
+}
+
+// ----------------------------------------------------------------------------
+// Test 30: TestArch_AppPublishesViaOutboxNotBus
+// ----------------------------------------------------------------------------
+//
+// Per ADR 0008: integration events are written to the per-module
+// outbox table inside the same tx as the aggregate mutation; a
+// separate forwarder polls the outbox and publishes to the bus.
+// App-layer code MUST NOT call `Publisher.Publish` or
+// `MessagePublisher.Publish` directly — that bypasses the outbox and
+// breaks the at-least-once + ordered-by-aggregate guarantees.
+//
+// Detection: AST-walk app/ files; flag CallExprs with selector name
+// `Publish` whose receiver is a watermill-typed publisher.
+//
+// Heuristic — we accept any `*.Publish(...)` call inside app/ as a
+// violation unless allow-listed. False positive: a domain repo named
+// `OutboxPublisher` may legitimately expose Publish at the app layer
+// when going through the outbox helper.
+func TestArch_AppPublishesViaOutboxNotBus(t *testing.T) {
+	t.Parallel()
+
+	// Allow-list: app/-layer Publish callers that go through the outbox
+	// indirection (the Outbox itself uses .Publish on a wrapped pub).
+	allowList := []string{
+		// Currently empty — the outbox forwarder lives in adapters/.
+	}
+
+	type violation struct {
+		file string
+		line int
+	}
+	var violations []violation
+
+	for _, mod := range modulesUnderInternal(t) {
+		appDir := filepath.Join(internalDir(t), mod, "app")
+		walkGoFiles(t, appDir, false, func(path string, src []byte) {
+			slashPath := pathToSlash(path)
+			for _, allowed := range allowList {
+				if strings.HasSuffix(slashPath, allowed) {
+					return
+				}
+			}
+			imports := parseImports(t, path, src)
+			usesWatermill := false
+			for _, imp := range imports {
+				if strings.HasPrefix(imp, "github.com/ThreeDotsLabs/watermill") {
+					usesWatermill = true
+					break
+				}
+			}
+			if !usesWatermill {
+				return
+			}
+			fset, f := parseFile(t, path, src)
+			ast.Inspect(f, func(n ast.Node) bool {
+				call, ok := n.(*ast.CallExpr)
+				if !ok {
+					return true
+				}
+				name := callName(call.Fun)
+				if name == "Publish" {
 					violations = append(violations, violation{
-						file:   path,
-						typ:    ts.Name.Name,
-						reason: "Event interface lacks an unexported seal method (e.g. `isTenantEvent()`)",
+						file: path,
+						line: fset.Position(call.Pos()).Line,
 					})
 				}
 				return true
@@ -447,13 +510,13 @@ func TestArch_DomainEventsSealed(t *testing.T) {
 	}
 
 	if len(violations) > 0 {
-		t.Logf("UNSEALED DOMAIN EVENT VIOLATIONS — %d", len(violations))
-		t.Logf("Per Vernon IDDD ch. 8 + Wild Workouts canon: every domain `Event`")
-		t.Logf("interface MUST be sealed via an unexported marker method (e.g.")
-		t.Logf("`isTenantEvent()`). The seal prevents external packages from")
-		t.Logf("implementing the marker — the domain owns its event taxonomy.")
+		t.Logf("APP-LAYER DIRECT-PUBLISH VIOLATIONS — %d", len(violations))
+		t.Logf("Per ADR 0008: integration events go through the outbox, not")
+		t.Logf("a direct Publisher.Publish call in app/. The outbox guarantees")
+		t.Logf("at-least-once delivery + ordered drainage; direct publish loses")
+		t.Logf("both.")
 		for _, v := range violations {
-			t.Errorf("%s — type %s: %s", v.file, v.typ, v.reason)
+			t.Errorf("%s:%d — .Publish() inside app/ (use the outbox via the repo Add path)", v.file, v.line)
 		}
 	}
 }

@@ -20,36 +20,36 @@
 // internal/identity/ports/route_registration_test.go) so the per-module
 // authors can iterate on local discipline without merge friction here.
 //
-// # ADR catalog enforced
+// # The 14-principle taxonomy
 //
-// EDA discipline (5 tests):
-//   - ADR 0001 (modular monolith) → TestArch_NoCrossModuleImports
-//   - ADR 0008 (Watermill messaging) → TestArch_SubscribersInPortsSubscribers
-//   - ADR 0001/0006 (module-owned schemas) → TestArch_NoCrossSchemaJoins
-//   - ADR 0027 (outbox-doubles-as-audit) → TestArch_OutboxTableSchema
-//   - ADR 0002 (DDD sealed events) → TestArch_DomainEventsSealed
+// Tests are organised by the DESIGN PRINCIPLE they enforce, not by the
+// symptom they catch. A symptom-named test ("clock injection") is a
+// proxy for the underlying principle ("pure domain — no hidden
+// inputs"); when the principle is captured directly, the test surface
+// stops bloating every time the symptom catalogue grows.
 //
-// TDL Clean Architecture (5 tests):
-//   - ADR 0002/0047 (domain purity) → TestArch_DomainHasNoInfraImports
-//   - ADR 0004 (TDL aggregate factory + UnmarshalFromDB) → TestArch_AggregatesHaveFactoryAndUnmarshal
-//   - ADR 0004 (UpdateByID closure pattern) → TestArch_RepositoriesHaveUpdateByIDFn
-//   - ADR 0047 (Cheney "accept interfaces") → TestArch_PortsAdaptersDontDefineInterfaces
-//   - ADR 0047 (one-way dependency flow) → TestArch_AppDoesntImportPorts
+//   P1  Pure Domain                — pure_domain_arch_test.go         (10 tests)
+//   P2  Explicit DI                — explicit_di_arch_test.go         ( 5 tests)
+//   P3  Aggregate Invariants       — aggregate_invariants_arch_test.go( 8 tests)
+//   P4  Event-Driven Communication — eda_arch_test.go                 ( 6 tests)
+//   P5  Persistence as Adapter     — persistence_arch_test.go         ( 9 tests *)
+//   P6  Multi-Tenancy Enforcement  — multi_tenancy_arch_test.go       ( 6 tests)
+//   P7  Auth in Middleware         — auth_middleware_arch_test.go     ( 5 tests)
+//   P8  Concurrency Safety         — concurrency_arch_test.go         ( 4 tests)
+//   P9  Modern Go Idioms           — modern_go_arch_test.go           ( 7 tests)
+//   P10 URL / API Conformance      — url_api_arch_test.go             ( 8 tests)
+//   P11 DB Schema Hygiene          — db_schema_arch_test.go           (15 tests)
+//   P12 Observability Uniformity   — observability_arch_test.go       ( 8 tests)
+//   P13 Performance Discipline     — performance_arch_test.go         ( 5 tests)
+//   P14 Meta / Process             — meta_arch_test.go                ( 2 tests)
+//                                                                     ----
+//                                                                       98
 //
-// Modern Go (5 tests):
-//   - ADR 0034 (Go 1.26+) → TestArch_NoInterfaceEmpty
-//   - ADR 0013 (log/slog stdlib) → TestArch_NoLogPackage
-//   - CLAUDE.md "Banned" list → TestArch_NoBannedDeps
-//   - CLAUDE.md ctor-patterns → TestArch_NoMustInRequestPath
-//   - Stripe money canon → TestArch_NoFloat64ForMoney
-//
-// Clock-injection invariants (3 tests, protects commit a33e9a0):
-//   - TestArch_NoClockPackageReference
-//   - TestArch_NoTimeNowInDomain
-//   - TestArch_HandlersInjectNow
-//
-// Meta (1 test):
-//   - TestMeta_EveryAcceptedADRHasFitnessFunctionRef
+// * P5 carries 3 preserved-from-the-original-19 layer-boundary tests
+//   (PortsAdaptersDontDefineInterfaces, AppDoesntImportPorts,
+//   DomainHasNoInfraImports). The brief specifies 6 net-new P5 tests;
+//   keeping the preserved 3 maintains coverage continuity. Total 98 vs
+//   target 95 — three-test overshoot in favour of zero coverage loss.
 //
 // # Process discipline
 //
@@ -63,17 +63,28 @@
 // `**Fitness function:** TBD — grandfathered` marker but at most 5
 // such markers may exist at any time, forcing gradual gap closure.
 //
+// # Skip discipline
+//
+// Tests that hit invasive violations (>50 LOC fix) may `t.Skip("known
+// violation: <reason> — tracked in KNOWN_VIOLATIONS.md")`. The
+// running cap is < 15 skipped tests across the suite — the suite must
+// overwhelmingly enforce LIVE constraints, not document tech debt.
+//
 // # Cited canon
 //
 //   - Ford / Parsons / Kua — Building Evolutionary Architectures (2017)
 //   - Neal Ford — Software Architecture: The Hard Parts (2021)
 //   - Vernon — Implementing DDD (sealed events, aggregate factories)
-//   - Khorikov — Unit Testing Principles (2020) ch. 11 (clock injection)
+//   - Khorikov — Unit Testing Principles (2020) ch. 11 (clock injection,
+//     time-pure domain, the "humble object" pattern)
 //   - Cheney — "Accept interfaces, return structs" (2016 blog)
 //   - Mat Ryer — "How I write HTTP services" (2024)
 //   - ThreeDotsLabs Wild Workouts (the canonical Go DDD reference)
 //   - Brandur Leach — Crunchy Bridge architecture (outbox / sqlc canon)
-//   - Stripe API platform — money-as-int64, spec-of-record
+//   - Stripe API platform — money-as-int64, spec-of-record, idempotency
 //   - Auth0 / GitHub — enumeration safety + URL design canon
 //   - NIST 800-63B §5.2.2 — account lockout policy
+//   - RFC 9457 — Problem Details for HTTP APIs
+//   - RFC 8693 — OAuth 2.0 Token Exchange (the `act` claim)
+//   - OWASP API Top 10 (2023)
 package architecture

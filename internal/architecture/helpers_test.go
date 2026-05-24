@@ -13,6 +13,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"testing"
@@ -57,6 +58,11 @@ func adrDir(t *testing.T) string {
 	return filepath.Join(repoRoot(t), "docs", "adr")
 }
 
+// apiSpecPath returns <repoRoot>/api/openapi.yaml.
+func apiSpecPath(t *testing.T) string {
+	return filepath.Join(repoRoot(t), "api", "openapi.yaml")
+}
+
 // modulesUnderInternal returns the names of every bounded-context
 // module dir under internal/ that is NOT "common" or "architecture"
 // (the architecture package + the shared kernel are not modules).
@@ -83,8 +89,15 @@ func modulesUnderInternal(t *testing.T) []string {
 // walkGoFiles invokes fn for every .go file under root. _test.go files
 // are included when includeTests=true. Generated files (matching the
 // "// Code generated" canonical first-line marker) are always skipped.
+//
+// Silently returns if root does not exist — module-shape arch tests
+// often probe optional subdirectories (e.g. ports/subscribers/ may
+// not exist for read-only modules).
 func walkGoFiles(t *testing.T, root string, includeTests bool, fn func(path string, src []byte)) {
 	t.Helper()
+	if _, err := os.Stat(root); err != nil {
+		return
+	}
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -113,6 +126,36 @@ func walkGoFiles(t *testing.T, root string, includeTests bool, fn func(path stri
 		}
 		if strings.Contains(string(head), "Code generated") &&
 			strings.Contains(string(head), "DO NOT EDIT") {
+			return nil
+		}
+		fn(path, src)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk %s: %v", root, err)
+	}
+}
+
+// walkFilesByExt invokes fn for every file under root whose name ends
+// in ext. Skips directories silently if root does not exist.
+func walkFilesByExt(t *testing.T, root, ext string, fn func(path string, src []byte)) {
+	t.Helper()
+	if _, err := os.Stat(root); err != nil {
+		return
+	}
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			return nil
+		}
+		if !strings.HasSuffix(path, ext) {
+			return nil
+		}
+		src, rerr := os.ReadFile(path)
+		if rerr != nil {
+			t.Errorf("read %s: %v", path, rerr)
 			return nil
 		}
 		fn(path, src)
@@ -161,4 +204,133 @@ func readDirSafe(dir string) ([]os.DirEntry, error) {
 // readFileBytes wraps os.ReadFile for fixture/test consumption.
 func readFileBytes(path string) ([]byte, error) {
 	return os.ReadFile(path)
+}
+
+// stripGoComments removes // line comments + /* */ block comments
+// while preserving newlines (so line-number arithmetic stays correct).
+// Sufficient for go-fmt'd source where comment delimiters are never
+// load-bearing inside string literals.
+func stripGoComments(s string) string {
+	blockRE := regexp.MustCompile(`(?s)/\*.*?\*/`)
+	s = blockRE.ReplaceAllStringFunc(s, func(m string) string {
+		return strings.Repeat("\n", strings.Count(m, "\n"))
+	})
+	lineRE := regexp.MustCompile(`//[^\n]*`)
+	s = lineRE.ReplaceAllString(s, "")
+	return s
+}
+
+// stripSQLComments removes -- line comments + /* */ block comments
+// from a SQL source string.
+func stripSQLComments(s string) string {
+	blockRE := regexp.MustCompile(`(?s)/\*.*?\*/`)
+	s = blockRE.ReplaceAllString(s, "")
+	lineRE := regexp.MustCompile(`--[^\n]*`)
+	s = lineRE.ReplaceAllString(s, "")
+	return s
+}
+
+// readLine returns the 1-indexed Nth line of src, or "" if out of range.
+func readLine(src string, n int) string {
+	if n < 1 {
+		return ""
+	}
+	cur := 1
+	start := 0
+	for i := 0; i < len(src); i++ {
+		if src[i] == '\n' {
+			if cur == n {
+				return src[start:i]
+			}
+			cur++
+			start = i + 1
+		}
+	}
+	if cur == n {
+		return src[start:]
+	}
+	return ""
+}
+
+// callName returns the trailing identifier of a function-call
+// expression, supporting `pkg.Func`, `recv.Method`, and bare `Func`.
+func callName(e ast.Expr) string {
+	switch x := e.(type) {
+	case *ast.Ident:
+		return x.Name
+	case *ast.SelectorExpr:
+		return x.Sel.Name
+	}
+	return ""
+}
+
+// callPkgAndName returns the package selector + name for `pkg.Func`
+// call expressions, or ("", name) for bare Idents. Returns ("","")
+// when the call isn't a simple selector / ident.
+func callPkgAndName(e ast.Expr) (pkg, name string) {
+	switch x := e.(type) {
+	case *ast.Ident:
+		return "", x.Name
+	case *ast.SelectorExpr:
+		if id, ok := x.X.(*ast.Ident); ok {
+			return id.Name, x.Sel.Name
+		}
+	}
+	return "", ""
+}
+
+// typeName returns the textual representation of an Ident-typed
+// expression (for use in error messages).
+func typeName(e ast.Expr) string {
+	if id, ok := e.(*ast.Ident); ok {
+		return id.Name
+	}
+	return "<complex-type>"
+}
+
+// isHandlerReceiver reports whether a FuncDecl receiver names a
+// type ending in "Handler" (e.g. *LoginHandler, ListSessionsHandler).
+// Both pointer + value receivers are accepted.
+func isHandlerReceiver(recv *ast.FieldList) bool {
+	if recv == nil || len(recv.List) == 0 {
+		return false
+	}
+	t := recv.List[0].Type
+	if star, ok := t.(*ast.StarExpr); ok {
+		t = star.X
+	}
+	id, ok := t.(*ast.Ident)
+	if !ok {
+		return false
+	}
+	return strings.HasSuffix(id.Name, "Handler")
+}
+
+// returnsPointerAndError reports whether the function declaration's
+// result list is exactly `(*T, error)` for some T.
+func returnsPointerAndError(fd *ast.FuncDecl) bool {
+	if fd.Type.Results == nil || len(fd.Type.Results.List) != 2 {
+		return false
+	}
+	if _, ok := fd.Type.Results.List[0].Type.(*ast.StarExpr); !ok {
+		return false
+	}
+	id, ok := fd.Type.Results.List[1].Type.(*ast.Ident)
+	if !ok {
+		return false
+	}
+	return id.Name == "error"
+}
+
+// pathToSlash normalises Windows-style backslashes to forward slashes
+// for path-matching predicates.
+func pathToSlash(p string) string { return filepath.ToSlash(p) }
+
+// hasArchTestNolint returns true when the comment text at `pos` (and
+// the trailing comment on the same line) contains an `arch-test:`
+// opt-out directive. We use specific directive prefixes (vs a blanket
+// nolint) so each opt-out is intentional and grep-discoverable.
+func hasArchTestDirective(lineText, directive string) bool {
+	return strings.Contains(lineText, "// arch-test:"+directive) ||
+		strings.Contains(lineText, "//arch-test:"+directive)
 }

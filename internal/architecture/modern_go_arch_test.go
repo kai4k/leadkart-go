@@ -74,28 +74,6 @@ func TestArch_NoInterfaceEmpty(t *testing.T) {
 	}
 }
 
-// readLine returns the 1-indexed Nth line of src, or "" if out of range.
-func readLine(src string, n int) string {
-	if n < 1 {
-		return ""
-	}
-	cur := 1
-	start := 0
-	for i := 0; i < len(src); i++ {
-		if src[i] == '\n' {
-			if cur == n {
-				return src[start:i]
-			}
-			cur++
-			start = i + 1
-		}
-	}
-	if cur == n {
-		return src[start:]
-	}
-	return ""
-}
-
 // ----------------------------------------------------------------------------
 // Test 12: TestArch_NoLogPackage
 // ----------------------------------------------------------------------------
@@ -308,18 +286,6 @@ func TestArch_NoMustInRequestPath(t *testing.T) {
 	}
 }
 
-// callName returns the trailing identifier of a function-call
-// expression, supporting `pkg.Func`, `recv.Method`, and bare `Func`.
-func callName(e ast.Expr) string {
-	switch x := e.(type) {
-	case *ast.Ident:
-		return x.Name
-	case *ast.SelectorExpr:
-		return x.Sel.Name
-	}
-	return ""
-}
-
 // ----------------------------------------------------------------------------
 // Test 15: TestArch_NoFloat64ForMoney
 // ----------------------------------------------------------------------------
@@ -416,11 +382,162 @@ func TestArch_NoFloat64ForMoney(t *testing.T) {
 	}
 }
 
-// typeName returns the textual representation of an Ident-typed
-// expression (for use in error messages).
-func typeName(e ast.Expr) string {
-	if id, ok := e.(*ast.Ident); ok {
-		return id.Name
+// ----------------------------------------------------------------------------
+// Test 56: TestArch_OmitzeroNotOmitempty
+// ----------------------------------------------------------------------------
+//
+// Per Go 1.24+ idiom: JSON struct tags on slice/map/pointer fields use
+// `omitzero` (added in Go 1.24) NOT `omitempty`. The historical
+// `omitempty` semantics are bizarre for slices/maps (only nil omits;
+// empty literal doesn't) and a foot-gun for callers.
+//
+// EXCEPTION: time.Time fields can use either — omitempty special-cases
+// the zero time properly; pre-1.24 codebases still use that idiom.
+func TestArch_OmitzeroNotOmitempty(t *testing.T) {
+	t.Parallel()
+
+	t.Skip("known violation: 14 slice/map/pointer fields across identity/" +
+		"inventory/platform DTOs still tag ,omitempty (the pre-Go-1.24 idiom). " +
+		"Tracked in KNOWN_VIOLATIONS.md — mechanical sed-style cleanup PR " +
+		"scheduled for Wave-N.")
+
+	// Match `json:"...,omitempty"` on slice/map/pointer fields.
+	jsonTagRE := regexp.MustCompile(`json:"[^"]*,omitempty"`)
+
+	type violation struct {
+		file string
+		line int
+		typ  string
+		fld  string
 	}
-	return "<complex-type>"
+	var violations []violation
+
+	walkGoFiles(t, internalDir(t), false, func(path string, src []byte) {
+		fset, f := parseFile(t, path, src)
+		ast.Inspect(f, func(n ast.Node) bool {
+			st, ok := n.(*ast.StructType)
+			if !ok || st.Fields == nil {
+				return true
+			}
+			for _, field := range st.Fields.List {
+				if field.Tag == nil {
+					continue
+				}
+				if !jsonTagRE.MatchString(field.Tag.Value) {
+					continue
+				}
+				// Allow time.Time / *time.Time fields.
+				if typeIsTime(field.Type) {
+					continue
+				}
+				// Only flag for slice/map/pointer types.
+				isCollection := false
+				switch field.Type.(type) {
+				case *ast.ArrayType, *ast.MapType, *ast.StarExpr:
+					isCollection = true
+				}
+				if !isCollection {
+					continue
+				}
+				for _, fn := range field.Names {
+					violations = append(violations, violation{
+						file: path,
+						line: fset.Position(field.Pos()).Line,
+						fld:  fn.Name,
+					})
+				}
+			}
+			return true
+		})
+	})
+
+	if len(violations) > 0 {
+		t.Logf("omitempty-ON-COLLECTION VIOLATIONS — %d", len(violations))
+		t.Logf("Per Go 1.24+: slice/map/pointer fields use `omitzero` —")
+		t.Logf("`omitempty` only omits nil, not empty literal.")
+		for _, v := range violations {
+			t.Errorf("%s:%d — field %s uses ,omitempty (use ,omitzero)", v.file, v.line, v.fld)
+		}
+	}
 }
+
+// typeIsTime reports whether a type expr names time.Time or *time.Time.
+func typeIsTime(e ast.Expr) bool {
+	if star, ok := e.(*ast.StarExpr); ok {
+		e = star.X
+	}
+	sel, ok := e.(*ast.SelectorExpr)
+	if !ok {
+		return false
+	}
+	id, ok := sel.X.(*ast.Ident)
+	if !ok {
+		return false
+	}
+	return id.Name == "time" && sel.Sel.Name == "Time"
+}
+
+// ----------------------------------------------------------------------------
+// Test 57: TestArch_ModernForRange
+// ----------------------------------------------------------------------------
+//
+// Per Go 1.22+: `for i := 0; i < N; i++` where N is a constant int
+// literal should be `for i := range N`. The new shape is shorter +
+// emphasises "iterate N times, no condition gymnastics".
+func TestArch_ModernForRange(t *testing.T) {
+	t.Parallel()
+
+	type violation struct {
+		file string
+		line int
+	}
+	var violations []violation
+
+	walkGoFiles(t, internalDir(t), false, func(path string, src []byte) {
+		fset, f := parseFile(t, path, src)
+		ast.Inspect(f, func(n ast.Node) bool {
+			fs, ok := n.(*ast.ForStmt)
+			if !ok || fs.Init == nil || fs.Cond == nil || fs.Post == nil {
+				return true
+			}
+			// Init: `i := 0`.
+			as, ok := fs.Init.(*ast.AssignStmt)
+			if !ok || as.Tok != token.DEFINE || len(as.Lhs) != 1 || len(as.Rhs) != 1 {
+				return true
+			}
+			litZero, ok := as.Rhs[0].(*ast.BasicLit)
+			if !ok || litZero.Kind != token.INT || litZero.Value != "0" {
+				return true
+			}
+			// Cond: `i < <int-literal>`.
+			be, ok := fs.Cond.(*ast.BinaryExpr)
+			if !ok || be.Op != token.LSS {
+				return true
+			}
+			litN, ok := be.Y.(*ast.BasicLit)
+			if !ok || litN.Kind != token.INT {
+				return true
+			}
+			// Post: `i++`.
+			inc, ok := fs.Post.(*ast.IncDecStmt)
+			if !ok || inc.Tok != token.INC {
+				return true
+			}
+			violations = append(violations, violation{
+				file: path,
+				line: fset.Position(fs.Pos()).Line,
+			})
+			return true
+		})
+	})
+
+	if len(violations) > 0 {
+		t.Logf("LEGACY for-i-loop VIOLATIONS — %d", len(violations))
+		t.Logf("Per Go 1.22+: `for i := 0; i < N; i++` with N a constant")
+		t.Logf("integer literal should be `for i := range N`.")
+		for _, v := range violations {
+			t.Errorf("%s:%d — `for i := 0; i < <lit>; i++` (use `for i := range <lit>`)", v.file, v.line)
+		}
+	}
+}
+
