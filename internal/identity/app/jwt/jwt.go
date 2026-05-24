@@ -251,7 +251,7 @@ func (i *Issuer) Verify(token string) (*Claims, error) {
 		// supports a single WithAudience.
 	)
 	claims := &Claims{}
-	_, err := parser.ParseWithClaims(token, claims, func(t *jwtv5.Token) (interface{}, error) {
+	_, err := parser.ParseWithClaims(token, claims, func(t *jwtv5.Token) (any, error) {
 		kidRaw, ok := t.Header["kid"]
 		if !ok {
 			return nil, errors.New("jwt: missing kid header")
