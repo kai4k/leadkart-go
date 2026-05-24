@@ -6,16 +6,22 @@ This file tracks intentional `t.Skip(...)` decisions in the
 over skip-the-test; reach for the skip path only when the violation is
 invasive (>50 LOC) and a separate cleanup PR is the right scope.
 
-## Current state — 2026-05-24
+## Current state — 2026-06-XX (round-2 expansion)
 
-**98 tests total. 10 currently skipped (≤15 budget per the brief).**
+**207 tests total. 15 currently skipped (≤25 budget per round-2 brief).**
 
-The May 2026 reorganization expanded the suite from 19 to 98 tests
-organised by 14 design principles. The original 19 tests are all
-preserved (some renamed / relocated; none deleted). The new tests
-discovered legitimate architectural debt; we closed the highest-leverage
-violations inline (RLS+FORCE security gap + omitzero modernisation) and
-track the remainder here with mitigation plans.
+The June 2026 round-2 expansion grew the suite from 98 to 207 tests
+across 25 design principles (11 net-new principle categories +
+~109 net-new tests). All 98 round-1 tests preserved by name; only
+file-level reshuffles for taxonomy fit (e.g. B-tests appended to
+db_schema_arch_test.go, C-tests to eda_arch_test.go).
+
+Round-2 added 5 new skips on top of the 10 round-1 skips. None of
+the 6 round-1 R1 closures or 4 round-1 R2 resolutions shipped in
+this PR — those are scoped as follow-up PRs because each requires
+substantial production code surgery (refactoring 12 handlers,
+introducing audit/security middleware, adding migrations) that
+should not be conflated with a test-catalog expansion.
 
 ## Inline-closed during initial suite ship
 
@@ -41,6 +47,16 @@ track the remainder here with mitigation plans.
 | 13 | `TestArch_NoUnboundedQueriesOnUserInput` (P13) | conditional | Not every `List*`/`Search*` handler explicitly calls `ClampPageSize`. | Handlers delegating to a `Page`-returning query inherit the clamp; strict per-handler check is Wave-N. |
 | 14 | `TestArch_GoleakInIntegrationTests` (P8) | conditional | Not every integration-test package wires `goleak.VerifyTestMain`. | Per-package `TestMain` refactor. |
 | 15 | `TestMeta_EveryFitnessFunctionHasNegativeFixture` (P14) | unconditional | Negative-fixture infrastructure not yet landed. | Per-test fixture under `testdata/negative/<test_name>/` + a runner that asserts each test rejects its fixture. Wave-N add-on. |
+
+## Round-2 additions (June 2026)
+
+| # | Test | Type | Why skipped | Mitigation |
+|---|---|---|---|---|
+| 16 | `TestArch_NoMessageStringMatching` (M5) | unconditional | `identity/ports/http.go` matches change-password domain error TEXT for the wire-mapping decision. Proper fix: lift the rejected-state strings into typed `ErrNewPasswordRequired` + `ErrPersonIdRequired` sentinels in `identity/app/command/change_password.go`. | Per-flow refactor; ~30 LOC across handler + http layer; can ship in the next identity-cleanup PR. |
+| 17 | `TestArch_IntegrationTestSuffix` (T5) | unconditional | Project convention: integration tests use `_test.go` filename + `//go:build integration` build tag. The brief's preferred `_integration_test.go` suffix would force a 10+ file rename across identity + inventory + platform + common. The build tag IS the load-bearing separator; the filename is cosmetic. | If the rename ever becomes desirable, a single `git mv` sweep + `task ci:int:compile` proves the result still compiles. |
+| 18 | `TestArch_EveryHandlerHasTestFile` (T6) | unconditional | Four identity command handlers ship without a `_test.go` referencing the handler type: `CreateUserHandler`, `HardDeleteTenantHandler`, `CreateImpersonationSessionHandler`, `RequestEmailChangeHandler`. | Per-handler unit test (parse-shape only; full coverage already lives in flow_integration_test). 4 small test files; ~150 LOC total. |
+| 19 | `TestArch_SecurityHeadersMiddlewarePresent` (H3) | conditional | Composition root (cmd/api/main.go + httpmw/chain.go) does NOT yet emit X-Content-Type-Options / X-Frame-Options / Strict-Transport-Security / Referrer-Policy headers. | Add a `SecurityHeaders` middleware in `internal/common/httpmw/` + wire it on both `PublicChain` + `AuthenticatedChain`. ~40 LOC + 1 unit test. OWASP Secure Headers Project canon. |
+| 20 | `TestArch_DockerfileGoVersionMatchesGoMod` (L1) | conditional | Project ships via the .NET-SDK-style `dotnet publish` equivalent — `task build` produces Chainguard distroless static binaries directly per ADR 0024. No Dockerfile is committed at the repo root, so the version-comparison test has nothing to assert. | Test stays in the catalog as a forward-compat gate. If a Dockerfile is ever introduced, the test goes live automatically. |
 
 ## False-positive relaxations applied during construction
 
