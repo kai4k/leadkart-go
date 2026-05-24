@@ -1,5 +1,7 @@
 -- LeadKart Go — replace `tenants.admin_email` denormalisation with a
 -- proper audit chain on the existing membership graph.
+-- ADR 0027 (audit log via outbox) + ADR 0003 (state-based persistence:
+-- derived values come from JOINs, not snapshot columns).
 --
 -- Why: `identity.tenants.admin_email` was a snapshot of the registering
 -- admin's email taken at RegisterTenantCommand time. It NEVER auto-
