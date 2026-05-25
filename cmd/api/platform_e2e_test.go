@@ -206,7 +206,6 @@ func (f platformE2E) mintPlatformOperatorToken(t *testing.T) string {
 // TestE2E_Platform_FullFlow_CreateVerifyBrowsePurchase — drives the
 // canonical Lead Agent → Buyer flow end-to-end. C2 review-pass.
 func TestE2E_Platform_FullFlow_CreateVerifyBrowsePurchase(t *testing.T) {
-	t.Parallel()
 	f := newPlatformE2E(t)
 	opToken := f.mintPlatformOperatorToken(t)
 
@@ -342,7 +341,6 @@ func TestE2E_Platform_FullFlow_CreateVerifyBrowsePurchase(t *testing.T) {
 // TestE2E_Platform_TenantClaim_RefusedByRequirePlatform — C5: tenant
 // claims with the Manage permission still get 403 from RequirePlatform.
 func TestE2E_Platform_TenantClaim_RefusedByRequirePlatform(t *testing.T) {
-	t.Parallel()
 	f := newPlatformE2E(t)
 	tenant := f.id.registerAndLogin(t, "tenant-c5")
 

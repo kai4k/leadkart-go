@@ -27,7 +27,6 @@ import (
 // `(product_id, expiry_date DESC, id DESC) WHERE NOT is_deleted` —
 // matching the query's `ORDER BY expiry_date DESC, id DESC`).
 func TestKeysetBatchesPage_UsesIndexUnderRLS(t *testing.T) {
-	t.Parallel()
 	pool := repoFixture(t)
 	tid := seedTenant(t, pool)
 	ctx := tenantCtx(t, tid)

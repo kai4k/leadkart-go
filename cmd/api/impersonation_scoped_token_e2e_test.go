@@ -48,7 +48,6 @@ import (
 // opens session targeting Tenant A → response carries a JWT whose
 // claims match the ADR 0045 contract.
 func TestE2E_Impersonation_ScopedToken_Issuance(t *testing.T) {
-	t.Parallel()
 	f := newE2EFixture(t)
 	tenantA := f.registerAndLogin(t, "acme")
 	platformTok := f.mintPlatformToken(t, "")
@@ -137,7 +136,6 @@ func TestE2E_Impersonation_ScopedToken_Issuance(t *testing.T) {
 // blast-radius test. The scoped token has is_platform=false; calling
 // any /v1/platform/* route MUST 403 (RequirePlatform rejects).
 func TestE2E_Impersonation_ScopedToken_BlocksPlatformRoutes(t *testing.T) {
-	t.Parallel()
 	f := newE2EFixture(t)
 	tenantA := f.registerAndLogin(t, "acme")
 	platformTok := f.mintPlatformToken(t, "")
@@ -188,7 +186,6 @@ func TestE2E_Impersonation_ScopedToken_BlocksPlatformRoutes(t *testing.T) {
 // a non-existent tenant returns 404, not 500. Distinct error class
 // (ErrImpersonationTargetMissing) from the validation rejection.
 func TestE2E_Impersonation_TargetTenantNotFound(t *testing.T) {
-	t.Parallel()
 	f := newE2EFixture(t)
 	platformTok := f.mintPlatformToken(t, "")
 

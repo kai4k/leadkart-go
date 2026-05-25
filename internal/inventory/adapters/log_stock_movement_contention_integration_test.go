@@ -37,7 +37,6 @@ import (
 // Locking is the canonical primitive for hot-row counters per
 // Postgres §13.3.2 + Stripe ledger pattern + DDIA Ch.7.
 func TestLogStockMovement_Concurrent_NoLostUpdate(t *testing.T) {
-	t.Parallel()
 	pool := repoFixture(t)
 	tid := seedTenant(t, pool)
 	ctx := tenantCtx(t, tid)

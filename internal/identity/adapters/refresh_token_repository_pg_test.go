@@ -51,7 +51,6 @@ func seedFamily(t *testing.T, persons *adapters.PersonRepository, tenants *adapt
 }
 
 func TestRefreshTokenFamilyRepository_Add_PersistsFamilyAndFirstToken(t *testing.T) {
-	t.Parallel()
 	pool := repoFixture(t)
 	tx := pg.NewTransactor(pool)
 	families := adapters.NewRefreshTokenFamilyRepository(pool, tx)
@@ -78,7 +77,6 @@ func TestRefreshTokenFamilyRepository_Add_PersistsFamilyAndFirstToken(t *testing
 }
 
 func TestRefreshTokenFamilyRepository_GetByTokenHash_ResolvesFamily(t *testing.T) {
-	t.Parallel()
 	pool := repoFixture(t)
 	tx := pg.NewTransactor(pool)
 	families := adapters.NewRefreshTokenFamilyRepository(pool, tx)
@@ -98,7 +96,6 @@ func TestRefreshTokenFamilyRepository_GetByTokenHash_ResolvesFamily(t *testing.T
 }
 
 func TestRefreshTokenFamilyRepository_GetByTokenHash_NotFound(t *testing.T) {
-	t.Parallel()
 	pool := repoFixture(t)
 	tx := pg.NewTransactor(pool)
 	families := adapters.NewRefreshTokenFamilyRepository(pool, tx)
@@ -110,7 +107,6 @@ func TestRefreshTokenFamilyRepository_GetByTokenHash_NotFound(t *testing.T) {
 }
 
 func TestRefreshTokenFamilyRepository_UpdateByID_RotatePersistsNewTokenAndConsumesOld(t *testing.T) {
-	t.Parallel()
 	pool := repoFixture(t)
 	tx := pg.NewTransactor(pool)
 	families := adapters.NewRefreshTokenFamilyRepository(pool, tx)
@@ -157,7 +153,6 @@ func TestRefreshTokenFamilyRepository_UpdateByID_RotatePersistsNewTokenAndConsum
 }
 
 func TestRefreshTokenFamilyRepository_UpdateByID_ReuseDetectionRevokesFamily(t *testing.T) {
-	t.Parallel()
 	pool := repoFixture(t)
 	tx := pg.NewTransactor(pool)
 	families := adapters.NewRefreshTokenFamilyRepository(pool, tx)
@@ -216,7 +211,6 @@ func TestRefreshTokenFamilyRepository_UpdateByID_ReuseDetectionRevokesFamily(t *
 }
 
 func TestRefreshTokenFamilyRepository_UpdateByID_RevokePersistsState(t *testing.T) {
-	t.Parallel()
 	pool := repoFixture(t)
 	tx := pg.NewTransactor(pool)
 	families := adapters.NewRefreshTokenFamilyRepository(pool, tx)
@@ -251,7 +245,6 @@ func TestRefreshTokenFamilyRepository_UpdateByID_RevokePersistsState(t *testing.
 }
 
 func TestRefreshTokenFamilyRepository_ListActiveForPerson_ExcludesRevoked(t *testing.T) {
-	t.Parallel()
 	pool := repoFixture(t)
 	tx := pg.NewTransactor(pool)
 	families := adapters.NewRefreshTokenFamilyRepository(pool, tx)

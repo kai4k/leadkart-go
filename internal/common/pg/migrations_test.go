@@ -113,7 +113,6 @@ func createAppRole(t *testing.T, db *sql.DB) {
 // TestMigrationsApplyCleanly verifies the migration set lands without error
 // against a fresh Postgres 17 instance — the floor for everything else.
 func TestMigrationsApplyCleanly(t *testing.T) {
-	t.Parallel()
 	dsn := startPostgres(t)
 	applyMigrations(t, dsn)
 
@@ -238,7 +237,6 @@ func TestMigrationsApplyCleanly(t *testing.T) {
 // multi-tenancy model: with `app.tenant_id = X`, SELECT against
 // identity.tenant_memberships returns ONLY tenant X's rows.
 func TestRLSIsolatesTenants(t *testing.T) {
-	t.Parallel()
 	dsn := startPostgres(t)
 	applyMigrations(t, dsn)
 
@@ -367,7 +365,6 @@ func TestRLSIsolatesTenants(t *testing.T) {
 // blocks a Person from holding two concurrent Active Memberships across
 // tenants — the database-level enforcement of the login-flow invariant.
 func TestSingleActiveMembershipInvariant(t *testing.T) {
-	t.Parallel()
 	dsn := startPostgres(t)
 	applyMigrations(t, dsn)
 

@@ -59,7 +59,6 @@ func seedPerson(t *testing.T, repo *adapters.PersonRepository, addr string) *per
 }
 
 func TestMembershipRepository_Add_PersistsRowAndOutboxEvent(t *testing.T) {
-	t.Parallel()
 	pool := repoFixture(t)
 	tx := pg.NewTransactor(pool)
 	tenants := adapters.NewTenantRepository(pool, tx)
@@ -99,7 +98,6 @@ func TestMembershipRepository_Add_PersistsRowAndOutboxEvent(t *testing.T) {
 }
 
 func TestMembershipRepository_Add_SecondActive_ReturnsErrAlreadyActive(t *testing.T) {
-	t.Parallel()
 	pool := repoFixture(t)
 	tx := pg.NewTransactor(pool)
 	tenants := adapters.NewTenantRepository(pool, tx)
@@ -128,7 +126,6 @@ func TestMembershipRepository_Add_SecondActive_ReturnsErrAlreadyActive(t *testin
 }
 
 func TestMembershipRepository_GetByID_OutsideTenantScope_NotFound(t *testing.T) {
-	t.Parallel()
 	pool := repoFixture(t)
 	tx := pg.NewTransactor(pool)
 	tenants := adapters.NewTenantRepository(pool, tx)
@@ -154,7 +151,6 @@ func TestMembershipRepository_GetByID_OutsideTenantScope_NotFound(t *testing.T) 
 }
 
 func TestMembershipRepository_UpdateByID_DeactivateClearsActiveSlot(t *testing.T) {
-	t.Parallel()
 	pool := repoFixture(t)
 	tx := pg.NewTransactor(pool)
 	tenants := adapters.NewTenantRepository(pool, tx)
@@ -192,7 +188,6 @@ func TestMembershipRepository_UpdateByID_DeactivateClearsActiveSlot(t *testing.T
 }
 
 func TestMembershipRepository_GetActiveForPerson_BypassesRLS(t *testing.T) {
-	t.Parallel()
 	pool := repoFixture(t)
 	tx := pg.NewTransactor(pool)
 	tenants := adapters.NewTenantRepository(pool, tx)
@@ -220,7 +215,6 @@ func TestMembershipRepository_GetActiveForPerson_BypassesRLS(t *testing.T) {
 }
 
 func TestMembershipRepository_GetActiveForPerson_NoActive_NotFound(t *testing.T) {
-	t.Parallel()
 	pool := repoFixture(t)
 	tx := pg.NewTransactor(pool)
 	persons := adapters.NewPersonRepository(pool, tx)
@@ -236,7 +230,6 @@ func TestMembershipRepository_GetActiveForPerson_NoActive_NotFound(t *testing.T)
 // ----- Task 18 — child-table state (roles + overrides + profile) ------------
 
 func TestMembershipRepository_Add_PersistsRoleAssignmentsAndOverrides(t *testing.T) {
-	t.Parallel()
 	pool := repoFixture(t)
 	tx := pg.NewTransactor(pool)
 	persons := adapters.NewPersonRepository(pool, tx)
@@ -314,7 +307,6 @@ func TestMembershipRepository_Add_PersistsRoleAssignmentsAndOverrides(t *testing
 }
 
 func TestMembershipRepository_UpdateByID_ReplacesRoleAssignmentsAndOverrides(t *testing.T) {
-	t.Parallel()
 	pool := repoFixture(t)
 	tx := pg.NewTransactor(pool)
 	persons := adapters.NewPersonRepository(pool, tx)
@@ -378,7 +370,6 @@ func TestMembershipRepository_UpdateByID_ReplacesRoleAssignmentsAndOverrides(t *
 }
 
 func TestMembershipRepository_Add_RejectsCrossTenantRoleAssignment(t *testing.T) {
-	t.Parallel()
 	pool := repoFixture(t)
 	tx := pg.NewTransactor(pool)
 	persons := adapters.NewPersonRepository(pool, tx)

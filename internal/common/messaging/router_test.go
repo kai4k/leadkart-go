@@ -65,7 +65,6 @@ func runRouter(t *testing.T, r *messaging.Router) func() {
 }
 
 func TestRouter_FullStack_TenantContextAndAuditAndIdempotency(t *testing.T) {
-	t.Parallel()
 	pool := inboxFixture(t)
 	receiver := messaging.NewIdempotentReceiver(pool)
 	auditW := audit.NewWriter(pool, silentLog(), time.Now)
@@ -192,7 +191,6 @@ func TestRouter_FullStack_TenantContextAndAuditAndIdempotency(t *testing.T) {
 // metadata, the AuditMiddleware projects them onto the corresponding
 // audit_log_entry columns.
 func TestRouter_AuditMiddleware_PopulatesActFields_WhenMessageMetadataCarriesActClaim(t *testing.T) {
-	t.Parallel()
 	pool := inboxFixture(t)
 	receiver := messaging.NewIdempotentReceiver(pool)
 	auditW := audit.NewWriter(pool, silentLog(), time.Now)
@@ -281,7 +279,6 @@ func TestRouter_AuditMiddleware_PopulatesActFields_WhenMessageMetadataCarriesAct
 // hot path) must not leak NULL → uuid.Nil round-trips into the audit
 // columns.
 func TestRouter_AuditMiddleware_LeavesActFieldsEmpty_WhenNoMetadata(t *testing.T) {
-	t.Parallel()
 	pool := inboxFixture(t)
 	receiver := messaging.NewIdempotentReceiver(pool)
 	auditW := audit.NewWriter(pool, silentLog(), time.Now)
@@ -359,7 +356,6 @@ func TestRouter_AuditMiddleware_LeavesActFieldsEmpty_WhenNoMetadata(t *testing.T
 }
 
 func TestRouter_HandlerError_DoesNotRecordInbox_AuditMarksFailure(t *testing.T) {
-	t.Parallel()
 	pool := inboxFixture(t)
 	receiver := messaging.NewIdempotentReceiver(pool)
 	auditW := audit.NewWriter(pool, silentLog(), time.Now)

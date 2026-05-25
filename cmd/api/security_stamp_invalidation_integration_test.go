@@ -73,7 +73,6 @@ import (
 const invalidationFastPathBudget = 15 * time.Second
 
 func TestSecurityStampInvalidation_PasswordChange_Returns401WithinFastPath(t *testing.T) {
-	t.Parallel()
 	pool := startWiredPostgresForHTTP(t)
 	hybrid := newTestHybridCache(t)
 

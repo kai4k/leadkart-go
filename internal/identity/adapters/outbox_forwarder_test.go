@@ -77,7 +77,6 @@ func waitForCount(t *testing.T, drain *drainSubscriber, want int, timeout time.D
 }
 
 func TestOutboxForwarder_PublishesUnforwardedRows(t *testing.T) {
-	t.Parallel()
 	pool := repoFixture(t)
 	tx := pg.NewTransactor(pool)
 	tenants := adapters.NewTenantRepository(pool, tx)
@@ -150,7 +149,6 @@ func TestOutboxForwarder_PublishesUnforwardedRows(t *testing.T) {
 }
 
 func TestOutboxForwarder_IsIdempotent_OnSecondPass(t *testing.T) {
-	t.Parallel()
 	pool := repoFixture(t)
 	tx := pg.NewTransactor(pool)
 	tenants := adapters.NewTenantRepository(pool, tx)
@@ -194,7 +192,6 @@ func TestOutboxForwarder_IsIdempotent_OnSecondPass(t *testing.T) {
 }
 
 func TestOutboxForwarder_RunStopsOnContextCancel(t *testing.T) {
-	t.Parallel()
 	pool := repoFixture(t)
 	tx := pg.NewTransactor(pool)
 	pubsub := gochannel.NewGoChannel(gochannel.Config{}, watermill.NewSlogLogger(silentSlog()))

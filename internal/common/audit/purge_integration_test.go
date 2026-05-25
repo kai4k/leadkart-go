@@ -26,7 +26,6 @@ import (
 )
 
 func TestPurgeWorker_DeletesOlderThanRetention(t *testing.T) {
-	t.Parallel()
 	pool := startPostgres(t)
 
 	// Seed: one row well outside the retention window, one inside.

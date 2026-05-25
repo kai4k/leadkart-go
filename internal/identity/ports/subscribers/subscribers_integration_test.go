@@ -358,7 +358,6 @@ func waitFor(t *testing.T, cond func() bool, timeout time.Duration, msg string) 
 }
 
 func TestRevokeFamilies_OnPasswordChanged(t *testing.T) {
-	t.Parallel()
 	fx := newFixture(t)
 	pubsub, _, stop := wireRouter(t, fx)
 	defer stop()
@@ -398,7 +397,6 @@ func TestRevokeFamilies_OnPasswordChanged(t *testing.T) {
 }
 
 func TestRevokeFamilies_OnAnonymised(t *testing.T) {
-	t.Parallel()
 	fx := newFixture(t)
 	pubsub, _, stop := wireRouter(t, fx)
 	defer stop()
@@ -423,7 +421,6 @@ func TestRevokeFamilies_OnAnonymised(t *testing.T) {
 }
 
 func TestRevokeFamilies_OnGloballySuspended(t *testing.T) {
-	t.Parallel()
 	fx := newFixture(t)
 	pubsub, _, stop := wireRouter(t, fx)
 	defer stop()
@@ -449,7 +446,6 @@ func TestRevokeFamilies_OnGloballySuspended(t *testing.T) {
 }
 
 func TestRevokeFamilies_OnEmailChanged(t *testing.T) {
-	t.Parallel()
 	fx := newFixture(t)
 	pubsub, _, stop := wireRouter(t, fx)
 	defer stop()
@@ -476,7 +472,6 @@ func TestRevokeFamilies_OnEmailChanged(t *testing.T) {
 }
 
 func TestRevokeFamilies_OnMembershipDeactivated_NarrowsToTenantScope(t *testing.T) {
-	t.Parallel()
 	// MembershipDeactivated cascade is narrower than the Person-level
 	// events: ONLY families bound to that (PersonID, TenantID) tuple
 	// die. Other-tenant families for the same Person stay alive.
@@ -520,7 +515,6 @@ func TestRevokeFamilies_OnMembershipDeactivated_NarrowsToTenantScope(t *testing.
 }
 
 func TestRevokeFamilies_NoActiveFamilies_NoOp(t *testing.T) {
-	t.Parallel()
 	fx := newFixture(t)
 	pubsub, _, stop := wireRouter(t, fx)
 	defer stop()
@@ -547,7 +541,6 @@ func TestRevokeFamilies_NoActiveFamilies_NoOp(t *testing.T) {
 }
 
 func TestReuseDetectedSIEM_LogsOnReuseRevocation(t *testing.T) {
-	t.Parallel()
 	fx := newFixture(t)
 	// Custom logger that records to a thread-safe buffer so the
 	// subscriber goroutine's slog.Write doesn't race the assertion
@@ -590,7 +583,6 @@ func TestReuseDetectedSIEM_LogsOnReuseRevocation(t *testing.T) {
 }
 
 func TestReuseDetectedSIEM_IgnoresNonReuseRevocations(t *testing.T) {
-	t.Parallel()
 	fx := newFixture(t)
 	// safeBuffer — same race-detector reason as the sister test above.
 	buf := &safeBuffer{}

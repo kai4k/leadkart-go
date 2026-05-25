@@ -32,7 +32,6 @@ import (
 // quantity, ApplyMovement on the parent batch each turn) so the planner
 // sees enough rows that index lookup beats Seq Scan.
 func TestKeysetStockMovementsPage_UsesIndexUnderRLS(t *testing.T) {
-	t.Parallel()
 	pool := repoFixture(t)
 	tid := seedTenant(t, pool)
 	ctx := tenantCtx(t, tid)

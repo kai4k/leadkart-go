@@ -71,7 +71,6 @@ func invSilentSlog() *slog.Logger {
 // the previous build silently orphaned every inventory event because
 // the identity forwarder hardcodes identity.outbox.
 func TestInventoryOutboxForwarder_PublishesProductCreated(t *testing.T) {
-	t.Parallel()
 	pool := repoFixture(t)
 	tid := seedTenant(t, pool)
 	ctx := tenantCtx(t, tid)
@@ -152,7 +151,6 @@ func TestInventoryOutboxForwarder_PublishesProductCreated(t *testing.T) {
 // TestInventoryOutboxForwarder_IsIdempotent_OnSecondPass — second
 // ForwardOnce against an already-drained outbox returns 0.
 func TestInventoryOutboxForwarder_IsIdempotent_OnSecondPass(t *testing.T) {
-	t.Parallel()
 	pool := repoFixture(t)
 	tid := seedTenant(t, pool)
 	ctx := tenantCtx(t, tid)

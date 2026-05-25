@@ -23,7 +23,6 @@ import (
 // full Add → GetByID → UpdateByID path + asserts an outbox row was
 // written same-tx per ADR 0008.
 func TestProductRepository_AddGetUpdate_RoundTripsViaOutbox(t *testing.T) {
-	t.Parallel()
 	pool := repoFixture(t)
 	tid := seedTenant(t, pool)
 	ctx := tenantCtx(t, tid)
@@ -104,7 +103,6 @@ func TestProductRepository_AddGetUpdate_RoundTripsViaOutbox(t *testing.T) {
 // TestProductRepository_Add_DuplicateSKU_ReturnsErrSKUTaken proves the
 // per-tenant partial unique index surfaces as a typed error.
 func TestProductRepository_Add_DuplicateSKU_ReturnsErrSKUTaken(t *testing.T) {
-	t.Parallel()
 	pool := repoFixture(t)
 	tid := seedTenant(t, pool)
 	ctx := tenantCtx(t, tid)
@@ -135,7 +133,6 @@ func TestProductRepository_Add_DuplicateSKU_ReturnsErrSKUTaken(t *testing.T) {
 // multi-aggregate path: Add Product → Add Batch → Inbound + Outbound
 // movements via UoW + version bump verified at every step.
 func TestBatchRepository_FullStockMovementFlow_HappyPath(t *testing.T) {
-	t.Parallel()
 	pool := repoFixture(t)
 	tid := seedTenant(t, pool)
 	ctx := tenantCtx(t, tid)
@@ -245,7 +242,6 @@ func TestBatchRepository_FullStockMovementFlow_HappyPath(t *testing.T) {
 // racers) ships in slice 2 alongside the LogStockMovement handler
 // integration test.
 func TestBatchRepository_SequentialUpdates_BumpVersionMonotonically(t *testing.T) {
-	t.Parallel()
 	pool := repoFixture(t)
 	tid := seedTenant(t, pool)
 	ctx := tenantCtx(t, tid)
@@ -314,7 +310,6 @@ func TestBatchRepository_SequentialUpdates_BumpVersionMonotonically(t *testing.T
 // proves the cross-aggregate read used by DeleteProductHandler returns
 // the right boolean for the live-stock guard.
 func TestBatchRepository_AnyLiveWithStockForProduct_GatesProductDelete(t *testing.T) {
-	t.Parallel()
 	pool := repoFixture(t)
 	tid := seedTenant(t, pool)
 	ctx := tenantCtx(t, tid)
@@ -373,7 +368,6 @@ func TestBatchRepository_AnyLiveWithStockForProduct_GatesProductDelete(t *testin
 // TestProductRepository_ListPage_PaginatesByCreatedAtKeyset proves the
 // keyset cursor returns disjoint pages across two calls.
 func TestProductRepository_ListPage_PaginatesByCreatedAtKeyset(t *testing.T) {
-	t.Parallel()
 	pool := repoFixture(t)
 	tid := seedTenant(t, pool)
 	ctx := tenantCtx(t, tid)

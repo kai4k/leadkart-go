@@ -19,6 +19,7 @@ import (
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
 	"github.com/testcontainers/testcontainers-go/wait"
 
+	"github.com/leadkart/leadkart-go/internal/common/pg"
 	"github.com/leadkart/leadkart-go/internal/platform/domain/leadform"
 )
 
@@ -87,7 +88,7 @@ func bootstrapPlatformDB(ctx context.Context, ownerDSN, migrationsDir string) er
 	}
 	defer gooseDB.Close()
 
-	if err := goose.SetDialect("postgres"); err != nil {
+	if err := pg.EnsureGooseDialect(); err != nil {
 		return fmt.Errorf("set dialect: %w", err)
 	}
 	if err := goose.UpContext(ctx, gooseDB, migrationsDir); err != nil {

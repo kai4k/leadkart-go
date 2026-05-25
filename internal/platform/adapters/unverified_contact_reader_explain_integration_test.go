@@ -29,7 +29,6 @@ import (
 // Platform-only table; the connection runs under TxScopePlatform so RLS
 // admits the rows.
 func TestKeysetUnverifiedContactsPage_UsesIndexUnderRLS(t *testing.T) {
-	t.Parallel()
 	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 	defer cancel()
 	_ = ctx // arch-test:integration-timeout-anchor

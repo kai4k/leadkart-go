@@ -289,7 +289,6 @@ func decodeError(t *testing.T, body []byte) ports.ErrorResponse {
 // repository sees the request — the JWT tenant_id claim doesn't
 // match the URL path tenant.
 func TestE2E_CrossTenant_TenantRouteRejectedAsForbidden(t *testing.T) {
-	t.Parallel()
 	f := newE2EFixture(t)
 	tenantA := f.registerAndLogin(t, "acme")
 	tenantB := f.registerAndLogin(t, "globex")
@@ -316,7 +315,6 @@ func TestE2E_CrossTenant_TenantRouteRejectedAsForbidden(t *testing.T) {
 // silently filters at the DB level; the handler can't distinguish
 // "wrong tenant" from "doesn't exist").
 func TestE2E_CrossTenant_UserRouteHiddenAsNotFound(t *testing.T) {
-	t.Parallel()
 	f := newE2EFixture(t)
 	tenantA := f.registerAndLogin(t, "acme")
 	tenantB := f.registerAndLogin(t, "globex")
@@ -370,7 +368,6 @@ func TestE2E_CrossTenant_UserRouteHiddenAsNotFound(t *testing.T) {
 // TestE2E_CrossTenant_RoleRouteHiddenAsNotFound — Tenant A trying to
 // read or mutate Tenant B's roles. Same RLS-collapse-to-404 rule.
 func TestE2E_CrossTenant_RoleRouteHiddenAsNotFound(t *testing.T) {
-	t.Parallel()
 	f := newE2EFixture(t)
 	tenantA := f.registerAndLogin(t, "acme")
 	tenantB := f.registerAndLogin(t, "globex")
@@ -424,7 +421,6 @@ func TestE2E_CrossTenant_RoleRouteHiddenAsNotFound(t *testing.T) {
 // collapses to 404 (NOT 403 — defeats family-id enumeration via
 // ownership probing).
 func TestE2E_CrossTenant_SessionRevokeBlocked(t *testing.T) {
-	t.Parallel()
 	f := newE2EFixture(t)
 	tenantA := f.registerAndLogin(t, "acme")
 	tenantB := f.registerAndLogin(t, "globex")
@@ -465,7 +461,6 @@ func TestE2E_CrossTenant_SessionRevokeBlocked(t *testing.T) {
 // route MUST return 403 to a tenant-Admin token. Sweeps the most
 // important platform endpoints in one test for breadth.
 func TestE2E_PlatformGate_TenantAdminBlocked(t *testing.T) {
-	t.Parallel()
 	f := newE2EFixture(t)
 	tenantA := f.registerAndLogin(t, "acme")
 
@@ -508,7 +503,6 @@ func TestE2E_PlatformGate_TenantAdminBlocked(t *testing.T) {
 // TestE2E_Auth_NoToken_Returns401 — authenticated routes without a
 // Bearer token return 401, not 404 or 200.
 func TestE2E_Auth_NoToken_Returns401(t *testing.T) {
-	t.Parallel()
 	f := newE2EFixture(t)
 	cases := []struct {
 		method, path string
@@ -536,7 +530,6 @@ func TestE2E_Auth_NoToken_Returns401(t *testing.T) {
 // routes. This is the "is_platform=true" bypass the
 // RequireTenantContext middleware honours.
 func TestE2E_PlatformOperator_BypassesTenantGate(t *testing.T) {
-	t.Parallel()
 	f := newE2EFixture(t)
 	tenantA := f.registerAndLogin(t, "acme")
 	platformTok := f.mintPlatformToken(t, "")
@@ -569,7 +562,6 @@ func TestE2E_PlatformOperator_BypassesTenantGate(t *testing.T) {
 // TestE2E_PlatformOperator_ListsAllTenants — operator's
 // /api/v1/platform/tenants returns BOTH tenants (cross-tenant view).
 func TestE2E_PlatformOperator_ListsAllTenants(t *testing.T) {
-	t.Parallel()
 	f := newE2EFixture(t)
 	tenantA := f.registerAndLogin(t, "acme")
 	tenantB := f.registerAndLogin(t, "globex")
@@ -608,7 +600,6 @@ func TestE2E_PlatformOperator_ListsAllTenants(t *testing.T) {
 //                       no tenant, no membership (TenantID claim is
 //                       synthetic, no DB row)
 func TestE2E_PlatformStats_ReflectsState(t *testing.T) {
-	t.Parallel()
 	f := newE2EFixture(t)
 	admins := []registeredTenant{
 		f.registerAndLogin(t, "acme"),
@@ -650,7 +641,6 @@ func TestE2E_PlatformStats_ReflectsState(t *testing.T) {
 // multi-tenancy.md "Identity model: at most one Active Membership
 // per Person" + the partial unique index.
 func TestE2E_RegisterTenant_SameAdminEmailRejected(t *testing.T) {
-	t.Parallel()
 	f := newE2EFixture(t)
 	tenantA := f.registerAndLogin(t, "acme")
 
@@ -681,7 +671,6 @@ func TestE2E_RegisterTenant_SameAdminEmailRejected(t *testing.T) {
 // proves the new endpoints work end-to-end through real DB +
 // adapter, not just unit-test fakes.
 func TestE2E_TenantAdmin_SelfServicePath(t *testing.T) {
-	t.Parallel()
 	f := newE2EFixture(t)
 	tenantA := f.registerAndLogin(t, "acme")
 
@@ -733,7 +722,6 @@ func TestE2E_TenantAdmin_SelfServicePath(t *testing.T) {
 // TestE2E_Impersonation_Lifecycle — create + list + end. Single
 // operator, single session.
 func TestE2E_Impersonation_Lifecycle(t *testing.T) {
-	t.Parallel()
 	f := newE2EFixture(t)
 	tenantA := f.registerAndLogin(t, "acme")
 	platformTok := f.mintPlatformToken(t, "")
@@ -803,7 +791,6 @@ func TestE2E_Impersonation_Lifecycle(t *testing.T) {
 // must fail at 422 impersonation_invalid per the session VO's
 // audit gate.
 func TestE2E_Impersonation_RejectsShortReason(t *testing.T) {
-	t.Parallel()
 	f := newE2EFixture(t)
 	tenantA := f.registerAndLogin(t, "acme")
 	platformTok := f.mintPlatformToken(t, "")
@@ -827,7 +814,6 @@ func TestE2E_Impersonation_RejectsShortReason(t *testing.T) {
 // TestE2E_Impersonation_OperatorIsolation — operator A creates a
 // session; operator B lists their own → does NOT see A's session.
 func TestE2E_Impersonation_OperatorIsolation(t *testing.T) {
-	t.Parallel()
 	f := newE2EFixture(t)
 	tenantA := f.registerAndLogin(t, "acme")
 	operatorA := f.mintPlatformToken(t, ids.NewV7().String())
@@ -867,7 +853,6 @@ func TestE2E_Impersonation_OperatorIsolation(t *testing.T) {
 // TestE2E_ChangePassword_RejectsWrongCurrent — authenticated, but
 // supplies wrong current password → 401 incorrect_current_password.
 func TestE2E_ChangePassword_RejectsWrongCurrent(t *testing.T) {
-	t.Parallel()
 	f := newE2EFixture(t)
 	tenantA := f.registerAndLogin(t, "acme")
 
@@ -889,7 +874,6 @@ func TestE2E_ChangePassword_RejectsWrongCurrent(t *testing.T) {
 // TestE2E_ResetPassword_BadTokenRejected — submitting reset-password
 // with an invalid token → 400 reset_token_invalid. Anonymous endpoint.
 func TestE2E_ResetPassword_BadTokenRejected(t *testing.T) {
-	t.Parallel()
 	f := newE2EFixture(t)
 	resp := f.postJSON(t, "/api/v1/auth/reset-password", ports.ResetPasswordRequest{
 		Token:       "totally-bogus-token-not-issued-by-us",
@@ -908,7 +892,6 @@ func TestE2E_ResetPassword_BadTokenRejected(t *testing.T) {
 // (Auth0/Okta canon: never disclose account existence). Same wire
 // shape as known-email path.
 func TestE2E_RequestPasswordReset_SilentSuccess(t *testing.T) {
-	t.Parallel()
 	f := newE2EFixture(t)
 	resp := f.postJSON(t, "/api/v1/auth/request-password-reset",
 		ports.RequestPasswordResetRequest{

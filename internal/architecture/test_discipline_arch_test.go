@@ -82,20 +82,29 @@ func isIntegrationTestFile(src []byte) bool {
 }
 
 // ----------------------------------------------------------------------------
-// TD1: TestArch_TestFuncsCallTParallelOrCiteReason
+// TD1a: TestArch_UnitTestsCallTParallel
 // ----------------------------------------------------------------------------
 //
-// Per Bryan Mills + Cheney canon: tests run in parallel by default;
-// serialized tests need a cited reason in the godoc. Catches the
-// "forgot t.Parallel" drift that silently halves CI throughput.
+// **Scope: UNIT TESTS ONLY** (files without `//go:build integration`
+// AND without `_integration_test.go` suffix).
 //
-// Predicate: every `func Test*(t *testing.T)` body either calls
-// `t.Parallel()` directly OR has a godoc/comment line mentioning
-// `serial:` or `// arch-test:serial` with rationale.
+// Cheney "Prefer table-driven tests" (2019) + Russ Cox "Subtests and
+// Sub-benchmarks" (2016) — UNIT tests share no state + parallelize
+// trivially. Serializing them wastes CPU; the canonical Go shape is
+// `t.Parallel()` at the top of every unit Test func.
 //
-// Allow-list: TestMain (Go testing infra; can't be parallel),
-// benchmarks (handled separately), helpers (caught by TD5).
-func TestArch_TestFuncsCallTParallelOrCiteReason(t *testing.T) {
+// **Integration tests are HANDLED BY TD1b**, which keeps them serial
+// by default (per Brandur "Postgres at scale" + TDL Wild Workouts —
+// integration tests share testcontainers + DB rows + process globals
+// like goose's dialect register; opting them all into parallel
+// surfaces process-global races (e.g. `goose.SetDialect` mutation
+// without a mutex).
+//
+// Allow-list: TestMain; benchmarks; helpers (TD5); `arch-test:serial`
+// godoc with cited rationale (e.g. `t.Setenv` callers — env vars are
+// process-global so a t.Setenv'ing test cannot be parallel; Go 1.17+
+// makes this a `t.Setenv` runtime panic).
+func TestArch_UnitTestsCallTParallel(t *testing.T) {
 	t.Parallel()
 
 	type violation struct {
@@ -108,6 +117,10 @@ func TestArch_TestFuncsCallTParallelOrCiteReason(t *testing.T) {
 	walkGoFiles(t, repoRoot(t), true, func(path string, src []byte) {
 		slash := pathToSlash(path)
 		if !isTestFile(slash) || archTestFile(slash) {
+			return
+		}
+		// SCOPE: unit tests only. Integration tests handled by TD1b.
+		if isIntegrationTestFile(src) || strings.HasSuffix(slash, "_integration_test.go") {
 			return
 		}
 		fset, f := parseFile(t, path, src)
@@ -157,7 +170,113 @@ func TestArch_TestFuncsCallTParallelOrCiteReason(t *testing.T) {
 	})
 
 	if len(violations) > 0 {
-		t.Errorf("%d test func(s) missing t.Parallel() — every Test* must call t.Parallel() OR carry an `arch-test:serial` godoc with rationale (Cheney, Mills; ADR 0019):", len(violations))
+		t.Errorf("%d UNIT-test func(s) missing t.Parallel() — every unit Test* must call t.Parallel() OR carry an `arch-test:serial — <reason>` godoc (Cheney 'Prefer table-driven tests'; Russ Cox 'Subtests and Sub-benchmarks'). For integration tests see TD1b:", len(violations))
+		for _, v := range violations {
+			t.Logf("  %s:%d — %s", v.file, v.line, v.fn)
+		}
+	}
+}
+
+// ----------------------------------------------------------------------------
+// TD1b: TestArch_IntegrationTestsSerialByDefault
+// ----------------------------------------------------------------------------
+//
+// **Scope: INTEGRATION TESTS ONLY** (files with `//go:build integration`
+// OR `_integration_test.go` suffix).
+//
+// Integration tests share infrastructure: testcontainers Postgres
+// instances, connection pools, DB rows, AND process-global state
+// (goose.SetDialect's dialect register, the testcontainers reaper,
+// OTel global TracerProvider if set, etc.). Forcing `t.Parallel()`
+// on them exposes latent process-global races (Brandur "Postgres at
+// scale" + TDL Wild Workouts — integration tests run SERIAL within
+// a package; parallelism is at the PACKAGE level via Go's default
+// `go test ./...` which runs packages in parallel).
+//
+// Default state: **integration test Test* funcs MUST NOT call
+// `t.Parallel()`**. Opt-in per-test via `arch-test:parallel-safe —
+// <audited rationale>` godoc, which signals the author audited:
+//
+//   1. The fixture owns its own testcontainer (no shared DB)
+//   2. No process-global mutations occur during setup
+//   3. The test doesn't depend on any other test's side effects
+//
+// Most integration tests do NOT meet bar #1+#2+#3 simultaneously, so
+// the canonical default is serial.
+func TestArch_IntegrationTestsSerialByDefault(t *testing.T) {
+	t.Parallel()
+
+	type violation struct {
+		file string
+		fn   string
+		line int
+	}
+	var violations []violation
+
+	walkGoFiles(t, repoRoot(t), true, func(path string, src []byte) {
+		slash := pathToSlash(path)
+		if !isTestFile(slash) || archTestFile(slash) {
+			return
+		}
+		// SCOPE: integration tests only.
+		if !isIntegrationTestFile(src) && !strings.HasSuffix(slash, "_integration_test.go") {
+			return
+		}
+		fset, f := parseFile(t, path, src)
+		body := string(src)
+		for _, decl := range f.Decls {
+			fd, ok := decl.(*ast.FuncDecl)
+			if !ok || fd.Body == nil {
+				continue
+			}
+			name := fd.Name.Name
+			if name == "TestMain" {
+				continue
+			}
+			if !strings.HasPrefix(name, "Test") || strings.HasPrefix(name, "TestArch_") || strings.HasPrefix(name, "TestMeta_") {
+				continue
+			}
+			// Only flag t.Parallel() at the TOP-LEVEL of the function
+			// body (not inside `t.Run("...", func(t *testing.T) {
+			// t.Parallel() ... })` subtests — subtest parallelism
+			// doesn't make the PARENT test run concurrently with other
+			// top-level tests).
+			hasParallel := false
+			for _, stmt := range fd.Body.List {
+				exprStmt, ok := stmt.(*ast.ExprStmt)
+				if !ok {
+					continue
+				}
+				call, ok := exprStmt.X.(*ast.CallExpr)
+				if !ok {
+					continue
+				}
+				sel, ok := call.Fun.(*ast.SelectorExpr)
+				if !ok {
+					continue
+				}
+				if id, ok := sel.X.(*ast.Ident); ok && (id.Name == "t" || id.Name == "tt") && sel.Sel.Name == "Parallel" {
+					hasParallel = true
+					break
+				}
+			}
+			if !hasParallel {
+				continue
+			}
+			// Opt-in escape hatch.
+			start := int(fd.Pos()) - 1
+			ctx := body[max0(start-400):start]
+			if strings.Contains(ctx, "arch-test:parallel-safe") {
+				continue
+			}
+			violations = append(violations, violation{
+				file: slash, fn: name, line: fset.Position(fd.Pos()).Line,
+			})
+		}
+	})
+
+	if len(violations) > 0 {
+		t.Errorf("%d INTEGRATION-test func(s) call t.Parallel() without an `arch-test:parallel-safe — <audited rationale>` godoc — integration tests are SERIAL by default per canon (Brandur 'Postgres at scale'; TDL Wild Workouts). t.Parallel exposes latent process-global races (e.g. goose.SetDialect). Add the marker only after auditing for: (1) own testcontainer, (2) no process-global mutations, (3) no inter-test side effects:", len(violations))
 		for _, v := range violations {
 			t.Logf("  %s:%d — %s", v.file, v.line, v.fn)
 		}

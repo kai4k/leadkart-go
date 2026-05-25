@@ -29,7 +29,6 @@ import (
 //   - Argon2id hash round-trips against the supplied plaintext
 //   - Re-running is a free no-op (ON CONFLICT branches do their job)
 func TestSeedSuperAdmin_FreshDatabase(t *testing.T) {
-	t.Parallel()
 	const (
 		email     = "platform-admin@bootstrap.test"
 		password  = "BootstrapTestPassword!2026"
@@ -60,7 +59,6 @@ func TestSeedSuperAdmin_FreshDatabase(t *testing.T) {
 // against a real DB (paranoia: confirms no rows leak in when the
 // caller hands us empty creds).
 func TestSeedSuperAdmin_MissingEnv_NoOp(t *testing.T) {
-	t.Parallel()
 	ctx, cancel := context.WithTimeout(t.Context(), 120*time.Second)
 	defer cancel()
 	db := startTestDB(t, ctx)

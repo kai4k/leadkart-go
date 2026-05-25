@@ -167,7 +167,6 @@ func newTenant(t *testing.T) *tenant.Tenant {
 }
 
 func TestTenantRepository_Add_PersistsRowAndOutboxEvent(t *testing.T) {
-	t.Parallel()
 	pool := repoFixture(t)
 	repo := adapters.NewTenantRepository(pool, pg.NewTransactor(pool))
 	ctx := t.Context()
@@ -213,7 +212,6 @@ func TestTenantRepository_Add_PersistsRowAndOutboxEvent(t *testing.T) {
 }
 
 func TestTenantRepository_Add_DuplicateSlug_ReturnsErrSlugTaken(t *testing.T) {
-	t.Parallel()
 	pool := repoFixture(t)
 	repo := adapters.NewTenantRepository(pool, pg.NewTransactor(pool))
 	ctx := t.Context()
@@ -238,7 +236,6 @@ func TestTenantRepository_Add_DuplicateSlug_ReturnsErrSlugTaken(t *testing.T) {
 }
 
 func TestTenantRepository_GetByID_NotFound(t *testing.T) {
-	t.Parallel()
 	pool := repoFixture(t)
 	repo := adapters.NewTenantRepository(pool, pg.NewTransactor(pool))
 	ctx := t.Context()
@@ -251,7 +248,6 @@ func TestTenantRepository_GetByID_NotFound(t *testing.T) {
 }
 
 func TestTenantRepository_UpdateByID_ActivatesAndDrainsEvent(t *testing.T) {
-	t.Parallel()
 	pool := repoFixture(t)
 	repo := adapters.NewTenantRepository(pool, pg.NewTransactor(pool))
 	ctx := t.Context()
@@ -320,7 +316,6 @@ func TestTenantRepository_UpdateByID_ActivatesAndDrainsEvent(t *testing.T) {
 }
 
 func TestTenantRepository_UpdateByID_NoOpClosureSkipsPersist(t *testing.T) {
-	t.Parallel()
 	pool := repoFixture(t)
 	repo := adapters.NewTenantRepository(pool, pg.NewTransactor(pool))
 	ctx := t.Context()

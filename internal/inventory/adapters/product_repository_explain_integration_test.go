@@ -42,7 +42,6 @@ import (
 // or (b) the partial-index predicate drifted out of alignment with the
 // query predicate. Either warrants a manual EXPLAIN review.
 func TestKeysetProductsPage_UsesIndexUnderRLS(t *testing.T) {
-	t.Parallel()
 	pool := repoFixture(t)
 	tid := seedTenant(t, pool)
 	ctx := tenantCtx(t, tid)

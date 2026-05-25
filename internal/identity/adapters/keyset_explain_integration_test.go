@@ -41,7 +41,6 @@ import (
 // OR the partial-index predicate became incompatible with the
 // query predicate — both warrant a manual EXPLAIN review.
 func TestKeysetMembershipsPage_UsesIndexUnderRLS(t *testing.T) {
-	t.Parallel()
 	pool := repoFixture(t)
 	ctx := t.Context()
 
