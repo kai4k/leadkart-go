@@ -88,6 +88,9 @@ import (
 	"github.com/leadkart/leadkart-go/internal/platform/domain/verificationcall"
 
 	crmadapters "github.com/leadkart/leadkart-go/internal/crm/adapters"
+	"github.com/leadkart/leadkart-go/internal/crm/domain/assignmenthistory"
+	"github.com/leadkart/leadkart-go/internal/crm/domain/calllog"
+	"github.com/leadkart/leadkart-go/internal/crm/domain/crmlead"
 	crmapp "github.com/leadkart/leadkart-go/internal/crm/app"
 	crmcommand "github.com/leadkart/leadkart-go/internal/crm/app/command"
 	crmquery "github.com/leadkart/leadkart-go/internal/crm/app/query"
@@ -773,16 +776,20 @@ func buildCrmApp(pool *pgxpool.Pool, now func() time.Time) crmWiringResult {
 	calls := crmadapters.NewCallLogRepository(pool, tx)
 	history := crmadapters.NewAssignmentHistoryRepository(pool, tx)
 
+	newCrmLeadID := func() crmlead.ID { return crmlead.ID(ids.NewV7().String()) }
+	newCallLogID := func() calllog.ID { return calllog.ID(ids.NewV7().String()) }
+	newHistoryID := func() assignmenthistory.ID { return assignmenthistory.ID(ids.NewV7().String()) }
+
 	return crmWiringResult{
 		App: crmapp.Application{
 			Commands: crmapp.Commands{
-				IngestPurchasedLead:   crmcommand.NewIngestPurchasedLeadHandler(leads),
-				AssignLead:            crmcommand.NewAssignLeadHandler(leads, history, tx, now),
-				ChangeLeadStage:       crmcommand.NewChangeLeadStageHandler(leads),
-				ChangeLeadTemperature: crmcommand.NewChangeLeadTemperatureHandler(leads),
-				LogCall:               crmcommand.NewLogCallHandler(leads, calls, now),
-				ConvertLead:           crmcommand.NewConvertLeadHandler(leads),
-				LoseLead:              crmcommand.NewLoseLeadHandler(leads),
+				IngestPurchasedLead:   crmcommand.NewIngestPurchasedLeadHandler(leads, now, newCrmLeadID),
+				AssignLead:            crmcommand.NewAssignLeadHandler(leads, history, tx, now, newHistoryID),
+				ChangeLeadStage:       crmcommand.NewChangeLeadStageHandler(leads, now),
+				ChangeLeadTemperature: crmcommand.NewChangeLeadTemperatureHandler(leads, now),
+				LogCall:               crmcommand.NewLogCallHandler(leads, calls, now, newCallLogID),
+				ConvertLead:           crmcommand.NewConvertLeadHandler(leads, now),
+				LoseLead:              crmcommand.NewLoseLeadHandler(leads, now),
 			},
 			Queries: crmapp.Queries{
 				GetLead:   crmquery.NewGetLeadHandler(leads),

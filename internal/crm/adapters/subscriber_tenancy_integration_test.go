@@ -1,5 +1,17 @@
 //go:build integration
 
+// arch-test:no-timeout-needed — the cross-driver async path (testcontainers
+// Postgres + Watermill GoChannel + messaging.Router) is bounded by per-step
+// waitFor budgets (5s) and explicit time.After fail-paths; there is no inner
+// blocking call that would benefit from an outer context.WithTimeout wrapper
+// per the established H4+H9 pattern.
+//
+// arch-test:no-synctest — synctest only models in-process goroutines on
+// virtual time; this test depends on real network IO (pgxpool to a
+// testcontainer + Watermill GoChannel driver), neither of which can be
+// virtualised. The H4+H9 gates exist precisely because the cross-driver
+// surface needs real-time integration coverage.
+
 // subscriber_tenancy_integration_test.go — reviewer H4 + H9 gates:
 //
 //   H4: drive the LeadPurchased subscriber with a tenant-scoped envelope
@@ -54,7 +66,7 @@ func wireCrmRouter(t *testing.T, pool *pgxpool.Pool, topic string) (*gochannel.G
 	t.Cleanup(func() { _ = pubsub.Close() })
 
 	receiver := messaging.NewIdempotentReceiver(pool)
-	auditW := audit.NewWriter(pool, silentLog())
+	auditW := audit.NewWriter(pool, silentLog(), time.Now)
 	router, err := messaging.NewRouter(messaging.Deps{
 		Subscriber:       pubsub,
 		Logger:           silentLog(),
@@ -75,10 +87,10 @@ func wireCrmRouter(t *testing.T, pool *pgxpool.Pool, topic string) (*gochannel.G
 	tx := pg.NewTransactor(pool)
 	leads := adapters.NewCrmLeadRepository(pool, tx)
 	ingest := subscribers.NewPurchasedLeadIngestor(
-		command.NewIngestPurchasedLeadHandler(leads), silentLog())
+		command.NewIngestPurchasedLeadHandler(leads, time.Now, func() crmlead.ID { return crmlead.ID(ids.NewV7().String()) }), silentLog())
 	subscribers.Register(router, ingest, topic, silentLog())
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
 	go func() { done <- router.Run(ctx) }()
 
@@ -179,7 +191,7 @@ func TestH4_SubscriberTenantScoping_LandsUnderCorrectTenant_RLSIsolated(t *testi
 	waitFor(t, func() bool {
 		ctx := withTenantCtxFromString(t.Context(), tenantA)
 		got, err := leads.GetBySourcePurchaseID(ctx, purchaseID)
-		return err == nil && got != nil && got.TenantID() == tenantA
+		return err == nil && got != nil && got.TenantID().String() == tenantA
 	}, 5*time.Second, "row never appeared under tenant A")
 
 	// RLS gate: same query under tenant B's ctx MUST yield ErrNotFound
@@ -224,7 +236,7 @@ func TestH9_DoubleDeliveryIdempotent(t *testing.T) {
 	publishLeadPurchased(t, pubsub, topic, tenantID, purchaseID)
 
 	// Give the subscriber a moment to process the second message.
-	time.Sleep(300 * time.Millisecond)
+	time.Sleep(300 * time.Millisecond) // arch-test:wait-justified — replay-quiescence window for the second envelope; synctest can't model Watermill's cross-driver async path.
 
 	// Final assertion: exactly ONE row under this purchase_id.
 	tx := pg.NewTransactor(pool)
@@ -265,7 +277,7 @@ func waitFor(t *testing.T, cond func() bool, timeout time.Duration, msg string) 
 		if cond() {
 			return
 		}
-		time.Sleep(20 * time.Millisecond)
+		time.Sleep(20 * time.Millisecond) // arch-test:wait-justified — poll interval inside waitFor against a real cross-driver async pipeline.
 	}
 	t.Fatal(msg)
 }

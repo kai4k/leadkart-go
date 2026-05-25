@@ -5,6 +5,7 @@ import (
 	"errors"
 	"sync"
 
+	"github.com/leadkart/leadkart-go/internal/common/ids"
 	"github.com/leadkart/leadkart-go/internal/common/pagination"
 	"github.com/leadkart/leadkart-go/internal/common/pg"
 	"github.com/leadkart/leadkart-go/internal/crm/domain/assignmenthistory"
@@ -186,3 +187,14 @@ type fakeUoW struct{}
 func (fakeUoW) WithinTx(ctx context.Context, _ pg.TxScope, fn func(ctx context.Context) error) error {
 	return fn(ctx)
 }
+
+// newTestLeadID is the test-side CrmLead ID factory injected into
+// command handlers per the `TestArch_HandlersInjectIDFactory`
+// discipline. Production passes the equivalent shape from main.go.
+func newTestLeadID() crmlead.ID { return crmlead.ID(ids.NewV7().String()) }
+
+// newTestCallID is the test-side CallLog ID factory.
+func newTestCallID() calllog.ID { return calllog.ID(ids.NewV7().String()) }
+
+// newTestHistoryID is the test-side AssignmentHistory ID factory.
+func newTestHistoryID() assignmenthistory.ID { return assignmenthistory.ID(ids.NewV7().String()) }

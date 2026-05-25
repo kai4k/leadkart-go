@@ -1,7 +1,6 @@
 package command_test
 
 import (
-	"context"
 	"errors"
 	"testing"
 
@@ -14,8 +13,8 @@ func TestLogCall_HappyPath(t *testing.T) {
 	leads := newFakeLeads()
 	calls := newFakeCallLogs()
 	id := seedLead(t, leads)
-	h := command.NewLogCallHandler(leads, calls, fixedTime)
-	out, err := h.Handle(context.Background(), command.LogCallCommand{
+	h := command.NewLogCallHandler(leads, calls, fixedTime, newTestCallID)
+	out, err := h.Handle(t.Context(), command.LogCallCommand{
 		LeadID: id, Outcome: calllog.OutcomeInterested, Notes: "warm prospect", LoggedByMembershipID: "01923400-0000-7000-8000-cccccccc0004",
 	})
 	if err != nil {
@@ -24,7 +23,7 @@ func TestLogCall_HappyPath(t *testing.T) {
 	if out.CallID.IsZero() {
 		t.Fatal("CallID should be set")
 	}
-	rows, _ := calls.ListByLead(context.Background(), id)
+	rows, _ := calls.ListByLead(t.Context(), id)
 	if len(rows) != 1 {
 		t.Fatalf("calls rows: %d", len(rows))
 	}
@@ -34,8 +33,8 @@ func TestLogCall_NotFound(t *testing.T) {
 	t.Parallel()
 	leads := newFakeLeads()
 	calls := newFakeCallLogs()
-	h := command.NewLogCallHandler(leads, calls, fixedTime)
-	_, err := h.Handle(context.Background(), command.LogCallCommand{
+	h := command.NewLogCallHandler(leads, calls, fixedTime, newTestCallID)
+	_, err := h.Handle(t.Context(), command.LogCallCommand{
 		LeadID: "missing", Outcome: calllog.OutcomeConnected, LoggedByMembershipID: "01923400-0000-7000-8000-cccccccc0004",
 	})
 	if !errors.Is(err, command.ErrLeadNotFound) {
@@ -48,12 +47,12 @@ func TestLogCall_RefusesTerminalLead(t *testing.T) {
 	leads := newFakeLeads()
 	calls := newFakeCallLogs()
 	id := seedLead(t, leads)
-	convert := command.NewConvertLeadHandler(leads)
-	if err := convert.Handle(context.Background(), command.ConvertLeadCommand{LeadID: id, ConvertedByMembershipID: "01923400-0000-7000-8000-cccccccc000a"}); err != nil {
+	convert := command.NewConvertLeadHandler(leads, fixedTime)
+	if err := convert.Handle(t.Context(), command.ConvertLeadCommand{LeadID: id, ConvertedByMembershipID: "01923400-0000-7000-8000-cccccccc000a"}); err != nil {
 		t.Fatalf("convert: %v", err)
 	}
-	h := command.NewLogCallHandler(leads, calls, fixedTime)
-	_, err := h.Handle(context.Background(), command.LogCallCommand{
+	h := command.NewLogCallHandler(leads, calls, fixedTime, newTestCallID)
+	_, err := h.Handle(t.Context(), command.LogCallCommand{
 		LeadID: id, Outcome: calllog.OutcomeConnected, LoggedByMembershipID: "01923400-0000-7000-8000-cccccccc0004",
 	})
 	if !errors.Is(err, command.ErrLeadTerminal) {

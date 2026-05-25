@@ -16,9 +16,9 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/leadkart/leadkart-go/internal/common/clock"
 	"github.com/leadkart/leadkart-go/internal/common/errs"
 	"github.com/leadkart/leadkart-go/internal/crm/domain/crmlead"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
 
 // validateUUIDString returns ErrInvalid wrapping a clear message when
@@ -103,7 +103,7 @@ const notesMaxLen = 4000
 //   - LoggedAt non-zero (caller supplies — typically time.Now()).
 type CallLog struct {
 	id                   ID
-	tenantID             string
+	tenantID             tenant.ID
 	leadID               crmlead.ID
 	outcome              Outcome
 	notes                string
@@ -118,15 +118,18 @@ type CallLog struct {
 // drains the event via [PullEvents] when persisting.
 //
 // loggedAt MUST be non-zero — caller passes the wall-clock time the
-// call happened (typically time.Now()).
-func New(id ID, tenantID string, leadID crmlead.ID, outcome Outcome, notes, loggedBy string, loggedAt time.Time) (*CallLog, error) {
+// call happened (typically time.Now()). For slice 1, log_call handlers
+// pass the injected `now` for both `loggedAt` and `createdAt`; future
+// flows that backfill historical calls (manual import slice 2+) can
+// pass divergent values.
+func New(id ID, tenantID tenant.ID, leadID crmlead.ID, outcome Outcome, notes, loggedBy string, loggedAt time.Time) (*CallLog, error) {
 	if id.IsZero() {
 		return nil, fmt.Errorf("%w: id required", ErrInvalid)
 	}
 	if err := validateUUIDString("id", string(id)); err != nil {
 		return nil, err
 	}
-	if err := validateUUIDString("tenant id", strings.TrimSpace(tenantID)); err != nil {
+	if err := validateUUIDString("tenant id", strings.TrimSpace(tenantID.String())); err != nil {
 		return nil, err
 	}
 	if leadID.IsZero() {
@@ -147,7 +150,10 @@ func New(id ID, tenantID string, leadID crmlead.ID, outcome Outcome, notes, logg
 	if loggedAt.IsZero() {
 		return nil, fmt.Errorf("%w: logged_at required", ErrInvalid)
 	}
-	now := clock.Now()
+	// createdAt mirrors loggedAt for slice 1 — callers (LogCallHandler)
+	// pass the same injected `now` for both. Future slices that backfill
+	// historical calls can pass divergent values by extending this
+	// factory; doing so today would add a parameter for zero benefit.
 	c := &CallLog{
 		id:                   id,
 		tenantID:             tenantID,
@@ -156,7 +162,7 @@ func New(id ID, tenantID string, leadID crmlead.ID, outcome Outcome, notes, logg
 		notes:                notes,
 		loggedByMembershipID: loggedBy,
 		loggedAt:             loggedAt,
-		createdAt:            now,
+		createdAt:            loggedAt,
 	}
 	c.recordEvent(LoggedEvent{
 		CallID:               id,
@@ -172,7 +178,7 @@ func New(id ID, tenantID string, leadID crmlead.ID, outcome Outcome, notes, logg
 // Snapshot is the persistence-layer DTO consumed by [UnmarshalFromDB].
 type Snapshot struct {
 	ID                   ID
-	TenantID             string
+	TenantID             tenant.ID
 	LeadID               crmlead.ID
 	Outcome              Outcome
 	Notes                string
@@ -202,7 +208,7 @@ func UnmarshalFromDB(s Snapshot) *CallLog {
 func (c *CallLog) ID() ID { return c.id }
 
 // TenantID returns the owning tenant.
-func (c *CallLog) TenantID() string { return c.tenantID }
+func (c *CallLog) TenantID() tenant.ID { return c.tenantID }
 
 // LeadID returns the parent lead.
 func (c *CallLog) LeadID() crmlead.ID { return c.leadID }

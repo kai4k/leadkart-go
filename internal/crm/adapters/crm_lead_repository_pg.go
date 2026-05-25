@@ -17,6 +17,7 @@ import (
 	"github.com/leadkart/leadkart-go/internal/common/tenancy"
 	"github.com/leadkart/leadkart-go/internal/crm/adapters/db"
 	"github.com/leadkart/leadkart-go/internal/crm/domain/crmlead"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
 
 // tenantUUIDFromCtx parses the tenant ID stashed in ctx via the
@@ -268,7 +269,7 @@ func insertLeadRow(ctx context.Context, q *db.Queries, l *crmlead.CrmLead) error
 	if err != nil {
 		return fmt.Errorf("crm lead repo: parse id %q: %w", l.ID(), err)
 	}
-	tid, err := uuid.Parse(l.TenantID())
+	tid, err := uuid.Parse(l.TenantID().String())
 	if err != nil {
 		return fmt.Errorf("crm lead repo: parse tenant id %q: %w", l.TenantID(), err)
 	}
@@ -357,7 +358,7 @@ func drainLeadEvents(ctx context.Context, tx pgx.Tx, l *crmlead.CrmLead) error {
 	if len(evs) == 0 {
 		return nil
 	}
-	tid, err := uuid.Parse(l.TenantID())
+	tid, err := uuid.Parse(l.TenantID().String())
 	if err != nil {
 		return fmt.Errorf("crm lead repo: parse tenant id %q: %w", l.TenantID(), err)
 	}
@@ -390,7 +391,7 @@ func rowToLead(row db.CrmCrmLead) (*crmlead.CrmLead, error) {
 	}
 	return crmlead.UnmarshalFromDB(crmlead.Snapshot{
 		ID:                      crmlead.ID(uuidFromPg(row.ID).String()),
-		TenantID:                uuidFromPg(row.TenantID).String(),
+		TenantID:                tenant.ID(uuidFromPg(row.TenantID).String()),
 		SourcePurchaseID:        uuidStringOrEmpty(row.SourcePurchaseID),
 		SourcePlatformLeadID:    uuidStringOrEmpty(row.SourcePlatformLeadID),
 		Stage:                   stage,

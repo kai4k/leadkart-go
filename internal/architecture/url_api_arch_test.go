@@ -255,6 +255,14 @@ func TestArch_RoutesUsePluralNouns(t *testing.T) {
 		"approve":                true,
 		"cancel":                 true,
 		"deny":                   true,
+		// CRM lead-aggregate state-transition sub-actions per Stripe canon
+		// (POST /charges/{id}/capture). ADR 0060 + URL design rule (Wave 8):
+		// state transitions are POSTs to a verb-segment under the parent.
+		"convert":                true,
+		"assign":                 true,
+		"lose":                   true,
+		"stage":                  true,
+		"temperature":            true,
 		"purchase":               true,
 		"topup":                  true,
 		"balance":                true,

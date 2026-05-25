@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/leadkart/leadkart-go/internal/common/ids"
 	"github.com/leadkart/leadkart-go/internal/crm/domain/calllog"
 	"github.com/leadkart/leadkart-go/internal/crm/domain/crmlead"
 )
@@ -28,23 +27,32 @@ type LogCallResult struct {
 
 // LogCallHandler runs the log-a-call flow. Append-only; no UpdateByID.
 type LogCallHandler struct {
-	leads crmlead.Repository
-	calls calllog.Repository
-	now   func() time.Time
+	leads     crmlead.Repository
+	calls     calllog.Repository
+	now       func() time.Time
+	newCallID func() calllog.ID
 }
 
 // NewLogCallHandler wires the handler.
-func NewLogCallHandler(leads crmlead.Repository, calls calllog.Repository, now func() time.Time) LogCallHandler {
+//
+// newCallID is the CallLog ID factory per the
+// `TestArch_HandlersInjectIDFactory` discipline. Production passes
+// `func() calllog.ID { return calllog.ID(ids.NewV7().String()) }`;
+// tests inject a deterministic counter so the minted ID is pinnable.
+func NewLogCallHandler(leads crmlead.Repository, calls calllog.Repository, now func() time.Time, newCallID func() calllog.ID) LogCallHandler {
 	if leads == nil {
 		panic("command: NewLogCallHandler leads repository required")
 	}
 	if calls == nil {
 		panic("command: NewLogCallHandler calls repository required")
 	}
+	if newCallID == nil {
+		panic("command: NewLogCallHandler newCallID required")
+	}
 	if now == nil {
 		now = time.Now
 	}
-	return LogCallHandler{leads: leads, calls: calls, now: now}
+	return LogCallHandler{leads: leads, calls: calls, now: now, newCallID: newCallID}
 }
 
 // Handle persists the call log + emits the V1 event via the repository's
@@ -70,7 +78,7 @@ func (h LogCallHandler) Handle(ctx context.Context, cmd LogCallCommand) (LogCall
 	}
 
 	c, err := calllog.New(
-		calllog.ID(ids.NewV7().String()),
+		h.newCallID(),
 		lead.TenantID(),
 		cmd.LeadID,
 		cmd.Outcome,

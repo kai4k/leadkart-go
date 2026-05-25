@@ -1,4 +1,4 @@
-package calllog_test
+﻿package calllog_test
 
 import (
 	"errors"
@@ -8,7 +8,12 @@ import (
 
 	"github.com/leadkart/leadkart-go/internal/crm/domain/calllog"
 	"github.com/leadkart/leadkart-go/internal/crm/domain/crmlead"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
+
+// fixedNow pins the wall-clock so emitted-event timestamps are
+// deterministic across the table tests (Khorikov §8 — pin time).
+var fixedNow = time.Date(2026, 6, 2, 9, 0, 0, 0, time.UTC)
 
 // Test fixture UUIDs — every aggregate ID must parse as RFC 9562 per
 // reviewer H6 (validation at aggregate-construction time).
@@ -21,10 +26,12 @@ const (
 	tidMember1 = "01923400-0000-7000-8000-cccccccc0001"
 )
 
+var tenantID1 = tenant.ID(tidTenant1)
+
 func TestNew_HappyPath(t *testing.T) {
 	t.Parallel()
 	loggedAt := time.Date(2026, 6, 2, 10, 30, 0, 0, time.UTC)
-	c, err := calllog.New(calllog.ID(tidCall1), tidTenant1, crmlead.ID(tidLead1), calllog.OutcomeConnected, "good chat", tidMember1, loggedAt)
+	c, err := calllog.New(calllog.ID(tidCall1), tenantID1, crmlead.ID(tidLead1), calllog.OutcomeConnected, "good chat", tidMember1, loggedAt)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -49,22 +56,22 @@ func TestNew_Invariants(t *testing.T) {
 	tests := []struct {
 		name string
 		id   calllog.ID
-		tid  string
+		tid  tenant.ID
 		lid  string
 		out  calllog.Outcome
 		not  string
 		by   string
 		at   time.Time
 	}{
-		{name: "missing id", id: "", tid: tidTenant1, lid: tidLead1, out: calllog.OutcomeConnected, by: tidMember1, at: time.Now()},
-		{name: "non-uuid id", id: calllog.ID("not-a-uuid"), tid: tidTenant1, lid: tidLead1, out: calllog.OutcomeConnected, by: tidMember1, at: time.Now()},
-		{name: "missing tenant", id: calllog.ID(tidCallI), tid: "", lid: tidLead1, out: calllog.OutcomeConnected, by: tidMember1, at: time.Now()},
-		{name: "non-uuid tenant", id: calllog.ID(tidCallI), tid: "not-a-uuid", lid: tidLead1, out: calllog.OutcomeConnected, by: tidMember1, at: time.Now()},
-		{name: "missing lead", id: calllog.ID(tidCallI), tid: tidTenant1, lid: "", out: calllog.OutcomeConnected, by: tidMember1, at: time.Now()},
-		{name: "bad outcome", id: calllog.ID(tidCallI), tid: tidTenant1, lid: tidLead1, out: calllog.Outcome("rude"), by: tidMember1, at: time.Now()},
-		{name: "missing by", id: calllog.ID(tidCallI), tid: tidTenant1, lid: tidLead1, out: calllog.OutcomeBusy, by: "", at: time.Now()},
-		{name: "notes too long", id: calllog.ID(tidCallI), tid: tidTenant1, lid: tidLead1, out: calllog.OutcomeBusy, not: strings.Repeat("x", 5000), by: tidMember1, at: time.Now()},
-		{name: "zero logged_at", id: calllog.ID(tidCallI), tid: tidTenant1, lid: tidLead1, out: calllog.OutcomeBusy, by: tidMember1, at: time.Time{}},
+		{name: "missing id", id: "", tid: tenantID1, lid: tidLead1, out: calllog.OutcomeConnected, by: tidMember1, at: fixedNow},
+		{name: "non-uuid id", id: calllog.ID("not-a-uuid"), tid: tenantID1, lid: tidLead1, out: calllog.OutcomeConnected, by: tidMember1, at: fixedNow},
+		{name: "missing tenant", id: calllog.ID(tidCallI), tid: tenant.ID(""), lid: tidLead1, out: calllog.OutcomeConnected, by: tidMember1, at: fixedNow},
+		{name: "non-uuid tenant", id: calllog.ID(tidCallI), tid: tenant.ID("not-a-uuid"), lid: tidLead1, out: calllog.OutcomeConnected, by: tidMember1, at: fixedNow},
+		{name: "missing lead", id: calllog.ID(tidCallI), tid: tenantID1, lid: "", out: calllog.OutcomeConnected, by: tidMember1, at: fixedNow},
+		{name: "bad outcome", id: calllog.ID(tidCallI), tid: tenantID1, lid: tidLead1, out: calllog.Outcome("rude"), by: tidMember1, at: fixedNow},
+		{name: "missing by", id: calllog.ID(tidCallI), tid: tenantID1, lid: tidLead1, out: calllog.OutcomeBusy, by: "", at: fixedNow},
+		{name: "notes too long", id: calllog.ID(tidCallI), tid: tenantID1, lid: tidLead1, out: calllog.OutcomeBusy, not: strings.Repeat("x", 5000), by: tidMember1, at: fixedNow},
+		{name: "zero logged_at", id: calllog.ID(tidCallI), tid: tenantID1, lid: tidLead1, out: calllog.OutcomeBusy, by: tidMember1, at: time.Time{}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -94,8 +101,8 @@ func TestParseOutcome(t *testing.T) {
 func TestUnmarshalFromDB_RoundTrip(t *testing.T) {
 	t.Parallel()
 	snap := calllog.Snapshot{
-		ID: "c-1", TenantID: "t", LeadID: "l", Outcome: calllog.OutcomeInterested,
-		Notes: "hot", LoggedByMembershipID: "m", LoggedAt: time.Now().UTC(), CreatedAt: time.Now().UTC(),
+		ID: "c-1", TenantID: tenant.ID("t"), LeadID: "l", Outcome: calllog.OutcomeInterested,
+		Notes: "hot", LoggedByMembershipID: "m", LoggedAt: fixedNow, CreatedAt: fixedNow,
 	}
 	c := calllog.UnmarshalFromDB(snap)
 	if c.PullEvents() != nil {

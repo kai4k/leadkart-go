@@ -229,6 +229,12 @@ addressed in Slice 1 and tracked here as Slice 2+ work:
   add deploy churn for zero practical value (no other write path
   exists). Will revisit if Slice 2 adds a direct admin SQL ingest path.
 
+## Fitness function
+
+`TestArch_AggregatesHaveFactoryAndUnmarshal + TestArch_RepositoriesHaveUpdateByIDFn` (in `internal/architecture/`).
+
+CRM aggregates (crmlead, calllog, assignmenthistory) satisfy the factory pattern; calllog + assignmenthistory append-only exceptions are documented in the UpdateByID test allow-list with rationale citing this ADR.
+
 ## Sources
 
 - ADR 0001 (modular monolith); ADR 0002 (hexagonal + DDD); ADR 0008 (Watermill + outbox); ADR 0036 (permission catalog); ADR 0038 (keyset pagination); ADR 0041 (CQRS read models); ADR 0044 (enum safety); ADR 0046 (spec-first OpenAPI); ADR 0047 (layer-boundary); ADR 0049 (URL + route arch); ADR 0050 (OpenAPI as code-of-record); ADR 0056 (impersonation propagation).
@@ -237,4 +243,4 @@ addressed in Slice 1 and tracked here as Slice 2+ work:
 - Kamil Grzybek, *Modular Monolith with DDD* — `Meetings` aggregate as the size-discipline reference (~350 lines).
 - Khorikov, *Pragmatic Clean Architecture* — application layer as pure orchestration; the per-handler-filter pattern for sales-exec "see only my assigned".
 - Stripe API canon — natural-key idempotency on commercial transactions (`payment_intent_id`, not `customer_id`).
-- LeadKart .NET — `LeadKart.Modules.Crm.IntegrationEvents.CrmIntegrationEvents` (`crm.lead-converted.v1`, `crm.lead-assigned.v1`, etc.) — Go port preserves wire-alias compatibility.
+- LeadKart .NET — `LeadKart.Modules.Crm.IntegrationEvents.CrmIntegrationEvents` (`crm.lead_converted.v1`, `crm.lead_assigned.v1`, etc.) — Go port preserves wire-alias compatibility.

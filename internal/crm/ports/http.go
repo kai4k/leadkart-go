@@ -460,7 +460,7 @@ func leadToDto(l *crmlead.CrmLead) LeadDto {
 	}
 	return LeadDto{
 		ID:                       l.ID().String(),
-		TenantID:                 l.TenantID(),
+		TenantID:                 l.TenantID().String(),
 		Stage:                    l.Stage().String(),
 		Temperature:              l.Temperature().String(),
 		ContactName:              p.ContactName,

@@ -1,10 +1,9 @@
-//go:build integration
+﻿//go:build integration
 
 package adapters_test
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -21,12 +20,14 @@ import (
 	"github.com/testcontainers/testcontainers-go/wait"
 
 	"github.com/leadkart/leadkart-go/internal/common/ids"
+	"github.com/leadkart/leadkart-go/internal/common/messaging/messagingtest"
 	"github.com/leadkart/leadkart-go/internal/common/pagination"
 	"github.com/leadkart/leadkart-go/internal/common/pg"
 	"github.com/leadkart/leadkart-go/internal/common/tenancy"
 	"github.com/leadkart/leadkart-go/internal/crm/adapters"
 	"github.com/leadkart/leadkart-go/internal/crm/domain/calllog"
 	"github.com/leadkart/leadkart-go/internal/crm/domain/crmlead"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
 
 // crmRepoFixture mirrors the identity-side repoFixture: spins an
@@ -87,7 +88,10 @@ func bootstrapTestDB(ctx context.Context, ownerDSN, dir string) error {
 		return fmt.Errorf("goose open: %w", err)
 	}
 	defer gooseDB.Close()
-	if err := goose.SetDialect("postgres"); err != nil {
+	// Use the race-safe wrapper (see internal/common/pg/goose_helper.go):
+	// goose.SetDialect mutates a package global; parallel testcontainers
+	// callers race on it. EnsureGooseDialect serialises via sync.Once.
+	if err := pg.EnsureGooseDialect(); err != nil {
 		return fmt.Errorf("set dialect: %w", err)
 	}
 	if err := goose.UpContext(ctx, gooseDB, dir); err != nil {
@@ -134,16 +138,6 @@ func migrationsDir(t *testing.T) string {
 	return filepath.Join(filepath.Dir(here), "..", "..", "..", "migrations")
 }
 
-func openRawDB(t *testing.T, pool *pgxpool.Pool) (*sql.DB, error) {
-	t.Helper()
-	cfg := pool.Config().ConnConfig
-	dsn := cfg.ConnString()
-	if dsn == "" {
-		return nil, errors.New("pool has no ConnString")
-	}
-	return sql.Open("pgx", dsn)
-}
-
 // withTenantCtx attaches a tenant ID to the context so the repository's
 // tenant-scoped reads have a target tenant. Mirrors what the HTTP
 // middleware does in production.
@@ -152,7 +146,7 @@ func withTenantCtx(ctx context.Context, tenantID uuid.UUID) context.Context {
 }
 
 // newSnapshot returns a valid PurchaseSnapshot keyed by a fresh
-// PurchaseID — tests use this to seed leads through the subscriber-
+// PurchaseID â€” tests use this to seed leads through the subscriber-
 // shaped factory path.
 func newSnapshot(t *testing.T, purchaseID, platformLeadID, buyer string) crmlead.PurchaseSnapshot {
 	t.Helper()
@@ -193,7 +187,7 @@ func TestCrmLeadRepository_Add_PersistsAndEmitsOutbox(t *testing.T) {
 	leadID := crmlead.ID(ids.NewV7().String())
 	purchaseID := ids.NewV7().String()
 	snap := newSnapshot(t, purchaseID, ids.NewV7().String(), ids.NewV7().String())
-	l, err := crmlead.NewFromPurchaseSnapshot(leadID, tenantID.String(), snap)
+	l, err := crmlead.NewFromPurchaseSnapshot(leadID, tenant.ID(tenantID.String()), snap, time.Now().UTC())
 	if err != nil {
 		t.Fatalf("factory: %v", err)
 	}
@@ -216,24 +210,13 @@ func TestCrmLeadRepository_Add_PersistsAndEmitsOutbox(t *testing.T) {
 		t.Fatalf("extra round-trip: %q", got.Profile().Extra.GstNumber)
 	}
 
-	// Outbox row written with topic crm.lead-created.v1. The outbox is
-	// RLS+FORCE — verification uses a raw DB connection under platform
-	// GUC to bypass the policy (same shape as identity-side test).
-	rawDB, err := openRawDB(t, pool)
-	if err != nil {
-		t.Fatalf("openRawDB: %v", err)
-	}
-	defer rawDB.Close()
-	if _, err := rawDB.ExecContext(ctx, `SELECT set_config('app.is_platform','true',false)`); err != nil {
-		t.Fatalf("set platform: %v", err)
-	}
-	var topic string
-	if err := rawDB.QueryRowContext(ctx, `SELECT topic FROM crm.outbox WHERE tenant_id = $1`,
-		tenantID.String()).Scan(&topic); err != nil {
-		t.Fatalf("read outbox: %v", err)
-	}
-	if topic != "crm.lead-created.v1" {
-		t.Fatalf("outbox topic: %q", topic)
+	// Outbox row written with topic crm.lead_created.v1. The outbox is
+	// RLS+FORCE â€” assertion goes through the typed messagingtest helper
+	// (Wave 7 + ADR 0047: no raw SQL in tests; helper internalises the
+	// platform-GUC bypass once).
+	topics := messagingtest.OutboxTopicsForTenant(t, pool, messagingtest.SchemaCRM, tenantID.String())
+	if len(topics) != 1 || topics[0] != "crm.lead_created.v1" {
+		t.Fatalf("outbox topics: %v", topics)
 	}
 }
 
@@ -247,7 +230,7 @@ func TestCrmLeadRepository_GetBySourcePurchaseID_FoundAndNotFound(t *testing.T) 
 	leadID := crmlead.ID(ids.NewV7().String())
 	purchase := ids.NewV7().String()
 	snap := newSnapshot(t, purchase, ids.NewV7().String(), ids.NewV7().String())
-	l, err := crmlead.NewFromPurchaseSnapshot(leadID, tenantID.String(), snap)
+	l, err := crmlead.NewFromPurchaseSnapshot(leadID, tenant.ID(tenantID.String()), snap, time.Now().UTC())
 	if err != nil {
 		t.Fatalf("factory: %v", err)
 	}
@@ -278,14 +261,14 @@ func TestCrmLeadRepository_UpdateByID_StateMachineRoundTrip(t *testing.T) {
 	ctx := withTenantCtx(t.Context(), tenantID)
 	leadID := crmlead.ID(ids.NewV7().String())
 	snap := newSnapshot(t, ids.NewV7().String(), ids.NewV7().String(), ids.NewV7().String())
-	l, _ := crmlead.NewFromPurchaseSnapshot(leadID, tenantID.String(), snap)
+	l, _ := crmlead.NewFromPurchaseSnapshot(leadID, tenant.ID(tenantID.String()), snap, time.Now().UTC())
 	if err := repo.Add(ctx, l); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
 
 	actor := ids.NewV7().String()
 	if err := repo.UpdateByID(ctx, leadID, func(l *crmlead.CrmLead) (bool, error) {
-		if err := l.ChangeStage(crmlead.StageContacted, actor, "first call"); err != nil {
+		if err := l.ChangeStage(crmlead.StageContacted, actor, "first call", time.Now().UTC()); err != nil {
 			return false, err
 		}
 		return true, nil
@@ -301,7 +284,7 @@ func TestCrmLeadRepository_UpdateByID_StateMachineRoundTrip(t *testing.T) {
 	}
 
 	if err := repo.UpdateByID(ctx, leadID, func(l *crmlead.CrmLead) (bool, error) {
-		if err := l.Convert(actor); err != nil {
+		if err := l.Convert(actor, time.Now().UTC()); err != nil {
 			return false, err
 		}
 		return true, nil
@@ -327,20 +310,20 @@ func TestCrmLeadRepository_ListPage_FilterByStage(t *testing.T) {
 
 	// Seed two leads, advance one to Contacted.
 	first := crmlead.ID(ids.NewV7().String())
-	l1, _ := crmlead.NewFromPurchaseSnapshot(first, tenantID.String(),
-		newSnapshot(t, ids.NewV7().String(), ids.NewV7().String(), ids.NewV7().String()))
+	l1, _ := crmlead.NewFromPurchaseSnapshot(first, tenant.ID(tenantID.String()),
+		newSnapshot(t, ids.NewV7().String(), ids.NewV7().String(), ids.NewV7().String()), time.Now().UTC())
 	if err := repo.Add(ctx, l1); err != nil {
 		t.Fatalf("Add 1: %v", err)
 	}
 	second := crmlead.ID(ids.NewV7().String())
-	l2, _ := crmlead.NewFromPurchaseSnapshot(second, tenantID.String(),
-		newSnapshot(t, ids.NewV7().String(), ids.NewV7().String(), ids.NewV7().String()))
+	l2, _ := crmlead.NewFromPurchaseSnapshot(second, tenant.ID(tenantID.String()),
+		newSnapshot(t, ids.NewV7().String(), ids.NewV7().String(), ids.NewV7().String()), time.Now().UTC())
 	if err := repo.Add(ctx, l2); err != nil {
 		t.Fatalf("Add 2: %v", err)
 	}
 	actor := ids.NewV7().String()
 	if err := repo.UpdateByID(ctx, second, func(l *crmlead.CrmLead) (bool, error) {
-		if err := l.ChangeStage(crmlead.StageContacted, actor, ""); err != nil {
+		if err := l.ChangeStage(crmlead.StageContacted, actor, "", time.Now().UTC()); err != nil {
 			return false, err
 		}
 		return true, nil
@@ -357,7 +340,7 @@ func TestCrmLeadRepository_ListPage_FilterByStage(t *testing.T) {
 		t.Fatalf("filter stage=contacted returned wrong set: %+v", page.Items)
 	}
 
-	// No filter → both leads.
+	// No filter â†’ both leads.
 	full, err := repo.ListPage(ctx, crmlead.ListFilter{}, pagination.Cursor{}, 50)
 	if err != nil {
 		t.Fatalf("ListPage unfiltered: %v", err)
@@ -376,19 +359,19 @@ func TestCrmLeadRepository_Assign_AndCallLog_RoundTrip(t *testing.T) {
 	tenantID := ids.NewV7()
 	ctx := withTenantCtx(t.Context(), tenantID)
 	leadID := crmlead.ID(ids.NewV7().String())
-	l, _ := crmlead.NewFromPurchaseSnapshot(leadID, tenantID.String(),
-		newSnapshot(t, ids.NewV7().String(), ids.NewV7().String(), ids.NewV7().String()))
+	l, _ := crmlead.NewFromPurchaseSnapshot(leadID, tenant.ID(tenantID.String()),
+		newSnapshot(t, ids.NewV7().String(), ids.NewV7().String(), ids.NewV7().String()), time.Now().UTC())
 	if err := leads.Add(ctx, l); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
 
-	// Assign via UpdateByID — handler-side path uses a UoW to combine
+	// Assign via UpdateByID â€” handler-side path uses a UoW to combine
 	// the lead update + history insert; this test exercises only the
 	// repo-side persistence.
 	assignee := ids.NewV7().String()
 	manager := ids.NewV7().String()
 	if err := leads.UpdateByID(ctx, leadID, func(l *crmlead.CrmLead) (bool, error) {
-		if err := l.Assign(assignee, manager, "first routing"); err != nil {
+		if err := l.Assign(assignee, manager, "first routing", time.Now().UTC()); err != nil {
 			return false, err
 		}
 		return true, nil
@@ -402,7 +385,7 @@ func TestCrmLeadRepository_Assign_AndCallLog_RoundTrip(t *testing.T) {
 
 	// Append a call log.
 	callID := calllog.ID(ids.NewV7().String())
-	cl, err := calllog.New(callID, tenantID.String(), leadID, calllog.OutcomeInterested, "warm", assignee, time.Now().UTC())
+	cl, err := calllog.New(callID, tenant.ID(tenantID.String()), leadID, calllog.OutcomeInterested, "warm", assignee, time.Now().UTC())
 	if err != nil {
 		t.Fatalf("calllog.New: %v", err)
 	}

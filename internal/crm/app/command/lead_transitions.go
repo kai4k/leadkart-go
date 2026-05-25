@@ -3,6 +3,7 @@ package command
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/leadkart/leadkart-go/internal/crm/domain/crmlead"
 )
@@ -23,14 +24,19 @@ type ChangeLeadStageCommand struct {
 // ChangeLeadStageHandler runs the stage-advance flow.
 type ChangeLeadStageHandler struct {
 	leads crmlead.Repository
+	now   func() time.Time
 }
 
-// NewChangeLeadStageHandler wires the handler.
-func NewChangeLeadStageHandler(leads crmlead.Repository) ChangeLeadStageHandler {
+// NewChangeLeadStageHandler wires the handler. `now` is the injected
+// wall-clock (Pure Domain canon — ADR 0047); nil → time.Now.
+func NewChangeLeadStageHandler(leads crmlead.Repository, now func() time.Time) ChangeLeadStageHandler {
 	if leads == nil {
 		panic("command: NewChangeLeadStageHandler leads repository required")
 	}
-	return ChangeLeadStageHandler{leads: leads}
+	if now == nil {
+		now = time.Now
+	}
+	return ChangeLeadStageHandler{leads: leads, now: now}
 }
 
 // Handle advances the stage. Returns [ErrLeadNotFound] / [ErrLeadTerminal]
@@ -42,9 +48,10 @@ func (h ChangeLeadStageHandler) Handle(ctx context.Context, cmd ChangeLeadStageC
 	if cmd.ChangedByMembershipID == "" {
 		return errors.New("crm change_stage: changed-by membership id required")
 	}
+	now := h.now()
 	err := h.leads.UpdateByID(ctx, cmd.LeadID, func(l *crmlead.CrmLead) (bool, error) {
 		oldStage := l.Stage()
-		if err := l.ChangeStage(cmd.NewStage, cmd.ChangedByMembershipID, cmd.Reason); err != nil {
+		if err := l.ChangeStage(cmd.NewStage, cmd.ChangedByMembershipID, cmd.Reason, now); err != nil {
 			return false, err
 		}
 		// no-op transitions (same stage) → no persist needed.
@@ -68,14 +75,19 @@ type ChangeLeadTemperatureCommand struct {
 // ChangeLeadTemperatureHandler runs the temperature-change flow.
 type ChangeLeadTemperatureHandler struct {
 	leads crmlead.Repository
+	now   func() time.Time
 }
 
-// NewChangeLeadTemperatureHandler wires the handler.
-func NewChangeLeadTemperatureHandler(leads crmlead.Repository) ChangeLeadTemperatureHandler {
+// NewChangeLeadTemperatureHandler wires the handler. `now` is the
+// injected wall-clock (Pure Domain canon — ADR 0047); nil → time.Now.
+func NewChangeLeadTemperatureHandler(leads crmlead.Repository, now func() time.Time) ChangeLeadTemperatureHandler {
 	if leads == nil {
 		panic("command: NewChangeLeadTemperatureHandler leads repository required")
 	}
-	return ChangeLeadTemperatureHandler{leads: leads}
+	if now == nil {
+		now = time.Now
+	}
+	return ChangeLeadTemperatureHandler{leads: leads, now: now}
 }
 
 // Handle changes the temperature axis.
@@ -86,9 +98,10 @@ func (h ChangeLeadTemperatureHandler) Handle(ctx context.Context, cmd ChangeLead
 	if cmd.ChangedByMembershipID == "" {
 		return errors.New("crm change_temperature: changed-by membership id required")
 	}
+	now := h.now()
 	err := h.leads.UpdateByID(ctx, cmd.LeadID, func(l *crmlead.CrmLead) (bool, error) {
 		oldTemp := l.Temperature()
-		if err := l.ChangeTemperature(cmd.NewTemperature, cmd.ChangedByMembershipID); err != nil {
+		if err := l.ChangeTemperature(cmd.NewTemperature, cmd.ChangedByMembershipID, now); err != nil {
 			return false, err
 		}
 		if l.Temperature() == oldTemp {
@@ -110,14 +123,19 @@ type ConvertLeadCommand struct {
 // ConvertLeadHandler runs the convert flow.
 type ConvertLeadHandler struct {
 	leads crmlead.Repository
+	now   func() time.Time
 }
 
-// NewConvertLeadHandler wires the handler.
-func NewConvertLeadHandler(leads crmlead.Repository) ConvertLeadHandler {
+// NewConvertLeadHandler wires the handler. `now` is the injected
+// wall-clock (Pure Domain canon — ADR 0047); nil → time.Now.
+func NewConvertLeadHandler(leads crmlead.Repository, now func() time.Time) ConvertLeadHandler {
 	if leads == nil {
 		panic("command: NewConvertLeadHandler leads repository required")
 	}
-	return ConvertLeadHandler{leads: leads}
+	if now == nil {
+		now = time.Now
+	}
+	return ConvertLeadHandler{leads: leads, now: now}
 }
 
 // Handle terminally converts the lead.
@@ -128,8 +146,9 @@ func (h ConvertLeadHandler) Handle(ctx context.Context, cmd ConvertLeadCommand) 
 	if cmd.ConvertedByMembershipID == "" {
 		return errors.New("crm convert: converted-by membership id required")
 	}
+	now := h.now()
 	err := h.leads.UpdateByID(ctx, cmd.LeadID, func(l *crmlead.CrmLead) (bool, error) {
-		if err := l.Convert(cmd.ConvertedByMembershipID); err != nil {
+		if err := l.Convert(cmd.ConvertedByMembershipID, now); err != nil {
 			return false, err
 		}
 		return true, nil
@@ -149,14 +168,19 @@ type LoseLeadCommand struct {
 // LoseLeadHandler runs the lose flow.
 type LoseLeadHandler struct {
 	leads crmlead.Repository
+	now   func() time.Time
 }
 
-// NewLoseLeadHandler wires the handler.
-func NewLoseLeadHandler(leads crmlead.Repository) LoseLeadHandler {
+// NewLoseLeadHandler wires the handler. `now` is the injected
+// wall-clock (Pure Domain canon — ADR 0047); nil → time.Now.
+func NewLoseLeadHandler(leads crmlead.Repository, now func() time.Time) LoseLeadHandler {
 	if leads == nil {
 		panic("command: NewLoseLeadHandler leads repository required")
 	}
-	return LoseLeadHandler{leads: leads}
+	if now == nil {
+		now = time.Now
+	}
+	return LoseLeadHandler{leads: leads, now: now}
 }
 
 // Handle terminally loses the lead. Reason is required per audit
@@ -171,8 +195,9 @@ func (h LoseLeadHandler) Handle(ctx context.Context, cmd LoseLeadCommand) error 
 	if cmd.Reason == "" {
 		return errors.New("crm lose: reason required")
 	}
+	now := h.now()
 	err := h.leads.UpdateByID(ctx, cmd.LeadID, func(l *crmlead.CrmLead) (bool, error) {
-		if err := l.Lose(cmd.LostByMembershipID, cmd.Reason); err != nil {
+		if err := l.Lose(cmd.LostByMembershipID, cmd.Reason, now); err != nil {
 			return false, err
 		}
 		return true, nil

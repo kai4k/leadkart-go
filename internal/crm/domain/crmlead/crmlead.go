@@ -19,8 +19,8 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/leadkart/leadkart-go/internal/common/clock"
 	"github.com/leadkart/leadkart-go/internal/common/errs"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
 
 // validateUUIDString returns ErrInvalid wrapping a clear message when
@@ -136,7 +136,7 @@ type ExtraProfile struct {
 //     same reason for Lose); otherwise rejected.
 type CrmLead struct {
 	id        ID
-	tenantID  string // UUIDv7 of the owning tenant — kept as string to avoid identity-pkg dependency
+	tenantID  tenant.ID // owning tenant (typed alias prevents accidental ID swap)
 	profile   Profile
 	stage     Stage
 	temperature Temperature
@@ -170,14 +170,16 @@ type CrmLead struct {
 //
 // On success, the lead has emitted a [CreatedEvent] which the repository
 // drains via [PullEvents] when persisting.
-func New(id ID, tenantID string, p Profile, createdByMembershipID string) (*CrmLead, error) {
+//
+// `now` is the injected wall-clock (Pure Domain canon — ADR 0047).
+func New(id ID, tenantID tenant.ID, p Profile, createdByMembershipID string, now time.Time) (*CrmLead, error) {
 	if id.IsZero() {
 		return nil, fmt.Errorf("%w: id required", ErrInvalid)
 	}
 	if err := validateUUIDString("id", id.String()); err != nil {
 		return nil, err
 	}
-	if err := validateUUIDString("tenant id", strings.TrimSpace(tenantID)); err != nil {
+	if err := validateUUIDString("tenant id", strings.TrimSpace(tenantID.String())); err != nil {
 		return nil, err
 	}
 	if err := validateOptionalUUID("created by membership id", createdByMembershipID); err != nil {
@@ -186,7 +188,9 @@ func New(id ID, tenantID string, p Profile, createdByMembershipID string) (*CrmL
 	if err := validateProfile(p); err != nil {
 		return nil, err
 	}
-	now := clock.Now()
+	if now.IsZero() {
+		return nil, fmt.Errorf("%w: now required", ErrInvalid)
+	}
 	l := &CrmLead{
 		id:                    id,
 		tenantID:              tenantID,
@@ -247,14 +251,16 @@ type PurchaseSnapshot struct {
 // Initial state: [StageNew] + [TemperatureWarm]. Profile populated from
 // the snapshot; provenance fields set; assignee left zero (auto-assign
 // is a slice 2+ concern).
-func NewFromPurchaseSnapshot(id ID, tenantID string, s PurchaseSnapshot) (*CrmLead, error) {
+//
+// `now` is the injected wall-clock (Pure Domain canon — ADR 0047).
+func NewFromPurchaseSnapshot(id ID, tenantID tenant.ID, s PurchaseSnapshot, now time.Time) (*CrmLead, error) {
 	if id.IsZero() {
 		return nil, fmt.Errorf("%w: id required", ErrInvalid)
 	}
 	if err := validateUUIDString("id", id.String()); err != nil {
 		return nil, err
 	}
-	if err := validateUUIDString("tenant id", strings.TrimSpace(tenantID)); err != nil {
+	if err := validateUUIDString("tenant id", strings.TrimSpace(tenantID.String())); err != nil {
 		return nil, err
 	}
 	if err := validateUUIDString("snapshot purchase id", strings.TrimSpace(s.PurchaseID)); err != nil {
@@ -289,7 +295,9 @@ func NewFromPurchaseSnapshot(id ID, tenantID string, s PurchaseSnapshot) (*CrmLe
 	if err := validateProfile(p); err != nil {
 		return nil, err
 	}
-	now := clock.Now()
+	if now.IsZero() {
+		return nil, fmt.Errorf("%w: now required", ErrInvalid)
+	}
 	l := &CrmLead{
 		id:                    id,
 		tenantID:              tenantID,
@@ -316,7 +324,7 @@ func NewFromPurchaseSnapshot(id ID, tenantID string, s PurchaseSnapshot) (*CrmLe
 // [UnmarshalFromDB] — keeps the adapter free of internal field knowledge.
 type Snapshot struct {
 	ID                       ID
-	TenantID                 string
+	TenantID                 tenant.ID
 	Profile                  Profile
 	Stage                    Stage
 	Temperature              Temperature
@@ -363,7 +371,7 @@ func UnmarshalFromDB(s Snapshot) *CrmLead {
 func (l *CrmLead) ID() ID { return l.id }
 
 // TenantID returns the owning tenant ID.
-func (l *CrmLead) TenantID() string { return l.tenantID }
+func (l *CrmLead) TenantID() tenant.ID { return l.tenantID }
 
 // Profile returns the lead's BRD §6.3 profile snapshot.
 func (l *CrmLead) Profile() Profile { return l.profile }
@@ -432,7 +440,9 @@ func (l *CrmLead) CreatedByMembershipID() string { return l.createdByMembershipI
 //
 // `reason` is optional — empty is allowed for the first assignment;
 // reassignments SHOULD carry one for audit (the App layer can enforce).
-func (l *CrmLead) Assign(newAssignee, assignedBy, reason string) error {
+//
+// `now` is the injected wall-clock (Pure Domain canon — ADR 0047).
+func (l *CrmLead) Assign(newAssignee, assignedBy, reason string, now time.Time) error {
 	if err := validateUUIDString("assignee membership id", strings.TrimSpace(newAssignee)); err != nil {
 		return err
 	}
@@ -445,8 +455,10 @@ func (l *CrmLead) Assign(newAssignee, assignedBy, reason string) error {
 	if l.assigneeMembershipID == newAssignee {
 		return nil // idempotent
 	}
+	if now.IsZero() {
+		return fmt.Errorf("%w: now required", ErrInvalid)
+	}
 	previous := l.assigneeMembershipID
-	now := clock.Now()
 	l.assigneeMembershipID = newAssignee
 	l.assignedAt = now
 	l.recordEvent(AssignedEvent{
@@ -469,7 +481,9 @@ func (l *CrmLead) Assign(newAssignee, assignedBy, reason string) error {
 //
 // `reason` is optional — sales executives may attach context for the
 // audit log + downstream subscribers.
-func (l *CrmLead) ChangeStage(newStage Stage, changedBy, reason string) error {
+//
+// `now` is the injected wall-clock (Pure Domain canon — ADR 0047).
+func (l *CrmLead) ChangeStage(newStage Stage, changedBy, reason string, now time.Time) error {
 	if !newStage.IsValid() {
 		return fmt.Errorf("%w: target stage %q invalid", ErrInvalid, newStage)
 	}
@@ -488,8 +502,10 @@ func (l *CrmLead) ChangeStage(newStage Stage, changedBy, reason string) error {
 	if !canAdvance(l.stage, newStage) {
 		return fmt.Errorf("%w: cannot transition %s → %s", ErrInvalid, l.stage, newStage)
 	}
+	if now.IsZero() {
+		return fmt.Errorf("%w: now required", ErrInvalid)
+	}
 	old := l.stage
-	now := clock.Now()
 	l.stage = newStage
 	l.recordEvent(StageChangedEvent{
 		LeadID:                l.id,
@@ -505,7 +521,9 @@ func (l *CrmLead) ChangeStage(newStage Stage, changedBy, reason string) error {
 
 // ChangeTemperature transitions on the independent temperature axis.
 // Allowed at any non-terminal stage. Idempotent on self-transition.
-func (l *CrmLead) ChangeTemperature(newTemp Temperature, changedBy string) error {
+//
+// `now` is the injected wall-clock (Pure Domain canon — ADR 0047).
+func (l *CrmLead) ChangeTemperature(newTemp Temperature, changedBy string, now time.Time) error {
 	if !newTemp.IsValid() {
 		return fmt.Errorf("%w: target temperature %q invalid", ErrInvalid, newTemp)
 	}
@@ -518,8 +536,10 @@ func (l *CrmLead) ChangeTemperature(newTemp Temperature, changedBy string) error
 	if l.temperature == newTemp {
 		return nil // idempotent
 	}
+	if now.IsZero() {
+		return fmt.Errorf("%w: now required", ErrInvalid)
+	}
 	old := l.temperature
-	now := clock.Now()
 	l.temperature = newTemp
 	l.recordEvent(TemperatureChangedEvent{
 		LeadID:                l.id,
@@ -538,14 +558,18 @@ func (l *CrmLead) ChangeTemperature(newTemp Temperature, changedBy string) error
 // On success, the lead transitions to [StageConverted], records the
 // timestamp + actor, and emits [ConvertedEvent] (which is the future
 // Orders module's create-trigger per ADR 0060).
-func (l *CrmLead) Convert(convertedBy string) error {
+//
+// `now` is the injected wall-clock (Pure Domain canon — ADR 0047).
+func (l *CrmLead) Convert(convertedBy string, now time.Time) error {
 	if err := validateUUIDString("converted-by membership id", strings.TrimSpace(convertedBy)); err != nil {
 		return err
 	}
 	if l.stage.IsTerminal() {
 		return fmt.Errorf("%w: stage=%s; conversion not allowed", ErrTerminal, l.stage)
 	}
-	now := clock.Now()
+	if now.IsZero() {
+		return fmt.Errorf("%w: now required", ErrInvalid)
+	}
 	l.stage = StageConverted
 	l.convertedAt = now
 	l.convertedByMembershipID = convertedBy
@@ -563,7 +587,9 @@ func (l *CrmLead) Convert(convertedBy string) error {
 //
 // `reason` is REQUIRED (audit doctrine — `data-retention.md`); empty
 // returns [ErrInvalid].
-func (l *CrmLead) Lose(lostBy, reason string) error {
+//
+// `now` is the injected wall-clock (Pure Domain canon — ADR 0047).
+func (l *CrmLead) Lose(lostBy, reason string, now time.Time) error {
 	if err := validateUUIDString("lost-by membership id", strings.TrimSpace(lostBy)); err != nil {
 		return err
 	}
@@ -576,7 +602,9 @@ func (l *CrmLead) Lose(lostBy, reason string) error {
 	if l.stage.IsTerminal() {
 		return fmt.Errorf("%w: stage=%s; lose not allowed", ErrTerminal, l.stage)
 	}
-	now := clock.Now()
+	if now.IsZero() {
+		return fmt.Errorf("%w: now required", ErrInvalid)
+	}
 	l.stage = StageLost
 	l.lostAt = now
 	l.lostByMembershipID = lostBy

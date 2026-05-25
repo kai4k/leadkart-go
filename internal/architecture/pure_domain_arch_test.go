@@ -564,6 +564,7 @@ func TestArch_NoSlogDefault(t *testing.T) {
 		"internal/identity/ports/subscribers/invalidate_cache.go",
 		"internal/identity/ports/subscribers/reuse_detected_siem.go",
 		"internal/identity/ports/subscribers/revoke_families.go",
+		"internal/crm/ports/subscribers/lead_purchased.go",
 	}
 
 	type violation struct {

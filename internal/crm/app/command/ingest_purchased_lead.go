@@ -11,9 +11,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
-	"github.com/leadkart/leadkart-go/internal/common/ids"
 	"github.com/leadkart/leadkart-go/internal/crm/domain/crmlead"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
 
 // ErrPurchaseAlreadyIngested surfaces when the subscriber receives a
@@ -34,7 +35,7 @@ var ErrPurchaseAlreadyIngested = errors.New("crm ingest: purchase already ingest
 // non-nil lead, leaving the existing row untouched.
 type IngestPurchasedLeadCommand struct {
 	PurchaseID              string
-	TenantID                string
+	TenantID                tenant.ID
 	PlatformLeadID          string
 	PurchasedByMembershipID string
 	Snapshot                crmlead.PurchaseSnapshot
@@ -52,16 +53,30 @@ type IngestPurchasedLeadResult struct {
 // consuming tenant's CRM. Idempotent: a same-PurchaseID retry returns
 // the existing lead's ID with AlreadyExisted=true + no events emitted.
 type IngestPurchasedLeadHandler struct {
-	leads crmlead.Repository
+	leads     crmlead.Repository
+	now       func() time.Time
+	newLeadID func() crmlead.ID
 }
 
 // NewIngestPurchasedLeadHandler wires the handler against the lead
-// repository interface.
-func NewIngestPurchasedLeadHandler(leads crmlead.Repository) IngestPurchasedLeadHandler {
+// repository interface. `now` is the injected wall-clock (Pure Domain
+// canon — ADR 0047); nil → time.Now.
+//
+// newLeadID is the CrmLead ID factory per the
+// `TestArch_HandlersInjectIDFactory` discipline. Production passes
+// `func() crmlead.ID { return crmlead.ID(ids.NewV7().String()) }`;
+// tests inject a deterministic counter so the minted ID is pinnable.
+func NewIngestPurchasedLeadHandler(leads crmlead.Repository, now func() time.Time, newLeadID func() crmlead.ID) IngestPurchasedLeadHandler {
 	if leads == nil {
 		panic("command: NewIngestPurchasedLeadHandler leads repository required")
 	}
-	return IngestPurchasedLeadHandler{leads: leads}
+	if newLeadID == nil {
+		panic("command: NewIngestPurchasedLeadHandler newLeadID required")
+	}
+	if now == nil {
+		now = time.Now
+	}
+	return IngestPurchasedLeadHandler{leads: leads, now: now, newLeadID: newLeadID}
 }
 
 // Handle is the subscriber entrypoint. Returns nil + AlreadyExisted=true
@@ -100,8 +115,8 @@ func (h IngestPurchasedLeadHandler) Handle(ctx context.Context, cmd IngestPurcha
 		snap.PurchasedByMembershipID = cmd.PurchasedByMembershipID
 	}
 
-	leadID := crmlead.ID(ids.NewV7().String())
-	lead, err := crmlead.NewFromPurchaseSnapshot(leadID, cmd.TenantID, snap)
+	leadID := h.newLeadID()
+	lead, err := crmlead.NewFromPurchaseSnapshot(leadID, cmd.TenantID, snap, h.now())
 	if err != nil {
 		return IngestPurchasedLeadResult{}, fmt.Errorf("crm ingest: factory: %w", err)
 	}

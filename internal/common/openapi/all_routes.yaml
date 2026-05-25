@@ -1798,6 +1798,7 @@ paths:
       summary: Get one CRM lead by ID
       parameters:
         - { $ref: '#/components/parameters/LeadId' }
+        - { $ref: '#/components/parameters/XCommandId' }
       responses:
         '200':
           description: The lead
@@ -1814,9 +1815,10 @@ paths:
       summary: Assign or reassign a lead
       description: |
         Sets the lead's current assignee. Atomic with an append to the
-        AssignmentHistory audit table. Emits `crm.lead-assigned.v1`.
+        AssignmentHistory audit table. Emits `crm.lead_assigned.v1`.
       parameters:
         - { $ref: '#/components/parameters/LeadId' }
+        - { $ref: '#/components/parameters/XCommandId' }
       requestBody:
         required: true
         content:
@@ -1844,9 +1846,10 @@ paths:
       description: |
         Non-terminal transitions only: New → Contacted → Interested →
         Negotiation. Use `/convert` or `/lose` for terminal transitions.
-        Emits `crm.lead-stage-changed.v1`.
+        Emits `crm.lead_stage_changed.v1`.
       parameters:
         - { $ref: '#/components/parameters/LeadId' }
+        - { $ref: '#/components/parameters/XCommandId' }
       requestBody:
         required: true
         content:
@@ -1870,9 +1873,10 @@ paths:
       summary: Change the lead's qualitative temperature axis
       description: |
         Independent of stage — Hot/Warm/Cold/Dead transition at any
-        non-terminal stage. Emits `crm.lead-temperature-changed.v1`.
+        non-terminal stage. Emits `crm.lead_temperature_changed.v1`.
       parameters:
         - { $ref: '#/components/parameters/LeadId' }
+        - { $ref: '#/components/parameters/XCommandId' }
       requestBody:
         required: true
         content:
@@ -1894,10 +1898,11 @@ paths:
       tags: [crm]
       summary: Log a call against a lead
       description: |
-        Creates a CallLog row + emits `crm.call-logged.v1`. Refused on
+        Creates a CallLog row + emits `crm.call_logged.v1`. Refused on
         terminal leads (converted / lost).
       parameters:
         - { $ref: '#/components/parameters/LeadId' }
+        - { $ref: '#/components/parameters/XCommandId' }
       requestBody:
         required: true
         content:
@@ -1923,10 +1928,11 @@ paths:
       tags: [crm]
       summary: Terminal-convert a lead (won)
       description: |
-        Sets the lead to `converted`. Emits `crm.lead-converted.v1` —
+        Sets the lead to `converted`. Emits `crm.lead_converted.v1` —
         this is the future Orders module's create-trigger per ADR 0060.
       parameters:
         - { $ref: '#/components/parameters/LeadId' }
+        - { $ref: '#/components/parameters/XCommandId' }
       responses:
         '204': { description: Converted }
         '400': { $ref: '#/components/responses/BadRequest' }
@@ -1944,9 +1950,10 @@ paths:
       summary: Terminal-lose a lead (with required reason)
       description: |
         Sets the lead to `lost`. `reason` is REQUIRED (audit doctrine).
-        Emits `crm.lead-lost.v1`.
+        Emits `crm.lead_lost.v1`.
       parameters:
         - { $ref: '#/components/parameters/LeadId' }
+        - { $ref: '#/components/parameters/XCommandId' }
       requestBody:
         required: true
         content:

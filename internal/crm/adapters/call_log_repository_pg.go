@@ -13,6 +13,7 @@ import (
 	"github.com/leadkart/leadkart-go/internal/crm/adapters/db"
 	"github.com/leadkart/leadkart-go/internal/crm/domain/calllog"
 	"github.com/leadkart/leadkart-go/internal/crm/domain/crmlead"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
 
 // CallLogRepository is the pgx/sqlc-backed implementation of
@@ -46,7 +47,7 @@ func (r *CallLogRepository) addOnTx(ctx context.Context, tx pgx.Tx, c *calllog.C
 	if err != nil {
 		return fmt.Errorf("crm call_log repo: parse id %q: %w", c.ID(), err)
 	}
-	tid, err := uuid.Parse(c.TenantID())
+	tid, err := uuid.Parse(c.TenantID().String())
 	if err != nil {
 		return fmt.Errorf("crm call_log repo: parse tenant id %q: %w", c.TenantID(), err)
 	}
@@ -54,13 +55,17 @@ func (r *CallLogRepository) addOnTx(ctx context.Context, tx pgx.Tx, c *calllog.C
 	if err != nil {
 		return fmt.Errorf("crm call_log repo: parse lead id %q: %w", c.LeadID(), err)
 	}
+	loggedByID, err := uuid.Parse(c.LoggedByMembershipID())
+	if err != nil {
+		return fmt.Errorf("crm call_log repo: parse logged_by membership id %q: %w", c.LoggedByMembershipID(), err)
+	}
 	if err := q.InsertCallLog(ctx, db.InsertCallLogParams{
 		ID:                   pgUUID(cid),
 		TenantID:             pgUUID(tid),
 		LeadID:               pgUUID(lid),
 		Outcome:              c.Outcome().String(),
 		Notes:                c.Notes(),
-		LoggedByMembershipID: pgUUID(uuid.MustParse(c.LoggedByMembershipID())),
+		LoggedByMembershipID: pgUUID(loggedByID),
 		LoggedAt:             pgRequiredTimestamp(c.LoggedAt()),
 		CreatedAt:            pgRequiredTimestamp(c.CreatedAt()),
 	}); err != nil {
@@ -139,7 +144,7 @@ func rowToCallLog(row db.CrmCallLog) *calllog.CallLog {
 	outcome := calllog.Outcome(row.Outcome)
 	return calllog.UnmarshalFromDB(calllog.Snapshot{
 		ID:                   calllog.ID(uuidFromPg(row.ID).String()),
-		TenantID:             uuidFromPg(row.TenantID).String(),
+		TenantID:             tenant.ID(uuidFromPg(row.TenantID).String()),
 		LeadID:               crmlead.ID(uuidFromPg(row.LeadID).String()),
 		Outcome:              outcome,
 		Notes:                row.Notes,

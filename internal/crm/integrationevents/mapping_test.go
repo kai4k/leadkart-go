@@ -10,6 +10,7 @@ import (
 	"github.com/leadkart/leadkart-go/internal/crm/domain/calllog"
 	"github.com/leadkart/leadkart-go/internal/crm/domain/crmlead"
 	"github.com/leadkart/leadkart-go/internal/crm/integrationevents"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
 
 // All UUIDs used in this test are deterministic so a snapshot-shaped
@@ -27,7 +28,7 @@ var (
 func TestFromDomainEvent_CreatedV1(t *testing.T) {
 	t.Parallel()
 	in := crmlead.CreatedEvent{
-		LeadID: crmlead.ID(leadID.String()), TenantID: tenantID.String(),
+		LeadID: crmlead.ID(leadID.String()), TenantID: tenant.ID(tenantID.String()),
 		SourcePurchaseID: purchaseID.String(), CreatedByMembershipID: memberA.String(), At: at,
 	}
 	got, err := integrationevents.FromDomainEvent(in)
@@ -42,7 +43,7 @@ func TestFromDomainEvent_CreatedV1(t *testing.T) {
 		v1.SourcePurchaseID != purchaseID || v1.CreatedByMembershipID != memberA {
 		t.Fatalf("fields: %+v", v1)
 	}
-	if v1.Topic() != "crm.lead-created.v1" {
+	if v1.Topic() != "crm.lead_created.v1" {
 		t.Fatalf("topic: %q", v1.Topic())
 	}
 }
@@ -50,7 +51,7 @@ func TestFromDomainEvent_CreatedV1(t *testing.T) {
 func TestFromDomainEvent_AssignedV1_FirstAndReassign(t *testing.T) {
 	t.Parallel()
 	first := crmlead.AssignedEvent{
-		LeadID: crmlead.ID(leadID.String()), TenantID: tenantID.String(),
+		LeadID: crmlead.ID(leadID.String()), TenantID: tenant.ID(tenantID.String()),
 		AssigneeMembershipID: memberA.String(), AssignedByMembershipID: memberB.String(), At: at,
 	}
 	got, err := integrationevents.FromDomainEvent(first)
@@ -81,7 +82,7 @@ func TestFromDomainEvent_AssignedV1_FirstAndReassign(t *testing.T) {
 func TestFromDomainEvent_StageChangedAndTemperatureChanged(t *testing.T) {
 	t.Parallel()
 	sc := crmlead.StageChangedEvent{
-		LeadID: crmlead.ID(leadID.String()), TenantID: tenantID.String(),
+		LeadID: crmlead.ID(leadID.String()), TenantID: tenant.ID(tenantID.String()),
 		OldStage: crmlead.StageNew, NewStage: crmlead.StageContacted,
 		ChangedByMembershipID: memberA.String(), Reason: "first call", At: at,
 	}
@@ -95,7 +96,7 @@ func TestFromDomainEvent_StageChangedAndTemperatureChanged(t *testing.T) {
 	}
 
 	tc := crmlead.TemperatureChangedEvent{
-		LeadID: crmlead.ID(leadID.String()), TenantID: tenantID.String(),
+		LeadID: crmlead.ID(leadID.String()), TenantID: tenant.ID(tenantID.String()),
 		OldTemperature: crmlead.TemperatureWarm, NewTemperature: crmlead.TemperatureHot,
 		ChangedByMembershipID: memberA.String(), At: at,
 	}
@@ -112,18 +113,18 @@ func TestFromDomainEvent_StageChangedAndTemperatureChanged(t *testing.T) {
 func TestFromDomainEvent_ConvertedAndLost(t *testing.T) {
 	t.Parallel()
 	conv, err := integrationevents.FromDomainEvent(crmlead.ConvertedEvent{
-		LeadID: crmlead.ID(leadID.String()), TenantID: tenantID.String(),
+		LeadID: crmlead.ID(leadID.String()), TenantID: tenant.ID(tenantID.String()),
 		ConvertedByMembershipID: memberA.String(), At: at,
 	})
 	if err != nil {
 		t.Fatalf("conv: %v", err)
 	}
-	if conv.Topic() != "crm.lead-converted.v1" {
+	if conv.Topic() != "crm.lead_converted.v1" {
 		t.Fatalf("topic: %q", conv.Topic())
 	}
 
 	lost, err := integrationevents.FromDomainEvent(crmlead.LostEvent{
-		LeadID: crmlead.ID(leadID.String()), TenantID: tenantID.String(),
+		LeadID: crmlead.ID(leadID.String()), TenantID: tenant.ID(tenantID.String()),
 		LostByMembershipID: memberA.String(), Reason: "no budget", At: at,
 	})
 	if err != nil {
@@ -138,7 +139,7 @@ func TestFromDomainEvent_ConvertedAndLost(t *testing.T) {
 func TestFromDomainEvent_CallLogged(t *testing.T) {
 	t.Parallel()
 	got, err := integrationevents.FromDomainEvent(calllog.LoggedEvent{
-		CallID: calllog.ID(callID.String()), LeadID: crmlead.ID(leadID.String()), TenantID: tenantID.String(),
+		CallID: calllog.ID(callID.String()), LeadID: crmlead.ID(leadID.String()), TenantID: tenant.ID(tenantID.String()),
 		Outcome: calllog.OutcomeInterested, LoggedByMembershipID: memberA.String(), At: at,
 	})
 	if err != nil {
@@ -183,7 +184,7 @@ func TestFromDomainEvent_MalformedUUIDReturnsErr(t *testing.T) {
 	t.Parallel()
 	in := crmlead.CreatedEvent{
 		LeadID:                crmlead.ID(leadID.String()),
-		TenantID:              "not-a-uuid",
+		TenantID:              tenant.ID("not-a-uuid"),
 		CreatedByMembershipID: memberA.String(),
 		At:                    at,
 	}

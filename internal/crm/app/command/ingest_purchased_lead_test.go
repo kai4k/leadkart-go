@@ -35,8 +35,8 @@ func validSnapshot(purchase string) crmlead.PurchaseSnapshot {
 func TestIngest_HappyPath(t *testing.T) {
 	t.Parallel()
 	leads := newFakeLeads()
-	h := command.NewIngestPurchasedLeadHandler(leads)
-	out, err := h.Handle(context.Background(), command.IngestPurchasedLeadCommand{
+	h := command.NewIngestPurchasedLeadHandler(leads, fixedTime, newTestLeadID)
+	out, err := h.Handle(t.Context(), command.IngestPurchasedLeadCommand{
 		PurchaseID:              "01923400-0000-7000-8000-dddddddd0001",
 		TenantID:                "01923400-0000-7000-8000-bbbbbbbb0001",
 		PlatformLeadID:          "01923400-0000-7000-8000-eeeeeeee0001",
@@ -57,16 +57,16 @@ func TestIngest_HappyPath(t *testing.T) {
 func TestIngest_IdempotentOnSamePurchaseID(t *testing.T) {
 	t.Parallel()
 	leads := newFakeLeads()
-	h := command.NewIngestPurchasedLeadHandler(leads)
+	h := command.NewIngestPurchasedLeadHandler(leads, fixedTime, newTestLeadID)
 	cmd := command.IngestPurchasedLeadCommand{
 		PurchaseID: "01923400-0000-7000-8000-dddddddd0002", TenantID: "01923400-0000-7000-8000-bbbbbbbb0001",
 		Snapshot: validSnapshot("01923400-0000-7000-8000-dddddddd0002"),
 	}
-	first, err := h.Handle(context.Background(), cmd)
+	first, err := h.Handle(t.Context(), cmd)
 	if err != nil {
 		t.Fatalf("first: %v", err)
 	}
-	second, err := h.Handle(context.Background(), cmd)
+	second, err := h.Handle(t.Context(), cmd)
 	if err != nil {
 		t.Fatalf("second: %v", err)
 	}
@@ -81,8 +81,8 @@ func TestIngest_IdempotentOnSamePurchaseID(t *testing.T) {
 func TestIngest_MissingPurchaseID(t *testing.T) {
 	t.Parallel()
 	leads := newFakeLeads()
-	h := command.NewIngestPurchasedLeadHandler(leads)
-	_, err := h.Handle(context.Background(), command.IngestPurchasedLeadCommand{TenantID: "t", Snapshot: validSnapshot("")})
+	h := command.NewIngestPurchasedLeadHandler(leads, fixedTime, newTestLeadID)
+	_, err := h.Handle(t.Context(), command.IngestPurchasedLeadCommand{TenantID: "t", Snapshot: validSnapshot("")})
 	if err == nil {
 		t.Fatal("want error")
 	}
@@ -91,14 +91,14 @@ func TestIngest_MissingPurchaseID(t *testing.T) {
 func TestIngest_NormalisesProvenanceOnSnapshot(t *testing.T) {
 	t.Parallel()
 	leads := newFakeLeads()
-	h := command.NewIngestPurchasedLeadHandler(leads)
+	h := command.NewIngestPurchasedLeadHandler(leads, fixedTime, newTestLeadID)
 	// Snapshot fields left blank — handler should fill them from the
 	// command top-level so the persisted aggregate carries source info.
 	snap := validSnapshot("01923400-0000-7000-8000-dddddddd0003")
 	snap.PurchaseID = ""
 	snap.PlatformLeadID = ""
 	snap.PurchasedByMembershipID = ""
-	out, err := h.Handle(context.Background(), command.IngestPurchasedLeadCommand{
+	out, err := h.Handle(t.Context(), command.IngestPurchasedLeadCommand{
 		PurchaseID:              "01923400-0000-7000-8000-dddddddd0003",
 		TenantID:                "01923400-0000-7000-8000-bbbbbbbb0001",
 		PlatformLeadID:          "01923400-0000-7000-8000-eeeeeeee0003",
@@ -108,7 +108,7 @@ func TestIngest_NormalisesProvenanceOnSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Handle: %v", err)
 	}
-	l, err := leads.GetByID(context.Background(), out.LeadID)
+	l, err := leads.GetByID(t.Context(), out.LeadID)
 	if err != nil {
 		t.Fatalf("GetByID: %v", err)
 	}
@@ -120,8 +120,8 @@ func TestIngest_NormalisesProvenanceOnSnapshot(t *testing.T) {
 func TestIngest_LookupFailureBubbles(t *testing.T) {
 	t.Parallel()
 	leads := &erroringLeads{fakeLeads: newFakeLeads()}
-	h := command.NewIngestPurchasedLeadHandler(leads)
-	_, err := h.Handle(context.Background(), command.IngestPurchasedLeadCommand{
+	h := command.NewIngestPurchasedLeadHandler(leads, fixedTime, newTestLeadID)
+	_, err := h.Handle(t.Context(), command.IngestPurchasedLeadCommand{
 		PurchaseID: "p", TenantID: "t", Snapshot: validSnapshot("p"),
 	})
 	if err == nil || errors.Is(err, command.ErrPurchaseAlreadyIngested) {

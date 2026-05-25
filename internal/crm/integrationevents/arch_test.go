@@ -9,6 +9,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 // aliasRegex enforces the canonical wire-alias shape per messaging.md
@@ -121,13 +123,16 @@ func TestArch_NoFrameworkImports(t *testing.T) {
 // TenantScoped interface contract.
 func TestArch_TenantScopedRecordsExposeTenantID(t *testing.T) {
 	t.Parallel()
+	var seen int
 	for _, e := range all() {
 		ts, ok := e.(TenantScoped)
 		if !ok {
 			continue
 		}
-		_ = ts.TenantID()
+		_ = ts.TenantID() // arch-test:ignore-err — TenantID() returns tenant.ID (no error); we only assert the interface compile-check succeeded.
+		seen++
 	}
+	require.Positive(t, seen, "no TenantScoped records discovered — registry empty or interface mis-named")
 }
 
 func packageDir(t *testing.T) string {

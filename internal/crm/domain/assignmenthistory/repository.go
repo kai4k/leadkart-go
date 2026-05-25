@@ -18,7 +18,7 @@ var ErrNotFound = errs.New(errs.KindNotFound, "assignment_history", "assignment 
 type Repository interface {
 	// Add persists a brand-new Entry. Slice 1 emits no integration
 	// event from this aggregate; the parent CrmLead's [crmlead.Assign]
-	// path emits the wire-side `crm.lead-assigned.v1` event.
+	// path emits the wire-side `crm.lead_assigned.v1` event.
 	Add(ctx context.Context, e *Entry) error
 
 	// GetByID returns the entry or [ErrNotFound].

@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/leadkart/leadkart-go/internal/common/clock"
 	"github.com/leadkart/leadkart-go/internal/crm/domain/crmlead"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
 
 // fixedNow is the deterministic clock used across the table tests so
@@ -40,11 +40,13 @@ const (
 	tidBuyer1        = "01923400-0000-7000-8000-cccccccc000c"
 )
 
-func withFixedClock(t *testing.T) {
-	t.Helper()
-	clock.Set(fixedNow)
-	t.Cleanup(clock.Reset)
-}
+// Typed tenant-ID fixtures. The crmlead factories take tenant.ID
+// (typed alias) per TestArch_NoBareTenantIDStrings — tests use the
+// typed values directly so the test stays parity with production.
+var (
+	tenantID1 = tenant.ID(tidTenant1)
+	tenantID2 = tenant.ID(tidTenant2)
+)
 
 func validProfile() crmlead.Profile {
 	return crmlead.Profile{
@@ -74,9 +76,8 @@ func validProfile() crmlead.Profile {
 
 func TestNew_HappyPath(t *testing.T) {
 	t.Parallel()
-	withFixedClock(t)
 
-	l, err := crmlead.New(crmlead.ID(tidLead1), tidTenant1, validProfile(), tidMemCreator)
+	l, err := crmlead.New(crmlead.ID(tidLead1), tenantID1, validProfile(), tidMemCreator, fixedNow)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -101,7 +102,7 @@ func TestNew_HappyPath(t *testing.T) {
 	if !ok {
 		t.Fatalf("event type: %T", evs[0])
 	}
-	if created.LeadID != crmlead.ID(tidLead1) || created.TenantID != tidTenant1 || created.CreatedByMembershipID != tidMemCreator {
+	if created.LeadID != crmlead.ID(tidLead1) || created.TenantID != tenantID1 || created.CreatedByMembershipID != tidMemCreator {
 		t.Fatalf("event fields: %+v", created)
 	}
 	if created.SourcePurchaseID != "" {
@@ -115,30 +116,29 @@ func TestNew_HappyPath(t *testing.T) {
 
 func TestNew_InvariantViolations(t *testing.T) {
 	t.Parallel()
-	withFixedClock(t)
 	tests := []struct {
 		name string
 		mut  func(*crmlead.Profile)
 		id   crmlead.ID
-		tid  string
+		tid  tenant.ID
 	}{
-		{name: "missing id", mut: func(*crmlead.Profile) {}, id: "", tid: tidTenant1},
-		{name: "non-uuid id", mut: func(*crmlead.Profile) {}, id: crmlead.ID("not-a-uuid"), tid: tidTenant1},
+		{name: "missing id", mut: func(*crmlead.Profile) {}, id: "", tid: tenantID1},
+		{name: "non-uuid id", mut: func(*crmlead.Profile) {}, id: crmlead.ID("not-a-uuid"), tid: tenantID1},
 		{name: "missing tenant", mut: func(*crmlead.Profile) {}, id: crmlead.ID(tidLead1), tid: ""},
-		{name: "non-uuid tenant", mut: func(*crmlead.Profile) {}, id: crmlead.ID(tidLead1), tid: "not-a-uuid"},
-		{name: "missing contact_name", mut: func(p *crmlead.Profile) { p.ContactName = "" }, id: crmlead.ID(tidLead1), tid: tidTenant1},
-		{name: "bad phone format", mut: func(p *crmlead.Profile) { p.PhoneE164 = "9876543210" }, id: crmlead.ID(tidLead1), tid: tidTenant1},
-		{name: "bad phone length", mut: func(p *crmlead.Profile) { p.PhoneE164 = "+91987" }, id: crmlead.ID(tidLead1), tid: tidTenant1},
-		{name: "bad pincode length", mut: func(p *crmlead.Profile) { p.Pincode = "12345" }, id: crmlead.ID(tidLead1), tid: tidTenant1},
-		{name: "bad business_type", mut: func(p *crmlead.Profile) { p.BusinessType = "Wholesale" }, id: crmlead.ID(tidLead1), tid: tidTenant1},
-		{name: "bad medicine_system", mut: func(p *crmlead.Profile) { p.MedicineSystem = "Homeopathic" }, id: crmlead.ID(tidLead1), tid: tidTenant1},
+		{name: "non-uuid tenant", mut: func(*crmlead.Profile) {}, id: crmlead.ID(tidLead1), tid: tenant.ID("not-a-uuid")},
+		{name: "missing contact_name", mut: func(p *crmlead.Profile) { p.ContactName = "" }, id: crmlead.ID(tidLead1), tid: tenantID1},
+		{name: "bad phone format", mut: func(p *crmlead.Profile) { p.PhoneE164 = "9876543210" }, id: crmlead.ID(tidLead1), tid: tenantID1},
+		{name: "bad phone length", mut: func(p *crmlead.Profile) { p.PhoneE164 = "+91987" }, id: crmlead.ID(tidLead1), tid: tenantID1},
+		{name: "bad pincode length", mut: func(p *crmlead.Profile) { p.Pincode = "12345" }, id: crmlead.ID(tidLead1), tid: tenantID1},
+		{name: "bad business_type", mut: func(p *crmlead.Profile) { p.BusinessType = "Wholesale" }, id: crmlead.ID(tidLead1), tid: tenantID1},
+		{name: "bad medicine_system", mut: func(p *crmlead.Profile) { p.MedicineSystem = "Homeopathic" }, id: crmlead.ID(tidLead1), tid: tenantID1},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			p := validProfile()
 			tc.mut(&p)
-			_, err := crmlead.New(tc.id, tc.tid, p, tidActor)
+			_, err := crmlead.New(tc.id, tc.tid, p, tidActor, fixedNow)
 			if err == nil {
 				t.Fatalf("want error")
 			}
@@ -151,7 +151,6 @@ func TestNew_InvariantViolations(t *testing.T) {
 
 func TestNewFromPurchaseSnapshot_HappyPath(t *testing.T) {
 	t.Parallel()
-	withFixedClock(t)
 	snap := crmlead.PurchaseSnapshot{
 		PurchaseID:              tidPurchase1,
 		PlatformLeadID:          tidPlatformLead1,
@@ -176,7 +175,7 @@ func TestNewFromPurchaseSnapshot_HappyPath(t *testing.T) {
 		OrderValue:              "Above50000",
 		BuyTimeline:             "Within15Days",
 	}
-	l, err := crmlead.NewFromPurchaseSnapshot(crmlead.ID(tidLead2), tidTenant2, snap)
+	l, err := crmlead.NewFromPurchaseSnapshot(crmlead.ID(tidLead2), tenantID2, snap, fixedNow)
 	if err != nil {
 		t.Fatalf("NewFromPurchaseSnapshot: %v", err)
 	}
@@ -200,11 +199,10 @@ func TestNewFromPurchaseSnapshot_HappyPath(t *testing.T) {
 
 func TestNewFromPurchaseSnapshot_RejectsMissingPurchaseID(t *testing.T) {
 	t.Parallel()
-	withFixedClock(t)
 	snap := crmlead.PurchaseSnapshot{
 		ContactName: "X", MobileE164: "+919812345678",
 	}
-	_, err := crmlead.NewFromPurchaseSnapshot(crmlead.ID(tidLeadX), tidTenant1, snap)
+	_, err := crmlead.NewFromPurchaseSnapshot(crmlead.ID(tidLeadX), tenantID1, snap, fixedNow)
 	if !errors.Is(err, crmlead.ErrInvalid) {
 		t.Fatalf("want ErrInvalid, got %v", err)
 	}
@@ -214,8 +212,7 @@ func TestNewFromPurchaseSnapshot_RejectsMissingPurchaseID(t *testing.T) {
 
 func newLead(t *testing.T) *crmlead.CrmLead {
 	t.Helper()
-	withFixedClock(t)
-	l, err := crmlead.New(crmlead.ID(tidLeadState), tidTenant1, validProfile(), tidMemActor)
+	l, err := crmlead.New(crmlead.ID(tidLeadState), tenantID1, validProfile(), tidMemActor, fixedNow)
 	if err != nil {
 		t.Fatalf("seed New: %v", err)
 	}
@@ -227,7 +224,7 @@ func TestChangeStage_HappyForwardChain(t *testing.T) {
 	t.Parallel()
 	l := newLead(t)
 	for _, target := range []crmlead.Stage{crmlead.StageContacted, crmlead.StageInterested, crmlead.StageNegotiation} {
-		if err := l.ChangeStage(target, tidMemSales, "advancing"); err != nil {
+		if err := l.ChangeStage(target, tidMemSales, "advancing", fixedNow); err != nil {
 			t.Fatalf("ChangeStage %s: %v", target, err)
 		}
 		if l.Stage() != target {
@@ -247,7 +244,7 @@ func TestChangeStage_HappyForwardChain(t *testing.T) {
 func TestChangeStage_IdempotentSelfTransition(t *testing.T) {
 	t.Parallel()
 	l := newLead(t)
-	if err := l.ChangeStage(crmlead.StageNew, tidMemSales, ""); err != nil {
+	if err := l.ChangeStage(crmlead.StageNew, tidMemSales, "", fixedNow); err != nil {
 		t.Fatalf("self ChangeStage: %v", err)
 	}
 	if evs := l.PullEvents(); len(evs) != 0 {
@@ -258,7 +255,7 @@ func TestChangeStage_IdempotentSelfTransition(t *testing.T) {
 func TestChangeStage_RejectsSkip(t *testing.T) {
 	t.Parallel()
 	l := newLead(t)
-	err := l.ChangeStage(crmlead.StageNegotiation, tidMemSales, "")
+	err := l.ChangeStage(crmlead.StageNegotiation, tidMemSales, "", fixedNow)
 	if !errors.Is(err, crmlead.ErrInvalid) {
 		t.Fatalf("want ErrInvalid, got %v", err)
 	}
@@ -267,11 +264,11 @@ func TestChangeStage_RejectsSkip(t *testing.T) {
 func TestChangeStage_RejectsBacktrack(t *testing.T) {
 	t.Parallel()
 	l := newLead(t)
-	if err := l.ChangeStage(crmlead.StageContacted, tidMemSales, ""); err != nil {
+	if err := l.ChangeStage(crmlead.StageContacted, tidMemSales, "", fixedNow); err != nil {
 		t.Fatalf("setup: %v", err)
 	}
 	_ = l.PullEvents()
-	err := l.ChangeStage(crmlead.StageNew, tidMemSales, "")
+	err := l.ChangeStage(crmlead.StageNew, tidMemSales, "", fixedNow)
 	if !errors.Is(err, crmlead.ErrInvalid) {
 		t.Fatalf("want ErrInvalid, got %v", err)
 	}
@@ -281,7 +278,7 @@ func TestChangeStage_RejectsDirectConvertOrLose(t *testing.T) {
 	t.Parallel()
 	l := newLead(t)
 	for _, target := range []crmlead.Stage{crmlead.StageConverted, crmlead.StageLost} {
-		if err := l.ChangeStage(target, tidMem, ""); !errors.Is(err, crmlead.ErrInvalid) {
+		if err := l.ChangeStage(target, tidMem, "", fixedNow); !errors.Is(err, crmlead.ErrInvalid) {
 			t.Fatalf("target %s: want ErrInvalid, got %v", target, err)
 		}
 	}
@@ -290,11 +287,11 @@ func TestChangeStage_RejectsDirectConvertOrLose(t *testing.T) {
 func TestChangeStage_TerminalRefused(t *testing.T) {
 	t.Parallel()
 	l := newLead(t)
-	if err := l.Convert(tidMemCloser); err != nil {
+	if err := l.Convert(tidMemCloser, fixedNow); err != nil {
 		t.Fatalf("Convert: %v", err)
 	}
 	_ = l.PullEvents()
-	err := l.ChangeStage(crmlead.StageContacted, tidMem, "")
+	err := l.ChangeStage(crmlead.StageContacted, tidMem, "", fixedNow)
 	if !errors.Is(err, crmlead.ErrTerminal) {
 		t.Fatalf("want ErrTerminal, got %v", err)
 	}
@@ -306,7 +303,7 @@ func TestChangeTemperature_FreeTransition(t *testing.T) {
 	t.Parallel()
 	l := newLead(t)
 	for _, target := range []crmlead.Temperature{crmlead.TemperatureHot, crmlead.TemperatureCold, crmlead.TemperatureDead, crmlead.TemperatureWarm} {
-		if err := l.ChangeTemperature(target, tidMem); err != nil {
+		if err := l.ChangeTemperature(target, tidMem, fixedNow); err != nil {
 			t.Fatalf("ChangeTemperature %s: %v", target, err)
 		}
 		if l.Temperature() != target {
@@ -318,7 +315,7 @@ func TestChangeTemperature_FreeTransition(t *testing.T) {
 func TestChangeTemperature_IdempotentSelf(t *testing.T) {
 	t.Parallel()
 	l := newLead(t)
-	if err := l.ChangeTemperature(crmlead.TemperatureWarm, tidMem); err != nil {
+	if err := l.ChangeTemperature(crmlead.TemperatureWarm, tidMem, fixedNow); err != nil {
 		t.Fatalf("err: %v", err)
 	}
 	if evs := l.PullEvents(); len(evs) != 0 {
@@ -329,11 +326,11 @@ func TestChangeTemperature_IdempotentSelf(t *testing.T) {
 func TestChangeTemperature_RejectsTerminal(t *testing.T) {
 	t.Parallel()
 	l := newLead(t)
-	if err := l.Lose(tidMem, "no budget"); err != nil {
+	if err := l.Lose(tidMem, "no budget", fixedNow); err != nil {
 		t.Fatalf("Lose: %v", err)
 	}
 	_ = l.PullEvents()
-	err := l.ChangeTemperature(crmlead.TemperatureHot, tidMem)
+	err := l.ChangeTemperature(crmlead.TemperatureHot, tidMem, fixedNow)
 	if !errors.Is(err, crmlead.ErrTerminal) {
 		t.Fatalf("want ErrTerminal, got %v", err)
 	}
@@ -344,7 +341,7 @@ func TestChangeTemperature_RejectsTerminal(t *testing.T) {
 func TestConvert_Terminal(t *testing.T) {
 	t.Parallel()
 	l := newLead(t)
-	if err := l.Convert(tidMemCloser); err != nil {
+	if err := l.Convert(tidMemCloser, fixedNow); err != nil {
 		t.Fatalf("Convert: %v", err)
 	}
 	if l.Stage() != crmlead.StageConverted {
@@ -365,7 +362,7 @@ func TestConvert_Terminal(t *testing.T) {
 		t.Fatalf("event: %+v", evs[0])
 	}
 	// Second Convert is refused.
-	if err := l.Convert(tidMemCloser); !errors.Is(err, crmlead.ErrTerminal) {
+	if err := l.Convert(tidMemCloser, fixedNow); !errors.Is(err, crmlead.ErrTerminal) {
 		t.Fatalf("second Convert: want ErrTerminal, got %v", err)
 	}
 }
@@ -373,7 +370,7 @@ func TestConvert_Terminal(t *testing.T) {
 func TestLose_TerminalWithReason(t *testing.T) {
 	t.Parallel()
 	l := newLead(t)
-	if err := l.Lose(tidMemCloser, "competitor won pricing"); err != nil {
+	if err := l.Lose(tidMemCloser, "competitor won pricing", fixedNow); err != nil {
 		t.Fatalf("Lose: %v", err)
 	}
 	if l.Stage() != crmlead.StageLost {
@@ -390,7 +387,7 @@ func TestLose_TerminalWithReason(t *testing.T) {
 func TestLose_RequiresReason(t *testing.T) {
 	t.Parallel()
 	l := newLead(t)
-	if err := l.Lose(tidMem, ""); !errors.Is(err, crmlead.ErrInvalid) {
+	if err := l.Lose(tidMem, "", fixedNow); !errors.Is(err, crmlead.ErrInvalid) {
 		t.Fatalf("want ErrInvalid, got %v", err)
 	}
 }
@@ -398,11 +395,11 @@ func TestLose_RequiresReason(t *testing.T) {
 func TestLose_RejectsAfterConvert(t *testing.T) {
 	t.Parallel()
 	l := newLead(t)
-	if err := l.Convert(tidMem); err != nil {
+	if err := l.Convert(tidMem, fixedNow); err != nil {
 		t.Fatalf("Convert: %v", err)
 	}
 	_ = l.PullEvents()
-	err := l.Lose(tidMem, "too late")
+	err := l.Lose(tidMem, "too late", fixedNow)
 	if !errors.Is(err, crmlead.ErrTerminal) {
 		t.Fatalf("want ErrTerminal, got %v", err)
 	}
@@ -413,7 +410,7 @@ func TestLose_RejectsAfterConvert(t *testing.T) {
 func TestAssign_FirstAssignment(t *testing.T) {
 	t.Parallel()
 	l := newLead(t)
-	if err := l.Assign(tidMemSalesA, tidMemManager, "initial routing"); err != nil {
+	if err := l.Assign(tidMemSalesA, tidMemManager, "initial routing", fixedNow); err != nil {
 		t.Fatalf("Assign: %v", err)
 	}
 	if l.AssigneeMembershipID() != tidMemSalesA {
@@ -432,11 +429,11 @@ func TestAssign_FirstAssignment(t *testing.T) {
 func TestAssign_Reassignment(t *testing.T) {
 	t.Parallel()
 	l := newLead(t)
-	if err := l.Assign(tidMemSalesA, tidMemManager, "initial"); err != nil {
+	if err := l.Assign(tidMemSalesA, tidMemManager, "initial", fixedNow); err != nil {
 		t.Fatalf("Assign 1: %v", err)
 	}
 	_ = l.PullEvents()
-	if err := l.Assign(tidMemSalesB, tidMemManager, "rebalance"); err != nil {
+	if err := l.Assign(tidMemSalesB, tidMemManager, "rebalance", fixedNow); err != nil {
 		t.Fatalf("Assign 2: %v", err)
 	}
 	evs := l.PullEvents()
@@ -452,11 +449,11 @@ func TestAssign_Reassignment(t *testing.T) {
 func TestAssign_IdempotentSame(t *testing.T) {
 	t.Parallel()
 	l := newLead(t)
-	if err := l.Assign(tidMemA, tidMemManager, ""); err != nil {
+	if err := l.Assign(tidMemA, tidMemManager, "", fixedNow); err != nil {
 		t.Fatalf("Assign: %v", err)
 	}
 	_ = l.PullEvents()
-	if err := l.Assign(tidMemA, tidMemManager, "ignored"); err != nil {
+	if err := l.Assign(tidMemA, tidMemManager, "ignored", fixedNow); err != nil {
 		t.Fatalf("Assign idempotent: %v", err)
 	}
 	if evs := l.PullEvents(); len(evs) != 0 {
@@ -467,11 +464,11 @@ func TestAssign_IdempotentSame(t *testing.T) {
 func TestAssign_RejectsTerminal(t *testing.T) {
 	t.Parallel()
 	l := newLead(t)
-	if err := l.Convert(tidMem); err != nil {
+	if err := l.Convert(tidMem, fixedNow); err != nil {
 		t.Fatalf("Convert: %v", err)
 	}
 	_ = l.PullEvents()
-	err := l.Assign(tidMemNew, tidMemManager, "tried")
+	err := l.Assign(tidMemNew, tidMemManager, "tried", fixedNow)
 	if !errors.Is(err, crmlead.ErrTerminal) {
 		t.Fatalf("want ErrTerminal, got %v", err)
 	}

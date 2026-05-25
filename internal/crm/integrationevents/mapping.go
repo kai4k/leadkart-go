@@ -41,7 +41,7 @@ func FromDomainEvent(d any) (Event, error) {
 		if err != nil {
 			return nil, err
 		}
-		tenantID, err := parseUUID("tenant_id", e.TenantID)
+		tenantID, err := parseUUID("tenant_id", e.TenantID.String())
 		if err != nil {
 			return nil, err
 		}
@@ -72,7 +72,7 @@ func FromDomainEvent(d any) (Event, error) {
 		if err != nil {
 			return nil, err
 		}
-		tenantID, err := parseUUID("tenant_id", e.TenantID)
+		tenantID, err := parseUUID("tenant_id", e.TenantID.String())
 		if err != nil {
 			return nil, err
 		}
@@ -105,7 +105,7 @@ func FromDomainEvent(d any) (Event, error) {
 		if err != nil {
 			return nil, err
 		}
-		tenantID, err := parseUUID("tenant_id", e.TenantID)
+		tenantID, err := parseUUID("tenant_id", e.TenantID.String())
 		if err != nil {
 			return nil, err
 		}
@@ -128,7 +128,7 @@ func FromDomainEvent(d any) (Event, error) {
 		if err != nil {
 			return nil, err
 		}
-		tenantID, err := parseUUID("tenant_id", e.TenantID)
+		tenantID, err := parseUUID("tenant_id", e.TenantID.String())
 		if err != nil {
 			return nil, err
 		}
@@ -150,7 +150,7 @@ func FromDomainEvent(d any) (Event, error) {
 		if err != nil {
 			return nil, err
 		}
-		tenantID, err := parseUUID("tenant_id", e.TenantID)
+		tenantID, err := parseUUID("tenant_id", e.TenantID.String())
 		if err != nil {
 			return nil, err
 		}
@@ -170,7 +170,7 @@ func FromDomainEvent(d any) (Event, error) {
 		if err != nil {
 			return nil, err
 		}
-		tenantID, err := parseUUID("tenant_id", e.TenantID)
+		tenantID, err := parseUUID("tenant_id", e.TenantID.String())
 		if err != nil {
 			return nil, err
 		}
@@ -197,7 +197,7 @@ func FromDomainEvent(d any) (Event, error) {
 		if err != nil {
 			return nil, err
 		}
-		tenantID, err := parseUUID("tenant_id", e.TenantID)
+		tenantID, err := parseUUID("tenant_id", e.TenantID.String())
 		if err != nil {
 			return nil, err
 		}

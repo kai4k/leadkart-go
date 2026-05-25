@@ -39,6 +39,7 @@ const (
 	SchemaIdentity  Schema = "identity"
 	SchemaInventory Schema = "inventory"
 	SchemaPlatform  Schema = "platform"
+	SchemaCRM       Schema = "crm"
 )
 
 // OutboxCountByTenant returns the number of rows in <schema>.outbox

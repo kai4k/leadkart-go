@@ -20,9 +20,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/leadkart/leadkart-go/internal/common/clock"
 	"github.com/leadkart/leadkart-go/internal/common/errs"
 	"github.com/leadkart/leadkart-go/internal/crm/domain/crmlead"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
 
 // ErrInvalid is the sentinel returned (wrapped via %w) by [New] on
@@ -51,7 +51,7 @@ const reasonMaxLen = 1000
 // PreviousAssignee is empty on the FIRST assignment for a lead.
 type Entry struct {
 	id                       ID
-	tenantID                 string
+	tenantID                 tenant.ID
 	leadID                   crmlead.ID
 	previousAssignee         string // empty for first assignment
 	assigneeMembershipID     string
@@ -70,11 +70,15 @@ type Entry struct {
 // row is a side-effect write. Keeping the entry mute keeps the
 // integration-event vocabulary single-sourced (lead-assigned, not
 // assignment-recorded).
-func New(id ID, tenantID string, leadID crmlead.ID, previousAssignee, assignee, assignedBy, reason string, assignedAt time.Time) (*Entry, error) {
+//
+// `now` is the injected clock (Pure Domain canon — ADR 0047). Caller
+// (handler) passes the same wall-clock used for the lead-aggregate
+// mutator so the audit row's CreatedAt aligns with AssignedAt.
+func New(id ID, tenantID tenant.ID, leadID crmlead.ID, previousAssignee, assignee, assignedBy, reason string, assignedAt time.Time, now time.Time) (*Entry, error) {
 	if id.IsZero() {
 		return nil, fmt.Errorf("%w: id required", ErrInvalid)
 	}
-	if strings.TrimSpace(tenantID) == "" {
+	if strings.TrimSpace(tenantID.String()) == "" {
 		return nil, fmt.Errorf("%w: tenant id required", ErrInvalid)
 	}
 	if leadID.IsZero() {
@@ -92,6 +96,9 @@ func New(id ID, tenantID string, leadID crmlead.ID, previousAssignee, assignee, 
 	if assignedAt.IsZero() {
 		return nil, fmt.Errorf("%w: assigned_at required", ErrInvalid)
 	}
+	if now.IsZero() {
+		return nil, fmt.Errorf("%w: now required", ErrInvalid)
+	}
 	return &Entry{
 		id:                     id,
 		tenantID:               tenantID,
@@ -101,14 +108,14 @@ func New(id ID, tenantID string, leadID crmlead.ID, previousAssignee, assignee, 
 		assignedByMembershipID: assignedBy,
 		reason:                 reason,
 		assignedAt:             assignedAt,
-		createdAt:              clock.Now(),
+		createdAt:              now,
 	}, nil
 }
 
 // Snapshot is the persistence-layer DTO consumed by [UnmarshalFromDB].
 type Snapshot struct {
 	ID                     ID
-	TenantID               string
+	TenantID               tenant.ID
 	LeadID                 crmlead.ID
 	PreviousAssignee       string
 	AssigneeMembershipID   string
@@ -139,7 +146,7 @@ func UnmarshalFromDB(s Snapshot) *Entry {
 func (e *Entry) ID() ID { return e.id }
 
 // TenantID returns the owning tenant.
-func (e *Entry) TenantID() string { return e.tenantID }
+func (e *Entry) TenantID() tenant.ID { return e.tenantID }
 
 // LeadID returns the parent lead.
 func (e *Entry) LeadID() crmlead.ID { return e.leadID }

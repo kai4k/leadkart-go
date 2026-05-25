@@ -13,6 +13,7 @@ import (
 	"github.com/leadkart/leadkart-go/internal/crm/adapters/db"
 	"github.com/leadkart/leadkart-go/internal/crm/domain/assignmenthistory"
 	"github.com/leadkart/leadkart-go/internal/crm/domain/crmlead"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
 
 // AssignmentHistoryRepository is the pgx/sqlc-backed implementation of
@@ -46,7 +47,7 @@ func (r *AssignmentHistoryRepository) addOnTx(ctx context.Context, tx pgx.Tx, e 
 	if err != nil {
 		return fmt.Errorf("crm assignment_history repo: parse id %q: %w", e.ID(), err)
 	}
-	tid, err := uuid.Parse(e.TenantID())
+	tid, err := uuid.Parse(e.TenantID().String())
 	if err != nil {
 		return fmt.Errorf("crm assignment_history repo: parse tenant id %q: %w", e.TenantID(), err)
 	}
@@ -131,7 +132,7 @@ func (r *AssignmentHistoryRepository) ListByLead(ctx context.Context, leadID crm
 func rowToHistoryEntry(row db.CrmAssignmentHistory) *assignmenthistory.Entry {
 	return assignmenthistory.UnmarshalFromDB(assignmenthistory.Snapshot{
 		ID:                     assignmenthistory.ID(uuidFromPg(row.ID).String()),
-		TenantID:               uuidFromPg(row.TenantID).String(),
+		TenantID:               tenant.ID(uuidFromPg(row.TenantID).String()),
 		LeadID:                 crmlead.ID(uuidFromPg(row.LeadID).String()),
 		PreviousAssignee:       uuidStringOrEmpty(row.PreviousAssigneeMembershipID),
 		AssigneeMembershipID:   uuidFromPg(row.AssigneeMembershipID).String(),

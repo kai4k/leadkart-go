@@ -6,10 +6,10 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/leadkart/leadkart-go/internal/common/ids"
 	"github.com/leadkart/leadkart-go/internal/common/pg"
 	"github.com/leadkart/leadkart-go/internal/crm/domain/assignmenthistory"
 	"github.com/leadkart/leadkart-go/internal/crm/domain/crmlead"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
 
 // ErrLeadNotFound surfaces when the lead ID does not exist in the
@@ -41,15 +41,21 @@ type AssignLeadResult struct {
 // the same UoW transaction per ADR 0060 — partial failure rolls back
 // both.
 type AssignLeadHandler struct {
-	leads   crmlead.Repository
-	history assignmenthistory.Repository
-	uow     pg.UnitOfWork
-	now     func() time.Time
+	leads     crmlead.Repository
+	history   assignmenthistory.Repository
+	uow       pg.UnitOfWork
+	now       func() time.Time
+	newHistID func() assignmenthistory.ID
 }
 
 // NewAssignLeadHandler wires the handler against domain interfaces +
 // the UoW primitive.
-func NewAssignLeadHandler(leads crmlead.Repository, history assignmenthistory.Repository, uow pg.UnitOfWork, now func() time.Time) AssignLeadHandler {
+//
+// newHistID is the assignment-history ID factory per the
+// `TestArch_HandlersInjectIDFactory` discipline. Production passes
+// `func() assignmenthistory.ID { return assignmenthistory.ID(ids.NewV7().String()) }`;
+// tests inject a deterministic counter so the minted ID is pinnable.
+func NewAssignLeadHandler(leads crmlead.Repository, history assignmenthistory.Repository, uow pg.UnitOfWork, now func() time.Time, newHistID func() assignmenthistory.ID) AssignLeadHandler {
 	if leads == nil {
 		panic("command: NewAssignLeadHandler leads repository required")
 	}
@@ -59,10 +65,13 @@ func NewAssignLeadHandler(leads crmlead.Repository, history assignmenthistory.Re
 	if uow == nil {
 		panic("command: NewAssignLeadHandler uow required")
 	}
+	if newHistID == nil {
+		panic("command: NewAssignLeadHandler newHistID required")
+	}
 	if now == nil {
 		now = time.Now
 	}
-	return AssignLeadHandler{leads: leads, history: history, uow: uow, now: now}
+	return AssignLeadHandler{leads: leads, history: history, uow: uow, now: now, newHistID: newHistID}
 }
 
 // Handle performs the assignment + audit write in one transaction.
@@ -77,17 +86,18 @@ func (h AssignLeadHandler) Handle(ctx context.Context, cmd AssignLeadCommand) (A
 		return AssignLeadResult{}, errors.New("crm assign: assigned-by membership id required")
 	}
 
+	now := h.now()
 	var resultID assignmenthistory.ID
 	err := h.uow.WithinTx(ctx, pg.TxScopeTenant, func(ctx context.Context) error {
 		var captured struct {
 			previous string
-			tenant   string
+			tenant   tenant.ID
 			noop     bool
 		}
 		err := h.leads.UpdateByID(ctx, cmd.LeadID, func(l *crmlead.CrmLead) (bool, error) {
 			captured.previous = l.AssigneeMembershipID()
 			captured.tenant = l.TenantID()
-			if err := l.Assign(cmd.AssigneeMembershipID, cmd.AssignedByMembershipID, cmd.Reason); err != nil {
+			if err := l.Assign(cmd.AssigneeMembershipID, cmd.AssignedByMembershipID, cmd.Reason, now); err != nil {
 				return false, err
 			}
 			// idempotent self-assignment: aggregate emitted no event.
@@ -104,14 +114,15 @@ func (h AssignLeadHandler) Handle(ctx context.Context, cmd AssignLeadCommand) (A
 			return nil
 		}
 		entry, err := assignmenthistory.New(
-			assignmenthistory.ID(ids.NewV7().String()),
+			h.newHistID(),
 			captured.tenant,
 			cmd.LeadID,
 			captured.previous,
 			cmd.AssigneeMembershipID,
 			cmd.AssignedByMembershipID,
 			cmd.Reason,
-			h.now(),
+			now,
+			now,
 		)
 		if err != nil {
 			return fmt.Errorf("crm assign: history factory: %w", err)

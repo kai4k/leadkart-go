@@ -199,6 +199,9 @@ func TestArch_SubscribersAreIdempotent(t *testing.T) {
 		"internal/identity/ports/subscribers/registration.go",        // router-config helper; idempotency middleware wired at router level
 		"internal/identity/ports/subscribers/revoke_families.go",     // Family.Revoke is no-op on already-revoked families (godoc cited)
 		"internal/identity/ports/subscribers/email_sender.go",        // email provider enforces dedup at gateway; ADR 0057
+		"internal/crm/ports/subscribers/lead_purchased.go",           // delegates to IngestPurchasedLeadHandler — natural-key precheck (GetBySourcePurchaseID) lives in the command; ADR 0060
+		"internal/crm/ports/subscribers/lead_purchased_payload.go",   // wire-shape envelope DTO; no handler logic
+		"internal/crm/ports/subscribers/registration.go",             // router-config helper; idempotency middleware wired at router level
 	}
 
 	getRE := regexp.MustCompile(`\b(Get|Find|Lookup|Exists)[A-Z]\w*\(`)

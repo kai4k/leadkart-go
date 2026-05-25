@@ -11,6 +11,7 @@ import (
 	"github.com/leadkart/leadkart-go/internal/common/messaging"
 	"github.com/leadkart/leadkart-go/internal/crm/app/command"
 	"github.com/leadkart/leadkart-go/internal/crm/domain/crmlead"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
 
 // HandlerName constants — CI-stable per messaging.md "stable handler
@@ -56,16 +57,20 @@ func (h *PurchasedLeadIngestor) Handle(ctx context.Context, _ string, msg *messa
 	}
 	var evt LeadPurchasedV1
 	if err := json.Unmarshal(msg.Payload, &evt); err != nil {
+		// retry — malformed envelope is a producer-side bug; the inbox dedup
+		// means the retry won't double-spend even if the producer fixes + replays.
 		return fmt.Errorf("crm subscribers: decode %s: %w", LeadPurchasedTopic, err)
 	}
 	out, err := h.cmd.Handle(ctx, command.IngestPurchasedLeadCommand{
 		PurchaseID:              evt.PurchaseID,
-		TenantID:                evt.TenantID,
+		TenantID:                tenant.ID(evt.TenantID),
 		PlatformLeadID:          evt.PlatformLeadID,
 		PurchasedByMembershipID: evt.PurchasedByMembershipID,
 		Snapshot:                snapshotFromV1(evt),
 	})
 	if err != nil {
+		// retry — command-side failure (DB hiccup / lock contention); the
+		// natural-key (PurchaseID) idempotency check makes the retry safe.
 		return fmt.Errorf("crm subscribers: ingest: %w", err)
 	}
 	if out.AlreadyExisted {

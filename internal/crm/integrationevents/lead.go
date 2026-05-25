@@ -11,7 +11,7 @@ import (
 // or a manual import (SourcePurchaseID == uuid.Nil; manual path lands
 // in slice 2+).
 //
-// Wire alias: `crm.lead-created.v1`. Tenant-scoped.
+// Wire alias: `crm.lead_created.v1`. Tenant-scoped.
 type CrmLeadCreatedV1 struct {
 	LeadID                uuid.UUID `json:"lead_id"`
 	TenantIDClaim         uuid.UUID `json:"tenant_id"`
@@ -21,7 +21,7 @@ type CrmLeadCreatedV1 struct {
 }
 
 // Topic returns the canonical wire alias.
-func (CrmLeadCreatedV1) Topic() string { return "crm.lead-created.v1" }
+func (CrmLeadCreatedV1) Topic() string { return "crm.lead_created.v1" }
 
 // OccurredAt returns the domain timestamp.
 func (e CrmLeadCreatedV1) OccurredAt() time.Time { return e.OccurredAtUTC }
@@ -33,7 +33,7 @@ func (e CrmLeadCreatedV1) TenantID() uuid.UUID { return e.TenantIDClaim }
 // assignment or reassignment). AssignmentHistory row written in the
 // same transaction by the command handler.
 //
-// Wire alias: `crm.lead-assigned.v1`.
+// Wire alias: `crm.lead_assigned.v1`.
 type CrmLeadAssignedV1 struct {
 	LeadID                 uuid.UUID `json:"lead_id"`
 	TenantIDClaim          uuid.UUID `json:"tenant_id"`
@@ -44,7 +44,7 @@ type CrmLeadAssignedV1 struct {
 }
 
 // Topic returns the canonical wire alias.
-func (CrmLeadAssignedV1) Topic() string { return "crm.lead-assigned.v1" }
+func (CrmLeadAssignedV1) Topic() string { return "crm.lead_assigned.v1" }
 
 // OccurredAt returns the domain timestamp.
 func (e CrmLeadAssignedV1) OccurredAt() time.Time { return e.OccurredAtUTC }
@@ -57,7 +57,7 @@ func (e CrmLeadAssignedV1) TenantID() uuid.UUID { return e.TenantIDClaim }
 // CrmLeadLostV1; this event covers only the New→Contacted→…→Negotiation
 // chain.
 //
-// Wire alias: `crm.lead-stage-changed.v1`.
+// Wire alias: `crm.lead_stage_changed.v1`.
 type CrmLeadStageChangedV1 struct {
 	LeadID                uuid.UUID `json:"lead_id"`
 	TenantIDClaim         uuid.UUID `json:"tenant_id"`
@@ -69,7 +69,7 @@ type CrmLeadStageChangedV1 struct {
 }
 
 // Topic returns the canonical wire alias.
-func (CrmLeadStageChangedV1) Topic() string { return "crm.lead-stage-changed.v1" }
+func (CrmLeadStageChangedV1) Topic() string { return "crm.lead_stage_changed.v1" }
 
 // OccurredAt returns the domain timestamp.
 func (e CrmLeadStageChangedV1) OccurredAt() time.Time { return e.OccurredAtUTC }
@@ -80,7 +80,7 @@ func (e CrmLeadStageChangedV1) TenantID() uuid.UUID { return e.TenantIDClaim }
 // CrmLeadTemperatureChangedV1 — the lead's qualitative interest signal
 // changed. Independent of [CrmLeadStageChangedV1].
 //
-// Wire alias: `crm.lead-temperature-changed.v1`.
+// Wire alias: `crm.lead_temperature_changed.v1`.
 type CrmLeadTemperatureChangedV1 struct {
 	LeadID                uuid.UUID `json:"lead_id"`
 	TenantIDClaim         uuid.UUID `json:"tenant_id"`
@@ -91,7 +91,7 @@ type CrmLeadTemperatureChangedV1 struct {
 }
 
 // Topic returns the canonical wire alias.
-func (CrmLeadTemperatureChangedV1) Topic() string { return "crm.lead-temperature-changed.v1" }
+func (CrmLeadTemperatureChangedV1) Topic() string { return "crm.lead_temperature_changed.v1" }
 
 // OccurredAt returns the domain timestamp.
 func (e CrmLeadTemperatureChangedV1) OccurredAt() time.Time { return e.OccurredAtUTC }
@@ -100,7 +100,7 @@ func (e CrmLeadTemperatureChangedV1) OccurredAt() time.Time { return e.OccurredA
 func (e CrmLeadTemperatureChangedV1) TenantID() uuid.UUID { return e.TenantIDClaim }
 
 // CrmCallLoggedV1 — a CallLog was created against a lead. Wire alias:
-// `crm.call-logged.v1`. Append-only — no subsequent update / delete events.
+// `crm.call_logged.v1`. Append-only — no subsequent update / delete events.
 type CrmCallLoggedV1 struct {
 	CallID               uuid.UUID `json:"call_id"`
 	LeadID               uuid.UUID `json:"lead_id"`
@@ -111,7 +111,7 @@ type CrmCallLoggedV1 struct {
 }
 
 // Topic returns the canonical wire alias.
-func (CrmCallLoggedV1) Topic() string { return "crm.call-logged.v1" }
+func (CrmCallLoggedV1) Topic() string { return "crm.call_logged.v1" }
 
 // OccurredAt returns the domain timestamp.
 func (e CrmCallLoggedV1) OccurredAt() time.Time { return e.OccurredAtUTC }
@@ -123,7 +123,7 @@ func (e CrmCallLoggedV1) TenantID() uuid.UUID { return e.TenantIDClaim }
 // module consumes this as the trigger to seed a Quotation skeleton per
 // ADR 0060 contract for the v0.4+ Orders work.
 //
-// Wire alias: `crm.lead-converted.v1`.
+// Wire alias: `crm.lead_converted.v1`.
 type CrmLeadConvertedV1 struct {
 	LeadID                  uuid.UUID `json:"lead_id"`
 	TenantIDClaim           uuid.UUID `json:"tenant_id"`
@@ -132,7 +132,7 @@ type CrmLeadConvertedV1 struct {
 }
 
 // Topic returns the canonical wire alias.
-func (CrmLeadConvertedV1) Topic() string { return "crm.lead-converted.v1" }
+func (CrmLeadConvertedV1) Topic() string { return "crm.lead_converted.v1" }
 
 // OccurredAt returns the domain timestamp.
 func (e CrmLeadConvertedV1) OccurredAt() time.Time { return e.OccurredAtUTC }
@@ -143,7 +143,7 @@ func (e CrmLeadConvertedV1) TenantID() uuid.UUID { return e.TenantIDClaim }
 // CrmLeadLostV1 — terminal-failure transition. Carries the audit
 // reason required at [crmlead.CrmLead.Lose].
 //
-// Wire alias: `crm.lead-lost.v1`.
+// Wire alias: `crm.lead_lost.v1`.
 type CrmLeadLostV1 struct {
 	LeadID             uuid.UUID `json:"lead_id"`
 	TenantIDClaim      uuid.UUID `json:"tenant_id"`
@@ -153,7 +153,7 @@ type CrmLeadLostV1 struct {
 }
 
 // Topic returns the canonical wire alias.
-func (CrmLeadLostV1) Topic() string { return "crm.lead-lost.v1" }
+func (CrmLeadLostV1) Topic() string { return "crm.lead_lost.v1" }
 
 // OccurredAt returns the domain timestamp.
 func (e CrmLeadLostV1) OccurredAt() time.Time { return e.OccurredAtUTC }

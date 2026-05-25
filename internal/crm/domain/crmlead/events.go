@@ -1,6 +1,10 @@
 package crmlead
 
-import "time"
+import (
+	"time"
+
+	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
+)
 
 // Event is the SEALED marker interface for CrmLead domain events.
 // Sealed via the unexported isCrmLeadEvent() method so only types in
@@ -21,7 +25,7 @@ type Event interface {
 // leads, populated for subscriber-created leads.
 type CreatedEvent struct {
 	LeadID                ID
-	TenantID              string
+	TenantID              tenant.ID
 	SourcePurchaseID      string // empty for manual-import
 	CreatedByMembershipID string
 	At                    time.Time
@@ -33,7 +37,7 @@ func (CreatedEvent) isCrmLeadEvent() {}
 // PreviousAssignee is empty for the first assignment.
 type AssignedEvent struct {
 	LeadID                 ID
-	TenantID               string
+	TenantID               tenant.ID
 	PreviousAssignee       string // empty for first assignment
 	AssigneeMembershipID   string
 	AssignedByMembershipID string
@@ -47,7 +51,7 @@ func (AssignedEvent) isCrmLeadEvent() {}
 // Convert / Lose use [ConvertedEvent] / [LostEvent] instead.
 type StageChangedEvent struct {
 	LeadID                ID
-	TenantID              string
+	TenantID              tenant.ID
 	OldStage              Stage
 	NewStage              Stage
 	ChangedByMembershipID string
@@ -61,7 +65,7 @@ func (StageChangedEvent) isCrmLeadEvent() {}
 // temperature axis.
 type TemperatureChangedEvent struct {
 	LeadID                ID
-	TenantID              string
+	TenantID              tenant.ID
 	OldTemperature        Temperature
 	NewTemperature        Temperature
 	ChangedByMembershipID string
@@ -75,7 +79,7 @@ func (TemperatureChangedEvent) isCrmLeadEvent() {}
 // a Quotation skeleton (per ADR 0060 contract for the v0.4+ Orders work).
 type ConvertedEvent struct {
 	LeadID                  ID
-	TenantID                string
+	TenantID                tenant.ID
 	ConvertedByMembershipID string
 	At                      time.Time
 }
@@ -86,7 +90,7 @@ func (ConvertedEvent) isCrmLeadEvent() {}
 // Reason MUST be non-empty (audit doctrine).
 type LostEvent struct {
 	LeadID             ID
-	TenantID           string
+	TenantID           tenant.ID
 	LostByMembershipID string
 	Reason             string
 	At                 time.Time

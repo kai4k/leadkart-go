@@ -51,6 +51,7 @@ import (
 
 	crmadapters "github.com/leadkart/leadkart-go/internal/crm/adapters"
 	crmcommand "github.com/leadkart/leadkart-go/internal/crm/app/command"
+	"github.com/leadkart/leadkart-go/internal/crm/domain/crmlead"
 	crmintegrationevents "github.com/leadkart/leadkart-go/internal/crm/integrationevents"
 	crmsubscribers "github.com/leadkart/leadkart-go/internal/crm/ports/subscribers"
 	"github.com/leadkart/leadkart-go/internal/identity/adapters"
@@ -62,6 +63,7 @@ import (
 	"github.com/leadkart/leadkart-go/internal/common/cache"
 	"github.com/leadkart/leadkart-go/internal/common/config"
 	"github.com/leadkart/leadkart-go/internal/common/email"
+	"github.com/leadkart/leadkart-go/internal/common/ids"
 	"github.com/leadkart/leadkart-go/internal/common/jobs"
 	"github.com/leadkart/leadkart-go/internal/common/messaging"
 	"github.com/leadkart/leadkart-go/internal/common/obs"
@@ -261,8 +263,9 @@ func run(ctx context.Context, stdout *os.File) error {
 	// platform.events topic for the lead-purchased ingest.
 	crmForwarder := crmadapters.NewOutboxForwarder(pool, tx, pubsub, crmintegrationevents.Topic, 0, time.Now)
 	crmLeads := crmadapters.NewCrmLeadRepository(pool, tx)
+	newCrmLeadID := func() crmlead.ID { return crmlead.ID(ids.NewV7().String()) }
 	crmIngest := crmsubscribers.NewPurchasedLeadIngestor(
-		crmcommand.NewIngestPurchasedLeadHandler(crmLeads), logger)
+		crmcommand.NewIngestPurchasedLeadHandler(crmLeads, time.Now, newCrmLeadID), logger)
 
 	router, err := messaging.NewRouter(messaging.Deps{
 		Subscriber:       pubsub,
