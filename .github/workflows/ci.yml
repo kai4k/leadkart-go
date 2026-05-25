@@ -242,25 +242,46 @@ jobs:
       - name: Install gotestsum
         run: go install gotest.tools/gotestsum@latest
 
-      # Run ONLY TestArch_* across every package that hosts arch tests.
-      # Local `task test:arch` is the source of truth — keep this list in
-      # sync. Currently three sites:
-      #   - internal/identity/integrationevents — event-marker + alias-regex hygiene
-      #   - internal/identity/app                — layer-boundary discipline (ADR 0047)
-      #   - internal/identity/ports              — route-registration conflict (ADR 0049/Wave 8)
-      #                                            + OpenAPI ↔ code drift (ADR 0050/Wave 9.3)
-      # PRE-WAVE-9.3 BUG: this job listed only `integrationevents/...` so the
-      # boundary + route arch tests silently never ran on cloud CI even though
-      # local pre-push gated them. Wave 9.3 brought them into the gate.
+      # Run TestArch_* + TestMeta_* across EVERY package that hosts arch
+      # tests. Local `task test:arch` (in Taskfile.yml) is the source of
+      # truth — this list MUST stay in lock-step with it.
+      #
+      # CHANGELOG (drift history — read before editing):
+      #   - Pre-Wave-9.3: only `integrationevents/...` ran cloud-side; the
+      #     boundary + route arch tests silently never ran on PRs even
+      #     though local pre-push gated them. Wave 9.3 brought identity's
+      #     three packages into the gate.
+      #   - May 2026 (this commit): the gate STILL listed only the three
+      #     identity packages, while the local Taskfile had grown to 14
+      #     paths (inventory + platform + crm + the cross-cutting
+      #     internal/architecture/ fitness-function suite — 98+ tests).
+      #     Every PR since inventory-slice-1 was merging with only
+      #     identity arch coverage in CI. Closed for good below.
+      #
+      # The bug recurs because the source-of-truth lives in Taskfile.yml
+      # but CI re-encodes the list. Long-term fix (follow-up): have CI
+      # call `task test:arch` directly + add a drift test that diffs the
+      # two lists.
       - name: Run architecture tests
         run: |
           gotestsum \
             --junitfile=junit-architecture.xml \
             --format=testname \
-            -- -run "^TestArch_" -shuffle=on \
+            -- -run "^Test(Arch|Meta)_" -shuffle=on \
                ./internal/identity/integrationevents/... \
                ./internal/identity/app/... \
-               ./internal/identity/ports/...
+               ./internal/identity/ports/... \
+               ./internal/inventory/integrationevents/... \
+               ./internal/inventory/app/... \
+               ./internal/inventory/ports/... \
+               ./internal/inventory/adapters/... \
+               ./internal/platform/integrationevents/... \
+               ./internal/platform/app/... \
+               ./internal/platform/ports/... \
+               ./internal/crm/integrationevents/... \
+               ./internal/crm/app/... \
+               ./internal/crm/ports/... \
+               ./internal/architecture/...
 
       - name: Upload architecture test results (JUnit)
         if: always()
