@@ -6,6 +6,9 @@ import (
 	"time"
 
 	"github.com/leadkart/leadkart-go/internal/crm/app/command"
+	"github.com/leadkart/leadkart-go/internal/crm/domain/assignmenthistory"
+	"github.com/leadkart/leadkart-go/internal/crm/domain/crmlead"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
 
 func fixedTime() time.Time {
@@ -129,5 +132,71 @@ func TestAssignLead_Terminal(t *testing.T) {
 	})
 	if !errors.Is(err, command.ErrLeadTerminal) {
 		t.Fatalf("want ErrLeadTerminal, got %v", err)
+	}
+}
+
+// ----- Input validation -----------------------------------------------------
+
+func TestAssignLead_InputValidation(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		cmd  command.AssignLeadCommand
+	}{
+		{
+			"zero tenant id",
+			command.AssignLeadCommand{TenantID: tenant.ID(""), LeadID: crmlead.ID("01923400-0000-7000-8000-cccccccc0001"), AssigneeMembershipID: "01923400-0000-7000-8000-cccccccc0004", AssignedByMembershipID: "01923400-0000-7000-8000-cccccccc0006"},
+		},
+		{
+			"zero lead id",
+			command.AssignLeadCommand{TenantID: testTenantID, LeadID: crmlead.ID(""), AssigneeMembershipID: "01923400-0000-7000-8000-cccccccc0004", AssignedByMembershipID: "01923400-0000-7000-8000-cccccccc0006"},
+		},
+		{
+			"empty assignee membership id",
+			command.AssignLeadCommand{TenantID: testTenantID, LeadID: crmlead.ID("01923400-0000-7000-8000-cccccccc0001"), AssigneeMembershipID: "", AssignedByMembershipID: "01923400-0000-7000-8000-cccccccc0006"},
+		},
+		{
+			"empty assigned-by membership id",
+			command.AssignLeadCommand{TenantID: testTenantID, LeadID: crmlead.ID("01923400-0000-7000-8000-cccccccc0001"), AssigneeMembershipID: "01923400-0000-7000-8000-cccccccc0004", AssignedByMembershipID: ""},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			h := command.NewAssignLeadHandler(newFakeLeads(), newFakeHistory(), fakeUoW{}, fixedTime, newTestHistoryID)
+			_, err := h.Handle(t.Context(), tc.cmd)
+			if err == nil {
+				t.Fatal("want input-validation error, got nil")
+			}
+		})
+	}
+}
+
+// ----- History factory rejection wrapping ----------------------------------
+
+// historyIDFactoryEmpty returns the zero-value assignmenthistory.ID. The
+// downstream assignmenthistory.New ctor MUST reject this with ErrInvalid;
+// the handler wraps that into "crm assign: history factory: ...".
+func historyIDFactoryEmpty() assignmenthistory.ID { return assignmenthistory.ID("") }
+
+func TestAssignLead_HistoryFactoryRejection_Wrapped(t *testing.T) {
+	t.Parallel()
+	leads := newFakeLeads()
+	history := newFakeHistory()
+	id := seedLead(t, leads)
+	// Inject the empty-ID factory so the assignmenthistory.New ctor fires
+	// its "id required" branch. Verifies the handler's "history factory"
+	// wrap path is exercised (this branch was previously untested).
+	h := command.NewAssignLeadHandler(leads, history, fakeUoW{}, fixedTime, historyIDFactoryEmpty)
+	_, err := h.Handle(t.Context(), command.AssignLeadCommand{
+		TenantID: testTenantID, LeadID: id,
+		AssigneeMembershipID:   "01923400-0000-7000-8000-cccccccc0004",
+		AssignedByMembershipID: "01923400-0000-7000-8000-cccccccc0006",
+	})
+	if err == nil {
+		t.Fatal("want history-factory error, got nil")
+	}
+	if !errors.Is(err, assignmenthistory.ErrInvalid) {
+		t.Fatalf("want assignmenthistory.ErrInvalid wrapped, got %v", err)
 	}
 }
