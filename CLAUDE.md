@@ -221,14 +221,51 @@ internal/{module}/
 
 ---
 
-## Testing rules (per ADR 0019)
+## Testing rules (per ADR 0019 + ADR 0062)
+
+### Test pyramid (ThreeDotsLabs canon — ADR 0062)
+
+| Layer | Tests | How | Target per aggregate |
+|---|---|---|---|
+| Domain | Business rules — invariants, state machines, VO validation | Pure unit tests | Many (~10-30) |
+| App / handlers | Orchestration — calls repo, emits events, error paths | Unit tests against `<aggregate>test.FakeRepository` | Many (~5-15) |
+| Adapter / SQL | SQL contract — RLS fires, JSONB round-trip, 23505 translation, outbox-row write, soft-delete partial-index | Integration tests via `pgtest.RunMain` | Few (~3-6) |
+
+### Per-aggregate fakes (mandatory)
+
+Every domain aggregate with a `Repository` interface has a co-located
+`<aggregate>test/fake_repository.go` exposing `FakeRepository`. Pattern:
+
+```
+internal/<module>/domain/<aggregate>/
+├── repository.go                  # interface
+├── role.go                        # aggregate
+└── <aggregate>test/
+    └── fake_repository.go         # in-memory FakeRepository
+```
+
+Constraints (enforced by `internal/architecture/tdl_canon_arch_test.go`):
+- `var _ <aggregate>.Repository = (*FakeRepository)(nil)` compile-time gate
+- NO `sync` imports (domain-subtree concurrency-free + single-test-owner pattern)
+- Faithful contract: must mirror SQL adapter's `ErrXxx` translations, sort order, soft-delete filtering, partial-unique-index semantics
+
+### Test conventions
 
 - Table-driven via `t.Run`. `t.Parallel()` in subtests.
 - Stdlib `testing` + `go-cmp` for diffs + `testify/require` for ergonomics.
 - `testcontainers-go` for integration tests; build tag `//go:build integration`.
-- `goleak.VerifyTestMain` in integration packages.
-- Fakes per module under `{module}/{module}test/`.
+- `goleak.VerifyTestMain` (or `goleak.Find` when wrapping with `pgtest.RunMain`) in integration packages.
+- Shared `pgtest.Container` per package via `pgtest.RunMain`; per-test isolation via fresh `tenant.ID` + RLS (parallel) or `sharedPG.TruncateAll(t)` (cross-tenant serial).
+- Mixing `t.Parallel()` + `TruncateAll(t)` in one test is forbidden (`TestArch_TruncateAllImpliesSerial`).
 - Race detector mandatory in CI (`go test -race -shuffle=on`).
+
+### Integration tests are SQL-contract-only (ADR 0062)
+
+`internal/<module>/adapters/*_repository_pg_test.go` MUST test:
+SQLSTATE translations, RLS enforcement, JSONB round-trips, outbox-row writes, partial-index behaviors, EXPLAIN-under-RLS index selection, DB triggers.
+
+These tests MUST NOT exist at the SQL layer (covered by `<aggregate>test.FakeRepository`):
+Pure round-trips, ErrNotFound on missing ID, domain state machines, business-rule rejections that the aggregate ctor / mutator enforces.
 
 ---
 
