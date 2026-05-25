@@ -13,86 +13,16 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/permission"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/role"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/role/roletest"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/rolehierarchy"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
 
-
-// fakeRoleRepo is the minimum [role.Repository] surface the role
-// management handlers exercise.
-type fakeRoleRepo struct {
-	roles map[role.ID]*role.Role
-	names map[string]role.ID // (tenant_id|name) → id, for ErrNameTaken
-}
-
-func newFakeRoleRepo() *fakeRoleRepo {
-	return &fakeRoleRepo{
-		roles: make(map[role.ID]*role.Role),
-		names: make(map[string]role.ID),
-	}
-}
-
-func nameKey(tid tenant.ID, name string) string { return tid.String() + "|" + name }
-
-func (r *fakeRoleRepo) Add(_ context.Context, x *role.Role) error {
-	if _, ok := r.names[nameKey(x.TenantID(), x.Name())]; ok {
-		return role.ErrNameTaken
-	}
-	r.roles[x.ID()] = x
-	r.names[nameKey(x.TenantID(), x.Name())] = x.ID()
-	return nil
-}
-
-func (r *fakeRoleRepo) UpdateByID(_ context.Context, id role.ID, fn func(*role.Role) (bool, error)) error {
-	x, ok := r.roles[id]
-	if !ok {
-		return role.ErrNotFound
-	}
-	commit, err := fn(x)
-	if err != nil {
-		return err
-	}
-	_ = commit
-	return nil
-}
-
-func (r *fakeRoleRepo) GetByID(_ context.Context, id role.ID) (*role.Role, error) {
-	x, ok := r.roles[id]
-	if !ok {
-		return nil, role.ErrNotFound
-	}
-	return x, nil
-}
-
-func (r *fakeRoleRepo) GetByTenantAndName(_ context.Context, tid tenant.ID, name string) (*role.Role, error) {
-	id, ok := r.names[nameKey(tid, name)]
-	if !ok {
-		return nil, role.ErrNotFound
-	}
-	return r.roles[id], nil
-}
-
-func (r *fakeRoleRepo) GetByIDs(_ context.Context, ids []role.ID) ([]*role.Role, error) {
-	var out []*role.Role
-	for _, id := range ids {
-		if x, ok := r.roles[id]; ok {
-			out = append(out, x)
-		}
-	}
-	return out, nil
-}
-
-func (r *fakeRoleRepo) ListByTenant(_ context.Context, tid tenant.ID) ([]*role.Role, error) {
-	var out []*role.Role
-	for _, x := range r.roles {
-		if x.TenantID() == tid {
-			out = append(out, x)
-		}
-	}
-	return out, nil
-}
-
-var _ role.Repository = (*fakeRoleRepo)(nil)
+// The role-side fake lives in internal/identity/domain/role/roletest/
+// per TDL Wild Workouts canon — co-located with the aggregate it
+// fakes. newFakeRoleRepo is preserved as a one-line alias so existing
+// tests don't need rewriting.
+func newFakeRoleRepo() *roletest.FakeRepository { return roletest.NewFakeRepository() }
 
 // fakeEdgeRepo is the minimum [rolehierarchy.Repository] surface the
 // SetRoleParent + CreateRole-with-parent handlers exercise. Per-tenant
@@ -231,7 +161,7 @@ var _ = pagination.Cursor{}
 // every test.
 var _ = membership.ID("")
 
-func newCustomRole(t *testing.T, repo *fakeRoleRepo, name string) *role.Role {
+func newCustomRole(t *testing.T, repo *roletest.FakeRepository, name string) *role.Role {
 	t.Helper()
 	tid := tenant.ID("33333333-3333-3333-3333-333333333333")
 	r, err := role.New(role.ID(ids.NewV7().String()), tid, name, false, 50, false, testNow)
