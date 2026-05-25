@@ -104,3 +104,45 @@ func bindScope(ctx context.Context, tx pgx.Tx, scope TxScope) error {
 		return errors.New("pg: unknown TxScope")
 	}
 }
+
+// WithinTxPgxTenant is the TDL-canon variant of [WithinTxPgx] for the
+// tenant scope. tenantID is an EXPLICIT parameter — the adapter passes
+// it (extracted from the Repository method signature), not ctx-fished
+// via tenancy.FromContext. ctx still flows for cancellation/deadline.
+//
+// Per ADR 0062: domain values belong in function signatures, not in
+// context.Context. ctx-tenancy.WithID is no longer required upstream
+// for adapters that have refactored to this entry point.
+//
+// Returns an error if tenantID is empty (fail-closed — callers needing
+// cross-tenant access use TxScopePlatform via [WithinTxPgx]).
+func (t *Transactor) WithinTxPgxTenant(
+	ctx context.Context,
+	tenantID string,
+	fn func(ctx context.Context, tx pgx.Tx) error,
+) error {
+	tx, err := t.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return fmt.Errorf("pg: begin tx: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback(ctx)
+		}
+	}()
+
+	if err := SetTenantOnTxExplicit(ctx, tx, tenantID); err != nil {
+		return err
+	}
+
+	if err := fn(ctx, tx); err != nil {
+		return err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("pg: commit tx: %w", err)
+	}
+	committed = true
+	return nil
+}

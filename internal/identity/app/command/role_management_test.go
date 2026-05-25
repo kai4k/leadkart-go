@@ -105,6 +105,7 @@ func TestUpdateRole_RenameSucceeds(t *testing.T) {
 	r := newCustomRole(t, repo, "Old Name")
 	h := command.NewUpdateRoleHandler(repo, func() time.Time { return testNow })
 	if err := h.Handle(t.Context(), command.UpdateRoleCommand{
+		TenantID:       tenant.ID("33333333-3333-3333-3333-333333333333"),
 		RoleID:         r.ID(),
 		Name:           "New Name",
 		HierarchyLevel: -1,
@@ -121,7 +122,8 @@ func TestUpdateRole_NotFound(t *testing.T) {
 	repo := newFakeRoleRepo()
 	h := command.NewUpdateRoleHandler(repo, func() time.Time { return testNow })
 	err := h.Handle(t.Context(), command.UpdateRoleCommand{
-		RoleID: role.ID("99999999-9999-9999-9999-999999999999"),
+		TenantID: tenant.ID("33333333-3333-3333-3333-333333333333"),
+		RoleID:   role.ID("99999999-9999-9999-9999-999999999999"),
 		Name:   "x",
 	})
 	if !errors.Is(err, command.ErrRoleNotFound) {
@@ -135,6 +137,7 @@ func TestReplaceRolePermissions_RejectsUnknown(t *testing.T) {
 	r := newCustomRole(t, repo, "Sales Manager")
 	h := command.NewReplaceRolePermissionsHandler(repo, func() time.Time { return testNow })
 	err := h.Handle(t.Context(), command.ReplaceRolePermissionsCommand{
+		TenantID:        tenant.ID("33333333-3333-3333-3333-333333333333"),
 		RoleID:          r.ID(),
 		PermissionNames: []string{"identity.totally.fake"},
 	})
@@ -149,6 +152,7 @@ func TestGrantRolePermission_AddsPermission(t *testing.T) {
 	r := newCustomRole(t, repo, "Sales Manager")
 	h := command.NewGrantRolePermissionHandler(repo, func() time.Time { return testNow })
 	if err := h.Handle(t.Context(), command.GrantRolePermissionCommand{
+		TenantID:       tenant.ID("33333333-3333-3333-3333-333333333333"),
 		RoleID:         r.ID(),
 		PermissionName: permission.IdentityPermissions.Tenants.View,
 	}); err != nil {
@@ -168,6 +172,7 @@ func TestRevokeRolePermission_RoundTrip(t *testing.T) {
 
 	h := command.NewRevokeRolePermissionHandler(repo, func() time.Time { return testNow })
 	if err := h.Handle(t.Context(), command.RevokeRolePermissionCommand{
+		TenantID:       tenant.ID("33333333-3333-3333-3333-333333333333"),
 		RoleID:         r.ID(),
 		PermissionName: permission.IdentityPermissions.Tenants.View,
 	}); err != nil {
@@ -184,6 +189,7 @@ func TestDeleteRole_Succeeds(t *testing.T) {
 	r := newCustomRole(t, repo, "Sales Manager")
 	h := command.NewDeleteRoleHandler(repo, func() time.Time { return testNow })
 	if err := h.Handle(t.Context(), command.DeleteRoleCommand{
+		TenantID:  tenant.ID("33333333-3333-3333-3333-333333333333"),
 		RoleID:    r.ID(),
 		DeletedBy: "11111111-1111-1111-1111-111111111111",
 	}); err != nil {

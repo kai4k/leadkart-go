@@ -138,13 +138,13 @@ func (f *fakeRoleRepo) Add(_ context.Context, r *role.Role) error {
 	return nil
 }
 
-func (f *fakeRoleRepo) UpdateByID(_ context.Context, _ role.ID, _ func(*role.Role) (bool, error)) error {
+func (f *fakeRoleRepo) UpdateByID(_ context.Context, _ tenant.ID, _ role.ID, _ func(*role.Role) (bool, error)) error {
 	return errors.New("fake: UpdateByID not used by ApplyDefaultRoles tests")
 }
 
-func (f *fakeRoleRepo) GetByID(_ context.Context, id role.ID) (*role.Role, error) {
+func (f *fakeRoleRepo) GetByID(_ context.Context, tenantID tenant.ID, id role.ID) (*role.Role, error) {
 	r, ok := f.roles[id]
-	if !ok || r.IsDeleted() {
+	if !ok || r.IsDeleted() || r.TenantID() != tenantID {
 		return nil, role.ErrNotFound
 	}
 	return r, nil
@@ -161,10 +161,10 @@ func (f *fakeRoleRepo) GetByTenantAndName(
 	return nil, role.ErrNotFound
 }
 
-func (f *fakeRoleRepo) GetByIDs(_ context.Context, ids []role.ID) ([]*role.Role, error) {
+func (f *fakeRoleRepo) GetByIDs(_ context.Context, tenantID tenant.ID, ids []role.ID) ([]*role.Role, error) {
 	out := make([]*role.Role, 0, len(ids))
 	for _, id := range ids {
-		if r, ok := f.roles[id]; ok && !r.IsDeleted() {
+		if r, ok := f.roles[id]; ok && !r.IsDeleted() && r.TenantID() == tenantID {
 			out = append(out, r)
 		}
 	}

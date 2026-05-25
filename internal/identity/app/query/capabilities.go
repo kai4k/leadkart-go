@@ -112,7 +112,7 @@ func (h GetCapabilitiesHandler) Handle(ctx context.Context, q GetCapabilitiesQue
 	roleIDs := m.RoleAssignments()
 	var rolesViews []CapabilityRoleView
 	if len(roleIDs) > 0 {
-		roles, rerr := h.roles.GetByIDs(ctx, roleIDs)
+		roles, rerr := h.roles.GetByIDs(ctx, m.TenantID(), roleIDs)
 		if rerr != nil {
 			return CapabilitiesView{}, fmt.Errorf("get_capabilities: load roles: %w", rerr)
 		}

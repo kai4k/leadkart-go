@@ -25,6 +25,7 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/permission"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/role"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
 
 // Resolver computes a Membership's effective permission set. Pure
@@ -75,7 +76,7 @@ func (r *Resolver) Resolve(
 	if err != nil {
 		return nil, fmt.Errorf("permissions: load membership %q: %w", membershipID, err)
 	}
-	roles, err := r.loadRolesForMembership(ctx, m.RoleAssignments())
+	roles, err := r.loadRolesForMembership(ctx, m.TenantID(), m.RoleAssignments())
 	if err != nil {
 		return nil, err
 	}
@@ -95,7 +96,7 @@ func (r *Resolver) ResolveForLoaded(
 	if m == nil {
 		return nil, errors.New("permissions: membership required")
 	}
-	roles, err := r.loadRolesForMembership(ctx, m.RoleAssignments())
+	roles, err := r.loadRolesForMembership(ctx, m.TenantID(), m.RoleAssignments())
 	if err != nil {
 		return nil, err
 	}
@@ -128,7 +129,7 @@ func (r *Resolver) ResolveAuth(
 	if m == nil {
 		return AuthClaims{}, errors.New("permissions: membership required")
 	}
-	roles, err := r.loadRolesForMembership(ctx, m.RoleAssignments())
+	roles, err := r.loadRolesForMembership(ctx, m.TenantID(), m.RoleAssignments())
 	if err != nil {
 		return AuthClaims{}, err
 	}
@@ -147,12 +148,13 @@ func (r *Resolver) ResolveAuth(
 
 func (r *Resolver) loadRolesForMembership(
 	ctx context.Context,
+	tenantID tenant.ID,
 	ids []role.ID,
 ) ([]*role.Role, error) {
 	if len(ids) == 0 {
 		return nil, nil
 	}
-	loaded, err := r.roles.GetByIDs(ctx, ids)
+	loaded, err := r.roles.GetByIDs(ctx, tenantID, ids)
 	if err != nil {
 		return nil, fmt.Errorf("permissions: load roles: %w", err)
 	}

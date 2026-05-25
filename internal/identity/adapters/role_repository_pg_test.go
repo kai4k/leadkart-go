@@ -84,7 +84,7 @@ func TestRoleRepository_Add_PersistsPermissionsJSONBRoundTrip(t *testing.T) {
 		t.Fatalf("Add: %v", err)
 	}
 
-	got, err := roles.GetByID(ctx, r.ID())
+	got, err := roles.GetByID(ctx, tn.ID(), r.ID())
 	if err != nil {
 		t.Fatalf("GetByID: %v", err)
 	}
@@ -140,7 +140,7 @@ func TestRoleRepository_RLS_IsolatesCrossTenantReads(t *testing.T) {
 		t.Fatalf("Add under A: %v", err)
 	}
 	// Tenant B's context cannot see Tenant A's role — RLS filters it out.
-	_, err := roles.GetByID(ctxB, rA.ID())
+	_, err := roles.GetByID(ctxB, tnB.ID(), rA.ID())
 	if !errors.Is(err, role.ErrNotFound) {
 		t.Fatalf("RLS leak: tenant B saw tenant A's role: %v", err)
 	}
@@ -174,7 +174,7 @@ func TestRoleRepository_GetByIDs_FiltersCrossTenant(t *testing.T) {
 	}
 
 	// Tenant A asks for [rA1, rA2, rB] — RLS hides rB; expect 2 rows.
-	got, err := roles.GetByIDs(ctxA, []role.ID{rA1.ID(), rA2.ID(), rB.ID()})
+	got, err := roles.GetByIDs(ctxA, tnA.ID(), []role.ID{rA1.ID(), rA2.ID(), rB.ID()})
 	if err != nil {
 		t.Fatalf("GetByIDs: %v", err)
 	}
@@ -199,7 +199,7 @@ func TestRoleRepository_UpdateByID_Delete_PersistsSoftDeleteAndHidesFromGetByID(
 		t.Fatalf("Add: %v", err)
 	}
 
-	err := roles.UpdateByID(ctx, r.ID(), func(loaded *role.Role) (bool, error) {
+	err := roles.UpdateByID(ctx, tn.ID(), r.ID(), func(loaded *role.Role) (bool, error) {
 		return true, loaded.Delete("admin@example.test", time.Now().UTC())
 	})
 	if err != nil {
@@ -207,7 +207,7 @@ func TestRoleRepository_UpdateByID_Delete_PersistsSoftDeleteAndHidesFromGetByID(
 	}
 
 	// Live read filters soft-deleted rows.
-	_, err = roles.GetByID(ctx, r.ID())
+	_, err = roles.GetByID(ctx, tn.ID(), r.ID())
 	if !errors.Is(err, role.ErrNotFound) {
 		t.Fatalf("GetByID after delete: got %v want ErrNotFound", err)
 	}
@@ -231,7 +231,7 @@ func TestRoleRepository_UpdateByID_Rollback_WhenUpdateFnErrors(t *testing.T) {
 	}
 
 	sentinel := errors.New("update intentionally failed")
-	err := roles.UpdateByID(ctx, r.ID(), func(loaded *role.Role) (bool, error) {
+	err := roles.UpdateByID(ctx, tn.ID(), r.ID(), func(loaded *role.Role) (bool, error) {
 		_ = loaded.Rename("ShouldRollBack", testNow) // arch-test:ignore-err - test fixture setup
 		return true, sentinel
 	})
@@ -239,7 +239,7 @@ func TestRoleRepository_UpdateByID_Rollback_WhenUpdateFnErrors(t *testing.T) {
 		t.Fatalf("UpdateByID error: got %v want sentinel", err)
 	}
 
-	got, err := roles.GetByID(ctx, r.ID())
+	got, err := roles.GetByID(ctx, tn.ID(), r.ID())
 	if err != nil {
 		t.Fatalf("GetByID: %v", err)
 	}

@@ -88,18 +88,22 @@ func (f *FakeRepository) Add(_ context.Context, r *role.Role) error {
 	return nil
 }
 
-// UpdateByID loads, mutates via fn, then either persists (commit=true)
-// or rolls back (commit=false / err). Soft-deleted roles return
-// [role.ErrNotFound] — UpdateByID is for live roles only.
+// UpdateByID loads (scoped to tenantID), mutates via fn, then persists
+// (commit=true) or rolls back (commit=false / err). Soft-deleted roles
+// return [role.ErrNotFound]. Roles outside the supplied tenant also
+// return ErrNotFound — mirrors the SQL adapter's RLS-bound behavior.
 //
 // The fake doesn't deep-copy the role before passing to fn; the caller
 // observes mutations even if it returns (false, nil). This mirrors
-// the pg adapter's behavior — both rely on the aggregate's invariants
-// being re-checked at persist time, not snapshot-rollback.
-func (f *FakeRepository) UpdateByID(_ context.Context, id role.ID, fn func(*role.Role) (bool, error)) error {
+// the pg adapter — both rely on aggregate invariants being re-checked
+// at persist time, not snapshot-rollback.
+func (f *FakeRepository) UpdateByID(_ context.Context, tenantID tenant.ID, id role.ID, fn func(*role.Role) (bool, error)) error {
 
 	r, ok := f.rows[id]
 	if !ok || r.IsDeleted() {
+		return role.ErrNotFound
+	}
+	if r.TenantID() != tenantID {
 		return role.ErrNotFound
 	}
 	commit, err := fn(r)
@@ -128,12 +132,16 @@ func (f *FakeRepository) UpdateByID(_ context.Context, id role.ID, fn func(*role
 	return nil
 }
 
-// GetByID returns the live role or [role.ErrNotFound]. Soft-deleted
-// rows are hidden.
-func (f *FakeRepository) GetByID(_ context.Context, id role.ID) (*role.Role, error) {
+// GetByID returns the live role (scoped to tenantID) or
+// [role.ErrNotFound]. Soft-deleted rows + roles in other tenants are
+// hidden — mirrors the SQL adapter's RLS-bound behavior.
+func (f *FakeRepository) GetByID(_ context.Context, tenantID tenant.ID, id role.ID) (*role.Role, error) {
 
 	r, ok := f.rows[id]
 	if !ok || r.IsDeleted() {
+		return nil, role.ErrNotFound
+	}
+	if r.TenantID() != tenantID {
 		return nil, role.ErrNotFound
 	}
 	return r, nil
@@ -154,17 +162,19 @@ func (f *FakeRepository) GetByTenantAndName(_ context.Context, tid tenant.ID, na
 	return r, nil
 }
 
-// GetByIDs hydrates the supplied IDs. Soft-deleted roles are silently
-// dropped from the result — mirrors the SQL adapter's `WHERE NOT
-// is_deleted` filter. Order of the result is unspecified (matches
-// the SQL `WHERE id = ANY($1)` behavior — caller must not rely on
-// input order).
-func (f *FakeRepository) GetByIDs(_ context.Context, ids []role.ID) ([]*role.Role, error) {
+// GetByIDs hydrates the supplied IDs scoped to tenantID. Soft-deleted
+// roles + roles outside the tenant are silently dropped — mirrors the
+// SQL adapter's `WHERE NOT is_deleted` filter under RLS. Order of the
+// result is unspecified.
+func (f *FakeRepository) GetByIDs(_ context.Context, tenantID tenant.ID, ids []role.ID) ([]*role.Role, error) {
 
 	out := make([]*role.Role, 0, len(ids))
 	for _, id := range ids {
 		r, ok := f.rows[id]
 		if !ok || r.IsDeleted() {
+			continue
+		}
+		if r.TenantID() != tenantID {
 			continue
 		}
 		out = append(out, r)

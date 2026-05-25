@@ -33,7 +33,8 @@ type RoleView struct {
 
 // GetRoleQuery returns the role detail by ID.
 type GetRoleQuery struct {
-	RoleID role.ID
+	TenantID tenant.ID
+	RoleID   role.ID
 }
 
 // GetRoleHandler runs the read.
@@ -57,10 +58,13 @@ func NewGetRoleHandler(r role.Repository, edges rolehierarchy.Repository) GetRol
 // view's ParentRoleID field (cheap — single indexed lookup on the
 // edges table; bounded tenant catalog).
 func (h GetRoleHandler) Handle(ctx context.Context, q GetRoleQuery) (RoleView, error) {
+	if q.TenantID.IsZero() {
+		return RoleView{}, errors.New("get_role: tenant id required")
+	}
 	if q.RoleID.IsZero() {
 		return RoleView{}, errors.New("get_role: role id required")
 	}
-	r, err := h.roles.GetByID(ctx, q.RoleID)
+	r, err := h.roles.GetByID(ctx, q.TenantID, q.RoleID)
 	if err != nil {
 		return RoleView{}, fmt.Errorf("get_role: %w", err)
 	}

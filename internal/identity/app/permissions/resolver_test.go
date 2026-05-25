@@ -67,10 +67,10 @@ type fakeRoleRepo struct {
 	roles map[role.ID]*role.Role
 }
 
-func (f *fakeRoleRepo) GetByIDs(_ context.Context, ids []role.ID) ([]*role.Role, error) {
+func (f *fakeRoleRepo) GetByIDs(_ context.Context, tenantID tenant.ID, ids []role.ID) ([]*role.Role, error) {
 	out := make([]*role.Role, 0, len(ids))
 	for _, id := range ids {
-		if r, ok := f.roles[id]; ok && !r.IsDeleted() {
+		if r, ok := f.roles[id]; ok && !r.IsDeleted() && r.TenantID() == tenantID {
 			out = append(out, r)
 		}
 	}
@@ -80,10 +80,10 @@ func (f *fakeRoleRepo) GetByIDs(_ context.Context, ids []role.ID) ([]*role.Role,
 func (f *fakeRoleRepo) Add(context.Context, *role.Role) error {
 	return errors.New("fake: Add unused")
 }
-func (f *fakeRoleRepo) UpdateByID(context.Context, role.ID, func(*role.Role) (bool, error)) error {
+func (f *fakeRoleRepo) UpdateByID(context.Context, tenant.ID, role.ID, func(*role.Role) (bool, error)) error {
 	return errors.New("fake: UpdateByID unused")
 }
-func (f *fakeRoleRepo) GetByID(context.Context, role.ID) (*role.Role, error) {
+func (f *fakeRoleRepo) GetByID(context.Context, tenant.ID, role.ID) (*role.Role, error) {
 	return nil, errors.New("fake: GetByID unused")
 }
 func (f *fakeRoleRepo) GetByTenantAndName(context.Context, tenant.ID, string) (*role.Role, error) {

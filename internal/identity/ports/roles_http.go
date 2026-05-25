@@ -186,7 +186,13 @@ func handleUpdateRole(log *slog.Logger, a app.Application) http.Handler {
 		if req.HierarchyLevel != nil {
 			hl = *req.HierarchyLevel
 		}
+		tid, ok := tenancy.FromContext(r.Context())
+		if !ok || tid == "" {
+			writeError(w, http.StatusUnauthorized, ErrCodeInvalidCredentials, "")
+			return
+		}
 		err := a.Commands.UpdateRole.Handle(r.Context(), command.UpdateRoleCommand{
+			TenantID:       tenant.ID(tid),
 			RoleID:         id,
 			Name:           req.Name,
 			HierarchyLevel: hl,
@@ -208,8 +214,14 @@ func handleReplaceRolePermissions(log *slog.Logger, a app.Application) http.Hand
 			writeError(w, http.StatusBadRequest, ErrCodeInvalidBody, "request body is not valid JSON")
 			return
 		}
+		tid, ok := tenancy.FromContext(r.Context())
+		if !ok || tid == "" {
+			writeError(w, http.StatusUnauthorized, ErrCodeInvalidCredentials, "")
+			return
+		}
 		err := a.Commands.ReplaceRolePermissions.Handle(r.Context(),
 			command.ReplaceRolePermissionsCommand{
+				TenantID:        tenant.ID(tid),
 				RoleID:          id,
 				PermissionNames: req.Permissions,
 			})
@@ -234,8 +246,14 @@ func handleGrantRolePermission(log *slog.Logger, a app.Application) http.Handler
 			writeError(w, http.StatusBadRequest, ErrCodeInvalidBody, "request body is not valid JSON")
 			return
 		}
+		tid, ok := tenancy.FromContext(r.Context())
+		if !ok || tid == "" {
+			writeError(w, http.StatusUnauthorized, ErrCodeInvalidCredentials, "")
+			return
+		}
 		err := a.Commands.GrantRolePermission.Handle(r.Context(),
 			command.GrantRolePermissionCommand{
+				TenantID:       tenant.ID(tid),
 				RoleID:         id,
 				PermissionName: req.Permission,
 			})
@@ -260,8 +278,14 @@ func handleRevokeRolePermission(log *slog.Logger, a app.Application) http.Handle
 			writeError(w, http.StatusBadRequest, ErrCodeInvalidBody, "request body is not valid JSON")
 			return
 		}
+		tid, ok := tenancy.FromContext(r.Context())
+		if !ok || tid == "" {
+			writeError(w, http.StatusUnauthorized, ErrCodeInvalidCredentials, "")
+			return
+		}
 		err := a.Commands.RevokeRolePermission.Handle(r.Context(),
 			command.RevokeRolePermissionCommand{
+				TenantID:       tenant.ID(tid),
 				RoleID:         id,
 				PermissionName: req.Permission,
 			})
@@ -287,7 +311,13 @@ func handleDeleteRole(log *slog.Logger, a app.Application) http.Handler {
 			writeError(w, http.StatusUnauthorized, ErrCodeInvalidCredentials, "")
 			return
 		}
+		tid, tidOk := tenancy.FromContext(r.Context())
+		if !tidOk || tid == "" {
+			writeError(w, http.StatusUnauthorized, ErrCodeInvalidCredentials, "")
+			return
+		}
 		err := a.Commands.DeleteRole.Handle(r.Context(), command.DeleteRoleCommand{
+			TenantID:  tenant.ID(tid),
 			RoleID:    id,
 			DeletedBy: c.Subject,
 		})
