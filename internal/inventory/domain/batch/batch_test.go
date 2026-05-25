@@ -289,6 +289,7 @@ func TestApplyMovement_RejectsZeroQuantityForMutatingTypes(t *testing.T) {
 	b := freshBatch(t)
 	for _, tp := range []batch.MovementType{batch.MovementInbound, batch.MovementOutbound, batch.MovementAdjustment} {
 		t.Run(string(tp), func(t *testing.T) {
+			t.Parallel()
 			if err := b.ApplyMovement(tp, 0, fixedNow); !errors.Is(err, batch.ErrInvalid) {
 				t.Fatalf("%v: want ErrInvalid, got %v", tp, err)
 			}

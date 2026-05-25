@@ -1,7 +1,6 @@
 package command_test
 
 import (
-	"context"
 	"errors"
 	"testing"
 
@@ -26,12 +25,12 @@ func TestRejectUnverifiedContact_HappyPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	if err := contacts.Add(context.Background(), c); err != nil {
+	if err := contacts.Add(t.Context(), c); err != nil {
 		t.Fatalf("seed add: %v", err)
 	}
 
 	h := command.NewRejectUnverifiedContactHandler(contacts, nowFunc)
-	err = h.Handle(context.Background(), command.RejectUnverifiedContactCommand{
+	err = h.Handle(t.Context(), command.RejectUnverifiedContactCommand{
 		ContactID:  cID,
 		Reason:     "Obvious test data",
 		RejectedBy: agentID,
@@ -40,7 +39,7 @@ func TestRejectUnverifiedContact_HappyPath(t *testing.T) {
 		t.Fatalf("handle: %v", err)
 	}
 
-	loaded, _ := contacts.GetByID(context.Background(), cID)
+	loaded, _ := contacts.GetByID(t.Context(), cID)
 	if loaded.State() != unverifiedcontact.StateRejected {
 		t.Errorf("state=%q want rejected", loaded.State())
 	}
@@ -57,7 +56,7 @@ func TestRejectUnverifiedContact_ContactNotFound(t *testing.T) {
 	contacts := platformtest.NewFakeUnverifiedContactRepository()
 	h := command.NewRejectUnverifiedContactHandler(contacts, nowFunc)
 
-	err := h.Handle(context.Background(), command.RejectUnverifiedContactCommand{
+	err := h.Handle(t.Context(), command.RejectUnverifiedContactCommand{
 		ContactID:  unverifiedcontact.ID("01900000-0000-7000-8000-000000000999"),
 		Reason:     "anything",
 		RejectedBy: unverifiedcontact.MembershipID(ids.NewV7().String()),
@@ -84,12 +83,12 @@ func TestRejectUnverifiedContact_FromInCallState(t *testing.T) {
 	if err := c.StartCall(nowFunc()); err != nil {
 		t.Fatalf("seed start call: %v", err)
 	}
-	if err := contacts.Add(context.Background(), c); err != nil {
+	if err := contacts.Add(t.Context(), c); err != nil {
 		t.Fatalf("seed add: %v", err)
 	}
 
 	h := command.NewRejectUnverifiedContactHandler(contacts, nowFunc)
-	err = h.Handle(context.Background(), command.RejectUnverifiedContactCommand{
+	err = h.Handle(t.Context(), command.RejectUnverifiedContactCommand{
 		ContactID:  cID,
 		Reason:     "Customer not interested",
 		RejectedBy: agentID,
@@ -97,7 +96,7 @@ func TestRejectUnverifiedContact_FromInCallState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("handle: %v", err)
 	}
-	loaded, _ := contacts.GetByID(context.Background(), cID)
+	loaded, _ := contacts.GetByID(t.Context(), cID)
 	if loaded.State() != unverifiedcontact.StateRejected {
 		t.Errorf("state=%q want rejected", loaded.State())
 	}

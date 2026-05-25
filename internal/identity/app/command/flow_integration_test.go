@@ -469,7 +469,7 @@ func startWiredPostgres(t *testing.T) *pgxpool.Pool {
 	if err != nil {
 		t.Fatalf("goose open: %v", err)
 	}
-	if err := goose.SetDialect("postgres"); err != nil {
+	if err := pg.EnsureGooseDialect(); err != nil {
 		_ = gooseDB.Close()
 		t.Fatalf("set dialect: %v", err)
 	}

@@ -14,6 +14,8 @@ import (
 	"github.com/google/uuid"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/pressly/goose/v3"
+
+	"github.com/leadkart/leadkart-go/internal/common/pg"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
 	"github.com/testcontainers/testcontainers-go/wait"
@@ -75,7 +77,7 @@ func applyMigrations(t *testing.T, dsn string) {
 	}
 	defer db.Close()
 
-	if err := goose.SetDialect("postgres"); err != nil {
+	if err := pg.EnsureGooseDialect(); err != nil {
 		t.Fatalf("set dialect: %v", err)
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
@@ -321,7 +323,7 @@ func TestRLSIsolatesTenants(t *testing.T) {
 	if seenTenant != tenantA {
 		t.Fatalf("tenantA saw tenant_id %s, want %s", seenTenant, tenantA)
 	}
-	_ = tx.Rollback()
+	_ = tx.Rollback() // arch-test:ignore-err — cleanup; tx scope ends here
 
 	// Platform context (under leadkart_app role): see both rows.
 	tx, err = db.BeginTx(ctx, nil)
@@ -340,7 +342,7 @@ func TestRLSIsolatesTenants(t *testing.T) {
 	if seen != 2 {
 		t.Fatalf("platform scope: saw %d memberships, want 2", seen)
 	}
-	_ = tx.Rollback()
+	_ = tx.Rollback() // arch-test:ignore-err — cleanup; tx scope ends here
 
 	// No GUC set, leadkart_app role: zero rows (fail-closed).
 	tx, err = db.BeginTx(ctx, nil)
@@ -356,7 +358,7 @@ func TestRLSIsolatesTenants(t *testing.T) {
 	if seen != 0 {
 		t.Fatalf("neutral scope: saw %d memberships, want 0 (fail-closed)", seen)
 	}
-	_ = tx.Rollback()
+	_ = tx.Rollback() // arch-test:ignore-err — cleanup; tx scope ends here
 }
 
 // TestSingleActiveMembershipInvariant verifies the partial unique index

@@ -38,6 +38,7 @@ import (
 // Allow-list: sentinel-error factories like `errs.New(...)` and
 // `errors.New(...)` are common at package scope; we exclude them by
 // pkg name.
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_NoPackageSingletons(t *testing.T) {
 	t.Parallel()
 
@@ -121,6 +122,7 @@ func TestArch_NoPackageSingletons(t *testing.T) {
 // Detection heuristic: an init() body containing call expressions to
 // substrate packages (pgxpool, sql, http, net, os.ReadFile, os.Getenv,
 // os.Open) is flagged. The forbidden call list is closed.
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_NoInitDoingRealWork(t *testing.T) {
 	t.Parallel()
 
@@ -200,6 +202,7 @@ func TestArch_NoInitDoingRealWork(t *testing.T) {
 //
 // Scope: every exported `New<X>` function returning `(*<X>, error)`
 // under internal/<mod>/{adapters,app,ports} + every common/<X>/New*.
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_ConstructorsEnumerateAllDeps(t *testing.T) {
 	t.Parallel()
 
@@ -296,6 +299,7 @@ func TestArch_ConstructorsEnumerateAllDeps(t *testing.T) {
 //
 // EXCEPTION: domain packages whose canonical design uses Flyweight
 // intern (e.g. permission's closed-set catalog). Listed explicitly.
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_NoSyncOnceOutsideAdapters(t *testing.T) {
 	t.Parallel()
 
@@ -364,6 +368,7 @@ func TestArch_NoSyncOnceOutsideAdapters(t *testing.T) {
 // Loggers are constructor-injected. A package-level logger fragments
 // observability — per-request correlation enrichment requires a
 // logger that arrives WITH the request scope (via ctx in slog.*Context).
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_NoPackageLevelLogger(t *testing.T) {
 	t.Parallel()
 

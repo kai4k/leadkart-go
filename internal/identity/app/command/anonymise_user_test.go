@@ -31,7 +31,7 @@ func TestAnonymiseUser_Cascades(t *testing.T) {
 		t.Fatalf("membership.New: %v", err)
 	}
 	m.PullEvents()
-	_ = mRepo.Add(t.Context(), m)
+	_ = mRepo.Add(t.Context(), m) // arch-test:ignore-err - test fixture setup
 
 	h := command.NewAnonymiseUserHandler(mRepo, pRepo, func() time.Time { return testNow })
 	if err := h.Handle(t.Context(), command.AnonymiseUserCommand{MembershipID: m.ID()}); err != nil {

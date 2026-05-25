@@ -239,7 +239,7 @@ func newCustomRole(t *testing.T, repo *fakeRoleRepo, name string) *role.Role {
 		t.Fatalf("role.New: %v", err)
 	}
 	r.PullEvents()
-	_ = repo.Add(t.Context(), r)
+	_ = repo.Add(t.Context(), r) // arch-test:ignore-err - test fixture setup
 	return r
 }
 
@@ -263,7 +263,7 @@ func TestCreateRole_Succeeds(t *testing.T) {
 func TestCreateRole_RejectsDuplicateName(t *testing.T) {
 	t.Parallel()
 	repo := newFakeRoleRepo()
-	_ = newCustomRole(t, repo, "Sales Manager")
+	_ = newCustomRole(t, repo, "Sales Manager") // arch-test:ignore-err - test fixture setup
 	h := command.NewCreateRoleHandler(repo, newFakeEdgeRepo(), fakeUoW{}, nowFunc, func() role.ID { return role.ID(ids.NewV7().String()) }, func() rolehierarchy.ID { return rolehierarchy.ID(ids.NewV7().String()) })
 	_, err := h.Handle(t.Context(), command.CreateRoleCommand{
 		TenantID:       tenant.ID("33333333-3333-3333-3333-333333333333"),
@@ -339,7 +339,7 @@ func TestRevokeRolePermission_RoundTrip(t *testing.T) {
 	t.Parallel()
 	repo := newFakeRoleRepo()
 	r := newCustomRole(t, repo, "Sales Manager")
-	_ = r.GrantPermission(permission.FromConstant(permission.IdentityPermissions.Tenants.View), testNow)
+	_ = r.GrantPermission(permission.FromConstant(permission.IdentityPermissions.Tenants.View), testNow) // arch-test:ignore-err - test fixture setup
 	r.PullEvents()
 
 	h := command.NewRevokeRolePermissionHandler(repo, func() time.Time { return testNow })

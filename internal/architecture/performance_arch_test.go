@@ -29,6 +29,7 @@ import (
 // `*_explain_integration_test.go` file. Skip-with-violation is
 // acceptable; the contract is that the EXPLAIN gate prevents regression
 // once added.
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_KeysetQueryEXPLAINTest(t *testing.T) {
 	t.Parallel()
 
@@ -99,6 +100,7 @@ func TestArch_KeysetQueryEXPLAINTest(t *testing.T) {
 // Per Brandur "What I learned running Postgres at scale": N+1 is the
 // most common DB perf bug; static catches the easy ones, runtime
 // catches the hard ones.
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_NoNPlusOneInLoops(t *testing.T) {
 	t.Parallel()
 
@@ -180,6 +182,7 @@ func TestArch_NoNPlusOneInLoops(t *testing.T) {
 // http.Server composite literals set ReadHeaderTimeout + ReadTimeout
 // + WriteTimeout + IdleTimeout explicitly. Per Mat Ryer 2024 + Cloudflare
 // canon: leaving these zero opens slowloris vectors.
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_HTTPTimeoutsSetExplicit(t *testing.T) {
 	t.Parallel()
 
@@ -265,6 +268,7 @@ func TestArch_HTTPTimeoutsSetExplicit(t *testing.T) {
 //
 // pgxpool.Config usage sets MaxConns, MinConns, MaxConnLifetime
 // explicitly. Defaults are usually wrong for tenant workloads.
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_PgxpoolConfigBounded(t *testing.T) {
 	t.Parallel()
 
@@ -332,6 +336,7 @@ func TestArch_PgxpoolConfigBounded(t *testing.T) {
 // Catches the real anti-pattern: a List handler returning a raw
 // `[]T` slice without ANY bound (no cursor, no pagination shape, no
 // domain invariant).
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_ListHandlersBoundedByPaginationShape(t *testing.T) {
 	t.Parallel()
 

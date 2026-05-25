@@ -13,11 +13,15 @@ import (
 
 const testCaller = "tenant:019df708-f642-7f66-b73b-c7919f2447cb"
 
+// fixedNow pins time at a single date so test failures are reproducible
+// (Khorikov *Unit Testing* §8).
+var fixedNow = time.Date(2026, 5, 7, 12, 0, 0, 0, time.UTC)
+
 func hashOf(s string) [32]byte { return sha256.Sum256([]byte(s)) }
 
 func TestInMemoryStore_PutGet_RoundTrip(t *testing.T) {
 	t.Parallel()
-	store := idempotency.NewInMemoryStore(nil)
+	store := idempotency.NewInMemoryStore(func() time.Time { return fixedNow })
 	key := uuid.New()
 	body := hashOf("body-1")
 
@@ -28,8 +32,8 @@ func TestInMemoryStore_PutGet_RoundTrip(t *testing.T) {
 		ResponseStatus:  201,
 		ResponseBody:    []byte(`{"id":"abc"}`),
 		ResponseHeaders: map[string]string{"Content-Type": "application/json"},
-		CreatedAt:       time.Now(),
-		ExpiresAt:       time.Now().Add(time.Hour),
+		CreatedAt:       fixedNow,
+		ExpiresAt:       fixedNow.Add(time.Hour),
 	}
 	if err := store.Put(t.Context(), rec); err != nil {
 		t.Fatalf("Put: %v", err)
@@ -63,20 +67,20 @@ func TestInMemoryStore_Get_AbsentKey_ReturnsZero(t *testing.T) {
 
 func TestInMemoryStore_Get_BodyMismatch_ReturnsErrBodyMismatch(t *testing.T) {
 	t.Parallel()
-	store := idempotency.NewInMemoryStore(nil)
+	store := idempotency.NewInMemoryStore(func() time.Time { return fixedNow })
 	key := uuid.New()
 	original := hashOf("original-body")
 	different := hashOf("different-body")
 
-	_ = store.Put(t.Context(), idempotency.Record{
+	_ = store.Put(t.Context(), idempotency.Record{ // arch-test:ignore-err — Put cannot fail on valid inputs in InMemory; Get below is the assertion
 		CallerID:        testCaller,
 		Key:             key,
 		BodyHash:        original,
 		ResponseStatus:  200,
 		ResponseBody:    []byte("ok"),
 		ResponseHeaders: map[string]string{},
-		CreatedAt:       time.Now(),
-		ExpiresAt:       time.Now().Add(time.Hour),
+		CreatedAt:       fixedNow,
+		ExpiresAt:       fixedNow.Add(time.Hour),
 	})
 	_, err := store.Get(t.Context(), testCaller, key, different)
 	if !errors.Is(err, idempotency.ErrBodyMismatch) {
@@ -90,21 +94,21 @@ func TestInMemoryStore_Get_BodyMismatch_ReturnsErrBodyMismatch(t *testing.T) {
 // load-bearing security property the audit-fix migration enforces.
 func TestInMemoryStore_Get_DifferentCaller_TreatedAsAbsent(t *testing.T) {
 	t.Parallel()
-	store := idempotency.NewInMemoryStore(nil)
+	store := idempotency.NewInMemoryStore(func() time.Time { return fixedNow })
 	key := uuid.New()
 	body := hashOf("body-1")
 	const callerA = "tenant:aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
 	const callerB = "tenant:bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
 
-	_ = store.Put(t.Context(), idempotency.Record{
+	_ = store.Put(t.Context(), idempotency.Record{ // arch-test:ignore-err — InMemory Put cannot fail on valid inputs; cross-caller scope is the assertion
 		CallerID:        callerA,
 		Key:             key,
 		BodyHash:        body,
 		ResponseStatus:  201,
 		ResponseBody:    []byte(`{"secret":"A"}`),
 		ResponseHeaders: map[string]string{},
-		CreatedAt:       time.Now(),
-		ExpiresAt:       time.Now().Add(time.Hour),
+		CreatedAt:       fixedNow,
+		ExpiresAt:       fixedNow.Add(time.Hour),
 	})
 	got, err := store.Get(t.Context(), callerB, key, body)
 	if err != nil {
@@ -123,7 +127,7 @@ func TestInMemoryStore_Get_ExpiredRecord_TreatedAsAbsent(t *testing.T) {
 	key := uuid.New()
 	body := hashOf("b")
 
-	_ = store.Put(t.Context(), idempotency.Record{
+	_ = store.Put(t.Context(), idempotency.Record{ // arch-test:ignore-err — InMemory Put cannot fail on valid inputs; expiry behavior is the assertion
 		CallerID:        testCaller,
 		Key:             key,
 		BodyHash:        body,
@@ -150,7 +154,7 @@ func TestInMemoryStore_Put_RejectsZeroKey(t *testing.T) {
 	err := store.Put(t.Context(), idempotency.Record{
 		CallerID:  testCaller,
 		Key:       uuid.Nil,
-		ExpiresAt: time.Now().Add(time.Hour),
+		ExpiresAt: fixedNow.Add(time.Hour),
 	})
 	if !errors.Is(err, idempotency.ErrInvalid) {
 		t.Errorf("expected ErrInvalid, got %v", err)
@@ -162,7 +166,7 @@ func TestInMemoryStore_Put_RejectsEmptyCaller(t *testing.T) {
 	store := idempotency.NewInMemoryStore(nil)
 	err := store.Put(t.Context(), idempotency.Record{
 		Key:       uuid.New(),
-		ExpiresAt: time.Now().Add(time.Hour),
+		ExpiresAt: fixedNow.Add(time.Hour),
 	})
 	if !errors.Is(err, idempotency.ErrInvalid) {
 		t.Errorf("expected ErrInvalid, got %v", err)
@@ -189,12 +193,12 @@ func TestInMemoryStore_Purge_DropsExpired(t *testing.T) {
 	live := uuid.New()
 	expired := uuid.New()
 
-	_ = store.Put(t.Context(), idempotency.Record{
+	_ = store.Put(t.Context(), idempotency.Record{ // arch-test:ignore-err — InMemory Put on valid record; Purge() count is the assertion
 		CallerID: testCaller,
 		Key:      live, BodyHash: hashOf("a"), ResponseStatus: 200,
 		ExpiresAt: now.Add(time.Hour),
 	})
-	_ = store.Put(t.Context(), idempotency.Record{
+	_ = store.Put(t.Context(), idempotency.Record{ // arch-test:ignore-err — InMemory Put on valid record; Purge() count is the assertion
 		CallerID: testCaller,
 		Key:      expired, BodyHash: hashOf("b"), ResponseStatus: 200,
 		ExpiresAt: now.Add(-time.Hour),

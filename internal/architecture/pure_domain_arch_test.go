@@ -33,6 +33,7 @@ import (
 // dependency; composition root wires `time.Now`, tests inject a fixed
 // closure. Any future re-introduction of a clock package or a
 // `clock.Now()` call trips a PR-time failure.
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_NoClockPackageReference(t *testing.T) {
 	t.Parallel()
 
@@ -81,6 +82,7 @@ func TestArch_NoClockPackageReference(t *testing.T) {
 // IDDD: time flows in via method parameters (`now time.Time` last arg).
 // A direct `time.Now()` call in the domain makes the aggregate
 // non-deterministic + un-testable without monkey-patching.
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_NoTimeNowInDomain(t *testing.T) {
 	t.Parallel()
 
@@ -130,6 +132,7 @@ func TestArch_NoTimeNowInDomain(t *testing.T) {
 // `now func() time.Time` field, NOT by calling `time.Now()` directly.
 // The composition root wires `time.Now` into every handler ctor; tests
 // inject a fixed-time closure for determinism.
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_HandlersInjectNow(t *testing.T) {
 	t.Parallel()
 
@@ -194,6 +197,7 @@ func TestArch_HandlersInjectNow(t *testing.T) {
 // Canon: Khorikov §11 (mocking time generalises to all environmental
 // inputs); Wild Workouts repository pattern (callers own the random
 // source).
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_NoRandInDomain(t *testing.T) {
 	t.Parallel()
 
@@ -243,6 +247,7 @@ func TestArch_NoRandInDomain(t *testing.T) {
 //
 // Canon: Vernon IDDD ch. 5 (Entities — identity given at creation);
 // Wild Workouts (every ctor takes `id X.ID`).
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_NoUUIDGenerationInDomain(t *testing.T) {
 	t.Parallel()
 
@@ -323,6 +328,7 @@ func TestArch_NoUUIDGenerationInDomain(t *testing.T) {
 // Canon: 12-factor app §III (config in env, READ at startup); ADR 0017
 // (koanf); Brandur "12-factor without the cult" (config is data, not
 // behaviour).
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_NoOsGetenvOutsideConfigAndMain(t *testing.T) {
 	t.Parallel()
 
@@ -393,6 +399,7 @@ func TestArch_NoOsGetenvOutsideConfigAndMain(t *testing.T) {
 //
 // EXCEPTION: `path` (pure-string operations on slash-separated paths)
 // is permitted — it does no I/O.
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_NoFilesystemInDomain(t *testing.T) {
 	t.Parallel()
 
@@ -444,6 +451,7 @@ func TestArch_NoFilesystemInDomain(t *testing.T) {
 // Canon: Bryan Mills "Rethinking Concurrency Patterns" (GopherCon 2018
 // — keep concurrency at the edges); Vernon IDDD ch. 10 (aggregates
 // own a single consistency boundary, single-threaded).
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_NoGoroutinesInDomain(t *testing.T) {
 	t.Parallel()
 
@@ -528,6 +536,7 @@ func TestArch_NoGoroutinesInDomain(t *testing.T) {
 // EXCEPTION: cmd/*/main.go MAY call slog.Default() exactly once for
 // bootstrap-time logging before the configured logger is constructed.
 // Detection ignores cmd/ entirely.
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_NoSlogDefault(t *testing.T) {
 	t.Parallel()
 
@@ -616,6 +625,7 @@ func TestArch_NoSlogDefault(t *testing.T) {
 // domain): the domain takes IDs as parameters, the handler is where
 // minting is allowed — but ONLY via an injected factory so tests
 // pin the value.
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_HandlersInjectIDFactory(t *testing.T) {
 	t.Parallel()
 

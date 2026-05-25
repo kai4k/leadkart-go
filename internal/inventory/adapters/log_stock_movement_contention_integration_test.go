@@ -40,6 +40,8 @@ func TestLogStockMovement_Concurrent_NoLostUpdate(t *testing.T) {
 	pool := repoFixture(t)
 	tid := seedTenant(t, pool)
 	ctx := tenantCtx(t, tid)
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
 
 	tx := pg.NewTransactor(pool)
 	products := adapters.NewProductRepository(pool, tx)

@@ -1,5 +1,10 @@
 //go:build integration
 
+// arch-test:no-synctest — subscriber tests exercise the Watermill router
+// goroutine against a real Postgres testcontainer; the polled `families`
+// row signals subscriber commit across the SQL driver boundary, which is
+// opaque to testing/synctest's virtual clock.
+
 package subscribers_test
 
 import (
@@ -40,6 +45,7 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/integrationevents"
 	"github.com/leadkart/leadkart-go/internal/identity/ports/subscribers"
 	"github.com/leadkart/leadkart-go/internal/common/audit"
+	"github.com/leadkart/leadkart-go/internal/common/audit/audittest"
 	"github.com/leadkart/leadkart-go/internal/common/cache"
 	"github.com/leadkart/leadkart-go/internal/common/messaging"
 	"github.com/leadkart/leadkart-go/internal/common/pg"
@@ -97,7 +103,7 @@ func newFixture(t *testing.T) *fixture {
 	if err != nil {
 		t.Fatalf("goose open: %v", err)
 	}
-	if err := goose.SetDialect("postgres"); err != nil {
+	if err := pg.EnsureGooseDialect(); err != nil {
 		_ = gooseDB.Close()
 		t.Fatalf("set dialect: %v", err)
 	}
@@ -347,7 +353,7 @@ func waitFor(t *testing.T, cond func() bool, timeout time.Duration, msg string) 
 		if cond() {
 			return
 		}
-		time.Sleep(20 * time.Millisecond)
+		time.Sleep(20 * time.Millisecond) // arch-test:wait-justified - async event-driven test wait
 	}
 	t.Fatal(msg)
 }
@@ -524,15 +530,8 @@ func TestRevokeFamilies_NoActiveFamilies_NoOp(t *testing.T) {
 
 	// Wait for processing — assert via audit row that subscriber ran
 	// + succeeded without error (zero families to revoke is success).
-	waitFor(t, func() bool {
-		var n int
-		_ = fx.pool.QueryRow(t.Context(), `
-			SELECT count(*) FROM buildingblocks.audit_log_entry
-			WHERE  action = 'identity.person_password_changed.v1'
-			  AND  succeeded = true
-		`).Scan(&n)
-		return n >= 1
-	}, 3*time.Second, "subscriber audit row not written")
+	waitFor(t, audittest.HasAtLeastOneByAction(t, fx.pool, "identity.person_password_changed.v1"),
+		3*time.Second, "subscriber audit row not written")
 }
 
 func TestReuseDetectedSIEM_LogsOnReuseRevocation(t *testing.T) {
@@ -613,7 +612,7 @@ func TestReuseDetectedSIEM_IgnoresNonReuseRevocations(t *testing.T) {
 	}, uuid.New())
 
 	// Wait for processing to settle, then assert no SIEM log.
-	time.Sleep(800 * time.Millisecond)
+	time.Sleep(800 * time.Millisecond) // arch-test:wait-justified - async event-driven test wait
 	if bytes.Contains(buf.Bytes(), []byte("reuse detected")) {
 		t.Fatalf("SIEM log emitted for non-reuse revocation: %s", buf.String())
 	}

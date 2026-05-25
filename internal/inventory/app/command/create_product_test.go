@@ -63,7 +63,7 @@ func TestCreateProductHandler_DuplicateSKU_ReturnsErrSKUTaken(t *testing.T) {
 	h := command.NewCreateProductHandler(repo, func() time.Time { return fixedNow }, testNewProductID)
 	tid := newTenantID(t)
 	actor := newMembershipID(t)
-	_ = seedProduct(t, repo, tid, actor, "DUP-1")
+	_ = seedProduct(t, repo, tid, actor, "DUP-1") // arch-test:ignore-err — seed helper, error reported via t.Fatalf inside helper
 
 	_, err := h.Handle(t.Context(), command.CreateProductCommand{
 		TenantID: tid, ActorMembershipID: actor,

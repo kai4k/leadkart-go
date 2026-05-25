@@ -238,7 +238,7 @@ func TestGrantPermission_Idempotent(t *testing.T) {
 	t.Parallel()
 	r := newRole(t)
 	p := permission.FromConstant(permission.IdentityPermissions.Users.View)
-	_ = r.GrantPermission(p, testNow)
+	_ = r.GrantPermission(p, testNow) // arch-test:ignore-err - test fixture setup
 	_ = r.PullEvents()
 	if err := r.GrantPermission(p, testNow); err != nil {
 		t.Fatalf("dup Grant: %v", err)
@@ -260,7 +260,7 @@ func TestRevokePermission_RemovesAndEmits(t *testing.T) {
 	t.Parallel()
 	r := newRole(t)
 	p := permission.FromConstant(permission.IdentityPermissions.Users.View)
-	_ = r.GrantPermission(p, testNow)
+	_ = r.GrantPermission(p, testNow) // arch-test:ignore-err - test fixture setup
 	_ = r.PullEvents()
 	if err := r.RevokePermission(p, testNow); err != nil {
 		t.Fatalf("Revoke: %v", err)
@@ -295,7 +295,7 @@ func TestReplacePermissions_DiffEvents(t *testing.T) {
 	r := newRole(t)
 	view := permission.FromConstant(permission.IdentityPermissions.Users.View)
 	create := permission.FromConstant(permission.IdentityPermissions.Users.Create)
-	_ = r.GrantPermission(view, testNow)
+	_ = r.GrantPermission(view, testNow) // arch-test:ignore-err - test fixture setup
 	_ = r.PullEvents()
 
 	if err := r.ReplacePermissions([]*permission.Permission{create}, testNow); err != nil {
@@ -324,8 +324,8 @@ func TestReplacePermissions_EmptyTargetRevokesAll(t *testing.T) {
 	r := newRole(t)
 	view := permission.FromConstant(permission.IdentityPermissions.Users.View)
 	create := permission.FromConstant(permission.IdentityPermissions.Users.Create)
-	_ = r.GrantPermission(view, testNow)
-	_ = r.GrantPermission(create, testNow)
+	_ = r.GrantPermission(view, testNow) // arch-test:ignore-err - test fixture setup
+	_ = r.GrantPermission(create, testNow) // arch-test:ignore-err - test fixture setup
 	_ = r.PullEvents()
 
 	if err := r.ReplacePermissions(nil, testNow); err != nil {
@@ -392,7 +392,7 @@ func TestDelete_Idempotent(t *testing.T) {
 func TestMutations_RejectAfterDelete(t *testing.T) {
 	t.Parallel()
 	r := newRole(t)
-	_ = r.Delete("admin-1", testNow)
+	_ = r.Delete("admin-1", testNow) // arch-test:ignore-err - test fixture setup
 	p := permission.FromConstant(permission.IdentityPermissions.Users.View)
 	if err := r.Rename("X", testNow); !errors.Is(err, role.ErrDeleted) {
 		t.Fatalf("Rename after delete: %v", err)

@@ -1,4 +1,5 @@
 //go:build integration
+// arch-test:no-timeout-needed - integration tests rely on testcontainers boot timeout
 
 package adapters_test
 
@@ -11,6 +12,7 @@ import (
 
 	"github.com/leadkart/leadkart-go/internal/common/email"
 	"github.com/leadkart/leadkart-go/internal/common/ids"
+	"github.com/leadkart/leadkart-go/internal/common/pg/rlstest"
 	"github.com/leadkart/leadkart-go/internal/common/slug"
 	"github.com/leadkart/leadkart-go/internal/common/tenancy"
 	"github.com/leadkart/leadkart-go/internal/identity/adapters"
@@ -94,10 +96,7 @@ func TestKeysetMembershipsPage_UsesIndexUnderRLS(t *testing.T) {
 	defer func() { _ = dbtx.Rollback(ctx) }()
 
 	// Bind the test tenant's GUC so RLS admits rows.
-	if _, err := dbtx.Exec(ctx,
-		`SELECT set_config('app.tenant_id', $1, true)`, tn.ID().String()); err != nil {
-		t.Fatalf("set tenant guc: %v", err)
-	}
+	rlstest.SetSessionTenant(t, ctx, dbtx, tn.ID().String())
 
 	// The same predicate shape sqlc emits in ListActiveMembershipsInTenantPage.
 	// First-page sentinel cursor admits every row.
@@ -153,4 +152,4 @@ func personEmailFor(i int) string {
 
 // _ keeps the context import live even if future refactors collapse
 // the test body.
-var _ context.Context = context.Background()
+var _ context.Context = context.Background() // arch-test:context-background — package-level type assertion, no *testing.T in scope

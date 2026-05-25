@@ -100,7 +100,7 @@ func TestHealth_AlwaysReturns200(t *testing.T) {
 		t.Fatalf("/health is diagnostics — must always 200; got %d", rec.Code)
 	}
 	var report map[string]string
-	_ = json.Unmarshal(rec.Body.Bytes(), &report)
+	_ = json.Unmarshal(rec.Body.Bytes(), &report) // arch-test:ignore-err — handler always emits valid JSON; report-map lookup is the assertion
 	if report["redis"] == "ok" {
 		t.Fatal("/health should still surface failed checker status")
 	}
@@ -155,7 +155,7 @@ func TestRegister_PostConstruction(t *testing.T) {
 		t.Fatalf("expected 200 with late-registered checker, got %d", rec.Code)
 	}
 	var report map[string]string
-	_ = json.Unmarshal(rec.Body.Bytes(), &report)
+	_ = json.Unmarshal(rec.Body.Bytes(), &report) // arch-test:ignore-err — handler always emits valid JSON; report-map lookup is the assertion
 	if report["late"] != "ok" {
 		t.Fatalf("late checker not reported: %+v", report)
 	}

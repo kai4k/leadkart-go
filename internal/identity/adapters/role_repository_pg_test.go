@@ -1,4 +1,5 @@
 //go:build integration
+// arch-test:no-timeout-needed - integration tests rely on testcontainers boot timeout
 
 package adapters_test
 
@@ -345,7 +346,7 @@ func TestRoleRepository_UpdateByID_NoOp_WhenUpdateFnReturnsFalse(t *testing.T) {
 
 	// Mutate the loaded aggregate but instruct the repo NOT to persist.
 	err := roles.UpdateByID(ctx, r.ID(), func(loaded *role.Role) (bool, error) {
-		_ = loaded.Rename("ShouldNotStick", testNow)
+		_ = loaded.Rename("ShouldNotStick", testNow) // arch-test:ignore-err - test fixture setup
 		return false, nil
 	})
 	if err != nil {
@@ -375,7 +376,7 @@ func TestRoleRepository_UpdateByID_Rollback_WhenUpdateFnErrors(t *testing.T) {
 
 	sentinel := errors.New("update intentionally failed")
 	err := roles.UpdateByID(ctx, r.ID(), func(loaded *role.Role) (bool, error) {
-		_ = loaded.Rename("ShouldRollBack", testNow)
+		_ = loaded.Rename("ShouldRollBack", testNow) // arch-test:ignore-err - test fixture setup
 		return true, sentinel
 	})
 	if !errors.Is(err, sentinel) {

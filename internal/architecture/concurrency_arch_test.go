@@ -34,6 +34,7 @@ import (
 // (no fire-and-forget goroutines from request paths). Background work
 // goes through the outbox + a subscriber, NOT a goroutine the request
 // can't track.
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_NoNakedGoroutinesInHandlers(t *testing.T) {
 	t.Parallel()
 
@@ -85,6 +86,7 @@ func TestArch_NoNakedGoroutinesInHandlers(t *testing.T) {
 // Per Mills + sqlite-style ringbuffer pattern: unbounded buffers turn
 // memory pressure into latency. Force every wide buffer to be
 // justified inline.
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_BoundedChannelBuffers(t *testing.T) {
 	t.Parallel()
 
@@ -231,6 +233,7 @@ func TestArch_GoleakInIntegrationTests(t *testing.T) {
 // app/command/, app/query/, ports/ cannot call time.Sleep. Use ctx-
 // aware backoff (e.g. ticker + select on ctx.Done()) so cancellation
 // short-circuits the wait.
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_NoTimeSleepInRequestPath(t *testing.T) {
 	t.Parallel()
 

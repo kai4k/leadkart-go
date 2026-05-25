@@ -2,7 +2,6 @@ package obs_test
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"log/slog"
 	"strings"
@@ -116,7 +115,7 @@ func TestFanOutHandler_EnabledORsChildren(t *testing.T) {
 		slog.NewJSONHandler(buf, &slog.HandlerOptions{Level: slog.LevelError}),
 		slog.NewJSONHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug}),
 	)
-	if !h.Enabled(context.Background(), slog.LevelInfo) {
+	if !h.Enabled(t.Context(), slog.LevelInfo) {
 		t.Fatal("Enabled(INFO) should be true (second child accepts Debug+)")
 	}
 }

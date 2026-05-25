@@ -1,5 +1,8 @@
 //go:build integration
 
+// arch-test:no-timeout-needed — newPlatformE2E → startWiredPostgresForHTTP uses
+// context.WithTimeout(90s) internally; per-request HTTP uses t.Context().
+
 // Platform-module end-to-end test (ADR 0059 / review-pass C2). Drives
 // the full HTTP surface against a testcontainers Postgres + the real
 // ServeMux via httptest:
@@ -30,6 +33,7 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/app/jwt"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/permission"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
+	"github.com/leadkart/leadkart-go/internal/identity/identitytest"
 	identityports "github.com/leadkart/leadkart-go/internal/identity/ports"
 	inventoryapp "github.com/leadkart/leadkart-go/internal/inventory/app"
 	platformadapters "github.com/leadkart/leadkart-go/internal/platform/adapters"
@@ -145,13 +149,7 @@ func (f platformE2E) mintBuyerToken(t *testing.T, r registeredTenant) string {
 // synthetic JWT.
 func securityStampForPerson(t *testing.T, f platformE2E, personID string) string {
 	t.Helper()
-	var stamp string
-	err := f.Pool.QueryRow(t.Context(),
-		`SELECT security_stamp::text FROM identity.persons WHERE id = $1`, personID).Scan(&stamp)
-	if err != nil {
-		t.Fatalf("read stamp: %v", err)
-	}
-	return stamp
+	return identitytest.GetSecurityStamp(t, f.Pool, personID)
 }
 
 // mintPlatformOperatorToken provisions a Person row + mints a JWT with
@@ -326,7 +324,7 @@ func TestE2E_Platform_FullFlow_CreateVerifyBrowsePurchase(t *testing.T) {
 	buyer2.AccessToken = f.mintBuyerToken(t, buyer2)
 	browse2 := f.id.authedJSON(t, http.MethodGet, "/api/v1/platform/marketplace/leads", buyer2.AccessToken, nil)
 	var browse2Resp platformports.BrowseMarketplaceResponse
-	_ = json.Unmarshal(browse2.body, &browse2Resp)
+	_ = json.Unmarshal(browse2.body, &browse2Resp) // arch-test:ignore-err — best-effort decode; loop below tolerates empty Items slice
 	for _, item := range browse2Resp.Items {
 		if item.ID == verified.PlatformLeadID {
 			t.Errorf("sold lead %q must NOT appear in marketplace; items=%+v",

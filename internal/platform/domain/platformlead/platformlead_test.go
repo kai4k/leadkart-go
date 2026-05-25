@@ -128,7 +128,7 @@ func TestPurchase_RejectsZeroOrNegativeAmount(t *testing.T) {
 func TestPurchase_AlreadySoldByOther_Rejected(t *testing.T) {
 	t.Parallel()
 	l, _ := platformlead.NewFromUnverifiedContact(leadID, contactID, sampleForm(t), agentID, now)
-	_ = l.Purchase(tenantA, memberA, 50000, now.Add(time.Hour))
+	_ = l.Purchase(tenantA, memberA, 50000, now.Add(time.Hour)) // arch-test:ignore-err — domain test seed
 	err := l.Purchase(tenantB, memberB, 50000, now.Add(2*time.Hour))
 	if !errors.Is(err, platformlead.ErrAlreadySold) {
 		t.Errorf("expected ErrAlreadySold, got %v", err)
@@ -138,7 +138,7 @@ func TestPurchase_AlreadySoldByOther_Rejected(t *testing.T) {
 func TestPurchase_AlreadySoldBySameTenantSamePrice_Idempotent(t *testing.T) {
 	t.Parallel()
 	l, _ := platformlead.NewFromUnverifiedContact(leadID, contactID, sampleForm(t), agentID, now)
-	_ = l.Purchase(tenantA, memberA, 50000, now.Add(time.Hour))
+	_ = l.Purchase(tenantA, memberA, 50000, now.Add(time.Hour)) // arch-test:ignore-err — domain test seed
 	_ = l.PullEvents()
 	if err := l.Purchase(tenantA, memberA, 50000, now.Add(2*time.Hour)); err != nil {
 		t.Errorf("idempotent expected, got %v", err)

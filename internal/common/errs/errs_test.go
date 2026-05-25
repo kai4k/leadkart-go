@@ -111,7 +111,7 @@ func TestNew_UnknownKindRejected(t *testing.T) {
 			t.Fatal("New(KindUnknown, ...) did not panic — KindUnknown is not a valid construction kind")
 		}
 	}()
-	_ = errs.New(errs.KindUnknown, "bad", "should panic")
+	_ = errs.New(errs.KindUnknown, "bad", "should panic") // arch-test:ignore-err — asserts panic; return value unreachable
 }
 
 // errs.Is should NOT match its own returned error unwrapped via errors.Is

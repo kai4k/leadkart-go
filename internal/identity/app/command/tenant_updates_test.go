@@ -90,7 +90,7 @@ func TestUpdateTenantProfile_Succeeds(t *testing.T) {
 	t.Parallel()
 	repo := newFakeTenantRepo()
 	tn := newTenant(t)
-	_ = repo.Add(t.Context(), tn)
+	_ = repo.Add(t.Context(), tn) // arch-test:ignore-err - test fixture setup
 
 	h := command.NewUpdateTenantProfileHandler(repo, func() time.Time { return testNow })
 	err := h.Handle(t.Context(), command.UpdateTenantProfileCommand{
@@ -127,7 +127,7 @@ func TestUpdateTenantProfile_AggregateRejection_WrapsErrInvalid(t *testing.T) {
 	t.Parallel()
 	repo := newFakeTenantRepo()
 	tn := newTenant(t)
-	_ = repo.Add(t.Context(), tn)
+	_ = repo.Add(t.Context(), tn) // arch-test:ignore-err - test fixture setup
 	h := command.NewUpdateTenantProfileHandler(repo, func() time.Time { return testNow })
 	err := h.Handle(t.Context(), command.UpdateTenantProfileCommand{
 		TenantID:    tn.ID(),
@@ -143,7 +143,7 @@ func TestUpdateTenantStatutory_RejectsBadGST(t *testing.T) {
 	t.Parallel()
 	repo := newFakeTenantRepo()
 	tn := newTenant(t)
-	_ = repo.Add(t.Context(), tn)
+	_ = repo.Add(t.Context(), tn) // arch-test:ignore-err - test fixture setup
 	h := command.NewUpdateTenantStatutoryHandler(repo, func() time.Time { return testNow })
 	err := h.Handle(t.Context(), command.UpdateTenantStatutoryCommand{
 		TenantID:  tn.ID(),
@@ -158,7 +158,7 @@ func TestUpdateTenantSettings_Succeeds(t *testing.T) {
 	t.Parallel()
 	repo := newFakeTenantRepo()
 	tn := newTenant(t)
-	_ = repo.Add(t.Context(), tn)
+	_ = repo.Add(t.Context(), tn) // arch-test:ignore-err - test fixture setup
 	h := command.NewUpdateTenantSettingsHandler(repo, func() time.Time { return testNow })
 	err := h.Handle(t.Context(), command.UpdateTenantSettingsCommand{
 		TenantID:          tn.ID(),
@@ -186,7 +186,7 @@ func TestSuspendTenant_RequiresReason(t *testing.T) {
 		t.Fatalf("Activate: %v", err)
 	}
 	tn.PullEvents()
-	_ = repo.Add(t.Context(), tn)
+	_ = repo.Add(t.Context(), tn) // arch-test:ignore-err - test fixture setup
 
 	h := command.NewSuspendTenantHandler(repo, newFakeMembershipRepo(), func() time.Time { return testNow })
 	err := h.Handle(t.Context(), command.SuspendTenantCommand{TenantID: tn.ID()})
@@ -203,7 +203,7 @@ func TestSuspendTenant_Succeeds(t *testing.T) {
 		t.Fatalf("Activate: %v", err)
 	}
 	tn.PullEvents()
-	_ = repo.Add(t.Context(), tn)
+	_ = repo.Add(t.Context(), tn) // arch-test:ignore-err - test fixture setup
 	h := command.NewSuspendTenantHandler(repo, newFakeMembershipRepo(), func() time.Time { return testNow })
 	err := h.Handle(t.Context(), command.SuspendTenantCommand{
 		TenantID: tn.ID(),
@@ -221,9 +221,9 @@ func TestActivateTenant_Idempotent(t *testing.T) {
 	t.Parallel()
 	repo := newFakeTenantRepo()
 	tn := newTenant(t)
-	_ = tn.Activate(testNow)
+	_ = tn.Activate(testNow) // arch-test:ignore-err - test fixture setup
 	tn.PullEvents()
-	_ = repo.Add(t.Context(), tn)
+	_ = repo.Add(t.Context(), tn) // arch-test:ignore-err - test fixture setup
 	h := command.NewActivateTenantHandler(repo, func() time.Time { return testNow })
 	if err := h.Handle(t.Context(), command.ActivateTenantCommand{TenantID: tn.ID()}); err != nil {
 		t.Fatalf("Handle (already active): %v", err)
@@ -234,9 +234,9 @@ func TestMarkTenantForDeletion_HappyPath(t *testing.T) {
 	t.Parallel()
 	repo := newFakeTenantRepo()
 	tn := newTenant(t)
-	_ = tn.Activate(testNow)
+	_ = tn.Activate(testNow) // arch-test:ignore-err - test fixture setup
 	tn.PullEvents()
-	_ = repo.Add(t.Context(), tn)
+	_ = repo.Add(t.Context(), tn) // arch-test:ignore-err - test fixture setup
 
 	h := command.NewMarkTenantForDeletionHandler(repo, newFakeMembershipRepo(), func() time.Time { return testNow })
 	if err := h.Handle(t.Context(), command.MarkTenantForDeletionCommand{
@@ -254,10 +254,10 @@ func TestRestoreTenant_FromPendingDeletion(t *testing.T) {
 	t.Parallel()
 	repo := newFakeTenantRepo()
 	tn := newTenant(t)
-	_ = tn.Activate(testNow)
-	_ = tn.MarkForDeletion("test-reason", testNow)
+	_ = tn.Activate(testNow) // arch-test:ignore-err - test fixture setup
+	_ = tn.MarkForDeletion("test-reason", testNow) // arch-test:ignore-err - test fixture setup
 	tn.PullEvents()
-	_ = repo.Add(t.Context(), tn)
+	_ = repo.Add(t.Context(), tn) // arch-test:ignore-err - test fixture setup
 
 	h := command.NewRestoreTenantHandler(repo, func() time.Time { return testNow })
 	if err := h.Handle(t.Context(), command.RestoreTenantCommand{TenantID: tn.ID()}); err != nil {

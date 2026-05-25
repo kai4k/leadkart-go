@@ -498,6 +498,7 @@ func TestArch_ProblemDetailsErrorShape(t *testing.T) {
 // ServeMux). The bare `mux.Handle("/path", ...)` pattern is a Go
 // 1.20-era anti-pattern that matches ALL methods + opens CORS/CSRF
 // holes.
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_HTTPMethodExplicit(t *testing.T) {
 	t.Parallel()
 
@@ -609,6 +610,7 @@ func TestArch_PathParamNamingCanonical(t *testing.T) {
 // Allow-list: handler files explicitly marked
 // `// arch-test:max-bytes-in-middleware <reason>` defer the wrap
 // to a chain-level middleware (e.g. idempotency.Middleware).
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_MaxBytesReaderOnWrites(t *testing.T) {
 	t.Parallel()
 
@@ -660,6 +662,7 @@ func TestArch_MaxBytesReaderOnWrites(t *testing.T) {
 // up to the body's declared size with no upper bound. Banned in
 // handler/middleware code; allowed only after a MaxBytesReader wrap
 // or in tests.
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_NoIoReadAllOnRequestBody(t *testing.T) {
 	t.Parallel()
 

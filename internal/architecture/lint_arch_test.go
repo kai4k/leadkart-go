@@ -110,6 +110,10 @@ func TestArch_NoNolintWithoutReason(t *testing.T) {
 //
 // Soft check: budget of 30 raw TODOs total; lower the ceiling as
 // the codebase matures.
+//
+// Scope: production — TODO budget is a production-code maintenance
+// concern; test files often carry test-author TODOs which shouldn't
+// count against the production debt ratchet.
 func TestArch_NoTODOWithoutTicket(t *testing.T) {
 	t.Parallel()
 

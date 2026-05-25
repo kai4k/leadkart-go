@@ -1,5 +1,8 @@
 //go:build integration
 
+// arch-test:no-timeout-needed — newE2EFixture → startWiredPostgresForHTTP uses
+// context.WithTimeout(90s) internally; per-request HTTP uses t.Context().
+
 // GET /api/v1/tenants/by-slug/{slug} enumeration-safety matrix.
 //
 // Slugs are human-readable + guessable (the company name); the
@@ -181,6 +184,7 @@ func TestE2E_TenantBySlug_Unauthenticated_Returns401(t *testing.T) {
 	f := newE2EFixture(t)
 	tenantA := f.registerAndLogin(t, "acme")
 
+	// arch-test:http-justified — http.DefaultClient.Do hits f.URL which IS the httptest.NewServer.URL set up in newE2EFixture; the real mux + full middleware chain is exercised, just via the fixture's wrapper.
 	req, _ := http.NewRequest(http.MethodGet, f.URL+"/api/v1/tenants/by-slug/"+tenantA.Slug, nil)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {

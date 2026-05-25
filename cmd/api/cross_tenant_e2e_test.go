@@ -1,5 +1,9 @@
 //go:build integration
 
+// arch-test:no-timeout-needed — newE2EFixture → startWiredPostgresForHTTP uses
+// context.WithTimeout(90s) internally + testcontainers wait strategy bounds
+// container startup; per-request HTTP uses t.Context() (auto-canceled on test end).
+
 // Cross-tenant + platform-gate end-to-end tests for the post-A.3 HTTP
 // surface. Wires the FULL Identity Application against testcontainers
 // Postgres + the real ServeMux via httptest, then exercises the
@@ -445,7 +449,7 @@ func TestE2E_CrossTenant_SessionRevokeBlocked(t *testing.T) {
 	// Tenant A's family must STILL be active (B's attempt was a no-op).
 	listAAgain := f.authedJSON(t, http.MethodGet, "/api/v1/auth/sessions", tenantA.AccessToken, nil)
 	var sessA2 ports.ListSessionsResponse
-	_ = json.Unmarshal(listAAgain.body, &sessA2)
+	_ = json.Unmarshal(listAAgain.body, &sessA2) // arch-test:ignore-err — best-effort decode; len assertion below catches body shape failures
 	if len(sessA2.Sessions) != 1 {
 		t.Errorf("Tenant A's session count after attack = %d, want 1", len(sessA2.Sessions))
 	}
@@ -486,6 +490,7 @@ func TestE2E_PlatformGate_TenantAdminBlocked(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
 			resp := f.authedJSON(t, c.method, c.path, tenantA.AccessToken, c.body)
 			if resp.status != http.StatusForbidden {
 				t.Errorf("%s %s: status %d, want 403; body=%s",
@@ -509,6 +514,7 @@ func TestE2E_Auth_NoToken_Returns401(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.method+" "+c.path, func(t *testing.T) {
+			t.Parallel()
 			resp := f.authedJSON(t, c.method, c.path, "", nil)
 			if resp.status != http.StatusUnauthorized {
 				t.Errorf("status: got %d, want 401; body=%s", resp.status, resp.body)
@@ -773,7 +779,7 @@ func TestE2E_Impersonation_Lifecycle(t *testing.T) {
 	list2 := f.authedJSON(t, http.MethodGet,
 		"/api/v1/platform/impersonation/sessions", platformTok, nil)
 	var lr2 ports.ListImpersonationSessionsResponse
-	_ = json.Unmarshal(list2.body, &lr2)
+	_ = json.Unmarshal(list2.body, &lr2) // arch-test:ignore-err — best-effort decode; loop below tolerates empty slice
 	for _, s := range lr2.Sessions {
 		if s.SessionID == cr.SessionID {
 			t.Error("ended session still appears in list")
@@ -825,7 +831,7 @@ func TestE2E_Impersonation_OperatorIsolation(t *testing.T) {
 		t.Fatalf("create: %d body %s", create.status, create.body)
 	}
 	var cr ports.CreateImpersonationSessionResponse
-	_ = json.Unmarshal(create.body, &cr)
+	_ = json.Unmarshal(create.body, &cr) // arch-test:ignore-err — best-effort decode; create.status checked above
 
 	// B lists their sessions — must not see A's.
 	list := f.authedJSON(t, http.MethodGet,
@@ -834,7 +840,7 @@ func TestE2E_Impersonation_OperatorIsolation(t *testing.T) {
 		t.Fatalf("list: %d body %s", list.status, list.body)
 	}
 	var lr ports.ListImpersonationSessionsResponse
-	_ = json.Unmarshal(list.body, &lr)
+	_ = json.Unmarshal(list.body, &lr) // arch-test:ignore-err — best-effort decode; list.status checked above
 	for _, s := range lr.Sessions {
 		if s.SessionID == cr.SessionID {
 			t.Errorf("operator B saw operator A's session %s", s.SessionID)

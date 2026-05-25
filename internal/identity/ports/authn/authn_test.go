@@ -346,7 +346,7 @@ func TestRequirePermission_PanicsOnUnknownPermissionName(t *testing.T) {
 			t.Fatal("expected panic on unknown permission name (wiring bug)")
 		}
 	}()
-	_ = authn.RequirePermission(v, alwaysFresh{}, "made.up.permission.x")
+	_ = authn.RequirePermission(v, alwaysFresh{}, "made.up.permission.x") // arch-test:ignore-err - test fixture setup
 }
 
 func TestRequireAuth_PanicsOnNilVerifier(t *testing.T) {
@@ -356,7 +356,7 @@ func TestRequireAuth_PanicsOnNilVerifier(t *testing.T) {
 			t.Fatal("expected panic on nil verifier")
 		}
 	}()
-	_ = authn.RequireAuth(nil)
+	_ = authn.RequireAuth(nil) // arch-test:ignore-err - test fixture setup
 }
 
 // ----- RequireAnyPermission ------------------------------------------------
@@ -428,7 +428,7 @@ func TestRequireAnyPermission_PanicsOnEmptyList(t *testing.T) {
 			t.Fatal("expected panic on empty permission list")
 		}
 	}()
-	_ = authn.RequireAnyPermission(v, alwaysFresh{})
+	_ = authn.RequireAnyPermission(v, alwaysFresh{}) // arch-test:ignore-err - test fixture setup
 }
 
 // ----- RequirePlatform -----------------------------------------------------

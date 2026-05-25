@@ -37,6 +37,7 @@ import (
 // AGGREGATE DETECTION: a directory is an aggregate iff it declares a
 // `type Repository interface`. VOs (leadform) and policy packages
 // (permission, passwordpolicy, impersonation) are not aggregates.
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_AggregatesHaveFactoryAndUnmarshal(t *testing.T) {
 	t.Parallel()
 
@@ -122,6 +123,7 @@ func TestArch_AggregatesHaveFactoryAndUnmarshal(t *testing.T) {
 // marker interface would be a domain-modelling escape hatch. The seal
 // is an unexported method (e.g. `isTenantEvent()`) — only types in the
 // same package can implement it.
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_DomainEventsSealed(t *testing.T) {
 	t.Parallel()
 
@@ -197,6 +199,7 @@ func TestArch_DomainEventsSealed(t *testing.T) {
 // AGGREGATE DETECTION: same as test 16 — directories that declare
 // `type Repository interface`. The aggregate root struct is the
 // exported struct with the same name as the package (PascalCase).
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_AggregatesNoPublicFields(t *testing.T) {
 	t.Parallel()
 
@@ -321,6 +324,7 @@ func TestArch_AggregatesNoPublicFields(t *testing.T) {
 // whose type is a SelectorExpr `pkg.TypeName` where pkg matches an
 // aggregate-package basename AND TypeName matches the canonical
 // PascalCase of pkg.
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_ConstructionOnlyViaFactory(t *testing.T) {
 	t.Parallel()
 
@@ -424,6 +428,7 @@ func TestArch_ConstructionOnlyViaFactory(t *testing.T) {
 //
 // This catches the "silent state change" bug — a mutation that updates
 // fields without enqueuing the corresponding domain event.
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_MutatorsEmitEventsOnStateChange(t *testing.T) {
 	t.Parallel()
 
@@ -550,6 +555,7 @@ func TestArch_MutatorsEmitEventsOnStateChange(t *testing.T) {
 // reconstructs already-validated, already-emitted state — emitting an
 // event during rehydration would re-publish historical events on every
 // repository read.
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_UnmarshalFromDBDoesNotEmitEvents(t *testing.T) {
 	t.Parallel()
 
@@ -610,6 +616,7 @@ func TestArch_UnmarshalFromDBDoesNotEmitEvents(t *testing.T) {
 // insert; re-validating on every read costs CPU + risks rejecting
 // historical rows that were valid at write-time but fail a tightened
 // rule today.
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_UnmarshalFromDBDoesNotValidate(t *testing.T) {
 	t.Parallel()
 
@@ -674,6 +681,7 @@ func TestArch_UnmarshalFromDBDoesNotValidate(t *testing.T) {
 // Workouts: typed IDs prevent accidental swap (TenantID vs UserID)
 // + give the codebase a single place to evolve the underlying repr
 // (UUID v4 -> v7 was a one-file change).
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_AggregateIDsUseTypedIDs(t *testing.T) {
 	t.Parallel()
 

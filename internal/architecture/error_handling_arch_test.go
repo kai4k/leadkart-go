@@ -38,6 +38,7 @@ import (
 // `var ErrXxx`. Local `errors.New` inside function bodies is fine
 // (one-off contextual errors). The sentinel convention makes
 // `errors.Is(err, ErrXxx)` discoverable.
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_SentinelErrorsNamedErr(t *testing.T) {
 	t.Parallel()
 
@@ -73,6 +74,7 @@ func TestArch_SentinelErrorsNamedErr(t *testing.T) {
 //
 // Allow-list: log-formatting (slog.Error / slog.Info pass err
 // directly), HTTP-write layer (writes message to wire), tests.
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_NoErrorDotMessageInProduction(t *testing.T) {
 	t.Parallel()
 
@@ -133,6 +135,7 @@ func TestArch_NoErrorDotMessageInProduction(t *testing.T) {
 // `Sentinel error` or `Wrapped error` field SHOULD also have Is().
 // This is a soft check; opt out via `// arch-test:no-errors-is` on
 // the type declaration.
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_CustomErrorsImplementIs(t *testing.T) {
 	t.Parallel()
 
@@ -217,6 +220,7 @@ func TestArch_CustomErrorsImplementIs(t *testing.T) {
 // `panic("...")` loses the structured error chain (no Wrap / no
 // stack-trace tooling). Use `panic(fmt.Errorf(...))` or, better,
 // return an error. Tests + init() are exempt.
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_NoPanicString(t *testing.T) {
 	t.Parallel()
 
@@ -268,6 +272,7 @@ func TestArch_NoPanicString(t *testing.T) {
 // `strings.Contains(err.Error(), "...")` couples the caller to the
 // upstream's message format — they break together on every wording
 // change. Use errors.Is + a typed sentinel.
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_NoMessageStringMatching(t *testing.T) {
 	t.Parallel()
 
@@ -298,6 +303,7 @@ func TestArch_NoMessageStringMatching(t *testing.T) {
 //
 // Allow-list: assertions inside `case <Type>:` of `switch v :=
 // err.(type)` are fine — that's the canonical type-switch shape.
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_ErrorsAsOverTypeAssertion(t *testing.T) {
 	t.Parallel()
 
@@ -333,6 +339,7 @@ func TestArch_ErrorsAsOverTypeAssertion(t *testing.T) {
 //
 // Allow-list: packages with no command-returning fns + pure-VO
 // packages (errs / ids / slug / email / ...).
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_PackageExportsErrSentinels(t *testing.T) {
 	t.Parallel()
 
@@ -390,6 +397,7 @@ func TestArch_PackageExportsErrSentinels(t *testing.T) {
 // Heuristic: errors.New("Please ...") / starts with capital-then-
 // space text + period — flagged. Snake_case / kebab-case / dotted
 // domain phrases ("tenant_already_exists") are fine.
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_DomainErrorsNoUserStrings(t *testing.T) {
 	t.Parallel()
 

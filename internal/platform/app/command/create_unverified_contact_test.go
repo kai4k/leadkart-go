@@ -1,7 +1,6 @@
 package command_test
 
 import (
-	"context"
 	"testing"
 
 	"github.com/leadkart/leadkart-go/internal/common/ids"
@@ -25,7 +24,7 @@ func TestCreateUnverifiedContact_PersistsAndDrainsCreatedEvent(t *testing.T) {
 	h := command.NewCreateUnverifiedContactHandler(contacts, nowFunc, func() unverifiedcontact.ID { return unverifiedcontact.ID(ids.NewV7().String()) })
 
 	agentID := unverifiedcontact.MembershipID(ids.NewV7().String())
-	out, err := h.Handle(context.Background(), command.CreateUnverifiedContactCommand{
+	out, err := h.Handle(t.Context(), command.CreateUnverifiedContactCommand{
 		Form:      sampleForm(t),
 		CreatedBy: agentID,
 	})
@@ -37,7 +36,7 @@ func TestCreateUnverifiedContact_PersistsAndDrainsCreatedEvent(t *testing.T) {
 	}
 
 	// Aggregate landed in the fake.
-	got, err := contacts.GetByID(context.Background(), out.ContactID)
+	got, err := contacts.GetByID(t.Context(), out.ContactID)
 	if err != nil {
 		t.Fatalf("GetByID: %v", err)
 	}

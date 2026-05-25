@@ -40,6 +40,7 @@ import (
 // Allow-list: ad-hoc adapter test fakes that wrap a `payload any`
 // (e.g. cache-recorder spies) opt out via
 // `// arch-test:fake-any-payload`. Generated db/ skipped.
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_NoInterfaceEmptyInStructFields(t *testing.T) {
 	t.Parallel()
 
@@ -94,6 +95,7 @@ func TestArch_NoInterfaceEmptyInStructFields(t *testing.T) {
 //
 // Allow-list: errors.As is fine (caught by M6); test files have
 // looser rules.
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_TypeAssertionsUseCommaOk(t *testing.T) {
 	t.Parallel()
 
@@ -151,6 +153,7 @@ func TestArch_TypeAssertionsUseCommaOk(t *testing.T) {
 //
 // This is a SOFT check (heuristic) — opt out via
 // `// arch-test:magic-ok <reason>` on the same line.
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_NoUntypedNumericConstantsInBusiness(t *testing.T) {
 	t.Parallel()
 
@@ -211,6 +214,7 @@ func TestArch_NoUntypedNumericConstantsInBusiness(t *testing.T) {
 // `IFoo` / `TFoo` / `IRepository` are C# / Delphi conventions. Go
 // uses bare names — `Foo`, `Repository`. Interface vs struct is
 // discovered by usage, not name.
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_NoHungarianNotation(t *testing.T) {
 	t.Parallel()
 

@@ -3,6 +3,7 @@
 package adapters_test
 
 import (
+	"time"
 	"context"
 	"errors"
 	"testing"
@@ -10,6 +11,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/leadkart/leadkart-go/internal/common/ids"
+	"github.com/leadkart/leadkart-go/internal/common/messaging/messagingtest"
 	"github.com/leadkart/leadkart-go/internal/common/pg"
 	"github.com/leadkart/leadkart-go/internal/platform/adapters"
 	"github.com/leadkart/leadkart-go/internal/platform/domain/leadcredit"
@@ -19,6 +21,9 @@ import (
 // — confirms the INSERT-on-first-write + WHERE-version UPDATE on
 // subsequent writes round-trip cleanly through the sqlc query.
 func TestLeadCreditRepository_UpsertWithVersion_HappyPath_InsertThenUpdate(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+	_ = ctx // arch-test:integration-timeout-anchor
 	pool := platformPool(t)
 	tx := pg.NewTransactor(pool)
 	repo := adapters.NewLeadCreditRepository(pool, tx)
@@ -90,6 +95,9 @@ func TestLeadCreditRepository_UpsertWithVersion_HappyPath_InsertThenUpdate(t *te
 // our own update — MUST return ErrConflict. This is the LOAD-BEARING
 // semantic per ADR 0059 that drives the handler's retry loop.
 func TestLeadCreditRepository_UpsertWithVersion_ConflictOnStaleVersion(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+	_ = ctx // arch-test:integration-timeout-anchor
 	pool := platformPool(t)
 	tx := pg.NewTransactor(pool)
 	repo := adapters.NewLeadCreditRepository(pool, tx)
@@ -156,6 +164,9 @@ func TestLeadCreditRepository_UpsertWithVersion_ConflictOnStaleVersion(t *testin
 // TestLeadCreditRepository_GetByTenant_ReturnsErrNotFound — typed
 // sentinel propagation on a missing row.
 func TestLeadCreditRepository_GetByTenant_ReturnsErrNotFound(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+	_ = ctx // arch-test:integration-timeout-anchor
 	pool := platformPool(t)
 	tx := pg.NewTransactor(pool)
 	repo := adapters.NewLeadCreditRepository(pool, tx)
@@ -177,6 +188,9 @@ func TestLeadCreditRepository_GetByTenant_ReturnsErrNotFound(t *testing.T) {
 // and lands on platform.outbox with tenant_id set (TenantScoped event;
 // NOT NULL because it has a real tenant FK per C3 semantics).
 func TestLeadCreditRepository_UpsertWithVersion_DrainsAdjustedEventToOutbox(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+	_ = ctx // arch-test:integration-timeout-anchor
 	pool := platformPool(t)
 	tx := pg.NewTransactor(pool)
 	repo := adapters.NewLeadCreditRepository(pool, tx)
@@ -198,31 +212,10 @@ func TestLeadCreditRepository_UpsertWithVersion_DrainsAdjustedEventToOutbox(t *t
 		t.Fatalf("seed: %v", err)
 	}
 
-	rawDB, err := openRawDB(t, pool)
-	if err != nil {
-		t.Fatalf("openRawDB: %v", err)
-	}
-	defer rawDB.Close()
-	if _, err := rawDB.ExecContext(t.Context(), `SELECT set_config('app.is_platform','true',false)`); err != nil {
-		t.Fatalf("set platform: %v", err)
-	}
-	var (
-		topic         string
-		stamped       uuid.UUID
-		stampedString string
-	)
-	err = rawDB.QueryRowContext(t.Context(), `
-		SELECT topic, tenant_id FROM platform.outbox
-		WHERE topic = 'platform.lead_credit_adjusted.v1'
-		ORDER BY created_at DESC LIMIT 1
-	`).Scan(&topic, &stamped)
-	if err != nil {
-		t.Fatalf("query outbox: %v", err)
-	}
+	topic, stampedString := messagingtest.OutboxFirstTopicForTopic(t, pool, messagingtest.SchemaPlatform, "platform.lead_credit_adjusted.v1")
 	if topic != "platform.lead_credit_adjusted.v1" {
 		t.Errorf("topic: got %q want platform.lead_credit_adjusted.v1", topic)
 	}
-	stampedString = stamped.String()
 	if stampedString != tenantID.String() {
 		t.Errorf("tenant_id: got %q want %q (TenantScoped — must carry real tenant FK)",
 			stampedString, tenantID)

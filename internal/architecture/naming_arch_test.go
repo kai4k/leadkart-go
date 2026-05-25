@@ -32,6 +32,7 @@ import (
 // Package names: lowercase, no underscores, no camelCase. Effective
 // Go canon. Drift signal: when devs from camelCase languages start
 // contributing, packages slowly accrete `userManagement` etc.
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_PackageNamesLowercaseSingleWord(t *testing.T) {
 	t.Parallel()
 
@@ -84,6 +85,7 @@ func TestArch_PackageNamesLowercaseSingleWord(t *testing.T) {
 // shape, not action), or whose name explicitly ends in a noun-form
 // (`Repository`, `Gateway`, `Store`, `Service`, `Reader`, `Writer`)
 // — those are acceptable conventions even with one method.
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_SingleMethodInterfacesUseErSuffix(t *testing.T) {
 	t.Parallel()
 
@@ -180,6 +182,7 @@ func TestArch_SingleMethodInterfacesUseErSuffix(t *testing.T) {
 // or `Open<T>` (canonical alternative for I/O ctors).
 //
 // Allow-list: Test* / Build* / arch-test:non-ctor markers.
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_ConstructorsNamedNewX(t *testing.T) {
 	t.Parallel()
 
@@ -232,6 +235,7 @@ func TestArch_ConstructorsNamedNewX(t *testing.T) {
 // Per Effective Go: "The name of a method's receiver should be a
 // reflection of its identity; often a one or two letter abbreviation
 // of its type suffices (such as 'c' or 'cl' for 'Client')."
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_ReceiverNamesShortAndConsistent(t *testing.T) {
 	t.Parallel()
 

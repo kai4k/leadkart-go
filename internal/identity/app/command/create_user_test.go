@@ -1,5 +1,6 @@
 package command_test
 
+
 import (
 	"testing"
 	"time"
@@ -33,24 +34,25 @@ func TestNewCreateUserHandler_PanicsOnNilDeps(t *testing.T) {
 		{
 			name: "nil uow",
 			fn: func() {
-				_ = command.NewCreateUserHandler(nil, &fakePersonRepo{}, newFakeMembershipRepo(), func() time.Time { return testNow }, testNewPersonID, testNewMembershipID)
+				_ = command.NewCreateUserHandler(nil, &fakePersonRepo{}, newFakeMembershipRepo(), func() time.Time { return testNow }, testNewPersonID, testNewMembershipID) // arch-test:ignore-err - test fixture setup
 			},
 		},
 		{
 			name: "nil persons",
 			fn: func() {
-				_ = command.NewCreateUserHandler(fakeUoW{}, nil, newFakeMembershipRepo(), func() time.Time { return testNow }, testNewPersonID, testNewMembershipID)
+				_ = command.NewCreateUserHandler(fakeUoW{}, nil, newFakeMembershipRepo(), func() time.Time { return testNow }, testNewPersonID, testNewMembershipID) // arch-test:ignore-err - test fixture setup
 			},
 		},
 		{
 			name: "nil memberships",
 			fn: func() {
-				_ = command.NewCreateUserHandler(fakeUoW{}, &fakePersonRepo{}, nil, func() time.Time { return testNow }, testNewPersonID, testNewMembershipID)
+				_ = command.NewCreateUserHandler(fakeUoW{}, &fakePersonRepo{}, nil, func() time.Time { return testNow }, testNewPersonID, testNewMembershipID) // arch-test:ignore-err - test fixture setup
 			},
 		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
 			defer func() {
 				if r := recover(); r == nil {
 					t.Error("expected panic on nil dep")

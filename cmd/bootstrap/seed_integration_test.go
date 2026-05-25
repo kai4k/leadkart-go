@@ -12,10 +12,13 @@ import (
 
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/pressly/goose/v3"
+
+	"github.com/leadkart/leadkart-go/internal/common/pg"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
 	"github.com/testcontainers/testcontainers-go/wait"
 
+	"github.com/leadkart/leadkart-go/cmd/bootstrap/seedtest"
 	"github.com/leadkart/leadkart-go/internal/identity/app/argon2"
 )
 
@@ -34,7 +37,8 @@ func TestSeedSuperAdmin_FreshDatabase(t *testing.T) {
 		lastName  = "Strap"
 	)
 
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(t.Context(), 120*time.Second)
+	defer cancel()
 	db := startTestDB(t, ctx)
 
 	// 1. First run — seeds 5 rows.
@@ -56,7 +60,8 @@ func TestSeedSuperAdmin_FreshDatabase(t *testing.T) {
 // against a real DB (paranoia: confirms no rows leak in when the
 // caller hands us empty creds).
 func TestSeedSuperAdmin_MissingEnv_NoOp(t *testing.T) {
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(t.Context(), 120*time.Second)
+	defer cancel()
 	db := startTestDB(t, ctx)
 
 	if err := runOnce(ctx, db, "", "", "", "", false); err != nil {
@@ -69,18 +74,7 @@ func assertSeedState(t *testing.T, ctx context.Context, db *sql.DB, email, passw
 	t.Helper()
 
 	// Tenant.
-	var (
-		tenantID     string
-		tenantSlug   string
-		tenantStatus string
-		legalName    string
-	)
-	if err := db.QueryRowContext(ctx, `
-		SELECT id, slug, status, legal_name
-		FROM   identity.tenants WHERE slug = $1
-	`, "platform").Scan(&tenantID, &tenantSlug, &tenantStatus, &legalName); err != nil {
-		t.Fatalf("query platform tenant: %v", err)
-	}
+	tenantID, tenantSlug, tenantStatus, legalName := seedtest.GetTenantBySlug(t, ctx, db, "platform")
 	if tenantSlug != "platform" {
 		t.Errorf("tenant slug = %q, want %q", tenantSlug, "platform")
 	}
@@ -92,18 +86,7 @@ func assertSeedState(t *testing.T, ctx context.Context, db *sql.DB, email, passw
 	}
 
 	// Person — Argon2 hash round-trip.
-	var (
-		personID     string
-		personEmail  string
-		passwordHash string
-		fname, lname string
-	)
-	if err := db.QueryRowContext(ctx, `
-		SELECT id, email, password_hash, first_name, last_name
-		FROM   identity.persons WHERE email = $1
-	`, email).Scan(&personID, &personEmail, &passwordHash, &fname, &lname); err != nil {
-		t.Fatalf("query person: %v", err)
-	}
+	personID, _, passwordHash, fname, lname := seedtest.GetSeededSuperAdminPerson(t, ctx, db, email)
 	if fname != firstName || lname != lastName {
 		t.Errorf("person name = %q %q, want %q %q", fname, lname, firstName, lastName)
 	}
@@ -115,19 +98,7 @@ func assertSeedState(t *testing.T, ctx context.Context, db *sql.DB, email, passw
 	}
 
 	// Role — under platform tenant, is_super_admin = true.
-	var (
-		roleID       string
-		roleName     string
-		isSuperAdmin bool
-		isDefault    bool
-	)
-	if err := db.QueryRowContext(ctx, `
-		SELECT id, name, is_super_admin, is_system_default
-		FROM   identity.roles
-		WHERE  tenant_id = $1 AND name = $2 AND NOT is_deleted
-	`, tenantID, "SuperAdmin").Scan(&roleID, &roleName, &isSuperAdmin, &isDefault); err != nil {
-		t.Fatalf("query role: %v", err)
-	}
+	roleID, _, isSuperAdmin, isDefault := seedtest.GetSuperAdminRole(t, ctx, db, tenantID, "SuperAdmin")
 	if !isSuperAdmin {
 		t.Errorf("role.is_super_admin = false, want true")
 	}
@@ -136,28 +107,13 @@ func assertSeedState(t *testing.T, ctx context.Context, db *sql.DB, email, passw
 	}
 
 	// Membership — Person ↔ platform tenant, status active.
-	var (
-		membershipID     string
-		membershipStatus string
-	)
-	if err := db.QueryRowContext(ctx, `
-		SELECT id, status FROM identity.tenant_memberships
-		WHERE  person_id = $1 AND tenant_id = $2
-	`, personID, tenantID).Scan(&membershipID, &membershipStatus); err != nil {
-		t.Fatalf("query membership: %v", err)
-	}
+	membershipID, membershipStatus := seedtest.GetMembershipForPerson(t, ctx, db, personID, tenantID)
 	if membershipStatus != "active" {
 		t.Errorf("membership status = %q, want active", membershipStatus)
 	}
 
 	// Role assignment — Membership ↔ Role.
-	var assigned int
-	if err := db.QueryRowContext(ctx, `
-		SELECT count(*) FROM identity.role_assignments
-		WHERE  membership_id = $1 AND role_id = $2
-	`, membershipID, roleID).Scan(&assigned); err != nil {
-		t.Fatalf("query role_assignment: %v", err)
-	}
+	assigned := seedtest.CountRoleAssignmentsForMembershipAndRole(t, ctx, db, membershipID, roleID)
 	if assigned != 1 {
 		t.Errorf("role_assignments count = %d, want 1", assigned)
 	}
@@ -166,41 +122,26 @@ func assertSeedState(t *testing.T, ctx context.Context, db *sql.DB, email, passw
 func assertRowCounts(t *testing.T, ctx context.Context, db *sql.DB, want int) {
 	t.Helper()
 
-	var tenants, persons, members, assigns, roles int
-	if err := db.QueryRowContext(ctx,
-		`SELECT count(*) FROM identity.tenants WHERE slug = 'platform'`).Scan(&tenants); err != nil {
-		t.Fatalf("count tenants: %v", err)
-	}
-	if err := db.QueryRowContext(ctx,
-		`SELECT count(*) FROM identity.tenant_memberships`).Scan(&members); err != nil {
-		t.Fatalf("count memberships: %v", err)
-	}
-	if err := db.QueryRowContext(ctx,
-		`SELECT count(*) FROM identity.persons`).Scan(&persons); err != nil {
-		t.Fatalf("count persons: %v", err)
-	}
-	if err := db.QueryRowContext(ctx,
-		`SELECT count(*) FROM identity.roles WHERE is_super_admin AND NOT is_deleted`).Scan(&roles); err != nil {
-		t.Fatalf("count super-admin roles: %v", err)
-	}
-	if err := db.QueryRowContext(ctx,
-		`SELECT count(*) FROM identity.role_assignments`).Scan(&assigns); err != nil {
-		t.Fatalf("count role_assignments: %v", err)
-	}
+	tenants := seedtest.CountTenantsBySlug(t, ctx, db, "platform")
+	members := seedtest.CountAllMemberships(t, ctx, db)
+	persons := seedtest.CountAllPersons(t, ctx, db)
+	roles := seedtest.CountSuperAdminRoles(t, ctx, db)
+	assigns := seedtest.CountAllRoleAssignments(t, ctx, db)
 
-	if tenants != want {
+	wantInt64 := int64(want)
+	if tenants != wantInt64 {
 		t.Errorf("platform tenant rows = %d, want %d", tenants, want)
 	}
-	if persons != want {
+	if persons != wantInt64 {
 		t.Errorf("person rows = %d, want %d", persons, want)
 	}
-	if members != want {
+	if members != wantInt64 {
 		t.Errorf("membership rows = %d, want %d", members, want)
 	}
-	if roles != want {
+	if roles != wantInt64 {
 		t.Errorf("super-admin role rows = %d, want %d", roles, want)
 	}
-	if assigns != want {
+	if assigns != wantInt64 {
 		t.Errorf("role_assignment rows = %d, want %d", assigns, want)
 	}
 }
@@ -243,7 +184,7 @@ func startTestDB(t *testing.T, ctx context.Context) *sql.DB {
 	if err != nil {
 		t.Fatalf("goose open: %v", err)
 	}
-	if err := goose.SetDialect("postgres"); err != nil {
+	if err := pg.EnsureGooseDialect(); err != nil {
 		_ = gooseDB.Close()
 		t.Fatalf("set dialect: %v", err)
 	}

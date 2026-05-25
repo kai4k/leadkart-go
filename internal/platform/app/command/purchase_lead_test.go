@@ -1,7 +1,6 @@
 package command_test
 
 import (
-	"context"
 	"errors"
 	"testing"
 
@@ -24,7 +23,7 @@ func seedAvailableLead(t *testing.T, leads *platformtest.FakePlatformLeadReposit
 	if err != nil {
 		t.Fatalf("seed lead: %v", err)
 	}
-	if err := leads.Add(context.Background(), l); err != nil {
+	if err := leads.Add(t.Context(), l); err != nil {
 		t.Fatalf("seed lead persist: %v", err)
 	}
 	return leadID
@@ -44,7 +43,7 @@ func seedCreditedTenant(t *testing.T, credits *platformtest.FakeLeadCreditReposi
 			t.Fatalf("seed topup: %v", err)
 		}
 	}
-	if err := credits.UpsertWithVersion(context.Background(), c); err != nil {
+	if err := credits.UpsertWithVersion(t.Context(), c); err != nil {
 		t.Fatalf("seed upsert: %v", err)
 	}
 }
@@ -63,7 +62,7 @@ func TestPurchaseLead_HappyPath(t *testing.T) {
 	seedCreditedTenant(t, credits, leadcredit.TenantID(tenantID.String()), 10)
 
 	h := command.NewPurchaseLeadHandler(uow, leads, credits, outbox, nowFunc, func() string { return ids.NewV7().String() })
-	out, err := h.Handle(context.Background(), command.PurchaseLeadCommand{
+	out, err := h.Handle(t.Context(), command.PurchaseLeadCommand{
 		PlatformLeadID:         leadID,
 		PurchasingTenantID:     tenantID,
 		PurchasingMembershipID: memberID,
@@ -77,7 +76,7 @@ func TestPurchaseLead_HappyPath(t *testing.T) {
 	}
 
 	// Lead is now sold.
-	l, _ := leads.GetByID(context.Background(), leadID)
+	l, _ := leads.GetByID(t.Context(), leadID)
 	if l.IsAvailable() {
 		t.Error("expected lead to be sold")
 	}
@@ -86,7 +85,7 @@ func TestPurchaseLead_HappyPath(t *testing.T) {
 	}
 
 	// Credit was debited (1 credit per lead in Slice 1).
-	c, _ := credits.GetByTenant(context.Background(), leadcredit.TenantID(tenantID.String()))
+	c, _ := credits.GetByTenant(t.Context(), leadcredit.TenantID(tenantID.String()))
 	if c.Balance() != 9 {
 		t.Errorf("balance=%d want 9", c.Balance())
 	}
@@ -123,7 +122,7 @@ func TestPurchaseLead_InsufficientCredits(t *testing.T) {
 	seedCreditedTenant(t, credits, leadcredit.TenantID(tenantID.String()), 0)
 
 	h := command.NewPurchaseLeadHandler(uow, leads, credits, outbox, nowFunc, func() string { return ids.NewV7().String() })
-	_, err := h.Handle(context.Background(), command.PurchaseLeadCommand{
+	_, err := h.Handle(t.Context(), command.PurchaseLeadCommand{
 		PlatformLeadID:         leadID,
 		PurchasingTenantID:     tenantID,
 		PurchasingMembershipID: unverifiedcontact.MembershipID(ids.NewV7().String()),
@@ -133,7 +132,7 @@ func TestPurchaseLead_InsufficientCredits(t *testing.T) {
 		t.Fatalf("expected ErrInsufficientCredits, got %v", err)
 	}
 	// Lead must remain available.
-	l, _ := leads.GetByID(context.Background(), leadID)
+	l, _ := leads.GetByID(t.Context(), leadID)
 	if !l.IsAvailable() {
 		t.Error("lead must stay available on failed purchase")
 	}
@@ -152,7 +151,7 @@ func TestPurchaseLead_NoCreditRowYet(t *testing.T) {
 	// No credit row at all.
 
 	h := command.NewPurchaseLeadHandler(uow, leads, credits, outbox, nowFunc, func() string { return ids.NewV7().String() })
-	_, err := h.Handle(context.Background(), command.PurchaseLeadCommand{
+	_, err := h.Handle(t.Context(), command.PurchaseLeadCommand{
 		PlatformLeadID:         leadID,
 		PurchasingTenantID:     tenantID,
 		PurchasingMembershipID: unverifiedcontact.MembershipID(ids.NewV7().String()),
@@ -183,7 +182,7 @@ func TestPurchaseLead_AlreadySold(t *testing.T) {
 	h := command.NewPurchaseLeadHandler(uow, leads, credits, outbox, nowFunc, func() string { return ids.NewV7().String() })
 
 	// First purchase succeeds.
-	_, err := h.Handle(context.Background(), command.PurchaseLeadCommand{
+	_, err := h.Handle(t.Context(), command.PurchaseLeadCommand{
 		PlatformLeadID:         leadID,
 		PurchasingTenantID:     tenantA,
 		PurchasingMembershipID: unverifiedcontact.MembershipID(ids.NewV7().String()),
@@ -194,7 +193,7 @@ func TestPurchaseLead_AlreadySold(t *testing.T) {
 	}
 
 	// Second tenant's purchase fails with ErrLeadAlreadySold.
-	_, err = h.Handle(context.Background(), command.PurchaseLeadCommand{
+	_, err = h.Handle(t.Context(), command.PurchaseLeadCommand{
 		PlatformLeadID:         leadID,
 		PurchasingTenantID:     tenantB,
 		PurchasingMembershipID: unverifiedcontact.MembershipID(ids.NewV7().String()),
@@ -214,7 +213,7 @@ func TestPurchaseLead_AlreadySold(t *testing.T) {
 	// UpsertWithVersion (or splits them across separate WithinTx
 	// closures) would silently debit tenantB. This assertion catches
 	// that regression at unit-test time, NOT in production.
-	bBal, err := credits.GetByTenant(context.Background(), leadcredit.TenantID(tenantB.String()))
+	bBal, err := credits.GetByTenant(t.Context(), leadcredit.TenantID(tenantB.String()))
 	if err != nil {
 		t.Fatalf("tenantB credit reload: %v", err)
 	}
@@ -239,7 +238,7 @@ func TestPurchaseLead_RetriesOnConflict(t *testing.T) {
 	credits.ForceConflictOnce = true
 
 	h := command.NewPurchaseLeadHandler(uow, leads, credits, outbox, nowFunc, func() string { return ids.NewV7().String() })
-	_, err := h.Handle(context.Background(), command.PurchaseLeadCommand{
+	_, err := h.Handle(t.Context(), command.PurchaseLeadCommand{
 		PlatformLeadID:         leadID,
 		PurchasingTenantID:     tenantID,
 		PurchasingMembershipID: unverifiedcontact.MembershipID(ids.NewV7().String()),

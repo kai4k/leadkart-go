@@ -1,5 +1,6 @@
 package command_test
 
+
 import (
 	"errors"
 	"testing"
@@ -18,21 +19,23 @@ func TestNewHardDeleteTenantHandler_PanicsOnNilDeps(t *testing.T) {
 	t.Parallel()
 
 	t.Run("nil tenants", func(t *testing.T) {
+		t.Parallel()
 		defer func() {
 			if r := recover(); r == nil {
 				t.Error("expected panic on nil tenants repo")
 			}
 		}()
-		_ = command.NewHardDeleteTenantHandler(nil, newFakeMembershipRepo(), func() time.Time { return testNow })
+		_ = command.NewHardDeleteTenantHandler(nil, newFakeMembershipRepo(), func() time.Time { return testNow }) // arch-test:ignore-err - test fixture setup
 	})
 
 	t.Run("nil memberships", func(t *testing.T) {
+		t.Parallel()
 		defer func() {
 			if r := recover(); r == nil {
 				t.Error("expected panic on nil memberships repo")
 			}
 		}()
-		_ = command.NewHardDeleteTenantHandler(newFakeTenantRepo(), nil, func() time.Time { return testNow })
+		_ = command.NewHardDeleteTenantHandler(newFakeTenantRepo(), nil, func() time.Time { return testNow }) // arch-test:ignore-err - test fixture setup
 	})
 }
 
@@ -91,7 +94,7 @@ func TestHardDeleteTenant_RowDeletedAfterAggregateTransition(t *testing.T) {
 		t.Fatalf("MarkForDeletion: %v", err)
 	}
 	tn.PullEvents()
-	_ = tenants.Add(t.Context(), tn)
+	_ = tenants.Add(t.Context(), tn) // arch-test:ignore-err - test fixture setup
 
 	h := command.NewHardDeleteTenantHandler(tenants, members, func() time.Time { return testNow })
 	if err := h.Handle(t.Context(), command.HardDeleteTenantCommand{TenantID: tn.ID()}); err != nil {

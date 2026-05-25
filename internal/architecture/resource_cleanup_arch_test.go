@@ -29,6 +29,7 @@ import (
 //
 // Allow-list: tests that explicitly close-and-check err (`if err :=
 // f.Close(); err != nil`) on the same line are fine.
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_DeferCloseAfterOpen(t *testing.T) {
 	t.Parallel()
 
@@ -76,6 +77,7 @@ func TestArch_DeferCloseAfterOpen(t *testing.T) {
 // Predicate: every `Query(`-returning assignment (pgx pattern
 // `rows, err := <something>.Query(`) must be followed within 5
 // lines by `defer rows.Close()` (or the assignment is to `_`).
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_RowsCloseErrorChecked(t *testing.T) {
 	t.Parallel()
 
@@ -130,6 +132,7 @@ func TestArch_RowsCloseErrorChecked(t *testing.T) {
 //
 // Predicate: lines matching `<x>, err := <y>.Begin*(...)` followed
 // within 5 lines by `defer <x>.Rollback(ctx)`.
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_TxRollbackInErrorPath(t *testing.T) {
 	t.Parallel()
 
@@ -184,6 +187,7 @@ func TestArch_TxRollbackInErrorPath(t *testing.T) {
 // OpenFile under the same regex). G4 narrows to OpenFile with
 // non-default flags (write-mode) since those tend to hold the lock
 // longer.
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_NoLeakedFileHandles(t *testing.T) {
 	t.Parallel()
 
@@ -228,6 +232,7 @@ func TestArch_NoLeakedFileHandles(t *testing.T) {
 // shutdown path leak forever (the Once never re-runs). Predicate:
 // any `\.Do\(func\b` body must NOT contain `go func` or `go <call>`
 // unless explicitly marked.
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_NoSyncOnceLeaksGoroutines(t *testing.T) {
 	t.Parallel()
 

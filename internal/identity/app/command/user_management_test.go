@@ -1,5 +1,6 @@
 package command_test
 
+
 import (
 	"context"
 	"errors"
@@ -106,7 +107,7 @@ func TestUpdateUserProfile_Succeeds(t *testing.T) {
 	t.Parallel()
 	repo := newFakeMembershipRepo()
 	m := newMembership(t)
-	_ = repo.Add(t.Context(), m)
+	_ = repo.Add(t.Context(), m) // arch-test:ignore-err - test fixture setup
 
 	h := command.NewUpdateUserProfileHandler(repo, func() time.Time { return testNow })
 	if err := h.Handle(t.Context(), command.UpdateUserProfileCommand{
@@ -141,7 +142,7 @@ func TestDeactivateUser_RequiresReason(t *testing.T) {
 	t.Parallel()
 	repo := newFakeMembershipRepo()
 	m := newMembership(t)
-	_ = repo.Add(t.Context(), m)
+	_ = repo.Add(t.Context(), m) // arch-test:ignore-err - test fixture setup
 	h := command.NewDeactivateUserHandler(repo, func() time.Time { return testNow })
 	err := h.Handle(t.Context(), command.DeactivateUserCommand{MembershipID: m.ID()})
 	if !errors.Is(err, membership.ErrInvalid) {
@@ -153,7 +154,7 @@ func TestDeactivateUser_Succeeds(t *testing.T) {
 	t.Parallel()
 	repo := newFakeMembershipRepo()
 	m := newMembership(t)
-	_ = repo.Add(t.Context(), m)
+	_ = repo.Add(t.Context(), m) // arch-test:ignore-err - test fixture setup
 	h := command.NewDeactivateUserHandler(repo, func() time.Time { return testNow })
 	if err := h.Handle(t.Context(), command.DeactivateUserCommand{
 		MembershipID: m.ID(),
@@ -170,9 +171,9 @@ func TestReactivateUser_RoundTrip(t *testing.T) {
 	t.Parallel()
 	repo := newFakeMembershipRepo()
 	m := newMembership(t)
-	_ = m.Deactivate("temporary-leave", testNow)
+	_ = m.Deactivate("temporary-leave", testNow) // arch-test:ignore-err - test fixture setup
 	m.PullEvents()
-	_ = repo.Add(t.Context(), m)
+	_ = repo.Add(t.Context(), m) // arch-test:ignore-err - test fixture setup
 
 	h := command.NewReactivateUserHandler(repo, func() time.Time { return testNow })
 	if err := h.Handle(t.Context(), command.ReactivateUserCommand{MembershipID: m.ID()}); err != nil {
@@ -207,6 +208,7 @@ func TestNewHandlers_PanicOnNilRepo(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
 			defer func() {
 				if r := recover(); r == nil {
 					t.Error("expected panic on nil repo")

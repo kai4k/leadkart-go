@@ -29,6 +29,14 @@ linters:
       # Tests get a pass on a few rules.
       - path: _test\.go
         linters: [errcheck, gosec, cyclop]
+      # sqlc-generated code lives under <module>/adapters/db/ (ADR 0037).
+      # Generated SQL string literals trip gosec's G101 false-positive
+      # heuristic when table / column names contain substrings like
+      # "credit" / "credential" / "secret" / "token" (e.g. lead_credits,
+      # password_reset_token_hash). The generator output isn't hand-
+      # written; we don't author secrets in SQL literals.
+      - path: adapters/db/.*\.sql\.go
+        linters: [gosec]
 
   settings:
     cyclop:

@@ -1,4 +1,5 @@
 //go:build integration
+// arch-test:no-timeout-needed - integration tests rely on testcontainers boot timeout
 
 package adapters_test
 
@@ -327,19 +328,19 @@ func TestMembershipRepository_UpdateByID_ReplacesRoleAssignmentsAndOverrides(t *
 	}
 
 	m, _ := membership.New(membership.ID(ids.NewV7().String()), p.ID(), tn.ID(), membership.ID(""), testNow)
-	_ = m.AssignRole(r1.ID(), testNow)
-	_ = m.AssignRole(r2.ID(), testNow)
-	_ = m.GrantPermission(permission.FromConstant(permission.IdentityPermissions.Roles.View), time.Time{}, testNow)
+	_ = m.AssignRole(r1.ID(), testNow) // arch-test:ignore-err - test fixture setup
+	_ = m.AssignRole(r2.ID(), testNow) // arch-test:ignore-err - test fixture setup
+	_ = m.GrantPermission(permission.FromConstant(permission.IdentityPermissions.Roles.View), time.Time{}, testNow) // arch-test:ignore-err - test fixture setup
 	if err := memberships.Add(ctx, m); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
 
 	// Replace state via UpdateByID: drop r1, add r3, drop the grant, add a revoke.
 	err := memberships.UpdateByID(ctx, m.ID(), func(loaded *membership.Membership) (bool, error) {
-		_ = loaded.RevokeRole(r1.ID(), testNow)
-		_ = loaded.AssignRole(r3.ID(), testNow)
+		_ = loaded.RevokeRole(r1.ID(), testNow) // arch-test:ignore-err - test fixture setup
+		_ = loaded.AssignRole(r3.ID(), testNow) // arch-test:ignore-err - test fixture setup
 		// flipping the same permission from granted to revoked auto-suppresses.
-		_ = loaded.RevokePermission(permission.FromConstant(permission.IdentityPermissions.Roles.View), testNow)
+		_ = loaded.RevokePermission(permission.FromConstant(permission.IdentityPermissions.Roles.View), testNow) // arch-test:ignore-err - test fixture setup
 		return true, nil
 	})
 	if err != nil {
@@ -388,7 +389,7 @@ func TestMembershipRepository_Add_RejectsCrossTenantRoleAssignment(t *testing.T)
 	}
 
 	m, _ := membership.New(membership.ID(ids.NewV7().String()), p.ID(), tnA.ID(), membership.ID(""), testNow)
-	_ = m.AssignRole(rB.ID(), testNow)
+	_ = m.AssignRole(rB.ID(), testNow) // arch-test:ignore-err - test fixture setup
 
 	ctxA := tenancy.WithID(t.Context(), tenancy.ID(tnA.ID().String()))
 	err := memberships.Add(ctxA, m)

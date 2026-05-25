@@ -255,7 +255,7 @@ func TestRotate_AfterRevoke_Fails(t *testing.T) {
 
 	f := newFamily(t)
 	_ = f.PullEvents()
-	_ = f.Revoke("user_revoked", baseTime)
+	_ = f.Revoke("user_revoked", baseTime) // arch-test:ignore-err - test fixture setup
 	_ = f.PullEvents()
 
 	err := f.Rotate(f.CurrentToken().Hash(), hash("new"), 14*24*time.Hour, baseTime)
@@ -321,7 +321,7 @@ func TestRevoke_Idempotent(t *testing.T) {
 
 	f := newFamily(t)
 	_ = f.PullEvents()
-	_ = f.Revoke("first", baseTime)
+	_ = f.Revoke("first", baseTime) // arch-test:ignore-err - test fixture setup
 	_ = f.PullEvents()
 
 	if err := f.Revoke("repeat", baseTime.Add(time.Second)); err != nil {

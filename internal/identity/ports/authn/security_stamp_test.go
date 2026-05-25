@@ -248,7 +248,7 @@ func TestRequireFreshStamp_PanicsOnNilVerifier(t *testing.T) {
 			t.Fatal("expected panic on nil verifier (wiring bug)")
 		}
 	}()
-	_ = authn.RequireFreshStamp(nil, &fakeStampValidator{})
+	_ = authn.RequireFreshStamp(nil, &fakeStampValidator{}) // arch-test:ignore-err - test fixture setup
 }
 
 func TestRequireFreshStamp_PanicsOnNilValidator(t *testing.T) {
@@ -258,5 +258,5 @@ func TestRequireFreshStamp_PanicsOnNilValidator(t *testing.T) {
 			t.Fatal("expected panic on nil validator (wiring bug)")
 		}
 	}()
-	_ = authn.RequireFreshStamp(&fakeVerifier{}, nil)
+	_ = authn.RequireFreshStamp(&fakeVerifier{}, nil) // arch-test:ignore-err - test fixture setup
 }

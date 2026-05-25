@@ -63,7 +63,7 @@ func TestDecodeRejectsGarbage(t *testing.T) {
 		input string
 	}{
 		{"not_base64", "not!!base64@@@"},
-		{"valid_base64_but_not_json", pagination.Encode(pagination.Cursor{SortValue: time.Now(), ID: "x"}) + "garbage"},
+		{"valid_base64_but_not_json", pagination.Encode(pagination.Cursor{SortValue: time.Date(2026, 5, 18, 12, 34, 56, 0, time.UTC), ID: "x"}) + "garbage"},
 		{"truncated", "eyJzIjoi"},
 	}
 	for _, tc := range cases {

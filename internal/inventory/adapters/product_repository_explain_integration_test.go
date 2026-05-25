@@ -3,6 +3,7 @@
 package adapters_test
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/leadkart/leadkart-go/internal/common/ids"
 	"github.com/leadkart/leadkart-go/internal/common/pg"
+	"github.com/leadkart/leadkart-go/internal/common/pg/rlstest"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
 	"github.com/leadkart/leadkart-go/internal/inventory/adapters"
 	"github.com/leadkart/leadkart-go/internal/inventory/domain/product"
@@ -44,6 +46,8 @@ func TestKeysetProductsPage_UsesIndexUnderRLS(t *testing.T) {
 	pool := repoFixture(t)
 	tid := seedTenant(t, pool)
 	ctx := tenantCtx(t, tid)
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
 
 	tx := pg.NewTransactor(pool)
 	products := adapters.NewProductRepository(pool, tx)
@@ -78,9 +82,7 @@ func TestKeysetProductsPage_UsesIndexUnderRLS(t *testing.T) {
 	}
 	defer conn.Release()
 
-	if _, err := conn.Exec(ctx, `SELECT set_config('app.tenant_id', $1, false)`, tid.String()); err != nil {
-		t.Fatalf("set tenant: %v", err)
-	}
+	rlstest.SetSessionTenantPersistent(t, ctx, conn.Conn(), tid.String())
 
 	// Same predicate shape as sqlc's ListProductsByTenantPage. First-page
 	// sentinel cursor (max time + max uuid) admits every row.

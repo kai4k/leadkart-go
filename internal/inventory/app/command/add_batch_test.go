@@ -123,7 +123,7 @@ func TestAddBatchHandler_DuplicateBatchNumber_ReturnsErrBatchNumberTaken(t *test
 	tid := newTenantID(t)
 	actor := newMembershipID(t)
 	p := seedProduct(t, productRepo, tid, actor, "AB-3")
-	_ = seedBatch(t, batchRepo, p, actor, "DUP-LOT")
+	_ = seedBatch(t, batchRepo, p, actor, "DUP-LOT") // arch-test:ignore-err — seed helper, error reported via t.Fatalf inside helper
 	h := command.NewAddBatchHandler(uow, productRepo, batchRepo, func() time.Time { return fixedNow }, testNewBatchID)
 
 	_, err := h.Handle(t.Context(), command.AddBatchCommand{

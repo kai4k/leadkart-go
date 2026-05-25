@@ -37,6 +37,7 @@ import (
 //
 // Predicate: any function in `<module>/app/query/` returning a
 // type whose name ends in `Page` MUST use `pagination.Page[T]`.
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_PaginationUsesGenericPage(t *testing.T) {
 	t.Parallel()
 
@@ -82,6 +83,7 @@ func TestArch_PaginationUsesGenericPage(t *testing.T) {
 //
 // Excludes: test files (free-form), generated db/, json-marshal-shape
 // helpers in common/ openly typed `any` for the json package.
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_NoAnyInExportedReturns(t *testing.T) {
 	t.Parallel()
 
@@ -138,6 +140,7 @@ func TestArch_NoAnyInExportedReturns(t *testing.T) {
 // Allow-list: containers that legitimately want `any` (e.g. generic
 // Page container) opt out via `// arch-test:bare-any-generic
 // <reason>` on the same line as the type-param decl.
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_GenericConstraintsExplicit(t *testing.T) {
 	t.Parallel()
 

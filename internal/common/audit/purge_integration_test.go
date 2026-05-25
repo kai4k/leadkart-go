@@ -14,6 +14,8 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/pressly/goose/v3"
+
+	"github.com/leadkart/leadkart-go/internal/common/pg"
 	"github.com/riverqueue/river"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
@@ -21,6 +23,7 @@ import (
 
 	"github.com/leadkart/leadkart-go/internal/common/ids"
 	"github.com/leadkart/leadkart-go/internal/common/audit"
+	"github.com/leadkart/leadkart-go/internal/common/audit/audittest"
 )
 
 func TestPurgeWorker_DeletesOlderThanRetention(t *testing.T) {
@@ -58,17 +61,8 @@ func TestPurgeWorker_DeletesOlderThanRetention(t *testing.T) {
 		t.Fatalf("Work: %v", err)
 	}
 
-	var oldCount, freshCount int
-	if err := pool.QueryRow(t.Context(),
-		`SELECT count(*) FROM buildingblocks.audit_log_entry WHERE action = 'test.purge.old'`,
-	).Scan(&oldCount); err != nil {
-		t.Fatalf("count old: %v", err)
-	}
-	if err := pool.QueryRow(t.Context(),
-		`SELECT count(*) FROM buildingblocks.audit_log_entry WHERE action = 'test.purge.fresh'`,
-	).Scan(&freshCount); err != nil {
-		t.Fatalf("count fresh: %v", err)
-	}
+	oldCount := audittest.CountByAction(t, pool, "test.purge.old")
+	freshCount := audittest.CountByAction(t, pool, "test.purge.fresh")
 
 	if oldCount != 0 {
 		t.Errorf("old rows after purge: got %d want 0", oldCount)
@@ -117,7 +111,7 @@ func startPostgres(t *testing.T) *pgxpool.Pool {
 	if err != nil {
 		t.Fatalf("goose open: %v", err)
 	}
-	if err := goose.SetDialect("postgres"); err != nil {
+	if err := pg.EnsureGooseDialect(); err != nil {
 		_ = gooseDB.Close()
 		t.Fatalf("set dialect: %v", err)
 	}
@@ -133,7 +127,7 @@ func startPostgres(t *testing.T) *pgxpool.Pool {
 	}
 	t.Cleanup(pool.Close)
 	// Smoke audit_log_entry exists at the expected schema location.
-	_ = ids.NewV7() // quiet unused import in case ids isn't used elsewhere
+	_ = ids.NewV7() // arch-test:ignore-err — side-effect only; quiets unused import
 	return pool
 }
 

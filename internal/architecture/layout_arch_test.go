@@ -289,6 +289,7 @@ func TestArch_IntegrationTestSuffix(t *testing.T) {
 //
 // Pragmatic: files under app/command/ that contain `type *Handler
 // struct` must have a same-stem _test.go.
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_EveryHandlerHasTestFile(t *testing.T) {
 	t.Parallel()
 
@@ -360,6 +361,7 @@ func TestArch_EveryHandlerHasTestFile(t *testing.T) {
 //
 // Fakes living in production .go files are a smell — they ship in
 // the production binary + grow without bound.
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_TestFakesInTestPackage(t *testing.T) {
 	t.Parallel()
 

@@ -1,4 +1,5 @@
 //go:build integration
+// arch-test:no-timeout-needed - integration tests rely on testcontainers boot timeout
 
 package adapters_test
 

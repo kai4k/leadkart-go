@@ -40,6 +40,7 @@ import (
 // `Login`, `Logout`, `ChangePassword`, `Impersonation`, `Refresh`
 // must contain either an `integrationevents.` reference or an
 // `outbox` reference.
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_EveryAuthnEventAudited(t *testing.T) {
 	t.Parallel()
 
@@ -140,6 +141,7 @@ func TestArch_AuditLogIsAppendOnly(t *testing.T) {
 // the same multi-line call.
 //
 // Allow-list: tests + scaffolding fakes.
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_AuditEntryHasActorTargetActionResult(t *testing.T) {
 	t.Parallel()
 
@@ -181,6 +183,7 @@ func TestArch_AuditEntryHasActorTargetActionResult(t *testing.T) {
 // `audit.Write*` or `Audit{...}` must NOT also contain `password`,
 // `secret`, or `token` as a string-literal key in the same
 // multi-line expression.
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_NoSensitivePayloadInAudit(t *testing.T) {
 	t.Parallel()
 

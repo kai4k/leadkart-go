@@ -27,6 +27,7 @@ import (
 // EXCEPTION: lines carrying a `// nolint:` directive (the file's
 // author has explicitly opted out + accepted ownership of the
 // violation).
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_NoInterfaceEmpty(t *testing.T) {
 	t.Parallel()
 
@@ -219,6 +220,7 @@ func TestArch_NoBannedDeps(t *testing.T) {
 // EXCEPTIONS:
 //   - `init()` functions — init-time panics are tolerated.
 //   - Package-level `var x = pkg.MustX(...)` — init-time too.
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_NoMustInRequestPath(t *testing.T) {
 	t.Parallel()
 
@@ -301,6 +303,7 @@ func TestArch_NoMustInRequestPath(t *testing.T) {
 // fail. Case-insensitive name match.
 //
 // Scope: every non-generated non-test Go file under internal/.
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_NoFloat64ForMoney(t *testing.T) {
 	t.Parallel()
 
@@ -393,6 +396,7 @@ func TestArch_NoFloat64ForMoney(t *testing.T) {
 //
 // EXCEPTION: time.Time fields can use either — omitempty special-cases
 // the zero time properly; pre-1.24 codebases still use that idiom.
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_OmitzeroNotOmitempty(t *testing.T) {
 	t.Parallel()
 
@@ -478,6 +482,7 @@ func typeIsTime(e ast.Expr) bool {
 // Per Go 1.22+: `for i := 0; i < N; i++` where N is a constant int
 // literal should be `for i := range N`. The new shape is shorter +
 // emphasises "iterate N times, no condition gymnastics".
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_ModernForRange(t *testing.T) {
 	t.Parallel()
 
@@ -552,6 +557,7 @@ func TestArch_ModernForRange(t *testing.T) {
 //
 // Allow-list: explicit `// arch-test:signal-channel <reason>` for
 // the legitimate "wake-up signal" pattern.
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_NoMakeChannelWithoutSize(t *testing.T) {
 	t.Parallel()
 
@@ -599,6 +605,7 @@ func TestArch_NoMakeChannelWithoutSize(t *testing.T) {
 // Predicate: struct fields with names ending `_rate`, `_pct`,
 // `_percent` flagged unless renamed to `_bps` AND typed as an int
 // kind. Soft (opt-out via marker).
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_PercentagesAsBasisPoints(t *testing.T) {
 	t.Parallel()
 
@@ -635,6 +642,7 @@ func TestArch_PercentagesAsBasisPoints(t *testing.T) {
 // float32 / float64 in struct fields tagged for DB persistence is
 // a known rounding-bug source for money. Use int64 (smallest unit)
 // or pgtype.Numeric.
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_NoFloatInPersistedDecimals(t *testing.T) {
 	t.Parallel()
 
@@ -671,6 +679,7 @@ func TestArch_NoFloatInPersistedDecimals(t *testing.T) {
 //
 // Allow-list: cmd/ binaries that legitimately format for user
 // display.
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_NoTimeLocalInBusiness(t *testing.T) {
 	t.Parallel()
 
@@ -708,6 +717,7 @@ func TestArch_NoTimeLocalInBusiness(t *testing.T) {
 // when the layout has no zone segment. Every `time.Parse` call MUST
 // either be followed by `.UTC()` OR use a layout that includes a
 // timezone token (Z, -07:00, etc.).
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_TimeParsedAsUTCAtBoundary(t *testing.T) {
 	t.Parallel()
 
@@ -754,6 +764,7 @@ func TestArch_TimeParsedAsUTCAtBoundary(t *testing.T) {
 //
 // Soft predicate: bare-string literals in time.Format calls
 // outside test code.
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_NoNewTimeFormatStrings(t *testing.T) {
 	t.Parallel()
 

@@ -1,5 +1,6 @@
 package command_test
 
+
 import (
 	"errors"
 	"strings"
@@ -45,24 +46,25 @@ func TestNewCreateImpersonationSessionHandler_PanicsOnNilDeps(t *testing.T) {
 		{
 			name: "nil store",
 			fn: func() {
-				_ = command.NewCreateImpersonationSessionHandler(nil, tenants, issuer, func() time.Time { return testNow })
+				_ = command.NewCreateImpersonationSessionHandler(nil, tenants, issuer, func() time.Time { return testNow }) // arch-test:ignore-err - test fixture setup
 			},
 		},
 		{
 			name: "nil tenants",
 			fn: func() {
-				_ = command.NewCreateImpersonationSessionHandler(store, nil, issuer, func() time.Time { return testNow })
+				_ = command.NewCreateImpersonationSessionHandler(store, nil, issuer, func() time.Time { return testNow }) // arch-test:ignore-err - test fixture setup
 			},
 		},
 		{
 			name: "nil issuer",
 			fn: func() {
-				_ = command.NewCreateImpersonationSessionHandler(store, tenants, nil, func() time.Time { return testNow })
+				_ = command.NewCreateImpersonationSessionHandler(store, tenants, nil, func() time.Time { return testNow }) // arch-test:ignore-err - test fixture setup
 			},
 		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
 			defer func() {
 				if r := recover(); r == nil {
 					t.Error("expected panic on nil dep")
@@ -115,6 +117,7 @@ func TestCreateImpersonationSession_RejectsMissingInputs(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
 			_, err := h.Handle(t.Context(), c.cmd)
 			if err == nil {
 				t.Fatal("expected error, got nil")
@@ -154,7 +157,7 @@ func TestCreateImpersonationSession_HappyPath_MintsScopedToken(t *testing.T) {
 	t.Parallel()
 	tenants := newFakeTenantRepo()
 	tn := newTenant(t)
-	_ = tenants.Add(t.Context(), tn)
+	_ = tenants.Add(t.Context(), tn) // arch-test:ignore-err - test fixture setup
 
 	store := adapters.NewImpersonationInMemoryStore(func() time.Time { return testNow })
 	issuer := newImpersonationIssuer(t)

@@ -36,6 +36,7 @@ import (
 // substrate. Callers must go through `common/cache` (HybridCache or
 // a facade) so the TTL-profile registry + singleflight stampede
 // protection + L1/L2 layering apply uniformly.
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_AllCacheCallsViaHybridCache(t *testing.T) {
 	t.Parallel()
 
@@ -78,6 +79,7 @@ func TestArch_AllCacheCallsViaHybridCache(t *testing.T) {
 //
 // Heuristic note: enforced at the package-level `common/cache` consumer
 // surface only — handlers/adapters that pass keys downstream.
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_CacheKeyFormatCanonical(t *testing.T) {
 	t.Parallel()
 
@@ -124,6 +126,7 @@ func TestArch_CacheKeyFormatCanonical(t *testing.T) {
 // Predicate: any file that imports `common/cache` and constructs a
 // `cache.TTL{...}` literal directly (instead of calling a named
 // profile fn) fails.
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_CacheTTLProfileExplicit(t *testing.T) {
 	t.Parallel()
 
@@ -164,6 +167,7 @@ func TestArch_CacheTTLProfileExplicit(t *testing.T) {
 // Allow-list: keys that are explicitly *global* (e.g. person
 // directory) carry the `// arch-test:global-cache` marker on the
 // same line.
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_CacheKeysIncludeTenantScope(t *testing.T) {
 	t.Parallel()
 
@@ -211,6 +215,7 @@ func TestArch_CacheKeysIncludeTenantScope(t *testing.T) {
 // implements a Get/Fetch fallback must reference singleflight.Group.
 // Consumers (facade users) are not flagged here — they get the
 // protection transitively.
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_SingleflightWrapsExpensiveMisses(t *testing.T) {
 	t.Parallel()
 
@@ -237,6 +242,7 @@ func TestArch_SingleflightWrapsExpensiveMisses(t *testing.T) {
 // embedded full JSON blobs, hashes-of-hashes, or accidental free-
 // form user input. Redis tolerates 512MB keys but the cost shape
 // makes everything slower.
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_CacheKeyLengthBounded(t *testing.T) {
 	t.Parallel()
 
@@ -274,6 +280,7 @@ func TestArch_CacheKeyLengthBounded(t *testing.T) {
 //
 // Predicate: every `.Delete(` or `.Invalidate(` call on a cache
 // receiver must live under `<module>/ports/subscribers/`.
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_CacheInvalidationPairedWithEvent(t *testing.T) {
 	t.Parallel()
 

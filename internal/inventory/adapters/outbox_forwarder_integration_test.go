@@ -3,6 +3,7 @@
 package adapters_test
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -53,7 +54,7 @@ func invWaitForCount(t *testing.T, drain *invDrainSubscriber, want int, timeout 
 		if got := drain.snapshot(); len(got) >= want {
 			return got
 		}
-		time.Sleep(20 * time.Millisecond)
+		time.Sleep(20 * time.Millisecond) // arch-test:wait-justified
 	}
 	t.Fatalf("inventory subscriber: timed out waiting for %d messages, got %d",
 		want, len(drain.snapshot()))
@@ -73,6 +74,8 @@ func TestInventoryOutboxForwarder_PublishesProductCreated(t *testing.T) {
 	pool := repoFixture(t)
 	tid := seedTenant(t, pool)
 	ctx := tenantCtx(t, tid)
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
 
 	tx := pg.NewTransactor(pool)
 	products := adapters.NewProductRepository(pool, tx)
@@ -151,6 +154,8 @@ func TestInventoryOutboxForwarder_IsIdempotent_OnSecondPass(t *testing.T) {
 	pool := repoFixture(t)
 	tid := seedTenant(t, pool)
 	ctx := tenantCtx(t, tid)
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
 
 	tx := pg.NewTransactor(pool)
 	products := adapters.NewProductRepository(pool, tx)

@@ -8,6 +8,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 // aliasRegex enforces the canonical wire-alias shape per messaging.md
@@ -141,17 +143,19 @@ func TestArch_NoFrameworkImports(t *testing.T) {
 // TenantScoped via method but the method returns the wrong field".
 func TestArch_TenantScopedRecordsExposeTenantID(t *testing.T) {
 	t.Parallel()
+	seen := 0
 	for _, e := range all() {
 		ts, ok := e.(TenantScoped)
 		if !ok {
 			continue
 		}
-		// All zero-value records will return a zero UUID. We don't
-		// fail on that — just ensure the method exists + returns
-		// a uuid (compile-time covered) AND that the docstring on
-		// TenantScoped is honoured.
-		_ = ts.TenantID()
+		// Method exists (compile-time covered) AND can be invoked on
+		// a zero-value record without panic. Zero UUID is acceptable
+		// here — the test gates the contract surface, not the value.
+		_ = ts.TenantID() // arch-test:ignore-err — contract surface check; value discarded by design
+		seen++
 	}
+	require.Positive(t, seen, "no TenantScoped records discovered; the TenantScoped contract has zero implementers, which contradicts the integration-events catalog")
 }
 
 // packageDir returns the absolute path of this test's package

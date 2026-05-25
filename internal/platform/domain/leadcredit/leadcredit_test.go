@@ -82,7 +82,7 @@ func TestTopup_RequiresReason(t *testing.T) {
 func TestCharge_HappyPath(t *testing.T) {
 	t.Parallel()
 	l, _ := leadcredit.NewForTenant(tenantA, now)
-	_ = l.Topup(100, "init", operator, now)
+	_ = l.Topup(100, "init", operator, now) // arch-test:ignore-err — domain test seed
 	_ = l.PullEvents()
 	if err := l.Charge(30, "Marketplace purchase: lead 0190", operator, now.Add(time.Hour)); err != nil {
 		t.Fatalf("unexpected: %v", err)
@@ -103,7 +103,7 @@ func TestCharge_HappyPath(t *testing.T) {
 func TestCharge_RejectsInsufficientBalance(t *testing.T) {
 	t.Parallel()
 	l, _ := leadcredit.NewForTenant(tenantA, now)
-	_ = l.Topup(10, "init", operator, now)
+	_ = l.Topup(10, "init", operator, now) // arch-test:ignore-err — domain test seed
 	err := l.Charge(100, "Marketplace purchase", operator, now.Add(time.Hour))
 	if !errors.Is(err, leadcredit.ErrInsufficientBalance) {
 		t.Errorf("expected ErrInsufficientBalance, got %v", err)

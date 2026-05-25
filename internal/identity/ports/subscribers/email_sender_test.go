@@ -17,6 +17,8 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/ports/subscribers"
 )
 
+var fixedNow = time.Date(2026, 5, 24, 12, 0, 0, 0, time.UTC)
+
 // emailSenderSilentLog — unit-only logger; the sibling integration
 // test file declares its own silentLog under the integration tag.
 func emailSenderSilentLog() *slog.Logger {
@@ -57,9 +59,9 @@ func TestEmailSender_HandlePasswordResetEmail_Sends(t *testing.T) {
 		PersonID:       personID,
 		Email:          "alice@example.test",
 		PlaintextToken: "tok-ABC-123",
-		ExpiresAtUTC:   time.Now().UTC().Add(time.Hour),
+		ExpiresAtUTC:   fixedNow.UTC().Add(time.Hour),
 		RecipientName:  "Alice",
-		OccurredAtUTC:  time.Now().UTC(),
+		OccurredAtUTC:  fixedNow.UTC(),
 	}
 	msg := makeMsg(t, evt.Topic(), evt)
 
@@ -124,9 +126,9 @@ func TestEmailSender_HandleEmailChangeConfirmation_Sends(t *testing.T) {
 		NewEmail:       "new@example.test",
 		OldEmail:       "old@example.test",
 		PlaintextToken: "ec-tok-XYZ-789",
-		ExpiresAtUTC:   time.Now().UTC().Add(time.Hour),
+		ExpiresAtUTC:   fixedNow.UTC().Add(time.Hour),
 		RecipientName:  "Bob",
-		OccurredAtUTC:  time.Now().UTC(),
+		OccurredAtUTC:  fixedNow.UTC(),
 	}
 	msg := makeMsg(t, evt.Topic(), evt)
 
@@ -164,9 +166,9 @@ func TestEmailSender_HandlePasswordResetEmail_EmptyRecipientName_FallsBack(t *te
 		PersonID:       uuid.New(),
 		Email:          "alice@example.test",
 		PlaintextToken: "tok",
-		ExpiresAtUTC:   time.Now().UTC().Add(time.Hour),
+		ExpiresAtUTC:   fixedNow.UTC().Add(time.Hour),
 		RecipientName:  "", // empty
-		OccurredAtUTC:  time.Now().UTC(),
+		OccurredAtUTC:  fixedNow.UTC(),
 	}
 	msg := makeMsg(t, evt.Topic(), evt)
 

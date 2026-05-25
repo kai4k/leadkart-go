@@ -9,7 +9,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/leadkart/leadkart-go/internal/common/ids"
+	"github.com/leadkart/leadkart-go/internal/common/messaging/messagingtest"
 	"github.com/leadkart/leadkart-go/internal/common/pagination"
 	"github.com/leadkart/leadkart-go/internal/common/pg"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
@@ -26,6 +29,8 @@ func TestProductRepository_AddGetUpdate_RoundTripsViaOutbox(t *testing.T) {
 	pool := repoFixture(t)
 	tid := seedTenant(t, pool)
 	ctx := tenantCtx(t, tid)
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
 
 	tx := pg.NewTransactor(pool)
 	products := adapters.NewProductRepository(pool, tx)
@@ -77,22 +82,13 @@ func TestProductRepository_AddGetUpdate_RoundTripsViaOutbox(t *testing.T) {
 		t.Fatalf("name after update: %q", got2.Name())
 	}
 
-	// Outbox row written for the Create (and Update) — bypass RLS to
-	// inspect since outbox is FORCE RLS.
-	rawDB, err := openRawDB(t, pool)
+	// Outbox row written for the Create (and Update) — the helper
+	// bypasses RLS internally since outbox is FORCE RLS.
+	tidUUID, err := uuid.Parse(tid.String())
 	if err != nil {
-		t.Fatalf("openRawDB: %v", err)
+		t.Fatalf("uuid.Parse(tid): %v", err)
 	}
-	defer rawDB.Close()
-	if _, err := rawDB.ExecContext(ctx, `SELECT set_config('app.is_platform','true',false)`); err != nil {
-		t.Fatalf("set platform: %v", err)
-	}
-	var count int
-	if err := rawDB.QueryRowContext(ctx,
-		`SELECT count(*) FROM inventory.outbox WHERE tenant_id = $1`,
-		tid.String()).Scan(&count); err != nil {
-		t.Fatalf("read outbox count: %v", err)
-	}
+	count := messagingtest.OutboxCountByTenant(t, pool, messagingtest.SchemaInventory, tidUUID)
 	if count < 2 {
 		t.Fatalf("outbox: got %d rows want >= 2 (created + updated)", count)
 	}
@@ -104,6 +100,8 @@ func TestProductRepository_Add_DuplicateSKU_ReturnsErrSKUTaken(t *testing.T) {
 	pool := repoFixture(t)
 	tid := seedTenant(t, pool)
 	ctx := tenantCtx(t, tid)
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
 
 	tx := pg.NewTransactor(pool)
 	products := adapters.NewProductRepository(pool, tx)
@@ -132,6 +130,8 @@ func TestBatchRepository_FullStockMovementFlow_HappyPath(t *testing.T) {
 	pool := repoFixture(t)
 	tid := seedTenant(t, pool)
 	ctx := tenantCtx(t, tid)
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
 
 	tx := pg.NewTransactor(pool)
 	products := adapters.NewProductRepository(pool, tx)
@@ -239,6 +239,8 @@ func TestBatchRepository_SequentialUpdates_BumpVersionMonotonically(t *testing.T
 	pool := repoFixture(t)
 	tid := seedTenant(t, pool)
 	ctx := tenantCtx(t, tid)
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
 
 	tx := pg.NewTransactor(pool)
 	products := adapters.NewProductRepository(pool, tx)
@@ -305,6 +307,8 @@ func TestBatchRepository_AnyLiveWithStockForProduct_GatesProductDelete(t *testin
 	pool := repoFixture(t)
 	tid := seedTenant(t, pool)
 	ctx := tenantCtx(t, tid)
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
 
 	tx := pg.NewTransactor(pool)
 	products := adapters.NewProductRepository(pool, tx)
@@ -361,6 +365,8 @@ func TestProductRepository_ListPage_PaginatesByCreatedAtKeyset(t *testing.T) {
 	pool := repoFixture(t)
 	tid := seedTenant(t, pool)
 	ctx := tenantCtx(t, tid)
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
 
 	tx := pg.NewTransactor(pool)
 	products := adapters.NewProductRepository(pool, tx)
@@ -378,7 +384,7 @@ func TestProductRepository_ListPage_PaginatesByCreatedAtKeyset(t *testing.T) {
 		if err := products.Add(ctx, p); err != nil {
 			t.Fatalf("seed Add %d: %v", i, err)
 		}
-		time.Sleep(5 * time.Millisecond) // ensure created_at differs across rows
+		time.Sleep(5 * time.Millisecond) // ensure created_at differs across rows // arch-test:wait-justified
 	}
 
 	page1, err := products.ListPage(ctx, tid, product.ListFilter{}, pagination.Cursor{}, 2)

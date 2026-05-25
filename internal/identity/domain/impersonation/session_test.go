@@ -7,9 +7,11 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/domain/impersonation"
 )
 
+var fixedNow = time.Date(2026, 5, 24, 12, 0, 0, 0, time.UTC)
+
 func TestNewSession_RejectsShortReason(t *testing.T) {
 	t.Parallel()
-	_, err := impersonation.NewSession("op-1", "tenant-1", "short", 0, time.Now())
+	_, err := impersonation.NewSession("op-1", "tenant-1", "short", 0, fixedNow)
 	if err == nil {
 		t.Fatal("expected error on short reason")
 	}
@@ -19,7 +21,7 @@ func TestNewSession_RejectsExcessiveDuration(t *testing.T) {
 	t.Parallel()
 	_, err := impersonation.NewSession("op-1", "tenant-1",
 		"diagnostic: investigating tenant outage 2026-05-07",
-		5*time.Hour, time.Now())
+		5*time.Hour, fixedNow)
 	if err == nil {
 		t.Fatal("expected error on duration > 4h")
 	}

@@ -178,7 +178,7 @@ func TestApprove_RecordsApprovedEvent(t *testing.T) {
 	_ = r.PullEvents()
 	approver := membership.ID(ids.NewV7().String())
 	expiresAt := fixedClock().Add(7 * 24 * time.Hour)
-	_ = r.Approve(approver, "ok", uuid.New(), expiresAt, fixedClock())
+	_ = r.Approve(approver, "ok", uuid.New(), expiresAt, fixedClock()) // arch-test:ignore-err - test fixture setup
 	events := r.PullEvents()
 	if len(events) != 1 {
 		t.Fatalf("events = %d, want 1", len(events))

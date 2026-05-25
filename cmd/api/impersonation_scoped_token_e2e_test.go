@@ -1,5 +1,8 @@
 //go:build integration
 
+// arch-test:no-timeout-needed — newE2EFixture → startWiredPostgresForHTTP uses
+// context.WithTimeout(90s) internally; per-request HTTP uses t.Context().
+
 // Wave 4 — scoped JWT impersonation (ADR 0045) end-to-end matrix.
 //
 // Verifies the AssumeRole-style flow from operator session creation

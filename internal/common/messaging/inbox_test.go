@@ -14,11 +14,14 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/pressly/goose/v3"
+
+	"github.com/leadkart/leadkart-go/internal/common/pg"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
 	"github.com/testcontainers/testcontainers-go/wait"
 
 	"github.com/leadkart/leadkart-go/internal/common/messaging"
+	"github.com/leadkart/leadkart-go/internal/common/messaging/messagingtest"
 )
 
 // inboxFixture spins ephemeral Postgres + applies migrations + returns
@@ -59,7 +62,7 @@ func inboxFixture(t *testing.T) *pgxpool.Pool {
 		t.Fatalf("goose open: %v", err)
 	}
 	defer gooseDB.Close()
-	if err := goose.SetDialect("postgres"); err != nil {
+	if err := pg.EnsureGooseDialect(); err != nil {
 		t.Fatalf("set dialect: %v", err)
 	}
 	if err := goose.UpContext(ctx, gooseDB, migrationsDir(t)); err != nil {
@@ -101,14 +104,7 @@ func TestIdempotentReceiver_FirstCall_RunsHandlerAndRecords(t *testing.T) {
 	}
 
 	// Verify row exists.
-	var n int
-	err := pool.QueryRow(t.Context(), `
-		SELECT count(*) FROM identity.processed_messages
-		WHERE  message_id = $1 AND handler_name = $2
-	`, "11111111-1111-1111-1111-111111111111", "test.handler").Scan(&n)
-	if err != nil {
-		t.Fatalf("count: %v", err)
-	}
+	n := messagingtest.InboxCountForMessage(t, pool, "11111111-1111-1111-1111-111111111111", "test.handler")
 	if n != 1 {
 		t.Fatalf("processed_messages row count: got %d want 1", n)
 	}
@@ -154,13 +150,7 @@ func TestIdempotentReceiver_HandlerError_DoesNotRecord_NextCallRunsAgain(t *test
 	if err == nil || err.Error() != "transient" {
 		t.Fatalf("first call expected transient err, got %v", err)
 	}
-	var n int
-	if err := pool.QueryRow(t.Context(), `
-		SELECT count(*) FROM identity.processed_messages
-		WHERE  message_id = $1 AND handler_name = $2
-	`, mid, "test.flaky").Scan(&n); err != nil {
-		t.Fatalf("count: %v", err)
-	}
+	n := messagingtest.InboxCountForMessage(t, pool, mid, "test.flaky")
 	if n != 0 {
 		t.Fatalf("dedup row recorded after handler error: got %d want 0", n)
 	}
@@ -209,12 +199,11 @@ func TestIdempotentReceiver_ScopedByHandlerName(t *testing.T) {
 }
 
 func TestIdempotentReceiver_Wrap_PanicsOnEmptyName(t *testing.T) {
-	t.Parallel()
 	receiver := messaging.NewIdempotentReceiver(nil) // pool not used in this path
 	defer func() {
 		if r := recover(); r == nil {
 			t.Fatal("expected panic on empty handlerName")
 		}
 	}()
-	_ = receiver.Wrap("", func(context.Context, string) error { return nil })
+	_ = receiver.Wrap("", func(context.Context, string) error { return nil }) // arch-test:ignore-err — asserts panic; return value unreachable
 }

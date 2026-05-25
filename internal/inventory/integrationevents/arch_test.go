@@ -9,6 +9,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 // aliasRegex enforces the canonical wire-alias shape per messaging.md
@@ -128,13 +130,16 @@ func TestArch_NoFrameworkImports(t *testing.T) {
 // record's method exists + returns a uuid.UUID (compile-time covered).
 func TestArch_TenantScopedRecordsExposeTenantID(t *testing.T) {
 	t.Parallel()
+	seen := 0
 	for _, e := range all() {
 		ts, ok := e.(TenantScoped)
 		if !ok {
 			continue
 		}
-		_ = ts.TenantID()
+		_ = ts.TenantID() // arch-test:ignore-err — method-existence proof; value discarded by design
+		seen++
 	}
+	require.Positive(t, seen, "no TenantScoped records discovered; the TenantScoped contract has zero implementers")
 }
 
 // packageDir returns the absolute path of this test's package directory.

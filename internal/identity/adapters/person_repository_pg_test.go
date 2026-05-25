@@ -1,4 +1,5 @@
 //go:build integration
+// arch-test:no-timeout-needed - integration tests rely on testcontainers boot timeout
 
 package adapters_test
 
@@ -9,6 +10,7 @@ import (
 
 	"github.com/leadkart/leadkart-go/internal/common/email"
 	"github.com/leadkart/leadkart-go/internal/common/ids"
+	"github.com/leadkart/leadkart-go/internal/common/messaging/messagingtest"
 	"github.com/leadkart/leadkart-go/internal/identity/adapters"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
 	"github.com/leadkart/leadkart-go/internal/common/pg"
@@ -59,23 +61,10 @@ func TestPersonRepository_Add_PersistsRowAndOutboxEvent(t *testing.T) {
 		t.Fatal("expected IsActive=true on new Person")
 	}
 
-	rawDB, err := openRawDB(t, pool)
-	if err != nil {
-		t.Fatalf("openRawDB: %v", err)
-	}
-	defer rawDB.Close()
-
-	var topic string
 	// Person events are written under the platform-tenant sentinel
-	// (uuid.Nil); under platform scope the SELECT sees them.
-	if _, err := rawDB.ExecContext(ctx, `SELECT set_config('app.is_platform','true',false)`); err != nil {
-		t.Fatalf("set platform: %v", err)
-	}
-	if err := rawDB.QueryRowContext(ctx, `
-		SELECT topic FROM identity.outbox WHERE topic = 'identity.person_created.v1'
-	`).Scan(&topic); err != nil {
-		t.Fatalf("read outbox: %v", err)
-	}
+	// (uuid.Nil); messagingtest internally bypasses RLS via the
+	// platform GUC so the SELECT sees them.
+	topic, _ := messagingtest.OutboxFirstTopicForTopic(t, pool, messagingtest.SchemaIdentity, "identity.person_created.v1")
 	if topic != "identity.person_created.v1" {
 		t.Fatalf("topic: got %q want identity.person_created.v1", topic)
 	}
