@@ -11,14 +11,26 @@
 //   rows by tenant so parallel runs cannot see each others state.
 //   Brandur "Postgres at scale" + TDL Wild Workouts canon: shared
 //   infrastructure + per-test logical isolation = safe parallelism.
+//
+// SQL-CONTRACT COVERAGE (per ADR 0062 — TDL Test Pyramid):
+//   - Optimistic-version UPDATE: `UPDATE ... WHERE version = $expected`
+//     returning 0 rows → typed [leadcredit.ErrConflict]. This is the
+//     SQL-specific contract that backs the handler's retry loop per
+//     ADR 0059.
+//   - Outbox row insertion (TenantScoped event) in the SAME tx as the
+//     aggregate write; confirms tenant_id stamping for TenantScoped
+//     events per ADR 0059 + C3.
+//
+// Round-trip Get/Insert + ErrNotFound + plain state transition coverage
+// moved to [leadcredittest.FakeRepository].
 
 package adapters_test
 
 import (
-	"time"
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -29,84 +41,11 @@ import (
 	"github.com/leadkart/leadkart-go/internal/platform/domain/leadcredit"
 )
 
-// TestLeadCreditRepository_UpsertWithVersion_HappyPath_InsertThenUpdate
-// — confirms the INSERT-on-first-write + WHERE-version UPDATE on
-// subsequent writes round-trip cleanly through the sqlc query.
-func TestLeadCreditRepository_UpsertWithVersion_HappyPath_InsertThenUpdate(t *testing.T) {
-	t.Parallel()
-	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
-	defer cancel()
-	_ = ctx // arch-test:integration-timeout-anchor
-	pool := platformPool(t)
-	tx := pg.NewTransactor(pool)
-	repo := adapters.NewLeadCreditRepository(pool, tx)
-
-	tenantID := leadcredit.TenantID(uuid.New().String())
-	op := leadcredit.MembershipID(ids.NewV7().String())
-
-	// First write — INSERT path.
-	err := tx.WithinTx(t.Context(), pg.TxScopePlatform, func(ctx context.Context) error {
-		c, err := leadcredit.NewForTenant(tenantID, nowUTC())
-		if err != nil {
-			return err
-		}
-		if err := c.Topup(100, "initial", op, nowUTC()); err != nil {
-			return err
-		}
-		return repo.UpsertWithVersion(ctx, c)
-	})
-	if err != nil {
-		t.Fatalf("first upsert: %v", err)
-	}
-
-	// Read back — Balance=100, Version=1 (post-INSERT).
-	err = tx.WithinTx(t.Context(), pg.TxScopePlatform, func(ctx context.Context) error {
-		got, err := repo.GetByTenant(ctx, tenantID)
-		if err != nil {
-			return err
-		}
-		if got.Balance() != 100 {
-			t.Errorf("balance: got %d want 100", got.Balance())
-		}
-		// INSERT path persists with version=1 (per amended SQL) so the
-		// repo's optimistic-version UPDATE path can unambiguously
-		// detect "fresh aggregate" via in-memory Version==0.
-		if got.Version() != 1 {
-			t.Errorf("version: got %d want 1 (INSERT writes version=1)", got.Version())
-		}
-		// Second write — UPDATE path with WHERE version = $expected.
-		if err := got.Topup(50, "second", op, nowUTC()); err != nil {
-			return err
-		}
-		return repo.UpsertWithVersion(ctx, got)
-	})
-	if err != nil {
-		t.Fatalf("second upsert: %v", err)
-	}
-
-	// Read back — Balance=150.
-	err = tx.WithinTx(t.Context(), pg.TxScopePlatform, func(ctx context.Context) error {
-		got, err := repo.GetByTenant(ctx, tenantID)
-		if err != nil {
-			return err
-		}
-		if got.Balance() != 150 {
-			t.Errorf("balance: got %d want 150", got.Balance())
-		}
-		if got.Version() != 2 {
-			t.Errorf("version: got %d want 2 (UPDATE bumps 1→2)", got.Version())
-		}
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("read after update: %v", err)
-	}
-}
-
 // TestLeadCreditRepository_UpsertWithVersion_ConflictOnStaleVersion —
-// load the row, persist a competing update underneath, then attempt
-// our own update — MUST return ErrConflict. This is the LOAD-BEARING
-// semantic per ADR 0059 that drives the handler's retry loop.
+// SQL-contract: load the row, persist a competing update underneath,
+// then attempt our own update — MUST return ErrConflict. The "WHERE
+// version = $expected" UPDATE returning 0 rows is the SQL-specific
+// behavior that drives the handler's retry loop per ADR 0059.
 func TestLeadCreditRepository_UpsertWithVersion_ConflictOnStaleVersion(t *testing.T) {
 	t.Parallel()
 	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
@@ -175,33 +114,11 @@ func TestLeadCreditRepository_UpsertWithVersion_ConflictOnStaleVersion(t *testin
 	}
 }
 
-// TestLeadCreditRepository_GetByTenant_ReturnsErrNotFound — typed
-// sentinel propagation on a missing row.
-func TestLeadCreditRepository_GetByTenant_ReturnsErrNotFound(t *testing.T) {
-	t.Parallel()
-	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
-	defer cancel()
-	_ = ctx // arch-test:integration-timeout-anchor
-	pool := platformPool(t)
-	tx := pg.NewTransactor(pool)
-	repo := adapters.NewLeadCreditRepository(pool, tx)
-
-	err := tx.WithinTx(t.Context(), pg.TxScopePlatform, func(ctx context.Context) error {
-		_, err := repo.GetByTenant(ctx, leadcredit.TenantID(uuid.New().String()))
-		if !errors.Is(err, leadcredit.ErrNotFound) {
-			t.Errorf("expected ErrNotFound, got %v", err)
-		}
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("tx: %v", err)
-	}
-}
-
 // TestLeadCreditRepository_UpsertWithVersion_DrainsAdjustedEventToOutbox
-// — confirms the AdjustedEvent gets translated to LeadCreditAdjustedV1
-// and lands on platform.outbox with tenant_id set (TenantScoped event;
-// NOT NULL because it has a real tenant FK per C3 semantics).
+// — SQL-contract: confirms the AdjustedEvent gets translated to
+// LeadCreditAdjustedV1 and lands on platform.outbox with tenant_id set
+// (TenantScoped event; NOT NULL because it has a real tenant FK per C3
+// semantics).
 func TestLeadCreditRepository_UpsertWithVersion_DrainsAdjustedEventToOutbox(t *testing.T) {
 	// arch-test:no-parallel — cross-tenant scan; uses TruncateAll
 	sharedPG.TruncateAll(t)

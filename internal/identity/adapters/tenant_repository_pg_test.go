@@ -11,6 +11,16 @@
 //   rows by tenant so parallel runs cannot see each others state.
 //   Brandur "Postgres at scale" + TDL Wild Workouts canon: shared
 //   infrastructure + per-test logical isolation = safe parallelism.
+//
+// SQL-CONTRACT COVERAGE for this file (ADR 0062 — adapter integration
+// tests are SQL-contract-only; business-rule + state-machine coverage
+// lives in tenanttest.FakeRepository unit tests):
+//
+//   - Outbox-row insertion in the same transaction as the tenant row on
+//     both Add (identity.tenant_registered.v1) and UpdateByID/Activate
+//     (identity.tenant_activated.v1). Watermill-sql forwarder canon.
+//   - SQLSTATE 23505 → tenant.ErrSlugTaken translation via the unique
+//     index on tenants.slug.
 
 package adapters_test
 
@@ -54,7 +64,10 @@ func newTenant(t *testing.T) *tenant.Tenant {
 	return tn
 }
 
-func TestTenantRepository_Add_PersistsRowAndOutboxEvent(t *testing.T) {
+// SQL-contract: Add writes the outbox row in the same tx as the tenant
+// row. The aggregate round-trip (slug / status) is covered by
+// tenanttest.FakeRepository.
+func TestTenantRepository_Add_PersistsOutboxEventInSameTx(t *testing.T) {
 	t.Parallel()
 	pool := repoFixture(t)
 	repo := adapters.NewTenantRepository(pool, pg.NewTransactor(pool))
@@ -63,18 +76,6 @@ func TestTenantRepository_Add_PersistsRowAndOutboxEvent(t *testing.T) {
 	tn := newTenant(t)
 	if err := repo.Add(ctx, tn); err != nil {
 		t.Fatalf("Add: %v", err)
-	}
-
-	// Round-trip: GetByID returns the same logical tenant.
-	got, err := repo.GetByID(ctx, tn.ID())
-	if err != nil {
-		t.Fatalf("GetByID: %v", err)
-	}
-	if got.Slug() != tn.Slug() {
-		t.Fatalf("slug round-trip: got %q want %q", got.Slug(), tn.Slug())
-	}
-	if got.Status() != tenant.StatusPending {
-		t.Fatalf("status round-trip: got %v want %v", got.Status(), tenant.StatusPending)
 	}
 
 	// Outbox row written with topic identity.tenant_registered.v1.
@@ -89,6 +90,8 @@ func TestTenantRepository_Add_PersistsRowAndOutboxEvent(t *testing.T) {
 	}
 }
 
+// SQL-contract: SQLSTATE 23505 on the unique tenants.slug index is
+// translated to tenant.ErrSlugTaken.
 func TestTenantRepository_Add_DuplicateSlug_ReturnsErrSlugTaken(t *testing.T) {
 	t.Parallel()
 	pool := repoFixture(t)
@@ -114,20 +117,10 @@ func TestTenantRepository_Add_DuplicateSlug_ReturnsErrSlugTaken(t *testing.T) {
 	}
 }
 
-func TestTenantRepository_GetByID_NotFound(t *testing.T) {
-	t.Parallel()
-	pool := repoFixture(t)
-	repo := adapters.NewTenantRepository(pool, pg.NewTransactor(pool))
-	ctx := t.Context()
-
-	missing := tenant.ID(ids.NewV7().String())
-	_, err := repo.GetByID(ctx, missing)
-	if !errors.Is(err, tenant.ErrNotFound) {
-		t.Fatalf("expected ErrNotFound, got %v", err)
-	}
-}
-
-func TestTenantRepository_UpdateByID_ActivatesAndDrainsEvent(t *testing.T) {
+// SQL-contract: UpdateByID also enqueues an outbox row (tenant_activated.v1)
+// in the same tx as the row UPDATE. Watermill-sql two-row-per-mutation
+// invariant for both INSERT and UPDATE paths.
+func TestTenantRepository_UpdateByID_PersistsActivatedOutboxEventInSameTx(t *testing.T) {
 	t.Parallel()
 	pool := repoFixture(t)
 	repo := adapters.NewTenantRepository(pool, pg.NewTransactor(pool))
@@ -149,17 +142,6 @@ func TestTenantRepository_UpdateByID_ActivatesAndDrainsEvent(t *testing.T) {
 		t.Fatalf("UpdateByID: %v", err)
 	}
 
-	got, err := repo.GetByID(ctx, tn.ID())
-	if err != nil {
-		t.Fatalf("GetByID after activate: %v", err)
-	}
-	if got.Status() != tenant.StatusActive {
-		t.Fatalf("expected active, got %v", got.Status())
-	}
-	if got.ActivatedAt().IsZero() {
-		t.Fatal("activated_at not set")
-	}
-
 	// Outbox now has both registered + activated events for this tenant.
 	topics := messagingtest.OutboxTopicsForTenant(t, pool, messagingtest.SchemaIdentity, tn.ID().String())
 	want := []string{"identity.tenant_registered.v1", "identity.tenant_activated.v1"}
@@ -172,32 +154,3 @@ func TestTenantRepository_UpdateByID_ActivatesAndDrainsEvent(t *testing.T) {
 		}
 	}
 }
-
-func TestTenantRepository_UpdateByID_NoOpClosureSkipsPersist(t *testing.T) {
-	t.Parallel()
-	pool := repoFixture(t)
-	repo := adapters.NewTenantRepository(pool, pg.NewTransactor(pool))
-	ctx := t.Context()
-
-	tn := newTenant(t)
-	if err := repo.Add(ctx, tn); err != nil {
-		t.Fatalf("seed Add: %v", err)
-	}
-
-	// Closure returns (false, nil) — skip persist + skip events.
-	err := repo.UpdateByID(ctx, tn.ID(), func(_ *tenant.Tenant) (bool, error) {
-		return false, nil
-	})
-	if err != nil {
-		t.Fatalf("UpdateByID: %v", err)
-	}
-
-	got, err := repo.GetByID(ctx, tn.ID())
-	if err != nil {
-		t.Fatalf("GetByID: %v", err)
-	}
-	if got.Status() != tenant.StatusPending {
-		t.Fatalf("expected unchanged status pending, got %v", got.Status())
-	}
-}
-

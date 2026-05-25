@@ -11,6 +11,25 @@
 //   rows by tenant so parallel runs cannot see each others state.
 //   Brandur "Postgres at scale" + TDL Wild Workouts canon: shared
 //   infrastructure + per-test logical isolation = safe parallelism.
+//
+// SQL-CONTRACT COVERAGE for this file (ADR 0062 + ADR 0058 — adapter
+// integration tests are SQL-contract-only; business-rule + state-
+// machine coverage lives in rolehierarchytest.FakeRepository):
+//
+//   - Partial unique index uq_role_hierarchy_active_edge_per_child
+//     (WHERE is_active) → SQLSTATE 23505 → ErrEdgeAlreadyExists.
+//   - DB trigger edge_check_cycle (SECURITY INVOKER on the edges table)
+//     rejects multi-hop cycle closures → ErrCycle.
+//   - Composite FK fk_edges_parent_same_tenant declaratively rejects
+//     cross-tenant parent references → ErrCrossTenant (declarative
+//     replacement for the Wave 9.1d SECURITY DEFINER trigger).
+//   - DB CHECK chk_edge_no_self_loop is a backstop when the aggregate's
+//     own ErrSelfReference is bypassed via UnmarshalFromDB → translated
+//     back to ErrSelfReference at the adapter layer.
+//   - Soft-delete partial-index filtering on reads — GetActiveByChild
+//     hides removed edges (WHERE removed_at IS NULL) via SQL predicate.
+//   - Recursive CTE in GetAncestorsByChild walks upward through the
+//     edge graph (Postgres-specific WITH RECURSIVE).
 
 package adapters_test
 
@@ -47,45 +66,9 @@ func freshEdge(t *testing.T, tid tenant.ID, child, parent role.ID) *rolehierarch
 	return e
 }
 
-func TestEdgeRepository_Add_HappyPath(t *testing.T) {
-	t.Parallel()
-	pool := repoFixture(t)
-	tenants := adapters.NewTenantRepository(pool, pg.NewTransactor(pool))
-	roles := adapters.NewRoleRepository(pool, pg.NewTransactor(pool))
-	edges := adapters.NewRoleHierarchyEdgeRepository(pool, pg.NewTransactor(pool))
-
-	tn := seedTenant(t, tenants)
-	ctx := tenancy.WithID(t.Context(), tenancy.ID(tn.ID().String()))
-
-	parent := newRole(t, tn.ID(), "Manager")
-	child := newRole(t, tn.ID(), "Junior")
-	if err := roles.Add(ctx, parent); err != nil {
-		t.Fatalf("seed parent: %v", err)
-	}
-	if err := roles.Add(ctx, child); err != nil {
-		t.Fatalf("seed child: %v", err)
-	}
-
-	e := freshEdge(t, tn.ID(), child.ID(), parent.ID())
-	if err := edges.Add(ctx, e); err != nil {
-		t.Fatalf("Add: %v", err)
-	}
-
-	got, err := edges.GetActiveByChild(ctx, child.ID())
-	if err != nil {
-		t.Fatalf("GetActiveByChild: %v", err)
-	}
-	if got.ID() != e.ID() {
-		t.Fatalf("id: got %q want %q", got.ID(), e.ID())
-	}
-	if got.ParentRoleID() != parent.ID() {
-		t.Fatalf("ParentRoleID: got %q want %q", got.ParentRoleID(), parent.ID())
-	}
-	if !got.IsActive() {
-		t.Fatal("IsActive: got false want true")
-	}
-}
-
+// SQL-contract: partial unique index uq_role_hierarchy_active_edge_per_child
+// (predicate `WHERE is_active`) raises SQLSTATE 23505 on a second active
+// edge for the same child → ErrEdgeAlreadyExists.
 func TestEdgeRepository_Add_RejectsDuplicateActiveChildEdge(t *testing.T) {
 	t.Parallel()
 	pool := repoFixture(t)
@@ -113,6 +96,9 @@ func TestEdgeRepository_Add_RejectsDuplicateActiveChildEdge(t *testing.T) {
 	}
 }
 
+// SQL-contract: DB trigger edge_check_cycle (SECURITY INVOKER on the
+// edges table) rejects an edge that would close a multi-hop cycle in
+// the active-edge graph. Trigger output translated to ErrCycle.
 func TestEdgeRepository_Add_RejectsCycle(t *testing.T) {
 	t.Parallel()
 	pool := repoFixture(t)
@@ -141,6 +127,10 @@ func TestEdgeRepository_Add_RejectsCycle(t *testing.T) {
 	}
 }
 
+// SQL-contract: composite FK fk_edges_parent_same_tenant declaratively
+// rejects an edge whose parent role belongs to another tenant.
+// Declarative cross-tenant safety per ADR 0058 (replaces the Wave 9.1d
+// SECURITY DEFINER trigger). Translated to ErrCrossTenant.
 func TestEdgeRepository_Add_RejectsCrossTenant(t *testing.T) {
 	t.Parallel()
 	pool := repoFixture(t)
@@ -183,7 +173,10 @@ func TestEdgeRepository_Add_RejectsCrossTenant(t *testing.T) {
 	}
 }
 
-func TestEdgeRepository_GetActiveByChild_ReturnsActiveOnly(t *testing.T) {
+// SQL-contract: soft-deleted edges vanish from GetActiveByChild via the
+// `WHERE removed_at IS NULL` filter on the read path — proves the
+// partial-index + read predicate agree at the Postgres layer.
+func TestEdgeRepository_GetActiveByChild_FiltersSoftDeleted(t *testing.T) {
 	t.Parallel()
 	pool := repoFixture(t)
 	tenants := adapters.NewTenantRepository(pool, pg.NewTransactor(pool))
@@ -217,7 +210,11 @@ func TestEdgeRepository_GetActiveByChild_ReturnsActiveOnly(t *testing.T) {
 	}
 }
 
-func TestEdgeRepository_GetAncestorsByChild_WalksUpward(t *testing.T) {
+// SQL-contract: GetAncestorsByChild uses a Postgres-specific WITH
+// RECURSIVE CTE to walk upward through the edge graph. The fake
+// approximates this with an in-memory loop, but the recursive CTE
+// + depth-first ordering is SQL-specific.
+func TestEdgeRepository_GetAncestorsByChild_RecursiveCTEWalksUpward(t *testing.T) {
 	t.Parallel()
 	pool := repoFixture(t)
 	tenants := adapters.NewTenantRepository(pool, pg.NewTransactor(pool))
@@ -261,44 +258,10 @@ func TestEdgeRepository_GetAncestorsByChild_WalksUpward(t *testing.T) {
 	}
 }
 
-func TestEdgeRepository_UpdateByID_SoftDeleteSucceeds(t *testing.T) {
-	t.Parallel()
-	pool := repoFixture(t)
-	tenants := adapters.NewTenantRepository(pool, pg.NewTransactor(pool))
-	roles := adapters.NewRoleRepository(pool, pg.NewTransactor(pool))
-	edges := adapters.NewRoleHierarchyEdgeRepository(pool, pg.NewTransactor(pool))
-
-	tn := seedTenant(t, tenants)
-	ctx := tenancy.WithID(t.Context(), tenancy.ID(tn.ID().String()))
-
-	p := newRole(t, tn.ID(), "Manager")
-	c := newRole(t, tn.ID(), "Junior")
-	for _, r := range []*role.Role{p, c} {
-		if err := roles.Add(ctx, r); err != nil {
-			t.Fatalf("seed %s: %v", r.Name(), err)
-		}
-	}
-	e := freshEdge(t, tn.ID(), c.ID(), p.ID())
-	if err := edges.Add(ctx, e); err != nil {
-		t.Fatalf("Add: %v", err)
-	}
-	upErr := edges.UpdateByID(ctx, e.ID(), func(loaded *rolehierarchy.Edge) (bool, error) {
-		return true, loaded.Remove(membership.ID(""), "soft-delete test path", time.Now())
-	})
-	if upErr != nil {
-		t.Fatalf("UpdateByID: %v", upErr)
-	}
-	// Single-parent invariant freed — adding a new edge for the same
-	// child must now succeed.
-	p2 := newRole(t, tn.ID(), "NewManager")
-	if err := roles.Add(ctx, p2); err != nil {
-		t.Fatalf("seed p2: %v", err)
-	}
-	if err := edges.Add(ctx, freshEdge(t, tn.ID(), c.ID(), p2.ID())); err != nil {
-		t.Fatalf("re-add after soft-delete: %v", err)
-	}
-}
-
+// SQL-contract: DB CHECK chk_edge_no_self_loop is the schema-level
+// backstop when the aggregate's own ErrSelfReference is bypassed via
+// UnmarshalFromDB (which doesn't re-validate). The check_violation must
+// translate back to ErrSelfReference at the adapter layer.
 func TestEdgeRepository_Add_RejectsSelfReference(t *testing.T) {
 	t.Parallel()
 	pool := repoFixture(t)

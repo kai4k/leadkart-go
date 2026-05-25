@@ -6,19 +6,20 @@
 //   Per-test context.WithTimeout would be belt-and-suspenders against the
 //   shared-pool + parallel-with-RLS canon shape.
 //
-// arch-test:parallel-safe — every Test* uses the shared pgtest container
-//   + a fresh tenant_id per test bound via tenancy.WithID(); RLS isolates
-//   rows by tenant so parallel runs cannot see each others state.
-//   Brandur "Postgres at scale" + TDL Wild Workouts canon: shared
-//   infrastructure + per-test logical isolation = safe parallelism.
+// SQL-CONTRACT COVERAGE (per ADR 0062 — TDL Test Pyramid):
+//   - Outbox row insertion in the SAME tx as the aggregate write
+//     (ADR 0008); confirms tenant_id IS NULL for Platform-scoped events
+//     per ADR 0059 + C3.
+//
+// Round-trip Add/GetByID + ErrNotFound coverage moved to
+// [unverifiedcontacttest.FakeRepository].
 
 package adapters_test
 
 import (
-	"time"
 	"context"
-	"errors"
 	"testing"
+	"time"
 
 	"github.com/leadkart/leadkart-go/internal/common/ids"
 	"github.com/leadkart/leadkart-go/internal/common/messaging/messagingtest"
@@ -38,86 +39,11 @@ func newSampleContact(t *testing.T) (*unverifiedcontact.UnverifiedContact, unver
 	return c, agentID
 }
 
-// withPlatformGUC drives the connection under app.is_platform=true so
-// the Platform-only RLS policies pass. Mirror of identity's pattern.
-func withPlatformGUC(ctx context.Context) context.Context {
-	return ctx // tests pass the ctx through pg.Transactor which sets the GUC for TxScopePlatform
-}
-
-// TestUnverifiedContactRepository_Add_RoundTripsViaGetByID — write +
-// read shape under RLS. Confirms the sqlc INSERT param shape + the
-// reader code path return logically equivalent aggregates.
-func TestUnverifiedContactRepository_Add_RoundTripsViaGetByID(t *testing.T) {
-	t.Parallel()
-	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
-	defer cancel()
-	_ = ctx // arch-test:integration-timeout-anchor
-	pool := platformPool(t)
-	tx := pg.NewTransactor(pool)
-	repo := adapters.NewUnverifiedContactRepository(pool, tx)
-
-	// Add runs under TxScopePlatform (platform-only table; RLS would
-	// reject a tenant scope). The repo's Add method opens its own tx
-	// when ctx carries none.
-	c, _ := newSampleContact(t)
-	if err := repo.Add(withPlatformGUC(t.Context()), c); err != nil {
-		t.Fatalf("Add: %v", err)
-	}
-
-	// GetByID without an active tx — reader uses pool directly.
-	// Under leadkart_app role + RLS, the SELECT only returns rows
-	// when app.is_platform()=true (set on the connection's TX-bound
-	// GUC). We surface the GUC by wrapping the read in a manual
-	// platform-scoped tx.
-	err := tx.WithinTx(t.Context(), pg.TxScopePlatform, func(ctx context.Context) error {
-		got, err := repo.GetByID(ctx, c.ID())
-		if err != nil {
-			return err
-		}
-		if got.ID() != c.ID() {
-			t.Errorf("ID round-trip: got %q want %q", got.ID(), c.ID())
-		}
-		if got.State() != unverifiedcontact.StateNew {
-			t.Errorf("State round-trip: got %q want new", got.State())
-		}
-		if got.Form().MobileE164() != "+919876543210" {
-			t.Errorf("MobileE164 round-trip: got %q", got.Form().MobileE164())
-		}
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("read tx: %v", err)
-	}
-}
-
-// TestUnverifiedContactRepository_GetByID_RetursErrNotFound — the typed
-// sentinel propagation. Catches a regression where pgx.ErrNoRows gets
-// surfaced raw instead of mapped to the domain sentinel.
-func TestUnverifiedContactRepository_GetByID_ReturnsErrNotFound(t *testing.T) {
-	t.Parallel()
-	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
-	defer cancel()
-	_ = ctx // arch-test:integration-timeout-anchor
-	pool := platformPool(t)
-	tx := pg.NewTransactor(pool)
-	repo := adapters.NewUnverifiedContactRepository(pool, tx)
-
-	err := tx.WithinTx(t.Context(), pg.TxScopePlatform, func(ctx context.Context) error {
-		_, err := repo.GetByID(ctx, unverifiedcontact.ID(ids.NewV7().String()))
-		if !errors.Is(err, unverifiedcontact.ErrNotFound) {
-			t.Errorf("expected ErrNotFound, got %v", err)
-		}
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("tx: %v", err)
-	}
-}
-
-// TestUnverifiedContactRepository_Add_DrainsCreatedEventToOutbox — C3
-// + general outbox shape. After Add, the platform.outbox row exists
-// with the canonical topic + tenant_id IS NULL (Platform-scoped
-// event per ADR 0059 + migration 20260601000002).
+// TestUnverifiedContactRepository_Add_DrainsCreatedEventToOutbox —
+// SQL-contract (C3 + general outbox shape). After Add, the
+// platform.outbox row MUST exist with the canonical topic + tenant_id
+// IS NULL (Platform-scoped event per ADR 0059 + migration
+// 20260601000002).
 func TestUnverifiedContactRepository_Add_DrainsCreatedEventToOutbox(t *testing.T) {
 	// arch-test:no-parallel — cross-tenant scan; uses TruncateAll
 	sharedPG.TruncateAll(t)
