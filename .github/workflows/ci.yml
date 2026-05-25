@@ -141,6 +141,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.go == 'true' || github.event_name == 'push'
     steps:
+      - uses: actions/checkout@v6
       - uses: ./.github/actions/go-setup
 
       - name: Vet
@@ -188,6 +189,7 @@ jobs:
     needs: [changes, unit]
     if: needs.changes.outputs.go == 'true' || github.event_name == 'push'
     steps:
+      - uses: actions/checkout@v6
       - uses: ./.github/actions/go-setup
 
       - name: Run architecture tests (task ci:test:arch)
@@ -215,7 +217,12 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: '22'
-          cache: 'npm'
+          # No `cache: 'npm'` here — npm cache requires a
+          # package-lock.json which this repo doesn't ship (Spectral
+          # runs via `npx --yes @stoplight/spectral-cli@<pinned>`).
+          # The npx download is ~5s on warm cache; not worth the
+          # ceremony of adding a placeholder package.json just to
+          # unlock the npm cache key.
 
       - uses: arduino/setup-task@v2
         with:
@@ -251,6 +258,7 @@ jobs:
           --health-timeout 3s
           --health-retries 15
     steps:
+      - uses: actions/checkout@v6
       - uses: ./.github/actions/go-setup
         with:
           install-task: 'false'
@@ -281,6 +289,7 @@ jobs:
     needs: [changes, unit]
     if: needs.changes.outputs.go == 'true' || github.event_name == 'push'
     steps:
+      - uses: actions/checkout@v6
       - uses: ./.github/actions/go-setup
 
       # Pre-pull Postgres image — testcontainers does it on first use, but

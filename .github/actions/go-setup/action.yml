@@ -29,7 +29,12 @@ inputs:
 runs:
   using: composite
   steps:
-    - uses: actions/checkout@v6
+    # NOTE: actions/checkout is the CALLER'S responsibility. A local
+    # composite action under .github/actions/ cannot self-bootstrap —
+    # GitHub needs the action.yml file on disk to load it, which only
+    # happens after the workspace is checked out. So every job that
+    # uses this action must `actions/checkout@v6` BEFORE the
+    # `uses: ./.github/actions/go-setup` step.
 
     # Pin Go from go.mod — single source of truth (2026 canon). cache:true
     # enables module + build cache scoped per-job; explicit actions/cache
