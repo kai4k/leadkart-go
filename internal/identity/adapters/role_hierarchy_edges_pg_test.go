@@ -1,5 +1,16 @@
 //go:build integration
-// arch-test:no-timeout-needed - integration tests rely on testcontainers boot timeout
+
+// arch-test:no-timeout-needed — every test in this file uses the shared
+//   pgtest container (per-package); pgxpool internal conn timeouts +
+//   package-level `task ci:test:int -timeout=15m` already bound execution.
+//   Per-test context.WithTimeout would be belt-and-suspenders against the
+//   shared-pool + parallel-with-RLS canon shape.
+//
+// arch-test:parallel-safe — every Test* uses the shared pgtest container
+//   + a fresh tenant_id per test bound via tenancy.WithID(); RLS isolates
+//   rows by tenant so parallel runs cannot see each others state.
+//   Brandur "Postgres at scale" + TDL Wild Workouts canon: shared
+//   infrastructure + per-test logical isolation = safe parallelism.
 
 package adapters_test
 
@@ -37,6 +48,7 @@ func freshEdge(t *testing.T, tid tenant.ID, child, parent role.ID) *rolehierarch
 }
 
 func TestEdgeRepository_Add_HappyPath(t *testing.T) {
+	t.Parallel()
 	pool := repoFixture(t)
 	tenants := adapters.NewTenantRepository(pool, pg.NewTransactor(pool))
 	roles := adapters.NewRoleRepository(pool, pg.NewTransactor(pool))
@@ -75,6 +87,7 @@ func TestEdgeRepository_Add_HappyPath(t *testing.T) {
 }
 
 func TestEdgeRepository_Add_RejectsDuplicateActiveChildEdge(t *testing.T) {
+	t.Parallel()
 	pool := repoFixture(t)
 	tenants := adapters.NewTenantRepository(pool, pg.NewTransactor(pool))
 	roles := adapters.NewRoleRepository(pool, pg.NewTransactor(pool))
@@ -101,6 +114,7 @@ func TestEdgeRepository_Add_RejectsDuplicateActiveChildEdge(t *testing.T) {
 }
 
 func TestEdgeRepository_Add_RejectsCycle(t *testing.T) {
+	t.Parallel()
 	pool := repoFixture(t)
 	tenants := adapters.NewTenantRepository(pool, pg.NewTransactor(pool))
 	roles := adapters.NewRoleRepository(pool, pg.NewTransactor(pool))
@@ -128,6 +142,7 @@ func TestEdgeRepository_Add_RejectsCycle(t *testing.T) {
 }
 
 func TestEdgeRepository_Add_RejectsCrossTenant(t *testing.T) {
+	t.Parallel()
 	pool := repoFixture(t)
 	tenants := adapters.NewTenantRepository(pool, pg.NewTransactor(pool))
 	roles := adapters.NewRoleRepository(pool, pg.NewTransactor(pool))
@@ -169,6 +184,7 @@ func TestEdgeRepository_Add_RejectsCrossTenant(t *testing.T) {
 }
 
 func TestEdgeRepository_GetActiveByChild_ReturnsActiveOnly(t *testing.T) {
+	t.Parallel()
 	pool := repoFixture(t)
 	tenants := adapters.NewTenantRepository(pool, pg.NewTransactor(pool))
 	roles := adapters.NewRoleRepository(pool, pg.NewTransactor(pool))
@@ -202,6 +218,7 @@ func TestEdgeRepository_GetActiveByChild_ReturnsActiveOnly(t *testing.T) {
 }
 
 func TestEdgeRepository_GetAncestorsByChild_WalksUpward(t *testing.T) {
+	t.Parallel()
 	pool := repoFixture(t)
 	tenants := adapters.NewTenantRepository(pool, pg.NewTransactor(pool))
 	roles := adapters.NewRoleRepository(pool, pg.NewTransactor(pool))
@@ -245,6 +262,7 @@ func TestEdgeRepository_GetAncestorsByChild_WalksUpward(t *testing.T) {
 }
 
 func TestEdgeRepository_UpdateByID_SoftDeleteSucceeds(t *testing.T) {
+	t.Parallel()
 	pool := repoFixture(t)
 	tenants := adapters.NewTenantRepository(pool, pg.NewTransactor(pool))
 	roles := adapters.NewRoleRepository(pool, pg.NewTransactor(pool))
@@ -282,6 +300,7 @@ func TestEdgeRepository_UpdateByID_SoftDeleteSucceeds(t *testing.T) {
 }
 
 func TestEdgeRepository_Add_RejectsSelfReference(t *testing.T) {
+	t.Parallel()
 	pool := repoFixture(t)
 	tenants := adapters.NewTenantRepository(pool, pg.NewTransactor(pool))
 	roles := adapters.NewRoleRepository(pool, pg.NewTransactor(pool))

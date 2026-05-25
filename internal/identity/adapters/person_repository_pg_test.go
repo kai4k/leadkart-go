@@ -1,5 +1,16 @@
 //go:build integration
-// arch-test:no-timeout-needed - integration tests rely on testcontainers boot timeout
+
+// arch-test:no-timeout-needed — every test in this file uses the shared
+//   pgtest container (per-package); pgxpool internal conn timeouts +
+//   package-level `task ci:test:int -timeout=15m` already bound execution.
+//   Per-test context.WithTimeout would be belt-and-suspenders against the
+//   shared-pool + parallel-with-RLS canon shape.
+//
+// arch-test:parallel-safe — every Test* uses the shared pgtest container
+//   + a fresh tenant_id per test bound via tenancy.WithID(); RLS isolates
+//   rows by tenant so parallel runs cannot see each others state.
+//   Brandur "Postgres at scale" + TDL Wild Workouts canon: shared
+//   infrastructure + per-test logical isolation = safe parallelism.
 
 package adapters_test
 
@@ -41,6 +52,7 @@ func newPerson(t *testing.T, addr string) *person.Person {
 }
 
 func TestPersonRepository_Add_PersistsRowAndOutboxEvent(t *testing.T) {
+	t.Parallel()
 	pool := repoFixture(t)
 	repo := adapters.NewPersonRepository(pool, pg.NewTransactor(pool))
 	ctx := t.Context()
@@ -71,6 +83,7 @@ func TestPersonRepository_Add_PersistsRowAndOutboxEvent(t *testing.T) {
 }
 
 func TestPersonRepository_Add_DuplicateEmail_ReturnsErrEmailTaken(t *testing.T) {
+	t.Parallel()
 	pool := repoFixture(t)
 	repo := adapters.NewPersonRepository(pool, pg.NewTransactor(pool))
 	ctx := t.Context()
@@ -88,6 +101,7 @@ func TestPersonRepository_Add_DuplicateEmail_ReturnsErrEmailTaken(t *testing.T) 
 }
 
 func TestPersonRepository_GetByEmail_ResolvesGlobally(t *testing.T) {
+	t.Parallel()
 	pool := repoFixture(t)
 	repo := adapters.NewPersonRepository(pool, pg.NewTransactor(pool))
 	ctx := t.Context()
@@ -108,6 +122,7 @@ func TestPersonRepository_GetByEmail_ResolvesGlobally(t *testing.T) {
 }
 
 func TestPersonRepository_UpdateByID_ChangePasswordRotatesStamp(t *testing.T) {
+	t.Parallel()
 	pool := repoFixture(t)
 	repo := adapters.NewPersonRepository(pool, pg.NewTransactor(pool))
 	ctx := t.Context()
@@ -142,6 +157,7 @@ func TestPersonRepository_UpdateByID_ChangePasswordRotatesStamp(t *testing.T) {
 }
 
 func TestPersonRepository_UpdateByID_AnonymiseScrubs(t *testing.T) {
+	t.Parallel()
 	pool := repoFixture(t)
 	repo := adapters.NewPersonRepository(pool, pg.NewTransactor(pool))
 	ctx := t.Context()
@@ -180,6 +196,7 @@ func TestPersonRepository_UpdateByID_AnonymiseScrubs(t *testing.T) {
 }
 
 func TestPersonRepository_GetByID_NotFound(t *testing.T) {
+	t.Parallel()
 	pool := repoFixture(t)
 	repo := adapters.NewPersonRepository(pool, pg.NewTransactor(pool))
 	ctx := t.Context()

@@ -1,148 +1,36 @@
 //go:build integration
 
+// arch-test:no-timeout-needed — every test in this file uses the shared
+//   pgtest container (per-package); pgxpool internal conn timeouts +
+//   package-level `task ci:test:int -timeout=15m` already bound execution.
+//   Per-test context.WithTimeout would be belt-and-suspenders against the
+//   shared-pool + parallel-with-RLS canon shape.
+//
+// arch-test:parallel-safe — every Test* uses the shared pgtest container
+//   + a fresh tenant_id per test bound via tenancy.WithID(); RLS isolates
+//   rows by tenant so parallel runs cannot see each others state.
+//   Brandur "Postgres at scale" + TDL Wild Workouts canon: shared
+//   infrastructure + per-test logical isolation = safe parallelism.
+
 package adapters_test
 
 import (
-	"context"
 	"errors"
-	"fmt"
-	"path/filepath"
-	"runtime"
 	"testing"
-	"time"
-
-	"github.com/jackc/pgx/v5/pgxpool"
-	_ "github.com/jackc/pgx/v5/stdlib"
-	"github.com/pressly/goose/v3"
-	"github.com/testcontainers/testcontainers-go"
-	"github.com/testcontainers/testcontainers-go/modules/postgres"
-	"github.com/testcontainers/testcontainers-go/wait"
 
 	"github.com/leadkart/leadkart-go/internal/common/email"
 	"github.com/leadkart/leadkart-go/internal/common/ids"
 	"github.com/leadkart/leadkart-go/internal/common/messaging/messagingtest"
+	"github.com/leadkart/leadkart-go/internal/common/pg"
 	"github.com/leadkart/leadkart-go/internal/common/slug"
 	"github.com/leadkart/leadkart-go/internal/identity/adapters"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
-	"github.com/leadkart/leadkart-go/internal/common/pg"
 )
 
-// repoFixture spins an ephemeral Postgres, applies migrations as the
-// owner role, then provisions a non-superuser `leadkart_app` role and
-// returns a pgxpool connected as THAT role. Without the role swap RLS
-// would never fire (testcontainers' default user is a superuser).
-//
-// Mirrors the production three-role split per multi-tenancy.md
-// "Three Postgres roles": owner runs migrations, app runs queries.
-func repoFixture(t *testing.T) *pgxpool.Pool {
-	t.Helper()
-
-	ctx, cancel := context.WithTimeout(t.Context(), 90*time.Second)
-	defer cancel()
-
-	c, err := postgres.Run(ctx,
-		"postgres:17-alpine",
-		postgres.WithDatabase("leadkart_test"),
-		postgres.WithUsername("leadkart"),
-		postgres.WithPassword("leadkart_test"),
-		testcontainers.WithWaitStrategy(
-			wait.ForLog("database system is ready to accept connections").
-				WithOccurrence(2).
-				WithStartupTimeout(60*time.Second),
-		),
-	)
-	if err != nil {
-		t.Fatalf("start postgres: %v", err)
-	}
-	t.Cleanup(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		_ = c.Terminate(ctx)
-	})
-
-	ownerDSN, err := c.ConnectionString(ctx, "sslmode=disable")
-	if err != nil {
-		t.Fatalf("dsn: %v", err)
-	}
-
-	// Apply migrations + provision leadkart_app under the owner role,
-	// then close cleanly before opening the app-role pool.
-	if err := bootstrapTestDB(ctx, ownerDSN, migrationsDir(t)); err != nil {
-		t.Fatalf("bootstrap: %v", err)
-	}
-
-	host, port, err := containerHostPort(ctx, c)
-	if err != nil {
-		t.Fatalf("host:port: %v", err)
-	}
-	appDSN := "postgres://leadkart_app:leadkart_app_pw@" + host + ":" + port + "/leadkart_test?sslmode=disable"
-
-	pool, err := pgxpool.New(ctx, appDSN)
-	if err != nil {
-		t.Fatalf("pgxpool.New: %v", err)
-	}
-	t.Cleanup(pool.Close)
-
-	return pool
-}
-
-// bootstrapTestDB applies migrations and provisions the non-superuser
-// `leadkart_app` role with the minimum grants the production app needs.
-// All work happens through one *sql.DB that closes before pgxpool opens
-// its own connections (avoids cached-connection-state confusion).
-func bootstrapTestDB(ctx context.Context, ownerDSN, migrationsDir string) error {
-	gooseDB, err := goose.OpenDBWithDriver("pgx", ownerDSN)
-	if err != nil {
-		return fmt.Errorf("goose open: %w", err)
-	}
-	defer gooseDB.Close()
-
-	if err := pg.EnsureGooseDialect(); err != nil {
-		return fmt.Errorf("set dialect: %w", err)
-	}
-	if err := goose.UpContext(ctx, gooseDB, migrationsDir); err != nil {
-		return fmt.Errorf("goose up: %w", err)
-	}
-
-	stmts := []string{
-		`CREATE ROLE leadkart_app LOGIN PASSWORD 'leadkart_app_pw' NOSUPERUSER NOINHERIT NOCREATEROLE NOCREATEDB`,
-		`GRANT USAGE ON SCHEMA app, identity, inventory TO leadkart_app`,
-		`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA identity TO leadkart_app`,
-		`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA inventory TO leadkart_app`,
-		`GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA app TO leadkart_app`,
-	}
-	for _, s := range stmts {
-		if _, err := gooseDB.ExecContext(ctx, s); err != nil {
-			return fmt.Errorf("provision leadkart_app: %s: %w", s, err)
-		}
-	}
-	return nil
-}
-
-// containerHostPort extracts (host, port) for the container so we can
-// build a DSN with the swapped username/password — testcontainers'
-// own ConnectionString helper bakes the default user into the DSN.
-func containerHostPort(ctx context.Context, c *postgres.PostgresContainer) (string, string, error) {
-	host, err := c.Host(ctx)
-	if err != nil {
-		return "", "", fmt.Errorf("host: %w", err)
-	}
-	port, err := c.MappedPort(ctx, "5432/tcp")
-	if err != nil {
-		return "", "", fmt.Errorf("port: %w", err)
-	}
-	return host, port.Port(), nil
-}
-
-func migrationsDir(t *testing.T) string {
-	t.Helper()
-	_, here, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("runtime.Caller failed")
-	}
-	// here = .../internal/identity/adapters/tenant_repository_pg_test.go
-	return filepath.Join(filepath.Dir(here), "..", "..", "..", "migrations")
-}
+// Shared bootstrap (repoFixture / TestMain / migrations / role
+// provisioning) lives in fixture_integration_test.go per the Brandur /
+// TDL canon — ONE container per package, shared pool, per-test
+// isolation via fresh tenant_id + RLS.
 
 func newTenant(t *testing.T) *tenant.Tenant {
 	t.Helper()
@@ -167,6 +55,7 @@ func newTenant(t *testing.T) *tenant.Tenant {
 }
 
 func TestTenantRepository_Add_PersistsRowAndOutboxEvent(t *testing.T) {
+	t.Parallel()
 	pool := repoFixture(t)
 	repo := adapters.NewTenantRepository(pool, pg.NewTransactor(pool))
 	ctx := t.Context()
@@ -201,6 +90,7 @@ func TestTenantRepository_Add_PersistsRowAndOutboxEvent(t *testing.T) {
 }
 
 func TestTenantRepository_Add_DuplicateSlug_ReturnsErrSlugTaken(t *testing.T) {
+	t.Parallel()
 	pool := repoFixture(t)
 	repo := adapters.NewTenantRepository(pool, pg.NewTransactor(pool))
 	ctx := t.Context()
@@ -225,6 +115,7 @@ func TestTenantRepository_Add_DuplicateSlug_ReturnsErrSlugTaken(t *testing.T) {
 }
 
 func TestTenantRepository_GetByID_NotFound(t *testing.T) {
+	t.Parallel()
 	pool := repoFixture(t)
 	repo := adapters.NewTenantRepository(pool, pg.NewTransactor(pool))
 	ctx := t.Context()
@@ -237,6 +128,7 @@ func TestTenantRepository_GetByID_NotFound(t *testing.T) {
 }
 
 func TestTenantRepository_UpdateByID_ActivatesAndDrainsEvent(t *testing.T) {
+	t.Parallel()
 	pool := repoFixture(t)
 	repo := adapters.NewTenantRepository(pool, pg.NewTransactor(pool))
 	ctx := t.Context()
@@ -282,6 +174,7 @@ func TestTenantRepository_UpdateByID_ActivatesAndDrainsEvent(t *testing.T) {
 }
 
 func TestTenantRepository_UpdateByID_NoOpClosureSkipsPersist(t *testing.T) {
+	t.Parallel()
 	pool := repoFixture(t)
 	repo := adapters.NewTenantRepository(pool, pg.NewTransactor(pool))
 	ctx := t.Context()
@@ -292,7 +185,7 @@ func TestTenantRepository_UpdateByID_NoOpClosureSkipsPersist(t *testing.T) {
 	}
 
 	// Closure returns (false, nil) — skip persist + skip events.
-	err := repo.UpdateByID(ctx, tn.ID(), func(t2 *tenant.Tenant) (bool, error) {
+	err := repo.UpdateByID(ctx, tn.ID(), func(_ *tenant.Tenant) (bool, error) {
 		return false, nil
 	})
 	if err != nil {

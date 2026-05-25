@@ -166,7 +166,13 @@ func TestArch_BoundedChannelBuffers(t *testing.T) {
 // ----------------------------------------------------------------------------
 //
 // Every package that ships *_integration_test.go files has a TestMain
-// invoking goleak.VerifyTestMain (or imports a helper that wraps it).
+// that runs a goroutine-leak check via goleak — either:
+//   - `goleak.VerifyTestMain(m, ...)` — the simple shape (goleak owns
+//     the m.Run lifecycle); OR
+//   - `goleak.Find(...)` after a custom m.Run wrapper — required when
+//     TestMain ALSO needs to wrap shared infrastructure (e.g.
+//     pgtest.RunMain). Per uber-go/goleak README: "If you need to do
+//     additional cleanup, use goleak.Find()."
 // Per ADR 0019 + uber-go/goleak README: integration tests with
 // testcontainers spawn long-lived goroutines (pgx pool, watermill
 // subscriber) — a leak across test runs masks bugs the next test
@@ -208,7 +214,12 @@ func TestArch_GoleakInIntegrationTests(t *testing.T) {
 				continue
 			}
 			text := string(raw)
-			if strings.Contains(text, "goleak.VerifyTestMain") {
+			// Accept either the simple shape (VerifyTestMain owns m.Run)
+			// OR the manual-wrap shape (goleak.Find after a custom
+			// m.Run wrapper like pgtest.RunMain). Both satisfy the
+			// uber-go/goleak README guidance.
+			if strings.Contains(text, "goleak.VerifyTestMain") ||
+				strings.Contains(text, "goleak.Find") {
 				hasGoleak = true
 				break
 			}
@@ -219,7 +230,7 @@ func TestArch_GoleakInIntegrationTests(t *testing.T) {
 	}
 
 	if len(violations) > 0 {
-		t.Errorf("integration-test package does not wire goleak.VerifyTestMain — add testmain_integration_test.go (Uber goleak README + ADR 0019):")
+		t.Errorf("integration-test package does not wire goleak — add goleak.VerifyTestMain (or goleak.Find after a custom wrapper like pgtest.RunMain) per Uber goleak README + ADR 0019:")
 		for _, v := range violations {
 			t.Logf("  %s", v.dir)
 		}

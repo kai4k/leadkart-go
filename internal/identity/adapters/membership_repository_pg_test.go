@@ -1,5 +1,16 @@
 //go:build integration
-// arch-test:no-timeout-needed - integration tests rely on testcontainers boot timeout
+
+// arch-test:no-timeout-needed — every test in this file uses the shared
+//   pgtest container (per-package); pgxpool internal conn timeouts +
+//   package-level `task ci:test:int -timeout=15m` already bound execution.
+//   Per-test context.WithTimeout would be belt-and-suspenders against the
+//   shared-pool + parallel-with-RLS canon shape.
+//
+// arch-test:parallel-safe — every Test* uses the shared pgtest container
+//   + a fresh tenant_id per test bound via tenancy.WithID(); RLS isolates
+//   rows by tenant so parallel runs cannot see each others state.
+//   Brandur "Postgres at scale" + TDL Wild Workouts canon: shared
+//   infrastructure + per-test logical isolation = safe parallelism.
 
 package adapters_test
 
@@ -59,6 +70,7 @@ func seedPerson(t *testing.T, repo *adapters.PersonRepository, addr string) *per
 }
 
 func TestMembershipRepository_Add_PersistsRowAndOutboxEvent(t *testing.T) {
+	t.Parallel()
 	pool := repoFixture(t)
 	tx := pg.NewTransactor(pool)
 	tenants := adapters.NewTenantRepository(pool, tx)
@@ -98,6 +110,7 @@ func TestMembershipRepository_Add_PersistsRowAndOutboxEvent(t *testing.T) {
 }
 
 func TestMembershipRepository_Add_SecondActive_ReturnsErrAlreadyActive(t *testing.T) {
+	t.Parallel()
 	pool := repoFixture(t)
 	tx := pg.NewTransactor(pool)
 	tenants := adapters.NewTenantRepository(pool, tx)
@@ -126,6 +139,7 @@ func TestMembershipRepository_Add_SecondActive_ReturnsErrAlreadyActive(t *testin
 }
 
 func TestMembershipRepository_GetByID_OutsideTenantScope_NotFound(t *testing.T) {
+	t.Parallel()
 	pool := repoFixture(t)
 	tx := pg.NewTransactor(pool)
 	tenants := adapters.NewTenantRepository(pool, tx)
@@ -151,6 +165,7 @@ func TestMembershipRepository_GetByID_OutsideTenantScope_NotFound(t *testing.T) 
 }
 
 func TestMembershipRepository_UpdateByID_DeactivateClearsActiveSlot(t *testing.T) {
+	t.Parallel()
 	pool := repoFixture(t)
 	tx := pg.NewTransactor(pool)
 	tenants := adapters.NewTenantRepository(pool, tx)
@@ -188,6 +203,7 @@ func TestMembershipRepository_UpdateByID_DeactivateClearsActiveSlot(t *testing.T
 }
 
 func TestMembershipRepository_GetActiveForPerson_BypassesRLS(t *testing.T) {
+	t.Parallel()
 	pool := repoFixture(t)
 	tx := pg.NewTransactor(pool)
 	tenants := adapters.NewTenantRepository(pool, tx)
@@ -215,6 +231,7 @@ func TestMembershipRepository_GetActiveForPerson_BypassesRLS(t *testing.T) {
 }
 
 func TestMembershipRepository_GetActiveForPerson_NoActive_NotFound(t *testing.T) {
+	t.Parallel()
 	pool := repoFixture(t)
 	tx := pg.NewTransactor(pool)
 	persons := adapters.NewPersonRepository(pool, tx)
@@ -230,6 +247,7 @@ func TestMembershipRepository_GetActiveForPerson_NoActive_NotFound(t *testing.T)
 // ----- Task 18 — child-table state (roles + overrides + profile) ------------
 
 func TestMembershipRepository_Add_PersistsRoleAssignmentsAndOverrides(t *testing.T) {
+	t.Parallel()
 	pool := repoFixture(t)
 	tx := pg.NewTransactor(pool)
 	persons := adapters.NewPersonRepository(pool, tx)
@@ -307,6 +325,7 @@ func TestMembershipRepository_Add_PersistsRoleAssignmentsAndOverrides(t *testing
 }
 
 func TestMembershipRepository_UpdateByID_ReplacesRoleAssignmentsAndOverrides(t *testing.T) {
+	t.Parallel()
 	pool := repoFixture(t)
 	tx := pg.NewTransactor(pool)
 	persons := adapters.NewPersonRepository(pool, tx)
@@ -370,6 +389,7 @@ func TestMembershipRepository_UpdateByID_ReplacesRoleAssignmentsAndOverrides(t *
 }
 
 func TestMembershipRepository_Add_RejectsCrossTenantRoleAssignment(t *testing.T) {
+	t.Parallel()
 	pool := repoFixture(t)
 	tx := pg.NewTransactor(pool)
 	persons := adapters.NewPersonRepository(pool, tx)
