@@ -295,13 +295,126 @@ func waitFor(t *testing.T, cond func() bool, timeout time.Duration, msg string) 
 	t.Fatal(msg)
 }
 
-func TestRevokeFamilies_OnPasswordChanged(t *testing.T) {
+// TestRevokeFamilies_PersonLevelCascade is the consolidated cascade
+// gate for all four Person-level revocation triggers per ADR 0021 +
+// ADR 0029. The four subscribers (password-changed, anonymised,
+// globally-suspended, email-changed) share the SAME wiring shape —
+// only the event payload + expected `revoke_reason` string differ.
+// Table-driving them into one test cuts four pgtest-bound runs to a
+// single wired-fixture boot with four t.Run subcases.
+//
+// SQL-contract coverage retained:
+//   - subscriber finds Active families via ListActiveForPerson (RLS-
+//     bypassed platform query)
+//   - revoke transitions land via UpdateByID (UPDATE → revoked_at +
+//     revoke_reason write)
+//   - reason string is what the subscriber writes (cross-driver
+//     payload propagation contract)
+//
+// Per-aggregate state-machine + business-rule coverage lives in
+// refreshtokentest.FakeRepository unit tests (ADR 0062).
+func TestRevokeFamilies_PersonLevelCascade(t *testing.T) {
 	t.Parallel()
 	fx := newFixture(t)
 	pubsub, _, stop := wireRouter(t, fx)
 	defer stop()
 
-	p := fx.seedPerson(t, "alice@flow.test")
+	// Build one Person + Tenant + Family per subcase upfront so
+	// subcases stay parallel-safe under the shared fixture (each
+	// subcase has its own PersonID + Family rows; no cross-case
+	// shared mutable state).
+	type personLevelCase struct {
+		name       string
+		seedEmail  string
+		event      func(pid uuid.UUID) integrationevents.Event
+		wantReason string
+	}
+	cases := []personLevelCase{
+		{
+			name:      "PasswordChanged",
+			seedEmail: "alice@flow.test",
+			event: func(pid uuid.UUID) integrationevents.Event {
+				return integrationevents.PersonPasswordChangedV1{
+					PersonID:      pid,
+					OccurredAtUTC: time.Now().UTC(),
+				}
+			},
+			wantReason: "password_changed",
+		},
+		{
+			name:      "Anonymised",
+			seedEmail: "anon@flow.test",
+			event: func(pid uuid.UUID) integrationevents.Event {
+				return integrationevents.PersonAnonymisedV1{
+					PersonID:      pid,
+					OccurredAtUTC: time.Now().UTC(),
+				}
+			},
+			wantReason: "person_anonymised",
+		},
+		{
+			name:      "GloballySuspended",
+			seedEmail: "suspended@flow.test",
+			event: func(pid uuid.UUID) integrationevents.Event {
+				return integrationevents.PersonGloballySuspendedV1{
+					PersonID:      pid,
+					Reason:        "compliance: cross-tenant fraud 2026-05-07",
+					OccurredAtUTC: time.Now().UTC(),
+				}
+			},
+			wantReason: "globally_suspended",
+		},
+		{
+			name:      "EmailChanged",
+			seedEmail: "old-email@flow.test",
+			event: func(pid uuid.UUID) integrationevents.Event {
+				return integrationevents.PersonEmailChangedV1{
+					PersonID:      pid,
+					OldEmail:      "old-email@flow.test",
+					NewEmail:      "new-email@flow.test",
+					OccurredAtUTC: time.Now().UTC(),
+				}
+			},
+			wantReason: "email_changed",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			// Each subcase owns its own Person + Family rows under
+			// the shared subscriber + router. PersonID isolation via
+			// unique email seed prevents cross-subcase interference.
+			p := fx.seedPerson(t, tc.seedEmail)
+			tn := fx.seedTenant(t)
+			f := fx.seedFamily(t, p, tn)
+
+			pidUUID, _ := uuid.Parse(p.ID().String())
+			publishEvent(t, pubsub, tc.event(pidUUID), uuid.Nil)
+
+			waitFor(t, func() bool {
+				got, err := fx.families.GetByID(t.Context(), f.ID())
+				if err != nil {
+					return false
+				}
+				return got.IsRevoked() && got.RevokeReason() == tc.wantReason
+			}, 3*time.Second, "subscriber did not revoke family with reason="+tc.wantReason)
+		})
+	}
+}
+
+// TestRevokeFamilies_PasswordChanged_RevokesAllPersonFamilies — the
+// password-changed case is special: a single event must revoke EVERY
+// active family for the Person (multi-device logout). Kept as its own
+// test because the assertion shape differs from the single-family
+// cases above (list-all-active vs. specific-family lookup).
+func TestRevokeFamilies_PasswordChanged_RevokesAllPersonFamilies(t *testing.T) {
+	t.Parallel()
+	fx := newFixture(t)
+	pubsub, _, stop := wireRouter(t, fx)
+	defer stop()
+
+	p := fx.seedPerson(t, "multi-device@flow.test")
 	tn := fx.seedTenant(t)
 	f1 := fx.seedFamily(t, p, tn)
 	f2 := fx.seedFamily(t, p, tn)
@@ -318,99 +431,18 @@ func TestRevokeFamilies_OnPasswordChanged(t *testing.T) {
 			return false
 		}
 		return len(actives) == 0
-	}, 3*time.Second, "subscriber did not revoke families within 3s")
+	}, 3*time.Second, "subscriber did not revoke all families within 3s")
 
-	// Verify both were revoked with reason="password_changed".
 	for _, fid := range []refreshtoken.FamilyID{f1.ID(), f2.ID()} {
 		got, err := fx.families.GetByID(t.Context(), fid)
 		if err != nil {
 			t.Fatalf("GetByID %s: %v", fid, err)
 		}
-		if !got.IsRevoked() {
-			t.Fatalf("family %s not revoked", fid)
-		}
-		if got.RevokeReason() != "password_changed" {
-			t.Fatalf("family %s reason: got %q want password_changed", fid, got.RevokeReason())
+		if !got.IsRevoked() || got.RevokeReason() != "password_changed" {
+			t.Fatalf("family %s: revoked=%v reason=%q (want revoked=true reason=password_changed)",
+				fid, got.IsRevoked(), got.RevokeReason())
 		}
 	}
-}
-
-func TestRevokeFamilies_OnAnonymised(t *testing.T) {
-	t.Parallel()
-	fx := newFixture(t)
-	pubsub, _, stop := wireRouter(t, fx)
-	defer stop()
-
-	p := fx.seedPerson(t, "anon@flow.test")
-	tn := fx.seedTenant(t)
-	f := fx.seedFamily(t, p, tn)
-
-	pidUUID, _ := uuid.Parse(p.ID().String())
-	publishEvent(t, pubsub, integrationevents.PersonAnonymisedV1{
-		PersonID:      pidUUID,
-		OccurredAtUTC: time.Now().UTC(),
-	}, uuid.Nil)
-
-	waitFor(t, func() bool {
-		got, err := fx.families.GetByID(t.Context(), f.ID())
-		if err != nil {
-			return false
-		}
-		return got.IsRevoked() && got.RevokeReason() == "person_anonymised"
-	}, 3*time.Second, "anonymise subscriber did not revoke family")
-}
-
-func TestRevokeFamilies_OnGloballySuspended(t *testing.T) {
-	t.Parallel()
-	fx := newFixture(t)
-	pubsub, _, stop := wireRouter(t, fx)
-	defer stop()
-
-	p := fx.seedPerson(t, "suspended@flow.test")
-	tn := fx.seedTenant(t)
-	f := fx.seedFamily(t, p, tn)
-
-	pidUUID, _ := uuid.Parse(p.ID().String())
-	publishEvent(t, pubsub, integrationevents.PersonGloballySuspendedV1{
-		PersonID:      pidUUID,
-		Reason:        "compliance: cross-tenant fraud 2026-05-07",
-		OccurredAtUTC: time.Now().UTC(),
-	}, uuid.Nil)
-
-	waitFor(t, func() bool {
-		got, err := fx.families.GetByID(t.Context(), f.ID())
-		if err != nil {
-			return false
-		}
-		return got.IsRevoked() && got.RevokeReason() == "globally_suspended"
-	}, 3*time.Second, "globally-suspended subscriber did not revoke family")
-}
-
-func TestRevokeFamilies_OnEmailChanged(t *testing.T) {
-	t.Parallel()
-	fx := newFixture(t)
-	pubsub, _, stop := wireRouter(t, fx)
-	defer stop()
-
-	p := fx.seedPerson(t, "old-email@flow.test")
-	tn := fx.seedTenant(t)
-	f := fx.seedFamily(t, p, tn)
-
-	pidUUID, _ := uuid.Parse(p.ID().String())
-	publishEvent(t, pubsub, integrationevents.PersonEmailChangedV1{
-		PersonID:      pidUUID,
-		OldEmail:      "old-email@flow.test",
-		NewEmail:      "new-email@flow.test",
-		OccurredAtUTC: time.Now().UTC(),
-	}, uuid.Nil)
-
-	waitFor(t, func() bool {
-		got, err := fx.families.GetByID(t.Context(), f.ID())
-		if err != nil {
-			return false
-		}
-		return got.IsRevoked() && got.RevokeReason() == "email_changed"
-	}, 3*time.Second, "email-changed subscriber did not revoke family")
 }
 
 func TestRevokeFamilies_OnMembershipDeactivated_NarrowsToTenantScope(t *testing.T) {

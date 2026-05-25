@@ -139,13 +139,7 @@ func TestIdempotentReceiver_ScopedByHandlerName(t *testing.T) {
 	}
 }
 
-func TestIdempotentReceiver_Wrap_PanicsOnEmptyName(t *testing.T) {
-	t.Parallel()
-	receiver := messaging.NewIdempotentReceiver(nil) // pool not used in this path
-	defer func() {
-		if r := recover(); r == nil {
-			t.Fatal("expected panic on empty handlerName")
-		}
-	}()
-	_ = receiver.Wrap("", func(context.Context, string) error { return nil }) // arch-test:ignore-err — asserts panic; return value unreachable
-}
+// Note: TestIdempotentReceiver_Wrap_PanicsOnEmptyName lives in
+// inbox_unit_test.go (no integration tag) — pure-Go validation, no
+// Postgres needed. Keeping it here would force a pgtest container
+// boot for a <1ms panic assertion.
