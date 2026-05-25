@@ -140,7 +140,7 @@ func TestMembershipRepository_GetByID_OutsideTenantScope_NotFound(t *testing.T) 
 
 	// Look up under tenant B's scope — RLS hides the row.
 	ctxB := tenancy.WithID(t.Context(), tenancy.ID(tnB.ID().String()))
-	_, err := memberships.GetByID(ctxB, mA.ID())
+	_, err := memberships.GetByID(ctxB, tnB.ID(), mA.ID())
 	if !errors.Is(err, membership.ErrNotFound) {
 		t.Fatalf("expected ErrNotFound (RLS isolation), got %v", err)
 	}
@@ -170,7 +170,7 @@ func TestMembershipRepository_UpdateByID_DeactivateClearsActiveSlot(t *testing.T
 	}
 
 	// Deactivate in A.
-	err := memberships.UpdateByID(ctxA, mA.ID(), func(m *membership.Membership) (bool, error) {
+	err := memberships.UpdateByID(ctxA, tnA.ID(), mA.ID(), func(m *membership.Membership) (bool, error) {
 		if err := m.Deactivate("job change", testNow); err != nil {
 			return false, err
 		}
@@ -278,7 +278,7 @@ func TestMembershipRepository_Add_PersistsChildTablesInSameTx(t *testing.T) {
 	// GetByID hydrates roles + overrides + profile end-to-end. The exact
 	// state-transition semantics are covered by membershiptest.FakeRepository;
 	// here we only prove the SQL fan-out write+read round-trip is intact.
-	got, err := memberships.GetByID(ctx, m.ID())
+	got, err := memberships.GetByID(ctx, tn.ID(), m.ID())
 	if err != nil {
 		t.Fatalf("GetByID: %v", err)
 	}

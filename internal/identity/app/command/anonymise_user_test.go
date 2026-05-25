@@ -35,7 +35,10 @@ func TestAnonymiseUser_Cascades(t *testing.T) {
 	_ = mRepo.Add(t.Context(), m) // arch-test:ignore-err - test fixture setup
 
 	h := command.NewAnonymiseUserHandler(mRepo, pRepo, func() time.Time { return testNow })
-	if err := h.Handle(t.Context(), command.AnonymiseUserCommand{MembershipID: m.ID()}); err != nil {
+	if err := h.Handle(t.Context(), command.AnonymiseUserCommand{
+		TenantID:     tenant.ID("33333333-3333-3333-3333-333333333333"),
+		MembershipID: m.ID(),
+	}); err != nil {
 		t.Fatalf("Handle: %v", err)
 	}
 	if !p.IsAnonymised() {
@@ -49,6 +52,7 @@ func TestAnonymiseUser_NotFound(t *testing.T) {
 	pRepo := seedPersonRepo(t, nil)
 	h := command.NewAnonymiseUserHandler(mRepo, pRepo, func() time.Time { return testNow })
 	err := h.Handle(t.Context(), command.AnonymiseUserCommand{
+		TenantID:     tenant.ID("33333333-3333-3333-3333-333333333333"),
 		MembershipID: membership.ID("99999999-9999-9999-9999-999999999999"),
 	})
 	if !errors.Is(err, command.ErrUserNotFound) {

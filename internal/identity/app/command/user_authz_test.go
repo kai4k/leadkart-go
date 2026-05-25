@@ -10,6 +10,7 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/permission"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/role"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
 
 func TestAssignUserRole_AddsAssignment(t *testing.T) {
@@ -21,6 +22,7 @@ func TestAssignUserRole_AddsAssignment(t *testing.T) {
 
 	h := command.NewAssignUserRoleHandler(repo, func() time.Time { return testNow })
 	if err := h.Handle(t.Context(), command.AssignUserRoleCommand{
+			TenantID:     tenant.ID("33333333-3333-3333-3333-333333333333"),
 		MembershipID: m.ID(),
 		RoleID:       rid,
 	}); err != nil {
@@ -42,6 +44,7 @@ func TestRevokeUserRole_RemovesAssignment(t *testing.T) {
 
 	h := command.NewRevokeUserRoleHandler(repo, func() time.Time { return testNow })
 	if err := h.Handle(t.Context(), command.RevokeUserRoleCommand{
+			TenantID:     tenant.ID("33333333-3333-3333-3333-333333333333"),
 		MembershipID: m.ID(),
 		RoleID:       rid,
 	}); err != nil {
@@ -59,6 +62,7 @@ func TestReplaceUserPermissionOverrides_RejectsUnknownPermission(t *testing.T) {
 	_ = repo.Add(t.Context(), m) // arch-test:ignore-err - test fixture setup
 	h := command.NewReplaceUserPermissionOverridesHandler(repo, func() time.Time { return testNow })
 	err := h.Handle(t.Context(), command.ReplaceUserPermissionOverridesCommand{
+			TenantID:     tenant.ID("33333333-3333-3333-3333-333333333333"),
 		MembershipID: m.ID(),
 		GrantedNames: []string{"identity.totally.fake"},
 	})
@@ -74,6 +78,7 @@ func TestReplaceUserPermissionOverrides_HappyPath(t *testing.T) {
 	_ = repo.Add(t.Context(), m) // arch-test:ignore-err - test fixture setup
 	h := command.NewReplaceUserPermissionOverridesHandler(repo, func() time.Time { return testNow })
 	err := h.Handle(t.Context(), command.ReplaceUserPermissionOverridesCommand{
+			TenantID:     tenant.ID("33333333-3333-3333-3333-333333333333"),
 		MembershipID: m.ID(),
 		GrantedNames: []string{permission.IdentityPermissions.Tenants.View},
 		RevokedNames: []string{permission.IdentityPermissions.Users.Anonymise},
@@ -98,6 +103,7 @@ func TestAssignUserManager_Succeeds(t *testing.T) {
 
 	h := command.NewAssignUserManagerHandler(repo, func() time.Time { return testNow })
 	if err := h.Handle(t.Context(), command.AssignUserManagerCommand{
+			TenantID:     tenant.ID("33333333-3333-3333-3333-333333333333"),
 		MembershipID: m.ID(),
 		ManagerID:    managerID,
 	}); err != nil {
@@ -115,6 +121,7 @@ func TestAssignUserManager_RejectsSelfManagement(t *testing.T) {
 	_ = repo.Add(t.Context(), m) // arch-test:ignore-err - test fixture setup
 	h := command.NewAssignUserManagerHandler(repo, func() time.Time { return testNow })
 	err := h.Handle(t.Context(), command.AssignUserManagerCommand{
+			TenantID:     tenant.ID("33333333-3333-3333-3333-333333333333"),
 		MembershipID: m.ID(),
 		ManagerID:    m.ID(),
 	})
@@ -133,7 +140,8 @@ func TestRemoveUserManager_RoundTrip(t *testing.T) {
 	_ = repo.Add(t.Context(), m) // arch-test:ignore-err - test fixture setup
 
 	h := command.NewRemoveUserManagerHandler(repo, func() time.Time { return testNow })
-	if err := h.Handle(t.Context(), command.RemoveUserManagerCommand{MembershipID: m.ID()}); err != nil {
+	if err := h.Handle(t.Context(), command.RemoveUserManagerCommand{
+			TenantID:     tenant.ID("33333333-3333-3333-3333-333333333333"),MembershipID: m.ID()}); err != nil {
 		t.Fatalf("Handle: %v", err)
 	}
 	if !m.ReportsTo().IsZero() {
@@ -154,23 +162,28 @@ func TestAuthzHandlers_NotFound(t *testing.T) {
 	}{
 		{"AssignRole", func() error {
 			return command.NewAssignUserRoleHandler(repo, func() time.Time { return testNow }).Handle(t.Context(),
-				command.AssignUserRoleCommand{MembershipID: bad, RoleID: rid})
+				command.AssignUserRoleCommand{
+			TenantID:     tenant.ID("33333333-3333-3333-3333-333333333333"),MembershipID: bad, RoleID: rid})
 		}},
 		{"RevokeRole", func() error {
 			return command.NewRevokeUserRoleHandler(repo, func() time.Time { return testNow }).Handle(t.Context(),
-				command.RevokeUserRoleCommand{MembershipID: bad, RoleID: rid})
+				command.RevokeUserRoleCommand{
+			TenantID:     tenant.ID("33333333-3333-3333-3333-333333333333"),MembershipID: bad, RoleID: rid})
 		}},
 		{"ReplaceOverrides", func() error {
 			return command.NewReplaceUserPermissionOverridesHandler(repo, func() time.Time { return testNow }).Handle(t.Context(),
-				command.ReplaceUserPermissionOverridesCommand{MembershipID: bad})
+				command.ReplaceUserPermissionOverridesCommand{
+			TenantID:     tenant.ID("33333333-3333-3333-3333-333333333333"),MembershipID: bad})
 		}},
 		{"AssignManager", func() error {
 			return command.NewAssignUserManagerHandler(repo, func() time.Time { return testNow }).Handle(t.Context(),
-				command.AssignUserManagerCommand{MembershipID: bad, ManagerID: mid})
+				command.AssignUserManagerCommand{
+			TenantID:     tenant.ID("33333333-3333-3333-3333-333333333333"),MembershipID: bad, ManagerID: mid})
 		}},
 		{"RemoveManager", func() error {
 			return command.NewRemoveUserManagerHandler(repo, func() time.Time { return testNow }).Handle(t.Context(),
-				command.RemoveUserManagerCommand{MembershipID: bad})
+				command.RemoveUserManagerCommand{
+			TenantID:     tenant.ID("33333333-3333-3333-3333-333333333333"),MembershipID: bad})
 		}},
 	}
 	for _, c := range cases {

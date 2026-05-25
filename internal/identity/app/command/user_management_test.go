@@ -45,6 +45,7 @@ func TestUpdateUserProfile_Succeeds(t *testing.T) {
 
 	h := command.NewUpdateUserProfileHandler(repo, func() time.Time { return testNow })
 	if err := h.Handle(t.Context(), command.UpdateUserProfileCommand{
+			TenantID:      tenant.ID("33333333-3333-3333-3333-333333333333"),
 		MembershipID:  m.ID(),
 		Designation:   "Sales Manager",
 		Department:    "North Zone",
@@ -65,6 +66,7 @@ func TestUpdateUserProfile_NotFound(t *testing.T) {
 	repo := newFakeMembershipRepo()
 	h := command.NewUpdateUserProfileHandler(repo, func() time.Time { return testNow })
 	err := h.Handle(t.Context(), command.UpdateUserProfileCommand{
+			TenantID:      tenant.ID("33333333-3333-3333-3333-333333333333"),
 		MembershipID: membership.ID("99999999-9999-9999-9999-999999999999"),
 	})
 	if !errors.Is(err, command.ErrUserNotFound) {
@@ -78,7 +80,8 @@ func TestDeactivateUser_RequiresReason(t *testing.T) {
 	m := newMembership(t)
 	_ = repo.Add(t.Context(), m) // arch-test:ignore-err - test fixture setup
 	h := command.NewDeactivateUserHandler(repo, func() time.Time { return testNow })
-	err := h.Handle(t.Context(), command.DeactivateUserCommand{MembershipID: m.ID()})
+	err := h.Handle(t.Context(), command.DeactivateUserCommand{
+			TenantID:     tenant.ID("33333333-3333-3333-3333-333333333333"),MembershipID: m.ID()})
 	if !errors.Is(err, membership.ErrInvalid) {
 		t.Fatalf("err = %v, want wraps membership.ErrInvalid (empty reason)", err)
 	}
@@ -91,6 +94,7 @@ func TestDeactivateUser_Succeeds(t *testing.T) {
 	_ = repo.Add(t.Context(), m) // arch-test:ignore-err - test fixture setup
 	h := command.NewDeactivateUserHandler(repo, func() time.Time { return testNow })
 	if err := h.Handle(t.Context(), command.DeactivateUserCommand{
+			TenantID:     tenant.ID("33333333-3333-3333-3333-333333333333"),
 		MembershipID: m.ID(),
 		Reason:       "left-the-company",
 	}); err != nil {
@@ -110,7 +114,8 @@ func TestReactivateUser_RoundTrip(t *testing.T) {
 	_ = repo.Add(t.Context(), m) // arch-test:ignore-err - test fixture setup
 
 	h := command.NewReactivateUserHandler(repo, func() time.Time { return testNow })
-	if err := h.Handle(t.Context(), command.ReactivateUserCommand{MembershipID: m.ID()}); err != nil {
+	if err := h.Handle(t.Context(), command.ReactivateUserCommand{
+			TenantID:     tenant.ID("33333333-3333-3333-3333-333333333333"),MembershipID: m.ID()}); err != nil {
 		t.Fatalf("Handle: %v", err)
 	}
 	if m.Status() != membership.StatusActive {
@@ -123,6 +128,7 @@ func TestReactivateUser_NotFound(t *testing.T) {
 	repo := newFakeMembershipRepo()
 	h := command.NewReactivateUserHandler(repo, func() time.Time { return testNow })
 	err := h.Handle(t.Context(), command.ReactivateUserCommand{
+			TenantID:     tenant.ID("33333333-3333-3333-3333-333333333333"),
 		MembershipID: membership.ID("99999999-9999-9999-9999-999999999999"),
 	})
 	if !errors.Is(err, command.ErrUserNotFound) {
