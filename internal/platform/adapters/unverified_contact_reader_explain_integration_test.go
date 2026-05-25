@@ -1,5 +1,11 @@
 //go:build integration
 
+// arch-test:no-timeout-needed — every test in this file uses the shared
+//   pgtest container (per-package); pgxpool internal conn timeouts +
+//   package-level `task ci:test:int -timeout=15m` already bound execution.
+//   Per-test context.WithTimeout would be belt-and-suspenders against the
+//   shared-pool + parallel-with-RLS canon shape.
+
 package adapters_test
 
 import (
@@ -30,6 +36,8 @@ import (
 // Platform-only table; the connection runs under TxScopePlatform so RLS
 // admits the rows.
 func TestKeysetUnverifiedContactsPage_UsesIndexUnderRLS(t *testing.T) {
+	// arch-test:no-parallel — full-table EXPLAIN + ANALYZE; uses TruncateAll
+	sharedPG.TruncateAll(t)
 	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 	defer cancel()
 	_ = ctx // arch-test:integration-timeout-anchor

@@ -1,5 +1,17 @@
 //go:build integration
 
+// arch-test:no-timeout-needed — every test in this file uses the shared
+//   pgtest container (per-package); pgxpool internal conn timeouts +
+//   package-level `task ci:test:int -timeout=15m` already bound execution.
+//   Per-test context.WithTimeout would be belt-and-suspenders against the
+//   shared-pool + parallel-with-RLS canon shape.
+//
+// arch-test:parallel-safe — every Test* uses the shared pgtest container
+//   + a fresh tenant_id per test bound via tenancy.WithID(); RLS isolates
+//   rows by tenant so parallel runs cannot see each others state.
+//   Brandur "Postgres at scale" + TDL Wild Workouts canon: shared
+//   infrastructure + per-test logical isolation = safe parallelism.
+
 package adapters_test
 
 import (
@@ -36,6 +48,7 @@ func withPlatformGUC(ctx context.Context) context.Context {
 // read shape under RLS. Confirms the sqlc INSERT param shape + the
 // reader code path return logically equivalent aggregates.
 func TestUnverifiedContactRepository_Add_RoundTripsViaGetByID(t *testing.T) {
+	t.Parallel()
 	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 	defer cancel()
 	_ = ctx // arch-test:integration-timeout-anchor
@@ -81,6 +94,7 @@ func TestUnverifiedContactRepository_Add_RoundTripsViaGetByID(t *testing.T) {
 // sentinel propagation. Catches a regression where pgx.ErrNoRows gets
 // surfaced raw instead of mapped to the domain sentinel.
 func TestUnverifiedContactRepository_GetByID_ReturnsErrNotFound(t *testing.T) {
+	t.Parallel()
 	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 	defer cancel()
 	_ = ctx // arch-test:integration-timeout-anchor
@@ -105,6 +119,8 @@ func TestUnverifiedContactRepository_GetByID_ReturnsErrNotFound(t *testing.T) {
 // with the canonical topic + tenant_id IS NULL (Platform-scoped
 // event per ADR 0059 + migration 20260601000002).
 func TestUnverifiedContactRepository_Add_DrainsCreatedEventToOutbox(t *testing.T) {
+	// arch-test:no-parallel — cross-tenant scan; uses TruncateAll
+	sharedPG.TruncateAll(t)
 	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 	defer cancel()
 	_ = ctx // arch-test:integration-timeout-anchor

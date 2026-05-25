@@ -1,5 +1,17 @@
 //go:build integration
 
+// arch-test:no-timeout-needed — every test in this file uses the shared
+//   pgtest container (per-package); pgxpool internal conn timeouts +
+//   package-level `task ci:test:int -timeout=15m` already bound execution.
+//   Per-test context.WithTimeout would be belt-and-suspenders against the
+//   shared-pool + parallel-with-RLS canon shape.
+//
+// arch-test:parallel-safe — every Test* uses the shared pgtest container
+//   + a fresh tenant_id per test bound via tenancy.WithID(); RLS isolates
+//   rows by tenant so parallel runs cannot see each others state.
+//   Brandur "Postgres at scale" + TDL Wild Workouts canon: shared
+//   infrastructure + per-test logical isolation = safe parallelism.
+
 package adapters_test
 
 import (
@@ -21,6 +33,7 @@ import (
 // — confirms the INSERT-on-first-write + WHERE-version UPDATE on
 // subsequent writes round-trip cleanly through the sqlc query.
 func TestLeadCreditRepository_UpsertWithVersion_HappyPath_InsertThenUpdate(t *testing.T) {
+	t.Parallel()
 	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 	defer cancel()
 	_ = ctx // arch-test:integration-timeout-anchor
@@ -95,6 +108,7 @@ func TestLeadCreditRepository_UpsertWithVersion_HappyPath_InsertThenUpdate(t *te
 // our own update — MUST return ErrConflict. This is the LOAD-BEARING
 // semantic per ADR 0059 that drives the handler's retry loop.
 func TestLeadCreditRepository_UpsertWithVersion_ConflictOnStaleVersion(t *testing.T) {
+	t.Parallel()
 	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 	defer cancel()
 	_ = ctx // arch-test:integration-timeout-anchor
@@ -164,6 +178,7 @@ func TestLeadCreditRepository_UpsertWithVersion_ConflictOnStaleVersion(t *testin
 // TestLeadCreditRepository_GetByTenant_ReturnsErrNotFound — typed
 // sentinel propagation on a missing row.
 func TestLeadCreditRepository_GetByTenant_ReturnsErrNotFound(t *testing.T) {
+	t.Parallel()
 	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 	defer cancel()
 	_ = ctx // arch-test:integration-timeout-anchor
@@ -188,6 +203,8 @@ func TestLeadCreditRepository_GetByTenant_ReturnsErrNotFound(t *testing.T) {
 // and lands on platform.outbox with tenant_id set (TenantScoped event;
 // NOT NULL because it has a real tenant FK per C3 semantics).
 func TestLeadCreditRepository_UpsertWithVersion_DrainsAdjustedEventToOutbox(t *testing.T) {
+	// arch-test:no-parallel — cross-tenant scan; uses TruncateAll
+	sharedPG.TruncateAll(t)
 	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 	defer cancel()
 	_ = ctx // arch-test:integration-timeout-anchor

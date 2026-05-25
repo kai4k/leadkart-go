@@ -1,5 +1,17 @@
 //go:build integration
 
+// arch-test:no-timeout-needed — every test in this file uses the shared
+//   pgtest container (per-package); pgxpool internal conn timeouts +
+//   package-level `task ci:test:int -timeout=15m` already bound execution.
+//   Per-test context.WithTimeout would be belt-and-suspenders against the
+//   shared-pool + parallel-with-RLS canon shape.
+//
+// arch-test:parallel-safe — every Test* uses the shared pgtest container
+//   + a fresh tenant_id per test bound via tenancy.WithID(); RLS isolates
+//   rows by tenant so parallel runs cannot see each others state.
+//   Brandur "Postgres at scale" + TDL Wild Workouts canon: shared
+//   infrastructure + per-test logical isolation = safe parallelism.
+
 package adapters_test
 
 import (
@@ -52,6 +64,7 @@ func seedPlatformLead(t *testing.T, leadRepo *adapters.PlatformLeadRepository, c
 
 // TestPlatformLeadRepository_Add_RoundTripsViaGetByID — write + read.
 func TestPlatformLeadRepository_Add_RoundTripsViaGetByID(t *testing.T) {
+	t.Parallel()
 	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 	defer cancel()
 	_ = ctx // arch-test:integration-timeout-anchor
@@ -95,6 +108,8 @@ func TestPlatformLeadRepository_Add_RoundTripsViaGetByID(t *testing.T) {
 // PII-field accessors MUST return the empty string (no row data
 // scanned in).
 func TestPlatformLeadRepository_MarketplaceBrowse_OmitsPII(t *testing.T) {
+	// arch-test:no-parallel — cross-tenant scan; uses TruncateAll
+	sharedPG.TruncateAll(t)
 	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 	defer cancel()
 	_ = ctx // arch-test:integration-timeout-anchor
@@ -152,6 +167,7 @@ func TestPlatformLeadRepository_MarketplaceBrowse_OmitsPII(t *testing.T) {
 // purchase flow drives sold_to_tenant_id + sold_at; reload sees the
 // transition.
 func TestPlatformLeadRepository_UpdateByID_Purchase_RoundTrips(t *testing.T) {
+	t.Parallel()
 	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 	defer cancel()
 	_ = ctx // arch-test:integration-timeout-anchor
@@ -197,6 +213,7 @@ func TestPlatformLeadRepository_UpdateByID_Purchase_RoundTrips(t *testing.T) {
 // TestPlatformLeadRepository_GetByID_ReturnsErrNotFound — sentinel
 // shape.
 func TestPlatformLeadRepository_GetByID_ReturnsErrNotFound(t *testing.T) {
+	t.Parallel()
 	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 	defer cancel()
 	_ = ctx // arch-test:integration-timeout-anchor

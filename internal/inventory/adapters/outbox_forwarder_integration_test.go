@@ -1,5 +1,11 @@
 //go:build integration
 
+// arch-test:no-timeout-needed — every test in this file uses the shared
+//   pgtest container (per-package); pgxpool internal conn timeouts +
+//   package-level `task ci:test:int -timeout=15m` already bound execution.
+//   Per-test context.WithTimeout would be belt-and-suspenders against the
+//   shared-pool + parallel-with-RLS canon shape.
+
 package adapters_test
 
 import (
@@ -71,6 +77,8 @@ func invSilentSlog() *slog.Logger {
 // the previous build silently orphaned every inventory event because
 // the identity forwarder hardcodes identity.outbox.
 func TestInventoryOutboxForwarder_PublishesProductCreated(t *testing.T) {
+	// arch-test:no-parallel — cross-tenant scan; uses TruncateAll
+	sharedPG.TruncateAll(t)
 	pool := repoFixture(t)
 	tid := seedTenant(t, pool)
 	ctx := tenantCtx(t, tid)
@@ -151,6 +159,8 @@ func TestInventoryOutboxForwarder_PublishesProductCreated(t *testing.T) {
 // TestInventoryOutboxForwarder_IsIdempotent_OnSecondPass — second
 // ForwardOnce against an already-drained outbox returns 0.
 func TestInventoryOutboxForwarder_IsIdempotent_OnSecondPass(t *testing.T) {
+	// arch-test:no-parallel — cross-tenant scan; uses TruncateAll
+	sharedPG.TruncateAll(t)
 	pool := repoFixture(t)
 	tid := seedTenant(t, pool)
 	ctx := tenantCtx(t, tid)
