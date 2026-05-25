@@ -148,11 +148,14 @@ Browser  ←─ HttpOnly cookies ─→  SvelteKit (adapter-node)  ←─ Bearer
 
 | Layer | Location | Authority |
 |---|---|---|
+| **TDL canon** | [`docs/doctrine/tdl_canon.md`](docs/doctrine/tdl_canon.md) | THE thought process. Drift = finding. Mechanical subset enforced by `internal/architecture/tdl_strict_arch_test.go`. |
 | **Living rules** | `.claude/rules/*.md` | Authoritative. Drift = finding. |
 | **Architectural decisions** | `docs/adr/*.md` (Michael Nygard format) | One decision per file, dated, sealed. |
-| **Long-form doctrine** | `docs/doctrine/*.md` | Detailed rule expansions (TBD as code lands). |
+| **Long-form doctrine** | `docs/doctrine/*.md` | Detailed rule expansions. |
 | **Map** | `CLAUDE.md` (this), `README.md`, `BRD.md` | Quick-start; not authoritative. |
 | **Master plan** | `.claude/plans/snazzy-strolling-cray.md` (author-private) | Rebuild plan + Glossary + canonical patterns. |
+
+**Before reviewing or extending code in `domain/`, `app/`, or `ports/`:** read [`docs/doctrine/tdl_canon.md`](docs/doctrine/tdl_canon.md) and run `task review:tdl`. The canon doc captures the *why* behind every decision; the arch tests block the patterns that audits kept missing (ctx-smuggled tenant, validate-tags-in-domain, Save-on-repository, business-verb repo methods, mock-generation tools, setter methods on aggregates). Both gates exist because audits-trust-the-pattern was repeatedly wrong.
 
 ---
 

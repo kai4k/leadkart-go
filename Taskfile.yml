@@ -232,6 +232,13 @@ tasks:
       - task: test:int
       - task: ci:smoke
 
+  review:tdl:
+    desc: 'Strict TDL-canon review gate. Runs only TestArch_TDL_* (the strict subset codifying docs/doctrine/tdl_canon.md). Use before opening a PR that touches domain/, app/, or ports/.'
+    cmds:
+      - echo "Reading the canon — docs/doctrine/tdl_canon.md"
+      - echo "Running strict TDL arch tests..."
+      - go test -count=1 -shuffle=on -run "^TestArch_TDL_" ./internal/architecture/...
+
   ci:openapi:
     desc: 'OpenAPI spec lint via Spectral (requires npx / node). Spectral pinned via SPECTRAL_VERSION (top of file). Mirrors the openapi-lint job in .github/workflows/ci.yml — per ADR 0050.'
     cmds:
