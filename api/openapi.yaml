@@ -2938,6 +2938,11 @@ components:
         callback_window_end_at:    { type: string, format: date-time, description: 'Required when outcome=busy' }
 
     LogVerificationCallResponse:
+      type: object
+      required: [call_id]
+      properties:
+        call_id: { type: string, format: uuid, description: 'ID of the verification-call row written to platform.verification_calls.' }
+
     # ===== CRM (ADR 0060) ==============================================
     CrmLeadDto:
       type: object
