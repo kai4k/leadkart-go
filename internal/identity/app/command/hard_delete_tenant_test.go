@@ -100,7 +100,7 @@ func TestHardDeleteTenant_RowDeletedAfterAggregateTransition(t *testing.T) {
 	if err := h.Handle(t.Context(), command.HardDeleteTenantCommand{TenantID: tn.ID()}); err != nil {
 		t.Fatalf("Handle: %v", err)
 	}
-	if _, ok := tenants.tenants[tn.ID()]; ok {
-		t.Error("expected tenant row hard-deleted from repo, still present")
+	if _, err := tenants.GetByID(t.Context(), tn.ID()); !errors.Is(err, tenant.ErrNotFound) {
+		t.Errorf("expected tenant row hard-deleted from repo, GetByID err = %v, want tenant.ErrNotFound", err)
 	}
 }

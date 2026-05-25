@@ -2,90 +2,24 @@ package command_test
 
 
 import (
-	"context"
 	"errors"
 	"testing"
 	"time"
 
 	"github.com/leadkart/leadkart-go/internal/identity/app/command"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/membership/membershiptest"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
 
 
-// fakeMembershipRepo is the minimum [membership.Repository] surface
-// the user_management handlers exercise.
-type fakeMembershipRepo struct {
-	memberships map[membership.ID]*membership.Membership
-}
-
-func newFakeMembershipRepo() *fakeMembershipRepo {
-	return &fakeMembershipRepo{memberships: make(map[membership.ID]*membership.Membership)}
-}
-
-func (r *fakeMembershipRepo) Add(_ context.Context, m *membership.Membership) error {
-	r.memberships[m.ID()] = m
-	return nil
-}
-
-func (r *fakeMembershipRepo) UpdateByID(_ context.Context, id membership.ID, fn func(*membership.Membership) (bool, error)) error {
-	m, ok := r.memberships[id]
-	if !ok {
-		return membership.ErrNotFound
-	}
-	commit, err := fn(m)
-	if err != nil {
-		return err
-	}
-	_ = commit
-	return nil
-}
-
-func (r *fakeMembershipRepo) GetByID(_ context.Context, id membership.ID) (*membership.Membership, error) {
-	m, ok := r.memberships[id]
-	if !ok {
-		return nil, membership.ErrNotFound
-	}
-	return m, nil
-}
-
-func (r *fakeMembershipRepo) GetActiveForPerson(_ context.Context, _ person.ID) (*membership.Membership, error) {
-	return nil, membership.ErrNotFound
-}
-
-func (r *fakeMembershipRepo) ListForTenant(_ context.Context, tid tenant.ID) ([]*membership.Membership, error) {
-	var out []*membership.Membership
-	for _, m := range r.memberships {
-		if m.TenantID() == tid {
-			out = append(out, m)
-		}
-	}
-	return out, nil
-}
-
-func (r *fakeMembershipRepo) ListAllForPerson(_ context.Context, pid person.ID) ([]*membership.Membership, error) {
-	var out []*membership.Membership
-	for _, m := range r.memberships {
-		if m.PersonID() == pid {
-			out = append(out, m)
-		}
-	}
-	return out, nil
-}
-
-func (r *fakeMembershipRepo) HasActiveSuperAdmin(_ context.Context, _ tenant.ID) (bool, error) {
-	return false, nil
-}
-
-func (r *fakeMembershipRepo) ListForTenantPage(_ context.Context, _ time.Time, _ string, _ int) ([]*membership.Membership, error) {
-	// Tests in this package exercise the command path, not the paginated
-	// list query. Empty page is the safe stub — query-layer tests live
-	// in the query package against a real testcontainers DB.
-	return nil, nil
-}
-
-var _ membership.Repository = (*fakeMembershipRepo)(nil)
+// The membership-side fake lives in
+// internal/identity/domain/membership/membershiptest/ per TDL Wild
+// Workouts canon — co-located with the aggregate it fakes.
+// newFakeMembershipRepo is preserved as a one-line alias so existing
+// tests don't need rewriting.
+func newFakeMembershipRepo() *membershiptest.FakeRepository { return membershiptest.NewFakeRepository() }
 
 func newMembership(t *testing.T) *membership.Membership {
 	t.Helper()

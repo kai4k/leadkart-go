@@ -33,7 +33,7 @@ func TestRequestEmailChange_RejectsZeroPersonID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("email.New: %v", err)
 	}
-	repo := &fakePersonRepo{}
+	repo := seedPersonRepo(t, nil)
 	h := command.NewRequestEmailChangeHandler(repo, func() time.Time { return testNow })
 
 	err = h.Handle(t.Context(), command.RequestEmailChangeCommand{
@@ -49,11 +49,12 @@ func TestRequestEmailChange_RejectsZeroPersonID(t *testing.T) {
 // guard for the email VO.
 func TestRequestEmailChange_RejectsZeroEmail(t *testing.T) {
 	t.Parallel()
-	repo := &fakePersonRepo{person: newPersonWithPassword(t, "irrelevant")}
+	p := newPersonWithPassword(t, "irrelevant")
+	repo := seedPersonRepo(t, p)
 	h := command.NewRequestEmailChangeHandler(repo, func() time.Time { return testNow })
 
 	err := h.Handle(t.Context(), command.RequestEmailChangeCommand{
-		PersonID: repo.person.ID(),
+		PersonID: p.ID(),
 		NewEmail: email.Address{},
 	})
 	if err == nil {
@@ -71,7 +72,7 @@ func TestRequestEmailChange_PersonNotFound_ReturnsErrEmailChangeRejected(t *test
 	if err != nil {
 		t.Fatalf("email.New: %v", err)
 	}
-	repo := &fakePersonRepo{} // no Person seeded
+	repo := seedPersonRepo(t, nil) // no Person seeded
 	h := command.NewRequestEmailChangeHandler(repo, func() time.Time { return testNow })
 
 	err = h.Handle(t.Context(), command.RequestEmailChangeCommand{
@@ -89,12 +90,13 @@ func TestRequestEmailChange_PersonNotFound_ReturnsErrEmailChangeRejected(t *test
 // into the generic rejection.
 func TestRequestEmailChange_SameAsCurrent_Rejected(t *testing.T) {
 	t.Parallel()
-	repo := &fakePersonRepo{person: newPersonWithPassword(t, "irrelevant")}
+	p := newPersonWithPassword(t, "irrelevant")
+	repo := seedPersonRepo(t, p)
 	h := command.NewRequestEmailChangeHandler(repo, func() time.Time { return testNow })
 
 	err := h.Handle(t.Context(), command.RequestEmailChangeCommand{
-		PersonID: repo.person.ID(),
-		NewEmail: repo.person.Email(),
+		PersonID: p.ID(),
+		NewEmail: p.Email(),
 	})
 	if !errors.Is(err, command.ErrEmailChangeRejected) {
 		t.Fatalf("err = %v, want ErrEmailChangeRejected", err)

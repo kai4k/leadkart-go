@@ -1,68 +1,54 @@
 package command_test
 
 import (
-	"time"
-
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/leadkart/leadkart-go/internal/common/email"
 	"github.com/leadkart/leadkart-go/internal/identity/app/command"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/passwordpolicy"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/person/persontest"
 )
 
 
-// resettableRepo extends the existing fakePersonRepo behaviour with a
-// hash → Person index so the confirm flow's GetByPasswordResetTokenHash
-// lookup works against in-memory state.
-//
-// drainedEvents captures the aggregate's pulled events after each
-// successful UpdateByID closure — gives tests post-EDA visibility into
-// the [person.PasswordResetEmailRequestedEvent] payload (carrying the
-// plaintext token per ADR 0057) since the email gateway no longer
-// records the body inline.
+// resettableRepo wraps the shared [persontest.FakeRepository] with the
+// drained-events capture the password-reset flow assertions need. The
+// shared fake matches the SQL adapter's contract semantics
+// (GetByPasswordResetTokenHash hashes match against the pending
+// reset sub-state); this wrapper adds drainPersonEvents-equivalent
+// observability so tests can assert on the
+// [person.PasswordResetEmailRequestedEvent] payload (carrying the
+// plaintext token per ADR 0057) — the email gateway no longer records
+// the body inline.
 type resettableRepo struct {
-	*fakePersonRepo
+	*persontest.FakeRepository
+	seeded        *person.Person // the one Person under test, retained for event drain
 	drainedEvents []person.Event
 }
 
-func newResettableRepo(p *person.Person) *resettableRepo {
-	return &resettableRepo{fakePersonRepo: &fakePersonRepo{person: p}}
-}
-
-func (r *resettableRepo) GetByEmail(_ context.Context, e email.Address) (*person.Person, error) {
-	if r.person == nil || r.person.Email().String() != e.String() {
-		return nil, person.ErrNotFound
+func newResettableRepo(t *testing.T, p *person.Person) *resettableRepo {
+	t.Helper()
+	inner := persontest.NewFakeRepository()
+	if p != nil {
+		if err := inner.Add(t.Context(), p); err != nil {
+			t.Fatalf("newResettableRepo: Add: %v", err)
+		}
 	}
-	return r.person, nil
-}
-
-func (r *resettableRepo) GetByPasswordResetTokenHash(_ context.Context, h person.PasswordResetTokenHash) (*person.Person, error) {
-	if r.person == nil {
-		return nil, person.ErrNotFound
-	}
-	pending := r.person.PendingPasswordReset()
-	if pending.IsZero() || !pending.Hash().Equal(h) {
-		return nil, person.ErrNotFound
-	}
-	return r.person, nil
+	return &resettableRepo{FakeRepository: inner, seeded: p}
 }
 
 // UpdateByID overrides the embedded fake's variant to additionally
 // drain events on commit — mirrors the pg adapter's drainPersonEvents
 // path so the test sees the same shape production sees post-Wave-9.2d.
-func (r *resettableRepo) UpdateByID(_ context.Context, id person.ID, fn func(*person.Person) (bool, error)) error {
-	if r.person == nil || r.person.ID() != id {
-		return person.ErrNotFound
-	}
-	commit, err := fn(r.person)
-	if err != nil {
+func (r *resettableRepo) UpdateByID(ctx context.Context, id person.ID, fn func(*person.Person) (bool, error)) error {
+	if err := r.FakeRepository.UpdateByID(ctx, id, fn); err != nil {
 		return err
 	}
-	if commit {
-		r.drainedEvents = append(r.drainedEvents, r.person.PullEvents()...)
+	if r.seeded != nil && r.seeded.ID() == id {
+		r.drainedEvents = append(r.drainedEvents, r.seeded.PullEvents()...)
 	}
 	return nil
 }
@@ -90,14 +76,15 @@ func TestRequestPasswordReset_HappyPath_PersistsAndEmitsEmailEvent(t *testing.T)
 	if err != nil {
 		t.Fatalf("email.New: %v", err)
 	}
-	repo := newResettableRepo(newPersonWithPassword(t, "current-pw"))
+	p := newPersonWithPassword(t, "current-pw")
+	repo := newResettableRepo(t, p)
 
 	h := command.NewRequestPasswordResetHandler(repo, func() time.Time { return testNow })
 
 	if err := h.Handle(t.Context(), command.RequestPasswordResetCommand{Email: addr}); err != nil {
 		t.Fatalf("Handle: %v", err)
 	}
-	if repo.person.PendingPasswordReset().IsZero() {
+	if p.PendingPasswordReset().IsZero() {
 		t.Error("expected pending password reset to be persisted")
 	}
 	// Per ADR 0057: the email is delivered async via a Watermill
@@ -111,7 +98,7 @@ func TestRequestPasswordReset_HappyPath_PersistsAndEmitsEmailEvent(t *testing.T)
 
 func TestRequestPasswordReset_UnknownEmail_SilentSuccess(t *testing.T) {
 	t.Parallel()
-	repo := newResettableRepo(nil) // no Person seeded
+	repo := newResettableRepo(t, nil) // no Person seeded
 	h := command.NewRequestPasswordResetHandler(repo, func() time.Time { return testNow })
 
 	addr, _ := email.New("unknown@example.test")
@@ -135,7 +122,7 @@ func TestConfirmPasswordReset_HappyPath_RotatesPasswordAndStamp(t *testing.T) {
 
 	addr, _ := email.New("alice@example.test")
 	p := newPersonWithPassword(t, "current-pw")
-	repo := newResettableRepo(p)
+	repo := newResettableRepo(t, p)
 
 	reqHandler := command.NewRequestPasswordResetHandler(repo, func() time.Time { return testNow })
 	if err := reqHandler.Handle(t.Context(), command.RequestPasswordResetCommand{Email: addr}); err != nil {
@@ -163,7 +150,7 @@ func TestConfirmPasswordReset_HappyPath_RotatesPasswordAndStamp(t *testing.T) {
 
 func TestConfirmPasswordReset_BadToken_ReturnsTokenInvalid(t *testing.T) {
 	t.Parallel()
-	repo := newResettableRepo(newPersonWithPassword(t, "current-pw"))
+	repo := newResettableRepo(t, newPersonWithPassword(t, "current-pw"))
 	h := command.NewConfirmPasswordResetHandler(repo, passwordpolicy.Noop{}, func() time.Time { return testNow })
 	err := h.Handle(t.Context(), command.ConfirmPasswordResetCommand{
 		RawToken:    "totally-bogus-token",

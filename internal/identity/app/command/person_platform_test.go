@@ -9,31 +9,34 @@ import (
 
 	"github.com/leadkart/leadkart-go/internal/identity/app/command"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/person/persontest"
 )
 
 
 func TestGlobalSuspendPerson_Succeeds(t *testing.T) {
 	t.Parallel()
-	repo := &fakePersonRepo{person: newPersonWithPassword(t, "irrelevant")}
+	p := newPersonWithPassword(t, "irrelevant")
+	repo := seedPersonRepo(t, p)
 	h := command.NewGlobalSuspendPersonHandler(repo, func() time.Time { return testNow })
 	err := h.Handle(t.Context(), command.GlobalSuspendPersonCommand{
-		PersonID: repo.person.ID(),
+		PersonID: p.ID(),
 		Reason:   "compliance: cross-tenant abuse 2026-05-07",
 	})
 	if err != nil {
 		t.Fatalf("Handle: %v", err)
 	}
-	if !repo.person.IsGloballySuspended() {
+	if !p.IsGloballySuspended() {
 		t.Error("expected Person globally suspended")
 	}
 }
 
 func TestGlobalSuspendPerson_RequiresReason(t *testing.T) {
 	t.Parallel()
-	repo := &fakePersonRepo{person: newPersonWithPassword(t, "irrelevant")}
+	p := newPersonWithPassword(t, "irrelevant")
+	repo := seedPersonRepo(t, p)
 	h := command.NewGlobalSuspendPersonHandler(repo, func() time.Time { return testNow })
 	err := h.Handle(t.Context(), command.GlobalSuspendPersonCommand{
-		PersonID: repo.person.ID(),
+		PersonID: p.ID(),
 	})
 	if !errors.Is(err, person.ErrInvalid) {
 		t.Fatalf("err = %v, want wraps person.ErrInvalid", err)
@@ -47,7 +50,7 @@ func TestLiftPersonGlobalSuspension_RoundTrip(t *testing.T) {
 		t.Fatalf("setup GloballySuspend: %v", err)
 	}
 	p.PullEvents()
-	repo := &fakePersonRepo{person: p}
+	repo := seedPersonRepo(t, p)
 
 	h := command.NewLiftPersonGlobalSuspensionHandler(repo, func() time.Time { return testNow })
 	if err := h.Handle(t.Context(), command.LiftPersonGlobalSuspensionCommand{
@@ -62,40 +65,42 @@ func TestLiftPersonGlobalSuspension_RoundTrip(t *testing.T) {
 
 func TestAnonymisePerson_Succeeds(t *testing.T) {
 	t.Parallel()
-	repo := &fakePersonRepo{person: newPersonWithPassword(t, "irrelevant")}
+	p := newPersonWithPassword(t, "irrelevant")
+	repo := seedPersonRepo(t, p)
 	h := command.NewAnonymisePersonHandler(repo, func() time.Time { return testNow })
 	if err := h.Handle(t.Context(), command.AnonymisePersonCommand{
-		PersonID: repo.person.ID(),
+		PersonID: p.ID(),
 	}); err != nil {
 		t.Fatalf("Handle: %v", err)
 	}
-	if !repo.person.IsAnonymised() {
+	if !p.IsAnonymised() {
 		t.Error("expected Person anonymised")
 	}
 }
 
 func TestUpdatePersonProfile_Succeeds(t *testing.T) {
 	t.Parallel()
-	repo := &fakePersonRepo{person: newPersonWithPassword(t, "irrelevant")}
+	p := newPersonWithPassword(t, "irrelevant")
+	repo := seedPersonRepo(t, p)
 	h := command.NewUpdatePersonProfileHandler(repo, func() time.Time { return testNow })
 	if err := h.Handle(t.Context(), command.UpdatePersonProfileCommand{
-		PersonID:  repo.person.ID(),
+		PersonID:  p.ID(),
 		FirstName: "Renamed",
 		LastName:  "Surname",
 	}); err != nil {
 		t.Fatalf("Handle: %v", err)
 	}
-	if repo.person.FirstName() != "Renamed" {
-		t.Errorf("FirstName = %q, want Renamed", repo.person.FirstName())
+	if p.FirstName() != "Renamed" {
+		t.Errorf("FirstName = %q, want Renamed", p.FirstName())
 	}
-	if repo.person.LastName() != "Surname" {
-		t.Errorf("LastName = %q, want Surname", repo.person.LastName())
+	if p.LastName() != "Surname" {
+		t.Errorf("LastName = %q, want Surname", p.LastName())
 	}
 }
 
 func TestPersonPlatformHandlers_NotFound(t *testing.T) {
 	t.Parallel()
-	repo := &fakePersonRepo{} // no Person seeded
+	repo := persontest.NewFakeRepository() // no Person seeded
 	bad := person.ID("99999999-9999-9999-9999-999999999999")
 	cases := []struct {
 		name string

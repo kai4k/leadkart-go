@@ -15,6 +15,7 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/domain/role"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/role/roletest"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/rolehierarchy"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/rolehierarchy/rolehierarchytest"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
 
@@ -24,119 +25,12 @@ import (
 // tests don't need rewriting.
 func newFakeRoleRepo() *roletest.FakeRepository { return roletest.NewFakeRepository() }
 
-// fakeEdgeRepo is the minimum [rolehierarchy.Repository] surface the
-// SetRoleParent + CreateRole-with-parent handlers exercise. Per-tenant
-// in-memory map; enforces single-parent invariant (mirroring the
-// partial unique index) + multi-hop cycle detection (mirroring the DB
-// trigger) so the unit tests cover the same failure modes the adapter
-// translates from SQL.
-type fakeEdgeRepo struct {
-	edges map[rolehierarchy.ID]*rolehierarchy.Edge
-}
-
-func newFakeEdgeRepo() *fakeEdgeRepo {
-	return &fakeEdgeRepo{edges: make(map[rolehierarchy.ID]*rolehierarchy.Edge)}
-}
-
-func (f *fakeEdgeRepo) Add(_ context.Context, e *rolehierarchy.Edge) error {
-	// Single-parent invariant — refuse a second active edge for the
-	// same child (mirrors uq_role_hierarchy_active_edge_per_child).
-	for _, existing := range f.edges {
-		if existing.IsActive() && existing.ChildRoleID() == e.ChildRoleID() {
-			return rolehierarchy.ErrEdgeAlreadyExists
-		}
-	}
-	// Multi-hop cycle detection — walking child's proposed parent
-	// upward, would we ever land back on the child? (mirrors
-	// edge_check_cycle trigger).
-	if hasCycle(f.edges, e.ChildRoleID(), e.ParentRoleID()) {
-		return rolehierarchy.ErrCycle
-	}
-	f.edges[e.ID()] = e
-	return nil
-}
-
-func (f *fakeEdgeRepo) GetActiveByChild(_ context.Context, child role.ID) (*rolehierarchy.Edge, error) {
-	for _, e := range f.edges {
-		if e.IsActive() && e.ChildRoleID() == child {
-			return e, nil
-		}
-	}
-	return nil, rolehierarchy.ErrEdgeNotFound
-}
-
-func (f *fakeEdgeRepo) UpdateByID(_ context.Context, id rolehierarchy.ID, fn func(*rolehierarchy.Edge) (bool, error)) error {
-	e, ok := f.edges[id]
-	if !ok {
-		return rolehierarchy.ErrEdgeNotFound
-	}
-	commit, err := fn(e)
-	if err != nil {
-		return err
-	}
-	_ = commit
-	return nil
-}
-
-func (f *fakeEdgeRepo) GetAncestorsByChild(_ context.Context, child role.ID) ([]*rolehierarchy.Edge, error) {
-	var out []*rolehierarchy.Edge
-	cur := child
-	seen := map[role.ID]struct{}{child: {}}
-	for {
-		var step *rolehierarchy.Edge
-		for _, e := range f.edges {
-			if e.IsActive() && e.ChildRoleID() == cur {
-				step = e
-				break
-			}
-		}
-		if step == nil {
-			return out, nil
-		}
-		if _, dup := seen[step.ParentRoleID()]; dup {
-			return out, nil
-		}
-		seen[step.ParentRoleID()] = struct{}{}
-		out = append(out, step)
-		cur = step.ParentRoleID()
-	}
-}
-
-func (f *fakeEdgeRepo) ListActiveByParent(_ context.Context, parent role.ID) ([]*rolehierarchy.Edge, error) {
-	var out []*rolehierarchy.Edge
-	for _, e := range f.edges {
-		if e.IsActive() && e.ParentRoleID() == parent {
-			out = append(out, e)
-		}
-	}
-	return out, nil
-}
-
-var _ rolehierarchy.Repository = (*fakeEdgeRepo)(nil)
-
-// hasCycle reports whether adding edge child→parent would close a
-// loop given the existing edge set.
-func hasCycle(edges map[rolehierarchy.ID]*rolehierarchy.Edge, child, parent role.ID) bool {
-	cur := parent
-	seen := map[role.ID]struct{}{child: {}}
-	for {
-		if _, dup := seen[cur]; dup {
-			return true
-		}
-		seen[cur] = struct{}{}
-		var step *rolehierarchy.Edge
-		for _, e := range edges {
-			if e.IsActive() && e.ChildRoleID() == cur {
-				step = e
-				break
-			}
-		}
-		if step == nil {
-			return false
-		}
-		cur = step.ParentRoleID()
-	}
-}
+// The rolehierarchy-side fake lives in
+// internal/identity/domain/rolehierarchy/rolehierarchytest/ per TDL
+// Wild Workouts canon — co-located with the aggregate it fakes.
+// newFakeEdgeRepo is preserved as a one-line alias so existing tests
+// don't need rewriting.
+func newFakeEdgeRepo() *rolehierarchytest.FakeRepository { return rolehierarchytest.NewFakeRepository() }
 
 // fakeUoW is a no-op UnitOfWork — calls fn directly without ctx
 // propagation. The fake repos don't use TxFromContext, so this is

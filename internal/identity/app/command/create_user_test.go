@@ -34,7 +34,7 @@ func TestNewCreateUserHandler_PanicsOnNilDeps(t *testing.T) {
 		{
 			name: "nil uow",
 			fn: func() {
-				_ = command.NewCreateUserHandler(nil, &fakePersonRepo{}, newFakeMembershipRepo(), func() time.Time { return testNow }, testNewPersonID, testNewMembershipID) // arch-test:ignore-err - test fixture setup
+				_ = command.NewCreateUserHandler(nil, seedPersonRepo(t, nil), newFakeMembershipRepo(), func() time.Time { return testNow }, testNewPersonID, testNewMembershipID) // arch-test:ignore-err - test fixture setup
 			},
 		},
 		{
@@ -46,7 +46,7 @@ func TestNewCreateUserHandler_PanicsOnNilDeps(t *testing.T) {
 		{
 			name: "nil memberships",
 			fn: func() {
-				_ = command.NewCreateUserHandler(fakeUoW{}, &fakePersonRepo{}, nil, func() time.Time { return testNow }, testNewPersonID, testNewMembershipID) // arch-test:ignore-err - test fixture setup
+				_ = command.NewCreateUserHandler(fakeUoW{}, seedPersonRepo(t, nil), nil, func() time.Time { return testNow }, testNewPersonID, testNewMembershipID) // arch-test:ignore-err - test fixture setup
 			},
 		},
 	}
@@ -73,7 +73,7 @@ func TestCreateUser_RejectsZeroTenantID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("email.New: %v", err)
 	}
-	h := command.NewCreateUserHandler(fakeUoW{}, &fakePersonRepo{}, newFakeMembershipRepo(), func() time.Time { return testNow }, testNewPersonID, testNewMembershipID)
+	h := command.NewCreateUserHandler(fakeUoW{}, seedPersonRepo(t, nil), newFakeMembershipRepo(), func() time.Time { return testNow }, testNewPersonID, testNewMembershipID)
 
 	_, err = h.Handle(t.Context(), command.CreateUserCommand{
 		TenantID: tenant.ID(""),
@@ -91,7 +91,7 @@ func TestCreateUser_RejectsZeroTenantID(t *testing.T) {
 // still asserts both because mid-stack guard-in-depth is cheap.
 func TestCreateUser_RejectsZeroEmail(t *testing.T) {
 	t.Parallel()
-	h := command.NewCreateUserHandler(fakeUoW{}, &fakePersonRepo{}, newFakeMembershipRepo(), func() time.Time { return testNow }, testNewPersonID, testNewMembershipID)
+	h := command.NewCreateUserHandler(fakeUoW{}, seedPersonRepo(t, nil), newFakeMembershipRepo(), func() time.Time { return testNow }, testNewPersonID, testNewMembershipID)
 
 	_, err := h.Handle(t.Context(), command.CreateUserCommand{
 		TenantID: tenant.ID("11111111-1111-1111-1111-111111111111"),
@@ -112,7 +112,7 @@ func TestCreateUser_BrandNewPerson_HappyPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("email.New: %v", err)
 	}
-	persons := &fakePersonRepo{}
+	persons := seedPersonRepo(t, nil)
 	members := newFakeMembershipRepo()
 	h := command.NewCreateUserHandler(fakeUoW{}, persons, members, func() time.Time { return testNow }, testNewPersonID, testNewMembershipID)
 

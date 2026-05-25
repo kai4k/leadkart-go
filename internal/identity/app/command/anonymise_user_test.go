@@ -18,11 +18,12 @@ var testNow = time.Date(2026, 5, 24, 12, 0, 0, 0, time.UTC)
 func TestAnonymiseUser_Cascades(t *testing.T) {
 	t.Parallel()
 	mRepo := newFakeMembershipRepo()
-	pRepo := &fakePersonRepo{person: newPersonWithPassword(t, "irrelevant")}
+	p := newPersonWithPassword(t, "irrelevant")
+	pRepo := seedPersonRepo(t, p)
 
 	m, err := membership.New(
 		membership.ID("11111111-1111-1111-1111-111111111111"),
-		pRepo.person.ID(),
+		p.ID(),
 		tenant.ID("33333333-3333-3333-3333-333333333333"),
 		membership.ID(""),
 		testNow,
@@ -37,7 +38,7 @@ func TestAnonymiseUser_Cascades(t *testing.T) {
 	if err := h.Handle(t.Context(), command.AnonymiseUserCommand{MembershipID: m.ID()}); err != nil {
 		t.Fatalf("Handle: %v", err)
 	}
-	if !pRepo.person.IsAnonymised() {
+	if !p.IsAnonymised() {
 		t.Error("expected Person anonymised")
 	}
 }
@@ -45,7 +46,7 @@ func TestAnonymiseUser_Cascades(t *testing.T) {
 func TestAnonymiseUser_NotFound(t *testing.T) {
 	t.Parallel()
 	mRepo := newFakeMembershipRepo()
-	pRepo := &fakePersonRepo{}
+	pRepo := seedPersonRepo(t, nil)
 	h := command.NewAnonymiseUserHandler(mRepo, pRepo, func() time.Time { return testNow })
 	err := h.Handle(t.Context(), command.AnonymiseUserCommand{
 		MembershipID: membership.ID("99999999-9999-9999-9999-999999999999"),

@@ -1,7 +1,6 @@
 package command_test
 
 import (
-	"context"
 	"errors"
 	"strings"
 	"testing"
@@ -11,60 +10,15 @@ import (
 	"github.com/leadkart/leadkart-go/internal/common/slug"
 	"github.com/leadkart/leadkart-go/internal/identity/app/command"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant/tenanttest"
 )
 
 
-// fakeTenantRepo is the minimum [tenant.Repository] surface the
-// tenant-update / lifecycle handlers exercise.
-type fakeTenantRepo struct {
-	tenants map[tenant.ID]*tenant.Tenant
-}
-
-func newFakeTenantRepo() *fakeTenantRepo {
-	return &fakeTenantRepo{tenants: make(map[tenant.ID]*tenant.Tenant)}
-}
-
-func (r *fakeTenantRepo) Add(_ context.Context, t *tenant.Tenant) error {
-	r.tenants[t.ID()] = t
-	return nil
-}
-func (r *fakeTenantRepo) UpdateByID(_ context.Context, id tenant.ID, fn func(*tenant.Tenant) (bool, error)) error {
-	t, ok := r.tenants[id]
-	if !ok {
-		return tenant.ErrNotFound
-	}
-	commit, err := fn(t)
-	if err != nil {
-		return err
-	}
-	_ = commit
-	return nil
-}
-func (r *fakeTenantRepo) GetByID(_ context.Context, id tenant.ID) (*tenant.Tenant, error) {
-	t, ok := r.tenants[id]
-	if !ok {
-		return nil, tenant.ErrNotFound
-	}
-	return t, nil
-}
-func (r *fakeTenantRepo) GetBySlug(_ context.Context, _ slug.Slug) (*tenant.Tenant, error) {
-	return nil, tenant.ErrNotFound
-}
-
-func (r *fakeTenantRepo) ListAll(_ context.Context) ([]*tenant.Tenant, error) {
-	out := make([]*tenant.Tenant, 0, len(r.tenants))
-	for _, t := range r.tenants {
-		out = append(out, t)
-	}
-	return out, nil
-}
-
-func (r *fakeTenantRepo) HardDeleteRow(_ context.Context, id tenant.ID) error {
-	delete(r.tenants, id)
-	return nil
-}
-
-var _ tenant.Repository = (*fakeTenantRepo)(nil)
+// The tenant-side fake lives in internal/identity/domain/tenant/tenanttest/
+// per TDL Wild Workouts canon — co-located with the aggregate it
+// fakes. newFakeTenantRepo is preserved as a one-line alias so existing
+// tests don't need rewriting.
+func newFakeTenantRepo() *tenanttest.FakeRepository { return tenanttest.NewFakeRepository() }
 
 func newTenant(t *testing.T) *tenant.Tenant {
 	t.Helper()
