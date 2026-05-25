@@ -531,11 +531,12 @@ func TestRevokeFamilies_NoActiveFamilies_NoOp(t *testing.T) {
 	// + succeeded without error (zero families to revoke is success).
 	waitFor(t, func() bool {
 		var n int
-		_ = fx.pool.QueryRow(t.Context(), ` // arch-test:ignore-err - test fixture setup
+		const q = `
 			SELECT count(*) FROM buildingblocks.audit_log_entry
 			WHERE  action = 'identity.person_password_changed.v1'
 			  AND  succeeded = true
-		`).Scan(&n)
+		`
+		_ = fx.pool.QueryRow(t.Context(), q).Scan(&n) // arch-test:ignore-err — poll loop; non-1 count just keeps polling until deadline
 		return n >= 1
 	}, 3*time.Second, "subscriber audit row not written")
 }
