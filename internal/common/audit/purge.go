@@ -50,7 +50,7 @@ func NewPurgeWorker(pool *pgxpool.Pool, log *slog.Logger, now func() time.Time) 
 		panic("audit: NewPurgeWorker pool required")
 	}
 	if log == nil {
-		log = slog.Default()
+		panic("audit: NewPurgeWorker log required")
 	}
 	if now == nil {
 		now = time.Now

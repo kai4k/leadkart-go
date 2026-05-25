@@ -15,6 +15,8 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/integrationevents"
 )
 
+// arch-test:idempotency-via-noop-on-replay — Family.Revoke transitions an active family to revoked; calling it on an already-revoked family is a documented no-op (see refreshtoken.Family godoc). Replaying the same event reaches the same terminal state.
+
 // RevokeFamiliesOnSecurityChange is the choreographed reaction to
 // Person-level security mutations: any change that rotates the
 // SecurityStamp (password change, anonymisation, global suspend,
@@ -61,7 +63,7 @@ func NewRevokeFamiliesOnSecurityChange(
 	now func() time.Time,
 ) *RevokeFamiliesOnSecurityChange {
 	if log == nil {
-		log = slog.Default()
+		panic("subscribers: NewRevokeFamiliesOnSecurityChange log required")
 	}
 	if now == nil {
 		now = time.Now

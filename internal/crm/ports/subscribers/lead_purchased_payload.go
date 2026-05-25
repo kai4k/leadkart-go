@@ -22,6 +22,8 @@ import (
 	"time"
 )
 
+// arch-test:idempotency-via-wire-shape-only — file contains the wire DTO + topic constant; no handler logic, no message processing, nothing to dedup.
+
 // LeadPurchasedV1 mirrors `platform.lead-purchased.v1` per the slice
 // brief. Tenant-scoped. Replace this struct with the Platform-module
 // import when both branches merge.

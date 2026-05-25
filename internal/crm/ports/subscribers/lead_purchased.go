@@ -21,6 +21,8 @@ const (
 	HandlerIngestLeadPurchased = "crm.subscribers.IngestLeadPurchased"
 )
 
+// arch-test:idempotency-via-natural-key-precheck — dedup happens one call-frame down: command.IngestPurchasedLeadHandler.Handle runs GetBySourcePurchaseID(PurchaseID) inside the same tx and short-circuits with AlreadyExisted=true on replay (ADR 0060). The handler returns nil on that branch so Watermill ACKs the duplicate.
+
 // PurchasedLeadIngestor is the CRM-side subscriber that turns
 // `platform.lead-purchased.v1` envelopes into CrmLead aggregates via
 // the [command.IngestPurchasedLeadHandler] command. Idempotent — the
@@ -40,9 +42,12 @@ type PurchasedLeadIngestor struct {
 }
 
 // NewPurchasedLeadIngestor wires the subscriber. Both args required.
+// log is mandatory — pass slog.New(slog.NewTextHandler(io.Discard, nil))
+// in tests that don't want output. Mat Ryer canon (NewServer takes the
+// logger explicitly); no nil-fallback.
 func NewPurchasedLeadIngestor(cmd command.IngestPurchasedLeadHandler, log *slog.Logger) *PurchasedLeadIngestor {
 	if log == nil {
-		log = slog.Default()
+		panic("subscribers: NewPurchasedLeadIngestor log required")
 	}
 	return &PurchasedLeadIngestor{cmd: cmd, log: log}
 }

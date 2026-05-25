@@ -122,7 +122,7 @@ func CorrelationIDMiddleware(h message.HandlerFunc) message.HandlerFunc {
 // audit Writer already swallows + logs; this middleware just calls it.
 func AuditMiddleware(writer *audit.Writer, log *slog.Logger) message.HandlerMiddleware {
 	if log == nil {
-		log = slog.Default()
+		panic("messaging: AuditMiddleware log required")
 	}
 	return func(h message.HandlerFunc) message.HandlerFunc {
 		return func(msg *message.Message) ([]*message.Message, error) {

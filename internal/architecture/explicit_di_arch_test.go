@@ -206,16 +206,16 @@ func TestArch_NoInitDoingRealWork(t *testing.T) {
 func TestArch_ConstructorsEnumerateAllDeps(t *testing.T) {
 	t.Parallel()
 
-	// Files where the ctor legitimately reaches for substrate (e.g.
-	// the composition-root wiring helper in identity/app/app.go +
-	// guarded slog.Default nil-fallback per the P1 #9 allow-list).
+	// Files where the ctor legitimately reaches for substrate. ONLY the
+	// per-module Application facades (which compose sub-ctors via
+	// keyword-arg structs) are allowed — every other ctor must enumerate
+	// its deps as parameters. The previous slog.Default nil-fallback
+	// exemptions (cache/hybrid.go, messaging/router.go) were retired in
+	// the May 2026 slog-injection sweep.
 	allowFiles := []string{
 		"internal/identity/app/app.go", // Application facade composes sub-ctors
 		"internal/inventory/app/app.go",
 		"internal/platform/app/app.go",
-		// Guarded `if log == nil { log = slog.Default() }` fallback:
-		"internal/common/cache/hybrid.go",
-		"internal/common/messaging/router.go",
 	}
 
 	type violation struct {

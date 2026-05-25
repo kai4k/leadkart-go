@@ -6,6 +6,8 @@ import (
 	"github.com/leadkart/leadkart-go/internal/common/messaging"
 )
 
+// arch-test:idempotency-via-router-middleware — wire-up file only; the messaging.Router this file binds to is constructed in the composition root with IdempotencyMiddleware on every subscriber, so dedup happens at the router layer before any Handle is called.
+
 // Register wires every CRM in-module subscriber against the supplied
 // router. Called once at composition root (cmd/worker — CRM does NOT
 // publish events from the request path).

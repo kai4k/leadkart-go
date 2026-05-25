@@ -31,7 +31,7 @@ const errCodeInternal = "internal_error"
 // abort without logging (e.g. timeout-driven aborts upstream).
 func Recover(log *slog.Logger) func(http.Handler) http.Handler {
 	if log == nil {
-		log = slog.Default()
+		panic("httpmw: Recover log required")
 	}
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

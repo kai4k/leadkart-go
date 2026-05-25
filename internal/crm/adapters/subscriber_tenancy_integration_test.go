@@ -1,11 +1,5 @@
 //go:build integration
 
-// arch-test:no-timeout-needed — the cross-driver async path (testcontainers
-// Postgres + Watermill GoChannel + messaging.Router) is bounded by per-step
-// waitFor budgets (5s) and explicit time.After fail-paths; there is no inner
-// blocking call that would benefit from an outer context.WithTimeout wrapper
-// per the established H4+H9 pattern.
-//
 // arch-test:no-synctest — synctest only models in-process goroutines on
 // virtual time; this test depends on real network IO (pgxpool to a
 // testcontainer + Watermill GoChannel driver), neither of which can be
@@ -174,6 +168,9 @@ func publishLeadPurchased(t *testing.T, pubsub *gochannel.GoChannel, topic strin
 // for tenant A; asserts the row lands with tenant_id=A AND is
 // invisible to a tenant=B RLS context.
 func TestH4_SubscriberTenantScoping_LandsUnderCorrectTenant_RLSIsolated(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+
 	pool := crmRepoFixture(t)
 	const topic = "test.platform.events.h4"
 
@@ -189,15 +186,15 @@ func TestH4_SubscriberTenantScoping_LandsUnderCorrectTenant_RLSIsolated(t *testi
 
 	// Wait for the subscriber to land the row under tenant A.
 	waitFor(t, func() bool {
-		ctx := withTenantCtxFromString(t.Context(), tenantA)
-		got, err := leads.GetBySourcePurchaseID(ctx, purchaseID)
+		tctx := withTenantCtxFromString(ctx, tenantA)
+		got, err := leads.GetBySourcePurchaseID(tctx, purchaseID)
 		return err == nil && got != nil && got.TenantID().String() == tenantA
 	}, 5*time.Second, "row never appeared under tenant A")
 
 	// RLS gate: same query under tenant B's ctx MUST yield ErrNotFound
 	// (NOT empty, NOT panic) because RLS hides the row from a foreign
 	// tenant's session GUC.
-	ctxB := withTenantCtxFromString(t.Context(), tenantB)
+	ctxB := withTenantCtxFromString(ctx, tenantB)
 	if _, err := leads.GetBySourcePurchaseID(ctxB, purchaseID); err == nil {
 		t.Fatal("RLS leak: tenant B saw tenant A's lead")
 	}
@@ -207,6 +204,9 @@ func TestH4_SubscriberTenantScoping_LandsUnderCorrectTenant_RLSIsolated(t *testi
 // EXACT SAME envelope twice. The inbox dedup MUST short-circuit the
 // second delivery; ListPage MUST show exactly ONE lead.
 func TestH9_DoubleDeliveryIdempotent(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+
 	pool := crmRepoFixture(t)
 	const topic = "test.platform.events.h9"
 
@@ -218,10 +218,10 @@ func TestH9_DoubleDeliveryIdempotent(t *testing.T) {
 	// First delivery
 	publishLeadPurchased(t, pubsub, topic, tenantID, purchaseID)
 	waitFor(t, func() bool {
-		ctx := withTenantCtxFromString(t.Context(), tenantID)
+		tctx := withTenantCtxFromString(ctx, tenantID)
 		tx := pg.NewTransactor(pool)
 		leads := adapters.NewCrmLeadRepository(pool, tx)
-		got, err := leads.GetBySourcePurchaseID(ctx, purchaseID)
+		got, err := leads.GetBySourcePurchaseID(tctx, purchaseID)
 		return err == nil && got != nil
 	}, 5*time.Second, "first delivery never landed")
 
@@ -241,8 +241,8 @@ func TestH9_DoubleDeliveryIdempotent(t *testing.T) {
 	// Final assertion: exactly ONE row under this purchase_id.
 	tx := pg.NewTransactor(pool)
 	leads := adapters.NewCrmLeadRepository(pool, tx)
-	ctx := withTenantCtxFromString(t.Context(), tenantID)
-	page, err := leads.ListPage(ctx, crmlead.ListFilter{}, pagination.Cursor{}, 50)
+	tctx := withTenantCtxFromString(ctx, tenantID)
+	page, err := leads.ListPage(tctx, crmlead.ListFilter{}, pagination.Cursor{}, 50)
 	if err != nil {
 		t.Fatalf("ListPage: %v", err)
 	}

@@ -77,7 +77,7 @@ func New(cfg Config) (*HybridCache, error) {
 		cfg.Codec = JSONCodec{}
 	}
 	if cfg.Logger == nil {
-		cfg.Logger = slog.Default()
+		return nil, errors.New("cache: Logger required")
 	}
 	l1, err := ristretto.NewCache(&ristretto.Config[string, []byte]{
 		NumCounters: cfg.L1MaxItems * 10,

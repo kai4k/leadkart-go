@@ -3,6 +3,8 @@ package subscribers_test
 import (
 	"context"
 	"encoding/json"
+	"io"
+	"log/slog"
 	"sync"
 	"testing"
 	"time"
@@ -16,6 +18,12 @@ import (
 	"github.com/leadkart/leadkart-go/internal/crm/domain/crmlead"
 	"github.com/leadkart/leadkart-go/internal/crm/ports/subscribers"
 )
+
+// silentLog returns a no-output *slog.Logger for tests — required by
+// subscriber constructors per Mat Ryer canon (no nil-fallback).
+func silentLog() *slog.Logger {
+	return slog.New(slog.NewTextHandler(io.Discard, nil))
+}
 
 // fakeLeads is a minimal crmlead.Repository for the subscriber tests.
 // Only the methods the command path touches are implemented.
@@ -112,7 +120,7 @@ func validEvent(tenantID string, purchase string) subscribers.LeadPurchasedV1 {
 func TestPurchasedLeadIngestor_HappyPath(t *testing.T) {
 	t.Parallel()
 	leads := newFakeLeads()
-	h := subscribers.NewPurchasedLeadIngestor(command.NewIngestPurchasedLeadHandler(leads, time.Now, func() crmlead.ID { return crmlead.ID(uuid.NewString()) }), nil)
+	h := subscribers.NewPurchasedLeadIngestor(command.NewIngestPurchasedLeadHandler(leads, time.Now, func() crmlead.ID { return crmlead.ID(uuid.NewString()) }), silentLog())
 	tenantID := uuid.NewString()
 	purchase := uuid.NewString()
 	if err := h.Handle(t.Context(), "", buildEnvelope(t, validEvent(tenantID, purchase))); err != nil {
@@ -130,7 +138,7 @@ func TestPurchasedLeadIngestor_HappyPath(t *testing.T) {
 func TestPurchasedLeadIngestor_IdempotentOnReplay(t *testing.T) {
 	t.Parallel()
 	leads := newFakeLeads()
-	h := subscribers.NewPurchasedLeadIngestor(command.NewIngestPurchasedLeadHandler(leads, time.Now, func() crmlead.ID { return crmlead.ID(uuid.NewString()) }), nil)
+	h := subscribers.NewPurchasedLeadIngestor(command.NewIngestPurchasedLeadHandler(leads, time.Now, func() crmlead.ID { return crmlead.ID(uuid.NewString()) }), silentLog())
 	tenantID := uuid.NewString()
 	purchase := uuid.NewString()
 	env := buildEnvelope(t, validEvent(tenantID, purchase))
@@ -150,7 +158,7 @@ func TestPurchasedLeadIngestor_IdempotentOnReplay(t *testing.T) {
 func TestPurchasedLeadIngestor_WrongTopicShortCircuits(t *testing.T) {
 	t.Parallel()
 	leads := newFakeLeads()
-	h := subscribers.NewPurchasedLeadIngestor(command.NewIngestPurchasedLeadHandler(leads, time.Now, func() crmlead.ID { return crmlead.ID(uuid.NewString()) }), nil)
+	h := subscribers.NewPurchasedLeadIngestor(command.NewIngestPurchasedLeadHandler(leads, time.Now, func() crmlead.ID { return crmlead.ID(uuid.NewString()) }), silentLog())
 	msg := buildEnvelope(t, validEvent(uuid.NewString(), uuid.NewString()))
 	msg.Metadata.Set(messaging.HeaderEventType, "platform.unrelated.v1")
 	if err := h.Handle(t.Context(), "", msg); err != nil {
@@ -164,7 +172,7 @@ func TestPurchasedLeadIngestor_WrongTopicShortCircuits(t *testing.T) {
 func TestPurchasedLeadIngestor_MalformedPayloadErrors(t *testing.T) {
 	t.Parallel()
 	leads := newFakeLeads()
-	h := subscribers.NewPurchasedLeadIngestor(command.NewIngestPurchasedLeadHandler(leads, time.Now, func() crmlead.ID { return crmlead.ID(uuid.NewString()) }), nil)
+	h := subscribers.NewPurchasedLeadIngestor(command.NewIngestPurchasedLeadHandler(leads, time.Now, func() crmlead.ID { return crmlead.ID(uuid.NewString()) }), silentLog())
 	msg := message.NewMessage(uuid.NewString(), []byte("{not json"))
 	msg.Metadata.Set(messaging.HeaderEventType, subscribers.LeadPurchasedTopic)
 	if err := h.Handle(t.Context(), "", msg); err == nil {
