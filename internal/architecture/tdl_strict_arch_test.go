@@ -711,57 +711,11 @@ func typeIsError(e ast.Expr) bool {
 	return ok && id.Name == "error"
 }
 
-// ----------------------------------------------------------------------------
-// TestArch_TDL_NoServiceDirInModules
-// ----------------------------------------------------------------------------
-//
-// Position (tdl_canon.md §5 + §12): TDL uses `internal/<module>/service/`
-// ONLY as the module composition root — a single file `service.go`
-// exporting `NewApplication(ctx) (app.Application, cleanup func())`.
-// Business logic, handlers, or use-case code under `service/` is the
-// anti-pattern the "no service layer" rule guards against.
-//
-// LeadKart currently puts module composition in cmd/api/main.go (a
-// known deviation; documented in tdl_canon.md §12 — either follow TDL
-// or accept the deviation explicitly). This test enforces the
-// downstream rule regardless: no `service/` directory under
-// `internal/<module>/` at all. If we later adopt the TDL pattern, this
-// test will need a narrow exception for the single composition-root
-// file.
-//
-// arch-test:no-negative-fixture.
-func TestArch_TDL_NoServiceDirInModules(t *testing.T) {
-	t.Parallel()
-
-	root := internalDir(t)
-
-	type violation struct {
-		dir string
-	}
-	var violations []violation
-
-	for _, mod := range modulesUnderInternal(t) {
-		serviceDir := filepath.Join(root, mod, "service")
-		info, err := os.Stat(serviceDir)
-		if err != nil || !info.IsDir() {
-			continue
-		}
-		violations = append(violations, violation{dir: pathToSlash(serviceDir)})
-	}
-
-	if len(violations) == 0 {
-		return
-	}
-
-	t.Errorf("%d internal/<module>/service/ director(ies) — forbidden per TDL canon §5/§12:", len(violations))
-	t.Logf("  Position: no 'service layer' between handlers and domain.")
-	t.Logf("  TDL uses service/ ONLY for the composition root")
-	t.Logf("  (NewApplication + cleanup). LeadKart's composition lives")
-	t.Logf("  in cmd/api/main.go — service/ dirs serve no canon purpose.")
-	for _, v := range violations {
-		t.Logf("  %s", v.dir)
-	}
-}
+// No `internal/<module>/service/` dir test lives here — that rule is
+// enforced by TestArch_EveryModuleHasFourLayers in layout_arch_test.go,
+// which fatals on ANY non-canonical top-level dir (broader coverage +
+// stricter failure mode). Duplicating it here would only add audit
+// surface, not safety. See tdl_canon.md §5 + §12.
 
 // ----------------------------------------------------------------------------
 // TestArch_TDL_NoSetterMethodsOnAggregates

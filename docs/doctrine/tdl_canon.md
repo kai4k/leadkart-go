@@ -208,9 +208,9 @@ Local interfaces (`UserService` in `command/services.go`) instead of a shared in
 - A handler that calls another handler — use cases compose via the domain or via events, not by mutual call.
 
 ### How to enforce
-- Forbid the directory name `service/` anywhere except the module composition root.
-- For every type matching `*Handler` in `app/command/` or `app/query/`, require exactly one exported method named `Handle` with signature `(context.Context, X) error` or `(context.Context, X) (Y, error)`.
-- For every interface declared in `app/command/services.go` (or equivalent), assert no other module imports it — they're handler-local by design.
+- Forbid the directory name `service/` anywhere except the module composition root. **(Enforced by `TestArch_EveryModuleHasFourLayers` in `layout_arch_test.go` — fatals on any non-canonical top-level dir, including `service/`.)**
+- For every type matching `*Handler` in `app/command/` or `app/query/`, require exactly one exported method named `Handle` with signature `(context.Context, X) error` or `(context.Context, X) (Y, error)`. **(Enforced by `TestArch_TDL_HandlerSignatureStrict`.)**
+- For every interface declared in `app/command/services.go` (or equivalent), assert no other module imports it — they're handler-local by design. **(Indirectly enforced via `TestArch_NoCrossModuleImports`; a per-file gate is a future refinement.)**
 
 ---
 
