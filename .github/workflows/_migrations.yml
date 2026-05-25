@@ -1,0 +1,58 @@
+name: Reusable — Migrations Apply Cleanly
+
+# Reusable workflow for the migrations-check job. Applies all migrations
+# to an ephemeral Postgres on every PR touching migrations/ OR
+# cmd/migrate/. Catches schema-level errors (GIN opclass mismatches, bad
+# FK shapes, RLS policy syntax, type incompatibilities) BEFORE they hit
+# integration tests.
+#
+# Justification: the GIN-on-uuid bug shipped in Wave 1 because `task ci`
+# (pre-push) doesn't apply migrations — only cloud CI did via the
+# integration job. By then the bug was already pushed. This job runs in
+# < 30s + fails fast on schema errors so the rest of the pipeline doesn't
+# waste time. Per ADR-implicit "fail fast at the smallest possible gate".
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Migrations Apply Cleanly
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: leadkart
+          POSTGRES_PASSWORD: leadkart_test
+          POSTGRES_DB: leadkart_migcheck
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U leadkart -d leadkart_migcheck"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 15
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/go-setup
+        with:
+          install-task: 'false'
+
+      - name: Apply all migrations via cmd/migrate
+        env:
+          LEADKART_POSTGRES__DSN: postgres://leadkart:leadkart_test@localhost:5432/leadkart_migcheck?sslmode=disable
+        run: go run ./cmd/migrate up
+
+      - name: Sanity probe — verify the canonical extensions/tables exist
+        env:
+          PGPASSWORD: leadkart_test
+        run: |
+          psql -h localhost -U leadkart -d leadkart_migcheck -c "SELECT 1 FROM pg_extension WHERE extname = 'pg_trgm'" | grep -q "1 row" \
+            || (echo "pg_trgm extension missing" && exit 1)
+          psql -h localhost -U leadkart -d leadkart_migcheck -c "\dt identity.*" | grep -q "tenant_memberships" \
+            || (echo "identity.tenant_memberships missing" && exit 1)

@@ -123,9 +123,24 @@ tasks:
       - go tool gotestsum --junitfile=junit-architecture.xml --format=testname -- -run "^Test(Arch|Meta)_" -shuffle=on {{.ARCH_TEST_PACKAGES}}
 
   ci:test:int:
-    desc: 'Integration tests + JUnit XML (CI flavor). Requires Docker.'
+    desc: 'Integration tests + JUnit XML (CI flavor). Requires Docker. Unsharded — used by local `task ci:full` + as the fall-through when the matrix-sharded ci:test:int:shard variant is not invoked.'
     cmds:
       - go tool gotestsum --junitfile=junit-integration.xml --format=testname -- -race -shuffle=on -tags=integration -timeout=15m -coverprofile={{.COVER_INT_OUT}} ./...
+
+  ci:test:int:shard:
+    desc: |
+      Matrix-sharded integration tests for CI. Each shard runs ONLY its
+      module's //go:build integration files in parallel on a separate
+      runner. Wall-time drops from sum(shards) → max(shard).
+      Required env: SHARD (friendly name for junit filename) + PKG
+      (Go package selector). CI workflow's matrix strategy sets both.
+      Example (local repro of the identity shard):
+        SHARD=identity PKG=./internal/identity/... task ci:test:int:shard
+    vars:
+      SHARD: '{{.SHARD | default "all"}}'
+      PKG: '{{.PKG | default "./..."}}'
+    cmds:
+      - go tool gotestsum --junitfile=junit-integration-{{.SHARD}}.xml --format=testname -- -race -shuffle=on -tags=integration -timeout=15m -coverprofile=coverage-integration-{{.SHARD}}.out {{.PKG}}
 
   test:int:compile:
     desc: 'Compile-only check for //go:build integration files. Catches broken integration tests without spinning testcontainers; runs in pre-push gate per ADR 0049 (Wave 7 surfaced an integration-tagged build failure that local `task ci` missed).'

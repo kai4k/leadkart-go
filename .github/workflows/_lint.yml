@@ -1,0 +1,44 @@
+name: Reusable — Lint + Vet + Vuln
+
+# Reusable workflow for the lint + vet + vuln + build chain. Extracted
+# from the old monolithic "unit" job — these checks have NO dependency
+# on tests, so running them in parallel with unit tests halves the
+# wall-time of the Go pipeline.
+#
+# - vet:    syntactic correctness gate (~5s)
+# - lint:   golangci-lint v2 strict profile (~2min — the long pole here)
+# - vuln:   govulncheck via go.mod tool directive (~30s)
+# - build:  all binaries via `task build` (~30s)
+#
+# Total ~3min wall-time; runs in parallel with unit/architecture/
+# integration so the critical path is unaffected.
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  static:
+    name: Vet / Lint / Vuln / Build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/go-setup
+
+      - name: Vet (task vet)
+        run: task vet
+
+      - name: Lint (golangci-lint v2 strict)
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.12.2
+          args: --timeout=5m
+
+      - name: Vulnerability scan (task vuln — go tool govulncheck)
+        run: task vuln
+
+      - name: Build all binaries (task build)
+        run: task build

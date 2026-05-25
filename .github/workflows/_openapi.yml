@@ -1,0 +1,35 @@
+name: Reusable — OpenAPI Spec Lint
+
+# Reusable workflow for the OpenAPI Spectral lint. Spectral version is
+# pinned via SPECTRAL_VERSION in Taskfile.yml — CI invokes
+# `task ci:openapi` so the pinning is enforced.
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: OpenAPI Spec Lint (Spectral)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          # No `cache: 'npm'` — npm cache requires a package-lock.json
+          # which this repo doesn't ship (Spectral runs via npx).
+          # npx download is ~5s on warm cache; not worth a placeholder
+          # package.json just to unlock the cache key.
+
+      - uses: arduino/setup-task@v2
+        with:
+          version: 3.x
+          repo-token: ${{ github.token }}
+
+      - name: Run Spectral (task ci:openapi)
+        run: task ci:openapi
