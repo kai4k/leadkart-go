@@ -41,14 +41,12 @@ import (
 )
 
 // codeRoutesPaths are the source files whose mux.Handle calls are the
-// code-side truth. Every module that registers /api/v1/* routes via
-// its `ports.AddRoutes` MUST have its http.go listed here, otherwise
-// the drift gate silently misses cross-module routes.
-//
-// Per ADR 0050 (Wave 9.3) + ADR 0061 (inventory slice 1):
+// code-side truth for the IDENTITY drift gate. Other modules ship
+// their OWN route_spec_test.go (platform, inventory, crm) — drift
+// gates are PER-MODULE per ADR 0050 since each module owns its
+// corner of the URL space.
 var codeRoutesPaths = []string{
 	"http.go",
-	"../../inventory/ports/http.go",
 }
 
 // specPath is the canonical OpenAPI spec.
