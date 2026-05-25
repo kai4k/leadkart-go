@@ -9,17 +9,24 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/permission"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/role"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
 
 // User authorization mutations: role assignment + permission overlay
 // + manager hierarchy. Each handler is a thin UpdateByID wrapper over
 // the corresponding [membership.Membership] method.
+//
+// Per ADR 0062 every command here carries the TenantID explicitly —
+// the HTTP layer projects it from the JWT before constructing the
+// command. Repository methods thread it through to the SQL adapter's
+// GUC bind / the fake's tenant filter.
 
 // ----- AssignUserRole -------------------------------------------------------
 
 // AssignUserRoleCommand grants a Role to a Membership. Aggregate
 // dedups silently — re-assigning the same Role emits no event.
 type AssignUserRoleCommand struct {
+	TenantID     tenant.ID
 	MembershipID membership.ID
 	RoleID       role.ID
 }
@@ -44,6 +51,9 @@ func NewAssignUserRoleHandler(m membership.Repository, now func() time.Time) Ass
 
 // Handle dispatches to [Membership.AssignRole].
 func (h AssignUserRoleHandler) Handle(ctx context.Context, cmd AssignUserRoleCommand) error {
+	if cmd.TenantID.IsZero() {
+		return errors.New("assign_user_role: tenant id required")
+	}
 	if cmd.MembershipID.IsZero() {
 		return errors.New("assign_user_role: membership id required")
 	}
@@ -51,7 +61,7 @@ func (h AssignUserRoleHandler) Handle(ctx context.Context, cmd AssignUserRoleCom
 		return errors.New("assign_user_role: role id required")
 	}
 	now := h.now()
-	err := h.memberships.UpdateByID(ctx, cmd.MembershipID, func(m *membership.Membership) (bool, error) {
+	err := h.memberships.UpdateByID(ctx, cmd.TenantID, cmd.MembershipID, func(m *membership.Membership) (bool, error) {
 		if err := m.AssignRole(cmd.RoleID, now); err != nil {
 			return false, err
 		}
@@ -70,6 +80,7 @@ func (h AssignUserRoleHandler) Handle(ctx context.Context, cmd AssignUserRoleCom
 
 // RevokeUserRoleCommand removes a Role assignment.
 type RevokeUserRoleCommand struct {
+	TenantID     tenant.ID
 	MembershipID membership.ID
 	RoleID       role.ID
 }
@@ -94,6 +105,9 @@ func NewRevokeUserRoleHandler(m membership.Repository, now func() time.Time) Rev
 
 // Handle dispatches to [Membership.RevokeRole].
 func (h RevokeUserRoleHandler) Handle(ctx context.Context, cmd RevokeUserRoleCommand) error {
+	if cmd.TenantID.IsZero() {
+		return errors.New("revoke_user_role: tenant id required")
+	}
 	if cmd.MembershipID.IsZero() {
 		return errors.New("revoke_user_role: membership id required")
 	}
@@ -101,7 +115,7 @@ func (h RevokeUserRoleHandler) Handle(ctx context.Context, cmd RevokeUserRoleCom
 		return errors.New("revoke_user_role: role id required")
 	}
 	now := h.now()
-	err := h.memberships.UpdateByID(ctx, cmd.MembershipID, func(m *membership.Membership) (bool, error) {
+	err := h.memberships.UpdateByID(ctx, cmd.TenantID, cmd.MembershipID, func(m *membership.Membership) (bool, error) {
 		if err := m.RevokeRole(cmd.RoleID, now); err != nil {
 			return false, err
 		}
@@ -124,9 +138,10 @@ func (h RevokeUserRoleHandler) Handle(ctx context.Context, cmd RevokeUserRoleCom
 // at the boundary (programmer error, not request error — bad input
 // from the HTTP layer is converted to ErrPermissionUnknown below).
 type ReplaceUserPermissionOverridesCommand struct {
-	MembershipID    membership.ID
-	GrantedNames    []string
-	RevokedNames    []string
+	TenantID     tenant.ID
+	MembershipID membership.ID
+	GrantedNames []string
+	RevokedNames []string
 }
 
 // ErrPermissionUnknown surfaces when a permission name in the request
@@ -155,6 +170,9 @@ func NewReplaceUserPermissionOverridesHandler(m membership.Repository, now func(
 // Handle resolves each permission name through the closed catalogue
 // + dispatches to [Membership.ReplacePermissionOverlays].
 func (h ReplaceUserPermissionOverridesHandler) Handle(ctx context.Context, cmd ReplaceUserPermissionOverridesCommand) error {
+	if cmd.TenantID.IsZero() {
+		return errors.New("replace_user_permission_overrides: tenant id required")
+	}
 	if cmd.MembershipID.IsZero() {
 		return errors.New("replace_user_permission_overrides: membership id required")
 	}
@@ -167,7 +185,7 @@ func (h ReplaceUserPermissionOverridesHandler) Handle(ctx context.Context, cmd R
 		return err
 	}
 	now := h.now()
-	upErr := h.memberships.UpdateByID(ctx, cmd.MembershipID, func(m *membership.Membership) (bool, error) {
+	upErr := h.memberships.UpdateByID(ctx, cmd.TenantID, cmd.MembershipID, func(m *membership.Membership) (bool, error) {
 		if err := m.ReplacePermissionOverlays(granted, revoked, now); err != nil {
 			return false, err
 		}
@@ -204,6 +222,7 @@ func resolvePermissions(names []string) ([]*permission.Permission, error) {
 // pointer. Same-tenant invariant enforced at DB level by the composite
 // FK (membership_id, tenant_id) → tenant_memberships(id, tenant_id).
 type AssignUserManagerCommand struct {
+	TenantID     tenant.ID
 	MembershipID membership.ID
 	ManagerID    membership.ID
 }
@@ -229,6 +248,9 @@ func NewAssignUserManagerHandler(m membership.Repository, now func() time.Time) 
 // Handle dispatches to [Membership.AssignManager]. Self-management
 // (m.id == cmd.ManagerID) is rejected by the aggregate.
 func (h AssignUserManagerHandler) Handle(ctx context.Context, cmd AssignUserManagerCommand) error {
+	if cmd.TenantID.IsZero() {
+		return errors.New("assign_user_manager: tenant id required")
+	}
 	if cmd.MembershipID.IsZero() {
 		return errors.New("assign_user_manager: membership id required")
 	}
@@ -236,7 +258,7 @@ func (h AssignUserManagerHandler) Handle(ctx context.Context, cmd AssignUserMana
 		return errors.New("assign_user_manager: manager id required")
 	}
 	now := h.now()
-	err := h.memberships.UpdateByID(ctx, cmd.MembershipID, func(m *membership.Membership) (bool, error) {
+	err := h.memberships.UpdateByID(ctx, cmd.TenantID, cmd.MembershipID, func(m *membership.Membership) (bool, error) {
 		if err := m.AssignManager(cmd.ManagerID, now); err != nil {
 			return false, err
 		}
@@ -255,6 +277,7 @@ func (h AssignUserManagerHandler) Handle(ctx context.Context, cmd AssignUserMana
 
 // RemoveUserManagerCommand clears the reports-to pointer.
 type RemoveUserManagerCommand struct {
+	TenantID     tenant.ID
 	MembershipID membership.ID
 }
 
@@ -279,11 +302,14 @@ func NewRemoveUserManagerHandler(m membership.Repository, now func() time.Time) 
 // Handle dispatches to [Membership.RemoveManager]. Idempotent —
 // already-no-manager returns nil without an event.
 func (h RemoveUserManagerHandler) Handle(ctx context.Context, cmd RemoveUserManagerCommand) error {
+	if cmd.TenantID.IsZero() {
+		return errors.New("remove_user_manager: tenant id required")
+	}
 	if cmd.MembershipID.IsZero() {
 		return errors.New("remove_user_manager: membership id required")
 	}
 	now := h.now()
-	err := h.memberships.UpdateByID(ctx, cmd.MembershipID, func(m *membership.Membership) (bool, error) {
+	err := h.memberships.UpdateByID(ctx, cmd.TenantID, cmd.MembershipID, func(m *membership.Membership) (bool, error) {
 		if err := m.RemoveManager(now); err != nil {
 			return false, err
 		}

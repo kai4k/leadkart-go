@@ -198,13 +198,13 @@ func TestEdgeRepository_GetActiveByChild_FiltersSoftDeleted(t *testing.T) {
 		t.Fatalf("Add: %v", err)
 	}
 	// Remove → must not appear in GetActiveByChild.
-	rmErr := edges.UpdateByID(ctx, e.ID(), func(loaded *rolehierarchy.Edge) (bool, error) {
+	rmErr := edges.UpdateByID(ctx, tn.ID(), e.ID(), func(loaded *rolehierarchy.Edge) (bool, error) {
 		return true, loaded.Remove(membership.ID(""), "removal for the active-only check", time.Now())
 	})
 	if rmErr != nil {
 		t.Fatalf("Remove: %v", rmErr)
 	}
-	_, err := edges.GetActiveByChild(ctx, c.ID())
+	_, err := edges.GetActiveByChild(ctx, tn.ID(), c.ID())
 	if !errors.Is(err, rolehierarchy.ErrEdgeNotFound) {
 		t.Fatalf("expected ErrEdgeNotFound after soft-delete, got %v", err)
 	}
@@ -240,7 +240,7 @@ func TestEdgeRepository_GetAncestorsByChild_RecursiveCTEWalksUpward(t *testing.T
 		t.Fatalf("c → p: %v", err)
 	}
 
-	ancs, err := edges.GetAncestorsByChild(ctx, c.ID())
+	ancs, err := edges.GetAncestorsByChild(ctx, tn.ID(), c.ID())
 	if err != nil {
 		t.Fatalf("GetAncestorsByChild: %v", err)
 	}

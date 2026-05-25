@@ -510,15 +510,15 @@ func NewSetRoleParentHandler(edges rolehierarchy.Repository, uow pg.UnitOfWork, 
 // cross-tenant rejected at the DB layer (cycle trigger + composite
 // FK fire on insert).
 func (h SetRoleParentHandler) Handle(ctx context.Context, cmd SetRoleParentCommand) error {
+	if cmd.TenantID.IsZero() {
+		return errors.New("set_role_parent: tenant id required")
+	}
 	if cmd.RoleID.IsZero() {
 		return errors.New("set_role_parent: role id required")
 	}
 	if cmd.NewParentID.IsZero() {
 		// Clear-parent path: only soft-delete; no new edge to insert.
 		return h.clearParent(ctx, cmd)
-	}
-	if cmd.TenantID.IsZero() {
-		return errors.New("set_role_parent: tenant id required for non-clear path")
 	}
 
 	return h.uow.WithinTx(ctx, pg.TxScopeTenant, func(ctx context.Context) error {
@@ -550,7 +550,7 @@ func (h SetRoleParentHandler) Handle(ctx context.Context, cmd SetRoleParentComma
 // clearParent handles the NewParentID-is-zero branch. Single
 // soft-delete — no need to open a UoW since there's only one write.
 func (h SetRoleParentHandler) clearParent(ctx context.Context, cmd SetRoleParentCommand) error {
-	existing, gErr := h.edges.GetActiveByChild(ctx, cmd.RoleID)
+	existing, gErr := h.edges.GetActiveByChild(ctx, cmd.TenantID, cmd.RoleID)
 	if errors.Is(gErr, rolehierarchy.ErrEdgeNotFound) {
 		// Already a root — idempotent no-op.
 		return nil
@@ -559,7 +559,7 @@ func (h SetRoleParentHandler) clearParent(ctx context.Context, cmd SetRoleParent
 		return fmt.Errorf("set_role_parent: load existing edge: %w", gErr)
 	}
 	now := h.now()
-	rmErr := h.edges.UpdateByID(ctx, existing.ID(), func(e *rolehierarchy.Edge) (bool, error) {
+	rmErr := h.edges.UpdateByID(ctx, cmd.TenantID, existing.ID(), func(e *rolehierarchy.Edge) (bool, error) {
 		if err := e.Remove(cmd.ActorMembershipID, cmd.Reason, now); err != nil {
 			return false, err
 		}
@@ -576,7 +576,7 @@ func (h SetRoleParentHandler) clearParent(ctx context.Context, cmd SetRoleParent
 // insert must commit atomically to preserve the single-parent
 // invariant without a transient window where both rows are active).
 func (h SetRoleParentHandler) removeExistingEdge(ctx context.Context, cmd SetRoleParentCommand) error {
-	existing, gErr := h.edges.GetActiveByChild(ctx, cmd.RoleID)
+	existing, gErr := h.edges.GetActiveByChild(ctx, cmd.TenantID, cmd.RoleID)
 	if errors.Is(gErr, rolehierarchy.ErrEdgeNotFound) {
 		return nil
 	}
@@ -584,7 +584,7 @@ func (h SetRoleParentHandler) removeExistingEdge(ctx context.Context, cmd SetRol
 		return fmt.Errorf("set_role_parent: load existing edge: %w", gErr)
 	}
 	now := h.now()
-	return h.edges.UpdateByID(ctx, existing.ID(), func(e *rolehierarchy.Edge) (bool, error) {
+	return h.edges.UpdateByID(ctx, cmd.TenantID, existing.ID(), func(e *rolehierarchy.Edge) (bool, error) {
 		if err := e.Remove(cmd.ActorMembershipID, cmd.Reason, now); err != nil {
 			return false, err
 		}

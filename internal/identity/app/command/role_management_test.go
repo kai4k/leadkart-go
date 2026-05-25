@@ -218,7 +218,7 @@ func TestSetRoleParent_SetsParentOnRootChild(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("Handle: %v", err)
 	}
-	got, err := edges.GetActiveByChild(t.Context(), child.ID())
+	got, err := edges.GetActiveByChild(t.Context(), tid, child.ID())
 	if err != nil {
 		t.Fatalf("GetActiveByChild: %v", err)
 	}
@@ -253,7 +253,7 @@ func TestSetRoleParent_ReplacesExistingParent(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("replace: %v", err)
 	}
-	got, err := edges.GetActiveByChild(t.Context(), child.ID())
+	got, err := edges.GetActiveByChild(t.Context(), tid, child.ID())
 	if err != nil {
 		t.Fatalf("GetActiveByChild: %v", err)
 	}
@@ -284,7 +284,7 @@ func TestSetRoleParent_ClearsParent(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("clear: %v", err)
 	}
-	if _, err := edges.GetActiveByChild(t.Context(), child.ID()); !errors.Is(err, rolehierarchy.ErrEdgeNotFound) {
+	if _, err := edges.GetActiveByChild(t.Context(), tid, child.ID()); !errors.Is(err, rolehierarchy.ErrEdgeNotFound) {
 		t.Fatalf("expected no active edge after clear, got: %v", err)
 	}
 }

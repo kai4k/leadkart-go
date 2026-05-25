@@ -37,6 +37,7 @@ import (
 
 	"github.com/leadkart/leadkart-go/internal/identity/domain/role"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/rolehierarchy"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
 
 // FakeRepository is the in-memory implementation of
@@ -97,10 +98,10 @@ func (f *FakeRepository) Add(_ context.Context, e *rolehierarchy.Edge) error {
 // GetActiveByChild returns the single active edge for the supplied
 // child, or [rolehierarchy.ErrEdgeNotFound] when the child has no
 // parent.
-func (f *FakeRepository) GetActiveByChild(_ context.Context, childRoleID role.ID) (*rolehierarchy.Edge, error) {
+func (f *FakeRepository) GetActiveByChild(_ context.Context, tenantID tenant.ID, childRoleID role.ID) (*rolehierarchy.Edge, error) {
 
 	for _, e := range f.edges {
-		if e.IsActive() && e.ChildRoleID() == childRoleID {
+		if e.IsActive() && e.TenantID() == tenantID && e.ChildRoleID() == childRoleID {
 			return e, nil
 		}
 	}
@@ -114,10 +115,13 @@ func (f *FakeRepository) GetActiveByChild(_ context.Context, childRoleID role.ID
 // caller observes mutations even if it returns (false, nil). This
 // mirrors the pg adapter's behavior — both rely on the aggregate's
 // invariants being re-checked at persist time, not snapshot-rollback.
-func (f *FakeRepository) UpdateByID(_ context.Context, id rolehierarchy.ID, updateFn func(*rolehierarchy.Edge) (bool, error)) error {
+func (f *FakeRepository) UpdateByID(_ context.Context, tenantID tenant.ID, id rolehierarchy.ID, updateFn func(*rolehierarchy.Edge) (bool, error)) error {
 
 	e, ok := f.edges[id]
 	if !ok {
+		return rolehierarchy.ErrEdgeNotFound
+	}
+	if e.TenantID() != tenantID {
 		return rolehierarchy.ErrEdgeNotFound
 	}
 	commit, err := updateFn(e)
@@ -132,7 +136,7 @@ func (f *FakeRepository) UpdateByID(_ context.Context, id rolehierarchy.ID, upda
 // `childRoleID`, returning each ancestor edge in depth order (child's
 // parent first → root). Cycle protection via a seen-set so the walk
 // terminates even if a stale cycle leaked past Add's guard.
-func (f *FakeRepository) GetAncestorsByChild(_ context.Context, childRoleID role.ID) ([]*rolehierarchy.Edge, error) {
+func (f *FakeRepository) GetAncestorsByChild(_ context.Context, tenantID tenant.ID, childRoleID role.ID) ([]*rolehierarchy.Edge, error) {
 
 	var out []*rolehierarchy.Edge
 	cur := childRoleID
@@ -140,7 +144,7 @@ func (f *FakeRepository) GetAncestorsByChild(_ context.Context, childRoleID role
 	for {
 		var step *rolehierarchy.Edge
 		for _, e := range f.edges {
-			if e.IsActive() && e.ChildRoleID() == cur {
+			if e.IsActive() && e.TenantID() == tenantID && e.ChildRoleID() == cur {
 				step = e
 				break
 			}
@@ -161,11 +165,11 @@ func (f *FakeRepository) GetAncestorsByChild(_ context.Context, childRoleID role
 // `parentRoleID`. Order is unspecified — mirrors the SQL adapter's
 // ListActiveHierarchyEdgesByParent which delivers rows in index order
 // (the test layer relies on equality, not ordering).
-func (f *FakeRepository) ListActiveByParent(_ context.Context, parentRoleID role.ID) ([]*rolehierarchy.Edge, error) {
+func (f *FakeRepository) ListActiveByParent(_ context.Context, tenantID tenant.ID, parentRoleID role.ID) ([]*rolehierarchy.Edge, error) {
 
 	var out []*rolehierarchy.Edge
 	for _, e := range f.edges {
-		if e.IsActive() && e.ParentRoleID() == parentRoleID {
+		if e.IsActive() && e.TenantID() == tenantID && e.ParentRoleID() == parentRoleID {
 			out = append(out, e)
 		}
 	}

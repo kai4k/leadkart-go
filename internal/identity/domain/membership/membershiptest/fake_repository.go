@@ -96,10 +96,13 @@ func (f *FakeRepository) Add(_ context.Context, m *membership.Membership) error 
 // the caller observes mutations even if it returns (false, nil). This
 // mirrors the pg adapter's behavior — both rely on the aggregate's
 // invariants being re-checked at persist time, not snapshot-rollback.
-func (f *FakeRepository) UpdateByID(_ context.Context, id membership.ID, updateFn func(*membership.Membership) (bool, error)) error {
+func (f *FakeRepository) UpdateByID(_ context.Context, tenantID tenant.ID, id membership.ID, updateFn func(*membership.Membership) (bool, error)) error {
 
 	m, ok := f.rows[id]
 	if !ok {
+		return membership.ErrNotFound
+	}
+	if m.TenantID() != tenantID {
 		return membership.ErrNotFound
 	}
 	commit, err := updateFn(m)
@@ -114,10 +117,13 @@ func (f *FakeRepository) UpdateByID(_ context.Context, id membership.ID, updateF
 // any status (Active or Inactive); active-only filtering is the
 // caller's responsibility (mirrors the SQL adapter's RLS-scoped read
 // which returns rows of any status).
-func (f *FakeRepository) GetByID(_ context.Context, id membership.ID) (*membership.Membership, error) {
+func (f *FakeRepository) GetByID(_ context.Context, tenantID tenant.ID, id membership.ID) (*membership.Membership, error) {
 
 	m, ok := f.rows[id]
 	if !ok {
+		return nil, membership.ErrNotFound
+	}
+	if m.TenantID() != tenantID {
 		return nil, membership.ErrNotFound
 	}
 	return m, nil
@@ -164,10 +170,13 @@ func (f *FakeRepository) ListForTenant(_ context.Context, tenantID tenant.ID) ([
 //
 // Note: the SQL adapter takes a beforeID as uuid; the fake compares as
 // string. limit must be positive (mirrors the adapter's validation).
-func (f *FakeRepository) ListForTenantPage(_ context.Context, beforeJoinedAt time.Time, beforeID string, limit int) ([]*membership.Membership, error) {
+func (f *FakeRepository) ListForTenantPage(_ context.Context, tenantID tenant.ID, beforeJoinedAt time.Time, beforeID string, limit int) ([]*membership.Membership, error) {
 
 	var out []*membership.Membership
 	for _, m := range f.rows {
+		if m.TenantID() != tenantID {
+			continue
+		}
 		if m.Status() != membership.StatusActive {
 			continue
 		}

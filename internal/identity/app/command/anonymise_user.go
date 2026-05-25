@@ -8,6 +8,7 @@ import (
 
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
 
 // AnonymiseUserCommand triggers a DPDP §12 / GDPR Art. 17 right-to-
@@ -22,8 +23,12 @@ import (
 // hold by default. A tenant Admin cannot anonymise a Person that
 // holds Memberships outside their tenant.
 //
+// Per ADR 0062 TenantID is explicit — projected from JWT by the
+// HTTP layer to scope the entry-point membership lookup.
+//
 // Idempotent: already-anonymised Persons return nil with no event.
 type AnonymiseUserCommand struct {
+	TenantID     tenant.ID
 	MembershipID membership.ID
 }
 
@@ -54,10 +59,13 @@ func NewAnonymiseUserHandler(m membership.Repository, p person.Repository, now f
 // consume to revoke refresh-token families + scrub free-text fields
 // in CRM/Tasks/etc. (post-launch wiring per architecture.md).
 func (h AnonymiseUserHandler) Handle(ctx context.Context, cmd AnonymiseUserCommand) error {
+	if cmd.TenantID.IsZero() {
+		return errors.New("anonymise_user: tenant id required")
+	}
 	if cmd.MembershipID.IsZero() {
 		return errors.New("anonymise_user: membership id required")
 	}
-	m, err := h.memberships.GetByID(ctx, cmd.MembershipID)
+	m, err := h.memberships.GetByID(ctx, cmd.TenantID, cmd.MembershipID)
 	if err != nil {
 		if errors.Is(err, membership.ErrNotFound) {
 			return ErrUserNotFound

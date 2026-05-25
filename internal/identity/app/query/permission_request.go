@@ -9,6 +9,7 @@ import (
 	"github.com/leadkart/leadkart-go/internal/common/pagination"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/permissionrequest"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
 
 // PermissionRequestView is the read-shape of [permissionrequest.Request]
@@ -54,7 +55,12 @@ func projectPermissionRequest(r *permissionrequest.Request) PermissionRequestVie
 // ----- GetPermissionRequest -------------------------------------------------
 
 // GetPermissionRequestQuery returns the read shape by ID.
+//
+// TenantID is the caller's tenant scope (injected from JWT context
+// by the HTTP layer) — flows explicitly through repository methods
+// per ADR 0062 (no ctx-tenancy GUC smuggling).
 type GetPermissionRequestQuery struct {
+	TenantID  tenant.ID
 	RequestID permissionrequest.ID
 }
 
@@ -73,10 +79,13 @@ func NewGetPermissionRequestHandler(r permissionrequest.Repository) GetPermissio
 
 // Handle returns the [PermissionRequestView] or [permissionrequest.ErrNotFound].
 func (h GetPermissionRequestHandler) Handle(ctx context.Context, q GetPermissionRequestQuery) (PermissionRequestView, error) {
+	if q.TenantID.IsZero() {
+		return PermissionRequestView{}, errors.New("get_permission_request: tenant id required")
+	}
 	if q.RequestID.IsZero() {
 		return PermissionRequestView{}, errors.New("get_permission_request: request id required")
 	}
-	r, err := h.requests.GetByID(ctx, q.RequestID)
+	r, err := h.requests.GetByID(ctx, q.TenantID, q.RequestID)
 	if err != nil {
 		return PermissionRequestView{}, fmt.Errorf("get_permission_request: %w", err)
 	}
@@ -87,7 +96,12 @@ func (h GetPermissionRequestHandler) Handle(ctx context.Context, q GetPermission
 
 // ListMyPermissionRequestsQuery returns the requester's paginated
 // history (all states).
+//
+// TenantID is the caller's tenant scope (injected from JWT context
+// by the HTTP layer) — flows explicitly through repository methods
+// per ADR 0062 (no ctx-tenancy GUC smuggling).
 type ListMyPermissionRequestsQuery struct {
+	TenantID              tenant.ID
 	RequesterMembershipID membership.ID
 	Cursor                pagination.Cursor
 	PageSize              int
@@ -112,12 +126,16 @@ func (h ListMyPermissionRequestsHandler) Handle(
 	ctx context.Context,
 	q ListMyPermissionRequestsQuery,
 ) (pagination.Page[PermissionRequestView], error) {
+	if q.TenantID.IsZero() {
+		return pagination.Page[PermissionRequestView]{},
+			errors.New("list_my_permission_requests: tenant id required")
+	}
 	if q.RequesterMembershipID.IsZero() {
 		return pagination.Page[PermissionRequestView]{},
 			errors.New("list_my_permission_requests: requester membership id required")
 	}
 	pageSize := pagination.ClampPageSize(q.PageSize)
-	page, err := h.requests.ListByRequester(ctx, q.RequesterMembershipID, pageSize, q.Cursor)
+	page, err := h.requests.ListByRequester(ctx, q.TenantID, q.RequesterMembershipID, pageSize, q.Cursor)
 	if err != nil {
 		return pagination.Page[PermissionRequestView]{},
 			fmt.Errorf("list_my_permission_requests: %w", err)
@@ -129,7 +147,12 @@ func (h ListMyPermissionRequestsHandler) Handle(
 
 // ListPendingForApproverQuery returns the approver's pending queue —
 // every Pending Request the supplied Membership is positioned to act on.
+//
+// TenantID is the caller's tenant scope (injected from JWT context
+// by the HTTP layer) — flows explicitly through repository methods
+// per ADR 0062 (no ctx-tenancy GUC smuggling).
 type ListPendingForApproverQuery struct {
+	TenantID             tenant.ID
 	ApproverMembershipID membership.ID
 	Cursor               pagination.Cursor
 	PageSize             int
@@ -154,12 +177,16 @@ func (h ListPendingForApproverHandler) Handle(
 	ctx context.Context,
 	q ListPendingForApproverQuery,
 ) (pagination.Page[PermissionRequestView], error) {
+	if q.TenantID.IsZero() {
+		return pagination.Page[PermissionRequestView]{},
+			errors.New("list_pending_for_approver: tenant id required")
+	}
 	if q.ApproverMembershipID.IsZero() {
 		return pagination.Page[PermissionRequestView]{},
 			errors.New("list_pending_for_approver: approver membership id required")
 	}
 	pageSize := pagination.ClampPageSize(q.PageSize)
-	page, err := h.requests.ListPendingApprovableBy(ctx, q.ApproverMembershipID, pageSize, q.Cursor)
+	page, err := h.requests.ListPendingApprovableBy(ctx, q.TenantID, q.ApproverMembershipID, pageSize, q.Cursor)
 	if err != nil {
 		return pagination.Page[PermissionRequestView]{},
 			fmt.Errorf("list_pending_for_approver: %w", err)

@@ -70,9 +70,10 @@ func NewResolver(memberships membership.Repository, roles role.Repository, now f
 // `multi-tenancy.md` RLS canon.
 func (r *Resolver) Resolve(
 	ctx context.Context,
+	tenantID tenant.ID,
 	membershipID membership.ID,
 ) ([]*permission.Permission, error) {
-	m, err := r.memberships.GetByID(ctx, membershipID)
+	m, err := r.memberships.GetByID(ctx, tenantID, membershipID)
 	if err != nil {
 		return nil, fmt.Errorf("permissions: load membership %q: %w", membershipID, err)
 	}

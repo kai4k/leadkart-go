@@ -44,11 +44,15 @@ func NewPermissionRequestRepository(pool *pgxpool.Pool, tx *pg.Transactor) *Perm
 // Pending Request. Translates SQLSTATE 23505 on
 // uq_permission_requests_pending into
 // [permissionrequest.ErrPendingRequestExists].
+//
+// The aggregate carries its own TenantID — the GUC is bound from
+// req.TenantID() (TDL canon per ADR 0062: tenantID flows through
+// explicit values, not ctx).
 func (r *PermissionRequestRepository) Add(ctx context.Context, req *permissionrequest.Request) error {
 	if tx, ok := pg.TxFromContext(ctx); ok {
 		return r.addOnTx(ctx, tx, req)
 	}
-	return r.tx.WithinTxPgx(ctx, pg.TxScopeTenant, func(ctx context.Context, tx pgx.Tx) error {
+	return r.tx.WithinTxPgxTenant(ctx, req.TenantID().String(), func(ctx context.Context, tx pgx.Tx) error {
 		return r.addOnTx(ctx, tx, req)
 	})
 }
@@ -65,13 +69,16 @@ func (r *PermissionRequestRepository) addOnTx(
 	return drainPermissionRequestEvents(ctx, tx, req)
 }
 
-// GetByID satisfies [permissionrequest.Repository]. RLS-scoped read.
+// GetByID satisfies [permissionrequest.Repository]. Tenant-scoped
+// read — GUC bound from the explicit tenantID parameter (TDL canon
+// per ADR 0062).
 func (r *PermissionRequestRepository) GetByID(
 	ctx context.Context,
+	tenantID tenant.ID,
 	id permissionrequest.ID,
 ) (*permissionrequest.Request, error) {
 	var out *permissionrequest.Request
-	err := r.tx.WithinTxPgx(ctx, pg.TxScopeTenant, func(ctx context.Context, tx pgx.Tx) error {
+	err := r.tx.WithinTxPgxTenant(ctx, tenantID.String(), func(ctx context.Context, tx pgx.Tx) error {
 		q := r.q.WithTx(tx)
 		got, err := loadPermissionRequest(ctx, q, id)
 		if err != nil {
@@ -88,13 +95,15 @@ func (r *PermissionRequestRepository) GetByID(
 
 // UpdateByID satisfies [permissionrequest.Repository] — TDL Sep 2024
 // UpdateFn pattern: load → updateFn → persist (if shouldPersist) →
-// drain events. All in one tenant-scoped transaction.
+// drain events. All in one tenant-scoped transaction. GUC bound from
+// the explicit tenantID parameter (TDL canon per ADR 0062).
 //
 // Approve / Deny / Cancel all flow through here; the aggregate's state
 // machine validates legality, the SQL just writes whatever the
 // aggregate computed.
 func (r *PermissionRequestRepository) UpdateByID(
 	ctx context.Context,
+	tenantID tenant.ID,
 	id permissionrequest.ID,
 	updateFn func(*permissionrequest.Request) (bool, error),
 ) error {
@@ -105,7 +114,7 @@ func (r *PermissionRequestRepository) UpdateByID(
 	if tx, ok := pg.TxFromContext(ctx); ok {
 		return r.updateOnTx(ctx, tx, id, updateFn)
 	}
-	return r.tx.WithinTxPgx(ctx, pg.TxScopeTenant, func(ctx context.Context, tx pgx.Tx) error {
+	return r.tx.WithinTxPgxTenant(ctx, tenantID.String(), func(ctx context.Context, tx pgx.Tx) error {
 		return r.updateOnTx(ctx, tx, id, updateFn)
 	})
 }

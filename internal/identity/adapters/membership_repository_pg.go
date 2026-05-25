@@ -74,7 +74,7 @@ func (r *MembershipRepository) Add(ctx context.Context, m *membership.Membership
 	if tx, ok := pg.TxFromContext(ctx); ok {
 		return r.addOnTx(ctx, tx, m)
 	}
-	return r.tx.WithinTxPgx(ctx, pg.TxScopeTenant, func(ctx context.Context, tx pgx.Tx) error {
+	return r.tx.WithinTxPgxTenant(ctx, m.TenantID().String(), func(ctx context.Context, tx pgx.Tx) error {
 		return r.addOnTx(ctx, tx, m)
 	})
 }
@@ -110,10 +110,11 @@ func (r *MembershipRepository) addOnTx(ctx context.Context, tx pgx.Tx, m *member
 // is simpler than per-row diff tracking and idempotent under retry.
 func (r *MembershipRepository) UpdateByID(
 	ctx context.Context,
+	tenantID tenant.ID,
 	id membership.ID,
 	updateFn func(*membership.Membership) (bool, error),
 ) error {
-	return r.tx.WithinTxPgx(ctx, pg.TxScopeTenant, func(ctx context.Context, tx pgx.Tx) error {
+	return r.tx.WithinTxPgxTenant(ctx, tenantID.String(), func(ctx context.Context, tx pgx.Tx) error {
 		q := r.q.WithTx(tx)
 		m, err := loadMembership(ctx, q, id)
 		if err != nil {
@@ -146,9 +147,9 @@ func (r *MembershipRepository) UpdateByID(
 // tenant scope for RLS. Returns [membership.ErrNotFound] if no row
 // matches OR if the row exists in a different tenant scope (RLS-hidden
 // — same observable behaviour as truly missing).
-func (r *MembershipRepository) GetByID(ctx context.Context, id membership.ID) (*membership.Membership, error) {
+func (r *MembershipRepository) GetByID(ctx context.Context, tenantID tenant.ID, id membership.ID) (*membership.Membership, error) {
 	var out *membership.Membership
-	err := r.tx.WithinTxPgx(ctx, pg.TxScopeTenant, func(ctx context.Context, tx pgx.Tx) error {
+	err := r.tx.WithinTxPgxTenant(ctx, tenantID.String(), func(ctx context.Context, tx pgx.Tx) error {
 		m, err := loadMembership(ctx, r.q.WithTx(tx), id)
 		if err != nil {
 			return err
@@ -221,13 +222,13 @@ func (r *MembershipRepository) GetActiveForPerson(
 // failure beats silent empty result).
 func (r *MembershipRepository) ListForTenant(
 	ctx context.Context,
-	_ tenant.ID, // RLS scopes via ctx tenant; explicit param kept for contract symmetry
+	tenantID tenant.ID,
 ) ([]*membership.Membership, error) {
 	// (No SQL helper for "list all in current tenant" — we go through
 	// ListMembershipsForPerson would be wrong scope. Issue a plain SELECT
 	// via the transactor; sqlc adds nothing here.)
 	var out []*membership.Membership
-	err := r.tx.WithinTxPgx(ctx, pg.TxScopeTenant, func(ctx context.Context, tx pgx.Tx) error {
+	err := r.tx.WithinTxPgxTenant(ctx, tenantID.String(), func(ctx context.Context, tx pgx.Tx) error {
 		q := r.q.WithTx(tx)
 		hydrated, err := q.ListMembershipsInCurrentTenant(ctx)
 		if err != nil {
@@ -270,6 +271,7 @@ func (r *MembershipRepository) ListForTenant(
 // and uses it to set next_cursor.
 func (r *MembershipRepository) ListForTenantPage(
 	ctx context.Context,
+	tenantID tenant.ID,
 	beforeJoinedAt time.Time,
 	beforeID string,
 	limit int,
@@ -283,7 +285,7 @@ func (r *MembershipRepository) ListForTenantPage(
 	}
 
 	var out []*membership.Membership
-	err = r.tx.WithinTxPgx(ctx, pg.TxScopeTenant, func(ctx context.Context, tx pgx.Tx) error {
+	err = r.tx.WithinTxPgxTenant(ctx, tenantID.String(), func(ctx context.Context, tx pgx.Tx) error {
 		q := r.q.WithTx(tx)
 		hydrated, qerr := q.ListActiveMembershipsInTenantPage(ctx, db.ListActiveMembershipsInTenantPageParams{
 			BeforeJoinedAt: pgRequiredTimestamp(beforeJoinedAt),

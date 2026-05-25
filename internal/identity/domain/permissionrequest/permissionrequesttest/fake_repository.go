@@ -39,6 +39,7 @@ import (
 	"github.com/leadkart/leadkart-go/internal/common/pagination"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/permissionrequest"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
 
 // FakeRepository is the in-memory implementation of
@@ -98,18 +99,23 @@ func (f *FakeRepository) Add(_ context.Context, r *permissionrequest.Request) er
 	return nil
 }
 
-// UpdateByID loads, mutates via updateFn, persists. Returns
-// [permissionrequest.ErrNotFound] if the row doesn't exist.
+// UpdateByID loads (scoped to tenantID), mutates via updateFn,
+// persists. Returns [permissionrequest.ErrNotFound] if the row
+// doesn't exist OR belongs to a different tenant — mirrors the SQL
+// adapter's RLS-bound behavior.
 //
 // Maintains the pending-tuple index: if the mutation moves State away
 // from Pending (→ Approved / Denied / Cancelled), the
 // (requester, permission) slot is freed so a future Add can succeed
 // for the same tuple. Drains events on commit, matching the SQL
 // adapter's drainPermissionRequestEvents → outbox flow.
-func (f *FakeRepository) UpdateByID(_ context.Context, id permissionrequest.ID, updateFn func(*permissionrequest.Request) (bool, error)) error {
+func (f *FakeRepository) UpdateByID(_ context.Context, tenantID tenant.ID, id permissionrequest.ID, updateFn func(*permissionrequest.Request) (bool, error)) error {
 
 	x, ok := f.requests[id]
 	if !ok {
+		return permissionrequest.ErrNotFound
+	}
+	if x.TenantID() != tenantID {
 		return permissionrequest.ErrNotFound
 	}
 	prevState := x.State()
@@ -130,24 +136,32 @@ func (f *FakeRepository) UpdateByID(_ context.Context, id permissionrequest.ID, 
 	return nil
 }
 
-// GetByID returns the Request or [permissionrequest.ErrNotFound].
-func (f *FakeRepository) GetByID(_ context.Context, id permissionrequest.ID) (*permissionrequest.Request, error) {
+// GetByID returns the Request scoped to tenantID, or
+// [permissionrequest.ErrNotFound]. Requests in other tenants are
+// hidden — mirrors the SQL adapter's RLS-bound behavior.
+func (f *FakeRepository) GetByID(_ context.Context, tenantID tenant.ID, id permissionrequest.ID) (*permissionrequest.Request, error) {
 
 	x, ok := f.requests[id]
 	if !ok {
+		return nil, permissionrequest.ErrNotFound
+	}
+	if x.TenantID() != tenantID {
 		return nil, permissionrequest.ErrNotFound
 	}
 	return x, nil
 }
 
 // GetPendingForMembership returns every Pending request the supplied
-// Membership has open. Used by the application service to pre-validate
-// the at-most-one-pending invariant before mint AND by the requester's
-// UI ("show my pending elevations").
-func (f *FakeRepository) GetPendingForMembership(_ context.Context, m membership.ID) ([]*permissionrequest.Request, error) {
+// Membership has open in the supplied tenant. Used by the application
+// service to pre-validate the at-most-one-pending invariant before
+// mint AND by the requester's UI ("show my pending elevations").
+func (f *FakeRepository) GetPendingForMembership(_ context.Context, tenantID tenant.ID, m membership.ID) ([]*permissionrequest.Request, error) {
 
 	var out []*permissionrequest.Request
 	for _, x := range f.requests {
+		if x.TenantID() != tenantID {
+			continue
+		}
 		if x.RequesterMembershipID() == m && x.State() == permissionrequest.StatePending {
 			out = append(out, x)
 		}
@@ -157,14 +171,17 @@ func (f *FakeRepository) GetPendingForMembership(_ context.Context, m membership
 
 // ListPendingApprovableBy returns the keyset-paginated queue of
 // Pending requests where approver_membership_id matches the supplied
-// Membership ID. Per ADR 0038 cursor semantics: first page passes the
-// zero pagination.Cursor + the adapter applies its own sentinel
-// internally. The fake delegates page assembly to
+// Membership ID (scoped to tenantID). Per ADR 0038 cursor semantics:
+// first page passes the zero pagination.Cursor + the adapter applies
+// its own sentinel internally. The fake delegates page assembly to
 // [pagination.BuildPage] using (CreatedAt, ID) as the sort tuple.
-func (f *FakeRepository) ListPendingApprovableBy(_ context.Context, approver membership.ID, pageSize int, _ pagination.Cursor) (pagination.Page[*permissionrequest.Request], error) {
+func (f *FakeRepository) ListPendingApprovableBy(_ context.Context, tenantID tenant.ID, approver membership.ID, pageSize int, _ pagination.Cursor) (pagination.Page[*permissionrequest.Request], error) {
 
 	var items []*permissionrequest.Request
 	for _, x := range f.requests {
+		if x.TenantID() != tenantID {
+			continue
+		}
 		if x.ApproverMembershipID() == approver && x.State() == permissionrequest.StatePending {
 			items = append(items, x)
 		}
@@ -175,12 +192,15 @@ func (f *FakeRepository) ListPendingApprovableBy(_ context.Context, approver mem
 }
 
 // ListByRequester returns the keyset-paginated history of every state
-// for the supplied Requester Membership. Used by the requester's
-// "my requests" UI.
-func (f *FakeRepository) ListByRequester(_ context.Context, requester membership.ID, pageSize int, _ pagination.Cursor) (pagination.Page[*permissionrequest.Request], error) {
+// for the supplied Requester Membership (scoped to tenantID). Used by
+// the requester's "my requests" UI.
+func (f *FakeRepository) ListByRequester(_ context.Context, tenantID tenant.ID, requester membership.ID, pageSize int, _ pagination.Cursor) (pagination.Page[*permissionrequest.Request], error) {
 
 	var items []*permissionrequest.Request
 	for _, x := range f.requests {
+		if x.TenantID() != tenantID {
+			continue
+		}
 		if x.RequesterMembershipID() == requester {
 			items = append(items, x)
 		}

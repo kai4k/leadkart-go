@@ -49,10 +49,11 @@ type UserView struct {
 
 // ----- GetUserQuery --------------------------------------------------------
 
-// GetUserQuery returns the UserView for a Membership in the caller's
-// tenant. Cross-tenant access surfaces as [membership.ErrNotFound]
-// (the repository's RLS scope filters silently).
+// GetUserQuery returns the UserView for a Membership in the supplied
+// tenant. Per ADR 0062 TenantID is explicit; cross-tenant access
+// surfaces as [membership.ErrNotFound] (RLS hides + fake filters).
 type GetUserQuery struct {
+	TenantID     tenant.ID
 	MembershipID membership.ID
 }
 
@@ -76,10 +77,13 @@ func NewGetUserHandler(m membership.Repository, p person.Repository) GetUserHand
 // Handle returns the composed view or [membership.ErrNotFound] when
 // the Membership doesn't exist (or is in a different tenant).
 func (h GetUserHandler) Handle(ctx context.Context, q GetUserQuery) (UserView, error) {
+	if q.TenantID.IsZero() {
+		return UserView{}, errors.New("get_user: tenant id required")
+	}
 	if q.MembershipID.IsZero() {
 		return UserView{}, errors.New("get_user: membership id required")
 	}
-	m, err := h.memberships.GetByID(ctx, q.MembershipID)
+	m, err := h.memberships.GetByID(ctx, q.TenantID, q.MembershipID)
 	if err != nil {
 		return UserView{}, fmt.Errorf("get_user: load membership: %w", err)
 	}
@@ -220,7 +224,7 @@ func (h ListUsersPagedHandler) Handle(ctx context.Context, q ListUsersPagedQuery
 
 	// LIMIT page_size+1 — the "peek one extra" pattern. BuildPage drops
 	// the extra row + sets HasMore + NextCursor accordingly.
-	mems, err := h.memberships.ListForTenantPage(ctx, beforeAt, beforeID, pageSize+1)
+	mems, err := h.memberships.ListForTenantPage(ctx, q.TenantID, beforeAt, beforeID, pageSize+1)
 	if err != nil {
 		return pagination.Page[UserView]{}, fmt.Errorf("list_users_paged: list memberships: %w", err)
 	}

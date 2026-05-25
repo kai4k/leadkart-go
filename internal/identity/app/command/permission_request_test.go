@@ -67,6 +67,7 @@ func TestRequestPermissionElevation_HappyPath(t *testing.T) {
 
 	h := command.NewRequestPermissionElevationHandler(reqs, mems, fixedTimeFn(), func() permissionrequest.ID { return permissionrequest.ID(ids.NewV7().String()) })
 	out, err := h.Handle(t.Context(), command.RequestPermissionElevationCommand{
+		TenantID:              requester.TenantID(),
 		RequesterMembershipID: requester.ID(),
 		Permission:            permission.FromConstant(permission.IdentityPermissions.Users.Create),
 		Reason:                "need to onboard 5 users for monthly sales drive",
@@ -89,6 +90,7 @@ func TestRequestPermissionElevation_NonExistentMembership(t *testing.T) {
 	h := command.NewRequestPermissionElevationHandler(reqs, mems, fixedTimeFn(), func() permissionrequest.ID { return permissionrequest.ID(ids.NewV7().String()) })
 
 	_, err := h.Handle(t.Context(), command.RequestPermissionElevationCommand{
+		TenantID:              tenant.ID(ids.NewV7().String()),
 		RequesterMembershipID: membership.ID(ids.NewV7().String()),
 		Permission:            permission.FromConstant(permission.IdentityPermissions.Users.Create),
 		Reason:                "need to onboard 5 users for monthly sales drive",
@@ -108,6 +110,7 @@ func TestRequestPermissionElevation_RejectsDuplicatePending(t *testing.T) {
 	h := command.NewRequestPermissionElevationHandler(reqs, mems, fixedTimeFn(), func() permissionrequest.ID { return permissionrequest.ID(ids.NewV7().String()) })
 
 	cmd := command.RequestPermissionElevationCommand{
+		TenantID:              requester.TenantID(),
 		RequesterMembershipID: requester.ID(),
 		Permission:            permission.FromConstant(permission.IdentityPermissions.Users.Create),
 		Reason:                "need to onboard 5 users for monthly sales drive",
@@ -137,6 +140,7 @@ func TestApprovePermissionRequest_HappyPath(t *testing.T) {
 
 	submitH := command.NewRequestPermissionElevationHandler(reqs, mems, fixedTimeFn(), func() permissionrequest.ID { return permissionrequest.ID(ids.NewV7().String()) })
 	out, err := submitH.Handle(t.Context(), command.RequestPermissionElevationCommand{
+		TenantID:              requester.TenantID(),
 		RequesterMembershipID: requester.ID(),
 		Permission:            permission.FromConstant(permission.IdentityPermissions.Users.Create),
 		Reason:                "need to onboard 5 users for monthly sales drive",
@@ -147,6 +151,7 @@ func TestApprovePermissionRequest_HappyPath(t *testing.T) {
 
 	approveH := command.NewApprovePermissionRequestHandler(reqs, mems, fixedTimeFn(), ids.NewV7)
 	if err := approveH.Handle(t.Context(), command.ApprovePermissionRequestCommand{
+		TenantID:             requester.TenantID(),
 		RequestID:            out.RequestID,
 		ApproverMembershipID: manager.ID(),
 		DecisionReason:       "approved for the rollout",
@@ -155,7 +160,7 @@ func TestApprovePermissionRequest_HappyPath(t *testing.T) {
 	}
 
 	// Request state should be Approved.
-	req, _ := reqs.GetByID(t.Context(), out.RequestID)
+	req, _ := reqs.GetByID(t.Context(), requester.TenantID(), out.RequestID)
 	if req.State() != permissionrequest.StateApproved {
 		t.Errorf("State = %v, want approved", req.State())
 	}
@@ -183,6 +188,7 @@ func TestApprovePermissionRequest_BlocksSelfApproval(t *testing.T) {
 
 	submitH := command.NewRequestPermissionElevationHandler(reqs, mems, fixedTimeFn(), func() permissionrequest.ID { return permissionrequest.ID(ids.NewV7().String()) })
 	out, _ := submitH.Handle(t.Context(), command.RequestPermissionElevationCommand{
+		TenantID:              requester.TenantID(),
 		RequesterMembershipID: requester.ID(),
 		Permission:            permission.FromConstant(permission.IdentityPermissions.Users.Create),
 		Reason:                "need to onboard 5 users for monthly sales drive",
@@ -190,6 +196,7 @@ func TestApprovePermissionRequest_BlocksSelfApproval(t *testing.T) {
 
 	approveH := command.NewApprovePermissionRequestHandler(reqs, mems, fixedTimeFn(), ids.NewV7)
 	err := approveH.Handle(t.Context(), command.ApprovePermissionRequestCommand{
+		TenantID:             requester.TenantID(),
 		RequestID:            out.RequestID,
 		ApproverMembershipID: requester.ID(), // self-approval
 	})
@@ -209,6 +216,7 @@ func TestApprovePermissionRequest_MissingManagerRequiresPlatform(t *testing.T) {
 
 	submitH := command.NewRequestPermissionElevationHandler(reqs, mems, fixedTimeFn(), func() permissionrequest.ID { return permissionrequest.ID(ids.NewV7().String()) })
 	out, _ := submitH.Handle(t.Context(), command.RequestPermissionElevationCommand{
+		TenantID:              requester.TenantID(),
 		RequesterMembershipID: requester.ID(),
 		Permission:            permission.FromConstant(permission.IdentityPermissions.Users.Create),
 		Reason:                "need to onboard 5 users for monthly sales drive",
@@ -217,6 +225,7 @@ func TestApprovePermissionRequest_MissingManagerRequiresPlatform(t *testing.T) {
 	approveH := command.NewApprovePermissionRequestHandler(reqs, mems, fixedTimeFn(), ids.NewV7)
 	// Non-platform random approver should be Forbidden.
 	err := approveH.Handle(t.Context(), command.ApprovePermissionRequestCommand{
+		TenantID:             requester.TenantID(),
 		RequestID:            out.RequestID,
 		ApproverMembershipID: membership.ID(ids.NewV7().String()),
 		IsPlatformOperator:   false,
@@ -227,6 +236,7 @@ func TestApprovePermissionRequest_MissingManagerRequiresPlatform(t *testing.T) {
 
 	// Platform operator should be allowed.
 	if err := approveH.Handle(t.Context(), command.ApprovePermissionRequestCommand{
+		TenantID:             requester.TenantID(),
 		RequestID:            out.RequestID,
 		ApproverMembershipID: membership.ID(ids.NewV7().String()),
 		IsPlatformOperator:   true,
@@ -251,6 +261,7 @@ func TestDenyPermissionRequest_HappyPath(t *testing.T) {
 
 	submitH := command.NewRequestPermissionElevationHandler(reqs, mems, fixedTimeFn(), func() permissionrequest.ID { return permissionrequest.ID(ids.NewV7().String()) })
 	out, _ := submitH.Handle(t.Context(), command.RequestPermissionElevationCommand{
+		TenantID:              requester.TenantID(),
 		RequesterMembershipID: requester.ID(),
 		Permission:            permission.FromConstant(permission.IdentityPermissions.Users.Create),
 		Reason:                "need to onboard 5 users for monthly sales drive",
@@ -258,13 +269,14 @@ func TestDenyPermissionRequest_HappyPath(t *testing.T) {
 
 	denyH := command.NewDenyPermissionRequestHandler(reqs, mems, fixedTimeFn())
 	if err := denyH.Handle(t.Context(), command.DenyPermissionRequestCommand{
+		TenantID:             requester.TenantID(),
 		RequestID:            out.RequestID,
 		ApproverMembershipID: manager.ID(),
 		DecisionReason:       "scope too broad; rethink and re-submit",
 	}); err != nil {
 		t.Fatalf("Deny: %v", err)
 	}
-	req, _ := reqs.GetByID(t.Context(), out.RequestID)
+	req, _ := reqs.GetByID(t.Context(), requester.TenantID(), out.RequestID)
 	if req.State() != permissionrequest.StateDenied {
 		t.Errorf("State = %v, want denied", req.State())
 	}
@@ -282,6 +294,7 @@ func TestCancelPermissionRequest_OnlyRequesterCanCancel(t *testing.T) {
 
 	submitH := command.NewRequestPermissionElevationHandler(reqs, mems, fixedTimeFn(), func() permissionrequest.ID { return permissionrequest.ID(ids.NewV7().String()) })
 	out, _ := submitH.Handle(t.Context(), command.RequestPermissionElevationCommand{
+		TenantID:              requester.TenantID(),
 		RequesterMembershipID: requester.ID(),
 		Permission:            permission.FromConstant(permission.IdentityPermissions.Users.Create),
 		Reason:                "need to onboard 5 users for monthly sales drive",
@@ -290,6 +303,7 @@ func TestCancelPermissionRequest_OnlyRequesterCanCancel(t *testing.T) {
 	cancelH := command.NewCancelPermissionRequestHandler(reqs, fixedTimeFn())
 	// Different caller — collapses to 404 enumeration-safe.
 	err := cancelH.Handle(t.Context(), command.CancelPermissionRequestCommand{
+		TenantID:              requester.TenantID(),
 		RequestID:             out.RequestID,
 		RequesterMembershipID: membership.ID(ids.NewV7().String()),
 	})
@@ -299,12 +313,13 @@ func TestCancelPermissionRequest_OnlyRequesterCanCancel(t *testing.T) {
 
 	// True requester can cancel.
 	if err := cancelH.Handle(t.Context(), command.CancelPermissionRequestCommand{
+		TenantID:              requester.TenantID(),
 		RequestID:             out.RequestID,
 		RequesterMembershipID: requester.ID(),
 	}); err != nil {
 		t.Fatalf("Cancel: %v", err)
 	}
-	req, _ := reqs.GetByID(t.Context(), out.RequestID)
+	req, _ := reqs.GetByID(t.Context(), requester.TenantID(), out.RequestID)
 	if req.State() != permissionrequest.StateCancelled {
 		t.Errorf("State = %v, want cancelled", req.State())
 	}

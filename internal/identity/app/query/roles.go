@@ -68,7 +68,7 @@ func (h GetRoleHandler) Handle(ctx context.Context, q GetRoleQuery) (RoleView, e
 	if err != nil {
 		return RoleView{}, fmt.Errorf("get_role: %w", err)
 	}
-	parentID, err := h.lookupParent(ctx, r.ID())
+	parentID, err := h.lookupParent(ctx, q.TenantID, r.ID())
 	if err != nil {
 		return RoleView{}, fmt.Errorf("get_role: lookup parent: %w", err)
 	}
@@ -78,11 +78,11 @@ func (h GetRoleHandler) Handle(ctx context.Context, q GetRoleQuery) (RoleView, e
 // lookupParent returns the active parent role for `id` OR empty
 // string when the role is a root. ErrEdgeNotFound is the expected
 // "no parent" signal — not an error.
-func (h GetRoleHandler) lookupParent(ctx context.Context, id role.ID) (string, error) {
+func (h GetRoleHandler) lookupParent(ctx context.Context, tenantID tenant.ID, id role.ID) (string, error) {
 	if h.edges == nil {
 		return "", nil
 	}
-	edge, err := h.edges.GetActiveByChild(ctx, id)
+	edge, err := h.edges.GetActiveByChild(ctx, tenantID, id)
 	if errors.Is(err, rolehierarchy.ErrEdgeNotFound) {
 		return "", nil
 	}
@@ -131,7 +131,7 @@ func (h ListRolesHandler) Handle(ctx context.Context, q ListRolesQuery) ([]RoleV
 	}
 	out := make([]RoleView, 0, len(roles))
 	for _, r := range roles {
-		parentID, perr := h.lookupParent(ctx, r.ID())
+		parentID, perr := h.lookupParent(ctx, q.TenantID, r.ID())
 		if perr != nil {
 			return nil, fmt.Errorf("list_roles: lookup parent for %s: %w", r.ID(), perr)
 		}
@@ -140,11 +140,11 @@ func (h ListRolesHandler) Handle(ctx context.Context, q ListRolesQuery) ([]RoleV
 	return out, nil
 }
 
-func (h ListRolesHandler) lookupParent(ctx context.Context, id role.ID) (string, error) {
+func (h ListRolesHandler) lookupParent(ctx context.Context, tenantID tenant.ID, id role.ID) (string, error) {
 	if h.edges == nil {
 		return "", nil
 	}
-	edge, err := h.edges.GetActiveByChild(ctx, id)
+	edge, err := h.edges.GetActiveByChild(ctx, tenantID, id)
 	if errors.Is(err, rolehierarchy.ErrEdgeNotFound) {
 		return "", nil
 	}

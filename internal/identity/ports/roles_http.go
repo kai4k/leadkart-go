@@ -23,11 +23,19 @@ import (
 
 func handleGetRole(log *slog.Logger, a app.Application) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		tid, ok := tenancy.FromContext(r.Context())
+		if !ok || tid == "" {
+			writeError(w, http.StatusUnauthorized, ErrCodeInvalidCredentials, "")
+			return
+		}
 		id, ok := parseRoleIDPath(w, r)
 		if !ok {
 			return
 		}
-		view, err := a.Queries.GetRole.Handle(r.Context(), query.GetRoleQuery{RoleID: id})
+		view, err := a.Queries.GetRole.Handle(r.Context(), query.GetRoleQuery{
+			TenantID: tenant.ID(tid),
+			RoleID:   id,
+		})
 		switch {
 		case errors.Is(err, role.ErrNotFound):
 			writeError(w, http.StatusNotFound, ErrCodeRoleNotFound, "")

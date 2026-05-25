@@ -94,6 +94,9 @@ func (h GetCapabilitiesHandler) Handle(ctx context.Context, q GetCapabilitiesQue
 	if q.MembershipID.IsZero() {
 		return CapabilitiesView{}, errors.New("get_capabilities: membership id required")
 	}
+	if q.TenantID == "" {
+		return CapabilitiesView{}, errors.New("get_capabilities: tenant id required")
+	}
 
 	p, err := h.persons.GetByID(ctx, q.PersonID)
 	if err != nil {
@@ -104,7 +107,7 @@ func (h GetCapabilitiesHandler) Handle(ctx context.Context, q GetCapabilitiesQue
 		return CapabilitiesView{}, fmt.Errorf("get_capabilities: load person: %w", err)
 	}
 
-	m, err := h.memberships.GetByID(ctx, q.MembershipID)
+	m, err := h.memberships.GetByID(ctx, q.TenantID, q.MembershipID)
 	if err != nil {
 		return CapabilitiesView{}, fmt.Errorf("get_capabilities: load membership: %w", err)
 	}
@@ -145,11 +148,13 @@ type CachedGetCapabilitiesHandler struct {
 	facade *cache.Facade[capabilitiesCacheKey, CapabilitiesView]
 }
 
-// capabilitiesCacheKey scopes the cache key to the immutable inputs
-// (membership_id + security_stamp). Other inputs (person_id,
-// tenant_id) are derived from the membership, so omitting them keeps
-// the key short.
+// capabilitiesCacheKey scopes the cache key to (tenant_id +
+// membership_id + security_stamp). Per ADR 0062 the tenantID is
+// explicit so the factory can dispatch the Repository lookup without
+// smuggling scope through ctx; also documents cross-tenant cache
+// isolation explicitly.
 type capabilitiesCacheKey struct {
+	TenantID      string
 	MembershipID  string
 	SecurityStamp string
 }
@@ -176,14 +181,13 @@ func NewCachedGetCapabilitiesHandler(inner GetCapabilitiesHandler, hc *cache.Hyb
 	facade := cache.NewFacade[capabilitiesCacheKey, CapabilitiesView](
 		hc, "capabilities",
 		func(k capabilitiesCacheKey) string {
-			return "leadkart:capabilities:m=" + k.MembershipID + ":s=" + k.SecurityStamp
+			return "leadkart:capabilities:t=" + k.TenantID + ":m=" + k.MembershipID + ":s=" + k.SecurityStamp
 		},
 		func(ctx context.Context, k capabilitiesCacheKey) (CapabilitiesView, error) {
-			// Resolve the membership first to derive PersonID + TenantID.
-			// We can't put those in the cache key (would explode the key
-			// space + they're derivable). One DB hit per miss; cache hits
-			// avoid it.
-			mem, err := m.GetByID(ctx, membership.ID(k.MembershipID))
+			// Resolve the membership first to derive PersonID. TenantID
+			// is in the cache key so we pass it explicitly per ADR 0062.
+			// One DB hit per miss; cache hits avoid it.
+			mem, err := m.GetByID(ctx, tenant.ID(k.TenantID), membership.ID(k.MembershipID))
 			if err != nil {
 				return CapabilitiesView{}, fmt.Errorf("capabilities cache factory: load membership: %w", err)
 			}
@@ -203,6 +207,7 @@ func NewCachedGetCapabilitiesHandler(inner GetCapabilitiesHandler, hc *cache.Hyb
 // on hit the cached view returns immediately.
 func (h CachedGetCapabilitiesHandler) Handle(ctx context.Context, q GetCapabilitiesQuery) (CapabilitiesView, error) {
 	return h.facade.Get(ctx, capabilitiesCacheKey{
+		TenantID:      q.TenantID.String(),
 		MembershipID:  q.MembershipID.String(),
 		SecurityStamp: q.SecurityStamp,
 	})

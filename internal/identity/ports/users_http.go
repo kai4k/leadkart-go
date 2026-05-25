@@ -25,11 +25,16 @@ import (
 
 func handleGetUser(log *slog.Logger, a app.Application) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		tid, ok := tenancy.FromContext(r.Context())
+		if !ok || tid == "" {
+			writeError(w, http.StatusUnauthorized, ErrCodeInvalidCredentials, "")
+			return
+		}
 		id, ok := parseUserIDPath(w, r)
 		if !ok {
 			return
 		}
-		view, err := a.Queries.GetUser.Handle(r.Context(), query.GetUserQuery{MembershipID: id})
+		view, err := a.Queries.GetUser.Handle(r.Context(), query.GetUserQuery{TenantID: tenant.ID(tid), MembershipID: id})
 		switch {
 		case errors.Is(err, membership.ErrNotFound):
 			writeError(w, http.StatusNotFound, ErrCodeUserNotFound, "")
@@ -100,6 +105,11 @@ func handleListUsers(log *slog.Logger, a app.Application) http.Handler {
 
 func handleUpdateUserProfile(log *slog.Logger, a app.Application) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		tid, ok := tenancy.FromContext(r.Context())
+		if !ok || tid == "" {
+			writeError(w, http.StatusUnauthorized, ErrCodeInvalidCredentials, "")
+			return
+		}
 		id, ok := parseUserIDPath(w, r)
 		if !ok {
 			return
@@ -110,6 +120,7 @@ func handleUpdateUserProfile(log *slog.Logger, a app.Application) http.Handler {
 			return
 		}
 		err := a.Commands.UpdateUserProfile.Handle(r.Context(), command.UpdateUserProfileCommand{
+			TenantID:      tenant.ID(tid),
 			MembershipID:  id,
 			Designation:   req.Designation,
 			Department:    req.Department,
@@ -123,6 +134,11 @@ func handleUpdateUserProfile(log *slog.Logger, a app.Application) http.Handler {
 
 func handleDeactivateUser(log *slog.Logger, a app.Application) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		tid, ok := tenancy.FromContext(r.Context())
+		if !ok || tid == "" {
+			writeError(w, http.StatusUnauthorized, ErrCodeInvalidCredentials, "")
+			return
+		}
 		id, ok := parseUserIDPath(w, r)
 		if !ok {
 			return
@@ -133,6 +149,7 @@ func handleDeactivateUser(log *slog.Logger, a app.Application) http.Handler {
 			return
 		}
 		err := a.Commands.DeactivateUser.Handle(r.Context(), command.DeactivateUserCommand{
+			TenantID:     tenant.ID(tid),
 			MembershipID: id,
 			Reason:       req.Reason,
 		})
@@ -144,11 +161,17 @@ func handleDeactivateUser(log *slog.Logger, a app.Application) http.Handler {
 
 func handleReactivateUser(log *slog.Logger, a app.Application) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		tid, ok := tenancy.FromContext(r.Context())
+		if !ok || tid == "" {
+			writeError(w, http.StatusUnauthorized, ErrCodeInvalidCredentials, "")
+			return
+		}
 		id, ok := parseUserIDPath(w, r)
 		if !ok {
 			return
 		}
 		err := a.Commands.ReactivateUser.Handle(r.Context(), command.ReactivateUserCommand{
+			TenantID:     tenant.ID(tid),
 			MembershipID: id,
 		})
 		writeUserMutationResult(w, log, r, err)
@@ -159,6 +182,11 @@ func handleReactivateUser(log *slog.Logger, a app.Application) http.Handler {
 
 func handleAssignUserRole(log *slog.Logger, a app.Application) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		tid, ok := tenancy.FromContext(r.Context())
+		if !ok || tid == "" {
+			writeError(w, http.StatusUnauthorized, ErrCodeInvalidCredentials, "")
+			return
+		}
 		mid, ok := parseUserIDPath(w, r)
 		if !ok {
 			return
@@ -173,6 +201,7 @@ func handleAssignUserRole(log *slog.Logger, a app.Application) http.Handler {
 			return
 		}
 		err := a.Commands.AssignUserRole.Handle(r.Context(), command.AssignUserRoleCommand{
+			TenantID:     tenant.ID(tid),
 			MembershipID: mid,
 			RoleID:       role.ID(req.RoleID),
 		})
@@ -184,6 +213,11 @@ func handleAssignUserRole(log *slog.Logger, a app.Application) http.Handler {
 
 func handleRevokeUserRole(log *slog.Logger, a app.Application) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		tid, ok := tenancy.FromContext(r.Context())
+		if !ok || tid == "" {
+			writeError(w, http.StatusUnauthorized, ErrCodeInvalidCredentials, "")
+			return
+		}
 		mid, ok := parseUserIDPath(w, r)
 		if !ok {
 			return
@@ -195,6 +229,7 @@ func handleRevokeUserRole(log *slog.Logger, a app.Application) http.Handler {
 			return
 		}
 		err := a.Commands.RevokeUserRole.Handle(r.Context(), command.RevokeUserRoleCommand{
+			TenantID:     tenant.ID(tid),
 			MembershipID: mid,
 			RoleID:       role.ID(raw),
 		})
@@ -206,6 +241,11 @@ func handleRevokeUserRole(log *slog.Logger, a app.Application) http.Handler {
 
 func handleReplaceUserPermissionOverrides(log *slog.Logger, a app.Application) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		tid, ok := tenancy.FromContext(r.Context())
+		if !ok || tid == "" {
+			writeError(w, http.StatusUnauthorized, ErrCodeInvalidCredentials, "")
+			return
+		}
 		mid, ok := parseUserIDPath(w, r)
 		if !ok {
 			return
@@ -217,6 +257,7 @@ func handleReplaceUserPermissionOverrides(log *slog.Logger, a app.Application) h
 		}
 		err := a.Commands.ReplaceUserPermissionOverrides.Handle(r.Context(),
 			command.ReplaceUserPermissionOverridesCommand{
+				TenantID:     tenant.ID(tid),
 				MembershipID: mid,
 				GrantedNames: req.Granted,
 				RevokedNames: req.Revoked,
@@ -233,6 +274,11 @@ func handleReplaceUserPermissionOverrides(log *slog.Logger, a app.Application) h
 
 func handleAssignUserManager(log *slog.Logger, a app.Application) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		tid, ok := tenancy.FromContext(r.Context())
+		if !ok || tid == "" {
+			writeError(w, http.StatusUnauthorized, ErrCodeInvalidCredentials, "")
+			return
+		}
 		mid, ok := parseUserIDPath(w, r)
 		if !ok {
 			return
@@ -247,6 +293,7 @@ func handleAssignUserManager(log *slog.Logger, a app.Application) http.Handler {
 			return
 		}
 		err := a.Commands.AssignUserManager.Handle(r.Context(), command.AssignUserManagerCommand{
+			TenantID:     tenant.ID(tid),
 			MembershipID: mid,
 			ManagerID:    membership.ID(req.ManagerID),
 		})
@@ -258,11 +305,17 @@ func handleAssignUserManager(log *slog.Logger, a app.Application) http.Handler {
 
 func handleRemoveUserManager(log *slog.Logger, a app.Application) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		tid, ok := tenancy.FromContext(r.Context())
+		if !ok || tid == "" {
+			writeError(w, http.StatusUnauthorized, ErrCodeInvalidCredentials, "")
+			return
+		}
 		mid, ok := parseUserIDPath(w, r)
 		if !ok {
 			return
 		}
 		err := a.Commands.RemoveUserManager.Handle(r.Context(), command.RemoveUserManagerCommand{
+			TenantID:     tenant.ID(tid),
 			MembershipID: mid,
 		})
 		writeUserMutationResult(w, log, r, err)
@@ -335,11 +388,17 @@ func handleCreateUser(log *slog.Logger, a app.Application) http.Handler {
 
 func handleAnonymiseUser(log *slog.Logger, a app.Application) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		tid, ok := tenancy.FromContext(r.Context())
+		if !ok || tid == "" {
+			writeError(w, http.StatusUnauthorized, ErrCodeInvalidCredentials, "")
+			return
+		}
 		mid, ok := parseUserIDPath(w, r)
 		if !ok {
 			return
 		}
 		err := a.Commands.AnonymiseUser.Handle(r.Context(), command.AnonymiseUserCommand{
+			TenantID:     tenant.ID(tid),
 			MembershipID: mid,
 		})
 		writeUserMutationResult(w, log, r, err)
