@@ -30,6 +30,15 @@
 //     hides removed edges (WHERE removed_at IS NULL) via SQL predicate.
 //   - Recursive CTE in GetAncestorsByChild walks upward through the
 //     edge graph (Postgres-specific WITH RECURSIVE).
+//
+// arch-test:raw-sql-justified — TestEdgeRepository_GetActiveByChild_
+//   FiltersSoftDeleted intentionally bypasses the adapter with a
+//   direct SELECT to assert the PHYSICAL row state after Remove
+//   (proving soft-vs-hard delete + partial-index filter at the SQL
+//   layer). The fake mirrors the observable "ErrEdgeNotFound after
+//   remove" behaviour; only the adapter-bypass SELECT proves the
+//   Postgres-specific mechanism is what's doing the filtering. Per
+//   ADR 0062 §6 this is the canonical shape for a SQL-contract test.
 
 package adapters_test
 
@@ -173,9 +182,20 @@ func TestEdgeRepository_Add_RejectsCrossTenant(t *testing.T) {
 	}
 }
 
-// SQL-contract: soft-deleted edges vanish from GetActiveByChild via the
-// `WHERE removed_at IS NULL` filter on the read path — proves the
-// partial-index + read predicate agree at the Postgres layer.
+// SQL-contract: Remove is SOFT-delete (physical row survives, only
+// `removed_at` flips non-NULL) AND the partial index
+// `uq_role_hierarchy_active_edge_per_child WHERE removed_at IS NULL`
+// hides it from the read path. The two halves of the contract:
+//
+//   1. Physical row stays — direct SELECT bypassing the adapter
+//      proves the UPDATE didn't DELETE.
+//   2. The partial index + WHERE removed_at IS NULL predicate on the
+//      read path means GetActiveByChild can't see it.
+//
+// The fake's "Remove → ErrEdgeNotFound" assertion mirrors observable
+// behaviour; only the SQL test proves the PG-specific mechanism (soft
+// vs. hard delete + partial-index filter) actually fires. Sharpened
+// per ADR 0062 to be a SQL-contract test, not a logic round-trip.
 func TestEdgeRepository_GetActiveByChild_FiltersSoftDeleted(t *testing.T) {
 	t.Parallel()
 	pool := repoFixture(t)
@@ -197,16 +217,33 @@ func TestEdgeRepository_GetActiveByChild_FiltersSoftDeleted(t *testing.T) {
 	if err := edges.Add(ctx, e); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
-	// Remove → must not appear in GetActiveByChild.
 	rmErr := edges.UpdateByID(ctx, tn.ID(), e.ID(), func(loaded *rolehierarchy.Edge) (bool, error) {
 		return true, loaded.Remove(membership.ID(""), "removal for the active-only check", time.Now())
 	})
 	if rmErr != nil {
 		t.Fatalf("Remove: %v", rmErr)
 	}
-	_, err := edges.GetActiveByChild(ctx, tn.ID(), c.ID())
+
+	// SQL-contract part 1: physical row survives the soft delete.
+	// Direct SELECT bypassing the adapter (under platform scope to
+	// avoid the GUC dance) — proves removed_at moved off NULL.
+	var removedAt *time.Time
+	err := pool.QueryRow(t.Context(),
+		`SELECT removed_at FROM identity.role_hierarchy_edges WHERE id = $1`,
+		e.ID().String(),
+	).Scan(&removedAt)
+	if err != nil {
+		t.Fatalf("direct SELECT for physical row: %v", err)
+	}
+	if removedAt == nil {
+		t.Fatal("physical row's removed_at is NULL — Remove behaved as hard-delete, contract broken")
+	}
+
+	// SQL-contract part 2: partial-index `WHERE removed_at IS NULL`
+	// hides the soft-deleted row from GetActiveByChild.
+	_, err = edges.GetActiveByChild(ctx, tn.ID(), c.ID())
 	if !errors.Is(err, rolehierarchy.ErrEdgeNotFound) {
-		t.Fatalf("expected ErrEdgeNotFound after soft-delete, got %v", err)
+		t.Fatalf("expected ErrEdgeNotFound after soft-delete (partial-index filter), got %v", err)
 	}
 }
 
