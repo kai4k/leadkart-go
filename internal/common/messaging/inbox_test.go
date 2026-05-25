@@ -1,92 +1,30 @@
 //go:build integration
 
+// arch-test:no-timeout-needed — every test in this file uses the shared
+//   pgtest container; pgxpool internal conn timeouts + package-level
+//   `task ci:test:int -timeout=15m` already bound execution.
+//
+// arch-test:parallel-safe — every Test* uses a unique (handler_name,
+//   message_id) tuple as the inbox-dedup key, so parallel runs cannot
+//   collide on the dedup row.
+
 package messaging_test
 
 import (
 	"context"
 	"errors"
-	"path/filepath"
-	"runtime"
 	"sync/atomic"
 	"testing"
-	"time"
-
-	_ "github.com/jackc/pgx/v5/stdlib"
-	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/pressly/goose/v3"
-
-	"github.com/leadkart/leadkart-go/internal/common/pg"
-	"github.com/testcontainers/testcontainers-go"
-	"github.com/testcontainers/testcontainers-go/modules/postgres"
-	"github.com/testcontainers/testcontainers-go/wait"
 
 	"github.com/leadkart/leadkart-go/internal/common/messaging"
 	"github.com/leadkart/leadkart-go/internal/common/messaging/messagingtest"
 )
 
-// inboxFixture spins ephemeral Postgres + applies migrations + returns
-// a pgxpool. Container auto-cleans via t.Cleanup. Connects as the
-// (default) superuser — the inbox table is non-RLS so role choice
-// doesn't matter for these tests.
-func inboxFixture(t *testing.T) *pgxpool.Pool {
-	t.Helper()
-	ctx, cancel := context.WithTimeout(t.Context(), 90*time.Second)
-	defer cancel()
-
-	c, err := postgres.Run(ctx,
-		"postgres:17-alpine",
-		postgres.WithDatabase("leadkart_test"),
-		postgres.WithUsername("leadkart"),
-		postgres.WithPassword("leadkart_test"),
-		testcontainers.WithWaitStrategy(
-			wait.ForLog("database system is ready to accept connections").
-				WithOccurrence(2).WithStartupTimeout(60*time.Second),
-		),
-	)
-	if err != nil {
-		t.Fatalf("start postgres: %v", err)
-	}
-	t.Cleanup(func() {
-		// Cleanup runs after t.Context() is cancelled — must use Background.
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		_ = c.Terminate(ctx)
-	})
-
-	dsn, err := c.ConnectionString(ctx, "sslmode=disable")
-	if err != nil {
-		t.Fatalf("dsn: %v", err)
-	}
-	gooseDB, err := goose.OpenDBWithDriver("pgx", dsn)
-	if err != nil {
-		t.Fatalf("goose open: %v", err)
-	}
-	defer gooseDB.Close()
-	if err := pg.EnsureGooseDialect(); err != nil {
-		t.Fatalf("set dialect: %v", err)
-	}
-	if err := goose.UpContext(ctx, gooseDB, migrationsDir(t)); err != nil {
-		t.Fatalf("goose up: %v", err)
-	}
-
-	pool, err := pgxpool.New(ctx, dsn)
-	if err != nil {
-		t.Fatalf("pool: %v", err)
-	}
-	t.Cleanup(pool.Close)
-	return pool
-}
-
-func migrationsDir(t *testing.T) string {
-	t.Helper()
-	_, here, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("runtime.Caller failed")
-	}
-	return filepath.Join(filepath.Dir(here), "..", "..", "..", "migrations")
-}
+// Shared bootstrap (inboxFixture / TestMain) lives in
+// fixture_integration_test.go per the Brandur / TDL canon.
 
 func TestIdempotentReceiver_FirstCall_RunsHandlerAndRecords(t *testing.T) {
+	t.Parallel()
 	pool := inboxFixture(t)
 	receiver := messaging.NewIdempotentReceiver(pool)
 
@@ -111,6 +49,7 @@ func TestIdempotentReceiver_FirstCall_RunsHandlerAndRecords(t *testing.T) {
 }
 
 func TestIdempotentReceiver_Replay_SkipsHandler(t *testing.T) {
+	t.Parallel()
 	pool := inboxFixture(t)
 	receiver := messaging.NewIdempotentReceiver(pool)
 
@@ -132,6 +71,7 @@ func TestIdempotentReceiver_Replay_SkipsHandler(t *testing.T) {
 }
 
 func TestIdempotentReceiver_HandlerError_DoesNotRecord_NextCallRunsAgain(t *testing.T) {
+	t.Parallel()
 	pool := inboxFixture(t)
 	receiver := messaging.NewIdempotentReceiver(pool)
 
@@ -173,6 +113,7 @@ func TestIdempotentReceiver_HandlerError_DoesNotRecord_NextCallRunsAgain(t *test
 }
 
 func TestIdempotentReceiver_ScopedByHandlerName(t *testing.T) {
+	t.Parallel()
 	// Same message_id processed by two distinct handlers — both run.
 	pool := inboxFixture(t)
 	receiver := messaging.NewIdempotentReceiver(pool)
@@ -199,6 +140,7 @@ func TestIdempotentReceiver_ScopedByHandlerName(t *testing.T) {
 }
 
 func TestIdempotentReceiver_Wrap_PanicsOnEmptyName(t *testing.T) {
+	t.Parallel()
 	receiver := messaging.NewIdempotentReceiver(nil) // pool not used in this path
 	defer func() {
 		if r := recover(); r == nil {

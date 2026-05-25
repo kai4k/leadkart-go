@@ -1,7 +1,19 @@
 //go:build integration
 
+// arch-test:no-timeout-needed — every test in this file uses the shared
+//   pgtest container (per-package); pgxpool internal conn timeouts +
+//   package-level `task ci:test:int -timeout=15m` already bound execution.
+//   Per-test context.WithTimeout would be belt-and-suspenders against the
+//   shared-pool + parallel-with-RLS canon shape.
+//
+// arch-test:parallel-safe — every Test* uses the shared pgtest container
+//   + fresh tenant/person/family IDs per test; RLS isolates rows by
+//   tenant so parallel runs cannot see each others state. Per-test
+//   miniredis (in-memory) prevents cache pollution. Brandur Postgres
+//   canon + TDL Wild Workouts canon.
+//
 // arch-test:no-synctest — subscriber tests exercise the Watermill router
-// goroutine against a real Postgres testcontainer; the polled `families`
+// goroutine against a real Postgres testcontainer; the polled families
 // row signals subscriber commit across the SQL driver boundary, which is
 // opaque to testing/synctest's virtual clock.
 
@@ -16,8 +28,6 @@ import (
 	"errors"
 	"io"
 	"log/slog"
-	"path/filepath"
-	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -27,13 +37,8 @@ import (
 	"github.com/ThreeDotsLabs/watermill/pubsub/gochannel"
 	"github.com/alicebob/miniredis/v2"
 	"github.com/google/uuid"
-	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/pressly/goose/v3"
 	"github.com/redis/go-redis/v9"
-	"github.com/testcontainers/testcontainers-go"
-	"github.com/testcontainers/testcontainers-go/modules/postgres"
-	"github.com/testcontainers/testcontainers-go/wait"
 
 	"github.com/leadkart/leadkart-go/internal/common/email"
 	"github.com/leadkart/leadkart-go/internal/common/ids"
@@ -69,78 +74,17 @@ type fixture struct {
 	miniredis   *miniredis.Miniredis
 }
 
+// newFixture returns a per-test fixture backed by the SHARED package-
+// scoped Postgres pool (see fixture_integration_test.go TestMain).
+// The pool is shared; the miniredis + cache facade + repository
+// instances are per-test because they hold per-test in-memory state
+// or are cheap to construct.
+//
+// Per-test isolation: each call creates aggregates under a fresh
+// tenant.ID (via seedTenant) so RLS prevents cross-test reads.
 func newFixture(t *testing.T) *fixture {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(t.Context(), 90*time.Second)
-	defer cancel()
-
-	c, err := postgres.Run(ctx,
-		"postgres:17-alpine",
-		postgres.WithDatabase("leadkart_test"),
-		postgres.WithUsername("leadkart"),
-		postgres.WithPassword("leadkart_test"),
-		testcontainers.WithWaitStrategy(
-			wait.ForLog("database system is ready to accept connections").
-				WithOccurrence(2).WithStartupTimeout(60*time.Second),
-		),
-	)
-	if err != nil {
-		t.Fatalf("start postgres: %v", err)
-	}
-	t.Cleanup(func() {
-		// Cleanup runs after t.Context() is cancelled — must use Background.
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		_ = c.Terminate(ctx)
-	})
-
-	ownerDSN, err := c.ConnectionString(ctx, "sslmode=disable")
-	if err != nil {
-		t.Fatalf("dsn: %v", err)
-	}
-
-	gooseDB, err := goose.OpenDBWithDriver("pgx", ownerDSN)
-	if err != nil {
-		t.Fatalf("goose open: %v", err)
-	}
-	if err := pg.EnsureGooseDialect(); err != nil {
-		_ = gooseDB.Close()
-		t.Fatalf("set dialect: %v", err)
-	}
-	if err := goose.UpContext(ctx, gooseDB, migrationsDir(t)); err != nil {
-		_ = gooseDB.Close()
-		t.Fatalf("goose up: %v", err)
-	}
-	for _, s := range []string{
-		`CREATE ROLE leadkart_app LOGIN PASSWORD 'leadkart_app_pw' NOSUPERUSER NOINHERIT NOCREATEROLE NOCREATEDB`,
-		`GRANT USAGE ON SCHEMA app, identity, buildingblocks TO leadkart_app`,
-		`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA identity TO leadkart_app`,
-		`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA buildingblocks TO leadkart_app`,
-		`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA app TO leadkart_app`,
-		`GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA app TO leadkart_app`,
-	} {
-		if _, err := gooseDB.ExecContext(ctx, s); err != nil {
-			_ = gooseDB.Close()
-			t.Fatalf("provision app role: %s: %v", s, err)
-		}
-	}
-	_ = gooseDB.Close()
-
-	host, err := c.Host(ctx)
-	if err != nil {
-		t.Fatalf("host: %v", err)
-	}
-	port, err := c.MappedPort(ctx, "5432/tcp")
-	if err != nil {
-		t.Fatalf("port: %v", err)
-	}
-	appDSN := "postgres://leadkart_app:leadkart_app_pw@" + host + ":" + port.Port() + "/leadkart_test?sslmode=disable"
-
-	pool, err := pgxpool.New(ctx, appDSN)
-	if err != nil {
-		t.Fatalf("pool: %v", err)
-	}
-	t.Cleanup(pool.Close)
+	pool := sharedPG.Pool()
 
 	tx := pg.NewTransactor(pool)
 	persons := adapters.NewPersonRepository(pool, tx)
@@ -148,6 +92,8 @@ func newFixture(t *testing.T) *fixture {
 	// Real HybridCache + SecurityStampCache against miniredis so the
 	// cascade subscriber's invalidation step runs end-to-end against
 	// the same facade production wires (audit-checklist.md §12b).
+	// miniredis is in-memory + per-test (RunT auto-cleans on test end);
+	// cheap (~10ms) — kept per-test to avoid cross-test cache pollution.
 	store := miniredis.RunT(t)
 	redisCli := redis.NewClient(&redis.Options{Addr: store.Addr()})
 	t.Cleanup(func() { _ = redisCli.Close() })
@@ -169,15 +115,6 @@ func newFixture(t *testing.T) *fixture {
 		stampCache: adapters.NewSecurityStampCache(hc, persons),
 		miniredis:  store,
 	}
-}
-
-func migrationsDir(t *testing.T) string {
-	t.Helper()
-	_, here, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("runtime.Caller failed")
-	}
-	return filepath.Join(filepath.Dir(here), "..", "..", "..", "..", "migrations")
 }
 
 const fxStrongHash = "$argon2id$v=19$m=19456,t=2,p=1$c2FsdHkx$abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
@@ -359,6 +296,7 @@ func waitFor(t *testing.T, cond func() bool, timeout time.Duration, msg string) 
 }
 
 func TestRevokeFamilies_OnPasswordChanged(t *testing.T) {
+	t.Parallel()
 	fx := newFixture(t)
 	pubsub, _, stop := wireRouter(t, fx)
 	defer stop()
@@ -398,6 +336,7 @@ func TestRevokeFamilies_OnPasswordChanged(t *testing.T) {
 }
 
 func TestRevokeFamilies_OnAnonymised(t *testing.T) {
+	t.Parallel()
 	fx := newFixture(t)
 	pubsub, _, stop := wireRouter(t, fx)
 	defer stop()
@@ -422,6 +361,7 @@ func TestRevokeFamilies_OnAnonymised(t *testing.T) {
 }
 
 func TestRevokeFamilies_OnGloballySuspended(t *testing.T) {
+	t.Parallel()
 	fx := newFixture(t)
 	pubsub, _, stop := wireRouter(t, fx)
 	defer stop()
@@ -447,6 +387,7 @@ func TestRevokeFamilies_OnGloballySuspended(t *testing.T) {
 }
 
 func TestRevokeFamilies_OnEmailChanged(t *testing.T) {
+	t.Parallel()
 	fx := newFixture(t)
 	pubsub, _, stop := wireRouter(t, fx)
 	defer stop()
@@ -473,6 +414,7 @@ func TestRevokeFamilies_OnEmailChanged(t *testing.T) {
 }
 
 func TestRevokeFamilies_OnMembershipDeactivated_NarrowsToTenantScope(t *testing.T) {
+	t.Parallel()
 	// MembershipDeactivated cascade is narrower than the Person-level
 	// events: ONLY families bound to that (PersonID, TenantID) tuple
 	// die. Other-tenant families for the same Person stay alive.
@@ -516,6 +458,7 @@ func TestRevokeFamilies_OnMembershipDeactivated_NarrowsToTenantScope(t *testing.
 }
 
 func TestRevokeFamilies_NoActiveFamilies_NoOp(t *testing.T) {
+	t.Parallel()
 	fx := newFixture(t)
 	pubsub, _, stop := wireRouter(t, fx)
 	defer stop()
@@ -535,6 +478,7 @@ func TestRevokeFamilies_NoActiveFamilies_NoOp(t *testing.T) {
 }
 
 func TestReuseDetectedSIEM_LogsOnReuseRevocation(t *testing.T) {
+	t.Parallel()
 	fx := newFixture(t)
 	// Custom logger that records to a thread-safe buffer so the
 	// subscriber goroutine's slog.Write doesn't race the assertion
@@ -577,6 +521,7 @@ func TestReuseDetectedSIEM_LogsOnReuseRevocation(t *testing.T) {
 }
 
 func TestReuseDetectedSIEM_IgnoresNonReuseRevocations(t *testing.T) {
+	t.Parallel()
 	fx := newFixture(t)
 	// safeBuffer — same race-detector reason as the sister test above.
 	buf := &safeBuffer{}
