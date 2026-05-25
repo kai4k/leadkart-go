@@ -23,6 +23,7 @@ import (
 
 	"github.com/leadkart/leadkart-go/internal/common/ids"
 	"github.com/leadkart/leadkart-go/internal/common/audit"
+	"github.com/leadkart/leadkart-go/internal/common/audit/audittest"
 )
 
 func TestPurgeWorker_DeletesOlderThanRetention(t *testing.T) {
@@ -60,17 +61,8 @@ func TestPurgeWorker_DeletesOlderThanRetention(t *testing.T) {
 		t.Fatalf("Work: %v", err)
 	}
 
-	var oldCount, freshCount int
-	if err := pool.QueryRow(t.Context(),
-		`SELECT count(*) FROM buildingblocks.audit_log_entry WHERE action = 'test.purge.old'`,
-	).Scan(&oldCount); err != nil {
-		t.Fatalf("count old: %v", err)
-	}
-	if err := pool.QueryRow(t.Context(),
-		`SELECT count(*) FROM buildingblocks.audit_log_entry WHERE action = 'test.purge.fresh'`,
-	).Scan(&freshCount); err != nil {
-		t.Fatalf("count fresh: %v", err)
-	}
+	oldCount := audittest.CountByAction(t, pool, "test.purge.old")
+	freshCount := audittest.CountByAction(t, pool, "test.purge.fresh")
 
 	if oldCount != 0 {
 		t.Errorf("old rows after purge: got %d want 0", oldCount)

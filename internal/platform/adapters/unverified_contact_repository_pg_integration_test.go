@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/leadkart/leadkart-go/internal/common/ids"
+	"github.com/leadkart/leadkart-go/internal/common/messaging/messagingtest"
 	"github.com/leadkart/leadkart-go/internal/common/pg"
 	"github.com/leadkart/leadkart-go/internal/platform/adapters"
 	"github.com/leadkart/leadkart-go/internal/platform/domain/unverifiedcontact"
@@ -116,26 +117,8 @@ func TestUnverifiedContactRepository_Add_DrainsCreatedEventToOutbox(t *testing.T
 		t.Fatalf("Add: %v", err)
 	}
 
-	rawDB, err := openRawDB(t, pool)
-	if err != nil {
-		t.Fatalf("openRawDB: %v", err)
-	}
-	defer rawDB.Close()
-	// Bypass RLS via platform GUC for the verification read.
-	if _, err := rawDB.ExecContext(t.Context(), `SELECT set_config('app.is_platform','true',false)`); err != nil {
-		t.Fatalf("set platform: %v", err)
-	}
-	var (
-		topic     string
-		tenantNil bool
-	)
-	err = rawDB.QueryRowContext(t.Context(), `
-		SELECT topic, (tenant_id IS NULL) FROM platform.outbox
-		ORDER BY created_at DESC LIMIT 1
-	`).Scan(&topic, &tenantNil)
-	if err != nil {
-		t.Fatalf("query outbox: %v", err)
-	}
+	// Bypass RLS via platform GUC handled internally by the helper.
+	topic, tenantNil := messagingtest.OutboxLatestTopicAndTenantNull(t, pool, messagingtest.SchemaPlatform)
 	if topic != "platform.unverified_contact_created.v1" {
 		t.Errorf("topic: got %q want platform.unverified_contact_created.v1", topic)
 	}

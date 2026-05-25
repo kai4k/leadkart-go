@@ -33,6 +33,7 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/app/jwt"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/permission"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
+	"github.com/leadkart/leadkart-go/internal/identity/identitytest"
 	identityports "github.com/leadkart/leadkart-go/internal/identity/ports"
 	inventoryapp "github.com/leadkart/leadkart-go/internal/inventory/app"
 	platformadapters "github.com/leadkart/leadkart-go/internal/platform/adapters"
@@ -148,13 +149,7 @@ func (f platformE2E) mintBuyerToken(t *testing.T, r registeredTenant) string {
 // synthetic JWT.
 func securityStampForPerson(t *testing.T, f platformE2E, personID string) string {
 	t.Helper()
-	var stamp string
-	err := f.Pool.QueryRow(t.Context(),
-		`SELECT security_stamp::text FROM identity.persons WHERE id = $1`, personID).Scan(&stamp)
-	if err != nil {
-		t.Fatalf("read stamp: %v", err)
-	}
-	return stamp
+	return identitytest.GetSecurityStamp(t, f.Pool, personID)
 }
 
 // mintPlatformOperatorToken provisions a Person row + mints a JWT with

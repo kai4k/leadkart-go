@@ -92,6 +92,7 @@ func extractMuxHandlerExpr(text string, pos int) string {
 // We scan the SECOND ARG of the mux.Handle call for the marker. False
 // positives possible if a handler-wrapper alias re-exports the marker;
 // the test allow-list (per file) is the escape hatch.
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_EveryAuthenticatedRouteHasMiddleware(t *testing.T) {
 	t.Parallel()
 
@@ -233,6 +234,7 @@ func TestArch_EveryAuthenticatedRouteHasMiddleware(t *testing.T) {
 // Detection: parse every ports/*.go; find CallExprs to `RequirePermission`
 // or `RequireAnyPermission` (selector-suffix match); inspect argument
 // types — flag `*ast.BasicLit` (string literal).
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_PermissionConstantsFromCatalog(t *testing.T) {
 	t.Parallel()
 
@@ -427,6 +429,7 @@ func TestArch_IdempotencyOnMutationEndpoints(t *testing.T) {
 // Detection: walk every struct with a Password field of type string;
 // assert struct name matches one of the input suffixes OR is on a
 // documented allow-list.
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_PasswordFieldsTyped(t *testing.T) {
 	t.Parallel()
 
@@ -606,6 +609,7 @@ func TestArch_RefreshTokenTTLBounded(t *testing.T) {
 //
 // Predicate: every `jwtv5.SigningMethod*` reference must be one of
 // the allowed methods.
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_JWTSigningMethodHS256OrRS256(t *testing.T) {
 	t.Parallel()
 
@@ -753,6 +757,7 @@ func TestArch_Argon2ParamsMeetOWASP(t *testing.T) {
 // practical since 2017 — Stevens et al). Banned in security
 // contexts; allowed only with an explicit arch-test marker
 // (e.g. ETag / cache-key hashing where collisions don't matter).
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_NoCryptoMd5OrSha1ForSecurity(t *testing.T) {
 	t.Parallel()
 

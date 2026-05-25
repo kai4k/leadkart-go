@@ -35,6 +35,7 @@ import (
 // Modules NEVER reference each other's domain/app/ports/adapters.
 // The integrationevents/ package is the explicit anti-corruption layer
 // per Vernon IDDD ch. 13 + the canonical shared-kernel allow-list.
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_NoCrossModuleImports(t *testing.T) {
 	t.Parallel()
 
@@ -120,6 +121,7 @@ func TestArch_NoCrossModuleImports(t *testing.T) {
 // Per ADR 0008 + the canonical messaging layout (TDL Watermill course):
 // the inbound-port for an integration-event subscriber lives next to
 // the inbound-port for HTTP.
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_SubscribersInPortsSubscribers(t *testing.T) {
 	t.Parallel()
 
@@ -185,6 +187,7 @@ func TestArch_SubscribersInPortsSubscribers(t *testing.T) {
 // wrap or any call expression named `Get*`/`Find*` inside the file.
 // False negatives are possible; a file allow-list opts the subscriber
 // out with a documented rationale.
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_SubscribersAreIdempotent(t *testing.T) {
 	t.Parallel()
 
@@ -255,6 +258,7 @@ func TestArch_SubscribersAreIdempotent(t *testing.T) {
 // integrationevents/; collect every exported struct type whose name
 // ends in `V<digit>+`; assert a method declaration on (T or *T) named
 // `Topic` exists.
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_IntegrationEventsHaveTopicMethod(t *testing.T) {
 	t.Parallel()
 
@@ -371,6 +375,7 @@ func TestArch_IntegrationEventsHaveTopicMethod(t *testing.T) {
 // `IsTenantScoped` or `IsPlatform` to exist on the type. The per-
 // module suite asserts EXCLUSIVE OR via the interface marker; this
 // cross-cutting test asserts at-least-one (drift floor).
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_IntegrationEventsAreTenantScopedOrPlatform(t *testing.T) {
 	t.Parallel()
 
@@ -456,6 +461,7 @@ func TestArch_IntegrationEventsAreTenantScopedOrPlatform(t *testing.T) {
 // violation unless allow-listed. False positive: a domain repo named
 // `OutboxPublisher` may legitimately expose Publish at the app layer
 // when going through the outbox helper.
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_AppPublishesViaOutboxNotBus(t *testing.T) {
 	t.Parallel()
 
@@ -535,6 +541,7 @@ func TestArch_AppPublishesViaOutboxNotBus(t *testing.T) {
 // PascalCase, explicit version segment). Drift in the topic naming
 // surface is a hard-to-roll-back change: subscribers index on the
 // exact string. ADR 0008 + messaging.md doctrine.
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_TopicNamingConvention(t *testing.T) {
 	t.Parallel()
 
@@ -576,6 +583,7 @@ func TestArch_TopicNamingConvention(t *testing.T) {
 //
 // Predicate: every call's first arg must be a Go identifier
 // (`HandlerXxx`), not a string literal.
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_HandlerNamesConstDefined(t *testing.T) {
 	t.Parallel()
 
@@ -610,6 +618,7 @@ func TestArch_HandlerNamesConstDefined(t *testing.T) {
 // inline re-publish skips the outbox + breaks at-least-once
 // guarantees + opens up cycles. ThreeDotsLabs "Go Event-Driven"
 // pattern.
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_SubscribersDontPublish(t *testing.T) {
 	t.Parallel()
 
@@ -640,6 +649,7 @@ func TestArch_SubscribersDontPublish(t *testing.T) {
 // The outbox forwarder reads from `<module>.outbox` cross-tenant; it
 // MUST run under `pg.TxScopePlatform` (RLS bypassed via schema-owner
 // role) otherwise SET LOCAL app.tenant_id makes it see only NULL rows.
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_OutboxForwarderUsesTxScopePlatform(t *testing.T) {
 	t.Parallel()
 
@@ -682,6 +692,7 @@ func TestArch_OutboxForwarderUsesTxScopePlatform(t *testing.T) {
 // in a subscriber MUST be accompanied by a `// retry` or `// fatal`
 // marker — forces the author's intent to be explicit so retry-storm
 // regressions don't slip through review.
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_WatermillErrorReturnIsRetry(t *testing.T) {
 	t.Parallel()
 

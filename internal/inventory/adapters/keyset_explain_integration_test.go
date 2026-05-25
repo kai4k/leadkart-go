@@ -12,6 +12,7 @@ import (
 
 	"github.com/leadkart/leadkart-go/internal/common/ids"
 	"github.com/leadkart/leadkart-go/internal/common/pg"
+	"github.com/leadkart/leadkart-go/internal/common/pg/rlstest"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
 	"github.com/leadkart/leadkart-go/internal/inventory/adapters"
 	"github.com/leadkart/leadkart-go/internal/inventory/domain/batch"
@@ -74,9 +75,7 @@ func TestKeysetBatchesPage_UsesIndexUnderRLS(t *testing.T) {
 		t.Fatalf("acquire: %v", err)
 	}
 	defer dbtx.Release()
-	if _, err := dbtx.Exec(ctx, `SELECT set_config('app.tenant_id', $1, false)`, tid.String()); err != nil {
-		t.Fatalf("set tenant: %v", err)
-	}
+	rlstest.SetSessionTenantPersistent(t, ctx, dbtx.Conn(), tid.String())
 
 	const explainSQL = `
 		EXPLAIN (FORMAT JSON, ANALYZE, BUFFERS)

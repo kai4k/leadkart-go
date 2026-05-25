@@ -1526,6 +1526,7 @@ func TestArch_NoFmtPrintlnInTests(t *testing.T) {
 //   - fakes files (`fakes_test.go`, `*_fakes_test.go`)
 //   - testmain (`testmain*_test.go`)
 //   - aggregate-private tests living in a sub-pkg test file
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_TestFilesPairWithProductionFile(t *testing.T) {
 	t.Parallel()
 

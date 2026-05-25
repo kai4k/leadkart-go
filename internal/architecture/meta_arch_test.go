@@ -337,6 +337,7 @@ func discoverTestArchNames(t *testing.T) map[string]bool {
 // doc comment. (revive's `exported` linter equivalent.) The check
 // here is gentle — a budget ceiling (`task de-sloppify` will lower
 // it once formal sweeps land).
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_EveryExportedHasGodoc(t *testing.T) {
 	t.Parallel()
 
@@ -388,6 +389,7 @@ func TestArch_EveryExportedHasGodoc(t *testing.T) {
 // Every package should have AT LEAST one file beginning with
 // `// Package <name> ...`. doc.go is the canonical home but any
 // .go file qualifies.
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_EveryPackageHasDocComment(t *testing.T) {
 	t.Parallel()
 
@@ -555,6 +557,7 @@ func TestArch_LdFlagsTrimpathInTaskfile(t *testing.T) {
 // ADR 0024 — Chainguard distroless static. CGO breaks static linkage;
 // any `//go:build cgo` in non-test files is a deployment-breaking
 // change.
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_NoCgoBuildTags(t *testing.T) {
 	t.Parallel()
 

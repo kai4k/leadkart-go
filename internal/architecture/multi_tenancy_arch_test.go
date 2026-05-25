@@ -279,6 +279,7 @@ func TestArch_EveryTenantTableHasRLSPolicies(t *testing.T) {
 //
 // Detection: walk aggregate root struct fields; assert at least one
 // field name is tenantID / TenantID. Exceptions ride in the allow-list.
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_TenantEntitiesCarryTenantID(t *testing.T) {
 	t.Parallel()
 
@@ -387,6 +388,7 @@ func TestArch_TenantEntitiesCarryTenantID(t *testing.T) {
 // Heuristic: any *_pg.go file with `WithinTx(`/`WithinTxPgx(` calls
 // must reference TxScopeTenant somewhere (or be a documented platform-
 // only adapter).
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_RepoTenantScopedReadsUseTxScopeTenant(t *testing.T) {
 	t.Parallel()
 
@@ -473,6 +475,7 @@ func TestArch_RepoTenantScopedReadsUseTxScopeTenant(t *testing.T) {
 //
 // This is a heuristic; misses a handler that does cross-tenant work
 // without the name pattern. Tracked as a known low-precision test.
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_CrossTenantOperationsCheckIsPlatform(t *testing.T) {
 	t.Parallel()
 
@@ -532,6 +535,7 @@ func TestArch_CrossTenantOperationsCheckIsPlatform(t *testing.T) {
 //
 // Detection: walk every FuncDecl across internal/<mod>/; flag any
 // parameter named tenantID/TenantID/tenant_id whose type is `string`.
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_NoBareTenantIDStrings(t *testing.T) {
 	t.Parallel()
 
@@ -539,8 +543,10 @@ func TestArch_NoBareTenantIDStrings(t *testing.T) {
 	// function operates at the substrate boundary (email gateway,
 	// subscriber dispatch by Watermill metadata string).
 	allowList := []string{
-		"internal/common/email/gateway.go",                        // gateway crosses substrate; ID is a metadata string
-		"internal/identity/ports/subscribers/revoke_families.go",  // Watermill metadata is plain string
+		"internal/common/email/gateway.go",                              // gateway crosses substrate; ID is a metadata string
+		"internal/identity/ports/subscribers/revoke_families.go",        // Watermill metadata is plain string
+		"internal/common/messaging/messagingtest/outboxtest.go",         // test-helper in common/; can't import identity/domain/tenant per ADR 0047
+		"internal/common/pg/rlstest/rlstest.go",                         // test-helper in common/; same boundary constraint
 	}
 
 	type violation struct {

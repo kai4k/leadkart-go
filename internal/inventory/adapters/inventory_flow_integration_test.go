@@ -9,7 +9,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/leadkart/leadkart-go/internal/common/ids"
+	"github.com/leadkart/leadkart-go/internal/common/messaging/messagingtest"
 	"github.com/leadkart/leadkart-go/internal/common/pagination"
 	"github.com/leadkart/leadkart-go/internal/common/pg"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
@@ -79,22 +82,13 @@ func TestProductRepository_AddGetUpdate_RoundTripsViaOutbox(t *testing.T) {
 		t.Fatalf("name after update: %q", got2.Name())
 	}
 
-	// Outbox row written for the Create (and Update) — bypass RLS to
-	// inspect since outbox is FORCE RLS.
-	rawDB, err := openRawDB(t, pool)
+	// Outbox row written for the Create (and Update) — the helper
+	// bypasses RLS internally since outbox is FORCE RLS.
+	tidUUID, err := uuid.Parse(tid.String())
 	if err != nil {
-		t.Fatalf("openRawDB: %v", err)
+		t.Fatalf("uuid.Parse(tid): %v", err)
 	}
-	defer rawDB.Close()
-	if _, err := rawDB.ExecContext(ctx, `SELECT set_config('app.is_platform','true',false)`); err != nil {
-		t.Fatalf("set platform: %v", err)
-	}
-	var count int
-	if err := rawDB.QueryRowContext(ctx,
-		`SELECT count(*) FROM inventory.outbox WHERE tenant_id = $1`,
-		tid.String()).Scan(&count); err != nil {
-		t.Fatalf("read outbox count: %v", err)
-	}
+	count := messagingtest.OutboxCountByTenant(t, pool, messagingtest.SchemaInventory, tidUUID)
 	if count < 2 {
 		t.Fatalf("outbox: got %d rows want >= 2 (created + updated)", count)
 	}

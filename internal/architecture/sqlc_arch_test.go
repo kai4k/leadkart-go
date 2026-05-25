@@ -179,6 +179,7 @@ func TestArch_SqlcGeneratedCodeUnchanged(t *testing.T) {
 // Heuristic: greps adapter package (.go files in
 // `<module>/adapters/`) for `.<Name>(`. False-positives are rare
 // (sqlc names are PascalCase + business-domain-specific).
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_EveryNamedQueryHasGoCaller(t *testing.T) {
 	t.Parallel()
 
@@ -294,6 +295,7 @@ func TestArch_SqlcConfigUsesPgxV5(t *testing.T) {
 //
 // Detects literal `pgx.Conn` identifier usage in non-substrate
 // production code.
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_NoRawPgxConnExec(t *testing.T) {
 	t.Parallel()
 
@@ -338,6 +340,7 @@ func TestArch_NoRawPgxConnExec(t *testing.T) {
 //
 // Heuristic: any file importing squirrel must mention `sq.Dollar`
 // somewhere.
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_SquirrelUsesDollarPlaceholder(t *testing.T) {
 	t.Parallel()
 
@@ -384,6 +387,7 @@ func TestArch_SquirrelUsesDollarPlaceholder(t *testing.T) {
 //
 // Heuristic: looks for `fmt.Sprintf(` calls whose first arg contains
 // SQL-keyword literal patterns in non-test files under adapters/.
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_NoStringInterpInSQLConstruction(t *testing.T) {
 	t.Parallel()
 

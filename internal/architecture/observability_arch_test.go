@@ -47,6 +47,7 @@ import (
 // Heuristic: flag Info/Debug calls inside a `Handle` method body UNLESS
 // the message text references error / fail / reject / deny / blocked /
 // lock (those are diagnostic, not narrative).
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_NoInfoLogOnHandlerSuccessPath(t *testing.T) {
 	t.Parallel()
 
@@ -123,6 +124,7 @@ func TestArch_NoInfoLogOnHandlerSuccessPath(t *testing.T) {
 // `fmt.Errorf` calls that include an error argument use `%w` for
 // wrapping, NOT `%v` or `%s`. The wrapped error supports errors.Is /
 // errors.As; %v/%s loses the chain.
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_ErrorWrappingUsesPercentW(t *testing.T) {
 	t.Parallel()
 
@@ -205,6 +207,7 @@ func exprText(e ast.Expr) string {
 //
 // No fmt.Print* in non-test production code outside cmd/*/main.go
 // (allowed for startup banners). Use slog.
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_NoFmtPrintInProduction(t *testing.T) {
 	t.Parallel()
 
@@ -254,6 +257,7 @@ func TestArch_NoFmtPrintInProduction(t *testing.T) {
 // slog.<Level>(...) calls cannot have key strings matching password /
 // secret / token / api_key / private_key / jwt — these leak credentials
 // into log aggregation.
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_NoSensitiveFieldsInLogArgs(t *testing.T) {
 	t.Parallel()
 
@@ -316,6 +320,7 @@ func TestArch_NoSensitiveFieldsInLogArgs(t *testing.T) {
 // Detection: any function body that takes ctx as its first parameter
 // AND calls slog.<Level>(...) directly (without `Context` suffix) is
 // flagged.
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_CorrelationIDPropagation(t *testing.T) {
 	t.Parallel()
 
@@ -490,6 +495,7 @@ func TestArch_EveryProblemDetailHasType(t *testing.T) {
 // mutating handler emits at least one integration event — so the
 // heuristic "handler emits AT LEAST one event" is sufficient for
 // the audit contract.
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_AuditLogWritesForAuthnEvents(t *testing.T) {
 	t.Parallel()
 

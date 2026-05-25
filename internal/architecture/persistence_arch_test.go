@@ -37,6 +37,7 @@ import (
 // scope without leaking the active tx into the application layer.
 //
 // EXCEPTIONS (canon-aligned, append-only ledger aggregates).
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_RepositoriesHaveUpdateByIDFn(t *testing.T) {
 	t.Parallel()
 
@@ -128,6 +129,7 @@ func TestArch_RepositoriesHaveUpdateByIDFn(t *testing.T) {
 // Detection: parse every non-test file under internal/<mod>/domain/;
 // flag any SelectorExpr with X named pgtype/pgx/pgxpool inside a
 // FieldList of any FuncDecl / InterfaceType / StructType.
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_NoDBTypesInDomainSignatures(t *testing.T) {
 	t.Parallel()
 
@@ -200,6 +202,7 @@ func TestArch_NoDBTypesInDomainSignatures(t *testing.T) {
 // `ctx context.Context` as the first parameter. Per Brandur ctx-tx
 // pattern + Cheney "always carry ctx": cancellation, deadline, and
 // tx propagation all flow through ctx.
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_CtxFirstArgInRepoMethods(t *testing.T) {
 	t.Parallel()
 
@@ -277,6 +280,7 @@ func TestArch_CtxFirstArgInRepoMethods(t *testing.T) {
 // Heuristic detection: function body contains the literal
 // `TxFromContext` token (matches `pg.TxFromContext(ctx)` and any
 // equivalent dot-import or rename).
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_AdaptersJoinParentUoW(t *testing.T) {
 	t.Parallel()
 
@@ -375,6 +379,7 @@ func TestArch_AdaptersJoinParentUoW(t *testing.T) {
 // Detection: walk *_pg.go files; for any method body containing
 // `pgx.ErrNoRows`, assert the same body also references a `ErrNotFound`
 // (or `Err<Anything>NotFound`) sentinel — that's the canonical map.
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_RepoErrorsAreTypedSentinels(t *testing.T) {
 	t.Parallel()
 
@@ -440,6 +445,7 @@ func TestArch_RepoErrorsAreTypedSentinels(t *testing.T) {
 // EXCEPTION list (consumer-side interfaces that legitimately live with
 // their primary impl — typically because the consumer is a middleware
 // in the same layer).
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_PortsAdaptersDontDefineInterfaces(t *testing.T) {
 	t.Parallel()
 
@@ -503,6 +509,7 @@ func TestArch_PortsAdaptersDontDefineInterfaces(t *testing.T) {
 //
 // Per ADR 0047: dependency flow is ports → app → domain. app/ may NOT
 // import ports/ from any module.
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_AppDoesntImportPorts(t *testing.T) {
 	t.Parallel()
 
@@ -539,6 +546,7 @@ func TestArch_AppDoesntImportPorts(t *testing.T) {
 // Per ADR 0002 + ADR 0047 + Vernon IDDD ch. 4: domain is pure Go.
 // Substrate concerns enter via domain-declared interfaces. Allowed
 // common/* leaves: pure VOs + utilities + typed-ID factories.
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_DomainHasNoInfraImports(t *testing.T) {
 	t.Parallel()
 
@@ -626,6 +634,7 @@ func TestArch_DomainHasNoInfraImports(t *testing.T) {
 //
 // This is the positive-shaped complement of test 32 (which checks
 // domain SIGNATURES); test 36 checks imports anywhere in domain + app.
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_DomainAndAppDontImportPgxDriver(t *testing.T) {
 	t.Parallel()
 
@@ -678,6 +687,7 @@ func TestArch_DomainAndAppDontImportPgxDriver(t *testing.T) {
 // caching shapes). Commands importing query types signals a
 // "command returns a projection" anti-pattern; do the read in a
 // follow-up call.
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_AppCommandDoesNotImportAppQuery(t *testing.T) {
 	t.Parallel()
 
@@ -714,6 +724,7 @@ func TestArch_AppCommandDoesNotImportAppQuery(t *testing.T) {
 // Allow-list: handlers explicitly returning `(string, error)` for
 // new-ID commands; the resource ID is canonical wire payload (not
 // a domain leak).
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_CommandHandlersReturnResult(t *testing.T) {
 	t.Parallel()
 
@@ -768,6 +779,7 @@ func TestArch_CommandHandlersReturnResult(t *testing.T) {
 //
 // Query handlers MUST NOT write — no `.Add(`, `.Update*(`, `.Delete(`
 // calls in app/query/ files. Reads side is for projections only.
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_QueryHandlersDontMutate(t *testing.T) {
 	t.Parallel()
 

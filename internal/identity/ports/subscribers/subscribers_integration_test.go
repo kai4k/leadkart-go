@@ -45,6 +45,7 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/integrationevents"
 	"github.com/leadkart/leadkart-go/internal/identity/ports/subscribers"
 	"github.com/leadkart/leadkart-go/internal/common/audit"
+	"github.com/leadkart/leadkart-go/internal/common/audit/audittest"
 	"github.com/leadkart/leadkart-go/internal/common/cache"
 	"github.com/leadkart/leadkart-go/internal/common/messaging"
 	"github.com/leadkart/leadkart-go/internal/common/pg"
@@ -529,16 +530,8 @@ func TestRevokeFamilies_NoActiveFamilies_NoOp(t *testing.T) {
 
 	// Wait for processing — assert via audit row that subscriber ran
 	// + succeeded without error (zero families to revoke is success).
-	waitFor(t, func() bool {
-		var n int
-		const q = `
-			SELECT count(*) FROM buildingblocks.audit_log_entry
-			WHERE  action = 'identity.person_password_changed.v1'
-			  AND  succeeded = true
-		`
-		_ = fx.pool.QueryRow(t.Context(), q).Scan(&n) // arch-test:ignore-err — poll loop; non-1 count just keeps polling until deadline
-		return n >= 1
-	}, 3*time.Second, "subscriber audit row not written")
+	waitFor(t, audittest.HasAtLeastOneByAction(t, fx.pool, "identity.person_password_changed.v1"),
+		3*time.Second, "subscriber audit row not written")
 }
 
 func TestReuseDetectedSIEM_LogsOnReuseRevocation(t *testing.T) {

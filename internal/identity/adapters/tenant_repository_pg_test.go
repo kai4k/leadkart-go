@@ -4,7 +4,6 @@ package adapters_test
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -21,6 +20,7 @@ import (
 
 	"github.com/leadkart/leadkart-go/internal/common/email"
 	"github.com/leadkart/leadkart-go/internal/common/ids"
+	"github.com/leadkart/leadkart-go/internal/common/messaging/messagingtest"
 	"github.com/leadkart/leadkart-go/internal/common/slug"
 	"github.com/leadkart/leadkart-go/internal/identity/adapters"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
@@ -189,25 +189,14 @@ func TestTenantRepository_Add_PersistsRowAndOutboxEvent(t *testing.T) {
 	}
 
 	// Outbox row written with topic identity.tenant_registered.v1.
-	// Outbox is RLS+FORCE — verification queries run under platform GUC
-	// to bypass the policy (mirrors what the Watermill forwarder does in
-	// production).
-	var topic string
-	rawDB, err := openRawDB(t, pool)
-	if err != nil {
-		t.Fatalf("openRawDB: %v", err)
+	// Outbox is RLS+FORCE — the helper bypasses the policy internally
+	// (mirrors what the Watermill forwarder does in production).
+	topics := messagingtest.OutboxTopicsForTenant(t, pool, messagingtest.SchemaIdentity, tn.ID().String())
+	if len(topics) == 0 {
+		t.Fatal("read outbox: no rows")
 	}
-	defer rawDB.Close()
-	if _, err := rawDB.ExecContext(ctx, `SELECT set_config('app.is_platform','true',false)`); err != nil {
-		t.Fatalf("set platform: %v", err)
-	}
-	if err := rawDB.QueryRowContext(ctx, `
-		SELECT topic FROM identity.outbox WHERE tenant_id = $1
-	`, tn.ID().String()).Scan(&topic); err != nil {
-		t.Fatalf("read outbox: %v", err)
-	}
-	if topic != "identity.tenant_registered.v1" {
-		t.Fatalf("outbox topic: got %q want identity.tenant_registered.v1", topic)
+	if topics[0] != "identity.tenant_registered.v1" {
+		t.Fatalf("outbox topic: got %q want identity.tenant_registered.v1", topics[0])
 	}
 }
 
@@ -280,30 +269,7 @@ func TestTenantRepository_UpdateByID_ActivatesAndDrainsEvent(t *testing.T) {
 	}
 
 	// Outbox now has both registered + activated events for this tenant.
-	rawDB, err := openRawDB(t, pool)
-	if err != nil {
-		t.Fatalf("openRawDB: %v", err)
-	}
-	defer rawDB.Close()
-	if _, err := rawDB.ExecContext(ctx, `SELECT set_config('app.is_platform','true',false)`); err != nil {
-		t.Fatalf("set platform: %v", err)
-	}
-	rows, err := rawDB.QueryContext(ctx, `
-		SELECT topic FROM identity.outbox WHERE tenant_id = $1 ORDER BY occurred_at
-	`, tn.ID().String())
-	if err != nil {
-		t.Fatalf("query outbox: %v", err)
-	}
-	defer rows.Close()
-
-	var topics []string
-	for rows.Next() {
-		var topic string
-		if err := rows.Scan(&topic); err != nil {
-			t.Fatalf("scan: %v", err)
-		}
-		topics = append(topics, topic)
-	}
+	topics := messagingtest.OutboxTopicsForTenant(t, pool, messagingtest.SchemaIdentity, tn.ID().String())
 	want := []string{"identity.tenant_registered.v1", "identity.tenant_activated.v1"}
 	if len(topics) != len(want) {
 		t.Fatalf("outbox topics: got %v want %v", topics, want)
@@ -342,14 +308,3 @@ func TestTenantRepository_UpdateByID_NoOpClosureSkipsPersist(t *testing.T) {
 	}
 }
 
-// openRawDB returns a database/sql handle pointed at the same DSN as the
-// pgxpool — used for verification queries that bypass the repository.
-func openRawDB(t *testing.T, pool *pgxpool.Pool) (*sql.DB, error) {
-	t.Helper()
-	cfg := pool.Config().ConnConfig
-	dsn := cfg.ConnString()
-	if dsn == "" {
-		return nil, errors.New("pool has no ConnString")
-	}
-	return sql.Open("pgx", dsn)
-}

@@ -11,6 +11,7 @@ import (
 
 	"github.com/leadkart/leadkart-go/internal/common/ids"
 	"github.com/leadkart/leadkart-go/internal/common/pg"
+	"github.com/leadkart/leadkart-go/internal/common/pg/rlstest"
 	"github.com/leadkart/leadkart-go/internal/platform/adapters"
 	"github.com/leadkart/leadkart-go/internal/platform/domain/leadform"
 	"github.com/leadkart/leadkart-go/internal/platform/domain/unverifiedcontact"
@@ -96,9 +97,7 @@ func TestKeysetUnverifiedContactsPage_UsesIndexUnderRLS(t *testing.T) {
 	}
 	defer func() { _ = dbtx.Rollback(context.Background()) }() // arch-test:context-background — cleanup must outlive test ctx
 
-	if _, err := dbtx.Exec(t.Context(), `SELECT set_config('app.is_platform','true',true)`); err != nil {
-		t.Fatalf("set platform: %v", err)
-	}
+	rlstest.SetSessionPlatformLocal(t, t.Context(), dbtx)
 
 	// Same predicate shape as sqlc's ListUnverifiedContactsPage with a
 	// non-empty state filter (typical caller pattern: "show me NEW").

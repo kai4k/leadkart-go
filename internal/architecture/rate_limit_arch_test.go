@@ -27,6 +27,7 @@ import (
 // The composition root's middleware chain MUST include the IP-level
 // rate-limiter (`httpmw.IPRateLimit` or equivalent). Drift here
 // would re-open the credential-stuffing path.
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_IPRateLimitMiddlewarePresent(t *testing.T) {
 	t.Parallel()
 
@@ -53,6 +54,10 @@ func TestArch_IPRateLimitMiddlewarePresent(t *testing.T) {
 // Predicate: every file that contains `StatusTooManyRequests` (or
 // the integer 429 inside an http response) must also contain
 // `Retry-After`.
+//
+// Scope: production — Retry-After header is a wire-contract concern;
+// test code that constructs 429 responses inline (e.g. fakes) is
+// allowed to skip the header for brevity.
 func TestArch_429ResponseHasRetryAfter(t *testing.T) {
 	t.Parallel()
 
@@ -87,6 +92,7 @@ func TestArch_429ResponseHasRetryAfter(t *testing.T) {
 // Predicate: every file referencing `RatePerSecond` or `Burst` AND
 // `httpmw.LimiterConfig` must reference `cfg.` or `config.` — i.e.
 // the value comes from config.
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_RateLimitConfigExplicit(t *testing.T) {
 	t.Parallel()
 

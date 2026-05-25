@@ -21,6 +21,7 @@ import (
 	"github.com/testcontainers/testcontainers-go/wait"
 
 	"github.com/leadkart/leadkart-go/internal/common/messaging"
+	"github.com/leadkart/leadkart-go/internal/common/messaging/messagingtest"
 )
 
 // inboxFixture spins ephemeral Postgres + applies migrations + returns
@@ -103,14 +104,7 @@ func TestIdempotentReceiver_FirstCall_RunsHandlerAndRecords(t *testing.T) {
 	}
 
 	// Verify row exists.
-	var n int
-	err := pool.QueryRow(t.Context(), `
-		SELECT count(*) FROM identity.processed_messages
-		WHERE  message_id = $1 AND handler_name = $2
-	`, "11111111-1111-1111-1111-111111111111", "test.handler").Scan(&n)
-	if err != nil {
-		t.Fatalf("count: %v", err)
-	}
+	n := messagingtest.InboxCountForMessage(t, pool, "11111111-1111-1111-1111-111111111111", "test.handler")
 	if n != 1 {
 		t.Fatalf("processed_messages row count: got %d want 1", n)
 	}
@@ -156,13 +150,7 @@ func TestIdempotentReceiver_HandlerError_DoesNotRecord_NextCallRunsAgain(t *test
 	if err == nil || err.Error() != "transient" {
 		t.Fatalf("first call expected transient err, got %v", err)
 	}
-	var n int
-	if err := pool.QueryRow(t.Context(), `
-		SELECT count(*) FROM identity.processed_messages
-		WHERE  message_id = $1 AND handler_name = $2
-	`, mid, "test.flaky").Scan(&n); err != nil {
-		t.Fatalf("count: %v", err)
-	}
+	n := messagingtest.InboxCountForMessage(t, pool, mid, "test.flaky")
 	if n != 0 {
 		t.Fatalf("dedup row recorded after handler error: got %d want 0", n)
 	}

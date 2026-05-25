@@ -26,6 +26,7 @@ import (
 //
 // Vacuously true when no jobs/ dir exists yet — the test is the
 // institutional lever for when CRM/Inventory start using river.
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_RiverJobsImplementInterface(t *testing.T) {
 	t.Parallel()
 
@@ -62,6 +63,7 @@ func TestArch_RiverJobsImplementInterface(t *testing.T) {
 //
 // Every River worker MUST declare an explicit Timeout. Defaulting
 // to "wait forever" is a known cause of stuck workers.
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_RiverJobsHaveTimeout(t *testing.T) {
 	t.Parallel()
 
@@ -95,6 +97,7 @@ func TestArch_RiverJobsHaveTimeout(t *testing.T) {
 // River retries on failure → workers MUST be idempotent OR carry
 // `// river:idempotent <reason>` documentation comment on the
 // Worker type.
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_RiverJobsIdempotent(t *testing.T) {
 	t.Parallel()
 
@@ -128,6 +131,7 @@ func TestArch_RiverJobsIdempotent(t *testing.T) {
 // Queue names follow `<module>_<purpose>`. Shared queue names mean
 // CRM's slow job blocks inventory's fast job. Per-module queues
 // give per-team scaling.
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_RiverQueuesScopedPerModule(t *testing.T) {
 	t.Parallel()
 

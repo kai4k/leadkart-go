@@ -32,6 +32,7 @@ import (
 // only legitimate sites are composition roots (cmd/*/main.go) +
 // test files (where the test framework owns the lifecycle).
 // Anywhere else, callers MUST receive ctx from upstream.
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_NoContextBackgroundOutsideMainOrTest(t *testing.T) {
 	t.Parallel()
 
@@ -64,6 +65,7 @@ func TestArch_NoContextBackgroundOutsideMainOrTest(t *testing.T) {
 // signal that the call site needs revisit. Banned outside tests; if
 // you need a temporary placeholder, accept ctx from upstream + plumb
 // it through.
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_NoContextTODOInProduction(t *testing.T) {
 	t.Parallel()
 
@@ -91,6 +93,7 @@ func TestArch_NoContextTODOInProduction(t *testing.T) {
 // cancel fn. Failing to defer cancel() leaks a goroutine + a timer
 // per call. Predicate: every `_, cancel := context.With*(...)` line
 // must be followed within 3 lines by `defer cancel()`.
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_WithTimeoutHasDeferCancel(t *testing.T) {
 	t.Parallel()
 
@@ -135,6 +138,7 @@ func TestArch_WithTimeoutHasDeferCancel(t *testing.T) {
 // packages. context godoc: "The provided key must be comparable and
 // should not be of type string or any other built-in type". Every
 // ctx.Value() call must pass a typed key.
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_CtxValueKeysAreTyped(t *testing.T) {
 	t.Parallel()
 
@@ -170,6 +174,7 @@ func TestArch_CtxValueKeysAreTyped(t *testing.T) {
 // boolean predicates (`IsX()`) that don't do I/O are fine. The test
 // flags only fns whose body contains I/O markers (Query/Exec/HTTP
 // roundtrip/etc.).
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_CtxFirstParamInExportedFns(t *testing.T) {
 	t.Parallel()
 
@@ -255,6 +260,7 @@ func TestArch_CtxFirstParamInExportedFns(t *testing.T) {
 //
 // This is a soft check (heuristic) — false positives opt out via
 // `// arch-test:goroutine-detached <reason>` comment.
+// Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_GoroutinesInheritCtx(t *testing.T) {
 	t.Parallel()
 

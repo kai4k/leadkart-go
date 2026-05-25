@@ -12,6 +12,7 @@ import (
 
 	"github.com/leadkart/leadkart-go/internal/common/ids"
 	"github.com/leadkart/leadkart-go/internal/common/pg"
+	"github.com/leadkart/leadkart-go/internal/common/pg/rlstest"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
 	"github.com/leadkart/leadkart-go/internal/inventory/adapters"
 	"github.com/leadkart/leadkart-go/internal/inventory/domain/batch"
@@ -119,9 +120,7 @@ func TestKeysetStockMovementsPage_UsesIndexUnderRLS(t *testing.T) {
 	}
 	defer conn.Release()
 
-	if _, err := conn.Exec(ctx, `SELECT set_config('app.tenant_id', $1, false)`, tid.String()); err != nil {
-		t.Fatalf("set tenant: %v", err)
-	}
+	rlstest.SetSessionTenantPersistent(t, ctx, conn.Conn(), tid.String())
 
 	// Same predicate shape as sqlc's ListMovementsByBatchPage. Sentinel
 	// cursor admits every row.
