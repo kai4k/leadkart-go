@@ -30,12 +30,15 @@ type fakeMembershipRepo struct {
 	getErr      error
 }
 
-func (f *fakeMembershipRepo) GetByID(_ context.Context, id membership.ID) (*membership.Membership, error) {
+func (f *fakeMembershipRepo) GetByID(_ context.Context, tenantID tenant.ID, id membership.ID) (*membership.Membership, error) {
 	if f.getErr != nil {
 		return nil, f.getErr
 	}
 	m, ok := f.memberships[id]
 	if !ok {
+		return nil, membership.ErrNotFound
+	}
+	if m.TenantID() != tenantID {
 		return nil, membership.ErrNotFound
 	}
 	return m, nil
@@ -44,7 +47,7 @@ func (f *fakeMembershipRepo) GetByID(_ context.Context, id membership.ID) (*memb
 func (f *fakeMembershipRepo) Add(context.Context, *membership.Membership) error {
 	return errors.New("fake: Add unused")
 }
-func (f *fakeMembershipRepo) UpdateByID(context.Context, membership.ID, func(*membership.Membership) (bool, error)) error {
+func (f *fakeMembershipRepo) UpdateByID(context.Context, tenant.ID, membership.ID, func(*membership.Membership) (bool, error)) error {
 	return errors.New("fake: UpdateByID unused")
 }
 func (f *fakeMembershipRepo) GetActiveForPerson(context.Context, person.ID) (*membership.Membership, error) {
@@ -56,7 +59,7 @@ func (f *fakeMembershipRepo) ListForTenant(context.Context, tenant.ID) ([]*membe
 func (f *fakeMembershipRepo) ListAllForPerson(context.Context, person.ID) ([]*membership.Membership, error) {
 	return nil, errors.New("fake: ListAllForPerson unused")
 }
-func (f *fakeMembershipRepo) ListForTenantPage(context.Context, time.Time, string, int) ([]*membership.Membership, error) {
+func (f *fakeMembershipRepo) ListForTenantPage(context.Context, tenant.ID, time.Time, string, int) ([]*membership.Membership, error) {
 	return nil, errors.New("fake: ListForTenantPage unused")
 }
 func (f *fakeMembershipRepo) HasActiveSuperAdmin(context.Context, tenant.ID) (bool, error) {
@@ -151,7 +154,7 @@ func TestResolve_NoRoles_NoOverlay_ReturnsEmpty(t *testing.T) {
 	roles := &fakeRoleRepo{roles: map[role.ID]*role.Role{}}
 	r := permissions.NewResolver(mems, roles, time.Now)
 
-	got, err := r.Resolve(t.Context(), m.ID())
+	got, err := r.Resolve(t.Context(), tid, m.ID())
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
@@ -180,7 +183,7 @@ func TestResolve_UnionsRolePermissions(t *testing.T) {
 	roles := &fakeRoleRepo{roles: map[role.ID]*role.Role{r1.ID(): r1, r2.ID(): r2}}
 	res := permissions.NewResolver(mems, roles, time.Now)
 
-	got, err := res.Resolve(t.Context(), m.ID())
+	got, err := res.Resolve(t.Context(), tid, m.ID())
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
@@ -211,7 +214,7 @@ func TestResolve_OverlayGrantedExtendsBaseline(t *testing.T) {
 	roles := &fakeRoleRepo{roles: map[role.ID]*role.Role{r1.ID(): r1}}
 	res := permissions.NewResolver(mems, roles, time.Now)
 
-	got, err := res.Resolve(t.Context(), m.ID())
+	got, err := res.Resolve(t.Context(), tid, m.ID())
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
@@ -243,7 +246,7 @@ func TestResolve_OverlayRevokedSuppressesRoleGrant(t *testing.T) {
 	roles := &fakeRoleRepo{roles: map[role.ID]*role.Role{r1.ID(): r1}}
 	res := permissions.NewResolver(mems, roles, time.Now)
 
-	got, err := res.Resolve(t.Context(), m.ID())
+	got, err := res.Resolve(t.Context(), tid, m.ID())
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
@@ -260,7 +263,7 @@ func TestResolve_PropagatesGetByIDError(t *testing.T) {
 		getErr:      sentinel,
 	}
 	res := permissions.NewResolver(mems, &fakeRoleRepo{}, time.Now)
-	_, err := res.Resolve(t.Context(), membership.ID(ids.NewV7().String()))
+	_, err := res.Resolve(t.Context(), freshTenantID(t), membership.ID(ids.NewV7().String()))
 	if !errors.Is(err, sentinel) {
 		t.Fatalf("Resolve: got %v want sentinel", err)
 	}
@@ -409,7 +412,7 @@ func TestResolve_NoParent_FallsBackToFlatBehavior(t *testing.T) {
 	roles := &fakeRoleRepo{roles: map[role.ID]*role.Role{flat.ID(): flat}}
 	res := permissions.NewResolver(mems, roles, time.Now)
 
-	got, err := res.Resolve(t.Context(), m.ID())
+	got, err := res.Resolve(t.Context(), tid, m.ID())
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
