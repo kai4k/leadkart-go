@@ -56,8 +56,8 @@ func TestDeleteProductHandler_HasLiveStock_ReturnsErrAnyLiveStock(t *testing.T) 
 	tid := newTenantID(t)
 	actor := newMembershipID(t)
 	p := seedProduct(t, productRepo, tid, actor, "STOCK-1")
-	batchRepo.anyLiveStockFor = p.ID()
-	batchRepo.anyLiveStockOn = true
+	batchRepo.AnyLiveStockFor = p.ID()
+	batchRepo.AnyLiveStockOn = true
 	h := command.NewDeleteProductHandler(productRepo, batchRepo, func() time.Time { return fixedNow })
 
 	err := h.Handle(t.Context(), command.DeleteProductCommand{

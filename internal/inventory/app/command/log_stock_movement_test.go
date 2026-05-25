@@ -34,8 +34,8 @@ func TestLogStockMovementHandler_HappyPath_Inbound(t *testing.T) {
 	if out.QuantityOnHandAfter != 100 {
 		t.Fatalf("QuantityOnHandAfter: got %d want 100", out.QuantityOnHandAfter)
 	}
-	if movementRepo.addCalls != 1 {
-		t.Fatalf("movementRepo.addCalls: got %d want 1", movementRepo.addCalls)
+	if movementRepo.AddCalls != 1 {
+		t.Fatalf("movementRepo.AddCalls: got %d want 1", movementRepo.AddCalls)
 	}
 	if uow.Runs() != 1 {
 		t.Fatalf("UoW runs (no contention): got %d want 1", uow.Runs())
@@ -71,10 +71,10 @@ func TestLogStockMovementHandler_OutboundSignsQuantityNegative(t *testing.T) {
 		t.Fatalf("Handle outbound: %v", err)
 	}
 	// Pull the just-added movement and confirm signed convention.
-	if len(movementRepo.movements) != 1 {
-		t.Fatalf("movement count: %d", len(movementRepo.movements))
+	if len(movementRepo.Movements) != 1 {
+		t.Fatalf("movement count: %d", len(movementRepo.Movements))
 	}
-	for _, m := range movementRepo.movements {
+	for _, m := range movementRepo.Movements {
 		if m.Quantity() != -30 {
 			t.Fatalf("Outbound stored quantity: got %d want -30 (signed ledger convention)", m.Quantity())
 		}
@@ -165,8 +165,8 @@ func TestLogStockMovementHandler_InsufficientStock_NoRetry(t *testing.T) {
 	if uow.Runs() != 1 {
 		t.Fatalf("UoW runs on insufficient-stock (no retry): got %d want 1", uow.Runs())
 	}
-	if movementRepo.addCalls != 0 {
-		t.Fatalf("movement MUST NOT be persisted on reject: addCalls=%d", movementRepo.addCalls)
+	if movementRepo.AddCalls != 0 {
+		t.Fatalf("movement MUST NOT be persisted on reject: addCalls=%d", movementRepo.AddCalls)
 	}
 }
 

@@ -29,8 +29,8 @@ func TestCreateProductHandler_HappyPath_Persists(t *testing.T) {
 	if out.ProductID.IsZero() {
 		t.Fatal("ProductID should be set on success")
 	}
-	if repo.addCalls != 1 {
-		t.Fatalf("addCalls: got %d want 1", repo.addCalls)
+	if repo.AddCalls != 1 {
+		t.Fatalf("AddCalls: got %d want 1", repo.AddCalls)
 	}
 }
 
@@ -51,8 +51,8 @@ func TestCreateProductHandler_RejectsInvalidSpec(t *testing.T) {
 	if !errors.Is(err, product.ErrInvalid) {
 		t.Fatalf("err: got %v want ErrInvalid", err)
 	}
-	if repo.addCalls != 0 {
-		t.Fatalf("addCalls on invalid spec: got %d want 0 (Add MUST NOT be called)", repo.addCalls)
+	if repo.AddCalls != 0 {
+		t.Fatalf("AddCalls on invalid spec: got %d want 0 (Add MUST NOT be called)", repo.AddCalls)
 	}
 }
 
@@ -81,7 +81,7 @@ func TestCreateProductHandler_DuplicateSKU_ReturnsErrSKUTaken(t *testing.T) {
 func TestCreateProductHandler_RepoAddError_Propagates(t *testing.T) {
 	t.Parallel()
 	repo := newFakeProductRepo()
-	repo.addErr = errSentinel
+	repo.AddErr = errSentinel
 	h := command.NewCreateProductHandler(repo, func() time.Time { return fixedNow }, testNewProductID)
 	tid := newTenantID(t)
 	actor := newMembershipID(t)

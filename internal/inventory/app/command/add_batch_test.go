@@ -40,8 +40,8 @@ func TestAddBatchHandler_HappyPath_AddsBatch(t *testing.T) {
 	if uow.Runs() != 1 {
 		t.Fatalf("UoW runs: got %d want 1", uow.Runs())
 	}
-	if batchRepo.addCalls != 1 {
-		t.Fatalf("batchRepo.addCalls: got %d want 1", batchRepo.addCalls)
+	if batchRepo.AddCalls != 1 {
+		t.Fatalf("batchRepo.AddCalls: got %d want 1", batchRepo.AddCalls)
 	}
 }
 
@@ -68,8 +68,8 @@ func TestAddBatchHandler_MissingProduct_ReturnsErrNotFound(t *testing.T) {
 	if !errors.Is(err, product.ErrNotFound) {
 		t.Fatalf("err: got %v want ErrNotFound", err)
 	}
-	if batchRepo.addCalls != 0 {
-		t.Fatalf("batchRepo.addCalls on missing product: got %d want 0", batchRepo.addCalls)
+	if batchRepo.AddCalls != 0 {
+		t.Fatalf("batchRepo.AddCalls on missing product: got %d want 0", batchRepo.AddCalls)
 	}
 }
 
@@ -109,8 +109,8 @@ func TestAddBatchHandler_SoftDeletedParent_ReturnsErrNotFound(t *testing.T) {
 	if !errors.Is(err, product.ErrNotFound) {
 		t.Fatalf("err: got %v want ErrNotFound (soft-deleted parent)", err)
 	}
-	if batchRepo.addCalls != 0 {
-		t.Fatalf("batchRepo.addCalls on deleted parent: got %d want 0", batchRepo.addCalls)
+	if batchRepo.AddCalls != 0 {
+		t.Fatalf("batchRepo.AddCalls on deleted parent: got %d want 0", batchRepo.AddCalls)
 	}
 }
 

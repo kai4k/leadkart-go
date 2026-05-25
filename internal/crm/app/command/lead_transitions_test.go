@@ -8,6 +8,7 @@ import (
 	"github.com/leadkart/leadkart-go/internal/common/ids"
 	"github.com/leadkart/leadkart-go/internal/crm/app/command"
 	"github.com/leadkart/leadkart-go/internal/crm/domain/crmlead"
+	"github.com/leadkart/leadkart-go/internal/crm/domain/crmlead/crmleadtest"
 )
 
 // fixedSeed is the deterministic clock used by every seedLead caller
@@ -17,7 +18,7 @@ var fixedSeed = time.Date(2026, 6, 2, 9, 0, 0, 0, time.UTC)
 
 // seedLead creates a fresh CrmLead inside the fake repository + returns
 // its ID â€” used by every transition test.
-func seedLead(t *testing.T, r *fakeLeads) crmlead.ID {
+func seedLead(t *testing.T, r *crmleadtest.FakeRepository) crmlead.ID {
 	t.Helper()
 	l, err := crmlead.New(
 		crmlead.ID(ids.NewV7().String()),

@@ -7,6 +7,7 @@ import (
 
 	"github.com/leadkart/leadkart-go/internal/crm/app/command"
 	"github.com/leadkart/leadkart-go/internal/crm/domain/crmlead"
+	"github.com/leadkart/leadkart-go/internal/crm/domain/crmlead/crmleadtest"
 )
 
 func validSnapshot(purchase string) crmlead.PurchaseSnapshot {
@@ -119,7 +120,7 @@ func TestIngest_NormalisesProvenanceOnSnapshot(t *testing.T) {
 
 func TestIngest_LookupFailureBubbles(t *testing.T) {
 	t.Parallel()
-	leads := &erroringLeads{fakeLeads: newFakeLeads()}
+	leads := &erroringLeads{FakeRepository: newFakeLeads()}
 	h := command.NewIngestPurchasedLeadHandler(leads, fixedTime, newTestLeadID)
 	_, err := h.Handle(t.Context(), command.IngestPurchasedLeadCommand{
 		PurchaseID: "p", TenantID: "t", Snapshot: validSnapshot("p"),
@@ -130,10 +131,11 @@ func TestIngest_LookupFailureBubbles(t *testing.T) {
 }
 
 // erroringLeads always errors on GetBySourcePurchaseID (non-NotFound),
-// exercising the bubble-up path. Embeds *fakeLeads so the sync.Mutex
-// inside fakeLeads is shared by pointer, not copied by value.
+// exercising the bubble-up path. Embeds the canonical
+// *crmleadtest.FakeRepository so the embedded contract methods carry
+// through unchanged; only GetBySourcePurchaseID is overridden.
 type erroringLeads struct {
-	*fakeLeads
+	*crmleadtest.FakeRepository
 }
 
 func (*erroringLeads) GetBySourcePurchaseID(_ context.Context, _ string) (*crmlead.CrmLead, error) {
