@@ -219,50 +219,15 @@ func TestFlow_RegisterLoginRefreshLogout(t *testing.T) {
 	}
 }
 
-func TestFlow_LoginUnknownEmail_GenericFailure(t *testing.T) {
-	t.Parallel()
-	login := newWiredApp(t).login
-	ctx := t.Context()
-
-	addr, _ := email.New("nobody@example.test")
-	_, err := login.Handle(ctx, command.LoginCommand{
-		Email:    addr,
-		Password: "anything",
-	})
-	if !errors.Is(err, command.ErrInvalidCredentials) {
-		t.Fatalf("expected ErrInvalidCredentials, got %v", err)
-	}
-}
-
-func TestFlow_LoginWrongPassword_GenericFailure(t *testing.T) {
-	t.Parallel()
-	app := newWiredApp(t)
-	register, login := app.register, app.login
-	ctx := t.Context()
-
-	full := ids.NewV7().String()
-	tenantSlug, _ := slug.New("wp-" + full[len(full)-8:])
-	addr, _ := email.New("wp@flow.test")
-	if _, err := register.Handle(ctx, command.RegisterTenantCommand{
-		Slug:           tenantSlug,
-		LegalName:      "Wrong Password Pharma",
-		DisplayName:    "WP",
-		AdminEmail:     addr,
-		AdminPassword:  "right-password",
-		AdminFirstName: "WP",
-		AdminLastName:  "Admin",
-	}); err != nil {
-		t.Fatalf("Register: %v", err)
-	}
-
-	_, err := login.Handle(ctx, command.LoginCommand{
-		Email:    addr,
-		Password: "wrong-password",
-	})
-	if !errors.Is(err, command.ErrInvalidCredentials) {
-		t.Fatalf("expected ErrInvalidCredentials, got %v", err)
-	}
-}
+// Note: TestFlow_LoginUnknownEmail_GenericFailure +
+// TestFlow_LoginWrongPassword_GenericFailure were pruned per ADR 0062
+// strict redundancy audit (2026-05-26). Both branches are pure handler
+// orchestration over the AuthRouter contract + argon2 verify; no SQL
+// contract is exercised. Equivalent assertions now live in
+// login_test.go as handler-unit tests against persontest.FakeRepository
+// + fakeAuthRouter — running in <100ms each vs. the full pgtest +
+// miniredis + JWT boot the integration version paid for the same
+// observable.
 
 func TestFlow_RegisterDuplicateActiveEmail_Blocked(t *testing.T) {
 	t.Parallel()
