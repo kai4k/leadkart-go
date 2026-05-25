@@ -489,11 +489,34 @@ func TestRevokeFamilies_OnMembershipDeactivated_NarrowsToTenantScope(t *testing.
 	}
 }
 
+// TestRevokeFamilies_NoActiveFamilies_NoOp covers the empty-list
+// short-circuit: a PersonLevel event for a Person with zero active
+// families must mark the run successful AND must NOT issue a spurious
+// UPDATE-all on the families table (e.g., from a missing predicate).
+//
+// Two halves of the SQL contract:
+//
+//   1. Subscriber-ran observable: an audit row exists for the event
+//      action (router middleware contract).
+//   2. No spurious mutation: a baseline-seeded family from a DIFFERENT
+//      Person remains untouched after the subscriber runs — proves
+//      the empty-list path didn't fall through to a row-set-bypass
+//      UPDATE that would have flipped is_revoked=true on every family.
+//
+// Without (2) the test reduces to "subscriber ran" — already covered
+// by TestRouter_FullStack in common/messaging/router_test.go. The
+// no-spurious-mutation assertion is the SQL-specific contract.
 func TestRevokeFamilies_NoActiveFamilies_NoOp(t *testing.T) {
 	t.Parallel()
 	fx := newFixture(t)
 	pubsub, _, stop := wireRouter(t, fx)
 	defer stop()
+
+	// Sentinel family for an UNRELATED Person — must stay Active after
+	// the empty-list noop runs for the target Person.
+	other := fx.seedPerson(t, "untouched@flow.test")
+	otherTn := fx.seedTenant(t)
+	sentinel := fx.seedFamily(t, other, otherTn)
 
 	p := fx.seedPerson(t, "noop@flow.test")
 	pidUUID, _ := uuid.Parse(p.ID().String())
@@ -503,10 +526,21 @@ func TestRevokeFamilies_NoActiveFamilies_NoOp(t *testing.T) {
 		OccurredAtUTC: time.Now().UTC(),
 	}, uuid.Nil)
 
-	// Wait for processing — assert via audit row that subscriber ran
-	// + succeeded without error (zero families to revoke is success).
+	// SQL-contract part 1: subscriber-ran observable.
 	waitFor(t, audittest.HasAtLeastOneByAction(t, fx.pool, "identity.person_password_changed.v1"),
 		3*time.Second, "subscriber audit row not written")
+
+	// SQL-contract part 2: no spurious mutation — the sentinel family
+	// for the unrelated Person must remain Active. A missing predicate
+	// on the subscriber's UPDATE would have flipped is_revoked on
+	// every family system-wide.
+	got, err := fx.families.GetByID(t.Context(), sentinel.ID())
+	if err != nil {
+		t.Fatalf("GetByID sentinel: %v", err)
+	}
+	if got.IsRevoked() {
+		t.Fatalf("sentinel family for unrelated Person was revoked — subscriber's empty-list path leaked a row-set-bypass UPDATE")
+	}
 }
 
 func TestReuseDetectedSIEM_LogsOnReuseRevocation(t *testing.T) {

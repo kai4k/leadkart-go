@@ -26,6 +26,14 @@
 //     from GetByID under the live `WHERE NOT is_deleted` filter.
 //   - pgx ROLLBACK on UpdateByID closure error (real tx rollback, not
 //     fake in-memory revert).
+//
+// arch-test:raw-sql-justified — TestRoleRepository_UpdateByID_Delete_
+//   PersistsSoftDeleteAndHidesFromGetByID intentionally bypasses the
+//   adapter with a direct SELECT to assert the PHYSICAL row state
+//   (`is_deleted=true`) after Delete, proving soft-vs-hard delete at
+//   the SQL layer. Per ADR 0062 §6 canonical SQL-contract test shape
+//   (matches the rolehierarchy soft-delete sharpening in commit
+//   85bb585).
 
 package adapters_test
 
@@ -183,9 +191,19 @@ func TestRoleRepository_GetByIDs_FiltersCrossTenant(t *testing.T) {
 	}
 }
 
-// SQL-contract: soft-deleted rows vanish from GetByID through the
-// `WHERE NOT is_deleted` filter on the read path — proves the partial
-// index + read predicate agree at the Postgres layer.
+// SQL-contract: Delete is SOFT-delete (physical row survives, only
+// `is_deleted` flips to true) AND the partial-index + read predicate
+// `WHERE NOT is_deleted` hides it from the live read path. Two halves:
+//
+//   1. Physical row stays — direct SELECT bypassing the adapter
+//      proves the UPDATE didn't DELETE.
+//   2. The partial-index + WHERE NOT is_deleted predicate on the
+//      read path means GetByID can't see it.
+//
+// The roletest.FakeRepository's "Delete → GetByID returns ErrNotFound"
+// observable is identical; only the SQL test proves the PG-specific
+// mechanism (soft vs. hard delete + partial-index filter) actually
+// fires. Canonical post-rolehierarchy sharpening pattern per ADR 0062.
 func TestRoleRepository_UpdateByID_Delete_PersistsSoftDeleteAndHidesFromGetByID(t *testing.T) {
 	t.Parallel()
 	pool := repoFixture(t)
@@ -206,10 +224,25 @@ func TestRoleRepository_UpdateByID_Delete_PersistsSoftDeleteAndHidesFromGetByID(
 		t.Fatalf("UpdateByID delete: %v", err)
 	}
 
-	// Live read filters soft-deleted rows.
+	// SQL-contract part 1: physical row survives the soft delete.
+	// Direct SELECT bypassing the adapter — proves is_deleted moved
+	// to true (UPDATE, not DELETE).
+	var isDeleted bool
+	if err := pool.QueryRow(t.Context(),
+		`SELECT is_deleted FROM identity.roles WHERE id = $1`,
+		r.ID().String(),
+	).Scan(&isDeleted); err != nil {
+		t.Fatalf("direct SELECT for physical row: %v", err)
+	}
+	if !isDeleted {
+		t.Fatal("physical row's is_deleted is false — Delete behaved as hard-delete, contract broken")
+	}
+
+	// SQL-contract part 2: partial index + `WHERE NOT is_deleted`
+	// predicate hides the soft-deleted row from GetByID.
 	_, err = roles.GetByID(ctx, tn.ID(), r.ID())
 	if !errors.Is(err, role.ErrNotFound) {
-		t.Fatalf("GetByID after delete: got %v want ErrNotFound", err)
+		t.Fatalf("GetByID after delete: got %v want ErrNotFound (partial-index filter)", err)
 	}
 }
 

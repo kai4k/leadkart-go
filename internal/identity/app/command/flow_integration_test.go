@@ -10,6 +10,13 @@
 //   + a fresh tenant_id per test; RLS isolates rows by tenant so parallel
 //   runs cannot see each others state. Brandur "Postgres at scale" +
 //   TDL Wild Workouts canon.
+//
+// arch-test:raw-sql-justified — TestFlow_RegisterDuplicateActiveEmail_
+//   Blocked intentionally bypasses the adapter with a direct SELECT
+//   to assert the pg.UnitOfWork ROLLED BACK after the second register
+//   failed (no tenant B row in identity.tenants). Per ADR 0062 §6 the
+//   rollback is the SQL-specific contract — the observable error is
+//   already mirror-able by the fake.
 
 package command_test
 
@@ -229,9 +236,27 @@ func TestFlow_RegisterLoginRefreshLogout(t *testing.T) {
 // miniredis + JWT boot the integration version paid for the same
 // observable.
 
+// TestFlow_RegisterDuplicateActiveEmail_Blocked covers the
+// cross-aggregate UnitOfWork rollback when the membership Add fails
+// with ErrAlreadyActive. Sharpened per ADR 0062: the observable
+// (`ErrEmailHasActiveMembership`) is mirror-able from the fake-backed
+// handler layer; the SQL-specific contract is that the FAILED Add
+// rolls back the ENTIRE pg.UnitOfWork — tenant B's row, the
+// (reused) person update, the failed membership — atomically.
+//
+// Two halves of the SQL contract:
+//
+//   1. Observable: second Register returns ErrEmailHasActiveMembership.
+//   2. Physical: direct SELECT for tenant B's slug returns zero rows
+//      — proves the pg.UnitOfWork rolled back the tenant insert when
+//      the membership Add fired ErrAlreadyActive partway through.
+//
+// Only the SQL adapter can prove (2); the fake has no UoW or pg.Tx
+// semantics to roll back.
 func TestFlow_RegisterDuplicateActiveEmail_Blocked(t *testing.T) {
 	t.Parallel()
-	register := newWiredApp(t).register
+	wired := newWiredApp(t)
+	register := wired.register
 	ctx := t.Context()
 
 	addr, _ := email.New("dup-active@flow.test")
@@ -261,8 +286,23 @@ func TestFlow_RegisterDuplicateActiveEmail_Blocked(t *testing.T) {
 		AdminFirstName: "Alice",
 		AdminLastName:  "B",
 	})
+	// SQL-contract part 1: observable error.
 	if !errors.Is(err, command.ErrEmailHasActiveMembership) {
 		t.Fatalf("expected ErrEmailHasActiveMembership, got %v", err)
+	}
+
+	// SQL-contract part 2: pg.UnitOfWork rollback proof. Tenant B's
+	// row must NOT exist — the failed membership Add rolled back the
+	// entire register flow's tx. Direct SELECT bypassing the adapter.
+	var count int
+	if err := wired.pool.QueryRow(t.Context(),
+		`SELECT count(*) FROM identity.tenants WHERE slug = $1`,
+		slugB.String(),
+	).Scan(&count); err != nil {
+		t.Fatalf("direct SELECT for tenant B rollback proof: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("tenant B row count after failed register: got %d want 0 — pg.UnitOfWork did NOT roll back the tenant insert", count)
 	}
 }
 

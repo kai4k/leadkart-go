@@ -29,6 +29,14 @@
 //     + profile child-table rows survive Add → GetByID hydration.
 //   - Composite FK fk_role_assignments_same_tenant rejects cross-tenant
 //     role IDs (declarative cross-tenant safety per ADR 0058).
+//
+// arch-test:raw-sql-justified — TestMembershipRepository_UpdateByID_
+//   DeactivateClearsActiveSlot intentionally bypasses the adapter
+//   with a direct SELECT to assert the PHYSICAL row state
+//   (status='inactive') after Deactivate, proving the UPDATE rewrote
+//   the column that the partial-index predicate filters on. Per ADR
+//   0062 §6 canonical SQL-contract shape (matches rolehierarchy +
+//   role soft-delete sharpenings).
 
 package adapters_test
 
@@ -150,6 +158,18 @@ func TestMembershipRepository_GetByID_OutsideTenantScope_NotFound(t *testing.T) 
 // (predicate `WHERE status='active' AND NOT is_deleted`) releases its
 // slot the moment a row flips out of status='active' — proving the
 // predicate sees the new status atomically inside the UPDATE tx.
+//
+// Two halves of the SQL contract:
+//
+//   1. Physical row state — direct SELECT bypassing the adapter
+//      proves the UPDATE rewrote `status` (not a soft-delete), which
+//      is what frees the partial-index slot (the predicate filters
+//      on status, not on is_deleted alone).
+//   2. The partial-index slot release admits a second Active across
+//      tenants — the second Add for the same Person succeeds.
+//
+// Canonical post-rolehierarchy sharpening pattern per ADR 0062:
+// adapter-bypass SELECT for physical state PLUS observable behaviour.
 func TestMembershipRepository_UpdateByID_DeactivateClearsActiveSlot(t *testing.T) {
 	t.Parallel()
 	pool := repoFixture(t)
@@ -180,11 +200,29 @@ func TestMembershipRepository_UpdateByID_DeactivateClearsActiveSlot(t *testing.T
 		t.Fatalf("Deactivate: %v", err)
 	}
 
-	// Now adding an Active in B is allowed (single-Active slot freed).
+	// SQL-contract part 1: physical row state — UPDATE rewrote status
+	// from 'active' to 'inactive' (the partial-index predicate filters
+	// on status, so the slot is freed by status change, not by row
+	// removal). Direct SELECT bypassing the adapter.
+	var status string
+	if err := pool.QueryRow(t.Context(),
+		`SELECT status FROM identity.tenant_memberships WHERE id = $1`,
+		mA.ID().String(),
+	).Scan(&status); err != nil {
+		t.Fatalf("direct SELECT for physical row: %v", err)
+	}
+	if status != "inactive" {
+		t.Fatalf("physical row status: got %q want %q — Deactivate didn't update the status column", status, "inactive")
+	}
+
+	// SQL-contract part 2: partial-index slot release admits the
+	// second Active across tenants (per Person). The fake's logical
+	// filter mirrors this observable; only this part of the test
+	// proves the PG partial-index is what's doing it.
 	mB, _ := membership.New(membership.ID(ids.NewV7().String()), p.ID(), tnB.ID(), membership.ID(""), testNow)
 	ctxB := tenancy.WithID(t.Context(), tenancy.ID(tnB.ID().String()))
 	if err := memberships.Add(ctxB, mB); err != nil {
-		t.Fatalf("Add B after deactivate: %v", err)
+		t.Fatalf("Add B after deactivate (partial-index slot release): %v", err)
 	}
 }
 

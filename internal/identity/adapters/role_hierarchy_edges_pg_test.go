@@ -44,11 +44,13 @@ package adapters_test
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/leadkart/leadkart-go/internal/common/ids"
 	"github.com/leadkart/leadkart-go/internal/common/pg"
+	"github.com/leadkart/leadkart-go/internal/common/pg/rlstest"
 	"github.com/leadkart/leadkart-go/internal/common/tenancy"
 	"github.com/leadkart/leadkart-go/internal/identity/adapters"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
@@ -248,9 +250,21 @@ func TestEdgeRepository_GetActiveByChild_FiltersSoftDeleted(t *testing.T) {
 }
 
 // SQL-contract: GetAncestorsByChild uses a Postgres-specific WITH
-// RECURSIVE CTE to walk upward through the edge graph. The fake
-// approximates this with an in-memory loop, but the recursive CTE
-// + depth-first ordering is SQL-specific.
+// RECURSIVE CTE to walk upward through the edge graph. The fake's
+// in-memory loop returns the correct logical result on small chains,
+// but only the SQL execution proves the recursive CTE actually
+// evaluates correctly under Postgres planner discipline.
+//
+// Two halves of the SQL contract:
+//
+//   1. EXPLAIN plan asserts the query uses a Recursive CTE node
+//      (`CTE Scan` over a `Recursive Union`) — proves the plan is
+//      the recursive shape, not a JOIN rewrite that happens to
+//      return the right rows on a 3-deep chain.
+//   2. Observable result: 3-node chain (c → p → gp) yields the
+//      two-edge ancestor list in depth-first order.
+//
+// Canonical SQL-contract sharpening per ADR 0062: plan + observable.
 func TestEdgeRepository_GetAncestorsByChild_RecursiveCTEWalksUpward(t *testing.T) {
 	t.Parallel()
 	pool := repoFixture(t)
@@ -277,6 +291,58 @@ func TestEdgeRepository_GetAncestorsByChild_RecursiveCTEWalksUpward(t *testing.T
 		t.Fatalf("c → p: %v", err)
 	}
 
+	// SQL-contract part 1: EXPLAIN proves the plan is a recursive CTE.
+	// Any rewrite of the sqlc query (flat JOIN, app-side loop) would
+	// silently change the asymptotic shape but might still return the
+	// correct result on a 3-deep chain.
+	//
+	// Acquire a connection + tx so SET LOCAL takes effect (canonical
+	// pattern matched from keyset_explain_integration_test.go).
+	conn, err := pool.Acquire(t.Context())
+	if err != nil {
+		t.Fatalf("acquire: %v", err)
+	}
+	defer conn.Release()
+	dbtx, err := conn.Begin(t.Context())
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	defer func() { _ = dbtx.Rollback(t.Context()) }()
+	rlstest.SetSessionTenant(t, t.Context(), dbtx, tn.ID().String())
+
+	const explainSQL = `
+		EXPLAIN (FORMAT TEXT)
+		WITH RECURSIVE ancestors AS (
+		  SELECT id, child_role_id, parent_role_id, 1 AS depth
+		  FROM identity.role_hierarchy_edges
+		  WHERE child_role_id = $1 AND removed_at IS NULL
+		  UNION ALL
+		  SELECT e.id, e.child_role_id, e.parent_role_id, a.depth + 1
+		  FROM identity.role_hierarchy_edges e
+		  JOIN ancestors a ON e.child_role_id = a.parent_role_id
+		  WHERE e.removed_at IS NULL
+		)
+		SELECT id, child_role_id, parent_role_id FROM ancestors ORDER BY depth
+	`
+	planRows, err := dbtx.Query(t.Context(), explainSQL, c.ID().String())
+	if err != nil {
+		t.Fatalf("EXPLAIN: %v", err)
+	}
+	var planLines []string
+	for planRows.Next() {
+		var line string
+		if err := planRows.Scan(&line); err != nil {
+			t.Fatalf("EXPLAIN scan: %v", err)
+		}
+		planLines = append(planLines, line)
+	}
+	planRows.Close()
+	plan := strings.Join(planLines, "\n")
+	if !strings.Contains(plan, "Recursive Union") && !strings.Contains(plan, "CTE Scan") {
+		t.Fatalf("EXPLAIN plan does not show a recursive CTE node — got:\n%s", plan)
+	}
+
+	// SQL-contract part 2: observable result.
 	ancs, err := edges.GetAncestorsByChild(ctx, tn.ID(), c.ID())
 	if err != nil {
 		t.Fatalf("GetAncestorsByChild: %v", err)

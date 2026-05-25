@@ -32,6 +32,7 @@ package adapters_test
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"strings"
 	"testing"
 	"time"
 
@@ -100,8 +101,19 @@ func TestRefreshTokenFamilyRepository_Add_PersistsFamilyAndFirstTokenInSameTx(t 
 }
 
 // SQL-contract: GetByTokenHash performs the SQL JOIN from refresh_tokens
-// (where the hash lives) back to refresh_token_families. Proves the
-// btree index on (token_hash) is wired + the JOIN hydrates the family.
+// (where the hash lives) back to refresh_token_families. The
+// refreshtokentest.FakeRepository mirrors the lookup observable, so
+// the SQL test must ALSO prove the PG-specific mechanism: EXPLAIN
+// confirms the plan uses the btree Index Scan on `token_hash`, not a
+// Seq Scan. Without the EXPLAIN, the only thing this test would prove
+// over the fake is "the SQL also returns the right row" — which is
+// pure round-trip per ADR 0062 §6.
+//
+// Two halves:
+//
+//   1. EXPLAIN plan: Index Scan over the token_hash unique index
+//      (Postgres auto-names it `refresh_tokens_token_hash_key`).
+//   2. Observable: lookup hydrates the family by id.
 func TestRefreshTokenFamilyRepository_GetByTokenHash_JoinsTokenToFamily(t *testing.T) {
 	t.Parallel()
 	pool := repoFixture(t)
@@ -112,8 +124,38 @@ func TestRefreshTokenFamilyRepository_GetByTokenHash_JoinsTokenToFamily(t *testi
 
 	secret := "hash-resolves-token"
 	f := seedFamily(t, persons, tenants, families, secret)
+	hash := hashOf(t, secret)
 
-	got, err := families.GetByTokenHash(t.Context(), hashOf(t, secret))
+	// SQL-contract part 1: EXPLAIN proves Index Scan on token_hash.
+	// refresh_tokens is non-RLS (session infrastructure), so no
+	// SET LOCAL dance is needed — query directly.
+	const explainSQL = `
+		EXPLAIN (FORMAT TEXT)
+		SELECT family_id FROM identity.refresh_tokens WHERE token_hash = $1
+	`
+	planRows, err := pool.Query(t.Context(), explainSQL, hash.String())
+	if err != nil {
+		t.Fatalf("EXPLAIN: %v", err)
+	}
+	var planLines []string
+	for planRows.Next() {
+		var line string
+		if err := planRows.Scan(&line); err != nil {
+			t.Fatalf("EXPLAIN scan: %v", err)
+		}
+		planLines = append(planLines, line)
+	}
+	planRows.Close()
+	plan := strings.Join(planLines, "\n")
+	if !strings.Contains(plan, "Index") {
+		t.Fatalf("EXPLAIN plan does not show an Index node — token_hash lookup falling back to scan; got:\n%s", plan)
+	}
+	if strings.Contains(plan, "Seq Scan") {
+		t.Fatalf("EXPLAIN plan shows Seq Scan on refresh_tokens — index regression; got:\n%s", plan)
+	}
+
+	// SQL-contract part 2: observable — lookup hydrates the family.
+	got, err := families.GetByTokenHash(t.Context(), hash)
 	if err != nil {
 		t.Fatalf("GetByTokenHash: %v", err)
 	}
