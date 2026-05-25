@@ -2,11 +2,13 @@ package command
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/leadkart/leadkart-go/internal/common/pg"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 	"github.com/leadkart/leadkart-go/internal/inventory/domain/batch"
 	"github.com/leadkart/leadkart-go/internal/inventory/domain/stockmovement"
 )
@@ -18,7 +20,12 @@ import (
 // Inbound / Outbound / Reservation / Release, and any non-zero for
 // Adjustment. The handler converts to the SIGNED ledger convention
 // before persisting (Outbound becomes negative).
+//
+// TenantID is the caller's tenant scope (injected from JWT context by
+// the HTTP layer). Per ADR 0062 (TDL canon): tenantID flows through
+// explicit command fields, not via context smuggling.
 type LogStockMovementCommand struct {
+	TenantID          tenant.ID
 	BatchID           batch.ID
 	ActorMembershipID membership.ID
 	Type              batch.MovementType
@@ -93,6 +100,9 @@ func NewLogStockMovementHandler(uow pg.UnitOfWork, batches batch.Repository, mov
 
 // Handle persists a stock movement against the supplied batch.
 func (h LogStockMovementHandler) Handle(ctx context.Context, cmd LogStockMovementCommand) (LogStockMovementResult, error) {
+	if cmd.TenantID.IsZero() {
+		return LogStockMovementResult{}, errors.New("log_stock_movement: tenant id required")
+	}
 	if !cmd.Type.IsValid() {
 		return LogStockMovementResult{}, fmt.Errorf("%w: unknown movement type %q", batch.ErrInvalid, cmd.Type)
 	}
@@ -119,7 +129,7 @@ func (h LogStockMovementHandler) persist(ctx context.Context, cmd LogStockMoveme
 	var result LogStockMovementResult
 	err := h.uow.WithinTx(ctx, pg.TxScopeTenant, func(ctx context.Context) error {
 		var loaded *batch.Batch
-		updateErr := h.batches.UpdateByID(ctx, cmd.BatchID, func(b *batch.Batch) (bool, error) {
+		updateErr := h.batches.UpdateByID(ctx, cmd.TenantID, cmd.BatchID, func(b *batch.Batch) (bool, error) {
 			if err := b.ApplyMovement(cmd.Type, magnitude, now); err != nil {
 				return false, err
 			}

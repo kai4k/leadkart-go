@@ -41,6 +41,7 @@ import (
 	"context"
 
 	"github.com/leadkart/leadkart-go/internal/common/pagination"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 	"github.com/leadkart/leadkart-go/internal/inventory/domain/batch"
 	"github.com/leadkart/leadkart-go/internal/inventory/domain/product"
 )
@@ -123,9 +124,11 @@ func (r *FakeRepository) Add(_ context.Context, b *batch.Batch) error {
 	return nil
 }
 
-// UpdateByID loads, mutates via fn, then either persists (commit=true)
-// or rolls back (commit=false / err). Returns [batch.ErrNotFound] when
-// the row doesn't exist (or is soft-deleted).
+// UpdateByID loads (scoped to tenantID), mutates via fn, then either
+// persists (commit=true) or rolls back (commit=false / err). Returns
+// [batch.ErrNotFound] when the row doesn't exist, is soft-deleted, OR
+// lives in a different tenant — mirrors the SQL adapter's RLS-bound
+// behavior.
 //
 // Honours [FakeRepository.ConflictsBeforeSuccess] — when > 0, returns
 // [batch.ErrConcurrencyConflict] and decrements the counter, mirroring
@@ -135,7 +138,7 @@ func (r *FakeRepository) Add(_ context.Context, b *batch.Batch) error {
 // caller observes mutations even if it returns (false, nil). This
 // mirrors the pg adapter's behavior — both rely on the aggregate's
 // invariants being re-checked at persist time, not snapshot-rollback.
-func (r *FakeRepository) UpdateByID(_ context.Context, id batch.ID, fn func(*batch.Batch) (bool, error)) error {
+func (r *FakeRepository) UpdateByID(_ context.Context, tenantID tenant.ID, id batch.ID, fn func(*batch.Batch) (bool, error)) error {
 
 	r.UpdateCalls++
 	if r.UpdateErr != nil {
@@ -143,6 +146,9 @@ func (r *FakeRepository) UpdateByID(_ context.Context, id batch.ID, fn func(*bat
 	}
 	b, ok := r.Batches[id]
 	if !ok {
+		return batch.ErrNotFound
+	}
+	if b.TenantID() != tenantID {
 		return batch.ErrNotFound
 	}
 	commit, err := fn(b)
@@ -164,12 +170,16 @@ func (r *FakeRepository) UpdateByID(_ context.Context, id batch.ID, fn func(*bat
 	return nil
 }
 
-// GetByID returns the LIVE batch or [batch.ErrNotFound]. Soft-deleted
-// rows are hidden.
-func (r *FakeRepository) GetByID(_ context.Context, id batch.ID) (*batch.Batch, error) {
+// GetByID returns the LIVE batch (scoped to tenantID) or
+// [batch.ErrNotFound]. Soft-deleted rows + batches in other tenants
+// are hidden — mirrors the SQL adapter's RLS-bound behavior.
+func (r *FakeRepository) GetByID(_ context.Context, tenantID tenant.ID, id batch.ID) (*batch.Batch, error) {
 
 	b, ok := r.Batches[id]
 	if !ok || b.IsDeleted() {
+		return nil, batch.ErrNotFound
+	}
+	if b.TenantID() != tenantID {
 		return nil, batch.ErrNotFound
 	}
 	return b, nil
@@ -179,16 +189,17 @@ func (r *FakeRepository) GetByID(_ context.Context, id batch.ID) (*batch.Batch, 
 // tests exercise the listing path against a real testcontainers DB).
 // The stub returns the zero page so the interface stays satisfied
 // without a list fake nobody exercises from the command layer.
-func (r *FakeRepository) ListByProductPage(_ context.Context, _ product.ID, _ batch.ListFilter, _ pagination.Cursor, _ int) (pagination.Page[*batch.Batch], error) {
+func (r *FakeRepository) ListByProductPage(_ context.Context, _ tenant.ID, _ product.ID, _ batch.ListFilter, _ pagination.Cursor, _ int) (pagination.Page[*batch.Batch], error) {
 	return pagination.Page[*batch.Batch]{Items: []*batch.Batch{}}, nil
 }
 
 // AnyLiveWithStockForProduct reports whether any LIVE batch with
-// quantity_on_hand > 0 exists for productID. Honours the
-// AnyLiveStockFor + AnyLiveStockOn knobs — when AnyLiveStockFor
-// matches productID, returns AnyLiveStockOn; otherwise returns false.
-// Mirrors the application-layer guard used by DeleteProductHandler.
-func (r *FakeRepository) AnyLiveWithStockForProduct(_ context.Context, productID product.ID) (bool, error) {
+// quantity_on_hand > 0 exists for productID in the supplied tenant.
+// Honours the AnyLiveStockFor + AnyLiveStockOn knobs — when
+// AnyLiveStockFor matches productID, returns AnyLiveStockOn; otherwise
+// returns false. Mirrors the application-layer guard used by
+// DeleteProductHandler.
+func (r *FakeRepository) AnyLiveWithStockForProduct(_ context.Context, _ tenant.ID, productID product.ID) (bool, error) {
 
 	if r.AnyLiveStockFor == productID {
 		return r.AnyLiveStockOn, nil

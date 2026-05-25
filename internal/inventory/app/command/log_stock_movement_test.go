@@ -22,6 +22,7 @@ func TestLogStockMovementHandler_HappyPath_Inbound(t *testing.T) {
 	h := command.NewLogStockMovementHandler(uow, batchRepo, movementRepo, func() time.Time { return fixedNow }, testNewMovementID)
 
 	out, err := h.Handle(t.Context(), command.LogStockMovementCommand{
+		TenantID:          tid,
 		BatchID:           b.ID(),
 		ActorMembershipID: actor,
 		Type:              batch.MovementInbound,
@@ -61,6 +62,7 @@ func TestLogStockMovementHandler_OutboundSignsQuantityNegative(t *testing.T) {
 
 	h := command.NewLogStockMovementHandler(uow, batchRepo, movementRepo, func() time.Time { return fixedNow }, testNewMovementID)
 	_, err := h.Handle(t.Context(), command.LogStockMovementCommand{
+		TenantID:          tid,
 		BatchID:           b.ID(),
 		ActorMembershipID: actor,
 		Type:              batch.MovementOutbound,
@@ -95,6 +97,7 @@ func TestLogStockMovementHandler_InvalidType_ReturnsErrInvalid(t *testing.T) {
 
 	h := command.NewLogStockMovementHandler(uow, batchRepo, movementRepo, func() time.Time { return fixedNow }, testNewMovementID)
 	_, err := h.Handle(t.Context(), command.LogStockMovementCommand{
+		TenantID:          tid,
 		BatchID:           b.ID(),
 		ActorMembershipID: actor,
 		Type:              batch.MovementType("garbage"),
@@ -123,6 +126,7 @@ func TestLogStockMovementHandler_ZeroQuantity_ReturnsErrInvalid(t *testing.T) {
 
 	h := command.NewLogStockMovementHandler(uow, batchRepo, movementRepo, func() time.Time { return fixedNow }, testNewMovementID)
 	_, err := h.Handle(t.Context(), command.LogStockMovementCommand{
+		TenantID:          tid,
 		BatchID:           b.ID(),
 		ActorMembershipID: actor,
 		Type:              batch.MovementInbound,
@@ -152,6 +156,7 @@ func TestLogStockMovementHandler_InsufficientStock_NoRetry(t *testing.T) {
 
 	h := command.NewLogStockMovementHandler(uow, batchRepo, movementRepo, func() time.Time { return fixedNow }, testNewMovementID)
 	_, err := h.Handle(t.Context(), command.LogStockMovementCommand{
+		TenantID:          tid,
 		BatchID:           b.ID(),
 		ActorMembershipID: actor,
 		Type:              batch.MovementOutbound,
@@ -185,6 +190,7 @@ func TestLogStockMovementHandler_NegativeMagnitude_ReturnsErrInvalid(t *testing.
 
 	h := command.NewLogStockMovementHandler(uow, batchRepo, movementRepo, func() time.Time { return fixedNow }, testNewMovementID)
 	_, err := h.Handle(t.Context(), command.LogStockMovementCommand{
+		TenantID:          tid,
 		BatchID:           b.ID(),
 		ActorMembershipID: actor,
 		Type:              batch.MovementInbound,

@@ -21,6 +21,7 @@ func TestAddBatchHandler_HappyPath_AddsBatch(t *testing.T) {
 	h := command.NewAddBatchHandler(uow, productRepo, batchRepo, func() time.Time { return fixedNow }, testNewBatchID)
 
 	out, err := h.Handle(t.Context(), command.AddBatchCommand{
+		TenantID:                   tid,
 		ProductID:                  p.ID(),
 		ActorMembershipID:          actor,
 		BatchNumber:                "LOT-1",
@@ -52,9 +53,11 @@ func TestAddBatchHandler_MissingProduct_ReturnsErrNotFound(t *testing.T) {
 	batchRepo := newFakeBatchRepo()
 	uow := &fakeUoW{}
 	h := command.NewAddBatchHandler(uow, productRepo, batchRepo, func() time.Time { return fixedNow }, testNewBatchID)
+	tid := newTenantID(t)
 	actor := newMembershipID(t)
 
 	_, err := h.Handle(t.Context(), command.AddBatchCommand{
+		TenantID:                   tid,
 		ProductID:                  product.ID("nonexistent"),
 		ActorMembershipID:          actor,
 		BatchNumber:                "LOT-1",
@@ -96,6 +99,7 @@ func TestAddBatchHandler_SoftDeletedParent_ReturnsErrNotFound(t *testing.T) {
 	h := command.NewAddBatchHandler(uow, productRepo, batchRepo, func() time.Time { return fixedNow }, testNewBatchID)
 
 	_, err := h.Handle(t.Context(), command.AddBatchCommand{
+		TenantID:                   tid,
 		ProductID:                  p.ID(),
 		ActorMembershipID:          actor,
 		BatchNumber:                "LOT-X",
@@ -127,6 +131,7 @@ func TestAddBatchHandler_DuplicateBatchNumber_ReturnsErrBatchNumberTaken(t *test
 	h := command.NewAddBatchHandler(uow, productRepo, batchRepo, func() time.Time { return fixedNow }, testNewBatchID)
 
 	_, err := h.Handle(t.Context(), command.AddBatchCommand{
+		TenantID:                   tid,
 		ProductID:                  p.ID(),
 		ActorMembershipID:          actor,
 		BatchNumber:                "DUP-LOT",
@@ -156,6 +161,7 @@ func TestAddBatchHandler_InvalidSpec_ReturnsErrInvalid(t *testing.T) {
 	sameDay := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 
 	_, err := h.Handle(t.Context(), command.AddBatchCommand{
+		TenantID:                   tid,
 		ProductID:                  p.ID(),
 		ActorMembershipID:          actor,
 		BatchNumber:                "LOT-1",

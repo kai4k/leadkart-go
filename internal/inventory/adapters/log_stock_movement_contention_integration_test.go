@@ -112,6 +112,7 @@ func TestLogStockMovement_Concurrent_NoLostUpdate(t *testing.T) {
 			defer wg.Done()
 			<-startBarrier
 			_, err := h.Handle(ctx, command.LogStockMovementCommand{
+				TenantID:          tid,
 				BatchID:           b.ID(),
 				ActorMembershipID: actor,
 				Type:              batch.MovementInbound,
@@ -142,7 +143,7 @@ func TestLogStockMovement_Concurrent_NoLostUpdate(t *testing.T) {
 
 	// (c) final quantity_on_hand == sum of inbounds — the LOAD-BEARING
 	// assertion. Lost updates here would surface as final < expected.
-	final, err := batches.GetByID(ctx, b.ID())
+	final, err := batches.GetByID(ctx, tid, b.ID())
 	if err != nil {
 		t.Fatalf("GetByID after race: %v", err)
 	}

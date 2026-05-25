@@ -34,6 +34,7 @@ import (
 	"context"
 
 	"github.com/leadkart/leadkart-go/internal/common/pagination"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 	"github.com/leadkart/leadkart-go/internal/inventory/domain/batch"
 	"github.com/leadkart/leadkart-go/internal/inventory/domain/stockmovement"
 )
@@ -83,11 +84,16 @@ func (r *FakeRepository) Add(_ context.Context, m *stockmovement.Movement) error
 	return nil
 }
 
-// GetByID returns the movement or [stockmovement.ErrNotFound].
-func (r *FakeRepository) GetByID(_ context.Context, id stockmovement.ID) (*stockmovement.Movement, error) {
+// GetByID returns the movement (scoped to tenantID) or
+// [stockmovement.ErrNotFound]. Movements in other tenants are hidden —
+// mirrors the SQL adapter's RLS-bound behavior.
+func (r *FakeRepository) GetByID(_ context.Context, tenantID tenant.ID, id stockmovement.ID) (*stockmovement.Movement, error) {
 
 	m, ok := r.Movements[id]
 	if !ok {
+		return nil, stockmovement.ErrNotFound
+	}
+	if m.TenantID() != tenantID {
 		return nil, stockmovement.ErrNotFound
 	}
 	return m, nil
@@ -97,6 +103,6 @@ func (r *FakeRepository) GetByID(_ context.Context, id stockmovement.ID) (*stock
 // tests exercise the listing path against a real testcontainers DB).
 // The stub returns the zero page so the interface stays satisfied
 // without a list fake nobody exercises from the command layer.
-func (r *FakeRepository) ListByBatchPage(_ context.Context, _ batch.ID, _ stockmovement.PageRequest) (pagination.Page[*stockmovement.Movement], error) {
+func (r *FakeRepository) ListByBatchPage(_ context.Context, _ tenant.ID, _ batch.ID, _ stockmovement.PageRequest) (pagination.Page[*stockmovement.Movement], error) {
 	return pagination.Page[*stockmovement.Movement]{Items: []*stockmovement.Movement{}}, nil
 }

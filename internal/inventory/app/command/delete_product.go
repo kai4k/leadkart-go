@@ -2,10 +2,12 @@ package command
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 	"github.com/leadkart/leadkart-go/internal/inventory/domain/batch"
 	"github.com/leadkart/leadkart-go/internal/inventory/domain/product"
 )
@@ -13,7 +15,12 @@ import (
 // DeleteProductCommand — soft-deletes the product. Per BRD §6.5 + slice
 // spec: REJECTED with batch.ErrAnyLiveStock if any live batch with
 // quantity_on_hand > 0 exists.
+//
+// TenantID is the caller's tenant scope (injected from JWT context by
+// the HTTP layer). Per ADR 0062 (TDL canon): tenantID flows through
+// explicit command fields, not via context smuggling.
 type DeleteProductCommand struct {
+	TenantID          tenant.ID
 	ProductID         product.ID
 	ActorMembershipID membership.ID
 }
@@ -49,10 +56,13 @@ func NewDeleteProductHandler(products product.Repository, batches batch.Reposito
 // stock-check path returning false → the SoftDelete UpdateByID then
 // returning ErrNotFound after an unnecessary round-trip.
 func (h DeleteProductHandler) Handle(ctx context.Context, cmd DeleteProductCommand) error {
-	if _, err := h.products.GetByID(ctx, cmd.ProductID); err != nil {
+	if cmd.TenantID.IsZero() {
+		return errors.New("delete_product: tenant id required")
+	}
+	if _, err := h.products.GetByID(ctx, cmd.TenantID, cmd.ProductID); err != nil {
 		return err
 	}
-	hasStock, err := h.batches.AnyLiveWithStockForProduct(ctx, cmd.ProductID)
+	hasStock, err := h.batches.AnyLiveWithStockForProduct(ctx, cmd.TenantID, cmd.ProductID)
 	if err != nil {
 		return fmt.Errorf("delete product: stock check: %w", err)
 	}
@@ -60,7 +70,7 @@ func (h DeleteProductHandler) Handle(ctx context.Context, cmd DeleteProductComma
 		return batch.ErrAnyLiveStock
 	}
 	now := h.now()
-	err = h.products.UpdateByID(ctx, cmd.ProductID, func(p *product.Product) (bool, error) {
+	err = h.products.UpdateByID(ctx, cmd.TenantID, cmd.ProductID, func(p *product.Product) (bool, error) {
 		if err := p.SoftDelete(cmd.ActorMembershipID, now); err != nil {
 			return false, err
 		}

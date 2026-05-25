@@ -38,25 +38,31 @@ type ListFilter struct {
 // return structs" — the consumer (application service) defines what it
 // needs; adapters in `internal/inventory/adapters/` implement.
 //
-// Tenant-scoped: every method honours [tenancy.FromContext] for RLS
-// (pgxpool AfterAcquire binds app.tenant_id GUC; Postgres RLS does the
-// filter). Cross-tenant access surfaces as ErrNotFound per ADR 0044.
+// Tenant scoping (ADR 0062 — TDL canon): every method that takes an ID
+// without an aggregate ALSO takes an EXPLICIT tenantID parameter. The
+// adapter binds the GUC from the parameter at tx-begin (NOT from ctx-
+// tenancy.WithID — that's a domain value in context, which Khorikov §11
+// + Cheney mark as a hidden input). RLS remains the security backstop;
+// the explicit param is the API surface contract. Cross-tenant access
+// surfaces as ErrNotFound per ADR 0044.
 type Repository interface {
-	// Add persists a brand-new product. Drains the aggregate's events
-	// into the outbox same-tx per ADR 0008. Returns ErrSKUTaken on
-	// unique-index violation.
+	// Add persists a brand-new product. The aggregate already carries
+	// its TenantID — no separate param needed. Drains the aggregate's
+	// events into the outbox same-tx per ADR 0008. Returns ErrSKUTaken
+	// on unique-index violation.
 	Add(ctx context.Context, p *Product) error
 
-	// UpdateByID loads → updateFn → persist + emits events under one
-	// tenant-scoped tx. Returns (true, nil) from updateFn to commit;
-	// (false, nil) to abort; (_, err) rolls back.
-	UpdateByID(ctx context.Context, id ID, updateFn func(*Product) (bool, error)) error
+	// UpdateByID loads (scoped to tenantID) → updateFn → persist + emits
+	// events under one tenant-scoped tx. Returns (true, nil) from
+	// updateFn to commit; (false, nil) to abort; (_, err) rolls back.
+	UpdateByID(ctx context.Context, tenantID tenant.ID, id ID, updateFn func(*Product) (bool, error)) error
 
-	// GetByID returns a LIVE (non-deleted) product or ErrNotFound.
-	GetByID(ctx context.Context, id ID) (*Product, error)
+	// GetByID returns a LIVE (non-deleted) product in the supplied tenant
+	// or ErrNotFound.
+	GetByID(ctx context.Context, tenantID tenant.ID, id ID) (*Product, error)
 
 	// ListPage returns a keyset-paginated page of LIVE products in the
-	// current tenant scope, ordered (created_at DESC, id DESC) per
+	// supplied tenant scope, ordered (created_at DESC, id DESC) per
 	// ADR 0038. Optionally filtered by [ListFilter].
 	//
 	// The cursor's SortValue is the row's CreatedAt; the tiebreaker is

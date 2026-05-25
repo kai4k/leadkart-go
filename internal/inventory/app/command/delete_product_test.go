@@ -20,7 +20,7 @@ func TestDeleteProductHandler_HappyPath_SoftDeletes(t *testing.T) {
 	h := command.NewDeleteProductHandler(productRepo, batchRepo, func() time.Time { return fixedNow })
 
 	if err := h.Handle(t.Context(), command.DeleteProductCommand{
-		ProductID: p.ID(), ActorMembershipID: actor,
+		TenantID: tid, ProductID: p.ID(), ActorMembershipID: actor,
 	}); err != nil {
 		t.Fatalf("Handle: %v", err)
 	}
@@ -38,10 +38,11 @@ func TestDeleteProductHandler_MissingProduct_ReturnsErrNotFound(t *testing.T) {
 	productRepo := newFakeProductRepo()
 	batchRepo := newFakeBatchRepo()
 	h := command.NewDeleteProductHandler(productRepo, batchRepo, func() time.Time { return fixedNow })
+	tid := newTenantID(t)
 	actor := newMembershipID(t)
 
 	err := h.Handle(t.Context(), command.DeleteProductCommand{
-		ProductID: product.ID("nonexistent"), ActorMembershipID: actor,
+		TenantID: tid, ProductID: product.ID("nonexistent"), ActorMembershipID: actor,
 	})
 	if !errors.Is(err, product.ErrNotFound) {
 		t.Fatalf("err: got %v want ErrNotFound", err)
@@ -61,7 +62,7 @@ func TestDeleteProductHandler_HasLiveStock_ReturnsErrAnyLiveStock(t *testing.T) 
 	h := command.NewDeleteProductHandler(productRepo, batchRepo, func() time.Time { return fixedNow })
 
 	err := h.Handle(t.Context(), command.DeleteProductCommand{
-		ProductID: p.ID(), ActorMembershipID: actor,
+		TenantID: tid, ProductID: p.ID(), ActorMembershipID: actor,
 	})
 	if !errors.Is(err, batch.ErrAnyLiveStock) {
 		t.Fatalf("err: got %v want ErrAnyLiveStock", err)

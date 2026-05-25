@@ -14,7 +14,8 @@
 //     guarantee: ErrSKUTaken on duplicate live (tenant_id, sku) per the
 //     partial unique index `uq_products_tenant_sku_live`, ErrNotFound
 //     on missing / soft-deleted GetByID, and the soft-delete filter on
-//     reads.
+//     reads. Per ADR 0062: cross-tenant access returns ErrNotFound
+//     (mirrors RLS-bound SQL adapter).
 //   - Single-test-owner pattern: each test creates its OWN
 //     FakeRepository via [NewFakeRepository] — no shared mutable state
 //     across tests. t.Parallel is naturally safe because no two tests
@@ -103,15 +104,16 @@ func (r *FakeRepository) Add(_ context.Context, p *product.Product) error {
 	return nil
 }
 
-// UpdateByID loads, mutates via updateFn, then either persists
-// (commit=true) or rolls back (commit=false / err). Returns
-// [product.ErrNotFound] when the row doesn't exist.
+// UpdateByID loads (scoped to tenantID), mutates via updateFn, then either
+// persists (commit=true) or rolls back (commit=false / err). Returns
+// [product.ErrNotFound] when the row doesn't exist OR lives in a
+// different tenant — mirrors the SQL adapter's RLS-bound behavior.
 //
 // The fake doesn't deep-copy the Product before passing to updateFn;
 // the caller observes mutations even if it returns (false, nil). This
 // mirrors the pg adapter's behavior — both rely on the aggregate's
 // invariants being re-checked at persist time, not snapshot-rollback.
-func (r *FakeRepository) UpdateByID(_ context.Context, id product.ID, updateFn func(*product.Product) (bool, error)) error {
+func (r *FakeRepository) UpdateByID(_ context.Context, tenantID tenant.ID, id product.ID, updateFn func(*product.Product) (bool, error)) error {
 
 	r.UpdateCalls++
 	if r.UpdateErr != nil {
@@ -119,6 +121,9 @@ func (r *FakeRepository) UpdateByID(_ context.Context, id product.ID, updateFn f
 	}
 	p, ok := r.Products[id]
 	if !ok {
+		return product.ErrNotFound
+	}
+	if p.TenantID() != tenantID {
 		return product.ErrNotFound
 	}
 	commit, err := updateFn(p)
@@ -131,16 +136,20 @@ func (r *FakeRepository) UpdateByID(_ context.Context, id product.ID, updateFn f
 	return nil
 }
 
-// GetByID returns the LIVE product or [product.ErrNotFound]. Soft-
-// deleted rows are hidden. Honours the GetErr knob for error-
-// propagation drills.
-func (r *FakeRepository) GetByID(_ context.Context, id product.ID) (*product.Product, error) {
+// GetByID returns the LIVE product (scoped to tenantID) or
+// [product.ErrNotFound]. Soft-deleted rows + products in other tenants
+// are hidden — mirrors the SQL adapter's RLS-bound behavior. Honours
+// the GetErr knob for error-propagation drills.
+func (r *FakeRepository) GetByID(_ context.Context, tenantID tenant.ID, id product.ID) (*product.Product, error) {
 
 	if r.GetErr != nil {
 		return nil, r.GetErr
 	}
 	p, ok := r.Products[id]
 	if !ok || p.IsDeleted() {
+		return nil, product.ErrNotFound
+	}
+	if p.TenantID() != tenantID {
 		return nil, product.ErrNotFound
 	}
 	return p, nil

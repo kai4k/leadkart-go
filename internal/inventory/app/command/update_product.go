@@ -2,16 +2,25 @@ package command
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 	"github.com/leadkart/leadkart-go/internal/inventory/domain/product"
 )
 
 // UpdateProductCommand — partial-update payload. Only non-nil fields
 // are considered; matching-value updates are no-op (no event).
+//
+// TenantID is the caller's tenant scope (injected from JWT context by
+// the HTTP layer). Per ADR 0062 (TDL canon): tenantID flows through
+// explicit command fields, not via context smuggling. The adapter binds
+// the GUC from cmd.TenantID at tx-begin; RLS remains the security
+// backstop.
 type UpdateProductCommand struct {
+	TenantID          tenant.ID
 	ProductID         product.ID
 	ActorMembershipID membership.ID
 	Name              *string
@@ -41,8 +50,11 @@ func NewUpdateProductHandler(products product.Repository, now func() time.Time) 
 // product.ErrInvalid surfaces as 422 (with field detail in the inline
 // HTTP handler). product.ErrDeleted surfaces as 409.
 func (h UpdateProductHandler) Handle(ctx context.Context, cmd UpdateProductCommand) error {
+	if cmd.TenantID.IsZero() {
+		return errors.New("update_product: tenant id required")
+	}
 	now := h.now()
-	err := h.products.UpdateByID(ctx, cmd.ProductID, func(p *product.Product) (bool, error) {
+	err := h.products.UpdateByID(ctx, cmd.TenantID, cmd.ProductID, func(p *product.Product) (bool, error) {
 		if err := p.Update(cmd.ActorMembershipID, product.UpdateSpec{
 			Name:         cmd.Name,
 			GSTRateBps:   cmd.GSTRateBps,

@@ -37,12 +37,14 @@ func NewProductRepository(pool *pgxpool.Pool, tx *pg.Transactor) *ProductReposit
 }
 
 // Add satisfies [product.Repository]. Joins surrounding UoW tx via
-// pg.TxFromContext when present.
+// pg.TxFromContext when present. The aggregate carries its own TenantID
+// — the GUC is bound from p.TenantID() (TDL canon per ADR 0062:
+// tenantID flows through explicit values, not ctx).
 func (r *ProductRepository) Add(ctx context.Context, p *product.Product) error {
 	if tx, ok := pg.TxFromContext(ctx); ok {
 		return r.addOnTx(ctx, tx, p)
 	}
-	return r.tx.WithinTxPgx(ctx, pg.TxScopeTenant, func(ctx context.Context, tx pgx.Tx) error {
+	return r.tx.WithinTxPgxTenant(ctx, p.TenantID().String(), func(ctx context.Context, tx pgx.Tx) error {
 		return r.addOnTx(ctx, tx, p)
 	})
 }
@@ -56,11 +58,12 @@ func (r *ProductRepository) addOnTx(ctx context.Context, tx pgx.Tx, p *product.P
 }
 
 // UpdateByID satisfies [product.Repository] — TDL UpdateFn pattern.
-func (r *ProductRepository) UpdateByID(ctx context.Context, id product.ID, updateFn func(*product.Product) (bool, error)) error {
+// GUC bound from the explicit tenantID parameter (TDL canon per ADR 0062).
+func (r *ProductRepository) UpdateByID(ctx context.Context, tenantID tenant.ID, id product.ID, updateFn func(*product.Product) (bool, error)) error {
 	if tx, ok := pg.TxFromContext(ctx); ok {
 		return r.updateOnTx(ctx, tx, id, updateFn)
 	}
-	return r.tx.WithinTxPgx(ctx, pg.TxScopeTenant, func(ctx context.Context, tx pgx.Tx) error {
+	return r.tx.WithinTxPgxTenant(ctx, tenantID.String(), func(ctx context.Context, tx pgx.Tx) error {
 		return r.updateOnTx(ctx, tx, id, updateFn)
 	})
 }
@@ -84,10 +87,11 @@ func (r *ProductRepository) updateOnTx(ctx context.Context, tx pgx.Tx, id produc
 	return drainProductEvents(ctx, tx, p)
 }
 
-// GetByID satisfies [product.Repository].
-func (r *ProductRepository) GetByID(ctx context.Context, id product.ID) (*product.Product, error) {
+// GetByID satisfies [product.Repository]. Tenant-scoped read — GUC bound
+// from the explicit tenantID parameter (TDL canon per ADR 0062).
+func (r *ProductRepository) GetByID(ctx context.Context, tenantID tenant.ID, id product.ID) (*product.Product, error) {
 	var out *product.Product
-	err := r.tx.WithinTxPgx(ctx, pg.TxScopeTenant, func(ctx context.Context, tx pgx.Tx) error {
+	err := r.tx.WithinTxPgxTenant(ctx, tenantID.String(), func(ctx context.Context, tx pgx.Tx) error {
 		q := r.q.WithTx(tx)
 		got, err := loadProduct(ctx, q, id)
 		if err != nil {
@@ -127,7 +131,7 @@ func (r *ProductRepository) ListPage(ctx context.Context, tenantID tenant.ID, fi
 	}
 
 	var out []*product.Product
-	err = r.tx.WithinTxPgx(ctx, pg.TxScopeTenant, func(ctx context.Context, tx pgx.Tx) error {
+	err = r.tx.WithinTxPgxTenant(ctx, tenantID.String(), func(ctx context.Context, tx pgx.Tx) error {
 		q := r.q.WithTx(tx)
 		rows, err := q.ListProductsByTenantPage(ctx, db.ListProductsByTenantPageParams{
 			TenantID:        pgUUID(tid),
