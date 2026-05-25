@@ -9,6 +9,8 @@
 *.out
 coverage.out
 coverage.html
+# JUnit XML emitted by `task ci:test*` (gotestsum --junitfile)
+junit-*.xml
 
 # Go
 go.work

@@ -3,57 +3,47 @@ name: CI
 # ============================================================================
 # LeadKart Go — single-workflow CI pipeline.
 #
-# JOB GRAPH
+# CANON SHAPE (kubernetes / terraform / golang/go pattern):
+#   - Single workflow file, NOT split per concern (one mental model).
+#   - Per-job path gating via dorny/paths-filter.
+#   - Composite actions under .github/actions/* for repeated step
+#     sequences (`go-setup`, `junit-report`) — first-class GitHub DRY
+#     primitive for sharing step sequences within a job.
+#   - Test command shape lives in Taskfile.yml — CI invokes
+#     `task ci:test`, `task ci:test:arch`, `task ci:test:int`,
+#     `task ci:openapi`. CI MUST NOT re-encode test flags / package
+#     lists / tool versions. Drift gates:
+#       internal/architecture/ci_arch_coverage_test.go enforces this.
 #
-#   changes (dorny/paths-filter)
+# SUPPLY CHAIN:
+#   - Spectral CLI: pinned via SPECTRAL_VERSION in Taskfile.yml (NOT
+#     @latest — same SLSA anti-pattern govulncheck was moved off of).
+#   - gotestsum: pinned via go.mod tool directive (`go tool gotestsum`).
+#   - govulncheck: pinned via go.mod tool directive (`go tool govulncheck`).
+#   - Third-party actions: tag-pinned (Dependabot keeps current). SHA
+#     pinning is the stricter canon; tracked for a follow-up + matches
+#     how hashicorp/kubernetes do it today.
+#
+# JOB GRAPH:
+#
+#   changes
 #     ├── unit ── architecture
 #     │     └── integration
 #     │     └── docker-build ── container-smoke
+#     ├── openapi-lint
+#     └── migrations-check
 #
-# Each downstream job declares `needs:` so the chain stays gated:
-#   - architecture / integration only run after unit passes (avoids
-#     wasting compute on a broken build).
-#   - container-smoke only runs after docker-build (the image must
-#     exist + healthcheck must pass) AND unit (the binary must be
-#     functionally correct, not just compile).
-#
-# PATH-AWARE GATING (the cost lever)
-#
-# `changes` runs dorny/paths-filter@v4 once at the top + emits per-area
-# outputs (`go`, `docker`). Every other job carries
-#   if: needs.changes.outputs.<area> == 'true' || github.event_name == 'push'
-# so:
-#   - Push-to-main always runs the full pipeline (post-merge regression
-#     gate; required-status-check freshness for branch protection).
-#   - Pull-request only runs jobs whose paths actually changed. A pure
-#     domain-test PR skips docker-build + smoke (~7 min saved). A
-#     workflow-only PR skips everything below `changes` (~17 min saved).
+# PATH-AWARE GATING:
+#   `changes` runs dorny/paths-filter once + emits per-area outputs;
+#   every other job carries `if: needs.changes.outputs.<area> == 'true'
+#   || github.event_name == 'push'`. PR runs only touched areas;
+#   push-to-main always runs the full pipeline.
 #
 # DOCS-ONLY PRs never even trigger the workflow (top-level paths-ignore).
-#
-# TEST TAXONOMY (mirrored 1:1 in Taskfile.yml — `task` matches CI exactly)
-#
-#   unit          — `task test`    — go test ./... -shuffle=on -skip "^TestArch_"
-#                                   Race detector + coverage. ~3 min.
-#   architecture  — `task test:arch` — TestArch_* (integrationevents hygiene)
-#                                   Standalone job so a contract failure shows
-#                                   distinctly. ~30 s.
-#   integration   — `task test:int` — //go:build integration. Testcontainers
-#                                   Postgres per-test. ~5-10 min.
-#   container-smoke — `task test:smoke` — full compose stack + scripts/smoke.sh
-#                                   E2E happy path: register → login → refresh
-#                                   → logout → revoked-token replay = 401.
-#
-# Modelled after kubernetes / terraform / golang/go canonical CI shape:
-# single workflow file, per-job path gating via paths-filter, push-to-main
-# fully covered.
 # ============================================================================
 
 on:
   pull_request:
-    # Pure-docs PRs skip CI entirely. The path-filter below handles the
-    # finer-grained "this PR touched no Go" case; this top-level filter
-    # is the cheaper "don't even spin the runner" gate.
     paths-ignore:
       - '**.md'
       - 'docs/**'
@@ -74,6 +64,9 @@ concurrency:
   group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
+# Top-level default-restrictive permissions per GitHub's security-
+# hardening guide. Individual jobs that need MORE must declare their own
+# permissions block; the default here is least-privilege.
 permissions:
   contents: read
   pull-requests: read
@@ -83,9 +76,7 @@ permissions:
 jobs:
   # ---------------------------------------------------------------------------
   # changes — runs dorny/paths-filter once, emits booleans per area. Cheap
-  # (~10 s) probe job that every other job gates against. Outputs feed the
-  # `if:` expressions on downstream jobs so a Go-only PR skips Docker work
-  # and vice versa.
+  # (~10 s) probe job that every other job gates against.
   # ---------------------------------------------------------------------------
   changes:
     name: Detect Changed Areas
@@ -111,10 +102,13 @@ jobs:
               - 'internal/identity/adapters/sql/**'
               - 'sqlc.yaml'
               - '.golangci.yml'
+              - 'Taskfile.yml'
               - '.github/workflows/ci.yml'
+              - '.github/actions/**'
             migrations:
               - 'migrations/**'
               - 'cmd/migrate/**'
+              - 'Taskfile.yml'
               - '.github/workflows/ci.yml'
             docker:
               - 'docker/**'
@@ -123,17 +117,22 @@ jobs:
               - 'migrations/**'
               - 'go.mod'
               - 'go.sum'
+              - 'Taskfile.yml'
               - '.github/workflows/ci.yml'
             openapi:
               - 'api/openapi.yaml'
               - 'internal/common/openapi/all_routes.yaml'
               - '.spectral.yaml'
+              - 'Taskfile.yml'
               - '.github/workflows/ci.yml'
 
   # ---------------------------------------------------------------------------
-  # Unit job — fast feedback. No Docker. Excludes architecture tests so they
-  # surface in their own job. Includes vuln scan (govulncheck) + binary build
-  # so we know `cmd/api` + `cmd/migrate` + `cmd/worker` compile.
+  # Unit job — fast feedback. Race + shuffle + coverage + JUnit. Includes
+  # vuln scan (govulncheck) + binary build so we know cmd/api + cmd/migrate
+  # + cmd/worker + cmd/bootstrap all compile.
+  #
+  # All work runs via `task` — command shape, flags, package list, junit
+  # filename all live in Taskfile.yml.
   # ---------------------------------------------------------------------------
   unit:
     name: Build / Lint / Unit Tests / Vuln
@@ -142,22 +141,10 @@ jobs:
     needs: changes
     if: needs.changes.outputs.go == 'true' || github.event_name == 'push'
     steps:
-      - uses: actions/checkout@v6
-
-      # Pin Go from go.mod (2026 canon — single source of truth).
-      - uses: actions/setup-go@v6
-        with:
-          go-version-file: go.mod
-          cache: true
-
-      # `go mod download` validates checksums against go.sum on every
-      # module fetch (Go 1.22+ canon); the earlier explicit `go mod verify`
-      # step was redundant noise.
-      - name: Download modules
-        run: go mod download
+      - uses: ./.github/actions/go-setup
 
       - name: Vet
-        run: go vet ./...
+        run: task vet
 
       - name: Lint (golangci-lint v2 strict)
         uses: golangci/golangci-lint-action@v9
@@ -165,20 +152,8 @@ jobs:
           version: v2.12.2
           args: --timeout=5m
 
-      # gotestsum gives canonical JUnit XML output (dotnet trx equivalent).
-      - name: Install gotestsum
-        run: go install gotest.tools/gotestsum@latest
-
-      # Unit tests with race + shuffle + coverage. -skip excludes TestArch_*
-      # so the architecture job is the sole signal for arch failures.
-      - name: Unit tests (race + shuffle + coverage, skipping TestArch_*)
-        run: |
-          gotestsum \
-            --junitfile=junit-unit.xml \
-            --format=testname \
-            -- -race -shuffle=on -coverprofile=coverage.out \
-               -skip="^TestArch_" \
-               ./...
+      - name: Unit tests (task ci:test — race + shuffle + coverage + junit)
+        run: task ci:test
 
       - name: Upload coverage artifact
         uses: actions/upload-artifact@v7
@@ -187,43 +162,24 @@ jobs:
           path: coverage.out
           retention-days: 7
 
-      - name: Upload unit test results (JUnit)
+      - uses: ./.github/actions/junit-report
         if: always()
-        uses: actions/upload-artifact@v7
         with:
-          name: junit-unit
-          path: junit-unit.xml
-          retention-days: 7
+          name: unit
+          junit-path: junit-unit.xml
 
-      - name: Annotate test failures (PR Checks)
-        # `always()` keeps the reporter running on test failure so failed
-        # cases get annotated. `hashFiles(...) != ''` skips when the
-        # gotestsum step was itself skipped (e.g. lint above failed first)
-        # so there's no junit XML to report against — avoids dorny's
-        # "No test report files were found" CI annotation noise.
-        if: always() && hashFiles('junit-unit.xml') != ''
-        uses: dorny/test-reporter@v3
-        with:
-          name: Unit Tests
-          path: junit-unit.xml
-          reporter: java-junit
-          fail-on-error: false
+      - name: Vulnerability scan (task vuln — go tool govulncheck)
+        run: task vuln
 
-      - name: Vulnerability scan (govulncheck)
-        # Pinned via the `tool` directive in go.mod (Go 1.24+); previous
-        # `go run @latest` pulled an unpinned version every CI run, a
-        # supply-chain surface SLSA L3 explicitly forbids. `go tool`
-        # uses the version + sum baked into go.mod / go.sum.
-        run: go tool govulncheck ./...
-
-      - name: Build all binaries
-        run: go build -trimpath -ldflags="-s -w" -o bin/ ./cmd/...
+      - name: Build all binaries (task build)
+        run: task build
 
   # ---------------------------------------------------------------------------
-  # Architecture tests. Mirrors .NET LeadKart's `architecture-tests` job —
-  # standalone so a contract failure (event missing TenantScoped marker, alias
-  # regex violation, forbidden framework import in IntegrationEvents) shows
-  # up distinctly instead of buried in the unit-test list. Cheap (~30s).
+  # Architecture tests — TestArch_* + TestMeta_* across every package
+  # hosting arch tests. Package list lives in Taskfile.yml's
+  # ARCH_TEST_PACKAGES var. CI invokes `task ci:test:arch`; the canon-
+  # discipline gate at internal/architecture/ci_arch_coverage_test.go
+  # asserts CI does NOT reimplement the test command.
   # ---------------------------------------------------------------------------
   architecture:
     name: Architecture Tests
@@ -232,89 +188,20 @@ jobs:
     needs: [changes, unit]
     if: needs.changes.outputs.go == 'true' || github.event_name == 'push'
     steps:
-      - uses: actions/checkout@v6
+      - uses: ./.github/actions/go-setup
 
-      - uses: actions/setup-go@v6
-        with:
-          go-version-file: go.mod
-          cache: true
+      - name: Run architecture tests (task ci:test:arch)
+        run: task ci:test:arch
 
-      - name: Install gotestsum
-        run: go install gotest.tools/gotestsum@latest
-
-      # Run TestArch_* + TestMeta_* across EVERY package that hosts arch
-      # tests. Local `task test:arch` (in Taskfile.yml) is the source of
-      # truth — this list MUST stay in lock-step with it.
-      #
-      # CHANGELOG (drift history — read before editing):
-      #   - Pre-Wave-9.3: only `integrationevents/...` ran cloud-side; the
-      #     boundary + route arch tests silently never ran on PRs even
-      #     though local pre-push gated them. Wave 9.3 brought identity's
-      #     three packages into the gate.
-      #   - May 2026 (this commit): the gate STILL listed only the three
-      #     identity packages, while the local Taskfile had grown to 14
-      #     paths (inventory + platform + crm + the cross-cutting
-      #     internal/architecture/ fitness-function suite — 98+ tests).
-      #     Every PR since inventory-slice-1 was merging with only
-      #     identity arch coverage in CI. Closed for good below.
-      #
-      # The bug recurs because the source-of-truth lives in Taskfile.yml
-      # but CI re-encodes the list. Long-term fix (follow-up): have CI
-      # call `task test:arch` directly + add a drift test that diffs the
-      # two lists.
-      - name: Run architecture tests
-        run: |
-          gotestsum \
-            --junitfile=junit-architecture.xml \
-            --format=testname \
-            -- -run "^Test(Arch|Meta)_" -shuffle=on \
-               ./internal/identity/integrationevents/... \
-               ./internal/identity/app/... \
-               ./internal/identity/ports/... \
-               ./internal/inventory/integrationevents/... \
-               ./internal/inventory/app/... \
-               ./internal/inventory/ports/... \
-               ./internal/inventory/adapters/... \
-               ./internal/platform/integrationevents/... \
-               ./internal/platform/app/... \
-               ./internal/platform/ports/... \
-               ./internal/crm/integrationevents/... \
-               ./internal/crm/app/... \
-               ./internal/crm/ports/... \
-               ./internal/architecture/...
-
-      - name: Upload architecture test results (JUnit)
+      - uses: ./.github/actions/junit-report
         if: always()
-        uses: actions/upload-artifact@v7
         with:
-          name: junit-architecture
-          path: junit-architecture.xml
-          retention-days: 7
-
-      - name: Annotate architecture failures (PR Checks)
-        if: always() && hashFiles('junit-architecture.xml') != ''
-        uses: dorny/test-reporter@v3
-        with:
-          name: Architecture Tests
-          path: junit-architecture.xml
-          reporter: java-junit
-          fail-on-error: false
+          name: architecture
+          junit-path: junit-architecture.xml
 
   # ---------------------------------------------------------------------------
-  # OpenAPI spec gate — Spectral lint on api/openapi.yaml.
-  #
-  # Two gates protect the spec:
-  #   1. THIS job — Spectral lints the YAML for design hygiene (missing
-  #      summary, untagged operations, schema-less responses, etc.).
-  #   2. `architecture` job — TestArch_RouteHasSpecOperation asserts every
-  #      mux.Handle has a matching spec operation + vice versa.
-  # Per ADR 0050: the spec is the canonical contract (ADR 0046 spec-first);
-  # both gates run on every PR that touches api/openapi.yaml.
-  #
-  # Spectral installs via npx (zero-config; ~5s on a warm cache). The
-  # ruleset lives at .spectral.yaml — a thin extension of spectral:oas
-  # (the canonical OpenAPI 3.x ruleset) with project-specific rules
-  # codified in ADR 0049 (URL design canon).
+  # OpenAPI spec gate — Spectral lint on api/openapi.yaml. Spectral
+  # version pinned via SPECTRAL_VERSION in Taskfile.yml (NOT @latest).
   # ---------------------------------------------------------------------------
   openapi-lint:
     name: OpenAPI Spec Lint (Spectral)
@@ -328,21 +215,20 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: '22'
+          cache: 'npm'
 
-      - name: Run Spectral
-        run: npx --yes @stoplight/spectral-cli@latest lint api/openapi.yaml --ruleset .spectral.yaml --fail-severity=error
+      - uses: arduino/setup-task@v2
+        with:
+          version: 3.x
+          repo-token: ${{ github.token }}
+
+      - name: Run Spectral (task ci:openapi)
+        run: task ci:openapi
 
   # ---------------------------------------------------------------------------
-  # Migrations check — apply all migrations to an ephemeral Postgres on every
-  # PR that touches migrations/ OR cmd/migrate/. Catches schema-level errors
-  # (GIN opclass mismatches, bad FK shapes, RLS policy syntax, type
-  # incompatibilities) BEFORE they hit integration tests.
-  #
-  # Justification: the GIN-on-uuid bug shipped in Wave 1 because task ci
-  # (pre-push) doesn't apply migrations — only cloud CI did via the
-  # integration job. By then the bug was already pushed. This job runs in
-  # < 30s + fails fast on schema errors so the rest of the pipeline doesn't
-  # waste time. Per ADR-implicit "fail fast at the smallest possible gate".
+  # Migrations check — apply all migrations to an ephemeral Postgres on
+  # every PR touching migrations/ OR cmd/migrate/. Catches schema-level
+  # errors before they hit integration tests.
   # ---------------------------------------------------------------------------
   migrations-check:
     name: Migrations Apply Cleanly
@@ -359,19 +245,15 @@ jobs:
           POSTGRES_DB: leadkart_migcheck
         ports:
           - 5432:5432
-        # Health gate so the migrate run doesn't race the readiness probe.
         options: >-
           --health-cmd "pg_isready -U leadkart -d leadkart_migcheck"
           --health-interval 2s
           --health-timeout 3s
           --health-retries 15
     steps:
-      - uses: actions/checkout@v6
-
-      - uses: actions/setup-go@v6
+      - uses: ./.github/actions/go-setup
         with:
-          go-version-file: go.mod
-          cache: true
+          install-task: 'false'
 
       - name: Apply all migrations via cmd/migrate
         env:
@@ -382,19 +264,15 @@ jobs:
         env:
           PGPASSWORD: leadkart_test
         run: |
-          # Confirm pg_trgm extension is loaded (caught by the Wave 1 GIN bug
-          # IF it had been wired correctly).
           psql -h localhost -U leadkart -d leadkart_migcheck -c "SELECT 1 FROM pg_extension WHERE extname = 'pg_trgm'" | grep -q "1 row" \
             || (echo "pg_trgm extension missing" && exit 1)
-          # Confirm core tables present after up.
           psql -h localhost -U leadkart -d leadkart_migcheck -c "\dt identity.*" | grep -q "tenant_memberships" \
             || (echo "identity.tenant_memberships missing" && exit 1)
 
   # ---------------------------------------------------------------------------
-  # Integration tests — //go:build integration files. Per testcontainers-go
-  # canonical CI guidance (golang.testcontainers.org/system_requirements/ci/),
-  # GitHub-hosted runners ship Docker preinstalled — testcontainers picks it
-  # up without further config.
+  # Integration tests — //go:build integration files via testcontainers
+  # Postgres. Per testcontainers-go canonical CI guidance, GitHub-hosted
+  # runners ship Docker preinstalled; testcontainers picks it up.
   # ---------------------------------------------------------------------------
   integration:
     name: Integration Tests (testcontainers)
@@ -403,12 +281,7 @@ jobs:
     needs: [changes, unit]
     if: needs.changes.outputs.go == 'true' || github.event_name == 'push'
     steps:
-      - uses: actions/checkout@v6
-
-      - uses: actions/setup-go@v6
-        with:
-          go-version-file: go.mod
-          cache: true
+      - uses: ./.github/actions/go-setup
 
       # Pre-pull Postgres image — testcontainers does it on first use, but
       # pre-pulling parallelises with module download + speeds up the first
@@ -416,20 +289,8 @@ jobs:
       - name: Pre-pull Postgres image
         run: docker pull postgres:17-alpine
 
-      - name: Download modules
-        run: go mod download
-
-      - name: Install gotestsum
-        run: go install gotest.tools/gotestsum@latest
-
-      - name: Integration tests
-        run: |
-          gotestsum \
-            --junitfile=junit-integration.xml \
-            --format=testname \
-            -- -race -shuffle=on -tags=integration -timeout=15m \
-               -coverprofile=coverage-integration.out \
-               ./...
+      - name: Integration tests (task ci:test:int)
+        run: task ci:test:int
 
       - name: Upload integration coverage artifact
         if: always()
@@ -439,36 +300,20 @@ jobs:
           path: coverage-integration.out
           retention-days: 7
 
-      - name: Upload integration test results (JUnit)
+      - uses: ./.github/actions/junit-report
         if: always()
-        uses: actions/upload-artifact@v7
         with:
-          name: junit-integration
-          path: junit-integration.xml
-          retention-days: 7
-
-      - name: Annotate integration failures (PR Checks)
-        if: always() && hashFiles('junit-integration.xml') != ''
-        uses: dorny/test-reporter@v3
-        with:
-          name: Integration Tests
-          path: junit-integration.xml
-          reporter: java-junit
-          fail-on-error: false
+          name: integration
+          junit-path: junit-integration.xml
 
   # ---------------------------------------------------------------------------
   # Docker build — proves the production Dockerfile builds clean for both
-  # api + migrate targets. No push, no sign, no scan — just
-  # `docker buildx build --target=...`. Catches:
+  # api + migrate targets. No push, no sign, no scan. Catches:
   #   - bind-mount COPY drift (the /src/migrations bug)
   #   - GO_VERSION ARG vs go.mod toolchain drift
   #   - target rename / new target without registry update
   # release.yml ships the full multi-arch + cosign + Syft + Trivy pipeline
   # on tag.
-  #
-  # Gated on (a) docker-relevant paths changed OR (b) push-to-main, AND
-  # waits on `unit` so a broken Go build doesn't waste 3 min building an
-  # image that can't possibly run.
   # ---------------------------------------------------------------------------
   docker-build:
     name: Docker Build (api + migrate)
@@ -491,8 +336,8 @@ jobs:
           push: false
           load: true
           tags: leadkart-go-api:pr-${{ github.event.pull_request.number || github.sha }}
-          cache-from: type=gha,scope=api-pr
-          cache-to: type=gha,scope=api-pr,mode=max
+          cache-from: type=gha,scope=docker-pr
+          cache-to: type=gha,scope=docker-pr,mode=max
 
       - name: Build migrate target
         uses: docker/build-push-action@v7
@@ -503,12 +348,11 @@ jobs:
           push: false
           load: true
           tags: leadkart-go-migrate:pr-${{ github.event.pull_request.number || github.sha }}
-          cache-from: type=gha,scope=migrate-pr
-          cache-to: type=gha,scope=migrate-pr,mode=max
+          cache-from: type=gha,scope=docker-pr
+          cache-to: type=gha,scope=docker-pr,mode=max
 
       # Verify the api binary's HEALTHCHECK CLI flag works inside the
-      # built image — guards against the binary breaking its own probe
-      # contract. We expect exit 1 because there's no admin listener
+      # built image. We expect exit 1 because there's no admin listener
       # bound here; the value is "binary parses the flag + exits with
       # the documented shape" rather than "probe succeeds."
       - name: Verify -healthcheck flag in built image
@@ -520,15 +364,7 @@ jobs:
             || echo "OK: healthcheck exited non-zero as expected"
 
   # ---------------------------------------------------------------------------
-  # Container smoke — boots the full compose stack + runs scripts/smoke.sh.
-  # End-to-end happy path: register tenant → login → refresh → logout →
-  # revoked-token replay returns 401.
-  #
-  # Catches: OTel SDK init failures, migration apply failures, JWT validator
-  # config drift, probe wiring (admin vs public listener separation).
-  #
-  # Gated on docker-build success so we don't try to compose-up an image
-  # that failed to build.
+  # Container smoke — boots full compose stack + runs scripts/smoke.sh.
   # ---------------------------------------------------------------------------
   container-smoke:
     name: Container Smoke (compose up + scripts/smoke.sh)
@@ -545,8 +381,7 @@ jobs:
       # docker/compose.yml uses ${VAR:?required} substitution so the
       # stack refuses to start without an explicit JWT signing key + key
       # ID (canon — secrets must NOT have placeholder defaults). Mint
-      # an ephemeral pair per CI run; the smoke run is throwaway so a
-      # fresh key is fine.
+      # an ephemeral pair per CI run.
       - name: Mint ephemeral JWT secrets for smoke
         run: |
           {

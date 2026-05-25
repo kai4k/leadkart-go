@@ -1,0 +1,41 @@
+# Composite action — JUnit artifact upload + Checks-panel annotation.
+#
+# Replaces the "upload-artifact + dorny/test-reporter" pair duplicated
+# across unit / architecture / integration jobs. Both steps are wrapped
+# in `if: always()` so failures still publish results.
+#
+# CANON: dorny/test-reporter writes a separate "Check" run that surfaces
+# per-test failures inline on the PR — much more readable than scrolling
+# the raw logs. fail-on-error: false because the gotestsum step already
+# fails the job; the reporter is just for visibility.
+
+name: 'JUnit Report Upload + Annotate'
+description: 'Upload a junit XML artifact + annotate failures on the PR Checks panel. Used after every gotestsum-flavored test job.'
+
+inputs:
+  name:
+    description: 'Display name for the GitHub Checks panel + artifact (e.g. "unit", "architecture", "integration").'
+    required: true
+  junit-path:
+    description: 'Path to the junit XML file produced by gotestsum.'
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Upload JUnit artifact
+      if: always() && hashFiles(inputs.junit-path) != ''
+      uses: actions/upload-artifact@v7
+      with:
+        name: junit-${{ inputs.name }}
+        path: ${{ inputs.junit-path }}
+        retention-days: 7
+
+    - name: Annotate test failures on PR Checks
+      if: always() && hashFiles(inputs.junit-path) != ''
+      uses: dorny/test-reporter@v3
+      with:
+        name: ${{ inputs.name }}
+        path: ${{ inputs.junit-path }}
+        reporter: java-junit
+        fail-on-error: false

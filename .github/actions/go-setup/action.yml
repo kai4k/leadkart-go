@@ -1,0 +1,58 @@
+# Composite action — Go + Task runner setup.
+#
+# Replaces the "checkout + setup-go + go mod download + install task" step
+# sequence duplicated across unit / architecture / integration / migrations
+# jobs in ci.yml. ONE bootstrap shape; jobs invoke `task <name>` after.
+#
+# CANON:
+#   - Composite actions are GitHub's first-class DRY primitive for reusing
+#     a sequence of steps within a job (vs reusable workflows for whole
+#     jobs). kubernetes / terraform / hashicorp use this pattern for the
+#     "setup phase" of every test job.
+#   - Pinning third-party actions to SHA is GitHub's security-hardening
+#     canon — tags are mutable + can be re-pointed at malicious commits.
+#     First-party `actions/*` is tag-pinned (Dependabot rotates SHAs).
+#
+# INPUTS:
+#   install-task — whether to install go-task/task (default true). Jobs
+#                  that only need raw `go` (e.g. govulncheck) can skip.
+
+name: 'Go + Task Setup'
+description: 'Checkout, Go toolchain (from go.mod), module download, optional Task runner. Used by every Go-shaped CI job to eliminate setup duplication.'
+
+inputs:
+  install-task:
+    description: 'Install the go-task/task runner (default true). Required for jobs that invoke `task <name>` commands.'
+    required: false
+    default: 'true'
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/checkout@v6
+
+    # Pin Go from go.mod — single source of truth (2026 canon). cache:true
+    # enables module + build cache scoped per-job; explicit actions/cache
+    # on ~/.cache/go-build would let jobs SHARE the cache (~30-60s saving
+    # per downstream job) — follow-up optimisation.
+    - uses: actions/setup-go@v6
+      with:
+        go-version-file: go.mod
+        cache: true
+
+    # `go mod download` validates checksums against go.sum on every fetch
+    # (Go 1.22+ canon). No explicit `go mod verify` step needed.
+    - name: Download Go modules
+      shell: bash
+      run: go mod download
+
+    # Task runner — installs go-task/task v3 binary. Used by every test
+    # job (`task ci:test`, `task ci:test:arch`, `task ci:test:int`,
+    # `task ci:openapi`). Taskfile is the canonical source of truth for
+    # command shape per Brandur Leach + golangci-lint canon.
+    - name: Install Task
+      if: inputs.install-task == 'true'
+      uses: arduino/setup-task@v2
+      with:
+        version: 3.x
+        repo-token: ${{ github.token }}
