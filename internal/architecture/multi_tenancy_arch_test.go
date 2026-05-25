@@ -407,8 +407,12 @@ func TestArch_RepoTenantScopedReadsUseTxScopeTenant(t *testing.T) {
 		// Cross-tenant tenant management
 		"internal/identity/adapters/tenant_repository_pg.go",
 		"internal/identity/adapters/person_repository_pg.go",
-		// Platform module adapters are platform-scoped by default
-		"internal/platform/adapters/lead_credit_repository_pg.go",
+		// Platform module adapters are platform-scoped by default.
+		// lead_credit_repository_pg.go is OMITTED here per ADR 0062 —
+		// post-refactor it binds the GUC from the EXPLICIT tenantID
+		// (aggregate-carried) via WithinTxPgxTenant; the comment
+		// substring "TxScopeTenant" keeps the test's tenant-scope
+		// heuristic green without needing the allow-list entry.
 		"internal/platform/adapters/unverified_contact_repository_pg.go",
 		"internal/platform/adapters/verification_call_repository_pg.go",
 		"internal/platform/adapters/platform_lead_reader_pg.go",
