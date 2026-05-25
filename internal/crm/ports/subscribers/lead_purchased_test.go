@@ -17,6 +17,7 @@ import (
 	"github.com/leadkart/leadkart-go/internal/crm/app/command"
 	"github.com/leadkart/leadkart-go/internal/crm/domain/crmlead"
 	"github.com/leadkart/leadkart-go/internal/crm/ports/subscribers"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
 
 // silentLog returns a no-output *slog.Logger for tests — required by
@@ -51,31 +52,38 @@ func (r *fakeLeads) Add(_ context.Context, l *crmlead.CrmLead) error {
 	return nil
 }
 
-func (r *fakeLeads) GetByID(_ context.Context, id crmlead.ID) (*crmlead.CrmLead, error) {
+func (r *fakeLeads) GetByID(_ context.Context, tenantID tenant.ID, id crmlead.ID) (*crmlead.CrmLead, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	l, ok := r.byID[id]
 	if !ok {
 		return nil, crmlead.ErrNotFound
 	}
+	if l.TenantID() != tenantID {
+		return nil, crmlead.ErrNotFound
+	}
 	return l, nil
 }
 
-func (r *fakeLeads) GetBySourcePurchaseID(_ context.Context, p string) (*crmlead.CrmLead, error) {
+func (r *fakeLeads) GetBySourcePurchaseID(_ context.Context, tenantID tenant.ID, p string) (*crmlead.CrmLead, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	id, ok := r.byPurchase[p]
 	if !ok {
 		return nil, crmlead.ErrNotFound
 	}
-	return r.byID[id], nil
+	l := r.byID[id]
+	if l == nil || l.TenantID() != tenantID {
+		return nil, crmlead.ErrNotFound
+	}
+	return l, nil
 }
 
-func (r *fakeLeads) UpdateByID(_ context.Context, _ crmlead.ID, _ func(*crmlead.CrmLead) (bool, error)) error {
+func (r *fakeLeads) UpdateByID(_ context.Context, _ tenant.ID, _ crmlead.ID, _ func(*crmlead.CrmLead) (bool, error)) error {
 	return nil
 }
 
-func (r *fakeLeads) ListPage(_ context.Context, _ crmlead.ListFilter, _ pagination.Cursor, _ int) (pagination.Page[*crmlead.CrmLead], error) {
+func (r *fakeLeads) ListPage(_ context.Context, _ tenant.ID, _ crmlead.ListFilter, _ pagination.Cursor, _ int) (pagination.Page[*crmlead.CrmLead], error) {
 	return pagination.Page[*crmlead.CrmLead]{}, nil
 }
 
@@ -126,7 +134,7 @@ func TestPurchasedLeadIngestor_HappyPath(t *testing.T) {
 	if err := h.Handle(t.Context(), "", buildEnvelope(t, validEvent(tenantID, purchase))); err != nil {
 		t.Fatalf("Handle: %v", err)
 	}
-	got, err := leads.GetBySourcePurchaseID(t.Context(), purchase)
+	got, err := leads.GetBySourcePurchaseID(t.Context(), tenant.ID(tenantID), purchase)
 	if err != nil {
 		t.Fatalf("GetBySourcePurchaseID: %v", err)
 	}

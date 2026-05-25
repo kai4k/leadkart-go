@@ -14,14 +14,29 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/leadkart/leadkart-go/internal/common/pagination"
+	"github.com/leadkart/leadkart-go/internal/common/tenancy"
 	"github.com/leadkart/leadkart-go/internal/crm/app"
 	"github.com/leadkart/leadkart-go/internal/crm/app/command"
 	"github.com/leadkart/leadkart-go/internal/crm/app/query"
 	"github.com/leadkart/leadkart-go/internal/crm/domain/calllog"
 	"github.com/leadkart/leadkart-go/internal/crm/domain/crmlead"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/permission"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 	"github.com/leadkart/leadkart-go/internal/identity/ports/authn"
 )
+
+// tenantFromContext extracts the caller's tenant ID from ctx (bound by
+// authn middleware). Returns (zero, false) when missing — handlers
+// short-circuit to 401 in that case. Per ADR 0062 the explicit value
+// flows downstream to commands + queries; ctx-tenancy is only the
+// HTTP-boundary extraction point.
+func tenantFromContext(r *http.Request) (tenant.ID, bool) {
+	tid, ok := tenancy.FromContext(r.Context())
+	if !ok || tid == "" {
+		return tenant.ID(""), false
+	}
+	return tenant.ID(tid), true
+}
 
 // pincodeRE mirrors the CHECK constraint on crm.crm_leads.pincode
 // (Indian PIN code = 6 digits). Per reviewer M15, the HTTP handler
@@ -87,6 +102,11 @@ func handleListLeads(log *slog.Logger, a app.Application) http.Handler {
 			writeError(w, http.StatusUnauthorized, errCodeUnauthenticated, "")
 			return
 		}
+		tid, ok := tenantFromContext(r)
+		if !ok {
+			writeError(w, http.StatusUnauthorized, errCodeUnauthenticated, "")
+			return
+		}
 		params := r.URL.Query()
 		cursor, err := pagination.Decode(params.Get("cursor"))
 		if err != nil {
@@ -128,7 +148,7 @@ func handleListLeads(log *slog.Logger, a app.Application) http.Handler {
 		}
 
 		page, err := a.Queries.ListLeads.Handle(r.Context(), query.ListLeadsQuery{
-			Cursor: cursor, PageSize: pageSize, Filter: filter, SelfFilter: selfFilter,
+			TenantID: tid, Cursor: cursor, PageSize: pageSize, Filter: filter, SelfFilter: selfFilter,
 		})
 		if err != nil {
 			log.ErrorContext(r.Context(), "crm: list leads", "err", err)
@@ -149,11 +169,16 @@ func handleListLeads(log *slog.Logger, a app.Application) http.Handler {
 
 func handleGetLead(log *slog.Logger, a app.Application) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		tid, ok := tenantFromContext(r)
+		if !ok {
+			writeError(w, http.StatusUnauthorized, errCodeUnauthenticated, "")
+			return
+		}
 		id, ok := parseLeadID(w, r)
 		if !ok {
 			return
 		}
-		l, err := a.Queries.GetLead.Handle(r.Context(), query.GetLeadQuery{LeadID: id})
+		l, err := a.Queries.GetLead.Handle(r.Context(), query.GetLeadQuery{TenantID: tid, LeadID: id})
 		switch {
 		case errors.Is(err, query.ErrLeadNotFound):
 			writeError(w, http.StatusNotFound, errCodeLeadNotFound, "")
@@ -169,6 +194,11 @@ func handleGetLead(log *slog.Logger, a app.Application) http.Handler {
 
 func handleAssignLead(log *slog.Logger, a app.Application) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		tid, ok := tenantFromContext(r)
+		if !ok {
+			writeError(w, http.StatusUnauthorized, errCodeUnauthenticated, "")
+			return
+		}
 		id, ok := parseLeadID(w, r)
 		if !ok {
 			return
@@ -188,7 +218,7 @@ func handleAssignLead(log *slog.Logger, a app.Application) http.Handler {
 			return
 		}
 		out, err := a.Commands.AssignLead.Handle(r.Context(), command.AssignLeadCommand{
-			LeadID: id, AssigneeMembershipID: req.AssigneeMembershipID,
+			TenantID: tid, LeadID: id, AssigneeMembershipID: req.AssigneeMembershipID,
 			AssignedByMembershipID: c.MembershipID, Reason: req.Reason,
 		})
 		switch {
@@ -212,6 +242,11 @@ func handleAssignLead(log *slog.Logger, a app.Application) http.Handler {
 
 func handleChangeStage(log *slog.Logger, a app.Application) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		tid, ok := tenantFromContext(r)
+		if !ok {
+			writeError(w, http.StatusUnauthorized, errCodeUnauthenticated, "")
+			return
+		}
 		id, ok := parseLeadID(w, r)
 		if !ok {
 			return
@@ -232,7 +267,7 @@ func handleChangeStage(log *slog.Logger, a app.Application) http.Handler {
 			return
 		}
 		err = a.Commands.ChangeLeadStage.Handle(r.Context(), command.ChangeLeadStageCommand{
-			LeadID: id, NewStage: stage, ChangedByMembershipID: c.MembershipID, Reason: req.Reason,
+			TenantID: tid, LeadID: id, NewStage: stage, ChangedByMembershipID: c.MembershipID, Reason: req.Reason,
 		})
 		mapMutationErr(w, log, r, err, "change stage")
 	})
@@ -240,6 +275,11 @@ func handleChangeStage(log *slog.Logger, a app.Application) http.Handler {
 
 func handleChangeTemperature(log *slog.Logger, a app.Application) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		tid, ok := tenantFromContext(r)
+		if !ok {
+			writeError(w, http.StatusUnauthorized, errCodeUnauthenticated, "")
+			return
+		}
 		id, ok := parseLeadID(w, r)
 		if !ok {
 			return
@@ -260,7 +300,7 @@ func handleChangeTemperature(log *slog.Logger, a app.Application) http.Handler {
 			return
 		}
 		err = a.Commands.ChangeLeadTemperature.Handle(r.Context(), command.ChangeLeadTemperatureCommand{
-			LeadID: id, NewTemperature: temp, ChangedByMembershipID: c.MembershipID,
+			TenantID: tid, LeadID: id, NewTemperature: temp, ChangedByMembershipID: c.MembershipID,
 		})
 		mapMutationErr(w, log, r, err, "change temperature")
 	})
@@ -268,6 +308,11 @@ func handleChangeTemperature(log *slog.Logger, a app.Application) http.Handler {
 
 func handleLogCall(log *slog.Logger, a app.Application) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		tid, ok := tenantFromContext(r)
+		if !ok {
+			writeError(w, http.StatusUnauthorized, errCodeUnauthenticated, "")
+			return
+		}
 		id, ok := parseLeadID(w, r)
 		if !ok {
 			return
@@ -288,7 +333,7 @@ func handleLogCall(log *slog.Logger, a app.Application) http.Handler {
 			return
 		}
 		out, err := a.Commands.LogCall.Handle(r.Context(), command.LogCallCommand{
-			LeadID: id, Outcome: outcome, Notes: req.Notes, LoggedByMembershipID: c.MembershipID,
+			TenantID: tid, LeadID: id, Outcome: outcome, Notes: req.Notes, LoggedByMembershipID: c.MembershipID,
 		})
 		switch {
 		case errors.Is(err, command.ErrLeadNotFound):
@@ -308,6 +353,11 @@ func handleLogCall(log *slog.Logger, a app.Application) http.Handler {
 
 func handleConvertLead(log *slog.Logger, a app.Application) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		tid, ok := tenantFromContext(r)
+		if !ok {
+			writeError(w, http.StatusUnauthorized, errCodeUnauthenticated, "")
+			return
+		}
 		id, ok := parseLeadID(w, r)
 		if !ok {
 			return
@@ -318,7 +368,7 @@ func handleConvertLead(log *slog.Logger, a app.Application) http.Handler {
 			return
 		}
 		err := a.Commands.ConvertLead.Handle(r.Context(), command.ConvertLeadCommand{
-			LeadID: id, ConvertedByMembershipID: c.MembershipID,
+			TenantID: tid, LeadID: id, ConvertedByMembershipID: c.MembershipID,
 		})
 		mapMutationErr(w, log, r, err, "convert lead")
 	})
@@ -326,6 +376,11 @@ func handleConvertLead(log *slog.Logger, a app.Application) http.Handler {
 
 func handleLoseLead(log *slog.Logger, a app.Application) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		tid, ok := tenantFromContext(r)
+		if !ok {
+			writeError(w, http.StatusUnauthorized, errCodeUnauthenticated, "")
+			return
+		}
 		id, ok := parseLeadID(w, r)
 		if !ok {
 			return
@@ -345,7 +400,7 @@ func handleLoseLead(log *slog.Logger, a app.Application) http.Handler {
 			return
 		}
 		err := a.Commands.LoseLead.Handle(r.Context(), command.LoseLeadCommand{
-			LeadID: id, LostByMembershipID: c.MembershipID, Reason: req.Reason,
+			TenantID: tid, LeadID: id, LostByMembershipID: c.MembershipID, Reason: req.Reason,
 		})
 		mapMutationErr(w, log, r, err, "lose lead")
 	})

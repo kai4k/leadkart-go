@@ -14,7 +14,9 @@
 //     guarantee: ErrNotFound on missing IDs, source-purchase-id
 //     idempotency lookup (mirrors the subscriber path's at-most-once
 //     check), and append-only drain of aggregate events into a
-//     per-lead emitted-events slice for assertions.
+//     per-lead emitted-events slice for assertions. Cross-tenant
+//     reads return ErrNotFound (mirrors the SQL adapter's RLS-bound
+//     behavior).
 //   - Single-test-owner pattern: each test creates its OWN
 //     FakeRepository via [NewFakeRepository] — no shared mutable state
 //     across tests. t.Parallel is naturally safe because no two tests
@@ -37,6 +39,7 @@ import (
 
 	"github.com/leadkart/leadkart-go/internal/common/pagination"
 	"github.com/leadkart/leadkart-go/internal/crm/domain/crmlead"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
 
 // FakeRepository is the in-memory implementation of
@@ -103,9 +106,10 @@ func (r *FakeRepository) Add(_ context.Context, l *crmlead.CrmLead) error {
 	return nil
 }
 
-// UpdateByID loads, mutates via fn, then either persists (commit=true)
-// or rolls back (commit=false / err). Returns [crmlead.ErrNotFound]
-// when the row doesn't exist.
+// UpdateByID loads (scoped to tenantID), mutates via fn, then either
+// persists (commit=true) or rolls back (commit=false / err). Returns
+// [crmlead.ErrNotFound] when the row doesn't exist OR belongs to a
+// different tenant — mirrors the SQL adapter's RLS-bound behavior.
 //
 // On commit, drains the aggregate's events into
 // [FakeRepository.EmittedEventsByLead]. On abort, drains-and-discards
@@ -116,10 +120,13 @@ func (r *FakeRepository) Add(_ context.Context, l *crmlead.CrmLead) error {
 // observes mutations even if it returns (false, nil). This mirrors the
 // pg adapter's behavior — both rely on the aggregate's invariants
 // being re-checked at persist time, not snapshot-rollback.
-func (r *FakeRepository) UpdateByID(_ context.Context, id crmlead.ID, fn func(*crmlead.CrmLead) (bool, error)) error {
+func (r *FakeRepository) UpdateByID(_ context.Context, tenantID tenant.ID, id crmlead.ID, fn func(*crmlead.CrmLead) (bool, error)) error {
 
 	l, ok := r.ByID[id]
 	if !ok {
+		return crmlead.ErrNotFound
+	}
+	if l.TenantID() != tenantID {
 		return crmlead.ErrNotFound
 	}
 	persist, err := fn(l)
@@ -135,37 +142,53 @@ func (r *FakeRepository) UpdateByID(_ context.Context, id crmlead.ID, fn func(*c
 	return nil
 }
 
-// GetByID returns the lead or [crmlead.ErrNotFound].
-func (r *FakeRepository) GetByID(_ context.Context, id crmlead.ID) (*crmlead.CrmLead, error) {
+// GetByID returns the lead from the supplied tenant or
+// [crmlead.ErrNotFound]. Leads outside the tenant are hidden —
+// mirrors the SQL adapter's RLS-bound behavior.
+func (r *FakeRepository) GetByID(_ context.Context, tenantID tenant.ID, id crmlead.ID) (*crmlead.CrmLead, error) {
 
 	l, ok := r.ByID[id]
 	if !ok {
+		return nil, crmlead.ErrNotFound
+	}
+	if l.TenantID() != tenantID {
 		return nil, crmlead.ErrNotFound
 	}
 	return l, nil
 }
 
 // GetBySourcePurchaseID returns the lead minted from the supplied
-// Platform purchase event or [crmlead.ErrNotFound] when no such lead
-// exists. Underpins the subscriber's at-most-once-per-purchase
-// idempotency check.
-func (r *FakeRepository) GetBySourcePurchaseID(_ context.Context, purchaseID string) (*crmlead.CrmLead, error) {
+// Platform purchase event under the supplied tenant scope, or
+// [crmlead.ErrNotFound] when no such lead exists in that tenant.
+// Underpins the subscriber's at-most-once-per-purchase idempotency
+// check.
+func (r *FakeRepository) GetBySourcePurchaseID(_ context.Context, tenantID tenant.ID, purchaseID string) (*crmlead.CrmLead, error) {
 
 	id, ok := r.ByPurchase[purchaseID]
 	if !ok {
 		return nil, crmlead.ErrNotFound
 	}
-	return r.ByID[id], nil
+	l, ok := r.ByID[id]
+	if !ok {
+		return nil, crmlead.ErrNotFound
+	}
+	if l.TenantID() != tenantID {
+		return nil, crmlead.ErrNotFound
+	}
+	return l, nil
 }
 
-// ListPage returns the first pageSize leads in map-iteration order
-// (unspecified). Slice 1 unit tests don't exercise the sort tuple +
-// keyset cursor logic — those are covered by adapter integration
-// tests against the actual `created_at DESC, id DESC` index.
-func (r *FakeRepository) ListPage(_ context.Context, _ crmlead.ListFilter, _ pagination.Cursor, pageSize int) (pagination.Page[*crmlead.CrmLead], error) {
+// ListPage returns the first pageSize leads (scoped to tenantID) in
+// map-iteration order (unspecified). Slice 1 unit tests don't exercise
+// the sort tuple + keyset cursor logic — those are covered by adapter
+// integration tests against the actual `created_at DESC, id DESC` index.
+func (r *FakeRepository) ListPage(_ context.Context, tenantID tenant.ID, _ crmlead.ListFilter, _ pagination.Cursor, pageSize int) (pagination.Page[*crmlead.CrmLead], error) {
 
 	out := make([]*crmlead.CrmLead, 0, len(r.ByID))
 	for _, l := range r.ByID {
+		if l.TenantID() != tenantID {
+			continue
+		}
 		out = append(out, l)
 	}
 	if pageSize > 0 && len(out) > pageSize {

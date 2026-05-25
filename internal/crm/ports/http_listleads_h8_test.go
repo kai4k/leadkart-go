@@ -18,11 +18,13 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/leadkart/leadkart-go/internal/common/pagination"
+	"github.com/leadkart/leadkart-go/internal/common/tenancy"
 	"github.com/leadkart/leadkart-go/internal/crm/app"
 	cmdquery "github.com/leadkart/leadkart-go/internal/crm/app/query"
 	"github.com/leadkart/leadkart-go/internal/crm/domain/crmlead"
 	"github.com/leadkart/leadkart-go/internal/identity/app/jwt"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/permission"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 	"github.com/leadkart/leadkart-go/internal/identity/ports/authn"
 )
 
@@ -35,17 +37,17 @@ type recordingLeadsRepo struct {
 	last  crmlead.ListFilter
 }
 
-func (r *recordingLeadsRepo) Add(context.Context, *crmlead.CrmLead) error  { panic("unused") }
-func (r *recordingLeadsRepo) GetByID(context.Context, crmlead.ID) (*crmlead.CrmLead, error) {
+func (r *recordingLeadsRepo) Add(context.Context, *crmlead.CrmLead) error { panic("unused") }
+func (r *recordingLeadsRepo) GetByID(context.Context, tenant.ID, crmlead.ID) (*crmlead.CrmLead, error) {
 	panic("unused")
 }
-func (r *recordingLeadsRepo) GetBySourcePurchaseID(context.Context, string) (*crmlead.CrmLead, error) {
+func (r *recordingLeadsRepo) GetBySourcePurchaseID(context.Context, tenant.ID, string) (*crmlead.CrmLead, error) {
 	panic("unused")
 }
-func (r *recordingLeadsRepo) UpdateByID(context.Context, crmlead.ID, func(*crmlead.CrmLead) (bool, error)) error {
+func (r *recordingLeadsRepo) UpdateByID(context.Context, tenant.ID, crmlead.ID, func(*crmlead.CrmLead) (bool, error)) error {
 	panic("unused")
 }
-func (r *recordingLeadsRepo) ListPage(_ context.Context, f crmlead.ListFilter, _ pagination.Cursor, _ int) (pagination.Page[*crmlead.CrmLead], error) {
+func (r *recordingLeadsRepo) ListPage(_ context.Context, _ tenant.ID, f crmlead.ListFilter, _ pagination.Cursor, _ int) (pagination.Page[*crmlead.CrmLead], error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.calls++
@@ -81,6 +83,16 @@ func h8Claims(membershipID string, hasReadAll bool) *jwt.Claims {
 	}
 }
 
+// h8Ctx wraps ctx with both the authn claims (production middleware
+// runs this) AND the tenancy ID (production middleware also binds
+// this from claims.TenantID). The handler reads tenant via
+// tenancy.FromContext per ADR 0062.
+func h8Ctx(ctx context.Context, claims *jwt.Claims) context.Context {
+	ctx = authn.WithClaims(ctx, claims)
+	ctx = tenancy.WithID(ctx, tenancy.ID(claims.TenantID))
+	return ctx
+}
+
 // TestHandleListLeads_H8_SelfFilterWithOtherAssignee_403 pins the H8
 // fix: a caller lacking read_all who passes ?assignee=<other> MUST
 // 403, NOT silently get an empty page from the SQL AND-intersection.
@@ -94,7 +106,7 @@ func TestHandleListLeads_H8_SelfFilterWithOtherAssignee_403(t *testing.T) {
 	otherMembership := uuid.NewString()
 
 	req := httptest.NewRequestWithContext(
-		authn.WithClaims(t.Context(), h8Claims(selfMembership, false /*hasReadAll*/)),
+		h8Ctx(t.Context(), h8Claims(selfMembership, false /*hasReadAll*/)),
 		http.MethodGet, "/api/v1/crm/leads?assignee="+otherMembership, nil,
 	)
 	rec := httptest.NewRecorder()
@@ -127,7 +139,7 @@ func TestHandleListLeads_H8_SelfFilterWithSelfAssignee_200(t *testing.T) {
 	selfMembership := uuid.NewString()
 
 	req := httptest.NewRequestWithContext(
-		authn.WithClaims(t.Context(), h8Claims(selfMembership, false /*hasReadAll*/)),
+		h8Ctx(t.Context(), h8Claims(selfMembership, false /*hasReadAll*/)),
 		http.MethodGet, "/api/v1/crm/leads?assignee="+selfMembership, nil,
 	)
 	rec := httptest.NewRecorder()
@@ -154,7 +166,7 @@ func TestHandleListLeads_H8_ReadAllBypassesGate(t *testing.T) {
 	otherMembership := uuid.NewString()
 
 	req := httptest.NewRequestWithContext(
-		authn.WithClaims(t.Context(), h8Claims(selfMembership, true /*hasReadAll*/)),
+		h8Ctx(t.Context(), h8Claims(selfMembership, true /*hasReadAll*/)),
 		http.MethodGet, "/api/v1/crm/leads?assignee="+otherMembership, nil,
 	)
 	rec := httptest.NewRecorder()

@@ -18,7 +18,8 @@ import (
 
 // CallLogRepository is the pgx/sqlc-backed implementation of
 // [calllog.Repository]. Tenant-scoped — every read + write runs under
-// [pg.TxScopeTenant].
+// [pg.TxScopeTenant]. GUC bound from explicit tenantID per ADR 0062
+// (TDL canon).
 type CallLogRepository struct {
 	pool *pgxpool.Pool
 	tx   *pg.Transactor
@@ -31,12 +32,14 @@ func NewCallLogRepository(pool *pgxpool.Pool, tx *pg.Transactor) *CallLogReposit
 }
 
 // Add satisfies [calllog.Repository]. Drains events into the outbox in
-// the same tx; joins a surrounding UoW when ctx carries one.
+// the same tx; joins a surrounding UoW when ctx carries one. The
+// aggregate carries its own TenantID — the GUC is bound from
+// c.TenantID() (TDL canon per ADR 0062).
 func (r *CallLogRepository) Add(ctx context.Context, c *calllog.CallLog) error {
 	if tx, ok := pg.TxFromContext(ctx); ok {
 		return r.addOnTx(ctx, tx, c)
 	}
-	return r.tx.WithinTxPgx(ctx, pg.TxScopeTenant, func(ctx context.Context, tx pgx.Tx) error {
+	return r.tx.WithinTxPgxTenant(ctx, c.TenantID().String(), func(ctx context.Context, tx pgx.Tx) error {
 		return r.addOnTx(ctx, tx, c)
 	})
 }
@@ -74,14 +77,15 @@ func (r *CallLogRepository) addOnTx(ctx context.Context, tx pgx.Tx, c *calllog.C
 	return drainCallLogEvents(ctx, tx, c, tid)
 }
 
-// GetByID satisfies [calllog.Repository].
-func (r *CallLogRepository) GetByID(ctx context.Context, id calllog.ID) (*calllog.CallLog, error) {
+// GetByID satisfies [calllog.Repository]. Tenant-scoped read — GUC
+// bound from the explicit tenantID parameter (TDL canon per ADR 0062).
+func (r *CallLogRepository) GetByID(ctx context.Context, tenantID tenant.ID, id calllog.ID) (*calllog.CallLog, error) {
 	cid, err := uuid.Parse(id.String())
 	if err != nil {
 		return nil, fmt.Errorf("crm call_log repo: parse id %q: %w", id, err)
 	}
 	var out *calllog.CallLog
-	err = r.tx.WithinTxPgx(ctx, pg.TxScopeTenant, func(ctx context.Context, tx pgx.Tx) error {
+	err = r.tx.WithinTxPgxTenant(ctx, tenantID.String(), func(ctx context.Context, tx pgx.Tx) error {
 		q := r.q.WithTx(tx)
 		row, err := q.GetCallLogByID(ctx, pgUUID(cid))
 		if err != nil {
@@ -99,14 +103,15 @@ func (r *CallLogRepository) GetByID(ctx context.Context, id calllog.ID) (*calllo
 	return out, nil
 }
 
-// ListByLead satisfies [calllog.Repository].
-func (r *CallLogRepository) ListByLead(ctx context.Context, leadID crmlead.ID) ([]*calllog.CallLog, error) {
+// ListByLead satisfies [calllog.Repository]. Tenant-scoped read — GUC
+// bound from the explicit tenantID parameter.
+func (r *CallLogRepository) ListByLead(ctx context.Context, tenantID tenant.ID, leadID crmlead.ID) ([]*calllog.CallLog, error) {
 	lid, err := uuid.Parse(leadID.String())
 	if err != nil {
 		return nil, fmt.Errorf("crm call_log repo: parse lead id %q: %w", leadID, err)
 	}
 	var out []*calllog.CallLog
-	err = r.tx.WithinTxPgx(ctx, pg.TxScopeTenant, func(ctx context.Context, tx pgx.Tx) error {
+	err = r.tx.WithinTxPgxTenant(ctx, tenantID.String(), func(ctx context.Context, tx pgx.Tx) error {
 		q := r.q.WithTx(tx)
 		rows, err := q.ListCallLogsByLead(ctx, pgUUID(lid))
 		if err != nil {

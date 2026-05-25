@@ -90,7 +90,7 @@ func (h IngestPurchasedLeadHandler) Handle(ctx context.Context, cmd IngestPurcha
 	}
 
 	// Idempotency check first — survives broker replay AND cold rebuild.
-	existing, err := h.leads.GetBySourcePurchaseID(ctx, cmd.PurchaseID)
+	existing, err := h.leads.GetBySourcePurchaseID(ctx, cmd.TenantID, cmd.PurchaseID)
 	switch {
 	case err == nil && existing != nil:
 		return IngestPurchasedLeadResult{LeadID: existing.ID(), AlreadyExisted: true}, nil

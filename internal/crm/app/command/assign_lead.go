@@ -23,7 +23,11 @@ var ErrLeadTerminal = errors.New("crm: lead is in a terminal stage")
 // AssignLeadCommand carries a manual-assignment request. AssignedBy is
 // the actor (manager / admin) issuing the change; AssigneeMembershipID
 // is the new owner.
+//
+// TenantID is the caller's tenant scope (TDL canon per ADR 0062 —
+// flows through as an explicit value, not via ctx-tenancy).
 type AssignLeadCommand struct {
+	TenantID               tenant.ID
 	LeadID                 crmlead.ID
 	AssigneeMembershipID   string
 	AssignedByMembershipID string
@@ -76,6 +80,9 @@ func NewAssignLeadHandler(leads crmlead.Repository, history assignmenthistory.Re
 
 // Handle performs the assignment + audit write in one transaction.
 func (h AssignLeadHandler) Handle(ctx context.Context, cmd AssignLeadCommand) (AssignLeadResult, error) {
+	if cmd.TenantID.IsZero() {
+		return AssignLeadResult{}, errors.New("crm assign: tenant id required")
+	}
 	if cmd.LeadID.IsZero() {
 		return AssignLeadResult{}, errors.New("crm assign: lead id required")
 	}
@@ -91,12 +98,10 @@ func (h AssignLeadHandler) Handle(ctx context.Context, cmd AssignLeadCommand) (A
 	err := h.uow.WithinTx(ctx, pg.TxScopeTenant, func(ctx context.Context) error {
 		var captured struct {
 			previous string
-			tenant   tenant.ID
 			noop     bool
 		}
-		err := h.leads.UpdateByID(ctx, cmd.LeadID, func(l *crmlead.CrmLead) (bool, error) {
+		err := h.leads.UpdateByID(ctx, cmd.TenantID, cmd.LeadID, func(l *crmlead.CrmLead) (bool, error) {
 			captured.previous = l.AssigneeMembershipID()
-			captured.tenant = l.TenantID()
 			if err := l.Assign(cmd.AssigneeMembershipID, cmd.AssignedByMembershipID, cmd.Reason, now); err != nil {
 				return false, err
 			}
@@ -115,7 +120,7 @@ func (h AssignLeadHandler) Handle(ctx context.Context, cmd AssignLeadCommand) (A
 		}
 		entry, err := assignmenthistory.New(
 			h.newHistID(),
-			captured.tenant,
+			cmd.TenantID,
 			cmd.LeadID,
 			captured.previous,
 			cmd.AssigneeMembershipID,

@@ -19,7 +19,7 @@ func TestAssignLead_FirstAssignment(t *testing.T) {
 	id := seedLead(t, leads)
 	h := command.NewAssignLeadHandler(leads, history, fakeUoW{}, fixedTime, newTestHistoryID)
 	out, err := h.Handle(t.Context(), command.AssignLeadCommand{
-		LeadID: id, AssigneeMembershipID: "01923400-0000-7000-8000-cccccccc0004", AssignedByMembershipID: "01923400-0000-7000-8000-cccccccc0006",
+		TenantID: testTenantID, LeadID: id, AssigneeMembershipID: "01923400-0000-7000-8000-cccccccc0004", AssignedByMembershipID: "01923400-0000-7000-8000-cccccccc0006",
 	})
 	if err != nil {
 		t.Fatalf("Handle: %v", err)
@@ -28,12 +28,12 @@ func TestAssignLead_FirstAssignment(t *testing.T) {
 		t.Fatal("AssignmentID should be set")
 	}
 	// Lead's mirrored assignee should match.
-	got, _ := leads.GetByID(t.Context(), id)
+	got, _ := leads.GetByID(t.Context(), testTenantID, id)
 	if got.AssigneeMembershipID() != "01923400-0000-7000-8000-cccccccc0004" {
 		t.Fatalf("lead.assignee: %q", got.AssigneeMembershipID())
 	}
 	// History row written.
-	rows, _ := history.ListByLead(t.Context(), id)
+	rows, _ := history.ListByLead(t.Context(), testTenantID, id)
 	if len(rows) != 1 {
 		t.Fatalf("history rows: %d", len(rows))
 	}
@@ -49,13 +49,13 @@ func TestAssignLead_IdempotentSelfAssignWritesNoHistory(t *testing.T) {
 	id := seedLead(t, leads)
 	h := command.NewAssignLeadHandler(leads, history, fakeUoW{}, fixedTime, newTestHistoryID)
 	if _, err := h.Handle(t.Context(), command.AssignLeadCommand{
-		LeadID: id, AssigneeMembershipID: "01923400-0000-7000-8000-cccccccc0004", AssignedByMembershipID: "01923400-0000-7000-8000-cccccccc0006",
+		TenantID: testTenantID, LeadID: id, AssigneeMembershipID: "01923400-0000-7000-8000-cccccccc0004", AssignedByMembershipID: "01923400-0000-7000-8000-cccccccc0006",
 	}); err != nil {
 		t.Fatalf("first: %v", err)
 	}
 	// Self-assign — must NOT write a new history row.
 	out, err := h.Handle(t.Context(), command.AssignLeadCommand{
-		LeadID: id, AssigneeMembershipID: "01923400-0000-7000-8000-cccccccc0004", AssignedByMembershipID: "01923400-0000-7000-8000-cccccccc0006",
+		TenantID: testTenantID, LeadID: id, AssigneeMembershipID: "01923400-0000-7000-8000-cccccccc0004", AssignedByMembershipID: "01923400-0000-7000-8000-cccccccc0006",
 	})
 	if err != nil {
 		t.Fatalf("self: %v", err)
@@ -63,7 +63,7 @@ func TestAssignLead_IdempotentSelfAssignWritesNoHistory(t *testing.T) {
 	if out.AssignmentID != "" {
 		t.Fatalf("self-assign should return zero AssignmentID, got %q", out.AssignmentID)
 	}
-	rows, _ := history.ListByLead(t.Context(), id)
+	rows, _ := history.ListByLead(t.Context(), testTenantID, id)
 	if len(rows) != 1 {
 		t.Fatalf("history rows after self-assign: %d (want 1)", len(rows))
 	}
@@ -76,16 +76,16 @@ func TestAssignLead_Reassignment(t *testing.T) {
 	id := seedLead(t, leads)
 	h := command.NewAssignLeadHandler(leads, history, fakeUoW{}, fixedTime, newTestHistoryID)
 	if _, err := h.Handle(t.Context(), command.AssignLeadCommand{
-		LeadID: id, AssigneeMembershipID: "01923400-0000-7000-8000-cccccccc0004", AssignedByMembershipID: "01923400-0000-7000-8000-cccccccc0006",
+		TenantID: testTenantID, LeadID: id, AssigneeMembershipID: "01923400-0000-7000-8000-cccccccc0004", AssignedByMembershipID: "01923400-0000-7000-8000-cccccccc0006",
 	}); err != nil {
 		t.Fatalf("first: %v", err)
 	}
 	if _, err := h.Handle(t.Context(), command.AssignLeadCommand{
-		LeadID: id, AssigneeMembershipID: "01923400-0000-7000-8000-cccccccc0005", AssignedByMembershipID: "01923400-0000-7000-8000-cccccccc0006", Reason: "rebalance",
+		TenantID: testTenantID, LeadID: id, AssigneeMembershipID: "01923400-0000-7000-8000-cccccccc0005", AssignedByMembershipID: "01923400-0000-7000-8000-cccccccc0006", Reason: "rebalance",
 	}); err != nil {
 		t.Fatalf("second: %v", err)
 	}
-	rows, _ := history.ListByLead(t.Context(), id)
+	rows, _ := history.ListByLead(t.Context(), testTenantID, id)
 	if len(rows) != 2 {
 		t.Fatalf("history rows: %d", len(rows))
 	}
@@ -107,7 +107,7 @@ func TestAssignLead_NotFound(t *testing.T) {
 	history := newFakeHistory()
 	h := command.NewAssignLeadHandler(leads, history, fakeUoW{}, fixedTime, newTestHistoryID)
 	_, err := h.Handle(t.Context(), command.AssignLeadCommand{
-		LeadID: "nope", AssigneeMembershipID: "01923400-0000-7000-8000-cccccccc0004", AssignedByMembershipID: "01923400-0000-7000-8000-cccccccc0006",
+		TenantID: testTenantID, LeadID: "nope", AssigneeMembershipID: "01923400-0000-7000-8000-cccccccc0004", AssignedByMembershipID: "01923400-0000-7000-8000-cccccccc0006",
 	})
 	if !errors.Is(err, command.ErrLeadNotFound) {
 		t.Fatalf("want ErrLeadNotFound, got %v", err)
@@ -120,12 +120,12 @@ func TestAssignLead_Terminal(t *testing.T) {
 	history := newFakeHistory()
 	id := seedLead(t, leads)
 	convert := command.NewConvertLeadHandler(leads, fixedTime)
-	if err := convert.Handle(t.Context(), command.ConvertLeadCommand{LeadID: id, ConvertedByMembershipID: "01923400-0000-7000-8000-cccccccc000a"}); err != nil {
+	if err := convert.Handle(t.Context(), command.ConvertLeadCommand{TenantID: testTenantID, LeadID: id, ConvertedByMembershipID: "01923400-0000-7000-8000-cccccccc000a"}); err != nil {
 		t.Fatalf("convert: %v", err)
 	}
 	h := command.NewAssignLeadHandler(leads, history, fakeUoW{}, fixedTime, newTestHistoryID)
 	_, err := h.Handle(t.Context(), command.AssignLeadCommand{
-		LeadID: id, AssigneeMembershipID: "01923400-0000-7000-8000-cccccccc0004", AssignedByMembershipID: "01923400-0000-7000-8000-cccccccc0006",
+		TenantID: testTenantID, LeadID: id, AssigneeMembershipID: "01923400-0000-7000-8000-cccccccc0004", AssignedByMembershipID: "01923400-0000-7000-8000-cccccccc0006",
 	})
 	if !errors.Is(err, command.ErrLeadTerminal) {
 		t.Fatalf("want ErrLeadTerminal, got %v", err)

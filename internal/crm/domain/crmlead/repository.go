@@ -6,6 +6,7 @@ import (
 
 	"github.com/leadkart/leadkart-go/internal/common/errs"
 	"github.com/leadkart/leadkart-go/internal/common/pagination"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
 
 // ----- Sentinel errors ------------------------------------------------------
@@ -24,11 +25,15 @@ var ErrNotFound = errs.New(errs.KindNotFound, "crm_lead", "crm lead not found")
 //
 // All methods MUST be safe for concurrent use by multiple goroutines.
 //
-// All methods MUST honour tenant context via pgxpool's AfterAcquire
-// SET LOCAL app.tenant_id callback (ADR 0006). Postgres RLS does the
-// filtering at the row layer.
+// Tenant scoping (ADR 0062 — TDL canon): every method that takes an ID
+// without an aggregate ALSO takes an EXPLICIT tenantID parameter. The
+// adapter binds the GUC from the parameter at tx-begin (NOT from ctx-
+// tenancy.WithID — that's a domain value in context, which Khorikov §11
+// + Cheney mark as a hidden input). RLS remains the security backstop;
+// the explicit param is the API surface contract.
 type Repository interface {
 	// Add persists a brand-new lead from [New] or [NewFromPurchaseSnapshot].
+	// The aggregate already carries its TenantID — no separate param needed.
 	// The aggregate's PullEvents are drained inside the same transaction
 	// and appended to the crm.outbox table per ADR 0027.
 	//
@@ -37,31 +42,33 @@ type Repository interface {
 	// double-Add will surface as a UNIQUE-violation wrapped error.
 	Add(ctx context.Context, l *CrmLead) error
 
-	// UpdateByID loads the lead, runs updateFn (which mutates state via
-	// aggregate methods), then persists + emits events — all in one
-	// transaction. TDL Sep 2024 canon.
+	// UpdateByID loads the lead (scoped to tenantID), runs updateFn (which
+	// mutates state via aggregate methods), then persists + emits events —
+	// all in one transaction. TDL Sep 2024 canon.
 	//
 	// updateFn returns (true, nil) to commit; (false, nil) to abort
 	// without changes; (_, err) to roll back.
 	//
-	// Returns [ErrNotFound] when the lead doesn't exist (or RLS hides it).
-	UpdateByID(ctx context.Context, id ID, updateFn func(*CrmLead) (bool, error)) error
+	// Returns [ErrNotFound] when the lead doesn't exist in the tenant
+	// (or RLS hides it).
+	UpdateByID(ctx context.Context, tenantID tenant.ID, id ID, updateFn func(*CrmLead) (bool, error)) error
 
-	// GetByID returns the lead or [ErrNotFound]. Read-only path; does
-	// not drain events or open a write transaction.
-	GetByID(ctx context.Context, id ID) (*CrmLead, error)
+	// GetByID returns the lead from the supplied tenant or [ErrNotFound].
+	// Read-only path; does not drain events or open a write transaction.
+	GetByID(ctx context.Context, tenantID tenant.ID, id ID) (*CrmLead, error)
 
 	// GetBySourcePurchaseID returns the lead minted from the given
-	// Platform purchase event, or [ErrNotFound] when no such lead exists.
-	// The subscriber's idempotency check uses this.
-	GetBySourcePurchaseID(ctx context.Context, purchaseID string) (*CrmLead, error)
+	// Platform purchase event under the supplied tenant scope, or
+	// [ErrNotFound] when no such lead exists. The subscriber's
+	// idempotency check uses this.
+	GetBySourcePurchaseID(ctx context.Context, tenantID tenant.ID, purchaseID string) (*CrmLead, error)
 
 	// ListPage is the cursor-paginated list endpoint per ADR 0038.
 	// Sort tuple is (created_at DESC, id DESC). filter narrows the
 	// returned set; all filter fields are optional (empty/zero means
 	// no filter). The returned [pagination.Page] carries HasMore +
 	// NextCursor for the next-page request.
-	ListPage(ctx context.Context, filter ListFilter, cursor pagination.Cursor, pageSize int) (pagination.Page[*CrmLead], error)
+	ListPage(ctx context.Context, tenantID tenant.ID, filter ListFilter, cursor pagination.Cursor, pageSize int) (pagination.Page[*CrmLead], error)
 }
 
 // ListFilter narrows the lead-list result set per BRD §6.3. All fields

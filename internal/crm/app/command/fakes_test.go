@@ -11,6 +11,7 @@ import (
 	"github.com/leadkart/leadkart-go/internal/crm/domain/calllog/calllogtest"
 	"github.com/leadkart/leadkart-go/internal/crm/domain/crmlead"
 	"github.com/leadkart/leadkart-go/internal/crm/domain/crmlead/crmleadtest"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
 
 // The per-aggregate fakes live in the canonical <aggregate>test/
@@ -23,6 +24,12 @@ func newFakeCallLogs() *calllogtest.FakeRepository { return calllogtest.NewFakeR
 func newFakeHistory() *assignmenthistorytest.FakeRepository {
 	return assignmenthistorytest.NewFakeRepository()
 }
+
+// testTenantID is the tenant used by seedLead + every test command
+// that needs a tenant scope. Pinning a single value keeps the
+// per-aggregate fake's tenant-filter behavior aligned with the
+// command's TenantID payload.
+const testTenantID = tenant.ID("01923400-0000-7000-8000-000000000001")
 
 // fakeUoW satisfies pg.UnitOfWork without opening a real tx. Just
 // runs the closure inline.

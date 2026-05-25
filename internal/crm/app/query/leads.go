@@ -14,6 +14,7 @@ import (
 
 	"github.com/leadkart/leadkart-go/internal/common/pagination"
 	"github.com/leadkart/leadkart-go/internal/crm/domain/crmlead"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
 
 // ErrLeadNotFound surfaces when the lead ID does not exist in the
@@ -23,9 +24,11 @@ var ErrLeadNotFound = errors.New("crm query: lead not found")
 
 // ----- GetLead --------------------------------------------------------------
 
-// GetLeadQuery selects a single lead by ID.
+// GetLeadQuery selects a single lead by ID under the supplied tenant
+// scope. TenantID is the explicit tenant scope per ADR 0062 (TDL canon).
 type GetLeadQuery struct {
-	LeadID crmlead.ID
+	TenantID tenant.ID
+	LeadID   crmlead.ID
 }
 
 // GetLeadHandler runs the single-lead read.
@@ -43,10 +46,13 @@ func NewGetLeadHandler(leads crmlead.Repository) GetLeadHandler {
 
 // Handle returns the lead or [ErrLeadNotFound].
 func (h GetLeadHandler) Handle(ctx context.Context, q GetLeadQuery) (*crmlead.CrmLead, error) {
+	if q.TenantID.IsZero() {
+		return nil, errors.New("crm get_lead: tenant id required")
+	}
 	if q.LeadID.IsZero() {
 		return nil, errors.New("crm get_lead: lead id required")
 	}
-	l, err := h.leads.GetByID(ctx, q.LeadID)
+	l, err := h.leads.GetByID(ctx, q.TenantID, q.LeadID)
 	if err != nil {
 		if errors.Is(err, crmlead.ErrNotFound) {
 			return nil, ErrLeadNotFound
@@ -61,11 +67,14 @@ func (h GetLeadHandler) Handle(ctx context.Context, q GetLeadQuery) (*crmlead.Cr
 // ListLeadsQuery carries the cursor-pagination + filter inputs per
 // ADR 0038 + BRD §6.3.
 //
+// TenantID is the explicit tenant scope per ADR 0062 (TDL canon).
+//
 // SelfFilter is the per-handler "only my assigned leads" enforcement —
 // HTTP layer populates it from the JWT membership claim when the caller
 // LACKS `crm.leads.read_all`. The repository-side filter applies it as
 // an AssigneeMembershipID exact-match.
 type ListLeadsQuery struct {
+	TenantID   tenant.ID
 	Cursor     pagination.Cursor
 	PageSize   int
 	Filter     crmlead.ListFilter
@@ -89,11 +98,14 @@ func NewListLeadsHandler(leads crmlead.Repository) ListLeadsHandler {
 // ADR 0038; SelfFilter (if non-empty) is merged into Filter.SelfFilter
 // before the repository call.
 func (h ListLeadsHandler) Handle(ctx context.Context, q ListLeadsQuery) (pagination.Page[*crmlead.CrmLead], error) {
+	if q.TenantID.IsZero() {
+		return pagination.Page[*crmlead.CrmLead]{}, errors.New("crm list_leads: tenant id required")
+	}
 	filter := q.Filter
 	if q.SelfFilter != "" {
 		filter.SelfFilter = q.SelfFilter
 	}
-	page, err := h.leads.ListPage(ctx, filter, q.Cursor, pagination.ClampPageSize(q.PageSize))
+	page, err := h.leads.ListPage(ctx, q.TenantID, filter, q.Cursor, pagination.ClampPageSize(q.PageSize))
 	if err != nil {
 		return pagination.Page[*crmlead.CrmLead]{}, fmt.Errorf("crm list_leads: %w", err)
 	}

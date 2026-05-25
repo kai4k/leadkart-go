@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/leadkart/leadkart-go/internal/crm/domain/crmlead"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
 
 // ----- ChangeLeadStage ------------------------------------------------------
@@ -14,7 +15,11 @@ import (
 // machine in crmlead/stage.go enforces the allowed transitions; the
 // handler maps domain errors to the typed [ErrLeadNotFound] /
 // [ErrLeadTerminal] / generic invalid sentinels.
+//
+// TenantID is the caller's tenant scope (TDL canon per ADR 0062 —
+// flows through as an explicit value, not via ctx-tenancy).
 type ChangeLeadStageCommand struct {
+	TenantID              tenant.ID
 	LeadID                crmlead.ID
 	NewStage              crmlead.Stage
 	ChangedByMembershipID string
@@ -42,6 +47,9 @@ func NewChangeLeadStageHandler(leads crmlead.Repository, now func() time.Time) C
 // Handle advances the stage. Returns [ErrLeadNotFound] / [ErrLeadTerminal]
 // / [crmlead.ErrInvalid] on the respective failures.
 func (h ChangeLeadStageHandler) Handle(ctx context.Context, cmd ChangeLeadStageCommand) error {
+	if cmd.TenantID.IsZero() {
+		return errors.New("crm change_stage: tenant id required")
+	}
 	if cmd.LeadID.IsZero() {
 		return errors.New("crm change_stage: lead id required")
 	}
@@ -49,7 +57,7 @@ func (h ChangeLeadStageHandler) Handle(ctx context.Context, cmd ChangeLeadStageC
 		return errors.New("crm change_stage: changed-by membership id required")
 	}
 	now := h.now()
-	err := h.leads.UpdateByID(ctx, cmd.LeadID, func(l *crmlead.CrmLead) (bool, error) {
+	err := h.leads.UpdateByID(ctx, cmd.TenantID, cmd.LeadID, func(l *crmlead.CrmLead) (bool, error) {
 		oldStage := l.Stage()
 		if err := l.ChangeStage(cmd.NewStage, cmd.ChangedByMembershipID, cmd.Reason, now); err != nil {
 			return false, err
@@ -66,7 +74,10 @@ func (h ChangeLeadStageHandler) Handle(ctx context.Context, cmd ChangeLeadStageC
 // ----- ChangeLeadTemperature -----------------------------------------------
 
 // ChangeLeadTemperatureCommand carries a temperature-update request.
+//
+// TenantID is the caller's tenant scope (TDL canon per ADR 0062).
 type ChangeLeadTemperatureCommand struct {
+	TenantID              tenant.ID
 	LeadID                crmlead.ID
 	NewTemperature        crmlead.Temperature
 	ChangedByMembershipID string
@@ -92,6 +103,9 @@ func NewChangeLeadTemperatureHandler(leads crmlead.Repository, now func() time.T
 
 // Handle changes the temperature axis.
 func (h ChangeLeadTemperatureHandler) Handle(ctx context.Context, cmd ChangeLeadTemperatureCommand) error {
+	if cmd.TenantID.IsZero() {
+		return errors.New("crm change_temperature: tenant id required")
+	}
 	if cmd.LeadID.IsZero() {
 		return errors.New("crm change_temperature: lead id required")
 	}
@@ -99,7 +113,7 @@ func (h ChangeLeadTemperatureHandler) Handle(ctx context.Context, cmd ChangeLead
 		return errors.New("crm change_temperature: changed-by membership id required")
 	}
 	now := h.now()
-	err := h.leads.UpdateByID(ctx, cmd.LeadID, func(l *crmlead.CrmLead) (bool, error) {
+	err := h.leads.UpdateByID(ctx, cmd.TenantID, cmd.LeadID, func(l *crmlead.CrmLead) (bool, error) {
 		oldTemp := l.Temperature()
 		if err := l.ChangeTemperature(cmd.NewTemperature, cmd.ChangedByMembershipID, now); err != nil {
 			return false, err
@@ -115,7 +129,10 @@ func (h ChangeLeadTemperatureHandler) Handle(ctx context.Context, cmd ChangeLead
 // ----- ConvertLead ---------------------------------------------------------
 
 // ConvertLeadCommand is the terminal-success transition request.
+//
+// TenantID is the caller's tenant scope (TDL canon per ADR 0062).
 type ConvertLeadCommand struct {
+	TenantID                tenant.ID
 	LeadID                  crmlead.ID
 	ConvertedByMembershipID string
 }
@@ -140,6 +157,9 @@ func NewConvertLeadHandler(leads crmlead.Repository, now func() time.Time) Conve
 
 // Handle terminally converts the lead.
 func (h ConvertLeadHandler) Handle(ctx context.Context, cmd ConvertLeadCommand) error {
+	if cmd.TenantID.IsZero() {
+		return errors.New("crm convert: tenant id required")
+	}
 	if cmd.LeadID.IsZero() {
 		return errors.New("crm convert: lead id required")
 	}
@@ -147,7 +167,7 @@ func (h ConvertLeadHandler) Handle(ctx context.Context, cmd ConvertLeadCommand) 
 		return errors.New("crm convert: converted-by membership id required")
 	}
 	now := h.now()
-	err := h.leads.UpdateByID(ctx, cmd.LeadID, func(l *crmlead.CrmLead) (bool, error) {
+	err := h.leads.UpdateByID(ctx, cmd.TenantID, cmd.LeadID, func(l *crmlead.CrmLead) (bool, error) {
 		if err := l.Convert(cmd.ConvertedByMembershipID, now); err != nil {
 			return false, err
 		}
@@ -159,7 +179,10 @@ func (h ConvertLeadHandler) Handle(ctx context.Context, cmd ConvertLeadCommand) 
 // ----- LoseLead ------------------------------------------------------------
 
 // LoseLeadCommand is the terminal-failure transition request.
+//
+// TenantID is the caller's tenant scope (TDL canon per ADR 0062).
 type LoseLeadCommand struct {
+	TenantID           tenant.ID
 	LeadID             crmlead.ID
 	LostByMembershipID string
 	Reason             string
@@ -186,6 +209,9 @@ func NewLoseLeadHandler(leads crmlead.Repository, now func() time.Time) LoseLead
 // Handle terminally loses the lead. Reason is required per audit
 // doctrine.
 func (h LoseLeadHandler) Handle(ctx context.Context, cmd LoseLeadCommand) error {
+	if cmd.TenantID.IsZero() {
+		return errors.New("crm lose: tenant id required")
+	}
 	if cmd.LeadID.IsZero() {
 		return errors.New("crm lose: lead id required")
 	}
@@ -196,7 +222,7 @@ func (h LoseLeadHandler) Handle(ctx context.Context, cmd LoseLeadCommand) error 
 		return errors.New("crm lose: reason required")
 	}
 	now := h.now()
-	err := h.leads.UpdateByID(ctx, cmd.LeadID, func(l *crmlead.CrmLead) (bool, error) {
+	err := h.leads.UpdateByID(ctx, cmd.TenantID, cmd.LeadID, func(l *crmlead.CrmLead) (bool, error) {
 		if err := l.Lose(cmd.LostByMembershipID, cmd.Reason, now); err != nil {
 			return false, err
 		}

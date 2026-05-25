@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -14,39 +13,21 @@ import (
 
 	"github.com/leadkart/leadkart-go/internal/common/pagination"
 	"github.com/leadkart/leadkart-go/internal/common/pg"
-	"github.com/leadkart/leadkart-go/internal/common/tenancy"
 	"github.com/leadkart/leadkart-go/internal/crm/adapters/db"
 	"github.com/leadkart/leadkart-go/internal/crm/domain/crmlead"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
 
-// tenantUUIDFromCtx parses the tenant ID stashed in ctx via the
-// tenancy.WithID HTTP middleware. Returns (uuid.Nil, false) when no
-// tenant is present OR the stored string is not a UUID.
-//
-// Per reviewer M13: a parse failure here is a PROGRAMMER ERROR (the
-// HTTP middleware always inserts a validated UUID); we still log it
-// rather than silently dropping the request to a "tenant required"
-// 4xx with no operator trail. The callers already surface a clear
-// "tenant required in context" error to the operator.
-func tenantUUIDFromCtx(ctx context.Context) (uuid.UUID, bool) {
-	id, ok := tenancy.FromContext(ctx)
-	if !ok || id.IsZero() {
-		return uuid.Nil, false
-	}
-	parsed, err := uuid.Parse(id.String())
-	if err != nil {
-		slog.ErrorContext(ctx, "crm: tenancy ctx carries non-UUID id (middleware bypass?)",
-			"raw", id.String(), "err", err)
-		return uuid.Nil, false
-	}
-	return parsed, true
-}
-
 // CrmLeadRepository is the pgx/sqlc-backed implementation of
 // [crmlead.Repository]. Tenant-scoped — every read + write runs under
 // [pg.TxScopeTenant] so the connection's `app.tenant_id` GUC binds
 // before queries touch the table; Postgres RLS does the rest.
+//
+// Tenant scoping (ADR 0062 — TDL canon): the GUC is bound from an
+// EXPLICIT tenantID Repository-method parameter via
+// [pg.Transactor.WithinTxPgxTenant]. Add uses the aggregate's own
+// TenantID (which the aggregate carries). ctx-tenancy.WithID is no
+// longer required upstream.
 //
 // Domain↔row mapping lives here; sqlc-generated *db.Queries hold the
 // SQL. Per ADR 0047, no app/ code imports this struct — handlers depend
@@ -66,11 +47,15 @@ func NewCrmLeadRepository(pool *pgxpool.Pool, tx *pg.Transactor) *CrmLeadReposit
 // drains its events into the outbox, all in one tx under tenant scope.
 // Joins a surrounding UnitOfWork tx when ctx carries one (per ADR 0047
 // + identity-side precedent).
+//
+// The aggregate carries its own TenantID — the GUC is bound from
+// l.TenantID() (TDL canon per ADR 0062: tenantID flows through
+// explicit values, not ctx).
 func (r *CrmLeadRepository) Add(ctx context.Context, l *crmlead.CrmLead) error {
 	if tx, ok := pg.TxFromContext(ctx); ok {
 		return r.addOnTx(ctx, tx, l)
 	}
-	return r.tx.WithinTxPgx(ctx, pg.TxScopeTenant, func(ctx context.Context, tx pgx.Tx) error {
+	return r.tx.WithinTxPgxTenant(ctx, l.TenantID().String(), func(ctx context.Context, tx pgx.Tx) error {
 		return r.addOnTx(ctx, tx, l)
 	})
 }
@@ -83,10 +68,11 @@ func (r *CrmLeadRepository) addOnTx(ctx context.Context, tx pgx.Tx, l *crmlead.C
 	return drainLeadEvents(ctx, tx, l)
 }
 
-// GetByID satisfies [crmlead.Repository]. RLS-scoped read.
-func (r *CrmLeadRepository) GetByID(ctx context.Context, id crmlead.ID) (*crmlead.CrmLead, error) {
+// GetByID satisfies [crmlead.Repository]. Tenant-scoped read — GUC
+// bound from the explicit tenantID parameter (TDL canon per ADR 0062).
+func (r *CrmLeadRepository) GetByID(ctx context.Context, tenantID tenant.ID, id crmlead.ID) (*crmlead.CrmLead, error) {
 	var out *crmlead.CrmLead
-	err := r.tx.WithinTxPgx(ctx, pg.TxScopeTenant, func(ctx context.Context, tx pgx.Tx) error {
+	err := r.tx.WithinTxPgxTenant(ctx, tenantID.String(), func(ctx context.Context, tx pgx.Tx) error {
 		q := r.q.WithTx(tx)
 		got, err := loadLead(ctx, q, id)
 		if err != nil {
@@ -102,14 +88,15 @@ func (r *CrmLeadRepository) GetByID(ctx context.Context, id crmlead.ID) (*crmlea
 }
 
 // GetBySourcePurchaseID satisfies [crmlead.Repository] — subscriber
-// idempotency lookup.
-func (r *CrmLeadRepository) GetBySourcePurchaseID(ctx context.Context, purchaseID string) (*crmlead.CrmLead, error) {
+// idempotency lookup. Tenant-scoped — GUC bound from the explicit
+// tenantID parameter.
+func (r *CrmLeadRepository) GetBySourcePurchaseID(ctx context.Context, tenantID tenant.ID, purchaseID string) (*crmlead.CrmLead, error) {
 	pid, err := uuid.Parse(purchaseID)
 	if err != nil {
 		return nil, fmt.Errorf("crm lead repo: parse purchase_id %q: %w", purchaseID, err)
 	}
 	var out *crmlead.CrmLead
-	err = r.tx.WithinTxPgx(ctx, pg.TxScopeTenant, func(ctx context.Context, tx pgx.Tx) error {
+	err = r.tx.WithinTxPgxTenant(ctx, tenantID.String(), func(ctx context.Context, tx pgx.Tx) error {
 		q := r.q.WithTx(tx)
 		row, err := q.GetCrmLeadByPurchaseID(ctx, pgUUID(pid))
 		if err != nil {
@@ -134,16 +121,17 @@ func (r *CrmLeadRepository) GetBySourcePurchaseID(ctx context.Context, purchaseI
 // UpdateByID satisfies [crmlead.Repository] — TDL Sep 2024 UpdateFn
 // pattern. Load → updateFn → persist (if shouldPersist) → drain events.
 // All in one tenant-scoped transaction; joins a surrounding UoW when ctx
-// carries one.
+// carries one. GUC bound from the explicit tenantID parameter.
 func (r *CrmLeadRepository) UpdateByID(
 	ctx context.Context,
+	tenantID tenant.ID,
 	id crmlead.ID,
 	updateFn func(*crmlead.CrmLead) (bool, error),
 ) error {
 	if tx, ok := pg.TxFromContext(ctx); ok {
 		return r.updateOnTx(ctx, tx, id, updateFn)
 	}
-	return r.tx.WithinTxPgx(ctx, pg.TxScopeTenant, func(ctx context.Context, tx pgx.Tx) error {
+	return r.tx.WithinTxPgxTenant(ctx, tenantID.String(), func(ctx context.Context, tx pgx.Tx) error {
 		return r.updateOnTx(ctx, tx, id, updateFn)
 	})
 }
@@ -176,21 +164,23 @@ func (r *CrmLeadRepository) updateOnTx(
 }
 
 // ListPage satisfies [crmlead.Repository] — cursor-paginated list per
-// ADR 0038.
+// ADR 0038. GUC bound from the explicit tenantID parameter (TDL canon
+// per ADR 0062).
 func (r *CrmLeadRepository) ListPage(
 	ctx context.Context,
+	tenantID tenant.ID,
 	filter crmlead.ListFilter,
 	cursor pagination.Cursor,
 	pageSize int,
 ) (pagination.Page[*crmlead.CrmLead], error) {
 	clamped := pagination.ClampPageSize(pageSize)
-	tenant, ok := tenantUUIDFromCtx(ctx)
-	if !ok {
-		return pagination.Page[*crmlead.CrmLead]{}, errors.New("crm lead repo: tenant required in context")
+	tid, err := uuid.Parse(tenantID.String())
+	if err != nil {
+		return pagination.Page[*crmlead.CrmLead]{}, fmt.Errorf("crm lead repo: parse tenant id %q: %w", tenantID, err)
 	}
 
 	params := db.ListCrmLeadsPageParams{
-		TenantID: pgUUID(tenant),
+		TenantID: pgUUID(tid),
 		// peek-one-extra trick per ADR 0038
 		PageSize:        int32(clamped) + 1, //nolint:gosec // clamped ≤ 200 by ClampPageSize
 		ProductRanges:   nullableTextArray(filter.ProductRanges),
@@ -209,7 +199,7 @@ func (r *CrmLeadRepository) ListPage(
 	}
 
 	var rows []db.CrmCrmLead
-	err := r.tx.WithinTxPgx(ctx, pg.TxScopeTenant, func(ctx context.Context, tx pgx.Tx) error {
+	err = r.tx.WithinTxPgxTenant(ctx, tenantID.String(), func(ctx context.Context, tx pgx.Tx) error {
 		q := r.q.WithTx(tx)
 		got, err := q.ListCrmLeadsPage(ctx, params)
 		if err != nil {

@@ -14,7 +14,8 @@
 //     It honors every contract guarantee: append-only Add (no
 //     UpdateByID surface — assignment history is forensic-trail
 //     immutable), ErrNotFound on missing GetByID, per-lead ListByLead
-//     filter.
+//     filter, tenant-scoped reads return ErrNotFound for cross-tenant
+//     rows (mirrors the SQL adapter's RLS-bound behavior).
 //   - Single-test-owner pattern: each test creates its OWN
 //     FakeRepository via [NewFakeRepository] — no shared mutable state
 //     across tests. t.Parallel is naturally safe because no two tests
@@ -36,6 +37,7 @@ import (
 
 	"github.com/leadkart/leadkart-go/internal/crm/domain/assignmenthistory"
 	"github.com/leadkart/leadkart-go/internal/crm/domain/crmlead"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
 
 // FakeRepository is the in-memory implementation of
@@ -72,23 +74,33 @@ func (r *FakeRepository) Add(_ context.Context, e *assignmenthistory.Entry) erro
 	return nil
 }
 
-// GetByID returns the entry or [assignmenthistory.ErrNotFound].
-func (r *FakeRepository) GetByID(_ context.Context, id assignmenthistory.ID) (*assignmenthistory.Entry, error) {
+// GetByID returns the entry from the supplied tenant or
+// [assignmenthistory.ErrNotFound]. Cross-tenant rows return
+// ErrNotFound to mirror the SQL adapter's RLS-bound behavior.
+func (r *FakeRepository) GetByID(_ context.Context, tenantID tenant.ID, id assignmenthistory.ID) (*assignmenthistory.Entry, error) {
 
 	e, ok := r.ByID[id]
 	if !ok {
+		return nil, assignmenthistory.ErrNotFound
+	}
+	if e.TenantID() != tenantID {
 		return nil, assignmenthistory.ErrNotFound
 	}
 	return e, nil
 }
 
 // ListByLead returns every assignment-history entry for the supplied
-// leadID in unspecified order. Slice 1 unit tests don't exercise the
-// newest-first ordering; that's covered by adapter integration tests.
-func (r *FakeRepository) ListByLead(_ context.Context, leadID crmlead.ID) ([]*assignmenthistory.Entry, error) {
+// (tenant, leadID) in unspecified order. Slice 1 unit tests don't
+// exercise the newest-first ordering; that's covered by adapter
+// integration tests. Cross-tenant rows are filtered out to mirror the
+// SQL adapter's RLS-bound behavior.
+func (r *FakeRepository) ListByLead(_ context.Context, tenantID tenant.ID, leadID crmlead.ID) ([]*assignmenthistory.Entry, error) {
 
 	out := []*assignmenthistory.Entry{}
 	for _, e := range r.ByID {
+		if e.TenantID() != tenantID {
+			continue
+		}
 		if e.LeadID() == leadID {
 			out = append(out, e)
 		}

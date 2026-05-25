@@ -12,7 +12,9 @@
 //   - The fake is a FAITHFUL implementation of [calllog.Repository] —
 //     not a mock-with-canned-responses. It honors every contract
 //     guarantee: append-only Add (no UpdateByID surface), ErrNotFound
-//     on missing GetByID, per-lead ListByLead filter.
+//     on missing GetByID, per-lead ListByLead filter, tenant-scoped
+//     reads return ErrNotFound for cross-tenant rows (mirrors the
+//     SQL adapter's RLS-bound behavior).
 //   - Single-test-owner pattern: each test creates its OWN
 //     FakeRepository via [NewFakeRepository] — no shared mutable state
 //     across tests. t.Parallel is naturally safe because no two tests
@@ -34,6 +36,7 @@ import (
 
 	"github.com/leadkart/leadkart-go/internal/crm/domain/calllog"
 	"github.com/leadkart/leadkart-go/internal/crm/domain/crmlead"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
 
 // FakeRepository is the in-memory implementation of
@@ -70,24 +73,33 @@ func (r *FakeRepository) Add(_ context.Context, c *calllog.CallLog) error {
 	return nil
 }
 
-// GetByID returns the call log or [calllog.ErrNotFound].
-func (r *FakeRepository) GetByID(_ context.Context, id calllog.ID) (*calllog.CallLog, error) {
+// GetByID returns the call log from the supplied tenant or
+// [calllog.ErrNotFound]. Cross-tenant rows return ErrNotFound to
+// mirror the SQL adapter's RLS-bound behavior.
+func (r *FakeRepository) GetByID(_ context.Context, tenantID tenant.ID, id calllog.ID) (*calllog.CallLog, error) {
 
 	c, ok := r.ByID[id]
 	if !ok {
 		return nil, calllog.ErrNotFound
 	}
+	if c.TenantID() != tenantID {
+		return nil, calllog.ErrNotFound
+	}
 	return c, nil
 }
 
-// ListByLead returns every call log for the supplied leadID in
-// unspecified order. Slice 1 unit tests don't exercise the newest-
+// ListByLead returns every call log for the supplied (tenant, leadID)
+// in unspecified order. Slice 1 unit tests don't exercise the newest-
 // first ordering; that's covered by adapter integration tests against
-// the `logged_at DESC` index.
-func (r *FakeRepository) ListByLead(_ context.Context, leadID crmlead.ID) ([]*calllog.CallLog, error) {
+// the `logged_at DESC` index. Cross-tenant rows are filtered out to
+// mirror the SQL adapter's RLS-bound behavior.
+func (r *FakeRepository) ListByLead(_ context.Context, tenantID tenant.ID, leadID crmlead.ID) ([]*calllog.CallLog, error) {
 
 	out := []*calllog.CallLog{}
 	for _, c := range r.ByID {
+		if c.TenantID() != tenantID {
+			continue
+		}
 		if c.LeadID() == leadID {
 			out = append(out, c)
 		}

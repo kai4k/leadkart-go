@@ -1,4 +1,4 @@
-﻿package command_test
+package command_test
 
 import (
 	"errors"
@@ -17,12 +17,14 @@ import (
 var fixedSeed = time.Date(2026, 6, 2, 9, 0, 0, 0, time.UTC)
 
 // seedLead creates a fresh CrmLead inside the fake repository + returns
-// its ID â€” used by every transition test.
+// its ID â€” used by every transition test. The lead carries
+// [testTenantID] so per-aggregate fake tenant filtering aligns with
+// the command's TenantID payload.
 func seedLead(t *testing.T, r *crmleadtest.FakeRepository) crmlead.ID {
 	t.Helper()
 	l, err := crmlead.New(
 		crmlead.ID(ids.NewV7().String()),
-		"01923400-0000-7000-8000-000000000001",
+		testTenantID,
 		crmlead.Profile{ContactName: "X", PhoneE164: "+919812345678"},
 		"01923400-0000-7000-8000-cccccccc0001",
 		fixedSeed,
@@ -42,11 +44,11 @@ func TestChangeStage_HappyPath(t *testing.T) {
 	id := seedLead(t, leads)
 	h := command.NewChangeLeadStageHandler(leads, fixedTime)
 	if err := h.Handle(t.Context(), command.ChangeLeadStageCommand{
-		LeadID: id, NewStage: crmlead.StageContacted, ChangedByMembershipID: "01923400-0000-7000-8000-cccccccc000a", Reason: "first call",
+		TenantID: testTenantID, LeadID: id, NewStage: crmlead.StageContacted, ChangedByMembershipID: "01923400-0000-7000-8000-cccccccc000a", Reason: "first call",
 	}); err != nil {
 		t.Fatalf("Handle: %v", err)
 	}
-	got, _ := leads.GetByID(t.Context(), id)
+	got, _ := leads.GetByID(t.Context(), testTenantID, id)
 	if got.Stage() != crmlead.StageContacted {
 		t.Fatalf("stage: %s", got.Stage())
 	}
@@ -58,7 +60,7 @@ func TestChangeStage_RejectsSkip(t *testing.T) {
 	id := seedLead(t, leads)
 	h := command.NewChangeLeadStageHandler(leads, fixedTime)
 	err := h.Handle(t.Context(), command.ChangeLeadStageCommand{
-		LeadID: id, NewStage: crmlead.StageNegotiation, ChangedByMembershipID: "01923400-0000-7000-8000-cccccccc000a",
+		TenantID: testTenantID, LeadID: id, NewStage: crmlead.StageNegotiation, ChangedByMembershipID: "01923400-0000-7000-8000-cccccccc000a",
 	})
 	if !errors.Is(err, crmlead.ErrInvalid) {
 		t.Fatalf("want ErrInvalid, got %v", err)
@@ -70,7 +72,7 @@ func TestChangeStage_NotFound(t *testing.T) {
 	leads := newFakeLeads()
 	h := command.NewChangeLeadStageHandler(leads, fixedTime)
 	err := h.Handle(t.Context(), command.ChangeLeadStageCommand{
-		LeadID: "nope", NewStage: crmlead.StageContacted, ChangedByMembershipID: "01923400-0000-7000-8000-cccccccc000a",
+		TenantID: testTenantID, LeadID: "nope", NewStage: crmlead.StageContacted, ChangedByMembershipID: "01923400-0000-7000-8000-cccccccc000a",
 	})
 	if !errors.Is(err, command.ErrLeadNotFound) {
 		t.Fatalf("want ErrLeadNotFound, got %v", err)
@@ -82,12 +84,12 @@ func TestChangeStage_Terminal(t *testing.T) {
 	leads := newFakeLeads()
 	id := seedLead(t, leads)
 	convert := command.NewConvertLeadHandler(leads, fixedTime)
-	if err := convert.Handle(t.Context(), command.ConvertLeadCommand{LeadID: id, ConvertedByMembershipID: "01923400-0000-7000-8000-cccccccc000a"}); err != nil {
+	if err := convert.Handle(t.Context(), command.ConvertLeadCommand{TenantID: testTenantID, LeadID: id, ConvertedByMembershipID: "01923400-0000-7000-8000-cccccccc000a"}); err != nil {
 		t.Fatalf("convert: %v", err)
 	}
 	h := command.NewChangeLeadStageHandler(leads, fixedTime)
 	err := h.Handle(t.Context(), command.ChangeLeadStageCommand{
-		LeadID: id, NewStage: crmlead.StageContacted, ChangedByMembershipID: "01923400-0000-7000-8000-cccccccc000a",
+		TenantID: testTenantID, LeadID: id, NewStage: crmlead.StageContacted, ChangedByMembershipID: "01923400-0000-7000-8000-cccccccc000a",
 	})
 	if !errors.Is(err, command.ErrLeadTerminal) {
 		t.Fatalf("want ErrLeadTerminal, got %v", err)
@@ -100,11 +102,11 @@ func TestChangeTemperature_HappyPath(t *testing.T) {
 	id := seedLead(t, leads)
 	h := command.NewChangeLeadTemperatureHandler(leads, fixedTime)
 	if err := h.Handle(t.Context(), command.ChangeLeadTemperatureCommand{
-		LeadID: id, NewTemperature: crmlead.TemperatureHot, ChangedByMembershipID: "01923400-0000-7000-8000-cccccccc000a",
+		TenantID: testTenantID, LeadID: id, NewTemperature: crmlead.TemperatureHot, ChangedByMembershipID: "01923400-0000-7000-8000-cccccccc000a",
 	}); err != nil {
 		t.Fatalf("Handle: %v", err)
 	}
-	got, _ := leads.GetByID(t.Context(), id)
+	got, _ := leads.GetByID(t.Context(), testTenantID, id)
 	if got.Temperature() != crmlead.TemperatureHot {
 		t.Fatalf("temperature: %s", got.Temperature())
 	}
@@ -115,10 +117,10 @@ func TestConvertLead_HappyPath(t *testing.T) {
 	leads := newFakeLeads()
 	id := seedLead(t, leads)
 	h := command.NewConvertLeadHandler(leads, fixedTime)
-	if err := h.Handle(t.Context(), command.ConvertLeadCommand{LeadID: id, ConvertedByMembershipID: "01923400-0000-7000-8000-cccccccc000a"}); err != nil {
+	if err := h.Handle(t.Context(), command.ConvertLeadCommand{TenantID: testTenantID, LeadID: id, ConvertedByMembershipID: "01923400-0000-7000-8000-cccccccc000a"}); err != nil {
 		t.Fatalf("Handle: %v", err)
 	}
-	got, _ := leads.GetByID(t.Context(), id)
+	got, _ := leads.GetByID(t.Context(), testTenantID, id)
 	if got.Stage() != crmlead.StageConverted {
 		t.Fatalf("stage: %s", got.Stage())
 	}
@@ -129,7 +131,7 @@ func TestLoseLead_RequiresReason(t *testing.T) {
 	leads := newFakeLeads()
 	id := seedLead(t, leads)
 	h := command.NewLoseLeadHandler(leads, fixedTime)
-	err := h.Handle(t.Context(), command.LoseLeadCommand{LeadID: id, LostByMembershipID: "01923400-0000-7000-8000-cccccccc000a"})
+	err := h.Handle(t.Context(), command.LoseLeadCommand{TenantID: testTenantID, LeadID: id, LostByMembershipID: "01923400-0000-7000-8000-cccccccc000a"})
 	if err == nil {
 		t.Fatal("want error on missing reason")
 	}
@@ -140,10 +142,10 @@ func TestLoseLead_HappyPath(t *testing.T) {
 	leads := newFakeLeads()
 	id := seedLead(t, leads)
 	h := command.NewLoseLeadHandler(leads, fixedTime)
-	if err := h.Handle(t.Context(), command.LoseLeadCommand{LeadID: id, LostByMembershipID: "01923400-0000-7000-8000-cccccccc000a", Reason: "no budget"}); err != nil {
+	if err := h.Handle(t.Context(), command.LoseLeadCommand{TenantID: testTenantID, LeadID: id, LostByMembershipID: "01923400-0000-7000-8000-cccccccc000a", Reason: "no budget"}); err != nil {
 		t.Fatalf("Handle: %v", err)
 	}
-	got, _ := leads.GetByID(t.Context(), id)
+	got, _ := leads.GetByID(t.Context(), testTenantID, id)
 	if got.Stage() != crmlead.StageLost {
 		t.Fatalf("stage: %s", got.Stage())
 	}

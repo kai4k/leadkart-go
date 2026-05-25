@@ -8,7 +8,13 @@ import (
 	"github.com/leadkart/leadkart-go/internal/crm/app/command"
 	"github.com/leadkart/leadkart-go/internal/crm/domain/crmlead"
 	"github.com/leadkart/leadkart-go/internal/crm/domain/crmlead/crmleadtest"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
+
+// ingestTenantID is the tenant used by the ingest tests. Distinct from
+// [testTenantID] (seedLead's) because ingest tests don't seed leads
+// upfront — they ingest into a fresh tenant scope.
+const ingestTenantID = tenant.ID("01923400-0000-7000-8000-bbbbbbbb0001")
 
 func validSnapshot(purchase string) crmlead.PurchaseSnapshot {
 	return crmlead.PurchaseSnapshot{
@@ -39,7 +45,7 @@ func TestIngest_HappyPath(t *testing.T) {
 	h := command.NewIngestPurchasedLeadHandler(leads, fixedTime, newTestLeadID)
 	out, err := h.Handle(t.Context(), command.IngestPurchasedLeadCommand{
 		PurchaseID:              "01923400-0000-7000-8000-dddddddd0001",
-		TenantID:                "01923400-0000-7000-8000-bbbbbbbb0001",
+		TenantID:                ingestTenantID,
 		PlatformLeadID:          "01923400-0000-7000-8000-eeeeeeee0001",
 		PurchasedByMembershipID: "01923400-0000-7000-8000-cccccccc000d",
 		Snapshot:                validSnapshot("01923400-0000-7000-8000-dddddddd0001"),
@@ -60,7 +66,7 @@ func TestIngest_IdempotentOnSamePurchaseID(t *testing.T) {
 	leads := newFakeLeads()
 	h := command.NewIngestPurchasedLeadHandler(leads, fixedTime, newTestLeadID)
 	cmd := command.IngestPurchasedLeadCommand{
-		PurchaseID: "01923400-0000-7000-8000-dddddddd0002", TenantID: "01923400-0000-7000-8000-bbbbbbbb0001",
+		PurchaseID: "01923400-0000-7000-8000-dddddddd0002", TenantID: ingestTenantID,
 		Snapshot: validSnapshot("01923400-0000-7000-8000-dddddddd0002"),
 	}
 	first, err := h.Handle(t.Context(), cmd)
@@ -101,7 +107,7 @@ func TestIngest_NormalisesProvenanceOnSnapshot(t *testing.T) {
 	snap.PurchasedByMembershipID = ""
 	out, err := h.Handle(t.Context(), command.IngestPurchasedLeadCommand{
 		PurchaseID:              "01923400-0000-7000-8000-dddddddd0003",
-		TenantID:                "01923400-0000-7000-8000-bbbbbbbb0001",
+		TenantID:                ingestTenantID,
 		PlatformLeadID:          "01923400-0000-7000-8000-eeeeeeee0003",
 		PurchasedByMembershipID: "01923400-0000-7000-8000-cccccccc000e",
 		Snapshot:                snap,
@@ -109,7 +115,7 @@ func TestIngest_NormalisesProvenanceOnSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Handle: %v", err)
 	}
-	l, err := leads.GetByID(t.Context(), out.LeadID)
+	l, err := leads.GetByID(t.Context(), ingestTenantID, out.LeadID)
 	if err != nil {
 		t.Fatalf("GetByID: %v", err)
 	}
@@ -138,6 +144,6 @@ type erroringLeads struct {
 	*crmleadtest.FakeRepository
 }
 
-func (*erroringLeads) GetBySourcePurchaseID(_ context.Context, _ string) (*crmlead.CrmLead, error) {
+func (*erroringLeads) GetBySourcePurchaseID(_ context.Context, _ tenant.ID, _ string) (*crmlead.CrmLead, error) {
 	return nil, errors.New("synthetic lookup failure")
 }

@@ -44,6 +44,7 @@ import (
 	"github.com/leadkart/leadkart-go/internal/crm/app/command"
 	"github.com/leadkart/leadkart-go/internal/crm/domain/crmlead"
 	"github.com/leadkart/leadkart-go/internal/crm/ports/subscribers"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
 
 func silentLog() *slog.Logger {
@@ -187,15 +188,16 @@ func TestH4_SubscriberTenantScoping_LandsUnderCorrectTenant_RLSIsolated(t *testi
 	// Wait for the subscriber to land the row under tenant A.
 	waitFor(t, func() bool {
 		tctx := withTenantCtxFromString(ctx, tenantA)
-		got, err := leads.GetBySourcePurchaseID(tctx, purchaseID)
+		got, err := leads.GetBySourcePurchaseID(tctx, tenant.ID(tenantA), purchaseID)
 		return err == nil && got != nil && got.TenantID().String() == tenantA
 	}, 5*time.Second, "row never appeared under tenant A")
 
-	// RLS gate: same query under tenant B's ctx MUST yield ErrNotFound
-	// (NOT empty, NOT panic) because RLS hides the row from a foreign
-	// tenant's session GUC.
+	// RLS gate: same query under tenant B's scope MUST yield ErrNotFound
+	// (NOT empty, NOT panic) — RLS hides the row from a foreign tenant's
+	// session GUC. The explicit tenantID parameter (ADR 0062) is what
+	// binds the GUC; ctxB is preserved for cancellation/deadline only.
 	ctxB := withTenantCtxFromString(ctx, tenantB)
-	if _, err := leads.GetBySourcePurchaseID(ctxB, purchaseID); err == nil {
+	if _, err := leads.GetBySourcePurchaseID(ctxB, tenant.ID(tenantB), purchaseID); err == nil {
 		t.Fatal("RLS leak: tenant B saw tenant A's lead")
 	}
 }
@@ -221,7 +223,7 @@ func TestH9_DoubleDeliveryIdempotent(t *testing.T) {
 		tctx := withTenantCtxFromString(ctx, tenantID)
 		tx := pg.NewTransactor(pool)
 		leads := adapters.NewCrmLeadRepository(pool, tx)
-		got, err := leads.GetBySourcePurchaseID(tctx, purchaseID)
+		got, err := leads.GetBySourcePurchaseID(tctx, tenant.ID(tenantID), purchaseID)
 		return err == nil && got != nil
 	}, 5*time.Second, "first delivery never landed")
 
@@ -242,7 +244,7 @@ func TestH9_DoubleDeliveryIdempotent(t *testing.T) {
 	tx := pg.NewTransactor(pool)
 	leads := adapters.NewCrmLeadRepository(pool, tx)
 	tctx := withTenantCtxFromString(ctx, tenantID)
-	page, err := leads.ListPage(tctx, crmlead.ListFilter{}, pagination.Cursor{}, 50)
+	page, err := leads.ListPage(tctx, tenant.ID(tenantID), crmlead.ListFilter{}, pagination.Cursor{}, 50)
 	if err != nil {
 		t.Fatalf("ListPage: %v", err)
 	}

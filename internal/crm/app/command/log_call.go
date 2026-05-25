@@ -8,12 +8,17 @@ import (
 
 	"github.com/leadkart/leadkart-go/internal/crm/domain/calllog"
 	"github.com/leadkart/leadkart-go/internal/crm/domain/crmlead"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
 
 // LogCallCommand carries a call-log creation request. The handler
 // verifies the parent lead exists + is not terminal (a converted /
 // lost lead refuses new call logs — final dispositions are final).
+//
+// TenantID is the caller's tenant scope (TDL canon per ADR 0062 —
+// flows through as an explicit value, not via ctx-tenancy).
 type LogCallCommand struct {
+	TenantID             tenant.ID
 	LeadID               crmlead.ID
 	Outcome              calllog.Outcome
 	Notes                string
@@ -58,15 +63,19 @@ func NewLogCallHandler(leads crmlead.Repository, calls calllog.Repository, now f
 // Handle persists the call log + emits the V1 event via the repository's
 // outbox drain.
 func (h LogCallHandler) Handle(ctx context.Context, cmd LogCallCommand) (LogCallResult, error) {
+	if cmd.TenantID.IsZero() {
+		return LogCallResult{}, errors.New("crm log_call: tenant id required")
+	}
 	if cmd.LeadID.IsZero() {
 		return LogCallResult{}, errors.New("crm log_call: lead id required")
 	}
 	if cmd.LoggedByMembershipID == "" {
 		return LogCallResult{}, errors.New("crm log_call: logged-by membership id required")
 	}
-	// Load the lead first — gives us the tenant_id for the call-log row
-	// + lets us refuse calls against terminal leads.
-	lead, err := h.leads.GetByID(ctx, cmd.LeadID)
+	// Load the lead first — gates against terminal leads + verifies the
+	// caller's tenant scope actually owns this lead (RLS-equivalent
+	// rejection at the repository layer).
+	lead, err := h.leads.GetByID(ctx, cmd.TenantID, cmd.LeadID)
 	if err != nil {
 		if errors.Is(err, crmlead.ErrNotFound) {
 			return LogCallResult{}, ErrLeadNotFound
@@ -79,7 +88,7 @@ func (h LogCallHandler) Handle(ctx context.Context, cmd LogCallCommand) (LogCall
 
 	c, err := calllog.New(
 		h.newCallID(),
-		lead.TenantID(),
+		cmd.TenantID,
 		cmd.LeadID,
 		cmd.Outcome,
 		cmd.Notes,

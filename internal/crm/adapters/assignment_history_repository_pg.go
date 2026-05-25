@@ -17,7 +17,8 @@ import (
 )
 
 // AssignmentHistoryRepository is the pgx/sqlc-backed implementation of
-// [assignmenthistory.Repository]. Tenant-scoped.
+// [assignmenthistory.Repository]. Tenant-scoped. GUC bound from
+// explicit tenantID per ADR 0062 (TDL canon).
 type AssignmentHistoryRepository struct {
 	pool *pgxpool.Pool
 	tx   *pg.Transactor
@@ -31,12 +32,13 @@ func NewAssignmentHistoryRepository(pool *pgxpool.Pool, tx *pg.Transactor) *Assi
 
 // Add satisfies [assignmenthistory.Repository]. No events emitted from
 // this aggregate per ADR 0060 — the parent CrmLead's AssignedEvent is
-// the wire-side audit signal.
+// the wire-side audit signal. The aggregate carries its own TenantID —
+// the GUC is bound from e.TenantID() (TDL canon per ADR 0062).
 func (r *AssignmentHistoryRepository) Add(ctx context.Context, e *assignmenthistory.Entry) error {
 	if tx, ok := pg.TxFromContext(ctx); ok {
 		return r.addOnTx(ctx, tx, e)
 	}
-	return r.tx.WithinTxPgx(ctx, pg.TxScopeTenant, func(ctx context.Context, tx pgx.Tx) error {
+	return r.tx.WithinTxPgxTenant(ctx, e.TenantID().String(), func(ctx context.Context, tx pgx.Tx) error {
 		return r.addOnTx(ctx, tx, e)
 	})
 }
@@ -79,14 +81,15 @@ func (r *AssignmentHistoryRepository) addOnTx(ctx context.Context, tx pgx.Tx, e 
 	return nil
 }
 
-// GetByID satisfies [assignmenthistory.Repository].
-func (r *AssignmentHistoryRepository) GetByID(ctx context.Context, id assignmenthistory.ID) (*assignmenthistory.Entry, error) {
+// GetByID satisfies [assignmenthistory.Repository]. Tenant-scoped read —
+// GUC bound from the explicit tenantID parameter (TDL canon per ADR 0062).
+func (r *AssignmentHistoryRepository) GetByID(ctx context.Context, tenantID tenant.ID, id assignmenthistory.ID) (*assignmenthistory.Entry, error) {
 	hid, err := uuid.Parse(id.String())
 	if err != nil {
 		return nil, fmt.Errorf("crm assignment_history repo: parse id %q: %w", id, err)
 	}
 	var out *assignmenthistory.Entry
-	err = r.tx.WithinTxPgx(ctx, pg.TxScopeTenant, func(ctx context.Context, tx pgx.Tx) error {
+	err = r.tx.WithinTxPgxTenant(ctx, tenantID.String(), func(ctx context.Context, tx pgx.Tx) error {
 		q := r.q.WithTx(tx)
 		row, err := q.GetAssignmentHistoryByID(ctx, pgUUID(hid))
 		if err != nil {
@@ -104,14 +107,15 @@ func (r *AssignmentHistoryRepository) GetByID(ctx context.Context, id assignment
 	return out, nil
 }
 
-// ListByLead satisfies [assignmenthistory.Repository].
-func (r *AssignmentHistoryRepository) ListByLead(ctx context.Context, leadID crmlead.ID) ([]*assignmenthistory.Entry, error) {
+// ListByLead satisfies [assignmenthistory.Repository]. Tenant-scoped
+// read — GUC bound from the explicit tenantID parameter.
+func (r *AssignmentHistoryRepository) ListByLead(ctx context.Context, tenantID tenant.ID, leadID crmlead.ID) ([]*assignmenthistory.Entry, error) {
 	lid, err := uuid.Parse(leadID.String())
 	if err != nil {
 		return nil, fmt.Errorf("crm assignment_history repo: parse lead id %q: %w", leadID, err)
 	}
 	var out []*assignmenthistory.Entry
-	err = r.tx.WithinTxPgx(ctx, pg.TxScopeTenant, func(ctx context.Context, tx pgx.Tx) error {
+	err = r.tx.WithinTxPgxTenant(ctx, tenantID.String(), func(ctx context.Context, tx pgx.Tx) error {
 		q := r.q.WithTx(tx)
 		rows, err := q.ListAssignmentHistoryByLead(ctx, pgUUID(lid))
 		if err != nil {
