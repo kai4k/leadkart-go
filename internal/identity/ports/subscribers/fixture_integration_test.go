@@ -40,11 +40,12 @@ var sharedPG *pgtest.Container
 // Wraps m.Run() with goleak after-test check; replaces the deleted
 // testmain_integration_test.go.
 func TestMain(m *testing.M) {
-	c, code := pgtest.RunMain(m, pgtest.Config{
+	code := pgtest.RunMain(m, pgtest.Config{
 		Schemas: []string{"identity", "buildingblocks"},
 		Grants:  []string{"identity", "buildingblocks", "app"},
+	}, func(c *pgtest.Container) {
+		sharedPG = c
 	})
-	sharedPG = c
 
 	if err := goleak.Find(
 		goleak.IgnoreTopFunction("github.com/testcontainers/testcontainers-go.(*Reaper).connect.func1"),

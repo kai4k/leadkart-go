@@ -30,11 +30,12 @@
 //	var sharedPG *pgtest.Container
 //
 //	func TestMain(m *testing.M) {
-//	    c, code := pgtest.RunMain(m, pgtest.Config{
+//	    code := pgtest.RunMain(m, pgtest.Config{
 //	        Schemas: []string{"app", "identity"},
 //	        Grants:  []string{"identity"},
+//	    }, func(c *pgtest.Container) {
+//	        sharedPG = c   // ← runs BEFORE m.Run() so tests see non-nil
 //	    })
-//	    sharedPG = c
 //	    os.Exit(code)
 //	}
 //
@@ -189,21 +190,34 @@ func (c *Container) TruncateAll(t testing.TB) {
 
 // RunMain is the canonical TestMain entry point. Spins ONE postgres
 // container, applies migrations, provisions the leadkart_app role with
-// the configured grants, then runs m.Run(). Returns the container
-// (already wired) + the exit code; caller MUST call os.Exit(code) so
-// the deferred container cleanup runs.
+// the configured grants, calls the supplied setup callback with the
+// wired *Container (caller assigns to package-level sharedPG), THEN
+// runs m.Run(). Returns the exit code; caller MUST call os.Exit on it.
+//
+// The setup callback runs INSIDE RunMain BEFORE m.Run() — this is the
+// load-bearing ordering. The previous API (which returned the
+// *Container after m.Run had already finished) made the canonical
+// `var sharedPG *Container; ... sharedPG = c` pattern broken because
+// sharedPG was nil during test execution. setup-callback enforces the
+// correct order at compile time.
 //
 // Failure modes (Postgres image pull failure, migration failure, role
-// grant failure) all surface as fmt-printed errors + non-zero exit.
-// No goleak wrapping — packages that want goleak can wrap m.Run()
-// themselves OR rely on testcontainers-go's own background-goroutine
-// reaper ignore-list per the existing testmain_integration_test.go
-// pattern.
-func RunMain(m *testing.M, cfg Config) (*Container, int) {
+// grant failure) all surface as fmt-printed errors + exit code 1
+// returned WITHOUT m.Run() being invoked. The setup callback is
+// also not invoked on failure.
+//
+// No goleak wrapping — packages that want goleak run it after RunMain
+// returns (before os.Exit). See identity/adapters/fixture_integration_test.go
+// for the canonical wiring.
+func RunMain(m *testing.M, cfg Config, setup func(*Container)) int {
 	c, err := setupContainer(context.Background(), cfg)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "pgtest.RunMain: setup: %v\n", err)
-		return nil, 1
+		return 1
+	}
+
+	if setup != nil {
+		setup(c)
 	}
 
 	code := m.Run()
@@ -217,7 +231,7 @@ func RunMain(m *testing.M, cfg Config) (*Container, int) {
 	}
 	c.pool.Close()
 
-	return c, code
+	return code
 }
 
 // setupContainer is the actual bootstrap — pulled out of RunMain so

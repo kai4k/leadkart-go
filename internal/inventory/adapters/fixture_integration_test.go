@@ -82,15 +82,16 @@ var testNow = fixedNow
 // testmain_integration_test.go; merged here so all bootstrap
 // discipline lives in one file).
 func TestMain(m *testing.M) {
-	c, code := pgtest.RunMain(m, pgtest.Config{
+	code := pgtest.RunMain(m, pgtest.Config{
 		// USAGE on these schemas. "app" is implicit.
 		Schemas: []string{"identity", "inventory"},
 		// DML on these. identity is included because the inventory tests
 		// seed real tenant rows through the identity TenantRepository to
 		// satisfy the composite FK on inventory.products.
 		Grants: []string{"identity", "inventory"},
+	}, func(c *pgtest.Container) {
+		sharedPG = c
 	})
-	sharedPG = c
 
 	// Goroutine-leak check happens AFTER container cleanup;
 	// testcontainers' reaper goroutine + pgxpool's background

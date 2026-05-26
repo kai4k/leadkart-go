@@ -30,11 +30,12 @@ var sharedPG *pgtest.Container
 // TestMain bootstrap. audit-log writes go through buildingblocks
 // schema; identity schema is included for the FK from audit_log_entry.
 func TestMain(m *testing.M) {
-	c, code := pgtest.RunMain(m, pgtest.Config{
+	code := pgtest.RunMain(m, pgtest.Config{
 		Schemas: []string{"identity", "buildingblocks"},
 		Grants:  []string{"identity", "buildingblocks"},
+	}, func(c *pgtest.Container) {
+		sharedPG = c
 	})
-	sharedPG = c
 
 	if err := goleak.Find(
 		goleak.IgnoreTopFunction("github.com/testcontainers/testcontainers-go.(*Reaper).connect.func1"),
