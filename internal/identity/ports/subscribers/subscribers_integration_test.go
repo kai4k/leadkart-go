@@ -317,7 +317,11 @@ func TestRevokeFamilies_PersonLevelCascade(t *testing.T) {
 	t.Parallel()
 	fx := newFixture(t)
 	pubsub, _, stop := wireRouter(t, fx)
-	defer stop()
+	// t.Cleanup (not defer) — defer fires when the parent's body
+	// returns, which happens BEFORE parallel subtests execute (parent's
+	// t.Parallel + child's t.Parallel queue children for after-parent).
+	// t.Cleanup waits for the parent AND all subtests to complete.
+	t.Cleanup(stop)
 
 	// Build one Person + Tenant + Family per subcase upfront so
 	// subcases stay parallel-safe under the shared fixture (each

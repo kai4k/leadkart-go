@@ -41,9 +41,12 @@
 package adapters_test
 
 import (
+	"database/sql"
 	"errors"
 	"testing"
 	"time"
+
+	_ "github.com/jackc/pgx/v5/stdlib" // pgx driver for database/sql owner-DSN RLS-bypass
 
 	"github.com/leadkart/leadkart-go/internal/common/email"
 	"github.com/leadkart/leadkart-go/internal/common/ids"
@@ -203,9 +206,17 @@ func TestMembershipRepository_UpdateByID_DeactivateClearsActiveSlot(t *testing.T
 	// SQL-contract part 1: physical row state — UPDATE rewrote status
 	// from 'active' to 'inactive' (the partial-index predicate filters
 	// on status, so the slot is freed by status change, not by row
-	// removal). Direct SELECT bypassing the adapter.
+	// removal). Direct SELECT via OWNER DSN — bypasses RLS so we can
+	// inspect physical row state regardless of tenant scope (the app
+	// pool's RLS would hide rows whose tenant_id doesn't match the
+	// GUC, which is what we WANT to inspect physically).
+	ownerDB, openErr := sql.Open("pgx", sharedPG.OwnerDSN())
+	if openErr != nil {
+		t.Fatalf("open owner DB: %v", openErr)
+	}
+	defer func() { _ = ownerDB.Close() }()
 	var status string
-	if err := pool.QueryRow(t.Context(),
+	if err := ownerDB.QueryRowContext(t.Context(),
 		`SELECT status FROM identity.tenant_memberships WHERE id = $1`,
 		mA.ID().String(),
 	).Scan(&status); err != nil {

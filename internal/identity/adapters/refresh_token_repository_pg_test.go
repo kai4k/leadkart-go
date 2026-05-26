@@ -62,7 +62,11 @@ func hashOf(t *testing.T, s string) refreshtoken.TokenHash {
 func seedFamily(t *testing.T, persons *adapters.PersonRepository, tenants *adapters.TenantRepository, families *adapters.RefreshTokenFamilyRepository, secret string) *refreshtoken.Family {
 	t.Helper()
 	tn := seedTenant(t, tenants)
-	p := seedPerson(t, persons, "rt-"+ids.NewV7().String()[:8]+"@example.test")
+	// UUIDv7's leading chars are timestamp-derived → parallel tests in
+	// the same millisecond would collide on the [:8] prefix. Use the
+	// trailing random portion of the full UUID for email uniqueness.
+	full := ids.NewV7().String()
+	p := seedPerson(t, persons, "rt-"+full[len(full)-8:]+"@example.test")
 
 	fid := refreshtoken.FamilyID(ids.NewV7().String())
 	hash := hashOf(t, secret)

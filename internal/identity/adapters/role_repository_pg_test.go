@@ -38,9 +38,12 @@
 package adapters_test
 
 import (
+	"database/sql"
 	"errors"
 	"testing"
 	"time"
+
+	_ "github.com/jackc/pgx/v5/stdlib" // pgx driver for database/sql owner-DSN RLS-bypass
 
 	"github.com/leadkart/leadkart-go/internal/common/ids"
 	"github.com/leadkart/leadkart-go/internal/common/pg"
@@ -225,10 +228,16 @@ func TestRoleRepository_UpdateByID_Delete_PersistsSoftDeleteAndHidesFromGetByID(
 	}
 
 	// SQL-contract part 1: physical row survives the soft delete.
-	// Direct SELECT bypassing the adapter — proves is_deleted moved
-	// to true (UPDATE, not DELETE).
+	// Direct SELECT via the OWNER DSN — bypasses RLS so the SELECT can
+	// see the soft-deleted row regardless of tenant scope (the app
+	// pool's RLS would filter it out by partial-index predicate).
+	ownerDB, openErr := sql.Open("pgx", sharedPG.OwnerDSN())
+	if openErr != nil {
+		t.Fatalf("open owner DB: %v", openErr)
+	}
+	defer func() { _ = ownerDB.Close() }()
 	var isDeleted bool
-	if err := pool.QueryRow(t.Context(),
+	if err := ownerDB.QueryRowContext(t.Context(),
 		`SELECT is_deleted FROM identity.roles WHERE id = $1`,
 		r.ID().String(),
 	).Scan(&isDeleted); err != nil {

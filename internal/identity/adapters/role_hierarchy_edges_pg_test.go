@@ -43,10 +43,13 @@
 package adapters_test
 
 import (
+	"database/sql"
 	"errors"
 	"strings"
 	"testing"
 	"time"
+
+	_ "github.com/jackc/pgx/v5/stdlib" // pgx driver for database/sql owner-DSN RLS-bypass
 
 	"github.com/leadkart/leadkart-go/internal/common/ids"
 	"github.com/leadkart/leadkart-go/internal/common/pg"
@@ -227,14 +230,21 @@ func TestEdgeRepository_GetActiveByChild_FiltersSoftDeleted(t *testing.T) {
 	}
 
 	// SQL-contract part 1: physical row survives the soft delete.
-	// Direct SELECT bypassing the adapter (under platform scope to
-	// avoid the GUC dance) — proves removed_at moved off NULL.
+	// Direct SELECT via OWNER DSN — bypasses RLS so we can inspect the
+	// physical row state regardless of tenant scope (the app pool's
+	// RLS policy on this table uses raw current_setting::boolean which
+	// requires app.is_platform to be pre-set; the owner role has no
+	// such constraint).
+	ownerDB, openErr := sql.Open("pgx", sharedPG.OwnerDSN())
+	if openErr != nil {
+		t.Fatalf("open owner DB: %v", openErr)
+	}
+	defer func() { _ = ownerDB.Close() }()
 	var removedAt *time.Time
-	err := pool.QueryRow(t.Context(),
+	if err := ownerDB.QueryRowContext(t.Context(),
 		`SELECT removed_at FROM identity.role_hierarchy_edges WHERE id = $1`,
 		e.ID().String(),
-	).Scan(&removedAt)
-	if err != nil {
+	).Scan(&removedAt); err != nil {
 		t.Fatalf("direct SELECT for physical row: %v", err)
 	}
 	if removedAt == nil {
@@ -243,8 +253,7 @@ func TestEdgeRepository_GetActiveByChild_FiltersSoftDeleted(t *testing.T) {
 
 	// SQL-contract part 2: partial-index `WHERE removed_at IS NULL`
 	// hides the soft-deleted row from GetActiveByChild.
-	_, err = edges.GetActiveByChild(ctx, tn.ID(), c.ID())
-	if !errors.Is(err, rolehierarchy.ErrEdgeNotFound) {
+	if _, err := edges.GetActiveByChild(ctx, tn.ID(), c.ID()); !errors.Is(err, rolehierarchy.ErrEdgeNotFound) {
 		t.Fatalf("expected ErrEdgeNotFound after soft-delete (partial-index filter), got %v", err)
 	}
 }
