@@ -149,6 +149,139 @@ func TestRemoveUserManager_RoundTrip(t *testing.T) {
 	}
 }
 
+// TestAuthzHandlers_InputRejections — boundary-input table for the
+// AssignRole / RevokeRole / AssignManager handlers. Zero tenant /
+// membership / role / manager IDs short-circuit before any repo call.
+func TestAuthzHandlers_InputRejections(t *testing.T) {
+	t.Parallel()
+	zeroTID := tenant.ID("")
+	zeroMID := membership.ID("")
+	zeroRID := role.ID("")
+	someTID := tenant.ID("33333333-3333-3333-3333-333333333333")
+	someMID := membership.ID("11111111-1111-1111-1111-111111111111")
+	someRID := role.ID("44444444-4444-4444-4444-444444444444")
+	cases := []struct {
+		name string
+		fn   func() error
+	}{
+		{"AssignUserRole zero tenant", func() error {
+			return command.NewAssignUserRoleHandler(newFakeMembershipRepo(), func() time.Time { return testNow }).Handle(
+				t.Context(), command.AssignUserRoleCommand{TenantID: zeroTID, MembershipID: someMID, RoleID: someRID})
+		}},
+		{"AssignUserRole zero membership", func() error {
+			return command.NewAssignUserRoleHandler(newFakeMembershipRepo(), func() time.Time { return testNow }).Handle(
+				t.Context(), command.AssignUserRoleCommand{TenantID: someTID, MembershipID: zeroMID, RoleID: someRID})
+		}},
+		{"AssignUserRole zero role", func() error {
+			return command.NewAssignUserRoleHandler(newFakeMembershipRepo(), func() time.Time { return testNow }).Handle(
+				t.Context(), command.AssignUserRoleCommand{TenantID: someTID, MembershipID: someMID, RoleID: zeroRID})
+		}},
+		{"RevokeUserRole zero tenant", func() error {
+			return command.NewRevokeUserRoleHandler(newFakeMembershipRepo(), func() time.Time { return testNow }).Handle(
+				t.Context(), command.RevokeUserRoleCommand{TenantID: zeroTID, MembershipID: someMID, RoleID: someRID})
+		}},
+		{"RevokeUserRole zero membership", func() error {
+			return command.NewRevokeUserRoleHandler(newFakeMembershipRepo(), func() time.Time { return testNow }).Handle(
+				t.Context(), command.RevokeUserRoleCommand{TenantID: someTID, MembershipID: zeroMID, RoleID: someRID})
+		}},
+		{"RevokeUserRole zero role", func() error {
+			return command.NewRevokeUserRoleHandler(newFakeMembershipRepo(), func() time.Time { return testNow }).Handle(
+				t.Context(), command.RevokeUserRoleCommand{TenantID: someTID, MembershipID: someMID, RoleID: zeroRID})
+		}},
+		{"AssignUserManager zero manager", func() error {
+			return command.NewAssignUserManagerHandler(newFakeMembershipRepo(), func() time.Time { return testNow }).Handle(
+				t.Context(), command.AssignUserManagerCommand{TenantID: someTID, MembershipID: someMID, ManagerID: membership.ID("")})
+		}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			err := c.fn()
+			if err == nil {
+				t.Fatal("expected error, got nil")
+			}
+		})
+	}
+}
+
+// TestRevokeUserRole_NonExistentAssignment_Idempotent — Membership.RevokeRole
+// is idempotent on a role that isn't assigned; the handler returns
+// nil with no event.
+func TestRevokeUserRole_NonExistentAssignment_Idempotent(t *testing.T) {
+	t.Parallel()
+	repo := newFakeMembershipRepo()
+	m := newMembership(t) // no role assignments
+	_ = repo.Add(t.Context(), m) // arch-test:ignore-err
+
+	h := command.NewRevokeUserRoleHandler(repo, func() time.Time { return testNow })
+	err := h.Handle(t.Context(), command.RevokeUserRoleCommand{
+		TenantID:     tenant.ID("33333333-3333-3333-3333-333333333333"),
+		MembershipID: m.ID(),
+		RoleID:       role.ID("not-assigned"),
+	})
+	if err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	if got := m.PullEvents(); len(got) != 0 {
+		t.Errorf("PullEvents len = %d, want 0 (idempotent revoke)", len(got))
+	}
+}
+
+// TestReplaceUserPermissionOverrides_GrantsAndRevokes_BothApplied
+// — happy path with BOTH grants AND revokes in one call. Verifies the
+// closure handles the simultaneous overlay shape.
+func TestReplaceUserPermissionOverrides_GrantsAndRevokes_BothApplied(t *testing.T) {
+	t.Parallel()
+	repo := newFakeMembershipRepo()
+	m := newMembership(t)
+	_ = repo.Add(t.Context(), m) // arch-test:ignore-err
+
+	h := command.NewReplaceUserPermissionOverridesHandler(repo, func() time.Time { return testNow })
+	if err := h.Handle(t.Context(), command.ReplaceUserPermissionOverridesCommand{
+		TenantID:     tenant.ID("33333333-3333-3333-3333-333333333333"),
+		MembershipID: m.ID(),
+		GrantedNames: []string{
+			permission.IdentityPermissions.Tenants.View,
+			permission.IdentityPermissions.Users.Create,
+		},
+		RevokedNames: []string{
+			permission.IdentityPermissions.Users.Anonymise,
+			permission.IdentityPermissions.Tenants.Delete,
+		},
+	}); err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	if got := len(m.GrantedPermissions()); got != 2 {
+		t.Errorf("GrantedPermissions count = %d, want 2", got)
+	}
+	if got := len(m.RevokedPermissions()); got != 2 {
+		t.Errorf("RevokedPermissions count = %d, want 2", got)
+	}
+}
+
+// TestRemoveUserManager_AlreadyNoManager_Idempotent — Membership.RemoveManager
+// on a Membership that has no manager is a no-op; no event, no error.
+func TestRemoveUserManager_AlreadyNoManager_Idempotent(t *testing.T) {
+	t.Parallel()
+	repo := newFakeMembershipRepo()
+	m := newMembership(t) // ReportsTo is zero by default
+	_ = repo.Add(t.Context(), m) // arch-test:ignore-err
+
+	h := command.NewRemoveUserManagerHandler(repo, func() time.Time { return testNow })
+	if err := h.Handle(t.Context(), command.RemoveUserManagerCommand{
+		TenantID:     tenant.ID("33333333-3333-3333-3333-333333333333"),
+		MembershipID: m.ID(),
+	}); err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	if !m.ReportsTo().IsZero() {
+		t.Errorf("ReportsTo = %v, want zero (unchanged)", m.ReportsTo())
+	}
+	if got := m.PullEvents(); len(got) != 0 {
+		t.Errorf("PullEvents len = %d, want 0 (idempotent — no manager to remove)", len(got))
+	}
+}
+
 func TestAuthzHandlers_NotFound(t *testing.T) {
 	t.Parallel()
 	repo := newFakeMembershipRepo()

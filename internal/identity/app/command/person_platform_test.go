@@ -2,6 +2,7 @@ package command_test
 
 
 import (
+	"context"
 	"time"
 
 	"errors"
@@ -11,6 +12,21 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person/persontest"
 )
+
+// failingPersonsForPlatform overrides UpdateByID to surface errors —
+// shared across the GlobalSuspend / LiftSuspension / Anonymise /
+// UpdateProfile handlers.
+type failingPersonsForPlatform struct {
+	*persontest.FakeRepository
+	updateErr error
+}
+
+func (r *failingPersonsForPlatform) UpdateByID(ctx context.Context, id person.ID, fn func(*person.Person) (bool, error)) error {
+	if r.updateErr != nil {
+		return r.updateErr
+	}
+	return r.FakeRepository.UpdateByID(ctx, id, fn)
+}
 
 
 func TestGlobalSuspendPerson_Succeeds(t *testing.T) {
@@ -129,6 +145,144 @@ func TestPersonPlatformHandlers_NotFound(t *testing.T) {
 			err := c.fn()
 			if !errors.Is(err, command.ErrPersonNotFound) {
 				t.Errorf("err = %v, want ErrPersonNotFound", err)
+			}
+		})
+	}
+}
+
+// TestPersonPlatformHandlers_EmptyPersonID is the boundary-input table
+// — every handler rejects zero PersonID at the boundary before any
+// repo is touched.
+func TestPersonPlatformHandlers_EmptyPersonID(t *testing.T) {
+	t.Parallel()
+	repo := persontest.NewFakeRepository()
+	cases := []struct {
+		name string
+		fn   func() error
+	}{
+		{"GlobalSuspend", func() error {
+			return command.NewGlobalSuspendPersonHandler(repo, func() time.Time { return testNow }).Handle(t.Context(),
+				command.GlobalSuspendPersonCommand{PersonID: person.ID(""), Reason: "x"})
+		}},
+		{"LiftSuspension", func() error {
+			return command.NewLiftPersonGlobalSuspensionHandler(repo, func() time.Time { return testNow }).Handle(t.Context(),
+				command.LiftPersonGlobalSuspensionCommand{PersonID: person.ID("")})
+		}},
+		{"Anonymise", func() error {
+			return command.NewAnonymisePersonHandler(repo, func() time.Time { return testNow }).Handle(t.Context(),
+				command.AnonymisePersonCommand{PersonID: person.ID("")})
+		}},
+		{"UpdateProfile", func() error {
+			return command.NewUpdatePersonProfileHandler(repo, func() time.Time { return testNow }).Handle(t.Context(),
+				command.UpdatePersonProfileCommand{PersonID: person.ID(""), FirstName: "x", LastName: "y"})
+		}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			err := c.fn()
+			if err == nil {
+				t.Fatal("expected error for empty PersonID, got nil")
+			}
+		})
+	}
+}
+
+// TestPersonPlatformHandlers_AggregateRejection_Wrapped — for each
+// handler, drive the aggregate to reject (empty reason / empty name /
+// already-anonymised-cannot-update-profile) and assert the error wraps
+// person.ErrInvalid (i.e. handler propagates through fmt.Errorf wrap).
+func TestPersonPlatformHandlers_AggregateRejection_Wrapped(t *testing.T) {
+	t.Parallel()
+
+	t.Run("UpdateProfile empty first name", func(t *testing.T) {
+		t.Parallel()
+		p := newPersonWithPassword(t, "irrelevant")
+		repo := seedPersonRepo(t, p)
+		h := command.NewUpdatePersonProfileHandler(repo, func() time.Time { return testNow })
+		err := h.Handle(t.Context(), command.UpdatePersonProfileCommand{
+			PersonID:  p.ID(),
+			FirstName: "", // aggregate rejects
+			LastName:  "x",
+		})
+		if !errors.Is(err, person.ErrInvalid) {
+			t.Fatalf("err = %v, want wraps person.ErrInvalid", err)
+		}
+	})
+
+	t.Run("UpdateProfile empty last name", func(t *testing.T) {
+		t.Parallel()
+		p := newPersonWithPassword(t, "irrelevant")
+		repo := seedPersonRepo(t, p)
+		h := command.NewUpdatePersonProfileHandler(repo, func() time.Time { return testNow })
+		err := h.Handle(t.Context(), command.UpdatePersonProfileCommand{
+			PersonID:  p.ID(),
+			FirstName: "x",
+			LastName:  "", // aggregate rejects
+		})
+		if !errors.Is(err, person.ErrInvalid) {
+			t.Fatalf("err = %v, want wraps person.ErrInvalid", err)
+		}
+	})
+
+	t.Run("UpdateProfile on anonymised person rejected", func(t *testing.T) {
+		t.Parallel()
+		p := newPersonWithPassword(t, "irrelevant")
+		if err := p.Anonymise(testNow); err != nil {
+			t.Fatalf("Anonymise setup: %v", err)
+		}
+		repo := seedPersonRepo(t, p)
+		h := command.NewUpdatePersonProfileHandler(repo, func() time.Time { return testNow })
+		err := h.Handle(t.Context(), command.UpdatePersonProfileCommand{
+			PersonID:  p.ID(),
+			FirstName: "Renamed",
+			LastName:  "Anonymised",
+		})
+		if !errors.Is(err, person.ErrInvalid) {
+			t.Fatalf("err = %v, want wraps person.ErrInvalid (cannot update anonymised)", err)
+		}
+	})
+}
+
+// TestPersonPlatformHandlers_GenericRepoError_Wrapped — for each
+// handler, generic UpdateByID failure (non-NotFound) MUST wrap, not
+// collapse to ErrPersonNotFound. Operators see the alert.
+func TestPersonPlatformHandlers_GenericRepoError_Wrapped(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		fn   func(repo person.Repository) error
+	}{
+		{"GlobalSuspend", func(repo person.Repository) error {
+			return command.NewGlobalSuspendPersonHandler(repo, func() time.Time { return testNow }).Handle(t.Context(),
+				command.GlobalSuspendPersonCommand{PersonID: person.ID("some-id"), Reason: "x"})
+		}},
+		{"LiftSuspension", func(repo person.Repository) error {
+			return command.NewLiftPersonGlobalSuspensionHandler(repo, func() time.Time { return testNow }).Handle(t.Context(),
+				command.LiftPersonGlobalSuspensionCommand{PersonID: person.ID("some-id")})
+		}},
+		{"Anonymise", func(repo person.Repository) error {
+			return command.NewAnonymisePersonHandler(repo, func() time.Time { return testNow }).Handle(t.Context(),
+				command.AnonymisePersonCommand{PersonID: person.ID("some-id")})
+		}},
+		{"UpdateProfile", func(repo person.Repository) error {
+			return command.NewUpdatePersonProfileHandler(repo, func() time.Time { return testNow }).Handle(t.Context(),
+				command.UpdatePersonProfileCommand{PersonID: person.ID("some-id"), FirstName: "x", LastName: "y"})
+		}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			repo := &failingPersonsForPlatform{
+				FakeRepository: persontest.NewFakeRepository(),
+				updateErr:      errBoom,
+			}
+			err := c.fn(repo)
+			if !errors.Is(err, errBoom) {
+				t.Fatalf("err = %v, want chain includes errBoom", err)
+			}
+			if errors.Is(err, command.ErrPersonNotFound) {
+				t.Fatal("generic repo error must NOT collapse to ErrPersonNotFound")
 			}
 		})
 	}

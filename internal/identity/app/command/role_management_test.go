@@ -305,6 +305,188 @@ func TestSetRoleParent_RejectsSelfReference(t *testing.T) {
 	}
 }
 
+// ----- CreateRole — input + parent-edge branch coverage --------------------
+
+// failingEdgesRepo overrides Add only — uses to inject specific
+// rolehierarchy.Err* values per the CreateRole parent-edge arm.
+type failingEdgesRepo struct {
+	*rolehierarchytest.FakeRepository
+	addErr error
+}
+
+func (r *failingEdgesRepo) Add(ctx context.Context, e *rolehierarchy.Edge) error {
+	if r.addErr != nil {
+		return r.addErr
+	}
+	return r.FakeRepository.Add(ctx, e)
+}
+
+// failingTxUoW returns a fixed error from WithinTx (DB driver / tx
+// error scenarios).
+type failingTxUoW struct {
+	err error
+}
+
+func (u failingTxUoW) WithinTx(_ context.Context, _ pg.TxScope, _ func(context.Context) error) error {
+	return u.err
+}
+
+func TestCreateRole_RejectsZeroTenantID(t *testing.T) {
+	t.Parallel()
+	repo := newFakeRoleRepo()
+	h := command.NewCreateRoleHandler(repo, newFakeEdgeRepo(), fakeUoW{}, nowFunc, func() role.ID { return role.ID(ids.NewV7().String()) }, func() rolehierarchy.ID { return rolehierarchy.ID(ids.NewV7().String()) })
+	_, err := h.Handle(t.Context(), command.CreateRoleCommand{
+		TenantID:       tenant.ID(""),
+		Name:           "Sales Lead",
+		HierarchyLevel: 40,
+	})
+	if err == nil {
+		t.Fatal("expected error for zero TenantID, got nil")
+	}
+}
+
+func TestCreateRole_AggregateInvariant_EmptyName(t *testing.T) {
+	t.Parallel()
+	repo := newFakeRoleRepo()
+	h := command.NewCreateRoleHandler(repo, newFakeEdgeRepo(), fakeUoW{}, nowFunc, func() role.ID { return role.ID(ids.NewV7().String()) }, func() rolehierarchy.ID { return rolehierarchy.ID(ids.NewV7().String()) })
+	_, err := h.Handle(t.Context(), command.CreateRoleCommand{
+		TenantID:       tenant.ID("33333333-3333-3333-3333-333333333333"),
+		Name:           "", // aggregate ctor rejects
+		HierarchyLevel: 40,
+	})
+	if !errors.Is(err, role.ErrInvalid) {
+		t.Fatalf("err = %v, want wraps role.ErrInvalid", err)
+	}
+}
+
+func TestCreateRole_AggregateInvariant_BadHierarchyLevel(t *testing.T) {
+	t.Parallel()
+	repo := newFakeRoleRepo()
+	h := command.NewCreateRoleHandler(repo, newFakeEdgeRepo(), fakeUoW{}, nowFunc, func() role.ID { return role.ID(ids.NewV7().String()) }, func() rolehierarchy.ID { return rolehierarchy.ID(ids.NewV7().String()) })
+	_, err := h.Handle(t.Context(), command.CreateRoleCommand{
+		TenantID:       tenant.ID("33333333-3333-3333-3333-333333333333"),
+		Name:           "Sales Lead",
+		HierarchyLevel: 9999, // out of [0,99] range
+	})
+	if !errors.Is(err, role.ErrInvalid) {
+		t.Fatalf("err = %v, want wraps role.ErrInvalid", err)
+	}
+}
+
+// TestCreateRole_ParentEdgeRequiresWiring — when ParentRoleID is set
+// but edges OR uow is nil, the handler refuses with the explicit
+// "parent edge requires edges repo + uow wiring" error. Composition-
+// time mistake, not a user error.
+func TestCreateRole_ParentEdgeRequiresWiring(t *testing.T) {
+	t.Parallel()
+	repo := newFakeRoleRepo()
+	parent := newCustomRole(t, repo, "Manager")
+	cases := []struct {
+		name  string
+		edges rolehierarchy.Repository
+		uow   pg.UnitOfWork
+	}{
+		{"nil edges + nil uow", nil, nil},
+		{"nil edges + ok uow", nil, fakeUoW{}},
+		{"ok edges + nil uow", newFakeEdgeRepo(), nil},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			h := command.NewCreateRoleHandler(repo, c.edges, c.uow, nowFunc, func() role.ID { return role.ID(ids.NewV7().String()) }, func() rolehierarchy.ID { return rolehierarchy.ID(ids.NewV7().String()) })
+			_, err := h.Handle(t.Context(), command.CreateRoleCommand{
+				TenantID:       tenant.ID("33333333-3333-3333-3333-333333333333"),
+				Name:           "Child Role",
+				HierarchyLevel: 40,
+				ParentRoleID:   parent.ID(),
+			})
+			if err == nil {
+				t.Fatal("expected wiring error for nil edges/uow, got nil")
+			}
+		})
+	}
+}
+
+// TestCreateRole_ParentEdgeError_Propagated — each of the
+// rolehierarchy.Err* sentinels MUST propagate unwrapped (i.e. errors.Is
+// matches the original). Per the handler's switch on ErrCycle /
+// ErrCrossTenant / ErrSelfReference / ErrEdgeAlreadyExists.
+func TestCreateRole_ParentEdgeError_Propagated(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		err  error
+	}{
+		{"ErrCycle", rolehierarchy.ErrCycle},
+		{"ErrCrossTenant", rolehierarchy.ErrCrossTenant},
+		{"ErrEdgeAlreadyExists", rolehierarchy.ErrEdgeAlreadyExists},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			repo := newFakeRoleRepo()
+			parent := newCustomRole(t, repo, "Manager_"+c.name)
+			edges := &failingEdgesRepo{
+				FakeRepository: rolehierarchytest.NewFakeRepository(),
+				addErr:         c.err,
+			}
+			h := command.NewCreateRoleHandler(repo, edges, fakeUoW{}, nowFunc, func() role.ID { return role.ID(ids.NewV7().String()) }, func() rolehierarchy.ID { return rolehierarchy.ID(ids.NewV7().String()) })
+			_, err := h.Handle(t.Context(), command.CreateRoleCommand{
+				TenantID:       tenant.ID("33333333-3333-3333-3333-333333333333"),
+				Name:           "Child Role " + c.name,
+				HierarchyLevel: 40,
+				ParentRoleID:   parent.ID(),
+			})
+			if !errors.Is(err, c.err) {
+				t.Fatalf("err = %v, want errors.Is(_, %v)", err, c.err)
+			}
+		})
+	}
+}
+
+// TestCreateRole_ParentEdge_GenericTxError_Wrapped — generic non-
+// sentinel tx error wraps with "create_role: %w" rather than
+// propagating cleanly. Lets operators see the alert.
+func TestCreateRole_ParentEdge_GenericTxError_Wrapped(t *testing.T) {
+	t.Parallel()
+	repo := newFakeRoleRepo()
+	parent := newCustomRole(t, repo, "Manager")
+	// failing tx — never invokes the inner closure, returns errBoom.
+	uow := failingTxUoW{err: errBoom}
+	h := command.NewCreateRoleHandler(repo, newFakeEdgeRepo(), uow, nowFunc, func() role.ID { return role.ID(ids.NewV7().String()) }, func() rolehierarchy.ID { return rolehierarchy.ID(ids.NewV7().String()) })
+	_, err := h.Handle(t.Context(), command.CreateRoleCommand{
+		TenantID:       tenant.ID("33333333-3333-3333-3333-333333333333"),
+		Name:           "Child Role",
+		HierarchyLevel: 40,
+		ParentRoleID:   parent.ID(),
+	})
+	if !errors.Is(err, errBoom) {
+		t.Fatalf("err = %v, want chain includes errBoom", err)
+	}
+}
+
+// TestUpdateRole_HierarchyLevelChange — Role.ChangeHierarchyLevel
+// emits NO event (operational concern per the aggregate doc). Test
+// asserts state mutation only.
+func TestUpdateRole_HierarchyLevelChange(t *testing.T) {
+	t.Parallel()
+	repo := newFakeRoleRepo()
+	r := newCustomRole(t, repo, "Sales Manager")
+	beforeLevel := r.HierarchyLevel()
+	newLevel := beforeLevel + 5 // any in [0,99]; default 50 → 55
+	h := command.NewUpdateRoleHandler(repo, func() time.Time { return testNow })
+	if err := h.Handle(t.Context(), command.UpdateRoleCommand{
+		TenantID:       tenant.ID("33333333-3333-3333-3333-333333333333"),
+		RoleID:         r.ID(),
+		HierarchyLevel: newLevel,
+	}); err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	if got := r.HierarchyLevel(); got != newLevel {
+		t.Errorf("HierarchyLevel = %d, want %d", got, newLevel)
+	}
+}
+
 func TestSetRoleParent_RejectsMultiHopCycle(t *testing.T) {
 	t.Parallel()
 	repo := newFakeRoleRepo()
