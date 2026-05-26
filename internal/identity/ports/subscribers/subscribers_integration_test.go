@@ -1,7 +1,19 @@
 //go:build integration
 
+// arch-test:no-timeout-needed — every test in this file uses the shared
+//   pgtest container (per-package); pgxpool internal conn timeouts +
+//   package-level `task ci:test:int -timeout=15m` already bound execution.
+//   Per-test context.WithTimeout would be belt-and-suspenders against the
+//   shared-pool + parallel-with-RLS canon shape.
+//
+// arch-test:parallel-safe — every Test* uses the shared pgtest container
+//   + fresh tenant/person/family IDs per test; RLS isolates rows by
+//   tenant so parallel runs cannot see each others state. Per-test
+//   miniredis (in-memory) prevents cache pollution. Brandur Postgres
+//   canon + TDL Wild Workouts canon.
+//
 // arch-test:no-synctest — subscriber tests exercise the Watermill router
-// goroutine against a real Postgres testcontainer; the polled `families`
+// goroutine against a real Postgres testcontainer; the polled families
 // row signals subscriber commit across the SQL driver boundary, which is
 // opaque to testing/synctest's virtual clock.
 
@@ -16,8 +28,6 @@ import (
 	"errors"
 	"io"
 	"log/slog"
-	"path/filepath"
-	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -27,13 +37,8 @@ import (
 	"github.com/ThreeDotsLabs/watermill/pubsub/gochannel"
 	"github.com/alicebob/miniredis/v2"
 	"github.com/google/uuid"
-	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/pressly/goose/v3"
 	"github.com/redis/go-redis/v9"
-	"github.com/testcontainers/testcontainers-go"
-	"github.com/testcontainers/testcontainers-go/modules/postgres"
-	"github.com/testcontainers/testcontainers-go/wait"
 
 	"github.com/leadkart/leadkart-go/internal/common/email"
 	"github.com/leadkart/leadkart-go/internal/common/ids"
@@ -69,78 +74,17 @@ type fixture struct {
 	miniredis   *miniredis.Miniredis
 }
 
+// newFixture returns a per-test fixture backed by the SHARED package-
+// scoped Postgres pool (see fixture_integration_test.go TestMain).
+// The pool is shared; the miniredis + cache facade + repository
+// instances are per-test because they hold per-test in-memory state
+// or are cheap to construct.
+//
+// Per-test isolation: each call creates aggregates under a fresh
+// tenant.ID (via seedTenant) so RLS prevents cross-test reads.
 func newFixture(t *testing.T) *fixture {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(t.Context(), 90*time.Second)
-	defer cancel()
-
-	c, err := postgres.Run(ctx,
-		"postgres:17-alpine",
-		postgres.WithDatabase("leadkart_test"),
-		postgres.WithUsername("leadkart"),
-		postgres.WithPassword("leadkart_test"),
-		testcontainers.WithWaitStrategy(
-			wait.ForLog("database system is ready to accept connections").
-				WithOccurrence(2).WithStartupTimeout(60*time.Second),
-		),
-	)
-	if err != nil {
-		t.Fatalf("start postgres: %v", err)
-	}
-	t.Cleanup(func() {
-		// Cleanup runs after t.Context() is cancelled — must use Background.
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		_ = c.Terminate(ctx)
-	})
-
-	ownerDSN, err := c.ConnectionString(ctx, "sslmode=disable")
-	if err != nil {
-		t.Fatalf("dsn: %v", err)
-	}
-
-	gooseDB, err := goose.OpenDBWithDriver("pgx", ownerDSN)
-	if err != nil {
-		t.Fatalf("goose open: %v", err)
-	}
-	if err := pg.EnsureGooseDialect(); err != nil {
-		_ = gooseDB.Close()
-		t.Fatalf("set dialect: %v", err)
-	}
-	if err := goose.UpContext(ctx, gooseDB, migrationsDir(t)); err != nil {
-		_ = gooseDB.Close()
-		t.Fatalf("goose up: %v", err)
-	}
-	for _, s := range []string{
-		`CREATE ROLE leadkart_app LOGIN PASSWORD 'leadkart_app_pw' NOSUPERUSER NOINHERIT NOCREATEROLE NOCREATEDB`,
-		`GRANT USAGE ON SCHEMA app, identity, buildingblocks TO leadkart_app`,
-		`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA identity TO leadkart_app`,
-		`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA buildingblocks TO leadkart_app`,
-		`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA app TO leadkart_app`,
-		`GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA app TO leadkart_app`,
-	} {
-		if _, err := gooseDB.ExecContext(ctx, s); err != nil {
-			_ = gooseDB.Close()
-			t.Fatalf("provision app role: %s: %v", s, err)
-		}
-	}
-	_ = gooseDB.Close()
-
-	host, err := c.Host(ctx)
-	if err != nil {
-		t.Fatalf("host: %v", err)
-	}
-	port, err := c.MappedPort(ctx, "5432/tcp")
-	if err != nil {
-		t.Fatalf("port: %v", err)
-	}
-	appDSN := "postgres://leadkart_app:leadkart_app_pw@" + host + ":" + port.Port() + "/leadkart_test?sslmode=disable"
-
-	pool, err := pgxpool.New(ctx, appDSN)
-	if err != nil {
-		t.Fatalf("pool: %v", err)
-	}
-	t.Cleanup(pool.Close)
+	pool := sharedPG.Pool()
 
 	tx := pg.NewTransactor(pool)
 	persons := adapters.NewPersonRepository(pool, tx)
@@ -148,6 +92,8 @@ func newFixture(t *testing.T) *fixture {
 	// Real HybridCache + SecurityStampCache against miniredis so the
 	// cascade subscriber's invalidation step runs end-to-end against
 	// the same facade production wires (audit-checklist.md §12b).
+	// miniredis is in-memory + per-test (RunT auto-cleans on test end);
+	// cheap (~10ms) — kept per-test to avoid cross-test cache pollution.
 	store := miniredis.RunT(t)
 	redisCli := redis.NewClient(&redis.Options{Addr: store.Addr()})
 	t.Cleanup(func() { _ = redisCli.Close() })
@@ -169,15 +115,6 @@ func newFixture(t *testing.T) *fixture {
 		stampCache: adapters.NewSecurityStampCache(hc, persons),
 		miniredis:  store,
 	}
-}
-
-func migrationsDir(t *testing.T) string {
-	t.Helper()
-	_, here, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("runtime.Caller failed")
-	}
-	return filepath.Join(filepath.Dir(here), "..", "..", "..", "..", "migrations")
 }
 
 const fxStrongHash = "$argon2id$v=19$m=19456,t=2,p=1$c2FsdHkx$abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
@@ -358,12 +295,130 @@ func waitFor(t *testing.T, cond func() bool, timeout time.Duration, msg string) 
 	t.Fatal(msg)
 }
 
-func TestRevokeFamilies_OnPasswordChanged(t *testing.T) {
+// TestRevokeFamilies_PersonLevelCascade is the consolidated cascade
+// gate for all four Person-level revocation triggers per ADR 0021 +
+// ADR 0029. The four subscribers (password-changed, anonymised,
+// globally-suspended, email-changed) share the SAME wiring shape —
+// only the event payload + expected `revoke_reason` string differ.
+// Table-driving them into one test cuts four pgtest-bound runs to a
+// single wired-fixture boot with four t.Run subcases.
+//
+// SQL-contract coverage retained:
+//   - subscriber finds Active families via ListActiveForPerson (RLS-
+//     bypassed platform query)
+//   - revoke transitions land via UpdateByID (UPDATE → revoked_at +
+//     revoke_reason write)
+//   - reason string is what the subscriber writes (cross-driver
+//     payload propagation contract)
+//
+// Per-aggregate state-machine + business-rule coverage lives in
+// refreshtokentest.FakeRepository unit tests (ADR 0062).
+func TestRevokeFamilies_PersonLevelCascade(t *testing.T) {
+	t.Parallel()
+	fx := newFixture(t)
+	pubsub, _, stop := wireRouter(t, fx)
+	// t.Cleanup (not defer) — defer fires when the parent's body
+	// returns, which happens BEFORE parallel subtests execute (parent's
+	// t.Parallel + child's t.Parallel queue children for after-parent).
+	// t.Cleanup waits for the parent AND all subtests to complete.
+	t.Cleanup(stop)
+
+	// Build one Person + Tenant + Family per subcase upfront so
+	// subcases stay parallel-safe under the shared fixture (each
+	// subcase has its own PersonID + Family rows; no cross-case
+	// shared mutable state).
+	type personLevelCase struct {
+		name       string
+		seedEmail  string
+		event      func(pid uuid.UUID) integrationevents.Event
+		wantReason string
+	}
+	cases := []personLevelCase{
+		{
+			name:      "PasswordChanged",
+			seedEmail: "alice@flow.test",
+			event: func(pid uuid.UUID) integrationevents.Event {
+				return integrationevents.PersonPasswordChangedV1{
+					PersonID:      pid,
+					OccurredAtUTC: time.Now().UTC(),
+				}
+			},
+			wantReason: "password_changed",
+		},
+		{
+			name:      "Anonymised",
+			seedEmail: "anon@flow.test",
+			event: func(pid uuid.UUID) integrationevents.Event {
+				return integrationevents.PersonAnonymisedV1{
+					PersonID:      pid,
+					OccurredAtUTC: time.Now().UTC(),
+				}
+			},
+			wantReason: "person_anonymised",
+		},
+		{
+			name:      "GloballySuspended",
+			seedEmail: "suspended@flow.test",
+			event: func(pid uuid.UUID) integrationevents.Event {
+				return integrationevents.PersonGloballySuspendedV1{
+					PersonID:      pid,
+					Reason:        "compliance: cross-tenant fraud 2026-05-07",
+					OccurredAtUTC: time.Now().UTC(),
+				}
+			},
+			wantReason: "globally_suspended",
+		},
+		{
+			name:      "EmailChanged",
+			seedEmail: "old-email@flow.test",
+			event: func(pid uuid.UUID) integrationevents.Event {
+				return integrationevents.PersonEmailChangedV1{
+					PersonID:      pid,
+					OldEmail:      "old-email@flow.test",
+					NewEmail:      "new-email@flow.test",
+					OccurredAtUTC: time.Now().UTC(),
+				}
+			},
+			wantReason: "email_changed",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			// Each subcase owns its own Person + Family rows under
+			// the shared subscriber + router. PersonID isolation via
+			// unique email seed prevents cross-subcase interference.
+			p := fx.seedPerson(t, tc.seedEmail)
+			tn := fx.seedTenant(t)
+			f := fx.seedFamily(t, p, tn)
+
+			pidUUID, _ := uuid.Parse(p.ID().String())
+			publishEvent(t, pubsub, tc.event(pidUUID), uuid.Nil)
+
+			waitFor(t, func() bool {
+				got, err := fx.families.GetByID(t.Context(), f.ID())
+				if err != nil {
+					return false
+				}
+				return got.IsRevoked() && got.RevokeReason() == tc.wantReason
+			}, 3*time.Second, "subscriber did not revoke family with reason="+tc.wantReason)
+		})
+	}
+}
+
+// TestRevokeFamilies_PasswordChanged_RevokesAllPersonFamilies — the
+// password-changed case is special: a single event must revoke EVERY
+// active family for the Person (multi-device logout). Kept as its own
+// test because the assertion shape differs from the single-family
+// cases above (list-all-active vs. specific-family lookup).
+func TestRevokeFamilies_PasswordChanged_RevokesAllPersonFamilies(t *testing.T) {
+	t.Parallel()
 	fx := newFixture(t)
 	pubsub, _, stop := wireRouter(t, fx)
 	defer stop()
 
-	p := fx.seedPerson(t, "alice@flow.test")
+	p := fx.seedPerson(t, "multi-device@flow.test")
 	tn := fx.seedTenant(t)
 	f1 := fx.seedFamily(t, p, tn)
 	f2 := fx.seedFamily(t, p, tn)
@@ -380,99 +435,22 @@ func TestRevokeFamilies_OnPasswordChanged(t *testing.T) {
 			return false
 		}
 		return len(actives) == 0
-	}, 3*time.Second, "subscriber did not revoke families within 3s")
+	}, 3*time.Second, "subscriber did not revoke all families within 3s")
 
-	// Verify both were revoked with reason="password_changed".
 	for _, fid := range []refreshtoken.FamilyID{f1.ID(), f2.ID()} {
 		got, err := fx.families.GetByID(t.Context(), fid)
 		if err != nil {
 			t.Fatalf("GetByID %s: %v", fid, err)
 		}
-		if !got.IsRevoked() {
-			t.Fatalf("family %s not revoked", fid)
-		}
-		if got.RevokeReason() != "password_changed" {
-			t.Fatalf("family %s reason: got %q want password_changed", fid, got.RevokeReason())
+		if !got.IsRevoked() || got.RevokeReason() != "password_changed" {
+			t.Fatalf("family %s: revoked=%v reason=%q (want revoked=true reason=password_changed)",
+				fid, got.IsRevoked(), got.RevokeReason())
 		}
 	}
 }
 
-func TestRevokeFamilies_OnAnonymised(t *testing.T) {
-	fx := newFixture(t)
-	pubsub, _, stop := wireRouter(t, fx)
-	defer stop()
-
-	p := fx.seedPerson(t, "anon@flow.test")
-	tn := fx.seedTenant(t)
-	f := fx.seedFamily(t, p, tn)
-
-	pidUUID, _ := uuid.Parse(p.ID().String())
-	publishEvent(t, pubsub, integrationevents.PersonAnonymisedV1{
-		PersonID:      pidUUID,
-		OccurredAtUTC: time.Now().UTC(),
-	}, uuid.Nil)
-
-	waitFor(t, func() bool {
-		got, err := fx.families.GetByID(t.Context(), f.ID())
-		if err != nil {
-			return false
-		}
-		return got.IsRevoked() && got.RevokeReason() == "person_anonymised"
-	}, 3*time.Second, "anonymise subscriber did not revoke family")
-}
-
-func TestRevokeFamilies_OnGloballySuspended(t *testing.T) {
-	fx := newFixture(t)
-	pubsub, _, stop := wireRouter(t, fx)
-	defer stop()
-
-	p := fx.seedPerson(t, "suspended@flow.test")
-	tn := fx.seedTenant(t)
-	f := fx.seedFamily(t, p, tn)
-
-	pidUUID, _ := uuid.Parse(p.ID().String())
-	publishEvent(t, pubsub, integrationevents.PersonGloballySuspendedV1{
-		PersonID:      pidUUID,
-		Reason:        "compliance: cross-tenant fraud 2026-05-07",
-		OccurredAtUTC: time.Now().UTC(),
-	}, uuid.Nil)
-
-	waitFor(t, func() bool {
-		got, err := fx.families.GetByID(t.Context(), f.ID())
-		if err != nil {
-			return false
-		}
-		return got.IsRevoked() && got.RevokeReason() == "globally_suspended"
-	}, 3*time.Second, "globally-suspended subscriber did not revoke family")
-}
-
-func TestRevokeFamilies_OnEmailChanged(t *testing.T) {
-	fx := newFixture(t)
-	pubsub, _, stop := wireRouter(t, fx)
-	defer stop()
-
-	p := fx.seedPerson(t, "old-email@flow.test")
-	tn := fx.seedTenant(t)
-	f := fx.seedFamily(t, p, tn)
-
-	pidUUID, _ := uuid.Parse(p.ID().String())
-	publishEvent(t, pubsub, integrationevents.PersonEmailChangedV1{
-		PersonID:      pidUUID,
-		OldEmail:      "old-email@flow.test",
-		NewEmail:      "new-email@flow.test",
-		OccurredAtUTC: time.Now().UTC(),
-	}, uuid.Nil)
-
-	waitFor(t, func() bool {
-		got, err := fx.families.GetByID(t.Context(), f.ID())
-		if err != nil {
-			return false
-		}
-		return got.IsRevoked() && got.RevokeReason() == "email_changed"
-	}, 3*time.Second, "email-changed subscriber did not revoke family")
-}
-
 func TestRevokeFamilies_OnMembershipDeactivated_NarrowsToTenantScope(t *testing.T) {
+	t.Parallel()
 	// MembershipDeactivated cascade is narrower than the Person-level
 	// events: ONLY families bound to that (PersonID, TenantID) tuple
 	// die. Other-tenant families for the same Person stay alive.
@@ -515,10 +493,34 @@ func TestRevokeFamilies_OnMembershipDeactivated_NarrowsToTenantScope(t *testing.
 	}
 }
 
+// TestRevokeFamilies_NoActiveFamilies_NoOp covers the empty-list
+// short-circuit: a PersonLevel event for a Person with zero active
+// families must mark the run successful AND must NOT issue a spurious
+// UPDATE-all on the families table (e.g., from a missing predicate).
+//
+// Two halves of the SQL contract:
+//
+//   1. Subscriber-ran observable: an audit row exists for the event
+//      action (router middleware contract).
+//   2. No spurious mutation: a baseline-seeded family from a DIFFERENT
+//      Person remains untouched after the subscriber runs — proves
+//      the empty-list path didn't fall through to a row-set-bypass
+//      UPDATE that would have flipped is_revoked=true on every family.
+//
+// Without (2) the test reduces to "subscriber ran" — already covered
+// by TestRouter_FullStack in common/messaging/router_test.go. The
+// no-spurious-mutation assertion is the SQL-specific contract.
 func TestRevokeFamilies_NoActiveFamilies_NoOp(t *testing.T) {
+	t.Parallel()
 	fx := newFixture(t)
 	pubsub, _, stop := wireRouter(t, fx)
 	defer stop()
+
+	// Sentinel family for an UNRELATED Person — must stay Active after
+	// the empty-list noop runs for the target Person.
+	other := fx.seedPerson(t, "untouched@flow.test")
+	otherTn := fx.seedTenant(t)
+	sentinel := fx.seedFamily(t, other, otherTn)
 
 	p := fx.seedPerson(t, "noop@flow.test")
 	pidUUID, _ := uuid.Parse(p.ID().String())
@@ -528,13 +530,25 @@ func TestRevokeFamilies_NoActiveFamilies_NoOp(t *testing.T) {
 		OccurredAtUTC: time.Now().UTC(),
 	}, uuid.Nil)
 
-	// Wait for processing — assert via audit row that subscriber ran
-	// + succeeded without error (zero families to revoke is success).
+	// SQL-contract part 1: subscriber-ran observable.
 	waitFor(t, audittest.HasAtLeastOneByAction(t, fx.pool, "identity.person_password_changed.v1"),
 		3*time.Second, "subscriber audit row not written")
+
+	// SQL-contract part 2: no spurious mutation — the sentinel family
+	// for the unrelated Person must remain Active. A missing predicate
+	// on the subscriber's UPDATE would have flipped is_revoked on
+	// every family system-wide.
+	got, err := fx.families.GetByID(t.Context(), sentinel.ID())
+	if err != nil {
+		t.Fatalf("GetByID sentinel: %v", err)
+	}
+	if got.IsRevoked() {
+		t.Fatalf("sentinel family for unrelated Person was revoked — subscriber's empty-list path leaked a row-set-bypass UPDATE")
+	}
 }
 
 func TestReuseDetectedSIEM_LogsOnReuseRevocation(t *testing.T) {
+	t.Parallel()
 	fx := newFixture(t)
 	// Custom logger that records to a thread-safe buffer so the
 	// subscriber goroutine's slog.Write doesn't race the assertion
@@ -577,6 +591,7 @@ func TestReuseDetectedSIEM_LogsOnReuseRevocation(t *testing.T) {
 }
 
 func TestReuseDetectedSIEM_IgnoresNonReuseRevocations(t *testing.T) {
+	t.Parallel()
 	fx := newFixture(t)
 	// safeBuffer — same race-detector reason as the sister test above.
 	buf := &safeBuffer{}

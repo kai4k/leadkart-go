@@ -19,13 +19,13 @@ func TestUpdateProductHandler_HappyPath_AppliesPartial(t *testing.T) {
 
 	newName := "Renamed"
 	err := h.Handle(t.Context(), command.UpdateProductCommand{
-		ProductID: p.ID(), ActorMembershipID: actor,
+		TenantID: tid, ProductID: p.ID(), ActorMembershipID: actor,
 		Name: &newName,
 	})
 	if err != nil {
 		t.Fatalf("Handle: %v", err)
 	}
-	got, _ := repo.GetByID(t.Context(), p.ID())
+	got, _ := repo.GetByID(t.Context(), tid, p.ID())
 	if got.Name() != newName {
 		t.Fatalf("name: got %q want %q", got.Name(), newName)
 	}
@@ -36,11 +36,12 @@ func TestUpdateProductHandler_MissingProduct_ReturnsErrNotFound(t *testing.T) {
 	t.Parallel()
 	repo := newFakeProductRepo()
 	h := command.NewUpdateProductHandler(repo, func() time.Time { return fixedNow })
+	tid := newTenantID(t)
 	actor := newMembershipID(t)
 
 	newName := "x"
 	err := h.Handle(t.Context(), command.UpdateProductCommand{
-		ProductID: product.ID("nonexistent"), ActorMembershipID: actor,
+		TenantID: tid, ProductID: product.ID("nonexistent"), ActorMembershipID: actor,
 		Name: &newName,
 	})
 	if !errors.Is(err, product.ErrNotFound) {
@@ -60,7 +61,7 @@ func TestUpdateProductHandler_InvalidGSTRate_ReturnsErrInvalid(t *testing.T) {
 
 	bad := 99999 // > 10000 ceiling
 	err := h.Handle(t.Context(), command.UpdateProductCommand{
-		ProductID: p.ID(), ActorMembershipID: actor,
+		TenantID: tid, ProductID: p.ID(), ActorMembershipID: actor,
 		GSTRateBps: &bad,
 	})
 	if !errors.Is(err, product.ErrInvalid) {
@@ -86,7 +87,7 @@ func TestUpdateProductHandler_DeletedProduct_ReturnsErrDeleted(t *testing.T) {
 
 	newName := "Late"
 	err := h.Handle(t.Context(), command.UpdateProductCommand{
-		ProductID: p.ID(), ActorMembershipID: actor,
+		TenantID: tid, ProductID: p.ID(), ActorMembershipID: actor,
 		Name: &newName,
 	})
 	// Domain-side guard: Product.Update returns ErrDeleted on a soft-

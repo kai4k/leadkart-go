@@ -119,10 +119,10 @@ func NewRouter(deps Deps) (*Router, error) {
 	if deps.AuditWriter == nil {
 		return nil, errors.New("messaging: AuditWriter required")
 	}
-	log := deps.Logger
-	if log == nil {
-		log = slog.Default()
+	if deps.Logger == nil {
+		return nil, errors.New("messaging: Logger required")
 	}
+	log := deps.Logger
 	closeTimeout := deps.CloseTimeout
 	if closeTimeout == 0 {
 		closeTimeout = defaultRouterCloseTimeout

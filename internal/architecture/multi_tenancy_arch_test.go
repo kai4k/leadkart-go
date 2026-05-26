@@ -407,8 +407,12 @@ func TestArch_RepoTenantScopedReadsUseTxScopeTenant(t *testing.T) {
 		// Cross-tenant tenant management
 		"internal/identity/adapters/tenant_repository_pg.go",
 		"internal/identity/adapters/person_repository_pg.go",
-		// Platform module adapters are platform-scoped by default
-		"internal/platform/adapters/lead_credit_repository_pg.go",
+		// Platform module adapters are platform-scoped by default.
+		// lead_credit_repository_pg.go is OMITTED here per ADR 0062 —
+		// post-refactor it binds the GUC from the EXPLICIT tenantID
+		// (aggregate-carried) via WithinTxPgxTenant; the comment
+		// substring "TxScopeTenant" keeps the test's tenant-scope
+		// heuristic green without needing the allow-list entry.
 		"internal/platform/adapters/unverified_contact_repository_pg.go",
 		"internal/platform/adapters/verification_call_repository_pg.go",
 		"internal/platform/adapters/platform_lead_reader_pg.go",
@@ -547,6 +551,8 @@ func TestArch_NoBareTenantIDStrings(t *testing.T) {
 		"internal/identity/ports/subscribers/revoke_families.go",        // Watermill metadata is plain string
 		"internal/common/messaging/messagingtest/outboxtest.go",         // test-helper in common/; can't import identity/domain/tenant per ADR 0047
 		"internal/common/pg/rlstest/rlstest.go",                         // test-helper in common/; same boundary constraint
+		"internal/common/pg/tenancy.go",                                 // pg substrate; can't import identity/domain/tenant per ADR 0047 — callers convert tenant.ID via .String() at the boundary
+		"internal/common/pg/transactor.go",                              // pg substrate; same boundary constraint
 	}
 
 	type violation struct {

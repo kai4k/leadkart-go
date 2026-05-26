@@ -8,7 +8,9 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 	"github.com/leadkart/leadkart-go/internal/inventory/domain/batch"
+	"github.com/leadkart/leadkart-go/internal/inventory/domain/batch/batchtest"
 	"github.com/leadkart/leadkart-go/internal/inventory/domain/product"
+	"github.com/leadkart/leadkart-go/internal/inventory/domain/product/producttest"
 	"github.com/leadkart/leadkart-go/internal/inventory/domain/stockmovement"
 )
 
@@ -35,7 +37,7 @@ func newMembershipID(t *testing.T) membership.ID {
 
 // seedProduct creates + Adds a fresh Product to repo, returning it. SKU
 // is supplied per call so tests can drive ErrSKUTaken paths.
-func seedProduct(t *testing.T, repo *fakeProductRepo, tid tenant.ID, actor membership.ID, sku string) *product.Product {
+func seedProduct(t *testing.T, repo *producttest.FakeRepository, tid tenant.ID, actor membership.ID, sku string) *product.Product {
 	t.Helper()
 	p, err := product.New(
 		product.ID(ids.NewV7().String()),
@@ -58,7 +60,7 @@ func seedProduct(t *testing.T, repo *fakeProductRepo, tid tenant.ID, actor membe
 
 // seedBatch creates + Adds a fresh live Batch to repo for the given
 // product. Batch starts with quantity_on_hand=0.
-func seedBatch(t *testing.T, repo *fakeBatchRepo, p *product.Product, actor membership.ID, batchNumber string) *batch.Batch {
+func seedBatch(t *testing.T, repo *batchtest.FakeRepository, p *product.Product, actor membership.ID, batchNumber string) *batch.Batch {
 	t.Helper()
 	mfg := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	exp := time.Date(2028, 1, 1, 0, 0, 0, 0, time.UTC)

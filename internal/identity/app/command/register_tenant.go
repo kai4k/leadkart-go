@@ -372,7 +372,7 @@ func (h RegisterTenantHandler) seedRolesAndAssignOwner(
 	if !ok {
 		return errors.New("register tenant: CompanyOwner not in seeded catalog (catalog drift)")
 	}
-	err = h.memberships.UpdateByID(tenantCtx, result.MembershipID,
+	err = h.memberships.UpdateByID(tenantCtx, result.TenantID, result.MembershipID,
 		func(m *membership.Membership) (bool, error) {
 			return true, m.AssignRole(owner.ID(), now)
 		})

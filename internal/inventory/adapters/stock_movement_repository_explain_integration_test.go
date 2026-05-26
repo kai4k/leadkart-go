@@ -1,5 +1,17 @@
 //go:build integration
 
+// arch-test:no-timeout-needed — every test in this file uses the shared
+//   pgtest container (per-package); pgxpool internal conn timeouts +
+//   package-level `task ci:test:int -timeout=15m` already bound execution.
+//   Per-test context.WithTimeout would be belt-and-suspenders against the
+//   shared-pool + parallel-with-RLS canon shape.
+//
+// arch-test:parallel-safe — every Test* uses the shared pgtest container
+//   + a fresh tenant_id per test bound via tenancy.WithID(); RLS isolates
+//   rows by tenant so parallel runs cannot see each other's state.
+//   Brandur "Postgres at scale" + TDL Wild Workouts canon: shared
+//   infrastructure + per-test logical isolation = safe parallelism.
+
 package adapters_test
 
 import (
@@ -33,6 +45,7 @@ import (
 // quantity, ApplyMovement on the parent batch each turn) so the planner
 // sees enough rows that index lookup beats Seq Scan.
 func TestKeysetStockMovementsPage_UsesIndexUnderRLS(t *testing.T) {
+	t.Parallel()
 	pool := repoFixture(t)
 	tid := seedTenant(t, pool)
 	ctx := tenantCtx(t, tid)
@@ -80,7 +93,7 @@ func TestKeysetStockMovementsPage_UsesIndexUnderRLS(t *testing.T) {
 		err := tx.WithinTx(ctx, pg.TxScopeTenant, func(ctx context.Context) error {
 			// Reload batch + apply movement under one tx so the version
 			// check + outbox write stay consistent.
-			return batches.UpdateByID(ctx, b.ID(), func(bb *batch.Batch) (bool, error) {
+			return batches.UpdateByID(ctx, tid, b.ID(), func(bb *batch.Batch) (bool, error) {
 				if err := bb.ApplyMovement(batch.MovementInbound, 1, occurredAt); err != nil {
 					return false, err
 				}

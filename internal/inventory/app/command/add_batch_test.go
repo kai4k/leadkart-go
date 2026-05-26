@@ -21,6 +21,7 @@ func TestAddBatchHandler_HappyPath_AddsBatch(t *testing.T) {
 	h := command.NewAddBatchHandler(uow, productRepo, batchRepo, func() time.Time { return fixedNow }, testNewBatchID)
 
 	out, err := h.Handle(t.Context(), command.AddBatchCommand{
+		TenantID:                   tid,
 		ProductID:                  p.ID(),
 		ActorMembershipID:          actor,
 		BatchNumber:                "LOT-1",
@@ -40,8 +41,8 @@ func TestAddBatchHandler_HappyPath_AddsBatch(t *testing.T) {
 	if uow.Runs() != 1 {
 		t.Fatalf("UoW runs: got %d want 1", uow.Runs())
 	}
-	if batchRepo.addCalls != 1 {
-		t.Fatalf("batchRepo.addCalls: got %d want 1", batchRepo.addCalls)
+	if batchRepo.AddCalls != 1 {
+		t.Fatalf("batchRepo.AddCalls: got %d want 1", batchRepo.AddCalls)
 	}
 }
 
@@ -52,9 +53,11 @@ func TestAddBatchHandler_MissingProduct_ReturnsErrNotFound(t *testing.T) {
 	batchRepo := newFakeBatchRepo()
 	uow := &fakeUoW{}
 	h := command.NewAddBatchHandler(uow, productRepo, batchRepo, func() time.Time { return fixedNow }, testNewBatchID)
+	tid := newTenantID(t)
 	actor := newMembershipID(t)
 
 	_, err := h.Handle(t.Context(), command.AddBatchCommand{
+		TenantID:                   tid,
 		ProductID:                  product.ID("nonexistent"),
 		ActorMembershipID:          actor,
 		BatchNumber:                "LOT-1",
@@ -68,8 +71,8 @@ func TestAddBatchHandler_MissingProduct_ReturnsErrNotFound(t *testing.T) {
 	if !errors.Is(err, product.ErrNotFound) {
 		t.Fatalf("err: got %v want ErrNotFound", err)
 	}
-	if batchRepo.addCalls != 0 {
-		t.Fatalf("batchRepo.addCalls on missing product: got %d want 0", batchRepo.addCalls)
+	if batchRepo.AddCalls != 0 {
+		t.Fatalf("batchRepo.AddCalls on missing product: got %d want 0", batchRepo.AddCalls)
 	}
 }
 
@@ -96,6 +99,7 @@ func TestAddBatchHandler_SoftDeletedParent_ReturnsErrNotFound(t *testing.T) {
 	h := command.NewAddBatchHandler(uow, productRepo, batchRepo, func() time.Time { return fixedNow }, testNewBatchID)
 
 	_, err := h.Handle(t.Context(), command.AddBatchCommand{
+		TenantID:                   tid,
 		ProductID:                  p.ID(),
 		ActorMembershipID:          actor,
 		BatchNumber:                "LOT-X",
@@ -109,8 +113,8 @@ func TestAddBatchHandler_SoftDeletedParent_ReturnsErrNotFound(t *testing.T) {
 	if !errors.Is(err, product.ErrNotFound) {
 		t.Fatalf("err: got %v want ErrNotFound (soft-deleted parent)", err)
 	}
-	if batchRepo.addCalls != 0 {
-		t.Fatalf("batchRepo.addCalls on deleted parent: got %d want 0", batchRepo.addCalls)
+	if batchRepo.AddCalls != 0 {
+		t.Fatalf("batchRepo.AddCalls on deleted parent: got %d want 0", batchRepo.AddCalls)
 	}
 }
 
@@ -127,6 +131,7 @@ func TestAddBatchHandler_DuplicateBatchNumber_ReturnsErrBatchNumberTaken(t *test
 	h := command.NewAddBatchHandler(uow, productRepo, batchRepo, func() time.Time { return fixedNow }, testNewBatchID)
 
 	_, err := h.Handle(t.Context(), command.AddBatchCommand{
+		TenantID:                   tid,
 		ProductID:                  p.ID(),
 		ActorMembershipID:          actor,
 		BatchNumber:                "DUP-LOT",
@@ -156,6 +161,7 @@ func TestAddBatchHandler_InvalidSpec_ReturnsErrInvalid(t *testing.T) {
 	sameDay := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 
 	_, err := h.Handle(t.Context(), command.AddBatchCommand{
+		TenantID:                   tid,
 		ProductID:                  p.ID(),
 		ActorMembershipID:          actor,
 		BatchNumber:                "LOT-1",

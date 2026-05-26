@@ -582,6 +582,7 @@ func TestArch_AuditChainColumnsOnTenantTables(t *testing.T) {
 		"identity.outbox":                  "outbox / audit log (ADR 0027)",
 		"platform.outbox":                  "outbox / audit log (ADR 0027)",
 		"inventory.outbox":                 "outbox / audit log (ADR 0027)",
+		"crm.outbox":                       "outbox / audit log (ADR 0027)",
 		"buildingblocks.audit_log_entry":   "audit log sink",
 		"buildingblocks.admin_impersonation_audit": "audit log (ADR 0045)",
 		"app.command_idempotency":          "idempotency infra",
@@ -592,6 +593,8 @@ func TestArch_AuditChainColumnsOnTenantTables(t *testing.T) {
 		// Append-only ledgers / event-stream aggregates:
 		"inventory.stock_movements":      "event-stream aggregate (carries actor_membership_id)",
 		"platform.verification_calls":    "append-only ledger (carries logged_by_membership_id)",
+		"crm.call_logs":                  "append-only call audit (carries logged_by_membership_id) per ADR 0060",
+		"crm.assignment_history":         "append-only assignment audit (carries assigned_by_membership_id) per ADR 0060",
 		// Platform globals:
 		"platform.platform_leads":  "marketplace global (carries verified_by_membership_id + sold_to_membership_id)",
 		"platform.lead_credits":    "balance aggregate (no creation event)",

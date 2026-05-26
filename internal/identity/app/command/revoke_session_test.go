@@ -1,7 +1,6 @@
 package command_test
 
 import (
-	"context"
 	"errors"
 	"testing"
 	"time"
@@ -9,6 +8,7 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/app/command"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/refreshtoken"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/refreshtoken/refreshtokentest"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
 
@@ -17,57 +17,12 @@ import (
 // refactor. Replaces the prior package-global clock.Set helper.
 var revokeNow = time.Date(2026, 5, 7, 12, 0, 0, 0, time.UTC)
 
-// fakeFamilyRepo is the minimum [refreshtoken.Repository] surface
-// the revoke-session handlers exercise.
-type fakeFamilyRepo struct {
-	families map[refreshtoken.FamilyID]*refreshtoken.Family
-}
-
-func newFakeFamilyRepo() *fakeFamilyRepo {
-	return &fakeFamilyRepo{families: make(map[refreshtoken.FamilyID]*refreshtoken.Family)}
-}
-
-func (r *fakeFamilyRepo) Add(_ context.Context, f *refreshtoken.Family) error {
-	r.families[f.ID()] = f
-	return nil
-}
-
-func (r *fakeFamilyRepo) UpdateByID(_ context.Context, id refreshtoken.FamilyID, fn func(*refreshtoken.Family) (bool, error)) error {
-	f, ok := r.families[id]
-	if !ok {
-		return refreshtoken.ErrNotFound
-	}
-	commit, err := fn(f)
-	if err != nil {
-		return err
-	}
-	_ = commit // commit semantics are repository-internal; no persistence in fake
-	return nil
-}
-
-func (r *fakeFamilyRepo) GetByID(_ context.Context, id refreshtoken.FamilyID) (*refreshtoken.Family, error) {
-	f, ok := r.families[id]
-	if !ok {
-		return nil, refreshtoken.ErrNotFound
-	}
-	return f, nil
-}
-
-func (r *fakeFamilyRepo) GetByTokenHash(_ context.Context, _ refreshtoken.TokenHash) (*refreshtoken.Family, error) {
-	return nil, refreshtoken.ErrNotFound
-}
-
-func (r *fakeFamilyRepo) ListActiveForPerson(_ context.Context, pid person.ID) ([]*refreshtoken.Family, error) {
-	var out []*refreshtoken.Family
-	for _, f := range r.families {
-		if f.PersonID() == pid && !f.IsRevoked() {
-			out = append(out, f)
-		}
-	}
-	return out, nil
-}
-
-var _ refreshtoken.Repository = (*fakeFamilyRepo)(nil)
+// The refreshtoken-side fake lives in
+// internal/identity/domain/refreshtoken/refreshtokentest/ per TDL Wild
+// Workouts canon — co-located with the aggregate it fakes.
+// newFakeFamilyRepo is preserved as a one-line alias so existing tests
+// don't need rewriting.
+func newFakeFamilyRepo() *refreshtokentest.FakeRepository { return refreshtokentest.NewFakeRepository() }
 
 func newFamily(t *testing.T, personID person.ID, deviceLabel string) *refreshtoken.Family {
 	t.Helper()

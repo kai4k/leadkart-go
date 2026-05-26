@@ -13,200 +13,24 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/permission"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/role"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/role/roletest"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/rolehierarchy"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/rolehierarchy/rolehierarchytest"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
 
+// The role-side fake lives in internal/identity/domain/role/roletest/
+// per TDL Wild Workouts canon — co-located with the aggregate it
+// fakes. newFakeRoleRepo is preserved as a one-line alias so existing
+// tests don't need rewriting.
+func newFakeRoleRepo() *roletest.FakeRepository { return roletest.NewFakeRepository() }
 
-// fakeRoleRepo is the minimum [role.Repository] surface the role
-// management handlers exercise.
-type fakeRoleRepo struct {
-	roles map[role.ID]*role.Role
-	names map[string]role.ID // (tenant_id|name) → id, for ErrNameTaken
-}
-
-func newFakeRoleRepo() *fakeRoleRepo {
-	return &fakeRoleRepo{
-		roles: make(map[role.ID]*role.Role),
-		names: make(map[string]role.ID),
-	}
-}
-
-func nameKey(tid tenant.ID, name string) string { return tid.String() + "|" + name }
-
-func (r *fakeRoleRepo) Add(_ context.Context, x *role.Role) error {
-	if _, ok := r.names[nameKey(x.TenantID(), x.Name())]; ok {
-		return role.ErrNameTaken
-	}
-	r.roles[x.ID()] = x
-	r.names[nameKey(x.TenantID(), x.Name())] = x.ID()
-	return nil
-}
-
-func (r *fakeRoleRepo) UpdateByID(_ context.Context, id role.ID, fn func(*role.Role) (bool, error)) error {
-	x, ok := r.roles[id]
-	if !ok {
-		return role.ErrNotFound
-	}
-	commit, err := fn(x)
-	if err != nil {
-		return err
-	}
-	_ = commit
-	return nil
-}
-
-func (r *fakeRoleRepo) GetByID(_ context.Context, id role.ID) (*role.Role, error) {
-	x, ok := r.roles[id]
-	if !ok {
-		return nil, role.ErrNotFound
-	}
-	return x, nil
-}
-
-func (r *fakeRoleRepo) GetByTenantAndName(_ context.Context, tid tenant.ID, name string) (*role.Role, error) {
-	id, ok := r.names[nameKey(tid, name)]
-	if !ok {
-		return nil, role.ErrNotFound
-	}
-	return r.roles[id], nil
-}
-
-func (r *fakeRoleRepo) GetByIDs(_ context.Context, ids []role.ID) ([]*role.Role, error) {
-	var out []*role.Role
-	for _, id := range ids {
-		if x, ok := r.roles[id]; ok {
-			out = append(out, x)
-		}
-	}
-	return out, nil
-}
-
-func (r *fakeRoleRepo) ListByTenant(_ context.Context, tid tenant.ID) ([]*role.Role, error) {
-	var out []*role.Role
-	for _, x := range r.roles {
-		if x.TenantID() == tid {
-			out = append(out, x)
-		}
-	}
-	return out, nil
-}
-
-var _ role.Repository = (*fakeRoleRepo)(nil)
-
-// fakeEdgeRepo is the minimum [rolehierarchy.Repository] surface the
-// SetRoleParent + CreateRole-with-parent handlers exercise. Per-tenant
-// in-memory map; enforces single-parent invariant (mirroring the
-// partial unique index) + multi-hop cycle detection (mirroring the DB
-// trigger) so the unit tests cover the same failure modes the adapter
-// translates from SQL.
-type fakeEdgeRepo struct {
-	edges map[rolehierarchy.ID]*rolehierarchy.Edge
-}
-
-func newFakeEdgeRepo() *fakeEdgeRepo {
-	return &fakeEdgeRepo{edges: make(map[rolehierarchy.ID]*rolehierarchy.Edge)}
-}
-
-func (f *fakeEdgeRepo) Add(_ context.Context, e *rolehierarchy.Edge) error {
-	// Single-parent invariant — refuse a second active edge for the
-	// same child (mirrors uq_role_hierarchy_active_edge_per_child).
-	for _, existing := range f.edges {
-		if existing.IsActive() && existing.ChildRoleID() == e.ChildRoleID() {
-			return rolehierarchy.ErrEdgeAlreadyExists
-		}
-	}
-	// Multi-hop cycle detection — walking child's proposed parent
-	// upward, would we ever land back on the child? (mirrors
-	// edge_check_cycle trigger).
-	if hasCycle(f.edges, e.ChildRoleID(), e.ParentRoleID()) {
-		return rolehierarchy.ErrCycle
-	}
-	f.edges[e.ID()] = e
-	return nil
-}
-
-func (f *fakeEdgeRepo) GetActiveByChild(_ context.Context, child role.ID) (*rolehierarchy.Edge, error) {
-	for _, e := range f.edges {
-		if e.IsActive() && e.ChildRoleID() == child {
-			return e, nil
-		}
-	}
-	return nil, rolehierarchy.ErrEdgeNotFound
-}
-
-func (f *fakeEdgeRepo) UpdateByID(_ context.Context, id rolehierarchy.ID, fn func(*rolehierarchy.Edge) (bool, error)) error {
-	e, ok := f.edges[id]
-	if !ok {
-		return rolehierarchy.ErrEdgeNotFound
-	}
-	commit, err := fn(e)
-	if err != nil {
-		return err
-	}
-	_ = commit
-	return nil
-}
-
-func (f *fakeEdgeRepo) GetAncestorsByChild(_ context.Context, child role.ID) ([]*rolehierarchy.Edge, error) {
-	var out []*rolehierarchy.Edge
-	cur := child
-	seen := map[role.ID]struct{}{child: {}}
-	for {
-		var step *rolehierarchy.Edge
-		for _, e := range f.edges {
-			if e.IsActive() && e.ChildRoleID() == cur {
-				step = e
-				break
-			}
-		}
-		if step == nil {
-			return out, nil
-		}
-		if _, dup := seen[step.ParentRoleID()]; dup {
-			return out, nil
-		}
-		seen[step.ParentRoleID()] = struct{}{}
-		out = append(out, step)
-		cur = step.ParentRoleID()
-	}
-}
-
-func (f *fakeEdgeRepo) ListActiveByParent(_ context.Context, parent role.ID) ([]*rolehierarchy.Edge, error) {
-	var out []*rolehierarchy.Edge
-	for _, e := range f.edges {
-		if e.IsActive() && e.ParentRoleID() == parent {
-			out = append(out, e)
-		}
-	}
-	return out, nil
-}
-
-var _ rolehierarchy.Repository = (*fakeEdgeRepo)(nil)
-
-// hasCycle reports whether adding edge child→parent would close a
-// loop given the existing edge set.
-func hasCycle(edges map[rolehierarchy.ID]*rolehierarchy.Edge, child, parent role.ID) bool {
-	cur := parent
-	seen := map[role.ID]struct{}{child: {}}
-	for {
-		if _, dup := seen[cur]; dup {
-			return true
-		}
-		seen[cur] = struct{}{}
-		var step *rolehierarchy.Edge
-		for _, e := range edges {
-			if e.IsActive() && e.ChildRoleID() == cur {
-				step = e
-				break
-			}
-		}
-		if step == nil {
-			return false
-		}
-		cur = step.ParentRoleID()
-	}
-}
+// The rolehierarchy-side fake lives in
+// internal/identity/domain/rolehierarchy/rolehierarchytest/ per TDL
+// Wild Workouts canon — co-located with the aggregate it fakes.
+// newFakeEdgeRepo is preserved as a one-line alias so existing tests
+// don't need rewriting.
+func newFakeEdgeRepo() *rolehierarchytest.FakeRepository { return rolehierarchytest.NewFakeRepository() }
 
 // fakeUoW is a no-op UnitOfWork — calls fn directly without ctx
 // propagation. The fake repos don't use TxFromContext, so this is
@@ -231,7 +55,7 @@ var _ = pagination.Cursor{}
 // every test.
 var _ = membership.ID("")
 
-func newCustomRole(t *testing.T, repo *fakeRoleRepo, name string) *role.Role {
+func newCustomRole(t *testing.T, repo *roletest.FakeRepository, name string) *role.Role {
 	t.Helper()
 	tid := tenant.ID("33333333-3333-3333-3333-333333333333")
 	r, err := role.New(role.ID(ids.NewV7().String()), tid, name, false, 50, false, testNow)
@@ -281,6 +105,7 @@ func TestUpdateRole_RenameSucceeds(t *testing.T) {
 	r := newCustomRole(t, repo, "Old Name")
 	h := command.NewUpdateRoleHandler(repo, func() time.Time { return testNow })
 	if err := h.Handle(t.Context(), command.UpdateRoleCommand{
+		TenantID:       tenant.ID("33333333-3333-3333-3333-333333333333"),
 		RoleID:         r.ID(),
 		Name:           "New Name",
 		HierarchyLevel: -1,
@@ -297,7 +122,8 @@ func TestUpdateRole_NotFound(t *testing.T) {
 	repo := newFakeRoleRepo()
 	h := command.NewUpdateRoleHandler(repo, func() time.Time { return testNow })
 	err := h.Handle(t.Context(), command.UpdateRoleCommand{
-		RoleID: role.ID("99999999-9999-9999-9999-999999999999"),
+		TenantID: tenant.ID("33333333-3333-3333-3333-333333333333"),
+		RoleID:   role.ID("99999999-9999-9999-9999-999999999999"),
 		Name:   "x",
 	})
 	if !errors.Is(err, command.ErrRoleNotFound) {
@@ -311,6 +137,7 @@ func TestReplaceRolePermissions_RejectsUnknown(t *testing.T) {
 	r := newCustomRole(t, repo, "Sales Manager")
 	h := command.NewReplaceRolePermissionsHandler(repo, func() time.Time { return testNow })
 	err := h.Handle(t.Context(), command.ReplaceRolePermissionsCommand{
+		TenantID:        tenant.ID("33333333-3333-3333-3333-333333333333"),
 		RoleID:          r.ID(),
 		PermissionNames: []string{"identity.totally.fake"},
 	})
@@ -325,6 +152,7 @@ func TestGrantRolePermission_AddsPermission(t *testing.T) {
 	r := newCustomRole(t, repo, "Sales Manager")
 	h := command.NewGrantRolePermissionHandler(repo, func() time.Time { return testNow })
 	if err := h.Handle(t.Context(), command.GrantRolePermissionCommand{
+		TenantID:       tenant.ID("33333333-3333-3333-3333-333333333333"),
 		RoleID:         r.ID(),
 		PermissionName: permission.IdentityPermissions.Tenants.View,
 	}); err != nil {
@@ -344,6 +172,7 @@ func TestRevokeRolePermission_RoundTrip(t *testing.T) {
 
 	h := command.NewRevokeRolePermissionHandler(repo, func() time.Time { return testNow })
 	if err := h.Handle(t.Context(), command.RevokeRolePermissionCommand{
+		TenantID:       tenant.ID("33333333-3333-3333-3333-333333333333"),
 		RoleID:         r.ID(),
 		PermissionName: permission.IdentityPermissions.Tenants.View,
 	}); err != nil {
@@ -360,6 +189,7 @@ func TestDeleteRole_Succeeds(t *testing.T) {
 	r := newCustomRole(t, repo, "Sales Manager")
 	h := command.NewDeleteRoleHandler(repo, func() time.Time { return testNow })
 	if err := h.Handle(t.Context(), command.DeleteRoleCommand{
+		TenantID:  tenant.ID("33333333-3333-3333-3333-333333333333"),
 		RoleID:    r.ID(),
 		DeletedBy: "11111111-1111-1111-1111-111111111111",
 	}); err != nil {
@@ -388,7 +218,7 @@ func TestSetRoleParent_SetsParentOnRootChild(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("Handle: %v", err)
 	}
-	got, err := edges.GetActiveByChild(t.Context(), child.ID())
+	got, err := edges.GetActiveByChild(t.Context(), tid, child.ID())
 	if err != nil {
 		t.Fatalf("GetActiveByChild: %v", err)
 	}
@@ -423,7 +253,7 @@ func TestSetRoleParent_ReplacesExistingParent(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("replace: %v", err)
 	}
-	got, err := edges.GetActiveByChild(t.Context(), child.ID())
+	got, err := edges.GetActiveByChild(t.Context(), tid, child.ID())
 	if err != nil {
 		t.Fatalf("GetActiveByChild: %v", err)
 	}
@@ -454,7 +284,7 @@ func TestSetRoleParent_ClearsParent(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("clear: %v", err)
 	}
-	if _, err := edges.GetActiveByChild(t.Context(), child.ID()); !errors.Is(err, rolehierarchy.ErrEdgeNotFound) {
+	if _, err := edges.GetActiveByChild(t.Context(), tid, child.ID()); !errors.Is(err, rolehierarchy.ErrEdgeNotFound) {
 		t.Fatalf("expected no active edge after clear, got: %v", err)
 	}
 }
@@ -472,6 +302,188 @@ func TestSetRoleParent_RejectsSelfReference(t *testing.T) {
 	})
 	if !errors.Is(err, rolehierarchy.ErrSelfReference) {
 		t.Fatalf("err = %v, want ErrSelfReference", err)
+	}
+}
+
+// ----- CreateRole — input + parent-edge branch coverage --------------------
+
+// failingEdgesRepo overrides Add only — uses to inject specific
+// rolehierarchy.Err* values per the CreateRole parent-edge arm.
+type failingEdgesRepo struct {
+	*rolehierarchytest.FakeRepository
+	addErr error
+}
+
+func (r *failingEdgesRepo) Add(ctx context.Context, e *rolehierarchy.Edge) error {
+	if r.addErr != nil {
+		return r.addErr
+	}
+	return r.FakeRepository.Add(ctx, e)
+}
+
+// failingTxUoW returns a fixed error from WithinTx (DB driver / tx
+// error scenarios).
+type failingTxUoW struct {
+	err error
+}
+
+func (u failingTxUoW) WithinTx(_ context.Context, _ pg.TxScope, _ func(context.Context) error) error {
+	return u.err
+}
+
+func TestCreateRole_RejectsZeroTenantID(t *testing.T) {
+	t.Parallel()
+	repo := newFakeRoleRepo()
+	h := command.NewCreateRoleHandler(repo, newFakeEdgeRepo(), fakeUoW{}, nowFunc, func() role.ID { return role.ID(ids.NewV7().String()) }, func() rolehierarchy.ID { return rolehierarchy.ID(ids.NewV7().String()) })
+	_, err := h.Handle(t.Context(), command.CreateRoleCommand{
+		TenantID:       tenant.ID(""),
+		Name:           "Sales Lead",
+		HierarchyLevel: 40,
+	})
+	if err == nil {
+		t.Fatal("expected error for zero TenantID, got nil")
+	}
+}
+
+func TestCreateRole_AggregateInvariant_EmptyName(t *testing.T) {
+	t.Parallel()
+	repo := newFakeRoleRepo()
+	h := command.NewCreateRoleHandler(repo, newFakeEdgeRepo(), fakeUoW{}, nowFunc, func() role.ID { return role.ID(ids.NewV7().String()) }, func() rolehierarchy.ID { return rolehierarchy.ID(ids.NewV7().String()) })
+	_, err := h.Handle(t.Context(), command.CreateRoleCommand{
+		TenantID:       tenant.ID("33333333-3333-3333-3333-333333333333"),
+		Name:           "", // aggregate ctor rejects
+		HierarchyLevel: 40,
+	})
+	if !errors.Is(err, role.ErrInvalid) {
+		t.Fatalf("err = %v, want wraps role.ErrInvalid", err)
+	}
+}
+
+func TestCreateRole_AggregateInvariant_BadHierarchyLevel(t *testing.T) {
+	t.Parallel()
+	repo := newFakeRoleRepo()
+	h := command.NewCreateRoleHandler(repo, newFakeEdgeRepo(), fakeUoW{}, nowFunc, func() role.ID { return role.ID(ids.NewV7().String()) }, func() rolehierarchy.ID { return rolehierarchy.ID(ids.NewV7().String()) })
+	_, err := h.Handle(t.Context(), command.CreateRoleCommand{
+		TenantID:       tenant.ID("33333333-3333-3333-3333-333333333333"),
+		Name:           "Sales Lead",
+		HierarchyLevel: 9999, // out of [0,99] range
+	})
+	if !errors.Is(err, role.ErrInvalid) {
+		t.Fatalf("err = %v, want wraps role.ErrInvalid", err)
+	}
+}
+
+// TestCreateRole_ParentEdgeRequiresWiring — when ParentRoleID is set
+// but edges OR uow is nil, the handler refuses with the explicit
+// "parent edge requires edges repo + uow wiring" error. Composition-
+// time mistake, not a user error.
+func TestCreateRole_ParentEdgeRequiresWiring(t *testing.T) {
+	t.Parallel()
+	repo := newFakeRoleRepo()
+	parent := newCustomRole(t, repo, "Manager")
+	cases := []struct {
+		name  string
+		edges rolehierarchy.Repository
+		uow   pg.UnitOfWork
+	}{
+		{"nil edges + nil uow", nil, nil},
+		{"nil edges + ok uow", nil, fakeUoW{}},
+		{"ok edges + nil uow", newFakeEdgeRepo(), nil},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			h := command.NewCreateRoleHandler(repo, c.edges, c.uow, nowFunc, func() role.ID { return role.ID(ids.NewV7().String()) }, func() rolehierarchy.ID { return rolehierarchy.ID(ids.NewV7().String()) })
+			_, err := h.Handle(t.Context(), command.CreateRoleCommand{
+				TenantID:       tenant.ID("33333333-3333-3333-3333-333333333333"),
+				Name:           "Child Role",
+				HierarchyLevel: 40,
+				ParentRoleID:   parent.ID(),
+			})
+			if err == nil {
+				t.Fatal("expected wiring error for nil edges/uow, got nil")
+			}
+		})
+	}
+}
+
+// TestCreateRole_ParentEdgeError_Propagated — each of the
+// rolehierarchy.Err* sentinels MUST propagate unwrapped (i.e. errors.Is
+// matches the original). Per the handler's switch on ErrCycle /
+// ErrCrossTenant / ErrSelfReference / ErrEdgeAlreadyExists.
+func TestCreateRole_ParentEdgeError_Propagated(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		err  error
+	}{
+		{"ErrCycle", rolehierarchy.ErrCycle},
+		{"ErrCrossTenant", rolehierarchy.ErrCrossTenant},
+		{"ErrEdgeAlreadyExists", rolehierarchy.ErrEdgeAlreadyExists},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			repo := newFakeRoleRepo()
+			parent := newCustomRole(t, repo, "Manager_"+c.name)
+			edges := &failingEdgesRepo{
+				FakeRepository: rolehierarchytest.NewFakeRepository(),
+				addErr:         c.err,
+			}
+			h := command.NewCreateRoleHandler(repo, edges, fakeUoW{}, nowFunc, func() role.ID { return role.ID(ids.NewV7().String()) }, func() rolehierarchy.ID { return rolehierarchy.ID(ids.NewV7().String()) })
+			_, err := h.Handle(t.Context(), command.CreateRoleCommand{
+				TenantID:       tenant.ID("33333333-3333-3333-3333-333333333333"),
+				Name:           "Child Role " + c.name,
+				HierarchyLevel: 40,
+				ParentRoleID:   parent.ID(),
+			})
+			if !errors.Is(err, c.err) {
+				t.Fatalf("err = %v, want errors.Is(_, %v)", err, c.err)
+			}
+		})
+	}
+}
+
+// TestCreateRole_ParentEdge_GenericTxError_Wrapped — generic non-
+// sentinel tx error wraps with "create_role: %w" rather than
+// propagating cleanly. Lets operators see the alert.
+func TestCreateRole_ParentEdge_GenericTxError_Wrapped(t *testing.T) {
+	t.Parallel()
+	repo := newFakeRoleRepo()
+	parent := newCustomRole(t, repo, "Manager")
+	// failing tx — never invokes the inner closure, returns errBoom.
+	uow := failingTxUoW{err: errBoom}
+	h := command.NewCreateRoleHandler(repo, newFakeEdgeRepo(), uow, nowFunc, func() role.ID { return role.ID(ids.NewV7().String()) }, func() rolehierarchy.ID { return rolehierarchy.ID(ids.NewV7().String()) })
+	_, err := h.Handle(t.Context(), command.CreateRoleCommand{
+		TenantID:       tenant.ID("33333333-3333-3333-3333-333333333333"),
+		Name:           "Child Role",
+		HierarchyLevel: 40,
+		ParentRoleID:   parent.ID(),
+	})
+	if !errors.Is(err, errBoom) {
+		t.Fatalf("err = %v, want chain includes errBoom", err)
+	}
+}
+
+// TestUpdateRole_HierarchyLevelChange — Role.ChangeHierarchyLevel
+// emits NO event (operational concern per the aggregate doc). Test
+// asserts state mutation only.
+func TestUpdateRole_HierarchyLevelChange(t *testing.T) {
+	t.Parallel()
+	repo := newFakeRoleRepo()
+	r := newCustomRole(t, repo, "Sales Manager")
+	beforeLevel := r.HierarchyLevel()
+	newLevel := beforeLevel + 5 // any in [0,99]; default 50 → 55
+	h := command.NewUpdateRoleHandler(repo, func() time.Time { return testNow })
+	if err := h.Handle(t.Context(), command.UpdateRoleCommand{
+		TenantID:       tenant.ID("33333333-3333-3333-3333-333333333333"),
+		RoleID:         r.ID(),
+		HierarchyLevel: newLevel,
+	}); err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	if got := r.HierarchyLevel(); got != newLevel {
+		t.Errorf("HierarchyLevel = %d, want %d", got, newLevel)
 	}
 }
 

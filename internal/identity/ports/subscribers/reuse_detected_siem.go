@@ -12,6 +12,8 @@ import (
 	"github.com/leadkart/leadkart-go/internal/common/messaging"
 )
 
+// arch-test:idempotency-via-append-only-log — emits a WARN slog record only; duplicate dispatch produces duplicate audit lines which is the correct (lossy-tolerant) behaviour for SIEM ingest. No state mutation to dedup.
+
 // ReuseDetectedSIEM is the security-incident subscriber for RFC 9700
 // §4.13 reuse-detection events. Fires only when a
 // `identity.refresh_token_family_revoked.v1` arrives with
@@ -26,10 +28,13 @@ type ReuseDetectedSIEM struct {
 	log *slog.Logger
 }
 
-// NewReuseDetectedSIEM wires the subscriber.
+// NewReuseDetectedSIEM wires the subscriber. log is mandatory — pass
+// slog.New(slog.NewTextHandler(io.Discard, nil)) in tests that don't
+// want output. Mat Ryer canon (NewServer takes the logger explicitly);
+// no nil-fallback.
 func NewReuseDetectedSIEM(log *slog.Logger) *ReuseDetectedSIEM {
 	if log == nil {
-		log = slog.Default()
+		panic("subscribers: NewReuseDetectedSIEM log required")
 	}
 	return &ReuseDetectedSIEM{log: log}
 }

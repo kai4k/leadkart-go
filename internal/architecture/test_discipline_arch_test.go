@@ -222,8 +222,19 @@ func TestArch_IntegrationTestsSerialByDefault(t *testing.T) {
 		if !isIntegrationTestFile(src) && !strings.HasSuffix(slash, "_integration_test.go") {
 			return
 		}
-		fset, f := parseFile(t, path, src)
 		body := string(src)
+		// File-level opt-in: a single `arch-test:parallel-safe` marker
+		// anywhere in the file (typically at the top, alongside the
+		// build tag) covers every Test* in the file. Used by the
+		// shared-pgtest-container + RLS-tenant-partition canon shape
+		// where the same rationale applies to every test in the file.
+		// Per-test markers (within 400 chars of the func decl) are also
+		// accepted, below — useful for files with mixed parallel + serial.
+		if strings.Contains(body, "arch-test:parallel-safe") &&
+			fileLevelParallelSafe(body) {
+			return
+		}
+		fset, f := parseFile(t, path, src)
 		for _, decl := range f.Decls {
 			fd, ok := decl.(*ast.FuncDecl)
 			if !ok || fd.Body == nil {
@@ -281,6 +292,28 @@ func TestArch_IntegrationTestsSerialByDefault(t *testing.T) {
 			t.Logf("  %s:%d — %s", v.file, v.line, v.fn)
 		}
 	}
+}
+
+// fileLevelParallelSafe reports whether the body carries a file-level
+// `arch-test:parallel-safe` marker that's positioned BEFORE any
+// top-level `func Test...` declaration. This is the "the whole file
+// shares the same parallel rationale" shape; per-test markers (within
+// 400 chars of the func decl) are checked separately by the caller.
+//
+// Requires the marker to come BEFORE the first Test* func so it can't
+// be sneaked in mid-file to cover only tests below — file-level means
+// file-level.
+func fileLevelParallelSafe(body string) bool {
+	markerIdx := strings.Index(body, "arch-test:parallel-safe")
+	if markerIdx < 0 {
+		return false
+	}
+	firstTestRE := regexp.MustCompile(`(?m)^func Test[A-Z]\w*\(`)
+	loc := firstTestRE.FindStringIndex(body)
+	if loc == nil {
+		return true // no Test* funcs anywhere; vacuously safe
+	}
+	return markerIdx < loc[0]
 }
 
 // max0 — go 1.21's builtin max() returns nondeterministic types under
@@ -1096,12 +1129,29 @@ func TestArch_IntegrationTestsHaveTimeout(t *testing.T) {
 		if !isIntegrationTestFile(src) {
 			return
 		}
-		// TestMain files don't drive tests directly — they wire goleak;
-		// timeout applies in the Test* funcs that they bracket.
+		// TestMain files don't drive tests directly — they wire goleak +
+		// shared infrastructure; timeout applies in the Test* funcs they
+		// bracket. Recognise both `testmain_*` files AND any file that
+		// only contains TestMain + helpers (no Test* funcs), e.g. the
+		// canon `fixture_integration_test.go` pattern that owns
+		// pgtest.RunMain.
 		if strings.Contains(slash, "/testmain_integration_test.go") {
 			return
 		}
 		text := string(src)
+		// Exclude `TestMain` from the Test* probe — TestMain is a setup
+		// hook, not a Test* func that needs per-test timeout bounding.
+		hasTestFunc := false
+		for _, m := range regexp.MustCompile(`(?m)^func (Test[A-Z]\w*)\(`).FindAllStringSubmatch(text, -1) {
+			if m[1] != "TestMain" {
+				hasTestFunc = true
+				break
+			}
+		}
+		if !hasTestFunc {
+			// File has TestMain or helpers only — no Test* funcs to bound.
+			return
+		}
 		if strings.Contains(text, "context.WithTimeout") ||
 			strings.Contains(text, "context.WithDeadline") ||
 			strings.Contains(text, "IntegrationTimeout") ||

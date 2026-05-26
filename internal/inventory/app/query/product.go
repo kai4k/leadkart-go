@@ -12,7 +12,12 @@ import (
 )
 
 // GetProductQuery — single-product read.
+//
+// TenantID is the caller's tenant scope (injected from JWT context by
+// the HTTP layer). Per ADR 0062 (TDL canon): tenantID flows through
+// explicit query fields, not via context smuggling.
 type GetProductQuery struct {
+	TenantID  tenant.ID
 	ProductID product.ID
 }
 
@@ -28,7 +33,7 @@ func NewGetProductHandler(products product.Repository) GetProductHandler {
 
 // Handle returns the product.
 func (h GetProductHandler) Handle(ctx context.Context, q GetProductQuery) (*product.Product, error) {
-	return h.products.GetByID(ctx, q.ProductID)
+	return h.products.GetByID(ctx, q.TenantID, q.ProductID)
 }
 
 // ListProductsPageQuery — cursor-paginated product list under tenant

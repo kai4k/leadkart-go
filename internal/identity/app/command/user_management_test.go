@@ -2,90 +2,25 @@ package command_test
 
 
 import (
-	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/leadkart/leadkart-go/internal/identity/app/command"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/membership/membershiptest"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
 
 
-// fakeMembershipRepo is the minimum [membership.Repository] surface
-// the user_management handlers exercise.
-type fakeMembershipRepo struct {
-	memberships map[membership.ID]*membership.Membership
-}
-
-func newFakeMembershipRepo() *fakeMembershipRepo {
-	return &fakeMembershipRepo{memberships: make(map[membership.ID]*membership.Membership)}
-}
-
-func (r *fakeMembershipRepo) Add(_ context.Context, m *membership.Membership) error {
-	r.memberships[m.ID()] = m
-	return nil
-}
-
-func (r *fakeMembershipRepo) UpdateByID(_ context.Context, id membership.ID, fn func(*membership.Membership) (bool, error)) error {
-	m, ok := r.memberships[id]
-	if !ok {
-		return membership.ErrNotFound
-	}
-	commit, err := fn(m)
-	if err != nil {
-		return err
-	}
-	_ = commit
-	return nil
-}
-
-func (r *fakeMembershipRepo) GetByID(_ context.Context, id membership.ID) (*membership.Membership, error) {
-	m, ok := r.memberships[id]
-	if !ok {
-		return nil, membership.ErrNotFound
-	}
-	return m, nil
-}
-
-func (r *fakeMembershipRepo) GetActiveForPerson(_ context.Context, _ person.ID) (*membership.Membership, error) {
-	return nil, membership.ErrNotFound
-}
-
-func (r *fakeMembershipRepo) ListForTenant(_ context.Context, tid tenant.ID) ([]*membership.Membership, error) {
-	var out []*membership.Membership
-	for _, m := range r.memberships {
-		if m.TenantID() == tid {
-			out = append(out, m)
-		}
-	}
-	return out, nil
-}
-
-func (r *fakeMembershipRepo) ListAllForPerson(_ context.Context, pid person.ID) ([]*membership.Membership, error) {
-	var out []*membership.Membership
-	for _, m := range r.memberships {
-		if m.PersonID() == pid {
-			out = append(out, m)
-		}
-	}
-	return out, nil
-}
-
-func (r *fakeMembershipRepo) HasActiveSuperAdmin(_ context.Context, _ tenant.ID) (bool, error) {
-	return false, nil
-}
-
-func (r *fakeMembershipRepo) ListForTenantPage(_ context.Context, _ time.Time, _ string, _ int) ([]*membership.Membership, error) {
-	// Tests in this package exercise the command path, not the paginated
-	// list query. Empty page is the safe stub — query-layer tests live
-	// in the query package against a real testcontainers DB.
-	return nil, nil
-}
-
-var _ membership.Repository = (*fakeMembershipRepo)(nil)
+// The membership-side fake lives in
+// internal/identity/domain/membership/membershiptest/ per TDL Wild
+// Workouts canon — co-located with the aggregate it fakes.
+// newFakeMembershipRepo is preserved as a one-line alias so existing
+// tests don't need rewriting.
+func newFakeMembershipRepo() *membershiptest.FakeRepository { return membershiptest.NewFakeRepository() }
 
 func newMembership(t *testing.T) *membership.Membership {
 	t.Helper()
@@ -111,6 +46,7 @@ func TestUpdateUserProfile_Succeeds(t *testing.T) {
 
 	h := command.NewUpdateUserProfileHandler(repo, func() time.Time { return testNow })
 	if err := h.Handle(t.Context(), command.UpdateUserProfileCommand{
+			TenantID:      tenant.ID("33333333-3333-3333-3333-333333333333"),
 		MembershipID:  m.ID(),
 		Designation:   "Sales Manager",
 		Department:    "North Zone",
@@ -131,6 +67,7 @@ func TestUpdateUserProfile_NotFound(t *testing.T) {
 	repo := newFakeMembershipRepo()
 	h := command.NewUpdateUserProfileHandler(repo, func() time.Time { return testNow })
 	err := h.Handle(t.Context(), command.UpdateUserProfileCommand{
+			TenantID:      tenant.ID("33333333-3333-3333-3333-333333333333"),
 		MembershipID: membership.ID("99999999-9999-9999-9999-999999999999"),
 	})
 	if !errors.Is(err, command.ErrUserNotFound) {
@@ -144,7 +81,8 @@ func TestDeactivateUser_RequiresReason(t *testing.T) {
 	m := newMembership(t)
 	_ = repo.Add(t.Context(), m) // arch-test:ignore-err - test fixture setup
 	h := command.NewDeactivateUserHandler(repo, func() time.Time { return testNow })
-	err := h.Handle(t.Context(), command.DeactivateUserCommand{MembershipID: m.ID()})
+	err := h.Handle(t.Context(), command.DeactivateUserCommand{
+			TenantID:     tenant.ID("33333333-3333-3333-3333-333333333333"),MembershipID: m.ID()})
 	if !errors.Is(err, membership.ErrInvalid) {
 		t.Fatalf("err = %v, want wraps membership.ErrInvalid (empty reason)", err)
 	}
@@ -157,6 +95,7 @@ func TestDeactivateUser_Succeeds(t *testing.T) {
 	_ = repo.Add(t.Context(), m) // arch-test:ignore-err - test fixture setup
 	h := command.NewDeactivateUserHandler(repo, func() time.Time { return testNow })
 	if err := h.Handle(t.Context(), command.DeactivateUserCommand{
+			TenantID:     tenant.ID("33333333-3333-3333-3333-333333333333"),
 		MembershipID: m.ID(),
 		Reason:       "left-the-company",
 	}); err != nil {
@@ -176,7 +115,8 @@ func TestReactivateUser_RoundTrip(t *testing.T) {
 	_ = repo.Add(t.Context(), m) // arch-test:ignore-err - test fixture setup
 
 	h := command.NewReactivateUserHandler(repo, func() time.Time { return testNow })
-	if err := h.Handle(t.Context(), command.ReactivateUserCommand{MembershipID: m.ID()}); err != nil {
+	if err := h.Handle(t.Context(), command.ReactivateUserCommand{
+			TenantID:     tenant.ID("33333333-3333-3333-3333-333333333333"),MembershipID: m.ID()}); err != nil {
 		t.Fatalf("Handle: %v", err)
 	}
 	if m.Status() != membership.StatusActive {
@@ -189,6 +129,7 @@ func TestReactivateUser_NotFound(t *testing.T) {
 	repo := newFakeMembershipRepo()
 	h := command.NewReactivateUserHandler(repo, func() time.Time { return testNow })
 	err := h.Handle(t.Context(), command.ReactivateUserCommand{
+			TenantID:     tenant.ID("33333333-3333-3333-3333-333333333333"),
 		MembershipID: membership.ID("99999999-9999-9999-9999-999999999999"),
 	})
 	if !errors.Is(err, command.ErrUserNotFound) {
@@ -216,5 +157,138 @@ func TestNewHandlers_PanicOnNilRepo(t *testing.T) {
 			}()
 			c.fn()
 		})
+	}
+}
+
+// TestUserManagementHandlers_InputRejections — boundary-input guards
+// for every handler. Zero TenantID and zero MembershipID short-circuit
+// before any repo is touched.
+func TestUserManagementHandlers_InputRejections(t *testing.T) {
+	t.Parallel()
+	zeroTID := tenant.ID("")
+	zeroMID := membership.ID("")
+	someTID := tenant.ID("33333333-3333-3333-3333-333333333333")
+	someMID := membership.ID("11111111-1111-1111-1111-111111111111")
+	cases := []struct {
+		name string
+		fn   func() error
+	}{
+		{"UpdateUserProfile zero tenant", func() error {
+			return command.NewUpdateUserProfileHandler(newFakeMembershipRepo(), func() time.Time { return testNow }).Handle(
+				t.Context(), command.UpdateUserProfileCommand{TenantID: zeroTID, MembershipID: someMID})
+		}},
+		{"UpdateUserProfile zero membership", func() error {
+			return command.NewUpdateUserProfileHandler(newFakeMembershipRepo(), func() time.Time { return testNow }).Handle(
+				t.Context(), command.UpdateUserProfileCommand{TenantID: someTID, MembershipID: zeroMID})
+		}},
+		{"DeactivateUser zero tenant", func() error {
+			return command.NewDeactivateUserHandler(newFakeMembershipRepo(), func() time.Time { return testNow }).Handle(
+				t.Context(), command.DeactivateUserCommand{TenantID: zeroTID, MembershipID: someMID, Reason: "x"})
+		}},
+		{"DeactivateUser zero membership", func() error {
+			return command.NewDeactivateUserHandler(newFakeMembershipRepo(), func() time.Time { return testNow }).Handle(
+				t.Context(), command.DeactivateUserCommand{TenantID: someTID, MembershipID: zeroMID, Reason: "x"})
+		}},
+		{"ReactivateUser zero tenant", func() error {
+			return command.NewReactivateUserHandler(newFakeMembershipRepo(), func() time.Time { return testNow }).Handle(
+				t.Context(), command.ReactivateUserCommand{TenantID: zeroTID, MembershipID: someMID})
+		}},
+		{"ReactivateUser zero membership", func() error {
+			return command.NewReactivateUserHandler(newFakeMembershipRepo(), func() time.Time { return testNow }).Handle(
+				t.Context(), command.ReactivateUserCommand{TenantID: someTID, MembershipID: zeroMID})
+		}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			err := c.fn()
+			if err == nil {
+				t.Fatal("expected error, got nil")
+			}
+		})
+	}
+}
+
+// TestDeactivateUser_AlreadyInactive_Idempotent exercises the aggregate-
+// idempotent arm: Deactivate on an already-Inactive Membership returns
+// nil + emits no event. The handler's closure path therefore commits
+// no mutation — same shape as a first-time Deactivate from the handler
+// caller's perspective (returns nil), but no DeactivatedEvent fires.
+func TestDeactivateUser_AlreadyInactive_Idempotent(t *testing.T) {
+	t.Parallel()
+	repo := newFakeMembershipRepo()
+	m := newMembership(t)
+	if err := m.Deactivate("initial-leave", testNow); err != nil {
+		t.Fatalf("setup Deactivate: %v", err)
+	}
+	_ = m.PullEvents()
+	_ = repo.Add(t.Context(), m) // arch-test:ignore-err
+
+	h := command.NewDeactivateUserHandler(repo, func() time.Time { return testNow })
+	if err := h.Handle(t.Context(), command.DeactivateUserCommand{
+		TenantID:     tenant.ID("33333333-3333-3333-3333-333333333333"),
+		MembershipID: m.ID(),
+		Reason:       "second-deactivate-attempt",
+	}); err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	if m.Status() != membership.StatusInactive {
+		t.Errorf("Status = %v, want Inactive (unchanged)", m.Status())
+	}
+	if got := m.PullEvents(); len(got) != 0 {
+		t.Errorf("PullEvents len = %d, want 0 (idempotent — no event)", len(got))
+	}
+}
+
+// TestReactivateUser_AlreadyActive_Idempotent — Reactivate on an
+// already-Active Membership returns nil + emits no event per the
+// aggregate's no-op contract.
+func TestReactivateUser_AlreadyActive_Idempotent(t *testing.T) {
+	t.Parallel()
+	repo := newFakeMembershipRepo()
+	m := newMembership(t) // StatusActive by default
+	_ = m.PullEvents()
+	_ = repo.Add(t.Context(), m) // arch-test:ignore-err
+
+	h := command.NewReactivateUserHandler(repo, func() time.Time { return testNow })
+	if err := h.Handle(t.Context(), command.ReactivateUserCommand{
+		TenantID:     tenant.ID("33333333-3333-3333-3333-333333333333"),
+		MembershipID: m.ID(),
+	}); err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	if m.Status() != membership.StatusActive {
+		t.Errorf("Status = %v, want Active (unchanged)", m.Status())
+	}
+	if got := m.PullEvents(); len(got) != 0 {
+		t.Errorf("PullEvents len = %d, want 0 (idempotent — no event)", len(got))
+	}
+}
+
+// TestUpdateUserProfile_HappyPath_NoLengthRejection documents that
+// Membership.UpdateProfile has NO length invariant on the input fields
+// — long status messages, long designations, etc. all pass through.
+// Per the BRD line N (per-tenant profile) admin UI should clamp; the
+// aggregate intentionally stays permissive so retroactive policy
+// tightening doesn't reject existing rows.
+//
+// (Branch documented; the more-substantial coverage lives in
+// the existing TestUpdateUserProfile_Succeeds.)
+func TestUpdateUserProfile_HappyPath_NoLengthRejection(t *testing.T) {
+	t.Parallel()
+	repo := newFakeMembershipRepo()
+	m := newMembership(t)
+	_ = repo.Add(t.Context(), m) // arch-test:ignore-err
+
+	longMsg := strings.Repeat("a", 500)
+	h := command.NewUpdateUserProfileHandler(repo, func() time.Time { return testNow })
+	if err := h.Handle(t.Context(), command.UpdateUserProfileCommand{
+		TenantID:      tenant.ID("33333333-3333-3333-3333-333333333333"),
+		MembershipID:  m.ID(),
+		Designation:   "Sales Manager",
+		Department:    "North Zone",
+		StatusMessage: longMsg,
+	}); err != nil {
+		t.Fatalf("Handle: %v", err)
 	}
 }

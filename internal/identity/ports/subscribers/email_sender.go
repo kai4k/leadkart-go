@@ -15,6 +15,8 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/integrationevents"
 )
 
+// arch-test:idempotency-via-gateway-dedup — the EmailGateway (SendGrid in prod, Recorder in dev) enforces dedup at the provider via the per-message ID + suppression list. Per ADR 0057, re-sends are absorbed there; the subscriber itself is stateless dispatch.
+
 // EmailSender is the subscriber that turns the V1 email-dispatch events
 // emitted by the password-reset + email-change command handlers (per
 // ADR 0057) into actual gateway.Send calls. Single responsibility:
@@ -61,7 +63,7 @@ func NewEmailSender(gateway email.Gateway, from email.Address, appURL string, lo
 		panic("subscribers: NewEmailSender appURL required")
 	}
 	if log == nil {
-		log = slog.Default()
+		panic("subscribers: NewEmailSender log required")
 	}
 	return &EmailSender{gateway: gateway, from: from, appURL: appURL, log: log}
 }

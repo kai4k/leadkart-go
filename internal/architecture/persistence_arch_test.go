@@ -42,9 +42,11 @@ func TestArch_RepositoriesHaveUpdateByIDFn(t *testing.T) {
 	t.Parallel()
 
 	exceptions := map[string]string{
-		"stockmovement":    "append-only ledger (per repository.go godoc)",
-		"verificationcall": "append-only call log (per repository.go godoc)",
-		"leadcredit":       "optimistic-concurrency UpsertWithVersion (ADR 0059)",
+		"stockmovement":     "append-only ledger (per repository.go godoc)",
+		"verificationcall":  "append-only call log (per repository.go godoc)",
+		"leadcredit":        "optimistic-concurrency UpsertWithVersion (ADR 0059)",
+		"calllog":           "append-only CRM call log (ADR 0060 — no state-mutation methods after New)",
+		"assignmenthistory": "append-only CRM assignment audit (ADR 0060 — append-only Entry, no UpdateByID)",
 	}
 
 	type violation struct {

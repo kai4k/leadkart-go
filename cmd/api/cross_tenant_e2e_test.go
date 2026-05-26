@@ -40,13 +40,14 @@ import (
 	"github.com/leadkart/leadkart-go/internal/common/config"
 	"github.com/leadkart/leadkart-go/internal/common/email"
 	"github.com/leadkart/leadkart-go/internal/common/ids"
+	crmapp "github.com/leadkart/leadkart-go/internal/crm/app"
 	"github.com/leadkart/leadkart-go/internal/identity/adapters"
 	"github.com/leadkart/leadkart-go/internal/identity/app"
 	"github.com/leadkart/leadkart-go/internal/identity/app/jwt"
-	platformapp "github.com/leadkart/leadkart-go/internal/platform/app"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/permission"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
 	"github.com/leadkart/leadkart-go/internal/identity/ports"
+	platformapp "github.com/leadkart/leadkart-go/internal/platform/app"
 )
 
 // testNow is the deterministic instant test fixtures pass to domain
@@ -87,7 +88,7 @@ func newE2EFixture(t *testing.T) e2eFixture {
 	if err != nil {
 		t.Fatalf("buildIdentityApp: %v", err)
 	}
-	srv := httptest.NewServer(newServer(silentLogger(), wiring.App, platformapp.Application{}, buildInventoryApp(pool), wiring.Issuer, wiring.StampValidator))
+	srv := httptest.NewServer(newServer(silentLogger(), wiring.App, platformapp.Application{}, buildInventoryApp(pool), crmapp.Application{}, wiring.Issuer, wiring.StampValidator))
 	t.Cleanup(srv.Close)
 	return e2eFixture{
 		URL:     srv.URL,

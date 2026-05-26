@@ -540,31 +540,13 @@ func TestArch_NoGoroutinesInDomain(t *testing.T) {
 func TestArch_NoSlogDefault(t *testing.T) {
 	t.Parallel()
 
-	// Files allow-listed for the GUARDED-NIL-FALLBACK pattern:
-	//
-	//   if log == nil { log = slog.Default() }
-	//
-	// All entries here MUST have a `*slog.Logger` constructor parameter
-	// (or a Config-struct field) that the caller is meant to supply;
-	// the fallback only fires when the caller forgets. This is the
-	// common Go library idiom (cf. http.Handler nil-mux, sql.DB default
-	// driver). Each entry below was audited by hand for the guarded
-	// shape — drift here means a legitimate violation slipped in under
-	// an existing whitelist entry. Re-audit when modifying any of these
-	// files.
-	allowList := []string{
-		"internal/common/audit/purge.go",
-		"internal/common/audit/writer.go",
-		"internal/common/cache/hybrid.go",
-		"internal/common/httpmw/recover.go",
-		"internal/common/httpmw/requestlog.go",
-		"internal/common/messaging/middleware.go",
-		"internal/common/messaging/router.go",
-		"internal/identity/ports/subscribers/email_sender.go",
-		"internal/identity/ports/subscribers/invalidate_cache.go",
-		"internal/identity/ports/subscribers/reuse_detected_siem.go",
-		"internal/identity/ports/subscribers/revoke_families.go",
-	}
+	// No allow-list. Every production caller MUST inject `*slog.Logger`
+	// at construction; nil arrives → panic at NewX (Mat Ryer 2024 +
+	// Khorikov §6 — dependencies enter via parameters, not globals).
+	// The previous guarded-nil-fallback pattern was retired in the May
+	// 2026 slog-injection sweep — see feedback_test_failures_canon_only
+	// (memory) + the Apr 2026 Cheney post "constructors that mask their
+	// dependencies are technical debt".
 
 	type violation struct {
 		file string
@@ -573,12 +555,6 @@ func TestArch_NoSlogDefault(t *testing.T) {
 	var violations []violation
 
 	walkGoFiles(t, internalDir(t), false, func(path string, src []byte) {
-		slashPath := pathToSlash(path)
-		for _, allowed := range allowList {
-			if strings.HasSuffix(slashPath, allowed) {
-				return
-			}
-		}
 		fset, f := parseFile(t, path, src)
 		ast.Inspect(f, func(n ast.Node) bool {
 			call, ok := n.(*ast.CallExpr)

@@ -32,6 +32,29 @@ func SetTenantOnTx(ctx context.Context, tx pgx.Tx) error {
 	return nil
 }
 
+// SetTenantOnTxExplicit binds the supplied tenant.ID to the Postgres
+// transaction's app.tenant_id GUC. The TDL-canon variant of
+// [SetTenantOnTx] — the tenantID is an EXPLICIT parameter rather than
+// fished out of context.Context. Per ADR 0062 + the "domain values
+// belong in function signatures, not in ctx" principle (Khorikov §11 +
+// Cheney accept-interfaces-return-structs).
+//
+// Adapters that have refactored to explicit-tenant Repository methods
+// call this; ctx-tenancy.WithID can be empty. ctx is still passed for
+// cancellation/deadline.
+//
+// Empty tenantID returns an error (use [SetPlatformOnTx] for cross-
+// tenant flows; fail-closed per multi-tenancy.md).
+func SetTenantOnTxExplicit(ctx context.Context, tx pgx.Tx, tenantID string) error {
+	if tenantID == "" {
+		return errors.New("pg: explicit tenantID required (use SetPlatformOnTx for cross-tenant flows)")
+	}
+	if _, err := tx.Exec(ctx, `SELECT set_config('app.tenant_id', $1, true)`, tenantID); err != nil {
+		return fmt.Errorf("pg: bind tenant_id GUC: %w", err)
+	}
+	return nil
+}
+
 // SetPlatformOnTx flips the platform-operator GUC for the duration of the
 // transaction, bypassing RLS on every tenant-scoped table. Reserved for:
 //

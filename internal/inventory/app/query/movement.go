@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/leadkart/leadkart-go/internal/common/pagination"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 	"github.com/leadkart/leadkart-go/internal/inventory/domain/batch"
 	"github.com/leadkart/leadkart-go/internal/inventory/domain/stockmovement"
 )
@@ -12,7 +13,12 @@ import (
 // ListBatchMovementsPageQuery — cursor-paginated per-batch ledger read.
 // Optionally filtered by movement Type per the route's ?type=&cursor=
 // query string.
+//
+// TenantID is the caller's tenant scope (injected from JWT context by
+// the HTTP layer). Per ADR 0062 (TDL canon): tenantID flows through
+// explicit query fields, not via context smuggling.
 type ListBatchMovementsPageQuery struct {
+	TenantID tenant.ID
 	BatchID  batch.ID
 	Cursor   pagination.Cursor
 	PageSize int
@@ -39,7 +45,7 @@ func (h ListBatchMovementsPageHandler) Handle(ctx context.Context, q ListBatchMo
 	if !req.Filter.IsValid() {
 		return pagination.Page[*stockmovement.Movement]{}, fmt.Errorf("%w: type=%q", stockmovement.ErrInvalid, q.Type)
 	}
-	page, err := h.movements.ListByBatchPage(ctx, q.BatchID, req)
+	page, err := h.movements.ListByBatchPage(ctx, q.TenantID, q.BatchID, req)
 	if err != nil {
 		return pagination.Page[*stockmovement.Movement]{}, fmt.Errorf("list movements: %w", err)
 	}

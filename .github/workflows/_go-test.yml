@@ -1,0 +1,109 @@
+name: Reusable — Go Test Job
+
+# Reusable workflow for any Go test job that:
+#   - boots a fresh runner
+#   - checks out + sets up Go from go.mod + installs Task
+#   - invokes a Taskfile target (which owns the actual test command)
+#   - uploads JUnit XML + annotates the PR Checks panel
+#
+# FAANG canon (hashicorp / aws-samples / google-github-actions):
+#   - Reusable workflows under .github/workflows/ with `_` prefix marks
+#     them as "called only" — `workflow_call:` trigger means they don't
+#     run on push/PR directly.
+#   - Inputs are typed (string/boolean/number). Defaults absorb the
+#     common case so callers only pass what differs.
+#   - Outputs propagate matrix-shard names back to the caller for
+#     downstream consumption.
+#
+# Used by ci.yml jobs: unit, architecture, integration (matrix-sharded).
+
+on:
+  workflow_call:
+    inputs:
+      # Required — every caller must name itself for the Checks panel.
+      job-name:
+        description: 'Display name (used for the GitHub Checks panel + JUnit artifact name).'
+        type: string
+        required: true
+      task-name:
+        description: 'Taskfile target to invoke (e.g. ci:test, ci:test:arch, ci:test:int:shard).'
+        type: string
+        required: true
+      junit-path:
+        description: 'Path to the JUnit XML the task emits (relative to repo root).'
+        type: string
+        required: true
+
+      # Optional — defaults cover the common case.
+      runs-on:
+        description: 'GitHub runner label. ubuntu-latest works for everything we have.'
+        type: string
+        default: 'ubuntu-latest'
+      timeout-minutes:
+        description: 'Per-job timeout. Keep tight to surface hangs fast.'
+        type: number
+        default: 15
+      needs-docker:
+        description: 'Pre-pull postgres:17-alpine for testcontainers-based jobs.'
+        type: boolean
+        default: false
+      coverage-path:
+        description: 'Path to the coverage profile the task emits. Empty = no upload.'
+        type: string
+        default: ''
+      coverage-artifact-name:
+        description: 'Artifact name for the coverage upload. Required iff coverage-path is set.'
+        type: string
+        default: ''
+      env-shard:
+        description: 'SHARD env var (matrix-sharded task variants — e.g. ci:test:int:shard).'
+        type: string
+        default: ''
+      env-pkg:
+        description: 'PKG env var (matrix-sharded task variants).'
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+  checks: write   # dorny/test-reporter
+
+jobs:
+  run:
+    name: ${{ inputs.job-name }}
+    runs-on: ${{ inputs.runs-on }}
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    steps:
+      # Caller does checkout-then-composite — composites can't self-bootstrap.
+      - uses: actions/checkout@v6
+
+      - uses: ./.github/actions/go-setup
+
+      # testcontainers-based jobs benefit from pre-pulling the image
+      # in parallel with go-setup's module-download step.
+      - name: Pre-pull postgres:17-alpine
+        if: inputs.needs-docker
+        run: docker pull postgres:17-alpine
+
+      # The actual work. Taskfile owns the test command + flags + package
+      # list. Job is a thin wrapper that just invokes the task with the
+      # right env vars (for matrix-sharded variants).
+      - name: Run task ${{ inputs.task-name }}
+        env:
+          SHARD: ${{ inputs.env-shard }}
+          PKG: ${{ inputs.env-pkg }}
+        run: task ${{ inputs.task-name }}
+
+      - name: Upload coverage artifact
+        if: always() && inputs.coverage-path != ''
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ inputs.coverage-artifact-name }}
+          path: ${{ inputs.coverage-path }}
+          retention-days: 7
+
+      - uses: ./.github/actions/junit-report
+        if: always()
+        with:
+          name: ${{ inputs.job-name }}
+          junit-path: ${{ inputs.junit-path }}

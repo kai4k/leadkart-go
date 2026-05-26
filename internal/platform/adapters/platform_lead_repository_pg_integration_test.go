@@ -1,12 +1,27 @@
 //go:build integration
 
+// arch-test:no-timeout-needed — every test in this file uses the shared
+//   pgtest container (per-package); pgxpool internal conn timeouts +
+//   package-level `task ci:test:int -timeout=15m` already bound execution.
+//   Per-test context.WithTimeout would be belt-and-suspenders against the
+//   shared-pool + parallel-with-RLS canon shape.
+//
+// SQL-CONTRACT COVERAGE (per ADR 0062 — TDL Test Pyramid):
+//   - MarketplaceBrowse SELECT column-set discipline (H12): the browse
+//     read MUST omit PII columns (email / gst_number / pan_number /
+//     mobile_e164 / street). Asserted at the SQL layer because a `SELECT
+//     *` drift in production would bypass the application-layer DTO
+//     mapper. This is a SQL-specific contract test.
+//
+// Round-trip Add/GetByID + state-machine (Purchase) + ErrNotFound
+// coverage moved to [platformleadtest.FakeRepository].
+
 package adapters_test
 
 import (
-	"time"
 	"context"
-	"errors"
 	"testing"
+	"time"
 
 	"github.com/leadkart/leadkart-go/internal/common/ids"
 	"github.com/leadkart/leadkart-go/internal/common/pagination"
@@ -15,6 +30,7 @@ import (
 	"github.com/leadkart/leadkart-go/internal/platform/domain/platformlead"
 	"github.com/leadkart/leadkart-go/internal/platform/domain/unverifiedcontact"
 )
+
 
 // seedPlatformLead inserts a contact row first (FK target) + a
 // PlatformLead linked to it. Returns the lead ID.
@@ -50,51 +66,15 @@ func seedPlatformLead(t *testing.T, leadRepo *adapters.PlatformLeadRepository, c
 	return leadID
 }
 
-// TestPlatformLeadRepository_Add_RoundTripsViaGetByID — write + read.
-func TestPlatformLeadRepository_Add_RoundTripsViaGetByID(t *testing.T) {
-	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
-	defer cancel()
-	_ = ctx // arch-test:integration-timeout-anchor
-	pool := platformPool(t)
-	tx := pg.NewTransactor(pool)
-	repo := adapters.NewPlatformLeadRepository(pool, tx)
-	contactRepo := adapters.NewUnverifiedContactRepository(pool, tx)
-
-	leadID := seedPlatformLead(t, repo, contactRepo, tx)
-	err := tx.WithinTx(t.Context(), pg.TxScopePlatform, func(ctx context.Context) error {
-		got, err := repo.GetByID(ctx, leadID)
-		if err != nil {
-			return err
-		}
-		if got.ID() != leadID {
-			t.Errorf("ID round-trip: got %q want %q", got.ID(), leadID)
-		}
-		if !got.IsAvailable() {
-			t.Error("expected IsAvailable=true on freshly-verified lead")
-		}
-		// FULL form round-trip on GetByID — including PII (this read
-		// path is used by the buyer post-purchase, so PII availability
-		// here is correct).
-		if got.Form().Email() != "ops@acme.test" {
-			t.Errorf("Email round-trip: got %q want ops@acme.test", got.Form().Email())
-		}
-		if got.Form().GstNumber() != "27AAAAA0000A1Z5" {
-			t.Errorf("GstNumber round-trip: got %q", got.Form().GstNumber())
-		}
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("read tx: %v", err)
-	}
-}
-
-// TestPlatformLeadRepository_MarketplaceBrowse_OmitsPII — H12. The
-// browse SELECT explicitly omits email / gst_number / pan_number /
-// mobile_e164 / street to prevent a future `SELECT *` drift from
-// leaking PII through the DTO mapper. The returned aggregate's
-// PII-field accessors MUST return the empty string (no row data
-// scanned in).
+// TestPlatformLeadRepository_MarketplaceBrowse_OmitsPII — SQL-contract
+// (H12). The browse SELECT explicitly omits email / gst_number /
+// pan_number / mobile_e164 / street to prevent a future `SELECT *` drift
+// from leaking PII through the DTO mapper. The returned aggregate's
+// PII-field accessors MUST return the empty string (no row data scanned
+// in).
 func TestPlatformLeadRepository_MarketplaceBrowse_OmitsPII(t *testing.T) {
+	// arch-test:no-parallel — cross-tenant scan; uses TruncateAll
+	sharedPG.TruncateAll(t)
 	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 	defer cancel()
 	_ = ctx // arch-test:integration-timeout-anchor
@@ -145,73 +125,5 @@ func TestPlatformLeadRepository_MarketplaceBrowse_OmitsPII(t *testing.T) {
 	}
 	if row.Form().City() != "Pune" {
 		t.Errorf("City: got %q want Pune", row.Form().City())
-	}
-}
-
-// TestPlatformLeadRepository_UpdateByID_Purchase_RoundTrips —
-// purchase flow drives sold_to_tenant_id + sold_at; reload sees the
-// transition.
-func TestPlatformLeadRepository_UpdateByID_Purchase_RoundTrips(t *testing.T) {
-	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
-	defer cancel()
-	_ = ctx // arch-test:integration-timeout-anchor
-	pool := platformPool(t)
-	tx := pg.NewTransactor(pool)
-	repo := adapters.NewPlatformLeadRepository(pool, tx)
-	contactRepo := adapters.NewUnverifiedContactRepository(pool, tx)
-
-	leadID := seedPlatformLead(t, repo, contactRepo, tx)
-	buyerTenant := platformlead.TenantID(ids.NewV7().String())
-	buyerMember := unverifiedcontact.MembershipID(ids.NewV7().String())
-
-	err := tx.WithinTx(t.Context(), pg.TxScopePlatform, func(ctx context.Context) error {
-		return repo.UpdateByID(ctx, leadID, func(l *platformlead.PlatformLead) (bool, error) {
-			return true, l.Purchase(buyerTenant, buyerMember, 50000, nowUTC())
-		})
-	})
-	if err != nil {
-		t.Fatalf("purchase: %v", err)
-	}
-
-	err = tx.WithinTx(t.Context(), pg.TxScopePlatform, func(ctx context.Context) error {
-		got, err := repo.GetByID(ctx, leadID)
-		if err != nil {
-			return err
-		}
-		if got.IsAvailable() {
-			t.Error("expected IsAvailable=false post-purchase")
-		}
-		if got.SoldToTenantID() != buyerTenant {
-			t.Errorf("SoldToTenantID: got %q want %q", got.SoldToTenantID(), buyerTenant)
-		}
-		if got.AmountPaisa() != 50000 {
-			t.Errorf("AmountPaisa: got %d want 50000", got.AmountPaisa())
-		}
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("read: %v", err)
-	}
-}
-
-// TestPlatformLeadRepository_GetByID_ReturnsErrNotFound — sentinel
-// shape.
-func TestPlatformLeadRepository_GetByID_ReturnsErrNotFound(t *testing.T) {
-	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
-	defer cancel()
-	_ = ctx // arch-test:integration-timeout-anchor
-	pool := platformPool(t)
-	tx := pg.NewTransactor(pool)
-	repo := adapters.NewPlatformLeadRepository(pool, tx)
-
-	err := tx.WithinTx(t.Context(), pg.TxScopePlatform, func(ctx context.Context) error {
-		_, err := repo.GetByID(ctx, platformlead.ID(ids.NewV7().String()))
-		if !errors.Is(err, platformlead.ErrNotFound) {
-			t.Errorf("expected ErrNotFound, got %v", err)
-		}
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("tx: %v", err)
 	}
 }

@@ -2,7 +2,6 @@ package command_test
 
 
 import (
-	"context"
 	"errors"
 	"testing"
 	"time"
@@ -13,84 +12,25 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/app/command"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/passwordpolicy"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/person/persontest"
 )
 
-
-// fakePersonRepo is the minimum [person.Repository] surface the
-// ChangePasswordHandler exercises — GetByID + UpdateByID. Add /
-// GetByEmail are unused; we still implement them so the type
-// satisfies the interface and the compile-time assertion below
-// catches drift.
-type fakePersonRepo struct {
-	person *person.Person
-
-	// updateCalls counts UpdateByID invocations that committed
-	// (closure returned true). False-return closures (no-op) +
-	// error returns don't bump the counter.
-	updateCalls int
-
-	getErr error
-}
-
-func (f *fakePersonRepo) Add(_ context.Context, _ *person.Person) error { return nil }
-
-func (f *fakePersonRepo) GetByID(_ context.Context, id person.ID) (*person.Person, error) {
-	if f.getErr != nil {
-		return nil, f.getErr
-	}
-	if f.person == nil || f.person.ID() != id {
-		return nil, person.ErrNotFound
-	}
-	return f.person, nil
-}
-
-func (f *fakePersonRepo) GetByIDs(_ context.Context, ids []person.ID) (map[person.ID]*person.Person, error) {
-	out := make(map[person.ID]*person.Person, len(ids))
-	if f.person == nil {
-		return out, nil
-	}
-	for _, id := range ids {
-		if id == f.person.ID() {
-			out[id] = f.person
+// The person-side fake lives in internal/identity/domain/person/persontest/
+// per TDL Wild Workouts canon — co-located with the aggregate it
+// fakes. seedPersonRepo seeds a fresh [persontest.FakeRepository] with
+// the supplied Person and returns the repo; mirrors the old
+// `&fakePersonRepo{person: p}` shorthand while delegating contract
+// semantics to the shared fake.
+func seedPersonRepo(t *testing.T, p *person.Person) *persontest.FakeRepository {
+	t.Helper()
+	repo := persontest.NewFakeRepository()
+	if p != nil {
+		if err := repo.Add(t.Context(), p); err != nil {
+			t.Fatalf("seedPersonRepo: Add: %v", err)
 		}
 	}
-	return out, nil
+	return repo
 }
-
-func (f *fakePersonRepo) GetByEmail(_ context.Context, _ email.Address) (*person.Person, error) {
-	return nil, person.ErrNotFound
-}
-
-func (f *fakePersonRepo) GetByPasswordResetTokenHash(_ context.Context, _ person.PasswordResetTokenHash) (*person.Person, error) {
-	return nil, person.ErrNotFound
-}
-
-func (f *fakePersonRepo) GetByEmailChangeTokenHash(_ context.Context, _ person.EmailChangeTokenHash) (*person.Person, error) {
-	return nil, person.ErrNotFound
-}
-
-func (f *fakePersonRepo) UpdateByID(_ context.Context, id person.ID, fn func(*person.Person) (bool, error)) error {
-	if f.person == nil || f.person.ID() != id {
-		return person.ErrNotFound
-	}
-	commit, err := fn(f.person)
-	if err != nil {
-		return err
-	}
-	if commit {
-		f.updateCalls++
-	}
-	return nil
-}
-
-func (f *fakePersonRepo) UpdateLockoutState(_ context.Context, _ *person.Person) error {
-	// Unused by ChangePassword tests — the lockout hot-path is owned
-	// by the Login flow. Keep the implementation stub-true so the
-	// person.Repository compile-time assertion below stays valid.
-	return nil
-}
-
-var _ person.Repository = (*fakePersonRepo)(nil)
 
 func newPersonWithPassword(t *testing.T, plain string) *person.Person {
 	t.Helper()
@@ -118,44 +58,52 @@ func newPersonWithPassword(t *testing.T, plain string) *person.Person {
 func TestChangePassword_Succeeds(t *testing.T) {
 	t.Parallel()
 	currentPlain := "correct horse battery staple"
-	repo := &fakePersonRepo{person: newPersonWithPassword(t, currentPlain)}
+	p := newPersonWithPassword(t, currentPlain)
+	repo := seedPersonRepo(t, p)
 	h := command.NewChangePasswordHandler(repo, passwordpolicy.Noop{}, func() time.Time { return testNow })
 
 	err := h.Handle(t.Context(), command.ChangePasswordCommand{
-		PersonID:        repo.person.ID(),
+		PersonID:        p.ID(),
 		CurrentPassword: currentPlain,
 		NewPassword:     "Tr0ub4dor&3-newly-strong-passphrase!",
 	})
 	if err != nil {
 		t.Fatalf("Handle: %v", err)
 	}
-	if repo.updateCalls != 1 {
-		t.Errorf("updateCalls = %d, want 1", repo.updateCalls)
+	// State-based assertion (TDL canon): the persisted Person carries
+	// the new hash. Mirroring the persistence boundary via GetByID is
+	// stronger than a mock-style call-counter.
+	got, err := repo.GetByID(t.Context(), p.ID())
+	if err != nil {
+		t.Fatalf("GetByID after change: %v", err)
 	}
-	// New hash must verify against new plaintext, NOT the old one.
-	if vErr := argon2.Verify("Tr0ub4dor&3-newly-strong-passphrase!", repo.person.PasswordHash().String()); vErr != nil {
+	if vErr := argon2.Verify("Tr0ub4dor&3-newly-strong-passphrase!", got.PasswordHash().String()); vErr != nil {
 		t.Errorf("verify new password: %v", vErr)
 	}
-	if vErr := argon2.Verify(currentPlain, repo.person.PasswordHash().String()); vErr == nil {
+	if vErr := argon2.Verify(currentPlain, got.PasswordHash().String()); vErr == nil {
 		t.Error("verify OLD password against new hash unexpectedly succeeded")
 	}
 }
 
 func TestChangePassword_RejectsIncorrectCurrentPassword(t *testing.T) {
 	t.Parallel()
-	repo := &fakePersonRepo{person: newPersonWithPassword(t, "real-current-pw")}
+	p := newPersonWithPassword(t, "real-current-pw")
+	originalHash := p.PasswordHash().String()
+	repo := seedPersonRepo(t, p)
 	h := command.NewChangePasswordHandler(repo, passwordpolicy.Noop{}, func() time.Time { return testNow })
 
 	err := h.Handle(t.Context(), command.ChangePasswordCommand{
-		PersonID:        repo.person.ID(),
+		PersonID:        p.ID(),
 		CurrentPassword: "wrong-current-pw",
 		NewPassword:     "anything-stronger-than-floor",
 	})
 	if !errors.Is(err, command.ErrIncorrectCurrentPassword) {
 		t.Fatalf("err = %v, want ErrIncorrectCurrentPassword", err)
 	}
-	if repo.updateCalls != 0 {
-		t.Errorf("update should NOT happen on wrong current password; got %d calls", repo.updateCalls)
+	// State-based assertion: hash unchanged on rejection.
+	got, _ := repo.GetByID(t.Context(), p.ID())
+	if got.PasswordHash().String() != originalHash {
+		t.Error("password hash should not change on wrong current password")
 	}
 }
 
@@ -164,7 +112,7 @@ func TestChangePassword_PersonNotFound_ReturnsIncorrectCurrentPassword(t *testin
 	// "no such person" + "wrong password" into the same error to
 	// defeat ID-enumeration via change-password timing/error shape.
 	t.Parallel()
-	repo := &fakePersonRepo{} // no Person seeded
+	repo := seedPersonRepo(t, nil) // no Person seeded
 	h := command.NewChangePasswordHandler(repo, passwordpolicy.Noop{}, func() time.Time { return testNow })
 
 	err := h.Handle(t.Context(), command.ChangePasswordCommand{
@@ -180,39 +128,45 @@ func TestChangePassword_PersonNotFound_ReturnsIncorrectCurrentPassword(t *testin
 func TestChangePassword_RejectsBreachedPassword(t *testing.T) {
 	t.Parallel()
 	currentPlain := "real-current-pw"
-	repo := &fakePersonRepo{person: newPersonWithPassword(t, currentPlain)}
+	p := newPersonWithPassword(t, currentPlain)
+	originalHash := p.PasswordHash().String()
+	repo := seedPersonRepo(t, p)
 	// Use offline list — "password" is in defaultBreachedSet.
 	h := command.NewChangePasswordHandler(repo, adapters.NewOfflinePasswordList(), func() time.Time { return testNow })
 
 	err := h.Handle(t.Context(), command.ChangePasswordCommand{
-		PersonID:        repo.person.ID(),
+		PersonID:        p.ID(),
 		CurrentPassword: currentPlain,
 		NewPassword:     "password",
 	})
 	if !errors.Is(err, command.ErrPasswordBreached) {
 		t.Fatalf("err = %v, want ErrPasswordBreached", err)
 	}
-	if repo.updateCalls != 0 {
-		t.Errorf("breached password must not commit; got %d update calls", repo.updateCalls)
+	got, _ := repo.GetByID(t.Context(), p.ID())
+	if got.PasswordHash().String() != originalHash {
+		t.Error("breached password must not change hash")
 	}
 }
 
 func TestChangePassword_RejectsSameAsCurrent(t *testing.T) {
 	t.Parallel()
 	plain := "exact-same-passphrase"
-	repo := &fakePersonRepo{person: newPersonWithPassword(t, plain)}
+	p := newPersonWithPassword(t, plain)
+	originalHash := p.PasswordHash().String()
+	repo := seedPersonRepo(t, p)
 	h := command.NewChangePasswordHandler(repo, passwordpolicy.Noop{}, func() time.Time { return testNow })
 
 	err := h.Handle(t.Context(), command.ChangePasswordCommand{
-		PersonID:        repo.person.ID(),
+		PersonID:        p.ID(),
 		CurrentPassword: plain,
 		NewPassword:     plain,
 	})
 	if !errors.Is(err, command.ErrPasswordSameAsCurrent) {
 		t.Fatalf("err = %v, want ErrPasswordSameAsCurrent", err)
 	}
-	if repo.updateCalls != 0 {
-		t.Errorf("same-as-current must not commit; got %d update calls", repo.updateCalls)
+	got, _ := repo.GetByID(t.Context(), p.ID())
+	if got.PasswordHash().String() != originalHash {
+		t.Error("same-as-current must not change hash")
 	}
 }
 
@@ -226,7 +180,7 @@ func TestChangePassword_AnonymisedPerson_ReturnsIncorrectCurrentPassword(t *test
 	if err := p.Anonymise(testNow); err != nil {
 		t.Fatalf("Anonymise: %v", err)
 	}
-	repo := &fakePersonRepo{person: p}
+	repo := seedPersonRepo(t, p)
 	h := command.NewChangePasswordHandler(repo, passwordpolicy.Noop{}, func() time.Time { return testNow })
 
 	err := h.Handle(t.Context(), command.ChangePasswordCommand{
@@ -241,7 +195,7 @@ func TestChangePassword_AnonymisedPerson_ReturnsIncorrectCurrentPassword(t *test
 
 func TestChangePassword_RejectsZeroPersonID(t *testing.T) {
 	t.Parallel()
-	repo := &fakePersonRepo{}
+	repo := seedPersonRepo(t, nil)
 	h := command.NewChangePasswordHandler(repo, passwordpolicy.Noop{}, func() time.Time { return testNow })
 
 	err := h.Handle(t.Context(), command.ChangePasswordCommand{
@@ -256,11 +210,12 @@ func TestChangePassword_RejectsZeroPersonID(t *testing.T) {
 
 func TestChangePassword_RejectsEmptyNewPassword(t *testing.T) {
 	t.Parallel()
-	repo := &fakePersonRepo{person: newPersonWithPassword(t, "real-current-pw")}
+	p := newPersonWithPassword(t, "real-current-pw")
+	repo := seedPersonRepo(t, p)
 	h := command.NewChangePasswordHandler(repo, passwordpolicy.Noop{}, func() time.Time { return testNow })
 
 	err := h.Handle(t.Context(), command.ChangePasswordCommand{
-		PersonID:        repo.person.ID(),
+		PersonID:        p.ID(),
 		CurrentPassword: "real-current-pw",
 		NewPassword:     "",
 	})
@@ -287,6 +242,6 @@ func TestNewChangePasswordHandler_PanicsOnNilDeps(t *testing.T) {
 				t.Error("expected panic on nil breach checker")
 			}
 		}()
-		_ = command.NewChangePasswordHandler(&fakePersonRepo{}, nil, func() time.Time { return testNow }) // arch-test:ignore-err - test fixture setup
+		_ = command.NewChangePasswordHandler(persontest.NewFakeRepository(), nil, func() time.Time { return testNow }) // arch-test:ignore-err - test fixture setup
 	})
 }

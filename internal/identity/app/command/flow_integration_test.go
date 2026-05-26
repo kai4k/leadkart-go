@@ -1,46 +1,38 @@
 //go:build integration
 
-// End-to-end contract test for the Identity Week-5 command surface.
+// arch-test:no-timeout-needed — every test in this file uses the shared
+//   pgtest container (per-package); pgxpool internal conn timeouts +
+//   package-level `task ci:test:int -timeout=15m` already bound execution.
+//   Per-test context.WithTimeout would be belt-and-suspenders against the
+//   shared-pool + parallel-with-RLS canon shape.
 //
-// The four handlers compose the auth flow that the .NET LeadKart side
-// has shipped for years; this test pins the same shape against real
-// Postgres + the four pgx repository adapters. No HTTP layer yet —
-// once routes.go ships, the same flow runs through net/http with the
-// integration assertions adapting to JSON DTOs.
+// arch-test:parallel-safe — every Test* uses the shared pgtest container
+//   + a fresh tenant_id per test; RLS isolates rows by tenant so parallel
+//   runs cannot see each others state. Brandur "Postgres at scale" +
+//   TDL Wild Workouts canon.
 //
-// Contract:
-//
-//	RegisterTenant(slug, admin) → tenantID + personID + membershipID
-//	Login(email, password)      → access JWT + refresh plaintext
-//	Refresh(plaintext)          → fresh JWT + new refresh plaintext
-//	                               (old plaintext now consumed)
-//	Refresh(consumed plaintext) → ErrRefreshRejected + family revoked
-//	                               (RFC 9700 §4.13 reuse detection)
-//	Logout(plaintext)           → idempotent revoke
+// arch-test:raw-sql-justified — TestFlow_RegisterDuplicateActiveEmail_
+//   Blocked intentionally bypasses the adapter with a direct SELECT
+//   to assert the pg.UnitOfWork ROLLED BACK after the second register
+//   failed (no tenant B row in identity.tenants). Per ADR 0062 §6 the
+//   rollback is the SQL-specific contract — the observable error is
+//   already mirror-able by the fake.
 
 package command_test
 
 import (
-	"context"
 	"errors"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/alicebob/miniredis/v2"
-	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/pressly/goose/v3"
 	"github.com/redis/go-redis/v9"
-	"github.com/testcontainers/testcontainers-go"
-	"github.com/testcontainers/testcontainers-go/modules/postgres"
-	"github.com/testcontainers/testcontainers-go/wait"
 
 	"github.com/leadkart/leadkart-go/internal/common/email"
 	"github.com/leadkart/leadkart-go/internal/common/ids"
@@ -147,6 +139,7 @@ func newWiredApp(t *testing.T) wiredApp {
 }
 
 func TestFlow_RegisterLoginRefreshLogout(t *testing.T) {
+	t.Parallel()
 	app := newWiredApp(t)
 	register, login, refresh, logout := app.register, app.login, app.refresh, app.logout
 	ctx := t.Context()
@@ -233,51 +226,37 @@ func TestFlow_RegisterLoginRefreshLogout(t *testing.T) {
 	}
 }
 
-func TestFlow_LoginUnknownEmail_GenericFailure(t *testing.T) {
-	login := newWiredApp(t).login
-	ctx := t.Context()
+// Note: TestFlow_LoginUnknownEmail_GenericFailure +
+// TestFlow_LoginWrongPassword_GenericFailure were pruned per ADR 0062
+// strict redundancy audit (2026-05-26). Both branches are pure handler
+// orchestration over the AuthRouter contract + argon2 verify; no SQL
+// contract is exercised. Equivalent assertions now live in
+// login_test.go as handler-unit tests against persontest.FakeRepository
+// + fakeAuthRouter — running in <100ms each vs. the full pgtest +
+// miniredis + JWT boot the integration version paid for the same
+// observable.
 
-	addr, _ := email.New("nobody@example.test")
-	_, err := login.Handle(ctx, command.LoginCommand{
-		Email:    addr,
-		Password: "anything",
-	})
-	if !errors.Is(err, command.ErrInvalidCredentials) {
-		t.Fatalf("expected ErrInvalidCredentials, got %v", err)
-	}
-}
-
-func TestFlow_LoginWrongPassword_GenericFailure(t *testing.T) {
-	app := newWiredApp(t)
-	register, login := app.register, app.login
-	ctx := t.Context()
-
-	full := ids.NewV7().String()
-	tenantSlug, _ := slug.New("wp-" + full[len(full)-8:])
-	addr, _ := email.New("wp@flow.test")
-	if _, err := register.Handle(ctx, command.RegisterTenantCommand{
-		Slug:           tenantSlug,
-		LegalName:      "Wrong Password Pharma",
-		DisplayName:    "WP",
-		AdminEmail:     addr,
-		AdminPassword:  "right-password",
-		AdminFirstName: "WP",
-		AdminLastName:  "Admin",
-	}); err != nil {
-		t.Fatalf("Register: %v", err)
-	}
-
-	_, err := login.Handle(ctx, command.LoginCommand{
-		Email:    addr,
-		Password: "wrong-password",
-	})
-	if !errors.Is(err, command.ErrInvalidCredentials) {
-		t.Fatalf("expected ErrInvalidCredentials, got %v", err)
-	}
-}
-
+// TestFlow_RegisterDuplicateActiveEmail_Blocked covers the
+// cross-aggregate UnitOfWork rollback when the membership Add fails
+// with ErrAlreadyActive. Sharpened per ADR 0062: the observable
+// (`ErrEmailHasActiveMembership`) is mirror-able from the fake-backed
+// handler layer; the SQL-specific contract is that the FAILED Add
+// rolls back the ENTIRE pg.UnitOfWork — tenant B's row, the
+// (reused) person update, the failed membership — atomically.
+//
+// Two halves of the SQL contract:
+//
+//   1. Observable: second Register returns ErrEmailHasActiveMembership.
+//   2. Physical: direct SELECT for tenant B's slug returns zero rows
+//      — proves the pg.UnitOfWork rolled back the tenant insert when
+//      the membership Add fired ErrAlreadyActive partway through.
+//
+// Only the SQL adapter can prove (2); the fake has no UoW or pg.Tx
+// semantics to roll back.
 func TestFlow_RegisterDuplicateActiveEmail_Blocked(t *testing.T) {
-	register := newWiredApp(t).register
+	t.Parallel()
+	wired := newWiredApp(t)
+	register := wired.register
 	ctx := t.Context()
 
 	addr, _ := email.New("dup-active@flow.test")
@@ -307,8 +286,23 @@ func TestFlow_RegisterDuplicateActiveEmail_Blocked(t *testing.T) {
 		AdminFirstName: "Alice",
 		AdminLastName:  "B",
 	})
+	// SQL-contract part 1: observable error.
 	if !errors.Is(err, command.ErrEmailHasActiveMembership) {
 		t.Fatalf("expected ErrEmailHasActiveMembership, got %v", err)
+	}
+
+	// SQL-contract part 2: pg.UnitOfWork rollback proof. Tenant B's
+	// row must NOT exist — the failed membership Add rolled back the
+	// entire register flow's tx. Direct SELECT bypassing the adapter.
+	var count int
+	if err := wired.pool.QueryRow(t.Context(),
+		`SELECT count(*) FROM identity.tenants WHERE slug = $1`,
+		slugB.String(),
+	).Scan(&count); err != nil {
+		t.Fatalf("direct SELECT for tenant B rollback proof: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("tenant B row count after failed register: got %d want 0 — pg.UnitOfWork did NOT roll back the tenant insert", count)
 	}
 }
 
@@ -322,6 +316,7 @@ func TestFlow_RegisterDuplicateActiveEmail_Blocked(t *testing.T) {
 // PermissionResolver + JWT issuer + authn middleware compose into a
 // working end-to-end authorization flow with no test-only shortcuts.
 func TestE2E_LoginThenRequirePermissionGate(t *testing.T) {
+	t.Parallel()
 	app := newWiredApp(t)
 	register, login, issuer, stamps := app.register, app.login, app.issuer, app.stamps
 	ctx := t.Context()
@@ -427,94 +422,7 @@ func TestE2E_LoginThenRequirePermissionGate(t *testing.T) {
 	}
 }
 
-// startWiredPostgres mirrors repoFixture in the adapters package: spins
-// an ephemeral Postgres, applies migrations, provisions the non-superuser
-// `leadkart_app` role, returns a pgxpool connected as that role.
-//
-// Duplicated rather than imported because the adapters_test package is
-// `adapters_test` and exporting its helper would require widening the
-// Test* visibility surface unnecessarily.
-func startWiredPostgres(t *testing.T) *pgxpool.Pool {
-	t.Helper()
-
-	ctx, cancel := context.WithTimeout(t.Context(), 90*time.Second)
-	defer cancel()
-
-	c, err := postgres.Run(ctx,
-		"postgres:17-alpine",
-		postgres.WithDatabase("leadkart_test"),
-		postgres.WithUsername("leadkart"),
-		postgres.WithPassword("leadkart_test"),
-		testcontainers.WithWaitStrategy(
-			wait.ForLog("database system is ready to accept connections").
-				WithOccurrence(2).
-				WithStartupTimeout(60*time.Second),
-		),
-	)
-	if err != nil {
-		t.Fatalf("start postgres: %v", err)
-	}
-	t.Cleanup(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		_ = c.Terminate(ctx)
-	})
-
-	ownerDSN, err := c.ConnectionString(ctx, "sslmode=disable")
-	if err != nil {
-		t.Fatalf("dsn: %v", err)
-	}
-
-	gooseDB, err := goose.OpenDBWithDriver("pgx", ownerDSN)
-	if err != nil {
-		t.Fatalf("goose open: %v", err)
-	}
-	if err := pg.EnsureGooseDialect(); err != nil {
-		_ = gooseDB.Close()
-		t.Fatalf("set dialect: %v", err)
-	}
-	migrationsDir := resolveMigrationsDir(t)
-	if err := goose.UpContext(ctx, gooseDB, migrationsDir); err != nil {
-		_ = gooseDB.Close()
-		t.Fatalf("goose up: %v", err)
-	}
-	for _, s := range []string{
-		`CREATE ROLE leadkart_app LOGIN PASSWORD 'leadkart_app_pw' NOSUPERUSER NOINHERIT NOCREATEROLE NOCREATEDB`,
-		`GRANT USAGE ON SCHEMA app, identity TO leadkart_app`,
-		`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA identity TO leadkart_app`,
-		`GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA app TO leadkart_app`,
-	} {
-		if _, err := gooseDB.ExecContext(ctx, s); err != nil {
-			_ = gooseDB.Close()
-			t.Fatalf("provision leadkart_app: %s: %v", s, err)
-		}
-	}
-	_ = gooseDB.Close()
-
-	host, err := c.Host(ctx)
-	if err != nil {
-		t.Fatalf("host: %v", err)
-	}
-	port, err := c.MappedPort(ctx, "5432/tcp")
-	if err != nil {
-		t.Fatalf("port: %v", err)
-	}
-	appDSN := "postgres://leadkart_app:leadkart_app_pw@" + host + ":" + port.Port() + "/leadkart_test?sslmode=disable"
-
-	pool, err := pgxpool.New(ctx, appDSN)
-	if err != nil {
-		t.Fatalf("pgxpool.New: %v", err)
-	}
-	t.Cleanup(pool.Close)
-	return pool
-}
-
-func resolveMigrationsDir(t *testing.T) string {
-	t.Helper()
-	_, here, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("runtime.Caller failed")
-	}
-	// here = .../internal/identity/app/command/flow_integration_test.go
-	return filepath.Join(filepath.Dir(here), "..", "..", "..", "..", "migrations")
-}
+// Shared bootstrap (startWiredPostgres / TestMain / migrations / role
+// provisioning) lives in fixture_integration_test.go per the Brandur /
+// TDL canon — ONE container per package, shared pool, per-test
+// isolation via fresh tenant_id + RLS.

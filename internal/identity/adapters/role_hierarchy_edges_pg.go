@@ -45,11 +45,15 @@ func NewRoleHierarchyEdgeRepository(pool *pgxpool.Pool, tx *pg.Transactor) *Role
 // Add satisfies [rolehierarchy.Repository] — persists a brand-new
 // active Edge. Translates DB-level invariant breaches into typed
 // domain sentinels (see [translateHierarchyEdgeError]).
+//
+// The aggregate carries its own TenantID — the GUC is bound from
+// e.TenantID() (TDL canon per ADR 0062: tenantID flows through
+// explicit values, not ctx).
 func (r *RoleHierarchyEdgeRepository) Add(ctx context.Context, e *rolehierarchy.Edge) error {
 	if tx, ok := pg.TxFromContext(ctx); ok {
 		return r.addOnTx(ctx, tx, e)
 	}
-	return r.tx.WithinTxPgx(ctx, pg.TxScopeTenant, func(ctx context.Context, tx pgx.Tx) error {
+	return r.tx.WithinTxPgxTenant(ctx, e.TenantID().String(), func(ctx context.Context, tx pgx.Tx) error {
 		return r.addOnTx(ctx, tx, e)
 	})
 }
@@ -66,11 +70,13 @@ func (r *RoleHierarchyEdgeRepository) addOnTx(
 	return drainHierarchyEdgeEvents(ctx, tx, e)
 }
 
-// GetActiveByChild satisfies [rolehierarchy.Repository]. RLS-scoped
+// GetActiveByChild satisfies [rolehierarchy.Repository]. Tenant-scoped
 // read returning the single active edge for the supplied child OR
-// [rolehierarchy.ErrEdgeNotFound] when none exists.
+// [rolehierarchy.ErrEdgeNotFound] when none exists. GUC bound from the
+// explicit tenantID parameter (TDL canon per ADR 0062).
 func (r *RoleHierarchyEdgeRepository) GetActiveByChild(
 	ctx context.Context,
+	tenantID tenant.ID,
 	childRoleID role.ID,
 ) (*rolehierarchy.Edge, error) {
 	cid, err := uuid.Parse(childRoleID.String())
@@ -78,7 +84,7 @@ func (r *RoleHierarchyEdgeRepository) GetActiveByChild(
 		return nil, fmt.Errorf("edge repo: parse child id %q: %w", childRoleID, err)
 	}
 	var out *rolehierarchy.Edge
-	err = r.tx.WithinTxPgx(ctx, pg.TxScopeTenant, func(ctx context.Context, tx pgx.Tx) error {
+	err = r.tx.WithinTxPgxTenant(ctx, tenantID.String(), func(ctx context.Context, tx pgx.Tx) error {
 		q := r.q.WithTx(tx)
 		row, qerr := q.GetActiveHierarchyEdgeByChild(ctx, pgUUID(cid))
 		if qerr != nil {
@@ -102,19 +108,21 @@ func (r *RoleHierarchyEdgeRepository) GetActiveByChild(
 
 // UpdateByID satisfies [rolehierarchy.Repository] — TDL Sep 2024
 // UpdateFn pattern: load → updateFn → persist (if shouldPersist) →
-// drain events. All in one tenant-scoped transaction.
+// drain events. All in one tenant-scoped transaction. GUC bound from
+// the explicit tenantID parameter (TDL canon per ADR 0062).
 //
 // Joins a parent [pg.UnitOfWork] tx when present so SetRoleParent's
 // "soft-delete-old + insert-new" replacement commits atomically.
 func (r *RoleHierarchyEdgeRepository) UpdateByID(
 	ctx context.Context,
+	tenantID tenant.ID,
 	id rolehierarchy.ID,
 	updateFn func(*rolehierarchy.Edge) (bool, error),
 ) error {
 	if tx, ok := pg.TxFromContext(ctx); ok {
 		return r.updateOnTx(ctx, tx, id, updateFn)
 	}
-	return r.tx.WithinTxPgx(ctx, pg.TxScopeTenant, func(ctx context.Context, tx pgx.Tx) error {
+	return r.tx.WithinTxPgxTenant(ctx, tenantID.String(), func(ctx context.Context, tx pgx.Tx) error {
 		return r.updateOnTx(ctx, tx, id, updateFn)
 	})
 }
@@ -146,9 +154,11 @@ func (r *RoleHierarchyEdgeRepository) updateOnTx(
 // GetAncestorsByChild satisfies [rolehierarchy.Repository]. Returns
 // ancestor edges in depth order (child's parent first → root) via the
 // recursive CTE; only ACTIVE edges are walked. Empty result = child
-// is a root.
+// is a root. GUC bound from the explicit tenantID parameter (TDL
+// canon per ADR 0062).
 func (r *RoleHierarchyEdgeRepository) GetAncestorsByChild(
 	ctx context.Context,
+	tenantID tenant.ID,
 	childRoleID role.ID,
 ) ([]*rolehierarchy.Edge, error) {
 	cid, err := uuid.Parse(childRoleID.String())
@@ -156,7 +166,7 @@ func (r *RoleHierarchyEdgeRepository) GetAncestorsByChild(
 		return nil, fmt.Errorf("edge repo: parse child id %q: %w", childRoleID, err)
 	}
 	var out []*rolehierarchy.Edge
-	err = r.tx.WithinTxPgx(ctx, pg.TxScopeTenant, func(ctx context.Context, tx pgx.Tx) error {
+	err = r.tx.WithinTxPgxTenant(ctx, tenantID.String(), func(ctx context.Context, tx pgx.Tx) error {
 		q := r.q.WithTx(tx)
 		rows, qerr := q.GetHierarchyAncestorsByChild(ctx, pgUUID(cid))
 		if qerr != nil {
@@ -177,8 +187,11 @@ func (r *RoleHierarchyEdgeRepository) GetAncestorsByChild(
 
 // ListActiveByParent satisfies [rolehierarchy.Repository]. Returns
 // every direct child of `parentRoleID` ordered by establishment time.
+// GUC bound from the explicit tenantID parameter (TDL canon per
+// ADR 0062).
 func (r *RoleHierarchyEdgeRepository) ListActiveByParent(
 	ctx context.Context,
+	tenantID tenant.ID,
 	parentRoleID role.ID,
 ) ([]*rolehierarchy.Edge, error) {
 	pid, err := uuid.Parse(parentRoleID.String())
@@ -186,7 +199,7 @@ func (r *RoleHierarchyEdgeRepository) ListActiveByParent(
 		return nil, fmt.Errorf("edge repo: parse parent id %q: %w", parentRoleID, err)
 	}
 	var out []*rolehierarchy.Edge
-	err = r.tx.WithinTxPgx(ctx, pg.TxScopeTenant, func(ctx context.Context, tx pgx.Tx) error {
+	err = r.tx.WithinTxPgxTenant(ctx, tenantID.String(), func(ctx context.Context, tx pgx.Tx) error {
 		q := r.q.WithTx(tx)
 		rows, qerr := q.ListActiveHierarchyEdgesByParent(ctx, pgUUID(pid))
 		if qerr != nil {

@@ -69,7 +69,7 @@ type Writer struct {
 // Nil → time.Now.
 func NewWriter(pool *pgxpool.Pool, log *slog.Logger, now func() time.Time) *Writer {
 	if log == nil {
-		log = slog.Default()
+		panic("audit: NewWriter log required")
 	}
 	if now == nil {
 		now = time.Now

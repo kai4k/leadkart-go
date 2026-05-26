@@ -51,11 +51,15 @@ func NewRoleRepository(pool *pgxpool.Pool, tx *pg.Transactor) *RoleRepository {
 // tenant scope. Translates SQLSTATE 23505 from the partial unique
 // index `uq_roles_tenant_name WHERE NOT is_deleted` into
 // [role.ErrNameTaken].
+//
+// The aggregate carries its own TenantID — the GUC is bound from
+// ro.TenantID() (TDL canon per ADR 0062: tenantID flows through
+// explicit values, not ctx).
 func (r *RoleRepository) Add(ctx context.Context, ro *role.Role) error {
 	if tx, ok := pg.TxFromContext(ctx); ok {
 		return r.addOnTx(ctx, tx, ro)
 	}
-	return r.tx.WithinTxPgx(ctx, pg.TxScopeTenant, func(ctx context.Context, tx pgx.Tx) error {
+	return r.tx.WithinTxPgxTenant(ctx, ro.TenantID().String(), func(ctx context.Context, tx pgx.Tx) error {
 		return r.addOnTx(ctx, tx, ro)
 	})
 }
@@ -68,10 +72,11 @@ func (r *RoleRepository) addOnTx(ctx context.Context, tx pgx.Tx, ro *role.Role) 
 	return drainRoleEvents(ctx, tx, ro)
 }
 
-// GetByID satisfies [role.Repository]. RLS-scoped read.
-func (r *RoleRepository) GetByID(ctx context.Context, id role.ID) (*role.Role, error) {
+// GetByID satisfies [role.Repository]. Tenant-scoped read — GUC bound
+// from the explicit tenantID parameter (TDL canon per ADR 0062).
+func (r *RoleRepository) GetByID(ctx context.Context, tenantID tenant.ID, id role.ID) (*role.Role, error) {
 	var out *role.Role
-	err := r.tx.WithinTxPgx(ctx, pg.TxScopeTenant, func(ctx context.Context, tx pgx.Tx) error {
+	err := r.tx.WithinTxPgxTenant(ctx, tenantID.String(), func(ctx context.Context, tx pgx.Tx) error {
 		q := r.q.WithTx(tx)
 		got, err := loadRole(ctx, q, id)
 		if err != nil {
@@ -86,8 +91,9 @@ func (r *RoleRepository) GetByID(ctx context.Context, id role.ID) (*role.Role, e
 	return out, nil
 }
 
-// GetByTenantAndName satisfies [role.Repository]. RLS-scoped read by
-// (tenant_id, name). Live rows only (soft-deleted filtered out).
+// GetByTenantAndName satisfies [role.Repository]. Tenant-scoped read by
+// (tenant_id, name) — GUC bound from the explicit tenantID param.
+// Live rows only (soft-deleted filtered out).
 func (r *RoleRepository) GetByTenantAndName(
 	ctx context.Context,
 	tenantID tenant.ID,
@@ -98,7 +104,7 @@ func (r *RoleRepository) GetByTenantAndName(
 		return nil, err
 	}
 	var out *role.Role
-	err = r.tx.WithinTxPgx(ctx, pg.TxScopeTenant, func(ctx context.Context, tx pgx.Tx) error {
+	err = r.tx.WithinTxPgxTenant(ctx, tenantID.String(), func(ctx context.Context, tx pgx.Tx) error {
 		q := r.q.WithTx(tx)
 		row, err := q.GetRoleByTenantAndName(ctx, db.GetRoleByTenantAndNameParams{
 			TenantID: pgUUID(tid),
@@ -124,11 +130,11 @@ func (r *RoleRepository) GetByTenantAndName(
 }
 
 // GetByIDs satisfies [role.Repository] — bulk-load for the
-// PermissionResolver. RLS still applies — cross-tenant IDs are
-// silently dropped from the result set (caller cannot distinguish
-// "doesn't exist" from "wrong tenant" through this contract; that's
-// intentional per `multi-tenancy.md` "Identity model").
-func (r *RoleRepository) GetByIDs(ctx context.Context, ids []role.ID) ([]*role.Role, error) {
+// PermissionResolver, scoped to tenantID. RLS still applies (GUC bound
+// from the explicit param) — cross-tenant IDs are silently dropped from
+// the result set. That's intentional per `multi-tenancy.md` "Identity
+// model".
+func (r *RoleRepository) GetByIDs(ctx context.Context, tenantID tenant.ID, ids []role.ID) ([]*role.Role, error) {
 	if len(ids) == 0 {
 		return nil, nil
 	}
@@ -141,7 +147,7 @@ func (r *RoleRepository) GetByIDs(ctx context.Context, ids []role.ID) ([]*role.R
 		pgIDs = append(pgIDs, pgUUID(uid))
 	}
 	var out []*role.Role
-	err := r.tx.WithinTxPgx(ctx, pg.TxScopeTenant, func(ctx context.Context, tx pgx.Tx) error {
+	err := r.tx.WithinTxPgxTenant(ctx, tenantID.String(), func(ctx context.Context, tx pgx.Tx) error {
 		q := r.q.WithTx(tx)
 		rows, err := q.GetRolesByIDs(ctx, pgIDs)
 		if err != nil {
@@ -164,7 +170,8 @@ func (r *RoleRepository) GetByIDs(ctx context.Context, ids []role.ID) ([]*role.R
 }
 
 // ListByTenant satisfies [role.Repository] — full live catalog for the
-// supplied tenant, ordered hierarchy_level then name. RLS-scoped.
+// supplied tenant, ordered hierarchy_level then name. GUC bound from
+// the explicit tenantID param.
 func (r *RoleRepository) ListByTenant(
 	ctx context.Context,
 	tenantID tenant.ID,
@@ -174,7 +181,7 @@ func (r *RoleRepository) ListByTenant(
 		return nil, err
 	}
 	var out []*role.Role
-	err = r.tx.WithinTxPgx(ctx, pg.TxScopeTenant, func(ctx context.Context, tx pgx.Tx) error {
+	err = r.tx.WithinTxPgxTenant(ctx, tenantID.String(), func(ctx context.Context, tx pgx.Tx) error {
 		q := r.q.WithTx(tx)
 		rows, err := q.ListRolesByTenant(ctx, pgUUID(tid))
 		if err != nil {
@@ -209,13 +216,14 @@ func (r *RoleRepository) ListByTenant(
 // aggregate-immutable; the SQL doesn't write them under any branch.
 func (r *RoleRepository) UpdateByID(
 	ctx context.Context,
+	tenantID tenant.ID,
 	id role.ID,
 	updateFn func(*role.Role) (bool, error),
 ) error {
 	if tx, ok := pg.TxFromContext(ctx); ok {
 		return r.updateOnTx(ctx, tx, id, updateFn)
 	}
-	return r.tx.WithinTxPgx(ctx, pg.TxScopeTenant, func(ctx context.Context, tx pgx.Tx) error {
+	return r.tx.WithinTxPgxTenant(ctx, tenantID.String(), func(ctx context.Context, tx pgx.Tx) error {
 		return r.updateOnTx(ctx, tx, id, updateFn)
 	})
 }

@@ -1,26 +1,71 @@
-// Package platformtest provides in-memory test doubles for the
-// Platform module — fakes per `tdd.md` "Fakes pattern". Used by
-// app/command/*_test.go to exercise handlers without touching pgx.
+// Package platformtest provides cross-cutting test doubles for the
+// Platform module — UoW, Outbox, and the [TransactionalFake] contract
+// the rollback-aware UoW snapshots.
 //
-// All fakes are goroutine-safe; uow + outbox propagation models the
-// production shape (UoW closure runs the fn, fakes pretend they
-// joined the tx by writing to their in-memory slice).
+// Per-aggregate fakes (FakeUnverifiedContactRepository,
+// FakeVerificationCallRepository, FakePlatformLeadRepository,
+// FakeLeadCreditRepository) live in their canonical `<aggregate>test/`
+// directories per TDL Wild Workouts canon — co-located with the
+// domain aggregate they fake. The aliases below preserve the
+// `platformtest.FakeXRepository` import surface so existing tests stay
+// green without per-call-site rewrites.
 package platformtest
 
 import (
 	"context"
-	"sort"
 	"sync"
 
-	"github.com/leadkart/leadkart-go/internal/common/pagination"
 	"github.com/leadkart/leadkart-go/internal/common/pg"
 	"github.com/leadkart/leadkart-go/internal/platform/app/query"
-	"github.com/leadkart/leadkart-go/internal/platform/domain/leadcredit"
-	"github.com/leadkart/leadkart-go/internal/platform/domain/platformlead"
-	"github.com/leadkart/leadkart-go/internal/platform/domain/unverifiedcontact"
-	"github.com/leadkart/leadkart-go/internal/platform/domain/verificationcall"
+	"github.com/leadkart/leadkart-go/internal/platform/domain/leadcredit/leadcredittest"
+	"github.com/leadkart/leadkart-go/internal/platform/domain/platformlead/platformleadtest"
+	"github.com/leadkart/leadkart-go/internal/platform/domain/unverifiedcontact/unverifiedcontacttest"
+	"github.com/leadkart/leadkart-go/internal/platform/domain/verificationcall/verificationcalltest"
 	"github.com/leadkart/leadkart-go/internal/platform/integrationevents"
 )
+
+// ----- per-aggregate fake aliases ------------------------------------------
+
+// FakeUnverifiedContactRepository is an alias to the canonical
+// [unverifiedcontacttest.FakeRepository] — defined in the aggregate-
+// co-located test package per TDL Wild Workouts canon. Re-exported
+// here so existing callers continue to compile.
+type FakeUnverifiedContactRepository = unverifiedcontacttest.FakeRepository
+
+// NewFakeUnverifiedContactRepository forwards to the canonical
+// constructor. Re-exported for the same reason as the type alias.
+func NewFakeUnverifiedContactRepository() *FakeUnverifiedContactRepository {
+	return unverifiedcontacttest.NewFakeRepository()
+}
+
+// FakeVerificationCallRepository is an alias to the canonical
+// [verificationcalltest.FakeRepository].
+type FakeVerificationCallRepository = verificationcalltest.FakeRepository
+
+// NewFakeVerificationCallRepository forwards to the canonical constructor.
+func NewFakeVerificationCallRepository() *FakeVerificationCallRepository {
+	return verificationcalltest.NewFakeRepository()
+}
+
+// FakePlatformLeadRepository is an alias to the canonical
+// [platformleadtest.FakeRepository].
+type FakePlatformLeadRepository = platformleadtest.FakeRepository
+
+// NewFakePlatformLeadRepository forwards to the canonical constructor.
+func NewFakePlatformLeadRepository() *FakePlatformLeadRepository {
+	return platformleadtest.NewFakeRepository()
+}
+
+// FakeLeadCreditRepository is an alias to the canonical
+// [leadcredittest.FakeRepository].
+type FakeLeadCreditRepository = leadcredittest.FakeRepository
+
+// NewFakeLeadCreditRepository forwards to the canonical constructor.
+func NewFakeLeadCreditRepository() *FakeLeadCreditRepository {
+	return leadcredittest.NewFakeRepository()
+}
+
+// ----- FakeUnitOfWork -------------------------------------------------------
 
 // FakeUnitOfWork runs fn synchronously + models transactional rollback
 // against any registered fake. Production: Postgres rolls back the
@@ -78,6 +123,8 @@ func (u *FakeUnitOfWork) WithinTx(ctx context.Context, _ pg.TxScope, fn func(ctx
 	return err
 }
 
+// ----- FakeOutbox ----------------------------------------------------------
+
 // FakeOutbox captures enqueued events for assertions. Goroutine-safe.
 type FakeOutbox struct {
 	mu     sync.Mutex
@@ -102,348 +149,12 @@ func (f *FakeOutbox) Reset() {
 	f.Events = nil
 }
 
-// ----- FakeUnverifiedContactRepository --------------------------------------
+// ----- compile-time conformance assertions ---------------------------------
 
-// FakeUnverifiedContactRepository is an in-memory store. Also captures
-// pulled domain events on Add/UpdateByID so tests can assert they were
-// drained.
-type FakeUnverifiedContactRepository struct {
-	mu             sync.Mutex
-	Store          map[unverifiedcontact.ID]*unverifiedcontact.UnverifiedContact
-	DrainedEvents  []unverifiedcontact.Event
-}
-
-// NewFakeUnverifiedContactRepository returns an empty fake.
-func NewFakeUnverifiedContactRepository() *FakeUnverifiedContactRepository {
-	return &FakeUnverifiedContactRepository{
-		Store: make(map[unverifiedcontact.ID]*unverifiedcontact.UnverifiedContact),
-	}
-}
-
-// Add satisfies [unverifiedcontact.Repository].
-func (r *FakeUnverifiedContactRepository) Add(_ context.Context, c *unverifiedcontact.UnverifiedContact) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.Store[c.ID()] = c
-	r.DrainedEvents = append(r.DrainedEvents, c.PullEvents()...)
-	return nil
-}
-
-// UpdateByID satisfies [unverifiedcontact.Repository]. Re-hydrates a
-// fresh aggregate copy on each call so the mutator's state-machine
-// transitions reflect the canonical re-load-mutate-persist shape.
-func (r *FakeUnverifiedContactRepository) UpdateByID(
-	_ context.Context,
-	id unverifiedcontact.ID,
-	updateFn func(*unverifiedcontact.UnverifiedContact) (bool, error),
-) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	c, ok := r.Store[id]
-	if !ok {
-		return unverifiedcontact.ErrNotFound
-	}
-	shouldPersist, err := updateFn(c)
-	if err != nil {
-		return err
-	}
-	if !shouldPersist {
-		return nil
-	}
-	r.DrainedEvents = append(r.DrainedEvents, c.PullEvents()...)
-	return nil
-}
-
-// GetByID satisfies [unverifiedcontact.Repository].
-func (r *FakeUnverifiedContactRepository) GetByID(
-	_ context.Context, id unverifiedcontact.ID,
-) (*unverifiedcontact.UnverifiedContact, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	c, ok := r.Store[id]
-	if !ok {
-		return nil, unverifiedcontact.ErrNotFound
-	}
-	return c, nil
-}
-
-// ----- FakeVerificationCallRepository --------------------------------------
-
-// FakeVerificationCallRepository is an in-memory store.
-type FakeVerificationCallRepository struct {
-	mu            sync.Mutex
-	Store         []*verificationcall.VerificationCall
-	DrainedEvents []verificationcall.Event
-}
-
-// NewFakeVerificationCallRepository returns an empty fake.
-func NewFakeVerificationCallRepository() *FakeVerificationCallRepository {
-	return &FakeVerificationCallRepository{}
-}
-
-// Add satisfies [verificationcall.Repository].
-func (r *FakeVerificationCallRepository) Add(_ context.Context, c *verificationcall.VerificationCall) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.Store = append(r.Store, c)
-	r.DrainedEvents = append(r.DrainedEvents, c.PullEvents()...)
-	return nil
-}
-
-// ListByContact satisfies [verificationcall.Repository].
-func (r *FakeVerificationCallRepository) ListByContact(
-	_ context.Context, contactID unverifiedcontact.ID,
-) ([]*verificationcall.VerificationCall, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	var out []*verificationcall.VerificationCall
-	for _, c := range r.Store {
-		if c.ContactID() == contactID {
-			out = append(out, c)
-		}
-	}
-	sort.Slice(out, func(i, j int) bool {
-		return out[i].LoggedAt().After(out[j].LoggedAt())
-	})
-	return out, nil
-}
-
-// ----- FakePlatformLeadRepository ------------------------------------------
-
-// FakePlatformLeadRepository is an in-memory store.
-type FakePlatformLeadRepository struct {
-	mu            sync.Mutex
-	Store         map[platformlead.ID]*platformlead.PlatformLead
-	DrainedEvents []platformlead.Event
-}
-
-// NewFakePlatformLeadRepository returns an empty fake.
-func NewFakePlatformLeadRepository() *FakePlatformLeadRepository {
-	return &FakePlatformLeadRepository{
-		Store: make(map[platformlead.ID]*platformlead.PlatformLead),
-	}
-}
-
-// Add satisfies [platformlead.Repository].
-func (r *FakePlatformLeadRepository) Add(_ context.Context, l *platformlead.PlatformLead) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.Store[l.ID()] = l
-	r.DrainedEvents = append(r.DrainedEvents, l.PullEvents()...)
-	return nil
-}
-
-// UpdateByID satisfies [platformlead.Repository].
-func (r *FakePlatformLeadRepository) UpdateByID(
-	_ context.Context,
-	id platformlead.ID,
-	updateFn func(*platformlead.PlatformLead) (bool, error),
-) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	l, ok := r.Store[id]
-	if !ok {
-		return platformlead.ErrNotFound
-	}
-	shouldPersist, err := updateFn(l)
-	if err != nil {
-		return err
-	}
-	if !shouldPersist {
-		return nil
-	}
-	r.DrainedEvents = append(r.DrainedEvents, l.PullEvents()...)
-	return nil
-}
-
-// GetByID satisfies [platformlead.Repository].
-func (r *FakePlatformLeadRepository) GetByID(
-	_ context.Context, id platformlead.ID,
-) (*platformlead.PlatformLead, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	l, ok := r.Store[id]
-	if !ok {
-		return nil, platformlead.ErrNotFound
-	}
-	return l, nil
-}
-
-// MarketplaceBrowse satisfies [platformlead.Repository]. Returns ALL
-// unsold leads in insertion order — Slice 1 tests don't exercise the
-// filter set; the integration test suite does.
-func (r *FakePlatformLeadRepository) MarketplaceBrowse(
-	_ context.Context,
-	_ platformlead.MarketplaceFilter,
-	_ pagination.Cursor,
-	pageSize int,
-) ([]*platformlead.PlatformLead, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	var out []*platformlead.PlatformLead
-	for _, l := range r.Store {
-		if l.IsAvailable() {
-			out = append(out, l)
-		}
-		if len(out) >= pageSize {
-			break
-		}
-	}
-	return out, nil
-}
-
-// ----- FakeLeadCreditRepository --------------------------------------------
-
-// FakeLeadCreditRepository is an in-memory store with version checks.
-type FakeLeadCreditRepository struct {
-	mu            sync.Mutex
-	Store         map[leadcredit.TenantID]*leadcredit.LeadCredit
-	versions      map[leadcredit.TenantID]int64 // last persisted version
-	DrainedEvents []leadcredit.Event
-	// ForceConflictOnce flips the next UpsertWithVersion to return
-	// ErrConflict. Used by retry tests.
-	ForceConflictOnce bool
-}
-
-// NewFakeLeadCreditRepository returns an empty fake.
-func NewFakeLeadCreditRepository() *FakeLeadCreditRepository {
-	return &FakeLeadCreditRepository{
-		Store:    make(map[leadcredit.TenantID]*leadcredit.LeadCredit),
-		versions: make(map[leadcredit.TenantID]int64),
-	}
-}
-
-// GetByTenant satisfies [leadcredit.Repository].
-func (r *FakeLeadCreditRepository) GetByTenant(
-	_ context.Context, id leadcredit.TenantID,
-) (*leadcredit.LeadCredit, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	c, ok := r.Store[id]
-	if !ok {
-		return nil, leadcredit.ErrNotFound
-	}
-	// Return a fresh hydration from snapshot so callers' mutations
-	// don't leak across calls — same shape as a real pgx-backed read.
-	snap := leadcredit.Snapshot{
-		TenantID:  c.TenantID(),
-		Balance:   c.Balance(),
-		Version:   c.Version(),
-		CreatedAt: c.CreatedAt(),
-		UpdatedAt: c.UpdatedAt(),
-	}
-	return leadcredit.UnmarshalFromDB(snap), nil
-}
-
-// UpsertWithVersion satisfies [leadcredit.Repository] with optimistic-
-// version semantics. Returns ErrConflict when ForceConflictOnce is set
-// OR when the in-aggregate version doesn't match the stored version.
-func (r *FakeLeadCreditRepository) UpsertWithVersion(
-	_ context.Context, l *leadcredit.LeadCredit,
-) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.ForceConflictOnce {
-		r.ForceConflictOnce = false
-		return leadcredit.ErrConflict
-	}
-	stored, exists := r.versions[l.TenantID()]
-	if !exists {
-		// INSERT path — aggregate version must be 0.
-		if l.Version() != 0 {
-			return leadcredit.ErrConflict
-		}
-	} else if l.Version() != stored {
-		return leadcredit.ErrConflict
-	}
-	// Persist a fresh snapshot with version+1 so subsequent reads see
-	// the new state.
-	snap := leadcredit.Snapshot{
-		TenantID:  l.TenantID(),
-		Balance:   l.Balance(),
-		Version:   l.Version() + 1,
-		CreatedAt: l.CreatedAt(),
-		UpdatedAt: l.UpdatedAt(),
-	}
-	r.Store[l.TenantID()] = leadcredit.UnmarshalFromDB(snap)
-	r.versions[l.TenantID()] = l.Version() + 1
-	r.DrainedEvents = append(r.DrainedEvents, l.PullEvents()...)
-	return nil
-}
-
-// ----- TransactionalFake implementations -----------------------------------
-
-// Snapshot satisfies [TransactionalFake]. Captures the full balance/
-// version map + DrainedEvents slice so a rolled-back closure looks
-// like it never ran.
-func (r *FakeLeadCreditRepository) Snapshot() func() {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	store := make(map[leadcredit.TenantID]*leadcredit.LeadCredit, len(r.Store))
-	for k, v := range r.Store {
-		store[k] = v
-	}
-	versions := make(map[leadcredit.TenantID]int64, len(r.versions))
-	for k, v := range r.versions {
-		versions[k] = v
-	}
-	drained := make([]leadcredit.Event, len(r.DrainedEvents))
-	copy(drained, r.DrainedEvents)
-	forceConflict := r.ForceConflictOnce
-	return func() {
-		r.mu.Lock()
-		defer r.mu.Unlock()
-		r.Store = store
-		r.versions = versions
-		r.DrainedEvents = drained
-		r.ForceConflictOnce = forceConflict
-	}
-}
-
-// Snapshot satisfies [TransactionalFake] for the lead repository.
-// Captures the store map + DrainedEvents.
-func (r *FakePlatformLeadRepository) Snapshot() func() {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	// Deep-copy the aggregate pointers via UnmarshalFromDB so closures
-	// that mutated the aggregate in-place (e.g. Purchase) don't leak
-	// past the rollback.
-	store := make(map[platformlead.ID]*platformlead.PlatformLead, len(r.Store))
-	for k, v := range r.Store {
-		store[k] = platformlead.UnmarshalFromDB(platformlead.Snapshot{
-			ID:                     v.ID(),
-			SourceContactID:        v.SourceContactID(),
-			Form:                   v.Form(),
-			GstVerified:            v.GstVerified(),
-			SoldToTenantID:         v.SoldToTenantID(),
-			SoldAt:                 v.SoldAt(),
-			SoldToMembershipID:     v.SoldToMembershipID(),
-			AmountPaisa:            v.AmountPaisa(),
-			VerifiedAt:             v.VerifiedAt(),
-			VerifiedByMembershipID: v.VerifiedByMembershipID(),
-			CreatedAt:              v.CreatedAt(),
-		})
-	}
-	drained := make([]platformlead.Event, len(r.DrainedEvents))
-	copy(drained, r.DrainedEvents)
-	return func() {
-		r.mu.Lock()
-		defer r.mu.Unlock()
-		r.Store = store
-		r.DrainedEvents = drained
-	}
-}
-
-// Compile-time interface assertions — keep fakes in step with domain
-// interface drift.
 var (
-	_ unverifiedcontact.Repository = (*FakeUnverifiedContactRepository)(nil)
-	_ verificationcall.Repository  = (*FakeVerificationCallRepository)(nil)
-	_ platformlead.Repository      = (*FakePlatformLeadRepository)(nil)
-	_ leadcredit.Repository        = (*FakeLeadCreditRepository)(nil)
-	_ pg.UnitOfWork                = (*FakeUnitOfWork)(nil)
-	_ TransactionalFake            = (*FakeLeadCreditRepository)(nil)
-	_ TransactionalFake            = (*FakePlatformLeadRepository)(nil)
+	_ pg.UnitOfWork     = (*FakeUnitOfWork)(nil)
+	_ TransactionalFake = (*FakeLeadCreditRepository)(nil)
+	_ TransactionalFake = (*FakePlatformLeadRepository)(nil)
 )
 
 // Quiet the unused-import linter on query types when fakes ship before

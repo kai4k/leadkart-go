@@ -36,11 +36,11 @@ func newFakeProductRepo() *fakeProductRepo {
 }
 
 func (r *fakeProductRepo) Add(context.Context, *product.Product) error { return nil }
-func (r *fakeProductRepo) UpdateByID(context.Context, product.ID, func(*product.Product) (bool, error)) error {
+func (r *fakeProductRepo) UpdateByID(context.Context, tenant.ID, product.ID, func(*product.Product) (bool, error)) error {
 	return nil
 }
 
-func (r *fakeProductRepo) GetByID(_ context.Context, id product.ID) (*product.Product, error) {
+func (r *fakeProductRepo) GetByID(_ context.Context, _ tenant.ID, id product.ID) (*product.Product, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.getErr != nil {
@@ -73,11 +73,11 @@ func newFakeBatchRepo() *fakeBatchRepo {
 }
 
 func (r *fakeBatchRepo) Add(context.Context, *batch.Batch) error { return nil }
-func (r *fakeBatchRepo) UpdateByID(context.Context, batch.ID, func(*batch.Batch) (bool, error)) error {
+func (r *fakeBatchRepo) UpdateByID(context.Context, tenant.ID, batch.ID, func(*batch.Batch) (bool, error)) error {
 	return nil
 }
 
-func (r *fakeBatchRepo) GetByID(_ context.Context, id batch.ID) (*batch.Batch, error) {
+func (r *fakeBatchRepo) GetByID(_ context.Context, _ tenant.ID, id batch.ID) (*batch.Batch, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.getErr != nil {
@@ -90,14 +90,14 @@ func (r *fakeBatchRepo) GetByID(_ context.Context, id batch.ID) (*batch.Batch, e
 	return b, nil
 }
 
-func (r *fakeBatchRepo) ListByProductPage(_ context.Context, _ product.ID, _ batch.ListFilter, _ pagination.Cursor, _ int) (pagination.Page[*batch.Batch], error) {
+func (r *fakeBatchRepo) ListByProductPage(_ context.Context, _ tenant.ID, _ product.ID, _ batch.ListFilter, _ pagination.Cursor, _ int) (pagination.Page[*batch.Batch], error) {
 	if r.listErr != nil {
 		return pagination.Page[*batch.Batch]{}, r.listErr
 	}
 	return r.listPage, nil
 }
 
-func (r *fakeBatchRepo) AnyLiveWithStockForProduct(context.Context, product.ID) (bool, error) {
+func (r *fakeBatchRepo) AnyLiveWithStockForProduct(context.Context, tenant.ID, product.ID) (bool, error) {
 	return false, nil
 }
 
@@ -107,10 +107,10 @@ type fakeMovementRepo struct {
 }
 
 func (r *fakeMovementRepo) Add(context.Context, *stockmovement.Movement) error { return nil }
-func (r *fakeMovementRepo) GetByID(context.Context, stockmovement.ID) (*stockmovement.Movement, error) {
+func (r *fakeMovementRepo) GetByID(context.Context, tenant.ID, stockmovement.ID) (*stockmovement.Movement, error) {
 	return nil, stockmovement.ErrNotFound
 }
-func (r *fakeMovementRepo) ListByBatchPage(_ context.Context, _ batch.ID, _ stockmovement.PageRequest) (pagination.Page[*stockmovement.Movement], error) {
+func (r *fakeMovementRepo) ListByBatchPage(_ context.Context, _ tenant.ID, _ batch.ID, _ stockmovement.PageRequest) (pagination.Page[*stockmovement.Movement], error) {
 	if r.listErr != nil {
 		return pagination.Page[*stockmovement.Movement]{}, r.listErr
 	}

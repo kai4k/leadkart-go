@@ -165,6 +165,7 @@ func (h CreateRoleHandler) Handle(ctx context.Context, cmd CreateRoleCommand) (C
 // HierarchyLevel uses the sentinel -1 to mean "no change". (We use
 // -1 because 0 is a valid valid hierarchy level.)
 type UpdateRoleCommand struct {
+	TenantID       tenant.ID
 	RoleID         role.ID
 	Name           string // empty = no rename
 	HierarchyLevel int    // -1 = no change
@@ -191,11 +192,14 @@ func NewUpdateRoleHandler(r role.Repository, now func() time.Time) UpdateRoleHan
 // Handle dispatches to the aggregate. System-default roles +
 // SuperAdmin reject mutation per the aggregate's ensureMutable gate.
 func (h UpdateRoleHandler) Handle(ctx context.Context, cmd UpdateRoleCommand) error {
+	if cmd.TenantID.IsZero() {
+		return errors.New("update_role: tenant id required")
+	}
 	if cmd.RoleID.IsZero() {
 		return errors.New("update_role: role id required")
 	}
 	now := h.now()
-	err := h.roles.UpdateByID(ctx, cmd.RoleID, func(r *role.Role) (bool, error) {
+	err := h.roles.UpdateByID(ctx, cmd.TenantID, cmd.RoleID, func(r *role.Role) (bool, error) {
 		mutated := false
 		if cmd.Name != "" {
 			if err := r.Rename(cmd.Name, now); err != nil {
@@ -228,6 +232,7 @@ func (h UpdateRoleHandler) Handle(ctx context.Context, cmd UpdateRoleCommand) er
 // permission set. Names MUST be catalogue-known; unknown names →
 // ErrPermissionUnknown.
 type ReplaceRolePermissionsCommand struct {
+	TenantID        tenant.ID
 	RoleID          role.ID
 	PermissionNames []string
 }
@@ -252,6 +257,9 @@ func NewReplaceRolePermissionsHandler(r role.Repository, now func() time.Time) R
 
 // Handle resolves names + dispatches to [Role.ReplacePermissions].
 func (h ReplaceRolePermissionsHandler) Handle(ctx context.Context, cmd ReplaceRolePermissionsCommand) error {
+	if cmd.TenantID.IsZero() {
+		return errors.New("replace_role_permissions: tenant id required")
+	}
 	if cmd.RoleID.IsZero() {
 		return errors.New("replace_role_permissions: role id required")
 	}
@@ -260,7 +268,7 @@ func (h ReplaceRolePermissionsHandler) Handle(ctx context.Context, cmd ReplaceRo
 		return err
 	}
 	now := h.now()
-	upErr := h.roles.UpdateByID(ctx, cmd.RoleID, func(r *role.Role) (bool, error) {
+	upErr := h.roles.UpdateByID(ctx, cmd.TenantID, cmd.RoleID, func(r *role.Role) (bool, error) {
 		if err := r.ReplacePermissions(target, now); err != nil {
 			return false, err
 		}
@@ -279,6 +287,7 @@ func (h ReplaceRolePermissionsHandler) Handle(ctx context.Context, cmd ReplaceRo
 
 // GrantRolePermissionCommand adds a single permission to the role.
 type GrantRolePermissionCommand struct {
+	TenantID       tenant.ID
 	RoleID         role.ID
 	PermissionName string
 }
@@ -303,6 +312,9 @@ func NewGrantRolePermissionHandler(r role.Repository, now func() time.Time) Gran
 
 // Handle dispatches to [Role.GrantPermission].
 func (h GrantRolePermissionHandler) Handle(ctx context.Context, cmd GrantRolePermissionCommand) error {
+	if cmd.TenantID.IsZero() {
+		return errors.New("grant_role_permission: tenant id required")
+	}
 	if cmd.RoleID.IsZero() {
 		return errors.New("grant_role_permission: role id required")
 	}
@@ -311,7 +323,7 @@ func (h GrantRolePermissionHandler) Handle(ctx context.Context, cmd GrantRolePer
 		return fmt.Errorf("%w: %q", ErrPermissionUnknown, cmd.PermissionName)
 	}
 	now := h.now()
-	upErr := h.roles.UpdateByID(ctx, cmd.RoleID, func(r *role.Role) (bool, error) {
+	upErr := h.roles.UpdateByID(ctx, cmd.TenantID, cmd.RoleID, func(r *role.Role) (bool, error) {
 		if err := r.GrantPermission(p, now); err != nil {
 			return false, err
 		}
@@ -330,6 +342,7 @@ func (h GrantRolePermissionHandler) Handle(ctx context.Context, cmd GrantRolePer
 
 // RevokeRolePermissionCommand removes a single permission.
 type RevokeRolePermissionCommand struct {
+	TenantID       tenant.ID
 	RoleID         role.ID
 	PermissionName string
 }
@@ -354,6 +367,9 @@ func NewRevokeRolePermissionHandler(r role.Repository, now func() time.Time) Rev
 
 // Handle dispatches to [Role.RevokePermission].
 func (h RevokeRolePermissionHandler) Handle(ctx context.Context, cmd RevokeRolePermissionCommand) error {
+	if cmd.TenantID.IsZero() {
+		return errors.New("revoke_role_permission: tenant id required")
+	}
 	if cmd.RoleID.IsZero() {
 		return errors.New("revoke_role_permission: role id required")
 	}
@@ -362,7 +378,7 @@ func (h RevokeRolePermissionHandler) Handle(ctx context.Context, cmd RevokeRoleP
 		return fmt.Errorf("%w: %q", ErrPermissionUnknown, cmd.PermissionName)
 	}
 	now := h.now()
-	upErr := h.roles.UpdateByID(ctx, cmd.RoleID, func(r *role.Role) (bool, error) {
+	upErr := h.roles.UpdateByID(ctx, cmd.TenantID, cmd.RoleID, func(r *role.Role) (bool, error) {
 		if err := r.RevokePermission(p, now); err != nil {
 			return false, err
 		}
@@ -385,6 +401,7 @@ func (h RevokeRolePermissionHandler) Handle(ctx context.Context, cmd RevokeRoleP
 // System-default roles + SuperAdmin reject deletion via the
 // aggregate's ensureMutable + Delete checks.
 type DeleteRoleCommand struct {
+	TenantID  tenant.ID
 	RoleID    role.ID
 	DeletedBy string
 }
@@ -409,11 +426,14 @@ func NewDeleteRoleHandler(r role.Repository, now func() time.Time) DeleteRoleHan
 
 // Handle dispatches to [Role.Delete].
 func (h DeleteRoleHandler) Handle(ctx context.Context, cmd DeleteRoleCommand) error {
+	if cmd.TenantID.IsZero() {
+		return errors.New("delete_role: tenant id required")
+	}
 	if cmd.RoleID.IsZero() {
 		return errors.New("delete_role: role id required")
 	}
 	now := h.now()
-	err := h.roles.UpdateByID(ctx, cmd.RoleID, func(r *role.Role) (bool, error) {
+	err := h.roles.UpdateByID(ctx, cmd.TenantID, cmd.RoleID, func(r *role.Role) (bool, error) {
 		if err := r.Delete(cmd.DeletedBy, now); err != nil {
 			return false, err
 		}
@@ -490,15 +510,15 @@ func NewSetRoleParentHandler(edges rolehierarchy.Repository, uow pg.UnitOfWork, 
 // cross-tenant rejected at the DB layer (cycle trigger + composite
 // FK fire on insert).
 func (h SetRoleParentHandler) Handle(ctx context.Context, cmd SetRoleParentCommand) error {
+	if cmd.TenantID.IsZero() {
+		return errors.New("set_role_parent: tenant id required")
+	}
 	if cmd.RoleID.IsZero() {
 		return errors.New("set_role_parent: role id required")
 	}
 	if cmd.NewParentID.IsZero() {
 		// Clear-parent path: only soft-delete; no new edge to insert.
 		return h.clearParent(ctx, cmd)
-	}
-	if cmd.TenantID.IsZero() {
-		return errors.New("set_role_parent: tenant id required for non-clear path")
 	}
 
 	return h.uow.WithinTx(ctx, pg.TxScopeTenant, func(ctx context.Context) error {
@@ -530,7 +550,7 @@ func (h SetRoleParentHandler) Handle(ctx context.Context, cmd SetRoleParentComma
 // clearParent handles the NewParentID-is-zero branch. Single
 // soft-delete — no need to open a UoW since there's only one write.
 func (h SetRoleParentHandler) clearParent(ctx context.Context, cmd SetRoleParentCommand) error {
-	existing, gErr := h.edges.GetActiveByChild(ctx, cmd.RoleID)
+	existing, gErr := h.edges.GetActiveByChild(ctx, cmd.TenantID, cmd.RoleID)
 	if errors.Is(gErr, rolehierarchy.ErrEdgeNotFound) {
 		// Already a root — idempotent no-op.
 		return nil
@@ -539,7 +559,7 @@ func (h SetRoleParentHandler) clearParent(ctx context.Context, cmd SetRoleParent
 		return fmt.Errorf("set_role_parent: load existing edge: %w", gErr)
 	}
 	now := h.now()
-	rmErr := h.edges.UpdateByID(ctx, existing.ID(), func(e *rolehierarchy.Edge) (bool, error) {
+	rmErr := h.edges.UpdateByID(ctx, cmd.TenantID, existing.ID(), func(e *rolehierarchy.Edge) (bool, error) {
 		if err := e.Remove(cmd.ActorMembershipID, cmd.Reason, now); err != nil {
 			return false, err
 		}
@@ -556,7 +576,7 @@ func (h SetRoleParentHandler) clearParent(ctx context.Context, cmd SetRoleParent
 // insert must commit atomically to preserve the single-parent
 // invariant without a transient window where both rows are active).
 func (h SetRoleParentHandler) removeExistingEdge(ctx context.Context, cmd SetRoleParentCommand) error {
-	existing, gErr := h.edges.GetActiveByChild(ctx, cmd.RoleID)
+	existing, gErr := h.edges.GetActiveByChild(ctx, cmd.TenantID, cmd.RoleID)
 	if errors.Is(gErr, rolehierarchy.ErrEdgeNotFound) {
 		return nil
 	}
@@ -564,7 +584,7 @@ func (h SetRoleParentHandler) removeExistingEdge(ctx context.Context, cmd SetRol
 		return fmt.Errorf("set_role_parent: load existing edge: %w", gErr)
 	}
 	now := h.now()
-	return h.edges.UpdateByID(ctx, existing.ID(), func(e *rolehierarchy.Edge) (bool, error) {
+	return h.edges.UpdateByID(ctx, cmd.TenantID, existing.ID(), func(e *rolehierarchy.Edge) (bool, error) {
 		if err := e.Remove(cmd.ActorMembershipID, cmd.Reason, now); err != nil {
 			return false, err
 		}

@@ -55,7 +55,7 @@ func (s *statusCapture) Write(b []byte) (int, error) {
 // too important to bury at Debug.
 func RequestLog(log *slog.Logger) func(http.Handler) http.Handler {
 	if log == nil {
-		log = slog.Default()
+		panic("httpmw: RequestLog log required")
 	}
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

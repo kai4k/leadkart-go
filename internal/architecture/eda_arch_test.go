@@ -183,26 +183,38 @@ func TestArch_SubscribersInPortsSubscribers(t *testing.T) {
 // delivery means duplicate dispatch is the rule. Every subscriber
 // must be replay-safe.
 //
-// Detection is a heuristic — we accept either the explicit middleware
-// wrap or any call expression named `Get*`/`Find*` inside the file.
-// False negatives are possible; a file allow-list opts the subscriber
-// out with a documented rationale.
+// Detection accepts ANY of three signals (in order — first match wins):
+//
+//   (1) explicit `messaging.IdempotencyMiddleware` / Decorator / Wrapper
+//       reference (the universal infra-level guarantee);
+//   (2) a `Get*`/`Find*`/`Lookup*`/`Exists*` call inside the file
+//       (inline natural-key precheck);
+//   (3) an inline marker comment
+//       `// arch-test:idempotency-via-<mechanism> — <reason>`
+//       — for subscribers whose dedup happens one call-frame down
+//       (the precheck lives in the command they delegate to), in an
+//       infra layer that wraps the whole router, or in the wire layer
+//       (DTO files with no handler logic).
+//
+// The inline marker is the canon escape valve for the (legitimate)
+// case where the heuristic can't see the precheck because the dedup
+// lives in a sibling file. Each marker must end `— <reason>` so the
+// rationale travels with the code, not with a registry list.
 // Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_SubscribersAreIdempotent(t *testing.T) {
 	t.Parallel()
 
-	// Files that are inherently idempotent without explicit wrap or
-	// repo precheck (each with documented rationale in the file godoc).
-	allowList := []string{
-		"internal/identity/ports/subscribers/reuse_detected_siem.go", // append-only audit log; duplicate-safe
-		"internal/identity/ports/subscribers/invalidate_cache.go",    // cache delete is idempotent by definition
-		"internal/identity/ports/subscribers/registration.go",        // router-config helper; idempotency middleware wired at router level
-		"internal/identity/ports/subscribers/revoke_families.go",     // Family.Revoke is no-op on already-revoked families (godoc cited)
-		"internal/identity/ports/subscribers/email_sender.go",        // email provider enforces dedup at gateway; ADR 0057
-	}
-
 	getRE := regexp.MustCompile(`\b(Get|Find|Lookup|Exists)[A-Z]\w*\(`)
 	idempMiddlewareRE := regexp.MustCompile(`\bIdempotency(Middleware|Decorator|Wrapper)\b`)
+	// Marker must include a trailing reason after an em-dash so the
+	// rationale lives with the code. Matches:
+	//   // arch-test:idempotency-via-natural-key-precheck — reason
+	//   // arch-test:idempotency-via-router-middleware — reason
+	//   // arch-test:idempotency-via-wire-shape-only — reason
+	//   // arch-test:idempotency-via-append-only-log — reason
+	//   // arch-test:idempotency-via-gateway-dedup — reason
+	//   // arch-test:idempotency-via-noop-on-replay — reason
+	inlineMarkerRE := regexp.MustCompile(`//\s*arch-test:idempotency-via-[a-z][a-z0-9-]*\s+—\s+\S`)
 
 	type violation struct {
 		file string
@@ -216,16 +228,14 @@ func TestArch_SubscribersAreIdempotent(t *testing.T) {
 			if strings.HasSuffix(slashPath, "/doc.go") {
 				return
 			}
-			for _, allowed := range allowList {
-				if strings.HasSuffix(slashPath, allowed) {
-					return
-				}
-			}
 			text := string(src)
 			if idempMiddlewareRE.MatchString(text) {
 				return
 			}
 			if getRE.MatchString(text) {
+				return
+			}
+			if inlineMarkerRE.MatchString(text) {
 				return
 			}
 			violations = append(violations, violation{file: path})
@@ -235,11 +245,12 @@ func TestArch_SubscribersAreIdempotent(t *testing.T) {
 	if len(violations) > 0 {
 		t.Logf("SUBSCRIBER IDEMPOTENCY VIOLATIONS — %d", len(violations))
 		t.Logf("Watermill at-least-once delivery means every subscriber may")
-		t.Logf("see the same event twice. Either wrap with")
-		t.Logf("messaging.IdempotencyMiddleware OR perform a natural-key")
-		t.Logf("precheck (Get*/Find* returning ErrNotFound before create).")
+		t.Logf("see the same event twice. Pick one of:")
+		t.Logf("  (1) wrap with messaging.IdempotencyMiddleware / Decorator,")
+		t.Logf("  (2) natural-key precheck (Get*/Find*/Lookup*/Exists* returning ErrNotFound before create),")
+		t.Logf("  (3) inline marker `// arch-test:idempotency-via-<mechanism> — <reason>` when the dedup is one call-frame down.")
 		for _, v := range violations {
-			t.Errorf("%s — no IdempotencyMiddleware wrap + no Get/Find precheck", v.file)
+			t.Errorf("%s — no IdempotencyMiddleware wrap + no Get/Find precheck + no inline arch-test marker", v.file)
 		}
 	}
 }

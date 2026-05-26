@@ -22,6 +22,8 @@ type SecurityStampInvalidator interface {
 	Invalidate(ctx context.Context, id person.ID) error
 }
 
+// arch-test:idempotency-via-noop-on-replay — cache.Invalidate is unconditional Del; replaying it 1..N times yields identical post-state. Documented in the doctrine block below ("The handler is idempotent: cache.Invalidate is unconditional Del...").
+
 // InvalidateSecurityStampCache evicts the cached SecurityStamp for a
 // Person whenever a stamp-rotation event fires
 // (PasswordChanged / Anonymised / GloballySuspended / EmailChanged).
@@ -78,7 +80,7 @@ func NewInvalidateSecurityStampCache(
 		panic("subscribers: NewInvalidateSecurityStampCache stampCache required")
 	}
 	if log == nil {
-		log = slog.Default()
+		panic("subscribers: NewInvalidateSecurityStampCache log required")
 	}
 	return &InvalidateSecurityStampCache{stampCache: stampCache, log: log}
 }

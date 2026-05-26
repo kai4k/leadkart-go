@@ -84,6 +84,29 @@ func TestNewFromUnverifiedContact_RejectsZeroFields(t *testing.T) {
 	}
 }
 
+func TestNewFromUnverifiedContact_RejectsZeroNow(t *testing.T) {
+	t.Parallel()
+	_, err := platformlead.NewFromUnverifiedContact(leadID, contactID, sampleForm(t), agentID, time.Time{})
+	if !errors.Is(err, platformlead.ErrInvalid) {
+		t.Errorf("expected ErrInvalid, got %v", err)
+	}
+}
+
+func TestNewFromUnverifiedContact_RejectsEmptyContactName(t *testing.T) {
+	t.Parallel()
+	// Form{} default-zero has empty ContactName — the ctor MUST reject this
+	// branch. We rely on UnmarshalFromDB to bypass leadform.New's own ctor
+	// validation so we can build an invalid-form fixture.
+	emptyForm := leadform.UnmarshalFromDB(leadform.Input{
+		ContactName: "   ", // whitespace-only also fails the TrimSpace check
+		MobileE164:  "+919876543210",
+	})
+	_, err := platformlead.NewFromUnverifiedContact(leadID, contactID, emptyForm, agentID, now)
+	if !errors.Is(err, platformlead.ErrInvalid) {
+		t.Errorf("expected ErrInvalid for empty ContactName, got %v", err)
+	}
+}
+
 func TestPurchase_HappyPath(t *testing.T) {
 	t.Parallel()
 	l, _ := platformlead.NewFromUnverifiedContact(leadID, contactID, sampleForm(t), agentID, now)
@@ -125,6 +148,24 @@ func TestPurchase_RejectsZeroOrNegativeAmount(t *testing.T) {
 	}
 }
 
+func TestPurchase_RejectsZeroTenantID(t *testing.T) {
+	t.Parallel()
+	l, _ := platformlead.NewFromUnverifiedContact(leadID, contactID, sampleForm(t), agentID, now)
+	err := l.Purchase(platformlead.TenantID(""), memberA, 50000, now.Add(time.Hour))
+	if !errors.Is(err, platformlead.ErrInvalid) {
+		t.Errorf("expected ErrInvalid on empty tenantID, got %v", err)
+	}
+}
+
+func TestPurchase_RejectsZeroPurchasingMembershipID(t *testing.T) {
+	t.Parallel()
+	l, _ := platformlead.NewFromUnverifiedContact(leadID, contactID, sampleForm(t), agentID, now)
+	err := l.Purchase(tenantA, unverifiedcontact.MembershipID(""), 50000, now.Add(time.Hour))
+	if !errors.Is(err, platformlead.ErrInvalid) {
+		t.Errorf("expected ErrInvalid on empty purchasingMembershipID, got %v", err)
+	}
+}
+
 func TestPurchase_AlreadySoldByOther_Rejected(t *testing.T) {
 	t.Parallel()
 	l, _ := platformlead.NewFromUnverifiedContact(leadID, contactID, sampleForm(t), agentID, now)
@@ -148,6 +189,17 @@ func TestPurchase_AlreadySoldBySameTenantSamePrice_Idempotent(t *testing.T) {
 	}
 }
 
+func TestPurchase_AlreadySoldBySameTenantDifferentPrice_Rejected(t *testing.T) {
+	t.Parallel()
+	l, _ := platformlead.NewFromUnverifiedContact(leadID, contactID, sampleForm(t), agentID, now)
+	_ = l.Purchase(tenantA, memberA, 50000, now.Add(time.Hour)) // arch-test:ignore-err — domain test seed
+	// Same tenant, different price → not idempotent — must reject.
+	err := l.Purchase(tenantA, memberA, 75000, now.Add(2*time.Hour))
+	if !errors.Is(err, platformlead.ErrAlreadySold) {
+		t.Errorf("expected ErrAlreadySold on price mismatch, got %v", err)
+	}
+}
+
 func TestUnmarshalFromDB_RoundTrip(t *testing.T) {
 	t.Parallel()
 	snap := platformlead.Snapshot{
@@ -168,5 +220,77 @@ func TestUnmarshalFromDB_RoundTrip(t *testing.T) {
 	}
 	if l.AmountPaisa() != 50000 {
 		t.Errorf("AmountPaisa round-trip failed")
+	}
+}
+
+// ----- Getter coverage ------------------------------------------------------
+
+func TestGetters_PinAllConstructionTimeValues(t *testing.T) {
+	t.Parallel()
+	form := sampleForm(t)
+	l, err := platformlead.NewFromUnverifiedContact(leadID, contactID, form, agentID, now)
+	if err != nil {
+		t.Fatalf("unexpected: %v", err)
+	}
+	if l.ID() != leadID {
+		t.Errorf("ID = %q", l.ID())
+	}
+	if l.SourceContactID() != contactID {
+		t.Errorf("SourceContactID = %q", l.SourceContactID())
+	}
+	if l.Form().ContactName() != form.ContactName() {
+		t.Errorf("Form() round-trip failed")
+	}
+	if l.GstVerified() {
+		t.Error("GstVerified default true, want false (Phase 2 feature)")
+	}
+	if l.VerifiedByMembershipID() != agentID {
+		t.Errorf("VerifiedByMembershipID = %q", l.VerifiedByMembershipID())
+	}
+	if !l.VerifiedAt().Equal(now) {
+		t.Errorf("VerifiedAt = %v", l.VerifiedAt())
+	}
+	if !l.CreatedAt().Equal(now) {
+		t.Errorf("CreatedAt = %v", l.CreatedAt())
+	}
+	// Unsold getters are zero-valued.
+	if !l.SoldAt().IsZero() {
+		t.Errorf("SoldAt = %v, want zero", l.SoldAt())
+	}
+	if !l.SoldToMembershipID().IsZero() {
+		t.Errorf("SoldToMembershipID = %v, want zero", l.SoldToMembershipID())
+	}
+	if l.AmountPaisa() != 0 {
+		t.Errorf("AmountPaisa = %d, want 0", l.AmountPaisa())
+	}
+}
+
+func TestGetters_GstVerified_RoundTripsFromUnmarshal(t *testing.T) {
+	t.Parallel()
+	snap := platformlead.Snapshot{
+		ID:                     leadID,
+		SourceContactID:        contactID,
+		Form:                   sampleForm(t),
+		GstVerified:            true,
+		VerifiedAt:             now,
+		VerifiedByMembershipID: agentID,
+		CreatedAt:              now,
+	}
+	l := platformlead.UnmarshalFromDB(snap)
+	if !l.GstVerified() {
+		t.Error("GstVerified after Unmarshal = false, want true")
+	}
+}
+
+func TestPullEvents_DrainsAndClears(t *testing.T) {
+	t.Parallel()
+	l, _ := platformlead.NewFromUnverifiedContact(leadID, contactID, sampleForm(t), agentID, now)
+	first := l.PullEvents()
+	if len(first) != 1 {
+		t.Fatalf("first PullEvents = %d, want 1", len(first))
+	}
+	second := l.PullEvents()
+	if second != nil {
+		t.Errorf("second PullEvents = %v, want nil", second)
 	}
 }

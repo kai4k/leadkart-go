@@ -35,11 +35,13 @@ func NewStockMovementRepository(pool *pgxpool.Pool, tx *pg.Transactor) *StockMov
 }
 
 // Add satisfies [stockmovement.Repository]. Joins surrounding UoW tx.
+// The aggregate carries its own TenantID — the GUC is bound from
+// m.TenantID() (TDL canon per ADR 0062).
 func (r *StockMovementRepository) Add(ctx context.Context, m *stockmovement.Movement) error {
 	if tx, ok := pg.TxFromContext(ctx); ok {
 		return r.addOnTx(ctx, tx, m)
 	}
-	return r.tx.WithinTxPgx(ctx, pg.TxScopeTenant, func(ctx context.Context, tx pgx.Tx) error {
+	return r.tx.WithinTxPgxTenant(ctx, m.TenantID().String(), func(ctx context.Context, tx pgx.Tx) error {
 		return r.addOnTx(ctx, tx, m)
 	})
 }
@@ -52,10 +54,11 @@ func (r *StockMovementRepository) addOnTx(ctx context.Context, tx pgx.Tx, m *sto
 	return drainMovementEvents(ctx, tx, m)
 }
 
-// GetByID satisfies [stockmovement.Repository].
-func (r *StockMovementRepository) GetByID(ctx context.Context, id stockmovement.ID) (*stockmovement.Movement, error) {
+// GetByID satisfies [stockmovement.Repository]. Tenant-scoped read —
+// GUC bound from the explicit tenantID parameter (TDL canon per ADR 0062).
+func (r *StockMovementRepository) GetByID(ctx context.Context, tenantID tenant.ID, id stockmovement.ID) (*stockmovement.Movement, error) {
 	var out *stockmovement.Movement
-	err := r.tx.WithinTxPgx(ctx, pg.TxScopeTenant, func(ctx context.Context, tx pgx.Tx) error {
+	err := r.tx.WithinTxPgxTenant(ctx, tenantID.String(), func(ctx context.Context, tx pgx.Tx) error {
 		q := r.q.WithTx(tx)
 		mid, perr := uuid.Parse(id.String())
 		if perr != nil {
@@ -78,8 +81,10 @@ func (r *StockMovementRepository) GetByID(ctx context.Context, id stockmovement.
 }
 
 // ListByBatchPage satisfies [stockmovement.Repository]. Keyset on
-// (occurred_at DESC, id DESC) per migration index idx_movements_batch_keyset.
-func (r *StockMovementRepository) ListByBatchPage(ctx context.Context, batchID batch.ID, req stockmovement.PageRequest) (pagination.Page[*stockmovement.Movement], error) {
+// (occurred_at DESC, id DESC) per migration index
+// idx_movements_batch_keyset. GUC bound from the explicit tenantID
+// parameter (TDL canon per ADR 0062).
+func (r *StockMovementRepository) ListByBatchPage(ctx context.Context, tenantID tenant.ID, batchID batch.ID, req stockmovement.PageRequest) (pagination.Page[*stockmovement.Movement], error) {
 	bid, err := uuid.Parse(batchID.String())
 	if err != nil {
 		return pagination.Page[*stockmovement.Movement]{}, fmt.Errorf("movement repo: parse batch id: %w", err)
@@ -98,7 +103,7 @@ func (r *StockMovementRepository) ListByBatchPage(ctx context.Context, batchID b
 	filterType := string(req.Filter.Type)
 
 	var out []*stockmovement.Movement
-	err = r.tx.WithinTxPgx(ctx, pg.TxScopeTenant, func(ctx context.Context, tx pgx.Tx) error {
+	err = r.tx.WithinTxPgxTenant(ctx, tenantID.String(), func(ctx context.Context, tx pgx.Tx) error {
 		q := r.q.WithTx(tx)
 		rows, err := q.ListMovementsByBatchPage(ctx, db.ListMovementsByBatchPageParams{
 			BatchID:          pgUUID(bid),

@@ -1,9 +1,9 @@
 // route_spec_test.go — TestArch_ guard preventing drift between the
-// Go HTTP route table and api/openapi.yaml.
+// Identity Go HTTP route table and api/openapi.yaml.
 //
 // Per ADR 0050: the OpenAPI spec is the canonical contract (ADR 0046);
-// the Go routes MUST match it exactly under /api/v1/*. This arch test
-// is the gate.
+// the Go routes MUST match it exactly under identity-owned prefixes.
+// This arch test is the gate.
 //
 // Two failure modes caught:
 //
@@ -14,10 +14,13 @@
 //     mux.Handle in code. Either ship the handler OR remove the spec
 //     entry.
 //
-// Scope: only /api/v1/* routes are checked. Infrastructure routes
+// Scope: identity-owned prefixes only. Sibling bounded contexts
+// (Platform, Inventory, CRM) ship their own per-module
+// route_spec_test.go (ADR 0050 — drift gates are PER-MODULE since each
+// module owns its corner of the URL space). Infrastructure routes
 // (`GET /`, `GET /favicon.ico`, `GET /docs`, `GET /openapi.yaml`)
 // live OUTSIDE the spec on purpose — they're cross-cutting, not
-// product API surface.
+// product API surface — and don't appear under any owned prefix.
 //
 // History: pre-Wave-9, the spec was authored once in Wave 5 and
 // promptly diverged from later route additions (Wave 4 impersonation
@@ -41,18 +44,56 @@ import (
 )
 
 // codeRoutesPaths are the source files whose mux.Handle calls are the
-// code-side truth. Every module that registers /api/v1/* routes via
-// its `ports.AddRoutes` MUST have its http.go listed here, otherwise
-// the drift gate silently misses cross-module routes.
-//
-// Per ADR 0050 (Wave 9.3) + ADR 0061 (inventory slice 1):
+// code-side truth for the IDENTITY drift gate. Other modules ship
+// their OWN route_spec_test.go (platform, inventory, crm) — drift
+// gates are PER-MODULE per ADR 0050 since each module owns its
+// corner of the URL space.
 var codeRoutesPaths = []string{
 	"http.go",
-	"../../inventory/ports/http.go",
 }
 
 // specPath is the canonical OpenAPI spec.
 const specPath = "../../../api/openapi.yaml"
+
+// identityOwnedPrefixes are the URL prefixes THIS module owns. Each
+// prefix is a leading substring (treated as a prefix that ALSO matches
+// the bare prefix itself when the spec/code uses it as a complete path).
+// Mirror of platform's platformOwnedPrefixes shape (ADR 0050 canon —
+// positive prefix matching, not negative filtering of other modules).
+//
+// Adding a new identity-owned sub-resource means appending its prefix
+// here AND adding the spec entry — the drift gate then enforces both
+// directions for the new namespace.
+var identityOwnedPrefixes = []string{
+	"/api/v1/auth",
+	"/api/v1/sessions",
+	"/api/v1/tenants",
+	"/api/v1/users",
+	"/api/v1/roles",
+	"/api/v1/role-hierarchy",
+	"/api/v1/permissions",
+	"/api/v1/permission-requests",
+	"/api/v1/search",
+	// Identity-owned slices under the shared /platform/ namespace.
+	// Sibling slices (unverified-contacts, marketplace, lead-credits)
+	// belong to the Platform module and are covered by its own gate.
+	"/api/v1/platform/tenants",
+	"/api/v1/platform/persons",
+	"/api/v1/platform/impersonation",
+	"/api/v1/platform/stats",
+}
+
+// matchesOwnedPrefix reports whether p falls under one of the
+// identityOwnedPrefixes namespaces (treats "/foo" as covering "/foo"
+// + "/foo/...").
+func matchesOwnedPrefix(p string) bool {
+	for _, pref := range identityOwnedPrefixes {
+		if p == pref || strings.HasPrefix(p, pref+"/") || strings.HasPrefix(p, pref) {
+			return true
+		}
+	}
+	return false
+}
 
 // routeKey is the canonical (METHOD, PATH) tuple used for set-diffing.
 type routeKey struct {
@@ -64,7 +105,7 @@ func (r routeKey) String() string { return r.method + " " + r.path }
 
 // TestArch_RouteHasSpecOperation walks every mux.Handle registration
 // under internal/identity/ports/http.go + every operation in
-// api/openapi.yaml, restricted to the /api/v1/* prefix, and asserts
+// api/openapi.yaml, restricted to identity-owned prefixes, and asserts
 // the two sets are equal.
 func TestArch_RouteHasSpecOperation(t *testing.T) {
 	t.Parallel()
@@ -111,8 +152,9 @@ func TestArch_RouteHasSpecOperation(t *testing.T) {
 		return
 	}
 
-	t.Logf("OpenAPI ↔ code-route drift detected (per ADR 0050).")
-	t.Logf("Total: %d code routes, %d spec operations under /api/v1/*", len(codeSet), len(specSet))
+	t.Logf("OpenAPI ↔ Identity code-route drift detected (per ADR 0050).")
+	t.Logf("Total: %d code routes, %d spec operations under identity-owned prefixes %v",
+		len(codeSet), len(specSet), identityOwnedPrefixes)
 	if len(codeOrphans) > 0 {
 		t.Logf("\n%d route(s) in code but missing from api/openapi.yaml:", len(codeOrphans))
 		for _, r := range codeOrphans {
@@ -128,9 +170,9 @@ func TestArch_RouteHasSpecOperation(t *testing.T) {
 }
 
 // extractCodeRoutes parses http.go via go/parser and pulls every
-// `mux.Handle("METHOD /api/v1/...", h)` literal. Restricted to /api/v1/*
-// prefix; infrastructure routes (/, /favicon.ico, /docs, /openapi.yaml)
-// are out of scope by design.
+// `mux.Handle("METHOD /api/v1/...", h)` literal. Restricted to
+// identity-owned prefixes; infrastructure routes (/, /favicon.ico,
+// /docs, /openapi.yaml) are out of scope by design.
 func extractCodeRoutes(path string) ([]routeKey, error) {
 	fset := token.NewFileSet()
 	f, err := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
@@ -161,7 +203,7 @@ func extractCodeRoutes(path string) ([]routeKey, error) {
 		if !found {
 			return true
 		}
-		if !strings.HasPrefix(p, "/api/v1/") {
+		if !matchesOwnedPrefix(p) {
 			return true
 		}
 		out = append(out, routeKey{method: method, path: p})
@@ -197,17 +239,7 @@ func extractSpecRoutes(path string) ([]routeKey, error) {
 
 	var out []routeKey
 	for specPath, ops := range spec.Paths {
-		if !strings.HasPrefix(specPath, "/api/v1/") {
-			continue
-		}
-		// Sibling bounded contexts also live under /api/v1/* (e.g. the
-		// Platform module's verification + marketplace + credits routes
-		// under /api/v1/platform/{unverified-contacts,marketplace,
-		// lead-credits}/...). Identity's drift gate covers identity-
-		// owned routes only; each sibling module ships its own scoped
-		// route_spec_test.go (per ADR 0050 — drift gates are PER-MODULE
-		// since each module owns its corner of the URL space).
-		if isPlatformModuleOwnedPath(specPath) {
+		if !matchesOwnedPrefix(specPath) {
 			continue
 		}
 		for verb := range ops {
@@ -221,22 +253,4 @@ func extractSpecRoutes(path string) ([]routeKey, error) {
 		}
 	}
 	return out, nil
-}
-
-// isPlatformModuleOwnedPath reports whether p belongs to the Platform
-// bounded context's sub-namespace (ADR 0059). Identity owns the
-// `/api/v1/platform/{tenants,persons,impersonation,stats}/...` operator
-// surface; Platform owns the listed sub-resources. Each module's own
-// route_spec_test.go covers ITS scope; this guard excludes the
-// platform-module space from identity's gate.
-func isPlatformModuleOwnedPath(p string) bool {
-	switch {
-	case p == "/api/v1/platform/unverified-contacts",
-		strings.HasPrefix(p, "/api/v1/platform/unverified-contacts/"),
-		strings.HasPrefix(p, "/api/v1/platform/marketplace/"),
-		p == "/api/v1/platform/lead-credits",
-		strings.HasPrefix(p, "/api/v1/platform/lead-credits/"):
-		return true
-	}
-	return false
 }

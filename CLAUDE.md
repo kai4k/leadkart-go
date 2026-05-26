@@ -148,11 +148,14 @@ Browser  ←─ HttpOnly cookies ─→  SvelteKit (adapter-node)  ←─ Bearer
 
 | Layer | Location | Authority |
 |---|---|---|
+| **TDL canon** | [`docs/doctrine/tdl_canon.md`](docs/doctrine/tdl_canon.md) | THE thought process. Drift = finding. Mechanical subset enforced by `internal/architecture/tdl_strict_arch_test.go`. |
 | **Living rules** | `.claude/rules/*.md` | Authoritative. Drift = finding. |
 | **Architectural decisions** | `docs/adr/*.md` (Michael Nygard format) | One decision per file, dated, sealed. |
-| **Long-form doctrine** | `docs/doctrine/*.md` | Detailed rule expansions (TBD as code lands). |
+| **Long-form doctrine** | `docs/doctrine/*.md` | Detailed rule expansions. |
 | **Map** | `CLAUDE.md` (this), `README.md`, `BRD.md` | Quick-start; not authoritative. |
 | **Master plan** | `.claude/plans/snazzy-strolling-cray.md` (author-private) | Rebuild plan + Glossary + canonical patterns. |
+
+**Before reviewing or extending code in `domain/`, `app/`, or `ports/`:** read [`docs/doctrine/tdl_canon.md`](docs/doctrine/tdl_canon.md) and run `task review:tdl`. The canon doc captures the *why* behind every decision; the arch tests block the patterns that audits kept missing (ctx-smuggled tenant, validate-tags-in-domain, Save-on-repository, business-verb repo methods, mock-generation tools, setter methods on aggregates). Both gates exist because audits-trust-the-pattern was repeatedly wrong.
 
 ---
 
@@ -221,14 +224,51 @@ internal/{module}/
 
 ---
 
-## Testing rules (per ADR 0019)
+## Testing rules (per ADR 0019 + ADR 0062)
+
+### Test pyramid (ThreeDotsLabs canon — ADR 0062)
+
+| Layer | Tests | How | Target per aggregate |
+|---|---|---|---|
+| Domain | Business rules — invariants, state machines, VO validation | Pure unit tests | Many (~10-30) |
+| App / handlers | Orchestration — calls repo, emits events, error paths | Unit tests against `<aggregate>test.FakeRepository` | Many (~5-15) |
+| Adapter / SQL | SQL contract — RLS fires, JSONB round-trip, 23505 translation, outbox-row write, soft-delete partial-index | Integration tests via `pgtest.RunMain` | Few (~3-6) |
+
+### Per-aggregate fakes (mandatory)
+
+Every domain aggregate with a `Repository` interface has a co-located
+`<aggregate>test/fake_repository.go` exposing `FakeRepository`. Pattern:
+
+```
+internal/<module>/domain/<aggregate>/
+├── repository.go                  # interface
+├── role.go                        # aggregate
+└── <aggregate>test/
+    └── fake_repository.go         # in-memory FakeRepository
+```
+
+Constraints (enforced by `internal/architecture/tdl_canon_arch_test.go`):
+- `var _ <aggregate>.Repository = (*FakeRepository)(nil)` compile-time gate
+- NO `sync` imports (domain-subtree concurrency-free + single-test-owner pattern)
+- Faithful contract: must mirror SQL adapter's `ErrXxx` translations, sort order, soft-delete filtering, partial-unique-index semantics
+
+### Test conventions
 
 - Table-driven via `t.Run`. `t.Parallel()` in subtests.
 - Stdlib `testing` + `go-cmp` for diffs + `testify/require` for ergonomics.
 - `testcontainers-go` for integration tests; build tag `//go:build integration`.
-- `goleak.VerifyTestMain` in integration packages.
-- Fakes per module under `{module}/{module}test/`.
+- `goleak.VerifyTestMain` (or `goleak.Find` when wrapping with `pgtest.RunMain`) in integration packages.
+- Shared `pgtest.Container` per package via `pgtest.RunMain`; per-test isolation via fresh `tenant.ID` + RLS (parallel) or `sharedPG.TruncateAll(t)` (cross-tenant serial).
+- Mixing `t.Parallel()` + `TruncateAll(t)` in one test is forbidden (`TestArch_TruncateAllImpliesSerial`).
 - Race detector mandatory in CI (`go test -race -shuffle=on`).
+
+### Integration tests are SQL-contract-only (ADR 0062)
+
+`internal/<module>/adapters/*_repository_pg_test.go` MUST test:
+SQLSTATE translations, RLS enforcement, JSONB round-trips, outbox-row writes, partial-index behaviors, EXPLAIN-under-RLS index selection, DB triggers.
+
+These tests MUST NOT exist at the SQL layer (covered by `<aggregate>test.FakeRepository`):
+Pure round-trips, ErrNotFound on missing ID, domain state machines, business-rule rejections that the aggregate ctor / mutator enforces.
 
 ---
 

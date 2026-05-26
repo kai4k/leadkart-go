@@ -52,12 +52,14 @@ func NewBatchRepository(pool *pgxpool.Pool, tx *pg.Transactor) *BatchRepository 
 	return &BatchRepository{pool: pool, tx: tx, q: db.New(pool)}
 }
 
-// Add satisfies [batch.Repository]. Joins surrounding UoW tx.
+// Add satisfies [batch.Repository]. Joins surrounding UoW tx. The
+// aggregate carries its own TenantID — the GUC is bound from
+// b.TenantID() (TDL canon per ADR 0062).
 func (r *BatchRepository) Add(ctx context.Context, b *batch.Batch) error {
 	if tx, ok := pg.TxFromContext(ctx); ok {
 		return r.addOnTx(ctx, tx, b)
 	}
-	return r.tx.WithinTxPgx(ctx, pg.TxScopeTenant, func(ctx context.Context, tx pgx.Tx) error {
+	return r.tx.WithinTxPgxTenant(ctx, b.TenantID().String(), func(ctx context.Context, tx pgx.Tx) error {
 		return r.addOnTx(ctx, tx, b)
 	})
 }
@@ -73,12 +75,13 @@ func (r *BatchRepository) addOnTx(ctx context.Context, tx pgx.Tx, b *batch.Batch
 // UpdateByID satisfies [batch.Repository]. Acquires a pessimistic
 // row-level lock (SELECT ... FOR UPDATE) before loading the aggregate
 // so concurrent updaters serialize at the DB layer; see [BatchRepository]
-// doc for the rationale.
-func (r *BatchRepository) UpdateByID(ctx context.Context, id batch.ID, updateFn func(*batch.Batch) (bool, error)) error {
+// doc for the rationale. GUC bound from the explicit tenantID parameter
+// (TDL canon per ADR 0062).
+func (r *BatchRepository) UpdateByID(ctx context.Context, tenantID tenant.ID, id batch.ID, updateFn func(*batch.Batch) (bool, error)) error {
 	if tx, ok := pg.TxFromContext(ctx); ok {
 		return r.updateOnTx(ctx, tx, id, updateFn)
 	}
-	return r.tx.WithinTxPgx(ctx, pg.TxScopeTenant, func(ctx context.Context, tx pgx.Tx) error {
+	return r.tx.WithinTxPgxTenant(ctx, tenantID.String(), func(ctx context.Context, tx pgx.Tx) error {
 		return r.updateOnTx(ctx, tx, id, updateFn)
 	})
 }
@@ -146,10 +149,11 @@ func (r *BatchRepository) updateOnTx(ctx context.Context, tx pgx.Tx, id batch.ID
 	return drainBatchEvents(ctx, tx, b)
 }
 
-// GetByID satisfies [batch.Repository].
-func (r *BatchRepository) GetByID(ctx context.Context, id batch.ID) (*batch.Batch, error) {
+// GetByID satisfies [batch.Repository]. Tenant-scoped read — GUC bound
+// from the explicit tenantID parameter (TDL canon per ADR 0062).
+func (r *BatchRepository) GetByID(ctx context.Context, tenantID tenant.ID, id batch.ID) (*batch.Batch, error) {
 	var out *batch.Batch
-	err := r.tx.WithinTxPgx(ctx, pg.TxScopeTenant, func(ctx context.Context, tx pgx.Tx) error {
+	err := r.tx.WithinTxPgxTenant(ctx, tenantID.String(), func(ctx context.Context, tx pgx.Tx) error {
 		q := r.q.WithTx(tx)
 		got, err := loadBatch(ctx, q, id)
 		if err != nil {
@@ -165,8 +169,9 @@ func (r *BatchRepository) GetByID(ctx context.Context, id batch.ID) (*batch.Batc
 }
 
 // ListByProductPage satisfies [batch.Repository]. Keyset on
-// (expiry_date DESC, id DESC) per migration 20260603000001 index.
-func (r *BatchRepository) ListByProductPage(ctx context.Context, productID product.ID, filter batch.ListFilter, cursor pagination.Cursor, pageSize int) (pagination.Page[*batch.Batch], error) {
+// (expiry_date DESC, id DESC) per migration 20260603000001 index. GUC
+// bound from the explicit tenantID parameter (TDL canon per ADR 0062).
+func (r *BatchRepository) ListByProductPage(ctx context.Context, tenantID tenant.ID, productID product.ID, filter batch.ListFilter, cursor pagination.Cursor, pageSize int) (pagination.Page[*batch.Batch], error) {
 	pid, err := uuid.Parse(productID.String())
 	if err != nil {
 		return pagination.Page[*batch.Batch]{}, fmt.Errorf("batch repo: parse product id: %w", err)
@@ -184,7 +189,7 @@ func (r *BatchRepository) ListByProductPage(ctx context.Context, productID produ
 	}
 
 	var out []*batch.Batch
-	err = r.tx.WithinTxPgx(ctx, pg.TxScopeTenant, func(ctx context.Context, tx pgx.Tx) error {
+	err = r.tx.WithinTxPgxTenant(ctx, tenantID.String(), func(ctx context.Context, tx pgx.Tx) error {
 		q := r.q.WithTx(tx)
 		rows, err := q.ListBatchesByProductPage(ctx, db.ListBatchesByProductPageParams{
 			ProductID:        pgUUID(pid),
@@ -218,14 +223,15 @@ func (r *BatchRepository) ListByProductPage(ctx context.Context, productID produ
 	return page, nil
 }
 
-// AnyLiveWithStockForProduct satisfies [batch.Repository].
-func (r *BatchRepository) AnyLiveWithStockForProduct(ctx context.Context, productID product.ID) (bool, error) {
+// AnyLiveWithStockForProduct satisfies [batch.Repository]. GUC bound
+// from the explicit tenantID parameter (TDL canon per ADR 0062).
+func (r *BatchRepository) AnyLiveWithStockForProduct(ctx context.Context, tenantID tenant.ID, productID product.ID) (bool, error) {
 	pid, err := uuid.Parse(productID.String())
 	if err != nil {
 		return false, fmt.Errorf("batch repo: parse product id: %w", err)
 	}
 	var exists bool
-	err = r.tx.WithinTxPgx(ctx, pg.TxScopeTenant, func(ctx context.Context, tx pgx.Tx) error {
+	err = r.tx.WithinTxPgxTenant(ctx, tenantID.String(), func(ctx context.Context, tx pgx.Tx) error {
 		q := r.q.WithTx(tx)
 		got, err := q.AnyLiveBatchWithStockForProduct(ctx, pgUUID(pid))
 		if err != nil {

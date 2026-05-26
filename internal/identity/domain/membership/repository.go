@@ -33,15 +33,23 @@ var ErrAlreadyActive = errs.New(errs.KindConflict, "membership", "person already
 type Repository interface {
 	// Add persists a brand-new Membership from [New]. Returns
 	// [ErrAlreadyActive] if the PersonID already has an Active Membership.
+	// The aggregate carries TenantID — no explicit parameter needed.
 	Add(ctx context.Context, m *Membership) error
 
 	// UpdateByID loads, mutates via updateFn, persists, drains events.
-	// Per ADR 0004 + TDL Sep 2024 UpdateFn pattern.
-	UpdateByID(ctx context.Context, id ID, updateFn func(*Membership) (bool, error)) error
+	// Per ADR 0004 + TDL Sep 2024 UpdateFn pattern. Per ADR 0062 the
+	// tenantID is an explicit parameter — the SQL adapter binds it
+	// onto the tx GUC for RLS; the fake filters by it for parity.
+	// Returns [ErrNotFound] if the Membership doesn't exist OR exists
+	// in a different tenant scope (RLS-hidden — same observable
+	// behaviour as truly missing).
+	UpdateByID(ctx context.Context, tenantID tenant.ID, id ID, updateFn func(*Membership) (bool, error)) error
 
-	// GetByID returns the Membership or [ErrNotFound]. Tenant-scoped: returns
-	// only Memberships visible under the current tenant context.
-	GetByID(ctx context.Context, id ID) (*Membership, error)
+	// GetByID returns the Membership or [ErrNotFound]. Per ADR 0062
+	// tenantID is an explicit parameter — the SQL adapter binds it
+	// onto the tx GUC for RLS; the fake filters by it for parity.
+	// Returns [ErrNotFound] when the row exists in a different tenant.
+	GetByID(ctx context.Context, tenantID tenant.ID, id ID) (*Membership, error)
 
 	// GetActiveForPerson returns the (single) Active Membership for a
 	// Person across all tenants. Used by NON-login cross-tenant callers
@@ -78,7 +86,7 @@ type Repository interface {
 	// layer free of pagination-package coupling per ADR 0002. The
 	// application-layer query handler is responsible for cursor
 	// encode/decode + sentinel construction.
-	ListForTenantPage(ctx context.Context, beforeJoinedAt time.Time, beforeID string, limit int) ([]*Membership, error)
+	ListForTenantPage(ctx context.Context, tenantID tenant.ID, beforeJoinedAt time.Time, beforeID string, limit int) ([]*Membership, error)
 
 	// ListAllForPerson returns every Membership (Active + Inactive) the
 	// supplied Person holds across ALL tenants. Cross-tenant read —

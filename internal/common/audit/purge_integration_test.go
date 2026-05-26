@@ -1,32 +1,27 @@
 //go:build integration
 
+// arch-test:no-timeout-needed — single test in this file uses the shared
+//   pgtest container; pgxpool internal conn timeouts + package-level
+//   `task ci:test:int -timeout=15m` already bound execution.
+
 package audit_test
 
 import (
-	"context"
 	"io"
 	"log/slog"
-	"path/filepath"
-	"runtime"
 	"testing"
 	"time"
 
-	_ "github.com/jackc/pgx/v5/stdlib"
-	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/pressly/goose/v3"
-
-	"github.com/leadkart/leadkart-go/internal/common/pg"
 	"github.com/riverqueue/river"
-	"github.com/testcontainers/testcontainers-go"
-	"github.com/testcontainers/testcontainers-go/modules/postgres"
-	"github.com/testcontainers/testcontainers-go/wait"
 
-	"github.com/leadkart/leadkart-go/internal/common/ids"
 	"github.com/leadkart/leadkart-go/internal/common/audit"
 	"github.com/leadkart/leadkart-go/internal/common/audit/audittest"
 )
 
 func TestPurgeWorker_DeletesOlderThanRetention(t *testing.T) {
+	// arch-test:no-parallel — asserts on global audit_log_entry row counts
+	// (cross-tenant by design); uses TruncateAll for clean state.
+	sharedPG.TruncateAll(t)
 	pool := startPostgres(t)
 
 	// Seed: one row well outside the retention window, one inside.
@@ -76,66 +71,5 @@ func silentLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
 
-// startPostgres spins testcontainers Postgres + applies migrations.
-// Distinct from cmd/api's fixture because audit-package tests run
-// inside their own package — no cross-package helper sharing.
-func startPostgres(t *testing.T) *pgxpool.Pool {
-	t.Helper()
-	ctx, cancel := context.WithTimeout(t.Context(), 90*time.Second)
-	defer cancel()
-
-	c, err := postgres.Run(ctx,
-		"postgres:17-alpine",
-		postgres.WithDatabase("leadkart_test"),
-		postgres.WithUsername("leadkart"),
-		postgres.WithPassword("leadkart_test"),
-		testcontainers.WithWaitStrategy(
-			wait.ForLog("database system is ready to accept connections").
-				WithOccurrence(2).WithStartupTimeout(60*time.Second),
-		),
-	)
-	if err != nil {
-		t.Fatalf("start postgres: %v", err)
-	}
-	t.Cleanup(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		_ = c.Terminate(ctx)
-	})
-
-	dsn, err := c.ConnectionString(ctx, "sslmode=disable")
-	if err != nil {
-		t.Fatalf("dsn: %v", err)
-	}
-	gooseDB, err := goose.OpenDBWithDriver("pgx", dsn)
-	if err != nil {
-		t.Fatalf("goose open: %v", err)
-	}
-	if err := pg.EnsureGooseDialect(); err != nil {
-		_ = gooseDB.Close()
-		t.Fatalf("set dialect: %v", err)
-	}
-	if err := goose.UpContext(ctx, gooseDB, migrationsDir(t)); err != nil {
-		_ = gooseDB.Close()
-		t.Fatalf("goose up: %v", err)
-	}
-	_ = gooseDB.Close()
-
-	pool, err := pgxpool.New(ctx, dsn)
-	if err != nil {
-		t.Fatalf("pgxpool: %v", err)
-	}
-	t.Cleanup(pool.Close)
-	// Smoke audit_log_entry exists at the expected schema location.
-	_ = ids.NewV7() // arch-test:ignore-err — side-effect only; quiets unused import
-	return pool
-}
-
-func migrationsDir(t *testing.T) string {
-	t.Helper()
-	_, here, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("runtime.Caller failed")
-	}
-	return filepath.Join(filepath.Dir(here), "..", "..", "..", "migrations")
-}
+// Shared bootstrap (startPostgres / TestMain) lives in
+// fixture_integration_test.go per the Brandur / TDL canon.

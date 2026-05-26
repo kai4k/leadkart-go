@@ -170,11 +170,17 @@ func handleListProducts(log *slog.Logger, a app.Application) http.Handler {
 
 func handleGetProduct(log *slog.Logger, a app.Application) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		c, ok := authn.ClaimsFromContext(r.Context())
+		if !ok {
+			writeError(w, http.StatusUnauthorized, ErrCodeUnauthenticated, "")
+			return
+		}
 		id, ok := parsePathUUID(w, r, "productId")
 		if !ok {
 			return
 		}
 		p, err := a.Queries.GetProduct.Handle(r.Context(), query.GetProductQuery{
+			TenantID:  tenant.ID(c.TenantID),
 			ProductID: product.ID(id.String()),
 		})
 		switch {
@@ -207,6 +213,7 @@ func handleUpdateProduct(log *slog.Logger, a app.Application) http.Handler {
 			return
 		}
 		err := a.Commands.UpdateProduct.Handle(r.Context(), command.UpdateProductCommand{
+			TenantID:          tenant.ID(c.TenantID),
 			ProductID:         product.ID(id.String()),
 			ActorMembershipID: membership.ID(c.MembershipID),
 			Name:              req.Name,
@@ -245,6 +252,7 @@ func handleDeleteProduct(log *slog.Logger, a app.Application) http.Handler {
 			return
 		}
 		err := a.Commands.DeleteProduct.Handle(r.Context(), command.DeleteProductCommand{
+			TenantID:          tenant.ID(c.TenantID),
 			ProductID:         product.ID(id.String()),
 			ActorMembershipID: membership.ID(c.MembershipID),
 		})
@@ -287,6 +295,7 @@ func handleAddBatch(log *slog.Logger, a app.Application) http.Handler {
 			return
 		}
 		out, err := a.Commands.AddBatch.Handle(r.Context(), command.AddBatchCommand{
+			TenantID:                   tenant.ID(c.TenantID),
 			ProductID:                  product.ID(productID.String()),
 			ActorMembershipID:          membership.ID(c.MembershipID),
 			BatchNumber:                req.BatchNumber,
@@ -318,6 +327,11 @@ func handleAddBatch(log *slog.Logger, a app.Application) http.Handler {
 
 func handleListBatchesForProduct(log *slog.Logger, a app.Application) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		c, ok := authn.ClaimsFromContext(r.Context())
+		if !ok {
+			writeError(w, http.StatusUnauthorized, ErrCodeUnauthenticated, "")
+			return
+		}
 		productID, ok := parsePathUUID(w, r, "productId")
 		if !ok {
 			return
@@ -329,6 +343,7 @@ func handleListBatchesForProduct(log *slog.Logger, a app.Application) http.Handl
 			return
 		}
 		page, err := a.Queries.ListBatchesByProduct.Handle(r.Context(), query.ListBatchesByProductQuery{
+			TenantID:       tenant.ID(c.TenantID),
 			ProductID:      product.ID(productID.String()),
 			Cursor:         cursor,
 			PageSize:       parsePageSize(q.Get("page_size")),
@@ -353,12 +368,18 @@ func handleListBatchesForProduct(log *slog.Logger, a app.Application) http.Handl
 
 func handleGetBatch(log *slog.Logger, a app.Application) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		c, ok := authn.ClaimsFromContext(r.Context())
+		if !ok {
+			writeError(w, http.StatusUnauthorized, ErrCodeUnauthenticated, "")
+			return
+		}
 		id, ok := parsePathUUID(w, r, "batchId")
 		if !ok {
 			return
 		}
 		b, err := a.Queries.GetBatch.Handle(r.Context(), query.GetBatchQuery{
-			BatchID: batch.ID(id.String()),
+			TenantID: tenant.ID(c.TenantID),
+			BatchID:  batch.ID(id.String()),
 		})
 		switch {
 		case errors.Is(err, batch.ErrNotFound):
@@ -390,6 +411,7 @@ func handleLogStockMovement(log *slog.Logger, a app.Application) http.Handler {
 			return
 		}
 		out, err := a.Commands.LogStockMovement.Handle(r.Context(), command.LogStockMovementCommand{
+			TenantID:          tenant.ID(c.TenantID),
 			BatchID:           batch.ID(batchID.String()),
 			ActorMembershipID: membership.ID(c.MembershipID),
 			Type:              batch.MovementType(req.Type),
@@ -432,6 +454,11 @@ func handleLogStockMovement(log *slog.Logger, a app.Application) http.Handler {
 
 func handleListBatchMovements(log *slog.Logger, a app.Application) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		c, ok := authn.ClaimsFromContext(r.Context())
+		if !ok {
+			writeError(w, http.StatusUnauthorized, ErrCodeUnauthenticated, "")
+			return
+		}
 		batchID, ok := parsePathUUID(w, r, "batchId")
 		if !ok {
 			return
@@ -447,6 +474,7 @@ func handleListBatchMovements(log *slog.Logger, a app.Application) http.Handler 
 			filterType = batch.MovementType(t)
 		}
 		page, err := a.Queries.ListBatchMovementsPage.Handle(r.Context(), query.ListBatchMovementsPageQuery{
+			TenantID: tenant.ID(c.TenantID),
 			BatchID:  batch.ID(batchID.String()),
 			Cursor:   cursor,
 			PageSize: parsePageSize(q.Get("page_size")),

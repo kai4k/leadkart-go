@@ -47,12 +47,14 @@ var ErrPermissionRequestForbidden = errors.New("permission_request: caller canno
 // ----- RequestPermissionElevation ------------------------------------------
 
 // RequestPermissionElevationCommand carries the validated submission
-// input. RequesterMembershipID is populated by the HTTP layer from the
-// JWT membership_id claim — caller never supplies it from the body.
+// input. TenantID + RequesterMembershipID are populated by the HTTP
+// layer from the JWT claims — caller never supplies them from the body.
+// Per ADR 0062 the TenantID flows explicitly through repo methods.
 //
 // DurationDays = 0 triggers the [permissionrequest.DefaultDurationDays]
 // fallback so the wire DTO can omit the field for the common case.
 type RequestPermissionElevationCommand struct {
+	TenantID              tenant.ID
 	RequesterMembershipID membership.ID
 	Permission            *permission.Permission
 	DurationDays          int
@@ -119,6 +121,10 @@ func (h RequestPermissionElevationHandler) Handle(
 	ctx context.Context,
 	cmd RequestPermissionElevationCommand,
 ) (RequestPermissionElevationResult, error) {
+	if cmd.TenantID.IsZero() {
+		return RequestPermissionElevationResult{},
+			errors.New("request_permission_elevation: tenant id required")
+	}
 	if cmd.RequesterMembershipID.IsZero() {
 		return RequestPermissionElevationResult{},
 			errors.New("request_permission_elevation: requester membership id required")
@@ -132,7 +138,7 @@ func (h RequestPermissionElevationHandler) Handle(
 		duration = permissionrequest.DefaultDurationDays
 	}
 
-	requester, err := h.memberships.GetByID(ctx, cmd.RequesterMembershipID)
+	requester, err := h.memberships.GetByID(ctx, cmd.TenantID, cmd.RequesterMembershipID)
 	if err != nil {
 		if errors.Is(err, membership.ErrNotFound) {
 			return RequestPermissionElevationResult{}, ErrUserNotFound
@@ -176,7 +182,12 @@ func (h RequestPermissionElevationHandler) Handle(
 // by the HTTP layer); IsPlatformOperator is true when the caller's JWT
 // has is_platform=true — used to short-circuit the manager-check for
 // orphan / root memberships per ADR 0055.
+//
+// TenantID is the caller's tenant scope (injected from JWT context by
+// the HTTP layer) — flows explicitly through repository methods per
+// ADR 0062 (no ctx-tenancy GUC smuggling).
 type ApprovePermissionRequestCommand struct {
+	TenantID             tenant.ID
 	RequestID            permissionrequest.ID
 	ApproverMembershipID membership.ID
 	IsPlatformOperator   bool
@@ -245,6 +256,9 @@ func (h ApprovePermissionRequestHandler) Handle(
 	ctx context.Context,
 	cmd ApprovePermissionRequestCommand,
 ) error {
+	if cmd.TenantID.IsZero() {
+		return errors.New("approve_permission_request: tenant id required")
+	}
 	if cmd.RequestID.IsZero() {
 		return errors.New("approve_permission_request: request id required")
 	}
@@ -255,7 +269,7 @@ func (h ApprovePermissionRequestHandler) Handle(
 	// Load requester membership for the manager-check. We do this
 	// outside the UpdateByID closure so the authz decision is settled
 	// before the tx opens.
-	req, err := h.requests.GetByID(ctx, cmd.RequestID)
+	req, err := h.requests.GetByID(ctx, cmd.TenantID, cmd.RequestID)
 	if err != nil {
 		if errors.Is(err, permissionrequest.ErrNotFound) {
 			return ErrPermissionRequestNotFound
@@ -269,7 +283,7 @@ func (h ApprovePermissionRequestHandler) Handle(
 		return ErrPermissionRequestSelfApproval
 	}
 
-	requester, err := h.memberships.GetByID(ctx, req.RequesterMembershipID())
+	requester, err := h.memberships.GetByID(ctx, req.TenantID(), req.RequesterMembershipID())
 	if err != nil {
 		if errors.Is(err, membership.ErrNotFound) {
 			// The requester membership has been deleted between
@@ -289,7 +303,7 @@ func (h ApprovePermissionRequestHandler) Handle(
 	overrideID := h.newOverrideID()
 
 	// Step 1 — flip Request to Approved + record grant linkage.
-	if err := h.requests.UpdateByID(ctx, cmd.RequestID, func(loaded *permissionrequest.Request) (bool, error) {
+	if err := h.requests.UpdateByID(ctx, cmd.TenantID, cmd.RequestID, func(loaded *permissionrequest.Request) (bool, error) {
 		if err := loaded.Approve(cmd.ApproverMembershipID, cmd.DecisionReason, overrideID, expiresAt, now); err != nil {
 			return false, err
 		}
@@ -308,7 +322,7 @@ func (h ApprovePermissionRequestHandler) Handle(
 	}
 
 	// Step 2 — grant the bounded permission on the requester's overlay.
-	if err := h.memberships.UpdateByID(ctx, req.RequesterMembershipID(), func(m *membership.Membership) (bool, error) {
+	if err := h.memberships.UpdateByID(ctx, req.TenantID(), req.RequesterMembershipID(), func(m *membership.Membership) (bool, error) {
 		if err := m.GrantPermission(req.Permission(), expiresAt, now); err != nil {
 			return false, err
 		}
@@ -344,7 +358,12 @@ func (h ApprovePermissionRequestHandler) callerCanApprove(
 
 // DenyPermissionRequestCommand carries the denial input. DecisionReason
 // is REQUIRED on Deny per ADR 0055 (audit canon).
+//
+// TenantID is the caller's tenant scope (injected from JWT context by
+// the HTTP layer) — flows explicitly through repository methods per
+// ADR 0062 (no ctx-tenancy GUC smuggling).
 type DenyPermissionRequestCommand struct {
+	TenantID             tenant.ID
 	RequestID            permissionrequest.ID
 	ApproverMembershipID membership.ID
 	IsPlatformOperator   bool
@@ -380,6 +399,9 @@ func (h DenyPermissionRequestHandler) Handle(
 	ctx context.Context,
 	cmd DenyPermissionRequestCommand,
 ) error {
+	if cmd.TenantID.IsZero() {
+		return errors.New("deny_permission_request: tenant id required")
+	}
 	if cmd.RequestID.IsZero() {
 		return errors.New("deny_permission_request: request id required")
 	}
@@ -387,7 +409,7 @@ func (h DenyPermissionRequestHandler) Handle(
 		return errors.New("deny_permission_request: approver membership id required")
 	}
 
-	req, err := h.requests.GetByID(ctx, cmd.RequestID)
+	req, err := h.requests.GetByID(ctx, cmd.TenantID, cmd.RequestID)
 	if err != nil {
 		if errors.Is(err, permissionrequest.ErrNotFound) {
 			return ErrPermissionRequestNotFound
@@ -401,7 +423,7 @@ func (h DenyPermissionRequestHandler) Handle(
 		return ErrPermissionRequestSelfApproval
 	}
 
-	requester, err := h.memberships.GetByID(ctx, req.RequesterMembershipID())
+	requester, err := h.memberships.GetByID(ctx, req.TenantID(), req.RequesterMembershipID())
 	if err != nil {
 		if errors.Is(err, membership.ErrNotFound) {
 			return ErrPermissionRequestNotFound
@@ -413,7 +435,7 @@ func (h DenyPermissionRequestHandler) Handle(
 	}
 
 	now := h.now()
-	if err := h.requests.UpdateByID(ctx, cmd.RequestID, func(loaded *permissionrequest.Request) (bool, error) {
+	if err := h.requests.UpdateByID(ctx, cmd.TenantID, cmd.RequestID, func(loaded *permissionrequest.Request) (bool, error) {
 		if err := loaded.Deny(cmd.ApproverMembershipID, cmd.DecisionReason, now); err != nil {
 			return false, err
 		}
@@ -457,7 +479,12 @@ func canApproveSimilar(
 // CancelPermissionRequestCommand carries the cancellation input. Only
 // the requester themselves can cancel; the handler verifies caller ==
 // requester.
+//
+// TenantID is the caller's tenant scope (injected from JWT context by
+// the HTTP layer) — flows explicitly through repository methods per
+// ADR 0062 (no ctx-tenancy GUC smuggling).
 type CancelPermissionRequestCommand struct {
+	TenantID              tenant.ID
 	RequestID             permissionrequest.ID
 	RequesterMembershipID membership.ID
 }
@@ -488,6 +515,9 @@ func (h CancelPermissionRequestHandler) Handle(
 	ctx context.Context,
 	cmd CancelPermissionRequestCommand,
 ) error {
+	if cmd.TenantID.IsZero() {
+		return errors.New("cancel_permission_request: tenant id required")
+	}
 	if cmd.RequestID.IsZero() {
 		return errors.New("cancel_permission_request: request id required")
 	}
@@ -495,7 +525,7 @@ func (h CancelPermissionRequestHandler) Handle(
 		return errors.New("cancel_permission_request: requester membership id required")
 	}
 
-	req, err := h.requests.GetByID(ctx, cmd.RequestID)
+	req, err := h.requests.GetByID(ctx, cmd.TenantID, cmd.RequestID)
 	if err != nil {
 		if errors.Is(err, permissionrequest.ErrNotFound) {
 			return ErrPermissionRequestNotFound
@@ -511,7 +541,7 @@ func (h CancelPermissionRequestHandler) Handle(
 	}
 
 	now := h.now()
-	if err := h.requests.UpdateByID(ctx, cmd.RequestID, func(loaded *permissionrequest.Request) (bool, error) {
+	if err := h.requests.UpdateByID(ctx, cmd.TenantID, cmd.RequestID, func(loaded *permissionrequest.Request) (bool, error) {
 		if err := loaded.Cancel(now); err != nil {
 			return false, err
 		}

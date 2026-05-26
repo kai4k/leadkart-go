@@ -8,6 +8,7 @@ import (
 
 	"github.com/leadkart/leadkart-go/internal/common/pg"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 	"github.com/leadkart/leadkart-go/internal/inventory/domain/batch"
 	"github.com/leadkart/leadkart-go/internal/inventory/domain/product"
 )
@@ -16,7 +17,12 @@ import (
 // a Product. Defensive read of the parent Product up front to surface
 // 404 cleanly (the composite-FK would otherwise return a generic FK
 // violation).
+//
+// TenantID is the caller's tenant scope (injected from JWT context by
+// the HTTP layer). Per ADR 0062 (TDL canon): tenantID flows through
+// explicit command fields, not via context smuggling.
 type AddBatchCommand struct {
+	TenantID                   tenant.ID
 	ProductID                  product.ID
 	ActorMembershipID          membership.ID
 	BatchNumber                string
@@ -86,10 +92,13 @@ func NewAddBatchHandler(uow pg.UnitOfWork, products product.Repository, batches 
 // Returns batch.ErrBatchNumberTaken on (product_id, batch_number)
 // unique-violation.
 func (h AddBatchHandler) Handle(ctx context.Context, cmd AddBatchCommand) (AddBatchResult, error) {
+	if cmd.TenantID.IsZero() {
+		return AddBatchResult{}, errors.New("add_batch: tenant id required")
+	}
 	now := h.now()
 	var result AddBatchResult
 	err := h.uow.WithinTx(ctx, pg.TxScopeTenant, func(ctx context.Context) error {
-		p, err := h.products.GetByID(ctx, cmd.ProductID)
+		p, err := h.products.GetByID(ctx, cmd.TenantID, cmd.ProductID)
 		if err != nil {
 			if errors.Is(err, product.ErrNotFound) {
 				return product.ErrNotFound

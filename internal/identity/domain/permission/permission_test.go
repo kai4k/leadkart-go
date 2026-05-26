@@ -69,6 +69,18 @@ func TestIdentityPermissions_Catalogue(t *testing.T) {
 	if permission.IdentityPermissions.Inventory.Stock.Manage != "inventory.stock.manage" {
 		t.Fatalf("Inventory.Stock.Manage: %q", permission.IdentityPermissions.Inventory.Stock.Manage)
 	}
+	if permission.IdentityPermissions.Crm.Leads.Read != "crm.leads.read" {
+		t.Fatalf("Crm.Leads.Read: %q", permission.IdentityPermissions.Crm.Leads.Read)
+	}
+	if permission.IdentityPermissions.Crm.Leads.Assign != "crm.leads.assign" {
+		t.Fatalf("Crm.Leads.Assign: %q", permission.IdentityPermissions.Crm.Leads.Assign)
+	}
+	if permission.IdentityPermissions.Crm.Leads.Manage != "crm.leads.manage" {
+		t.Fatalf("Crm.Leads.Manage: %q", permission.IdentityPermissions.Crm.Leads.Manage)
+	}
+	if permission.IdentityPermissions.Crm.Leads.ReadAll != "crm.leads.read_all" {
+		t.Fatalf("Crm.Leads.ReadAll: %q", permission.IdentityPermissions.Crm.Leads.ReadAll)
+	}
 }
 
 func TestFromConstant_ReturnsInternedInstance(t *testing.T) {

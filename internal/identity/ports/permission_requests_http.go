@@ -10,12 +10,14 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/leadkart/leadkart-go/internal/common/pagination"
+	"github.com/leadkart/leadkart-go/internal/common/tenancy"
 	"github.com/leadkart/leadkart-go/internal/identity/app"
 	"github.com/leadkart/leadkart-go/internal/identity/app/command"
 	"github.com/leadkart/leadkart-go/internal/identity/app/query"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/permission"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/permissionrequest"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 	"github.com/leadkart/leadkart-go/internal/identity/ports/authn"
 )
 
@@ -33,8 +35,10 @@ import (
 //   - List my requests / pending-for-approver: caller IS the membership
 //     in the relevant role.
 //
-// All routes are tenant-scoped via the JWT's tenant_id claim binding
-// app.tenant_id GUC on connection acquire; RLS scopes naturally.
+// All routes are tenant-scoped: per ADR 0062 the TenantID is extracted
+// from the request's tenancy context and threaded explicitly through
+// Commands + Queries to the repository layer (no ctx-tenancy GUC
+// smuggling).
 
 // ----- POST /api/v1/permission-requests ------------------------------------
 
@@ -42,6 +46,11 @@ func handleCreatePermissionRequest(log *slog.Logger, a app.Application) http.Han
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		c, ok := authn.ClaimsFromContext(r.Context())
 		if !ok || c.MembershipID == "" {
+			writeError(w, http.StatusUnauthorized, ErrCodeInvalidCredentials, "")
+			return
+		}
+		tid, ok := tenancy.FromContext(r.Context())
+		if !ok || tid == "" {
 			writeError(w, http.StatusUnauthorized, ErrCodeInvalidCredentials, "")
 			return
 		}
@@ -60,6 +69,7 @@ func handleCreatePermissionRequest(log *slog.Logger, a app.Application) http.Han
 
 		out, err := a.Commands.RequestPermissionElevation.Handle(r.Context(),
 			command.RequestPermissionElevationCommand{
+				TenantID:              tenant.ID(tid),
 				RequesterMembershipID: membership.ID(c.MembershipID),
 				Permission:            perm,
 				DurationDays:          req.DurationDays,
@@ -104,6 +114,11 @@ func handleListPermissionRequests(log *slog.Logger, a app.Application) http.Hand
 			writeError(w, http.StatusUnauthorized, ErrCodeInvalidCredentials, "")
 			return
 		}
+		tid, ok := tenancy.FromContext(r.Context())
+		if !ok || tid == "" {
+			writeError(w, http.StatusUnauthorized, ErrCodeInvalidCredentials, "")
+			return
+		}
 
 		role := r.URL.Query().Get("role")
 		if role == "" {
@@ -128,6 +143,7 @@ func handleListPermissionRequests(log *slog.Logger, a app.Application) http.Hand
 		case "approver":
 			page, qerr = a.Queries.ListPendingForApprover.Handle(r.Context(),
 				query.ListPendingForApproverQuery{
+					TenantID:             tenant.ID(tid),
 					ApproverMembershipID: membership.ID(c.MembershipID),
 					Cursor:               cursor,
 					PageSize:             pageSize,
@@ -135,6 +151,7 @@ func handleListPermissionRequests(log *slog.Logger, a app.Application) http.Hand
 		default: // requester
 			page, qerr = a.Queries.ListMyPermissionRequests.Handle(r.Context(),
 				query.ListMyPermissionRequestsQuery{
+					TenantID:              tenant.ID(tid),
 					RequesterMembershipID: membership.ID(c.MembershipID),
 					Cursor:                cursor,
 					PageSize:              pageSize,
@@ -167,12 +184,17 @@ func handleGetPermissionRequest(log *slog.Logger, a app.Application) http.Handle
 			writeError(w, http.StatusUnauthorized, ErrCodeInvalidCredentials, "")
 			return
 		}
+		tid, ok := tenancy.FromContext(r.Context())
+		if !ok || tid == "" {
+			writeError(w, http.StatusUnauthorized, ErrCodeInvalidCredentials, "")
+			return
+		}
 		id, ok := parsePermissionRequestIDPath(w, r)
 		if !ok {
 			return
 		}
 		view, err := a.Queries.GetPermissionRequest.Handle(r.Context(),
-			query.GetPermissionRequestQuery{RequestID: id})
+			query.GetPermissionRequestQuery{TenantID: tenant.ID(tid), RequestID: id})
 		switch {
 		case errors.Is(err, permissionrequest.ErrNotFound):
 			writeError(w, http.StatusNotFound, ErrCodePermissionRequestNotFound, "")
@@ -205,6 +227,11 @@ func handleApprovePermissionRequest(log *slog.Logger, a app.Application) http.Ha
 			writeError(w, http.StatusUnauthorized, ErrCodeInvalidCredentials, "")
 			return
 		}
+		tid, ok := tenancy.FromContext(r.Context())
+		if !ok || tid == "" {
+			writeError(w, http.StatusUnauthorized, ErrCodeInvalidCredentials, "")
+			return
+		}
 		id, ok := parsePermissionRequestIDPath(w, r)
 		if !ok {
 			return
@@ -217,6 +244,7 @@ func handleApprovePermissionRequest(log *slog.Logger, a app.Application) http.Ha
 		}
 		err := a.Commands.ApprovePermissionRequest.Handle(r.Context(),
 			command.ApprovePermissionRequestCommand{
+				TenantID:             tenant.ID(tid),
 				RequestID:            id,
 				ApproverMembershipID: membership.ID(c.MembershipID),
 				IsPlatformOperator:   c.IsPlatform,
@@ -256,6 +284,11 @@ func handleDenyPermissionRequest(log *slog.Logger, a app.Application) http.Handl
 			writeError(w, http.StatusUnauthorized, ErrCodeInvalidCredentials, "")
 			return
 		}
+		tid, ok := tenancy.FromContext(r.Context())
+		if !ok || tid == "" {
+			writeError(w, http.StatusUnauthorized, ErrCodeInvalidCredentials, "")
+			return
+		}
 		id, ok := parsePermissionRequestIDPath(w, r)
 		if !ok {
 			return
@@ -267,6 +300,7 @@ func handleDenyPermissionRequest(log *slog.Logger, a app.Application) http.Handl
 		}
 		err := a.Commands.DenyPermissionRequest.Handle(r.Context(),
 			command.DenyPermissionRequestCommand{
+				TenantID:             tenant.ID(tid),
 				RequestID:            id,
 				ApproverMembershipID: membership.ID(c.MembershipID),
 				IsPlatformOperator:   c.IsPlatform,
@@ -306,12 +340,18 @@ func handleCancelPermissionRequest(log *slog.Logger, a app.Application) http.Han
 			writeError(w, http.StatusUnauthorized, ErrCodeInvalidCredentials, "")
 			return
 		}
+		tid, ok := tenancy.FromContext(r.Context())
+		if !ok || tid == "" {
+			writeError(w, http.StatusUnauthorized, ErrCodeInvalidCredentials, "")
+			return
+		}
 		id, ok := parsePermissionRequestIDPath(w, r)
 		if !ok {
 			return
 		}
 		err := a.Commands.CancelPermissionRequest.Handle(r.Context(),
 			command.CancelPermissionRequestCommand{
+				TenantID:              tenant.ID(tid),
 				RequestID:             id,
 				RequesterMembershipID: membership.ID(c.MembershipID),
 			})

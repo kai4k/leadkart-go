@@ -19,11 +19,38 @@ vars:
   COVER_INT_OUT: coverage-integration.out
   BIN_DIR: bin
   GO_LINT_VERSION: v2.12.2
+  # Spectral CLI version — PINNED, NOT @latest. `@latest` would re-fetch
+  # whatever the npm registry serves at run time, which is the same
+  # supply-chain anti-pattern govulncheck was deliberately moved off of
+  # (see go.mod tool directive). Bumping is a deliberate PR — Dependabot
+  # / Renovate flags new versions; humans review the changelog.
+  SPECTRAL_VERSION: '6.16.0'
   # Migration runner connection — override per env: `DATABASE_URL=... task migrate:up`
   DATABASE_URL: '{{.DATABASE_URL | default "postgres://leadkart:leadkart_dev@localhost:5432/leadkart?sslmode=disable"}}'
   MIGRATIONS_DIR: migrations
   # Compose path used for dev stack tasks
   COMPOSE_FILE: docker/compose.yml
+  # Architecture-test package list — SINGLE SOURCE OF TRUTH consumed by
+  # both `test:arch` (local) and `ci:test:arch` (CI JUnit-flavored). CI
+  # workflow MUST NOT re-encode this list; it MUST invoke the task.
+  # Drift-prevention: TestArch_CIArchJobInvokesTaskRunner asserts the CI
+  # workflow's architecture job is a `task ci:test:arch` invocation, not
+  # a hand-rolled `go test` line. Adding a new module = add ONE line here.
+  ARCH_TEST_PACKAGES: >-
+    ./internal/identity/integrationevents/...
+    ./internal/identity/app/...
+    ./internal/identity/ports/...
+    ./internal/inventory/integrationevents/...
+    ./internal/inventory/app/...
+    ./internal/inventory/ports/...
+    ./internal/inventory/adapters/...
+    ./internal/platform/integrationevents/...
+    ./internal/platform/app/...
+    ./internal/platform/ports/...
+    ./internal/crm/integrationevents/...
+    ./internal/crm/app/...
+    ./internal/crm/ports/...
+    ./internal/architecture/...
 
 tasks:
   default:
@@ -52,6 +79,12 @@ tasks:
 
   # =====================================================================
   # Tests — `go test` is canon. Wrappers below remember the flag combos.
+  #
+  # The `ci:test:*` variants below wrap the same `go test` invocation in
+  # `go tool gotestsum` so CI gets JUnit XML for the GitHub Checks panel.
+  # gotestsum is pinned via the go.mod tool directive (alongside
+  # govulncheck) — same SLSA-aligned canon. CI MUST call these tasks +
+  # never re-encode the package list / flags.
   # =====================================================================
 
   test:
@@ -65,14 +98,49 @@ tasks:
       - CGO_ENABLED=1 go test -race -shuffle=on -skip "^Test(Arch|Meta)_" ./...
 
   test:arch:
-    desc: 'Architecture tests (TestArch_* + TestMeta_*) — integration-events hygiene + layer-boundary discipline (ADR 0047) + route-registration conflict gate (ADR 0049) + cross-module fitness-function suite under internal/architecture/ (Ford / Parsons / Kua canon). Covers identity + inventory + platform.'
+    desc: 'Architecture tests (TestArch_* + TestMeta_*) — integration-events hygiene + layer-boundary discipline (ADR 0047) + route-registration conflict gate (ADR 0049) + spec drift (ADR 0050) + cross-module fitness-function suite under internal/architecture/ (Ford / Parsons / Kua canon). Covers identity + inventory + platform + CRM.'
     cmds:
-      - go test -shuffle=on -run "^Test(Arch|Meta)_" ./internal/identity/integrationevents/... ./internal/identity/app/... ./internal/identity/ports/... ./internal/inventory/integrationevents/... ./internal/inventory/app/... ./internal/inventory/ports/... ./internal/inventory/adapters/... ./internal/platform/integrationevents/... ./internal/platform/app/... ./internal/platform/ports/... ./internal/architecture/...
+      - go test -shuffle=on -run "^Test(Arch|Meta)_" {{.ARCH_TEST_PACKAGES}}
 
   test:int:
     desc: Integration tests (testcontainers Postgres; requires Docker)
     cmds:
       - go test -shuffle=on -tags=integration -timeout=15m -coverprofile={{.COVER_INT_OUT}} ./...
+
+  # ---- CI-flavored variants — wrap the above in gotestsum + JUnit XML.
+  # The test command + package list are identical; only the wrapper differs.
+  # This keeps local `task test*` cache-friendly while CI gets junit output
+  # for the dorny/test-reporter Checks annotation.
+
+  ci:test:
+    desc: 'Unit tests with race + shuffle + coverage + JUnit XML (CI flavor). Skips TestArch_* / TestMeta_*.'
+    cmds:
+      - go tool gotestsum --junitfile=junit-unit.xml --format=testname -- -race -shuffle=on -coverprofile={{.COVER_OUT}} -skip "^Test(Arch|Meta)_" ./...
+
+  ci:test:arch:
+    desc: 'Architecture tests + JUnit XML (CI flavor). Same package list as task test:arch via shared ARCH_TEST_PACKAGES var.'
+    cmds:
+      - go tool gotestsum --junitfile=junit-architecture.xml --format=testname -- -run "^Test(Arch|Meta)_" -shuffle=on {{.ARCH_TEST_PACKAGES}}
+
+  ci:test:int:
+    desc: 'Integration tests + JUnit XML (CI flavor). Requires Docker. Unsharded — used by local `task ci:full` + as the fall-through when the matrix-sharded ci:test:int:shard variant is not invoked.'
+    cmds:
+      - go tool gotestsum --junitfile=junit-integration.xml --format=testname -- -race -shuffle=on -tags=integration -timeout=15m -coverprofile={{.COVER_INT_OUT}} ./...
+
+  ci:test:int:shard:
+    desc: |
+      Matrix-sharded integration tests for CI. Each shard runs ONLY its
+      module's //go:build integration files in parallel on a separate
+      runner. Wall-time drops from sum(shards) → max(shard).
+      Required env: SHARD (friendly name for junit filename) + PKG
+      (Go package selector). CI workflow's matrix strategy sets both.
+      Example (local repro of the identity shard):
+        SHARD=identity PKG=./internal/identity/... task ci:test:int:shard
+    vars:
+      SHARD: '{{.SHARD | default "all"}}'
+      PKG: '{{.PKG | default "./..."}}'
+    cmds:
+      - go tool gotestsum --junitfile=junit-integration-{{.SHARD}}.xml --format=testname -- -race -shuffle=on -tags=integration -timeout=15m -coverprofile=coverage-integration-{{.SHARD}}.out {{.PKG}}
 
   test:int:compile:
     desc: 'Compile-only check for //go:build integration files. Catches broken integration tests without spinning testcontainers; runs in pre-push gate per ADR 0049 (Wave 7 surfaced an integration-tagged build failure that local `task ci` missed).'
@@ -164,10 +232,17 @@ tasks:
       - task: test:int
       - task: ci:smoke
 
-  ci:openapi:
-    desc: 'OpenAPI spec lint via Spectral (requires npx / node). Mirrors the openapi-lint job in .github/workflows/ci.yml — per ADR 0050.'
+  review:tdl:
+    desc: 'Strict TDL-canon review gate. Runs only TestArch_TDL_* (the strict subset codifying docs/doctrine/tdl_canon.md). Use before opening a PR that touches domain/, app/, or ports/.'
     cmds:
-      - npx --yes @stoplight/spectral-cli@latest lint api/openapi.yaml --ruleset .spectral.yaml --fail-severity=error
+      - echo "Reading the canon — docs/doctrine/tdl_canon.md"
+      - echo "Running strict TDL arch tests..."
+      - go test -count=1 -shuffle=on -run "^TestArch_TDL_" ./internal/architecture/...
+
+  ci:openapi:
+    desc: 'OpenAPI spec lint via Spectral (requires npx / node). Spectral pinned via SPECTRAL_VERSION (top of file). Mirrors the openapi-lint job in .github/workflows/ci.yml — per ADR 0050.'
+    cmds:
+      - npx --yes @stoplight/spectral-cli@{{.SPECTRAL_VERSION}} lint api/openapi.yaml --ruleset .spectral.yaml --fail-severity=error
 
   ci:migrations:
     desc: 'Apply all migrations to ephemeral Postgres + tear down. Catches schema errors (GIN opclass, FK shape, RLS policy syntax, etc.) before push. Requires Docker.'

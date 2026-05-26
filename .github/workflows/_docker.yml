@@ -1,0 +1,125 @@
+name: Reusable — Docker Build + Smoke
+
+# Reusable workflow for the docker-build → container-smoke chain.
+# Two-job sequence — split into its own file so the FAANG-style
+# orchestrator (ci.yml) stays small + the Docker concern stays self-
+# contained (caching strategy, smoke harness, teardown all in one
+# place).
+#
+# Caller passes nothing — the workflow reads the PR number / SHA from
+# the github context itself. `secrets: inherit` from the caller would
+# only be needed if we pushed to a real registry; PR builds are
+# load-only into the runner-local docker daemon.
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  # -------------------------------------------------------------------------
+  # Docker build — proves the production Dockerfile builds clean for both
+  # api + migrate targets. Unified cache scope so the shared FROM
+  # golang:... builder stage layers cache across both targets.
+  # -------------------------------------------------------------------------
+  build:
+    name: Docker Build (api + migrate)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Build api target
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: docker/Dockerfile
+          target: api
+          push: false
+          load: true
+          tags: leadkart-go-api:pr-${{ github.event.pull_request.number || github.sha }}
+          cache-from: type=gha,scope=docker-pr
+          cache-to: type=gha,scope=docker-pr,mode=max
+
+      - name: Build migrate target
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: docker/Dockerfile
+          target: migrate
+          push: false
+          load: true
+          tags: leadkart-go-migrate:pr-${{ github.event.pull_request.number || github.sha }}
+          cache-from: type=gha,scope=docker-pr
+          cache-to: type=gha,scope=docker-pr,mode=max
+
+      # Verify the api binary's HEALTHCHECK CLI flag works inside the
+      # built image. We expect exit 1 because there's no admin listener
+      # bound here; the value is "binary parses the flag + exits with
+      # the documented shape" rather than "probe succeeds."
+      - name: Verify -healthcheck flag in built image
+        run: |
+          docker run --rm --entrypoint /api \
+            leadkart-go-api:pr-${{ github.event.pull_request.number || github.sha }} \
+            -healthcheck \
+            && echo "UNEXPECTED: healthcheck exited 0 with no listener" && exit 1 \
+            || echo "OK: healthcheck exited non-zero as expected"
+
+  # -------------------------------------------------------------------------
+  # Container smoke — boots full compose stack + runs scripts/smoke.sh.
+  # End-to-end happy path: register → login → refresh → logout → revoked
+  # token replay = 401.
+  # -------------------------------------------------------------------------
+  smoke:
+    name: Container Smoke (compose up + scripts/smoke.sh)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: build
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      # docker/compose.yml uses ${VAR:?required} substitution so the
+      # stack refuses to start without an explicit JWT signing key + key
+      # ID (canon — secrets must NOT have placeholder defaults). Mint
+      # an ephemeral pair per CI run.
+      - name: Mint ephemeral JWT secrets for smoke
+        run: |
+          {
+            echo "LEADKART_JWT__KEY_ID=ci-smoke-$(date +%s)"
+            echo "LEADKART_JWT__SIGNING_KEY=$(openssl rand -hex 32)"
+          } > docker/.env
+
+      - name: Bring up full stack
+        run: |
+          docker compose --env-file docker/.env -f docker/compose.yml --profile full up -d --build
+          docker compose --env-file docker/.env -f docker/compose.yml --profile full ps
+
+      - name: Wait for api healthy (max 60s)
+        run: |
+          for i in $(seq 1 30); do
+            status=$(docker inspect --format='{{.State.Health.Status}}' leadkart-api 2>/dev/null || echo "starting")
+            echo "[$i] api health: $status"
+            [[ "$status" == "healthy" ]] && exit 0
+            sleep 2
+          done
+          echo "api never reached healthy"
+          docker compose --env-file docker/.env -f docker/compose.yml --profile full logs api --tail=100
+          exit 1
+
+      - name: Run smoke script
+        run: bash scripts/smoke.sh
+
+      - name: Dump api logs on failure
+        if: failure()
+        run: docker compose --env-file docker/.env -f docker/compose.yml --profile full logs --tail=200
+
+      - name: Tear down
+        if: always()
+        run: docker compose --env-file docker/.env -f docker/compose.yml --profile full down -v

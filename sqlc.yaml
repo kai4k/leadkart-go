@@ -10,10 +10,15 @@ version: "2"
 # app/domain code from accidentally pulling in generated query types.
 #
 # Each bounded context gets its OWN sqlc target — schema-per-module
-# canon per ADR 0001.
+# canon per ADR 0001. The schema directive points at the full migrations
+# tree so cross-module FKs validate; the queries directive scopes which
+# SQL files this target compiles.
 #
 # Generated files are committed so the build never depends on sqlc
 # being installed at compile time.
+#
+# Run: `sqlc generate` (or `task generate` once the tool directive is
+# on).
 
 sql:
   - engine: postgresql
@@ -38,6 +43,8 @@ sql:
         # repo adapter does the domain↔row mapping anyway.
 
   # Platform bounded context — ADR 0059 (Slice 1).
+  # Mirrors the identity layout: queries under adapters/sql/,
+  # generated package at adapters/db/ (package `db`).
   - engine: postgresql
     queries: internal/platform/adapters/sql
     schema: migrations
@@ -64,6 +71,26 @@ sql:
       go:
         package: db
         out: internal/inventory/adapters/db
+        sql_package: pgx/v5
+        emit_pointers_for_null_types: true
+        emit_json_tags: false
+        emit_prepared_queries: false
+        emit_interface: false
+        emit_exact_table_names: false
+        emit_enum_valid_method: true
+        emit_all_enum_values: false
+        output_db_file_name: db.go
+        output_models_file_name: models.go
+
+  # CRM bounded context — ADR 0060 (Slice 1).
+  # Mirrors the identity / platform / inventory layout.
+  - engine: postgresql
+    queries: internal/crm/adapters/sql
+    schema: migrations
+    gen:
+      go:
+        package: db
+        out: internal/crm/adapters/db
         sql_package: pgx/v5
         emit_pointers_for_null_types: true
         emit_json_tags: false

@@ -128,6 +128,14 @@ func walkGoFiles(t *testing.T, root string, includeTests bool, fn func(path stri
 			strings.Contains(string(head), "DO NOT EDIT") {
 			return nil
 		}
+		// Skip files gated by `//go:build integration` when scanning
+		// production code. These are test infrastructure that lives
+		// outside `_test.go` because they're imported across packages
+		// (e.g. internal/common/pgtest/). They only compile under the
+		// integration tag, so production-discipline rules don't apply.
+		if !includeTests && strings.Contains(string(head), "//go:build integration") {
+			return nil
+		}
 		fn(path, src)
 		return nil
 	})
