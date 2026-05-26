@@ -32,32 +32,31 @@
 -- pattern + restores the property "tenant-scoped queries succeed
 -- regardless of whether app.is_platform is set".
 --
+-- ALTER POLICY (not DROP+CREATE): swap the USING / WITH CHECK
+-- expressions atomically inside the goose tx. DROP+CREATE would leave
+-- a brief window where the policy is missing — under FORCE RLS that
+-- means rows are temporarily invisible, which is benign inside a tx
+-- but unidiomatic. ALTER POLICY is the canonical "swap predicate"
+-- shape per PostgreSQL docs §sql-alterpolicy.
+--
 -- Surfaced by TestEdgeRepository_GetAncestorsByChild_RecursiveCTEWalksUpward
 -- after pgtest.RunMain ordering fix (commit 7cda757) let integration
 -- tests actually run against the schema for the first time.
---
--- arch-test:no-down-required — DROP+CREATE is the canonical RLS-policy
---   replacement shape; no separate down section needed.
 
 -- +goose Up
 -- +goose StatementBegin
 
-DROP POLICY IF EXISTS tenant_isolation_select ON identity.role_hierarchy_edges;
-DROP POLICY IF EXISTS tenant_isolation_insert ON identity.role_hierarchy_edges;
-DROP POLICY IF EXISTS tenant_isolation_update ON identity.role_hierarchy_edges;
-DROP POLICY IF EXISTS tenant_isolation_delete ON identity.role_hierarchy_edges;
-
-CREATE POLICY tenant_isolation_select ON identity.role_hierarchy_edges FOR SELECT
+ALTER POLICY tenant_isolation_select ON identity.role_hierarchy_edges
     USING (tenant_id = app.current_tenant() OR app.is_platform());
 
-CREATE POLICY tenant_isolation_insert ON identity.role_hierarchy_edges FOR INSERT
+ALTER POLICY tenant_isolation_insert ON identity.role_hierarchy_edges
     WITH CHECK (tenant_id = app.current_tenant() OR app.is_platform());
 
-CREATE POLICY tenant_isolation_update ON identity.role_hierarchy_edges FOR UPDATE
+ALTER POLICY tenant_isolation_update ON identity.role_hierarchy_edges
     USING (tenant_id = app.current_tenant() OR app.is_platform())
     WITH CHECK (tenant_id = app.current_tenant() OR app.is_platform());
 
-CREATE POLICY tenant_isolation_delete ON identity.role_hierarchy_edges FOR DELETE
+ALTER POLICY tenant_isolation_delete ON identity.role_hierarchy_edges
     USING (tenant_id = app.current_tenant() OR app.is_platform());
 
 -- +goose StatementEnd
@@ -65,26 +64,21 @@ CREATE POLICY tenant_isolation_delete ON identity.role_hierarchy_edges FOR DELET
 -- +goose Down
 -- +goose StatementBegin
 
-DROP POLICY IF EXISTS tenant_isolation_select ON identity.role_hierarchy_edges;
-DROP POLICY IF EXISTS tenant_isolation_insert ON identity.role_hierarchy_edges;
-DROP POLICY IF EXISTS tenant_isolation_update ON identity.role_hierarchy_edges;
-DROP POLICY IF EXISTS tenant_isolation_delete ON identity.role_hierarchy_edges;
-
-CREATE POLICY tenant_isolation_select ON identity.role_hierarchy_edges FOR SELECT
+ALTER POLICY tenant_isolation_select ON identity.role_hierarchy_edges
     USING (tenant_id = current_setting('app.tenant_id', true)::uuid
            OR current_setting('app.is_platform', true)::boolean IS TRUE);
 
-CREATE POLICY tenant_isolation_insert ON identity.role_hierarchy_edges FOR INSERT
+ALTER POLICY tenant_isolation_insert ON identity.role_hierarchy_edges
     WITH CHECK (tenant_id = current_setting('app.tenant_id', true)::uuid
                 OR current_setting('app.is_platform', true)::boolean IS TRUE);
 
-CREATE POLICY tenant_isolation_update ON identity.role_hierarchy_edges FOR UPDATE
+ALTER POLICY tenant_isolation_update ON identity.role_hierarchy_edges
     USING (tenant_id = current_setting('app.tenant_id', true)::uuid
            OR current_setting('app.is_platform', true)::boolean IS TRUE)
     WITH CHECK (tenant_id = current_setting('app.tenant_id', true)::uuid
                 OR current_setting('app.is_platform', true)::boolean IS TRUE);
 
-CREATE POLICY tenant_isolation_delete ON identity.role_hierarchy_edges FOR DELETE
+ALTER POLICY tenant_isolation_delete ON identity.role_hierarchy_edges
     USING (tenant_id = current_setting('app.tenant_id', true)::uuid
            OR current_setting('app.is_platform', true)::boolean IS TRUE);
 
