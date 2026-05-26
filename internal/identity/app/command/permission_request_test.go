@@ -435,10 +435,10 @@ func (r *b2MemRepo) UpdateByID(ctx context.Context, tid tenant.ID, id membership
 	return r.FakeRepository.UpdateByID(ctx, tid, id, fn)
 }
 
-// b2ErrSentinel is the synthetic non-typed error used for "non-NotFound
+// errB2Permreq is the synthetic non-typed error used for "non-NotFound
 // wrapped" branches. Detection in tests uses errors.Is — every wrapper
 // MUST preserve it via %w.
-var b2ErrSentinel = errors.New("b2: synthetic infrastructure failure")
+var errB2Permreq = errors.New("b2: synthetic infrastructure failure")
 
 // ----- RequestPermissionElevation — additional branches -------------------
 
@@ -532,7 +532,7 @@ func TestRequestPermissionElevation_LoadRequester_NonNotFoundError_Wrapped(t *te
 
 	reqs := newFakePermissionRequestRepo()
 	mems := newB2MemRepo()
-	mems.errOnGetByID = b2ErrSentinel
+	mems.errOnGetByID = errB2Permreq
 	h := command.NewRequestPermissionElevationHandler(reqs, mems, fixedTimeFn(),
 		func() permissionrequest.ID { return permissionrequest.ID(ids.NewV7().String()) })
 
@@ -542,8 +542,8 @@ func TestRequestPermissionElevation_LoadRequester_NonNotFoundError_Wrapped(t *te
 		Permission:            permission.FromConstant(permission.IdentityPermissions.Users.Create),
 		Reason:                "need to onboard 5 users for monthly sales drive",
 	})
-	if !errors.Is(err, b2ErrSentinel) {
-		t.Fatalf("err = %v, want wrapped b2ErrSentinel", err)
+	if !errors.Is(err, errB2Permreq) {
+		t.Fatalf("err = %v, want wrapped errB2Permreq", err)
 	}
 	if errors.Is(err, command.ErrUserNotFound) {
 		t.Errorf("non-NotFound infra error MUST NOT collapse to ErrUserNotFound")
@@ -580,7 +580,7 @@ func TestRequestPermissionElevation_AddPersist_NonPendingExistsError_Wrapped(t *
 	mems := newFakeMembershipRepoForPermReq()
 	requester := freshMembershipForPermReq(t)
 	_ = mems.Add(t.Context(), requester) // arch-test:ignore-err - test fixture setup
-	reqs.errOnAdd = b2ErrSentinel
+	reqs.errOnAdd = errB2Permreq
 
 	h := command.NewRequestPermissionElevationHandler(reqs, mems, fixedTimeFn(),
 		func() permissionrequest.ID { return permissionrequest.ID(ids.NewV7().String()) })
@@ -590,8 +590,8 @@ func TestRequestPermissionElevation_AddPersist_NonPendingExistsError_Wrapped(t *
 		Permission:            permission.FromConstant(permission.IdentityPermissions.Users.Create),
 		Reason:                "need to onboard 5 users for monthly sales drive",
 	})
-	if !errors.Is(err, b2ErrSentinel) {
-		t.Fatalf("err = %v, want wrapped b2ErrSentinel", err)
+	if !errors.Is(err, errB2Permreq) {
+		t.Fatalf("err = %v, want wrapped errB2Permreq", err)
 	}
 	if errors.Is(err, command.ErrPermissionRequestPendingExists) {
 		t.Errorf("non-PendingExists infra error MUST NOT collapse to ErrPermissionRequestPendingExists")
@@ -812,7 +812,7 @@ func TestApprovePermissionRequest_Step2GrantFailure_RequestRemainsApproved(t *te
 	// Approve calls UpdateByID twice: first on requests (Step 1), then on
 	// memberships (Step 2). errOnUpdateByID on mems fires on the Step-2
 	// call only — Step 1 has already committed.
-	mems.errOnUpdateByID = b2ErrSentinel
+	mems.errOnUpdateByID = errB2Permreq
 
 	approveH := command.NewApprovePermissionRequestHandler(reqs, mems, fixedTimeFn(), ids.NewV7)
 	err := approveH.Handle(t.Context(), command.ApprovePermissionRequestCommand{
@@ -821,8 +821,8 @@ func TestApprovePermissionRequest_Step2GrantFailure_RequestRemainsApproved(t *te
 		ApproverMembershipID: manager.ID(),
 		DecisionReason:       "approved despite infra hiccup",
 	})
-	if !errors.Is(err, b2ErrSentinel) {
-		t.Fatalf("err = %v, want wrapped b2ErrSentinel", err)
+	if !errors.Is(err, errB2Permreq) {
+		t.Fatalf("err = %v, want wrapped errB2Permreq", err)
 	}
 	// Compensating-state assertion: Request is Approved even though the
 	// membership grant failed.
@@ -1118,14 +1118,15 @@ func TestCancelPermissionRequest_NonPending(t *testing.T) {
 
 // ----- Cross-cutting reachability checks ----------------------------------
 
-// b2KeepUnused references symbols imported above for branches that we
-// don't exercise inline (uuid + pagination) — keeps the import block
-// honest without unused-import warnings.
+// _ = b2KeepUnusedRef references symbols imported above for branches
+// we don't exercise inline (uuid + pagination + person) — keeps the
+// import block honest. Blank-identifier assignment avoids the
+// unused-var lint check.
 //
 //nolint:gochecknoglobals // sentinel reachability marker for unused-import
-var b2KeepUnused = struct {
-	_ uuid.UUID
+var (
+	_ = uuid.Nil
 	_ pagination.Cursor
 	_ *person.Person
-}{}
+)
 

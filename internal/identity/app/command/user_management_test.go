@@ -3,6 +3,7 @@ package command_test
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -279,10 +280,7 @@ func TestUpdateUserProfile_HappyPath_NoLengthRejection(t *testing.T) {
 	m := newMembership(t)
 	_ = repo.Add(t.Context(), m) // arch-test:ignore-err
 
-	longMsg := ""
-	for range 500 {
-		longMsg += "a"
-	}
+	longMsg := strings.Repeat("a", 500)
 	h := command.NewUpdateUserProfileHandler(repo, func() time.Time { return testNow })
 	if err := h.Handle(t.Context(), command.UpdateUserProfileCommand{
 		TenantID:      tenant.ID("33333333-3333-3333-3333-333333333333"),

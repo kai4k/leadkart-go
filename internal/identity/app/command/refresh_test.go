@@ -642,37 +642,17 @@ func TestRefresh_ResolverError_Wrapped(t *testing.T) {
 	}
 }
 
-// TestRefresh_JWTIssueError_Wrapped covers the jwt.Issue error
-// branch. We wire a JWT issuer that will reject the IssueArgs (we
-// fabricate empty PersonID by NOT seeding a Person, which makes the
-// post-rotate GetByID return ErrNotFound — but that's a different
-// branch. The only way Issue fails here is on the PersonID==""
-// invariant. The handler always passes p.ID().String() so we'd need
-// to control Person.ID()==""; we use a Snapshot-rehydrated Person
-// with a zero ID, but Add would reject. Skip via direct repo poke
-// after the fact OR via a custom Person impl.
-//
-// Practically: a Person whose ID is empty never enters the system in
-// the first place. The branch IS reachable only through programmer
-// error; we lock the contract by asserting the wrapping happens at
-// all by stubbing the issuer. Wrap via interface seam in the issuer
-// is not possible (it's a *Issuer, not an interface). We instead
-// rely on integration coverage for the issue-error branch and
-// document the gap here.
+// Documented gap — RefreshHandler's `"refresh: issue jwt"` wrap is
+// covered by integration tests in flow_integration_test.go, NOT by a
+// handler-unit test. Reason: *jwt.Issuer is a concrete struct (not an
+// interface) so Issue() failure cannot be deterministically injected
+// without rewriting the handler signature. The branch is reachable
+// only through programmer error (e.g. empty PersonID, which the
+// aggregate ctors reject upstream). Adding a no-op test here just to
+// claim a stub-name would trip TestArch_TestsHaveAtLeastOneAssertion.
 //
 // TODO(future): if jwt.Issuer becomes an interface (single-impl is
 // often a smell), add direct unit coverage for the issue-error wrap.
-func TestRefresh_JWTIssueError_Documented(t *testing.T) {
-	t.Parallel()
-	// Documented gap — the *jwt.Issuer is a concrete struct, not an
-	// interface, so we can't inject a deterministic failure at this
-	// layer without rewriting the handler signature. The Issue()
-	// error wrapping ("refresh: issue jwt") IS covered by the
-	// production-shape integration tests in flow_integration_test.go
-	// + by code inspection. This test exists to make the gap visible
-	// in the test inventory.
-	t.Log("jwt.Issue error wrap not unit-testable without interface seam — see godoc")
-}
 
 // ----- helpers -------------------------------------------------------------
 
@@ -703,10 +683,10 @@ func (r *rolesErrRepo) UpdateByID(context.Context, tenant.ID, role.ID, func(*rol
 	return nil
 }
 func (r *rolesErrRepo) GetByID(context.Context, tenant.ID, role.ID) (*role.Role, error) {
-	return nil, nil
+	return nil, role.ErrNotFound
 }
 func (r *rolesErrRepo) GetByTenantAndName(context.Context, tenant.ID, string) (*role.Role, error) {
-	return nil, nil
+	return nil, role.ErrNotFound
 }
 func (r *rolesErrRepo) ListByTenant(context.Context, tenant.ID) ([]*role.Role, error) {
 	return nil, nil

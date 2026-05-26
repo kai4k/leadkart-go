@@ -230,7 +230,7 @@ func (r *b2RegRoleRepo) Add(ctx context.Context, role *role.Role) error {
 	return r.FakeRepository.Add(ctx, role)
 }
 
-var b2RegSentinel = errors.New("b2: synthetic infrastructure failure (register_tenant)")
+var errB2RegTenant = errors.New("b2: synthetic infrastructure failure (register_tenant)")
 
 // b2PrebuiltPerson builds a Person with the supplied email so we can seed
 // the existing-Person reuse + active-membership-conflict branches.
@@ -329,13 +329,13 @@ func TestRegisterTenant_GetByEmail_NonNotFoundError_Wrapped(t *testing.T) {
 	t.Parallel()
 	deps := b2NewRegisterDeps()
 	persons := newB2RegPersonRepo()
-	persons.errOnGetByEmail = b2RegSentinel
+	persons.errOnGetByEmail = errB2RegTenant
 	deps.persons = persons
 	h := b2NewRegisterHandler(deps)
 
 	_, err := h.Handle(t.Context(), b2RegisterCmd(t))
-	if !errors.Is(err, b2RegSentinel) {
-		t.Fatalf("err = %v, want wrapped b2RegSentinel", err)
+	if !errors.Is(err, errB2RegTenant) {
+		t.Fatalf("err = %v, want wrapped errB2RegTenant", err)
 	}
 	if errors.Is(err, command.ErrEmailHasActiveMembership) {
 		t.Errorf("non-NotFound infra error MUST NOT collapse to ErrEmailHasActiveMembership")
@@ -402,13 +402,13 @@ func TestRegisterTenant_TenantsAdd_Error_Wrapped(t *testing.T) {
 	t.Parallel()
 	deps := b2NewRegisterDeps()
 	tenants := newB2RegTenantRepo()
-	tenants.errOnAdd = b2RegSentinel
+	tenants.errOnAdd = errB2RegTenant
 	deps.tenants = tenants
 	h := b2NewRegisterHandler(deps)
 
 	_, err := h.Handle(t.Context(), b2RegisterCmd(t))
-	if !errors.Is(err, b2RegSentinel) {
-		t.Fatalf("err = %v, want wrapped b2RegSentinel", err)
+	if !errors.Is(err, errB2RegTenant) {
+		t.Fatalf("err = %v, want wrapped errB2RegTenant", err)
 	}
 }
 
@@ -437,13 +437,13 @@ func TestRegisterTenant_PersonsAdd_OtherError_Wrapped(t *testing.T) {
 	t.Parallel()
 	deps := b2NewRegisterDeps()
 	persons := newB2RegPersonRepo()
-	persons.errOnAdd = b2RegSentinel
+	persons.errOnAdd = errB2RegTenant
 	deps.persons = persons
 	h := b2NewRegisterHandler(deps)
 
 	_, err := h.Handle(t.Context(), b2RegisterCmd(t))
-	if !errors.Is(err, b2RegSentinel) {
-		t.Fatalf("err = %v, want wrapped b2RegSentinel", err)
+	if !errors.Is(err, errB2RegTenant) {
+		t.Fatalf("err = %v, want wrapped errB2RegTenant", err)
 	}
 	if errors.Is(err, command.ErrEmailHasActiveMembership) {
 		t.Errorf("non-EmailTaken infra error MUST NOT collapse to ErrEmailHasActiveMembership")
@@ -474,13 +474,13 @@ func TestRegisterTenant_MembershipsAdd_OtherError_Wrapped(t *testing.T) {
 	t.Parallel()
 	deps := b2NewRegisterDeps()
 	memberships := newB2RegMembershipRepo()
-	memberships.errOnAdd = b2RegSentinel
+	memberships.errOnAdd = errB2RegTenant
 	deps.memberships = memberships
 	h := b2NewRegisterHandler(deps)
 
 	_, err := h.Handle(t.Context(), b2RegisterCmd(t))
-	if !errors.Is(err, b2RegSentinel) {
-		t.Fatalf("err = %v, want wrapped b2RegSentinel", err)
+	if !errors.Is(err, errB2RegTenant) {
+		t.Fatalf("err = %v, want wrapped errB2RegTenant", err)
 	}
 	if errors.Is(err, command.ErrEmailHasActiveMembership) {
 		t.Errorf("non-AlreadyActive infra error MUST NOT collapse to ErrEmailHasActiveMembership")
@@ -498,13 +498,13 @@ func TestRegisterTenant_ApplyDefaultRoles_Error_Wrapped(t *testing.T) {
 	roles := newB2RegRoleRepo()
 	// ApplyDefaultRoles iterates DefaultRoleCatalog, calls GetByTenantAndName
 	// (returns ErrNotFound on a fresh tenant), then Add. Inject Add error.
-	roles.errOnAdd = b2RegSentinel
+	roles.errOnAdd = errB2RegTenant
 	deps.roles = roles
 	h := b2NewRegisterHandler(deps)
 
 	_, err := h.Handle(t.Context(), b2RegisterCmd(t))
-	if !errors.Is(err, b2RegSentinel) {
-		t.Fatalf("err = %v, want wrapped b2RegSentinel", err)
+	if !errors.Is(err, errB2RegTenant) {
+		t.Fatalf("err = %v, want wrapped errB2RegTenant", err)
 	}
 }
 
@@ -522,11 +522,11 @@ func TestRegisterTenant_RoleAssignmentUpdateByID_Error_Wrapped(t *testing.T) {
 	// errOnUpdateByID fires on the NEXT UpdateByID call; in the register
 	// flow the only UpdateByID call on memberships is the role-assign
 	// step at the very end.
-	memberships.errOnUpdateByID = b2RegSentinel
+	memberships.errOnUpdateByID = errB2RegTenant
 
 	_, err := h.Handle(t.Context(), b2RegisterCmd(t))
-	if !errors.Is(err, b2RegSentinel) {
-		t.Fatalf("err = %v, want wrapped b2RegSentinel", err)
+	if !errors.Is(err, errB2RegTenant) {
+		t.Fatalf("err = %v, want wrapped errB2RegTenant", err)
 	}
 }
 
@@ -553,9 +553,9 @@ func TestNewRegisterTenantHandler_PanicsOnNilFactories(t *testing.T) {
 					t.Error("expected panic on nil ID factory")
 				}
 			}()
-			var fT func() tenant.ID = func() tenant.ID { return tenant.ID(ids.NewV7().String()) }
-			var fP func() person.ID = func() person.ID { return person.ID(ids.NewV7().String()) }
-			var fM func() membership.ID = func() membership.ID { return membership.ID(ids.NewV7().String()) }
+			fT := func() tenant.ID { return tenant.ID(ids.NewV7().String()) }
+			fP := func() person.ID { return person.ID(ids.NewV7().String()) }
+			fM := func() membership.ID { return membership.ID(ids.NewV7().String()) }
 			if tc.nilT {
 				fT = nil
 			}

@@ -176,7 +176,7 @@ func (r *b2EmailPersonRepo) UpdateByID(ctx context.Context, id person.ID, fn fun
 	return r.FakeRepository.UpdateByID(ctx, id, fn)
 }
 
-var b2EmailSentinel = errors.New("b2: synthetic infrastructure failure (email-change)")
+var errB2EmailChange = errors.New("b2: synthetic infrastructure failure (email-change)")
 
 // b2NewSecondaryPerson constructs a SECOND Person with a different ID +
 // email — used for collision tests (a different Person already owns the
@@ -202,15 +202,15 @@ func TestRequestEmailChange_GetByID_NonNotFoundError_Wrapped(t *testing.T) {
 	t.Parallel()
 	addr, _ := email.New("new@example.test")
 	repo := newB2EmailPersonRepo(t, nil)
-	repo.errOnGetByID = b2EmailSentinel
+	repo.errOnGetByID = errB2EmailChange
 
 	h := command.NewRequestEmailChangeHandler(repo, func() time.Time { return testNow })
 	err := h.Handle(t.Context(), command.RequestEmailChangeCommand{
 		PersonID: person.ID("p-anything"),
 		NewEmail: addr,
 	})
-	if !errors.Is(err, b2EmailSentinel) {
-		t.Fatalf("err = %v, want wrapped b2EmailSentinel", err)
+	if !errors.Is(err, errB2EmailChange) {
+		t.Fatalf("err = %v, want wrapped errB2EmailChange", err)
 	}
 	if errors.Is(err, command.ErrEmailChangeRejected) {
 		t.Errorf("non-NotFound infra error MUST NOT collapse to ErrEmailChangeRejected")
@@ -283,7 +283,7 @@ func TestRequestEmailChange_GetByEmail_NonNotFoundError_Wrapped(t *testing.T) {
 	t.Parallel()
 	p := newPersonWithPassword(t, "irrelevant")
 	repo := newB2EmailPersonRepo(t, p)
-	repo.errOnGetByEmail = b2EmailSentinel
+	repo.errOnGetByEmail = errB2EmailChange
 
 	h := command.NewRequestEmailChangeHandler(repo, func() time.Time { return testNow })
 	addr, _ := email.New("new@example.test")
@@ -291,8 +291,8 @@ func TestRequestEmailChange_GetByEmail_NonNotFoundError_Wrapped(t *testing.T) {
 		PersonID: p.ID(),
 		NewEmail: addr,
 	})
-	if !errors.Is(err, b2EmailSentinel) {
-		t.Fatalf("err = %v, want wrapped b2EmailSentinel", err)
+	if !errors.Is(err, errB2EmailChange) {
+		t.Fatalf("err = %v, want wrapped errB2EmailChange", err)
 	}
 	if errors.Is(err, command.ErrEmailAlreadyTaken) {
 		t.Errorf("non-NotFound collision-check error MUST NOT collapse to ErrEmailAlreadyTaken")
@@ -303,7 +303,7 @@ func TestRequestEmailChange_UpdateByID_Error_Wrapped(t *testing.T) {
 	t.Parallel()
 	p := newPersonWithPassword(t, "irrelevant")
 	repo := newB2EmailPersonRepo(t, p)
-	repo.errOnUpdateByID = b2EmailSentinel
+	repo.errOnUpdateByID = errB2EmailChange
 
 	h := command.NewRequestEmailChangeHandler(repo, func() time.Time { return testNow })
 	addr, _ := email.New("new@example.test")
@@ -311,8 +311,8 @@ func TestRequestEmailChange_UpdateByID_Error_Wrapped(t *testing.T) {
 		PersonID: p.ID(),
 		NewEmail: addr,
 	})
-	if !errors.Is(err, b2EmailSentinel) {
-		t.Fatalf("err = %v, want wrapped b2EmailSentinel", err)
+	if !errors.Is(err, errB2EmailChange) {
+		t.Fatalf("err = %v, want wrapped errB2EmailChange", err)
 	}
 }
 
@@ -429,12 +429,12 @@ func TestConfirmEmailChange_LookupNotFound_TokenInvalid(t *testing.T) {
 func TestConfirmEmailChange_Lookup_NonNotFoundError_Wrapped(t *testing.T) {
 	t.Parallel()
 	repo := newB2EmailPersonRepo(t, nil)
-	repo.errOnGetByEmailChangeTokenHash = b2EmailSentinel
+	repo.errOnGetByEmailChangeTokenHash = errB2EmailChange
 	h := command.NewConfirmEmailChangeHandler(repo, func() time.Time { return testNow })
 
 	err := h.Handle(t.Context(), command.ConfirmEmailChangeCommand{RawToken: "any-raw-token"})
-	if !errors.Is(err, b2EmailSentinel) {
-		t.Fatalf("err = %v, want wrapped b2EmailSentinel", err)
+	if !errors.Is(err, errB2EmailChange) {
+		t.Fatalf("err = %v, want wrapped errB2EmailChange", err)
 	}
 	if errors.Is(err, command.ErrEmailChangeTokenInvalid) {
 		t.Errorf("non-NotFound infra error MUST NOT collapse to ErrEmailChangeTokenInvalid")
@@ -513,14 +513,14 @@ func TestConfirmEmailChange_UpdateByID_OtherError_Wrapped(t *testing.T) {
 	p := newPersonWithPassword(t, "irrelevant")
 	_ = b2SeedPendingEmailChange(t, p, newAddr) // arch-test:ignore-err - seed-only; plaintext not needed
 	repo := newB2EmailPersonRepo(t, p)
-	repo.errOnUpdateByID = b2EmailSentinel
+	repo.errOnUpdateByID = errB2EmailChange
 
 	h := command.NewConfirmEmailChangeHandler(repo, func() time.Time { return testNow })
 	err := h.Handle(t.Context(), command.ConfirmEmailChangeCommand{
 		RawToken: "deterministic-test-token-base64url-stable-length-32+chars",
 	})
-	if !errors.Is(err, b2EmailSentinel) {
-		t.Fatalf("err = %v, want wrapped b2EmailSentinel", err)
+	if !errors.Is(err, errB2EmailChange) {
+		t.Fatalf("err = %v, want wrapped errB2EmailChange", err)
 	}
 	if errors.Is(err, command.ErrEmailChangeTokenInvalid) {
 		t.Errorf("non-Invalid/EmailTaken infra error MUST NOT collapse to ErrEmailChangeTokenInvalid")
