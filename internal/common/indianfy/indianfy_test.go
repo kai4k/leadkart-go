@@ -97,8 +97,9 @@ func TestContains(t *testing.T) {
 		}
 	}
 
-	// Zero FY contains nothing.
-	if indianfy.FY("").Contains(time.Now()) { //nolint:noctx // pure-VO test
+	// Zero FY contains nothing — any time, fixed for determinism per
+	// Khorikov "Unit Testing" §8 clock-injection canon.
+	if indianfy.FY("").Contains(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)) {
 		t.Error("zero FY.Contains() returned true")
 	}
 }
@@ -133,7 +134,7 @@ func TestCurrent_UsesInjectedNow(t *testing.T) {
 		t.Errorf("Current(injected) = %s want 2026-27", got)
 	}
 	// nil now falls back to time.Now — just assert it doesn't panic.
-	_ = indianfy.Current(nil)
+	_ = indianfy.Current(nil) // arch-test:ignore-err -- Current returns FY (no error); test asserts non-panic with nil now-injection.
 }
 
 func TestPreviousNext(t *testing.T) {
