@@ -5,6 +5,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/leadkart/leadkart-go/internal/common/ids"
 	"github.com/leadkart/leadkart-go/internal/dispatch/domain/consignmentnote"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
@@ -143,7 +145,7 @@ func TestConsignmentNote_MarkDispatched_IdempotentOnSameDocket(t *testing.T) {
 	cn.PullEvents()
 	actor := membership.ID(ids.NewV7().String())
 
-	_ = cn.MarkDispatched("BDX-99", actor, fixedNow().Add(time.Hour))
+	require.NoError(t, cn.MarkDispatched("BDX-99", actor, fixedNow().Add(time.Hour)))
 	cn.PullEvents()
 
 	// Same docket → no event, no error.
@@ -182,8 +184,8 @@ func TestConsignmentNote_MarkFailed_FromAnyNonTerminal(t *testing.T) {
 	// From in_transit.
 	{
 		cn, _ := consignmentnote.New(sampleNewInput(t))
-		_ = cn.MarkDispatched("BDX-77", actor, fixedNow().Add(time.Hour))
-		_ = cn.MarkInTransit(actor, fixedNow().Add(2*time.Hour))
+		require.NoError(t, cn.MarkDispatched("BDX-77", actor, fixedNow().Add(time.Hour)))
+		require.NoError(t, cn.MarkInTransit(actor, fixedNow().Add(2*time.Hour)))
 		cn.PullEvents()
 
 		if err := cn.MarkFailed("damaged in transit", actor, fixedNow().Add(3*time.Hour)); err != nil {
@@ -202,8 +204,8 @@ func TestConsignmentNote_TerminalGuards(t *testing.T) {
 	// Delivered → cannot fail.
 	{
 		cn, _ := consignmentnote.New(sampleNewInput(t))
-		_ = cn.MarkDispatched("BDX-1", actor, fixedNow().Add(time.Hour))
-		_ = cn.MarkDelivered(actor, fixedNow().Add(2*time.Hour))
+		require.NoError(t, cn.MarkDispatched("BDX-1", actor, fixedNow().Add(time.Hour)))
+		require.NoError(t, cn.MarkDelivered(actor, fixedNow().Add(2*time.Hour)))
 
 		if err := cn.MarkFailed("oops", actor, fixedNow().Add(3*time.Hour)); !errors.Is(err, consignmentnote.ErrInvalidTransition) {
 			t.Errorf("fail after delivered: got %v want ErrInvalidTransition", err)
@@ -216,7 +218,7 @@ func TestConsignmentNote_TerminalGuards(t *testing.T) {
 	// Failed → cannot deliver.
 	{
 		cn, _ := consignmentnote.New(sampleNewInput(t))
-		_ = cn.MarkFailed("address bad", actor, fixedNow().Add(time.Hour))
+		require.NoError(t, cn.MarkFailed("address bad", actor, fixedNow().Add(time.Hour)))
 		if err := cn.MarkDelivered(actor, fixedNow().Add(2*time.Hour)); !errors.Is(err, consignmentnote.ErrInvalidTransition) {
 			t.Errorf("deliver after failed: got %v want ErrInvalidTransition", err)
 		}
@@ -227,7 +229,7 @@ func TestConsignmentNote_SkipInTransitDirectlyToDelivered(t *testing.T) {
 	t.Parallel()
 	cn, _ := consignmentnote.New(sampleNewInput(t))
 	actor := membership.ID(ids.NewV7().String())
-	_ = cn.MarkDispatched("BDX-2", actor, fixedNow().Add(time.Hour))
+	require.NoError(t, cn.MarkDispatched("BDX-2", actor, fixedNow().Add(time.Hour)))
 
 	// Some carriers skip the in-transit scan + jump dispatched → delivered.
 	if err := cn.MarkDelivered(actor, fixedNow().Add(2*time.Hour)); err != nil {

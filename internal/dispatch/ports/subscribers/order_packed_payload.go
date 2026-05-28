@@ -2,6 +2,11 @@ package subscribers
 
 import "time"
 
+// arch-test:idempotency-via-wire-shape-only — file contains the wire
+// DTO + topic constant; no handler logic, no message processing,
+// nothing to dedup. Mirror of the canonical CRM pattern in
+// crm/ports/subscribers/lead_purchased_payload.go.
+
 // OrderPackedV1 is a LOCAL MIRROR of the `orders.order_packed.v1`
 // wire contract. The Orders module ships the canonical struct in
 // internal/orders/integrationevents/ but is being built in parallel.
