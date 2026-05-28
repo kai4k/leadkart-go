@@ -453,6 +453,8 @@ func TestArch_MutatorsEmitEventsOnStateChange(t *testing.T) {
 		{"Batch", "ApplyMovement"}:    true, // paired StockMovement emits the inventory.* event
 		{"Batch", "SoftDelete"}:       true, // version bump only; deletion auditing via outbox row
 		{"Role", "ChangeHierarchyLevel"}: true, // hierarchy edges aggregate owns the event surface (ADR 0058)
+		{"Order", "AttachInvoice"}:     true, // event emitted via advance(StateInvoiced, ...) per ADR 0063 §4 state-machine canon
+		{"Order", "AttachConsignment"}: true, // event emitted via advance(StateDispatched, ...) per ADR 0063 §4 state-machine canon
 	}
 
 	type violation struct {

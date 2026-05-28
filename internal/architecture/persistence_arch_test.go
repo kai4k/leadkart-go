@@ -47,6 +47,9 @@ func TestArch_RepositoriesHaveUpdateByIDFn(t *testing.T) {
 		"leadcredit":        "optimistic-concurrency UpsertWithVersion (ADR 0059)",
 		"calllog":           "append-only CRM call log (ADR 0060 — no state-mutation methods after New)",
 		"assignmenthistory": "append-only CRM assignment audit (ADR 0060 — append-only Entry, no UpdateByID)",
+		"invoice":           "append-only tax invoice (ADR 0063 §3 — cancellation produces CreditNote, never mutates Invoice)",
+		"creditnote":        "append-only reversal document (ADR 0063 §3 — once issued, immutable)",
+		"payment":           "append-only payment receipt (ADR 0063 §3 — each receipt is a new row; refunds are new rows, not mutations)",
 	}
 
 	type violation struct {

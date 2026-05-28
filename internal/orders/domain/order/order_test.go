@@ -5,6 +5,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/leadkart/leadkart-go/internal/common/ids"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
@@ -174,7 +176,7 @@ func TestOrder_SelfTransitionIsIdempotent(t *testing.T) {
 	o, _ := order.New(sampleNewInput(t))
 	o.PullEvents()
 	actor := membership.ID(ids.NewV7().String())
-	_ = o.RecordTokenPayment(actor, fixedNow().Add(time.Hour))
+	require.NoError(t, o.RecordTokenPayment(actor, fixedNow().Add(time.Hour)))
 	o.PullEvents()
 
 	// Re-call RecordTokenPayment — no error, no event.
@@ -216,10 +218,10 @@ func TestOrder_Cancel_FromVariousStates(t *testing.T) {
 	// From invoiced — most interesting because compensation needs to mint a CreditNote.
 	{
 		o, _ := order.New(sampleNewInput(t))
-		_ = o.RecordTokenPayment(actor, fixedNow().Add(time.Hour))
-		_ = o.Confirm(actor, fixedNow().Add(2*time.Hour))
-		_ = o.MarkPacked(actor, fixedNow().Add(3*time.Hour))
-		_ = o.AttachInvoice("inv-1", actor, fixedNow().Add(4*time.Hour))
+		require.NoError(t, o.RecordTokenPayment(actor, fixedNow().Add(time.Hour)))
+		require.NoError(t, o.Confirm(actor, fixedNow().Add(2*time.Hour)))
+		require.NoError(t, o.MarkPacked(actor, fixedNow().Add(3*time.Hour)))
+		require.NoError(t, o.AttachInvoice("inv-1", actor, fixedNow().Add(4*time.Hour)))
 		o.PullEvents()
 
 		if err := o.Cancel("warehouse damage", actor, fixedNow().Add(5*time.Hour)); err != nil {
@@ -242,13 +244,13 @@ func TestOrder_CancelFromCompleteIsRejected(t *testing.T) {
 	actor := membership.ID(ids.NewV7().String())
 
 	// Walk to complete.
-	_ = o.RecordTokenPayment(actor, fixedNow().Add(time.Hour))
-	_ = o.Confirm(actor, fixedNow().Add(2*time.Hour))
-	_ = o.MarkPacked(actor, fixedNow().Add(3*time.Hour))
-	_ = o.AttachInvoice("inv-1", actor, fixedNow().Add(4*time.Hour))
-	_ = o.AttachConsignment("cn-1", actor, fixedNow().Add(5*time.Hour))
-	_ = o.MarkDelivered(actor, fixedNow().Add(6*time.Hour))
-	_ = o.MarkComplete(actor, fixedNow().Add(7*time.Hour))
+	require.NoError(t, o.RecordTokenPayment(actor, fixedNow().Add(time.Hour)))
+	require.NoError(t, o.Confirm(actor, fixedNow().Add(2*time.Hour)))
+	require.NoError(t, o.MarkPacked(actor, fixedNow().Add(3*time.Hour)))
+	require.NoError(t, o.AttachInvoice("inv-1", actor, fixedNow().Add(4*time.Hour)))
+	require.NoError(t, o.AttachConsignment("cn-1", actor, fixedNow().Add(5*time.Hour)))
+	require.NoError(t, o.MarkDelivered(actor, fixedNow().Add(6*time.Hour)))
+	require.NoError(t, o.MarkComplete(actor, fixedNow().Add(7*time.Hour)))
 
 	if err := o.Cancel("too late", actor, fixedNow().Add(8*time.Hour)); !errors.Is(err, order.ErrInvalidTransition) {
 		t.Errorf("cancel from complete: got %v want ErrInvalidTransition", err)
@@ -259,7 +261,7 @@ func TestOrder_CancelIdempotent(t *testing.T) {
 	t.Parallel()
 	o, _ := order.New(sampleNewInput(t))
 	actor := membership.ID(ids.NewV7().String())
-	_ = o.Cancel("first", actor, fixedNow().Add(time.Hour))
+	require.NoError(t, o.Cancel("first", actor, fixedNow().Add(time.Hour)))
 	o.PullEvents()
 
 	if err := o.Cancel("second", actor, fixedNow().Add(2*time.Hour)); err != nil {
@@ -277,9 +279,9 @@ func TestOrder_AttachInvoiceRequiresInvoiceID(t *testing.T) {
 	t.Parallel()
 	o, _ := order.New(sampleNewInput(t))
 	actor := membership.ID(ids.NewV7().String())
-	_ = o.RecordTokenPayment(actor, fixedNow().Add(time.Hour))
-	_ = o.Confirm(actor, fixedNow().Add(2*time.Hour))
-	_ = o.MarkPacked(actor, fixedNow().Add(3*time.Hour))
+	require.NoError(t, o.RecordTokenPayment(actor, fixedNow().Add(time.Hour)))
+	require.NoError(t, o.Confirm(actor, fixedNow().Add(2*time.Hour)))
+	require.NoError(t, o.MarkPacked(actor, fixedNow().Add(3*time.Hour)))
 
 	if err := o.AttachInvoice("", actor, fixedNow().Add(4*time.Hour)); !errors.Is(err, order.ErrInvalid) {
 		t.Errorf("AttachInvoice empty: got %v want ErrInvalid", err)

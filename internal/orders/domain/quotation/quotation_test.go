@@ -5,6 +5,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/leadkart/leadkart-go/internal/common/ids"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
@@ -211,7 +213,7 @@ func TestQuotation_TerminalGuards(t *testing.T) {
 	// Approved → cannot revise, cannot reject.
 	{
 		q, _ := quotation.New(sampleNewInput(t))
-		_ = q.Approve(membership.ID(ids.NewV7().String()), fixedNow())
+		require.NoError(t, q.Approve(membership.ID(ids.NewV7().String()), fixedNow()))
 		q.PullEvents()
 
 		err := q.Revise(quotation.ReviseInput{
@@ -232,7 +234,7 @@ func TestQuotation_TerminalGuards(t *testing.T) {
 	// Rejected → cannot revise, cannot approve.
 	{
 		q, _ := quotation.New(sampleNewInput(t))
-		_ = q.Reject(membership.ID(ids.NewV7().String()), "x", fixedNow())
+		require.NoError(t, q.Reject(membership.ID(ids.NewV7().String()), "x", fixedNow()))
 		q.PullEvents()
 
 		err := q.Revise(quotation.ReviseInput{
