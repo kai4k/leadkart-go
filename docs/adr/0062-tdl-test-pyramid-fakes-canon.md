@@ -121,8 +121,12 @@ test things that ARE SQL-specific:
 - **JSONB / typed-column round-trips** — Marshal/Unmarshal of
   permission lists, snapshots, value-object encodings survives the
   PG driver
-- **Outbox-row writes** — `repo.Add` writes both the aggregate row
-  and its outbox row in the same transaction (per ADR 0008)
+- **Outbox-row writes** — ~~`repo.Add` writes both the aggregate row
+  and its outbox row in the same transaction (per ADR 0008)~~
+  **AMENDED 2026-05-29 (see Amendment 1 below):** outbox-row writes
+  are NOT verified by querying the outbox table directly. They are
+  verified end-to-end via the production forwarder + a Watermill
+  subscriber that records published events (strict TDL canon).
 - **EXPLAIN-under-RLS** — confirms the right index is chosen for
   the bounded-keyset pagination paths (per ADR 0038)
 - **DB-trigger / function behavior** — e.g. role-hierarchy cycle
@@ -236,3 +240,70 @@ is unchanged.
   fake-imports-no-adapters rule
 - Commits 1f5abfc + 145598a + 11a65bc — implementation of the
   17-aggregate migration
+
+## Amendment 1 — 2026-05-29: Outbox tests are subscriber-based, not state-based
+
+### Why
+
+The original §3 listed "outbox-row writes" as a SQL-contract concern
+verified by integration tests reading the outbox table directly. In
+practice this drove a `common/messaging/messagingtest/outboxtest.go`
+helper that used `fmt.Sprintf` to inject schema names into raw SQL —
+violating both the sqlc canon (ADR 0004) and the `internal/common/`
+scope (TDL puts adapters in their owning module, not in a generic
+shared package). The flake of
+`TestTenantRepository_UpdateByID_PersistsActivatedOutboxEventInSameTx`
+on PR #47 surfaced this — the helper's missing `id` tiebreaker
+masked a production-readable consumer-side ordering bug.
+
+The strict TDL canon (ThreeDotsLabs Wild Workouts, "Repository
+pattern in Go" + "Database integration testing in Go") prescribes
+testing event-emission behavior through the SUBSCRIBER side: real
+forwarder, real Watermill pubsub, real subscriber records what
+arrives. State-based reads of the outbox table are a leaky abstraction
+that ties tests to internal table shape.
+
+### What
+
+For every aggregate that emits integration events via outbox:
+
+1. The integration test wires a Watermill GoChannel +
+   `adapters.NewOutboxForwarder` + a recording subscriber on the
+   module's events topic.
+2. The test runs the production code (`repo.Add` / `repo.UpdateByID`).
+3. The test calls `forwarder.ForwardOnce(ctx)` to drain pending
+   outbox rows.
+4. The test asserts on what the subscriber recorded — events
+   present, ordered, with the expected tenant_id metadata.
+
+Tests MUST NOT directly query `<schema>.outbox` to assert event
+emission. The forwarder + Watermill envelope are the canonical
+observation surface — same shape production consumers see.
+
+### Removed
+
+- `internal/common/messaging/messagingtest/outboxtest.go` deleted.
+- The arch-test allowlist for `messagingtest` raw SQL removed.
+- New arch test `TestArch_NoDirectOutboxStateAssertions` forbids any
+  `*_test.go` from selecting from `*.outbox` (heuristic: SQL
+  containing both `FROM` + `outbox` outside `adapters/sql/` +
+  `outbox_forwarder_test.go` — the forwarder itself legitimately
+  inspects rows it's about to publish).
+
+### Migration shape (per-module fixture)
+
+Each module's `adapters/` test directory owns a small `outboxSubscriberFixture`
+that combines GoChannel + drainSubscriber + OutboxForwarder.
+References:
+- `internal/identity/adapters/outbox_forwarder_test.go` —
+  pre-existing `drainSubscriber` + `waitForCount` pattern that this
+  amendment generalizes per-module.
+
+### Scope of this override
+
+This amendment supersedes §3's "outbox-row writes" bullet ONLY. The
+other SQL-contract concerns (SQLSTATE translation, RLS enforcement,
+partial-unique indexes, JSONB round-trips, EXPLAIN-under-RLS,
+DB-trigger behavior) remain in the integration-test layer
+unchanged — they're genuinely SQL-specific properties that no
+subscriber-based test can verify.
