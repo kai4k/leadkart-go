@@ -47,7 +47,7 @@ func TestMustNew_PanicsOnInvalid(t *testing.T) {
 			t.Fatal("expected panic")
 		}
 	}()
-	_ = pincode.MustNew("garbage")
+	_ = pincode.MustNew("garbage") // arch-test:ignore-err -- MustNew returns Code (no error); test asserts the panic, not the discarded value.
 }
 
 func TestFakeReader_DefaultSeedCoversMetros(t *testing.T) {
