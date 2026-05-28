@@ -5,6 +5,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/leadkart/leadkart-go/internal/common/ids"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
@@ -162,7 +164,7 @@ func TestNotification_DismissFromUnreadOrRead(t *testing.T) {
 	// From read.
 	{
 		n, _ := notification.New(sampleNewInput(t))
-		_ = n.MarkRead(fixedNow().Add(time.Hour))
+		require.NoError(t, n.MarkRead(fixedNow().Add(time.Hour)))
 		n.PullEvents()
 		if err := n.Dismiss(fixedNow().Add(2 * time.Hour)); err != nil {
 			t.Fatalf("Dismiss: %v", err)
@@ -178,7 +180,7 @@ func TestNotification_DismissFromUnreadOrRead(t *testing.T) {
 func TestNotification_TerminalGuards(t *testing.T) {
 	t.Parallel()
 	n, _ := notification.New(sampleNewInput(t))
-	_ = n.Dismiss(fixedNow().Add(time.Hour))
+	require.NoError(t, n.Dismiss(fixedNow().Add(time.Hour)))
 
 	if err := n.MarkRead(fixedNow().Add(2 * time.Hour)); !errors.Is(err, notification.ErrInvalidTransition) {
 		t.Errorf("MarkRead after Dismiss: got %v want ErrInvalidTransition", err)
@@ -224,7 +226,7 @@ func TestFakeRepository_DedupWithinWindow(t *testing.T) {
 	}
 }
 
-func TestFakeRepository_UnreadCount(t *testing.T) {
+func TestFakeRepository_CountUnreadForRecipient(t *testing.T) {
 	t.Parallel()
 	repo := notificationtest.NewFakeRepository()
 	tID := tenant.ID(ids.NewV7().String())
@@ -243,16 +245,16 @@ func TestFakeRepository_UnreadCount(t *testing.T) {
 		}
 	}
 
-	count, err := repo.UnreadCount(t.Context(), tID, recipient)
+	count, err := repo.CountUnreadForRecipient(t.Context(), tID, recipient)
 	if err != nil {
-		t.Fatalf("UnreadCount: %v", err)
+		t.Fatalf("CountUnreadForRecipient: %v", err)
 	}
 	if count != 5 {
-		t.Errorf("UnreadCount=%d want 5", count)
+		t.Errorf("count=%d want 5", count)
 	}
 }
 
-func TestFakeRepository_MarkAllReadBulk(t *testing.T) {
+func TestFakeRepository_UpdateAllUnreadBulk(t *testing.T) {
 	t.Parallel()
 	repo := notificationtest.NewFakeRepository()
 	tID := tenant.ID(ids.NewV7().String())
@@ -266,20 +268,20 @@ func TestFakeRepository_MarkAllReadBulk(t *testing.T) {
 		in.SourceEntityID = ids.NewV7().String()
 		in.Now = fixedNow().Add(time.Duration(i) * time.Minute)
 		n, _ := notification.New(in)
-		_ = repo.Add(t.Context(), n)
+		require.NoError(t, repo.Add(t.Context(), n))
 	}
 
-	affected, err := repo.MarkAllReadForRecipient(t.Context(), tID, recipient, fixedNow().Add(time.Hour).UnixNano())
+	affected, err := repo.UpdateAllUnreadForRecipient(t.Context(), tID, recipient, fixedNow().Add(time.Hour).UnixNano())
 	if err != nil {
-		t.Fatalf("MarkAllReadForRecipient: %v", err)
+		t.Fatalf("UpdateAllUnreadForRecipient: %v", err)
 	}
 	if affected != 3 {
 		t.Errorf("affected=%d want 3", affected)
 	}
 
-	count, _ := repo.UnreadCount(t.Context(), tID, recipient)
+	count, _ := repo.CountUnreadForRecipient(t.Context(), tID, recipient)
 	if count != 0 {
-		t.Errorf("UnreadCount after bulk-mark=%d want 0", count)
+		t.Errorf("count after bulk-mark=%d want 0", count)
 	}
 }
 

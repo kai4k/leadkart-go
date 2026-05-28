@@ -52,14 +52,18 @@ type Repository interface {
 		pageSize int,
 	) (pagination.Page[*Notification], error)
 
-	// UnreadCount returns the number of unread notifications for the
-	// recipient — drives the badge in the UI.
-	UnreadCount(ctx context.Context, tenantID tenant.ID, recipient membership.ID) (int64, error)
+	// CountUnreadForRecipient returns the number of unread notifications
+	// for the recipient — drives the badge in the UI. Persistence-verb
+	// shape (Count) per TDL canon §3.
+	CountUnreadForRecipient(ctx context.Context, tenantID tenant.ID, recipient membership.ID) (int64, error)
 
-	// MarkAllReadForRecipient bulk-flips every unread notification for
-	// the recipient to read with the supplied timestamp. Returns the
-	// number of rows affected.
-	MarkAllReadForRecipient(
+	// UpdateAllUnreadForRecipient bulk-flips every unread notification
+	// for the recipient to read with the supplied timestamp. Returns
+	// the number of rows affected. Persistence-verb shape (Update) per
+	// TDL canon §3 — the business-verb "MarkRead" lives on the
+	// aggregate; this is the SQL-side bulk equivalent used by the
+	// inbox `read-all` HTTP handler.
+	UpdateAllUnreadForRecipient(
 		ctx context.Context, tenantID tenant.ID, recipient membership.ID, readAt int64,
 	) (int64, error)
 }

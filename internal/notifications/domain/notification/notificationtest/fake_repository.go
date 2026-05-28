@@ -133,8 +133,8 @@ func (r *FakeRepository) ListPageForRecipient(
 	}, nil
 }
 
-// UnreadCount satisfies [notification.Repository].
-func (r *FakeRepository) UnreadCount(
+// CountUnreadForRecipient satisfies [notification.Repository].
+func (r *FakeRepository) CountUnreadForRecipient(
 	_ context.Context, tenantID tenant.ID, recipient membership.ID,
 ) (int64, error) {
 	var count int64
@@ -148,11 +148,11 @@ func (r *FakeRepository) UnreadCount(
 	return count, nil
 }
 
-// MarkAllReadForRecipient satisfies [notification.Repository]. Flips
-// every unread row to read with the supplied timestamp. The signature
-// takes int64 unix-nano per the canonical Postgres timestamptz
-// translation; tests pass time.Now().UnixNano().
-func (r *FakeRepository) MarkAllReadForRecipient(
+// UpdateAllUnreadForRecipient satisfies [notification.Repository].
+// Flips every unread row to read with the supplied timestamp. The
+// signature takes int64 unix-nano per the canonical Postgres
+// timestamptz translation; tests pass time.Now().UnixNano().
+func (r *FakeRepository) UpdateAllUnreadForRecipient(
 	_ context.Context, tenantID tenant.ID, recipient membership.ID, readAt int64,
 ) (int64, error) {
 	var affected int64
