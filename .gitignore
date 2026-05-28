@@ -39,3 +39,10 @@ Thumbs.db
 
 # Claude Code per-user permission settings — NEVER commit
 .claude/settings.local.json
+
+# Claude Code agent worktrees — transient state, never commit; deleting
+# them while an agent is running would corrupt the shared .git directory.
+.claude/worktrees/
+
+# Claude Code per-session task output / transcripts
+.claude/projects/
