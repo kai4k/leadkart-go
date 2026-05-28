@@ -47,7 +47,7 @@ func TestMustNew_PanicsOnInvalid(t *testing.T) {
 			t.Fatal("expected panic")
 		}
 	}()
-	_ = hsncode.MustNew("garbage")
+	_ = hsncode.MustNew("garbage") // arch-test:ignore-err -- MustNew returns Code (no error); test asserts the panic, not the discarded value.
 }
 
 func TestAccessors(t *testing.T) {
