@@ -58,7 +58,7 @@ SELECT id, tenant_id, topic, payload, occurred_at, created_at,
 FROM   identity.outbox
 WHERE  topic = $1
   AND  occurred_at >= $2
-ORDER  BY occurred_at DESC
+ORDER  BY occurred_at DESC, id DESC
 LIMIT  $3
 `
 
@@ -108,7 +108,7 @@ SELECT id, tenant_id, topic, payload, occurred_at, created_at,
        act_operator_id, act_session_id, act_reason
 FROM   identity.outbox
 WHERE  forwarded = false
-ORDER  BY created_at
+ORDER  BY created_at, id
 LIMIT  $1
 FOR    UPDATE SKIP LOCKED
 `

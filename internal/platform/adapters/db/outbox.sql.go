@@ -45,6 +45,11 @@ type InsertLeadCreditParams struct {
 	UpdatedAt pgtype.Timestamptz
 }
 
+// Inserts a fresh row with version=1 so post-INSERT reads return
+// Version=1. The repository's optimistic-version UPDATE path can
+// then unambiguously detect "fresh aggregate, no DB row" by checking
+// in-memory Version==0 (only NewForTenant emits 0; every loaded
+// aggregate carries >=1).
 func (q *Queries) InsertLeadCredit(ctx context.Context, arg InsertLeadCreditParams) error {
 	_, err := q.db.Exec(ctx, insertLeadCredit,
 		arg.TenantID,
@@ -96,7 +101,7 @@ SELECT id, tenant_id, topic, payload, occurred_at, created_at,
        act_operator_id, act_session_id, act_reason
 FROM   platform.outbox
 WHERE  forwarded = false
-ORDER  BY created_at
+ORDER  BY created_at, id
 LIMIT  $1
 FOR    UPDATE SKIP LOCKED
 `

@@ -73,13 +73,21 @@ func OutboxCountByTopic(t testing.TB, pool *pgxpool.Pool, schema Schema, topic s
 }
 
 // OutboxTopicsForTenant returns the list of topics drained for the
-// supplied tenant_id, ordered by occurred_at. Useful for asserting
-// event-emission ORDER (e.g. "Created before Activated").
+// supplied tenant_id, ordered by (occurred_at, id). The `id` tiebreaker
+// is canon — UUIDv7 ids are time-monotonic + provide deterministic
+// order when two events commit with the same occurred_at (e.g. a
+// TenantRegistered + TenantActivated pair emitted inside the same tx).
+// Per Brandur Leach "Transactionally Staged Job Drains" + Watermill
+// SQL outbox + ADR 0027 + the TestArch_OutboxSelectsOrderByMonotonicTiebreaker
+// gate.
+//
+// Useful for asserting event-emission ORDER (e.g. "Created before
+// Activated").
 func OutboxTopicsForTenant(t testing.TB, pool *pgxpool.Pool, schema Schema, tenantID string) []string {
 	t.Helper()
 	db := openBypassDB(t, pool)
 	defer func() { _ = db.Close() }()
-	q := fmt.Sprintf(`SELECT topic FROM %s.outbox WHERE tenant_id = $1 ORDER BY occurred_at`, schema) //nolint:gosec // G201: schema is closed-set enum
+	q := fmt.Sprintf(`SELECT topic FROM %s.outbox WHERE tenant_id = $1 ORDER BY occurred_at, id`, schema) //nolint:gosec // G201: schema is closed-set enum
 	rows, err := db.QueryContext(t.Context(), q, tenantID)
 	if err != nil {
 		t.Fatalf("messagingtest.OutboxTopicsForTenant(%s, %s): %v", schema, tenantID, err)
@@ -117,7 +125,7 @@ func OutboxLatestTopicAndTenantNull(t testing.TB, pool *pgxpool.Pool, schema Sch
 	t.Helper()
 	db := openBypassDB(t, pool)
 	defer func() { _ = db.Close() }()
-	q := fmt.Sprintf(`SELECT topic, (tenant_id IS NULL) FROM %s.outbox ORDER BY created_at DESC LIMIT 1`, schema) //nolint:gosec // G201: schema is closed-set enum
+	q := fmt.Sprintf(`SELECT topic, (tenant_id IS NULL) FROM %s.outbox ORDER BY created_at DESC, id DESC LIMIT 1`, schema) //nolint:gosec // G201: schema is closed-set enum
 	if err := db.QueryRowContext(t.Context(), q).Scan(&topic, &tenantIsNull); err != nil {
 		t.Fatalf("messagingtest.OutboxLatestTopicAndTenantNull(%s): %v", schema, err)
 	}

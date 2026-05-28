@@ -24,7 +24,7 @@ SELECT id, tenant_id, topic, payload, occurred_at, created_at,
        act_operator_id, act_session_id, act_reason
 FROM   inventory.outbox
 WHERE  forwarded = false
-ORDER  BY created_at
+ORDER  BY created_at, id
 LIMIT  $1
 FOR    UPDATE SKIP LOCKED;
 

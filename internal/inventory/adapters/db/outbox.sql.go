@@ -12,10 +12,12 @@ import (
 )
 
 const insertOutboxEvent = `-- name: InsertOutboxEvent :exec
+
 INSERT INTO inventory.outbox (
     id, tenant_id, topic, payload, occurred_at,
     act_operator_id, act_session_id, act_reason
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+`
 
 type InsertOutboxEventParams struct {
 	ID            pgtype.UUID
@@ -28,10 +30,22 @@ type InsertOutboxEventParams struct {
 	ActReason     *string
 }
 
+// Outbox queries — inventory.outbox is RLS+FORCE per ADR 0027 ("outbox
+// table doubles as audit log"). Insert happens inside the same tx as
+// aggregate state. Forwarder runs under platform-bypass to drain.
+// act_operator_id / act_session_id / act_reason carry impersonation
+// context (RFC 8693 act claim) per ADR 0056. NULL for non-impersonation
+// events; populated when the emitting handler ran under a scoped JWT.
 func (q *Queries) InsertOutboxEvent(ctx context.Context, arg InsertOutboxEventParams) error {
 	_, err := q.db.Exec(ctx, insertOutboxEvent,
-		arg.ID, arg.TenantID, arg.Topic, arg.Payload, arg.OccurredAt,
-		arg.ActOperatorID, arg.ActSessionID, arg.ActReason,
+		arg.ID,
+		arg.TenantID,
+		arg.Topic,
+		arg.Payload,
+		arg.OccurredAt,
+		arg.ActOperatorID,
+		arg.ActSessionID,
+		arg.ActReason,
 	)
 	return err
 }
@@ -42,7 +56,7 @@ SELECT id, tenant_id, topic, payload, occurred_at, created_at,
        act_operator_id, act_session_id, act_reason
 FROM   inventory.outbox
 WHERE  forwarded = false
-ORDER  BY created_at
+ORDER  BY created_at, id
 LIMIT  $1
 FOR    UPDATE SKIP LOCKED
 `
@@ -50,10 +64,10 @@ FOR    UPDATE SKIP LOCKED
 // Forwarder polls this. Caller MUST run under app.is_platform=true so
 // RLS policy inventory_outbox_select returns rows from every tenant.
 //
-// FOR UPDATE SKIP LOCKED — Postgres 9.5+; canonical Watermill SQL
-// outbox / river-queue / Brandur "Transactionally staged job drains in
-// Postgres" shape. Multiple forwarder replicas drain concurrently
-// without double-publishing.
+// FOR UPDATE SKIP LOCKED (Postgres 9.5+) lets multiple forwarder
+// replicas drain the outbox concurrently without double-publishing.
+// Mirror of identity's outbox.sql shape (Brandur Leach "Transactionally
+// staged job drains in Postgres" + river-queue canon).
 func (q *Queries) ListUnforwardedOutboxEvents(ctx context.Context, limit int32) ([]InventoryOutbox, error) {
 	rows, err := q.db.Query(ctx, listUnforwardedOutboxEvents, limit)
 	if err != nil {

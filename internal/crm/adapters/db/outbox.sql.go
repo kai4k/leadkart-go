@@ -73,7 +73,7 @@ SELECT id, tenant_id, topic, payload, occurred_at, created_at,
        act_operator_id, act_session_id, act_reason
 FROM   crm.outbox
 WHERE  NOT forwarded
-ORDER  BY created_at ASC
+ORDER  BY created_at ASC, id ASC
 LIMIT  $1
 `
 
@@ -89,9 +89,16 @@ type SelectUnforwardedCRMEventsRow struct {
 	ActReason     *string
 }
 
-// Forwarder polling query. ORDER BY created_at ASC for FIFO publish
-// order under load. LIMIT is supplied per-call so the forwarder can
-// batch without runaway memory under outbox backlog.
+// Forwarder polling query. ORDER BY (created_at ASC, id ASC) for FIFO
+// publish order — id is the canonical UUIDv7 tiebreaker when two
+// events commit with the same created_at (same-tx pair like
+// TenantRegistered → TenantActivated). Without the tiebreaker
+// Postgres returns ties in undefined order → consumers see events
+// out of causal order. Per Brandur Leach "Transactionally Staged
+// Job Drains" + Watermill SQL outbox + ADR 0027 + the
+// TestArch_OutboxSelectsOrderByMonotonicTiebreaker gate.
+// LIMIT is supplied per-call so the forwarder can batch without
+// runaway memory under outbox backlog.
 func (q *Queries) SelectUnforwardedCRMEvents(ctx context.Context, limit int32) ([]SelectUnforwardedCRMEventsRow, error) {
 	rows, err := q.db.Query(ctx, selectUnforwardedCRMEvents, limit)
 	if err != nil {
