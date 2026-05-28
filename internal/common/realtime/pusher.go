@@ -21,6 +21,7 @@ package realtime
 
 import (
 	"context"
+	"encoding/json"
 
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
@@ -32,12 +33,28 @@ import (
 // envelope's `event` field.
 type EventName string
 
-// Envelope is the payload shape pushed to subscribers. Generic JSON-
-// shaped data — the client's renderer routes by EventName + decodes
-// Data into the corresponding type.
+// Envelope is the payload shape pushed to subscribers. Data is
+// pre-marshalled JSON (json.RawMessage) so the Pusher implementation
+// can fan out the SAME bytes to N connections without re-marshalling
+// per-recipient — and so the production code stays free of `any`
+// (banned per TestArch_NoInterfaceEmptyInStructFields).
+//
+// Caller-side helper: [NewEnvelope] handles the marshal so command
+// handlers don't write `json.Marshal` inline.
 type Envelope struct {
-	Event EventName `json:"event"`
-	Data  any       `json:"data"`
+	Event EventName       `json:"event"`
+	Data  json.RawMessage `json:"data"`
+}
+
+// NewEnvelope JSON-marshals payload + wraps it in an [Envelope] keyed
+// by event. The marshal is one-shot per push site — Pusher fan-out
+// copies the same bytes to every recipient.
+func NewEnvelope(event EventName, payload any) (Envelope, error) {
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return Envelope{}, err
+	}
+	return Envelope{Event: event, Data: data}, nil
 }
 
 // Pusher fans out real-time deliveries. Implementations:

@@ -3,6 +3,8 @@ package realtime_test
 import (
 	"testing"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/leadkart/leadkart-go/internal/common/ids"
 	"github.com/leadkart/leadkart-go/internal/common/realtime"
 	"github.com/leadkart/leadkart-go/internal/common/realtime/realtimetest"
@@ -10,17 +12,23 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
 
-func TestNoopPusher_NoRecord(t *testing.T) {
+func TestNoopPusher_DoesNotPanic(t *testing.T) {
 	t.Parallel()
 	p := realtime.NoopPusher{}
 	tID := tenant.ID(ids.NewV7().String())
 	mID := membership.ID(ids.NewV7().String())
-	env := realtime.Envelope{Event: "test.foo.v1", Data: map[string]string{"k": "v"}}
+	env, err := realtime.NewEnvelope("test.foo.v1", map[string]string{"k": "v"})
+	require.NoError(t, err)
 
-	// Should not panic + should be cheap. Nothing to assert beyond
-	// "doesn't blow up" — that's the point of the noop.
-	p.PushToMembership(t.Context(), tID, mID, env)
-	p.PushToTenant(t.Context(), tID, env)
+	// The point of the noop is that BOTH methods accept-and-discard
+	// without crashing — that's the assertion (require.NotPanics is
+	// the canonical "I assert this is a no-op" pattern).
+	require.NotPanics(t, func() {
+		p.PushToMembership(t.Context(), tID, mID, env)
+	})
+	require.NotPanics(t, func() {
+		p.PushToTenant(t.Context(), tID, env)
+	})
 }
 
 func TestFakePusher_RecordsMembershipPush(t *testing.T) {
@@ -28,7 +36,8 @@ func TestFakePusher_RecordsMembershipPush(t *testing.T) {
 	p := realtimetest.NewFakePusher()
 	tID := tenant.ID(ids.NewV7().String())
 	mID := membership.ID(ids.NewV7().String())
-	env := realtime.Envelope{Event: "notifications.created.v1", Data: map[string]int{"count": 42}}
+	env, err := realtime.NewEnvelope("notifications.created.v1", map[string]int{"count": 42})
+	require.NoError(t, err)
 
 	p.PushToMembership(t.Context(), tID, mID, env)
 
