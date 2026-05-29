@@ -104,6 +104,11 @@ func TestArch_TypeAssertionsUseCommaOk(t *testing.T) {
 	// AND not in a type-switch. Heuristic: line containing `.(`
 	// but lacking `,` near the assertion AND lacking `type)`.
 	assertRE := regexp.MustCompile(`\.\([\w*.]+\)`)
+	// A real type assertion is Go syntax, never inside a string literal.
+	// Blank double-quoted string contents so type-assertion-like
+	// substrings (e.g. a goleak ignore "pkg.(*Pool).method") don't
+	// false-positive — same rationale as stripping comments.
+	stringRE := regexp.MustCompile(`"[^"]*"`)
 	var bad []string
 
 	walkGoFiles(t, root, false, func(path string, src []byte) {
@@ -111,6 +116,7 @@ func TestArch_TypeAssertionsUseCommaOk(t *testing.T) {
 		body := stripGoComments(string(src))
 		lines := strings.Split(body, "\n")
 		for i, ln := range lines {
+			ln = stringRE.ReplaceAllString(ln, `""`)
 			if !assertRE.MatchString(ln) {
 				continue
 			}
