@@ -73,25 +73,67 @@ func (f *FakeRepository) Add(_ context.Context, fam *refreshtoken.Family) error 
 	return nil
 }
 
-// UpdateByID loads, mutates via updateFn, persists. Returns
-// [refreshtoken.ErrNotFound] if the family doesn't exist.
+// UpdateByID loads, mutates via updateFn, persists — faithfully
+// mirroring the pg adapter's load→updateFn→(persist?) contract.
+// Returns [refreshtoken.ErrNotFound] if the family doesn't exist.
 //
-// The fake doesn't deep-copy the family before passing to updateFn;
-// the caller observes mutations even if it returns (false, nil). This
-// mirrors the pg adapter's behavior — both rely on the aggregate's
-// invariants being re-checked at persist time, not snapshot-rollback.
+// The pg adapter loads inside the tx, runs updateFn, and on
+// `(false, nil)` returns WITHOUT writing any row or draining events —
+// the mutations never reach storage. To honor that LSP contract the
+// fake snapshots the stored aggregate BEFORE calling updateFn and, on
+// `(false, nil)`, ROLLS the stored row back to that snapshot — so
+// mutations made under a no-persist decision are discarded. Pointer
+// identity is preserved so a commit==true caller still observes the
+// mutation it made through its own reference.
 func (f *FakeRepository) UpdateByID(_ context.Context, id refreshtoken.FamilyID, updateFn func(*refreshtoken.Family) (bool, error)) error {
 
-	fam, ok := f.families[id]
+	stored, ok := f.families[id]
 	if !ok {
 		return refreshtoken.ErrNotFound
 	}
-	commit, err := updateFn(fam)
+	snapshot := cloneFamily(stored)
+	commit, err := updateFn(stored)
 	if err != nil {
 		return err
 	}
-	_ = commit // mutator writes back to *fam directly; no separate persist step in fake
+	if !commit {
+		*stored = *snapshot // roll back mutations — mirror the adapter's no-persist branch
+		return nil
+	}
 	return nil
+}
+
+// cloneFamily produces an independent copy of a Family (and its token
+// chain) via a Snapshot round-trip (the same rehydration path the pg
+// adapter uses on load), so mutations on the working copy can't leak
+// into the stored original until the updateFn elects to commit. Pending
+// events are intentionally not carried — the adapter loads an event-free
+// aggregate too.
+func cloneFamily(fam *refreshtoken.Family) *refreshtoken.Family {
+	toks := fam.AllTokens()
+	snaps := make([]refreshtoken.TokenSnapshot, len(toks))
+	for i, t := range toks {
+		snaps[i] = refreshtoken.TokenSnapshot{
+			ID:           t.ID(),
+			Hash:         t.Hash(),
+			Generation:   t.Generation(),
+			IssuedAt:     t.IssuedAt(),
+			ExpiresAt:    t.ExpiresAt(),
+			ConsumedAt:   t.ConsumedAt(),
+			ReplacedByID: t.ReplacedByID(),
+		}
+	}
+	return refreshtoken.UnmarshalFromDB(refreshtoken.FamilySnapshot{
+		ID:           fam.ID(),
+		PersonID:     fam.PersonID(),
+		TenantID:     fam.TenantID(),
+		DeviceLabel:  fam.DeviceLabel(),
+		CreatedAt:    fam.CreatedAt(),
+		LastUsedAt:   fam.LastUsedAt(),
+		RevokedAt:    fam.RevokedAt(),
+		RevokeReason: fam.RevokeReason(),
+		Tokens:       snaps,
+	})
 }
 
 // GetByID returns the family + tokens or [refreshtoken.ErrNotFound].

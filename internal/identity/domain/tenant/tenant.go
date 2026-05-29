@@ -25,6 +25,15 @@ import (
 // violation. Callers branch via [errors.Is] in error-mapping middleware.
 var ErrInvalid = errs.New(errs.KindInvalidInput, "tenant", "invalid tenant")
 
+// PlatformSlug is the canonical slug of the LeadKart platform tenant —
+// the single source of truth for "is this the god-mode platform tenant".
+// Mirrors cmd/bootstrap's platformTenantSlug + the .NET parent's
+// SuperUser convention. Both the login command (mints is_platform from
+// tn.Slug() == PlatformSlug) and the platform-tier middleware
+// (authn.PlatformTenantSlug re-exports this) anchor on it so the two
+// can never disagree about which tenant is privileged.
+const PlatformSlug = "platform"
+
 // ID is the tenant primary key — UUIDv7 string for B-tree locality.
 // Wrapper type prevents accidental swap with other domain IDs.
 type ID string
@@ -57,8 +66,8 @@ type Tenant struct {
 	legalName           string
 	displayName         string
 	status              Status
-	statutory           Statutory    // optional Indian statutory IDs (GST/PAN/DrugLicence)
-	adminContact        AdminContact // optional admin phone + postal address
+	statutory           Statutory          // optional Indian statutory IDs (GST/PAN/DrugLicence)
+	adminContact        AdminContact       // optional admin phone + postal address
 	settings            Settings           // password policy + future operational settings
 	displayPreferences  DisplayPreferences // locale / time zone / date format / currency
 	createdAt           time.Time

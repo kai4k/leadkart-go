@@ -14,6 +14,7 @@ package crmlead
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -75,12 +76,77 @@ func (i ID) String() string { return string(i) }
 // Field length caps. Mirror the CHECK constraints in migration
 // 20260602000001 so domain validation matches DB validation.
 const (
-	contactNameMin   = 1
-	contactNameMax   = 200
-	lostReasonMax    = 1000
-	mobileE164Regex  = `^\+91[0-9]{10}$` // matches BRD §5 phone-format
-	pincodeRegexLen  = 6
+	contactNameMin  = 1
+	contactNameMax  = 200
+	lostReasonMax   = 1000
+	mobileE164Regex = `^\+91[0-9]{10}$` // matches BRD §5 phone-format
+	pincodeRegex    = `^[1-9][0-9]{5}$` // canon: India-Post, first digit 1-9 (rejects 000000)
 )
+
+// pincodePattern is the compiled India-Post pincode rule (BRD §A-B.1),
+// replicated from common/refdata/pincode — see validateProfile for why
+// the canonical VO can't be imported into this domain package.
+var pincodePattern = regexp.MustCompile(pincodeRegex)
+
+// CRM-local lead-taxonomy closed sets (BRD §5). These MIRROR the
+// canonical typed enums in internal/platform/domain/leadform, but are
+// redeclared here because importing that package would be a
+// cross-module DOMAIN dependency (banned by
+// TestArch_NoCrossModuleImports — platform/domain is not on the
+// shared-kernel allow-list). The wire fields stay strings (they arrive
+// via the lead-purchased integration event); these enums exist purely
+// to validate-at-construction. If the BRD set changes, both
+// declarations must move together — the integration-event contract is
+// the single source of truth for the string values.
+type (
+	businessType   string
+	medicineSystem string
+	orderValue     string
+	buyTimeline    string
+)
+
+const (
+	businessTypePCD        businessType = "PCD"
+	businessTypeThirdParty businessType = "ThirdParty"
+
+	medicineSystemAllopathic medicineSystem = "Allopathic"
+	medicineSystemAyurvedic  medicineSystem = "Ayurvedic"
+
+	orderValueBelow5000  orderValue = "Below5000"
+	orderValueUpto25000  orderValue = "Upto25000"
+	orderValueUpto50000  orderValue = "Upto50000"
+	orderValueAbove50000 orderValue = "Above50000"
+
+	buyTimelineWithinWeek   buyTimeline = "WithinWeek"
+	buyTimelineWithin15Days buyTimeline = "Within15Days"
+	buyTimelineWithinMonth  buyTimeline = "WithinMonth"
+)
+
+func (b businessType) isValid() bool {
+	return b == businessTypePCD || b == businessTypeThirdParty
+}
+
+func (m medicineSystem) isValid() bool {
+	return m == medicineSystemAllopathic || m == medicineSystemAyurvedic
+}
+
+func (o orderValue) isValid() bool {
+	switch o {
+	case orderValueBelow5000, orderValueUpto25000, orderValueUpto50000, orderValueAbove50000:
+		return true
+	default:
+		return false
+	}
+}
+
+func (t buyTimeline) isValid() bool {
+	switch t {
+	case buyTimelineWithinWeek, buyTimelineWithin15Days, buyTimelineWithinMonth:
+		return true
+	default:
+		return false
+	}
+}
 
 // Profile bundles the BRD §6.3 indexed columns + JSONB supplementary
 // fields. Treated as a single VO at the aggregate boundary; the
@@ -91,7 +157,7 @@ const (
 // schema enforces the same split via dedicated columns + a single jsonb
 // `extra_profile` column.
 //
-// Empty-string defaults match the migration's NOT NULL DEFAULT '' shape —
+// Empty-string defaults match the migration's NOT NULL DEFAULT ” shape —
 // the aggregate accepts partial profiles (manual import slice 2+ will use
 // this).
 type Profile struct {
@@ -135,16 +201,16 @@ type ExtraProfile struct {
 //   - Convert / Lose are idempotent ONLY on self-transition (same actor +
 //     same reason for Lose); otherwise rejected.
 type CrmLead struct {
-	id        ID
-	tenantID  tenant.ID // owning tenant (typed alias prevents accidental ID swap)
-	profile   Profile
-	stage     Stage
+	id          ID
+	tenantID    tenant.ID // owning tenant (typed alias prevents accidental ID swap)
+	profile     Profile
+	stage       Stage
 	temperature Temperature
 
 	// Source provenance — set for leads created via the lead-purchased
 	// subscriber. Manual-import paths (slice 2+) leave these zero.
-	sourcePurchaseID      string // platform.lead-purchased.v1 PurchaseID; UNIQUE on the table
-	sourcePlatformLeadID  string // platform_leads.id
+	sourcePurchaseID     string // platform.lead-purchased.v1 PurchaseID; UNIQUE on the table
+	sourcePlatformLeadID string // platform_leads.id
 
 	// Current assignee (mirrored from the latest crm.assignment_history row).
 	// Cleared (zero) when the lead has never been assigned.
@@ -152,14 +218,14 @@ type CrmLead struct {
 	assignedAt           time.Time
 
 	// Lifecycle metadata.
-	convertedAt              time.Time
-	convertedByMembershipID  string
-	lostAt                   time.Time
-	lostByMembershipID       string
-	lostReason               string
+	convertedAt             time.Time
+	convertedByMembershipID string
+	lostAt                  time.Time
+	lostByMembershipID      string
+	lostReason              string
 
-	createdAt              time.Time
-	createdByMembershipID  string // empty for subscriber-created leads
+	createdAt             time.Time
+	createdByMembershipID string // empty for subscriber-created leads
 
 	events []Event
 }
@@ -323,22 +389,22 @@ func NewFromPurchaseSnapshot(id ID, tenantID tenant.ID, s PurchaseSnapshot, now 
 // Adapter code scans DB rows into this struct, then re-hydrates via
 // [UnmarshalFromDB] — keeps the adapter free of internal field knowledge.
 type Snapshot struct {
-	ID                       ID
-	TenantID                 tenant.ID
-	Profile                  Profile
-	Stage                    Stage
-	Temperature              Temperature
-	SourcePurchaseID         string
-	SourcePlatformLeadID     string
-	AssigneeMembershipID     string
-	AssignedAt               time.Time
-	ConvertedAt              time.Time
-	ConvertedByMembershipID  string
-	LostAt                   time.Time
-	LostByMembershipID       string
-	LostReason               string
-	CreatedAt                time.Time
-	CreatedByMembershipID    string
+	ID                      ID
+	TenantID                tenant.ID
+	Profile                 Profile
+	Stage                   Stage
+	Temperature             Temperature
+	SourcePurchaseID        string
+	SourcePlatformLeadID    string
+	AssigneeMembershipID    string
+	AssignedAt              time.Time
+	ConvertedAt             time.Time
+	ConvertedByMembershipID string
+	LostAt                  time.Time
+	LostByMembershipID      string
+	LostReason              string
+	CreatedAt               time.Time
+	CreatedByMembershipID   string
 }
 
 // UnmarshalFromDB re-hydrates a CrmLead from persistence. Used ONLY by
@@ -647,14 +713,27 @@ func validateProfile(p Profile) error {
 	if !isValidIndianMobile(p.PhoneE164) {
 		return fmt.Errorf("%w: phone_e164 must match %s, got %q", ErrInvalid, mobileE164Regex, p.PhoneE164)
 	}
-	if p.Pincode != "" && len(p.Pincode) != pincodeRegexLen {
-		return fmt.Errorf("%w: pincode must be %d digits, got %q", ErrInvalid, pincodeRegexLen, p.Pincode)
+	if p.Pincode != "" && !pincodePattern.MatchString(p.Pincode) {
+		// Canonical India-Post rule (^[1-9][0-9]{5}$) — rejects "000000",
+		// short, and long values. The shared-kernel VO
+		// common/refdata/pincode is the canon source, but it cannot be
+		// imported here: TestArch_DomainHasNoInfraImports bars common/
+		// packages outside the pure-VO allow-list (refdata carries a
+		// DB-backed Reader interface). So the exact regex is replicated
+		// crmlead-locally; both must stay in lockstep with BRD §A-B.1.
+		return fmt.Errorf("%w: pincode %q must match %s", ErrInvalid, p.Pincode, pincodeRegex)
 	}
-	if p.BusinessType != "" && p.BusinessType != "PCD" && p.BusinessType != "ThirdParty" {
+	if p.BusinessType != "" && !businessType(p.BusinessType).isValid() {
 		return fmt.Errorf("%w: business_type %q not in {PCD, ThirdParty}", ErrInvalid, p.BusinessType)
 	}
-	if p.MedicineSystem != "" && p.MedicineSystem != "Allopathic" && p.MedicineSystem != "Ayurvedic" {
+	if p.MedicineSystem != "" && !medicineSystem(p.MedicineSystem).isValid() {
 		return fmt.Errorf("%w: medicine_system %q not in {Allopathic, Ayurvedic}", ErrInvalid, p.MedicineSystem)
+	}
+	if p.OrderValue != "" && !orderValue(p.OrderValue).isValid() {
+		return fmt.Errorf("%w: order_value %q not in {Below5000, Upto25000, Upto50000, Above50000}", ErrInvalid, p.OrderValue)
+	}
+	if p.BuyTimeline != "" && !buyTimeline(p.BuyTimeline).isValid() {
+		return fmt.Errorf("%w: buy_timeline %q not in {WithinWeek, Within15Days, WithinMonth}", ErrInvalid, p.BuyTimeline)
 	}
 	return nil
 }

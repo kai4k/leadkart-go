@@ -189,7 +189,7 @@ func (r *MembershipRepository) GetActiveForPerson(
 			return fmt.Errorf("membership repo: list for person: %w", err)
 		}
 		for _, row := range rows {
-			if row.Status != "active" {
+			if row.Status != membership.StatusActive.String() {
 				continue
 			}
 			roleIDs, lerr := loadRoleAssignments(ctx, q, uuidFromPg(row.ID))

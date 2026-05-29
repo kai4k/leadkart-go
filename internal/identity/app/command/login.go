@@ -93,10 +93,12 @@ type lockedError struct {
 	lockedUntil time.Time
 }
 
-func (e *lockedError) Error() string                { return ErrAccountLocked.Error() }
-func (e *lockedError) Unwrap() error                { return ErrAccountLocked }
-func (e *lockedError) Is(target error) bool         { return target == ErrAccountLocked }
-func newLockedError(lockedUntil time.Time) *lockedError { return &lockedError{lockedUntil: lockedUntil} }
+func (e *lockedError) Error() string        { return ErrAccountLocked.Error() }
+func (e *lockedError) Unwrap() error        { return ErrAccountLocked }
+func (e *lockedError) Is(target error) bool { return target == ErrAccountLocked }
+func newLockedError(lockedUntil time.Time) *lockedError {
+	return &lockedError{lockedUntil: lockedUntil}
+}
 
 // ----- Handler ---------------------------------------------------------------
 
@@ -287,7 +289,7 @@ func (h LoginHandler) Handle(ctx context.Context, cmd LoginCommand) (LoginResult
 		TenantSlug:    tn.Slug().String(),
 		MembershipID:  m.ID().String(),
 		SecurityStamp: p.SecurityStamp().String(),
-		IsPlatform:    tn.Slug().String() == "platform",
+		IsPlatform:    tn.Slug().String() == tenant.PlatformSlug,
 		IsSuperUser:   authClaims.IsSuperUser,
 		Permissions:   permissionNames(authClaims.Permissions),
 	})
@@ -430,4 +432,3 @@ func (h LoginHandler) registerSuccessfulLoginBestEffort(ctx context.Context, p *
 	p.RegisterSuccessfulLogin(h.now())
 	_ = h.persons.UpdateLockoutState(ctx, p)
 }
-
