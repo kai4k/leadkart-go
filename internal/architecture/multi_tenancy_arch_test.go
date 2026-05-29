@@ -549,7 +549,6 @@ func TestArch_NoBareTenantIDStrings(t *testing.T) {
 	allowList := []string{
 		"internal/common/email/gateway.go",                              // gateway crosses substrate; ID is a metadata string
 		"internal/identity/ports/subscribers/revoke_families.go",        // Watermill metadata is plain string
-		"internal/common/messaging/messagingtest/outboxtest.go",         // test-helper in common/; can't import identity/domain/tenant per ADR 0047
 		"internal/common/pg/rlstest/rlstest.go",                         // test-helper in common/; same boundary constraint
 		"internal/common/pg/tenancy.go",                                 // pg substrate; can't import identity/domain/tenant per ADR 0047 — callers convert tenant.ID via .String() at the boundary
 		"internal/common/pg/transactor.go",                              // pg substrate; same boundary constraint

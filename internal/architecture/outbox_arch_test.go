@@ -40,6 +40,8 @@
 package architecture_test
 
 import (
+	"go/ast"
+	"go/token"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -74,10 +76,14 @@ var outboxTableRE = regexp.MustCompile(`(?i)\b\w+\.outbox\b`)
 
 // TestArch_OutboxSelectsOrderByMonotonicTiebreaker walks every SQL
 // source file (the hand-written .sql files sqlc reads, plus the
-// generated .sql.go embedded query strings, plus the Go test helpers
-// that emit raw outbox SELECTs) and asserts that any ORDER BY clause
-// targeting a `*.outbox` table ends with `id` (or `id DESC`) as a
-// tiebreaker. Per ADR 0027 + the citations in the file header.
+// generated .sql.go embedded query strings) and asserts that any ORDER
+// BY clause targeting a `*.outbox` table ends with `id` (or `id DESC`)
+// as a tiebreaker. Per ADR 0027 + the citations in the file header.
+//
+// NOTE: as of ADR 0062 Amendment 1 (strict-TDL subscriber-based outbox
+// testing) there are NO test helpers that read the outbox table — tests
+// observe emissions on the Watermill bus via the production forwarder.
+// So this gate now scopes to PRODUCTION SQL only.
 //
 // arch-test:no-negative-fixture — the assertion target is the SQL
 // shape inside the canonical production outbox query files. A negative
@@ -85,11 +91,11 @@ var outboxTableRE = regexp.MustCompile(`(?i)\b\w+\.outbox\b`)
 // `ORDER BY created_at` (no tiebreaker) under
 // `testdata/negative/<test>/`. But the path-anchored walk
 // (collectOutboxQueryFiles) only inspects the production paths
-// `internal/<module>/adapters/sql/*outbox*.sql`, `*/adapters/db/outbox.sql.go`,
-// and `common/messaging/messagingtest/outboxtest.go` — a fixture
-// outside those paths wouldn't trigger the rule. The fitness function
-// IS the path-anchored matcher; the existing 14-violation RED→GREEN
-// transition recorded in the commit body is the negative-case proof.
+// `internal/<module>/adapters/sql/*outbox*.sql` and
+// `*/adapters/db/outbox.sql.go` — a fixture outside those paths
+// wouldn't trigger the rule. The fitness function IS the path-anchored
+// matcher; the existing 14-violation RED→GREEN transition recorded in
+// the commit body is the negative-case proof.
 func TestArch_OutboxSelectsOrderByMonotonicTiebreaker(t *testing.T) {
 	t.Parallel()
 
@@ -174,12 +180,6 @@ func collectOutboxQueryFiles(t *testing.T) []string {
 	}
 	paths = append(paths, matches...)
 
-	// Test helper that builds raw outbox queries inline.
-	helperPath := filepath.Join(root, "common", "messaging", "messagingtest", "outboxtest.go")
-	if _, err := os.Stat(helperPath); err == nil {
-		paths = append(paths, helperPath)
-	}
-
 	// The sqlc-generated `*.sql.go` files mirror the .sql sources — a
 	// fix to the .sql regenerates the .go. Including them ensures the
 	// gate catches drift if the generated file is hand-edited (a known
@@ -228,4 +228,98 @@ func lineNumber(body string, pos int) int {
 		return 0
 	}
 	return strings.Count(body[:pos], "\n") + 1
+}
+
+// sqlReadsOutboxRE matches a SQL string literal that READS the outbox
+// table — a `FROM`/`JOIN`/`INTO`/`UPDATE` clause naming `<schema>.outbox`.
+// Restricted to a SQL verb prefix so prose mentioning "writes a row to
+// crm.outbox" inside Go comments / non-SQL string args doesn't trip the
+// gate (and the AST walk only inspects STRING literals anyway, never
+// comments).
+var sqlReadsOutboxRE = regexp.MustCompile(`(?i)\b(?:from|join|into|update)\s+\w+\.outbox\b`)
+
+// TestArch_NoDirectOutboxStateAssertions forbids ANY test or test-helper
+// file from reading an `<schema>.outbox` table in SQL. Per ADR 0062
+// Amendment 1 (strict-TDL subscriber-based outbox testing): outbox
+// emissions are observed on the Watermill bus via the production
+// OutboxForwarder + an in-process subscriber — NEVER by SELECTing the
+// outbox table.
+//
+// WHY THIS GATE EXISTS — TestArch_NoRawSQLInTests (TP1) bans raw SQL in
+// *_test.go files but EXPLICITLY ALLOW-LISTS the typed-helper packages
+// (audittest, messagingtest, rlstest, seedtest, identitytest). The
+// deleted messagingtest/outboxtest.go lived inside that allow-list, so
+// TP1 could never have caught it. This gate closes the gap: it scans the
+// helper packages TOO, with a rule narrow enough (outbox-table reads
+// only) that it doesn't duplicate TP1.
+//
+// SCOPE — test files + the `*test/` helper-package source files. NOT
+// production (`internal/<mod>/adapters/sql/*.sql` + `adapters/db/*.sql.go`
+// legitimately read the outbox; the forwarder is the production drain).
+//
+// arch-test:no-synctest — purely-static analysis test.
+//
+// arch-test:no-negative-fixture — adding a sibling test file that reads
+// `FROM x.outbox` to prove the RED state would itself be the banned
+// anti-pattern this gate exists to prevent; the deleted outboxtest.go
+// (whose removal commit recorded the 5-site RED→GREEN transition) is the
+// negative-case proof. The AST string-literal matcher IS the fitness
+// function.
+func TestArch_NoDirectOutboxStateAssertions(t *testing.T) {
+	t.Parallel()
+
+	type violation struct {
+		file string
+		line int
+		lit  string
+	}
+	var violations []violation
+
+	walkGoFiles(t, repoRoot(t), true, func(path string, src []byte) {
+		slash := pathToSlash(path)
+		// Only test files + test-helper package source files are in scope.
+		isHelperPkg := strings.Contains(slash, "/audittest/") ||
+			strings.Contains(slash, "/messagingtest/") ||
+			strings.Contains(slash, "/rlstest/") ||
+			strings.Contains(slash, "/seedtest/") ||
+			strings.Contains(slash, "/identitytest/")
+		if !isTestFile(slash) && !isHelperPkg {
+			return
+		}
+		// The arch package's own files (this very test) mention the regex
+		// pattern + table name in source — skip to avoid self-matching the
+		// raw pattern. The matcher scans STRING literals; this file's
+		// pattern is a regexp literal, not a SQL read, but skip anyway for
+		// clarity.
+		if archTestFile(slash) {
+			return
+		}
+
+		fset, f := parseFile(t, path, src)
+		ast.Inspect(f, func(n ast.Node) bool {
+			lit, ok := n.(*ast.BasicLit)
+			if !ok || lit.Kind != token.STRING {
+				return true
+			}
+			if sqlReadsOutboxRE.MatchString(lit.Value) {
+				violations = append(violations, violation{
+					file: slash,
+					line: fset.Position(lit.Pos()).Line,
+					lit:  strings.TrimSpace(lit.Value),
+				})
+			}
+			return true
+		})
+	})
+
+	if len(violations) > 0 {
+		t.Errorf("%d outbox-table read(s) in test/helper code — strict-TDL canon (ADR 0062 Amendment 1) requires observing outbox emissions via the production forwarder + an in-process Watermill subscriber, NEVER by SELECTing the outbox table. Use the per-package outboxFixture (see internal/identity/adapters/outbox_subscriber_test.go):", len(violations))
+		for _, v := range violations {
+			lit := v.lit
+			if len(lit) > 100 {
+				lit = lit[:100]
+			}
+			t.Errorf("  %s:%d — %s", v.file, v.line, lit)
+		}
+	}
 }

@@ -13,10 +13,15 @@
 //   infrastructure + per-test logical isolation = safe parallelism.
 //
 // SQL-CONTRACT COVERAGE (per ADR 0062 — TDL Test Pyramid):
-//   - Outbox row insertion in the SAME tx as the aggregate write
-//     (ADR 0008); read-back via the messagingtest helper bypasses RLS.
 //   - SQLSTATE 23505 translation on the per-tenant partial unique
 //     index `uq_products_tenant_sku_live` → typed [product.ErrSKUTaken].
+//
+// Outbox-emission coverage (product.Add writes a same-tx outbox row →
+// forwarder publishes inventory.product_created.v1) lives in
+// outbox_forwarder_integration_test.go, asserted SUBSCRIBER-side via the
+// production forwarder + an in-process Watermill subscriber. Strict TDL
+// canon per ADR 0062 Amendment 1: outbox is observed on the bus, never
+// read from the table.
 //
 // Business-rule + state-machine + round-trip coverage moved to the
 // per-aggregate fakes:
@@ -31,60 +36,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/google/uuid"
-
 	"github.com/leadkart/leadkart-go/internal/common/ids"
-	"github.com/leadkart/leadkart-go/internal/common/messaging/messagingtest"
 	"github.com/leadkart/leadkart-go/internal/common/pg"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
 	"github.com/leadkart/leadkart-go/internal/inventory/adapters"
 	"github.com/leadkart/leadkart-go/internal/inventory/domain/product"
 )
-
-// TestProductRepository_Add_DrainsCreatedEventToOutbox — SQL-contract:
-// every product.Add MUST also write a row to inventory.outbox in the
-// same tx per ADR 0008. The read-back uses the messagingtest helper
-// (RLS+FORCE on outbox is bypassed inside the helper via the platform
-// GUC); confirms the topic + tenant_id round-trip.
-func TestProductRepository_Add_DrainsCreatedEventToOutbox(t *testing.T) {
-	t.Parallel()
-	pool := repoFixture(t)
-	tid := seedTenant(t, pool)
-	ctx := tenantCtx(t, tid)
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-
-	tx := pg.NewTransactor(pool)
-	products := adapters.NewProductRepository(pool, tx)
-	actor := membership.ID(ids.NewV7().String())
-
-	p, err := product.New(
-		product.ID(ids.NewV7().String()),
-		tid, actor,
-		product.Spec{
-			SKU: "AMOX-500", Name: "Amoxicillin 500 mg",
-			DosageForm: "Capsule", PackSize: "10x10",
-			HSNCode: "30049099", GSTRateBps: 1200,
-			Manufacturer: "Acme",
-		},
-		fixedNow,
-	)
-	if err != nil {
-		t.Fatalf("product.New: %v", err)
-	}
-	if err := products.Add(ctx, p); err != nil {
-		t.Fatalf("Add: %v", err)
-	}
-
-	tidUUID, err := uuid.Parse(tid.String())
-	if err != nil {
-		t.Fatalf("uuid.Parse(tid): %v", err)
-	}
-	count := messagingtest.OutboxCountByTenant(t, pool, messagingtest.SchemaInventory, tidUUID)
-	if count < 1 {
-		t.Fatalf("outbox: got %d rows want >= 1 (created event)", count)
-	}
-}
 
 // TestProductRepository_Add_DuplicateSKU_ReturnsErrSKUTaken — SQL-contract:
 // SQLSTATE 23505 on the per-tenant partial unique index

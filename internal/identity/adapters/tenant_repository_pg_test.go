@@ -6,21 +6,23 @@
 //   Per-test context.WithTimeout would be belt-and-suspenders against the
 //   shared-pool + parallel-with-RLS canon shape.
 //
-// arch-test:parallel-safe — every Test* uses the shared pgtest container
-//   + a fresh tenant_id per test bound via tenancy.WithID(); RLS isolates
-//   rows by tenant so parallel runs cannot see each others state.
-//   Brandur "Postgres at scale" + TDL Wild Workouts canon: shared
-//   infrastructure + per-test logical isolation = safe parallelism.
-//
 // SQL-CONTRACT COVERAGE for this file (ADR 0062 — adapter integration
 // tests are SQL-contract-only; business-rule + state-machine coverage
 // lives in tenanttest.FakeRepository unit tests):
 //
 //   - Outbox-row insertion in the same transaction as the tenant row on
 //     both Add (identity.tenant_registered.v1) and UpdateByID/Activate
-//     (identity.tenant_activated.v1). Watermill-sql forwarder canon.
+//     (identity.tenant_activated.v1). Verified subscriber-side after the
+//     OutboxForwarder drains — strict TDL canon per ADR 0062 Amendment 1.
+//     (Watermill-sql forwarder canon: same code path as production.)
 //   - SQLSTATE 23505 → tenant.ErrSlugTaken translation via the unique
 //     index on tenants.slug.
+//
+// PARALLELISM POLICY: tests that read outbox emissions via the
+// per-package subscriber fixture (newOutboxFixture) are SERIAL + use
+// sharedPG.TruncateAll(t) — the forwarder reads across every tenant
+// + parallel fixtures would race on FOR UPDATE SKIP LOCKED. Tests that
+// only touch tenant-scoped rows stay t.Parallel() under RLS isolation.
 
 package adapters_test
 
@@ -30,7 +32,7 @@ import (
 
 	"github.com/leadkart/leadkart-go/internal/common/email"
 	"github.com/leadkart/leadkart-go/internal/common/ids"
-	"github.com/leadkart/leadkart-go/internal/common/messaging/messagingtest"
+	"github.com/leadkart/leadkart-go/internal/common/messaging"
 	"github.com/leadkart/leadkart-go/internal/common/pg"
 	"github.com/leadkart/leadkart-go/internal/common/slug"
 	"github.com/leadkart/leadkart-go/internal/identity/adapters"
@@ -65,33 +67,40 @@ func newTenant(t *testing.T) *tenant.Tenant {
 }
 
 // SQL-contract: Add writes the outbox row in the same tx as the tenant
-// row. The aggregate round-trip (slug / status) is covered by
-// tenanttest.FakeRepository.
+// row. Verified end-to-end via the production forwarder + an in-process
+// Watermill subscriber — same code path as production. The aggregate
+// round-trip (slug / status) is covered by tenanttest.FakeRepository.
+//
+// arch-test:no-parallel — subscriber-fixture test; uses TruncateAll
+// (strict-TDL outbox-observation rule per ADR 0062 Amendment 1).
 func TestTenantRepository_Add_PersistsOutboxEventInSameTx(t *testing.T) {
-	t.Parallel()
-	pool := repoFixture(t)
-	repo := adapters.NewTenantRepository(pool, pg.NewTransactor(pool))
-	ctx := t.Context()
+	sharedPG.TruncateAll(t)
+	fix := newOutboxFixture(t)
+	repo := adapters.NewTenantRepository(fix.pool, pg.NewTransactor(fix.pool))
 
 	tn := newTenant(t)
-	if err := repo.Add(ctx, tn); err != nil {
+	if err := repo.Add(t.Context(), tn); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
 
-	// Outbox row written with topic identity.tenant_registered.v1.
-	// Outbox is RLS+FORCE — the helper bypasses the policy internally
-	// (mirrors what the Watermill forwarder does in production).
-	topics := messagingtest.OutboxTopicsForTenant(t, pool, messagingtest.SchemaIdentity, tn.ID().String())
-	if len(topics) == 0 {
-		t.Fatal("read outbox: no rows")
+	msgs := fix.forwardAndWait(t, 1)
+	got := eventTypes(msgs)
+	if len(got) != 1 || got[0] != "identity.tenant_registered.v1" {
+		t.Fatalf("event_types: got %v want [identity.tenant_registered.v1]", got)
 	}
-	if topics[0] != "identity.tenant_registered.v1" {
-		t.Fatalf("outbox topic: got %q want identity.tenant_registered.v1", topics[0])
+	if tid := msgs[0].Metadata.Get(messaging.HeaderTenantID); tid != tn.ID().String() {
+		t.Fatalf("tenant_id header: got %q want %q", tid, tn.ID().String())
 	}
 }
 
 // SQL-contract: SQLSTATE 23505 on the unique tenants.slug index is
-// translated to tenant.ErrSlugTaken.
+// translated to tenant.ErrSlugTaken. Does not observe outbox emissions,
+// so stays t.Parallel() under RLS isolation.
+//
+// arch-test:parallel-safe — shared pgtest container + fresh tenant_id
+// per test (newTenant uses ids.NewV7); RLS isolates rows by tenant so
+// the duplicate-slug collision is self-contained. No TruncateAll, no
+// cross-tenant scan, no process-global mutation.
 func TestTenantRepository_Add_DuplicateSlug_ReturnsErrSlugTaken(t *testing.T) {
 	t.Parallel()
 	pool := repoFixture(t)
@@ -119,20 +128,20 @@ func TestTenantRepository_Add_DuplicateSlug_ReturnsErrSlugTaken(t *testing.T) {
 
 // SQL-contract: UpdateByID also enqueues an outbox row (tenant_activated.v1)
 // in the same tx as the row UPDATE. Watermill-sql two-row-per-mutation
-// invariant for both INSERT and UPDATE paths.
+// invariant for both INSERT and UPDATE paths — verified subscriber-side.
+//
+// arch-test:no-parallel — subscriber-fixture test; uses TruncateAll.
 func TestTenantRepository_UpdateByID_PersistsActivatedOutboxEventInSameTx(t *testing.T) {
-	t.Parallel()
-	pool := repoFixture(t)
-	repo := adapters.NewTenantRepository(pool, pg.NewTransactor(pool))
-	ctx := t.Context()
+	sharedPG.TruncateAll(t)
+	fix := newOutboxFixture(t)
+	repo := adapters.NewTenantRepository(fix.pool, pg.NewTransactor(fix.pool))
 
 	tn := newTenant(t)
-	if err := repo.Add(ctx, tn); err != nil {
+	if err := repo.Add(t.Context(), tn); err != nil {
 		t.Fatalf("seed Add: %v", err)
 	}
 
-	// Activate via UpdateFn closure.
-	err := repo.UpdateByID(ctx, tn.ID(), func(t2 *tenant.Tenant) (bool, error) {
+	err := repo.UpdateByID(t.Context(), tn.ID(), func(t2 *tenant.Tenant) (bool, error) {
 		if err := t2.Activate(testNow); err != nil {
 			return false, err
 		}
@@ -142,15 +151,19 @@ func TestTenantRepository_UpdateByID_PersistsActivatedOutboxEventInSameTx(t *tes
 		t.Fatalf("UpdateByID: %v", err)
 	}
 
-	// Outbox now has both registered + activated events for this tenant.
-	topics := messagingtest.OutboxTopicsForTenant(t, pool, messagingtest.SchemaIdentity, tn.ID().String())
+	// Forwarder drains BOTH rows + subscriber receives them in (created_at,
+	// id) order — registered before activated. Order comes from the
+	// `id` UUIDv7 tiebreaker on the forwarder's SELECT, gated by
+	// TestArch_OutboxSelectsOrderByMonotonicTiebreaker.
+	msgs := fix.forwardAndWait(t, 2)
+	got := eventTypes(msgs)
 	want := []string{"identity.tenant_registered.v1", "identity.tenant_activated.v1"}
-	if len(topics) != len(want) {
-		t.Fatalf("outbox topics: got %v want %v", topics, want)
+	if len(got) != len(want) {
+		t.Fatalf("event_types len: got %v want %v", got, want)
 	}
 	for i, w := range want {
-		if topics[i] != w {
-			t.Fatalf("outbox[%d]: got %q want %q", i, topics[i], w)
+		if got[i] != w {
+			t.Fatalf("event_types[%d]: got %q want %q", i, got[i], w)
 		}
 	}
 }

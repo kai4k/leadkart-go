@@ -22,7 +22,7 @@ import (
 	"time"
 
 	"github.com/leadkart/leadkart-go/internal/common/ids"
-	"github.com/leadkart/leadkart-go/internal/common/messaging/messagingtest"
+	"github.com/leadkart/leadkart-go/internal/common/messaging"
 	"github.com/leadkart/leadkart-go/internal/common/pg"
 	"github.com/leadkart/leadkart-go/internal/platform/adapters"
 	"github.com/leadkart/leadkart-go/internal/platform/domain/unverifiedcontact"
@@ -50,22 +50,25 @@ func TestUnverifiedContactRepository_Add_DrainsCreatedEventToOutbox(t *testing.T
 	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 	defer cancel()
 	_ = ctx // arch-test:integration-timeout-anchor
-	pool := platformPool(t)
-	tx := pg.NewTransactor(pool)
-	repo := adapters.NewUnverifiedContactRepository(pool, tx)
+	fix := newPlatformOutboxFixture(t)
+	repo := adapters.NewUnverifiedContactRepository(fix.pool, pg.NewTransactor(fix.pool))
 
 	c, _ := newSampleContact(t)
 	if err := repo.Add(t.Context(), c); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
 
-	// Bypass RLS via platform GUC handled internally by the helper.
-	topic, tenantNil := messagingtest.OutboxLatestTopicAndTenantNull(t, pool, messagingtest.SchemaPlatform)
-	if topic != "platform.unverified_contact_created.v1" {
-		t.Errorf("topic: got %q want platform.unverified_contact_created.v1", topic)
+	// Production forwarder drains + the in-process subscriber receives the
+	// event. Strict TDL canon per ADR 0062 Amendment 1.
+	msgs := fix.forwardAndWait(t, 1)
+	got := platformEventTypes(msgs)
+	if len(got) != 1 || got[0] != "platform.unverified_contact_created.v1" {
+		t.Fatalf("event_types: got %v want [platform.unverified_contact_created.v1]", got)
 	}
-	if !tenantNil {
-		// C3 — platform-scoped events MUST persist as tenant_id NULL.
-		t.Error("tenant_id: got non-NULL; want NULL for Platform-scoped event (C3)")
+	// C3 — platform-scoped events persist as tenant_id NULL, so the
+	// forwarder OMITS the tenant_id metadata header (only set when the
+	// row carries a real tenant FK). Empty header == NULL on the wire.
+	if tid := msgs[0].Metadata.Get(messaging.HeaderTenantID); tid != "" {
+		t.Errorf("tenant_id header: got %q; want empty for Platform-scoped event (C3 — tenant_id NULL)", tid)
 	}
 }

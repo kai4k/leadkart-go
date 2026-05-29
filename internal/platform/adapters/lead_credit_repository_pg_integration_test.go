@@ -35,7 +35,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/leadkart/leadkart-go/internal/common/ids"
-	"github.com/leadkart/leadkart-go/internal/common/messaging/messagingtest"
+	"github.com/leadkart/leadkart-go/internal/common/messaging"
 	"github.com/leadkart/leadkart-go/internal/common/pg"
 	"github.com/leadkart/leadkart-go/internal/platform/adapters"
 	"github.com/leadkart/leadkart-go/internal/platform/domain/leadcredit"
@@ -132,6 +132,8 @@ func TestLeadCreditRepository_UpsertWithVersion_DrainsAdjustedEventToOutbox(t *t
 	tenantID := leadcredit.TenantID(uuid.New().String())
 	op := leadcredit.MembershipID(ids.NewV7().String())
 
+	fix := newPlatformOutboxFixture(t)
+
 	err := tx.WithinTx(t.Context(), pg.TxScopePlatform, func(ctx context.Context) error {
 		c, err := leadcredit.NewForTenant(tenantID, nowUTC())
 		if err != nil {
@@ -146,12 +148,16 @@ func TestLeadCreditRepository_UpsertWithVersion_DrainsAdjustedEventToOutbox(t *t
 		t.Fatalf("seed: %v", err)
 	}
 
-	topic, stampedString := messagingtest.OutboxFirstTopicForTopic(t, pool, messagingtest.SchemaPlatform, "platform.lead_credit_adjusted.v1")
-	if topic != "platform.lead_credit_adjusted.v1" {
-		t.Errorf("topic: got %q want platform.lead_credit_adjusted.v1", topic)
+	// Production forwarder drains + the in-process subscriber receives the
+	// adjusted event. Strict TDL canon per ADR 0062 Amendment 1.
+	msgs := fix.forwardAndWait(t, 1)
+	got := platformEventTypes(msgs)
+	if len(got) != 1 || got[0] != "platform.lead_credit_adjusted.v1" {
+		t.Fatalf("event_types: got %v want [platform.lead_credit_adjusted.v1]", got)
 	}
-	if stampedString != tenantID.String() {
-		t.Errorf("tenant_id: got %q want %q (TenantScoped — must carry real tenant FK)",
-			stampedString, tenantID)
+	// TenantScoped event — MUST carry the real tenant FK on the wire.
+	if tid := msgs[0].Metadata.Get(messaging.HeaderTenantID); tid != tenantID.String() {
+		t.Errorf("tenant_id header: got %q want %q (TenantScoped — must carry real tenant FK)",
+			tid, tenantID.String())
 	}
 }
