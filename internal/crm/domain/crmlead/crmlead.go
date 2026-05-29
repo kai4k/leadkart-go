@@ -88,66 +88,6 @@ const (
 // the canonical VO can't be imported into this domain package.
 var pincodePattern = regexp.MustCompile(pincodeRegex)
 
-// CRM-local lead-taxonomy closed sets (BRD §5). These MIRROR the
-// canonical typed enums in internal/platform/domain/leadform, but are
-// redeclared here because importing that package would be a
-// cross-module DOMAIN dependency (banned by
-// TestArch_NoCrossModuleImports — platform/domain is not on the
-// shared-kernel allow-list). The wire fields stay strings (they arrive
-// via the lead-purchased integration event); these enums exist purely
-// to validate-at-construction. If the BRD set changes, both
-// declarations must move together — the integration-event contract is
-// the single source of truth for the string values.
-type (
-	businessType   string
-	medicineSystem string
-	orderValue     string
-	buyTimeline    string
-)
-
-const (
-	businessTypePCD        businessType = "PCD"
-	businessTypeThirdParty businessType = "ThirdParty"
-
-	medicineSystemAllopathic medicineSystem = "Allopathic"
-	medicineSystemAyurvedic  medicineSystem = "Ayurvedic"
-
-	orderValueBelow5000  orderValue = "Below5000"
-	orderValueUpto25000  orderValue = "Upto25000"
-	orderValueUpto50000  orderValue = "Upto50000"
-	orderValueAbove50000 orderValue = "Above50000"
-
-	buyTimelineWithinWeek   buyTimeline = "WithinWeek"
-	buyTimelineWithin15Days buyTimeline = "Within15Days"
-	buyTimelineWithinMonth  buyTimeline = "WithinMonth"
-)
-
-func (b businessType) isValid() bool {
-	return b == businessTypePCD || b == businessTypeThirdParty
-}
-
-func (m medicineSystem) isValid() bool {
-	return m == medicineSystemAllopathic || m == medicineSystemAyurvedic
-}
-
-func (o orderValue) isValid() bool {
-	switch o {
-	case orderValueBelow5000, orderValueUpto25000, orderValueUpto50000, orderValueAbove50000:
-		return true
-	default:
-		return false
-	}
-}
-
-func (t buyTimeline) isValid() bool {
-	switch t {
-	case buyTimelineWithinWeek, buyTimelineWithin15Days, buyTimelineWithinMonth:
-		return true
-	default:
-		return false
-	}
-}
-
 // Profile bundles the BRD §6.3 indexed columns + JSONB supplementary
 // fields. Treated as a single VO at the aggregate boundary; the
 // repository decomposes it into the per-column persistence shape.
@@ -167,10 +107,10 @@ type Profile struct {
 	District       string
 	State          string
 	Pincode        string
-	BusinessType   string // "" | "PCD" | "ThirdParty"
-	MedicineSystem string // "" | "Allopathic" | "Ayurvedic"
-	OrderValue     string // "" | "Below5000" | "Upto25000" | "Upto50000" | "Above50000"
-	BuyTimeline    string // "" | "WithinWeek" | "Within15Days" | "WithinMonth"
+	BusinessType   BusinessType   // "" | "PCD" | "ThirdParty"
+	MedicineSystem MedicineSystem // "" | "Allopathic" | "Ayurvedic"
+	OrderValue     OrderValue     // "" | "Below5000" | "Upto25000" | "Upto50000" | "Above50000"
+	BuyTimeline    BuyTimeline    // "" | "WithinWeek" | "Within15Days" | "WithinMonth"
 	HasDrugLicence bool
 	HasGst         bool
 	GstVerified    bool
@@ -335,6 +275,27 @@ func NewFromPurchaseSnapshot(id ID, tenantID tenant.ID, s PurchaseSnapshot, now 
 	if err := validateOptionalUUID("snapshot purchased by membership id", s.PurchasedByMembershipID); err != nil {
 		return nil, err
 	}
+	// Parse the wire-string taxonomy fields into the typed enums at the
+	// snapshot boundary (TDL Safer Enums). This is where the off-catalogue
+	// rejection happens by construction — including OrderValue + BuyTimeline,
+	// which the prior bare-string Profile only validated for BusinessType +
+	// MedicineSystem. An invalid value fails the factory, never persisting.
+	bizType, err := ParseBusinessType(s.BusinessType)
+	if err != nil {
+		return nil, err
+	}
+	medSystem, err := ParseMedicineSystem(s.MedicineSystem)
+	if err != nil {
+		return nil, err
+	}
+	ordValue, err := ParseOrderValue(s.OrderValue)
+	if err != nil {
+		return nil, err
+	}
+	buyTL, err := ParseBuyTimeline(s.BuyTimeline)
+	if err != nil {
+		return nil, err
+	}
 	p := Profile{
 		ContactName:    s.ContactName,
 		PhoneE164:      s.MobileE164,
@@ -342,10 +303,10 @@ func NewFromPurchaseSnapshot(id ID, tenantID tenant.ID, s PurchaseSnapshot, now 
 		District:       s.District,
 		State:          s.State,
 		Pincode:        s.PinCode,
-		BusinessType:   s.BusinessType,
-		MedicineSystem: s.MedicineSystem,
-		OrderValue:     s.OrderValue,
-		BuyTimeline:    s.BuyTimeline,
+		BusinessType:   bizType,
+		MedicineSystem: medSystem,
+		OrderValue:     ordValue,
+		BuyTimeline:    buyTL,
 		HasDrugLicence: s.HasDrugLicence,
 		HasGst:         s.HasGst,
 		ProductRanges:  s.ProductRanges,
@@ -723,16 +684,16 @@ func validateProfile(p Profile) error {
 		// crmlead-locally; both must stay in lockstep with BRD §A-B.1.
 		return fmt.Errorf("%w: pincode %q must match %s", ErrInvalid, p.Pincode, pincodeRegex)
 	}
-	if p.BusinessType != "" && !businessType(p.BusinessType).isValid() {
+	if !p.BusinessType.IsValid() {
 		return fmt.Errorf("%w: business_type %q not in {PCD, ThirdParty}", ErrInvalid, p.BusinessType)
 	}
-	if p.MedicineSystem != "" && !medicineSystem(p.MedicineSystem).isValid() {
+	if !p.MedicineSystem.IsValid() {
 		return fmt.Errorf("%w: medicine_system %q not in {Allopathic, Ayurvedic}", ErrInvalid, p.MedicineSystem)
 	}
-	if p.OrderValue != "" && !orderValue(p.OrderValue).isValid() {
+	if !p.OrderValue.IsValid() {
 		return fmt.Errorf("%w: order_value %q not in {Below5000, Upto25000, Upto50000, Above50000}", ErrInvalid, p.OrderValue)
 	}
-	if p.BuyTimeline != "" && !buyTimeline(p.BuyTimeline).isValid() {
+	if !p.BuyTimeline.IsValid() {
 		return fmt.Errorf("%w: buy_timeline %q not in {WithinWeek, Within15Days, WithinMonth}", ErrInvalid, p.BuyTimeline)
 	}
 	return nil

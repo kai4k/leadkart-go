@@ -126,12 +126,12 @@ func TestArch_NoBannedDeps(t *testing.T) {
 	t.Parallel()
 
 	banned := map[string]string{
-		"gorm.io":                     "GORM is banned per ADR 0004 (sqlc + pgx is the canon)",
-		"entgo.io":                    "Ent is banned per ADR 0004 (rejected after deep validation; see plan §G.D)",
-		"bob.io":                      "bob is banned per ADR 0004",
+		"gorm.io":                      "GORM is banned per ADR 0004 (sqlc + pgx is the canon)",
+		"entgo.io":                     "Ent is banned per ADR 0004 (rejected after deep validation; see plan §G.D)",
+		"bob.io":                       "bob is banned per ADR 0004",
 		"github.com/gorilla/websocket": "gorilla/websocket is banned per ADR 0016 (coder/websocket is the canon)",
-		"go.uber.org/zap":             "zap is banned per ADR 0013 (log/slog stdlib only)",
-		"github.com/sirupsen/logrus":  "logrus is banned per ADR 0013 — DIRECT imports forbidden (indirect via testcontainers-go is tolerated)",
+		"go.uber.org/zap":              "zap is banned per ADR 0013 (log/slog stdlib only)",
+		"github.com/sirupsen/logrus":   "logrus is banned per ADR 0013 — DIRECT imports forbidden (indirect via testcontainers-go is tolerated)",
 		"github.com/Masterminds/sprig": "sprig is banned (templating bloat)",
 	}
 
@@ -220,6 +220,7 @@ func TestArch_NoBannedDeps(t *testing.T) {
 // EXCEPTIONS:
 //   - `init()` functions — init-time panics are tolerated.
 //   - Package-level `var x = pkg.MustX(...)` — init-time too.
+//
 // Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_NoMustInRequestPath(t *testing.T) {
 	t.Parallel()
@@ -775,10 +776,10 @@ func TestArch_NoNewTimeFormatStrings(t *testing.T) {
 	// Layouts that have a stdlib constant equivalent — using the
 	// literal is fine (the constant maps to the same string).
 	stdlibLayouts := map[string]bool{
-		"2006-01-02":                    true, // time.DateOnly
-		"15:04:05":                      true, // time.TimeOnly
-		"2006-01-02 15:04:05":           true, // time.DateTime
-		"2006-01-02T15:04:05Z07:00":     true, // time.RFC3339
+		"2006-01-02":                          true, // time.DateOnly
+		"15:04:05":                            true, // time.TimeOnly
+		"2006-01-02 15:04:05":                 true, // time.DateTime
+		"2006-01-02T15:04:05Z07:00":           true, // time.RFC3339
 		"2006-01-02T15:04:05.999999999Z07:00": true, // time.RFC3339Nano
 	}
 
@@ -802,5 +803,271 @@ func TestArch_NoNewTimeFormatStrings(t *testing.T) {
 	if len(bad) > 0 {
 		t.Fatalf("time.Format with non-stdlib inline layout literal — use a constant:\n  %s",
 			strings.Join(bad, "\n  "))
+	}
+}
+
+// ============================================================================
+// Principle MG — additional Go 1.24-1.25 modern-idiom gates (the genuine
+// gaps not already covered by ModernForRange / OmitzeroNotOmitempty /
+// BenchmarksUseBLoop / TestsUseTContext / ErrorsAsOverTypeAssertion /
+// CustomErrorsImplementIs). Each was confirmed already-clean in production
+// before gating.
+// ============================================================================
+
+// ----------------------------------------------------------------------------
+// MG1: TestArch_RangeOverSplitUsesSeq
+// ----------------------------------------------------------------------------
+//
+// Per Go 1.24+: when the ONLY use of a Split/Fields result is to iterate
+// it in a `for range`, use the allocation-free iterator variants —
+// strings.SplitSeq / strings.FieldsSeq / bytes.SplitSeq / bytes.FieldsSeq —
+// instead of strings.Split / strings.Fields / bytes.Split / bytes.Fields
+// (which allocate the full []string up front).
+//
+// Detection: a `*ast.RangeStmt` whose range expression X is a direct call
+// to strings.Split / strings.Fields / bytes.Split / bytes.Fields.
+//
+// Scope: production — non-test files under internal/. The arch-test suite
+// + integration-event arch tests legitimately range over strings.Split in
+// _test.go (line-by-line source scanning) and are out of scope.
+// Production was confirmed clean before this gate landed.
+//
+// arch-test:no-negative-fixture — the recorded RED→GREEN proof is the
+// mutation test in the deliverable (introduce a production
+// `for _, x := range strings.Split(...)` → RED). A committed fixture would
+// itself be the banned shape; the AST range-over-Split matcher IS the
+// fitness function.
+//
+// arch-test:no-synctest — purely-static AST analysis test.
+func TestArch_RangeOverSplitUsesSeq(t *testing.T) {
+	t.Parallel()
+
+	// pkg.Fn → the Seq replacement to suggest.
+	splitFns := map[string]map[string]string{
+		"strings": {"Split": "SplitSeq", "Fields": "FieldsSeq"},
+		"bytes":   {"Split": "SplitSeq", "Fields": "FieldsSeq"},
+	}
+
+	type violation struct {
+		file string
+		line int
+		repl string
+	}
+	var violations []violation
+
+	walkGoFiles(t, internalDir(t), false, func(path string, src []byte) {
+		fset, f := parseFile(t, path, src)
+		ast.Inspect(f, func(n ast.Node) bool {
+			rs, ok := n.(*ast.RangeStmt)
+			if !ok {
+				return true
+			}
+			call, ok := rs.X.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			pkg, name := callPkgAndName(call.Fun)
+			fns, ok := splitFns[pkg]
+			if !ok {
+				return true
+			}
+			seq, ok := fns[name]
+			if !ok {
+				return true
+			}
+			violations = append(violations, violation{
+				file: pathToSlash(path),
+				line: fset.Position(rs.Pos()).Line,
+				repl: pkg + "." + seq,
+			})
+			return true
+		})
+	})
+
+	if len(violations) > 0 {
+		t.Errorf("%d production `for range %s.Split/Fields(...)` loop(s) — use the Go 1.24 iterator variant (no up-front slice allocation):", len(violations), "strings|bytes")
+		for _, v := range violations {
+			t.Errorf("  %s:%d — range over Split/Fields; use %s instead", v.file, v.line, v.repl)
+		}
+	}
+}
+
+// ----------------------------------------------------------------------------
+// MG2: TestArch_WaitGroupUsesWgGo
+// ----------------------------------------------------------------------------
+//
+// Per Go 1.25+: spawning a goroutine tracked by a sync.WaitGroup is
+// `wg.Go(fn)` — which captures the Add+Done bookkeeping — NOT the legacy
+// `wg.Add(1); go func() { defer wg.Done(); ... }()` triad (one missed
+// Done / mis-counted Add is a deadlock or early-return bug).
+//
+// Detection (low-false-positive, structural): a `go func(){...}()`
+// statement whose spawned closure body contains a `wg.Done()` /
+// `<x>.Done()` call. The presence of a WaitGroup .Done() inside a
+// hand-spawned goroutine is the unambiguous legacy shape — atomic
+// counters (.Add(1) on atomic.Int64) never call .Done(), so they don't
+// trip. (We key off Done(), not Add(1), precisely to avoid the
+// atomic-counter false positive the brief flags.)
+//
+// Scope: production — non-test files under internal/. The sole production
+// WaitGroup user (internal/common/obs/health.go) already uses wg.Go();
+// production was confirmed clean before this gate landed.
+//
+// arch-test:no-negative-fixture — the recorded RED→GREEN proof is the
+// mutation test in the deliverable (rewrite health.go's wg.Go(...) back
+// into wg.Add(1)+go func(){defer wg.Done()} → RED). A committed fixture
+// would itself be the banned shape; the AST go-func-with-Done matcher IS
+// the fitness function.
+//
+// arch-test:no-synctest — purely-static AST analysis test.
+func TestArch_WaitGroupUsesWgGo(t *testing.T) {
+	t.Parallel()
+
+	type violation struct {
+		file string
+		line int
+	}
+	var violations []violation
+
+	// closureCallsDone reports whether the FuncLit body contains a
+	// `<x>.Done()` call (the WaitGroup.Done bookkeeping that wg.Go folds in).
+	closureCallsDone := func(lit *ast.FuncLit) bool {
+		found := false
+		ast.Inspect(lit.Body, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			sel, ok := call.Fun.(*ast.SelectorExpr)
+			if !ok {
+				return true
+			}
+			if sel.Sel.Name == "Done" && len(call.Args) == 0 {
+				found = true
+				return false
+			}
+			return true
+		})
+		return found
+	}
+
+	walkGoFiles(t, internalDir(t), false, func(path string, src []byte) {
+		fset, f := parseFile(t, path, src)
+		ast.Inspect(f, func(n ast.Node) bool {
+			gs, ok := n.(*ast.GoStmt)
+			if !ok {
+				return true
+			}
+			lit, ok := gs.Call.Fun.(*ast.FuncLit)
+			if !ok || lit.Body == nil {
+				return true
+			}
+			if closureCallsDone(lit) {
+				violations = append(violations, violation{
+					file: pathToSlash(path),
+					line: fset.Position(gs.Pos()).Line,
+				})
+			}
+			return true
+		})
+	})
+
+	if len(violations) > 0 {
+		t.Errorf("%d hand-spawned `go func(){ defer wg.Done(); ... }()` goroutine(s) — Go 1.25: use wg.Go(fn), which folds the Add/Done bookkeeping in and can't desync the counter:", len(violations))
+		for _, v := range violations {
+			t.Errorf("  %s:%d — go func with wg.Done() (use wg.Go(func(){ ... }))", v.file, v.line)
+		}
+	}
+}
+
+// ----------------------------------------------------------------------------
+// MG3: TestArch_NoHandRolledMinMax
+// ----------------------------------------------------------------------------
+//
+// Per Go 1.21+: `min` and `max` are predeclared builtins for ordered
+// types. A hand-rolled top-level `func min(a, b int) int` / `func max(...)`
+// shadows the builtin and is dead weight. Ban a top-level (non-method)
+// FuncDecl named min/max that takes exactly two same-typed comparable
+// (numeric/string) parameters — the builtin's shape. Domain helpers like
+// `maxCursorTime(...)` or a 3-arg `min(...)` clamp are NOT named exactly
+// min/max with the builtin's 2-arg shape, so they never trip.
+//
+// Scope: production — non-test files under internal/. The lone hand-rolled
+// `func min(a, b int) int` lives in meta_arch_test.go (a _test.go file,
+// out of scope); production was confirmed clean before this gate landed.
+//
+// arch-test:no-negative-fixture — the recorded RED→GREEN proof is the
+// mutation test in the deliverable (add a production `func min(a, b int)
+// int` → RED). A committed fixture would itself be the banned shape; the
+// AST func-decl matcher IS the fitness function.
+//
+// arch-test:no-synctest — purely-static AST analysis test.
+func TestArch_NoHandRolledMinMax(t *testing.T) {
+	t.Parallel()
+
+	numericOrString := map[string]bool{
+		"int": true, "int8": true, "int16": true, "int32": true, "int64": true,
+		"uint": true, "uint8": true, "uint16": true, "uint32": true, "uint64": true,
+		"uintptr": true, "float32": true, "float64": true, "string": true,
+		"byte": true, "rune": true,
+	}
+
+	// twoOrderedSameTypedParams reports whether the param list is exactly
+	// two parameters of the SAME numeric/string type — the builtin min/max
+	// shape. Accepts both `(a, b int)` and `(a int, b int)`.
+	twoOrderedSameTypedParams := func(fl *ast.FieldList) bool {
+		if fl == nil {
+			return false
+		}
+		var types []string
+		for _, fld := range fl.List {
+			id, ok := fld.Type.(*ast.Ident)
+			if !ok || !numericOrString[id.Name] {
+				return false
+			}
+			n := len(fld.Names)
+			if n == 0 {
+				n = 1
+			}
+			for range n {
+				types = append(types, id.Name)
+			}
+		}
+		return len(types) == 2 && types[0] == types[1]
+	}
+
+	type violation struct {
+		file string
+		line int
+		name string
+	}
+	var violations []violation
+
+	walkGoFiles(t, internalDir(t), false, func(path string, src []byte) {
+		fset, f := parseFile(t, path, src)
+		for _, decl := range f.Decls {
+			fd, ok := decl.(*ast.FuncDecl)
+			if !ok || fd.Recv != nil { // methods are not the shadow
+				continue
+			}
+			if fd.Name.Name != "min" && fd.Name.Name != "max" {
+				continue
+			}
+			if !twoOrderedSameTypedParams(fd.Type.Params) {
+				continue
+			}
+			violations = append(violations, violation{
+				file: pathToSlash(path),
+				line: fset.Position(fd.Pos()).Line,
+				name: fd.Name.Name,
+			})
+		}
+	})
+
+	if len(violations) > 0 {
+		t.Errorf("%d hand-rolled top-level func min/max shadowing the Go 1.21 builtins — delete it and use the predeclared min/max:", len(violations))
+		for _, v := range violations {
+			t.Errorf("  %s:%d — func %s(a, b T) T (use the builtin)", v.file, v.line, v.name)
+		}
 	}
 }
