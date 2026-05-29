@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/leadkart/leadkart-go/internal/common/pg"
+	"github.com/leadkart/leadkart-go/internal/common/pgconv"
 	"github.com/leadkart/leadkart-go/internal/crm/adapters/db"
 	"github.com/leadkart/leadkart-go/internal/crm/domain/assignmenthistory"
 	"github.com/leadkart/leadkart-go/internal/crm/domain/crmlead"
@@ -66,15 +67,15 @@ func (r *AssignmentHistoryRepository) addOnTx(ctx context.Context, tx pgx.Tx, e 
 		return fmt.Errorf("crm assignment_history repo: parse assigned_by %q: %w", e.AssignedByMembershipID(), err)
 	}
 	if err := q.InsertAssignmentHistory(ctx, db.InsertAssignmentHistoryParams{
-		ID:                           pgUUID(id),
-		TenantID:                     pgUUID(tid),
-		LeadID:                       pgUUID(lid),
+		ID:                           pgconv.PgUUID(id),
+		TenantID:                     pgconv.PgUUID(tid),
+		LeadID:                       pgconv.PgUUID(lid),
 		PreviousAssigneeMembershipID: uuidParamOpt(e.PreviousAssignee()),
-		AssigneeMembershipID:         pgUUID(assignee),
-		AssignedByMembershipID:       pgUUID(assignedBy),
+		AssigneeMembershipID:         pgconv.PgUUID(assignee),
+		AssignedByMembershipID:       pgconv.PgUUID(assignedBy),
 		Reason:                       e.Reason(),
-		AssignedAt:                   pgRequiredTimestamp(e.AssignedAt()),
-		CreatedAt:                    pgRequiredTimestamp(e.CreatedAt()),
+		AssignedAt:                   pgconv.PgRequiredTimestamp(e.AssignedAt()),
+		CreatedAt:                    pgconv.PgRequiredTimestamp(e.CreatedAt()),
 	}); err != nil {
 		return fmt.Errorf("crm assignment_history repo: insert: %w", err)
 	}
@@ -91,7 +92,7 @@ func (r *AssignmentHistoryRepository) GetByID(ctx context.Context, tenantID tena
 	var out *assignmenthistory.Entry
 	err = r.tx.WithinTxPgxTenant(ctx, tenantID.String(), func(ctx context.Context, tx pgx.Tx) error {
 		q := r.q.WithTx(tx)
-		row, err := q.GetAssignmentHistoryByID(ctx, pgUUID(hid))
+		row, err := q.GetAssignmentHistoryByID(ctx, pgconv.PgUUID(hid))
 		if err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				return assignmenthistory.ErrNotFound
@@ -117,7 +118,7 @@ func (r *AssignmentHistoryRepository) ListByLead(ctx context.Context, tenantID t
 	var out []*assignmenthistory.Entry
 	err = r.tx.WithinTxPgxTenant(ctx, tenantID.String(), func(ctx context.Context, tx pgx.Tx) error {
 		q := r.q.WithTx(tx)
-		rows, err := q.ListAssignmentHistoryByLead(ctx, pgUUID(lid))
+		rows, err := q.ListAssignmentHistoryByLead(ctx, pgconv.PgUUID(lid))
 		if err != nil {
 			return fmt.Errorf("crm assignment_history repo: list by lead: %w", err)
 		}
@@ -135,14 +136,14 @@ func (r *AssignmentHistoryRepository) ListByLead(ctx context.Context, tenantID t
 
 func rowToHistoryEntry(row db.CrmAssignmentHistory) *assignmenthistory.Entry {
 	return assignmenthistory.UnmarshalFromDB(assignmenthistory.Snapshot{
-		ID:                     assignmenthistory.ID(uuidFromPg(row.ID).String()),
-		TenantID:               tenant.ID(uuidFromPg(row.TenantID).String()),
-		LeadID:                 crmlead.ID(uuidFromPg(row.LeadID).String()),
+		ID:                     assignmenthistory.ID(pgconv.UUIDFromPg(row.ID).String()),
+		TenantID:               tenant.ID(pgconv.UUIDFromPg(row.TenantID).String()),
+		LeadID:                 crmlead.ID(pgconv.UUIDFromPg(row.LeadID).String()),
 		PreviousAssignee:       uuidStringOrEmpty(row.PreviousAssigneeMembershipID),
-		AssigneeMembershipID:   uuidFromPg(row.AssigneeMembershipID).String(),
-		AssignedByMembershipID: uuidFromPg(row.AssignedByMembershipID).String(),
+		AssigneeMembershipID:   pgconv.UUIDFromPg(row.AssigneeMembershipID).String(),
+		AssignedByMembershipID: pgconv.UUIDFromPg(row.AssignedByMembershipID).String(),
 		Reason:                 row.Reason,
-		AssignedAt:             timeFromPg(row.AssignedAt),
-		CreatedAt:              timeFromPg(row.CreatedAt),
+		AssignedAt:             pgconv.TimeFromPg(row.AssignedAt),
+		CreatedAt:              pgconv.TimeFromPg(row.CreatedAt),
 	})
 }

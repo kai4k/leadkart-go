@@ -9,11 +9,12 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/leadkart/leadkart-go/internal/common/pg"
+	"github.com/leadkart/leadkart-go/internal/common/pgconv"
 	"github.com/leadkart/leadkart-go/internal/identity/adapters/db"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/refreshtoken"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
-	"github.com/leadkart/leadkart-go/internal/common/pg"
 )
 
 // RefreshTokenFamilyRepository is the pgx/sqlc-backed implementation of
@@ -149,7 +150,7 @@ func (r *RefreshTokenFamilyRepository) ListActiveForPerson(ctx context.Context, 
 		// connection's iteration cursor), THEN load each family's
 		// tokens. pgx forbids multiplexed queries on one connection.
 		q := r.q.WithTx(tx)
-		familyRows, err := q.ListActiveFamiliesForPerson(ctx, pgUUID(uid))
+		familyRows, err := q.ListActiveFamiliesForPerson(ctx, pgconv.PgUUID(uid))
 		if err != nil {
 			return fmt.Errorf("refresh token repo: list active: %w", err)
 		}
@@ -184,14 +185,14 @@ func insertFamilyRow(ctx context.Context, q *db.Queries, f *refreshtoken.Family)
 		return err
 	}
 	err = q.InsertRefreshTokenFamily(ctx, db.InsertRefreshTokenFamilyParams{
-		ID:           pgUUID(uid),
-		PersonID:     pgUUID(pid),
-		TenantID:     pgUUID(tid),
+		ID:           pgconv.PgUUID(uid),
+		PersonID:     pgconv.PgUUID(pid),
+		TenantID:     pgconv.PgUUID(tid),
 		DeviceLabel:  f.DeviceLabel(),
-		CreatedAt:    pgRequiredTimestamp(f.CreatedAt()),
-		LastUsedAt:   pgRequiredTimestamp(f.LastUsedAt()),
-		RevokedAt:    pgTimestamp(f.RevokedAt()),
-		RevokeReason: nilIfEmpty(f.RevokeReason()),
+		CreatedAt:    pgconv.PgRequiredTimestamp(f.CreatedAt()),
+		LastUsedAt:   pgconv.PgRequiredTimestamp(f.LastUsedAt()),
+		RevokedAt:    pgconv.PgTimestamp(f.RevokedAt()),
+		RevokeReason: pgconv.ZeroToNil(f.RevokeReason()),
 	})
 	if err != nil {
 		return fmt.Errorf("refresh token repo: insert family: %w", err)
@@ -205,10 +206,10 @@ func persistFamilyState(ctx context.Context, q *db.Queries, f *refreshtoken.Fami
 		return err
 	}
 	err = q.UpdateRefreshTokenFamily(ctx, db.UpdateRefreshTokenFamilyParams{
-		ID:           pgUUID(uid),
-		LastUsedAt:   pgRequiredTimestamp(f.LastUsedAt()),
-		RevokedAt:    pgTimestamp(f.RevokedAt()),
-		RevokeReason: nilIfEmpty(f.RevokeReason()),
+		ID:           pgconv.PgUUID(uid),
+		LastUsedAt:   pgconv.PgRequiredTimestamp(f.LastUsedAt()),
+		RevokedAt:    pgconv.PgTimestamp(f.RevokedAt()),
+		RevokeReason: pgconv.ZeroToNil(f.RevokeReason()),
 	})
 	if err != nil {
 		return fmt.Errorf("refresh token repo: update family: %w", err)
@@ -233,22 +234,22 @@ func upsertFamilyTokens(ctx context.Context, q *db.Queries, f *refreshtoken.Fami
 		if err != nil {
 			return err
 		}
-		var replacedBy = pgUUIDOpt(uuid.Nil)
+		var replacedBy = pgconv.PgUUIDOrNull(uuid.Nil)
 		if !t.ReplacedByID().IsZero() {
 			rb, err := parseTokenID(t.ReplacedByID())
 			if err != nil {
 				return err
 			}
-			replacedBy = pgUUIDOpt(rb)
+			replacedBy = pgconv.PgUUIDOrNull(rb)
 		}
 		err = q.UpsertRefreshToken(ctx, db.UpsertRefreshTokenParams{
-			ID:           pgUUID(tid),
-			FamilyID:     pgUUID(fid),
+			ID:           pgconv.PgUUID(tid),
+			FamilyID:     pgconv.PgUUID(fid),
 			TokenHash:    t.Hash().String(),
 			Generation:   t.Generation(),
-			IssuedAt:     pgRequiredTimestamp(t.IssuedAt()),
-			ExpiresAt:    pgRequiredTimestamp(t.ExpiresAt()),
-			ConsumedAt:   pgTimestamp(t.ConsumedAt()),
+			IssuedAt:     pgconv.PgRequiredTimestamp(t.IssuedAt()),
+			ExpiresAt:    pgconv.PgRequiredTimestamp(t.ExpiresAt()),
+			ConsumedAt:   pgconv.PgTimestamp(t.ConsumedAt()),
 			ReplacedByID: replacedBy,
 		})
 		if err != nil {
@@ -283,7 +284,7 @@ func loadFamilyByID(ctx context.Context, q *db.Queries, id refreshtoken.FamilyID
 	if err != nil {
 		return nil, err
 	}
-	row, err := q.GetRefreshTokenFamilyByID(ctx, pgUUID(uid))
+	row, err := q.GetRefreshTokenFamilyByID(ctx, pgconv.PgUUID(uid))
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, refreshtoken.ErrNotFound
@@ -306,15 +307,15 @@ func hydrateFamily(ctx context.Context, q *db.Queries, row db.IdentityRefreshTok
 		}
 		var replacedBy refreshtoken.TokenID
 		if t.ReplacedByID.Valid {
-			replacedBy = refreshtoken.TokenID(uuidFromPg(t.ReplacedByID).String())
+			replacedBy = refreshtoken.TokenID(pgconv.UUIDFromPg(t.ReplacedByID).String())
 		}
 		tokenSnaps[i] = refreshtoken.TokenSnapshot{
-			ID:           refreshtoken.TokenID(uuidFromPg(t.ID).String()),
+			ID:           refreshtoken.TokenID(pgconv.UUIDFromPg(t.ID).String()),
 			Hash:         hash,
 			Generation:   t.Generation,
-			IssuedAt:     timeFromPg(t.IssuedAt),
-			ExpiresAt:    timeFromPg(t.ExpiresAt),
-			ConsumedAt:   timeFromPg(t.ConsumedAt),
+			IssuedAt:     pgconv.TimeFromPg(t.IssuedAt),
+			ExpiresAt:    pgconv.TimeFromPg(t.ExpiresAt),
+			ConsumedAt:   pgconv.TimeFromPg(t.ConsumedAt),
 			ReplacedByID: replacedBy,
 		}
 	}
@@ -323,26 +324,16 @@ func hydrateFamily(ctx context.Context, q *db.Queries, row db.IdentityRefreshTok
 		revokeReason = *row.RevokeReason
 	}
 	return refreshtoken.UnmarshalFromDB(refreshtoken.FamilySnapshot{
-		ID:           refreshtoken.FamilyID(uuidFromPg(row.ID).String()),
-		PersonID:     person.ID(uuidFromPg(row.PersonID).String()),
-		TenantID:     tenant.ID(uuidFromPg(row.TenantID).String()),
+		ID:           refreshtoken.FamilyID(pgconv.UUIDFromPg(row.ID).String()),
+		PersonID:     person.ID(pgconv.UUIDFromPg(row.PersonID).String()),
+		TenantID:     tenant.ID(pgconv.UUIDFromPg(row.TenantID).String()),
 		DeviceLabel:  row.DeviceLabel,
-		CreatedAt:    timeFromPg(row.CreatedAt),
-		LastUsedAt:   timeFromPg(row.LastUsedAt),
-		RevokedAt:    timeFromPg(row.RevokedAt),
+		CreatedAt:    pgconv.TimeFromPg(row.CreatedAt),
+		LastUsedAt:   pgconv.TimeFromPg(row.LastUsedAt),
+		RevokedAt:    pgconv.TimeFromPg(row.RevokedAt),
 		RevokeReason: revokeReason,
 		Tokens:       tokenSnaps,
 	}), nil
-}
-
-// nilIfEmpty maps "" → nil so sqlc-generated *string fields write SQL
-// NULL rather than an empty-string row. Domain represents "no reason"
-// as the zero string; the column is nullable.
-func nilIfEmpty(s string) *string {
-	if s == "" {
-		return nil
-	}
-	return &s
 }
 
 func parseFamilyID(id refreshtoken.FamilyID) (uuid.UUID, error) {

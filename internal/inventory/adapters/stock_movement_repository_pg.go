@@ -11,6 +11,7 @@ import (
 
 	"github.com/leadkart/leadkart-go/internal/common/pagination"
 	"github.com/leadkart/leadkart-go/internal/common/pg"
+	"github.com/leadkart/leadkart-go/internal/common/pgconv"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 	"github.com/leadkart/leadkart-go/internal/inventory/adapters/db"
@@ -64,7 +65,7 @@ func (r *StockMovementRepository) GetByID(ctx context.Context, tenantID tenant.I
 		if perr != nil {
 			return fmt.Errorf("movement repo: parse id: %w", perr)
 		}
-		row, err := q.GetStockMovementByID(ctx, pgUUID(mid))
+		row, err := q.GetStockMovementByID(ctx, pgconv.PgUUID(mid))
 		if err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				return stockmovement.ErrNotFound
@@ -90,15 +91,15 @@ func (r *StockMovementRepository) ListByBatchPage(ctx context.Context, tenantID 
 		return pagination.Page[*stockmovement.Movement]{}, fmt.Errorf("movement repo: parse batch id: %w", err)
 	}
 
-	cursorOccurredAt := pgRequiredTimestamp(maxCursorTime())
-	cursorID := pgUUID(maxCursorUUID())
+	cursorOccurredAt := pgconv.PgRequiredTimestamp(maxCursorTime())
+	cursorID := pgconv.PgUUID(maxCursorUUID())
 	if req.Cursor.ID != "" {
-		cursorOccurredAt = pgRequiredTimestamp(req.Cursor.SortValue)
+		cursorOccurredAt = pgconv.PgRequiredTimestamp(req.Cursor.SortValue)
 		uid, perr := uuid.Parse(req.Cursor.ID)
 		if perr != nil {
 			return pagination.Page[*stockmovement.Movement]{}, fmt.Errorf("movement repo: parse cursor id: %w", perr)
 		}
-		cursorID = pgUUID(uid)
+		cursorID = pgconv.PgUUID(uid)
 	}
 	filterType := string(req.Filter.Type)
 
@@ -106,7 +107,7 @@ func (r *StockMovementRepository) ListByBatchPage(ctx context.Context, tenantID 
 	err = r.tx.WithinTxPgxTenant(ctx, tenantID.String(), func(ctx context.Context, tx pgx.Tx) error {
 		q := r.q.WithTx(tx)
 		rows, err := q.ListMovementsByBatchPage(ctx, db.ListMovementsByBatchPageParams{
-			BatchID:          pgUUID(bid),
+			BatchID:          pgconv.PgUUID(bid),
 			CursorOccurredAt: cursorOccurredAt,
 			CursorID:         cursorID,
 			Type:             filterType,
@@ -142,17 +143,17 @@ func insertMovementRow(ctx context.Context, q *db.Queries, m *stockmovement.Move
 	tid, _ := uuid.Parse(m.TenantID().String())
 	aid, _ := uuid.Parse(m.ActorMembershipID().String())
 	return q.InsertStockMovement(ctx, db.InsertStockMovementParams{
-		ID:                  pgUUID(mid),
-		BatchID:             pgUUID(bid),
-		ProductID:           pgUUID(pid),
-		TenantID:            pgUUID(tid),
+		ID:                  pgconv.PgUUID(mid),
+		BatchID:             pgconv.PgUUID(bid),
+		ProductID:           pgconv.PgUUID(pid),
+		TenantID:            pgconv.PgUUID(tid),
 		Type:                string(m.Type()),
 		Quantity:            m.Quantity(),
 		QuantityOnHandAfter: m.QuantityOnHandAfter(),
 		Reason:              m.Reason(),
-		ActorMembershipID:   pgUUID(aid),
+		ActorMembershipID:   pgconv.PgUUID(aid),
 		SourceReference:     m.SourceReference(),
-		OccurredAt:          pgRequiredTimestamp(m.OccurredAt()),
+		OccurredAt:          pgconv.PgRequiredTimestamp(m.OccurredAt()),
 	})
 }
 
@@ -177,11 +178,11 @@ func drainMovementEvents(ctx context.Context, tx pgx.Tx, m *stockmovement.Moveme
 }
 
 func rowToMovement(row db.InventoryStockMovement) *stockmovement.Movement {
-	mid := stockmovement.ID(uuidFromPg(row.ID).String())
-	bid := batch.ID(uuidFromPg(row.BatchID).String())
-	pid := product.ID(uuidFromPg(row.ProductID).String())
-	tid := tenant.ID(uuidFromPg(row.TenantID).String())
-	aid := membership.ID(uuidFromPg(row.ActorMembershipID).String())
+	mid := stockmovement.ID(pgconv.UUIDFromPg(row.ID).String())
+	bid := batch.ID(pgconv.UUIDFromPg(row.BatchID).String())
+	pid := product.ID(pgconv.UUIDFromPg(row.ProductID).String())
+	tid := tenant.ID(pgconv.UUIDFromPg(row.TenantID).String())
+	aid := membership.ID(pgconv.UUIDFromPg(row.ActorMembershipID).String())
 	return stockmovement.UnmarshalFromDB(stockmovement.Snapshot{
 		ID:                  mid,
 		BatchID:             bid,
@@ -193,6 +194,6 @@ func rowToMovement(row db.InventoryStockMovement) *stockmovement.Movement {
 		Reason:              row.Reason,
 		ActorMembershipID:   aid,
 		SourceReference:     row.SourceReference,
-		OccurredAt:          timeFromPg(row.OccurredAt),
+		OccurredAt:          pgconv.TimeFromPg(row.OccurredAt),
 	})
 }

@@ -16,9 +16,10 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/leadkart/leadkart-go/internal/identity/adapters/db"
 	"github.com/leadkart/leadkart-go/internal/common/audit"
 	"github.com/leadkart/leadkart-go/internal/common/pg"
+	"github.com/leadkart/leadkart-go/internal/common/pgconv"
+	"github.com/leadkart/leadkart-go/internal/identity/adapters/db"
 )
 
 // AuditReaderPG is the concrete pg-backed implementation of
@@ -58,9 +59,9 @@ func (r *AuditReaderPG) ListByTenant(
 	var rows []db.BuildingblocksAuditLogEntry
 	err := r.tx.WithinTxPgx(ctx, pg.TxScopePlatform, func(ctx context.Context, tx pgx.Tx) error {
 		out, qerr := r.q.WithTx(tx).ListAuditEventsByTenantPage(ctx, db.ListAuditEventsByTenantPageParams{
-			TenantID:       pgUUID(tenantID),
-			BeforeOccurred: pgRequiredTimestamp(before),
-			BeforeID:       pgUUID(beforeID),
+			TenantID:       pgconv.PgUUID(tenantID),
+			BeforeOccurred: pgconv.PgRequiredTimestamp(before),
+			BeforeID:       pgconv.PgUUID(beforeID),
 			Limit:          limit,
 		})
 		if qerr != nil {
@@ -87,9 +88,9 @@ func (r *AuditReaderPG) ListByUser(
 	var rows []db.BuildingblocksAuditLogEntry
 	err := r.tx.WithinTxPgx(ctx, pg.TxScopePlatform, func(ctx context.Context, tx pgx.Tx) error {
 		out, qerr := r.q.WithTx(tx).ListAuditEventsByUserPage(ctx, db.ListAuditEventsByUserPageParams{
-			UserID:         pgUUID(userID),
-			BeforeOccurred: pgRequiredTimestamp(before),
-			BeforeID:       pgUUID(beforeID),
+			UserID:         pgconv.PgUUID(userID),
+			BeforeOccurred: pgconv.PgRequiredTimestamp(before),
+			BeforeID:       pgconv.PgUUID(beforeID),
 			Limit:          limit,
 		})
 		if qerr != nil {
@@ -108,12 +109,12 @@ func rowsToEntries(rows []db.BuildingblocksAuditLogEntry) []audit.Entry {
 	out := make([]audit.Entry, 0, len(rows))
 	for _, r := range rows {
 		e := audit.Entry{
-			ID:            uuidFromPg(r.ID),
+			ID:            pgconv.UUIDFromPg(r.ID),
 			Action:        r.Action,
-			UserID:        uuidFromPg(r.UserID),
-			TenantID:      uuidFromPg(r.TenantID),
-			CorrelationID: uuidFromPg(r.CorrelationID),
-			OccurredAtUTC: timeFromPg(r.OccurredAtUtc),
+			UserID:        pgconv.UUIDFromPg(r.UserID),
+			TenantID:      pgconv.UUIDFromPg(r.TenantID),
+			CorrelationID: pgconv.UUIDFromPg(r.CorrelationID),
+			OccurredAtUTC: pgconv.TimeFromPg(r.OccurredAtUtc),
 			Duration:      time.Duration(r.DurationMs) * time.Millisecond,
 			Succeeded:     r.Succeeded,
 			Payload:       r.Payload,

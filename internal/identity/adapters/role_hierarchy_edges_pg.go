@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/leadkart/leadkart-go/internal/common/pg"
+	"github.com/leadkart/leadkart-go/internal/common/pgconv"
 	"github.com/leadkart/leadkart-go/internal/identity/adapters/db"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/role"
@@ -86,7 +87,7 @@ func (r *RoleHierarchyEdgeRepository) GetActiveByChild(
 	var out *rolehierarchy.Edge
 	err = r.tx.WithinTxPgxTenant(ctx, tenantID.String(), func(ctx context.Context, tx pgx.Tx) error {
 		q := r.q.WithTx(tx)
-		row, qerr := q.GetActiveHierarchyEdgeByChild(ctx, pgUUID(cid))
+		row, qerr := q.GetActiveHierarchyEdgeByChild(ctx, pgconv.PgUUID(cid))
 		if qerr != nil {
 			if errors.Is(qerr, pgx.ErrNoRows) {
 				return rolehierarchy.ErrEdgeNotFound
@@ -168,7 +169,7 @@ func (r *RoleHierarchyEdgeRepository) GetAncestorsByChild(
 	var out []*rolehierarchy.Edge
 	err = r.tx.WithinTxPgxTenant(ctx, tenantID.String(), func(ctx context.Context, tx pgx.Tx) error {
 		q := r.q.WithTx(tx)
-		rows, qerr := q.GetHierarchyAncestorsByChild(ctx, pgUUID(cid))
+		rows, qerr := q.GetHierarchyAncestorsByChild(ctx, pgconv.PgUUID(cid))
 		if qerr != nil {
 			return fmt.Errorf("edge repo: get ancestors by child: %w", qerr)
 		}
@@ -201,7 +202,7 @@ func (r *RoleHierarchyEdgeRepository) ListActiveByParent(
 	var out []*rolehierarchy.Edge
 	err = r.tx.WithinTxPgxTenant(ctx, tenantID.String(), func(ctx context.Context, tx pgx.Tx) error {
 		q := r.q.WithTx(tx)
-		rows, qerr := q.ListActiveHierarchyEdgesByParent(ctx, pgUUID(pid))
+		rows, qerr := q.ListActiveHierarchyEdgesByParent(ctx, pgconv.PgUUID(pid))
 		if qerr != nil {
 			return fmt.Errorf("edge repo: list active by parent: %w", qerr)
 		}
@@ -232,7 +233,7 @@ func loadHierarchyEdge(
 	if err != nil {
 		return nil, fmt.Errorf("edge repo: parse id %q: %w", id, err)
 	}
-	row, err := q.GetHierarchyEdgeByID(ctx, pgUUID(rid))
+	row, err := q.GetHierarchyEdgeByID(ctx, pgconv.PgUUID(rid))
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, rolehierarchy.ErrEdgeNotFound
@@ -263,24 +264,21 @@ func insertHierarchyEdgeRow(
 	if err != nil {
 		return fmt.Errorf("edge repo: parse parent id %q: %w", e.ParentRoleID(), err)
 	}
-	var establishedByPg = pgUUIDOpt(uuid.Nil)
+	var establishedByPg = pgconv.PgUUIDOrNull(uuid.Nil)
 	if mid := e.EstablishedByMembershipID(); !mid.IsZero() {
 		muid, perr := uuid.Parse(mid.String())
 		if perr != nil {
 			return fmt.Errorf("edge repo: parse established_by %q: %w", mid, perr)
 		}
-		establishedByPg = pgUUIDOpt(muid)
+		establishedByPg = pgconv.PgUUIDOrNull(muid)
 	}
-	var reasonPg *string
-	if rsn := e.Reason(); rsn != "" {
-		reasonPg = &rsn
-	}
+	reasonPg := pgconv.ZeroToNil(e.Reason())
 	err = q.InsertHierarchyEdge(ctx, db.InsertHierarchyEdgeParams{
-		ID:                        pgUUID(rid),
-		TenantID:                  pgUUID(tid),
-		ChildRoleID:               pgUUID(cid),
-		ParentRoleID:              pgUUID(pid),
-		EstablishedAt:             pgRequiredTimestamp(e.EstablishedAt()),
+		ID:                        pgconv.PgUUID(rid),
+		TenantID:                  pgconv.PgUUID(tid),
+		ChildRoleID:               pgconv.PgUUID(cid),
+		ParentRoleID:              pgconv.PgUUID(pid),
+		EstablishedAt:             pgconv.PgRequiredTimestamp(e.EstablishedAt()),
 		EstablishedByMembershipID: establishedByPg,
 		Reason:                    reasonPg,
 	})
@@ -302,21 +300,18 @@ func persistHierarchyEdgeRemoval(
 	if err != nil {
 		return fmt.Errorf("edge repo: parse id %q: %w", e.ID(), err)
 	}
-	var removedByPg = pgUUIDOpt(uuid.Nil)
+	var removedByPg = pgconv.PgUUIDOrNull(uuid.Nil)
 	if mid := e.RemovedByMembershipID(); !mid.IsZero() {
 		muid, perr := uuid.Parse(mid.String())
 		if perr != nil {
 			return fmt.Errorf("edge repo: parse removed_by %q: %w", mid, perr)
 		}
-		removedByPg = pgUUIDOpt(muid)
+		removedByPg = pgconv.PgUUIDOrNull(muid)
 	}
-	var reasonPg *string
-	if rsn := e.RemovalReason(); rsn != "" {
-		reasonPg = &rsn
-	}
+	reasonPg := pgconv.ZeroToNil(e.RemovalReason())
 	err = q.UpdateHierarchyEdgeRemoved(ctx, db.UpdateHierarchyEdgeRemovedParams{
-		ID:                    pgUUID(rid),
-		RemovedAt:             pgTimestamp(e.RemovedAt()),
+		ID:                    pgconv.PgUUID(rid),
+		RemovedAt:             pgconv.PgTimestamp(e.RemovedAt()),
 		RemovedByMembershipID: removedByPg,
 		RemovalReason:         reasonPg,
 	})
@@ -368,11 +363,11 @@ func rowToHierarchyEdgeFromCols(
 	remAt pgtype.Timestamptz, remBy pgtype.UUID, remReason *string,
 ) *rolehierarchy.Edge {
 	establishedBy := membership.ID("")
-	if v := uuidFromPg(estBy); v != uuid.Nil {
+	if v := pgconv.UUIDFromPg(estBy); v != uuid.Nil {
 		establishedBy = membership.ID(v.String())
 	}
 	removedBy := membership.ID("")
-	if v := uuidFromPg(remBy); v != uuid.Nil {
+	if v := pgconv.UUIDFromPg(remBy); v != uuid.Nil {
 		removedBy = membership.ID(v.String())
 	}
 	reasonStr := ""
@@ -384,14 +379,14 @@ func rowToHierarchyEdgeFromCols(
 		removalReasonStr = *remReason
 	}
 	return rolehierarchy.UnmarshalFromDB(rolehierarchy.Snapshot{
-		ID:                        rolehierarchy.ID(uuidFromPg(id).String()),
-		TenantID:                  tenant.ID(uuidFromPg(tid).String()),
-		ChildRoleID:               role.ID(uuidFromPg(cid).String()),
-		ParentRoleID:              role.ID(uuidFromPg(pid).String()),
-		EstablishedAt:             timeFromPg(estAt),
+		ID:                        rolehierarchy.ID(pgconv.UUIDFromPg(id).String()),
+		TenantID:                  tenant.ID(pgconv.UUIDFromPg(tid).String()),
+		ChildRoleID:               role.ID(pgconv.UUIDFromPg(cid).String()),
+		ParentRoleID:              role.ID(pgconv.UUIDFromPg(pid).String()),
+		EstablishedAt:             pgconv.TimeFromPg(estAt),
 		EstablishedByMembershipID: establishedBy,
 		Reason:                    reasonStr,
-		RemovedAt:                 timeFromPg(remAt),
+		RemovedAt:                 pgconv.TimeFromPg(remAt),
 		RemovedByMembershipID:     removedBy,
 		RemovalReason:             removalReasonStr,
 	})

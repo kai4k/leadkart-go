@@ -8,11 +8,12 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/leadkart/leadkart-go/internal/common/pagination"
 	"github.com/leadkart/leadkart-go/internal/common/pg"
+	"github.com/leadkart/leadkart-go/internal/common/pgconv"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 	"github.com/leadkart/leadkart-go/internal/inventory/adapters/db"
 	"github.com/leadkart/leadkart-go/internal/inventory/domain/product"
@@ -118,23 +119,23 @@ func (r *ProductRepository) ListPage(ctx context.Context, tenantID tenant.ID, fi
 
 	// Cursor → SQL parameters. Empty cursor (first page) uses sentinel
 	// "infinity" values so `(created_at, id) < (sort, id)` matches all.
-	cursorCreatedAt := pgRequiredTimestamp(maxCursorTime())
+	cursorCreatedAt := pgconv.PgRequiredTimestamp(maxCursorTime())
 	var cursorID pgtype.UUID
-	cursorID = pgUUID(maxCursorUUID())
+	cursorID = pgconv.PgUUID(maxCursorUUID())
 	if cursor.ID != "" {
-		cursorCreatedAt = pgRequiredTimestamp(cursor.SortValue)
+		cursorCreatedAt = pgconv.PgRequiredTimestamp(cursor.SortValue)
 		uid, perr := uuid.Parse(cursor.ID)
 		if perr != nil {
 			return pagination.Page[*product.Product]{}, fmt.Errorf("product repo: parse cursor id: %w", perr)
 		}
-		cursorID = pgUUID(uid)
+		cursorID = pgconv.PgUUID(uid)
 	}
 
 	var out []*product.Product
 	err = r.tx.WithinTxPgxTenant(ctx, tenantID.String(), func(ctx context.Context, tx pgx.Tx) error {
 		q := r.q.WithTx(tx)
 		rows, err := q.ListProductsByTenantPage(ctx, db.ListProductsByTenantPageParams{
-			TenantID:        pgUUID(tid),
+			TenantID:        pgconv.PgUUID(tid),
 			CursorCreatedAt: cursorCreatedAt,
 			CursorID:        cursorID,
 			ActiveOnly:      filter.ActiveOnly,
@@ -173,7 +174,7 @@ func loadProduct(ctx context.Context, q *db.Queries, id product.ID) (*product.Pr
 	if err != nil {
 		return nil, fmt.Errorf("product repo: parse id %q: %w", id, err)
 	}
-	row, err := q.GetProductByID(ctx, pgUUID(uid))
+	row, err := q.GetProductByID(ctx, pgconv.PgUUID(uid))
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, product.ErrNotFound
@@ -193,19 +194,19 @@ func insertProductRow(ctx context.Context, q *db.Queries, p *product.Product) er
 		return fmt.Errorf("product repo: parse tenant id: %w", err)
 	}
 	err = q.InsertProduct(ctx, db.InsertProductParams{
-		ID:           pgUUID(pid),
-		TenantID:     pgUUID(tid),
-		Sku:          p.SKU(),
-		Name:         p.Name(),
-		DosageForm:   p.DosageForm(),
-		PackSize:     p.PackSize(),
-		HsnCode:      p.HSNCode(),
+		ID:         pgconv.PgUUID(pid),
+		TenantID:   pgconv.PgUUID(tid),
+		Sku:        p.SKU(),
+		Name:       p.Name(),
+		DosageForm: p.DosageForm(),
+		PackSize:   p.PackSize(),
+		HsnCode:    p.HSNCode(),
 		//nolint:gosec // bounded by aggregate invariant
 		GstRateBps:   int32(p.GSTRateBps()),
 		Manufacturer: p.Manufacturer(),
 		IsActive:     p.IsActive(),
-		CreatedAt:    pgRequiredTimestamp(p.CreatedAt()),
-		UpdatedAt:    pgRequiredTimestamp(p.UpdatedAt()),
+		CreatedAt:    pgconv.PgRequiredTimestamp(p.CreatedAt()),
+		UpdatedAt:    pgconv.PgRequiredTimestamp(p.UpdatedAt()),
 	})
 	if err != nil {
 		if isSKUUniqueViolation(err) {
@@ -223,10 +224,10 @@ func persistProductState(ctx context.Context, q *db.Queries, p *product.Product)
 	}
 	if p.IsDeleted() {
 		err = q.SoftDeleteProduct(ctx, db.SoftDeleteProductParams{
-			ID:        pgUUID(pid),
-			DeletedAt: pgRequiredTimestamp(p.DeletedAt()),
-			DeletedBy: stringPtrFromValue(p.DeletedBy()),
-			UpdatedAt: pgRequiredTimestamp(p.UpdatedAt()),
+			ID:        pgconv.PgUUID(pid),
+			DeletedAt: pgconv.PgRequiredTimestamp(p.DeletedAt()),
+			DeletedBy: pgconv.ZeroToNil(p.DeletedBy()),
+			UpdatedAt: pgconv.PgRequiredTimestamp(p.UpdatedAt()),
 		})
 		if err != nil {
 			return fmt.Errorf("product repo: soft delete: %w", err)
@@ -234,13 +235,13 @@ func persistProductState(ctx context.Context, q *db.Queries, p *product.Product)
 		return nil
 	}
 	err = q.UpdateProduct(ctx, db.UpdateProductParams{
-		ID:           pgUUID(pid),
-		Name:         p.Name(),
+		ID:   pgconv.PgUUID(pid),
+		Name: p.Name(),
 		//nolint:gosec // bounded by aggregate invariant
 		GstRateBps:   int32(p.GSTRateBps()),
 		Manufacturer: p.Manufacturer(),
 		IsActive:     p.IsActive(),
-		UpdatedAt:    pgRequiredTimestamp(p.UpdatedAt()),
+		UpdatedAt:    pgconv.PgRequiredTimestamp(p.UpdatedAt()),
 	})
 	if err != nil {
 		if isSKUUniqueViolation(err) {
@@ -252,8 +253,8 @@ func persistProductState(ctx context.Context, q *db.Queries, p *product.Product)
 }
 
 func rowToProduct(row db.InventoryProduct) (*product.Product, error) {
-	pid := product.ID(uuidFromPg(row.ID).String())
-	tid := tenant.ID(uuidFromPg(row.TenantID).String())
+	pid := product.ID(pgconv.UUIDFromPg(row.ID).String())
+	tid := tenant.ID(pgconv.UUIDFromPg(row.TenantID).String())
 	deletedBy := ""
 	if row.DeletedBy != nil {
 		deletedBy = *row.DeletedBy
@@ -269,10 +270,10 @@ func rowToProduct(row db.InventoryProduct) (*product.Product, error) {
 		GSTRateBps:   int(row.GstRateBps),
 		Manufacturer: row.Manufacturer,
 		IsActive:     row.IsActive,
-		CreatedAt:    timeFromPg(row.CreatedAt),
-		UpdatedAt:    timeFromPg(row.UpdatedAt),
+		CreatedAt:    pgconv.TimeFromPg(row.CreatedAt),
+		UpdatedAt:    pgconv.TimeFromPg(row.UpdatedAt),
 		IsDeleted:    row.IsDeleted,
-		DeletedAt:    timeFromPg(row.DeletedAt),
+		DeletedAt:    pgconv.TimeFromPg(row.DeletedAt),
 		DeletedBy:    deletedBy,
 	}), nil
 }

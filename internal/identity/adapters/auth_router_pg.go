@@ -9,10 +9,11 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/leadkart/leadkart-go/internal/common/email"
+	"github.com/leadkart/leadkart-go/internal/common/pg"
+	"github.com/leadkart/leadkart-go/internal/common/pgconv"
 	"github.com/leadkart/leadkart-go/internal/identity/adapters/db"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
-	"github.com/leadkart/leadkart-go/internal/common/pg"
 )
 
 // AuthRouterPG is the postgres-backed authentication-routing adapter.
@@ -170,7 +171,7 @@ func (r *AuthRouterPG) ResolveByEmail(
 			CreatedByMembershipID: row.CreatedByMembershipID,
 		}
 
-		mid := uuidFromPg(row.MembershipID)
+		mid := pgconv.UUIDFromPg(row.MembershipID)
 		roleIDs, err := loadRoleAssignments(ctx, q, mid)
 		if err != nil {
 			return err

@@ -12,6 +12,7 @@ import (
 
 	"github.com/leadkart/leadkart-go/internal/common/ids"
 	"github.com/leadkart/leadkart-go/internal/common/pg"
+	"github.com/leadkart/leadkart-go/internal/common/pgconv"
 	"github.com/leadkart/leadkart-go/internal/identity/app/actclaim"
 	"github.com/leadkart/leadkart-go/internal/platform/adapters/db"
 	"github.com/leadkart/leadkart-go/internal/platform/integrationevents"
@@ -73,11 +74,11 @@ func writeOutboxEvents(
 			return fmt.Errorf("platform outbox: marshal %s: %w", ev.Topic(), err)
 		}
 		err = q.InsertPlatformOutboxEvent(ctx, db.InsertPlatformOutboxEventParams{
-			ID:            pgUUID(ids.NewV7()),
-			TenantID:      pgUUIDOrNull(tenantID),
+			ID:            pgconv.PgUUID(ids.NewV7()),
+			TenantID:      pgconv.PgUUIDOrNull(tenantID),
 			Topic:         ev.Topic(),
 			Payload:       payload,
-			OccurredAt:    pgRequiredTimestamp(ev.OccurredAt()),
+			OccurredAt:    pgconv.PgRequiredTimestamp(ev.OccurredAt()),
 			ActOperatorID: actOperatorID,
 			ActSessionID:  actSessionID,
 			ActReason:     actReason,
@@ -139,17 +140,12 @@ func outboxActParams(ctx context.Context) (pgtype.UUID, pgtype.UUID, *string) {
 		sesID pgtype.UUID
 	)
 	if parsed, err := uuid.Parse(c.OperatorID); err == nil {
-		opID = pgUUID(parsed)
+		opID = pgconv.PgUUID(parsed)
 	}
 	if parsed, err := uuid.Parse(c.SessionID); err == nil {
-		sesID = pgUUID(parsed)
+		sesID = pgconv.PgUUID(parsed)
 	}
-	var reason *string
-	if c.Reason != "" {
-		r := c.Reason
-		reason = &r
-	}
-	return opID, sesID, reason
+	return opID, sesID, pgconv.ZeroToNil(c.Reason)
 }
 
 // drainEventsToOutbox is the shared "pull domain events + map + persist"

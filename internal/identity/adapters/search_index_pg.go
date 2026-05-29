@@ -14,9 +14,10 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/leadkart/leadkart-go/internal/common/pg"
+	"github.com/leadkart/leadkart-go/internal/common/pgconv"
 	"github.com/leadkart/leadkart-go/internal/identity/adapters/db"
 	"github.com/leadkart/leadkart-go/internal/identity/app/query"
-	"github.com/leadkart/leadkart-go/internal/common/pg"
 )
 
 // SearchIndexPG implements [query.SearchIndex] over pg_trgm GIN
@@ -59,11 +60,11 @@ func (s *SearchIndexPG) SearchPersons(ctx context.Context, q string, limit int32
 		hits = make([]query.SearchPersonHit, 0, len(rows))
 		for _, r := range rows {
 			hits = append(hits, query.SearchPersonHit{
-				ID:        uuidFromPg(r.ID).String(),
+				ID:        pgconv.UUIDFromPg(r.ID).String(),
 				Email:     r.Email,
 				FirstName: r.FirstName,
 				LastName:  r.LastName,
-				CreatedAt: timeFromPg(r.CreatedAt),
+				CreatedAt: pgconv.TimeFromPg(r.CreatedAt),
 			})
 		}
 		return nil
@@ -88,12 +89,12 @@ func (s *SearchIndexPG) SearchTenants(ctx context.Context, q string, limit int32
 		hits = make([]query.SearchTenantHit, 0, len(rows))
 		for _, r := range rows {
 			hits = append(hits, query.SearchTenantHit{
-				ID:          uuidFromPg(r.ID).String(),
+				ID:          pgconv.UUIDFromPg(r.ID).String(),
 				Slug:        r.Slug,
 				LegalName:   r.LegalName,
 				DisplayName: r.DisplayName,
 				Status:      r.Status,
-				CreatedAt:   timeFromPg(r.CreatedAt),
+				CreatedAt:   pgconv.TimeFromPg(r.CreatedAt),
 			})
 		}
 		return nil

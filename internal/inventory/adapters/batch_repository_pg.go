@@ -8,11 +8,12 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/leadkart/leadkart-go/internal/common/pagination"
 	"github.com/leadkart/leadkart-go/internal/common/pg"
+	"github.com/leadkart/leadkart-go/internal/common/pgconv"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 	"github.com/leadkart/leadkart-go/internal/inventory/adapters/db"
 	"github.com/leadkart/leadkart-go/internal/inventory/domain/batch"
@@ -99,7 +100,7 @@ func (r *BatchRepository) lockBatchRowForUpdate(ctx context.Context, tx pgx.Tx, 
 	if err != nil {
 		return fmt.Errorf("batch repo: parse id %q: %w", id, err)
 	}
-	if _, scanErr := r.q.WithTx(tx).LockBatchForUpdate(ctx, pgUUID(bid)); scanErr != nil {
+	if _, scanErr := r.q.WithTx(tx).LockBatchForUpdate(ctx, pgconv.PgUUID(bid)); scanErr != nil {
 		if errors.Is(scanErr, pgx.ErrNoRows) {
 			return batch.ErrNotFound
 		}
@@ -172,22 +173,22 @@ func (r *BatchRepository) ListByProductPage(ctx context.Context, tenantID tenant
 		return pagination.Page[*batch.Batch]{}, fmt.Errorf("batch repo: parse product id: %w", err)
 	}
 
-	cursorExpiry := pgDate(maxCursorTime())
-	cursorID := pgUUID(maxCursorUUID())
+	cursorExpiry := pgconv.PgDate(maxCursorTime())
+	cursorID := pgconv.PgUUID(maxCursorUUID())
 	if cursor.ID != "" {
-		cursorExpiry = pgDate(cursor.SortValue)
+		cursorExpiry = pgconv.PgDate(cursor.SortValue)
 		uid, perr := uuid.Parse(cursor.ID)
 		if perr != nil {
 			return pagination.Page[*batch.Batch]{}, fmt.Errorf("batch repo: parse cursor id: %w", perr)
 		}
-		cursorID = pgUUID(uid)
+		cursorID = pgconv.PgUUID(uid)
 	}
 
 	var out []*batch.Batch
 	err = r.tx.WithinTxPgxTenant(ctx, tenantID.String(), func(ctx context.Context, tx pgx.Tx) error {
 		q := r.q.WithTx(tx)
 		rows, err := q.ListBatchesByProductPage(ctx, db.ListBatchesByProductPageParams{
-			ProductID:        pgUUID(pid),
+			ProductID:        pgconv.PgUUID(pid),
 			CursorExpiryDate: cursorExpiry,
 			CursorID:         cursorID,
 			IncludeExpired:   filter.IncludeExpired,
@@ -228,7 +229,7 @@ func (r *BatchRepository) AnyLiveWithStockForProduct(ctx context.Context, tenant
 	var exists bool
 	err = r.tx.WithinTxPgxTenant(ctx, tenantID.String(), func(ctx context.Context, tx pgx.Tx) error {
 		q := r.q.WithTx(tx)
-		got, err := q.AnyLiveBatchWithStockForProduct(ctx, pgUUID(pid))
+		got, err := q.AnyLiveBatchWithStockForProduct(ctx, pgconv.PgUUID(pid))
 		if err != nil {
 			return fmt.Errorf("batch repo: any live with stock: %w", err)
 		}
@@ -245,7 +246,7 @@ func loadBatch(ctx context.Context, q *db.Queries, id batch.ID) (*batch.Batch, e
 	if err != nil {
 		return nil, fmt.Errorf("batch repo: parse id %q: %w", id, err)
 	}
-	row, err := q.GetBatchByID(ctx, pgUUID(bid))
+	row, err := q.GetBatchByID(ctx, pgconv.PgUUID(bid))
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, batch.ErrNotFound
@@ -260,20 +261,20 @@ func insertBatchRow(ctx context.Context, q *db.Queries, b *batch.Batch) error {
 	pid, _ := uuid.Parse(b.ProductID().String())
 	tid, _ := uuid.Parse(b.TenantID().String())
 	err := q.InsertBatch(ctx, db.InsertBatchParams{
-		ID:                         pgUUID(bid),
-		ProductID:                  pgUUID(pid),
-		TenantID:                   pgUUID(tid),
+		ID:                         pgconv.PgUUID(bid),
+		ProductID:                  pgconv.PgUUID(pid),
+		TenantID:                   pgconv.PgUUID(tid),
 		BatchNumber:                b.BatchNumber(),
-		ManufactureDate:            pgDate(b.ManufactureDate()),
-		ExpiryDate:                 pgDate(b.ExpiryDate()),
+		ManufactureDate:            pgconv.PgDate(b.ManufactureDate()),
+		ExpiryDate:                 pgconv.PgDate(b.ExpiryDate()),
 		ManufacturerName:           b.ManufacturerName(),
 		ManufacturingLicenceNumber: b.ManufacturingLicenceNumber(),
 		MrpPaise:                   b.MRPPaise(),
 		PurchasePricePaise:         b.PurchasePricePaise(),
 		QuantityOnHand:             b.QuantityOnHand(),
 		Version:                    b.Version(),
-		CreatedAt:                  pgRequiredTimestamp(b.CreatedAt()),
-		UpdatedAt:                  pgRequiredTimestamp(b.UpdatedAt()),
+		CreatedAt:                  pgconv.PgRequiredTimestamp(b.CreatedAt()),
+		UpdatedAt:                  pgconv.PgRequiredTimestamp(b.UpdatedAt()),
 	})
 	if err != nil {
 		if isBatchNumberUniqueViolation(err) {
@@ -297,15 +298,15 @@ func persistBatchState(ctx context.Context, q *db.Queries, b *batch.Batch, expec
 	var deletedAt pgtype.Timestamptz
 	var deletedBy *string
 	if b.IsDeleted() {
-		deletedAt = pgRequiredTimestamp(b.DeletedAt())
+		deletedAt = pgconv.PgRequiredTimestamp(b.DeletedAt())
 		dbStr := b.DeletedBy()
 		deletedBy = &dbStr
 	}
 	rowsAffected, err := q.UpdateBatchWithVersionCheck(ctx, db.UpdateBatchWithVersionCheckParams{
-		ID:                         pgUUID(bid),
+		ID:                         pgconv.PgUUID(bid),
 		QuantityOnHand:             b.QuantityOnHand(),
 		Version:                    b.Version(),
-		UpdatedAt:                  pgRequiredTimestamp(b.UpdatedAt()),
+		UpdatedAt:                  pgconv.PgRequiredTimestamp(b.UpdatedAt()),
 		IsDeleted:                  b.IsDeleted(),
 		DeletedAt:                  deletedAt,
 		DeletedBy:                  deletedBy,
@@ -341,9 +342,9 @@ func drainBatchEvents(ctx context.Context, tx pgx.Tx, b *batch.Batch) error {
 }
 
 func rowToBatch(row db.InventoryBatch) (*batch.Batch, error) {
-	bid := batch.ID(uuidFromPg(row.ID).String())
-	pid := product.ID(uuidFromPg(row.ProductID).String())
-	tid := tenant.ID(uuidFromPg(row.TenantID).String())
+	bid := batch.ID(pgconv.UUIDFromPg(row.ID).String())
+	pid := product.ID(pgconv.UUIDFromPg(row.ProductID).String())
+	tid := tenant.ID(pgconv.UUIDFromPg(row.TenantID).String())
 	deletedBy := ""
 	if row.DeletedBy != nil {
 		deletedBy = *row.DeletedBy
@@ -353,18 +354,18 @@ func rowToBatch(row db.InventoryBatch) (*batch.Batch, error) {
 		ProductID:                  pid,
 		TenantID:                   tid,
 		BatchNumber:                row.BatchNumber,
-		ManufactureDate:            timeFromPgDate(row.ManufactureDate),
-		ExpiryDate:                 timeFromPgDate(row.ExpiryDate),
+		ManufactureDate:            pgconv.TimeFromPgDate(row.ManufactureDate),
+		ExpiryDate:                 pgconv.TimeFromPgDate(row.ExpiryDate),
 		ManufacturerName:           row.ManufacturerName,
 		ManufacturingLicenceNumber: row.ManufacturingLicenceNumber,
 		MRPPaise:                   row.MrpPaise,
 		PurchasePricePaise:         row.PurchasePricePaise,
 		QuantityOnHand:             row.QuantityOnHand,
 		Version:                    row.Version,
-		CreatedAt:                  timeFromPg(row.CreatedAt),
-		UpdatedAt:                  timeFromPg(row.UpdatedAt),
+		CreatedAt:                  pgconv.TimeFromPg(row.CreatedAt),
+		UpdatedAt:                  pgconv.TimeFromPg(row.UpdatedAt),
 		IsDeleted:                  row.IsDeleted,
-		DeletedAt:                  timeFromPg(row.DeletedAt),
+		DeletedAt:                  pgconv.TimeFromPg(row.DeletedAt),
 		DeletedBy:                  deletedBy,
 	}), nil
 }

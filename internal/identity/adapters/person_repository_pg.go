@@ -11,9 +11,10 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/leadkart/leadkart-go/internal/common/email"
+	"github.com/leadkart/leadkart-go/internal/common/pg"
+	"github.com/leadkart/leadkart-go/internal/common/pgconv"
 	"github.com/leadkart/leadkart-go/internal/identity/adapters/db"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
-	"github.com/leadkart/leadkart-go/internal/common/pg"
 )
 
 // PersonRepository is the pgx/sqlc-backed implementation of
@@ -101,7 +102,7 @@ func (r *PersonRepository) GetByIDs(ctx context.Context, ids []person.ID) (map[p
 		if err != nil {
 			return nil, err
 		}
-		uids = append(uids, pgUUID(u))
+		uids = append(uids, pgconv.PgUUID(u))
 	}
 	rows, err := r.q.GetPersonsByIDs(ctx, uids)
 	if err != nil {
@@ -145,10 +146,10 @@ func (r *PersonRepository) updateLockoutOnTx(ctx context.Context, tx pgx.Tx, p *
 		return err
 	}
 	params := db.UpdatePersonLockoutStateParams{
-		ID:                pgUUID(uid),
+		ID:                pgconv.PgUUID(uid),
 		FailedLoginCount:  int32(p.FailedLoginCount()), //nolint:gosec // bounded by MaxFailedLogins (=10)
-		LockedUntil:       pgTimestamp(p.LockedUntil()),
-		LastFailedLoginAt: pgTimestamp(p.LastFailedLoginAt()),
+		LockedUntil:       pgconv.PgTimestamp(p.LockedUntil()),
+		LastFailedLoginAt: pgconv.PgTimestamp(p.LastFailedLoginAt()),
 	}
 	if err := q.UpdatePersonLockoutState(ctx, params); err != nil {
 		return fmt.Errorf("person repo: update lockout state: %w", err)
@@ -212,7 +213,7 @@ func loadPerson(ctx context.Context, q *db.Queries, id person.ID) (*person.Perso
 	if err != nil {
 		return nil, err
 	}
-	row, err := q.GetPersonByID(ctx, pgUUID(uid))
+	row, err := q.GetPersonByID(ctx, pgconv.PgUUID(uid))
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, person.ErrNotFound
@@ -232,22 +233,22 @@ func insertPersonRow(ctx context.Context, q *db.Queries, p *person.Person) error
 		return fmt.Errorf("person repo: parse security_stamp: %w", err)
 	}
 	params := db.InsertPersonParams{
-		ID:                     pgUUID(uid),
+		ID:                     pgconv.PgUUID(uid),
 		Email:                  p.Email().String(),
 		FirstName:              p.FirstName(),
 		LastName:               p.LastName(),
 		PasswordHash:           p.PasswordHash().String(),
-		SecurityStamp:          pgUUID(stampUUID),
+		SecurityStamp:          pgconv.PgUUID(stampUUID),
 		IsActive:               p.IsActive(),
 		IsAnonymised:           p.IsAnonymised(),
-		CreatedAt:              pgRequiredTimestamp(p.CreatedAt()),
+		CreatedAt:              pgconv.PgRequiredTimestamp(p.CreatedAt()),
 		IsGloballySuspended:    p.IsGloballySuspended(),
 		GlobalSuspensionReason: p.GlobalSuspensionReason(),
-		GloballySuspendedAt:    pgTimestamp(p.GloballySuspendedAt()),
+		GloballySuspendedAt:    pgconv.PgTimestamp(p.GloballySuspendedAt()),
 		MustChangePassword:     p.MustChangePassword(),
 		FailedLoginCount:       int32(p.FailedLoginCount()), //nolint:gosec // bounded by MaxFailedLogins (=10)
-		LockedUntil:            pgTimestamp(p.LockedUntil()),
-		LastFailedLoginAt:      pgTimestamp(p.LastFailedLoginAt()),
+		LockedUntil:            pgconv.PgTimestamp(p.LockedUntil()),
+		LastFailedLoginAt:      pgconv.PgTimestamp(p.LastFailedLoginAt()),
 	}
 	applyPendingResetTo(&params, p.PendingPasswordReset())
 	applyPendingEmailChangeTo(&params, p.PendingEmailChange())
@@ -273,7 +274,7 @@ func applyPendingResetTo(p *db.InsertPersonParams, pr person.PendingPasswordRese
 	}
 	hash := pr.Hash().String()
 	p.PasswordResetTokenHash = &hash
-	p.PasswordResetExpiresAt = pgTimestamp(pr.ExpiresAt())
+	p.PasswordResetExpiresAt = pgconv.PgTimestamp(pr.ExpiresAt())
 }
 
 func applyPendingEmailChangeTo(p *db.InsertPersonParams, ec person.PendingEmailChange) {
@@ -284,7 +285,7 @@ func applyPendingEmailChangeTo(p *db.InsertPersonParams, ec person.PendingEmailC
 	newEmail := ec.NewEmail().String()
 	p.PendingEmailChangeNewEmail = &newEmail
 	p.PendingEmailChangeTokenHash = &hash
-	p.PendingEmailChangeExpiresAt = pgTimestamp(ec.ExpiresAt())
+	p.PendingEmailChangeExpiresAt = pgconv.PgTimestamp(ec.ExpiresAt())
 }
 
 func applyPendingResetToUpdate(p *db.UpdatePersonParams, pr person.PendingPasswordReset) {
@@ -293,7 +294,7 @@ func applyPendingResetToUpdate(p *db.UpdatePersonParams, pr person.PendingPasswo
 	}
 	hash := pr.Hash().String()
 	p.PasswordResetTokenHash = &hash
-	p.PasswordResetExpiresAt = pgTimestamp(pr.ExpiresAt())
+	p.PasswordResetExpiresAt = pgconv.PgTimestamp(pr.ExpiresAt())
 }
 
 func applyPendingEmailChangeToUpdate(p *db.UpdatePersonParams, ec person.PendingEmailChange) {
@@ -304,7 +305,7 @@ func applyPendingEmailChangeToUpdate(p *db.UpdatePersonParams, ec person.Pending
 	newEmail := ec.NewEmail().String()
 	p.PendingEmailChangeNewEmail = &newEmail
 	p.PendingEmailChangeTokenHash = &hash
-	p.PendingEmailChangeExpiresAt = pgTimestamp(ec.ExpiresAt())
+	p.PendingEmailChangeExpiresAt = pgconv.PgTimestamp(ec.ExpiresAt())
 }
 
 func persistPerson(ctx context.Context, q *db.Queries, p *person.Person) error {
@@ -317,22 +318,22 @@ func persistPerson(ctx context.Context, q *db.Queries, p *person.Person) error {
 		return fmt.Errorf("person repo: parse security_stamp: %w", err)
 	}
 	params := db.UpdatePersonParams{
-		ID:                     pgUUID(uid),
+		ID:                     pgconv.PgUUID(uid),
 		Email:                  p.Email().String(),
 		FirstName:              p.FirstName(),
 		LastName:               p.LastName(),
 		PasswordHash:           p.PasswordHash().String(),
-		SecurityStamp:          pgUUID(stampUUID),
+		SecurityStamp:          pgconv.PgUUID(stampUUID),
 		IsActive:               p.IsActive(),
 		IsAnonymised:           p.IsAnonymised(),
-		AnonymisedAt:           pgTimestamp(p.AnonymisedAt()),
+		AnonymisedAt:           pgconv.PgTimestamp(p.AnonymisedAt()),
 		IsGloballySuspended:    p.IsGloballySuspended(),
 		GlobalSuspensionReason: p.GlobalSuspensionReason(),
-		GloballySuspendedAt:    pgTimestamp(p.GloballySuspendedAt()),
+		GloballySuspendedAt:    pgconv.PgTimestamp(p.GloballySuspendedAt()),
 		MustChangePassword:     p.MustChangePassword(),
 		FailedLoginCount:       int32(p.FailedLoginCount()), //nolint:gosec // bounded by MaxFailedLogins (=10)
-		LockedUntil:            pgTimestamp(p.LockedUntil()),
-		LastFailedLoginAt:      pgTimestamp(p.LastFailedLoginAt()),
+		LockedUntil:            pgconv.PgTimestamp(p.LockedUntil()),
+		LastFailedLoginAt:      pgconv.PgTimestamp(p.LastFailedLoginAt()),
 	}
 	applyPendingResetToUpdate(&params, p.PendingPasswordReset())
 	applyPendingEmailChangeToUpdate(&params, p.PendingEmailChange())
@@ -367,7 +368,7 @@ func drainPersonEvents(ctx context.Context, tx pgx.Tx, p *person.Person) error {
 }
 
 func rowToPerson(row db.IdentityPerson) (*person.Person, error) {
-	id := person.ID(uuidFromPg(row.ID).String())
+	id := person.ID(pgconv.UUIDFromPg(row.ID).String())
 
 	addr, err := email.New(row.Email)
 	if err != nil {
@@ -379,7 +380,7 @@ func rowToPerson(row db.IdentityPerson) (*person.Person, error) {
 		// must round-trip a valid hash.
 		return nil, fmt.Errorf("person repo: hydrate password_hash: %w", err)
 	}
-	stamp, err := person.SecurityStampFromString(uuidFromPg(row.SecurityStamp).String())
+	stamp, err := person.SecurityStampFromString(pgconv.UUIDFromPg(row.SecurityStamp).String())
 	if err != nil {
 		return nil, fmt.Errorf("person repo: hydrate security_stamp: %w", err)
 	}
@@ -394,13 +395,13 @@ func rowToPerson(row db.IdentityPerson) (*person.Person, error) {
 		IsAnonymised:           row.IsAnonymised,
 		IsGloballySuspended:    row.IsGloballySuspended,
 		GlobalSuspensionReason: row.GlobalSuspensionReason,
-		GloballySuspendedAt:    timeFromPg(row.GloballySuspendedAt),
+		GloballySuspendedAt:    pgconv.TimeFromPg(row.GloballySuspendedAt),
 		MustChangePassword:     row.MustChangePassword,
 		FailedLoginCount:       int(row.FailedLoginCount),
-		LockedUntil:            timeFromPg(row.LockedUntil),
-		LastFailedLoginAt:      timeFromPg(row.LastFailedLoginAt),
-		CreatedAt:              timeFromPg(row.CreatedAt),
-		AnonymisedAt:           timeFromPg(row.AnonymisedAt),
+		LockedUntil:            pgconv.TimeFromPg(row.LockedUntil),
+		LastFailedLoginAt:      pgconv.TimeFromPg(row.LastFailedLoginAt),
+		CreatedAt:              pgconv.TimeFromPg(row.CreatedAt),
+		AnonymisedAt:           pgconv.TimeFromPg(row.AnonymisedAt),
 	}
 	if row.PasswordResetTokenHash != nil {
 		resetHash, herr := person.NewPasswordResetTokenHash(*row.PasswordResetTokenHash)
@@ -408,7 +409,7 @@ func rowToPerson(row db.IdentityPerson) (*person.Person, error) {
 			return nil, fmt.Errorf("person repo: hydrate password_reset_token_hash: %w", herr)
 		}
 		snap.PasswordResetTokenHash = resetHash
-		snap.PasswordResetExpiresAt = timeFromPg(row.PasswordResetExpiresAt)
+		snap.PasswordResetExpiresAt = pgconv.TimeFromPg(row.PasswordResetExpiresAt)
 	}
 	if row.PendingEmailChangeTokenHash != nil && row.PendingEmailChangeNewEmail != nil {
 		newAddr, eerr := email.New(*row.PendingEmailChangeNewEmail)
@@ -421,7 +422,7 @@ func rowToPerson(row db.IdentityPerson) (*person.Person, error) {
 		}
 		snap.PendingEmailChangeNewEmail = newAddr
 		snap.PendingEmailChangeHash = ecHash
-		snap.PendingEmailChangeExpiresAt = timeFromPg(row.PendingEmailChangeExpiresAt)
+		snap.PendingEmailChangeExpiresAt = pgconv.TimeFromPg(row.PendingEmailChangeExpiresAt)
 	}
 	return person.UnmarshalFromDB(snap), nil
 }

@@ -198,10 +198,10 @@ func TestRoleRepository_GetByIDs_FiltersCrossTenant(t *testing.T) {
 // `is_deleted` flips to true) AND the partial-index + read predicate
 // `WHERE NOT is_deleted` hides it from the live read path. Two halves:
 //
-//   1. Physical row stays — direct SELECT bypassing the adapter
-//      proves the UPDATE didn't DELETE.
-//   2. The partial-index + WHERE NOT is_deleted predicate on the
-//      read path means GetByID can't see it.
+//  1. Physical row stays — direct SELECT bypassing the adapter
+//     proves the UPDATE didn't DELETE.
+//  2. The partial-index + WHERE NOT is_deleted predicate on the
+//     read path means GetByID can't see it.
 //
 // The roletest.FakeRepository's "Delete → GetByID returns ErrNotFound"
 // observable is identical; only the SQL test proves the PG-specific

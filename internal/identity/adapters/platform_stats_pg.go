@@ -17,9 +17,9 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/leadkart/leadkart-go/internal/common/pg"
 	"github.com/leadkart/leadkart-go/internal/identity/adapters/db"
 	"github.com/leadkart/leadkart-go/internal/identity/app/query"
-	"github.com/leadkart/leadkart-go/internal/common/pg"
 )
 
 // PlatformStatsReaderPG runs the dashboard COUNT(*) rollups under

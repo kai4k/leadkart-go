@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/leadkart/leadkart-go/internal/common/pg"
+	"github.com/leadkart/leadkart-go/internal/common/pgconv"
 	"github.com/leadkart/leadkart-go/internal/platform/adapters/db"
 	"github.com/leadkart/leadkart-go/internal/platform/domain/leadform"
 	"github.com/leadkart/leadkart-go/internal/platform/domain/unverifiedcontact"
@@ -97,7 +98,7 @@ func loadUnverifiedContact(ctx context.Context, q *db.Queries, id unverifiedcont
 	if err != nil {
 		return nil, fmt.Errorf("unverified contact repo: parse id %q: %w", id, err)
 	}
-	row, err := q.GetUnverifiedContactByID(ctx, pgUUID(uid))
+	row, err := q.GetUnverifiedContactByID(ctx, pgconv.PgUUID(uid))
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, unverifiedcontact.ErrNotFound
@@ -118,11 +119,11 @@ func insertUnverifiedContactRow(ctx context.Context, q *db.Queries, c *unverifie
 	}
 	f := c.Form()
 	err = q.InsertUnverifiedContact(ctx, db.InsertUnverifiedContactParams{
-		ID:                     pgUUID(uid),
+		ID:                     pgconv.PgUUID(uid),
 		State:                  c.State().String(),
 		RejectionReason:        c.RejectionReason(),
-		BusyCallbackAt:         pgTimestamp(c.BusyCallbackAt()),
-		BusyCallbackEndAt:      pgTimestamp(c.BusyCallbackEndAt()),
+		BusyCallbackAt:         pgconv.PgTimestamp(c.BusyCallbackAt()),
+		BusyCallbackEndAt:      pgconv.PgTimestamp(c.BusyCallbackEndAt()),
 		PlatformLeadID:         pgUUIDOptStr(c.PlatformLeadID()),
 		ContactName:            f.ContactName(),
 		MobileE164:             f.MobileE164(),
@@ -143,11 +144,11 @@ func insertUnverifiedContactRow(ctx context.Context, q *db.Queries, c *unverifie
 		DosageForms:            f.DosageForms(),
 		OrderValue:             string(f.OrderValue()),
 		BuyTimeline:            string(f.BuyTimeline()),
-		CreatedAt:              pgRequiredTimestamp(c.CreatedAt()),
-		CreatedByMembershipID:  pgUUID(createdByID),
-		VerifiedAt:             pgTimestamp(c.VerifiedAt()),
+		CreatedAt:              pgconv.PgRequiredTimestamp(c.CreatedAt()),
+		CreatedByMembershipID:  pgconv.PgUUID(createdByID),
+		VerifiedAt:             pgconv.PgTimestamp(c.VerifiedAt()),
 		VerifiedByMembershipID: pgUUIDOptStr(c.VerifiedByMembershipID().String()),
-		RejectedAt:             pgTimestamp(c.RejectedAt()),
+		RejectedAt:             pgconv.PgTimestamp(c.RejectedAt()),
 		RejectedByMembershipID: pgUUIDOptStr(c.RejectedByMembershipID().String()),
 	})
 	if err != nil {
@@ -162,15 +163,15 @@ func updateUnverifiedContactRow(ctx context.Context, q *db.Queries, c *unverifie
 		return fmt.Errorf("unverified contact repo: parse id: %w", err)
 	}
 	err = q.UpdateUnverifiedContact(ctx, db.UpdateUnverifiedContactParams{
-		ID:                     pgUUID(uid),
+		ID:                     pgconv.PgUUID(uid),
 		State:                  c.State().String(),
 		RejectionReason:        c.RejectionReason(),
-		BusyCallbackAt:         pgTimestamp(c.BusyCallbackAt()),
-		BusyCallbackEndAt:      pgTimestamp(c.BusyCallbackEndAt()),
+		BusyCallbackAt:         pgconv.PgTimestamp(c.BusyCallbackAt()),
+		BusyCallbackEndAt:      pgconv.PgTimestamp(c.BusyCallbackEndAt()),
 		PlatformLeadID:         pgUUIDOptStr(c.PlatformLeadID()),
-		VerifiedAt:             pgTimestamp(c.VerifiedAt()),
+		VerifiedAt:             pgconv.PgTimestamp(c.VerifiedAt()),
 		VerifiedByMembershipID: pgUUIDOptStr(c.VerifiedByMembershipID().String()),
-		RejectedAt:             pgTimestamp(c.RejectedAt()),
+		RejectedAt:             pgconv.PgTimestamp(c.RejectedAt()),
 		RejectedByMembershipID: pgUUIDOptStr(c.RejectedByMembershipID().String()),
 	})
 	if err != nil {
@@ -206,18 +207,18 @@ func rowToUnverifiedContact(row db.PlatformUnverifiedContact) (*unverifiedcontac
 		return nil, fmt.Errorf("unverified contact repo: invalid state %q", row.State)
 	}
 	return unverifiedcontact.UnmarshalFromDB(unverifiedcontact.Snapshot{
-		ID:                     unverifiedcontact.ID(uuidFromPg(row.ID).String()),
+		ID:                     unverifiedcontact.ID(pgconv.UUIDFromPg(row.ID).String()),
 		Form:                   form,
 		State:                  state,
 		RejectionReason:        row.RejectionReason,
-		BusyCallbackAt:         timeFromPg(row.BusyCallbackAt),
-		BusyCallbackEndAt:      timeFromPg(row.BusyCallbackEndAt),
+		BusyCallbackAt:         pgconv.TimeFromPg(row.BusyCallbackAt),
+		BusyCallbackEndAt:      pgconv.TimeFromPg(row.BusyCallbackEndAt),
 		PlatformLeadID:         uuidStringIfValid(row.PlatformLeadID),
-		CreatedAt:              timeFromPg(row.CreatedAt),
-		CreatedByMembershipID:  unverifiedcontact.MembershipID(uuidFromPg(row.CreatedByMembershipID).String()),
-		VerifiedAt:             timeFromPg(row.VerifiedAt),
+		CreatedAt:              pgconv.TimeFromPg(row.CreatedAt),
+		CreatedByMembershipID:  unverifiedcontact.MembershipID(pgconv.UUIDFromPg(row.CreatedByMembershipID).String()),
+		VerifiedAt:             pgconv.TimeFromPg(row.VerifiedAt),
 		VerifiedByMembershipID: unverifiedcontact.MembershipID(uuidStringIfValid(row.VerifiedByMembershipID)),
-		RejectedAt:             timeFromPg(row.RejectedAt),
+		RejectedAt:             pgconv.TimeFromPg(row.RejectedAt),
 		RejectedByMembershipID: unverifiedcontact.MembershipID(uuidStringIfValid(row.RejectedByMembershipID)),
 	}), nil
 }

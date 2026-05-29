@@ -164,12 +164,12 @@ func TestMembershipRepository_GetByID_OutsideTenantScope_NotFound(t *testing.T) 
 //
 // Two halves of the SQL contract:
 //
-//   1. Physical row state — direct SELECT bypassing the adapter
-//      proves the UPDATE rewrote `status` (not a soft-delete), which
-//      is what frees the partial-index slot (the predicate filters
-//      on status, not on is_deleted alone).
-//   2. The partial-index slot release admits a second Active across
-//      tenants — the second Add for the same Person succeeds.
+//  1. Physical row state — direct SELECT bypassing the adapter
+//     proves the UPDATE rewrote `status` (not a soft-delete), which
+//     is what frees the partial-index slot (the predicate filters
+//     on status, not on is_deleted alone).
+//  2. The partial-index slot release admits a second Active across
+//     tenants — the second Add for the same Person succeeds.
 //
 // Canonical post-rolehierarchy sharpening pattern per ADR 0062:
 // adapter-bypass SELECT for physical state PLUS observable behaviour.

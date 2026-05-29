@@ -31,7 +31,6 @@ import (
 	"github.com/leadkart/leadkart-go/internal/platform/domain/unverifiedcontact"
 )
 
-
 // seedPlatformLead inserts a contact row first (FK target) + a
 // PlatformLead linked to it. Returns the lead ID.
 func seedPlatformLead(t *testing.T, leadRepo *adapters.PlatformLeadRepository, contactRepo *adapters.UnverifiedContactRepository, tx *pg.Transactor) platformlead.ID {

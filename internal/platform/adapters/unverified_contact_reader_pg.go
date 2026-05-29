@@ -11,6 +11,7 @@ import (
 
 	"github.com/leadkart/leadkart-go/internal/common/pagination"
 	"github.com/leadkart/leadkart-go/internal/common/pg"
+	"github.com/leadkart/leadkart-go/internal/common/pgconv"
 	"github.com/leadkart/leadkart-go/internal/platform/adapters/db"
 	"github.com/leadkart/leadkart-go/internal/platform/app/query"
 )
@@ -64,14 +65,14 @@ func (r *UnverifiedContactReader) ListUnverifiedContactsPage(
 		out = make([]query.UnverifiedContactView, 0, len(rows))
 		for _, row := range rows {
 			out = append(out, query.UnverifiedContactView{
-				ID:                    uuidFromPg(row.ID).String(),
+				ID:                    pgconv.UUIDFromPg(row.ID).String(),
 				State:                 row.State,
 				ContactName:           row.ContactName,
 				MobileE164:            row.MobileE164,
 				City:                  row.City,
 				StateGeo:              row.StateGeo,
-				CreatedAt:             timeFromPg(row.CreatedAt).Format(time.RFC3339Nano),
-				CreatedByMembershipID: uuidFromPg(row.CreatedByMembershipID).String(),
+				CreatedAt:             pgconv.TimeFromPg(row.CreatedAt).Format(time.RFC3339Nano),
+				CreatedByMembershipID: pgconv.UUIDFromPg(row.CreatedByMembershipID).String(),
 			})
 		}
 		return nil

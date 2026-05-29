@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/leadkart/leadkart-go/internal/common/pg"
+	"github.com/leadkart/leadkart-go/internal/common/pgconv"
 	"github.com/leadkart/leadkart-go/internal/identity/adapters/db"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/permission"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/role"
@@ -107,7 +108,7 @@ func (r *RoleRepository) GetByTenantAndName(
 	err = r.tx.WithinTxPgxTenant(ctx, tenantID.String(), func(ctx context.Context, tx pgx.Tx) error {
 		q := r.q.WithTx(tx)
 		row, err := q.GetRoleByTenantAndName(ctx, db.GetRoleByTenantAndNameParams{
-			TenantID: pgUUID(tid),
+			TenantID: pgconv.PgUUID(tid),
 			Name:     name,
 		})
 		if err != nil {
@@ -144,7 +145,7 @@ func (r *RoleRepository) GetByIDs(ctx context.Context, tenantID tenant.ID, ids [
 		if err != nil {
 			return nil, fmt.Errorf("role repo: parse id %q: %w", id, err)
 		}
-		pgIDs = append(pgIDs, pgUUID(uid))
+		pgIDs = append(pgIDs, pgconv.PgUUID(uid))
 	}
 	var out []*role.Role
 	err := r.tx.WithinTxPgxTenant(ctx, tenantID.String(), func(ctx context.Context, tx pgx.Tx) error {
@@ -183,7 +184,7 @@ func (r *RoleRepository) ListByTenant(
 	var out []*role.Role
 	err = r.tx.WithinTxPgxTenant(ctx, tenantID.String(), func(ctx context.Context, tx pgx.Tx) error {
 		q := r.q.WithTx(tx)
-		rows, err := q.ListRolesByTenant(ctx, pgUUID(tid))
+		rows, err := q.ListRolesByTenant(ctx, pgconv.PgUUID(tid))
 		if err != nil {
 			return fmt.Errorf("role repo: list by tenant: %w", err)
 		}
@@ -259,7 +260,7 @@ func loadRole(ctx context.Context, q *db.Queries, id role.ID) (*role.Role, error
 	if err != nil {
 		return nil, fmt.Errorf("role repo: parse id %q: %w", id, err)
 	}
-	row, err := q.GetRoleByID(ctx, pgUUID(uid))
+	row, err := q.GetRoleByID(ctx, pgconv.PgUUID(uid))
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, role.ErrNotFound
@@ -287,8 +288,8 @@ func insertRoleRow(ctx context.Context, q *db.Queries, ro *role.Role) error {
 		return err
 	}
 	err = q.InsertRole(ctx, db.InsertRoleParams{
-		ID:              pgUUID(rid),
-		TenantID:        pgUUID(tid),
+		ID:              pgconv.PgUUID(rid),
+		TenantID:        pgconv.PgUUID(tid),
 		Name:            ro.Name(),
 		IsSystemDefault: ro.IsSystemDefault(),
 		IsSuperAdmin:    ro.IsSuperAdmin(),
@@ -297,7 +298,7 @@ func insertRoleRow(ctx context.Context, q *db.Queries, ro *role.Role) error {
 		// invariants. Cast to int32 cannot overflow.
 		HierarchyLevel: int32(ro.HierarchyLevel()), //nolint:gosec // G115: bounded [0,99] by aggregate
 		Permissions:    permsJSON,
-		CreatedAt:      pgRequiredTimestamp(ro.CreatedAt()),
+		CreatedAt:      pgconv.PgRequiredTimestamp(ro.CreatedAt()),
 	})
 	if err != nil {
 		if isRoleNameUniqueViolation(err) {
@@ -324,8 +325,8 @@ func persistRoleState(ctx context.Context, q *db.Queries, ro *role.Role) error {
 			deletedBy = &by
 		}
 		err = q.SoftDeleteRole(ctx, db.SoftDeleteRoleParams{
-			ID:        pgUUID(rid),
-			DeletedAt: pgRequiredTimestamp(ro.DeletedAt()),
+			ID:        pgconv.PgUUID(rid),
+			DeletedAt: pgconv.PgRequiredTimestamp(ro.DeletedAt()),
 			DeletedBy: deletedBy,
 		})
 		if err != nil {
@@ -338,7 +339,7 @@ func persistRoleState(ctx context.Context, q *db.Queries, ro *role.Role) error {
 		return err
 	}
 	err = q.UpdateRole(ctx, db.UpdateRoleParams{
-		ID:   pgUUID(rid),
+		ID:   pgconv.PgUUID(rid),
 		Name: ro.Name(),
 		// Bounded [0,99] by role aggregate invariants per insertRoleRow.
 		HierarchyLevel: int32(ro.HierarchyLevel()), //nolint:gosec // G115: bounded [0,99] by aggregate
@@ -380,8 +381,8 @@ func drainRoleEvents(ctx context.Context, tx pgx.Tx, ro *role.Role) error {
 // rowToRole hydrates the aggregate from the sqlc row. UnmarshalFromDB
 // trusts the data — no re-validation per TDL canon.
 func rowToRole(row db.IdentityRole) (*role.Role, error) {
-	id := role.ID(uuidFromPg(row.ID).String())
-	tid := tenant.ID(uuidFromPg(row.TenantID).String())
+	id := role.ID(pgconv.UUIDFromPg(row.ID).String())
+	tid := tenant.ID(pgconv.UUIDFromPg(row.TenantID).String())
 	perms, err := decodePermissions(row.Permissions)
 	if err != nil {
 		return nil, fmt.Errorf("role repo: hydrate permissions: %w", err)
@@ -398,9 +399,9 @@ func rowToRole(row db.IdentityRole) (*role.Role, error) {
 		IsSuperAdmin:    row.IsSuperAdmin,
 		HierarchyLevel:  int(row.HierarchyLevel),
 		Permissions:     perms,
-		CreatedAt:       timeFromPg(row.CreatedAt),
+		CreatedAt:       pgconv.TimeFromPg(row.CreatedAt),
 		IsDeleted:       row.IsDeleted,
-		DeletedAt:       timeFromPg(row.DeletedAt),
+		DeletedAt:       pgconv.TimeFromPg(row.DeletedAt),
 		DeletedBy:       deletedBy,
 	}), nil
 }

@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/leadkart/leadkart-go/internal/common/pg"
+	"github.com/leadkart/leadkart-go/internal/common/pgconv"
 	"github.com/leadkart/leadkart-go/internal/identity/adapters/db"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/permission"
@@ -184,7 +185,7 @@ func (r *MembershipRepository) GetActiveForPerson(
 		// across tenants. The partial-unique index guarantees at most one
 		// is Active; we filter in memory rather than adding a fourth sqlc
 		// query path.
-		rows, err := q.ListMembershipsForPerson(ctx, pgUUID(uid))
+		rows, err := q.ListMembershipsForPerson(ctx, pgconv.PgUUID(uid))
 		if err != nil {
 			return fmt.Errorf("membership repo: list for person: %w", err)
 		}
@@ -192,11 +193,11 @@ func (r *MembershipRepository) GetActiveForPerson(
 			if row.Status != membership.StatusActive.String() {
 				continue
 			}
-			roleIDs, lerr := loadRoleAssignments(ctx, q, uuidFromPg(row.ID))
+			roleIDs, lerr := loadRoleAssignments(ctx, q, pgconv.UUIDFromPg(row.ID))
 			if lerr != nil {
 				return lerr
 			}
-			granted, revoked, lerr := loadPermissionOverrides(ctx, q, uuidFromPg(row.ID))
+			granted, revoked, lerr := loadPermissionOverrides(ctx, q, pgconv.UUIDFromPg(row.ID))
 			if lerr != nil {
 				return lerr
 			}
@@ -239,11 +240,11 @@ func (r *MembershipRepository) ListForTenant(
 		// path needs the bulk json_agg join (benchmark first).
 		out = make([]*membership.Membership, 0, len(hydrated))
 		for _, row := range hydrated {
-			roleIDs, lerr := loadRoleAssignments(ctx, q, uuidFromPg(row.ID))
+			roleIDs, lerr := loadRoleAssignments(ctx, q, pgconv.UUIDFromPg(row.ID))
 			if lerr != nil {
 				return lerr
 			}
-			granted, revoked, lerr := loadPermissionOverrides(ctx, q, uuidFromPg(row.ID))
+			granted, revoked, lerr := loadPermissionOverrides(ctx, q, pgconv.UUIDFromPg(row.ID))
 			if lerr != nil {
 				return lerr
 			}
@@ -288,8 +289,8 @@ func (r *MembershipRepository) ListForTenantPage(
 	err = r.tx.WithinTxPgxTenant(ctx, tenantID.String(), func(ctx context.Context, tx pgx.Tx) error {
 		q := r.q.WithTx(tx)
 		hydrated, qerr := q.ListActiveMembershipsInTenantPage(ctx, db.ListActiveMembershipsInTenantPageParams{
-			BeforeJoinedAt: pgRequiredTimestamp(beforeJoinedAt),
-			BeforeID:       pgUUID(beforeUUID),
+			BeforeJoinedAt: pgconv.PgRequiredTimestamp(beforeJoinedAt),
+			BeforeID:       pgconv.PgUUID(beforeUUID),
 			Limit:          int32(limit), //nolint:gosec // page_size capped at 200 well within int32
 		})
 		if qerr != nil {
@@ -302,11 +303,11 @@ func (r *MembershipRepository) ListForTenantPage(
 		// in a single query keyed by IN(membership_ids).
 		out = make([]*membership.Membership, 0, len(hydrated))
 		for _, row := range hydrated {
-			roleIDs, lerr := loadRoleAssignments(ctx, q, uuidFromPg(row.ID))
+			roleIDs, lerr := loadRoleAssignments(ctx, q, pgconv.UUIDFromPg(row.ID))
 			if lerr != nil {
 				return lerr
 			}
-			granted, revoked, lerr := loadPermissionOverrides(ctx, q, uuidFromPg(row.ID))
+			granted, revoked, lerr := loadPermissionOverrides(ctx, q, pgconv.UUIDFromPg(row.ID))
 			if lerr != nil {
 				return lerr
 			}
@@ -339,7 +340,7 @@ func (r *MembershipRepository) HasActiveSuperAdmin(
 	var found bool
 	err = r.tx.WithinTxPgx(ctx, pg.TxScopePlatform, func(ctx context.Context, tx pgx.Tx) error {
 		q := r.q.WithTx(tx)
-		rows, err := q.ListSuperAdminMembershipsInTenant(ctx, pgUUID(tid))
+		rows, err := q.ListSuperAdminMembershipsInTenant(ctx, pgconv.PgUUID(tid))
 		if err != nil {
 			return fmt.Errorf("membership repo: list super-admin in tenant: %w", err)
 		}
@@ -373,17 +374,17 @@ func (r *MembershipRepository) ListAllForPerson(
 	var out []*membership.Membership
 	err = r.tx.WithinTxPgx(ctx, pg.TxScopePlatform, func(ctx context.Context, tx pgx.Tx) error {
 		q := r.q.WithTx(tx)
-		rows, err := q.ListMembershipsForPerson(ctx, pgUUID(uid))
+		rows, err := q.ListMembershipsForPerson(ctx, pgconv.PgUUID(uid))
 		if err != nil {
 			return fmt.Errorf("membership repo: list for person: %w", err)
 		}
 		out = make([]*membership.Membership, 0, len(rows))
 		for _, row := range rows {
-			roleIDs, lerr := loadRoleAssignments(ctx, q, uuidFromPg(row.ID))
+			roleIDs, lerr := loadRoleAssignments(ctx, q, pgconv.UUIDFromPg(row.ID))
 			if lerr != nil {
 				return lerr
 			}
-			granted, revoked, lerr := loadPermissionOverrides(ctx, q, uuidFromPg(row.ID))
+			granted, revoked, lerr := loadPermissionOverrides(ctx, q, pgconv.UUIDFromPg(row.ID))
 			if lerr != nil {
 				return lerr
 			}
@@ -408,7 +409,7 @@ func loadMembership(ctx context.Context, q *db.Queries, id membership.ID) (*memb
 	if err != nil {
 		return nil, err
 	}
-	row, err := q.GetMembershipByID(ctx, pgUUID(uid))
+	row, err := q.GetMembershipByID(ctx, pgconv.PgUUID(uid))
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, membership.ErrNotFound
@@ -430,13 +431,13 @@ func loadMembership(ctx context.Context, q *db.Queries, id membership.ID) (*memb
 // Order: assigned_at, role_id (matches the SQL query) — domain treats
 // the slice as a set, so ordering is informational only.
 func loadRoleAssignments(ctx context.Context, q *db.Queries, mid uuid.UUID) ([]role.ID, error) {
-	rows, err := q.ListRoleAssignmentsByMembership(ctx, pgUUID(mid))
+	rows, err := q.ListRoleAssignmentsByMembership(ctx, pgconv.PgUUID(mid))
 	if err != nil {
 		return nil, fmt.Errorf("membership repo: list role assignments: %w", err)
 	}
 	out := make([]role.ID, 0, len(rows))
 	for _, r := range rows {
-		out = append(out, role.ID(uuidFromPg(r.RoleID).String()))
+		out = append(out, role.ID(pgconv.UUIDFromPg(r.RoleID).String()))
 	}
 	return out, nil
 }
@@ -455,7 +456,7 @@ func loadPermissionOverrides(
 	q *db.Queries,
 	mid uuid.UUID,
 ) (granted []membership.GrantedOverride, revoked []*permission.Permission, err error) {
-	rows, err := q.ListPermissionOverridesByMembership(ctx, pgUUID(mid))
+	rows, err := q.ListPermissionOverridesByMembership(ctx, pgconv.PgUUID(mid))
 	if err != nil {
 		return nil, nil, fmt.Errorf("membership repo: list permission overrides: %w", err)
 	}
@@ -471,7 +472,7 @@ func loadPermissionOverrides(
 			// non-zero = JIT-bounded grant filtered at resolve time.
 			granted = append(granted, membership.GrantedOverride{
 				Permission: p,
-				ExpiresAt:  timeFromPg(row.ExpiresAt),
+				ExpiresAt:  pgconv.TimeFromPg(row.ExpiresAt),
 			})
 		case overrideKindRevoked:
 			revoked = append(revoked, p)
@@ -505,14 +506,14 @@ func insertMembershipRow(ctx context.Context, q *db.Queries, m *membership.Membe
 		if perr != nil {
 			return fmt.Errorf("membership repo: parse createdBy %q: %w", cb, perr)
 		}
-		createdBy = pgUUID(cbUUID)
+		createdBy = pgconv.PgUUID(cbUUID)
 	}
 	err = q.InsertMembership(ctx, db.InsertMembershipParams{
-		ID:                    pgUUID(mid),
-		PersonID:              pgUUID(pid),
-		TenantID:              pgUUID(tid),
+		ID:                    pgconv.PgUUID(mid),
+		PersonID:              pgconv.PgUUID(pid),
+		TenantID:              pgconv.PgUUID(tid),
 		Status:                m.Status().String(),
-		JoinedAt:              pgRequiredTimestamp(m.JoinedAt()),
+		JoinedAt:              pgconv.PgRequiredTimestamp(m.JoinedAt()),
 		CreatedByMembershipID: createdBy,
 	})
 	if err != nil {
@@ -530,9 +531,9 @@ func persistMembershipStatus(ctx context.Context, q *db.Queries, m *membership.M
 		return err
 	}
 	err = q.UpdateMembershipStatus(ctx, db.UpdateMembershipStatusParams{
-		ID:     pgUUID(mid),
+		ID:     pgconv.PgUUID(mid),
 		Status: m.Status().String(),
-		LeftAt: pgTimestamp(m.LeftAt()),
+		LeftAt: pgconv.PgTimestamp(m.LeftAt()),
 	})
 	if err != nil {
 		if isMembershipActiveCollision(err) {
@@ -573,20 +574,20 @@ func rowToMembership(
 	granted []membership.GrantedOverride,
 	revoked []*permission.Permission,
 ) (*membership.Membership, error) {
-	id := membership.ID(uuidFromPg(row.ID).String())
-	personID := person.ID(uuidFromPg(row.PersonID).String())
-	tenantID := tenant.ID(uuidFromPg(row.TenantID).String())
+	id := membership.ID(pgconv.UUIDFromPg(row.ID).String())
+	personID := person.ID(pgconv.UUIDFromPg(row.PersonID).String())
+	tenantID := tenant.ID(pgconv.UUIDFromPg(row.TenantID).String())
 
 	status, err := membership.ParseStatus(row.Status)
 	if err != nil {
 		return nil, fmt.Errorf("membership repo: hydrate status %q: %w", row.Status, err)
 	}
 	reportsTo := membership.ID("")
-	if reports := uuidFromPg(row.ReportsTo); reports != uuid.Nil {
+	if reports := pgconv.UUIDFromPg(row.ReportsTo); reports != uuid.Nil {
 		reportsTo = membership.ID(reports.String())
 	}
 	createdBy := membership.ID("")
-	if cb := uuidFromPg(row.CreatedByMembershipID); cb != uuid.Nil {
+	if cb := pgconv.UUIDFromPg(row.CreatedByMembershipID); cb != uuid.Nil {
 		createdBy = membership.ID(cb.String())
 	}
 	return membership.UnmarshalFromDB(membership.Snapshot{
@@ -594,8 +595,8 @@ func rowToMembership(
 		PersonID:           personID,
 		TenantID:           tenantID,
 		Status:             status,
-		JoinedAt:           timeFromPg(row.JoinedAt),
-		LeftAt:             timeFromPg(row.LeftAt),
+		JoinedAt:           pgconv.TimeFromPg(row.JoinedAt),
+		LeftAt:             pgconv.TimeFromPg(row.LeftAt),
 		RoleAssignments:    roleAssignments,
 		GrantedPermissions: granted,
 		RevokedPermissions: revoked,
@@ -624,11 +625,11 @@ func persistMembershipProfile(ctx context.Context, q *db.Queries, m *membership.
 		reportsTo = parsed
 	}
 	err = q.UpdateMembershipProfile(ctx, db.UpdateMembershipProfileParams{
-		ID:            pgUUID(mid),
+		ID:            pgconv.PgUUID(mid),
 		Designation:   m.Designation(),
 		Department:    m.Department(),
 		StatusMessage: m.StatusMessage(),
-		ReportsTo:     pgUUIDOpt(reportsTo),
+		ReportsTo:     pgconv.PgUUIDOrNull(reportsTo),
 	})
 	if err != nil {
 		return fmt.Errorf("membership repo: update profile: %w", err)
@@ -654,19 +655,19 @@ func replaceRoleAssignments(ctx context.Context, q *db.Queries, m *membership.Me
 	if err != nil {
 		return err
 	}
-	if err := q.DeleteRoleAssignmentsByMembership(ctx, pgUUID(mid)); err != nil {
+	if err := q.DeleteRoleAssignmentsByMembership(ctx, pgconv.PgUUID(mid)); err != nil {
 		return fmt.Errorf("membership repo: clear role assignments: %w", err)
 	}
-	now := pgRequiredTimestamp(time.Now().UTC())
+	now := pgconv.PgRequiredTimestamp(time.Now().UTC())
 	for _, rid := range m.RoleAssignments() {
 		ruid, err := uuid.Parse(rid.String())
 		if err != nil {
 			return fmt.Errorf("membership repo: parse role id %q: %w", rid, err)
 		}
 		err = q.InsertRoleAssignment(ctx, db.InsertRoleAssignmentParams{
-			MembershipID: pgUUID(mid),
-			RoleID:       pgUUID(ruid),
-			TenantID:     pgUUID(tid),
+			MembershipID: pgconv.PgUUID(mid),
+			RoleID:       pgconv.PgUUID(ruid),
+			TenantID:     pgconv.PgUUID(tid),
 			AssignedAt:   now,
 		})
 		if err != nil {
@@ -691,21 +692,21 @@ func replacePermissionOverrides(ctx context.Context, q *db.Queries, m *membershi
 	if err != nil {
 		return err
 	}
-	if err := q.DeletePermissionOverridesByMembership(ctx, pgUUID(mid)); err != nil {
+	if err := q.DeletePermissionOverridesByMembership(ctx, pgconv.PgUUID(mid)); err != nil {
 		return fmt.Errorf("membership repo: clear permission overrides: %w", err)
 	}
-	now := pgRequiredTimestamp(time.Now().UTC())
+	now := pgconv.PgRequiredTimestamp(time.Now().UTC())
 	for _, g := range m.GrantedPermissions() {
 		if g.Permission == nil {
 			continue
 		}
 		err := q.InsertPermissionOverride(ctx, db.InsertPermissionOverrideParams{
-			MembershipID:   pgUUID(mid),
+			MembershipID:   pgconv.PgUUID(mid),
 			PermissionName: g.Permission.Name(),
 			Kind:           overrideKindGranted,
-			TenantID:       pgUUID(tid),
+			TenantID:       pgconv.PgUUID(tid),
 			UpdatedAt:      now,
-			ExpiresAt:      pgTimestamp(g.ExpiresAt), // nil → NULL = perpetual
+			ExpiresAt:      pgconv.PgTimestamp(g.ExpiresAt), // nil → NULL = perpetual
 		})
 		if err != nil {
 			return fmt.Errorf("membership repo: insert granted override %q: %w", g.Permission.Name(), err)
@@ -716,10 +717,10 @@ func replacePermissionOverrides(ctx context.Context, q *db.Queries, m *membershi
 			continue
 		}
 		err := q.InsertPermissionOverride(ctx, db.InsertPermissionOverrideParams{
-			MembershipID:   pgUUID(mid),
+			MembershipID:   pgconv.PgUUID(mid),
 			PermissionName: p.Name(),
 			Kind:           overrideKindRevoked,
-			TenantID:       pgUUID(tid),
+			TenantID:       pgconv.PgUUID(tid),
 			UpdatedAt:      now,
 			// Revocations are permanent until re-granted; ExpiresAt stays NULL.
 		})

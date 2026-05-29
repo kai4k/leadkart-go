@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/leadkart/leadkart-go/internal/common/pg"
+	"github.com/leadkart/leadkart-go/internal/common/pgconv"
 	"github.com/leadkart/leadkart-go/internal/platform/adapters/db"
 	"github.com/leadkart/leadkart-go/internal/platform/domain/leadcredit"
 )
@@ -47,7 +48,7 @@ func (r *LeadCreditRepository) GetByTenant(ctx context.Context, id leadcredit.Te
 		return nil, fmt.Errorf("lead credit repo: parse tenant id: %w", err)
 	}
 	loadOn := func(ctx context.Context, q *db.Queries) (*leadcredit.LeadCredit, error) {
-		row, err := q.GetLeadCredit(ctx, pgUUID(tid))
+		row, err := q.GetLeadCredit(ctx, pgconv.PgUUID(tid))
 		if err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				return nil, leadcredit.ErrNotFound
@@ -55,11 +56,11 @@ func (r *LeadCreditRepository) GetByTenant(ctx context.Context, id leadcredit.Te
 			return nil, fmt.Errorf("lead credit repo: get: %w", err)
 		}
 		return leadcredit.UnmarshalFromDB(leadcredit.Snapshot{
-			TenantID:  leadcredit.TenantID(uuidFromPg(row.TenantID).String()),
+			TenantID:  leadcredit.TenantID(pgconv.UUIDFromPg(row.TenantID).String()),
 			Balance:   row.Balance,
 			Version:   row.Version,
-			CreatedAt: timeFromPg(row.CreatedAt),
-			UpdatedAt: timeFromPg(row.UpdatedAt),
+			CreatedAt: pgconv.TimeFromPg(row.CreatedAt),
+			UpdatedAt: pgconv.TimeFromPg(row.UpdatedAt),
 		}), nil
 	}
 
@@ -125,8 +126,8 @@ func (r *LeadCreditRepository) upsertOnTx(ctx context.Context, tx pgx.Tx, l *lea
 	affected, err := q.UpdateLeadCreditWithVersion(ctx, db.UpdateLeadCreditWithVersionParams{
 		NewBalance:      l.Balance(),
 		ExpectedVersion: l.Version(),
-		UpdatedAt:       pgRequiredTimestamp(l.UpdatedAt()),
-		TenantID:        pgUUID(tid),
+		UpdatedAt:       pgconv.PgRequiredTimestamp(l.UpdatedAt()),
+		TenantID:        pgconv.PgUUID(tid),
 	})
 	if err != nil {
 		return fmt.Errorf("lead credit repo: update: %w", err)
@@ -138,10 +139,10 @@ func (r *LeadCreditRepository) upsertOnTx(ctx context.Context, tx pgx.Tx, l *lea
 		}
 		// Fresh aggregate, no row yet — INSERT.
 		if err := q.InsertLeadCredit(ctx, db.InsertLeadCreditParams{
-			TenantID:  pgUUID(tid),
+			TenantID:  pgconv.PgUUID(tid),
 			Balance:   l.Balance(),
-			CreatedAt: pgRequiredTimestamp(l.CreatedAt()),
-			UpdatedAt: pgRequiredTimestamp(l.UpdatedAt()),
+			CreatedAt: pgconv.PgRequiredTimestamp(l.CreatedAt()),
+			UpdatedAt: pgconv.PgRequiredTimestamp(l.UpdatedAt()),
 		}); err != nil {
 			return fmt.Errorf("lead credit repo: insert: %w", err)
 		}

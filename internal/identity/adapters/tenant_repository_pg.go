@@ -13,12 +13,13 @@ import (
 	"github.com/leadkart/leadkart-go/internal/common/druglicence"
 	"github.com/leadkart/leadkart-go/internal/common/gst"
 	"github.com/leadkart/leadkart-go/internal/common/pan"
+	"github.com/leadkart/leadkart-go/internal/common/pg"
+	"github.com/leadkart/leadkart-go/internal/common/pgconv"
 	"github.com/leadkart/leadkart-go/internal/common/phone"
 	"github.com/leadkart/leadkart-go/internal/common/postaladdress"
 	"github.com/leadkart/leadkart-go/internal/common/slug"
 	"github.com/leadkart/leadkart-go/internal/identity/adapters/db"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
-	"github.com/leadkart/leadkart-go/internal/common/pg"
 )
 
 // TenantRepository is the pgx/sqlc-backed implementation of
@@ -139,7 +140,7 @@ func (r *TenantRepository) HardDeleteRow(ctx context.Context, id tenant.ID) erro
 	if err != nil {
 		return err
 	}
-	if err := r.q.HardDeleteTenant(ctx, pgUUID(uid)); err != nil {
+	if err := r.q.HardDeleteTenant(ctx, pgconv.PgUUID(uid)); err != nil {
 		return fmt.Errorf("tenant repo: hard delete: %w", err)
 	}
 	return nil
@@ -152,7 +153,7 @@ func loadTenant(ctx context.Context, q *db.Queries, id tenant.ID) (*tenant.Tenan
 	if err != nil {
 		return nil, err
 	}
-	row, err := q.GetTenantByID(ctx, pgUUID(uid))
+	row, err := q.GetTenantByID(ctx, pgconv.PgUUID(uid))
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, tenant.ErrNotFound
@@ -173,12 +174,12 @@ func insertTenantRow(ctx context.Context, q *db.Queries, t *tenant.Tenant) error
 	policy := t.Settings().PasswordPolicy()
 	prefs := t.DisplayPreferences()
 	err = q.InsertTenant(ctx, db.InsertTenantParams{
-		ID:                        pgUUID(uid),
+		ID:                        pgconv.PgUUID(uid),
 		Slug:                      t.Slug().String(),
 		LegalName:                 t.LegalName(),
 		DisplayName:               t.DisplayName(),
 		Status:                    t.Status().String(),
-		CreatedAt:                 pgRequiredTimestamp(t.CreatedAt()),
+		CreatedAt:                 pgconv.PgRequiredTimestamp(t.CreatedAt()),
 		GstNumber:                 stat.GST().String(),
 		PanNumber:                 stat.PAN().String(),
 		DrugLicenceNumber:         stat.DrugLicence().String(),
@@ -200,9 +201,9 @@ func insertTenantRow(ctx context.Context, q *db.Queries, t *tenant.Tenant) error
 		TimeZone:                  prefs.TimeZone(),
 		DateFormat:                prefs.DateFormat(),
 		Currency:                  prefs.Currency(),
-		DeletionScheduledAt:       pgTimestamp(t.DeletionScheduledAt()),
+		DeletionScheduledAt:       pgconv.PgTimestamp(t.DeletionScheduledAt()),
 		DeletionReason:            t.DeletionReason(),
-		HardDeletedAt:             pgTimestamp(t.HardDeletedAt()),
+		HardDeletedAt:             pgconv.PgTimestamp(t.HardDeletedAt()),
 	})
 	if err != nil {
 		if isUniqueViolation(err) {
@@ -224,12 +225,12 @@ func persistTenant(ctx context.Context, q *db.Queries, t *tenant.Tenant) error {
 	policy := t.Settings().PasswordPolicy()
 	prefs := t.DisplayPreferences()
 	err = q.UpdateTenant(ctx, db.UpdateTenantParams{
-		ID:                        pgUUID(uid),
+		ID:                        pgconv.PgUUID(uid),
 		LegalName:                 t.LegalName(),
 		DisplayName:               t.DisplayName(),
 		Status:                    t.Status().String(),
-		ActivatedAt:               pgTimestamp(t.ActivatedAt()),
-		SuspendedAt:               pgTimestamp(t.SuspendedAt()),
+		ActivatedAt:               pgconv.PgTimestamp(t.ActivatedAt()),
+		SuspendedAt:               pgconv.PgTimestamp(t.SuspendedAt()),
 		GstNumber:                 stat.GST().String(),
 		PanNumber:                 stat.PAN().String(),
 		DrugLicenceNumber:         stat.DrugLicence().String(),
@@ -251,9 +252,9 @@ func persistTenant(ctx context.Context, q *db.Queries, t *tenant.Tenant) error {
 		TimeZone:                  prefs.TimeZone(),
 		DateFormat:                prefs.DateFormat(),
 		Currency:                  prefs.Currency(),
-		DeletionScheduledAt:       pgTimestamp(t.DeletionScheduledAt()),
+		DeletionScheduledAt:       pgconv.PgTimestamp(t.DeletionScheduledAt()),
 		DeletionReason:            t.DeletionReason(),
-		HardDeletedAt:             pgTimestamp(t.HardDeletedAt()),
+		HardDeletedAt:             pgconv.PgTimestamp(t.HardDeletedAt()),
 	})
 	if err != nil {
 		return fmt.Errorf("tenant repo: update: %w", err)
@@ -291,7 +292,7 @@ func drainTenantEvents(ctx context.Context, tx pgx.Tx, t *tenant.Tenant) error {
 //
 //nolint:gocyclo // Mechanical projection — readability beats helper-function indirection here.
 func rowToTenant(row db.IdentityTenant) (*tenant.Tenant, error) {
-	tID := tenant.ID(uuidFromPg(row.ID).String())
+	tID := tenant.ID(pgconv.UUIDFromPg(row.ID).String())
 	s, err := slug.New(row.Slug)
 	if err != nil {
 		return nil, fmt.Errorf("tenant repo: hydrate slug %q: %w", row.Slug, err)
@@ -336,12 +337,12 @@ func rowToTenant(row db.IdentityTenant) (*tenant.Tenant, error) {
 		AdminContact:        contact,
 		Settings:            settings,
 		DisplayPreferences:  prefs,
-		CreatedAt:           timeFromPg(row.CreatedAt),
-		ActivatedAt:         timeFromPg(row.ActivatedAt),
-		SuspendedAt:         timeFromPg(row.SuspendedAt),
-		DeletionScheduledAt: timeFromPg(row.DeletionScheduledAt),
+		CreatedAt:           pgconv.TimeFromPg(row.CreatedAt),
+		ActivatedAt:         pgconv.TimeFromPg(row.ActivatedAt),
+		SuspendedAt:         pgconv.TimeFromPg(row.SuspendedAt),
+		DeletionScheduledAt: pgconv.TimeFromPg(row.DeletionScheduledAt),
 		DeletionReason:      row.DeletionReason,
-		HardDeletedAt:       timeFromPg(row.HardDeletedAt),
+		HardDeletedAt:       pgconv.TimeFromPg(row.HardDeletedAt),
 	}), nil
 }
 

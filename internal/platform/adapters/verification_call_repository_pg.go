@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/leadkart/leadkart-go/internal/common/pg"
+	"github.com/leadkart/leadkart-go/internal/common/pgconv"
 	"github.com/leadkart/leadkart-go/internal/platform/adapters/db"
 	"github.com/leadkart/leadkart-go/internal/platform/domain/unverifiedcontact"
 	"github.com/leadkart/leadkart-go/internal/platform/domain/verificationcall"
@@ -66,7 +67,7 @@ func (r *VerificationCallRepository) ListByContact(
 	if tx, ok := pg.TxFromContext(ctx); ok {
 		q = r.q.WithTx(tx)
 	}
-	rows, err := q.ListVerificationCallsByContact(ctx, pgUUID(cid))
+	rows, err := q.ListVerificationCallsByContact(ctx, pgconv.PgUUID(cid))
 	if err != nil {
 		return nil, fmt.Errorf("verification call repo: list: %w", err)
 	}
@@ -91,14 +92,14 @@ func insertVerificationCallRow(ctx context.Context, q *db.Queries, c *verificati
 		return fmt.Errorf("verification call repo: parse logged_by: %w", err)
 	}
 	err = q.InsertVerificationCall(ctx, db.InsertVerificationCallParams{
-		ID:                    pgUUID(cid),
-		ContactID:             pgUUID(contactID),
+		ID:                    pgconv.PgUUID(cid),
+		ContactID:             pgconv.PgUUID(contactID),
 		OutcomeCode:           string(c.Outcome()),
 		Notes:                 c.Notes(),
-		CallbackWindowStartAt: pgTimestamp(c.CallbackWindowStartAt()),
-		CallbackWindowEndAt:   pgTimestamp(c.CallbackWindowEndAt()),
-		LoggedAt:              pgRequiredTimestamp(c.LoggedAt()),
-		LoggedByMembershipID:  pgUUID(loggedBy),
+		CallbackWindowStartAt: pgconv.PgTimestamp(c.CallbackWindowStartAt()),
+		CallbackWindowEndAt:   pgconv.PgTimestamp(c.CallbackWindowEndAt()),
+		LoggedAt:              pgconv.PgRequiredTimestamp(c.LoggedAt()),
+		LoggedByMembershipID:  pgconv.PgUUID(loggedBy),
 	})
 	if err != nil {
 		return fmt.Errorf("verification call repo: insert: %w", err)
@@ -108,13 +109,13 @@ func insertVerificationCallRow(ctx context.Context, q *db.Queries, c *verificati
 
 func rowToVerificationCall(row db.PlatformVerificationCall) *verificationcall.VerificationCall {
 	return verificationcall.UnmarshalFromDB(verificationcall.Snapshot{
-		ID:                    verificationcall.ID(uuidFromPg(row.ID).String()),
-		ContactID:             unverifiedcontact.ID(uuidFromPg(row.ContactID).String()),
+		ID:                    verificationcall.ID(pgconv.UUIDFromPg(row.ID).String()),
+		ContactID:             unverifiedcontact.ID(pgconv.UUIDFromPg(row.ContactID).String()),
 		Outcome:               verificationcall.OutcomeCode(row.OutcomeCode),
 		Notes:                 row.Notes,
-		CallbackWindowStartAt: timeFromPg(row.CallbackWindowStartAt),
-		CallbackWindowEndAt:   timeFromPg(row.CallbackWindowEndAt),
-		LoggedAt:              timeFromPg(row.LoggedAt),
-		LoggedByMembershipID:  unverifiedcontact.MembershipID(uuidFromPg(row.LoggedByMembershipID).String()),
+		CallbackWindowStartAt: pgconv.TimeFromPg(row.CallbackWindowStartAt),
+		CallbackWindowEndAt:   pgconv.TimeFromPg(row.CallbackWindowEndAt),
+		LoggedAt:              pgconv.TimeFromPg(row.LoggedAt),
+		LoggedByMembershipID:  unverifiedcontact.MembershipID(pgconv.UUIDFromPg(row.LoggedByMembershipID).String()),
 	})
 }

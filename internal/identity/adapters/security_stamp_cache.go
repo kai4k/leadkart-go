@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
 	"github.com/leadkart/leadkart-go/internal/common/cache"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
 )
 
 // PersonStampReader is the consumer-side interface

@@ -11,6 +11,7 @@ import (
 
 	"github.com/leadkart/leadkart-go/internal/common/pagination"
 	"github.com/leadkart/leadkart-go/internal/common/pg"
+	"github.com/leadkart/leadkart-go/internal/common/pgconv"
 	"github.com/leadkart/leadkart-go/internal/platform/adapters/db"
 	"github.com/leadkart/leadkart-go/internal/platform/domain/leadform"
 	"github.com/leadkart/leadkart-go/internal/platform/domain/platformlead"
@@ -119,14 +120,14 @@ func (r *PlatformLeadRepository) MarketplaceBrowse(
 		limit = 1
 	}
 	params := db.MarketplaceBrowseParams{
-		State:          nilIfEmpty(filter.State),
-		City:           nilIfEmpty(filter.City),
-		District:       nilIfEmpty(filter.District),
-		Pincode:        nilIfEmpty(filter.Pincode),
-		BusinessType:   nilIfEmpty(filter.BusinessType),
-		MedicineSystem: nilIfEmpty(filter.MedicineSystem),
-		OrderValue:     nilIfEmpty(filter.OrderValue),
-		BuyTimeline:    nilIfEmpty(filter.BuyTimeline),
+		State:          pgconv.ZeroToNil(filter.State),
+		City:           pgconv.ZeroToNil(filter.City),
+		District:       pgconv.ZeroToNil(filter.District),
+		Pincode:        pgconv.ZeroToNil(filter.Pincode),
+		BusinessType:   pgconv.ZeroToNil(filter.BusinessType),
+		MedicineSystem: pgconv.ZeroToNil(filter.MedicineSystem),
+		OrderValue:     pgconv.ZeroToNil(filter.OrderValue),
+		BuyTimeline:    pgconv.ZeroToNil(filter.BuyTimeline),
 		HasDrugLicence: filter.HasDrugLicence,
 		HasGst:         filter.HasGst,
 		GstVerified:    filter.GstVerified,
@@ -155,7 +156,7 @@ func loadPlatformLead(ctx context.Context, q *db.Queries, id platformlead.ID) (*
 	if err != nil {
 		return nil, fmt.Errorf("platform lead repo: parse id %q: %w", id, err)
 	}
-	row, err := q.GetPlatformLeadByID(ctx, pgUUID(uid))
+	row, err := q.GetPlatformLeadByID(ctx, pgconv.PgUUID(uid))
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, platformlead.ErrNotFound
@@ -180,10 +181,10 @@ func insertPlatformLeadRow(ctx context.Context, q *db.Queries, l *platformlead.P
 	}
 	f := l.Form()
 	err = q.InsertPlatformLead(ctx, db.InsertPlatformLeadParams{
-		ID:                     pgUUID(id),
-		SourceContactID:        pgUUID(srcID),
+		ID:                     pgconv.PgUUID(id),
+		SourceContactID:        pgconv.PgUUID(srcID),
 		SoldToTenantID:         pgUUIDOptStr(l.SoldToTenantID().String()),
-		SoldAt:                 pgTimestamp(l.SoldAt()),
+		SoldAt:                 pgconv.PgTimestamp(l.SoldAt()),
 		SoldToMembershipID:     pgUUIDOptStr(l.SoldToMembershipID().String()),
 		AmountPaisa:            l.AmountPaisa(),
 		ContactName:            f.ContactName(),
@@ -206,9 +207,9 @@ func insertPlatformLeadRow(ctx context.Context, q *db.Queries, l *platformlead.P
 		DosageForms:            f.DosageForms(),
 		OrderValue:             string(f.OrderValue()),
 		BuyTimeline:            string(f.BuyTimeline()),
-		VerifiedAt:             pgRequiredTimestamp(l.VerifiedAt()),
-		VerifiedByMembershipID: pgUUID(verifiedBy),
-		CreatedAt:              pgRequiredTimestamp(l.CreatedAt()),
+		VerifiedAt:             pgconv.PgRequiredTimestamp(l.VerifiedAt()),
+		VerifiedByMembershipID: pgconv.PgUUID(verifiedBy),
+		CreatedAt:              pgconv.PgRequiredTimestamp(l.CreatedAt()),
 	})
 	if err != nil {
 		return fmt.Errorf("platform lead repo: insert: %w", err)
@@ -222,9 +223,9 @@ func updatePlatformLeadRow(ctx context.Context, q *db.Queries, l *platformlead.P
 		return fmt.Errorf("platform lead repo: parse id: %w", err)
 	}
 	err = q.UpdatePlatformLead(ctx, db.UpdatePlatformLeadParams{
-		ID:                 pgUUID(id),
+		ID:                 pgconv.PgUUID(id),
 		SoldToTenantID:     pgUUIDOptStr(l.SoldToTenantID().String()),
-		SoldAt:             pgTimestamp(l.SoldAt()),
+		SoldAt:             pgconv.PgTimestamp(l.SoldAt()),
 		SoldToMembershipID: pgUUIDOptStr(l.SoldToMembershipID().String()),
 		AmountPaisa:        l.AmountPaisa(),
 		GstVerified:        l.GstVerified(),
@@ -258,17 +259,17 @@ func rowToPlatformLead(row db.PlatformPlatformLead) *platformlead.PlatformLead {
 		BuyTimeline:    leadform.BuyTimeline(row.BuyTimeline),
 	})
 	return platformlead.UnmarshalFromDB(platformlead.Snapshot{
-		ID:                     platformlead.ID(uuidFromPg(row.ID).String()),
-		SourceContactID:        unverifiedcontact.ID(uuidFromPg(row.SourceContactID).String()),
+		ID:                     platformlead.ID(pgconv.UUIDFromPg(row.ID).String()),
+		SourceContactID:        unverifiedcontact.ID(pgconv.UUIDFromPg(row.SourceContactID).String()),
 		Form:                   form,
 		GstVerified:            row.GstVerified,
 		SoldToTenantID:         platformlead.TenantID(uuidStringIfValid(row.SoldToTenantID)),
-		SoldAt:                 timeFromPg(row.SoldAt),
+		SoldAt:                 pgconv.TimeFromPg(row.SoldAt),
 		SoldToMembershipID:     unverifiedcontact.MembershipID(uuidStringIfValid(row.SoldToMembershipID)),
 		AmountPaisa:            row.AmountPaisa,
-		VerifiedAt:             timeFromPg(row.VerifiedAt),
-		VerifiedByMembershipID: unverifiedcontact.MembershipID(uuidFromPg(row.VerifiedByMembershipID).String()),
-		CreatedAt:              timeFromPg(row.CreatedAt),
+		VerifiedAt:             pgconv.TimeFromPg(row.VerifiedAt),
+		VerifiedByMembershipID: unverifiedcontact.MembershipID(pgconv.UUIDFromPg(row.VerifiedByMembershipID).String()),
+		CreatedAt:              pgconv.TimeFromPg(row.CreatedAt),
 	})
 }
 
@@ -287,6 +288,7 @@ func drainPlatformLeadEventsToOutbox(ctx context.Context, tx pgx.Tx, l *platform
 	// still correct — it returns nil events + no-ops.
 	return drainEventsToOutbox(ctx, tx, uuid.Nil, asAny)
 }
+
 // marketplaceRowToPlatformLead re-builds a PlatformLead aggregate from
 // the PII-omitting marketplace projection. The omitted columns
 // (email / mobile_e164 / gst_number / pan_number / street) are absent
@@ -310,17 +312,17 @@ func marketplaceRowToPlatformLead(row db.MarketplaceBrowseRow) *platformlead.Pla
 		BuyTimeline:    leadform.BuyTimeline(row.BuyTimeline),
 	})
 	return platformlead.UnmarshalFromDB(platformlead.Snapshot{
-		ID:                     platformlead.ID(uuidFromPg(row.ID).String()),
-		SourceContactID:        unverifiedcontact.ID(uuidFromPg(row.SourceContactID).String()),
+		ID:                     platformlead.ID(pgconv.UUIDFromPg(row.ID).String()),
+		SourceContactID:        unverifiedcontact.ID(pgconv.UUIDFromPg(row.SourceContactID).String()),
 		Form:                   form,
 		GstVerified:            row.GstVerified,
 		SoldToTenantID:         platformlead.TenantID(uuidStringIfValid(row.SoldToTenantID)),
-		SoldAt:                 timeFromPg(row.SoldAt),
+		SoldAt:                 pgconv.TimeFromPg(row.SoldAt),
 		SoldToMembershipID:     unverifiedcontact.MembershipID(uuidStringIfValid(row.SoldToMembershipID)),
 		AmountPaisa:            row.AmountPaisa,
-		VerifiedAt:             timeFromPg(row.VerifiedAt),
-		VerifiedByMembershipID: unverifiedcontact.MembershipID(uuidFromPg(row.VerifiedByMembershipID).String()),
-		CreatedAt:              timeFromPg(row.CreatedAt),
+		VerifiedAt:             pgconv.TimeFromPg(row.VerifiedAt),
+		VerifiedByMembershipID: unverifiedcontact.MembershipID(pgconv.UUIDFromPg(row.VerifiedByMembershipID).String()),
+		CreatedAt:              pgconv.TimeFromPg(row.CreatedAt),
 	})
 }
 
@@ -337,17 +339,8 @@ func applyMarketplaceCursorParams(params *db.MarketplaceBrowseParams, cursor pag
 	if err != nil {
 		return
 	}
-	params.CursorVerifiedAt = pgTimestamp(cursor.SortValue)
-	params.CursorID = pgUUID(cursorID)
-}
-
-// nilIfEmpty returns nil for the empty string so a sqlc narg param maps
-// to SQL NULL ("don't filter on this column").
-func nilIfEmpty(s string) *string {
-	if s == "" {
-		return nil
-	}
-	return &s
+	params.CursorVerifiedAt = pgconv.PgTimestamp(cursor.SortValue)
+	params.CursorID = pgconv.PgUUID(cursorID)
 }
 
 // nilIfEmptySlice returns nil for an empty/nil slice so the GIN-overlap

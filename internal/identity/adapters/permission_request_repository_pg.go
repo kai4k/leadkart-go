@@ -14,6 +14,7 @@ import (
 
 	"github.com/leadkart/leadkart-go/internal/common/pagination"
 	"github.com/leadkart/leadkart-go/internal/common/pg"
+	"github.com/leadkart/leadkart-go/internal/common/pgconv"
 	"github.com/leadkart/leadkart-go/internal/identity/adapters/db"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/permission"
@@ -158,7 +159,7 @@ func (r *PermissionRequestRepository) GetPendingForMembership(
 	var out []*permissionrequest.Request
 	err = r.tx.WithinTxPgxTenant(ctx, tenantID.String(), func(ctx context.Context, tx pgx.Tx) error {
 		q := r.q.WithTx(tx)
-		rows, err := q.ListPendingPermissionRequestsForMembership(ctx, pgUUID(mid))
+		rows, err := q.ListPendingPermissionRequestsForMembership(ctx, pgconv.PgUUID(mid))
 		if err != nil {
 			return fmt.Errorf("permreq repo: list pending for membership: %w", err)
 		}
@@ -201,9 +202,9 @@ func (r *PermissionRequestRepository) ListPendingApprovableBy(
 	err = r.tx.WithinTxPgxTenant(ctx, tenantID.String(), func(ctx context.Context, tx pgx.Tx) error {
 		q := r.q.WithTx(tx)
 		got, qerr := q.ListPendingPermissionRequestsByApproverPage(ctx, db.ListPendingPermissionRequestsByApproverPageParams{
-			ApproverMembershipID: pgUUID(approverUUID),
-			Column2:              pgRequiredTimestamp(beforeAt),
-			Column3:              pgUUID(beforeID),
+			ApproverMembershipID: pgconv.PgUUID(approverUUID),
+			Column2:              pgconv.PgRequiredTimestamp(beforeAt),
+			Column3:              pgconv.PgUUID(beforeID),
 			Limit:                int32(limit), //nolint:gosec // bounded by pagination.ClampPageSize (≤200)
 		})
 		if qerr != nil {
@@ -250,9 +251,9 @@ func (r *PermissionRequestRepository) ListByRequester(
 	err = r.tx.WithinTxPgxTenant(ctx, tenantID.String(), func(ctx context.Context, tx pgx.Tx) error {
 		q := r.q.WithTx(tx)
 		got, qerr := q.ListPermissionRequestsByRequesterPage(ctx, db.ListPermissionRequestsByRequesterPageParams{
-			RequesterMembershipID: pgUUID(requesterUUID),
-			Column2:               pgRequiredTimestamp(beforeAt),
-			Column3:               pgUUID(beforeID),
+			RequesterMembershipID: pgconv.PgUUID(requesterUUID),
+			Column2:               pgconv.PgRequiredTimestamp(beforeAt),
+			Column3:               pgconv.PgUUID(beforeID),
 			Limit:                 int32(limit), //nolint:gosec // bounded by pagination.ClampPageSize (≤200)
 		})
 		if qerr != nil {
@@ -288,7 +289,7 @@ func loadPermissionRequest(
 	if err != nil {
 		return nil, fmt.Errorf("permreq repo: parse id %q: %w", id, err)
 	}
-	row, err := q.GetPermissionRequestByID(ctx, pgUUID(rid))
+	row, err := q.GetPermissionRequestByID(ctx, pgconv.PgUUID(rid))
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, permissionrequest.ErrNotFound
@@ -316,13 +317,13 @@ func insertPermissionRequestRow(
 		return fmt.Errorf("permreq repo: parse requester id %q: %w", req.RequesterMembershipID(), err)
 	}
 	err = q.InsertPermissionRequest(ctx, db.InsertPermissionRequestParams{
-		ID:                    pgUUID(rid),
-		TenantID:              pgUUID(tid),
-		RequesterMembershipID: pgUUID(mid),
+		ID:                    pgconv.PgUUID(rid),
+		TenantID:              pgconv.PgUUID(tid),
+		RequesterMembershipID: pgconv.PgUUID(mid),
 		PermissionConstant:    req.Permission().Name(),
 		DurationDays:          int32(req.DurationDays()), //nolint:gosec // bounded [1,90] by aggregate
 		Reason:                req.Reason(),
-		CreatedAt:             pgRequiredTimestamp(req.CreatedAt()),
+		CreatedAt:             pgconv.PgRequiredTimestamp(req.CreatedAt()),
 	})
 	if err != nil {
 		if isPendingRequestUniqueViolation(err) {
@@ -348,22 +349,22 @@ func persistPermissionRequestDecision(
 		if perr != nil {
 			return fmt.Errorf("permreq repo: parse approver id %q: %w", id, perr)
 		}
-		approverPg = pgUUID(auid)
+		approverPg = pgconv.PgUUID(auid)
 	}
 	var decisionReason *string
 	if rsn := req.DecisionReason(); rsn != "" {
 		decisionReason = &rsn
 	}
-	grantedPg := pgUUIDOpt(req.GrantedOverrideID())
+	grantedPg := pgconv.PgUUIDOrNull(req.GrantedOverrideID())
 	err = q.UpdatePermissionRequestDecision(ctx, db.UpdatePermissionRequestDecisionParams{
-		ID:                   pgUUID(rid),
+		ID:                   pgconv.PgUUID(rid),
 		State:                string(req.State()),
 		ApproverMembershipID: approverPg,
-		DecidedAt:            pgTimestamp(req.DecidedAt()),
+		DecidedAt:            pgconv.PgTimestamp(req.DecidedAt()),
 		DecisionReason:       decisionReason,
 		GrantedOverrideID:    grantedPg,
-		ExpiresAt:            pgTimestamp(req.ExpiresAt()),
-		UpdatedAt:            pgRequiredTimestamp(req.UpdatedAt()),
+		ExpiresAt:            pgconv.PgTimestamp(req.ExpiresAt()),
+		UpdatedAt:            pgconv.PgRequiredTimestamp(req.UpdatedAt()),
 	})
 	if err != nil {
 		return fmt.Errorf("permreq repo: update decision: %w", err)
@@ -398,7 +399,7 @@ func rowToPermissionRequest(row db.IdentityPermissionRequest) (*permissionreques
 			row.PermissionConstant, err)
 	}
 	approverID := membership.ID("")
-	if a := uuidFromPg(row.ApproverMembershipID); a != uuid.Nil {
+	if a := pgconv.UUIDFromPg(row.ApproverMembershipID); a != uuid.Nil {
 		approverID = membership.ID(a.String())
 	}
 	decisionReason := ""
@@ -406,20 +407,20 @@ func rowToPermissionRequest(row db.IdentityPermissionRequest) (*permissionreques
 		decisionReason = *row.DecisionReason
 	}
 	return permissionrequest.UnmarshalFromDB(permissionrequest.Snapshot{
-		ID:                    permissionrequest.ID(uuidFromPg(row.ID).String()),
-		TenantID:              tenant.ID(uuidFromPg(row.TenantID).String()),
-		RequesterMembershipID: membership.ID(uuidFromPg(row.RequesterMembershipID).String()),
+		ID:                    permissionrequest.ID(pgconv.UUIDFromPg(row.ID).String()),
+		TenantID:              tenant.ID(pgconv.UUIDFromPg(row.TenantID).String()),
+		RequesterMembershipID: membership.ID(pgconv.UUIDFromPg(row.RequesterMembershipID).String()),
 		Permission:            perm,
 		DurationDays:          int(row.DurationDays),
 		Reason:                row.Reason,
 		State:                 permissionrequest.State(row.State),
 		ApproverMembershipID:  approverID,
-		DecidedAt:             timeFromPg(row.DecidedAt),
+		DecidedAt:             pgconv.TimeFromPg(row.DecidedAt),
 		DecisionReason:        decisionReason,
-		GrantedOverrideID:     uuidFromPg(row.GrantedOverrideID),
-		ExpiresAt:             timeFromPg(row.ExpiresAt),
-		CreatedAt:             timeFromPg(row.CreatedAt),
-		UpdatedAt:             timeFromPg(row.UpdatedAt),
+		GrantedOverrideID:     pgconv.UUIDFromPg(row.GrantedOverrideID),
+		ExpiresAt:             pgconv.TimeFromPg(row.ExpiresAt),
+		CreatedAt:             pgconv.TimeFromPg(row.CreatedAt),
+		UpdatedAt:             pgconv.TimeFromPg(row.UpdatedAt),
 	}), nil
 }
 

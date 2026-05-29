@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/leadkart/leadkart-go/internal/common/pg"
+	"github.com/leadkart/leadkart-go/internal/common/pgconv"
 	"github.com/leadkart/leadkart-go/internal/crm/adapters/db"
 	"github.com/leadkart/leadkart-go/internal/crm/domain/calllog"
 	"github.com/leadkart/leadkart-go/internal/crm/domain/crmlead"
@@ -63,14 +64,14 @@ func (r *CallLogRepository) addOnTx(ctx context.Context, tx pgx.Tx, c *calllog.C
 		return fmt.Errorf("crm call_log repo: parse logged_by membership id %q: %w", c.LoggedByMembershipID(), err)
 	}
 	if err := q.InsertCallLog(ctx, db.InsertCallLogParams{
-		ID:                   pgUUID(cid),
-		TenantID:             pgUUID(tid),
-		LeadID:               pgUUID(lid),
+		ID:                   pgconv.PgUUID(cid),
+		TenantID:             pgconv.PgUUID(tid),
+		LeadID:               pgconv.PgUUID(lid),
 		Outcome:              c.Outcome().String(),
 		Notes:                c.Notes(),
-		LoggedByMembershipID: pgUUID(loggedByID),
-		LoggedAt:             pgRequiredTimestamp(c.LoggedAt()),
-		CreatedAt:            pgRequiredTimestamp(c.CreatedAt()),
+		LoggedByMembershipID: pgconv.PgUUID(loggedByID),
+		LoggedAt:             pgconv.PgRequiredTimestamp(c.LoggedAt()),
+		CreatedAt:            pgconv.PgRequiredTimestamp(c.CreatedAt()),
 	}); err != nil {
 		return fmt.Errorf("crm call_log repo: insert: %w", err)
 	}
@@ -87,7 +88,7 @@ func (r *CallLogRepository) GetByID(ctx context.Context, tenantID tenant.ID, id 
 	var out *calllog.CallLog
 	err = r.tx.WithinTxPgxTenant(ctx, tenantID.String(), func(ctx context.Context, tx pgx.Tx) error {
 		q := r.q.WithTx(tx)
-		row, err := q.GetCallLogByID(ctx, pgUUID(cid))
+		row, err := q.GetCallLogByID(ctx, pgconv.PgUUID(cid))
 		if err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				return calllog.ErrNotFound
@@ -113,7 +114,7 @@ func (r *CallLogRepository) ListByLead(ctx context.Context, tenantID tenant.ID, 
 	var out []*calllog.CallLog
 	err = r.tx.WithinTxPgxTenant(ctx, tenantID.String(), func(ctx context.Context, tx pgx.Tx) error {
 		q := r.q.WithTx(tx)
-		rows, err := q.ListCallLogsByLead(ctx, pgUUID(lid))
+		rows, err := q.ListCallLogsByLead(ctx, pgconv.PgUUID(lid))
 		if err != nil {
 			return fmt.Errorf("crm call_log repo: list by lead: %w", err)
 		}
@@ -148,13 +149,13 @@ func drainCallLogEvents(ctx context.Context, tx pgx.Tx, c *calllog.CallLog, tena
 func rowToCallLog(row db.CrmCallLog) *calllog.CallLog {
 	outcome := calllog.Outcome(row.Outcome)
 	return calllog.UnmarshalFromDB(calllog.Snapshot{
-		ID:                   calllog.ID(uuidFromPg(row.ID).String()),
-		TenantID:             tenant.ID(uuidFromPg(row.TenantID).String()),
-		LeadID:               crmlead.ID(uuidFromPg(row.LeadID).String()),
+		ID:                   calllog.ID(pgconv.UUIDFromPg(row.ID).String()),
+		TenantID:             tenant.ID(pgconv.UUIDFromPg(row.TenantID).String()),
+		LeadID:               crmlead.ID(pgconv.UUIDFromPg(row.LeadID).String()),
 		Outcome:              outcome,
 		Notes:                row.Notes,
-		LoggedByMembershipID: uuidFromPg(row.LoggedByMembershipID).String(),
-		LoggedAt:             timeFromPg(row.LoggedAt),
-		CreatedAt:            timeFromPg(row.CreatedAt),
+		LoggedByMembershipID: pgconv.UUIDFromPg(row.LoggedByMembershipID).String(),
+		LoggedAt:             pgconv.TimeFromPg(row.LoggedAt),
+		CreatedAt:            pgconv.TimeFromPg(row.CreatedAt),
 	})
 }

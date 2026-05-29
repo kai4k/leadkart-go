@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/leadkart/leadkart-go/internal/common/ids"
+	"github.com/leadkart/leadkart-go/internal/common/pgconv"
 	"github.com/leadkart/leadkart-go/internal/identity/adapters/db"
 	"github.com/leadkart/leadkart-go/internal/identity/app/actclaim"
 	"github.com/leadkart/leadkart-go/internal/identity/integrationevents"
@@ -62,11 +63,11 @@ func writeOutboxEvents(
 			return fmt.Errorf("outbox: marshal %s: %w", e.Topic(), err)
 		}
 		err = q.InsertOutboxEvent(ctx, db.InsertOutboxEventParams{
-			ID:            pgUUID(ids.NewV7()),
-			TenantID:      pgUUID(tenantID),
+			ID:            pgconv.PgUUID(ids.NewV7()),
+			TenantID:      pgconv.PgUUID(tenantID),
 			Topic:         e.Topic(),
 			Payload:       payload,
-			OccurredAt:    pgRequiredTimestamp(e.OccurredAt()),
+			OccurredAt:    pgconv.PgRequiredTimestamp(e.OccurredAt()),
 			ActOperatorID: actOperatorID,
 			ActSessionID:  actSessionID,
 			ActReason:     actReason,
@@ -96,17 +97,12 @@ func outboxActParams(ctx context.Context) (pgtype.UUID, pgtype.UUID, *string) {
 		sesID pgtype.UUID
 	)
 	if parsed, err := uuid.Parse(c.OperatorID); err == nil {
-		opID = pgUUID(parsed)
+		opID = pgconv.PgUUID(parsed)
 	}
 	if parsed, err := uuid.Parse(c.SessionID); err == nil {
-		sesID = pgUUID(parsed)
+		sesID = pgconv.PgUUID(parsed)
 	}
-	var reason *string
-	if c.Reason != "" {
-		r := c.Reason
-		reason = &r
-	}
-	return opID, sesID, reason
+	return opID, sesID, pgconv.ZeroToNil(c.Reason)
 }
 
 // mapDomainEvents translates a slice of domain events into the

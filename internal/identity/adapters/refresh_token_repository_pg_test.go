@@ -116,9 +116,9 @@ func TestRefreshTokenFamilyRepository_Add_PersistsFamilyAndFirstTokenInSameTx(t 
 //
 // Two halves:
 //
-//   1. EXPLAIN plan: Index Scan over the token_hash unique index
-//      (Postgres auto-names it `refresh_tokens_token_hash_key`).
-//   2. Observable: lookup hydrates the family by id.
+//  1. EXPLAIN plan: Index Scan over the token_hash unique index
+//     (Postgres auto-names it `refresh_tokens_token_hash_key`).
+//  2. Observable: lookup hydrates the family by id.
 func TestRefreshTokenFamilyRepository_GetByTokenHash_JoinsTokenToFamily(t *testing.T) {
 	t.Parallel()
 	pool := repoFixture(t)

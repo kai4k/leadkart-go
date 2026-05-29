@@ -192,10 +192,10 @@ func TestEdgeRepository_Add_RejectsCrossTenant(t *testing.T) {
 // `uq_role_hierarchy_active_edge_per_child WHERE removed_at IS NULL`
 // hides it from the read path. The two halves of the contract:
 //
-//   1. Physical row stays — direct SELECT bypassing the adapter
-//      proves the UPDATE didn't DELETE.
-//   2. The partial index + WHERE removed_at IS NULL predicate on the
-//      read path means GetActiveByChild can't see it.
+//  1. Physical row stays — direct SELECT bypassing the adapter
+//     proves the UPDATE didn't DELETE.
+//  2. The partial index + WHERE removed_at IS NULL predicate on the
+//     read path means GetActiveByChild can't see it.
 //
 // The fake's "Remove → ErrEdgeNotFound" assertion mirrors observable
 // behaviour; only the SQL test proves the PG-specific mechanism (soft
@@ -266,12 +266,12 @@ func TestEdgeRepository_GetActiveByChild_FiltersSoftDeleted(t *testing.T) {
 //
 // Two halves of the SQL contract:
 //
-//   1. EXPLAIN plan asserts the query uses a Recursive CTE node
-//      (`CTE Scan` over a `Recursive Union`) — proves the plan is
-//      the recursive shape, not a JOIN rewrite that happens to
-//      return the right rows on a 3-deep chain.
-//   2. Observable result: 3-node chain (c → p → gp) yields the
-//      two-edge ancestor list in depth-first order.
+//  1. EXPLAIN plan asserts the query uses a Recursive CTE node
+//     (`CTE Scan` over a `Recursive Union`) — proves the plan is
+//     the recursive shape, not a JOIN rewrite that happens to
+//     return the right rows on a 3-deep chain.
+//  2. Observable result: 3-node chain (c → p → gp) yields the
+//     two-edge ancestor list in depth-first order.
 //
 // Canonical SQL-contract sharpening per ADR 0062: plan + observable.
 func TestEdgeRepository_GetAncestorsByChild_RecursiveCTEWalksUpward(t *testing.T) {

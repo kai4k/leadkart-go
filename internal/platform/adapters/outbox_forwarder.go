@@ -13,6 +13,7 @@ import (
 
 	"github.com/leadkart/leadkart-go/internal/common/messaging"
 	"github.com/leadkart/leadkart-go/internal/common/pg"
+	"github.com/leadkart/leadkart-go/internal/common/pgconv"
 	"github.com/leadkart/leadkart-go/internal/platform/adapters/db"
 )
 
@@ -68,21 +69,21 @@ func (f *OutboxForwarder) ForwardOnce(ctx context.Context) (int, error) {
 		now := f.now()
 		propagator := otel.GetTextMapPropagator()
 		for _, row := range rows {
-			msg := message.NewMessage(uuidFromPg(row.ID).String(), row.Payload)
+			msg := message.NewMessage(pgconv.UUIDFromPg(row.ID).String(), row.Payload)
 			msg.Metadata.Set(messaging.HeaderEventType, row.Topic)
 			// tenant_id is set only when the row carries a real tenant FK.
 			// Platform-scoped events (tenant_id NULL) ship without the
 			// header, so downstream TenantContextMiddleware leaves the
 			// scope empty.
 			if row.TenantID.Valid {
-				msg.Metadata.Set(messaging.HeaderTenantID, uuidFromPg(row.TenantID).String())
+				msg.Metadata.Set(messaging.HeaderTenantID, pgconv.UUIDFromPg(row.TenantID).String())
 			}
-			msg.Metadata.Set(messaging.HeaderOccurredAt, timeFromPg(row.OccurredAt).Format(time.RFC3339Nano))
+			msg.Metadata.Set(messaging.HeaderOccurredAt, pgconv.TimeFromPg(row.OccurredAt).Format(time.RFC3339Nano))
 			if row.ActOperatorID.Valid {
-				msg.Metadata.Set(messaging.HeaderActOperatorID, uuidFromPg(row.ActOperatorID).String())
+				msg.Metadata.Set(messaging.HeaderActOperatorID, pgconv.UUIDFromPg(row.ActOperatorID).String())
 			}
 			if row.ActSessionID.Valid {
-				msg.Metadata.Set(messaging.HeaderActSessionID, uuidFromPg(row.ActSessionID).String())
+				msg.Metadata.Set(messaging.HeaderActSessionID, pgconv.UUIDFromPg(row.ActSessionID).String())
 			}
 			if row.ActReason != nil && *row.ActReason != "" {
 				msg.Metadata.Set(messaging.HeaderActReason, *row.ActReason)
@@ -95,7 +96,7 @@ func (f *OutboxForwarder) ForwardOnce(ctx context.Context) (int, error) {
 			}
 			if err := q.MarkPlatformOutboxEventForwarded(ctx, db.MarkPlatformOutboxEventForwardedParams{
 				ID:          row.ID,
-				ForwardedAt: pgRequiredTimestamp(now),
+				ForwardedAt: pgconv.PgRequiredTimestamp(now),
 			}); err != nil {
 				return fmt.Errorf("platform forwarder: mark forwarded: %w", err)
 			}
