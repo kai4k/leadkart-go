@@ -286,15 +286,28 @@ func TestArch_NoSensitiveKeysInTestLogs(t *testing.T) {
 // injection vector + bypasses pgx parameter binding. Same anti-
 // pattern in tests.
 //
-// Allow-list: the test-helper packages (audittest/messagingtest/
-// rlstest/seedtest) — they intentionally use fmt.Sprintf with a
-// fixed `schema` argument to switch table names (parameter binding
-// can't substitute schema/table names in PG).
+// NO ALLOW-LIST. The 2026-05-29 outbox-helper finding (ADR 0062
+// Amendment 1) proved the previous helper-package allow-list was a
+// loophole: messagingtest/outboxtest.go used
+// `fmt.Sprintf(`+"`"+`SELECT ... %s.outbox ...`+"`"+`, schema)` to
+// switch schema names — exactly the construction this rule names — yet
+// was allow-listed AND used a BACKTICK literal the old double-quote-only
+// regex never matched. Both holes are closed here: the matcher now
+// covers backtick literals too, and the allow-list is gone. Every test
+// helper uses a static `const q` parameterised query instead
+// (identitytest / audittest / rlstest / seedtest / inboxtest are the
+// canonical shape). Schema/table-name switching, when genuinely needed,
+// belongs in a per-schema typed helper, not a Sprintf'd format string.
 func TestArch_NoStringInterpInTestSQLConstruction(t *testing.T) {
 	t.Parallel()
 
 	sqlKw := regexp.MustCompile(`(?i)\b(SELECT|INSERT|UPDATE|DELETE|WHERE|FROM|JOIN|UNION)\b`)
-	sprintfLine := regexp.MustCompile(`(?i)fmt\.Sprintf\(\s*"([^"]*)"`)
+	// Match fmt.Sprintf with EITHER a double-quoted or a backtick
+	// (raw-string) first argument. The backtick form is the one the
+	// outboxtest.go anti-pattern used; the old double-quote-only regex
+	// missed it entirely.
+	sprintfDQ := regexp.MustCompile(`(?i)fmt\.Sprintf\(\s*"([^"]*)"`)
+	sprintfBT := regexp.MustCompile("(?i)fmt\\.Sprintf\\(\\s*`([^`]*)`")
 
 	type violation struct {
 		file string
@@ -304,36 +317,35 @@ func TestArch_NoStringInterpInTestSQLConstruction(t *testing.T) {
 
 	walkGoFiles(t, repoRoot(t), true, func(path string, src []byte) {
 		slash := pathToSlash(path)
-		if !isTestFile(slash) || archTestFile(slash) {
-			return
-		}
-		// Helper packages allowed — they use fmt.Sprintf with schema
-		// substitution for typed wrapping.
-		if strings.Contains(slash, "/audittest/") || strings.Contains(slash, "/messagingtest/") ||
-			strings.Contains(slash, "/rlstest/") || strings.Contains(slash, "/seedtest/") ||
-			strings.Contains(slash, "/identitytest/") {
-			return
-		}
-		// Helper packages' SOURCE files (not tests) — same allow.
-		if strings.HasSuffix(slash, "/audittest.go") || strings.HasSuffix(slash, "/outboxtest.go") ||
-			strings.HasSuffix(slash, "/inboxtest.go") || strings.HasSuffix(slash, "/rlstest.go") ||
-			strings.HasSuffix(slash, "/seedtest.go") || strings.HasSuffix(slash, "/identitytest.go") {
+		// Scope: test files + the test-helper package source files
+		// (audittest.go etc. are not *_test.go but ARE test infra). The
+		// pgtest container provisioner is excluded — its only Sprintf is
+		// a GRANT DDL where role/schema names are unparameterizable, and
+		// it lives in pgtest/ (not a typed read helper).
+		isHelperSrc := strings.HasSuffix(slash, "/audittest.go") ||
+			strings.HasSuffix(slash, "/inboxtest.go") ||
+			strings.HasSuffix(slash, "/rlstest.go") ||
+			strings.HasSuffix(slash, "/seedtest.go") ||
+			strings.HasSuffix(slash, "/identitytest.go")
+		if (!isTestFile(slash) && !isHelperSrc) || archTestFile(slash) {
 			return
 		}
 		text := string(src)
 		for i, ln := range strings.Split(text, "\n") {
-			m := sprintfLine.FindStringSubmatch(ln)
-			if m == nil {
-				continue
-			}
-			if sqlKw.MatchString(m[1]) {
-				violations = append(violations, violation{file: slash, line: i + 1})
+			for _, re := range []*regexp.Regexp{sprintfDQ, sprintfBT} {
+				m := re.FindStringSubmatch(ln)
+				if m == nil {
+					continue
+				}
+				if sqlKw.MatchString(m[1]) {
+					violations = append(violations, violation{file: slash, line: i + 1})
+				}
 			}
 		}
 	})
 
 	if len(violations) > 0 {
-		t.Errorf("%d test-file fmt.Sprintf(\"SELECT/INSERT/UPDATE/DELETE ...\") call(s) — use typed helpers (audittest/messagingtest/rlstest/seedtest) or, in extremis, parameter binding ($1, $2). Sister rule to TestArch_NoStringInterpInSQLConstruction (production):", len(violations))
+		t.Errorf("%d test/helper fmt.Sprintf(\"SELECT/INSERT/... %%s\") call(s) building SQL — use a static `const q` parameterised query in a typed helper (see identitytest/audittest). NO allow-list since the 2026-05-29 outbox-helper finding. Sister rule to TestArch_NoStringInterpInSQLConstruction (production):", len(violations))
 		for _, v := range violations[:min0(len(violations), 25)] {
 			t.Logf("  %s:%d", v.file, v.line)
 		}
