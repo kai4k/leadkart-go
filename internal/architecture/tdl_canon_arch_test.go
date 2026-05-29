@@ -53,7 +53,7 @@ import (
 	"go/token"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -115,7 +115,7 @@ func TestArch_EveryRepositoryHasFake(t *testing.T) {
 		return
 	}
 
-	sort.Slice(violations, func(i, j int) bool { return violations[i].repoFile < violations[j].repoFile })
+	slices.SortFunc(violations, func(a, b missing) int { return strings.Compare(a.repoFile, b.repoFile) })
 	t.Errorf("%d domain aggregate(s) with a Repository interface but no co-located <aggregate>test FakeRepository — required by TDL canon:", len(violations))
 	t.Logf("Per TDL Wild Workouts: every Repository interface gets a faithful")
 	t.Logf("FakeRepository in a sibling test package. Reference:")

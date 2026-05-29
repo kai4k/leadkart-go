@@ -20,7 +20,7 @@ type OrderPackedV1 struct {
 	BoxCount              int32      `json:"box_count"`
 	WeightGrams           int64      `json:"weight_grams"`
 	CarrierName           string     `json:"carrier_name"`
-	ExpectedDeliveryAtUTC *time.Time `json:"expected_delivery_at_utc,omitempty"`
+	ExpectedDeliveryAtUTC *time.Time `json:"expected_delivery_at_utc,omitzero"`
 	PackedAtUTC           time.Time  `json:"packed_at_utc"`
 	PackedByMembershipID  string     `json:"packed_by_membership_id"`
 }

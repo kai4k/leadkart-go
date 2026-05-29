@@ -36,7 +36,7 @@ import (
 	"go/token"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 	"testing"
 
@@ -145,8 +145,8 @@ func TestArch_RouteHasSpecOperation(t *testing.T) {
 		}
 	}
 
-	sort.Slice(codeOrphans, func(i, j int) bool { return codeOrphans[i].String() < codeOrphans[j].String() })
-	sort.Slice(specOrphans, func(i, j int) bool { return specOrphans[i].String() < specOrphans[j].String() })
+	slices.SortFunc(codeOrphans, func(a, b routeKey) int { return strings.Compare(a.String(), b.String()) })
+	slices.SortFunc(specOrphans, func(a, b routeKey) int { return strings.Compare(a.String(), b.String()) })
 
 	if len(codeOrphans) == 0 && len(specOrphans) == 0 {
 		return

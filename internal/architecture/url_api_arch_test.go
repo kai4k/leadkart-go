@@ -22,7 +22,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"sort"
+	"slices"
 	"strings"
 	"testing"
 
@@ -55,7 +55,7 @@ func specPaths(t *testing.T) []string {
 			out = append(out, strings.ToUpper(method)+" "+pathKey)
 		}
 	}
-	sort.Strings(out)
+	slices.Sort(out)
 	return out
 }
 
@@ -78,7 +78,7 @@ func codeRoutes(t *testing.T) []string {
 			}
 		})
 	}
-	sort.Strings(out)
+	slices.Sort(out)
 	return out
 }
 
@@ -141,8 +141,8 @@ func TestArch_RouteHasSpecOperation(t *testing.T) {
 			specOnly = append(specOnly, k)
 		}
 	}
-	sort.Strings(codeOnly)
-	sort.Strings(specOnly)
+	slices.Sort(codeOnly)
+	slices.Sort(specOnly)
 
 	if len(codeOnly) > 0 || len(specOnly) > 0 {
 		t.Logf("ROUTE / SPEC DRIFT — code-only=%d spec-only=%d", len(codeOnly), len(specOnly))

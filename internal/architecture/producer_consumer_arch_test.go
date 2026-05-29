@@ -40,7 +40,7 @@ import (
 	"go/token"
 	"path/filepath"
 	"regexp"
-	"sort"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -230,6 +230,8 @@ func TestArch_TopicProducerConsumerBijection(t *testing.T) {
 	//
 	// nameToTopic is the per-file pre-scan of every identifier (const or
 	// var) whose RHS resolves to a topic value.
+	//nolint:staticcheck // S1021: recursive closure — the name must be
+	// declared before the literal can reference itself; cannot be merged.
 	var resolveTopicExpr func(expr ast.Expr, nameToTopic map[string]string) (string, bool)
 	resolveTopicExpr = func(expr ast.Expr, nameToTopic map[string]string) (string, bool) {
 		switch x := expr.(type) {
@@ -396,7 +398,7 @@ func TestArch_TopicProducerConsumerBijection(t *testing.T) {
 			orphans = append(orphans, topic+"  ("+file+")")
 		}
 	}
-	sort.Strings(orphans)
+	slices.Sort(orphans)
 	if len(orphans) > 0 {
 		t.Logf("PRODUCED \\ CONSUMED — %d orphan producer topic(s) with no subscriber yet (allowed):", len(orphans))
 		for _, o := range orphans {
@@ -476,8 +478,11 @@ func TestArch_MigrationDoesNotReferenceLaterSchema(t *testing.T) {
 	migs := loadMigrations(t)
 	// loadMigrations returns os.ReadDir order = lexical = timestamp-prefix
 	// order. Sort defensively so the gate doesn't depend on FS ordering.
-	sort.Slice(migs, func(i, j int) bool {
-		return filepath.Base(migs[i].path) < filepath.Base(migs[j].path)
+	slices.SortFunc(migs, func(a, b struct {
+		path string
+		text string
+	}) int {
+		return strings.Compare(filepath.Base(a.path), filepath.Base(b.path))
 	})
 
 	createSchemaRE := regexp.MustCompile(`(?i)\bCREATE\s+SCHEMA\s+(?:IF\s+NOT\s+EXISTS\s+)?"?(\w+)`)

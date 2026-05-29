@@ -1,8 +1,9 @@
 package query_test
 
 import (
+	"cmp"
 	"context"
-	"sort"
+	"slices"
 	"testing"
 	"time"
 
@@ -36,8 +37,8 @@ func (f *fakeListReader) ListUnverifiedContactsPage(
 	}
 	// Stable sort by CreatedAt DESC — mirrors the production SQL
 	// ORDER BY (created_at DESC, id DESC).
-	sort.SliceStable(filtered, func(i, j int) bool {
-		return filtered[i].CreatedAt > filtered[j].CreatedAt
+	slices.SortStableFunc(filtered, func(a, b query.UnverifiedContactView) int {
+		return cmp.Compare(b.CreatedAt, a.CreatedAt)
 	})
 	// Cursor — skip until past the cursor's id+sort_value.
 	if !cursor.SortValue.IsZero() && cursor.ID != "" {

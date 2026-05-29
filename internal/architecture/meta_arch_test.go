@@ -36,7 +36,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"sort"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -274,7 +274,7 @@ func TestMeta_EveryFitnessFunctionHasNegativeFixture(t *testing.T) {
 		}
 		missing = append(missing, e.name)
 	}
-	sort.Strings(missing)
+	slices.Sort(missing)
 
 	if len(missing) > 0 {
 		t.Errorf("%d TestArch_* function(s) carry neither a negative fixture nor an `arch-test:no-negative-fixture` godoc marker — pick one (Ford / Parsons / Kua 'Building Evolutionary Architectures' ch.4):", len(missing))

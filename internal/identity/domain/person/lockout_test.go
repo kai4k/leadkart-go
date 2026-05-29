@@ -79,7 +79,7 @@ func TestPerson_RegisterFailedLogin_OutsideWindow_ResetsCounter(t *testing.T) {
 
 	t0 := time.Date(2026, 5, 23, 12, 0, 0, 0, time.UTC)
 	// Build up some failures inside the first window.
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		p.RegisterFailedLogin(t0.Add(time.Duration(i) * time.Second))
 	}
 	if got := p.FailedLoginCount(); got != 3 {
@@ -106,7 +106,7 @@ func TestPerson_RegisterSuccessfulLogin_ClearsCounter(t *testing.T) {
 	_ = p.PullEvents()
 
 	t0 := time.Date(2026, 5, 23, 12, 0, 0, 0, time.UTC)
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		p.RegisterFailedLogin(t0.Add(time.Duration(i) * time.Second))
 	}
 	_ = p.PullEvents() // drain any incidental events

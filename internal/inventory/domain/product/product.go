@@ -352,8 +352,7 @@ func (p *Product) Deactivate(actorID membership.ID, now time.Time) error {
 	if !p.isActive {
 		return nil // no-op — Update would have no-op'd anyway
 	}
-	f := false
-	if err := p.Update(actorID, UpdateSpec{IsActive: &f}, now); err != nil {
+	if err := p.Update(actorID, UpdateSpec{IsActive: new(false)}, now); err != nil {
 		return err
 	}
 	// Update emitted UpdatedEvent with ChangedFields=["is_active"];

@@ -650,11 +650,9 @@ func parseBoolPtr(s string) *bool {
 	}
 	switch s {
 	case "true", "1", "yes":
-		t := true
-		return &t
+		return new(true)
 	case "false", "0", "no":
-		f := false
-		return &f
+		return new(false)
 	}
 	return nil
 }

@@ -383,7 +383,7 @@ func TestListUsersPaged_HappyPath_FirstPageSentinelAdmitsAllRows(t *testing.T) {
 	t.Parallel()
 	persons := persontest.NewFakeRepository()
 	mems := membershiptest.NewFakeRepository()
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		pid := person.ID(fmt.Sprintf("11111111-0000-0000-0000-00000000000%d", i))
 		p := newPersonAt(t, pid, fmt.Sprintf("p%d@example.test", i), "P", "Q")
 		if err := persons.Add(t.Context(), p); err != nil {
@@ -422,7 +422,7 @@ func TestListUsersPaged_PageBoundary_EmitsNextCursor(t *testing.T) {
 	t.Parallel()
 	persons := persontest.NewFakeRepository()
 	mems := membershiptest.NewFakeRepository()
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		pid := person.ID(fmt.Sprintf("11111111-0000-0000-0000-00000000000%d", i))
 		p := newPersonAt(t, pid, fmt.Sprintf("p%d@example.test", i), "P", "Q")
 		if err := persons.Add(t.Context(), p); err != nil {
@@ -476,7 +476,7 @@ func TestListUsersPaged_HonoursCursor(t *testing.T) {
 	persons := persontest.NewFakeRepository()
 	mems := membershiptest.NewFakeRepository()
 	// Use distinct joinedAts so cursor predicate cuts cleanly.
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		pid := person.ID(fmt.Sprintf("11111111-0000-0000-0000-00000000000%d", i))
 		p := newPersonAt(t, pid, fmt.Sprintf("p%d@example.test", i), "P", "Q")
 		if err := persons.Add(t.Context(), p); err != nil {

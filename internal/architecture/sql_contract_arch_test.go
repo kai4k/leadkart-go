@@ -28,13 +28,14 @@
 package architecture_test
 
 import (
+	"cmp"
 	"go/ast"
 	"go/parser"
 	"go/token"
 	"os"
 	"path/filepath"
 	"regexp"
-	"sort"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -146,11 +147,8 @@ func TestArch_AdapterIntegrationTestsHaveSQLContractMarker(t *testing.T) {
 		return
 	}
 
-	sort.Slice(violations, func(i, j int) bool {
-		if violations[i].file != violations[j].file {
-			return violations[i].file < violations[j].file
-		}
-		return violations[i].line < violations[j].line
+	slices.SortFunc(violations, func(a, b unmarkedTest) int {
+		return cmp.Or(cmp.Compare(a.file, b.file), cmp.Compare(a.line, b.line))
 	})
 
 	t.Errorf("%d adapter integration test(s) without SQL-contract justification (ADR 0062):", len(violations))
