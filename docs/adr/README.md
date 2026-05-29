@@ -47,5 +47,11 @@ One decision per file, Michael Nygard format (Context / Decision / Consequences 
 | 0056 | Impersonation context propagation via outbox metadata | Accepted |
 | 0057 | Email decoupling via subscribers (outbox-driven send) | Accepted |
 | 0058 | Role hierarchy as join-table aggregate (supersedes 0054) | Accepted |
+| 0059 | Platform module — aggregates + events | Accepted |
+| 0060 | CRM module — aggregates + events | Accepted |
+| 0061 | Inventory module — aggregates + events | Accepted |
+| 0062 | TDL test pyramid + per-aggregate fakes canon | Accepted |
+| 0063 | Orders module — state-based aggregates + saga | Accepted |
+| 0064 | Outbox as pure relay + Watermill Forwarder + RLS-where-it-matters (supersedes 0027 in part) | Accepted |
 
-ADRs 0011–0026 + 0032 + 0059+ land as the relevant code lands per the master plan.
+ADRs 0011–0026 + 0032 land as the relevant code lands per the master plan.

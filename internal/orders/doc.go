@@ -1,7 +1,13 @@
 // Package orders is the Orders bounded context — quotations, orders,
 // invoices, credit notes, payments.
 //
-// Layout per CLAUDE.md "Three unbreakable rules":
+// STATUS: domain-only skeleton. Only domain/ aggregates exist; there is
+// no app/, ports/, or adapters/ layer yet, and the module is wired into
+// no cmd/ host. It publishes nothing (no outbox), so orders.order_packed.v1
+// — which the Dispatch module is designed to consume — is not yet emitted.
+// The layout below is the target, not the current state.
+//
+// Target layout per CLAUDE.md "Three unbreakable rules":
 //
 //	internal/orders/
 //	├── domain/                 entities, VOs, repository interfaces

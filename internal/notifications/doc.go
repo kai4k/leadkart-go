@@ -2,7 +2,11 @@
 // module user-facing alerts (in-app inbox + push + future email digest).
 // Per BRD §6.9 + Udi Dahan's "subscriber-decides" pattern.
 //
-// Layout:
+// STATUS: domain-only skeleton. Only domain/notification exists; there is
+// no app/, ports/, or adapters/ layer yet and nothing is wired into a
+// cmd/ host. The layout below is the target, not the current state.
+//
+// Target layout:
 //
 //	internal/notifications/
 //	├── domain/notification/           the Notification aggregate

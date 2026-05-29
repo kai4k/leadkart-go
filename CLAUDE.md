@@ -102,6 +102,12 @@
   - **9.3 — OpenAPI as code-of-record + spec/code drift CI gates** (ADR 0050). `TestArch_RouteHasSpecOperation` (bijective drift gate) + `task ci:openapi` (Spectral lint with LeadKart-specific rules in `.spectral.yaml`) + CI matrix alignment (fixed silent skip of Wave 6/8 arch tests cloud-side); 27 missing ops + 18 schemas added to `api/openapi.yaml` to close the existing drift (Wave 5 shipped 33 ops; code grew to 60; spec was 45% behind).
   - **9.4 — Role hierarchy refactored to join-table aggregate (ADR 0058 supersedes ADR 0054).** `parent_role_id` column on `identity.roles` retired in favour of `identity.role_hierarchy_edges` + new `rolehierarchy.Edge` aggregate (Vernon IDDD ch.7 + Khorikov §11). Cross-tenant safety becomes declarative (composite FK `(tenant_id, role_id) → (tenant_id, id)` replaces the Wave 9.1d SECURITY DEFINER trigger). Single-parent invariant via partial unique index; multi-hop cycle detection via simplified SECURITY INVOKER trigger on the edges table; soft-delete preserves audit history. Wire contract STABLE — `PATCH /api/v1/roles/{roleId}/parent` keeps the same URL + body shape (optional `reason` field added); `RoleDto.parent_role_id` populated via JOIN at read time. `RoleParentChangedV1` retired in favour of paired `RoleHierarchyEdgeEstablishedV1` + `RoleHierarchyEdgeRemovedV1` integration events. Migration 20260523000007 data-lifts existing `roles.parent_role_id` links into the new table before dropping the column + the SECURITY DEFINER hotfix function.
 
+**Audit + canon-alignment pass (2026-05-29, branch `fix/outbox-monotonic-ordering`):**
+- Deep multi-agent audit (TDL → Watermill/Brandur → Go idioms → FAANG) against *external* canon, not just our docs. Shipped: repaired the silently-dead Platform→CRM lead flow (producer/consumer topic literal drift), CRM outbox `FOR UPDATE SKIP LOCKED`, a `search.go` errgroup data race, forwarder metadata-header constants; + arch gates (`TestArch_OutboxDrainUsesSkipLocked`, `TestArch_MessageMetadataUsesHeaderConstants`, `TestArch_EventTypeFilterUsesConstant`).
+- **Single data-access approach:** sqlc bumped v1.30→**v1.31.1**, pinned via `go tool`, full regen (closed stale-generated drift); in-module raw SQL converted to sqlc; **squirrel removed** (marketplace browse → sqlc null-guard `narg`). Raw pgx now only in `common/pg`.
+- **Doctrine corrected to match code (this pass):** ADR 0027 Amd 1 (outbox is a relay, NOT the audit log — audit lives in `buildingblocks.audit_log_entry`); ADR 0006 Amd 1 (actual RLS mechanism is single-pool tx-local `set_config`, not `AfterAcquire`; **"RLS where it matters"** — tenant data plane only); ADR 0004 Amd 1 (squirrel retired); **ADR 0064** (outbox-as-relay + adopt Watermill `Forwarder`/`watermill-sql` per TDL + RLS-where-it-matters). TDL is the supreme authority where our local doctrine drifted.
+- **In flight (sequenced):** buildingblocks sqlc target + `processed_messages`→`buildingblocks` relocation; Watermill `Forwarder` adoption (ADR 0064); subscriber resilience (PoisonQueue, Recoverer-inside-Retry, transactional inbox); shared RFC-9457 error helper + body cap; comment cleanup; edge-case-first tests; access-path-aware RLS gate.
+
 **Active branches:**
 - `main` — production; protected via PR-only merge.
 - `archive/vibe-phase1-attempt` — reference-only (the original vibe-coded Phase 1 attempt; never merged, lives forever for archaeology).
@@ -187,10 +193,10 @@ internal/{module}/
 
 | Concern | Choice | ADR |
 |---|---|---|
-| Go version | 1.25 (target 1.26+) | 0034 |
-| DB layer | sqlc + pgx/v5 + squirrel | 0004 |
+| Go version | 1.26.3 | 0034 |
+| DB layer | sqlc (pinned v1.31.1 via `go tool`) + pgx/v5 — squirrel retired | 0004 (+Amd 1) |
 | Migrations | goose | 0005 |
-| Multi-tenancy | Postgres RLS + SET LOCAL via pgxpool AfterAcquire | 0006 |
+| Multi-tenancy | Postgres RLS (tenant data plane only) + tx-local `set_config` via Transactor | 0006 (+Amd 1) |
 | HTTP | stdlib `net/http` ServeMux 1.22+ | 0007 |
 | Messaging | Watermill v1.5+ + watermill-sql outbox | 0008 |
 | Background jobs | river | 0010 |

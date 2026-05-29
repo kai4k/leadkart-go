@@ -1,32 +1,33 @@
-// Package messaging wires the LeadKart Watermill router + the
-// canonical middleware stack per `messaging.md` doctrine + `architecture.md`
-// "Cross-module extensibility — integration events, not handler edits".
+// Package messaging wires the LeadKart Watermill router and its
+// middleware stack. Cross-module communication is integration events on
+// the bus, never direct handler edits.
 //
-// Stack composition order (outer-most → inner-most), per messaging.md:
+// The actual stack (as wired in router.go) is two layers:
 //
-//	Recoverer → CorrelationID → TenantContext → Idempotency → Audit → Retry → handler
+//	global:       Recoverer → TraceContext → CorrelationID → TenantContext
+//	per-handler:  Idempotency → Audit → Retry → handler
 //
-//   - Recoverer turns a panicking handler into an error so the broker
-//     can DLQ + the process keeps serving.
-//   - CorrelationID propagates the X-Correlation-Id chain so a single
-//     trace spans HTTP → outbox → forwarder → subscriber.
-//   - TenantContext bridges Envelope.TenantId metadata into ctx via
-//     `tenancy.WithID`; subscribers run with the correct tenant scope
-//     for downstream RLS-bound queries (parallels .NET
-//     TenantContextMiddleware in messaging.md).
-//   - Idempotency wraps the handler in a (message_id, handler_name)
-//     dedup table lookup against `identity.processed_messages` —
-//     replay-safe at-least-once delivery (Layer 2 of messaging.md
-//     "Idempotency").
-//   - Audit auto-writes a row to buildingblocks.audit_log_entry for
-//     every processed message (success OR failure).
-//   - Retry sits innermost so a transient error inside the handler
-//     gets retried under the SAME (message_id, handler_name) +
-//     SAME correlation chain.
+//   - Recoverer converts a panicking handler into an error. NOTE: it is
+//     currently outermost, so a recovered panic does NOT reach Retry —
+//     panicking handlers don't retry. There is also no PoisonQueue/DLQ
+//     yet, so a handler that keeps returning an error (e.g. on a
+//     permanently malformed payload) retries indefinitely. Both are
+//     known gaps; the fix (Recoverer-inside-Retry + PoisonQueue for
+//     non-retryable errors) is tracked for the subscriber-resilience
+//     pass. Do not claim DLQ behaviour until it ships.
+//   - TraceContext extracts the W3C trace context from message metadata
+//     so the consumer span joins the producer's trace.
+//   - CorrelationID propagates the correlation chain across the async hop.
+//   - TenantContext bridges the tenant_id metadata header into ctx via
+//     tenancy.WithID so tenant-scoped subscribers run under the right RLS
+//     scope.
+//   - Idempotency wraps the handler in a (message_id, handler_name) dedup
+//     check (run-then-insert; not yet transactional with the handler's
+//     side effects). Backstop for at-least-once delivery.
+//   - Audit auto-writes a row to buildingblocks.audit_log_entry per
+//     processed message (success or failure).
+//   - Retry retries transient handler errors under the same message +
+//     correlation chain.
 //
-// Sagas are NOT in this package per TDL canon (plan §G.H.4 + ADR
-// 0031). Choreography only.
-//
-// Citations: ThreeDotsLabs Watermill v1.5 docs; messaging.md doctrine;
-// Wolverine middleware-pipeline parallel.
+// Choreography only — no sagas in this package.
 package messaging

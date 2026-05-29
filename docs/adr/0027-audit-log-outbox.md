@@ -92,3 +92,20 @@ The outbox captures **domain events** (state-change facts). For non-state-change
 `TestArch_OutboxTableSchema` (in `internal/architecture/`).
 
 Outbox table column set is fixed — the audit reader assumes id / occurred_at / topic / payload / forwarded_at + the act_* columns per ADR 0056.
+
+---
+
+## Amendment 1 (2026-05-29) — the outbox does NOT double as the audit log; that decision is reversed
+
+**This ADR's core decision no longer reflects the code, and the code is right.** Recorded honestly per the "code and doctrine must not diverge silently" rule.
+
+**What actually happened:** the per-tenant audit read against the outbox (`ListAuditEventsForTenant`) is dead — wired to no handler. The live audit-read path reads a *separate* table, `buildingblocks.audit_log_entry` (populated by the Watermill `AuditLoggingMiddleware`, read by `audit_reader_pg.go`), which has **no RLS**. So "outbox doubles as the audit log" was quietly abandoned in implementation; what remained was the *cost* — the outbox carrying RLS+FORCE for an audit-read path that does not exist.
+
+**Why the original was a mistake:** the outbox (an event *relay*: write-once, drained by a platform-scoped forwarder, never read tenant-scoped) and the audit log (tenant-scoped forensic reads, multi-year retention) have **different access patterns and lifecycles**. Coupling them forced never-delete + RLS onto the relay, which then fought the canonical messaging tooling (Watermill `Forwarder` + `watermill-sql`). Brandur's "events table is also a free audit log" fits only when the two concerns share an access path; here they don't.
+
+**Corrected decision (see [ADR 0064](0064-outbox-as-relay-and-watermill-forwarder.md)):**
+- The outbox is a **pure event relay**; audit stays in `buildingblocks.audit_log_entry`.
+- The dead `ListAuditEventsForTenant` outbox query is retired.
+- RLS is removed from the relay per "RLS where it matters" — see [ADR 0006](0006-multi-tenancy-rls.md) Amendment 1.
+
+This ADR is **superseded in part by ADR 0064** (the outbox-first / same-tx-write principle survives; the outbox-as-audit-log coupling does not).
