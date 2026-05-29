@@ -11,6 +11,7 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/propagation"
 
+	"github.com/leadkart/leadkart-go/internal/common/messaging"
 	"github.com/leadkart/leadkart-go/internal/common/pg"
 	"github.com/leadkart/leadkart-go/internal/identity/adapters/db"
 )
@@ -84,22 +85,22 @@ func (f *OutboxForwarder) ForwardOnce(ctx context.Context) (int, error) {
 		propagator := otel.GetTextMapPropagator()
 		for _, row := range rows {
 			msg := message.NewMessage(uuidFromPg(row.ID).String(), row.Payload)
-			msg.Metadata.Set("event_type", row.Topic)
-			msg.Metadata.Set("tenant_id", uuidFromPg(row.TenantID).String())
-			msg.Metadata.Set("occurred_at", timeFromPg(row.OccurredAt).Format(time.RFC3339Nano))
+			msg.Metadata.Set(messaging.HeaderEventType, row.Topic)
+			msg.Metadata.Set(messaging.HeaderTenantID, uuidFromPg(row.TenantID).String())
+			msg.Metadata.Set(messaging.HeaderOccurredAt, timeFromPg(row.OccurredAt).Format(time.RFC3339Nano))
 			// Per ADR 0056: propagate the RFC 8693 actor claim from the
 			// outbox row onto Watermill message metadata. Subscriber-side
 			// AuditMiddleware reads these back to populate
 			// audit_log_entry.act_*. Empty metadata for non-impersonation
 			// rows — the AuditMiddleware path is presence-checked.
 			if row.ActOperatorID.Valid {
-				msg.Metadata.Set("act_operator_id", uuidFromPg(row.ActOperatorID).String())
+				msg.Metadata.Set(messaging.HeaderActOperatorID, uuidFromPg(row.ActOperatorID).String())
 			}
 			if row.ActSessionID.Valid {
-				msg.Metadata.Set("act_session_id", uuidFromPg(row.ActSessionID).String())
+				msg.Metadata.Set(messaging.HeaderActSessionID, uuidFromPg(row.ActSessionID).String())
 			}
 			if row.ActReason != nil && *row.ActReason != "" {
-				msg.Metadata.Set("act_reason", *row.ActReason)
+				msg.Metadata.Set(messaging.HeaderActReason, *row.ActReason)
 			}
 			// W3C Trace Context propagation across the broker. The forwarder
 			// runs in a separate process from the producing handler (cmd/api

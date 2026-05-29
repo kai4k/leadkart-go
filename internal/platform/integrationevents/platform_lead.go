@@ -51,8 +51,14 @@ type LeadPurchasedV1 struct {
 	LeadSnapshot            LeadSnapshot `json:"lead_snapshot"`
 }
 
+// TopicLeadPurchasedV1 is the canonical wire alias for the lead-purchase
+// event. Single source of truth: the producer stamps it on the outbox row
+// and CRM's subscriber filters on this same constant, so the two cannot
+// drift (the underscore/hyphen mismatch that silently dropped this flow).
+const TopicLeadPurchasedV1 = "platform.lead_purchased.v1"
+
 // Topic returns the canonical wire alias.
-func (LeadPurchasedV1) Topic() string { return "platform.lead_purchased.v1" }
+func (LeadPurchasedV1) Topic() string { return TopicLeadPurchasedV1 }
 
 // OccurredAt returns the domain timestamp.
 func (e LeadPurchasedV1) OccurredAt() time.Time { return e.PurchasedAt }

@@ -141,7 +141,16 @@ func (h SearchHandler) Handle(ctx context.Context, q SearchQuery) (SearchView, e
 	//nolint:gosec // limit clamped at 20 above
 	limit32 := int32(limit)
 
-	view := SearchView{}
+	// Each goroutine writes ONLY its own locals; nothing is shared, so
+	// there is no data race. The view is assembled after Wait. (The
+	// earlier version mutated one shared SearchView from both goroutines,
+	// which raced on HasPartial when both categories timed out.)
+	var (
+		persons        []SearchPersonHit
+		tenants        []SearchTenantHit
+		personsPartial bool
+		tenantsPartial bool
+	)
 
 	g, gctx := errgroup.WithContext(ctx)
 	if q.IncludePersons {
@@ -150,13 +159,13 @@ func (h SearchHandler) Handle(ctx context.Context, q SearchQuery) (SearchView, e
 			defer cancel()
 			rows, err := h.index.SearchPersons(subCtx, q.Q, limit32)
 			if errors.Is(err, context.DeadlineExceeded) {
-				view.HasPartial = true
+				personsPartial = true
 				return nil
 			}
 			if err != nil {
 				return fmt.Errorf("search: persons: %w", err)
 			}
-			view.Persons = rows
+			persons = rows
 			return nil
 		})
 	}
@@ -167,13 +176,13 @@ func (h SearchHandler) Handle(ctx context.Context, q SearchQuery) (SearchView, e
 			defer cancel()
 			rows, err := h.index.SearchTenants(subCtx, q.Q, limit32)
 			if errors.Is(err, context.DeadlineExceeded) {
-				view.HasPartial = true
+				tenantsPartial = true
 				return nil
 			}
 			if err != nil {
 				return fmt.Errorf("search: tenants: %w", err)
 			}
-			view.Tenants = rows
+			tenants = rows
 			return nil
 		})
 	}
@@ -181,7 +190,11 @@ func (h SearchHandler) Handle(ctx context.Context, q SearchQuery) (SearchView, e
 	if err := g.Wait(); err != nil {
 		return SearchView{}, err
 	}
-	return view, nil
+	return SearchView{
+		Persons:    persons,
+		Tenants:    tenants,
+		HasPartial: personsPartial || tenantsPartial,
+	}, nil
 }
 
 // CachedSearchHandler wraps SearchHandler with cache.SearchResultsTTL.

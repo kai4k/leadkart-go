@@ -230,6 +230,65 @@ func lineNumber(body string, pos int) int {
 	return strings.Count(body[:pos], "\n") + 1
 }
 
+// TestArch_OutboxDrainUsesSkipLocked asserts every outbox drain query
+// (the forwarder's "unforwarded" SELECT) carries FOR UPDATE SKIP LOCKED.
+// Without it, two forwarder replicas (e.g. during a rolling deploy) read
+// the same rows and both publish — duplicate downstream delivery. Brandur
+// Leach "Transactionally Staged Job Drains" + Watermill SQL outbox +
+// river-queue all use SKIP LOCKED for exactly this.
+//
+// The drain query is identified as the SELECT against <schema>.outbox
+// whose predicate filters unforwarded rows (NOT forwarded / forwarded =
+// false). The InsertX and MarkXForwarded statements are not drains and
+// are not checked.
+//
+// arch-test:no-synctest — purely-static analysis test.
+//
+// arch-test:no-negative-fixture — the CRM drain that shipped WITHOUT
+// SKIP LOCKED (commit history on fix/outbox-monotonic-ordering) is the
+// recorded RED→GREEN proof; a sibling fixture SQL file would itself be
+// the banned shape under the path-anchored walk.
+func TestArch_OutboxDrainUsesSkipLocked(t *testing.T) {
+	t.Parallel()
+
+	// A drain SELECT: references <schema>.outbox AND filters unforwarded
+	// rows. Match the query body between a `-- name:` header and the next
+	// header (or EOF) so we test each named query independently.
+	unforwardedRE := regexp.MustCompile(`(?i)\b(not\s+forwarded|forwarded\s*=\s*false)\b`)
+	skipLockedRE := regexp.MustCompile(`(?i)for\s+update\s+skip\s+locked`)
+	nameSplitRE := regexp.MustCompile(`(?m)^--\s*name:`)
+
+	var violations []string
+	for _, path := range collectOutboxQueryFiles(t) {
+		src, err := os.ReadFile(path) //nolint:gosec // arch-test fixture path under internal/
+		if err != nil {
+			t.Fatalf("read %s: %v", path, err)
+		}
+		body := string(src)
+		if !outboxTableRE.MatchString(body) {
+			continue
+		}
+		// Split into per-query blocks so a SKIP LOCKED on one query can't
+		// satisfy a different unguarded drain in the same file.
+		for _, block := range nameSplitRE.Split(body, -1) {
+			if !outboxTableRE.MatchString(block) || !unforwardedRE.MatchString(block) {
+				continue
+			}
+			// This block is a drain SELECT. It must lock-and-skip.
+			if !skipLockedRE.MatchString(block) {
+				violations = append(violations, pathToSlash(path))
+			}
+		}
+	}
+
+	if len(violations) > 0 {
+		t.Errorf("%d outbox drain query(ies) missing FOR UPDATE SKIP LOCKED — concurrent forwarder replicas will double-publish (Brandur 'Transactionally Staged Job Drains' + Watermill SQL outbox):", len(violations))
+		for _, v := range violations {
+			t.Errorf("  %s", v)
+		}
+	}
+}
+
 // sqlReadsOutboxRE matches a SQL string literal that READS the outbox
 // table — a `FROM`/`JOIN`/`INTO`/`UPDATE` clause naming `<schema>.outbox`.
 // Restricted to a SQL verb prefix so prose mentioning "writes a row to

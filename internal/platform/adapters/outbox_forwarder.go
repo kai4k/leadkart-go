@@ -11,6 +11,7 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/propagation"
 
+	"github.com/leadkart/leadkart-go/internal/common/messaging"
 	"github.com/leadkart/leadkart-go/internal/common/pg"
 	"github.com/leadkart/leadkart-go/internal/platform/adapters/db"
 )
@@ -68,24 +69,23 @@ func (f *OutboxForwarder) ForwardOnce(ctx context.Context) (int, error) {
 		propagator := otel.GetTextMapPropagator()
 		for _, row := range rows {
 			msg := message.NewMessage(uuidFromPg(row.ID).String(), row.Payload)
-			msg.Metadata.Set("event_type", row.Topic)
-			// tenant_id metadata is set only when the row carries a
-			// real tenant FK. Platform-scoped events (tenant_id NULL,
-			// per migration 20260601000002) ship without the header,
-			// matching the on-wire shape downstream subscribers
-			// expect (Watermill envelope.TenantId stays empty).
+			msg.Metadata.Set(messaging.HeaderEventType, row.Topic)
+			// tenant_id is set only when the row carries a real tenant FK.
+			// Platform-scoped events (tenant_id NULL) ship without the
+			// header, so downstream TenantContextMiddleware leaves the
+			// scope empty.
 			if row.TenantID.Valid {
-				msg.Metadata.Set("tenant_id", uuidFromPg(row.TenantID).String())
+				msg.Metadata.Set(messaging.HeaderTenantID, uuidFromPg(row.TenantID).String())
 			}
-			msg.Metadata.Set("occurred_at", timeFromPg(row.OccurredAt).Format(time.RFC3339Nano))
+			msg.Metadata.Set(messaging.HeaderOccurredAt, timeFromPg(row.OccurredAt).Format(time.RFC3339Nano))
 			if row.ActOperatorID.Valid {
-				msg.Metadata.Set("act_operator_id", uuidFromPg(row.ActOperatorID).String())
+				msg.Metadata.Set(messaging.HeaderActOperatorID, uuidFromPg(row.ActOperatorID).String())
 			}
 			if row.ActSessionID.Valid {
-				msg.Metadata.Set("act_session_id", uuidFromPg(row.ActSessionID).String())
+				msg.Metadata.Set(messaging.HeaderActSessionID, uuidFromPg(row.ActSessionID).String())
 			}
 			if row.ActReason != nil && *row.ActReason != "" {
-				msg.Metadata.Set("act_reason", *row.ActReason)
+				msg.Metadata.Set(messaging.HeaderActReason, *row.ActReason)
 			}
 			propagator.Inject(ctx, propagation.MapCarrier(msg.Metadata))
 			msg.SetContext(ctx)
