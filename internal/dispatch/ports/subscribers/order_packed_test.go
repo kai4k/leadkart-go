@@ -19,6 +19,7 @@ import (
 	"github.com/leadkart/leadkart-go/internal/dispatch/domain/consignmentnote/consignmentnotetest"
 	"github.com/leadkart/leadkart-go/internal/dispatch/ports/subscribers"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
+	ordersevents "github.com/leadkart/leadkart-go/internal/orders/integrationevents"
 )
 
 // fakeUoW is a minimal pg.UnitOfWork that just runs fn synchronously.
@@ -48,20 +49,20 @@ func buildHandler(t *testing.T) (*subscribers.OrderPackedIngestor, *consignmentn
 	return subscribers.NewOrderPackedIngestor(cmd, silentLog()), repo
 }
 
-func buildEnvelope(t *testing.T, evt subscribers.OrderPackedV1) *message.Message {
+func buildEnvelope(t *testing.T, evt ordersevents.OrderPackedV1) *message.Message {
 	t.Helper()
 	body, err := json.Marshal(evt)
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
 	msg := message.NewMessage(uuid.NewString(), body)
-	msg.Metadata.Set(messaging.HeaderEventType, subscribers.OrderPackedTopic)
+	msg.Metadata.Set(messaging.HeaderEventType, ordersevents.TopicOrderPackedV1)
 	msg.Metadata.Set(messaging.HeaderTenantID, evt.TenantID)
 	return msg
 }
 
-func validEvent(tenantID, orderID string) subscribers.OrderPackedV1 {
-	return subscribers.OrderPackedV1{
+func validEvent(tenantID, orderID string) ordersevents.OrderPackedV1 {
+	return ordersevents.OrderPackedV1{
 		OrderID:              orderID,
 		TenantID:             tenantID,
 		BoxCount:             3,
@@ -153,7 +154,7 @@ func TestOrderPackedIngestor_MalformedPayloadErrors(t *testing.T) {
 	t.Parallel()
 	h, _ := buildHandler(t)
 	msg := message.NewMessage(uuid.NewString(), []byte("{not json"))
-	msg.Metadata.Set(messaging.HeaderEventType, subscribers.OrderPackedTopic)
+	msg.Metadata.Set(messaging.HeaderEventType, ordersevents.TopicOrderPackedV1)
 	if err := h.Handle(t.Context(), "", msg); err == nil {
 		t.Fatal("want decode error")
 	}
