@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -15,9 +16,12 @@ import (
 )
 
 // UnverifiedContactReader is the pgx/sqlc-backed read-model satisfying
-// [query.ListUnverifiedContactsReader]. Platform-only — runs under the
-// caller's existing scope (the HTTP layer authn middleware sets the
-// platform GUC when the operator's JWT is_platform=true).
+// [query.ListUnverifiedContactsReader]. The unverified_contacts table is
+// platform-only (RLS policy uvc_platform_only USING app.is_platform()),
+// so every read MUST run inside a TxScopePlatform transaction that binds
+// the platform GUC — a pool checkout has app.is_platform()=false and FORCE
+// RLS would filter every row to empty. (The GUC is tx-local; an HTTP
+// middleware cannot set it for a later separate pool checkout.)
 type UnverifiedContactReader struct {
 	pool *pgxpool.Pool
 	tx   *pg.Transactor
@@ -46,27 +50,34 @@ func (r *UnverifiedContactReader) ListUnverifiedContactsPage(
 	}
 
 	clamped := int32Clamp(pageSize)
-	rows, err := r.q.ListUnverifiedContactsPage(ctx, db.ListUnverifiedContactsPageParams{
-		StateFilter: state,
-		CursorAt:    cursorAt,
-		CursorID:    cursorID,
-		PageSize:    clamped,
+	var out []query.UnverifiedContactView
+	err := r.tx.WithinTxPgx(ctx, pg.TxScopePlatform, func(ctx context.Context, tx pgx.Tx) error {
+		rows, qerr := r.q.WithTx(tx).ListUnverifiedContactsPage(ctx, db.ListUnverifiedContactsPageParams{
+			StateFilter: state,
+			CursorAt:    cursorAt,
+			CursorID:    cursorID,
+			PageSize:    clamped,
+		})
+		if qerr != nil {
+			return qerr
+		}
+		out = make([]query.UnverifiedContactView, 0, len(rows))
+		for _, row := range rows {
+			out = append(out, query.UnverifiedContactView{
+				ID:                    uuidFromPg(row.ID).String(),
+				State:                 row.State,
+				ContactName:           row.ContactName,
+				MobileE164:            row.MobileE164,
+				City:                  row.City,
+				StateGeo:              row.StateGeo,
+				CreatedAt:             timeFromPg(row.CreatedAt).Format(time.RFC3339Nano),
+				CreatedByMembershipID: uuidFromPg(row.CreatedByMembershipID).String(),
+			})
+		}
+		return nil
 	})
 	if err != nil {
 		return nil, fmt.Errorf("unverified contacts reader: list: %w", err)
-	}
-	out := make([]query.UnverifiedContactView, 0, len(rows))
-	for _, row := range rows {
-		out = append(out, query.UnverifiedContactView{
-			ID:                    uuidFromPg(row.ID).String(),
-			State:                 row.State,
-			ContactName:           row.ContactName,
-			MobileE164:            row.MobileE164,
-			City:                  row.City,
-			StateGeo:              row.StateGeo,
-			CreatedAt:             timeFromPg(row.CreatedAt).Format(time.RFC3339Nano),
-			CreatedByMembershipID: uuidFromPg(row.CreatedByMembershipID).String(),
-		})
 	}
 	return out, nil
 }

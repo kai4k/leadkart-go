@@ -12,6 +12,7 @@ import (
 	"github.com/leadkart/leadkart-go/internal/crm/app/command"
 	"github.com/leadkart/leadkart-go/internal/crm/domain/crmlead"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
+	platformevents "github.com/leadkart/leadkart-go/internal/platform/integrationevents"
 )
 
 // HandlerName constants — CI-stable per messaging.md "stable handler
@@ -60,7 +61,7 @@ func (h *PurchasedLeadIngestor) Handle(ctx context.Context, _ string, msg *messa
 		// Topic-mismatch on the shared platform.events topic — not for us.
 		return nil
 	}
-	var evt LeadPurchasedV1
+	var evt platformevents.LeadPurchasedV1
 	if err := json.Unmarshal(msg.Payload, &evt); err != nil {
 		// retry — malformed envelope is a producer-side bug; the inbox dedup
 		// means the retry won't double-spend even if the producer fixes + replays.
@@ -92,7 +93,7 @@ func (h *PurchasedLeadIngestor) Handle(ctx context.Context, _ string, msg *messa
 // snapshotFromV1 converts the wire payload into the domain factory's
 // [crmlead.PurchaseSnapshot] shape. Just field-by-field copy; the
 // domain factory does the validation.
-func snapshotFromV1(evt LeadPurchasedV1) crmlead.PurchaseSnapshot {
+func snapshotFromV1(evt platformevents.LeadPurchasedV1) crmlead.PurchaseSnapshot {
 	s := evt.LeadSnapshot
 	return crmlead.PurchaseSnapshot{
 		PurchaseID:              evt.PurchaseID,

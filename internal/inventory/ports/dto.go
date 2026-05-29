@@ -179,7 +179,7 @@ type ErrorResponse struct {
 	Status int    `json:"status,omitzero"`
 	Detail string `json:"detail,omitzero"`
 	// LeadKart legacy fields
-	Error   string              `json:"error,omitzero"`
+	Error   string              `json:"error"`
 	Message string              `json:"message,omitzero"`
 	Errors  map[string][]string `json:"errors,omitzero"`
 }

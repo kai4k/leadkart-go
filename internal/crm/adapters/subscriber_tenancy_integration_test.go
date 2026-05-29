@@ -45,6 +45,7 @@ import (
 	"github.com/leadkart/leadkart-go/internal/crm/domain/crmlead"
 	"github.com/leadkart/leadkart-go/internal/crm/ports/subscribers"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
+	platformevents "github.com/leadkart/leadkart-go/internal/platform/integrationevents"
 )
 
 func silentLog() *slog.Logger {
@@ -118,14 +119,14 @@ func wireCrmRouter(t *testing.T, pool *pgxpool.Pool, topic string) (*gochannel.G
 // both flow correctly.
 func publishLeadPurchased(t *testing.T, pubsub *gochannel.GoChannel, topic string, tenantID, purchaseID string) string {
 	t.Helper()
-	evt := subscribers.LeadPurchasedV1{
+	evt := platformevents.LeadPurchasedV1{
 		PurchaseID:              purchaseID,
 		TenantID:                tenantID,
 		PlatformLeadID:          ids.NewV7().String(),
 		PurchasedAt:             time.Now().UTC(),
 		PurchasedByMembershipID: ids.NewV7().String(),
 		AmountPaisa:             50000,
-		LeadSnapshot: subscribers.LeadSnapshotV1{
+		LeadSnapshot: platformevents.LeadSnapshot{
 			ContactName:    "Tenancy Pharma",
 			MobileE164:     "+919812345678",
 			Email:          "x@example.com",

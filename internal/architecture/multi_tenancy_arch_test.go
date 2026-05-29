@@ -414,6 +414,7 @@ func TestArch_RepoTenantScopedReadsUseTxScopeTenant(t *testing.T) {
 		// substring "TxScopeTenant" keeps the test's tenant-scope
 		// heuristic green without needing the allow-list entry.
 		"internal/platform/adapters/unverified_contact_repository_pg.go",
+		"internal/platform/adapters/unverified_contact_reader_pg.go", // platform-only table (uvc_platform_only RLS) — reads under TxScopePlatform
 		"internal/platform/adapters/verification_call_repository_pg.go",
 		"internal/platform/adapters/platform_lead_reader_pg.go",
 		"internal/platform/adapters/outbox_forwarder.go",

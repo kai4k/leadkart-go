@@ -18,6 +18,7 @@ import (
 	"github.com/leadkart/leadkart-go/internal/crm/domain/crmlead"
 	"github.com/leadkart/leadkart-go/internal/crm/ports/subscribers"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
+	platformevents "github.com/leadkart/leadkart-go/internal/platform/integrationevents"
 )
 
 // silentLog returns a no-output *slog.Logger for tests — required by
@@ -87,7 +88,7 @@ func (r *fakeLeads) ListPage(_ context.Context, _ tenant.ID, _ crmlead.ListFilte
 	return pagination.Page[*crmlead.CrmLead]{}, nil
 }
 
-func buildEnvelope(t *testing.T, evt subscribers.LeadPurchasedV1) *message.Message {
+func buildEnvelope(t *testing.T, evt platformevents.LeadPurchasedV1) *message.Message {
 	t.Helper()
 	body, err := json.Marshal(evt)
 	if err != nil {
@@ -99,15 +100,15 @@ func buildEnvelope(t *testing.T, evt subscribers.LeadPurchasedV1) *message.Messa
 	return msg
 }
 
-func validEvent(tenantID string, purchase string) subscribers.LeadPurchasedV1 {
-	return subscribers.LeadPurchasedV1{
+func validEvent(tenantID string, purchase string) platformevents.LeadPurchasedV1 {
+	return platformevents.LeadPurchasedV1{
 		PurchaseID:              purchase,
 		TenantID:                tenantID,
 		PlatformLeadID:          uuid.NewString(),
 		PurchasedAt:             time.Now().UTC(), // arch-test:wall-clock -- wire-envelope fixture; subscriber doesn't pin timestamps.
 		PurchasedByMembershipID: uuid.NewString(),
 		AmountPaisa:             50000,
-		LeadSnapshot: subscribers.LeadSnapshotV1{
+		LeadSnapshot: platformevents.LeadSnapshot{
 			ContactName:    "Test Pharma",
 			MobileE164:     "+919812345678",
 			Email:          "x@example.com",
@@ -237,7 +238,7 @@ func TestLeadPurchasedV1_FrozenWireContract(t *testing.T) {
 		`"buy_timeline":"WithinWeek"` +
 		`}}`
 
-	var got subscribers.LeadPurchasedV1
+	var got platformevents.LeadPurchasedV1
 	if err := json.Unmarshal([]byte(canonical), &got); err != nil {
 		t.Fatalf("decode canonical: %v", err)
 	}

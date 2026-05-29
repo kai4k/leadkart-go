@@ -362,13 +362,15 @@ func (f Form) BusinessType() BusinessType { return f.businessType }
 // MedicineSystem returns the closed-set medicine system.
 func (f Form) MedicineSystem() MedicineSystem { return f.medicineSystem }
 
-// ProductRanges returns the (possibly nil) product-range list.
-// Callers MUST NOT mutate the returned slice — VO is immutable.
-func (f Form) ProductRanges() []string { return f.productRanges }
+// ProductRanges returns a copy of the product-range list. Defensive copy
+// keeps the VO immutable — a caller cannot mutate the backing array
+// shared with the persisted/embedded Form (matches every other aggregate
+// slice getter in the codebase).
+func (f Form) ProductRanges() []string { return slices.Clone(f.productRanges) }
 
-// DosageForms returns the (possibly nil) dosage-form list.
-// Callers MUST NOT mutate the returned slice.
-func (f Form) DosageForms() []string { return f.dosageForms }
+// DosageForms returns a copy of the dosage-form list (defensive copy; see
+// ProductRanges).
+func (f Form) DosageForms() []string { return slices.Clone(f.dosageForms) }
 
 // OrderValue returns the closed-set order-value band.
 func (f Form) OrderValue() OrderValue { return f.orderValue }
