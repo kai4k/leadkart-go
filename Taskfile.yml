@@ -104,8 +104,13 @@ tasks:
 
   test:int:
     desc: Integration tests (testcontainers Postgres; requires Docker)
+    # -p 1 serializes package execution so only ONE Postgres testcontainer
+    # starts at a time. Each package already shares a single container; the
+    # default per-package parallelism (~GOMAXPROCS) starts that many
+    # containers at once, which Docker Desktop (esp. Windows) can't service
+    # → spurious fast setup failures. Serial startup is deterministic.
     cmds:
-      - go test -shuffle=on -tags=integration -timeout=15m -coverprofile={{.COVER_INT_OUT}} ./...
+      - go test -shuffle=on -tags=integration -timeout=15m -p 1 -coverprofile={{.COVER_INT_OUT}} ./...
 
   # ---- CI-flavored variants — wrap the above in gotestsum + JUnit XML.
   # The test command + package list are identical; only the wrapper differs.
