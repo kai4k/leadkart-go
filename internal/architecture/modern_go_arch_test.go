@@ -10,6 +10,7 @@ import (
 	"go/token"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"strings"
 	"testing"
@@ -1073,37 +1074,52 @@ func TestArch_NoHandRolledMinMax(t *testing.T) {
 }
 
 // ----------------------------------------------------------------------------
-// MG4: TestArch_NoSortSliceInProduction
+// MG4: TestArch_NoLegacySortPackage
 // ----------------------------------------------------------------------------
 //
-// Per Go 1.21+: ordering a slice is `slices.SortFunc(s, cmp)` where the
-// comparator returns an int (negative / 0 / positive) — the typed,
-// generic idiom. The legacy `sort.Slice(s, less)` / `sort.SliceStable`
-// take a `func(i, j int) bool` less-func and sort via runtime reflection
-// (reflect.Swapper) — slower, untyped (the closure indexes the slice by
-// int, defeating the type system), and superseded. `cmp.Compare` +
-// `cmp.Or` express the same orderings (incl. multi-key + DESC via arg
-// swap) without reflection.
+// Per Go 1.21+ the `slices` package supersedes the reflection-based
+// `sort` convenience funcs:
 //
-// Detection (AST, low-false-positive): a `*ast.CallExpr` whose callee is
-// the qualified selector `sort.Slice` or `sort.SliceStable`. Keyed off
-// pkg+name so a method named Slice on some other receiver never trips.
+//   - sort.Slice / sort.SliceStable  → slices.SortFunc / slices.SortStableFunc
+//     (int-returning comparator via cmp.Compare / cmp.Or; swap args for DESC)
+//   - sort.Strings / sort.Ints / sort.Float64s → slices.Sort
 //
-// Scope: production — non-test files under internal/. Test code may still
-// use sort.Slice freely (this gate's `includeTests=false`). The 9 prior
-// production call sites (all per-aggregate FakeRepositories, which the
-// project treats as production non-_test.go) were converted to
-// slices.SortFunc before this gate landed; production was confirmed clean.
+// The sort.Slice family takes a `func(i, j int) bool` less-func and sorts
+// via runtime reflection (reflect.Swapper) — slower, untyped (the closure
+// indexes the slice by int, defeating the type system). slices.SortFunc is
+// generic and typed. The sort.Strings/Ints/Float64s helpers are likewise
+// one-line slices.Sort calls now.
 //
-// arch-test:no-negative-fixture — the recorded RED→GREEN proof is the
-// mutation test in the deliverable (re-introduce a production
-// `sort.Slice(...)` in a fake → RED; revert → GREEN). A committed fixture
-// would itself be the banned shape; the AST sort.Slice matcher IS the
-// fitness function.
+// Scope: ALL .go under internal/ (includeTests=true). The earlier
+// production-only carve-out was removed in the Go-canon sweep (ADR 0066):
+// arch + route_spec tests carried the bulk of the legacy calls and a
+// single approach must hold everywhere, not just in production.
+//
+// Detection (AST, low-false-positive): a *ast.CallExpr whose callee is the
+// qualified selector sort.<Func> for one of the superseded names. Keyed off
+// pkg+name so a method named Slice on some other receiver never trips, and
+// string-literal / comment mentions of "sort.Slice" are ignored (not AST
+// call nodes). sort.Sort and sort.Search are NOT banned — they have no
+// drop-in slices replacement.
+//
+// arch-test:no-negative-fixture — RED→GREEN proof is the mutation test in
+// the deliverable (reintroduce a sort.Slice call → RED; revert → GREEN). A
+// committed fixture would itself be the banned shape; the AST matcher IS
+// the fitness function.
 //
 // arch-test:no-synctest — purely-static AST analysis test.
-func TestArch_NoSortSliceInProduction(t *testing.T) {
+func TestArch_NoLegacySortPackage(t *testing.T) {
 	t.Parallel()
+
+	// Superseded by slices. Maps name → the canonical replacement shown in
+	// the failure message.
+	replacement := map[string]string{
+		"Slice":       "slices.SortFunc(s, func(a, b T) int {...})",
+		"SliceStable": "slices.SortStableFunc(s, func(a, b T) int {...})",
+		"Strings":     "slices.Sort(s)",
+		"Ints":        "slices.Sort(s)",
+		"Float64s":    "slices.Sort(s)",
+	}
 
 	type violation struct {
 		file string
@@ -1112,7 +1128,7 @@ func TestArch_NoSortSliceInProduction(t *testing.T) {
 	}
 	var violations []violation
 
-	walkGoFiles(t, internalDir(t), false, func(path string, src []byte) {
+	walkGoFiles(t, internalDir(t), true, func(path string, src []byte) {
 		fset, f := parseFile(t, path, src)
 		ast.Inspect(f, func(n ast.Node) bool {
 			call, ok := n.(*ast.CallExpr)
@@ -1120,7 +1136,10 @@ func TestArch_NoSortSliceInProduction(t *testing.T) {
 				return true
 			}
 			pkg, name := callPkgAndName(call.Fun)
-			if pkg != "sort" || (name != "Slice" && name != "SliceStable") {
+			if pkg != "sort" {
+				return true
+			}
+			if _, banned := replacement[name]; !banned {
 				return true
 			}
 			violations = append(violations, violation{
@@ -1133,9 +1152,204 @@ func TestArch_NoSortSliceInProduction(t *testing.T) {
 	})
 
 	if len(violations) > 0 {
-		t.Errorf("%d production sort.Slice/sort.SliceStable call(s) — Go 1.21: use slices.SortFunc with an int-returning comparator (cmp.Compare / cmp.Or; swap args for DESC) instead of the reflection-based legacy form:", len(violations))
+		t.Errorf("%d legacy sort.* call(s) — Go 1.21: use the slices package instead of the reflection-based sort convenience funcs:", len(violations))
 		for _, v := range violations {
-			t.Errorf("  %s:%d — %s(s, func(i, j int) bool {...}) (use slices.SortFunc(s, func(a, b T) int {...}))", v.file, v.line, v.fn)
+			name := v.fn[len("sort."):]
+			t.Errorf("  %s:%d — %s(...) → %s", v.file, v.line, v.fn, replacement[name])
+		}
+	}
+}
+
+// ----------------------------------------------------------------------------
+// MG5: TestArch_NoAddressOfThrowawayLocal
+// ----------------------------------------------------------------------------
+//
+// Go 1.26 extended new() to accept an expression: new(true) → *bool,
+// new(42) → *int, new("x") → *string. The pre-1.26 idiom — declare a
+// throwaway local solely to take its address — is now superseded:
+//
+//	t := true        ->   return new(true)
+//	return &t
+//
+// This gate flags exactly that shape and nothing fuzzier: a `x := <literal>`
+// (basic literal, or the predeclared true/false) immediately followed by a
+// `return ... &x ...`. The narrow "assign-a-constant-then-return-its-address"
+// match keeps false positives at zero — conditional nil-on-zero helpers
+// (pgconv.ZeroToNil) and `&param` returns are NOT this shape and are left
+// alone (new() always yields a non-nil pointer; those need the nil branch).
+//
+// Scope: production (.go under internal/, non-test). new(expr) in tests is
+// a nice-to-have, not a correctness concern, and test fixtures occasionally
+// want a named local for clarity.
+//
+// arch-test:no-negative-fixture — RED→GREEN proof is the mutation test
+// (reintroduce `t := true; return &t` → RED; revert → GREEN). A committed
+// fixture would be the banned shape itself.
+//
+// arch-test:no-synctest — purely-static AST analysis test.
+func TestArch_NoAddressOfThrowawayLocal(t *testing.T) {
+	t.Parallel()
+
+	type violation struct {
+		file string
+		line int
+		name string
+	}
+	var violations []violation
+
+	isConstLiteral := func(e ast.Expr) bool {
+		switch v := e.(type) {
+		case *ast.BasicLit:
+			return true
+		case *ast.Ident:
+			return v.Name == "true" || v.Name == "false"
+		}
+		return false
+	}
+	// returnsAddressOf reports whether a return statement yields &name among
+	// its results.
+	returnsAddressOf := func(ret *ast.ReturnStmt, name string) bool {
+		for _, r := range ret.Results {
+			u, ok := r.(*ast.UnaryExpr)
+			if !ok || u.Op != token.AND {
+				continue
+			}
+			if id, ok := u.X.(*ast.Ident); ok && id.Name == name {
+				return true
+			}
+		}
+		return false
+	}
+
+	walkGoFiles(t, internalDir(t), false, func(path string, src []byte) {
+		fset, f := parseFile(t, path, src)
+		ast.Inspect(f, func(n ast.Node) bool {
+			block, ok := n.(*ast.BlockStmt)
+			if !ok {
+				return true
+			}
+			for i := 0; i+1 < len(block.List); i++ {
+				assign, ok := block.List[i].(*ast.AssignStmt)
+				if !ok || assign.Tok != token.DEFINE ||
+					len(assign.Lhs) != 1 || len(assign.Rhs) != 1 {
+					continue
+				}
+				lhs, ok := assign.Lhs[0].(*ast.Ident)
+				if !ok || lhs.Name == "_" {
+					continue
+				}
+				if !isConstLiteral(assign.Rhs[0]) {
+					continue
+				}
+				ret, ok := block.List[i+1].(*ast.ReturnStmt)
+				if !ok || !returnsAddressOf(ret, lhs.Name) {
+					continue
+				}
+				violations = append(violations, violation{
+					file: pathToSlash(path),
+					line: fset.Position(assign.Pos()).Line,
+					name: lhs.Name,
+				})
+			}
+			return true
+		})
+	})
+
+	if len(violations) > 0 {
+		t.Errorf("%d throwaway-local-then-address site(s) — Go 1.26: return new(<literal>) instead of `x := lit; return &x`:", len(violations))
+		for _, v := range violations {
+			t.Errorf("  %s:%d — `%s := <lit>; return &%s` → `return new(<lit>)`", v.file, v.line, v.name, v.name)
+		}
+	}
+}
+
+// ----------------------------------------------------------------------------
+// MG6: TestArch_TimeFieldsUseOmitzero
+// ----------------------------------------------------------------------------
+//
+// Go 1.24 added the `omitzero` json tag option. For time.Time / time.Duration
+// `omitempty` is wrong or useless: a value-typed time.Time is never "empty"
+// (it has no comparable-to-empty zero the encoder recognises), so omitempty
+// silently never omits; omitzero omits the zero value as intended. Even for
+// *time.Time, omitzero is the canonical, consistent choice.
+//
+// This gate flags any struct field of type time.Time / time.Duration (value
+// or pointer) whose json tag carries `omitempty`. Use `omitzero`.
+//
+// Scope: production struct definitions (.go under internal/, non-test).
+//
+// arch-test:no-negative-fixture — RED→GREEN proof is the mutation test
+// (re-add `omitempty` on a *time.Time field → RED; revert → GREEN).
+//
+// arch-test:no-synctest — purely-static AST analysis test.
+func TestArch_TimeFieldsUseOmitzero(t *testing.T) {
+	t.Parallel()
+
+	isTimeType := func(e ast.Expr) bool {
+		if star, ok := e.(*ast.StarExpr); ok {
+			e = star.X
+		}
+		sel, ok := e.(*ast.SelectorExpr)
+		if !ok {
+			return false
+		}
+		pkg, ok := sel.X.(*ast.Ident)
+		if !ok || pkg.Name != "time" {
+			return false
+		}
+		return sel.Sel.Name == "Time" || sel.Sel.Name == "Duration"
+	}
+
+	type violation struct {
+		file  string
+		line  int
+		field string
+	}
+	var violations []violation
+
+	walkGoFiles(t, internalDir(t), false, func(path string, src []byte) {
+		fset, f := parseFile(t, path, src)
+		ast.Inspect(f, func(n ast.Node) bool {
+			st, ok := n.(*ast.StructType)
+			if !ok || st.Fields == nil {
+				return true
+			}
+			for _, field := range st.Fields.List {
+				if field.Tag == nil || !isTimeType(field.Type) {
+					continue
+				}
+				tag := reflect.StructTag(strings.Trim(field.Tag.Value, "`"))
+				jsonTag, ok := tag.Lookup("json")
+				if !ok {
+					continue
+				}
+				hasOmitempty := false
+				for opt := range strings.SplitSeq(jsonTag, ",") {
+					if opt == "omitempty" {
+						hasOmitempty = true
+					}
+				}
+				if !hasOmitempty {
+					continue
+				}
+				name := "?"
+				if len(field.Names) > 0 {
+					name = field.Names[0].Name
+				}
+				violations = append(violations, violation{
+					file:  pathToSlash(path),
+					line:  fset.Position(field.Pos()).Line,
+					field: name,
+				})
+			}
+			return true
+		})
+	})
+
+	if len(violations) > 0 {
+		t.Errorf("%d time.Time/time.Duration field(s) tagged json:\",omitempty\" — Go 1.24: use \",omitzero\":", len(violations))
+		for _, v := range violations {
+			t.Errorf("  %s:%d — field %s", v.file, v.line, v.field)
 		}
 	}
 }

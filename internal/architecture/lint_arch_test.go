@@ -44,11 +44,16 @@ func TestArch_GolangciLintConfigCanonical(t *testing.T) {
 	if !strings.Contains(body, "default: standard") {
 		t.Error(".golangci.yml does not enable default standard set (errcheck/govet/ineffassign/staticcheck/unused)")
 	}
-	required := []string{"revive", "gosec"}
+	required := []string{"revive", "gosec", "depguard"}
 	for _, l := range required {
 		if !strings.Contains(body, l) {
 			t.Errorf(".golangci.yml does not enable %s", l)
 		}
+	}
+	// depguard must carry the layer-boundary driver-ban (ADR 0047/0066):
+	// the declarative complement to the AST import gates.
+	if !strings.Contains(body, "github.com/jackc/pgx") {
+		t.Error(".golangci.yml depguard does not deny the pgx driver in domain/app (ADR 0047/0066)")
 	}
 }
 

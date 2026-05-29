@@ -414,3 +414,161 @@ func TestArch_StatusComparisonsUseTypedConst(t *testing.T) {
 		}
 	}
 }
+
+// ============================================================================
+// GATE 4 — TestArch_NoModuleLocalPgConversionHelpers
+// ============================================================================
+//
+// The Go<->pgtype conversion helpers (pgUUID, pgTimestamp, pgRequiredTimestamp,
+// pgDate, pgUUIDOrNull, and the zero->nil *string converter) were copy-pasted
+// into all four modules' adapters/conversion.go and drifted only by name
+// (pgUUIDOpt vs pgUUIDOrNull). They now live once in internal/common/pgconv
+// (ADR 0066). This gate stops a per-module copy from creeping back.
+//
+// Two FP-free shapes are flagged in internal/*/adapters/ (non-test, generated
+// db/ skipped by walkGoFiles):
+//
+//	A. a func returning pgtype.{UUID,Timestamptz,Date} whose every parameter
+//	   is a Go scalar we wrap (uuid.UUID / time.Time) — a pure Go->pg wrapper.
+//	B. a func returning *T whose body is `return &<param>` — the zero->nil
+//	   scalar converter (stringPtr shape).
+//
+// Deliberately NOT flagged (domain-specific transformers that legitimately
+// stay in the adapter): uuidParamOpt (parses a wire string → pgtype.UUID, so
+// its param is string, not uuid.UUID); nameQueryPattern (wraps %…% then
+// returns &local, not &param); nullableTextArray ([]string → []string). The
+// shapes above exclude all three by construction.
+//
+// Scope: production — conversion helpers are production adapter code; a
+// converter declared in an adapter _test.go is test scaffolding, not a
+// shipped duplicate (includeTests=false).
+//
+// arch-test:no-negative-fixture — RED→GREEN proof is the mutation test
+// (re-add a `func pgUUID(id uuid.UUID) pgtype.UUID` to a module adapter →
+// RED; revert → GREEN).
+func TestArch_NoModuleLocalPgConversionHelpers(t *testing.T) {
+	t.Parallel()
+
+	isPgtypeResult := func(results *ast.FieldList) bool {
+		if results == nil || len(results.List) != 1 {
+			return false
+		}
+		sel, ok := results.List[0].Type.(*ast.SelectorExpr)
+		if !ok {
+			return false
+		}
+		x, ok := sel.X.(*ast.Ident)
+		if !ok || x.Name != "pgtype" {
+			return false
+		}
+		switch sel.Sel.Name {
+		case "UUID", "Timestamptz", "Date":
+			return true
+		}
+		return false
+	}
+	isWrapScalar := func(e ast.Expr) bool {
+		sel, ok := e.(*ast.SelectorExpr)
+		if !ok {
+			return false
+		}
+		x, ok := sel.X.(*ast.Ident)
+		if !ok {
+			return false
+		}
+		return (x.Name == "uuid" && sel.Sel.Name == "UUID") ||
+			(x.Name == "time" && sel.Sel.Name == "Time")
+	}
+	allParamsWrapScalar := func(params *ast.FieldList) bool {
+		if params == nil || len(params.List) == 0 {
+			return false
+		}
+		for _, p := range params.List {
+			if !isWrapScalar(p.Type) {
+				return false
+			}
+		}
+		return true
+	}
+	paramNames := func(params *ast.FieldList) map[string]bool {
+		out := map[string]bool{}
+		if params == nil {
+			return out
+		}
+		for _, p := range params.List {
+			for _, n := range p.Names {
+				out[n.Name] = true
+			}
+		}
+		return out
+	}
+	// returnsAddressOfParam reports whether fn's body has `return &<param>`.
+	returnsAddressOfParam := func(fn *ast.FuncDecl) bool {
+		if fn.Body == nil {
+			return false
+		}
+		names := paramNames(fn.Type.Params)
+		found := false
+		ast.Inspect(fn.Body, func(n ast.Node) bool {
+			ret, ok := n.(*ast.ReturnStmt)
+			if !ok {
+				return true
+			}
+			for _, r := range ret.Results {
+				u, ok := r.(*ast.UnaryExpr)
+				if !ok || u.Op != token.AND {
+					continue
+				}
+				if id, ok := u.X.(*ast.Ident); ok && names[id.Name] {
+					found = true
+				}
+			}
+			return true
+		})
+		return found
+	}
+	isPointerResult := func(results *ast.FieldList) bool {
+		if results == nil || len(results.List) != 1 {
+			return false
+		}
+		_, ok := results.List[0].Type.(*ast.StarExpr)
+		return ok
+	}
+
+	type violation struct {
+		file string
+		line int
+		fn   string
+	}
+	var violations []violation
+
+	walkGoFiles(t, internalDir(t), false, func(path string, src []byte) {
+		slash := pathToSlash(path)
+		if !strings.Contains(slash, "/adapters/") {
+			return
+		}
+		fset, f := parseFile(t, path, src)
+		for _, decl := range f.Decls {
+			fn, ok := decl.(*ast.FuncDecl)
+			if !ok || fn.Recv != nil { // methods are not these helpers
+				continue
+			}
+			pgWrapper := isPgtypeResult(fn.Type.Results) && allParamsWrapScalar(fn.Type.Params)
+			zeroToNil := isPointerResult(fn.Type.Results) && returnsAddressOfParam(fn)
+			if pgWrapper || zeroToNil {
+				violations = append(violations, violation{
+					file: slash,
+					line: fset.Position(fn.Pos()).Line,
+					fn:   fn.Name.Name,
+				})
+			}
+		}
+	})
+
+	if len(violations) > 0 {
+		t.Errorf("%d module-local pg-conversion helper(s) — use internal/common/pgconv (ADR 0066) instead of a per-module copy:", len(violations))
+		for _, v := range violations {
+			t.Errorf("  %s:%d — func %s (move to / call pgconv.*)", v.file, v.line, v.fn)
+		}
+	}
+}

@@ -23,6 +23,7 @@ linters:
     - testifylint
     - sqlclosecheck
     - tagliatelle         # struct tag naming consistency
+    - depguard            # layer-boundary import guard (ADR 0047/0066)
 
   exclusions:
     rules:
@@ -39,6 +40,27 @@ linters:
         linters: [gosec]
 
   settings:
+    depguard:
+      # Layer-boundary import guard — the Go-canon, declarative complement
+      # to the AST fitness tests (ADR 0047/0066). Blocks the pgx driver from
+      # leaking into the inner layers, the way a .NET project blocks EF Core
+      # / Npgsql. Direct imports only; the transitive closure is covered by
+      # TestArch_LayersHaveNoForbiddenTransitiveDeps.
+      rules:
+        domain:
+          files:
+            - "**/internal/*/domain/**/*.go"
+          deny:
+            - pkg: github.com/jackc/pgx
+              desc: domain is persistence-ignorant — no DB driver (ADR 0047/0066); use repository interfaces
+            - pkg: database/sql
+              desc: domain is persistence-ignorant — no database/sql (ADR 0047)
+        app:
+          files:
+            - "**/internal/*/app/**/*.go"
+          deny:
+            - pkg: github.com/jackc/pgx
+              desc: app depends on pg.UnitOfWork / domain interfaces, not the pgx driver (ADR 0047)
     cyclop:
       # 20 accommodates the orchestrator + auth handlers (TenantOnboarding,
       # Login, Refresh) which legitimately branch on a handful of well-named
