@@ -191,11 +191,11 @@ WHERE  id = $1;
 SELECT id, email, first_name, last_name, created_at,
        similarity(
            lower(email) || ' ' || lower(first_name) || ' ' || lower(last_name),
-           lower($1)
+           lower(sqlc.arg(query))
        ) AS rank
 FROM   identity.persons
 WHERE  is_active AND NOT is_anonymised
 AND    (lower(email) || ' ' || lower(first_name) || ' ' || lower(last_name))
-       ILIKE '%' || lower($1) || '%'
+       ILIKE '%' || lower(sqlc.arg(query)) || '%'
 ORDER  BY rank DESC, id DESC
-LIMIT  $2;
+LIMIT  sqlc.arg('limit');

@@ -26,7 +26,7 @@ SELECT id, product_id, tenant_id, batch_number,
        mrp_paise, purchase_price_paise,
        quantity_on_hand, version,
        created_at, updated_at,
-       is_deleted, deleted_at, deleted_by
+       is_deleted, deleted_at, deleted_by, created_by_membership_id
 FROM   inventory.batches
 WHERE  id = $1
 AND    NOT is_deleted;
@@ -47,7 +47,7 @@ SET    quantity_on_hand = $2,
        manufacturer_name = $9,
        manufacturing_licence_number = $10
 WHERE  id = $1
-AND    version = $11;
+AND    version = sqlc.arg(version_expected);
 
 -- name: ListBatchesByProductPage :many
 -- Cursor-paginated list per ADR 0038. Keyset on (expiry_date, id) DESC
@@ -61,14 +61,14 @@ SELECT id, product_id, tenant_id, batch_number,
        mrp_paise, purchase_price_paise,
        quantity_on_hand, version,
        created_at, updated_at,
-       is_deleted, deleted_at, deleted_by
+       is_deleted, deleted_at, deleted_by, created_by_membership_id
 FROM   inventory.batches
 WHERE  product_id = $1
 AND    NOT is_deleted
-AND    ($4::boolean OR expiry_date > now())
-AND    (expiry_date, id) < ($2, $3)
+AND    (sqlc.arg(include_expired)::boolean OR expiry_date > now())
+AND    (expiry_date, id) < (sqlc.arg(cursor_expiry_date)::date, sqlc.arg(cursor_id)::uuid)
 ORDER  BY expiry_date DESC, id DESC
-LIMIT  $5;
+LIMIT  sqlc.arg('limit');
 
 -- name: AnyLiveBatchWithStockForProduct :one
 SELECT EXISTS (

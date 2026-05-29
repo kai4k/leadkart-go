@@ -18,7 +18,7 @@ INSERT INTO identity.roles (
 -- name: GetRoleByID :one
 SELECT id, tenant_id, name, is_system_default, is_super_admin,
        hierarchy_level, permissions, created_at,
-       is_deleted, deleted_at, deleted_by
+       is_deleted, deleted_at, deleted_by, created_by_membership_id
 FROM   identity.roles
 WHERE  id = $1;
 
@@ -27,7 +27,7 @@ WHERE  id = $1;
 -- by RoleRepository for "lookup-by-name" admin flows. Live rows only.
 SELECT id, tenant_id, name, is_system_default, is_super_admin,
        hierarchy_level, permissions, created_at,
-       is_deleted, deleted_at, deleted_by
+       is_deleted, deleted_at, deleted_by, created_by_membership_id
 FROM   identity.roles
 WHERE  tenant_id = $1
   AND  name      = $2
@@ -39,7 +39,7 @@ WHERE  tenant_id = $1
 -- intent + platform-bypass paths that want a specific tenant.
 SELECT id, tenant_id, name, is_system_default, is_super_admin,
        hierarchy_level, permissions, created_at,
-       is_deleted, deleted_at, deleted_by
+       is_deleted, deleted_at, deleted_by, created_by_membership_id
 FROM   identity.roles
 WHERE  tenant_id  = $1
   AND  NOT is_deleted
@@ -51,7 +51,7 @@ ORDER  BY hierarchy_level, name;
 -- RLS still applies; cross-tenant lookups must run under platform.
 SELECT id, tenant_id, name, is_system_default, is_super_admin,
        hierarchy_level, permissions, created_at,
-       is_deleted, deleted_at, deleted_by
+       is_deleted, deleted_at, deleted_by, created_by_membership_id
 FROM   identity.roles
 WHERE  id = ANY($1::uuid[])
   AND  NOT is_deleted;
