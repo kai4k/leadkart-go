@@ -32,7 +32,7 @@ package tenanttest
 
 import (
 	"context"
-	"sort"
+	"slices"
 
 	"github.com/leadkart/leadkart-go/internal/common/slug"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
@@ -150,8 +150,8 @@ func (f *FakeRepository) ListAll(_ context.Context) ([]*tenant.Tenant, error) {
 	for _, t := range f.rows {
 		out = append(out, t)
 	}
-	sort.Slice(out, func(i, j int) bool {
-		return out[i].CreatedAt().Before(out[j].CreatedAt())
+	slices.SortFunc(out, func(a, b *tenant.Tenant) int {
+		return a.CreatedAt().Compare(b.CreatedAt())
 	})
 	return out, nil
 }

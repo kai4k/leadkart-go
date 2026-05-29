@@ -35,8 +35,9 @@
 package membershiptest
 
 import (
+	"cmp"
 	"context"
-	"sort"
+	"slices"
 	"time"
 
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
@@ -189,8 +190,8 @@ func (f *FakeRepository) ListForTenant(_ context.Context, tenantID tenant.ID) ([
 			out = append(out, m)
 		}
 	}
-	sort.Slice(out, func(i, j int) bool {
-		return out[i].JoinedAt().Before(out[j].JoinedAt())
+	slices.SortFunc(out, func(a, b *membership.Membership) int {
+		return a.JoinedAt().Compare(b.JoinedAt())
 	})
 	return out, nil
 }
@@ -225,11 +226,11 @@ func (f *FakeRepository) ListForTenantPage(_ context.Context, tenantID tenant.ID
 			out = append(out, m)
 		}
 	}
-	sort.Slice(out, func(i, j int) bool {
-		if !out[i].JoinedAt().Equal(out[j].JoinedAt()) {
-			return out[i].JoinedAt().After(out[j].JoinedAt()) // DESC
-		}
-		return out[i].ID().String() > out[j].ID().String() // DESC
+	slices.SortFunc(out, func(a, b *membership.Membership) int {
+		return cmp.Or(
+			b.JoinedAt().Compare(a.JoinedAt()),            // joined_at DESC
+			cmp.Compare(b.ID().String(), a.ID().String()), // id DESC
+		)
 	})
 	if limit > 0 && len(out) > limit {
 		out = out[:limit]
@@ -249,8 +250,8 @@ func (f *FakeRepository) ListAllForPerson(_ context.Context, personID person.ID)
 			out = append(out, m)
 		}
 	}
-	sort.Slice(out, func(i, j int) bool {
-		return out[i].JoinedAt().Before(out[j].JoinedAt())
+	slices.SortFunc(out, func(a, b *membership.Membership) int {
+		return a.JoinedAt().Compare(b.JoinedAt())
 	})
 	return out, nil
 }

@@ -3,8 +3,9 @@
 package notificationtest
 
 import (
+	"cmp"
 	"context"
-	"sort"
+	"slices"
 	"time"
 
 	"github.com/leadkart/leadkart-go/internal/common/pagination"
@@ -116,11 +117,11 @@ func (r *FakeRepository) ListPageForRecipient(
 		}
 		matched = append(matched, n)
 	}
-	sort.Slice(matched, func(i, j int) bool {
-		if matched[i].CreatedAt().Equal(matched[j].CreatedAt()) {
-			return matched[i].ID() > matched[j].ID()
-		}
-		return matched[i].CreatedAt().After(matched[j].CreatedAt())
+	slices.SortFunc(matched, func(a, b *notification.Notification) int {
+		return cmp.Or(
+			b.CreatedAt().Compare(a.CreatedAt()), // created_at DESC
+			cmp.Compare(b.ID(), a.ID()),          // id DESC tiebreaker
+		)
 	})
 	hasMore := false
 	if len(matched) > pageSize {

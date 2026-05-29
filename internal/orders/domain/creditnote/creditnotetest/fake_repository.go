@@ -3,8 +3,9 @@
 package creditnotetest
 
 import (
+	"cmp"
 	"context"
-	"sort"
+	"slices"
 
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 	"github.com/leadkart/leadkart-go/internal/orders/domain/creditnote"
@@ -63,11 +64,11 @@ func (r *FakeRepository) ListByInvoice(
 			out = append(out, c)
 		}
 	}
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].IssuedAt().Equal(out[j].IssuedAt()) {
-			return out[i].ID() < out[j].ID()
-		}
-		return out[i].IssuedAt().Before(out[j].IssuedAt())
+	slices.SortFunc(out, func(a, b *creditnote.CreditNote) int {
+		return cmp.Or(
+			a.IssuedAt().Compare(b.IssuedAt()), // issued_at ASC
+			cmp.Compare(a.ID(), b.ID()),        // id ASC tiebreaker
+		)
 	})
 	return out, nil
 }

@@ -32,7 +32,7 @@ package verificationcalltest
 
 import (
 	"context"
-	"sort"
+	"slices"
 
 	"github.com/leadkart/leadkart-go/internal/platform/domain/unverifiedcontact"
 	"github.com/leadkart/leadkart-go/internal/platform/domain/verificationcall"
@@ -89,8 +89,8 @@ func (r *FakeRepository) ListByContact(
 			out = append(out, c)
 		}
 	}
-	sort.Slice(out, func(i, j int) bool {
-		return out[i].LoggedAt().After(out[j].LoggedAt())
+	slices.SortFunc(out, func(a, b *verificationcall.VerificationCall) int {
+		return b.LoggedAt().Compare(a.LoggedAt()) // logged_at DESC
 	})
 	return out, nil
 }

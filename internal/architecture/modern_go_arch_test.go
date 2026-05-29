@@ -1071,3 +1071,71 @@ func TestArch_NoHandRolledMinMax(t *testing.T) {
 		}
 	}
 }
+
+// ----------------------------------------------------------------------------
+// MG4: TestArch_NoSortSliceInProduction
+// ----------------------------------------------------------------------------
+//
+// Per Go 1.21+: ordering a slice is `slices.SortFunc(s, cmp)` where the
+// comparator returns an int (negative / 0 / positive) — the typed,
+// generic idiom. The legacy `sort.Slice(s, less)` / `sort.SliceStable`
+// take a `func(i, j int) bool` less-func and sort via runtime reflection
+// (reflect.Swapper) — slower, untyped (the closure indexes the slice by
+// int, defeating the type system), and superseded. `cmp.Compare` +
+// `cmp.Or` express the same orderings (incl. multi-key + DESC via arg
+// swap) without reflection.
+//
+// Detection (AST, low-false-positive): a `*ast.CallExpr` whose callee is
+// the qualified selector `sort.Slice` or `sort.SliceStable`. Keyed off
+// pkg+name so a method named Slice on some other receiver never trips.
+//
+// Scope: production — non-test files under internal/. Test code may still
+// use sort.Slice freely (this gate's `includeTests=false`). The 9 prior
+// production call sites (all per-aggregate FakeRepositories, which the
+// project treats as production non-_test.go) were converted to
+// slices.SortFunc before this gate landed; production was confirmed clean.
+//
+// arch-test:no-negative-fixture — the recorded RED→GREEN proof is the
+// mutation test in the deliverable (re-introduce a production
+// `sort.Slice(...)` in a fake → RED; revert → GREEN). A committed fixture
+// would itself be the banned shape; the AST sort.Slice matcher IS the
+// fitness function.
+//
+// arch-test:no-synctest — purely-static AST analysis test.
+func TestArch_NoSortSliceInProduction(t *testing.T) {
+	t.Parallel()
+
+	type violation struct {
+		file string
+		line int
+		fn   string
+	}
+	var violations []violation
+
+	walkGoFiles(t, internalDir(t), false, func(path string, src []byte) {
+		fset, f := parseFile(t, path, src)
+		ast.Inspect(f, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			pkg, name := callPkgAndName(call.Fun)
+			if pkg != "sort" || (name != "Slice" && name != "SliceStable") {
+				return true
+			}
+			violations = append(violations, violation{
+				file: pathToSlash(path),
+				line: fset.Position(call.Pos()).Line,
+				fn:   "sort." + name,
+			})
+			return true
+		})
+	})
+
+	if len(violations) > 0 {
+		t.Errorf("%d production sort.Slice/sort.SliceStable call(s) — Go 1.21: use slices.SortFunc with an int-returning comparator (cmp.Compare / cmp.Or; swap args for DESC) instead of the reflection-based legacy form:", len(violations))
+		for _, v := range violations {
+			t.Errorf("  %s:%d — %s(s, func(i, j int) bool {...}) (use slices.SortFunc(s, func(a, b T) int {...}))", v.file, v.line, v.fn)
+		}
+	}
+}
