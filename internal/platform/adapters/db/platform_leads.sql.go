@@ -114,10 +114,6 @@ type InsertPlatformLeadParams struct {
 }
 
 // Platform module — PlatformLead queries. Per ADR 0059.
-//
-// Static reads only — the marketplace browse with dynamic filters is
-// assembled via squirrel directly in the adapter (sqlc can't express
-// the optional WHERE clauses on text[] GIN columns cleanly).
 func (q *Queries) InsertPlatformLead(ctx context.Context, arg InsertPlatformLeadParams) error {
 	_, err := q.db.Exec(ctx, insertPlatformLead,
 		arg.ID,
@@ -151,6 +147,153 @@ func (q *Queries) InsertPlatformLead(ctx context.Context, arg InsertPlatformLead
 		arg.CreatedAt,
 	)
 	return err
+}
+
+const marketplaceBrowse = `-- name: MarketplaceBrowse :many
+SELECT id, source_contact_id,
+       sold_to_tenant_id, sold_at, sold_to_membership_id, amount_paisa,
+       contact_name, pincode, city, district, state_geo,
+       has_drug_licence, has_gst, gst_verified, has_pan,
+       business_type, medicine_system, product_ranges, dosage_forms,
+       order_value, buy_timeline,
+       verified_at, verified_by_membership_id, created_at
+FROM   platform.platform_leads
+WHERE  sold_to_tenant_id IS NULL
+AND    ($1::text IS NULL          OR state_geo = $1)
+AND    ($2::text IS NULL           OR city = $2)
+AND    ($3::text IS NULL       OR district = $3)
+AND    ($4::text IS NULL        OR pincode = $4)
+AND    ($5::text IS NULL  OR business_type = $5)
+AND    ($6::text IS NULL OR medicine_system = $6)
+AND    ($7::text IS NULL    OR order_value = $7)
+AND    ($8::text IS NULL   OR buy_timeline = $8)
+AND    ($9::boolean IS NULL OR has_drug_licence = $9)
+AND    ($10::boolean IS NULL     OR has_gst = $10)
+AND    ($11::boolean IS NULL OR gst_verified = $11)
+AND    ($12::text[] IS NULL OR product_ranges && $12::text[])
+AND    ($13::text[] IS NULL OR dosage_forms && $13::text[])
+AND    ($14::timestamptz IS NULL
+        OR (verified_at, id) < ($14::timestamptz, $15::uuid))
+ORDER  BY verified_at DESC, id DESC
+LIMIT  $16
+`
+
+type MarketplaceBrowseParams struct {
+	State            *string
+	City             *string
+	District         *string
+	Pincode          *string
+	BusinessType     *string
+	MedicineSystem   *string
+	OrderValue       *string
+	BuyTimeline      *string
+	HasDrugLicence   *bool
+	HasGst           *bool
+	GstVerified      *bool
+	ProductRanges    []string
+	DosageForms      []string
+	CursorVerifiedAt pgtype.Timestamptz
+	CursorID         pgtype.UUID
+	Lim              int32
+}
+
+type MarketplaceBrowseRow struct {
+	ID                     pgtype.UUID
+	SourceContactID        pgtype.UUID
+	SoldToTenantID         pgtype.UUID
+	SoldAt                 pgtype.Timestamptz
+	SoldToMembershipID     pgtype.UUID
+	AmountPaisa            int64
+	ContactName            string
+	Pincode                string
+	City                   string
+	District               string
+	StateGeo               string
+	HasDrugLicence         bool
+	HasGst                 bool
+	GstVerified            bool
+	HasPan                 bool
+	BusinessType           string
+	MedicineSystem         string
+	ProductRanges          []string
+	DosageForms            []string
+	OrderValue             string
+	BuyTimeline            string
+	VerifiedAt             pgtype.Timestamptz
+	VerifiedByMembershipID pgtype.UUID
+	CreatedAt              pgtype.Timestamptz
+}
+
+// BRD §4.3 marketplace browse. Null-guarded optional filters: a NULL
+// arg means "don't filter on this column". Array filters use GIN `&&`
+// overlap; keyset cursor on (verified_at, id) DESC.
+//
+// H12 SECURITY: the SELECT list DELIBERATELY OMITS PII columns
+// (email, mobile_e164, gst_number, pan_number, street). This is a
+// hard projection boundary per ADR 0059 — never add those columns.
+// Because the list is a strict subset, sqlc emits a custom
+// MarketplaceBrowseRow type (not the full PlatformPlatformLead model);
+// that's intentional and correct here.
+func (q *Queries) MarketplaceBrowse(ctx context.Context, arg MarketplaceBrowseParams) ([]MarketplaceBrowseRow, error) {
+	rows, err := q.db.Query(ctx, marketplaceBrowse,
+		arg.State,
+		arg.City,
+		arg.District,
+		arg.Pincode,
+		arg.BusinessType,
+		arg.MedicineSystem,
+		arg.OrderValue,
+		arg.BuyTimeline,
+		arg.HasDrugLicence,
+		arg.HasGst,
+		arg.GstVerified,
+		arg.ProductRanges,
+		arg.DosageForms,
+		arg.CursorVerifiedAt,
+		arg.CursorID,
+		arg.Lim,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []MarketplaceBrowseRow
+	for rows.Next() {
+		var i MarketplaceBrowseRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.SourceContactID,
+			&i.SoldToTenantID,
+			&i.SoldAt,
+			&i.SoldToMembershipID,
+			&i.AmountPaisa,
+			&i.ContactName,
+			&i.Pincode,
+			&i.City,
+			&i.District,
+			&i.StateGeo,
+			&i.HasDrugLicence,
+			&i.HasGst,
+			&i.GstVerified,
+			&i.HasPan,
+			&i.BusinessType,
+			&i.MedicineSystem,
+			&i.ProductRanges,
+			&i.DosageForms,
+			&i.OrderValue,
+			&i.BuyTimeline,
+			&i.VerifiedAt,
+			&i.VerifiedByMembershipID,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const updatePlatformLead = `-- name: UpdatePlatformLead :exec

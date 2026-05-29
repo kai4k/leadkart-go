@@ -325,6 +325,66 @@ func (q *Queries) GetPersonByPasswordResetTokenHash(ctx context.Context, passwor
 	return i, err
 }
 
+const getPersonsByIDs = `-- name: GetPersonsByIDs :many
+SELECT id, email, first_name, last_name, password_hash, security_stamp,
+       is_active, is_anonymised, created_at, anonymised_at,
+       is_globally_suspended, global_suspension_reason, globally_suspended_at,
+       password_reset_token_hash, password_reset_expires_at,
+       pending_email_change_new_email, pending_email_change_token_hash,
+       pending_email_change_expires_at,
+       created_by_person_id,
+       must_change_password, failed_login_count, locked_until, last_failed_login_at
+FROM   identity.persons
+WHERE  id = ANY($1::uuid[])
+`
+
+// Batched hydration — single round-trip via `id = ANY(...)` instead of
+// N GetPersonByID calls. Column list mirrors GetPersonByID exactly so
+// it reuses the IdentityPerson model.
+func (q *Queries) GetPersonsByIDs(ctx context.Context, ids []pgtype.UUID) ([]IdentityPerson, error) {
+	rows, err := q.db.Query(ctx, getPersonsByIDs, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []IdentityPerson
+	for rows.Next() {
+		var i IdentityPerson
+		if err := rows.Scan(
+			&i.ID,
+			&i.Email,
+			&i.FirstName,
+			&i.LastName,
+			&i.PasswordHash,
+			&i.SecurityStamp,
+			&i.IsActive,
+			&i.IsAnonymised,
+			&i.CreatedAt,
+			&i.AnonymisedAt,
+			&i.IsGloballySuspended,
+			&i.GlobalSuspensionReason,
+			&i.GloballySuspendedAt,
+			&i.PasswordResetTokenHash,
+			&i.PasswordResetExpiresAt,
+			&i.PendingEmailChangeNewEmail,
+			&i.PendingEmailChangeTokenHash,
+			&i.PendingEmailChangeExpiresAt,
+			&i.CreatedByPersonID,
+			&i.MustChangePassword,
+			&i.FailedLoginCount,
+			&i.LockedUntil,
+			&i.LastFailedLoginAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const insertPerson = `-- name: InsertPerson :exec
 
 INSERT INTO identity.persons (

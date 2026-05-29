@@ -7,6 +7,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/leadkart/leadkart-go/internal/common/email"
@@ -87,65 +88,32 @@ func (r *PersonRepository) GetByID(ctx context.Context, id person.ID) (*person.P
 }
 
 // GetByIDs satisfies [person.Repository] — batched hydration. Single
-// query via `WHERE id = ANY($1::uuid[])` instead of N round-trips per
-// loop iteration. Brandur "What I learned running Postgres at scale" —
-// batching is the canonical N+1 fix; pgx's array-of-uuid binding makes
-// it a one-liner.
-//
-// Hand-written SQL (no sqlc query) — the column list intentionally
-// mirrors [getPersonByID] so a future sqlc-generated variant is a
-// drop-in.
+// query via `WHERE id = ANY(...)` instead of N round-trips per loop
+// iteration. Brandur "What I learned running Postgres at scale" —
+// batching is the canonical N+1 fix.
 func (r *PersonRepository) GetByIDs(ctx context.Context, ids []person.ID) (map[person.ID]*person.Person, error) {
 	if len(ids) == 0 {
 		return map[person.ID]*person.Person{}, nil
 	}
-	uids := make([]uuid.UUID, 0, len(ids))
+	uids := make([]pgtype.UUID, 0, len(ids))
 	for _, id := range ids {
 		u, err := parsePersonID(id)
 		if err != nil {
 			return nil, err
 		}
-		uids = append(uids, u)
+		uids = append(uids, pgUUID(u))
 	}
-	const q = `
-		SELECT id, email, first_name, last_name, password_hash, security_stamp,
-		       is_active, is_anonymised, created_at, anonymised_at,
-		       is_globally_suspended, global_suspension_reason, globally_suspended_at,
-		       password_reset_token_hash, password_reset_expires_at,
-		       pending_email_change_new_email, pending_email_change_token_hash,
-		       pending_email_change_expires_at,
-		       created_by_person_id,
-		       must_change_password, failed_login_count, locked_until, last_failed_login_at
-		FROM   identity.persons
-		WHERE  id = ANY($1::uuid[])`
-	rows, err := r.pool.Query(ctx, q, uids)
+	rows, err := r.q.GetPersonsByIDs(ctx, uids)
 	if err != nil {
 		return nil, fmt.Errorf("person repo: get by ids: %w", err)
 	}
-	defer rows.Close()
 	out := make(map[person.ID]*person.Person, len(ids))
-	for rows.Next() {
-		var i db.IdentityPerson
-		if err := rows.Scan(
-			&i.ID, &i.Email, &i.FirstName, &i.LastName, &i.PasswordHash, &i.SecurityStamp,
-			&i.IsActive, &i.IsAnonymised, &i.CreatedAt, &i.AnonymisedAt,
-			&i.IsGloballySuspended, &i.GlobalSuspensionReason, &i.GloballySuspendedAt,
-			&i.PasswordResetTokenHash, &i.PasswordResetExpiresAt,
-			&i.PendingEmailChangeNewEmail, &i.PendingEmailChangeTokenHash,
-			&i.PendingEmailChangeExpiresAt,
-			&i.CreatedByPersonID,
-			&i.MustChangePassword, &i.FailedLoginCount, &i.LockedUntil, &i.LastFailedLoginAt,
-		); err != nil {
-			return nil, fmt.Errorf("person repo: scan: %w", err)
-		}
-		p, err := rowToPerson(i)
+	for _, row := range rows {
+		p, err := rowToPerson(row)
 		if err != nil {
 			return nil, err
 		}
 		out[p.ID()] = p
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("person repo: rows: %w", err)
 	}
 	return out, nil
 }

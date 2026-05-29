@@ -99,12 +99,7 @@ func (r *BatchRepository) lockBatchRowForUpdate(ctx context.Context, tx pgx.Tx, 
 	if err != nil {
 		return fmt.Errorf("batch repo: parse id %q: %w", id, err)
 	}
-	var locked uuid.UUID
-	scanErr := tx.QueryRow(ctx,
-		`SELECT id FROM inventory.batches WHERE id = $1 AND NOT is_deleted FOR UPDATE`,
-		bid,
-	).Scan(&locked)
-	if scanErr != nil {
+	if _, scanErr := r.q.WithTx(tx).LockBatchForUpdate(ctx, pgUUID(bid)); scanErr != nil {
 		if errors.Is(scanErr, pgx.ErrNoRows) {
 			return batch.ErrNotFound
 		}

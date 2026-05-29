@@ -31,6 +31,17 @@ FROM   inventory.batches
 WHERE  id = $1
 AND    NOT is_deleted;
 
+-- name: LockBatchForUpdate :one
+-- Pessimistic row-level lock for the UpdateByID path. Concurrent
+-- callers block here until the holding tx commits/rolls back. Returns
+-- ErrNoRows (→ batch.ErrNotFound) on missing or soft-deleted rows —
+-- same visibility filter as GetBatchByID.
+SELECT id
+FROM   inventory.batches
+WHERE  id = $1
+AND    NOT is_deleted
+FOR UPDATE;
+
 -- name: UpdateBatchWithVersionCheck :execrows
 -- Optimistic-concurrency UPDATE. Returns rows-affected so the adapter
 -- can branch on 0 → ErrConcurrencyConflict. The `version = $11`

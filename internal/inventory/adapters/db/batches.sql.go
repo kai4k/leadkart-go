@@ -201,6 +201,25 @@ func (q *Queries) ListBatchesByProductPage(ctx context.Context, arg ListBatchesB
 	return items, nil
 }
 
+const lockBatchForUpdate = `-- name: LockBatchForUpdate :one
+SELECT id
+FROM   inventory.batches
+WHERE  id = $1
+AND    NOT is_deleted
+FOR UPDATE
+`
+
+// Pessimistic row-level lock for the UpdateByID path. Concurrent
+// callers block here until the holding tx commits/rolls back. Returns
+// ErrNoRows (→ batch.ErrNotFound) on missing or soft-deleted rows —
+// same visibility filter as GetBatchByID.
+func (q *Queries) LockBatchForUpdate(ctx context.Context, id pgtype.UUID) (pgtype.UUID, error) {
+	row := q.db.QueryRow(ctx, lockBatchForUpdate, id)
+	var id_2 pgtype.UUID
+	err := row.Scan(&id_2)
+	return id_2, err
+}
+
 const updateBatchWithVersionCheck = `-- name: UpdateBatchWithVersionCheck :execrows
 UPDATE inventory.batches
 SET    quantity_on_hand = $2,
