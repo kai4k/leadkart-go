@@ -160,8 +160,8 @@ func handleListLeads(log *slog.Logger, a app.Application) http.Handler {
 			HasMore:    page.HasMore,
 			NextCursor: page.NextCursor,
 		}
-		for _, l := range page.Items {
-			out.Items = append(out.Items, leadToDto(l))
+		for _, v := range page.Items {
+			out.Items = append(out.Items, leadViewToDto(v))
 		}
 		writeJSON(w, http.StatusOK, out)
 	})
@@ -178,7 +178,7 @@ func handleGetLead(log *slog.Logger, a app.Application) http.Handler {
 		if !ok {
 			return
 		}
-		l, err := a.Queries.GetLead.Handle(r.Context(), query.GetLeadQuery{TenantID: tid, LeadID: id})
+		v, err := a.Queries.GetLead.Handle(r.Context(), query.GetLeadQuery{TenantID: tid, LeadID: id})
 		switch {
 		case errors.Is(err, query.ErrLeadNotFound):
 			writeError(w, http.StatusNotFound, errCodeLeadNotFound, "")
@@ -188,7 +188,7 @@ func handleGetLead(log *slog.Logger, a app.Application) http.Handler {
 			writeError(w, http.StatusInternalServerError, errCodeInternalError, "")
 			return
 		}
-		writeJSON(w, http.StatusOK, leadToDto(l))
+		writeJSON(w, http.StatusOK, leadViewToDto(v))
 	})
 }
 
@@ -489,62 +489,42 @@ func mapMutationErr(w http.ResponseWriter, log *slog.Logger, r *http.Request, er
 	}
 }
 
-func leadToDto(l *crmlead.CrmLead) LeadDto {
-	p := l.Profile()
-	// extra_profile as a generic map keeps the wire shape forward-
-	// compatible: the JSONB column can grow new keys without forcing
-	// a wire-DTO field bump.
-	extra := map[string]any{}
-	if p.Extra.Street != "" {
-		extra["street"] = p.Extra.Street
-	}
-	if p.Extra.GstNumber != "" {
-		extra["gst_number"] = p.Extra.GstNumber
-	}
-	if p.Extra.PanNumber != "" {
-		extra["pan_number"] = p.Extra.PanNumber
-	}
-	if p.Extra.HasPan {
-		extra["has_pan"] = true
-	}
-	if p.Extra.Email != "" {
-		extra["email"] = p.Extra.Email
-	}
-	if p.Extra.Notes != "" {
-		extra["notes"] = p.Extra.Notes
-	}
+// leadViewToDto maps the app-layer read View to the wire DTO (1:1).
+// Per STRICT CQRS the write aggregate never reaches the port — the
+// projection lives in query.projectLead; this is a trivial copy.
+func leadViewToDto(v query.LeadView) LeadDto {
 	return LeadDto{
-		ID:                       l.ID().String(),
-		TenantID:                 l.TenantID().String(),
-		Stage:                    l.Stage().String(),
-		Temperature:              l.Temperature().String(),
-		ContactName:              p.ContactName,
-		PhoneE164:                p.PhoneE164,
-		City:                     p.City,
-		District:                 p.District,
-		State:                    p.State,
-		Pincode:                  p.Pincode,
-		BusinessType:             p.BusinessType,
-		MedicineSystem:           p.MedicineSystem,
-		OrderValue:               p.OrderValue,
-		BuyTimeline:              p.BuyTimeline,
-		HasDrugLicence:           p.HasDrugLicence,
-		HasGst:                   p.HasGst,
-		GstVerified:              p.GstVerified,
-		ProductRanges:            p.ProductRanges,
-		DosageForms:              p.DosageForms,
-		ExtraProfile:             extra,
-		AssigneeMembershipID:     l.AssigneeMembershipID(),
-		AssignedAt:               l.AssignedAt(),
-		SourcePurchaseID:         l.SourcePurchaseID(),
-		SourcePlatformLeadID:     l.SourcePlatformLeadID(),
-		ConvertedAt:              l.ConvertedAt(),
-		ConvertedByMembershipID:  l.ConvertedByMembershipID(),
-		LostAt:                   l.LostAt(),
-		LostByMembershipID:       l.LostByMembershipID(),
-		LostReason:               l.LostReason(),
-		CreatedAt:                l.CreatedAt(),
-		CreatedByMembershipID:    l.CreatedByMembershipID(),
+		ID:                      v.ID,
+		TenantID:                v.TenantID,
+		Stage:                   v.Stage,
+		Temperature:             v.Temperature,
+		ContactName:             v.ContactName,
+		PhoneE164:               v.PhoneE164,
+		City:                    v.City,
+		District:                v.District,
+		State:                   v.State,
+		Pincode:                 v.Pincode,
+		BusinessType:            v.BusinessType,
+		MedicineSystem:          v.MedicineSystem,
+		OrderValue:              v.OrderValue,
+		BuyTimeline:             v.BuyTimeline,
+		HasDrugLicence:          v.HasDrugLicence,
+		HasGst:                  v.HasGst,
+		GstVerified:             v.GstVerified,
+		ProductRanges:           v.ProductRanges,
+		DosageForms:             v.DosageForms,
+		ExtraProfile:            v.ExtraProfile,
+		AssigneeMembershipID:    v.AssigneeMembershipID,
+		AssignedAt:              v.AssignedAt,
+		SourcePurchaseID:        v.SourcePurchaseID,
+		SourcePlatformLeadID:    v.SourcePlatformLeadID,
+		ConvertedAt:             v.ConvertedAt,
+		ConvertedByMembershipID: v.ConvertedByMembershipID,
+		LostAt:                  v.LostAt,
+		LostByMembershipID:      v.LostByMembershipID,
+		LostReason:              v.LostReason,
+		CreatedAt:               v.CreatedAt,
+		CreatedByMembershipID:   v.CreatedByMembershipID,
 	}
 }
 

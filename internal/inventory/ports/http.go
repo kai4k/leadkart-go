@@ -157,8 +157,8 @@ func handleListProducts(log *slog.Logger, a app.Application) http.Handler {
 			return
 		}
 		items := make([]ProductDto, 0, len(page.Items))
-		for _, p := range page.Items {
-			items = append(items, productToDto(p))
+		for _, v := range page.Items {
+			items = append(items, productViewToDto(v))
 		}
 		writeJSON(w, http.StatusOK, ListProductsResponse{
 			Items:      items,
@@ -179,7 +179,7 @@ func handleGetProduct(log *slog.Logger, a app.Application) http.Handler {
 		if !ok {
 			return
 		}
-		p, err := a.Queries.GetProduct.Handle(r.Context(), query.GetProductQuery{
+		v, err := a.Queries.GetProduct.Handle(r.Context(), query.GetProductQuery{
 			TenantID:  tenant.ID(c.TenantID),
 			ProductID: product.ID(id.String()),
 		})
@@ -192,7 +192,7 @@ func handleGetProduct(log *slog.Logger, a app.Application) http.Handler {
 			writeError(w, http.StatusInternalServerError, ErrCodeInternalError, "")
 			return
 		}
-		writeJSON(w, http.StatusOK, productToDto(p))
+		writeJSON(w, http.StatusOK, productViewToDto(v))
 	})
 }
 
@@ -355,8 +355,8 @@ func handleListBatchesForProduct(log *slog.Logger, a app.Application) http.Handl
 			return
 		}
 		items := make([]BatchDto, 0, len(page.Items))
-		for _, b := range page.Items {
-			items = append(items, batchToDto(b))
+		for _, v := range page.Items {
+			items = append(items, batchViewToDto(v))
 		}
 		writeJSON(w, http.StatusOK, ListBatchesResponse{
 			Items:      items,
@@ -377,7 +377,7 @@ func handleGetBatch(log *slog.Logger, a app.Application) http.Handler {
 		if !ok {
 			return
 		}
-		b, err := a.Queries.GetBatch.Handle(r.Context(), query.GetBatchQuery{
+		v, err := a.Queries.GetBatch.Handle(r.Context(), query.GetBatchQuery{
 			TenantID: tenant.ID(c.TenantID),
 			BatchID:  batch.ID(id.String()),
 		})
@@ -390,7 +390,7 @@ func handleGetBatch(log *slog.Logger, a app.Application) http.Handler {
 			writeError(w, http.StatusInternalServerError, ErrCodeInternalError, "")
 			return
 		}
-		writeJSON(w, http.StatusOK, batchToDto(b))
+		writeJSON(w, http.StatusOK, batchViewToDto(v))
 	})
 }
 
@@ -490,8 +490,8 @@ func handleListBatchMovements(log *slog.Logger, a app.Application) http.Handler 
 			return
 		}
 		items := make([]MovementDto, 0, len(page.Items))
-		for _, m := range page.Items {
-			items = append(items, movementToDto(m))
+		for _, v := range page.Items {
+			items = append(items, movementViewToDto(v))
 		}
 		writeJSON(w, http.StatusOK, ListMovementsResponse{
 			Items:      items,
@@ -559,56 +559,61 @@ func problemType(code string) string {
 
 // ----- Projections ----------------------------------------------------------
 
-func productToDto(p *product.Product) ProductDto {
+// productViewToDto maps the app-layer read View to the wire DTO (1:1).
+// Per STRICT CQRS the write aggregate never reaches the port — the
+// projection lives in query.projectProduct; this is a trivial copy.
+func productViewToDto(v query.ProductView) ProductDto {
 	return ProductDto{
-		ID:           p.ID().String(),
-		TenantID:     p.TenantID().String(),
-		SKU:          p.SKU(),
-		Name:         p.Name(),
-		DosageForm:   p.DosageForm(),
-		PackSize:     p.PackSize(),
-		HSNCode:      p.HSNCode(),
-		GSTRateBps:   p.GSTRateBps(),
-		Manufacturer: p.Manufacturer(),
-		IsActive:     p.IsActive(),
-		CreatedAt:    p.CreatedAt(),
-		UpdatedAt:    p.UpdatedAt(),
+		ID:           v.ID,
+		TenantID:     v.TenantID,
+		SKU:          v.SKU,
+		Name:         v.Name,
+		DosageForm:   v.DosageForm,
+		PackSize:     v.PackSize,
+		HSNCode:      v.HSNCode,
+		GSTRateBps:   v.GSTRateBps,
+		Manufacturer: v.Manufacturer,
+		IsActive:     v.IsActive,
+		CreatedAt:    v.CreatedAt,
+		UpdatedAt:    v.UpdatedAt,
 	}
 }
 
-func batchToDto(b *batch.Batch) BatchDto {
+// batchViewToDto maps the app-layer read View to the wire DTO (1:1).
+func batchViewToDto(v query.BatchView) BatchDto {
 	return BatchDto{
-		ID:                         b.ID().String(),
-		ProductID:                  b.ProductID().String(),
-		TenantID:                   b.TenantID().String(),
-		BatchNumber:                b.BatchNumber(),
-		ManufactureDate:            b.ManufactureDate(),
-		ExpiryDate:                 b.ExpiryDate(),
-		ManufacturerName:           b.ManufacturerName(),
-		ManufacturingLicenceNumber: b.ManufacturingLicenceNumber(),
-		MRPPaise:                   b.MRPPaise(),
-		PurchasePricePaise:         b.PurchasePricePaise(),
-		QuantityOnHand:             b.QuantityOnHand(),
-		Version:                    b.Version(),
-		CreatedAt:                  b.CreatedAt(),
-		UpdatedAt:                  b.UpdatedAt(),
+		ID:                         v.ID,
+		ProductID:                  v.ProductID,
+		TenantID:                   v.TenantID,
+		BatchNumber:                v.BatchNumber,
+		ManufactureDate:            v.ManufactureDate,
+		ExpiryDate:                 v.ExpiryDate,
+		ManufacturerName:           v.ManufacturerName,
+		ManufacturingLicenceNumber: v.ManufacturingLicenceNumber,
+		MRPPaise:                   v.MRPPaise,
+		PurchasePricePaise:         v.PurchasePricePaise,
+		QuantityOnHand:             v.QuantityOnHand,
+		Version:                    v.Version,
+		CreatedAt:                  v.CreatedAt,
+		UpdatedAt:                  v.UpdatedAt,
 	}
 }
 
-func movementToDto(m *stockmovement.Movement) MovementDto {
+// movementViewToDto maps the app-layer read View to the wire DTO (1:1).
+func movementViewToDto(v query.MovementView) MovementDto {
 	return MovementDto{
-		ID:                  m.ID().String(),
-		BatchID:             m.BatchID().String(),
-		ProductID:           m.ProductID().String(),
-		TenantID:            m.TenantID().String(),
-		Type:                string(m.Type()),
-		Quantity:            m.Quantity(),
-		QuantityOnHandAfter: m.QuantityOnHandAfter(),
-		Reason:              m.Reason(),
-		ActorMembershipID:   m.ActorMembershipID().String(),
+		ID:                  v.ID,
+		BatchID:             v.BatchID,
+		ProductID:           v.ProductID,
+		TenantID:            v.TenantID,
+		Type:                v.Type,
+		Quantity:            v.Quantity,
+		QuantityOnHandAfter: v.QuantityOnHandAfter,
+		Reason:              v.Reason,
+		ActorMembershipID:   v.ActorMembershipID,
 		// *string round-trip preserves absent-vs-empty distinction per
-		// ADR 0061 amendment 1 (M3) — domain stores *string.
-		SourceReference: m.SourceReference(),
-		OccurredAt:      m.OccurredAt(),
+		// ADR 0061 amendment 1 (M3) — View stores *string.
+		SourceReference: v.SourceReference,
+		OccurredAt:      v.OccurredAt,
 	}
 }
