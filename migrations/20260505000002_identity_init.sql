@@ -185,8 +185,8 @@ CREATE TABLE identity.outbox (
     forwarded     boolean     NOT NULL DEFAULT false,
     forwarded_at  timestamptz NULL
 );
-CREATE INDEX idx_outbox_unforwarded ON identity.outbox (created_at) WHERE NOT forwarded;
-CREATE INDEX idx_outbox_tenant_topic_occurred ON identity.outbox (tenant_id, topic, occurred_at DESC);
+CREATE INDEX idx_outbox_unforwarded ON identity.outbox (created_at, id) WHERE NOT forwarded;
+CREATE INDEX idx_outbox_tenant_topic_occurred ON identity.outbox (tenant_id, topic, occurred_at DESC, id DESC);
 
 ALTER TABLE identity.outbox ENABLE ROW LEVEL SECURITY;
 ALTER TABLE identity.outbox FORCE  ROW LEVEL SECURITY;

@@ -98,10 +98,7 @@ func TestMain(m *testing.M) {
 	// health-check are ignored because they're managed by their
 	// respective libraries' shutdowns (already invoked by
 	// pgtest.RunMain's defer).
-	if err := goleak.Find(
-		goleak.IgnoreTopFunction("github.com/testcontainers/testcontainers-go.(*Reaper).connect.func1"),
-		goleak.IgnoreTopFunction("github.com/jackc/pgx/v5/pgxpool.(*Pool).backgroundHealthCheck"),
-	); err != nil {
+	if err := goleak.Find(pgtest.GoleakOptions()...); err != nil {
 		fmt.Fprintf(os.Stderr, "goleak: %v\n", err)
 		if code == 0 {
 			code = 1

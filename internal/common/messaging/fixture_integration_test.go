@@ -38,10 +38,7 @@ func TestMain(m *testing.M) {
 		sharedPG = c
 	})
 
-	if err := goleak.Find(
-		goleak.IgnoreTopFunction("github.com/testcontainers/testcontainers-go.(*Reaper).connect.func1"),
-		goleak.IgnoreTopFunction("github.com/jackc/pgx/v5/pgxpool.(*Pool).backgroundHealthCheck"),
-	); err != nil {
+	if err := goleak.Find(pgtest.GoleakOptions()...); err != nil {
 		fmt.Fprintf(os.Stderr, "goleak: %v\n", err)
 		if code == 0 {
 			code = 1

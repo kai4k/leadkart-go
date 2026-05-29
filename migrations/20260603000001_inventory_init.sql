@@ -269,9 +269,9 @@ CREATE TABLE inventory.outbox (
     act_reason      text        NULL
 );
 CREATE INDEX idx_inventory_outbox_unforwarded
-    ON inventory.outbox (created_at) WHERE NOT forwarded;
+    ON inventory.outbox (created_at, id) WHERE NOT forwarded;
 CREATE INDEX idx_inventory_outbox_tenant_topic_occurred
-    ON inventory.outbox (tenant_id, topic, occurred_at DESC);
+    ON inventory.outbox (tenant_id, topic, occurred_at DESC, id DESC);
 
 ALTER TABLE inventory.outbox ENABLE ROW LEVEL SECURITY;
 ALTER TABLE inventory.outbox FORCE  ROW LEVEL SECURITY;

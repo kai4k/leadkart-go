@@ -285,9 +285,9 @@ CREATE TABLE platform.outbox (
 );
 
 CREATE INDEX idx_platform_outbox_unforwarded
-    ON platform.outbox (created_at) WHERE NOT forwarded;
+    ON platform.outbox (created_at, id) WHERE NOT forwarded;
 CREATE INDEX idx_platform_outbox_tenant_topic_occurred
-    ON platform.outbox (tenant_id, topic, occurred_at DESC);
+    ON platform.outbox (tenant_id, topic, occurred_at DESC, id DESC);
 
 ALTER TABLE platform.outbox ENABLE ROW LEVEL SECURITY;
 ALTER TABLE platform.outbox FORCE  ROW LEVEL SECURITY;

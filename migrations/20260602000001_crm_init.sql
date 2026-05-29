@@ -271,9 +271,9 @@ CREATE TABLE crm.outbox (
 );
 
 CREATE INDEX idx_crm_outbox_unforwarded
-    ON crm.outbox (created_at) WHERE NOT forwarded;
+    ON crm.outbox (created_at, id) WHERE NOT forwarded;
 CREATE INDEX idx_crm_outbox_tenant_topic_occurred
-    ON crm.outbox (tenant_id, topic, occurred_at DESC);
+    ON crm.outbox (tenant_id, topic, occurred_at DESC, id DESC);
 
 ALTER TABLE crm.outbox ENABLE ROW LEVEL SECURITY;
 ALTER TABLE crm.outbox FORCE  ROW LEVEL SECURITY;
