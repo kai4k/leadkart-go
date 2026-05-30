@@ -12,7 +12,7 @@ import (
 	"github.com/leadkart/leadkart-go/internal/common/ids"
 	"github.com/leadkart/leadkart-go/internal/common/pgconv"
 	"github.com/leadkart/leadkart-go/internal/identity/adapters/db"
-	"github.com/leadkart/leadkart-go/internal/identity/app/actclaim"
+	"github.com/leadkart/leadkart-go/internal/common/actclaim"
 	"github.com/leadkart/leadkart-go/internal/identity/integrationevents"
 )
 

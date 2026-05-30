@@ -29,7 +29,7 @@ import (
 	"strings"
 
 	"github.com/leadkart/leadkart-go/internal/common/tenancy"
-	"github.com/leadkart/leadkart-go/internal/identity/app/actclaim"
+	"github.com/leadkart/leadkart-go/internal/common/actclaim"
 	"github.com/leadkart/leadkart-go/internal/identity/app/jwt"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/permission"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"

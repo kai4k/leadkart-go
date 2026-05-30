@@ -17,7 +17,7 @@ import (
 	"github.com/leadkart/leadkart-go/internal/common/pgconv"
 	"github.com/leadkart/leadkart-go/internal/crm/adapters/db"
 	"github.com/leadkart/leadkart-go/internal/crm/integrationevents"
-	"github.com/leadkart/leadkart-go/internal/identity/app/actclaim"
+	"github.com/leadkart/leadkart-go/internal/common/actclaim"
 )
 
 // writeOutboxEvents persists a batch of framework-neutral integration
