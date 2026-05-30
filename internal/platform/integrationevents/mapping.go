@@ -27,17 +27,17 @@ var ErrUnknown = errors.New("platform.integrationevents: unrecognised domain eve
 // enumerates. For each input the mapper returns one of:
 //
 //  1. (Event, nil)   — translate this domain event into an integration
-//                      event; outbox writer persists it.
+//     event; outbox writer persists it.
 //  2. (nil,   nil)   — INTENTIONAL suppression. The handler emits the
-//                      corresponding integration event directly because
-//                      the wire shape needs data the domain event does
-//                      NOT carry (e.g. LeadSnapshot, which lives on the
-//                      PlatformLead aggregate's Form VO; the domain
-//                      VerifiedEvent only carries IDs + timestamps).
-//                      Skipping the mechanical mapper here prevents
-//                      a duplicate emit when the handler runs.
+//     corresponding integration event directly because
+//     the wire shape needs data the domain event does
+//     NOT carry (e.g. LeadSnapshot, which lives on the
+//     PlatformLead aggregate's Form VO; the domain
+//     VerifiedEvent only carries IDs + timestamps).
+//     Skipping the mechanical mapper here prevents
+//     a duplicate emit when the handler runs.
 //  3. (nil,   err)   — typed `ErrUnknown` wrap. New domain event added
-//                      without a mapper case — arch test fails CI.
+//     without a mapper case — arch test fails CI.
 //
 // Adding a new domain event:
 //   - ALWAYS add a case here (or the arch test fails).
@@ -45,8 +45,9 @@ var ErrUnknown = errors.New("platform.integrationevents: unrecognised domain eve
 //   - To suppress it: `return nil, nil` + a comment explaining WHY
 //     (handler emits directly? audit-only via outbox row itself? etc.)
 //
-//nolint:cyclop // Switch dispatcher — one case per recognised domain event.
 // Cyclomatic complexity scales with catalogue size by definition.
+//
+//nolint:cyclop // Switch dispatcher — one case per recognised domain event.
 func FromDomainEvent(d any) (Event, error) {
 	switch e := d.(type) {
 

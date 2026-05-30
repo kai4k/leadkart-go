@@ -22,7 +22,9 @@ var revokeNow = time.Date(2026, 5, 7, 12, 0, 0, 0, time.UTC)
 // Workouts canon — co-located with the aggregate it fakes.
 // newFakeFamilyRepo is preserved as a one-line alias so existing tests
 // don't need rewriting.
-func newFakeFamilyRepo() *refreshtokentest.FakeRepository { return refreshtokentest.NewFakeRepository() }
+func newFakeFamilyRepo() *refreshtokentest.FakeRepository {
+	return refreshtokentest.NewFakeRepository()
+}
 
 func newFamily(t *testing.T, personID person.ID, deviceLabel string) *refreshtoken.Family {
 	t.Helper()
@@ -172,7 +174,7 @@ func TestRevokeAllSessions_ExceptKeepsOneAlive(t *testing.T) {
 	current := newFamily(t, pid, "current-device")
 	other := mustFamily(t, refreshtoken.FamilyID("33333333-3333-3333-3333-333333333333"), pid, "other-device")
 	_ = repo.Add(t.Context(), current) // arch-test:ignore-err - test fixture setup
-	_ = repo.Add(t.Context(), other) // arch-test:ignore-err - test fixture setup
+	_ = repo.Add(t.Context(), other)   // arch-test:ignore-err - test fixture setup
 
 	h := command.NewRevokeAllSessionsHandler(repo, func() time.Time { return revokeNow })
 	out, err := h.Handle(t.Context(), command.RevokeAllSessionsCommand{

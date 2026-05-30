@@ -13,8 +13,8 @@ import (
 	semconv "go.opentelemetry.io/otel/semconv/v1.27.0"
 	"go.opentelemetry.io/otel/trace"
 
-	"github.com/leadkart/leadkart-go/internal/common/tenancy"
 	"github.com/leadkart/leadkart-go/internal/common/audit"
+	"github.com/leadkart/leadkart-go/internal/common/tenancy"
 )
 
 // Middleware metadata header names, kept stable across producers +
@@ -212,4 +212,3 @@ func parseTimeHeader(raw string) time.Time {
 	}
 	return t.UTC()
 }
-

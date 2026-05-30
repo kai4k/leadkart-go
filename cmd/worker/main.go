@@ -61,16 +61,9 @@ import (
 	crmadapters "github.com/leadkart/leadkart-go/internal/crm/adapters"
 	crmcommand "github.com/leadkart/leadkart-go/internal/crm/app/command"
 	"github.com/leadkart/leadkart-go/internal/crm/domain/crmlead"
-	crmintegrationevents "github.com/leadkart/leadkart-go/internal/crm/integrationevents"
 	crmsubscribers "github.com/leadkart/leadkart-go/internal/crm/ports/subscribers"
 	"github.com/leadkart/leadkart-go/internal/identity/adapters"
-	"github.com/leadkart/leadkart-go/internal/identity/integrationevents"
 	"github.com/leadkart/leadkart-go/internal/identity/ports/subscribers"
-	inventoryadapters "github.com/leadkart/leadkart-go/internal/inventory/adapters"
-	inventoryintegrationevents "github.com/leadkart/leadkart-go/internal/inventory/integrationevents"
-
-	platformadapters "github.com/leadkart/leadkart-go/internal/platform/adapters"
-	platformintegrationevents "github.com/leadkart/leadkart-go/internal/platform/integrationevents"
 )
 
 // Tunings — same shape as cmd/api/main.go so the two binaries' admin
@@ -90,12 +83,6 @@ const (
 	// routerCloseTimeout is the messaging.Router's per-shutdown
 	// CloseTimeout — must be ≤ shutdownTimeout.
 	routerCloseTimeout = 25 * time.Second
-	// forwarderPollInterval — how often the forwarder polls the outbox
-	// for unforwarded rows when the previous poll returned nothing.
-	forwarderPollInterval = time.Second
-	// forwarderRetryInterval — backoff after a publish failure before
-	// retrying the same row.
-	forwarderRetryInterval = 50 * time.Millisecond
 	// healthcheckTimeout caps the distroless self-probe HTTP call.
 	healthcheckTimeout = 3 * time.Second
 	// defaultEmailLinkBaseURL is the base URL the email subscriber
@@ -244,24 +231,15 @@ func run(ctx context.Context, stdout *os.File) error {
 	defer func() { _ = pubsub.Close() }()
 
 	tx := pg.NewTransactor(pool)
-	forwarder := adapters.NewOutboxForwarder(pool, tx, pubsub, integrationevents.Topic, 0, time.Now)
+	// Single Watermill Forwarder drains the shared common.outbox relay and
+	// republishes each event to its destination module topic (embedded in
+	// the envelope by messaging.PublishOutbox). Replaces the four hand-rolled
+	// per-module poll loops — per ADR 0064 the outbox is one shared relay.
+	outboxForwarder, err := messaging.NewOutboxForwarder(pool, pubsub, watermill.NewSlogLogger(logger))
+	if err != nil {
+		return fmt.Errorf("outbox forwarder: %w", err)
+	}
 
-	// Per-module outbox forwarder: each bounded context owns its own
-	// outbox table (CLAUDE.md §"Each module owns its Postgres schema"),
-	// so each needs its own forwarder bound to the schema-specific sqlc
-	// Queries.
-	inventoryForwarder := inventoryadapters.NewOutboxForwarder(pool, tx, pubsub, inventoryintegrationevents.Topic, 0, time.Now)
-
-	// Platform-module outbox forwarder (ADR 0059). Sibling of the
-	// identity forwarder — own table, own topic, own goroutine. Slice 1
-	// has no in-process subscriber for platform events; the topic is
-	// still drained so audit-log shape stays consistent.
-	platformForwarder := platformadapters.NewOutboxForwarder(pool, tx, pubsub, platformintegrationevents.Topic, 0, time.Now)
-
-	// CRM-module outbox forwarder (ADR 0060). Drains crm.outbox to the
-	// crm.events Watermill topic. Slice 1 CRM also subscribes to the
-	// platform.events topic for the lead-purchased ingest.
-	crmForwarder := crmadapters.NewOutboxForwarder(pool, tx, pubsub, crmintegrationevents.Topic, 0, time.Now)
 	crmLeads := crmadapters.NewCrmLeadRepository(pool, tx)
 	newCrmLeadID := func() crmlead.ID { return crmlead.ID(ids.NewV7().String()) }
 	crmIngest := crmsubscribers.NewPurchasedLeadIngestor(
@@ -333,30 +311,10 @@ func run(ctx context.Context, stdout *os.File) error {
 	g, gctx := errgroup.WithContext(ctx)
 
 	g.Go(func() error {
-		forwarder.Run(gctx, forwarderPollInterval, forwarderRetryInterval, func(err error) {
-			logger.ErrorContext(gctx, "outbox forwarder", "err", err)
-		})
-		return nil
-	})
-
-	g.Go(func() error {
-		platformForwarder.Run(gctx, forwarderPollInterval, forwarderRetryInterval, func(err error) {
-			logger.ErrorContext(gctx, "platform outbox forwarder", "err", err)
-		})
-		return nil
-	})
-
-	g.Go(func() error {
-		inventoryForwarder.Run(gctx, forwarderPollInterval, forwarderRetryInterval, func(err error) {
-			logger.ErrorContext(gctx, "inventory outbox forwarder", "err", err)
-		})
-		return nil
-	})
-
-	g.Go(func() error {
-		crmForwarder.Run(gctx, forwarderPollInterval, forwarderRetryInterval, func(err error) {
-			logger.ErrorContext(gctx, "crm outbox forwarder", "err", err)
-		})
+		logger.Info("outbox forwarder starting")
+		if err := outboxForwarder.Run(gctx); err != nil && !errors.Is(err, context.Canceled) {
+			return fmt.Errorf("outbox forwarder: %w", err)
+		}
 		return nil
 	})
 
@@ -399,6 +357,7 @@ func run(ctx context.Context, stdout *os.File) error {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 		defer cancel()
 		_ = adminSrv.Shutdown(shutdownCtx)
+		_ = outboxForwarder.Close()
 		return router.Close()
 	})
 

@@ -169,51 +169,16 @@ CREATE TABLE identity.auth_routing (
 );
 COMMENT ON TABLE identity.auth_routing IS 'Cross-tenant email→tenant index for login. NOT RLS-scoped (intentional — login flow predates tenant context). Maintained via Watermill events.';
 
--- ============================================================================
--- identity.outbox
--- Per-module outbox table per ADR 0008 + 0027. Doubles as audit log.
--- Tenant-scoped + RLS so per-tenant audit queries are clean.
--- ============================================================================
-
-CREATE TABLE identity.outbox (
-    id            uuid        PRIMARY KEY,
-    tenant_id     uuid        NOT NULL,           -- denormalised; events without tenant scope use a sentinel
-    topic         text        NOT NULL,
-    payload       jsonb       NOT NULL,
-    occurred_at   timestamptz NOT NULL,
-    created_at    timestamptz NOT NULL DEFAULT now(),
-    forwarded     boolean     NOT NULL DEFAULT false,
-    forwarded_at  timestamptz NULL
-);
-CREATE INDEX idx_outbox_unforwarded ON identity.outbox (created_at, id) WHERE NOT forwarded;
-CREATE INDEX idx_outbox_tenant_topic_occurred ON identity.outbox (tenant_id, topic, occurred_at DESC, id DESC);
-
-ALTER TABLE identity.outbox ENABLE ROW LEVEL SECURITY;
-ALTER TABLE identity.outbox FORCE  ROW LEVEL SECURITY;
-
-CREATE POLICY outbox_select ON identity.outbox
-    FOR SELECT
-    USING (tenant_id = app.current_tenant() OR app.is_platform());
-
-CREATE POLICY outbox_insert ON identity.outbox
-    FOR INSERT
-    WITH CHECK (tenant_id = app.current_tenant() OR app.is_platform());
-
--- The forwarder process needs UPDATE to flip `forwarded = true` AFTER publish.
--- It runs in platform-operator mode so the policy permits cross-tenant updates.
-CREATE POLICY outbox_modify ON identity.outbox
-    FOR UPDATE
-    USING (app.is_platform())
-    WITH CHECK (app.is_platform());
-
-COMMENT ON TABLE identity.outbox IS 'Domain events written same-tx as aggregate state. Watermill SQL forwarder polls + republishes. Doubles as audit log per ADR 0027.';
+-- NOTE: the per-module identity.outbox table was retired by ADR 0064/0067
+-- (migration 20260604000002) — the transactional outbox is now ONE shared
+-- common.outbox relay drained by the Watermill library Forwarder. No
+-- per-module outbox table is created here anymore.
 
 -- +goose StatementEnd
 
 -- +goose Down
 -- +goose StatementBegin
 
-DROP TABLE IF EXISTS identity.outbox CASCADE;
 DROP TABLE IF EXISTS identity.auth_routing CASCADE;
 DROP TABLE IF EXISTS identity.refresh_tokens CASCADE;
 DROP TABLE IF EXISTS identity.refresh_token_families CASCADE;

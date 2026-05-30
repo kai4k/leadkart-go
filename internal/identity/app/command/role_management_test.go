@@ -30,7 +30,9 @@ func newFakeRoleRepo() *roletest.FakeRepository { return roletest.NewFakeReposit
 // Wild Workouts canon — co-located with the aggregate it fakes.
 // newFakeEdgeRepo is preserved as a one-line alias so existing tests
 // don't need rewriting.
-func newFakeEdgeRepo() *rolehierarchytest.FakeRepository { return rolehierarchytest.NewFakeRepository() }
+func newFakeEdgeRepo() *rolehierarchytest.FakeRepository {
+	return rolehierarchytest.NewFakeRepository()
+}
 
 // fakeUoW is a no-op UnitOfWork — calls fn directly without ctx
 // propagation. The fake repos don't use TxFromContext, so this is
@@ -124,7 +126,7 @@ func TestUpdateRole_NotFound(t *testing.T) {
 	err := h.Handle(t.Context(), command.UpdateRoleCommand{
 		TenantID: tenant.ID("33333333-3333-3333-3333-333333333333"),
 		RoleID:   role.ID("99999999-9999-9999-9999-999999999999"),
-		Name:   "x",
+		Name:     "x",
 	})
 	if !errors.Is(err, command.ErrRoleNotFound) {
 		t.Fatalf("err = %v, want ErrRoleNotFound", err)

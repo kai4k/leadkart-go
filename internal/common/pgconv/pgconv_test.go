@@ -14,7 +14,7 @@ var fixedNow = time.Date(2026, 5, 30, 12, 0, 0, 0, time.UTC)
 // TestZeroToNil_EmptyReturnsNil pins the load-bearing invariant relocated
 // from crm/adapters: ZeroToNil is used for every nullable filter on the
 // CRM/inventory listing queries. A bug returning &"" for empty input would
-// inject `WHERE col = ''` predicates that match zero rows for every
+// inject `WHERE col = ”` predicates that match zero rows for every
 // unfiltered listing — a silent denial-of-service against the read surface.
 func TestZeroToNil_EmptyReturnsNil(t *testing.T) {
 	t.Parallel()

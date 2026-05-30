@@ -74,57 +74,58 @@ func loadMigrations(t *testing.T) []struct {
 }
 
 // ----------------------------------------------------------------------------
-// Test 66: TestArch_OutboxTableSchema (relocated from EDA)
+// Test 66: TestArch_OutboxTableSchema
 // ----------------------------------------------------------------------------
 //
-// Every CREATE TABLE <schema>.outbox in migrations/ MUST declare the
-// canonical column set so the in-process forwarder + the Watermill
-// SQL subscriber + the audit reader all stay drop-in compatible
-// across modules.
+// Per ADR 0064/0067 the outbox is ONE shared relay table (common.outbox)
+// drained by the Watermill library Forwarder + watermill-sql queue schema.
+// This gate enforces the post-0064 invariants:
 //
-// Required columns per ADR 0027 (outbox doubles as audit log):
-//   id, occurred_at, topic, payload, forwarded_at.
+//   - There is exactly ONE outbox table, and it is common.outbox (the old
+//     per-module identity/platform/crm/inventory.outbox tables are gone —
+//     the destination topic + tenant/occurred_at/act_* travel in the
+//     forwarder envelope / message metadata, not as columns).
+//   - common.outbox declares the watermill-sql PostgreSQLQueueSchema column
+//     set so the library publisher + subscriber stay drop-in compatible:
+//     offset, uuid, payload, metadata, acked, created_at.
+//
+// Replaces the pre-0064 shape (id/occurred_at/topic/payload/forwarded_at,
+// per-module). ADR 0027's "outbox doubles as audit log" was retired by
+// ADR 0027 Amd1 + 0064 — audit lives in common.audit_log_entry.
 func TestArch_OutboxTableSchema(t *testing.T) {
 	t.Parallel()
 
 	tableRE := regexp.MustCompile(`(?is)CREATE TABLE\s+(\w+)\.outbox\s*\((.*?)\);`)
-	required := []string{"id", "occurred_at", "topic", "payload", "forwarded_at"}
+	required := []string{"offset", "uuid", "payload", "metadata", "acked", "created_at"}
 
-	type violation struct {
-		file    string
-		schema  string
-		missing []string
+	type outboxTable struct {
+		file   string
+		schema string
+		body   string
 	}
-	var violations []violation
-
+	var found []outboxTable
 	for _, m := range loadMigrations(t) {
-		matches := tableRE.FindAllStringSubmatch(m.text, -1)
-		for _, mm := range matches {
-			schema := mm[1]
-			body := strings.ToLower(mm[2])
-			var missing []string
-			for _, col := range required {
-				colRE := regexp.MustCompile(`(?m)\b` + col + `\b`)
-				if !colRE.MatchString(body) {
-					missing = append(missing, col)
-				}
-			}
-			if len(missing) > 0 {
-				violations = append(violations, violation{
-					file:    m.path,
-					schema:  schema,
-					missing: missing,
-				})
-			}
+		for _, mm := range tableRE.FindAllStringSubmatch(m.text, -1) {
+			found = append(found, outboxTable{file: m.path, schema: mm[1], body: strings.ToLower(mm[2])})
 		}
 	}
 
-	if len(violations) > 0 {
-		t.Logf("OUTBOX SCHEMA VIOLATIONS — %d", len(violations))
-		t.Logf("Per ADR 0008 + 0027: outbox tables declare:")
-		t.Logf("  id, occurred_at, topic, payload, forwarded_at")
-		for _, v := range violations {
-			t.Errorf("%s — CREATE TABLE %s.outbox missing columns: %v", v.file, v.schema, v.missing)
+	if len(found) == 0 {
+		t.Fatal("no CREATE TABLE *.outbox found — expected exactly one (common.outbox per ADR 0064)")
+	}
+	for _, o := range found {
+		if o.schema != "common" {
+			t.Errorf("%s — per-module %s.outbox is forbidden; ADR 0064 mandates ONE shared common.outbox relay", o.file, o.schema)
+			continue
+		}
+		var missing []string
+		for _, col := range required {
+			if !regexp.MustCompile(`(?m)\b` + col + `\b`).MatchString(o.body) {
+				missing = append(missing, col)
+			}
+		}
+		if len(missing) > 0 {
+			t.Errorf("%s — common.outbox missing watermill-sql queue columns: %v (need %v)", o.file, missing, required)
 		}
 	}
 }
@@ -143,7 +144,7 @@ func TestArch_NoCrossSchemaJoins(t *testing.T) {
 	joinRE := regexp.MustCompile(`(?i)\bJOIN\s+([a-zA-Z_][a-zA-Z0-9_]*)\.[a-zA-Z_][a-zA-Z0-9_]*`)
 
 	allowedNonModule := map[string]bool{
-		"common":     true,
+		"common":             true,
 		"app":                true,
 		"pg_catalog":         true,
 		"information_schema": true,
@@ -583,21 +584,21 @@ func TestArch_AuditChainColumnsOnTenantTables(t *testing.T) {
 		"platform.outbox":                  "outbox / audit log (ADR 0027)",
 		"inventory.outbox":                 "outbox / audit log (ADR 0027)",
 		"crm.outbox":                       "outbox / audit log (ADR 0027)",
-		"common.audit_log_entry":   "audit log sink",
+		"common.audit_log_entry":           "audit log sink",
 		"common.admin_impersonation_audit": "audit log (ADR 0045)",
-		"common.command_idempotency":          "idempotency infra",
+		"common.command_idempotency":       "idempotency infra",
 		// Permission / hierarchy family (carry their own audit columns):
 		"identity.membership_permission_overrides": "permission* family (overlay state)",
 		"identity.permission_requests":             "permission* family (request workflow, has approver_membership_id)",
 		"identity.role_hierarchy_edges":            "rolehierarchy* family (carries established_by_membership_id)",
 		// Append-only ledgers / event-stream aggregates:
-		"inventory.stock_movements":      "event-stream aggregate (carries actor_membership_id)",
-		"platform.verification_calls":    "append-only ledger (carries logged_by_membership_id)",
-		"crm.call_logs":                  "append-only call audit (carries logged_by_membership_id) per ADR 0060",
-		"crm.assignment_history":         "append-only assignment audit (carries assigned_by_membership_id) per ADR 0060",
+		"inventory.stock_movements":   "event-stream aggregate (carries actor_membership_id)",
+		"platform.verification_calls": "append-only ledger (carries logged_by_membership_id)",
+		"crm.call_logs":               "append-only call audit (carries logged_by_membership_id) per ADR 0060",
+		"crm.assignment_history":      "append-only assignment audit (carries assigned_by_membership_id) per ADR 0060",
 		// Platform globals:
-		"platform.platform_leads":  "marketplace global (carries verified_by_membership_id + sold_to_membership_id)",
-		"platform.lead_credits":    "balance aggregate (no creation event)",
+		"platform.platform_leads":      "marketplace global (carries verified_by_membership_id + sold_to_membership_id)",
+		"platform.lead_credits":        "balance aggregate (no creation event)",
 		"platform.unverified_contacts": "platform-only Lead Agent queue (already carries created_by_membership_id NOT NULL)",
 	}
 
@@ -792,8 +793,8 @@ func TestArch_NoTextWhereVarcharSufficient(t *testing.T) {
 	// is preferred (Postgres docs note `varchar(N)` vs `text` has zero
 	// perf difference; the bound is purely for invariant enforcement).
 	allowedColumns := map[string]bool{
-		"hsn_code":                true, // Indian HSN codes: 4/6/8 digits but format is flexible
-		"outcome_code":            true, // free-form call outcome label (e.g. "called_no_answer")
+		"hsn_code":                 true, // Indian HSN codes: 4/6/8 digits but format is flexible
+		"outcome_code":             true, // free-form call outcome label (e.g. "called_no_answer")
 		"admin_address_state_code": true, // ISO 3166-2 state code (2-3 chars) but stored from form input
 	}
 

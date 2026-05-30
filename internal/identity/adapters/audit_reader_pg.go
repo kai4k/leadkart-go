@@ -56,7 +56,7 @@ func (r *AuditReaderPG) ListByTenant(
 	beforeID uuid.UUID,
 	limit int32,
 ) ([]audit.Entry, error) {
-	var rows []db.BuildingblocksAuditLogEntry
+	var rows []db.CommonAuditLogEntry
 	err := r.tx.WithinTxPgx(ctx, pg.TxScopePlatform, func(ctx context.Context, tx pgx.Tx) error {
 		out, qerr := r.q.WithTx(tx).ListAuditEventsByTenantPage(ctx, db.ListAuditEventsByTenantPageParams{
 			TenantID:       pgconv.PgUUID(tenantID),
@@ -85,7 +85,7 @@ func (r *AuditReaderPG) ListByUser(
 	beforeID uuid.UUID,
 	limit int32,
 ) ([]audit.Entry, error) {
-	var rows []db.BuildingblocksAuditLogEntry
+	var rows []db.CommonAuditLogEntry
 	err := r.tx.WithinTxPgx(ctx, pg.TxScopePlatform, func(ctx context.Context, tx pgx.Tx) error {
 		out, qerr := r.q.WithTx(tx).ListAuditEventsByUserPage(ctx, db.ListAuditEventsByUserPageParams{
 			UserID:         pgconv.PgUUID(userID),
@@ -105,7 +105,7 @@ func (r *AuditReaderPG) ListByUser(
 	return rowsToEntries(rows), nil
 }
 
-func rowsToEntries(rows []db.BuildingblocksAuditLogEntry) []audit.Entry {
+func rowsToEntries(rows []db.CommonAuditLogEntry) []audit.Entry {
 	out := make([]audit.Entry, 0, len(rows))
 	for _, r := range rows {
 		e := audit.Entry{

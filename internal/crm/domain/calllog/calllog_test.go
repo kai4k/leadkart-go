@@ -1,4 +1,4 @@
-﻿package calllog_test
+package calllog_test
 
 import (
 	"errors"

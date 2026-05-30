@@ -8,8 +8,8 @@ import (
 
 	"github.com/ThreeDotsLabs/watermill/message"
 
-	"github.com/leadkart/leadkart-go/internal/identity/integrationevents"
 	"github.com/leadkart/leadkart-go/internal/common/messaging"
+	"github.com/leadkart/leadkart-go/internal/identity/integrationevents"
 )
 
 // arch-test:idempotency-via-append-only-log — emits a WARN slog record only; duplicate dispatch produces duplicate audit lines which is the correct (lossy-tolerant) behaviour for SIEM ingest. No state mutation to dedup.

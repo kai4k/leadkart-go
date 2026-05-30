@@ -9,19 +9,19 @@
 //
 // Items snapshot:
 //
-//   On QuotationApproved, the Order is created with a frozen copy of
-//   the approved revision's items (`confirmed_items`). The Order
-//   carries this snapshot through its lifecycle — the Quotation can be
-//   revised post-approval (creating a fresh draft Quotation for the
-//   NEXT order) without affecting the in-flight Order.
+//	On QuotationApproved, the Order is created with a frozen copy of
+//	the approved revision's items (`confirmed_items`). The Order
+//	carries this snapshot through its lifecycle — the Quotation can be
+//	revised post-approval (creating a fresh draft Quotation for the
+//	NEXT order) without affecting the in-flight Order.
 //
 // Money invariants:
 //
-//   Every monetary field is `int64 paise`. Totals (subtotal_paise,
-//   tax_paise, grand_total_paise) are derived at ctor/transition time
-//   from the items snapshot + are stored on the row for read-side
-//   convenience. Per ADR 0061 — Stripe canon, NEVER float, NEVER
-//   decimal.
+//	Every monetary field is `int64 paise`. Totals (subtotal_paise,
+//	tax_paise, grand_total_paise) are derived at ctor/transition time
+//	from the items snapshot + are stored on the row for read-side
+//	convenience. Per ADR 0061 — Stripe canon, NEVER float, NEVER
+//	decimal.
 package order
 
 import (
@@ -56,30 +56,30 @@ func (id ID) String() string { return string(id) }
 // the confirmed items snapshot lives in `orders.order_items` keyed by
 // (tenant_id, order_id, line_number).
 type Order struct {
-	id                    ID
-	tenantID              tenant.ID
-	approvedQuotationID   quotation.ID
-	customerLeadID        quotation.CustomerLeadID
-	state                 State
-	confirmedItems        []quotation.LineItem // frozen snapshot from quotation tip on approval
-	subtotalPaise         int64
-	taxPaise              int64
-	grandTotalPaise       int64
+	id                  ID
+	tenantID            tenant.ID
+	approvedQuotationID quotation.ID
+	customerLeadID      quotation.CustomerLeadID
+	state               State
+	confirmedItems      []quotation.LineItem // frozen snapshot from quotation tip on approval
+	subtotalPaise       int64
+	taxPaise            int64
+	grandTotalPaise     int64
 
 	// Optional linkage IDs populated by downstream mutators.
-	invoiceID             string // set when state >= invoiced
-	consignmentNoteID     string // set when state >= dispatched
+	invoiceID         string // set when state >= invoiced
+	consignmentNoteID string // set when state >= dispatched
 
 	// Timestamps for the major transitions — surfaced on the row for
 	// read-side dashboards without hitting the outbox.
-	confirmedAt           *time.Time
-	packedAt              *time.Time
-	invoicedAt            *time.Time
-	dispatchedAt          *time.Time
-	deliveredAt           *time.Time
-	completedAt           *time.Time
-	cancelledAt           *time.Time
-	cancellationReason    string
+	confirmedAt        *time.Time
+	packedAt           *time.Time
+	invoicedAt         *time.Time
+	dispatchedAt       *time.Time
+	deliveredAt        *time.Time
+	completedAt        *time.Time
+	cancelledAt        *time.Time
+	cancellationReason string
 
 	createdAt             time.Time
 	createdByMembershipID membership.ID
@@ -163,9 +163,10 @@ func New(in NewInput) (*Order, error) {
 }
 
 // computeTotals walks items + sums to (subtotal, tax, grand). Per ADR 0061:
-//   line_subtotal = unit_sale_paise * quantity
-//   line_tax      = line_subtotal * gst_rate_bps / 10000
-//   line_total    = line_subtotal + line_tax
+//
+//	line_subtotal = unit_sale_paise * quantity
+//	line_tax      = line_subtotal * gst_rate_bps / 10000
+//	line_total    = line_subtotal + line_tax
 //
 // Returned totals are sums across all items. Integer-only — no rounding
 // risk under the bps representation.
@@ -422,11 +423,11 @@ func (o *Order) Cancel(reason string, actor membership.ID, now time.Time) error 
 	o.cancellationReason = reason
 	o.cancelledAt = &now
 	o.recordEvent(CancelledEvent{
-		OrderID:              o.id,
-		TenantID:             o.tenantID,
-		PriorState:           priorState,
-		Reason:               reason,
-		CancelledAt:          now,
+		OrderID:               o.id,
+		TenantID:              o.tenantID,
+		PriorState:            priorState,
+		Reason:                reason,
+		CancelledAt:           now,
 		CancelledByMembership: actor,
 	})
 	return nil
@@ -454,11 +455,11 @@ func (o *Order) advance(target State, actor membership.ID, now time.Time) error 
 	priorState := o.state
 	o.state = target
 	o.recordEvent(AdvancedEvent{
-		OrderID:                o.id,
-		TenantID:               o.tenantID,
-		PriorState:             priorState,
-		NewState:               target,
-		TransitionedAt:         now,
+		OrderID:                  o.id,
+		TenantID:                 o.tenantID,
+		PriorState:               priorState,
+		NewState:                 target,
+		TransitionedAt:           now,
 		TransitionedByMembership: actor,
 	})
 	return nil

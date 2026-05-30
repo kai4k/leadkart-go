@@ -173,6 +173,7 @@ func TestArch_BoundedChannelBuffers(t *testing.T) {
 //     TestMain ALSO needs to wrap shared infrastructure (e.g.
 //     pgtest.RunMain). Per uber-go/goleak README: "If you need to do
 //     additional cleanup, use goleak.Find()."
+//
 // Per ADR 0019 + uber-go/goleak README: integration tests with
 // testcontainers spawn long-lived goroutines (pgx pool, watermill
 // subscriber) — a leak across test runs masks bugs the next test

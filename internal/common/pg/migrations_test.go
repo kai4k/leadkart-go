@@ -129,7 +129,8 @@ func TestMigrationsApplyCleanly(t *testing.T) {
 	expectedIdentityTables := []string{
 		"tenants", "persons", "tenant_memberships",
 		"refresh_token_families", "refresh_tokens", "auth_routing",
-		"outbox",
+		// identity.outbox retired by ADR 0064/0067 — replaced by the shared
+		// common.outbox relay (migration 20260604000002).
 		"processed_messages",                                           // 20260507000001
 		"roles", "role_assignments", "membership_permission_overrides", // 20260507000002
 		"permission_requests",  // 20260523000003 (Wave 9.1e / ADR 0055)
@@ -204,6 +205,7 @@ func TestMigrationsApplyCleanly(t *testing.T) {
 		"audit_log_entry",           // 20260507000001
 		"admin_impersonation_audit", // 20260507000006 (ADR 0045)
 		"dead_letter",               // 20260604000001 (ADR 0067)
+		"outbox",                    // 20260604000002 (ADR 0064 shared relay)
 	}
 	for _, table := range expectedCommonTables {
 		var exists bool

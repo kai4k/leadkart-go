@@ -248,58 +248,15 @@ CREATE POLICY assignment_history_insert ON crm.assignment_history
 COMMENT ON TABLE crm.assignment_history IS
     'AssignmentHistory aggregate per ADR 0060. Append-only assignment audit. Latest row by assigned_at == current assignee (mirrored on crm.crm_leads.assignee_membership_id).';
 
--- ============================================================================
--- crm.outbox
--- Sibling of identity.outbox + platform.outbox. Same shape, same RLS+FORCE
--- posture. Forwarder publishes to Watermill topic `crm.events`.
--- ADR 0008 + 0027 + 0056.
--- ============================================================================
-
-CREATE TABLE crm.outbox (
-    id              uuid        PRIMARY KEY,
-    tenant_id       uuid        NOT NULL,           -- denormalised; CRM is fully tenant-scoped so this is never uuid.Nil
-    topic           text        NOT NULL,
-    payload         jsonb       NOT NULL,
-    occurred_at     timestamptz NOT NULL,
-    created_at      timestamptz NOT NULL DEFAULT now(),
-    forwarded       boolean     NOT NULL DEFAULT false,
-    forwarded_at    timestamptz NULL,
-    -- ADR 0056 actor-chain propagation (mirror of identity.outbox post-9.2c)
-    act_operator_id uuid        NULL,
-    act_session_id  uuid        NULL,
-    act_reason      text        NULL
-);
-
-CREATE INDEX idx_crm_outbox_unforwarded
-    ON crm.outbox (created_at, id) WHERE NOT forwarded;
-CREATE INDEX idx_crm_outbox_tenant_topic_occurred
-    ON crm.outbox (tenant_id, topic, occurred_at DESC, id DESC);
-
-ALTER TABLE crm.outbox ENABLE ROW LEVEL SECURITY;
-ALTER TABLE crm.outbox FORCE  ROW LEVEL SECURITY;
-
-CREATE POLICY crm_outbox_select ON crm.outbox
-    FOR SELECT
-    USING (tenant_id = app.current_tenant() OR app.is_platform());
-
-CREATE POLICY crm_outbox_insert ON crm.outbox
-    FOR INSERT
-    WITH CHECK (tenant_id = app.current_tenant() OR app.is_platform());
-
-CREATE POLICY crm_outbox_modify ON crm.outbox
-    FOR UPDATE
-    USING (app.is_platform())
-    WITH CHECK (app.is_platform());
-
-COMMENT ON TABLE crm.outbox IS
-    'Per-module outbox per ADR 0008 + 0027. Same shape as identity.outbox + platform.outbox; forwarder publishes to Watermill topic crm.events. Doubles as audit log.';
+-- NOTE: the per-module crm.outbox table was retired by ADR 0064/0067
+-- (migration 20260604000002) in favour of the shared common.outbox relay
+-- drained by the Watermill library Forwarder. No per-module outbox here.
 
 -- +goose StatementEnd
 
 -- +goose Down
 -- +goose StatementBegin
 
-DROP TABLE IF EXISTS crm.outbox CASCADE;
 DROP TABLE IF EXISTS crm.assignment_history CASCADE;
 DROP TABLE IF EXISTS crm.call_logs CASCADE;
 DROP TABLE IF EXISTS crm.crm_leads CASCADE;

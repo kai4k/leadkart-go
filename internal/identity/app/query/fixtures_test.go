@@ -15,8 +15,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/leadkart/leadkart-go/internal/common/email"
 	"github.com/leadkart/leadkart-go/internal/common/druglicence"
+	"github.com/leadkart/leadkart-go/internal/common/email"
 	"github.com/leadkart/leadkart-go/internal/common/gst"
 	"github.com/leadkart/leadkart-go/internal/common/pan"
 	"github.com/leadkart/leadkart-go/internal/common/phone"
@@ -38,16 +38,16 @@ var testNow = time.Date(2026, 5, 26, 12, 0, 0, 0, time.UTC)
 // canonical UUID-shaped IDs used across the suite. Real v7 UUIDs at
 // runtime; constants here so cmp.Diff comparisons stay stable.
 const (
-	testTenantID       = tenant.ID("11111111-1111-1111-1111-111111111111")
-	testTenantSlugStr  = "acme-pharma"
-	testPersonID       = person.ID("22222222-2222-2222-2222-222222222222")
-	testMembershipID   = membership.ID("33333333-3333-3333-3333-333333333333")
-	testRoleID         = role.ID("44444444-4444-4444-4444-444444444444")
-	testEdgeID         = rolehierarchy.ID("55555555-5555-5555-5555-555555555555")
-	testRequestID      = permissionrequest.ID("66666666-6666-6666-6666-666666666666")
-	testParentRoleID   = role.ID("77777777-7777-7777-7777-777777777777")
-	testApproverID     = membership.ID("88888888-8888-8888-8888-888888888888")
-	testEmail          = "alice@example.test"
+	testTenantID      = tenant.ID("11111111-1111-1111-1111-111111111111")
+	testTenantSlugStr = "acme-pharma"
+	testPersonID      = person.ID("22222222-2222-2222-2222-222222222222")
+	testMembershipID  = membership.ID("33333333-3333-3333-3333-333333333333")
+	testRoleID        = role.ID("44444444-4444-4444-4444-444444444444")
+	testEdgeID        = rolehierarchy.ID("55555555-5555-5555-5555-555555555555")
+	testRequestID     = permissionrequest.ID("66666666-6666-6666-6666-666666666666")
+	testParentRoleID  = role.ID("77777777-7777-7777-7777-777777777777")
+	testApproverID    = membership.ID("88888888-8888-8888-8888-888888888888")
+	testEmail         = "alice@example.test"
 )
 
 // mustEmail constructs an email.Address from a string. Fails the test

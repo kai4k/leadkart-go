@@ -23,8 +23,8 @@ import (
 	"time"
 
 	"github.com/alicebob/miniredis/v2"
-	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/jackc/pgx/v5/pgxpool"
+	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/pressly/goose/v3"
 
 	"github.com/leadkart/leadkart-go/internal/common/pg"
@@ -33,11 +33,11 @@ import (
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
 	"github.com/testcontainers/testcontainers-go/wait"
 
-	"github.com/leadkart/leadkart-go/internal/common/ids"
-	"github.com/leadkart/leadkart-go/internal/identity/ports"
 	"github.com/leadkart/leadkart-go/internal/common/cache"
 	"github.com/leadkart/leadkart-go/internal/common/config"
+	"github.com/leadkart/leadkart-go/internal/common/ids"
 	crmapp "github.com/leadkart/leadkart-go/internal/crm/app"
+	"github.com/leadkart/leadkart-go/internal/identity/ports"
 	platformapp "github.com/leadkart/leadkart-go/internal/platform/app"
 )
 
@@ -326,4 +326,3 @@ func migrationsDir(t *testing.T) string {
 	// here = .../cmd/api/http_flow_integration_test.go
 	return filepath.Join(filepath.Dir(here), "..", "..", "migrations")
 }
-

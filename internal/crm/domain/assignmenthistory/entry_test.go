@@ -1,4 +1,4 @@
-﻿package assignmenthistory_test
+package assignmenthistory_test
 
 import (
 	"errors"

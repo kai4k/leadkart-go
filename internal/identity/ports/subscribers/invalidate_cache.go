@@ -8,9 +8,9 @@ import (
 
 	"github.com/ThreeDotsLabs/watermill/message"
 
+	"github.com/leadkart/leadkart-go/internal/common/messaging"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
 	"github.com/leadkart/leadkart-go/internal/identity/integrationevents"
-	"github.com/leadkart/leadkart-go/internal/common/messaging"
 )
 
 // SecurityStampInvalidator is the single capability this subscriber

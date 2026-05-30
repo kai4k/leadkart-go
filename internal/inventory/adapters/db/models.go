@@ -8,22 +8,8 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-// X-Command-Id replay store per Stripe Idempotency-Key canon. 24h default TTL; background purge.
-type AppCommandIdempotency struct {
-	CommandID      string
-	BodyHash       string
-	ResponseStatus int32
-	ResponseBody   []byte
-	CreatedAt      pgtype.Timestamptz
-	ExpiresAt      pgtype.Timestamptz
-	// Per-caller scoping per Stripe Idempotency-Key canon. Tenant ID for tenant requests, "platform:<user>" for operator paths, "anon:<ip>" for unauth (defense-in-depth — middleware should not be on unauth routes).
-	CallerID string
-	// Captured response headers for verbatim replay (Content-Type minimum; ETag / X-Request-Id when set).
-	ResponseHeaders []byte
-}
-
 // Per-request operator impersonation activity. Indexed on operator + target tenant for forensic queries. 7-year retention per SOC2 CC4.1 / DPDP §12.
-type BuildingblocksAdminImpersonationAudit struct {
+type CommonAdminImpersonationAudit struct {
 	ID             pgtype.UUID
 	SessionID      pgtype.UUID
 	OperatorUserID pgtype.UUID
@@ -37,7 +23,7 @@ type BuildingblocksAdminImpersonationAudit struct {
 }
 
 // Auto-written per command via Watermill AuditLoggingMiddleware. 7-year retention; daily purge.
-type BuildingblocksAuditLogEntry struct {
+type CommonAuditLogEntry struct {
 	ID            pgtype.UUID
 	Action        string
 	UserID        pgtype.UUID
@@ -54,6 +40,42 @@ type BuildingblocksAuditLogEntry struct {
 	ActSessionID pgtype.UUID
 	// Denormalised reason from the impersonation session — captured at-rest for forensic queryability without needing to re-resolve the session record. NULL for non-impersonation rows.
 	ActReason *string
+}
+
+// X-Command-Id replay store per Stripe Idempotency-Key canon. 24h default TTL; background purge.
+type CommonCommandIdempotency struct {
+	CommandID      string
+	BodyHash       string
+	ResponseStatus int32
+	ResponseBody   []byte
+	CreatedAt      pgtype.Timestamptz
+	ExpiresAt      pgtype.Timestamptz
+	// Per-caller scoping per Stripe Idempotency-Key canon. Tenant ID for tenant requests, "platform:<user>" for operator paths, "anon:<ip>" for unauth (defense-in-depth — middleware should not be on unauth routes).
+	CallerID string
+	// Captured response headers for verbatim replay (Content-Type minimum; ETag / X-Request-Id when set).
+	ResponseHeaders []byte
+}
+
+// Durable landing zone for poisoned messages (retries exhausted or NonRetryable). Inspect + replay. Per ADR 0067.
+type CommonDeadLetter struct {
+	ID             pgtype.UUID
+	Topic          string
+	HandlerName    string
+	MessageID      string
+	Reason         string
+	Payload        []byte
+	Metadata       []byte
+	DeadLetteredAt pgtype.Timestamptz
+}
+
+// Transactional-outbox relay queue (watermill-sql PostgreSQLQueueSchema). One shared table, no RLS — pure relay per ADR 0064/0067. Rows deleted on ack.
+type CommonOutbox struct {
+	Offset    int64
+	Uuid      string
+	Payload   []byte
+	Metadata  []byte
+	Acked     bool
+	CreatedAt pgtype.Timestamptz
 }
 
 // AssignmentHistory aggregate per ADR 0060. Append-only assignment audit. Latest row by assigned_at == current assignee (mirrored on crm.crm_leads.assignee_membership_id).
@@ -116,21 +138,6 @@ type CrmCrmLead struct {
 	CreatedByMembershipID   pgtype.UUID
 }
 
-// Per-module outbox per ADR 0008 + 0027. Same shape as identity.outbox + platform.outbox; forwarder publishes to Watermill topic crm.events. Doubles as audit log.
-type CrmOutbox struct {
-	ID            pgtype.UUID
-	TenantID      pgtype.UUID
-	Topic         string
-	Payload       []byte
-	OccurredAt    pgtype.Timestamptz
-	CreatedAt     pgtype.Timestamptz
-	Forwarded     bool
-	ForwardedAt   pgtype.Timestamptz
-	ActOperatorID pgtype.UUID
-	ActSessionID  pgtype.UUID
-	ActReason     *string
-}
-
 // Cross-tenant email→tenant index for login. NOT RLS-scoped (intentional — login flow predates tenant context). Maintained via Watermill events.
 type IdentityAuthRouting struct {
 	Email          string
@@ -148,24 +155,6 @@ type IdentityMembershipPermissionOverride struct {
 	UpdatedAt      pgtype.Timestamptz
 	// ADR 0055 — time-bound overlay grant. NULL = perpetual. Resolver filters expired entries at resolve time; no cron sweep at v0.2 scale.
 	ExpiresAt pgtype.Timestamptz
-}
-
-// Domain events written same-tx as aggregate state. Watermill SQL forwarder polls + republishes. Doubles as audit log per ADR 0027.
-type IdentityOutbox struct {
-	ID          pgtype.UUID
-	TenantID    pgtype.UUID
-	Topic       string
-	Payload     []byte
-	OccurredAt  pgtype.Timestamptz
-	CreatedAt   pgtype.Timestamptz
-	Forwarded   bool
-	ForwardedAt pgtype.Timestamptz
-	// RFC 8693 act.sub — operator who initiated the impersonation session under which this event was emitted. NULL for non-impersonation rows. Stamped by the outbox writer from authn.ClaimsFromContext(ctx).Act.Sub; the forwarder propagates onto Watermill message metadata so the subscriber-side AuditMiddleware can populate audit_log_entry.act_operator_id.
-	ActOperatorID pgtype.UUID
-	// Impersonation session ID — same propagation path as act_operator_id. NULL for non-impersonation rows.
-	ActSessionID pgtype.UUID
-	// Denormalised reason from the impersonation session — same propagation path. NULL for non-impersonation rows.
-	ActReason *string
 }
 
 // ADR 0055 — permission-elevation approval workflow. Stores Requested → Approved/Denied/Cancelled history; approved grants land on identity.membership_permission_overrides with expires_at bounded.
@@ -365,21 +354,6 @@ type InventoryBatch struct {
 	CreatedByMembershipID pgtype.UUID
 }
 
-// Inventory module outbox — Watermill SQL forwarder polls + republishes. Doubles as audit log per ADR 0027.
-type InventoryOutbox struct {
-	ID            pgtype.UUID
-	TenantID      pgtype.UUID
-	Topic         string
-	Payload       []byte
-	OccurredAt    pgtype.Timestamptz
-	CreatedAt     pgtype.Timestamptz
-	Forwarded     bool
-	ForwardedAt   pgtype.Timestamptz
-	ActOperatorID pgtype.UUID
-	ActSessionID  pgtype.UUID
-	ActReason     *string
-}
-
 // Product aggregate. Tenant-scoped, FORCE RLS. SKU unique per tenant on live rows (partial index).
 type InventoryProduct struct {
 	ID           pgtype.UUID
@@ -423,22 +397,6 @@ type PlatformLeadCredit struct {
 	Version   int64
 	CreatedAt pgtype.Timestamptz
 	UpdatedAt pgtype.Timestamptz
-}
-
-// Per-module outbox per ADR 0008 + 0027. Same shape as identity.outbox; forwarder publishes to Watermill topic platform.events. Doubles as audit log.
-type PlatformOutbox struct {
-	ID pgtype.UUID
-	// NULL = Platform-scoped event (no tenant). Non-NULL = TenantScoped event keyed to identity.tenants.id. Per ADR 0059 review-pass fix C3 (migration 20260601000002).
-	TenantID      pgtype.UUID
-	Topic         string
-	Payload       []byte
-	OccurredAt    pgtype.Timestamptz
-	CreatedAt     pgtype.Timestamptz
-	Forwarded     bool
-	ForwardedAt   pgtype.Timestamptz
-	ActOperatorID pgtype.UUID
-	ActSessionID  pgtype.UUID
-	ActReason     *string
 }
 
 // Verified leads in the marketplace. RLS: unsold rows openly browsable; sold rows visible only to purchaser + platform. Per ADR 0059.

@@ -2,42 +2,36 @@ package adapters
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 
-	"github.com/leadkart/leadkart-go/internal/common/ids"
+	"github.com/leadkart/leadkart-go/internal/common/messaging"
 	"github.com/leadkart/leadkart-go/internal/common/pg"
-	"github.com/leadkart/leadkart-go/internal/common/pgconv"
-	"github.com/leadkart/leadkart-go/internal/common/actclaim"
-	"github.com/leadkart/leadkart-go/internal/platform/adapters/db"
 	"github.com/leadkart/leadkart-go/internal/platform/integrationevents"
 )
 
 // OutboxEnqueuer satisfies internal/platform/app/command.OutboxEnqueuer.
-// Writes one row per event to platform.outbox inside the active UoW tx
-// (pulled from ctx via pg.TxFromContext). Mirrors identity's outbox
-// writer per ADR 0008.
+// Writes integration events to the shared transactional outbox inside the
+// active UoW tx (pulled from ctx via pg.TxFromContext).
 //
 // Concrete struct + factory keep wiring boundary-clean: cmd/api builds
 // this with a single pool dep and passes it to handlers as the
-// `OutboxEnqueuer` interface.
+// OutboxEnqueuer interface.
 type OutboxEnqueuer struct{}
 
-// NewOutboxEnqueuer returns a zero-stateful enqueuer; pool isn't held
-// because the tx travels via ctx.
+// NewOutboxEnqueuer returns a zero-stateful enqueuer; the tx travels via
+// ctx so no pool is held.
 func NewOutboxEnqueuer() *OutboxEnqueuer { return &OutboxEnqueuer{} }
 
 // ErrNoActiveTx surfaces when EnqueueInTx is called outside a
 // UoW.WithinTx closure. Programmer bug — surfaces in tests immediately.
 var ErrNoActiveTx = errors.New("platform outbox: no active tx in ctx (call from UoW.WithinTx)")
 
-// EnqueueInTx satisfies the app-layer OutboxEnqueuer interface. Writes
-// each integration event to platform.outbox under the active tx.
+// EnqueueInTx satisfies the app-layer OutboxEnqueuer interface — writes
+// each integration event to the outbox under the active tx.
 func (e *OutboxEnqueuer) EnqueueInTx(ctx context.Context, events ...integrationevents.Event) error {
 	if len(events) == 0 {
 		return nil
@@ -49,59 +43,32 @@ func (e *OutboxEnqueuer) EnqueueInTx(ctx context.Context, events ...integratione
 	return writeOutboxEvents(ctx, tx, tenantOfEvents(events), events)
 }
 
-// writeOutboxEvents persists the supplied batch under the supplied tx.
-// Unexported — repositories call this from their Add / UpdateByID
-// methods to drain aggregate-side events.
+// writeOutboxEvents persists integration events to the transactional
+// outbox inside tx (same pgx.Tx as the aggregate mutation). Per ADR
+// 0064/0067 the outbox is the single shared common.outbox relay drained
+// by one Watermill Forwarder; tenant_id / occurred_at / act_* travel as
+// message metadata stamped by messaging.PublishOutbox. This wrapper just
+// supplies the platform destination topic.
 //
-// tenantID == uuid.Nil writes NULL into platform.outbox.tenant_id —
-// the column is NULLABLE post-migration 20260601000002 (ADR 0059 fix
-// C3). NULL signals "platform-scoped event, no owning tenant".
+// tenantID == uuid.Nil omits the tenant_id metadata (platform-scoped
+// event with no owning tenant).
 func writeOutboxEvents(
 	ctx context.Context,
 	tx pgx.Tx,
 	tenantID uuid.UUID,
 	events []integrationevents.Event,
 ) error {
-	if len(events) == 0 {
-		return nil
-	}
-	actOperatorID, actSessionID, actReason := outboxActParams(ctx)
-
-	q := db.New(tx)
-	for _, ev := range events {
-		payload, err := json.Marshal(ev)
-		if err != nil {
-			return fmt.Errorf("platform outbox: marshal %s: %w", ev.Topic(), err)
-		}
-		err = q.InsertPlatformOutboxEvent(ctx, db.InsertPlatformOutboxEventParams{
-			ID:            pgconv.PgUUID(ids.NewV7()),
-			TenantID:      pgconv.PgUUIDOrNull(tenantID),
-			Topic:         ev.Topic(),
-			Payload:       payload,
-			OccurredAt:    pgconv.PgRequiredTimestamp(ev.OccurredAt()),
-			ActOperatorID: actOperatorID,
-			ActSessionID:  actSessionID,
-			ActReason:     actReason,
-		})
-		if err != nil {
-			return fmt.Errorf("platform outbox: insert %s: %w", ev.Topic(), err)
-		}
-	}
-	return nil
+	return messaging.PublishOutbox(ctx, tx, integrationevents.Topic, tenantID, events)
 }
 
-// tenantOfEvents picks the tenant FK to stamp on the outbox row. For
-// a single-event batch we read from the event itself when it's
-// TenantScoped; for Platform events we return uuid.Nil — the writer
-// then INSERTs NULL into the (now nullable) tenant_id column per
-// migration 20260601000002 + ADR 0059 amendment. For a mixed batch we
-// use the first TenantScoped's tenant — handlers SHOULD NOT mix
-// platform + tenant-scoped events in one EnqueueInTx call (each call is
-// idempotent + cheap, separate them).
+// tenantOfEvents picks the tenant to stamp on the outbox metadata. Reads
+// the first TenantScoped event's tenant; Platform events return uuid.Nil
+// (no tenant metadata). Handlers SHOULD NOT mix platform + tenant-scoped
+// events in one EnqueueInTx call.
 //
-// Malformed TenantID (non-UUID string) is treated as Platform-scoped
-// (Nil) — defensive vs corrupt domain state; the outbox write MUST NOT
-// fail on a misshapen identifier (audit-log outage doctrine).
+// Malformed TenantID (non-UUID) is treated as Platform-scoped (Nil) —
+// defensive vs corrupt domain state; the outbox write MUST NOT fail on a
+// misshapen identifier (audit-log outage doctrine).
 func tenantOfEvents(events []integrationevents.Event) uuid.UUID {
 	for _, ev := range events {
 		ts, ok := ev.(integrationevents.TenantScoped)
@@ -121,39 +88,10 @@ func tenantOfEvents(events []integrationevents.Event) uuid.UUID {
 	return uuid.Nil
 }
 
-// outboxActParams projects the per-request actclaim ctx (set by the
-// authn middleware after JWT verification) onto the three sqlc param
-// slots. Defensive: malformed OperatorID / SessionID (non-UUID) is
-// dropped to NULL rather than failing the outbox write — audit-log
-// outage MUST NOT cascade per audit-checklist.md §12.
-//
-// Reuses internal/identity/app/actclaim — that ctx accessor is
-// authn-side wiring shared across modules per ADR 0056. Cross-module
-// import is legitimate (actclaim is the wire-shaped ctx contract).
-func outboxActParams(ctx context.Context) (pgtype.UUID, pgtype.UUID, *string) {
-	c, ok := actclaim.FromContext(ctx)
-	if !ok || c.IsZero() {
-		return pgtype.UUID{}, pgtype.UUID{}, nil
-	}
-	var (
-		opID  pgtype.UUID
-		sesID pgtype.UUID
-	)
-	if parsed, err := uuid.Parse(c.OperatorID); err == nil {
-		opID = pgconv.PgUUID(parsed)
-	}
-	if parsed, err := uuid.Parse(c.SessionID); err == nil {
-		sesID = pgconv.PgUUID(parsed)
-	}
-	return opID, sesID, pgconv.ZeroToNil(c.Reason)
-}
-
-// drainEventsToOutbox is the shared "pull domain events + map + persist"
-// helper used by every repository. Domain events get mapped through
-// integrationevents.FromDomainEvent (which may suppress with nil); the
-// resulting integration events go to platform.outbox under tx.
-//
-// Each repository's Add / UpdateByID call this once per persist.
+// drainEventsToOutbox is the shared "map + persist" helper used by every
+// repository: maps domain events through integrationevents.FromDomainEvent
+// (which may suppress with nil) + persists the result to the outbox under
+// tx. Each repository's Add / UpdateByID calls this once per persist.
 func drainEventsToOutbox(
 	ctx context.Context,
 	tx pgx.Tx,
@@ -167,10 +105,10 @@ func drainEventsToOutbox(
 	return writeOutboxEvents(ctx, tx, tenantID, mapped)
 }
 
-// mapDomainEvents translates the slice of domain events through
-// FromDomainEvent. Suppresses (returns nil) when the mapper does — used
-// for events that are emitted directly by the handler with derived data
-// (e.g. LeadVerifiedV1 with snapshot).
+// mapDomainEvents translates domain events through FromDomainEvent.
+// Suppresses (returns nil) when the mapper does — used for events emitted
+// directly by the handler with derived data (e.g. LeadVerifiedV1 with
+// snapshot).
 func mapDomainEvents(domainEvents []any) ([]integrationevents.Event, error) {
 	if len(domainEvents) == 0 {
 		return nil, nil

@@ -34,8 +34,10 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
 
+	"github.com/leadkart/leadkart-go/internal/common/cache"
 	"github.com/leadkart/leadkart-go/internal/common/email"
 	"github.com/leadkart/leadkart-go/internal/common/ids"
+	"github.com/leadkart/leadkart-go/internal/common/pg"
 	"github.com/leadkart/leadkart-go/internal/common/slug"
 	"github.com/leadkart/leadkart-go/internal/identity/adapters"
 	"github.com/leadkart/leadkart-go/internal/identity/app/argon2"
@@ -48,8 +50,6 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/domain/refreshtoken"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 	"github.com/leadkart/leadkart-go/internal/identity/ports/authn"
-	"github.com/leadkart/leadkart-go/internal/common/cache"
-	"github.com/leadkart/leadkart-go/internal/common/pg"
 )
 
 const refreshTTL = 14 * 24 * time.Hour
@@ -246,10 +246,10 @@ func TestFlow_RegisterLoginRefreshLogout(t *testing.T) {
 //
 // Two halves of the SQL contract:
 //
-//   1. Observable: second Register returns ErrEmailHasActiveMembership.
-//   2. Physical: direct SELECT for tenant B's slug returns zero rows
-//      — proves the pg.UnitOfWork rolled back the tenant insert when
-//      the membership Add fired ErrAlreadyActive partway through.
+//  1. Observable: second Register returns ErrEmailHasActiveMembership.
+//  2. Physical: direct SELECT for tenant B's slug returns zero rows
+//     — proves the pg.UnitOfWork rolled back the tenant insert when
+//     the membership Add fired ErrAlreadyActive partway through.
 //
 // Only the SQL adapter can prove (2); the fake has no UoW or pg.Tx
 // semantics to roll back.

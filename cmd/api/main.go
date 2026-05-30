@@ -44,12 +44,19 @@ import (
 
 	"github.com/leadkart/leadkart-go/internal/common/ids"
 
+	"github.com/leadkart/leadkart-go/internal/common/audit"
+	"github.com/leadkart/leadkart-go/internal/common/cache"
+	"github.com/leadkart/leadkart-go/internal/common/config"
+	"github.com/leadkart/leadkart-go/internal/common/httpmw"
+	"github.com/leadkart/leadkart-go/internal/common/idempotency"
+	"github.com/leadkart/leadkart-go/internal/common/obs"
+	"github.com/leadkart/leadkart-go/internal/common/openapi"
+	"github.com/leadkart/leadkart-go/internal/common/pg"
 	"github.com/leadkart/leadkart-go/internal/identity/adapters"
 	"github.com/leadkart/leadkart-go/internal/identity/app"
 	"github.com/leadkart/leadkart-go/internal/identity/app/argon2"
 	"github.com/leadkart/leadkart-go/internal/identity/app/command"
 	"github.com/leadkart/leadkart-go/internal/identity/app/jwt"
-	"github.com/leadkart/leadkart-go/internal/common/audit"
 	"github.com/leadkart/leadkart-go/internal/identity/app/permissions"
 	"github.com/leadkart/leadkart-go/internal/identity/app/query"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
@@ -61,39 +68,32 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 	"github.com/leadkart/leadkart-go/internal/identity/ports"
 	"github.com/leadkart/leadkart-go/internal/identity/ports/authn"
-	"github.com/leadkart/leadkart-go/internal/common/cache"
-	"github.com/leadkart/leadkart-go/internal/common/config"
-	"github.com/leadkart/leadkart-go/internal/common/httpmw"
-	"github.com/leadkart/leadkart-go/internal/common/idempotency"
-	"github.com/leadkart/leadkart-go/internal/common/obs"
-	"github.com/leadkart/leadkart-go/internal/common/openapi"
-	"github.com/leadkart/leadkart-go/internal/common/pg"
 
 	inventoryadapters "github.com/leadkart/leadkart-go/internal/inventory/adapters"
 	inventoryapp "github.com/leadkart/leadkart-go/internal/inventory/app"
 	inventorycommand "github.com/leadkart/leadkart-go/internal/inventory/app/command"
 	inventoryquery "github.com/leadkart/leadkart-go/internal/inventory/app/query"
-	inventoryports "github.com/leadkart/leadkart-go/internal/inventory/ports"
 	"github.com/leadkart/leadkart-go/internal/inventory/domain/batch"
 	"github.com/leadkart/leadkart-go/internal/inventory/domain/product"
 	"github.com/leadkart/leadkart-go/internal/inventory/domain/stockmovement"
+	inventoryports "github.com/leadkart/leadkart-go/internal/inventory/ports"
 
 	platformadapters "github.com/leadkart/leadkart-go/internal/platform/adapters"
 	platformapp "github.com/leadkart/leadkart-go/internal/platform/app"
 	platformcommand "github.com/leadkart/leadkart-go/internal/platform/app/command"
 	platformquery "github.com/leadkart/leadkart-go/internal/platform/app/query"
-	platformports "github.com/leadkart/leadkart-go/internal/platform/ports"
 	"github.com/leadkart/leadkart-go/internal/platform/domain/platformlead"
 	"github.com/leadkart/leadkart-go/internal/platform/domain/unverifiedcontact"
 	"github.com/leadkart/leadkart-go/internal/platform/domain/verificationcall"
+	platformports "github.com/leadkart/leadkart-go/internal/platform/ports"
 
 	crmadapters "github.com/leadkart/leadkart-go/internal/crm/adapters"
-	"github.com/leadkart/leadkart-go/internal/crm/domain/assignmenthistory"
-	"github.com/leadkart/leadkart-go/internal/crm/domain/calllog"
-	"github.com/leadkart/leadkart-go/internal/crm/domain/crmlead"
 	crmapp "github.com/leadkart/leadkart-go/internal/crm/app"
 	crmcommand "github.com/leadkart/leadkart-go/internal/crm/app/command"
 	crmquery "github.com/leadkart/leadkart-go/internal/crm/app/query"
+	"github.com/leadkart/leadkart-go/internal/crm/domain/assignmenthistory"
+	"github.com/leadkart/leadkart-go/internal/crm/domain/calllog"
+	"github.com/leadkart/leadkart-go/internal/crm/domain/crmlead"
 	crmports "github.com/leadkart/leadkart-go/internal/crm/ports"
 )
 
@@ -353,7 +353,7 @@ func run(ctx context.Context, stdout *os.File, _ []string) error {
 		Now:              time.Now,
 		IPRateLimit: httpmw.LimiterConfig{
 			RatePerSecond: apiIPRatePerSecond,
-			Burst:          apiIPRateBurst,
+			Burst:         apiIPRateBurst,
 		},
 	})
 	publicHandler := otelhttp.NewHandler(
@@ -443,9 +443,9 @@ func newServer(
 // Mat Ryer "the host owns URL structure decisions" canon.
 //
 //   - GET /              → 302 redirect to /docs (Scalar UI is the
-//                          discoverable entrypoint for humans + AI)
+//     discoverable entrypoint for humans + AI)
 //   - GET /favicon.ico   → 204 No Content (Stripe / Auth0 convention —
-//                          browsers stop asking after the first 204)
+//     browsers stop asking after the first 204)
 //   - GET /openapi.yaml  → embedded OpenAPI 3.1 spec (ADR 0046)
 //   - GET /docs          → Scalar UI HTML page (renders the spec)
 //   - GET /docs/         → same handler (trailing-slash tolerance)
@@ -573,98 +573,98 @@ func buildIdentityApp(pool *pgxpool.Pool, hybridCache *cache.HybridCache, cfg co
 		Families:       families,
 		Persons:        persons,
 		App: app.Application{
-		Commands: app.Commands{
-			RegisterTenant:       command.NewRegisterTenantHandler(tx, tenants, persons, memberships, roles, now, newTenantID, newPersonID, newMembershipID),
-			Login:                command.NewLoginHandler(authRouter, families, tenants, persons, permResolver, issuer, now, cfg.Refresh.AbsoluteTTL, dummyHash, newFamilyID),
-			Refresh:              command.NewRefreshHandler(families, persons, memberships, tenants, permResolver, issuer, now, cfg.Refresh.AbsoluteTTL),
-			Logout:               command.NewLogoutHandler(families, now),
-			ChangePassword:       command.NewChangePasswordHandler(persons, breachChecker, now),
-			RevokeSession:        command.NewRevokeSessionHandler(families, now),
-			RevokeAllSessions:    command.NewRevokeAllSessionsHandler(families, now),
-			RequestPasswordReset: command.NewRequestPasswordResetHandler(persons, now),
-			ConfirmPasswordReset: command.NewConfirmPasswordResetHandler(persons, breachChecker, now),
-			RequestEmailChange:   command.NewRequestEmailChangeHandler(persons, now),
-			ConfirmEmailChange:   command.NewConfirmEmailChangeHandler(persons, now),
+			Commands: app.Commands{
+				RegisterTenant:       command.NewRegisterTenantHandler(tx, tenants, persons, memberships, roles, now, newTenantID, newPersonID, newMembershipID),
+				Login:                command.NewLoginHandler(authRouter, families, tenants, persons, permResolver, issuer, now, cfg.Refresh.AbsoluteTTL, dummyHash, newFamilyID),
+				Refresh:              command.NewRefreshHandler(families, persons, memberships, tenants, permResolver, issuer, now, cfg.Refresh.AbsoluteTTL),
+				Logout:               command.NewLogoutHandler(families, now),
+				ChangePassword:       command.NewChangePasswordHandler(persons, breachChecker, now),
+				RevokeSession:        command.NewRevokeSessionHandler(families, now),
+				RevokeAllSessions:    command.NewRevokeAllSessionsHandler(families, now),
+				RequestPasswordReset: command.NewRequestPasswordResetHandler(persons, now),
+				ConfirmPasswordReset: command.NewConfirmPasswordResetHandler(persons, breachChecker, now),
+				RequestEmailChange:   command.NewRequestEmailChangeHandler(persons, now),
+				ConfirmEmailChange:   command.NewConfirmEmailChangeHandler(persons, now),
 
-			UpdateTenantProfile:            command.NewUpdateTenantProfileHandler(tenants, now),
-			UpdateTenantStatutory:          command.NewUpdateTenantStatutoryHandler(tenants, now),
-			UpdateTenantAdminContact:       command.NewUpdateTenantAdminContactHandler(tenants, now),
-			UpdateTenantSettings:           command.NewUpdateTenantSettingsHandler(tenants, now),
-			UpdateTenantDisplayPreferences: command.NewUpdateTenantDisplayPreferencesHandler(tenants, now),
-			SuspendTenant:                  command.NewSuspendTenantHandler(tenants, memberships, now),
-			ActivateTenant:                 command.NewActivateTenantHandler(tenants, now),
-			MarkTenantForDeletion:          command.NewMarkTenantForDeletionHandler(tenants, memberships, now),
-			RestoreTenant:                  command.NewRestoreTenantHandler(tenants, now),
+				UpdateTenantProfile:            command.NewUpdateTenantProfileHandler(tenants, now),
+				UpdateTenantStatutory:          command.NewUpdateTenantStatutoryHandler(tenants, now),
+				UpdateTenantAdminContact:       command.NewUpdateTenantAdminContactHandler(tenants, now),
+				UpdateTenantSettings:           command.NewUpdateTenantSettingsHandler(tenants, now),
+				UpdateTenantDisplayPreferences: command.NewUpdateTenantDisplayPreferencesHandler(tenants, now),
+				SuspendTenant:                  command.NewSuspendTenantHandler(tenants, memberships, now),
+				ActivateTenant:                 command.NewActivateTenantHandler(tenants, now),
+				MarkTenantForDeletion:          command.NewMarkTenantForDeletionHandler(tenants, memberships, now),
+				RestoreTenant:                  command.NewRestoreTenantHandler(tenants, now),
 
-			UpdateUserProfile:              command.NewUpdateUserProfileHandler(memberships, now),
-			DeactivateUser:                 command.NewDeactivateUserHandler(memberships, now),
-			ReactivateUser:                 command.NewReactivateUserHandler(memberships, now),
-			AssignUserRole:                 command.NewAssignUserRoleHandler(memberships, now),
-			RevokeUserRole:                 command.NewRevokeUserRoleHandler(memberships, now),
-			ReplaceUserPermissionOverrides: command.NewReplaceUserPermissionOverridesHandler(memberships, now),
-			AssignUserManager:              command.NewAssignUserManagerHandler(memberships, now),
-			RemoveUserManager:              command.NewRemoveUserManagerHandler(memberships, now),
-			CreateUser:                     command.NewCreateUserHandler(tx, persons, memberships, now, newPersonID, newMembershipID),
-			AnonymiseUser:                  command.NewAnonymiseUserHandler(memberships, persons, now),
+				UpdateUserProfile:              command.NewUpdateUserProfileHandler(memberships, now),
+				DeactivateUser:                 command.NewDeactivateUserHandler(memberships, now),
+				ReactivateUser:                 command.NewReactivateUserHandler(memberships, now),
+				AssignUserRole:                 command.NewAssignUserRoleHandler(memberships, now),
+				RevokeUserRole:                 command.NewRevokeUserRoleHandler(memberships, now),
+				ReplaceUserPermissionOverrides: command.NewReplaceUserPermissionOverridesHandler(memberships, now),
+				AssignUserManager:              command.NewAssignUserManagerHandler(memberships, now),
+				RemoveUserManager:              command.NewRemoveUserManagerHandler(memberships, now),
+				CreateUser:                     command.NewCreateUserHandler(tx, persons, memberships, now, newPersonID, newMembershipID),
+				AnonymiseUser:                  command.NewAnonymiseUserHandler(memberships, persons, now),
 
-			CreateRole:             command.NewCreateRoleHandler(roles, roleHierarchyEdges, tx, now, newRoleID, newRoleHierarchyEdgeID),
-			UpdateRole:             command.NewUpdateRoleHandler(roles, now),
-			DeleteRole:             command.NewDeleteRoleHandler(roles, now),
-			ReplaceRolePermissions: command.NewReplaceRolePermissionsHandler(roles, now),
-			GrantRolePermission:    command.NewGrantRolePermissionHandler(roles, now),
-			RevokeRolePermission:   command.NewRevokeRolePermissionHandler(roles, now),
-			SetRoleParent:          command.NewSetRoleParentHandler(roleHierarchyEdges, tx, now, newRoleHierarchyEdgeID), // ADR 0058
+				CreateRole:             command.NewCreateRoleHandler(roles, roleHierarchyEdges, tx, now, newRoleID, newRoleHierarchyEdgeID),
+				UpdateRole:             command.NewUpdateRoleHandler(roles, now),
+				DeleteRole:             command.NewDeleteRoleHandler(roles, now),
+				ReplaceRolePermissions: command.NewReplaceRolePermissionsHandler(roles, now),
+				GrantRolePermission:    command.NewGrantRolePermissionHandler(roles, now),
+				RevokeRolePermission:   command.NewRevokeRolePermissionHandler(roles, now),
+				SetRoleParent:          command.NewSetRoleParentHandler(roleHierarchyEdges, tx, now, newRoleHierarchyEdgeID), // ADR 0058
 
-			GlobalSuspendPerson:        command.NewGlobalSuspendPersonHandler(persons, now),
-			LiftPersonGlobalSuspension: command.NewLiftPersonGlobalSuspensionHandler(persons, now),
-			AnonymisePerson:            command.NewAnonymisePersonHandler(persons, now),
-			UpdatePersonProfile:        command.NewUpdatePersonProfileHandler(persons, now),
-			HardDeleteTenant:           command.NewHardDeleteTenantHandler(tenants, memberships, now),
+				GlobalSuspendPerson:        command.NewGlobalSuspendPersonHandler(persons, now),
+				LiftPersonGlobalSuspension: command.NewLiftPersonGlobalSuspensionHandler(persons, now),
+				AnonymisePerson:            command.NewAnonymisePersonHandler(persons, now),
+				UpdatePersonProfile:        command.NewUpdatePersonProfileHandler(persons, now),
+				HardDeleteTenant:           command.NewHardDeleteTenantHandler(tenants, memberships, now),
 
-			CreateImpersonationSession: command.NewCreateImpersonationSessionHandler(impersonationStore, tenants, issuer, now),
-			EndImpersonationSession:    command.NewEndImpersonationSessionHandler(impersonationStore),
+				CreateImpersonationSession: command.NewCreateImpersonationSessionHandler(impersonationStore, tenants, issuer, now),
+				EndImpersonationSession:    command.NewEndImpersonationSessionHandler(impersonationStore),
 
-			// Permission-elevation approval workflow (ADR 0055).
-			RequestPermissionElevation: command.NewRequestPermissionElevationHandler(permissionRequests, memberships, now, newPermissionRequestID),
-			ApprovePermissionRequest:   command.NewApprovePermissionRequestHandler(permissionRequests, memberships, now, newOverrideID),
-			DenyPermissionRequest:      command.NewDenyPermissionRequestHandler(permissionRequests, memberships, now),
-			CancelPermissionRequest:    command.NewCancelPermissionRequestHandler(permissionRequests, now),
-		},
-		Queries: app.Queries{
-			ListSessions: query.NewListSessionsHandler(families),
-			GetCapabilities: query.NewCachedGetCapabilitiesHandler(
-				query.NewGetCapabilitiesHandler(persons, memberships, roles),
-				hybridCache,
-				memberships,
-			),
-			GetTenant:                 query.NewGetTenantHandler(tenants),
-			GetTenantBySlug:           query.NewGetTenantBySlugHandler(tenants),
-			GetUser:                   query.NewGetUserHandler(memberships, persons),
-			ListUsers:                 query.NewListUsersHandler(memberships, persons),
-			ListUsersPaged:            query.NewListUsersPagedHandler(memberships, persons),
-			GetRole:                   query.NewGetRoleHandler(roles, roleHierarchyEdges),
-			ListRoles:                 query.NewListRolesHandler(roles, roleHierarchyEdges),
-			GetPerson:                 query.NewGetPersonHandler(persons),
-			GetPersonByEmail:          query.NewGetPersonByEmailHandler(persons),
-			ListPersonMemberships:     query.NewListPersonMembershipsHandler(memberships, persons),
-			ListAllTenants:            query.NewListAllTenantsHandler(tenants),
-			ListImpersonationSessions: query.NewListImpersonationSessionsHandler(impersonationStore),
-			PlatformStats: query.NewCachedPlatformStatsHandler(
-				query.NewPlatformStatsHandler(statsReader),
-				hybridCache,
-			),
-			Search: query.NewCachedSearchHandler(
-				query.NewSearchHandler(searchIndex),
-				hybridCache,
-			),
-			ListAuditEventsByTenant: query.NewListAuditEventsByTenantHandler(auditReader),
-			ListAuditEventsByUser:   query.NewListAuditEventsByUserHandler(auditReader),
+				// Permission-elevation approval workflow (ADR 0055).
+				RequestPermissionElevation: command.NewRequestPermissionElevationHandler(permissionRequests, memberships, now, newPermissionRequestID),
+				ApprovePermissionRequest:   command.NewApprovePermissionRequestHandler(permissionRequests, memberships, now, newOverrideID),
+				DenyPermissionRequest:      command.NewDenyPermissionRequestHandler(permissionRequests, memberships, now),
+				CancelPermissionRequest:    command.NewCancelPermissionRequestHandler(permissionRequests, now),
+			},
+			Queries: app.Queries{
+				ListSessions: query.NewListSessionsHandler(families),
+				GetCapabilities: query.NewCachedGetCapabilitiesHandler(
+					query.NewGetCapabilitiesHandler(persons, memberships, roles),
+					hybridCache,
+					memberships,
+				),
+				GetTenant:                 query.NewGetTenantHandler(tenants),
+				GetTenantBySlug:           query.NewGetTenantBySlugHandler(tenants),
+				GetUser:                   query.NewGetUserHandler(memberships, persons),
+				ListUsers:                 query.NewListUsersHandler(memberships, persons),
+				ListUsersPaged:            query.NewListUsersPagedHandler(memberships, persons),
+				GetRole:                   query.NewGetRoleHandler(roles, roleHierarchyEdges),
+				ListRoles:                 query.NewListRolesHandler(roles, roleHierarchyEdges),
+				GetPerson:                 query.NewGetPersonHandler(persons),
+				GetPersonByEmail:          query.NewGetPersonByEmailHandler(persons),
+				ListPersonMemberships:     query.NewListPersonMembershipsHandler(memberships, persons),
+				ListAllTenants:            query.NewListAllTenantsHandler(tenants),
+				ListImpersonationSessions: query.NewListImpersonationSessionsHandler(impersonationStore),
+				PlatformStats: query.NewCachedPlatformStatsHandler(
+					query.NewPlatformStatsHandler(statsReader),
+					hybridCache,
+				),
+				Search: query.NewCachedSearchHandler(
+					query.NewSearchHandler(searchIndex),
+					hybridCache,
+				),
+				ListAuditEventsByTenant: query.NewListAuditEventsByTenantHandler(auditReader),
+				ListAuditEventsByUser:   query.NewListAuditEventsByUserHandler(auditReader),
 
-			// Permission-elevation approval workflow (ADR 0055).
-			GetPermissionRequest:     query.NewGetPermissionRequestHandler(permissionRequests),
-			ListMyPermissionRequests: query.NewListMyPermissionRequestsHandler(permissionRequests),
-			ListPendingForApprover:   query.NewListPendingForApproverHandler(permissionRequests),
-		},
+				// Permission-elevation approval workflow (ADR 0055).
+				GetPermissionRequest:     query.NewGetPermissionRequestHandler(permissionRequests),
+				ListMyPermissionRequests: query.NewListMyPermissionRequestsHandler(permissionRequests),
+				ListPendingForApprover:   query.NewListPendingForApproverHandler(permissionRequests),
+			},
 		},
 	}, nil
 }

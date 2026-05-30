@@ -60,7 +60,7 @@ import (
 //   - newline (`\n`) — handles both .sql files (one-clause-per-line)
 //     AND Go raw-string SQL literals (the string literal is on ONE
 //     source line, so the newline after the literal terminates).
-//   - backtick (`` ` ``) — the Go raw-string terminator; without
+//   - backtick (“ ` “) — the Go raw-string terminator; without
 //     this, an inline SQL literal like
 //     `SELECT ... ORDER BY x, id`, schema)`
 //     would capture past the closing backtick + into the Go code.

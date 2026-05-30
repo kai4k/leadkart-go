@@ -23,9 +23,10 @@ import (
 // — surfaces in CI as a clear "you minted a domain event but never
 // wired the integration counterpart" failure.
 //
-//nolint:cyclop // Switch dispatcher — one case per recognised domain
 // event. Cyclomatic complexity scales with catalogue size by
 // definition; refactoring into a registry map costs more than it pays.
+//
+//nolint:cyclop // Switch dispatcher — one case per recognised domain
 func FromDomainEvent(d any) (Event, error) {
 	switch e := d.(type) {
 

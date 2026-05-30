@@ -28,9 +28,11 @@ import (
 
 	"github.com/leadkart/leadkart-go/internal/common/ids"
 	"github.com/leadkart/leadkart-go/internal/common/messaging"
+	"github.com/leadkart/leadkart-go/internal/common/messaging/messagingtest"
 	"github.com/leadkart/leadkart-go/internal/common/pg"
 	"github.com/leadkart/leadkart-go/internal/crm/adapters"
 	"github.com/leadkart/leadkart-go/internal/crm/domain/crmlead"
+	crmevents "github.com/leadkart/leadkart-go/internal/crm/integrationevents"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
 
@@ -74,8 +76,8 @@ func newSnapshot(t *testing.T, purchaseID, platformLeadID, buyer string) crmlead
 // arch-test:no-parallel — subscriber-fixture test; uses TruncateAll.
 func TestCrmLeadRepository_Add_PersistsAndEmitsOutbox(t *testing.T) {
 	sharedPG.TruncateAll(t)
-	fix := newCrmOutboxFixture(t)
-	repo := adapters.NewCrmLeadRepository(fix.pool, pg.NewTransactor(fix.pool))
+	pool := crmRepoFixture(t)
+	repo := adapters.NewCrmLeadRepository(pool, pg.NewTransactor(pool))
 
 	tenantID := ids.NewV7()
 	ctx := withTenantCtx(t.Context(), tenantID)
@@ -92,12 +94,18 @@ func TestCrmLeadRepository_Add_PersistsAndEmitsOutbox(t *testing.T) {
 		t.Fatalf("Add: %v", err)
 	}
 
-	msgs := fix.forwardAndWait(t, 1)
-	got := crmEventTypes(msgs)
+	// Producer contract (ADR 0064): the Add wrote one enveloped row to the
+	// shared common.outbox relay, in the same tx. messagingtest.DrainOutbox
+	// reads + unwraps it (the forwarder hop is library code).
+	rows := messagingtest.DrainOutbox(t.Context(), t, pool)
+	got := messagingtest.EventTypes(rows)
 	if len(got) != 1 || got[0] != "crm.lead_created.v1" {
 		t.Fatalf("event_types: got %v want [crm.lead_created.v1]", got)
 	}
-	if tid := msgs[0].Metadata.Get(messaging.HeaderTenantID); tid != tenantID.String() {
+	if rows[0].DestinationTopic != crmevents.Topic {
+		t.Fatalf("destination topic: got %q want %q", rows[0].DestinationTopic, crmevents.Topic)
+	}
+	if tid := rows[0].Message.Metadata.Get(messaging.HeaderTenantID); tid != tenantID.String() {
 		t.Fatalf("tenant_id header: got %q want %q", tid, tenantID.String())
 	}
 }

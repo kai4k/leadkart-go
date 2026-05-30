@@ -40,8 +40,13 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
 
+	"github.com/leadkart/leadkart-go/internal/common/audit"
+	"github.com/leadkart/leadkart-go/internal/common/audit/audittest"
+	"github.com/leadkart/leadkart-go/internal/common/cache"
 	"github.com/leadkart/leadkart-go/internal/common/email"
 	"github.com/leadkart/leadkart-go/internal/common/ids"
+	"github.com/leadkart/leadkart-go/internal/common/messaging"
+	"github.com/leadkart/leadkart-go/internal/common/pg"
 	"github.com/leadkart/leadkart-go/internal/common/slug"
 	"github.com/leadkart/leadkart-go/internal/identity/adapters"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
@@ -49,11 +54,6 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 	"github.com/leadkart/leadkart-go/internal/identity/integrationevents"
 	"github.com/leadkart/leadkart-go/internal/identity/ports/subscribers"
-	"github.com/leadkart/leadkart-go/internal/common/audit"
-	"github.com/leadkart/leadkart-go/internal/common/audit/audittest"
-	"github.com/leadkart/leadkart-go/internal/common/cache"
-	"github.com/leadkart/leadkart-go/internal/common/messaging"
-	"github.com/leadkart/leadkart-go/internal/common/pg"
 )
 
 // testNow is the deterministic instant test fixtures pass to domain
@@ -66,12 +66,12 @@ var testNow = time.Date(2026, 5, 24, 12, 0, 0, 0, time.UTC)
 // queries we DON'T touch but that other tests in the same fixture run
 // would.
 type fixture struct {
-	pool        *pgxpool.Pool
-	tenants     *adapters.TenantRepository
-	persons     *adapters.PersonRepository
-	families    *adapters.RefreshTokenFamilyRepository
-	stampCache  *adapters.SecurityStampCache
-	miniredis   *miniredis.Miniredis
+	pool       *pgxpool.Pool
+	tenants    *adapters.TenantRepository
+	persons    *adapters.PersonRepository
+	families   *adapters.RefreshTokenFamilyRepository
+	stampCache *adapters.SecurityStampCache
+	miniredis  *miniredis.Miniredis
 }
 
 // newFixture returns a per-test fixture backed by the SHARED package-
@@ -502,12 +502,12 @@ func TestRevokeFamilies_OnMembershipDeactivated_NarrowsToTenantScope(t *testing.
 //
 // Two halves of the SQL contract:
 //
-//   1. Subscriber-ran observable: an audit row exists for the event
-//      action (router middleware contract).
-//   2. No spurious mutation: a baseline-seeded family from a DIFFERENT
-//      Person remains untouched after the subscriber runs — proves
-//      the empty-list path didn't fall through to a row-set-bypass
-//      UPDATE that would have flipped is_revoked=true on every family.
+//  1. Subscriber-ran observable: an audit row exists for the event
+//     action (router middleware contract).
+//  2. No spurious mutation: a baseline-seeded family from a DIFFERENT
+//     Person remains untouched after the subscriber runs — proves
+//     the empty-list path didn't fall through to a row-set-bypass
+//     UPDATE that would have flipped is_revoked=true on every family.
 //
 // Without (2) the test reduces to "subscriber ran" — already covered
 // by TestRouter_FullStack in common/messaging/router_test.go. The

@@ -24,7 +24,7 @@
 // Per ADR 0063 (the load-bearing decision doc for this module):
 //
 //   - Five aggregates, NOT one fat Order. Quotation + Order + Invoice
-//     + CreditNote + Payment each carry their own invariant scope +
+//   - CreditNote + Payment each carry their own invariant scope +
 //     lifecycle (mutable, immutable, append-only — different shapes).
 //   - State-based persistence per ADR 0003 + 0035. NO event sourcing.
 //     The .NET parent uses Marten event streams for Orders; this Go

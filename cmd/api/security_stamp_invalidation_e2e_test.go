@@ -54,10 +54,7 @@ import (
 	"github.com/leadkart/leadkart-go/internal/common/config"
 	"github.com/leadkart/leadkart-go/internal/common/ids"
 	"github.com/leadkart/leadkart-go/internal/common/messaging"
-	"github.com/leadkart/leadkart-go/internal/common/pg"
 	crmapp "github.com/leadkart/leadkart-go/internal/crm/app"
-	"github.com/leadkart/leadkart-go/internal/identity/adapters"
-	"github.com/leadkart/leadkart-go/internal/identity/integrationevents"
 	"github.com/leadkart/leadkart-go/internal/identity/ports"
 	"github.com/leadkart/leadkart-go/internal/identity/ports/subscribers"
 	platformapp "github.com/leadkart/leadkart-go/internal/platform/app"
@@ -95,11 +92,13 @@ func TestSecurityStampInvalidation_PasswordChange_Returns401WithinFastPath(t *te
 	// cmd/api/main.go runs in production. Without this, the
 	// PersonPasswordChangedV1 event the ChangePassword handler emits
 	// to the outbox would never reach the cascade subscriber.
-	tx := pg.NewTransactor(pool)
 	pubsub := gochannel.NewGoChannel(gochannel.Config{}, watermill.NewSlogLogger(silentLogger()))
 	t.Cleanup(func() { _ = pubsub.Close() })
 
-	forwarder := adapters.NewOutboxForwarder(pool, tx, pubsub, integrationevents.Topic, 0, time.Now)
+	outboxForwarder, err := messaging.NewOutboxForwarder(pool, pubsub, watermill.NewSlogLogger(silentLogger()))
+	if err != nil {
+		t.Fatalf("messaging.NewOutboxForwarder: %v", err)
+	}
 	router, err := messaging.NewRouter(messaging.Deps{
 		Subscriber:       pubsub,
 		Publisher:        pubsub,
@@ -123,9 +122,12 @@ func TestSecurityStampInvalidation_PasswordChange_Returns401WithinFastPath(t *te
 	stackCtx, stackCancel := context.WithCancel(t.Context())
 	t.Cleanup(stackCancel)
 
-	go forwarder.Run(stackCtx, 50*time.Millisecond, 10*time.Millisecond, func(err error) {
-		t.Logf("forwarder: %v", err)
-	})
+	go func() {
+		if err := outboxForwarder.Run(stackCtx); err != nil && !errors.Is(err, context.Canceled) {
+			t.Logf("forwarder: %v", err)
+		}
+	}()
+	t.Cleanup(func() { _ = outboxForwarder.Close() })
 
 	routerDone := make(chan struct{})
 	go func() {

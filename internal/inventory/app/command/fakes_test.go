@@ -46,9 +46,11 @@ func (u *fakeUoW) Runs() int {
 // aggregate they fake. The newFakeXRepo helpers below are one-line
 // aliases so existing tests don't need rewriting at the call sites.
 
-func newFakeProductRepo() *producttest.FakeRepository       { return producttest.NewFakeRepository() }
-func newFakeBatchRepo() *batchtest.FakeRepository           { return batchtest.NewFakeRepository() }
-func newFakeMovementRepo() *stockmovementtest.FakeRepository { return stockmovementtest.NewFakeRepository() }
+func newFakeProductRepo() *producttest.FakeRepository { return producttest.NewFakeRepository() }
+func newFakeBatchRepo() *batchtest.FakeRepository     { return batchtest.NewFakeRepository() }
+func newFakeMovementRepo() *stockmovementtest.FakeRepository {
+	return stockmovementtest.NewFakeRepository()
+}
 
 // ----- compile-time interface checks -----------------------------------------
 

@@ -93,8 +93,8 @@ func TestArch_TopicProducerConsumerBijection(t *testing.T) {
 	// 2) PRODUCED = every value returned by a Topic() method. A Topic()
 	//    body either returns a string literal directly, or returns a const
 	//    identifier whose value we already captured in constValueByName.
-	produced := map[string]string{}           // topic value -> source location (file)
-	producedByTypeName := map[string]string{} // "LeadPurchasedV1" -> "platform.lead_purchased.v1"
+	produced := map[string]string{}                // topic value -> source location (file)
+	producedByTypeName := map[string]string{}      // "LeadPurchasedV1" -> "platform.lead_purchased.v1"
 	topicMethodReturnsConst := map[string]string{} // file:typeName -> const name (for the deferred resolve)
 	topicMethodTypeAtKey := map[string]string{}    // file:typeName -> receiver type name
 
@@ -550,7 +550,7 @@ func TestArch_MigrationDoesNotReferenceLaterSchema(t *testing.T) {
 // stripSQLLiterals blanks the contents of single-quoted SQL string
 // literals (preserving newlines for line arithmetic) so that GUC names
 // and other dotted text inside string args don't read as schema.object
-// references. Doubled single-quotes ('') are the SQL escape for a literal
+// references. Doubled single-quotes (”) are the SQL escape for a literal
 // quote; we treat them naively (the heuristic only needs to drop dotted
 // identifiers, and the doubled-quote case still blanks the bytes between).
 func stripSQLLiterals(s string) string {

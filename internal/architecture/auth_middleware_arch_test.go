@@ -30,21 +30,21 @@ import (
 // either pre-date the JWT exchange (login / password-reset) or serve
 // non-product surface (health, openapi).
 var publicRoutesAllowList = map[string]bool{
-	"GET /":                                          true, // root redirect to docs
-	"GET /favicon.ico":                               true,
-	"GET /docs":                                      true,
-	"GET /docs/":                                     true,
-	"GET /openapi.yaml":                              true,
-	"GET /health":                                    true,
-	"GET /alive":                                     true,
-	"GET /ready":                                     true,
-	"POST /api/v1/auth/login":                        true,
-	"POST /api/v1/auth/refresh":                      true,
-	"POST /api/v1/auth/logout":                       true,
-	"POST /api/v1/auth/request-password-reset":       true,
-	"POST /api/v1/auth/reset-password":               true,
-	"POST /api/v1/auth/confirm-email-change":         true,
-	"POST /api/v1/tenants":                           true, // open signup; rate-limited at IP
+	"GET /":                     true, // root redirect to docs
+	"GET /favicon.ico":          true,
+	"GET /docs":                 true,
+	"GET /docs/":                true,
+	"GET /openapi.yaml":         true,
+	"GET /health":               true,
+	"GET /alive":                true,
+	"GET /ready":                true,
+	"POST /api/v1/auth/login":   true,
+	"POST /api/v1/auth/refresh": true,
+	"POST /api/v1/auth/logout":  true,
+	"POST /api/v1/auth/request-password-reset": true,
+	"POST /api/v1/auth/reset-password":         true,
+	"POST /api/v1/auth/confirm-email-change":   true,
+	"POST /api/v1/tenants":                     true, // open signup; rate-limited at IP
 }
 
 // muxHandleRE captures `mux.Handle("METHOD /path", ...)`. We pull
@@ -292,7 +292,9 @@ func TestArch_PermissionConstantsFromCatalog(t *testing.T) {
 // ----------------------------------------------------------------------------
 //
 // The canonical chain order in httpmw.PublicChain MUST be:
-//   Correlation → RequestLog → Recover → IPRateLimit → Idempotency
+//
+//	Correlation → RequestLog → Recover → IPRateLimit → Idempotency
+//
 // (then per-route auth + handler).
 //
 // Detection: parse internal/common/httpmw/chain.go; locate the

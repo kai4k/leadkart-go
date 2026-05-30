@@ -20,20 +20,23 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
 
-
 // The permission-request-side fake lives in
 // internal/identity/domain/permissionrequest/permissionrequesttest/
 // per TDL Wild Workouts canon — co-located with the aggregate it
 // fakes. newFakePermissionRequestRepo is preserved as a one-line alias
 // so existing tests don't need rewriting.
-func newFakePermissionRequestRepo() *permissionrequesttest.FakeRepository { return permissionrequesttest.NewFakeRepository() }
+func newFakePermissionRequestRepo() *permissionrequesttest.FakeRepository {
+	return permissionrequesttest.NewFakeRepository()
+}
 
 // The membership-side fake lives in
 // internal/identity/domain/membership/membershiptest/ per TDL Wild
 // Workouts canon. newFakeMembershipRepoForPermReq is preserved as a
 // one-line alias keying off the same shared fake the user_management
 // tests use.
-func newFakeMembershipRepoForPermReq() *membershiptest.FakeRepository { return membershiptest.NewFakeRepository() }
+func newFakeMembershipRepoForPermReq() *membershiptest.FakeRepository {
+	return membershiptest.NewFakeRepository()
+}
 
 func freshMembershipForPermReq(t *testing.T) *membership.Membership {
 	t.Helper()
@@ -140,7 +143,7 @@ func TestApprovePermissionRequest_HappyPath(t *testing.T) {
 	_ = requester.AssignManager(manager.ID(), testNow) // arch-test:ignore-err - test fixture setup
 	_ = requester.PullEvents()
 	_ = mems.Add(t.Context(), requester) // arch-test:ignore-err - test fixture setup
-	_ = mems.Add(t.Context(), manager) // arch-test:ignore-err - test fixture setup
+	_ = mems.Add(t.Context(), manager)   // arch-test:ignore-err - test fixture setup
 
 	submitH := command.NewRequestPermissionElevationHandler(reqs, mems, fixedTimeFn(), func() permissionrequest.ID { return permissionrequest.ID(ids.NewV7().String()) })
 	out, err := submitH.Handle(t.Context(), command.RequestPermissionElevationCommand{
@@ -261,7 +264,7 @@ func TestDenyPermissionRequest_HappyPath(t *testing.T) {
 	_ = requester.AssignManager(manager.ID(), testNow) // arch-test:ignore-err - test fixture setup
 	_ = requester.PullEvents()
 	_ = mems.Add(t.Context(), requester) // arch-test:ignore-err - test fixture setup
-	_ = mems.Add(t.Context(), manager) // arch-test:ignore-err - test fixture setup
+	_ = mems.Add(t.Context(), manager)   // arch-test:ignore-err - test fixture setup
 
 	submitH := command.NewRequestPermissionElevationHandler(reqs, mems, fixedTimeFn(), func() permissionrequest.ID { return permissionrequest.ID(ids.NewV7().String()) })
 	out, _ := submitH.Handle(t.Context(), command.RequestPermissionElevationCommand{
@@ -699,7 +702,7 @@ func TestApprovePermissionRequest_NonPendingAtLoad(t *testing.T) {
 	approveH := command.NewApprovePermissionRequestHandler(reqs, mems, fixedTimeFn(), ids.NewV7)
 	err := approveH.Handle(t.Context(), command.ApprovePermissionRequestCommand{
 		TenantID:             requester.TenantID(),
-		RequestID:             out.RequestID,
+		RequestID:            out.RequestID,
 		ApproverMembershipID: membership.ID(ids.NewV7().String()),
 		IsPlatformOperator:   true,
 	})
@@ -1129,4 +1132,3 @@ var (
 	_ pagination.Cursor
 	_ *person.Person
 )
-

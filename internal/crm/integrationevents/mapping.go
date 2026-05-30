@@ -28,9 +28,10 @@ import (
 // calllog.New validate every ID via uuid.Parse). The parseUUID error
 // path here is the defense-in-depth in case validation is bypassed.
 //
-//nolint:cyclop // Switch dispatcher — one case per recognised domain
 // event. Cyclomatic complexity scales with catalogue size by definition;
 // refactoring into a registry map costs more than it pays.
+//
+//nolint:cyclop // Switch dispatcher — one case per recognised domain
 func FromDomainEvent(d any) (Event, error) {
 	switch e := d.(type) {
 
