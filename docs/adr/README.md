@@ -55,5 +55,6 @@ One decision per file, Michael Nygard format (Context / Decision / Consequences 
 | 0064 | Outbox as pure relay + Watermill Forwarder + RLS-where-it-matters (supersedes 0027 in part) | Accepted |
 | 0065 | Lead marketplace — multi-buyer + tiers + dynamic pricing (supersedes 0059 in part) | Accepted |
 | 0066 | Go 1.24–1.26 canon sweep + shared pgconv + arch-gate upgrades (transitive guard, depguard, visibility) | Accepted |
+| 0067 | Canonical Watermill cqrs messaging stack — EventBus/EventProcessor + wire-alias marshaler + resilience + durable DLQ (completes 0064; supersedes 0008/0009 in part) | Accepted |
 
 ADRs 0011–0026 + 0032 land as the relevant code lands per the master plan.
