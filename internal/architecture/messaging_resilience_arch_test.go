@@ -80,32 +80,44 @@ func TestArch_MessagingMiddlewareOrderResilient(t *testing.T) {
 	t.Parallel()
 	calls := renderAddMiddlewareCalls(t)
 
-	// Per-handler stack: the call containing both Idempotency and poison.
-	var stack []string
+	// Every per-handler stack is an AddMiddleware call carrying r.poison + an
+	// Idempotency variant. Two canonical shapes (ADR 0067 Phase-4):
+	//   at-least-once : poison → Idempotency → Audit → retry → Recoverer
+	//   transactional : poison → Audit → retry → TransactionalIdempotency → Recoverer
+	// Transactional keeps the dedup+handler tx INSIDE Retry so each retry
+	// attempt gets a FRESH tx (retrying inside an aborted pgx tx fails);
+	// at-least-once keeps Idempotency outermost so a duplicate short-circuits
+	// before Audit/Retry/DLQ. Both end in Recoverer (innermost) so panics
+	// convert to errors the inner path handles.
+	var stacks [][]string
 	for _, c := range calls {
-		if contains(c, "Idempotency") >= 0 && contains(c, "poison") >= 0 {
-			stack = c
-			break
+		if contains(c, "poison") >= 0 && contains(c, "Idempotency") >= 0 {
+			stacks = append(stacks, c)
 		}
 	}
-	if stack == nil {
-		t.Fatal("per-handler AddMiddleware stack (Idempotency + poison) not found")
+	if len(stacks) == 0 {
+		t.Fatal("no per-handler AddMiddleware stack (Idempotency + poison) found")
 	}
-	order := []string{"poison", "Idempotency", "Audit", "retry", "Recoverer"}
-	prev := -1
-	for _, want := range order {
-		at := contains(stack, want)
-		if at < 0 {
-			t.Errorf("per-handler stack missing %q (got %v)", want, stack)
-			continue
+	for _, stack := range stacks {
+		order := []string{"poison", "Idempotency", "Audit", "retry", "Recoverer"}
+		if contains(stack, "TransactionalIdempotency") >= 0 {
+			order = []string{"poison", "Audit", "retry", "TransactionalIdempotency", "Recoverer"}
 		}
-		if at <= prev {
-			t.Errorf("per-handler stack out of order: %q at %d, expected after %d (got %v)", want, at, prev, stack)
+		prev := -1
+		for _, want := range order {
+			at := contains(stack, want)
+			if at < 0 {
+				t.Errorf("per-handler stack missing %q (got %v)", want, stack)
+				continue
+			}
+			if at <= prev {
+				t.Errorf("per-handler stack out of order: %q at %d, expected after %d (got %v)", want, at, prev, stack)
+			}
+			prev = at
 		}
-		prev = at
-	}
-	if last := stack[len(stack)-1]; !strings.Contains(last, "Recoverer") {
-		t.Errorf("Recoverer must be INNERMOST (last arg) so panics retry; got last=%q", last)
+		if last := stack[len(stack)-1]; !strings.Contains(last, "Recoverer") {
+			t.Errorf("Recoverer must be INNERMOST (last arg); got last=%q", last)
+		}
 	}
 
 	// Global setup chain (Correlation/Trace/Tenant) must NOT include Recoverer.
@@ -150,5 +162,46 @@ func TestArch_PoisonQueueWired(t *testing.T) {
 	}
 	if !strings.Contains(errorsSrc, "func NonRetryable(") || !strings.Contains(errorsSrc, "func IsNonRetryable(") {
 		t.Error("messaging/errors.go missing NonRetryable / IsNonRetryable sentinel")
+	}
+}
+
+// TestArch_InboxIsTransactional asserts the transactional inbox (ADR 0067
+// Phase-4) is wired: the receiver exposes WrapTx that opens a tx via
+// Transactor.WithinTx and dedups with INSERT ... ON CONFLICT DO NOTHING, and
+// Router.AddCqrsHandler routes DB handlers through
+// TransactionalIdempotencyMiddleware. The middleware ORDER (txn idempotency
+// INSIDE Retry, so each retry gets a fresh tx) is enforced by
+// TestArch_MessagingMiddlewareOrderResilient.
+//
+// Scope: production — inspects messaging/inbox.go + router.go.
+//
+// arch-test:no-synctest — static text analysis.
+//
+// arch-test:no-negative-fixture — RED→GREEN proof is the mutation test
+// (drop WrapTx's WithinTx / ON CONFLICT, or revert AddCqrsHandler to the
+// non-transactional middleware → RED; revert → GREEN).
+func TestArch_InboxIsTransactional(t *testing.T) {
+	t.Parallel()
+	dir := filepath.Join(internalDir(t), "common", "messaging")
+	var inboxSrc, routerSrc string
+	walkGoFiles(t, dir, false, func(path string, src []byte) {
+		switch filepath.Base(pathToSlash(path)) {
+		case "inbox.go":
+			inboxSrc = string(src)
+		case "router.go":
+			routerSrc = string(src)
+		}
+	})
+	if !strings.Contains(inboxSrc, "func (r *IdempotentReceiver) WrapTx(") {
+		t.Error("inbox.go missing WrapTx — the transactional inbox path")
+	}
+	if !strings.Contains(inboxSrc, "WithinTx") {
+		t.Error("inbox.go WrapTx must open a tx via Transactor.WithinTx")
+	}
+	if !strings.Contains(inboxSrc, "ON CONFLICT DO NOTHING") {
+		t.Error("inbox.go insertDedup must use INSERT ... ON CONFLICT DO NOTHING")
+	}
+	if !strings.Contains(routerSrc, "TransactionalIdempotencyMiddleware") {
+		t.Error("router.go AddCqrsHandler must route DB handlers through TransactionalIdempotencyMiddleware")
 	}
 }

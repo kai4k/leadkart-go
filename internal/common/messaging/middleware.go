@@ -160,18 +160,38 @@ func AuditMiddleware(writer *audit.Writer, log *slog.Logger) message.HandlerMidd
 	}
 }
 
-// IdempotencyMiddleware wraps each handler with [IdempotentReceiver]
-// dedup. handlerName must be unique per registered subscriber; the
-// router exposes a helper that derives it from the registration name.
+// IdempotencyMiddleware wraps each handler with at-least-once
+// [IdempotentReceiver.Wrap] dedup (run-then-INSERT). For email / cache /
+// SIEM handlers whose external sends cannot be rolled back.
+// handlerName must be unique per registered subscriber.
 func IdempotencyMiddleware(receiver *IdempotentReceiver, handlerName string) message.HandlerMiddleware {
+	return idempotencyMiddleware(receiver.Wrap, handlerName)
+}
+
+// TransactionalIdempotencyMiddleware wraps each handler with
+// [IdempotentReceiver.WrapTx] — the dedup row + the handler's DB writes
+// commit in ONE tx (effectively-once). For DB-mutating handlers. MUST be
+// wired INSIDE Retry so each attempt gets a fresh tx (see
+// [Router.AddCqrsHandler]).
+func TransactionalIdempotencyMiddleware(receiver *IdempotentReceiver, handlerName string) message.HandlerMiddleware {
+	return idempotencyMiddleware(receiver.WrapTx, handlerName)
+}
+
+// idempotencyMiddleware is the shared body for both inbox variants. The
+// `wrap` func is either [IdempotentReceiver.Wrap] (at-least-once) or
+// [IdempotentReceiver.WrapTx] (transactional).
+//
+// CRITICAL: it calls msg.SetContext(ctx) before invoking the inner handler,
+// so the handler (and the repos it drives) see the ctx the wrapper produced
+// — for WrapTx that ctx carries the pgx.Tx via [pg.TxFromContext], which is
+// how the handler's writes join the dedup tx. For Wrap the ctx is unchanged,
+// so the call is a harmless no-op.
+func idempotencyMiddleware(wrap func(string, HandlerFunc) HandlerFunc, handlerName string) message.HandlerMiddleware {
 	return func(h message.HandlerFunc) message.HandlerFunc {
-		// Translate Watermill's HandlerFunc to messaging.HandlerFunc
-		// so IdempotentReceiver.Wrap can wrap it. The translation is
-		// straight-through except we surface the published-messages
-		// slice via a captured variable.
 		return func(msg *message.Message) ([]*message.Message, error) {
 			var capturedOut []*message.Message
-			capturedErr := receiver.Wrap(handlerName, func(_ context.Context, _ string) error {
+			capturedErr := wrap(handlerName, func(ctx context.Context, _ string) error {
+				msg.SetContext(ctx)
 				out, err := h(msg)
 				capturedOut = out
 				return err

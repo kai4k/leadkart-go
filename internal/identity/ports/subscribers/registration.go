@@ -111,6 +111,24 @@ func Handlers(
 	return handlers
 }
 
+// AtLeastOnceHandlerNames is the set of identity handler names whose side
+// effects are EXTERNAL and cannot be rolled back: cache eviction, SIEM emit,
+// email send. The composition root registers THESE via
+// messaging.Router.AddCqrsHandlerAtLeastOnce (run-then-INSERT, no DB tx held
+// across the send); every other handler — the must-succeed DB mutators like
+// the refresh-token-family revocation — is transactional (ADR 0067 Phase-4).
+func AtLeastOnceHandlerNames() map[string]bool {
+	return map[string]bool{
+		HandlerInvalidateCacheOnPasswordChanged:   true,
+		HandlerInvalidateCacheOnAnonymised:        true,
+		HandlerInvalidateCacheOnGloballySuspended: true,
+		HandlerInvalidateCacheOnEmailChanged:      true,
+		HandlerReuseDetectedSIEM:                  true,
+		HandlerSendPasswordResetEmail:             true,
+		HandlerSendEmailChangeConfirmation:        true,
+	}
+}
+
 // integrationevents import retained for the package's event types used in
 // handler signatures (kept explicit so goimports doesn't drop it when the
 // only references are in sibling files).
