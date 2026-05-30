@@ -47,10 +47,7 @@ func NewTenantRepository(pool *pgxpool.Pool, tx *pg.Transactor) *TenantRepositor
 // rather than opening its own — this is the canonical multi-aggregate
 // composition path used by RegisterTenant.
 func (r *TenantRepository) Add(ctx context.Context, t *tenant.Tenant) error {
-	if tx, ok := pg.TxFromContext(ctx); ok {
-		return r.addOnTx(ctx, tx, t)
-	}
-	return r.tx.WithinTxPgx(ctx, pg.TxScopePlatform, func(ctx context.Context, tx pgx.Tx) error {
+	return r.runInTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
 		return r.addOnTx(ctx, tx, t)
 	})
 }
@@ -66,13 +63,24 @@ func (r *TenantRepository) addOnTx(ctx context.Context, tx pgx.Tx, t *tenant.Ten
 	return drainTenantEvents(ctx, tx, t)
 }
 
+// runInTx joins an ambient UoW tx when present (the transactional inbox or
+// a composed multi-aggregate write), else opens its own platform-scoped tx.
+// Mutators route through it so an inbox-wrapped / composed write commits in
+// the SAME tx (ADR 0067 Phase-4 UoW-join contract).
+func (r *TenantRepository) runInTx(ctx context.Context, fn func(ctx context.Context, tx pgx.Tx) error) error {
+	if tx, ok := pg.TxFromContext(ctx); ok {
+		return fn(ctx, tx)
+	}
+	return r.tx.WithinTxPgx(ctx, pg.TxScopePlatform, fn)
+}
+
 // UpdateByID satisfies [tenant.Repository] — TDL Sep 2024 UpdateFn.
 func (r *TenantRepository) UpdateByID(
 	ctx context.Context,
 	id tenant.ID,
 	updateFn func(*tenant.Tenant) (bool, error),
 ) error {
-	return r.tx.WithinTxPgx(ctx, pg.TxScopePlatform, func(ctx context.Context, tx pgx.Tx) error {
+	return r.runInTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
 		q := r.q.WithTx(tx)
 		t, err := loadTenant(ctx, q, id)
 		if err != nil {

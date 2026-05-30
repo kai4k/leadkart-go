@@ -102,6 +102,19 @@ func (r *MembershipRepository) addOnTx(ctx context.Context, tx pgx.Tx, m *member
 	return drainMembershipEvents(ctx, tx, m)
 }
 
+// runInTxTenant joins an ambient UoW tx when present (the transactional
+// inbox or a composed write), else opens its own tenant-scoped tx bound to
+// tenantID. Mutators route through it so an inbox-wrapped / composed write
+// commits in the SAME tx (ADR 0067 Phase-4 UoW-join contract). When
+// joining, the parent owns the scope — the caller's tenantID must match the
+// parent tx's bound tenant.
+func (r *MembershipRepository) runInTxTenant(ctx context.Context, tenantID tenant.ID, fn func(ctx context.Context, tx pgx.Tx) error) error {
+	if tx, ok := pg.TxFromContext(ctx); ok {
+		return fn(ctx, tx)
+	}
+	return r.tx.WithinTxPgxTenant(ctx, tenantID.String(), fn)
+}
+
 // UpdateByID satisfies [membership.Repository]. Tenant-scoped: caller
 // must have set tenancy on ctx so RLS reveals the row.
 //
@@ -115,7 +128,7 @@ func (r *MembershipRepository) UpdateByID(
 	id membership.ID,
 	updateFn func(*membership.Membership) (bool, error),
 ) error {
-	return r.tx.WithinTxPgxTenant(ctx, tenantID.String(), func(ctx context.Context, tx pgx.Tx) error {
+	return r.runInTxTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
 		q := r.q.WithTx(tx)
 		m, err := loadMembership(ctx, q, id)
 		if err != nil {
@@ -150,7 +163,7 @@ func (r *MembershipRepository) UpdateByID(
 // — same observable behaviour as truly missing).
 func (r *MembershipRepository) GetByID(ctx context.Context, tenantID tenant.ID, id membership.ID) (*membership.Membership, error) {
 	var out *membership.Membership
-	err := r.tx.WithinTxPgxTenant(ctx, tenantID.String(), func(ctx context.Context, tx pgx.Tx) error {
+	err := r.runInTxTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
 		m, err := loadMembership(ctx, r.q.WithTx(tx), id)
 		if err != nil {
 			return err
@@ -229,7 +242,7 @@ func (r *MembershipRepository) ListForTenant(
 	// ListMembershipsForPerson would be wrong scope. Issue a plain SELECT
 	// via the transactor; sqlc adds nothing here.)
 	var out []*membership.Membership
-	err := r.tx.WithinTxPgxTenant(ctx, tenantID.String(), func(ctx context.Context, tx pgx.Tx) error {
+	err := r.runInTxTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
 		q := r.q.WithTx(tx)
 		hydrated, err := q.ListMembershipsInCurrentTenant(ctx)
 		if err != nil {
@@ -286,7 +299,7 @@ func (r *MembershipRepository) ListForTenantPage(
 	}
 
 	var out []*membership.Membership
-	err = r.tx.WithinTxPgxTenant(ctx, tenantID.String(), func(ctx context.Context, tx pgx.Tx) error {
+	err = r.runInTxTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
 		q := r.q.WithTx(tx)
 		hydrated, qerr := q.ListActiveMembershipsInTenantPage(ctx, db.ListActiveMembershipsInTenantPageParams{
 			BeforeJoinedAt: pgconv.PgRequiredTimestamp(beforeJoinedAt),

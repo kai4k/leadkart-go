@@ -38,9 +38,23 @@ func NewRefreshTokenFamilyRepository(pool *pgxpool.Pool, tx *pg.Transactor) *Ref
 	return &RefreshTokenFamilyRepository{pool: pool, tx: tx, q: db.New(pool)}
 }
 
+// runInTx joins an ambient UoW tx when present (the transactional inbox
+// or a composed multi-aggregate write), else opens its own platform-scoped
+// tx (refresh tokens are non-RLS session infra). Mirrors the runInTx helper
+// on the person/membership/tenant repos so the family repo honors the same
+// UoW-join contract — previously it called WithinTxPgx directly and would
+// silently split an inbox-wrapped revocation into a separate transaction
+// (ADR 0067 Phase-4 finding).
+func (r *RefreshTokenFamilyRepository) runInTx(ctx context.Context, fn func(ctx context.Context, tx pgx.Tx) error) error {
+	if tx, ok := pg.TxFromContext(ctx); ok {
+		return fn(ctx, tx)
+	}
+	return r.tx.WithinTxPgx(ctx, pg.TxScopePlatform, fn)
+}
+
 // Add persists a brand-new family + its first token from [refreshtoken.NewFamily].
 func (r *RefreshTokenFamilyRepository) Add(ctx context.Context, f *refreshtoken.Family) error {
-	return r.tx.WithinTxPgx(ctx, pg.TxScopePlatform, func(ctx context.Context, tx pgx.Tx) error {
+	return r.runInTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
 		q := r.q.WithTx(tx)
 		if err := insertFamilyRow(ctx, q, f); err != nil {
 			return err
@@ -62,7 +76,7 @@ func (r *RefreshTokenFamilyRepository) UpdateByID(
 	id refreshtoken.FamilyID,
 	updateFn func(*refreshtoken.Family) (bool, error),
 ) error {
-	return r.tx.WithinTxPgx(ctx, pg.TxScopePlatform, func(ctx context.Context, tx pgx.Tx) error {
+	return r.runInTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
 		q := r.q.WithTx(tx)
 		f, err := loadFamilyByID(ctx, q, id)
 		if err != nil {
@@ -88,7 +102,7 @@ func (r *RefreshTokenFamilyRepository) UpdateByID(
 // GetByID returns the family + all its tokens, or [refreshtoken.ErrNotFound].
 func (r *RefreshTokenFamilyRepository) GetByID(ctx context.Context, id refreshtoken.FamilyID) (*refreshtoken.Family, error) {
 	var out *refreshtoken.Family
-	err := r.tx.WithinTxPgx(ctx, pg.TxScopePlatform, func(ctx context.Context, tx pgx.Tx) error {
+	err := r.runInTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
 		f, err := loadFamilyByID(ctx, r.q.WithTx(tx), id)
 		if err != nil {
 			return err
@@ -107,7 +121,7 @@ func (r *RefreshTokenFamilyRepository) GetByID(ctx context.Context, id refreshto
 // the given hash.
 func (r *RefreshTokenFamilyRepository) GetByTokenHash(ctx context.Context, hash refreshtoken.TokenHash) (*refreshtoken.Family, error) {
 	var out *refreshtoken.Family
-	err := r.tx.WithinTxPgx(ctx, pg.TxScopePlatform, func(ctx context.Context, tx pgx.Tx) error {
+	err := r.runInTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
 		q := r.q.WithTx(tx)
 		row, err := q.GetRefreshTokenByHash(ctx, hash.String())
 		if err != nil {
@@ -145,7 +159,7 @@ func (r *RefreshTokenFamilyRepository) ListActiveForPerson(ctx context.Context, 
 		return nil, err
 	}
 	var out []*refreshtoken.Family
-	err = r.tx.WithinTxPgx(ctx, pg.TxScopePlatform, func(ctx context.Context, tx pgx.Tx) error {
+	err = r.runInTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
 		// Two-pass: drain family rows into a slice (releasing the
 		// connection's iteration cursor), THEN load each family's
 		// tokens. pgx forbids multiplexed queries on one connection.

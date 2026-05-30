@@ -347,7 +347,7 @@ func TestArch_AdaptersJoinParentUoW(t *testing.T) {
 					continue
 				}
 				// Also accept addOnTx helper calls (canonical wrapper).
-				if strings.Contains(fragment, "addOnTx") || strings.Contains(fragment, "WithinTx") {
+				if strings.Contains(fragment, "addOnTx") || strings.Contains(fragment, "runInTx") { // join helpers; bare WithinTx is NOT a join (ADR 0067 Phase-4)
 					continue
 				}
 				violations = append(violations, violation{

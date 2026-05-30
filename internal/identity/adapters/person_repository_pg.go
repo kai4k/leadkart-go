@@ -38,10 +38,7 @@ func NewPersonRepository(pool *pgxpool.Pool, tx *pg.Transactor) *PersonRepositor
 // parent [pg.UnitOfWork] is in flight), Add joins that tx rather than
 // opening its own — canonical multi-aggregate composition path.
 func (r *PersonRepository) Add(ctx context.Context, p *person.Person) error {
-	if tx, ok := pg.TxFromContext(ctx); ok {
-		return r.addOnTx(ctx, tx, p)
-	}
-	return r.tx.WithinTxPgx(ctx, pg.TxScopePlatform, func(ctx context.Context, tx pgx.Tx) error {
+	return r.runInTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
 		return r.addOnTx(ctx, tx, p)
 	})
 }
@@ -56,6 +53,17 @@ func (r *PersonRepository) addOnTx(ctx context.Context, tx pgx.Tx, p *person.Per
 	return drainPersonEvents(ctx, tx, p)
 }
 
+// runInTx joins an ambient UoW tx when present (the transactional inbox or
+// a composed multi-aggregate write), else opens its own platform-scoped tx.
+// Mutators route through it so an inbox-wrapped / composed write commits in
+// the SAME tx (ADR 0067 Phase-4 UoW-join contract).
+func (r *PersonRepository) runInTx(ctx context.Context, fn func(ctx context.Context, tx pgx.Tx) error) error {
+	if tx, ok := pg.TxFromContext(ctx); ok {
+		return fn(ctx, tx)
+	}
+	return r.tx.WithinTxPgx(ctx, pg.TxScopePlatform, fn)
+}
+
 // UpdateByID satisfies [person.Repository] — TDL UpdateFn closure pattern
 // for ChangePassword + Anonymise + future mutations.
 func (r *PersonRepository) UpdateByID(
@@ -63,7 +71,7 @@ func (r *PersonRepository) UpdateByID(
 	id person.ID,
 	updateFn func(*person.Person) (bool, error),
 ) error {
-	return r.tx.WithinTxPgx(ctx, pg.TxScopePlatform, func(ctx context.Context, tx pgx.Tx) error {
+	return r.runInTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
 		q := r.q.WithTx(tx)
 		p, err := loadPerson(ctx, q, id)
 		if err != nil {
