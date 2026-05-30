@@ -46,7 +46,7 @@ type ImpersonationAuditEntry struct {
 // ImpersonationAuditWriter persists [ImpersonationAuditEntry] rows.
 // Implementations:
 //   - [ImpersonationAuditWriterPG]   writes to
-//     buildingblocks.admin_impersonation_audit.
+//     common.admin_impersonation_audit.
 //   - [ImpersonationAuditWriterNoop] swallows everything (tests / dev
 //     where the audit table isn't migrated).
 type ImpersonationAuditWriter interface {
@@ -97,7 +97,7 @@ func (w *ImpersonationAuditWriterPG) Write(ctx context.Context, e ImpersonationA
 		sessionID = sid
 	}
 	_, err = w.pool.Exec(ctx, `
-		INSERT INTO buildingblocks.admin_impersonation_audit
+		INSERT INTO common.admin_impersonation_audit
 		    (id, session_id, operator_user_id, target_tenant_id,
 		     correlation_id, http_route, http_method, reason,
 		     started_at_utc, is_god_mode)
@@ -112,7 +112,7 @@ func (w *ImpersonationAuditWriterPG) Write(ctx context.Context, e ImpersonationA
 }
 
 // ImpersonationAuditWriterNoop swallows every Write. Used in tests +
-// bootstrap before the buildingblocks schema is migrated.
+// bootstrap before the common schema is migrated.
 type ImpersonationAuditWriterNoop struct{}
 
 // Write satisfies [ImpersonationAuditWriter].

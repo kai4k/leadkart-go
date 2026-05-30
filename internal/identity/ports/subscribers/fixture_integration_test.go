@@ -34,15 +34,15 @@ var sharedPG *pgtest.Container
 // TestMain bootstrap. Schemas + Grants reflect the subscriber tests'
 // touch surface:
 //   - identity:         tenants/persons/refresh_token_families tables
-//   - buildingblocks:   audit_log (cascade subscriber writes audit rows)
+//   - common:   audit_log (cascade subscriber writes audit rows)
 //   - app:              outbox tables (forwarder + subscriber pre-flight)
 //
 // Wraps m.Run() with goleak after-test check; replaces the deleted
 // testmain_integration_test.go.
 func TestMain(m *testing.M) {
 	code := pgtest.RunMain(m, pgtest.Config{
-		Schemas: []string{"identity", "buildingblocks"},
-		Grants:  []string{"identity", "buildingblocks", "app"},
+		Schemas: []string{"identity", "common"},
+		Grants:  []string{"identity", "common", "app"},
 	}, func(c *pgtest.Container) {
 		sharedPG = c
 	})

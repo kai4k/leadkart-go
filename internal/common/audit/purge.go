@@ -72,7 +72,7 @@ func (w *PurgeWorker) Work(ctx context.Context, _ *river.Job[PurgeJob]) error {
 	// so the cutoff stays deterministic.
 	cutoff := w.now().Add(-PurgeRetention)
 	tag, err := w.pool.Exec(ctx, `
-		DELETE FROM buildingblocks.audit_log_entry
+		DELETE FROM common.audit_log_entry
 		WHERE occurred_at_utc < $1
 	`, cutoff)
 	if err != nil {

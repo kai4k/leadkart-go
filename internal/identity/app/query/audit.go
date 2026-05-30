@@ -16,7 +16,7 @@ import (
 
 // AuditEventView is one row of the audit-log read shape per
 // ADR 0027 (outbox doubles as audit) + the additive
-// buildingblocks.audit_log_entry table from migration
+// common.audit_log_entry table from migration
 // 20260507000001. Fields:
 //
 //   - Action — domain command name (e.g. "tenant.suspended")

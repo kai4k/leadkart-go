@@ -27,12 +27,12 @@ import (
 // nolint:gochecknoglobals // canonical TestMain shared-fixture pattern
 var sharedPG *pgtest.Container
 
-// TestMain bootstrap. audit-log writes go through buildingblocks
+// TestMain bootstrap. audit-log writes go through common
 // schema; identity schema is included for the FK from audit_log_entry.
 func TestMain(m *testing.M) {
 	code := pgtest.RunMain(m, pgtest.Config{
-		Schemas: []string{"identity", "buildingblocks"},
-		Grants:  []string{"identity", "buildingblocks"},
+		Schemas: []string{"identity", "common"},
+		Grants:  []string{"identity", "common"},
 	}, func(c *pgtest.Container) {
 		sharedPG = c
 	})

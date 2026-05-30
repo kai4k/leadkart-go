@@ -26,7 +26,7 @@ import (
 )
 
 // tenantOwningSchemas lists the per-module schemas that hold tenant-
-// scoped tables. Pure platform schemas (`buildingblocks`, `app`) are
+// scoped tables. Pure platform schemas (`common`, `app`) are
 // not in this list — they store cross-tenant rows by definition.
 var tenantOwningSchemas = map[string]bool{
 	"identity":  true,

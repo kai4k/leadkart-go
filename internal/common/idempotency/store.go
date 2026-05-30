@@ -179,7 +179,7 @@ func (s *InMemoryStore) Len() int {
 
 // ----- PostgresStore -------------------------------------------------
 
-// PostgresStore persists idempotency records in app.command_idempotency
+// PostgresStore persists idempotency records in common.command_idempotency
 // (created in migration 20260507000001 + extended for caller scoping in
 // 20260507000007). Backed by pgxpool — works under [pg.Transactor]'s
 // SET LOCAL semantics but does NOT require a tenant scope (the table
@@ -204,13 +204,13 @@ func NewPostgresStore(pool *pgxpool.Pool) *PostgresStore {
 const pgGetIdempotencyRecord = `
 SELECT body_hash, response_status, response_body, response_headers,
        created_at, expires_at
-FROM   app.command_idempotency
+FROM   common.command_idempotency
 WHERE  caller_id  = $1
   AND  command_id = $2
 `
 
 const pgPutIdempotencyRecord = `
-INSERT INTO app.command_idempotency (
+INSERT INTO common.command_idempotency (
     caller_id, command_id, body_hash, response_status, response_body,
     response_headers, created_at, expires_at
 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
@@ -224,7 +224,7 @@ ON CONFLICT (caller_id, command_id) DO UPDATE SET
 `
 
 const pgPurgeIdempotency = `
-DELETE FROM app.command_idempotency
+DELETE FROM common.command_idempotency
 WHERE       expires_at <= $1
 `
 

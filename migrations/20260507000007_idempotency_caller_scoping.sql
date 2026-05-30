@@ -27,28 +27,28 @@
 -- +goose Up
 -- +goose StatementBegin
 
-ALTER TABLE app.command_idempotency
+ALTER TABLE common.command_idempotency
     DROP CONSTRAINT command_idempotency_pkey;
 
-ALTER TABLE app.command_idempotency
+ALTER TABLE common.command_idempotency
     ADD COLUMN caller_id        text  NOT NULL DEFAULT '',
     ADD COLUMN response_headers jsonb NOT NULL DEFAULT '{}'::jsonb;
 
-ALTER TABLE app.command_idempotency
+ALTER TABLE common.command_idempotency
     ALTER COLUMN caller_id DROP DEFAULT;
 
-ALTER TABLE app.command_idempotency
+ALTER TABLE common.command_idempotency
     ADD CONSTRAINT command_idempotency_pkey
         PRIMARY KEY (caller_id, command_id);
 
-ALTER TABLE app.command_idempotency
+ALTER TABLE common.command_idempotency
     ADD CONSTRAINT command_idempotency_caller_id_nonempty
         CHECK (length(caller_id) > 0 AND length(caller_id) <= 200);
 
-COMMENT ON COLUMN app.command_idempotency.caller_id IS
+COMMENT ON COLUMN common.command_idempotency.caller_id IS
     'Per-caller scoping per Stripe Idempotency-Key canon. Tenant ID for tenant requests, "platform:<user>" for operator paths, "anon:<ip>" for unauth (defense-in-depth — middleware should not be on unauth routes).';
 
-COMMENT ON COLUMN app.command_idempotency.response_headers IS
+COMMENT ON COLUMN common.command_idempotency.response_headers IS
     'Captured response headers for verbatim replay (Content-Type minimum; ETag / X-Request-Id when set).';
 
 -- +goose StatementEnd
@@ -56,17 +56,17 @@ COMMENT ON COLUMN app.command_idempotency.response_headers IS
 -- +goose Down
 -- +goose StatementBegin
 
-ALTER TABLE app.command_idempotency
+ALTER TABLE common.command_idempotency
     DROP CONSTRAINT command_idempotency_caller_id_nonempty;
 
-ALTER TABLE app.command_idempotency
+ALTER TABLE common.command_idempotency
     DROP CONSTRAINT command_idempotency_pkey;
 
-ALTER TABLE app.command_idempotency
+ALTER TABLE common.command_idempotency
     DROP COLUMN response_headers,
     DROP COLUMN caller_id;
 
-ALTER TABLE app.command_idempotency
+ALTER TABLE common.command_idempotency
     ADD CONSTRAINT command_idempotency_pkey PRIMARY KEY (command_id);
 
 -- +goose StatementEnd

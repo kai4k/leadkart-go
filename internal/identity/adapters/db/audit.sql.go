@@ -16,7 +16,7 @@ const listAuditEventsByTenantPage = `-- name: ListAuditEventsByTenantPage :many
 SELECT id, action, user_id, tenant_id, correlation_id,
        occurred_at_utc, duration_ms, succeeded, failure_reason, payload,
        act_operator_id, act_session_id, act_reason
-FROM   buildingblocks.audit_log_entry
+FROM   common.audit_log_entry
 WHERE  tenant_id = $1
 AND    (occurred_at_utc, id) < ($2::timestamptz, $3::uuid)
 ORDER  BY occurred_at_utc DESC, id DESC
@@ -30,7 +30,7 @@ type ListAuditEventsByTenantPageParams struct {
 	Limit          int32
 }
 
-// Audit-log read queries — buildingblocks.audit_log_entry.
+// Audit-log read queries — common.audit_log_entry.
 //
 // The table is auto-written per command by the Watermill
 // AuditLoggingMiddleware (per ADR 0027 outbox-doubles-as-audit + the
@@ -90,7 +90,7 @@ const listAuditEventsByUserPage = `-- name: ListAuditEventsByUserPage :many
 SELECT id, action, user_id, tenant_id, correlation_id,
        occurred_at_utc, duration_ms, succeeded, failure_reason, payload,
        act_operator_id, act_session_id, act_reason
-FROM   buildingblocks.audit_log_entry
+FROM   common.audit_log_entry
 WHERE  user_id = $1
 AND    (occurred_at_utc, id) < ($2::timestamptz, $3::uuid)
 ORDER  BY occurred_at_utc DESC, id DESC

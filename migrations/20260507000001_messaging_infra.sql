@@ -2,9 +2,9 @@
 --
 -- Three tables, three concerns:
 --
---  1. app.command_idempotency        — HTTP X-Command-Id replay store
+--  1. common.command_idempotency        — HTTP X-Command-Id replay store
 --                                       (Stripe Idempotency-Key canon).
---  2. buildingblocks.audit_log_entry — auto-write per command via the
+--  2. common.audit_log_entry — auto-write per command via the
 --                                       Watermill router AuditLoggingMiddleware
 --                                       (.NET messaging.md "Audit log middleware").
 --  3. identity.processed_messages    — per-handler inbox dedup for the
@@ -18,7 +18,7 @@
 -- +goose StatementBegin
 
 -- ===========================================================================
--- app.command_idempotency
+-- common.command_idempotency
 -- HTTP X-Command-Id idempotency middleware store.
 --
 -- Lifecycle:
@@ -35,7 +35,7 @@
 -- GitHub API request-id semantics; RFC 9110 §17 idempotent methods.
 -- ===========================================================================
 
-CREATE TABLE app.command_idempotency (
+CREATE TABLE common.command_idempotency (
     command_id      text        PRIMARY KEY CHECK (length(command_id) > 0 AND length(command_id) <= 200),
     body_hash       text        NOT NULL,
     response_status integer     NOT NULL,
@@ -44,13 +44,13 @@ CREATE TABLE app.command_idempotency (
     expires_at      timestamptz NOT NULL
 );
 
-CREATE INDEX idx_idempotency_expires ON app.command_idempotency (expires_at);
+CREATE INDEX idx_idempotency_expires ON common.command_idempotency (expires_at);
 
-COMMENT ON TABLE app.command_idempotency IS
+COMMENT ON TABLE common.command_idempotency IS
     'X-Command-Id replay store per Stripe Idempotency-Key canon. 24h default TTL; background purge.';
 
 -- ===========================================================================
--- buildingblocks schema + audit_log_entry
+-- common schema + audit_log_entry
 -- Cross-cutting audit log auto-written per command via Watermill router
 -- AuditLoggingMiddleware. NOT tenant-RLS — operator queries cross every
 -- tenant; per-tenant filter happens at query time via tenant_id column.
@@ -63,11 +63,7 @@ COMMENT ON TABLE app.command_idempotency IS
 -- to S3 Glacier per SOC2 CC4.1.
 -- ===========================================================================
 
-CREATE SCHEMA IF NOT EXISTS buildingblocks;
-COMMENT ON SCHEMA buildingblocks IS
-    'LeadKart cross-cutting plumbing tables (audit log, future cross-cutting documents).';
-
-CREATE TABLE buildingblocks.audit_log_entry (
+CREATE TABLE common.audit_log_entry (
     id              uuid        PRIMARY KEY,
     action          text        NOT NULL CHECK (length(action) > 0 AND length(action) <= 200),
     user_id         uuid        NULL,         -- the acting Person; NULL on anonymous flows (e.g. login attempt)
@@ -81,17 +77,17 @@ CREATE TABLE buildingblocks.audit_log_entry (
 );
 
 CREATE INDEX idx_audit_action_time
-    ON buildingblocks.audit_log_entry (action, occurred_at_utc DESC);
+    ON common.audit_log_entry (action, occurred_at_utc DESC);
 
 CREATE INDEX idx_audit_user_time
-    ON buildingblocks.audit_log_entry (user_id, occurred_at_utc DESC)
+    ON common.audit_log_entry (user_id, occurred_at_utc DESC)
     WHERE user_id IS NOT NULL;
 
 CREATE INDEX idx_audit_tenant_time
-    ON buildingblocks.audit_log_entry (tenant_id, occurred_at_utc DESC)
+    ON common.audit_log_entry (tenant_id, occurred_at_utc DESC)
     WHERE tenant_id IS NOT NULL;
 
-COMMENT ON TABLE buildingblocks.audit_log_entry IS
+COMMENT ON TABLE common.audit_log_entry IS
     'Auto-written per command via Watermill AuditLoggingMiddleware. 7-year retention; daily purge.';
 
 -- ===========================================================================
@@ -131,8 +127,8 @@ COMMENT ON TABLE identity.processed_messages IS
 -- +goose StatementBegin
 
 DROP TABLE IF EXISTS identity.processed_messages;
-DROP TABLE IF EXISTS buildingblocks.audit_log_entry CASCADE;
-DROP SCHEMA IF EXISTS buildingblocks CASCADE;
-DROP TABLE IF EXISTS app.command_idempotency;
+DROP TABLE IF EXISTS common.audit_log_entry CASCADE;
+DROP SCHEMA IF EXISTS common CASCADE;
+DROP TABLE IF EXISTS common.command_idempotency;
 
 -- +goose StatementEnd

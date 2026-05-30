@@ -194,26 +194,47 @@ func TestMigrationsApplyCleanly(t *testing.T) {
 		}
 	}
 
-	// buildingblocks schema present + 2 tables: audit_log_entry (from
-	// 20260507000001_messaging_infra) + admin_impersonation_audit
-	// (from 20260507000006_admin_impersonation_audit, A.7.b
-	// impersonation lifecycle).
-	var bbCount, appCount int
+	// Single source of truth for the `common.*` cross-cutting tables
+	// (ADR 0067 rename of buildingblocks → common; command_idempotency
+	// folded in from app). Same enumerated-list discipline as
+	// expectedIdentityTables above — the count assertion derives from
+	// len() so the test fails-loud on an extra OR a missing table.
+	expectedCommonTables := []string{
+		"command_idempotency",       // 20260507000001 (moved from app per ADR 0067)
+		"audit_log_entry",           // 20260507000001
+		"admin_impersonation_audit", // 20260507000006 (ADR 0045)
+		"dead_letter",               // 20260604000001 (ADR 0067)
+	}
+	for _, table := range expectedCommonTables {
+		var exists bool
+		if err := db.QueryRow(`
+			SELECT EXISTS(
+				SELECT 1 FROM pg_tables
+				WHERE schemaname = 'common' AND tablename = $1)
+		`, table).Scan(&exists); err != nil {
+			t.Fatalf("check common.%s: %v", table, err)
+		}
+		if !exists {
+			t.Fatalf("common.%s missing after migration", table)
+		}
+	}
+	var commonCount, appCount int
 	if err := db.QueryRow(`
-		SELECT count(*) FROM pg_tables WHERE schemaname = 'buildingblocks'
-	`).Scan(&bbCount); err != nil {
-		t.Fatalf("count buildingblocks tables: %v", err)
+		SELECT count(*) FROM pg_tables WHERE schemaname = 'common'
+	`).Scan(&commonCount); err != nil {
+		t.Fatalf("count common tables: %v", err)
 	}
-	if bbCount != 2 {
-		t.Fatalf("buildingblocks tables: got %d want 2", bbCount)
+	if want := len(expectedCommonTables); commonCount != want {
+		t.Fatalf("common tables: got %d, want %d", commonCount, want)
 	}
+	// app holds only the RLS GUC functions now — zero tables.
 	if err := db.QueryRow(`
 		SELECT count(*) FROM pg_tables WHERE schemaname = 'app'
 	`).Scan(&appCount); err != nil {
 		t.Fatalf("count app tables: %v", err)
 	}
-	if appCount != 1 {
-		t.Fatalf("app tables: got %d want 1 (command_idempotency)", appCount)
+	if appCount != 0 {
+		t.Fatalf("app tables: got %d, want 0 (command_idempotency moved to common; app is RLS-functions only)", appCount)
 	}
 
 	// app schema functions present.
@@ -281,9 +302,9 @@ func TestRLSIsolatesTenants(t *testing.T) {
 		}
 	}
 	for _, m := range []struct {
-		mid   uuid.UUID
-		pid   uuid.UUID
-		tid   uuid.UUID
+		mid uuid.UUID
+		pid uuid.UUID
+		tid uuid.UUID
 	}{{uuid.New(), personA, tenantA}, {uuid.New(), personB, tenantB}} {
 		if _, err := seedTx.ExecContext(ctx, `
 			INSERT INTO identity.tenant_memberships (id, person_id, tenant_id, status, joined_at)

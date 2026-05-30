@@ -143,7 +143,7 @@ func TestArch_NoCrossSchemaJoins(t *testing.T) {
 	joinRE := regexp.MustCompile(`(?i)\bJOIN\s+([a-zA-Z_][a-zA-Z0-9_]*)\.[a-zA-Z_][a-zA-Z0-9_]*`)
 
 	allowedNonModule := map[string]bool{
-		"buildingblocks":     true,
+		"common":     true,
 		"app":                true,
 		"pg_catalog":         true,
 		"information_schema": true,
@@ -583,9 +583,9 @@ func TestArch_AuditChainColumnsOnTenantTables(t *testing.T) {
 		"platform.outbox":                  "outbox / audit log (ADR 0027)",
 		"inventory.outbox":                 "outbox / audit log (ADR 0027)",
 		"crm.outbox":                       "outbox / audit log (ADR 0027)",
-		"buildingblocks.audit_log_entry":   "audit log sink",
-		"buildingblocks.admin_impersonation_audit": "audit log (ADR 0045)",
-		"app.command_idempotency":          "idempotency infra",
+		"common.audit_log_entry":   "audit log sink",
+		"common.admin_impersonation_audit": "audit log (ADR 0045)",
+		"common.command_idempotency":          "idempotency infra",
 		// Permission / hierarchy family (carry their own audit columns):
 		"identity.membership_permission_overrides": "permission* family (overlay state)",
 		"identity.permission_requests":             "permission* family (request workflow, has approver_membership_id)",

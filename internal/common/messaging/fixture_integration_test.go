@@ -30,10 +30,10 @@ var sharedPG *pgtest.Container
 // tenant-scoped tables touched by these tests.
 func TestMain(m *testing.M) {
 	code := pgtest.RunMain(m, pgtest.Config{
-		// buildingblocks added so the AuditMiddleware tests can write +
+		// common added so the AuditMiddleware tests can write +
 		// query audit_log_entry rows under the leadkart_app role.
-		Schemas: []string{"identity", "buildingblocks"},
-		Grants:  []string{"identity", "buildingblocks", "app"},
+		Schemas: []string{"identity", "common"},
+		Grants:  []string{"identity", "common", "app"},
 	}, func(c *pgtest.Container) {
 		sharedPG = c
 	})

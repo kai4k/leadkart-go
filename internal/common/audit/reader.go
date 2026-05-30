@@ -8,7 +8,7 @@ import (
 )
 
 // Reader returns paginated audit-log entries from
-// buildingblocks.audit_log_entry. Defined here (audit package) as the
+// common.audit_log_entry. Defined here (audit package) as the
 // CONSUMER-OWNED interface per Cheney "accept interfaces, return
 // structs"; concrete pg-backed implementation lives in
 // internal/identity/adapters/ where the sqlc-generated db.* package is
