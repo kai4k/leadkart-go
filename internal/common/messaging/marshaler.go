@@ -3,6 +3,7 @@ package messaging
 import (
 	"encoding/json"
 
+	"github.com/ThreeDotsLabs/watermill"
 	"github.com/ThreeDotsLabs/watermill/components/cqrs"
 	"github.com/ThreeDotsLabs/watermill/message"
 )
@@ -42,21 +43,31 @@ type WireAliasMarshaler struct {
 	json cqrs.JSONMarshaler
 }
 
-// NewWireAliasMarshaler returns the marshaler the EventProcessor + (future)
-// EventBus share. Zero-config: the embedded JSONMarshaler is only used by
-// Marshal (the EventBus path); the consumer hot path uses Name /
-// NameFromMessage / Unmarshal.
+// NewWireAliasMarshaler returns the one marshaler BOTH sides share: the
+// per-tx [cqrs.EventBus] in [PublishOutbox] (produce) and the
+// [cqrs.EventProcessor] in [NewEventProcessor] (consume). Zero-config: the
+// embedded JSONMarshaler is used only by [Name]'s non-event fallback; the
+// produce/consume hot paths use Marshal / Name / NameFromMessage / Unmarshal.
 func NewWireAliasMarshaler() WireAliasMarshaler { return WireAliasMarshaler{} }
 
-// Marshal encodes v to a message whose [HeaderEventType] is the Topic()
-// alias. Provided for completeness + a future cqrs.EventBus; the production
-// producer is [PublishOutbox], which stamps the identical header. Payload
-// encoding delegates to the stock JSON marshaler.
+// Marshal encodes v to a message whose payload is the raw json.Marshal(v)
+// and whose [HeaderEventType] is the Topic() alias. This IS the producer
+// hot path: [PublishOutbox] drives a per-transaction [cqrs.EventBus]
+// configured with this marshaler, so encode (here) and decode ([Unmarshal])
+// share one definition of the wire format — they cannot drift.
+//
+// Deliberately NOT delegating to the embedded [cqrs.JSONMarshaler.Marshal]:
+// that stamps an extra struct-name "name" metadata key the consumer never
+// reads (dispatch is by [HeaderEventType] via [NameFromMessage]), which
+// would be dead weight on every outbox row. We build the message directly
+// so the on-wire metadata is exactly the set the subscriber + forwarder
+// envelope expect.
 func (m WireAliasMarshaler) Marshal(v any) (*message.Message, error) {
-	msg, err := m.json.Marshal(v)
+	payload, err := json.Marshal(v)
 	if err != nil {
 		return nil, err
 	}
+	msg := message.NewMessage(watermill.NewUUID(), payload)
 	msg.Metadata.Set(HeaderEventType, m.Name(v))
 	return msg, nil
 }

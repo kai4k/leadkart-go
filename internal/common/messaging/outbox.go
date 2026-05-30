@@ -2,12 +2,12 @@ package messaging
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"time"
 
 	"github.com/ThreeDotsLabs/watermill"
 	wmsql "github.com/ThreeDotsLabs/watermill-sql/v4/pkg/sql"
+	"github.com/ThreeDotsLabs/watermill/components/cqrs"
 	"github.com/ThreeDotsLabs/watermill/components/forwarder"
 	"github.com/ThreeDotsLabs/watermill/message"
 	"github.com/google/uuid"
@@ -78,14 +78,25 @@ type OutboxEvent interface {
 // atomically with the write (Brandur "Transactionally staged job drains";
 // TDL outbox canon). Replaces the four hand-rolled module outbox writers.
 //
+// Canonical Watermill shape (ADR 0067): a per-transaction [cqrs.EventBus]
+// wrapping a [forwarder.NewPublisher] over a tx-bound watermill-sql
+// publisher. The EventBus is a throwaway struct (no pool, no goroutine), so
+// one-per-tx is the documented, intended usage — the same rule watermill-sql
+// states for the SQL publisher itself ("create one publisher per
+// transaction"). This makes produce + consume SYMMETRIC: both sides drive
+// the cqrs component with the SAME [WireAliasMarshaler], so the wire format
+// (payload encoding + event_type alias) has a single source of truth and
+// cannot drift between the producer's encode and the subscriber's decode.
+//
 // destinationTopic is the module's Watermill topic (e.g. "identity.events")
 // that subscribers consume; the Forwarder republishes there after unwrapping.
-// Each event's Topic() is stamped as the event_type metadata header so the
-// subscriber routes by event kind on the shared topic.
+// The marshaler stamps each event's Topic() as the event_type header so the
+// EventProcessor routes by event kind on the shared topic.
 //
-// Canonical metadata stamped per message: event_type, tenant_id (omitted
-// when Nil — platform-scoped), occurred_at, the RFC 8693 act_* claim from
-// ctx (ADR 0056), and the W3C trace context (so the consumer span joins the
+// Canonical metadata stamped per message: event_type (by the marshaler),
+// plus — via [EventBusConfig.OnPublish] — tenant_id (omitted when Nil,
+// platform-scoped), occurred_at, the RFC 8693 act_* claim from ctx
+// (ADR 0056), and the W3C trace context (so the consumer span joins the
 // producer trace across the async hop).
 func PublishOutbox[E OutboxEvent](
 	ctx context.Context,
@@ -106,22 +117,51 @@ func PublishOutbox[E OutboxEvent](
 	if err != nil {
 		return fmt.Errorf("outbox: new sql publisher: %w", err)
 	}
-	pub := forwarder.NewPublisher(sqlPub, forwarder.PublisherConfig{ForwarderTopic: OutboxForwarderTopic})
+	fwdPub := forwarder.NewPublisher(sqlPub, forwarder.PublisherConfig{ForwarderTopic: OutboxForwarderTopic})
 
-	actOperatorID, actSessionID, actReason := outboxActClaim(ctx)
-	propagator := otel.GetTextMapPropagator()
+	bus, err := cqrs.NewEventBusWithConfig(fwdPub, cqrs.EventBusConfig{
+		// One topic per module; the marshaler's Name(event)=Topic() alias is
+		// carried in the event_type header for the subscriber to route on.
+		GeneratePublishTopic: func(cqrs.GenerateEventPublishTopicParams) (string, error) {
+			return destinationTopic, nil
+		},
+		// EventBus.Publish sets msg.Context(ctx) BEFORE invoking OnPublish, so
+		// the callback reads the per-request ctx (act claim, trace) off the
+		// message. event_type is already stamped by the marshaler.
+		OnPublish: func(p cqrs.OnEventSendParams) error {
+			stampOutboxMetadata(p.Message, tenantID, p.Event)
+			return nil
+		},
+		Marshaler: NewWireAliasMarshaler(),
+		Logger:    watermill.NopLogger{},
+	})
+	if err != nil {
+		return fmt.Errorf("outbox: new event bus: %w", err)
+	}
 
 	for _, ev := range events {
-		payload, merr := json.Marshal(ev)
-		if merr != nil {
-			return fmt.Errorf("outbox: marshal %s: %w", ev.Topic(), merr)
+		if perr := bus.Publish(ctx, ev); perr != nil {
+			return fmt.Errorf("outbox: publish %s: %w", ev.Topic(), perr)
 		}
-		msg := message.NewMessage(uuid.NewString(), payload)
-		msg.Metadata.Set(HeaderEventType, ev.Topic())
-		if tenantID != uuid.Nil {
-			msg.Metadata.Set(HeaderTenantID, tenantID.String())
-		}
+	}
+	return nil
+}
+
+// stampOutboxMetadata adds the LeadKart envelope metadata to an outbound
+// outbox message from [PublishOutbox]'s OnPublish hook. event_type is set by
+// the marshaler; this adds tenant_id, occurred_at, the RFC 8693 act_* claim,
+// and the W3C trace context. ctx is read off the message (EventBus.Publish
+// stamps it before OnPublish). event is the originating event (typed E,
+// boxed) — used for its OccurredAt domain timestamp.
+func stampOutboxMetadata(msg *message.Message, tenantID uuid.UUID, event any) {
+	ctx := msg.Context()
+	if tenantID != uuid.Nil {
+		msg.Metadata.Set(HeaderTenantID, tenantID.String())
+	}
+	if ev, ok := event.(OutboxEvent); ok {
 		msg.Metadata.Set(HeaderOccurredAt, ev.OccurredAt().UTC().Format(time.RFC3339Nano))
+	}
+	if actOperatorID, actSessionID, actReason := outboxActClaim(ctx); actOperatorID != "" || actSessionID != "" || actReason != "" {
 		if actOperatorID != "" {
 			msg.Metadata.Set(HeaderActOperatorID, actOperatorID)
 		}
@@ -131,16 +171,10 @@ func PublishOutbox[E OutboxEvent](
 		if actReason != "" {
 			msg.Metadata.Set(HeaderActReason, actReason)
 		}
-		// Inject W3C trace context onto the metadata so the subscriber span
-		// (messaging.TraceContextMiddleware) joins this producer's trace.
-		msg.SetContext(ctx)
-		propagator.Inject(ctx, propagation.MapCarrier(msg.Metadata))
-
-		if perr := pub.Publish(destinationTopic, msg); perr != nil {
-			return fmt.Errorf("outbox: publish %s: %w", ev.Topic(), perr)
-		}
 	}
-	return nil
+	// Inject W3C trace context onto the metadata so the subscriber span
+	// (messaging.TraceContextMiddleware) joins this producer's trace.
+	otel.GetTextMapPropagator().Inject(ctx, propagation.MapCarrier(msg.Metadata))
 }
 
 // outboxActClaim projects the per-request RFC 8693 actor claim (set by the
