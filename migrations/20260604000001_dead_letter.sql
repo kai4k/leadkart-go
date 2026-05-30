@@ -5,7 +5,7 @@
 -- subscriber persists them here for inspection + manual replay. A
 -- broker-side DLQ topic alone is ephemeral; this is the durable record.
 --
--- Lives in `common` (the cross-cutting infra schema, ex-common)
+-- Lives in `common` (the cross-cutting infra schema, ex-buildingblocks)
 -- alongside audit_log_entry + command_idempotency.
 --
 -- +goose Up
