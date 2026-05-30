@@ -47,7 +47,7 @@ type ListAuditEventsByTenantPageParams struct {
 //
 // Cursor predicate: (occurred_at_utc, id) < ($2, $3) for tuple tie-
 // break. First page sentinel: future timestamp + max UUID.
-func (q *Queries) ListAuditEventsByTenantPage(ctx context.Context, arg ListAuditEventsByTenantPageParams) ([]BuildingblocksAuditLogEntry, error) {
+func (q *Queries) ListAuditEventsByTenantPage(ctx context.Context, arg ListAuditEventsByTenantPageParams) ([]CommonAuditLogEntry, error) {
 	rows, err := q.db.Query(ctx, listAuditEventsByTenantPage,
 		arg.TenantID,
 		arg.BeforeOccurred,
@@ -58,9 +58,9 @@ func (q *Queries) ListAuditEventsByTenantPage(ctx context.Context, arg ListAudit
 		return nil, err
 	}
 	defer rows.Close()
-	var items []BuildingblocksAuditLogEntry
+	var items []CommonAuditLogEntry
 	for rows.Next() {
-		var i BuildingblocksAuditLogEntry
+		var i CommonAuditLogEntry
 		if err := rows.Scan(
 			&i.ID,
 			&i.Action,
@@ -107,7 +107,7 @@ type ListAuditEventsByUserPageParams struct {
 // Keyset-paginated user-scoped events. Backed by
 // idx_audit_log_entry_user_occurred (user_id, occurred_at_utc DESC)
 // WHERE user_id IS NOT NULL.
-func (q *Queries) ListAuditEventsByUserPage(ctx context.Context, arg ListAuditEventsByUserPageParams) ([]BuildingblocksAuditLogEntry, error) {
+func (q *Queries) ListAuditEventsByUserPage(ctx context.Context, arg ListAuditEventsByUserPageParams) ([]CommonAuditLogEntry, error) {
 	rows, err := q.db.Query(ctx, listAuditEventsByUserPage,
 		arg.UserID,
 		arg.BeforeOccurred,
@@ -118,9 +118,9 @@ func (q *Queries) ListAuditEventsByUserPage(ctx context.Context, arg ListAuditEv
 		return nil, err
 	}
 	defer rows.Close()
-	var items []BuildingblocksAuditLogEntry
+	var items []CommonAuditLogEntry
 	for rows.Next() {
-		var i BuildingblocksAuditLogEntry
+		var i CommonAuditLogEntry
 		if err := rows.Scan(
 			&i.ID,
 			&i.Action,
