@@ -572,3 +572,74 @@ func TestArch_NoModuleLocalPgConversionHelpers(t *testing.T) {
 		}
 	}
 }
+
+// ============================================================================
+// GATE 5 — TestArch_NoInlinePgtypeConstruction
+// ============================================================================
+//
+// GATE 4 stops a per-module conversion *helper* from reappearing, but the
+// pgconv consolidation also has to stop INLINE construction — the bypass an
+// audit caught: adapter code writing `pgtype.Timestamptz{Time: t.UTC(),
+// Valid: true}` or `pgtype.UUID{Bytes: id, Valid: true}` straight into a
+// params struct instead of calling pgconv.PgTimestamp / pgconv.PgUUID. The
+// helper gate misses these because they're composite literals, not funcs.
+//
+// Flagged: a non-empty composite literal of pgtype.UUID / pgtype.Timestamptz
+// / pgtype.Date in internal/*/adapters/ (non-test; generated db/ skipped).
+// The EMPTY literal `pgtype.UUID{}` is allowed — it's the NULL/zero sentinel
+// (Valid=false), which is exactly what pgconv would also produce and reads
+// clearly inline. Only pgtype types pgconv covers are gated; pgtype.Text /
+// Int4 / etc. are out of scope (no pgconv helper, no single source to honor).
+//
+// arch-test:no-negative-fixture — RED→GREEN proof is the mutation test
+// (re-inline a `pgtype.UUID{Bytes: id, Valid: true}` in an adapter → RED;
+// revert → GREEN).
+//
+// Scope: production — inline construction in adapter _test.go is test
+// scaffolding, not shipped conversion (includeTests=false).
+func TestArch_NoInlinePgtypeConstruction(t *testing.T) {
+	t.Parallel()
+
+	covered := map[string]bool{"UUID": true, "Timestamptz": true, "Date": true}
+
+	type violation struct {
+		file string
+		line int
+		typ  string
+	}
+	var violations []violation
+
+	walkGoFiles(t, internalDir(t), false, func(path string, src []byte) {
+		if !strings.Contains(pathToSlash(path), "/adapters/") {
+			return
+		}
+		fset, f := parseFile(t, path, src)
+		ast.Inspect(f, func(n ast.Node) bool {
+			lit, ok := n.(*ast.CompositeLit)
+			if !ok || len(lit.Elts) == 0 { // empty {} = NULL sentinel, allowed
+				return true
+			}
+			sel, ok := lit.Type.(*ast.SelectorExpr)
+			if !ok {
+				return true
+			}
+			pkg, ok := sel.X.(*ast.Ident)
+			if !ok || pkg.Name != "pgtype" || !covered[sel.Sel.Name] {
+				return true
+			}
+			violations = append(violations, violation{
+				file: pathToSlash(path),
+				line: fset.Position(lit.Pos()).Line,
+				typ:  "pgtype." + sel.Sel.Name,
+			})
+			return true
+		})
+	})
+
+	if len(violations) > 0 {
+		t.Errorf("%d inline pgtype.{UUID,Timestamptz,Date} construction(s) in adapters — call pgconv.* (ADR 0066), not an inline composite literal:", len(violations))
+		for _, v := range violations {
+			t.Errorf("  %s:%d — %s{...} → pgconv.* helper", v.file, v.line, v.typ)
+		}
+	}
+}

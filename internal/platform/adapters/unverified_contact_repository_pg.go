@@ -250,7 +250,7 @@ func pgUUIDOptStr(s string) pgtype.UUID {
 		// Storage path — caller guarantees UUID shape from domain types.
 		return pgtype.UUID{}
 	}
-	return pgtype.UUID{Bytes: id, Valid: true}
+	return pgconv.PgUUID(id)
 }
 
 // uuidStringIfValid returns the string form of pg.UUID or "" when invalid.

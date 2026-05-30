@@ -30,4 +30,4 @@ TDL canon settled the nullable-representation question: the `*T`-vs-`pgtype.Text
 
 ## Fitness function
 
-`TestArch_NoLegacySortPackage`, `TestArch_NoAddressOfThrowawayLocal`, `TestArch_TimeFieldsUseOmitzero`, `TestArch_NoModuleLocalPgConversionHelpers`, `TestArch_LayersHaveNoForbiddenTransitiveDeps`, `TestArch_NoGratuitousExports`, and the depguard assertion in `TestArch_GolangciLintConfigCanonical` (all in `internal/architecture/`).
+`TestArch_NoLegacySortPackage`, `TestArch_NoAddressOfThrowawayLocal`, `TestArch_TimeFieldsUseOmitzero`, `TestArch_NoModuleLocalPgConversionHelpers`, `TestArch_NoInlinePgtypeConstruction` (bans inline `pgtype.{UUID,Timestamptz,Date}{...}` in adapters — the bypass the helper gate can't see), `TestArch_LayersHaveNoForbiddenTransitiveDeps`, `TestArch_NoGratuitousExports`, and the depguard assertion in `TestArch_GolangciLintConfigCanonical` (all in `internal/architecture/`).

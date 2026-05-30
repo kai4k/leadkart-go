@@ -46,7 +46,7 @@ func (r *UnverifiedContactReader) ListUnverifiedContactsPage(
 	cursorAt := pgtype.Timestamptz{}
 	cursorID := pgtype.UUID{}
 	if !cursor.SortValue.IsZero() && cursor.ID != "" {
-		cursorAt = pgtype.Timestamptz{Time: cursor.SortValue.UTC(), Valid: true}
+		cursorAt = pgconv.PgTimestamp(cursor.SortValue)
 		cursorID = pgUUIDOptStr(cursor.ID)
 	}
 

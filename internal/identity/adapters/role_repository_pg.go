@@ -320,10 +320,7 @@ func persistRoleState(ctx context.Context, q *db.Queries, ro *role.Role) error {
 	if ro.IsDeleted() {
 		// Soft-delete branch — name + permissions stay as-is in the row;
 		// the AND NOT is_deleted predicate on every read filters it out.
-		var deletedBy *string
-		if by := ro.DeletedBy(); by != "" {
-			deletedBy = &by
-		}
+		deletedBy := pgconv.ZeroToNil(ro.DeletedBy())
 		err = q.SoftDeleteRole(ctx, db.SoftDeleteRoleParams{
 			ID:        pgconv.PgUUID(rid),
 			DeletedAt: pgconv.PgRequiredTimestamp(ro.DeletedAt()),

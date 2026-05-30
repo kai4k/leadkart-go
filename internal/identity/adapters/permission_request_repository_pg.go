@@ -351,10 +351,7 @@ func persistPermissionRequestDecision(
 		}
 		approverPg = pgconv.PgUUID(auid)
 	}
-	var decisionReason *string
-	if rsn := req.DecisionReason(); rsn != "" {
-		decisionReason = &rsn
-	}
+	decisionReason := pgconv.ZeroToNil(req.DecisionReason())
 	grantedPg := pgconv.PgUUIDOrNull(req.GrantedOverrideID())
 	err = q.UpdatePermissionRequestDecision(ctx, db.UpdatePermissionRequestDecisionParams{
 		ID:                   pgconv.PgUUID(rid),

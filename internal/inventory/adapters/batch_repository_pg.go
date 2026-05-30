@@ -299,8 +299,7 @@ func persistBatchState(ctx context.Context, q *db.Queries, b *batch.Batch, expec
 	var deletedBy *string
 	if b.IsDeleted() {
 		deletedAt = pgconv.PgRequiredTimestamp(b.DeletedAt())
-		dbStr := b.DeletedBy()
-		deletedBy = &dbStr
+		deletedBy = pgconv.ZeroToNil(b.DeletedBy())
 	}
 	rowsAffected, err := q.UpdateBatchWithVersionCheck(ctx, db.UpdateBatchWithVersionCheckParams{
 		ID:                         pgconv.PgUUID(bid),

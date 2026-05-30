@@ -1,6 +1,7 @@
 package rolehierarchytest_test
 
 import (
+	"errors"
 	"testing"
 	"time"
 
@@ -77,7 +78,7 @@ func TestFakeRepository_UpdateByID_CommitTruePersists(t *testing.T) {
 		t.Fatalf("UpdateByID: %v", err)
 	}
 
-	if _, err := repo.GetActiveByChild(t.Context(), e.TenantID(), e.ChildRoleID()); err != rolehierarchy.ErrEdgeNotFound {
+	if _, err := repo.GetActiveByChild(t.Context(), e.TenantID(), e.ChildRoleID()); !errors.Is(err, rolehierarchy.ErrEdgeNotFound) {
 		t.Fatalf("commit=true did not persist removal: got err = %v, want ErrEdgeNotFound", err)
 	}
 }

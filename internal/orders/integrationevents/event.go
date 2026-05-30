@@ -52,19 +52,3 @@ type TenantScoped interface {
 	Event
 	TenantIDString() string
 }
-
-// Platform tags events with NO tenant scope. The unexported
-// isPlatformEvent() method is sealed within this package — only events
-// DEFINED HERE can satisfy Platform. (No Orders event is platform-scoped
-// today; the marker exists for shape-parity with the sibling modules so
-// the cross-cutting arch tests apply uniformly.)
-type Platform interface {
-	Event
-	isPlatformEvent()
-}
-
-// platformMarker is embedded by every Platform record to satisfy the
-// sealed interface without per-type method redeclaration.
-type platformMarker struct{}
-
-func (platformMarker) isPlatformEvent() {}
