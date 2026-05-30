@@ -49,6 +49,15 @@ import (
 
 	"github.com/riverqueue/river"
 
+	"github.com/leadkart/leadkart-go/internal/common/audit"
+	"github.com/leadkart/leadkart-go/internal/common/cache"
+	"github.com/leadkart/leadkart-go/internal/common/config"
+	"github.com/leadkart/leadkart-go/internal/common/email"
+	"github.com/leadkart/leadkart-go/internal/common/ids"
+	"github.com/leadkart/leadkart-go/internal/common/jobs"
+	"github.com/leadkart/leadkart-go/internal/common/messaging"
+	"github.com/leadkart/leadkart-go/internal/common/obs"
+	"github.com/leadkart/leadkart-go/internal/common/pg"
 	crmadapters "github.com/leadkart/leadkart-go/internal/crm/adapters"
 	crmcommand "github.com/leadkart/leadkart-go/internal/crm/app/command"
 	"github.com/leadkart/leadkart-go/internal/crm/domain/crmlead"
@@ -59,15 +68,6 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/ports/subscribers"
 	inventoryadapters "github.com/leadkart/leadkart-go/internal/inventory/adapters"
 	inventoryintegrationevents "github.com/leadkart/leadkart-go/internal/inventory/integrationevents"
-	"github.com/leadkart/leadkart-go/internal/common/audit"
-	"github.com/leadkart/leadkart-go/internal/common/cache"
-	"github.com/leadkart/leadkart-go/internal/common/config"
-	"github.com/leadkart/leadkart-go/internal/common/email"
-	"github.com/leadkart/leadkart-go/internal/common/ids"
-	"github.com/leadkart/leadkart-go/internal/common/jobs"
-	"github.com/leadkart/leadkart-go/internal/common/messaging"
-	"github.com/leadkart/leadkart-go/internal/common/obs"
-	"github.com/leadkart/leadkart-go/internal/common/pg"
 
 	platformadapters "github.com/leadkart/leadkart-go/internal/platform/adapters"
 	platformintegrationevents "github.com/leadkart/leadkart-go/internal/platform/integrationevents"
@@ -269,9 +269,11 @@ func run(ctx context.Context, stdout *os.File) error {
 
 	router, err := messaging.NewRouter(messaging.Deps{
 		Subscriber:       pubsub,
+		Publisher:        pubsub,
 		Logger:           logger,
 		IdempotencyInbox: messaging.NewIdempotentReceiver(pool),
 		AuditWriter:      audit.NewWriter(pool, logger, time.Now),
+		DeadLetters:      messaging.NewDeadLetterWriter(pool, logger, time.Now),
 		CloseTimeout:     routerCloseTimeout,
 		Retry:            messaging.DefaultRetry,
 	})

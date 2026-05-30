@@ -263,9 +263,11 @@ func wireRouter(t *testing.T, fx *fixture) (*gochannel.GoChannel, *messaging.Rou
 	auditW := audit.NewWriter(fx.pool, silentLog(), time.Now)
 	router, err := messaging.NewRouter(messaging.Deps{
 		Subscriber:       pubsub,
+		Publisher:        pubsub,
 		Logger:           silentLog(),
 		IdempotencyInbox: receiver,
 		AuditWriter:      auditW,
+		DeadLetters:      messaging.NewDeadLetterWriter(fx.pool, silentLog(), time.Now),
 		CloseTimeout:     2 * time.Second,
 		Retry: messaging.RetryConfig{
 			MaxRetries:      1,
@@ -562,9 +564,11 @@ func TestReuseDetectedSIEM_LogsOnReuseRevocation(t *testing.T) {
 	auditW := audit.NewWriter(fx.pool, silentLog(), time.Now)
 	router, err := messaging.NewRouter(messaging.Deps{
 		Subscriber:       pubsub,
+		Publisher:        pubsub,
 		Logger:           silentLog(),
 		IdempotencyInbox: receiver,
 		AuditWriter:      auditW,
+		DeadLetters:      messaging.NewDeadLetterWriter(fx.pool, silentLog(), time.Now),
 		Retry: messaging.RetryConfig{
 			MaxRetries: 1, InitialInterval: 10 * time.Millisecond,
 			MaxInterval: 50 * time.Millisecond, Multiplier: 2,
@@ -603,9 +607,11 @@ func TestReuseDetectedSIEM_IgnoresNonReuseRevocations(t *testing.T) {
 	auditW := audit.NewWriter(fx.pool, silentLog(), time.Now)
 	router, err := messaging.NewRouter(messaging.Deps{
 		Subscriber:       pubsub,
+		Publisher:        pubsub,
 		Logger:           silentLog(),
 		IdempotencyInbox: receiver,
 		AuditWriter:      auditW,
+		DeadLetters:      messaging.NewDeadLetterWriter(fx.pool, silentLog(), time.Now),
 		Retry: messaging.RetryConfig{
 			MaxRetries: 1, InitialInterval: 10 * time.Millisecond,
 			MaxInterval: 50 * time.Millisecond, Multiplier: 2,

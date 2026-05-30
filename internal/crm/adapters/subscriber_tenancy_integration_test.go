@@ -65,9 +65,11 @@ func wireCrmRouter(t *testing.T, pool *pgxpool.Pool, topic string) (*gochannel.G
 	auditW := audit.NewWriter(pool, silentLog(), time.Now)
 	router, err := messaging.NewRouter(messaging.Deps{
 		Subscriber:       pubsub,
+		Publisher:        pubsub,
 		Logger:           silentLog(),
 		IdempotencyInbox: receiver,
 		AuditWriter:      auditW,
+		DeadLetters:      messaging.NewDeadLetterWriter(pool, silentLog(), time.Now),
 		CloseTimeout:     3 * time.Second,
 		Retry: messaging.RetryConfig{
 			MaxRetries:      1,

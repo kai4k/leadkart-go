@@ -38,15 +38,24 @@ type Router struct {
 	auditW   *audit.Writer
 	log      *slog.Logger
 	retry    RetryConfig
+	poison   message.HandlerMiddleware
 }
 
 // Deps groups the dependencies the middleware stack requires —
 // keeping the [NewRouter] signature short.
 type Deps struct {
-	Subscriber       message.Subscriber
+	Subscriber message.Subscriber
+	// Publisher is used by the PoisonQueue middleware to salvage poisoned
+	// messages to [DeadLetterTopic], and by the in-process DLQ consumer
+	// to read them back. With a single pub/sub (gochannel, watermill-sql)
+	// this is the same value as Subscriber.
+	Publisher        message.Publisher
 	Logger           *slog.Logger
 	IdempotencyInbox *IdempotentReceiver
 	AuditWriter      *audit.Writer
+	// DeadLetters persists poisoned messages to common.dead_letter.
+	// NewRouter wires a DLQ consumer on [DeadLetterTopic] that calls it.
+	DeadLetters *DeadLetterWriter
 	// CloseTimeout caps how long Run() waits on shutdown for in-
 	// flight handlers to drain. Default 30s if zero.
 	CloseTimeout time.Duration
@@ -92,32 +101,37 @@ var DefaultRetry = RetryConfig{
 // caps how long [Router.Run] waits for in-flight handlers on shutdown.
 const defaultRouterCloseTimeout = 30 * time.Second
 
-// NewRouter constructs the router + applies global middleware.
+// NewRouter constructs the router, applies global middleware, and wires
+// the durable dead-letter consumer.
 //
-// Global middleware (in declaration order — outermost first):
-//   - watermill.Recoverer        panic → error
-//   - TraceContextMiddleware     extract W3C trace ctx → consumer span
+// Global middleware (declaration order — outermost first). These are
+// context/observability setup that must surround every handler + every
+// emitted message, so they sit outside the per-handler resilience stack:
 //   - CorrelationIDMiddleware    propagate / generate correlation_id
+//   - TraceContextMiddleware     extract W3C trace ctx → consumer span
 //   - TenantContextMiddleware    metadata → ctx via tenancy.WithID
 //
-// Trace middleware sits second-outermost (just inside Recoverer) so the
-// per-message span surrounds every other middleware + the handler body
-// — panic recovery still needs to be outermost so a recovered panic
-// doesn't escape the trace boundary.
-//
-// Per-handler middleware (Idempotency + Audit + Retry) is applied at
-// [Router.AddSubscriber] time so each handler's name participates in
-// the dedup key. Retry sits innermost so transient handler failures
-// retry under the same dedup row.
+// Per-handler middleware (applied at [Router.AddSubscriber], outermost
+// first) is the canonical resilience stack — see [Router.AddSubscriber]
+// for the ordering rationale. Recoverer is INNERMOST so a panicking
+// handler is converted to an error that Retry then retries; PoisonQueue
+// is OUTSIDE Retry so a message is dead-lettered only after retries are
+// exhausted (or immediately for a [NonRetryable] error).
 func NewRouter(deps Deps) (*Router, error) {
 	if deps.Subscriber == nil {
 		return nil, errors.New("messaging: Subscriber required")
+	}
+	if deps.Publisher == nil {
+		return nil, errors.New("messaging: Publisher required (PoisonQueue dead-letter)")
 	}
 	if deps.IdempotencyInbox == nil {
 		return nil, errors.New("messaging: IdempotencyInbox required")
 	}
 	if deps.AuditWriter == nil {
 		return nil, errors.New("messaging: AuditWriter required")
+	}
+	if deps.DeadLetters == nil {
+		return nil, errors.New("messaging: DeadLetters required")
 	}
 	if deps.Logger == nil {
 		return nil, errors.New("messaging: Logger required")
@@ -138,32 +152,74 @@ func NewRouter(deps Deps) (*Router, error) {
 		return nil, fmt.Errorf("messaging: new router: %w", err)
 	}
 
-	// Global middleware — outermost wraps innermost.
+	// Global middleware — outermost wraps innermost. Setup only; the
+	// resilience stack (Recoverer/Retry/PoisonQueue) is per-handler.
 	r.AddMiddleware(
-		wmw.Recoverer,
-		TraceContextMiddleware,
 		CorrelationIDMiddleware,
+		TraceContextMiddleware,
 		TenantContextMiddleware,
 	)
 
-	return &Router{
+	// PoisonQueue salvages a handler error to DeadLetterTopic. Built once
+	// + shared across handlers. context.Canceled (graceful shutdown) is
+	// NOT poison — let it propagate so the message is redelivered next run.
+	poison, err := wmw.PoisonQueueWithFilter(deps.Publisher, DeadLetterTopic, func(err error) bool {
+		return !errors.Is(err, context.Canceled)
+	})
+	if err != nil {
+		return nil, fmt.Errorf("messaging: poison queue: %w", err)
+	}
+
+	router := &Router{
 		router:   r,
 		sub:      deps.Subscriber,
 		receiver: deps.IdempotencyInbox,
 		auditW:   deps.AuditWriter,
 		log:      log,
 		retry:    retry,
-	}, nil
+		poison:   poison,
+	}
+
+	// Durable DLQ consumer — reads DeadLetterTopic + persists each poisoned
+	// message to common.dead_letter. Registered directly on the raw
+	// router with ONLY Recoverer: it must NOT carry the PoisonQueue/Retry
+	// stack, or a failed DLQ write would re-poison into the same topic (a
+	// loop). The persister is best-effort (acks on write failure).
+	r.AddConsumerHandler(
+		"messaging.dead_letter.persist",
+		DeadLetterTopic,
+		deps.Subscriber,
+		func(msg *message.Message) error { return deps.DeadLetters.persist(msg.Context(), msg) },
+	).AddMiddleware(wmw.Recoverer)
+
+	return router, nil
 }
 
-// AddSubscriber registers handlerName as a subscriber on topic. The
-// handler receives ctx with tenant + correlation propagated; the
-// per-handler middleware stack wraps it in:
+// AddSubscriber registers handlerName as a subscriber on topic with the
+// canonical resilience stack. Middleware order (outermost → innermost,
+// which is the order passed to AddMiddleware):
 //
-//	IdempotencyMiddleware(handlerName) → AuditMiddleware → Retry → handler
+//	PoisonQueue → Idempotency → Audit → Retry → Recoverer → handler
 //
-// retry caps + backoff are tuned for transient errors; non-transient
-// errors should NOT retry (return them unwrapped, broker DLQs).
+// Rationale (each position is load-bearing):
+//   - Recoverer INNERMOST: a panicking handler becomes a RecoveredPanicError
+//     that Retry sees and retries — panics are no longer fatal-once.
+//   - Retry inside Audit: Audit records the final outcome once, after the
+//     retry budget is spent (or immediately when Retry.ShouldRetry rejects a
+//     [NonRetryable] error), not once per attempt.
+//   - Idempotency inside PoisonQueue (NOT outermost): the dedup row is written
+//     only when the inner chain returns nil — genuine success. A failed
+//     handler propagates up to PoisonQueue, so NO inbox row is written and the
+//     message stays replayable. If Idempotency were outermost it would see
+//     PoisonQueue's swallowed nil and mark a poisoned message "processed",
+//     silently blocking DLQ replay.
+//   - PoisonQueue OUTERMOST: after retries exhaust it salvages the message to
+//     the dead-letter topic and acks (swallows the error) so the broker does
+//     not redeliver-and-re-poison. A duplicate returns nil from Idempotency,
+//     so PoisonQueue never salvages it.
+//
+// A handler returns [NonRetryable](err) for a permanently-unprocessable
+// message (malformed payload, schema mismatch) so it dead-letters at once.
 func (r *Router) AddSubscriber(handlerName string, topic string, fn SubscriberHandler) {
 	// AddConsumerHandler superseded AddNoPublisherHandler in Watermill v1.4
 	// (jeremydmiller-style API rename); same behaviour, deprecation
@@ -174,9 +230,11 @@ func (r *Router) AddSubscriber(handlerName string, topic string, fn SubscriberHa
 		r.sub,
 		watermillAdapter(fn),
 	).AddMiddleware(
+		r.poison,
 		IdempotencyMiddleware(r.receiver, handlerName),
 		AuditMiddleware(r.auditW, r.log),
 		retryMiddleware(r.retry),
+		wmw.Recoverer,
 	)
 }
 
@@ -210,18 +268,19 @@ func watermillAdapter(fn SubscriberHandler) message.NoPublishHandlerFunc {
 	}
 }
 
-// retryMiddleware applies an exponential-backoff retry policy per
-// messaging.md "Retry policy — narrow catches only".
-//
-// Non-retryable errors should bypass via the return value — Watermill
-// retries everything by default; bespoke per-handler error narrowing
-// is left to the handler itself (e.g. errors.Is gates).
+// retryMiddleware applies an exponential-backoff retry policy for
+// transient handler failures. A handler marks a permanently-unprocessable
+// error with [NonRetryable]; ShouldRetry then skips retries so it reaches
+// the PoisonQueue (DLQ) at once instead of burning the backoff budget.
 func retryMiddleware(cfg RetryConfig) message.HandlerMiddleware {
 	r := wmw.Retry{
 		MaxRetries:      cfg.MaxRetries,
 		InitialInterval: cfg.InitialInterval,
 		MaxInterval:     cfg.MaxInterval,
 		Multiplier:      cfg.Multiplier,
+		ShouldRetry: func(p wmw.RetryParams) bool {
+			return !IsNonRetryable(p.Err)
+		},
 	}
 	return r.Middleware
 }
