@@ -60,9 +60,12 @@ func TestInventoryOutbox_ProductCreated_EnqueuesEnvelopedEvent(t *testing.T) {
 		t.Fatalf("products.Add: %v", err)
 	}
 
-	rows := messagingtest.DrainOutbox(t.Context(), t, pool)
+	// The shared common.outbox relay (ADR 0064) also carries the
+	// tenant-seed's identity event; assert on THIS module's event by
+	// filtering to the inventory destination topic.
+	rows := messagingtest.RowsForTopic(messagingtest.DrainOutbox(t.Context(), t, pool), integrationevents.Topic)
 	if len(rows) != 1 {
-		t.Fatalf("outbox rows: got %d want 1", len(rows))
+		t.Fatalf("inventory outbox rows: got %d want 1", len(rows))
 	}
 	row := rows[0]
 	if row.DestinationTopic != integrationevents.Topic {
@@ -114,8 +117,10 @@ func TestInventoryOutbox_ProductCreated_EnqueuesExactlyOnce(t *testing.T) {
 		t.Fatalf("Add: %v", err)
 	}
 
-	rows := messagingtest.DrainOutbox(t.Context(), t, pool)
+	// Filter to the inventory destination topic — the shared relay also
+	// holds the tenant-seed's identity event (ADR 0064).
+	rows := messagingtest.RowsForTopic(messagingtest.DrainOutbox(t.Context(), t, pool), integrationevents.Topic)
 	if len(rows) != 1 {
-		t.Fatalf("outbox rows: got %d want 1 (exactly-once enqueue)", len(rows))
+		t.Fatalf("inventory outbox rows: got %d want 1 (exactly-once enqueue)", len(rows))
 	}
 }

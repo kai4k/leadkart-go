@@ -287,7 +287,13 @@ func startWiredPostgresForHTTP(t *testing.T) *pgxpool.Pool {
 	}
 	for _, s := range []string{
 		`CREATE ROLE leadkart_app LOGIN PASSWORD 'leadkart_app_pw' NOSUPERUSER NOINHERIT NOCREATEROLE NOCREATEDB`,
-		`GRANT USAGE ON SCHEMA app, identity, platform TO leadkart_app`,
+		`GRANT USAGE ON SCHEMA app, common, identity, platform TO leadkart_app`,
+		// `common` holds the shared watermill-sql outbox relay that every
+		// module publishes through (ADR 0064/0067). Its "offset" BIGSERIAL
+		// needs sequence USAGE in addition to table DML — GRANT ON ALL TABLES
+		// does NOT cover the backing sequences.
+		`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA common TO leadkart_app`,
+		`GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA common TO leadkart_app`,
 		`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA identity TO leadkart_app`,
 		`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA platform TO leadkart_app`,
 		`GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA app TO leadkart_app`,

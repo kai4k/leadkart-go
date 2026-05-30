@@ -302,7 +302,7 @@ func setupContainer(ctx context.Context, cfg Config) (*Container, error) {
 		pg:       pg,
 		ownerDSN: ownerDSN,
 		appDSN:   appDSN,
-		cfg:      cfg,
+		cfg:      normalizeConfig(cfg),
 	}, nil
 }
 
@@ -323,16 +323,27 @@ func applyMigrationsAndGrants(ctx context.Context, ownerDSN, migDir string, cfg 
 		return fmt.Errorf("goose up: %w", err)
 	}
 
-	usageSchemas := append([]string{"app"}, cfg.Schemas...)
+	// "app" (RLS GUC helpers) and "common" (the shared watermill-sql outbox
+	// relay + cross-cutting infra every module writes through, per ADR
+	// 0064/0067) are universal — always provisioned regardless of the
+	// per-package Config, mirroring how "app" has always been implicit.
+	usageSchemas := dedupeSchemas(append([]string{"app", "common"}, cfg.Schemas...))
+	grantSchemas := dedupeSchemas(append([]string{"common"}, cfg.Grants...))
 	stmts := []string{
 		fmt.Sprintf(`CREATE ROLE %s LOGIN PASSWORD '%s' NOSUPERUSER NOINHERIT NOCREATEROLE NOCREATEDB`,
 			appRoleName, appRolePasswd),
 		fmt.Sprintf(`GRANT USAGE ON SCHEMA %s TO %s`, strings.Join(usageSchemas, ", "), appRoleName),
 		fmt.Sprintf(`GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA app TO %s`, appRoleName),
 	}
-	for _, schema := range cfg.Grants {
+	for _, schema := range grantSchemas {
 		stmts = append(stmts,
 			fmt.Sprintf(`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA %s TO %s`,
+				schema, appRoleName),
+			// Serial/identity columns need explicit sequence USAGE — GRANT ON
+			// ALL TABLES does NOT cover the backing sequences. Pair the two so
+			// any serial in a granted schema works (e.g. the watermill-sql
+			// relay common.outbox."offset" BIGSERIAL). Per ADR 0064/0067.
+			fmt.Sprintf(`GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA %s TO %s`,
 				schema, appRoleName))
 	}
 	for _, s := range stmts {
@@ -341,6 +352,38 @@ func applyMigrationsAndGrants(ctx context.Context, ownerDSN, migDir string, cfg 
 		}
 	}
 	return nil
+}
+
+// normalizeConfig prepends the universal "common" schema — the shared
+// watermill-sql outbox relay + cross-cutting infra every module reads and
+// writes (ADR 0064/0067) — to both Schemas and Grants. This makes `common`
+// implicit everywhere the Config is consumed: the app-role grants AND
+// TruncateAll's wipe scope. Without it, per-module fixtures (whose Grants
+// list only their own schema) leave common.outbox un-truncated, so its
+// rows accumulate across tests and outbox-count assertions see stale rows.
+// Mirrors how "app" has always been implicit.
+func normalizeConfig(cfg Config) Config {
+	cfg.Schemas = dedupeSchemas(append([]string{"common"}, cfg.Schemas...))
+	cfg.Grants = dedupeSchemas(append([]string{"common"}, cfg.Grants...))
+	return cfg
+}
+
+// dedupeSchemas removes duplicate schema names (preserving first-seen
+// order) so a `GRANT ... ON SCHEMA a, b` list never names a schema twice
+// — Postgres rejects "schema X specified more than once". Needed because
+// "app"/"common" are now prepended unconditionally and a package's Config
+// may also list them.
+func dedupeSchemas(in []string) []string {
+	seen := make(map[string]struct{}, len(in))
+	out := make([]string, 0, len(in))
+	for _, s := range in {
+		if _, ok := seen[s]; ok {
+			continue
+		}
+		seen[s] = struct{}{}
+		out = append(out, s)
+	}
+	return out
 }
 
 // findMigrationsDir walks up from the current working directory until

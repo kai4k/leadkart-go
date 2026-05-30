@@ -89,14 +89,15 @@ func TestPersonRepository_Add_PersistsOutboxEventInSameTx(t *testing.T) {
 	if len(got) != 1 || got[0] != "identity.person_created.v1" {
 		t.Fatalf("event_types: got %v want [identity.person_created.v1]", got)
 	}
-	// Person events ship under the platform-tenant sentinel (uuid.Nil).
-	// The forwarder still sets the tenant_id metadata header for outbox
-	// rows whose tenant_id is non-NULL; for person rows on the
-	// platform-tenant the row carries uuid.Nil so the header is
-	// uuid.Nil.String() (forwarder treats Valid+Zero as a present FK,
-	// matching identity's tenant_id NOT NULL DEFAULT '00..00' constraint).
-	if tid := msgs[0].Metadata.Get(messaging.HeaderTenantID); tid == "" {
-		t.Fatalf("tenant_id header: empty (expected platform-tenant sentinel)")
+	// Persons are global — identity has no tenant for a person, so the
+	// outbox writer passes uuid.Nil. Per ADR 0059 C3 + the shared
+	// PublishOutbox contract, global/platform-scoped events carry NO
+	// tenant_id on the wire: the uuid.Nil sentinel was retired precisely so
+	// consumers don't try to resolve "00000000…" as a real tenant, so
+	// PublishOutbox OMITS the tenant_id header when the tenant is Nil.
+	// (Matches platform's unverified_contact C3 assertion — one canon.)
+	if tid := msgs[0].Metadata.Get(messaging.HeaderTenantID); tid != "" {
+		t.Fatalf("tenant_id header: got %q; want empty for a global person (ADR 0059 C3 — no uuid.Nil sentinel on the wire)", tid)
 	}
 }
 

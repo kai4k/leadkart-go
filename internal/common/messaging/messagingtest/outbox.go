@@ -81,6 +81,21 @@ func DrainOutbox(ctx context.Context, t *testing.T, pool *pgxpool.Pool) []Outbox
 	return out
 }
 
+// RowsForTopic returns only the rows whose destination topic matches —
+// the canonical way to assert on THIS module's event after ADR 0064, since
+// the shared common.outbox relay also carries events from cross-module
+// test seeds (e.g. an inventory test that seeds a tenant emits an identity
+// event into the same relay). Filter to your module's topic, then count.
+func RowsForTopic(rows []OutboxRow, topic string) []OutboxRow {
+	out := make([]OutboxRow, 0, len(rows))
+	for _, r := range rows {
+		if r.DestinationTopic == topic {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
 // EventTypes returns the event_type metadata header of each row, in drain
 // order — the common assertion for "which events did the producer emit".
 func EventTypes(rows []OutboxRow) []string {

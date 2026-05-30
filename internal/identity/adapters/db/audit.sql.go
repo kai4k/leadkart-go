@@ -34,7 +34,7 @@ type ListAuditEventsByTenantPageParams struct {
 //
 // The table is auto-written per command by the Watermill
 // AuditLoggingMiddleware (per ADR 0027 outbox-doubles-as-audit + the
-// additive buildingblocks audit table from migration
+// additive common audit table from migration
 // 20260507000001). Reads here are operator-facing — keyset paginated
 // per ADR 0038 + filtered by tenant_id / user_id / action.
 //
