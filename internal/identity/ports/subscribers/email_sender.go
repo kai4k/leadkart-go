@@ -2,15 +2,10 @@ package subscribers
 
 import (
 	"context"
-	"encoding/json"
-	"errors"
 	"fmt"
 	"log/slog"
 
-	"github.com/ThreeDotsLabs/watermill/message"
-
 	"github.com/leadkart/leadkart-go/internal/common/email"
-	"github.com/leadkart/leadkart-go/internal/common/messaging"
 	"github.com/leadkart/leadkart-go/internal/identity/app/command"
 	"github.com/leadkart/leadkart-go/internal/identity/integrationevents"
 )
@@ -29,10 +24,10 @@ import (
 //     token + expiry are bounded, so a stuck retry loop self-resolves
 //     when the token expires (next request mints a fresh one).
 //   - gateway.Send failure → same shape (return error, retry).
-//   - Topic-mismatch (handler wired against the wrong event_type) →
-//     short-circuit silently per the established subscriber pattern
-//     (InvalidateSecurityStampCache canon — handlers ride the shared
-//     Identity topic + filter by event_type header).
+//
+// Post-cqrs (ADR 0067): topic routing + payload decode are owned by the
+// EventProcessor + WireAliasMarshaler; each handler is the typed dispatch
+// only — no event_type filter, no json.Unmarshal.
 //
 // Production wiring (cmd/worker) injects a real provider behind the
 // [email.Gateway] interface; v0.2 stays Recorder-backed (no SMTP/SES
@@ -68,23 +63,13 @@ func NewEmailSender(gateway email.Gateway, from email.Address, appURL string, lo
 	return &EmailSender{gateway: gateway, from: from, appURL: appURL, log: log}
 }
 
-// HandlePasswordResetEmail is the handler for
-// `identity.person_password_reset_email_requested.v1`. Decodes the
-// event payload + builds the reset-link email + dispatches via the
-// gateway. Returns the gateway error so Watermill retries on transient
-// failure.
+// HandlePasswordResetEmail is the typed cqrs handler for
+// `identity.person_password_reset_email_requested.v1`. Builds the
+// reset-link email + dispatches via the gateway. Returns the gateway
+// error so Watermill retries on transient failure.
 func (h *EmailSender) HandlePasswordResetEmail(
-	ctx context.Context, _ string, msg *message.Message,
+	ctx context.Context, evt *integrationevents.PersonPasswordResetEmailRequestedV1,
 ) error {
-	expected := integrationevents.PersonPasswordResetEmailRequestedV1{}.Topic()
-	if msg.Metadata.Get(messaging.HeaderEventType) != expected {
-		// Topic-mismatch on the shared identity topic — not for us.
-		return nil
-	}
-	var evt integrationevents.PersonPasswordResetEmailRequestedV1
-	if err := json.Unmarshal(msg.Payload, &evt); err != nil {
-		return fmt.Errorf("subscribers: decode %s: %w", expected, err)
-	}
 	to, err := email.New(evt.Email)
 	if err != nil {
 		return fmt.Errorf("subscribers: hydrate to address %q: %w", evt.Email, err)
@@ -106,12 +91,6 @@ func (h *EmailSender) HandlePasswordResetEmail(
 		return fmt.Errorf("subscribers: build password-reset message: %w", err)
 	}
 	if err := h.gateway.Send(ctx, emailMsg); err != nil {
-		// Wrap with the gateway sentinel so callers / SIEM can split
-		// transient (retry) from validation (DLQ-after-N) per the
-		// email.Gateway error contract.
-		if errors.Is(err, email.ErrInvalidMessage) {
-			return fmt.Errorf("subscribers: password-reset send: %w", err)
-		}
 		return fmt.Errorf("subscribers: password-reset send: %w", err)
 	}
 	h.log.InfoContext(ctx, "password reset email sent",
@@ -120,21 +99,13 @@ func (h *EmailSender) HandlePasswordResetEmail(
 	return nil
 }
 
-// HandleEmailChangeConfirmation is the handler for
+// HandleEmailChangeConfirmation is the typed cqrs handler for
 // `identity.person_email_change_confirmation_requested.v1`. Mirrors the
 // password-reset shape; the confirmation link goes to the NEW address
 // per Auth0/Okta canon.
 func (h *EmailSender) HandleEmailChangeConfirmation(
-	ctx context.Context, _ string, msg *message.Message,
+	ctx context.Context, evt *integrationevents.PersonEmailChangeConfirmationRequestedV1,
 ) error {
-	expected := integrationevents.PersonEmailChangeConfirmationRequestedV1{}.Topic()
-	if msg.Metadata.Get(messaging.HeaderEventType) != expected {
-		return nil
-	}
-	var evt integrationevents.PersonEmailChangeConfirmationRequestedV1
-	if err := json.Unmarshal(msg.Payload, &evt); err != nil {
-		return fmt.Errorf("subscribers: decode %s: %w", expected, err)
-	}
 	to, err := email.New(evt.NewEmail)
 	if err != nil {
 		return fmt.Errorf("subscribers: hydrate to address %q: %w", evt.NewEmail, err)

@@ -2,16 +2,12 @@ package subscribers
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
 	"time"
 
-	"github.com/ThreeDotsLabs/watermill/message"
-
-	"github.com/leadkart/leadkart-go/internal/common/messaging"
 	"github.com/leadkart/leadkart-go/internal/dispatch/app/command"
 	"github.com/leadkart/leadkart-go/internal/dispatch/domain/consignmentnote"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
@@ -58,19 +54,10 @@ func NewOrderPackedIngestor(
 	return &OrderPackedIngestor{cmd: cmd, log: log}
 }
 
-// Handle decodes the envelope + dispatches to the command handler.
-func (h *OrderPackedIngestor) Handle(ctx context.Context, _ string, msg *message.Message) error {
-	if msg.Metadata.Get(messaging.HeaderEventType) != ordersevents.TopicOrderPackedV1 {
-		// Not our event — the orders.events topic carries every Orders
-		// integration event; we only care about order_packed.
-		return nil
-	}
-	var evt ordersevents.OrderPackedV1
-	if err := json.Unmarshal(msg.Payload, &evt); err != nil {
-		// retry — malformed envelope is a producer-side bug; the
-		// natural-key idempotency check makes the retry-after-fix safe.
-		return fmt.Errorf("dispatch subscribers: decode %s: %w", ordersevents.TopicOrderPackedV1, err)
-	}
+// Handle is the typed cqrs handler for `orders.order_packed.v1`. Topic
+// routing + payload decode are owned by the EventProcessor (ADR 0067);
+// this is the business reaction only.
+func (h *OrderPackedIngestor) Handle(ctx context.Context, evt *ordersevents.OrderPackedV1) error {
 	if strings.TrimSpace(evt.OrderID) == "" || strings.TrimSpace(evt.TenantID) == "" {
 		// retry — defensively reject malformed payload (missing IDs).
 		// Producer-side bug; same rationale as decode failure.

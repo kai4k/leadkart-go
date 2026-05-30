@@ -258,17 +258,29 @@ func run(ctx context.Context, stdout *os.File) error {
 	if err != nil {
 		return fmt.Errorf("messaging router: %w", err)
 	}
-	// Email-dispatch subscriber (ADR 0057). buildEmailSender panics on
-	// malformed no-reply address — string literal, init-time only, so
-	// fail-fast at boot is the right shape per CLAUDE.md "MustNewX
-	// init-time only".
-	subscribers.Register(router, subWiring.Families, subWiring.StampCache, buildEmailSender(logger), logger, time.Now)
+	// cqrs EventProcessor (ADR 0067): typed dispatch over the shared
+	// router. The processor derives each handler's subscribe topic from
+	// the event alias (identity.* → identity.events, platform.* →
+	// platform.events) and decodes the payload via the WireAliasMarshaler;
+	// router.AddCqrsHandler attaches the canonical resilience stack
+	// (PoisonQueue + Idempotency + Audit + Retry + Recoverer) per handler.
+	eventProcessor, err := messaging.NewEventProcessor(router.RawRouter(), pubsub, watermill.NewSlogLogger(logger))
+	if err != nil {
+		return fmt.Errorf("messaging event processor: %w", err)
+	}
 
-	// CRM module subscribers (ADR 0060). The lead-purchased subscriber
-	// rides the Platform module's `platform.events` topic — handler-side
-	// event_type filtering routes only `platform.lead-purchased.v1` to
-	// the ingest handler.
-	crmsubscribers.Register(router, crmIngest, "platform.events", logger)
+	// Gather every module's typed handlers. buildEmailSender panics on a
+	// malformed no-reply address — string literal, init-time only, so
+	// fail-fast at boot is the right shape (CLAUDE.md "MustNewX init-time
+	// only"). CRM's lead-purchased handler is a cross-module consumer of
+	// the Platform `platform.lead_purchased.v1` event (ADR 0060).
+	cqrsHandlers := subscribers.Handlers(subWiring.Families, subWiring.StampCache, buildEmailSender(logger), logger, time.Now)
+	cqrsHandlers = append(cqrsHandlers, crmsubscribers.Handlers(crmIngest)...)
+	for _, h := range cqrsHandlers {
+		if err := router.AddCqrsHandler(eventProcessor, h); err != nil {
+			return fmt.Errorf("register cqrs handler: %w", err)
+		}
+	}
 
 	// River background-job pool. v0.2 ships one job — AuditLogPurgeJob —
 	// running daily to enforce the 7-year audit retention. River's

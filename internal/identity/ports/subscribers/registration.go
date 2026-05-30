@@ -4,30 +4,32 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/leadkart/leadkart-go/internal/common/messaging"
+	"github.com/ThreeDotsLabs/watermill/components/cqrs"
+
 	"github.com/leadkart/leadkart-go/internal/identity/domain/refreshtoken"
 	"github.com/leadkart/leadkart-go/internal/identity/integrationevents"
 )
 
-// arch-test:idempotency-via-router-middleware — wire-up file only; the messaging.Router this file binds to is constructed in the composition root with IdempotencyMiddleware on every subscriber, so dedup happens at the router layer before any Handle is called.
+// arch-test:idempotency-via-router-middleware — wire-up file only; the cqrs handlers this file builds are registered via messaging.Router.AddCqrsHandler in the composition root, which attaches IdempotencyMiddleware to every handler, so dedup happens at the router layer before any Handle is called.
 
 // Identity subscriber-handler names (CI-stable). Changing one of these
 // makes every previously-processed message "fresh" against
 // identity.processed_messages and re-runs the handler on every
-// undelivered envelope. Only rename if you intend that behaviour
-// (e.g. fixing a serious bug retroactively).
+// undelivered envelope. Only rename if you intend that behaviour.
 //
 // Two parallel subscriber families on the stamp-rotation events:
 //
-//   InvalidateCacheOn*  — opportunistic SecurityStampCache eviction.
-//                         WARN-and-continue on failure (TTL is the
-//                         contract). NOT retried.
-//   RevokeOn*           — must-succeed refresh-token family revocation.
-//                         Returns error on failure → Watermill retries.
+//	InvalidateCacheOn*  — opportunistic SecurityStampCache eviction.
+//	                      WARN-and-continue on failure (TTL is the
+//	                      contract). NOT retried (handler returns nil).
+//	RevokeOn*           — must-succeed refresh-token family revocation.
+//	                      Returns error on failure → Watermill retries.
 //
-// Each subscriber has its own dedup key so they're tracked
-// independently in identity.processed_messages — A succeeding while
-// B retries is a valid intermediate state.
+// Each handler has its own dedup key so they're tracked independently in
+// identity.processed_messages — A succeeding while B retries is a valid
+// intermediate state. Multiple handlers bind the SAME event type
+// (e.g. PersonPasswordChangedV1 → both InvalidateCache + Revoke); the
+// cqrs EventProcessor fans the event out to every matching handler.
 const (
 	// Cache-eviction subscribers (Subscriber A — opportunistic).
 	HandlerInvalidateCacheOnPasswordChanged   = "identity.subscribers.InvalidateCacheOnPasswordChanged"
@@ -45,40 +47,35 @@ const (
 	// SIEM subscriber.
 	HandlerReuseDetectedSIEM = "identity.subscribers.ReuseDetectedSIEM"
 
-	// Email-dispatch subscribers (Subscriber pattern per ADR 0057 —
-	// must-succeed; Watermill retries on transient gateway failure).
-	HandlerSendPasswordResetEmail       = "identity.subscribers.SendPasswordResetEmail"
-	HandlerSendEmailChangeConfirmation  = "identity.subscribers.SendEmailChangeConfirmation"
+	// Email-dispatch subscribers (ADR 0057 — must-succeed; Watermill
+	// retries on transient gateway failure).
+	HandlerSendPasswordResetEmail      = "identity.subscribers.SendPasswordResetEmail"
+	HandlerSendEmailChangeConfirmation = "identity.subscribers.SendEmailChangeConfirmation"
 )
 
-// Register wires every Identity in-module subscriber against the
-// supplied router. Called once at composition root (cmd/api or
-// cmd/worker depending on which process hosts the subscriber loop).
+// Handlers builds every Identity in-module cqrs event handler. The
+// composition root (cmd/worker) registers each on the shared router via
+// messaging.Router.AddCqrsHandler, which supplies the canonical
+// resilience stack (PoisonQueue + Idempotency + Audit + Retry +
+// Recoverer). Subscribers only worry about the typed reaction.
 //
-// Per messaging.md doctrine: subscribers stay self-contained; their
-// dependencies (repos, log) are passed in here. The router supplies
-// the canonical middleware stack (Recoverer + CorrelationID +
-// TenantContext globally, then Idempotency + Audit + Retry per
-// handler) — subscribers only worry about the action.
+// Post-cqrs (ADR 0067): no router.AddSubscriber, no event_type filters,
+// no json.Unmarshal — cqrs.NewEventHandler[T] + the WireAliasMarshaler
+// own dispatch + decode. Topic routing is derived from each event's
+// alias by the EventProcessor (identity.* → identity.events).
 //
-// stampCache is threaded into the [InvalidateSecurityStampCache]
-// subscriber. The two subscribers (cache-evict + family-revoke) ride
-// the same events but carry independent retry/failure policies — see
-// each type's docstring. stampCache is required (NewInvalidateSecurityStampCache
-// panics otherwise); production wires *adapters.SecurityStampCache,
-// tests inject a [SecurityStampInvalidator] fake.
-//
-// families depends on the domain interface [refreshtoken.Repository]
-// (Cheney "accept interfaces, return structs") — production wires
-// *adapters.RefreshTokenFamilyRepository.
-func Register(
-	router *messaging.Router,
+// stampCache feeds the [InvalidateSecurityStampCache] handlers; families
+// feeds [RevokeFamiliesOnSecurityChange]; both depend on domain
+// interfaces (Cheney "accept interfaces, return structs"). emailSender
+// may be nil — tests that don't exercise the email path skip those two
+// handlers to avoid wiring a Recorder.
+func Handlers(
 	families refreshtoken.Repository,
 	stampCache SecurityStampInvalidator,
 	emailSender *EmailSender,
 	log *slog.Logger,
 	now func() time.Time,
-) {
+) []cqrs.EventHandler {
 	if now == nil {
 		now = time.Now
 	}
@@ -86,75 +83,35 @@ func Register(
 	revoke := NewRevokeFamiliesOnSecurityChange(families, log, now)
 	siem := NewReuseDetectedSIEM(log)
 
-	// Cache-evict subscribers (opportunistic; WARN+continue on failure).
-	router.AddSubscriber(
-		HandlerInvalidateCacheOnPasswordChanged,
-		integrationevents.Topic,
-		invalidate.HandlePasswordChanged,
-	)
-	router.AddSubscriber(
-		HandlerInvalidateCacheOnAnonymised,
-		integrationevents.Topic,
-		invalidate.HandleAnonymised,
-	)
-	router.AddSubscriber(
-		HandlerInvalidateCacheOnGloballySuspended,
-		integrationevents.Topic,
-		invalidate.HandleGloballySuspended,
-	)
-	router.AddSubscriber(
-		HandlerInvalidateCacheOnEmailChanged,
-		integrationevents.Topic,
-		invalidate.HandleEmailChanged,
-	)
+	handlers := []cqrs.EventHandler{
+		// Cache-evict (opportunistic).
+		cqrs.NewEventHandler(HandlerInvalidateCacheOnPasswordChanged, invalidate.HandlePasswordChanged),
+		cqrs.NewEventHandler(HandlerInvalidateCacheOnAnonymised, invalidate.HandleAnonymised),
+		cqrs.NewEventHandler(HandlerInvalidateCacheOnGloballySuspended, invalidate.HandleGloballySuspended),
+		cqrs.NewEventHandler(HandlerInvalidateCacheOnEmailChanged, invalidate.HandleEmailChanged),
 
-	// Family-revoke subscribers (must-succeed; Watermill retries on error).
-	router.AddSubscriber(
-		HandlerRevokeOnPasswordChange,
-		integrationevents.Topic,
-		revoke.HandlePasswordChanged,
-	)
-	router.AddSubscriber(
-		HandlerRevokeOnAnonymise,
-		integrationevents.Topic,
-		revoke.HandleAnonymised,
-	)
-	router.AddSubscriber(
-		HandlerRevokeOnGloballySuspended,
-		integrationevents.Topic,
-		revoke.HandleGloballySuspended,
-	)
-	router.AddSubscriber(
-		HandlerRevokeOnEmailChanged,
-		integrationevents.Topic,
-		revoke.HandleEmailChanged,
-	)
-	router.AddSubscriber(
-		HandlerRevokeOnMembershipDeactivate,
-		integrationevents.Topic,
-		revoke.HandleMembershipDeactivated,
-	)
+		// Family-revoke (must-succeed).
+		cqrs.NewEventHandler(HandlerRevokeOnPasswordChange, revoke.HandlePasswordChanged),
+		cqrs.NewEventHandler(HandlerRevokeOnAnonymise, revoke.HandleAnonymised),
+		cqrs.NewEventHandler(HandlerRevokeOnGloballySuspended, revoke.HandleGloballySuspended),
+		cqrs.NewEventHandler(HandlerRevokeOnEmailChanged, revoke.HandleEmailChanged),
+		cqrs.NewEventHandler(HandlerRevokeOnMembershipDeactivate, revoke.HandleMembershipDeactivated),
 
-	// SIEM subscriber.
-	router.AddSubscriber(
-		HandlerReuseDetectedSIEM,
-		integrationevents.Topic,
-		siem.Handle,
-	)
+		// SIEM.
+		cqrs.NewEventHandler(HandlerReuseDetectedSIEM, siem.Handle),
+	}
 
-	// Email-dispatch subscribers (ADR 0057). Skipped if emailSender is
-	// nil — tests that don't exercise the email path may pass nil to
-	// avoid wiring a Recorder.
+	// Email-dispatch (ADR 0057). Skipped when emailSender is nil.
 	if emailSender != nil {
-		router.AddSubscriber(
-			HandlerSendPasswordResetEmail,
-			integrationevents.Topic,
-			emailSender.HandlePasswordResetEmail,
-		)
-		router.AddSubscriber(
-			HandlerSendEmailChangeConfirmation,
-			integrationevents.Topic,
-			emailSender.HandleEmailChangeConfirmation,
+		handlers = append(handlers,
+			cqrs.NewEventHandler(HandlerSendPasswordResetEmail, emailSender.HandlePasswordResetEmail),
+			cqrs.NewEventHandler(HandlerSendEmailChangeConfirmation, emailSender.HandleEmailChangeConfirmation),
 		)
 	}
+	return handlers
 }
+
+// integrationevents import retained for the package's event types used in
+// handler signatures (kept explicit so goimports doesn't drop it when the
+// only references are in sibling files).
+var _ = integrationevents.Topic

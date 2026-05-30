@@ -2,17 +2,12 @@ package subscribers_test
 
 import (
 	"context"
-	"encoding/json"
 	"io"
 	"log/slog"
 	"testing"
 	"time"
 
-	"github.com/ThreeDotsLabs/watermill/message"
-	"github.com/google/uuid"
-
 	"github.com/leadkart/leadkart-go/internal/common/ids"
-	"github.com/leadkart/leadkart-go/internal/common/messaging"
 	"github.com/leadkart/leadkart-go/internal/common/pg"
 	"github.com/leadkart/leadkart-go/internal/dispatch/app/command"
 	"github.com/leadkart/leadkart-go/internal/dispatch/domain/consignmentnote"
@@ -23,8 +18,6 @@ import (
 )
 
 // fakeUoW is a minimal pg.UnitOfWork that just runs fn synchronously.
-// Mirrors the platformtest.FakeUnitOfWork pattern but without
-// rollback-aware fakes (single-aggregate test path).
 type fakeUoW struct{}
 
 func (fakeUoW) WithinTx(ctx context.Context, _ pg.TxScope, fn func(context.Context) error) error {
@@ -49,18 +42,6 @@ func buildHandler(t *testing.T) (*subscribers.OrderPackedIngestor, *consignmentn
 	return subscribers.NewOrderPackedIngestor(cmd, silentLog()), repo
 }
 
-func buildEnvelope(t *testing.T, evt ordersevents.OrderPackedV1) *message.Message {
-	t.Helper()
-	body, err := json.Marshal(evt)
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
-	}
-	msg := message.NewMessage(uuid.NewString(), body)
-	msg.Metadata.Set(messaging.HeaderEventType, ordersevents.TopicOrderPackedV1)
-	msg.Metadata.Set(messaging.HeaderTenantID, evt.TenantID)
-	return msg
-}
-
 func validEvent(tenantID, orderID string) ordersevents.OrderPackedV1 {
 	return ordersevents.OrderPackedV1{
 		OrderID:              orderID,
@@ -73,16 +54,21 @@ func validEvent(tenantID, orderID string) ordersevents.OrderPackedV1 {
 	}
 }
 
-// TestOrderPackedIngestor_HappyPath proves the full chain works:
-// envelope decoded → command run → ConsignmentNote created with the
-// right tenant + order + carrier.
+// Post-cqrs (ADR 0067): the handler receives the already-decoded typed
+// event; topic routing + payload decode are the EventProcessor's job, so
+// the old wrong-event-type + malformed-JSON unit cases are gone (the
+// typed handler can never be invoked with a mismatched type or bad bytes).
+
+// TestOrderPackedIngestor_HappyPath proves command run → ConsignmentNote
+// created with the right tenant + order + carrier + drained event.
 func TestOrderPackedIngestor_HappyPath(t *testing.T) {
 	t.Parallel()
 	h, repo := buildHandler(t)
 	tenantID := ids.NewV7().String()
 	orderID := ids.NewV7().String()
 
-	if err := h.Handle(t.Context(), "", buildEnvelope(t, validEvent(tenantID, orderID))); err != nil {
+	evt := validEvent(tenantID, orderID)
+	if err := h.Handle(t.Context(), &evt); err != nil {
 		t.Fatalf("Handle: %v", err)
 	}
 
@@ -99,10 +85,6 @@ func TestOrderPackedIngestor_HappyPath(t *testing.T) {
 	if cn.BoxCount() != 3 {
 		t.Errorf("box count=%d", cn.BoxCount())
 	}
-
-	// Domain event must have been DRAINED into the fake repo's
-	// DrainedEvents slice — proves the events-are-raised-properly
-	// invariant the user asked about.
 	if len(repo.DrainedEvents) != 1 {
 		t.Fatalf("DrainedEvents len=%d want 1", len(repo.DrainedEvents))
 	}
@@ -119,12 +101,12 @@ func TestOrderPackedIngestor_IdempotentOnReplay(t *testing.T) {
 	h, repo := buildHandler(t)
 	tenantID := ids.NewV7().String()
 	orderID := ids.NewV7().String()
-	env := buildEnvelope(t, validEvent(tenantID, orderID))
+	evt := validEvent(tenantID, orderID)
 
-	if err := h.Handle(t.Context(), "", env); err != nil {
+	if err := h.Handle(t.Context(), &evt); err != nil {
 		t.Fatalf("first: %v", err)
 	}
-	if err := h.Handle(t.Context(), "", env); err != nil {
+	if err := h.Handle(t.Context(), &evt); err != nil {
 		t.Fatalf("replay: %v", err)
 	}
 	if got := len(repo.ByOrderID); got != 1 {
@@ -132,50 +114,20 @@ func TestOrderPackedIngestor_IdempotentOnReplay(t *testing.T) {
 	}
 }
 
-// TestOrderPackedIngestor_WrongTopicShortCircuits proves the
-// event_type filter — the subscriber ignores events from the same
-// topic that aren't OrderPacked.
-func TestOrderPackedIngestor_WrongTopicShortCircuits(t *testing.T) {
-	t.Parallel()
-	h, repo := buildHandler(t)
-	msg := buildEnvelope(t, validEvent(ids.NewV7().String(), ids.NewV7().String()))
-	msg.Metadata.Set(messaging.HeaderEventType, "orders.order_confirmed.v1")
-	if err := h.Handle(t.Context(), "", msg); err != nil {
-		t.Fatalf("Handle wrong topic: %v", err)
-	}
-	if len(repo.Store) != 0 {
-		t.Error("short-circuit failed: a consignment note was created for the wrong event_type")
-	}
-}
-
-// TestOrderPackedIngestor_MalformedPayloadErrors proves bad JSON
-// produces an error (which causes Watermill retry).
-func TestOrderPackedIngestor_MalformedPayloadErrors(t *testing.T) {
-	t.Parallel()
-	h, _ := buildHandler(t)
-	msg := message.NewMessage(uuid.NewString(), []byte("{not json"))
-	msg.Metadata.Set(messaging.HeaderEventType, ordersevents.TopicOrderPackedV1)
-	if err := h.Handle(t.Context(), "", msg); err == nil {
-		t.Fatal("want decode error")
-	}
-}
-
 // TestOrderPackedIngestor_RejectsMissingIDs proves defensive rejection
-// when the envelope is structurally valid but missing required IDs.
+// when the typed event is missing required IDs.
 func TestOrderPackedIngestor_RejectsMissingIDs(t *testing.T) {
 	t.Parallel()
 	h, _ := buildHandler(t)
-
 	evt := validEvent(ids.NewV7().String(), ids.NewV7().String())
 	evt.OrderID = ""
-	msg := buildEnvelope(t, evt)
-	if err := h.Handle(t.Context(), "", msg); err == nil {
+	if err := h.Handle(t.Context(), &evt); err == nil {
 		t.Fatal("want error on missing order_id")
 	}
 }
 
 // TestOrderPackedIngestor_DefaultsCarrierWhenAbsent proves "Unassigned"
-// fallback for OrderPacked envelopes that don't pre-pick a carrier.
+// fallback for OrderPacked events that don't pre-pick a carrier.
 func TestOrderPackedIngestor_DefaultsCarrierWhenAbsent(t *testing.T) {
 	t.Parallel()
 	h, repo := buildHandler(t)
@@ -184,7 +136,7 @@ func TestOrderPackedIngestor_DefaultsCarrierWhenAbsent(t *testing.T) {
 	evt := validEvent(tenantID, orderID)
 	evt.CarrierName = "  "
 
-	if err := h.Handle(t.Context(), "", buildEnvelope(t, evt)); err != nil {
+	if err := h.Handle(t.Context(), &evt); err != nil {
 		t.Fatalf("Handle: %v", err)
 	}
 	cn, err := repo.GetByOrderID(t.Context(), tenant.ID(tenantID), consignmentnote.OrderID(orderID))

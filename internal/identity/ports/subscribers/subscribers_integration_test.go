@@ -279,9 +279,25 @@ func wireRouter(t *testing.T, fx *fixture) (*gochannel.GoChannel, *messaging.Rou
 	if err != nil {
 		t.Fatalf("NewRouter: %v", err)
 	}
-	subscribers.Register(router, fx.families, fx.stampCache, nil, silentLog(), time.Now)
+	registerIdentityHandlers(t, router, pubsub, fx, nil, silentLog())
 	stop := runRouter(t, router)
 	return pubsub, router, stop
+}
+
+// registerIdentityHandlers builds the cqrs EventProcessor over the
+// router + registers every identity handler with the canonical
+// resilience stack (ADR 0067 — replaces the old subscribers.Register).
+func registerIdentityHandlers(t *testing.T, router *messaging.Router, sub message.Subscriber, fx *fixture, emailSender *subscribers.EmailSender, log *slog.Logger) {
+	t.Helper()
+	ep, err := messaging.NewEventProcessor(router.RawRouter(), sub, watermill.NewSlogLogger(silentLog()))
+	if err != nil {
+		t.Fatalf("NewEventProcessor: %v", err)
+	}
+	for _, h := range subscribers.Handlers(fx.families, fx.stampCache, emailSender, log, time.Now) {
+		if err := router.AddCqrsHandler(ep, h); err != nil {
+			t.Fatalf("AddCqrsHandler: %v", err)
+		}
+	}
 }
 
 // waitFor polls cond until true or timeout.
@@ -577,7 +593,7 @@ func TestReuseDetectedSIEM_LogsOnReuseRevocation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRouter: %v", err)
 	}
-	subscribers.Register(router, fx.families, fx.stampCache, nil, siemLog, time.Now)
+	registerIdentityHandlers(t, router, pubsub, fx, nil, siemLog)
 	stop := runRouter(t, router)
 	defer stop()
 
@@ -620,7 +636,7 @@ func TestReuseDetectedSIEM_IgnoresNonReuseRevocations(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRouter: %v", err)
 	}
-	subscribers.Register(router, fx.families, fx.stampCache, nil, siemLog, time.Now)
+	registerIdentityHandlers(t, router, pubsub, fx, nil, siemLog)
 	stop := runRouter(t, router)
 	defer stop()
 

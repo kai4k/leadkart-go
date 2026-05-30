@@ -2,13 +2,9 @@ package subscribers
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 
-	"github.com/ThreeDotsLabs/watermill/message"
-
-	"github.com/leadkart/leadkart-go/internal/common/messaging"
 	"github.com/leadkart/leadkart-go/internal/crm/app/command"
 	"github.com/leadkart/leadkart-go/internal/crm/domain/crmlead"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
@@ -56,23 +52,13 @@ func NewPurchasedLeadIngestor(cmd command.IngestPurchasedLeadHandler, log *slog.
 // Handle decodes the envelope + dispatches to the command handler.
 // Returns nil on duplicate (the command's AlreadyExisted result short-
 // circuits without error) — Watermill ACKs the message.
-func (h *PurchasedLeadIngestor) Handle(ctx context.Context, _ string, msg *message.Message) error {
-	if msg.Metadata.Get(messaging.HeaderEventType) != LeadPurchasedTopic {
-		// Topic-mismatch on the shared platform.events topic — not for us.
-		return nil
-	}
-	var evt platformevents.LeadPurchasedV1
-	if err := json.Unmarshal(msg.Payload, &evt); err != nil {
-		// retry — malformed envelope is a producer-side bug; the inbox dedup
-		// means the retry won't double-spend even if the producer fixes + replays.
-		return fmt.Errorf("crm subscribers: decode %s: %w", LeadPurchasedTopic, err)
-	}
+func (h *PurchasedLeadIngestor) Handle(ctx context.Context, evt *platformevents.LeadPurchasedV1) error {
 	out, err := h.cmd.Handle(ctx, command.IngestPurchasedLeadCommand{
 		PurchaseID:              evt.PurchaseID,
 		TenantID:                tenant.ID(evt.TenantID),
 		PlatformLeadID:          evt.PlatformLeadID,
 		PurchasedByMembershipID: evt.PurchasedByMembershipID,
-		Snapshot:                snapshotFromV1(evt),
+		Snapshot:                snapshotFromV1(*evt),
 	})
 	if err != nil {
 		// retry — command-side failure (DB hiccup / lock contention); the

@@ -2,14 +2,10 @@ package subscribers
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"time"
 
-	"github.com/ThreeDotsLabs/watermill/message"
-
-	"github.com/leadkart/leadkart-go/internal/common/messaging"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/refreshtoken"
 	"github.com/leadkart/leadkart-go/internal/identity/integrationevents"
@@ -34,9 +30,7 @@ import (
 // Single responsibility: family revocation only. The companion
 // [InvalidateSecurityStampCache] subscriber handles the cache
 // invalidation concern independently — same events, separate
-// subscriber, separate retry policy. See the `Concurrency contract`
-// docstring on that type for why the two concerns are split rather
-// than coupled inside one handler.
+// subscriber, separate retry policy.
 //
 // Failure mode: must-succeed. Family revocation is server-side state
 // that the rest of the system depends on (refresh-token reuse
@@ -45,6 +39,10 @@ import (
 // it (DefaultRetry: 5 attempts, 200ms→5s exponential) until the DB
 // confirms revocation. Idempotent — Family.Revoke is no-op on
 // already-revoked families.
+//
+// Post-cqrs (ADR 0067): topic routing + payload decode move to the
+// EventProcessor + WireAliasMarshaler; each handler is the typed
+// reaction only — no event_type filter, no json.Unmarshal.
 type RevokeFamiliesOnSecurityChange struct {
 	families refreshtoken.Repository
 	log      *slog.Logger
@@ -75,74 +73,38 @@ func NewRevokeFamiliesOnSecurityChange(
 	}
 }
 
-// HandlePasswordChanged is the [messaging.SubscriberHandler] for the
-// `identity.person_password_changed.v1` topic. Other events on the
-// shared topic short-circuit silently.
+// HandlePasswordChanged handles `identity.person_password_changed.v1`.
 func (h *RevokeFamiliesOnSecurityChange) HandlePasswordChanged(
-	ctx context.Context, _ string, msg *message.Message,
+	ctx context.Context, evt *integrationevents.PersonPasswordChangedV1,
 ) error {
-	expected := integrationevents.PersonPasswordChangedV1{}.Topic()
-	if msg.Metadata.Get(messaging.HeaderEventType) != expected {
-		return nil
-	}
-	var evt integrationevents.PersonPasswordChangedV1
-	if err := json.Unmarshal(msg.Payload, &evt); err != nil {
-		return fmt.Errorf("subscribers: decode %s: %w", expected, err)
-	}
 	return h.revokeAll(ctx, evt.PersonID.String(), "password_changed")
 }
 
-// HandleAnonymised is the handler for `identity.person_anonymised.v1`.
+// HandleAnonymised handles `identity.person_anonymised.v1`.
 func (h *RevokeFamiliesOnSecurityChange) HandleAnonymised(
-	ctx context.Context, _ string, msg *message.Message,
+	ctx context.Context, evt *integrationevents.PersonAnonymisedV1,
 ) error {
-	expected := integrationevents.PersonAnonymisedV1{}.Topic()
-	if msg.Metadata.Get(messaging.HeaderEventType) != expected {
-		return nil
-	}
-	var evt integrationevents.PersonAnonymisedV1
-	if err := json.Unmarshal(msg.Payload, &evt); err != nil {
-		return fmt.Errorf("subscribers: decode %s: %w", expected, err)
-	}
 	return h.revokeAll(ctx, evt.PersonID.String(), "person_anonymised")
 }
 
-// HandleGloballySuspended is the handler for
-// `identity.person_globally_suspended.v1`. Compliance/fraud bans
-// MUST kill every refresh-token family for that Person across
-// tenants — the global-suspension flag would otherwise leave
-// already-issued tokens valid until expiry, defeating the lockout
+// HandleGloballySuspended handles `identity.person_globally_suspended.v1`.
+// Compliance/fraud bans MUST kill every refresh-token family for that
+// Person across tenants — the global-suspension flag would otherwise
+// leave already-issued tokens valid until expiry, defeating the lockout
 // purpose. Per `security.md` SecurityStamp rotation triggers.
 func (h *RevokeFamiliesOnSecurityChange) HandleGloballySuspended(
-	ctx context.Context, _ string, msg *message.Message,
+	ctx context.Context, evt *integrationevents.PersonGloballySuspendedV1,
 ) error {
-	expected := integrationevents.PersonGloballySuspendedV1{}.Topic()
-	if msg.Metadata.Get(messaging.HeaderEventType) != expected {
-		return nil
-	}
-	var evt integrationevents.PersonGloballySuspendedV1
-	if err := json.Unmarshal(msg.Payload, &evt); err != nil {
-		return fmt.Errorf("subscribers: decode %s: %w", expected, err)
-	}
 	return h.revokeAll(ctx, evt.PersonID.String(), "globally_suspended")
 }
 
-// HandleEmailChanged is the handler for
-// `identity.person_email_changed.v1`. Email IS the global identity
-// primary; rotating it without invalidating sessions would let stale
-// JWTs continue to authenticate against the new email's account.
-// Auth0/Okta canon: every email change forces a re-login.
+// HandleEmailChanged handles `identity.person_email_changed.v1`. Email IS
+// the global identity primary; rotating it without invalidating sessions
+// would let stale JWTs continue to authenticate against the new email's
+// account. Auth0/Okta canon: every email change forces a re-login.
 func (h *RevokeFamiliesOnSecurityChange) HandleEmailChanged(
-	ctx context.Context, _ string, msg *message.Message,
+	ctx context.Context, evt *integrationevents.PersonEmailChangedV1,
 ) error {
-	expected := integrationevents.PersonEmailChangedV1{}.Topic()
-	if msg.Metadata.Get(messaging.HeaderEventType) != expected {
-		return nil
-	}
-	var evt integrationevents.PersonEmailChangedV1
-	if err := json.Unmarshal(msg.Payload, &evt); err != nil {
-		return fmt.Errorf("subscribers: decode %s: %w", expected, err)
-	}
 	return h.revokeAll(ctx, evt.PersonID.String(), "email_changed")
 }
 
@@ -150,22 +112,9 @@ func (h *RevokeFamiliesOnSecurityChange) HandleEmailChanged(
 // revoke — when a tenant Admin deactivates a Membership, only THAT
 // tenant's families for that Person should die; the Person may
 // continue to operate under another tenant's still-Active Membership.
-//
-// The single-Active-Membership invariant per `multi-tenancy.md`
-// guarantees at-most-one Active anyway, but a Person can be Inactive
-// in one tenant while still authenticated against an unrevoked
-// session — the deactivation cascade closes that gap.
 func (h *RevokeFamiliesOnSecurityChange) HandleMembershipDeactivated(
-	ctx context.Context, _ string, msg *message.Message,
+	ctx context.Context, evt *integrationevents.MembershipDeactivatedV1,
 ) error {
-	expected := integrationevents.MembershipDeactivatedV1{}.Topic()
-	if msg.Metadata.Get(messaging.HeaderEventType) != expected {
-		return nil
-	}
-	var evt integrationevents.MembershipDeactivatedV1
-	if err := json.Unmarshal(msg.Payload, &evt); err != nil {
-		return fmt.Errorf("subscribers: decode %s: %w", expected, err)
-	}
 	return h.revokeForTenant(ctx, evt.PersonID.String(), evt.TenantIDClaim.String(), "membership_deactivated")
 }
 

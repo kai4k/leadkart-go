@@ -56,7 +56,7 @@ func silentLog() *slog.Logger {
 // IdempotentReceiver + AuditWriter against the real testcontainers
 // pool, registers the CRM lead-purchased subscriber, and starts the
 // router goroutine. Cleanup stops the router + closes the pubsub.
-func wireCrmRouter(t *testing.T, pool *pgxpool.Pool, topic string) (*gochannel.GoChannel, func()) {
+func wireCrmRouter(t *testing.T, pool *pgxpool.Pool) (*gochannel.GoChannel, func()) {
 	t.Helper()
 	pubsub := gochannel.NewGoChannel(gochannel.Config{}, watermill.NewSlogLogger(silentLog()))
 	t.Cleanup(func() { _ = pubsub.Close() })
@@ -86,7 +86,20 @@ func wireCrmRouter(t *testing.T, pool *pgxpool.Pool, topic string) (*gochannel.G
 	leads := adapters.NewCrmLeadRepository(pool, tx)
 	ingest := subscribers.NewPurchasedLeadIngestor(
 		command.NewIngestPurchasedLeadHandler(leads, time.Now, func() crmlead.ID { return crmlead.ID(ids.NewV7().String()) }), silentLog())
-	subscribers.Register(router, ingest, topic, silentLog())
+	// cqrs wiring (ADR 0067): register the typed handler on the router via
+	// the EventProcessor. The `topic` arg is the bus topic the test
+	// publishes to; the EventProcessor derives its own subscribe topic
+	// from the event alias (platform.lead_purchased.v1 → platform.events),
+	// so this test publishes on platform.events (see publishLeadPurchased).
+	ep, err := messaging.NewEventProcessor(router.RawRouter(), pubsub, watermill.NewSlogLogger(silentLog()))
+	if err != nil {
+		t.Fatalf("NewEventProcessor: %v", err)
+	}
+	for _, h := range subscribers.Handlers(ingest) {
+		if err := router.AddCqrsHandler(ep, h); err != nil {
+			t.Fatalf("AddCqrsHandler: %v", err)
+		}
+	}
 
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
@@ -119,7 +132,7 @@ func wireCrmRouter(t *testing.T, pool *pgxpool.Pool, topic string) (*gochannel.G
 // envelope on the bus, complete with tenant + event_type metadata so
 // the router's TenantContextMiddleware + the subscriber's topic filter
 // both flow correctly.
-func publishLeadPurchased(t *testing.T, pubsub *gochannel.GoChannel, topic string, tenantID, purchaseID string) string {
+func publishLeadPurchased(t *testing.T, pubsub *gochannel.GoChannel, tenantID, purchaseID string) string {
 	t.Helper()
 	evt := platformevents.LeadPurchasedV1{
 		PurchaseID:              purchaseID,
@@ -156,7 +169,9 @@ func publishLeadPurchased(t *testing.T, pubsub *gochannel.GoChannel, topic strin
 	msg.Metadata.Set(messaging.HeaderEventType, subscribers.LeadPurchasedTopic)
 	msg.Metadata.Set(messaging.HeaderTenantID, tenantID)
 	msg.Metadata.Set(messaging.HeaderOccurredAt, time.Now().UTC().Format(time.RFC3339Nano))
-	if err := pubsub.Publish(topic, msg); err != nil {
+	// Publish to the module topic the cqrs EventProcessor subscribes to
+	// (derived from the event alias platform.lead_purchased.v1).
+	if err := pubsub.Publish(platformevents.Topic, msg); err != nil {
 		t.Fatalf("publish: %v", err)
 	}
 	return msgID
@@ -176,14 +191,13 @@ func TestH4_SubscriberTenantScoping_LandsUnderCorrectTenant_RLSIsolated(t *testi
 	defer cancel()
 
 	pool := crmRepoFixture(t)
-	const topic = "test.platform.events.h4"
 
-	pubsub, _ := wireCrmRouter(t, pool, topic)
+	pubsub, _ := wireCrmRouter(t, pool)
 
 	tenantA := ids.NewV7().String()
 	tenantB := ids.NewV7().String()
 	purchaseID := ids.NewV7().String()
-	publishLeadPurchased(t, pubsub, topic, tenantA, purchaseID)
+	publishLeadPurchased(t, pubsub, tenantA, purchaseID)
 
 	tx := pg.NewTransactor(pool)
 	leads := adapters.NewCrmLeadRepository(pool, tx)
@@ -213,15 +227,14 @@ func TestH9_DoubleDeliveryIdempotent(t *testing.T) {
 	defer cancel()
 
 	pool := crmRepoFixture(t)
-	const topic = "test.platform.events.h9"
 
-	pubsub, _ := wireCrmRouter(t, pool, topic)
+	pubsub, _ := wireCrmRouter(t, pool)
 
 	tenantID := ids.NewV7().String()
 	purchaseID := ids.NewV7().String()
 
 	// First delivery
-	publishLeadPurchased(t, pubsub, topic, tenantID, purchaseID)
+	publishLeadPurchased(t, pubsub, tenantID, purchaseID)
 	waitFor(t, func() bool {
 		tctx := withTenantCtxFromString(ctx, tenantID)
 		tx := pg.NewTransactor(pool)
@@ -238,7 +251,7 @@ func TestH9_DoubleDeliveryIdempotent(t *testing.T) {
 	// short-circuits on duplicate via GetBySourcePurchaseID — that is
 	// the LAYER-2 dedup. Both layers must hold for safe at-least-once
 	// delivery.
-	publishLeadPurchased(t, pubsub, topic, tenantID, purchaseID)
+	publishLeadPurchased(t, pubsub, tenantID, purchaseID)
 
 	// Give the subscriber a moment to process the second message.
 	time.Sleep(300 * time.Millisecond) // arch-test:wait-justified — replay-quiescence window for the second envelope; synctest can't model Watermill's cross-driver async path.

@@ -117,7 +117,19 @@ func TestSecurityStampInvalidation_PasswordChange_Returns401WithinFastPath(t *te
 	if err != nil {
 		t.Fatalf("messaging.NewRouter: %v", err)
 	}
-	subscribers.Register(router, wiring.Families, wiring.StampCache, nil, silentLogger(), time.Now)
+	// ADR 0067 — Register was deleted; build the cqrs EventProcessor over
+	// the router + register every identity handler with the canonical
+	// resilience stack (mirrors registerIdentityHandlers in the subscribers
+	// integration test, inlined here since that helper is in another package).
+	ep, err := messaging.NewEventProcessor(router.RawRouter(), pubsub, watermill.NewSlogLogger(silentLogger()))
+	if err != nil {
+		t.Fatalf("messaging.NewEventProcessor: %v", err)
+	}
+	for _, h := range subscribers.Handlers(wiring.Families, wiring.StampCache, nil, silentLogger(), time.Now) {
+		if err := router.AddCqrsHandler(ep, h); err != nil {
+			t.Fatalf("AddCqrsHandler: %v", err)
+		}
+	}
 
 	stackCtx, stackCancel := context.WithCancel(t.Context())
 	t.Cleanup(stackCancel)
