@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/ThreeDotsLabs/watermill"
+	"github.com/ThreeDotsLabs/watermill/components/cqrs"
 	"github.com/ThreeDotsLabs/watermill/message"
 	wmw "github.com/ThreeDotsLabs/watermill/message/router/middleware"
 
@@ -236,6 +237,40 @@ func (r *Router) AddSubscriber(handlerName string, topic string, fn SubscriberHa
 		retryMiddleware(r.retry),
 		wmw.Recoverer,
 	)
+}
+
+// RawRouter exposes the underlying Watermill *message.Router so the cqrs
+// EventProcessor ([NewEventProcessor]) can register its typed handlers on
+// the SAME router that already carries the global setup middleware
+// (CorrelationID / TraceContext / TenantContext). The per-handler
+// resilience stack is NOT applied here — use [Router.AddCqrsHandler] to
+// attach a cqrs handler with the canonical stack.
+func (r *Router) RawRouter() *message.Router { return r.router }
+
+// AddCqrsHandler registers one typed cqrs event handler on the router via
+// the EventProcessor, then wraps it with the IDENTICAL per-handler
+// resilience stack [AddSubscriber] uses — PoisonQueue → Idempotency →
+// Audit → Retry → Recoverer (see [AddSubscriber] for the ordering
+// rationale). The handler name for idempotency dedup is the cqrs handler's
+// own HandlerName().
+//
+// This is the cqrs equivalent of [AddSubscriber]: same middleware, same
+// DLQ isolation (the dead-letter consumer stays its own Recoverer-only
+// handler from [NewRouter]) — only dispatch + payload decode move into the
+// cqrs component + [WireAliasMarshaler].
+func (r *Router) AddCqrsHandler(p *cqrs.EventProcessor, eh cqrs.EventHandler) error {
+	h, err := p.AddHandler(eh)
+	if err != nil {
+		return fmt.Errorf("messaging: add cqrs handler %q: %w", eh.HandlerName(), err)
+	}
+	h.AddMiddleware(
+		r.poison,
+		IdempotencyMiddleware(r.receiver, eh.HandlerName()),
+		AuditMiddleware(r.auditW, r.log),
+		retryMiddleware(r.retry),
+		wmw.Recoverer,
+	)
+	return nil
 }
 
 // Running returns true once the router's Run loop is up — useful in
