@@ -626,7 +626,7 @@ func buildIdentityApp(pool *pgxpool.Pool, hybridCache *cache.HybridCache, cfg co
 
 				// Permission-elevation approval workflow (ADR 0055).
 				RequestPermissionElevation: command.NewRequestPermissionElevationHandler(permissionRequests, memberships, now, newPermissionRequestID),
-				ApprovePermissionRequest:   command.NewApprovePermissionRequestHandler(permissionRequests, memberships, now, newOverrideID),
+				ApprovePermissionRequest:   command.NewApprovePermissionRequestHandler(tx, permissionRequests, memberships, now, newOverrideID),
 				DenyPermissionRequest:      command.NewDenyPermissionRequestHandler(permissionRequests, memberships, now),
 				CancelPermissionRequest:    command.NewCancelPermissionRequestHandler(permissionRequests, now),
 			},

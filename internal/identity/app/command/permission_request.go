@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/leadkart/leadkart-go/internal/common/pg"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/permission"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/permissionrequest"
@@ -211,6 +212,7 @@ type ApprovePermissionRequestCommand struct {
 // Both writes share the SAME pg.UnitOfWork tx so either both succeed
 // or both fail — no orphan Approved-without-grant rows.
 type ApprovePermissionRequestHandler struct {
+	uow           pg.UnitOfWork
 	requests      permissionrequest.Repository
 	memberships   membership.Repository
 	now           func() time.Time
@@ -224,12 +226,13 @@ type ApprovePermissionRequestHandler struct {
 // passes `func() uuid.UUID { return ids.NewV7() }`; tests inject a
 // deterministic counter so the minted ID is pinnable.
 func NewApprovePermissionRequestHandler(
+	uow pg.UnitOfWork,
 	requests permissionrequest.Repository,
 	memberships membership.Repository,
 	now func() time.Time,
 	newOverrideID func() uuid.UUID,
 ) ApprovePermissionRequestHandler {
-	if requests == nil || memberships == nil {
+	if uow == nil || requests == nil || memberships == nil {
 		panic("command: NewApprovePermissionRequestHandler all dependencies required")
 	}
 	if newOverrideID == nil {
@@ -239,7 +242,7 @@ func NewApprovePermissionRequestHandler(
 		now = time.Now
 	}
 	return ApprovePermissionRequestHandler{
-		requests: requests, memberships: memberships, now: now, newOverrideID: newOverrideID,
+		uow: uow, requests: requests, memberships: memberships, now: now, newOverrideID: newOverrideID,
 	}
 }
 
@@ -302,40 +305,39 @@ func (h ApprovePermissionRequestHandler) Handle(
 	expiresAt := now.Add(time.Duration(req.DurationDays()) * 24 * time.Hour)
 	overrideID := h.newOverrideID()
 
-	// Step 1 — flip Request to Approved + record grant linkage.
-	if err := h.requests.UpdateByID(ctx, cmd.TenantID, cmd.RequestID, func(loaded *permissionrequest.Request) (bool, error) {
-		if err := loaded.Approve(cmd.ApproverMembershipID, cmd.DecisionReason, overrideID, expiresAt, now); err != nil {
-			return false, err
+	// Approve the request and grant the overlay permission atomically.
+	// A grant without its approval record (or an approval with no grant)
+	// is a security-relevant inconsistency, so both writes share one tx;
+	// each repo joins it via pg.TxFromContext. Tenant scope binds from
+	// ctx-tenancy (set by the authn middleware).
+	err = h.uow.WithinTx(ctx, pg.TxScopeTenant, func(ctx context.Context) error {
+		if err := h.requests.UpdateByID(ctx, cmd.TenantID, cmd.RequestID, func(loaded *permissionrequest.Request) (bool, error) {
+			if err := loaded.Approve(cmd.ApproverMembershipID, cmd.DecisionReason, overrideID, expiresAt, now); err != nil {
+				return false, err
+			}
+			return true, nil
+		}); err != nil {
+			return err
 		}
-		return true, nil
-	}); err != nil {
-		switch {
-		case errors.Is(err, permissionrequest.ErrNotPending):
-			return ErrPermissionRequestNotPending
-		case errors.Is(err, permissionrequest.ErrSelfApproval):
-			return ErrPermissionRequestSelfApproval
-		case errors.Is(err, permissionrequest.ErrNotFound):
-			return ErrPermissionRequestNotFound
-		default:
-			return fmt.Errorf("approve_permission_request: update request: %w", err)
-		}
+		return h.memberships.UpdateByID(ctx, req.TenantID(), req.RequesterMembershipID(), func(m *membership.Membership) (bool, error) {
+			if err := m.GrantPermission(req.Permission(), expiresAt, now); err != nil {
+				return false, err
+			}
+			return true, nil
+		})
+	})
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, permissionrequest.ErrNotPending):
+		return ErrPermissionRequestNotPending
+	case errors.Is(err, permissionrequest.ErrSelfApproval):
+		return ErrPermissionRequestSelfApproval
+	case errors.Is(err, permissionrequest.ErrNotFound):
+		return ErrPermissionRequestNotFound
+	default:
+		return fmt.Errorf("approve_permission_request: %w", err)
 	}
-
-	// Step 2 — grant the bounded permission on the requester's overlay.
-	if err := h.memberships.UpdateByID(ctx, req.TenantID(), req.RequesterMembershipID(), func(m *membership.Membership) (bool, error) {
-		if err := m.GrantPermission(req.Permission(), expiresAt, now); err != nil {
-			return false, err
-		}
-		return true, nil
-	}); err != nil {
-		// At this point the Request is already Approved. A subscriber-
-		// driven compensating action could re-Cancel + revoke; for v0.2
-		// we surface the error + leave the Request in Approved state.
-		// The Membership overlay grant is the load-bearing security
-		// surface; the audit log records the Approve event regardless.
-		return fmt.Errorf("approve_permission_request: grant override: %w", err)
-	}
-	return nil
 }
 
 // callerCanApprove evaluates the manager-or-platform rule.

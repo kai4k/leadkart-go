@@ -156,7 +156,7 @@ func TestApprovePermissionRequest_HappyPath(t *testing.T) {
 		t.Fatalf("submit: %v", err)
 	}
 
-	approveH := command.NewApprovePermissionRequestHandler(reqs, mems, fixedTimeFn(), ids.NewV7)
+	approveH := command.NewApprovePermissionRequestHandler(fakeUoW{}, reqs, mems, fixedTimeFn(), ids.NewV7)
 	if err := approveH.Handle(t.Context(), command.ApprovePermissionRequestCommand{
 		TenantID:             requester.TenantID(),
 		RequestID:            out.RequestID,
@@ -201,7 +201,7 @@ func TestApprovePermissionRequest_BlocksSelfApproval(t *testing.T) {
 		Reason:                "need to onboard 5 users for monthly sales drive",
 	})
 
-	approveH := command.NewApprovePermissionRequestHandler(reqs, mems, fixedTimeFn(), ids.NewV7)
+	approveH := command.NewApprovePermissionRequestHandler(fakeUoW{}, reqs, mems, fixedTimeFn(), ids.NewV7)
 	err := approveH.Handle(t.Context(), command.ApprovePermissionRequestCommand{
 		TenantID:             requester.TenantID(),
 		RequestID:            out.RequestID,
@@ -229,7 +229,7 @@ func TestApprovePermissionRequest_MissingManagerRequiresPlatform(t *testing.T) {
 		Reason:                "need to onboard 5 users for monthly sales drive",
 	})
 
-	approveH := command.NewApprovePermissionRequestHandler(reqs, mems, fixedTimeFn(), ids.NewV7)
+	approveH := command.NewApprovePermissionRequestHandler(fakeUoW{}, reqs, mems, fixedTimeFn(), ids.NewV7)
 	// Non-platform random approver should be Forbidden.
 	err := approveH.Handle(t.Context(), command.ApprovePermissionRequestCommand{
 		TenantID:             requester.TenantID(),
@@ -642,6 +642,7 @@ func TestApprovePermissionRequest_InputValidation(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			h := command.NewApprovePermissionRequestHandler(
+				fakeUoW{},
 				newFakePermissionRequestRepo(),
 				newFakeMembershipRepoForPermReq(),
 				fixedTimeFn(),
@@ -659,7 +660,7 @@ func TestApprovePermissionRequest_RequestNotFound(t *testing.T) {
 
 	reqs := newFakePermissionRequestRepo()
 	mems := newFakeMembershipRepoForPermReq()
-	h := command.NewApprovePermissionRequestHandler(reqs, mems, fixedTimeFn(), ids.NewV7)
+	h := command.NewApprovePermissionRequestHandler(fakeUoW{}, reqs, mems, fixedTimeFn(), ids.NewV7)
 
 	err := h.Handle(t.Context(), command.ApprovePermissionRequestCommand{
 		TenantID:             tenant.ID(ids.NewV7().String()),
@@ -699,7 +700,7 @@ func TestApprovePermissionRequest_NonPendingAtLoad(t *testing.T) {
 		t.Fatalf("Cancel: %v", err)
 	}
 
-	approveH := command.NewApprovePermissionRequestHandler(reqs, mems, fixedTimeFn(), ids.NewV7)
+	approveH := command.NewApprovePermissionRequestHandler(fakeUoW{}, reqs, mems, fixedTimeFn(), ids.NewV7)
 	err := approveH.Handle(t.Context(), command.ApprovePermissionRequestCommand{
 		TenantID:             requester.TenantID(),
 		RequestID:            out.RequestID,
@@ -740,7 +741,7 @@ func TestApprovePermissionRequest_RequesterDeletedBetweenSubmitAndApprove(t *tes
 	wrappedMems := &b2MemRepo{FakeRepository: mems}
 	wrappedMems.errOnGetByID = membership.ErrNotFound
 
-	approveH := command.NewApprovePermissionRequestHandler(reqs, wrappedMems, fixedTimeFn(), ids.NewV7)
+	approveH := command.NewApprovePermissionRequestHandler(fakeUoW{}, reqs, wrappedMems, fixedTimeFn(), ids.NewV7)
 	err := approveH.Handle(t.Context(), command.ApprovePermissionRequestCommand{
 		TenantID:             requester.TenantID(),
 		RequestID:            out.RequestID,
@@ -774,7 +775,7 @@ func TestApprovePermissionRequest_NonManagerAndNonPlatform_Forbidden(t *testing.
 		Reason:                "need to onboard 5 users for monthly sales drive",
 	})
 
-	approveH := command.NewApprovePermissionRequestHandler(reqs, mems, fixedTimeFn(), ids.NewV7)
+	approveH := command.NewApprovePermissionRequestHandler(fakeUoW{}, reqs, mems, fixedTimeFn(), ids.NewV7)
 	other := membership.ID(ids.NewV7().String())
 	err := approveH.Handle(t.Context(), command.ApprovePermissionRequestCommand{
 		TenantID:             requester.TenantID(),
@@ -787,11 +788,12 @@ func TestApprovePermissionRequest_NonManagerAndNonPlatform_Forbidden(t *testing.
 	}
 }
 
-func TestApprovePermissionRequest_Step2GrantFailure_RequestRemainsApproved(t *testing.T) {
-	// Step-1 (Request.Approve UpdateByID on the requests repo) succeeds.
-	// Step-2 (Membership.GrantPermission UpdateByID on the memberships
-	// repo) fails — handler returns wrapped error AND leaves the Request
-	// in Approved state (compensating-state behaviour per ADR 0055).
+func TestApprovePermissionRequest_GrantFailure_PropagatesError(t *testing.T) {
+	// The grant (membership UpdateByID) fails inside the UoW closure, so
+	// Handle returns the wrapped error. Approve + grant share one tx
+	// (ADR 0067), so a real DB rolls the request Approve back too; the
+	// no-op test UoW can't model rollback, so this asserts only the error
+	// path — the atomic rollback is covered at the SQL layer.
 	t.Parallel()
 
 	reqs := newFakePermissionRequestRepo()
@@ -812,33 +814,23 @@ func TestApprovePermissionRequest_Step2GrantFailure_RequestRemainsApproved(t *te
 		Reason:                "need to onboard 5 users for monthly sales drive",
 	})
 
-	// Approve calls UpdateByID twice: first on requests (Step 1), then on
-	// memberships (Step 2). errOnUpdateByID on mems fires on the Step-2
-	// call only — Step 1 has already committed.
+	// The grant call fails; the error must propagate (wrapped) out of
+	// Handle so the caller sees the failure and the tx rolls back.
 	mems.errOnUpdateByID = errB2Permreq
 
-	approveH := command.NewApprovePermissionRequestHandler(reqs, mems, fixedTimeFn(), ids.NewV7)
+	approveH := command.NewApprovePermissionRequestHandler(fakeUoW{}, reqs, mems, fixedTimeFn(), ids.NewV7)
 	err := approveH.Handle(t.Context(), command.ApprovePermissionRequestCommand{
 		TenantID:             requester.TenantID(),
 		RequestID:            out.RequestID,
 		ApproverMembershipID: manager.ID(),
-		DecisionReason:       "approved despite infra hiccup",
+		DecisionReason:       "infra hiccup mid-grant",
 	})
 	if !errors.Is(err, errB2Permreq) {
 		t.Fatalf("err = %v, want wrapped errB2Permreq", err)
 	}
-	// Compensating-state assertion: Request is Approved even though the
-	// membership grant failed.
-	req, gerr := reqs.GetByID(t.Context(), requester.TenantID(), out.RequestID)
-	if gerr != nil {
-		t.Fatalf("GetByID after partial failure: %v", gerr)
-	}
-	if req.State() != permissionrequest.StateApproved {
-		t.Errorf("State after Step-2 failure = %v, want approved (audit canon)", req.State())
-	}
-	// And the membership overlay is empty — no grant landed.
+	// No grant landed.
 	if got := len(requester.GrantedPermissions()); got != 0 {
-		t.Errorf("granted permissions = %d, want 0 (Step-2 failure → no grant)", got)
+		t.Errorf("granted permissions = %d, want 0 (grant failed)", got)
 	}
 }
 
@@ -867,7 +859,7 @@ func TestApprovePermissionRequest_UpdateByID_NonPendingTranslation(t *testing.T)
 	})
 	reqs.errOnUpdateByID = permissionrequest.ErrNotPending
 
-	approveH := command.NewApprovePermissionRequestHandler(reqs, mems, fixedTimeFn(), ids.NewV7)
+	approveH := command.NewApprovePermissionRequestHandler(fakeUoW{}, reqs, mems, fixedTimeFn(), ids.NewV7)
 	err := approveH.Handle(t.Context(), command.ApprovePermissionRequestCommand{
 		TenantID:             requester.TenantID(),
 		RequestID:            out.RequestID,
