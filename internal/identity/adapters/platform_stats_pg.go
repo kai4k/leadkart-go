@@ -1,9 +1,5 @@
-// platform_stats_pg.go — concrete pg-backed [query.PlatformStatsReader].
-//
-// Lives in the adapters package where pgx + sqlc are permitted per
-// ADR 0047 boundary discipline. The consumer-side interface
-// [query.PlatformStatsReader] is defined in
-// internal/identity/app/query/platform_stats.go.
+// platform_stats_pg.go — pg-backed [query.PlatformStatsReader] (ADR 0047).
+// Consumer-side interface: internal/identity/app/query/platform_stats.go.
 
 package adapters
 
@@ -22,8 +18,8 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/app/query"
 )
 
-// PlatformStatsReaderPG runs the dashboard COUNT(*) rollups under
-// platform scope so RLS-scoped tenant_memberships sees every tenant.
+// PlatformStatsReaderPG runs COUNT(*) rollups under platform scope so
+// tenant_memberships (RLS+FORCE) is visible across all tenants.
 type PlatformStatsReaderPG struct {
 	pool *pgxpool.Pool
 	tx   *pg.Transactor
@@ -41,11 +37,10 @@ func NewPlatformStatsReaderPG(pool *pgxpool.Pool, tx *pg.Transactor) *PlatformSt
 	return &PlatformStatsReaderPG{pool: pool, tx: tx, q: db.New(pool)}
 }
 
-// Compile-time interface satisfaction.
 var _ query.PlatformStatsReader = (*PlatformStatsReaderPG)(nil)
 
-// Base runs the base rollup as ONE round-trip (scalar subqueries)
-// inside a platform-scope tx so the counts share one snapshot.
+// Base runs the base rollup as a single round-trip so all counts share
+// one snapshot.
 func (r *PlatformStatsReaderPG) Base(ctx context.Context) (query.PlatformStatsBase, error) {
 	var b query.PlatformStatsBase
 	err := r.tx.WithinTxPgx(ctx, pg.TxScopePlatform, func(ctx context.Context, tx pgx.Tx) error {
@@ -68,10 +63,9 @@ func (r *PlatformStatsReaderPG) Base(ctx context.Context) (query.PlatformStatsBa
 	return b, nil
 }
 
-// Deltas runs the "new rows in interval" rollup as ONE round-trip.
-// intervalLabel is a Postgres interval string ("24 hours" / "7 days" /
-// "30 days"). The closed-set label validator lives in the app layer;
-// this adapter trusts the input.
+// Deltas runs the "new rows in interval" rollup as a single round-trip.
+// intervalLabel is a Postgres interval string ("24 hours", "7 days",
+// "30 days"); the app layer validates it before calling here.
 func (r *PlatformStatsReaderPG) Deltas(ctx context.Context, intervalLabel string) (query.PlatformStatsDeltaCounts, error) {
 	win, err := parsePgInterval(intervalLabel)
 	if err != nil {
@@ -97,11 +91,8 @@ func (r *PlatformStatsReaderPG) Deltas(ctx context.Context, intervalLabel string
 	return d, nil
 }
 
-// parsePgInterval maps the closed-set "<n> hours|days" label
-// (produced by windowLabelToInterval in the app layer) into a
-// pgtype.Interval whose field decomposition matches Postgres's own
-// `interval '<n> days'` / `interval '<n> hours'` construction exactly —
-// preserving the prior `now() - $1::interval` semantics.
+// parsePgInterval converts a "<n> hours|days" label into a pgtype.Interval
+// whose field decomposition matches Postgres's own interval construction.
 func parsePgInterval(label string) (pgtype.Interval, error) {
 	n, unit, ok := strings.Cut(label, " ")
 	if !ok {

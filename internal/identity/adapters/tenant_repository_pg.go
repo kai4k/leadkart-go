@@ -22,14 +22,9 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
 
-// TenantRepository is the pgx/sqlc-backed implementation of
-// [tenant.Repository]. Tenant is a global aggregate (each row IS a
-// tenant — non-RLS), so writes run under platform-scope to satisfy the
-// outbox table's RLS WITH CHECK policy. Reads bypass the transactor
-// since the tenants table has no policies attached.
-//
-// The repository owns domain↔row mapping; sqlc-generated *db.Queries hold
-// the SQL. Aggregates stay framework-free.
+// TenantRepository is the pgx/sqlc-backed [tenant.Repository]. Tenant is
+// a global aggregate (non-RLS); writes run under platform scope to satisfy
+// the outbox RLS WITH CHECK policy.
 type TenantRepository struct {
 	pool *pgxpool.Pool
 	tx   *pg.Transactor
@@ -42,19 +37,15 @@ func NewTenantRepository(pool *pgxpool.Pool, tx *pg.Transactor) *TenantRepositor
 	return &TenantRepository{pool: pool, tx: tx, q: db.New(pool)}
 }
 
-// Add satisfies [tenant.Repository]. When the supplied ctx carries an
-// active tx (a parent [pg.UnitOfWork] is in flight), Add joins that tx
-// rather than opening its own — this is the canonical multi-aggregate
-// composition path used by RegisterTenant.
+// Add satisfies [tenant.Repository]. Joins an ambient UoW tx when present
+// (canonical multi-aggregate composition path for RegisterTenant).
 func (r *TenantRepository) Add(ctx context.Context, t *tenant.Tenant) error {
 	return r.runInTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
 		return r.addOnTx(ctx, tx, t)
 	})
 }
 
-// addOnTx persists the aggregate against the supplied tx + drains
-// events to the outbox. Unexported — callers must use [Add] or the
-// surrounding [pg.UnitOfWork].
+// addOnTx inserts the tenant row and drains events. Unexported.
 func (r *TenantRepository) addOnTx(ctx context.Context, tx pgx.Tx, t *tenant.Tenant) error {
 	q := r.q.WithTx(tx)
 	if err := insertTenantRow(ctx, q, t); err != nil {
@@ -63,10 +54,8 @@ func (r *TenantRepository) addOnTx(ctx context.Context, tx pgx.Tx, t *tenant.Ten
 	return drainTenantEvents(ctx, tx, t)
 }
 
-// runInTx joins an ambient UoW tx when present (the transactional inbox or
-// a composed multi-aggregate write), else opens its own platform-scoped tx.
-// Mutators route through it so an inbox-wrapped / composed write commits in
-// the SAME tx (ADR 0067 Phase-4 UoW-join contract).
+// runInTx joins an ambient UoW tx when present, else opens a platform-scoped
+// tx (ADR 0067 Phase-4 UoW-join contract).
 func (r *TenantRepository) runInTx(ctx context.Context, fn func(ctx context.Context, tx pgx.Tx) error) error {
 	if tx, ok := pg.TxFromContext(ctx); ok {
 		return fn(ctx, tx)
@@ -93,10 +82,8 @@ func (r *TenantRepository) UpdateByID(
 		if !shouldPersist {
 			return nil
 		}
-		// Tenant.HardDelete() pushes Status → StatusDeleted +
-		// HardDeletedAt = now. Persist the audit-trail metadata via
-		// UpdateTenant; the SQL-level row-delete is reserved for the
-		// post-saga cleanup endpoint via HardDeleteTenant.
+		// Tenant.HardDelete() sets HardDeletedAt. Persist via UpdateTenant;
+		// the physical DELETE is the post-saga HardDeleteRow path.
 		if err := persistTenant(ctx, q, t); err != nil {
 			return err
 		}
@@ -138,11 +125,8 @@ func (r *TenantRepository) ListAll(ctx context.Context) ([]*tenant.Tenant, error
 	return out, nil
 }
 
-// HardDeleteRow runs the SQL-level DELETE for the post-saga cleanup
-// path. Caller MUST already have invoked Tenant.HardDelete() on the
-// aggregate (records terminal-state event + HardDeletedAt). This
-// method is exposed only for the platform-tier endpoint that flushes
-// the row after audit export per data-retention.md.
+// HardDeleteRow issues the physical DELETE for the post-saga cleanup.
+// Caller must have invoked Tenant.HardDelete() first. Platform-tier only.
 func (r *TenantRepository) HardDeleteRow(ctx context.Context, id tenant.ID) error {
 	uid, err := parseTenantID(id)
 	if err != nil {
@@ -270,9 +254,8 @@ func persistTenant(ctx context.Context, q *db.Queries, t *tenant.Tenant) error {
 	return nil
 }
 
-// drainTenantEvents pulls events off the aggregate, maps each through
-// integrationevents.FromDomainEvent, and writes the resulting V1
-// records to the outbox.
+// drainTenantEvents maps aggregate events to V1 integration events and
+// writes them to the outbox.
 func drainTenantEvents(ctx context.Context, tx pgx.Tx, t *tenant.Tenant) error {
 	evs := t.PullEvents()
 	if len(evs) == 0 {
@@ -293,12 +276,10 @@ func drainTenantEvents(ctx context.Context, tx pgx.Tx, t *tenant.Tenant) error {
 	return writeOutboxEvents(ctx, tx, uid, mapped)
 }
 
-// rowToTenant projects a sqlc-generated [db.IdentityTenant] row into the
-// domain aggregate. sqlc unifies the row type across GetTenantByID +
-// GetTenantBySlug + ListAllTenants because the SELECT column lists
-// match — one projector handles all three call sites.
+// rowToTenant projects a sqlc [db.IdentityTenant] row into the aggregate.
+// Single projector covers GetTenantByID, GetTenantBySlug, and ListAllTenants.
 //
-//nolint:gocyclo // Mechanical projection — readability beats helper-function indirection here.
+//nolint:gocyclo // Mechanical projection — splitting into helpers adds no clarity.
 func rowToTenant(row db.IdentityTenant) (*tenant.Tenant, error) {
 	tID := tenant.ID(pgconv.UUIDFromPg(row.ID).String())
 	s, err := slug.New(row.Slug)
@@ -354,10 +335,9 @@ func rowToTenant(row db.IdentityTenant) (*tenant.Tenant, error) {
 	}), nil
 }
 
-// buildStatutory rehydrates the [tenant.Statutory] composite from
-// possibly-empty column strings. All three empty → zero VO; partial
-// state attempts to NewStatutory and may surface validation errors
-// (e.g. PAN/GST embedded-PAN mismatch from corrupted historical data).
+// buildStatutory rehydrates [tenant.Statutory] from possibly-empty column
+// strings. All-empty returns a zero VO; partial state may surface validation
+// errors (e.g. PAN/GST mismatch from corrupted historical data).
 func buildStatutory(gstStr, panStr, drugLicenceStr string) (tenant.Statutory, error) {
 	if gstStr == "" && panStr == "" && drugLicenceStr == "" {
 		return tenant.Statutory{}, nil
@@ -428,7 +408,7 @@ func buildDisplayPreferences(locale, tz, dateFormat, currency string) (tenant.Di
 	return tenant.NewDisplayPreferences(locale, tz, dateFormat, currency)
 }
 
-// parseTenantID converts the domain ID string into a uuid.UUID.
+// parseTenantID parses the domain ID into a uuid.UUID.
 func parseTenantID(id tenant.ID) (uuid.UUID, error) {
 	parsed, err := uuid.Parse(id.String())
 	if err != nil {
@@ -437,22 +417,16 @@ func parseTenantID(id tenant.ID) (uuid.UUID, error) {
 	return parsed, nil
 }
 
-// isUniqueViolation reports whether err wraps a Postgres unique-constraint
+// isUniqueViolation reports whether err is a Postgres unique-constraint
 // violation (SQLSTATE [pg.SQLStateUniqueViolation]).
 func isUniqueViolation(err error) bool {
 	pgErr, ok := errors.AsType[*pgconn.PgError](err)
 	return ok && pgErr.Code == pg.SQLStateUniqueViolation
 }
 
-// passwordPolicyInt32 narrows a domain-validated int (always in
-// [0, 1440] per [tenant.NewPasswordPolicy] bounds — min length is
-// small, max-failed-attempts ≤ 50, lockout-minutes ≤ 24h) into the
-// int32 the sqlc-generated params struct uses. The aggregate VO has
-// already enforced the ranges, so out-of-range values here mean
-// in-process corruption rather than user input — panic is the right
-// behaviour. Mirrors stdlib precedent (e.g. regexp.MustCompile)
-// where a "host is broken" branch panics rather than poisoning the
-// signature with an error return at every call site.
+// passwordPolicyInt32 narrows a domain-validated int to int32.
+// The aggregate VO has already enforced the range ([0, 1440]); an
+// out-of-range value here means in-process corruption — panic is correct.
 func passwordPolicyInt32(v int) int32 {
 	if v < 0 || v > 1<<30 {
 		panic(fmt.Sprintf("tenant repo: password policy int %d out of bounds — domain VO invariant violated", v))

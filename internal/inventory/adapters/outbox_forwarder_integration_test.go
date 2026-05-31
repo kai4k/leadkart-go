@@ -1,12 +1,10 @@
 //go:build integration
 
-// outbox_forwarder_integration_test.go — producer→outbox contract for
-// inventory. Post-ADR-0064: the per-module hand-rolled forwarder is gone;
-// one library Watermill Forwarder (cmd/worker) drains the shared
-// common.outbox relay. This verifies the PRODUCER side — a repository write
-// enqueues the right enveloped event to common.outbox — via
-// messagingtest.DrainOutbox (relay read + envelope unwrap). The forwarder
-// hop is library code, not re-verified here.
+// outbox_forwarder_integration_test.go — producer-side outbox contract
+// for inventory (ADR 0064). The per-module forwarder is replaced by a
+// shared Watermill Forwarder in cmd/worker. These tests verify the
+// producer: a repository write enqueues the correct enveloped event to
+// common.outbox. The forwarder hop is library code and is not re-verified.
 
 package adapters_test
 
@@ -26,10 +24,9 @@ import (
 	"github.com/leadkart/leadkart-go/internal/inventory/integrationevents"
 )
 
-// TestInventoryOutbox_ProductCreated_EnqueuesEnvelopedEvent proves creating
-// a product writes one enveloped row to common.outbox carrying the
-// inventory destination topic, event_type + tenant metadata, and the V1
-// payload the forwarder will republish.
+// TestInventoryOutbox_ProductCreated_EnqueuesEnvelopedEvent asserts that
+// creating a product writes one enveloped row to common.outbox with the
+// inventory topic, correct event_type, tenant metadata, and V1 payload.
 func TestInventoryOutbox_ProductCreated_EnqueuesEnvelopedEvent(t *testing.T) {
 	// arch-test:no-parallel — cross-tenant scan; uses TruncateAll
 	sharedPG.TruncateAll(t)
@@ -60,9 +57,8 @@ func TestInventoryOutbox_ProductCreated_EnqueuesEnvelopedEvent(t *testing.T) {
 		t.Fatalf("products.Add: %v", err)
 	}
 
-	// The shared common.outbox relay (ADR 0064) also carries the
-	// tenant-seed's identity event; assert on THIS module's event by
-	// filtering to the inventory destination topic.
+	// The relay also carries the tenant-seed identity event (ADR 0064);
+	// filter to the inventory topic to isolate this module's event.
 	rows := messagingtest.RowsForTopic(messagingtest.DrainOutbox(t.Context(), t, pool), integrationevents.Topic)
 	if len(rows) != 1 {
 		t.Fatalf("inventory outbox rows: got %d want 1", len(rows))
@@ -93,10 +89,9 @@ func TestInventoryOutbox_ProductCreated_EnqueuesEnvelopedEvent(t *testing.T) {
 	}
 }
 
-// TestInventoryOutbox_ProductCreated_EnqueuesExactlyOnce proves the
-// producer writes exactly one outbox row per create — no duplicate enqueue.
-// (Replaces the old "second ForwardOnce returns 0" test: drain idempotency
-// is now the library forwarder's DeleteOnAck concern, per ADR 0064.)
+// TestInventoryOutbox_ProductCreated_EnqueuesExactlyOnce asserts the
+// producer writes exactly one row per create. Drain idempotency is the
+// library forwarder's concern (ADR 0064).
 func TestInventoryOutbox_ProductCreated_EnqueuesExactlyOnce(t *testing.T) {
 	// arch-test:no-parallel — cross-tenant scan; uses TruncateAll
 	sharedPG.TruncateAll(t)
@@ -117,8 +112,7 @@ func TestInventoryOutbox_ProductCreated_EnqueuesExactlyOnce(t *testing.T) {
 		t.Fatalf("Add: %v", err)
 	}
 
-	// Filter to the inventory destination topic — the shared relay also
-	// holds the tenant-seed's identity event (ADR 0064).
+	// Filter to inventory topic — relay also holds the identity seed event.
 	rows := messagingtest.RowsForTopic(messagingtest.DrainOutbox(t.Context(), t, pool), integrationevents.Topic)
 	if len(rows) != 1 {
 		t.Fatalf("inventory outbox rows: got %d want 1 (exactly-once enqueue)", len(rows))

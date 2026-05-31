@@ -1,18 +1,12 @@
-// impersonation_audit_pg.go — persistent audit-log writer for the
-// platform-operator impersonation flow.
+// impersonation_audit_pg.go — persistent audit writer for the platform
+// impersonation flow (ADR 0051, Wave 9.1b).
 //
-// Per ADR 0051 (Wave 9.1b): types renamed from `impersonation.*` to
-// `ImpersonationAudit*` to avoid collision in the flat adapters
-// package, where multiple Pg-backed writers coexist. The interface
-// lives here for now because v0.2 has no consumer; when Wave 4.1's
-// audit-log enrichment subscriber actually wires this up, the
-// interface should migrate to `internal/identity/domain/impersonation/`
-// per Cheney "accept interfaces, return structs."
-//
-// Wired in Phase 2+ when the AuditLoggingMiddleware learns to surface
-// the X-Impersonation-Session-Id header → operator-correlation row
-// via this writer. v0.2 has the table migration shipped (20260507000006)
-// but no row insertions yet.
+// Types are prefixed ImpersonationAudit* to avoid name collisions in
+// the flat adapters package. The interface lives here pending a real
+// consumer; when Wave 4.1 wires X-Impersonation-Session-Id →
+// operator-correlation rows it should migrate to
+// internal/identity/domain/impersonation/ per Cheney. Migration
+// 20260507000006 ships the table; row insertions start in Phase 2+.
 
 package adapters
 
@@ -27,9 +21,8 @@ import (
 	"github.com/leadkart/leadkart-go/internal/common/ids"
 )
 
-// ImpersonationAuditEntry is one persistent activity row written for
-// each request the operator runs under an impersonation session.
-// Mirrors the .NET `AdminImpersonationAudit` Marten document shape.
+// ImpersonationAuditEntry is one activity row per impersonated request.
+// Mirrors the .NET AdminImpersonationAudit document shape.
 type ImpersonationAuditEntry struct {
 	ID             string
 	SessionID      string // empty when system jobs / tests bypass middleware
@@ -44,11 +37,8 @@ type ImpersonationAuditEntry struct {
 }
 
 // ImpersonationAuditWriter persists [ImpersonationAuditEntry] rows.
-// Implementations:
-//   - [ImpersonationAuditWriterPG]   writes to
-//     common.admin_impersonation_audit.
-//   - [ImpersonationAuditWriterNoop] swallows everything (tests / dev
-//     where the audit table isn't migrated).
+// [ImpersonationAuditWriterPG] writes to common.admin_impersonation_audit;
+// [ImpersonationAuditWriterNoop] is a no-op for tests and pre-migration dev.
 type ImpersonationAuditWriter interface {
 	Write(ctx context.Context, entry ImpersonationAuditEntry) error
 }
@@ -58,9 +48,7 @@ type ImpersonationAuditWriterPG struct {
 	pool *pgxpool.Pool
 }
 
-// NewImpersonationAuditWriterPG wires the writer against a pgxpool.
-// The admin_impersonation_audit table is non-RLS — no tenant context
-// needed for the INSERT.
+// NewImpersonationAuditWriterPG wires the writer. The table is non-RLS.
 func NewImpersonationAuditWriterPG(pool *pgxpool.Pool) *ImpersonationAuditWriterPG {
 	if pool == nil {
 		panic("impersonation: NewImpersonationAuditWriterPG pool required")
@@ -68,7 +56,7 @@ func NewImpersonationAuditWriterPG(pool *pgxpool.Pool) *ImpersonationAuditWriter
 	return &ImpersonationAuditWriterPG{pool: pool}
 }
 
-// Write satisfies [ImpersonationAuditWriter].
+// Write satisfies [ImpersonationAuditWriter]. Auto-populates ID and StartedAtUTC when zero.
 func (w *ImpersonationAuditWriterPG) Write(ctx context.Context, e ImpersonationAuditEntry) error {
 	if e.ID == "" {
 		e.ID = ids.NewV7().String()
@@ -111,8 +99,7 @@ func (w *ImpersonationAuditWriterPG) Write(ctx context.Context, e ImpersonationA
 	return nil
 }
 
-// ImpersonationAuditWriterNoop swallows every Write. Used in tests +
-// bootstrap before the common schema is migrated.
+// ImpersonationAuditWriterNoop is a no-op Write for tests and pre-migration bootstrap.
 type ImpersonationAuditWriterNoop struct{}
 
 // Write satisfies [ImpersonationAuditWriter].

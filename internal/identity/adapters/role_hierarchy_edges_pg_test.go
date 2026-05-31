@@ -62,7 +62,7 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
 
-// freshEdge mints an Edge with a stable test timestamp.
+// freshEdge mints an Edge with the test timestamp.
 func freshEdge(t *testing.T, tid tenant.ID, child, parent role.ID) *rolehierarchy.Edge {
 	t.Helper()
 	e, err := rolehierarchy.New(
@@ -80,9 +80,9 @@ func freshEdge(t *testing.T, tid tenant.ID, child, parent role.ID) *rolehierarch
 	return e
 }
 
-// SQL-contract: partial unique index uq_role_hierarchy_active_edge_per_child
-// (predicate `WHERE is_active`) raises SQLSTATE 23505 on a second active
-// edge for the same child → ErrEdgeAlreadyExists.
+// SQL-contract: uq_role_hierarchy_active_edge_per_child (WHERE is_active)
+// raises SQLSTATE 23505 on a second active edge for the same child →
+// ErrEdgeAlreadyExists.
 func TestEdgeRepository_Add_RejectsDuplicateActiveChildEdge(t *testing.T) {
 	t.Parallel()
 	pool := repoFixture(t)
@@ -110,9 +110,8 @@ func TestEdgeRepository_Add_RejectsDuplicateActiveChildEdge(t *testing.T) {
 	}
 }
 
-// SQL-contract: DB trigger edge_check_cycle (SECURITY INVOKER on the
-// edges table) rejects an edge that would close a multi-hop cycle in
-// the active-edge graph. Trigger output translated to ErrCycle.
+// SQL-contract: DB trigger edge_check_cycle rejects a multi-hop cycle
+// in the active-edge graph → ErrCycle.
 func TestEdgeRepository_Add_RejectsCycle(t *testing.T) {
 	t.Parallel()
 	pool := repoFixture(t)
@@ -130,21 +129,20 @@ func TestEdgeRepository_Add_RejectsCycle(t *testing.T) {
 			t.Fatalf("seed %s: %v", r.Name(), err)
 		}
 	}
-	// b → a (legal).
+	// b → a (legal edge).
 	if err := edges.Add(ctx, freshEdge(t, tn.ID(), b.ID(), a.ID())); err != nil {
 		t.Fatalf("b → a: %v", err)
 	}
-	// a → b would close the cycle — DB trigger fires.
+	// a → b closes the cycle — trigger fires.
 	err := edges.Add(ctx, freshEdge(t, tn.ID(), a.ID(), b.ID()))
 	if !errors.Is(err, rolehierarchy.ErrCycle) {
 		t.Fatalf("expected ErrCycle, got %v", err)
 	}
 }
 
-// SQL-contract: composite FK fk_edges_parent_same_tenant declaratively
-// rejects an edge whose parent role belongs to another tenant.
-// Declarative cross-tenant safety per ADR 0058 (replaces the Wave 9.1d
-// SECURITY DEFINER trigger). Translated to ErrCrossTenant.
+// SQL-contract: composite FK fk_edges_parent_same_tenant rejects an edge
+// with a parent from another tenant (ADR 0058, replaces SECURITY DEFINER
+// trigger) → ErrCrossTenant.
 func TestEdgeRepository_Add_RejectsCrossTenant(t *testing.T) {
 	t.Parallel()
 	pool := repoFixture(t)
@@ -166,9 +164,7 @@ func TestEdgeRepository_Add_RejectsCrossTenant(t *testing.T) {
 		t.Fatalf("Add B: %v", err)
 	}
 
-	// Attempt to add an edge in tenant A whose parent is rB (tenant B).
-	// Composite FK fk_edges_parent_same_tenant fires — declarative
-	// replacement for the Wave 9.1d SECURITY DEFINER trigger per ADR 0058.
+	// Edge in tenant A with parent from tenant B — FK fires.
 	bad, err := rolehierarchy.New(
 		rolehierarchy.ID(ids.NewV7().String()),
 		tnA.ID(),
@@ -187,20 +183,11 @@ func TestEdgeRepository_Add_RejectsCrossTenant(t *testing.T) {
 	}
 }
 
-// SQL-contract: Remove is SOFT-delete (physical row survives, only
-// `removed_at` flips non-NULL) AND the partial index
-// `uq_role_hierarchy_active_edge_per_child WHERE removed_at IS NULL`
-// hides it from the read path. The two halves of the contract:
+// SQL-contract: Remove is SOFT-delete (removed_at flips non-NULL).
+// The partial index hides the row from GetActiveByChild. Two halves:
 //
-//  1. Physical row stays — direct SELECT bypassing the adapter
-//     proves the UPDATE didn't DELETE.
-//  2. The partial index + WHERE removed_at IS NULL predicate on the
-//     read path means GetActiveByChild can't see it.
-//
-// The fake's "Remove → ErrEdgeNotFound" assertion mirrors observable
-// behaviour; only the SQL test proves the PG-specific mechanism (soft
-// vs. hard delete + partial-index filter) actually fires. Sharpened
-// per ADR 0062 to be a SQL-contract test, not a logic round-trip.
+//  1. Physical row survives: adapter-bypass SELECT confirms removed_at is set.
+//  2. GetActiveByChild returns ErrEdgeNotFound after the soft-delete.
 func TestEdgeRepository_GetActiveByChild_FiltersSoftDeleted(t *testing.T) {
 	t.Parallel()
 	pool := repoFixture(t)
@@ -229,12 +216,7 @@ func TestEdgeRepository_GetActiveByChild_FiltersSoftDeleted(t *testing.T) {
 		t.Fatalf("Remove: %v", rmErr)
 	}
 
-	// SQL-contract part 1: physical row survives the soft delete.
-	// Direct SELECT via OWNER DSN — bypasses RLS so we can inspect the
-	// physical row state regardless of tenant scope (the app pool's
-	// RLS policy on this table uses raw current_setting::boolean which
-	// requires app.is_platform to be pre-set; the owner role has no
-	// such constraint).
+	// Part 1: direct SELECT via OWNER DSN proves the row survives.
 	ownerDB, openErr := sql.Open("pgx", sharedPG.OwnerDSN())
 	if openErr != nil {
 		t.Fatalf("open owner DB: %v", openErr)
@@ -251,29 +233,17 @@ func TestEdgeRepository_GetActiveByChild_FiltersSoftDeleted(t *testing.T) {
 		t.Fatal("physical row's removed_at is NULL — Remove behaved as hard-delete, contract broken")
 	}
 
-	// SQL-contract part 2: partial-index `WHERE removed_at IS NULL`
-	// hides the soft-deleted row from GetActiveByChild.
+	// Part 2: WHERE removed_at IS NULL predicate hides row from GetActiveByChild.
 	if _, err := edges.GetActiveByChild(ctx, tn.ID(), c.ID()); !errors.Is(err, rolehierarchy.ErrEdgeNotFound) {
 		t.Fatalf("expected ErrEdgeNotFound after soft-delete (partial-index filter), got %v", err)
 	}
 }
 
-// SQL-contract: GetAncestorsByChild uses a Postgres-specific WITH
-// RECURSIVE CTE to walk upward through the edge graph. The fake's
-// in-memory loop returns the correct logical result on small chains,
-// but only the SQL execution proves the recursive CTE actually
-// evaluates correctly under Postgres planner discipline.
+// SQL-contract: GetAncestorsByChild uses WITH RECURSIVE to walk the edge
+// graph. Two halves:
 //
-// Two halves of the SQL contract:
-//
-//  1. EXPLAIN plan asserts the query uses a Recursive CTE node
-//     (`CTE Scan` over a `Recursive Union`) — proves the plan is
-//     the recursive shape, not a JOIN rewrite that happens to
-//     return the right rows on a 3-deep chain.
-//  2. Observable result: 3-node chain (c → p → gp) yields the
-//     two-edge ancestor list in depth-first order.
-//
-// Canonical SQL-contract sharpening per ADR 0062: plan + observable.
+//  1. EXPLAIN proves the plan contains a Recursive CTE node.
+//  2. Observable: 3-node chain (c → p → gp) yields a two-edge ancestor list.
 func TestEdgeRepository_GetAncestorsByChild_RecursiveCTEWalksUpward(t *testing.T) {
 	t.Parallel()
 	pool := repoFixture(t)
@@ -292,7 +262,7 @@ func TestEdgeRepository_GetAncestorsByChild_RecursiveCTEWalksUpward(t *testing.T
 			t.Fatalf("seed %s: %v", r.Name(), err)
 		}
 	}
-	// p → gp, c → p.
+	// Build chain: p → gp, c → p.
 	if err := edges.Add(ctx, freshEdge(t, tn.ID(), p.ID(), gp.ID())); err != nil {
 		t.Fatalf("p → gp: %v", err)
 	}
@@ -300,13 +270,9 @@ func TestEdgeRepository_GetAncestorsByChild_RecursiveCTEWalksUpward(t *testing.T
 		t.Fatalf("c → p: %v", err)
 	}
 
-	// SQL-contract part 1: EXPLAIN proves the plan is a recursive CTE.
-	// Any rewrite of the sqlc query (flat JOIN, app-side loop) would
-	// silently change the asymptotic shape but might still return the
-	// correct result on a 3-deep chain.
-	//
-	// Acquire a connection + tx so SET LOCAL takes effect (canonical
-	// pattern matched from keyset_explain_integration_test.go).
+	// Part 1: EXPLAIN under RLS scope proves the recursive CTE.
+	// A flat JOIN would produce the right result on a 3-deep chain but
+	// have a different asymptotic shape — the plan check catches that.
 	conn, err := pool.Acquire(t.Context())
 	if err != nil {
 		t.Fatalf("acquire: %v", err)
@@ -351,7 +317,7 @@ func TestEdgeRepository_GetAncestorsByChild_RecursiveCTEWalksUpward(t *testing.T
 		t.Fatalf("EXPLAIN plan does not show a recursive CTE node — got:\n%s", plan)
 	}
 
-	// SQL-contract part 2: observable result.
+	// Part 2: observable result.
 	ancs, err := edges.GetAncestorsByChild(ctx, tn.ID(), c.ID())
 	if err != nil {
 		t.Fatalf("GetAncestorsByChild: %v", err)
@@ -359,7 +325,7 @@ func TestEdgeRepository_GetAncestorsByChild_RecursiveCTEWalksUpward(t *testing.T
 	if len(ancs) != 2 {
 		t.Fatalf("ancestors: got %d want 2", len(ancs))
 	}
-	// Depth-first: c's own edge (c→p) first, then p's edge (p→gp).
+	// Depth-first order: c→p first, then p→gp.
 	if ancs[0].ChildRoleID() != c.ID() || ancs[0].ParentRoleID() != p.ID() {
 		t.Errorf("ancestor[0]: got (%s→%s) want (%s→%s)",
 			ancs[0].ChildRoleID(), ancs[0].ParentRoleID(), c.ID(), p.ID())
@@ -370,10 +336,9 @@ func TestEdgeRepository_GetAncestorsByChild_RecursiveCTEWalksUpward(t *testing.T
 	}
 }
 
-// SQL-contract: DB CHECK chk_edge_no_self_loop is the schema-level
-// backstop when the aggregate's own ErrSelfReference is bypassed via
-// UnmarshalFromDB (which doesn't re-validate). The check_violation must
-// translate back to ErrSelfReference at the adapter layer.
+// SQL-contract: chk_edge_no_self_loop is the schema backstop when the
+// aggregate's ErrSelfReference is bypassed via UnmarshalFromDB; the
+// check_violation must translate to ErrSelfReference at the adapter layer.
 func TestEdgeRepository_Add_RejectsSelfReference(t *testing.T) {
 	t.Parallel()
 	pool := repoFixture(t)
@@ -388,12 +353,8 @@ func TestEdgeRepository_Add_RejectsSelfReference(t *testing.T) {
 	if err := roles.Add(ctx, r); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	// Aggregate would reject this; bypass via direct construction is
-	// blocked by ErrSelfReference. So instead we prove the DB CHECK
-	// constraint is a backstop by constructing via UnmarshalFromDB
-	// (which doesn't re-validate) and shipping straight to Add — the
-	// adapter must translate the resulting check_violation to
-	// ErrSelfReference.
+	// Bypass the aggregate constructor via UnmarshalFromDB (no re-validation)
+	// to trigger the DB CHECK. The adapter must translate to ErrSelfReference.
 	bad := rolehierarchy.UnmarshalFromDB(rolehierarchy.Snapshot{
 		ID:           rolehierarchy.ID(ids.NewV7().String()),
 		TenantID:     tn.ID(),

@@ -11,10 +11,8 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/app/query"
 )
 
-// fakePlatformStatsReader is an inline minimal
-// [query.PlatformStatsReader]. The handler is a pure projection from
-// the two reader calls — the fake captures arguments + returns canned
-// shapes / errors.
+// fakePlatformStatsReader is an inline minimal [query.PlatformStatsReader]
+// that captures arguments and returns canned shapes or errors.
 type fakePlatformStatsReader struct {
 	base       query.PlatformStatsBase
 	baseErr    error
@@ -49,10 +47,10 @@ var _ query.PlatformStatsReader = (*fakePlatformStatsReader)(nil)
 func TestParseDeltaWindow_ClosedSet(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
-		in       string
-		wantDur  time.Duration
-		wantLbl  string
-		wantErr  bool
+		in      string
+		wantDur time.Duration
+		wantLbl string
+		wantErr bool
 	}{
 		{"", 0, "", false},
 		{"24h", 24 * time.Hour, "24h", false},
@@ -161,8 +159,8 @@ func TestPlatformStats_WithWindow_CallsDeltasAndPopulates(t *testing.T) {
 func TestPlatformStats_WindowLabelMappings(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
-		label    string
-		wantArg  string
+		label   string
+		wantArg string
 	}{
 		{"24h", "24 hours"},
 		{"7d", "7 days"},
@@ -222,7 +220,7 @@ func TestCachedPlatformStats_HappyPath_CachesAndReturns(t *testing.T) {
 		t.Errorf("TenantsTotal = %d", got.TenantsTotal)
 	}
 	hc.L1.Wait()
-	// Second call — cache hit; base() should NOT be called again.
+	// Second call — cache hit; base() must not be called again.
 	if _, err := h.Handle(t.Context(), query.PlatformStatsQuery{WindowLabel: ""}); err != nil {
 		t.Fatalf("Handle 2: %v", err)
 	}
@@ -233,9 +231,7 @@ func TestCachedPlatformStats_HappyPath_CachesAndReturns(t *testing.T) {
 
 func TestCachedPlatformStats_InvalidWindowKey_FactoryError(t *testing.T) {
 	t.Parallel()
-	// Calling Handle with an unknown label (e.g. "junk") routes through
-	// the cache factory, which calls ParseDeltaWindow → returns
-	// ErrPlatformStatsInvalidWindow.
+	// Unknown label routes through the cache factory → ParseDeltaWindow → ErrPlatformStatsInvalidWindow.
 	r := &fakePlatformStatsReader{}
 	inner := query.NewPlatformStatsHandler(r)
 	hc := newHybridCacheForTest(t)

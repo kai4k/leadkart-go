@@ -1,17 +1,8 @@
 // concurrency_arch_test.go — Principle 8: Concurrency Safety.
 //
-// Per Bryan Mills "Rethinking Concurrency Patterns" (GopherCon 2018,
-// still canon), Cheney "always pass ctx", and Go's race detector
-// canon: concurrency is bounded, ctx-aware, and goroutine-leak-free.
-// Request paths never spawn naked goroutines; channel buffers are
-// bounded by const; integration tests use goleak.VerifyTestMain to
-// detect leaks.
-//
-// Tests in this file:
-//   48. TestArch_NoNakedGoroutinesInHandlers
-//   49. TestArch_BoundedChannelBuffers
-//   50. TestArch_GoleakInIntegrationTests
-//   51. TestArch_NoTimeSleepInRequestPath
+// Bryan Mills GopherCon 2018: concurrency is bounded, ctx-aware, goroutine-leak-free.
+// No naked goroutines in request paths; channel buffers bounded; integration
+// tests wire goleak.
 
 package architecture_test
 
@@ -26,14 +17,8 @@ import (
 	"testing"
 )
 
-// ----------------------------------------------------------------------------
-// Test 48: TestArch_NoNakedGoroutinesInHandlers
-// ----------------------------------------------------------------------------
-//
-// app/command/ and app/query/ files cannot contain `go ` statements
-// (no fire-and-forget goroutines from request paths). Background work
-// goes through the outbox + a subscriber, NOT a goroutine the request
-// can't track.
+// TestArch_NoNakedGoroutinesInHandlers asserts app/command/ and app/query/ have
+// no `go` statements. Background work goes through outbox + subscriber.
 // Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_NoNakedGoroutinesInHandlers(t *testing.T) {
 	t.Parallel()
@@ -75,17 +60,8 @@ func TestArch_NoNakedGoroutinesInHandlers(t *testing.T) {
 	}
 }
 
-// ----------------------------------------------------------------------------
-// Test 49: TestArch_BoundedChannelBuffers
-// ----------------------------------------------------------------------------
-//
-// `make(chan T, N)` where N is a numeric literal > 1024 OR a variable
-// (not a const ≤ 1024) requires `// arch-test:bounded-justified`
-// comment on the same line.
-//
-// Per Mills + sqlite-style ringbuffer pattern: unbounded buffers turn
-// memory pressure into latency. Force every wide buffer to be
-// justified inline.
+// TestArch_BoundedChannelBuffers asserts make(chan T, N) with N > 1024 or a
+// non-literal carries arch-test:bounded-justified.
 // Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_BoundedChannelBuffers(t *testing.T) {
 	t.Parallel()
@@ -124,7 +100,6 @@ func TestArch_BoundedChannelBuffers(t *testing.T) {
 			bufArg := call.Args[1]
 			lit, ok := bufArg.(*ast.BasicLit)
 			if !ok {
-				// Variable / call — count as violation requiring comment.
 				violations = append(violations, violation{
 					file: path,
 					line: pos.Line,
@@ -161,23 +136,9 @@ func TestArch_BoundedChannelBuffers(t *testing.T) {
 	}
 }
 
-// ----------------------------------------------------------------------------
-// Test 50: TestArch_GoleakInIntegrationTests
-// ----------------------------------------------------------------------------
-//
-// Every package that ships *_integration_test.go files has a TestMain
-// that runs a goroutine-leak check via goleak — either:
-//   - `goleak.VerifyTestMain(m, ...)` — the simple shape (goleak owns
-//     the m.Run lifecycle); OR
-//   - `goleak.Find(...)` after a custom m.Run wrapper — required when
-//     TestMain ALSO needs to wrap shared infrastructure (e.g.
-//     pgtest.RunMain). Per uber-go/goleak README: "If you need to do
-//     additional cleanup, use goleak.Find()."
-//
-// Per ADR 0019 + uber-go/goleak README: integration tests with
-// testcontainers spawn long-lived goroutines (pgx pool, watermill
-// subscriber) — a leak across test runs masks bugs the next test
-// inherits.
+// TestArch_GoleakInIntegrationTests asserts every package with
+// *_integration_test.go files has a TestMain using goleak.VerifyTestMain or
+// goleak.Find. ADR 0019 + uber-go/goleak README.
 func TestArch_GoleakInIntegrationTests(t *testing.T) {
 	t.Parallel()
 
@@ -186,8 +147,6 @@ func TestArch_GoleakInIntegrationTests(t *testing.T) {
 	}
 	var violations []violation
 
-	// Walk every dir under internal/ that contains at least one
-	// *_integration_test.go.
 	seenDirs := map[string]bool{}
 	_ = filepath.WalkDir(internalDir(t), func(path string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() {
@@ -215,10 +174,6 @@ func TestArch_GoleakInIntegrationTests(t *testing.T) {
 				continue
 			}
 			text := string(raw)
-			// Accept either the simple shape (VerifyTestMain owns m.Run)
-			// OR the manual-wrap shape (goleak.Find after a custom
-			// m.Run wrapper like pgtest.RunMain). Both satisfy the
-			// uber-go/goleak README guidance.
 			if strings.Contains(text, "goleak.VerifyTestMain") ||
 				strings.Contains(text, "goleak.Find") {
 				hasGoleak = true
@@ -238,13 +193,8 @@ func TestArch_GoleakInIntegrationTests(t *testing.T) {
 	}
 }
 
-// ----------------------------------------------------------------------------
-// Test 51: TestArch_NoTimeSleepInRequestPath
-// ----------------------------------------------------------------------------
-//
-// app/command/, app/query/, ports/ cannot call time.Sleep. Use ctx-
-// aware backoff (e.g. ticker + select on ctx.Done()) so cancellation
-// short-circuits the wait.
+// TestArch_NoTimeSleepInRequestPath asserts app/ and ports/ don't call
+// time.Sleep. Use ctx-aware backoff instead.
 // Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_NoTimeSleepInRequestPath(t *testing.T) {
 	t.Parallel()

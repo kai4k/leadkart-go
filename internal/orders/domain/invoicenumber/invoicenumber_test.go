@@ -26,11 +26,11 @@ func TestParseFinancialYear_Rejects(t *testing.T) {
 	for _, raw := range []string{
 		"",
 		"2026",
-		"2026-26",       // tail not next-year mod 100
-		"2026-2027",     // wrong format
-		"2026/27",       // wrong separator
-		"FY26-27",       // not numeric
-		"2026-50",       // bad tail
+		"2026-26",   // tail not (startYear+1)%100
+		"2026-2027", // wrong format
+		"2026/27",   // wrong separator
+		"FY26-27",   // not numeric
+		"2026-50",   // bad tail
 	} {
 		if _, err := invoicenumber.ParseFinancialYear(raw); !errors.Is(err, invoicenumber.ErrInvalid) {
 			t.Errorf("ParseFinancialYear(%q): got %v want ErrInvalid", raw, err)

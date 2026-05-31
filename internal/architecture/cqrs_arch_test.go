@@ -1,9 +1,7 @@
 // cqrs_arch_test.go — strict CQRS enforcement.
 //
-// The read side must return read models (Views/DTOs), never the write
-// aggregate. A query handler returning a domain aggregate leaks the write
-// model to the port and couples reads to write internals — the violation
-// found in CRM + Inventory (now fixed). This gate keeps it from recurring.
+// Query handlers must return read models (Views/DTOs), not domain aggregates.
+// Returning an aggregate leaks write internals to the port.
 
 package architecture_test
 
@@ -94,10 +92,8 @@ func TestArch_QueryHandlersReturnReadModelsNotAggregates(t *testing.T) {
 	}
 }
 
-// returnTypeRefsDomain reports whether a return-type expression is, or
-// wraps, a type from a `*/domain/*` package. Handles *T, []T, pagination
-// .Page[T] (and other generic IndexExpr type args), recursing into the
-// element/type-argument so `Page[*product.Product]` is caught.
+// returnTypeRefsDomain reports whether a return-type expression references a
+// */domain/* package, including through *, [], and generic IndexExpr wrappers.
 func returnTypeRefsDomain(expr ast.Expr, aliasToPath map[string]string) (string, bool) {
 	switch e := expr.(type) {
 	case *ast.StarExpr:

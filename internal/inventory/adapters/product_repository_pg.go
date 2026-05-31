@@ -19,28 +19,22 @@ import (
 	"github.com/leadkart/leadkart-go/internal/inventory/domain/product"
 )
 
-// ProductRepository is the pgx/sqlc-backed implementation of
-// [product.Repository]. Tenant-scoped — every method runs under
-// TxScopeTenant so the connection's `app.tenant_id` GUC binds before
-// queries; Postgres RLS does the filter.
-//
-// Domain ↔ row mapping lives in this package; sqlc-generated *db.Queries
-// hold the SQL.
+// ProductRepository is the pgx/sqlc-backed [product.Repository].
+// Tenant-scoped via TxScopeTenant; RLS filters rows by app.tenant_id GUC.
+// Domain↔row mapping is in this package; SQL lives in *db.Queries.
 type ProductRepository struct {
 	pool *pgxpool.Pool
 	tx   *pg.Transactor
 	q    *db.Queries
 }
 
-// NewProductRepository wires the repository.
+// NewProductRepository constructs a ProductRepository.
 func NewProductRepository(pool *pgxpool.Pool, tx *pg.Transactor) *ProductRepository {
 	return &ProductRepository{pool: pool, tx: tx, q: db.New(pool)}
 }
 
-// Add satisfies [product.Repository]. Joins surrounding UoW tx via
-// pg.TxFromContext when present. The aggregate carries its own TenantID
-// — the GUC is bound from p.TenantID() (TDL canon per ADR 0062:
-// tenantID flows through explicit values, not ctx).
+// Add satisfies [product.Repository]. Joins surrounding UoW tx when
+// present; GUC bound from p.TenantID() (ADR 0062).
 func (r *ProductRepository) Add(ctx context.Context, p *product.Product) error {
 	if tx, ok := pg.TxFromContext(ctx); ok {
 		return r.addOnTx(ctx, tx, p)
@@ -58,8 +52,8 @@ func (r *ProductRepository) addOnTx(ctx context.Context, tx pgx.Tx, p *product.P
 	return drainProductEvents(ctx, tx, p)
 }
 
-// UpdateByID satisfies [product.Repository] — TDL UpdateFn pattern.
-// GUC bound from the explicit tenantID parameter (TDL canon per ADR 0062).
+// UpdateByID satisfies [product.Repository] (TDL UpdateFn pattern).
+// GUC bound from tenantID (ADR 0062).
 func (r *ProductRepository) UpdateByID(ctx context.Context, tenantID tenant.ID, id product.ID, updateFn func(*product.Product) (bool, error)) error {
 	if tx, ok := pg.TxFromContext(ctx); ok {
 		return r.updateOnTx(ctx, tx, id, updateFn)
@@ -88,8 +82,7 @@ func (r *ProductRepository) updateOnTx(ctx context.Context, tx pgx.Tx, id produc
 	return drainProductEvents(ctx, tx, p)
 }
 
-// GetByID satisfies [product.Repository]. Tenant-scoped read — GUC bound
-// from the explicit tenantID parameter (TDL canon per ADR 0062).
+// GetByID satisfies [product.Repository]. GUC bound from tenantID (ADR 0062).
 func (r *ProductRepository) GetByID(ctx context.Context, tenantID tenant.ID, id product.ID) (*product.Product, error) {
 	var out *product.Product
 	err := r.tx.WithinTxPgxTenant(ctx, tenantID.String(), func(ctx context.Context, tx pgx.Tx) error {
@@ -107,18 +100,16 @@ func (r *ProductRepository) GetByID(ctx context.Context, tenantID tenant.ID, id 
 	return out, nil
 }
 
-// ListPage satisfies [product.Repository]. Keyset paginated per ADR
-// 0038. First-page cursor (zero SortValue + empty ID) maps to
-// effective MAX values so the (created_at, id) < ($, $) predicate
-// matches every row.
+// ListPage satisfies [product.Repository]. Keyset paginated (ADR 0038);
+// empty cursor maps to sentinel MAX values so the predicate matches all rows.
 func (r *ProductRepository) ListPage(ctx context.Context, tenantID tenant.ID, filter product.ListFilter, cursor pagination.Cursor, pageSize int) (pagination.Page[*product.Product], error) {
 	tid, err := uuid.Parse(tenantID.String())
 	if err != nil {
 		return pagination.Page[*product.Product]{}, fmt.Errorf("product repo: parse tenant id: %w", err)
 	}
 
-	// Cursor → SQL parameters. Empty cursor (first page) uses sentinel
-	// "infinity" values so `(created_at, id) < (sort, id)` matches all.
+	// Empty cursor (first page) uses sentinel values so the keyset
+	// predicate matches every row.
 	cursorCreatedAt := pgconv.PgRequiredTimestamp(maxCursorTime())
 	var cursorID pgtype.UUID
 	cursorID = pgconv.PgUUID(maxCursorUUID())
@@ -278,8 +269,8 @@ func rowToProduct(row db.InventoryProduct) (*product.Product, error) {
 	}), nil
 }
 
-// drainProductEvents pulls events off the aggregate, maps each through
-// the integrationevents mapper, and writes the V1 records to the outbox.
+// drainProductEvents maps and writes the product's pending domain events
+// to the outbox within the current transaction.
 func drainProductEvents(ctx context.Context, tx pgx.Tx, p *product.Product) error {
 	evs := p.PullEvents()
 	if len(evs) == 0 {
@@ -300,13 +291,12 @@ func drainProductEvents(ctx context.Context, tx pgx.Tx, p *product.Product) erro
 	return writeOutboxEvents(ctx, tx, tid, mapped)
 }
 
-// constraintProductTenantSku names the partial unique index protecting
-// (tenant_id, sku) WHERE NOT is_deleted. Migration 20260603000001
-// declares `uq_products_tenant_sku_live`.
+// constraintProductTenantSku is the partial unique index on
+// (tenant_id, sku) WHERE NOT is_deleted (migration 20260603000001).
 const constraintProductTenantSku = "uq_products_tenant_sku_live"
 
-// isSKUUniqueViolation reports whether err wraps a Postgres unique-
-// constraint violation on the SKU partial unique index.
+// isSKUUniqueViolation reports whether err is a unique-constraint
+// violation on the SKU partial unique index.
 func isSKUUniqueViolation(err error) bool {
 	pgErr, ok := errors.AsType[*pgconn.PgError](err)
 	if !ok {

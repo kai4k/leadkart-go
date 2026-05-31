@@ -47,8 +47,8 @@ func TestArch_AllRegisteredEventsHaveCanonicalAlias(t *testing.T) {
 	}
 }
 
-// TestArch_EveryRecordEndingInVNRegistered enforces "I added a struct but
-// forgot the register() line" doesn't slip past CI.
+// TestArch_EveryRecordEndingInVNRegistered catches V{N} structs missing
+// a register() call before CI.
 func TestArch_EveryRecordEndingInVNRegistered(t *testing.T) {
 	t.Parallel()
 

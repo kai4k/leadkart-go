@@ -2,7 +2,7 @@ package tenant
 
 import "fmt"
 
-// Status enumerates the tenant lifecycle states.
+// Status enumerates tenant lifecycle states.
 //
 // State machine:
 //
@@ -14,16 +14,14 @@ import "fmt"
 //	PendingDeletion  -> Active           (RestoreFromDeletion within grace window)
 //	PendingDeletion  -> Deleted          (HardDelete after grace, saga-driven)
 //
-// Per `data-retention.md`: deletion is a 30-day-grace lifecycle, not
-// a hard table delete — the audit log MUST survive (DPDP §12 / GDPR
-// Art. 17(3)(b) / SOC2 CC4.1). PendingDeletion blocks tenant ops but
-// keeps the row queryable for the saga + restoration window. Deleted
-// is a permanent terminal state — the row stays for FK integrity +
-// audit; tenant operations are 410 Gone.
+// Deletion is a 30-day-grace lifecycle (data-retention.md) — audit log must
+// survive (DPDP §12, GDPR Art. 17(3)(b), SOC2 CC4.1). PendingDeletion keeps
+// the row queryable for the saga; Deleted is terminal (row retained for FK
+// integrity; ops return 410 Gone).
 type Status int
 
 const (
-	// StatusUnknown is the zero value — never persisted; rejection target.
+	// StatusUnknown is the zero value; never persisted.
 	StatusUnknown Status = iota
 	// StatusPending — registered but not yet activated.
 	StatusPending
@@ -31,15 +29,13 @@ const (
 	StatusActive
 	// StatusSuspended — admin or billing suspension; reversible via Activate.
 	StatusSuspended
-	// StatusPendingDeletion — operator initiated deletion; 30-day grace
-	// window before HardDelete. RestoreFromDeletion cancels.
+	// StatusPendingDeletion — 30-day grace window; RestoreFromDeletion cancels.
 	StatusPendingDeletion
-	// StatusDeleted — terminal state. Row retained for audit + FK integrity;
-	// tenant ops respond 410 Gone.
+	// StatusDeleted — terminal; row retained for audit + FK integrity.
 	StatusDeleted
 )
 
-// String returns the snake_case form for log + DB serialisation.
+// String returns the snake_case form used for logging and DB serialisation.
 func (s Status) String() string {
 	switch s {
 	case StatusPending:
@@ -57,8 +53,8 @@ func (s Status) String() string {
 	}
 }
 
-// ParseStatus decodes the snake_case form back into a Status.
-// Used by the persistence adapter when reading rows.
+// ParseStatus decodes the snake_case string produced by [Status.String].
+// Used by the persistence adapter on row reads.
 func ParseStatus(s string) (Status, error) {
 	switch s {
 	case "pending":

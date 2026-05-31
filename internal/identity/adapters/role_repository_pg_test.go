@@ -54,9 +54,8 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
 
-// newRole is a tiny factory the role-repo tests share — gives a brand-new
-// non-system-default sales-tier role with one permission grant baked in
-// so the JSONB round-trip is non-trivial.
+// newRole is a shared factory for a non-system-default role with one
+// permission baked in so the JSONB round-trip is non-trivial.
 func newRole(t *testing.T, tenantID tenant.ID, name string) *role.Role {
 	t.Helper()
 	r, err := role.New(
@@ -79,8 +78,7 @@ func newRole(t *testing.T, tenantID tenant.ID, name string) *role.Role {
 }
 
 // SQL-contract: JSONB permission-list survives Marshal/Unmarshal through
-// the pgx driver. Business-rule round-trip (id/name/hierarchy) covered
-// by roletest.FakeRepository.
+// the pgx driver. Business-rule round-trip is covered by roletest.FakeRepository.
 func TestRoleRepository_Add_PersistsPermissionsJSONBRoundTrip(t *testing.T) {
 	t.Parallel()
 	pool := repoFixture(t)
@@ -108,9 +106,8 @@ func TestRoleRepository_Add_PersistsPermissionsJSONBRoundTrip(t *testing.T) {
 	}
 }
 
-// SQL-contract: SQLSTATE 23505 from the partial unique index
-// uq_roles_tenant_name WHERE NOT is_deleted is translated to
-// role.ErrNameTaken by the adapter.
+// SQL-contract: SQLSTATE 23505 from uq_roles_tenant_name (WHERE NOT
+// is_deleted) is translated to role.ErrNameTaken.
 func TestRoleRepository_Add_ReturnsErrNameTaken_OnDuplicateLiveName(t *testing.T) {
 	t.Parallel()
 	pool := repoFixture(t)
@@ -131,10 +128,8 @@ func TestRoleRepository_Add_ReturnsErrNameTaken_OnDuplicateLiveName(t *testing.T
 	}
 }
 
-// SQL-contract: RLS policy enforcement — Tenant A inserts a role;
-// Tenant B's connection scope MUST see zero rows. FORCE RLS + the
-// non-superuser role together close the door even on direct GetByID.
-// This is the canonical RLS proof for the file.
+// SQL-contract: RLS isolation — Tenant A's role is not visible from
+// Tenant B's connection scope (canonical RLS proof for this file).
 func TestRoleRepository_RLS_IsolatesCrossTenantReads(t *testing.T) {
 	t.Parallel()
 	pool := repoFixture(t)
@@ -150,16 +145,15 @@ func TestRoleRepository_RLS_IsolatesCrossTenantReads(t *testing.T) {
 	if err := roles.Add(ctxA, rA); err != nil {
 		t.Fatalf("Add under A: %v", err)
 	}
-	// Tenant B's context cannot see Tenant A's role — RLS filters it out.
+	// RLS hides tenant A's role from tenant B's context.
 	_, err := roles.GetByID(ctxB, tnB.ID(), rA.ID())
 	if !errors.Is(err, role.ErrNotFound) {
 		t.Fatalf("RLS leak: tenant B saw tenant A's role: %v", err)
 	}
 }
 
-// SQL-contract: GetByIDs (`WHERE id = ANY($1)`) applies RLS — IDs that
-// belong to other tenants are silently dropped, not surfaced as error.
-// Empty input returns empty slice without driver round-trip.
+// SQL-contract: GetByIDs (WHERE id = ANY($1)) applies RLS; cross-tenant
+// IDs are silently dropped. Empty input returns empty slice.
 func TestRoleRepository_GetByIDs_FiltersCrossTenant(t *testing.T) {
 	t.Parallel()
 	pool := repoFixture(t)
@@ -184,7 +178,7 @@ func TestRoleRepository_GetByIDs_FiltersCrossTenant(t *testing.T) {
 		t.Fatalf("Add B: %v", err)
 	}
 
-	// Tenant A asks for [rA1, rA2, rB] — RLS hides rB; expect 2 rows.
+	// Tenant A requests [rA1, rA2, rB] — RLS hides rB; expect 2 rows.
 	got, err := roles.GetByIDs(ctxA, tnA.ID(), []role.ID{rA1.ID(), rA2.ID(), rB.ID()})
 	if err != nil {
 		t.Fatalf("GetByIDs: %v", err)
@@ -194,19 +188,12 @@ func TestRoleRepository_GetByIDs_FiltersCrossTenant(t *testing.T) {
 	}
 }
 
-// SQL-contract: Delete is SOFT-delete (physical row survives, only
-// `is_deleted` flips to true) AND the partial-index + read predicate
-// `WHERE NOT is_deleted` hides it from the live read path. Two halves:
+// SQL-contract: Delete is SOFT-delete (is_deleted flips true); the
+// WHERE NOT is_deleted predicate hides the row from the live read path.
+// Two halves:
 //
-//  1. Physical row stays — direct SELECT bypassing the adapter
-//     proves the UPDATE didn't DELETE.
-//  2. The partial-index + WHERE NOT is_deleted predicate on the
-//     read path means GetByID can't see it.
-//
-// The roletest.FakeRepository's "Delete → GetByID returns ErrNotFound"
-// observable is identical; only the SQL test proves the PG-specific
-// mechanism (soft vs. hard delete + partial-index filter) actually
-// fires. Canonical post-rolehierarchy sharpening pattern per ADR 0062.
+//  1. Physical row survives: adapter-bypass SELECT confirms is_deleted=true.
+//  2. GetByID returns ErrNotFound.
 func TestRoleRepository_UpdateByID_Delete_PersistsSoftDeleteAndHidesFromGetByID(t *testing.T) {
 	t.Parallel()
 	pool := repoFixture(t)
@@ -227,10 +214,7 @@ func TestRoleRepository_UpdateByID_Delete_PersistsSoftDeleteAndHidesFromGetByID(
 		t.Fatalf("UpdateByID delete: %v", err)
 	}
 
-	// SQL-contract part 1: physical row survives the soft delete.
-	// Direct SELECT via the OWNER DSN — bypasses RLS so the SELECT can
-	// see the soft-deleted row regardless of tenant scope (the app
-	// pool's RLS would filter it out by partial-index predicate).
+	// Part 1: direct SELECT via OWNER DSN confirms is_deleted=true.
 	ownerDB, openErr := sql.Open("pgx", sharedPG.OwnerDSN())
 	if openErr != nil {
 		t.Fatalf("open owner DB: %v", openErr)
@@ -247,18 +231,16 @@ func TestRoleRepository_UpdateByID_Delete_PersistsSoftDeleteAndHidesFromGetByID(
 		t.Fatal("physical row's is_deleted is false — Delete behaved as hard-delete, contract broken")
 	}
 
-	// SQL-contract part 2: partial index + `WHERE NOT is_deleted`
-	// predicate hides the soft-deleted row from GetByID.
+	// Part 2: WHERE NOT is_deleted hides the row from GetByID.
 	_, err = roles.GetByID(ctx, tn.ID(), r.ID())
 	if !errors.Is(err, role.ErrNotFound) {
 		t.Fatalf("GetByID after delete: got %v want ErrNotFound (partial-index filter)", err)
 	}
 }
 
-// SQL-contract: real pgx tx ROLLBACK on closure error — the in-memory
-// fake can't prove that the underlying Postgres transaction actually
-// rolled back. Asserts the post-rollback row is the pre-update state
-// fetched from disk.
+// SQL-contract: real pgx tx ROLLBACK on closure error. The in-memory fake
+// cannot prove Postgres actually rolled back; this test asserts the
+// post-rollback row is the pre-update state.
 func TestRoleRepository_UpdateByID_Rollback_WhenUpdateFnErrors(t *testing.T) {
 	t.Parallel()
 	pool := repoFixture(t)
@@ -290,6 +272,5 @@ func TestRoleRepository_UpdateByID_Rollback_WhenUpdateFnErrors(t *testing.T) {
 	}
 }
 
-// Hierarchy integration tests moved to
-// role_hierarchy_edges_pg_test.go per ADR 0058 (Wave 9.4) — the
-// edge aggregate owns parent→child relationships now.
+// Hierarchy integration tests are in role_hierarchy_edges_pg_test.go
+// per ADR 0058 (Wave 9.4).

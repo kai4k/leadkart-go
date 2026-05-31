@@ -8,75 +8,51 @@ import (
 	"github.com/leadkart/leadkart-go/internal/common/slug"
 )
 
-// ----- Sentinel errors ------------------------------------------------------
-
 // ErrNotFound is returned by Repository.GetByID / GetBySlug when no tenant
 // exists for the supplied identifier.
 var ErrNotFound = errs.New(errs.KindNotFound, "tenant", "tenant not found")
 
-// ErrSlugTaken is returned by Repository.Add when a tenant with the same
-// slug already exists. (DB unique constraint surfaces as this typed error.)
+// ErrSlugTaken is returned by Repository.Add when the slug is already taken
+// (DB unique constraint translated to this typed error).
 var ErrSlugTaken = errs.New(errs.KindAlreadyExists, "tenant", "slug already taken")
 
-// ----- Repository contract --------------------------------------------------
-
-// Repository persists Tenant aggregates. The contract is declared here in
-// the domain package per Cheney "accept interfaces, return structs" — the
-// CONSUMER (the application service) defines what it needs; adapters in
-// internal/identity/adapters/ implement.
+// Repository persists Tenant aggregates. Declared in the domain package so the
+// consumer (app layer) owns the contract; adapters in internal/identity/adapters/
+// implement it (Cheney: "accept interfaces, return structs").
 //
-// All methods MUST be safe for concurrent use by multiple goroutines.
+// All methods must be goroutine-safe.
 //
-// All methods MUST honour [tenancy.FromContext] for tenant-scoped reads:
-// pgxpool's AfterAcquire callback issues `SET LOCAL app.tenant_id = $1`
-// per transaction (ADR 0006), then Postgres RLS does the filtering.
-//
-// Note: Tenant itself is NOT tenant-scoped (each row IS a tenant). RLS
-// applies only to platform-operator queries that span tenants — the
-// platform-operator role bypasses RLS via `app.is_platform = true`.
+// Tenant rows are NOT RLS-scoped (each row IS a tenant). Platform-operator
+// queries bypass RLS via app.is_platform = true (ADR 0006).
 type Repository interface {
-	// Add persists a brand-new tenant created via [New]. The aggregate's
-	// PullEvents are drained inside the same transaction and appended to
-	// the outbox table per ADR 0004 + ADR 0008.
-	//
-	// Returns [ErrSlugTaken] if a tenant with the same slug already exists.
+	// Add persists a new Tenant created via [New]. Events are drained into the
+	// outbox in the same transaction (ADR 0004 + ADR 0008).
+	// Returns [ErrSlugTaken] on slug collision.
 	Add(ctx context.Context, t *Tenant) error
 
-	// UpdateByID loads the tenant, runs updateFn (which mutates state via
-	// aggregate methods), then persists + emits events — all in one
-	// transaction. TDL Sep 2024 canon (ADR 0004).
-	//
-	// updateFn returns (true, nil) to commit; (false, nil) to abort
-	// without changes; (_, err) to roll back.
-	//
+	// UpdateByID loads the tenant, runs updateFn, then persists and emits events
+	// in one transaction (TDL canon, ADR 0004). updateFn returns (true, nil) to
+	// commit, (false, nil) to abort without changes, or (_, err) to roll back.
 	// Returns [ErrNotFound] if the tenant doesn't exist.
 	UpdateByID(ctx context.Context, id ID, updateFn func(*Tenant) (bool, error)) error
 
-	// GetByID returns the tenant or [ErrNotFound]. Read-only path; does
-	// not drain events or open a transaction.
+	// GetByID returns the tenant or [ErrNotFound]. Read-only; no transaction.
 	GetByID(ctx context.Context, id ID) (*Tenant, error)
 
 	// GetBySlug returns the tenant by URL slug or [ErrNotFound].
-	// Used during signup for slug-availability checks + login flows
-	// where the slug appears in the auth-routing index.
+	// Used for slug-availability checks and auth-routing.
 	GetBySlug(ctx context.Context, s slug.Slug) (*Tenant, error)
 
-	// ListAll returns every Tenant in the system, ordered by created_at.
-	// Cross-tenant query — Platform-operator path only. The aggregate
-	// table is non-RLS (each row IS a tenant); no privilege escalation
-	// happens here, the gate lives in the HTTP middleware.
+	// ListAll returns every Tenant ordered by created_at. Platform-operator
+	// path only; access gate lives in HTTP middleware.
 	ListAll(ctx context.Context) ([]*Tenant, error)
 
-	// HardDeleteRow physically removes the tenant row after the
-	// 30-day grace window has elapsed (per data-retention.md "Tenant
-	// deletion saga"). The grace-window pre-check lives in
-	// Tenant.HardDelete() — callers MUST run that aggregate transition
-	// via UpdateByID FIRST so the audit trail records the terminal-
-	// state event; HardDeleteRow then physically deletes.
-	//
-	// Idempotent: deleting an already-deleted row no-ops without error.
+	// HardDeleteRow physically removes the tenant row after the 30-day grace
+	// window (data-retention.md). Callers must first run Tenant.HardDelete via
+	// UpdateByID so the audit trail records the terminal event.
+	// Idempotent: no-ops if the row is already gone.
 	HardDeleteRow(ctx context.Context, id ID) error
 }
 
-// Compile-time guarantee that the sentinel errors are wrapped-comparable.
+// Compile-time check that sentinel errors are wrapped-comparable.
 var _ = errors.Is

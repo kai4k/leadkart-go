@@ -1,9 +1,5 @@
-// audit_reader_pg.go — concrete pg-backed [audit.Reader].
-//
-// Lives in the adapters package (where the sqlc-generated db.* package
-// is allowed to be imported) per ADR 0047 boundary discipline. The
-// consumer-side interface [audit.Reader] is defined in
-// internal/common/audit/reader.go.
+// audit_reader_pg.go — pg-backed [audit.Reader] (ADR 0047 boundary).
+// Consumer-side interface: internal/common/audit/reader.go.
 
 package adapters
 
@@ -22,18 +18,16 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/adapters/db"
 )
 
-// AuditReaderPG is the concrete pg-backed implementation of
-// [audit.Reader]. Runs every query under [pg.TxScopePlatform] — the
-// audit table is operator-facing, no RLS; HTTP boundary is responsible
-// for authorisation.
+// AuditReaderPG implements [audit.Reader] over Postgres. All queries run
+// under [pg.TxScopePlatform] — the audit table has no RLS; the HTTP
+// boundary enforces authorisation.
 type AuditReaderPG struct {
 	pool *pgxpool.Pool
 	tx   *pg.Transactor
 	q    *db.Queries
 }
 
-// NewAuditReaderPG wires the reader. Panics on nil pool / nil tx — both
-// are load-bearing for the platform-scope tx.
+// NewAuditReaderPG wires the reader. Panics on nil pool or nil tx.
 func NewAuditReaderPG(pool *pgxpool.Pool, tx *pg.Transactor) *AuditReaderPG {
 	if pool == nil {
 		panic("adapters: NewAuditReaderPG pool required")
@@ -44,11 +38,10 @@ func NewAuditReaderPG(pool *pgxpool.Pool, tx *pg.Transactor) *AuditReaderPG {
 	return &AuditReaderPG{pool: pool, tx: tx, q: db.New(pool)}
 }
 
-// Compile-time interface satisfaction.
 var _ audit.Reader = (*AuditReaderPG)(nil)
 
-// ListByTenant returns up to limit entries scoped to tenantID, ordered
-// (occurred_at_utc DESC, id DESC) keyset-paginated.
+// ListByTenant returns up to limit entries for tenantID, keyset-paginated
+// (occurred_at_utc DESC, id DESC).
 func (r *AuditReaderPG) ListByTenant(
 	ctx context.Context,
 	tenantID uuid.UUID,
@@ -76,8 +69,8 @@ func (r *AuditReaderPG) ListByTenant(
 	return rowsToEntries(rows), nil
 }
 
-// ListByUser returns up to limit entries scoped to userID (= JWT subject
-// = person_id), ordered (occurred_at_utc DESC, id DESC).
+// ListByUser returns up to limit entries for userID (JWT subject = person_id),
+// keyset-paginated (occurred_at_utc DESC, id DESC).
 func (r *AuditReaderPG) ListByUser(
 	ctx context.Context,
 	userID uuid.UUID,

@@ -54,7 +54,7 @@ func TestGetTenant_HappyPath_ProjectsEveryVOField(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Handle: %v", err)
 	}
-	// Check every projected field is non-default.
+	// Verify every projected field is non-default.
 	if got.ID != tn.ID().String() {
 		t.Errorf("ID")
 	}
@@ -107,7 +107,7 @@ func TestGetTenant_HappyPath_ProjectsEveryVOField(t *testing.T) {
 
 func TestGetTenant_DefaultZeroVOsProjectAsEmpty(t *testing.T) {
 	t.Parallel()
-	// Plain newTenant has empty statutory + contact + settings + prefs.
+	// Plain newTenant: no statutory, contact, settings, or prefs set.
 	tn := newTenant(t, testTenantID, testTenantSlugStr)
 	repo := tenanttest.NewFakeRepository()
 	if err := repo.Add(t.Context(), tn); err != nil {

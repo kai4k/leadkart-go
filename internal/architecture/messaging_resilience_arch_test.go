@@ -1,9 +1,5 @@
-// messaging_resilience_arch_test.go — locks the canonical Watermill
-// resilience wiring (ADR 0067) into router.go so a future edit cannot
-// silently reintroduce the panic-no-retry / infinite-retry P0s.
-//
-// The middleware ORDER is load-bearing and invisible to the type system,
-// so it is exactly the kind of invariant a fitness function must hold.
+// messaging_resilience_arch_test.go — locks ADR 0067 Watermill middleware order
+// into router.go. Middleware order is load-bearing and invisible to the type system.
 //
 // arch-test:no-synctest — purely-static AST analysis of one file.
 package architecture_test
@@ -18,8 +14,7 @@ import (
 	"testing"
 )
 
-// renderAddMiddlewareCalls parses router.go and returns, for every
-// `.AddMiddleware(...)` call, the rendered text of each argument in order.
+// renderAddMiddlewareCalls returns each .AddMiddleware argument list from router.go.
 func renderAddMiddlewareCalls(t *testing.T) [][]string {
 	t.Helper()
 	path := filepath.Join(internalDir(t), "common", "messaging", "router.go")

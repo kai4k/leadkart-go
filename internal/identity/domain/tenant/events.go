@@ -7,21 +7,16 @@ import (
 	"github.com/leadkart/leadkart-go/internal/common/slug"
 )
 
-// Event is the SEALED marker interface for tenant domain events.
-// Sealed via the unexported isTenantEvent() method so only types in
-// this package can satisfy it — same shape as role.Event.
+// Event is the sealed marker interface for tenant domain events. Sealed via
+// the unexported isTenantEvent() method — only types in this package satisfy it.
 //
-// Domain events deliberately do NOT carry wire concerns (Topic / V1
-// alias / occurred-at-as-method). Wire-versioning lives in
-// integrationevents.*V1 per Vernon IDDD ch. 8 ("Domain Events vs.
-// Integration Events"): a v2 wire rename must NOT force a domain edit.
-// The integration mapper in internal/identity/integrationevents/
-// type-switches on these structs and emits the canonical V1 envelope.
+// Events carry no wire concerns (topic, envelope, version alias). Wire
+// versioning lives in integrationevents.*V1 per Vernon IDDD ch. 8; a wire
+// rename must not force a domain edit. The integration mapper
+// type-switches on these structs to emit the V1 envelope.
 //
-// Domain events are recorded by aggregate methods and drained by
-// repositories on persist. The repository's UpdateByID closure pattern
-// (per ADR 0004 + TDL Sep 2024) writes events to the outbox table in
-// the same transaction as the state mutation.
+// Events are recorded by aggregate methods and drained by the repository
+// inside the same transaction as the state mutation (ADR 0004 + ADR 0008).
 type Event interface {
 	isTenantEvent()
 }
@@ -47,10 +42,8 @@ type ActivatedEvent struct {
 func (ActivatedEvent) isTenantEvent() {}
 
 // ProfileUpdatedEvent fires when [Tenant.UpdateProfile] is called.
-//
-// Carries OLD + NEW values so audit + downstream subscribers can render
-// the diff without re-loading the aggregate. Mirrors the .NET parent's
-// TenantProfileUpdated integration event.
+// Carries old and new values so subscribers can render diffs without
+// re-loading the aggregate.
 type ProfileUpdatedEvent struct {
 	TenantID       ID
 	OldLegalName   string
@@ -71,12 +64,9 @@ type SuspendedEvent struct {
 
 func (SuspendedEvent) isTenantEvent() {}
 
-// StatutoryUpdatedEvent fires when [Tenant.UpdateStatutory] changes
-// any of the declared Indian statutory IDs (GST/PAN/DrugLicence).
-//
-// Carries the OLD and NEW Statutory values so audit subscribers can
-// render diffs. Empty (zero) Statutory in OldStatutory means the
-// tenant declared statutory IDs for the first time.
+// StatutoryUpdatedEvent fires when [Tenant.UpdateStatutory] changes any
+// declared Indian statutory ID (GST/PAN/DrugLicence). Zero OldStatutory
+// indicates first declaration.
 type StatutoryUpdatedEvent struct {
 	TenantID     ID
 	OldStatutory Statutory
@@ -86,10 +76,9 @@ type StatutoryUpdatedEvent struct {
 
 func (StatutoryUpdatedEvent) isTenantEvent() {}
 
-// AdminContactUpdatedEvent fires when [Tenant.UpdateAdminContact]
-// changes the admin phone or postal address. Carries OLD/NEW for
-// audit-diff rendering. Empty (zero) AdminContact in OldAdminContact
-// means the tenant declared contact details for the first time.
+// AdminContactUpdatedEvent fires when [Tenant.UpdateAdminContact] changes
+// the admin phone or postal address. Zero OldAdminContact indicates first
+// declaration.
 type AdminContactUpdatedEvent struct {
 	TenantID        ID
 	OldAdminContact AdminContact
@@ -99,11 +88,9 @@ type AdminContactUpdatedEvent struct {
 
 func (AdminContactUpdatedEvent) isTenantEvent() {}
 
-// SettingsUpdatedEvent fires when [Tenant.UpdateSettings] changes
-// the tenant's operational settings (password policy today).
-//
-// Auth + login-flow caches MUST consume this to invalidate cached
-// policy — incorrect cached policy means stale rules until cache TTL.
+// SettingsUpdatedEvent fires when [Tenant.UpdateSettings] changes operational
+// settings. Auth and login-flow caches must consume this to invalidate
+// cached policy.
 type SettingsUpdatedEvent struct {
 	TenantID    ID
 	OldSettings Settings
@@ -113,10 +100,9 @@ type SettingsUpdatedEvent struct {
 
 func (SettingsUpdatedEvent) isTenantEvent() {}
 
-// DisplayPreferencesUpdatedEvent fires when
-// [Tenant.UpdateDisplayPreferences] changes the tenant's UI rendering
-// preferences. Subscribers (web BFF preference cache, notification
-// renderers) consume to invalidate cached preferences.
+// DisplayPreferencesUpdatedEvent fires when [Tenant.UpdateDisplayPreferences]
+// changes UI rendering preferences. Subscribers (BFF cache, notification
+// renderers) must invalidate cached preferences on receipt.
 type DisplayPreferencesUpdatedEvent struct {
 	TenantID              ID
 	OldDisplayPreferences DisplayPreferences
@@ -126,12 +112,9 @@ type DisplayPreferencesUpdatedEvent struct {
 
 func (DisplayPreferencesUpdatedEvent) isTenantEvent() {}
 
-// MarkedForDeletionEvent fires when [Tenant.MarkForDeletion] is called.
-//
-// Per data-retention.md "Tenant deletion saga": entry into the 30-day
-// grace window. Subscribers (CRM, Orders, etc.) MAY block tenant ops
-// immediately or wait for the terminal DeletedEvent — implementation
-// choice per module.
+// MarkedForDeletionEvent fires when [Tenant.MarkForDeletion] is called,
+// entering the 30-day grace window (data-retention.md). Subscribers may
+// block tenant ops immediately or wait for DeletedEvent — per-module choice.
 type MarkedForDeletionEvent struct {
 	TenantID    ID
 	Reason      string
@@ -141,10 +124,8 @@ type MarkedForDeletionEvent struct {
 
 func (MarkedForDeletionEvent) isTenantEvent() {}
 
-// RestoredEvent fires when [Tenant.RestoreFromDeletion] cancels a
-// pending deletion within the grace window.
-//
-// Subscribers that blocked ops on MarkedForDeletionEvent re-enable.
+// RestoredEvent fires when [Tenant.RestoreFromDeletion] cancels a pending
+// deletion. Subscribers that blocked ops on MarkedForDeletionEvent must re-enable.
 type RestoredEvent struct {
 	TenantID ID
 	At       time.Time
@@ -152,13 +133,10 @@ type RestoredEvent struct {
 
 func (RestoredEvent) isTenantEvent() {}
 
-// DeletedEvent fires when [Tenant.HardDelete] is called by the
-// data-retention saga after the grace window expires.
-//
-// Per data-retention.md: terminal state. Subscribers SHOULD anonymise
-// remaining PII per their module's classification (CRM lead notes,
-// Tasks comments). Audit log retained 7 years; tenant row retained
-// for FK integrity.
+// DeletedEvent fires when [Tenant.HardDelete] is called after the grace
+// window expires. Terminal state. Subscribers should anonymise remaining PII
+// per their module's data-retention classification. Tenant row is retained
+// for FK integrity; audit log is kept 7 years.
 type DeletedEvent struct {
 	TenantID ID
 	Reason   string

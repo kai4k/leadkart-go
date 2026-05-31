@@ -12,9 +12,8 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
 
-// PersonView is the wire-shape of a [person.Person] for Platform
-// read endpoints. Email + names + flags + lifecycle timestamps; no
-// password hash, no security stamp.
+// PersonView is the wire-shape of a [person.Person] for Platform read endpoints.
+// Never includes password hash or security stamp.
 type PersonView struct {
 	ID                     string
 	Email                  string
@@ -31,8 +30,7 @@ type PersonView struct {
 
 // ----- GetPersonQuery ------------------------------------------------------
 
-// GetPersonQuery returns the Person view by global ID. Platform-only
-// path — no tenant scope applies (Person is non-RLS).
+// GetPersonQuery returns the Person view by global ID (non-RLS; platform-only).
 type GetPersonQuery struct {
 	PersonID person.ID
 }
@@ -65,15 +63,8 @@ func (h GetPersonHandler) Handle(ctx context.Context, q GetPersonQuery) (PersonV
 // ----- GetPersonByEmailQuery ------------------------------------------------
 
 // GetPersonByEmailQuery returns the global Person view by email.
-// PLATFORM-ONLY path — emails are sensitive + globally unique;
-// tenant admins do NOT have a cross-tenant email-probe surface
-// (they can search within their own tenant via /v1/users?q= which
-// joins with the tenant_memberships table per RLS scope).
-//
-// Per ADR 0044 enumeration safety + ADR 0039 scope rules. HTTP layer
-// gates on RequirePlatform before dispatch; this handler does NOT
-// perform additional authz (the route-level gate already established
-// it).
+// Platform-only (ADR 0039 + ADR 0044 enumeration safety); HTTP layer
+// gates on RequirePlatform — this handler performs no additional authz.
 type GetPersonByEmailQuery struct {
 	Email email.Address
 }
@@ -121,9 +112,7 @@ func projectPerson(p *person.Person) PersonView {
 
 // ----- ListPersonMembershipsQuery ------------------------------------------
 
-// ListPersonMembershipsQuery returns every Membership a Person holds
-// across all tenants. Platform-only — cross-tenant. The Membership
-// repo's ListAllForPerson is the underlying surface.
+// ListPersonMembershipsQuery returns every Membership a Person holds across all tenants (platform-only).
 type ListPersonMembershipsQuery struct {
 	PersonID person.ID
 }
@@ -145,17 +134,13 @@ func NewListPersonMembershipsHandler(m membership.Repository, p person.Repositor
 	return ListPersonMembershipsHandler{memberships: m, persons: p}
 }
 
-// Handle returns the slice of UserView for every Membership the
-// Person holds. Reuses [composeUserView] from users.go for shape
-// parity with GET /api/v1/users responses.
+// Handle returns a UserView slice for every Membership the Person holds.
 func (h ListPersonMembershipsHandler) Handle(ctx context.Context, q ListPersonMembershipsQuery) ([]UserView, error) {
 	if q.PersonID.IsZero() {
 		return nil, errors.New("list_person_memberships: person id required")
 	}
-	// Person fetch up-front so we don't repeat it per-membership in
-	// composeUserView. ErrNotFound at this point is data integrity —
-	// a Membership whose Person is gone — but possible during a
-	// concurrent anonymise; surface as empty slice rather than 500.
+	// Fetch Person up-front; ErrNotFound here is a data-integrity issue
+	// (possible during concurrent anonymise — surface as error, not 500).
 	p, err := h.persons.GetByID(ctx, q.PersonID)
 	if errors.Is(err, person.ErrNotFound) {
 		return nil, person.ErrNotFound
@@ -176,10 +161,8 @@ func (h ListPersonMembershipsHandler) Handle(ctx context.Context, q ListPersonMe
 
 // ----- ListAllTenantsQuery -------------------------------------------------
 
-// ListAllTenantsQuery returns every Tenant for the Platform-operator
-// dashboard. No filtering knobs at v0.2 — the result set is small
-// enough (< 10K rows in any realistic deployment) for client-side
-// pagination. Add server-side filtering when a real customer asks.
+// ListAllTenantsQuery returns every Tenant for the platform-operator dashboard.
+// No server-side filtering at v0.2; result set is small enough for client-side pagination.
 type ListAllTenantsQuery struct{}
 
 // ListAllTenantsHandler runs the cross-tenant lookup.

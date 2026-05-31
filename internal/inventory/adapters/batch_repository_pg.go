@@ -20,42 +20,29 @@ import (
 	"github.com/leadkart/leadkart-go/internal/inventory/domain/product"
 )
 
-// BatchRepository is the pgx/sqlc-backed implementation of
-// [batch.Repository]. Tenant-scoped.
+// BatchRepository is the pgx/sqlc-backed [batch.Repository].
+// Tenant-scoped via TxScopeTenant.
 //
-// Concurrency: UpdateByID acquires a pessimistic row-level lock
-// (SELECT ... FOR UPDATE) before the in-memory aggregate load.
-// Concurrent transactions block at lock acquisition until the holding
-// tx commits or rolls back — Postgres serializes them at the DB layer
-// so the application handler does NOT need an optimistic-retry loop.
-//
-// Canon: Postgres docs §13.3.2 (Explicit Locking) + Stripe ledger
-// pattern + DDIA Ch.7 — pessimistic locking is the right primitive
-// for hot-row counters (stock_on_hand here, balance there) where
-// optimistic-retry under high contention thrashes without making
-// forward progress. The `version` column is retained as a defense-
-// in-depth + audit signal; the UPDATE's `version = $expected`
-// predicate is now never expected to fail because the lock makes it
-// impossible for two writers to share the same expected version.
-//
-// The lock is held only for the duration of the surrounding
-// pg.UnitOfWork tx — typically sub-millisecond for the
-// LogStockMovement path. If a writer crashes mid-tx, Postgres
-// releases the lock on session disconnect (no operator action needed).
+// UpdateByID uses SELECT ... FOR UPDATE before loading the aggregate
+// so concurrent writers serialize at the DB layer; no application
+// retry loop is needed. Pessimistic locking is correct for hot-row
+// counters (Postgres §13.3.2 + Stripe ledger + DDIA Ch.7). The
+// version column is kept as defense-in-depth and audit signal; the
+// WHERE version=$expected predicate cannot fail because the row lock
+// prevents two writers from sharing an expected version.
 type BatchRepository struct {
 	pool *pgxpool.Pool
 	tx   *pg.Transactor
 	q    *db.Queries
 }
 
-// NewBatchRepository wires the repository.
+// NewBatchRepository constructs a BatchRepository.
 func NewBatchRepository(pool *pgxpool.Pool, tx *pg.Transactor) *BatchRepository {
 	return &BatchRepository{pool: pool, tx: tx, q: db.New(pool)}
 }
 
-// Add satisfies [batch.Repository]. Joins surrounding UoW tx. The
-// aggregate carries its own TenantID — the GUC is bound from
-// b.TenantID() (TDL canon per ADR 0062).
+// Add satisfies [batch.Repository]. Joins surrounding UoW tx; GUC
+// bound from b.TenantID() (ADR 0062).
 func (r *BatchRepository) Add(ctx context.Context, b *batch.Batch) error {
 	if tx, ok := pg.TxFromContext(ctx); ok {
 		return r.addOnTx(ctx, tx, b)
@@ -73,11 +60,9 @@ func (r *BatchRepository) addOnTx(ctx context.Context, tx pgx.Tx, b *batch.Batch
 	return drainBatchEvents(ctx, tx, b)
 }
 
-// UpdateByID satisfies [batch.Repository]. Acquires a pessimistic
-// row-level lock (SELECT ... FOR UPDATE) before loading the aggregate
-// so concurrent updaters serialize at the DB layer; see [BatchRepository]
-// doc for the rationale. GUC bound from the explicit tenantID parameter
-// (TDL canon per ADR 0062).
+// UpdateByID satisfies [batch.Repository]. Acquires SELECT ... FOR UPDATE
+// before loading the aggregate; see [BatchRepository] for rationale.
+// GUC bound from tenantID (ADR 0062).
 func (r *BatchRepository) UpdateByID(ctx context.Context, tenantID tenant.ID, id batch.ID, updateFn func(*batch.Batch) (bool, error)) error {
 	if tx, ok := pg.TxFromContext(ctx); ok {
 		return r.updateOnTx(ctx, tx, id, updateFn)
@@ -87,14 +72,10 @@ func (r *BatchRepository) UpdateByID(ctx context.Context, tenantID tenant.ID, id
 	})
 }
 
-// lockBatchRowForUpdate acquires a pessimistic row-level lock on the
-// batches row identified by id, within the supplied tx. Concurrent
-// callers block here until this tx commits or rolls back. Returns
-// batch.ErrNotFound if the row is missing or soft-deleted (same
-// semantics as the subsequent loadBatch read).
-//
-// The lock is released automatically by Postgres on tx commit/rollback
-// or connection drop; no application-level release is required.
+// lockBatchRowForUpdate acquires SELECT ... FOR UPDATE on the batches row.
+// Concurrent callers block until this tx commits or rolls back; Postgres
+// releases the lock on tx end or connection drop automatically.
+// Returns batch.ErrNotFound for a missing or soft-deleted row.
 func (r *BatchRepository) lockBatchRowForUpdate(ctx context.Context, tx pgx.Tx, id batch.ID) error {
 	bid, err := uuid.Parse(id.String())
 	if err != nil {
@@ -110,10 +91,9 @@ func (r *BatchRepository) lockBatchRowForUpdate(ctx context.Context, tx pgx.Tx, 
 }
 
 func (r *BatchRepository) updateOnTx(ctx context.Context, tx pgx.Tx, id batch.ID, updateFn func(*batch.Batch) (bool, error)) error {
-	// Acquire pessimistic row lock first — concurrent updaters block
-	// here until our tx commits, so the optimistic-version check below
-	// can never fail in production. Lock-then-read is the standard
-	// SELECT-FOR-UPDATE-with-snapshot pattern (Postgres §13.3.2).
+	// Acquire row lock first; concurrent writers block until our tx
+	// commits, so the version check below can never fail in production
+	// (Postgres §13.3.2 lock-then-read pattern).
 	if err := r.lockBatchRowForUpdate(ctx, tx, id); err != nil {
 		return err
 	}
@@ -130,11 +110,9 @@ func (r *BatchRepository) updateOnTx(ctx context.Context, tx pgx.Tx, id batch.ID
 	if !shouldPersist {
 		return nil
 	}
-	// Persist with WHERE version = $expected as defense-in-depth. The
-	// row lock above already prevents concurrent writers from sharing
-	// our expected version — rowsAffected==0 here would signal a
-	// programmer error (e.g. an external SQL bypass) rather than a
-	// real race. Treat it as ErrConcurrencyConflict for clear surfacing.
+	// WHERE version=$expected is defense-in-depth; rowsAffected==0
+	// signals a programmer error (e.g. external SQL bypass), not a
+	// real race (the row lock prevents that).
 	rowsAffected, err := persistBatchState(ctx, q, b, expectedVersion)
 	if err != nil {
 		return err
@@ -145,8 +123,7 @@ func (r *BatchRepository) updateOnTx(ctx context.Context, tx pgx.Tx, id batch.ID
 	return drainBatchEvents(ctx, tx, b)
 }
 
-// GetByID satisfies [batch.Repository]. Tenant-scoped read — GUC bound
-// from the explicit tenantID parameter (TDL canon per ADR 0062).
+// GetByID satisfies [batch.Repository]. GUC bound from tenantID (ADR 0062).
 func (r *BatchRepository) GetByID(ctx context.Context, tenantID tenant.ID, id batch.ID) (*batch.Batch, error) {
 	var out *batch.Batch
 	err := r.tx.WithinTxPgxTenant(ctx, tenantID.String(), func(ctx context.Context, tx pgx.Tx) error {
@@ -165,8 +142,7 @@ func (r *BatchRepository) GetByID(ctx context.Context, tenantID tenant.ID, id ba
 }
 
 // ListByProductPage satisfies [batch.Repository]. Keyset on
-// (expiry_date DESC, id DESC) per migration 20260603000001 index. GUC
-// bound from the explicit tenantID parameter (TDL canon per ADR 0062).
+// (expiry_date DESC, id DESC); GUC bound from tenantID (ADR 0062).
 func (r *BatchRepository) ListByProductPage(ctx context.Context, tenantID tenant.ID, productID product.ID, filter batch.ListFilter, cursor pagination.Cursor, pageSize int) (pagination.Page[*batch.Batch], error) {
 	pid, err := uuid.Parse(productID.String())
 	if err != nil {
@@ -220,7 +196,7 @@ func (r *BatchRepository) ListByProductPage(ctx context.Context, tenantID tenant
 }
 
 // AnyLiveWithStockForProduct satisfies [batch.Repository]. GUC bound
-// from the explicit tenantID parameter (TDL canon per ADR 0062).
+// from tenantID (ADR 0062).
 func (r *BatchRepository) AnyLiveWithStockForProduct(ctx context.Context, tenantID tenant.ID, productID product.ID) (bool, error) {
 	pid, err := uuid.Parse(productID.String())
 	if err != nil {
@@ -281,8 +257,7 @@ func insertBatchRow(ctx context.Context, q *db.Queries, b *batch.Batch) error {
 			return batch.ErrBatchNumberTaken
 		}
 		if isFKViolation(err) {
-			// Composite-FK on (product_id, tenant_id) → products(id, tenant_id).
-			// Surfaces as cross-tenant product mix-up OR missing parent.
+			// Composite-FK (product_id, tenant_id) violation — missing or cross-tenant parent.
 			return product.ErrNotFound
 		}
 		return fmt.Errorf("batch repo: insert: %w", err)
@@ -290,9 +265,8 @@ func insertBatchRow(ctx context.Context, q *db.Queries, b *batch.Batch) error {
 	return nil
 }
 
-// persistBatchState writes the mutable Batch state under the WHERE
-// version = $expected predicate + bumps the version. Returns the
-// rows-affected count so the caller can branch on 0 → conflict.
+// persistBatchState writes mutable Batch state with WHERE version=$expected
+// and bumps version. Returns rows-affected so the caller can detect 0 → conflict.
 func persistBatchState(ctx context.Context, q *db.Queries, b *batch.Batch, expectedVersion int64) (int64, error) {
 	bid, _ := uuid.Parse(b.ID().String())
 	var deletedAt pgtype.Timestamptz
@@ -371,8 +345,8 @@ func rowToBatch(row db.InventoryBatch) (*batch.Batch, error) {
 
 const constraintBatchNumber = "uq_batches_product_number_live"
 
-// isBatchNumberUniqueViolation reports whether err wraps a unique-
-// constraint violation on the (product_id, batch_number) partial index.
+// isBatchNumberUniqueViolation reports whether err is a unique-constraint
+// violation on the (product_id, batch_number) partial index.
 func isBatchNumberUniqueViolation(err error) bool {
 	pgErr, ok := errors.AsType[*pgconn.PgError](err)
 	if !ok {
@@ -384,10 +358,9 @@ func isBatchNumberUniqueViolation(err error) bool {
 	return pgErr.ConstraintName == constraintBatchNumber
 }
 
-// isFKViolation reports whether err wraps a Postgres foreign-key
-// violation (SQLSTATE 23503). Used to surface the composite-FK breach
-// from batches.fk_batches_product_same_tenant as a friendly
-// product.ErrNotFound.
+// isFKViolation reports whether err is SQLSTATE 23503 (foreign key
+// violation), used to surface batches.fk_batches_product_same_tenant
+// breaches as product.ErrNotFound.
 func isFKViolation(err error) bool {
 	pgErr, ok := errors.AsType[*pgconn.PgError](err)
 	if !ok {

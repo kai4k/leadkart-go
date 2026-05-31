@@ -1,24 +1,8 @@
 // error_handling_arch_test.go — Principle M: Error handling discipline.
 //
-// Per Dave Cheney "Don't just check errors, handle them gracefully" +
-// Go 1.13 errors package (errors.Is / errors.As / sentinel idiom) +
-// LeadKart .NET error-mapping doctrine. The risks are:
-//
-//   - magic-string error matching (`strings.Contains(err.Error(), "x")`)
-//     — couples callers to formatted error text;
-//   - panic(string) — loses the structured error chain;
-//   - returning err.Error() into the wire layer — leaks internal
-//     detail (OWASP A04:2023);
-//   - custom error types missing Is() — break errors.Is propagation
-//     across wrap boundaries;
-//   - domain-layer error messages containing user-facing language —
-//     the HTTP layer should map domain errors to wire strings.
-//
-// Cited canon:
-//   - Cheney — "Don't just check errors" (2016) + "Stack traces" (2020)
-//   - Go 1.13 errors package design notes
-//   - LeadKart .NET httpmw/error_mapping_middleware.cs
-//   - RFC 9457 — error responses (HTTP layer translates domain)
+// Cheney + Go 1.13 errors package: sentinel errors, no magic-string matching,
+// no panic(string), wrap with %w, custom error types implement Is(),
+// domain errors use debug-tier text (HTTP layer maps to wire).
 
 package architecture_test
 
@@ -30,14 +14,8 @@ import (
 	"testing"
 )
 
-// ----------------------------------------------------------------------------
-// M1: TestArch_SentinelErrorsNamedErr
-// ----------------------------------------------------------------------------
-//
-// Every `errors.New("...")` at package level must be assigned to a
-// `var ErrXxx`. Local `errors.New` inside function bodies is fine
-// (one-off contextual errors). The sentinel convention makes
-// `errors.Is(err, ErrXxx)` discoverable.
+// TestArch_SentinelErrorsNamedErr asserts package-level errors.New() is
+// assigned to a var ErrXxx.
 // Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_SentinelErrorsNamedErr(t *testing.T) {
 	t.Parallel()
@@ -64,16 +42,8 @@ func TestArch_SentinelErrorsNamedErr(t *testing.T) {
 	}
 }
 
-// ----------------------------------------------------------------------------
-// M2: TestArch_NoErrorDotMessageInProduction
-// ----------------------------------------------------------------------------
-//
-// `err.Error()` calls outside the HTTP wire layer + logging layer
-// indicate the caller is matching on formatted text — which breaks
-// when the upstream changes wording. Use `errors.Is` / `errors.As`.
-//
-// Allow-list: log-formatting (slog.Error / slog.Info pass err
-// directly), HTTP-write layer (writes message to wire), tests.
+// TestArch_NoErrorDotMessageInProduction asserts err.Error() is absent from
+// app/ and adapters/ outside log/HTTP layers.
 // Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_NoErrorDotMessageInProduction(t *testing.T) {
 	t.Parallel()
@@ -92,9 +62,7 @@ func TestArch_NoErrorDotMessageInProduction(t *testing.T) {
 					return
 				}
 				body := string(src)
-				// Strip method bodies that ARE the Error() impl —
-				// those legitimately delegate to a sentinel's Error()
-				// to share text.
+				// Strip Error() method bodies so they don't self-flag.
 				errMethodBodyRE := regexp.MustCompile(`(?s)func\s*\([^)]+\)\s+Error\(\)\s+string\s*\{[^}]*\}`)
 				body = errMethodBodyRE.ReplaceAllString(body, "func errStripped() string { return \"\" }")
 				lines := strings.Split(body, "\n")
@@ -122,19 +90,8 @@ func TestArch_NoErrorDotMessageInProduction(t *testing.T) {
 	}
 }
 
-// ----------------------------------------------------------------------------
-// M3: TestArch_CustomErrorsImplementIs
-// ----------------------------------------------------------------------------
-//
-// Every type that satisfies the error interface (has an `Error()
-// string` method) AND wraps a sentinel should ALSO implement
-// `Is(target error) bool` so `errors.Is(wrappedErr, sentinel)`
-// keeps working across wrap boundaries.
-//
-// Pragmatic predicate: types with an Error() method that carry a
-// `Sentinel error` or `Wrapped error` field SHOULD also have Is().
-// This is a soft check; opt out via `// arch-test:no-errors-is` on
-// the type declaration.
+// TestArch_CustomErrorsImplementIs asserts error types wrapping a sentinel
+// field also implement Is(). Opt out via arch-test:no-errors-is.
 // Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_CustomErrorsImplementIs(t *testing.T) {
 	t.Parallel()
@@ -146,7 +103,6 @@ func TestArch_CustomErrorsImplementIs(t *testing.T) {
 		modDir := filepath.Join(root, mod)
 		walkGoFiles(t, modDir, false, func(path string, src []byte) {
 			_, file := parseFile(t, path, src)
-			// Collect (typeName, hasErrorMethod, hasIsMethod, hasSentinelField).
 			info := map[string]struct {
 				hasError, hasIs, hasSentinel, optOut bool
 			}{}
@@ -213,13 +169,8 @@ func TestArch_CustomErrorsImplementIs(t *testing.T) {
 	}
 }
 
-// ----------------------------------------------------------------------------
-// M4: TestArch_NoPanicString
-// ----------------------------------------------------------------------------
-//
-// `panic("...")` loses the structured error chain (no Wrap / no
-// stack-trace tooling). Use `panic(fmt.Errorf(...))` or, better,
-// return an error. Tests + init() are exempt.
+// TestArch_NoPanicString asserts panic("...") is absent. Use panic(fmt.Errorf(...))
+// or return an error.
 // Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_NoPanicString(t *testing.T) {
 	t.Parallel()
@@ -235,11 +186,7 @@ func TestArch_NoPanicString(t *testing.T) {
 			if !strings.HasPrefix(trimmed, "panic(\"") {
 				continue
 			}
-			// Allow the canonical guard pattern: panic immediately
-			// preceded (within 3 lines) by a `if X == nil` /
-			// `if X == ""` / `if X < N` / `if !X.Valid()` check —
-			// the composition-root assertion idiom. (Wild Workouts +
-			// Cheney "Practical Go".)
+			// Allow the canonical guard pattern: panic after a nil/zero check.
 			isGuard := false
 			for j := i - 1; j >= 0 && j > i-4; j-- {
 				p := strings.TrimSpace(lines[j])
@@ -265,13 +212,8 @@ func TestArch_NoPanicString(t *testing.T) {
 	}
 }
 
-// ----------------------------------------------------------------------------
-// M5: TestArch_NoMessageStringMatching
-// ----------------------------------------------------------------------------
-//
-// `strings.Contains(err.Error(), "...")` couples the caller to the
-// upstream's message format — they break together on every wording
-// change. Use errors.Is + a typed sentinel.
+// TestArch_NoMessageStringMatching asserts strings.Contains(err.Error(), ...)
+// is absent. Use errors.Is + typed sentinel.
 // Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_NoMessageStringMatching(t *testing.T) {
 	t.Parallel()
@@ -293,16 +235,8 @@ func TestArch_NoMessageStringMatching(t *testing.T) {
 	}
 }
 
-// ----------------------------------------------------------------------------
-// M6: TestArch_ErrorsAsOverTypeAssertion
-// ----------------------------------------------------------------------------
-//
-// `err.(*FooErr)` raw type-assertion fails when the err is wrapped
-// (errors.Wrap / fmt.Errorf with %w). `errors.As` traverses the
-// chain. Use it.
-//
-// Allow-list: assertions inside `case <Type>:` of `switch v :=
-// err.(type)` are fine — that's the canonical type-switch shape.
+// TestArch_ErrorsAsOverTypeAssertion asserts raw err.(*T) type-assertions are
+// absent. Use errors.As (wrap-safe).
 // Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_ErrorsAsOverTypeAssertion(t *testing.T) {
 	t.Parallel()
@@ -328,17 +262,8 @@ func TestArch_ErrorsAsOverTypeAssertion(t *testing.T) {
 	}
 }
 
-// ----------------------------------------------------------------------------
-// M7: TestArch_PackageExportsErrSentinels
-// ----------------------------------------------------------------------------
-//
-// Every domain aggregate package (`internal/<module>/domain/<agg>/`)
-// must export at least one `ErrXxx` sentinel — handlers map domain
-// errors to wire responses by sentinel matching, so a package
-// returning unnamed-error stew is unmappable.
-//
-// Allow-list: packages with no command-returning fns + pure-VO
-// packages (errs / ids / slug / email / ...).
+// TestArch_PackageExportsErrSentinels asserts every domain aggregate package
+// exports at least one ErrXxx sentinel.
 // Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_PackageExportsErrSentinels(t *testing.T) {
 	t.Parallel()
@@ -385,18 +310,8 @@ func TestArch_PackageExportsErrSentinels(t *testing.T) {
 	}
 }
 
-// ----------------------------------------------------------------------------
-// M8: TestArch_DomainErrorsNoUserStrings
-// ----------------------------------------------------------------------------
-//
-// Domain-layer Err sentinel messages should NOT contain
-// user-presentation language (sentence case, periods, "Please"
-// etc.). The HTTP layer maps domain sentinels to user-facing
-// strings; the domain text is for log/debug.
-//
-// Heuristic: errors.New("Please ...") / starts with capital-then-
-// space text + period — flagged. Snake_case / kebab-case / dotted
-// domain phrases ("tenant_already_exists") are fine.
+// TestArch_DomainErrorsNoUserStrings asserts domain Err sentinel messages don't
+// look user-facing (sentence-case with period, or "Please ...").
 // Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_DomainErrorsNoUserStrings(t *testing.T) {
 	t.Parallel()
@@ -432,4 +347,3 @@ func TestArch_DomainErrorsNoUserStrings(t *testing.T) {
 			strings.Join(bad, "\n  "))
 	}
 }
-

@@ -2,41 +2,14 @@
 // suite — a CI-time gate that converts the project's ADR catalog into
 // mechanically-enforced tests.
 //
-// # Why a separate package
+// Per Ford / Parsons / Kua "Building Evolutionary Architectures" (2017):
+// fitness functions prevent architectural drift. Without them, ADRs rot into
+// aspirational documentation. Cross-module + global-invariant tests live here;
+// per-module tests live alongside their modules.
 //
-// Per Neal Ford + Rebecca Parsons + Patrick Kua, "Building Evolutionary
-// Architectures" (O'Reilly 2017; 2nd ed. 2023): the "fitness function"
-// is the mechanism that prevents architectural drift over time — every
-// architectural characteristic (modularity, layer purity, security
-// boundary, performance budget) gets a test that fails when the
-// characteristic is violated. Without fitness functions, ADRs rot into
-// aspirational documentation that the codebase silently contradicts.
+// Tests are organised by DESIGN PRINCIPLE, not by symptom.
 //
-// This package holds the fitness functions that span MULTIPLE modules
-// (e.g. "no cross-module imports between identity + inventory") or
-// that gate global invariants (e.g. "every accepted ADR has a fitness
-// function reference"). Per-module arch tests still live alongside
-// their modules (e.g. internal/identity/integrationevents/arch_test.go,
-// internal/identity/ports/route_registration_test.go) so the per-module
-// authors can iterate on local discipline without merge friction here.
-//
-// # The 25-principle taxonomy
-//
-// Tests are organised by the DESIGN PRINCIPLE they enforce, not by the
-// symptom they catch. A symptom-named test ("clock injection") is a
-// proxy for the underlying principle ("pure domain — no hidden
-// inputs"); when the principle is captured directly, the test surface
-// stops bloating every time the symptom catalogue grows.
-//
-// May 2026 → June 2026 expansion: the original 14-principle / 98-test
-// catalog (preserved in full) gained 11 new principles + ~110 tests
-// covering the substrate areas the round-1 catalog didn't reach:
-// sqlc/pgx, goose-discipline, cache, context, resource-cleanup,
-// generics, error-handling, layout, naming, type-safety, ingress
-// hardening (HTTP/audit/rate-limit), CQRS, lint, jobs, testing,
-// docs, build determinism, channels, PR-time gates.
-//
-// Round-1 catalog (98 tests preserved by name; numbering stable):
+// Round-1 catalog (98 tests; numbering stable):
 //
 //	P1  Pure Domain                — pure_domain_arch_test.go         (10)
 //	P2  Explicit DI                — explicit_di_arch_test.go         ( 5)
@@ -86,10 +59,7 @@
 //	                                                                  ~110
 //
 // Grand total: ~207 tests across 25 principle categories.
-//
-//   - P5 carries 3 preserved-from-the-original-19 layer-boundary tests
-//     (PortsAdaptersDontDefineInterfaces, AppDoesntImportPorts,
-//     DomainHasNoInfraImports).
+// P5 carries 3 layer-boundary tests preserved from the original 19.
 //
 // # Process discipline
 //
@@ -99,36 +69,22 @@
 //  2. The marker `**Fitness function:** convention-only — not
 //     mechanically expressible` with a 1-2 sentence rationale.
 //
-// The meta-test enforces this. Grandfathered ADRs may carry the
-// `**Fitness function:** TBD — grandfathered` marker but at most 5
-// such markers may exist at any time, forcing gradual gap closure.
+// Grandfathered ADRs carry `**Fitness function:** TBD — grandfathered`;
+// at most 5 at a time.
 //
 // # Skip discipline
 //
-// Tests that hit invasive violations (>50 LOC fix) may `t.Skip("known
-// violation: <reason> — tracked in KNOWN_VIOLATIONS.md")`. The
-// running cap is ≤ 25 skipped tests across the suite (round-2
-// expansion raised the cap from 15 to accommodate the larger
-// principle surface) — the suite must overwhelmingly enforce LIVE
-// constraints, not document tech debt. Current state: 15 of 207
-// tests skip; 5 of those skips came from the round-2 expansion, the
-// other 10 are inherited from round-1.
+// Tests hitting invasive violations (>50 LOC fix) may
+// `t.Skip("known violation: <reason> — tracked in KNOWN_VIOLATIONS.md")`.
+// Cap: ≤ 25 skipped tests. Current: 15 of 207 skip.
 //
 // # Cited canon
 //
 //   - Ford / Parsons / Kua — Building Evolutionary Architectures (2017)
-//   - Neal Ford — Software Architecture: The Hard Parts (2021)
-//   - Vernon — Implementing DDD (sealed events, aggregate factories)
-//   - Khorikov — Unit Testing Principles (2020) ch. 11 (clock injection,
-//     time-pure domain, the "humble object" pattern)
-//   - Cheney — "Accept interfaces, return structs" (2016 blog)
-//   - Mat Ryer — "How I write HTTP services" (2024)
-//   - ThreeDotsLabs Wild Workouts (the canonical Go DDD reference)
-//   - Brandur Leach — Crunchy Bridge architecture (outbox / sqlc canon)
-//   - Stripe API platform — money-as-int64, spec-of-record, idempotency
-//   - Auth0 / GitHub — enumeration safety + URL design canon
-//   - NIST 800-63B §5.2.2 — account lockout policy
-//   - RFC 9457 — Problem Details for HTTP APIs
-//   - RFC 8693 — OAuth 2.0 Token Exchange (the `act` claim)
-//   - OWASP API Top 10 (2023)
+//   - Vernon — Implementing DDD; Khorikov — Unit Testing Principles ch. 11
+//   - Cheney — "Accept interfaces, return structs"; Mat Ryer 2024
+//   - ThreeDotsLabs Wild Workouts (canonical Go DDD reference)
+//   - Brandur Leach — Crunchy Bridge (outbox / sqlc canon)
+//   - Stripe / Auth0 / GitHub — URL design, idempotency, enumeration safety
+//   - NIST 800-63B §5.2.2; RFC 9457; RFC 8693; OWASP API Top 10 (2023)
 package architecture

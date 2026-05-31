@@ -1,33 +1,8 @@
 // layout_arch_test.go — Principle T: Folder + file conventions.
 //
-// The TDL Wild Workouts canonical module shape:
-//
-//   internal/<module>/
-//   ├── domain/
-//   │   └── <agg>/
-//   │       ├── <agg>.go
-//   │       ├── events.go
-//   │       ├── repository.go
-//   │       └── <agg>_test.go
-//   ├── app/
-//   │   ├── command/
-//   │   ├── query/
-//   │   └── jobs/        (optional)
-//   ├── ports/
-//   ├── adapters/
-//   │   ├── sql/         (sqlc input)
-//   │   └── db/          (sqlc-generated; package db)
-//   ├── integrationevents/
-//   └── <module>test/    (fakes; optional)
-//
-// Drift in the shape is the first warning that someone is inventing
-// a new architectural idiom. The tests below mechanically check the
-// most load-bearing pieces.
-//
-// Cited canon:
-//   - ThreeDotsLabs Wild Workouts (Nov 2025 canonical reference)
-//   - Vernon IDDD ch. 4 (architecture as code) — layered + bounded-context-aligned
-//   - Go community "small interfaces, consumer-defined" → ports/adapters layout
+// TDL Wild Workouts canonical module shape: domain/<agg>/, app/command/,
+// app/query/, ports/, adapters/sql+db/, integrationevents/, <module>test/.
+// Drift signals an invented architectural idiom.
 
 package architecture_test
 
@@ -37,14 +12,8 @@ import (
 	"testing"
 )
 
-// ----------------------------------------------------------------------------
-// T1: TestArch_EveryModuleHasFourLayers
-// ----------------------------------------------------------------------------
-//
-// Every bounded-context module under internal/ contains ONLY the
-// canonical top-level dirs: domain, app, ports, adapters,
-// integrationevents, optional <module>test/. Stray top-level
-// folders (e.g. internal/identity/services/) are drift.
+// TestArch_EveryModuleHasFourLayers asserts every module has only canonical
+// top-level dirs: domain, app, ports, adapters, integrationevents, <module>test/.
 func TestArch_EveryModuleHasFourLayers(t *testing.T) {
 	t.Parallel()
 
@@ -87,21 +56,8 @@ func TestArch_EveryModuleHasFourLayers(t *testing.T) {
 	}
 }
 
-// ----------------------------------------------------------------------------
-// T2: TestArch_EveryAggregateDirHasCanonicalFiles
-// ----------------------------------------------------------------------------
-//
-// Each domain/<agg>/ aggregate dir should contain at least:
-//   - <agg>.go        (the aggregate root + its methods)
-//   - events.go       (the V1 events the aggregate emits, optional
-//                      if the agg is a pure VO leaf)
-//   - repository.go   (the repository interface, optional for pure
-//                      VO + cross-aggregate join leaves)
-//
-// Pragmatic check: every aggregate dir must have AT LEAST <agg>.go
-// (the canonical entrypoint). events.go / repository.go presence is
-// strongly recommended but not enforced (some aggregates emit no
-// events; some are not separately persisted).
+// TestArch_EveryAggregateDirHasCanonicalFiles asserts every domain/<agg>/ dir
+// contains at least one non-test .go file.
 func TestArch_EveryAggregateDirHasCanonicalFiles(t *testing.T) {
 	t.Parallel()
 
@@ -148,18 +104,8 @@ func TestArch_EveryAggregateDirHasCanonicalFiles(t *testing.T) {
 	}
 }
 
-// ----------------------------------------------------------------------------
-// T3: TestArch_PgAdapterFilenamePattern
-// ----------------------------------------------------------------------------
-//
-// Hand-written pgx-backed repository adapters live in
-// `<module>/adapters/` with the filename pattern `*_repository_pg.go`
-// or `*_pg.go`. The `_pg` suffix telegraphs "this is the Postgres
-// impl; swappable" + makes grep for adapter sweeps trivial.
-//
-// Predicate: any file in `<module>/adapters/` whose name matches
-// `*_repository*.go` MUST end in `_repository_pg.go` (or
-// `_repository_pg_test.go`).
+// TestArch_PgAdapterFilenamePattern asserts *_repository*.go files in adapters/
+// follow the *_repository_pg.go convention.
 func TestArch_PgAdapterFilenamePattern(t *testing.T) {
 	t.Parallel()
 
@@ -198,14 +144,8 @@ func TestArch_PgAdapterFilenamePattern(t *testing.T) {
 	}
 }
 
-// ----------------------------------------------------------------------------
-// T4: TestArch_SqlcGeneratedFilesUnderAdaptersDb
-// ----------------------------------------------------------------------------
-//
-// `*.sql.go` is the sqlc canonical extension. Files matching this
-// pattern MUST live under `<module>/adapters/db/` (the generated
-// package). Stray *.sql.go files outside that dir are either
-// misplaced or hand-written shouldn't-be-shaped-like-sqlc files.
+// TestArch_SqlcGeneratedFilesUnderAdaptersDb asserts *.sql.go files only
+// exist under <module>/adapters/db/.
 func TestArch_SqlcGeneratedFilesUnderAdaptersDb(t *testing.T) {
 	t.Parallel()
 
@@ -230,36 +170,13 @@ func TestArch_SqlcGeneratedFilesUnderAdaptersDb(t *testing.T) {
 	}
 }
 
-// ----------------------------------------------------------------------------
-// T5: TestArch_IntegrationTestSuffix
-// ----------------------------------------------------------------------------
+// TestArch_IntegrationTestSuffix asserts *_integration_test.go files carry
+// //go:build integration. Bidirectional: suffix ↔ build tag.
 //
-// Files carrying `//go:build integration` SHOULD use the
-// `_integration_test.go` filename suffix so integration vs unit tests
-// are distinguishable by filename alone — but this is COSMETIC. The
-// load-bearing separator per Go canon is the `//go:build integration`
-// directive itself (Go 1.17+ `//go:build` syntax; `cmd/go` docs
-// §"Build constraints"). CI workflows gate on the build tag, NOT the
-// filename, so the rename is style not correctness.
-//
-// Test enforces the rule that matters: every `//go:build integration`
-// file is gated by that tag (which we already get for free — the file
-// physically won't compile in the non-integration toolchain), and
-// every file with the `_integration_test.go` suffix carries the
-// matching build tag. This is the bidirectional check that prevents
-// drift; filename ordering matches stdlib pattern (`http_test.go`,
-// `http_external_test.go` — no enforced ordering).
-//
-// arch-test:no-negative-fixture (rule is stdlib idiom — Go's
-// `cmd/go` documentation IS the negative-test corpus).
+// arch-test:no-negative-fixture (rule is stdlib idiom).
 func TestArch_IntegrationTestSuffix(t *testing.T) {
 	t.Parallel()
 
-	// Bidirectional check:
-	//   - If filename ends in `_integration_test.go`, MUST carry
-	//     `//go:build integration` (catch wrong-tag mistakes).
-	//   - If file has `//go:build integration` directive, that's
-	//     enough — filename suffix is cosmetic per the godoc above.
 	var mismatched []string
 	walkGoFiles(t, internalDir(t), true, func(path string, src []byte) {
 		body := string(src)
@@ -278,17 +195,8 @@ func TestArch_IntegrationTestSuffix(t *testing.T) {
 	}
 }
 
-// ----------------------------------------------------------------------------
-// T6: TestArch_EveryHandlerHasTestFile
-// ----------------------------------------------------------------------------
-//
-// Every `*Handler` struct in `<module>/app/command/` (the command
-// handler bundle) should have a sibling `<file>_test.go`. Coverage
-// floor: every command handler must have at least a parse-shape
-// unit test.
-//
-// Pragmatic: files under app/command/ that contain `type *Handler
-// struct` must have a same-stem _test.go.
+// TestArch_EveryHandlerHasTestFile asserts every *Handler struct in
+// app/command/ has a sibling *_test.go or is referenced from one.
 // Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_EveryHandlerHasTestFile(t *testing.T) {
 	t.Parallel()
@@ -307,8 +215,6 @@ func TestArch_EveryHandlerHasTestFile(t *testing.T) {
 			if _, err := readFileBytes(testPath); err == nil {
 				return
 			}
-			// Allow if there's ANY _test.go in the same dir that
-			// references the handler type (common: shared flow tests).
 			handlerName := ""
 			for _, ln := range strings.Split(body, "\n") {
 				if i := strings.Index(ln, "Handler struct"); i > 0 {
@@ -351,16 +257,8 @@ func TestArch_EveryHandlerHasTestFile(t *testing.T) {
 	}
 }
 
-// ----------------------------------------------------------------------------
-// T7: TestArch_TestFakesInTestPackage
-// ----------------------------------------------------------------------------
-//
-// Types matching `Fake*` / `Stub*` / `Mock*` should live in either:
-//   - a `<module>test/` package (the canonical fakes location), OR
-//   - a `*_test.go` file (test-internal fakes).
-//
-// Fakes living in production .go files are a smell — they ship in
-// the production binary + grow without bound.
+// TestArch_TestFakesInTestPackage asserts Fake*/Stub*/Mock* types live in
+// <module>test/ or _test.go files, not production code.
 // Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_TestFakesInTestPackage(t *testing.T) {
 	t.Parallel()
@@ -374,7 +272,6 @@ func TestArch_TestFakesInTestPackage(t *testing.T) {
 			return
 		}
 		if strings.Contains(slash, "test/") {
-			// e.g. /platformtest/ — canonical
 			return
 		}
 		body := stripGoComments(string(src))

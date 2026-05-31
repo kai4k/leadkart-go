@@ -10,12 +10,10 @@ import (
 	"github.com/leadkart/leadkart-go/internal/inventory/integrationevents"
 )
 
-// writeOutboxEvents persists integration events to the transactional
-// outbox inside tx (same pgx.Tx as the aggregate mutation). Per ADR
-// 0064/0067 the outbox is the single shared common.outbox relay drained
-// by one Watermill Forwarder; tenant_id / occurred_at / act_* travel as
-// message metadata stamped by messaging.PublishOutbox. This wrapper just
-// supplies the inventory destination topic.
+// writeOutboxEvents writes integration events to common.outbox inside tx
+// (same transaction as the aggregate mutation). ADR 0064/0067: one shared
+// relay drained by the Watermill Forwarder. This wrapper supplies the
+// inventory destination topic.
 func writeOutboxEvents(
 	ctx context.Context,
 	tx pgx.Tx,
@@ -25,8 +23,8 @@ func writeOutboxEvents(
 	return messaging.PublishOutbox(ctx, tx, integrationevents.Topic, tenantID, events)
 }
 
-// mapDomainEvents translates a slice of domain events into the canonical
-// integration events for outbox storage.
+// mapDomainEvents maps domain events to canonical integration events for
+// outbox storage. Returns nil, nil when the slice is empty.
 func mapDomainEvents(domainEvents []any) ([]integrationevents.Event, error) {
 	if len(domainEvents) == 0 {
 		return nil, nil

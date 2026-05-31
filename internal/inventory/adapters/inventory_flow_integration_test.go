@@ -12,21 +12,11 @@
 //   Brandur "Postgres at scale" + TDL Wild Workouts canon: shared
 //   infrastructure + per-test logical isolation = safe parallelism.
 //
-// SQL-CONTRACT COVERAGE (per ADR 0062 — TDL Test Pyramid):
-//   - SQLSTATE 23505 translation on the per-tenant partial unique
-//     index `uq_products_tenant_sku_live` → typed [product.ErrSKUTaken].
+// SQL-contract coverage (ADR 0062): SQLSTATE 23505 on
+// uq_products_tenant_sku_live → [product.ErrSKUTaken].
 //
-// Outbox-emission coverage (product.Add writes a same-tx outbox row →
-// forwarder publishes inventory.product_created.v1) lives in
-// outbox_forwarder_integration_test.go, asserted SUBSCRIBER-side via the
-// production forwarder + an in-process Watermill subscriber. Strict TDL
-// canon per ADR 0062 Amendment 1: outbox is observed on the bus, never
-// read from the table.
-//
-// Business-rule + state-machine + round-trip coverage moved to the
-// per-aggregate fakes:
-//   - [batchtest.FakeRepository] / [producttest.FakeRepository] /
-//     [stockmovementtest.FakeRepository].
+// Outbox-emission coverage lives in outbox_forwarder_integration_test.go;
+// business-rule + round-trip coverage in per-aggregate fakes.
 
 package adapters_test
 
@@ -43,10 +33,8 @@ import (
 	"github.com/leadkart/leadkart-go/internal/inventory/domain/product"
 )
 
-// TestProductRepository_Add_DuplicateSKU_ReturnsErrSKUTaken — SQL-contract:
-// SQLSTATE 23505 on the per-tenant partial unique index
-// `uq_products_tenant_sku_live` MUST surface as the typed domain
-// sentinel [product.ErrSKUTaken].
+// TestProductRepository_Add_DuplicateSKU_ReturnsErrSKUTaken verifies that
+// SQLSTATE 23505 on uq_products_tenant_sku_live surfaces as [product.ErrSKUTaken].
 func TestProductRepository_Add_DuplicateSKU_ReturnsErrSKUTaken(t *testing.T) {
 	t.Parallel()
 	pool := repoFixture(t)

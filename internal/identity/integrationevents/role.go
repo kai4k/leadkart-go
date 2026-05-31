@@ -6,13 +6,8 @@ import (
 	"github.com/google/uuid"
 )
 
-// RoleCreatedV1 — a Role was created in the given tenant. Consumed
-// by audit + permission-cache invalidation subscribers + future
-// admin-UI live-update channels.
-//
-// Tenant-scoped: every Role belongs to exactly one tenant. The
-// platform-tenant SuperAdmin role is no exception — its TenantID
-// is the platform tenant's UUID.
+// RoleCreatedV1 — a Role was created. Tenant-scoped: every Role belongs to
+// exactly one tenant, including the platform-tenant SuperAdmin role.
 type RoleCreatedV1 struct {
 	RoleID          uuid.UUID `json:"role_id"`
 	TenantIDClaim   uuid.UUID `json:"tenant_id"`
@@ -32,9 +27,8 @@ func (e RoleCreatedV1) OccurredAt() time.Time { return e.OccurredAtUTC }
 // TenantID satisfies [TenantScoped].
 func (e RoleCreatedV1) TenantID() uuid.UUID { return e.TenantIDClaim }
 
-// RoleRenamedV1 — a non-system-default role's name changed. Audit
-// subscribers render the diff via OldName/NewName without re-loading
-// prior state.
+// RoleRenamedV1 — a non-system-default role's name changed. OldName/NewName
+// let audit subscribers render the diff without re-loading state.
 type RoleRenamedV1 struct {
 	RoleID        uuid.UUID `json:"role_id"`
 	TenantIDClaim uuid.UUID `json:"tenant_id"`
@@ -52,9 +46,8 @@ func (e RoleRenamedV1) OccurredAt() time.Time { return e.OccurredAtUTC }
 // TenantID satisfies [TenantScoped].
 func (e RoleRenamedV1) TenantID() uuid.UUID { return e.TenantIDClaim }
 
-// RolePermissionGrantedV1 — a Permission was added to a Role's set.
-// Permission name is the wire-stable identifier; downstream caches
-// invalidate by RoleID + the Memberships that hold that Role.
+// RolePermissionGrantedV1 — a Permission was added to a Role. Downstream caches
+// invalidate by RoleID and the Memberships holding that Role.
 type RolePermissionGrantedV1 struct {
 	RoleID        uuid.UUID `json:"role_id"`
 	TenantIDClaim uuid.UUID `json:"tenant_id"`
@@ -88,9 +81,8 @@ func (e RolePermissionRevokedV1) OccurredAt() time.Time { return e.OccurredAtUTC
 // TenantID satisfies [TenantScoped].
 func (e RolePermissionRevokedV1) TenantID() uuid.UUID { return e.TenantIDClaim }
 
-// RoleDeletedV1 — a non-system-default role was soft-deleted. Cascade
-// subscribers in CRM/Tasks/etc. revoke any Membership assignments
-// referencing the deleted RoleID.
+// RoleDeletedV1 — a non-system-default role was soft-deleted. Downstream
+// modules revoke Membership assignments referencing this RoleID.
 type RoleDeletedV1 struct {
 	RoleID        uuid.UUID `json:"role_id"`
 	TenantIDClaim uuid.UUID `json:"tenant_id"`
@@ -107,12 +99,10 @@ func (e RoleDeletedV1) OccurredAt() time.Time { return e.OccurredAtUTC }
 // TenantID satisfies [TenantScoped].
 func (e RoleDeletedV1) TenantID() uuid.UUID { return e.TenantIDClaim }
 
-// Note: RoleParentChangedV1 retired in Wave 9.4 (ADR 0058 supersedes
-// ADR 0054). The rolehierarchy aggregate now emits
-// RoleHierarchyEdgeEstablishedV1 / RoleHierarchyEdgeRemovedV1 — see
-// role_hierarchy.go.
+// RoleParentChangedV1 retired in Wave 9.4 (ADR 0058 supersedes ADR 0054);
+// see role_hierarchy.go.
 
-// Compile-time + runtime registration.
+// Compile-time assertions and registration.
 var (
 	_ TenantScoped = RoleCreatedV1{}
 	_ TenantScoped = RoleRenamedV1{}

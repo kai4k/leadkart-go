@@ -1,9 +1,5 @@
-// search_index_pg.go — concrete pg-backed [query.SearchIndex].
-//
-// Lives in the adapters package (where the sqlc-generated db.* package
-// is allowed to be imported) per ADR 0047 boundary discipline. The
-// consumer-side interface [query.SearchIndex] is defined in
-// internal/identity/app/query/search.go.
+// search_index_pg.go — pg-backed [query.SearchIndex] (ADR 0047).
+// Consumer-side interface: internal/identity/app/query/search.go.
 
 package adapters
 
@@ -20,10 +16,9 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/app/query"
 )
 
-// SearchIndexPG implements [query.SearchIndex] over pg_trgm GIN
-// indexes on identity.persons + identity.tenants (created by migration
-// 20260518000001). Runs every query under [pg.TxScopePlatform] — the
-// search surface is operator-only; HTTP boundary gates is_platform.
+// SearchIndexPG implements [query.SearchIndex] over pg_trgm GIN indexes on
+// identity.persons and identity.tenants (migration 20260518000001).
+// Queries run under [pg.TxScopePlatform]; HTTP boundary gates is_platform.
 type SearchIndexPG struct {
 	pool *pgxpool.Pool
 	tx   *pg.Transactor
@@ -41,12 +36,10 @@ func NewSearchIndexPG(pool *pgxpool.Pool, tx *pg.Transactor) *SearchIndexPG {
 	return &SearchIndexPG{pool: pool, tx: tx, q: db.New(pool)}
 }
 
-// Compile-time interface satisfaction.
 var _ query.SearchIndex = (*SearchIndexPG)(nil)
 
 // SearchPersons runs the pg_trgm similarity query against identity.persons.
-// Returns ([], context.DeadlineExceeded) on timeout — the handler treats
-// that as partial.
+// Returns an empty slice + context.DeadlineExceeded on timeout.
 func (s *SearchIndexPG) SearchPersons(ctx context.Context, q string, limit int32) ([]query.SearchPersonHit, error) {
 	var hits []query.SearchPersonHit
 	err := s.tx.WithinTxPgx(ctx, pg.TxScopePlatform, func(ctx context.Context, tx pgx.Tx) error {

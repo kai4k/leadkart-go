@@ -12,20 +12,11 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
 
-// CapabilitiesView is the enriched read shape for
-// GET /v1/auth/me/capabilities.
-//
-// JWT-resident fields (person_id, membership_id, tenant_id,
-// tenant_slug, is_platform, is_super_user, permissions) come straight
-// from the verified claims and are projected by the HTTP layer. The
-// FIELDS in this struct are the enrichment that needs a DB lookup:
-//   - Profile (email, first_name, last_name) from Person
-//   - Resolved Roles (id, name, is_super_admin) from Membership +
-//     RoleRepo.GetByIDs
-//
-// The cache key includes the security_stamp; stamp rotation (password
-// change, role grant/revoke, anonymise) automatically invalidates per
-// ADR 0028 + ADR 0042 — TTL is just a memory bound.
+// CapabilitiesView is the DB-enrichment for GET /v1/auth/me/capabilities.
+// JWT-resident fields are projected by the HTTP layer; this struct holds
+// the fields that require a DB lookup: Person profile + resolved Roles.
+// Cache key includes security_stamp — stamp rotation (password change,
+// role grant/revoke, anonymise) invalidates automatically (ADR 0028 + 0042).
 type CapabilitiesView struct {
 	Email     string
 	FirstName string
@@ -33,20 +24,15 @@ type CapabilitiesView struct {
 	Roles     []CapabilityRoleView
 }
 
-// CapabilityRoleView is one resolved Role surface in the capabilities
-// bundle. Carries display name (drives the UI "your role: X" widget)
-// + the is_super_admin flag so the frontend can render the SuperAdmin
-// chip / unlock special UX.
+// CapabilityRoleView is one resolved Role in the capabilities bundle.
 type CapabilityRoleView struct {
 	ID           string
 	Name         string
 	IsSuperAdmin bool
 }
 
-// GetCapabilitiesQuery resolves the enrichment fields for one
-// membership. SecurityStamp comes from the JWT (cache-key component);
-// it's not used by the underlying repository calls — those run under
-// the standard tenant scope.
+// GetCapabilitiesQuery resolves enrichment for one membership.
+// SecurityStamp is from the JWT and used only as a cache-key component.
 type GetCapabilitiesQuery struct {
 	PersonID      person.ID
 	MembershipID  membership.ID
@@ -54,14 +40,9 @@ type GetCapabilitiesQuery struct {
 	SecurityStamp string
 }
 
-// GetCapabilitiesHandler is the un-cached source-of-truth resolver.
-// Two DB round-trips: Person.GetByID + RoleRepo.GetByIDs (Membership
-// is already on the JWT — no third hit needed; we read its role
-// assignments via Membership.GetByID).
-//
-// Wrap with CachedGetCapabilitiesHandler at the composition root —
-// the HTTP handler always talks to the cached wrapper via
-// Application.Queries.
+// GetCapabilitiesHandler is the un-cached resolver: two DB round-trips
+// (Person.GetByID + RoleRepo.GetByIDs). Wrap with
+// CachedGetCapabilitiesHandler at the composition root.
 type GetCapabilitiesHandler struct {
 	persons     person.Repository
 	memberships membership.Repository
@@ -83,10 +64,6 @@ func NewGetCapabilitiesHandler(p person.Repository, m membership.Repository, r r
 }
 
 // Handle resolves the enrichment for the supplied membership.
-// Returns an empty view (zero-fields, empty Roles slice) without
-// error if either the Person or Membership is missing — capabilities
-// is a read-only enrichment surface; absent rows are not a hard
-// failure (the caller can still rely on JWT-resident fields).
 func (h GetCapabilitiesHandler) Handle(ctx context.Context, q GetCapabilitiesQuery) (CapabilitiesView, error) {
 	if q.PersonID.IsZero() {
 		return CapabilitiesView{}, errors.New("get_capabilities: person id required")
@@ -100,10 +77,8 @@ func (h GetCapabilitiesHandler) Handle(ctx context.Context, q GetCapabilitiesQue
 
 	p, err := h.persons.GetByID(ctx, q.PersonID)
 	if err != nil {
-		// Person missing is a data-integrity issue (we have a valid
-		// JWT for this person but they're not in the DB). Surface as
-		// generic error rather than silently returning an empty view —
-		// the operator wants to see this in the logs.
+		// Valid JWT but Person absent = data-integrity violation; surface
+		// as error so operators see it in logs rather than silently empty.
 		return CapabilitiesView{}, fmt.Errorf("get_capabilities: load person: %w", err)
 	}
 
@@ -137,40 +112,25 @@ func (h GetCapabilitiesHandler) Handle(ctx context.Context, q GetCapabilitiesQue
 	}, nil
 }
 
-// CachedGetCapabilitiesHandler is the cache-wrapped facade in front
-// of the un-cached resolver. Per ADR 0042 — keyed by (membership_id,
-// security_stamp); stamp rotation invalidates implicitly.
-//
-// Cache key shape: "leadkart:capabilities:m=<membership-id>:s=<stamp>"
-// — the stamp IS the invalidation mechanism, so the TTL
-// (CapabilitiesTTL = 2min L1 / 15min L2) is just a memory bound.
+// CachedGetCapabilitiesHandler is the cache-wrapped facade (ADR 0042).
+// Keyed by (tenant_id, membership_id, security_stamp); stamp rotation
+// is the invalidation mechanism — TTL is just a memory bound.
 type CachedGetCapabilitiesHandler struct {
 	facade *cache.Facade[capabilitiesCacheKey, CapabilitiesView]
 }
 
-// capabilitiesCacheKey scopes the cache key to (tenant_id +
-// membership_id + security_stamp). Per ADR 0062 the tenantID is
-// explicit so the factory can dispatch the Repository lookup without
-// smuggling scope through ctx; also documents cross-tenant cache
-// isolation explicitly.
+// capabilitiesCacheKey scopes the cache entry to (tenant_id, membership_id,
+// security_stamp). TenantID is explicit per ADR 0062 (no ctx-scope smuggling).
 type capabilitiesCacheKey struct {
 	TenantID      string
 	MembershipID  string
 	SecurityStamp string
 }
 
-// NewCachedGetCapabilitiesHandler builds the facade. Factory closure
-// reconstructs the query from the cache key, then dispatches to the
-// inner un-cached handler — but the factory needs the PersonID +
-// TenantID which AREN'T in the cache key.
-//
-// Trade-off: the factory reads the membership first (1 DB hit) to
-// resolve PersonID + TenantID, then calls the un-cached handler. On
-// cache hit, neither lookup runs. The cost-of-miss is the same as
-// the un-cached path (the un-cached handler also reads membership).
-// Cache hit ratio target per ADR 0042 (Capabilities profile) is high
-// — a single operator/user session repeats this call many times
-// across page loads.
+// NewCachedGetCapabilitiesHandler builds the facade. On cache miss the
+// factory reads the membership first (1 DB hit) to resolve PersonID,
+// then delegates to the inner handler — same cost as un-cached.
+// Cache hit ratio is high per ADR 0042 (same user hits this on every page load).
 func NewCachedGetCapabilitiesHandler(inner GetCapabilitiesHandler, hc *cache.HybridCache, m membership.Repository) CachedGetCapabilitiesHandler {
 	if hc == nil {
 		panic("query: NewCachedGetCapabilitiesHandler hybrid cache required")
@@ -184,9 +144,7 @@ func NewCachedGetCapabilitiesHandler(inner GetCapabilitiesHandler, hc *cache.Hyb
 			return "leadkart:capabilities:t=" + k.TenantID + ":m=" + k.MembershipID + ":s=" + k.SecurityStamp
 		},
 		func(ctx context.Context, k capabilitiesCacheKey) (CapabilitiesView, error) {
-			// Resolve the membership first to derive PersonID. TenantID
-			// is in the cache key so we pass it explicitly per ADR 0062.
-			// One DB hit per miss; cache hits avoid it.
+			// One DB hit per miss to resolve PersonID; TenantID explicit per ADR 0062.
 			mem, err := m.GetByID(ctx, tenant.ID(k.TenantID), membership.ID(k.MembershipID))
 			if err != nil {
 				return CapabilitiesView{}, fmt.Errorf("capabilities cache factory: load membership: %w", err)

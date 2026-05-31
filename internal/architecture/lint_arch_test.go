@@ -1,15 +1,7 @@
 // lint_arch_test.go — Principle P: Linting / static analysis discipline.
 //
-// The project runs golangci-lint v2 + gosec + revive + bodyclose in
-// `task lint`. These tests guarantee the lint configuration itself
-// stays canonical (drift in .golangci.yml is the silent
-// "we stopped catching X" failure mode), every `//nolint:` directive
-// has a documented reason, and TODOs carry ticket references.
-//
-// Cited canon:
-//   - golangci-lint v2 schema docs
-//   - Cheney "Practical Go" §6 (nolint with reason)
-//   - Linus Torvalds — TODO comments need ticket numbers (kernel canon)
+// golangci-lint v2 + gosec + revive. Gates: .golangci.yml stays canonical,
+// every //nolint: has a reason, TODOs carry ticket references.
 
 package architecture_test
 
@@ -20,14 +12,8 @@ import (
 	"testing"
 )
 
-// ----------------------------------------------------------------------------
-// P1: TestArch_GolangciLintConfigCanonical
-// ----------------------------------------------------------------------------
-//
-// .golangci.yml must enable the canonical linter set: errcheck,
-// ineffassign, gosec, staticcheck, revive, govet, unused. (errcheck
-// + ineffassign + staticcheck + unused + govet are part of `default:
-// standard` in v2 schema; revive + gosec are explicit `enable:`.)
+// TestArch_GolangciLintConfigCanonical asserts .golangci.yml uses v2 schema with
+// default: standard and explicit revive + gosec + depguard.
 func TestArch_GolangciLintConfigCanonical(t *testing.T) {
 	t.Parallel()
 
@@ -37,7 +23,6 @@ func TestArch_GolangciLintConfigCanonical(t *testing.T) {
 		t.Fatalf("read .golangci.yml: %v", err)
 	}
 	body := string(src)
-	// v2 schema sentinel.
 	if !strings.Contains(body, "version: \"2\"") && !strings.Contains(body, "version: '2'") {
 		t.Error(".golangci.yml does not declare version: \"2\" (v2 schema)")
 	}
@@ -50,20 +35,13 @@ func TestArch_GolangciLintConfigCanonical(t *testing.T) {
 			t.Errorf(".golangci.yml does not enable %s", l)
 		}
 	}
-	// depguard must carry the layer-boundary driver-ban (ADR 0047/0066):
-	// the declarative complement to the AST import gates.
 	if !strings.Contains(body, "github.com/jackc/pgx") {
 		t.Error(".golangci.yml depguard does not deny the pgx driver in domain/app (ADR 0047/0066)")
 	}
 }
 
-// ----------------------------------------------------------------------------
-// P2: TestArch_NoNolintWithoutReason
-// ----------------------------------------------------------------------------
-//
-// Every `//nolint:<linter>` directive must be followed by ` // ` +
-// rationale on the same line (golangci-lint v2 enforces this with
-// `nolintlint`, but the arch test catches early drift).
+// TestArch_NoNolintWithoutReason asserts every //nolint: directive has a
+// trailing reason comment.
 func TestArch_NoNolintWithoutReason(t *testing.T) {
 	t.Parallel()
 
@@ -78,9 +56,6 @@ func TestArch_NoNolintWithoutReason(t *testing.T) {
 			if !nolintRE.MatchString(ln) {
 				continue
 			}
-			// Reason is anything after the nolint directive on the
-			// same line that begins with `//` AGAIN (i.e. a trailing
-			// comment) or after `--` separator.
 			tail := nolintRE.Split(ln, 2)
 			if len(tail) < 2 {
 				continue
@@ -105,20 +80,10 @@ func TestArch_NoNolintWithoutReason(t *testing.T) {
 // duplicate symbol error; the original implementation enforces the
 // same predicate (no fmt.Print* in internal/ production).
 
-// ----------------------------------------------------------------------------
-// P4: TestArch_NoTODOWithoutTicket
-// ----------------------------------------------------------------------------
+// TestArch_NoTODOWithoutTicket asserts production TODO/FIXME comments cite
+// #NNN or ADR-NNNN. Budget: ≤ 30 ticketless TODOs total.
 //
-// `TODO` / `FIXME` comments without a ticket reference rot
-// silently — bare TODOs are aspirational. Linus-rule: every
-// TODO carries `(#NNN)` or `(ADR-NNNN)`.
-//
-// Soft check: budget of 30 raw TODOs total; lower the ceiling as
-// the codebase matures.
-//
-// Scope: production — TODO budget is a production-code maintenance
-// concern; test files often carry test-author TODOs which shouldn't
-// count against the production debt ratchet.
+// Scope: production — test-file TODOs don't count against the debt ratchet.
 func TestArch_NoTODOWithoutTicket(t *testing.T) {
 	t.Parallel()
 

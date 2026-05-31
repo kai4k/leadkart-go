@@ -20,42 +20,24 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
 
-// RoleRepository is the pgx/sqlc-backed implementation of
-// [role.Repository]. Tenant-scoped — every read + write runs under
-// [pg.TxScopeTenant] so the connection's `app.tenant_id` GUC binds
-// before queries touch the table; Postgres RLS does the rest.
-//
-// Cross-tenant operations (SuperAdmin admin UI, support tooling,
-// platform analytics) MUST use a platform-scoped transactor at a
-// higher layer; this repo refuses to bypass RLS itself.
-//
-// Hierarchy (parent→child) was extracted into the [rolehierarchy]
-// aggregate per ADR 0058 (Wave 9.4); this repo no longer touches
-// parent_role_id (the column is gone from identity.roles).
-//
-// Domain↔row mapping lives here; sqlc-generated *db.Queries hold the SQL.
+// RoleRepository is the pgx/sqlc-backed [role.Repository]. Tenant-scoped:
+// all reads and writes run under [pg.TxScopeTenant]. Cross-tenant operations
+// must go through a platform-scoped transactor at a higher layer.
+// Hierarchy (parent→child) lives in [rolehierarchy] per ADR 0058 (Wave 9.4).
 type RoleRepository struct {
 	pool *pgxpool.Pool
 	tx   *pg.Transactor
 	q    *db.Queries
 }
 
-// NewRoleRepository wires the repository against a pool + transactor
-// (same pool as the transactor — composing distinct pools would split
-// the connection state the GUC binds to).
+// NewRoleRepository wires the repository against a pool and transactor.
 func NewRoleRepository(pool *pgxpool.Pool, tx *pg.Transactor) *RoleRepository {
 	return &RoleRepository{pool: pool, tx: tx, q: db.New(pool)}
 }
 
-// Add satisfies [role.Repository] — persists a brand-new Role from
-// [role.New], drains its events into the outbox, all in one tx under
-// tenant scope. Translates SQLSTATE 23505 from the partial unique
-// index `uq_roles_tenant_name WHERE NOT is_deleted` into
-// [role.ErrNameTaken].
-//
-// The aggregate carries its own TenantID — the GUC is bound from
-// ro.TenantID() (TDL canon per ADR 0062: tenantID flows through
-// explicit values, not ctx).
+// Add satisfies [role.Repository]. Translates SQLSTATE 23505 from
+// uq_roles_tenant_name (WHERE NOT is_deleted) to [role.ErrNameTaken].
+// GUC bound from ro.TenantID() (ADR 0062).
 func (r *RoleRepository) Add(ctx context.Context, ro *role.Role) error {
 	if tx, ok := pg.TxFromContext(ctx); ok {
 		return r.addOnTx(ctx, tx, ro)
@@ -73,8 +55,7 @@ func (r *RoleRepository) addOnTx(ctx context.Context, tx pgx.Tx, ro *role.Role) 
 	return drainRoleEvents(ctx, tx, ro)
 }
 
-// GetByID satisfies [role.Repository]. Tenant-scoped read — GUC bound
-// from the explicit tenantID parameter (TDL canon per ADR 0062).
+// GetByID satisfies [role.Repository]. GUC bound from tenantID (ADR 0062).
 func (r *RoleRepository) GetByID(ctx context.Context, tenantID tenant.ID, id role.ID) (*role.Role, error) {
 	var out *role.Role
 	err := r.tx.WithinTxPgxTenant(ctx, tenantID.String(), func(ctx context.Context, tx pgx.Tx) error {
@@ -92,9 +73,8 @@ func (r *RoleRepository) GetByID(ctx context.Context, tenantID tenant.ID, id rol
 	return out, nil
 }
 
-// GetByTenantAndName satisfies [role.Repository]. Tenant-scoped read by
-// (tenant_id, name) — GUC bound from the explicit tenantID param.
-// Live rows only (soft-deleted filtered out).
+// GetByTenantAndName satisfies [role.Repository]. Live rows only.
+// GUC bound from tenantID (ADR 0062).
 func (r *RoleRepository) GetByTenantAndName(
 	ctx context.Context,
 	tenantID tenant.ID,
@@ -130,11 +110,8 @@ func (r *RoleRepository) GetByTenantAndName(
 	return out, nil
 }
 
-// GetByIDs satisfies [role.Repository] — bulk-load for the
-// PermissionResolver, scoped to tenantID. RLS still applies (GUC bound
-// from the explicit param) — cross-tenant IDs are silently dropped from
-// the result set. That's intentional per `multi-tenancy.md` "Identity
-// model".
+// GetByIDs satisfies [role.Repository]. Bulk-load scoped to tenantID;
+// RLS silently drops cross-tenant IDs from the result.
 func (r *RoleRepository) GetByIDs(ctx context.Context, tenantID tenant.ID, ids []role.ID) ([]*role.Role, error) {
 	if len(ids) == 0 {
 		return nil, nil
@@ -170,9 +147,8 @@ func (r *RoleRepository) GetByIDs(ctx context.Context, tenantID tenant.ID, ids [
 	return out, nil
 }
 
-// ListByTenant satisfies [role.Repository] — full live catalog for the
-// supplied tenant, ordered hierarchy_level then name. GUC bound from
-// the explicit tenantID param.
+// ListByTenant satisfies [role.Repository]. Returns live roles ordered by
+// hierarchy_level then name. GUC bound from tenantID.
 func (r *RoleRepository) ListByTenant(
 	ctx context.Context,
 	tenantID tenant.ID,
@@ -204,17 +180,10 @@ func (r *RoleRepository) ListByTenant(
 	return out, nil
 }
 
-// UpdateByID satisfies [role.Repository] — TDL Sep 2024 UpdateFn pattern:
-// Load → updateFn → persist (if shouldPersist) → drain events. All in
-// one tenant-scoped transaction. RLS naturally refuses cross-tenant
-// loads — updateFn never runs under a foreign tenant context.
-//
-// Persistence branches on aggregate state:
-//   - role.IsDeleted() → SoftDeleteRole (sets is_deleted/deleted_at/deleted_by)
-//   - otherwise        → UpdateRole (name, hierarchy_level, permissions JSONB)
-//
-// is_system_default + is_super_admin + tenant_id + created_at are
-// aggregate-immutable; the SQL doesn't write them under any branch.
+// UpdateByID satisfies [role.Repository]. TDL UpdateFn pattern.
+// Branches on IsDeleted: true → SoftDeleteRole; false → UpdateRole.
+// Immutable fields (is_system_default, is_super_admin, tenant_id,
+// created_at) are never written.
 func (r *RoleRepository) UpdateByID(
 	ctx context.Context,
 	tenantID tenant.ID,
@@ -268,7 +237,7 @@ func loadRole(ctx context.Context, q *db.Queries, id role.ID) (*role.Role, error
 		return nil, fmt.Errorf("role repo: get by id: %w", err)
 	}
 	if row.IsDeleted {
-		// Soft-deleted rows are forensic-only; live reads must not see them.
+		// Soft-deleted rows are forensic-only.
 		return nil, role.ErrNotFound
 	}
 	return rowToRole(row)
@@ -293,9 +262,7 @@ func insertRoleRow(ctx context.Context, q *db.Queries, ro *role.Role) error {
 		Name:            ro.Name(),
 		IsSystemDefault: ro.IsSystemDefault(),
 		IsSuperAdmin:    ro.IsSuperAdmin(),
-		// HierarchyLevel is bounded by role.HierarchyLevelMin (0) +
-		// role.HierarchyLevelMax (99) per the aggregate's New + ChangeHierarchyLevel
-		// invariants. Cast to int32 cannot overflow.
+		// HierarchyLevel bounded [0,99] by aggregate invariants; int32 safe.
 		HierarchyLevel: int32(ro.HierarchyLevel()), //nolint:gosec // G115: bounded [0,99] by aggregate
 		Permissions:    permsJSON,
 		CreatedAt:      pgconv.PgRequiredTimestamp(ro.CreatedAt()),
@@ -309,17 +276,15 @@ func insertRoleRow(ctx context.Context, q *db.Queries, ro *role.Role) error {
 	return nil
 }
 
-// persistRoleState writes the mutable Role state — name, hierarchy_level,
-// permissions OR soft-delete flags — under the aggregate's current
-// shape. Caller (UpdateByID) owns the tx + chose to persist.
+// persistRoleState writes mutable Role state (name, hierarchy_level,
+// permissions) or soft-delete flags, depending on aggregate state.
 func persistRoleState(ctx context.Context, q *db.Queries, ro *role.Role) error {
 	rid, err := uuid.Parse(ro.ID().String())
 	if err != nil {
 		return fmt.Errorf("role repo: parse id %q: %w", ro.ID(), err)
 	}
 	if ro.IsDeleted() {
-		// Soft-delete branch — name + permissions stay as-is in the row;
-		// the AND NOT is_deleted predicate on every read filters it out.
+		// Soft-delete: name + permissions stay; AND NOT is_deleted filters them.
 		deletedBy := pgconv.ZeroToNil(ro.DeletedBy())
 		err = q.SoftDeleteRole(ctx, db.SoftDeleteRoleParams{
 			ID:        pgconv.PgUUID(rid),
@@ -338,13 +303,12 @@ func persistRoleState(ctx context.Context, q *db.Queries, ro *role.Role) error {
 	err = q.UpdateRole(ctx, db.UpdateRoleParams{
 		ID:   pgconv.PgUUID(rid),
 		Name: ro.Name(),
-		// Bounded [0,99] by role aggregate invariants per insertRoleRow.
+		// Bounded [0,99] by aggregate invariants.
 		HierarchyLevel: int32(ro.HierarchyLevel()), //nolint:gosec // G115: bounded [0,99] by aggregate
 		Permissions:    permsJSON,
 	})
 	if err != nil {
 		if isRoleNameUniqueViolation(err) {
-			// Rename collided with another live role's name in the same tenant.
 			return role.ErrNameTaken
 		}
 		return fmt.Errorf("role repo: update: %w", err)
@@ -352,9 +316,8 @@ func persistRoleState(ctx context.Context, q *db.Queries, ro *role.Role) error {
 	return nil
 }
 
-// drainRoleEvents pulls events off the aggregate, maps each through
-// integrationevents.FromDomainEvent, and writes the resulting V1
-// records to the outbox. No-op when PullEvents returns nil.
+// drainRoleEvents maps aggregate events to V1 integration events and
+// writes them to the outbox. No-op when PullEvents returns nil.
 func drainRoleEvents(ctx context.Context, tx pgx.Tx, ro *role.Role) error {
 	evs := ro.PullEvents()
 	if len(evs) == 0 {
@@ -376,7 +339,7 @@ func drainRoleEvents(ctx context.Context, tx pgx.Tx, ro *role.Role) error {
 }
 
 // rowToRole hydrates the aggregate from the sqlc row. UnmarshalFromDB
-// trusts the data — no re-validation per TDL canon.
+// trusts the data without re-validation (TDL canon).
 func rowToRole(row db.IdentityRole) (*role.Role, error) {
 	id := role.ID(pgconv.UUIDFromPg(row.ID).String())
 	tid := tenant.ID(pgconv.UUIDFromPg(row.TenantID).String())
@@ -403,10 +366,8 @@ func rowToRole(row db.IdentityRole) (*role.Role, error) {
 	}), nil
 }
 
-// encodePermissions serialises the role's permission set as a JSONB
-// array of name strings. Names are the wire-stable identifier — they
-// survive aggregate-internal pointer churn (intern table re-pointing
-// across deploys).
+// encodePermissions serialises the role's permission set as a JSONB array
+// of name strings (wire-stable identifiers).
 func encodePermissions(perms []*permission.Permission) ([]byte, error) {
 	names := make([]string, 0, len(perms))
 	for _, p := range perms {
@@ -422,11 +383,8 @@ func encodePermissions(perms []*permission.Permission) ([]byte, error) {
 	return out, nil
 }
 
-// decodePermissions reverses [encodePermissions]. Unknown names are
-// rejected — a Role row carrying an unknown permission name is data
-// corruption (catalogue is closed-set per `coding-standards.md`
-// "Permissions — closed-set construction"); fail-loud beats silent
-// privilege-loss.
+// decodePermissions reverses [encodePermissions]. Unknown permission names
+// are data corruption (closed-set catalogue); fails loudly.
 func decodePermissions(payload []byte) ([]*permission.Permission, error) {
 	if len(payload) == 0 {
 		return nil, nil
@@ -454,17 +412,12 @@ func parseTenantIDForRole(id tenant.ID) (uuid.UUID, error) {
 	return parsed, nil
 }
 
-// constraintRoleTenantName names the partial unique index protecting
-// (tenant_id, name) WHERE NOT is_deleted. Migration 20260507000002
-// declares `uq_roles_tenant_name` — this constant is the single source
-// of truth for the constraint identifier per `coding-standards.md`
-// "No magic strings".
+// constraintRoleTenantName is the partial unique index name for
+// (tenant_id, name) WHERE NOT is_deleted (migration 20260507000002).
 const constraintRoleTenantName = "uq_roles_tenant_name"
 
-// isRoleNameUniqueViolation reports whether err wraps a Postgres
-// unique-constraint violation on `uq_roles_tenant_name`. Other unique
-// violations bubble up as wrapped errors — they signal a different
-// invariant breach and shouldn't masquerade as ErrNameTaken.
+// isRoleNameUniqueViolation reports whether err is a unique-constraint
+// violation specifically on uq_roles_tenant_name.
 func isRoleNameUniqueViolation(err error) bool {
 	pgErr, ok := errors.AsType[*pgconn.PgError](err)
 	if !ok {

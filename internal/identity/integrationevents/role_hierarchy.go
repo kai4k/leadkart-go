@@ -6,22 +6,14 @@ import (
 	"github.com/google/uuid"
 )
 
-// Wave 9.4 / ADR 0058 — the rolehierarchy aggregate emits these
-// when a parent→child edge is established or removed. Replaces
-// RoleParentChangedV1 (retired) with two distinct events so
-// subscribers (cached effective-permission projection invalidation,
-// audit log, future org-chart UI) can react asymmetrically.
-//
-// Tenant-scoped — every edge belongs to exactly one tenant
-// (composite FK fk_edges_*_same_tenant enforces).
+// Wave 9.4 / ADR 0058: two distinct events replace the retired RoleParentChangedV1
+// so subscribers can react asymmetrically. Tenant-scoped — every edge belongs
+// to exactly one tenant (composite FK fk_edges_*_same_tenant).
 
-// RoleHierarchyEdgeEstablishedV1 — a brand-new active edge was added
-// linking child_role_id → parent_role_id. Subscribers invalidate any
-// cached effective-permission projections / org-chart caches for
-// memberships holding either role.
-//
-// EstablishedByMembershipID is the zero UUID when a system path
-// (data migration, onboarding seed) created the edge.
+// RoleHierarchyEdgeEstablishedV1 — a new child→parent edge was created.
+// Subscribers invalidate effective-permission caches for memberships holding
+// either role. EstablishedByMembershipID is zero for system paths (migrations,
+// seeds).
 type RoleHierarchyEdgeEstablishedV1 struct {
 	EdgeID                    uuid.UUID `json:"edge_id"`
 	TenantIDClaim             uuid.UUID `json:"tenant_id"`
@@ -43,9 +35,8 @@ func (e RoleHierarchyEdgeEstablishedV1) OccurredAt() time.Time { return e.Occurr
 // TenantID satisfies [TenantScoped].
 func (e RoleHierarchyEdgeEstablishedV1) TenantID() uuid.UUID { return e.TenantIDClaim }
 
-// RoleHierarchyEdgeRemovedV1 — an active edge was soft-deleted.
-// Subscribers invalidate the same caches the establish event did.
-// Same identity tuple so audit dashboards can pair them.
+// RoleHierarchyEdgeRemovedV1 — an active edge was soft-deleted. Same identity
+// tuple as [RoleHierarchyEdgeEstablishedV1] so audit dashboards can pair them.
 type RoleHierarchyEdgeRemovedV1 struct {
 	EdgeID                uuid.UUID `json:"edge_id"`
 	TenantIDClaim         uuid.UUID `json:"tenant_id"`
@@ -67,7 +58,7 @@ func (e RoleHierarchyEdgeRemovedV1) OccurredAt() time.Time { return e.OccurredAt
 // TenantID satisfies [TenantScoped].
 func (e RoleHierarchyEdgeRemovedV1) TenantID() uuid.UUID { return e.TenantIDClaim }
 
-// Compile-time + runtime registration.
+// Compile-time assertions and registration.
 var (
 	_ TenantScoped = RoleHierarchyEdgeEstablishedV1{}
 	_ TenantScoped = RoleHierarchyEdgeRemovedV1{}

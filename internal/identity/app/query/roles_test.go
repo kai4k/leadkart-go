@@ -27,17 +27,14 @@ func TestNewGetRoleHandler_PanicsOnNilRoles(t *testing.T) {
 
 func TestNewGetRoleHandler_NilEdgesAllowed(t *testing.T) {
 	t.Parallel()
-	// Edges may be nil — covered by the lookupParent nil-guard. Asserts
-	// the ctor does NOT panic + returns a usable handler whose Handle
-	// path treats nil edges as "always root".
+	// Edges may be nil; ctor must not panic, and nil edges means "always root".
 	defer func() {
 		if r := recover(); r != nil {
 			t.Fatalf("unexpected panic with nil edges: %v", r)
 		}
 	}()
 	h := query.NewGetRoleHandler(roletest.NewFakeRepository(), nil)
-	// Empty repo → ErrNotFound — proves Handle exercises the nil-edges
-	// branch without crashing in lookupParent.
+	// Empty repo → ErrNotFound proves Handle exercises the nil-edges branch.
 	_, err := h.Handle(t.Context(), query.GetRoleQuery{TenantID: testTenantID, RoleID: testRoleID})
 	if !errors.Is(err, role.ErrNotFound) {
 		t.Fatalf("err = %v, want role.ErrNotFound", err)
@@ -158,8 +155,7 @@ func TestGetRole_NilEdgesReturnsEmptyParent(t *testing.T) {
 	}
 }
 
-// edgesErrRepo lets a test inject a non-ErrEdgeNotFound failure on
-// GetActiveByChild.
+// edgesErrRepo injects a non-ErrEdgeNotFound failure on GetActiveByChild.
 type edgesErrRepo struct {
 	rolehierarchy.Repository
 	err error
@@ -223,7 +219,7 @@ func TestListRoles_RejectsZeroTenant(t *testing.T) {
 	}
 }
 
-// rolesListErrRepo injects failure on the ListByTenant path.
+// rolesListErrRepo injects failure on ListByTenant.
 type rolesListErrRepo struct {
 	role.Repository
 	err error
@@ -284,7 +280,7 @@ func TestListRoles_HappyPath_OrdersAndPopulatesParent(t *testing.T) {
 	if len(got) != 2 {
 		t.Fatalf("len = %d, want 2", len(got))
 	}
-	// Find the manager (child) and assert it carries the parent reference.
+	// Find the manager (child) and verify it carries the parent reference.
 	var mgr *query.RoleView
 	for i := range got {
 		if got[i].Name == "Manager" {

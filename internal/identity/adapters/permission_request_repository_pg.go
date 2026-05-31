@@ -22,14 +22,9 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
 
-// PermissionRequestRepository is the pgx/sqlc-backed implementation of
-// [permissionrequest.Repository]. Tenant-scoped — every read + write
-// runs under [pg.TxScopeTenant] so the connection's `app.tenant_id`
-// GUC binds before queries touch the table; Postgres RLS does the rest.
-//
-// When ctx carries an active tx (a parent [pg.UnitOfWork] is in flight),
-// Add joins that tx rather than opening its own — same shape as
-// MembershipRepository.Add per ADR 0047.
+// PermissionRequestRepository is the pgx/sqlc-backed [permissionrequest.Repository].
+// Tenant-scoped: all reads and writes run under [pg.TxScopeTenant].
+// Joins an ambient UoW tx when present (ADR 0047).
 type PermissionRequestRepository struct {
 	pool *pgxpool.Pool
 	tx   *pg.Transactor
@@ -41,14 +36,9 @@ func NewPermissionRequestRepository(pool *pgxpool.Pool, tx *pg.Transactor) *Perm
 	return &PermissionRequestRepository{pool: pool, tx: tx, q: db.New(pool)}
 }
 
-// Add satisfies [permissionrequest.Repository] — persists a brand-new
-// Pending Request. Translates SQLSTATE 23505 on
-// uq_permission_requests_pending into
-// [permissionrequest.ErrPendingRequestExists].
-//
-// The aggregate carries its own TenantID — the GUC is bound from
-// req.TenantID() (TDL canon per ADR 0062: tenantID flows through
-// explicit values, not ctx).
+// Add satisfies [permissionrequest.Repository]. Translates SQLSTATE 23505
+// on uq_permission_requests_pending to [permissionrequest.ErrPendingRequestExists].
+// GUC bound from req.TenantID() (ADR 0062).
 func (r *PermissionRequestRepository) Add(ctx context.Context, req *permissionrequest.Request) error {
 	if tx, ok := pg.TxFromContext(ctx); ok {
 		return r.addOnTx(ctx, tx, req)
@@ -70,9 +60,8 @@ func (r *PermissionRequestRepository) addOnTx(
 	return drainPermissionRequestEvents(ctx, tx, req)
 }
 
-// GetByID satisfies [permissionrequest.Repository]. Tenant-scoped
-// read — GUC bound from the explicit tenantID parameter (TDL canon
-// per ADR 0062).
+// GetByID satisfies [permissionrequest.Repository]. GUC bound from the
+// explicit tenantID parameter (ADR 0062).
 func (r *PermissionRequestRepository) GetByID(
 	ctx context.Context,
 	tenantID tenant.ID,
@@ -94,24 +83,17 @@ func (r *PermissionRequestRepository) GetByID(
 	return out, nil
 }
 
-// UpdateByID satisfies [permissionrequest.Repository] — TDL Sep 2024
-// UpdateFn pattern: load → updateFn → persist (if shouldPersist) →
-// drain events. All in one tenant-scoped transaction. GUC bound from
-// the explicit tenantID parameter (TDL canon per ADR 0062).
-//
-// Approve / Deny / Cancel all flow through here; the aggregate's state
-// machine validates legality, the SQL just writes whatever the
-// aggregate computed.
+// UpdateByID satisfies [permissionrequest.Repository]. TDL UpdateFn
+// pattern: load → updateFn → persist → drain events. GUC bound from
+// tenantID (ADR 0062). Approve/Deny/Cancel all route here.
 func (r *PermissionRequestRepository) UpdateByID(
 	ctx context.Context,
 	tenantID tenant.ID,
 	id permissionrequest.ID,
 	updateFn func(*permissionrequest.Request) (bool, error),
 ) error {
-	// When the caller is already inside a [pg.UnitOfWork] (e.g. the
-	// Approve handler that writes BOTH the request decision AND the
-	// membership grant in the same tx) join that tx so all writes share
-	// the outbox row's commit point.
+	// Join an ambient UoW tx when present (e.g. Approve writes both the
+	// request decision and the membership grant in the same commit).
 	if tx, ok := pg.TxFromContext(ctx); ok {
 		return r.updateOnTx(ctx, tx, id, updateFn)
 	}
@@ -144,9 +126,8 @@ func (r *PermissionRequestRepository) updateOnTx(
 	return drainPermissionRequestEvents(ctx, tx, req)
 }
 
-// GetPendingForMembership satisfies [permissionrequest.Repository].
-// Tenant-scoped read — GUC bound from the explicit tenantID parameter
-// (TDL canon per ADR 0062).
+// GetPendingForMembership satisfies [permissionrequest.Repository]. GUC
+// bound from the explicit tenantID parameter (ADR 0062).
 func (r *PermissionRequestRepository) GetPendingForMembership(
 	ctx context.Context,
 	tenantID tenant.ID,
@@ -180,10 +161,8 @@ func (r *PermissionRequestRepository) GetPendingForMembership(
 }
 
 // ListPendingApprovableBy satisfies [permissionrequest.Repository].
-// Keyset-paginated approver queue. ADR 0038 — first page passes the
-// zero cursor; adapter applies the sentinel (now+1d, max-uuid) so the
-// tuple-comparison admits every row. GUC bound from the explicit
-// tenantID parameter (TDL canon per ADR 0062).
+// Keyset-paginated approver queue (ADR 0038). Zero cursor uses a far-
+// future sentinel to admit all rows. GUC bound from tenantID (ADR 0062).
 func (r *PermissionRequestRepository) ListPendingApprovableBy(
 	ctx context.Context,
 	tenantID tenant.ID,
@@ -230,9 +209,8 @@ func (r *PermissionRequestRepository) ListPendingApprovableBy(
 }
 
 // ListByRequester satisfies [permissionrequest.Repository]. Returns
-// keyset-paginated history (all states) for the requester membership.
-// GUC bound from the explicit tenantID parameter (TDL canon per
-// ADR 0062).
+// keyset-paginated request history (all states). GUC bound from tenantID
+// (ADR 0062).
 func (r *PermissionRequestRepository) ListByRequester(
 	ctx context.Context,
 	tenantID tenant.ID,
@@ -422,8 +400,8 @@ func rowToPermissionRequest(row db.IdentityPermissionRequest) (*permissionreques
 }
 
 // constraintPermissionRequestsPending names the partial unique index
-// from migration 20260523000003 enforcing the at-most-one-pending
-// invariant per (requester_membership_id, permission_constant).
+// (migration 20260523000003) enforcing at-most-one-pending per
+// (requester_membership_id, permission_constant).
 const constraintPermissionRequestsPending = "uq_permission_requests_pending"
 
 func isPendingRequestUniqueViolation(err error) bool {
@@ -437,10 +415,8 @@ func isPendingRequestUniqueViolation(err error) bool {
 	return pgErr.ConstraintName == constraintPermissionRequestsPending
 }
 
-// permReqFirstPageBefore / permReqFirstPageBeforeID are the sentinel
-// tuple values supplied on the first page (no cursor). Mirrors the
-// audit.FirstPageBefore pattern — admit every row by setting the upper
-// bound to a far-future timestamp + the all-FF UUID.
+// permReqFirstPageBefore / permReqFirstPageBeforeID are first-page
+// sentinels (no cursor): far-future timestamp + all-FF UUID admits all rows.
 var (
 	permReqFirstPageBefore   = time.Date(9999, 1, 1, 0, 0, 0, 0, time.UTC)
 	permReqFirstPageBeforeID = uuid.MustParse("ffffffff-ffff-ffff-ffff-ffffffffffff")

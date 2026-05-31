@@ -17,16 +17,9 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
 
-// RefreshTokenFamilyRepository is the pgx/sqlc-backed implementation of
-// [refreshtoken.Repository]. The two underlying tables
-// (refresh_token_families + refresh_tokens) are NON-RLS — refresh tokens
-// are session-management infrastructure that carries tenant context as a
-// data column. Token-hash uniqueness is the load-bearing isolation per
-// Auth0/Okta/Stripe canon; cross-tenant lookups by token hash are
-// intentional + the foundational read pattern.
-//
-// All paths run under TxScopePlatform: the outbox row's tenant_id is
-// the family's tenantID and the policy `is_platform()` always permits.
+// RefreshTokenFamilyRepository is the pgx/sqlc-backed [refreshtoken.Repository].
+// The underlying tables are non-RLS (session infrastructure); tenant context
+// is a data column. All paths run under TxScopePlatform.
 type RefreshTokenFamilyRepository struct {
 	pool *pgxpool.Pool
 	tx   *pg.Transactor
@@ -38,13 +31,10 @@ func NewRefreshTokenFamilyRepository(pool *pgxpool.Pool, tx *pg.Transactor) *Ref
 	return &RefreshTokenFamilyRepository{pool: pool, tx: tx, q: db.New(pool)}
 }
 
-// runInTx joins an ambient UoW tx when present (the transactional inbox
-// or a composed multi-aggregate write), else opens its own platform-scoped
-// tx (refresh tokens are non-RLS session infra). Mirrors the runInTx helper
-// on the person/membership/tenant repos so the family repo honors the same
-// UoW-join contract — previously it called WithinTxPgx directly and would
-// silently split an inbox-wrapped revocation into a separate transaction
-// (ADR 0067 Phase-4 finding).
+// runInTx joins an ambient UoW tx when present, else opens a platform-scoped
+// tx (ADR 0067 Phase-4 UoW-join contract). Previously calling WithinTxPgx
+// directly caused inbox-wrapped revocations to split into separate
+// transactions.
 func (r *RefreshTokenFamilyRepository) runInTx(ctx context.Context, fn func(ctx context.Context, tx pgx.Tx) error) error {
 	if tx, ok := pg.TxFromContext(ctx); ok {
 		return fn(ctx, tx)
@@ -52,7 +42,7 @@ func (r *RefreshTokenFamilyRepository) runInTx(ctx context.Context, fn func(ctx 
 	return r.tx.WithinTxPgx(ctx, pg.TxScopePlatform, fn)
 }
 
-// Add persists a brand-new family + its first token from [refreshtoken.NewFamily].
+// Add persists a new family and its first token.
 func (r *RefreshTokenFamilyRepository) Add(ctx context.Context, f *refreshtoken.Family) error {
 	return r.runInTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
 		q := r.q.WithTx(tx)
@@ -66,11 +56,8 @@ func (r *RefreshTokenFamilyRepository) Add(ctx context.Context, f *refreshtoken.
 	})
 }
 
-// UpdateByID — TDL UpdateFn pattern. Loads family + tokens, runs
-// closure, persists whatever the aggregate now says. The UPSERT-by-id
-// path covers both the "new token minted" case (insert) and the
-// "previous token consumed" case (update consumed_at + replaced_by_id)
-// without explicit delta tracking.
+// UpdateByID uses the TDL UpdateFn pattern. UPSERT-by-id covers both
+// new-token-mint (insert) and consumed-token (update) without delta tracking.
 func (r *RefreshTokenFamilyRepository) UpdateByID(
 	ctx context.Context,
 	id refreshtoken.FamilyID,
@@ -99,7 +86,7 @@ func (r *RefreshTokenFamilyRepository) UpdateByID(
 	})
 }
 
-// GetByID returns the family + all its tokens, or [refreshtoken.ErrNotFound].
+// GetByID returns the family and all its tokens, or [refreshtoken.ErrNotFound].
 func (r *RefreshTokenFamilyRepository) GetByID(ctx context.Context, id refreshtoken.FamilyID) (*refreshtoken.Family, error) {
 	var out *refreshtoken.Family
 	err := r.runInTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
@@ -116,9 +103,8 @@ func (r *RefreshTokenFamilyRepository) GetByID(ctx context.Context, id refreshto
 	return out, nil
 }
 
-// GetByTokenHash resolves a presented refresh token to its family.
-// Returns [refreshtoken.ErrNotFound] when no family has a token with
-// the given hash.
+// GetByTokenHash resolves a token hash to its family, or returns
+// [refreshtoken.ErrNotFound].
 func (r *RefreshTokenFamilyRepository) GetByTokenHash(ctx context.Context, hash refreshtoken.TokenHash) (*refreshtoken.Family, error) {
 	var out *refreshtoken.Family
 	err := r.runInTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
@@ -150,9 +136,8 @@ func (r *RefreshTokenFamilyRepository) GetByTokenHash(ctx context.Context, hash 
 	return out, nil
 }
 
-// ListActiveForPerson returns all non-revoked families for a Person —
-// powers the user "manage sessions" UI + the per-Person family-cap
-// enforcement at family creation time.
+// ListActiveForPerson returns all non-revoked families for a Person.
+// Powers the "manage sessions" UI and per-Person family-cap enforcement.
 func (r *RefreshTokenFamilyRepository) ListActiveForPerson(ctx context.Context, personID person.ID) ([]*refreshtoken.Family, error) {
 	uid, err := parsePersonIDForRefresh(personID)
 	if err != nil {
@@ -160,9 +145,8 @@ func (r *RefreshTokenFamilyRepository) ListActiveForPerson(ctx context.Context, 
 	}
 	var out []*refreshtoken.Family
 	err = r.runInTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
-		// Two-pass: drain family rows into a slice (releasing the
-		// connection's iteration cursor), THEN load each family's
-		// tokens. pgx forbids multiplexed queries on one connection.
+		// Two-pass: collect family rows, then load tokens per family.
+		// pgx forbids multiplexed queries on one connection.
 		q := r.q.WithTx(tx)
 		familyRows, err := q.ListActiveFamiliesForPerson(ctx, pgconv.PgUUID(uid))
 		if err != nil {
@@ -236,11 +220,9 @@ func upsertFamilyTokens(ctx context.Context, q *db.Queries, f *refreshtoken.Fami
 	if err != nil {
 		return err
 	}
-	// Iterate in REVERSE generation order so that when an older token's
-	// replaced_by_id points at a newer token, the newer one already
-	// exists (FK refresh_tokens_replaced_by_id_fkey is satisfied at
-	// statement time — Postgres FK checks run per-statement under
-	// READ COMMITTED).
+	// Reverse generation order: newer tokens exist first so the
+	// replaced_by_id FK (refresh_tokens_replaced_by_id_fkey) is
+	// satisfied at statement time under READ COMMITTED.
 	tokens := f.AllTokens()
 	for i := len(tokens) - 1; i >= 0; i-- {
 		t := tokens[i]

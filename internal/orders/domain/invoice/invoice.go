@@ -1,31 +1,15 @@
-// Package invoice owns the [Invoice] aggregate — the immutable tax
-// document issued after an order is packed. Per BRD §6.4 + §A-014 +
-// ADR 0063 §3.
+// Package invoice owns the [Invoice] aggregate — the immutable tax document
+// issued after an order is packed (BRD §6.4 + §A-014 + ADR 0063 §3).
 //
-// Invariants:
+// Key invariants:
+//   - APPEND-ONLY: no mutator; only New + UnmarshalFromDB.
+//   - GAPLESS NUMBERING: invoice_number allocated by [invoicenumber.Allocator]
+//     inside the same tx so rollback reverts the counter — never via Postgres
+//     SEQUENCE nextval(), which burns numbers on rollback and breaks GSTR-1.
+//   - TENANT-SCOPED: composite PK (tenant_id, id); RLS+FORCE.
 //
-//   - APPEND-ONLY. Once an Invoice row exists, it is never updated.
-//     Cancellation post-delivery produces a CreditNote referencing this
-//     invoice; pre-delivery cancellation produces a CancellationNote.
-//     There is no mutator method on this aggregate — only New + Unmarshal.
-//   - GAPLESS NUMBERING. The invoice_number is allocated via
-//     [invoicenumber.Allocator] INSIDE the surrounding business tx so
-//     rollback rolls back the increment. NEVER via Postgres SEQUENCE
-//     `nextval()` (which would burn numbers on rollback → GSTR-1 audit
-//     failure).
-//   - TENANT-SCOPED. Composite PK (tenant_id, id); RLS+FORCE.
-//
-// State at creation time:
-//
-//   - InvoiceNumber: caller-supplied via [invoicenumber.Number] (the
-//     command handler allocates via the Allocator, then constructs the
-//     Invoice with the resulting Number). The Invoice does NOT call
-//     Allocator itself — that's a handler responsibility (separation
-//     of concerns + invariant: allocation MUST happen in the same tx
-//     as the Insert).
-//   - LineItems: caller-supplied snapshot (frozen at Invoice issue
-//     time — typically a copy of Order.confirmedItems verbatim).
-//   - TaxDetails: HSN-level tax breakdown for GSTR-1 reporting.
+// The command handler allocates the Number and passes it in; Invoice never
+// calls Allocator directly (allocation must be in the same tx as Insert).
 package invoice
 
 import (
@@ -50,15 +34,14 @@ type ID string
 // IsZero reports whether id is unset.
 func (id ID) IsZero() bool { return id == "" }
 
-// String returns the underlying UUID string.
+// String implements [fmt.Stringer].
 func (id ID) String() string { return string(id) }
 
-// TaxLine is the per-HSN tax breakdown row. The Invoice carries one
-// TaxLine per distinct (HSNCode, GSTRateBps) pair across its line
-// items. Required for GSTR-1 export.
+// TaxLine is the per-HSN tax breakdown row — one entry per distinct
+// (HSNCode, GSTRateBps) pair. Required for GSTR-1 export.
 type TaxLine struct {
-	HSNCode      string
-	GSTRateBps   int32 // basis points (12% = 1200) per inventory canon
+	HSNCode           string
+	GSTRateBps        int32 // basis points (12% = 1200) per inventory canon
 	TaxableValuePaise int64
 	TaxAmountPaise    int64
 }
@@ -82,33 +65,33 @@ func (tl TaxLine) Validate() error {
 
 // Invoice is the aggregate root. Append-only.
 type Invoice struct {
-	id                    ID
-	tenantID              tenant.ID
-	orderID               order.ID
-	number                invoicenumber.Number
-	lineItems             []quotation.LineItem
-	taxLines              []TaxLine
-	subtotalPaise         int64
-	taxPaise              int64
-	grandTotalPaise       int64
-	issuedAt              time.Time
-	issuedByMembershipID  membership.ID
+	id                   ID
+	tenantID             tenant.ID
+	orderID              order.ID
+	number               invoicenumber.Number
+	lineItems            []quotation.LineItem
+	taxLines             []TaxLine
+	subtotalPaise        int64
+	taxPaise             int64
+	grandTotalPaise      int64
+	issuedAt             time.Time
+	issuedByMembershipID membership.ID
 }
 
-// NewInput is the ctor input. Called by the command handler that
-// allocated the Number from the Allocator + assembled the snapshots.
+// NewInput carries all fields for [New]. Assembled by the command handler
+// after allocating the Number via [invoicenumber.Allocator].
 type NewInput struct {
-	ID                    ID
-	TenantID              tenant.ID
-	OrderID               order.ID
-	Number                invoicenumber.Number
-	LineItems             []quotation.LineItem
-	TaxLines              []TaxLine
-	SubtotalPaise         int64
-	TaxPaise              int64
-	GrandTotalPaise       int64
-	IssuedAt              time.Time
-	IssuedByMembershipID  membership.ID
+	ID                   ID
+	TenantID             tenant.ID
+	OrderID              order.ID
+	Number               invoicenumber.Number
+	LineItems            []quotation.LineItem
+	TaxLines             []TaxLine
+	SubtotalPaise        int64
+	TaxPaise             int64
+	GrandTotalPaise      int64
+	IssuedAt             time.Time
+	IssuedByMembershipID membership.ID
 }
 
 // New constructs an Invoice. Validates every invariant.
@@ -184,17 +167,17 @@ func New(in NewInput) (*Invoice, error) {
 
 // Snapshot is the persistence DTO consumed by [UnmarshalFromDB].
 type Snapshot struct {
-	ID                    ID
-	TenantID              tenant.ID
-	OrderID               order.ID
-	Number                invoicenumber.Number
-	LineItems             []quotation.LineItem
-	TaxLines              []TaxLine
-	SubtotalPaise         int64
-	TaxPaise              int64
-	GrandTotalPaise       int64
-	IssuedAt              time.Time
-	IssuedByMembershipID  membership.ID
+	ID                   ID
+	TenantID             tenant.ID
+	OrderID              order.ID
+	Number               invoicenumber.Number
+	LineItems            []quotation.LineItem
+	TaxLines             []TaxLine
+	SubtotalPaise        int64
+	TaxPaise             int64
+	GrandTotalPaise      int64
+	IssuedAt             time.Time
+	IssuedByMembershipID membership.ID
 }
 
 // UnmarshalFromDB rehydrates the aggregate without re-validating.
@@ -217,8 +200,6 @@ func UnmarshalFromDB(s Snapshot) *Invoice {
 		issuedByMembershipID: s.IssuedByMembershipID,
 	}
 }
-
-// ----- Getters --------------------------------------------------------------
 
 // ID returns the aggregate identity.
 func (inv *Invoice) ID() ID { return inv.id }
@@ -246,17 +227,17 @@ func (inv *Invoice) TaxLines() []TaxLine {
 	return out
 }
 
-// SubtotalPaise returns the sum of taxable values.
+// SubtotalPaise returns the sum of taxable values in paise.
 func (inv *Invoice) SubtotalPaise() int64 { return inv.subtotalPaise }
 
-// TaxPaise returns the sum of tax amounts.
+// TaxPaise returns the total tax in paise.
 func (inv *Invoice) TaxPaise() int64 { return inv.taxPaise }
 
-// GrandTotalPaise returns subtotal + tax.
+// GrandTotalPaise returns subtotal + tax in paise.
 func (inv *Invoice) GrandTotalPaise() int64 { return inv.grandTotalPaise }
 
 // IssuedAt returns the issue timestamp.
 func (inv *Invoice) IssuedAt() time.Time { return inv.issuedAt }
 
-// IssuedByMembershipID returns the actor who issued.
+// IssuedByMembershipID returns the membership that issued this invoice.
 func (inv *Invoice) IssuedByMembershipID() membership.ID { return inv.issuedByMembershipID }

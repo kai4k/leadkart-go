@@ -12,11 +12,8 @@ import (
 )
 
 // RoleView is the wire-shape of a [role.Role] for read endpoints.
-//
-// ParentRoleID (ADR 0058) — empty when the role is a root. Populated
-// by JOIN to identity.role_hierarchy_edges at read time; the Role
-// aggregate itself no longer carries the field (hierarchy is its
-// own aggregate per Wave 9.4).
+// ParentRoleID (ADR 0058) is empty for root roles; populated via the
+// role_hierarchy_edges table at read time (hierarchy is its own aggregate).
 type RoleView struct {
 	ID              string
 	TenantID        string
@@ -43,9 +40,7 @@ type GetRoleHandler struct {
 	edges rolehierarchy.Repository
 }
 
-// NewGetRoleHandler wires the handler. `edges` may be nil in test
-// fixtures that don't exercise the parent-population path; the
-// handler treats nil as "always root" for those callers.
+// NewGetRoleHandler wires the handler. edges may be nil; nil is treated as "always root".
 func NewGetRoleHandler(r role.Repository, edges rolehierarchy.Repository) GetRoleHandler {
 	if r == nil {
 		panic("query: NewGetRoleHandler roles repository required")
@@ -53,10 +48,8 @@ func NewGetRoleHandler(r role.Repository, edges rolehierarchy.Repository) GetRol
 	return GetRoleHandler{roles: r, edges: edges}
 }
 
-// Handle returns the [RoleView] or [role.ErrNotFound]. Performs a
-// secondary lookup against [rolehierarchy.Repository] to populate the
-// view's ParentRoleID field (cheap — single indexed lookup on the
-// edges table; bounded tenant catalog).
+// Handle returns the [RoleView] or [role.ErrNotFound].
+// Performs a secondary indexed lookup to populate ParentRoleID.
 func (h GetRoleHandler) Handle(ctx context.Context, q GetRoleQuery) (RoleView, error) {
 	if q.TenantID.IsZero() {
 		return RoleView{}, errors.New("get_role: tenant id required")
@@ -75,9 +68,8 @@ func (h GetRoleHandler) Handle(ctx context.Context, q GetRoleQuery) (RoleView, e
 	return projectRole(r, parentID), nil
 }
 
-// lookupParent returns the active parent role for `id` OR empty
-// string when the role is a root. ErrEdgeNotFound is the expected
-// "no parent" signal — not an error.
+// lookupParent returns the active parent role ID, or "" for roots.
+// ErrEdgeNotFound is the expected "no parent" signal, not an error.
 func (h GetRoleHandler) lookupParent(ctx context.Context, tenantID tenant.ID, id role.ID) (string, error) {
 	if h.edges == nil {
 		return "", nil
@@ -105,8 +97,7 @@ type ListRolesHandler struct {
 	edges rolehierarchy.Repository
 }
 
-// NewListRolesHandler wires the handler. `edges` is optional for
-// fixtures (see GetRoleHandler's commentary).
+// NewListRolesHandler wires the handler. edges may be nil (treated as "always root").
 func NewListRolesHandler(r role.Repository, edges rolehierarchy.Repository) ListRolesHandler {
 	if r == nil {
 		panic("query: NewListRolesHandler roles repository required")
@@ -115,12 +106,8 @@ func NewListRolesHandler(r role.Repository, edges rolehierarchy.Repository) List
 }
 
 // Handle returns [RoleView]s ordered by hierarchy_level, name.
-// Parent population: for each role we look up its active edge. At
-// the per-tenant catalog sizes BRD line 241 implies (≤30 roles
-// typical) this is N small indexed lookups — cheaper than a JOIN-
-// heavy alternative + avoids leaking edge schema into the roles
-// sqlc query. If a future tenant grows the catalog into the
-// thousands we'd swap this to a single bulk query.
+// Per-role parent lookup is N small indexed queries; acceptable for
+// the ≤30-role catalogs BRD §241 implies. Bulk if catalogs grow.
 func (h ListRolesHandler) Handle(ctx context.Context, q ListRolesQuery) ([]RoleView, error) {
 	if q.TenantID.IsZero() {
 		return nil, errors.New("list_roles: tenant id required")

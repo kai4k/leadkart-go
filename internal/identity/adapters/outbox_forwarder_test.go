@@ -8,12 +8,11 @@
 
 // outbox_forwarder_test.go — producer→outbox contract for identity.
 //
-// Post-ADR-0064 the per-module hand-rolled forwarder is gone; one library
-// Watermill Forwarder (cmd/worker) drains the shared common.outbox relay.
-// These tests verify the PRODUCER side — a repository write enqueues the
-// right enveloped event(s) to common.outbox in the same tx — via
-// messagingtest.DrainOutbox (the relay read + envelope unwrap). The
-// forwarder hop itself is library code, not re-verified here.
+// Post-ADR-0064: the per-module forwarder is gone; a single library
+// Watermill Forwarder (cmd/worker) drains common.outbox. These tests
+// verify the PRODUCER side — a repository write enqueues the correct
+// enveloped row in the same tx — via messagingtest.DrainOutbox.
+// The forwarder hop is library code and not re-verified here.
 
 package adapters_test
 
@@ -31,10 +30,9 @@ import (
 	identityevents "github.com/leadkart/leadkart-go/internal/identity/integrationevents"
 )
 
-// TestOutbox_TenantRegistered_EnqueuesEnvelopedEvent proves registering a
-// tenant writes exactly one enveloped row to common.outbox, carrying the
-// canonical event_type + tenant metadata + the destination topic the
-// forwarder will republish to, and the marshaled V1 payload.
+// TestOutbox_TenantRegistered_EnqueuesEnvelopedEvent verifies that
+// registering a tenant writes exactly one enveloped row to common.outbox
+// with the correct event_type, tenant_id, destination topic, and V1 payload.
 func TestOutbox_TenantRegistered_EnqueuesEnvelopedEvent(t *testing.T) {
 	sharedPG.TruncateAll(t)
 	fix := newOutboxFixture(t)
@@ -63,8 +61,7 @@ func TestOutbox_TenantRegistered_EnqueuesEnvelopedEvent(t *testing.T) {
 		t.Fatalf("tenant_id metadata: got %q want %q", got, tn.ID().String())
 	}
 
-	// Payload is the marshaled integration-event V1 record — primitive
-	// snake_case wire shape per integrationevents.TenantRegisteredV1.
+	// Payload is the marshaled V1 record (snake_case per integrationevents.TenantRegisteredV1).
 	var payload struct {
 		TenantID string `json:"tenant_id"`
 		Slug     string `json:"slug"`
@@ -80,10 +77,9 @@ func TestOutbox_TenantRegistered_EnqueuesEnvelopedEvent(t *testing.T) {
 	}
 }
 
-// TestOutbox_TenantRegistered_EnqueuesExactlyOnce proves the producer
-// writes exactly one outbox row per registration — no duplicate enqueue.
-// (Replaces the old "second ForwardOnce returns 0" test: drain idempotency
-// is now the library forwarder's DeleteOnAck concern, per ADR 0064.)
+// TestOutbox_TenantRegistered_EnqueuesExactlyOnce proves no duplicate enqueue
+// per registration. Drain idempotency is the forwarder's DeleteOnAck concern
+// (ADR 0064).
 func TestOutbox_TenantRegistered_EnqueuesExactlyOnce(t *testing.T) {
 	sharedPG.TruncateAll(t)
 	fix := newOutboxFixture(t)
@@ -97,13 +93,12 @@ func TestOutbox_TenantRegistered_EnqueuesExactlyOnce(t *testing.T) {
 		t.Fatalf("Add: %v", err)
 	}
 
-	// forwardAndWait asserts the count internally — exactly one row, on the
-	// identity destination topic.
+	// forwardAndWait asserts exactly one row on the identity topic.
 	msgs := fix.forwardAndWait(t, 1)
 	if got := msgs[0].Metadata.Get(messaging.HeaderEventType); got != "identity.tenant_registered.v1" {
 		t.Fatalf("event_type: got %q", got)
 	}
-	// Guard the destination-topic contract the forwarder routes on.
+	// Assert destination-topic contract.
 	rows := drainOutboxRows(t, fix)
 	if rows[0].DestinationTopic != identityevents.Topic {
 		t.Fatalf("destination topic: got %q want %q", rows[0].DestinationTopic, identityevents.Topic)
