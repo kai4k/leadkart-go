@@ -26,25 +26,25 @@
 //
 // # Middleware stack (as wired in router.go)
 //
-//	global (outermost first):  CorrelationID → TraceContext → TenantContext
-//	per-handler (outermost first, via AddSubscriber / AddCqrsHandler):
-//	                           PoisonQueue → Idempotency → Audit → Retry → Recoverer
+//		global (outermost first):  CorrelationID → TraceContext → TenantContext
+//		per-handler (outermost first, via AddSubscriber / AddCqrsHandler):
+//		                           PoisonQueue → Idempotency → Audit → Retry → Recoverer
 //
-//   - Recoverer is INNERMOST: a panicking handler becomes an error that
-//     Retry sees and retries (panics are no longer fatal-once).
-//   - Retry inside Audit: Audit records the final outcome once, after the
-//     retry budget is spent (or immediately for a [NonRetryable] error).
-//   - Idempotency inside PoisonQueue: the dedup row is written only on
-//     genuine success; a poisoned message is never marked "processed".
-//   - PoisonQueue OUTERMOST: after retries exhaust (or immediately for a
-//     [NonRetryable] error) it salvages the message to [DeadLetterTopic],
-//     persisted durably to common.dead_letter by [DeadLetterWriter] for
-//     inspection / replay. The DLQ persister carries ONLY Recoverer (a
-//     failed DLQ write must not re-poison into the same topic).
-//   - TraceContext extracts the producer's W3C trace context so the
-//     consumer span joins the producer trace across the async hop.
-//   - TenantContext bridges the tenant_id metadata header into ctx so
-//     tenant-scoped subscribers run under the right RLS scope.
+//	  - Recoverer is INNERMOST: a panicking handler becomes an error that
+//	    Retry sees and retries (panics are no longer fatal-once).
+//	  - Retry inside Audit: Audit records the final outcome once, after the
+//	    retry budget is spent (or immediately for a [NonRetryable] error).
+//	  - Idempotency inside PoisonQueue: the dedup row is written only on
+//	    genuine success; a poisoned message is never marked "processed".
+//	  - PoisonQueue OUTERMOST: after retries exhaust (or immediately for a
+//	    [NonRetryable] error) it salvages the message to [DeadLetterTopic],
+//	    persisted durably to common.dead_letter by [DeadLetterWriter] for
+//	    inspection / replay. The DLQ persister carries ONLY Recoverer (a
+//	    failed DLQ write must not re-poison into the same topic).
+//	  - TraceContext extracts the producer's W3C trace context so the
+//	    consumer span joins the producer trace across the async hop.
+//	  - TenantContext bridges the tenant_id metadata header into ctx so
+//	    tenant-scoped subscribers run under the right RLS scope.
 //
 // # Idempotency (inbox)
 //
