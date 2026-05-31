@@ -9,20 +9,17 @@ import (
 	"github.com/ThreeDotsLabs/watermill/message"
 )
 
-// moduleTopicFromAlias derives the module routing topic from a per-event
-// wire alias. Every alias is `<module>.<event>.v<N>` (ADR 0059) and every
-// module subscribe topic is `<module>.events` (e.g. identityevents.Topic),
-// so the alias self-encodes its routing topic: the first dotted segment +
-// ".events".
+// moduleTopicFromAlias derives a module's routing topic from a per-event wire
+// alias. Aliases are "<module>.<event>.v<N>" (ADR 0059) and every module
+// subscribe topic is "<module>.events", so the first segment + ".events" is
+// the topic:
 //
-//	identity.person_created.v1   -> identity.events
-//	platform.lead_purchased.v1   -> platform.events   (CRM consumes this)
-//	orders.order_packed.v1       -> orders.events      (Dispatch consumes this)
+//	identity.person_created.v1 -> identity.events
+//	platform.lead_purchased.v1 -> platform.events   (CRM consumes this)
+//	orders.order_packed.v1     -> orders.events      (Dispatch consumes this)
 //
-// This lets a SINGLE cqrs.EventProcessor host handlers for every module —
-// including cross-module consumers — without a per-module topic table: the
-// marshaler's Name(event)=event.Topic() yields the alias, and this maps it
-// back to the topic the OutboxForwarder republishes to.
+// This lets one EventProcessor host every module's handlers — including
+// cross-module consumers — with no per-module topic table.
 func moduleTopicFromAlias(alias string) (string, error) {
 	mod, _, ok := strings.Cut(alias, ".")
 	if !ok || mod == "" {
@@ -31,26 +28,16 @@ func moduleTopicFromAlias(alias string) (string, error) {
 	return mod + ".events", nil
 }
 
-// NewEventProcessor builds the canonical cqrs.EventProcessor for the
-// consumer side (ADR 0067). It hosts every module's typed event handlers
-// (cqrs.NewEventHandler[T]) on one router, replacing the hand-rolled
-// metadata-filter + json.Unmarshal boilerplate in every subscriber.
+// NewEventProcessor builds the cqrs EventProcessor for the consumer side
+// (ADR 0067). It hosts every module's typed handlers on one router.
 //
-//   - GenerateSubscribeTopic  — module topic derived from the event alias
-//     (see [moduleTopicFromAlias]); cross-module handlers subscribe to the
-//     producer's topic automatically.
-//   - SubscriberConstructor   — every handler shares the one broker
-//     subscriber (gochannel in v0.2). The per-handler resilience stack is
-//     router-global middleware (see [NewRouter]); cqrs does not own it.
-//   - Marshaler               — [WireAliasMarshaler]: dispatch key is the
-//     frozen wire alias, payload is raw JSON (matches [PublishOutbox]).
-//   - AckOnUnknownEvent: true — many event types ride one module topic;
-//     a handler only matches its own alias, so every other event on the
-//     topic is "unknown" to it and MUST be acked, not retried forever.
-//
-// Handlers are registered via [cqrs.EventProcessor.AddHandlersToRouter]
-// AFTER all module Register funcs have contributed their handlers — see
-// cmd/worker wiring.
+// GenerateSubscribeTopic derives each handler's topic from the event alias;
+// SubscriberConstructor shares the one broker subscriber (gochannel in v0.2 —
+// fan-out per Subscribe; a real consumer-group broker needs per-handler
+// subscribers, see ADR 0067); AckOnUnknownEvent is true because many event
+// types ride one module topic, so a handler must ack the ones that aren't its
+// own. The per-handler resilience stack is attached by Router.AddCqrsHandler,
+// not here.
 func NewEventProcessor(router *message.Router, sub message.Subscriber, log watermill.LoggerAdapter) (*cqrs.EventProcessor, error) {
 	if router == nil {
 		return nil, fmt.Errorf("messaging: NewEventProcessor router required")
