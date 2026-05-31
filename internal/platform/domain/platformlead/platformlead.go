@@ -1,13 +1,12 @@
-// Package platformlead defines the PlatformLead aggregate — a verified
-// lead exposed in the marketplace + purchasable by a tenant per BRD §6.2
-// + ADR 0059.
+// Package platformlead defines the PlatformLead aggregate: a verified lead
+// sold to a tenant via the marketplace (BRD §6.2, ADR 0059).
 //
 // State machine: Available (sold_to_tenant_id NULL) → Sold (terminal).
-// All BRD §5 form fields live on the contained [leadform.Form] VO and
-// are snapshotted at verification (never re-edited).
+// BRD §5 form fields live on the [leadform.Form] VO, snapshotted at
+// verification and never re-edited.
 //
-// Per ADR 0059, the table's RLS posture allows cross-tenant SELECT for
-// unsold rows; writes (create + purchase UPDATE) are platform-only.
+// Per ADR 0059, RLS allows cross-tenant SELECT on unsold rows; writes
+// (create + purchase UPDATE) are platform-only.
 package platformlead
 
 import (
@@ -23,8 +22,8 @@ import (
 // ErrInvalid is the sentinel for invariant violations.
 var ErrInvalid = errors.New("platformlead: invalid")
 
-// ErrAlreadySold is returned when [Purchase] runs against a lead that
-// has already been sold to a different tenant. Handler maps to HTTP 409.
+// ErrAlreadySold is returned when [Purchase] hits a lead already sold to a
+// different tenant. Handler maps to HTTP 409.
 var ErrAlreadySold = errors.New("platformlead: already sold")
 
 // ID is the lead primary key (UUIDv7 string).
@@ -50,7 +49,7 @@ type PlatformLead struct {
 	id                     ID
 	sourceContactID        unverifiedcontact.ID
 	form                   leadform.Form
-	gstVerified            bool      // BRD §4.3 filter — set by external GST API in Phase 2
+	gstVerified            bool      // BRD §4.3 filter; set by external GST API in Phase 2
 	soldToTenantID         TenantID  // empty until sold
 	soldAt                 time.Time // zero until sold
 	soldToMembershipID     unverifiedcontact.MembershipID
@@ -62,10 +61,9 @@ type PlatformLead struct {
 	events []Event
 }
 
-// NewFromUnverifiedContact constructs a brand-new PlatformLead from a
-// freshly-verified contact's snapshot data + the verifying agent's
-// membership. Called inside the UnverifiedContact.MarkVerified flow's
-// handler — the same UoW tx writes both aggregates.
+// NewFromUnverifiedContact constructs a PlatformLead from a freshly-verified
+// contact's snapshot and the verifying agent's membership. Called in the
+// UnverifiedContact.MarkVerified handler; same UoW tx writes both aggregates.
 func NewFromUnverifiedContact(
 	id ID,
 	sourceContactID unverifiedcontact.ID,
@@ -147,12 +145,11 @@ func (l *PlatformLead) SourceContactID() unverifiedcontact.ID { return l.sourceC
 // Form returns the snapshotted BRD §5 lead-form VO.
 func (l *PlatformLead) Form() leadform.Form { return l.form }
 
-// GstVerified returns whether the external GST status check has run.
-// false in Slice 1 (Phase 2 enhancement).
+// GstVerified reports whether the external GST check has run. Always false
+// in Slice 1 (Phase 2 enhancement).
 func (l *PlatformLead) GstVerified() bool { return l.gstVerified }
 
-// IsAvailable reports whether the lead is unsold (visible in the
-// marketplace).
+// IsAvailable reports whether the lead is unsold (marketplace-visible).
 func (l *PlatformLead) IsAvailable() bool { return l.soldToTenantID.IsZero() }
 
 // SoldToTenantID returns the purchasing tenant; zero if unsold.
@@ -177,18 +174,15 @@ func (l *PlatformLead) VerifiedByMembershipID() unverifiedcontact.MembershipID {
 	return l.verifiedByMembershipID
 }
 
-// CreatedAt returns the row-creation timestamp (== VerifiedAt in
-// Slice 1; separate column for future "draft then publish" flow).
+// CreatedAt returns the row-creation timestamp (== VerifiedAt in Slice 1;
+// separate column for a future draft-then-publish flow).
 func (l *PlatformLead) CreatedAt() time.Time { return l.createdAt }
 
 // ----- State transitions ----------------------------------------------------
 
-// Purchase transitions an Available lead to Sold. amountPaisa is the
-// price the purchasing tenant paid — captured here for forensic + audit
-// queries (the actual LeadCredit balance debit happens on a sibling
-// aggregate inside the same UoW tx).
-//
-// Returns [ErrAlreadySold] when called on a sold lead.
+// Purchase transitions an Available lead to Sold. amountPaisa is recorded
+// for audit only; the LeadCredit balance debit happens on a sibling
+// aggregate in the same UoW tx. Returns [ErrAlreadySold] on a sold lead.
 func (l *PlatformLead) Purchase(
 	tenantID TenantID,
 	purchasingMembershipID unverifiedcontact.MembershipID,
@@ -205,8 +199,7 @@ func (l *PlatformLead) Purchase(
 		return fmt.Errorf("%w: amountPaisa must be positive (got %d)", ErrInvalid, amountPaisa)
 	}
 	if !l.soldToTenantID.IsZero() {
-		// Idempotent only when re-purchase by the same tenant + same
-		// price (handles retry inside the purchase handler).
+		// Idempotent retry: same tenant + same price is a no-op.
 		if l.soldToTenantID == tenantID && l.amountPaisa == amountPaisa {
 			return nil
 		}
@@ -228,7 +221,7 @@ func (l *PlatformLead) Purchase(
 
 // ----- Events --------------------------------------------------------------
 
-// PullEvents drains + returns the recorded domain events.
+// PullEvents drains and returns the recorded domain events.
 func (l *PlatformLead) PullEvents() []Event {
 	if len(l.events) == 0 {
 		return nil

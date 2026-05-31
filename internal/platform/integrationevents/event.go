@@ -1,66 +1,56 @@
-// Package integrationevents holds the Platform module's framework-
-// neutral integration-event records + their domain→wire mapper.
+// Package integrationevents holds the Platform module's framework-neutral
+// integration-event records and their domain→wire mapper.
 //
-// Mirror of internal/identity/integrationevents per ADR 0008 + 0046 +
-// 0059. The package has ZERO infrastructure dependencies — pure data
-// records + a marker interface. Wire serialisation lives in the
-// outbox writer adapter; transport selection lives in the forwarder.
+// Mirrors internal/identity/integrationevents per ADR 0008 + 0046 + 0059.
+// ZERO infrastructure deps — pure data records plus a marker interface. Wire
+// serialisation lives in the outbox writer; transport selection in the forwarder.
 //
-// All event types end in `V{N}` per `messaging.md` "Event versioning"
-// canon — breaking changes ship a parallel V2 record (never rename or
-// drop a field on an existing version).
+// Event types end in V{N} per messaging.md "Event versioning": breaking changes
+// ship a parallel V2 (never rename or drop a field on an existing version).
 package integrationevents
 
 import (
 	"time"
 )
 
-// Topic is the canonical Watermill destination for ALL Platform
-// integration events. The platform outbox forwarder publishes here;
-// subscribers (CRM in Phase 2.2, Notifications in Slice 2) consume +
-// route per [Event.Topic] alias via metadata header.
+// Topic is the canonical Watermill destination for all Platform integration
+// events. The forwarder publishes here; subscribers route per [Event.Topic]
+// alias via metadata header.
 const Topic = "platform.events"
 
 // Event is the marker interface every Platform integration-event record
-// satisfies. Topic() returns the alias `platform.{event-kebab}.v{N}`.
-// OccurredAt() returns the domain-time at which the event happened.
+// satisfies. Topic() returns the `platform.{event-kebab}.v{N}` alias;
+// OccurredAt() the domain time of the event.
 type Event interface {
 	Topic() string
 	OccurredAt() time.Time
 }
 
-// TenantScoped tags events that belong to ONE tenant. Wire shape
-// carries `tenant_id` (UUID-shaped STRING per ADR 0059 frozen brief —
-// cross-language consumers don't need a uuid codec, matches CRM
-// subscriber's local mirror byte-for-byte). The runtime pipeline reads
-// it onto Watermill's envelope.TenantId so subscribers see a per-
-// tenant scope.
+// TenantScoped tags events belonging to one tenant. Wire carries tenant_id as
+// a UUID-shaped string (ADR 0059: cross-language consumers need no uuid codec,
+// matches CRM's mirror byte-for-byte). The pipeline lifts it onto
+// envelope.TenantId so subscribers see per-tenant scope.
 //
-// Compile-time assertion shape in each record file:
-//
-//	var _ TenantScoped = LeadPurchasedV1{}
+// Each record file asserts: var _ TenantScoped = LeadPurchasedV1{}
 type TenantScoped interface {
 	Event
 	TenantIDString() string
 }
 
-// Platform tags events with NO tenant scope. Three classes apply:
+// Platform tags events with no tenant scope:
 //
-//   - UnverifiedContact + VerificationCall + PlatformLead-Verified
-//     (all live on the Platform tier; no tenant-context distinct from
-//     the platform itself).
+//   - UnverifiedContact, VerificationCall, PlatformLead-Verified (Platform tier).
 //   - LeadCredit-init events (rare; not in Slice 1).
 //   - System maintenance / impersonation audit (future).
 //
-// The unexported isPlatformEvent() method is sealed within this
-// package — only events DEFINED HERE can satisfy Platform.
+// isPlatformEvent() is sealed: only events defined in this package can satisfy it.
 type Platform interface {
 	Event
 	isPlatformEvent()
 }
 
-// platformMarker is embedded by every Platform record to satisfy the
-// sealed interface without per-type method redeclaration.
+// platformMarker is embedded by every Platform record to satisfy the sealed
+// interface without per-type redeclaration.
 type platformMarker struct{}
 
 func (platformMarker) isPlatformEvent() {}

@@ -1,27 +1,20 @@
-// Package order owns the [Order] aggregate — the state-machine
-// document that walks an approved [quotation.Quotation] from
-// confirmation through delivery. Per BRD §6.4 + ADR 0063.
+// Package order owns the [Order] aggregate — the state machine that walks an
+// approved [quotation.Quotation] from confirmation through delivery (BRD §6.4,
+// ADR 0063).
 //
-// The Order aggregate is the LOAD-BEARING state machine in the
-// fulfillment saga: subscribers to its integration events drive
-// inventory reservations, dispatch-note creation, and notification
-// fan-out. Order's `state` column IS the saga state per ADR 0063 §4.
+// Order is the load-bearing state machine of the fulfillment saga: subscribers
+// to its integration events drive inventory reservations, dispatch-note
+// creation, and notification fan-out. Its state column IS the saga state
+// (ADR 0063 §4).
 //
-// Items snapshot:
+// Items snapshot: on QuotationApproved the Order freezes a copy of the approved
+// revision's items (confirmed_items) and carries it through the lifecycle, so
+// post-approval Quotation revisions (a fresh draft for the NEXT order) don't
+// affect the in-flight Order.
 //
-//	On QuotationApproved, the Order is created with a frozen copy of
-//	the approved revision's items (`confirmed_items`). The Order
-//	carries this snapshot through its lifecycle — the Quotation can be
-//	revised post-approval (creating a fresh draft Quotation for the
-//	NEXT order) without affecting the in-flight Order.
-//
-// Money invariants:
-//
-//	Every monetary field is `int64 paise`. Totals (subtotal_paise,
-//	tax_paise, grand_total_paise) are derived at ctor/transition time
-//	from the items snapshot + are stored on the row for read-side
-//	convenience. Per ADR 0061 — Stripe canon, NEVER float, NEVER
-//	decimal.
+// Money: every monetary field is int64 paise. Totals are derived from the items
+// snapshot at ctor/transition time and stored on the row for read-side
+// convenience. Per ADR 0061 (Stripe canon): never float, never decimal.
 package order
 
 import (
@@ -35,12 +28,11 @@ import (
 	"github.com/leadkart/leadkart-go/internal/orders/domain/quotation"
 )
 
-// ErrInvalid is the sentinel for ctor / input invariant violations.
-// Map to HTTP 422.
+// ErrInvalid is the sentinel for ctor / input invariant violations. Map to HTTP 422.
 var ErrInvalid = errors.New("order: invalid")
 
-// ErrInvalidTransition is returned when a mutator is called against a
-// terminal state OR an illegal (cur, target) edge. Map to HTTP 409.
+// ErrInvalidTransition is returned for a mutator against a terminal state or an
+// illegal (cur, target) edge. Map to HTTP 409.
 var ErrInvalidTransition = errors.New("order: invalid state transition")
 
 // ID is a UUIDv7.
@@ -52,8 +44,8 @@ func (id ID) IsZero() bool { return id == "" }
 // String returns the underlying UUID string.
 func (id ID) String() string { return string(id) }
 
-// Order is the aggregate root. One per-tenant row in `orders.orders`;
-// the confirmed items snapshot lives in `orders.order_items` keyed by
+// Order is the aggregate root: one per-tenant row in orders.orders; the
+// confirmed items snapshot lives in orders.order_items keyed by
 // (tenant_id, order_id, line_number).
 type Order struct {
 	id                  ID
@@ -70,8 +62,8 @@ type Order struct {
 	invoiceID         string // set when state >= invoiced
 	consignmentNoteID string // set when state >= dispatched
 
-	// Timestamps for the major transitions — surfaced on the row for
-	// read-side dashboards without hitting the outbox.
+	// Major-transition timestamps, surfaced on the row for read-side
+	// dashboards without hitting the outbox.
 	confirmedAt        *time.Time
 	packedAt           *time.Time
 	invoicedAt         *time.Time
@@ -87,10 +79,9 @@ type Order struct {
 	events []Event
 }
 
-// NewInput is the constructor input. Called by the
-// `ApproveQuotationCommand` handler — the items snapshot is the
-// caller-provided frozen revision items + the totals are computed
-// inside ctor for invariant integrity.
+// NewInput is the [New] constructor input, supplied by the
+// ApproveQuotationCommand handler. ConfirmedItems is the caller's frozen
+// revision items; totals are computed inside the ctor for invariant integrity.
 type NewInput struct {
 	ID                    ID
 	TenantID              tenant.ID
@@ -101,10 +92,8 @@ type NewInput struct {
 	Now                   time.Time
 }
 
-// New constructs an Order in state `quotation_approved`. This is the
-// SOLE entry point — Orders cannot start in any other state. Drafting
-// happens on the Quotation side; an Order exists IFF a Quotation has
-// been approved.
+// New constructs an Order in state quotation_approved. Sole entry point — an
+// Order cannot start in any other state; it exists iff a Quotation was approved.
 func New(in NewInput) (*Order, error) {
 	if in.ID.IsZero() {
 		return nil, fmt.Errorf("%w: id required", ErrInvalid)
@@ -162,14 +151,12 @@ func New(in NewInput) (*Order, error) {
 	return o, nil
 }
 
-// computeTotals walks items + sums to (subtotal, tax, grand). Per ADR 0061:
+// computeTotals sums items to (subtotal, tax, grand). Per ADR 0061:
 //
 //	line_subtotal = unit_sale_paise * quantity
 //	line_tax      = line_subtotal * gst_rate_bps / 10000
-//	line_total    = line_subtotal + line_tax
 //
-// Returned totals are sums across all items. Integer-only — no rounding
-// risk under the bps representation.
+// Integer-only — the bps representation carries no rounding risk.
 func computeTotals(items []quotation.LineItem) (subtotal, tax, grand int64) {
 	for _, it := range items {
 		lineSubtotal := it.UnitSalePaise * int64(it.Quantity)
@@ -181,7 +168,7 @@ func computeTotals(items []quotation.LineItem) (subtotal, tax, grand int64) {
 	return
 }
 
-// Snapshot is the persistence DTO consumed by [UnmarshalFromDB].
+// Snapshot is the persistence DTO for [UnmarshalFromDB].
 type Snapshot struct {
 	ID                    ID
 	TenantID              tenant.ID
@@ -206,7 +193,7 @@ type Snapshot struct {
 	CreatedByMembershipID membership.ID
 }
 
-// UnmarshalFromDB rehydrates the aggregate without re-validating.
+// UnmarshalFromDB rehydrates the aggregate without re-validating. Adapter only.
 func UnmarshalFromDB(s Snapshot) *Order {
 	items := make([]quotation.LineItem, len(s.ConfirmedItems))
 	copy(items, s.ConfirmedItems)
@@ -308,15 +295,13 @@ func (o *Order) CancellationReason() string { return o.cancellationReason }
 
 // ----- State transitions ----------------------------------------------------
 
-// RecordTokenPayment transitions quotation_approved → token_paid. Idempotent
-// on self.
+// RecordTokenPayment transitions quotation_approved → token_paid. Idempotent on self.
 func (o *Order) RecordTokenPayment(actor membership.ID, now time.Time) error {
 	return o.advance(StateTokenPaid, actor, now)
 }
 
-// Confirm transitions token_paid → confirmed. Records the confirmedAt
-// timestamp. Idempotent on self. Side-effect: subscribers consume the
-// emitted ConfirmedEvent → Inventory reserves stock.
+// Confirm transitions token_paid → confirmed, stamping confirmedAt. Idempotent
+// on self. Downstream: subscribers to the emitted event reserve Inventory stock.
 func (o *Order) Confirm(actor membership.ID, now time.Time) error {
 	if err := o.advance(StateConfirmed, actor, now); err != nil {
 		return err
@@ -338,10 +323,8 @@ func (o *Order) MarkPacked(actor membership.ID, now time.Time) error {
 	return nil
 }
 
-// AttachInvoice transitions packed → invoiced + links the invoice ID +
-// publishes InvoicedEvent. invoiceID is the freshly-allocated invoice
-// aggregate's ID (the gapless number is allocated by the invoice
-// aggregate ctor; Order just stores the FK).
+// AttachInvoice transitions packed → invoiced and links invoiceID — the FK to
+// the freshly-allocated invoice aggregate (which owns the gapless number).
 func (o *Order) AttachInvoice(invoiceID string, actor membership.ID, now time.Time) error {
 	if strings.TrimSpace(invoiceID) == "" {
 		return fmt.Errorf("%w: invoice_id required", ErrInvalid)
@@ -356,9 +339,9 @@ func (o *Order) AttachInvoice(invoiceID string, actor membership.ID, now time.Ti
 	return nil
 }
 
-// AttachConsignment transitions invoiced → dispatched + links the
-// consignment-note ID. The consignment-note row lives in the Dispatch
-// module's schema; Order stores the FK as text (cross-schema reference).
+// AttachConsignment transitions invoiced → dispatched and links the
+// consignment-note ID. The note lives in the Dispatch schema; Order stores the
+// FK as text (cross-schema reference).
 func (o *Order) AttachConsignment(consignmentID string, actor membership.ID, now time.Time) error {
 	if strings.TrimSpace(consignmentID) == "" {
 		return fmt.Errorf("%w: consignment_id required", ErrInvalid)
@@ -373,8 +356,8 @@ func (o *Order) AttachConsignment(consignmentID string, actor membership.ID, now
 	return nil
 }
 
-// MarkDelivered transitions dispatched → delivered. Driven by the
-// Dispatch subscriber when the carrier confirms delivery.
+// MarkDelivered transitions dispatched → delivered. Driven by the Dispatch
+// subscriber on carrier delivery confirmation.
 func (o *Order) MarkDelivered(actor membership.ID, now time.Time) error {
 	if err := o.advance(StateDelivered, actor, now); err != nil {
 		return err
@@ -385,9 +368,8 @@ func (o *Order) MarkDelivered(actor membership.ID, now time.Time) error {
 	return nil
 }
 
-// MarkComplete transitions delivered → complete. Recommended after the
-// FullPayment aggregate confirms the balance is paid (gated by the
-// command handler that calls this).
+// MarkComplete transitions delivered → complete. The calling command handler
+// gates this on the FullPayment aggregate confirming the balance is paid.
 func (o *Order) MarkComplete(actor membership.ID, now time.Time) error {
 	if err := o.advance(StateComplete, actor, now); err != nil {
 		return err
@@ -398,9 +380,9 @@ func (o *Order) MarkComplete(actor membership.ID, now time.Time) error {
 	return nil
 }
 
-// Cancel transitions any non-terminal state → cancelled with the
-// supplied reason. The state at cancel-time decides what compensation
-// subscribers fire (see ADR 0063 §4). Idempotent on self.
+// Cancel transitions any non-terminal state → cancelled with reason. The
+// cancel-time state decides which compensation subscribers fire (ADR 0063 §4).
+// Idempotent on self.
 func (o *Order) Cancel(reason string, actor membership.ID, now time.Time) error {
 	if o.state == StateCancelled {
 		return nil
@@ -433,12 +415,11 @@ func (o *Order) Cancel(reason string, actor membership.ID, now time.Time) error 
 	return nil
 }
 
-// advance is the shared transition primitive. Validates (idempotent on
-// self, terminal-guard, canAdvance), updates state, emits the standard
-// AdvancedEvent.
+// advance is the shared transition primitive: validate (self-idempotent,
+// terminal-guard, canAdvance), set state, emit AdvancedEvent.
 func (o *Order) advance(target State, actor membership.ID, now time.Time) error {
 	if o.state == target {
-		return nil // idempotent self-transition
+		return nil // self-transition: idempotent no-op
 	}
 	if o.state.IsTerminal() {
 		return fmt.Errorf("%w: cannot transition from terminal state %s", ErrInvalidTransition, o.state)
@@ -467,7 +448,7 @@ func (o *Order) advance(target State, actor membership.ID, now time.Time) error 
 
 // ----- Events --------------------------------------------------------------
 
-// PullEvents drains + returns the recorded domain events.
+// PullEvents drains and returns the recorded domain events.
 func (o *Order) PullEvents() []Event {
 	if len(o.events) == 0 {
 		return nil

@@ -172,7 +172,7 @@ func TestQuotation_Approve_FreezesTipAndIsIdempotent(t *testing.T) {
 		t.Fatalf("events len=%d want 1", len(events))
 	}
 
-	// Idempotent re-approve — no event, no error.
+	// Idempotent re-approve: no event, no error.
 	if err := q.Approve(approver, fixedNow().Add(2*time.Hour)); err != nil {
 		t.Fatalf("re-Approve: %v", err)
 	}
@@ -198,7 +198,7 @@ func TestQuotation_Reject_TerminalAndIdempotent(t *testing.T) {
 	}
 	q.PullEvents()
 
-	// Idempotent re-reject — no event, no error.
+	// Idempotent re-reject: no event, no error.
 	if err := q.Reject(rejector, "customer chose competitor", fixedNow().Add(2*time.Hour)); err != nil {
 		t.Fatalf("re-Reject: %v", err)
 	}

@@ -1,14 +1,9 @@
-// Package platformtest provides cross-cutting test doubles for the
-// Platform module — UoW, Outbox, and the [TransactionalFake] contract
-// the rollback-aware UoW snapshots.
+// Package platformtest provides cross-cutting Platform test doubles: UoW,
+// Outbox, and the [TransactionalFake] contract the rollback-aware UoW snapshots.
 //
-// Per-aggregate fakes (FakeUnverifiedContactRepository,
-// FakeVerificationCallRepository, FakePlatformLeadRepository,
-// FakeLeadCreditRepository) live in their canonical `<aggregate>test/`
-// directories per TDL Wild Workouts canon — co-located with the
-// domain aggregate they fake. The aliases below preserve the
-// `platformtest.FakeXRepository` import surface so existing tests stay
-// green without per-call-site rewrites.
+// Per-aggregate fakes live in their canonical `<aggregate>test/` directories
+// (TDL Wild Workouts canon, co-located with the aggregate). The aliases below
+// preserve the `platformtest.FakeXRepository` import surface for existing tests.
 package platformtest
 
 import (
@@ -26,19 +21,16 @@ import (
 
 // ----- per-aggregate fake aliases ------------------------------------------
 
-// FakeUnverifiedContactRepository is an alias to the canonical
-// [unverifiedcontacttest.FakeRepository] — defined in the aggregate-
-// co-located test package per TDL Wild Workouts canon. Re-exported
-// here so existing callers continue to compile.
+// FakeUnverifiedContactRepository aliases the canonical
+// [unverifiedcontacttest.FakeRepository], re-exported for existing callers.
 type FakeUnverifiedContactRepository = unverifiedcontacttest.FakeRepository
 
-// NewFakeUnverifiedContactRepository forwards to the canonical
-// constructor. Re-exported for the same reason as the type alias.
+// NewFakeUnverifiedContactRepository forwards to the canonical constructor.
 func NewFakeUnverifiedContactRepository() *FakeUnverifiedContactRepository {
 	return unverifiedcontacttest.NewFakeRepository()
 }
 
-// FakeVerificationCallRepository is an alias to the canonical
+// FakeVerificationCallRepository aliases the canonical
 // [verificationcalltest.FakeRepository].
 type FakeVerificationCallRepository = verificationcalltest.FakeRepository
 
@@ -47,7 +39,7 @@ func NewFakeVerificationCallRepository() *FakeVerificationCallRepository {
 	return verificationcalltest.NewFakeRepository()
 }
 
-// FakePlatformLeadRepository is an alias to the canonical
+// FakePlatformLeadRepository aliases the canonical
 // [platformleadtest.FakeRepository].
 type FakePlatformLeadRepository = platformleadtest.FakeRepository
 
@@ -56,7 +48,7 @@ func NewFakePlatformLeadRepository() *FakePlatformLeadRepository {
 	return platformleadtest.NewFakeRepository()
 }
 
-// FakeLeadCreditRepository is an alias to the canonical
+// FakeLeadCreditRepository aliases the canonical
 // [leadcredittest.FakeRepository].
 type FakeLeadCreditRepository = leadcredittest.FakeRepository
 
@@ -67,48 +59,41 @@ func NewFakeLeadCreditRepository() *FakeLeadCreditRepository {
 
 // ----- FakeUnitOfWork -------------------------------------------------------
 
-// FakeUnitOfWork runs fn synchronously + models transactional rollback
-// against any registered fake. Production: Postgres rolls back the
-// debit when the platformlead UPDATE returns ErrAlreadySold inside the
-// same WithinTx closure. The fake must mirror that semantic — without
-// it, tests would silently miss "loser was debited" regressions
-// (review-pass finding H10).
+// FakeUnitOfWork runs fn synchronously and models transactional rollback
+// against any registered fake. Production Postgres rolls back the debit when
+// the platformlead UPDATE returns ErrAlreadySold in the same WithinTx closure;
+// the fake must mirror that or tests miss "loser was debited" regressions
+// (finding H10).
 //
-// Usage pattern:
+// Usage:
 //
 //	credits := platformtest.NewFakeLeadCreditRepository()
 //	leads   := platformtest.NewFakePlatformLeadRepository()
 //	uow := platformtest.NewFakeUnitOfWork(credits, leads)
-//	// any fake that mutates state across WithinTx boundaries must
-//	// implement TransactionalFake + be registered.
 //
-// The zero-value [FakeUnitOfWork] continues to work for single-write
-// flows that don't need rollback semantics (no fakes registered =
-// closure-only, current behaviour).
+// Any fake mutating state across WithinTx boundaries must implement
+// TransactionalFake and be registered. The zero value works for single-write
+// flows that don't need rollback (no fakes registered = closure-only).
 type FakeUnitOfWork struct {
 	fakes []TransactionalFake
 }
 
-// TransactionalFake is the rollback-aware contract a fake repository
-// implements when it wants the FakeUoW to undo its mutations on
-// closure error. Snapshot captures pre-tx state; Restore puts it
-// back.
+// TransactionalFake is the rollback-aware contract a fake implements so the
+// FakeUoW can undo its mutations on closure error.
 type TransactionalFake interface {
-	// Snapshot captures the fake's pre-tx state. Returned closure
-	// MUST be safe to invoke at most once (the UoW calls it iff
-	// the closure errors).
+	// Snapshot captures pre-tx state. The returned closure restores it and
+	// is called at most once (only when the closure errors).
 	Snapshot() (restore func())
 }
 
-// NewFakeUnitOfWork constructs a UoW that snapshots each registered
-// fake at WithinTx entry + restores them on closure error.
+// NewFakeUnitOfWork returns a UoW that snapshots each registered fake at
+// WithinTx entry and restores them on closure error.
 func NewFakeUnitOfWork(fakes ...TransactionalFake) *FakeUnitOfWork {
 	return &FakeUnitOfWork{fakes: fakes}
 }
 
-// WithinTx satisfies [pg.UnitOfWork]. Snapshots all registered fakes
-// before fn runs; on closure error, restores every fake to its
-// pre-tx state (modelling Postgres ROLLBACK).
+// WithinTx satisfies [pg.UnitOfWork]: snapshots all registered fakes before fn,
+// and on closure error restores them (modelling Postgres ROLLBACK).
 func (u *FakeUnitOfWork) WithinTx(ctx context.Context, _ pg.TxScope, fn func(ctx context.Context) error) error {
 	restores := make([]func(), 0, len(u.fakes))
 	for _, f := range u.fakes {
@@ -142,7 +127,7 @@ func (f *FakeOutbox) EnqueueInTx(_ context.Context, events ...integrationevents.
 	return nil
 }
 
-// Reset clears recorded events. Useful between sub-tests.
+// Reset clears recorded events between sub-tests.
 func (f *FakeOutbox) Reset() {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -157,6 +142,5 @@ var (
 	_ TransactionalFake = (*FakePlatformLeadRepository)(nil)
 )
 
-// Quiet the unused-import linter on query types when fakes ship before
-// the read-model adapter.
+// Pins the query import while fakes ship ahead of the read-model adapter.
 var _ = query.UnverifiedContactView{}

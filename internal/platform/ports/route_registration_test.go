@@ -1,6 +1,5 @@
-// route_registration_test.go — TestArch_ guard against Go 1.22+
-// ServeMux pattern-conflict panics at PR time. Mirror of
-// internal/identity/ports/route_registration_test.go.
+// TestArch_ guard against Go 1.22+ ServeMux pattern-conflict panics.
+// Mirror of internal/identity/ports/route_registration_test.go.
 
 package ports_test
 
@@ -23,9 +22,8 @@ type stubStampValidator struct{}
 
 func (stubStampValidator) IsFresh(context.Context, string, string) (bool, error) { return true, nil }
 
-// TestArch_RouteRegistration_NoConflicts wires AddRoutes against a
-// fresh ServeMux and fails on any panic from Go's pattern-overlap
-// detector.
+// TestArch_RouteRegistration_NoConflicts wires AddRoutes on a fresh ServeMux
+// and fails on any pattern-overlap panic.
 func TestArch_RouteRegistration_NoConflicts(t *testing.T) {
 	t.Parallel()
 

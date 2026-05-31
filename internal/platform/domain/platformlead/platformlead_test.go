@@ -94,11 +94,10 @@ func TestNewFromUnverifiedContact_RejectsZeroNow(t *testing.T) {
 
 func TestNewFromUnverifiedContact_RejectsEmptyContactName(t *testing.T) {
 	t.Parallel()
-	// Form{} default-zero has empty ContactName — the ctor MUST reject this
-	// branch. We rely on UnmarshalFromDB to bypass leadform.New's own ctor
-	// validation so we can build an invalid-form fixture.
+	// Build an invalid-form fixture via UnmarshalFromDB to bypass
+	// leadform.New's own ctor validation; the platformlead ctor must reject it.
 	emptyForm := leadform.UnmarshalFromDB(leadform.Input{
-		ContactName: "   ", // whitespace-only also fails the TrimSpace check
+		ContactName: "   ", // whitespace-only fails the TrimSpace check
 		MobileE164:  "+919876543210",
 	})
 	_, err := platformlead.NewFromUnverifiedContact(leadID, contactID, emptyForm, agentID, now)
@@ -193,7 +192,7 @@ func TestPurchase_AlreadySoldBySameTenantDifferentPrice_Rejected(t *testing.T) {
 	t.Parallel()
 	l, _ := platformlead.NewFromUnverifiedContact(leadID, contactID, sampleForm(t), agentID, now)
 	_ = l.Purchase(tenantA, memberA, 50000, now.Add(time.Hour)) // arch-test:ignore-err — domain test seed
-	// Same tenant, different price → not idempotent — must reject.
+	// Same tenant, different price is not idempotent: must reject.
 	err := l.Purchase(tenantA, memberA, 75000, now.Add(2*time.Hour))
 	if !errors.Is(err, platformlead.ErrAlreadySold) {
 		t.Errorf("expected ErrAlreadySold on price mismatch, got %v", err)

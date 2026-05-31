@@ -23,26 +23,12 @@ import (
 	"github.com/leadkart/leadkart-go/internal/platform/domain/verificationcall"
 )
 
-// AddRoutes registers Platform HTTP handlers on mux. Mat Ryer 2024
-// canon: ports own request/response translation, not the routing
-// scheme — the composition root chooses the URL space.
+// AddRoutes registers Platform HTTP handlers on mux (ADR 0059). Mat Ryer
+// 2024 canon: ports own request/response translation, not the URL space.
 //
-// verifier + stampValidator gate authenticated routes. Both MUST be
-// non-nil for the auth-route block to register; pass (nil, nil) only
-// in test fixtures that don't exercise the auth surface (none exist
-// in this slice — every route is gated).
-//
-// Routes registered (per ADR 0059 brief):
-//
-//	POST /api/v1/platform/unverified-contacts                    Lead Agent creates raw contact
-//	POST /api/v1/platform/unverified-contacts/{id}/calls         log a verification call outcome
-//	POST /api/v1/platform/unverified-contacts/{id}/verify        promote to PlatformLead
-//	POST /api/v1/platform/unverified-contacts/{id}/reject        terminal reject
-//	GET  /api/v1/platform/unverified-contacts                    Platform-only list (paginated)
-//	GET  /api/v1/platform/marketplace/leads                      tenant-facing browse (paginated)
-//	POST /api/v1/platform/marketplace/leads/{id}/purchase        tenant purchases with credits
-//	POST /api/v1/platform/lead-credits/topup                     Platform-only top-up
-//	GET  /api/v1/platform/lead-credits/balance                   per-caller balance
+// verifier and stampValidator gate every route — both MUST be non-nil to
+// register anything. Pass (nil, nil) only from fixtures that skip the auth
+// surface; every platform route is gated, so that registers nothing.
 func AddRoutes(
 	mux *http.ServeMux,
 	log *slog.Logger,
@@ -51,39 +37,27 @@ func AddRoutes(
 	stampValidator authn.StampValidator,
 ) {
 	if verifier == nil || stampValidator == nil {
-		// Platform module routes are 100% auth-gated — no anonymous
-		// surface. Without the verifier we register nothing. Test
-		// fixtures that DON'T exercise platform routes pass nil/nil;
-		// production passes the real verifier.
+		// No anonymous surface — without a verifier, register nothing.
 		return
 	}
 
-	// Per-route gate composers — `chain` wraps an outer middleware
-	// around an inner middleware-wrapped handler. Used to layer
-	// RequirePlatform (defense-in-depth tenant=Platform check) atop
-	// the RequirePermission gate on Platform-only routes.
+	// chain wraps outer around an inner-wrapped handler — used to layer
+	// RequirePlatform atop RequirePermission on Platform-only routes.
 	chain := func(outer, inner func(http.Handler) http.Handler) func(http.Handler) http.Handler {
 		return func(h http.Handler) http.Handler {
 			return outer(inner(h))
 		}
 	}
 
-	// requirePlatform: defense-in-depth gate for Platform-only routes
-	// per `multi-tenancy.md` "Platform admin endpoints" + Identity's
-	// `/v1/platform/*` pattern. The middleware enforces BOTH
-	// `is_platform=true` AND `tenant_slug == "platform"` on the JWT —
-	// a tenant role that was (mis-)granted Platform.* permissions still
-	// cannot reach the Platform queue / topup endpoints because their
-	// JWT carries `is_platform=false`.
+	// requirePlatform enforces both is_platform=true AND tenant_slug=="platform"
+	// on the JWT (multi-tenancy.md "Platform admin endpoints"). A tenant role
+	// mis-granted Platform.* permissions still can't reach these routes — its
+	// JWT carries is_platform=false. Defense-in-depth atop the permission gate.
 	requirePlatform := authn.RequirePlatform(verifier, stampValidator)
 
-	// UnverifiedContacts — Platform.UnverifiedContacts.Manage gate.
-	// Write-side endpoints (POST /create, /calls, /verify, /reject) AND
-	// the Platform-only LIST endpoint all require RequirePlatform
-	// in addition to the permission gate (defense-in-depth — a tenant
-	// role granted Manage by misconfiguration must not reach the
-	// queue). The LIST endpoint is the most sensitive — it reveals
-	// every contact in the platform pipeline including PII.
+	// UnverifiedContacts writes + the Platform-only LIST: permission gate plus
+	// requirePlatform. LIST is the most sensitive — it exposes the whole
+	// pipeline including PII.
 	manageContacts := authn.RequirePermission(verifier, stampValidator,
 		permission.IdentityPermissions.PlatformUnverifiedContacts.Manage)
 
@@ -105,23 +79,20 @@ func AddRoutes(
 	mux.Handle("GET /api/v1/platform/marketplace/leads",
 		browse(handleBrowseMarketplace(log, a)))
 
-	// Marketplace purchase — purchase permission. Tenant-facing
-	// (NOT RequirePlatform — tenants buy leads, not Platform operators).
+	// Marketplace purchase — tenant-facing, so NO requirePlatform.
 	purchase := authn.RequirePermission(verifier, stampValidator,
 		permission.IdentityPermissions.PlatformMarketplace.Purchase)
 	mux.Handle("POST /api/v1/platform/marketplace/leads/{id}/purchase",
 		purchase(handlePurchaseLead(log, a)))
 
-	// LeadCredits topup — Platform-tier ONLY. Defense-in-depth:
-	// RequirePlatform layered atop the topup permission so a tenant
-	// role with the topup permission (misconfiguration) still cannot
-	// credit balances.
+	// LeadCredits topup — Platform-tier only; requirePlatform atop the
+	// permission so a mis-granted tenant role still can't credit balances.
 	topup := authn.RequirePermission(verifier, stampValidator,
 		permission.IdentityPermissions.PlatformLeadCredits.Topup)
 	mux.Handle("POST /api/v1/platform/lead-credits/topup",
 		chain(requirePlatform, topup)(handleTopupLeadCredits(log, a)))
 
-	// LeadCredits read — held by every tenant role + Platform.
+	// LeadCredits read — held by every tenant role and Platform.
 	read := authn.RequirePermission(verifier, stampValidator,
 		permission.IdentityPermissions.PlatformLeadCredits.Read)
 	mux.Handle("GET /api/v1/platform/lead-credits/balance",
@@ -254,9 +225,8 @@ func handleVerifyUnverifiedContact(log *slog.Logger, a app.Application) http.Han
 			writeError(w, http.StatusNotFound, ErrCodeContactNotFound, "")
 			return
 		case errors.Is(err, command.ErrContactAlreadyTerminal):
-			// H11 — contact already Verified or Rejected; refuse a
-			// duplicate verify to avoid emitting a second
-			// LeadVerifiedV1 + creating a phantom PlatformLead.
+			// H11 — refuse duplicate verify: avoids a second
+			// LeadVerifiedV1 and a phantom PlatformLead.
 			writeError(w, http.StatusConflict, ErrCodeContactAlreadyTerminal,
 				"contact is already in a terminal state")
 			return
@@ -534,12 +504,9 @@ func handleTopupLeadCredits(log *slog.Logger, a app.Application) http.Handler {
 
 func handleGetLeadCreditBalance(log *slog.Logger, a app.Application) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Caller's tenant from the JWT — tenant users see their own
-		// balance; platform users get whatever tenant the JWT context
-		// carries (in v0.2 platform user without impersonation sees
-		// the platform tenant's balance row, which is typically zero
-		// — they should use a future GET .../tenants/{id}/balance for
-		// per-tenant operator views).
+		// Balance is for the JWT's tenant. A platform user without
+		// impersonation sees the platform tenant's (usually zero) row;
+		// per-tenant operator views await a future GET .../tenants/{id}/balance.
 		c, ok := authn.ClaimsFromContext(r.Context())
 		if !ok {
 			writeError(w, http.StatusUnauthorized, ErrCodeMembershipContextRequired, "")
@@ -550,8 +517,7 @@ func handleGetLeadCreditBalance(log *slog.Logger, a app.Application) http.Handle
 		})
 		switch {
 		case errors.Is(err, query.ErrCreditRowNotFound):
-			// No row yet → 200 + zero balance (canonical zero-or-row
-			// shape; the row gets INSERTed lazily on first topup).
+			// No row yet → 200 + zero balance; row is INSERTed lazily on first topup.
 			writeJSON(w, http.StatusOK, LeadCreditBalanceResponse{
 				TenantID: c.TenantID,
 				Balance:  0,
@@ -595,8 +561,8 @@ func problemType(code string) string {
 	return "https://leadkart.api/errors/" + code
 }
 
-// parsePathUUID extracts a path parameter, validates UUID shape, +
-// writes a 400 on failure. Returns (string, true) on success.
+// parsePathUUID returns the named path param if it's a valid UUID, else
+// writes a 400 and returns ok=false.
 func parsePathUUID(w http.ResponseWriter, r *http.Request, name, errCode string) (string, bool) {
 	raw := strings.TrimSpace(r.PathValue(name))
 	if _, err := uuid.Parse(raw); err != nil {
@@ -606,8 +572,8 @@ func parsePathUUID(w http.ResponseWriter, r *http.Request, name, errCode string)
 	return raw, true
 }
 
-// parsePageSize parses ?page_size=N and clamps via pagination.
-// Returns the default when absent; rejects non-numeric.
+// parsePageSize parses and clamps ?page_size=N; default when absent,
+// error on non-numeric.
 func parsePageSize(r *http.Request) (int, error) {
 	raw := strings.TrimSpace(r.URL.Query().Get("page_size"))
 	if raw == "" {
@@ -620,7 +586,7 @@ func parsePageSize(r *http.Request) (int, error) {
 	return pagination.ClampPageSize(n), nil
 }
 
-// parseCSV splits a comma-separated query parameter; empties dropped.
+// parseCSV splits a comma-separated query param, dropping empties.
 func parseCSV(s string) []string {
 	s = strings.TrimSpace(s)
 	if s == "" {
@@ -640,9 +606,8 @@ func parseCSV(s string) []string {
 	return out
 }
 
-// parseBoolPtr parses a tri-state query bool. Empty string returns
-// nil (no filter); "true"/"1"/"yes" returns &true; "false"/"0"/"no"
-// returns &false; everything else returns nil (silently).
+// parseBoolPtr parses a tri-state query bool: true/1/yes → &true,
+// false/0/no → &false, anything else (incl. empty) → nil = no filter.
 func parseBoolPtr(s string) *bool {
 	s = strings.ToLower(strings.TrimSpace(s))
 	if s == "" {
@@ -657,10 +622,8 @@ func parseBoolPtr(s string) *bool {
 	return nil
 }
 
-// membershipIDFromCtx extracts the verified JWT's membership_id claim
-// so handlers can stamp "who did this" on aggregate methods. Falls
-// back to an empty string when the claim is missing — the caller
-// branches on the boolean to surface 401.
+// membershipIDFromCtx returns the JWT's membership_id (for "who did this"
+// stamps) and ok=false when absent or non-UUID; callers surface 401.
 func membershipIDFromCtx(r *http.Request) (string, bool) {
 	c, ok := authn.ClaimsFromContext(r.Context())
 	if !ok {

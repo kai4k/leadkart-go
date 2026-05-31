@@ -1,15 +1,12 @@
 package integrationevents
 
-// allEvents holds one zero-value of every V{N} record defined in this
-// package. Each record file calls [register] in its package-level var
-// block; the arch test iterates this slice to enforce marker + alias-
-// regex compliance across the catalogue.
-//
-// Mirror of internal/identity/integrationevents/registry.go shape.
+// allEvents holds one zero-value of every V{N} record in this package. Each
+// record file calls [register] in its var block; the arch test iterates this
+// to enforce marker + alias-regex compliance. Mirrors identity's registry.go.
 var allEvents []Event
 
-// register appends e to the package-level catalogue + returns it
-// unchanged so the caller can write a single-line var block:
+// register appends e to the catalogue and returns it unchanged, so callers can
+// write a one-line var block:
 //
 //	var _ = register(LeadPurchasedV1{})
 func register(e Event) Event {
@@ -17,8 +14,7 @@ func register(e Event) Event {
 	return e
 }
 
-// all returns a defensive copy of the registered catalogue. Used by
-// arch tests in the same package (no external consumers).
+// all returns a defensive copy of the catalogue. Used by in-package arch tests.
 func all() []Event {
 	out := make([]Event, len(allEvents))
 	copy(out, allEvents)

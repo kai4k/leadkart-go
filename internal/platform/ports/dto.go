@@ -1,18 +1,14 @@
-// Package ports holds Platform module inbound concrete implementations
-// per TDL canon — HTTP handlers + future event subscribers. Packages
-// under here translate external requests into Application command/
-// query handler calls.
+// Package ports holds the Platform module's inbound concrete adapters (TDL
+// canon): HTTP handlers that translate external requests into Application
+// command/query calls.
 package ports
 
 import "time"
 
 // ----- UnverifiedContact ----------------------------------------------------
 
-// CreateUnverifiedContactRequest is the wire shape for POST
-// /api/v1/platform/unverified-contacts.
-//
-// All BRD §5 lead form fields (locked). JSON snake_case for tooling
-// + Stripe / Auth0 wire-convention parity.
+// CreateUnverifiedContactRequest is the POST /unverified-contacts wire shape.
+// All BRD §5 lead-form fields (locked); snake_case JSON per Stripe/Auth0 parity.
 type CreateUnverifiedContactRequest struct {
 	ContactName    string   `json:"contact_name"`
 	MobileE164     string   `json:"mobile_e164"`
@@ -40,8 +36,7 @@ type CreateUnverifiedContactResponse struct {
 	ContactID string `json:"contact_id"`
 }
 
-// LogVerificationCallRequest is the wire shape for POST
-// .../unverified-contacts/{id}/calls.
+// LogVerificationCallRequest is the POST .../{id}/calls wire shape.
 type LogVerificationCallRequest struct {
 	Outcome               string    `json:"outcome"`
 	Notes                 string    `json:"notes,omitzero"`
@@ -67,8 +62,7 @@ type RejectUnverifiedContactRequest struct {
 	Reason string `json:"reason"`
 }
 
-// UnverifiedContactDto is the wire shape returned by
-// GET /api/v1/platform/unverified-contacts.
+// UnverifiedContactDto is the GET /unverified-contacts wire shape.
 type UnverifiedContactDto struct {
 	ID                    string `json:"id"`
 	State                 string `json:"state"`
@@ -80,8 +74,8 @@ type UnverifiedContactDto struct {
 	CreatedByMembershipID string `json:"created_by_membership_id"`
 }
 
-// ListUnverifiedContactsResponse is the cursor-paginated wire envelope.
-// Mirrors pagination.Page[T] shape from internal/common/pagination/.
+// ListUnverifiedContactsResponse is the cursor-paginated envelope
+// (mirrors pagination.Page[T]).
 type ListUnverifiedContactsResponse struct {
 	Items      []UnverifiedContactDto `json:"items"`
 	HasMore    bool                   `json:"has_more"`
@@ -90,9 +84,8 @@ type ListUnverifiedContactsResponse struct {
 
 // ----- Marketplace ----------------------------------------------------------
 
-// MarketplaceLeadDto is the wire shape returned by GET
-// /api/v1/platform/marketplace/leads. Excludes email/GST/PAN —
-// available only post-purchase to protect prospect privacy.
+// MarketplaceLeadDto is the GET /marketplace/leads wire shape. Excludes
+// email/GST/PAN — those are revealed only post-purchase (prospect privacy).
 type MarketplaceLeadDto struct {
 	ID             string    `json:"id"`
 	ContactName    string    `json:"contact_name"`
@@ -120,9 +113,8 @@ type BrowseMarketplaceResponse struct {
 	NextCursor string               `json:"next_cursor,omitzero"`
 }
 
-// PurchaseLeadRequest carries the price the tenant agreed to pay. The
-// charge against the lead-credit balance is FIXED at 1 credit per lead
-// (BRD §4.2); AmountPaisa is the forensic price field.
+// PurchaseLeadRequest carries the agreed price. Credit charge is fixed at
+// 1 per lead (BRD §4.2); AmountPaisa is the forensic price field.
 type PurchaseLeadRequest struct {
 	AmountPaisa int64 `json:"amount_paisa"`
 }
@@ -156,9 +148,8 @@ type LeadCreditBalanceResponse struct {
 
 // ----- Errors --------------------------------------------------------------
 
-// ErrorResponse is the canonical platform-module error envelope.
-// Mirror of identity.ports.ErrorResponse (RFC 9457 Problem Details +
-// legacy fields).
+// ErrorResponse is the platform-module error envelope. Mirror of
+// identity.ports.ErrorResponse (RFC 9457 Problem Details + legacy fields).
 type ErrorResponse struct {
 	Type    string              `json:"type,omitzero"`
 	Title   string              `json:"title,omitzero"`

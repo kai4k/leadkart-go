@@ -98,8 +98,8 @@ func TestVerifyUnverifiedContact_HappyPath(t *testing.T) {
 }
 
 func TestVerifyUnverifiedContact_PromoteFromNew(t *testing.T) {
-	// Even when the caller skips the call-log step, the handler promotes
-	// New → InCall first so MarkVerified's guard passes.
+	// Caller skipped the call-log step; handler promotes New → InCall
+	// so MarkVerified's guard passes.
 	t.Parallel()
 
 	contacts := platformtest.NewFakeUnverifiedContactRepository()
@@ -143,11 +143,9 @@ func TestVerifyUnverifiedContact_ContactNotFound(t *testing.T) {
 	}
 }
 
-// TestVerifyUnverifiedContact_AlreadyVerified_Idempotent — verifying a
-// contact that's ALREADY in Verified state is a no-op at the domain
-// layer (UnverifiedContact.MarkVerified short-circuits with nil). The
-// handler swallows the no-op + returns successfully without spawning a
-// second PlatformLead row. H11 — review-pass failure-mode coverage.
+// TestVerifyUnverifiedContact_AlreadyVerified_Idempotent: re-verifying a
+// Verified contact must not spawn a second PlatformLead. H11 —
+// review-pass.
 func TestVerifyUnverifiedContact_AlreadyVerified_Idempotent(t *testing.T) {
 	t.Parallel()
 
@@ -181,26 +179,13 @@ func TestVerifyUnverifiedContact_AlreadyVerified_Idempotent(t *testing.T) {
 		t.Fatalf("first verify: %v", err)
 	}
 
-	// Second verify on the now-Verified contact. Aggregate short-
-	// circuits (idempotent terminal); the handler will not add a
-	// SECOND PlatformLead. The handler currently DOES still attempt
-	// the second lead Add because UpdateByID is called with
-	// shouldPersist=true regardless — this assertion locks the
-	// EXPECTED post-fix behaviour: second verify either succeeds
-	// idempotently (no NEW lead) OR returns a typed sentinel.
-	//
-	// Production note: handler invokes leads.Add inside the closure
-	// AFTER the (now-idempotent) MarkVerified. With fakes, leads.Add
-	// is unconditional — so we expect the handler to skip the second
-	// Add when the contact's StateBefore == StateVerified. This test
-	// asserts no second lead leaks. If it fails, the handler needs a
-	// "skip lead-creation when contact already verified" guard.
+	// Second verify on the now-Verified contact must not leak a second
+	// lead: expect an idempotent success or a typed sentinel.
 	_, err = h.Handle(t.Context(), command.VerifyUnverifiedContactCommand{
 		ContactID:  cID,
 		VerifiedBy: agentID,
 	})
-	// Either success (idempotent) or a typed sentinel is acceptable;
-	// silently corrupting state with a second lead is NOT.
+	// Success or the typed sentinel is fine; a second lead is not.
 	if err != nil && !errors.Is(err, command.ErrContactAlreadyTerminal) {
 		t.Fatalf("second verify: got %v; want nil OR ErrContactAlreadyTerminal", err)
 	}
@@ -213,10 +198,8 @@ func TestVerifyUnverifiedContact_AlreadyVerified_Idempotent(t *testing.T) {
 	}
 }
 
-// TestVerifyUnverifiedContact_AlreadyRejected_Refused — once a contact
-// is in the terminal Rejected state, verify MUST fail (not silently
-// flip to Verified). The aggregate enforces this via the
-// `verify requires in_call state` guard. H11 — review-pass.
+// TestVerifyUnverifiedContact_AlreadyRejected_Refused: verify after a
+// terminal Reject must fail, not flip to Verified. H11 — review-pass.
 func TestVerifyUnverifiedContact_AlreadyRejected_Refused(t *testing.T) {
 	t.Parallel()
 

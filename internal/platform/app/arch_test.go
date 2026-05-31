@@ -1,14 +1,8 @@
-// arch_test.go — architectural boundary discipline as a CI gate.
+// Architectural boundary discipline as a CI gate.
 //
-// Per ADR 0047 + ADR 0059: the app/ layer is a pure-Go region that
-// depends on domain interfaces + a handful of cross-cutting infra
-// interfaces (pg.UnitOfWork, etc.). It MUST NOT depend on:
-//
-//   - github.com/leadkart/leadkart-go/internal/platform/adapters/db
-//     (sqlc-generated row types)
-//   - github.com/jackc/pgx/v5 / pgxpool / pgtype (DB driver)
-//   - github.com/leadkart/leadkart-go/internal/platform/adapters
-//     (concrete adapter package)
+// Per ADR 0047 + ADR 0059: app/ depends on domain + cross-cutting infra
+// interfaces (pg.UnitOfWork, etc.), never on the persistence substrate:
+// adapters/db (sqlc rows), the adapters package, or pgx/pgxpool/pgtype.
 //
 // Mirror of internal/identity/app/arch_test.go.
 
@@ -31,9 +25,8 @@ var forbiddenAppImports = map[string]string{
 	"github.com/jackc/pgx/v5/pgtype":                                "pgtype is a sqlc/driver concern; should never appear in app/ — domain VOs carry strong types",
 }
 
-// TestArch_AppDoesNotImportForbidden walks every Go file under
-// internal/platform/app/ (excluding _test.go) + asserts none import a
-// forbidden path.
+// TestArch_AppDoesNotImportForbidden asserts no non-test file under
+// internal/platform/app/ imports a forbidden substrate path.
 func TestArch_AppDoesNotImportForbidden(t *testing.T) {
 	t.Parallel()
 

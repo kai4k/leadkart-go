@@ -31,7 +31,7 @@ func TestUpdateProductHandler_HappyPath_AppliesPartial(t *testing.T) {
 	}
 }
 
-// Failure 1: missing product → ErrNotFound (surfaces as 404 at HTTP).
+// Missing product → ErrNotFound (404 at HTTP).
 func TestUpdateProductHandler_MissingProduct_ReturnsErrNotFound(t *testing.T) {
 	t.Parallel()
 	repo := newFakeProductRepo()
@@ -49,8 +49,7 @@ func TestUpdateProductHandler_MissingProduct_ReturnsErrNotFound(t *testing.T) {
 	}
 }
 
-// Failure 2: out-of-range GST → ErrInvalid bubbles up from the
-// aggregate's Update guard.
+// Out-of-range GST → ErrInvalid from the aggregate's Update guard.
 func TestUpdateProductHandler_InvalidGSTRate_ReturnsErrInvalid(t *testing.T) {
 	t.Parallel()
 	repo := newFakeProductRepo()
@@ -69,16 +68,15 @@ func TestUpdateProductHandler_InvalidGSTRate_ReturnsErrInvalid(t *testing.T) {
 	}
 }
 
-// Failure 3: update on soft-deleted product → ErrDeleted.
+// Update on soft-deleted product → ErrDeleted.
 func TestUpdateProductHandler_DeletedProduct_ReturnsErrDeleted(t *testing.T) {
 	t.Parallel()
 	repo := newFakeProductRepo()
 	tid := newTenantID(t)
 	actor := newMembershipID(t)
 	p := seedProduct(t, repo, tid, actor, "DEL-1")
-	// Soft-delete the product through the domain so the repo stays in
-	// sync (fakeProductRepo's GetByID filters IsDeleted, so we
-	// short-circuit that here by mutating directly).
+	// Soft-delete via the domain; GetByID filters IsDeleted so we mutate
+	// the aggregate directly.
 	if err := p.SoftDelete(actor, fixedNow); err != nil {
 		t.Fatalf("SoftDelete: %v", err)
 	}
@@ -90,10 +88,8 @@ func TestUpdateProductHandler_DeletedProduct_ReturnsErrDeleted(t *testing.T) {
 		TenantID: tid, ProductID: p.ID(), ActorMembershipID: actor,
 		Name: &newName,
 	})
-	// Domain-side guard: Product.Update returns ErrDeleted on a soft-
-	// deleted aggregate. The handler wraps but errors.Is unwraps. The
-	// HTTP layer maps ErrDeleted → 409 (per handler switch on
-	// product.ErrDeleted in ports/http.go).
+	// Product.Update returns ErrDeleted on a soft-deleted aggregate; the
+	// HTTP layer maps it to 409.
 	if !errors.Is(err, product.ErrDeleted) {
 		t.Fatalf("err on update of soft-deleted product: got %v want ErrDeleted", err)
 	}

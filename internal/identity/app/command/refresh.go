@@ -92,8 +92,8 @@ func NewRefreshHandler(
 //  3. Mint new ⟨plaintext, hash⟩ pair.
 //  4. UpdateByID closure runs Family.Rotate(presentedHash, newHash).
 //     - On reuse-detection: aggregate emits RevokedEvent; the closure
-//       returns shouldPersist=true alongside ErrReuseDetected so the
-//       revocation is committed. Caller receives ErrRefreshRejected.
+//     returns shouldPersist=true alongside ErrReuseDetected so the
+//     revocation is committed. Caller receives ErrRefreshRejected.
 //     - On any other rotate error: returns ErrRefreshRejected.
 //  5. Resolve Person + Tenant + Membership for the new JWT claims.
 //  6. Issue JWT.

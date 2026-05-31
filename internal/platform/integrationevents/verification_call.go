@@ -4,11 +4,9 @@ import (
 	"time"
 )
 
-// VerificationCallLoggedV1 — a Lead Agent recorded the outcome of an
-// outbound call. Platform-scoped. All UUID fields wire-shaped as
-// strings per ADR 0059 frozen brief. Subscribers in Slice 2 will
-// project onto operator dashboards + auto-create Reminders for Busy
-// outcomes.
+// VerificationCallLoggedV1 signals a Lead Agent recorded an outbound-call
+// outcome. Platform-scoped; UUIDs are wire-shaped strings per ADR 0059. Slice 2
+// subscribers project onto dashboards and auto-create Reminders for Busy outcomes.
 type VerificationCallLoggedV1 struct {
 	platformMarker
 
@@ -19,7 +17,7 @@ type VerificationCallLoggedV1 struct {
 	LoggedByMembershipID string    `json:"logged_by_membership_id"`
 }
 
-// Topic returns the canonical wire alias.
+// Topic returns the wire alias.
 func (VerificationCallLoggedV1) Topic() string { return "platform.verification_call_logged.v1" }
 
 // OccurredAt returns the domain timestamp.

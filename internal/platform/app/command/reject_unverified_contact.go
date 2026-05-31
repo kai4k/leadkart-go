@@ -9,8 +9,8 @@ import (
 	"github.com/leadkart/leadkart-go/internal/platform/domain/unverifiedcontact"
 )
 
-// RejectUnverifiedContactCommand carries the input for the Lead Agent
-// "this contact is unusable" terminal-reject use case.
+// RejectUnverifiedContactCommand is the Lead Agent "this contact is
+// unusable" terminal-reject input.
 type RejectUnverifiedContactCommand struct {
 	ContactID  unverifiedcontact.ID
 	Reason     string
@@ -34,7 +34,7 @@ func NewRejectUnverifiedContactHandler(
 	return RejectUnverifiedContactHandler{contacts: contacts, now: now}
 }
 
-// Handle persists the rejected transition. UpdateByID drains the
+// Handle drives the Reject transition; UpdateByID drains the
 // RejectedEvent to the outbox in the same tx.
 func (h RejectUnverifiedContactHandler) Handle(
 	ctx context.Context,
@@ -42,10 +42,8 @@ func (h RejectUnverifiedContactHandler) Handle(
 ) error {
 	now := h.now()
 	err := h.contacts.UpdateByID(ctx, cmd.ContactID, func(c *unverifiedcontact.UnverifiedContact) (bool, error) {
-		// Promote from New if needed — the reject endpoint is a quick
-		// terminal path that doesn't always run a call-log step first
-		// (operator decides "this contact is clearly unusable" from
-		// the form alone, e.g. obvious test data).
+		// Promote from New: reject can fire without a prior call-log
+		// step when the form alone is clearly unusable (e.g. test data).
 		if c.State() == unverifiedcontact.StateNew {
 			if err := c.StartCall(now); err != nil {
 				return false, err

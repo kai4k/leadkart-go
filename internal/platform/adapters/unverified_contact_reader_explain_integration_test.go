@@ -1,10 +1,8 @@
 //go:build integration
 
-// arch-test:no-timeout-needed — every test in this file uses the shared
-//   pgtest container (per-package); pgxpool internal conn timeouts +
-//   package-level `task ci:test:int -timeout=15m` already bound execution.
-//   Per-test context.WithTimeout would be belt-and-suspenders against the
-//   shared-pool + parallel-with-RLS canon shape.
+// arch-test:no-timeout-needed — shared pgtest container + pgxpool conn
+//   timeouts + package-level `task ci:test:int -timeout=15m` already bound
+//   execution.
 
 package adapters_test
 
@@ -23,18 +21,11 @@ import (
 	"github.com/leadkart/leadkart-go/internal/platform/domain/unverifiedcontact"
 )
 
-// TestKeysetUnverifiedContactsPage_UsesIndexUnderRLS mirrors the
-// identity keyset EXPLAIN gate (per ADR 0038) for
-// platform.unverified_contacts.
-//
-// Asserts the state-filtered keyset query plans as an Index Scan against
-// the composite index idx_uvc_state_created_keyset declared in
-// migration 20260601000001 as
-// `(state, created_at DESC, id DESC)` — matching the query's
-// `WHERE state = $1 ORDER BY created_at DESC, id DESC` keyset shape.
-//
-// Platform-only table; the connection runs under TxScopePlatform so RLS
-// admits the rows.
+// TestKeysetUnverifiedContactsPage_UsesIndexUnderRLS mirrors the identity
+// keyset EXPLAIN gate (ADR 0038) for platform.unverified_contacts: the
+// state-filtered keyset query must plan as an Index Scan on
+// idx_uvc_state_created_keyset (state, created_at DESC, id DESC), not a Seq
+// Scan. Runs under TxScopePlatform so RLS admits the rows.
 func TestKeysetUnverifiedContactsPage_UsesIndexUnderRLS(t *testing.T) {
 	// arch-test:no-parallel — full-table EXPLAIN + ANALYZE; uses TruncateAll
 	sharedPG.TruncateAll(t)
@@ -47,9 +38,8 @@ func TestKeysetUnverifiedContactsPage_UsesIndexUnderRLS(t *testing.T) {
 
 	agentID := unverifiedcontact.MembershipID(ids.NewV7().String())
 
-	// Seed 200 contacts in StateNew so the planner reliably prefers the
-	// index over a Seq Scan. Stagger created_at so the keyset cursor has
-	// distinct (created_at, id) pairs.
+	// 200 StateNew rows so the planner prefers the index; staggered
+	// created_at gives distinct (created_at, id) keyset pairs.
 	const seedCount = 200
 	base := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC).UTC()
 	for i := range seedCount {
@@ -90,9 +80,8 @@ func TestKeysetUnverifiedContactsPage_UsesIndexUnderRLS(t *testing.T) {
 		t.Fatalf("analyze: %v", err)
 	}
 
-	// EXPLAIN runs under platform GUC so RLS admits the rows — mirror of
-	// the read path: HTTP authn middleware sets app.is_platform=true
-	// when the operator's JWT is_platform=true.
+	// EXPLAIN runs under the platform GUC so RLS admits the rows (mirrors the
+	// read path, where authn sets app.is_platform=true).
 	conn, err := pool.Acquire(t.Context())
 	if err != nil {
 		t.Fatalf("acquire: %v", err)
@@ -108,8 +97,7 @@ func TestKeysetUnverifiedContactsPage_UsesIndexUnderRLS(t *testing.T) {
 	rlstest.SetSessionPlatformLocal(t, t.Context(), dbtx)
 
 	// Same predicate shape as sqlc's ListUnverifiedContactsPage with a
-	// non-empty state filter (typical caller pattern: "show me NEW").
-	// First-page sentinel cursor admits every row.
+	// non-empty state filter; the first-page sentinel cursor admits every row.
 	const explainSQL = `
 		EXPLAIN (FORMAT JSON, ANALYZE, BUFFERS)
 		SELECT id, state, rejection_reason,
@@ -142,9 +130,8 @@ func TestKeysetUnverifiedContactsPage_UsesIndexUnderRLS(t *testing.T) {
 	planText := string(rawPlan)
 	t.Logf("EXPLAIN plan:\n%s", planText)
 
-	// Primary regression guard: any Index Scan flavour is acceptable.
-	// The bug class we're guarding is "planner ignored every index +
-	// scanned the table".
+	// Guard the "planner ignored every index and scanned the table" bug; any
+	// Index Scan flavour passes.
 	if !strings.Contains(planText, "Index Scan") &&
 		!strings.Contains(planText, "Bitmap Index Scan") {
 		t.Errorf("expected plan to contain Index Scan (any flavour); got:\n%s", planText)
@@ -160,8 +147,8 @@ func TestKeysetUnverifiedContactsPage_UsesIndexUnderRLS(t *testing.T) {
 	}
 }
 
-// padDigits returns n as a zero-padded width-digit string for unique
-// mobile + email seeding. Sufficient up to 10^width-1 distinct rows.
+// padDigits returns n as a zero-padded width-digit string for unique mobile +
+// email seeding (good for up to 10^width-1 rows).
 func padDigits(n, width int) string {
 	s := ""
 	for i := range width {

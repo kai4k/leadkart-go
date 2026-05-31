@@ -4,16 +4,12 @@ import (
 	"time"
 )
 
-// LeadCreditAdjustedV1 — a per-tenant credit balance changed (topup
-// from operator action or charge from marketplace purchase).
-// TenantScoped: the tenant whose balance changed.
+// LeadCreditAdjustedV1 signals a per-tenant credit balance change (operator
+// topup or marketplace-purchase charge). TenantScoped to the affected tenant.
 //
-// All UUID fields are wire-shaped as strings per ADR 0059 frozen brief
-// (matches CRM subscriber's local mirror without per-language uuid
-// codec). DeltaCredits is SIGNED — positive on topup, negative on
-// charge. NewBalanceCredits is the post-adjustment balance. Consumers
-// (tenant dashboard, audit indexer) consume both for forensic
-// reconstruction.
+// UUID fields are wire-shaped strings per ADR 0059. DeltaCredits is signed
+// (positive topup, negative charge); NewBalanceCredits is the post-adjustment
+// balance. Consumers use both for forensic reconstruction.
 type LeadCreditAdjustedV1 struct {
 	TenantID               string    `json:"tenant_id"`
 	AdjustmentID           string    `json:"adjustment_id"`
@@ -24,7 +20,7 @@ type LeadCreditAdjustedV1 struct {
 	AdjustedByMembershipID string    `json:"adjusted_by_membership_id"`
 }
 
-// Topic returns the canonical wire alias.
+// Topic returns the wire alias.
 func (LeadCreditAdjustedV1) Topic() string { return "platform.lead_credit_adjusted.v1" }
 
 // OccurredAt returns the domain timestamp.

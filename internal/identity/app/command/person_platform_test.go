@@ -1,6 +1,5 @@
 package command_test
 
-
 import (
 	"context"
 	"time"
@@ -13,9 +12,8 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person/persontest"
 )
 
-// failingPersonsForPlatform overrides UpdateByID to surface errors —
-// shared across the GlobalSuspend / LiftSuspension / Anonymise /
-// UpdateProfile handlers.
+// failingPersonsForPlatform injects errors on UpdateByID, shared across the
+// platform person handlers.
 type failingPersonsForPlatform struct {
 	*persontest.FakeRepository
 	updateErr error
@@ -27,7 +25,6 @@ func (r *failingPersonsForPlatform) UpdateByID(ctx context.Context, id person.ID
 	}
 	return r.FakeRepository.UpdateByID(ctx, id, fn)
 }
-
 
 func TestGlobalSuspendPerson_Succeeds(t *testing.T) {
 	t.Parallel()
@@ -150,9 +147,8 @@ func TestPersonPlatformHandlers_NotFound(t *testing.T) {
 	}
 }
 
-// TestPersonPlatformHandlers_EmptyPersonID is the boundary-input table
-// — every handler rejects zero PersonID at the boundary before any
-// repo is touched.
+// TestPersonPlatformHandlers_EmptyPersonID — every handler rejects zero
+// PersonID before any repo call.
 func TestPersonPlatformHandlers_EmptyPersonID(t *testing.T) {
 	t.Parallel()
 	repo := persontest.NewFakeRepository()
@@ -188,10 +184,8 @@ func TestPersonPlatformHandlers_EmptyPersonID(t *testing.T) {
 	}
 }
 
-// TestPersonPlatformHandlers_AggregateRejection_Wrapped — for each
-// handler, drive the aggregate to reject (empty reason / empty name /
-// already-anonymised-cannot-update-profile) and assert the error wraps
-// person.ErrInvalid (i.e. handler propagates through fmt.Errorf wrap).
+// TestPersonPlatformHandlers_AggregateRejection_Wrapped — aggregate rejections
+// propagate wrapping person.ErrInvalid.
 func TestPersonPlatformHandlers_AggregateRejection_Wrapped(t *testing.T) {
 	t.Parallel()
 
@@ -244,9 +238,8 @@ func TestPersonPlatformHandlers_AggregateRejection_Wrapped(t *testing.T) {
 	})
 }
 
-// TestPersonPlatformHandlers_GenericRepoError_Wrapped — for each
-// handler, generic UpdateByID failure (non-NotFound) MUST wrap, not
-// collapse to ErrPersonNotFound. Operators see the alert.
+// TestPersonPlatformHandlers_GenericRepoError_Wrapped — a non-NotFound
+// UpdateByID failure wraps, not collapses to ErrPersonNotFound.
 func TestPersonPlatformHandlers_GenericRepoError_Wrapped(t *testing.T) {
 	t.Parallel()
 	cases := []struct {

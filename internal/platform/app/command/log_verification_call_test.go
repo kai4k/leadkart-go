@@ -49,7 +49,7 @@ func TestLogVerificationCall_NoAnswerLeavesContactInCall(t *testing.T) {
 	if out.CallID == "" {
 		t.Error("expected CallID")
 	}
-	// Contact promoted to InCall by the handler's StartCall promotion.
+	// Handler's StartCall promoted the contact to InCall.
 	loaded, _ := contacts.GetByID(t.Context(), cID)
 	if loaded.State() != unverifiedcontact.StateInCall {
 		t.Errorf("state=%q want in_call", loaded.State())

@@ -13,11 +13,7 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
 
-// The membership-side fake lives in
-// internal/identity/domain/membership/membershiptest/ per TDL Wild
-// Workouts canon — co-located with the aggregate it fakes.
-// newFakeMembershipRepo is preserved as a one-line alias so existing
-// tests don't need rewriting.
+// newFakeMembershipRepo aliases the co-located membershiptest fake.
 func newFakeMembershipRepo() *membershiptest.FakeRepository {
 	return membershiptest.NewFakeRepository()
 }
@@ -160,9 +156,8 @@ func TestNewHandlers_PanicOnNilRepo(t *testing.T) {
 	}
 }
 
-// TestUserManagementHandlers_InputRejections — boundary-input guards
-// for every handler. Zero TenantID and zero MembershipID short-circuit
-// before any repo is touched.
+// TestUserManagementHandlers_InputRejections — zero TenantID/MembershipID
+// short-circuit before any repo call.
 func TestUserManagementHandlers_InputRejections(t *testing.T) {
 	t.Parallel()
 	zeroTID := tenant.ID("")
@@ -209,11 +204,8 @@ func TestUserManagementHandlers_InputRejections(t *testing.T) {
 	}
 }
 
-// TestDeactivateUser_AlreadyInactive_Idempotent exercises the aggregate-
-// idempotent arm: Deactivate on an already-Inactive Membership returns
-// nil + emits no event. The handler's closure path therefore commits
-// no mutation — same shape as a first-time Deactivate from the handler
-// caller's perspective (returns nil), but no DeactivatedEvent fires.
+// TestDeactivateUser_AlreadyInactive_Idempotent — Deactivate on an already-
+// Inactive Membership returns nil and emits no event.
 func TestDeactivateUser_AlreadyInactive_Idempotent(t *testing.T) {
 	t.Parallel()
 	repo := newFakeMembershipRepo()
@@ -240,9 +232,8 @@ func TestDeactivateUser_AlreadyInactive_Idempotent(t *testing.T) {
 	}
 }
 
-// TestReactivateUser_AlreadyActive_Idempotent — Reactivate on an
-// already-Active Membership returns nil + emits no event per the
-// aggregate's no-op contract.
+// TestReactivateUser_AlreadyActive_Idempotent — Reactivate on an already-Active
+// Membership returns nil and emits no event.
 func TestReactivateUser_AlreadyActive_Idempotent(t *testing.T) {
 	t.Parallel()
 	repo := newFakeMembershipRepo()
@@ -265,15 +256,9 @@ func TestReactivateUser_AlreadyActive_Idempotent(t *testing.T) {
 	}
 }
 
-// TestUpdateUserProfile_HappyPath_NoLengthRejection documents that
-// Membership.UpdateProfile has NO length invariant on the input fields
-// — long status messages, long designations, etc. all pass through.
-// Per the BRD line N (per-tenant profile) admin UI should clamp; the
-// aggregate intentionally stays permissive so retroactive policy
-// tightening doesn't reject existing rows.
-//
-// (Branch documented; the more-substantial coverage lives in
-// the existing TestUpdateUserProfile_Succeeds.)
+// TestUpdateUserProfile_HappyPath_NoLengthRejection — Membership.UpdateProfile
+// has no length invariant; the admin UI clamps, the aggregate stays permissive
+// so retroactive policy tightening doesn't reject existing rows.
 func TestUpdateUserProfile_HappyPath_NoLengthRejection(t *testing.T) {
 	t.Parallel()
 	repo := newFakeMembershipRepo()

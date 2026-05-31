@@ -12,15 +12,13 @@ import (
 	"github.com/leadkart/leadkart-go/internal/platform/integrationevents"
 )
 
-// ErrContactAlreadyTerminal is surfaced by the verify handler when the
-// contact is already in a terminal state (Verified or Rejected). For
-// Verified the aggregate is idempotent; the handler still refuses to
-// emit a SECOND LeadVerifiedV1 + create a SECOND PlatformLead. HTTP
-// layer maps to 409 (Conflict).
+// ErrContactAlreadyTerminal signals the contact is already Verified or
+// Rejected. The handler refuses rather than emit a second
+// LeadVerifiedV1 / create a second PlatformLead; HTTP maps to 409.
 var ErrContactAlreadyTerminal = errors.New("verify: contact already in terminal state")
 
-// VerifyUnverifiedContactCommand carries the input for the Lead Agent
-// "promote this contact to a marketplace PlatformLead" use case.
+// VerifyUnverifiedContactCommand is the Lead Agent "promote this contact
+// to a marketplace PlatformLead" input.
 type VerifyUnverifiedContactCommand struct {
 	ContactID  unverifiedcontact.ID
 	VerifiedBy unverifiedcontact.MembershipID
@@ -31,12 +29,10 @@ type VerifyUnverifiedContactResult struct {
 	PlatformLeadID platformlead.ID
 }
 
-// VerifyUnverifiedContactHandler is the load-bearing handler — runs
-// the contact + lead writes in ONE UoW tx, then emits a tailored
-// LeadVerifiedV1 carrying the full LeadSnapshot built from the
+// VerifyUnverifiedContactHandler writes the contact and the new lead in
+// one UoW tx, then emits LeadVerifiedV1 with the full snapshot from the
 // contact's form VO. The mechanical mapper suppresses the platformlead
-// domain VerifiedEvent precisely so this handler can drive the wire
-// shape.
+// VerifiedEvent so this handler drives the wire shape.
 type VerifyUnverifiedContactHandler struct {
 	uow       pg.UnitOfWork
 	contacts  unverifiedcontact.Repository
@@ -48,10 +44,8 @@ type VerifyUnverifiedContactHandler struct {
 
 // NewVerifyUnverifiedContactHandler wires the handler.
 //
-// newLeadID is the PlatformLead-ID factory per the
-// `TestArch_HandlersInjectIDFactory` discipline. Production passes
-// `func() platformlead.ID { return platformlead.ID(ids.NewV7().String()) }`;
-// tests inject a deterministic counter so the minted ID is pinnable.
+// newLeadID is injected per TestArch_HandlersInjectIDFactory; tests
+// inject a deterministic counter for pinnable IDs.
 func NewVerifyUnverifiedContactHandler(
 	uow pg.UnitOfWork,
 	contacts unverifiedcontact.Repository,
@@ -72,16 +66,9 @@ func NewVerifyUnverifiedContactHandler(
 	}
 }
 
-// Handle is the contact→lead promotion. Steps inside ONE tx:
-//
-//  1. Generate the new PlatformLead ID.
-//  2. Update the contact (load + MarkVerified + persist) — joins the tx.
-//  3. Re-load the contact to get the verified form (UpdateByID returns
-//     no aggregate handle; the load happens inline via GetByID under
-//     the same tx ctx).
-//  4. Construct + persist the PlatformLead from the contact's form +
-//     ID generated in step 1.
-//  5. Enqueue LeadVerifiedV1 directly with the LeadSnapshot.
+// Handle promotes a contact to a PlatformLead in one tx: guard against
+// double-verify, transition the contact, build the lead from its form,
+// and enqueue LeadVerifiedV1 with the snapshot.
 func (h VerifyUnverifiedContactHandler) Handle(
 	ctx context.Context,
 	cmd VerifyUnverifiedContactCommand,
@@ -94,11 +81,9 @@ func (h VerifyUnverifiedContactHandler) Handle(
 	now := h.now()
 
 	err := h.uow.WithinTx(ctx, pg.TxScopePlatform, func(ctx context.Context) error {
-		// Step 0: load the contact under the tx so we can guard
-		// against double-verify / verify-after-reject BEFORE
-		// fabricating a fresh leadID + emitting a second
-		// LeadVerifiedV1 (which would create a phantom marketplace
-		// row downstream). H11 — review-pass.
+		// Guard against double-verify / verify-after-reject before
+		// minting a fresh leadID + second LeadVerifiedV1 (which would
+		// create a phantom marketplace row). H11 — review-pass.
 		existing, err := h.contacts.GetByID(ctx, cmd.ContactID)
 		if err != nil {
 			if errors.Is(err, unverifiedcontact.ErrNotFound) {
@@ -108,20 +93,18 @@ func (h VerifyUnverifiedContactHandler) Handle(
 		}
 		switch existing.State() {
 		case unverifiedcontact.StateVerified, unverifiedcontact.StateRejected:
-			// Terminal state — refuse the request rather than
-			// idempotent-no-op (which would still fabricate a fresh
-			// leadID + emit LeadVerifiedV1 a second time).
+			// Refuse rather than no-op: a no-op would still mint a
+			// fresh leadID and re-emit LeadVerifiedV1.
 			return ErrContactAlreadyTerminal
 		case unverifiedcontact.StateNew, unverifiedcontact.StateInCall, unverifiedcontact.StateBusy:
 			// proceed
 		}
 
-		// Step 1: load + transition the contact. Aggregate enforces
-		// the state-machine guard a second time (defense-in-depth).
+		// Transition the contact; the aggregate re-checks the guard
+		// (defense-in-depth).
 		err = h.contacts.UpdateByID(ctx, cmd.ContactID, func(c *unverifiedcontact.UnverifiedContact) (bool, error) {
-			// Ensure InCall first — verify requires it. If the contact
-			// is in New (caller skipped the call-log step), promote
-			// to InCall first so the next transition is legal.
+			// Verify requires InCall; promote from New if the caller
+			// skipped the call-log step.
 			if c.State() == unverifiedcontact.StateNew {
 				if err := c.StartCall(now); err != nil {
 					return false, err
@@ -136,14 +119,12 @@ func (h VerifyUnverifiedContactHandler) Handle(
 			return fmt.Errorf("transition contact: %w", err)
 		}
 
-		// Step 2: re-load the contact under the same tx ctx so we can
-		// pull the form VO + the verified-by/at fields.
+		// Re-load under the same tx to pull the form VO.
 		c, err := h.contacts.GetByID(ctx, cmd.ContactID)
 		if err != nil {
 			return fmt.Errorf("reload contact: %w", err)
 		}
 
-		// Step 3: construct + persist the PlatformLead.
 		lead, err := platformlead.NewFromUnverifiedContact(
 			leadID, cmd.ContactID, c.Form(), cmd.VerifiedBy, now,
 		)
@@ -154,9 +135,8 @@ func (h VerifyUnverifiedContactHandler) Handle(
 			return fmt.Errorf("persist lead: %w", err)
 		}
 
-		// Step 4: emit LeadVerifiedV1 with the full LeadSnapshot.
-		// UUIDs travel the wire as strings per ADR 0059 frozen brief.
-		// Drains in the SAME tx via OutboxEnqueuer.
+		// Emit LeadVerifiedV1 in the same tx via OutboxEnqueuer. UUIDs
+		// ride the wire as strings (ADR 0059).
 		ev := integrationevents.LeadVerifiedV1{
 			PlatformLeadID:         leadID.String(),
 			VerifiedAt:             now.UTC(),

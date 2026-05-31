@@ -58,7 +58,6 @@ func boomingPlatformGuard(err error) *membershipsWithSuperAdmin {
 // _ = membership.ID compile-time guard.
 var _ = membership.ID("")
 
-
 // The tenant-side fake lives in internal/identity/domain/tenant/tenanttest/
 // per TDL Wild Workouts canon — co-located with the aggregate it
 // fakes. newFakeTenantRepo is preserved as a one-line alias so existing
@@ -253,7 +252,7 @@ func TestRestoreTenant_FromPendingDeletion(t *testing.T) {
 	t.Parallel()
 	repo := newFakeTenantRepo()
 	tn := newTenant(t)
-	_ = tn.Activate(testNow) // arch-test:ignore-err - test fixture setup
+	_ = tn.Activate(testNow)                       // arch-test:ignore-err - test fixture setup
 	_ = tn.MarkForDeletion("test-reason", testNow) // arch-test:ignore-err - test fixture setup
 	tn.PullEvents()
 	_ = repo.Add(t.Context(), tn) // arch-test:ignore-err - test fixture setup
@@ -477,7 +476,7 @@ func TestMarkTenantForDeletion_ReasonMismatch_OnAlreadyPending(t *testing.T) {
 	t.Parallel()
 	repo := newFakeTenantRepo()
 	tn := newTenant(t)
-	_ = tn.Activate(testNow)                                  // arch-test:ignore-err
+	_ = tn.Activate(testNow)                                   // arch-test:ignore-err
 	_ = tn.MarkForDeletion("original: ops-initiated", testNow) // arch-test:ignore-err
 	tn.PullEvents()
 	_ = repo.Add(t.Context(), tn) // arch-test:ignore-err
@@ -500,7 +499,7 @@ func TestRestoreTenant_AggregateRejection_FromSuspended(t *testing.T) {
 	t.Parallel()
 	repo := newFakeTenantRepo()
 	tn := newTenant(t)
-	_ = tn.Activate(testNow)                   // arch-test:ignore-err
+	_ = tn.Activate(testNow)                    // arch-test:ignore-err
 	_ = tn.Suspend("ops-test-suspend", testNow) // arch-test:ignore-err
 	tn.PullEvents()
 	_ = repo.Add(t.Context(), tn) // arch-test:ignore-err

@@ -1,40 +1,22 @@
-// Package platformleadtest provides the in-memory FakeRepository
-// implementing [platformlead.Repository]. Used by app-layer handler
-// tests + downstream integration scenarios that need a working
-// PlatformLead store without a Postgres dependency.
+// Package platformleadtest provides the in-memory FakeRepository implementing
+// [platformlead.Repository], for app-layer handler tests and integration
+// scenarios that need a PlatformLead store without Postgres.
 //
-// TDL CANON (ThreeDotsLabs Wild Workouts + "Go with the Domain"):
+// TDL canon (Wild Workouts + "Go with the Domain"):
+//   - Co-located in a sibling <aggregate>test/ package.
+//   - Faithful contract implementation, not a canned-response mock: ErrNotFound
+//     on missing IDs, unsold-only MarketplaceBrowse (mirrors the adapter's
+//     WHERE sold_to_tenant_id IS NULL), event drain on each commit.
+//   - Implements the TransactionalFake contract via [FakeRepository.Snapshot]:
+//     registered with FakeUnitOfWork, it rolls back on closure error to model
+//     Postgres ROLLBACK under the PurchaseLead race.
+//   - Single-test-owner: each test builds its own fake, so t.Parallel is safe
+//     without sync. Sync here would also trip TestArch_NoGoroutinesInDomain
+//     (domain is concurrency-free — Bryan Mills, "Rethinking Concurrency").
 //
-//   - The fake lives in a sibling package <aggregate>test/, co-located
-//     with the domain aggregate it implements an interface from. Same
-//     visibility surface as the aggregate itself; no special test-side
-//     plumbing.
-//   - The fake is a FAITHFUL implementation of
-//     [platformlead.Repository] — not a mock-with-canned-responses.
-//     It honors every contract guarantee: ErrNotFound on missing IDs,
-//     unsold-only filter on MarketplaceBrowse (mirrors the adapter's
-//     `WHERE sold_to_tenant_id IS NULL` predicate), per-aggregate
-//     event drain on each commit.
-//   - The fake implements the [TransactionalFake] contract via
-//     [FakeRepository.Snapshot] — registered with [FakeUnitOfWork], it
-//     supports closure-error rollback so tests verify "loser's
-//     mutation is undone when the winning UPDATE rejects in the same
-//     UoW" behaviour (Postgres ROLLBACK semantics under the
-//     PurchaseLead race).
-//   - Single-test-owner pattern: each test creates its OWN
-//     FakeRepository via [NewFakeRepository] — no shared mutable state
-//     across tests. t.Parallel is naturally safe because no two tests
-//     share the same fake instance. This is TDL canon: fakes don't
-//     need sync primitives because they're per-test, and putting sync
-//     in domain-co-located test packages would trip
-//     TestArch_NoGoroutinesInDomain (domain layer is concurrency-free
-//     by design — Bryan Mills "Rethinking Concurrency Patterns").
-//
-// Why fakes, not mocks: per TDL "Go with the Domain" ch. 8, mocks
-// couple the test to the call-pattern of the SUT (Subject Under Test);
-// fakes couple to the CONTRACT. Refactoring the SUT to use the
-// interface differently breaks mock-tests but leaves fake-tests
-// green. The contract is the load-bearing thing.
+// Fakes over mocks ("Go with the Domain" ch. 8): mocks couple tests to the
+// SUT's call pattern, fakes couple to the contract — refactors leave fake tests
+// green.
 package platformleadtest
 
 import (
@@ -44,38 +26,30 @@ import (
 	"github.com/leadkart/leadkart-go/internal/platform/domain/platformlead"
 )
 
-// FakeRepository is the in-memory implementation of
-// [platformlead.Repository]. Zero-value-NOT-usable — construct via
-// [NewFakeRepository] so the internal map is initialised.
-// Single-test-owner: do NOT share one instance across tests; each test
-// creates its own.
+// FakeRepository is the in-memory [platformlead.Repository]. Construct via
+// [NewFakeRepository] (zero value unusable). Single-test-owner: do not share
+// across tests.
 type FakeRepository struct {
-	// Store is the live lead index by ID. PlatformLeads transition
-	// from Available → Sold via [platformlead.PlatformLead.Purchase];
-	// not row-level soft-deleted.
+	// Store indexes live leads by ID. Leads go Available → Sold via Purchase;
+	// not soft-deleted.
 	Store map[platformlead.ID]*platformlead.PlatformLead
 
-	// DrainedEvents captures every domain event pulled off the
-	// aggregate at Add + committed-UpdateByID time.
+	// DrainedEvents collects events pulled at Add and committed UpdateByID.
 	DrainedEvents []platformlead.Event
 }
 
-// NewFakeRepository returns an empty in-memory lead repository.
-// Single-test-owner — each test should construct its own instance;
-// do NOT share one fake across parallel tests (no internal sync).
+// NewFakeRepository returns an empty in-memory lead repository. Single-test-owner:
+// each test builds its own; no internal sync.
 func NewFakeRepository() *FakeRepository {
 	return &FakeRepository{
 		Store: make(map[platformlead.ID]*platformlead.PlatformLead),
 	}
 }
 
-// Compile-time interface conformance gate. Drift in
-// [platformlead.Repository] (a method renamed, signature changed)
-// breaks at build time before any test runs.
+// Contract gate: interface drift breaks the build before any test runs.
 var _ platformlead.Repository = (*FakeRepository)(nil)
 
-// Add persists a brand-new lead. Drains the aggregate's events via
-// PullEvents into [FakeRepository.DrainedEvents].
+// Add persists a new lead and drains its events into DrainedEvents.
 func (r *FakeRepository) Add(_ context.Context, l *platformlead.PlatformLead) error {
 
 	r.Store[l.ID()] = l
@@ -83,15 +57,12 @@ func (r *FakeRepository) Add(_ context.Context, l *platformlead.PlatformLead) er
 	return nil
 }
 
-// UpdateByID loads, mutates via updateFn, persists. Returns
-// [platformlead.ErrNotFound] when the row doesn't exist.
+// UpdateByID loads, applies updateFn, and on persist drains events. Returns
+// [platformlead.ErrNotFound] when the row is absent.
 //
-// On commit, drains the aggregate's events into
-// [FakeRepository.DrainedEvents]. The fake doesn't deep-copy the
-// aggregate before passing to updateFn; the caller observes mutations
-// even if it returns (false, nil). This mirrors the pg adapter's
-// behavior — both rely on the aggregate's invariants being re-checked
-// at persist time, not snapshot-rollback.
+// No deep-copy before updateFn: the caller observes mutations even on
+// (false, nil), matching the pg adapter — both re-check invariants at persist
+// time rather than snapshot-rollback.
 func (r *FakeRepository) UpdateByID(
 	_ context.Context,
 	id platformlead.ID,
@@ -125,9 +96,8 @@ func (r *FakeRepository) GetByID(
 	return l, nil
 }
 
-// MarketplaceBrowse returns ALL unsold leads in insertion order up to
-// pageSize. Slice 1 tests don't exercise the filter set; the
-// integration test suite does.
+// MarketplaceBrowse returns unsold leads up to pageSize. Filters are exercised
+// by the integration suite, not here.
 func (r *FakeRepository) MarketplaceBrowse(
 	_ context.Context,
 	_ platformlead.MarketplaceFilter,
@@ -147,12 +117,10 @@ func (r *FakeRepository) MarketplaceBrowse(
 	return out, nil
 }
 
-// Snapshot satisfies the platformtest.TransactionalFake contract.
-// Captures the Store map + DrainedEvents at the WithinTx entry point;
-// the returned closure restores both on closure error so the fake
-// models Postgres ROLLBACK semantics. Deep-copies aggregate pointers
-// via UnmarshalFromDB so closures that mutated the aggregate in-place
-// (e.g. Purchase) don't leak past the rollback.
+// Snapshot satisfies the platformtest.TransactionalFake contract. It captures
+// Store and DrainedEvents; the returned closure restores them on error,
+// modelling Postgres ROLLBACK. Aggregates are deep-copied via UnmarshalFromDB
+// so in-place mutations (e.g. Purchase) don't leak past rollback.
 func (r *FakeRepository) Snapshot() func() {
 
 	store := make(map[platformlead.ID]*platformlead.PlatformLead, len(r.Store))

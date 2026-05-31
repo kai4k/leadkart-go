@@ -54,10 +54,8 @@ import (
 
 const refreshTTL = 14 * 24 * time.Hour
 
-// wiredApp groups the Identity composition outputs the integration
-// tests need. Returned as a struct (not a positional tuple) because
-// the post-A.7 surface — login + refresh + permission gate + stamp
-// validator — pushed the tuple past readable arity.
+// wiredApp groups the Identity composition outputs the integration tests need
+// (a struct, not a tuple — the surface outgrew readable arity).
 type wiredApp struct {
 	pool     *pgxpool.Pool
 	register command.RegisterTenantHandler
@@ -94,9 +92,8 @@ func newWiredApp(t *testing.T) wiredApp {
 		t.Fatalf("dummy hash: %v", err)
 	}
 
-	// Real HybridCache + SecurityStampCache + Validator wired against
-	// miniredis. Required by the post-A.7 [authn.RequirePermission]
-	// surface (which composes RequireFreshStamp internally).
+	// Real HybridCache + SecurityStampCache + Validator over miniredis —
+	// [authn.RequirePermission] composes RequireFreshStamp internally.
 	store := miniredis.RunT(t)
 	redisCli := redis.NewClient(&redis.Options{Addr: store.Addr()})
 	t.Cleanup(func() { _ = redisCli.Close() })
@@ -200,8 +197,7 @@ func TestFlow_RegisterLoginRefreshLogout(t *testing.T) {
 		t.Fatal("Refresh returned the same refresh plaintext (no rotation)")
 	}
 
-	// 4. Replay the consumed plaintext — RFC 9700 §4.13 reuse detection
-	//    revokes the family + rejects the request.
+	// 4. Replay the consumed plaintext — reuse detection revokes + rejects.
 	_, err = refresh.Handle(ctx, command.RefreshCommand{
 		RefreshTokenPlain: loginOut.RefreshTokenPlain,
 	})
@@ -226,33 +222,17 @@ func TestFlow_RegisterLoginRefreshLogout(t *testing.T) {
 	}
 }
 
-// Note: TestFlow_LoginUnknownEmail_GenericFailure +
-// TestFlow_LoginWrongPassword_GenericFailure were pruned per ADR 0062
-// strict redundancy audit (2026-05-26). Both branches are pure handler
-// orchestration over the AuthRouter contract + argon2 verify; no SQL
-// contract is exercised. Equivalent assertions now live in
-// login_test.go as handler-unit tests against persontest.FakeRepository
-// + fakeAuthRouter — running in <100ms each vs. the full pgtest +
-// miniredis + JWT boot the integration version paid for the same
-// observable.
+// LoginUnknownEmail/WrongPassword integration tests were pruned (ADR 0062
+// redundancy audit) — equivalent handler-unit coverage lives in login_test.go.
 
-// TestFlow_RegisterDuplicateActiveEmail_Blocked covers the
-// cross-aggregate UnitOfWork rollback when the membership Add fails
-// with ErrAlreadyActive. Sharpened per ADR 0062: the observable
-// (`ErrEmailHasActiveMembership`) is mirror-able from the fake-backed
-// handler layer; the SQL-specific contract is that the FAILED Add
-// rolls back the ENTIRE pg.UnitOfWork — tenant B's row, the
-// (reused) person update, the failed membership — atomically.
-//
-// Two halves of the SQL contract:
+// TestFlow_RegisterDuplicateActiveEmail_Blocked proves the cross-aggregate
+// UnitOfWork rollback: the SQL-only contract is that a membership Add failing
+// with ErrAlreadyActive rolls back the ENTIRE tx. Two halves:
 //
 //  1. Observable: second Register returns ErrEmailHasActiveMembership.
-//  2. Physical: direct SELECT for tenant B's slug returns zero rows
-//     — proves the pg.UnitOfWork rolled back the tenant insert when
-//     the membership Add fired ErrAlreadyActive partway through.
+//  2. Physical: a direct SELECT for tenant B's slug returns zero rows.
 //
-// Only the SQL adapter can prove (2); the fake has no UoW or pg.Tx
-// semantics to roll back.
+// Only the SQL adapter can prove (2); the fake has no tx to roll back.
 func TestFlow_RegisterDuplicateActiveEmail_Blocked(t *testing.T) {
 	t.Parallel()
 	wired := newWiredApp(t)
@@ -291,9 +271,8 @@ func TestFlow_RegisterDuplicateActiveEmail_Blocked(t *testing.T) {
 		t.Fatalf("expected ErrEmailHasActiveMembership, got %v", err)
 	}
 
-	// SQL-contract part 2: pg.UnitOfWork rollback proof. Tenant B's
-	// row must NOT exist — the failed membership Add rolled back the
-	// entire register flow's tx. Direct SELECT bypassing the adapter.
+	// SQL-contract part 2: rollback proof. Tenant B's row must NOT exist.
+	// Direct SELECT, bypassing the adapter.
 	var count int
 	if err := wired.pool.QueryRow(t.Context(),
 		`SELECT count(*) FROM identity.tenants WHERE slug = $1`,
@@ -306,22 +285,17 @@ func TestFlow_RegisterDuplicateActiveEmail_Blocked(t *testing.T) {
 	}
 }
 
-// TestE2E_LoginThenRequirePermissionGate is the Task 26 closing test:
-// the full chain — onboard a tenant (CompanyOwner role auto-seeded with
-// Meta.TenantAdmin permission) → login → take the JWT → call a handler
-// guarded by [authn.RequirePermission] → assert the gate passes for
-// the seeded permission and rejects an unrelated one.
-//
-// Proves the load-bearing claim of Phase 1: TenantOnboardingService +
-// PermissionResolver + JWT issuer + authn middleware compose into a
-// working end-to-end authorization flow with no test-only shortcuts.
+// TestE2E_LoginThenRequirePermissionGate exercises the full chain: onboard
+// (CompanyOwner auto-seeded with Meta.TenantAdmin) → login → call a handler
+// guarded by [authn.RequirePermission] → assert it grants the seeded permission
+// and rejects an unrelated one + a tampered token.
 func TestE2E_LoginThenRequirePermissionGate(t *testing.T) {
 	t.Parallel()
 	app := newWiredApp(t)
 	register, login, issuer, stamps := app.register, app.login, app.issuer, app.stamps
 	ctx := t.Context()
 
-	// 1. Onboard. CompanyOwner auto-assigned, carries Meta.TenantAdmin.
+	// 1. Onboard. CompanyOwner auto-assigned, carrying Meta.TenantAdmin.
 	full := ids.NewV7().String()
 	registerSlug, _ := slug.New("e2e-gate-" + full[len(full)-8:])
 	adminEmail, _ := email.New("e2e-gate@flow.test")
@@ -388,16 +362,9 @@ func TestE2E_LoginThenRequirePermissionGate(t *testing.T) {
 		t.Fatal("forbidden gate: sentinel ran despite missing permission")
 	}
 
-	// 6. Tampered token → 401 (not 403). Mutating one byte of the
-	//    signature segment invalidates the HMAC; the verifier rejects
-	//    before claim inspection.
-	//
-	//    The previous form (`[:len-2] + "XX"`) is non-deterministic — if
-	//    the random signature happens to end with "XX" (≈1 in 4096) the
-	//    tamper is a no-op and the verifier accepts the token. Split on
-	//    "." so we know we're touching the signature segment, then flip
-	//    one char to a guaranteed-different base64url value. This makes
-	//    the test robust without weakening the HMAC-rejection intent.
+	// 6. Tampered token → 401 (not 403): flipping one signature byte breaks the
+	//    HMAC, so the verifier rejects before claim inspection. Split on "." +
+	//    flip one char (deterministic, unlike a fixed-suffix swap).
 	parts := strings.Split(loginOut.AccessToken, ".")
 	if len(parts) != 3 || len(parts[2]) == 0 {
 		t.Fatalf("token shape: want header.payload.signature, got %d parts", len(parts))
@@ -422,7 +389,6 @@ func TestE2E_LoginThenRequirePermissionGate(t *testing.T) {
 	}
 }
 
-// Shared bootstrap (startWiredPostgres / TestMain / migrations / role
-// provisioning) lives in fixture_integration_test.go per the Brandur /
-// TDL canon — ONE container per package, shared pool, per-test
+// Shared bootstrap (startWiredPostgres / TestMain / migrations) lives in
+// fixture_integration_test.go: one container per package, shared pool, per-test
 // isolation via fresh tenant_id + RLS.

@@ -1,28 +1,20 @@
 //go:build integration
 
-// arch-test:no-timeout-needed — every test in this file uses the shared
-//   pgtest container (per-package); pgxpool internal conn timeouts +
-//   package-level `task ci:test:int -timeout=15m` already bound execution.
-//   Per-test context.WithTimeout would be belt-and-suspenders against the
-//   shared-pool + parallel-with-RLS canon shape.
+// arch-test:no-timeout-needed — shared pgtest container + pgxpool conn
+//   timeouts + package-level `task ci:test:int -timeout=15m` already bound
+//   execution.
 //
-// arch-test:parallel-safe — every Test* uses the shared pgtest container
-//   + a fresh tenant_id per test bound via tenancy.WithID(); RLS isolates
-//   rows by tenant so parallel runs cannot see each others state.
-//   Brandur "Postgres at scale" + TDL Wild Workouts canon: shared
-//   infrastructure + per-test logical isolation = safe parallelism.
+// arch-test:parallel-safe — fresh tenant_id per test bound via tenancy.WithID();
+//   RLS isolates rows by tenant, so parallel runs can't see each other.
 //
-// SQL-CONTRACT COVERAGE (per ADR 0062 — TDL Test Pyramid):
-//   - Optimistic-version UPDATE: `UPDATE ... WHERE version = $expected`
-//     returning 0 rows → typed [leadcredit.ErrConflict]. This is the
-//     SQL-specific contract that backs the handler's retry loop per
-//     ADR 0059.
-//   - Outbox row insertion (TenantScoped event) in the SAME tx as the
-//     aggregate write; confirms tenant_id stamping for TenantScoped
-//     events per ADR 0059 + C3.
+// SQL-contract coverage (ADR 0062, TDL Test Pyramid):
+//   - Optimistic UPDATE ... WHERE version = $expected returning 0 rows →
+//     [leadcredit.ErrConflict]; backs the handler retry loop (ADR 0059).
+//   - Outbox row (TenantScoped event) written in the aggregate's tx;
+//     confirms tenant_id stamping (ADR 0059, C3).
 //
-// Round-trip Get/Insert + ErrNotFound + plain state transition coverage
-// moved to [leadcredittest.FakeRepository].
+// Round-trip + ErrNotFound + state-transition coverage lives in
+// [leadcredittest.FakeRepository].
 
 package adapters_test
 
@@ -41,11 +33,9 @@ import (
 	"github.com/leadkart/leadkart-go/internal/platform/domain/leadcredit"
 )
 
-// TestLeadCreditRepository_UpsertWithVersion_ConflictOnStaleVersion —
-// SQL-contract: load the row, persist a competing update underneath,
-// then attempt our own update — MUST return ErrConflict. The "WHERE
-// version = $expected" UPDATE returning 0 rows is the SQL-specific
-// behavior that drives the handler's retry loop per ADR 0059.
+// TestLeadCreditRepository_UpsertWithVersion_ConflictOnStaleVersion proves a
+// competing write underneath a stale read yields ErrConflict (the version
+// WHERE clause returning 0 rows; ADR 0059).
 func TestLeadCreditRepository_UpsertWithVersion_ConflictOnStaleVersion(t *testing.T) {
 	t.Parallel()
 	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
@@ -102,7 +92,7 @@ func TestLeadCreditRepository_UpsertWithVersion_ConflictOnStaleVersion(t *testin
 		t.Fatalf("caller B write: %v", err)
 	}
 
-	// Caller A now attempts to write — version stamp is stale.
+	// Caller A writes with a now-stale version stamp.
 	err = tx.WithinTx(t.Context(), pg.TxScopePlatform, func(ctx context.Context) error {
 		if err := aSide.Topup(50, "stale write", op, nowUTC()); err != nil {
 			return err
@@ -115,10 +105,8 @@ func TestLeadCreditRepository_UpsertWithVersion_ConflictOnStaleVersion(t *testin
 }
 
 // TestLeadCreditRepository_UpsertWithVersion_DrainsAdjustedEventToOutbox
-// — SQL-contract: confirms the AdjustedEvent gets translated to
-// LeadCreditAdjustedV1 and lands on platform.outbox with tenant_id set
-// (TenantScoped event; NOT NULL because it has a real tenant FK per C3
-// semantics).
+// confirms the AdjustedEvent maps to LeadCreditAdjustedV1 on the outbox with
+// tenant_id set (TenantScoped, real tenant FK; C3).
 func TestLeadCreditRepository_UpsertWithVersion_DrainsAdjustedEventToOutbox(t *testing.T) {
 	// arch-test:no-parallel — cross-tenant scan; uses TruncateAll
 	sharedPG.TruncateAll(t)
@@ -148,14 +136,12 @@ func TestLeadCreditRepository_UpsertWithVersion_DrainsAdjustedEventToOutbox(t *t
 		t.Fatalf("seed: %v", err)
 	}
 
-	// Production forwarder drains + the in-process subscriber receives the
-	// adjusted event. Strict TDL canon per ADR 0062 Amendment 1.
 	msgs := fix.forwardAndWait(t, 1)
 	got := platformEventTypes(msgs)
 	if len(got) != 1 || got[0] != "platform.lead_credit_adjusted.v1" {
 		t.Fatalf("event_types: got %v want [platform.lead_credit_adjusted.v1]", got)
 	}
-	// TenantScoped event — MUST carry the real tenant FK on the wire.
+	// TenantScoped: must carry the real tenant FK on the wire.
 	if tid := msgs[0].Metadata.Get(messaging.HeaderTenantID); tid != tenantID.String() {
 		t.Errorf("tenant_id header: got %q want %q (TenantScoped — must carry real tenant FK)",
 			tid, tenantID.String())

@@ -10,9 +10,8 @@ import (
 	"github.com/leadkart/leadkart-go/internal/platform/platformtest"
 )
 
-// TestRejectUnverifiedContact_HappyPath — Lead Agent terminal-rejects
-// a contact. Aggregate transitions to Rejected; outbox row landed
-// via the mechanical mapper. C2 — review-pass.
+// TestRejectUnverifiedContact_HappyPath: contact transitions to
+// Rejected; the mapper writes the outbox row. C2 — review-pass.
 func TestRejectUnverifiedContact_HappyPath(t *testing.T) {
 	t.Parallel()
 
@@ -48,8 +47,8 @@ func TestRejectUnverifiedContact_HappyPath(t *testing.T) {
 	}
 }
 
-// TestRejectUnverifiedContact_ContactNotFound — missing contact
-// surfaces as the typed sentinel the HTTP layer maps to 404. C2.
+// TestRejectUnverifiedContact_ContactNotFound: missing contact surfaces
+// the typed sentinel HTTP maps to 404. C2.
 func TestRejectUnverifiedContact_ContactNotFound(t *testing.T) {
 	t.Parallel()
 
@@ -66,9 +65,9 @@ func TestRejectUnverifiedContact_ContactNotFound(t *testing.T) {
 	}
 }
 
-// TestRejectUnverifiedContact_FromInCallState — when the contact is
-// already InCall (a call log preceded the reject), the handler skips
-// the StartCall promotion + goes straight to MarkRejected. C2.
+// TestRejectUnverifiedContact_FromInCallState: an already-InCall
+// contact skips the StartCall promotion and goes straight to
+// MarkRejected. C2.
 func TestRejectUnverifiedContact_FromInCallState(t *testing.T) {
 	t.Parallel()
 

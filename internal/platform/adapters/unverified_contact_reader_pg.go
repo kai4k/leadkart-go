@@ -16,13 +16,12 @@ import (
 	"github.com/leadkart/leadkart-go/internal/platform/app/query"
 )
 
-// UnverifiedContactReader is the pgx/sqlc-backed read-model satisfying
-// [query.ListUnverifiedContactsReader]. The unverified_contacts table is
-// platform-only (RLS policy uvc_platform_only USING app.is_platform()),
-// so every read MUST run inside a TxScopePlatform transaction that binds
-// the platform GUC — a pool checkout has app.is_platform()=false and FORCE
-// RLS would filter every row to empty. (The GUC is tx-local; an HTTP
-// middleware cannot set it for a later separate pool checkout.)
+// UnverifiedContactReader is the pgx/sqlc read-model for
+// [query.ListUnverifiedContactsReader]. unverified_contacts is platform-only
+// (RLS uvc_platform_only USING app.is_platform()), so every read MUST run in
+// a TxScopePlatform tx that binds the platform GUC: a bare pool checkout has
+// is_platform()=false and FORCE RLS filters every row out. The GUC is
+// tx-local, so middleware cannot set it for a later separate checkout.
 type UnverifiedContactReader struct {
 	pool *pgxpool.Pool
 	tx   *pg.Transactor
@@ -34,9 +33,8 @@ func NewUnverifiedContactReader(pool *pgxpool.Pool, tx *pg.Transactor) *Unverifi
 	return &UnverifiedContactReader{pool: pool, tx: tx, q: db.New(pool)}
 }
 
-// ListUnverifiedContactsPage satisfies the app-layer interface. The
-// cursor is decoded into (sort_value, id) at the boundary; empty cursor
-// (first page) translates to NULL on the SQL side.
+// ListUnverifiedContactsPage satisfies the app-layer interface. An empty
+// cursor (first page) decodes to NULL on the SQL side.
 func (r *UnverifiedContactReader) ListUnverifiedContactsPage(
 	ctx context.Context,
 	state string,
@@ -83,9 +81,9 @@ func (r *UnverifiedContactReader) ListUnverifiedContactsPage(
 	return out, nil
 }
 
-// int32Clamp narrows an int to int32, clamping to [1, MaxInt32]. The
-// app-layer ClampPageSize already bounds [1, 200], so this is a defence
-// against overflow when sqlc demands int32 + gosec flags the raw cast.
+// int32Clamp narrows an int to int32 in [1, 1<<30]. App-layer ClampPageSize
+// already bounds [1, 200]; this guards the sqlc int32 cast against overflow
+// (gosec).
 func int32Clamp(n int) int32 {
 	if n <= 0 {
 		return 1

@@ -1,11 +1,7 @@
-// route_spec_test.go — TestArch_ guard preventing drift between the
-// Platform Go HTTP route table and api/openapi.yaml.
-//
-// Per ADR 0050: every /api/v1/platform/* route in code MUST have a
-// matching operation in api/openapi.yaml + vice versa.
-//
-// Mirror of internal/identity/ports/route_spec_test.go, scoped to the
-// `/api/v1/platform/` prefix.
+// TestArch_ guard against drift between the Platform HTTP route table and
+// api/openapi.yaml: per ADR 0050 every /api/v1/platform/* route MUST have a
+// matching spec operation and vice versa. Mirror of identity's
+// route_spec_test.go, scoped to the /api/v1/platform/ prefix.
 
 package ports_test
 
@@ -25,26 +21,18 @@ import (
 const platformCodeRoutesPath = "http.go"
 const platformSpecPath = "../../../api/openapi.yaml"
 
-// platformOwnedPrefixes are the URL prefixes THIS module owns under
-// the shared `/api/v1/platform/` namespace. Identity owns
-// `/api/v1/platform/{tenants,persons,impersonation,stats}/...` (cross-
-// tenant operator endpoints + impersonation sessions) — those are
-// covered by identity's own route_spec_test. The shared prefix is a
-// historical convention; per-module ownership is determined by the
-// sub-resource segment.
-//
-// Adding a new platform-module sub-resource means appending its prefix
-// here AND adding the spec entry — the drift gate then enforces both
-// directions for the new namespace.
+// platformOwnedPrefixes are the prefixes THIS module owns under the shared
+// /api/v1/platform/ namespace; identity owns tenants/persons/impersonation/
+// stats (covered by its own spec test). Ownership is by sub-resource segment.
+// New sub-resource = append here AND add the spec entry; the gate enforces both.
 var platformOwnedPrefixes = []string{
 	"/api/v1/platform/unverified-contacts",
 	"/api/v1/platform/marketplace/",
 	"/api/v1/platform/lead-credits",
 }
 
-// matchesOwnedPrefix reports whether p falls under one of the
-// platformOwnedPrefixes namespaces (treats "/foo" as covering "/foo"
-// + "/foo/...").
+// matchesOwnedPrefix reports whether p falls under any platformOwnedPrefixes
+// namespace ("/foo" covers "/foo" and "/foo/...").
 func matchesOwnedPrefix(p string) bool {
 	for _, pref := range platformOwnedPrefixes {
 		if p == pref || strings.HasPrefix(p, pref+"/") || strings.HasPrefix(p, pref) {
@@ -61,8 +49,8 @@ type platformRouteKey struct {
 
 func (r platformRouteKey) String() string { return r.method + " " + r.path }
 
-// TestArch_RouteHasSpecOperation diffs code-side routes vs spec-side
-// operations under /api/v1/platform/* — both sets must be equal.
+// TestArch_RouteHasSpecOperation requires code routes and spec operations
+// under /api/v1/platform/* to be the same set.
 func TestArch_RouteHasSpecOperation(t *testing.T) {
 	t.Parallel()
 

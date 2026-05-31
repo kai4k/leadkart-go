@@ -19,14 +19,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// aliasRegex enforces the canonical wire-alias shape per messaging.md
-// "Event versioning". Module prefix MUST be `platform`; event-name
-// segment lower-snake-case; trailing `.vN` integer.
+// aliasRegex enforces the wire-alias shape (messaging.md "Event versioning"):
+// `platform` prefix, lower-snake-case name, trailing `.vN`.
 var aliasRegex = regexp.MustCompile(`^platform\.[a-z][a-z0-9_]*\.v\d+$`)
 
-// TestArch_AllRegisteredEventsSatisfyMarker enforces:
-//   - every event in the registry implements TenantScoped OR Platform;
-//   - no event implements both (would mean a typo on the marker).
+// TestArch_AllRegisteredEventsSatisfyMarker asserts every registered event
+// implements exactly one of TenantScoped or Platform.
 func TestArch_AllRegisteredEventsSatisfyMarker(t *testing.T) {
 	t.Parallel()
 	if len(all()) == 0 {
@@ -44,9 +42,8 @@ func TestArch_AllRegisteredEventsSatisfyMarker(t *testing.T) {
 	}
 }
 
-// TestArch_AllRegisteredEventsHaveCanonicalAlias asserts every Topic()
-// matches the `platform.{event-kebab}.v{N}` regex and aliases are
-// collision-free.
+// TestArch_AllRegisteredEventsHaveCanonicalAlias asserts every Topic() matches
+// aliasRegex and aliases are collision-free.
 func TestArch_AllRegisteredEventsHaveCanonicalAlias(t *testing.T) {
 	t.Parallel()
 	seen := map[string]string{}
@@ -63,9 +60,8 @@ func TestArch_AllRegisteredEventsHaveCanonicalAlias(t *testing.T) {
 	}
 }
 
-// TestArch_EveryRecordEndingInVNRegistered enforces: every exported
-// `type FooV{N} struct` in this package appears in the registry. Catches
-// "I added the struct but forgot the register() line."
+// TestArch_EveryRecordEndingInVNRegistered asserts every exported
+// `type FooV{N} struct` appears in the registry — catches a forgotten register().
 func TestArch_EveryRecordEndingInVNRegistered(t *testing.T) {
 	t.Parallel()
 
@@ -103,10 +99,9 @@ func TestArch_EveryRecordEndingInVNRegistered(t *testing.T) {
 	}
 }
 
-// TestArch_NoFrameworkImports enforces the framework-neutral contract:
-// integration-event records depend on stdlib + uuid + sibling Platform
-// domain packages ONLY. No watermill, no pgx, no http, no app/adapter
-// imports.
+// TestArch_NoFrameworkImports enforces framework-neutrality: records may import
+// only stdlib + uuid + sibling Platform domain packages. No watermill, pgx,
+// http, or app/adapter imports.
 func TestArch_NoFrameworkImports(t *testing.T) {
 	t.Parallel()
 
@@ -126,9 +121,7 @@ func TestArch_NoFrameworkImports(t *testing.T) {
 		"github.com/leadkart/leadkart-go/internal/platform/adapters",
 		"github.com/leadkart/leadkart-go/internal/platform/app",
 		"github.com/leadkart/leadkart-go/internal/platform/ports",
-		// Cross-bounded-context import bans — Platform integration
-		// events must not lean on Identity internals (compile-time
-		// fence against accidental coupling).
+		// Cross-context ban: Platform events must not lean on Identity internals.
 		"github.com/leadkart/leadkart-go/internal/identity/adapters",
 		"github.com/leadkart/leadkart-go/internal/identity/app",
 		"github.com/leadkart/leadkart-go/internal/identity/ports",
@@ -143,10 +136,8 @@ func TestArch_NoFrameworkImports(t *testing.T) {
 	}
 }
 
-// TestArch_TenantScopedRecordsExposeTenantID verifies TenantScoped
-// records actually return their TenantIDString() property; smoke check
-// that the interface contract is honoured. UUIDs travel the wire as
-// strings per ADR 0059 frozen brief.
+// TestArch_TenantScopedRecordsExposeTenantID smoke-checks that TenantScoped
+// records honour the interface contract. UUIDs travel as strings per ADR 0059.
 func TestArch_TenantScopedRecordsExposeTenantID(t *testing.T) {
 	t.Parallel()
 	seen := 0
@@ -162,27 +153,17 @@ func TestArch_TenantScopedRecordsExposeTenantID(t *testing.T) {
 }
 
 // TestArch_FromDomainEvent_HandlesAllRegisteredDomainEvents asserts
-// that FromDomainEvent recognises every Platform domain-event TYPE
-// in the system. Each must return either a non-nil Event (mapped) OR
-// (nil, nil) (intentional suppression, documented in mapping.go). A
-// return of (nil, ErrUnknown) fails CI — it means a new domain event
-// was added without a matching mapper case (or a suppression note).
+// FromDomainEvent recognises every Platform domain-event type: each must return
+// a non-nil Event or (nil, nil); (nil, ErrUnknown) fails CI. (Slice 1 H6 fix:
+// new events can no longer silently double or vanish.)
 //
-// This is the H6 fix from the Slice 1 review punch list: future event
-// additions can no longer silently double or vanish — the test fails
-// at the boundary, citing the missing type.
-//
-// Maintenance contract: when a new domain event TYPE is added under
-// internal/platform/domain/*, append a zero-value sample below AND
-// add the matching case to FromDomainEvent. The test then proves the
-// mapper covers it (or explicitly suppresses with a documented why).
+// Maintenance: when a domain event type is added under platform/domain/*, append
+// a zero-value sample below and add its case to FromDomainEvent.
 func TestArch_FromDomainEvent_HandlesAllRegisteredDomainEvents(t *testing.T) {
 	t.Parallel()
 
-	// One zero-value sample per recognised domain event TYPE. The
-	// PullEvents → drainEventsToOutbox pipeline only ever feeds
-	// FromDomainEvent values whose TYPE is in this list; the values'
-	// fields are NOT inspected — only the type switch fires.
+	// One zero-value sample per recognised domain event type. Only the type
+	// switch fires; field values are not inspected.
 	samples := []any{
 		unverifiedcontact.CreatedEvent{},
 		unverifiedcontact.CallStartedEvent{},
@@ -207,15 +188,13 @@ func TestArch_FromDomainEvent_HandlesAllRegisteredDomainEvents(t *testing.T) {
 			if err != nil {
 				t.Fatalf("%s: FromDomainEvent unexpected error: %v", name, err)
 			}
-			// (ie may be nil — intentional suppression — that's
-			// acceptable per the contract documented in mapping.go.)
+			// ie may be nil — intentional suppression per mapping.go.
 			_ = ie
 		})
 	}
 }
 
-// packageDir returns the absolute path of this test's package
-// directory.
+// packageDir returns the absolute path of this test's package directory.
 func packageDir(t *testing.T) string {
 	t.Helper()
 	_, here, _, ok := runtime.Caller(0)
@@ -225,8 +204,7 @@ func packageDir(t *testing.T) string {
 	return filepath.Dir(here)
 }
 
-// readFileString reads a file into a string. Inlined wrapper rather
-// than importing os in the arch-test seam at the top of the file.
+// readFileString reads a file into a string.
 func readFileString(path string) (string, error) {
 	b, err := os.ReadFile(path) //nolint:gosec // arch-test fixture path
 	if err != nil {

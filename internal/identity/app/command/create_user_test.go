@@ -1,6 +1,5 @@
 package command_test
 
-
 import (
 	"context"
 	"errors"
@@ -18,9 +17,7 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
 
-// failingMembersRepo wraps the shared fake to surface errors from the
-// targeted lookup/persist branches. Defaults to delegating to the
-// embedded fake; opt-in failures via the per-method err overrides.
+// failingMembersRepo injects errors on GetActiveForPerson + Add.
 type failingMembersRepo struct {
 	*membershiptest.FakeRepository
 	getActiveErr error // returned from GetActiveForPerson when non-nil
@@ -41,10 +38,7 @@ func (r *failingMembersRepo) Add(ctx context.Context, m *membership.Membership) 
 	return r.FakeRepository.Add(ctx, m)
 }
 
-// failingPersonsRepoForUser mirrors the wrapper in
-// password_reset_flow_test.go but adds the per-method overrides
-// CreateUserHandler exercises (GetByEmail, Add). Kept separate so the
-// password-reset wrapper stays focused.
+// failingPersonsRepoForUser injects errors on GetByEmail + Add.
 type failingPersonsRepoForUser struct {
 	*persontest.FakeRepository
 	getByEmailErr error
@@ -65,17 +59,12 @@ func (r *failingPersonsRepoForUser) Add(ctx context.Context, p *person.Person) e
 	return r.FakeRepository.Add(ctx, p)
 }
 
-// Test-local factories — tests construct fresh UUIDv7s per call (same
-// shape as production wiring). Deterministic pinning happens per-test
-// via captured closures when needed.
+// Test-local ID factories — fresh UUIDv7 per call (production shape).
 func testNewPersonID() person.ID         { return person.ID(ids.NewV7().String()) }
 func testNewMembershipID() membership.ID { return membership.ID(ids.NewV7().String()) }
 
-// TestNewCreateUserHandler_PanicsOnNilDeps locks the wiring
-// contract: NewCreateUserHandler panics fast if any of its three
-// required deps (uow, persons, memberships) is nil. Composition
-// errors should never reach request time per CLAUDE.md
-// "Constructor patterns".
+// TestNewCreateUserHandler_PanicsOnNilDeps — uow, persons, memberships are all
+// required at composition time.
 func TestNewCreateUserHandler_PanicsOnNilDeps(t *testing.T) {
 	t.Parallel()
 
@@ -115,10 +104,7 @@ func TestNewCreateUserHandler_PanicsOnNilDeps(t *testing.T) {
 	}
 }
 
-// TestCreateUser_RejectsZeroTenantID exercises the input-shape
-// guard before any repository or uow is touched. Sibling
-// integration tests in flow_integration_test.go drive the happy
-// path against a real testcontainers DB.
+// TestCreateUser_RejectsZeroTenantID — input guard before any repo/uow call.
 func TestCreateUser_RejectsZeroTenantID(t *testing.T) {
 	t.Parallel()
 	addr, err := email.New("recruit@example.test")
@@ -137,10 +123,7 @@ func TestCreateUser_RejectsZeroTenantID(t *testing.T) {
 	}
 }
 
-// TestCreateUser_RejectsZeroEmail mirrors the tenant-id guard for
-// the email VO. Per CLAUDE.md ADR 0022 — DDD ctor validation in
-// the domain; HTTP DTO validation at the boundary; the handler
-// still asserts both because mid-stack guard-in-depth is cheap.
+// TestCreateUser_RejectsZeroEmail — guard-in-depth on the email VO.
 func TestCreateUser_RejectsZeroEmail(t *testing.T) {
 	t.Parallel()
 	h := command.NewCreateUserHandler(fakeUoW{}, seedPersonRepo(t, nil), newFakeMembershipRepo(), func() time.Time { return testNow }, testNewPersonID, testNewMembershipID)
@@ -155,9 +138,8 @@ func TestCreateUser_RejectsZeroEmail(t *testing.T) {
 	}
 }
 
-// TestCreateUser_BrandNewPerson_HappyPath exercises the
-// find-or-create-by-email flow against in-memory fakes. New Person
-// + new Membership minted in one fakeUoW pass; PersonExisted == false.
+// TestCreateUser_BrandNewPerson_HappyPath — new Person + Membership minted in
+// one pass; PersonExisted == false.
 func TestCreateUser_BrandNewPerson_HappyPath(t *testing.T) {
 	t.Parallel()
 	addr, err := email.New("recruit@example.test")
@@ -189,10 +171,8 @@ func TestCreateUser_BrandNewPerson_HappyPath(t *testing.T) {
 	}
 }
 
-// TestCreateUser_RejectsEmptyPassword exercises the password-required
-// guard inside hashPassword (the empty-string short-circuit BEFORE
-// argon2 is asked to hash). Surface is the generic
-// `"create user: password required"` error.
+// TestCreateUser_RejectsEmptyPassword — hashPassword short-circuits on empty
+// password with "create user: password required".
 func TestCreateUser_RejectsEmptyPassword(t *testing.T) {
 	t.Parallel()
 	addr, err := email.New("recruit@example.test")
@@ -213,11 +193,9 @@ func TestCreateUser_RejectsEmptyPassword(t *testing.T) {
 	}
 }
 
-// TestCreateUser_PersonsGetByEmail_NonNotFoundError_Wrapped — generic
-// lookup failure (driver / network / context cancellation) wraps with
-// `"create user: lookup person: %w"`. Critical that the handler does
-// NOT collapse this to "not found" — that would mint a duplicate
-// Person row.
+// TestCreateUser_PersonsGetByEmail_NonNotFoundError_Wrapped — a generic lookup
+// failure wraps as "create user: lookup person" and must NOT collapse to
+// not-found (which would mint a duplicate Person).
 func TestCreateUser_PersonsGetByEmail_NonNotFoundError_Wrapped(t *testing.T) {
 	t.Parallel()
 	addr, err := email.New("recruit@example.test")
@@ -239,11 +217,9 @@ func TestCreateUser_PersonsGetByEmail_NonNotFoundError_Wrapped(t *testing.T) {
 	}
 }
 
-// TestCreateUser_PreExistingPerson_ActiveLookupError_Wrapped — when
-// the Person exists but the active-membership lookup fails with a
-// generic error, the handler MUST wrap as `"create user: lookup
-// active: %w"`. The collapse-to-ErrEmailHasActiveMembership branch
-// fires ONLY on a real ErrNotFound + an actual active row.
+// TestCreateUser_PreExistingPerson_ActiveLookupError_Wrapped — a generic
+// active-membership lookup failure wraps as "create user: lookup active"
+// (collapse to ErrEmailHasActiveMembership fires only on a real active row).
 func TestCreateUser_PreExistingPerson_ActiveLookupError_Wrapped(t *testing.T) {
 	t.Parallel()
 	addr, err := email.New("recruit@example.test")
@@ -269,9 +245,8 @@ func TestCreateUser_PreExistingPerson_ActiveLookupError_Wrapped(t *testing.T) {
 	}
 }
 
-// TestCreateUser_PreExistingPerson_ActiveMembershipFound_RejectsAsHasActive
-// exercises the single-Active-Membership invariant: a Person already
-// holding an Active Membership somewhere cannot be re-added.
+// TestCreateUser_PreExistingPerson_ActiveMembershipFound_RejectsAsHasActive —
+// a Person already holding an Active Membership cannot be re-added.
 func TestCreateUser_PreExistingPerson_ActiveMembershipFound_RejectsAsHasActive(t *testing.T) {
 	t.Parallel()
 	addr, err := email.New("recruit@example.test")
@@ -281,9 +256,7 @@ func TestCreateUser_PreExistingPerson_ActiveMembershipFound_RejectsAsHasActive(t
 	existing := newPersonWithEmail(t, addr.String(), "Recruit", "Existing")
 	persons := seedPersonRepo(t, existing)
 	members := newFakeMembershipRepo()
-	// Seed an active Membership for the existing Person in some OTHER
-	// tenant — single-Active-Membership invariant: cannot add to a
-	// second tenant while the first is still Active.
+	// Seed an active Membership in another tenant — can't add a second.
 	otherTenantID := tenant.ID("22222222-2222-2222-2222-222222222222")
 	active, mErr := membership.New(
 		membership.ID(ids.NewV7().String()),
@@ -311,11 +284,8 @@ func TestCreateUser_PreExistingPerson_ActiveMembershipFound_RejectsAsHasActive(t
 	}
 }
 
-// TestCreateUser_FindOrCreatePerson_AggregateError_Wrapped — when the
-// CreateUserCommand carries an empty FirstName (per BRD line 241
-// admin-provisioned credentials still require name fields) the
-// NewWithMustChangePassword aggregate rejects with person.ErrInvalid.
-// Handler wraps as `"create user: construct person: %w"`.
+// TestCreateUser_FindOrCreatePerson_AggregateError_Wrapped — empty FirstName
+// → person.ErrInvalid, wrapped as "create user: construct person".
 func TestCreateUser_FindOrCreatePerson_AggregateError_Wrapped(t *testing.T) {
 	t.Parallel()
 	addr, err := email.New("recruit@example.test")
@@ -335,11 +305,8 @@ func TestCreateUser_FindOrCreatePerson_AggregateError_Wrapped(t *testing.T) {
 	}
 }
 
-// TestCreateUser_PersonsAdd_EmailTakenRace_TranslatedToHasActive
-// exercises the race-loss arm: another concurrent create-user committed
-// the Person before us. Pre-tx lookup said NotFound (so we tried to
-// Add), but the Add now hits person.ErrEmailTaken. Handler translates
-// to ErrEmailHasActiveMembership — same wire-shape as the pre-tx win.
+// TestCreateUser_PersonsAdd_EmailTakenRace_TranslatedToHasActive — a race-loss
+// person.ErrEmailTaken on Add collapses to ErrEmailHasActiveMembership.
 func TestCreateUser_PersonsAdd_EmailTakenRace_TranslatedToHasActive(t *testing.T) {
 	t.Parallel()
 	addr, err := email.New("recruit@example.test")
@@ -363,10 +330,9 @@ func TestCreateUser_PersonsAdd_EmailTakenRace_TranslatedToHasActive(t *testing.T
 	}
 }
 
-// TestCreateUser_MembershipsAdd_AlreadyActiveRace_TranslatedToHasActive
-// — same shape as the Person-side race-loss but on the Membership
-// partial-unique-index (uq_memberships_person_active). Surface is the
-// same ErrEmailHasActiveMembership friendly error.
+// TestCreateUser_MembershipsAdd_AlreadyActiveRace_TranslatedToHasActive — the
+// Membership-side race (partial-unique-index) also collapses to
+// ErrEmailHasActiveMembership.
 func TestCreateUser_MembershipsAdd_AlreadyActiveRace_TranslatedToHasActive(t *testing.T) {
 	t.Parallel()
 	addr, err := email.New("recruit@example.test")
@@ -390,10 +356,8 @@ func TestCreateUser_MembershipsAdd_AlreadyActiveRace_TranslatedToHasActive(t *te
 	}
 }
 
-// TestCreateUser_PreExistingPerson_NoActiveMembership_AttachesAndReports
-// — happy path for the attach-to-existing arm: Person exists globally
-// but is currently between Active Memberships. The handler reuses the
-// Person ID + reports PersonExisted=true.
+// TestCreateUser_PreExistingPerson_NoActiveMembership_AttachesAndReports — a
+// Person between jobs is reused (PersonExisted=true).
 func TestCreateUser_PreExistingPerson_NoActiveMembership_AttachesAndReports(t *testing.T) {
 	t.Parallel()
 	addr, err := email.New("recruit@example.test")
@@ -426,10 +390,8 @@ func TestCreateUser_PreExistingPerson_NoActiveMembership_AttachesAndReports(t *t
 	}
 }
 
-// newPersonWithEmail constructs a Person at the supplied email. Distinct
-// from newPersonWithPassword which uses a hard-coded "alice@example.test"
-// — create_user tests need to control the email to exercise the
-// find-or-create arms.
+// newPersonWithEmail constructs a Person at the given email (the find-or-create
+// arms need control over it, unlike newPersonWithPassword's fixed address).
 func newPersonWithEmail(t *testing.T, addrStr, first, last string) *person.Person {
 	t.Helper()
 	addr, err := email.New(addrStr)

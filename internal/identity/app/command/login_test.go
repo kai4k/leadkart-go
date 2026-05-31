@@ -705,10 +705,8 @@ func TestLockedUntilFromError_NonLockedError_ReturnsZero(t *testing.T) {
 
 // ----- terminal-Person paths -----------------------------------------------
 
-// TestLogin_AnonymisedPerson_ReturnsInvalidCredentials covers the
-// anonymised-Person branch: enumeration-safe collapse to
-// ErrInvalidCredentials + dummy verify (no failed-counter bump per
-// ADR 0053 — anonymised state is admin-controlled, not recoverable).
+// TestLogin_AnonymisedPerson_ReturnsInvalidCredentials — dummy verify, no
+// counter bump (admin-controlled terminal state per ADR 0053).
 func TestLogin_AnonymisedPerson_ReturnsInvalidCredentials(t *testing.T) {
 	t.Parallel()
 	p := newPersonAnonymised(t)
@@ -732,9 +730,8 @@ func TestLogin_AnonymisedPerson_ReturnsInvalidCredentials(t *testing.T) {
 	}
 }
 
-// TestLogin_InactivePerson_ReturnsInvalidCredentials covers the
-// !IsActive branch: same enumeration-safe collapse + no
-// failed-counter bump.
+// TestLogin_InactivePerson_ReturnsInvalidCredentials — !IsActive branch, same
+// collapse + no counter bump.
 func TestLogin_InactivePerson_ReturnsInvalidCredentials(t *testing.T) {
 	t.Parallel()
 	p := newPersonInactive(t, "anything")
@@ -760,10 +757,8 @@ func TestLogin_InactivePerson_ReturnsInvalidCredentials(t *testing.T) {
 
 // ----- no-active-membership branches ---------------------------------------
 
-// TestLogin_NoActiveMembership_WrongPassword_BumpsCounter covers the
-// m == nil branch with wrong password: REAL verify runs (not dummy)
-// so timing tracks the wrong-password path exactly; bump happens
-// because we observe the wrong-password failure mode.
+// TestLogin_NoActiveMembership_WrongPassword_BumpsCounter — m == nil + wrong
+// password: real verify, counter bumps.
 func TestLogin_NoActiveMembership_WrongPassword_BumpsCounter(t *testing.T) {
 	t.Parallel()
 	const plain = "real-pw"
@@ -788,10 +783,8 @@ func TestLogin_NoActiveMembership_WrongPassword_BumpsCounter(t *testing.T) {
 	}
 }
 
-// TestLogin_NoActiveMembership_CorrectPassword_StillRejects covers the
-// m == nil branch with the CORRECT password: still ErrInvalidCredentials,
-// no counter bump (real verify returned nil, so the bump branch is not
-// taken).
+// TestLogin_NoActiveMembership_CorrectPassword_StillRejects — m == nil + correct
+// password: still ErrInvalidCredentials, no counter bump.
 func TestLogin_NoActiveMembership_CorrectPassword_StillRejects(t *testing.T) {
 	t.Parallel()
 	const plain = "real-pw"
@@ -818,10 +811,8 @@ func TestLogin_NoActiveMembership_CorrectPassword_StillRejects(t *testing.T) {
 
 // ----- error-wrapping branches ---------------------------------------------
 
-// TestLogin_AuthRouterError_WrappedAndPropagated covers the
-// "non-ErrNotFound" branch of ResolveByEmail — a real DB error must
-// surface as a wrapped "resolve auth routing" error so operators can
-// distinguish transient infra failure from credentials-rejected.
+// TestLogin_AuthRouterError_WrappedAndPropagated — a non-NotFound ResolveByEmail
+// error wraps as "resolve auth routing" (distinct from credentials-rejected).
 func TestLogin_AuthRouterError_WrappedAndPropagated(t *testing.T) {
 	t.Parallel()
 	persons := persontestRepo(t)
@@ -845,19 +836,15 @@ func TestLogin_AuthRouterError_WrappedAndPropagated(t *testing.T) {
 	}
 }
 
-// TestLogin_TenantLookupError_Wrapped covers the wrapping of the
-// `tenants.GetByID` failure branch — tenant resolution is the FIRST
-// post-verify roundtrip; failures surface as
-// "login: resolve tenant: <wrapped>" per the package's error-wrapping
-// convention.
+// TestLogin_TenantLookupError_Wrapped — a tenants.GetByID failure wraps as
+// "login: resolve tenant".
 func TestLogin_TenantLookupError_Wrapped(t *testing.T) {
 	t.Parallel()
 	rig := newLoginRig(t)
 
 	const plain = "ok-pw"
 	p := newPersonWithPassword(t, plain)
-	// Membership references a tenant we DON'T seed into rig.tenants —
-	// the tenants fake returns ErrNotFound for that ID.
+	// Membership references an unseeded tenant — the fake returns ErrNotFound.
 	missingTenantID := tenant.ID(ids.NewV7().String())
 	m, err := membership.New(
 		membership.ID(ids.NewV7().String()),
@@ -883,18 +870,13 @@ func TestLogin_TenantLookupError_Wrapped(t *testing.T) {
 	}
 }
 
-// TestLogin_CorruptedPasswordHash_WrappedVerifyError covers the
-// argon2 non-mismatch branch (corrupted PHC string in the Person row).
-// Distinct from ErrMismatch — must surface as
-// "login: verify password: <wrapped>" so operators can investigate
-// a credential-store corruption event vs. a normal wrong-pw attempt.
+// TestLogin_CorruptedPasswordHash_WrappedVerifyError — a corrupted PHC string
+// yields argon2.ErrFormat, which folds into the failed-attempt branch
+// (ErrInvalidCredentials + counter bump).
 func TestLogin_CorruptedPasswordHash_WrappedVerifyError(t *testing.T) {
 	t.Parallel()
 	addr, _ := email.New("corrupt@flow.test")
-	// Build a Person via Snapshot with a deliberately-broken PHC string
-	// — argon2.Verify returns ErrFormat, which the handler re-bumps the
-	// counter on (ErrFormat is in the "treat as failed attempt" branch
-	// per resolveAndVerify).
+	// Broken PHC string → argon2.Verify returns ErrFormat.
 	broken, _ := person.NewPasswordHash("$argon2id$broken$$$but-long-enough-to-pass-length-floor-checks")
 	snap := person.Snapshot{
 		ID:           person.ID(ids.NewV7().String()),
@@ -921,9 +903,6 @@ func TestLogin_CorruptedPasswordHash_WrappedVerifyError(t *testing.T) {
 	}{p.Email(): {p: p, m: m}}}
 	h := loginHandlerForFailurePaths(t, router, persons)
 
-	// argon2.Verify will return ErrFormat (broken PHC string). Per the
-	// production handler that's treated as the wrong-password branch
-	// (ErrInvalidCredentials + counter bump) — confirm the observable.
 	priorFailed := p.FailedLoginCount()
 	_, err = h.Handle(t.Context(), command.LoginCommand{
 		Email:    p.Email(),

@@ -19,25 +19,16 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
 
-// The role-side fake lives in internal/identity/domain/role/roletest/
-// per TDL Wild Workouts canon — co-located with the aggregate it
-// fakes. newFakeRoleRepo is preserved as a one-line alias so existing
-// tests don't need rewriting.
+// newFakeRoleRepo aliases the co-located roletest fake.
 func newFakeRoleRepo() *roletest.FakeRepository { return roletest.NewFakeRepository() }
 
-// The rolehierarchy-side fake lives in
-// internal/identity/domain/rolehierarchy/rolehierarchytest/ per TDL
-// Wild Workouts canon — co-located with the aggregate it fakes.
-// newFakeEdgeRepo is preserved as a one-line alias so existing tests
-// don't need rewriting.
+// newFakeEdgeRepo aliases the co-located rolehierarchytest fake.
 func newFakeEdgeRepo() *rolehierarchytest.FakeRepository {
 	return rolehierarchytest.NewFakeRepository()
 }
 
-// fakeUoW is a no-op UnitOfWork — calls fn directly without ctx
-// propagation. The fake repos don't use TxFromContext, so this is
-// sufficient for unit-test coverage. Adapter integration tests are
-// the source of truth for real-tx atomicity.
+// fakeUoW is a no-op UnitOfWork that calls fn directly. The fakes don't use
+// TxFromContext; real-tx atomicity is covered by adapter integration tests.
 type fakeUoW struct{}
 
 func (fakeUoW) WithinTx(ctx context.Context, _ pg.TxScope, fn func(context.Context) error) error {
@@ -49,12 +40,9 @@ func nowFunc() time.Time {
 	return time.Date(2026, 5, 23, 12, 0, 0, 0, time.UTC)
 }
 
-// silence unused-imports linter when only some tests reference
-// pagination indirectly; helps tighten the import set if it drifts.
+// Keep pagination + membership imports reachable.
 var _ = pagination.Cursor{}
 
-// silence unused-imports linter if membership.ID isn't referenced in
-// every test.
 var _ = membership.ID("")
 
 func newCustomRole(t *testing.T, repo *roletest.FakeRepository, name string) *role.Role {
@@ -309,8 +297,7 @@ func TestSetRoleParent_RejectsSelfReference(t *testing.T) {
 
 // ----- CreateRole — input + parent-edge branch coverage --------------------
 
-// failingEdgesRepo overrides Add only — uses to inject specific
-// rolehierarchy.Err* values per the CreateRole parent-edge arm.
+// failingEdgesRepo overrides Add to inject rolehierarchy.Err* values.
 type failingEdgesRepo struct {
 	*rolehierarchytest.FakeRepository
 	addErr error
@@ -323,8 +310,7 @@ func (r *failingEdgesRepo) Add(ctx context.Context, e *rolehierarchy.Edge) error
 	return r.FakeRepository.Add(ctx, e)
 }
 
-// failingTxUoW returns a fixed error from WithinTx (DB driver / tx
-// error scenarios).
+// failingTxUoW returns a fixed error from WithinTx (tx-error scenarios).
 type failingTxUoW struct {
 	err error
 }
@@ -375,10 +361,8 @@ func TestCreateRole_AggregateInvariant_BadHierarchyLevel(t *testing.T) {
 	}
 }
 
-// TestCreateRole_ParentEdgeRequiresWiring — when ParentRoleID is set
-// but edges OR uow is nil, the handler refuses with the explicit
-// "parent edge requires edges repo + uow wiring" error. Composition-
-// time mistake, not a user error.
+// TestCreateRole_ParentEdgeRequiresWiring — a set ParentRoleID with nil edges
+// or uow is refused as a composition-time wiring error.
 func TestCreateRole_ParentEdgeRequiresWiring(t *testing.T) {
 	t.Parallel()
 	repo := newFakeRoleRepo()
@@ -409,10 +393,8 @@ func TestCreateRole_ParentEdgeRequiresWiring(t *testing.T) {
 	}
 }
 
-// TestCreateRole_ParentEdgeError_Propagated — each of the
-// rolehierarchy.Err* sentinels MUST propagate unwrapped (i.e. errors.Is
-// matches the original). Per the handler's switch on ErrCycle /
-// ErrCrossTenant / ErrSelfReference / ErrEdgeAlreadyExists.
+// TestCreateRole_ParentEdgeError_Propagated — rolehierarchy.Err* sentinels
+// propagate so errors.Is still matches.
 func TestCreateRole_ParentEdgeError_Propagated(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
@@ -446,14 +428,12 @@ func TestCreateRole_ParentEdgeError_Propagated(t *testing.T) {
 	}
 }
 
-// TestCreateRole_ParentEdge_GenericTxError_Wrapped — generic non-
-// sentinel tx error wraps with "create_role: %w" rather than
-// propagating cleanly. Lets operators see the alert.
+// TestCreateRole_ParentEdge_GenericTxError_Wrapped — a non-sentinel tx error
+// wraps as "create_role".
 func TestCreateRole_ParentEdge_GenericTxError_Wrapped(t *testing.T) {
 	t.Parallel()
 	repo := newFakeRoleRepo()
 	parent := newCustomRole(t, repo, "Manager")
-	// failing tx — never invokes the inner closure, returns errBoom.
 	uow := failingTxUoW{err: errBoom}
 	h := command.NewCreateRoleHandler(repo, newFakeEdgeRepo(), uow, nowFunc, func() role.ID { return role.ID(ids.NewV7().String()) }, func() rolehierarchy.ID { return rolehierarchy.ID(ids.NewV7().String()) })
 	_, err := h.Handle(t.Context(), command.CreateRoleCommand{
@@ -467,15 +447,14 @@ func TestCreateRole_ParentEdge_GenericTxError_Wrapped(t *testing.T) {
 	}
 }
 
-// TestUpdateRole_HierarchyLevelChange — Role.ChangeHierarchyLevel
-// emits NO event (operational concern per the aggregate doc). Test
-// asserts state mutation only.
+// TestUpdateRole_HierarchyLevelChange — Role.ChangeHierarchyLevel emits no
+// event; asserts state mutation only.
 func TestUpdateRole_HierarchyLevelChange(t *testing.T) {
 	t.Parallel()
 	repo := newFakeRoleRepo()
 	r := newCustomRole(t, repo, "Sales Manager")
 	beforeLevel := r.HierarchyLevel()
-	newLevel := beforeLevel + 5 // any in [0,99]; default 50 → 55
+	newLevel := beforeLevel + 5 // default 50 → 55
 	h := command.NewUpdateRoleHandler(repo, func() time.Time { return testNow })
 	if err := h.Handle(t.Context(), command.UpdateRoleCommand{
 		TenantID:       tenant.ID("33333333-3333-3333-3333-333333333333"),

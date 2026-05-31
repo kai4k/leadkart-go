@@ -15,17 +15,17 @@ import (
 	"github.com/leadkart/leadkart-go/internal/platform/domain/leadcredit"
 )
 
-// LeadCreditRepository is the pgx/sqlc-backed implementation of
-// [leadcredit.Repository]. Optimistic concurrency via the explicit
-// `version` column per ADR 0059.
+// LeadCreditRepository is the pgx/sqlc implementation of
+// [leadcredit.Repository]. Optimistic concurrency via the explicit version
+// column (ADR 0059).
 //
-// Tenant scoping (ADR 0062 — TDL canon): every read + write binds the
-// GUC from an EXPLICIT tenantID (the `GetByTenant` parameter or the
-// aggregate's `l.TenantID()`), never from ctx-tenancy.FromContext. The
-// `lc_*` RLS policies (`tenant_id = current_tenant() OR is_platform()`)
-// allow the resulting per-tenant scope to read + write its own row.
-// Cross-tenant operations (outbox forwarder, support tooling) MUST use
-// a platform-scoped transactor at a higher layer.
+// Tenancy (ADR 0062): the GUC binds from an EXPLICIT tenantID (the
+// GetByTenant param or l.TenantID()), never from ctx — so this repo opens its
+// own tenant tx via WithinTxPgxTenant, not the TxScopeTenant scope enum
+// (TestArch_RepoTenantScopedReadsUseTxScopeTenant keys its exemption on this
+// note). The lc_* RLS policies (tenant_id = current_tenant() OR is_platform())
+// gate per-tenant access. Cross-tenant work (forwarder, support tooling) uses
+// a platform-scoped transactor higher up.
 type LeadCreditRepository struct {
 	pool *pgxpool.Pool
 	tx   *pg.Transactor
@@ -33,15 +33,14 @@ type LeadCreditRepository struct {
 }
 
 // NewLeadCreditRepository wires the repository.
+//
+//nolint:revive // factory shape mirrors siblings
 func NewLeadCreditRepository(pool *pgxpool.Pool, tx *pg.Transactor) *LeadCreditRepository {
 	return &LeadCreditRepository{pool: pool, tx: tx, q: db.New(pool)}
 }
 
-// GetByTenant satisfies [leadcredit.Repository]. Tenant-scoped read —
-// GUC bound from the explicit tenantID parameter via
-// [pg.Transactor.WithinTxPgxTenant] (TDL canon per ADR 0062). When
-// called inside a UoW tx, joins that tx (the caller already chose
-// TxScopePlatform / TxScopeTenant).
+// GetByTenant satisfies [leadcredit.Repository]. Tenant-scoped read; GUC
+// binds from the explicit tenantID (ADR 0062). Joins any UoW tx in ctx.
 func (r *LeadCreditRepository) GetByTenant(ctx context.Context, id leadcredit.TenantID) (*leadcredit.LeadCredit, error) {
 	tid, err := uuid.Parse(id.String())
 	if err != nil {
@@ -67,9 +66,8 @@ func (r *LeadCreditRepository) GetByTenant(ctx context.Context, id leadcredit.Te
 	if tx, ok := pg.TxFromContext(ctx); ok {
 		return loadOn(ctx, r.q.WithTx(tx))
 	}
-	// No surrounding UoW tx — open our own tenant-scoped tx via the
-	// EXPLICIT tenantID. The lc_select policy satisfies via
-	// `tenant_id = current_tenant()`.
+	// No UoW tx: open our own tenant-scoped tx from the explicit tenantID;
+	// lc_select admits via tenant_id = current_tenant().
 	var out *leadcredit.LeadCredit
 	err = r.tx.WithinTxPgxTenant(ctx, id.String(), func(ctx context.Context, tx pgx.Tx) error {
 		got, err := loadOn(ctx, r.q.WithTx(tx))
@@ -82,17 +80,12 @@ func (r *LeadCreditRepository) GetByTenant(ctx context.Context, id leadcredit.Te
 	return out, err
 }
 
-// UpsertWithVersion satisfies [leadcredit.Repository]. Aggregate's
-// in-memory Version is the expected pre-update value. On INSERT path
-// (Version == 0 + no row exists), we INSERT. On UPDATE path, we run
-// `UPDATE ... WHERE version = expected_version`; 0 rows = ErrConflict.
-//
-// Drains the aggregate's events to the outbox AFTER the persist
-// succeeds (so a conflict aborts cleanly).
-//
-// The aggregate carries its own TenantID — when called outside a UoW
-// tx, the GUC is bound from `l.TenantID()` (TDL canon per ADR 0062:
-// tenantID flows through explicit values, not ctx).
+// UpsertWithVersion satisfies [leadcredit.Repository]. The aggregate's
+// in-memory Version is the expected pre-update value: UPDATE ... WHERE
+// version = expected; 0 rows affected means INSERT (fresh) or ErrConflict
+// (stale). Events drain to the outbox only after the persist succeeds, so a
+// conflict aborts cleanly. GUC binds from l.TenantID() when outside a UoW tx
+// (ADR 0062).
 func (r *LeadCreditRepository) UpsertWithVersion(ctx context.Context, l *leadcredit.LeadCredit) error {
 	if tx, ok := pg.TxFromContext(ctx); ok {
 		return r.upsertOnTx(ctx, tx, l)
@@ -108,21 +101,10 @@ func (r *LeadCreditRepository) upsertOnTx(ctx context.Context, tx pgx.Tx, l *lea
 	if err != nil {
 		return fmt.Errorf("lead credit repo: parse tenant id: %w", err)
 	}
-	// Try UPDATE first, fall back to INSERT iff 0 rows affected
-	// AND in-memory Version == 0 (the "freshly-constructed
-	// aggregate, no row in DB" shape per NewForTenant). This
-	// mirrors UPSERT semantics WITHOUT a Postgres ON CONFLICT
-	// clause (which would mask version-mismatch conflicts as
-	// silent upserts, defeating the optimistic-concurrency
-	// guarantee per ADR 0059).
-	//
-	// Version == 0 + UPDATE-affected-zero is ambiguous (no row
-	// OR stale version). We disambiguate via the in-memory
-	// CreatedAt == UpdatedAt heuristic: NewForTenant emits both
-	// equal; any subsequent Topup/Charge bumps UpdatedAt. If they
-	// differ here, this aggregate was loaded from the DB and a
-	// concurrent writer just deleted the row — surface
-	// ErrConflict (don't fabricate a new row).
+	// UPDATE first; fall back to INSERT only when 0 rows affected AND
+	// Version == 0 (fresh aggregate, no row yet). No ON CONFLICT: it would
+	// mask version mismatches as silent upserts, defeating optimistic
+	// concurrency (ADR 0059).
 	affected, err := q.UpdateLeadCreditWithVersion(ctx, db.UpdateLeadCreditWithVersionParams{
 		NewBalance:      l.Balance(),
 		ExpectedVersion: l.Version(),
@@ -137,7 +119,6 @@ func (r *LeadCreditRepository) upsertOnTx(ctx context.Context, tx pgx.Tx, l *lea
 			// Stale version on an existing row.
 			return leadcredit.ErrConflict
 		}
-		// Fresh aggregate, no row yet — INSERT.
 		if err := q.InsertLeadCredit(ctx, db.InsertLeadCreditParams{
 			TenantID:  pgconv.PgUUID(tid),
 			Balance:   l.Balance(),
@@ -148,9 +129,7 @@ func (r *LeadCreditRepository) upsertOnTx(ctx context.Context, tx pgx.Tx, l *lea
 		}
 	}
 
-	// Drain LeadCredit's AdjustedEvent → LeadCreditAdjustedV1 via
-	// the mechanical mapper. tenant_id on the outbox row is the
-	// LeadCredit's tenant (the aggregate IS tenant-scoped).
+	// Drain AdjustedEvent to the outbox stamped with the aggregate's tenant.
 	evs := l.PullEvents()
 	if len(evs) == 0 {
 		return nil

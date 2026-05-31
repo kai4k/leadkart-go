@@ -13,10 +13,9 @@ import (
 )
 
 // fakeListReader satisfies [query.ListUnverifiedContactsReader] with an
-// in-memory slice + optional state filter. C2 — review-pass: the
-// handler test owns its own narrow fake (the platformtest package's
-// FakeUnverifiedContactRepository is the WRITE-side fake; the read
-// path uses a different interface per ADR 0047).
+// in-memory slice + optional state filter. C2: the handler test owns its own
+// narrow fake — platformtest's FakeUnverifiedContactRepository is the
+// write-side fake; the read path uses a different interface (ADR 0047).
 type fakeListReader struct {
 	rows []query.UnverifiedContactView
 }
@@ -27,7 +26,7 @@ func (f *fakeListReader) ListUnverifiedContactsPage(
 	cursor pagination.Cursor,
 	pageSize int,
 ) ([]query.UnverifiedContactView, error) {
-	// State filter — empty == all.
+	// Empty state == all.
 	var filtered []query.UnverifiedContactView
 	for _, r := range f.rows {
 		if state != "" && r.State != state {
@@ -40,7 +39,7 @@ func (f *fakeListReader) ListUnverifiedContactsPage(
 	slices.SortStableFunc(filtered, func(a, b query.UnverifiedContactView) int {
 		return cmp.Compare(b.CreatedAt, a.CreatedAt)
 	})
-	// Cursor — skip until past the cursor's id+sort_value.
+	// Skip past the cursor's id+sort_value.
 	if !cursor.SortValue.IsZero() && cursor.ID != "" {
 		drop := 0
 		for i, r := range filtered {
@@ -70,8 +69,8 @@ func mkView(id string, state string, createdAt time.Time) query.UnverifiedContac
 	}
 }
 
-// TestListUnverifiedContacts_HappyPath — happy path. Handler builds
-// the wire-shaped page via pagination.BuildPage. C2.
+// TestListUnverifiedContacts_HappyPath — handler builds the wire-shaped page
+// via pagination.BuildPage. C2.
 func TestListUnverifiedContacts_HappyPath(t *testing.T) {
 	t.Parallel()
 
@@ -93,13 +92,13 @@ func TestListUnverifiedContacts_HappyPath(t *testing.T) {
 	if len(page.Items) != 2 {
 		t.Fatalf("expected 2 items, got %d", len(page.Items))
 	}
-	// HasMore is false — we have 2 + asked for 50.
+	// HasMore false: 2 rows vs 50 requested.
 	if page.HasMore {
 		t.Error("HasMore expected false")
 	}
 }
 
-// TestListUnverifiedContacts_StateFilter — only rows matching state.
+// TestListUnverifiedContacts_StateFilter — returns only rows matching state.
 func TestListUnverifiedContacts_StateFilter(t *testing.T) {
 	t.Parallel()
 
@@ -128,9 +127,9 @@ func TestListUnverifiedContacts_StateFilter(t *testing.T) {
 	}
 }
 
-// TestListUnverifiedContacts_PaginationHasMore — when more rows exist
-// than page-size, HasMore is true + NextCursor non-empty. The reader
-// fetches LIMIT+1; the handler drops the +1 and surfaces it as cursor.
+// TestListUnverifiedContacts_PaginationHasMore — with more rows than page size,
+// HasMore is true and NextCursor non-empty. Reader fetches LIMIT+1; the handler
+// drops the +1 and surfaces it as the cursor.
 func TestListUnverifiedContacts_PaginationHasMore(t *testing.T) {
 	t.Parallel()
 

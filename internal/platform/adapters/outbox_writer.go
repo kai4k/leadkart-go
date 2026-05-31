@@ -13,25 +13,19 @@ import (
 	"github.com/leadkart/leadkart-go/internal/platform/integrationevents"
 )
 
-// OutboxEnqueuer satisfies internal/platform/app/command.OutboxEnqueuer.
-// Writes integration events to the shared transactional outbox inside the
-// active UoW tx (pulled from ctx via pg.TxFromContext).
-//
-// Concrete struct + factory keep wiring boundary-clean: cmd/api builds
-// this with a single pool dep and passes it to handlers as the
-// OutboxEnqueuer interface.
+// OutboxEnqueuer satisfies command.OutboxEnqueuer, writing integration events
+// to the shared transactional outbox under the active UoW tx (from ctx).
+// Stateless: the tx travels via ctx, so no pool is held.
 type OutboxEnqueuer struct{}
 
-// NewOutboxEnqueuer returns a zero-stateful enqueuer; the tx travels via
-// ctx so no pool is held.
+// NewOutboxEnqueuer returns a stateless enqueuer.
 func NewOutboxEnqueuer() *OutboxEnqueuer { return &OutboxEnqueuer{} }
 
-// ErrNoActiveTx surfaces when EnqueueInTx is called outside a
-// UoW.WithinTx closure. Programmer bug — surfaces in tests immediately.
+// ErrNoActiveTx is returned when EnqueueInTx is called outside a UoW.WithinTx
+// closure (programmer bug).
 var ErrNoActiveTx = errors.New("platform outbox: no active tx in ctx (call from UoW.WithinTx)")
 
-// EnqueueInTx satisfies the app-layer OutboxEnqueuer interface — writes
-// each integration event to the outbox under the active tx.
+// EnqueueInTx satisfies the app-layer OutboxEnqueuer interface.
 func (e *OutboxEnqueuer) EnqueueInTx(ctx context.Context, events ...integrationevents.Event) error {
 	if len(events) == 0 {
 		return nil
@@ -43,15 +37,10 @@ func (e *OutboxEnqueuer) EnqueueInTx(ctx context.Context, events ...integratione
 	return writeOutboxEvents(ctx, tx, tenantOfEvents(events), events)
 }
 
-// writeOutboxEvents persists integration events to the transactional
-// outbox inside tx (same pgx.Tx as the aggregate mutation). Per ADR
-// 0064/0067 the outbox is the single shared common.outbox relay drained
-// by one Watermill Forwarder; tenant_id / occurred_at / act_* travel as
-// message metadata stamped by messaging.PublishOutbox. This wrapper just
-// supplies the platform destination topic.
-//
-// tenantID == uuid.Nil omits the tenant_id metadata (platform-scoped
-// event with no owning tenant).
+// writeOutboxEvents persists events to the shared common.outbox relay inside
+// tx (ADR 0064/0067), drained by one Watermill Forwarder; tenant_id /
+// occurred_at / act_* travel as metadata stamped by messaging.PublishOutbox.
+// tenantID == uuid.Nil omits the tenant_id metadata (platform-scoped event).
 func writeOutboxEvents(
 	ctx context.Context,
 	tx pgx.Tx,
@@ -61,14 +50,10 @@ func writeOutboxEvents(
 	return messaging.PublishOutbox(ctx, tx, integrationevents.Topic, tenantID, events)
 }
 
-// tenantOfEvents picks the tenant to stamp on the outbox metadata. Reads
-// the first TenantScoped event's tenant; Platform events return uuid.Nil
-// (no tenant metadata). Handlers SHOULD NOT mix platform + tenant-scoped
-// events in one EnqueueInTx call.
-//
-// Malformed TenantID (non-UUID) is treated as Platform-scoped (Nil) —
-// defensive vs corrupt domain state; the outbox write MUST NOT fail on a
-// misshapen identifier (audit-log outage doctrine).
+// tenantOfEvents returns the tenant to stamp: the first TenantScoped event's
+// tenant, else uuid.Nil. Handlers should not mix platform + tenant-scoped
+// events in one call. A malformed TenantID is treated as platform-scoped
+// (Nil) — the outbox write must not fail on a misshapen id.
 func tenantOfEvents(events []integrationevents.Event) uuid.UUID {
 	for _, ev := range events {
 		ts, ok := ev.(integrationevents.TenantScoped)
@@ -88,10 +73,9 @@ func tenantOfEvents(events []integrationevents.Event) uuid.UUID {
 	return uuid.Nil
 }
 
-// drainEventsToOutbox is the shared "map + persist" helper used by every
-// repository: maps domain events through integrationevents.FromDomainEvent
-// (which may suppress with nil) + persists the result to the outbox under
-// tx. Each repository's Add / UpdateByID calls this once per persist.
+// drainEventsToOutbox maps domain events via FromDomainEvent (may suppress
+// with nil) and persists the result to the outbox under tx. Shared by every
+// repository's Add / UpdateByID.
 func drainEventsToOutbox(
 	ctx context.Context,
 	tx pgx.Tx,
@@ -105,10 +89,9 @@ func drainEventsToOutbox(
 	return writeOutboxEvents(ctx, tx, tenantID, mapped)
 }
 
-// mapDomainEvents translates domain events through FromDomainEvent.
-// Suppresses (returns nil) when the mapper does — used for events emitted
-// directly by the handler with derived data (e.g. LeadVerifiedV1 with
-// snapshot).
+// mapDomainEvents translates domain events through FromDomainEvent, skipping
+// any the mapper suppresses (events the handler emits directly with derived
+// data, e.g. LeadVerifiedV1 with snapshot).
 func mapDomainEvents(domainEvents []any) ([]integrationevents.Event, error) {
 	if len(domainEvents) == 0 {
 		return nil, nil

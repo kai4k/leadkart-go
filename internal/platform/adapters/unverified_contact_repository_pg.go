@@ -17,9 +17,9 @@ import (
 	"github.com/leadkart/leadkart-go/internal/platform/domain/unverifiedcontact"
 )
 
-// UnverifiedContactRepository is the pgx/sqlc-backed implementation of
-// [unverifiedcontact.Repository]. Platform-only table — every write runs
-// under TxScopePlatform.
+// UnverifiedContactRepository is the pgx/sqlc implementation of
+// [unverifiedcontact.Repository]. Platform-only table; every write runs under
+// TxScopePlatform.
 type UnverifiedContactRepository struct {
 	pool *pgxpool.Pool
 	tx   *pg.Transactor
@@ -31,8 +31,7 @@ func NewUnverifiedContactRepository(pool *pgxpool.Pool, tx *pg.Transactor) *Unve
 	return &UnverifiedContactRepository{pool: pool, tx: tx, q: db.New(pool)}
 }
 
-// Add satisfies [unverifiedcontact.Repository]. Joins the surrounding
-// UoW tx via pg.TxFromContext when present.
+// Add satisfies [unverifiedcontact.Repository]. Joins any UoW tx in ctx.
 func (r *UnverifiedContactRepository) Add(ctx context.Context, c *unverifiedcontact.UnverifiedContact) error {
 	if tx, ok := pg.TxFromContext(ctx); ok {
 		return r.addOnTx(ctx, tx, c)
@@ -80,9 +79,8 @@ func (r *UnverifiedContactRepository) UpdateByID(
 	return r.tx.WithinTxPgx(ctx, pg.TxScopePlatform, run)
 }
 
-// GetByID satisfies [unverifiedcontact.Repository]. Honours any active
-// tx in ctx so a sequence inside one UoW closure (mutate, then re-load
-// for projection) sees its own writes.
+// GetByID satisfies [unverifiedcontact.Repository]. Honours any tx in ctx so
+// a mutate-then-reload sequence in one UoW closure sees its own writes.
 func (r *UnverifiedContactRepository) GetByID(ctx context.Context, id unverifiedcontact.ID) (*unverifiedcontact.UnverifiedContact, error) {
 	q := r.q
 	if tx, ok := pg.TxFromContext(ctx); ok {
@@ -223,8 +221,8 @@ func rowToUnverifiedContact(row db.PlatformUnverifiedContact) (*unverifiedcontac
 	}), nil
 }
 
-// drainContactEventsToOutbox pulls events off the aggregate, maps each
-// through the integration-event mapper, + writes to the outbox.
+// drainContactEventsToOutbox maps the aggregate's events and writes them to
+// the outbox.
 func drainContactEventsToOutbox(ctx context.Context, tx pgx.Tx, c *unverifiedcontact.UnverifiedContact) error {
 	evs := c.PullEvents()
 	if len(evs) == 0 {
@@ -234,26 +232,25 @@ func drainContactEventsToOutbox(ctx context.Context, tx pgx.Tx, c *unverifiedcon
 	for i, e := range evs {
 		asAny[i] = e
 	}
-	// UnverifiedContact is Platform-scoped → tenant_id = uuid.Nil on
-	// outbox rows.
+	// Platform-scoped: tenant_id = uuid.Nil on outbox rows.
 	return drainEventsToOutbox(ctx, tx, uuid.Nil, asAny)
 }
 
-// pgUUIDOptStr wraps a string-shaped optional UUID into pgtype.UUID.
-// Empty string → Valid=false.
+// pgUUIDOptStr wraps an optional string UUID into pgtype.UUID; empty or
+// unparseable yields Valid=false.
 func pgUUIDOptStr(s string) pgtype.UUID {
 	if s == "" {
 		return pgtype.UUID{}
 	}
 	id, err := uuid.Parse(s)
 	if err != nil {
-		// Storage path — caller guarantees UUID shape from domain types.
+		// Caller guarantees UUID shape from domain types.
 		return pgtype.UUID{}
 	}
 	return pgconv.PgUUID(id)
 }
 
-// uuidStringIfValid returns the string form of pg.UUID or "" when invalid.
+// uuidStringIfValid returns the string form of a pgtype.UUID, or "" if invalid.
 func uuidStringIfValid(p pgtype.UUID) string {
 	if !p.Valid {
 		return ""

@@ -18,10 +18,9 @@ import (
 	"github.com/leadkart/leadkart-go/internal/platform/domain/unverifiedcontact"
 )
 
-// PlatformLeadRepository is the pgx/sqlc-backed implementation of
-// [platformlead.Repository]. All reads go through sqlc — the
-// marketplace browse uses null-guarded params + GIN `&&` overlap
-// predicates expressed natively in the generated MarketplaceBrowse query.
+// PlatformLeadRepository is the pgx/sqlc implementation of
+// [platformlead.Repository]. MarketplaceBrowse uses null-guarded params +
+// GIN && overlap predicates expressed natively in the generated query.
 type PlatformLeadRepository struct {
 	pool *pgxpool.Pool
 	tx   *pg.Transactor
@@ -90,25 +89,16 @@ func (r *PlatformLeadRepository) GetByID(ctx context.Context, id platformlead.ID
 	return loadPlatformLead(ctx, q, id)
 }
 
-// MarketplaceBrowse satisfies [platformlead.Repository]. Backed by the
-// sqlc MarketplaceBrowse query — null-guarded optional filters
-// (a nil arg = "don't filter") + GIN `&&` overlap predicates +
-// (verified_at, id) keyset cursor, all expressed natively in SQL.
+// MarketplaceBrowse satisfies [platformlead.Repository]. Null-guarded
+// optional filters (nil = don't filter) + GIN && overlap + (verified_at, id)
+// keyset, all in SQL.
 //
-// H12 hardening (review-pass): the SELECT list explicitly OMITS PII
-// columns (email, gst_number, pan_number, mobile_e164, street). These
-// fields land on the lead row at insertion (the verification form is
-// captured wholesale) but the marketplace surface MUST NOT expose
-// them to cross-tenant browsers per BRD §4.3 + ADR 0059 marketplace
-// SELECT policy. Because the projection is a strict subset, sqlc emits
-// a custom db.MarketplaceBrowseRow type (not the full
-// PlatformPlatformLead model) that simply has no PII fields to leak —
-// [marketplaceRowToPlatformLead] re-builds the aggregate from it and
-// never touches the omitted columns.
-//
-// Once the purchaser owns the lead, the full row (incl PII) is
-// available via GetByID under the buyer's tenant context — that's
-// the only legitimate read of the omitted columns post-purchase.
+// H12: the SELECT OMITS PII columns (email, gst_number, pan_number,
+// mobile_e164, street). They land at insertion but must never reach
+// cross-tenant browsers (BRD §4.3, ADR 0059 SELECT policy). The strict
+// subset makes sqlc emit db.MarketplaceBrowseRow with no PII fields to leak;
+// [marketplaceRowToPlatformLead] hydrates from it. Post-purchase, the buyer
+// reads the full row (incl PII) via GetByID under their own tenant.
 func (r *PlatformLeadRepository) MarketplaceBrowse(
 	ctx context.Context,
 	filter platformlead.MarketplaceFilter,
@@ -282,18 +272,15 @@ func drainPlatformLeadEventsToOutbox(ctx context.Context, tx pgx.Tx, l *platform
 	for i, e := range evs {
 		asAny[i] = e
 	}
-	// PlatformLead aggregate-side events are SUPPRESSED by the
-	// mechanical mapper (handler emits LeadVerifiedV1 + LeadPurchasedV1
-	// directly with the LeadSnapshot). Calling drainEventsToOutbox is
-	// still correct — it returns nil events + no-ops.
+	// Aggregate-side events are suppressed by the mapper (the handler emits
+	// LeadVerifiedV1 + LeadPurchasedV1 directly with the snapshot); drain
+	// no-ops on them.
 	return drainEventsToOutbox(ctx, tx, uuid.Nil, asAny)
 }
 
-// marketplaceRowToPlatformLead re-builds a PlatformLead aggregate from
-// the PII-omitting marketplace projection. The omitted columns
-// (email / mobile_e164 / gst_number / pan_number / street) are absent
-// from db.MarketplaceBrowseRow entirely, so they hydrate to their zero
-// values — there is nothing to leak through the DTO mapper (H12).
+// marketplaceRowToPlatformLead hydrates an aggregate from the PII-omitting
+// projection. The omitted columns are absent from db.MarketplaceBrowseRow, so
+// they hydrate to zero values: nothing to leak (H12).
 func marketplaceRowToPlatformLead(row db.MarketplaceBrowseRow) *platformlead.PlatformLead {
 	form := leadform.UnmarshalFromDB(leadform.Input{
 		ContactName:    row.ContactName,
@@ -326,11 +313,9 @@ func marketplaceRowToPlatformLead(row db.MarketplaceBrowseRow) *platformlead.Pla
 	})
 }
 
-// applyMarketplaceCursorParams sets the keyset predicate params for the
-// (verified_at, id) DESC ordering. A zero/empty or malformed cursor is
-// dropped (params left nil → SQL skips the predicate) rather than
-// failing — keeps the browse endpoint forgiving of stale client-side
-// cursor blobs.
+// applyMarketplaceCursorParams sets the (verified_at, id) DESC keyset
+// predicate. A zero/malformed cursor is dropped (params left nil, SQL skips
+// the predicate) so the endpoint tolerates stale client cursor blobs.
 func applyMarketplaceCursorParams(params *db.MarketplaceBrowseParams, cursor pagination.Cursor) {
 	if cursor.SortValue.IsZero() || cursor.ID == "" {
 		return
@@ -343,8 +328,8 @@ func applyMarketplaceCursorParams(params *db.MarketplaceBrowseParams, cursor pag
 	params.CursorID = pgconv.PgUUID(cursorID)
 }
 
-// nilIfEmptySlice returns nil for an empty/nil slice so the GIN-overlap
-// narg param maps to SQL NULL ("don't filter").
+// nilIfEmptySlice returns nil for an empty slice so the GIN-overlap param
+// maps to SQL NULL (don't filter).
 func nilIfEmptySlice(s []string) []string {
 	if len(s) == 0 {
 		return nil

@@ -158,13 +158,13 @@ func TestOrder_RejectsSkippingStates(t *testing.T) {
 	o, _ := order.New(sampleNewInput(t))
 	actor := membership.ID(ids.NewV7().String())
 
-	// quotation_approved → packed is a skip; reject.
+	// quotation_approved → packed skips states.
 	err := o.MarkPacked(actor, fixedNow().Add(time.Hour))
 	if !errors.Is(err, order.ErrInvalidTransition) {
 		t.Errorf("skip MarkPacked: got %v want ErrInvalidTransition", err)
 	}
 
-	// quotation_approved → confirmed is also a skip (must pass token_paid).
+	// quotation_approved → confirmed also skips (must pass token_paid).
 	err = o.Confirm(actor, fixedNow().Add(time.Hour))
 	if !errors.Is(err, order.ErrInvalidTransition) {
 		t.Errorf("skip Confirm: got %v want ErrInvalidTransition", err)
@@ -179,7 +179,7 @@ func TestOrder_SelfTransitionIsIdempotent(t *testing.T) {
 	require.NoError(t, o.RecordTokenPayment(actor, fixedNow().Add(time.Hour)))
 	o.PullEvents()
 
-	// Re-call RecordTokenPayment — no error, no event.
+	// Re-call: no error, no event.
 	if err := o.RecordTokenPayment(actor, fixedNow().Add(2*time.Hour)); err != nil {
 		t.Fatalf("re-RecordTokenPayment: %v", err)
 	}
@@ -215,7 +215,7 @@ func TestOrder_Cancel_FromVariousStates(t *testing.T) {
 		}
 	}
 
-	// From invoiced — most interesting because compensation needs to mint a CreditNote.
+	// From invoiced — drives CreditNote compensation.
 	{
 		o, _ := order.New(sampleNewInput(t))
 		require.NoError(t, o.RecordTokenPayment(actor, fixedNow().Add(time.Hour)))

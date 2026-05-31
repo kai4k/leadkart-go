@@ -13,15 +13,11 @@ import (
 
 // ----- fakeUoW ---------------------------------------------------------------
 
-// fakeUoW is a pass-through UnitOfWork — runs fn directly with the
-// supplied ctx, no real Postgres tx. Tests that exercise
-// add-batch-handler / log-stock-movement-handler use this to drive the
-// retry loop / re-check branches without spinning Postgres.
+// fakeUoW is a pass-through UnitOfWork: runs fn directly, no real Postgres tx.
 type fakeUoW struct {
-	// runs counts how many times WithinTx was entered (for retry-loop
-	// assertions). Sync primitives are permitted here because fakeUoW
-	// lives in app-layer _test.go (not under domain/) and the test-side
-	// arch gate exempts test files from the no-sync-in-domain rule.
+	// runs counts WithinTx entries (for retry-loop assertions). sync is
+	// allowed here — this is app-layer _test.go, exempt from the
+	// no-sync-in-domain arch gate.
 	mu   sync.Mutex
 	runs int
 }
@@ -41,10 +37,8 @@ func (u *fakeUoW) Runs() int {
 
 // ----- per-aggregate fake constructors --------------------------------------
 
-// The per-aggregate fakes live in the canonical <aggregate>test/
-// directories per TDL Wild Workouts canon — co-located with the
-// aggregate they fake. The newFakeXRepo helpers below are one-line
-// aliases so existing tests don't need rewriting at the call sites.
+// Per-aggregate fakes live in the canonical <aggregate>test/ dirs (TDL Wild
+// Workouts canon). These helpers are aliases so call sites stay unchanged.
 
 func newFakeProductRepo() *producttest.FakeRepository { return producttest.NewFakeRepository() }
 func newFakeBatchRepo() *batchtest.FakeRepository     { return batchtest.NewFakeRepository() }
@@ -56,5 +50,5 @@ func newFakeMovementRepo() *stockmovementtest.FakeRepository {
 
 var _ pg.UnitOfWork = (*fakeUoW)(nil)
 
-// errSentinel is a generic non-typed error for "any non-domain error".
+// errSentinel stands in for any non-domain error.
 var errSentinel = errors.New("sentinel")

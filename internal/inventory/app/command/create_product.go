@@ -1,13 +1,9 @@
 // Package command holds Inventory CQRS command handlers.
 //
-// Per TDL Wild Workouts canon: handler is the orchestrator AND
-// contract; no service abstraction; each Handler is a concrete struct
-// with a single Handle method. HTTP ports call
-// `app.Commands.X.Handle(...)` directly.
-//
-// Boundary discipline (ADR 0047): handlers depend on domain repository
-// INTERFACES only — no pgx, no concrete adapter structs, no
-// adapters/db row types. The composition root wires concrete adapters.
+// Per TDL Wild Workouts canon each handler is the orchestrator and the
+// contract: a concrete struct with one Handle method, called directly via
+// app.Commands.X.Handle(...). Per ADR 0047 handlers depend on domain
+// repository interfaces only — never pgx or concrete adapters.
 package command
 
 import (
@@ -20,9 +16,8 @@ import (
 	"github.com/leadkart/leadkart-go/internal/inventory/domain/product"
 )
 
-// CreateProductCommand carries the validated input for creating a new
-// Product. ActorMembershipID populates the CreatedByMembershipID on the
-// integration event for audit.
+// CreateProductCommand is the validated input for creating a Product.
+// ActorMembershipID populates CreatedByMembershipID on the audit event.
 type CreateProductCommand struct {
 	TenantID          tenant.ID
 	ActorMembershipID membership.ID
@@ -40,23 +35,17 @@ type CreateProductResult struct {
 	ProductID product.ID
 }
 
-// CreateProductHandler — single-aggregate insert + outbox drain.
-// Wire-contract: ErrSKUTaken surfaces as HTTP 409.
+// CreateProductHandler does a single-aggregate insert plus outbox drain.
+// ErrSKUTaken surfaces as HTTP 409.
 type CreateProductHandler struct {
 	products     product.Repository
 	now          func() time.Time
 	newProductID func() product.ID
 }
 
-// NewCreateProductHandler wires the handler. `now` is the explicit time
-// source per the clock-injection refactor — composition root wires
-// `time.Now`; tests inject a fixed-time closure for deterministic
-// timestamps. Nil → time.Now.
-//
-// newProductID is the aggregate-ID factory per the
-// `TestArch_HandlersInjectIDFactory` discipline. Production passes
-// `func() product.ID { return product.ID(ids.NewV7().String()) }`;
-// tests inject a deterministic counter so the minted ID is pinnable.
+// NewCreateProductHandler wires the handler. now is the injected clock (nil →
+// time.Now). newProductID is the aggregate-ID factory required by
+// TestArch_HandlersInjectIDFactory; tests inject a deterministic one.
 func NewCreateProductHandler(products product.Repository, now func() time.Time, newProductID func() product.ID) CreateProductHandler {
 	if newProductID == nil {
 		panic("command: NewCreateProductHandler newProductID required")
@@ -67,8 +56,8 @@ func NewCreateProductHandler(products product.Repository, now func() time.Time, 
 	return CreateProductHandler{products: products, now: now, newProductID: newProductID}
 }
 
-// Handle constructs + persists the Product. Outbox event drain rides
-// the adapter's Add path (one-tx with the row insert per ADR 0008).
+// Handle constructs and persists the Product. The outbox drain rides the
+// adapter's Add path in one tx with the row insert (ADR 0008).
 func (h CreateProductHandler) Handle(ctx context.Context, cmd CreateProductCommand) (CreateProductResult, error) {
 	p, err := product.New(
 		h.newProductID(),

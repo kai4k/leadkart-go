@@ -12,16 +12,11 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
 
-// revokeNow is the deterministic instant the revoke_session_test suite
-// passes to every handler + aggregate call per the clock-injection
-// refactor. Replaces the prior package-global clock.Set helper.
+// revokeNow is the deterministic instant this suite passes to handlers +
+// aggregates.
 var revokeNow = time.Date(2026, 5, 7, 12, 0, 0, 0, time.UTC)
 
-// The refreshtoken-side fake lives in
-// internal/identity/domain/refreshtoken/refreshtokentest/ per TDL Wild
-// Workouts canon — co-located with the aggregate it fakes.
-// newFakeFamilyRepo is preserved as a one-line alias so existing tests
-// don't need rewriting.
+// newFakeFamilyRepo aliases the co-located refreshtokentest fake.
 func newFakeFamilyRepo() *refreshtokentest.FakeRepository {
 	return refreshtokentest.NewFakeRepository()
 }
@@ -73,8 +68,7 @@ func TestRevokeSession_Succeeds(t *testing.T) {
 }
 
 func TestRevokeSession_CrossPerson_ReturnsNotFound(t *testing.T) {
-	// Per security.md: "wrong owner" collapses to "not found" to defeat
-	// FamilyID enumeration via ownership probing.
+	// "wrong owner" collapses to "not found" to defeat FamilyID enumeration.
 	t.Parallel()
 	repo := newFakeFamilyRepo()
 	owner := person.ID("p-owner")

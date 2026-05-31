@@ -1,19 +1,12 @@
 //go:build integration
 
-// outbox_subscriber_test.go — outbox assertion shim for the
-// platform/adapters package.
+// Outbox assertion shim for the platform/adapters package.
 //
-// Post-ADR-0064: producers write an enveloped row to the shared
-// common.outbox relay in the same tx as the aggregate write; one library
-// Watermill Forwarder (cmd/worker) drains + republishes. Tests assert the
-// PRODUCER contract via messagingtest.DrainOutbox (relay read + envelope
-// unwrap). The thin fixture below preserves the prior call sites
-// (newPlatformOutboxFixture / forwardAndWait / platformEventTypes).
-//
-// Platform note: platform-scoped events persist with no tenant FK, so the
-// producer omits the tenant_id metadata header for them; subscriber-side
-// tests assert the header is empty for platform-scoped events + non-empty
-// for tenant-scoped events.
+// Post-ADR-0064: producers write an enveloped row to the shared common.outbox
+// relay in the aggregate's tx; one Watermill Forwarder drains + republishes.
+// Tests assert the PRODUCER contract via messagingtest.DrainOutbox (relay read
+// + envelope unwrap). Platform-scoped events carry no tenant FK, so the
+// producer omits the tenant_id header for them.
 
 package adapters_test
 
@@ -36,11 +29,9 @@ func newPlatformOutboxFixture(t *testing.T) *platformOutboxFixture {
 	return &platformOutboxFixture{pool: platformPool(t)}
 }
 
-// forwardAndWait reads the enveloped rows the producer wrote to
-// common.outbox, unwraps them, and asserts the count matches want.
-// Returns the inner Watermill messages in drain order. Name kept for
-// caller compatibility; post-ADR-0064 the assertion reads the relay
-// directly (no forwarder hop).
+// forwardAndWait drains common.outbox, unwraps the rows, asserts the count is
+// want, and returns the inner messages in drain order. Post-ADR-0064 this
+// reads the relay directly (no forwarder hop); the name is kept for callers.
 func (f *platformOutboxFixture) forwardAndWait(t *testing.T, want int) []*message.Message {
 	t.Helper()
 	rows := messagingtest.DrainOutbox(t.Context(), t, f.pool)

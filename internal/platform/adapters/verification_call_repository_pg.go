@@ -15,8 +15,8 @@ import (
 	"github.com/leadkart/leadkart-go/internal/platform/domain/verificationcall"
 )
 
-// VerificationCallRepository is the pgx/sqlc-backed implementation of
-// [verificationcall.Repository]. Append-only — no UpdateByID.
+// VerificationCallRepository is the pgx/sqlc implementation of
+// [verificationcall.Repository]. Append-only; no UpdateByID.
 type VerificationCallRepository struct {
 	pool *pgxpool.Pool
 	tx   *pg.Transactor
@@ -43,7 +43,7 @@ func (r *VerificationCallRepository) addOnTx(ctx context.Context, tx pgx.Tx, c *
 	if err := insertVerificationCallRow(ctx, q, c); err != nil {
 		return err
 	}
-	// VerificationCall is Platform-scoped → tenant_id = uuid.Nil.
+	// Platform-scoped: tenant_id = uuid.Nil.
 	evs := c.PullEvents()
 	if len(evs) == 0 {
 		return nil

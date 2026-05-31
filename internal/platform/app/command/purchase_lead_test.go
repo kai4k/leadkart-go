@@ -29,8 +29,7 @@ func seedAvailableLead(t *testing.T, leads *platformtest.FakePlatformLeadReposit
 	return leadID
 }
 
-// seedCreditedTenant tops up the tenant's lead-credit balance via the
-// repository directly (skip the handler — keep this fast).
+// seedCreditedTenant tops up the tenant's balance via the repo directly.
 func seedCreditedTenant(t *testing.T, credits *platformtest.FakeLeadCreditRepository, tenant leadcredit.TenantID, balance int64) {
 	t.Helper()
 	c, err := leadcredit.NewForTenant(tenant, nowFunc())
@@ -90,10 +89,8 @@ func TestPurchaseLead_HappyPath(t *testing.T) {
 		t.Errorf("balance=%d want 9", c.Balance())
 	}
 
-	// Outbox got LeadPurchasedV1 (LeadCreditAdjustedV1 fires from the
-	// mechanical mapper via the leadcredit.AdjustedEvent drain;
-	// it shows up in the credits repo's DrainedEvents but not in the
-	// app-layer fake outbox).
+	// Only LeadPurchasedV1 hits the app-layer outbox; the mapper's
+	// LeadCreditAdjustedV1 drains via the credit repo, not here.
 	if len(outbox.Events) != 1 {
 		t.Fatalf("expected 1 outbox event, got %d", len(outbox.Events))
 	}
@@ -168,9 +165,8 @@ func TestPurchaseLead_AlreadySold(t *testing.T) {
 	leads := platformtest.NewFakePlatformLeadRepository()
 	credits := platformtest.NewFakeLeadCreditRepository()
 	outbox := platformtest.NewFakeOutbox()
-	// Use the rollback-aware UoW so the loser's debit gets rolled back
-	// when the lead UPDATE fires ErrAlreadySold — mirrors production
-	// Postgres ROLLBACK behaviour. See FakeUnitOfWork godoc + H10.
+	// Rollback-aware UoW: the loser's debit rolls back when the lead
+	// UPDATE fires ErrAlreadySold, mirroring Postgres. See H10.
 	uow := platformtest.NewFakeUnitOfWork(credits, leads)
 
 	tenantA := platformlead.TenantID(ids.NewV7().String())
@@ -203,16 +199,10 @@ func TestPurchaseLead_AlreadySold(t *testing.T) {
 		t.Fatalf("expected ErrLeadAlreadySold, got %v", err)
 	}
 
-	// H10 — loser's balance MUST remain unchanged. The current
-	// implementation relies on the surrounding UoW.WithinTx to
-	// rollback the credit debit when the platformlead UPDATE fires
-	// ErrAlreadySold inside the same closure. The fake UoW runs the
-	// closure inline + the fake credit repo persists on
-	// UpsertWithVersion — so a regression that moves the
-	// platformlead.Purchase mutation BEFORE the credit
-	// UpsertWithVersion (or splits them across separate WithinTx
-	// closures) would silently debit tenantB. This assertion catches
-	// that regression at unit-test time, NOT in production.
+	// H10 — the loser's balance must be unchanged. Relies on
+	// UoW.WithinTx rolling back the debit when the lead UPDATE fires
+	// ErrAlreadySold in the same closure. Catches a regression that
+	// reorders Purchase before UpsertWithVersion (or splits the tx).
 	bBal, err := credits.GetByTenant(t.Context(), leadcredit.TenantID(tenantB.String()))
 	if err != nil {
 		t.Fatalf("tenantB credit reload: %v", err)
@@ -234,7 +224,7 @@ func TestPurchaseLead_RetriesOnConflict(t *testing.T) {
 	leadID := seedAvailableLead(t, leads)
 	seedCreditedTenant(t, credits, leadcredit.TenantID(tenantID.String()), 10)
 
-	// First attempt returns ErrConflict; second succeeds.
+	// First attempt conflicts; the retry succeeds.
 	credits.ForceConflictOnce = true
 
 	h := command.NewPurchaseLeadHandler(uow, leads, credits, outbox, nowFunc, func() string { return ids.NewV7().String() })

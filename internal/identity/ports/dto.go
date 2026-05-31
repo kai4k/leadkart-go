@@ -1,7 +1,6 @@
-// Package ports holds Identity inbound concrete implementations per
-// TDL canon — HTTP handlers, future event subscribers. Packages under
-// here translate external requests into Application command/query
-// handler calls.
+// Package ports holds Identity inbound concretes per TDL canon — HTTP
+// handlers (and future event subscribers) that translate external
+// requests into Application command/query calls.
 package ports
 
 import (
@@ -11,24 +10,22 @@ import (
 
 // ----- RegisterTenant --------------------------------------------------------
 
-// RegisterTenantRequest is the wire shape for POST /api/v1/tenants.
+// RegisterTenantRequest is the POST /api/v1/tenants body.
 //
-// JSON snake_case mirrors the .NET Web API; the same Blazor frontend
-// can talk to either backend without renaming fields. Validation lives
-// in the handler — DTOs only carry shape.
+// snake_case mirrors the .NET Web API so one frontend talks to either
+// backend. Validation lives in the handler; DTOs carry shape only.
 type RegisterTenantRequest struct {
-	Slug          string `json:"slug"`
-	LegalName     string `json:"legal_name"`
-	DisplayName   string `json:"display_name"`
-	AdminEmail    string `json:"admin_email"`
-	AdminPassword string `json:"admin_password"`
+	Slug           string `json:"slug"`
+	LegalName      string `json:"legal_name"`
+	DisplayName    string `json:"display_name"`
+	AdminEmail     string `json:"admin_email"`
+	AdminPassword  string `json:"admin_password"`
 	AdminFirstName string `json:"admin_first_name"`
 	AdminLastName  string `json:"admin_last_name"`
 }
 
-// RegisterTenantResponse is the 201 body — IDs only. Discoverability
-// of the new tenant happens through GET /api/v1/tenants/{id}; the
-// minimum response surface here keeps the contract small.
+// RegisterTenantResponse is the 201 body — IDs only; fetch the rest via
+// GET /api/v1/tenants/{id}.
 type RegisterTenantResponse struct {
 	TenantID     string `json:"tenant_id"`
 	PersonID     string `json:"person_id"`
@@ -39,34 +36,22 @@ type RegisterTenantResponse struct {
 
 // LoginRequest — POST /api/v1/auth/login.
 //
-// Per multi-tenancy.md "Login flow consequence": NO tenant_slug field.
-// The single-Active-Membership invariant resolves tenant context
-// implicitly. Same shape as the .NET version after the Identity-model
-// rebuild.
+// No tenant_slug field: the single-Active-Membership invariant resolves
+// tenant context implicitly (multi-tenancy.md "Login flow consequence").
 type LoginRequest struct {
 	Email    string `json:"email"`
 	Password string `json:"password"`
-	// DeviceLabel is optional from the client. When empty, the handler
-	// derives it from User-Agent (truncated to 128 chars), then
-	// RemoteAddr, then "Unknown device" — see resolveDeviceLabel in
-	// http.go. The domain (refreshtoken.NewFamily) requires a non-empty
-	// label; the boundary guarantees that invariant before the call.
-	// Auth0 / Stripe / GitHub all do this so clients don't have to
-	// compute their own labels.
+	// DeviceLabel is optional; when empty the handler derives it
+	// (User-Agent → RemoteAddr → "Unknown device", see resolveDeviceLabel).
 	DeviceLabel string `json:"device_label,omitzero"`
 }
 
-// LoginResponse / RefreshResponse are identical structurally.
+// LoginResponse doubles as the refresh response.
 //
-// Refresh-token plaintext is returned in the BODY (not a cookie) for
-// JWT-bearer clients (mobile, integrations). The future Blazor BFF
-// will sit in front and convert the body refresh-token to an HttpOnly
-// cookie + ITicketStore session per security.md "BFF cookie".
-//
-// MustChangePassword surfaces the BRD-line-241 forced-rotation flag —
-// frontend MUST redirect to the change-password screen when true.
-// omitempty keeps the wire shape clean on the common path (self-
-// rotated credentials never carry the flag).
+// Refresh-token plaintext is in the BODY (not a cookie) for bearer
+// clients; the BFF converts it to an HttpOnly cookie (security.md "BFF
+// cookie"). MustChangePassword is the BRD forced-rotation flag — the
+// frontend MUST route to change-password when true.
 type LoginResponse struct {
 	AccessToken          string    `json:"access_token"`
 	RefreshToken         string    `json:"refresh_token"`
@@ -94,17 +79,14 @@ type LogoutRequest struct {
 
 // RequestPasswordResetRequest — POST /api/v1/auth/request-password-reset.
 //
-// Anonymous endpoint. Per Auth0/Okta canon: ALWAYS returns 204 No
-// Content regardless of whether the email is registered — defeats
-// account enumeration.
+// Anonymous. Always 204 regardless of email registration (Auth0/Okta) —
+// defeats enumeration.
 type RequestPasswordResetRequest struct {
 	Email string `json:"email"`
 }
 
-// ResetPasswordRequest — POST /api/v1/auth/reset-password.
-//
-// Anonymous endpoint. Caller supplies the plaintext token from the
-// emailed link + their chosen new password.
+// ResetPasswordRequest — POST /api/v1/auth/reset-password. Anonymous;
+// carries the emailed token + the new password.
 type ResetPasswordRequest struct {
 	Token       string `json:"token"`
 	NewPassword string `json:"new_password"`
@@ -113,19 +95,14 @@ type ResetPasswordRequest struct {
 // ----- Email change ---------------------------------------------------------
 
 // RequestEmailChangeRequest — POST /api/v1/auth/request-email-change.
-//
-// Authenticated route. PersonID comes from JWT Subject; new email
-// arrives in the body. Confirmation link is emailed to the NEW
-// address.
+// Authenticated; PersonID from JWT Subject, confirmation link emailed to
+// the new address.
 type RequestEmailChangeRequest struct {
 	NewEmail string `json:"new_email"`
 }
 
 // ConfirmEmailChangeRequest — POST /api/v1/auth/confirm-email-change.
-//
-// Anonymous endpoint (the confirmation link works without a session
-// because the token IS the proof). Caller supplies the plaintext
-// token from the emailed link.
+// Anonymous — the emailed token IS the proof, no session needed.
 type ConfirmEmailChangeRequest struct {
 	Token string `json:"token"`
 }
@@ -133,12 +110,9 @@ type ConfirmEmailChangeRequest struct {
 // ----- ChangePassword --------------------------------------------------------
 
 // ChangePasswordRequest — POST /api/v1/auth/change-password.
-//
-// Authenticated route — PersonID comes from the JWT (set by
-// RequireAuth + tenancy bridge per A.2.3), NOT from the body. Per
-// security.md "Password change": the current password MUST be
-// verified even when authenticated, otherwise an attacker with a
-// stolen access token could permanently take over an account.
+// Authenticated; PersonID from the JWT, not the body. The current
+// password MUST be verified even when authenticated, else a stolen
+// access token = account takeover (security.md "Password change").
 type ChangePasswordRequest struct {
 	CurrentPassword string `json:"current_password"`
 	NewPassword     string `json:"new_password"`
@@ -146,10 +120,8 @@ type ChangePasswordRequest struct {
 
 // ----- Audit-log reads (GET /v1/auth/me/activity, GET /v1/tenants/{id}/audit/events) ----
 
-// AuditEventDto is one row of the audit-log read shape per
-// ADR 0027 (outbox doubles as audit). Per-event minimum: action +
-// timestamp + outcome; payload is raw JSON the frontend can render
-// per-action as needed.
+// AuditEventDto is one audit-log row per ADR 0027 (outbox doubles as
+// audit): action + timestamp + outcome, plus raw-JSON payload.
 type AuditEventDto struct {
 	ID            string          `json:"id"`
 	Action        string          `json:"action"`
@@ -163,8 +135,8 @@ type AuditEventDto struct {
 	Payload       json.RawMessage `json:"payload,omitzero"`
 }
 
-// ListAuditEventsResponse — keyset-paginated wire shape per ADR
-// 0038. events[] always non-nil; next_cursor empty when last page.
+// ListAuditEventsResponse — keyset-paginated per ADR 0038. events[]
+// always non-nil; next_cursor empty on the last page.
 type ListAuditEventsResponse struct {
 	Events     []AuditEventDto `json:"events"`
 	HasMore    bool            `json:"has_more"`
@@ -173,13 +145,9 @@ type ListAuditEventsResponse struct {
 
 // ----- Omni-search (GET /v1/search) ------------------------------------------
 
-// SearchResponse — GET /v1/search?q=&limit=&include=
-//
-// Operator omni-search wire shape per ADR 0040. Two categories
-// returned; both slices always non-nil (empty when no matches).
-// has_partial=true signals a sub-query exceeded its per-category
-// timeout (200ms) — frontend renders what's there and may show a
-// "partial results" hint.
+// SearchResponse — GET /v1/search omni-search per ADR 0040. Both slices
+// always non-nil. has_partial=true means a sub-query exceeded its 200ms
+// per-category timeout; render what's there.
 type SearchResponse struct {
 	Persons    []SearchPersonHit `json:"persons"`
 	Tenants    []SearchTenantHit `json:"tenants"`
@@ -207,29 +175,13 @@ type SearchTenantHit struct {
 
 // ----- Capabilities (GET /v1/auth/me/capabilities) ---------------------------
 
-// CapabilitiesDto is the wire shape of GET /v1/auth/me/capabilities.
+// CapabilitiesDto is the GET /v1/auth/me/capabilities shape — the
+// resolved permission/role/profile bundle (Auth0 /userinfo + MS Graph
+// /me). See handleGetCapabilities for field provenance and derivation.
 //
-// Mirrors Auth0 /userinfo + Microsoft Graph /me semantics — returns
-// the resolved permission/role/profile bundle for the calling
-// membership so the frontend never has to decode the JWT to drive
-// nav / tier / button-visibility.
-//
-// Field provenance:
-//   - JWT-resident (zero DB hit): person_id, membership_id, tenant_id,
-//     tenant_slug, is_platform, is_super_user, permissions[].
-//   - Enriched (cached via cache.CapabilitiesTTL — 2min L1 / 15min L2;
-//     ADR 0042): email, first_name, last_name, roles[]. Cache key
-//     includes the security_stamp so stamp rotation invalidates
-//     implicitly per ADR 0028.
-//
-// Caller derivation rules (see handler godoc):
-//   - is_platform IS the slug-anchored claim per Phase 1.5 hardening —
-//     true iff (claim.is_platform AND tenant_slug == "platform").
-//   - permissions is the closed-set catalogue list (always returned,
-//     [] for a fresh member with no role-driven permissions).
-//   - roles always returned ([] for fresh member); each entry carries
-//     is_super_admin so the frontend can render the SuperAdmin chip
-//     without re-parsing the permissions array.
+// permissions and roles are always non-nil ([] for a fresh member);
+// each role carries is_super_admin so the frontend renders the
+// SuperAdmin chip without re-parsing permissions.
 type CapabilitiesDto struct {
 	PersonID     string              `json:"person_id"`
 	MembershipID string              `json:"membership_id"`
@@ -244,11 +196,8 @@ type CapabilitiesDto struct {
 	Roles        []CapabilityRoleDto `json:"roles"`
 }
 
-// CapabilityRoleDto is one resolved Role surface inside the
-// capabilities bundle. Carries display name (drives the UI
-// "your role: X" widget) plus is_super_admin so the frontend can
-// render the SuperAdmin chip / unlock special UX without
-// re-parsing the permissions array.
+// CapabilityRoleDto is one role inside the capabilities bundle: display
+// name + is_super_admin for the SuperAdmin chip.
 type CapabilityRoleDto struct {
 	ID           string `json:"id"`
 	Name         string `json:"name"`
@@ -257,9 +206,8 @@ type CapabilityRoleDto struct {
 
 // ----- User management -------------------------------------------------------
 
-// UserDto is the wire-shape of a Membership composed with its
-// underlying Person's identity fields. "User" in HTTP vocabulary
-// always means one (Person, Tenant) Membership row.
+// UserDto is a Membership composed with its Person's identity fields.
+// "User" in HTTP vocabulary = one (Person, Tenant) Membership row.
 type UserDto struct {
 	MembershipID  string    `json:"membership_id"`
 	PersonID      string    `json:"person_id"`
@@ -277,13 +225,9 @@ type UserDto struct {
 	RoleIDs       []string  `json:"role_ids"`
 }
 
-// ListUsersResponse — GET /api/v1/users.
-//
-// Paginated wire shape per ADR 0038 — cursor (keyset) over offset.
-// `users` is the canonical resource-name key the frontend already
-// expects from v0.1; `has_more` + `next_cursor` are the pagination
-// metadata. Total count intentionally omitted (O(n) under RLS;
-// frontend uses has_more for "load more" UX per ADR 0038 non-goals).
+// ListUsersResponse — GET /api/v1/users. Keyset-paginated per ADR 0038.
+// No total count (O(n) under RLS); the frontend drives "load more" off
+// has_more.
 type ListUsersResponse struct {
 	Users      []UserDto `json:"users"`
 	HasMore    bool      `json:"has_more"`
@@ -309,27 +253,23 @@ type AssignUserRoleRequest struct {
 }
 
 // ReplaceUserPermissionOverridesRequest — PATCH .../permission-overrides.
-//
-// Atomic replacement of both overlays. Empty arrays clear the
-// overlay. Permission names MUST match the closed [permission.
-// IdentityPermissions] catalogue; unknown names → 422.
+// Atomic replace of both overlays; empty arrays clear them. Names must be
+// in [permission.IdentityPermissions]; unknown → 422.
 type ReplaceUserPermissionOverridesRequest struct {
 	Granted []string `json:"granted"`
 	Revoked []string `json:"revoked"`
 }
 
 // AssignUserManagerRequest — PUT /api/v1/users/{userId}/manager.
-//
-// ManagerID MUST be a Membership in the same tenant — composite FK
-// at the schema level enforces this; cross-tenant ID surfaces as 422.
+// ManagerID must be a same-tenant Membership (composite FK enforces it;
+// cross-tenant → 422).
 type AssignUserManagerRequest struct {
 	ManagerID string `json:"manager_id"`
 }
 
 // CreateUserRequest — POST /api/v1/users. Find-or-create-by-email
-// server-side per Auth0/Microsoft Entra ID canon: caller supplies
-// email + password + names; server decides whether to attach to an
-// existing global Person or create a new one.
+// (Auth0/Entra): the server attaches to an existing global Person or
+// creates one.
 type CreateUserRequest struct {
 	Email     string `json:"email"`
 	Password  string `json:"password"`
@@ -337,12 +277,9 @@ type CreateUserRequest struct {
 	LastName  string `json:"last_name"`
 }
 
-// CreateUserResponse — POST /api/v1/users 201 body.
-//
-// PersonExisted lets the UI distinguish "we attached you to an
-// existing global identity" from "we created a fresh Person record" —
-// useful for the admin who entered the email so they understand the
-// new user already had an account elsewhere.
+// CreateUserResponse — POST /api/v1/users 201 body. PersonExisted tells
+// the admin whether the email was attached to an existing global
+// identity vs a fresh Person.
 type CreateUserResponse struct {
 	PersonID      string `json:"person_id"`
 	MembershipID  string `json:"membership_id"`
@@ -351,9 +288,8 @@ type CreateUserResponse struct {
 
 // ----- Platform: cross-tenant Person + tenant ops ----------------------------
 
-// PersonDto is the wire-shape of a Person for Platform read endpoints.
-// Returned by GET /api/v1/platform/persons/{personId}. Password hash
-// + security stamp are NEVER exposed.
+// PersonDto is a Person for Platform read endpoints. Password hash +
+// security stamp are NEVER exposed.
 type PersonDto struct {
 	ID                     string    `json:"id"`
 	Email                  string    `json:"email"`
@@ -375,9 +311,8 @@ type GlobalSuspendPersonRequest struct {
 }
 
 // UpdatePersonProfileRequest — PATCH /api/v1/platform/persons/{personId}/profile.
-// Updates the GLOBAL Person profile (FirstName, LastName) — distinct
-// from the per-Tenant designation/department/status_message which
-// move via [UpdateUserProfileRequest].
+// Updates the GLOBAL Person profile, distinct from the per-Tenant fields
+// in [UpdateUserProfileRequest].
 type UpdatePersonProfileRequest struct {
 	FirstName string `json:"first_name"`
 	LastName  string `json:"last_name"`
@@ -395,14 +330,10 @@ type ListAllTenantsResponse struct {
 	Tenants []TenantDto `json:"tenants"`
 }
 
-// ListTenantsResponse — GET /api/v1/tenants?slug=acme.
-//
-// Per ADR 0052 (Wave 9.1c): canonical replacement for the
-// grandfathered GET /api/v1/tenants/by-slug/{slug} path-segment
-// lookup. Stripe/Auth0 canon: "find by alternate key" returns a list
-// of 0-1 matches (NOT 404). Caller-visibility filtered (enumeration-
-// safe per ADR 0044); empty Tenants[] means either "no such slug"
-// OR "you can't see it" — indistinguishable by design.
+// ListTenantsResponse — GET /api/v1/tenants?slug=acme. Canonical slug
+// lookup per ADR 0052: 0-1 matches (Stripe/Auth0), not 404.
+// Enumeration-safe (ADR 0044) — empty Tenants[] is "no such slug" OR
+// "you can't see it", indistinguishable by design.
 type ListTenantsResponse struct {
 	Tenants []TenantDto `json:"tenants"`
 }
@@ -410,22 +341,17 @@ type ListTenantsResponse struct {
 // ----- Platform: Impersonation sessions --------------------------------------
 
 // CreateImpersonationSessionRequest — POST /api/v1/platform/impersonation/sessions.
-// Reason MUST be ≥10 chars; DurationMinutes optional (defaults 30,
-// max 240). TargetTenantId is the tenant the operator wants to act as.
+// Reason ≥10 chars; DurationMinutes optional (default 30, max 240).
 type CreateImpersonationSessionRequest struct {
 	TargetTenantID  string `json:"target_tenant_id"`
 	Reason          string `json:"reason"`
 	DurationMinutes int    `json:"duration_minutes,omitzero"`
 }
 
-// CreateImpersonationSessionResponse — 201 body. Per ADR 0045
-// (Wave 4): includes the scoped access token + its expiry. Operator's
-// frontend uses this token for the session lifetime (no refresh
-// path — AWS STS AssumeRole canon; re-open the session if you need
-// longer than the duration).
-//
-// The token's `aud` is `leadkart-impersonation`; routes that don't
-// accept impersonation tokens reject it server-side.
+// CreateImpersonationSessionResponse — 201 body per ADR 0045: scoped
+// access token + expiry, used for the session lifetime. No refresh path
+// (AWS STS AssumeRole canon); re-open to extend. Token aud is
+// leadkart-impersonation; non-accepting routes reject it server-side.
 type CreateImpersonationSessionResponse struct {
 	SessionID               string    `json:"session_id"`
 	ExpiresAtUTC            time.Time `json:"expires_at_utc"`
@@ -451,17 +377,10 @@ type ListImpersonationSessionsResponse struct {
 
 // ----- Platform: Stats -------------------------------------------------------
 
-// PlatformStatsResponse — GET /api/v1/platform/stats. Operator
-// dashboard at-a-glance counts. Single round-trip from caller.
-//
-// Deltas is populated when the request specifies ?delta_window=24h|7d|30d
-// (closed set per ADR 0040 — cache-key-explosion prevention). Each
-// delta count is "new rows since now() - window" for the matching
-// base metric. Omitted from the wire shape when no delta was asked
-// for (omitempty + pointer-to-struct).
-//
-// Cached server-side via HybridCache facade keyed by (delta_window)
-// with 5min TTL per ADR 0040.
+// PlatformStatsResponse — GET /api/v1/platform/stats. Operator dashboard
+// counts. Deltas is populated only on ?delta_window=24h|7d|30d (closed
+// set per ADR 0040) and counts "new rows since now() - window" per base
+// metric. Cached 5min keyed by delta_window.
 type PlatformStatsResponse struct {
 	TenantsTotal      int                  `json:"tenants_total"`
 	TenantsActive     int                  `json:"tenants_active"`
@@ -471,9 +390,8 @@ type PlatformStatsResponse struct {
 	Deltas            *PlatformStatsDeltas `json:"deltas,omitzero"`
 }
 
-// PlatformStatsDeltas carries the "Δ in the last <window>" widget data.
-// Same metric names as the base counts so the frontend can render a
-// "<base> (+<delta> this <window>)" UI uniformly.
+// PlatformStatsDeltas carries "Δ in the last <window>". Same metric
+// names as the base counts for uniform "<base> (+<delta>)" rendering.
 type PlatformStatsDeltas struct {
 	Window            string `json:"window"` // "24h" | "7d" | "30d"
 	TenantsTotal      int    `json:"tenants_total"`
@@ -484,11 +402,9 @@ type PlatformStatsDeltas struct {
 
 // ----- Role management -------------------------------------------------------
 
-// RoleDto is the wire-shape of a [role.Role] for read endpoints.
-//
-// ParentRoleID (ADR 0054) — empty when the role is a root. The
-// frontend uses this to render the hierarchy tree + permission-
-// inheritance preview.
+// RoleDto is a [role.Role] for read endpoints. ParentRoleID (ADR 0054)
+// is empty for a root role; drives the hierarchy tree + inheritance
+// preview.
 type RoleDto struct {
 	ID              string    `json:"id"`
 	TenantID        string    `json:"tenant_id"`
@@ -506,15 +422,11 @@ type ListRolesResponse struct {
 	Roles []RoleDto `json:"roles"`
 }
 
-// CreateRoleRequest — POST /api/v1/roles.
-//
-// HierarchyLevel must be in role.HierarchyLevelMin..HierarchyLevelMax.
-// IsSuperAdmin is intentionally absent — see CreateRoleCommand
-// godoc for the seed-only invariant.
-//
-// ParentRoleID (ADR 0054) — optional. Omit / empty / null = root role.
-// Must reference a role in the same tenant; cross-tenant + cycle
-// prevention runs at the DB-trigger layer.
+// CreateRoleRequest — POST /api/v1/roles. HierarchyLevel in
+// [HierarchyLevelMin, HierarchyLevelMax]. IsSuperAdmin is absent on
+// purpose (seed-only; see CreateRoleCommand). ParentRoleID (ADR 0054)
+// optional — omit/empty/null = root; same-tenant only, DB enforces
+// cross-tenant + cycle prevention.
 type CreateRoleRequest struct {
 	Name           string `json:"name"`
 	HierarchyLevel int    `json:"hierarchy_level"`
@@ -526,11 +438,9 @@ type CreateRoleResponse struct {
 	RoleID string `json:"role_id"`
 }
 
-// UpdateRoleRequest — PATCH /api/v1/roles/{roleId}.
-//
-// Both fields optional. Empty Name skips rename. HierarchyLevel
-// nil-pointer skips re-level (using a pointer instead of -1 sentinel
-// keeps the wire shape clean).
+// UpdateRoleRequest — PATCH /api/v1/roles/{roleId}. Both optional: empty
+// Name skips rename, nil HierarchyLevel skips re-level (pointer over -1
+// sentinel).
 type UpdateRoleRequest struct {
 	Name           string `json:"name,omitzero"`
 	HierarchyLevel *int   `json:"hierarchy_level,omitzero"`
@@ -546,16 +456,11 @@ type RolePermissionRequest struct {
 	Permission string `json:"permission"`
 }
 
-// SetRoleParentRequest — PATCH /api/v1/roles/{roleId}/parent.
-//
-// ADR 0058 (Wave 9.4) — pointer-string so JSON `null` clears the
-// parent (role becomes a root by soft-deleting any active edge).
-// Empty string treated identically. Non-empty must be a valid UUID
-// referencing a role in the same tenant; the DB rejects cross-tenant
-// + cycle declaratively.
-//
-// `reason` is OPTIONAL audit text propagated onto the new edge OR
-// onto the cleared edge. When supplied must be 10-1024 chars.
+// SetRoleParentRequest — PATCH /api/v1/roles/{roleId}/parent (ADR 0058).
+// Pointer-string so JSON null (or empty) clears the parent (soft-deletes
+// the active edge → root). Non-empty must be a same-tenant role UUID; DB
+// rejects cross-tenant + cycle. reason is optional audit text, 10-1024
+// chars when set.
 type SetRoleParentRequest struct {
 	ParentRoleID *string `json:"parent_role_id"`
 	Reason       string  `json:"reason,omitzero"`
@@ -563,33 +468,32 @@ type SetRoleParentRequest struct {
 
 // ----- Tenant management -----------------------------------------------------
 
-// TenantDto is the wire-shape of a Tenant for read endpoints. Mirrors
-// the .NET LeadKart `TenantDto` — full profile + statutory + contact +
-// settings + display preferences + lifecycle timestamps.
+// TenantDto is a Tenant for read endpoints — full profile, statutory,
+// contact, settings, display prefs, lifecycle timestamps. Mirrors the
+// .NET TenantDto.
 type TenantDto struct {
 	ID          string `json:"id"`
 	Slug        string `json:"slug"`
 	LegalName   string `json:"legal_name"`
 	DisplayName string `json:"display_name"`
-	// admin_email removed in migration 20260507000008 — derived value
-	// (CompanyOwner-role membership → person.email). Use the
-	// /v1/users endpoints to discover current admin contacts.
-	Status              string             `json:"status"`
-	CreatedAt           time.Time          `json:"created_at"`
-	ActivatedAt         time.Time          `json:"activated_at,omitzero"`
-	SuspendedAt         time.Time          `json:"suspended_at,omitzero"`
-	DeletionScheduledAt time.Time          `json:"deletion_scheduled_at,omitzero"`
-	DeletionReason      string             `json:"deletion_reason,omitzero"`
-	GSTNumber           string             `json:"gst_number,omitzero"`
-	PANNumber           string             `json:"pan_number,omitzero"`
-	DrugLicenceNumber   string             `json:"drug_licence_number,omitzero"`
-	AdminPhone          string             `json:"admin_phone,omitzero"`
-	AdminAddress        AdminAddressDto    `json:"admin_address"`
-	PasswordPolicy      PasswordPolicyDto  `json:"password_policy"`
-	Locale              string             `json:"locale,omitzero"`
-	TimeZone            string             `json:"time_zone,omitzero"`
-	DateFormat          string             `json:"date_format,omitzero"`
-	Currency            string             `json:"currency,omitzero"`
+	// admin_email removed in migration 20260507000008 — now derived
+	// (CompanyOwner membership → person.email). Use /v1/users instead.
+	Status              string            `json:"status"`
+	CreatedAt           time.Time         `json:"created_at"`
+	ActivatedAt         time.Time         `json:"activated_at,omitzero"`
+	SuspendedAt         time.Time         `json:"suspended_at,omitzero"`
+	DeletionScheduledAt time.Time         `json:"deletion_scheduled_at,omitzero"`
+	DeletionReason      string            `json:"deletion_reason,omitzero"`
+	GSTNumber           string            `json:"gst_number,omitzero"`
+	PANNumber           string            `json:"pan_number,omitzero"`
+	DrugLicenceNumber   string            `json:"drug_licence_number,omitzero"`
+	AdminPhone          string            `json:"admin_phone,omitzero"`
+	AdminAddress        AdminAddressDto   `json:"admin_address"`
+	PasswordPolicy      PasswordPolicyDto `json:"password_policy"`
+	Locale              string            `json:"locale,omitzero"`
+	TimeZone            string            `json:"time_zone,omitzero"`
+	DateFormat          string            `json:"date_format,omitzero"`
+	Currency            string            `json:"currency,omitzero"`
 }
 
 // AdminAddressDto is the postal-address slice of [TenantDto].
@@ -620,10 +524,8 @@ type UpdateTenantProfileRequest struct {
 }
 
 // UpdateTenantStatutoryRequest — PATCH /api/v1/tenants/{tenantId}/statutory.
-//
-// Empty strings clear the corresponding declaration; the aggregate
-// accepts a zero [tenant.Statutory] for tenants that haven't yet
-// onboarded their compliance IDs.
+// Empty strings clear a declaration; a zero [tenant.Statutory] is valid
+// for not-yet-onboarded tenants.
 type UpdateTenantStatutoryRequest struct {
 	GSTNumber         string `json:"gst_number"`
 	PANNumber         string `json:"pan_number"`
@@ -649,25 +551,22 @@ type UpdateTenantDisplayPreferencesRequest struct {
 	Currency   string `json:"currency"`
 }
 
-// SuspendTenantRequest — POST .../suspend. Reason MUST be non-empty
-// (audit requirement per data-retention.md).
+// SuspendTenantRequest — POST .../suspend. Reason required (data-retention.md audit).
 type SuspendTenantRequest struct {
 	Reason string `json:"reason"`
 }
 
 // MarkTenantForDeletionRequest — POST .../mark-for-deletion. Reason
-// MUST be non-empty (DPDP §12 + SOC2 CC4.1 audit requirement).
+// required (DPDP §12 + SOC2 CC4.1 audit).
 type MarkTenantForDeletionRequest struct {
 	Reason string `json:"reason"`
 }
 
 // ----- Sessions --------------------------------------------------------------
 
-// SessionDto is one entry in the GET /api/v1/auth/sessions response.
-//
-// Auth0 / Okta / GitHub session-management UIs converged on this
-// minimal surface: device label + when created + when last refreshed.
-// Tokens / hashes are NEVER exposed.
+// SessionDto is one GET /api/v1/auth/sessions entry: device label +
+// created + last-refreshed (Auth0/Okta/GitHub shape). Tokens/hashes
+// NEVER exposed.
 type SessionDto struct {
 	FamilyID    string    `json:"family_id"`
 	TenantID    string    `json:"tenant_id"`
@@ -681,11 +580,9 @@ type ListSessionsResponse struct {
 	Sessions []SessionDto `json:"sessions"`
 }
 
-// RevokeAllSessionsRequest — DELETE /api/v1/auth/sessions body.
-//
-// Optional. ExceptCurrent=true keeps the caller's CURRENT session
-// alive (Auth0 / Okta default — "sign me out of OTHER devices").
-// Reason is an audit string; defaults to "user_revoked_all" server-side.
+// RevokeAllSessionsRequest — DELETE /api/v1/auth/sessions body. Optional.
+// ExceptCurrent keeps the caller's session ("sign me out of OTHER
+// devices"). Reason defaults to "user_revoked_all" server-side.
 type RevokeAllSessionsRequest struct {
 	ExceptCurrent bool   `json:"except_current,omitzero"`
 	Reason        string `json:"reason,omitzero"`
@@ -699,10 +596,8 @@ type RevokeAllSessionsResponse struct {
 // ----- Permission-elevation approval workflow (ADR 0055) --------------------
 
 // CreatePermissionRequestRequest — POST /api/v1/permission-requests body.
-//
-// `permission` MUST be one of the closed-set [permission.IdentityPermissions]
-// constants; unknown names → 422. `duration_days` is optional; omit (or
-// pass 0) to use the default 7-day window. `reason` MUST be ≥10 chars.
+// permission must be in [permission.IdentityPermissions] (unknown → 422);
+// duration_days optional (0 = default 7-day window); reason ≥10 chars.
 type CreatePermissionRequestRequest struct {
 	Permission   string `json:"permission"`
 	DurationDays int    `json:"duration_days,omitzero"`
@@ -710,34 +605,28 @@ type CreatePermissionRequestRequest struct {
 }
 
 // CreatePermissionRequestResponse — POST /api/v1/permission-requests 201 body.
-//
-// ApproverMembershipID is the requester's current manager — the
-// frontend can render "your manager X must approve". Empty when the
-// requester has no manager (then only Platform operators can approve).
+// ApproverMembershipID is the requester's current manager (empty when
+// none — then only Platform operators can approve).
 type CreatePermissionRequestResponse struct {
 	RequestID            string `json:"request_id"`
 	ApproverMembershipID string `json:"approver_membership_id,omitzero"`
 	Status               string `json:"status"` // always "pending" on the 201 path
 }
 
-// ApprovePermissionRequestRequest — POST /api/v1/permission-requests/{id}/approve.
-//
-// `decision_reason` is OPTIONAL on Approve (audit-friendly when set,
-// not required). Max length 1024 chars per the DB CHECK.
+// ApprovePermissionRequestRequest — POST .../{id}/approve. decision_reason
+// optional, max 1024 chars (DB CHECK).
 type ApprovePermissionRequestRequest struct {
 	DecisionReason string `json:"decision_reason,omitzero"`
 }
 
-// DenyPermissionRequestRequest — POST /api/v1/permission-requests/{id}/deny.
-//
-// `decision_reason` is REQUIRED on Deny per ADR 0055 audit canon.
+// DenyPermissionRequestRequest — POST .../{id}/deny. decision_reason
+// required (ADR 0055 audit).
 type DenyPermissionRequestRequest struct {
 	DecisionReason string `json:"decision_reason"`
 }
 
 // PermissionRequestDto is the read shape of a permission-elevation
-// request. Wire-stable; ADR 0055 reserves expansion via new optional
-// fields with default zero values.
+// request. Wire-stable; ADR 0055 expands via new optional fields only.
 type PermissionRequestDto struct {
 	ID                    string    `json:"id"`
 	TenantID              string    `json:"tenant_id"`
@@ -754,10 +643,8 @@ type PermissionRequestDto struct {
 	UpdatedAt             time.Time `json:"updated_at"`
 }
 
-// ListPermissionRequestsResponse — paginated GET response.
-//
-// `requests` always non-nil; `has_more` + `next_cursor` follow ADR 0038
-// cursor semantics.
+// ListPermissionRequestsResponse — paginated GET response. requests
+// always non-nil; cursor semantics per ADR 0038.
 type ListPermissionRequestsResponse struct {
 	Requests   []PermissionRequestDto `json:"requests"`
 	HasMore    bool                   `json:"has_more"`
@@ -766,18 +653,14 @@ type ListPermissionRequestsResponse struct {
 
 // ----- Errors ----------------------------------------------------------------
 
-// ErrorResponse is the shared 4xx/5xx body shape — RFC 9457 Problem
-// Details for HTTP APIs (https://datatracker.ietf.org/doc/html/rfc9457),
-// extended with LeadKart-canonical fields.
+// ErrorResponse is the shared 4xx/5xx body — RFC 9457 Problem Details
+// plus LeadKart-legacy fields. The legacy error+message stay populated
+// for clients branching on error; field-level errors go in the errors
+// map (RFC 9457 §3.1 extension).
 //
-// Backward-compat: the legacy `error` + `message` fields stay populated
-// so existing clients branching on `error` keep working unchanged.
-// New field-level errors arrive via the `errors` map (RFC 9457 §3.1
-// extension fields convention).
-//
-// Per ADR 0044 enumeration safety: empty Message + nil Errors when the
-// caller lacks access. The status code identifies the failure class;
-// the body MUST NOT leak existence information.
+// Enumeration safety (ADR 0044): empty Message + nil Errors when the
+// caller lacks access — the status code is the only signal, never
+// existence info.
 //
 // Wire shape:
 //
@@ -801,7 +684,7 @@ type ErrorResponse struct {
 	Detail string `json:"detail,omitzero"`
 
 	// LeadKart legacy fields (kept for backward compat).
-	Error   string `json:"error"`             // machine-parseable code
+	Error   string `json:"error"`            // machine-parseable code
 	Message string `json:"message,omitzero"` // human-readable
 
 	// Field-level errors (RFC 9457 §3.1 extension; key = JSON field

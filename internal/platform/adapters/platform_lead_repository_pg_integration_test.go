@@ -1,20 +1,16 @@
 //go:build integration
 
-// arch-test:no-timeout-needed — every test in this file uses the shared
-//   pgtest container (per-package); pgxpool internal conn timeouts +
-//   package-level `task ci:test:int -timeout=15m` already bound execution.
-//   Per-test context.WithTimeout would be belt-and-suspenders against the
-//   shared-pool + parallel-with-RLS canon shape.
+// arch-test:no-timeout-needed — shared pgtest container + pgxpool conn
+//   timeouts + package-level `task ci:test:int -timeout=15m` already bound
+//   execution.
 //
-// SQL-CONTRACT COVERAGE (per ADR 0062 — TDL Test Pyramid):
-//   - MarketplaceBrowse SELECT column-set discipline (H12): the browse
-//     read MUST omit PII columns (email / gst_number / pan_number /
-//     mobile_e164 / street). Asserted at the SQL layer because a `SELECT
-//     *` drift in production would bypass the application-layer DTO
-//     mapper. This is a SQL-specific contract test.
+// SQL-contract coverage (ADR 0062, TDL Test Pyramid):
+//   - MarketplaceBrowse SELECT column-set (H12): must omit PII columns
+//     (email / gst_number / pan_number / mobile_e164 / street). Asserted at
+//     the SQL layer because a SELECT * drift would bypass the DTO mapper.
 //
-// Round-trip Add/GetByID + state-machine (Purchase) + ErrNotFound
-// coverage moved to [platformleadtest.FakeRepository].
+// Round-trip + state-machine + ErrNotFound coverage lives in
+// [platformleadtest.FakeRepository].
 
 package adapters_test
 
@@ -31,16 +27,15 @@ import (
 	"github.com/leadkart/leadkart-go/internal/platform/domain/unverifiedcontact"
 )
 
-// seedPlatformLead inserts a contact row first (FK target) + a
-// PlatformLead linked to it. Returns the lead ID.
+// seedPlatformLead inserts the parent contact (FK target) then a PlatformLead
+// linked to it, returning the lead ID.
 func seedPlatformLead(t *testing.T, leadRepo *adapters.PlatformLeadRepository, contactRepo *adapters.UnverifiedContactRepository, tx *pg.Transactor) platformlead.ID {
 	t.Helper()
 	leadID := platformlead.ID(ids.NewV7().String())
 	agentID := unverifiedcontact.MembershipID(ids.NewV7().String())
 	contactID := unverifiedcontact.ID(ids.NewV7().String())
 
-	// First insert the parent contact so the FK on platform_leads.
-	// source_contact_id is satisfiable.
+	// Parent contact satisfies the platform_leads.source_contact_id FK.
 	c, err := unverifiedcontact.New(contactID, fixtureForm(t), agentID, nowUTC())
 	if err != nil {
 		t.Fatalf("contact ctor: %v", err)
@@ -65,12 +60,8 @@ func seedPlatformLead(t *testing.T, leadRepo *adapters.PlatformLeadRepository, c
 	return leadID
 }
 
-// TestPlatformLeadRepository_MarketplaceBrowse_OmitsPII — SQL-contract
-// (H12). The browse SELECT explicitly omits email / gst_number /
-// pan_number / mobile_e164 / street to prevent a future `SELECT *` drift
-// from leaking PII through the DTO mapper. The returned aggregate's
-// PII-field accessors MUST return the empty string (no row data scanned
-// in).
+// TestPlatformLeadRepository_MarketplaceBrowse_OmitsPII asserts the browse
+// SELECT omits PII (H12): the returned aggregate's PII accessors must be empty.
 func TestPlatformLeadRepository_MarketplaceBrowse_OmitsPII(t *testing.T) {
 	// arch-test:no-parallel — cross-tenant scan; uses TruncateAll
 	sharedPG.TruncateAll(t)
@@ -84,10 +75,7 @@ func TestPlatformLeadRepository_MarketplaceBrowse_OmitsPII(t *testing.T) {
 
 	leadID := seedPlatformLead(t, repo, contactRepo, tx)
 
-	// Browse runs under TxScopePlatform too (any authenticated tenant
-	// can browse; the SELECT policy allows unsold rows to all). Use
-	// a tenant scope to confirm a real cross-tenant browse pulls the
-	// row without PII.
+	// Any authenticated tenant can browse (SELECT policy admits unsold rows).
 	got, err := repo.MarketplaceBrowse(t.Context(), platformlead.MarketplaceFilter{},
 		pagination.Cursor{}, 50)
 	if err != nil {
@@ -100,9 +88,7 @@ func TestPlatformLeadRepository_MarketplaceBrowse_OmitsPII(t *testing.T) {
 	if row.ID() != leadID {
 		t.Errorf("ID: got %q want %q", row.ID(), leadID)
 	}
-	// PII assertions — H12. Form().Email() / GstNumber() / PanNumber()
-	// / MobileE164() / Street() MUST be empty because the browse
-	// SELECT does not fetch those columns.
+	// H12: PII accessors must be empty — the browse SELECT skips those columns.
 	if row.Form().Email() != "" {
 		t.Errorf("Email PII leak: got %q want \"\" (H12 — marketplace browse must not expose email)", row.Form().Email())
 	}
@@ -118,7 +104,7 @@ func TestPlatformLeadRepository_MarketplaceBrowse_OmitsPII(t *testing.T) {
 	if row.Form().Street() != "" {
 		t.Errorf("Street PII leak: got %q want \"\" (H12)", row.Form().Street())
 	}
-	// Non-PII fields ARE populated.
+	// Non-PII fields are populated.
 	if row.Form().ContactName() == "" {
 		t.Error("ContactName missing — needed for marketplace card")
 	}
