@@ -6,11 +6,17 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/leadkart/leadkart-go/internal/common/pg"
 	"github.com/leadkart/leadkart-go/internal/dispatch/domain/consignmentnote"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
+
+// Status-transition handlers are single-aggregate UpdateFn commands (TDL
+// canon): each loads → mutates → persists ONE ConsignmentNote via
+// notes.UpdateByID, which already owns its transaction (repository-owns-tx,
+// ADR 0004). No pg.UnitOfWork wrapper — a WithinTx around a single
+// UpdateByID is redundant ceremony (ADR 0067 UoW audit). The multi-write
+// CreateConsignmentNote command keeps the UoW.
 
 // ----- MarkDispatched -------------------------------------------------------
 
@@ -25,31 +31,28 @@ type MarkDispatchedCommand struct {
 
 // MarkDispatchedHandler runs the pending → dispatched transition.
 type MarkDispatchedHandler struct {
-	uow   pg.UnitOfWork
 	notes consignmentnote.Repository
 	now   func() time.Time
 }
 
 // NewMarkDispatchedHandler wires the handler.
-func NewMarkDispatchedHandler(uow pg.UnitOfWork, notes consignmentnote.Repository, now func() time.Time) MarkDispatchedHandler {
+func NewMarkDispatchedHandler(notes consignmentnote.Repository, now func() time.Time) MarkDispatchedHandler {
 	if now == nil {
 		now = time.Now
 	}
-	return MarkDispatchedHandler{uow: uow, notes: notes, now: now}
+	return MarkDispatchedHandler{notes: notes, now: now}
 }
 
-// Handle executes the transition inside a UoW tx.
+// Handle executes the transition via the UpdateFn pattern.
 func (h MarkDispatchedHandler) Handle(ctx context.Context, cmd MarkDispatchedCommand) error {
-	return h.uow.WithinTx(ctx, pg.TxScopeTenant, func(ctx context.Context) error {
-		return h.notes.UpdateByID(ctx, cmd.TenantID, cmd.ConsignmentNoteID, func(cn *consignmentnote.ConsignmentNote) (bool, error) {
-			priorStatus := cn.Status()
-			if err := cn.MarkDispatched(cmd.DocketNumber, cmd.TransitionedByMembership, h.now()); err != nil {
-				return false, fmt.Errorf("mark dispatched: %w", err)
-			}
-			// No-op when already-dispatched-with-same-docket (mutator
-			// returns nil but doesn't change state).
-			return cn.Status() != priorStatus, nil
-		})
+	return h.notes.UpdateByID(ctx, cmd.TenantID, cmd.ConsignmentNoteID, func(cn *consignmentnote.ConsignmentNote) (bool, error) {
+		priorStatus := cn.Status()
+		if err := cn.MarkDispatched(cmd.DocketNumber, cmd.TransitionedByMembership, h.now()); err != nil {
+			return false, fmt.Errorf("mark dispatched: %w", err)
+		}
+		// No-op when already-dispatched-with-same-docket (mutator
+		// returns nil but doesn't change state).
+		return cn.Status() != priorStatus, nil
 	})
 }
 
@@ -64,29 +67,26 @@ type MarkInTransitCommand struct {
 
 // MarkInTransitHandler runs the dispatched → in_transit transition.
 type MarkInTransitHandler struct {
-	uow   pg.UnitOfWork
 	notes consignmentnote.Repository
 	now   func() time.Time
 }
 
 // NewMarkInTransitHandler wires the handler.
-func NewMarkInTransitHandler(uow pg.UnitOfWork, notes consignmentnote.Repository, now func() time.Time) MarkInTransitHandler {
+func NewMarkInTransitHandler(notes consignmentnote.Repository, now func() time.Time) MarkInTransitHandler {
 	if now == nil {
 		now = time.Now
 	}
-	return MarkInTransitHandler{uow: uow, notes: notes, now: now}
+	return MarkInTransitHandler{notes: notes, now: now}
 }
 
 // Handle executes the transition.
 func (h MarkInTransitHandler) Handle(ctx context.Context, cmd MarkInTransitCommand) error {
-	return h.uow.WithinTx(ctx, pg.TxScopeTenant, func(ctx context.Context) error {
-		return h.notes.UpdateByID(ctx, cmd.TenantID, cmd.ConsignmentNoteID, func(cn *consignmentnote.ConsignmentNote) (bool, error) {
-			priorStatus := cn.Status()
-			if err := cn.MarkInTransit(cmd.TransitionedByMembership, h.now()); err != nil {
-				return false, err
-			}
-			return cn.Status() != priorStatus, nil
-		})
+	return h.notes.UpdateByID(ctx, cmd.TenantID, cmd.ConsignmentNoteID, func(cn *consignmentnote.ConsignmentNote) (bool, error) {
+		priorStatus := cn.Status()
+		if err := cn.MarkInTransit(cmd.TransitionedByMembership, h.now()); err != nil {
+			return false, err
+		}
+		return cn.Status() != priorStatus, nil
 	})
 }
 
@@ -103,29 +103,26 @@ type MarkDeliveredCommand struct {
 
 // MarkDeliveredHandler runs the terminal-success transition.
 type MarkDeliveredHandler struct {
-	uow   pg.UnitOfWork
 	notes consignmentnote.Repository
 	now   func() time.Time
 }
 
 // NewMarkDeliveredHandler wires the handler.
-func NewMarkDeliveredHandler(uow pg.UnitOfWork, notes consignmentnote.Repository, now func() time.Time) MarkDeliveredHandler {
+func NewMarkDeliveredHandler(notes consignmentnote.Repository, now func() time.Time) MarkDeliveredHandler {
 	if now == nil {
 		now = time.Now
 	}
-	return MarkDeliveredHandler{uow: uow, notes: notes, now: now}
+	return MarkDeliveredHandler{notes: notes, now: now}
 }
 
 // Handle executes the transition.
 func (h MarkDeliveredHandler) Handle(ctx context.Context, cmd MarkDeliveredCommand) error {
-	return h.uow.WithinTx(ctx, pg.TxScopeTenant, func(ctx context.Context) error {
-		return h.notes.UpdateByID(ctx, cmd.TenantID, cmd.ConsignmentNoteID, func(cn *consignmentnote.ConsignmentNote) (bool, error) {
-			priorStatus := cn.Status()
-			if err := cn.MarkDelivered(cmd.TransitionedByMembership, h.now()); err != nil {
-				return false, err
-			}
-			return cn.Status() != priorStatus, nil
-		})
+	return h.notes.UpdateByID(ctx, cmd.TenantID, cmd.ConsignmentNoteID, func(cn *consignmentnote.ConsignmentNote) (bool, error) {
+		priorStatus := cn.Status()
+		if err := cn.MarkDelivered(cmd.TransitionedByMembership, h.now()); err != nil {
+			return false, err
+		}
+		return cn.Status() != priorStatus, nil
 	})
 }
 
@@ -141,17 +138,16 @@ type MarkFailedCommand struct {
 
 // MarkFailedHandler runs the terminal-failure transition.
 type MarkFailedHandler struct {
-	uow   pg.UnitOfWork
 	notes consignmentnote.Repository
 	now   func() time.Time
 }
 
 // NewMarkFailedHandler wires the handler.
-func NewMarkFailedHandler(uow pg.UnitOfWork, notes consignmentnote.Repository, now func() time.Time) MarkFailedHandler {
+func NewMarkFailedHandler(notes consignmentnote.Repository, now func() time.Time) MarkFailedHandler {
 	if now == nil {
 		now = time.Now
 	}
-	return MarkFailedHandler{uow: uow, notes: notes, now: now}
+	return MarkFailedHandler{notes: notes, now: now}
 }
 
 // ErrTerminal is the sentinel surfaced when an upstream caller tries
@@ -160,13 +156,11 @@ var ErrTerminal = errors.New("dispatch: consignment note is terminal")
 
 // Handle executes the transition.
 func (h MarkFailedHandler) Handle(ctx context.Context, cmd MarkFailedCommand) error {
-	return h.uow.WithinTx(ctx, pg.TxScopeTenant, func(ctx context.Context) error {
-		return h.notes.UpdateByID(ctx, cmd.TenantID, cmd.ConsignmentNoteID, func(cn *consignmentnote.ConsignmentNote) (bool, error) {
-			priorStatus := cn.Status()
-			if err := cn.MarkFailed(cmd.Reason, cmd.TransitionedByMembership, h.now()); err != nil {
-				return false, err
-			}
-			return cn.Status() != priorStatus, nil
-		})
+	return h.notes.UpdateByID(ctx, cmd.TenantID, cmd.ConsignmentNoteID, func(cn *consignmentnote.ConsignmentNote) (bool, error) {
+		priorStatus := cn.Status()
+		if err := cn.MarkFailed(cmd.Reason, cmd.TransitionedByMembership, h.now()); err != nil {
+			return false, err
+		}
+		return cn.Status() != priorStatus, nil
 	})
 }
