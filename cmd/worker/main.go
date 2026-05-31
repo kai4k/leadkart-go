@@ -276,20 +276,9 @@ func run(ctx context.Context, stdout *os.File) error {
 	// the Platform `platform.lead_purchased.v1` event (ADR 0060).
 	cqrsHandlers := subscribers.Handlers(subWiring.Families, subWiring.StampCache, buildEmailSender(logger), logger, time.Now)
 	cqrsHandlers = append(cqrsHandlers, crmsubscribers.Handlers(crmIngest)...)
-	// ADR 0067 Phase-4: DB-mutating handlers use the transactional inbox
-	// (dedup + write in one tx); external-effect handlers (cache/SIEM/email)
-	// stay at-least-once. The identity ALO set is the authority for the split;
-	// all other handlers (revoke-family, crm ingest) are transactional.
-	atLeastOnce := subscribers.AtLeastOnceHandlerNames()
 	for _, h := range cqrsHandlers {
-		var rerr error
-		if atLeastOnce[h.HandlerName()] {
-			rerr = router.AddCqrsHandlerAtLeastOnce(eventProcessor, h)
-		} else {
-			rerr = router.AddCqrsHandler(eventProcessor, h)
-		}
-		if rerr != nil {
-			return fmt.Errorf("register cqrs handler %q: %w", h.HandlerName(), rerr)
+		if err := router.AddCqrsHandler(eventProcessor, h); err != nil {
+			return fmt.Errorf("register cqrs handler: %w", err)
 		}
 	}
 

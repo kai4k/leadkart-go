@@ -49,10 +49,14 @@
 // # Idempotency (inbox)
 //
 // [IdempotentReceiver] dedups per (message_id, handler_name) against
-// identity.processed_messages. The current contract is run-then-INSERT
-// (at-least-once delivery + idempotent handlers). The transactional inbox
-// (dedup-insert + DB-mutating handler in one pg.WithinTx, effectively-once)
-// is the planned next increment recorded in ADR 0067; external-effect
-// handlers (email / cache / SIEM) stay at-least-once because their sends
-// cannot be rolled back.
+// identity.processed_messages. The contract is run-then-INSERT:
+// at-least-once delivery + idempotent handlers — the TDL/Watermill canon
+// (their CQRS guidance dedups in-handler; the Duplicator middleware exists
+// to force handler idempotency). Every consumer handler is independently
+// idempotent (business-key short-circuit or no-op-on-replay); the inbox
+// row is a skip-redundant-work optimization, NOT the sole correctness
+// mechanism. A transactional inbox (dedup + handler in one tx) was
+// evaluated and deliberately NOT adopted — see ADR 0067 — because it adds
+// no correctness over already-idempotent handlers and external-effect
+// handlers (email / cache / SIEM) cannot be rolled back anyway.
 package messaging

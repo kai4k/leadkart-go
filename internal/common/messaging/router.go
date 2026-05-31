@@ -263,32 +263,6 @@ func (r *Router) AddCqrsHandler(p *cqrs.EventProcessor, eh cqrs.EventHandler) er
 	if err != nil {
 		return fmt.Errorf("messaging: add cqrs handler %q: %w", eh.HandlerName(), err)
 	}
-	// Transactional inbox (ADR 0067 Phase-4): TransactionalIdempotency sits
-	// INSIDE Retry so each retry attempt opens a FRESH tx — retrying inside an
-	// aborted pgx tx fails ("current transaction is aborted"). Recoverer is
-	// innermost so a panicking handler rolls its tx back and is retried. The
-	// dedup row + the handler's DB writes commit atomically (effectively-once).
-	h.AddMiddleware(
-		r.poison,
-		AuditMiddleware(r.auditW, r.log),
-		retryMiddleware(r.retry),
-		TransactionalIdempotencyMiddleware(r.receiver, eh.HandlerName()),
-		wmw.Recoverer,
-	)
-	return nil
-}
-
-// AddCqrsHandlerAtLeastOnce registers a cqrs handler whose side effects are
-// EXTERNAL and cannot be rolled back (email, cache eviction, SIEM emit). It
-// uses run-then-INSERT dedup with Idempotency OUTERMOST — a duplicate
-// short-circuits before Audit/Retry/DLQ, and no DB tx is held open across the
-// external call. Same DLQ isolation as [AddCqrsHandler]; only the inbox
-// semantics differ. The composition root picks the variant per handler.
-func (r *Router) AddCqrsHandlerAtLeastOnce(p *cqrs.EventProcessor, eh cqrs.EventHandler) error {
-	h, err := p.AddHandler(eh)
-	if err != nil {
-		return fmt.Errorf("messaging: add cqrs handler %q: %w", eh.HandlerName(), err)
-	}
 	h.AddMiddleware(
 		r.poison,
 		IdempotencyMiddleware(r.receiver, eh.HandlerName()),

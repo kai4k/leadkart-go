@@ -5,11 +5,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
-
-	"github.com/leadkart/leadkart-go/internal/common/pg"
-	"github.com/leadkart/leadkart-go/internal/common/tenancy"
 )
 
 // IdempotentReceiver wraps a Watermill subscriber handler with
@@ -46,15 +42,11 @@ import (
 // must be transactional or compensating internally).
 type IdempotentReceiver struct {
 	pool *pgxpool.Pool
-	// tx drives the transactional inbox path ([WrapTx]): dedup-insert +
-	// handler writes commit in ONE tx. Built from pool so the constructor
-	// signature stays stable for every caller.
-	tx *pg.Transactor
 }
 
 // NewIdempotentReceiver wires the receiver against a pool.
 func NewIdempotentReceiver(pool *pgxpool.Pool) *IdempotentReceiver {
-	return &IdempotentReceiver{pool: pool, tx: pg.NewTransactor(pool)}
+	return &IdempotentReceiver{pool: pool}
 }
 
 // HandlerFunc is the underlying handler shape — same as Watermill's
@@ -107,73 +99,6 @@ func (r *IdempotentReceiver) Wrap(handlerName string, fn HandlerFunc) HandlerFun
 		}
 		return nil
 	}
-}
-
-// WrapTx is the TRANSACTIONAL inbox path (ADR 0067 Phase-4): the dedup
-// INSERT and the wrapped handler's DB writes commit in ONE transaction, so a
-// DB-mutating handler is EFFECTIVELY-ONCE. Either both the dedup row and the
-// side effects commit, or neither does (the message stays replayable).
-//
-// Order of operations, all inside one [pg.Transactor.WithinTx]:
-//
-//  1. Open a tx whose scope is derived from the message context — tenant
-//     metadata present (bridged by [TenantContextMiddleware]) → TxScopeTenant,
-//     else TxScopePlatform.
-//  2. INSERT (message_id, handler_name) ON CONFLICT DO NOTHING against the
-//     SAME tx. RowsAffected==0 ⇒ a prior delivery already processed this pair
-//     → skip the handler, commit the no-op tx, return nil (ack).
-//  3. Else run the handler. It joins THIS tx via [pg.TxFromContext] (every
-//     must-succeed repo honors the UoW-join contract), so its writes + the
-//     dedup row are atomic.
-//  4. Handler error ⇒ WithinTx rolls back (dedup row + writes gone) ⇒ the
-//     error propagates to Retry/PoisonQueue ⇒ a fresh delivery re-runs.
-//
-// MUST be wired INSIDE the Retry middleware (see [Router.AddCqrsHandler]):
-// each retry attempt needs a FRESH tx — retrying inside an aborted pgx tx
-// fails with "current transaction is aborted".
-//
-// At-least-once handlers (email / cache / SIEM) use [Wrap] instead: their
-// sends cannot be rolled back and must not hold a DB tx open across an
-// external call.
-func (r *IdempotentReceiver) WrapTx(handlerName string, fn HandlerFunc) HandlerFunc {
-	if handlerName == "" {
-		panic("messaging: IdempotentReceiver.WrapTx requires non-empty handlerName")
-	}
-	return func(ctx context.Context, messageID string) error {
-		scope := pg.TxScopePlatform
-		if _, ok := tenancy.FromContext(ctx); ok {
-			scope = pg.TxScopeTenant
-		}
-		return r.tx.WithinTx(ctx, scope, func(ctx context.Context) error {
-			tx, ok := pg.TxFromContext(ctx)
-			if !ok {
-				return errors.New("inbox: WrapTx: no tx in ctx (WithinTx contract broken)")
-			}
-			inserted, ierr := r.insertDedup(ctx, tx, messageID, handlerName)
-			if ierr != nil {
-				return fmt.Errorf("inbox: dedup insert %s/%s: %w", handlerName, messageID, ierr)
-			}
-			if !inserted {
-				return nil // already processed by a prior delivery — ack
-			}
-			return fn(ctx, messageID)
-		})
-	}
-}
-
-// insertDedup writes the (message_id, handler_name) row on the supplied tx,
-// returning whether THIS call inserted it (false ⇒ ON CONFLICT no-op ⇒ a
-// prior delivery already recorded the pair).
-func (r *IdempotentReceiver) insertDedup(ctx context.Context, tx pgx.Tx, messageID, handlerName string) (bool, error) {
-	tag, err := tx.Exec(ctx, `
-		INSERT INTO identity.processed_messages (message_id, handler_name)
-		VALUES ($1, $2)
-		ON CONFLICT DO NOTHING
-	`, messageID, handlerName)
-	if err != nil {
-		return false, err
-	}
-	return tag.RowsAffected() == 1, nil
 }
 
 // alreadyProcessed returns true iff the (message, handler) row exists.
