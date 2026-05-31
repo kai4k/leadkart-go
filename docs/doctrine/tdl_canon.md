@@ -285,12 +285,16 @@ If you find yourself reaching for a mutex in a domain method, the question is "w
 
 Aggregate transactional boundary is **one aggregate per command**. A command that needs to change two aggregates becomes: command-handler-A mutates aggregate-A and writes event-A; subscriber-B handles event-A and mutates aggregate-B in its own transaction.
 
+**LeadKart exception — genuine multi-aggregate atomic commands:** `pg.UnitOfWork.WithinTx` is the Transaction-Provider for the narrow set of commands where outbox choreography would introduce an unacceptable failure window (e.g. `RegisterTenant` creating tenant + user + role atomically). Handlers depend on `pg.UnitOfWork` (not on `pgx.Tx` directly); adapters join the ambient tx via `pg.TxFromContext`. This exception is deliberate and documented (ADR 0067); it is not the default. Cross-MODULE effects still go via outbox events, not shared tx.
+
 ### Why
 TDL: *"Stay away from transactions that span more than one service, except when there's no other way... Your microservice boundaries are likely wrong if you consider using a distributed transaction"* ([distributed-transactions-in-go](https://threedots.tech/post/distributed-transactions-in-go/)).
 
 The outbox pattern (Watermill `forwarder`) makes event-with-state atomic: the event row lands in the same Postgres transaction as the aggregate update; the background forwarder publishes to the broker afterwards. *"Save the event in the same database... within the same transaction. Then, asynchronously publish it to the Pub/Sub."*
 
 Eventual consistency is the rule, not the exception: *"Not all operations need to be strongly consistent, even if it initially seems like it."*
+
+**Consumer delivery — at-least-once + idempotent handlers (TDL/Watermill canon).** Watermill delivers at-least-once; the `Duplicator` middleware exists precisely to force handler idempotency. Every consumer handler is independently idempotent (business-key short-circuit or no-op-on-replay). A transactional inbox (dedup-insert + handler mutation in one DB tx, aimed at effectively-once) was evaluated and deliberately NOT adopted: it adds no correctness over handlers that are already idempotent, and external-effect handlers (email, cache, SIEM) cannot be rolled back regardless. Per ADR 0067: handlers must declare their idempotency strategy explicitly.
 
 Cross-aggregate direct calls (handler-A calling handler-B in the same tx) are the path to the distributed monolith — even in a process. They couple deployment lifecycle ("if I touch handler-B I have to retest handler-A") and forbid the eventual extraction of B into its own service.
 

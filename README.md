@@ -6,7 +6,7 @@ Go rebuild of LeadKart (multi-tenant Indian PCD pharma SaaS). Reference port fro
 
 **Phase 1.5 closed + Waves 1–9 shipped.** The Identity bounded context runs the full surface: register-tenant + login (with NIST-aligned account lockout) + refresh + logout, password + email change flows, 60+ HTTP routes, scoped-JWT impersonation (RFC 8693), role hierarchy + permission-elevation approval workflows, OpenAPI 3.1 spec as code-of-record with `Spectral` lint + drift gate, layer-boundary arch tests, EDA-driven email + audit-log enrichment.
 
-For the wave-by-wave delivery history (Phase 1.5 + Waves 1–9), see [`CLAUDE.md`](CLAUDE.md) § *Current state*. For architecture decisions, see [`docs/adr/`](docs/adr/) (57 ADRs, Michael Nygard format).
+For the wave-by-wave delivery history (Phase 1.5 + Waves 1–9), see [`CLAUDE.md`](CLAUDE.md) § *Current state*. For architecture decisions, see [`docs/adr/`](docs/adr/) (50 ADRs through 0067, Michael Nygard format).
 
 **Next:** Phase 2 — Platform bounded context (marketplace + lead credits + verification calls). See [`BRD.md`](BRD.md) + the master plan.
 
@@ -16,11 +16,11 @@ For the wave-by-wave delivery history (Phase 1.5 + Waves 1–9), see [`CLAUDE.md
 |---|---|---|
 | Language | Go 1.26+ | ADR 0034 |
 | Architecture | Modular monolith + Hexagonal (TDL Wild Workouts canon) | ADR 0001, 0002 |
-| Persistence | Postgres + sqlc + pgx/v5 + squirrel | ADR 0004 |
+| Persistence | Postgres + sqlc (pinned v1.31.1) + pgx/v5 | ADR 0004 |
 | Migrations | goose | ADR 0005 |
 | Multi-tenancy | Postgres RLS + `SET LOCAL app.tenant_id` via pgxpool `AfterAcquire` | ADR 0006 |
 | HTTP | stdlib `net/http` ServeMux 1.22+ | ADR 0007 |
-| Messaging | Watermill v1.5+ in-proc + watermill-sql outbox | ADR 0008 |
+| Messaging | Watermill v1.5+ — watermill-sql outbox + single Forwarder relay; cqrs EventBus (per-tx producer) + EventProcessor (consumer); per-handler resilience (PoisonQueue→Idempotency→Audit→Retry→Recoverer); durable `common.dead_letter` DLQ; at-least-once + idempotent handlers | ADRs 0008, 0064, 0067 |
 | Background jobs | river (Postgres-backed) | ADR 0010 |
 | Auth | golang-jwt/jwt/v5 + refresh-token families + RFC 8693 scoped-JWT impersonation | ADRs 0011, 0045 |
 | Crypto | `golang.org/x/crypto/argon2` | ADR 0012 |
@@ -102,7 +102,7 @@ internal/                             # all business code (Go internal/ rule)
 api/openapi.yaml                      # canonical HTTP contract (Stripe/GitHub/Anthropic canon)
 migrations/                           # goose .sql migrations (timestamp-prefixed)
 docker/                               # Dockerfile (multi-target) + compose.yml + smoke
-docs/adr/                             # 57 ADRs (Michael Nygard) — auth, EDA, arch, CI gates
+docs/adr/                             # 50 ADRs through 0067 (Michael Nygard) — auth, EDA, arch, CI gates
 .spectral.yaml                        # OpenAPI lint ruleset (extends spectral:oas + LeadKart)
 .github/workflows/ci.yml              # paths-filter-gated pipeline (changes → {unit, arch,
                                       # integration, migrations, openapi, docker, smoke})
