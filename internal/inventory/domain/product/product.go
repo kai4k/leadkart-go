@@ -15,6 +15,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/leadkart/leadkart-go/internal/common/errs"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
@@ -106,15 +108,28 @@ type Product struct {
 // Returns ErrInvalid (wrapped) on violation.
 // actorID populates CreatedEvent.ActorID for the integration mapper.
 // now is the explicit clock instant; the aggregate has no temporal dependency.
+// validateUUID enforces the H6 reviewer rule: every domain ID must parse as a
+// UUID at AGGREGATE-CONSTRUCTION time, not later at the adapter boundary.
+func validateUUID(name, val string) error {
+	val = strings.TrimSpace(val)
+	if val == "" {
+		return fmt.Errorf("%w: %s required", ErrInvalid, name)
+	}
+	if _, err := uuid.Parse(val); err != nil {
+		return fmt.Errorf("%w: %s not a valid uuid", ErrInvalid, name)
+	}
+	return nil
+}
+
 func New(id ID, tenantID tenant.ID, actorID membership.ID, spec Spec, now time.Time) (*Product, error) {
-	if id.IsZero() {
-		return nil, fmt.Errorf("%w: id required", ErrInvalid)
+	if err := validateUUID("id", id.String()); err != nil {
+		return nil, err
 	}
-	if tenantID.IsZero() {
-		return nil, fmt.Errorf("%w: tenantID required", ErrInvalid)
+	if err := validateUUID("tenantID", tenantID.String()); err != nil {
+		return nil, err
 	}
-	if actorID.IsZero() {
-		return nil, fmt.Errorf("%w: actorID required", ErrInvalid)
+	if err := validateUUID("actorID", actorID.String()); err != nil {
+		return nil, err
 	}
 	sku, err := validateSKU(spec.SKU)
 	if err != nil {

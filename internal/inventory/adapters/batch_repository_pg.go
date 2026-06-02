@@ -233,10 +233,19 @@ func loadBatch(ctx context.Context, q *db.Queries, id batch.ID) (*batch.Batch, e
 }
 
 func insertBatchRow(ctx context.Context, q *db.Queries, b *batch.Batch) error {
-	bid, _ := uuid.Parse(b.ID().String())
-	pid, _ := uuid.Parse(b.ProductID().String())
-	tid, _ := uuid.Parse(b.TenantID().String())
-	err := q.InsertBatch(ctx, db.InsertBatchParams{
+	bid, err := uuid.Parse(b.ID().String())
+	if err != nil {
+		return fmt.Errorf("batch repo: parse id: %w", err)
+	}
+	pid, err := uuid.Parse(b.ProductID().String())
+	if err != nil {
+		return fmt.Errorf("batch repo: parse product_id: %w", err)
+	}
+	tid, err := uuid.Parse(b.TenantID().String())
+	if err != nil {
+		return fmt.Errorf("batch repo: parse tenant_id: %w", err)
+	}
+	err = q.InsertBatch(ctx, db.InsertBatchParams{
 		ID:                         pgconv.PgUUID(bid),
 		ProductID:                  pgconv.PgUUID(pid),
 		TenantID:                   pgconv.PgUUID(tid),
@@ -268,7 +277,10 @@ func insertBatchRow(ctx context.Context, q *db.Queries, b *batch.Batch) error {
 // persistBatchState writes mutable Batch state with WHERE version=$expected
 // and bumps version. Returns rows-affected so the caller can detect 0 → conflict.
 func persistBatchState(ctx context.Context, q *db.Queries, b *batch.Batch, expectedVersion int64) (int64, error) {
-	bid, _ := uuid.Parse(b.ID().String())
+	bid, err := uuid.Parse(b.ID().String())
+	if err != nil {
+		return 0, fmt.Errorf("batch repo: parse id: %w", err)
+	}
 	var deletedAt pgtype.Timestamptz
 	var deletedBy *string
 	if b.IsDeleted() {

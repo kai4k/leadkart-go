@@ -133,11 +133,26 @@ func (r *StockMovementRepository) ListByBatchPage(ctx context.Context, tenantID 
 // ----- Helpers ---------------------------------------------------------------
 
 func insertMovementRow(ctx context.Context, q *db.Queries, m *stockmovement.Movement) error {
-	mid, _ := uuid.Parse(m.ID().String())
-	bid, _ := uuid.Parse(m.BatchID().String())
-	pid, _ := uuid.Parse(m.ProductID().String())
-	tid, _ := uuid.Parse(m.TenantID().String())
-	aid, _ := uuid.Parse(m.ActorMembershipID().String())
+	mid, err := uuid.Parse(m.ID().String())
+	if err != nil {
+		return fmt.Errorf("stock movement repo: parse id: %w", err)
+	}
+	bid, err := uuid.Parse(m.BatchID().String())
+	if err != nil {
+		return fmt.Errorf("stock movement repo: parse batch_id: %w", err)
+	}
+	pid, err := uuid.Parse(m.ProductID().String())
+	if err != nil {
+		return fmt.Errorf("stock movement repo: parse product_id: %w", err)
+	}
+	tid, err := uuid.Parse(m.TenantID().String())
+	if err != nil {
+		return fmt.Errorf("stock movement repo: parse tenant_id: %w", err)
+	}
+	aid, err := uuid.Parse(m.ActorMembershipID().String())
+	if err != nil {
+		return fmt.Errorf("stock movement repo: parse actor_membership_id: %w", err)
+	}
 	return q.InsertStockMovement(ctx, db.InsertStockMovementParams{
 		ID:                  pgconv.PgUUID(mid),
 		BatchID:             pgconv.PgUUID(bid),

@@ -27,18 +27,33 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/leadkart/leadkart-go/internal/common/errs"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 	"github.com/leadkart/leadkart-go/internal/inventory/domain/product"
 )
 
+// validateUUID enforces the H6 reviewer rule: every domain ID must parse as a
+// UUID at AGGREGATE-CONSTRUCTION time, not later at the adapter boundary.
+func validateUUID(name, val string) error {
+	val = strings.TrimSpace(val)
+	if val == "" {
+		return fmt.Errorf("%w: %s required", ErrInvalid, name)
+	}
+	if _, err := uuid.Parse(val); err != nil {
+		return fmt.Errorf("%w: %s not a valid uuid", ErrInvalid, name)
+	}
+	return nil
+}
+
 // Field bounds (mirror migration CHECK constraints).
 const (
-	BatchNumberMinLen        = 1
-	BatchNumberMaxLen        = 100
-	ManufacturerNameMaxLen   = 200
-	ManufacturingLicenceMax  = 100
+	BatchNumberMinLen       = 1
+	BatchNumberMaxLen       = 100
+	ManufacturerNameMaxLen  = 200
+	ManufacturingLicenceMax = 100
 )
 
 // MovementType is the closed-set classifier on a single stock-movement
@@ -164,17 +179,17 @@ type Batch struct {
 // call site so multiple aggregates touched in one handler share the
 // same instant for audit consistency.
 func New(id ID, productID product.ID, tenantID tenant.ID, actorID membership.ID, spec Spec, now time.Time) (*Batch, error) {
-	if id.IsZero() {
-		return nil, fmt.Errorf("%w: id required", ErrInvalid)
+	if err := validateUUID("id", id.String()); err != nil {
+		return nil, err
 	}
-	if productID.IsZero() {
-		return nil, fmt.Errorf("%w: product_id required", ErrInvalid)
+	if err := validateUUID("product_id", productID.String()); err != nil {
+		return nil, err
 	}
-	if tenantID.IsZero() {
-		return nil, fmt.Errorf("%w: tenant_id required", ErrInvalid)
+	if err := validateUUID("tenant_id", tenantID.String()); err != nil {
+		return nil, err
 	}
-	if actorID.IsZero() {
-		return nil, fmt.Errorf("%w: actor_id required", ErrInvalid)
+	if err := validateUUID("actor_id", actorID.String()); err != nil {
+		return nil, err
 	}
 	bn := strings.TrimSpace(spec.BatchNumber)
 	if bn == "" {
