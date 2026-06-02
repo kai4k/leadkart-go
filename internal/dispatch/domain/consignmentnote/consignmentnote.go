@@ -27,6 +27,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
@@ -98,14 +100,14 @@ type NewInput struct {
 
 // New constructs a pending ConsignmentNote.
 func New(in NewInput) (*ConsignmentNote, error) {
-	if in.ID.IsZero() {
-		return nil, fmt.Errorf("%w: id required", ErrInvalid)
+	if err := validateUUID("id", in.ID.String()); err != nil {
+		return nil, err
 	}
-	if in.TenantID == "" {
-		return nil, fmt.Errorf("%w: tenant_id required", ErrInvalid)
+	if err := validateUUID("tenant_id", in.TenantID.String()); err != nil {
+		return nil, err
 	}
-	if in.OrderID.IsZero() {
-		return nil, fmt.Errorf("%w: order_id required", ErrInvalid)
+	if err := validateUUID("order_id", in.OrderID.String()); err != nil {
+		return nil, err
 	}
 	carrier := strings.TrimSpace(in.CarrierName)
 	if carrier == "" {
@@ -117,8 +119,8 @@ func New(in NewInput) (*ConsignmentNote, error) {
 	if in.WeightGrams <= 0 {
 		return nil, fmt.Errorf("%w: weight_grams must be positive (got %d)", ErrInvalid, in.WeightGrams)
 	}
-	if in.CreatedByMembershipID == "" {
-		return nil, fmt.Errorf("%w: created_by_membership_id required", ErrInvalid)
+	if err := validateUUID("created_by_membership_id", in.CreatedByMembershipID.String()); err != nil {
+		return nil, err
 	}
 	if in.Now.IsZero() {
 		return nil, fmt.Errorf("%w: now required", ErrInvalid)
@@ -150,6 +152,19 @@ func New(in NewInput) (*ConsignmentNote, error) {
 		CreatedByMembershipID: cn.createdByMembershipID,
 	})
 	return cn, nil
+}
+
+// validateUUID enforces the H6 reviewer rule: every domain ID must parse as a
+// UUID at AGGREGATE-CONSTRUCTION time, not later at the adapter boundary.
+func validateUUID(name, val string) error {
+	val = strings.TrimSpace(val)
+	if val == "" {
+		return fmt.Errorf("%w: %s required", ErrInvalid, name)
+	}
+	if _, err := uuid.Parse(val); err != nil {
+		return fmt.Errorf("%w: %s not a valid uuid", ErrInvalid, name)
+	}
+	return nil
 }
 
 // Snapshot is the persistence DTO consumed by [UnmarshalFromDB].

@@ -48,6 +48,26 @@ func PgRequiredTimestamp(t time.Time) pgtype.Timestamptz {
 	return pgtype.Timestamptz{Time: t.UTC(), Valid: true}
 }
 
+// PgTimestampPtr wraps an optional *time.Time into pgtype.Timestamptz: nil maps
+// to NULL (Valid=false), a non-nil value is normalised to UTC. For aggregates
+// that model nullable timestamps as pointers (e.g. dispatched_at).
+func PgTimestampPtr(t *time.Time) pgtype.Timestamptz {
+	if t == nil {
+		return pgtype.Timestamptz{}
+	}
+	return pgtype.Timestamptz{Time: t.UTC(), Valid: true}
+}
+
+// TimePtrFromPg unwraps a pgtype.Timestamptz into a *time.Time: NULL returns
+// nil, a valid value returns a UTC pointer. Inverse of [PgTimestampPtr].
+func TimePtrFromPg(p pgtype.Timestamptz) *time.Time {
+	if !p.Valid {
+		return nil
+	}
+	u := p.Time.UTC()
+	return &u
+}
+
 // PgDate wraps an optional date-only value into pgtype.Date (sqlc maps SQL
 // `date` columns to pgtype.Date). The zero time maps to NULL; time-of-day
 // and zone are dropped — the domain canonicalises to UTC at construction.

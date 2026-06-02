@@ -138,6 +138,26 @@ type CrmCrmLead struct {
 	CreatedByMembershipID   pgtype.UUID
 }
 
+// Transport document per shipment (ADR 0063). State machine: pending → dispatched → in_transit → delivered | failed. One per order via UNIQUE(tenant_id, order_id). Tenant-scoped RLS.
+type DispatchConsignmentNote struct {
+	ID                    pgtype.UUID
+	TenantID              pgtype.UUID
+	OrderID               pgtype.UUID
+	Status                string
+	CarrierName           string
+	DocketNumber          string
+	BoxCount              int32
+	WeightGrams           int64
+	ExpectedDeliveryAt    pgtype.Timestamptz
+	DispatchedAt          pgtype.Timestamptz
+	InTransitAt           pgtype.Timestamptz
+	DeliveredAt           pgtype.Timestamptz
+	FailedAt              pgtype.Timestamptz
+	FailureReason         string
+	CreatedAt             pgtype.Timestamptz
+	CreatedByMembershipID pgtype.UUID
+}
+
 // Cross-tenant email→tenant index for login. NOT RLS-scoped (intentional — login flow predates tenant context). Maintained via Watermill events.
 type IdentityAuthRouting struct {
 	Email          string
