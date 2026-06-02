@@ -40,8 +40,13 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
 
+	"github.com/leadkart/leadkart-go/internal/common/audit"
+	"github.com/leadkart/leadkart-go/internal/common/audit/audittest"
+	"github.com/leadkart/leadkart-go/internal/common/cache"
 	"github.com/leadkart/leadkart-go/internal/common/email"
 	"github.com/leadkart/leadkart-go/internal/common/ids"
+	"github.com/leadkart/leadkart-go/internal/common/messaging"
+	"github.com/leadkart/leadkart-go/internal/common/pg"
 	"github.com/leadkart/leadkart-go/internal/common/slug"
 	"github.com/leadkart/leadkart-go/internal/identity/adapters"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
@@ -49,11 +54,6 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 	"github.com/leadkart/leadkart-go/internal/identity/integrationevents"
 	"github.com/leadkart/leadkart-go/internal/identity/ports/subscribers"
-	"github.com/leadkart/leadkart-go/internal/common/audit"
-	"github.com/leadkart/leadkart-go/internal/common/audit/audittest"
-	"github.com/leadkart/leadkart-go/internal/common/cache"
-	"github.com/leadkart/leadkart-go/internal/common/messaging"
-	"github.com/leadkart/leadkart-go/internal/common/pg"
 )
 
 // testNow is the deterministic instant test fixtures pass to domain
@@ -66,12 +66,12 @@ var testNow = time.Date(2026, 5, 24, 12, 0, 0, 0, time.UTC)
 // queries we DON'T touch but that other tests in the same fixture run
 // would.
 type fixture struct {
-	pool        *pgxpool.Pool
-	tenants     *adapters.TenantRepository
-	persons     *adapters.PersonRepository
-	families    *adapters.RefreshTokenFamilyRepository
-	stampCache  *adapters.SecurityStampCache
-	miniredis   *miniredis.Miniredis
+	pool       *pgxpool.Pool
+	tenants    *adapters.TenantRepository
+	persons    *adapters.PersonRepository
+	families   *adapters.RefreshTokenFamilyRepository
+	stampCache *adapters.SecurityStampCache
+	miniredis  *miniredis.Miniredis
 }
 
 // newFixture returns a per-test fixture backed by the SHARED package-
@@ -263,9 +263,11 @@ func wireRouter(t *testing.T, fx *fixture) (*gochannel.GoChannel, *messaging.Rou
 	auditW := audit.NewWriter(fx.pool, silentLog(), time.Now)
 	router, err := messaging.NewRouter(messaging.Deps{
 		Subscriber:       pubsub,
+		Publisher:        pubsub,
 		Logger:           silentLog(),
 		IdempotencyInbox: receiver,
 		AuditWriter:      auditW,
+		DeadLetters:      messaging.NewDeadLetterWriter(fx.pool, silentLog(), time.Now),
 		CloseTimeout:     2 * time.Second,
 		Retry: messaging.RetryConfig{
 			MaxRetries:      1,
@@ -277,9 +279,25 @@ func wireRouter(t *testing.T, fx *fixture) (*gochannel.GoChannel, *messaging.Rou
 	if err != nil {
 		t.Fatalf("NewRouter: %v", err)
 	}
-	subscribers.Register(router, fx.families, fx.stampCache, nil, silentLog(), time.Now)
+	registerIdentityHandlers(t, router, pubsub, fx, nil, silentLog())
 	stop := runRouter(t, router)
 	return pubsub, router, stop
+}
+
+// registerIdentityHandlers builds the cqrs EventProcessor over the
+// router + registers every identity handler with the canonical
+// resilience stack (ADR 0067 — replaces the old subscribers.Register).
+func registerIdentityHandlers(t *testing.T, router *messaging.Router, sub message.Subscriber, fx *fixture, emailSender *subscribers.EmailSender, log *slog.Logger) {
+	t.Helper()
+	ep, err := messaging.NewEventProcessor(router.RawRouter(), sub, watermill.NewSlogLogger(silentLog()))
+	if err != nil {
+		t.Fatalf("NewEventProcessor: %v", err)
+	}
+	for _, h := range subscribers.Handlers(fx.families, fx.stampCache, emailSender, log, time.Now) {
+		if err := router.AddCqrsHandler(ep, h); err != nil {
+			t.Fatalf("AddCqrsHandler: %v", err)
+		}
+	}
 }
 
 // waitFor polls cond until true or timeout.
@@ -500,12 +518,12 @@ func TestRevokeFamilies_OnMembershipDeactivated_NarrowsToTenantScope(t *testing.
 //
 // Two halves of the SQL contract:
 //
-//   1. Subscriber-ran observable: an audit row exists for the event
-//      action (router middleware contract).
-//   2. No spurious mutation: a baseline-seeded family from a DIFFERENT
-//      Person remains untouched after the subscriber runs — proves
-//      the empty-list path didn't fall through to a row-set-bypass
-//      UPDATE that would have flipped is_revoked=true on every family.
+//  1. Subscriber-ran observable: an audit row exists for the event
+//     action (router middleware contract).
+//  2. No spurious mutation: a baseline-seeded family from a DIFFERENT
+//     Person remains untouched after the subscriber runs — proves
+//     the empty-list path didn't fall through to a row-set-bypass
+//     UPDATE that would have flipped is_revoked=true on every family.
 //
 // Without (2) the test reduces to "subscriber ran" — already covered
 // by TestRouter_FullStack in common/messaging/router_test.go. The
@@ -562,9 +580,11 @@ func TestReuseDetectedSIEM_LogsOnReuseRevocation(t *testing.T) {
 	auditW := audit.NewWriter(fx.pool, silentLog(), time.Now)
 	router, err := messaging.NewRouter(messaging.Deps{
 		Subscriber:       pubsub,
+		Publisher:        pubsub,
 		Logger:           silentLog(),
 		IdempotencyInbox: receiver,
 		AuditWriter:      auditW,
+		DeadLetters:      messaging.NewDeadLetterWriter(fx.pool, silentLog(), time.Now),
 		Retry: messaging.RetryConfig{
 			MaxRetries: 1, InitialInterval: 10 * time.Millisecond,
 			MaxInterval: 50 * time.Millisecond, Multiplier: 2,
@@ -573,7 +593,7 @@ func TestReuseDetectedSIEM_LogsOnReuseRevocation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRouter: %v", err)
 	}
-	subscribers.Register(router, fx.families, fx.stampCache, nil, siemLog, time.Now)
+	registerIdentityHandlers(t, router, pubsub, fx, nil, siemLog)
 	stop := runRouter(t, router)
 	defer stop()
 
@@ -603,9 +623,11 @@ func TestReuseDetectedSIEM_IgnoresNonReuseRevocations(t *testing.T) {
 	auditW := audit.NewWriter(fx.pool, silentLog(), time.Now)
 	router, err := messaging.NewRouter(messaging.Deps{
 		Subscriber:       pubsub,
+		Publisher:        pubsub,
 		Logger:           silentLog(),
 		IdempotencyInbox: receiver,
 		AuditWriter:      auditW,
+		DeadLetters:      messaging.NewDeadLetterWriter(fx.pool, silentLog(), time.Now),
 		Retry: messaging.RetryConfig{
 			MaxRetries: 1, InitialInterval: 10 * time.Millisecond,
 			MaxInterval: 50 * time.Millisecond, Multiplier: 2,
@@ -614,7 +636,7 @@ func TestReuseDetectedSIEM_IgnoresNonReuseRevocations(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRouter: %v", err)
 	}
-	subscribers.Register(router, fx.families, fx.stampCache, nil, siemLog, time.Now)
+	registerIdentityHandlers(t, router, pubsub, fx, nil, siemLog)
 	stop := runRouter(t, router)
 	defer stop()
 

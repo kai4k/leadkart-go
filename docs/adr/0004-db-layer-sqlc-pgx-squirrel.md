@@ -85,3 +85,15 @@ If, mid-execution:
 `TestArch_NoBannedDeps + TestArch_RepositoriesHaveUpdateByIDFn` (in `internal/architecture/`).
 
 `gorm.io/*` / `entgo.io/*` / `bob.io/*` blocked as direct go.mod requires; every aggregate Repository declares the TDL `UpdateByID(ctx, id, fn)` closure (append-only exceptions documented in the test).
+
+---
+
+## Amendment 1 (2026-05-29) — squirrel retired; sqlc is the single data-access approach; sqlc pinned at v1.31.1
+
+Two corrections to the locked stack.
+
+**1. `squirrel` is removed.** The "Decision" listed squirrel for "2–3 dynamic-query spots." In practice it was used in exactly **one** place (the Platform marketplace browse). That query is now a single sqlc `:many` using null-guard `sqlc.narg` params (a nil arg = "don't filter") + native GIN `&&` overlap + a keyset tuple — so **sqlc covers it too**, and squirrel was dropped from `go.mod`. Per the single-approach rule: **one data-access approach — sqlc** for all queries; raw pgx survives *only* in `internal/common/pg` (the `set_config` GUC + `BeginTx` substrate). Dynamic filters use sqlc null-guards, not a query builder.
+
+**2. sqlc pinned + current.** sqlc is bumped to **v1.31.1** and pinned via the Go `tool` directive in `go.mod` (`go tool sqlc generate`), so the generated-code version is reproducible — closing the stale-generated-code drift where checked-in `*.sql.go` lagged many versions. Keyset/tuple params use `sqlc.arg`/`sqlc.narg` with explicit `::uuid`/`::timestamptz` casts (sqlc types a row-value tuple by its first element).
+
+**Fitness function (planned, Phase 6):** an arch gate banning raw SQL via `pool`/`tx` `Exec`/`Query` outside `common/pg`, so the single-approach rule is mechanically enforced. The squirrel-placeholder gate becomes vacuous (nothing imports squirrel) and is retired in the same pass.

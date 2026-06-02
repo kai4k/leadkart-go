@@ -1,16 +1,7 @@
-// passwordpolicy_offline_list.go — bundled in-memory implementation
-// of [passwordpolicy.Checker] backed by a hard-coded set of well-known
-// weak passwords.
-//
-// Per ADR 0051 (Wave 9.1a): the interface lives in
-// `internal/identity/domain/passwordpolicy/`; the concrete impl lives
-// here in the adapters package alongside the other repository +
-// gateway implementations. Cheney "accept interfaces, return structs"
-// + TDL Wild Workouts single-module rule.
-//
-// Production-grade implementations (HIBP k-anonymity API per Troy
-// Hunt) plug into the same [passwordpolicy.Checker] interface —
-// wiring-time choice in the composition root.
+// passwordpolicy_offline_list.go — bundled [passwordpolicy.Checker]
+// backed by a hard-coded weak-password set (ADR 0051, Wave 9.1a).
+// Production deployments can swap in an HIBP k-anonymity checker at
+// composition time via the same interface.
 
 package adapters
 
@@ -22,21 +13,10 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/domain/passwordpolicy"
 )
 
-// OfflinePasswordList is the bundled minimum-viable [passwordpolicy.Checker]
-// backed by a hard-coded set of well-known weak passwords. Lookups
-// are O(1) + case-insensitive. No network, no external dependencies —
-// safe for dev + early-deploy production.
-//
-// Source list compiled from:
-//   - OWASP Authentication Cheat Sheet 2025 "Common weak passwords"
-//   - NIST SP 800-63B 2025 §5.1.1.2 "compromised password screening"
-//     example list
-//   - Top entries from public credential-stuffing datasets
-//
-// Catches the casual cases — "password", "12345678", "qwerty" — and
-// the LeadKart-default placeholders ("change_me", "leadkart"). For
-// production-grade coverage, swap to an HIBPChecker when the API
-// integration lands (deferred to v1.0).
+// OfflinePasswordList implements [passwordpolicy.Checker] using a
+// hard-coded set of common weak passwords. Lookups are O(1) and
+// case-insensitive; no network dependency. Source: OWASP Auth Cheat Sheet
+// 2025, NIST SP 800-63B §5.1.1.2, and credential-stuffing datasets.
 type OfflinePasswordList struct {
 	set map[string]struct{}
 }
@@ -46,13 +26,9 @@ func NewOfflinePasswordList() *OfflinePasswordList {
 	return &OfflinePasswordList{set: defaultBreachedSet()}
 }
 
-// NewOfflinePasswordListWith constructs an OfflinePasswordList seeded
-// by the supplied passwords. Used by tests that want to assert
-// specific entries are rejected/accepted; production calls
-// [NewOfflinePasswordList].
-//
-// Inputs are normalised: lowercased + trimmed. Empty strings are
-// silently skipped (don't allow "" to mark every password as breached).
+// NewOfflinePasswordListWith constructs an OfflinePasswordList from the
+// supplied seed (for tests). Inputs are lowercased and trimmed; empty
+// strings are silently skipped.
 func NewOfflinePasswordListWith(passwords []string) *OfflinePasswordList {
 	set := make(map[string]struct{}, len(passwords))
 	for _, p := range passwords {
@@ -65,7 +41,6 @@ func NewOfflinePasswordListWith(passwords []string) *OfflinePasswordList {
 	return &OfflinePasswordList{set: set}
 }
 
-// Compile-time interface satisfaction.
 var _ passwordpolicy.Checker = (*OfflinePasswordList)(nil)
 
 // IsBreached reports whether plaintext (after case-fold + trim) is in
@@ -87,21 +62,14 @@ func (c *OfflinePasswordList) Size() int {
 	return len(c.set)
 }
 
-// normalisePassword canonicalises a password for set membership: trim
-// outer whitespace + lowercase. Internal whitespace is preserved (a
-// passphrase like "correct horse battery staple" is genuinely different
-// from "correcthorsebatterystaple").
+// normalisePassword lowercases and trims outer whitespace. Internal
+// whitespace is preserved (passphrases differ from their collapsed forms).
 func normalisePassword(s string) string {
 	return strings.ToLower(strings.TrimSpace(s))
 }
 
-// defaultBreachedSet returns the seed set OfflinePasswordList ships
-// with. Kept short + auditable here rather than in a separate data
-// file — a curated set is more useful than an exhaustive one
-// (developers can SEE what's banned without grepping a CSV).
-//
-// Update policy: append only; never remove an entry without operator
-// review (could re-enable a banned password unintentionally).
+// defaultBreachedSet is the seed shipped with OfflinePasswordList.
+// Append-only; never remove an entry without operator review.
 func defaultBreachedSet() map[string]struct{} {
 	list := []string{
 		// OWASP top-N + universal classics

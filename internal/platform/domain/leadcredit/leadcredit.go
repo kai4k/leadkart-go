@@ -1,14 +1,10 @@
 // Package leadcredit defines the LeadCredit aggregate — per-tenant
-// purchase-credit balance per BRD §4.2 + ADR 0059.
+// purchase-credit balance (BRD §4.2, ADR 0059).
 //
-// One row per tenant. Optimistic concurrency via an explicit
-// [LeadCredit.Version] integer column that the repository increments on
-// every UPDATE inside a `WHERE version = $old` predicate. 0 rows
-// affected = conflict — the calling command handler retries with
-// backoff (per ADR 0059 + .NET ADR-015).
-//
-// State: balance >= 0 invariant; Topup adds; Charge subtracts (rejects
-// if balance < amount).
+// One row per tenant. Optimistic concurrency via [LeadCredit.Version]:
+// the repository UPDATEs under `WHERE version = $old`; 0 rows affected =
+// conflict, and the command handler retries with backoff (ADR 0059, .NET
+// ADR-015). Invariant: balance >= 0; Topup adds, Charge subtracts.
 package leadcredit
 
 import (
@@ -16,13 +12,15 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 // ErrInvalid is the sentinel for invariant violations.
 var ErrInvalid = errors.New("leadcredit: invalid")
 
-// ErrInsufficientBalance is returned by [Charge] when the requested
-// amount exceeds the current balance. Handler maps to HTTP 422.
+// ErrInsufficientBalance is returned by [Charge] when amount exceeds the
+// balance. Handler maps to HTTP 422.
 var ErrInsufficientBalance = errors.New("leadcredit: insufficient balance")
 
 // TenantID is the lead-credit row primary key (matches the tenant row).
@@ -34,8 +32,8 @@ func (t TenantID) IsZero() bool { return t == "" }
 // String returns the underlying UUID string.
 func (t TenantID) String() string { return string(t) }
 
-// MembershipID is the FK to identity.tenant_memberships.id — the
-// adjusting operator. Stored as a string to keep boundary clean.
+// MembershipID is the adjusting operator — FK to
+// identity.tenant_memberships.id. Stored as a string to keep the boundary clean.
 type MembershipID string
 
 // IsZero reports whether m is unset.
@@ -55,13 +53,12 @@ type LeadCredit struct {
 	events []Event
 }
 
-// NewForTenant constructs a brand-new zero-balance LeadCredit row.
-// Emitted on tenant registration (PlatformLead module's subscriber to
-// identity.TenantRegisteredV1 in Slice 2; Slice 1 ships the Topup
-// endpoint which creates the row on first credit).
+// NewForTenant constructs a zero-balance LeadCredit row. Created on tenant
+// registration (Slice 2 subscriber to identity.TenantRegisteredV1); Slice 1
+// creates it on first Topup.
 func NewForTenant(tenantID TenantID, now time.Time) (*LeadCredit, error) {
-	if tenantID.IsZero() {
-		return nil, fmt.Errorf("%w: tenantID required", ErrInvalid)
+	if err := validateUUID("tenantID", tenantID.String()); err != nil {
+		return nil, err
 	}
 	if now.IsZero() {
 		return nil, fmt.Errorf("%w: now required", ErrInvalid)
@@ -73,6 +70,20 @@ func NewForTenant(tenantID TenantID, now time.Time) (*LeadCredit, error) {
 		createdAt: now,
 		updatedAt: now,
 	}, nil
+}
+
+// validateUUID enforces the H6 reviewer rule: every domain ID must parse
+// as a UUID at AGGREGATE-CONSTRUCTION time, not later at the adapter
+// boundary. Trims surrounding whitespace before parsing.
+func validateUUID(name, val string) error {
+	val = strings.TrimSpace(val)
+	if val == "" {
+		return fmt.Errorf("%w: %s required", ErrInvalid, name)
+	}
+	if _, err := uuid.Parse(val); err != nil {
+		return fmt.Errorf("%w: %s not a valid uuid", ErrInvalid, name)
+	}
+	return nil
 }
 
 // Snapshot is the persistence-layer DTO consumed by [UnmarshalFromDB].
@@ -103,9 +114,8 @@ func (l *LeadCredit) TenantID() TenantID { return l.tenantID }
 // Balance returns the current credit count.
 func (l *LeadCredit) Balance() int64 { return l.balance }
 
-// Version returns the optimistic-concurrency version. The repository
-// reads this BEFORE the UPDATE + writes `WHERE version = $old + SET
-// version = $old + 1`.
+// Version returns the optimistic-concurrency version. The repository reads it
+// before the UPDATE, then `WHERE version = $old SET version = $old + 1`.
 func (l *LeadCredit) Version() int64 { return l.version }
 
 // CreatedAt returns the row-creation timestamp.
@@ -116,9 +126,9 @@ func (l *LeadCredit) UpdatedAt() time.Time { return l.updatedAt }
 
 // ----- State transitions ----------------------------------------------------
 
-// Topup adds credits to the balance. delta MUST be > 0.
-// reason captured for audit (BRD §4.2 — purchases are permanent + no
-// refunds; topup audit is the only forensic anchor).
+// Topup adds credits; delta must be > 0. reason is required for audit: purchases
+// are permanent and non-refundable, so the topup record is the only forensic
+// anchor (BRD §4.2).
 func (l *LeadCredit) Topup(delta int64, reason string, adjustedBy MembershipID, now time.Time) error {
 	if delta <= 0 {
 		return fmt.Errorf("%w: topup delta must be positive (got %d)", ErrInvalid, delta)
@@ -142,9 +152,9 @@ func (l *LeadCredit) Topup(delta int64, reason string, adjustedBy MembershipID, 
 	return nil
 }
 
-// Charge subtracts credits — used by the marketplace-purchase handler.
-// Rejects with [ErrInsufficientBalance] when the result would go
-// negative (the balance >= 0 invariant is also a DB CHECK constraint).
+// Charge subtracts credits (marketplace-purchase handler). Rejects with
+// [ErrInsufficientBalance] when the result would go negative; the balance >= 0
+// invariant is also a DB CHECK constraint.
 func (l *LeadCredit) Charge(amount int64, reason string, adjustedBy MembershipID, now time.Time) error {
 	if amount <= 0 {
 		return fmt.Errorf("%w: charge amount must be positive (got %d)", ErrInvalid, amount)
@@ -190,9 +200,8 @@ func (l *LeadCredit) recordEvent(e Event) {
 // Event is the sealed marker interface.
 type Event interface{ isLeadCreditEvent() }
 
-// AdjustedEvent fires on every Topup + Charge — Delta carries the
-// signed change (positive on topup, negative on charge). Subscribers
-// (tenant dashboard refresh, audit indexing) consume.
+// AdjustedEvent fires on every Topup and Charge; Delta is signed (+ topup,
+// - charge). Consumed by tenant dashboard refresh and audit indexing.
 type AdjustedEvent struct {
 	TenantID               TenantID
 	Delta                  int64 // signed: + on topup, - on charge

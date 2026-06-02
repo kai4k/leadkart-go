@@ -31,14 +31,10 @@ import (
 	"github.com/leadkart/leadkart-go/internal/inventory/domain/product"
 )
 
-// TestKeysetBatchesPage_UsesIndexUnderRLS mirrors identity's
-// keyset_explain_integration_test for the inventory.batches partial
-// index per ADR 0061 amendment 1 (finding M7).
-//
-// Asserts the per-product keyset query plans as an Index Scan against
-// idx_batches_product (post fix-pass: declared
-// `(product_id, expiry_date DESC, id DESC) WHERE NOT is_deleted` —
-// matching the query's `ORDER BY expiry_date DESC, id DESC`).
+// TestKeysetBatchesPage_UsesIndexUnderRLS asserts the per-product keyset
+// query plans as an Index Scan against idx_batches_product
+// (product_id, expiry_date DESC, id DESC) WHERE NOT is_deleted —
+// ADR 0061 amendment 1 (finding M7).
 func TestKeysetBatchesPage_UsesIndexUnderRLS(t *testing.T) {
 	t.Parallel()
 	pool := repoFixture(t)
@@ -58,8 +54,7 @@ func TestKeysetBatchesPage_UsesIndexUnderRLS(t *testing.T) {
 	if err := products.Add(ctx, p); err != nil {
 		t.Fatalf("Add product: %v", err)
 	}
-	// Seed 200 batches — enough rows that the planner reliably prefers
-	// the index over Seq Scan.
+	// 200 rows: enough for the planner to reliably prefer the index.
 	mfg := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	for i := range 200 {
 		exp := time.Date(2028, 1, 1, 0, 0, 0, 0, time.UTC).Add(time.Duration(i) * 24 * time.Hour)
@@ -78,11 +73,8 @@ func TestKeysetBatchesPage_UsesIndexUnderRLS(t *testing.T) {
 		}
 	}
 
-	// Acquire a pgx conn under platform scope so EXPLAIN sees all tenants
-	// (and the planner can see all rows). The query itself runs under
-	// the same scope; in production tenant_id is restricted via RLS,
-	// the planner still picks the same index because (product_id, ...)
-	// is the leading column.
+	// Platform-scope conn so EXPLAIN sees all rows; production RLS still
+	// picks the same index because product_id is the leading column.
 	dbtx, err := pool.Acquire(ctx)
 	if err != nil {
 		t.Fatalf("acquire: %v", err)
@@ -113,13 +105,10 @@ func TestKeysetBatchesPage_UsesIndexUnderRLS(t *testing.T) {
 	planText := string(rawPlan)
 	t.Logf("EXPLAIN plan:\n%s", planText)
 
-	// Primary regression guard: no Seq Scan on inventory.batches under
-	// RLS. The planner may legitimately pick *any* index whose leading
-	// column is product_id — at the 200-row test scale it sometimes
-	// prefers uq_batches_product_number_live (also product_id-leading)
-	// over idx_batches_product. The bug we're guarding against is
-	// "planner ignored every index + did a full table scan", not
-	// "planner picked a different but equally-valid index".
+	// Guard: any index scan is acceptable; the bug class is "planner
+	// ignored every index". At 200 rows the planner may pick
+	// uq_batches_product_number_live (also product_id-leading) instead
+	// of idx_batches_product — both are correct.
 	if !strings.Contains(planText, "Index Scan") &&
 		!strings.Contains(planText, "Bitmap Index Scan") {
 		t.Errorf("expected plan to contain Index Scan (any flavour); got:\n%s", planText)

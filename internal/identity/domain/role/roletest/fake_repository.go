@@ -31,8 +31,9 @@
 package roletest
 
 import (
+	"cmp"
 	"context"
-	"sort"
+	"slices"
 
 	"github.com/leadkart/leadkart-go/internal/identity/domain/role"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
@@ -194,11 +195,11 @@ func (f *FakeRepository) ListByTenant(_ context.Context, tid tenant.ID) ([]*role
 		}
 		out = append(out, r)
 	}
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].HierarchyLevel() != out[j].HierarchyLevel() {
-			return out[i].HierarchyLevel() < out[j].HierarchyLevel()
-		}
-		return out[i].Name() < out[j].Name()
+	slices.SortFunc(out, func(a, b *role.Role) int {
+		return cmp.Or(
+			cmp.Compare(a.HierarchyLevel(), b.HierarchyLevel()), // hierarchy_level ASC
+			cmp.Compare(a.Name(), b.Name()),                     // name ASC
+		)
 	})
 	return out, nil
 }

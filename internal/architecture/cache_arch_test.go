@@ -1,23 +1,8 @@
 // cache_arch_test.go — Principle E: Cache discipline.
 //
-// ADR 0015 (caching: ristretto + redis/go-redis/v9 + singleflight)
-// + ADR 0042 (cache TTL strategy: five profiles). Caches without
-// discipline turn into hard-to-debug correctness traps:
-//
-//   - direct ristretto / redis use bypasses singleflight + the TTL
-//     profile registry → cache stampedes + ad-hoc retention windows;
-//   - non-canonical key shapes prevent invalidation (the canonical
-//     <scope>:<entity>:<id>:<purpose> shape makes batch eviction
-//     trivial);
-//   - missing tenant scope in a key is a multi-tenancy bug magnet
-//     (cache hit serves Tenant A's data to Tenant B);
-//   - raw time.Duration TTLs bypass the jittered profile catalog.
-//
-// Cited canon:
-//   - ADR 0015 + ADR 0042
-//   - Microsoft HybridCache RemoveAsync / Tag canon
-//   - Stripe / GitHub cache-key shape ("<scope>:<entity>:<id>")
-//   - OWASP A01:2021 + LeadKart multi-tenancy.md
+// ADR 0015 (ristretto + redis + singleflight) + ADR 0042 (five TTL profiles).
+// Guards: all cache via HybridCache, canonical key shape, tenant scope,
+// jittered TTL profiles, singleflight stampede protection.
 
 package architecture_test
 
@@ -28,14 +13,8 @@ import (
 	"testing"
 )
 
-// ----------------------------------------------------------------------------
-// E1: TestArch_AllCacheCallsViaHybridCache
-// ----------------------------------------------------------------------------
-//
-// Direct ristretto / redis client use is banned outside the cache
-// substrate. Callers must go through `common/cache` (HybridCache or
-// a facade) so the TTL-profile registry + singleflight stampede
-// protection + L1/L2 layering apply uniformly.
+// TestArch_AllCacheCallsViaHybridCache asserts direct ristretto/redis use is
+// banned outside common/cache/ (ADR 0015).
 // Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_AllCacheCallsViaHybridCache(t *testing.T) {
 	t.Parallel()
@@ -64,21 +43,8 @@ func TestArch_AllCacheCallsViaHybridCache(t *testing.T) {
 	}
 }
 
-// ----------------------------------------------------------------------------
-// E2: TestArch_CacheKeyFormatCanonical
-// ----------------------------------------------------------------------------
-//
-// Cache keys must follow `<scope>:<entity>:<id>:<purpose>` — at
-// least 3 colons. Enforced by walking every string literal passed
-// to a `cache.*` package call.
-//
-// Predicate: any string literal containing colons that participates
-// in a cache.* call site must have >= 3 colons. Free-form keys
-// (e.g. URL-shaped paths used as keys) opt out via the marker
-// `// arch-test:non-canonical-cache-key` on the same line.
-//
-// Heuristic note: enforced at the package-level `common/cache` consumer
-// surface only — handlers/adapters that pass keys downstream.
+// TestArch_CacheKeyFormatCanonical asserts cache.*(ctx, key, ...) string keys
+// follow <scope>:<entity>:<id> (≥2 colons; Stripe/GitHub canon).
 // Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_CacheKeyFormatCanonical(t *testing.T) {
 	t.Parallel()
@@ -113,19 +79,8 @@ func TestArch_CacheKeyFormatCanonical(t *testing.T) {
 	}
 }
 
-// ----------------------------------------------------------------------------
-// E3: TestArch_CacheTTLProfileExplicit
-// ----------------------------------------------------------------------------
-//
-// ADR 0042 declares 5 named TTL profiles (Default / SecurityStamp /
-// Capabilities / SearchResults / Dashboard). Cache writes MUST use
-// one of these via `cache.<X>TTL()` — not a raw `time.Duration`
-// literal. Raw durations bypass the jitter discipline + accidentally
-// invent new retention windows.
-//
-// Predicate: any file that imports `common/cache` and constructs a
-// `cache.TTL{...}` literal directly (instead of calling a named
-// profile fn) fails.
+// TestArch_CacheTTLProfileExplicit asserts no cache.TTL{} literal is constructed
+// outside common/cache/. Use a named profile fn (ADR 0042).
 // Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_CacheTTLProfileExplicit(t *testing.T) {
 	t.Parallel()
@@ -151,22 +106,8 @@ func TestArch_CacheTTLProfileExplicit(t *testing.T) {
 	}
 }
 
-// ----------------------------------------------------------------------------
-// E4: TestArch_CacheKeysIncludeTenantScope
-// ----------------------------------------------------------------------------
-//
-// Tenant-scoped cache keys MUST contain a tenant scoping segment.
-// Without it, Tenant B may serve Tenant A's cached row when the
-// person.ID happens to collide (low-probability with UUIDv7 IDs,
-// but the test is the institutional protection).
-//
-// Heuristic: any cache key string literal containing `:tenant_id`,
-// `:member`, or `membership:` must also contain `:tenant:` OR `:t:`
-// (the canonical short form).
-//
-// Allow-list: keys that are explicitly *global* (e.g. person
-// directory) carry the `// arch-test:global-cache` marker on the
-// same line.
+// TestArch_CacheKeysIncludeTenantScope asserts tenant-bearing cache keys include
+// :tenant: or :t:. Missing scope risks serving Tenant A's data to Tenant B.
 // Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_CacheKeysIncludeTenantScope(t *testing.T) {
 	t.Parallel()
@@ -202,19 +143,8 @@ func TestArch_CacheKeysIncludeTenantScope(t *testing.T) {
 	}
 }
 
-// ----------------------------------------------------------------------------
-// E5: TestArch_SingleflightWrapsExpensiveMisses
-// ----------------------------------------------------------------------------
-//
-// ADR 0015: ristretto + redis + singleflight. Expensive-derive cache
-// fills (DB-roundtrip fallbacks) MUST use singleflight to coalesce
-// concurrent misses; missing it produces the thundering-herd against
-// Postgres.
-//
-// Predicate: every file under `common/cache/` (the substrate) that
-// implements a Get/Fetch fallback must reference singleflight.Group.
-// Consumers (facade users) are not flagged here — they get the
-// protection transitively.
+// TestArch_SingleflightWrapsExpensiveMisses asserts common/cache/ substrate
+// references singleflight.Group. ADR 0015: prevents thundering-herd.
 // Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_SingleflightWrapsExpensiveMisses(t *testing.T) {
 	t.Parallel()
@@ -234,14 +164,7 @@ func TestArch_SingleflightWrapsExpensiveMisses(t *testing.T) {
 	}
 }
 
-// ----------------------------------------------------------------------------
-// E6: TestArch_CacheKeyLengthBounded
-// ----------------------------------------------------------------------------
-//
-// Cache keys > 256 chars indicate something has gone wrong:
-// embedded full JSON blobs, hashes-of-hashes, or accidental free-
-// form user input. Redis tolerates 512MB keys but the cost shape
-// makes everything slower.
+// TestArch_CacheKeyLengthBounded asserts literal cache keys are ≤ 256 chars.
 // Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_CacheKeyLengthBounded(t *testing.T) {
 	t.Parallel()
@@ -268,18 +191,8 @@ func TestArch_CacheKeyLengthBounded(t *testing.T) {
 	}
 }
 
-// ----------------------------------------------------------------------------
-// E7: TestArch_CacheInvalidationPairedWithEvent
-// ----------------------------------------------------------------------------
-//
-// Cache invalidation (`cache.*.Delete` / `cache.*.Invalidate`) MUST
-// happen inside a subscriber consuming a state-change event — never
-// inside a write handler (which leaks the cache lifecycle into the
-// write path + breaks at-least-once invalidation if the write
-// retries the cache delete doesn't).
-//
-// Predicate: every `.Delete(` or `.Invalidate(` call on a cache
-// receiver must live under `<module>/ports/subscribers/`.
+// TestArch_CacheInvalidationPairedWithEvent asserts cache Delete/Invalidate
+// calls are in ports/subscribers/, not in write handlers.
 // Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_CacheInvalidationPairedWithEvent(t *testing.T) {
 	t.Parallel()
@@ -289,10 +202,6 @@ func TestArch_CacheInvalidationPairedWithEvent(t *testing.T) {
 	var bad []string
 
 	for _, mod := range modulesUnderInternal(t) {
-		// Walk the WHOLE module but flag only call sites that are NOT
-		// in a subscriber AND NOT in an adapter that EXPOSES an
-		// invalidation primitive (a cache adapter's Invalidate method
-		// is the receiver, not a caller).
 		modDir := filepath.Join(root, mod)
 		walkGoFiles(t, modDir, false, func(path string, src []byte) {
 			slash := pathToSlash(path)
@@ -317,9 +226,7 @@ func TestArch_CacheInvalidationPairedWithEvent(t *testing.T) {
 	}
 }
 
-// lineNumberAt returns the 1-indexed line number for the byte
-// offset `off` in src. Used by cache tests to attribute marker
-// opt-outs to the same line as the cache call.
+// lineNumberAt returns the 1-indexed line number for byte offset off in src.
 func lineNumberAt(src string, off int) int {
 	if off > len(src) {
 		off = len(src)
@@ -327,9 +234,7 @@ func lineNumberAt(src string, off int) int {
 	return strings.Count(src[:off], "\n") + 1
 }
 
-// hasOptOutNearby checks whether the line at `line` (1-indexed) in
-// src OR the immediately preceding line contains the supplied
-// directive substring.
+// hasOptOutNearby reports whether line or the preceding line contains directive.
 func hasOptOutNearby(src string, line int, directive string) bool {
 	return strings.Contains(readLine(src, line), directive) ||
 		strings.Contains(readLine(src, line-1), directive)

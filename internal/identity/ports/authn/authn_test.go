@@ -15,9 +15,8 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/ports/authn"
 )
 
-// fakeVerifier is a minimal authn.Verifier for middleware tests.
-// Production wires *jwt.Issuer; tests substitute this so they don't
-// need to mint real HMAC-signed tokens.
+// fakeVerifier is a minimal authn.Verifier so tests avoid minting real
+// HMAC-signed tokens (production wires *jwt.Issuer).
 type fakeVerifier struct {
 	wantToken string
 	claims    *jwt.Claims
@@ -34,23 +33,16 @@ func (f *fakeVerifier) Verify(token string) (*jwt.Claims, error) {
 	return f.claims, nil
 }
 
-// alwaysFresh satisfies [authn.StampValidator] by reporting every
-// stamp as fresh. Used by the perm/tenant-context/platform tests
-// here that focus on authorization branches; freshness behaviour is
-// covered exhaustively in security_stamp_test.go.
+// alwaysFresh reports every stamp fresh — for the authz-branch tests here;
+// freshness itself is covered in security_stamp_test.go.
 type alwaysFresh struct{}
 
 func (alwaysFresh) IsFresh(_ context.Context, _, _ string) (bool, error) {
 	return true, nil
 }
 
-// withFreshness fills in Subject + SecurityStamp on a Claims literal
-// when the test focuses on a NON-freshness branch (permission /
-// tenant-context / platform). RequireFreshStamp guards against empty
-// Subject or SecurityStamp before consulting the validator (defense-
-// in-depth against claim-stripping); this helper supplies non-empty
-// placeholders so those guards don't fire and the test-under-attention
-// reaches its assertion.
+// withFreshness fills Subject + SecurityStamp so RequireFreshStamp's empty-claim
+// guards don't fire, letting non-freshness branch tests reach their assertion.
 func withFreshness(c *jwt.Claims) *jwt.Claims {
 	if c.Subject == "" {
 		c.Subject = "01999999-aaaa-7000-8000-aaaaaaaaaaaa"
@@ -61,9 +53,8 @@ func withFreshness(c *jwt.Claims) *jwt.Claims {
 	return c
 }
 
-// next is the protected handler — records that it was reached and lets
-// tests inspect the claims attached to ctx via authn.ClaimsFromContext
-// AND the tenant ID bound to ctx via tenancy.FromContext.
+// sentinel is the protected handler: records that it ran plus the claims and
+// tenant ID bound to ctx, so tests can assert what the middleware propagated.
 type sentinel struct {
 	called   bool
 	claims   *jwt.Claims
@@ -176,10 +167,8 @@ func TestRequireAuth_ValidToken_PopulatesClaimsAndCallsNext(t *testing.T) {
 }
 
 func TestRequireAuth_BindsTenantContextFromClaim(t *testing.T) {
-	// Per multi-tenancy.md: every authenticated request MUST have
-	// tenant ctx bound so downstream repos under TxScopeTenant can
-	// resolve `app.tenant_id` GUC. RequireAuth bridges JWT claim
-	// tenant_id → tenancy.WithID(ctx) so handlers don't have to.
+	// multi-tenancy.md: RequireAuth bridges the tenant_id claim into ctx so
+	// downstream repos under TxScopeTenant can resolve the app.tenant_id GUC.
 	t.Parallel()
 	const wantTenant = "019dfe62-d263-7a20-b7de-08df2621c8eb"
 	v := &fakeVerifier{
@@ -202,15 +191,12 @@ func TestRequireAuth_BindsTenantContextFromClaim(t *testing.T) {
 }
 
 func TestRequireAuth_EmptyTenantIDClaim_Returns401(t *testing.T) {
-	// A token with empty tenant_id is a JWT-issuance bug — every
-	// production-issued token populates tenant_id. Treat as
-	// unauthenticated rather than letting the request reach a
-	// handler with an unbound tenant ctx (would fail opaquely at
-	// the repo layer when TxScopeTenant tried to set the GUC).
+	// Empty tenant_id is an issuance bug; fail closed rather than let it fail
+	// opaquely at the repo layer when TxScopeTenant sets the GUC.
 	t.Parallel()
 	cases := []struct {
-		name      string
-		tenantID  string
+		name     string
+		tenantID string
 	}{
 		{"empty", ""},
 		{"whitespace only", "   "},
@@ -271,7 +257,7 @@ func TestRequirePermission_ClaimsLackPermission_Returns403(t *testing.T) {
 		wantToken: "tok",
 		claims: withFreshness(&jwt.Claims{
 			TenantID:    "tenant-test",
-			Permissions: []string{permission.IdentityPermissions.Users.View}, // wrong perm
+			Permissions: []string{permission.IdentityPermissions.Users.View}, // not Roles.View
 		}),
 	}
 	s := &sentinel{}
@@ -321,7 +307,7 @@ func TestRequirePermission_SuperUser_BypassesCheck(t *testing.T) {
 		claims: withFreshness(&jwt.Claims{
 			TenantID:    "tenant-test",
 			IsSuperUser: true,
-			// Empty permissions on purpose: SuperUser short-circuits.
+			// nil perms: SuperUser short-circuits the check.
 			Permissions: nil,
 		}),
 	}
@@ -435,8 +421,7 @@ func TestRequireAnyPermission_PanicsOnEmptyList(t *testing.T) {
 
 func TestRequirePlatform_TokenIsPlatform_Returns200(t *testing.T) {
 	t.Parallel()
-	// Slug-anchor + IsPlatform flag together — defense-in-depth check
-	// per migration 20260507000008.
+	// Slug anchor + IsPlatform flag together (migration 20260507000008).
 	v := &fakeVerifier{
 		wantToken: "tok",
 		claims: withFreshness(&jwt.Claims{
@@ -455,8 +440,7 @@ func TestRequirePlatform_TokenIsPlatform_Returns200(t *testing.T) {
 }
 
 func TestRequirePlatform_IsPlatformWithoutSlug_Returns403(t *testing.T) {
-	// Spoofed/bug case: JWT carries is_platform=true but tenant_slug
-	// is NOT 'platform'. Slug anchor catches it — defense-in-depth.
+	// is_platform=true but tenant_slug != platform: the slug anchor rejects it.
 	t.Parallel()
 	v := &fakeVerifier{
 		wantToken: "tok",

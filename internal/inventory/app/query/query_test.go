@@ -157,8 +157,8 @@ func TestGetProductHandler_HappyPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Handle: %v", err)
 	}
-	if got.ID() != p.ID() {
-		t.Fatalf("id mismatch")
+	if got.ID != p.ID().String() {
+		t.Fatalf("id mismatch: got %q want %q", got.ID, p.ID().String())
 	}
 }
 

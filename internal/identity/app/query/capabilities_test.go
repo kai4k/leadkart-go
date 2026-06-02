@@ -23,8 +23,7 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
 
-// newHybridCacheForTest wires a miniredis-backed HybridCache for the
-// cached-capabilities handler tests.
+// newHybridCacheForTest returns a miniredis-backed HybridCache for handler tests.
 func newHybridCacheForTest(t *testing.T) *cache.HybridCache {
 	t.Helper()
 	store := miniredis.RunT(t)
@@ -234,8 +233,7 @@ func TestGetCapabilities_HappyPath_ProjectsAllFields(t *testing.T) {
 	}
 }
 
-// rolesErrRepo wraps the fake to surface a controlled error on
-// GetByIDs — covers the `roles.GetByIDs` error branch of the handler.
+// rolesErrRepo injects a controlled error on GetByIDs.
 type rolesErrRepo struct {
 	role.Repository
 	err error

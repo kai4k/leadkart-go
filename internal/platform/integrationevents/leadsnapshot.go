@@ -2,15 +2,12 @@ package integrationevents
 
 import "github.com/leadkart/leadkart-go/internal/platform/domain/leadform"
 
-// LeadSnapshot is the BRD §5 lead-form payload carried by LeadPurchasedV1
-// + LeadVerifiedV1. Plain struct of primitives — per `messaging.md`
-// "Composition, not inheritance": no domain VOs, no nested aggregates.
-// CRM (the LeadPurchasedV1 consumer) builds its CrmLead aggregate from
-// this snapshot WITHOUT calling back to Platform (Udi Dahan event
-// autonomy rule).
+// LeadSnapshot is the BRD §5 lead-form payload carried by LeadPurchasedV1 and
+// LeadVerifiedV1. Plain primitives only — no domain VOs, no nested aggregates
+// (messaging.md "Composition, not inheritance"). CRM builds its CrmLead from
+// this snapshot without calling back to Platform (Udi Dahan autonomy).
 //
-// Field shapes mirror the frozen contract in CLAUDE.md slice-1 brief
-// (do NOT change without coordinating a V2 rename per `messaging.md`
+// Field shapes are frozen: do not change without a V2 rename (messaging.md
 // "Event versioning").
 type LeadSnapshot struct {
 	ContactName    string   `json:"contact_name"`
@@ -23,23 +20,22 @@ type LeadSnapshot struct {
 	Street         string   `json:"street"`
 	HasDrugLicence bool     `json:"has_drug_licence"`
 	HasGst         bool     `json:"has_gst"`
-	GstNumber      string   `json:"gst_number"`   // empty when HasGst=false
+	GstNumber      string   `json:"gst_number"` // empty when HasGst=false
 	HasPan         bool     `json:"has_pan"`
-	PanNumber      string   `json:"pan_number"`   // empty when HasPan=false
+	PanNumber      string   `json:"pan_number"`      // empty when HasPan=false
 	BusinessType   string   `json:"business_type"`   // "PCD" | "ThirdParty"
 	MedicineSystem string   `json:"medicine_system"` // "Allopathic" | "Ayurvedic"
 	ProductRanges  []string `json:"product_ranges"`
 	DosageForms    []string `json:"dosage_forms"`
-	OrderValue     string   `json:"order_value"`     // "Below5000" | "Upto25000" | "Upto50000" | "Above50000"
-	BuyTimeline    string   `json:"buy_timeline"`    // "WithinWeek" | "Within15Days" | "WithinMonth"
+	OrderValue     string   `json:"order_value"`  // "Below5000" | "Upto25000" | "Upto50000" | "Above50000"
+	BuyTimeline    string   `json:"buy_timeline"` // "WithinWeek" | "Within15Days" | "WithinMonth"
 }
 
-// SnapshotFromForm builds a wire-stable LeadSnapshot from the domain
-// VO. Used by handlers that emit LeadVerifiedV1 / LeadPurchasedV1.
+// SnapshotFromForm builds a wire-stable LeadSnapshot from the domain VO, for
+// handlers emitting LeadVerifiedV1 / LeadPurchasedV1.
 //
-// Lives here (not in the leadform package) because LeadSnapshot is the
-// wire contract — the inverse direction (LeadSnapshot → Form, used by
-// CRM's consumer) would also live in the consumer side's mapper.
+// Lives here, not in leadform, because LeadSnapshot is the wire contract; the
+// inverse (LeadSnapshot → Form) belongs to the consumer side's mapper.
 func SnapshotFromForm(f leadform.Form) LeadSnapshot {
 	return LeadSnapshot{
 		ContactName:    f.ContactName(),

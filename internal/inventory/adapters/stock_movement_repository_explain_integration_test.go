@@ -32,18 +32,10 @@ import (
 	"github.com/leadkart/leadkart-go/internal/inventory/domain/stockmovement"
 )
 
-// TestKeysetStockMovementsPage_UsesIndexUnderRLS mirrors the identity
-// keyset EXPLAIN gate (per ADR 0038) for inventory.stock_movements.
-//
-// Asserts the per-batch ledger keyset query plans as an Index Scan
-// against idx_movements_batch_keyset declared in migration
-// 20260603000001 as `(batch_id, occurred_at DESC, id DESC)` — matching
-// the query's `WHERE batch_id = $1 ORDER BY occurred_at DESC, id DESC`
-// keyset shape.
-//
-// Append-only ledger — the seed loop appends Inbound movements (positive
-// quantity, ApplyMovement on the parent batch each turn) so the planner
-// sees enough rows that index lookup beats Seq Scan.
+// TestKeysetStockMovementsPage_UsesIndexUnderRLS asserts the per-batch
+// keyset query plans as an Index Scan against idx_movements_batch_keyset
+// (batch_id, occurred_at DESC, id DESC) — ADR 0038 + migration 20260603000001.
+// Seeds 200 inbound movements so the planner has enough rows to prefer the index.
 func TestKeysetStockMovementsPage_UsesIndexUnderRLS(t *testing.T) {
 	t.Parallel()
 	pool := repoFixture(t)
@@ -87,12 +79,10 @@ func TestKeysetStockMovementsPage_UsesIndexUnderRLS(t *testing.T) {
 
 	const seedCount = 200
 	for i := range seedCount {
-		// Tick occurred_at so each row has a distinct (occurred_at, id)
-		// — keeps the keyset index discriminating, mirrors prod traffic.
+		// Distinct occurred_at per row keeps the keyset index discriminating.
 		occurredAt := fixedNow.Add(time.Duration(i) * time.Second)
 		err := tx.WithinTx(ctx, pg.TxScopeTenant, func(ctx context.Context) error {
-			// Reload batch + apply movement under one tx so the version
-			// check + outbox write stay consistent.
+			// Reload + apply under one tx: version check and outbox write stay consistent.
 			return batches.UpdateByID(ctx, tid, b.ID(), func(bb *batch.Batch) (bool, error) {
 				if err := bb.ApplyMovement(batch.MovementInbound, 1, occurredAt); err != nil {
 					return false, err
@@ -135,8 +125,7 @@ func TestKeysetStockMovementsPage_UsesIndexUnderRLS(t *testing.T) {
 
 	rlstest.SetSessionTenantPersistent(t, ctx, conn.Conn(), tid.String())
 
-	// Same predicate shape as sqlc's ListMovementsByBatchPage. Sentinel
-	// cursor admits every row.
+	// Same predicate shape as sqlc's ListMovementsByBatchPage.
 	const explainSQL = `
 		EXPLAIN (FORMAT JSON, ANALYZE, BUFFERS)
 		SELECT id, batch_id, product_id, tenant_id,

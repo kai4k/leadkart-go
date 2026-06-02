@@ -1,23 +1,20 @@
 package subscribers_test
 
 import (
-	"context"
 	"encoding/json"
 	"io"
 	"log/slog"
-	"sync"
 	"testing"
 	"time"
 
-	"github.com/ThreeDotsLabs/watermill/message"
 	"github.com/google/uuid"
 
-	"github.com/leadkart/leadkart-go/internal/common/messaging"
-	"github.com/leadkart/leadkart-go/internal/common/pagination"
 	"github.com/leadkart/leadkart-go/internal/crm/app/command"
 	"github.com/leadkart/leadkart-go/internal/crm/domain/crmlead"
+	"github.com/leadkart/leadkart-go/internal/crm/domain/crmlead/crmleadtest"
 	"github.com/leadkart/leadkart-go/internal/crm/ports/subscribers"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
+	platformevents "github.com/leadkart/leadkart-go/internal/platform/integrationevents"
 )
 
 // silentLog returns a no-output *slog.Logger for tests — required by
@@ -26,88 +23,20 @@ func silentLog() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
 
-// fakeLeads is a minimal crmlead.Repository for the subscriber tests.
-// Only the methods the command path touches are implemented.
-type fakeLeads struct {
-	mu          sync.Mutex
-	byID        map[crmlead.ID]*crmlead.CrmLead
-	byPurchase  map[string]crmlead.ID
-}
+// Subscriber tests use the canonical co-located crmleadtest.FakeRepository
+// (per-aggregate fake mandate) rather than a hand-rolled local fake — the
+// faithful fake errors on a source_purchase_id collision, so a regression
+// that broke the handler's at-most-once short-circuit would surface here.
 
-func newFakeLeads() *fakeLeads {
-	return &fakeLeads{
-		byID:       map[crmlead.ID]*crmlead.CrmLead{},
-		byPurchase: map[string]crmlead.ID{},
-	}
-}
-
-func (r *fakeLeads) Add(_ context.Context, l *crmlead.CrmLead) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if l.SourcePurchaseID() != "" {
-		r.byPurchase[l.SourcePurchaseID()] = l.ID()
-	}
-	r.byID[l.ID()] = l
-	_ = l.PullEvents()
-	return nil
-}
-
-func (r *fakeLeads) GetByID(_ context.Context, tenantID tenant.ID, id crmlead.ID) (*crmlead.CrmLead, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	l, ok := r.byID[id]
-	if !ok {
-		return nil, crmlead.ErrNotFound
-	}
-	if l.TenantID() != tenantID {
-		return nil, crmlead.ErrNotFound
-	}
-	return l, nil
-}
-
-func (r *fakeLeads) GetBySourcePurchaseID(_ context.Context, tenantID tenant.ID, p string) (*crmlead.CrmLead, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	id, ok := r.byPurchase[p]
-	if !ok {
-		return nil, crmlead.ErrNotFound
-	}
-	l := r.byID[id]
-	if l == nil || l.TenantID() != tenantID {
-		return nil, crmlead.ErrNotFound
-	}
-	return l, nil
-}
-
-func (r *fakeLeads) UpdateByID(_ context.Context, _ tenant.ID, _ crmlead.ID, _ func(*crmlead.CrmLead) (bool, error)) error {
-	return nil
-}
-
-func (r *fakeLeads) ListPage(_ context.Context, _ tenant.ID, _ crmlead.ListFilter, _ pagination.Cursor, _ int) (pagination.Page[*crmlead.CrmLead], error) {
-	return pagination.Page[*crmlead.CrmLead]{}, nil
-}
-
-func buildEnvelope(t *testing.T, evt subscribers.LeadPurchasedV1) *message.Message {
-	t.Helper()
-	body, err := json.Marshal(evt)
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
-	}
-	msg := message.NewMessage(uuid.NewString(), body)
-	msg.Metadata.Set(messaging.HeaderEventType, subscribers.LeadPurchasedTopic)
-	msg.Metadata.Set(messaging.HeaderTenantID, evt.TenantID)
-	return msg
-}
-
-func validEvent(tenantID string, purchase string) subscribers.LeadPurchasedV1 {
-	return subscribers.LeadPurchasedV1{
+func validEvent(tenantID string, purchase string) platformevents.LeadPurchasedV1 {
+	return platformevents.LeadPurchasedV1{
 		PurchaseID:              purchase,
 		TenantID:                tenantID,
 		PlatformLeadID:          uuid.NewString(),
 		PurchasedAt:             time.Now().UTC(), // arch-test:wall-clock -- wire-envelope fixture; subscriber doesn't pin timestamps.
 		PurchasedByMembershipID: uuid.NewString(),
 		AmountPaisa:             50000,
-		LeadSnapshot: subscribers.LeadSnapshotV1{
+		LeadSnapshot: platformevents.LeadSnapshot{
 			ContactName:    "Test Pharma",
 			MobileE164:     "+919812345678",
 			Email:          "x@example.com",
@@ -125,13 +54,18 @@ func validEvent(tenantID string, purchase string) subscribers.LeadPurchasedV1 {
 	}
 }
 
+// Post-cqrs (ADR 0067): the handler receives the already-decoded typed
+// event; topic routing + payload decode are the EventProcessor's job, so
+// the old wrong-topic + malformed-payload unit cases are gone.
+
 func TestPurchasedLeadIngestor_HappyPath(t *testing.T) {
 	t.Parallel()
-	leads := newFakeLeads()
+	leads := crmleadtest.NewFakeRepository()
 	h := subscribers.NewPurchasedLeadIngestor(command.NewIngestPurchasedLeadHandler(leads, time.Now, func() crmlead.ID { return crmlead.ID(uuid.NewString()) }), silentLog())
 	tenantID := uuid.NewString()
 	purchase := uuid.NewString()
-	if err := h.Handle(t.Context(), "", buildEnvelope(t, validEvent(tenantID, purchase))); err != nil {
+	evt := validEvent(tenantID, purchase)
+	if err := h.Handle(t.Context(), &evt); err != nil {
 		t.Fatalf("Handle: %v", err)
 	}
 	got, err := leads.GetBySourcePurchaseID(t.Context(), tenant.ID(tenantID), purchase)
@@ -145,46 +79,21 @@ func TestPurchasedLeadIngestor_HappyPath(t *testing.T) {
 
 func TestPurchasedLeadIngestor_IdempotentOnReplay(t *testing.T) {
 	t.Parallel()
-	leads := newFakeLeads()
+	leads := crmleadtest.NewFakeRepository()
 	h := subscribers.NewPurchasedLeadIngestor(command.NewIngestPurchasedLeadHandler(leads, time.Now, func() crmlead.ID { return crmlead.ID(uuid.NewString()) }), silentLog())
 	tenantID := uuid.NewString()
 	purchase := uuid.NewString()
-	env := buildEnvelope(t, validEvent(tenantID, purchase))
+	evt := validEvent(tenantID, purchase)
 
-	if err := h.Handle(t.Context(), "", env); err != nil {
+	if err := h.Handle(t.Context(), &evt); err != nil {
 		t.Fatalf("first: %v", err)
 	}
-	if err := h.Handle(t.Context(), "", env); err != nil {
+	if err := h.Handle(t.Context(), &evt); err != nil {
 		t.Fatalf("replay: %v", err)
 	}
 	// Still ONE lead.
-	if len(leads.byPurchase) != 1 {
-		t.Fatalf("byPurchase entries: %d", len(leads.byPurchase))
-	}
-}
-
-func TestPurchasedLeadIngestor_WrongTopicShortCircuits(t *testing.T) {
-	t.Parallel()
-	leads := newFakeLeads()
-	h := subscribers.NewPurchasedLeadIngestor(command.NewIngestPurchasedLeadHandler(leads, time.Now, func() crmlead.ID { return crmlead.ID(uuid.NewString()) }), silentLog())
-	msg := buildEnvelope(t, validEvent(uuid.NewString(), uuid.NewString()))
-	msg.Metadata.Set(messaging.HeaderEventType, "platform.unrelated.v1")
-	if err := h.Handle(t.Context(), "", msg); err != nil {
-		t.Fatalf("Handle wrong topic: %v", err)
-	}
-	if len(leads.byPurchase) != 0 {
-		t.Fatal("short-circuit failed: a lead was ingested for a non-matching topic")
-	}
-}
-
-func TestPurchasedLeadIngestor_MalformedPayloadErrors(t *testing.T) {
-	t.Parallel()
-	leads := newFakeLeads()
-	h := subscribers.NewPurchasedLeadIngestor(command.NewIngestPurchasedLeadHandler(leads, time.Now, func() crmlead.ID { return crmlead.ID(uuid.NewString()) }), silentLog())
-	msg := message.NewMessage(uuid.NewString(), []byte("{not json"))
-	msg.Metadata.Set(messaging.HeaderEventType, subscribers.LeadPurchasedTopic)
-	if err := h.Handle(t.Context(), "", msg); err == nil {
-		t.Fatal("want decode error")
+	if len(leads.ByPurchase) != 1 {
+		t.Fatalf("ByPurchase entries: %d", len(leads.ByPurchase))
 	}
 }
 
@@ -237,14 +146,11 @@ func TestLeadPurchasedV1_FrozenWireContract(t *testing.T) {
 		`"buy_timeline":"WithinWeek"` +
 		`}}`
 
-	var got subscribers.LeadPurchasedV1
+	var got platformevents.LeadPurchasedV1
 	if err := json.Unmarshal([]byte(canonical), &got); err != nil {
 		t.Fatalf("decode canonical: %v", err)
 	}
 
-	// Pin specific field types — TenantID MUST be a string with the
-	// exact value, NOT a parsed-then-restringified uuid (which would
-	// drop hyphenless input, normalise case, etc).
 	if got.TenantID != "7f7b0e6a-3c52-4f25-9c1d-7e8f44b1c001" {
 		t.Fatalf("TenantID drift: got %q", got.TenantID)
 	}
@@ -255,8 +161,6 @@ func TestLeadPurchasedV1_FrozenWireContract(t *testing.T) {
 		t.Fatalf("AmountPaisa drift: got %d", got.AmountPaisa)
 	}
 
-	// Round-trip MUST be byte-equal to the canonical payload. If
-	// anyone changes a field type or json tag, this fails loudly.
 	out, err := json.Marshal(got)
 	if err != nil {
 		t.Fatalf("re-encode: %v", err)

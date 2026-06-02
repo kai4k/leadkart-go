@@ -12,28 +12,21 @@ import (
 
 // ----- GetTenantQuery -------------------------------------------------------
 
-// GetTenantQuery returns the full Tenant view for the supplied ID.
-// HTTP layer enforces the same-tenant-or-platform gate before
-// dispatching; the query handler trusts that the caller is authorised.
+// GetTenantQuery returns the full Tenant view by ID.
+// HTTP layer enforces same-tenant-or-platform gate; handler trusts the caller.
 type GetTenantQuery struct {
 	TenantID tenant.ID
 }
 
-// TenantView is the wire-shape of a Tenant for read endpoints. Mirrors
-// the .NET LeadKart `TenantDto` — profile + statutory + contact +
-// settings + display preferences + status + lifecycle timestamps.
-//
-// Empty/zero fields surface as JSON nulls or defaults; the wire shape
-// stays stable regardless of which fields the tenant has populated.
+// TenantView is the wire-shape of a Tenant for read endpoints.
+// Zero fields surface as JSON nulls; shape is stable regardless of which VOs are set.
 type TenantView struct {
 	ID          string
 	Slug        string
 	LegalName   string
 	DisplayName string
-	// AdminEmail removed in migration 20260507000008 — current admin
-	// is derived via the CompanyOwner-role membership. Use the
-	// ListUsers / GetMembership query path to retrieve the current
-	// admin Person + their email.
+	// AdminEmail removed in migration 20260507000008; derive admin via
+	// CompanyOwner-role membership (ListUsers / GetMembership path).
 	Status              string
 	CreatedAt           time.Time
 	ActivatedAt         time.Time
@@ -41,15 +34,14 @@ type TenantView struct {
 	DeletionScheduledAt time.Time
 	DeletionReason      string
 
-	// Statutory — Indian compliance IDs (each may be empty until
-	// declared by the tenant).
-	GSTNumber       string
-	PANNumber       string
+	// Statutory — Indian compliance IDs (empty until declared).
+	GSTNumber         string
+	PANNumber         string
 	DrugLicenceNumber string
 
-	// AdminContact — phone + postal address (each may be empty).
-	AdminPhone     string
-	AdminAddress   AdminAddressView
+	// AdminContact — phone + postal address (may be empty).
+	AdminPhone   string
+	AdminAddress AdminAddressView
 
 	// Settings — operational policy.
 	PasswordPolicy PasswordPolicyView
@@ -61,9 +53,7 @@ type TenantView struct {
 	Currency   string
 }
 
-// AdminAddressView is the postal-address slice of TenantView. Mirrors
-// the [postaladdress.Address] VO accessors — Indian-style street +
-// city + district + state + state-code + pincode.
+// AdminAddressView is the postal-address projection in TenantView.
 type AdminAddressView struct {
 	Street    string
 	City      string
@@ -112,19 +102,10 @@ func (h GetTenantHandler) Handle(ctx context.Context, q GetTenantQuery) (TenantV
 
 // ----- GetTenantBySlugQuery -------------------------------------------------
 
-// GetTenantBySlugQuery returns the full Tenant view for the supplied
-// slug. Per ADR 0044 (enumeration safety): the AUTHZ gate is the
-// caller's responsibility — this handler returns the tenant whenever
-// the slug resolves; the HTTP layer compares the resolved tenant.ID
-// against the caller's JWT.tenant_id and emits the enumeration-safe
-// 404 on mismatch (NOT 403).
-//
-// Rationale: slugs are human-readable + low-entropy ("acme-pharma" is
-// guessable; UUIDs are not). The 403-vs-404 distinction matters only
-// when the identifier is guessable — for UUIDs, both are safe; for
-// slugs, only 404 prevents enumeration. The query handler stays
-// scope-agnostic so the same handler serves both tenant-admin (with
-// authz check) and platform-operator (no check) paths.
+// GetTenantBySlugQuery returns the full Tenant view by slug.
+// Authz is the caller's responsibility (ADR 0044 enumeration safety):
+// HTTP layer emits 404 (not 403) on tenant-ID mismatch so guessable
+// slugs don't leak existence. Handler is scope-agnostic.
 type GetTenantBySlugQuery struct {
 	Slug slug.Slug
 }
@@ -144,13 +125,7 @@ func NewGetTenantBySlugHandler(tenants tenant.Repository) GetTenantBySlugHandler
 }
 
 // Handle returns the TenantView for the slug or [tenant.ErrNotFound].
-// Runs under platform scope (the tenants table is non-RLS; slug
-// uniqueness is enforced by the partial unique index uq_tenants_slug).
-//
-// The slug VO is already validated at construction; this handler does
-// not re-validate. Empty slug returns an error (defensive — shouldn't
-// happen if HTTP boundary validated, but guards against future
-// internal callers).
+// Defends against an empty slug (belt-and-braces; HTTP boundary validates first).
 func (h GetTenantBySlugHandler) Handle(ctx context.Context, q GetTenantBySlugQuery) (TenantView, error) {
 	if q.Slug.String() == "" {
 		return TenantView{}, errors.New("get_tenant_by_slug: slug required")

@@ -15,17 +15,15 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
 
-// fakeAuditReader is an inline minimal [audit.Reader]. The handler
-// queries are simple delegations; the fake records the args + returns
-// canned entries or an error. Per the task brief — inline minimal
-// fakes for the consumer-defined interface (no shared fake package).
+// fakeAuditReader is an inline minimal [audit.Reader] that records args
+// and returns canned entries or errors.
 type fakeAuditReader struct {
-	tenantArgs      []readerArgs
-	userArgs        []readerArgs
-	tenantEntries   []audit.Entry
-	userEntries     []audit.Entry
-	tenantErr       error
-	userErr         error
+	tenantArgs    []readerArgs
+	userArgs      []readerArgs
+	tenantEntries []audit.Entry
+	userEntries   []audit.Entry
+	tenantErr     error
+	userErr       error
 }
 
 type readerArgs struct {
@@ -53,10 +51,7 @@ func (f *fakeAuditReader) ListByUser(_ context.Context, uID uuid.UUID, before ti
 
 var _ audit.Reader = (*fakeAuditReader)(nil)
 
-// auditTenantUUID is a parseable UUID for tenant-scoped tests.
 const auditTenantUUID = "11111111-1111-1111-1111-111111111111"
-
-// auditUserUUID is a parseable UUID for user-scoped tests.
 const auditUserUUID = "22222222-2222-2222-2222-222222222222"
 
 // ----- ListAuditEventsByTenantHandler --------------------------------------

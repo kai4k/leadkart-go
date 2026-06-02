@@ -10,10 +10,9 @@ import (
 // Event is the sealed marker every domain event satisfies.
 type Event interface{ isQuotationEvent() }
 
-// CreatedEvent fires on ctor. Carries the row IDs + line-item count
-// (the items themselves ride the wire integration event only). Counts
-// are int64 to sidestep G115 (int → int32 narrowing) — len(itemsCopy)
-// is platform-int, narrowing is gratuitous.
+// CreatedEvent fires on ctor. Carries row IDs + line-item count only;
+// items ride the wire integration event. Counts are int64 to sidestep
+// G115 narrowing on platform-int len().
 type CreatedEvent struct {
 	QuotationID           ID
 	TenantID              tenant.ID
@@ -38,9 +37,8 @@ type RevisedEvent struct {
 
 func (RevisedEvent) isQuotationEvent() {}
 
-// ApprovedEvent fires on Approve. Carries the locked-in revision
-// number so the Order side knows exactly which items snapshot was
-// frozen.
+// ApprovedEvent fires on Approve. Carries the frozen revision number so
+// the Order side knows which items snapshot was locked in.
 type ApprovedEvent struct {
 	QuotationID            ID
 	TenantID               tenant.ID

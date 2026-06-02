@@ -1,6 +1,8 @@
 package command_test
 
 import (
+	"context"
+	"errors"
 	"testing"
 
 	"github.com/leadkart/leadkart-go/internal/common/ids"
@@ -9,14 +11,27 @@ import (
 	"github.com/leadkart/leadkart-go/internal/platform/platformtest"
 )
 
-// TestCreateUnverifiedContact_PersistsAndDrainsCreatedEvent — happy
-// path for the Lead Agent "register a new raw contact" use case.
-// Asserts the contact lands in the repository AND the CreatedEvent is
-// drained off the aggregate (the outbox writer translates it into
-// UnverifiedContactCreatedV1 at adapter time — covered by adapter
-// integration tests).
-//
-// C2 — review-pass: this handler had zero coverage prior.
+// failingContactRepo's Add always errors — to assert the handler wraps
+// (rather than swallows) a repository failure. Add is the only method the
+// happy path touches; the others panic if hit.
+type failingContactRepo struct{ err error }
+
+func (r failingContactRepo) Add(context.Context, *unverifiedcontact.UnverifiedContact) error {
+	return r.err
+}
+
+func (failingContactRepo) UpdateByID(context.Context, unverifiedcontact.ID, func(*unverifiedcontact.UnverifiedContact) (bool, error)) error {
+	panic("not used")
+}
+
+func (failingContactRepo) GetByID(context.Context, unverifiedcontact.ID) (*unverifiedcontact.UnverifiedContact, error) {
+	panic("not used")
+}
+
+// TestCreateUnverifiedContact_PersistsAndDrainsCreatedEvent: contact
+// lands in the repo and the CreatedEvent drains off the aggregate (the
+// outbox writer maps it to UnverifiedContactCreatedV1 — adapter tests).
+// C2 — review-pass.
 func TestCreateUnverifiedContact_PersistsAndDrainsCreatedEvent(t *testing.T) {
 	t.Parallel()
 
@@ -50,9 +65,8 @@ func TestCreateUnverifiedContact_PersistsAndDrainsCreatedEvent(t *testing.T) {
 		t.Errorf("form not round-tripped: %q", got.Form().MobileE164())
 	}
 
-	// CreatedEvent drained from the aggregate by Add. The mechanical
-	// mapper translates this to UnverifiedContactCreatedV1 (covered
-	// by integrationevents arch tests).
+	// Add drains the CreatedEvent; the mapper turns it into
+	// UnverifiedContactCreatedV1 (integrationevents arch tests).
 	if len(contacts.DrainedEvents) != 1 {
 		t.Fatalf("expected 1 drained event, got %d", len(contacts.DrainedEvents))
 	}
@@ -61,18 +75,19 @@ func TestCreateUnverifiedContact_PersistsAndDrainsCreatedEvent(t *testing.T) {
 	}
 }
 
-// TestCreateUnverifiedContact_RepositoryErrorBubbles — handler MUST
-// surface repo failures rather than silently swallow. Production
-// repository surfaces pgx-shaped errors; handler wraps without
-// changing the underlying error chain.
+// TestCreateUnverifiedContact_RepositoryErrorBubbles: the handler must wrap,
+// not swallow, a repository failure.
 func TestCreateUnverifiedContact_RepositoryErrorBubbles(t *testing.T) {
 	t.Parallel()
 
-	// We don't have a "broken repo" fake; the surface area here is
-	// limited to the happy-path + the wrapping shape. The handler's
-	// `if err != nil { return fmt.Errorf(...) }` shape is covered
-	// by the wider integration suite. This stub-test pins the
-	// constructor signature.
-	h := command.NewCreateUnverifiedContactHandler(platformtest.NewFakeUnverifiedContactRepository(), nowFunc, func() unverifiedcontact.ID { return unverifiedcontact.ID(ids.NewV7().String()) })
-	_ = h
+	wantErr := errors.New("db down")
+	h := command.NewCreateUnverifiedContactHandler(failingContactRepo{err: wantErr}, nowFunc, func() unverifiedcontact.ID { return unverifiedcontact.ID(ids.NewV7().String()) })
+
+	_, err := h.Handle(t.Context(), command.CreateUnverifiedContactCommand{
+		Form:      sampleForm(t),
+		CreatedBy: unverifiedcontact.MembershipID(ids.NewV7().String()),
+	})
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("err = %v, want wrapped %v", err, wantErr)
+	}
 }

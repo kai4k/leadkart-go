@@ -14,32 +14,21 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
 
-// FromDomainEvent translates ANY recognised domain event into its
-// canonical integration event. Used by [drainXEvents] in repository
-// adapters: domain events emitted by aggregates flow through this
-// function before they hit the outbox table.
+// FromDomainEvent translates a recognised domain event into its canonical
+// integration event. Called by repository adapters before writing to the
+// outbox. Returns [ErrUnknownDomainEvent] for unrecognised types.
 //
-// Returns ErrUnknown for events the mapper hasn't been taught about
-// — surfaces in CI as a clear "you minted a domain event but never
-// wired the integration counterpart" failure.
-//
-//nolint:cyclop // Switch dispatcher — one case per recognised domain
-// event. Cyclomatic complexity scales with catalogue size by
-// definition; refactoring into a registry map costs more than it pays.
+//nolint:cyclop // Switch dispatcher — one case per recognised domain event. Cyclomatic complexity scales with catalogue size by definition; refactoring into a registry map costs more than it pays.
 func FromDomainEvent(d any) (Event, error) {
 	switch e := d.(type) {
 
 	// ----- Tenant -----------------------------------------------------
 
 	case tenant.RegisteredEvent:
-		// AdminPersonID + AdminMembershipID are NOT carried on the
-		// domain event because the Tenant aggregate doesn't own them
-		// — they're created in a sibling aggregate during the
-		// orchestrated RegisterTenant flow. The Application service
-		// emits the integration event directly with the full tuple
-		// after persisting all three aggregates. This mapper handles
-		// the domain-event-only path (Tenant created in isolation,
-		// e.g. test seeds) with zeroed admin fields.
+		// AdminPersonID/AdminMembershipID are absent: the Tenant aggregate
+		// doesn't own them. The app service emits a richer event after
+		// persisting all three aggregates; this path (isolation/seeds)
+		// zeroes the admin fields.
 		return TenantRegisteredV1{
 			TenantID:      mustParseUUID(e.TenantID.String()),
 			Slug:          e.Slug.String(),
@@ -527,20 +516,17 @@ func FromDomainEvent(d any) (Event, error) {
 	return nil, fmt.Errorf("integrationevents: %w: %T", ErrUnknownDomainEvent, d)
 }
 
-// ErrUnknownDomainEvent surfaces when [FromDomainEvent] is handed a
-// type the mapper hasn't been taught. CI surfaces as "you minted a
-// domain event but the integration counterpart isn't wired".
+// ErrUnknownDomainEvent is returned by [FromDomainEvent] for unrecognised
+// domain event types — indicates a missing integration-counterpart wiring.
 var ErrUnknownDomainEvent = unknownErr("unknown domain event type")
 
 type unknownErr string
 
 func (u unknownErr) Error() string { return string(u) }
 
-// mustParseUUID panics on a malformed UUID string. Domain IDs are
-// minted via [ids.NewV7] which produces canonical RFC 9562 UUIDs;
-// a parse failure here means the aggregate constructed an ID via a
-// non-canonical path (programmer error) — fail-fast is the right
-// response per `coding-standards.md` "Result vs exceptions".
+// mustParseUUID panics on a malformed UUID. Domain IDs are minted via
+// ids.NewV7 (RFC 9562); a parse failure means the aggregate used a
+// non-canonical ID path — fail-fast per coding-standards.md.
 func mustParseUUID(s string) uuid.UUID {
 	u, err := uuid.Parse(s)
 	if err != nil {

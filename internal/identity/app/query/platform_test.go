@@ -171,7 +171,7 @@ func TestListPersonMemberships_PersonNotFoundSurfacesErr(t *testing.T) {
 	}
 }
 
-// personsErr2Repo lets a test return a non-ErrNotFound failure on GetByID.
+// personsErr2Repo injects a non-ErrNotFound failure on GetByID.
 type personsErr2Repo struct {
 	person.Repository
 	err error
@@ -192,7 +192,7 @@ func TestListPersonMemberships_PropagatesGenericPersonError(t *testing.T) {
 	}
 }
 
-// membershipsListAllErrRepo lets a test inject failure on ListAllForPerson.
+// membershipsListAllErrRepo injects failure on ListAllForPerson.
 type membershipsListAllErrRepo struct {
 	membership.Repository
 	err error
@@ -231,10 +231,8 @@ func TestListPersonMemberships_HappyPath(t *testing.T) {
 	if err := mems.Add(t.Context(), m1); err != nil {
 		t.Fatal(err)
 	}
-	// m2 is in a different tenant — single Active-per-Person invariant
-	// would refuse, so deactivate m1 first to allow m2 Active. Actually:
-	// the fake's Add rejects a second Active for same Person regardless
-	// of tenant — keep m2 Inactive.
+	// Fake rejects a second Active for the same Person regardless of tenant;
+	// deactivate m2 so Add succeeds.
 	if err := m2.Deactivate("seed for test", testNow); err != nil {
 		t.Fatal(err)
 	}
@@ -269,7 +267,7 @@ func TestNewListAllTenantsHandler_PanicsOnNilRepo(t *testing.T) {
 	_ = query.NewListAllTenantsHandler(nil) // arch-test:ignore-err - test fixture setup
 }
 
-// tenantsErrRepo injects a failure on ListAll.
+// tenantsErrRepo injects failure on ListAll.
 type tenantsErrRepo struct {
 	tenant.Repository
 	err error

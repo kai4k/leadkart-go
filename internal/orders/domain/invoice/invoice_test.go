@@ -35,10 +35,10 @@ func sampleNumber() invoicenumber.Number {
 func sampleNewInput(t *testing.T) invoice.NewInput {
 	t.Helper()
 	return invoice.NewInput{
-		ID:       invoice.ID(ids.NewV7().String()),
-		TenantID: tenant.ID(ids.NewV7().String()),
-		OrderID:  order.ID(ids.NewV7().String()),
-		Number:   sampleNumber(),
+		ID:        invoice.ID(ids.NewV7().String()),
+		TenantID:  tenant.ID(ids.NewV7().String()),
+		OrderID:   order.ID(ids.NewV7().String()),
+		Number:    sampleNumber(),
 		LineItems: []quotation.LineItem{sampleItem()},
 		TaxLines: []invoice.TaxLine{{
 			HSNCode:           "30041020",

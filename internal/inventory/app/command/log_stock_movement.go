@@ -13,17 +13,14 @@ import (
 	"github.com/leadkart/leadkart-go/internal/inventory/domain/stockmovement"
 )
 
-// LogStockMovementCommand is the request payload for the POST
-// /v1/inventory/batches/{id}/movements endpoint.
+// LogStockMovementCommand is the payload for POST
+// /v1/inventory/batches/{id}/movements.
 //
-// Quantity is the MAGNITUDE — caller passes a positive number for
-// Inbound / Outbound / Reservation / Release, and any non-zero for
-// Adjustment. The handler converts to the SIGNED ledger convention
-// before persisting (Outbound becomes negative).
+// Quantity is the magnitude (positive); the handler applies the signed ledger
+// convention before persisting (Outbound becomes negative).
 //
-// TenantID is the caller's tenant scope (injected from JWT context by
-// the HTTP layer). Per ADR 0062 (TDL canon): tenantID flows through
-// explicit command fields, not via context smuggling.
+// TenantID is the caller's tenant scope; per ADR 0062 (TDL canon) it flows
+// through an explicit field, never via context smuggling.
 type LogStockMovementCommand struct {
 	TenantID          tenant.ID
 	BatchID           batch.ID
@@ -34,41 +31,26 @@ type LogStockMovementCommand struct {
 	SourceReference   *string
 }
 
-// LogStockMovementResult carries the new MovementID + the batch's
-// post-mutation quantity_on_hand (handy for SPA optimistic-update
-// reconciliation).
+// LogStockMovementResult carries the new MovementID and the batch's
+// post-mutation quantity_on_hand (for SPA optimistic-update reconciliation).
 type LogStockMovementResult struct {
 	MovementID          stockmovement.ID
 	QuantityOnHandAfter int64
 }
 
-// LogStockMovementHandler — the slice's central orchestration.
+// LogStockMovementHandler is the slice's central orchestration: a
+// multi-aggregate single-tx write (ADR 0008 + Vernon ch.10) that updates the
+// Batch and adds a StockMovement in the same UoW tx, emitting LoggedEvent.
 //
-// Multi-aggregate single-tx write per ADR 0008 + Vernon ch.10:
-//   1. Open UoW tx (TxScopeTenant — RLS-bound to caller's tenant)
-//   2. UpdateByID the Batch — the adapter acquires a pessimistic row
-//      lock (SELECT ... FOR UPDATE) before the load, so concurrent
-//      writers serialize at the DB layer; the in-memory ApplyMovement
-//      then runs against the latest committed state, and the row is
-//      persisted with version-bump as a defense-in-depth signal.
-//   3. Add a new StockMovement row inside the SAME tx (joins via
-//      pg.TxFromContext) — emits LoggedEvent → outbox.
+// No retry loop. Batch UpdateByID takes a pessimistic row lock
+// (SELECT ... FOR UPDATE), so concurrent writers serialise at the DB and
+// batch.ErrConcurrencyConflict is unreachable; ApplyMovement guards always run
+// against the latest committed state. Per Postgres §13.3.2, the Stripe ledger
+// pattern, and DDIA Ch.7, pessimistic locks beat optimistic retries for
+// hot-row counters where contention is the norm.
 //
-// No retry loop: by construction the pessimistic lock makes
-// batch.ErrConcurrencyConflict unreachable in production. Concurrent
-// LogStockMovement calls against the same batch block at the row lock
-// (typical wait < 1ms in the LogStockMovement hot path) and run in a
-// serial-order schedule. ApplyMovement guards (insufficient stock,
-// expired) ALWAYS evaluate against the latest committed state —
-// there is no stale-snapshot path.
-//
-// Canon: Postgres §13.3.2 explicit locking + Stripe ledger pattern +
-// DDIA Ch.7 — pessimistic locks beat optimistic retries for hot-row
-// counters where contention is the norm, not the exception.
-//
-// Idempotency: per ADR 0031, the X-Command-Id middleware catches
-// duplicate requests at the HTTP boundary; this handler does NOT
-// re-check.
+// Idempotency: per ADR 0031 the X-Command-Id middleware dedupes at the HTTP
+// boundary; this handler does not re-check.
 type LogStockMovementHandler struct {
 	uow           pg.UnitOfWork
 	batches       batch.Repository
@@ -77,14 +59,9 @@ type LogStockMovementHandler struct {
 	newMovementID func() stockmovement.ID
 }
 
-// NewLogStockMovementHandler wires the handler. `now` is the explicit
-// time source — composition root passes `time.Now`; tests inject a
-// fixed-time closure for deterministic assertions. Nil → time.Now.
-//
-// newMovementID is the StockMovement-ID factory per the
-// `TestArch_HandlersInjectIDFactory` discipline. Production passes
-// `func() stockmovement.ID { return stockmovement.ID(ids.NewV7().String()) }`;
-// tests inject a deterministic counter so the minted ID is pinnable.
+// NewLogStockMovementHandler wires the handler. now is the injected clock
+// (nil → time.Now). newMovementID is the StockMovement-ID factory required by
+// TestArch_HandlersInjectIDFactory; tests inject a deterministic one.
 func NewLogStockMovementHandler(uow pg.UnitOfWork, batches batch.Repository, movements stockmovement.Repository, now func() time.Time, newMovementID func() stockmovement.ID) LogStockMovementHandler {
 	if newMovementID == nil {
 		panic("command: NewLogStockMovementHandler newMovementID required")
@@ -109,8 +86,7 @@ func (h LogStockMovementHandler) Handle(ctx context.Context, cmd LogStockMovemen
 	if cmd.Quantity == 0 {
 		return LogStockMovementResult{}, fmt.Errorf("%w: quantity must be non-zero", batch.ErrInvalid)
 	}
-	// Magnitude must be positive — caller-supplied negative quantity is
-	// rejected; the handler controls the signed convention.
+	// Magnitude must be positive; the handler owns the sign convention.
 	magnitude := cmd.Quantity
 	if magnitude < 0 {
 		return LogStockMovementResult{}, fmt.Errorf("%w: quantity must be a positive magnitude (got %d)", batch.ErrInvalid, magnitude)
@@ -118,13 +94,11 @@ func (h LogStockMovementHandler) Handle(ctx context.Context, cmd LogStockMovemen
 	return h.persist(ctx, cmd, magnitude, h.now())
 }
 
-// persist runs the multi-aggregate single-tx write inside one UoW.
-// The batch repository's UpdateByID acquires SELECT FOR UPDATE — the
-// concurrency story lives in [BatchRepository.updateOnTx], NOT here.
+// persist runs the multi-aggregate single-tx write. Batch UpdateByID acquires
+// SELECT FOR UPDATE; the concurrency story lives in [BatchRepository.updateOnTx].
 //
-// `now` is the shared instant captured once at the top of Handle so the
-// Batch.ApplyMovement updatedAt + StockMovement.occurredAt line up
-// byte-for-byte in audit / ledger queries.
+// now is captured once in Handle so Batch.ApplyMovement's updatedAt and
+// StockMovement.occurredAt match exactly in audit/ledger queries.
 func (h LogStockMovementHandler) persist(ctx context.Context, cmd LogStockMovementCommand, magnitude int64, now time.Time) (LogStockMovementResult, error) {
 	var result LogStockMovementResult
 	err := h.uow.WithinTx(ctx, pg.TxScopeTenant, func(ctx context.Context) error {
@@ -134,16 +108,15 @@ func (h LogStockMovementHandler) persist(ctx context.Context, cmd LogStockMoveme
 				return false, err
 			}
 			loaded = b
-			// Persist always — ApplyMovement bumps version on every
-			// successful call (including non-mutating Reservation /
-			// Release) so the row write must follow.
+			// Persist always: ApplyMovement bumps version on every
+			// successful call, so the row write must follow.
 			return true, nil
 		})
 		if updateErr != nil {
 			return updateErr
 		}
-		// loaded is the post-ApplyMovement state. Construct the
-		// StockMovement with the SIGNED quantity + new on-hand snapshot.
+		// Construct the StockMovement from the post-ApplyMovement state
+		// with the signed quantity and new on-hand snapshot.
 		signed := signedQuantityForType(cmd.Type, magnitude)
 		m, err := stockmovement.New(h.newMovementID(), stockmovement.Spec{
 			BatchID:             loaded.ID(),
@@ -174,15 +147,11 @@ func (h LogStockMovementHandler) persist(ctx context.Context, cmd LogStockMoveme
 	return result, nil
 }
 
-// signedQuantityForType applies the ledger SIGN convention per
-// StockMovement's documented contract:
-//   - Inbound / Reservation / Release / Adjustment: positive magnitude as-is.
-//   - Outbound: negate (caller passed magnitude>0; ledger stores negative).
+// signedQuantityForType applies the ledger sign convention: Outbound negates,
+// everything else keeps the positive magnitude.
 //
-// Adjustment direction (count-up vs shrinkage) is NOT disambiguated at
-// the wire in Slice 1 — both ride positive magnitude. When product
-// asks for the distinction, add a `direction` enum field to
-// LogMovementRequest + branch here per ADR 0061 §"Deferred".
+// Adjustment direction (count-up vs shrinkage) is not disambiguated in Slice 1;
+// add a direction enum and branch here when product asks (ADR 0061 §"Deferred").
 func signedQuantityForType(mt batch.MovementType, magnitude int64) int64 {
 	if mt == batch.MovementOutbound {
 		return -magnitude

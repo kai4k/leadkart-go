@@ -14,11 +14,10 @@
 // first line; the natural-key precheck inside the command (one
 // ConsignmentNote per Order — partial unique index) is the backstop.
 //
-// CROSS-MODULE EVENT MIRROR: until the Orders module's
-// integrationevents package lands on the same branch, the
-// [OrderPackedV1] struct in this package is a LOCAL MIRROR of the
-// canonical `orders.order_packed.v1` wire contract. Wire payload
-// (JSON) is identical so consumers don't need rewiring when the mirror
-// is later replaced with an import. Per the precedent in
-// internal/crm/ports/subscribers/lead_purchased_payload.go.
+// CROSS-MODULE EVENT CONTRACT: the `orders.order_packed.v1` wire shape
+// is owned by the producer side — [ordersevents.OrderPackedV1] in
+// internal/orders/integrationevents. This package IMPORTS it (the
+// sanctioned anti-corruption-layer path, per the precedent in
+// internal/crm/ports/subscribers/lead_purchased_payload.go) rather than
+// mirroring the struct locally, so producer and consumer cannot drift.
 package subscribers

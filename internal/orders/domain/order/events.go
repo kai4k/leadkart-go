@@ -11,8 +11,8 @@ import (
 // Event is the sealed marker every domain event satisfies.
 type Event interface{ isOrderEvent() }
 
-// CreatedEvent fires on ctor (Order is created in state
-// quotation_approved when the source Quotation is approved).
+// CreatedEvent fires on ctor — an Order starts in quotation_approved when its
+// source Quotation is approved.
 type CreatedEvent struct {
 	OrderID               ID
 	TenantID              tenant.ID
@@ -25,32 +25,27 @@ type CreatedEvent struct {
 
 func (CreatedEvent) isOrderEvent() {}
 
-// AdvancedEvent fires on every forward state transition (token paid,
-// confirmed, packed, invoiced, dispatched, delivered, complete).
-// PriorState + NewState carry the diff so subscribers can route on
-// either side without losing context.
+// AdvancedEvent fires on every forward transition. PriorState + NewState carry
+// the diff so subscribers can route on either side.
 //
-// Per ADR 0063: subscribers route on NewState — e.g. the Inventory
-// stock-reservation subscriber filters for NewState=confirmed; the
-// Notifications "your order shipped" subscriber filters for
+// Per ADR 0063 subscribers route on NewState — Inventory stock-reservation
+// filters NewState=confirmed; Notifications "order shipped" filters
 // NewState=dispatched.
 type AdvancedEvent struct {
-	OrderID                 ID
-	TenantID                tenant.ID
-	PriorState              State
-	NewState                State
-	TransitionedAt          time.Time
+	OrderID                  ID
+	TenantID                 tenant.ID
+	PriorState               State
+	NewState                 State
+	TransitionedAt           time.Time
 	TransitionedByMembership membership.ID
 }
 
 func (AdvancedEvent) isOrderEvent() {}
 
-// CancelledEvent fires when Cancel transitions the order to the
-// terminal `cancelled` state. PriorState is the state at cancel-time
-// — the compensation-driving fact (e.g. PriorState=invoiced means
-// the Invoice → CreditNote subscriber should fire; PriorState=
-// dispatched means the Dispatch → cancel-consignment subscriber also
-// fires).
+// CancelledEvent fires when Cancel moves the order to the terminal cancelled
+// state. PriorState (the state at cancel-time) drives compensation: invoiced
+// fires the Invoice → CreditNote subscriber; dispatched also fires the
+// Dispatch → cancel-consignment subscriber.
 type CancelledEvent struct {
 	OrderID               ID
 	TenantID              tenant.ID

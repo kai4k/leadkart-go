@@ -16,7 +16,7 @@ INSERT INTO inventory.products (
 SELECT id, tenant_id, sku, name, dosage_form, pack_size, hsn_code,
        gst_rate_bps, manufacturer, is_active,
        created_at, updated_at,
-       is_deleted, deleted_at, deleted_by
+       is_deleted, deleted_at, deleted_by, created_by_membership_id
 FROM   inventory.products
 WHERE  id = $1
 AND    NOT is_deleted;
@@ -52,15 +52,15 @@ AND    NOT is_deleted;
 SELECT id, tenant_id, sku, name, dosage_form, pack_size, hsn_code,
        gst_rate_bps, manufacturer, is_active,
        created_at, updated_at,
-       is_deleted, deleted_at, deleted_by
+       is_deleted, deleted_at, deleted_by, created_by_membership_id
 FROM   inventory.products
 WHERE  tenant_id = $1
 AND    NOT is_deleted
-AND    (NOT $4::boolean OR is_active = true)
+AND    (NOT sqlc.arg(active_only)::boolean OR is_active = true)
 AND    (
-        $5::text = ''
-        OR (lower(sku) || ' ' || lower(name)) ILIKE '%' || lower($5) || '%'
+        sqlc.arg(search)::text = ''
+        OR (lower(sku) || ' ' || lower(name)) ILIKE '%' || lower(sqlc.arg(search)) || '%'
        )
-AND    (created_at, id) < ($2, $3)
+AND    (created_at, id) < (sqlc.arg(cursor_created_at)::timestamptz, sqlc.arg(cursor_id)::uuid)
 ORDER  BY created_at DESC, id DESC
-LIMIT  $6;
+LIMIT  sqlc.arg('limit');

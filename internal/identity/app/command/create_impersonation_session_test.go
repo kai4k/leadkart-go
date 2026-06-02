@@ -1,6 +1,5 @@
 package command_test
 
-
 import (
 	"errors"
 	"strings"
@@ -13,8 +12,8 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
 
-// impSigningKey is the deterministic HS256 secret used by impersonation
-// handler tests. 32+ bytes per RFC 7518 §3.2.
+// impSigningKey is the deterministic HS256 secret for impersonation tests
+// (32+ bytes per RFC 7518 §3.2).
 var impSigningKey = jwt.SigningKey{
 	KeyID:  "imp-test-key",
 	Secret: []byte("test-secret-bytes-test-secret-bytes-32+"),
@@ -29,10 +28,8 @@ func newImpersonationIssuer(t *testing.T) *jwt.Issuer {
 	return iss
 }
 
-// TestNewCreateImpersonationSessionHandler_PanicsOnNilDeps locks the
-// wiring contract: each of the four deps (store, tenants, issuer,
-// now) is required at composition time. Now is the only optional
-// dep (nil → time.Now).
+// TestNewCreateImpersonationSessionHandler_PanicsOnNilDeps — store, tenants, and
+// issuer are required; only now is optional (nil → time.Now).
 func TestNewCreateImpersonationSessionHandler_PanicsOnNilDeps(t *testing.T) {
 	t.Parallel()
 	tenants := newFakeTenantRepo()
@@ -75,10 +72,8 @@ func TestNewCreateImpersonationSessionHandler_PanicsOnNilDeps(t *testing.T) {
 	}
 }
 
-// TestCreateImpersonationSession_RejectsMissingInputs verifies the
-// input-shape guards before any store / issuer call. Per ADR 0045 +
-// session VO: operator id, security stamp, and target tenant id are
-// all mandatory.
+// TestCreateImpersonationSession_RejectsMissingInputs — operator id, security
+// stamp, and target tenant id are all mandatory (rejected before any store call).
 func TestCreateImpersonationSession_RejectsMissingInputs(t *testing.T) {
 	t.Parallel()
 	tenants := newFakeTenantRepo()
@@ -127,9 +122,8 @@ func TestCreateImpersonationSession_RejectsMissingInputs(t *testing.T) {
 }
 
 // TestCreateImpersonationSession_TargetTenantNotFound_ReturnsErrImpersonationTargetMissing
-// proves the resolve-target gate fires BEFORE the session record is
-// created. The HTTP layer relies on the typed sentinel for 404 mapping
-// per ADR 0045 + Russ Cox "Working with Errors in Go 1.13".
+// — the resolve-target gate fires before the session is created; the typed
+// sentinel maps to 404.
 func TestCreateImpersonationSession_TargetTenantNotFound_ReturnsErrImpersonationTargetMissing(t *testing.T) {
 	t.Parallel()
 	tenants := newFakeTenantRepo() // empty — no tenant seeded
@@ -148,11 +142,9 @@ func TestCreateImpersonationSession_TargetTenantNotFound_ReturnsErrImpersonation
 	}
 }
 
-// TestCreateImpersonationSession_HappyPath_MintsScopedToken exercises
-// the full create flow: persist session record, mint scoped JWT, return
-// access_token + expiry. Per ADR 0045 the scoped token is DOWNGRADED
-// (is_platform=false, is_super_user=false) regardless of the operator's
-// normal claims.
+// TestCreateImpersonationSession_HappyPath_MintsScopedToken — persists the
+// session + mints a DOWNGRADED scoped JWT (is_platform/is_super_user=false) per
+// ADR 0045.
 func TestCreateImpersonationSession_HappyPath_MintsScopedToken(t *testing.T) {
 	t.Parallel()
 	tenants := newFakeTenantRepo()
@@ -179,7 +171,7 @@ func TestCreateImpersonationSession_HappyPath_MintsScopedToken(t *testing.T) {
 	if res.AccessToken == "" {
 		t.Error("AccessToken empty — issuer.Issue should have minted a token")
 	}
-	// Token is a compact JWS — three dot-separated base64url segments.
+	// Compact JWS — three dot-separated segments.
 	if got := strings.Count(res.AccessToken, "."); got != 2 {
 		t.Errorf("AccessToken dot count = %d, want 2 (header.payload.signature)", got)
 	}
@@ -187,7 +179,7 @@ func TestCreateImpersonationSession_HappyPath_MintsScopedToken(t *testing.T) {
 		t.Errorf("AccessTokenExpiresAtUTC = %v, want equal to ExpiresAtUTC %v", res.AccessTokenExpiresAtUTC, res.ExpiresAtUTC)
 	}
 
-	// Verify the token's claims to lock the DOWNGRADED-scope invariant.
+	// Lock the downgraded-scope invariant.
 	claims, err := issuer.Verify(res.AccessToken)
 	if err != nil {
 		t.Fatalf("issuer.Verify: %v", err)

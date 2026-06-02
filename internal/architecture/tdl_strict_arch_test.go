@@ -40,13 +40,14 @@
 package architecture_test
 
 import (
+	"cmp"
 	"go/ast"
 	"go/parser"
 	"go/token"
 	"os"
 	"path/filepath"
 	"regexp"
-	"sort"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -113,11 +114,8 @@ func TestArch_TDL_NoTenancyFromContextInApp(t *testing.T) {
 		return
 	}
 
-	sort.Slice(violations, func(i, j int) bool {
-		if violations[i].file != violations[j].file {
-			return violations[i].file < violations[j].file
-		}
-		return violations[i].line < violations[j].line
+	slices.SortFunc(violations, func(a, b violation) int {
+		return cmp.Or(cmp.Compare(a.file, b.file), cmp.Compare(a.line, b.line))
 	})
 	t.Errorf("%d tenancy.FromContext call(s) inside app/ — forbidden per TDL canon §4:", len(violations))
 	t.Logf("  Position: domain values (tenant.ID) flow as EXPLICIT parameters,")
@@ -182,11 +180,8 @@ func TestArch_TDL_NoValidateTagsInDomain(t *testing.T) {
 		return
 	}
 
-	sort.Slice(violations, func(i, j int) bool {
-		if violations[i].file != violations[j].file {
-			return violations[i].file < violations[j].file
-		}
-		return violations[i].line < violations[j].line
+	slices.SortFunc(violations, func(a, b violation) int {
+		return cmp.Or(cmp.Compare(a.file, b.file), cmp.Compare(a.line, b.line))
 	})
 	t.Errorf("%d validate:\"…\" tag(s) inside domain/ — forbidden per TDL canon §11:", len(violations))
 	t.Logf("  Position: business invariants live in aggregate ctors + mutators,")
@@ -243,11 +238,8 @@ func TestArch_TDL_NoValidateTagsOnCommandsOrQueries(t *testing.T) {
 		return
 	}
 
-	sort.Slice(violations, func(i, j int) bool {
-		if violations[i].file != violations[j].file {
-			return violations[i].file < violations[j].file
-		}
-		return violations[i].line < violations[j].line
+	slices.SortFunc(violations, func(a, b violation) int {
+		return cmp.Or(cmp.Compare(a.file, b.file), cmp.Compare(a.line, b.line))
 	})
 	t.Errorf("%d validate:\"…\" tag(s) inside app/ — forbidden per TDL canon §11:", len(violations))
 	t.Logf("  Position: Command + Query structs carry plain data only.")
@@ -529,8 +521,8 @@ func TestArch_TDL_NoMockGenerationTools(t *testing.T) {
 		return
 	}
 
-	sort.Slice(violations, func(i, j int) bool {
-		return violations[i].file < violations[j].file
+	slices.SortFunc(violations, func(a, b violation) int {
+		return cmp.Compare(a.file, b.file)
 	})
 	t.Errorf("%d mock-generation tool import(s) — forbidden per TDL canon §6:", len(violations))
 	t.Logf("  Position: TDL prefers FAKES (faithful contract impls in")
@@ -644,11 +636,8 @@ func TestArch_TDL_HandlerSignatureStrict(t *testing.T) {
 		return
 	}
 
-	sort.Slice(violations, func(i, j int) bool {
-		if violations[i].file != violations[j].file {
-			return violations[i].file < violations[j].file
-		}
-		return violations[i].typ < violations[j].typ
+	slices.SortFunc(violations, func(a, b violation) int {
+		return cmp.Or(cmp.Compare(a.file, b.file), cmp.Compare(a.typ, b.typ))
 	})
 	t.Errorf("%d handler signature violation(s) — per TDL canon §5:", len(violations))
 	t.Logf("  Position: every *Handler exposes Handle(ctx, X) error")
@@ -791,11 +780,8 @@ func TestArch_TDL_NoSetterMethodsOnAggregates(t *testing.T) {
 		return
 	}
 
-	sort.Slice(violations, func(i, j int) bool {
-		if violations[i].file != violations[j].file {
-			return violations[i].file < violations[j].file
-		}
-		return violations[i].line < violations[j].line
+	slices.SortFunc(violations, func(a, b violation) int {
+		return cmp.Or(cmp.Compare(a.file, b.file), cmp.Compare(a.line, b.line))
 	})
 	t.Errorf("%d Set* method(s) on domain aggregates — forbidden per TDL canon §2:", len(violations))
 	t.Logf("  Position: aggregates expose behaviour methods, not setters.")

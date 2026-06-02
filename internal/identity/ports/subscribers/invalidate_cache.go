@@ -2,15 +2,10 @@ package subscribers
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
 	"log/slog"
-
-	"github.com/ThreeDotsLabs/watermill/message"
 
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
 	"github.com/leadkart/leadkart-go/internal/identity/integrationevents"
-	"github.com/leadkart/leadkart-go/internal/common/messaging"
 )
 
 // SecurityStampInvalidator is the single capability this subscriber
@@ -43,27 +38,18 @@ type SecurityStampInvalidator interface {
 //     subscribers (SIEM, audit, refresh-token reuse detection)
 //     depend on. It MUST succeed.
 //
-// Failure mode (Camp 1 / Microsoft canon for our profile):
-//
-//   - L1 / L2 transport failures: log at WARN, return nil.
-//     Watermill does NOT retry — the TTL covers eventual consistency.
-//     Retrying would be expensive (re-runs idempotency + audit
-//     middleware) for a guarantee we don't need.
-//   - The handler is idempotent: cache.Invalidate is unconditional
-//     Del, safe to re-run any number of times. So even though we
-//     don't request retries, accidental re-delivery (router upgrade,
-//     replay) is harmless.
+// Post-cqrs (ADR 0067): the EventProcessor + WireAliasMarshaler own
+// topic routing + payload decode, so each handler is just the typed
+// business reaction — no event_type filter, no json.Unmarshal. The
+// handler stays idempotent (cache.Invalidate is unconditional Del), so
+// re-delivery / replay is harmless even though this concern does not
+// request Watermill retries (the TTL is the contract).
 //
 // Doctrine sources:
 //   - Microsoft Learn — HybridCache RemoveAsync semantics (best-effort).
-//   - Auth0 / Okta session-validation refresh window (~30s) — the
-//     industry baseline for JWT revocation latency in Camp-1
-//     SaaS profiles.
-//   - LeadKart `.NET .claude/rules/audit-checklist.md §12b` —
-//     "Cache facade per concern" + per-key eviction over tags.
-//   - Three Dots Labs / Wolverine canon — one subscriber per concern;
-//     each carries its own retry/failure semantics matching its
-//     correctness profile.
+//   - Auth0 / Okta session-validation refresh window (~30s).
+//   - LeadKart `.NET .claude/rules/audit-checklist.md §12b`.
+//   - Three Dots Labs / Wolverine — one subscriber per concern.
 type InvalidateSecurityStampCache struct {
 	stampCache SecurityStampInvalidator
 	log        *slog.Logger
@@ -85,79 +71,44 @@ func NewInvalidateSecurityStampCache(
 	return &InvalidateSecurityStampCache{stampCache: stampCache, log: log}
 }
 
-// HandlePasswordChanged is the [messaging.SubscriberHandler] for the
-// `identity.person_password_changed.v1` topic. Other events on the
-// shared topic short-circuit silently.
+// HandlePasswordChanged is the typed cqrs handler for
+// `identity.person_password_changed.v1`.
 func (h *InvalidateSecurityStampCache) HandlePasswordChanged(
-	ctx context.Context, _ string, msg *message.Message,
+	ctx context.Context, evt *integrationevents.PersonPasswordChangedV1,
 ) error {
-	expected := integrationevents.PersonPasswordChangedV1{}.Topic()
-	if msg.Metadata.Get(messaging.HeaderEventType) != expected {
-		return nil
-	}
-	var evt integrationevents.PersonPasswordChangedV1
-	if err := json.Unmarshal(msg.Payload, &evt); err != nil {
-		return fmt.Errorf("subscribers: decode %s: %w", expected, err)
-	}
 	h.invalidate(ctx, evt.PersonID.String(), "password_changed")
 	return nil
 }
 
-// HandleAnonymised is the handler for `identity.person_anonymised.v1`.
+// HandleAnonymised handles `identity.person_anonymised.v1`.
 func (h *InvalidateSecurityStampCache) HandleAnonymised(
-	ctx context.Context, _ string, msg *message.Message,
+	ctx context.Context, evt *integrationevents.PersonAnonymisedV1,
 ) error {
-	expected := integrationevents.PersonAnonymisedV1{}.Topic()
-	if msg.Metadata.Get(messaging.HeaderEventType) != expected {
-		return nil
-	}
-	var evt integrationevents.PersonAnonymisedV1
-	if err := json.Unmarshal(msg.Payload, &evt); err != nil {
-		return fmt.Errorf("subscribers: decode %s: %w", expected, err)
-	}
 	h.invalidate(ctx, evt.PersonID.String(), "person_anonymised")
 	return nil
 }
 
-// HandleGloballySuspended is the handler for
-// `identity.person_globally_suspended.v1`.
+// HandleGloballySuspended handles `identity.person_globally_suspended.v1`.
 func (h *InvalidateSecurityStampCache) HandleGloballySuspended(
-	ctx context.Context, _ string, msg *message.Message,
+	ctx context.Context, evt *integrationevents.PersonGloballySuspendedV1,
 ) error {
-	expected := integrationevents.PersonGloballySuspendedV1{}.Topic()
-	if msg.Metadata.Get(messaging.HeaderEventType) != expected {
-		return nil
-	}
-	var evt integrationevents.PersonGloballySuspendedV1
-	if err := json.Unmarshal(msg.Payload, &evt); err != nil {
-		return fmt.Errorf("subscribers: decode %s: %w", expected, err)
-	}
 	h.invalidate(ctx, evt.PersonID.String(), "globally_suspended")
 	return nil
 }
 
-// HandleEmailChanged is the handler for
-// `identity.person_email_changed.v1`. The flow that triggers this
-// event is currently disabled at the product level; the handler
-// stays wired so the cascade works correctly when the flow lands.
+// HandleEmailChanged handles `identity.person_email_changed.v1`. The flow
+// that triggers this event is currently disabled at the product level;
+// the handler stays wired so the cascade works when the flow lands.
 func (h *InvalidateSecurityStampCache) HandleEmailChanged(
-	ctx context.Context, _ string, msg *message.Message,
+	ctx context.Context, evt *integrationevents.PersonEmailChangedV1,
 ) error {
-	expected := integrationevents.PersonEmailChangedV1{}.Topic()
-	if msg.Metadata.Get(messaging.HeaderEventType) != expected {
-		return nil
-	}
-	var evt integrationevents.PersonEmailChangedV1
-	if err := json.Unmarshal(msg.Payload, &evt); err != nil {
-		return fmt.Errorf("subscribers: decode %s: %w", expected, err)
-	}
 	h.invalidate(ctx, evt.PersonID.String(), "email_changed")
 	return nil
 }
 
-// invalidate is the shared cache-eviction body. Always returns nil
-// to the caller — see the type docstring for the
-// "WARN-and-continue, TTL is the contract" rationale.
+// invalidate is the shared cache-eviction body. Always succeeds from the
+// caller's view — see the type docstring for the "WARN-and-continue, TTL
+// is the contract" rationale.
 func (h *InvalidateSecurityStampCache) invalidate(
 	ctx context.Context, personID, reason string,
 ) {

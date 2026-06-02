@@ -60,9 +60,8 @@ func TestOfflinePasswordList_AcceptsStrongPasswords(t *testing.T) {
 }
 
 func TestOfflinePasswordList_PreservesInternalWhitespace(t *testing.T) {
-	// "correct horse battery staple" is a passphrase — must NOT collapse
-	// to "correcthorsebatterystaple" (different cred). The normaliser
-	// trims OUTER whitespace only.
+	// Passphrase with spaces must not collapse to the spaceless form;
+	// normaliser trims outer whitespace only.
 	t.Parallel()
 	c := adapters.NewOfflinePasswordListWith([]string{"correcthorsebatterystaple"})
 	breached, _ := c.IsBreached(t.Context(), "correct horse battery staple")
@@ -72,8 +71,7 @@ func TestOfflinePasswordList_PreservesInternalWhitespace(t *testing.T) {
 }
 
 func TestOfflinePasswordList_NewOfflinePasswordListWith_FiltersEmpty(t *testing.T) {
-	// Empty strings in the seed list MUST NOT make every password look
-	// breached.
+	// Empty strings in the seed must not make every password look breached.
 	t.Parallel()
 	c := adapters.NewOfflinePasswordListWith([]string{"", "  ", "password"})
 	if c.Size() != 1 {
@@ -88,8 +86,7 @@ func TestOfflinePasswordList_NewOfflinePasswordListWith_FiltersEmpty(t *testing.
 func TestOfflinePasswordList_DefaultListSize_Sanity(t *testing.T) {
 	t.Parallel()
 	c := adapters.NewOfflinePasswordList()
-	// Sanity: at least 30 entries — catches an accidental empty-list
-	// regression that would silently weaken security.
+	// At least 30 entries — guard against accidental empty-list regression.
 	if c.Size() < 30 {
 		t.Errorf("default offline list too short: %d entries (want ≥30)", c.Size())
 	}

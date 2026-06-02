@@ -1,39 +1,23 @@
 package subscribers
 
 import (
-	"log/slog"
-
-	"github.com/leadkart/leadkart-go/internal/common/messaging"
+	"github.com/ThreeDotsLabs/watermill/components/cqrs"
 )
 
-// arch-test:idempotency-via-router-middleware — wire-up file only; the
-// messaging.Router this file binds to is constructed in the composition
-// root with IdempotencyMiddleware on every subscriber, so dedup
-// happens at the router layer before any Handle is called.
+// arch-test:idempotency-via-router-middleware  — wire-up file only; the cqrs handlers it builds are registered via messaging.Router.AddCqrsHandler, which attaches IdempotencyMiddleware to every handler, so dedup happens at the router layer before any Handle runs.
 
-// Register wires every Dispatch in-module subscriber against the
-// supplied router. Called once at the composition root (cmd/worker —
-// Dispatch does not subscribe from the request path).
+// Handlers returns the dispatch order-packed cqrs handler. orderPacked
+// may be nil in test fixtures that opt out — returns an empty slice then.
 //
-// The OrderPacked subscriber rides the Orders module's `orders.events`
-// topic — handler-side `event_type` metadata filtering routes only
-// `orders.order_packed.v1` to the create-consignment-note handler.
-//
-// ordersTopic defaults to "orders.events" when empty. Production wires
-// the integrationevents.Topic constant from the Orders module once
-// both branches merge; tests pass an override.
-func Register(
-	router *messaging.Router,
-	orderPacked *OrderPackedIngestor,
-	ordersTopic string,
-	log *slog.Logger,
-) {
+// Post-cqrs (ADR 0067): topic routing is derived from the event alias by
+// the EventProcessor (orders.* → orders.events), so this no longer takes
+// a topic string. The composition root registers each handler via
+// messaging.Router.AddCqrsHandler.
+func Handlers(orderPacked *OrderPackedIngestor) []cqrs.EventHandler {
 	if orderPacked == nil {
-		return // test fixtures may opt out
+		return nil
 	}
-	if ordersTopic == "" {
-		ordersTopic = "orders.events"
+	return []cqrs.EventHandler{
+		cqrs.NewEventHandler(HandlerCreateConsignmentNote, orderPacked.Handle),
 	}
-	_ = log // subscriber owns its own logger; param kept for parity
-	router.AddSubscriber(HandlerCreateConsignmentNote, ordersTopic, orderPacked.Handle)
 }

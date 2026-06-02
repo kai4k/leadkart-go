@@ -9,7 +9,7 @@
 //     during session), tenant_id, tenant_slug, membership_id,
 //     security_stamp, is_platform, is_super_user, jti.
 //   - HMAC-SHA256 (HS256) signing — single-key rotation via kid header
-//     + accepted PreviousSigningKeys list.
+//   - accepted PreviousSigningKeys list.
 //
 // JWT is the access-token-only path. Refresh tokens are opaque + stored
 // hash-only per [refreshtoken.Family] — issued + verified by
@@ -151,7 +151,7 @@ type IssueArgs struct {
 // once constructed (the underlying HMAC keys are immutable byte slices).
 type Issuer struct {
 	current  SigningKey
-	previous []SigningKey  // accepted for Verify only; never used to Sign
+	previous []SigningKey // accepted for Verify only; never used to Sign
 	now      func() time.Time
 }
 
@@ -304,4 +304,3 @@ func newJTI() (string, error) {
 	}
 	return hex.EncodeToString(buf), nil
 }
-

@@ -7,19 +7,19 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/leadkart/leadkart-go/internal/common/email"
+	"github.com/leadkart/leadkart-go/internal/common/pg"
+	"github.com/leadkart/leadkart-go/internal/common/pgconv"
 	"github.com/leadkart/leadkart-go/internal/identity/adapters/db"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
-	"github.com/leadkart/leadkart-go/internal/common/pg"
 )
 
-// PersonRepository is the pgx/sqlc-backed implementation of
-// [person.Repository]. Person is a global aggregate (non-RLS table —
-// `database.md` "Identity tenant-scoping rules"); writes still run under
-// platform scope so the outbox INSERT policy is satisfied. Reads bypass
-// the transactor since persons has no policies attached.
+// PersonRepository is the pgx/sqlc-backed [person.Repository]. Person is
+// a global aggregate (non-RLS); writes run under platform scope to satisfy
+// the outbox INSERT policy.
 type PersonRepository struct {
 	pool *pgxpool.Pool
 	tx   *pg.Transactor
@@ -31,21 +31,15 @@ func NewPersonRepository(pool *pgxpool.Pool, tx *pg.Transactor) *PersonRepositor
 	return &PersonRepository{pool: pool, tx: tx, q: db.New(pool)}
 }
 
-// Add satisfies [person.Repository] — persists a new Person + drains
-// CreatedEvent into the outbox. When ctx carries an active tx (a
-// parent [pg.UnitOfWork] is in flight), Add joins that tx rather than
-// opening its own — canonical multi-aggregate composition path.
+// Add satisfies [person.Repository]. Joins an ambient UoW tx when present;
+// otherwise opens a platform-scoped tx. Drains CreatedEvent into the outbox.
 func (r *PersonRepository) Add(ctx context.Context, p *person.Person) error {
-	if tx, ok := pg.TxFromContext(ctx); ok {
-		return r.addOnTx(ctx, tx, p)
-	}
-	return r.tx.WithinTxPgx(ctx, pg.TxScopePlatform, func(ctx context.Context, tx pgx.Tx) error {
+	return r.runInTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
 		return r.addOnTx(ctx, tx, p)
 	})
 }
 
-// addOnTx persists the aggregate against the supplied tx + drains
-// events to the outbox. Unexported.
+// addOnTx inserts the person row and drains events. Unexported.
 func (r *PersonRepository) addOnTx(ctx context.Context, tx pgx.Tx, p *person.Person) error {
 	q := r.q.WithTx(tx)
 	if err := insertPersonRow(ctx, q, p); err != nil {
@@ -54,14 +48,22 @@ func (r *PersonRepository) addOnTx(ctx context.Context, tx pgx.Tx, p *person.Per
 	return drainPersonEvents(ctx, tx, p)
 }
 
-// UpdateByID satisfies [person.Repository] — TDL UpdateFn closure pattern
-// for ChangePassword + Anonymise + future mutations.
+// runInTx joins an ambient UoW tx when present, else opens a platform-scoped
+// tx (ADR 0067 Phase-4 UoW-join contract).
+func (r *PersonRepository) runInTx(ctx context.Context, fn func(ctx context.Context, tx pgx.Tx) error) error {
+	if tx, ok := pg.TxFromContext(ctx); ok {
+		return fn(ctx, tx)
+	}
+	return r.tx.WithinTxPgx(ctx, pg.TxScopePlatform, fn)
+}
+
+// UpdateByID satisfies [person.Repository]. TDL UpdateFn pattern.
 func (r *PersonRepository) UpdateByID(
 	ctx context.Context,
 	id person.ID,
 	updateFn func(*person.Person) (bool, error),
 ) error {
-	return r.tx.WithinTxPgx(ctx, pg.TxScopePlatform, func(ctx context.Context, tx pgx.Tx) error {
+	return r.runInTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
 		q := r.q.WithTx(tx)
 		p, err := loadPerson(ctx, q, id)
 		if err != nil {
@@ -86,81 +88,40 @@ func (r *PersonRepository) GetByID(ctx context.Context, id person.ID) (*person.P
 	return loadPerson(ctx, r.q, id)
 }
 
-// GetByIDs satisfies [person.Repository] — batched hydration. Single
-// query via `WHERE id = ANY($1::uuid[])` instead of N round-trips per
-// loop iteration. Brandur "What I learned running Postgres at scale" —
-// batching is the canonical N+1 fix; pgx's array-of-uuid binding makes
-// it a one-liner.
-//
-// Hand-written SQL (no sqlc query) — the column list intentionally
-// mirrors [getPersonByID] so a future sqlc-generated variant is a
-// drop-in.
+// GetByIDs satisfies [person.Repository]. Batched via WHERE id = ANY($1);
+// avoids N round-trips.
 func (r *PersonRepository) GetByIDs(ctx context.Context, ids []person.ID) (map[person.ID]*person.Person, error) {
 	if len(ids) == 0 {
 		return map[person.ID]*person.Person{}, nil
 	}
-	uids := make([]uuid.UUID, 0, len(ids))
+	uids := make([]pgtype.UUID, 0, len(ids))
 	for _, id := range ids {
 		u, err := parsePersonID(id)
 		if err != nil {
 			return nil, err
 		}
-		uids = append(uids, u)
+		uids = append(uids, pgconv.PgUUID(u))
 	}
-	const q = `
-		SELECT id, email, first_name, last_name, password_hash, security_stamp,
-		       is_active, is_anonymised, created_at, anonymised_at,
-		       is_globally_suspended, global_suspension_reason, globally_suspended_at,
-		       password_reset_token_hash, password_reset_expires_at,
-		       pending_email_change_new_email, pending_email_change_token_hash,
-		       pending_email_change_expires_at,
-		       created_by_person_id,
-		       must_change_password, failed_login_count, locked_until, last_failed_login_at
-		FROM   identity.persons
-		WHERE  id = ANY($1::uuid[])`
-	rows, err := r.pool.Query(ctx, q, uids)
+	rows, err := r.q.GetPersonsByIDs(ctx, uids)
 	if err != nil {
 		return nil, fmt.Errorf("person repo: get by ids: %w", err)
 	}
-	defer rows.Close()
 	out := make(map[person.ID]*person.Person, len(ids))
-	for rows.Next() {
-		var i db.IdentityPerson
-		if err := rows.Scan(
-			&i.ID, &i.Email, &i.FirstName, &i.LastName, &i.PasswordHash, &i.SecurityStamp,
-			&i.IsActive, &i.IsAnonymised, &i.CreatedAt, &i.AnonymisedAt,
-			&i.IsGloballySuspended, &i.GlobalSuspensionReason, &i.GloballySuspendedAt,
-			&i.PasswordResetTokenHash, &i.PasswordResetExpiresAt,
-			&i.PendingEmailChangeNewEmail, &i.PendingEmailChangeTokenHash,
-			&i.PendingEmailChangeExpiresAt,
-			&i.CreatedByPersonID,
-			&i.MustChangePassword, &i.FailedLoginCount, &i.LockedUntil, &i.LastFailedLoginAt,
-		); err != nil {
-			return nil, fmt.Errorf("person repo: scan: %w", err)
-		}
-		p, err := rowToPerson(i)
+	for _, row := range rows {
+		p, err := rowToPerson(row)
 		if err != nil {
 			return nil, err
 		}
 		out[p.ID()] = p
 	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("person repo: rows: %w", err)
-	}
 	return out, nil
 }
 
-// UpdateLockoutState satisfies [person.Repository]. Hot-path direct
-// update for the Login flow's wrong-password + lockout-clear branches
-// per Wave 9.2 (lockout). Touches ONLY the four lockout columns +
-// drains any events the aggregate recorded (PersonAccountLockedEvent
-// on threshold crossing; PersonAccountUnlockedEvent on success-after-
-// failure). Cheaper than UpdateByID's full-aggregate UPDATE on every
-// failed-login attempt — high frequency under brute-force.
-//
-// Runs under TxScopePlatform (persons is non-RLS but outbox is, and
-// the V1 events are platform-scoped); joins a parent UoW tx via
-// pg.TxFromContext when one is in flight.
+// UpdateLockoutState satisfies [person.Repository]. Touches only the
+// four lockout columns and drains lock/unlock events. Cheaper than the
+// full-aggregate UpdateByID on every failed-login attempt (high frequency
+// under brute-force). Runs under TxScopePlatform; joins a parent UoW tx
+// when present.
 func (r *PersonRepository) UpdateLockoutState(ctx context.Context, p *person.Person) error {
 	if tx, ok := pg.TxFromContext(ctx); ok {
 		return r.updateLockoutOnTx(ctx, tx, p)
@@ -177,10 +138,10 @@ func (r *PersonRepository) updateLockoutOnTx(ctx context.Context, tx pgx.Tx, p *
 		return err
 	}
 	params := db.UpdatePersonLockoutStateParams{
-		ID:                pgUUID(uid),
+		ID:                pgconv.PgUUID(uid),
 		FailedLoginCount:  int32(p.FailedLoginCount()), //nolint:gosec // bounded by MaxFailedLogins (=10)
-		LockedUntil:       pgTimestamp(p.LockedUntil()),
-		LastFailedLoginAt: pgTimestamp(p.LastFailedLoginAt()),
+		LockedUntil:       pgconv.PgTimestamp(p.LockedUntil()),
+		LastFailedLoginAt: pgconv.PgTimestamp(p.LastFailedLoginAt()),
 	}
 	if err := q.UpdatePersonLockoutState(ctx, params); err != nil {
 		return fmt.Errorf("person repo: update lockout state: %w", err)
@@ -188,8 +149,7 @@ func (r *PersonRepository) updateLockoutOnTx(ctx context.Context, tx pgx.Tx, p *
 	return drainPersonEvents(ctx, tx, p)
 }
 
-// GetByEmail satisfies [person.Repository]. Cross-tenant lookup by
-// globally-unique email; consumed by login flow + password-reset.
+// GetByEmail satisfies [person.Repository]. Looks up by globally-unique email.
 func (r *PersonRepository) GetByEmail(ctx context.Context, e email.Address) (*person.Person, error) {
 	row, err := r.q.GetPersonByEmail(ctx, e.String())
 	if err != nil {
@@ -202,8 +162,7 @@ func (r *PersonRepository) GetByEmail(ctx context.Context, e email.Address) (*pe
 }
 
 // GetByPasswordResetTokenHash satisfies [person.Repository]. Hash-only
-// lookup powering the confirm-password-reset flow. Backed by partial
-// unique index uq_persons_password_reset_hash.
+// lookup for the confirm-password-reset flow.
 func (r *PersonRepository) GetByPasswordResetTokenHash(ctx context.Context, hash person.PasswordResetTokenHash) (*person.Person, error) {
 	if hash.IsZero() {
 		return nil, person.ErrNotFound
@@ -220,8 +179,7 @@ func (r *PersonRepository) GetByPasswordResetTokenHash(ctx context.Context, hash
 }
 
 // GetByEmailChangeTokenHash satisfies [person.Repository]. Hash-only
-// lookup powering the confirm-email-change flow. Backed by partial
-// unique index uq_persons_email_change_hash.
+// lookup for the confirm-email-change flow.
 func (r *PersonRepository) GetByEmailChangeTokenHash(ctx context.Context, hash person.EmailChangeTokenHash) (*person.Person, error) {
 	if hash.IsZero() {
 		return nil, person.ErrNotFound
@@ -244,7 +202,7 @@ func loadPerson(ctx context.Context, q *db.Queries, id person.ID) (*person.Perso
 	if err != nil {
 		return nil, err
 	}
-	row, err := q.GetPersonByID(ctx, pgUUID(uid))
+	row, err := q.GetPersonByID(ctx, pgconv.PgUUID(uid))
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, person.ErrNotFound
@@ -264,22 +222,22 @@ func insertPersonRow(ctx context.Context, q *db.Queries, p *person.Person) error
 		return fmt.Errorf("person repo: parse security_stamp: %w", err)
 	}
 	params := db.InsertPersonParams{
-		ID:                     pgUUID(uid),
+		ID:                     pgconv.PgUUID(uid),
 		Email:                  p.Email().String(),
 		FirstName:              p.FirstName(),
 		LastName:               p.LastName(),
 		PasswordHash:           p.PasswordHash().String(),
-		SecurityStamp:          pgUUID(stampUUID),
+		SecurityStamp:          pgconv.PgUUID(stampUUID),
 		IsActive:               p.IsActive(),
 		IsAnonymised:           p.IsAnonymised(),
-		CreatedAt:              pgRequiredTimestamp(p.CreatedAt()),
+		CreatedAt:              pgconv.PgRequiredTimestamp(p.CreatedAt()),
 		IsGloballySuspended:    p.IsGloballySuspended(),
 		GlobalSuspensionReason: p.GlobalSuspensionReason(),
-		GloballySuspendedAt:    pgTimestamp(p.GloballySuspendedAt()),
+		GloballySuspendedAt:    pgconv.PgTimestamp(p.GloballySuspendedAt()),
 		MustChangePassword:     p.MustChangePassword(),
 		FailedLoginCount:       int32(p.FailedLoginCount()), //nolint:gosec // bounded by MaxFailedLogins (=10)
-		LockedUntil:            pgTimestamp(p.LockedUntil()),
-		LastFailedLoginAt:      pgTimestamp(p.LastFailedLoginAt()),
+		LockedUntil:            pgconv.PgTimestamp(p.LockedUntil()),
+		LastFailedLoginAt:      pgconv.PgTimestamp(p.LastFailedLoginAt()),
 	}
 	applyPendingResetTo(&params, p.PendingPasswordReset())
 	applyPendingEmailChangeTo(&params, p.PendingEmailChange())
@@ -292,20 +250,16 @@ func insertPersonRow(ctx context.Context, q *db.Queries, p *person.Person) error
 	return nil
 }
 
-// applyPendingResetTo / applyPendingEmailChangeTo project the Person's
-// pending sub-states onto the params struct. Zero values map to NULL
-// columns; the partial unique indexes only see the populated rows.
-//
-// Implemented as helpers shared by Insert + Update params so the column
-// projection rules live in one place — drift between create + update
-// would otherwise corrupt round-trip semantics silently.
+// applyPendingResetTo and applyPendingEmailChangeTo project the Person's
+// pending sub-states onto the params struct. Zero values map to NULL;
+// shared by Insert + Update params so projection rules stay in one place.
 func applyPendingResetTo(p *db.InsertPersonParams, pr person.PendingPasswordReset) {
 	if pr.IsZero() {
 		return
 	}
 	hash := pr.Hash().String()
 	p.PasswordResetTokenHash = &hash
-	p.PasswordResetExpiresAt = pgTimestamp(pr.ExpiresAt())
+	p.PasswordResetExpiresAt = pgconv.PgTimestamp(pr.ExpiresAt())
 }
 
 func applyPendingEmailChangeTo(p *db.InsertPersonParams, ec person.PendingEmailChange) {
@@ -316,7 +270,7 @@ func applyPendingEmailChangeTo(p *db.InsertPersonParams, ec person.PendingEmailC
 	newEmail := ec.NewEmail().String()
 	p.PendingEmailChangeNewEmail = &newEmail
 	p.PendingEmailChangeTokenHash = &hash
-	p.PendingEmailChangeExpiresAt = pgTimestamp(ec.ExpiresAt())
+	p.PendingEmailChangeExpiresAt = pgconv.PgTimestamp(ec.ExpiresAt())
 }
 
 func applyPendingResetToUpdate(p *db.UpdatePersonParams, pr person.PendingPasswordReset) {
@@ -325,7 +279,7 @@ func applyPendingResetToUpdate(p *db.UpdatePersonParams, pr person.PendingPasswo
 	}
 	hash := pr.Hash().String()
 	p.PasswordResetTokenHash = &hash
-	p.PasswordResetExpiresAt = pgTimestamp(pr.ExpiresAt())
+	p.PasswordResetExpiresAt = pgconv.PgTimestamp(pr.ExpiresAt())
 }
 
 func applyPendingEmailChangeToUpdate(p *db.UpdatePersonParams, ec person.PendingEmailChange) {
@@ -336,7 +290,7 @@ func applyPendingEmailChangeToUpdate(p *db.UpdatePersonParams, ec person.Pending
 	newEmail := ec.NewEmail().String()
 	p.PendingEmailChangeNewEmail = &newEmail
 	p.PendingEmailChangeTokenHash = &hash
-	p.PendingEmailChangeExpiresAt = pgTimestamp(ec.ExpiresAt())
+	p.PendingEmailChangeExpiresAt = pgconv.PgTimestamp(ec.ExpiresAt())
 }
 
 func persistPerson(ctx context.Context, q *db.Queries, p *person.Person) error {
@@ -349,22 +303,22 @@ func persistPerson(ctx context.Context, q *db.Queries, p *person.Person) error {
 		return fmt.Errorf("person repo: parse security_stamp: %w", err)
 	}
 	params := db.UpdatePersonParams{
-		ID:                     pgUUID(uid),
+		ID:                     pgconv.PgUUID(uid),
 		Email:                  p.Email().String(),
 		FirstName:              p.FirstName(),
 		LastName:               p.LastName(),
 		PasswordHash:           p.PasswordHash().String(),
-		SecurityStamp:          pgUUID(stampUUID),
+		SecurityStamp:          pgconv.PgUUID(stampUUID),
 		IsActive:               p.IsActive(),
 		IsAnonymised:           p.IsAnonymised(),
-		AnonymisedAt:           pgTimestamp(p.AnonymisedAt()),
+		AnonymisedAt:           pgconv.PgTimestamp(p.AnonymisedAt()),
 		IsGloballySuspended:    p.IsGloballySuspended(),
 		GlobalSuspensionReason: p.GlobalSuspensionReason(),
-		GloballySuspendedAt:    pgTimestamp(p.GloballySuspendedAt()),
+		GloballySuspendedAt:    pgconv.PgTimestamp(p.GloballySuspendedAt()),
 		MustChangePassword:     p.MustChangePassword(),
 		FailedLoginCount:       int32(p.FailedLoginCount()), //nolint:gosec // bounded by MaxFailedLogins (=10)
-		LockedUntil:            pgTimestamp(p.LockedUntil()),
-		LastFailedLoginAt:      pgTimestamp(p.LastFailedLoginAt()),
+		LockedUntil:            pgconv.PgTimestamp(p.LockedUntil()),
+		LastFailedLoginAt:      pgconv.PgTimestamp(p.LastFailedLoginAt()),
 	}
 	applyPendingResetToUpdate(&params, p.PendingPasswordReset())
 	applyPendingEmailChangeToUpdate(&params, p.PendingEmailChange())
@@ -374,14 +328,9 @@ func persistPerson(ctx context.Context, q *db.Queries, p *person.Person) error {
 	return nil
 }
 
-// drainPersonEvents maps Person aggregate events through
-// integrationevents.FromDomainEvent and writes the resulting V1
-// records to the outbox. Person is global (non-tenant), so the
-// outbox row carries uuid.Nil — RLS WITH CHECK passes under
-// TxScopePlatform.
-//
-// When the platform-tenant concept materialises (cross-tenant
-// operator audit), swap uuid.Nil for that tenant's UUID.
+// drainPersonEvents maps Person aggregate events to V1 integration events
+// and writes them to the outbox. Person is global; outbox row carries
+// uuid.Nil (RLS passes under TxScopePlatform).
 func drainPersonEvents(ctx context.Context, tx pgx.Tx, p *person.Person) error {
 	evs := p.PullEvents()
 	if len(evs) == 0 {
@@ -399,7 +348,7 @@ func drainPersonEvents(ctx context.Context, tx pgx.Tx, p *person.Person) error {
 }
 
 func rowToPerson(row db.IdentityPerson) (*person.Person, error) {
-	id := person.ID(uuidFromPg(row.ID).String())
+	id := person.ID(pgconv.UUIDFromPg(row.ID).String())
 
 	addr, err := email.New(row.Email)
 	if err != nil {
@@ -407,11 +356,10 @@ func rowToPerson(row db.IdentityPerson) (*person.Person, error) {
 	}
 	hash, err := person.NewPasswordHash(row.PasswordHash)
 	if err != nil && !row.IsAnonymised {
-		// Anonymised rows store empty hash by design; everything else
-		// must round-trip a valid hash.
+		// Anonymised rows store an empty hash by design; all others must round-trip.
 		return nil, fmt.Errorf("person repo: hydrate password_hash: %w", err)
 	}
-	stamp, err := person.SecurityStampFromString(uuidFromPg(row.SecurityStamp).String())
+	stamp, err := person.SecurityStampFromString(pgconv.UUIDFromPg(row.SecurityStamp).String())
 	if err != nil {
 		return nil, fmt.Errorf("person repo: hydrate security_stamp: %w", err)
 	}
@@ -426,13 +374,13 @@ func rowToPerson(row db.IdentityPerson) (*person.Person, error) {
 		IsAnonymised:           row.IsAnonymised,
 		IsGloballySuspended:    row.IsGloballySuspended,
 		GlobalSuspensionReason: row.GlobalSuspensionReason,
-		GloballySuspendedAt:    timeFromPg(row.GloballySuspendedAt),
+		GloballySuspendedAt:    pgconv.TimeFromPg(row.GloballySuspendedAt),
 		MustChangePassword:     row.MustChangePassword,
 		FailedLoginCount:       int(row.FailedLoginCount),
-		LockedUntil:            timeFromPg(row.LockedUntil),
-		LastFailedLoginAt:      timeFromPg(row.LastFailedLoginAt),
-		CreatedAt:              timeFromPg(row.CreatedAt),
-		AnonymisedAt:           timeFromPg(row.AnonymisedAt),
+		LockedUntil:            pgconv.TimeFromPg(row.LockedUntil),
+		LastFailedLoginAt:      pgconv.TimeFromPg(row.LastFailedLoginAt),
+		CreatedAt:              pgconv.TimeFromPg(row.CreatedAt),
+		AnonymisedAt:           pgconv.TimeFromPg(row.AnonymisedAt),
 	}
 	if row.PasswordResetTokenHash != nil {
 		resetHash, herr := person.NewPasswordResetTokenHash(*row.PasswordResetTokenHash)
@@ -440,7 +388,7 @@ func rowToPerson(row db.IdentityPerson) (*person.Person, error) {
 			return nil, fmt.Errorf("person repo: hydrate password_reset_token_hash: %w", herr)
 		}
 		snap.PasswordResetTokenHash = resetHash
-		snap.PasswordResetExpiresAt = timeFromPg(row.PasswordResetExpiresAt)
+		snap.PasswordResetExpiresAt = pgconv.TimeFromPg(row.PasswordResetExpiresAt)
 	}
 	if row.PendingEmailChangeTokenHash != nil && row.PendingEmailChangeNewEmail != nil {
 		newAddr, eerr := email.New(*row.PendingEmailChangeNewEmail)
@@ -453,7 +401,7 @@ func rowToPerson(row db.IdentityPerson) (*person.Person, error) {
 		}
 		snap.PendingEmailChangeNewEmail = newAddr
 		snap.PendingEmailChangeHash = ecHash
-		snap.PendingEmailChangeExpiresAt = timeFromPg(row.PendingEmailChangeExpiresAt)
+		snap.PendingEmailChangeExpiresAt = pgconv.TimeFromPg(row.PendingEmailChangeExpiresAt)
 	}
 	return person.UnmarshalFromDB(snap), nil
 }

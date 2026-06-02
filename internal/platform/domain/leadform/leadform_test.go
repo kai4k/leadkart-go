@@ -7,9 +7,8 @@ import (
 	"github.com/leadkart/leadkart-go/internal/platform/domain/leadform"
 )
 
-// validInput returns an Input that passes [leadform.New] cleanly.
-// Per-test helpers mutate one field at a time to assert specific
-// invariant rejections.
+// validInput returns an Input that passes [leadform.New]; tests mutate one
+// field to assert a specific rejection.
 func validInput() leadform.Input {
 	return leadform.Input{
 		ContactName:    "Rajesh Pharma",
@@ -58,11 +57,11 @@ func TestNew_InvalidMobile_Rejected(t *testing.T) {
 	t.Parallel()
 	tests := []string{
 		"",
-		"9876543210",   // missing +91
-		"+9198765432",  // too short
+		"9876543210",     // missing +91
+		"+9198765432",    // too short
 		"+9198765432109", // too long
-		"+91987654321X", // non-digit
-		"+1234567890",  // wrong country
+		"+91987654321X",  // non-digit
+		"+1234567890",    // wrong country
 	}
 	for _, m := range tests {
 		in := validInput()
@@ -153,7 +152,6 @@ func TestNew_BuyTimelineClosedSet(t *testing.T) {
 func TestNew_GstCrossValidation(t *testing.T) {
 	t.Parallel()
 
-	// has_gst=true but gst_number missing → reject.
 	in := validInput()
 	in.HasGst = true
 	in.GstNumber = ""
@@ -162,7 +160,6 @@ func TestNew_GstCrossValidation(t *testing.T) {
 		t.Errorf("has_gst=true + empty gst should reject, got %v", err)
 	}
 
-	// has_gst=true but gst_number malformed → reject.
 	in = validInput()
 	in.HasGst = true
 	in.GstNumber = "INVALID"
@@ -171,7 +168,6 @@ func TestNew_GstCrossValidation(t *testing.T) {
 		t.Errorf("has_gst=true + malformed gst should reject, got %v", err)
 	}
 
-	// has_gst=false but gst_number supplied → reject.
 	in = validInput()
 	in.HasGst = false
 	in.GstNumber = "27AABCU9603R1ZV"
@@ -180,7 +176,6 @@ func TestNew_GstCrossValidation(t *testing.T) {
 		t.Errorf("has_gst=false + gst supplied should reject, got %v", err)
 	}
 
-	// has_gst=false + empty gst → accept.
 	in = validInput()
 	in.HasGst = false
 	in.GstNumber = ""
@@ -268,9 +263,8 @@ func TestEqual_DifferentMobile_False(t *testing.T) {
 
 func TestUnmarshalFromDB_SkipsValidation(t *testing.T) {
 	t.Parallel()
-	// Bad mobile pattern would fail New; UnmarshalFromDB tolerates
-	// since the row was trusted-stored. This is a property test of
-	// the rehydration boundary.
+	// A bad mobile would fail New, but UnmarshalFromDB tolerates it as a
+	// trusted-stored row.
 	in := leadform.Input{
 		ContactName:    "X",
 		MobileE164:     "garbage",

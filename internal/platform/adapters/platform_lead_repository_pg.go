@@ -5,23 +5,23 @@ import (
 	"errors"
 	"fmt"
 
-	sq "github.com/Masterminds/squirrel"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/leadkart/leadkart-go/internal/common/pagination"
 	"github.com/leadkart/leadkart-go/internal/common/pg"
+	"github.com/leadkart/leadkart-go/internal/common/pgconv"
 	"github.com/leadkart/leadkart-go/internal/platform/adapters/db"
 	"github.com/leadkart/leadkart-go/internal/platform/domain/leadform"
 	"github.com/leadkart/leadkart-go/internal/platform/domain/platformlead"
 	"github.com/leadkart/leadkart-go/internal/platform/domain/unverifiedcontact"
 )
 
-// PlatformLeadRepository is the pgx/sqlc-backed implementation of
-// [platformlead.Repository]. Static reads via sqlc; the marketplace
-// browse uses squirrel directly (dynamic WHERE clauses + GIN array
-// filters don't map cleanly to sqlc parameter slots).
+// PlatformLeadRepository is the pgx/sqlc implementation of
+// [platformlead.Repository]. MarketplaceBrowse uses null-guarded params +
+// GIN && overlap predicates expressed natively in the generated query.
 type PlatformLeadRepository struct {
 	pool *pgxpool.Pool
 	tx   *pg.Transactor
@@ -59,7 +59,9 @@ func (r *PlatformLeadRepository) UpdateByID(
 ) error {
 	run := func(ctx context.Context, tx pgx.Tx) error {
 		q := r.q.WithTx(tx)
-		l, err := loadPlatformLead(ctx, q, id)
+		// Row-lock the lead + hydrate its buyer set so RecordPurchase's
+		// sale-limit count is race-free under concurrent purchases (ADR 0065).
+		l, err := loadPlatformLeadForUpdate(ctx, q, id)
 		if err != nil {
 			return err
 		}
@@ -71,6 +73,9 @@ func (r *PlatformLeadRepository) UpdateByID(
 			return nil
 		}
 		if err := updatePlatformLeadRow(ctx, q, l); err != nil {
+			return err
+		}
+		if err := insertPendingPurchases(ctx, q, l); err != nil {
 			return err
 		}
 		return drainPlatformLeadEventsToOutbox(ctx, tx, l)
@@ -90,93 +95,52 @@ func (r *PlatformLeadRepository) GetByID(ctx context.Context, id platformlead.ID
 	return loadPlatformLead(ctx, q, id)
 }
 
-// MarketplaceBrowse satisfies [platformlead.Repository]. Uses squirrel
-// for dynamic WHERE clauses; queries `platform.platform_leads` directly
-// since sqlc can't express the optional `&&` GIN overlap predicates
-// cleanly.
+// MarketplaceBrowse satisfies [platformlead.Repository]. Null-guarded
+// optional filters (nil = don't filter) + GIN && overlap + (verified_at, id)
+// keyset, all in SQL.
 //
-// H12 hardening (review-pass): the SELECT list explicitly OMITS PII
-// columns (email, gst_number, pan_number, mobile_e164, street). These
-// fields land on the lead row at insertion (the verification form is
-// captured wholesale) but the marketplace surface MUST NOT expose
-// them to cross-tenant browsers per BRD §4.3 + ADR 0059 marketplace
-// SELECT policy. The omitted columns are scanned as the empty
-// string/zero into the in-memory aggregate so a future `SELECT *`
-// drift cannot leak them through the DTO mapper (the row struct is
-// re-built via [marketplaceRowToPlatformLead] which never touches
-// the omitted fields).
-//
-// Once the purchaser owns the lead, the full row (incl PII) is
-// available via GetByID under the buyer's tenant context — that's
-// the only legitimate read of the omitted columns post-purchase.
+// H12: the SELECT OMITS PII columns (email, gst_number, pan_number,
+// mobile_e164, street). They land at insertion but must never reach
+// cross-tenant browsers (BRD §4.3, ADR 0059 SELECT policy). The strict
+// subset makes sqlc emit db.MarketplaceBrowseRow with no PII fields to leak;
+// [marketplaceRowToPlatformLead] hydrates from it. Post-purchase, the buyer
+// reads the full row (incl PII) via GetByID under their own tenant.
 func (r *PlatformLeadRepository) MarketplaceBrowse(
 	ctx context.Context,
 	filter platformlead.MarketplaceFilter,
 	cursor pagination.Cursor,
 	pageSize int,
 ) ([]*platformlead.PlatformLead, error) {
-	psql := sq.StatementBuilder.PlaceholderFormat(sq.Dollar)
-	query := psql.
-		Select(
-			// IDs + sold-state (sold rows excluded by WHERE; SELECT
-			// list kept here for future cursor compatibility).
-			"id", "source_contact_id",
-			"sold_to_tenant_id", "sold_at", "sold_to_membership_id", "amount_paisa",
-			// Non-PII form fields ONLY. email / mobile_e164 / gst_number
-			// / pan_number / street DELIBERATELY OMITTED — H12.
-			"contact_name", "pincode", "city", "district", "state_geo",
-			"has_drug_licence", "has_gst", "gst_verified", "has_pan",
-			"business_type", "medicine_system", "product_ranges", "dosage_forms",
-			"order_value", "buy_timeline",
-			"verified_at", "verified_by_membership_id", "created_at",
-		).
-		From("platform.platform_leads").
-		Where(sq.Eq{"sold_to_tenant_id": nil})
-
-	query = applyMarketplaceFilters(query, filter)
-	query = applyMarketplaceCursor(query, cursor)
-
 	limit := pageSize
 	if limit <= 0 {
 		limit = 1
 	}
-	//nolint:gosec // G115: app-layer ClampPageSize bounds to [1, 200]
-	query = query.OrderBy("verified_at DESC", "id DESC").Limit(uint64(limit))
-
-	sqlStr, args, err := query.ToSql()
-	if err != nil {
-		return nil, fmt.Errorf("platform lead repo: build browse SQL: %w", err)
+	params := db.MarketplaceBrowseParams{
+		State:          pgconv.ZeroToNil(filter.State),
+		City:           pgconv.ZeroToNil(filter.City),
+		District:       pgconv.ZeroToNil(filter.District),
+		Pincode:        pgconv.ZeroToNil(filter.Pincode),
+		BusinessType:   pgconv.ZeroToNil(filter.BusinessType),
+		MedicineSystem: pgconv.ZeroToNil(filter.MedicineSystem),
+		OrderValue:     pgconv.ZeroToNil(filter.OrderValue),
+		BuyTimeline:    pgconv.ZeroToNil(filter.BuyTimeline),
+		HasDrugLicence: filter.HasDrugLicence,
+		HasGst:         filter.HasGst,
+		GstVerified:    filter.GstVerified,
+		ProductRanges:  nilIfEmptySlice(filter.ProductRanges),
+		DosageForms:    nilIfEmptySlice(filter.DosageForms),
+		//nolint:gosec // G115: app-layer ClampPageSize bounds to [1, 200]
+		Lim: int32(limit),
 	}
+	applyMarketplaceCursorParams(&params, cursor)
 
-	rows, err := r.pool.Query(ctx, sqlStr, args...)
+	rows, err := r.q.MarketplaceBrowse(ctx, params)
 	if err != nil {
 		return nil, fmt.Errorf("platform lead repo: browse query: %w", err)
 	}
-	defer rows.Close()
-
-	var out []*platformlead.PlatformLead
-	for rows.Next() {
-		var row db.PlatformPlatformLead
-		// PII columns left at their zero value — the SELECT list
-		// above does not fetch them; the aggregate-side LeadSnapshot
-		// for the marketplace VIEW excludes them by design.
-		err := rows.Scan(
-			&row.ID, &row.SourceContactID,
-			&row.SoldToTenantID, &row.SoldAt, &row.SoldToMembershipID, &row.AmountPaisa,
-			&row.ContactName, &row.Pincode,
-			&row.City, &row.District, &row.StateGeo,
-			&row.HasDrugLicence, &row.HasGst, &row.GstVerified, &row.HasPan,
-			&row.BusinessType, &row.MedicineSystem, &row.ProductRanges, &row.DosageForms,
-			&row.OrderValue, &row.BuyTimeline,
-			&row.VerifiedAt, &row.VerifiedByMembershipID, &row.CreatedAt,
-		)
-		if err != nil {
-			return nil, fmt.Errorf("platform lead repo: scan: %w", err)
-		}
-		out = append(out, rowToPlatformLead(row))
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("platform lead repo: rows iter: %w", err)
+	out := make([]*platformlead.PlatformLead, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, marketplaceRowToPlatformLead(row))
 	}
 	return out, nil
 }
@@ -188,14 +152,47 @@ func loadPlatformLead(ctx context.Context, q *db.Queries, id platformlead.ID) (*
 	if err != nil {
 		return nil, fmt.Errorf("platform lead repo: parse id %q: %w", id, err)
 	}
-	row, err := q.GetPlatformLeadByID(ctx, pgUUID(uid))
+	row, err := q.GetPlatformLeadByID(ctx, pgconv.PgUUID(uid))
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, platformlead.ErrNotFound
 		}
 		return nil, fmt.Errorf("platform lead repo: get: %w", err)
 	}
-	return rowToPlatformLead(row), nil
+	// Plain reads don't hydrate the buyer set (availability is a query
+	// concern; the purchase path uses loadPlatformLeadForUpdate).
+	return rowToPlatformLead(row, nil), nil
+}
+
+// loadPlatformLeadForUpdate row-locks the lead and hydrates its buyer set so
+// RecordPurchase enforces the sale limit + no-double-buy race-free.
+func loadPlatformLeadForUpdate(ctx context.Context, q *db.Queries, id platformlead.ID) (*platformlead.PlatformLead, error) {
+	uid, err := uuid.Parse(id.String())
+	if err != nil {
+		return nil, fmt.Errorf("platform lead repo: parse id %q: %w", id, err)
+	}
+	row, err := q.GetPlatformLeadByIDForUpdate(ctx, pgconv.PgUUID(uid))
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, platformlead.ErrNotFound
+		}
+		return nil, fmt.Errorf("platform lead repo: get for update: %w", err)
+	}
+	buyerUUIDs, err := q.ListLeadPurchaseTenantIDs(ctx, pgconv.PgUUID(uid))
+	if err != nil {
+		return nil, fmt.Errorf("platform lead repo: list buyers: %w", err)
+	}
+	buyers := make([]platformlead.TenantID, 0, len(buyerUUIDs))
+	for _, b := range buyerUUIDs {
+		buyers = append(buyers, platformlead.TenantID(pgconv.UUIDFromPg(b).String()))
+	}
+	return rowToPlatformLead(forUpdateRowAsByIDRow(row), buyers), nil
+}
+
+// forUpdateRowAsByIDRow adapts the FOR UPDATE row to the shared mapper input
+// (identical column set, distinct sqlc type).
+func forUpdateRowAsByIDRow(r db.GetPlatformLeadByIDForUpdateRow) db.GetPlatformLeadByIDRow {
+	return db.GetPlatformLeadByIDRow(r)
 }
 
 func insertPlatformLeadRow(ctx context.Context, q *db.Queries, l *platformlead.PlatformLead) error {
@@ -213,12 +210,10 @@ func insertPlatformLeadRow(ctx context.Context, q *db.Queries, l *platformlead.P
 	}
 	f := l.Form()
 	err = q.InsertPlatformLead(ctx, db.InsertPlatformLeadParams{
-		ID:                     pgUUID(id),
-		SourceContactID:        pgUUID(srcID),
-		SoldToTenantID:         pgUUIDOptStr(l.SoldToTenantID().String()),
-		SoldAt:                 pgTimestamp(l.SoldAt()),
-		SoldToMembershipID:     pgUUIDOptStr(l.SoldToMembershipID().String()),
-		AmountPaisa:            l.AmountPaisa(),
+		ID:                     pgconv.PgUUID(id),
+		SourceContactID:        pgconv.PgUUID(srcID),
+		Tier:                   l.Tier().String(),
+		SaleLimit:              intPtrToInt32Ptr(l.SaleLimit()),
 		ContactName:            f.ContactName(),
 		MobileE164:             f.MobileE164(),
 		Email:                  f.Email(),
@@ -239,9 +234,9 @@ func insertPlatformLeadRow(ctx context.Context, q *db.Queries, l *platformlead.P
 		DosageForms:            f.DosageForms(),
 		OrderValue:             string(f.OrderValue()),
 		BuyTimeline:            string(f.BuyTimeline()),
-		VerifiedAt:             pgRequiredTimestamp(l.VerifiedAt()),
-		VerifiedByMembershipID: pgUUID(verifiedBy),
-		CreatedAt:              pgRequiredTimestamp(l.CreatedAt()),
+		VerifiedAt:             pgconv.PgRequiredTimestamp(l.VerifiedAt()),
+		VerifiedByMembershipID: pgconv.PgUUID(verifiedBy),
+		CreatedAt:              pgconv.PgRequiredTimestamp(l.CreatedAt()),
 	})
 	if err != nil {
 		return fmt.Errorf("platform lead repo: insert: %w", err)
@@ -249,26 +244,73 @@ func insertPlatformLeadRow(ctx context.Context, q *db.Queries, l *platformlead.P
 	return nil
 }
 
+// updatePlatformLeadRow persists the only mutable column on the lead row,
+// gst_verified. A purchase is an INSERT into lead_purchases (see
+// insertPendingPurchases), not an update here.
 func updatePlatformLeadRow(ctx context.Context, q *db.Queries, l *platformlead.PlatformLead) error {
 	id, err := uuid.Parse(l.ID().String())
 	if err != nil {
 		return fmt.Errorf("platform lead repo: parse id: %w", err)
 	}
-	err = q.UpdatePlatformLead(ctx, db.UpdatePlatformLeadParams{
-		ID:                 pgUUID(id),
-		SoldToTenantID:     pgUUIDOptStr(l.SoldToTenantID().String()),
-		SoldAt:             pgTimestamp(l.SoldAt()),
-		SoldToMembershipID: pgUUIDOptStr(l.SoldToMembershipID().String()),
-		AmountPaisa:        l.AmountPaisa(),
-		GstVerified:        l.GstVerified(),
+	err = q.UpdatePlatformLeadGstVerified(ctx, db.UpdatePlatformLeadGstVerifiedParams{
+		ID:          pgconv.PgUUID(id),
+		GstVerified: l.GstVerified(),
 	})
 	if err != nil {
-		return fmt.Errorf("platform lead repo: update: %w", err)
+		return fmt.Errorf("platform lead repo: update gst_verified: %w", err)
 	}
 	return nil
 }
 
-func rowToPlatformLead(row db.PlatformPlatformLead) *platformlead.PlatformLead {
+// insertPendingPurchases drains the lead's recorded purchases and INSERTs each
+// lead_purchases row. A UNIQUE(lead_id, tenant_id) 23505 (a concurrent buyer
+// won the race) maps to [platformlead.ErrAlreadyPurchased].
+func insertPendingPurchases(ctx context.Context, q *db.Queries, l *platformlead.PlatformLead) error {
+	for _, p := range l.PullPendingPurchases() {
+		pid, err := uuid.Parse(p.ID())
+		if err != nil {
+			return fmt.Errorf("platform lead repo: parse purchase id: %w", err)
+		}
+		leadID, err := uuid.Parse(p.LeadID().String())
+		if err != nil {
+			return fmt.Errorf("platform lead repo: parse purchase lead id: %w", err)
+		}
+		tenantID, err := uuid.Parse(p.TenantID().String())
+		if err != nil {
+			return fmt.Errorf("platform lead repo: parse purchase tenant id: %w", err)
+		}
+		membershipID, err := uuid.Parse(p.MembershipID().String())
+		if err != nil {
+			return fmt.Errorf("platform lead repo: parse purchase membership id: %w", err)
+		}
+		err = q.InsertLeadPurchase(ctx, db.InsertLeadPurchaseParams{
+			ID:                    pgconv.PgUUID(pid),
+			LeadID:                pgconv.PgUUID(leadID),
+			TenantID:              pgconv.PgUUID(tenantID),
+			CreatedByMembershipID: pgconv.PgUUID(membershipID),
+			AmountPaisa:           p.AmountPaisa(),
+			PurchasedAt:           pgconv.PgRequiredTimestamp(p.PurchasedAt()),
+		})
+		if err != nil {
+			if isUniqueViolation(err) {
+				return platformlead.ErrAlreadyPurchased
+			}
+			return fmt.Errorf("platform lead repo: insert purchase: %w", err)
+		}
+	}
+	return nil
+}
+
+// isUniqueViolation reports whether err is a Postgres 23505 unique-violation.
+func isUniqueViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) {
+		return false
+	}
+	return pgErr.Code == pg.SQLStateUniqueViolation
+}
+
+func rowToPlatformLead(row db.GetPlatformLeadByIDRow, buyers []platformlead.TenantID) *platformlead.PlatformLead {
 	form := leadform.UnmarshalFromDB(leadform.Input{
 		ContactName:    row.ContactName,
 		MobileE164:     row.MobileE164,
@@ -291,18 +333,36 @@ func rowToPlatformLead(row db.PlatformPlatformLead) *platformlead.PlatformLead {
 		BuyTimeline:    leadform.BuyTimeline(row.BuyTimeline),
 	})
 	return platformlead.UnmarshalFromDB(platformlead.Snapshot{
-		ID:                     platformlead.ID(uuidFromPg(row.ID).String()),
-		SourceContactID:        unverifiedcontact.ID(uuidFromPg(row.SourceContactID).String()),
+		ID:                     platformlead.ID(pgconv.UUIDFromPg(row.ID).String()),
+		SourceContactID:        unverifiedcontact.ID(pgconv.UUIDFromPg(row.SourceContactID).String()),
 		Form:                   form,
 		GstVerified:            row.GstVerified,
-		SoldToTenantID:         platformlead.TenantID(uuidStringIfValid(row.SoldToTenantID)),
-		SoldAt:                 timeFromPg(row.SoldAt),
-		SoldToMembershipID:     unverifiedcontact.MembershipID(uuidStringIfValid(row.SoldToMembershipID)),
-		AmountPaisa:            row.AmountPaisa,
-		VerifiedAt:             timeFromPg(row.VerifiedAt),
-		VerifiedByMembershipID: unverifiedcontact.MembershipID(uuidFromPg(row.VerifiedByMembershipID).String()),
-		CreatedAt:              timeFromPg(row.CreatedAt),
+		Tier:                   platformlead.Tier(row.Tier),
+		SaleLimit:              int32PtrToIntPtr(row.SaleLimit),
+		BuyerTenantIDs:         buyers,
+		VerifiedAt:             pgconv.TimeFromPg(row.VerifiedAt),
+		VerifiedByMembershipID: unverifiedcontact.MembershipID(pgconv.UUIDFromPg(row.VerifiedByMembershipID).String()),
+		CreatedAt:              pgconv.TimeFromPg(row.CreatedAt),
 	})
+}
+
+// int32PtrToIntPtr / intPtrToInt32Ptr bridge the sqlc nullable column type
+// (*int32) and the domain's platform-agnostic *int for the sale_limit override.
+func int32PtrToIntPtr(v *int32) *int {
+	if v == nil {
+		return nil
+	}
+	n := int(*v)
+	return &n
+}
+
+func intPtrToInt32Ptr(v *int) *int32 {
+	if v == nil {
+		return nil
+	}
+	//nolint:gosec // sale_limit is a small positive bound, never overflows int32.
+	n := int32(*v)
+	return &n
 }
 
 func drainPlatformLeadEventsToOutbox(ctx context.Context, tx pgx.Tx, l *platformlead.PlatformLead) error {
@@ -314,74 +374,65 @@ func drainPlatformLeadEventsToOutbox(ctx context.Context, tx pgx.Tx, l *platform
 	for i, e := range evs {
 		asAny[i] = e
 	}
-	// PlatformLead aggregate-side events are SUPPRESSED by the
-	// mechanical mapper (handler emits LeadVerifiedV1 + LeadPurchasedV1
-	// directly with the LeadSnapshot). Calling drainEventsToOutbox is
-	// still correct — it returns nil events + no-ops.
+	// Aggregate-side events are suppressed by the mapper (the handler emits
+	// LeadVerifiedV1 + LeadPurchasedV1 directly with the snapshot); drain
+	// no-ops on them.
 	return drainEventsToOutbox(ctx, tx, uuid.Nil, asAny)
 }
 
-
-// applyMarketplaceFilters chains the optional BRD §4.3 filter clauses
-// onto an unsold-leads query. Extracted from MarketplaceBrowse to keep
-// the orchestrator below the cyclomatic-complexity ceiling.
-func applyMarketplaceFilters(q sq.SelectBuilder, f platformlead.MarketplaceFilter) sq.SelectBuilder {
-	if f.State != "" {
-		q = q.Where(sq.Eq{"state_geo": f.State})
-	}
-	if f.City != "" {
-		q = q.Where(sq.Eq{"city": f.City})
-	}
-	if f.District != "" {
-		q = q.Where(sq.Eq{"district": f.District})
-	}
-	if f.Pincode != "" {
-		q = q.Where(sq.Eq{"pincode": f.Pincode})
-	}
-	if f.BusinessType != "" {
-		q = q.Where(sq.Eq{"business_type": f.BusinessType})
-	}
-	if f.MedicineSystem != "" {
-		q = q.Where(sq.Eq{"medicine_system": f.MedicineSystem})
-	}
-	if f.OrderValue != "" {
-		q = q.Where(sq.Eq{"order_value": f.OrderValue})
-	}
-	if f.BuyTimeline != "" {
-		q = q.Where(sq.Eq{"buy_timeline": f.BuyTimeline})
-	}
-	if f.HasDrugLicence != nil {
-		q = q.Where(sq.Eq{"has_drug_licence": *f.HasDrugLicence})
-	}
-	if f.HasGst != nil {
-		q = q.Where(sq.Eq{"has_gst": *f.HasGst})
-	}
-	if f.GstVerified != nil {
-		q = q.Where(sq.Eq{"gst_verified": *f.GstVerified})
-	}
-	if len(f.ProductRanges) > 0 {
-		q = q.Where(sq.Expr("product_ranges && ?", f.ProductRanges))
-	}
-	if len(f.DosageForms) > 0 {
-		q = q.Where(sq.Expr("dosage_forms && ?", f.DosageForms))
-	}
-	return q
+// marketplaceRowToPlatformLead hydrates an aggregate from the PII-omitting
+// projection. The omitted columns are absent from db.MarketplaceBrowseRow, so
+// they hydrate to zero values: nothing to leak (H12).
+func marketplaceRowToPlatformLead(row db.MarketplaceBrowseRow) *platformlead.PlatformLead {
+	form := leadform.UnmarshalFromDB(leadform.Input{
+		ContactName:    row.ContactName,
+		Pincode:        row.Pincode,
+		City:           row.City,
+		District:       row.District,
+		State:          row.StateGeo,
+		HasDrugLicence: row.HasDrugLicence,
+		HasGst:         row.HasGst,
+		HasPan:         row.HasPan,
+		BusinessType:   leadform.BusinessType(row.BusinessType),
+		MedicineSystem: leadform.MedicineSystem(row.MedicineSystem),
+		ProductRanges:  row.ProductRanges,
+		DosageForms:    row.DosageForms,
+		OrderValue:     leadform.OrderValue(row.OrderValue),
+		BuyTimeline:    leadform.BuyTimeline(row.BuyTimeline),
+	})
+	return platformlead.UnmarshalFromDB(platformlead.Snapshot{
+		ID:                     platformlead.ID(pgconv.UUIDFromPg(row.ID).String()),
+		SourceContactID:        unverifiedcontact.ID(pgconv.UUIDFromPg(row.SourceContactID).String()),
+		Form:                   form,
+		GstVerified:            row.GstVerified,
+		Tier:                   platformlead.Tier(row.Tier),
+		SaleLimit:              int32PtrToIntPtr(row.SaleLimit),
+		VerifiedAt:             pgconv.TimeFromPg(row.VerifiedAt),
+		VerifiedByMembershipID: unverifiedcontact.MembershipID(pgconv.UUIDFromPg(row.VerifiedByMembershipID).String()),
+		CreatedAt:              pgconv.TimeFromPg(row.CreatedAt),
+	})
 }
 
-// applyMarketplaceCursor adds the keyset predicate for the (verified_at,
-// id) DESC ordering. Malformed cursor.ID is dropped (no predicate added)
-// rather than failing — keeps the browse endpoint forgiving of stale
-// client-side cursor blobs.
-func applyMarketplaceCursor(q sq.SelectBuilder, cursor pagination.Cursor) sq.SelectBuilder {
+// applyMarketplaceCursorParams sets the (verified_at, id) DESC keyset
+// predicate. A zero/malformed cursor is dropped (params left nil, SQL skips
+// the predicate) so the endpoint tolerates stale client cursor blobs.
+func applyMarketplaceCursorParams(params *db.MarketplaceBrowseParams, cursor pagination.Cursor) {
 	if cursor.SortValue.IsZero() || cursor.ID == "" {
-		return q
+		return
 	}
 	cursorID, err := uuid.Parse(cursor.ID)
 	if err != nil {
-		return q
+		return
 	}
-	return q.Where(sq.Expr(
-		"(verified_at, id) < (?, ?)",
-		cursor.SortValue, cursorID,
-	))
+	params.CursorVerifiedAt = pgconv.PgTimestamp(cursor.SortValue)
+	params.CursorID = pgconv.PgUUID(cursorID)
+}
+
+// nilIfEmptySlice returns nil for an empty slice so the GIN-overlap param
+// maps to SQL NULL (don't filter).
+func nilIfEmptySlice(s []string) []string {
+	if len(s) == 0 {
+		return nil
+	}
+	return s
 }

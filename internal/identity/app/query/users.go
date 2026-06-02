@@ -12,24 +12,15 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
 
-// Sentinel for "first page" cursor — the tuple (maxTime, maxUUID) is
-// guaranteed to be strictly greater than every real (joined_at, id)
-// pair, so the WHERE (joined_at, id) < (sentinel) predicate admits
-// every row. Used by ListUsersPaged when the caller supplied no
-// cursor (q.Cursor.ID == "" + SortValue.IsZero()).
-//
-// Per ADR 0038 — keyset predicate needs concrete tuple values; this
-// is the canonical "no cursor = first page" encoding.
+// First-page keyset sentinel: (maxTime, maxUUID) is strictly greater than
+// every real (joined_at, id) pair, admitting all rows (ADR 0038).
 var (
 	pageStartSortValue = time.Date(9999, 12, 31, 23, 59, 59, 0, time.UTC)
 	pageStartID        = "ffffffff-ffff-ffff-ffff-ffffffffffff"
 )
 
-// UserView is the wire-shape composing per-Membership context with
-// the underlying Person's global identity fields. Mirrors the .NET
-// LeadKart `MembershipDetailDto` — each "user" in the HTTP vocabulary
-// is one (Person, Tenant) Membership row plus enough Person data to
-// make the row legible without a second roundtrip.
+// UserView composes per-Membership context with the Person's global identity fields.
+// A "user" in HTTP vocabulary is one (Person, Tenant) Membership row.
 type UserView struct {
 	MembershipID  string
 	PersonID      string
@@ -49,9 +40,8 @@ type UserView struct {
 
 // ----- GetUserQuery --------------------------------------------------------
 
-// GetUserQuery returns the UserView for a Membership in the supplied
-// tenant. Per ADR 0062 TenantID is explicit; cross-tenant access
-// surfaces as [membership.ErrNotFound] (RLS hides + fake filters).
+// GetUserQuery returns the UserView for a Membership in the supplied tenant.
+// TenantID is explicit per ADR 0062; cross-tenant access surfaces as ErrNotFound.
 type GetUserQuery struct {
 	TenantID     tenant.ID
 	MembershipID membership.ID
@@ -89,11 +79,8 @@ func (h GetUserHandler) Handle(ctx context.Context, q GetUserQuery) (UserView, e
 	}
 	p, err := h.persons.GetByID(ctx, m.PersonID())
 	if err != nil {
-		// Person fetched globally by ID — non-RLS table — should not
-		// fail with NotFound when Membership exists. Surface as
-		// generic error so the operator sees the data-integrity
-		// violation rather than silently presenting an incomplete
-		// view.
+		// Non-RLS table: ErrNotFound here is a data-integrity violation;
+		// surface as error so operators see it rather than an empty view.
 		return UserView{}, fmt.Errorf("get_user: load person %s: %w", m.PersonID(), err)
 	}
 	return composeUserView(m, p), nil
@@ -102,10 +89,7 @@ func (h GetUserHandler) Handle(ctx context.Context, q GetUserQuery) (UserView, e
 // ----- ListUsersQuery ------------------------------------------------------
 
 // ListUsersQuery returns all Memberships in the supplied tenant.
-//
-// Tenant scope is supplied explicitly so the handler stays repository-
-// pattern-pure; the RLS GUC + JWT-bridge middleware ensure the caller
-// can only pass their own tenant ID anyway.
+// TenantID is explicit per ADR 0062; RLS + JWT-bridge ensure it matches the caller's scope.
 type ListUsersQuery struct {
 	TenantID tenant.ID
 }
@@ -127,14 +111,9 @@ func NewListUsersHandler(m membership.Repository, p person.Repository) ListUsers
 	return ListUsersHandler{memberships: m, persons: p}
 }
 
-// Handle returns the slice of UserView for all Memberships under the
-// tenant. Implementation note: N+1 Person fetches per Membership are
-// acceptable for v0.2 (small-tenant UX); the future denormalised view
-// or batched lookup is a per-tenant-scale optimization.
-//
-// Kept for callers that genuinely want every row (full-tenant export,
-// internal admin tools). The HTTP boundary uses ListUsersPagedHandler
-// instead for the standard list endpoint per ADR 0038.
+// Handle returns all UserViews for the tenant.
+// HTTP boundary uses ListUsersPagedHandler for the standard list endpoint (ADR 0038).
+// This handler is for full-tenant exports / internal admin tools.
 func (h ListUsersHandler) Handle(ctx context.Context, q ListUsersQuery) ([]UserView, error) {
 	if q.TenantID.IsZero() {
 		return nil, errors.New("list_users: tenant id required")
@@ -143,10 +122,7 @@ func (h ListUsersHandler) Handle(ctx context.Context, q ListUsersQuery) ([]UserV
 	if err != nil {
 		return nil, fmt.Errorf("list_users: list memberships: %w", err)
 	}
-	// Batched hydration — one query for N persons, not N queries
-	// (Brandur "Postgres at Scale"; per the runtime QueryCounter gate
-	// in [pg.QueryCounter] this brings the per-request query budget
-	// from O(N) to O(1)).
+	// Batched hydration: one GetByIDs query for all persons, not N queries.
 	pIDs := make([]person.ID, 0, len(mems))
 	for _, m := range mems {
 		pIDs = append(pIDs, m.PersonID())
@@ -159,8 +135,7 @@ func (h ListUsersHandler) Handle(ctx context.Context, q ListUsersQuery) ([]UserV
 	for _, m := range mems {
 		p, ok := personByID[m.PersonID()]
 		if !ok {
-			// Race with soft-delete is the only legal absence; treat
-			// as the same opaque load error the prior shape returned.
+			// Only legal absence: race with soft-delete.
 			return nil, fmt.Errorf("list_users: load person %s: %w", m.PersonID(), person.ErrNotFound)
 		}
 		out = append(out, composeUserView(m, p))
@@ -170,19 +145,10 @@ func (h ListUsersHandler) Handle(ctx context.Context, q ListUsersQuery) ([]UserV
 
 // ----- ListUsersPagedQuery -------------------------------------------------
 
-// ListUsersPagedQuery returns one keyset-paginated page of ACTIVE
-// Memberships under the supplied tenant. Per ADR 0038:
-//
-//   - Cursor with zero values = first page (sentinel sort tuple admits
-//     every row).
-//   - PageSize is clamped via [pagination.ClampPageSize] before the
-//     query; callers can pass 0 to get the default.
-//   - Returns [pagination.Page[UserView]] with HasMore + NextCursor
-//     populated.
-//
+// ListUsersPagedQuery returns one keyset page of ACTIVE Memberships (ADR 0038).
+// Zero Cursor = first page. PageSize is clamped by pagination.ClampPageSize.
 // Status filter is hard-coded to 'active' to match the partial index
-// shipped in migration 20260518000001. Inactive listing lands as a
-// separate ?status=inactive endpoint when frontend asks.
+// from migration 20260518000001.
 type ListUsersPagedQuery struct {
 	TenantID tenant.ID
 	Cursor   pagination.Cursor
@@ -214,7 +180,7 @@ func (h ListUsersPagedHandler) Handle(ctx context.Context, q ListUsersPagedQuery
 	}
 	pageSize := pagination.ClampPageSize(q.PageSize)
 
-	// Sentinel for first page when caller supplied no cursor.
+	// Use sentinel when caller supplied no cursor.
 	beforeAt := q.Cursor.SortValue
 	beforeID := q.Cursor.ID
 	if beforeID == "" && beforeAt.IsZero() {
@@ -222,14 +188,13 @@ func (h ListUsersPagedHandler) Handle(ctx context.Context, q ListUsersPagedQuery
 		beforeID = pageStartID
 	}
 
-	// LIMIT page_size+1 — the "peek one extra" pattern. BuildPage drops
-	// the extra row + sets HasMore + NextCursor accordingly.
+	// Fetch page_size+1; BuildPage sets HasMore + NextCursor accordingly.
 	mems, err := h.memberships.ListForTenantPage(ctx, q.TenantID, beforeAt, beforeID, pageSize+1)
 	if err != nil {
 		return pagination.Page[UserView]{}, fmt.Errorf("list_users_paged: list memberships: %w", err)
 	}
 
-	// Batched hydration — one query for N persons, not N queries.
+	// Batched hydration: one query for all persons.
 	pIDs := make([]person.ID, 0, len(mems))
 	for _, m := range mems {
 		pIDs = append(pIDs, m.PersonID())

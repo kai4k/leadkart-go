@@ -63,3 +63,23 @@ Mechanism:
 
 
 **Fitness function:** convention-only — not mechanically expressible. RLS policies live at the Postgres layer + are exercised by the integration-test suite (`task test:int`); mechanically asserting the policy from Go would require an actual DB connection.
+
+---
+
+## Amendment 1 (2026-05-29) — actual mechanism is single-pool tx-local `set_config`, not `AfterAcquire`; and "RLS where it matters"
+
+Two corrections so the doctrine matches the code.
+
+**1. The implemented mechanism is NOT `pgxpool.AfterAcquire` + a separate platform-operator pool.** The original "Decision" describes an `AfterAcquire(ctx, conn)` callback issuing `SET LOCAL app.tenant_id` and a two-pool design. The code does something different — and safer:
+
+- **ONE pool.** Tenant/platform scope is bound **inside each transaction** via `SELECT set_config('app.tenant_id', $1, true)` / `set_config('app.is_platform', 'true', true)` (the `true` = transaction-local; auto-resets at commit/rollback). See `internal/common/pg/{transactor,tenancy}.go`; the scope is selected by `pg.TxScopeTenant` / `pg.TxScopePlatform`.
+- This is **safer than `AfterAcquire`**: tx-local config cannot leak across pooled connections (the failure mode the `AfterAcquire`/`SET LOCAL`-on-checkout approach risks). There is no separate platform pool; platform-scope is a per-tx GUC flip.
+
+The `AfterAcquire`/two-pool text in this ADR (and any mirror in README/CLAUDE.md) is **superseded by this amendment.**
+
+**2. "RLS where it matters" — RLS belongs on the tenant data plane, not on platform-only infrastructure.** The deciding test is the **access path, not the presence of a `tenant_id` column**:
+
+- **RLS+FORCE required:** tables holding tenant-owned rows reachable through **tenant-scoped query paths** (so an app-layer filter bug cannot leak cross-tenant data — RLS is the DB-enforced backstop).
+- **RLS not applicable:** tables only ever accessed by platform-scoped background workers (the **outbox** — read solely by the forwarder under platform scope; see [ADR 0064](0064-outbox-as-relay-and-watermill-forwarder.md)), and cross-tenant/admin tables by definition (`buildingblocks.audit_log_entry` correctly has none).
+
+Consequence: the blanket gate `TestArch_EveryTenantTableHasRLSAndForce` (which requires RLS on *every* table in the tenant-owning schemas) is being made **access-path-aware** — relay/infra tables opt out (via the existing `-- arch-test:opt-out-rls` marker) rather than carrying RLS that protects no real path. Putting RLS where it doesn't match the access pattern buys no security and fights canonical tooling (the lesson from ADR 0027 Amendment 1).

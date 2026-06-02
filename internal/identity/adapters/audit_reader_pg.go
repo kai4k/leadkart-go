@@ -1,9 +1,5 @@
-// audit_reader_pg.go — concrete pg-backed [audit.Reader].
-//
-// Lives in the adapters package (where the sqlc-generated db.* package
-// is allowed to be imported) per ADR 0047 boundary discipline. The
-// consumer-side interface [audit.Reader] is defined in
-// internal/common/audit/reader.go.
+// audit_reader_pg.go — pg-backed [audit.Reader] (ADR 0047 boundary).
+// Consumer-side interface: internal/common/audit/reader.go.
 
 package adapters
 
@@ -16,23 +12,22 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/leadkart/leadkart-go/internal/identity/adapters/db"
 	"github.com/leadkart/leadkart-go/internal/common/audit"
 	"github.com/leadkart/leadkart-go/internal/common/pg"
+	"github.com/leadkart/leadkart-go/internal/common/pgconv"
+	"github.com/leadkart/leadkart-go/internal/identity/adapters/db"
 )
 
-// AuditReaderPG is the concrete pg-backed implementation of
-// [audit.Reader]. Runs every query under [pg.TxScopePlatform] — the
-// audit table is operator-facing, no RLS; HTTP boundary is responsible
-// for authorisation.
+// AuditReaderPG implements [audit.Reader] over Postgres. All queries run
+// under [pg.TxScopePlatform] — the audit table has no RLS; the HTTP
+// boundary enforces authorisation.
 type AuditReaderPG struct {
 	pool *pgxpool.Pool
 	tx   *pg.Transactor
 	q    *db.Queries
 }
 
-// NewAuditReaderPG wires the reader. Panics on nil pool / nil tx — both
-// are load-bearing for the platform-scope tx.
+// NewAuditReaderPG wires the reader. Panics on nil pool or nil tx.
 func NewAuditReaderPG(pool *pgxpool.Pool, tx *pg.Transactor) *AuditReaderPG {
 	if pool == nil {
 		panic("adapters: NewAuditReaderPG pool required")
@@ -43,11 +38,10 @@ func NewAuditReaderPG(pool *pgxpool.Pool, tx *pg.Transactor) *AuditReaderPG {
 	return &AuditReaderPG{pool: pool, tx: tx, q: db.New(pool)}
 }
 
-// Compile-time interface satisfaction.
 var _ audit.Reader = (*AuditReaderPG)(nil)
 
-// ListByTenant returns up to limit entries scoped to tenantID, ordered
-// (occurred_at_utc DESC, id DESC) keyset-paginated.
+// ListByTenant returns up to limit entries for tenantID, keyset-paginated
+// (occurred_at_utc DESC, id DESC).
 func (r *AuditReaderPG) ListByTenant(
 	ctx context.Context,
 	tenantID uuid.UUID,
@@ -55,12 +49,12 @@ func (r *AuditReaderPG) ListByTenant(
 	beforeID uuid.UUID,
 	limit int32,
 ) ([]audit.Entry, error) {
-	var rows []db.BuildingblocksAuditLogEntry
+	var rows []db.CommonAuditLogEntry
 	err := r.tx.WithinTxPgx(ctx, pg.TxScopePlatform, func(ctx context.Context, tx pgx.Tx) error {
 		out, qerr := r.q.WithTx(tx).ListAuditEventsByTenantPage(ctx, db.ListAuditEventsByTenantPageParams{
-			TenantID:       pgUUID(tenantID),
-			BeforeOccurred: pgRequiredTimestamp(before),
-			BeforeID:       pgUUID(beforeID),
+			TenantID:       pgconv.PgUUID(tenantID),
+			BeforeOccurred: pgconv.PgRequiredTimestamp(before),
+			BeforeID:       pgconv.PgUUID(beforeID),
 			Limit:          limit,
 		})
 		if qerr != nil {
@@ -75,8 +69,8 @@ func (r *AuditReaderPG) ListByTenant(
 	return rowsToEntries(rows), nil
 }
 
-// ListByUser returns up to limit entries scoped to userID (= JWT subject
-// = person_id), ordered (occurred_at_utc DESC, id DESC).
+// ListByUser returns up to limit entries for userID (JWT subject = person_id),
+// keyset-paginated (occurred_at_utc DESC, id DESC).
 func (r *AuditReaderPG) ListByUser(
 	ctx context.Context,
 	userID uuid.UUID,
@@ -84,12 +78,12 @@ func (r *AuditReaderPG) ListByUser(
 	beforeID uuid.UUID,
 	limit int32,
 ) ([]audit.Entry, error) {
-	var rows []db.BuildingblocksAuditLogEntry
+	var rows []db.CommonAuditLogEntry
 	err := r.tx.WithinTxPgx(ctx, pg.TxScopePlatform, func(ctx context.Context, tx pgx.Tx) error {
 		out, qerr := r.q.WithTx(tx).ListAuditEventsByUserPage(ctx, db.ListAuditEventsByUserPageParams{
-			UserID:         pgUUID(userID),
-			BeforeOccurred: pgRequiredTimestamp(before),
-			BeforeID:       pgUUID(beforeID),
+			UserID:         pgconv.PgUUID(userID),
+			BeforeOccurred: pgconv.PgRequiredTimestamp(before),
+			BeforeID:       pgconv.PgUUID(beforeID),
 			Limit:          limit,
 		})
 		if qerr != nil {
@@ -104,16 +98,16 @@ func (r *AuditReaderPG) ListByUser(
 	return rowsToEntries(rows), nil
 }
 
-func rowsToEntries(rows []db.BuildingblocksAuditLogEntry) []audit.Entry {
+func rowsToEntries(rows []db.CommonAuditLogEntry) []audit.Entry {
 	out := make([]audit.Entry, 0, len(rows))
 	for _, r := range rows {
 		e := audit.Entry{
-			ID:            uuidFromPg(r.ID),
+			ID:            pgconv.UUIDFromPg(r.ID),
 			Action:        r.Action,
-			UserID:        uuidFromPg(r.UserID),
-			TenantID:      uuidFromPg(r.TenantID),
-			CorrelationID: uuidFromPg(r.CorrelationID),
-			OccurredAtUTC: timeFromPg(r.OccurredAtUtc),
+			UserID:        pgconv.UUIDFromPg(r.UserID),
+			TenantID:      pgconv.UUIDFromPg(r.TenantID),
+			CorrelationID: pgconv.UUIDFromPg(r.CorrelationID),
+			OccurredAtUTC: pgconv.TimeFromPg(r.OccurredAtUtc),
 			Duration:      time.Duration(r.DurationMs) * time.Millisecond,
 			Succeeded:     r.Succeeded,
 			Payload:       r.Payload,

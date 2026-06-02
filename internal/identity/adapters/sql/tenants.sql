@@ -133,11 +133,11 @@ DELETE FROM identity.tenants WHERE id = $1;
 SELECT id, slug, legal_name, display_name, status, created_at,
        similarity(
            lower(slug) || ' ' || lower(legal_name) || ' ' || lower(display_name),
-           lower($1)
+           lower(sqlc.arg(query))
        ) AS rank
 FROM   identity.tenants
 WHERE  status != 'hard_deleted'
 AND    (lower(slug) || ' ' || lower(legal_name) || ' ' || lower(display_name))
-       ILIKE '%' || lower($1) || '%'
+       ILIKE '%' || lower(sqlc.arg(query)) || '%'
 ORDER  BY rank DESC, id DESC
-LIMIT  $2;
+LIMIT  sqlc.arg('limit');

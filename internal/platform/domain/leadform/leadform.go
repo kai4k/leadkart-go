@@ -1,17 +1,10 @@
-// Package leadform defines the BRD §5 lead-form value object shared by
-// the Platform module's UnverifiedContact + PlatformLead aggregates +
-// the integration-event LeadSnapshot payload.
+// Package leadform defines the BRD §5 lead-form value object shared by the
+// Platform module's UnverifiedContact + PlatformLead aggregates and the
+// LeadSnapshot integration-event payload.
 //
-// All fields per BRD §5 "Lead Form — Locked Fields" — Indian PCD pharma
-// canon. The factory validates field-by-field invariants; cross-field
-// references to shared.pincodes / GST checksum live at the caller (the
-// BFF pre-fills city/district/state from pincode, then the handler calls
-// New here for shape validation).
-//
-// Per coding-standards.md "VO factories cross-validate, not just per-
-// field": HasGst implies GstNumber non-empty + format-valid; HasPan
-// implies PanNumber non-empty + format-valid. These cross-checks live
-// here.
+// The factory validates per-field shape (BRD §5 locked fields, Indian PCD
+// pharma canon) plus the cross-field rules HasGst↔GstNumber and HasPan↔PanNumber
+// (coding-standards.md). Pincode→city/district/state lookup lives at the caller.
 package leadform
 
 import (
@@ -25,18 +18,16 @@ import (
 // ErrInvalid is the sentinel for lead-form invariant violations.
 var ErrInvalid = errors.New("leadform: invalid")
 
-// BusinessType + MedicineSystem + OrderValue + BuyTimeline are
-// closed-set strings per BRD §5. Exported as typed constants so callers
-// + tests don't sprinkle literals.
+// BusinessType is a closed-set string per BRD §5.
 type BusinessType string
 
-// Closed-set [BusinessType] values per BRD §5.
+// BusinessType values.
 const (
 	BusinessTypePCD        BusinessType = "PCD"
 	BusinessTypeThirdParty BusinessType = "ThirdParty"
 )
 
-// IsValid reports whether b is one of the closed-set entries.
+// IsValid reports whether b is a known BusinessType.
 func (b BusinessType) IsValid() bool {
 	return b == BusinessTypePCD || b == BusinessTypeThirdParty
 }
@@ -44,16 +35,16 @@ func (b BusinessType) IsValid() bool {
 // String returns the wire form.
 func (b BusinessType) String() string { return string(b) }
 
-// MedicineSystem closed set.
+// MedicineSystem is a closed-set string per BRD §5.
 type MedicineSystem string
 
-// Closed-set [MedicineSystem] values per BRD §5.
+// MedicineSystem values.
 const (
 	MedicineSystemAllopathic MedicineSystem = "Allopathic"
 	MedicineSystemAyurvedic  MedicineSystem = "Ayurvedic"
 )
 
-// IsValid reports whether m is one of the closed-set entries.
+// IsValid reports whether m is a known MedicineSystem.
 func (m MedicineSystem) IsValid() bool {
 	return m == MedicineSystemAllopathic || m == MedicineSystemAyurvedic
 }
@@ -61,10 +52,10 @@ func (m MedicineSystem) IsValid() bool {
 // String returns the wire form.
 func (m MedicineSystem) String() string { return string(m) }
 
-// OrderValue closed set per BRD §5.
+// OrderValue is a closed-set band per BRD §5.
 type OrderValue string
 
-// Closed-set [OrderValue] bands per BRD §5.
+// OrderValue bands.
 const (
 	OrderValueBelow5000  OrderValue = "Below5000"
 	OrderValueUpto25000  OrderValue = "Upto25000"
@@ -72,7 +63,7 @@ const (
 	OrderValueAbove50000 OrderValue = "Above50000"
 )
 
-// IsValid reports whether o is one of the closed-set entries.
+// IsValid reports whether o is a known OrderValue.
 func (o OrderValue) IsValid() bool {
 	switch o {
 	case OrderValueBelow5000, OrderValueUpto25000, OrderValueUpto50000, OrderValueAbove50000:
@@ -84,17 +75,17 @@ func (o OrderValue) IsValid() bool {
 // String returns the wire form.
 func (o OrderValue) String() string { return string(o) }
 
-// BuyTimeline closed set per BRD §5.
+// BuyTimeline is a closed-set string per BRD §5.
 type BuyTimeline string
 
-// Closed-set [BuyTimeline] values per BRD §5.
+// BuyTimeline values.
 const (
-	BuyTimelineWithinWeek    BuyTimeline = "WithinWeek"
-	BuyTimelineWithin15Days  BuyTimeline = "Within15Days"
-	BuyTimelineWithinMonth   BuyTimeline = "WithinMonth"
+	BuyTimelineWithinWeek   BuyTimeline = "WithinWeek"
+	BuyTimelineWithin15Days BuyTimeline = "Within15Days"
+	BuyTimelineWithinMonth  BuyTimeline = "WithinMonth"
 )
 
-// IsValid reports whether t is one of the closed-set entries.
+// IsValid reports whether t is a known BuyTimeline.
 func (t BuyTimeline) IsValid() bool {
 	switch t {
 	case BuyTimelineWithinWeek, BuyTimelineWithin15Days, BuyTimelineWithinMonth:
@@ -106,8 +97,7 @@ func (t BuyTimeline) IsValid() bool {
 // String returns the wire form.
 func (t BuyTimeline) String() string { return string(t) }
 
-// Regexes for E.164 (+91 + 10 digits), 6-digit pincode, GST + PAN
-// patterns per Indian regulatory canon (BRD Appendix B).
+// Indian regulatory format patterns per BRD Appendix B.
 var (
 	mobileRE  = regexp.MustCompile(`^\+91[0-9]{10}$`)
 	pincodeRE = regexp.MustCompile(`^[0-9]{6}$`)
@@ -116,10 +106,6 @@ var (
 )
 
 // Form is the immutable BRD §5 value object. Compare via [Form.Equal].
-//
-// All getters return the contained value verbatim — no defensive copy
-// for primitives; collections (ProductRanges + DosageForms) return a
-// shared backing slice and callers MUST NOT mutate.
 type Form struct {
 	contactName    string
 	mobileE164     string
@@ -142,8 +128,7 @@ type Form struct {
 	buyTimeline    BuyTimeline
 }
 
-// Input is the bag of raw strings + bools the factory consumes. Keeps
-// the [New] signature manageable as BRD §5 fields evolve.
+// Input carries the raw fields [New] validates and [UnmarshalFromDB] rehydrates.
 type Input struct {
 	ContactName    string
 	MobileE164     string
@@ -166,23 +151,10 @@ type Input struct {
 	BuyTimeline    BuyTimeline
 }
 
-// New constructs a Form from raw inputs, validating BRD §5 invariants.
-// Returns [ErrInvalid] wrapped with the specific failure on rejection.
-//
-// Validation policy:
-//   - All required text fields trimmed-non-empty.
-//   - mobile_e164 matches +91 + 10 digits.
-//   - pincode is exactly 6 digits.
-//   - has_gst implies gst_number format-valid (and vice versa: gst
-//     supplied without has_gst is rejected).
-//   - has_pan implies pan_number format-valid.
-//   - business_type, medicine_system, order_value, buy_timeline are
-//     closed-set members.
-//   - product_ranges + dosage_forms entries trimmed-non-empty; nil
-//     slices are tolerated (downstream stores as `text[]` zero array).
-//
-// Returns a value type (not a pointer) — Form is small + immutable;
-// pointer indirection buys nothing here.
+// New constructs a Form from raw inputs, enforcing BRD §5 invariants. It returns
+// [ErrInvalid] wrapped with the specific failure on rejection. has_gst/has_pan
+// must agree with the respective number (set+valid, or unset+empty); list entries
+// are trimmed and empties dropped (nil tolerated).
 func New(in Input) (Form, error) {
 	if strings.TrimSpace(in.ContactName) == "" {
 		return Form{}, fmt.Errorf("%w: contact_name required", ErrInvalid)
@@ -218,8 +190,6 @@ func New(in Input) (Form, error) {
 		return Form{}, fmt.Errorf("%w: buy_timeline %q invalid", ErrInvalid, in.BuyTimeline)
 	}
 
-	// HasGst/PAN cross-validation. has_x=true ↔ x_number non-empty +
-	// format-valid; has_x=false ↔ x_number empty.
 	gstNorm := strings.TrimSpace(strings.ToUpper(in.GstNumber))
 	if in.HasGst {
 		if !gstRE.MatchString(gstNorm) {
@@ -241,7 +211,6 @@ func New(in Input) (Form, error) {
 		}
 	}
 
-	// Clean product_ranges + dosage_forms — drop empties, keep order.
 	ranges := cleanStringList(in.ProductRanges)
 	dfs := cleanStringList(in.DosageForms)
 
@@ -268,9 +237,8 @@ func New(in Input) (Form, error) {
 	}, nil
 }
 
-// UnmarshalFromDB rehydrates a Form WITHOUT re-validating — TDL canon
-// for trusted-storage re-hydration paths. Callers (repositories) MUST
-// have read the row from a trusted source.
+// UnmarshalFromDB rehydrates a Form from a trusted row without re-validating
+// (TDL canon for trusted-storage rehydration).
 func UnmarshalFromDB(in Input) Form {
 	return Form{
 		contactName:    in.ContactName,
@@ -295,8 +263,8 @@ func UnmarshalFromDB(in Input) Form {
 	}
 }
 
-// cleanStringList trims each entry + drops empties. Returns nil for
-// empty/all-empty input so storage layer writes an empty `text[]`.
+// cleanStringList trims entries and drops empties, returning nil when nothing
+// remains so storage writes an empty text[].
 func cleanStringList(in []string) []string {
 	if len(in) == 0 {
 		return nil
@@ -315,69 +283,64 @@ func cleanStringList(in []string) []string {
 	return out
 }
 
-// ----- Getters --------------------------------------------------------------
-
 // ContactName returns the contact-person full name.
 func (f Form) ContactName() string { return f.contactName }
 
 // MobileE164 returns the +91XXXXXXXXXX mobile number.
 func (f Form) MobileE164() string { return f.mobileE164 }
 
-// Email returns the contact email (may be empty — BRD §5 not required).
+// Email returns the contact email; may be empty (BRD §5 optional).
 func (f Form) Email() string { return f.emailAddr }
 
-// Pincode returns the 6-digit Indian PIN code.
+// Pincode returns the 6-digit PIN code.
 func (f Form) Pincode() string { return f.pincode }
 
-// City returns the city auto-derived from pincode (BRD §5).
+// City returns the city.
 func (f Form) City() string { return f.city }
 
-// District returns the district auto-derived from pincode.
+// District returns the district.
 func (f Form) District() string { return f.district }
 
-// State returns the state name auto-derived from pincode.
+// State returns the state name.
 func (f Form) State() string { return f.stateName }
 
-// Street returns the optional free-text street address.
+// Street returns the optional street address.
 func (f Form) Street() string { return f.street }
 
-// HasDrugLicence reports the boolean drug-licence declaration.
+// HasDrugLicence reports the drug-licence declaration.
 func (f Form) HasDrugLicence() bool { return f.hasDrugLicence }
 
 // HasGst reports whether the lead has a GST registration.
 func (f Form) HasGst() bool { return f.hasGst }
 
-// GstNumber returns the GSTIN (empty if HasGst == false).
+// GstNumber returns the GSTIN; empty when HasGst is false.
 func (f Form) GstNumber() string { return f.gstNumber }
 
 // HasPan reports whether the lead has a PAN.
 func (f Form) HasPan() bool { return f.hasPan }
 
-// PanNumber returns the PAN (empty if HasPan == false).
+// PanNumber returns the PAN; empty when HasPan is false.
 func (f Form) PanNumber() string { return f.panNumber }
 
-// BusinessType returns the closed-set business type.
+// BusinessType returns the business type.
 func (f Form) BusinessType() BusinessType { return f.businessType }
 
-// MedicineSystem returns the closed-set medicine system.
+// MedicineSystem returns the medicine system.
 func (f Form) MedicineSystem() MedicineSystem { return f.medicineSystem }
 
-// ProductRanges returns the (possibly nil) product-range list.
-// Callers MUST NOT mutate the returned slice — VO is immutable.
-func (f Form) ProductRanges() []string { return f.productRanges }
+// ProductRanges returns a defensive copy, keeping the VO immutable.
+func (f Form) ProductRanges() []string { return slices.Clone(f.productRanges) }
 
-// DosageForms returns the (possibly nil) dosage-form list.
-// Callers MUST NOT mutate the returned slice.
-func (f Form) DosageForms() []string { return f.dosageForms }
+// DosageForms returns a defensive copy, keeping the VO immutable.
+func (f Form) DosageForms() []string { return slices.Clone(f.dosageForms) }
 
-// OrderValue returns the closed-set order-value band.
+// OrderValue returns the order-value band.
 func (f Form) OrderValue() OrderValue { return f.orderValue }
 
-// BuyTimeline returns the closed-set buy timeline.
+// BuyTimeline returns the buy timeline.
 func (f Form) BuyTimeline() BuyTimeline { return f.buyTimeline }
 
-// Equal reports value equality. Used in idempotency no-op checks +
-// tests.
+// Equal reports value equality. Used in idempotency no-op checks and tests.
 func (f Form) Equal(other Form) bool {
 	if f.contactName != other.contactName ||
 		f.mobileE164 != other.mobileE164 ||

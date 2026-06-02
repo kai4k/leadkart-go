@@ -14,10 +14,8 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person/persontest"
 )
 
-// TestNewRequestEmailChangeHandler_PanicsOnNilDeps locks the wiring
-// contract: the persons repository is required. Per ADR 0057 the
-// handler intentionally does NOT take an email gateway — delivery
-// is via outbox subscriber, not synchronous call.
+// TestNewRequestEmailChangeHandler_PanicsOnNilDeps — persons repo is required.
+// Per ADR 0057 there is no email gateway dep (delivery is via outbox).
 func TestNewRequestEmailChangeHandler_PanicsOnNilDeps(t *testing.T) {
 	t.Parallel()
 	defer func() {
@@ -28,9 +26,7 @@ func TestNewRequestEmailChangeHandler_PanicsOnNilDeps(t *testing.T) {
 	_ = command.NewRequestEmailChangeHandler(nil, func() time.Time { return testNow }) // arch-test:ignore-err - test fixture setup
 }
 
-// TestRequestEmailChange_RejectsZeroPersonID exercises the input-
-// shape guard before any repository call. Aligned with the typed-
-// sentinel pattern used across the change-password flow.
+// TestRequestEmailChange_RejectsZeroPersonID — input guard before any repo call.
 func TestRequestEmailChange_RejectsZeroPersonID(t *testing.T) {
 	t.Parallel()
 	addr, err := email.New("new@example.test")
@@ -49,8 +45,7 @@ func TestRequestEmailChange_RejectsZeroPersonID(t *testing.T) {
 	}
 }
 
-// TestRequestEmailChange_RejectsZeroEmail mirrors the person-id
-// guard for the email VO.
+// TestRequestEmailChange_RejectsZeroEmail — guard on the email VO.
 func TestRequestEmailChange_RejectsZeroEmail(t *testing.T) {
 	t.Parallel()
 	p := newPersonWithPassword(t, "irrelevant")
@@ -66,10 +61,8 @@ func TestRequestEmailChange_RejectsZeroEmail(t *testing.T) {
 	}
 }
 
-// TestRequestEmailChange_PersonNotFound_ReturnsErrEmailChangeRejected
-// proves the generic-rejection invariant: a missing Person collapses
-// to the same error as terminal-state / same-email rejections. Per
-// security.md "Email change" + Auth0/Okta canon — enumeration safety.
+// TestRequestEmailChange_PersonNotFound_ReturnsErrEmailChangeRejected — a
+// missing Person collapses to the generic rejection (enumeration-safety).
 func TestRequestEmailChange_PersonNotFound_ReturnsErrEmailChangeRejected(t *testing.T) {
 	t.Parallel()
 	addr, err := email.New("new@example.test")
@@ -88,10 +81,8 @@ func TestRequestEmailChange_PersonNotFound_ReturnsErrEmailChangeRejected(t *test
 	}
 }
 
-// TestRequestEmailChange_SameAsCurrent_Rejected proves the no-op
-// guard fires before the token mint + UpdateByID call. Email
-// canon: requesting a change to the current address is collapsed
-// into the generic rejection.
+// TestRequestEmailChange_SameAsCurrent_Rejected — requesting the current
+// address collapses to the generic rejection before token mint.
 func TestRequestEmailChange_SameAsCurrent_Rejected(t *testing.T) {
 	t.Parallel()
 	p := newPersonWithPassword(t, "irrelevant")
@@ -107,26 +98,16 @@ func TestRequestEmailChange_SameAsCurrent_Rejected(t *testing.T) {
 	}
 }
 
-// =============================================================================
-// B2 — additional branch coverage for RequestEmailChange + the entire
-// ConfirmEmailChangeHandler (zero existing tests). Per ADR 0062 §6 +
-// security.md "Email change" canon.
-//
-// Inline wrappers `b2EmailPersonRepo` add error injection on the four call
-// sites (GetByID / GetByEmail / GetByEmailChangeTokenHash / UpdateByID).
-// Names scoped to b2* per the concurrent-agent coordination convention.
-// =============================================================================
-
-// b2EmailPersonRepo wraps the shared persontest.FakeRepository with per-
-// call error injection used by the email-change branches the bare fake
-// can't produce (non-NotFound infra errors + cross-Person collision).
+// Additional branch coverage for RequestEmailChange + ConfirmEmailChangeHandler
+// (ADR 0062 §6). b2EmailPersonRepo injects errors on the four call sites
+// (GetByID / GetByEmail / GetByEmailChangeTokenHash / UpdateByID).
 type b2EmailPersonRepo struct {
 	*persontest.FakeRepository
 
-	errOnGetByID                  error
-	errOnGetByEmail               error
+	errOnGetByID                   error
+	errOnGetByEmail                error
 	errOnGetByEmailChangeTokenHash error
-	errOnUpdateByID               error
+	errOnUpdateByID                error
 }
 
 func newB2EmailPersonRepo(t *testing.T, p *person.Person) *b2EmailPersonRepo {
@@ -178,9 +159,8 @@ func (r *b2EmailPersonRepo) UpdateByID(ctx context.Context, id person.ID, fn fun
 
 var errB2EmailChange = errors.New("b2: synthetic infrastructure failure (email-change)")
 
-// b2NewSecondaryPerson constructs a SECOND Person with a different ID +
-// email — used for collision tests (a different Person already owns the
-// "new email").
+// b2NewSecondaryPerson builds a second Person (different ID + email) for the
+// collision tests.
 func b2NewSecondaryPerson(t *testing.T, addr email.Address) *person.Person {
 	t.Helper()
 	hash, err := person.NewPasswordHash("$argon2id$v=19$m=65536,t=3,p=1$c29tZXNhbHQAAAAA$WjQXjLDXrEPYz8KGRwl9N6c1L+sM5n5L0c0kMmH3vLU")
@@ -256,9 +236,7 @@ func TestRequestEmailChange_GloballySuspendedPerson_Rejected(t *testing.T) {
 }
 
 func TestRequestEmailChange_NewEmailOwnedByDifferentPerson_AlreadyTaken(t *testing.T) {
-	// Collision: another Person owns the proposed new email. Handler
-	// surfaces ErrEmailAlreadyTaken (distinct 409 vs generic rejection
-	// — UI shows targeted message).
+	// Another Person owns the proposed email → ErrEmailAlreadyTaken (409).
 	t.Parallel()
 
 	p := newPersonWithPassword(t, "irrelevant")
@@ -318,15 +296,9 @@ func TestRequestEmailChange_UpdateByID_Error_Wrapped(t *testing.T) {
 
 // ----- ConfirmEmailChange — full coverage (no existing tests) ------------
 
-// b2SeedPendingEmailChange mints a fresh confirmation token + applies it
-// to the supplied Person via RequestEmailChange, then returns the raw
-// plaintext token the test will present to ConfirmEmailChangeHandler.
-//
-// Mirrors what request_email_change.go does post-mintResetToken, but
-// stays in-test so we don't depend on the handler's outbox event-drain
-// path to retrieve the token. The hash format MUST match
-// hashEmailChangeToken (SHA-256 hex of the plaintext) so the
-// handler's verification path resolves.
+// b2SeedPendingEmailChange applies a fresh confirmation token to p via
+// RequestEmailChange and returns the plaintext. The hash matches
+// hashEmailChangeToken (SHA-256 hex) so the handler's verification resolves.
 func b2SeedPendingEmailChange(t *testing.T, p *person.Person, newAddr email.Address) string {
 	t.Helper()
 	plaintext := "deterministic-test-token-base64url-stable-length-32+chars"
@@ -390,18 +362,9 @@ func TestConfirmEmailChange_EmptyRawToken_TokenInvalid(t *testing.T) {
 }
 
 func TestConfirmEmailChange_HashWrapperFormatError_TokenInvalid(t *testing.T) {
-	// NewEmailChangeTokenHash rejects hashes outside [emailChangeHashMinLen,
-	// emailChangeHashMaxLen]. Standard SHA-256 hex is 64 chars so the
-	// natural path never fails; force the wrap path by re-checking the
-	// handler's behaviour when the hash wrapper rejects. Easiest trigger:
-	// the handler hashes the raw plaintext via sha256 then wraps; the
-	// wrap can only fail on length, and SHA-256 hex is fixed at 64. The
-	// handler nevertheless contains an error path — exercised by passing
-	// a raw token that hashes to a string outside bounds (impossible at
-	// runtime). We assert the runtime-reachable hash path: a non-existent
-	// hash lookup. (The format-error branch is structurally unreachable
-	// for SHA-256 output; documented for future-proofing if the hash
-	// algorithm rotates.)
+	// The NewEmailChangeTokenHash format-error branch is unreachable for
+	// SHA-256 output (always 64 hex chars), so this exercises the
+	// runtime-reachable path: a non-existent hash lookup → token-invalid.
 	t.Parallel()
 	repo := seedPersonRepo(t, nil) // no Person seeded → GetByEmailChangeTokenHash returns ErrNotFound
 	h := command.NewConfirmEmailChangeHandler(repo, func() time.Time { return testNow })
@@ -450,9 +413,8 @@ func TestConfirmEmailChange_AnonymisedPerson_TokenInvalid(t *testing.T) {
 	if err := p.Anonymise(testNow); err != nil {
 		t.Fatalf("Anonymise: %v", err)
 	}
-	// After Anonymise the Person carries pending-email + is anonymised.
-	// The fake's GetByEmailChangeTokenHash still returns the row (scan
-	// is not state-filtered) — handler MUST reject before UpdateByID.
+	// The fake still returns the row (no state filter) — the handler must
+	// reject before UpdateByID.
 	repo := seedPersonRepo(t, p)
 	h := command.NewConfirmEmailChangeHandler(repo, func() time.Time { return testNow })
 
@@ -465,9 +427,7 @@ func TestConfirmEmailChange_AnonymisedPerson_TokenInvalid(t *testing.T) {
 }
 
 func TestConfirmEmailChange_UpdateByID_PersonInvalidError_TokenInvalid(t *testing.T) {
-	// Inject person.ErrInvalid from UpdateByID — handler MUST translate
-	// to ErrEmailChangeTokenInvalid (e.g. aggregate-side mismatch / expired
-	// surfacing as the generic 4xx).
+	// person.ErrInvalid from UpdateByID translates to ErrEmailChangeTokenInvalid.
 	t.Parallel()
 
 	newAddr, _ := email.New("rotated@example.test")
@@ -486,9 +446,8 @@ func TestConfirmEmailChange_UpdateByID_PersonInvalidError_TokenInvalid(t *testin
 }
 
 func TestConfirmEmailChange_UpdateByID_EmailTaken_TokenInvalid(t *testing.T) {
-	// Inject person.ErrEmailTaken from UpdateByID — collision race at
-	// commit time collapses to the generic ErrEmailChangeTokenInvalid
-	// (not 409) so original requester learns nothing about collision.
+	// A commit-time collision (person.ErrEmailTaken) collapses to the generic
+	// ErrEmailChangeTokenInvalid, not 409.
 	t.Parallel()
 
 	newAddr, _ := email.New("rotated@example.test")

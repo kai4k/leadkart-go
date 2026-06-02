@@ -263,57 +263,15 @@ CREATE POLICY lc_write ON platform.lead_credits
 COMMENT ON TABLE platform.lead_credits IS
     'Per-tenant credit balance. Optimistic concurrency: every UPDATE checks WHERE version = $old_version + sets version = $old_version + 1; 0 rows affected → conflict → command handler retries with backoff. Per ADR 0059.';
 
--- ============================================================================
--- platform.outbox
--- Sibling of identity.outbox — same shape, same RLS+FORCE posture. Topic
--- routed via `payload`-level Topic() metadata at forwarder time. ADR 0059.
--- ============================================================================
-
-CREATE TABLE platform.outbox (
-    id              uuid        PRIMARY KEY,
-    tenant_id       uuid        NOT NULL,           -- denormalised; platform-scoped events use uuid.Nil
-    topic           text        NOT NULL,
-    payload         jsonb       NOT NULL,
-    occurred_at     timestamptz NOT NULL,
-    created_at      timestamptz NOT NULL DEFAULT now(),
-    forwarded       boolean     NOT NULL DEFAULT false,
-    forwarded_at    timestamptz NULL,
-    -- ADR 0056 actor-chain propagation (mirror of identity.outbox post-9.2c)
-    act_operator_id uuid        NULL,
-    act_session_id  uuid        NULL,
-    act_reason      text        NULL
-);
-
-CREATE INDEX idx_platform_outbox_unforwarded
-    ON platform.outbox (created_at) WHERE NOT forwarded;
-CREATE INDEX idx_platform_outbox_tenant_topic_occurred
-    ON platform.outbox (tenant_id, topic, occurred_at DESC);
-
-ALTER TABLE platform.outbox ENABLE ROW LEVEL SECURITY;
-ALTER TABLE platform.outbox FORCE  ROW LEVEL SECURITY;
-
-CREATE POLICY platform_outbox_select ON platform.outbox
-    FOR SELECT
-    USING (tenant_id = app.current_tenant() OR app.is_platform());
-
-CREATE POLICY platform_outbox_insert ON platform.outbox
-    FOR INSERT
-    WITH CHECK (tenant_id = app.current_tenant() OR app.is_platform());
-
-CREATE POLICY platform_outbox_modify ON platform.outbox
-    FOR UPDATE
-    USING (app.is_platform())
-    WITH CHECK (app.is_platform());
-
-COMMENT ON TABLE platform.outbox IS
-    'Per-module outbox per ADR 0008 + 0027. Same shape as identity.outbox; forwarder publishes to Watermill topic platform.events. Doubles as audit log.';
+-- NOTE: the per-module platform.outbox table was retired by ADR 0064/0067
+-- (migration 20260604000002) in favour of the shared common.outbox relay
+-- drained by the Watermill library Forwarder. No per-module outbox here.
 
 -- +goose StatementEnd
 
 -- +goose Down
 -- +goose StatementBegin
 
-DROP TABLE IF EXISTS platform.outbox CASCADE;
 DROP TABLE IF EXISTS platform.lead_credits CASCADE;
 DROP TABLE IF EXISTS platform.platform_leads CASCADE;
 DROP TABLE IF EXISTS platform.verification_calls CASCADE;

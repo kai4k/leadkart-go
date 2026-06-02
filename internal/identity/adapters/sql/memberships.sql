@@ -76,9 +76,9 @@ SELECT id, person_id, tenant_id, status, joined_at, left_at,
        created_by_membership_id
 FROM   identity.tenant_memberships
 WHERE  status = 'active'
-  AND  (joined_at, id) < ($1::timestamptz, $2::uuid)
+  AND  (joined_at, id) < (sqlc.arg(before_joined_at)::timestamptz, sqlc.arg(before_id)::uuid)
 ORDER  BY joined_at DESC, id DESC
-LIMIT  $3;
+LIMIT  sqlc.arg('limit');
 
 -- name: ListSuperAdminMembershipsInTenant :many
 -- Returns the active Memberships in the supplied tenant that hold a

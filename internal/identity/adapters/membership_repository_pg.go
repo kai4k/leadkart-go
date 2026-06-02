@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/leadkart/leadkart-go/internal/common/pg"
+	"github.com/leadkart/leadkart-go/internal/common/pgconv"
 	"github.com/leadkart/leadkart-go/internal/identity/adapters/db"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/permission"
@@ -21,35 +22,24 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
 
-// permission-override kind constants. Mirror of the
+// permission-override kind constants — mirror of the
 // CHECK (kind IN ('granted', 'revoked')) in migration 20260507000002.
-// Wire-stable; persistence + hydration share these — no magic strings.
 const (
 	overrideKindGranted = "granted"
 	overrideKindRevoked = "revoked"
 )
 
-// MembershipRepository is the pgx/sqlc-backed implementation of
-// [membership.Repository]. tenant_memberships is RLS+FORCE, so every
-// write/read except GetActiveForPerson runs under TxScopeTenant — the
-// caller MUST have placed the appropriate tenant on context first.
+// MembershipRepository is the pgx/sqlc-backed [membership.Repository].
+// tenant_memberships is RLS+FORCE; every method except GetActiveForPerson
+// runs under TxScopeTenant.
 //
-// GetActiveForPerson is the documented carve-out for non-login
-// callers that need to resolve "what tenant does this Person belong
-// to" without prior tenant context (cascade subscribers, audit
-// reports, platform-operator UIs). Runs under TxScopePlatform to
-// bypass RLS + queries by PersonID through the partial-unique index
-// `uq_memberships_person_active`.
+// GetActiveForPerson runs under TxScopePlatform to bypass RLS for
+// callers (cascade subscribers, audit, platform UI) that need to resolve
+// "which tenant does this Person belong to" without prior tenant context.
+// Queries via the partial-unique index uq_memberships_person_active.
 //
-// The login flow does NOT use this method. Per current canon
-// (Brandur Leach / DHH "Postgres scales further than you think")
-// login goes through [adapters.AuthRouterPG] which JOINs persons +
-// tenant_memberships in one roundtrip — saves the persons-by-email
-// + memberships-by-person-id pair into a single indexed lookup.
-// Materialised views / denormalised auth_routing tables (the
-// 2014-era Stripe / Auth0 patterns) are no longer the canon — modern
-// Postgres + JWT + cache layers shifted the cost surface away from
-// this query.
+// Login does NOT use GetActiveForPerson — it goes through
+// [adapters.AuthRouterPG] (single-roundtrip JOIN).
 type MembershipRepository struct {
 	pool *pgxpool.Pool
 	tx   *pg.Transactor
@@ -61,15 +51,10 @@ func NewMembershipRepository(pool *pgxpool.Pool, tx *pg.Transactor) *MembershipR
 	return &MembershipRepository{pool: pool, tx: tx, q: db.New(pool)}
 }
 
-// Add satisfies [membership.Repository] — persists a new Active
-// Membership + drains CreatedEvent. When ctx carries an active tx (a
-// parent [pg.UnitOfWork] is in flight, including the RegisterTenant
-// platform-scope path), Add joins that tx rather than opening its own.
-// Standalone Add (no parent tx) runs under TxScopeTenant; caller must
-// have set tenancy.WithID(ctx, m.TenantID()) before invoking.
-//
-// Surfaces the partial-unique-index violation (single-Active-Membership
-// invariant) as [membership.ErrAlreadyActive].
+// Add satisfies [membership.Repository]. Joins an ambient UoW tx when
+// present; otherwise opens a tenant-scoped tx (caller must bind tenancy
+// on ctx). Surfaces the partial-unique-index violation as
+// [membership.ErrAlreadyActive].
 func (r *MembershipRepository) Add(ctx context.Context, m *membership.Membership) error {
 	if tx, ok := pg.TxFromContext(ctx); ok {
 		return r.addOnTx(ctx, tx, m)
@@ -79,11 +64,8 @@ func (r *MembershipRepository) Add(ctx context.Context, m *membership.Membership
 	})
 }
 
-// addOnTx persists the aggregate against the supplied tx — Active row
-// + profile + role_assignments + permission_overrides — then drains
-// events. Unexported.
-//
-// Surfaces ErrAlreadyActive on partial-unique-index violation.
+// addOnTx writes the membership row, profile, role_assignments, and
+// permission_overrides, then drains events. Unexported.
 func (r *MembershipRepository) addOnTx(ctx context.Context, tx pgx.Tx, m *membership.Membership) error {
 	q := r.q.WithTx(tx)
 	if err := insertMembershipRow(ctx, q, m); err != nil {
@@ -101,20 +83,25 @@ func (r *MembershipRepository) addOnTx(ctx context.Context, tx pgx.Tx, m *member
 	return drainMembershipEvents(ctx, tx, m)
 }
 
-// UpdateByID satisfies [membership.Repository]. Tenant-scoped: caller
-// must have set tenancy on ctx so RLS reveals the row.
-//
-// Persistence projects the full aggregate state — status (+ left_at),
-// profile fields, role_assignments (replace-all), and permission overrides
-// (replace-all) — under one transaction, then drains events. Replace-all
-// is simpler than per-row diff tracking and idempotent under retry.
+// runInTxTenant joins an ambient UoW tx when present, else opens a
+// tenant-scoped tx bound to tenantID (ADR 0067 Phase-4 UoW-join contract).
+func (r *MembershipRepository) runInTxTenant(ctx context.Context, tenantID tenant.ID, fn func(ctx context.Context, tx pgx.Tx) error) error {
+	if tx, ok := pg.TxFromContext(ctx); ok {
+		return fn(ctx, tx)
+	}
+	return r.tx.WithinTxPgxTenant(ctx, tenantID.String(), fn)
+}
+
+// UpdateByID satisfies [membership.Repository]. Persists full aggregate
+// state (status, profile, role_assignments, permission_overrides) under
+// replace-all semantics, then drains events.
 func (r *MembershipRepository) UpdateByID(
 	ctx context.Context,
 	tenantID tenant.ID,
 	id membership.ID,
 	updateFn func(*membership.Membership) (bool, error),
 ) error {
-	return r.tx.WithinTxPgxTenant(ctx, tenantID.String(), func(ctx context.Context, tx pgx.Tx) error {
+	return r.runInTxTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
 		q := r.q.WithTx(tx)
 		m, err := loadMembership(ctx, q, id)
 		if err != nil {
@@ -143,13 +130,11 @@ func (r *MembershipRepository) UpdateByID(
 	})
 }
 
-// GetByID satisfies [membership.Repository]. Read path; runs under
-// tenant scope for RLS. Returns [membership.ErrNotFound] if no row
-// matches OR if the row exists in a different tenant scope (RLS-hidden
-// — same observable behaviour as truly missing).
+// GetByID satisfies [membership.Repository]. Returns [membership.ErrNotFound]
+// when no row matches or the row is RLS-hidden by a different tenant scope.
 func (r *MembershipRepository) GetByID(ctx context.Context, tenantID tenant.ID, id membership.ID) (*membership.Membership, error) {
 	var out *membership.Membership
-	err := r.tx.WithinTxPgxTenant(ctx, tenantID.String(), func(ctx context.Context, tx pgx.Tx) error {
+	err := r.runInTxTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
 		m, err := loadMembership(ctx, r.q.WithTx(tx), id)
 		if err != nil {
 			return err
@@ -163,12 +148,9 @@ func (r *MembershipRepository) GetByID(ctx context.Context, tenantID tenant.ID, 
 	return out, nil
 }
 
-// GetActiveForPerson satisfies [membership.Repository]. Cross-tenant:
-// runs under platform scope to bypass RLS. Returns the (single) Active
-// Membership for the Person across all tenants — the partial-unique
-// index guarantees there is at most one.
-//
-// Returns [membership.ErrNotFound] if the Person has no Active Membership.
+// GetActiveForPerson satisfies [membership.Repository]. Platform-scoped
+// (bypasses RLS). Returns the single Active Membership for the Person, or
+// [membership.ErrNotFound] when none exists.
 func (r *MembershipRepository) GetActiveForPerson(
 	ctx context.Context,
 	personID person.ID,
@@ -180,23 +162,22 @@ func (r *MembershipRepository) GetActiveForPerson(
 	var out *membership.Membership
 	err = r.tx.WithinTxPgx(ctx, pg.TxScopePlatform, func(ctx context.Context, tx pgx.Tx) error {
 		q := r.q.WithTx(tx)
-		// ListMembershipsForPerson returns all (active + inactive) rows
-		// across tenants. The partial-unique index guarantees at most one
-		// is Active; we filter in memory rather than adding a fourth sqlc
-		// query path.
-		rows, err := q.ListMembershipsForPerson(ctx, pgUUID(uid))
+		// ListMembershipsForPerson returns all rows (active + inactive)
+		// across tenants. Filter active in memory; the partial-unique
+		// index guarantees at most one.
+		rows, err := q.ListMembershipsForPerson(ctx, pgconv.PgUUID(uid))
 		if err != nil {
 			return fmt.Errorf("membership repo: list for person: %w", err)
 		}
 		for _, row := range rows {
-			if row.Status != "active" {
+			if row.Status != membership.StatusActive.String() {
 				continue
 			}
-			roleIDs, lerr := loadRoleAssignments(ctx, q, uuidFromPg(row.ID))
+			roleIDs, lerr := loadRoleAssignments(ctx, q, pgconv.UUIDFromPg(row.ID))
 			if lerr != nil {
 				return lerr
 			}
-			granted, revoked, lerr := loadPermissionOverrides(ctx, q, uuidFromPg(row.ID))
+			granted, revoked, lerr := loadPermissionOverrides(ctx, q, pgconv.UUIDFromPg(row.ID))
 			if lerr != nil {
 				return lerr
 			}
@@ -215,35 +196,28 @@ func (r *MembershipRepository) GetActiveForPerson(
 	return out, nil
 }
 
-// ListForTenant satisfies [membership.Repository]. Tenant-scoped read.
-// Caller's tenant ID on ctx MUST equal the requested tenantID — we
-// redundantly assert so downstream callers can't accidentally cross
-// boundaries (RLS would have hidden mismatches anyway, but explicit
-// failure beats silent empty result).
+// ListForTenant satisfies [membership.Repository]. RLS isolates rows to
+// the bound tenant; mismatches return empty rather than error.
 func (r *MembershipRepository) ListForTenant(
 	ctx context.Context,
 	tenantID tenant.ID,
 ) ([]*membership.Membership, error) {
-	// (No SQL helper for "list all in current tenant" — we go through
-	// ListMembershipsForPerson would be wrong scope. Issue a plain SELECT
-	// via the transactor; sqlc adds nothing here.)
+	// ListMembershipsInCurrentTenant is the correct scope here.
 	var out []*membership.Membership
-	err := r.tx.WithinTxPgxTenant(ctx, tenantID.String(), func(ctx context.Context, tx pgx.Tx) error {
+	err := r.runInTxTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
 		q := r.q.WithTx(tx)
 		hydrated, err := q.ListMembershipsInCurrentTenant(ctx)
 		if err != nil {
 			return fmt.Errorf("membership repo: list for tenant: %w", err)
 		}
-		// Hydrate child-table state for each row. ListForTenant is an admin
-		// path; the N+2 round-trips per row are acceptable until a hot
-		// path needs the bulk json_agg join (benchmark first).
+		// N+2 hydration per row; acceptable for this admin-path listing.
 		out = make([]*membership.Membership, 0, len(hydrated))
 		for _, row := range hydrated {
-			roleIDs, lerr := loadRoleAssignments(ctx, q, uuidFromPg(row.ID))
+			roleIDs, lerr := loadRoleAssignments(ctx, q, pgconv.UUIDFromPg(row.ID))
 			if lerr != nil {
 				return lerr
 			}
-			granted, revoked, lerr := loadPermissionOverrides(ctx, q, uuidFromPg(row.ID))
+			granted, revoked, lerr := loadPermissionOverrides(ctx, q, pgconv.UUIDFromPg(row.ID))
 			if lerr != nil {
 				return lerr
 			}
@@ -261,14 +235,9 @@ func (r *MembershipRepository) ListForTenant(
 	return out, nil
 }
 
-// ListForTenantPage satisfies [membership.Repository]. Keyset-
-// paginated active-only listing per ADR 0038. Backed by the
-// partial composite index idx_memberships_tenant_active_joined
-// shipped in migration 20260518000001.
-//
-// limit is page_size + 1 (the "peek one extra" pattern); the
-// application-layer query handler drops the extra row when present
-// and uses it to set next_cursor.
+// ListForTenantPage satisfies [membership.Repository]. Keyset-paginated
+// active-only listing (ADR 0038); backed by
+// idx_memberships_tenant_active_joined. limit = page_size+1 (peek-one-extra).
 func (r *MembershipRepository) ListForTenantPage(
 	ctx context.Context,
 	tenantID tenant.ID,
@@ -285,28 +254,24 @@ func (r *MembershipRepository) ListForTenantPage(
 	}
 
 	var out []*membership.Membership
-	err = r.tx.WithinTxPgxTenant(ctx, tenantID.String(), func(ctx context.Context, tx pgx.Tx) error {
+	err = r.runInTxTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
 		q := r.q.WithTx(tx)
 		hydrated, qerr := q.ListActiveMembershipsInTenantPage(ctx, db.ListActiveMembershipsInTenantPageParams{
-			BeforeJoinedAt: pgRequiredTimestamp(beforeJoinedAt),
-			BeforeID:       pgUUID(beforeUUID),
+			BeforeJoinedAt: pgconv.PgRequiredTimestamp(beforeJoinedAt),
+			BeforeID:       pgconv.PgUUID(beforeUUID),
 			Limit:          int32(limit), //nolint:gosec // page_size capped at 200 well within int32
 		})
 		if qerr != nil {
 			return fmt.Errorf("membership repo: list-page: %w", qerr)
 		}
-		// Hydrate child-table state for each row — same N+2 round-trip
-		// pattern as ListForTenant. With page_size capped at 200 + the
-		// partial-index seek + composite, the per-page cost is bounded.
-		// Future optimization: bulk-fetch role_assignments + overrides
-		// in a single query keyed by IN(membership_ids).
+		// N+2 hydration per row; page_size capped at 200 bounds the cost.
 		out = make([]*membership.Membership, 0, len(hydrated))
 		for _, row := range hydrated {
-			roleIDs, lerr := loadRoleAssignments(ctx, q, uuidFromPg(row.ID))
+			roleIDs, lerr := loadRoleAssignments(ctx, q, pgconv.UUIDFromPg(row.ID))
 			if lerr != nil {
 				return lerr
 			}
-			granted, revoked, lerr := loadPermissionOverrides(ctx, q, uuidFromPg(row.ID))
+			granted, revoked, lerr := loadPermissionOverrides(ctx, q, pgconv.UUIDFromPg(row.ID))
 			if lerr != nil {
 				return lerr
 			}
@@ -324,10 +289,9 @@ func (r *MembershipRepository) ListForTenantPage(
 	return out, nil
 }
 
-// HasActiveSuperAdmin satisfies [membership.Repository]. Platform-
-// scope query against ListSuperAdminMembershipsInTenant — returns
-// true if the supplied tenant has at least one active Membership
-// holding a role flagged is_super_admin=true.
+// HasActiveSuperAdmin satisfies [membership.Repository]. Platform-scoped;
+// returns true when the tenant has at least one active Membership with
+// is_super_admin=true.
 func (r *MembershipRepository) HasActiveSuperAdmin(
 	ctx context.Context,
 	tenantID tenant.ID,
@@ -339,7 +303,7 @@ func (r *MembershipRepository) HasActiveSuperAdmin(
 	var found bool
 	err = r.tx.WithinTxPgx(ctx, pg.TxScopePlatform, func(ctx context.Context, tx pgx.Tx) error {
 		q := r.q.WithTx(tx)
-		rows, err := q.ListSuperAdminMembershipsInTenant(ctx, pgUUID(tid))
+		rows, err := q.ListSuperAdminMembershipsInTenant(ctx, pgconv.PgUUID(tid))
 		if err != nil {
 			return fmt.Errorf("membership repo: list super-admin in tenant: %w", err)
 		}
@@ -352,16 +316,9 @@ func (r *MembershipRepository) HasActiveSuperAdmin(
 	return found, nil
 }
 
-// ListAllForPerson satisfies [membership.Repository]. Platform-only
-// cross-tenant lookup — returns every Membership the Person holds
-// (Active + Inactive) across all tenants. Backed by the existing
-// ListMembershipsForPerson sqlc query which crosses tenant boundaries
-// (the index is non-RLS-filtered per database.md "Single-Active-
-// Membership constraint").
-//
-// Authorization: this method MUST only be called from a path the
-// HTTP layer has gated on Platform tier. The repository itself does
-// no permission check — that's middleware's job.
+// ListAllForPerson satisfies [membership.Repository]. Platform-scoped
+// cross-tenant lookup — returns all Memberships (Active + Inactive).
+// Caller must be gated on Platform tier; the repo does not check.
 func (r *MembershipRepository) ListAllForPerson(
 	ctx context.Context,
 	personID person.ID,
@@ -373,17 +330,17 @@ func (r *MembershipRepository) ListAllForPerson(
 	var out []*membership.Membership
 	err = r.tx.WithinTxPgx(ctx, pg.TxScopePlatform, func(ctx context.Context, tx pgx.Tx) error {
 		q := r.q.WithTx(tx)
-		rows, err := q.ListMembershipsForPerson(ctx, pgUUID(uid))
+		rows, err := q.ListMembershipsForPerson(ctx, pgconv.PgUUID(uid))
 		if err != nil {
 			return fmt.Errorf("membership repo: list for person: %w", err)
 		}
 		out = make([]*membership.Membership, 0, len(rows))
 		for _, row := range rows {
-			roleIDs, lerr := loadRoleAssignments(ctx, q, uuidFromPg(row.ID))
+			roleIDs, lerr := loadRoleAssignments(ctx, q, pgconv.UUIDFromPg(row.ID))
 			if lerr != nil {
 				return lerr
 			}
-			granted, revoked, lerr := loadPermissionOverrides(ctx, q, uuidFromPg(row.ID))
+			granted, revoked, lerr := loadPermissionOverrides(ctx, q, pgconv.UUIDFromPg(row.ID))
 			if lerr != nil {
 				return lerr
 			}
@@ -408,7 +365,7 @@ func loadMembership(ctx context.Context, q *db.Queries, id membership.ID) (*memb
 	if err != nil {
 		return nil, err
 	}
-	row, err := q.GetMembershipByID(ctx, pgUUID(uid))
+	row, err := q.GetMembershipByID(ctx, pgconv.PgUUID(uid))
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, membership.ErrNotFound
@@ -426,36 +383,30 @@ func loadMembership(ctx context.Context, q *db.Queries, id membership.ID) (*memb
 	return rowToMembership(row, roleIDs, granted, revoked)
 }
 
-// loadRoleAssignments fetches the Membership's projected role-id list.
-// Order: assigned_at, role_id (matches the SQL query) — domain treats
-// the slice as a set, so ordering is informational only.
+// loadRoleAssignments fetches the Membership's role-id list ordered by
+// (assigned_at, role_id). The domain treats the slice as a set.
 func loadRoleAssignments(ctx context.Context, q *db.Queries, mid uuid.UUID) ([]role.ID, error) {
-	rows, err := q.ListRoleAssignmentsByMembership(ctx, pgUUID(mid))
+	rows, err := q.ListRoleAssignmentsByMembership(ctx, pgconv.PgUUID(mid))
 	if err != nil {
 		return nil, fmt.Errorf("membership repo: list role assignments: %w", err)
 	}
 	out := make([]role.ID, 0, len(rows))
 	for _, r := range rows {
-		out = append(out, role.ID(uuidFromPg(r.RoleID).String()))
+		out = append(out, role.ID(pgconv.UUIDFromPg(r.RoleID).String()))
 	}
 	return out, nil
 }
 
-// loadPermissionOverrides splits the persisted overlay into the two
-// slices the domain Snapshot expects. Names go through TryFromConstant
-// — unknown permission_name in storage = data corruption (catalogue is
-// closed-set per coding-standards.md "Permissions — closed-set
-// construction"); fail-loud beats silent privilege-loss.
-//
-// granted entries carry an optional ExpiresAt (zero = perpetual);
-// revoked entries do not (revocation is permanent until re-granted).
-// ADR 0055 — approval workflow.
+// loadPermissionOverrides splits the persisted overlay into granted +
+// revoked slices. Unknown permission_name = data corruption (closed-set
+// catalogue); fails loudly. Granted entries carry an optional ExpiresAt
+// (zero = perpetual); revoked entries do not. ADR 0055.
 func loadPermissionOverrides(
 	ctx context.Context,
 	q *db.Queries,
 	mid uuid.UUID,
 ) (granted []membership.GrantedOverride, revoked []*permission.Permission, err error) {
-	rows, err := q.ListPermissionOverridesByMembership(ctx, pgUUID(mid))
+	rows, err := q.ListPermissionOverridesByMembership(ctx, pgconv.PgUUID(mid))
 	if err != nil {
 		return nil, nil, fmt.Errorf("membership repo: list permission overrides: %w", err)
 	}
@@ -467,11 +418,10 @@ func loadPermissionOverrides(
 		}
 		switch row.Kind {
 		case overrideKindGranted:
-			// ADR 0055 — ExpiresAt zero (NULL in column) = perpetual;
-			// non-zero = JIT-bounded grant filtered at resolve time.
+			// ADR 0055: ExpiresAt zero (NULL) = perpetual; non-zero = JIT-bounded.
 			granted = append(granted, membership.GrantedOverride{
 				Permission: p,
-				ExpiresAt:  timeFromPg(row.ExpiresAt),
+				ExpiresAt:  pgconv.TimeFromPg(row.ExpiresAt),
 			})
 		case overrideKindRevoked:
 			revoked = append(revoked, p)
@@ -495,24 +445,22 @@ func insertMembershipRow(ctx context.Context, q *db.Queries, m *membership.Membe
 	if err != nil {
 		return err
 	}
-	// CreatedBy is the audit chain — caller's Membership ID, or zero
-	// for self-bootstrapped paths. Zero ID maps to a NULL pgtype.UUID
-	// (Valid:false), which the column accepts via migration
-	// 20260507000008's NULL allowance.
+	// CreatedBy is the audit chain — zero maps to NULL (migration 20260507000008
+	// allows NULL for self-bootstrapped paths).
 	createdBy := pgtype.UUID{}
 	if cb := m.CreatedBy(); !cb.IsZero() {
 		cbUUID, perr := uuid.Parse(cb.String())
 		if perr != nil {
 			return fmt.Errorf("membership repo: parse createdBy %q: %w", cb, perr)
 		}
-		createdBy = pgUUID(cbUUID)
+		createdBy = pgconv.PgUUID(cbUUID)
 	}
 	err = q.InsertMembership(ctx, db.InsertMembershipParams{
-		ID:                    pgUUID(mid),
-		PersonID:              pgUUID(pid),
-		TenantID:              pgUUID(tid),
+		ID:                    pgconv.PgUUID(mid),
+		PersonID:              pgconv.PgUUID(pid),
+		TenantID:              pgconv.PgUUID(tid),
 		Status:                m.Status().String(),
-		JoinedAt:              pgRequiredTimestamp(m.JoinedAt()),
+		JoinedAt:              pgconv.PgRequiredTimestamp(m.JoinedAt()),
 		CreatedByMembershipID: createdBy,
 	})
 	if err != nil {
@@ -530,9 +478,9 @@ func persistMembershipStatus(ctx context.Context, q *db.Queries, m *membership.M
 		return err
 	}
 	err = q.UpdateMembershipStatus(ctx, db.UpdateMembershipStatusParams{
-		ID:     pgUUID(mid),
+		ID:     pgconv.PgUUID(mid),
 		Status: m.Status().String(),
-		LeftAt: pgTimestamp(m.LeftAt()),
+		LeftAt: pgconv.PgTimestamp(m.LeftAt()),
 	})
 	if err != nil {
 		if isMembershipActiveCollision(err) {
@@ -564,29 +512,27 @@ func drainMembershipEvents(ctx context.Context, tx pgx.Tx, m *membership.Members
 }
 
 // rowToMembership hydrates the Membership aggregate from the parent row
-// + the projected child-table state (roleAssignments, granted/revoked
-// permission overrides). Caller (loadMembership) batches the child reads
-// in one tx so RLS scope stays consistent across all four tables.
+// and child-table state (role_assignments + permission overrides).
 func rowToMembership(
 	row db.IdentityTenantMembership,
 	roleAssignments []role.ID,
 	granted []membership.GrantedOverride,
 	revoked []*permission.Permission,
 ) (*membership.Membership, error) {
-	id := membership.ID(uuidFromPg(row.ID).String())
-	personID := person.ID(uuidFromPg(row.PersonID).String())
-	tenantID := tenant.ID(uuidFromPg(row.TenantID).String())
+	id := membership.ID(pgconv.UUIDFromPg(row.ID).String())
+	personID := person.ID(pgconv.UUIDFromPg(row.PersonID).String())
+	tenantID := tenant.ID(pgconv.UUIDFromPg(row.TenantID).String())
 
 	status, err := membership.ParseStatus(row.Status)
 	if err != nil {
 		return nil, fmt.Errorf("membership repo: hydrate status %q: %w", row.Status, err)
 	}
 	reportsTo := membership.ID("")
-	if reports := uuidFromPg(row.ReportsTo); reports != uuid.Nil {
+	if reports := pgconv.UUIDFromPg(row.ReportsTo); reports != uuid.Nil {
 		reportsTo = membership.ID(reports.String())
 	}
 	createdBy := membership.ID("")
-	if cb := uuidFromPg(row.CreatedByMembershipID); cb != uuid.Nil {
+	if cb := pgconv.UUIDFromPg(row.CreatedByMembershipID); cb != uuid.Nil {
 		createdBy = membership.ID(cb.String())
 	}
 	return membership.UnmarshalFromDB(membership.Snapshot{
@@ -594,8 +540,8 @@ func rowToMembership(
 		PersonID:           personID,
 		TenantID:           tenantID,
 		Status:             status,
-		JoinedAt:           timeFromPg(row.JoinedAt),
-		LeftAt:             timeFromPg(row.LeftAt),
+		JoinedAt:           pgconv.TimeFromPg(row.JoinedAt),
+		LeftAt:             pgconv.TimeFromPg(row.LeftAt),
 		RoleAssignments:    roleAssignments,
 		GrantedPermissions: granted,
 		RevokedPermissions: revoked,
@@ -607,9 +553,8 @@ func rowToMembership(
 	}), nil
 }
 
-// persistMembershipProfile writes the per-tenant profile fields. Always
-// runs (no diff check) — the columns are NOT NULL DEFAULT ” in schema,
-// so writing the aggregate's current values is always safe.
+// persistMembershipProfile writes per-tenant profile fields. Always runs;
+// columns are NOT NULL DEFAULT ” so writing current values is safe.
 func persistMembershipProfile(ctx context.Context, q *db.Queries, m *membership.Membership) error {
 	mid, err := parseMembershipID(m.ID())
 	if err != nil {
@@ -624,11 +569,11 @@ func persistMembershipProfile(ctx context.Context, q *db.Queries, m *membership.
 		reportsTo = parsed
 	}
 	err = q.UpdateMembershipProfile(ctx, db.UpdateMembershipProfileParams{
-		ID:            pgUUID(mid),
+		ID:            pgconv.PgUUID(mid),
 		Designation:   m.Designation(),
 		Department:    m.Department(),
 		StatusMessage: m.StatusMessage(),
-		ReportsTo:     pgUUIDOpt(reportsTo),
+		ReportsTo:     pgconv.PgUUIDOrNull(reportsTo),
 	})
 	if err != nil {
 		return fmt.Errorf("membership repo: update profile: %w", err)
@@ -636,15 +581,9 @@ func persistMembershipProfile(ctx context.Context, q *db.Queries, m *membership.
 	return nil
 }
 
-// replaceRoleAssignments projects the aggregate's current RoleAssignments
-// slice onto identity.role_assignments under replace-all semantics: clear
-// every row for this Membership, then INSERT the current set. Idempotent
-// under retry; simpler than per-row diff tracking.
-//
-// Composite FK on (membership_id, tenant_id) → tenant_memberships(id, tenant_id)
-// rejects cross-tenant role IDs at the schema layer; the domain's
-// `multi-tenancy.md` "Identity model" CALLER INVARIANT (every assigned
-// Role MUST belong to the Membership's TenantID) is the upstream guard.
+// replaceRoleAssignments replaces the Membership's role_assignments using
+// replace-all semantics (DELETE + INSERT). Idempotent under retry. The
+// composite FK rejects cross-tenant role IDs at the schema layer.
 func replaceRoleAssignments(ctx context.Context, q *db.Queries, m *membership.Membership) error {
 	mid, err := parseMembershipID(m.ID())
 	if err != nil {
@@ -654,19 +593,19 @@ func replaceRoleAssignments(ctx context.Context, q *db.Queries, m *membership.Me
 	if err != nil {
 		return err
 	}
-	if err := q.DeleteRoleAssignmentsByMembership(ctx, pgUUID(mid)); err != nil {
+	if err := q.DeleteRoleAssignmentsByMembership(ctx, pgconv.PgUUID(mid)); err != nil {
 		return fmt.Errorf("membership repo: clear role assignments: %w", err)
 	}
-	now := pgRequiredTimestamp(time.Now().UTC())
+	now := pgconv.PgRequiredTimestamp(time.Now().UTC())
 	for _, rid := range m.RoleAssignments() {
 		ruid, err := uuid.Parse(rid.String())
 		if err != nil {
 			return fmt.Errorf("membership repo: parse role id %q: %w", rid, err)
 		}
 		err = q.InsertRoleAssignment(ctx, db.InsertRoleAssignmentParams{
-			MembershipID: pgUUID(mid),
-			RoleID:       pgUUID(ruid),
-			TenantID:     pgUUID(tid),
+			MembershipID: pgconv.PgUUID(mid),
+			RoleID:       pgconv.PgUUID(ruid),
+			TenantID:     pgconv.PgUUID(tid),
 			AssignedAt:   now,
 		})
 		if err != nil {
@@ -676,12 +615,9 @@ func replaceRoleAssignments(ctx context.Context, q *db.Queries, m *membership.Me
 	return nil
 }
 
-// replacePermissionOverrides projects the aggregate's overlay (granted +
-// revoked permission slices) onto identity.membership_permission_overrides
-// under replace-all semantics. Domain-level invariant guarantees a
-// permission_name appears at most once across both slices for a given
-// Membership; the table's PK (membership_id, permission_name) defends
-// against any drift.
+// replacePermissionOverrides replaces the Membership's permission overrides
+// using replace-all semantics. The PK (membership_id, permission_name)
+// defends against any domain-level drift.
 func replacePermissionOverrides(ctx context.Context, q *db.Queries, m *membership.Membership) error {
 	mid, err := parseMembershipID(m.ID())
 	if err != nil {
@@ -691,21 +627,21 @@ func replacePermissionOverrides(ctx context.Context, q *db.Queries, m *membershi
 	if err != nil {
 		return err
 	}
-	if err := q.DeletePermissionOverridesByMembership(ctx, pgUUID(mid)); err != nil {
+	if err := q.DeletePermissionOverridesByMembership(ctx, pgconv.PgUUID(mid)); err != nil {
 		return fmt.Errorf("membership repo: clear permission overrides: %w", err)
 	}
-	now := pgRequiredTimestamp(time.Now().UTC())
+	now := pgconv.PgRequiredTimestamp(time.Now().UTC())
 	for _, g := range m.GrantedPermissions() {
 		if g.Permission == nil {
 			continue
 		}
 		err := q.InsertPermissionOverride(ctx, db.InsertPermissionOverrideParams{
-			MembershipID:   pgUUID(mid),
+			MembershipID:   pgconv.PgUUID(mid),
 			PermissionName: g.Permission.Name(),
 			Kind:           overrideKindGranted,
-			TenantID:       pgUUID(tid),
+			TenantID:       pgconv.PgUUID(tid),
 			UpdatedAt:      now,
-			ExpiresAt:      pgTimestamp(g.ExpiresAt), // nil → NULL = perpetual
+			ExpiresAt:      pgconv.PgTimestamp(g.ExpiresAt), // nil → NULL = perpetual
 		})
 		if err != nil {
 			return fmt.Errorf("membership repo: insert granted override %q: %w", g.Permission.Name(), err)
@@ -716,10 +652,10 @@ func replacePermissionOverrides(ctx context.Context, q *db.Queries, m *membershi
 			continue
 		}
 		err := q.InsertPermissionOverride(ctx, db.InsertPermissionOverrideParams{
-			MembershipID:   pgUUID(mid),
+			MembershipID:   pgconv.PgUUID(mid),
 			PermissionName: p.Name(),
 			Kind:           overrideKindRevoked,
-			TenantID:       pgUUID(tid),
+			TenantID:       pgconv.PgUUID(tid),
 			UpdatedAt:      now,
 			// Revocations are permanent until re-granted; ExpiresAt stays NULL.
 		})
@@ -755,15 +691,13 @@ func parseTenantIDForMembership(id tenant.ID) (uuid.UUID, error) {
 }
 
 // constraintMembershipsPersonActive is the partial-unique-index name
-// from `migrations/20260505000002_identity_init.sql` enforcing the
-// single-Active-Membership invariant per `multi-tenancy.md`. Renaming
-// in the migration MUST be paired with updating this constant.
+// (migration 20260505000002) enforcing the single-Active-Membership invariant.
+// Any rename must update this constant.
 const constraintMembershipsPersonActive = "uq_memberships_person_active"
 
-// isMembershipActiveCollision reports whether err is the partial-unique
-// index violation specifically (single-Active-Membership invariant).
-// Other unique violations (e.g. (person_id, tenant_id) duplicate) bubble
-// as raw errors — they indicate a different bug class.
+// isMembershipActiveCollision reports whether err is the partial-unique-index
+// violation on the single-Active-Membership invariant. Other unique violations
+// bubble as-is.
 func isMembershipActiveCollision(err error) bool {
 	pgErr, ok := errors.AsType[*pgconn.PgError](err)
 	if !ok {

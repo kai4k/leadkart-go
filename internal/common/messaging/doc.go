@@ -1,32 +1,62 @@
-// Package messaging wires the LeadKart Watermill router + the
-// canonical middleware stack per `messaging.md` doctrine + `architecture.md`
-// "Cross-module extensibility — integration events, not handler edits".
+// Package messaging wires the LeadKart Watermill messaging spine: the
+// transactional outbox producer, the relay Forwarder, the subscriber
+// Router + resilience middleware, and the cqrs typed dispatch on both
+// sides. Cross-module communication is integration events on the bus,
+// never direct handler edits. Choreography only — no sagas here.
 //
-// Stack composition order (outer-most → inner-most), per messaging.md:
+// # Canonical stack (ADR 0067)
 //
-//	Recoverer → CorrelationID → TenantContext → Idempotency → Audit → Retry → handler
+// Produce (in the aggregate's pgx.Tx): [PublishOutbox] drives a
+// per-transaction [cqrs.EventBus] over a forwarder-decorated watermill-sql
+// publisher, so the event row commits atomically with the aggregate write
+// (outbox-first, ADR 0064). The producer and consumer share ONE
+// [WireAliasMarshaler]: Name(event)=event.Topic() (the frozen wire alias,
+// ADR 0059) carried in the event_type metadata header; payload is raw JSON.
+// Encode and decode therefore cannot drift.
 //
-//   - Recoverer turns a panicking handler into an error so the broker
-//     can DLQ + the process keeps serving.
-//   - CorrelationID propagates the X-Correlation-Id chain so a single
-//     trace spans HTTP → outbox → forwarder → subscriber.
-//   - TenantContext bridges Envelope.TenantId metadata into ctx via
-//     `tenancy.WithID`; subscribers run with the correct tenant scope
-//     for downstream RLS-bound queries (parallels .NET
-//     TenantContextMiddleware in messaging.md).
-//   - Idempotency wraps the handler in a (message_id, handler_name)
-//     dedup table lookup against `identity.processed_messages` —
-//     replay-safe at-least-once delivery (Layer 2 of messaging.md
-//     "Idempotency").
-//   - Audit auto-writes a row to buildingblocks.audit_log_entry for
-//     every processed message (success OR failure).
-//   - Retry sits innermost so a transient error inside the handler
-//     gets retried under the SAME (message_id, handler_name) +
-//     SAME correlation chain.
+// Relay: a single Watermill [forwarder.Forwarder] drains the shared
+// common.outbox queue table (watermill-sql v4 PostgreSQLQueueSchema, xid8
+// ordering — ADR 0064) and republishes each event to its destination
+// module topic, embedded in the envelope.
 //
-// Sagas are NOT in this package per TDL canon (plan §G.H.4 + ADR
-// 0031). Choreography only.
+// Consume: a [cqrs.EventProcessor] ([NewEventProcessor]) hosts every
+// module's typed handlers (cqrs.NewEventHandler[T]); GenerateSubscribeTopic
+// derives the module topic from the event alias, and AckOnUnknownEvent is
+// true because many event types ride one module topic.
 //
-// Citations: ThreeDotsLabs Watermill v1.5 docs; messaging.md doctrine;
-// Wolverine middleware-pipeline parallel.
+// # Middleware stack (as wired in router.go)
+//
+//		global (outermost first):  CorrelationID → TraceContext → TenantContext
+//		per-handler (outermost first, via AddSubscriber / AddCqrsHandler):
+//		                           PoisonQueue → Idempotency → Audit → Retry → Recoverer
+//
+//	  - Recoverer is INNERMOST: a panicking handler becomes an error that
+//	    Retry sees and retries (panics are no longer fatal-once).
+//	  - Retry inside Audit: Audit records the final outcome once, after the
+//	    retry budget is spent (or immediately for a [NonRetryable] error).
+//	  - Idempotency inside PoisonQueue: the dedup row is written only on
+//	    genuine success; a poisoned message is never marked "processed".
+//	  - PoisonQueue OUTERMOST: after retries exhaust (or immediately for a
+//	    [NonRetryable] error) it salvages the message to [DeadLetterTopic],
+//	    persisted durably to common.dead_letter by [DeadLetterWriter] for
+//	    inspection / replay. The DLQ persister carries ONLY Recoverer (a
+//	    failed DLQ write must not re-poison into the same topic).
+//	  - TraceContext extracts the producer's W3C trace context so the
+//	    consumer span joins the producer trace across the async hop.
+//	  - TenantContext bridges the tenant_id metadata header into ctx so
+//	    tenant-scoped subscribers run under the right RLS scope.
+//
+// # Idempotency (inbox)
+//
+// [IdempotentReceiver] dedups per (message_id, handler_name) against
+// identity.processed_messages. The contract is run-then-INSERT:
+// at-least-once delivery + idempotent handlers — the TDL/Watermill canon
+// (their CQRS guidance dedups in-handler; the Duplicator middleware exists
+// to force handler idempotency). Every consumer handler is independently
+// idempotent (business-key short-circuit or no-op-on-replay); the inbox
+// row is a skip-redundant-work optimization, NOT the sole correctness
+// mechanism. A transactional inbox (dedup + handler in one tx) was
+// evaluated and deliberately NOT adopted — see ADR 0067 — because it adds
+// no correctness over already-idempotent handlers and external-effect
+// handlers (email / cache / SIEM) cannot be rolled back anyway.
 package messaging

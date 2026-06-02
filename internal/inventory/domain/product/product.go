@@ -1,19 +1,12 @@
-// Package product defines the Product aggregate — the Inventory module's
-// catalog master per BRD §6.5 + ADR 0061.
+// Package product defines the Product aggregate — Inventory catalog master per BRD §6.5 + ADR 0061.
 //
-// Tenant-scoped. Identified by [ID] (UUIDv7). Carries the master fields
-// every batch + future order line references: SKU, name, dosage form,
-// pack size, HSN code (Indian GST), gst_rate_bps (basis points; never
-// float per Stripe canon), manufacturer, is_active flag, soft-delete.
+// Tenant-scoped; identified by [ID] (UUIDv7). Carries the fields every Batch and order line
+// references: SKU, name, dosage form, pack size, HSN code, gst_rate_bps (basis points, never float
+// per Stripe canon), manufacturer, is_active, soft-delete.
 //
-// Construction via [New] (factory enforcing invariants) or
-// [UnmarshalFromDB] (repository-only re-hydration — does NOT re-validate
-// per TDL Wild Workouts canon).
-//
-// Per the Aggregate-Root rule (Vernon IDDD ch.10): Batches reference
-// Products by ID, never by struct embedding. Cross-aggregate consistency
-// rides the same-tx outbox in the application layer (the Inventory
-// onboarding flow + the Batch.Add handler).
+// Construct via [New] (invariants enforced) or [UnmarshalFromDB] (repo re-hydration, no re-validation
+// per TDL Wild Workouts canon). Batches reference Products by ID only (Vernon IDDD ch.10);
+// cross-aggregate consistency via same-tx outbox in the application layer.
 package product
 
 import (
@@ -22,39 +15,37 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/leadkart/leadkart-go/internal/common/errs"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
 
-// Length / value bounds (mirrors of the migration's CHECK constraints —
-// single source of truth for the invariant per coding-standards.md "No
-// magic strings — production AND tests").
+// Length / value bounds — mirrors the migration's CHECK constraints (single source of truth).
 const (
-	SKUMinLength         = 1
-	SKUMaxLength         = 64
-	NameMinLength        = 1
-	NameMaxLength        = 200
-	DosageFormMinLength  = 1
-	DosageFormMaxLength  = 50
-	PackSizeMinLength    = 1
-	PackSizeMaxLength    = 100
-	HSNCodeMinLength     = 4
-	HSNCodeMaxLength     = 10
-	ManufacturerMaxLen   = 200
-	GSTRateBpsMin        = 0     // 0%
-	GSTRateBpsMax        = 10000 // 100% — practical ceiling; basis points
+	SKUMinLength        = 1
+	SKUMaxLength        = 64
+	NameMinLength       = 1
+	NameMaxLength       = 200
+	DosageFormMinLength = 1
+	DosageFormMaxLength = 50
+	PackSizeMinLength   = 1
+	PackSizeMaxLength   = 100
+	HSNCodeMinLength    = 4
+	HSNCodeMaxLength    = 10
+	ManufacturerMaxLen  = 200
+	GSTRateBpsMin       = 0     // 0%
+	GSTRateBpsMax       = 10000 // 100% — practical ceiling; basis points
 )
 
-// ErrInvalid is the sentinel returned (wrapped via %w) by [New] +
-// [Update] on invariant violation. Callers branch via errors.Is.
+// ErrInvalid is returned (wrapped via %w) by [New] and [Update] on invariant violation.
 var ErrInvalid = errs.New(errs.KindInvalidInput, "product", "invalid product")
 
-// ErrDeleted is returned when a mutation targets a soft-deleted product.
+// ErrDeleted is returned when a mutating method targets a soft-deleted product.
 var ErrDeleted = errs.New(errs.KindConflict, "product", "product is deleted")
 
-// ID is the Product primary key — UUIDv7 string. Wrapper type prevents
-// accidental swap with other domain IDs (Cheney "type the inputs" canon).
+// ID is the Product primary key — UUIDv7 string. Distinct type prevents accidental swap with other domain IDs.
 type ID string
 
 // IsZero reports whether ID is unset.
@@ -63,8 +54,7 @@ func (i ID) IsZero() bool { return i == "" }
 // String returns the underlying UUID string.
 func (i ID) String() string { return string(i) }
 
-// Spec is the wire-stable input to [New]. Defensive: invariants checked
-// inside New rather than at every call site.
+// Spec is the input to [New]. Invariants are validated inside New.
 type Spec struct {
 	SKU          string
 	Name         string
@@ -75,13 +65,9 @@ type Spec struct {
 	Manufacturer string
 }
 
-// UpdateSpec is the partial-update payload for [Product.Update]. Only
-// non-nil fields are applied; matching values are no-ops (no event).
-// Per Vernon IDDD ch.4 "Granular mutators emit granular events" — but
-// for the Product master a coarse Update is enough because consumers
-// (search index, integration-event subscribers, frontend cache) treat
-// "product changed" as a single signal. ChangedFields on the event
-// surfaces the diff.
+// UpdateSpec is the partial-update input for [Product.Update].
+// Only non-nil fields are applied; matching values are no-ops (no event emitted).
+// ChangedFields on the resulting event surfaces the diff.
 type UpdateSpec struct {
 	Name         *string
 	GSTRateBps   *int
@@ -91,12 +77,12 @@ type UpdateSpec struct {
 
 // Product is the aggregate root.
 //
-// Invariants enforced by [New] + [Update]:
+// Invariants enforced by [New] and [Update]:
 //   - id + tenantID non-zero
-//   - SKU trimmed, upper-cased, 1..SKUMaxLength
+//   - SKU trimmed + upper-cased, 1..SKUMaxLength
 //   - Name trimmed, 1..NameMaxLength
 //   - DosageForm + PackSize trimmed, length-bounded
-//   - HSNCode 4..10 digits (Indian GST canon)
+//   - HSNCode 4..10 digits (Indian GST)
 //   - GSTRateBps in [0, 10000] (basis points; 1200 = 12%)
 //   - Manufacturer trimmed, <=ManufacturerMaxLen
 type Product struct {
@@ -118,26 +104,32 @@ type Product struct {
 	events       []Event
 }
 
-// New constructs a brand-new Product. Returns ErrInvalid (wrapped) on
-// invariant violation. Emits CreatedEvent on success.
-//
-// actorID is the membership that initiated the create — populates the
-// CreatedEvent.ActorID so the integration mapper can stamp
-// `created_by_membership_id` on the wire event without re-deriving from
-// ctx.
-//
-// `now` is the explicit instant for createdAt/updatedAt/event timestamp.
-// Per the clock-injection refactor (post-Wave-9), the aggregate carries
-// NO temporal dependency — time flows in at every call site.
+// validateUUID enforces the H6 reviewer rule: every domain ID must parse as a
+// UUID at AGGREGATE-CONSTRUCTION time, not later at the adapter boundary.
+func validateUUID(name, val string) error {
+	val = strings.TrimSpace(val)
+	if val == "" {
+		return fmt.Errorf("%w: %s required", ErrInvalid, name)
+	}
+	if _, err := uuid.Parse(val); err != nil {
+		return fmt.Errorf("%w: %s not a valid uuid", ErrInvalid, name)
+	}
+	return nil
+}
+
+// New constructs a Product, validates all invariants, and emits [CreatedEvent].
+// Returns ErrInvalid (wrapped) on violation.
+// actorID populates CreatedEvent.ActorID for the integration mapper.
+// now is the explicit clock instant; the aggregate has no temporal dependency.
 func New(id ID, tenantID tenant.ID, actorID membership.ID, spec Spec, now time.Time) (*Product, error) {
-	if id.IsZero() {
-		return nil, fmt.Errorf("%w: id required", ErrInvalid)
+	if err := validateUUID("id", id.String()); err != nil {
+		return nil, err
 	}
-	if tenantID.IsZero() {
-		return nil, fmt.Errorf("%w: tenantID required", ErrInvalid)
+	if err := validateUUID("tenantID", tenantID.String()); err != nil {
+		return nil, err
 	}
-	if actorID.IsZero() {
-		return nil, fmt.Errorf("%w: actorID required", ErrInvalid)
+	if err := validateUUID("actorID", actorID.String()); err != nil {
+		return nil, err
 	}
 	sku, err := validateSKU(spec.SKU)
 	if err != nil {
@@ -199,75 +191,56 @@ func New(id ID, tenantID tenant.ID, actorID membership.ID, spec Spec, now time.T
 	return p, nil
 }
 
-// ----- Getters --------------------------------------------------------------
-
 // ID returns the Product's primary key.
 func (p *Product) ID() ID { return p.id }
 
 // TenantID returns the FK to [tenant.Tenant].
 func (p *Product) TenantID() tenant.ID { return p.tenantID }
 
-// SKU returns the per-tenant stock-keeping unit (always upper-case + trimmed).
+// SKU returns the per-tenant stock-keeping unit (upper-case, trimmed).
 func (p *Product) SKU() string { return p.sku }
 
 // Name returns the human-readable product name.
 func (p *Product) Name() string { return p.name }
 
-// DosageForm returns the BRD §6.5 dosage form (Tablet, Capsule, Syrup, ...).
+// DosageForm returns the dosage form (Tablet, Capsule, Syrup, ...).
 func (p *Product) DosageForm() string { return p.dosageForm }
 
 // PackSize returns the pack-size descriptor ("10x10", "100ml bottle", ...).
 func (p *Product) PackSize() string { return p.packSize }
 
-// HSNCode returns the Indian Harmonised System of Nomenclature code (4..10 digits).
+// HSNCode returns the Indian HSN code (4..10 digits).
 func (p *Product) HSNCode() string { return p.hsnCode }
 
-// GSTRateBps returns the applicable GST rate in basis points
-// (1200 = 12.00%). Never float, never percentage int (Stripe canon
-// — money math in integer minor units).
+// GSTRateBps returns the GST rate in basis points (1200 = 12.00%; never float).
 func (p *Product) GSTRateBps() int { return p.gstRateBps }
 
 // Manufacturer returns the declared manufacturer name (may be empty).
 func (p *Product) Manufacturer() string { return p.manufacturer }
 
-// IsActive reports whether the product is selectable on order forms +
-// product pickers. Independent of soft-delete (deleted ⇒ never visible
-// regardless of IsActive).
+// IsActive reports whether the product is selectable on order forms.
+// A soft-deleted product is never visible regardless of this flag.
 func (p *Product) IsActive() bool { return p.isActive }
 
-// IsDeleted reports whether the product has been soft-deleted. Live
-// read paths filter these; this getter is for forensic tooling.
+// IsDeleted reports soft-deleted state. Live reads filter these out; intended for forensic tooling.
 func (p *Product) IsDeleted() bool { return p.deleted }
 
-// DeletedAt returns the soft-delete timestamp (zero if live).
+// DeletedAt returns the soft-delete timestamp; zero if the product is live.
 func (p *Product) DeletedAt() time.Time { return p.deletedAt }
 
-// DeletedBy returns the membership id (or operator id) that performed
-// the soft-delete (empty if live).
+// DeletedBy returns the membership or operator ID that performed the soft-delete; empty if live.
 func (p *Product) DeletedBy() string { return p.deletedBy }
 
-// CreatedAt returns the immutable creation timestamp.
+// CreatedAt returns the creation timestamp (immutable).
 func (p *Product) CreatedAt() time.Time { return p.createdAt }
 
-// UpdatedAt returns the most-recent mutation timestamp.
+// UpdatedAt returns the most recent mutation timestamp.
 func (p *Product) UpdatedAt() time.Time { return p.updatedAt }
 
-// ----- State transitions ----------------------------------------------------
-
-// Update applies a partial-update spec. Only non-nil fields are
-// considered; matching values are no-ops. Emits UpdatedEvent with
-// ChangedFields populated (sorted alphabetically for deterministic
-// audit comparison).
-//
-// actorID is the membership that initiated the change — populates
-// UpdatedEvent.ActorID.
-//
-// `now` is the explicit instant for updatedAt + the emitted event's
-// `At`. Caller supplies it once per handler invocation so all aggregates
-// touched in the same operation share a single timestamp.
-//
-// Returns ErrDeleted if the Product was soft-deleted.
-// Returns ErrInvalid (wrapped) on field-validation failure.
+// Update applies a partial-update spec; only non-nil fields are applied.
+// Matching values are no-ops (no event emitted).
+// Emits [UpdatedEvent] with ChangedFields sorted alphabetically.
+// Returns [ErrDeleted] if soft-deleted, [ErrInvalid] on validation failure.
 func (p *Product) Update(actorID membership.ID, spec UpdateSpec, now time.Time) error {
 	if p.deleted {
 		return fmt.Errorf("%w: cannot update deleted product", ErrDeleted)
@@ -330,35 +303,25 @@ func (p *Product) Update(actorID membership.ID, spec UpdateSpec, now time.Time) 
 	return nil
 }
 
-// Activate sets is_active = true. Convenience wrapper around Update.
+// Activate sets is_active = true via [Update].
 func (p *Product) Activate(actorID membership.ID, now time.Time) error {
 	tr := true
 	return p.Update(actorID, UpdateSpec{IsActive: &tr}, now)
 }
 
-// Deactivate sets is_active = false. Convenience wrapper around Update
-// that ADDITIONALLY emits a DeactivatedEvent so downstream consumers
-// (search index, picker UI) can react without scanning UpdatedEvent
-// payloads for a `is_active` field-change marker.
-//
-// Distinct from SoftDelete — deactivated products are still visible to
-// admins + reports + historical orders; soft-deleted products are not.
-// Per ADR 0061 amendment 1 (event-name semantic split).
-//
-// Idempotent: if already inactive, no Update event drains and no
-// DeactivatedEvent is emitted (matches Update's no-op-on-no-change
-// canon).
+// Deactivate sets is_active = false via [Update] and additionally emits [DeactivatedEvent]
+// so consumers can route on the lifecycle signal without inspecting ChangedFields.
+// Distinct from [SoftDelete] — deactivated products remain visible to admins (ADR 0061 amendment 1).
+// Idempotent: already-inactive products are a no-op.
 func (p *Product) Deactivate(actorID membership.ID, now time.Time) error {
 	if !p.isActive {
-		return nil // no-op — Update would have no-op'd anyway
+		return nil // already inactive
 	}
-	f := false
-	if err := p.Update(actorID, UpdateSpec{IsActive: &f}, now); err != nil {
+	if err := p.Update(actorID, UpdateSpec{IsActive: new(false)}, now); err != nil {
 		return err
 	}
-	// Update emitted UpdatedEvent with ChangedFields=["is_active"];
-	// additionally record the dedicated DeactivatedEvent for consumers
-	// that route on the lifecycle signal rather than the diff.
+	// Update already emitted UpdatedEvent(ChangedFields=["is_active"]);
+	// emit DeactivatedEvent for consumers routing on the lifecycle signal.
 	p.recordEvent(DeactivatedEvent{
 		ProductID: p.id,
 		TenantID:  p.tenantID,
@@ -368,13 +331,9 @@ func (p *Product) Deactivate(actorID membership.ID, now time.Time) error {
 	return nil
 }
 
-// SoftDelete marks the product deleted, recording who did it for audit.
-// Idempotent (second call no-ops + emits no event).
-//
-// CALLER INVARIANT (application layer): SoftDelete must be REJECTED
-// when any live Batch with quantity_on_hand > 0 exists for this
-// product. The domain refuses cross-aggregate reaches per Vernon
-// ch.10; the SoftDeleteProductHandler enforces this rule.
+// SoftDelete marks the product deleted for audit. Idempotent — second call is a no-op.
+// Caller invariant (application layer): reject when any live Batch has quantity_on_hand > 0;
+// the domain cannot cross aggregate boundaries (Vernon ch.10), so SoftDeleteProductHandler enforces this.
 func (p *Product) SoftDelete(actorID membership.ID, now time.Time) error {
 	if p.deleted {
 		return nil
@@ -396,8 +355,6 @@ func (p *Product) SoftDelete(actorID membership.ID, now time.Time) error {
 	return nil
 }
 
-// ----- Persistence DTO ------------------------------------------------------
-
 // Snapshot is the persistence-layer projection consumed by [UnmarshalFromDB].
 type Snapshot struct {
 	ID           ID
@@ -417,9 +374,8 @@ type Snapshot struct {
 	DeletedBy    string
 }
 
-// UnmarshalFromDB re-hydrates a Product from persistence. Repository-only.
-// Does NOT re-validate (TDL canon: trust the DB).
-// Does NOT emit events (re-hydration is not a domain transition).
+// UnmarshalFromDB re-hydrates a Product from persistence.
+// Repository-only — does not re-validate (trust the DB) and does not emit events.
 func UnmarshalFromDB(s Snapshot) *Product {
 	return &Product{
 		id:           s.ID,
@@ -440,11 +396,8 @@ func UnmarshalFromDB(s Snapshot) *Product {
 	}
 }
 
-// ----- Event handling -------------------------------------------------------
-
-// PullEvents drains recorded domain events + clears the slice. The
-// repository calls this once per persist + writes the resulting events
-// to the outbox in the same tx (TDL Sep 2024 UpdateFn pattern).
+// PullEvents drains and returns recorded domain events, then clears the slice.
+// The repository calls this once per persist and writes events to the outbox in the same tx.
 func (p *Product) PullEvents() []Event {
 	if len(p.events) == 0 {
 		return nil
@@ -457,8 +410,6 @@ func (p *Product) PullEvents() []Event {
 func (p *Product) recordEvent(e Event) {
 	p.events = append(p.events, e)
 }
-
-// ----- Validation helpers ---------------------------------------------------
 
 func validateSKU(raw string) (string, error) {
 	trimmed := strings.ToUpper(strings.TrimSpace(raw))

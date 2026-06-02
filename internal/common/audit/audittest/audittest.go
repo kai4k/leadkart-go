@@ -1,5 +1,5 @@
 // Package audittest holds typed read-side helpers for integration
-// tests that need to assert on the buildingblocks.audit_log_entry
+// tests that need to assert on the common.audit_log_entry
 // state — without each test re-deriving the same raw SQL.
 //
 // Why this package exists: per ADR 0004, all production DB access
@@ -7,7 +7,7 @@
 // rule (the arch-test sqlc gates scope to non-test files), so each
 // integration test that wanted to verify "did the subscriber write
 // the audit row?" rolled its own raw `SELECT count(*) FROM
-// buildingblocks.audit_log_entry WHERE action = ...` query.
+// common.audit_log_entry WHERE action = ...` query.
 //
 // That blanket exemption was the structural gap that let the
 // // arch-test:ignore-err annotation get injected inside a SQL
@@ -36,7 +36,7 @@ func CountByAction(t testing.TB, pool *pgxpool.Pool, action string) int64 {
 	t.Helper()
 	var n int64
 	const q = `
-		SELECT count(*) FROM buildingblocks.audit_log_entry
+		SELECT count(*) FROM common.audit_log_entry
 		WHERE  action = $1
 		  AND  succeeded = true
 	`

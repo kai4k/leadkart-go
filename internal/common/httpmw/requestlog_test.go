@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/leadkart/leadkart-go/internal/common/tenancy"
 	"github.com/leadkart/leadkart-go/internal/common/httpmw"
+	"github.com/leadkart/leadkart-go/internal/common/tenancy"
 )
 
 func TestRequestLog_2xxLogsInfo(t *testing.T) {

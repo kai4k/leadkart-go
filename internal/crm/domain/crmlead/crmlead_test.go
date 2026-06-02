@@ -129,9 +129,13 @@ func TestNew_InvariantViolations(t *testing.T) {
 		{name: "missing contact_name", mut: func(p *crmlead.Profile) { p.ContactName = "" }, id: crmlead.ID(tidLead1), tid: tenantID1},
 		{name: "bad phone format", mut: func(p *crmlead.Profile) { p.PhoneE164 = "9876543210" }, id: crmlead.ID(tidLead1), tid: tenantID1},
 		{name: "bad phone length", mut: func(p *crmlead.Profile) { p.PhoneE164 = "+91987" }, id: crmlead.ID(tidLead1), tid: tenantID1},
-		{name: "bad pincode length", mut: func(p *crmlead.Profile) { p.Pincode = "12345" }, id: crmlead.ID(tidLead1), tid: tenantID1},
+		{name: "bad pincode too short", mut: func(p *crmlead.Profile) { p.Pincode = "12345" }, id: crmlead.ID(tidLead1), tid: tenantID1},
+		{name: "bad pincode too long", mut: func(p *crmlead.Profile) { p.Pincode = "1234567" }, id: crmlead.ID(tidLead1), tid: tenantID1},
+		{name: "bad pincode leading zero", mut: func(p *crmlead.Profile) { p.Pincode = "000000" }, id: crmlead.ID(tidLead1), tid: tenantID1},
 		{name: "bad business_type", mut: func(p *crmlead.Profile) { p.BusinessType = "Wholesale" }, id: crmlead.ID(tidLead1), tid: tenantID1},
 		{name: "bad medicine_system", mut: func(p *crmlead.Profile) { p.MedicineSystem = "Homeopathic" }, id: crmlead.ID(tidLead1), tid: tenantID1},
+		{name: "bad order_value", mut: func(p *crmlead.Profile) { p.OrderValue = "Below100" }, id: crmlead.ID(tidLead1), tid: tenantID1},
+		{name: "bad buy_timeline", mut: func(p *crmlead.Profile) { p.BuyTimeline = "Tomorrow" }, id: crmlead.ID(tidLead1), tid: tenantID1},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

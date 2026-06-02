@@ -30,18 +30,15 @@ var sharedPG *pgtest.Container
 // tenant-scoped tables touched by these tests.
 func TestMain(m *testing.M) {
 	code := pgtest.RunMain(m, pgtest.Config{
-		// buildingblocks added so the AuditMiddleware tests can write +
+		// common added so the AuditMiddleware tests can write +
 		// query audit_log_entry rows under the leadkart_app role.
-		Schemas: []string{"identity", "buildingblocks"},
-		Grants:  []string{"identity", "buildingblocks", "app"},
+		Schemas: []string{"identity", "common"},
+		Grants:  []string{"identity", "common", "app"},
 	}, func(c *pgtest.Container) {
 		sharedPG = c
 	})
 
-	if err := goleak.Find(
-		goleak.IgnoreTopFunction("github.com/testcontainers/testcontainers-go.(*Reaper).connect.func1"),
-		goleak.IgnoreTopFunction("github.com/jackc/pgx/v5/pgxpool.(*Pool).backgroundHealthCheck"),
-	); err != nil {
+	if err := goleak.Find(pgtest.GoleakOptions()...); err != nil {
 		fmt.Fprintf(os.Stderr, "goleak: %v\n", err)
 		if code == 0 {
 			code = 1

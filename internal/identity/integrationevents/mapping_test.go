@@ -15,9 +15,8 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/integrationevents"
 )
 
-// fixedTime returns a deterministic UTC instant for round-trip
-// equality assertions. Production maps `fixedNow.UTC()`; tests
-// pin a known value so any post-mapping mutation surfaces.
+// fixedTime returns a deterministic UTC instant; pins a known value so
+// post-mapping mutations surface in equality assertions.
 func fixedTime() time.Time {
 	return time.Date(2026, 5, 6, 12, 0, 0, 0, time.UTC)
 }
@@ -72,7 +71,7 @@ func TestFromDomainEvent_PersonAnonymised_PlatformScoped(t *testing.T) {
 	if !ok {
 		t.Fatalf("type: got %T", got)
 	}
-	// Compile-time guarantees Platform; runtime confirm.
+	// Compile-time guarantees Platform; confirm at runtime too.
 	if _, isPlatform := any(v1).(integrationevents.Platform); !isPlatform {
 		t.Fatal("PersonAnonymisedV1 must satisfy Platform marker")
 	}
@@ -102,7 +101,7 @@ func TestFromDomainEvent_MembershipCreated_TenantScoped(t *testing.T) {
 	if v1.TenantID().String() != tid.String() {
 		t.Fatalf("tenant_id: %s want %s", v1.TenantID(), tid)
 	}
-	// Compile-time guarantees TenantScoped; runtime confirm.
+	// Compile-time guarantees TenantScoped; confirm at runtime too.
 	if _, isTS := any(v1).(integrationevents.TenantScoped); !isTS {
 		t.Fatal("MembershipCreatedV1 must satisfy TenantScoped marker")
 	}

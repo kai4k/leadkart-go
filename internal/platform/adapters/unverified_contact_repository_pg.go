@@ -11,14 +11,15 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/leadkart/leadkart-go/internal/common/pg"
+	"github.com/leadkart/leadkart-go/internal/common/pgconv"
 	"github.com/leadkart/leadkart-go/internal/platform/adapters/db"
 	"github.com/leadkart/leadkart-go/internal/platform/domain/leadform"
 	"github.com/leadkart/leadkart-go/internal/platform/domain/unverifiedcontact"
 )
 
-// UnverifiedContactRepository is the pgx/sqlc-backed implementation of
-// [unverifiedcontact.Repository]. Platform-only table — every write runs
-// under TxScopePlatform.
+// UnverifiedContactRepository is the pgx/sqlc implementation of
+// [unverifiedcontact.Repository]. Platform-only table; every write runs under
+// TxScopePlatform.
 type UnverifiedContactRepository struct {
 	pool *pgxpool.Pool
 	tx   *pg.Transactor
@@ -30,8 +31,7 @@ func NewUnverifiedContactRepository(pool *pgxpool.Pool, tx *pg.Transactor) *Unve
 	return &UnverifiedContactRepository{pool: pool, tx: tx, q: db.New(pool)}
 }
 
-// Add satisfies [unverifiedcontact.Repository]. Joins the surrounding
-// UoW tx via pg.TxFromContext when present.
+// Add satisfies [unverifiedcontact.Repository]. Joins any UoW tx in ctx.
 func (r *UnverifiedContactRepository) Add(ctx context.Context, c *unverifiedcontact.UnverifiedContact) error {
 	if tx, ok := pg.TxFromContext(ctx); ok {
 		return r.addOnTx(ctx, tx, c)
@@ -79,9 +79,8 @@ func (r *UnverifiedContactRepository) UpdateByID(
 	return r.tx.WithinTxPgx(ctx, pg.TxScopePlatform, run)
 }
 
-// GetByID satisfies [unverifiedcontact.Repository]. Honours any active
-// tx in ctx so a sequence inside one UoW closure (mutate, then re-load
-// for projection) sees its own writes.
+// GetByID satisfies [unverifiedcontact.Repository]. Honours any tx in ctx so
+// a mutate-then-reload sequence in one UoW closure sees its own writes.
 func (r *UnverifiedContactRepository) GetByID(ctx context.Context, id unverifiedcontact.ID) (*unverifiedcontact.UnverifiedContact, error) {
 	q := r.q
 	if tx, ok := pg.TxFromContext(ctx); ok {
@@ -97,7 +96,7 @@ func loadUnverifiedContact(ctx context.Context, q *db.Queries, id unverifiedcont
 	if err != nil {
 		return nil, fmt.Errorf("unverified contact repo: parse id %q: %w", id, err)
 	}
-	row, err := q.GetUnverifiedContactByID(ctx, pgUUID(uid))
+	row, err := q.GetUnverifiedContactByID(ctx, pgconv.PgUUID(uid))
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, unverifiedcontact.ErrNotFound
@@ -118,11 +117,11 @@ func insertUnverifiedContactRow(ctx context.Context, q *db.Queries, c *unverifie
 	}
 	f := c.Form()
 	err = q.InsertUnverifiedContact(ctx, db.InsertUnverifiedContactParams{
-		ID:                     pgUUID(uid),
+		ID:                     pgconv.PgUUID(uid),
 		State:                  c.State().String(),
 		RejectionReason:        c.RejectionReason(),
-		BusyCallbackAt:         pgTimestamp(c.BusyCallbackAt()),
-		BusyCallbackEndAt:      pgTimestamp(c.BusyCallbackEndAt()),
+		BusyCallbackAt:         pgconv.PgTimestamp(c.BusyCallbackAt()),
+		BusyCallbackEndAt:      pgconv.PgTimestamp(c.BusyCallbackEndAt()),
 		PlatformLeadID:         pgUUIDOptStr(c.PlatformLeadID()),
 		ContactName:            f.ContactName(),
 		MobileE164:             f.MobileE164(),
@@ -143,11 +142,11 @@ func insertUnverifiedContactRow(ctx context.Context, q *db.Queries, c *unverifie
 		DosageForms:            f.DosageForms(),
 		OrderValue:             string(f.OrderValue()),
 		BuyTimeline:            string(f.BuyTimeline()),
-		CreatedAt:              pgRequiredTimestamp(c.CreatedAt()),
-		CreatedByMembershipID:  pgUUID(createdByID),
-		VerifiedAt:             pgTimestamp(c.VerifiedAt()),
+		CreatedAt:              pgconv.PgRequiredTimestamp(c.CreatedAt()),
+		CreatedByMembershipID:  pgconv.PgUUID(createdByID),
+		VerifiedAt:             pgconv.PgTimestamp(c.VerifiedAt()),
 		VerifiedByMembershipID: pgUUIDOptStr(c.VerifiedByMembershipID().String()),
-		RejectedAt:             pgTimestamp(c.RejectedAt()),
+		RejectedAt:             pgconv.PgTimestamp(c.RejectedAt()),
 		RejectedByMembershipID: pgUUIDOptStr(c.RejectedByMembershipID().String()),
 	})
 	if err != nil {
@@ -162,15 +161,15 @@ func updateUnverifiedContactRow(ctx context.Context, q *db.Queries, c *unverifie
 		return fmt.Errorf("unverified contact repo: parse id: %w", err)
 	}
 	err = q.UpdateUnverifiedContact(ctx, db.UpdateUnverifiedContactParams{
-		ID:                     pgUUID(uid),
+		ID:                     pgconv.PgUUID(uid),
 		State:                  c.State().String(),
 		RejectionReason:        c.RejectionReason(),
-		BusyCallbackAt:         pgTimestamp(c.BusyCallbackAt()),
-		BusyCallbackEndAt:      pgTimestamp(c.BusyCallbackEndAt()),
+		BusyCallbackAt:         pgconv.PgTimestamp(c.BusyCallbackAt()),
+		BusyCallbackEndAt:      pgconv.PgTimestamp(c.BusyCallbackEndAt()),
 		PlatformLeadID:         pgUUIDOptStr(c.PlatformLeadID()),
-		VerifiedAt:             pgTimestamp(c.VerifiedAt()),
+		VerifiedAt:             pgconv.PgTimestamp(c.VerifiedAt()),
 		VerifiedByMembershipID: pgUUIDOptStr(c.VerifiedByMembershipID().String()),
-		RejectedAt:             pgTimestamp(c.RejectedAt()),
+		RejectedAt:             pgconv.PgTimestamp(c.RejectedAt()),
 		RejectedByMembershipID: pgUUIDOptStr(c.RejectedByMembershipID().String()),
 	})
 	if err != nil {
@@ -206,24 +205,24 @@ func rowToUnverifiedContact(row db.PlatformUnverifiedContact) (*unverifiedcontac
 		return nil, fmt.Errorf("unverified contact repo: invalid state %q", row.State)
 	}
 	return unverifiedcontact.UnmarshalFromDB(unverifiedcontact.Snapshot{
-		ID:                     unverifiedcontact.ID(uuidFromPg(row.ID).String()),
+		ID:                     unverifiedcontact.ID(pgconv.UUIDFromPg(row.ID).String()),
 		Form:                   form,
 		State:                  state,
 		RejectionReason:        row.RejectionReason,
-		BusyCallbackAt:         timeFromPg(row.BusyCallbackAt),
-		BusyCallbackEndAt:      timeFromPg(row.BusyCallbackEndAt),
+		BusyCallbackAt:         pgconv.TimeFromPg(row.BusyCallbackAt),
+		BusyCallbackEndAt:      pgconv.TimeFromPg(row.BusyCallbackEndAt),
 		PlatformLeadID:         uuidStringIfValid(row.PlatformLeadID),
-		CreatedAt:              timeFromPg(row.CreatedAt),
-		CreatedByMembershipID:  unverifiedcontact.MembershipID(uuidFromPg(row.CreatedByMembershipID).String()),
-		VerifiedAt:             timeFromPg(row.VerifiedAt),
+		CreatedAt:              pgconv.TimeFromPg(row.CreatedAt),
+		CreatedByMembershipID:  unverifiedcontact.MembershipID(pgconv.UUIDFromPg(row.CreatedByMembershipID).String()),
+		VerifiedAt:             pgconv.TimeFromPg(row.VerifiedAt),
 		VerifiedByMembershipID: unverifiedcontact.MembershipID(uuidStringIfValid(row.VerifiedByMembershipID)),
-		RejectedAt:             timeFromPg(row.RejectedAt),
+		RejectedAt:             pgconv.TimeFromPg(row.RejectedAt),
 		RejectedByMembershipID: unverifiedcontact.MembershipID(uuidStringIfValid(row.RejectedByMembershipID)),
 	}), nil
 }
 
-// drainContactEventsToOutbox pulls events off the aggregate, maps each
-// through the integration-event mapper, + writes to the outbox.
+// drainContactEventsToOutbox maps the aggregate's events and writes them to
+// the outbox.
 func drainContactEventsToOutbox(ctx context.Context, tx pgx.Tx, c *unverifiedcontact.UnverifiedContact) error {
 	evs := c.PullEvents()
 	if len(evs) == 0 {
@@ -233,26 +232,25 @@ func drainContactEventsToOutbox(ctx context.Context, tx pgx.Tx, c *unverifiedcon
 	for i, e := range evs {
 		asAny[i] = e
 	}
-	// UnverifiedContact is Platform-scoped → tenant_id = uuid.Nil on
-	// outbox rows.
+	// Platform-scoped: tenant_id = uuid.Nil on outbox rows.
 	return drainEventsToOutbox(ctx, tx, uuid.Nil, asAny)
 }
 
-// pgUUIDOptStr wraps a string-shaped optional UUID into pgtype.UUID.
-// Empty string → Valid=false.
+// pgUUIDOptStr wraps an optional string UUID into pgtype.UUID; empty or
+// unparseable yields Valid=false.
 func pgUUIDOptStr(s string) pgtype.UUID {
 	if s == "" {
 		return pgtype.UUID{}
 	}
 	id, err := uuid.Parse(s)
 	if err != nil {
-		// Storage path — caller guarantees UUID shape from domain types.
+		// Caller guarantees UUID shape from domain types.
 		return pgtype.UUID{}
 	}
-	return pgtype.UUID{Bytes: id, Valid: true}
+	return pgconv.PgUUID(id)
 }
 
-// uuidStringIfValid returns the string form of pg.UUID or "" when invalid.
+// uuidStringIfValid returns the string form of a pgtype.UUID, or "" if invalid.
 func uuidStringIfValid(p pgtype.UUID) string {
 	if !p.Valid {
 		return ""

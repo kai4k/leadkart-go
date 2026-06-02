@@ -35,8 +35,9 @@
 package membershiptest
 
 import (
+	"cmp"
 	"context"
-	"sort"
+	"slices"
 	"time"
 
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
@@ -89,28 +90,63 @@ func (f *FakeRepository) Add(_ context.Context, m *membership.Membership) error 
 	return nil
 }
 
-// UpdateByID loads, mutates via updateFn, persists. Returns
-// [membership.ErrNotFound] if the Membership doesn't exist.
+// UpdateByID loads, mutates via updateFn, persists — faithfully
+// mirroring the pg adapter's load→updateFn→(persist?) contract.
+// Returns [membership.ErrNotFound] if the Membership doesn't exist.
 //
-// The fake doesn't deep-copy the Membership before passing to updateFn;
-// the caller observes mutations even if it returns (false, nil). This
-// mirrors the pg adapter's behavior — both rely on the aggregate's
-// invariants being re-checked at persist time, not snapshot-rollback.
+// The pg adapter loads inside the tx, runs updateFn, and on
+// `(false, nil)` returns WITHOUT writing any row or draining events —
+// the mutations never reach storage. To honor that LSP contract the
+// fake snapshots the stored aggregate BEFORE calling updateFn and, on
+// `(false, nil)` (or error), ROLLS the stored row back to that snapshot
+// — so mutations made under a no-persist decision are discarded.
+// Pointer identity is preserved so a commit==true caller still observes
+// the mutation it made through its own reference (the in-place idiom the
+// handler tests rely on).
 func (f *FakeRepository) UpdateByID(_ context.Context, tenantID tenant.ID, id membership.ID, updateFn func(*membership.Membership) (bool, error)) error {
 
-	m, ok := f.rows[id]
+	stored, ok := f.rows[id]
 	if !ok {
 		return membership.ErrNotFound
 	}
-	if m.TenantID() != tenantID {
+	if stored.TenantID() != tenantID {
 		return membership.ErrNotFound
 	}
-	commit, err := updateFn(m)
+	snapshot := cloneMembership(stored)
+	commit, err := updateFn(stored)
 	if err != nil {
 		return err
 	}
-	_ = commit // mutator writes back to *m directly; no separate persist step in fake
+	if !commit {
+		*stored = *snapshot // roll back mutations — mirror the adapter's no-persist branch
+		return nil
+	}
 	return nil
+}
+
+// cloneMembership produces an independent copy of a Membership via a
+// Snapshot round-trip (the same rehydration path the pg adapter uses on
+// load), so mutations on the working copy can't leak into the stored
+// original until the updateFn elects to commit. Pending events are
+// intentionally not carried — the adapter loads an event-free aggregate
+// too.
+func cloneMembership(m *membership.Membership) *membership.Membership {
+	return membership.UnmarshalFromDB(membership.Snapshot{
+		ID:                 m.ID(),
+		PersonID:           m.PersonID(),
+		TenantID:           m.TenantID(),
+		Status:             m.Status(),
+		JoinedAt:           m.JoinedAt(),
+		LeftAt:             m.LeftAt(),
+		RoleAssignments:    m.RoleAssignments(),
+		GrantedPermissions: m.GrantedPermissions(),
+		RevokedPermissions: m.RevokedPermissions(),
+		Designation:        m.Designation(),
+		Department:         m.Department(),
+		StatusMessage:      m.StatusMessage(),
+		ReportsTo:          m.ReportsTo(),
+		CreatedBy:          m.CreatedBy(),
+	})
 }
 
 // GetByID returns the Membership or [membership.ErrNotFound]. Returns
@@ -154,8 +190,8 @@ func (f *FakeRepository) ListForTenant(_ context.Context, tenantID tenant.ID) ([
 			out = append(out, m)
 		}
 	}
-	sort.Slice(out, func(i, j int) bool {
-		return out[i].JoinedAt().Before(out[j].JoinedAt())
+	slices.SortFunc(out, func(a, b *membership.Membership) int {
+		return a.JoinedAt().Compare(b.JoinedAt())
 	})
 	return out, nil
 }
@@ -190,11 +226,11 @@ func (f *FakeRepository) ListForTenantPage(_ context.Context, tenantID tenant.ID
 			out = append(out, m)
 		}
 	}
-	sort.Slice(out, func(i, j int) bool {
-		if !out[i].JoinedAt().Equal(out[j].JoinedAt()) {
-			return out[i].JoinedAt().After(out[j].JoinedAt()) // DESC
-		}
-		return out[i].ID().String() > out[j].ID().String() // DESC
+	slices.SortFunc(out, func(a, b *membership.Membership) int {
+		return cmp.Or(
+			b.JoinedAt().Compare(a.JoinedAt()),            // joined_at DESC
+			cmp.Compare(b.ID().String(), a.ID().String()), // id DESC
+		)
 	})
 	if limit > 0 && len(out) > limit {
 		out = out[:limit]
@@ -214,8 +250,8 @@ func (f *FakeRepository) ListAllForPerson(_ context.Context, personID person.ID)
 			out = append(out, m)
 		}
 	}
-	sort.Slice(out, func(i, j int) bool {
-		return out[i].JoinedAt().Before(out[j].JoinedAt())
+	slices.SortFunc(out, func(a, b *membership.Membership) int {
+		return a.JoinedAt().Compare(b.JoinedAt())
 	})
 	return out, nil
 }

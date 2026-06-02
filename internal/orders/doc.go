@@ -1,7 +1,13 @@
 // Package orders is the Orders bounded context — quotations, orders,
 // invoices, credit notes, payments.
 //
-// Layout per CLAUDE.md "Three unbreakable rules":
+// STATUS: domain-only skeleton. Only domain/ aggregates exist; there is
+// no app/, ports/, or adapters/ layer yet, and the module is wired into
+// no cmd/ host. It publishes nothing (no outbox), so orders.order_packed.v1
+// — which the Dispatch module is designed to consume — is not yet emitted.
+// The layout below is the target, not the current state.
+//
+// Target layout per CLAUDE.md "Three unbreakable rules":
 //
 //	internal/orders/
 //	├── domain/                 entities, VOs, repository interfaces
@@ -18,7 +24,7 @@
 // Per ADR 0063 (the load-bearing decision doc for this module):
 //
 //   - Five aggregates, NOT one fat Order. Quotation + Order + Invoice
-//     + CreditNote + Payment each carry their own invariant scope +
+//   - CreditNote + Payment each carry their own invariant scope +
 //     lifecycle (mutable, immutable, append-only — different shapes).
 //   - State-based persistence per ADR 0003 + 0035. NO event sourcing.
 //     The .NET parent uses Marten event streams for Orders; this Go

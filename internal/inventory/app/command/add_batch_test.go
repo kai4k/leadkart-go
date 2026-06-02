@@ -46,7 +46,7 @@ func TestAddBatchHandler_HappyPath_AddsBatch(t *testing.T) {
 	}
 }
 
-// Failure 1: missing product → ErrNotFound.
+// Missing product → ErrNotFound.
 func TestAddBatchHandler_MissingProduct_ReturnsErrNotFound(t *testing.T) {
 	t.Parallel()
 	productRepo := newFakeProductRepo()
@@ -76,13 +76,9 @@ func TestAddBatchHandler_MissingProduct_ReturnsErrNotFound(t *testing.T) {
 	}
 }
 
-// Failure 2: soft-deleted parent product (race re-check) → ErrNotFound.
-// Per ADR 0061 amendment 1 H4: AddBatch wraps both calls in a UoW + the
-// inner re-check fires on a parent that became soft-deleted between
-// the start of the tx and the GetByID. fakeProductRepo.GetByID already
-// filters IsDeleted, so the GetByID itself returns ErrNotFound — same
-// observable result, the H4 fix is structurally enforced by the UoW
-// wrapping (not just the explicit re-check, which is defence-in-depth).
+// Soft-deleted parent → ErrNotFound (ADR 0061 amendment 1 H4). The fake's
+// GetByID filters IsDeleted, so it returns ErrNotFound directly; the H4 fix is
+// the UoW wrapping, with the explicit re-check as defence-in-depth.
 func TestAddBatchHandler_SoftDeletedParent_ReturnsErrNotFound(t *testing.T) {
 	t.Parallel()
 	productRepo := newFakeProductRepo()
@@ -91,7 +87,7 @@ func TestAddBatchHandler_SoftDeletedParent_ReturnsErrNotFound(t *testing.T) {
 	tid := newTenantID(t)
 	actor := newMembershipID(t)
 	p := seedProduct(t, productRepo, tid, actor, "AB-2")
-	// Soft-delete BEFORE the handler runs.
+	// Soft-delete before the handler runs.
 	if err := p.SoftDelete(actor, fixedNow); err != nil {
 		t.Fatalf("SoftDelete: %v", err)
 	}
@@ -118,7 +114,7 @@ func TestAddBatchHandler_SoftDeletedParent_ReturnsErrNotFound(t *testing.T) {
 	}
 }
 
-// Failure 3: duplicate batch_number → ErrBatchNumberTaken.
+// Duplicate batch_number → ErrBatchNumberTaken.
 func TestAddBatchHandler_DuplicateBatchNumber_ReturnsErrBatchNumberTaken(t *testing.T) {
 	t.Parallel()
 	productRepo := newFakeProductRepo()
@@ -147,8 +143,8 @@ func TestAddBatchHandler_DuplicateBatchNumber_ReturnsErrBatchNumberTaken(t *test
 	}
 }
 
-// Failure 4: invalid spec (zero MRP is permitted, but expiry == manufacture
-// fails the chk_batch_expiry_after_manufacture invariant).
+// Invalid spec: expiry == manufacture fails the
+// chk_batch_expiry_after_manufacture invariant.
 func TestAddBatchHandler_InvalidSpec_ReturnsErrInvalid(t *testing.T) {
 	t.Parallel()
 	productRepo := newFakeProductRepo()

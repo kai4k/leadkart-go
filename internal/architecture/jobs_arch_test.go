@@ -1,12 +1,7 @@
 // jobs_arch_test.go — Principle I: River background-job discipline.
 //
-// ADR 0010: river is the only background-job library. River jobs
-// implement a typed Worker interface; the canonical shape requires
-// Kind(), an explicit Timeout, and idempotent semantics.
-//
-// Cited canon:
-//   - river docs — Worker interface + Idempotent annotation
-//   - Brandur Leach — river README + "Background jobs at scale"
+// ADR 0010: river is the only job library. Jobs must declare Kind(), Timeout,
+// and idempotent semantics.
 
 package architecture_test
 
@@ -17,15 +12,8 @@ import (
 	"testing"
 )
 
-// ----------------------------------------------------------------------------
-// I1: TestArch_RiverJobsImplementInterface
-// ----------------------------------------------------------------------------
-//
-// Types in `<module>/jobs/` should have a `Kind() string` method.
-// (River uses Kind to route + log + dedup.)
-//
-// Vacuously true when no jobs/ dir exists yet — the test is the
-// institutional lever for when CRM/Inventory start using river.
+// TestArch_RiverJobsImplementInterface asserts river job files expose Kind() string.
+// Vacuously true if no jobs/ dir exists yet.
 // Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_RiverJobsImplementInterface(t *testing.T) {
 	t.Parallel()
@@ -39,8 +27,6 @@ func TestArch_RiverJobsImplementInterface(t *testing.T) {
 		walkGoFiles(t, dir, false, func(path string, src []byte) {
 			any = true
 			body := stripGoComments(string(src))
-			// Pragmatic: file must reference both `Kind() string` and
-			// `river.Worker` (or river.Args / river.JobArgs).
 			hasKind := strings.Contains(body, "Kind() string") ||
 				strings.Contains(body, "Kind()    string")
 			hasRiver := strings.Contains(body, "river.")
@@ -57,12 +43,7 @@ func TestArch_RiverJobsImplementInterface(t *testing.T) {
 	}
 }
 
-// ----------------------------------------------------------------------------
-// I2: TestArch_RiverJobsHaveTimeout
-// ----------------------------------------------------------------------------
-//
-// Every River worker MUST declare an explicit Timeout. Defaulting
-// to "wait forever" is a known cause of stuck workers.
+// TestArch_RiverJobsHaveTimeout asserts river workers declare an explicit Timeout.
 // Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_RiverJobsHaveTimeout(t *testing.T) {
 	t.Parallel()
@@ -90,13 +71,8 @@ func TestArch_RiverJobsHaveTimeout(t *testing.T) {
 	}
 }
 
-// ----------------------------------------------------------------------------
-// I3: TestArch_RiverJobsIdempotent
-// ----------------------------------------------------------------------------
-//
-// River retries on failure → workers MUST be idempotent OR carry
 // `// river:idempotent <reason>` documentation comment on the
-// Worker type.
+// documentation (retry semantics require idempotent handlers).
 // Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_RiverJobsIdempotent(t *testing.T) {
 	t.Parallel()
@@ -124,13 +100,8 @@ func TestArch_RiverJobsIdempotent(t *testing.T) {
 	}
 }
 
-// ----------------------------------------------------------------------------
-// I4: TestArch_RiverQueuesScopedPerModule
-// ----------------------------------------------------------------------------
-//
-// Queue names follow `<module>_<purpose>`. Shared queue names mean
-// CRM's slow job blocks inventory's fast job. Per-module queues
-// give per-team scaling.
+// TestArch_RiverQueuesScopedPerModule asserts queue names match ^[a-z]+_[a-z_]+$
+// (module_purpose shape for per-module scaling).
 // Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_RiverQueuesScopedPerModule(t *testing.T) {
 	t.Parallel()

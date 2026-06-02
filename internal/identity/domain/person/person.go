@@ -847,13 +847,22 @@ func (p *Person) MarkPasswordChanged() {
 // Idempotency: NOT idempotent. Each call advances state.
 func (p *Person) RegisterFailedLogin(now time.Time) {
 	// Sliding-window reset — if the previous failure is outside the
-	// window, the current attempt is "the first" of a fresh window.
+	// window, the current attempt is "the first" of a fresh window. Also
+	// clear a now-expired lockout left from a prior window: lockedUntil is
+	// otherwise cleared only on successful login, so without this a fresh
+	// run of failures could never re-lock.
 	if !p.lastFailedLoginAt.IsZero() && now.Sub(p.lastFailedLoginAt) > LockoutWindow {
 		p.failedLoginCount = 0
+		if !p.lockedUntil.IsZero() && !now.Before(p.lockedUntil) {
+			p.lockedUntil = time.Time{}
+		}
 	}
 	p.failedLoginCount++
 	p.lastFailedLoginAt = now
-	if p.failedLoginCount >= MaxFailedLogins && p.lockedUntil.IsZero() {
+	// Gate on !IsLocked(now), NOT lockedUntil.IsZero(): an expired prior
+	// lockout leaves lockedUntil non-zero-but-past, which must still allow
+	// re-locking. IsLocked goes false once the duration elapses.
+	if p.failedLoginCount >= MaxFailedLogins && !p.IsLocked(now) {
 		p.lockedUntil = now.Add(LockoutDuration)
 		p.recordEvent(AccountLockedEvent{
 			PersonID:    p.id,

@@ -1,14 +1,7 @@
-// Package quotationtest provides the in-memory FakeRepository
-// implementing [quotation.Repository]. Used by app-layer command +
-// query handler tests + downstream integration scenarios that need a
-// working Quotation store without a Postgres dependency.
-//
-// TDL canon (ThreeDotsLabs Wild Workouts + "Go with the Domain") —
-// per-aggregate fakes live in <aggregate>test/ sibling packages of the
-// aggregate they fake. Single-test-owner pattern: each test constructs
-// its own FakeRepository via [NewFakeRepository]; no shared mutable
-// state across tests; no sync primitives (domain-subtree concurrency-
-// free per `TestArch_NoGoroutinesInDomain`).
+// Package quotationtest provides an in-memory [quotation.Repository] fake
+// for app-layer handler tests without a Postgres dependency.
+// TDL canon: per-aggregate fakes live in <aggregate>test/ siblings; no sync
+// primitives (domain-subtree concurrency-free).
 package quotationtest
 
 import (
@@ -19,29 +12,20 @@ import (
 	"github.com/leadkart/leadkart-go/internal/orders/domain/quotation"
 )
 
-// FakeRepository is the in-memory implementation of
-// [quotation.Repository]. Zero-value-NOT-usable — construct via
-// [NewFakeRepository] so the internal map is initialised.
+// FakeRepository is an in-memory [quotation.Repository].
+// Not zero-value-safe — use [NewFakeRepository].
 type FakeRepository struct {
-	// Store keys aggregates by their ID. The composite (tenant_id, id)
-	// uniqueness is enforced by Add — duplicate ID returns
-	// [ErrAlreadyExists].
+	// Store holds aggregates keyed by ID; Add enforces (tenant_id, id) uniqueness.
 	Store map[quotation.ID]*quotation.Quotation
 
-	// DrainedEvents captures every domain event pulled off any
-	// aggregate at Add or UpdateByID commit time. Tests assert against
-	// this slice to verify the right events fired.
+	// DrainedEvents accumulates events pulled from aggregates at Add/UpdateByID.
 	DrainedEvents []quotation.Event
 
-	// ForceAddError, when non-nil, makes the NEXT Add return this
-	// error + then clears itself. Drives "broker retry of duplicate
-	// Add" or "DB hiccup" tests.
+	// ForceAddError, when non-nil, causes the next Add to return it and clears itself.
 	ForceAddError error
 }
 
-// ErrAlreadyExists is the fake-side analogue of the adapter's
-// 23505-on-PK translation. Tests assert this to verify the natural-key
-// dedup path.
+// ErrAlreadyExists mirrors the adapter's SQLSTATE 23505 translation on PK conflict.
 var ErrAlreadyExists = errors.New("quotationtest: already exists")
 
 // NewFakeRepository returns an empty in-memory quotation repository.
@@ -51,12 +35,10 @@ func NewFakeRepository() *FakeRepository {
 	}
 }
 
-// Compile-time interface conformance — drift breaks at build.
+// Compile-time interface conformance.
 var _ quotation.Repository = (*FakeRepository)(nil)
 
-// Add satisfies [quotation.Repository]. Drains events. Returns
-// [ErrAlreadyExists] on duplicate (tenant_id, id) — mirrors the
-// adapter's 23505 translation.
+// Add drains events and returns [ErrAlreadyExists] on duplicate (tenant_id, id).
 func (r *FakeRepository) Add(_ context.Context, q *quotation.Quotation) error {
 	if r.ForceAddError != nil {
 		err := r.ForceAddError
@@ -71,8 +53,7 @@ func (r *FakeRepository) Add(_ context.Context, q *quotation.Quotation) error {
 	return nil
 }
 
-// GetByID satisfies [quotation.Repository]. Returns [quotation.ErrNotFound]
-// when the (tenant_id, id) pair has no row.
+// GetByID returns [quotation.ErrNotFound] when no row matches (tenant_id, id).
 func (r *FakeRepository) GetByID(
 	_ context.Context, tenantID tenant.ID, id quotation.ID,
 ) (*quotation.Quotation, error) {
@@ -81,16 +62,13 @@ func (r *FakeRepository) GetByID(
 		return nil, quotation.ErrNotFound
 	}
 	if q.TenantID() != tenantID {
-		// RLS-equivalent: a foreign tenant's read MUST look identical
-		// to "no such row" — the adapter binds RLS via GUC; the fake
-		// honours the same behaviour explicitly.
+		// Mirror RLS: cross-tenant read is indistinguishable from not-found.
 		return nil, quotation.ErrNotFound
 	}
 	return q, nil
 }
 
-// UpdateByID satisfies [quotation.Repository]. Mutates in-place when
-// the mutator returns (true, nil); drains events on the same path.
+// UpdateByID mutates in-place when the mutator returns (true, nil); drains events on commit.
 func (r *FakeRepository) UpdateByID(
 	ctx context.Context, tenantID tenant.ID, id quotation.ID,
 	mutator func(*quotation.Quotation) (bool, error),
@@ -104,8 +82,7 @@ func (r *FakeRepository) UpdateByID(
 		return mErr
 	}
 	if !changed {
-		// No-op path — domain event slice already empty (mutator
-		// returned false BEFORE any state change).
+		// Mutator returned false before any state change; event slice is empty.
 		return nil
 	}
 	r.DrainedEvents = append(r.DrainedEvents, q.PullEvents()...)

@@ -24,15 +24,13 @@ func TestDeleteProductHandler_HappyPath_SoftDeletes(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("Handle: %v", err)
 	}
-	// Re-load via direct map access — fakeProductRepo.GetByID filters
-	// deleted rows; we want to confirm the soft-delete was APPLIED.
+	// GetByID filters deleted rows, so assert via the aggregate directly.
 	if !p.IsDeleted() {
 		t.Fatal("product should be soft-deleted after Handle")
 	}
 }
 
-// Failure 1: missing product → ErrNotFound — per ADR 0061 amendment 1
-// (M6) the handler does an upfront GetByID, surfacing this directly.
+// Missing product → ErrNotFound via the upfront GetByID (ADR 0061 amendment 1 M6).
 func TestDeleteProductHandler_MissingProduct_ReturnsErrNotFound(t *testing.T) {
 	t.Parallel()
 	productRepo := newFakeProductRepo()
@@ -49,7 +47,7 @@ func TestDeleteProductHandler_MissingProduct_ReturnsErrNotFound(t *testing.T) {
 	}
 }
 
-// Failure 2: live batches with stock → ErrAnyLiveStock.
+// Live batches with stock → ErrAnyLiveStock.
 func TestDeleteProductHandler_HasLiveStock_ReturnsErrAnyLiveStock(t *testing.T) {
 	t.Parallel()
 	productRepo := newFakeProductRepo()

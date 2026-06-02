@@ -1,14 +1,11 @@
-// Package verificationcall defines the VerificationCall aggregate —
-// an append-only call-log entry per BRD §6.2 + ADR 0059.
+// Package verificationcall defines the VerificationCall aggregate: an
+// append-only call-log entry (BRD §6.2, ADR 0059).
 //
-// Each call is its own aggregate (not an entity inside UnverifiedContact)
-// because:
-//   - Calls are created independently — multiple per contact across
-//     re-attempts; no shared invariant to enforce across them.
-//   - Append-only — never mutated post-insert, never deleted.
-//   - The contact's state machine reacts to the call's outcome but the
-//     two writes are orchestrated by the handler under one UoW tx, not
-//     forced into one aggregate boundary (Vernon IDDD ch.10 rule).
+// Its own aggregate, not an entity inside UnverifiedContact: calls are
+// created independently (many per contact across re-attempts) with no
+// shared invariant, are append-only, and the contact's state transition
+// is orchestrated by the handler in the same tx rather than forced into
+// one boundary (Vernon IDDD ch.10).
 //
 // Platform-only (no tenant_id).
 package verificationcall
@@ -18,6 +15,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/leadkart/leadkart-go/internal/platform/domain/unverifiedcontact"
 )
@@ -34,11 +33,9 @@ func (i ID) IsZero() bool { return i == "" }
 // String returns the underlying UUID string.
 func (i ID) String() string { return string(i) }
 
-// OutcomeCode is the closed-set call outcome enum. The state machine
-// downstream (contact.MarkVerified / MarkRejected / MarkBusy) maps from
-// these codes — the contact handler reads OutcomeCode and runs the
-// matching transition. Codes that don't carry a state transition
-// (NoAnswer, WrongNumber) leave the contact in its current state.
+// OutcomeCode is the closed-set call outcome. The contact handler maps it
+// to a transition (MarkVerified/MarkRejected/MarkBusy); NoAnswer and
+// WrongNumber carry no transition and leave the contact unchanged.
 type OutcomeCode string
 
 // Closed-set call [OutcomeCode] values per ADR 0059.
@@ -64,24 +61,22 @@ func (o OutcomeCode) String() string { return string(o) }
 
 // VerificationCall is the aggregate root. Immutable once constructed.
 type VerificationCall struct {
-	id                     ID
-	contactID              unverifiedcontact.ID
-	outcome                OutcomeCode
-	notes                  string
-	callbackWindowStartAt  time.Time
-	callbackWindowEndAt    time.Time
-	loggedAt               time.Time
-	loggedByMembershipID   unverifiedcontact.MembershipID
+	id                    ID
+	contactID             unverifiedcontact.ID
+	outcome               OutcomeCode
+	notes                 string
+	callbackWindowStartAt time.Time
+	callbackWindowEndAt   time.Time
+	loggedAt              time.Time
+	loggedByMembershipID  unverifiedcontact.MembershipID
 
 	events []Event
 }
 
-// New constructs a brand-new VerificationCall. Validates:
-//   - id, contactID, loggedBy non-zero
-//   - outcome ∈ closed set
-//   - when outcome == Busy: both callback timestamps non-zero +
-//     end-after-start (handler-level rule, mirrored in
-//     UnverifiedContact.MarkBusy)
+// New constructs a VerificationCall, enforcing: id/contactID/loggedBy
+// non-zero, outcome in the closed set, and for Busy a valid callback
+// window (both timestamps set, end after start; mirrors
+// UnverifiedContact.MarkBusy).
 func New(
 	id ID,
 	contactID unverifiedcontact.ID,
@@ -91,14 +86,14 @@ func New(
 	loggedBy unverifiedcontact.MembershipID,
 	now time.Time,
 ) (*VerificationCall, error) {
-	if id.IsZero() {
-		return nil, fmt.Errorf("%w: id required", ErrInvalid)
+	if err := validateUUID("id", id.String()); err != nil {
+		return nil, err
 	}
-	if contactID.IsZero() {
-		return nil, fmt.Errorf("%w: contactID required", ErrInvalid)
+	if err := validateUUID("contactID", contactID.String()); err != nil {
+		return nil, err
 	}
-	if loggedBy.IsZero() {
-		return nil, fmt.Errorf("%w: loggedBy required", ErrInvalid)
+	if err := validateUUID("loggedBy", loggedBy.String()); err != nil {
+		return nil, err
 	}
 	if now.IsZero() {
 		return nil, fmt.Errorf("%w: now required", ErrInvalid)
@@ -115,9 +110,8 @@ func New(
 			return nil, fmt.Errorf("%w: callback end must be after start", ErrInvalid)
 		}
 	}
-	// Non-busy outcomes MUST NOT carry a callback window — keeps the
-	// payload meaningful and prevents the "I left a window because the
-	// frontend submitted both" footgun.
+	// Non-busy outcomes must not carry a callback window: rejects
+	// frontend that submits both regardless of outcome.
 	if outcome != OutcomeBusy && (!callbackWindowStartAt.IsZero() || !callbackWindowEndAt.IsZero()) {
 		return nil, fmt.Errorf("%w: non-busy outcome must not carry callback window", ErrInvalid)
 	}
@@ -140,6 +134,20 @@ func New(
 		LoggedByMembershipID: loggedBy,
 	})
 	return c, nil
+}
+
+// validateUUID enforces the H6 reviewer rule: every domain ID must parse
+// as a UUID at AGGREGATE-CONSTRUCTION time, not later at the adapter
+// boundary. Trims surrounding whitespace before parsing.
+func validateUUID(name, val string) error {
+	val = strings.TrimSpace(val)
+	if val == "" {
+		return fmt.Errorf("%w: %s required", ErrInvalid, name)
+	}
+	if _, err := uuid.Parse(val); err != nil {
+		return fmt.Errorf("%w: %s not a valid uuid", ErrInvalid, name)
+	}
+	return nil
 }
 
 // Snapshot is the persistence-layer DTO consumed by [UnmarshalFromDB].
@@ -182,12 +190,10 @@ func (c *VerificationCall) Outcome() OutcomeCode { return c.outcome }
 // Notes returns the free-text Lead Agent notes.
 func (c *VerificationCall) Notes() string { return c.notes }
 
-// CallbackWindowStartAt returns the busy-callback window start. Zero
-// unless outcome == Busy.
+// CallbackWindowStartAt returns the callback window start; zero unless Busy.
 func (c *VerificationCall) CallbackWindowStartAt() time.Time { return c.callbackWindowStartAt }
 
-// CallbackWindowEndAt returns the busy-callback window end. Zero
-// unless outcome == Busy.
+// CallbackWindowEndAt returns the callback window end; zero unless Busy.
 func (c *VerificationCall) CallbackWindowEndAt() time.Time { return c.callbackWindowEndAt }
 
 // LoggedAt returns the call-log timestamp.
@@ -200,7 +206,7 @@ func (c *VerificationCall) LoggedByMembershipID() unverifiedcontact.MembershipID
 
 // ----- Events --------------------------------------------------------------
 
-// PullEvents drains + returns the recorded domain events.
+// PullEvents drains and returns the recorded domain events.
 func (c *VerificationCall) PullEvents() []Event {
 	if len(c.events) == 0 {
 		return nil
@@ -217,8 +223,8 @@ func (c *VerificationCall) recordEvent(e Event) {
 // Event is the sealed marker interface.
 type Event interface{ isVerificationCallEvent() }
 
-// LoggedEvent fires on [New] — every call insert raises one. Mirrors
-// .NET parent's VerificationCallLogged integration event.
+// LoggedEvent fires on [New]; one per call insert. Mirrors the .NET
+// VerificationCallLogged integration event.
 type LoggedEvent struct {
 	CallID               ID
 	ContactID            unverifiedcontact.ID

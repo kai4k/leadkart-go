@@ -23,8 +23,8 @@ import (
 	"time"
 
 	"github.com/alicebob/miniredis/v2"
-	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/jackc/pgx/v5/pgxpool"
+	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/pressly/goose/v3"
 
 	"github.com/leadkart/leadkart-go/internal/common/pg"
@@ -33,11 +33,11 @@ import (
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
 	"github.com/testcontainers/testcontainers-go/wait"
 
-	"github.com/leadkart/leadkart-go/internal/common/ids"
-	"github.com/leadkart/leadkart-go/internal/identity/ports"
 	"github.com/leadkart/leadkart-go/internal/common/cache"
 	"github.com/leadkart/leadkart-go/internal/common/config"
+	"github.com/leadkart/leadkart-go/internal/common/ids"
 	crmapp "github.com/leadkart/leadkart-go/internal/crm/app"
+	"github.com/leadkart/leadkart-go/internal/identity/ports"
 	platformapp "github.com/leadkart/leadkart-go/internal/platform/app"
 )
 
@@ -287,7 +287,13 @@ func startWiredPostgresForHTTP(t *testing.T) *pgxpool.Pool {
 	}
 	for _, s := range []string{
 		`CREATE ROLE leadkart_app LOGIN PASSWORD 'leadkart_app_pw' NOSUPERUSER NOINHERIT NOCREATEROLE NOCREATEDB`,
-		`GRANT USAGE ON SCHEMA app, identity, platform TO leadkart_app`,
+		`GRANT USAGE ON SCHEMA app, common, identity, platform TO leadkart_app`,
+		// `common` holds the shared watermill-sql outbox relay that every
+		// module publishes through (ADR 0064/0067). Its "offset" BIGSERIAL
+		// needs sequence USAGE in addition to table DML — GRANT ON ALL TABLES
+		// does NOT cover the backing sequences.
+		`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA common TO leadkart_app`,
+		`GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA common TO leadkart_app`,
 		`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA identity TO leadkart_app`,
 		`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA platform TO leadkart_app`,
 		`GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA app TO leadkart_app`,
@@ -326,4 +332,3 @@ func migrationsDir(t *testing.T) string {
 	// here = .../cmd/api/http_flow_integration_test.go
 	return filepath.Join(filepath.Dir(here), "..", "..", "migrations")
 }
-

@@ -44,9 +44,8 @@ import (
 
 const tokenTTL = 14 * 24 * time.Hour
 
-// hashOf is a tiny helper that mirrors what the auth adapter will do in
-// production (SHA-256 the opaque token, hex-encode). Adapter tests don't
-// depend on the real auth path; we just need a TokenHash that round-trips.
+// hashOf SHA-256s the token and hex-encodes the result — matching the
+// production auth adapter. Tests only need a round-trippable TokenHash.
 func hashOf(t *testing.T, s string) refreshtoken.TokenHash {
 	t.Helper()
 	sum := sha256.Sum256([]byte(s))
@@ -57,16 +56,12 @@ func hashOf(t *testing.T, s string) refreshtoken.TokenHash {
 	return hash
 }
 
-// seedFamily creates Person + Tenant + initial Family with one token at
-// generation 0 — the precondition for every refresh-token integration test.
+// seedFamily creates the Person + Tenant + Family precondition for every
+// refresh-token integration test.
 func seedFamily(t *testing.T, persons *adapters.PersonRepository, tenants *adapters.TenantRepository, families *adapters.RefreshTokenFamilyRepository, secret string) *refreshtoken.Family {
 	t.Helper()
 	tn := seedTenant(t, tenants)
-	// Per-test email uniqueness via full UUIDv7 — Brandur "Postgres at
-	// scale" / Stripe canon: natural UUIDs everywhere, no length-tuning
-	// (RFC 5321 local-part allows 64 chars; v7 is 36). Truncating to a
-	// short suffix risks collisions on rapid parallel test starts +
-	// hides the failure mode.
+	// Full UUIDv7 in the local-part avoids collisions on rapid parallel starts.
 	p := seedPerson(t, persons, "rt-"+ids.NewV7().String()+"@example.test")
 
 	fid := refreshtoken.FamilyID(ids.NewV7().String())
@@ -81,9 +76,8 @@ func seedFamily(t *testing.T, persons *adapters.PersonRepository, tenants *adapt
 	return f
 }
 
-// SQL-contract: Add writes BOTH the family row and the first token row
-// inside the same pgx tx, and GetByID hydrates from BOTH tables. Multi-
-// table write+read SQL contract — fake covers in-memory bag semantics.
+// SQL-contract: Add writes family and first token in the same pgx tx;
+// GetByID hydrates from both tables.
 func TestRefreshTokenFamilyRepository_Add_PersistsFamilyAndFirstTokenInSameTx(t *testing.T) {
 	t.Parallel()
 	pool := repoFixture(t)
@@ -94,8 +88,7 @@ func TestRefreshTokenFamilyRepository_Add_PersistsFamilyAndFirstTokenInSameTx(t 
 
 	f := seedFamily(t, persons, tenants, families, "secret-token-1")
 
-	// Round-trip: GetByID hydrates the family + every token row from
-	// the child table.
+	// Round-trip: GetByID hydrates the family and token rows.
 	got, err := families.GetByID(t.Context(), f.ID())
 	if err != nil {
 		t.Fatalf("GetByID: %v", err)
@@ -105,20 +98,11 @@ func TestRefreshTokenFamilyRepository_Add_PersistsFamilyAndFirstTokenInSameTx(t 
 	}
 }
 
-// SQL-contract: GetByTokenHash performs the SQL JOIN from refresh_tokens
-// (where the hash lives) back to refresh_token_families. The
-// refreshtokentest.FakeRepository mirrors the lookup observable, so
-// the SQL test must ALSO prove the PG-specific mechanism: EXPLAIN
-// confirms the plan uses the btree Index Scan on `token_hash`, not a
-// Seq Scan. Without the EXPLAIN, the only thing this test would prove
-// over the fake is "the SQL also returns the right row" — which is
-// pure round-trip per ADR 0062 §6.
-//
+// SQL-contract: GetByTokenHash JOINs refresh_tokens → refresh_token_families.
 // Two halves:
 //
-//   1. EXPLAIN plan: Index Scan over the token_hash unique index
-//      (Postgres auto-names it `refresh_tokens_token_hash_key`).
-//   2. Observable: lookup hydrates the family by id.
+//  1. EXPLAIN proves an Index Scan on the token_hash unique index.
+//  2. Observable: lookup hydrates the correct family.
 func TestRefreshTokenFamilyRepository_GetByTokenHash_JoinsTokenToFamily(t *testing.T) {
 	t.Parallel()
 	pool := repoFixture(t)
@@ -131,9 +115,7 @@ func TestRefreshTokenFamilyRepository_GetByTokenHash_JoinsTokenToFamily(t *testi
 	f := seedFamily(t, persons, tenants, families, secret)
 	hash := hashOf(t, secret)
 
-	// SQL-contract part 1: EXPLAIN proves Index Scan on token_hash.
-	// refresh_tokens is non-RLS (session infrastructure), so no
-	// SET LOCAL dance is needed — query directly.
+	// Part 1: EXPLAIN proves Index Scan. Non-RLS table; no SET LOCAL needed.
 	const explainSQL = `
 		EXPLAIN (FORMAT TEXT)
 		SELECT family_id FROM identity.refresh_tokens WHERE token_hash = $1
@@ -159,7 +141,7 @@ func TestRefreshTokenFamilyRepository_GetByTokenHash_JoinsTokenToFamily(t *testi
 		t.Fatalf("EXPLAIN plan shows Seq Scan on refresh_tokens — index regression; got:\n%s", plan)
 	}
 
-	// SQL-contract part 2: observable — lookup hydrates the family.
+	// Part 2: observable — lookup returns the correct family.
 	got, err := families.GetByTokenHash(t.Context(), hash)
 	if err != nil {
 		t.Fatalf("GetByTokenHash: %v", err)
@@ -169,10 +151,8 @@ func TestRefreshTokenFamilyRepository_GetByTokenHash_JoinsTokenToFamily(t *testi
 	}
 }
 
-// SQL-contract: Rotate within UpdateByID issues an INSERT of the new
-// token row AND an UPDATE of the previous row (is_consumed + replaced_
-// by_id) inside ONE pgx tx — atomically. Re-reading the family must
-// surface both rows.
+// SQL-contract: Rotate inside UpdateByID INSERTs the new token and UPDATEs
+// the previous row (consumed + replaced_by_id) in ONE pgx tx.
 func TestRefreshTokenFamilyRepository_UpdateByID_RotateWritesNewTokenAndUpdatesOldInSameTx(t *testing.T) {
 	t.Parallel()
 	pool := repoFixture(t)
@@ -211,7 +191,6 @@ func TestRefreshTokenFamilyRepository_UpdateByID_RotateWritesNewTokenAndUpdatesO
 	}
 }
 
-// Note: ReuseDetection / Revoke business-rule scenarios + state-machine
-// transitions live in refreshtokentest.FakeRepository unit tests + the
-// refreshtoken aggregate's own unit tests. ListActiveForPerson's
-// revoked-filter is in-memory predicate work covered by the fake.
+// Business-rule and state-machine scenarios (ReuseDetection, Revoke,
+// ListActiveForPerson revoked-filter) live in
+// refreshtokentest.FakeRepository unit tests.

@@ -2,89 +2,29 @@ package adapters
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 
-	"github.com/leadkart/leadkart-go/internal/common/ids"
-	"github.com/leadkart/leadkart-go/internal/inventory/adapters/db"
-	"github.com/leadkart/leadkart-go/internal/inventory/app/actclaim"
+	"github.com/leadkart/leadkart-go/internal/common/messaging"
 	"github.com/leadkart/leadkart-go/internal/inventory/integrationevents"
 )
 
-// writeOutboxEvents persists framework-neutral integration events to
-// inventory.outbox inside the supplied transaction.
-//
-// Mirror of internal/identity/adapters/outbox_writer.go. Per ADR 0027 +
-// Brandur "events table" pattern: outbox doubles as audit log, single
-// tx with the aggregate write. Per ADR 0056: act_* columns carry the
-// RFC 8693 actor claim (NULL on the non-impersonation hot path).
+// writeOutboxEvents writes integration events to common.outbox inside tx
+// (same transaction as the aggregate mutation). ADR 0064/0067: one shared
+// relay drained by the Watermill Forwarder. This wrapper supplies the
+// inventory destination topic.
 func writeOutboxEvents(
 	ctx context.Context,
 	tx pgx.Tx,
 	tenantID uuid.UUID,
 	events []integrationevents.Event,
 ) error {
-	if len(events) == 0 {
-		return nil
-	}
-	actOperatorID, actSessionID, actReason := outboxActParams(ctx)
-
-	q := db.New(tx)
-	for _, e := range events {
-		payload, err := json.Marshal(e)
-		if err != nil {
-			return fmt.Errorf("inventory outbox: marshal %s: %w", e.Topic(), err)
-		}
-		err = q.InsertOutboxEvent(ctx, db.InsertOutboxEventParams{
-			ID:            pgUUID(ids.NewV7()),
-			TenantID:      pgUUID(tenantID),
-			Topic:         e.Topic(),
-			Payload:       payload,
-			OccurredAt:    pgRequiredTimestamp(e.OccurredAt()),
-			ActOperatorID: actOperatorID,
-			ActSessionID:  actSessionID,
-			ActReason:     actReason,
-		})
-		if err != nil {
-			return fmt.Errorf("inventory outbox: insert %s: %w", e.Topic(), err)
-		}
-	}
-	return nil
+	return messaging.PublishOutbox(ctx, tx, integrationevents.Topic, tenantID, events)
 }
 
-// outboxActParams projects the per-request actclaim ctx onto the three
-// sqlc param slots. Defensive: malformed OperatorID/SessionID (non-UUID)
-// is dropped to NULL rather than failing the outbox write — audit-log
-// outage MUST NOT cascade per audit-checklist.md §12.
-func outboxActParams(ctx context.Context) (pgtype.UUID, pgtype.UUID, *string) {
-	c, ok := actclaim.FromContext(ctx)
-	if !ok || c.IsZero() {
-		return pgtype.UUID{}, pgtype.UUID{}, nil
-	}
-	var (
-		opID  pgtype.UUID
-		sesID pgtype.UUID
-	)
-	if parsed, err := uuid.Parse(c.OperatorID); err == nil {
-		opID = pgUUID(parsed)
-	}
-	if parsed, err := uuid.Parse(c.SessionID); err == nil {
-		sesID = pgUUID(parsed)
-	}
-	var reason *string
-	if c.Reason != "" {
-		r := c.Reason
-		reason = &r
-	}
-	return opID, sesID, reason
-}
-
-// mapDomainEvents translates a slice of domain events into the
-// canonical integration events for outbox storage.
+// mapDomainEvents maps domain events to canonical integration events for
+// outbox storage. Returns nil, nil when the slice is empty.
 func mapDomainEvents(domainEvents []any) ([]integrationevents.Event, error) {
 	if len(domainEvents) == 0 {
 		return nil, nil

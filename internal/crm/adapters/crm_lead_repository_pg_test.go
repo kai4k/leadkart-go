@@ -6,21 +6,19 @@
 //   Per-test context.WithTimeout would be belt-and-suspenders against the
 //   shared-pool + parallel-with-RLS canon shape.
 //
-// arch-test:parallel-safe — every Test* uses the shared pgtest container
-//   + a fresh tenant_id per test bound via withTenantCtx; RLS isolates
-//   rows by tenant so parallel runs cannot see each others state.
-//   Brandur "Postgres at scale" + TDL Wild Workouts canon: shared
-//   infrastructure + per-test logical isolation = safe parallelism.
-//
 // SQL-CONTRACT COVERAGE (per ADR 0062 — TDL Test Pyramid):
 //   - Outbox row insertion in the SAME tx as the aggregate write
-//     (ADR 0008); confirms topic + tenant_id stamping on the CRM lead-
-//     created event.
+//     (ADR 0008), verified end-to-end via the production CRM forwarder
+//     + in-process Watermill subscriber. Strict TDL canon per ADR 0062
+//     Amendment 1: assertions are subscriber-side, not table-state-side.
 //
 // Round-trip Add/GetByID/GetBySourcePurchaseID + state-machine
 // (ChangeStage / Convert / Assign) + ErrNotFound + ListPage filter
 // coverage moved to [crmleadtest.FakeRepository]. ListPage index gate
 // stays in keyset_explain_integration_test.go.
+//
+// PARALLELISM POLICY: outbox-observing tests use newCrmOutboxFixture
+// + sharedPG.TruncateAll(t) + NO t.Parallel (strict-TDL outbox rule).
 
 package adapters_test
 
@@ -29,17 +27,14 @@ import (
 	"time"
 
 	"github.com/leadkart/leadkart-go/internal/common/ids"
+	"github.com/leadkart/leadkart-go/internal/common/messaging"
 	"github.com/leadkart/leadkart-go/internal/common/messaging/messagingtest"
 	"github.com/leadkart/leadkart-go/internal/common/pg"
 	"github.com/leadkart/leadkart-go/internal/crm/adapters"
 	"github.com/leadkart/leadkart-go/internal/crm/domain/crmlead"
+	crmevents "github.com/leadkart/leadkart-go/internal/crm/integrationevents"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
-
-// Shared bootstrap (crmRepoFixture / TestMain / migrations / role
-// provisioning / withTenantCtx) lives in fixture_integration_test.go
-// per the Brandur / TDL canon — ONE container per package, shared
-// pool, per-test isolation via fresh tenant_id + RLS.
 
 // newSnapshot returns a valid PurchaseSnapshot keyed by a fresh
 // PurchaseID — tests use this to seed leads through the subscriber-
@@ -74,13 +69,15 @@ func newSnapshot(t *testing.T, purchaseID, platformLeadID, buyer string) crmlead
 
 // TestCrmLeadRepository_Add_PersistsAndEmitsOutbox — SQL-contract:
 // every crmlead.Add MUST also write a row to crm.outbox in the same tx
-// per ADR 0008. The read-back uses the messagingtest helper (RLS+FORCE
-// on outbox bypassed via platform GUC); confirms the canonical topic
-// + tenant_id round-trip.
+// per ADR 0008. Verified end-to-end: production CRM forwarder drains
+// the outbox + the in-process Watermill subscriber receives the event.
+// Strict TDL canon per ADR 0062 Amendment 1.
+//
+// arch-test:no-parallel — subscriber-fixture test; uses TruncateAll.
 func TestCrmLeadRepository_Add_PersistsAndEmitsOutbox(t *testing.T) {
+	sharedPG.TruncateAll(t)
 	pool := crmRepoFixture(t)
-	tx := pg.NewTransactor(pool)
-	repo := adapters.NewCrmLeadRepository(pool, tx)
+	repo := adapters.NewCrmLeadRepository(pool, pg.NewTransactor(pool))
 
 	tenantID := ids.NewV7()
 	ctx := withTenantCtx(t.Context(), tenantID)
@@ -97,12 +94,18 @@ func TestCrmLeadRepository_Add_PersistsAndEmitsOutbox(t *testing.T) {
 		t.Fatalf("Add: %v", err)
 	}
 
-	// Outbox row written with topic crm.lead_created.v1. The outbox is
-	// RLS+FORCE — assertion goes through the typed messagingtest helper
-	// (Wave 7 + ADR 0047: no raw SQL in tests; helper internalises the
-	// platform-GUC bypass once).
-	topics := messagingtest.OutboxTopicsForTenant(t, pool, messagingtest.SchemaCRM, tenantID.String())
-	if len(topics) != 1 || topics[0] != "crm.lead_created.v1" {
-		t.Fatalf("outbox topics: %v", topics)
+	// Producer contract (ADR 0064): the Add wrote one enveloped row to the
+	// shared common.outbox relay, in the same tx. messagingtest.DrainOutbox
+	// reads + unwraps it (the forwarder hop is library code).
+	rows := messagingtest.DrainOutbox(t.Context(), t, pool)
+	got := messagingtest.EventTypes(rows)
+	if len(got) != 1 || got[0] != "crm.lead_created.v1" {
+		t.Fatalf("event_types: got %v want [crm.lead_created.v1]", got)
+	}
+	if rows[0].DestinationTopic != crmevents.Topic {
+		t.Fatalf("destination topic: got %q want %q", rows[0].DestinationTopic, crmevents.Topic)
+	}
+	if tid := rows[0].Message.Metadata.Get(messaging.HeaderTenantID); tid != tenantID.String() {
+		t.Fatalf("tenant_id header: got %q want %q", tid, tenantID.String())
 	}
 }

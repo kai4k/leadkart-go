@@ -5,32 +5,17 @@ import (
 	"github.com/leadkart/leadkart-go/internal/common/postaladdress"
 )
 
-// AdminContact bundles the tenant's primary administrative contact:
-//   - AdminPhone (E.164)
-//   - AdminAddress (Indian postal)
-//
-// AdminEmail lives on Tenant directly (it's part of the registration
-// invariant — every tenant has an email). This VO captures the
-// optional follow-up details collected post-onboarding.
-//
-// Both fields are optional individually — a tenant may onboard
-// without a phone number or address, supply them later, or clear them.
-//
-// Per LeadKart .NET parent's Contact composite VO + the .NET-shipped
-// MembershipContactUpdatedIntegrationEvent / TenantContactUpdated
-// vocabulary in messaging.md.
+// AdminContact holds the tenant's optional admin phone (E.164) and postal
+// address. Both fields are independently optional and may be supplied or
+// cleared post-onboarding. Mirrors the .NET Contact composite VO.
 type AdminContact struct {
 	phone   phone.Number
 	address postaladdress.Address
 }
 
-// NewAdminContact composes the optional contact fields. Pass zero
-// values for fields the tenant hasn't declared.
-//
-// No cross-validation required — phone and address are independent
-// concerns. (PostalAddress's own factory cross-validates city against
-// the pincode lookup table when the caller uses [postaladdress.Create]
-// instead of [postaladdress.New].)
+// NewAdminContact composes the optional contact fields. Pass zero values for
+// undeclared fields. Phone and address are validated independently by their
+// own VOs; no cross-validation needed here.
 func NewAdminContact(p phone.Number, a postaladdress.Address) AdminContact {
 	return AdminContact{phone: p, address: a}
 }
@@ -41,12 +26,12 @@ func (c AdminContact) Phone() phone.Number { return c.phone }
 // Address returns the admin postal address; zero if not declared.
 func (c AdminContact) Address() postaladdress.Address { return c.address }
 
-// IsZero reports whether NO contact details are declared.
+// IsZero reports whether no contact details are declared.
 func (c AdminContact) IsZero() bool {
 	return c.phone.IsZero() && c.address.IsZero()
 }
 
-// Equal compares two AdminContact by both fields.
+// Equal compares two AdminContact values by all fields.
 func (c AdminContact) Equal(other AdminContact) bool {
 	return c.phone.Equal(other.phone) && c.address.Equal(other.address)
 }

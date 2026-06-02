@@ -13,6 +13,7 @@ import (
 
 	"github.com/leadkart/leadkart-go/internal/common/pagination"
 	"github.com/leadkart/leadkart-go/internal/common/pg"
+	"github.com/leadkart/leadkart-go/internal/common/pgconv"
 	"github.com/leadkart/leadkart-go/internal/crm/adapters/db"
 	"github.com/leadkart/leadkart-go/internal/crm/domain/crmlead"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
@@ -98,7 +99,7 @@ func (r *CrmLeadRepository) GetBySourcePurchaseID(ctx context.Context, tenantID 
 	var out *crmlead.CrmLead
 	err = r.tx.WithinTxPgxTenant(ctx, tenantID.String(), func(ctx context.Context, tx pgx.Tx) error {
 		q := r.q.WithTx(tx)
-		row, err := q.GetCrmLeadByPurchaseID(ctx, pgUUID(pid))
+		row, err := q.GetCrmLeadByPurchaseID(ctx, pgconv.PgUUID(pid))
 		if err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				return crmlead.ErrNotFound
@@ -180,21 +181,21 @@ func (r *CrmLeadRepository) ListPage(
 	}
 
 	params := db.ListCrmLeadsPageParams{
-		TenantID: pgUUID(tid),
+		TenantID: pgconv.PgUUID(tid),
 		// peek-one-extra trick per ADR 0038
 		PageSize:        int32(clamped) + 1, //nolint:gosec // clamped ≤ 200 by ClampPageSize
 		ProductRanges:   nullableTextArray(filter.ProductRanges),
 		DosageForms:     nullableTextArray(filter.DosageForms),
-		Stage:           stringPtr(filter.Stage.String()),
-		Temperature:     stringPtr(filter.Temperature.String()),
-		City:            stringPtr(filter.City),
-		Pincode:         stringPtr(filter.Pincode),
-		BusinessType:    stringPtr(filter.BusinessType),
-		MedicineSystem:  stringPtr(filter.MedicineSystem),
+		Stage:           pgconv.ZeroToNil(filter.Stage.String()),
+		Temperature:     pgconv.ZeroToNil(filter.Temperature.String()),
+		City:            pgconv.ZeroToNil(filter.City),
+		Pincode:         pgconv.ZeroToNil(filter.Pincode),
+		BusinessType:    pgconv.ZeroToNil(filter.BusinessType),
+		MedicineSystem:  pgconv.ZeroToNil(filter.MedicineSystem),
 		NameQuery:       nameQueryPattern(filter.NameQuery),
 		Assignee:        uuidParamOpt(filter.AssigneeMembershipID),
 		SelfAssignee:    uuidParamOpt(filter.SelfFilter),
-		CursorCreatedAt: pgTimestamp(cursor.SortValue),
+		CursorCreatedAt: pgconv.PgTimestamp(cursor.SortValue),
 		CursorID:        uuidParamOpt(cursor.ID),
 	}
 
@@ -244,7 +245,7 @@ func loadLead(ctx context.Context, q *db.Queries, id crmlead.ID) (*crmlead.CrmLe
 	if err != nil {
 		return nil, fmt.Errorf("crm lead repo: parse id %q: %w", id, err)
 	}
-	row, err := q.GetCrmLeadByID(ctx, pgUUID(lid))
+	row, err := q.GetCrmLeadByID(ctx, pgconv.PgUUID(lid))
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, crmlead.ErrNotFound
@@ -269,8 +270,8 @@ func insertLeadRow(ctx context.Context, q *db.Queries, l *crmlead.CrmLead) error
 	}
 	p := l.Profile()
 	return q.InsertCrmLead(ctx, db.InsertCrmLeadParams{
-		ID:                      pgUUID(lid),
-		TenantID:                pgUUID(tid),
+		ID:                      pgconv.PgUUID(lid),
+		TenantID:                pgconv.PgUUID(tid),
 		SourcePurchaseID:        uuidParamOpt(l.SourcePurchaseID()),
 		SourcePlatformLeadID:    uuidParamOpt(l.SourcePlatformLeadID()),
 		Stage:                   l.Stage().String(),
@@ -281,10 +282,10 @@ func insertLeadRow(ctx context.Context, q *db.Queries, l *crmlead.CrmLead) error
 		District:                p.District,
 		State:                   p.State,
 		Pincode:                 p.Pincode,
-		BusinessType:            p.BusinessType,
-		MedicineSystem:          p.MedicineSystem,
-		OrderValue:              p.OrderValue,
-		BuyTimeline:             p.BuyTimeline,
+		BusinessType:            p.BusinessType.String(),
+		MedicineSystem:          p.MedicineSystem.String(),
+		OrderValue:              p.OrderValue.String(),
+		BuyTimeline:             p.BuyTimeline.String(),
 		HasDrugLicence:          p.HasDrugLicence,
 		HasGst:                  p.HasGst,
 		GstVerified:             p.GstVerified,
@@ -292,13 +293,13 @@ func insertLeadRow(ctx context.Context, q *db.Queries, l *crmlead.CrmLead) error
 		DosageForms:             p.DosageForms,
 		ExtraProfile:            extra,
 		AssigneeMembershipID:    uuidParamOpt(l.AssigneeMembershipID()),
-		AssignedAt:              pgTimestamp(l.AssignedAt()),
-		ConvertedAt:             pgTimestamp(l.ConvertedAt()),
+		AssignedAt:              pgconv.PgTimestamp(l.AssignedAt()),
+		ConvertedAt:             pgconv.PgTimestamp(l.ConvertedAt()),
 		ConvertedByMembershipID: uuidParamOpt(l.ConvertedByMembershipID()),
-		LostAt:                  pgTimestamp(l.LostAt()),
+		LostAt:                  pgconv.PgTimestamp(l.LostAt()),
 		LostByMembershipID:      uuidParamOpt(l.LostByMembershipID()),
 		LostReason:              l.LostReason(),
-		CreatedAt:               pgRequiredTimestamp(l.CreatedAt()),
+		CreatedAt:               pgconv.PgRequiredTimestamp(l.CreatedAt()),
 		CreatedByMembershipID:   uuidParamOpt(l.CreatedByMembershipID()),
 	})
 }
@@ -314,14 +315,14 @@ func persistLeadState(ctx context.Context, q *db.Queries, l *crmlead.CrmLead) er
 	}
 	p := l.Profile()
 	return q.UpdateCrmLead(ctx, db.UpdateCrmLeadParams{
-		ID:                      pgUUID(lid),
+		ID:                      pgconv.PgUUID(lid),
 		Stage:                   l.Stage().String(),
 		Temperature:             l.Temperature().String(),
 		AssigneeMembershipID:    uuidParamOpt(l.AssigneeMembershipID()),
-		AssignedAt:              pgTimestamp(l.AssignedAt()),
-		ConvertedAt:             pgTimestamp(l.ConvertedAt()),
+		AssignedAt:              pgconv.PgTimestamp(l.AssignedAt()),
+		ConvertedAt:             pgconv.PgTimestamp(l.ConvertedAt()),
 		ConvertedByMembershipID: uuidParamOpt(l.ConvertedByMembershipID()),
-		LostAt:                  pgTimestamp(l.LostAt()),
+		LostAt:                  pgconv.PgTimestamp(l.LostAt()),
 		LostByMembershipID:      uuidParamOpt(l.LostByMembershipID()),
 		LostReason:              l.LostReason(),
 		ExtraProfile:            extra,
@@ -331,10 +332,10 @@ func persistLeadState(ctx context.Context, q *db.Queries, l *crmlead.CrmLead) er
 		District:                p.District,
 		State:                   p.State,
 		Pincode:                 p.Pincode,
-		BusinessType:            p.BusinessType,
-		MedicineSystem:          p.MedicineSystem,
-		OrderValue:              p.OrderValue,
-		BuyTimeline:             p.BuyTimeline,
+		BusinessType:            p.BusinessType.String(),
+		MedicineSystem:          p.MedicineSystem.String(),
+		OrderValue:              p.OrderValue.String(),
+		BuyTimeline:             p.BuyTimeline.String(),
 		HasDrugLicence:          p.HasDrugLicence,
 		HasGst:                  p.HasGst,
 		GstVerified:             p.GstVerified,
@@ -380,12 +381,12 @@ func rowToLead(row db.CrmCrmLead) (*crmlead.CrmLead, error) {
 		return nil, fmt.Errorf("crm lead repo: stored temperature %q invalid: %w", row.Temperature, err)
 	}
 	return crmlead.UnmarshalFromDB(crmlead.Snapshot{
-		ID:                      crmlead.ID(uuidFromPg(row.ID).String()),
-		TenantID:                tenant.ID(uuidFromPg(row.TenantID).String()),
-		SourcePurchaseID:        uuidStringOrEmpty(row.SourcePurchaseID),
-		SourcePlatformLeadID:    uuidStringOrEmpty(row.SourcePlatformLeadID),
-		Stage:                   stage,
-		Temperature:             temp,
+		ID:                   crmlead.ID(pgconv.UUIDFromPg(row.ID).String()),
+		TenantID:             tenant.ID(pgconv.UUIDFromPg(row.TenantID).String()),
+		SourcePurchaseID:     uuidStringOrEmpty(row.SourcePurchaseID),
+		SourcePlatformLeadID: uuidStringOrEmpty(row.SourcePlatformLeadID),
+		Stage:                stage,
+		Temperature:          temp,
 		Profile: crmlead.Profile{
 			ContactName:    row.ContactName,
 			PhoneE164:      row.PhoneE164,
@@ -393,10 +394,10 @@ func rowToLead(row db.CrmCrmLead) (*crmlead.CrmLead, error) {
 			District:       row.District,
 			State:          row.State,
 			Pincode:        row.Pincode,
-			BusinessType:   row.BusinessType,
-			MedicineSystem: row.MedicineSystem,
-			OrderValue:     row.OrderValue,
-			BuyTimeline:    row.BuyTimeline,
+			BusinessType:   crmlead.BusinessType(row.BusinessType),
+			MedicineSystem: crmlead.MedicineSystem(row.MedicineSystem),
+			OrderValue:     crmlead.OrderValue(row.OrderValue),
+			BuyTimeline:    crmlead.BuyTimeline(row.BuyTimeline),
 			HasDrugLicence: row.HasDrugLicence,
 			HasGst:         row.HasGst,
 			GstVerified:    row.GstVerified,
@@ -405,13 +406,13 @@ func rowToLead(row db.CrmCrmLead) (*crmlead.CrmLead, error) {
 			Extra:          extra,
 		},
 		AssigneeMembershipID:    uuidStringOrEmpty(row.AssigneeMembershipID),
-		AssignedAt:              timeFromPg(row.AssignedAt),
-		ConvertedAt:             timeFromPg(row.ConvertedAt),
+		AssignedAt:              pgconv.TimeFromPg(row.AssignedAt),
+		ConvertedAt:             pgconv.TimeFromPg(row.ConvertedAt),
 		ConvertedByMembershipID: uuidStringOrEmpty(row.ConvertedByMembershipID),
-		LostAt:                  timeFromPg(row.LostAt),
+		LostAt:                  pgconv.TimeFromPg(row.LostAt),
 		LostByMembershipID:      uuidStringOrEmpty(row.LostByMembershipID),
 		LostReason:              row.LostReason,
-		CreatedAt:               timeFromPg(row.CreatedAt),
+		CreatedAt:               pgconv.TimeFromPg(row.CreatedAt),
 		CreatedByMembershipID:   uuidStringOrEmpty(row.CreatedByMembershipID),
 	}), nil
 }
@@ -430,7 +431,7 @@ func uuidParamOpt(s string) pgtype.UUID {
 	if err != nil {
 		return pgtype.UUID{}
 	}
-	return pgUUID(parsed)
+	return pgconv.PgUUID(parsed)
 }
 
 // uuidStringOrEmpty returns the string form of a pgtype.UUID, or "" if

@@ -1,24 +1,13 @@
 //go:build integration
 
-// fixture_integration_test.go — TestMain + shared pool for the
-// platform/adapters integration test package.
+// TestMain + shared pool for the platform/adapters integration package.
 //
-// PERFORMANCE SHAPE (Go+Postgres canon per Brandur Leach / TDL Wild
-// Workouts / mattermost-server):
-//
-//   - ONE Postgres testcontainer per test PACKAGE, bootstrapped in
-//     TestMain (~10s one-time cost).
-//   - ONE shared pgxpool used by every test in the package (pgxpool is
-//     goroutine-safe; multiplexes per-tx connections via Acquire).
-//   - Per-test isolation via fresh tenant_id + RLS GUC binding for
-//     tenant-scoped tests; cross-tenant tests (PlatformLead browse,
-//     outbox global reads, EXPLAIN over the whole table) call
-//     sharedPG.TruncateAll(t) at the top + opt out of t.Parallel().
-//   - t.Parallel() everywhere it's safe — Postgres connection pool +
-//     RLS partitioning makes this safe for tenant-scoped reads.
-//
-// Per-file factories (fixtureForm, nowUTC, openRawDB) stay in this
-// file — they're platform-specific helpers, not shared infrastructure.
+// Shape (Brandur Leach / TDL Wild Workouts canon):
+//   - ONE Postgres testcontainer per package, bootstrapped in TestMain.
+//   - ONE shared pgxpool (goroutine-safe; per-tx conns via Acquire).
+//   - Per-test isolation via fresh tenant_id + RLS for tenant-scoped tests;
+//     cross-tenant tests call sharedPG.TruncateAll(t) and opt out of
+//     t.Parallel().
 
 package adapters_test
 
@@ -38,37 +27,31 @@ import (
 	"github.com/leadkart/leadkart-go/internal/platform/domain/leadform"
 )
 
-// sharedPG is the per-package Postgres container + app-role pool. Set
-// by TestMain; consumed by every test via platformPool / sharedPG.Pool().
+// sharedPG is the per-package container + app-role pool, set by TestMain.
 //
 // nolint:gochecknoglobals // canonical TestMain shared-fixture pattern
 var sharedPG *pgtest.Container
 
-// TestMain is the package-scoped bootstrap. Spins ONE container,
-// applies migrations, provisions the leadkart_app role with grants
-// on the platform + identity schemas. Wraps m.Run() with goleak's
-// after-test goroutine-leak check (was previously in
-// testmain_integration_test.go; merged here so all bootstrap
-// discipline lives in one file).
+// TestMain bootstraps one container, applies migrations, provisions the
+// leadkart_app role with grants on the platform + identity schemas, then
+// wraps m.Run() with goleak's leak check.
 func TestMain(m *testing.M) {
 	code := pgtest.RunMain(m, pgtest.Config{
-		// USAGE on these schemas. "app" is implicit.
+		// USAGE on these schemas ("app" implicit).
 		Schemas: []string{"identity", "platform"},
 		// DML on these.
 		Grants: []string{"identity", "platform"},
+		// Migration-seeded marketplace tier config — availability checks
+		// depend on its rows; TruncateAll must not wipe it (ADR 0065).
+		PreserveTables: []string{"platform.lead_tiers"},
 	}, func(c *pgtest.Container) {
 		sharedPG = c
 	})
 
-	// Goroutine-leak check happens AFTER container cleanup;
-	// testcontainers' reaper goroutine + pgxpool's background
-	// health-check are ignored because they're managed by their
-	// respective libraries' shutdowns (already invoked by
-	// pgtest.RunMain's defer).
-	if err := goleak.Find(
-		goleak.IgnoreTopFunction("github.com/testcontainers/testcontainers-go.(*Reaper).connect.func1"),
-		goleak.IgnoreTopFunction("github.com/jackc/pgx/v5/pgxpool.(*Pool).backgroundHealthCheck"),
-	); err != nil {
+	// Leak check runs after container cleanup; testcontainers' reaper and
+	// pgxpool's health-check goroutine are owned by their libraries' shutdowns
+	// (already invoked by pgtest.RunMain's defer).
+	if err := goleak.Find(pgtest.GoleakOptions()...); err != nil {
 		fmt.Fprintf(os.Stderr, "goleak: %v\n", err)
 		if code == 0 {
 			code = 1
@@ -77,25 +60,16 @@ func TestMain(m *testing.M) {
 	os.Exit(code)
 }
 
-// platformPool returns the shared package-scoped Postgres pool. Each
-// caller gets the SAME pool — isolation between tests comes from
-// fresh tenant_ids + RLS, NOT from per-test database state.
-//
-// Tests that NEED cross-tenant isolation (cross-tenant browse, global
-// outbox reads, full-table EXPLAIN) should call sharedPG.TruncateAll(t)
-// explicitly + opt out of t.Parallel().
-//
-// Function signature preserved from the previous per-test-container
-// shape so existing tests don't need to change their call sites — just
-// add t.Parallel() (or TruncateAll) at the top.
+// platformPool returns the shared package-scoped pool; isolation comes from
+// fresh tenant_ids + RLS, not per-test database state. Cross-tenant tests
+// must call sharedPG.TruncateAll(t) and opt out of t.Parallel().
 func platformPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 	return sharedPG.Pool()
 }
 
-// openRawDB returns a database/sql handle pointed at the same DSN as
-// the pgxpool — used for verification queries that bypass the
-// repository (e.g. outbox-row inspection under platform GUC).
+// openRawDB returns a database/sql handle on the pool's DSN, for verification
+// queries that bypass the repository (e.g. outbox-row inspection).
 func openRawDB(t *testing.T, pool *pgxpool.Pool) (*sql.DB, error) {
 	t.Helper()
 	cfg := pool.Config().ConnConfig
@@ -106,7 +80,7 @@ func openRawDB(t *testing.T, pool *pgxpool.Pool) (*sql.DB, error) {
 	return sql.Open("pgx", dsn)
 }
 
-// fixtureForm returns a valid leadform.Form for integration-test seed.
+// fixtureForm returns a valid leadform.Form for seeding.
 func fixtureForm(t *testing.T) leadform.Form {
 	t.Helper()
 	f, err := leadform.New(leadform.Input{
@@ -135,9 +109,7 @@ func fixtureForm(t *testing.T) leadform.Form {
 	return f
 }
 
-// nowUTC is a deterministic, pinned timestamp for platform integration
-// tests. Replaces the prior package-global clock per the
-// clock-injection refactor.
+// nowUTC is a deterministic pinned timestamp for tests.
 func nowUTC() time.Time {
 	return time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC).UTC()
 }

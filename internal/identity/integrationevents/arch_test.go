@@ -12,18 +12,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// aliasRegex enforces the canonical wire-alias shape per messaging.md
-// "Event versioning". Module prefix MUST be `identity`; event-name
-// segment lower-snake-case; trailing `.vN` integer.
+// aliasRegex enforces the canonical wire-alias shape (messaging.md
+// "Event versioning"): identity prefix, lower-snake-case event name, .vN suffix.
 var aliasRegex = regexp.MustCompile(`^identity\.[a-z][a-z0-9_]*\.v\d+$`)
 
-// TestArch_AllRegisteredEventsSatisfyMarker enforces:
-//   - every event in the registry implements TenantScoped OR Platform;
-//   - no event implements both (would mean a typo on the marker).
-//
-// Compile-time assertions in each *.go file already enforce per-type;
-// this test catches missing assertions on NEW types added to the
-// registry without the matching `var _ Platform = …` line.
+// TestArch_AllRegisteredEventsSatisfyMarker enforces that every registered
+// event implements TenantScoped OR Platform (not both). Compile-time
+// assertions per file cover existing types; this catches newly added types
+// missing the marker assertion.
 func TestArch_AllRegisteredEventsSatisfyMarker(t *testing.T) {
 	t.Parallel()
 	if len(all()) == 0 {
@@ -41,8 +37,8 @@ func TestArch_AllRegisteredEventsSatisfyMarker(t *testing.T) {
 	}
 }
 
-// TestArch_AllRegisteredEventsHaveCanonicalAlias asserts every Topic()
-// matches the `identity.{event-kebab}.v{N}` regex.
+// TestArch_AllRegisteredEventsHaveCanonicalAlias asserts every Topic() matches
+// the canonical alias regex and that no two events share an alias.
 func TestArch_AllRegisteredEventsHaveCanonicalAlias(t *testing.T) {
 	t.Parallel()
 	seen := map[string]string{} // alias -> typeName, for collision detection
@@ -59,10 +55,8 @@ func TestArch_AllRegisteredEventsHaveCanonicalAlias(t *testing.T) {
 	}
 }
 
-// TestArch_EveryRecordEndingInVNRegistered enforces the rule that
-// every exported type whose name matches *V{N} (e.g. TenantRegisteredV1)
-// is registered in the catalogue. Catches "I added a struct but
-// forgot the register() line" mistakes.
+// TestArch_EveryRecordEndingInVNRegistered enforces that every exported VN
+// struct is in the catalogue. Catches "added a struct but forgot register()".
 func TestArch_EveryRecordEndingInVNRegistered(t *testing.T) {
 	t.Parallel()
 
@@ -101,10 +95,8 @@ func TestArch_EveryRecordEndingInVNRegistered(t *testing.T) {
 	}
 }
 
-// TestArch_NoFrameworkImports enforces the "Unobtrusive Mode" canon
-// per messaging.md: framework-neutral records, zero infrastructure
-// dependencies. Allowed imports: stdlib + uuid + sibling domain
-// packages (mapping.go reads domain events to translate them).
+// TestArch_NoFrameworkImports enforces the Unobtrusive Mode canon: no
+// infrastructure imports. Allowed: stdlib + uuid + sibling domain packages.
 func TestArch_NoFrameworkImports(t *testing.T) {
 	t.Parallel()
 
@@ -114,7 +106,7 @@ func TestArch_NoFrameworkImports(t *testing.T) {
 		t.Fatalf("build.ImportDir: %v", err)
 	}
 
-	// Banned: any infrastructure / framework dependency.
+	// Banned infrastructure/framework imports.
 	banned := []string{
 		"github.com/ThreeDotsLabs/watermill",
 		"github.com/jackc/pgx",
@@ -137,10 +129,8 @@ func TestArch_NoFrameworkImports(t *testing.T) {
 	}
 }
 
-// TestArch_TenantScopedRecordsExposeTenantID verifies every
-// TenantScoped record returns a non-zero TenantID() when the embedded
-// claim field is populated. Catches "I made the type satisfy
-// TenantScoped via method but the method returns the wrong field".
+// TestArch_TenantScopedRecordsExposeTenantID verifies every TenantScoped
+// record exposes TenantID() callable on a zero value without panic.
 func TestArch_TenantScopedRecordsExposeTenantID(t *testing.T) {
 	t.Parallel()
 	seen := 0
@@ -149,17 +139,14 @@ func TestArch_TenantScopedRecordsExposeTenantID(t *testing.T) {
 		if !ok {
 			continue
 		}
-		// Method exists (compile-time covered) AND can be invoked on
-		// a zero-value record without panic. Zero UUID is acceptable
-		// here — the test gates the contract surface, not the value.
+		// Zero UUID is fine — gates the contract surface, not the value.
 		_ = ts.TenantID() // arch-test:ignore-err — contract surface check; value discarded by design
 		seen++
 	}
 	require.Positive(t, seen, "no TenantScoped records discovered; the TenantScoped contract has zero implementers, which contradicts the integration-events catalog")
 }
 
-// packageDir returns the absolute path of this test's package
-// directory, used for go/build.ImportDir + filepath.Glob walks.
+// packageDir returns the absolute path of this package for ImportDir/Glob walks.
 func packageDir(t *testing.T) string {
 	t.Helper()
 	_, here, _, ok := runtime.Caller(0)
@@ -169,8 +156,7 @@ func packageDir(t *testing.T) string {
 	return filepath.Dir(here)
 }
 
-// readFile is a thin os.ReadFile wrapper returning string. Inlined
-// rather than imported so the test file's import surface stays small.
+// readFile wraps readBytes as string for arch-test source scanning.
 func readFile(path string) (string, error) {
 	b, err := readBytes(path)
 	if err != nil {

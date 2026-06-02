@@ -34,7 +34,7 @@ func TestCreateProductHandler_HappyPath_Persists(t *testing.T) {
 	}
 }
 
-// Failure 1: invariant violation (empty SKU) — ErrInvalid surfaces.
+// Empty SKU → ErrInvalid.
 func TestCreateProductHandler_RejectsInvalidSpec(t *testing.T) {
 	t.Parallel()
 	repo := newFakeProductRepo()
@@ -56,7 +56,7 @@ func TestCreateProductHandler_RejectsInvalidSpec(t *testing.T) {
 	}
 }
 
-// Failure 2: duplicate SKU → ErrSKUTaken propagates.
+// Duplicate SKU → ErrSKUTaken.
 func TestCreateProductHandler_DuplicateSKU_ReturnsErrSKUTaken(t *testing.T) {
 	t.Parallel()
 	repo := newFakeProductRepo()
@@ -76,8 +76,7 @@ func TestCreateProductHandler_DuplicateSKU_ReturnsErrSKUTaken(t *testing.T) {
 	}
 }
 
-// Failure 3: repo Add error propagates (non-domain error surfaces as
-// wrapped err — caller can branch on errors.Is).
+// Repo Add error propagates wrapped (caller can branch on errors.Is).
 func TestCreateProductHandler_RepoAddError_Propagates(t *testing.T) {
 	t.Parallel()
 	repo := newFakeProductRepo()

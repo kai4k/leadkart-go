@@ -92,7 +92,7 @@ func TestFakeRepository_DedupOnExternalReference(t *testing.T) {
 		t.Fatalf("first Add: %v", err)
 	}
 
-	// Second payment with the SAME ExternalReference + tenant → reject.
+	// Same ExternalReference + tenant → reject.
 	in2 := in
 	in2.ID = payment.ID(ids.NewV7().String())
 	second, _ := payment.New(in2)

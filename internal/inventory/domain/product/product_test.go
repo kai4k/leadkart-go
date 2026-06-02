@@ -12,11 +12,10 @@ import (
 	"github.com/leadkart/leadkart-go/internal/inventory/domain/product"
 )
 
-// fixedNow is the deterministic timestamp every product domain test
-// passes to factories + mutators per the clock-injection refactor.
+// fixedNow is the deterministic clock value passed to all product factories and mutators.
 var fixedNow = time.Date(2026, 5, 24, 12, 0, 0, 0, time.UTC)
 
-// freshIDs is a tiny helper — random Product ID, Tenant ID, Actor ID per test.
+// freshIDs returns a fresh random Product ID, Tenant ID, and Actor ID.
 func freshIDs(t *testing.T) (product.ID, tenant.ID, membership.ID) {
 	t.Helper()
 	return product.ID(ids.NewV7().String()),
@@ -24,9 +23,7 @@ func freshIDs(t *testing.T) (product.ID, tenant.ID, membership.ID) {
 		membership.ID(ids.NewV7().String())
 }
 
-// validSpec returns a baseline-valid Spec used by every test that doesn't
-// care about input validation. Centralising avoids per-test drift when
-// invariants tighten.
+// validSpec returns a baseline-valid Spec for tests that do not exercise validation.
 func validSpec() product.Spec {
 	return product.Spec{
 		SKU:          "AMOX-500",
@@ -46,7 +43,7 @@ func freshProduct(t *testing.T) *product.Product {
 	if err != nil {
 		t.Fatalf("product.New: %v", err)
 	}
-	// Drain creation event so per-test expectations target NEW events.
+	// Drain the creation event so test assertions target only subsequent events.
 	_ = p.PullEvents()
 	return p
 }
@@ -102,7 +99,7 @@ func TestNew_TrimsAndNormalizesSKU(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	// SKU upper-cased + trimmed for case-insensitive uniqueness behaviour.
+	// SKU is upper-cased and trimmed for case-insensitive uniqueness.
 	if p.SKU() != "AMOX-500" {
 		t.Fatalf("SKU normalisation: got %q want AMOX-500", p.SKU())
 	}
@@ -210,7 +207,7 @@ func TestUpdate_NoOp_NoEvent(t *testing.T) {
 	t.Parallel()
 	p := freshProduct(t)
 	actor := membership.ID(ids.NewV7().String())
-	// Update with all fields nil = no-op.
+	// All-nil spec = no-op.
 	if err := p.Update(actor, product.UpdateSpec{}, fixedNow); err != nil {
 		t.Fatalf("Update: %v", err)
 	}
@@ -265,10 +262,8 @@ func TestUpdate_RejectsAfterSoftDelete(t *testing.T) {
 	}
 }
 
-// TestSoftDelete_EmitsSoftDeletedEventOnce — per ADR 0061 amendment 1,
-// SoftDelete emits a dedicated SoftDeletedEvent (not the older
-// DeactivatedEvent — the two were semantically conflated). Idempotent:
-// second call no-ops + emits nothing.
+// TestSoftDelete_EmitsSoftDeletedEventOnce verifies ADR 0061 amendment 1:
+// SoftDelete emits SoftDeletedEvent (distinct from DeactivatedEvent); idempotent.
 func TestSoftDelete_EmitsSoftDeletedEventOnce(t *testing.T) {
 	t.Parallel()
 	p := freshProduct(t)
@@ -293,7 +288,7 @@ func TestSoftDelete_EmitsSoftDeletedEventOnce(t *testing.T) {
 	if softDel.ActorID != actor {
 		t.Fatalf("actor: got %q want %q", softDel.ActorID, actor)
 	}
-	// Second call is idempotent — no event.
+	// Second call is idempotent.
 	if err := p.SoftDelete(actor, fixedNow); err != nil {
 		t.Fatalf("second SoftDelete: %v", err)
 	}
@@ -302,12 +297,9 @@ func TestSoftDelete_EmitsSoftDeletedEventOnce(t *testing.T) {
 	}
 }
 
-// TestDeactivate_EmitsBothUpdatedAndDeactivatedEvents — per ADR 0061
-// amendment 1: Deactivate transitions is_active=false AND emits a
-// dedicated DeactivatedEvent in addition to the UpdatedEvent. Consumers
-// can route either on the diff (UpdatedEvent.ChangedFields contains
-// "is_active") or on the lifecycle signal (DeactivatedEvent). Distinct
-// from SoftDelete (terminal hide).
+// TestDeactivate_EmitsBothUpdatedAndDeactivatedEvents — ADR 0061 amendment 1:
+// Deactivate emits both UpdatedEvent(ChangedFields=["is_active"]) and DeactivatedEvent.
+// Distinct from SoftDelete (terminal hide).
 func TestDeactivate_EmitsBothUpdatedAndDeactivatedEvents(t *testing.T) {
 	t.Parallel()
 	p := freshProduct(t)
@@ -331,7 +323,7 @@ func TestDeactivate_EmitsBothUpdatedAndDeactivatedEvents(t *testing.T) {
 	if _, ok := evs[1].(product.DeactivatedEvent); !ok {
 		t.Fatalf("second event: %T (want DeactivatedEvent)", evs[1])
 	}
-	// Second Deactivate on an already-inactive product is a no-op.
+	// Already-inactive: no-op.
 	if err := p.Deactivate(actor, fixedNow); err != nil {
 		t.Fatalf("second Deactivate: %v", err)
 	}
@@ -351,8 +343,7 @@ func TestActivate_Deactivate_TogglesAndEmitsEvent(t *testing.T) {
 		t.Fatal("IsActive should be false")
 	}
 	evs := p.PullEvents()
-	// Deactivate emits BOTH UpdatedEvent (with ChangedFields=["is_active"])
-	// AND a dedicated DeactivatedEvent per ADR 0061 amendment 1.
+	// Deactivate emits UpdatedEvent(ChangedFields=["is_active"]) + DeactivatedEvent (ADR 0061 amendment 1).
 	if len(evs) != 2 {
 		t.Fatalf("events: got %d want 2 (UpdatedEvent + DeactivatedEvent)", len(evs))
 	}

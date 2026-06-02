@@ -2,7 +2,7 @@
 --
 -- Surfaced by the architectural fitness-function suite
 -- (TestArch_EveryTenantTableHasRLSAndForce in internal/architecture/
--- multi_tenancy_arch_test.go). 15 tables enabled RLS without
+-- multi_tenancy_arch_test.go). These tables enabled RLS without
 -- pairing FORCE — a security-class gap because Postgres exempts
 -- table owners + superusers from RLS unless FORCE is set explicitly
 -- (PG docs §5.8 + §13.3.2). In some deployment shapes the
@@ -16,22 +16,10 @@
 -- access paths (TxScopeTenant + TxScopePlatform) while closing the
 -- owner-bypass hole.
 --
--- Tables affected:
---   identity.membership_permission_overrides
---   identity.outbox
---   identity.role_assignments
---   identity.role_hierarchy_edges
---   identity.roles
---   identity.tenant_memberships
---   inventory.batches
---   inventory.outbox
---   inventory.products
---   inventory.stock_movements
---   platform.lead_credits
---   platform.outbox
---   platform.platform_leads
---   platform.unverified_contacts
---   platform.verification_calls
+-- NOTE: the per-module *.outbox tables were retired by ADR 0064/0067
+--       (replaced by the shared common.outbox relay, which is
+--       platform-scoped and carries no RLS), so they are intentionally
+--       excluded from the FORCE list below.
 --
 -- Reference: PG docs §5.8 "Row Security Policies" — "Superusers and
 -- roles with the BYPASSRLS attribute always bypass the row security
@@ -43,19 +31,16 @@
 -- +goose StatementBegin
 
 ALTER TABLE identity.membership_permission_overrides FORCE ROW LEVEL SECURITY;
-ALTER TABLE identity.outbox                          FORCE ROW LEVEL SECURITY;
 ALTER TABLE identity.role_assignments                FORCE ROW LEVEL SECURITY;
 ALTER TABLE identity.role_hierarchy_edges            FORCE ROW LEVEL SECURITY;
 ALTER TABLE identity.roles                           FORCE ROW LEVEL SECURITY;
 ALTER TABLE identity.tenant_memberships              FORCE ROW LEVEL SECURITY;
 
 ALTER TABLE inventory.batches                        FORCE ROW LEVEL SECURITY;
-ALTER TABLE inventory.outbox                         FORCE ROW LEVEL SECURITY;
 ALTER TABLE inventory.products                       FORCE ROW LEVEL SECURITY;
 ALTER TABLE inventory.stock_movements                FORCE ROW LEVEL SECURITY;
 
 ALTER TABLE platform.lead_credits                    FORCE ROW LEVEL SECURITY;
-ALTER TABLE platform.outbox                          FORCE ROW LEVEL SECURITY;
 ALTER TABLE platform.platform_leads                  FORCE ROW LEVEL SECURITY;
 ALTER TABLE platform.unverified_contacts             FORCE ROW LEVEL SECURITY;
 ALTER TABLE platform.verification_calls              FORCE ROW LEVEL SECURITY;
@@ -66,19 +51,16 @@ ALTER TABLE platform.verification_calls              FORCE ROW LEVEL SECURITY;
 -- +goose StatementBegin
 
 ALTER TABLE identity.membership_permission_overrides NO FORCE ROW LEVEL SECURITY;
-ALTER TABLE identity.outbox                          NO FORCE ROW LEVEL SECURITY;
 ALTER TABLE identity.role_assignments                NO FORCE ROW LEVEL SECURITY;
 ALTER TABLE identity.role_hierarchy_edges            NO FORCE ROW LEVEL SECURITY;
 ALTER TABLE identity.roles                           NO FORCE ROW LEVEL SECURITY;
 ALTER TABLE identity.tenant_memberships              NO FORCE ROW LEVEL SECURITY;
 
 ALTER TABLE inventory.batches                        NO FORCE ROW LEVEL SECURITY;
-ALTER TABLE inventory.outbox                         NO FORCE ROW LEVEL SECURITY;
 ALTER TABLE inventory.products                       NO FORCE ROW LEVEL SECURITY;
 ALTER TABLE inventory.stock_movements                NO FORCE ROW LEVEL SECURITY;
 
 ALTER TABLE platform.lead_credits                    NO FORCE ROW LEVEL SECURITY;
-ALTER TABLE platform.outbox                          NO FORCE ROW LEVEL SECURITY;
 ALTER TABLE platform.platform_leads                  NO FORCE ROW LEVEL SECURITY;
 ALTER TABLE platform.unverified_contacts             NO FORCE ROW LEVEL SECURITY;
 ALTER TABLE platform.verification_calls              NO FORCE ROW LEVEL SECURITY;

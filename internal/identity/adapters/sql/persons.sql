@@ -33,6 +33,21 @@ SELECT id, email, first_name, last_name, password_hash, security_stamp,
 FROM   identity.persons
 WHERE  id = $1;
 
+-- name: GetPersonsByIDs :many
+-- Batched hydration — single round-trip via `id = ANY(...)` instead of
+-- N GetPersonByID calls. Column list mirrors GetPersonByID exactly so
+-- it reuses the IdentityPerson model.
+SELECT id, email, first_name, last_name, password_hash, security_stamp,
+       is_active, is_anonymised, created_at, anonymised_at,
+       is_globally_suspended, global_suspension_reason, globally_suspended_at,
+       password_reset_token_hash, password_reset_expires_at,
+       pending_email_change_new_email, pending_email_change_token_hash,
+       pending_email_change_expires_at,
+       created_by_person_id,
+       must_change_password, failed_login_count, locked_until, last_failed_login_at
+FROM   identity.persons
+WHERE  id = ANY(sqlc.arg(ids)::uuid[]);
+
 -- name: GetPersonByEmail :one
 SELECT id, email, first_name, last_name, password_hash, security_stamp,
        is_active, is_anonymised, created_at, anonymised_at,
@@ -191,11 +206,11 @@ WHERE  id = $1;
 SELECT id, email, first_name, last_name, created_at,
        similarity(
            lower(email) || ' ' || lower(first_name) || ' ' || lower(last_name),
-           lower($1)
+           lower(sqlc.arg(query))
        ) AS rank
 FROM   identity.persons
 WHERE  is_active AND NOT is_anonymised
 AND    (lower(email) || ' ' || lower(first_name) || ' ' || lower(last_name))
-       ILIKE '%' || lower($1) || '%'
+       ILIKE '%' || lower(sqlc.arg(query)) || '%'
 ORDER  BY rank DESC, id DESC
-LIMIT  $2;
+LIMIT  sqlc.arg('limit');

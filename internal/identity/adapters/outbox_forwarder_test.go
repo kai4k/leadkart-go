@@ -1,103 +1,43 @@
 //go:build integration
 
-// arch-test:no-synctest — exercises the outbox-forwarder pump goroutine
-// against a real Postgres testcontainer; the polling waits cross the SQL
-// driver + Watermill subscriber boundary, neither of which testing/
-// synctest's virtual clock can model.
+// arch-test:no-timeout-needed — these tests do a single repository write
+// then a synchronous read of common.outbox via messagingtest.DrainOutbox
+// (no async subscriber goroutine to deadlock); execution is bounded by the
+// shared pgtest container + the package-level `go test -timeout`. A per-test
+// context.WithTimeout would be belt-and-suspenders.
+
+// outbox_forwarder_test.go — producer→outbox contract for identity.
+//
+// Post-ADR-0064: the per-module forwarder is gone; a single library
+// Watermill Forwarder (cmd/worker) drains common.outbox. These tests
+// verify the PRODUCER side — a repository write enqueues the correct
+// enveloped row in the same tx — via messagingtest.DrainOutbox.
+// The forwarder hop is library code and not re-verified here.
 
 package adapters_test
 
 import (
-	"context"
 	"encoding/json"
-	"errors"
-	"io"
-	"log/slog"
-	"sync"
 	"testing"
-	"time"
-
-	"github.com/ThreeDotsLabs/watermill"
-	"github.com/ThreeDotsLabs/watermill/message"
-	"github.com/ThreeDotsLabs/watermill/pubsub/gochannel"
 
 	"github.com/leadkart/leadkart-go/internal/common/email"
 	"github.com/leadkart/leadkart-go/internal/common/ids"
+	"github.com/leadkart/leadkart-go/internal/common/messaging"
+	"github.com/leadkart/leadkart-go/internal/common/pg"
 	"github.com/leadkart/leadkart-go/internal/common/slug"
 	"github.com/leadkart/leadkart-go/internal/identity/adapters"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
-	"github.com/leadkart/leadkart-go/internal/common/pg"
+	identityevents "github.com/leadkart/leadkart-go/internal/identity/integrationevents"
 )
 
-const outboxTopic = "identity.events"
-
-// forwarderFixedNow is the deterministic instant identity outbox-forwarder
-// integration tests pass into NewOutboxForwarder per the clock-injection
-// refactor — replaces the prior implicit clock.Now() reliance.
-var forwarderFixedNow = time.Date(2026, 5, 24, 12, 0, 0, 0, time.UTC)
-
-// drainSubscriber records every received message into a slice. Unlike
-// the production subscriber which persists state, this one is purely
-// in-memory + assertion-friendly.
-type drainSubscriber struct {
-	mu       sync.Mutex
-	received []*message.Message
-}
-
-func (d *drainSubscriber) record(msgs <-chan *message.Message) {
-	for msg := range msgs {
-		d.mu.Lock()
-		d.received = append(d.received, msg)
-		d.mu.Unlock()
-		msg.Ack()
-	}
-}
-
-func (d *drainSubscriber) snapshot() []*message.Message {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	out := make([]*message.Message, len(d.received))
-	copy(out, d.received)
-	return out
-}
-
-// waitForCount polls the subscriber's slice until len ≥ want or timeout.
-// Returns the recorded slice on success; t.Fatal on timeout.
-func waitForCount(t *testing.T, drain *drainSubscriber, want int, timeout time.Duration) []*message.Message {
-	t.Helper()
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		if got := drain.snapshot(); len(got) >= want {
-			return got
-		}
-		time.Sleep(20 * time.Millisecond) // arch-test:wait-justified - async event-driven test wait
-	}
-	t.Fatalf("subscriber: timed out waiting for %d messages, got %d", want, len(drain.snapshot()))
-	return nil
-}
-
-func TestOutboxForwarder_PublishesUnforwardedRows(t *testing.T) {
+// TestOutbox_TenantRegistered_EnqueuesEnvelopedEvent verifies that
+// registering a tenant writes exactly one enveloped row to common.outbox
+// with the correct event_type, tenant_id, destination topic, and V1 payload.
+func TestOutbox_TenantRegistered_EnqueuesEnvelopedEvent(t *testing.T) {
 	sharedPG.TruncateAll(t)
-	pool := repoFixture(t)
-	tx := pg.NewTransactor(pool)
-	tenants := adapters.NewTenantRepository(pool, tx)
+	fix := newOutboxFixture(t)
 
-	// Watermill in-process pub/sub — close at test end so the goroutine
-	// inside drainSubscriber.record exits cleanly.
-	pubsub := gochannel.NewGoChannel(gochannel.Config{}, watermill.NewSlogLogger(silentSlog()))
-	t.Cleanup(func() { _ = pubsub.Close() })
-
-	msgs, err := pubsub.Subscribe(t.Context(), outboxTopic)
-	if err != nil {
-		t.Fatalf("Subscribe: %v", err)
-	}
-	drain := &drainSubscriber{}
-	go drain.record(msgs)
-
-	forwarder := adapters.NewOutboxForwarder(pool, tx, pubsub, outboxTopic, 0, func() time.Time { return forwarderFixedNow })
-
-	// Drive the application: register a tenant — this writes one outbox
-	// row (TenantRegisteredEvent → identity.tenant_registered.v1).
+	tenants := adapters.NewTenantRepository(fix.pool, pg.NewTransactor(fix.pool))
 	full := ids.NewV7().String()
 	registerSlug, err := slug.New("forwarder-" + full[len(full)-8:])
 	if err != nil {
@@ -112,28 +52,16 @@ func TestOutboxForwarder_PublishesUnforwardedRows(t *testing.T) {
 		t.Fatalf("tenant Add: %v", err)
 	}
 
-	// Drain.
-	count, err := forwarder.ForwardOnce(t.Context())
-	if err != nil {
-		t.Fatalf("ForwardOnce: %v", err)
+	msgs := fix.forwardAndWait(t, 1)
+	msg := msgs[0]
+	if got := msg.Metadata.Get(messaging.HeaderEventType); got != "identity.tenant_registered.v1" {
+		t.Fatalf("event_type metadata: got %q", got)
 	}
-	if count != 1 {
-		t.Fatalf("forwarded count: got %d want 1", count)
-	}
-
-	got := waitForCount(t, drain, 1, 2*time.Second)
-
-	msg := got[0]
-	if msg.Metadata.Get("event_type") != "identity.tenant_registered.v1" {
-		t.Fatalf("event_type metadata: got %q", msg.Metadata.Get("event_type"))
-	}
-	if msg.Metadata.Get("tenant_id") != tn.ID().String() {
-		t.Fatalf("tenant_id metadata: got %q want %q",
-			msg.Metadata.Get("tenant_id"), tn.ID().String())
+	if got := msg.Metadata.Get(messaging.HeaderTenantID); got != tn.ID().String() {
+		t.Fatalf("tenant_id metadata: got %q want %q", got, tn.ID().String())
 	}
 
-	// Payload is the marshaled integration-event V1 record — primitive
-	// snake_case wire shape per integrationevents.TenantRegisteredV1.
+	// Payload is the marshaled V1 record (snake_case per integrationevents.TenantRegisteredV1).
 	var payload struct {
 		TenantID string `json:"tenant_id"`
 		Slug     string `json:"slug"`
@@ -149,24 +77,14 @@ func TestOutboxForwarder_PublishesUnforwardedRows(t *testing.T) {
 	}
 }
 
-func TestOutboxForwarder_IsIdempotent_OnSecondPass(t *testing.T) {
+// TestOutbox_TenantRegistered_EnqueuesExactlyOnce proves no duplicate enqueue
+// per registration. Drain idempotency is the forwarder's DeleteOnAck concern
+// (ADR 0064).
+func TestOutbox_TenantRegistered_EnqueuesExactlyOnce(t *testing.T) {
 	sharedPG.TruncateAll(t)
-	pool := repoFixture(t)
-	tx := pg.NewTransactor(pool)
-	tenants := adapters.NewTenantRepository(pool, tx)
+	fix := newOutboxFixture(t)
 
-	pubsub := gochannel.NewGoChannel(gochannel.Config{}, watermill.NewSlogLogger(silentSlog()))
-	t.Cleanup(func() { _ = pubsub.Close() })
-
-	msgs, err := pubsub.Subscribe(t.Context(), outboxTopic)
-	if err != nil {
-		t.Fatalf("Subscribe: %v", err)
-	}
-	drain := &drainSubscriber{}
-	go drain.record(msgs)
-
-	forwarder := adapters.NewOutboxForwarder(pool, tx, pubsub, outboxTopic, 0, func() time.Time { return forwarderFixedNow })
-
+	tenants := adapters.NewTenantRepository(fix.pool, pg.NewTransactor(fix.pool))
 	full := ids.NewV7().String()
 	registerSlug, _ := slug.New("idempotent-" + full[len(full)-8:])
 	addr, _ := email.New("idempotent@flow.test")
@@ -175,60 +93,14 @@ func TestOutboxForwarder_IsIdempotent_OnSecondPass(t *testing.T) {
 		t.Fatalf("Add: %v", err)
 	}
 
-	first, err := forwarder.ForwardOnce(t.Context())
-	if err != nil {
-		t.Fatalf("first ForwardOnce: %v", err)
+	// forwardAndWait asserts exactly one row on the identity topic.
+	msgs := fix.forwardAndWait(t, 1)
+	if got := msgs[0].Metadata.Get(messaging.HeaderEventType); got != "identity.tenant_registered.v1" {
+		t.Fatalf("event_type: got %q", got)
 	}
-	if first != 1 {
-		t.Fatalf("first pass count: got %d want 1", first)
+	// Assert destination-topic contract.
+	rows := drainOutboxRows(t, fix)
+	if rows[0].DestinationTopic != identityevents.Topic {
+		t.Fatalf("destination topic: got %q want %q", rows[0].DestinationTopic, identityevents.Topic)
 	}
-
-	// Second pass: row is now forwarded=true, must skip.
-	second, err := forwarder.ForwardOnce(t.Context())
-	if err != nil {
-		t.Fatalf("second ForwardOnce: %v", err)
-	}
-	if second != 0 {
-		t.Fatalf("second pass count: got %d want 0", second)
-	}
-}
-
-func TestOutboxForwarder_RunStopsOnContextCancel(t *testing.T) {
-	sharedPG.TruncateAll(t)
-	pool := repoFixture(t)
-	tx := pg.NewTransactor(pool)
-	pubsub := gochannel.NewGoChannel(gochannel.Config{}, watermill.NewSlogLogger(silentSlog()))
-	t.Cleanup(func() { _ = pubsub.Close() })
-
-	forwarder := adapters.NewOutboxForwarder(pool, tx, pubsub, outboxTopic, 0, func() time.Time { return forwarderFixedNow })
-
-	ctx, cancel := context.WithTimeout(t.Context(), 250*time.Millisecond)
-	defer cancel()
-
-	done := make(chan struct{})
-	go func() {
-		var lastErr error
-		forwarder.Run(ctx, 50*time.Millisecond, 10*time.Millisecond, func(err error) {
-			// Forwarder errors on ctx-cancel are tolerated; we just want
-			// Run to return.
-			if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
-				lastErr = err
-			}
-		})
-		_ = lastErr
-		close(done)
-	}()
-
-	select {
-	case <-done:
-		// expected — Run respected ctx cancellation
-	case <-time.After(2 * time.Second):
-		t.Fatal("Run did not exit within 2s after context cancel")
-	}
-}
-
-// silentSlog returns a slog.Logger that writes nothing — keeps test
-// runs quiet. Watermill's NewSlogLogger wraps it.
-func silentSlog() *slog.Logger {
-	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }

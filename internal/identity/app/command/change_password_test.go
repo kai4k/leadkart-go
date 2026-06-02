@@ -1,6 +1,5 @@
 package command_test
 
-
 import (
 	"errors"
 	"testing"
@@ -15,12 +14,7 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person/persontest"
 )
 
-// The person-side fake lives in internal/identity/domain/person/persontest/
-// per TDL Wild Workouts canon — co-located with the aggregate it
-// fakes. seedPersonRepo seeds a fresh [persontest.FakeRepository] with
-// the supplied Person and returns the repo; mirrors the old
-// `&fakePersonRepo{person: p}` shorthand while delegating contract
-// semantics to the shared fake.
+// seedPersonRepo returns a fresh persontest fake seeded with p (if non-nil).
 func seedPersonRepo(t *testing.T, p *person.Person) *persontest.FakeRepository {
 	t.Helper()
 	repo := persontest.NewFakeRepository()
@@ -54,7 +48,6 @@ func newPersonWithPassword(t *testing.T, plain string) *person.Person {
 	return p
 }
 
-
 func TestChangePassword_Succeeds(t *testing.T) {
 	t.Parallel()
 	currentPlain := "correct horse battery staple"
@@ -70,9 +63,7 @@ func TestChangePassword_Succeeds(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Handle: %v", err)
 	}
-	// State-based assertion (TDL canon): the persisted Person carries
-	// the new hash. Mirroring the persistence boundary via GetByID is
-	// stronger than a mock-style call-counter.
+	// State-based assertion: the persisted Person carries the new hash.
 	got, err := repo.GetByID(t.Context(), p.ID())
 	if err != nil {
 		t.Fatalf("GetByID after change: %v", err)
@@ -108,9 +99,7 @@ func TestChangePassword_RejectsIncorrectCurrentPassword(t *testing.T) {
 }
 
 func TestChangePassword_PersonNotFound_ReturnsIncorrectCurrentPassword(t *testing.T) {
-	// Per security.md "Login flow — enumeration safety": collapse
-	// "no such person" + "wrong password" into the same error to
-	// defeat ID-enumeration via change-password timing/error shape.
+	// "no such person" collapses to "wrong password" to defeat ID-enumeration.
 	t.Parallel()
 	repo := seedPersonRepo(t, nil) // no Person seeded
 	h := command.NewChangePasswordHandler(repo, passwordpolicy.Noop{}, func() time.Time { return testNow })
@@ -131,7 +120,7 @@ func TestChangePassword_RejectsBreachedPassword(t *testing.T) {
 	p := newPersonWithPassword(t, currentPlain)
 	originalHash := p.PasswordHash().String()
 	repo := seedPersonRepo(t, p)
-	// Use offline list — "password" is in defaultBreachedSet.
+	// Offline list — "password" is in defaultBreachedSet.
 	h := command.NewChangePasswordHandler(repo, adapters.NewOfflinePasswordList(), func() time.Time { return testNow })
 
 	err := h.Handle(t.Context(), command.ChangePasswordCommand{
@@ -171,9 +160,8 @@ func TestChangePassword_RejectsSameAsCurrent(t *testing.T) {
 }
 
 func TestChangePassword_AnonymisedPerson_ReturnsIncorrectCurrentPassword(t *testing.T) {
-	// Anonymised Persons have a scrubbed password hash + cannot
-	// authenticate. Surface as "incorrect current password" rather
-	// than "anonymised" to avoid leaking account state.
+	// Anonymised Persons surface as "incorrect current password", not
+	// "anonymised", to avoid leaking account state.
 	t.Parallel()
 	currentPlain := "irrelevant"
 	p := newPersonWithPassword(t, currentPlain)

@@ -13,8 +13,7 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
 
-// newPermissionRequest builds a Pending permission-request via the
-// canonical ctor.
+// newPermissionRequest builds a Pending permission-request.
 func newPermissionRequest(t *testing.T, id permissionrequest.ID, tenantID tenant.ID, requester membership.ID) *permissionrequest.Request {
 	t.Helper()
 	r, err := permissionrequest.New(
@@ -140,12 +139,12 @@ func TestGetPermissionRequest_HappyPath_ApprovedPopulatesApprover(t *testing.T) 
 	}
 }
 
-// reqsErrRepo lets a test inject failure on GetByID.
+// reqsErrRepo injects failures on repo methods.
 type reqsErrRepo struct {
 	permissionrequest.Repository
-	getErr           error
-	listByReqErr     error
-	listPendingErr   error
+	getErr         error
+	listByReqErr   error
+	listPendingErr error
 }
 
 func (r reqsErrRepo) GetByID(_ context.Context, _ tenant.ID, _ permissionrequest.ID) (*permissionrequest.Request, error) {

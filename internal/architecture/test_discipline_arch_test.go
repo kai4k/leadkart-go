@@ -197,9 +197,9 @@ func TestArch_UnitTestsCallTParallel(t *testing.T) {
 // `t.Parallel()`**. Opt-in per-test via `arch-test:parallel-safe —
 // <audited rationale>` godoc, which signals the author audited:
 //
-//   1. The fixture owns its own testcontainer (no shared DB)
-//   2. No process-global mutations occur during setup
-//   3. The test doesn't depend on any other test's side effects
+//  1. The fixture owns its own testcontainer (no shared DB)
+//  2. No process-global mutations occur during setup
+//  3. The test doesn't depend on any other test's side effects
 //
 // Most integration tests do NOT meet bar #1+#2+#3 simultaneously, so
 // the canonical default is serial.
@@ -1576,6 +1576,7 @@ func TestArch_NoFmtPrintlnInTests(t *testing.T) {
 //   - fakes files (`fakes_test.go`, `*_fakes_test.go`)
 //   - testmain (`testmain*_test.go`)
 //   - aggregate-private tests living in a sub-pkg test file
+//
 // Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_TestFilesPairWithProductionFile(t *testing.T) {
 	t.Parallel()

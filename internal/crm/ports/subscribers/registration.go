@@ -1,40 +1,24 @@
 package subscribers
 
 import (
-	"log/slog"
-
-	"github.com/leadkart/leadkart-go/internal/common/messaging"
+	"github.com/ThreeDotsLabs/watermill/components/cqrs"
 )
 
-// arch-test:idempotency-via-router-middleware — wire-up file only; the messaging.Router this file binds to is constructed in the composition root with IdempotencyMiddleware on every subscriber, so dedup happens at the router layer before any Handle is called.
+// arch-test:idempotency-via-router-middleware  — wire-up file only; the cqrs handlers it builds are registered via messaging.Router.AddCqrsHandler, which attaches IdempotencyMiddleware to every handler, so dedup happens at the router layer before any Handle runs.
 
-// Register wires every CRM in-module subscriber against the supplied
-// router. Called once at composition root (cmd/worker — CRM does NOT
-// publish events from the request path).
+// Handlers returns the CRM purchased-lead cqrs handler. ingest may be nil
+// in test fixtures that opt out — returns an empty slice then.
 //
-// The lead-purchased subscriber subscribes to the SAME topic the
-// Platform module publishes on (`platform.events`) — handler-side
-// `event_type` metadata filtering routes the right payload to the
-// right handler per the established subscriber pattern.
-//
-// platformTopic is the publish destination wired in the Platform
-// module's outbox forwarder. Production wires it from the Platform
-// integrationevents constant once that module ships; v0.2 callers
-// pass the literal "platform.events" string.
-func Register(
-	router *messaging.Router,
-	ingest *PurchasedLeadIngestor,
-	platformTopic string,
-	log *slog.Logger,
-) {
+// Post-cqrs (ADR 0067): the lead-purchased event is a Platform event
+// (alias platform.lead_purchased.v1); the EventProcessor derives its
+// subscribe topic (platform.events) from the alias, so this no longer
+// takes a topic string. The composition root registers the handler via
+// messaging.Router.AddCqrsHandler.
+func Handlers(ingest *PurchasedLeadIngestor) []cqrs.EventHandler {
 	if ingest == nil {
-		return // test fixtures may opt out of the subscriber wiring
+		return nil
 	}
-	if platformTopic == "" {
-		platformTopic = "platform.events"
+	return []cqrs.EventHandler{
+		cqrs.NewEventHandler(HandlerIngestLeadPurchased, ingest.Handle),
 	}
-	// log is unused inside Register itself — the subscriber owns its
-	// own logger. Param kept for parity with identity-side Register.
-	_ = log
-	router.AddSubscriber(HandlerIngestLeadPurchased, platformTopic, ingest.Handle)
 }

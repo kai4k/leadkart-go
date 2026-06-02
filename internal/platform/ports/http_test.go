@@ -28,7 +28,7 @@ import (
 	"github.com/leadkart/leadkart-go/internal/platform/ports"
 )
 
-// fakeVerifier returns its embedded *jwt.Claims for any token.
+// fakeVerifier returns its embedded claims (or err) for any token.
 type fakeVerifier struct {
 	claims *jwt.Claims
 	err    error
@@ -41,7 +41,7 @@ func (f *fakeVerifier) Verify(_ string) (*jwt.Claims, error) {
 	return f.claims, nil
 }
 
-// alwaysFresh — stamp validator always returns fresh.
+// alwaysFresh is a stamp validator that always reports fresh.
 type alwaysFresh struct{}
 
 func (alwaysFresh) IsFresh(_ context.Context, _, _ string) (bool, error) { return true, nil }
@@ -50,7 +50,7 @@ func silentLog() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
 
-// buildSampleForm returns a valid leadform.Form for seed flows.
+// buildSampleForm returns a valid leadform.Form for seeding.
 func buildSampleForm(t *testing.T) (leadform.Form, error) {
 	t.Helper()
 	return leadform.New(leadform.Input{
@@ -67,10 +67,8 @@ func buildSampleForm(t *testing.T) (leadform.Form, error) {
 	})
 }
 
-// platformClaims builds a Claims that satisfies BOTH RequirePlatform
-// (is_platform=true + slug=platform) AND a closed-set of permissions.
-// Subject + SecurityStamp populated so RequireFreshStamp's defense-
-// in-depth guards don't fire.
+// platformClaims builds Claims that satisfy RequirePlatform (is_platform=true,
+// slug=platform) plus perms. Subject + SecurityStamp set so freshness guards pass.
 func platformClaims(perms []string) *jwt.Claims {
 	c := &jwt.Claims{
 		TenantID:      ids.NewV7().String(),
@@ -84,8 +82,7 @@ func platformClaims(perms []string) *jwt.Claims {
 	return c
 }
 
-// tenantClaims builds a Claims for a regular tenant user with the
-// supplied permissions. RequirePlatform MUST refuse these.
+// tenantClaims builds Claims for a regular tenant user; RequirePlatform must refuse.
 func tenantClaims(perms []string) *jwt.Claims {
 	c := &jwt.Claims{
 		TenantID:      ids.NewV7().String(),
@@ -99,9 +96,8 @@ func tenantClaims(perms []string) *jwt.Claims {
 	return c
 }
 
-// buildApp wires a platform Application backed by in-memory fakes —
-// good enough to exercise the HTTP layer's request/response shape +
-// middleware composition.
+// buildApp wires a platform Application over in-memory fakes — enough to
+// exercise the HTTP layer's wire shapes and middleware composition.
 func buildApp(t *testing.T) (app.Application, *platformtest.FakeUnverifiedContactRepository, *platformtest.FakeLeadCreditRepository) {
 	t.Helper()
 	contacts := platformtest.NewFakeUnverifiedContactRepository()
@@ -118,7 +114,7 @@ func buildApp(t *testing.T) (app.Application, *platformtest.FakeUnverifiedContac
 			LogVerificationCall:     command.NewLogVerificationCallHandler(uow, calls, contacts, now, func() verificationcall.ID { return verificationcall.ID(ids.NewV7().String()) }),
 			VerifyUnverifiedContact: command.NewVerifyUnverifiedContactHandler(uow, contacts, leads, outbox, now, func() platformlead.ID { return platformlead.ID(ids.NewV7().String()) }),
 			RejectUnverifiedContact: command.NewRejectUnverifiedContactHandler(contacts, now),
-			PurchaseLead:            command.NewPurchaseLeadHandler(uow, leads, credits, outbox, now, func() string { return ids.NewV7().String() }),
+			PurchaseLead:            command.NewPurchaseLeadHandler(uow, leads, credits, platformtest.NewFakeTierReader(), outbox, now, func() string { return ids.NewV7().String() }),
 			TopupLeadCredits:        command.NewTopupLeadCreditsHandler(uow, credits, now),
 		},
 		Queries: app.Queries{
@@ -152,8 +148,7 @@ func doRequest(t *testing.T, mux *http.ServeMux, method, path string, body any) 
 	return rec
 }
 
-// TestHandleCreate_Platform_OK — happy path for a Platform-tier
-// operator. C2 — review-pass.
+// TestHandleCreate_Platform_OK — happy path for a Platform-tier operator (C2).
 func TestHandleCreate_Platform_OK(t *testing.T) {
 	t.Parallel()
 
@@ -186,13 +181,11 @@ func TestHandleCreate_Platform_OK(t *testing.T) {
 	}
 }
 
-// TestHandleCreate_Tenant_RefusedByRequirePlatform — C5 + C2: even a
-// tenant role with the right permission is refused by RequirePlatform.
+// TestHandleCreate_Tenant_RefusedByRequirePlatform — C5+C2: a tenant role with
+// the right permission is still refused (is_platform=false).
 func TestHandleCreate_Tenant_RefusedByRequirePlatform(t *testing.T) {
 	t.Parallel()
 
-	// Tenant claims with the same permission set — RequirePlatform must
-	// refuse because is_platform=false.
 	claims := tenantClaims([]string{permission.IdentityPermissions.PlatformUnverifiedContacts.Manage})
 	a, _, _ := buildApp(t)
 	mux := wireMux(t, claims, a)
@@ -209,9 +202,8 @@ func TestHandleCreate_Tenant_RefusedByRequirePlatform(t *testing.T) {
 	}
 }
 
-// TestHandleListUnverifiedContacts_Tenant_Refused — the LIST endpoint
-// reveals every contact in the platform pipeline; tenant MUST NOT
-// reach it. C5 — review-pass.
+// TestHandleListUnverifiedContacts_Tenant_Refused — LIST exposes the whole
+// pipeline; a tenant must not reach it (C5).
 func TestHandleListUnverifiedContacts_Tenant_Refused(t *testing.T) {
 	t.Parallel()
 
@@ -225,9 +217,8 @@ func TestHandleListUnverifiedContacts_Tenant_Refused(t *testing.T) {
 	}
 }
 
-// TestHandleTopupLeadCredits_Tenant_Refused — C5: tenant cannot top up,
-// even with the topup permission. RequirePlatform is the load-bearing
-// gate; permission gate is internal defense-in-depth.
+// TestHandleTopupLeadCredits_Tenant_Refused — C5: a tenant can't top up even
+// with the topup permission; RequirePlatform is the load-bearing gate.
 func TestHandleTopupLeadCredits_Tenant_Refused(t *testing.T) {
 	t.Parallel()
 
@@ -246,7 +237,7 @@ func TestHandleTopupLeadCredits_Tenant_Refused(t *testing.T) {
 	}
 }
 
-// TestHandleTopupLeadCredits_Platform_OK — happy path for Platform op.
+// TestHandleTopupLeadCredits_Platform_OK — happy path for a Platform operator.
 func TestHandleTopupLeadCredits_Platform_OK(t *testing.T) {
 	t.Parallel()
 
@@ -280,13 +271,11 @@ func TestHandleTopupLeadCredits_Platform_OK(t *testing.T) {
 	}
 }
 
-// TestHandlePurchaseLead_Tenant_HappyPath — tenant claims (NOT
-// platform) — purchase IS a tenant action. Confirms RequirePlatform is
-// NOT layered on the purchase route (only the Purchase permission).
+// TestHandlePurchaseLead_Tenant_HappyPath — purchase is a tenant action;
+// confirms RequirePlatform is NOT on the purchase route.
 func TestHandlePurchaseLead_Tenant_HappyPath(t *testing.T) {
 	t.Parallel()
 
-	// Tenant has the Purchase permission.
 	claims := tenantClaims([]string{permission.IdentityPermissions.PlatformMarketplace.Purchase})
 
 	contacts := platformtest.NewFakeUnverifiedContactRepository()
@@ -297,7 +286,7 @@ func TestHandlePurchaseLead_Tenant_HappyPath(t *testing.T) {
 	uow := platformtest.NewFakeUnitOfWork(credits, leads)
 	now := func() time.Time { return time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC) }
 
-	// Seed a lead + credit balance for the caller's tenant.
+	// Seed a lead and credit balance for the caller's tenant.
 	agentID := unverifiedcontact.MembershipID(ids.NewV7().String())
 	contactID := unverifiedcontact.ID(ids.NewV7().String())
 	leadID := platformlead.ID(ids.NewV7().String())
@@ -331,7 +320,7 @@ func TestHandlePurchaseLead_Tenant_HappyPath(t *testing.T) {
 			LogVerificationCall:     command.NewLogVerificationCallHandler(uow, calls, contacts, now, func() verificationcall.ID { return verificationcall.ID(ids.NewV7().String()) }),
 			VerifyUnverifiedContact: command.NewVerifyUnverifiedContactHandler(uow, contacts, leads, outbox, now, func() platformlead.ID { return platformlead.ID(ids.NewV7().String()) }),
 			RejectUnverifiedContact: command.NewRejectUnverifiedContactHandler(contacts, now),
-			PurchaseLead:            command.NewPurchaseLeadHandler(uow, leads, credits, outbox, now, func() string { return ids.NewV7().String() }),
+			PurchaseLead:            command.NewPurchaseLeadHandler(uow, leads, credits, platformtest.NewFakeTierReader(), outbox, now, func() string { return ids.NewV7().String() }),
 			TopupLeadCredits:        command.NewTopupLeadCreditsHandler(uow, credits, now),
 		},
 		Queries: app.Queries{
@@ -341,7 +330,7 @@ func TestHandlePurchaseLead_Tenant_HappyPath(t *testing.T) {
 	}
 	mux := wireMux(t, claims, a)
 
-	body := ports.PurchaseLeadRequest{AmountPaisa: 50000}
+	body := ports.PurchaseLeadRequest{}
 	rec := doRequest(t, mux, "POST", "/api/v1/platform/marketplace/leads/"+leadID.String()+"/purchase", body)
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("status=%d body=%s want 201", rec.Code, rec.Body.String())
@@ -356,17 +345,20 @@ func TestHandlePurchaseLead_Tenant_HappyPath(t *testing.T) {
 	if out.PlatformLeadID != leadID.String() {
 		t.Errorf("PlatformLeadID=%q want %q", out.PlatformLeadID, leadID)
 	}
+	// Server computes the price (first buyer pays the standard tier base).
+	if out.AmountPaisa != 50000 {
+		t.Errorf("AmountPaisa=%d want 50000 (server-computed)", out.AmountPaisa)
+	}
 }
 
-// TestHandleVerify_AlreadyTerminal_409 — H11 + C2 wire shape. Confirm
-// the ErrContactAlreadyTerminal sentinel maps to HTTP 409 with the
-// new error code.
+// TestHandleVerify_AlreadyTerminal_409 — H11+C2: ErrContactAlreadyTerminal
+// maps to 409 with the right error code.
 func TestHandleVerify_AlreadyTerminal_409(t *testing.T) {
 	t.Parallel()
 
 	claims := platformClaims([]string{permission.IdentityPermissions.PlatformUnverifiedContacts.Manage})
 
-	// Build app with a contact already in Verified state.
+	// Seed a contact already in a terminal state.
 	contacts := platformtest.NewFakeUnverifiedContactRepository()
 	leads := platformtest.NewFakePlatformLeadRepository()
 	credits := platformtest.NewFakeLeadCreditRepository()
@@ -401,7 +393,7 @@ func TestHandleVerify_AlreadyTerminal_409(t *testing.T) {
 			LogVerificationCall:     command.NewLogVerificationCallHandler(uow, calls, contacts, now, func() verificationcall.ID { return verificationcall.ID(ids.NewV7().String()) }),
 			VerifyUnverifiedContact: command.NewVerifyUnverifiedContactHandler(uow, contacts, leads, outbox, now, func() platformlead.ID { return platformlead.ID(ids.NewV7().String()) }),
 			RejectUnverifiedContact: command.NewRejectUnverifiedContactHandler(contacts, now),
-			PurchaseLead:            command.NewPurchaseLeadHandler(uow, leads, credits, outbox, now, func() string { return ids.NewV7().String() }),
+			PurchaseLead:            command.NewPurchaseLeadHandler(uow, leads, credits, platformtest.NewFakeTierReader(), outbox, now, func() string { return ids.NewV7().String() }),
 			TopupLeadCredits:        command.NewTopupLeadCreditsHandler(uow, credits, now),
 		},
 		Queries: app.Queries{
@@ -424,5 +416,5 @@ func TestHandleVerify_AlreadyTerminal_409(t *testing.T) {
 	}
 }
 
-// avoid unused-import error when test sliced
+// keeps errors imported when tests are sliced
 var _ = errors.New

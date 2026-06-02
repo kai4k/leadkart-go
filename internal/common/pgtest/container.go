@@ -77,11 +77,11 @@ import (
 // infrastructure provisioning a known role inside an ephemeral
 // container; the secret value is intentionally constant for repro).
 const (
-	appRoleName     = "leadkart_app"
-	appRolePasswd   = "leadkart_app_pw" //nolint:gosec // hardcoded test-only role; ephemeral container
-	dbName          = "leadkart_test"
-	ownerRole       = "leadkart"
-	ownerPasswdLit  = "leadkart_test" //nolint:gosec // hardcoded test-only role; ephemeral container
+	appRoleName    = "leadkart_app"
+	appRolePasswd  = "leadkart_app_pw" //nolint:gosec // hardcoded test-only role; ephemeral container
+	dbName         = "leadkart_test"
+	ownerRole      = "leadkart"
+	ownerPasswdLit = "leadkart_test" //nolint:gosec // hardcoded test-only role; ephemeral container
 )
 
 // Config configures what the shared container's bootstrap should look
@@ -92,7 +92,7 @@ const (
 // Most modules need:
 //   - Schemas: app + their own module schema (+ identity for tenant FK)
 //   - Grants:  their own module schema (+ identity if the module's tests
-//              directly insert tenants/persons for cross-FK seeding)
+//     directly insert tenants/persons for cross-FK seeding)
 //
 // App role credentials are fixed test-only constants (see top of file).
 // Not exposed via Config to keep the surface tight + satisfy arch-test
@@ -106,17 +106,24 @@ type Config struct {
 	// SELECT/INSERT/UPDATE/DELETE on ALL TABLES. Must be a subset of
 	// Schemas.
 	Grants []string
+
+	// PreserveTables are migration-seeded config/reference tables
+	// (qualified "schema.table") that TruncateAll must NOT wipe — e.g.
+	// platform.lead_tiers, whose seed rows the marketplace availability
+	// check depends on. Production never truncates these; the test
+	// harness mirrors that.
+	PreserveTables []string
 }
 
 // Container wraps the shared postgres container + the app-role pool.
 // Created once per package via RunMain; returned by Pool() to every
 // test. Closed automatically when TestMain exits.
 type Container struct {
-	pool         *pgxpool.Pool
-	pg           *postgres.PostgresContainer
-	ownerDSN     string
-	appDSN       string
-	cfg          Config
+	pool     *pgxpool.Pool
+	pg       *postgres.PostgresContainer
+	ownerDSN string
+	appDSN   string
+	cfg      Config
 }
 
 // Pool returns the shared app-role pgxpool. Safe to call from every
@@ -156,8 +163,13 @@ func (c *Container) TruncateAll(t testing.TB) {
 	}
 	defer func() { _ = db.Close() }()
 
+	preserve := make(map[string]bool, len(c.cfg.PreserveTables))
+	for _, p := range c.cfg.PreserveTables {
+		preserve[p] = true
+	}
+
 	schemaList := "'" + strings.Join(c.cfg.Grants, "','") + "'"
-	q := `SELECT format('%I.%I', schemaname, tablename)
+	q := `SELECT schemaname, tablename
 	      FROM pg_tables
 	      WHERE schemaname IN (` + schemaList + `)
 	        AND tablename NOT LIKE 'goose_%'`
@@ -169,11 +181,14 @@ func (c *Container) TruncateAll(t testing.TB) {
 
 	var tables []string
 	for rows.Next() {
-		var name string
-		if err := rows.Scan(&name); err != nil {
+		var schema, table string
+		if err := rows.Scan(&schema, &table); err != nil {
 			t.Fatalf("pgtest.TruncateAll: scan: %v", err)
 		}
-		tables = append(tables, name)
+		if preserve[schema+"."+table] {
+			continue // migration-seeded config table — leave its rows intact
+		}
+		tables = append(tables, `"`+schema+`"."`+table+`"`)
 	}
 	if err := rows.Err(); err != nil {
 		t.Fatalf("pgtest.TruncateAll: iterate: %v", err)
@@ -302,7 +317,7 @@ func setupContainer(ctx context.Context, cfg Config) (*Container, error) {
 		pg:       pg,
 		ownerDSN: ownerDSN,
 		appDSN:   appDSN,
-		cfg:      cfg,
+		cfg:      normalizeConfig(cfg),
 	}, nil
 }
 
@@ -323,16 +338,27 @@ func applyMigrationsAndGrants(ctx context.Context, ownerDSN, migDir string, cfg 
 		return fmt.Errorf("goose up: %w", err)
 	}
 
-	usageSchemas := append([]string{"app"}, cfg.Schemas...)
+	// "app" (RLS GUC helpers) and "common" (the shared watermill-sql outbox
+	// relay + cross-cutting infra every module writes through, per ADR
+	// 0064/0067) are universal — always provisioned regardless of the
+	// per-package Config, mirroring how "app" has always been implicit.
+	usageSchemas := dedupeSchemas(append([]string{"app", "common"}, cfg.Schemas...))
+	grantSchemas := dedupeSchemas(append([]string{"common"}, cfg.Grants...))
 	stmts := []string{
 		fmt.Sprintf(`CREATE ROLE %s LOGIN PASSWORD '%s' NOSUPERUSER NOINHERIT NOCREATEROLE NOCREATEDB`,
 			appRoleName, appRolePasswd),
 		fmt.Sprintf(`GRANT USAGE ON SCHEMA %s TO %s`, strings.Join(usageSchemas, ", "), appRoleName),
 		fmt.Sprintf(`GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA app TO %s`, appRoleName),
 	}
-	for _, schema := range cfg.Grants {
+	for _, schema := range grantSchemas {
 		stmts = append(stmts,
 			fmt.Sprintf(`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA %s TO %s`,
+				schema, appRoleName),
+			// Serial/identity columns need explicit sequence USAGE — GRANT ON
+			// ALL TABLES does NOT cover the backing sequences. Pair the two so
+			// any serial in a granted schema works (e.g. the watermill-sql
+			// relay common.outbox."offset" BIGSERIAL). Per ADR 0064/0067.
+			fmt.Sprintf(`GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA %s TO %s`,
 				schema, appRoleName))
 	}
 	for _, s := range stmts {
@@ -341,6 +367,38 @@ func applyMigrationsAndGrants(ctx context.Context, ownerDSN, migDir string, cfg 
 		}
 	}
 	return nil
+}
+
+// normalizeConfig prepends the universal "common" schema — the shared
+// watermill-sql outbox relay + cross-cutting infra every module reads and
+// writes (ADR 0064/0067) — to both Schemas and Grants. This makes `common`
+// implicit everywhere the Config is consumed: the app-role grants AND
+// TruncateAll's wipe scope. Without it, per-module fixtures (whose Grants
+// list only their own schema) leave common.outbox un-truncated, so its
+// rows accumulate across tests and outbox-count assertions see stale rows.
+// Mirrors how "app" has always been implicit.
+func normalizeConfig(cfg Config) Config {
+	cfg.Schemas = dedupeSchemas(append([]string{"common"}, cfg.Schemas...))
+	cfg.Grants = dedupeSchemas(append([]string{"common"}, cfg.Grants...))
+	return cfg
+}
+
+// dedupeSchemas removes duplicate schema names (preserving first-seen
+// order) so a `GRANT ... ON SCHEMA a, b` list never names a schema twice
+// — Postgres rejects "schema X specified more than once". Needed because
+// "app"/"common" are now prepended unconditionally and a package's Config
+// may also list them.
+func dedupeSchemas(in []string) []string {
+	seen := make(map[string]struct{}, len(in))
+	out := make([]string, 0, len(in))
+	for _, s := range in {
+		if _, ok := seen[s]; ok {
+			continue
+		}
+		seen[s] = struct{}{}
+		out = append(out, s)
+	}
+	return out
 }
 
 // findMigrationsDir walks up from the current working directory until

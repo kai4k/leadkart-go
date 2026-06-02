@@ -20,20 +20,15 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
 
+// newFakePermissionRequestRepo aliases the co-located permissionrequesttest fake.
+func newFakePermissionRequestRepo() *permissionrequesttest.FakeRepository {
+	return permissionrequesttest.NewFakeRepository()
+}
 
-// The permission-request-side fake lives in
-// internal/identity/domain/permissionrequest/permissionrequesttest/
-// per TDL Wild Workouts canon — co-located with the aggregate it
-// fakes. newFakePermissionRequestRepo is preserved as a one-line alias
-// so existing tests don't need rewriting.
-func newFakePermissionRequestRepo() *permissionrequesttest.FakeRepository { return permissionrequesttest.NewFakeRepository() }
-
-// The membership-side fake lives in
-// internal/identity/domain/membership/membershiptest/ per TDL Wild
-// Workouts canon. newFakeMembershipRepoForPermReq is preserved as a
-// one-line alias keying off the same shared fake the user_management
-// tests use.
-func newFakeMembershipRepoForPermReq() *membershiptest.FakeRepository { return membershiptest.NewFakeRepository() }
+// newFakeMembershipRepoForPermReq aliases the co-located membershiptest fake.
+func newFakeMembershipRepoForPermReq() *membershiptest.FakeRepository {
+	return membershiptest.NewFakeRepository()
+}
 
 func freshMembershipForPermReq(t *testing.T) *membership.Membership {
 	t.Helper()
@@ -140,7 +135,7 @@ func TestApprovePermissionRequest_HappyPath(t *testing.T) {
 	_ = requester.AssignManager(manager.ID(), testNow) // arch-test:ignore-err - test fixture setup
 	_ = requester.PullEvents()
 	_ = mems.Add(t.Context(), requester) // arch-test:ignore-err - test fixture setup
-	_ = mems.Add(t.Context(), manager) // arch-test:ignore-err - test fixture setup
+	_ = mems.Add(t.Context(), manager)   // arch-test:ignore-err - test fixture setup
 
 	submitH := command.NewRequestPermissionElevationHandler(reqs, mems, fixedTimeFn(), func() permissionrequest.ID { return permissionrequest.ID(ids.NewV7().String()) })
 	out, err := submitH.Handle(t.Context(), command.RequestPermissionElevationCommand{
@@ -153,7 +148,7 @@ func TestApprovePermissionRequest_HappyPath(t *testing.T) {
 		t.Fatalf("submit: %v", err)
 	}
 
-	approveH := command.NewApprovePermissionRequestHandler(reqs, mems, fixedTimeFn(), ids.NewV7)
+	approveH := command.NewApprovePermissionRequestHandler(fakeUoW{}, reqs, mems, fixedTimeFn(), ids.NewV7)
 	if err := approveH.Handle(t.Context(), command.ApprovePermissionRequestCommand{
 		TenantID:             requester.TenantID(),
 		RequestID:            out.RequestID,
@@ -198,7 +193,7 @@ func TestApprovePermissionRequest_BlocksSelfApproval(t *testing.T) {
 		Reason:                "need to onboard 5 users for monthly sales drive",
 	})
 
-	approveH := command.NewApprovePermissionRequestHandler(reqs, mems, fixedTimeFn(), ids.NewV7)
+	approveH := command.NewApprovePermissionRequestHandler(fakeUoW{}, reqs, mems, fixedTimeFn(), ids.NewV7)
 	err := approveH.Handle(t.Context(), command.ApprovePermissionRequestCommand{
 		TenantID:             requester.TenantID(),
 		RequestID:            out.RequestID,
@@ -215,7 +210,7 @@ func TestApprovePermissionRequest_MissingManagerRequiresPlatform(t *testing.T) {
 	reqs := newFakePermissionRequestRepo()
 	mems := newFakeMembershipRepoForPermReq()
 	requester := freshMembershipForPermReq(t)
-	// NO manager assigned — orphan / root membership.
+	// Orphan / root membership — no manager.
 	_ = mems.Add(t.Context(), requester) // arch-test:ignore-err - test fixture setup
 
 	submitH := command.NewRequestPermissionElevationHandler(reqs, mems, fixedTimeFn(), func() permissionrequest.ID { return permissionrequest.ID(ids.NewV7().String()) })
@@ -226,8 +221,8 @@ func TestApprovePermissionRequest_MissingManagerRequiresPlatform(t *testing.T) {
 		Reason:                "need to onboard 5 users for monthly sales drive",
 	})
 
-	approveH := command.NewApprovePermissionRequestHandler(reqs, mems, fixedTimeFn(), ids.NewV7)
-	// Non-platform random approver should be Forbidden.
+	approveH := command.NewApprovePermissionRequestHandler(fakeUoW{}, reqs, mems, fixedTimeFn(), ids.NewV7)
+	// Non-platform random approver → Forbidden.
 	err := approveH.Handle(t.Context(), command.ApprovePermissionRequestCommand{
 		TenantID:             requester.TenantID(),
 		RequestID:            out.RequestID,
@@ -238,7 +233,7 @@ func TestApprovePermissionRequest_MissingManagerRequiresPlatform(t *testing.T) {
 		t.Fatalf("non-platform err = %v, want ErrPermissionRequestForbidden", err)
 	}
 
-	// Platform operator should be allowed.
+	// Platform operator → allowed.
 	if err := approveH.Handle(t.Context(), command.ApprovePermissionRequestCommand{
 		TenantID:             requester.TenantID(),
 		RequestID:            out.RequestID,
@@ -261,7 +256,7 @@ func TestDenyPermissionRequest_HappyPath(t *testing.T) {
 	_ = requester.AssignManager(manager.ID(), testNow) // arch-test:ignore-err - test fixture setup
 	_ = requester.PullEvents()
 	_ = mems.Add(t.Context(), requester) // arch-test:ignore-err - test fixture setup
-	_ = mems.Add(t.Context(), manager) // arch-test:ignore-err - test fixture setup
+	_ = mems.Add(t.Context(), manager)   // arch-test:ignore-err - test fixture setup
 
 	submitH := command.NewRequestPermissionElevationHandler(reqs, mems, fixedTimeFn(), func() permissionrequest.ID { return permissionrequest.ID(ids.NewV7().String()) })
 	out, _ := submitH.Handle(t.Context(), command.RequestPermissionElevationCommand{
@@ -305,7 +300,7 @@ func TestCancelPermissionRequest_OnlyRequesterCanCancel(t *testing.T) {
 	})
 
 	cancelH := command.NewCancelPermissionRequestHandler(reqs, fixedTimeFn())
-	// Different caller — collapses to 404 enumeration-safe.
+	// Different caller → 404 (enumeration-safe).
 	err := cancelH.Handle(t.Context(), command.CancelPermissionRequestCommand{
 		TenantID:              requester.TenantID(),
 		RequestID:             out.RequestID,
@@ -315,7 +310,7 @@ func TestCancelPermissionRequest_OnlyRequesterCanCancel(t *testing.T) {
 		t.Fatalf("cross-caller err = %v, want ErrPermissionRequestNotFound", err)
 	}
 
-	// True requester can cancel.
+	// The true requester can cancel.
 	if err := cancelH.Handle(t.Context(), command.CancelPermissionRequestCommand{
 		TenantID:              requester.TenantID(),
 		RequestID:             out.RequestID,
@@ -329,45 +324,21 @@ func TestCancelPermissionRequest_OnlyRequesterCanCancel(t *testing.T) {
 	}
 }
 
-// =============================================================================
-// B2 — additional branch coverage per ADR 0062 §6 (handler-unit MANY).
-//
-// Existing tests above cover happy paths + a handful of rejections. The blocks
-// below close the remaining branches:
-//
-//   - input validation tables for all four handlers (TenantID/RequestID/Membership
-//     isZero rejections),
-//   - non-NotFound repository error wrapping for loads,
-//   - aggregate-invariant rejections propagated unchanged (short reason etc.),
-//   - non-Pending state translations,
-//   - approver-not-manager-and-not-platform Forbidden,
-//   - compensating-state behaviour when Step 2 (membership grant) fails after
-//     Step 1 (Request.Approve) committed,
-//   - cross-requester cancel enumeration safety,
-//   - default DurationDays fallback,
-//   - ErrPendingRequestExists vs generic Add error wrap.
-//
-// Inline wrappers `b2PermReqRepo` + `b2MemRepo` add error-injection that the
-// shared per-aggregate fakes don't expose. Names are scoped to this file (b2*)
-// per the concurrent-agent coordination convention.
-// =============================================================================
+// Additional branch coverage (ADR 0062 §6): input validation, non-NotFound
+// error wrapping, aggregate-invariant + non-Pending translations, authz
+// Forbidden, the compensating-state path when the Step-2 grant fails, cancel
+// enumeration safety, and the default-duration fallback. b2* wrappers add the
+// error injection the shared fakes lack.
 
-// ----- b2 inline wrappers --------------------------------------------------
-
-// b2PermReqRepo wraps the shared permissionrequest FakeRepository with
-// per-call error injection. Used for non-NotFound load + persist error
-// wrapping tests; production-shape contract still flows through the
-// embedded fake.
+// b2PermReqRepo injects per-call errors on GetByID / Add / UpdateByID.
 type b2PermReqRepo struct {
 	*permissionrequesttest.FakeRepository
 
-	// errOnGetByID forces GetByID to return this error on the NEXT call.
-	// Consumed-on-use (set back to nil after the first hit).
+	// errOnGetByID fires once on the next GetByID, then resets to nil.
 	errOnGetByID error
-	// errOnAdd forces Add to return this error on the NEXT call.
+	// errOnAdd fires once on the next Add, then resets to nil.
 	errOnAdd error
-	// errOnUpdateByID forces UpdateByID to return this error on the NEXT
-	// call (mimics persist-time failure after the mutate closure runs).
+	// errOnUpdateByID fires once on the next UpdateByID, then resets to nil.
 	errOnUpdateByID error
 }
 
@@ -402,10 +373,7 @@ func (r *b2PermReqRepo) UpdateByID(ctx context.Context, tid tenant.ID, id permis
 	return r.FakeRepository.UpdateByID(ctx, tid, id, fn)
 }
 
-// b2MemRepo wraps the shared membership FakeRepository with per-call error
-// injection on GetByID + UpdateByID. Used to exercise non-NotFound load
-// errors and the compensating-state branch when the Step-2 grant fails
-// after Step-1 Approve committed.
+// b2MemRepo injects per-call errors on GetByID + UpdateByID.
 type b2MemRepo struct {
 	*membershiptest.FakeRepository
 
@@ -435,9 +403,7 @@ func (r *b2MemRepo) UpdateByID(ctx context.Context, tid tenant.ID, id membership
 	return r.FakeRepository.UpdateByID(ctx, tid, id, fn)
 }
 
-// errB2Permreq is the synthetic non-typed error used for "non-NotFound
-// wrapped" branches. Detection in tests uses errors.Is — every wrapper
-// MUST preserve it via %w.
+// errB2Permreq is the synthetic error for the non-NotFound wrapped branches.
 var errB2Permreq = errors.New("b2: synthetic infrastructure failure")
 
 // ----- RequestPermissionElevation — additional branches -------------------
@@ -551,8 +517,8 @@ func TestRequestPermissionElevation_LoadRequester_NonNotFoundError_Wrapped(t *te
 }
 
 func TestRequestPermissionElevation_AggregateInvariantPropagated(t *testing.T) {
-	// permissionrequest.New rejects reason < MinReasonLength. The handler
-	// MUST propagate that error unchanged — no translation, no wrap.
+	// A too-short reason trips permissionrequest.New; the handler propagates
+	// the error unchanged.
 	t.Parallel()
 
 	reqs := newFakePermissionRequestRepo()
@@ -639,6 +605,7 @@ func TestApprovePermissionRequest_InputValidation(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			h := command.NewApprovePermissionRequestHandler(
+				fakeUoW{},
 				newFakePermissionRequestRepo(),
 				newFakeMembershipRepoForPermReq(),
 				fixedTimeFn(),
@@ -656,7 +623,7 @@ func TestApprovePermissionRequest_RequestNotFound(t *testing.T) {
 
 	reqs := newFakePermissionRequestRepo()
 	mems := newFakeMembershipRepoForPermReq()
-	h := command.NewApprovePermissionRequestHandler(reqs, mems, fixedTimeFn(), ids.NewV7)
+	h := command.NewApprovePermissionRequestHandler(fakeUoW{}, reqs, mems, fixedTimeFn(), ids.NewV7)
 
 	err := h.Handle(t.Context(), command.ApprovePermissionRequestCommand{
 		TenantID:             tenant.ID(ids.NewV7().String()),
@@ -669,8 +636,8 @@ func TestApprovePermissionRequest_RequestNotFound(t *testing.T) {
 }
 
 func TestApprovePermissionRequest_NonPendingAtLoad(t *testing.T) {
-	// Setup: submit + cancel (terminal). Re-approve must surface
-	// ErrPermissionRequestNotPending at the load-time state check.
+	// Submit + cancel, then re-approve → ErrPermissionRequestNotPending at the
+	// load-time state check.
 	t.Parallel()
 
 	reqs := newFakePermissionRequestRepo()
@@ -696,10 +663,10 @@ func TestApprovePermissionRequest_NonPendingAtLoad(t *testing.T) {
 		t.Fatalf("Cancel: %v", err)
 	}
 
-	approveH := command.NewApprovePermissionRequestHandler(reqs, mems, fixedTimeFn(), ids.NewV7)
+	approveH := command.NewApprovePermissionRequestHandler(fakeUoW{}, reqs, mems, fixedTimeFn(), ids.NewV7)
 	err := approveH.Handle(t.Context(), command.ApprovePermissionRequestCommand{
 		TenantID:             requester.TenantID(),
-		RequestID:             out.RequestID,
+		RequestID:            out.RequestID,
 		ApproverMembershipID: membership.ID(ids.NewV7().String()),
 		IsPlatformOperator:   true,
 	})
@@ -709,8 +676,7 @@ func TestApprovePermissionRequest_NonPendingAtLoad(t *testing.T) {
 }
 
 func TestApprovePermissionRequest_RequesterDeletedBetweenSubmitAndApprove(t *testing.T) {
-	// Submit, then drop the requester from the fake repo before approve.
-	// The membership GetByID returns ErrNotFound — handler collapses to
+	// Requester GetByID returns ErrNotFound at approve time → collapse to
 	// ErrPermissionRequestNotFound (enumeration-safety).
 	t.Parallel()
 
@@ -732,12 +698,11 @@ func TestApprovePermissionRequest_RequesterDeletedBetweenSubmitAndApprove(t *tes
 		Reason:                "need to onboard 5 users for monthly sales drive",
 	})
 
-	// Inject ErrNotFound on the next GetByID — simulates requester deletion
-	// race-window between submit + approve.
+	// ErrNotFound on the next GetByID simulates the deletion race.
 	wrappedMems := &b2MemRepo{FakeRepository: mems}
 	wrappedMems.errOnGetByID = membership.ErrNotFound
 
-	approveH := command.NewApprovePermissionRequestHandler(reqs, wrappedMems, fixedTimeFn(), ids.NewV7)
+	approveH := command.NewApprovePermissionRequestHandler(fakeUoW{}, reqs, wrappedMems, fixedTimeFn(), ids.NewV7)
 	err := approveH.Handle(t.Context(), command.ApprovePermissionRequestCommand{
 		TenantID:             requester.TenantID(),
 		RequestID:            out.RequestID,
@@ -749,8 +714,7 @@ func TestApprovePermissionRequest_RequesterDeletedBetweenSubmitAndApprove(t *tes
 }
 
 func TestApprovePermissionRequest_NonManagerAndNonPlatform_Forbidden(t *testing.T) {
-	// Requester has a manager; approver is some OTHER non-manager,
-	// non-platform membership.
+	// Approver is neither the requester's manager nor a platform operator.
 	t.Parallel()
 
 	reqs := newFakePermissionRequestRepo()
@@ -771,7 +735,7 @@ func TestApprovePermissionRequest_NonManagerAndNonPlatform_Forbidden(t *testing.
 		Reason:                "need to onboard 5 users for monthly sales drive",
 	})
 
-	approveH := command.NewApprovePermissionRequestHandler(reqs, mems, fixedTimeFn(), ids.NewV7)
+	approveH := command.NewApprovePermissionRequestHandler(fakeUoW{}, reqs, mems, fixedTimeFn(), ids.NewV7)
 	other := membership.ID(ids.NewV7().String())
 	err := approveH.Handle(t.Context(), command.ApprovePermissionRequestCommand{
 		TenantID:             requester.TenantID(),
@@ -784,11 +748,10 @@ func TestApprovePermissionRequest_NonManagerAndNonPlatform_Forbidden(t *testing.
 	}
 }
 
-func TestApprovePermissionRequest_Step2GrantFailure_RequestRemainsApproved(t *testing.T) {
-	// Step-1 (Request.Approve UpdateByID on the requests repo) succeeds.
-	// Step-2 (Membership.GrantPermission UpdateByID on the memberships
-	// repo) fails — handler returns wrapped error AND leaves the Request
-	// in Approved state (compensating-state behaviour per ADR 0055).
+func TestApprovePermissionRequest_GrantFailure_PropagatesError(t *testing.T) {
+	// The grant (membership UpdateByID) fails inside the UoW closure → wrapped
+	// error. The atomic rollback is covered at the SQL layer (the no-op test
+	// UoW can't model it).
 	t.Parallel()
 
 	reqs := newFakePermissionRequestRepo()
@@ -809,40 +772,27 @@ func TestApprovePermissionRequest_Step2GrantFailure_RequestRemainsApproved(t *te
 		Reason:                "need to onboard 5 users for monthly sales drive",
 	})
 
-	// Approve calls UpdateByID twice: first on requests (Step 1), then on
-	// memberships (Step 2). errOnUpdateByID on mems fires on the Step-2
-	// call only — Step 1 has already committed.
 	mems.errOnUpdateByID = errB2Permreq
 
-	approveH := command.NewApprovePermissionRequestHandler(reqs, mems, fixedTimeFn(), ids.NewV7)
+	approveH := command.NewApprovePermissionRequestHandler(fakeUoW{}, reqs, mems, fixedTimeFn(), ids.NewV7)
 	err := approveH.Handle(t.Context(), command.ApprovePermissionRequestCommand{
 		TenantID:             requester.TenantID(),
 		RequestID:            out.RequestID,
 		ApproverMembershipID: manager.ID(),
-		DecisionReason:       "approved despite infra hiccup",
+		DecisionReason:       "infra hiccup mid-grant",
 	})
 	if !errors.Is(err, errB2Permreq) {
 		t.Fatalf("err = %v, want wrapped errB2Permreq", err)
 	}
-	// Compensating-state assertion: Request is Approved even though the
-	// membership grant failed.
-	req, gerr := reqs.GetByID(t.Context(), requester.TenantID(), out.RequestID)
-	if gerr != nil {
-		t.Fatalf("GetByID after partial failure: %v", gerr)
-	}
-	if req.State() != permissionrequest.StateApproved {
-		t.Errorf("State after Step-2 failure = %v, want approved (audit canon)", req.State())
-	}
-	// And the membership overlay is empty — no grant landed.
 	if got := len(requester.GrantedPermissions()); got != 0 {
-		t.Errorf("granted permissions = %d, want 0 (Step-2 failure → no grant)", got)
+		t.Errorf("granted permissions = %d, want 0 (grant failed)", got)
 	}
 }
 
+// TestApprovePermissionRequest_UpdateByID_NonPendingTranslation — ErrNotPending
+// from the requests UpdateByID (a concurrent finalise race) translates to
+// ErrPermissionRequestNotPending.
 func TestApprovePermissionRequest_UpdateByID_NonPendingTranslation(t *testing.T) {
-	// Inject ErrNotPending from the requests UpdateByID — simulates the
-	// race where another approver finalised the same row between this
-	// handler's load-time check and its update closure.
 	t.Parallel()
 
 	reqs := newB2PermReqRepo()
@@ -864,7 +814,7 @@ func TestApprovePermissionRequest_UpdateByID_NonPendingTranslation(t *testing.T)
 	})
 	reqs.errOnUpdateByID = permissionrequest.ErrNotPending
 
-	approveH := command.NewApprovePermissionRequestHandler(reqs, mems, fixedTimeFn(), ids.NewV7)
+	approveH := command.NewApprovePermissionRequestHandler(fakeUoW{}, reqs, mems, fixedTimeFn(), ids.NewV7)
 	err := approveH.Handle(t.Context(), command.ApprovePermissionRequestCommand{
 		TenantID:             requester.TenantID(),
 		RequestID:            out.RequestID,
@@ -1002,7 +952,7 @@ func TestDenyPermissionRequest_MissingManagerAndNonPlatform_Forbidden(t *testing
 
 	reqs := newFakePermissionRequestRepo()
 	mems := newFakeMembershipRepoForPermReq()
-	requester := freshMembershipForPermReq(t) // NO manager
+	requester := freshMembershipForPermReq(t) // no manager
 	_ = mems.Add(t.Context(), requester)      // arch-test:ignore-err - test fixture setup
 
 	submitH := command.NewRequestPermissionElevationHandler(reqs, mems, fixedTimeFn(),
@@ -1079,8 +1029,7 @@ func TestCancelPermissionRequest_InputValidation(t *testing.T) {
 }
 
 func TestCancelPermissionRequest_NonPending(t *testing.T) {
-	// Submit + already-cancelled. Re-cancel by the requester (matching
-	// id) MUST surface NotPending (not NotFound).
+	// Re-cancel by the requester surfaces NotPending (not NotFound).
 	t.Parallel()
 
 	reqs := newFakePermissionRequestRepo()
@@ -1118,10 +1067,7 @@ func TestCancelPermissionRequest_NonPending(t *testing.T) {
 
 // ----- Cross-cutting reachability checks ----------------------------------
 
-// _ = b2KeepUnusedRef references symbols imported above for branches
-// we don't exercise inline (uuid + pagination + person) — keeps the
-// import block honest. Blank-identifier assignment avoids the
-// unused-var lint check.
+// Keep uuid + pagination + person imports reachable.
 //
 //nolint:gochecknoglobals // sentinel reachability marker for unused-import
 var (
@@ -1129,4 +1075,3 @@ var (
 	_ pagination.Cursor
 	_ *person.Person
 )
-

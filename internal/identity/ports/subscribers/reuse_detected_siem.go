@@ -2,14 +2,9 @@ package subscribers
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
 	"log/slog"
 
-	"github.com/ThreeDotsLabs/watermill/message"
-
 	"github.com/leadkart/leadkart-go/internal/identity/integrationevents"
-	"github.com/leadkart/leadkart-go/internal/common/messaging"
 )
 
 // arch-test:idempotency-via-append-only-log — emits a WARN slog record only; duplicate dispatch produces duplicate audit lines which is the correct (lossy-tolerant) behaviour for SIEM ingest. No state mutation to dedup.
@@ -39,19 +34,14 @@ func NewReuseDetectedSIEM(log *slog.Logger) *ReuseDetectedSIEM {
 	return &ReuseDetectedSIEM{log: log}
 }
 
-// Handle is the [messaging.SubscriberHandler]. Filters by event_type
-// header + Reason field.
+// Handle is the typed cqrs handler for
+// `identity.refresh_token_family_revoked.v1`. Topic routing + payload
+// decode are owned by the EventProcessor (ADR 0067); this filters by the
+// business Reason field (only reuse-detection revokes are SIEM incidents)
+// and emits the structured WARN record.
 func (h *ReuseDetectedSIEM) Handle(
-	ctx context.Context, _ string, msg *message.Message,
+	ctx context.Context, evt *integrationevents.RefreshTokenFamilyRevokedV1,
 ) error {
-	expected := integrationevents.RefreshTokenFamilyRevokedV1{}.Topic()
-	if msg.Metadata.Get(messaging.HeaderEventType) != expected {
-		return nil
-	}
-	var evt integrationevents.RefreshTokenFamilyRevokedV1
-	if err := json.Unmarshal(msg.Payload, &evt); err != nil {
-		return fmt.Errorf("subscribers: decode %s: %w", expected, err)
-	}
 	if evt.Reason != "reuse_detected" {
 		return nil
 	}

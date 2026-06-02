@@ -41,10 +41,10 @@ import (
 	platformapp "github.com/leadkart/leadkart-go/internal/platform/app"
 	platformcommand "github.com/leadkart/leadkart-go/internal/platform/app/command"
 	platformquery "github.com/leadkart/leadkart-go/internal/platform/app/query"
-	platformports "github.com/leadkart/leadkart-go/internal/platform/ports"
 	"github.com/leadkart/leadkart-go/internal/platform/domain/platformlead"
 	"github.com/leadkart/leadkart-go/internal/platform/domain/unverifiedcontact"
 	"github.com/leadkart/leadkart-go/internal/platform/domain/verificationcall"
+	platformports "github.com/leadkart/leadkart-go/internal/platform/ports"
 
 	"net/http/httptest"
 )
@@ -83,6 +83,7 @@ func newPlatformE2E(t *testing.T) platformE2E {
 	calls := platformadapters.NewVerificationCallRepository(pool, tx)
 	leads := platformadapters.NewPlatformLeadRepository(pool, tx)
 	credits := platformadapters.NewLeadCreditRepository(pool, tx)
+	tiers := platformadapters.NewLeadTierReader(pool)
 	reader := platformadapters.NewUnverifiedContactReader(pool, tx)
 	outboxEnq := platformadapters.NewOutboxEnqueuer()
 
@@ -92,7 +93,7 @@ func newPlatformE2E(t *testing.T) platformE2E {
 			LogVerificationCall:     platformcommand.NewLogVerificationCallHandler(tx, calls, contacts, now, func() verificationcall.ID { return verificationcall.ID(ids.NewV7().String()) }),
 			VerifyUnverifiedContact: platformcommand.NewVerifyUnverifiedContactHandler(tx, contacts, leads, outboxEnq, now, func() platformlead.ID { return platformlead.ID(ids.NewV7().String()) }),
 			RejectUnverifiedContact: platformcommand.NewRejectUnverifiedContactHandler(contacts, now),
-			PurchaseLead:            platformcommand.NewPurchaseLeadHandler(tx, leads, credits, outboxEnq, now, func() string { return ids.NewV7().String() }),
+			PurchaseLead:            platformcommand.NewPurchaseLeadHandler(tx, leads, credits, tiers, outboxEnq, now, func() string { return ids.NewV7().String() }),
 			TopupLeadCredits:        platformcommand.NewTopupLeadCreditsHandler(tx, credits, now),
 		},
 		Queries: platformapp.Queries{
@@ -297,15 +298,23 @@ func TestE2E_Platform_FullFlow_CreateVerifyBrowsePurchase(t *testing.T) {
 		t.Fatalf("verified lead not in marketplace browse; items=%+v", browse.Items)
 	}
 
-	// Step 5: Buyer purchases the lead.
+	// Step 5: Buyer purchases the lead. Price is computed server-side
+	// (ADR 0065 dynamic pricing) — first buyer pays the standard tier base.
 	purchaseResp := f.id.authedJSON(t, http.MethodPost,
 		"/api/v1/platform/marketplace/leads/"+verified.PlatformLeadID+"/purchase", buyer.AccessToken,
-		platformports.PurchaseLeadRequest{AmountPaisa: 50000})
+		platformports.PurchaseLeadRequest{})
 	if purchaseResp.status != http.StatusCreated {
 		t.Fatalf("purchase: status %d body %s", purchaseResp.status, purchaseResp.body)
 	}
+	var purchase platformports.PurchaseLeadResponse
+	if err := json.Unmarshal(purchaseResp.body, &purchase); err != nil {
+		t.Fatalf("decode purchase: %v", err)
+	}
+	if purchase.AmountPaisa != 50000 {
+		t.Errorf("purchase amount: got %d want 50000 (server-computed standard tier base)", purchase.AmountPaisa)
+	}
 
-	// Step 6: Buyer's balance is now 9 (1 credit per lead per ADR 0059).
+	// Step 6: Buyer's balance is now 9 (flat 1 credit per lead per ADR 0059).
 	balResp := f.id.authedJSON(t, http.MethodGet,
 		"/api/v1/platform/lead-credits/balance", buyer.AccessToken, nil)
 	if balResp.status != http.StatusOK {
@@ -319,18 +328,24 @@ func TestE2E_Platform_FullFlow_CreateVerifyBrowsePurchase(t *testing.T) {
 		t.Errorf("balance: got %d want 9", bal.Balance)
 	}
 
-	// Step 7: A second buyer would see the lead REMOVED from the
-	// marketplace (sold).
+	// Step 7: multi-buyer (ADR 0065) — one sale does NOT sell the lead out
+	// (standard tier limit is 6), so a second buyer STILL sees it in the
+	// marketplace and can buy it too. The lead leaves browse only once its
+	// purchase count reaches the sale limit.
 	buyer2 := f.id.registerAndLogin(t, "buyer2")
 	buyer2.AccessToken = f.mintBuyerToken(t, buyer2)
 	browse2 := f.id.authedJSON(t, http.MethodGet, "/api/v1/platform/marketplace/leads", buyer2.AccessToken, nil)
 	var browse2Resp platformports.BrowseMarketplaceResponse
 	_ = json.Unmarshal(browse2.body, &browse2Resp) // arch-test:ignore-err — best-effort decode; loop below tolerates empty Items slice
+	var stillListed bool
 	for _, item := range browse2Resp.Items {
 		if item.ID == verified.PlatformLeadID {
-			t.Errorf("sold lead %q must NOT appear in marketplace; items=%+v",
-				verified.PlatformLeadID, browse2Resp.Items)
+			stillListed = true
 		}
+	}
+	if !stillListed {
+		t.Errorf("multi-buyer: lead %q must REMAIN in marketplace after 1/6 sales; items=%+v",
+			verified.PlatformLeadID, browse2Resp.Items)
 	}
 }
 

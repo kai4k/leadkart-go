@@ -87,8 +87,7 @@ func freshContact(t *testing.T) *unverifiedcontact.UnverifiedContact {
 	if err != nil {
 		t.Fatalf("freshContact: %v", err)
 	}
-	// drain New event
-	_ = c.PullEvents()
+	_ = c.PullEvents() // drain New event
 	return c
 }
 
@@ -126,7 +125,7 @@ func TestStartCall_AlreadyInCall_Idempotent(t *testing.T) {
 func TestStartCall_FromVerified_Rejected(t *testing.T) {
 	t.Parallel()
 	c := freshContact(t)
-	_ = c.StartCall(now) // arch-test:ignore-err — domain test seed
+	_ = c.StartCall(now)                                                                      // arch-test:ignore-err — domain test seed
 	_ = c.MarkVerified("01900000-0000-7000-8000-000000000020", agentID, now.Add(time.Minute)) // arch-test:ignore-err — domain test seed
 	_ = c.PullEvents()
 	err := c.StartCall(now.Add(2 * time.Minute))
@@ -167,8 +166,7 @@ func TestMarkVerified_HappyPath(t *testing.T) {
 func TestMarkVerified_RequiresInCallState(t *testing.T) {
 	t.Parallel()
 	c := freshContact(t)
-	// from New
-	err := c.MarkVerified("01900000-0000-7000-8000-000000000020", agentID, now.Add(time.Minute))
+	err := c.MarkVerified("01900000-0000-7000-8000-000000000020", agentID, now.Add(time.Minute)) // from New
 	if !errors.Is(err, unverifiedcontact.ErrInvalid) {
 		t.Errorf("expected ErrInvalid (not in_call), got %v", err)
 	}
@@ -274,7 +272,7 @@ func TestMarkBusy_RejectsEndBeforeStart(t *testing.T) {
 func TestStartCall_FromBusy_ReentersInCall(t *testing.T) {
 	t.Parallel()
 	c := freshContact(t)
-	_ = c.StartCall(now) // arch-test:ignore-err — domain test seed
+	_ = c.StartCall(now)                                          // arch-test:ignore-err — domain test seed
 	_ = c.MarkBusy(now.Add(time.Hour), now.Add(2*time.Hour), now) // arch-test:ignore-err — domain test seed
 	_ = c.PullEvents()
 	if err := c.StartCall(now.Add(time.Hour + time.Minute)); err != nil {
@@ -291,13 +289,13 @@ func TestStartCall_FromBusy_ReentersInCall(t *testing.T) {
 func TestUnmarshalFromDB_RoundTrip(t *testing.T) {
 	t.Parallel()
 	snap := unverifiedcontact.Snapshot{
-		ID:                    unverifiedcontact.ID("01900000-0000-7000-8000-000000000010"),
-		Form:                  sampleForm(t),
-		State:                 unverifiedcontact.StateVerified,
-		PlatformLeadID:        "01900000-0000-7000-8000-000000000020",
-		CreatedAt:             now,
-		CreatedByMembershipID: agentID,
-		VerifiedAt:            now.Add(time.Minute),
+		ID:                     unverifiedcontact.ID("01900000-0000-7000-8000-000000000010"),
+		Form:                   sampleForm(t),
+		State:                  unverifiedcontact.StateVerified,
+		PlatformLeadID:         "01900000-0000-7000-8000-000000000020",
+		CreatedAt:              now,
+		CreatedByMembershipID:  agentID,
+		VerifiedAt:             now.Add(time.Minute),
 		VerifiedByMembershipID: agentID,
 	}
 	c := unverifiedcontact.UnmarshalFromDB(snap)

@@ -5,7 +5,7 @@
 //
 // Why: sqlc doesn't model Postgres session-level GUC setting. That's
 // a legitimate reason for the original tests to use raw SQL — but
-// the call shape (`pool.Exec(ctx, "SELECT set_config('app.tenant_id', $1, true)", id)`)
+// the call shape (`pool.Exec(ctx, "SELECT set_config($1, $2, true)", name, id)`)
 // is identical across 8+ files. Centralising in a helper:
 //   - Closes the raw-SQL-in-tests gate (TestArch_NoRawSQLInTests)
 //   - Documents the GUC scope (transaction-local vs. session-level)
@@ -17,14 +17,18 @@ import (
 	"testing"
 
 	"github.com/jackc/pgx/v5"
+
+	"github.com/leadkart/leadkart-go/internal/common/pg"
 )
 
-// Tenant constants must match the values [pg.WithTenantScope] +
-// the AfterAcquire hook write into the connection. Hard-coded here
-// for test-side readability + cited as canon source: pg.tenancy.go.
+// GUC names re-export the single source of truth in package pg
+// ([pg.GUCTenantID] / [pg.GUCIsPlatform]) so the test helpers and the
+// production set_config callers can never desync. Bound as a SQL
+// parameter to set_config — never spelled inline — so the literal lives
+// in exactly one place.
 const (
-	GUCAppTenantID  = "app.tenant_id"
-	GUCAppIsPlatform = "app.is_platform"
+	GUCAppTenantID   = pg.GUCTenantID
+	GUCAppIsPlatform = pg.GUCIsPlatform
 )
 
 // SetSessionTenant binds app.tenant_id on the connection for the
@@ -36,8 +40,8 @@ const (
 // long-lived fixture connections), use SetSessionTenantPersistent.
 func SetSessionTenant(t testing.TB, ctx context.Context, tx pgx.Tx, tenantID string) {
 	t.Helper()
-	const q = `SELECT set_config('app.tenant_id', $1, true)`
-	if _, err := tx.Exec(ctx, q, tenantID); err != nil {
+	const q = `SELECT set_config($1, $2, true)`
+	if _, err := tx.Exec(ctx, q, GUCAppTenantID, tenantID); err != nil {
 		t.Fatalf("rlstest.SetSessionTenant(%s): %v", tenantID, err)
 	}
 }
@@ -48,8 +52,8 @@ func SetSessionTenant(t testing.TB, ctx context.Context, tx pgx.Tx, tenantID str
 // each need the same RLS scope.
 func SetSessionTenantPersistent(t testing.TB, ctx context.Context, conn *pgx.Conn, tenantID string) {
 	t.Helper()
-	const q = `SELECT set_config('app.tenant_id', $1, false)`
-	if _, err := conn.Exec(ctx, q, tenantID); err != nil {
+	const q = `SELECT set_config($1, $2, false)`
+	if _, err := conn.Exec(ctx, q, GUCAppTenantID, tenantID); err != nil {
 		t.Fatalf("rlstest.SetSessionTenantPersistent(%s): %v", tenantID, err)
 	}
 }
@@ -64,8 +68,8 @@ func SetSessionTenantPersistent(t testing.TB, ctx context.Context, conn *pgx.Con
 // even when RLS bypasses tenant filtering.
 func SetSessionPlatform(t testing.TB, ctx context.Context, conn *pgx.Conn) {
 	t.Helper()
-	const q = `SELECT set_config('app.is_platform','true',false)`
-	if _, err := conn.Exec(ctx, q); err != nil {
+	const q = `SELECT set_config($1,'true',false)`
+	if _, err := conn.Exec(ctx, q, GUCAppIsPlatform); err != nil {
 		t.Fatalf("rlstest.SetSessionPlatform: %v", err)
 	}
 }
@@ -79,8 +83,8 @@ func SetSessionPlatform(t testing.TB, ctx context.Context, conn *pgx.Conn) {
 // that scope the platform GUC to a single read.
 func SetSessionPlatformLocal(t testing.TB, ctx context.Context, tx pgx.Tx) {
 	t.Helper()
-	const q = `SELECT set_config('app.is_platform','true',true)`
-	if _, err := tx.Exec(ctx, q); err != nil {
+	const q = `SELECT set_config($1,'true',true)`
+	if _, err := tx.Exec(ctx, q, GUCAppIsPlatform); err != nil {
 		t.Fatalf("rlstest.SetSessionPlatformLocal: %v", err)
 	}
 }

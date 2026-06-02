@@ -31,23 +31,11 @@ import (
 	"github.com/leadkart/leadkart-go/internal/inventory/domain/stockmovement"
 )
 
-// TestLogStockMovement_Concurrent_NoLostUpdate fires N goroutines
-// against the SAME batch via LogStockMovementHandler and asserts the
-// final on-hand quantity equals the SUM of all inbound magnitudes.
-//
-// Concurrency is handled at the DB layer: the BatchRepository's
-// UpdateByID acquires SELECT ... FOR UPDATE on the batch row, so
-// concurrent writers serialize at the lock. The application handler
-// has NO retry loop — by construction batch.ErrConcurrencyConflict
-// is unreachable in production. This test exists to PROVE that
-// invariant: N concurrent inbounds always sum correctly with zero
-// lost updates, regardless of CPU scheduling, GOMAXPROCS, or
-// Postgres tick alignment.
-//
-// Why not test the retry path? There IS no retry path in production
-// anymore (see batch_repository_pg.go pessimistic-lock rationale).
-// Locking is the canonical primitive for hot-row counters per
-// Postgres §13.3.2 + Stripe ledger pattern + DDIA Ch.7.
+// TestLogStockMovement_Concurrent_NoLostUpdate fires N goroutines against
+// the same batch and asserts final on-hand equals the sum of all inbound
+// quantities. BatchRepository.UpdateByID serializes writers via
+// SELECT ... FOR UPDATE; ErrConcurrencyConflict is unreachable in
+// production (Postgres §13.3.2 + Stripe ledger + DDIA Ch.7).
 func TestLogStockMovement_Concurrent_NoLostUpdate(t *testing.T) {
 	t.Parallel()
 	pool := repoFixture(t)
@@ -62,7 +50,6 @@ func TestLogStockMovement_Concurrent_NoLostUpdate(t *testing.T) {
 	movements := adapters.NewStockMovementRepository(pool, tx)
 	actor := membership.ID(ids.NewV7().String())
 
-	// Seed Product + Batch.
 	p, _ := product.New(product.ID(ids.NewV7().String()), tid, actor,
 		product.Spec{SKU: "RACE-1", Name: "Race", DosageForm: "Tablet",
 			PackSize: "10", HSNCode: "3004", GSTRateBps: 1200}, fixedNow)
@@ -81,27 +68,23 @@ func TestLogStockMovement_Concurrent_NoLostUpdate(t *testing.T) {
 		t.Fatalf("Add batch: %v", err)
 	}
 
-	// 8 racers — high enough to stress the lock acquisition path across
-	// scheduling regimes. Without DB serialization this number would
-	// produce lost updates on most cloud runners; with the row lock it
-	// is bounded only by tx commit latency.
+	// 8 racers: enough to stress lock acquisition; without DB
+	// serialization this produces lost updates on most runners.
 	const (
 		racers        = 8
 		perRacerQty   = 10
 		expectedFinal = racers * perRacerQty
 	)
 
-	// totalEntries counts WithinTx entries to PROVE the retry path
-	// never fires (i.e. exactly one tx attempt per Handle invocation).
-	// If a future refactor reintroduces optimistic-retry by accident
-	// this assertion catches it.
+	// totalEntries proves no retry path fires: exactly one tx per Handle.
+	// A future accidental reintroduction of optimistic-retry would bump this.
 	var totalEntries atomic.Int64
 	instrumentedUoW := &countingUoW{inner: tx, counter: &totalEntries}
 
 	h := command.NewLogStockMovementHandler(instrumentedUoW, batches, movements, func() time.Time { return fixedNow }, func() stockmovement.ID { return stockmovement.ID(ids.NewV7().String()) })
 
-	// Channel-based barrier so every goroutine releases inside the same
-	// Postgres tick — maximises lock-acquisition pressure.
+	// Channel barrier: all goroutines release simultaneously to maximise
+	// lock-acquisition pressure.
 	startBarrier := make(chan struct{})
 
 	var wg sync.WaitGroup
@@ -126,23 +109,19 @@ func TestLogStockMovement_Concurrent_NoLostUpdate(t *testing.T) {
 	wg.Wait()
 	close(errs)
 
-	// (a) every racer succeeded — no lock timeout, no spurious conflict.
+	// (a) every racer succeeded — no lock timeout or spurious conflict.
 	for err := range errs {
 		if err != nil {
 			t.Fatalf("racer error (every Handle must succeed): %v", err)
 		}
 	}
 
-	// (b) total UoW entries == racers — exactly one tx per Handle.
-	// Retry path is unreachable in the pessimistic-lock world; if this
-	// number grows beyond `racers` a future commit accidentally
-	// reintroduced optimistic-retry semantics.
+	// (b) exactly one tx per Handle — retry path must not fire.
 	if got := totalEntries.Load(); got != int64(racers) {
 		t.Fatalf("UoW entries: got %d want %d (no retry path expected with FOR UPDATE)", got, racers)
 	}
 
-	// (c) final quantity_on_hand == sum of inbounds — the LOAD-BEARING
-	// assertion. Lost updates here would surface as final < expected.
+	// (c) final on-hand == sum of inbounds — lost updates surface as final < expected.
 	final, err := batches.GetByID(ctx, tid, b.ID())
 	if err != nil {
 		t.Fatalf("GetByID after race: %v", err)
@@ -153,9 +132,9 @@ func TestLogStockMovement_Concurrent_NoLostUpdate(t *testing.T) {
 	}
 }
 
-// countingUoW wraps a *pg.Transactor + counts every WithinTx entry.
-// Implements pg.UnitOfWork; passes the inner call through unchanged so
-// the real Postgres tx + RLS binding still apply.
+// countingUoW wraps pg.UnitOfWork and counts every WithinTx call.
+// All behaviour is delegated to inner so the real Postgres tx and RLS
+// binding apply unchanged.
 type countingUoW struct {
 	inner   pg.UnitOfWork
 	counter *atomic.Int64
@@ -166,5 +145,5 @@ func (u *countingUoW) WithinTx(ctx context.Context, scope pg.TxScope, fn func(ct
 	return u.inner.WithinTx(ctx, scope, fn)
 }
 
-// compile-time interface assertion.
+// compile-time pg.UnitOfWork satisfaction.
 var _ pg.UnitOfWork = (*countingUoW)(nil)

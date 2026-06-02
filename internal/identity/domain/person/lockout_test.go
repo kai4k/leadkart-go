@@ -7,7 +7,6 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
 )
 
-
 // Lockout-policy + must-change-password tests per ADR 0053. Pure
 // aggregate-level coverage — repository / login-flow integration
 // tests live elsewhere.
@@ -79,7 +78,7 @@ func TestPerson_RegisterFailedLogin_OutsideWindow_ResetsCounter(t *testing.T) {
 
 	t0 := time.Date(2026, 5, 23, 12, 0, 0, 0, time.UTC)
 	// Build up some failures inside the first window.
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		p.RegisterFailedLogin(t0.Add(time.Duration(i) * time.Second))
 	}
 	if got := p.FailedLoginCount(); got != 3 {
@@ -98,6 +97,58 @@ func TestPerson_RegisterFailedLogin_OutsideWindow_ResetsCounter(t *testing.T) {
 	}
 }
 
+// TestPerson_RegisterFailedLogin_RelocksAfterExpiry guards the re-lock
+// bug: lockedUntil is cleared only on successful login, so after a first
+// lockout EXPIRES (the user never logs in to clear it) a fresh run of
+// failures in a new window must still re-lock. The prior gate
+// (lockedUntil.IsZero()) left it permanently non-zero-but-past, silently
+// suppressing every subsequent lockout — a brute-force bypass.
+func TestPerson_RegisterFailedLogin_RelocksAfterExpiry(t *testing.T) {
+	t.Parallel()
+	p := newPerson(t)
+	_ = p.PullEvents()
+
+	base := time.Date(2026, 5, 23, 12, 0, 0, 0, time.UTC)
+	// First lockout.
+	for i := 0; i < person.MaxFailedLogins; i++ {
+		p.RegisterFailedLogin(base.Add(time.Duration(i) * time.Second))
+	}
+	firstUntil := p.LockedUntil()
+	if firstUntil.IsZero() {
+		t.Fatal("setup: first lockout should set LockedUntil")
+	}
+	_ = p.PullEvents()
+
+	// Jump past the lockout AND the sliding window so the next failure
+	// starts a fresh count; the expired lock must not block re-locking.
+	after := firstUntil.Add(person.LockoutWindow + time.Minute)
+	if p.IsLocked(after) {
+		t.Fatal("setup: lockout should have expired by `after`")
+	}
+	for i := 0; i < person.MaxFailedLogins; i++ {
+		p.RegisterFailedLogin(after.Add(time.Duration(i) * time.Second))
+	}
+
+	lastNow := after.Add(time.Duration(person.MaxFailedLogins-1) * time.Second)
+	if !p.IsLocked(lastNow.Add(time.Second)) {
+		t.Fatal("account must RE-LOCK after a fresh run of failures post-expiry")
+	}
+	if got := p.LockedUntil(); !got.After(firstUntil) {
+		t.Errorf("re-lock LockedUntil = %v, want a fresh value after %v", got, firstUntil)
+	}
+	// A second AccountLockedEvent must fire for SIEM.
+	var relocked bool
+	for _, e := range p.PullEvents() {
+		if _, ok := e.(person.AccountLockedEvent); ok {
+			relocked = true
+			break
+		}
+	}
+	if !relocked {
+		t.Error("expected a second AccountLockedEvent on re-lock")
+	}
+}
+
 // ----- RegisterSuccessfulLogin ----------------------------------------------
 
 func TestPerson_RegisterSuccessfulLogin_ClearsCounter(t *testing.T) {
@@ -106,7 +157,7 @@ func TestPerson_RegisterSuccessfulLogin_ClearsCounter(t *testing.T) {
 	_ = p.PullEvents()
 
 	t0 := time.Date(2026, 5, 23, 12, 0, 0, 0, time.UTC)
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		p.RegisterFailedLogin(t0.Add(time.Duration(i) * time.Second))
 	}
 	_ = p.PullEvents() // drain any incidental events

@@ -1,42 +1,20 @@
-// Package leadcredittest provides the in-memory FakeRepository
-// implementing [leadcredit.Repository]. Used by app-layer handler
-// tests + downstream integration scenarios that need a working
-// LeadCredit store without a Postgres dependency.
+// Package leadcredittest provides the in-memory FakeRepository implementing
+// [leadcredit.Repository], for app-layer tests that need a working LeadCredit
+// store without Postgres.
 //
-// TDL CANON (ThreeDotsLabs Wild Workouts + "Go with the Domain"):
+// TDL canon (Wild Workouts + "Go with the Domain"): the fake is a faithful
+// implementation of the interface, not a mock. It honors the optimistic-concurrency
+// contract — a stored row's version must match the in-aggregate version on
+// UpsertWithVersion or [leadcredit.ErrConflict] is returned (mirrors the adapter's
+// WHERE version = $expected matching 0 rows). [FakeRepository.ForceConflictOnce]
+// drives the retry-loop test. [FakeRepository.Snapshot] satisfies TransactionalFake
+// for closure-error rollback — required by the PurchaseLead race test where the
+// loser's debit must unwind when the lead UPDATE returns ErrAlreadySold in the same
+// WithinTx.
 //
-//   - The fake lives in a sibling package <aggregate>test/, co-located
-//     with the domain aggregate it implements an interface from. Same
-//     visibility surface as the aggregate itself; no special test-side
-//     plumbing.
-//   - The fake is a FAITHFUL implementation of
-//     [leadcredit.Repository] — not a mock-with-canned-responses. It
-//     honors the optimistic-concurrency contract: a stored row's
-//     version must match the in-aggregate version on UpsertWithVersion,
-//     or [leadcredit.ErrConflict] is returned (mirrors the adapter's
-//     `WHERE version = $expected` predicate matching 0 rows). The
-//     [FakeRepository.ForceConflictOnce] knob lets a single test
-//     simulate one ErrConflict + then succeed — drives the retry-loop
-//     test.
-//   - The fake implements the [TransactionalFake] contract via
-//     [FakeRepository.Snapshot] — registered with [FakeUnitOfWork], it
-//     supports closure-error rollback. Critical for the PurchaseLead
-//     race test where the loser's debit must be undone when the lead
-//     UPDATE returns ErrAlreadySold inside the same WithinTx.
-//   - Single-test-owner pattern: each test creates its OWN
-//     FakeRepository via [NewFakeRepository] — no shared mutable state
-//     across tests. t.Parallel is naturally safe because no two tests
-//     share the same fake instance. This is TDL canon: fakes don't
-//     need sync primitives because they're per-test, and putting sync
-//     in domain-co-located test packages would trip
-//     TestArch_NoGoroutinesInDomain (domain layer is concurrency-free
-//     by design — Bryan Mills "Rethinking Concurrency Patterns").
-//
-// Why fakes, not mocks: per TDL "Go with the Domain" ch. 8, mocks
-// couple the test to the call-pattern of the SUT (Subject Under Test);
-// fakes couple to the CONTRACT. Refactoring the SUT to use the
-// interface differently breaks mock-tests but leaves fake-tests
-// green. The contract is the load-bearing thing.
+// Single-test-owner: each test constructs its own instance, so no sync is needed and
+// t.Parallel is safe. Sync in a domain-co-located package would trip
+// TestArch_NoGoroutinesInDomain (domain is concurrency-free — Bryan Mills).
 package leadcredittest
 
 import (
@@ -45,34 +23,26 @@ import (
 	"github.com/leadkart/leadkart-go/internal/platform/domain/leadcredit"
 )
 
-// FakeRepository is the in-memory implementation of
-// [leadcredit.Repository] with optimistic-version semantics.
-// Zero-value-NOT-usable — construct via [NewFakeRepository] so the
-// internal maps are initialised. Single-test-owner: do NOT share one
-// instance across tests; each test creates its own.
+// FakeRepository is the in-memory [leadcredit.Repository] with optimistic-version
+// semantics. Zero value unusable — construct via [NewFakeRepository]. Single-test-owner:
+// do not share an instance across tests.
 type FakeRepository struct {
-	// Store is the per-tenant LeadCredit row index. Holds the latest
-	// committed snapshot — reads hydrate a fresh aggregate from this.
+	// Store holds the latest committed snapshot per tenant; reads hydrate fresh from it.
 	Store map[leadcredit.TenantID]*leadcredit.LeadCredit
 
-	// versions mirrors the stored row's version column. Mutators
-	// compare the in-aggregate version against this value to enforce
-	// the `WHERE version = $loaded` predicate.
+	// versions mirrors the stored version column to enforce WHERE version = $loaded.
 	versions map[leadcredit.TenantID]int64
 
-	// DrainedEvents captures every domain event pulled off the
-	// aggregate at UpsertWithVersion-commit time.
+	// DrainedEvents captures events pulled off the aggregate at commit time.
 	DrainedEvents []leadcredit.Event
 
-	// ForceConflictOnce flips the next UpsertWithVersion to return
-	// [leadcredit.ErrConflict] regardless of the version match.
-	// Drives the application-layer retry-loop test.
+	// ForceConflictOnce makes the next UpsertWithVersion return [leadcredit.ErrConflict]
+	// regardless of version match; drives the app-layer retry-loop test.
 	ForceConflictOnce bool
 }
 
-// NewFakeRepository returns an empty in-memory credit repository.
-// Single-test-owner — each test should construct its own instance;
-// do NOT share one fake across parallel tests (no internal sync).
+// NewFakeRepository returns an empty in-memory credit repository. Single-test-owner:
+// construct one per test; no internal sync.
 func NewFakeRepository() *FakeRepository {
 	return &FakeRepository{
 		Store:    make(map[leadcredit.TenantID]*leadcredit.LeadCredit),
@@ -80,15 +50,12 @@ func NewFakeRepository() *FakeRepository {
 	}
 }
 
-// Compile-time interface conformance gate. Drift in
-// [leadcredit.Repository] (a method renamed, signature changed)
-// breaks at build time before any test runs.
+// Compile-time interface conformance gate.
 var _ leadcredit.Repository = (*FakeRepository)(nil)
 
-// GetByTenant returns a freshly-hydrated snapshot of the stored row
-// or [leadcredit.ErrNotFound]. Hydrating fresh prevents callers'
-// mutations from leaking across calls — same shape as a real pgx-
-// backed read.
+// GetByTenant returns a freshly-hydrated snapshot of the stored row, or
+// [leadcredit.ErrNotFound]. Fresh hydration stops caller mutations leaking across
+// calls, matching a real pgx-backed read.
 func (r *FakeRepository) GetByTenant(
 	_ context.Context, id leadcredit.TenantID,
 ) (*leadcredit.LeadCredit, error) {
@@ -107,17 +74,11 @@ func (r *FakeRepository) GetByTenant(
 	return leadcredit.UnmarshalFromDB(snap), nil
 }
 
-// UpsertWithVersion either INSERTs a brand-new row (when no stored
-// version exists + the in-aggregate Version == 0) or UPDATEs the row
-// with the `WHERE version = $loaded` predicate enforced via map
-// lookup. Returns [leadcredit.ErrConflict] when:
-//
-//   - [FakeRepository.ForceConflictOnce] is set (knob consumes itself);
-//   - the in-aggregate version doesn't match the stored version;
-//   - INSERT path attempted with non-zero starting version.
-//
-// On success, persists the next-version snapshot + drains aggregate
-// events into [FakeRepository.DrainedEvents].
+// UpsertWithVersion INSERTs a new row (no stored version, in-aggregate Version == 0)
+// or UPDATEs under the WHERE version = $loaded predicate. Returns
+// [leadcredit.ErrConflict] when ForceConflictOnce is set (consumes itself), the
+// version mismatches, or an INSERT is attempted with a non-zero version. On success
+// persists the next-version snapshot and drains events into DrainedEvents.
 func (r *FakeRepository) UpsertWithVersion(
 	_ context.Context, l *leadcredit.LeadCredit,
 ) error {
@@ -128,15 +89,14 @@ func (r *FakeRepository) UpsertWithVersion(
 	}
 	stored, exists := r.versions[l.TenantID()]
 	if !exists {
-		// INSERT path — aggregate version must be 0.
+		// INSERT path: aggregate version must be 0.
 		if l.Version() != 0 {
 			return leadcredit.ErrConflict
 		}
 	} else if l.Version() != stored {
 		return leadcredit.ErrConflict
 	}
-	// Persist a fresh snapshot with version+1 so subsequent reads see
-	// the new state.
+	// Persist version+1 so subsequent reads see the new state.
 	snap := leadcredit.Snapshot{
 		TenantID:  l.TenantID(),
 		Balance:   l.Balance(),
@@ -150,10 +110,9 @@ func (r *FakeRepository) UpsertWithVersion(
 	return nil
 }
 
-// Snapshot satisfies the platformtest.TransactionalFake contract.
-// Captures the Store + versions maps + DrainedEvents + ForceConflictOnce
-// flag at the WithinTx entry point; the returned closure restores all
-// four on closure error so the fake models Postgres ROLLBACK semantics.
+// Snapshot satisfies platformtest.TransactionalFake. It captures Store, versions,
+// DrainedEvents, and ForceConflictOnce; the returned closure restores all four on
+// closure error, modeling Postgres ROLLBACK.
 func (r *FakeRepository) Snapshot() func() {
 
 	store := make(map[leadcredit.TenantID]*leadcredit.LeadCredit, len(r.Store))

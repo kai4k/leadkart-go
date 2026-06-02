@@ -1,25 +1,19 @@
-// Package quotation owns the [Quotation] aggregate — the proposal /
-// draft document that precedes an [order.Order]. Per BRD §4.8 the
-// informal name is "Kacha Bill"; quotation is the correct term.
+// Package quotation owns the [Quotation] aggregate — the proposal that
+// precedes an [order.Order] (BRD §4.8 "Kacha Bill").
 //
 // State machine (strict; no skips, no backtracking):
 //
 //	draft → revised* → approved (terminal-success)
 //	       ↘ rejected (terminal-failure)
 //
-// Quotation owns its own revision chain — every Revise call appends a
-// new revision tuple (items snapshot, note, revised-by, revised-at) to
-// the [Quotation.Revisions] slice. The TIP of that slice is the
-// "current" quotation; earlier entries are immutable history. Approval
-// freezes the tip; Order then COPIES the tip into its own
-// `confirmed_items` snapshot so the Order's state is independent of
-// any later Quotation lifecycle.
+// Each Revise appends a tuple to the revision chain; the tip is the
+// "current" quote, earlier entries are immutable history. Approval
+// freezes the tip, which Order then copies into its own confirmed_items
+// so Order state is independent of later Quotation changes.
 //
-// Per ADR 0063: separate aggregate from Order, not a child entity.
-// Quotation revisions are their own audit need; collapsing into Order
-// would force a JSON revision-history column that breaks the
-// "Order owns confirmed-state, Quotation owns proposal-state"
-// invariant separation.
+// ADR 0063: a separate aggregate, not a child of Order — revisions are
+// their own audit need, and merging would force a JSON history column
+// that breaks the Order-owns-confirmed / Quotation-owns-proposal split.
 package quotation
 
 import (
@@ -36,9 +30,8 @@ import (
 // Map to HTTP 422 at the port boundary.
 var ErrInvalid = errors.New("quotation: invalid")
 
-// ErrInvalidTransition is returned when a mutator is called against a
-// terminal state (approved / rejected) or against a non-precondition
-// state. Map to HTTP 409 Conflict.
+// ErrInvalidTransition is returned by a mutator called against a
+// terminal or non-precondition state. Map to HTTP 409 Conflict.
 var ErrInvalidTransition = errors.New("quotation: invalid state transition")
 
 // ID is a UUIDv7 minted at command-handler time.
@@ -50,9 +43,8 @@ func (id ID) IsZero() bool { return id == "" }
 // String returns the underlying UUID string.
 func (id ID) String() string { return string(id) }
 
-// CustomerLeadID references the source `crm.crm_leads` row this
-// quotation was raised against. Stored as a string to keep the
-// boundary clean (no Orders → CRM domain import).
+// CustomerLeadID references the source crm.crm_leads row. A string, not
+// a CRM type, to avoid an Orders → CRM domain import.
 type CustomerLeadID string
 
 // IsZero reports whether c is unset.
@@ -61,20 +53,19 @@ func (c CustomerLeadID) IsZero() bool { return c == "" }
 // String returns the underlying UUID string.
 func (c CustomerLeadID) String() string { return string(c) }
 
-// LineItem is a single product row on a quotation revision. Prices are
-// `int64 paise` per ADR 0061 (Stripe canon). Quantity is an integer
-// number of UNITS (pack-aware semantics live in the application layer).
+// LineItem is one product row on a revision. Prices are int64 paise
+// (ADR 0061); Quantity is in units (pack semantics live in app layer).
 type LineItem struct {
-	ProductID    string
-	SKU          string
-	Description  string
-	Quantity     int32
-	UnitMrpPaise int64
+	ProductID     string
+	SKU           string
+	Description   string
+	Quantity      int32
+	UnitMrpPaise  int64
 	UnitSalePaise int64
-	GstRateBps   int32 // basis points (12% = 1200) per inventory canon
+	GstRateBps    int32 // basis points (12% = 1200)
 }
 
-// Validate runs the per-item invariants. Used by ctor + mutators.
+// Validate enforces per-item invariants. Used by ctor + mutators.
 func (li LineItem) Validate() error {
 	if li.ProductID == "" {
 		return fmt.Errorf("%w: line.product_id required", ErrInvalid)
@@ -89,9 +80,8 @@ func (li LineItem) Validate() error {
 		return fmt.Errorf("%w: line.unit_sale_paise must be positive", ErrInvalid)
 	}
 	if li.UnitMrpPaise > 0 && li.UnitSalePaise > li.UnitMrpPaise {
-		// Sale > MRP is a regulatory violation under DPCO; reject at
-		// the boundary so the front-end shows a clear error rather
-		// than letting it ride through Approval.
+		// Sale > MRP violates DPCO; reject at the boundary so it never
+		// rides through to Approval.
 		return fmt.Errorf("%w: line.unit_sale_paise (%d) exceeds line.unit_mrp_paise (%d)",
 			ErrInvalid, li.UnitSalePaise, li.UnitMrpPaise)
 	}
@@ -103,18 +93,18 @@ func (li LineItem) Validate() error {
 
 // Revision is one tuple in the quotation's history chain.
 type Revision struct {
-	Number          int64 // 1-indexed; tip is len(Revisions)
-	Items           []LineItem
-	Note            string
-	RevisedAt       time.Time
+	Number              int64 // 1-indexed
+	Items               []LineItem
+	Note                string
+	RevisedAt           time.Time
 	RevisedByMembership membership.ID
 }
 
 // State is the lifecycle position of the Quotation aggregate.
 type State string
 
-// Closed catalogue. Wire-stable lowercase strings — match the CHECK
-// constraint on orders.quotations.state in the init migration.
+// Closed catalogue. Wire-stable lowercase; must match the state CHECK
+// constraint on orders.quotations.
 const (
 	StateDraft    State = "draft"
 	StateApproved State = "approved"
@@ -136,8 +126,8 @@ func (s State) IsValid() bool {
 	return false
 }
 
-// ParseState turns an untrusted string into a [State] or returns
-// [ErrInvalid] wrapped with the bad value.
+// ParseState parses an untrusted string into a [State], or returns
+// [ErrInvalid] wrapping the bad value.
 func ParseState(raw string) (State, error) {
 	s := State(raw)
 	if !s.IsValid() {
@@ -146,22 +136,22 @@ func ParseState(raw string) (State, error) {
 	return s, nil
 }
 
-// Quotation is the aggregate root. One per-tenant row in
-// `orders.quotations`; revisions live in `orders.quotation_revisions`
-// keyed by (tenant_id, quotation_id, number).
+// Quotation is the aggregate root. One row in orders.quotations;
+// revisions live in orders.quotation_revisions keyed by
+// (tenant_id, quotation_id, number).
 type Quotation struct {
-	id              ID
-	tenantID        tenant.ID
-	customerLeadID  CustomerLeadID
-	state           State
-	revisions       []Revision
-	approvedAt      *time.Time
+	id                     ID
+	tenantID               tenant.ID
+	customerLeadID         CustomerLeadID
+	state                  State
+	revisions              []Revision
+	approvedAt             *time.Time
 	approvedByMembershipID *membership.ID
-	rejectedAt      *time.Time
+	rejectedAt             *time.Time
 	rejectedByMembershipID *membership.ID
-	rejectionReason string
-	createdAt       time.Time
-	createdByMembershipID membership.ID
+	rejectionReason        string
+	createdAt              time.Time
+	createdByMembershipID  membership.ID
 
 	events []Event
 }
@@ -177,9 +167,8 @@ type NewInput struct {
 	Now                   time.Time
 }
 
-// New constructs a draft Quotation with the seed (revision 1). Every
-// invariant is enforced at the boundary — once New returns nil error,
-// the aggregate is valid by construction.
+// New constructs a draft Quotation seeded with revision 1. A nil error
+// means the aggregate is valid by construction.
 func New(in NewInput) (*Quotation, error) {
 	if in.ID.IsZero() {
 		return nil, fmt.Errorf("%w: id required", ErrInvalid)
@@ -209,11 +198,11 @@ func New(in NewInput) (*Quotation, error) {
 	copy(itemsCopy, in.InitialItems)
 
 	q := &Quotation{
-		id:                    in.ID,
-		tenantID:              in.TenantID,
-		customerLeadID:        in.CustomerLeadID,
-		state:                 StateDraft,
-		revisions:             []Revision{{
+		id:             in.ID,
+		tenantID:       in.TenantID,
+		customerLeadID: in.CustomerLeadID,
+		state:          StateDraft,
+		revisions: []Revision{{
 			Number:              1,
 			Items:               itemsCopy,
 			Note:                strings.TrimSpace(in.InitialNote),
@@ -250,8 +239,8 @@ type Snapshot struct {
 	CreatedByMembershipID  membership.ID
 }
 
-// UnmarshalFromDB rehydrates the aggregate without re-validating —
-// the DB schema is the source of truth at this point.
+// UnmarshalFromDB rehydrates the aggregate without re-validating; the
+// DB is the source of truth here.
 func UnmarshalFromDB(s Snapshot) *Quotation {
 	revs := make([]Revision, len(s.Revisions))
 	copy(revs, s.Revisions)
@@ -285,45 +274,41 @@ func (q *Quotation) CustomerLeadID() CustomerLeadID { return q.customerLeadID }
 // State returns the current lifecycle state.
 func (q *Quotation) State() State { return q.state }
 
-// Revisions returns a defensive copy of the revision chain. The tip is
-// the LAST element.
+// Revisions returns a defensive copy of the chain; the tip is last.
 func (q *Quotation) Revisions() []Revision {
 	out := make([]Revision, len(q.revisions))
 	copy(out, q.revisions)
 	return out
 }
 
-// CurrentRevision returns the tip revision (the latest set of items).
-// Quotation construction guarantees at least one revision exists.
+// CurrentRevision returns the tip. Construction guarantees len >= 1.
 func (q *Quotation) CurrentRevision() Revision { return q.revisions[len(q.revisions)-1] }
 
-// ApprovedAt returns the approval timestamp + actor, or nil pointer
-// when not approved.
-func (q *Quotation) ApprovedAt() *time.Time            { return q.approvedAt }
+// ApprovedAt returns the approval timestamp, or nil when not approved.
+func (q *Quotation) ApprovedAt() *time.Time { return q.approvedAt }
 
-// ApprovedByMembershipID returns the actor who approved or nil pointer.
+// ApprovedByMembershipID returns the approver, or nil.
 func (q *Quotation) ApprovedByMembershipID() *membership.ID { return q.approvedByMembershipID }
 
-// RejectedAt returns the rejection timestamp + actor + reason, or
-// nil pointer when not rejected.
-func (q *Quotation) RejectedAt() *time.Time            { return q.rejectedAt }
+// RejectedAt returns the rejection timestamp, or nil when not rejected.
+func (q *Quotation) RejectedAt() *time.Time { return q.rejectedAt }
 
-// RejectedByMembershipID returns the actor who rejected.
+// RejectedByMembershipID returns the rejector, or nil.
 func (q *Quotation) RejectedByMembershipID() *membership.ID { return q.rejectedByMembershipID }
 
-// RejectionReason returns the operator-supplied reason on terminal-fail.
-func (q *Quotation) RejectionReason() string           { return q.rejectionReason }
+// RejectionReason returns the operator-supplied reason on reject.
+func (q *Quotation) RejectionReason() string { return q.rejectionReason }
 
-// CreatedAt returns the row-creation timestamp.
-func (q *Quotation) CreatedAt() time.Time              { return q.createdAt }
+// CreatedAt returns the creation timestamp.
+func (q *Quotation) CreatedAt() time.Time { return q.createdAt }
 
 // CreatedByMembershipID returns the actor who raised the quote.
 func (q *Quotation) CreatedByMembershipID() membership.ID { return q.createdByMembershipID }
 
 // ----- State transitions ----------------------------------------------------
 
-// ReviseInput is the input shape for [Quotation.Revise]. Note is
-// optional but recommended — appears on the audit trail.
+// ReviseInput is the input for [Quotation.Revise]. Note is optional and
+// shows up on the audit trail.
 type ReviseInput struct {
 	Items               []LineItem
 	Note                string
@@ -331,9 +316,8 @@ type ReviseInput struct {
 	Now                 time.Time
 }
 
-// Revise appends a new revision tuple with the supplied items snapshot.
-// Rejected against terminal states; the items must be non-empty + each
-// item must pass [LineItem.Validate].
+// Revise appends a revision with the supplied items. Rejected in
+// terminal states; items must be non-empty and each [LineItem.Validate].
 func (q *Quotation) Revise(in ReviseInput) error {
 	if q.state.IsTerminal() {
 		return fmt.Errorf("%w: cannot revise quotation in state %s", ErrInvalidTransition, q.state)
@@ -375,13 +359,12 @@ func (q *Quotation) Revise(in ReviseInput) error {
 	return nil
 }
 
-// Approve flips state to approved, freezing the tip revision as the
-// authoritative items snapshot. Idempotent on self (already-approved
-// returns nil + emits no event). Rejected against terminal-fail
-// (rejected) state.
+// Approve flips state to approved, freezing the tip as the
+// authoritative snapshot. Idempotent (re-approve is a no-op, no event);
+// errors if already rejected.
 func (q *Quotation) Approve(approverID membership.ID, now time.Time) error {
 	if q.state == StateApproved {
-		return nil // idempotent
+		return nil
 	}
 	if q.state == StateRejected {
 		return fmt.Errorf("%w: cannot approve rejected quotation", ErrInvalidTransition)
@@ -406,11 +389,11 @@ func (q *Quotation) Approve(approverID membership.ID, now time.Time) error {
 	return nil
 }
 
-// Reject flips state to rejected with the supplied reason. Idempotent
-// on self. Rejected against terminal-success (approved) state.
+// Reject flips state to rejected with the given reason. Idempotent;
+// errors if already approved.
 func (q *Quotation) Reject(rejectorID membership.ID, reason string, now time.Time) error {
 	if q.state == StateRejected {
-		return nil // idempotent
+		return nil
 	}
 	if q.state == StateApproved {
 		return fmt.Errorf("%w: cannot reject approved quotation", ErrInvalidTransition)
@@ -430,20 +413,19 @@ func (q *Quotation) Reject(rejectorID membership.ID, reason string, now time.Tim
 	q.rejectedByMembershipID = &rejectorID
 	q.rejectionReason = reason
 	q.recordEvent(RejectedEvent{
-		QuotationID:           q.id,
-		TenantID:              q.tenantID,
-		Reason:                reason,
-		RejectedAt:            now,
-		RejectedByMembership:  rejectorID,
+		QuotationID:          q.id,
+		TenantID:             q.tenantID,
+		Reason:               reason,
+		RejectedAt:           now,
+		RejectedByMembership: rejectorID,
 	})
 	return nil
 }
 
 // ----- Events --------------------------------------------------------------
 
-// PullEvents drains + returns the recorded domain events. The repo
-// calls this inside the persist tx so events are saved atomically with
-// the state change.
+// PullEvents drains and returns recorded events. The repo calls this
+// inside the persist tx so events commit atomically with the state.
 func (q *Quotation) PullEvents() []Event {
 	if len(q.events) == 0 {
 		return nil

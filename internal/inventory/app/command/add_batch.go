@@ -13,14 +13,10 @@ import (
 	"github.com/leadkart/leadkart-go/internal/inventory/domain/product"
 )
 
-// AddBatchCommand carries the validated input for adding a new Batch to
-// a Product. Defensive read of the parent Product up front to surface
-// 404 cleanly (the composite-FK would otherwise return a generic FK
-// violation).
+// AddBatchCommand is the validated input for adding a Batch to a Product.
 //
-// TenantID is the caller's tenant scope (injected from JWT context by
-// the HTTP layer). Per ADR 0062 (TDL canon): tenantID flows through
-// explicit command fields, not via context smuggling.
+// TenantID is the caller's tenant scope; per ADR 0062 (TDL canon) it flows
+// through an explicit field, never via context smuggling.
 type AddBatchCommand struct {
 	TenantID                   tenant.ID
 	ProductID                  product.ID
@@ -39,24 +35,14 @@ type AddBatchResult struct {
 	BatchID batch.ID
 }
 
-// AddBatchHandler — resolves parent Product, constructs Batch, persists
-// — ALL inside ONE UoW transaction.
+// AddBatchHandler resolves the parent Product, constructs the Batch, and
+// persists, all inside one UoW transaction.
 //
-// Per ADR 0061 amendment 1 (H4 race fix): the prior shape ran
-// `products.GetByID` and `batches.Add` as TWO separate transactions,
-// leaving a window where the parent product could be soft-deleted
-// between the load and the batch insert. The composite FK
-// `(product_id, tenant_id) → products(id, tenant_id)` is satisfied by
-// the soft-deleted row's PK so the orphan write succeeded — yielding a
-// live batch hanging off a deleted product.
-//
-// Fix: wrap both in `uow.WithinTx`. The load runs inside the tx; the
-// re-check `p.IsDeleted()` runs against the snapshot the same tx will
-// see; the batch insert joins the tx via `pg.TxFromContext`. Any
-// concurrent SoftDelete that committed BEFORE this tx started is
-// visible; any concurrent SoftDelete in flight ALONGSIDE this tx serialises
-// on the products row's xmin (Postgres MVCC — the loser surfaces as a
-// fresh GetByID returning the deleted row on its retry).
+// Per ADR 0061 amendment 1 (H4 race fix): running GetByID and Add as separate
+// transactions left a window where the parent could be soft-deleted between
+// load and insert, and the composite FK still accepted the orphan write.
+// Wrapping both in uow.WithinTx closes it — load, re-check, and insert share
+// one tx, so a concurrent SoftDelete serialises on the products row (MVCC).
 type AddBatchHandler struct {
 	uow        pg.UnitOfWork
 	products   product.Repository
@@ -65,14 +51,9 @@ type AddBatchHandler struct {
 	newBatchID func() batch.ID
 }
 
-// NewAddBatchHandler wires the handler. `now` is the explicit time
-// source per the clock-injection refactor — composition root wires
-// `time.Now`; tests inject a fixed-time closure. Nil → time.Now.
-//
-// newBatchID is the aggregate-ID factory per the
-// `TestArch_HandlersInjectIDFactory` discipline. Production passes
-// `func() batch.ID { return batch.ID(ids.NewV7().String()) }`;
-// tests inject a deterministic counter so the minted ID is pinnable.
+// NewAddBatchHandler wires the handler. now is the injected clock (nil →
+// time.Now). newBatchID is the aggregate-ID factory required by
+// TestArch_HandlersInjectIDFactory; tests inject a deterministic one.
 func NewAddBatchHandler(uow pg.UnitOfWork, products product.Repository, batches batch.Repository, now func() time.Time, newBatchID func() batch.ID) AddBatchHandler {
 	if newBatchID == nil {
 		panic("command: NewAddBatchHandler newBatchID required")
@@ -83,14 +64,10 @@ func NewAddBatchHandler(uow pg.UnitOfWork, products product.Repository, batches 
 	return AddBatchHandler{uow: uow, products: products, batches: batches, now: now, newBatchID: newBatchID}
 }
 
-// Handle adds a batch to the given product inside one tenant-scoped UoW.
-//
-// Returns product.ErrNotFound if the parent doesn't exist (or is
-// soft-deleted) in the caller's tenant scope — including the
-// soft-deleted-between-read-and-write race per ADR 0061 amendment 1.
-// Returns batch.ErrInvalid (wrapped) on spec failure.
-// Returns batch.ErrBatchNumberTaken on (product_id, batch_number)
-// unique-violation.
+// Handle adds a batch to the product inside one tenant-scoped UoW. Returns
+// product.ErrNotFound for a missing or soft-deleted parent (including the
+// read-then-write race per ADR 0061 amendment 1), batch.ErrInvalid on spec
+// failure, batch.ErrBatchNumberTaken on (product_id, batch_number) collision.
 func (h AddBatchHandler) Handle(ctx context.Context, cmd AddBatchCommand) (AddBatchResult, error) {
 	if cmd.TenantID.IsZero() {
 		return AddBatchResult{}, errors.New("add_batch: tenant id required")

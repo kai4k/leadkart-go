@@ -12,18 +12,9 @@ import (
 	"github.com/leadkart/leadkart-go/internal/common/cache"
 )
 
-// SearchView is the omni-search response (GET /v1/search?q=).
-//
-// Per ADR 0040 — multi-stage retrieval funnel: stage 1 is parallel
-// pg_trgm fanout across resource types; stage 2 is per-resource
-// similarity() ranking. Cmd+K UX returns categorized buckets so the
-// frontend can render groups separately.
-//
-// Currently surfaces persons + tenants (operator-only path). Future
-// extensions: users (per-tenant via memberships JOIN), leads (Phase 2).
-//
-// HasPartial = true means ≥1 sub-query exceeded the per-query
-// timeout. Frontend renders what's returned + signals partial data.
+// SearchView is the omni-search response (GET /v1/search?q=, ADR 0040).
+// Parallel pg_trgm fanout across resource types; operator-only path.
+// HasPartial = true when ≥1 sub-query exceeded its per-category timeout.
 type SearchView struct {
 	Persons    []SearchPersonHit
 	Tenants    []SearchTenantHit
@@ -50,50 +41,38 @@ type SearchTenantHit struct {
 }
 
 // SearchQuery carries the validated request inputs.
-//
-// Q is bound to [2, 100] chars at the HTTP boundary. PerCategoryLimit
-// caps the per-resource result count (defaults to 5).
+// Q is clamped to [2, 100] chars; PerCategoryLimit defaults to 5.
 type SearchQuery struct {
-	Q                 string
-	PerCategoryLimit  int
-	IncludePersons    bool
-	IncludeTenants    bool
+	Q                string
+	PerCategoryLimit int
+	IncludePersons   bool
+	IncludeTenants   bool
 }
 
 // ErrSearchQueryTooShort surfaces when the caller's query string
 // has fewer than 2 trimmed characters. HTTP maps to 400.
 var ErrSearchQueryTooShort = errors.New("search: query too short (min 2 chars)")
 
-// Search parameter clamps. Closed-set per ADR 0040 — bounded so
-// cache key space is bounded.
+// Search parameter clamps. Closed-set per ADR 0040 (bounded cache key space).
 const (
 	searchQueryMinLen          = 2
 	searchQueryMaxLen          = 100
 	searchDefaultCategoryLimit = 5
 	searchMaxCategoryLimit     = 20
-	// Per-category timeout. Cmd+K UX needs sub-second total response
-	// time; if one resource search blows past this, return partial
-	// results rather than blocking the entire response.
+	// Per-category timeout; exceeded sub-searches yield HasPartial=true.
 	searchPerCategoryTimeout = 200 * time.Millisecond
 )
 
-// SearchIndex is the consumer-defined contract for the parallel
-// pg_trgm fanout. Defined here (next to its sole consumer
-// [SearchHandler]) per Cheney "accept interfaces"; concrete pg-backed
-// implementation lives in internal/identity/adapters/ where db.* is
-// permitted. This layer carries NO pgx, pgxpool, or sqlc imports.
-//
-// Each method runs under platform-scope tx with the supplied
-// per-category timeout. On context.DeadlineExceeded the implementation
-// MUST return ([], context.DeadlineExceeded) — the handler turns that
-// into HasPartial=true rather than a hard failure.
+// SearchIndex is the consumer-defined interface for parallel pg_trgm fanout
+// (ADR 0047: no pgx/pgxpool/sqlc in app/). Each method runs under
+// platform-scope tx; on context.DeadlineExceeded must return (nil, DeadlineExceeded)
+// so the handler can set HasPartial=true instead of failing.
 type SearchIndex interface {
 	SearchPersons(ctx context.Context, q string, limit int32) ([]SearchPersonHit, error)
 	SearchTenants(ctx context.Context, q string, limit int32) ([]SearchTenantHit, error)
 }
 
-// SearchHandler depends on [SearchIndex] only — no pgxpool, no pgx,
-// no sqlc. Boundary discipline per ADR 0047.
+// SearchHandler depends on [SearchIndex] only (ADR 0047).
 type SearchHandler struct {
 	index SearchIndex
 }
@@ -106,22 +85,9 @@ func NewSearchHandler(index SearchIndex) SearchHandler {
 	return SearchHandler{index: index}
 }
 
-// Handle runs the fanout. errgroup coordinates the parallel sub-
-// queries; each carries a per-category timeout so a single slow
-// sub-search doesn't block the whole response.
-//
-// Order of operations:
-//
-//  1. Validate q (length 2-100 chars; reject early on too-short).
-//  2. Clamp per-category limit.
-//  3. Fan out (persons + tenants) in parallel.
-//  4. Each sub-query has its own timeout-bounded ctx; on timeout the
-//     handler returns partial results with HasPartial=true.
-//  5. Compose + return.
-//
-// Caller (HTTP layer) is responsible for converting timeouts /
-// partial states to the wire-shape — this handler just signals via
-// HasPartial.
+// Handle runs the parallel fanout. Validates and clamps q and limit,
+// fans out to persons + tenants concurrently; DeadlineExceeded on any
+// sub-query sets HasPartial=true rather than failing the whole call.
 func (h SearchHandler) Handle(ctx context.Context, q SearchQuery) (SearchView, error) {
 	q.Q = strings.TrimSpace(q.Q)
 	if len(q.Q) < searchQueryMinLen {
@@ -141,7 +107,14 @@ func (h SearchHandler) Handle(ctx context.Context, q SearchQuery) (SearchView, e
 	//nolint:gosec // limit clamped at 20 above
 	limit32 := int32(limit)
 
-	view := SearchView{}
+	// Each goroutine writes only its own locals; view assembled after Wait.
+	// (Earlier version mutated a shared SearchView, racing on HasPartial.)
+	var (
+		persons        []SearchPersonHit
+		tenants        []SearchTenantHit
+		personsPartial bool
+		tenantsPartial bool
+	)
 
 	g, gctx := errgroup.WithContext(ctx)
 	if q.IncludePersons {
@@ -150,13 +123,13 @@ func (h SearchHandler) Handle(ctx context.Context, q SearchQuery) (SearchView, e
 			defer cancel()
 			rows, err := h.index.SearchPersons(subCtx, q.Q, limit32)
 			if errors.Is(err, context.DeadlineExceeded) {
-				view.HasPartial = true
+				personsPartial = true
 				return nil
 			}
 			if err != nil {
 				return fmt.Errorf("search: persons: %w", err)
 			}
-			view.Persons = rows
+			persons = rows
 			return nil
 		})
 	}
@@ -167,13 +140,13 @@ func (h SearchHandler) Handle(ctx context.Context, q SearchQuery) (SearchView, e
 			defer cancel()
 			rows, err := h.index.SearchTenants(subCtx, q.Q, limit32)
 			if errors.Is(err, context.DeadlineExceeded) {
-				view.HasPartial = true
+				tenantsPartial = true
 				return nil
 			}
 			if err != nil {
 				return fmt.Errorf("search: tenants: %w", err)
 			}
-			view.Tenants = rows
+			tenants = rows
 			return nil
 		})
 	}
@@ -181,12 +154,15 @@ func (h SearchHandler) Handle(ctx context.Context, q SearchQuery) (SearchView, e
 	if err := g.Wait(); err != nil {
 		return SearchView{}, err
 	}
-	return view, nil
+	return SearchView{
+		Persons:    persons,
+		Tenants:    tenants,
+		HasPartial: personsPartial || tenantsPartial,
+	}, nil
 }
 
 // CachedSearchHandler wraps SearchHandler with cache.SearchResultsTTL.
-// Cache key includes the normalized query + bitmask of included
-// categories + limit (full inputs → cache key collision avoidance).
+// Cache key includes normalized query, category flags, and limit.
 type CachedSearchHandler struct {
 	facade *cache.Facade[searchCacheKey, SearchView]
 }
@@ -200,9 +176,7 @@ type searchCacheKey struct {
 	PerCategoryLimit int
 }
 
-// NewCachedSearchHandler builds the facade. SearchResultsTTL = 30s
-// L1 / 5min L2 + ±10% jitter per ADR 0042 — typing burst tolerant,
-// stampede-protected.
+// NewCachedSearchHandler builds the cache facade (ADR 0042: 30s L1 / 5min L2 + jitter).
 func NewCachedSearchHandler(inner SearchHandler, hc *cache.HybridCache) CachedSearchHandler {
 	if hc == nil {
 		panic("query: NewCachedSearchHandler hybrid cache required")
@@ -210,9 +184,7 @@ func NewCachedSearchHandler(inner SearchHandler, hc *cache.HybridCache) CachedSe
 	facade := cache.NewFacade[searchCacheKey, SearchView](
 		hc, "search",
 		func(k searchCacheKey) string {
-			// Include the include-flags in the key so a request that
-			// asks for persons-only doesn't return a tenants-included
-			// cached entry (or vice versa).
+			// Include category flags in the key to prevent cross-category cache hits.
 			persons := "0"
 			if k.IncludePersons {
 				persons = "1"
@@ -237,9 +209,7 @@ func NewCachedSearchHandler(inner SearchHandler, hc *cache.HybridCache) CachedSe
 	return CachedSearchHandler{facade: facade}
 }
 
-// Handle dispatches through the cache facade. The HTTP boundary
-// must validate q (length + non-empty) before calling — the
-// underlying SearchHandler revalidates as a belt-and-braces.
+// Handle dispatches through the cache facade; revalidates q as belt-and-braces.
 func (h CachedSearchHandler) Handle(ctx context.Context, q SearchQuery) (SearchView, error) {
 	q.Q = strings.TrimSpace(q.Q)
 	if len(q.Q) < searchQueryMinLen {

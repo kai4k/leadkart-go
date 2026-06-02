@@ -1,5 +1,5 @@
 // Package audit holds the cross-cutting audit-log writer that persists
-// to `buildingblocks.audit_log_entry` per messaging.md "Audit log
+// to `common.audit_log_entry` per messaging.md "Audit log
 // middleware — commands only" + data-retention.md "Audit log retention".
 //
 // The writer is consumed by both the Watermill router's
@@ -25,7 +25,7 @@ import (
 	"github.com/leadkart/leadkart-go/internal/common/ids"
 )
 
-// Entry is the row shape of buildingblocks.audit_log_entry — used by
+// Entry is the row shape of common.audit_log_entry — used by
 // both [Writer.Write] (caller leaves ID zero; writer generates) and
 // [Reader] (read-back populates ID from the row).
 //
@@ -128,7 +128,7 @@ func (w *Writer) Write(ctx context.Context, e Entry) error {
 	}
 
 	_, err := w.pool.Exec(ctx, `
-		INSERT INTO buildingblocks.audit_log_entry
+		INSERT INTO common.audit_log_entry
 			(id, action, user_id, tenant_id, correlation_id,
 			 occurred_at_utc, duration_ms, succeeded, failure_reason, payload,
 			 act_operator_id, act_session_id, act_reason)
@@ -154,7 +154,7 @@ func (w *Writer) Write(ctx context.Context, e Entry) error {
 		// every authenticated request the moment the audit table /
 		// Postgres has a transient blip — which is the exact failure
 		// mode the doctrine forbids. Caller can inspect the WARN log
-		// + the buildingblocks.audit_log_entry row count metric to
+		// + the common.audit_log_entry row count metric to
 		// detect outage; it MUST NOT branch on the return value.
 		w.log.WarnContext(ctx, "audit: write failed (swallowed)",
 			"action", e.Action, "err", err)

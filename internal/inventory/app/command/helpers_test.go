@@ -14,15 +14,12 @@ import (
 	"github.com/leadkart/leadkart-go/internal/inventory/domain/stockmovement"
 )
 
-// Test-local aggregate-ID factories — mirror the production wiring
-// shape (composition root passes `func() <T>.ID { ... }`).
+// Test-local aggregate-ID factories mirroring the production wiring shape.
 func testNewProductID() product.ID        { return product.ID(ids.NewV7().String()) }
 func testNewBatchID() batch.ID            { return batch.ID(ids.NewV7().String()) }
 func testNewMovementID() stockmovement.ID { return stockmovement.ID(ids.NewV7().String()) }
 
-// fixedNow is the deterministic instant inventory command tests pass to
-// every domain factory + mutator. Replaces the prior package-global
-// clock per the clock-injection refactor.
+// fixedNow is the deterministic instant tests pass to every factory and mutator.
 var fixedNow = time.Date(2026, 5, 24, 12, 0, 0, 0, time.UTC)
 
 func newTenantID(t *testing.T) tenant.ID {
@@ -35,8 +32,8 @@ func newMembershipID(t *testing.T) membership.ID {
 	return membership.ID(ids.NewV7().String())
 }
 
-// seedProduct creates + Adds a fresh Product to repo, returning it. SKU
-// is supplied per call so tests can drive ErrSKUTaken paths.
+// seedProduct creates and Adds a Product; SKU is per-call so tests can drive
+// ErrSKUTaken paths.
 func seedProduct(t *testing.T, repo *producttest.FakeRepository, tid tenant.ID, actor membership.ID, sku string) *product.Product {
 	t.Helper()
 	p, err := product.New(
@@ -58,8 +55,8 @@ func seedProduct(t *testing.T, repo *producttest.FakeRepository, tid tenant.ID, 
 	return p
 }
 
-// seedBatch creates + Adds a fresh live Batch to repo for the given
-// product. Batch starts with quantity_on_hand=0.
+// seedBatch creates and Adds a live Batch for the product, starting at
+// quantity_on_hand=0.
 func seedBatch(t *testing.T, repo *batchtest.FakeRepository, p *product.Product, actor membership.ID, batchNumber string) *batch.Batch {
 	t.Helper()
 	mfg := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)

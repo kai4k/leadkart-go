@@ -1,13 +1,9 @@
 // Package query holds Identity read-side query handlers.
 //
-// Mirrors the canonical TDL Wild Workouts `app/query` layout — query
-// handlers are concrete structs with `Handle(ctx, query) (Result, error)`
-// signatures, aggregated under [identity.Application.Queries] in the
-// facade and dispatched directly by HTTP/event ports.
-//
-// Queries NEVER mutate. They project repository data into wire-friendly
-// shapes; aggregates may be read but their domain methods (state
-// transitions) MUST not be invoked here.
+// TDL Wild Workouts layout: each handler is a concrete struct with
+// Handle(ctx, query) (Result, error), aggregated under
+// identity.Application.Queries and dispatched by HTTP/event ports.
+// Handlers project; they never call domain state-transition methods.
 package query
 
 import (
@@ -22,23 +18,16 @@ import (
 
 // ----- ListSessionsQuery ----------------------------------------------------
 
-// ListSessionsQuery returns the active refresh-token families for the
-// supplied PersonID. A "session" in the wire vocabulary is one Family
-// (one device-bound refresh-token chain).
-//
-// PersonID arrives from the verified JWT Subject claim — never from the
-// request body. The HTTP port populates it after RequireAuth.
+// ListSessionsQuery returns active refresh-token families for PersonID.
+// A "session" in the wire vocab is one Family (one device-bound chain).
+// PersonID comes from the verified JWT Subject; HTTP port sets it after RequireAuth.
 type ListSessionsQuery struct {
 	PersonID person.ID
 }
 
 // SessionView is the wire-shape of a single active session.
-//
-// FamilyID + DeviceLabel + CreatedAt + LastUsedAt are the four fields a
-// security-conscious user reviews ("which devices have access to my
-// account?") per Auth0 / Okta / GitHub session-management UI canon.
-//
-// Tokens / hashes are NEVER exposed — the caller receives metadata only.
+// Exposes metadata only (FamilyID, DeviceLabel, timestamps); tokens and
+// hashes are never included.
 type SessionView struct {
 	FamilyID    string
 	DeviceLabel string
@@ -61,11 +50,8 @@ func NewListSessionsHandler(families refreshtoken.Repository) ListSessionsHandle
 	return ListSessionsHandler{families: families}
 }
 
-// Handle returns the active sessions for PersonID, oldest first (matches
-// the repository's ListActiveForPerson ORDER BY created_at).
-//
-// Empty result is NOT an error — a freshly-anonymised user has no active
-// sessions but the query still succeeds.
+// Handle returns active sessions for PersonID, oldest first.
+// Empty result is not an error (e.g. freshly-anonymised user).
 func (h ListSessionsHandler) Handle(ctx context.Context, q ListSessionsQuery) ([]SessionView, error) {
 	if q.PersonID.IsZero() {
 		return nil, errors.New("list_sessions: person id required")

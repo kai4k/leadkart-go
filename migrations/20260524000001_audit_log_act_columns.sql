@@ -18,7 +18,7 @@
 -- +goose Up
 -- +goose StatementBegin
 
-ALTER TABLE buildingblocks.audit_log_entry
+ALTER TABLE common.audit_log_entry
     ADD COLUMN act_operator_id uuid NULL,
     ADD COLUMN act_session_id  uuid NULL,
     ADD COLUMN act_reason      text NULL;
@@ -28,20 +28,20 @@ ALTER TABLE buildingblocks.audit_log_entry
 -- size proportional to actual impersonation usage (most rows have
 -- NULL act_* columns).
 CREATE INDEX idx_audit_act_operator_occurred
-    ON buildingblocks.audit_log_entry (act_operator_id, occurred_at_utc DESC)
+    ON common.audit_log_entry (act_operator_id, occurred_at_utc DESC)
     WHERE act_operator_id IS NOT NULL;
 
 -- Per-session index for "show me every action inside session X".
 -- Same partial-index discipline.
 CREATE INDEX idx_audit_act_session_occurred
-    ON buildingblocks.audit_log_entry (act_session_id, occurred_at_utc DESC)
+    ON common.audit_log_entry (act_session_id, occurred_at_utc DESC)
     WHERE act_session_id IS NOT NULL;
 
-COMMENT ON COLUMN buildingblocks.audit_log_entry.act_operator_id IS
+COMMENT ON COLUMN common.audit_log_entry.act_operator_id IS
     'RFC 8693 act.sub — the original operator who initiated the impersonation session. NULL for non-impersonation rows.';
-COMMENT ON COLUMN buildingblocks.audit_log_entry.act_session_id IS
+COMMENT ON COLUMN common.audit_log_entry.act_session_id IS
     'Impersonation session ID — joins to the impersonation store (Redis). NULL for non-impersonation rows.';
-COMMENT ON COLUMN buildingblocks.audit_log_entry.act_reason IS
+COMMENT ON COLUMN common.audit_log_entry.act_reason IS
     'Denormalised reason from the impersonation session — captured at-rest for forensic queryability without needing to re-resolve the session record. NULL for non-impersonation rows.';
 
 -- +goose StatementEnd
@@ -49,10 +49,10 @@ COMMENT ON COLUMN buildingblocks.audit_log_entry.act_reason IS
 -- +goose Down
 -- +goose StatementBegin
 
-DROP INDEX IF EXISTS buildingblocks.idx_audit_act_session_occurred;
-DROP INDEX IF EXISTS buildingblocks.idx_audit_act_operator_occurred;
+DROP INDEX IF EXISTS common.idx_audit_act_session_occurred;
+DROP INDEX IF EXISTS common.idx_audit_act_operator_occurred;
 
-ALTER TABLE buildingblocks.audit_log_entry
+ALTER TABLE common.audit_log_entry
     DROP COLUMN IF EXISTS act_reason,
     DROP COLUMN IF EXISTS act_session_id,
     DROP COLUMN IF EXISTS act_operator_id;

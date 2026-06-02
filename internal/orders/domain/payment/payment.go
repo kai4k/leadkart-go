@@ -1,28 +1,17 @@
-// Package payment owns the [Payment] aggregate — the immutable
-// receipt for a single payment event against an order. Per BRD §6.4 +
-// ADR 0063.
+// Package payment owns the [Payment] aggregate: the immutable receipt for a
+// single payment event against an order (BRD §6.4, ADR 0063).
 //
-// Three kinds, distinguished by [Kind]:
-//
-//   - "token" — the upfront good-faith deposit at order confirmation
-//     time (BRD §6.4 step 4 — TokenPaymentReceived).
-//   - "full" — the balance payment at completion time (step 10 —
-//     FullPaymentReceived).
-//   - "refund" — money returned to the customer post-cancellation
-//     (linked to a [creditnote.CreditNote] for the financial audit
-//     chain).
+// Kinds (see [Kind]): "token" (upfront deposit, BRD §6.4 step 4), "full"
+// (balance at completion, step 10), "refund" (returned post-cancellation,
+// linked to a [creditnote.CreditNote] for the audit chain).
 //
 // Invariants:
-//
-//   - APPEND-ONLY. Each payment is its own row; the Order's
-//     `paid_amount` is the derived sum of token + full payments minus
-//     refunds.
-//   - Idempotency via the (tenant_id, external_reference) partial
-//     unique index when ExternalReference is set — prevents
-//     double-recording of the SAME real-world payment (e.g. webhook
-//     retried). When ExternalReference is empty (manual entry), no
-//     idempotency check fires; the operator is trusted to not enter
-//     the same payment twice.
+//   - Append-only. Each payment is its own row; Order.paid_amount is the
+//     derived sum of token + full minus refunds.
+//   - Idempotency via the (tenant_id, external_reference) partial unique index
+//     when ExternalReference is set — guards against double-recording the same
+//     real-world payment (e.g. retried webhook). Empty ExternalReference
+//     (manual entry) bypasses the check; the operator is trusted.
 package payment
 
 import (
@@ -57,9 +46,8 @@ const (
 	KindToken Kind = "token"
 	// KindFull — balance payment at completion.
 	KindFull Kind = "full"
-	// KindRefund — refund to customer post-cancellation. AmountPaise
-	// is the refund amount as a positive value; the Payment's sign in
-	// the derived paid_amount is handled at query time.
+	// KindRefund — refund post-cancellation. AmountPaise is positive; the sign
+	// in the derived paid_amount is applied at query time.
 	KindRefund Kind = "refund"
 )
 
@@ -78,9 +66,8 @@ func (k Kind) IsValid() bool {
 // Method is the payment instrument used.
 type Method string
 
-// Open catalogue — wire-stable strings; extend as new methods become
-// relevant. The Repository persists Method as a free-form text column
-// with a CHECK constraint; new values land via migration.
+// Open catalogue — wire-stable strings. Persisted as text with a CHECK
+// constraint; new values land via migration.
 const (
 	MethodUPI         Method = "upi"
 	MethodNEFT        Method = "neft"
@@ -105,31 +92,31 @@ func (m Method) IsValid() bool {
 
 // Payment is the aggregate root. Append-only.
 type Payment struct {
-	id                 ID
-	tenantID           tenant.ID
-	orderID            order.ID
-	kind               Kind
-	method             Method
-	amountPaise        int64
-	externalReference  string
-	notes              string
-	receivedAt         time.Time
-	recordedAt         time.Time
+	id                   ID
+	tenantID             tenant.ID
+	orderID              order.ID
+	kind                 Kind
+	method               Method
+	amountPaise          int64
+	externalReference    string
+	notes                string
+	receivedAt           time.Time
+	recordedAt           time.Time
 	recordedByMembership membership.ID
 }
 
 // NewInput is the ctor input.
 type NewInput struct {
-	ID                  ID
-	TenantID            tenant.ID
-	OrderID             order.ID
-	Kind                Kind
-	Method              Method
-	AmountPaise         int64
-	ExternalReference   string // optional; bank UTR / UPI ref / cheque no.
-	Notes               string
-	ReceivedAt          time.Time
-	RecordedAt          time.Time
+	ID                   ID
+	TenantID             tenant.ID
+	OrderID              order.ID
+	Kind                 Kind
+	Method               Method
+	AmountPaise          int64
+	ExternalReference    string // optional; bank UTR / UPI ref / cheque no.
+	Notes                string
+	ReceivedAt           time.Time
+	RecordedAt           time.Time
 	RecordedByMembership membership.ID
 }
 
@@ -233,8 +220,8 @@ func (p *Payment) Method() Method { return p.method }
 // AmountPaise returns the absolute payment amount.
 func (p *Payment) AmountPaise() int64 { return p.amountPaise }
 
-// ExternalReference returns the operator-supplied external ref (UTR /
-// UPI ref / cheque no). Empty when not supplied.
+// ExternalReference returns the operator-supplied external ref (UTR / UPI ref /
+// cheque no), or empty.
 func (p *Payment) ExternalReference() string { return p.externalReference }
 
 // Notes returns the operator-supplied free-form note.

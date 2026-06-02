@@ -43,8 +43,7 @@ func TestLogStockMovementHandler_HappyPath_Inbound(t *testing.T) {
 	}
 }
 
-// Outbound conversion: caller passes positive magnitude; handler stores
-// negative quantity in the ledger (Outbound = subtract).
+// Outbound: caller passes positive magnitude, ledger stores it negative.
 func TestLogStockMovementHandler_OutboundSignsQuantityNegative(t *testing.T) {
 	t.Parallel()
 	productRepo := newFakeProductRepo()
@@ -72,7 +71,7 @@ func TestLogStockMovementHandler_OutboundSignsQuantityNegative(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Handle outbound: %v", err)
 	}
-	// Pull the just-added movement and confirm signed convention.
+	// Confirm the signed convention on the persisted movement.
 	if len(movementRepo.Movements) != 1 {
 		t.Fatalf("movement count: %d", len(movementRepo.Movements))
 	}
@@ -83,7 +82,7 @@ func TestLogStockMovementHandler_OutboundSignsQuantityNegative(t *testing.T) {
 	}
 }
 
-// Failure 1: invalid type → ErrInvalid (early reject; no UoW entry).
+// Invalid type → ErrInvalid (early reject, no UoW entry).
 func TestLogStockMovementHandler_InvalidType_ReturnsErrInvalid(t *testing.T) {
 	t.Parallel()
 	productRepo := newFakeProductRepo()
@@ -112,7 +111,7 @@ func TestLogStockMovementHandler_InvalidType_ReturnsErrInvalid(t *testing.T) {
 	}
 }
 
-// Failure 2: zero magnitude → ErrInvalid (early reject).
+// Zero magnitude → ErrInvalid (early reject).
 func TestLogStockMovementHandler_ZeroQuantity_ReturnsErrInvalid(t *testing.T) {
 	t.Parallel()
 	productRepo := newFakeProductRepo()
@@ -141,8 +140,8 @@ func TestLogStockMovementHandler_ZeroQuantity_ReturnsErrInvalid(t *testing.T) {
 	}
 }
 
-// Failure 3: insufficient stock surfaces directly (no retry — domain
-// reject, not optimistic-concurrency).
+// Insufficient stock surfaces directly — no retry (domain reject, not
+// optimistic concurrency).
 func TestLogStockMovementHandler_InsufficientStock_NoRetry(t *testing.T) {
 	t.Parallel()
 	productRepo := newFakeProductRepo()
@@ -166,7 +165,7 @@ func TestLogStockMovementHandler_InsufficientStock_NoRetry(t *testing.T) {
 	if !errors.Is(err, batch.ErrInsufficientStock) {
 		t.Fatalf("err: got %v want ErrInsufficientStock", err)
 	}
-	// UoW ran exactly once — no retry on a domain-side reject.
+	// UoW ran exactly once — no retry on a domain reject.
 	if uow.Runs() != 1 {
 		t.Fatalf("UoW runs on insufficient-stock (no retry): got %d want 1", uow.Runs())
 	}
@@ -175,8 +174,8 @@ func TestLogStockMovementHandler_InsufficientStock_NoRetry(t *testing.T) {
 	}
 }
 
-// Negative magnitude rejected early — handler enforces "caller supplies
-// magnitude, handler picks the sign".
+// Negative magnitude rejected early: caller supplies magnitude, handler picks
+// the sign.
 func TestLogStockMovementHandler_NegativeMagnitude_ReturnsErrInvalid(t *testing.T) {
 	t.Parallel()
 	productRepo := newFakeProductRepo()

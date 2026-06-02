@@ -14,6 +14,7 @@ package crmlead
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -75,12 +76,17 @@ func (i ID) String() string { return string(i) }
 // Field length caps. Mirror the CHECK constraints in migration
 // 20260602000001 so domain validation matches DB validation.
 const (
-	contactNameMin   = 1
-	contactNameMax   = 200
-	lostReasonMax    = 1000
-	mobileE164Regex  = `^\+91[0-9]{10}$` // matches BRD §5 phone-format
-	pincodeRegexLen  = 6
+	contactNameMin  = 1
+	contactNameMax  = 200
+	lostReasonMax   = 1000
+	mobileE164Regex = `^\+91[0-9]{10}$` // matches BRD §5 phone-format
+	pincodeRegex    = `^[1-9][0-9]{5}$` // canon: India-Post, first digit 1-9 (rejects 000000)
 )
+
+// pincodePattern is the compiled India-Post pincode rule (BRD §A-B.1),
+// replicated from common/refdata/pincode — see validateProfile for why
+// the canonical VO can't be imported into this domain package.
+var pincodePattern = regexp.MustCompile(pincodeRegex)
 
 // Profile bundles the BRD §6.3 indexed columns + JSONB supplementary
 // fields. Treated as a single VO at the aggregate boundary; the
@@ -91,7 +97,7 @@ const (
 // schema enforces the same split via dedicated columns + a single jsonb
 // `extra_profile` column.
 //
-// Empty-string defaults match the migration's NOT NULL DEFAULT '' shape —
+// Empty-string defaults match the migration's NOT NULL DEFAULT ” shape —
 // the aggregate accepts partial profiles (manual import slice 2+ will use
 // this).
 type Profile struct {
@@ -101,10 +107,10 @@ type Profile struct {
 	District       string
 	State          string
 	Pincode        string
-	BusinessType   string // "" | "PCD" | "ThirdParty"
-	MedicineSystem string // "" | "Allopathic" | "Ayurvedic"
-	OrderValue     string // "" | "Below5000" | "Upto25000" | "Upto50000" | "Above50000"
-	BuyTimeline    string // "" | "WithinWeek" | "Within15Days" | "WithinMonth"
+	BusinessType   BusinessType   // "" | "PCD" | "ThirdParty"
+	MedicineSystem MedicineSystem // "" | "Allopathic" | "Ayurvedic"
+	OrderValue     OrderValue     // "" | "Below5000" | "Upto25000" | "Upto50000" | "Above50000"
+	BuyTimeline    BuyTimeline    // "" | "WithinWeek" | "Within15Days" | "WithinMonth"
 	HasDrugLicence bool
 	HasGst         bool
 	GstVerified    bool
@@ -135,16 +141,16 @@ type ExtraProfile struct {
 //   - Convert / Lose are idempotent ONLY on self-transition (same actor +
 //     same reason for Lose); otherwise rejected.
 type CrmLead struct {
-	id        ID
-	tenantID  tenant.ID // owning tenant (typed alias prevents accidental ID swap)
-	profile   Profile
-	stage     Stage
+	id          ID
+	tenantID    tenant.ID // owning tenant (typed alias prevents accidental ID swap)
+	profile     Profile
+	stage       Stage
 	temperature Temperature
 
 	// Source provenance — set for leads created via the lead-purchased
 	// subscriber. Manual-import paths (slice 2+) leave these zero.
-	sourcePurchaseID      string // platform.lead-purchased.v1 PurchaseID; UNIQUE on the table
-	sourcePlatformLeadID  string // platform_leads.id
+	sourcePurchaseID     string // platform.lead-purchased.v1 PurchaseID; UNIQUE on the table
+	sourcePlatformLeadID string // platform_leads.id
 
 	// Current assignee (mirrored from the latest crm.assignment_history row).
 	// Cleared (zero) when the lead has never been assigned.
@@ -152,14 +158,14 @@ type CrmLead struct {
 	assignedAt           time.Time
 
 	// Lifecycle metadata.
-	convertedAt              time.Time
-	convertedByMembershipID  string
-	lostAt                   time.Time
-	lostByMembershipID       string
-	lostReason               string
+	convertedAt             time.Time
+	convertedByMembershipID string
+	lostAt                  time.Time
+	lostByMembershipID      string
+	lostReason              string
 
-	createdAt              time.Time
-	createdByMembershipID  string // empty for subscriber-created leads
+	createdAt             time.Time
+	createdByMembershipID string // empty for subscriber-created leads
 
 	events []Event
 }
@@ -269,6 +275,27 @@ func NewFromPurchaseSnapshot(id ID, tenantID tenant.ID, s PurchaseSnapshot, now 
 	if err := validateOptionalUUID("snapshot purchased by membership id", s.PurchasedByMembershipID); err != nil {
 		return nil, err
 	}
+	// Parse the wire-string taxonomy fields into the typed enums at the
+	// snapshot boundary (TDL Safer Enums). This is where the off-catalogue
+	// rejection happens by construction — including OrderValue + BuyTimeline,
+	// which the prior bare-string Profile only validated for BusinessType +
+	// MedicineSystem. An invalid value fails the factory, never persisting.
+	bizType, err := ParseBusinessType(s.BusinessType)
+	if err != nil {
+		return nil, err
+	}
+	medSystem, err := ParseMedicineSystem(s.MedicineSystem)
+	if err != nil {
+		return nil, err
+	}
+	ordValue, err := ParseOrderValue(s.OrderValue)
+	if err != nil {
+		return nil, err
+	}
+	buyTL, err := ParseBuyTimeline(s.BuyTimeline)
+	if err != nil {
+		return nil, err
+	}
 	p := Profile{
 		ContactName:    s.ContactName,
 		PhoneE164:      s.MobileE164,
@@ -276,10 +303,10 @@ func NewFromPurchaseSnapshot(id ID, tenantID tenant.ID, s PurchaseSnapshot, now 
 		District:       s.District,
 		State:          s.State,
 		Pincode:        s.PinCode,
-		BusinessType:   s.BusinessType,
-		MedicineSystem: s.MedicineSystem,
-		OrderValue:     s.OrderValue,
-		BuyTimeline:    s.BuyTimeline,
+		BusinessType:   bizType,
+		MedicineSystem: medSystem,
+		OrderValue:     ordValue,
+		BuyTimeline:    buyTL,
 		HasDrugLicence: s.HasDrugLicence,
 		HasGst:         s.HasGst,
 		ProductRanges:  s.ProductRanges,
@@ -323,22 +350,22 @@ func NewFromPurchaseSnapshot(id ID, tenantID tenant.ID, s PurchaseSnapshot, now 
 // Adapter code scans DB rows into this struct, then re-hydrates via
 // [UnmarshalFromDB] — keeps the adapter free of internal field knowledge.
 type Snapshot struct {
-	ID                       ID
-	TenantID                 tenant.ID
-	Profile                  Profile
-	Stage                    Stage
-	Temperature              Temperature
-	SourcePurchaseID         string
-	SourcePlatformLeadID     string
-	AssigneeMembershipID     string
-	AssignedAt               time.Time
-	ConvertedAt              time.Time
-	ConvertedByMembershipID  string
-	LostAt                   time.Time
-	LostByMembershipID       string
-	LostReason               string
-	CreatedAt                time.Time
-	CreatedByMembershipID    string
+	ID                      ID
+	TenantID                tenant.ID
+	Profile                 Profile
+	Stage                   Stage
+	Temperature             Temperature
+	SourcePurchaseID        string
+	SourcePlatformLeadID    string
+	AssigneeMembershipID    string
+	AssignedAt              time.Time
+	ConvertedAt             time.Time
+	ConvertedByMembershipID string
+	LostAt                  time.Time
+	LostByMembershipID      string
+	LostReason              string
+	CreatedAt               time.Time
+	CreatedByMembershipID   string
 }
 
 // UnmarshalFromDB re-hydrates a CrmLead from persistence. Used ONLY by
@@ -647,14 +674,27 @@ func validateProfile(p Profile) error {
 	if !isValidIndianMobile(p.PhoneE164) {
 		return fmt.Errorf("%w: phone_e164 must match %s, got %q", ErrInvalid, mobileE164Regex, p.PhoneE164)
 	}
-	if p.Pincode != "" && len(p.Pincode) != pincodeRegexLen {
-		return fmt.Errorf("%w: pincode must be %d digits, got %q", ErrInvalid, pincodeRegexLen, p.Pincode)
+	if p.Pincode != "" && !pincodePattern.MatchString(p.Pincode) {
+		// Canonical India-Post rule (^[1-9][0-9]{5}$) — rejects "000000",
+		// short, and long values. The shared-kernel VO
+		// common/refdata/pincode is the canon source, but it cannot be
+		// imported here: TestArch_DomainHasNoInfraImports bars common/
+		// packages outside the pure-VO allow-list (refdata carries a
+		// DB-backed Reader interface). So the exact regex is replicated
+		// crmlead-locally; both must stay in lockstep with BRD §A-B.1.
+		return fmt.Errorf("%w: pincode %q must match %s", ErrInvalid, p.Pincode, pincodeRegex)
 	}
-	if p.BusinessType != "" && p.BusinessType != "PCD" && p.BusinessType != "ThirdParty" {
+	if !p.BusinessType.IsValid() {
 		return fmt.Errorf("%w: business_type %q not in {PCD, ThirdParty}", ErrInvalid, p.BusinessType)
 	}
-	if p.MedicineSystem != "" && p.MedicineSystem != "Allopathic" && p.MedicineSystem != "Ayurvedic" {
+	if !p.MedicineSystem.IsValid() {
 		return fmt.Errorf("%w: medicine_system %q not in {Allopathic, Ayurvedic}", ErrInvalid, p.MedicineSystem)
+	}
+	if !p.OrderValue.IsValid() {
+		return fmt.Errorf("%w: order_value %q not in {Below5000, Upto25000, Upto50000, Above50000}", ErrInvalid, p.OrderValue)
+	}
+	if !p.BuyTimeline.IsValid() {
+		return fmt.Errorf("%w: buy_timeline %q not in {WithinWeek, Within15Days, WithinMonth}", ErrInvalid, p.BuyTimeline)
 	}
 	return nil
 }

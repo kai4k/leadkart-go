@@ -50,16 +50,13 @@ import (
 	"github.com/ThreeDotsLabs/watermill"
 	"github.com/ThreeDotsLabs/watermill/pubsub/gochannel"
 
-	"github.com/leadkart/leadkart-go/internal/common/ids"
-	crmapp "github.com/leadkart/leadkart-go/internal/crm/app"
-	"github.com/leadkart/leadkart-go/internal/identity/adapters"
-	"github.com/leadkart/leadkart-go/internal/identity/integrationevents"
-	"github.com/leadkart/leadkart-go/internal/identity/ports"
-	"github.com/leadkart/leadkart-go/internal/identity/ports/subscribers"
 	"github.com/leadkart/leadkart-go/internal/common/audit"
 	"github.com/leadkart/leadkart-go/internal/common/config"
+	"github.com/leadkart/leadkart-go/internal/common/ids"
 	"github.com/leadkart/leadkart-go/internal/common/messaging"
-	"github.com/leadkart/leadkart-go/internal/common/pg"
+	crmapp "github.com/leadkart/leadkart-go/internal/crm/app"
+	"github.com/leadkart/leadkart-go/internal/identity/ports"
+	"github.com/leadkart/leadkart-go/internal/identity/ports/subscribers"
 	platformapp "github.com/leadkart/leadkart-go/internal/platform/app"
 )
 
@@ -95,16 +92,20 @@ func TestSecurityStampInvalidation_PasswordChange_Returns401WithinFastPath(t *te
 	// cmd/api/main.go runs in production. Without this, the
 	// PersonPasswordChangedV1 event the ChangePassword handler emits
 	// to the outbox would never reach the cascade subscriber.
-	tx := pg.NewTransactor(pool)
 	pubsub := gochannel.NewGoChannel(gochannel.Config{}, watermill.NewSlogLogger(silentLogger()))
 	t.Cleanup(func() { _ = pubsub.Close() })
 
-	forwarder := adapters.NewOutboxForwarder(pool, tx, pubsub, integrationevents.Topic, 0, time.Now)
+	outboxForwarder, err := messaging.NewOutboxForwarder(pool, pubsub, watermill.NewSlogLogger(silentLogger()))
+	if err != nil {
+		t.Fatalf("messaging.NewOutboxForwarder: %v", err)
+	}
 	router, err := messaging.NewRouter(messaging.Deps{
 		Subscriber:       pubsub,
+		Publisher:        pubsub,
 		Logger:           silentLogger(),
 		IdempotencyInbox: messaging.NewIdempotentReceiver(pool),
 		AuditWriter:      audit.NewWriter(pool, silentLogger(), time.Now),
+		DeadLetters:      messaging.NewDeadLetterWriter(pool, silentLogger(), time.Now),
 		CloseTimeout:     2 * time.Second,
 		Retry: messaging.RetryConfig{
 			MaxRetries:      1,
@@ -116,14 +117,29 @@ func TestSecurityStampInvalidation_PasswordChange_Returns401WithinFastPath(t *te
 	if err != nil {
 		t.Fatalf("messaging.NewRouter: %v", err)
 	}
-	subscribers.Register(router, wiring.Families, wiring.StampCache, nil, silentLogger(), time.Now)
+	// ADR 0067 — Register was deleted; build the cqrs EventProcessor over
+	// the router + register every identity handler with the canonical
+	// resilience stack (mirrors registerIdentityHandlers in the subscribers
+	// integration test, inlined here since that helper is in another package).
+	ep, err := messaging.NewEventProcessor(router.RawRouter(), pubsub, watermill.NewSlogLogger(silentLogger()))
+	if err != nil {
+		t.Fatalf("messaging.NewEventProcessor: %v", err)
+	}
+	for _, h := range subscribers.Handlers(wiring.Families, wiring.StampCache, nil, silentLogger(), time.Now) {
+		if err := router.AddCqrsHandler(ep, h); err != nil {
+			t.Fatalf("AddCqrsHandler: %v", err)
+		}
+	}
 
 	stackCtx, stackCancel := context.WithCancel(t.Context())
 	t.Cleanup(stackCancel)
 
-	go forwarder.Run(stackCtx, 50*time.Millisecond, 10*time.Millisecond, func(err error) {
-		t.Logf("forwarder: %v", err)
-	})
+	go func() {
+		if err := outboxForwarder.Run(stackCtx); err != nil && !errors.Is(err, context.Canceled) {
+			t.Logf("forwarder: %v", err)
+		}
+	}()
+	t.Cleanup(func() { _ = outboxForwarder.Close() })
 
 	routerDone := make(chan struct{})
 	go func() {

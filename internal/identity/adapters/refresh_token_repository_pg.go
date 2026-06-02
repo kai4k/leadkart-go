@@ -9,23 +9,17 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/leadkart/leadkart-go/internal/common/pg"
+	"github.com/leadkart/leadkart-go/internal/common/pgconv"
 	"github.com/leadkart/leadkart-go/internal/identity/adapters/db"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/refreshtoken"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
-	"github.com/leadkart/leadkart-go/internal/common/pg"
 )
 
-// RefreshTokenFamilyRepository is the pgx/sqlc-backed implementation of
-// [refreshtoken.Repository]. The two underlying tables
-// (refresh_token_families + refresh_tokens) are NON-RLS — refresh tokens
-// are session-management infrastructure that carries tenant context as a
-// data column. Token-hash uniqueness is the load-bearing isolation per
-// Auth0/Okta/Stripe canon; cross-tenant lookups by token hash are
-// intentional + the foundational read pattern.
-//
-// All paths run under TxScopePlatform: the outbox row's tenant_id is
-// the family's tenantID and the policy `is_platform()` always permits.
+// RefreshTokenFamilyRepository is the pgx/sqlc-backed [refreshtoken.Repository].
+// The underlying tables are non-RLS (session infrastructure); tenant context
+// is a data column. All paths run under TxScopePlatform.
 type RefreshTokenFamilyRepository struct {
 	pool *pgxpool.Pool
 	tx   *pg.Transactor
@@ -37,9 +31,20 @@ func NewRefreshTokenFamilyRepository(pool *pgxpool.Pool, tx *pg.Transactor) *Ref
 	return &RefreshTokenFamilyRepository{pool: pool, tx: tx, q: db.New(pool)}
 }
 
-// Add persists a brand-new family + its first token from [refreshtoken.NewFamily].
+// runInTx joins an ambient UoW tx when present, else opens a platform-scoped
+// tx (ADR 0067 Phase-4 UoW-join contract). Previously calling WithinTxPgx
+// directly caused inbox-wrapped revocations to split into separate
+// transactions.
+func (r *RefreshTokenFamilyRepository) runInTx(ctx context.Context, fn func(ctx context.Context, tx pgx.Tx) error) error {
+	if tx, ok := pg.TxFromContext(ctx); ok {
+		return fn(ctx, tx)
+	}
+	return r.tx.WithinTxPgx(ctx, pg.TxScopePlatform, fn)
+}
+
+// Add persists a new family and its first token.
 func (r *RefreshTokenFamilyRepository) Add(ctx context.Context, f *refreshtoken.Family) error {
-	return r.tx.WithinTxPgx(ctx, pg.TxScopePlatform, func(ctx context.Context, tx pgx.Tx) error {
+	return r.runInTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
 		q := r.q.WithTx(tx)
 		if err := insertFamilyRow(ctx, q, f); err != nil {
 			return err
@@ -51,17 +56,14 @@ func (r *RefreshTokenFamilyRepository) Add(ctx context.Context, f *refreshtoken.
 	})
 }
 
-// UpdateByID — TDL UpdateFn pattern. Loads family + tokens, runs
-// closure, persists whatever the aggregate now says. The UPSERT-by-id
-// path covers both the "new token minted" case (insert) and the
-// "previous token consumed" case (update consumed_at + replaced_by_id)
-// without explicit delta tracking.
+// UpdateByID uses the TDL UpdateFn pattern. UPSERT-by-id covers both
+// new-token-mint (insert) and consumed-token (update) without delta tracking.
 func (r *RefreshTokenFamilyRepository) UpdateByID(
 	ctx context.Context,
 	id refreshtoken.FamilyID,
 	updateFn func(*refreshtoken.Family) (bool, error),
 ) error {
-	return r.tx.WithinTxPgx(ctx, pg.TxScopePlatform, func(ctx context.Context, tx pgx.Tx) error {
+	return r.runInTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
 		q := r.q.WithTx(tx)
 		f, err := loadFamilyByID(ctx, q, id)
 		if err != nil {
@@ -84,10 +86,10 @@ func (r *RefreshTokenFamilyRepository) UpdateByID(
 	})
 }
 
-// GetByID returns the family + all its tokens, or [refreshtoken.ErrNotFound].
+// GetByID returns the family and all its tokens, or [refreshtoken.ErrNotFound].
 func (r *RefreshTokenFamilyRepository) GetByID(ctx context.Context, id refreshtoken.FamilyID) (*refreshtoken.Family, error) {
 	var out *refreshtoken.Family
-	err := r.tx.WithinTxPgx(ctx, pg.TxScopePlatform, func(ctx context.Context, tx pgx.Tx) error {
+	err := r.runInTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
 		f, err := loadFamilyByID(ctx, r.q.WithTx(tx), id)
 		if err != nil {
 			return err
@@ -101,12 +103,11 @@ func (r *RefreshTokenFamilyRepository) GetByID(ctx context.Context, id refreshto
 	return out, nil
 }
 
-// GetByTokenHash resolves a presented refresh token to its family.
-// Returns [refreshtoken.ErrNotFound] when no family has a token with
-// the given hash.
+// GetByTokenHash resolves a token hash to its family, or returns
+// [refreshtoken.ErrNotFound].
 func (r *RefreshTokenFamilyRepository) GetByTokenHash(ctx context.Context, hash refreshtoken.TokenHash) (*refreshtoken.Family, error) {
 	var out *refreshtoken.Family
-	err := r.tx.WithinTxPgx(ctx, pg.TxScopePlatform, func(ctx context.Context, tx pgx.Tx) error {
+	err := r.runInTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
 		q := r.q.WithTx(tx)
 		row, err := q.GetRefreshTokenByHash(ctx, hash.String())
 		if err != nil {
@@ -135,21 +136,19 @@ func (r *RefreshTokenFamilyRepository) GetByTokenHash(ctx context.Context, hash 
 	return out, nil
 }
 
-// ListActiveForPerson returns all non-revoked families for a Person —
-// powers the user "manage sessions" UI + the per-Person family-cap
-// enforcement at family creation time.
+// ListActiveForPerson returns all non-revoked families for a Person.
+// Powers the "manage sessions" UI and per-Person family-cap enforcement.
 func (r *RefreshTokenFamilyRepository) ListActiveForPerson(ctx context.Context, personID person.ID) ([]*refreshtoken.Family, error) {
 	uid, err := parsePersonIDForRefresh(personID)
 	if err != nil {
 		return nil, err
 	}
 	var out []*refreshtoken.Family
-	err = r.tx.WithinTxPgx(ctx, pg.TxScopePlatform, func(ctx context.Context, tx pgx.Tx) error {
-		// Two-pass: drain family rows into a slice (releasing the
-		// connection's iteration cursor), THEN load each family's
-		// tokens. pgx forbids multiplexed queries on one connection.
+	err = r.runInTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
+		// Two-pass: collect family rows, then load tokens per family.
+		// pgx forbids multiplexed queries on one connection.
 		q := r.q.WithTx(tx)
-		familyRows, err := q.ListActiveFamiliesForPerson(ctx, pgUUID(uid))
+		familyRows, err := q.ListActiveFamiliesForPerson(ctx, pgconv.PgUUID(uid))
 		if err != nil {
 			return fmt.Errorf("refresh token repo: list active: %w", err)
 		}
@@ -184,14 +183,14 @@ func insertFamilyRow(ctx context.Context, q *db.Queries, f *refreshtoken.Family)
 		return err
 	}
 	err = q.InsertRefreshTokenFamily(ctx, db.InsertRefreshTokenFamilyParams{
-		ID:           pgUUID(uid),
-		PersonID:     pgUUID(pid),
-		TenantID:     pgUUID(tid),
+		ID:           pgconv.PgUUID(uid),
+		PersonID:     pgconv.PgUUID(pid),
+		TenantID:     pgconv.PgUUID(tid),
 		DeviceLabel:  f.DeviceLabel(),
-		CreatedAt:    pgRequiredTimestamp(f.CreatedAt()),
-		LastUsedAt:   pgRequiredTimestamp(f.LastUsedAt()),
-		RevokedAt:    pgTimestamp(f.RevokedAt()),
-		RevokeReason: nilIfEmpty(f.RevokeReason()),
+		CreatedAt:    pgconv.PgRequiredTimestamp(f.CreatedAt()),
+		LastUsedAt:   pgconv.PgRequiredTimestamp(f.LastUsedAt()),
+		RevokedAt:    pgconv.PgTimestamp(f.RevokedAt()),
+		RevokeReason: pgconv.ZeroToNil(f.RevokeReason()),
 	})
 	if err != nil {
 		return fmt.Errorf("refresh token repo: insert family: %w", err)
@@ -205,10 +204,10 @@ func persistFamilyState(ctx context.Context, q *db.Queries, f *refreshtoken.Fami
 		return err
 	}
 	err = q.UpdateRefreshTokenFamily(ctx, db.UpdateRefreshTokenFamilyParams{
-		ID:           pgUUID(uid),
-		LastUsedAt:   pgRequiredTimestamp(f.LastUsedAt()),
-		RevokedAt:    pgTimestamp(f.RevokedAt()),
-		RevokeReason: nilIfEmpty(f.RevokeReason()),
+		ID:           pgconv.PgUUID(uid),
+		LastUsedAt:   pgconv.PgRequiredTimestamp(f.LastUsedAt()),
+		RevokedAt:    pgconv.PgTimestamp(f.RevokedAt()),
+		RevokeReason: pgconv.ZeroToNil(f.RevokeReason()),
 	})
 	if err != nil {
 		return fmt.Errorf("refresh token repo: update family: %w", err)
@@ -221,11 +220,9 @@ func upsertFamilyTokens(ctx context.Context, q *db.Queries, f *refreshtoken.Fami
 	if err != nil {
 		return err
 	}
-	// Iterate in REVERSE generation order so that when an older token's
-	// replaced_by_id points at a newer token, the newer one already
-	// exists (FK refresh_tokens_replaced_by_id_fkey is satisfied at
-	// statement time — Postgres FK checks run per-statement under
-	// READ COMMITTED).
+	// Reverse generation order: newer tokens exist first so the
+	// replaced_by_id FK (refresh_tokens_replaced_by_id_fkey) is
+	// satisfied at statement time under READ COMMITTED.
 	tokens := f.AllTokens()
 	for i := len(tokens) - 1; i >= 0; i-- {
 		t := tokens[i]
@@ -233,22 +230,22 @@ func upsertFamilyTokens(ctx context.Context, q *db.Queries, f *refreshtoken.Fami
 		if err != nil {
 			return err
 		}
-		var replacedBy = pgUUIDOpt(uuid.Nil)
+		var replacedBy = pgconv.PgUUIDOrNull(uuid.Nil)
 		if !t.ReplacedByID().IsZero() {
 			rb, err := parseTokenID(t.ReplacedByID())
 			if err != nil {
 				return err
 			}
-			replacedBy = pgUUIDOpt(rb)
+			replacedBy = pgconv.PgUUIDOrNull(rb)
 		}
 		err = q.UpsertRefreshToken(ctx, db.UpsertRefreshTokenParams{
-			ID:           pgUUID(tid),
-			FamilyID:     pgUUID(fid),
+			ID:           pgconv.PgUUID(tid),
+			FamilyID:     pgconv.PgUUID(fid),
 			TokenHash:    t.Hash().String(),
 			Generation:   t.Generation(),
-			IssuedAt:     pgRequiredTimestamp(t.IssuedAt()),
-			ExpiresAt:    pgRequiredTimestamp(t.ExpiresAt()),
-			ConsumedAt:   pgTimestamp(t.ConsumedAt()),
+			IssuedAt:     pgconv.PgRequiredTimestamp(t.IssuedAt()),
+			ExpiresAt:    pgconv.PgRequiredTimestamp(t.ExpiresAt()),
+			ConsumedAt:   pgconv.PgTimestamp(t.ConsumedAt()),
 			ReplacedByID: replacedBy,
 		})
 		if err != nil {
@@ -283,7 +280,7 @@ func loadFamilyByID(ctx context.Context, q *db.Queries, id refreshtoken.FamilyID
 	if err != nil {
 		return nil, err
 	}
-	row, err := q.GetRefreshTokenFamilyByID(ctx, pgUUID(uid))
+	row, err := q.GetRefreshTokenFamilyByID(ctx, pgconv.PgUUID(uid))
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, refreshtoken.ErrNotFound
@@ -306,15 +303,15 @@ func hydrateFamily(ctx context.Context, q *db.Queries, row db.IdentityRefreshTok
 		}
 		var replacedBy refreshtoken.TokenID
 		if t.ReplacedByID.Valid {
-			replacedBy = refreshtoken.TokenID(uuidFromPg(t.ReplacedByID).String())
+			replacedBy = refreshtoken.TokenID(pgconv.UUIDFromPg(t.ReplacedByID).String())
 		}
 		tokenSnaps[i] = refreshtoken.TokenSnapshot{
-			ID:           refreshtoken.TokenID(uuidFromPg(t.ID).String()),
+			ID:           refreshtoken.TokenID(pgconv.UUIDFromPg(t.ID).String()),
 			Hash:         hash,
 			Generation:   t.Generation,
-			IssuedAt:     timeFromPg(t.IssuedAt),
-			ExpiresAt:    timeFromPg(t.ExpiresAt),
-			ConsumedAt:   timeFromPg(t.ConsumedAt),
+			IssuedAt:     pgconv.TimeFromPg(t.IssuedAt),
+			ExpiresAt:    pgconv.TimeFromPg(t.ExpiresAt),
+			ConsumedAt:   pgconv.TimeFromPg(t.ConsumedAt),
 			ReplacedByID: replacedBy,
 		}
 	}
@@ -323,26 +320,16 @@ func hydrateFamily(ctx context.Context, q *db.Queries, row db.IdentityRefreshTok
 		revokeReason = *row.RevokeReason
 	}
 	return refreshtoken.UnmarshalFromDB(refreshtoken.FamilySnapshot{
-		ID:           refreshtoken.FamilyID(uuidFromPg(row.ID).String()),
-		PersonID:     person.ID(uuidFromPg(row.PersonID).String()),
-		TenantID:     tenant.ID(uuidFromPg(row.TenantID).String()),
+		ID:           refreshtoken.FamilyID(pgconv.UUIDFromPg(row.ID).String()),
+		PersonID:     person.ID(pgconv.UUIDFromPg(row.PersonID).String()),
+		TenantID:     tenant.ID(pgconv.UUIDFromPg(row.TenantID).String()),
 		DeviceLabel:  row.DeviceLabel,
-		CreatedAt:    timeFromPg(row.CreatedAt),
-		LastUsedAt:   timeFromPg(row.LastUsedAt),
-		RevokedAt:    timeFromPg(row.RevokedAt),
+		CreatedAt:    pgconv.TimeFromPg(row.CreatedAt),
+		LastUsedAt:   pgconv.TimeFromPg(row.LastUsedAt),
+		RevokedAt:    pgconv.TimeFromPg(row.RevokedAt),
 		RevokeReason: revokeReason,
 		Tokens:       tokenSnaps,
 	}), nil
-}
-
-// nilIfEmpty maps "" → nil so sqlc-generated *string fields write SQL
-// NULL rather than an empty-string row. Domain represents "no reason"
-// as the zero string; the column is nullable.
-func nilIfEmpty(s string) *string {
-	if s == "" {
-		return nil
-	}
-	return &s
 }
 
 func parseFamilyID(id refreshtoken.FamilyID) (uuid.UUID, error) {

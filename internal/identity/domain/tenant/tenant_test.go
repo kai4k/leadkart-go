@@ -17,8 +17,7 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
 
-// testNow is the deterministic instant test fixtures pass to domain
-// factories + mutators per the clock-injection refactor.
+// testNow is the deterministic clock value passed to all domain factories and mutators.
 var testNow = time.Date(2026, 5, 24, 12, 0, 0, 0, time.UTC)
 
 func mustEmail(t *testing.T, raw string) email.Address {
@@ -72,9 +71,9 @@ func TestNewTenant_AcceptsValidInputs(t *testing.T) {
 	if tn.DisplayName() != "Acme Pharma" {
 		t.Errorf("DisplayName() = %q", tn.DisplayName())
 	}
-	// AdminEmail accessor removed in migration 20260507000008 — admin
-	// email is no longer stored on the aggregate. The RegisteredEvent
-	// still carries it (covered by TestNewTenant_EmitsTenantRegisteredEvent).
+	// Admin email accessor removed in migration 20260507000008; the aggregate
+	// no longer stores it. RegisteredEvent still carries it as a point-in-time
+	// fact (see TestNewTenant_EmitsTenantRegisteredEvent).
 	_ = e
 	if tn.Status() != tenant.StatusPending {
 		t.Errorf("Status() = %v, want StatusPending", tn.Status())
@@ -389,9 +388,8 @@ func TestPullEvents_DrainsAndClears(t *testing.T) {
 
 func TestUnmarshalFromDB_DoesNotValidate(t *testing.T) {
 	t.Parallel()
-	// Re-hydration accepts data that the factory would reject.
-	// Reason: data was valid when stored; re-validating could corrupt
-	// history if invariants tightened in code.
+	// Re-hydration must accept data the factory would reject: data valid when
+	// stored must survive even if invariants later tighten.
 	tn := tenant.UnmarshalFromDB(tenant.Snapshot{
 		ID:          tenant.ID("not-a-real-uuid"), // factory would reject
 		Slug:        slug.Slug{},                  // factory would reject
@@ -465,7 +463,7 @@ func mustDL(t *testing.T, raw string) druglicence.Number {
 func TestNewStatutory_RejectsGSTPANMismatch(t *testing.T) {
 	t.Parallel()
 	g := mustGST(t, "29ABCPE1234F1Z5") // embedded PAN: ABCPE1234F
-	p := mustPAN(t, "ZZZPZ9999G")       // different PAN, P at position 4
+	p := mustPAN(t, "ZZZPZ9999G")      // different PAN, P at position 4
 	_, err := tenant.NewStatutory(g, p, druglicence.Number{})
 	if !errors.Is(err, tenant.ErrInvalid) {
 		t.Errorf("expected ErrInvalid, got %v", err)
@@ -649,8 +647,7 @@ func TestUpdateAdminContact_RejectedOnDeletedTenant(t *testing.T) {
 
 func TestUpdateAdminContact_PartialUpdate(t *testing.T) {
 	t.Parallel()
-	// Only phone, no address (address is zero) — still a valid contact
-	// declaration; tenant's address is just "not declared".
+	// Phone only, address zero — tenant's postal address is simply "not declared".
 	tn := newActiveTenant(t)
 	c := tenant.NewAdminContact(mustPhone(t, "+919876543210"), postaladdress.Address{})
 	if err := tn.UpdateAdminContact(c, testNow); err != nil {
@@ -1057,8 +1054,7 @@ func TestHardDelete_FromPendingDeletion_TransitionsToDeleted(t *testing.T) {
 
 func TestHardDelete_FromPending_AdminAbandonment(t *testing.T) {
 	t.Parallel()
-	// Tenant never activated — admin abandonment hard-deletes directly
-	// without a grace window since tenant never operated.
+	// Never activated: admin abandonment skips the grace window.
 	tn := newPendingTenant(t)
 	_ = tn.PullEvents()
 	if err := tn.HardDelete(testNow); err != nil {

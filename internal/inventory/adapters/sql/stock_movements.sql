@@ -32,7 +32,7 @@ SELECT id, batch_id, product_id, tenant_id,
        occurred_at
 FROM   inventory.stock_movements
 WHERE  batch_id = $1
-AND    ($4::text = '' OR type = $4)
-AND    (occurred_at, id) < ($2, $3)
+AND    (sqlc.arg(type)::text = '' OR type = sqlc.arg(type))
+AND    (occurred_at, id) < (sqlc.arg(cursor_occurred_at)::timestamptz, sqlc.arg(cursor_id)::uuid)
 ORDER  BY occurred_at DESC, id DESC
-LIMIT  $5;
+LIMIT  sqlc.arg('limit');

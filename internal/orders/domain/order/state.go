@@ -2,26 +2,21 @@ package order
 
 import "fmt"
 
-// State is the position of an [Order] in the fulfillment lifecycle per
-// BRD §6.4 + ADR 0063.
+// State is an [Order]'s position in the fulfillment lifecycle (BRD §6.4, ADR 0063).
 //
-// State machine (strict; no skips, no backtracking):
+// Strict machine, no skips/backtracking:
 //
 //	quotation_draft → quotation_approved → token_paid → confirmed →
 //	  packed → invoiced → dispatched → delivered → complete (terminal)
+//	(any non-terminal) → cancelled (terminal)
 //
-//	(any non-terminal state) → cancelled (terminal)
-//
-// Terminal states refuse outgoing transitions. Self-transitions are
-// idempotent no-ops (return nil + emit no event).
-//
-// Cancellation is reachable from every non-terminal state. Side-
-// effects (unreserve stock, mint credit note, cancel consignment) are
-// per-state and fire via subscribers on the published
-// `orders.order_cancelled.v1` envelope — see ADR 0063 §4.
+// Terminal states refuse transitions; self-transitions are idempotent no-ops.
+// Cancellation is reachable from any non-terminal state; per-state compensation
+// (unreserve stock, mint credit note, cancel consignment) fires via subscribers
+// on the orders.order_cancelled.v1 envelope — see ADR 0063 §4.
 type State string
 
-// Closed catalogue. Wire-stable lowercase strings — match the CHECK
+// Closed catalogue. Wire-stable lowercase strings — must match the CHECK
 // constraint on orders.orders.state in the init migration.
 const (
 	StateQuotationDraft    State = "quotation_draft"
@@ -42,8 +37,8 @@ func (s State) String() string { return string(s) }
 // IsTerminal reports whether the state allows NO further transitions.
 func (s State) IsTerminal() bool { return s == StateComplete || s == StateCancelled }
 
-// IsValid reports whether s is a known catalogue entry. Used by the
-// HTTP layer to reject untrusted input before it reaches the aggregate.
+// IsValid reports whether s is a known catalogue entry. Used at the HTTP edge
+// to reject untrusted input before it reaches the aggregate.
 func (s State) IsValid() bool {
 	switch s {
 	case StateQuotationDraft, StateQuotationApproved, StateTokenPaid,
@@ -54,8 +49,8 @@ func (s State) IsValid() bool {
 	return false
 }
 
-// ParseState turns an untrusted string into a [State] or returns
-// [ErrInvalid] wrapped with the bad value.
+// ParseState converts an untrusted string to a [State], wrapping [ErrInvalid]
+// with the bad value on failure.
 func ParseState(raw string) (State, error) {
 	s := State(raw)
 	if !s.IsValid() {
@@ -64,11 +59,8 @@ func ParseState(raw string) (State, error) {
 	return s, nil
 }
 
-// canAdvance reports whether cur → target is a permitted forward edge
-// (excluding cancellation, which has its own dedicated mutator).
-//
-// Self-transitions are handled BEFORE this function runs (idempotent
-// no-op).
+// canAdvance reports whether cur → target is a permitted forward edge.
+// Cancellation has its own mutator; self-transitions are handled before this runs.
 func canAdvance(cur, target State) bool {
 	switch cur {
 	case StateQuotationDraft:

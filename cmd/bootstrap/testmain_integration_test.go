@@ -6,10 +6,10 @@ import (
 	"testing"
 
 	"go.uber.org/goleak"
+
+	"github.com/leadkart/leadkart-go/internal/common/pgtest"
 )
 
 func TestMain(m *testing.M) {
-	goleak.VerifyTestMain(m,
-		goleak.IgnoreTopFunction("github.com/testcontainers/testcontainers-go.(*Reaper).connect.func1"),
-	)
+	goleak.VerifyTestMain(m, pgtest.GoleakOptions()...)
 }

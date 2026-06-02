@@ -1,14 +1,10 @@
 // Package app holds the Platform module Application facade.
 //
-// Per TDL Wild Workouts canonical layout: an Application{Commands,
-// Queries} struct aggregates concrete handler structs as fields. HTTP
-// + future gRPC + future CLI ports call `app.Commands.X.Handle(...)`
-// directly — no service interface, no mediator.
-//
-// Composition root (cmd/api/main.go) builds an Application by wiring
-// concrete adapters into each handler's constructor + assembling the
-// facade. Tests typically construct a partial Application with fakes
-// for the handlers under test.
+// Per TDL Wild Workouts: an Application{Commands, Queries} struct aggregates
+// concrete handler structs; ports call app.Commands.X.Handle(...) directly —
+// no service interface, no mediator. The composition root (cmd/api/main.go)
+// wires adapters into each handler. Tests build a partial Application with
+// fakes for the handlers under test.
 package app
 
 import (
@@ -16,16 +12,14 @@ import (
 	"github.com/leadkart/leadkart-go/internal/platform/app/query"
 )
 
-// Application is the Platform facade. Every external port (HTTP,
-// future gRPC, event subscribers) takes an Application + dispatches
+// Application is the Platform facade. Ports take an Application and dispatch
 // directly into its handler fields.
 type Application struct {
 	Commands Commands
 	Queries  Queries
 }
 
-// Commands aggregates all Platform command handlers. One field per
-// use case. New use cases extend this struct.
+// Commands aggregates the Platform command handlers, one field per use case.
 type Commands struct {
 	CreateUnverifiedContact command.CreateUnverifiedContactHandler
 	LogVerificationCall     command.LogVerificationCallHandler
@@ -35,7 +29,7 @@ type Commands struct {
 	TopupLeadCredits        command.TopupLeadCreditsHandler
 }
 
-// Queries aggregates all Platform query handlers. Read-side only.
+// Queries aggregates the Platform read-side query handlers.
 type Queries struct {
 	ListUnverifiedContacts query.ListUnverifiedContactsHandler
 	BrowseMarketplace      query.BrowseMarketplaceHandler

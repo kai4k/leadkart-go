@@ -249,56 +249,15 @@ CREATE POLICY movements_insert ON inventory.stock_movements
 COMMENT ON TABLE inventory.stock_movements IS
     'Append-only stock-movement ledger. Tenant-scoped, FORCE RLS. NO update/delete policies (Vernon IDDD append-only aggregate).';
 
--- ============================================================================
--- inventory.outbox — per-module outbox per ADR 0008 + 0027 (audit log dual).
--- Mirror of identity.outbox shape, including the act_* columns from
--- migration 20260525000001 (ADR 0056 — impersonation context propagation).
--- ============================================================================
-
-CREATE TABLE inventory.outbox (
-    id              uuid        PRIMARY KEY,
-    tenant_id       uuid        NOT NULL,
-    topic           text        NOT NULL,
-    payload         jsonb       NOT NULL,
-    occurred_at     timestamptz NOT NULL,
-    created_at      timestamptz NOT NULL DEFAULT now(),
-    forwarded       boolean     NOT NULL DEFAULT false,
-    forwarded_at    timestamptz NULL,
-    act_operator_id uuid        NULL,
-    act_session_id  uuid        NULL,
-    act_reason      text        NULL
-);
-CREATE INDEX idx_inventory_outbox_unforwarded
-    ON inventory.outbox (created_at) WHERE NOT forwarded;
-CREATE INDEX idx_inventory_outbox_tenant_topic_occurred
-    ON inventory.outbox (tenant_id, topic, occurred_at DESC);
-
-ALTER TABLE inventory.outbox ENABLE ROW LEVEL SECURITY;
-ALTER TABLE inventory.outbox FORCE  ROW LEVEL SECURITY;
-
-CREATE POLICY inventory_outbox_select ON inventory.outbox
-    FOR SELECT
-    USING (tenant_id = app.current_tenant() OR app.is_platform());
-
-CREATE POLICY inventory_outbox_insert ON inventory.outbox
-    FOR INSERT
-    WITH CHECK (tenant_id = app.current_tenant() OR app.is_platform());
-
--- Forwarder runs platform-scoped — flips `forwarded = true` cross-tenant.
-CREATE POLICY inventory_outbox_modify ON inventory.outbox
-    FOR UPDATE
-    USING (app.is_platform())
-    WITH CHECK (app.is_platform());
-
-COMMENT ON TABLE inventory.outbox IS
-    'Inventory module outbox — Watermill SQL forwarder polls + republishes. Doubles as audit log per ADR 0027.';
+-- NOTE: the per-module inventory.outbox table was retired by ADR 0064/0067
+-- (migration 20260604000002) in favour of the shared common.outbox relay
+-- drained by the Watermill library Forwarder. No per-module outbox here.
 
 -- +goose StatementEnd
 
 -- +goose Down
 -- +goose StatementBegin
 
-DROP TABLE IF EXISTS inventory.outbox CASCADE;
 DROP TABLE IF EXISTS inventory.stock_movements CASCADE;
 DROP TABLE IF EXISTS inventory.batches CASCADE;
 DROP TABLE IF EXISTS inventory.products CASCADE;

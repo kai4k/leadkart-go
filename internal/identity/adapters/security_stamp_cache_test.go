@@ -11,18 +11,15 @@ import (
 	"github.com/alicebob/miniredis/v2"
 	"github.com/redis/go-redis/v9"
 
+	"github.com/leadkart/leadkart-go/internal/common/cache"
 	"github.com/leadkart/leadkart-go/internal/common/email"
 	"github.com/leadkart/leadkart-go/internal/identity/adapters"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
-	"github.com/leadkart/leadkart-go/internal/common/cache"
 )
 
-// fakePersonReader is a controllable in-memory implementation of
-// [adapters.PersonStampReader]. Tests mutate the stamp via the
-// SetStamp method to simulate password-rotation while bypassing the
-// cache — the proof-of-cache test below relies on this to prove the
-// facade actually caches (not just calls the factory twice and gets
-// the same value).
+// fakePersonReader is a controllable [adapters.PersonStampReader].
+// SetStamp simulates password rotation bypassing the cache — needed
+// for the proof-of-cache test.
 type fakePersonReader struct {
 	id      person.ID
 	stamp   *atomic.Value // string
@@ -61,9 +58,7 @@ func (f *fakePersonReader) GetByID(_ context.Context, id person.ID) (*person.Per
 
 func (f *fakePersonReader) SetStamp(s string) { f.stamp.Store(s) }
 
-// hybridFixture wires miniredis + HybridCache + fakeReader for the
-// SecurityStampCache tests. Returns the cache + reader so tests can
-// assert call-counts + mutate-bypass-cache to prove caching is real.
+// hybridFixture wires miniredis + HybridCache + fakeReader for tests.
 type hybridFixture struct {
 	cache  *cache.HybridCache
 	stamps *adapters.SecurityStampCache
@@ -95,9 +90,8 @@ func newHybridFixture(t *testing.T, personID person.ID, initialStamp string) *hy
 const testStamp1 = "00000000-0000-7000-8000-000000000001"
 const testStamp2 = "00000000-0000-7000-8000-000000000002"
 
-// TestSecurityStampCache_Get_PopulatesFromReaderOnMiss is the basic
-// read-through cache assertion: miss triggers a single reader call,
-// the value comes back, the call counter ticked once.
+// TestSecurityStampCache_Get_PopulatesFromReaderOnMiss verifies miss
+// triggers exactly one reader call and returns the correct value.
 func TestSecurityStampCache_Get_PopulatesFromReaderOnMiss(t *testing.T) {
 	t.Parallel()
 	pid := person.ID("01999999-1111-7000-8000-000000000001")
@@ -116,28 +110,23 @@ func TestSecurityStampCache_Get_PopulatesFromReaderOnMiss(t *testing.T) {
 }
 
 // TestSecurityStampCache_Get_AfterWarmup_MutatedSourceReturnsCachedValue
-// is the canonical proof-of-cache test per `audit-checklist.md §12b`:
-// warm cache → mutate underlying source bypassing the facade →
-// re-call → assert PRE-mutation value still returned. Tautological
-// "call twice, assert equal" passes even with cache disabled — this
-// proves the cache layer is actually reading from cache, not the
-// reader.
+// is the proof-of-cache test: warm → mutate source bypassing facade →
+// re-call → assert the PRE-mutation value is returned.
+// A "call twice, assert equal" test passes even with no cache; this fails if
+// the facade doesn't actually cache.
 func TestSecurityStampCache_Get_AfterWarmup_MutatedSourceReturnsCachedValue(t *testing.T) {
 	t.Parallel()
 	pid := person.ID("01999999-2222-7000-8000-000000000002")
 	fx := newHybridFixture(t, pid, testStamp1)
 
-	// Warm cache (reader called once).
+	// Warm cache.
 	if _, err := fx.stamps.Get(t.Context(), pid); err != nil {
 		t.Fatalf("Get warmup: %v", err)
 	}
-	// Mutate source bypassing the facade — this would force any
-	// non-cached implementation to return the new value on next read.
+	// Mutate source bypassing the facade.
 	fx.reader.SetStamp(testStamp2)
 
-	// Allow ristretto admission to settle (set is async). The L2 write
-	// completes synchronously inside facade.Get so even if L1 misses,
-	// L2 is the safety net here.
+	// L2 write completes synchronously; L2 is the safety net even if L1 misses.
 	got, err := fx.stamps.Get(t.Context(), pid)
 	if err != nil {
 		t.Fatalf("Get post-mutation: %v", err)
@@ -148,11 +137,8 @@ func TestSecurityStampCache_Get_AfterWarmup_MutatedSourceReturnsCachedValue(t *t
 	}
 }
 
-// TestSecurityStampCache_Invalidate_BypassesCache asserts that after
-// Invalidate is called, the next Get re-fetches from the reader and
-// surfaces the post-mutation value. Without this, cascade subscribers
-// would have no way to close the eventual-consistency window faster
-// than the 30s TTL.
+// TestSecurityStampCache_Invalidate_BypassesCache verifies that after
+// Invalidate, the next Get re-fetches and returns the post-mutation value.
 func TestSecurityStampCache_Invalidate_BypassesCache(t *testing.T) {
 	t.Parallel()
 	pid := person.ID("01999999-3333-7000-8000-000000000003")
@@ -176,8 +162,7 @@ func TestSecurityStampCache_Invalidate_BypassesCache(t *testing.T) {
 	}
 }
 
-// TestSecurityStampValidator_IsFresh_TrueOnMatch is the happy-path
-// validator assertion.
+// TestSecurityStampValidator_IsFresh_TrueOnMatch verifies the happy path.
 func TestSecurityStampValidator_IsFresh_TrueOnMatch(t *testing.T) {
 	t.Parallel()
 	pid := person.ID("01999999-4444-7000-8000-000000000004")
@@ -193,8 +178,8 @@ func TestSecurityStampValidator_IsFresh_TrueOnMatch(t *testing.T) {
 	}
 }
 
-// TestSecurityStampValidator_IsFresh_FalseOnStale asserts the staleness
-// detection — caller treats false as 401 per security.md.
+// TestSecurityStampValidator_IsFresh_FalseOnStale verifies stale claim
+// returns false (caller treats as 401).
 func TestSecurityStampValidator_IsFresh_FalseOnStale(t *testing.T) {
 	t.Parallel()
 	pid := person.ID("01999999-5555-7000-8000-000000000005")
@@ -210,9 +195,8 @@ func TestSecurityStampValidator_IsFresh_FalseOnStale(t *testing.T) {
 	}
 }
 
-// TestSecurityStampValidator_IsFresh_EmptyPersonID_FalseNoLookup
-// asserts the early-return for malformed claims (defense-in-depth
-// against an attacker stripping `sub` from the JWT body).
+// TestSecurityStampValidator_IsFresh_EmptyPersonID_FalseNoLookup verifies
+// early-return for empty sub — defense-in-depth against stripped JWT claims.
 func TestSecurityStampValidator_IsFresh_EmptyPersonID_FalseNoLookup(t *testing.T) {
 	t.Parallel()
 	pid := person.ID("01999999-6666-7000-8000-000000000006")
@@ -231,10 +215,8 @@ func TestSecurityStampValidator_IsFresh_EmptyPersonID_FalseNoLookup(t *testing.T
 	}
 }
 
-// TestSecurityStampValidator_IsFresh_RepoError_PropagatesAsError
-// asserts that lookup failures (Person not found, DB error) surface as
-// errors rather than silently masking as "stale". The middleware
-// translates either to 401 — but operators care which branch fired.
+// TestSecurityStampValidator_IsFresh_RepoError_PropagatesAsError verifies
+// that lookup failures propagate as errors rather than being masked as stale.
 func TestSecurityStampValidator_IsFresh_RepoError_PropagatesAsError(t *testing.T) {
 	t.Parallel()
 	pid := person.ID("01999999-7777-7000-8000-000000000007")

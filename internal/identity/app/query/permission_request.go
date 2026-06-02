@@ -12,9 +12,8 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
 
-// PermissionRequestView is the read-shape of [permissionrequest.Request]
-// for HTTP responses. Mirrors the aggregate fields without leaking the
-// domain types into the wire boundary per Vernon IDDD ch. 4 + ADR 0046.
+// PermissionRequestView is the wire-shape of [permissionrequest.Request]
+// per Vernon IDDD ch. 4 + ADR 0046.
 type PermissionRequestView struct {
 	ID                    string
 	TenantID              string
@@ -55,10 +54,7 @@ func projectPermissionRequest(r *permissionrequest.Request) PermissionRequestVie
 // ----- GetPermissionRequest -------------------------------------------------
 
 // GetPermissionRequestQuery returns the read shape by ID.
-//
-// TenantID is the caller's tenant scope (injected from JWT context
-// by the HTTP layer) — flows explicitly through repository methods
-// per ADR 0062 (no ctx-tenancy GUC smuggling).
+// TenantID is the caller's JWT scope; passed explicitly per ADR 0062.
 type GetPermissionRequestQuery struct {
 	TenantID  tenant.ID
 	RequestID permissionrequest.ID
@@ -94,12 +90,8 @@ func (h GetPermissionRequestHandler) Handle(ctx context.Context, q GetPermission
 
 // ----- ListMyPermissionRequests --------------------------------------------
 
-// ListMyPermissionRequestsQuery returns the requester's paginated
-// history (all states).
-//
-// TenantID is the caller's tenant scope (injected from JWT context
-// by the HTTP layer) — flows explicitly through repository methods
-// per ADR 0062 (no ctx-tenancy GUC smuggling).
+// ListMyPermissionRequestsQuery returns the requester's paginated history (all states).
+// TenantID is the caller's JWT scope; passed explicitly per ADR 0062.
 type ListMyPermissionRequestsQuery struct {
 	TenantID              tenant.ID
 	RequesterMembershipID membership.ID
@@ -120,8 +112,7 @@ func NewListMyPermissionRequestsHandler(r permissionrequest.Repository) ListMyPe
 	return ListMyPermissionRequestsHandler{requests: r}
 }
 
-// Handle returns one page of requests authored by the supplied
-// Membership.
+// Handle returns one page of requests authored by the supplied Membership.
 func (h ListMyPermissionRequestsHandler) Handle(
 	ctx context.Context,
 	q ListMyPermissionRequestsQuery,
@@ -145,12 +136,8 @@ func (h ListMyPermissionRequestsHandler) Handle(
 
 // ----- ListPendingPermissionRequestsForApprover ----------------------------
 
-// ListPendingForApproverQuery returns the approver's pending queue —
-// every Pending Request the supplied Membership is positioned to act on.
-//
-// TenantID is the caller's tenant scope (injected from JWT context
-// by the HTTP layer) — flows explicitly through repository methods
-// per ADR 0062 (no ctx-tenancy GUC smuggling).
+// ListPendingForApproverQuery returns every Pending request the supplied
+// Membership can act on. TenantID is the caller's JWT scope; passed explicitly per ADR 0062.
 type ListPendingForApproverQuery struct {
 	TenantID             tenant.ID
 	ApproverMembershipID membership.ID
@@ -194,9 +181,7 @@ func (h ListPendingForApproverHandler) Handle(
 	return projectPermissionRequestPage(page), nil
 }
 
-// projectPermissionRequestPage rewraps a [pagination.Page] of domain
-// aggregates as a [PermissionRequestView] page — preserves the
-// pagination metadata (HasMore / NextCursor) verbatim.
+// projectPermissionRequestPage maps a domain aggregate page to a view page.
 func projectPermissionRequestPage(
 	page pagination.Page[*permissionrequest.Request],
 ) pagination.Page[PermissionRequestView] {

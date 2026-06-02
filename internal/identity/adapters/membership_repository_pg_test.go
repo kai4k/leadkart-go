@@ -60,18 +60,16 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
 
-// testNow is the deterministic instant test fixtures pass to domain
-// factories + mutators per the clock-injection refactor.
+// testNow is the deterministic clock used by all test fixtures in this package.
 var testNow = time.Date(2026, 5, 24, 12, 0, 0, 0, time.UTC)
 
-// seedTenant + seedPerson are convenience helpers — repos are wired the
-// same way the production composition root will wire them.
+// seedTenant and seedPerson are shared test helpers wired the same way
+// the production composition root wires them.
 func seedTenant(t *testing.T, repo *adapters.TenantRepository) *tenant.Tenant {
 	t.Helper()
 	id := tenant.ID(ids.NewV7().String())
-	// UUIDv7's leading chars are timestamp-derived → tests called in
-	// rapid succession would collide on a 8-char prefix slug. Use the
-	// trailing random portion.
+	// UUIDv7 leading chars are timestamp-derived; use the trailing random
+	// portion to avoid slug collisions on rapid test starts.
 	full := ids.NewV7().String()
 	s, err := slug.New("ten-" + full[len(full)-8:])
 	if err != nil {
@@ -97,9 +95,8 @@ func seedPerson(t *testing.T, repo *adapters.PersonRepository, addr string) *per
 	return p
 }
 
-// SQL-contract: SQLSTATE 23505 from the partial unique index
-// uq_memberships_person_active blocks a second Active row for the same
-// Person across ANY tenant.
+// SQL-contract: SQLSTATE 23505 from uq_memberships_person_active blocks
+// a second Active row for the same Person across any tenant.
 func TestMembershipRepository_Add_SecondActive_ReturnsErrAlreadyActive(t *testing.T) {
 	t.Parallel()
 	pool := repoFixture(t)
@@ -112,15 +109,14 @@ func TestMembershipRepository_Add_SecondActive_ReturnsErrAlreadyActive(t *testin
 	tnB := seedTenant(t, tenants)
 	p := seedPerson(t, persons, "switch@example.test")
 
-	// First Active Membership in tenant A.
+	// Active in tenant A.
 	mA, _ := membership.New(membership.ID(ids.NewV7().String()), p.ID(), tnA.ID(), membership.ID(""), testNow)
 	ctxA := tenancy.WithID(t.Context(), tenancy.ID(tnA.ID().String()))
 	if err := memberships.Add(ctxA, mA); err != nil {
 		t.Fatalf("first Add: %v", err)
 	}
 
-	// Second concurrent Active Membership in tenant B — partial unique
-	// index uq_memberships_person_active blocks it.
+	// Second Active in tenant B — partial unique index blocks it.
 	mB, _ := membership.New(membership.ID(ids.NewV7().String()), p.ID(), tnB.ID(), membership.ID(""), testNow)
 	ctxB := tenancy.WithID(t.Context(), tenancy.ID(tnB.ID().String()))
 	err := memberships.Add(ctxB, mB)
@@ -129,8 +125,7 @@ func TestMembershipRepository_Add_SecondActive_ReturnsErrAlreadyActive(t *testin
 	}
 }
 
-// SQL-contract: RLS policy enforcement — cross-tenant lookup returns
-// ErrNotFound. Canonical RLS proof for this file.
+// SQL-contract: RLS isolation — cross-tenant GetByID returns ErrNotFound.
 func TestMembershipRepository_GetByID_OutsideTenantScope_NotFound(t *testing.T) {
 	t.Parallel()
 	pool := repoFixture(t)
@@ -149,7 +144,7 @@ func TestMembershipRepository_GetByID_OutsideTenantScope_NotFound(t *testing.T) 
 		t.Fatalf("Add: %v", err)
 	}
 
-	// Look up under tenant B's scope — RLS hides the row.
+	// Tenant B's scope — RLS hides the row.
 	ctxB := tenancy.WithID(t.Context(), tenancy.ID(tnB.ID().String()))
 	_, err := memberships.GetByID(ctxB, tnB.ID(), mA.ID())
 	if !errors.Is(err, membership.ErrNotFound) {
@@ -157,22 +152,12 @@ func TestMembershipRepository_GetByID_OutsideTenantScope_NotFound(t *testing.T) 
 	}
 }
 
-// SQL-contract: the partial unique index uq_memberships_person_active
-// (predicate `WHERE status='active' AND NOT is_deleted`) releases its
-// slot the moment a row flips out of status='active' — proving the
-// predicate sees the new status atomically inside the UPDATE tx.
+// SQL-contract: uq_memberships_person_active releases its slot when
+// status flips out of 'active'. Two halves:
 //
-// Two halves of the SQL contract:
-//
-//   1. Physical row state — direct SELECT bypassing the adapter
-//      proves the UPDATE rewrote `status` (not a soft-delete), which
-//      is what frees the partial-index slot (the predicate filters
-//      on status, not on is_deleted alone).
-//   2. The partial-index slot release admits a second Active across
-//      tenants — the second Add for the same Person succeeds.
-//
-// Canonical post-rolehierarchy sharpening pattern per ADR 0062:
-// adapter-bypass SELECT for physical state PLUS observable behaviour.
+//  1. Physical row state via adapter-bypass SELECT: UPDATE rewrote
+//     status column (not a soft-delete), freeing the partial-index slot.
+//  2. Slot release admits a second Active for the same Person.
 func TestMembershipRepository_UpdateByID_DeactivateClearsActiveSlot(t *testing.T) {
 	t.Parallel()
 	pool := repoFixture(t)
@@ -203,13 +188,8 @@ func TestMembershipRepository_UpdateByID_DeactivateClearsActiveSlot(t *testing.T
 		t.Fatalf("Deactivate: %v", err)
 	}
 
-	// SQL-contract part 1: physical row state — UPDATE rewrote status
-	// from 'active' to 'inactive' (the partial-index predicate filters
-	// on status, so the slot is freed by status change, not by row
-	// removal). Direct SELECT via OWNER DSN — bypasses RLS so we can
-	// inspect physical row state regardless of tenant scope (the app
-	// pool's RLS would hide rows whose tenant_id doesn't match the
-	// GUC, which is what we WANT to inspect physically).
+	// SQL-contract part 1: direct SELECT via OWNER DSN proves the UPDATE
+	// wrote status='inactive' (freeing the partial-index slot).
 	ownerDB, openErr := sql.Open("pgx", sharedPG.OwnerDSN())
 	if openErr != nil {
 		t.Fatalf("open owner DB: %v", openErr)
@@ -226,10 +206,7 @@ func TestMembershipRepository_UpdateByID_DeactivateClearsActiveSlot(t *testing.T
 		t.Fatalf("physical row status: got %q want %q — Deactivate didn't update the status column", status, "inactive")
 	}
 
-	// SQL-contract part 2: partial-index slot release admits the
-	// second Active across tenants (per Person). The fake's logical
-	// filter mirrors this observable; only this part of the test
-	// proves the PG partial-index is what's doing it.
+	// SQL-contract part 2: slot release admits a new Active in another tenant.
 	mB, _ := membership.New(membership.ID(ids.NewV7().String()), p.ID(), tnB.ID(), membership.ID(""), testNow)
 	ctxB := tenancy.WithID(t.Context(), tenancy.ID(tnB.ID().String()))
 	if err := memberships.Add(ctxB, mB); err != nil {
@@ -237,10 +214,8 @@ func TestMembershipRepository_UpdateByID_DeactivateClearsActiveSlot(t *testing.T
 	}
 }
 
-// SQL-contract: GetActiveForPerson runs without a tenant GUC bound
-// (login flow precondition — the tenant is the OUTPUT of this query).
-// The adapter must open the connection under BYPASSRLS so the SELECT
-// can scan across all tenants. RLS-bypass discipline at the SQL layer.
+// SQL-contract: GetActiveForPerson runs without a tenant GUC bound;
+// the adapter opens under BYPASSRLS so it can scan across tenants.
 func TestMembershipRepository_GetActiveForPerson_BypassesRLS(t *testing.T) {
 	t.Parallel()
 	pool := repoFixture(t)
@@ -258,8 +233,7 @@ func TestMembershipRepository_GetActiveForPerson_BypassesRLS(t *testing.T) {
 		t.Fatalf("Add: %v", err)
 	}
 
-	// Login flow: ctx has NO tenant set yet — login resolves it via this
-	// query under platform scope.
+	// Login flow: ctx has no tenant — GetActiveForPerson resolves it.
 	got, err := memberships.GetActiveForPerson(t.Context(), p.ID())
 	if err != nil {
 		t.Fatalf("GetActiveForPerson: %v", err)
@@ -269,10 +243,9 @@ func TestMembershipRepository_GetActiveForPerson_BypassesRLS(t *testing.T) {
 	}
 }
 
-// SQL-contract: Add writes role_assignments + permission_overrides +
-// profile columns/rows in the SAME transaction as the membership row.
-// Proves the multi-table fan-out write atomically lands and the
-// matching SELECT hydration walks each child relation.
+// SQL-contract: Add writes role_assignments, permission_overrides, and
+// profile in the same transaction as the membership row; GetByID hydrates
+// all child tables.
 func TestMembershipRepository_Add_PersistsChildTablesInSameTx(t *testing.T) {
 	t.Parallel()
 	pool := repoFixture(t)
@@ -285,7 +258,7 @@ func TestMembershipRepository_Add_PersistsChildTablesInSameTx(t *testing.T) {
 	tn := seedTenant(t, tenants)
 	p := seedPerson(t, persons, "task18-add@example.test")
 
-	// Two real roles in the tenant — composite FK requires real role IDs.
+	// Composite FK requires real role IDs in the same tenant.
 	r1 := newRole(t, tn.ID(), "Sales")
 	r2 := newRole(t, tn.ID(), "Manager")
 	ctx := tenancy.WithID(t.Context(), tenancy.ID(tn.ID().String()))
@@ -296,8 +269,8 @@ func TestMembershipRepository_Add_PersistsChildTablesInSameTx(t *testing.T) {
 		t.Fatalf("Add r2: %v", err)
 	}
 
-	// Build a Membership carrying role assignments + a granted + a revoked
-	// permission overlay + non-empty profile.
+	// Membership with role assignments, a granted override, a revoked override,
+	// and non-empty profile fields.
 	m, err := membership.New(membership.ID(ids.NewV7().String()), p.ID(), tn.ID(), membership.ID(""), testNow)
 	if err != nil {
 		t.Fatalf("membership.New: %v", err)
@@ -324,9 +297,8 @@ func TestMembershipRepository_Add_PersistsChildTablesInSameTx(t *testing.T) {
 		t.Fatalf("Add membership: %v", err)
 	}
 
-	// GetByID hydrates roles + overrides + profile end-to-end. The exact
-	// state-transition semantics are covered by membershiptest.FakeRepository;
-	// here we only prove the SQL fan-out write+read round-trip is intact.
+	// GetByID proves the SQL fan-out write+read round-trip is intact.
+	// State-machine semantics are covered by membershiptest.FakeRepository.
 	got, err := memberships.GetByID(ctx, tn.ID(), m.ID())
 	if err != nil {
 		t.Fatalf("GetByID: %v", err)
@@ -346,10 +318,8 @@ func TestMembershipRepository_Add_PersistsChildTablesInSameTx(t *testing.T) {
 	}
 }
 
-// SQL-contract: composite FK fk_role_assignments_same_tenant rejects an
-// INSERT into role_assignments whose role_id belongs to a different
-// tenant than the membership.tenant_id. Declarative cross-tenant safety
-// per ADR 0058.
+// SQL-contract: composite FK fk_role_assignments_same_tenant rejects a
+// role_id from another tenant (declarative cross-tenant safety, ADR 0058).
 func TestMembershipRepository_Add_RejectsCrossTenantRoleAssignment(t *testing.T) {
 	t.Parallel()
 	pool := repoFixture(t)
@@ -363,7 +333,7 @@ func TestMembershipRepository_Add_RejectsCrossTenantRoleAssignment(t *testing.T)
 	tnB := seedTenant(t, tenants)
 	p := seedPerson(t, persons, "cross-tenant@example.test")
 
-	// Role in Tenant B; Membership in Tenant A; assign role from B → must fail.
+	// Role from Tenant B assigned to Membership in Tenant A — must fail.
 	rB := newRole(t, tnB.ID(), "ForeignRole")
 	ctxB := tenancy.WithID(t.Context(), tenancy.ID(tnB.ID().String()))
 	if err := rolesRepo.Add(ctxB, rB); err != nil {

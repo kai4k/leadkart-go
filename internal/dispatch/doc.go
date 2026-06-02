@@ -1,14 +1,23 @@
 // Package dispatch is the Dispatch bounded context — consignment notes
 // + carrier-status tracking. Per BRD §6.6.
 //
-// Layout per CLAUDE.md "Three unbreakable rules":
+// STATUS: scaffold, NOT wired. The domain, app, ports/subscribers, and
+// integrationevents packages exist, but there is no adapters/ layer
+// (no pg repository, no outbox, no forwarder) and ports/subscribers'
+// Register is not called from any cmd/ composition root. So nothing in
+// this module runs yet. The OrderPacked→ConsignmentNote flow below is
+// the intended design, not live behaviour. It also depends on the
+// Orders module publishing orders.order_packed.v1, which Orders does
+// not yet do (Orders is domain-only).
+//
+// Intended layout:
 //
 //	internal/dispatch/
-//	├── domain/                 ConsignmentNote aggregate
-//	├── app/                    command + query handlers
-//	├── ports/                  HTTP + subscribers (OrderPacked → create note)
-//	├── adapters/               pgx/sqlc + outbox
-//	└── integrationevents/      framework-neutral wire records
+//	├── domain/                 ConsignmentNote aggregate              [present]
+//	├── app/                    command + query handlers              [present]
+//	├── ports/                  HTTP + subscribers (OrderPacked → note) [present, unwired]
+//	├── adapters/               pgx/sqlc + outbox                      [MISSING]
+//	└── integrationevents/      framework-neutral wire records        [present]
 //
 // Owner of:
 //

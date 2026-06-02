@@ -11,14 +11,12 @@ import (
 	"github.com/leadkart/leadkart-go/internal/inventory/domain/product"
 )
 
-// UpdateProductCommand — partial-update payload. Only non-nil fields
-// are considered; matching-value updates are no-op (no event).
+// UpdateProductCommand is a partial-update payload: only non-nil fields apply,
+// and a matching-value update is a no-op (no event).
 //
-// TenantID is the caller's tenant scope (injected from JWT context by
-// the HTTP layer). Per ADR 0062 (TDL canon): tenantID flows through
-// explicit command fields, not via context smuggling. The adapter binds
-// the GUC from cmd.TenantID at tx-begin; RLS remains the security
-// backstop.
+// TenantID is the caller's tenant scope; per ADR 0062 (TDL canon) it flows
+// through an explicit field, never via context smuggling. The adapter binds
+// the GUC from it at tx-begin; RLS remains the security backstop.
 type UpdateProductCommand struct {
 	TenantID          tenant.ID
 	ProductID         product.ID
@@ -29,16 +27,15 @@ type UpdateProductCommand struct {
 	Manufacturer      *string
 }
 
-// UpdateProductHandler runs Load → updateFn → Persist + event drain
-// under the repository's tx (TDL UpdateFn pattern per ADR 0004).
+// UpdateProductHandler runs load → updateFn → persist plus event drain under
+// the repository's tx (TDL UpdateFn pattern, ADR 0004).
 type UpdateProductHandler struct {
 	products product.Repository
 	now      func() time.Time
 }
 
-// NewUpdateProductHandler wires the handler. `now` is the explicit time
-// source — composition root wires `time.Now`; tests inject a fixed-time
-// closure. Nil → time.Now.
+// NewUpdateProductHandler wires the handler. now is the injected clock (nil →
+// time.Now).
 func NewUpdateProductHandler(products product.Repository, now func() time.Time) UpdateProductHandler {
 	if now == nil {
 		now = time.Now
@@ -46,9 +43,8 @@ func NewUpdateProductHandler(products product.Repository, now func() time.Time) 
 	return UpdateProductHandler{products: products, now: now}
 }
 
-// Handle applies the partial update. ErrNotFound surfaces as 404.
-// product.ErrInvalid surfaces as 422 (with field detail in the inline
-// HTTP handler). product.ErrDeleted surfaces as 409.
+// Handle applies the partial update. ErrNotFound → 404, product.ErrInvalid →
+// 422 (with field detail at the HTTP layer), product.ErrDeleted → 409.
 func (h UpdateProductHandler) Handle(ctx context.Context, cmd UpdateProductCommand) error {
 	if cmd.TenantID.IsZero() {
 		return errors.New("update_product: tenant id required")

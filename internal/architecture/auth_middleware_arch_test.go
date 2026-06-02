@@ -1,17 +1,7 @@
 // auth_middleware_arch_test.go — Principle 7: Auth in Middleware.
 //
-// Per ADR 0007 (stdlib net/http ServeMux), ADR 0011 (JWT), ADR 0031
-// (idempotency via X-Command-Id), ADR 0036 (permission model), and
-// OWASP API Top 10 §A01:2023 (broken object-level authorisation):
-// every route is either explicitly public (allow-listed) or gated by
-// a canonical middleware. No ad-hoc auth checks inside handler bodies.
-//
-// Tests in this file:
-//   43. TestArch_EveryAuthenticatedRouteHasMiddleware
-//   44. TestArch_PermissionConstantsFromCatalog
-//   45. TestArch_MiddlewareOrderCanonical
-//   46. TestArch_IdempotencyOnMutationEndpoints
-//   47. TestArch_PasswordFieldsTyped
+// ADR 0007/0011/0031/0036 + OWASP A01:2023: every route is public (allow-listed)
+// or gated by a canonical middleware. No ad-hoc auth checks in handler bodies.
 
 package architecture_test
 
@@ -30,21 +20,21 @@ import (
 // either pre-date the JWT exchange (login / password-reset) or serve
 // non-product surface (health, openapi).
 var publicRoutesAllowList = map[string]bool{
-	"GET /":                                          true, // root redirect to docs
-	"GET /favicon.ico":                               true,
-	"GET /docs":                                      true,
-	"GET /docs/":                                     true,
-	"GET /openapi.yaml":                              true,
-	"GET /health":                                    true,
-	"GET /alive":                                     true,
-	"GET /ready":                                     true,
-	"POST /api/v1/auth/login":                        true,
-	"POST /api/v1/auth/refresh":                      true,
-	"POST /api/v1/auth/logout":                       true,
-	"POST /api/v1/auth/request-password-reset":       true,
-	"POST /api/v1/auth/reset-password":               true,
-	"POST /api/v1/auth/confirm-email-change":         true,
-	"POST /api/v1/tenants":                           true, // open signup; rate-limited at IP
+	"GET /":                     true, // root redirect to docs
+	"GET /favicon.ico":          true,
+	"GET /docs":                 true,
+	"GET /docs/":                true,
+	"GET /openapi.yaml":         true,
+	"GET /health":               true,
+	"GET /alive":                true,
+	"GET /ready":                true,
+	"POST /api/v1/auth/login":   true,
+	"POST /api/v1/auth/refresh": true,
+	"POST /api/v1/auth/logout":  true,
+	"POST /api/v1/auth/request-password-reset": true,
+	"POST /api/v1/auth/reset-password":         true,
+	"POST /api/v1/auth/confirm-email-change":   true,
+	"POST /api/v1/tenants":                     true, // open signup; rate-limited at IP
 }
 
 // muxHandleRE captures `mux.Handle("METHOD /path", ...)`. We pull
@@ -292,7 +282,9 @@ func TestArch_PermissionConstantsFromCatalog(t *testing.T) {
 // ----------------------------------------------------------------------------
 //
 // The canonical chain order in httpmw.PublicChain MUST be:
-//   Correlation → RequestLog → Recover → IPRateLimit → Idempotency
+//
+//	Correlation → RequestLog → Recover → IPRateLimit → Idempotency
+//
 // (then per-route auth + handler).
 //
 // Detection: parse internal/common/httpmw/chain.go; locate the

@@ -10,15 +10,15 @@ import (
 	"github.com/leadkart/leadkart-go/internal/platform/platformtest"
 )
 
-// TestGetLeadCreditBalance_HappyPath — handler returns the live
-// balance projection. C2 — review-pass.
+// TestGetLeadCreditBalance_HappyPath — handler returns the live balance
+// projection. C2.
 func TestGetLeadCreditBalance_HappyPath(t *testing.T) {
 	t.Parallel()
 
 	credits := platformtest.NewFakeLeadCreditRepository()
 	tenantID := leadcredit.TenantID(ids.NewV7().String())
 
-	// Seed: a tenant with 250 credits.
+	// Seed a tenant with 250 credits.
 	c, err := leadcredit.NewForTenant(tenantID, qNow())
 	if err != nil {
 		t.Fatalf("ctor: %v", err)
@@ -46,8 +46,8 @@ func TestGetLeadCreditBalance_HappyPath(t *testing.T) {
 	}
 }
 
-// TestGetLeadCreditBalance_NoRowYet_TypedSentinel — the typed sentinel
-// the HTTP layer maps to 200 + zero balance. C2.
+// TestGetLeadCreditBalance_NoRowYet_TypedSentinel — typed sentinel the HTTP
+// layer maps to 200 + zero balance. C2.
 func TestGetLeadCreditBalance_NoRowYet_TypedSentinel(t *testing.T) {
 	t.Parallel()
 

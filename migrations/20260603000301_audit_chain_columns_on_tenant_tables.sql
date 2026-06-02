@@ -37,7 +37,7 @@
 --   platform.lead_credits                     → balance aggregate
 --   inventory.stock_movements                 → event-stream aggregate
 --   *.outbox, *.processed_messages,           → infra
---   buildingblocks.*, identity.auth_routing
+--   common.*, identity.auth_routing
 --   identity.persons (credential / lockout / etc.)
 --
 -- Discipline:

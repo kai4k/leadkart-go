@@ -28,10 +28,11 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/leadkart/leadkart-go/internal/common/actclaim"
 	"github.com/leadkart/leadkart-go/internal/common/tenancy"
-	"github.com/leadkart/leadkart-go/internal/identity/app/actclaim"
 	"github.com/leadkart/leadkart-go/internal/identity/app/jwt"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/permission"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
 
 // ----- Context key + accessor ----------------------------------------------
@@ -347,11 +348,12 @@ func RequireTenantContext(verifier Verifier, validator StampValidator, pathVar s
 
 // ----- RequirePlatform -----------------------------------------------------
 
-// PlatformTenantSlug is the canonical slug for the platform tenant.
-// Mirrors cmd/bootstrap's platformTenantSlug + the .NET parent's
-// SuperUser god-mode convention. Used as a defense-in-depth anchor
-// for platform-tier middleware (see [RequirePlatform]).
-const PlatformTenantSlug = "platform"
+// PlatformTenantSlug is the canonical slug for the platform tenant,
+// re-exported from the single source of truth [tenant.PlatformSlug] so
+// platform-tier middleware (see [RequirePlatform]) and the login command
+// that mints the is_platform claim can never disagree on which tenant is
+// privileged. Used as a defense-in-depth anchor.
+const PlatformTenantSlug = tenant.PlatformSlug
 
 // RequirePlatform gates a handler on (a) a verified + freshness-
 // checked JWT AND (b) the `is_platform=true` claim AND (c) the

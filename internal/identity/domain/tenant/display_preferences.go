@@ -6,22 +6,9 @@ import (
 	"time"
 )
 
-// DisplayPreferences is a tenant's UI rendering preferences:
-//   - Locale (BCP 47 language tag — "en-IN", "hi-IN")
-//   - TimeZone (IANA tz database — "Asia/Kolkata")
-//   - DateFormat (Go time.Layout-style or canonical short codes)
-//   - Currency (ISO 4217 — "INR", "USD")
-//
-// Validation:
-//   - Locale: BCP 47 shape — 2-3 lowercase letters + optional region.
-//   - TimeZone: must successfully load via time.LoadLocation.
-//   - DateFormat: non-empty, ≤32 chars, accepts Go time.Layout strings
-//     ("02-Jan-2006") or canonical short codes ("DD-MMM-YYYY",
-//     "YYYY-MM-DD", "DD/MM/YYYY").
-//   - Currency: ISO 4217 — 3 uppercase letters.
-//
-// Per LeadKart .NET parent's DisplayPreferences VO. Defaults to
-// India: en-IN / Asia/Kolkata / DD-MMM-YYYY / INR.
+// DisplayPreferences holds the tenant's UI rendering preferences: Locale
+// (BCP 47), TimeZone (IANA), DateFormat (Go layout or short code), and
+// Currency (ISO 4217). Defaults to India: en-IN / Asia/Kolkata / DD-MMM-YYYY / INR.
 type DisplayPreferences struct {
 	locale     string
 	timeZone   string
@@ -34,12 +21,8 @@ const (
 	maxDateFormatLen = 32
 )
 
-// NewDisplayPreferences validates each field + returns a DisplayPreferences.
-//
-// Pass empty strings to keep defaults — but the factory is strict (no
-// silent fallbacks): empty inputs fail validation. Use [DefaultDisplayPreferences]
-// as the starting point, then mutate via the per-field apply pattern
-// the application layer wraps around this VO.
+// NewDisplayPreferences validates all four fields and returns a DisplayPreferences.
+// Empty inputs are rejected; use [DefaultDisplayPreferences] as the starting point.
 func NewDisplayPreferences(locale, timeZone, dateFormat, currency string) (DisplayPreferences, error) {
 	locale = strings.TrimSpace(locale)
 	timeZone = strings.TrimSpace(timeZone)
@@ -78,7 +61,7 @@ func NewDisplayPreferences(locale, timeZone, dateFormat, currency string) (Displ
 	}, nil
 }
 
-// DefaultDisplayPreferences returns the system default — India-tuned.
+// DefaultDisplayPreferences returns the India-tuned system default.
 func DefaultDisplayPreferences() DisplayPreferences {
 	return DisplayPreferences{
 		locale:     "en-IN",
@@ -105,15 +88,14 @@ func (d DisplayPreferences) IsZero() bool {
 	return d.locale == "" && d.timeZone == "" && d.dateFormat == "" && d.currency == ""
 }
 
-// Equal compares two DisplayPreferences by all fields.
+// Equal reports whether d and other are identical.
 func (d DisplayPreferences) Equal(other DisplayPreferences) bool {
 	return d == other
 }
 
-// isBCP47Like enforces a permissive shape: 2-3 lowercase letters
-// optionally followed by a region subtag (- + 2 uppercase letters
-// or 3 digits). Accepts "en", "hi", "en-IN", "hi-IN", "es-419".
-// Doesn't validate against the IANA registry.
+// isBCP47Like checks a permissive BCP 47 shape: 2-3 lowercase primary
+// subtag + optional region (2 uppercase letters or 3 digits).
+// Does not validate against the IANA registry.
 func isBCP47Like(s string) bool {
 	if len(s) < 2 || len(s) > maxLocaleLen {
 		return false
@@ -122,7 +104,7 @@ func isBCP47Like(s string) bool {
 	if len(parts) > 3 {
 		return false
 	}
-	// Primary subtag: 2-3 lowercase letters.
+	// Primary subtag must be 2-3 lowercase letters.
 	if !allLowerAlpha(parts[0], 2, 3) {
 		return false
 	}
@@ -171,8 +153,8 @@ func allDigits(s string, minN, maxN int) bool {
 	return true
 }
 
-// isISO4217Currency enforces 3 uppercase ASCII letters. Doesn't
-// validate against the ISO 4217 registry.
+// isISO4217Currency enforces exactly 3 uppercase ASCII letters.
+// Does not validate against the ISO 4217 registry.
 func isISO4217Currency(s string) bool {
 	return allUpperAlpha(s, 3, 3)
 }

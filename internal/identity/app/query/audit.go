@@ -8,24 +8,15 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/leadkart/leadkart-go/internal/common/audit"
 	"github.com/leadkart/leadkart-go/internal/common/pagination"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
-	"github.com/leadkart/leadkart-go/internal/common/audit"
 )
 
-// AuditEventView is one row of the audit-log read shape per
-// ADR 0027 (outbox doubles as audit) + the additive
-// buildingblocks.audit_log_entry table from migration
-// 20260507000001. Fields:
-//
-//   - Action — domain command name (e.g. "tenant.suspended")
-//   - Actor / TenantContext — uuid strings; empty when NULL
-//   - Succeeded + FailureReason — outcome surface for forensic
-//     queries ("show me every failed suspend in the last week")
-//   - OccurredAt — UTC timestamp; ALSO the keyset sort column
-//   - DurationMs — command execution wall-clock
-//   - Payload — raw JSONB bytes; HTTP layer surfaces as-is
+// AuditEventView is one read-side row from common.audit_log_entry
+// (migration 20260507000001, ADR 0027). OccurredAt is also the keyset
+// sort column. Payload is raw JSONB; HTTP layer surfaces it as-is.
 type AuditEventView struct {
 	ID            string
 	Action        string
@@ -41,20 +32,17 @@ type AuditEventView struct {
 
 // ----- ListAuditEventsByTenant ---------------------------------------------
 
-// ListAuditEventsByTenantQuery returns paginated tenant-scoped
-// audit events. Cursor walks (occurred_at_utc DESC, id DESC). Per
-// ADR 0038 keyset semantics; per ADR 0039 caller MUST be operator
-// (is_platform=true) OR same-tenant admin — HTTP layer gates.
+// ListAuditEventsByTenantQuery returns paginated tenant-scoped audit events.
+// Cursor walks (occurred_at_utc DESC, id DESC) per ADR 0038.
+// HTTP layer gates: caller must be platform operator or same-tenant admin (ADR 0039).
 type ListAuditEventsByTenantQuery struct {
 	TenantID tenant.ID
 	Cursor   pagination.Cursor
 	PageSize int
 }
 
-// ListAuditEventsByTenantHandler depends on [audit.Reader] only. No
-// pgxpool / pgx / sqlc imports — boundary discipline per ADR 0047
-// (app/ may NOT depend on the database driver or generated row types;
-// adapter implementations live behind the audit.Reader interface).
+// ListAuditEventsByTenantHandler depends on [audit.Reader] only; no
+// pgxpool/pgx/sqlc imports per ADR 0047 boundary discipline.
 type ListAuditEventsByTenantHandler struct {
 	reader audit.Reader
 }
@@ -94,9 +82,8 @@ func (h ListAuditEventsByTenantHandler) Handle(ctx context.Context, q ListAuditE
 
 // ----- ListAuditEventsByUser -----------------------------------------------
 
-// ListAuditEventsByUserQuery returns paginated person-scoped audit
-// events. UserID is the JWT subject (person_id), NOT a membership
-// id — audit_log_entry.user_id mirrors JWT.Subject.
+// ListAuditEventsByUserQuery returns paginated person-scoped audit events.
+// UserID is the JWT Subject (person_id), not a membership id.
 type ListAuditEventsByUserQuery struct {
 	UserID   person.ID
 	Cursor   pagination.Cursor
@@ -143,18 +130,16 @@ func (h ListAuditEventsByUserHandler) Handle(ctx context.Context, q ListAuditEve
 
 // ----- helpers --------------------------------------------------------------
 
-// cursorOrAuditSentinel decodes the keyset cursor into (occurred_at, id)
-// tuple, falling back to the first-page sentinel from the audit
-// package when the cursor is empty or malformed.
+// cursorOrAuditSentinel decodes the keyset cursor to (occurred_at, id),
+// falling back to the audit package's first-page sentinel when empty or malformed.
 func cursorOrAuditSentinel(c pagination.Cursor) (time.Time, uuid.UUID) {
 	if c.ID == "" && c.SortValue.IsZero() {
 		return audit.FirstPageBefore, audit.FirstPageBeforeID
 	}
 	id, err := uuid.Parse(c.ID)
 	if err != nil {
-		// Malformed cursor ID — fall back to sentinel. HTTP boundary
-		// should have already rejected invalid cursors via
-		// pagination.Decode; this is belt-and-braces.
+		// Malformed cursor ID — fall back to sentinel (belt-and-braces;
+		// HTTP boundary should already reject invalid cursors).
 		return audit.FirstPageBefore, audit.FirstPageBeforeID
 	}
 	return c.SortValue, id

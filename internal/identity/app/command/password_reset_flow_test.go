@@ -13,21 +13,18 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person/persontest"
 )
 
-// errBoom is a marker used by the failing-repo + failing-breach-checker
-// doubles below so tests can assert error propagation without coupling
-// to a specific message string.
+// errBoom is the marker error the doubles below return so tests assert
+// propagation without coupling to a message string.
 var errBoom = errors.New("boom")
 
-// failingPersonsRepo embeds the shared fake but overrides specific
-// method(s) to return errBoom for the targeted lookup/persist branch.
-// Construct with helper constructors below; keep the override surface
-// minimal so the rest of the contract still flows through the fake.
+// failingPersonsRepo injects errBoom on selected methods; the rest flows
+// through the embedded fake.
 type failingPersonsRepo struct {
 	*persontest.FakeRepository
-	failGetByEmail    bool
+	failGetByEmail     bool
 	failGetByTokenHash bool
-	failUpdateByID    bool
-	failUpdateErr     error // override the err returned (nil → errBoom)
+	failUpdateByID     bool
+	failUpdateErr      error // override the err returned (nil → errBoom)
 }
 
 func (f *failingPersonsRepo) GetByEmail(ctx context.Context, e email.Address) (*person.Person, error) {
@@ -55,17 +52,14 @@ func (f *failingPersonsRepo) UpdateByID(ctx context.Context, id person.ID, fn fu
 	return f.FakeRepository.UpdateByID(ctx, id, fn)
 }
 
-// breachingChecker is a [passwordpolicy.Checker] that reports every
-// password as breached. Used to exercise the breach-rejection branch
-// without coupling to the OfflineList contents.
+// breachingChecker reports every password as breached.
 type breachingChecker struct{}
 
 func (breachingChecker) IsBreached(_ context.Context, _ string) (bool, error) {
 	return true, nil
 }
 
-// failingBreachChecker returns an error from IsBreached — exercises the
-// "lookup failure" branch where the handler MUST surface the wrap, not
+// failingBreachChecker errors from IsBreached — the handler must wrap, not
 // fail-open.
 type failingBreachChecker struct{}
 
@@ -73,16 +67,9 @@ func (failingBreachChecker) IsBreached(_ context.Context, _ string) (bool, error
 	return false, errBoom
 }
 
-
-// resettableRepo wraps the shared [persontest.FakeRepository] with the
-// drained-events capture the password-reset flow assertions need. The
-// shared fake matches the SQL adapter's contract semantics
-// (GetByPasswordResetTokenHash hashes match against the pending
-// reset sub-state); this wrapper adds drainPersonEvents-equivalent
-// observability so tests can assert on the
-// [person.PasswordResetEmailRequestedEvent] payload (carrying the
-// plaintext token per ADR 0057) — the email gateway no longer records
-// the body inline.
+// resettableRepo wraps the persontest fake to capture drained events, so tests
+// can assert on the [person.PasswordResetEmailRequestedEvent] payload (the
+// plaintext token per ADR 0057).
 type resettableRepo struct {
 	*persontest.FakeRepository
 	seeded        *person.Person // the one Person under test, retained for event drain
@@ -100,9 +87,8 @@ func newResettableRepo(t *testing.T, p *person.Person) *resettableRepo {
 	return &resettableRepo{FakeRepository: inner, seeded: p}
 }
 
-// UpdateByID overrides the embedded fake's variant to additionally
-// drain events on commit — mirrors the pg adapter's drainPersonEvents
-// path so the test sees the same shape production sees post-Wave-9.2d.
+// UpdateByID also drains events on commit, mirroring the pg adapter's
+// drainPersonEvents path.
 func (r *resettableRepo) UpdateByID(ctx context.Context, id person.ID, fn func(*person.Person) (bool, error)) error {
 	if err := r.FakeRepository.UpdateByID(ctx, id, fn); err != nil {
 		return err
@@ -127,9 +113,6 @@ func (r *resettableRepo) emailRequestedToken(t *testing.T) string {
 }
 
 func TestRequestPasswordReset_HappyPath_PersistsAndEmitsEmailEvent(t *testing.T) {
-	// Safe to parallelise post-clock-injection: each handler carries its
-	// own `now func() time.Time` closure so different tests can use
-	// different instants concurrently without racing on a global.
 	t.Parallel()
 
 	addr, err := email.New("alice@example.test")
@@ -147,10 +130,8 @@ func TestRequestPasswordReset_HappyPath_PersistsAndEmitsEmailEvent(t *testing.T)
 	if p.PendingPasswordReset().IsZero() {
 		t.Error("expected pending password reset to be persisted")
 	}
-	// Per ADR 0057: the email is delivered async via a Watermill
-	// subscriber. The handler's contract is "emit the dispatch event";
-	// the subscriber-side test in ports/subscribers covers the actual
-	// gateway.Send. Assert the event was recorded.
+	// ADR 0057: the handler emits the dispatch event; delivery is async.
+	// Assert the event was recorded.
 	if tok := repo.emailRequestedToken(t); tok == "" {
 		t.Error("expected non-empty plaintext token on dispatch event")
 	}
@@ -171,13 +152,8 @@ func TestRequestPasswordReset_UnknownEmail_SilentSuccess(t *testing.T) {
 }
 
 func TestConfirmPasswordReset_HappyPath_RotatesPasswordAndStamp(t *testing.T) {
-	// Safe to parallelise post-clock-injection — this test was the
-	// cloud-CI flake's primary surface (a parallel permission_request
-	// test's freezeClock to 2026-05-23 overwrote this test's 2026-05-07,
-	// pushing the just-minted reset token past its 1h expiry window).
-	// With explicit-time injection, each test threads its own instant
-	// through the handler; cross-test interference is structurally
-	// impossible.
+	// Parallel-safe: each test threads its own injected clock (this was the
+	// prior cloud-CI flake when a global clock got overwritten cross-test).
 	t.Parallel()
 
 	addr, _ := email.New("alice@example.test")
@@ -188,8 +164,7 @@ func TestConfirmPasswordReset_HappyPath_RotatesPasswordAndStamp(t *testing.T) {
 	if err := reqHandler.Handle(t.Context(), command.RequestPasswordResetCommand{Email: addr}); err != nil {
 		t.Fatalf("Request: %v", err)
 	}
-	// Recover the plaintext from the captured dispatch event (the
-	// async subscriber would receive the same payload).
+	// Recover the plaintext from the captured dispatch event.
 	rawToken := repo.emailRequestedToken(t)
 	stampBefore := p.SecurityStamp()
 
@@ -223,11 +198,8 @@ func TestConfirmPasswordReset_BadToken_ReturnsTokenInvalid(t *testing.T) {
 
 // ----- ConfirmPasswordReset — input + lookup branch coverage --------------
 
-// TestConfirmPasswordReset_InputRejections is a table-driven cover of the
-// boundary-input + format-rejection arms. Per the enumeration-safety
-// rule (security.md "Password reset"): EVERY failure surfaces a single
-// sentinel — ErrResetTokenInvalid or ErrNewPasswordRequired — never a
-// driver-leak.
+// TestConfirmPasswordReset_InputRejections — every input failure surfaces a
+// single sentinel (ErrResetTokenInvalid / ErrNewPasswordRequired), no leak.
 func TestConfirmPasswordReset_InputRejections(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
@@ -259,11 +231,9 @@ func TestConfirmPasswordReset_InputRejections(t *testing.T) {
 	}
 }
 
-// TestConfirmPasswordReset_LookupError_Wrapped exercises the generic
-// (non-NotFound) lookup-error branch. The handler MUST wrap with
-// "confirm_password_reset: lookup: %w" — i.e. propagate the cause via
-// errors.Is, NOT collapse to ErrResetTokenInvalid. Collapsing would
-// hide infrastructure failures behind a benign-looking 422.
+// TestConfirmPasswordReset_LookupError_Wrapped — a non-NotFound lookup error
+// wraps as "confirm_password_reset: lookup" and must NOT collapse to
+// ErrResetTokenInvalid (which would hide infra failures behind a 422).
 func TestConfirmPasswordReset_LookupError_Wrapped(t *testing.T) {
 	t.Parallel()
 	repo := &failingPersonsRepo{
@@ -283,13 +253,11 @@ func TestConfirmPasswordReset_LookupError_Wrapped(t *testing.T) {
 	}
 }
 
-// TestConfirmPasswordReset_AnonymisedPerson_ReturnsTokenInvalid mirrors
-// the request-side suppression: anonymised Persons cannot reset; surface
-// as token-invalid (no account-state disclosure).
+// TestConfirmPasswordReset_AnonymisedPerson_ReturnsTokenInvalid — anonymised
+// Persons surface as token-invalid (no account-state disclosure).
 func TestConfirmPasswordReset_AnonymisedPerson_ReturnsTokenInvalid(t *testing.T) {
 	t.Parallel()
-	// Seed a Person + mint a real reset token via the request flow, then
-	// anonymise the Person before confirm.
+	// Mint a real reset token, then anonymise before confirm.
 	addr, _ := email.New("alice@example.test")
 	p := newPersonWithPassword(t, "current-pw")
 	repo := newResettableRepo(t, p)
@@ -312,8 +280,8 @@ func TestConfirmPasswordReset_AnonymisedPerson_ReturnsTokenInvalid(t *testing.T)
 	}
 }
 
-// TestConfirmPasswordReset_GloballySuspendedPerson_ReturnsTokenInvalid
-// mirrors the anonymised arm — globally-suspended Persons cannot reset.
+// TestConfirmPasswordReset_GloballySuspendedPerson_ReturnsTokenInvalid — like
+// the anonymised arm.
 func TestConfirmPasswordReset_GloballySuspendedPerson_ReturnsTokenInvalid(t *testing.T) {
 	t.Parallel()
 	addr, _ := email.New("alice@example.test")
@@ -338,10 +306,8 @@ func TestConfirmPasswordReset_GloballySuspendedPerson_ReturnsTokenInvalid(t *tes
 	}
 }
 
-// TestConfirmPasswordReset_SameAsCurrent_Rejected verifies the handler-
-// layer no-op suppression. The aggregate doesn't enforce this; the
-// handler does so the audit log doesn't fill with "reset to same
-// password" noise.
+// TestConfirmPasswordReset_SameAsCurrent_Rejected — handler-layer no-op
+// suppression (the aggregate doesn't enforce it).
 func TestConfirmPasswordReset_SameAsCurrent_Rejected(t *testing.T) {
 	t.Parallel()
 	const samePw = "current-pw-and-also-new"
@@ -364,10 +330,8 @@ func TestConfirmPasswordReset_SameAsCurrent_Rejected(t *testing.T) {
 	}
 }
 
-// TestConfirmPasswordReset_BreachCheckerError_Wrapped verifies the
-// handler does NOT fail-open on a breach-checker lookup failure
-// (network / ratelimit / provider error). Per security.md: the right
-// shape is a wrapped error that lets the HTTP layer surface 503.
+// TestConfirmPasswordReset_BreachCheckerError_Wrapped — a breach-checker error
+// wraps (no fail-open), letting the HTTP layer return 503.
 func TestConfirmPasswordReset_BreachCheckerError_Wrapped(t *testing.T) {
 	t.Parallel()
 	addr, _ := email.New("alice@example.test")
@@ -389,9 +353,8 @@ func TestConfirmPasswordReset_BreachCheckerError_Wrapped(t *testing.T) {
 	}
 }
 
-// TestConfirmPasswordReset_Breached_Rejected verifies the explicit
-// breach-rejection arm with a checker that reports every password as
-// breached. ErrPasswordBreached → HTTP 422.
+// TestConfirmPasswordReset_Breached_Rejected — a breached password →
+// ErrPasswordBreached (422).
 func TestConfirmPasswordReset_Breached_Rejected(t *testing.T) {
 	t.Parallel()
 	addr, _ := email.New("alice@example.test")
@@ -413,11 +376,8 @@ func TestConfirmPasswordReset_Breached_Rejected(t *testing.T) {
 	}
 }
 
-// TestConfirmPasswordReset_PersistInvalid_CollapsesToTokenInvalid
-// exercises the aggregate-rejection arm: the closure's UpdateByID
-// returns person.ErrInvalid (e.g. token mismatch / expired) — the
-// handler collapses to ErrResetTokenInvalid per the enumeration-safety
-// rule (same wire shape regardless of cause).
+// TestConfirmPasswordReset_PersistInvalid_CollapsesToTokenInvalid — a
+// person.ErrInvalid from UpdateByID collapses to ErrResetTokenInvalid.
 func TestConfirmPasswordReset_PersistInvalid_CollapsesToTokenInvalid(t *testing.T) {
 	t.Parallel()
 	addr, _ := email.New("alice@example.test")
@@ -444,8 +404,8 @@ func TestConfirmPasswordReset_PersistInvalid_CollapsesToTokenInvalid(t *testing.
 	}
 }
 
-// TestConfirmPasswordReset_PersistError_Wrapped exercises the generic-
-// (non-Invalid) persist-error branch — surfaces wrapped, NOT collapsed.
+// TestConfirmPasswordReset_PersistError_Wrapped — a generic (non-Invalid)
+// persist error surfaces wrapped, not collapsed.
 func TestConfirmPasswordReset_PersistError_Wrapped(t *testing.T) {
 	t.Parallel()
 	addr, _ := email.New("alice@example.test")
@@ -477,8 +437,7 @@ func TestConfirmPasswordReset_PersistError_Wrapped(t *testing.T) {
 
 // ----- RequestPasswordReset — input + lookup branch coverage --------------
 
-// TestRequestPasswordReset_RejectsZeroEmail mirrors the boundary check
-// before any repo dependency is touched.
+// TestRequestPasswordReset_RejectsZeroEmail — boundary check before any repo call.
 func TestRequestPasswordReset_RejectsZeroEmail(t *testing.T) {
 	t.Parallel()
 	repo := persontest.NewFakeRepository()
@@ -489,10 +448,8 @@ func TestRequestPasswordReset_RejectsZeroEmail(t *testing.T) {
 	}
 }
 
-// TestRequestPasswordReset_LookupError_Wrapped exercises the (non-
-// NotFound) lookup-error arm. Wrapped, NOT silent — operators see the
-// alert; the silent-success branch is reserved for the
-// enumeration-safe known cases (NotFound / anonymised / suspended).
+// TestRequestPasswordReset_LookupError_Wrapped — a non-NotFound lookup error is
+// wrapped (operator-visible), not silently swallowed.
 func TestRequestPasswordReset_LookupError_Wrapped(t *testing.T) {
 	t.Parallel()
 	repo := &failingPersonsRepo{
@@ -507,8 +464,7 @@ func TestRequestPasswordReset_LookupError_Wrapped(t *testing.T) {
 	}
 }
 
-// TestRequestPasswordReset_AnonymisedPerson_SilentSuccess proves the
-// suppression branch — no token minted, no event dispatched.
+// TestRequestPasswordReset_AnonymisedPerson_SilentSuccess — no token, no event.
 func TestRequestPasswordReset_AnonymisedPerson_SilentSuccess(t *testing.T) {
 	t.Parallel()
 	addr, _ := email.New("alice@example.test")
@@ -530,9 +486,8 @@ func TestRequestPasswordReset_AnonymisedPerson_SilentSuccess(t *testing.T) {
 	}
 }
 
-// TestRequestPasswordReset_GloballySuspendedPerson_SilentSuccess
-// mirrors the anonymised arm — globally-suspended Persons are
-// silently suppressed (no suspension-state disclosure).
+// TestRequestPasswordReset_GloballySuspendedPerson_SilentSuccess — like the
+// anonymised arm.
 func TestRequestPasswordReset_GloballySuspendedPerson_SilentSuccess(t *testing.T) {
 	t.Parallel()
 	addr, _ := email.New("alice@example.test")
@@ -554,14 +509,13 @@ func TestRequestPasswordReset_GloballySuspendedPerson_SilentSuccess(t *testing.T
 	}
 }
 
-// TestRequestPasswordReset_PersistError_Wrapped exercises the
-// UpdateByID-error arm. Wrapped — operator-visible.
+// TestRequestPasswordReset_PersistError_Wrapped — an UpdateByID error is
+// wrapped (operator-visible).
 func TestRequestPasswordReset_PersistError_Wrapped(t *testing.T) {
 	t.Parallel()
 	addr, _ := email.New("alice@example.test")
 	p := newPersonWithPassword(t, "current-pw")
-	// Wrap the underlying fake so GetByEmail returns the seeded Person
-	// (handler proceeds past the silent-suppression arms), but
+	// GetByEmail returns the seeded Person (past the suppression arms), but
 	// UpdateByID fails.
 	inner := persontest.NewFakeRepository()
 	if err := inner.Add(t.Context(), p); err != nil {
@@ -579,8 +533,7 @@ func TestRequestPasswordReset_PersistError_Wrapped(t *testing.T) {
 	}
 }
 
-// TestNewRequestPasswordResetHandler_PanicsOnNilRepo locks the wiring
-// contract.
+// TestNewRequestPasswordResetHandler_PanicsOnNilRepo — repo is required.
 func TestNewRequestPasswordResetHandler_PanicsOnNilRepo(t *testing.T) {
 	t.Parallel()
 	defer func() {
@@ -591,8 +544,7 @@ func TestNewRequestPasswordResetHandler_PanicsOnNilRepo(t *testing.T) {
 	_ = command.NewRequestPasswordResetHandler(nil, func() time.Time { return testNow }) // arch-test:ignore-err - test fixture setup
 }
 
-// TestNewConfirmPasswordResetHandler_PanicsOnNilDeps locks the wiring
-// contract for both required deps.
+// TestNewConfirmPasswordResetHandler_PanicsOnNilDeps — both deps are required.
 func TestNewConfirmPasswordResetHandler_PanicsOnNilDeps(t *testing.T) {
 	t.Parallel()
 	t.Run("nil persons", func(t *testing.T) {
@@ -614,4 +566,3 @@ func TestNewConfirmPasswordResetHandler_PanicsOnNilDeps(t *testing.T) {
 		_ = command.NewConfirmPasswordResetHandler(persontest.NewFakeRepository(), nil, func() time.Time { return testNow }) // arch-test:ignore-err - test fixture setup
 	})
 }
-

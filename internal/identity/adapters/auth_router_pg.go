@@ -9,58 +9,35 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/leadkart/leadkart-go/internal/common/email"
+	"github.com/leadkart/leadkart-go/internal/common/pg"
+	"github.com/leadkart/leadkart-go/internal/common/pgconv"
 	"github.com/leadkart/leadkart-go/internal/identity/adapters/db"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
-	"github.com/leadkart/leadkart-go/internal/common/pg"
 )
 
-// AuthRouterPG is the postgres-backed authentication-routing adapter.
-//
-// Single-roundtrip persons → active-membership lookup for the login
-// flow, plus deferred role/override hydration for the resolver. Saves
-// one network roundtrip vs. the historical
-// `persons.GetByEmail + memberships.GetActiveForPerson` pair.
-//
-// Why a dedicated component (not a method on PersonRepository or
-// MembershipRepository): the JOIN crosses two aggregates' query
-// surfaces. Putting the method on either repository would force a
-// domain-package import of the other (person → membership or
-// vice versa), which the existing structure deliberately avoids.
-// Auth-routing IS a separate concern; it gets its own adapter
-// matching the consumer-defined interface in
+// AuthRouterPG is the Postgres-backed authentication-routing adapter.
+// Satisfies the consumer-defined interface in
 // internal/identity/app/command/login.go.
 //
-// Industry alignment (2026 canon): single JOIN query indexed against
-// persons.email (UNIQUE) + tenant_memberships(person_id) WHERE
-// status='active' (partial UNIQUE). Postgres planner handles this
-// as a 2-step index seek with no sequential scan. The materialised-
-// view + denormalised-auth-table escalations (Stripe-2014 era) are
-// no longer the canon — modern Postgres + JWT-based auth + cache
-// layers (LeadKart's HybridCache) shifted the cost surface away
-// from the auth-routing query.
-//
-// Reference: Brandur Leach "Postgres can do more than you think"
-// (Crunchy Bridge 2024); DHH "The Majestic Monolith"; the TDL Wild
-// Workouts canonical query patterns; Linear / Cal.com / Vercel
-// internal architectures.
+// A dedicated adapter (not a method on PersonRepository or
+// MembershipRepository) because the JOIN crosses both aggregates'
+// query surfaces — putting it on either repo would require a
+// cross-domain import. Single indexed JOIN (persons.email UNIQUE +
+// tenant_memberships partial UNIQUE) is the canonical shape; the
+// Stripe-2014 materialised-view pattern is no longer needed.
 type AuthRouterPG struct {
 	tx *pg.Transactor
 	q  *db.Queries
 }
 
-// NewAuthRouterPG wires the adapter against a *pgxpool.Pool +
-// Transactor — same constructor shape as every other identity repo
-// (NewPersonRepository / NewMembershipRepository / etc.). The
-// internal *db.Queries handle is built from the pool here so callers
-// don't have to thread a db.Queries instance around.
+// NewAuthRouterPG wires the adapter against a pool and transactor.
 func NewAuthRouterPG(pool *pgxpool.Pool, tx *pg.Transactor) *AuthRouterPG {
 	return &AuthRouterPG{tx: tx, q: db.New(pool)}
 }
 
-// derefStr unwraps the *string pointers sqlc emits for LEFT JOIN
-// columns whose source is NOT NULL but the JOIN's no-match path
-// requires nullability in the result type. Nil → "".
+// derefStr dereferences *string pointers sqlc emits for LEFT JOIN nullable
+// columns. Returns "" for nil.
 func derefStr(s *string) string {
 	if s == nil {
 		return ""
@@ -68,30 +45,16 @@ func derefStr(s *string) string {
 	return *s
 }
 
-// ResolveByEmail satisfies the consumer-defined
-// `command.AuthRouter` interface.
+// ResolveByEmail satisfies the consumer-defined `command.AuthRouter` interface.
 //
 // Returns:
+//   - (*Person, *Membership, nil) — Person found with Active Membership, fully hydrated.
+//   - (*Person, nil, nil) — Person found, no Active Membership; login handler treats as invalid_credentials (OWASP enumeration safety).
+//   - (nil, nil, person.ErrNotFound) — no Person for this email.
 //
-//   - (*Person, *Membership, nil) when the Person exists AND has an
-//     Active Membership. The Membership is fully hydrated (role
-//     assignments + permission overrides loaded for the resolver).
-//   - (*Person, nil, nil) when the Person exists but has NO Active
-//     Membership. The login handler maps this to invalid_credentials
-//     (uniform with unknown-email per OWASP enumeration-safety).
-//   - (nil, nil, person.ErrNotFound) when no Person matches.
-//
-// Roundtrip count: 3 in the worst case (JOIN + role_assignments +
-// permission_overrides). Down from 4 in the previous
-// `GetByEmail → ListMembershipsForPerson → role_assignments →
-// permission_overrides` chain. The `tenants.GetByID` call after
-// resolution is a separate concern — login handler keeps making it.
-//
-// Runs under TxScopePlatform: persons is non-RLS but
-// tenant_memberships is RLS+FORCE; the platform GUC bypass lets the
-// JOIN see the Person's at-most-one Active Membership across tenants
-// (the partial-unique index `uq_memberships_person_active` makes
-// this single-row + correct).
+// Runs under TxScopePlatform so the JOIN can see tenant_memberships
+// (RLS+FORCE) across tenants via the partial-unique index
+// uq_memberships_person_active.
 func (r *AuthRouterPG) ResolveByEmail(
 	ctx context.Context,
 	e email.Address,
@@ -110,8 +73,7 @@ func (r *AuthRouterPG) ResolveByEmail(
 			return fmt.Errorf("auth router: get person+membership: %w", err)
 		}
 
-		// Hydrate the Person aggregate first — always present when the
-		// outer query returned a row.
+		// Hydrate Person — always present when the outer query returned a row.
 		personRow := db.IdentityPerson{
 			ID:                          row.PersonID,
 			Email:                       row.Email,
@@ -142,20 +104,14 @@ func (r *AuthRouterPG) ResolveByEmail(
 		}
 		p = hp
 
-		// LEFT JOIN nullability — the membership_id pgtype.UUID's Valid
-		// field is the canonical "row matched" indicator. A Person
-		// without an Active Membership is a normal case (just-registered
-		// pending-activation, post-deactivation reactivation flow); the
-		// caller decides how to surface that.
+		// MembershipID.Valid is the canonical "JOIN matched" indicator; nil
+		// is a normal case (pending activation, post-deactivation).
 		if !row.MembershipID.Valid {
 			return nil
 		}
 
-		// LEFT JOIN flips NOT NULL columns to nullable in the result —
-		// sqlc emits *string for those even though the underlying row
-		// is NOT NULL. Deref via the local helper; nil columns become
-		// empty strings, which the membership aggregate hydrator
-		// already tolerates for these informational fields.
+		// sqlc emits *string for LEFT JOIN columns even when the underlying
+		// column is NOT NULL. Deref to ""; the membership hydrator tolerates it.
 		membershipRow := db.IdentityTenantMembership{
 			ID:                    row.MembershipID,
 			PersonID:              row.PersonID,
@@ -170,7 +126,7 @@ func (r *AuthRouterPG) ResolveByEmail(
 			CreatedByMembershipID: row.CreatedByMembershipID,
 		}
 
-		mid := uuidFromPg(row.MembershipID)
+		mid := pgconv.UUIDFromPg(row.MembershipID)
 		roleIDs, err := loadRoleAssignments(ctx, q, mid)
 		if err != nil {
 			return err

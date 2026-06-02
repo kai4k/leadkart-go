@@ -41,7 +41,7 @@ var forbiddenAppImports = map[string]string{
 	"github.com/leadkart/leadkart-go/internal/identity/adapters":    "cross-module: inventory app/ MUST NOT import another module's concrete adapters (CLAUDE.md §Architecture rule 1)",
 	"github.com/leadkart/leadkart-go/internal/identity/adapters/db": "cross-module: inventory app/ MUST NOT import another module's sqlc-generated row types (CLAUDE.md §Architecture rule 1)",
 	"github.com/leadkart/leadkart-go/internal/identity/app":         "cross-module: inventory app/ MUST NOT import another module's application layer; use events on the bus (CLAUDE.md §Architecture rule 1)",
-	"github.com/leadkart/leadkart-go/internal/identity/app/actclaim": "cross-module: actclaim is duplicated locally per ADR 0061 amendment 1 (H5); identity's actclaim stays in identity's bounded context",
+	"github.com/leadkart/leadkart-go/internal/common/actclaim":      "cross-module: actclaim is duplicated locally per ADR 0061 amendment 1 (H5); identity's actclaim stays in identity's bounded context",
 	"github.com/leadkart/leadkart-go/internal/identity/ports":       "cross-module: inventory app/ MUST NOT import another module's HTTP ports / subscribers (CLAUDE.md §Architecture rule 1)",
 }
 

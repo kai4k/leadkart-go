@@ -52,7 +52,7 @@ func TestArch_NoCrossModuleImports(t *testing.T) {
 		"github.com/leadkart/leadkart-go/internal/identity/domain/membership": true,
 		"github.com/leadkart/leadkart-go/internal/identity/domain/permission": true,
 		"github.com/leadkart/leadkart-go/internal/identity/ports/authn":       true,
-		"github.com/leadkart/leadkart-go/internal/identity/app/actclaim":      true,
+		"github.com/leadkart/leadkart-go/internal/common/actclaim":            true,
 	}
 
 	forbiddenLayers := []string{"domain", "app", "ports", "adapters", "adapters/db"}
@@ -174,10 +174,10 @@ func TestArch_SubscribersInPortsSubscribers(t *testing.T) {
 // Every subscriber file in internal/<mod>/ports/subscribers/ must
 // provide an idempotency mechanism — either:
 //
-//   (a) wrap the handler with `messaging.IdempotencyMiddleware`, OR
-//   (b) the handler body performs a natural-key precheck — calls a
-//       repository `Get*` (or `Find*`) method that returns ErrNotFound
-//       before the create path.
+//	(a) wrap the handler with `messaging.IdempotencyMiddleware`, OR
+//	(b) the handler body performs a natural-key precheck — calls a
+//	    repository `Get*` (or `Find*`) method that returns ErrNotFound
+//	    before the create path.
 //
 // Per Watermill / Brandur outbox-handler best practice: at-least-once
 // delivery means duplicate dispatch is the rule. Every subscriber
@@ -185,16 +185,16 @@ func TestArch_SubscribersInPortsSubscribers(t *testing.T) {
 //
 // Detection accepts ANY of three signals (in order — first match wins):
 //
-//   (1) explicit `messaging.IdempotencyMiddleware` / Decorator / Wrapper
-//       reference (the universal infra-level guarantee);
-//   (2) a `Get*`/`Find*`/`Lookup*`/`Exists*` call inside the file
-//       (inline natural-key precheck);
-//   (3) an inline marker comment
-//       `// arch-test:idempotency-via-<mechanism> — <reason>`
-//       — for subscribers whose dedup happens one call-frame down
-//       (the precheck lives in the command they delegate to), in an
-//       infra layer that wraps the whole router, or in the wire layer
-//       (DTO files with no handler logic).
+//	(1) explicit `messaging.IdempotencyMiddleware` / Decorator / Wrapper
+//	    reference (the universal infra-level guarantee);
+//	(2) a `Get*`/`Find*`/`Lookup*`/`Exists*` call inside the file
+//	    (inline natural-key precheck);
+//	(3) an inline marker comment
+//	    `// arch-test:idempotency-via-<mechanism> — <reason>`
+//	    — for subscribers whose dedup happens one call-frame down
+//	    (the precheck lives in the command they delegate to), in an
+//	    infra layer that wraps the whole router, or in the wire layer
+//	    (DTO files with no handler logic).
 //
 // The inline marker is the canon escape valve for the (legitimate)
 // case where the heuristic can't see the precheck because the dedup
@@ -279,9 +279,9 @@ func TestArch_IntegrationEventsHaveTopicMethod(t *testing.T) {
 	// also recognising compile-time `var _ TopicProvider = X{}` or by
 	// detecting embedded type names that we know declare Topic().
 	embeddedTopicProviders := map[string]bool{
-		"platformMarker":      true,
-		"tenantScopedMarker":  true,
-		"tenantMarker":        true,
+		"platformMarker":     true,
+		"tenantScopedMarker": true,
+		"tenantMarker":       true,
 	}
 
 	type violation struct {

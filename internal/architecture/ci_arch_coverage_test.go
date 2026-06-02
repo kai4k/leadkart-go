@@ -1,29 +1,8 @@
-// ci_arch_coverage_test.go — Fitness functions gating CI vs Taskfile
-// drift across the FAANG-style reusable-workflow layout.
+// ci_arch_coverage_test.go — Fitness functions gating CI vs Taskfile drift.
 //
-// HISTORY:
-//   - Pre-Wave-9.3: cloud CI's architecture job ran a hardcoded subset
-//     of arch packages. Boundary + route tests silently never ran on
-//     PRs. Wave 9.3 extended CI to identity's three packages.
-//   - May 2026: drift recurred. Local Taskfile had 14 paths; CI re-
-//     encoded only 3. Every PR since inventory-slice-1 was merging with
-//     only identity arch coverage cloud-side.
-//   - June 2026: structural fix — CI workflow stopped encoding the
-//     package list. The architecture job invoked `task ci:test:arch`;
-//     Taskfile's ARCH_TEST_PACKAGES var became the single source of
-//     truth.
-//   - June 2026 (this commit): full FAANG-canon refactor — ci.yml split
-//     into orchestrator + reusable workflows under .github/workflows/_*.yml.
-//     Each test job is now a short `uses: ./.github/workflows/_go-test.yml`
-//     block that passes `task-name:` as an input. The reusable workflow
-//     invokes the task. The discipline gate moves UP one level: assert
-//     each test job in ci.yml supplies the canonical task-name.
-//
-// Ford / Parsons / Kua "Building Evolutionary Architectures" canon —
-// fitness functions encode invariants as executable tests. The new
-// invariant is "ci.yml's <job> block sets `task-name: <expected>` when
-// calling _go-test.yml." Drift = the task-name input doesn't match,
-// caught at PR time.
+// FAANG reusable-workflow layout: ci.yml dispatches to _go-test.yml with
+// `task-name: <task>`. Each job must supply the canonical task-name so
+// Taskfile owns the command shape (Ford/Parsons/Kua: fitness function).
 
 package architecture_test
 
@@ -35,14 +14,10 @@ import (
 	"testing"
 )
 
-// TestArch_CIUnitJobInvokesTaskRunner asserts the unit job in ci.yml
-// calls the reusable _go-test.yml workflow with task-name: ci:test.
+// TestArch_CIUnitJobInvokesTaskRunner asserts the unit job in ci.yml calls
+// _go-test.yml with task-name: ci:test.
 //
-// arch-test:no-negative-fixture — the assertion target IS the shipping
-// .github/workflows/ci.yml. A synthetic fixture would defeat the
-// "guards the actual CI" guarantee. Ford / Parsons / Kua ch.4 — fitness
-// functions may opt out of negative fixtures when the assertion target
-// is the production artifact itself.
+// arch-test:no-negative-fixture — assertion target is the shipping ci.yml.
 func TestArch_CIUnitJobInvokesTaskRunner(t *testing.T) {
 	t.Parallel()
 	assertJobInvokesTask(t, "unit", "ci:test", "ci:test\\b")
@@ -51,19 +26,16 @@ func TestArch_CIUnitJobInvokesTaskRunner(t *testing.T) {
 // TestArch_CIArchJobInvokesTaskRunner asserts the architecture job in
 // ci.yml calls _go-test.yml with task-name: ci:test:arch.
 //
-// arch-test:no-negative-fixture — same rationale as the sibling tests.
+// arch-test:no-negative-fixture — assertion target is the shipping ci.yml.
 func TestArch_CIArchJobInvokesTaskRunner(t *testing.T) {
 	t.Parallel()
 	assertJobInvokesTask(t, "architecture", "ci:test:arch", "ci:test:arch\\b")
 }
 
-// TestArch_CIIntegrationJobInvokesTaskRunner asserts the integration
-// job in ci.yml calls _go-test.yml with task-name: ci:test:int:shard
-// (matrix-sharded variant). The job must ALSO declare a strategy.matrix
-// for parallel sharding — serializing 7 modules onto one runner would
-// re-introduce the 5+ min wall-time the sharding was added to kill.
+// TestArch_CIIntegrationJobInvokesTaskRunner asserts the integration job calls
+// _go-test.yml with task-name: ci:test:int:shard and declares strategy.matrix.
 //
-// arch-test:no-negative-fixture — same rationale as the sibling tests.
+// arch-test:no-negative-fixture — assertion target is the shipping ci.yml.
 func TestArch_CIIntegrationJobInvokesTaskRunner(t *testing.T) {
 	t.Parallel()
 	jobBlock := assertJobInvokesTask(t, "integration", "ci:test:int:shard", "ci:test:int:shard\\b")
@@ -76,11 +48,10 @@ func TestArch_CIIntegrationJobInvokesTaskRunner(t *testing.T) {
 	}
 }
 
-// TestArch_CIOpenAPIJobInvokesReusable asserts the openapi-lint job in
-// ci.yml dispatches to _openapi.yml (which pins Spectral via Taskfile
-// SPECTRAL_VERSION). Forbid inline npx in the orchestrator itself.
+// TestArch_CIOpenAPIJobInvokesReusable asserts the openapi-lint job dispatches
+// to _openapi.yml with no inline npx.
 //
-// arch-test:no-negative-fixture — same rationale as the sibling tests.
+// arch-test:no-negative-fixture — assertion target is the shipping ci.yml.
 func TestArch_CIOpenAPIJobInvokesReusable(t *testing.T) {
 	t.Parallel()
 
@@ -98,13 +69,10 @@ func TestArch_CIOpenAPIJobInvokesReusable(t *testing.T) {
 	}
 }
 
-// TestArch_CIReusableTestWorkflowInvokesTask asserts the reusable
-// _go-test.yml workflow actually invokes `task <name>` (the discipline
-// gate at the bottom of the call stack). Ensures the orchestrator
-// can't sneak inline `go test` past the gate by routing through the
-// reusable workflow.
+// TestArch_CIReusableTestWorkflowInvokesTask asserts _go-test.yml invokes
+// `task ${{ inputs.task-name }}` with no inline go test / gotestsum.
 //
-// arch-test:no-negative-fixture — same rationale.
+// arch-test:no-negative-fixture — assertion target is the shipping _go-test.yml.
 func TestArch_CIReusableTestWorkflowInvokesTask(t *testing.T) {
 	t.Parallel()
 
@@ -122,10 +90,8 @@ func TestArch_CIReusableTestWorkflowInvokesTask(t *testing.T) {
 	}
 }
 
-// assertJobInvokesTask asserts that the named job in ci.yml calls a
-// reusable workflow under ./.github/workflows/_*.yml AND supplies
-// `task-name: <expected>` (or a matching regex) as an input. Returns
-// the job block string (for the caller to do additional checks) or "".
+// assertJobInvokesTask asserts the named job dispatches to a reusable _*.yml
+// workflow with task-name: expected. Returns the job block.
 func assertJobInvokesTask(t *testing.T, jobName, expectedTask, taskRegex string) string {
 	t.Helper()
 
@@ -145,9 +111,6 @@ func assertJobInvokesTask(t *testing.T, jobName, expectedTask, taskRegex string)
 		t.Errorf("ci.yml `%s` job MUST supply `task-name: %s` to the reusable workflow.", jobName, expectedTask)
 	}
 
-	// Forbid inline test invocations in the orchestrator — even though
-	// they wouldn't run (orchestrator dispatches to reusable workflows),
-	// their presence indicates someone tried to bypass the discipline.
 	forbiddenLineRE := regexp.MustCompile(`(?m)^\s*(go\s+test\b|gotestsum\b|go\s+tool\s+gotestsum\b)`)
 	if matches := forbiddenLineRE.FindAllString(jobBlock, -1); len(matches) > 0 {
 		t.Errorf("ci.yml `%s` job MUST NOT inline `go test` / `gotestsum` — dispatch to reusable workflow + task. Found %d:", jobName, len(matches))
@@ -158,10 +121,7 @@ func assertJobInvokesTask(t *testing.T, jobName, expectedTask, taskRegex string)
 	return jobBlock
 }
 
-// extractCIJobBlock returns the lines belonging to a single top-level
-// job in a GitHub Actions workflow file. Job blocks start at column 2
-// (`  <name>:`) and end at the next sibling job at the same indent
-// (or EOF).
+// extractCIJobBlock returns the lines for a named top-level CI job block.
 func extractCIJobBlock(t *testing.T, body, name string) string {
 	t.Helper()
 	header := "\n  " + name + ":"
@@ -178,7 +138,7 @@ func extractCIJobBlock(t *testing.T, body, name string) string {
 	return rest[:len("  "+name+":")+loc[0]]
 }
 
-// mustReadFile returns the file body or fails the test.
+// mustReadFile reads a file, fataling the test on error.
 func mustReadFile(t *testing.T, path string) string {
 	t.Helper()
 	raw, err := os.ReadFile(path) //nolint:gosec // arch-test fixture path
@@ -188,8 +148,7 @@ func mustReadFile(t *testing.T, path string) string {
 	return string(raw)
 }
 
-// repoRootDir returns the absolute path to the repo root by walking up
-// from the test file's directory until it finds the go.mod.
+// repoRootDir returns the repo root by walking up until go.mod is found.
 func repoRootDir(t *testing.T) string {
 	t.Helper()
 	wd, err := os.Getwd()

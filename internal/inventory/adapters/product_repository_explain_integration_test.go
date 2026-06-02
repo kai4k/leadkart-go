@@ -30,30 +30,11 @@ import (
 	"github.com/leadkart/leadkart-go/internal/inventory/domain/product"
 )
 
-// TestKeysetProductsPage_UsesIndexUnderRLS mirrors the identity keyset
-// EXPLAIN gate (per ADR 0038) for inventory.products.
-//
-// Asserts the per-tenant keyset query plans as an Index Scan against the
-// composite partial index idx_products_tenant_created_keyset declared in
-// migration 20260603000001 as
-// `(tenant_id, created_at DESC, id DESC) WHERE NOT is_deleted` — which
-// matches the query's `WHERE tenant_id = $1 AND NOT is_deleted ORDER BY
-// created_at DESC, id DESC` keyset shape.
-//
-// Test shape (canonical):
-//
-//  1. Reuse the testcontainers Postgres + migrations fixture.
-//  2. Seed 200 active products under one tenant (well above the planner's
-//     seq-scan threshold).
-//  3. ANALYZE so the planner has fresh statistics.
-//  4. Bind the tenant GUC so RLS admits rows.
-//  5. EXPLAIN the same SQL shape sqlc emits (ListProductsByTenantPage).
-//  6. Assert the plan contains Index Scan (any flavour) AND does NOT
-//     fall back to Seq Scan on inventory.products.
-//
-// If this test regresses, either (a) the planner gained a regression,
-// or (b) the partial-index predicate drifted out of alignment with the
-// query predicate. Either warrants a manual EXPLAIN review.
+// TestKeysetProductsPage_UsesIndexUnderRLS asserts the per-tenant keyset
+// query plans as an Index Scan against idx_products_tenant_created_keyset
+// (tenant_id, created_at DESC, id DESC) WHERE NOT is_deleted — ADR 0038.
+// Seeds 200 products, ANALYZEs, then EXPLAINs the ListProductsByTenantPage
+// SQL shape. Regression: planner fell back to Seq Scan OR predicate drifted.
 func TestKeysetProductsPage_UsesIndexUnderRLS(t *testing.T) {
 	t.Parallel()
 	pool := repoFixture(t)
@@ -97,8 +78,8 @@ func TestKeysetProductsPage_UsesIndexUnderRLS(t *testing.T) {
 
 	rlstest.SetSessionTenantPersistent(t, ctx, conn.Conn(), tid.String())
 
-	// Same predicate shape as sqlc's ListProductsByTenantPage. First-page
-	// sentinel cursor (max time + max uuid) admits every row.
+	// Same predicate shape as sqlc's ListProductsByTenantPage.
+	// First-page sentinel (max time + max uuid) admits every row.
 	const explainSQL = `
 		EXPLAIN (FORMAT JSON, ANALYZE, BUFFERS)
 		SELECT id, tenant_id, sku, name, dosage_form, pack_size, hsn_code,
@@ -116,9 +97,7 @@ func TestKeysetProductsPage_UsesIndexUnderRLS(t *testing.T) {
 		LIMIT  51
 	`
 
-	// Mirror of internal/inventory/adapters/cursor.go sentinels — far-
-	// future timestamp + all-FF UUID make `(created_at, id) < ($, $)`
-	// match every row on the first page.
+	// Sentinels mirror cursor.go: far-future timestamp + all-FF UUID.
 	sentinelTime := time.Date(9999, 12, 31, 23, 59, 59, 0, time.UTC)
 	sentinelID := "ffffffff-ffff-ffff-ffff-ffffffffffff"
 
@@ -132,10 +111,8 @@ func TestKeysetProductsPage_UsesIndexUnderRLS(t *testing.T) {
 	planText := string(rawPlan)
 	t.Logf("EXPLAIN plan:\n%s", planText)
 
-	// Primary regression guard: any Index Scan flavour (Index Scan,
-	// Index Scan Backward, Index Only Scan, Bitmap Index Scan) is
-	// acceptable. The bug class we are guarding is "planner ignored
-	// every index + scanned the table".
+	// Any Index Scan flavour is acceptable; the bug class is "planner
+	// ignored every index and scanned the table".
 	if !strings.Contains(planText, "Index Scan") &&
 		!strings.Contains(planText, "Bitmap Index Scan") {
 		t.Errorf("expected plan to contain Index Scan (any flavour); got:\n%s", planText)

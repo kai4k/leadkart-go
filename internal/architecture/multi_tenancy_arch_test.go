@@ -26,7 +26,7 @@ import (
 )
 
 // tenantOwningSchemas lists the per-module schemas that hold tenant-
-// scoped tables. Pure platform schemas (`buildingblocks`, `app`) are
+// scoped tables. Pure platform schemas (`common`, `app`) are
 // not in this list — they store cross-tenant rows by definition.
 var tenantOwningSchemas = map[string]bool{
 	"identity":  true,
@@ -414,6 +414,7 @@ func TestArch_RepoTenantScopedReadsUseTxScopeTenant(t *testing.T) {
 		// substring "TxScopeTenant" keeps the test's tenant-scope
 		// heuristic green without needing the allow-list entry.
 		"internal/platform/adapters/unverified_contact_repository_pg.go",
+		"internal/platform/adapters/unverified_contact_reader_pg.go", // platform-only table (uvc_platform_only RLS) — reads under TxScopePlatform
 		"internal/platform/adapters/verification_call_repository_pg.go",
 		"internal/platform/adapters/platform_lead_reader_pg.go",
 		"internal/platform/adapters/outbox_forwarder.go",
@@ -549,7 +550,6 @@ func TestArch_NoBareTenantIDStrings(t *testing.T) {
 	allowList := []string{
 		"internal/common/email/gateway.go",                              // gateway crosses substrate; ID is a metadata string
 		"internal/identity/ports/subscribers/revoke_families.go",        // Watermill metadata is plain string
-		"internal/common/messaging/messagingtest/outboxtest.go",         // test-helper in common/; can't import identity/domain/tenant per ADR 0047
 		"internal/common/pg/rlstest/rlstest.go",                         // test-helper in common/; same boundary constraint
 		"internal/common/pg/tenancy.go",                                 // pg substrate; can't import identity/domain/tenant per ADR 0047 — callers convert tenant.ID via .String() at the boundary
 		"internal/common/pg/transactor.go",                              // pg substrate; same boundary constraint

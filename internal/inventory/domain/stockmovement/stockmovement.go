@@ -34,6 +34,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/leadkart/leadkart-go/internal/common/errs"
 	"github.com/leadkart/leadkart-go/internal/common/pagination"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
@@ -93,6 +95,19 @@ type Movement struct {
 	events              []Event
 }
 
+// validateUUID enforces the H6 reviewer rule: every domain ID must parse as a
+// UUID at AGGREGATE-CONSTRUCTION time, not later at the adapter boundary.
+func validateUUID(name, val string) error {
+	val = strings.TrimSpace(val)
+	if val == "" {
+		return fmt.Errorf("%w: %s required", ErrInvalid, name)
+	}
+	if _, err := uuid.Parse(val); err != nil {
+		return fmt.Errorf("%w: %s not a valid uuid", ErrInvalid, name)
+	}
+	return nil
+}
+
 // New constructs a new ledger row. Returns ErrInvalid on invariant
 // violation. Emits LoggedEvent on success.
 //
@@ -113,20 +128,20 @@ type Movement struct {
 //
 //nolint:gocyclo,cyclop // straight-line guard cascade per coding-standards "validation = sequential guard list"
 func New(id ID, spec Spec, now time.Time) (*Movement, error) {
-	if id.IsZero() {
-		return nil, fmt.Errorf("%w: id required", ErrInvalid)
+	if err := validateUUID("id", id.String()); err != nil {
+		return nil, err
 	}
-	if spec.BatchID.IsZero() {
-		return nil, fmt.Errorf("%w: batch_id required", ErrInvalid)
+	if err := validateUUID("batch_id", spec.BatchID.String()); err != nil {
+		return nil, err
 	}
-	if spec.ProductID.IsZero() {
-		return nil, fmt.Errorf("%w: product_id required", ErrInvalid)
+	if err := validateUUID("product_id", spec.ProductID.String()); err != nil {
+		return nil, err
 	}
-	if spec.TenantID.IsZero() {
-		return nil, fmt.Errorf("%w: tenant_id required", ErrInvalid)
+	if err := validateUUID("tenant_id", spec.TenantID.String()); err != nil {
+		return nil, err
 	}
-	if spec.ActorMembershipID.IsZero() {
-		return nil, fmt.Errorf("%w: actor_membership_id required", ErrInvalid)
+	if err := validateUUID("actor_membership_id", spec.ActorMembershipID.String()); err != nil {
+		return nil, err
 	}
 	if !spec.Type.IsValid() {
 		return nil, fmt.Errorf("%w: unknown movement type %q", ErrInvalid, spec.Type)

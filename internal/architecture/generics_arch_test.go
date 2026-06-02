@@ -1,20 +1,7 @@
 // generics_arch_test.go — Principle K: Generics discipline.
 //
-// Go generics (1.18+) are a precision tool: they let us shed
-// `interface{}` from container types + cursor types + reusable
-// service shapes. The risk is the cousin pattern of "generics
-// everywhere" — over-abstraction is a known anti-pattern (Ian Lance
-// Taylor's own talks warn about this).
-//
-// These tests guard the spots where generics are the canon: the
-// pagination.Page type + reusable container ctors. They also ban
-// fresh `any`/`interface{}` returns from public APIs (those signal
-// "I didn't decide on the type yet" — anti-pattern in adapters).
-//
-// Cited canon:
-//   - Russ Cox / Ian Lance Taylor — Go 1.18 generics blog series
-//   - Adam Lee — "Don't use generics, use generics for collections"
-//   - LeadKart pagination.Page[T] design
+// Generics are used for containers (pagination.Page[T]) and to eliminate
+// untyped `any` returns. Over-abstraction is an anti-pattern (ILT talks).
 
 package architecture_test
 
@@ -26,17 +13,8 @@ import (
 	"testing"
 )
 
-// ----------------------------------------------------------------------------
-// K1: TestArch_PaginationUsesGenericPage
-// ----------------------------------------------------------------------------
-//
-// `pagination.Page[T]` is the canonical return shape for
-// keyset-paginated queries. Hand-rolled `XxxListPage` / `XxxResult`
-// types in adapters are drift — they bypass the standard
-// has_more/next_cursor envelope.
-//
-// Predicate: any function in `<module>/app/query/` returning a
-// type whose name ends in `Page` MUST use `pagination.Page[T]`.
+// TestArch_PaginationUsesGenericPage asserts query handlers returning *Page
+// use pagination.Page[T], not hand-rolled types (ADR 0038).
 // Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_PaginationUsesGenericPage(t *testing.T) {
 	t.Parallel()
@@ -71,18 +49,8 @@ func TestArch_PaginationUsesGenericPage(t *testing.T) {
 	}
 }
 
-// ----------------------------------------------------------------------------
-// K2: TestArch_NoAnyInExportedReturns
-// ----------------------------------------------------------------------------
-//
-// Exported functions in `app/` + `adapters/` (non-generated) may
-// not return `any` or `interface{}` as a final result type. Untyped
-// returns force the caller to type-assert + that's a refactor-hostile
-// API surface. Use a typed result, an error-only return, or a
-// well-named generic constraint.
-//
-// Excludes: test files (free-form), generated db/, json-marshal-shape
-// helpers in common/ openly typed `any` for the json package.
+// TestArch_NoAnyInExportedReturns asserts exported functions in app/ and
+// adapters/ don't return any or interface{}.
 // Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_NoAnyInExportedReturns(t *testing.T) {
 	t.Parallel()
@@ -127,19 +95,8 @@ func TestArch_NoAnyInExportedReturns(t *testing.T) {
 	}
 }
 
-// ----------------------------------------------------------------------------
-// K3: TestArch_GenericConstraintsExplicit
-// ----------------------------------------------------------------------------
-//
-// Generic type parameters use a constraint — `comparable`, `any`,
-// `cmp.Ordered`, or a domain-named constraint. We reject `[T any]`
-// at exported package boundaries: the unconstrained generic is a
-// future-incompatibility hazard + the constraint should be the
-// minimum the body actually requires.
-//
-// Allow-list: containers that legitimately want `any` (e.g. generic
-// Page container) opt out via `// arch-test:bare-any-generic
-// <reason>` on the same line as the type-param decl.
+// TestArch_GenericConstraintsExplicit asserts exported generic types/funcs
+// don't use bare `[T any]` without arch-test:bare-any-generic opt-out.
 // Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_GenericConstraintsExplicit(t *testing.T) {
 	t.Parallel()
@@ -162,9 +119,7 @@ func TestArch_GenericConstraintsExplicit(t *testing.T) {
 			if strings.Contains(ln, "arch-test:bare-any-generic") {
 				continue
 			}
-			// Allow internal helper fns (lowercase first letter of the
-			// surrounding decl): these are package-private and the
-			// constraint is the consumer's problem.
+			// Unexported funcs/types: package-private, skip.
 			trimmed := strings.TrimSpace(ln)
 			if strings.HasPrefix(trimmed, "func ") {
 				// Walk back to the func keyword on the same line; check

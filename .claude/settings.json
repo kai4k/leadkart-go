@@ -1,0 +1,52 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(go test:*)",
+      "Bash(go build:*)",
+      "Bash(go vet:*)",
+      "Bash(golangci-lint run:*)",
+      "Bash(task ci)",
+      "Bash(task test:arch)"
+    ]
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "shell": "powershell",
+            "command": "$j=[Console]::In.ReadToEnd()|ConvertFrom-Json; $f=$j.tool_input.file_path; if ($f -and $f -match '\\.go$' -and (Test-Path $f)) { gofmt -w $f 2>$null }; exit 0",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "shell": "powershell",
+            "command": "Set-Location 'd:\\Development\\leadkart-go'; $h=(git rev-parse --short HEAD 2>$null); $b=(git rev-parse --abbrev-ref HEAD 2>$null); $d=((git status --porcelain 2>$null)|Measure-Object).Count; $ctx=\"repo state: HEAD=$h branch=$b dirty=$d files\"; $out=@{ hookSpecificOutput=@{ hookEventName='SessionStart'; additionalContext=$ctx } } | ConvertTo-Json -Compress; Write-Output $out; exit 0",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "shell": "powershell",
+            "async": true,
+            "command": "Set-Location 'd:\\Development\\leadkart-go'; go build ./... 2>$null; $b=$LASTEXITCODE; go test -run '^TestArch_' ./internal/architecture/... 2>$null; $a=$LASTEXITCODE; if ($b -ne 0 -or $a -ne 0) { $m=\"VERIFY WARNING: build=$b arch=$a (non-zero = RED). Do not claim green / commit until fixed.\"; $out=@{ systemMessage=$m } | ConvertTo-Json -Compress; Write-Output $out }; exit 0",
+            "timeout": 300
+          }
+        ]
+      }
+    ]
+  }
+}

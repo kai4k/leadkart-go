@@ -6,12 +6,8 @@ import (
 	"github.com/google/uuid"
 )
 
-// PermissionRequestSubmittedV1 — a new Pending permission-elevation
-// request was submitted per ADR 0055. Subscribers: audit log; future
-// SMS / push approval notifications to the approver (deferred per
-// ADR 0055 deferred-work list).
-//
-// Tenant-scoped: requests are per-tenant and RLS bound.
+// PermissionRequestSubmittedV1 — a new Pending permission-elevation request
+// was submitted (ADR 0055). Tenant-scoped; RLS-bound.
 type PermissionRequestSubmittedV1 struct {
 	RequestID             uuid.UUID `json:"request_id"`
 	TenantIDClaim         uuid.UUID `json:"tenant_id"`
@@ -33,9 +29,8 @@ func (e PermissionRequestSubmittedV1) OccurredAt() time.Time { return e.Occurred
 // TenantID satisfies [TenantScoped].
 func (e PermissionRequestSubmittedV1) TenantID() uuid.UUID { return e.TenantIDClaim }
 
-// PermissionRequestApprovedV1 — a request was approved + a time-bound
-// grant landed on the requester's membership overlay. ExpiresAtUTC
-// mirrors the grant's expiry.
+// PermissionRequestApprovedV1 — request approved; time-bound grant applied to
+// the requester's membership overlay. ExpiresAtUTC mirrors the grant expiry.
 type PermissionRequestApprovedV1 struct {
 	RequestID            uuid.UUID `json:"request_id"`
 	TenantIDClaim        uuid.UUID `json:"tenant_id"`
@@ -53,8 +48,7 @@ func (e PermissionRequestApprovedV1) OccurredAt() time.Time { return e.OccurredA
 // TenantID satisfies [TenantScoped].
 func (e PermissionRequestApprovedV1) TenantID() uuid.UUID { return e.TenantIDClaim }
 
-// PermissionRequestDeniedV1 — a request was rejected. Reason is
-// REQUIRED on Deny per ADR 0055 audit canon.
+// PermissionRequestDeniedV1 — request rejected. Reason is required per ADR 0055.
 type PermissionRequestDeniedV1 struct {
 	RequestID            uuid.UUID `json:"request_id"`
 	TenantIDClaim        uuid.UUID `json:"tenant_id"`
@@ -72,8 +66,7 @@ func (e PermissionRequestDeniedV1) OccurredAt() time.Time { return e.OccurredAtU
 // TenantID satisfies [TenantScoped].
 func (e PermissionRequestDeniedV1) TenantID() uuid.UUID { return e.TenantIDClaim }
 
-// PermissionRequestCancelledV1 — the requester withdrew their pending
-// request. No approver involved.
+// PermissionRequestCancelledV1 — requester withdrew their pending request.
 type PermissionRequestCancelledV1 struct {
 	RequestID     uuid.UUID `json:"request_id"`
 	TenantIDClaim uuid.UUID `json:"tenant_id"`
@@ -91,7 +84,7 @@ func (e PermissionRequestCancelledV1) OccurredAt() time.Time { return e.Occurred
 // TenantID satisfies [TenantScoped].
 func (e PermissionRequestCancelledV1) TenantID() uuid.UUID { return e.TenantIDClaim }
 
-// Compile-time + runtime registration.
+// Compile-time assertions and registration.
 var (
 	_ TenantScoped = PermissionRequestSubmittedV1{}
 	_ TenantScoped = PermissionRequestApprovedV1{}

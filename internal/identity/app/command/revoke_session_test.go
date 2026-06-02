@@ -12,17 +12,14 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
 
-// revokeNow is the deterministic instant the revoke_session_test suite
-// passes to every handler + aggregate call per the clock-injection
-// refactor. Replaces the prior package-global clock.Set helper.
+// revokeNow is the deterministic instant this suite passes to handlers +
+// aggregates.
 var revokeNow = time.Date(2026, 5, 7, 12, 0, 0, 0, time.UTC)
 
-// The refreshtoken-side fake lives in
-// internal/identity/domain/refreshtoken/refreshtokentest/ per TDL Wild
-// Workouts canon — co-located with the aggregate it fakes.
-// newFakeFamilyRepo is preserved as a one-line alias so existing tests
-// don't need rewriting.
-func newFakeFamilyRepo() *refreshtokentest.FakeRepository { return refreshtokentest.NewFakeRepository() }
+// newFakeFamilyRepo aliases the co-located refreshtokentest fake.
+func newFakeFamilyRepo() *refreshtokentest.FakeRepository {
+	return refreshtokentest.NewFakeRepository()
+}
 
 func newFamily(t *testing.T, personID person.ID, deviceLabel string) *refreshtoken.Family {
 	t.Helper()
@@ -71,8 +68,7 @@ func TestRevokeSession_Succeeds(t *testing.T) {
 }
 
 func TestRevokeSession_CrossPerson_ReturnsNotFound(t *testing.T) {
-	// Per security.md: "wrong owner" collapses to "not found" to defeat
-	// FamilyID enumeration via ownership probing.
+	// "wrong owner" collapses to "not found" to defeat FamilyID enumeration.
 	t.Parallel()
 	repo := newFakeFamilyRepo()
 	owner := person.ID("p-owner")
@@ -172,7 +168,7 @@ func TestRevokeAllSessions_ExceptKeepsOneAlive(t *testing.T) {
 	current := newFamily(t, pid, "current-device")
 	other := mustFamily(t, refreshtoken.FamilyID("33333333-3333-3333-3333-333333333333"), pid, "other-device")
 	_ = repo.Add(t.Context(), current) // arch-test:ignore-err - test fixture setup
-	_ = repo.Add(t.Context(), other) // arch-test:ignore-err - test fixture setup
+	_ = repo.Add(t.Context(), other)   // arch-test:ignore-err - test fixture setup
 
 	h := command.NewRevokeAllSessionsHandler(repo, func() time.Time { return revokeNow })
 	out, err := h.Handle(t.Context(), command.RevokeAllSessionsCommand{

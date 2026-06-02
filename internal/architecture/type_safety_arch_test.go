@@ -23,6 +23,7 @@ package architecture_test
 
 import (
 	"go/ast"
+	"go/token"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -104,6 +105,11 @@ func TestArch_TypeAssertionsUseCommaOk(t *testing.T) {
 	// AND not in a type-switch. Heuristic: line containing `.(`
 	// but lacking `,` near the assertion AND lacking `type)`.
 	assertRE := regexp.MustCompile(`\.\([\w*.]+\)`)
+	// A real type assertion is Go syntax, never inside a string literal.
+	// Blank double-quoted string contents so type-assertion-like
+	// substrings (e.g. a goleak ignore "pkg.(*Pool).method") don't
+	// false-positive — same rationale as stripping comments.
+	stringRE := regexp.MustCompile(`"[^"]*"`)
 	var bad []string
 
 	walkGoFiles(t, root, false, func(path string, src []byte) {
@@ -111,6 +117,7 @@ func TestArch_TypeAssertionsUseCommaOk(t *testing.T) {
 		body := stripGoComments(string(src))
 		lines := strings.Split(body, "\n")
 		for i, ln := range lines {
+			ln = stringRE.ReplaceAllString(ln, `""`)
 			if !assertRE.MatchString(ln) {
 				continue
 			}
@@ -261,6 +268,148 @@ func TestArch_NoHungarianNotation(t *testing.T) {
 	if len(bad) > 0 {
 		t.Fatalf("Hungarian-notation type name (Go uses bare names — Effective Go):\n  %s",
 			strings.Join(bad, "\n  "))
+	}
+}
+
+// ----------------------------------------------------------------------------
+// Y6: TestArch_ClosedSetFieldsAreTypedEnums
+// ----------------------------------------------------------------------------
+//
+// Per TDL "Safer Enums in Go": a closed-set value in the DOMAIN must be
+// a defined type (`type X string` + typed consts + IsValid/String/Parse),
+// never a bare `string`/`[]string`. A field whose doc-comment OR
+// line-comment declares a closed set — two or more quoted alternatives
+// separated by `|`, e.g. `"PCD" | "ThirdParty"` — but whose Go type is
+// bare string is the anti-pattern this gate bans: the type system then
+// permits any off-catalogue value, pushing validation to scattered
+// run-time checks (the pre-conversion crmlead.Profile shape).
+//
+// WIRE/BOUNDARY structs are EXCLUDED — "no domain VOs on the wire":
+// strings are correct on integration-event payloads, HTTP DTOs, DB rows,
+// and query Views. Skipped: any struct whose name ends in Snapshot /
+// Input / DTO / Dto / Payload / View / Params / Row, and ANY file under
+// an `integrationevents/` path. (So platform's LeadSnapshot + crmlead's
+// PurchaseSnapshot — both string-typed with `"PCD" | "ThirdParty"`
+// comments — correctly pass; the aggregate's Profile + stored state are
+// checked.)
+//
+// Scope: production — domain aggregates + their VOs under
+// internal/<mod>/domain/. Test files declare fixtures freely.
+//
+// arch-test:no-negative-fixture — the recorded RED→GREEN proof is the
+// mutation test in the deliverable (revert one crmlead.Profile enum
+// field to bare `string` keeping its `"a" | "b"` comment → this gate
+// goes RED). A committed fixture struct under domain/ with the banned
+// shape would itself be the violation; the AST comment-vs-type matcher
+// IS the fitness function.
+//
+// arch-test:no-synctest — purely-static AST analysis test.
+func TestArch_ClosedSetFieldsAreTypedEnums(t *testing.T) {
+	t.Parallel()
+
+	// closedSetRE matches a comment that enumerates two or more quoted
+	// alternatives separated by `|` — e.g. `"PCD" | "ThirdParty"` or
+	// `"" | "a" | "b"`. The empty-string alternative counts toward the
+	// "unset is valid" idiom but the rule still requires two+ alternatives
+	// total, so a lone `"x"` (not a closed set) never trips.
+	closedSetRE := regexp.MustCompile(`"[^"]*"\s*\|\s*"[^"]*"`)
+
+	// Wire/boundary struct name suffixes — strings are correct on the wire.
+	wireSuffixes := []string{"Snapshot", "Input", "DTO", "Dto", "Payload", "View", "Params", "Row"}
+	isWireStructName := func(name string) bool {
+		for _, suf := range wireSuffixes {
+			if strings.HasSuffix(name, suf) {
+				return true
+			}
+		}
+		return false
+	}
+
+	// isBareStringType reports whether the field type is bare `string` or
+	// `[]string` (the un-typed shapes this gate bans for closed-set fields).
+	// A NAMED type (BusinessType, etc.) is an *ast.Ident whose Name is not
+	// the predeclared "string"; a []NamedType array elt is likewise named.
+	isBareStringType := func(e ast.Expr) bool {
+		switch ty := e.(type) {
+		case *ast.Ident:
+			return ty.Name == "string"
+		case *ast.ArrayType:
+			if id, ok := ty.Elt.(*ast.Ident); ok {
+				return id.Name == "string"
+			}
+		}
+		return false
+	}
+
+	commentDeclaresClosedSet := func(g *ast.CommentGroup) bool {
+		if g == nil {
+			return false
+		}
+		return closedSetRE.MatchString(g.Text())
+	}
+
+	type violation struct {
+		file  string
+		line  int
+		field string
+		strct string
+	}
+	var violations []violation
+
+	for _, mod := range modulesUnderInternal(t) {
+		domainDir := filepath.Join(internalDir(t), mod, "domain")
+		walkGoFiles(t, domainDir, false, func(path string, src []byte) {
+			slash := pathToSlash(path)
+			// Files under an integrationevents/ path are wire contracts even
+			// if (defensively) one ever lived under domain/.
+			if strings.Contains(slash, "/integrationevents/") {
+				return
+			}
+			fset, f := parseFile(t, path, src)
+
+			for _, decl := range f.Decls {
+				gd, ok := decl.(*ast.GenDecl)
+				if !ok || gd.Tok != token.TYPE {
+					continue
+				}
+				for _, spec := range gd.Specs {
+					ts, ok := spec.(*ast.TypeSpec)
+					if !ok {
+						continue
+					}
+					st, ok := ts.Type.(*ast.StructType)
+					if !ok || st.Fields == nil {
+						continue
+					}
+					if isWireStructName(ts.Name.Name) {
+						continue // wire/boundary struct — strings are correct
+					}
+					for _, fld := range st.Fields.List {
+						if !commentDeclaresClosedSet(fld.Doc) && !commentDeclaresClosedSet(fld.Comment) {
+							continue
+						}
+						if !isBareStringType(fld.Type) {
+							continue // already a named enum type — good
+						}
+						for _, nm := range fld.Names {
+							violations = append(violations, violation{
+								file:  slash,
+								line:  fset.Position(fld.Pos()).Line,
+								field: nm.Name,
+								strct: ts.Name.Name,
+							})
+						}
+					}
+				}
+			}
+		})
+	}
+
+	if len(violations) > 0 {
+		t.Errorf("%d domain struct field(s) declare a closed set in their comment but are typed as bare string/[]string — define a typed enum (TDL Safer Enums): type X string + consts + Parse/String/IsValid, and make the field that type:", len(violations))
+		for _, v := range violations {
+			t.Errorf("  %s:%d — %s.%s declares `\"a\" | \"b\"` but is bare string", v.file, v.line, v.strct, v.field)
+		}
 	}
 }
 

@@ -93,10 +93,12 @@ type lockedError struct {
 	lockedUntil time.Time
 }
 
-func (e *lockedError) Error() string                { return ErrAccountLocked.Error() }
-func (e *lockedError) Unwrap() error                { return ErrAccountLocked }
-func (e *lockedError) Is(target error) bool         { return target == ErrAccountLocked }
-func newLockedError(lockedUntil time.Time) *lockedError { return &lockedError{lockedUntil: lockedUntil} }
+func (e *lockedError) Error() string        { return ErrAccountLocked.Error() }
+func (e *lockedError) Unwrap() error        { return ErrAccountLocked }
+func (e *lockedError) Is(target error) bool { return target == ErrAccountLocked }
+func newLockedError(lockedUntil time.Time) *lockedError {
+	return &lockedError{lockedUntil: lockedUntil}
+}
 
 // ----- Handler ---------------------------------------------------------------
 
@@ -287,7 +289,7 @@ func (h LoginHandler) Handle(ctx context.Context, cmd LoginCommand) (LoginResult
 		TenantSlug:    tn.Slug().String(),
 		MembershipID:  m.ID().String(),
 		SecurityStamp: p.SecurityStamp().String(),
-		IsPlatform:    tn.Slug().String() == "platform",
+		IsPlatform:    tn.Slug().String() == tenant.PlatformSlug,
 		IsSuperUser:   authClaims.IsSuperUser,
 		Permissions:   permissionNames(authClaims.Permissions),
 	})
@@ -373,13 +375,15 @@ func (h LoginHandler) resolveAndVerify(ctx context.Context, cmd LoginCommand) (*
 	if m == nil {
 		// Person exists but has no Active Membership — same surface as
 		// unknown email per OWASP "Authentication Cheat Sheet"
-		// enumeration-safety. Real verify (not dummy) so even this
-		// branch's timing tracks the wrong-password path exactly,
-		// since the JOIN returned the actual password_hash. We do
-		// count this as a failed attempt — same observable as wrong-
-		// password from the caller's POV.
-		match := argon2.Verify(cmd.Password, p.PasswordHash().String()) == nil
-		if !match {
+		// enumeration-safety. Real verify (not dummy) so this branch's
+		// timing tracks the wrong-password path exactly (the JOIN returned
+		// the real hash). Count only a WRONG password as a failed attempt:
+		// a correct password proves it's not a brute-force probe, just a
+		// user with no active membership (off-boarded / mid-re-onboarding),
+		// and must not accrue lockout. Enumeration safety lives in the
+		// uniform error + timing, not in the internal counter the attacker
+		// can't observe.
+		if argon2.Verify(cmd.Password, p.PasswordHash().String()) != nil {
 			h.registerFailedLoginBestEffort(ctx, p)
 		}
 		return nil, nil, ErrInvalidCredentials
@@ -430,4 +434,3 @@ func (h LoginHandler) registerSuccessfulLoginBestEffort(ctx context.Context, p *
 	p.RegisterSuccessfulLogin(h.now())
 	_ = h.persons.UpdateLockoutState(ctx, p)
 }
-

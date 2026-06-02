@@ -12,6 +12,12 @@
 CREATE SCHEMA IF NOT EXISTS app;
 COMMENT ON SCHEMA app IS 'LeadKart cross-cutting primitives (RLS GUCs + helper functions). Owned by leadkart_owner; granted to leadkart_app + leadkart_test for read-only access.';
 
+-- Cross-cutting infra schema (ex-buildingblocks; matches internal/common/
+-- per ADR 0067). Created here in the bootstrap so every later migration —
+-- messaging_infra, dead_letter, audit columns — can target it.
+CREATE SCHEMA IF NOT EXISTS common;
+COMMENT ON SCHEMA common IS 'LeadKart cross-cutting plumbing (idempotency, audit log, dead-letter). Matches internal/common/ (TDL canon). Renamed from buildingblocks per ADR 0067.';
+
 -- ----------------------------------------------------------------------------
 -- LEAKPROOF wrapper around current_setting() so Postgres can push
 -- `app.current_tenant()` predicates into index scans (without LEAKPROOF
@@ -57,5 +63,6 @@ COMMENT ON FUNCTION app.is_platform() IS 'Returns true when the connection is op
 -- +goose StatementBegin
 DROP FUNCTION IF EXISTS app.is_platform();
 DROP FUNCTION IF EXISTS app.current_tenant();
+DROP SCHEMA IF EXISTS common CASCADE;
 DROP SCHEMA IF EXISTS app CASCADE;
 -- +goose StatementEnd

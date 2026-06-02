@@ -9,11 +9,11 @@ import (
 	"github.com/leadkart/leadkart-go/internal/platform/domain/unverifiedcontact"
 )
 
-// CreateUnverifiedContactCommand carries the validated input for the
-// Lead Agent "register a new raw contact" use case.
+// CreateUnverifiedContactCommand is the Lead Agent "register a new raw
+// contact" input.
 type CreateUnverifiedContactCommand struct {
-	Form        leadform.Form
-	CreatedBy   unverifiedcontact.MembershipID
+	Form      leadform.Form
+	CreatedBy unverifiedcontact.MembershipID
 }
 
 // CreateUnverifiedContactResult holds the new contact's ID.
@@ -21,10 +21,8 @@ type CreateUnverifiedContactResult struct {
 	ContactID unverifiedcontact.ID
 }
 
-// CreateUnverifiedContactHandler orchestrates the single-aggregate
-// create. The repository's Add method joins the surrounding UoW tx (if
-// any) or opens its own — both shapes drain the CreatedEvent to the
-// outbox in the same tx per ADR 0008.
+// CreateUnverifiedContactHandler creates a single contact aggregate.
+// Add drains the CreatedEvent to the outbox in the same tx (ADR 0008).
 type CreateUnverifiedContactHandler struct {
 	contacts     unverifiedcontact.Repository
 	now          func() time.Time
@@ -33,12 +31,9 @@ type CreateUnverifiedContactHandler struct {
 
 // NewCreateUnverifiedContactHandler wires the handler.
 //
-// newContactID is the aggregate-ID factory per the
-// `TestArch_HandlersInjectIDFactory` discipline: random sources are
-// HIDDEN INPUTS that violate Pure Domain (TDL Wild Workouts canon +
-// Khorikov §8). Production passes
-// `func() unverifiedcontact.ID { return unverifiedcontact.ID(ids.NewV7().String()) }`;
-// tests inject a deterministic counter so the minted ID is pinnable.
+// newContactID is injected per TestArch_HandlersInjectIDFactory: random
+// sources are hidden inputs that violate Pure Domain (TDL canon +
+// Khorikov §8). Tests inject a deterministic counter for pinnable IDs.
 func NewCreateUnverifiedContactHandler(
 	contacts unverifiedcontact.Repository,
 	now func() time.Time,

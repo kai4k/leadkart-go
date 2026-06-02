@@ -25,10 +25,11 @@ import (
 	"github.com/ThreeDotsLabs/watermill/message"
 	"github.com/ThreeDotsLabs/watermill/pubsub/gochannel"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/leadkart/leadkart-go/internal/common/tenancy"
 	"github.com/leadkart/leadkart-go/internal/common/audit"
 	"github.com/leadkart/leadkart-go/internal/common/messaging"
+	"github.com/leadkart/leadkart-go/internal/common/tenancy"
 )
 
 func silentLog() *slog.Logger {
@@ -74,9 +75,11 @@ func TestRouter_FullStack_TenantContextAndAuditAndIdempotency(t *testing.T) {
 
 	r, err := messaging.NewRouter(messaging.Deps{
 		Subscriber:       pubsub,
+		Publisher:        pubsub,
 		Logger:           silentLog(),
 		IdempotencyInbox: receiver,
 		AuditWriter:      auditW,
+		DeadLetters:      messaging.NewDeadLetterWriter(pool, silentLog(), time.Now),
 		CloseTimeout:     2 * time.Second,
 		Retry: messaging.RetryConfig{
 			MaxRetries:      1,
@@ -162,7 +165,7 @@ func TestRouter_FullStack_TenantContextAndAuditAndIdempotency(t *testing.T) {
 	// Audit row written for the one processed message.
 	var auditCount int
 	err = pool.QueryRow(t.Context(), `
-		SELECT count(*) FROM buildingblocks.audit_log_entry WHERE action = 'test.event.v1'
+		SELECT count(*) FROM common.audit_log_entry WHERE action = 'test.event.v1'
 	`).Scan(&auditCount)
 	if err != nil {
 		t.Fatalf("audit count: %v", err)
@@ -200,9 +203,11 @@ func TestRouter_AuditMiddleware_PopulatesActFields_WhenMessageMetadataCarriesAct
 
 	r, err := messaging.NewRouter(messaging.Deps{
 		Subscriber:       pubsub,
+		Publisher:        pubsub,
 		Logger:           silentLog(),
 		IdempotencyInbox: receiver,
 		AuditWriter:      auditW,
+		DeadLetters:      messaging.NewDeadLetterWriter(pool, silentLog(), time.Now),
 		CloseTimeout:     2 * time.Second,
 		Retry: messaging.RetryConfig{
 			MaxRetries:      1,
@@ -240,7 +245,7 @@ func TestRouter_AuditMiddleware_PopulatesActFields_WhenMessageMetadataCarriesAct
 	for time.Now().Before(deadline) {
 		var n int
 		const q = `
-			SELECT count(*) FROM buildingblocks.audit_log_entry
+			SELECT count(*) FROM common.audit_log_entry
 			WHERE  action = 'test.act.v1'
 		`
 		_ = pool.QueryRow(t.Context(), q).Scan(&n) // arch-test:ignore-err — poll loop; non-1 count just keeps polling until deadline
@@ -257,7 +262,7 @@ func TestRouter_AuditMiddleware_PopulatesActFields_WhenMessageMetadataCarriesAct
 	)
 	err = pool.QueryRow(t.Context(), `
 		SELECT act_operator_id, act_session_id, act_reason
-		FROM   buildingblocks.audit_log_entry
+		FROM   common.audit_log_entry
 		WHERE  action = 'test.act.v1'
 	`).Scan(&gotOperator, &gotSession, &gotReason)
 	if err != nil {
@@ -288,9 +293,11 @@ func TestRouter_AuditMiddleware_LeavesActFieldsEmpty_WhenNoMetadata(t *testing.T
 
 	r, err := messaging.NewRouter(messaging.Deps{
 		Subscriber:       pubsub,
+		Publisher:        pubsub,
 		Logger:           silentLog(),
 		IdempotencyInbox: receiver,
 		AuditWriter:      auditW,
+		DeadLetters:      messaging.NewDeadLetterWriter(pool, silentLog(), time.Now),
 		CloseTimeout:     2 * time.Second,
 		Retry: messaging.RetryConfig{
 			MaxRetries:      1,
@@ -321,7 +328,7 @@ func TestRouter_AuditMiddleware_LeavesActFieldsEmpty_WhenNoMetadata(t *testing.T
 	for time.Now().Before(deadline) {
 		var n int
 		const q = `
-			SELECT count(*) FROM buildingblocks.audit_log_entry
+			SELECT count(*) FROM common.audit_log_entry
 			WHERE  action = 'test.noact.v1'
 		`
 		_ = pool.QueryRow(t.Context(), q).Scan(&n) // arch-test:ignore-err — poll loop; non-1 count just keeps polling until deadline
@@ -338,7 +345,7 @@ func TestRouter_AuditMiddleware_LeavesActFieldsEmpty_WhenNoMetadata(t *testing.T
 	)
 	err = pool.QueryRow(t.Context(), `
 		SELECT act_operator_id::text, act_session_id::text, act_reason
-		FROM   buildingblocks.audit_log_entry
+		FROM   common.audit_log_entry
 		WHERE  action = 'test.noact.v1'
 	`).Scan(&gotOperator, &gotSession, &gotReason)
 	if err != nil {
@@ -365,9 +372,11 @@ func TestRouter_HandlerError_DoesNotRecordInbox_AuditMarksFailure(t *testing.T) 
 
 	r, err := messaging.NewRouter(messaging.Deps{
 		Subscriber:       pubsub,
+		Publisher:        pubsub,
 		Logger:           silentLog(),
 		IdempotencyInbox: receiver,
 		AuditWriter:      auditW,
+		DeadLetters:      messaging.NewDeadLetterWriter(pool, silentLog(), time.Now),
 		CloseTimeout:     2 * time.Second,
 		// Tight retry so the test bounds at <1s. Production
 		// uses DefaultRetry (~6s exhaustion).
@@ -421,13 +430,13 @@ func TestRouter_HandlerError_DoesNotRecordInbox_AuditMarksFailure(t *testing.T) 
 	// At least one audit row — Succeeded=false.
 	var auditCount, failedCount int
 	err = pool.QueryRow(t.Context(), `
-		SELECT count(*) FROM buildingblocks.audit_log_entry WHERE action = 'test.failure.v1'
+		SELECT count(*) FROM common.audit_log_entry WHERE action = 'test.failure.v1'
 	`).Scan(&auditCount)
 	if err != nil {
 		t.Fatalf("audit count: %v", err)
 	}
 	err = pool.QueryRow(t.Context(), `
-		SELECT count(*) FROM buildingblocks.audit_log_entry
+		SELECT count(*) FROM common.audit_log_entry
 		WHERE  action = 'test.failure.v1' AND succeeded = false
 	`).Scan(&failedCount)
 	if err != nil {
@@ -438,5 +447,145 @@ func TestRouter_HandlerError_DoesNotRecordInbox_AuditMarksFailure(t *testing.T) 
 	}
 	if failedCount < 1 {
 		t.Fatalf("failed audit rows: got %d want ≥1", failedCount)
+	}
+}
+
+// newDLQRouter builds a router whose retry budget is tight (1 retry) so
+// DLQ tests bound quickly, with a DeadLetterWriter persisting to
+// common.dead_letter. Returns the router + the pool for assertions.
+func newDLQRouter(t *testing.T, pool *pgxpool.Pool, pubsub *gochannel.GoChannel) *messaging.Router {
+	t.Helper()
+	r, err := messaging.NewRouter(messaging.Deps{
+		Subscriber:       pubsub,
+		Publisher:        pubsub,
+		Logger:           silentLog(),
+		IdempotencyInbox: messaging.NewIdempotentReceiver(pool),
+		AuditWriter:      audit.NewWriter(pool, silentLog(), time.Now),
+		DeadLetters:      messaging.NewDeadLetterWriter(pool, silentLog(), time.Now),
+		CloseTimeout:     2 * time.Second,
+		Retry: messaging.RetryConfig{
+			MaxRetries:      1,
+			InitialInterval: 10 * time.Millisecond,
+			MaxInterval:     50 * time.Millisecond,
+			Multiplier:      2.0,
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewRouter: %v", err)
+	}
+	t.Cleanup(func() { _ = r.Close() })
+	return r
+}
+
+// waitDeadLetter polls common.dead_letter for a row with the given
+// message_id, bounded by deadline. Returns the reason + handler_name of
+// the first match, or fails the test on timeout.
+func waitDeadLetter(t *testing.T, pool *pgxpool.Pool, messageID string) (reason, handler string) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	// arch-test:wait-justified — polling a Postgres row written by an async DLQ subscriber; bounded by deadline; synctest N/A across the SQL driver boundary.
+	for time.Now().Before(deadline) {
+		err := pool.QueryRow(t.Context(), `
+			SELECT reason, handler_name FROM common.dead_letter WHERE message_id = $1
+		`, messageID).Scan(&reason, &handler)
+		if err == nil {
+			return reason, handler
+		}
+		time.Sleep(20 * time.Millisecond) // arch-test:wait-justified — wait-until poll for async DLQ persist
+	}
+	t.Fatalf("no common.dead_letter row for message %s within 3s", messageID)
+	return "", ""
+}
+
+// TestRouter_PermanentFailure_DeadLetters proves the core resilience
+// contract: a handler that always errors is retried (not forever) and,
+// once the retry budget is spent, the message is salvaged to the durable
+// common.dead_letter table — never redelivered indefinitely (the original
+// P0). The inbox stays clean so a DLQ replay can reprocess it.
+func TestRouter_PermanentFailure_DeadLetters(t *testing.T) {
+	pool := inboxFixture(t)
+	pubsub := gochannel.NewGoChannel(gochannel.Config{}, watermill.NewSlogLogger(silentLog()))
+	t.Cleanup(func() { _ = pubsub.Close() })
+
+	r := newDLQRouter(t, pool, pubsub)
+
+	calls := &atomic.Int32{}
+	r.AddSubscriber("test.dlq.permanent", "test.dlq.permanent.topic",
+		func(_ context.Context, _ string, _ *message.Message) error {
+			calls.Add(1)
+			return errors.New("always fails")
+		})
+
+	stop := runRouter(t, r)
+	defer stop()
+
+	msgID := uuid.NewString()
+	msg := message.NewMessage(msgID, []byte(`{"k":"v"}`))
+	msg.Metadata.Set(messaging.HeaderEventType, "test.dlq.v1")
+	if err := pubsub.Publish("test.dlq.permanent.topic", msg); err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+
+	reason, handler := waitDeadLetter(t, pool, msgID)
+	if reason == "" {
+		t.Error("dead_letter row has empty reason")
+	}
+	if handler != "test.dlq.permanent" {
+		t.Errorf("dead_letter handler_name: got %q want %q", handler, "test.dlq.permanent")
+	}
+
+	// Retried, not infinite: initial + exactly 1 retry (MaxRetries=1).
+	if got := calls.Load(); got != 2 {
+		t.Errorf("handler calls: got %d want 2 (initial + 1 retry, then DLQ)", got)
+	}
+
+	// Inbox stays clean — a dead-lettered message is NOT marked processed,
+	// so a future DLQ replay can reprocess it.
+	var inbox int
+	if err := pool.QueryRow(t.Context(), `
+		SELECT count(*) FROM identity.processed_messages WHERE message_id = $1
+	`, msgID).Scan(&inbox); err != nil {
+		t.Fatalf("inbox count: %v", err)
+	}
+	if inbox != 0 {
+		t.Errorf("inbox row for dead-lettered message: got %d want 0 (must stay replayable)", inbox)
+	}
+}
+
+// TestRouter_NonRetryableError_DeadLettersImmediately proves a handler
+// that returns messaging.NonRetryable (a permanently-unprocessable payload)
+// dead-letters on the FIRST failure — no retry budget burned, no 5×-retry
+// waste on an error that can never succeed.
+func TestRouter_NonRetryableError_DeadLettersImmediately(t *testing.T) {
+	pool := inboxFixture(t)
+	pubsub := gochannel.NewGoChannel(gochannel.Config{}, watermill.NewSlogLogger(silentLog()))
+	t.Cleanup(func() { _ = pubsub.Close() })
+
+	r := newDLQRouter(t, pool, pubsub)
+
+	calls := &atomic.Int32{}
+	r.AddSubscriber("test.dlq.nonretryable", "test.dlq.nonretryable.topic",
+		func(_ context.Context, _ string, _ *message.Message) error {
+			calls.Add(1)
+			return messaging.NonRetryable(errors.New("malformed payload"))
+		})
+
+	stop := runRouter(t, r)
+	defer stop()
+
+	msgID := uuid.NewString()
+	msg := message.NewMessage(msgID, []byte(`not-json`))
+	msg.Metadata.Set(messaging.HeaderEventType, "test.dlq.v1")
+	if err := pubsub.Publish("test.dlq.nonretryable.topic", msg); err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+
+	if _, handler := waitDeadLetter(t, pool, msgID); handler != "test.dlq.nonretryable" {
+		t.Errorf("dead_letter handler_name: got %q want %q", handler, "test.dlq.nonretryable")
+	}
+
+	// NonRetryable ⇒ ShouldRetry=false ⇒ called exactly once (no retry).
+	if got := calls.Load(); got != 1 {
+		t.Errorf("handler calls: got %d want 1 (NonRetryable skips retry)", got)
 	}
 }

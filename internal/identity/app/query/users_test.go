@@ -183,8 +183,7 @@ func TestListUsers_RejectsZeroTenant(t *testing.T) {
 	}
 }
 
-// membershipsErrRepo lets a test inject failures on the listing
-// methods.
+// membershipsErrRepo injects failures on listing methods.
 type membershipsErrRepo struct {
 	membership.Repository
 	listErr     error
@@ -216,8 +215,7 @@ func TestListUsers_PropagatesListError(t *testing.T) {
 	}
 }
 
-// personsErrRepo lets a test inject failure on the batch-hydration
-// path.
+// personsErrRepo injects failure on the batch-hydration path.
 type personsErrRepo struct {
 	person.Repository
 	getByIDsErr error
@@ -244,8 +242,7 @@ func TestListUsers_PropagatesHydrateError(t *testing.T) {
 
 func TestListUsers_PersonAbsentDuringHydrate_Returns404(t *testing.T) {
 	t.Parallel()
-	// Membership references a Person that the persons repo will NOT
-	// return (race-with-soft-delete simulation).
+	// Membership references a Person not in the repo (race-with-soft-delete simulation).
 	m := newMembership(t, testMembershipID, testPersonID, testTenantID)
 	mems := membershiptest.NewFakeRepository()
 	if err := mems.Add(t.Context(), m); err != nil {
@@ -261,7 +258,7 @@ func TestListUsers_PersonAbsentDuringHydrate_Returns404(t *testing.T) {
 
 func TestListUsers_HappyPath_HydratesAllRows(t *testing.T) {
 	t.Parallel()
-	// Two memberships, two persons.
+	// Seed two memberships + two persons; verify both are hydrated.
 	p1 := newPersonAt(t, person.ID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"), "p1@example.test", "Person", "One")
 	p2 := newPersonAt(t, person.ID("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"), "p2@example.test", "Person", "Two")
 	m1 := newMembership(t, membership.ID("cccccccc-cccc-cccc-cccc-cccccccccccc"), p1.ID(), testTenantID)
@@ -350,7 +347,7 @@ func TestListUsersPaged_PropagatesListError(t *testing.T) {
 func TestListUsersPaged_PropagatesHydrateError(t *testing.T) {
 	t.Parallel()
 	mems := membershiptest.NewFakeRepository()
-	// Seed one row so the page query returns IDs the hydrate path must consume.
+	// Seed one row so the page query returns IDs the hydrate path consumes.
 	p := newPerson(t)
 	m := newMembership(t, testMembershipID, p.ID(), testTenantID)
 	if err := mems.Add(t.Context(), m); err != nil {
@@ -383,7 +380,7 @@ func TestListUsersPaged_HappyPath_FirstPageSentinelAdmitsAllRows(t *testing.T) {
 	t.Parallel()
 	persons := persontest.NewFakeRepository()
 	mems := membershiptest.NewFakeRepository()
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		pid := person.ID(fmt.Sprintf("11111111-0000-0000-0000-00000000000%d", i))
 		p := newPersonAt(t, pid, fmt.Sprintf("p%d@example.test", i), "P", "Q")
 		if err := persons.Add(t.Context(), p); err != nil {
@@ -422,7 +419,7 @@ func TestListUsersPaged_PageBoundary_EmitsNextCursor(t *testing.T) {
 	t.Parallel()
 	persons := persontest.NewFakeRepository()
 	mems := membershiptest.NewFakeRepository()
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		pid := person.ID(fmt.Sprintf("11111111-0000-0000-0000-00000000000%d", i))
 		p := newPersonAt(t, pid, fmt.Sprintf("p%d@example.test", i), "P", "Q")
 		if err := persons.Add(t.Context(), p); err != nil {
@@ -458,8 +455,7 @@ func TestListUsersPaged_PageBoundary_EmitsNextCursor(t *testing.T) {
 
 func TestListUsersPaged_ClampZeroPageSize(t *testing.T) {
 	t.Parallel()
-	// Just verify that PageSize=0 doesn't crash; the clamp pads it to
-	// DefaultPageSize internally.
+	// PageSize=0 is clamped to DefaultPageSize internally.
 	mems := membershiptest.NewFakeRepository()
 	h := query.NewListUsersPagedHandler(mems, persontest.NewFakeRepository())
 	page, err := h.Handle(t.Context(), query.ListUsersPagedQuery{TenantID: testTenantID, PageSize: 0})
@@ -475,8 +471,8 @@ func TestListUsersPaged_HonoursCursor(t *testing.T) {
 	t.Parallel()
 	persons := persontest.NewFakeRepository()
 	mems := membershiptest.NewFakeRepository()
-	// Use distinct joinedAts so cursor predicate cuts cleanly.
-	for i := 0; i < 3; i++ {
+	// Stagger joinedAts so cursor predicate cuts cleanly.
+	for i := range 3 {
 		pid := person.ID(fmt.Sprintf("11111111-0000-0000-0000-00000000000%d", i))
 		p := newPersonAt(t, pid, fmt.Sprintf("p%d@example.test", i), "P", "Q")
 		if err := persons.Add(t.Context(), p); err != nil {
@@ -491,8 +487,7 @@ func TestListUsersPaged_HonoursCursor(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	// Caller-supplied cursor at the SECOND joinedAt — should return
-	// only the row joined BEFORE it.
+	// Cursor at the second joinedAt — should return the row joined before it.
 	cursor := pagination.Cursor{
 		SortValue: testNow.Add(1 * time.Hour),
 		ID:        "33333333-0000-0000-0000-00000000000z", // > any seeded ID lexicographically
@@ -506,14 +501,11 @@ func TestListUsersPaged_HonoursCursor(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Handle: %v", err)
 	}
-	// joinedAt[0] is strictly Before the cursor — admitted.
-	// joinedAt[1] is Equal but the cursor ID is lexicographically
-	// greater than any seeded membership ID, so admitted too.
+	// joinedAt[0] strictly before cursor → admitted.
+	// joinedAt[1] equal but cursor ID lexicographically greater → also admitted.
 	if got, want := len(page.Items), 2; got != want {
 		t.Errorf("items = %d, want %d", got, want)
 	}
 }
 
-// Ensure roletest import is exercised so go vet doesn't flag in case
-// future refactors trim direct uses.
-var _ = role.HierarchyLevelDefault
+var _ = role.HierarchyLevelDefault // keep roletest import alive

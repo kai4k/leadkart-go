@@ -9,9 +9,7 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/domain/impersonation"
 )
 
-// ImpersonationSessionView is the wire-shape of an active session
-// for the operator's "my sessions" UI. Reason is included so the
-// operator can reconcile what they're currently impersonating.
+// ImpersonationSessionView is the wire-shape of an active impersonation session.
 type ImpersonationSessionView struct {
 	SessionID      string
 	OperatorID     string
@@ -21,9 +19,7 @@ type ImpersonationSessionView struct {
 	ExpiresAt      time.Time
 }
 
-// ListImpersonationSessionsQuery returns every active session for
-// the supplied operator. Cross-operator listing is NOT exposed —
-// each operator sees their own sessions only.
+// ListImpersonationSessionsQuery returns active sessions for the supplied operator only.
 type ListImpersonationSessionsQuery struct {
 	OperatorID string
 }

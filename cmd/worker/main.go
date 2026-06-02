@@ -41,6 +41,7 @@ import (
 	"time"
 
 	"github.com/ThreeDotsLabs/watermill"
+	"github.com/ThreeDotsLabs/watermill/components/forwarder"
 	"github.com/ThreeDotsLabs/watermill/pubsub/gochannel"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
@@ -49,16 +50,6 @@ import (
 
 	"github.com/riverqueue/river"
 
-	crmadapters "github.com/leadkart/leadkart-go/internal/crm/adapters"
-	crmcommand "github.com/leadkart/leadkart-go/internal/crm/app/command"
-	"github.com/leadkart/leadkart-go/internal/crm/domain/crmlead"
-	crmintegrationevents "github.com/leadkart/leadkart-go/internal/crm/integrationevents"
-	crmsubscribers "github.com/leadkart/leadkart-go/internal/crm/ports/subscribers"
-	"github.com/leadkart/leadkart-go/internal/identity/adapters"
-	"github.com/leadkart/leadkart-go/internal/identity/integrationevents"
-	"github.com/leadkart/leadkart-go/internal/identity/ports/subscribers"
-	inventoryadapters "github.com/leadkart/leadkart-go/internal/inventory/adapters"
-	inventoryintegrationevents "github.com/leadkart/leadkart-go/internal/inventory/integrationevents"
 	"github.com/leadkart/leadkart-go/internal/common/audit"
 	"github.com/leadkart/leadkart-go/internal/common/cache"
 	"github.com/leadkart/leadkart-go/internal/common/config"
@@ -68,9 +59,12 @@ import (
 	"github.com/leadkart/leadkart-go/internal/common/messaging"
 	"github.com/leadkart/leadkart-go/internal/common/obs"
 	"github.com/leadkart/leadkart-go/internal/common/pg"
-
-	platformadapters "github.com/leadkart/leadkart-go/internal/platform/adapters"
-	platformintegrationevents "github.com/leadkart/leadkart-go/internal/platform/integrationevents"
+	crmadapters "github.com/leadkart/leadkart-go/internal/crm/adapters"
+	crmcommand "github.com/leadkart/leadkart-go/internal/crm/app/command"
+	"github.com/leadkart/leadkart-go/internal/crm/domain/crmlead"
+	crmsubscribers "github.com/leadkart/leadkart-go/internal/crm/ports/subscribers"
+	"github.com/leadkart/leadkart-go/internal/identity/adapters"
+	"github.com/leadkart/leadkart-go/internal/identity/ports/subscribers"
 )
 
 // Tunings — same shape as cmd/api/main.go so the two binaries' admin
@@ -90,12 +84,6 @@ const (
 	// routerCloseTimeout is the messaging.Router's per-shutdown
 	// CloseTimeout — must be ≤ shutdownTimeout.
 	routerCloseTimeout = 25 * time.Second
-	// forwarderPollInterval — how often the forwarder polls the outbox
-	// for unforwarded rows when the previous poll returned nothing.
-	forwarderPollInterval = time.Second
-	// forwarderRetryInterval — backoff after a publish failure before
-	// retrying the same row.
-	forwarderRetryInterval = 50 * time.Millisecond
 	// healthcheckTimeout caps the distroless self-probe HTTP call.
 	healthcheckTimeout = 3 * time.Second
 	// defaultEmailLinkBaseURL is the base URL the email subscriber
@@ -244,24 +232,15 @@ func run(ctx context.Context, stdout *os.File) error {
 	defer func() { _ = pubsub.Close() }()
 
 	tx := pg.NewTransactor(pool)
-	forwarder := adapters.NewOutboxForwarder(pool, tx, pubsub, integrationevents.Topic, 0, time.Now)
+	// Single Watermill Forwarder drains the shared common.outbox relay and
+	// republishes each event to its destination module topic (embedded in
+	// the envelope by messaging.PublishOutbox). Replaces the four hand-rolled
+	// per-module poll loops — per ADR 0064 the outbox is one shared relay.
+	outboxForwarder, err := messaging.NewOutboxForwarder(pool, pubsub, watermill.NewSlogLogger(logger))
+	if err != nil {
+		return fmt.Errorf("outbox forwarder: %w", err)
+	}
 
-	// Per-module outbox forwarder: each bounded context owns its own
-	// outbox table (CLAUDE.md §"Each module owns its Postgres schema"),
-	// so each needs its own forwarder bound to the schema-specific sqlc
-	// Queries.
-	inventoryForwarder := inventoryadapters.NewOutboxForwarder(pool, tx, pubsub, inventoryintegrationevents.Topic, 0, time.Now)
-
-	// Platform-module outbox forwarder (ADR 0059). Sibling of the
-	// identity forwarder — own table, own topic, own goroutine. Slice 1
-	// has no in-process subscriber for platform events; the topic is
-	// still drained so audit-log shape stays consistent.
-	platformForwarder := platformadapters.NewOutboxForwarder(pool, tx, pubsub, platformintegrationevents.Topic, 0, time.Now)
-
-	// CRM-module outbox forwarder (ADR 0060). Drains crm.outbox to the
-	// crm.events Watermill topic. Slice 1 CRM also subscribes to the
-	// platform.events topic for the lead-purchased ingest.
-	crmForwarder := crmadapters.NewOutboxForwarder(pool, tx, pubsub, crmintegrationevents.Topic, 0, time.Now)
 	crmLeads := crmadapters.NewCrmLeadRepository(pool, tx)
 	newCrmLeadID := func() crmlead.ID { return crmlead.ID(ids.NewV7().String()) }
 	crmIngest := crmsubscribers.NewPurchasedLeadIngestor(
@@ -269,26 +248,40 @@ func run(ctx context.Context, stdout *os.File) error {
 
 	router, err := messaging.NewRouter(messaging.Deps{
 		Subscriber:       pubsub,
+		Publisher:        pubsub,
 		Logger:           logger,
 		IdempotencyInbox: messaging.NewIdempotentReceiver(pool),
 		AuditWriter:      audit.NewWriter(pool, logger, time.Now),
+		DeadLetters:      messaging.NewDeadLetterWriter(pool, logger, time.Now),
 		CloseTimeout:     routerCloseTimeout,
 		Retry:            messaging.DefaultRetry,
 	})
 	if err != nil {
 		return fmt.Errorf("messaging router: %w", err)
 	}
-	// Email-dispatch subscriber (ADR 0057). buildEmailSender panics on
-	// malformed no-reply address — string literal, init-time only, so
-	// fail-fast at boot is the right shape per CLAUDE.md "MustNewX
-	// init-time only".
-	subscribers.Register(router, subWiring.Families, subWiring.StampCache, buildEmailSender(logger), logger, time.Now)
+	// cqrs EventProcessor (ADR 0067): typed dispatch over the shared
+	// router. The processor derives each handler's subscribe topic from
+	// the event alias (identity.* → identity.events, platform.* →
+	// platform.events) and decodes the payload via the WireAliasMarshaler;
+	// router.AddCqrsHandler attaches the canonical resilience stack
+	// (PoisonQueue + Idempotency + Audit + Retry + Recoverer) per handler.
+	eventProcessor, err := messaging.NewEventProcessor(router.RawRouter(), pubsub, watermill.NewSlogLogger(logger))
+	if err != nil {
+		return fmt.Errorf("messaging event processor: %w", err)
+	}
 
-	// CRM module subscribers (ADR 0060). The lead-purchased subscriber
-	// rides the Platform module's `platform.events` topic — handler-side
-	// event_type filtering routes only `platform.lead-purchased.v1` to
-	// the ingest handler.
-	crmsubscribers.Register(router, crmIngest, "platform.events", logger)
+	// Gather every module's typed handlers. buildEmailSender panics on a
+	// malformed no-reply address — string literal, init-time only, so
+	// fail-fast at boot is the right shape (CLAUDE.md "MustNewX init-time
+	// only"). CRM's lead-purchased handler is a cross-module consumer of
+	// the Platform `platform.lead_purchased.v1` event (ADR 0060).
+	cqrsHandlers := subscribers.Handlers(subWiring.Families, subWiring.StampCache, buildEmailSender(logger), logger, time.Now)
+	cqrsHandlers = append(cqrsHandlers, crmsubscribers.Handlers(crmIngest)...)
+	for _, h := range cqrsHandlers {
+		if err := router.AddCqrsHandler(eventProcessor, h); err != nil {
+			return fmt.Errorf("register cqrs handler: %w", err)
+		}
+	}
 
 	// River background-job pool. v0.2 ships one job — AuditLogPurgeJob —
 	// running daily to enforce the 7-year audit retention. River's
@@ -328,33 +321,28 @@ func run(ctx context.Context, stdout *os.File) error {
 	}, healthCheckTimeout)
 	adminSrv := obs.NewAdminServer(cfg.Listen.WorkerAdmin, health)
 
+	return runWorkerServices(ctx, logger, outboxForwarder, router, riverClient, adminSrv)
+}
+
+// runWorkerServices runs the worker's long-lived services (outbox forwarder,
+// subscriber router, river client, admin listener) under one errgroup until
+// ctx cancels, then drives graceful shutdown. Split out of run so the
+// composition root stays under the cyclomatic-complexity gate.
+func runWorkerServices(
+	ctx context.Context,
+	logger *slog.Logger,
+	outboxForwarder *forwarder.Forwarder,
+	router *messaging.Router,
+	riverClient *jobs.Client,
+	adminSrv *http.Server,
+) error {
 	g, gctx := errgroup.WithContext(ctx)
 
 	g.Go(func() error {
-		forwarder.Run(gctx, forwarderPollInterval, forwarderRetryInterval, func(err error) {
-			logger.ErrorContext(gctx, "outbox forwarder", "err", err)
-		})
-		return nil
-	})
-
-	g.Go(func() error {
-		platformForwarder.Run(gctx, forwarderPollInterval, forwarderRetryInterval, func(err error) {
-			logger.ErrorContext(gctx, "platform outbox forwarder", "err", err)
-		})
-		return nil
-	})
-
-	g.Go(func() error {
-		inventoryForwarder.Run(gctx, forwarderPollInterval, forwarderRetryInterval, func(err error) {
-			logger.ErrorContext(gctx, "inventory outbox forwarder", "err", err)
-		})
-		return nil
-	})
-
-	g.Go(func() error {
-		crmForwarder.Run(gctx, forwarderPollInterval, forwarderRetryInterval, func(err error) {
-			logger.ErrorContext(gctx, "crm outbox forwarder", "err", err)
-		})
+		logger.Info("outbox forwarder starting")
+		if err := outboxForwarder.Run(gctx); err != nil && !errors.Is(err, context.Canceled) {
+			return fmt.Errorf("outbox forwarder: %w", err)
+		}
 		return nil
 	})
 
@@ -384,7 +372,7 @@ func run(ctx context.Context, stdout *os.File) error {
 	})
 
 	g.Go(func() error {
-		logger.Info("worker admin listening", "addr", cfg.Listen.WorkerAdmin)
+		logger.Info("worker admin listening", "addr", adminSrv.Addr)
 		if err := adminSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			return fmt.Errorf("admin: %w", err)
 		}
@@ -397,6 +385,7 @@ func run(ctx context.Context, stdout *os.File) error {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 		defer cancel()
 		_ = adminSrv.Shutdown(shutdownCtx)
+		_ = outboxForwarder.Close()
 		return router.Close()
 	})
 

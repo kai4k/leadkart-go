@@ -3,8 +3,9 @@
 package paymenttest
 
 import (
+	"cmp"
 	"context"
-	"sort"
+	"slices"
 
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 	"github.com/leadkart/leadkart-go/internal/orders/domain/order"
@@ -61,11 +62,11 @@ func (r *FakeRepository) ListByOrder(
 			out = append(out, p)
 		}
 	}
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].ReceivedAt().Equal(out[j].ReceivedAt()) {
-			return out[i].ID() < out[j].ID()
-		}
-		return out[i].ReceivedAt().Before(out[j].ReceivedAt())
+	slices.SortFunc(out, func(a, b *payment.Payment) int {
+		return cmp.Or(
+			a.ReceivedAt().Compare(b.ReceivedAt()), // received_at ASC
+			cmp.Compare(a.ID(), b.ID()),            // id ASC tiebreaker
+		)
 	})
 	return out, nil
 }

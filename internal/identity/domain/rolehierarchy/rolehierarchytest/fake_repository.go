@@ -108,28 +108,57 @@ func (f *FakeRepository) GetActiveByChild(_ context.Context, tenantID tenant.ID,
 	return nil, rolehierarchy.ErrEdgeNotFound
 }
 
-// UpdateByID loads, mutates via updateFn, persists. Returns
-// [rolehierarchy.ErrEdgeNotFound] if the row doesn't exist.
+// UpdateByID loads, mutates via updateFn, persists — faithfully
+// mirroring the pg adapter's load→updateFn→(persist?) contract.
+// Returns [rolehierarchy.ErrEdgeNotFound] if the row doesn't exist.
 //
-// The fake doesn't deep-copy the edge before passing to updateFn; the
-// caller observes mutations even if it returns (false, nil). This
-// mirrors the pg adapter's behavior — both rely on the aggregate's
-// invariants being re-checked at persist time, not snapshot-rollback.
+// The pg adapter loads inside the tx, runs updateFn, and on
+// `(false, nil)` returns WITHOUT writing the row or draining events —
+// the mutations never reach storage. To honor that LSP contract the
+// fake snapshots the stored aggregate BEFORE calling updateFn and, on
+// `(false, nil)`, ROLLS the stored edge back to that snapshot — so
+// mutations made under a no-persist decision are discarded. Pointer
+// identity is preserved so a commit==true caller still observes the
+// mutation it made through its own reference.
 func (f *FakeRepository) UpdateByID(_ context.Context, tenantID tenant.ID, id rolehierarchy.ID, updateFn func(*rolehierarchy.Edge) (bool, error)) error {
 
-	e, ok := f.edges[id]
+	stored, ok := f.edges[id]
 	if !ok {
 		return rolehierarchy.ErrEdgeNotFound
 	}
-	if e.TenantID() != tenantID {
+	if stored.TenantID() != tenantID {
 		return rolehierarchy.ErrEdgeNotFound
 	}
-	commit, err := updateFn(e)
+	snapshot := cloneEdge(stored)
+	commit, err := updateFn(stored)
 	if err != nil {
 		return err
 	}
-	_ = commit // mutator writes back to *e directly; no separate persist step in fake
+	if !commit {
+		*stored = *snapshot // roll back mutations — mirror the adapter's no-persist branch
+		return nil
+	}
 	return nil
+}
+
+// cloneEdge produces an independent copy of an Edge via a Snapshot
+// round-trip (the same rehydration path the pg adapter uses on load),
+// so mutations on the working copy can't leak into the stored original
+// until the updateFn elects to commit. Pending events are intentionally
+// not carried — the adapter loads an event-free aggregate too.
+func cloneEdge(e *rolehierarchy.Edge) *rolehierarchy.Edge {
+	return rolehierarchy.UnmarshalFromDB(rolehierarchy.Snapshot{
+		ID:                        e.ID(),
+		TenantID:                  e.TenantID(),
+		ChildRoleID:               e.ChildRoleID(),
+		ParentRoleID:              e.ParentRoleID(),
+		EstablishedAt:             e.EstablishedAt(),
+		EstablishedByMembershipID: e.EstablishedByMembershipID(),
+		Reason:                    e.Reason(),
+		RemovedAt:                 e.RemovedAt(),
+		RemovedByMembershipID:     e.RemovedByMembershipID(),
+		RemovalReason:             e.RemovalReason(),
+	})
 }
 
 // GetAncestorsByChild walks the active edge chain upward from

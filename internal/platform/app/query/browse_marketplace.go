@@ -17,10 +17,9 @@ type BrowseMarketplaceQuery struct {
 	PageSize int
 }
 
-// MarketplaceLeadView is the wire-shaped projection — UNSOLD leads
-// browsable by any authenticated tenant. Email + GST + PAN are NOT
-// surfaced on the marketplace view — those land in the purchaser's
-// CRM only after purchase (privacy-by-default for unsold prospects).
+// MarketplaceLeadView is the wire-shaped projection — UNSOLD leads browsable by
+// any authenticated tenant. Email/GST/PAN are excluded: they reach the
+// purchaser's CRM only after purchase (privacy-by-default for unsold prospects).
 type MarketplaceLeadView struct {
 	ID             string
 	ContactName    string
@@ -41,10 +40,9 @@ type MarketplaceLeadView struct {
 	VerifiedAt     time.Time
 }
 
-// BrowseMarketplaceHandler returns a page of unsold marketplace leads
-// matching the filter. Uses the platformlead.Repository's
-// MarketplaceBrowse directly — keeps the read path consistent with
-// the write-side RLS posture.
+// BrowseMarketplaceHandler returns a page of unsold marketplace leads matching
+// the filter. Reads via platformlead.Repository.MarketplaceBrowse to keep the
+// read path consistent with the write-side RLS posture.
 type BrowseMarketplaceHandler struct {
 	leads platformlead.Repository
 }
@@ -54,8 +52,7 @@ func NewBrowseMarketplaceHandler(leads platformlead.Repository) BrowseMarketplac
 	return BrowseMarketplaceHandler{leads: leads}
 }
 
-// Handle runs the query. The repository fetches LIMIT+1 + the handler
-// builds the wire page.
+// Handle fetches LIMIT+1 from the repo and builds the wire page.
 func (h BrowseMarketplaceHandler) Handle(
 	ctx context.Context,
 	q BrowseMarketplaceQuery,

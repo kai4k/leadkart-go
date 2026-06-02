@@ -13,7 +13,7 @@ import (
 	"github.com/leadkart/leadkart-go/internal/platform/platformtest"
 )
 
-// seedAvailableLead inserts a fresh PlatformLead into the leads fake.
+// seedAvailableLead inserts a fresh standard-tier PlatformLead into the fake.
 func seedAvailableLead(t *testing.T, leads *platformtest.FakePlatformLeadRepository) platformlead.ID {
 	t.Helper()
 	agentID := unverifiedcontact.MembershipID(ids.NewV7().String())
@@ -29,8 +29,27 @@ func seedAvailableLead(t *testing.T, leads *platformtest.FakePlatformLeadReposit
 	return leadID
 }
 
-// seedCreditedTenant tops up the tenant's lead-credit balance via the
-// repository directly (skip the handler — keep this fast).
+// seedLeadWithSaleLimit inserts a lead carrying a per-lead sale_limit override.
+func seedLeadWithSaleLimit(t *testing.T, leads *platformtest.FakePlatformLeadRepository, limit int) platformlead.ID {
+	t.Helper()
+	leadID := platformlead.ID(ids.NewV7().String())
+	l := platformlead.UnmarshalFromDB(platformlead.Snapshot{
+		ID:                     leadID,
+		SourceContactID:        unverifiedcontact.ID(ids.NewV7().String()),
+		Form:                   sampleForm(t),
+		Tier:                   platformlead.TierStandard,
+		SaleLimit:              &limit,
+		VerifiedAt:             nowFunc(),
+		VerifiedByMembershipID: unverifiedcontact.MembershipID(ids.NewV7().String()),
+		CreatedAt:              nowFunc(),
+	})
+	if err := leads.Add(t.Context(), l); err != nil {
+		t.Fatalf("seed lead persist: %v", err)
+	}
+	return leadID
+}
+
+// seedCreditedTenant tops up the tenant's balance via the repo directly.
 func seedCreditedTenant(t *testing.T, credits *platformtest.FakeLeadCreditRepository, tenant leadcredit.TenantID, balance int64) {
 	t.Helper()
 	c, err := leadcredit.NewForTenant(tenant, nowFunc())
@@ -61,12 +80,11 @@ func TestPurchaseLead_HappyPath(t *testing.T) {
 	leadID := seedAvailableLead(t, leads)
 	seedCreditedTenant(t, credits, leadcredit.TenantID(tenantID.String()), 10)
 
-	h := command.NewPurchaseLeadHandler(uow, leads, credits, outbox, nowFunc, func() string { return ids.NewV7().String() })
+	h := command.NewPurchaseLeadHandler(uow, leads, credits, platformtest.NewFakeTierReader(), outbox, nowFunc, func() string { return ids.NewV7().String() })
 	out, err := h.Handle(t.Context(), command.PurchaseLeadCommand{
 		PlatformLeadID:         leadID,
 		PurchasingTenantID:     tenantID,
 		PurchasingMembershipID: memberID,
-		AmountPaisa:            50000,
 	})
 	if err != nil {
 		t.Fatalf("handle: %v", err)
@@ -74,26 +92,24 @@ func TestPurchaseLead_HappyPath(t *testing.T) {
 	if out.PurchaseID == "" {
 		t.Error("expected non-empty PurchaseID")
 	}
+	// First buyer pays the tier base price (no volume discount).
+	if out.AmountPaisa != 50000 {
+		t.Errorf("out.AmountPaisa=%d want 50000", out.AmountPaisa)
+	}
 
-	// Lead is now sold.
+	// Lead now has one buyer.
 	l, _ := leads.GetByID(t.Context(), leadID)
-	if l.IsAvailable() {
-		t.Error("expected lead to be sold")
-	}
-	if l.SoldToTenantID() != tenantID {
-		t.Errorf("SoldToTenantID=%q", l.SoldToTenantID())
+	if !l.HasBuyer(tenantID) {
+		t.Error("expected tenant recorded as buyer")
 	}
 
-	// Credit was debited (1 credit per lead in Slice 1).
+	// Credit was debited (1 credit per lead).
 	c, _ := credits.GetByTenant(t.Context(), leadcredit.TenantID(tenantID.String()))
 	if c.Balance() != 9 {
 		t.Errorf("balance=%d want 9", c.Balance())
 	}
 
-	// Outbox got LeadPurchasedV1 (LeadCreditAdjustedV1 fires from the
-	// mechanical mapper via the leadcredit.AdjustedEvent drain;
-	// it shows up in the credits repo's DrainedEvents but not in the
-	// app-layer fake outbox).
+	// Only LeadPurchasedV1 hits the app-layer outbox.
 	if len(outbox.Events) != 1 {
 		t.Fatalf("expected 1 outbox event, got %d", len(outbox.Events))
 	}
@@ -109,6 +125,79 @@ func TestPurchaseLead_HappyPath(t *testing.T) {
 	}
 }
 
+func TestPurchaseLead_MultipleBuyersUnderLimit(t *testing.T) {
+	t.Parallel()
+
+	leads := platformtest.NewFakePlatformLeadRepository()
+	credits := platformtest.NewFakeLeadCreditRepository()
+	outbox := platformtest.NewFakeOutbox()
+	uow := platformtest.NewFakeUnitOfWork()
+
+	tenantA := platformlead.TenantID(ids.NewV7().String())
+	tenantB := platformlead.TenantID(ids.NewV7().String())
+	leadID := seedAvailableLead(t, leads) // standard limit 6
+	seedCreditedTenant(t, credits, leadcredit.TenantID(tenantA.String()), 10)
+	seedCreditedTenant(t, credits, leadcredit.TenantID(tenantB.String()), 10)
+
+	h := command.NewPurchaseLeadHandler(uow, leads, credits, platformtest.NewFakeTierReader(), outbox, nowFunc, func() string { return ids.NewV7().String() })
+
+	a, err := h.Handle(t.Context(), command.PurchaseLeadCommand{
+		PlatformLeadID: leadID, PurchasingTenantID: tenantA,
+		PurchasingMembershipID: unverifiedcontact.MembershipID(ids.NewV7().String()),
+	})
+	if err != nil {
+		t.Fatalf("buyer A: %v", err)
+	}
+	b, err := h.Handle(t.Context(), command.PurchaseLeadCommand{
+		PlatformLeadID: leadID, PurchasingTenantID: tenantB,
+		PurchasingMembershipID: unverifiedcontact.MembershipID(ids.NewV7().String()),
+	})
+	if err != nil {
+		t.Fatalf("buyer B: %v", err)
+	}
+	// Volume discount: second buyer pays less than the first.
+	if b.AmountPaisa >= a.AmountPaisa {
+		t.Errorf("expected volume discount: B=%d should be < A=%d", b.AmountPaisa, a.AmountPaisa)
+	}
+	l, _ := leads.GetByID(t.Context(), leadID)
+	if !l.HasBuyer(tenantA) || !l.HasBuyer(tenantB) {
+		t.Error("expected both tenants recorded as buyers")
+	}
+}
+
+func TestPurchaseLead_DoubleBuySameTenant_Rejected(t *testing.T) {
+	t.Parallel()
+
+	leads := platformtest.NewFakePlatformLeadRepository()
+	credits := platformtest.NewFakeLeadCreditRepository()
+	outbox := platformtest.NewFakeOutbox()
+	uow := platformtest.NewFakeUnitOfWork(credits, leads)
+
+	tenantID := platformlead.TenantID(ids.NewV7().String())
+	memberID := unverifiedcontact.MembershipID(ids.NewV7().String())
+	leadID := seedAvailableLead(t, leads)
+	seedCreditedTenant(t, credits, leadcredit.TenantID(tenantID.String()), 10)
+
+	h := command.NewPurchaseLeadHandler(uow, leads, credits, platformtest.NewFakeTierReader(), outbox, nowFunc, func() string { return ids.NewV7().String() })
+
+	if _, err := h.Handle(t.Context(), command.PurchaseLeadCommand{
+		PlatformLeadID: leadID, PurchasingTenantID: tenantID, PurchasingMembershipID: memberID,
+	}); err != nil {
+		t.Fatalf("first purchase: %v", err)
+	}
+	_, err := h.Handle(t.Context(), command.PurchaseLeadCommand{
+		PlatformLeadID: leadID, PurchasingTenantID: tenantID, PurchasingMembershipID: memberID,
+	})
+	if !errors.Is(err, command.ErrLeadAlreadyPurchased) {
+		t.Fatalf("expected ErrLeadAlreadyPurchased, got %v", err)
+	}
+	// The flat credit cost is one (only the first purchase debits).
+	c, _ := credits.GetByTenant(t.Context(), leadcredit.TenantID(tenantID.String()))
+	if c.Balance() != 9 {
+		t.Errorf("balance=%d want 9 (re-buy must roll back its debit)", c.Balance())
+	}
+}
+
 func TestPurchaseLead_InsufficientCredits(t *testing.T) {
 	t.Parallel()
 
@@ -121,20 +210,19 @@ func TestPurchaseLead_InsufficientCredits(t *testing.T) {
 	leadID := seedAvailableLead(t, leads)
 	seedCreditedTenant(t, credits, leadcredit.TenantID(tenantID.String()), 0)
 
-	h := command.NewPurchaseLeadHandler(uow, leads, credits, outbox, nowFunc, func() string { return ids.NewV7().String() })
+	h := command.NewPurchaseLeadHandler(uow, leads, credits, platformtest.NewFakeTierReader(), outbox, nowFunc, func() string { return ids.NewV7().String() })
 	_, err := h.Handle(t.Context(), command.PurchaseLeadCommand{
 		PlatformLeadID:         leadID,
 		PurchasingTenantID:     tenantID,
 		PurchasingMembershipID: unverifiedcontact.MembershipID(ids.NewV7().String()),
-		AmountPaisa:            50000,
 	})
 	if !errors.Is(err, command.ErrInsufficientCredits) {
 		t.Fatalf("expected ErrInsufficientCredits, got %v", err)
 	}
-	// Lead must remain available.
+	// Lead must remain available (no buyer recorded).
 	l, _ := leads.GetByID(t.Context(), leadID)
-	if !l.IsAvailable() {
-		t.Error("lead must stay available on failed purchase")
+	if l.PurchaseCount() != 0 {
+		t.Error("lead must stay unbought on failed purchase")
 	}
 }
 
@@ -150,75 +238,60 @@ func TestPurchaseLead_NoCreditRowYet(t *testing.T) {
 	leadID := seedAvailableLead(t, leads)
 	// No credit row at all.
 
-	h := command.NewPurchaseLeadHandler(uow, leads, credits, outbox, nowFunc, func() string { return ids.NewV7().String() })
+	h := command.NewPurchaseLeadHandler(uow, leads, credits, platformtest.NewFakeTierReader(), outbox, nowFunc, func() string { return ids.NewV7().String() })
 	_, err := h.Handle(t.Context(), command.PurchaseLeadCommand{
 		PlatformLeadID:         leadID,
 		PurchasingTenantID:     tenantID,
 		PurchasingMembershipID: unverifiedcontact.MembershipID(ids.NewV7().String()),
-		AmountPaisa:            50000,
 	})
 	if !errors.Is(err, command.ErrInsufficientCredits) {
 		t.Fatalf("expected ErrInsufficientCredits, got %v", err)
 	}
 }
 
-func TestPurchaseLead_AlreadySold(t *testing.T) {
+func TestPurchaseLead_SoldOut_LoserNotDebited(t *testing.T) {
 	t.Parallel()
 
 	leads := platformtest.NewFakePlatformLeadRepository()
 	credits := platformtest.NewFakeLeadCreditRepository()
 	outbox := platformtest.NewFakeOutbox()
-	// Use the rollback-aware UoW so the loser's debit gets rolled back
-	// when the lead UPDATE fires ErrAlreadySold — mirrors production
-	// Postgres ROLLBACK behaviour. See FakeUnitOfWork godoc + H10.
+	// Rollback-aware UoW: the loser's debit rolls back when RecordPurchase
+	// fires ErrSoldOut, mirroring Postgres. See H10.
 	uow := platformtest.NewFakeUnitOfWork(credits, leads)
 
 	tenantA := platformlead.TenantID(ids.NewV7().String())
 	tenantB := platformlead.TenantID(ids.NewV7().String())
-	leadID := seedAvailableLead(t, leads)
+	leadID := seedLeadWithSaleLimit(t, leads, 1) // sells out after one buyer
 	seedCreditedTenant(t, credits, leadcredit.TenantID(tenantA.String()), 10)
 	seedCreditedTenant(t, credits, leadcredit.TenantID(tenantB.String()), 10)
 
-	h := command.NewPurchaseLeadHandler(uow, leads, credits, outbox, nowFunc, func() string { return ids.NewV7().String() })
+	h := command.NewPurchaseLeadHandler(uow, leads, credits, platformtest.NewFakeTierReader(), outbox, nowFunc, func() string { return ids.NewV7().String() })
 
-	// First purchase succeeds.
-	_, err := h.Handle(t.Context(), command.PurchaseLeadCommand{
-		PlatformLeadID:         leadID,
-		PurchasingTenantID:     tenantA,
+	// First buyer takes the only slot.
+	if _, err := h.Handle(t.Context(), command.PurchaseLeadCommand{
+		PlatformLeadID: leadID, PurchasingTenantID: tenantA,
 		PurchasingMembershipID: unverifiedcontact.MembershipID(ids.NewV7().String()),
-		AmountPaisa:            50000,
-	})
-	if err != nil {
+	}); err != nil {
 		t.Fatalf("first purchase: %v", err)
 	}
 
-	// Second tenant's purchase fails with ErrLeadAlreadySold.
-	_, err = h.Handle(t.Context(), command.PurchaseLeadCommand{
-		PlatformLeadID:         leadID,
-		PurchasingTenantID:     tenantB,
+	// Second buyer is sold out.
+	_, err := h.Handle(t.Context(), command.PurchaseLeadCommand{
+		PlatformLeadID: leadID, PurchasingTenantID: tenantB,
 		PurchasingMembershipID: unverifiedcontact.MembershipID(ids.NewV7().String()),
-		AmountPaisa:            50000,
 	})
-	if !errors.Is(err, command.ErrLeadAlreadySold) {
-		t.Fatalf("expected ErrLeadAlreadySold, got %v", err)
+	if !errors.Is(err, command.ErrLeadSoldOut) {
+		t.Fatalf("expected ErrLeadSoldOut, got %v", err)
 	}
 
-	// H10 — loser's balance MUST remain unchanged. The current
-	// implementation relies on the surrounding UoW.WithinTx to
-	// rollback the credit debit when the platformlead UPDATE fires
-	// ErrAlreadySold inside the same closure. The fake UoW runs the
-	// closure inline + the fake credit repo persists on
-	// UpsertWithVersion — so a regression that moves the
-	// platformlead.Purchase mutation BEFORE the credit
-	// UpsertWithVersion (or splits them across separate WithinTx
-	// closures) would silently debit tenantB. This assertion catches
-	// that regression at unit-test time, NOT in production.
+	// H10 — the loser's balance must be unchanged (debit rolled back when
+	// RecordPurchase fired ErrSoldOut in the same closure).
 	bBal, err := credits.GetByTenant(t.Context(), leadcredit.TenantID(tenantB.String()))
 	if err != nil {
 		t.Fatalf("tenantB credit reload: %v", err)
 	}
 	if bBal.Balance() != 10 {
-		t.Errorf("tenantB balance: got %d want 10 (loser must not be debited on already-sold rejection)", bBal.Balance())
+		t.Errorf("tenantB balance: got %d want 10 (loser must not be debited on sold-out rejection)", bBal.Balance())
 	}
 }
 
@@ -234,15 +307,14 @@ func TestPurchaseLead_RetriesOnConflict(t *testing.T) {
 	leadID := seedAvailableLead(t, leads)
 	seedCreditedTenant(t, credits, leadcredit.TenantID(tenantID.String()), 10)
 
-	// First attempt returns ErrConflict; second succeeds.
+	// First attempt conflicts; the retry succeeds.
 	credits.ForceConflictOnce = true
 
-	h := command.NewPurchaseLeadHandler(uow, leads, credits, outbox, nowFunc, func() string { return ids.NewV7().String() })
+	h := command.NewPurchaseLeadHandler(uow, leads, credits, platformtest.NewFakeTierReader(), outbox, nowFunc, func() string { return ids.NewV7().String() })
 	_, err := h.Handle(t.Context(), command.PurchaseLeadCommand{
 		PlatformLeadID:         leadID,
 		PurchasingTenantID:     tenantID,
 		PurchasingMembershipID: unverifiedcontact.MembershipID(ids.NewV7().String()),
-		AmountPaisa:            50000,
 	})
 	if err != nil {
 		t.Fatalf("expected success after retry, got %v", err)

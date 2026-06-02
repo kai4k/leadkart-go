@@ -1,20 +1,7 @@
 // audit_arch_test.go — Principle N: Audit log discipline.
 //
-// ADR 0027: the outbox doubles as the audit log. Audit gaps in
-// auth flows are direct regulatory exposure (GDPR Art. 5 §1(f)
-// + SOC 2 CC7.2). Tests here close the gap mechanically:
-//
-//   - the audit table is append-only at the DB level (no UPDATE
-//     or DELETE policies);
-//   - audit writes carry actor + target + action + result;
-//   - sensitive payload (password / token / secret) is NEVER
-//     included in the audit envelope.
-//
-// Cited canon:
-//   - ADR 0027 (outbox doubles as audit)
-//   - GDPR Art. 5 §1(f) — integrity + confidentiality
-//   - SOC 2 CC7.2 — system events logged
-//   - OWASP Logging Cheat Sheet — sensitive data filter
+// ADR 0027: the outbox doubles as the audit log. GDPR Art. 5 §1(f) + SOC 2 CC7.2.
+// Gates: audit table append-only; writes carry Actor+Action; no sensitive payload.
 
 package architecture_test
 
@@ -25,36 +12,11 @@ import (
 	"testing"
 )
 
-// ----------------------------------------------------------------------------
-// N1: TestArch_EveryAuthnEventAudited
-// ----------------------------------------------------------------------------
-//
-// Login, Logout, ChangePassword, CreateImpersonationSession handlers
-// MUST emit an integration event. The audit middleware projects the
-// event into audit_log_entry. Heuristic: every named auth handler
-// must reference an integration-event Topic OR call an outbox
-// write fn.
-//
-// This is a soft check — auth handler files in
-// internal/identity/app/command/ that have a name starting with
-// `Login`, `Logout`, `ChangePassword`, `Impersonation`, `Refresh`
-// must contain either an `integrationevents.` reference or an
-// `outbox` reference.
+// TestArch_EveryAuthnEventAudited asserts auth-change handler files reference
+// an integration event, outbox write, or state-mutation call.
 // Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_EveryAuthnEventAudited(t *testing.T) {
 	t.Parallel()
-
-	// Closure: every auth-flow handler must EITHER directly emit an
-	// integration event / Audit call OR have an explicit
-	// `// arch-test:audit-via-middleware <reason>` marker documenting
-	// that the HTTP-layer AuditLoggingMiddleware covers it.
-	//
-	// LeadKart wires AuditLoggingMiddleware on the ChainAuthn /
-	// ChainPublic stacks (httpmw.PublicChain / Authenticated). The
-	// per-handler integration-event path is an additional structured
-	// signal — required for change-state flows, optional for pure
-	// auth (login/logout/refresh) where the middleware audit is
-	// sufficient.
 
 	authChangeNames := []string{
 		"change_password", "confirm_password_reset",
@@ -101,17 +63,8 @@ func TestArch_EveryAuthnEventAudited(t *testing.T) {
 	}
 }
 
-// ----------------------------------------------------------------------------
-// N2: TestArch_AuditLogIsAppendOnly
-// ----------------------------------------------------------------------------
-//
-// The audit_log_entry table MUST NOT have UPDATE or DELETE row-
-// security policies. Even with FORCE RLS, the policy surface is
-// the only door — leaving an UPDATE policy on means a compromised
-// service role can edit history.
-//
-// Predicate: scan migrations for `CREATE POLICY ... ON
-// <schema>.audit_log_entry FOR (UPDATE|DELETE)` — fail if found.
+// TestArch_AuditLogIsAppendOnly asserts audit_log_entry has no UPDATE or DELETE
+// RLS policies. An UPDATE policy lets a compromised service role edit history.
 func TestArch_AuditLogIsAppendOnly(t *testing.T) {
 	t.Parallel()
 
@@ -131,23 +84,13 @@ func TestArch_AuditLogIsAppendOnly(t *testing.T) {
 	}
 }
 
-// ----------------------------------------------------------------------------
-// N3: TestArch_AuditEntryHasActorTargetActionResult
-// ----------------------------------------------------------------------------
-//
-// Every audit write site that calls `audit.Write*` must pass the
-// canonical 4 fields. Heuristic: the call expression should mention
-// `Actor`, `Target`, `Action`, and `Result` (in any order) within
-// the same multi-line call.
-//
-// Allow-list: tests + scaffolding fakes.
+// TestArch_AuditEntryHasActorTargetActionResult asserts audit.Write* calls
+// include Actor and Action within a 600-char window.
 // Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_AuditEntryHasActorTargetActionResult(t *testing.T) {
 	t.Parallel()
 
 	root := internalDir(t)
-	// Coarse heuristic: every call to a function whose name starts
-	// with `audit.Write` should reference the 4 keys nearby.
 	writeRE := regexp.MustCompile(`audit\.Write\w*\(`)
 	var bad []string
 
@@ -174,15 +117,8 @@ func TestArch_AuditEntryHasActorTargetActionResult(t *testing.T) {
 	}
 }
 
-// ----------------------------------------------------------------------------
-// N4: TestArch_NoSensitivePayloadInAudit
-// ----------------------------------------------------------------------------
-//
-// Audit payloads MUST NEVER contain plaintext password / refresh
-// token / API key / OTP. Predicate: every line containing
-// `audit.Write*` or `Audit{...}` must NOT also contain `password`,
-// `secret`, or `token` as a string-literal key in the same
-// multi-line expression.
+// TestArch_NoSensitivePayloadInAudit asserts audit call sites don't include
+// password/secret/token literal keys in a 400-char window.
 // Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_NoSensitivePayloadInAudit(t *testing.T) {
 	t.Parallel()

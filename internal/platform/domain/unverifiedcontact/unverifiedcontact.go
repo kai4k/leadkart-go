@@ -11,10 +11,9 @@
 //	                                                │
 //	                                                └──StartCall──▶ InCall (re-attempt)
 //
-// All transitions emit domain events drained by the repository's
-// PullEvents on persist.
+// Transitions emit domain events drained via PullEvents on persist.
 //
-// Per ADR 0059 the contact is Platform-only (no tenant_id). All BRD §5
+// Per ADR 0059 the contact is Platform-only (no tenant_id); BRD §5
 // lead-form fields live on the contained [leadform.Form] VO.
 package unverifiedcontact
 
@@ -24,10 +23,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/leadkart/leadkart-go/internal/platform/domain/leadform"
 )
 
-// ErrInvalid is the sentinel returned (wrapped) on invariant violation.
+// ErrInvalid is wrapped and returned on invariant violation.
 var ErrInvalid = errors.New("unverifiedcontact: invalid")
 
 // ID is the UnverifiedContact primary key (UUIDv7 string).
@@ -42,7 +43,7 @@ func (i ID) String() string { return string(i) }
 // State is the lifecycle marker.
 type State string
 
-// Closed-set lifecycle [State] values per ADR 0059 state machine.
+// Closed-set [State] values per ADR 0059.
 const (
 	StateNew      State = "new"
 	StateInCall   State = "in_call"
@@ -51,7 +52,7 @@ const (
 	StateBusy     State = "busy"
 )
 
-// IsValid reports whether s is one of the closed-set states.
+// IsValid reports whether s is a known state.
 func (s State) IsValid() bool {
 	switch s {
 	case StateNew, StateInCall, StateVerified, StateRejected, StateBusy:
@@ -63,9 +64,8 @@ func (s State) IsValid() bool {
 // String returns the wire form.
 func (s State) String() string { return string(s) }
 
-// MembershipID is the FK to identity.tenant_memberships.id — opaque
-// from this module's perspective. Stored as a string to keep boundary
-// clean (no cross-module domain import).
+// MembershipID is the FK to identity.tenant_memberships.id. A string,
+// not the foreign type, to avoid a cross-module domain import.
 type MembershipID string
 
 // IsZero reports whether m is unset.
@@ -94,14 +94,14 @@ type UnverifiedContact struct {
 	events []Event
 }
 
-// New constructs a brand-new UnverifiedContact in [StateNew] from a
-// validated [leadform.Form] + the originating Lead Agent's membership.
+// New constructs an UnverifiedContact in [StateNew] from a validated
+// form and the originating Lead Agent's membership.
 func New(id ID, form leadform.Form, createdBy MembershipID, now time.Time) (*UnverifiedContact, error) {
-	if id.IsZero() {
-		return nil, fmt.Errorf("%w: id required", ErrInvalid)
+	if err := validateUUID("id", id.String()); err != nil {
+		return nil, err
 	}
-	if createdBy.IsZero() {
-		return nil, fmt.Errorf("%w: createdBy required", ErrInvalid)
+	if err := validateUUID("createdBy", createdBy.String()); err != nil {
+		return nil, err
 	}
 	if now.IsZero() {
 		return nil, fmt.Errorf("%w: now required", ErrInvalid)
@@ -122,6 +122,20 @@ func New(id ID, form leadform.Form, createdBy MembershipID, now time.Time) (*Unv
 	return c, nil
 }
 
+// validateUUID enforces the H6 reviewer rule: every domain ID must parse
+// as a UUID at AGGREGATE-CONSTRUCTION time, not later at the adapter
+// boundary. Trims surrounding whitespace before parsing.
+func validateUUID(name, val string) error {
+	val = strings.TrimSpace(val)
+	if val == "" {
+		return fmt.Errorf("%w: %s required", ErrInvalid, name)
+	}
+	if _, err := uuid.Parse(val); err != nil {
+		return fmt.Errorf("%w: %s not a valid uuid", ErrInvalid, name)
+	}
+	return nil
+}
+
 // Snapshot is the persistence-layer DTO consumed by [UnmarshalFromDB].
 type Snapshot struct {
 	ID                     ID
@@ -139,8 +153,7 @@ type Snapshot struct {
 	RejectedByMembershipID MembershipID
 }
 
-// UnmarshalFromDB rehydrates a UnverifiedContact without re-validating.
-// TDL canon trusted-storage path.
+// UnmarshalFromDB rehydrates a contact without re-validating (trusted-storage path).
 func UnmarshalFromDB(s Snapshot) *UnverifiedContact {
 	return &UnverifiedContact{
 		id:                     s.ID,
@@ -164,26 +177,22 @@ func UnmarshalFromDB(s Snapshot) *UnverifiedContact {
 // ID returns the contact primary key.
 func (c *UnverifiedContact) ID() ID { return c.id }
 
-// Form returns the BRD §5 lead-form VO.
+// Form returns the lead-form VO.
 func (c *UnverifiedContact) Form() leadform.Form { return c.form }
 
 // State returns the current lifecycle state.
 func (c *UnverifiedContact) State() State { return c.state }
 
-// RejectionReason returns the audit reason captured on Reject. Empty
-// in non-Rejected states.
+// RejectionReason returns the audit reason; empty unless rejected.
 func (c *UnverifiedContact) RejectionReason() string { return c.rejectionReason }
 
-// BusyCallbackAt returns the callback window start. Zero unless state
-// is [StateBusy].
+// BusyCallbackAt returns the callback window start; zero unless [StateBusy].
 func (c *UnverifiedContact) BusyCallbackAt() time.Time { return c.busyCallbackAt }
 
-// BusyCallbackEndAt returns the callback window end. Zero unless state
-// is [StateBusy].
+// BusyCallbackEndAt returns the callback window end; zero unless [StateBusy].
 func (c *UnverifiedContact) BusyCallbackEndAt() time.Time { return c.busyCallbackEndAt }
 
-// PlatformLeadID returns the projected PlatformLead's ID. Empty unless
-// state is [StateVerified].
+// PlatformLeadID returns the projected PlatformLead ID; empty unless [StateVerified].
 func (c *UnverifiedContact) PlatformLeadID() string { return c.platformLeadID }
 
 // CreatedAt returns the row creation timestamp.
@@ -206,9 +215,8 @@ func (c *UnverifiedContact) RejectedByMembershipID() MembershipID { return c.rej
 
 // ----- State transitions ----------------------------------------------------
 
-// StartCall transitions a Pending or Busy contact into InCall.
-// Idempotent: calling on an InCall contact returns nil with no event.
-// Terminal-state transitions (Verified, Rejected) are rejected.
+// StartCall moves a New or Busy contact into InCall. Idempotent from
+// InCall (no event); terminal states (Verified, Rejected) are rejected.
 func (c *UnverifiedContact) StartCall(now time.Time) error {
 	switch c.state {
 	case StateInCall:
@@ -223,7 +231,7 @@ func (c *UnverifiedContact) StartCall(now time.Time) error {
 		return fmt.Errorf("%w: invalid state %q", ErrInvalid, c.state)
 	}
 	c.state = StateInCall
-	// Clear any stale busy-window from a prior attempt.
+	// Clear stale busy-window from a prior attempt.
 	c.busyCallbackAt = time.Time{}
 	c.busyCallbackEndAt = time.Time{}
 	c.recordEvent(CallStartedEvent{
@@ -233,9 +241,8 @@ func (c *UnverifiedContact) StartCall(now time.Time) error {
 	return nil
 }
 
-// MarkVerified transitions an InCall contact to Verified terminal.
-// platformLeadID + verifiedBy required. The handler creates the
-// PlatformLead in the SAME tx; this method just records the link.
+// MarkVerified moves an InCall contact to the Verified terminal state.
+// The handler creates the PlatformLead in the same tx; this records the link.
 func (c *UnverifiedContact) MarkVerified(platformLeadID string, verifiedBy MembershipID, now time.Time) error {
 	if strings.TrimSpace(platformLeadID) == "" {
 		return fmt.Errorf("%w: platformLeadID required", ErrInvalid)
@@ -262,8 +269,8 @@ func (c *UnverifiedContact) MarkVerified(platformLeadID string, verifiedBy Membe
 	return nil
 }
 
-// MarkRejected transitions an InCall contact to Rejected terminal.
-// reason required for audit.
+// MarkRejected moves an InCall contact to the Rejected terminal state.
+// reason is required for audit.
 func (c *UnverifiedContact) MarkRejected(reason string, rejectedBy MembershipID, now time.Time) error {
 	if strings.TrimSpace(reason) == "" {
 		return fmt.Errorf("%w: rejection reason required", ErrInvalid)
@@ -290,9 +297,8 @@ func (c *UnverifiedContact) MarkRejected(reason string, rejectedBy MembershipID,
 	return nil
 }
 
-// MarkBusy transitions an InCall contact to Busy with a callback
-// window. Window start MUST be in the future + end MUST be after start.
-// Caller (the handler) provides `now` for determinism.
+// MarkBusy moves an InCall contact to Busy with a callback window.
+// Start must be future and end after start; caller provides now for determinism.
 func (c *UnverifiedContact) MarkBusy(callbackAt, callbackEndAt time.Time, now time.Time) error {
 	if callbackAt.IsZero() || callbackEndAt.IsZero() {
 		return fmt.Errorf("%w: callback window required", ErrInvalid)
@@ -310,18 +316,18 @@ func (c *UnverifiedContact) MarkBusy(callbackAt, callbackEndAt time.Time, now ti
 	c.busyCallbackAt = callbackAt
 	c.busyCallbackEndAt = callbackEndAt
 	c.recordEvent(MarkedBusyEvent{
-		ContactID:         c.id,
-		CallbackAt:        callbackAt,
-		CallbackEndAt:     callbackEndAt,
-		At:                now,
+		ContactID:     c.id,
+		CallbackAt:    callbackAt,
+		CallbackEndAt: callbackEndAt,
+		At:            now,
 	})
 	return nil
 }
 
 // ----- Events --------------------------------------------------------------
 
-// PullEvents drains + returns recorded domain events. Repository calls
-// once per Save inside the same tx that persists state.
+// PullEvents drains and returns recorded domain events. The repository
+// calls it once per persist, in the same tx that writes state.
 func (c *UnverifiedContact) PullEvents() []Event {
 	if len(c.events) == 0 {
 		return nil
@@ -335,8 +341,7 @@ func (c *UnverifiedContact) recordEvent(e Event) {
 	c.events = append(c.events, e)
 }
 
-// Event is the sealed marker interface for unverified-contact domain
-// events. Same shape as identity/domain/tenant.Event.
+// Event is the sealed marker interface for unverified-contact domain events.
 type Event interface{ isUnverifiedContactEvent() }
 
 // CreatedEvent fires when [New] succeeds.
@@ -349,8 +354,7 @@ type CreatedEvent struct {
 
 func (CreatedEvent) isUnverifiedContactEvent() {}
 
-// CallStartedEvent fires on every [StartCall] transition (incl. retry
-// from Busy → InCall).
+// CallStartedEvent fires on every [StartCall] transition, including Busy → InCall retry.
 type CallStartedEvent struct {
 	ContactID ID
 	At        time.Time
@@ -378,9 +382,8 @@ type RejectedEvent struct {
 
 func (RejectedEvent) isUnverifiedContactEvent() {}
 
-// MarkedBusyEvent fires on the InCall → Busy transition with a callback
-// window. Subscribers (Notifications module in Slice 2) auto-create a
-// Reminder for the originating Lead Agent.
+// MarkedBusyEvent fires on InCall → Busy. Notifications (Slice 2)
+// subscribes to auto-create a Reminder for the originating Lead Agent.
 type MarkedBusyEvent struct {
 	ContactID     ID
 	CallbackAt    time.Time

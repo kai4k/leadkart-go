@@ -11,17 +11,18 @@ package role
 // roles by adding new constants; never reuse a freed name.
 //
 // Hierarchy guidance (lower = higher authority):
-//   Platform.SuperAdmin           — special, runs without hierarchy
-//   Tenant.CompanyOwner            — 0
-//   Tenant.Administrator           — 10
-//   Tenant.SeniorManager           — 20
-//   Tenant.{Office,Sales,Purchase,Dispatch,HR}{Manager,Executive,Administrator}
-//                                  — HierarchyLevelDefault (50)
+//
+//	Platform.SuperAdmin           — special, runs without hierarchy
+//	Tenant.CompanyOwner            — 0
+//	Tenant.Administrator           — 10
+//	Tenant.SeniorManager           — 20
+//	Tenant.{Office,Sales,Purchase,Dispatch,HR}{Manager,Executive,Administrator}
+//	                               — HierarchyLevelDefault (50)
 var SystemRoles = struct {
 	Platform struct {
-		SuperAdmin       string
-		PlatformManager  string
-		LeadAgent        string
+		SuperAdmin      string
+		PlatformManager string
+		LeadAgent       string
 	}
 	Tenant struct {
 		CompanyOwner        string
@@ -40,9 +41,9 @@ var SystemRoles = struct {
 	}
 }{
 	Platform: struct {
-		SuperAdmin       string
-		PlatformManager  string
-		LeadAgent        string
+		SuperAdmin      string
+		PlatformManager string
+		LeadAgent       string
 	}{
 		SuperAdmin:      "SuperAdmin",
 		PlatformManager: "PlatformManager",

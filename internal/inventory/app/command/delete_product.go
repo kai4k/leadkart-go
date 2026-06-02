@@ -12,35 +12,28 @@ import (
 	"github.com/leadkart/leadkart-go/internal/inventory/domain/product"
 )
 
-// DeleteProductCommand — soft-deletes the product. Per BRD §6.5 + slice
-// spec: REJECTED with batch.ErrAnyLiveStock if any live batch with
-// quantity_on_hand > 0 exists.
+// DeleteProductCommand soft-deletes the product. Per BRD §6.5 it is rejected
+// with batch.ErrAnyLiveStock if any live batch has quantity_on_hand > 0.
 //
-// TenantID is the caller's tenant scope (injected from JWT context by
-// the HTTP layer). Per ADR 0062 (TDL canon): tenantID flows through
-// explicit command fields, not via context smuggling.
+// TenantID is the caller's tenant scope; per ADR 0062 (TDL canon) it flows
+// through an explicit field, never via context smuggling.
 type DeleteProductCommand struct {
 	TenantID          tenant.ID
 	ProductID         product.ID
 	ActorMembershipID membership.ID
 }
 
-// DeleteProductHandler enforces the "no live stock" guard before
-// soft-deleting the Product aggregate.
-//
-// Cross-aggregate read (batches.AnyLiveWithStockForProduct) lives in
-// the handler per Vernon ch.10 — the domain doesn't reach across
-// aggregates. The repository call is read-only; the actual mutation
-// stays inside Product.SoftDelete on the single-aggregate tx.
+// DeleteProductHandler enforces the no-live-stock guard before soft-deleting
+// the Product. The cross-aggregate read lives in the handler per Vernon
+// ch.10; the mutation stays inside Product.SoftDelete on a single-aggregate tx.
 type DeleteProductHandler struct {
 	products product.Repository
 	batches  batch.Repository
 	now      func() time.Time
 }
 
-// NewDeleteProductHandler wires the handler. `now` is the explicit time
-// source per the clock-injection refactor — composition root wires
-// `time.Now`; tests inject a fixed-time closure. Nil → time.Now.
+// NewDeleteProductHandler wires the handler. now is the injected clock (nil →
+// time.Now).
 func NewDeleteProductHandler(products product.Repository, batches batch.Repository, now func() time.Time) DeleteProductHandler {
 	if now == nil {
 		now = time.Now
@@ -50,11 +43,9 @@ func NewDeleteProductHandler(products product.Repository, batches batch.Reposito
 
 // Handle runs the stock guard, then soft-deletes the product.
 //
-// Per ADR 0061 amendment 1 (M6): GetByID runs FIRST so a missing
-// product surfaces as the friendlier `product.ErrNotFound` (mapped to
-// 204 idempotent-delete by the HTTP handler) rather than the
-// stock-check path returning false → the SoftDelete UpdateByID then
-// returning ErrNotFound after an unnecessary round-trip.
+// Per ADR 0061 amendment 1 (M6): GetByID runs first so a missing product
+// surfaces as product.ErrNotFound (mapped to 204 idempotent-delete) instead
+// of an extra round-trip through the stock check and SoftDelete.
 func (h DeleteProductHandler) Handle(ctx context.Context, cmd DeleteProductCommand) error {
 	if cmd.TenantID.IsZero() {
 		return errors.New("delete_product: tenant id required")

@@ -20,7 +20,7 @@ func qSampleForm(t *testing.T) leadform.Form {
 	f, err := leadform.New(leadform.Input{
 		ContactName:    "Marketplace Lead Co",
 		MobileE164:     "+919876543210",
-		Email:          "secret@hidden.test", // wire-shaped — MUST NOT appear on the marketplace view
+		Email:          "secret@hidden.test", // MUST NOT appear on the marketplace view
 		Pincode:        "411001",
 		City:           "Pune",
 		District:       "Pune",
@@ -53,9 +53,9 @@ func seedLead(t *testing.T, leads *platformtest.FakePlatformLeadRepository) plat
 	return leadID
 }
 
-// TestBrowseMarketplace_ReturnsUnsoldLeads_NoPII — happy path. The
-// marketplace view MUST exclude PII (email, GST/PAN numbers) since
-// any tenant can browse it. C2 + H12 — review-pass.
+// TestBrowseMarketplace_ReturnsUnsoldLeads_NoPII — happy path. The marketplace
+// view MUST exclude PII (email, GST/PAN numbers) since any tenant can browse
+// it. C2 + H12.
 func TestBrowseMarketplace_ReturnsUnsoldLeads_NoPII(t *testing.T) {
 	t.Parallel()
 
@@ -81,9 +81,8 @@ func TestBrowseMarketplace_ReturnsUnsoldLeads_NoPII(t *testing.T) {
 	if got.City != "Pune" {
 		t.Errorf("City=%q want Pune", got.City)
 	}
-	// H12 — explicit PII-exclusion check on the marketplace view.
-	// The view struct itself has no Email / GstNumber / PanNumber
-	// fields; failing this check requires future schema drift.
+	// H12 — PII-exclusion check. The view struct has no Email/GstNumber/
+	// PanNumber fields; only schema drift could break this.
 	if got.ContactName == "" {
 		t.Error("ContactName missing — needed for the marketplace card")
 	}
@@ -92,20 +91,34 @@ func TestBrowseMarketplace_ReturnsUnsoldLeads_NoPII(t *testing.T) {
 	}
 }
 
-// TestBrowseMarketplace_ExcludesSoldLeads — once a lead is purchased,
-// it disappears from the browse stream (only the purchaser sees it
-// via the post-purchase /v1/me/leads — Slice 2). C2.
-func TestBrowseMarketplace_ExcludesSoldLeads(t *testing.T) {
+// TestBrowseMarketplace_ExcludesSoldOutLeads — a lead at its sale limit leaves
+// the browse stream (ADR 0065 availability = purchase count < limit). Here a
+// per-lead sale_limit override of 1 makes a single purchase sell it out. C2.
+func TestBrowseMarketplace_ExcludesSoldOutLeads(t *testing.T) {
 	t.Parallel()
 
 	leads := platformtest.NewFakePlatformLeadRepository()
-	leadID := seedLead(t, leads)
+	one := 1
+	leadID := platformlead.ID(ids.NewV7().String())
+	l := platformlead.UnmarshalFromDB(platformlead.Snapshot{
+		ID:                     leadID,
+		SourceContactID:        unverifiedcontact.ID(ids.NewV7().String()),
+		Form:                   qSampleForm(t),
+		Tier:                   platformlead.TierStandard,
+		SaleLimit:              &one, // sells out after one purchase
+		VerifiedAt:             qNow(),
+		VerifiedByMembershipID: unverifiedcontact.MembershipID(ids.NewV7().String()),
+		CreatedAt:              qNow(),
+	})
+	if err := leads.Add(t.Context(), l); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
 
-	// Mark sold via direct UpdateByID — bypassing the handler.
+	// Record the single allowed purchase, bypassing the handler.
 	tenantID := platformlead.TenantID(ids.NewV7().String())
 	memberID := unverifiedcontact.MembershipID(ids.NewV7().String())
 	err := leads.UpdateByID(t.Context(), leadID, func(l *platformlead.PlatformLead) (bool, error) {
-		return true, l.Purchase(tenantID, memberID, 50000, qNow())
+		return true, l.RecordPurchase(ids.NewV7().String(), tenantID, memberID, 50000, 6, qNow())
 	})
 	if err != nil {
 		t.Fatalf("seed purchase: %v", err)
@@ -119,12 +132,12 @@ func TestBrowseMarketplace_ExcludesSoldLeads(t *testing.T) {
 		t.Fatalf("handle: %v", err)
 	}
 	if len(page.Items) != 0 {
-		t.Errorf("expected sold lead excluded from browse, got %d items", len(page.Items))
+		t.Errorf("expected sold-out lead excluded from browse, got %d items", len(page.Items))
 	}
 }
 
-// TestBrowseMarketplace_PageSizeClampedAndPaginated — clamping happens
-// at the handler layer + the repo gets size+1 to compute has_more.
+// TestBrowseMarketplace_PageSizeClampedAndPaginated — the handler clamps page
+// size and asks the repo for size+1 to compute has_more.
 func TestBrowseMarketplace_PageSizeClampedAndPaginated(t *testing.T) {
 	t.Parallel()
 
@@ -143,7 +156,7 @@ func TestBrowseMarketplace_PageSizeClampedAndPaginated(t *testing.T) {
 	if len(page.Items) != 2 {
 		t.Fatalf("expected page size 2, got %d items", len(page.Items))
 	}
-	// has_more should be true because we seeded 3 leads + asked for 2.
+	// has_more true: 3 seeded vs 2 requested.
 	if !page.HasMore {
 		t.Error("expected has_more = true with 3 seeded vs 2 requested")
 	}

@@ -11,12 +11,8 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/app/query"
 )
 
-// fakeSearchIndex is an inline minimal [query.SearchIndex]. The fanout
-// branches the handler exercises:
-//   - both categories enabled → expect both fns called
-//   - persons returning rows + tenants returning DeadlineExceeded →
-//     HasPartial=true
-//   - persons returning a non-deadline error → bubbles out
+// fakeSearchIndex is an inline minimal [query.SearchIndex].
+// Supports: both-categories enabled, DeadlineExceeded → HasPartial, non-deadline error → bubbles.
 type fakeSearchIndex struct {
 	personsRows  []query.SearchPersonHit
 	personsErr   error
@@ -24,14 +20,11 @@ type fakeSearchIndex struct {
 	tenantsErr   error
 	personsCalls atomic.Int32
 	tenantsCalls atomic.Int32
-	// personsCapturedQ / tenantsCapturedQ record the q the handler
-	// forwarded (after trim + length-clamp) so the test can assert
-	// normalization. Only first observation kept; concurrent fanout
-	// makes ordering nondeterministic.
+	// personsCapturedQ / tenantsCapturedQ record the first q forwarded
+	// by the handler (after trim + clamp). Concurrent fanout → first only.
 	personsCapturedQ string
 	tenantsCapturedQ string
-	// personsBlock simulates a slow query — held until released or
-	// ctx cancels (returns DeadlineExceeded then).
+	// personsBlock simulates a slow query; held until released or ctx cancels.
 	personsBlock chan struct{}
 }
 
@@ -237,10 +230,7 @@ func TestSearch_TenantsError_Bubbles(t *testing.T) {
 
 func TestSearch_LimitClampDefaults(t *testing.T) {
 	t.Parallel()
-	// Negative / zero → default (5). Verify by calling with limit=0
-	// and limit=-3; underlying index sees a positive int32. Index just
-	// needs to be called; we don't assert the limit value because the
-	// fake doesn't capture it — sufficient to prove no crash + no error.
+	// Negative / zero → default (5). Index called; limit not asserted (fake doesn't capture it).
 	idx := &fakeSearchIndex{}
 	h := query.NewSearchHandler(idx)
 	for _, l := range []int{0, -3} {
@@ -300,8 +290,7 @@ func TestCachedSearch_HappyPath_CachesView(t *testing.T) {
 		t.Errorf("persons len = %d", len(view.Persons))
 	}
 	hc.L1.Wait()
-	// Second identical call — cache hit; SearchPersons MUST NOT be
-	// called again.
+	// Second identical call — cache hit; SearchPersons must not be called again.
 	if _, err := h.Handle(t.Context(), q); err != nil {
 		t.Fatalf("Handle 2: %v", err)
 	}
@@ -335,5 +324,4 @@ func TestCachedSearch_LimitClampNegativeAndMax(t *testing.T) {
 	}
 }
 
-// Sanity placeholder for time import.
-var _ = time.Second
+var _ = time.Second // keeps time import alive
