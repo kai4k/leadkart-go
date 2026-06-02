@@ -86,25 +86,29 @@ func (f *FakeRepository) Add(_ context.Context, p *person.Person) error {
 // UpdateByID loads, mutates via updateFn, persists. Returns
 // [person.ErrNotFound] if the Person doesn't exist.
 //
-// The fake doesn't deep-copy the Person before passing to updateFn; the
-// caller observes mutations even if it returns (false, nil). This
-// mirrors the pg adapter's behavior — both rely on the aggregate's
-// invariants being re-checked at persist time, not snapshot-rollback.
+// On (false, nil) or a closure error, the in-memory aggregate is rolled
+// back to its pre-call state — mirroring the pg adapter, which only
+// writes when the closure returns (true, nil). Without this, a closure
+// that mutates then aborts would leak the mutation in the fake but not in
+// production, giving false-green tests.
 //
-// Re-keys the emails index if the mutation changed the email
-// (email-change confirm flow) so subsequent GetByEmail lookups
-// resolve to the new address.
+// Re-keys the emails index if a committed mutation changed the email
+// (email-change confirm flow) so subsequent GetByEmail lookups resolve to
+// the new address.
 func (f *FakeRepository) UpdateByID(_ context.Context, id person.ID, updateFn func(*person.Person) (bool, error)) error {
 
 	p, ok := f.rows[id]
 	if !ok {
 		return person.ErrNotFound
 	}
+	snapshot := *p // value copy of all fields (scalars/VOs + slice headers)
 	commit, err := updateFn(p)
 	if err != nil {
+		*p = snapshot // roll back — closure error = no persist
 		return err
 	}
 	if !commit {
+		*p = snapshot // roll back — mirror the adapter's no-persist branch
 		return nil
 	}
 	// Refresh the emails index in case the email rotated.

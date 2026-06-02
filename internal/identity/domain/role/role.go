@@ -339,20 +339,24 @@ func (r *Role) ReplacePermissions(target []*permission.Permission, now time.Time
 		return err
 	}
 	now = now.UTC()
-	wantSet := make(map[*permission.Permission]struct{}, len(target))
+	// Set membership is by permission NAME (value identity), not pointer:
+	// a caller may pass freshly-constructed *Permission that aren't the
+	// catalogue-interned pointers, and a pointer-keyed set would treat a
+	// same-named permission as both "revoke old" and "grant new".
+	wantSet := make(map[string]struct{}, len(target))
 	for _, p := range target {
 		if p != nil {
-			wantSet[p] = struct{}{}
+			wantSet[p.Name()] = struct{}{}
 		}
 	}
-	currentSet := make(map[*permission.Permission]struct{}, len(r.permissions))
+	currentSet := make(map[string]struct{}, len(r.permissions))
 	for _, p := range r.permissions {
-		currentSet[p] = struct{}{}
+		currentSet[p.Name()] = struct{}{}
 	}
-	// Build the kept slice + emit revoke events for removals.
-	kept := r.permissions[:0]
+	// Keep current entries still wanted; emit Revoke for the rest.
+	kept := make([]*permission.Permission, 0, len(r.permissions))
 	for _, p := range r.permissions {
-		if _, keep := wantSet[p]; keep {
+		if _, keep := wantSet[p.Name()]; keep {
 			kept = append(kept, p)
 			continue
 		}
@@ -364,11 +368,16 @@ func (r *Role) ReplacePermissions(target []*permission.Permission, now time.Time
 		})
 	}
 	r.permissions = kept
-	// Emit grant events for additions (anything in target not in current).
-	for p := range wantSet {
-		if _, already := currentSet[p]; already {
+	// Grant additions. Iterate target (not the map) for deterministic
+	// event order; skip nils + anything already present.
+	for _, p := range target {
+		if p == nil {
 			continue
 		}
+		if _, already := currentSet[p.Name()]; already {
+			continue
+		}
+		currentSet[p.Name()] = struct{}{} // guard against duplicate names in target
 		r.permissions = append(r.permissions, p)
 		r.recordEvent(PermissionGrantedEvent{
 			RoleID:     r.id,

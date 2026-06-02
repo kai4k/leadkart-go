@@ -210,7 +210,7 @@ func (h RefreshHandler) Handle(ctx context.Context, cmd RefreshCommand) (Refresh
 		TenantSlug:    tn.Slug().String(),
 		MembershipID:  m.ID().String(),
 		SecurityStamp: p.SecurityStamp().String(),
-		IsPlatform:    false, // Platform tenant lands in v0.3
+		IsPlatform:    tn.Slug().String() == tenant.PlatformSlug, // match login.go — platform scope must survive refresh
 		IsSuperUser:   authClaims.IsSuperUser,
 		Permissions:   permissionNames(authClaims.Permissions),
 	})
