@@ -65,6 +65,9 @@ import (
 	crmsubscribers "github.com/leadkart/leadkart-go/internal/crm/ports/subscribers"
 	"github.com/leadkart/leadkart-go/internal/identity/adapters"
 	"github.com/leadkart/leadkart-go/internal/identity/ports/subscribers"
+	platformadapters "github.com/leadkart/leadkart-go/internal/platform/adapters"
+	platformcommand "github.com/leadkart/leadkart-go/internal/platform/app/command"
+	platformsubscribers "github.com/leadkart/leadkart-go/internal/platform/ports/subscribers"
 )
 
 // Tunings — same shape as cmd/api/main.go so the two binaries' admin
@@ -246,6 +249,13 @@ func run(ctx context.Context, stdout *os.File) error {
 	crmIngest := crmsubscribers.NewPurchasedLeadIngestor(
 		crmcommand.NewIngestPurchasedLeadHandler(crmLeads, time.Now, newCrmLeadID), logger)
 
+	// Platform subscriber: identity.tenant_registered.v1 → init a zero-balance
+	// LeadCredit row for the new tenant (BRD §6.2). Cross-module consumer of
+	// the Identity `identity.events` topic; idempotent via natural-key precheck.
+	platformCredits := platformadapters.NewLeadCreditRepository(pool, tx)
+	platformTenantRegistered := platformsubscribers.NewTenantRegisteredIngestor(
+		platformcommand.NewInitialiseLeadCreditsHandler(tx, platformCredits, time.Now), logger)
+
 	router, err := messaging.NewRouter(messaging.Deps{
 		Subscriber:       pubsub,
 		Publisher:        pubsub,
@@ -277,6 +287,7 @@ func run(ctx context.Context, stdout *os.File) error {
 	// the Platform `platform.lead_purchased.v1` event (ADR 0060).
 	cqrsHandlers := subscribers.Handlers(subWiring.Families, subWiring.StampCache, buildEmailSender(logger), logger, time.Now)
 	cqrsHandlers = append(cqrsHandlers, crmsubscribers.Handlers(crmIngest)...)
+	cqrsHandlers = append(cqrsHandlers, platformsubscribers.Handlers(platformTenantRegistered)...)
 	for _, h := range cqrsHandlers {
 		if err := router.AddCqrsHandler(eventProcessor, h); err != nil {
 			return fmt.Errorf("register cqrs handler: %w", err)
