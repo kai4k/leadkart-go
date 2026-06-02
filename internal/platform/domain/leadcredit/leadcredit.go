@@ -12,6 +12,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 // ErrInvalid is the sentinel for invariant violations.
@@ -55,8 +57,8 @@ type LeadCredit struct {
 // registration (Slice 2 subscriber to identity.TenantRegisteredV1); Slice 1
 // creates it on first Topup.
 func NewForTenant(tenantID TenantID, now time.Time) (*LeadCredit, error) {
-	if tenantID.IsZero() {
-		return nil, fmt.Errorf("%w: tenantID required", ErrInvalid)
+	if err := validateUUID("tenantID", tenantID.String()); err != nil {
+		return nil, err
 	}
 	if now.IsZero() {
 		return nil, fmt.Errorf("%w: now required", ErrInvalid)
@@ -68,6 +70,20 @@ func NewForTenant(tenantID TenantID, now time.Time) (*LeadCredit, error) {
 		createdAt: now,
 		updatedAt: now,
 	}, nil
+}
+
+// validateUUID enforces the H6 reviewer rule: every domain ID must parse
+// as a UUID at AGGREGATE-CONSTRUCTION time, not later at the adapter
+// boundary. Trims surrounding whitespace before parsing.
+func validateUUID(name, val string) error {
+	val = strings.TrimSpace(val)
+	if val == "" {
+		return fmt.Errorf("%w: %s required", ErrInvalid, name)
+	}
+	if _, err := uuid.Parse(val); err != nil {
+		return fmt.Errorf("%w: %s not a valid uuid", ErrInvalid, name)
+	}
+	return nil
 }
 
 // Snapshot is the persistence-layer DTO consumed by [UnmarshalFromDB].

@@ -237,3 +237,61 @@ func TestVerifyUnverifiedContact_AlreadyRejected_Refused(t *testing.T) {
 		t.Errorf("expected no lead created on verify-after-reject, got %d", len(leads.Store))
 	}
 }
+
+// TestVerifyUnverifiedContact_LeadAddFails_RollsBackContact proves the
+// MarkVerified mutation is rolled back when the co-written PlatformLead Add
+// fails inside the same UoW closure. Both fakes are registered with the
+// FakeUnitOfWork so it snapshots+restores them on closure error (modelling
+// Postgres ROLLBACK). Without unverifiedcontacttest implementing
+// TransactionalFake (Snapshot), the contact would leak as Verified even
+// though the transaction aborted.
+func TestVerifyUnverifiedContact_LeadAddFails_RollsBackContact(t *testing.T) {
+	t.Parallel()
+
+	contacts := platformtest.NewFakeUnverifiedContactRepository()
+	leads := platformtest.NewFakePlatformLeadRepository()
+	outbox := platformtest.NewFakeOutbox()
+	uow := platformtest.NewFakeUnitOfWork(contacts, leads)
+
+	// Seed an in-call contact ready to verify.
+	agentID := unverifiedcontact.MembershipID(ids.NewV7().String())
+	cID := unverifiedcontact.ID(ids.NewV7().String())
+	c, err := unverifiedcontact.New(cID, sampleForm(t), agentID, nowFunc())
+	if err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if err := c.StartCall(nowFunc()); err != nil {
+		t.Fatalf("seed start call: %v", err)
+	}
+	if err := contacts.Add(t.Context(), c); err != nil {
+		t.Fatalf("seed add: %v", err)
+	}
+
+	// Force the lead Add to fail inside the tx.
+	addErr := errors.New("simulated insert failure")
+	leads.FailAddOnce = addErr
+
+	h := command.NewVerifyUnverifiedContactHandler(uow, contacts, leads, outbox, nowFunc, func() platformlead.ID { return platformlead.ID(ids.NewV7().String()) })
+	_, err = h.Handle(t.Context(), command.VerifyUnverifiedContactCommand{
+		ContactID:  cID,
+		VerifiedBy: agentID,
+	})
+	if !errors.Is(err, addErr) {
+		t.Fatalf("expected the simulated add failure to surface, got %v", err)
+	}
+
+	// Contact must be rolled back to InCall (not Verified).
+	loaded, gerr := contacts.GetByID(t.Context(), cID)
+	if gerr != nil {
+		t.Fatalf("reload contact: %v", gerr)
+	}
+	if loaded.State() != unverifiedcontact.StateInCall {
+		t.Errorf("contact state=%q want in_call (mutation must roll back on tx abort)", loaded.State())
+	}
+	if len(leads.Store) != 0 {
+		t.Errorf("expected no lead persisted, got %d", len(leads.Store))
+	}
+	if len(outbox.Events) != 0 {
+		t.Errorf("expected no outbox event on abort, got %d", len(outbox.Events))
+	}
+}

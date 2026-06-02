@@ -36,6 +36,12 @@ type FakeRepository struct {
 
 	// DrainedEvents collects events pulled at Add and committed UpdateByID.
 	DrainedEvents []platformlead.Event
+
+	// FailAddOnce, when non-nil, makes the next Add return it (and clears
+	// itself) instead of persisting. Drives rollback regression tests that
+	// need the co-written lead Add to fail inside a UoW closure — mirrors a
+	// Postgres INSERT error (e.g. 23505) aborting the tx.
+	FailAddOnce error
 }
 
 // NewFakeRepository returns an empty in-memory lead repository. Single-test-owner:
@@ -52,6 +58,11 @@ var _ platformlead.Repository = (*FakeRepository)(nil)
 // Add persists a new lead and drains its events into DrainedEvents.
 func (r *FakeRepository) Add(_ context.Context, l *platformlead.PlatformLead) error {
 
+	if r.FailAddOnce != nil {
+		err := r.FailAddOnce
+		r.FailAddOnce = nil
+		return err
+	}
 	r.Store[l.ID()] = l
 	r.DrainedEvents = append(r.DrainedEvents, l.PullEvents()...)
 	return nil

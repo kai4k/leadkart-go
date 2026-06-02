@@ -140,6 +140,7 @@ var (
 	_ pg.UnitOfWork     = (*FakeUnitOfWork)(nil)
 	_ TransactionalFake = (*FakeLeadCreditRepository)(nil)
 	_ TransactionalFake = (*FakePlatformLeadRepository)(nil)
+	_ TransactionalFake = (*FakeUnverifiedContactRepository)(nil)
 )
 
 // Pins the query import while fakes ship ahead of the read-model adapter.

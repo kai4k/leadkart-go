@@ -86,3 +86,38 @@ func (r *FakeRepository) GetByID(
 	}
 	return c, nil
 }
+
+// Snapshot satisfies the platformtest.TransactionalFake contract so this fake
+// can be registered with the FakeUnitOfWork. It captures Store + DrainedEvents;
+// the returned closure restores them on closure error, modelling Postgres
+// ROLLBACK. Aggregates are deep-copied via UnmarshalFromDB so an in-place
+// mutation (e.g. MarkVerified) doesn't leak past rollback — without this, the
+// MarkVerified handler's UoW (which co-writes this contact and a PlatformLead)
+// would leave the contact verified even when the surrounding tx aborts.
+func (r *FakeRepository) Snapshot() func() {
+
+	store := make(map[unverifiedcontact.ID]*unverifiedcontact.UnverifiedContact, len(r.Store))
+	for k, v := range r.Store {
+		store[k] = unverifiedcontact.UnmarshalFromDB(unverifiedcontact.Snapshot{
+			ID:                     v.ID(),
+			Form:                   v.Form(),
+			State:                  v.State(),
+			RejectionReason:        v.RejectionReason(),
+			BusyCallbackAt:         v.BusyCallbackAt(),
+			BusyCallbackEndAt:      v.BusyCallbackEndAt(),
+			PlatformLeadID:         v.PlatformLeadID(),
+			CreatedAt:              v.CreatedAt(),
+			CreatedByMembershipID:  v.CreatedByMembershipID(),
+			VerifiedAt:             v.VerifiedAt(),
+			VerifiedByMembershipID: v.VerifiedByMembershipID(),
+			RejectedAt:             v.RejectedAt(),
+			RejectedByMembershipID: v.RejectedByMembershipID(),
+		})
+	}
+	drained := make([]unverifiedcontact.Event, len(r.DrainedEvents))
+	copy(drained, r.DrainedEvents)
+	return func() {
+		r.Store = store
+		r.DrainedEvents = drained
+	}
+}

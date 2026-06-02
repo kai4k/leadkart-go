@@ -23,6 +23,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/leadkart/leadkart-go/internal/platform/domain/leadform"
 )
 
@@ -95,11 +97,11 @@ type UnverifiedContact struct {
 // New constructs an UnverifiedContact in [StateNew] from a validated
 // form and the originating Lead Agent's membership.
 func New(id ID, form leadform.Form, createdBy MembershipID, now time.Time) (*UnverifiedContact, error) {
-	if id.IsZero() {
-		return nil, fmt.Errorf("%w: id required", ErrInvalid)
+	if err := validateUUID("id", id.String()); err != nil {
+		return nil, err
 	}
-	if createdBy.IsZero() {
-		return nil, fmt.Errorf("%w: createdBy required", ErrInvalid)
+	if err := validateUUID("createdBy", createdBy.String()); err != nil {
+		return nil, err
 	}
 	if now.IsZero() {
 		return nil, fmt.Errorf("%w: now required", ErrInvalid)
@@ -118,6 +120,20 @@ func New(id ID, form leadform.Form, createdBy MembershipID, now time.Time) (*Unv
 		MobileE164:            form.MobileE164(),
 	})
 	return c, nil
+}
+
+// validateUUID enforces the H6 reviewer rule: every domain ID must parse
+// as a UUID at AGGREGATE-CONSTRUCTION time, not later at the adapter
+// boundary. Trims surrounding whitespace before parsing.
+func validateUUID(name, val string) error {
+	val = strings.TrimSpace(val)
+	if val == "" {
+		return fmt.Errorf("%w: %s required", ErrInvalid, name)
+	}
+	if _, err := uuid.Parse(val); err != nil {
+		return fmt.Errorf("%w: %s not a valid uuid", ErrInvalid, name)
+	}
+	return nil
 }
 
 // Snapshot is the persistence-layer DTO consumed by [UnmarshalFromDB].
