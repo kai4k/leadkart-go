@@ -156,7 +156,7 @@ func TestPurchaseLead_MultipleBuyersUnderLimit(t *testing.T) {
 		t.Fatalf("buyer B: %v", err)
 	}
 	// Volume discount: second buyer pays less than the first.
-	if !(b.AmountPaisa < a.AmountPaisa) {
+	if b.AmountPaisa >= a.AmountPaisa {
 		t.Errorf("expected volume discount: B=%d should be < A=%d", b.AmountPaisa, a.AmountPaisa)
 	}
 	l, _ := leads.GetByID(t.Context(), leadID)

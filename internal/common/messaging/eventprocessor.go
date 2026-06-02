@@ -1,6 +1,7 @@
 package messaging
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
@@ -40,10 +41,10 @@ func moduleTopicFromAlias(alias string) (string, error) {
 // not here.
 func NewEventProcessor(router *message.Router, sub message.Subscriber, log watermill.LoggerAdapter) (*cqrs.EventProcessor, error) {
 	if router == nil {
-		return nil, fmt.Errorf("messaging: NewEventProcessor router required")
+		return nil, errors.New("messaging: NewEventProcessor router required")
 	}
 	if sub == nil {
-		return nil, fmt.Errorf("messaging: NewEventProcessor subscriber required")
+		return nil, errors.New("messaging: NewEventProcessor subscriber required")
 	}
 	if log == nil {
 		log = watermill.NopLogger{}

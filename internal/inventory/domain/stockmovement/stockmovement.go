@@ -95,6 +95,19 @@ type Movement struct {
 	events              []Event
 }
 
+// validateUUID enforces the H6 reviewer rule: every domain ID must parse as a
+// UUID at AGGREGATE-CONSTRUCTION time, not later at the adapter boundary.
+func validateUUID(name, val string) error {
+	val = strings.TrimSpace(val)
+	if val == "" {
+		return fmt.Errorf("%w: %s required", ErrInvalid, name)
+	}
+	if _, err := uuid.Parse(val); err != nil {
+		return fmt.Errorf("%w: %s not a valid uuid", ErrInvalid, name)
+	}
+	return nil
+}
+
 // New constructs a new ledger row. Returns ErrInvalid on invariant
 // violation. Emits LoggedEvent on success.
 //
@@ -113,21 +126,7 @@ type Movement struct {
 //   - Reason trimmed 1..500
 //   - SourceReference, when supplied, <=200 chars
 //
-// validateUUID enforces the H6 reviewer rule: every domain ID must parse as a
-// UUID at AGGREGATE-CONSTRUCTION time, not later at the adapter boundary.
-//
 //nolint:gocyclo,cyclop // straight-line guard cascade per coding-standards "validation = sequential guard list"
-func validateUUID(name, val string) error {
-	val = strings.TrimSpace(val)
-	if val == "" {
-		return fmt.Errorf("%w: %s required", ErrInvalid, name)
-	}
-	if _, err := uuid.Parse(val); err != nil {
-		return fmt.Errorf("%w: %s not a valid uuid", ErrInvalid, name)
-	}
-	return nil
-}
-
 func New(id ID, spec Spec, now time.Time) (*Movement, error) {
 	if err := validateUUID("id", id.String()); err != nil {
 		return nil, err

@@ -41,6 +41,7 @@ import (
 	"time"
 
 	"github.com/ThreeDotsLabs/watermill"
+	"github.com/ThreeDotsLabs/watermill/components/forwarder"
 	"github.com/ThreeDotsLabs/watermill/pubsub/gochannel"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
@@ -320,6 +321,21 @@ func run(ctx context.Context, stdout *os.File) error {
 	}, healthCheckTimeout)
 	adminSrv := obs.NewAdminServer(cfg.Listen.WorkerAdmin, health)
 
+	return runWorkerServices(ctx, logger, outboxForwarder, router, riverClient, adminSrv)
+}
+
+// runWorkerServices runs the worker's long-lived services (outbox forwarder,
+// subscriber router, river client, admin listener) under one errgroup until
+// ctx cancels, then drives graceful shutdown. Split out of run so the
+// composition root stays under the cyclomatic-complexity gate.
+func runWorkerServices(
+	ctx context.Context,
+	logger *slog.Logger,
+	outboxForwarder *forwarder.Forwarder,
+	router *messaging.Router,
+	riverClient *jobs.Client,
+	adminSrv *http.Server,
+) error {
 	g, gctx := errgroup.WithContext(ctx)
 
 	g.Go(func() error {
@@ -356,7 +372,7 @@ func run(ctx context.Context, stdout *os.File) error {
 	})
 
 	g.Go(func() error {
-		logger.Info("worker admin listening", "addr", cfg.Listen.WorkerAdmin)
+		logger.Info("worker admin listening", "addr", adminSrv.Addr)
 		if err := adminSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			return fmt.Errorf("admin: %w", err)
 		}

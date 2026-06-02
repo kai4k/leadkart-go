@@ -104,10 +104,6 @@ type Product struct {
 	events       []Event
 }
 
-// New constructs a Product, validates all invariants, and emits [CreatedEvent].
-// Returns ErrInvalid (wrapped) on violation.
-// actorID populates CreatedEvent.ActorID for the integration mapper.
-// now is the explicit clock instant; the aggregate has no temporal dependency.
 // validateUUID enforces the H6 reviewer rule: every domain ID must parse as a
 // UUID at AGGREGATE-CONSTRUCTION time, not later at the adapter boundary.
 func validateUUID(name, val string) error {
@@ -121,6 +117,10 @@ func validateUUID(name, val string) error {
 	return nil
 }
 
+// New constructs a Product, validates all invariants, and emits [CreatedEvent].
+// Returns ErrInvalid (wrapped) on violation.
+// actorID populates CreatedEvent.ActorID for the integration mapper.
+// now is the explicit clock instant; the aggregate has no temporal dependency.
 func New(id ID, tenantID tenant.ID, actorID membership.ID, spec Spec, now time.Time) (*Product, error) {
 	if err := validateUUID("id", id.String()); err != nil {
 		return nil, err
