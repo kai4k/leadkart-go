@@ -20,6 +20,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/leadkart/leadkart-go/internal/common/errs"
 	"github.com/leadkart/leadkart-go/internal/crm/domain/crmlead"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
@@ -50,15 +52,15 @@ const reasonMaxLen = 1000
 //
 // PreviousAssignee is empty on the FIRST assignment for a lead.
 type Entry struct {
-	id                       ID
-	tenantID                 tenant.ID
-	leadID                   crmlead.ID
-	previousAssignee         string // empty for first assignment
-	assigneeMembershipID     string
-	assignedByMembershipID   string
-	reason                   string
-	assignedAt               time.Time
-	createdAt                time.Time
+	id                     ID
+	tenantID               tenant.ID
+	leadID                 crmlead.ID
+	previousAssignee       string // empty for first assignment
+	assigneeMembershipID   string
+	assignedByMembershipID string
+	reason                 string
+	assignedAt             time.Time
+	createdAt              time.Time
 }
 
 // New constructs a brand-new audit Entry. Append-only — no
@@ -78,17 +80,26 @@ func New(id ID, tenantID tenant.ID, leadID crmlead.ID, previousAssignee, assigne
 	if id.IsZero() {
 		return nil, fmt.Errorf("%w: id required", ErrInvalid)
 	}
-	if strings.TrimSpace(tenantID.String()) == "" {
-		return nil, fmt.Errorf("%w: tenant id required", ErrInvalid)
+	if err := validateUUIDString("id", string(id)); err != nil {
+		return nil, err
+	}
+	if err := validateUUIDString("tenant id", strings.TrimSpace(tenantID.String())); err != nil {
+		return nil, err
 	}
 	if leadID.IsZero() {
 		return nil, fmt.Errorf("%w: lead id required", ErrInvalid)
 	}
-	if strings.TrimSpace(assignee) == "" {
-		return nil, fmt.Errorf("%w: assignee membership id required", ErrInvalid)
+	if err := validateUUIDString("lead id", leadID.String()); err != nil {
+		return nil, err
 	}
-	if strings.TrimSpace(assignedBy) == "" {
-		return nil, fmt.Errorf("%w: assigned-by membership id required", ErrInvalid)
+	if err := validateUUIDString("assignee membership id", strings.TrimSpace(assignee)); err != nil {
+		return nil, err
+	}
+	if err := validateUUIDString("assigned-by membership id", strings.TrimSpace(assignedBy)); err != nil {
+		return nil, err
+	}
+	if err := validateOptionalUUID("previous assignee membership id", strings.TrimSpace(previousAssignee)); err != nil {
+		return nil, err
 	}
 	if len(reason) > reasonMaxLen {
 		return nil, fmt.Errorf("%w: reason too long (max %d, got %d)", ErrInvalid, reasonMaxLen, len(reason))
@@ -110,6 +121,30 @@ func New(id ID, tenantID tenant.ID, leadID crmlead.ID, previousAssignee, assigne
 		assignedAt:             assignedAt,
 		createdAt:              now,
 	}, nil
+}
+
+// validateUUIDString enforces the H6 reviewer rule (see [crmlead] +
+// [calllog]): every domain ID stored on an Entry must parse as a UUID
+// at AGGREGATE-CONSTRUCTION time, not later at the outbox boundary —
+// otherwise a malformed ID that sneaks past command validation panics
+// from the request path when the adapter parses it.
+func validateUUIDString(name, val string) error {
+	if val == "" {
+		return fmt.Errorf("%w: %s required", ErrInvalid, name)
+	}
+	if _, err := uuid.Parse(val); err != nil {
+		return fmt.Errorf("%w: %s not a valid uuid", ErrInvalid, name)
+	}
+	return nil
+}
+
+// validateOptionalUUID is the empty-allowed variant — previousAssignee
+// is empty on the first assignment for a lead.
+func validateOptionalUUID(name, val string) error {
+	if val == "" {
+		return nil
+	}
+	return validateUUIDString(name, val)
 }
 
 // Snapshot is the persistence-layer DTO consumed by [UnmarshalFromDB].

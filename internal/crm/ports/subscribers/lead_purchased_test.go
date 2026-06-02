@@ -1,19 +1,17 @@
 package subscribers_test
 
 import (
-	"context"
 	"encoding/json"
 	"io"
 	"log/slog"
-	"sync"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 
-	"github.com/leadkart/leadkart-go/internal/common/pagination"
 	"github.com/leadkart/leadkart-go/internal/crm/app/command"
 	"github.com/leadkart/leadkart-go/internal/crm/domain/crmlead"
+	"github.com/leadkart/leadkart-go/internal/crm/domain/crmlead/crmleadtest"
 	"github.com/leadkart/leadkart-go/internal/crm/ports/subscribers"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 	platformevents "github.com/leadkart/leadkart-go/internal/platform/integrationevents"
@@ -25,66 +23,10 @@ func silentLog() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
 
-// fakeLeads is a minimal crmlead.Repository for the subscriber tests.
-// Only the methods the command path touches are implemented.
-type fakeLeads struct {
-	mu         sync.Mutex
-	byID       map[crmlead.ID]*crmlead.CrmLead
-	byPurchase map[string]crmlead.ID
-}
-
-func newFakeLeads() *fakeLeads {
-	return &fakeLeads{
-		byID:       map[crmlead.ID]*crmlead.CrmLead{},
-		byPurchase: map[string]crmlead.ID{},
-	}
-}
-
-func (r *fakeLeads) Add(_ context.Context, l *crmlead.CrmLead) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if l.SourcePurchaseID() != "" {
-		r.byPurchase[l.SourcePurchaseID()] = l.ID()
-	}
-	r.byID[l.ID()] = l
-	_ = l.PullEvents()
-	return nil
-}
-
-func (r *fakeLeads) GetByID(_ context.Context, tenantID tenant.ID, id crmlead.ID) (*crmlead.CrmLead, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	l, ok := r.byID[id]
-	if !ok {
-		return nil, crmlead.ErrNotFound
-	}
-	if l.TenantID() != tenantID {
-		return nil, crmlead.ErrNotFound
-	}
-	return l, nil
-}
-
-func (r *fakeLeads) GetBySourcePurchaseID(_ context.Context, tenantID tenant.ID, p string) (*crmlead.CrmLead, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	id, ok := r.byPurchase[p]
-	if !ok {
-		return nil, crmlead.ErrNotFound
-	}
-	l := r.byID[id]
-	if l == nil || l.TenantID() != tenantID {
-		return nil, crmlead.ErrNotFound
-	}
-	return l, nil
-}
-
-func (r *fakeLeads) UpdateByID(_ context.Context, _ tenant.ID, _ crmlead.ID, _ func(*crmlead.CrmLead) (bool, error)) error {
-	return nil
-}
-
-func (r *fakeLeads) ListPage(_ context.Context, _ tenant.ID, _ crmlead.ListFilter, _ pagination.Cursor, _ int) (pagination.Page[*crmlead.CrmLead], error) {
-	return pagination.Page[*crmlead.CrmLead]{}, nil
-}
+// Subscriber tests use the canonical co-located crmleadtest.FakeRepository
+// (per-aggregate fake mandate) rather than a hand-rolled local fake — the
+// faithful fake errors on a source_purchase_id collision, so a regression
+// that broke the handler's at-most-once short-circuit would surface here.
 
 func validEvent(tenantID string, purchase string) platformevents.LeadPurchasedV1 {
 	return platformevents.LeadPurchasedV1{
@@ -118,7 +60,7 @@ func validEvent(tenantID string, purchase string) platformevents.LeadPurchasedV1
 
 func TestPurchasedLeadIngestor_HappyPath(t *testing.T) {
 	t.Parallel()
-	leads := newFakeLeads()
+	leads := crmleadtest.NewFakeRepository()
 	h := subscribers.NewPurchasedLeadIngestor(command.NewIngestPurchasedLeadHandler(leads, time.Now, func() crmlead.ID { return crmlead.ID(uuid.NewString()) }), silentLog())
 	tenantID := uuid.NewString()
 	purchase := uuid.NewString()
@@ -137,7 +79,7 @@ func TestPurchasedLeadIngestor_HappyPath(t *testing.T) {
 
 func TestPurchasedLeadIngestor_IdempotentOnReplay(t *testing.T) {
 	t.Parallel()
-	leads := newFakeLeads()
+	leads := crmleadtest.NewFakeRepository()
 	h := subscribers.NewPurchasedLeadIngestor(command.NewIngestPurchasedLeadHandler(leads, time.Now, func() crmlead.ID { return crmlead.ID(uuid.NewString()) }), silentLog())
 	tenantID := uuid.NewString()
 	purchase := uuid.NewString()
@@ -150,8 +92,8 @@ func TestPurchasedLeadIngestor_IdempotentOnReplay(t *testing.T) {
 		t.Fatalf("replay: %v", err)
 	}
 	// Still ONE lead.
-	if len(leads.byPurchase) != 1 {
-		t.Fatalf("byPurchase entries: %d", len(leads.byPurchase))
+	if len(leads.ByPurchase) != 1 {
+		t.Fatalf("ByPurchase entries: %d", len(leads.ByPurchase))
 	}
 }
 
