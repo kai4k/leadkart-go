@@ -12,8 +12,7 @@ import (
 )
 
 const getPlatformLeadByID = `-- name: GetPlatformLeadByID :one
-SELECT id, source_contact_id,
-       sold_to_tenant_id, sold_at, sold_to_membership_id, amount_paisa,
+SELECT id, source_contact_id, tier, sale_limit,
        contact_name, mobile_e164, email, pincode, city, district, state_geo, street,
        has_drug_licence, has_gst, gst_number, gst_verified, has_pan, pan_number,
        business_type, medicine_system, product_ranges, dosage_forms,
@@ -23,16 +22,123 @@ FROM   platform.platform_leads
 WHERE  id = $1
 `
 
-func (q *Queries) GetPlatformLeadByID(ctx context.Context, id pgtype.UUID) (PlatformPlatformLead, error) {
+type GetPlatformLeadByIDRow struct {
+	ID                     pgtype.UUID
+	SourceContactID        pgtype.UUID
+	Tier                   string
+	SaleLimit              *int32
+	ContactName            string
+	MobileE164             string
+	Email                  string
+	Pincode                string
+	City                   string
+	District               string
+	StateGeo               string
+	Street                 string
+	HasDrugLicence         bool
+	HasGst                 bool
+	GstNumber              string
+	GstVerified            bool
+	HasPan                 bool
+	PanNumber              string
+	BusinessType           string
+	MedicineSystem         string
+	ProductRanges          []string
+	DosageForms            []string
+	OrderValue             string
+	BuyTimeline            string
+	VerifiedAt             pgtype.Timestamptz
+	VerifiedByMembershipID pgtype.UUID
+	CreatedAt              pgtype.Timestamptz
+}
+
+func (q *Queries) GetPlatformLeadByID(ctx context.Context, id pgtype.UUID) (GetPlatformLeadByIDRow, error) {
 	row := q.db.QueryRow(ctx, getPlatformLeadByID, id)
-	var i PlatformPlatformLead
+	var i GetPlatformLeadByIDRow
 	err := row.Scan(
 		&i.ID,
 		&i.SourceContactID,
-		&i.SoldToTenantID,
-		&i.SoldAt,
-		&i.SoldToMembershipID,
-		&i.AmountPaisa,
+		&i.Tier,
+		&i.SaleLimit,
+		&i.ContactName,
+		&i.MobileE164,
+		&i.Email,
+		&i.Pincode,
+		&i.City,
+		&i.District,
+		&i.StateGeo,
+		&i.Street,
+		&i.HasDrugLicence,
+		&i.HasGst,
+		&i.GstNumber,
+		&i.GstVerified,
+		&i.HasPan,
+		&i.PanNumber,
+		&i.BusinessType,
+		&i.MedicineSystem,
+		&i.ProductRanges,
+		&i.DosageForms,
+		&i.OrderValue,
+		&i.BuyTimeline,
+		&i.VerifiedAt,
+		&i.VerifiedByMembershipID,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const getPlatformLeadByIDForUpdate = `-- name: GetPlatformLeadByIDForUpdate :one
+SELECT id, source_contact_id, tier, sale_limit,
+       contact_name, mobile_e164, email, pincode, city, district, state_geo, street,
+       has_drug_licence, has_gst, gst_number, gst_verified, has_pan, pan_number,
+       business_type, medicine_system, product_ranges, dosage_forms,
+       order_value, buy_timeline,
+       verified_at, verified_by_membership_id, created_at
+FROM   platform.platform_leads
+WHERE  id = $1
+FOR UPDATE
+`
+
+type GetPlatformLeadByIDForUpdateRow struct {
+	ID                     pgtype.UUID
+	SourceContactID        pgtype.UUID
+	Tier                   string
+	SaleLimit              *int32
+	ContactName            string
+	MobileE164             string
+	Email                  string
+	Pincode                string
+	City                   string
+	District               string
+	StateGeo               string
+	Street                 string
+	HasDrugLicence         bool
+	HasGst                 bool
+	GstNumber              string
+	GstVerified            bool
+	HasPan                 bool
+	PanNumber              string
+	BusinessType           string
+	MedicineSystem         string
+	ProductRanges          []string
+	DosageForms            []string
+	OrderValue             string
+	BuyTimeline            string
+	VerifiedAt             pgtype.Timestamptz
+	VerifiedByMembershipID pgtype.UUID
+	CreatedAt              pgtype.Timestamptz
+}
+
+// Row-locks the lead for the purchase tx so concurrent purchases of the same
+// lead serialise — the sale-limit count check is then race-free (ADR 0065).
+func (q *Queries) GetPlatformLeadByIDForUpdate(ctx context.Context, id pgtype.UUID) (GetPlatformLeadByIDForUpdateRow, error) {
+	row := q.db.QueryRow(ctx, getPlatformLeadByIDForUpdate, id)
+	var i GetPlatformLeadByIDForUpdateRow
+	err := row.Scan(
+		&i.ID,
+		&i.SourceContactID,
+		&i.Tier,
+		&i.SaleLimit,
 		&i.ContactName,
 		&i.MobileE164,
 		&i.Email,
@@ -63,31 +169,27 @@ func (q *Queries) GetPlatformLeadByID(ctx context.Context, id pgtype.UUID) (Plat
 const insertPlatformLead = `-- name: InsertPlatformLead :exec
 
 INSERT INTO platform.platform_leads (
-    id, source_contact_id,
-    sold_to_tenant_id, sold_at, sold_to_membership_id, amount_paisa,
+    id, source_contact_id, tier, sale_limit,
     contact_name, mobile_e164, email, pincode, city, district, state_geo, street,
     has_drug_licence, has_gst, gst_number, gst_verified, has_pan, pan_number,
     business_type, medicine_system, product_ranges, dosage_forms,
     order_value, buy_timeline,
     verified_at, verified_by_membership_id, created_at
 ) VALUES (
-    $1, $2,
-    $3, $4, $5, $6,
-    $7, $8, $9, $10, $11, $12, $13, $14,
-    $15, $16, $17, $18, $19, $20,
-    $21, $22, $23, $24,
-    $25, $26,
-    $27, $28, $29
+    $1, $2, $3, $4,
+    $5, $6, $7, $8, $9, $10, $11, $12,
+    $13, $14, $15, $16, $17, $18,
+    $19, $20, $21, $22,
+    $23, $24,
+    $25, $26, $27
 )
 `
 
 type InsertPlatformLeadParams struct {
 	ID                     pgtype.UUID
 	SourceContactID        pgtype.UUID
-	SoldToTenantID         pgtype.UUID
-	SoldAt                 pgtype.Timestamptz
-	SoldToMembershipID     pgtype.UUID
-	AmountPaisa            int64
+	Tier                   string
+	SaleLimit              *int32
 	ContactName            string
 	MobileE164             string
 	Email                  string
@@ -113,15 +215,13 @@ type InsertPlatformLeadParams struct {
 	CreatedAt              pgtype.Timestamptz
 }
 
-// Platform module — PlatformLead queries. Per ADR 0059.
+// Platform module — PlatformLead queries. Per ADR 0059 + ADR 0065 (multi-buyer).
 func (q *Queries) InsertPlatformLead(ctx context.Context, arg InsertPlatformLeadParams) error {
 	_, err := q.db.Exec(ctx, insertPlatformLead,
 		arg.ID,
 		arg.SourceContactID,
-		arg.SoldToTenantID,
-		arg.SoldAt,
-		arg.SoldToMembershipID,
-		arg.AmountPaisa,
+		arg.Tier,
+		arg.SaleLimit,
 		arg.ContactName,
 		arg.MobileE164,
 		arg.Email,
@@ -150,31 +250,36 @@ func (q *Queries) InsertPlatformLead(ctx context.Context, arg InsertPlatformLead
 }
 
 const marketplaceBrowse = `-- name: MarketplaceBrowse :many
-SELECT id, source_contact_id,
-       sold_to_tenant_id, sold_at, sold_to_membership_id, amount_paisa,
-       contact_name, pincode, city, district, state_geo,
-       has_drug_licence, has_gst, gst_verified, has_pan,
-       business_type, medicine_system, product_ranges, dosage_forms,
-       order_value, buy_timeline,
-       verified_at, verified_by_membership_id, created_at
-FROM   platform.platform_leads
-WHERE  sold_to_tenant_id IS NULL
-AND    ($1::text IS NULL          OR state_geo = $1)
-AND    ($2::text IS NULL           OR city = $2)
-AND    ($3::text IS NULL       OR district = $3)
-AND    ($4::text IS NULL        OR pincode = $4)
-AND    ($5::text IS NULL  OR business_type = $5)
-AND    ($6::text IS NULL OR medicine_system = $6)
-AND    ($7::text IS NULL    OR order_value = $7)
-AND    ($8::text IS NULL   OR buy_timeline = $8)
-AND    ($9::boolean IS NULL OR has_drug_licence = $9)
-AND    ($10::boolean IS NULL     OR has_gst = $10)
-AND    ($11::boolean IS NULL OR gst_verified = $11)
-AND    ($12::text[] IS NULL OR product_ranges && $12::text[])
-AND    ($13::text[] IS NULL OR dosage_forms && $13::text[])
+SELECT pl.id, pl.source_contact_id, pl.tier, pl.sale_limit,
+       pl.contact_name, pl.pincode, pl.city, pl.district, pl.state_geo,
+       pl.has_drug_licence, pl.has_gst, pl.gst_verified, pl.has_pan,
+       pl.business_type, pl.medicine_system, pl.product_ranges, pl.dosage_forms,
+       pl.order_value, pl.buy_timeline,
+       pl.verified_at, pl.verified_by_membership_id, pl.created_at
+FROM   platform.platform_leads pl
+WHERE  (
+           SELECT count(*) FROM platform.lead_purchases lp
+           WHERE lp.lead_id = pl.id
+       ) < COALESCE(
+           pl.sale_limit,
+           (SELECT t.default_sale_limit FROM platform.lead_tiers t WHERE t.code = pl.tier)
+       )
+AND    ($1::text IS NULL          OR pl.state_geo = $1)
+AND    ($2::text IS NULL           OR pl.city = $2)
+AND    ($3::text IS NULL       OR pl.district = $3)
+AND    ($4::text IS NULL        OR pl.pincode = $4)
+AND    ($5::text IS NULL  OR pl.business_type = $5)
+AND    ($6::text IS NULL OR pl.medicine_system = $6)
+AND    ($7::text IS NULL    OR pl.order_value = $7)
+AND    ($8::text IS NULL   OR pl.buy_timeline = $8)
+AND    ($9::boolean IS NULL OR pl.has_drug_licence = $9)
+AND    ($10::boolean IS NULL     OR pl.has_gst = $10)
+AND    ($11::boolean IS NULL OR pl.gst_verified = $11)
+AND    ($12::text[] IS NULL OR pl.product_ranges && $12::text[])
+AND    ($13::text[] IS NULL OR pl.dosage_forms && $13::text[])
 AND    ($14::timestamptz IS NULL
-        OR (verified_at, id) < ($14::timestamptz, $15::uuid))
-ORDER  BY verified_at DESC, id DESC
+        OR (pl.verified_at, pl.id) < ($14::timestamptz, $15::uuid))
+ORDER  BY pl.verified_at DESC, pl.id DESC
 LIMIT  $16
 `
 
@@ -200,10 +305,8 @@ type MarketplaceBrowseParams struct {
 type MarketplaceBrowseRow struct {
 	ID                     pgtype.UUID
 	SourceContactID        pgtype.UUID
-	SoldToTenantID         pgtype.UUID
-	SoldAt                 pgtype.Timestamptz
-	SoldToMembershipID     pgtype.UUID
-	AmountPaisa            int64
+	Tier                   string
+	SaleLimit              *int32
 	ContactName            string
 	Pincode                string
 	City                   string
@@ -227,6 +330,11 @@ type MarketplaceBrowseRow struct {
 // BRD §4.3 marketplace browse. Null-guarded optional filters: a NULL
 // arg means "don't filter on this column". Array filters use GIN `&&`
 // overlap; keyset cursor on (verified_at, id) DESC.
+//
+// Availability (ADR 0065): a lead is browsable while its purchase count is
+// below the effective sale limit (per-lead override, else tier default). A
+// tenant that already bought the lead is filtered defensively at purchase time
+// (RecordPurchase -> ErrAlreadyPurchased), not here.
 //
 // H12 SECURITY: the SELECT list DELIBERATELY OMITS PII columns
 // (email, mobile_e164, gst_number, pan_number, street). This is a
@@ -263,10 +371,8 @@ func (q *Queries) MarketplaceBrowse(ctx context.Context, arg MarketplaceBrowsePa
 		if err := rows.Scan(
 			&i.ID,
 			&i.SourceContactID,
-			&i.SoldToTenantID,
-			&i.SoldAt,
-			&i.SoldToMembershipID,
-			&i.AmountPaisa,
+			&i.Tier,
+			&i.SaleLimit,
 			&i.ContactName,
 			&i.Pincode,
 			&i.City,
@@ -296,33 +402,20 @@ func (q *Queries) MarketplaceBrowse(ctx context.Context, arg MarketplaceBrowsePa
 	return items, nil
 }
 
-const updatePlatformLead = `-- name: UpdatePlatformLead :exec
+const updatePlatformLeadGstVerified = `-- name: UpdatePlatformLeadGstVerified :exec
 UPDATE platform.platform_leads SET
-    sold_to_tenant_id     = $2,
-    sold_at               = $3,
-    sold_to_membership_id = $4,
-    amount_paisa          = $5,
-    gst_verified          = $6
+    gst_verified = $2
 WHERE id = $1
 `
 
-type UpdatePlatformLeadParams struct {
-	ID                 pgtype.UUID
-	SoldToTenantID     pgtype.UUID
-	SoldAt             pgtype.Timestamptz
-	SoldToMembershipID pgtype.UUID
-	AmountPaisa        int64
-	GstVerified        bool
+type UpdatePlatformLeadGstVerifiedParams struct {
+	ID          pgtype.UUID
+	GstVerified bool
 }
 
-func (q *Queries) UpdatePlatformLead(ctx context.Context, arg UpdatePlatformLeadParams) error {
-	_, err := q.db.Exec(ctx, updatePlatformLead,
-		arg.ID,
-		arg.SoldToTenantID,
-		arg.SoldAt,
-		arg.SoldToMembershipID,
-		arg.AmountPaisa,
-		arg.GstVerified,
-	)
+// The only post-creation mutation of the lead row itself; a purchase is an
+// INSERT into lead_purchases, not an UPDATE here.
+func (q *Queries) UpdatePlatformLeadGstVerified(ctx context.Context, arg UpdatePlatformLeadGstVerifiedParams) error {
+	_, err := q.db.Exec(ctx, updatePlatformLeadGstVerified, arg.ID, arg.GstVerified)
 	return err
 }

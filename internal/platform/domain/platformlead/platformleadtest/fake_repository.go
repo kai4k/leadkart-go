@@ -5,8 +5,10 @@
 // TDL canon (Wild Workouts + "Go with the Domain"):
 //   - Co-located in a sibling <aggregate>test/ package.
 //   - Faithful contract implementation, not a canned-response mock: ErrNotFound
-//     on missing IDs, unsold-only MarketplaceBrowse (mirrors the adapter's
-//     WHERE sold_to_tenant_id IS NULL), event drain on each commit.
+//     on missing IDs, availability-filtered MarketplaceBrowse (purchase count
+//     below the effective sale limit, per ADR 0065), event drain on each
+//     commit, and pending-purchase drain into Purchases (mirrors the adapter
+//     inserting lead_purchases rows).
 //   - Implements the TransactionalFake contract via [FakeRepository.Snapshot]:
 //     registered with FakeUnitOfWork, it rolls back on closure error to model
 //     Postgres ROLLBACK under the PurchaseLead race.
@@ -26,16 +28,33 @@ import (
 	"github.com/leadkart/leadkart-go/internal/platform/domain/platformlead"
 )
 
+// defaultTierLimits mirrors the platform.lead_tiers seed so MarketplaceBrowse
+// availability matches the adapter without a tier-config dependency.
+func defaultTierLimits() map[platformlead.Tier]int {
+	return map[platformlead.Tier]int{
+		platformlead.TierStandard: 6,
+		platformlead.TierPriority: 4,
+		platformlead.TierPremium:  2,
+	}
+}
+
 // FakeRepository is the in-memory [platformlead.Repository]. Construct via
 // [NewFakeRepository] (zero value unusable). Single-test-owner: do not share
 // across tests.
 type FakeRepository struct {
-	// Store indexes live leads by ID. Leads go Available → Sold via Purchase;
-	// not soft-deleted.
+	// Store indexes live leads by ID. A lead carries its buyer set in-memory;
+	// RecordPurchase appends to it, so subsequent loads see prior buyers.
 	Store map[platformlead.ID]*platformlead.PlatformLead
+
+	// Purchases collects the LeadPurchase rows drained on each committed
+	// RecordPurchase — the in-memory stand-in for platform.lead_purchases.
+	Purchases []*platformlead.LeadPurchase
 
 	// DrainedEvents collects events pulled at Add and committed UpdateByID.
 	DrainedEvents []platformlead.Event
+
+	// TierLimits is the per-tier default sale limit used by MarketplaceBrowse.
+	TierLimits map[platformlead.Tier]int
 
 	// FailAddOnce, when non-nil, makes the next Add return it (and clears
 	// itself) instead of persisting. Drives rollback regression tests that
@@ -48,7 +67,8 @@ type FakeRepository struct {
 // each test builds its own; no internal sync.
 func NewFakeRepository() *FakeRepository {
 	return &FakeRepository{
-		Store: make(map[platformlead.ID]*platformlead.PlatformLead),
+		Store:      make(map[platformlead.ID]*platformlead.PlatformLead),
+		TierLimits: defaultTierLimits(),
 	}
 }
 
@@ -68,12 +88,13 @@ func (r *FakeRepository) Add(_ context.Context, l *platformlead.PlatformLead) er
 	return nil
 }
 
-// UpdateByID loads, applies updateFn, and on persist drains events. Returns
-// [platformlead.ErrNotFound] when the row is absent.
+// UpdateByID loads, applies updateFn, and on persist drains events + pending
+// purchases. Returns [platformlead.ErrNotFound] when the row is absent.
 //
 // No deep-copy before updateFn: the caller observes mutations even on
 // (false, nil), matching the pg adapter — both re-check invariants at persist
-// time rather than snapshot-rollback.
+// time rather than snapshot-rollback (the FakeUnitOfWork handles tx rollback
+// via Snapshot).
 func (r *FakeRepository) UpdateByID(
 	_ context.Context,
 	id platformlead.ID,
@@ -91,6 +112,7 @@ func (r *FakeRepository) UpdateByID(
 	if !shouldPersist {
 		return nil
 	}
+	r.Purchases = append(r.Purchases, l.PullPendingPurchases()...)
 	r.DrainedEvents = append(r.DrainedEvents, l.PullEvents()...)
 	return nil
 }
@@ -107,8 +129,9 @@ func (r *FakeRepository) GetByID(
 	return l, nil
 }
 
-// MarketplaceBrowse returns unsold leads up to pageSize. Filters are exercised
-// by the integration suite, not here.
+// MarketplaceBrowse returns still-available leads (purchase count below the
+// effective sale limit) up to pageSize. Filters are exercised by the
+// integration suite, not here.
 func (r *FakeRepository) MarketplaceBrowse(
 	_ context.Context,
 	_ platformlead.MarketplaceFilter,
@@ -118,7 +141,7 @@ func (r *FakeRepository) MarketplaceBrowse(
 
 	var out []*platformlead.PlatformLead
 	for _, l := range r.Store {
-		if l.IsAvailable() {
+		if l.IsAvailable(r.TierLimits[l.Tier()]) {
 			out = append(out, l)
 		}
 		if len(out) >= pageSize {
@@ -129,9 +152,9 @@ func (r *FakeRepository) MarketplaceBrowse(
 }
 
 // Snapshot satisfies the platformtest.TransactionalFake contract. It captures
-// Store and DrainedEvents; the returned closure restores them on error,
-// modelling Postgres ROLLBACK. Aggregates are deep-copied via UnmarshalFromDB
-// so in-place mutations (e.g. Purchase) don't leak past rollback.
+// Store (deep-copied, buyer set included), Purchases, and DrainedEvents; the
+// returned closure restores them on error, modelling Postgres ROLLBACK so an
+// in-place RecordPurchase doesn't leak past a rolled-back tx.
 func (r *FakeRepository) Snapshot() func() {
 
 	store := make(map[platformlead.ID]*platformlead.PlatformLead, len(r.Store))
@@ -141,19 +164,21 @@ func (r *FakeRepository) Snapshot() func() {
 			SourceContactID:        v.SourceContactID(),
 			Form:                   v.Form(),
 			GstVerified:            v.GstVerified(),
-			SoldToTenantID:         v.SoldToTenantID(),
-			SoldAt:                 v.SoldAt(),
-			SoldToMembershipID:     v.SoldToMembershipID(),
-			AmountPaisa:            v.AmountPaisa(),
+			Tier:                   v.Tier(),
+			SaleLimit:              v.SaleLimit(),
+			BuyerTenantIDs:         v.BuyerTenantIDs(),
 			VerifiedAt:             v.VerifiedAt(),
 			VerifiedByMembershipID: v.VerifiedByMembershipID(),
 			CreatedAt:              v.CreatedAt(),
 		})
 	}
+	purchases := make([]*platformlead.LeadPurchase, len(r.Purchases))
+	copy(purchases, r.Purchases)
 	drained := make([]platformlead.Event, len(r.DrainedEvents))
 	copy(drained, r.DrainedEvents)
 	return func() {
 		r.Store = store
+		r.Purchases = purchases
 		r.DrainedEvents = drained
 	}
 }

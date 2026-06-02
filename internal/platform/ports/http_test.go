@@ -114,7 +114,7 @@ func buildApp(t *testing.T) (app.Application, *platformtest.FakeUnverifiedContac
 			LogVerificationCall:     command.NewLogVerificationCallHandler(uow, calls, contacts, now, func() verificationcall.ID { return verificationcall.ID(ids.NewV7().String()) }),
 			VerifyUnverifiedContact: command.NewVerifyUnverifiedContactHandler(uow, contacts, leads, outbox, now, func() platformlead.ID { return platformlead.ID(ids.NewV7().String()) }),
 			RejectUnverifiedContact: command.NewRejectUnverifiedContactHandler(contacts, now),
-			PurchaseLead:            command.NewPurchaseLeadHandler(uow, leads, credits, outbox, now, func() string { return ids.NewV7().String() }),
+			PurchaseLead:            command.NewPurchaseLeadHandler(uow, leads, credits, platformtest.NewFakeTierReader(), outbox, now, func() string { return ids.NewV7().String() }),
 			TopupLeadCredits:        command.NewTopupLeadCreditsHandler(uow, credits, now),
 		},
 		Queries: app.Queries{
@@ -320,7 +320,7 @@ func TestHandlePurchaseLead_Tenant_HappyPath(t *testing.T) {
 			LogVerificationCall:     command.NewLogVerificationCallHandler(uow, calls, contacts, now, func() verificationcall.ID { return verificationcall.ID(ids.NewV7().String()) }),
 			VerifyUnverifiedContact: command.NewVerifyUnverifiedContactHandler(uow, contacts, leads, outbox, now, func() platformlead.ID { return platformlead.ID(ids.NewV7().String()) }),
 			RejectUnverifiedContact: command.NewRejectUnverifiedContactHandler(contacts, now),
-			PurchaseLead:            command.NewPurchaseLeadHandler(uow, leads, credits, outbox, now, func() string { return ids.NewV7().String() }),
+			PurchaseLead:            command.NewPurchaseLeadHandler(uow, leads, credits, platformtest.NewFakeTierReader(), outbox, now, func() string { return ids.NewV7().String() }),
 			TopupLeadCredits:        command.NewTopupLeadCreditsHandler(uow, credits, now),
 		},
 		Queries: app.Queries{
@@ -330,7 +330,7 @@ func TestHandlePurchaseLead_Tenant_HappyPath(t *testing.T) {
 	}
 	mux := wireMux(t, claims, a)
 
-	body := ports.PurchaseLeadRequest{AmountPaisa: 50000}
+	body := ports.PurchaseLeadRequest{}
 	rec := doRequest(t, mux, "POST", "/api/v1/platform/marketplace/leads/"+leadID.String()+"/purchase", body)
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("status=%d body=%s want 201", rec.Code, rec.Body.String())
@@ -344,6 +344,10 @@ func TestHandlePurchaseLead_Tenant_HappyPath(t *testing.T) {
 	}
 	if out.PlatformLeadID != leadID.String() {
 		t.Errorf("PlatformLeadID=%q want %q", out.PlatformLeadID, leadID)
+	}
+	// Server computes the price (first buyer pays the standard tier base).
+	if out.AmountPaisa != 50000 {
+		t.Errorf("AmountPaisa=%d want 50000 (server-computed)", out.AmountPaisa)
 	}
 }
 
@@ -389,7 +393,7 @@ func TestHandleVerify_AlreadyTerminal_409(t *testing.T) {
 			LogVerificationCall:     command.NewLogVerificationCallHandler(uow, calls, contacts, now, func() verificationcall.ID { return verificationcall.ID(ids.NewV7().String()) }),
 			VerifyUnverifiedContact: command.NewVerifyUnverifiedContactHandler(uow, contacts, leads, outbox, now, func() platformlead.ID { return platformlead.ID(ids.NewV7().String()) }),
 			RejectUnverifiedContact: command.NewRejectUnverifiedContactHandler(contacts, now),
-			PurchaseLead:            command.NewPurchaseLeadHandler(uow, leads, credits, outbox, now, func() string { return ids.NewV7().String() }),
+			PurchaseLead:            command.NewPurchaseLeadHandler(uow, leads, credits, platformtest.NewFakeTierReader(), outbox, now, func() string { return ids.NewV7().String() }),
 			TopupLeadCredits:        command.NewTopupLeadCreditsHandler(uow, credits, now),
 		},
 		Queries: app.Queries{

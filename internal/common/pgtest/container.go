@@ -77,11 +77,11 @@ import (
 // infrastructure provisioning a known role inside an ephemeral
 // container; the secret value is intentionally constant for repro).
 const (
-	appRoleName     = "leadkart_app"
-	appRolePasswd   = "leadkart_app_pw" //nolint:gosec // hardcoded test-only role; ephemeral container
-	dbName          = "leadkart_test"
-	ownerRole       = "leadkart"
-	ownerPasswdLit  = "leadkart_test" //nolint:gosec // hardcoded test-only role; ephemeral container
+	appRoleName    = "leadkart_app"
+	appRolePasswd  = "leadkart_app_pw" //nolint:gosec // hardcoded test-only role; ephemeral container
+	dbName         = "leadkart_test"
+	ownerRole      = "leadkart"
+	ownerPasswdLit = "leadkart_test" //nolint:gosec // hardcoded test-only role; ephemeral container
 )
 
 // Config configures what the shared container's bootstrap should look
@@ -92,7 +92,7 @@ const (
 // Most modules need:
 //   - Schemas: app + their own module schema (+ identity for tenant FK)
 //   - Grants:  their own module schema (+ identity if the module's tests
-//              directly insert tenants/persons for cross-FK seeding)
+//     directly insert tenants/persons for cross-FK seeding)
 //
 // App role credentials are fixed test-only constants (see top of file).
 // Not exposed via Config to keep the surface tight + satisfy arch-test
@@ -106,17 +106,24 @@ type Config struct {
 	// SELECT/INSERT/UPDATE/DELETE on ALL TABLES. Must be a subset of
 	// Schemas.
 	Grants []string
+
+	// PreserveTables are migration-seeded config/reference tables
+	// (qualified "schema.table") that TruncateAll must NOT wipe — e.g.
+	// platform.lead_tiers, whose seed rows the marketplace availability
+	// check depends on. Production never truncates these; the test
+	// harness mirrors that.
+	PreserveTables []string
 }
 
 // Container wraps the shared postgres container + the app-role pool.
 // Created once per package via RunMain; returned by Pool() to every
 // test. Closed automatically when TestMain exits.
 type Container struct {
-	pool         *pgxpool.Pool
-	pg           *postgres.PostgresContainer
-	ownerDSN     string
-	appDSN       string
-	cfg          Config
+	pool     *pgxpool.Pool
+	pg       *postgres.PostgresContainer
+	ownerDSN string
+	appDSN   string
+	cfg      Config
 }
 
 // Pool returns the shared app-role pgxpool. Safe to call from every
@@ -156,8 +163,13 @@ func (c *Container) TruncateAll(t testing.TB) {
 	}
 	defer func() { _ = db.Close() }()
 
+	preserve := make(map[string]bool, len(c.cfg.PreserveTables))
+	for _, p := range c.cfg.PreserveTables {
+		preserve[p] = true
+	}
+
 	schemaList := "'" + strings.Join(c.cfg.Grants, "','") + "'"
-	q := `SELECT format('%I.%I', schemaname, tablename)
+	q := `SELECT schemaname, tablename
 	      FROM pg_tables
 	      WHERE schemaname IN (` + schemaList + `)
 	        AND tablename NOT LIKE 'goose_%'`
@@ -169,11 +181,14 @@ func (c *Container) TruncateAll(t testing.TB) {
 
 	var tables []string
 	for rows.Next() {
-		var name string
-		if err := rows.Scan(&name); err != nil {
+		var schema, table string
+		if err := rows.Scan(&schema, &table); err != nil {
 			t.Fatalf("pgtest.TruncateAll: scan: %v", err)
 		}
-		tables = append(tables, name)
+		if preserve[schema+"."+table] {
+			continue // migration-seeded config table — leave its rows intact
+		}
+		tables = append(tables, `"`+schema+`"."`+table+`"`)
 	}
 	if err := rows.Err(); err != nil {
 		t.Fatalf("pgtest.TruncateAll: iterate: %v", err)

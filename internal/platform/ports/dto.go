@@ -113,16 +113,18 @@ type BrowseMarketplaceResponse struct {
 	NextCursor string               `json:"next_cursor,omitzero"`
 }
 
-// PurchaseLeadRequest carries the agreed price. Credit charge is fixed at
-// 1 per lead (BRD §4.2); AmountPaisa is the forensic price field.
-type PurchaseLeadRequest struct {
-	AmountPaisa int64 `json:"amount_paisa"`
-}
+// PurchaseLeadRequest is the (empty) purchase body. The price is computed
+// server-side at purchase time (ADR 0065 dynamic pricing) — the client does
+// not propose an amount. Kept as a type for a stable request surface + future
+// fields (e.g. an idempotency key).
+type PurchaseLeadRequest struct{}
 
-// PurchaseLeadResponse — 201 body, purchase ID for CRM correlation.
+// PurchaseLeadResponse — 201 body. AmountPaisa is the computed price the buyer
+// was charged (snapshotted on the lead_purchases row).
 type PurchaseLeadResponse struct {
 	PurchaseID     string `json:"purchase_id"`
 	PlatformLeadID string `json:"platform_lead_id"`
+	AmountPaisa    int64  `json:"amount_paisa"`
 }
 
 // ----- LeadCredits ----------------------------------------------------------

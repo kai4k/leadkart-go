@@ -7,6 +7,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/leadkart/leadkart-go/internal/common/pagination"
@@ -58,7 +59,9 @@ func (r *PlatformLeadRepository) UpdateByID(
 ) error {
 	run := func(ctx context.Context, tx pgx.Tx) error {
 		q := r.q.WithTx(tx)
-		l, err := loadPlatformLead(ctx, q, id)
+		// Row-lock the lead + hydrate its buyer set so RecordPurchase's
+		// sale-limit count is race-free under concurrent purchases (ADR 0065).
+		l, err := loadPlatformLeadForUpdate(ctx, q, id)
 		if err != nil {
 			return err
 		}
@@ -70,6 +73,9 @@ func (r *PlatformLeadRepository) UpdateByID(
 			return nil
 		}
 		if err := updatePlatformLeadRow(ctx, q, l); err != nil {
+			return err
+		}
+		if err := insertPendingPurchases(ctx, q, l); err != nil {
 			return err
 		}
 		return drainPlatformLeadEventsToOutbox(ctx, tx, l)
@@ -153,7 +159,40 @@ func loadPlatformLead(ctx context.Context, q *db.Queries, id platformlead.ID) (*
 		}
 		return nil, fmt.Errorf("platform lead repo: get: %w", err)
 	}
-	return rowToPlatformLead(row), nil
+	// Plain reads don't hydrate the buyer set (availability is a query
+	// concern; the purchase path uses loadPlatformLeadForUpdate).
+	return rowToPlatformLead(row, nil), nil
+}
+
+// loadPlatformLeadForUpdate row-locks the lead and hydrates its buyer set so
+// RecordPurchase enforces the sale limit + no-double-buy race-free.
+func loadPlatformLeadForUpdate(ctx context.Context, q *db.Queries, id platformlead.ID) (*platformlead.PlatformLead, error) {
+	uid, err := uuid.Parse(id.String())
+	if err != nil {
+		return nil, fmt.Errorf("platform lead repo: parse id %q: %w", id, err)
+	}
+	row, err := q.GetPlatformLeadByIDForUpdate(ctx, pgconv.PgUUID(uid))
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, platformlead.ErrNotFound
+		}
+		return nil, fmt.Errorf("platform lead repo: get for update: %w", err)
+	}
+	buyerUUIDs, err := q.ListLeadPurchaseTenantIDs(ctx, pgconv.PgUUID(uid))
+	if err != nil {
+		return nil, fmt.Errorf("platform lead repo: list buyers: %w", err)
+	}
+	buyers := make([]platformlead.TenantID, 0, len(buyerUUIDs))
+	for _, b := range buyerUUIDs {
+		buyers = append(buyers, platformlead.TenantID(pgconv.UUIDFromPg(b).String()))
+	}
+	return rowToPlatformLead(forUpdateRowAsByIDRow(row), buyers), nil
+}
+
+// forUpdateRowAsByIDRow adapts the FOR UPDATE row to the shared mapper input
+// (identical column set, distinct sqlc type).
+func forUpdateRowAsByIDRow(r db.GetPlatformLeadByIDForUpdateRow) db.GetPlatformLeadByIDRow {
+	return db.GetPlatformLeadByIDRow(r)
 }
 
 func insertPlatformLeadRow(ctx context.Context, q *db.Queries, l *platformlead.PlatformLead) error {
@@ -173,10 +212,8 @@ func insertPlatformLeadRow(ctx context.Context, q *db.Queries, l *platformlead.P
 	err = q.InsertPlatformLead(ctx, db.InsertPlatformLeadParams{
 		ID:                     pgconv.PgUUID(id),
 		SourceContactID:        pgconv.PgUUID(srcID),
-		SoldToTenantID:         pgUUIDOptStr(l.SoldToTenantID().String()),
-		SoldAt:                 pgconv.PgTimestamp(l.SoldAt()),
-		SoldToMembershipID:     pgUUIDOptStr(l.SoldToMembershipID().String()),
-		AmountPaisa:            l.AmountPaisa(),
+		Tier:                   l.Tier().String(),
+		SaleLimit:              intPtrToInt32Ptr(l.SaleLimit()),
 		ContactName:            f.ContactName(),
 		MobileE164:             f.MobileE164(),
 		Email:                  f.Email(),
@@ -207,26 +244,73 @@ func insertPlatformLeadRow(ctx context.Context, q *db.Queries, l *platformlead.P
 	return nil
 }
 
+// updatePlatformLeadRow persists the only mutable column on the lead row,
+// gst_verified. A purchase is an INSERT into lead_purchases (see
+// insertPendingPurchases), not an update here.
 func updatePlatformLeadRow(ctx context.Context, q *db.Queries, l *platformlead.PlatformLead) error {
 	id, err := uuid.Parse(l.ID().String())
 	if err != nil {
 		return fmt.Errorf("platform lead repo: parse id: %w", err)
 	}
-	err = q.UpdatePlatformLead(ctx, db.UpdatePlatformLeadParams{
-		ID:                 pgconv.PgUUID(id),
-		SoldToTenantID:     pgUUIDOptStr(l.SoldToTenantID().String()),
-		SoldAt:             pgconv.PgTimestamp(l.SoldAt()),
-		SoldToMembershipID: pgUUIDOptStr(l.SoldToMembershipID().String()),
-		AmountPaisa:        l.AmountPaisa(),
-		GstVerified:        l.GstVerified(),
+	err = q.UpdatePlatformLeadGstVerified(ctx, db.UpdatePlatformLeadGstVerifiedParams{
+		ID:          pgconv.PgUUID(id),
+		GstVerified: l.GstVerified(),
 	})
 	if err != nil {
-		return fmt.Errorf("platform lead repo: update: %w", err)
+		return fmt.Errorf("platform lead repo: update gst_verified: %w", err)
 	}
 	return nil
 }
 
-func rowToPlatformLead(row db.PlatformPlatformLead) *platformlead.PlatformLead {
+// insertPendingPurchases drains the lead's recorded purchases and INSERTs each
+// lead_purchases row. A UNIQUE(lead_id, tenant_id) 23505 (a concurrent buyer
+// won the race) maps to [platformlead.ErrAlreadyPurchased].
+func insertPendingPurchases(ctx context.Context, q *db.Queries, l *platformlead.PlatformLead) error {
+	for _, p := range l.PullPendingPurchases() {
+		pid, err := uuid.Parse(p.ID())
+		if err != nil {
+			return fmt.Errorf("platform lead repo: parse purchase id: %w", err)
+		}
+		leadID, err := uuid.Parse(p.LeadID().String())
+		if err != nil {
+			return fmt.Errorf("platform lead repo: parse purchase lead id: %w", err)
+		}
+		tenantID, err := uuid.Parse(p.TenantID().String())
+		if err != nil {
+			return fmt.Errorf("platform lead repo: parse purchase tenant id: %w", err)
+		}
+		membershipID, err := uuid.Parse(p.MembershipID().String())
+		if err != nil {
+			return fmt.Errorf("platform lead repo: parse purchase membership id: %w", err)
+		}
+		err = q.InsertLeadPurchase(ctx, db.InsertLeadPurchaseParams{
+			ID:                    pgconv.PgUUID(pid),
+			LeadID:                pgconv.PgUUID(leadID),
+			TenantID:              pgconv.PgUUID(tenantID),
+			CreatedByMembershipID: pgconv.PgUUID(membershipID),
+			AmountPaisa:           p.AmountPaisa(),
+			PurchasedAt:           pgconv.PgRequiredTimestamp(p.PurchasedAt()),
+		})
+		if err != nil {
+			if isUniqueViolation(err) {
+				return platformlead.ErrAlreadyPurchased
+			}
+			return fmt.Errorf("platform lead repo: insert purchase: %w", err)
+		}
+	}
+	return nil
+}
+
+// isUniqueViolation reports whether err is a Postgres 23505 unique-violation.
+func isUniqueViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) {
+		return false
+	}
+	return pgErr.Code == pg.SQLStateUniqueViolation
+}
+
+func rowToPlatformLead(row db.GetPlatformLeadByIDRow, buyers []platformlead.TenantID) *platformlead.PlatformLead {
 	form := leadform.UnmarshalFromDB(leadform.Input{
 		ContactName:    row.ContactName,
 		MobileE164:     row.MobileE164,
@@ -253,14 +337,32 @@ func rowToPlatformLead(row db.PlatformPlatformLead) *platformlead.PlatformLead {
 		SourceContactID:        unverifiedcontact.ID(pgconv.UUIDFromPg(row.SourceContactID).String()),
 		Form:                   form,
 		GstVerified:            row.GstVerified,
-		SoldToTenantID:         platformlead.TenantID(uuidStringIfValid(row.SoldToTenantID)),
-		SoldAt:                 pgconv.TimeFromPg(row.SoldAt),
-		SoldToMembershipID:     unverifiedcontact.MembershipID(uuidStringIfValid(row.SoldToMembershipID)),
-		AmountPaisa:            row.AmountPaisa,
+		Tier:                   platformlead.Tier(row.Tier),
+		SaleLimit:              int32PtrToIntPtr(row.SaleLimit),
+		BuyerTenantIDs:         buyers,
 		VerifiedAt:             pgconv.TimeFromPg(row.VerifiedAt),
 		VerifiedByMembershipID: unverifiedcontact.MembershipID(pgconv.UUIDFromPg(row.VerifiedByMembershipID).String()),
 		CreatedAt:              pgconv.TimeFromPg(row.CreatedAt),
 	})
+}
+
+// int32PtrToIntPtr / intPtrToInt32Ptr bridge the sqlc nullable column type
+// (*int32) and the domain's platform-agnostic *int for the sale_limit override.
+func int32PtrToIntPtr(v *int32) *int {
+	if v == nil {
+		return nil
+	}
+	n := int(*v)
+	return &n
+}
+
+func intPtrToInt32Ptr(v *int) *int32 {
+	if v == nil {
+		return nil
+	}
+	//nolint:gosec // sale_limit is a small positive bound, never overflows int32.
+	n := int32(*v)
+	return &n
 }
 
 func drainPlatformLeadEventsToOutbox(ctx context.Context, tx pgx.Tx, l *platformlead.PlatformLead) error {
@@ -303,10 +405,8 @@ func marketplaceRowToPlatformLead(row db.MarketplaceBrowseRow) *platformlead.Pla
 		SourceContactID:        unverifiedcontact.ID(pgconv.UUIDFromPg(row.SourceContactID).String()),
 		Form:                   form,
 		GstVerified:            row.GstVerified,
-		SoldToTenantID:         platformlead.TenantID(uuidStringIfValid(row.SoldToTenantID)),
-		SoldAt:                 pgconv.TimeFromPg(row.SoldAt),
-		SoldToMembershipID:     unverifiedcontact.MembershipID(uuidStringIfValid(row.SoldToMembershipID)),
-		AmountPaisa:            row.AmountPaisa,
+		Tier:                   platformlead.Tier(row.Tier),
+		SaleLimit:              int32PtrToIntPtr(row.SaleLimit),
 		VerifiedAt:             pgconv.TimeFromPg(row.VerifiedAt),
 		VerifiedByMembershipID: unverifiedcontact.MembershipID(pgconv.UUIDFromPg(row.VerifiedByMembershipID).String()),
 		CreatedAt:              pgconv.TimeFromPg(row.CreatedAt),

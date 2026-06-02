@@ -3,6 +3,7 @@ package ports
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -404,14 +405,10 @@ func handlePurchaseLead(log *slog.Logger, a app.Application) http.Handler {
 		if !ok {
 			return
 		}
+		// Body is optional/empty — price is computed server-side (ADR 0065).
 		var req PurchaseLeadRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
 			writeError(w, http.StatusBadRequest, ErrCodeInvalidBody, "request body is not valid JSON")
-			return
-		}
-		if req.AmountPaisa <= 0 {
-			writeError(w, http.StatusUnprocessableEntity, ErrCodeInvalidPurchaseAmount,
-				"amount_paisa must be positive")
 			return
 		}
 		c, ok := authn.ClaimsFromContext(r.Context())
@@ -425,18 +422,21 @@ func handlePurchaseLead(log *slog.Logger, a app.Application) http.Handler {
 			return
 		}
 
+		_ = req // body currently carries no fields; price is server-computed
 		out, err := a.Commands.PurchaseLead.Handle(r.Context(), command.PurchaseLeadCommand{
 			PlatformLeadID:         platformlead.ID(leadID),
 			PurchasingTenantID:     platformlead.TenantID(c.TenantID),
 			PurchasingMembershipID: unverifiedcontact.MembershipID(membershipID),
-			AmountPaisa:            req.AmountPaisa,
 		})
 		switch {
 		case errors.Is(err, command.ErrLeadNotFound):
 			writeError(w, http.StatusNotFound, ErrCodeLeadNotFound, "")
 			return
-		case errors.Is(err, command.ErrLeadAlreadySold):
-			writeError(w, http.StatusConflict, ErrCodeLeadAlreadySold, "")
+		case errors.Is(err, command.ErrLeadSoldOut):
+			writeError(w, http.StatusConflict, ErrCodeLeadSoldOut, "lead has reached its sale limit")
+			return
+		case errors.Is(err, command.ErrLeadAlreadyPurchased):
+			writeError(w, http.StatusConflict, ErrCodeLeadAlreadyPurchased, "tenant already purchased this lead")
 			return
 		case errors.Is(err, command.ErrInsufficientCredits):
 			writeError(w, http.StatusUnprocessableEntity, ErrCodeInsufficientCredits,
@@ -454,6 +454,7 @@ func handlePurchaseLead(log *slog.Logger, a app.Application) http.Handler {
 		writeJSON(w, http.StatusCreated, PurchaseLeadResponse{
 			PurchaseID:     out.PurchaseID,
 			PlatformLeadID: leadID,
+			AmountPaisa:    out.AmountPaisa,
 		})
 	})
 }

@@ -399,14 +399,28 @@ type PlatformLeadCredit struct {
 	UpdatedAt pgtype.Timestamptz
 }
 
-// Verified leads in the marketplace. RLS: unsold rows openly browsable; sold rows visible only to purchaser + platform. Per ADR 0059.
+// One row per (lead, buyer tenant). amount_paisa = price this buyer paid (snapshot). UNIQUE(lead_id, tenant_id) blocks a double-buy. Per ADR 0065.
+type PlatformLeadPurchase struct {
+	ID                    pgtype.UUID
+	LeadID                pgtype.UUID
+	TenantID              pgtype.UUID
+	CreatedByMembershipID pgtype.UUID
+	AmountPaisa           int64
+	PurchasedAt           pgtype.Timestamptz
+}
+
+// Per-tier marketplace config: default sale limit + base price. Readable by all (tier pricing display); writes platform-only. Per ADR 0065.
+type PlatformLeadTier struct {
+	Code             string
+	DefaultSaleLimit int32
+	BasePricePaisa   int64
+	CreatedAt        pgtype.Timestamptz
+}
+
+// Verified leads in the marketplace, resold to multiple tenants up to a sale limit (ADR 0065). RLS: platform, or you hold a lead_purchases row, or the lead is still openly listed (purchases < effective sale limit).
 type PlatformPlatformLead struct {
 	ID                     pgtype.UUID
 	SourceContactID        pgtype.UUID
-	SoldToTenantID         pgtype.UUID
-	SoldAt                 pgtype.Timestamptz
-	SoldToMembershipID     pgtype.UUID
-	AmountPaisa            int64
 	ContactName            string
 	MobileE164             string
 	Email                  string
@@ -430,6 +444,8 @@ type PlatformPlatformLead struct {
 	VerifiedAt             pgtype.Timestamptz
 	VerifiedByMembershipID pgtype.UUID
 	CreatedAt              pgtype.Timestamptz
+	Tier                   string
+	SaleLimit              *int32
 }
 
 // Lead Agent work queue. Platform-only (no tenant). State machine: new → in_call → verified | rejected | busy. On verified, a platform_leads row is created in the same tx.

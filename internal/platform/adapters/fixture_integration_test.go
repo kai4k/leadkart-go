@@ -41,6 +41,9 @@ func TestMain(m *testing.M) {
 		Schemas: []string{"identity", "platform"},
 		// DML on these.
 		Grants: []string{"identity", "platform"},
+		// Migration-seeded marketplace tier config — availability checks
+		// depend on its rows; TruncateAll must not wipe it (ADR 0065).
+		PreserveTables: []string{"platform.lead_tiers"},
 	}, func(c *pgtest.Container) {
 		sharedPG = c
 	})

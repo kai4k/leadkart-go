@@ -16,13 +16,20 @@ package adapters_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
+
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/leadkart/leadkart-go/internal/common/ids"
 	"github.com/leadkart/leadkart-go/internal/common/pagination"
 	"github.com/leadkart/leadkart-go/internal/common/pg"
+	"github.com/leadkart/leadkart-go/internal/common/pgconv"
 	"github.com/leadkart/leadkart-go/internal/platform/adapters"
+	"github.com/leadkart/leadkart-go/internal/platform/adapters/db"
 	"github.com/leadkart/leadkart-go/internal/platform/domain/platformlead"
 	"github.com/leadkart/leadkart-go/internal/platform/domain/unverifiedcontact"
 )
@@ -110,5 +117,94 @@ func TestPlatformLeadRepository_MarketplaceBrowse_OmitsPII(t *testing.T) {
 	}
 	if row.Form().City() != "Pune" {
 		t.Errorf("City: got %q want Pune", row.Form().City())
+	}
+}
+
+// TestPlatformLeadRepository_Purchase_PersistsAndHydratesBuyer exercises the
+// multi-buyer purchase path end-to-end (ADR 0065): UpdateByID locks the lead,
+// RecordPurchase appends a buyer, the adapter INSERTs the lead_purchases row,
+// and a subsequent load re-hydrates the buyer set from the DB so the
+// no-double-buy guard fires.
+func TestPlatformLeadRepository_Purchase_PersistsAndHydratesBuyer(t *testing.T) {
+	// arch-test:no-parallel — uses TruncateAll
+	sharedPG.TruncateAll(t)
+	pool := platformPool(t)
+	tx := pg.NewTransactor(pool)
+	repo := adapters.NewPlatformLeadRepository(pool, tx)
+	contactRepo := adapters.NewUnverifiedContactRepository(pool, tx)
+	leadID := seedPlatformLead(t, repo, contactRepo, tx)
+
+	tenantA := platformlead.TenantID(ids.NewV7().String())
+	memberA := unverifiedcontact.MembershipID(ids.NewV7().String())
+	purchaseID := ids.NewV7().String()
+
+	err := repo.UpdateByID(t.Context(), leadID, func(l *platformlead.PlatformLead) (bool, error) {
+		return true, l.RecordPurchase(purchaseID, tenantA, memberA, 50000, 6, nowUTC())
+	})
+	if err != nil {
+		t.Fatalf("purchase: %v", err)
+	}
+
+	// Reload (FOR UPDATE hydrates the buyer set): the buyer must persist.
+	err = repo.UpdateByID(t.Context(), leadID, func(l *platformlead.PlatformLead) (bool, error) {
+		if !l.HasBuyer(tenantA) {
+			t.Errorf("buyer not hydrated from lead_purchases")
+		}
+		if l.PurchaseCount() != 1 {
+			t.Errorf("PurchaseCount = %d, want 1", l.PurchaseCount())
+		}
+		return false, nil
+	})
+	if err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+
+	// Double-buy by the same tenant is rejected by the in-memory guard.
+	err = repo.UpdateByID(t.Context(), leadID, func(l *platformlead.PlatformLead) (bool, error) {
+		return true, l.RecordPurchase(ids.NewV7().String(), tenantA, memberA, 50000, 6, nowUTC())
+	})
+	if !errors.Is(err, platformlead.ErrAlreadyPurchased) {
+		t.Fatalf("expected ErrAlreadyPurchased, got %v", err)
+	}
+}
+
+// TestPlatformLeadRepository_DuplicatePurchase_UniqueViolation validates the
+// UNIQUE(lead_id, tenant_id) constraint backstop (ADR 0065): two inserts for
+// the same (lead, tenant) raise SQLSTATE 23505 — the race-condition guard the
+// adapter translates to ErrAlreadyPurchased when the in-memory check is stale.
+func TestPlatformLeadRepository_DuplicatePurchase_UniqueViolation(t *testing.T) {
+	// arch-test:no-parallel — uses TruncateAll
+	sharedPG.TruncateAll(t)
+	pool := platformPool(t)
+	tx := pg.NewTransactor(pool)
+	repo := adapters.NewPlatformLeadRepository(pool, tx)
+	contactRepo := adapters.NewUnverifiedContactRepository(pool, tx)
+	leadID := seedPlatformLead(t, repo, contactRepo, tx)
+
+	leadUUID, _ := uuid.Parse(leadID.String())
+	tenantUUID := uuid.New()
+	q := db.New(pool)
+
+	err := tx.WithinTxPgx(t.Context(), pg.TxScopePlatform, func(ctx context.Context, pgxTx pgx.Tx) error {
+		qq := q.WithTx(pgxTx)
+		row := func(amount int64) db.InsertLeadPurchaseParams {
+			return db.InsertLeadPurchaseParams{
+				ID:                    pgconv.PgUUID(uuid.New()),
+				LeadID:                pgconv.PgUUID(leadUUID),
+				TenantID:              pgconv.PgUUID(tenantUUID),
+				CreatedByMembershipID: pgconv.PgUUID(uuid.New()),
+				AmountPaisa:           amount,
+				PurchasedAt:           pgconv.PgRequiredTimestamp(nowUTC()),
+			}
+		}
+		if e := qq.InsertLeadPurchase(ctx, row(50000)); e != nil {
+			return e
+		}
+		return qq.InsertLeadPurchase(ctx, row(60000)) // same (lead, tenant) → 23505
+	})
+
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) || pgErr.Code != pg.SQLStateUniqueViolation {
+		t.Fatalf("expected 23505 unique violation, got %v", err)
 	}
 }

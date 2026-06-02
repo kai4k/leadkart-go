@@ -11,6 +11,7 @@ package command
 import (
 	"context"
 
+	"github.com/leadkart/leadkart-go/internal/platform/domain/platformlead"
 	"github.com/leadkart/leadkart-go/internal/platform/integrationevents"
 )
 
@@ -24,4 +25,11 @@ type OutboxEnqueuer interface {
 	// UoW tx (from ctx via [pg.TxFromContext]). Errors if no tx is
 	// active — call only from within a UoW.WithinTx closure.
 	EnqueueInTx(ctx context.Context, events ...integrationevents.Event) error
+}
+
+// TierReader resolves the per-tier marketplace config (default sale limit +
+// base price) from platform.lead_tiers. The PurchaseLead handler feeds it into
+// dynamic pricing + the sale-limit invariant (ADR 0065).
+type TierReader interface {
+	GetTier(ctx context.Context, tier platformlead.Tier) (platformlead.TierConfig, error)
 }

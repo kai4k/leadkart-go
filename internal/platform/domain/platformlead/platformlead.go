@@ -24,9 +24,49 @@ import (
 // ErrInvalid is the sentinel for invariant violations.
 var ErrInvalid = errors.New("platformlead: invalid")
 
-// ErrAlreadySold is returned when [Purchase] hits a lead already sold to a
-// different tenant. Handler maps to HTTP 409.
-var ErrAlreadySold = errors.New("platformlead: already sold")
+// ErrAlreadyPurchased is returned by [RecordPurchase] when the buying tenant
+// already holds a purchase row for this lead (no double-buy). Handler maps to
+// HTTP 409. Mirrors the UNIQUE(lead_id, tenant_id) 23505 the adapter
+// translates.
+var ErrAlreadyPurchased = errors.New("platformlead: already purchased by tenant")
+
+// ErrSoldOut is returned by [RecordPurchase] when the lead's purchase count
+// has reached its effective sale limit. Handler maps to HTTP 409.
+var ErrSoldOut = errors.New("platformlead: sold out (sale limit reached)")
+
+// Tier is the marketplace pricing/eligibility band of a lead (ADR 0065). The
+// per-tier default sale limit + base price live in the platform.lead_tiers
+// config table; tenant-eligibility enforcement is deferred.
+type Tier string
+
+// Tier values — the closed set mirrored by the lead_tiers CHECK constraint.
+const (
+	TierStandard Tier = "standard"
+	TierPriority Tier = "priority"
+	TierPremium  Tier = "premium"
+)
+
+// IsValid reports whether t is one of the known tiers.
+func (t Tier) IsValid() bool {
+	switch t {
+	case TierStandard, TierPriority, TierPremium:
+		return true
+	default:
+		return false
+	}
+}
+
+// String returns the underlying tier code.
+func (t Tier) String() string { return string(t) }
+
+// TierConfig is the per-tier marketplace config loaded from
+// platform.lead_tiers — the default sale limit + base price the
+// PurchaseLead handler feeds into pricing + the limit invariant.
+type TierConfig struct {
+	Code             Tier
+	DefaultSaleLimit int
+	BasePricePaisa   int64
+}
 
 // ID is the lead primary key (UUIDv7 string).
 type ID string
@@ -46,22 +86,55 @@ func (t TenantID) IsZero() bool { return t == "" }
 // String returns the underlying UUID string.
 func (t TenantID) String() string { return string(t) }
 
-// PlatformLead is the aggregate root.
+// PlatformLead is the aggregate root. A verified lead is inventory resold to
+// several tenants up to a sale limit (ADR 0065) — not a one-off sale. The
+// buyers slice is the consistency boundary for the sale-limit + no-double-buy
+// invariants enforced by [RecordPurchase].
 type PlatformLead struct {
 	id                     ID
 	sourceContactID        unverifiedcontact.ID
 	form                   leadform.Form
-	gstVerified            bool      // BRD §4.3 filter; set by external GST API in Phase 2
-	soldToTenantID         TenantID  // empty until sold
-	soldAt                 time.Time // zero until sold
-	soldToMembershipID     unverifiedcontact.MembershipID
-	amountPaisa            int64 // 0 until sold
+	gstVerified            bool       // BRD §4.3 filter; set by external GST API in Phase 2
+	tier                   Tier       // pricing/eligibility band (ADR 0065)
+	saleLimit              *int       // per-lead override; nil = use tier default
+	buyers                 []TenantID // tenants that already hold a purchase row
 	verifiedAt             time.Time
 	verifiedByMembershipID unverifiedcontact.MembershipID
 	createdAt              time.Time
 
-	events []Event
+	pendingPurchases []*LeadPurchase // recorded this session; drained by the repo
+	events           []Event
 }
+
+// LeadPurchase is one buyer's purchase row (ADR 0065). Immutable record of
+// what that tenant was charged. Created by [RecordPurchase]; persisted by the
+// repository, which drains [PlatformLead.PullPendingPurchases].
+type LeadPurchase struct {
+	id           string
+	leadID       ID
+	tenantID     TenantID
+	membershipID unverifiedcontact.MembershipID
+	amountPaisa  int64
+	purchasedAt  time.Time
+}
+
+// ID returns the purchase primary key (UUIDv7 string).
+func (p *LeadPurchase) ID() string { return p.id }
+
+// LeadID returns the parent lead.
+func (p *LeadPurchase) LeadID() ID { return p.leadID }
+
+// TenantID returns the buyer tenant.
+func (p *LeadPurchase) TenantID() TenantID { return p.tenantID }
+
+// MembershipID returns the buying member.
+func (p *LeadPurchase) MembershipID() unverifiedcontact.MembershipID { return p.membershipID }
+
+// AmountPaisa returns the price this buyer was charged.
+func (p *LeadPurchase) AmountPaisa() int64 { return p.amountPaisa }
+
+// PurchasedAt returns the purchase timestamp.
+func (p *LeadPurchase) PurchasedAt() time.Time { return p.purchasedAt }
 
 // NewFromUnverifiedContact constructs a PlatformLead from a freshly-verified
 // contact's snapshot and the verifying agent's membership. Called in the
@@ -92,6 +165,7 @@ func NewFromUnverifiedContact(
 		id:                     id,
 		sourceContactID:        sourceContactID,
 		form:                   form,
+		tier:                   TierStandard, // default band; eligibility/tier assignment deferred (ADR 0065)
 		verifiedAt:             now,
 		verifiedByMembershipID: verifiedBy,
 		createdAt:              now,
@@ -119,15 +193,17 @@ func validateUUID(name, val string) error {
 }
 
 // Snapshot is the persistence-layer DTO consumed by [UnmarshalFromDB].
+// BuyerTenantIDs is hydrated only on the purchase path (the repo loads the
+// buyer set under a row lock so RecordPurchase enforces the sale limit
+// race-free); plain reads/browse leave it nil.
 type Snapshot struct {
 	ID                     ID
 	SourceContactID        unverifiedcontact.ID
 	Form                   leadform.Form
 	GstVerified            bool
-	SoldToTenantID         TenantID
-	SoldAt                 time.Time
-	SoldToMembershipID     unverifiedcontact.MembershipID
-	AmountPaisa            int64
+	Tier                   Tier
+	SaleLimit              *int
+	BuyerTenantIDs         []TenantID
 	VerifiedAt             time.Time
 	VerifiedByMembershipID unverifiedcontact.MembershipID
 	CreatedAt              time.Time
@@ -140,10 +216,9 @@ func UnmarshalFromDB(s Snapshot) *PlatformLead {
 		sourceContactID:        s.SourceContactID,
 		form:                   s.Form,
 		gstVerified:            s.GstVerified,
-		soldToTenantID:         s.SoldToTenantID,
-		soldAt:                 s.SoldAt,
-		soldToMembershipID:     s.SoldToMembershipID,
-		amountPaisa:            s.AmountPaisa,
+		tier:                   s.Tier,
+		saleLimit:              s.SaleLimit,
+		buyers:                 s.BuyerTenantIDs,
 		verifiedAt:             s.VerifiedAt,
 		verifiedByMembershipID: s.VerifiedByMembershipID,
 		createdAt:              s.CreatedAt,
@@ -165,22 +240,53 @@ func (l *PlatformLead) Form() leadform.Form { return l.form }
 // in Slice 1 (Phase 2 enhancement).
 func (l *PlatformLead) GstVerified() bool { return l.gstVerified }
 
-// IsAvailable reports whether the lead is unsold (marketplace-visible).
-func (l *PlatformLead) IsAvailable() bool { return l.soldToTenantID.IsZero() }
+// Tier returns the lead's marketplace tier.
+func (l *PlatformLead) Tier() Tier { return l.tier }
 
-// SoldToTenantID returns the purchasing tenant; zero if unsold.
-func (l *PlatformLead) SoldToTenantID() TenantID { return l.soldToTenantID }
+// SaleLimit returns the per-lead sale-limit override, or nil when the lead
+// falls back to its tier's default limit.
+func (l *PlatformLead) SaleLimit() *int { return l.saleLimit }
 
-// SoldAt returns the purchase timestamp; zero if unsold.
-func (l *PlatformLead) SoldAt() time.Time { return l.soldAt }
+// PurchaseCount returns how many tenants have bought this lead (the loaded
+// buyer set). Meaningful only when the aggregate was hydrated with buyers
+// (the purchase path); plain reads return 0.
+func (l *PlatformLead) PurchaseCount() int { return len(l.buyers) }
 
-// SoldToMembershipID returns the purchasing member; zero if unsold.
-func (l *PlatformLead) SoldToMembershipID() unverifiedcontact.MembershipID {
-	return l.soldToMembershipID
+// EffectiveSaleLimit resolves the sale limit: the per-lead override if set,
+// else the supplied tier default (coalesce, per ADR 0065).
+func (l *PlatformLead) EffectiveSaleLimit(tierDefaultLimit int) int {
+	if l.saleLimit != nil {
+		return *l.saleLimit
+	}
+	return tierDefaultLimit
 }
 
-// AmountPaisa returns the price paid in INR paise; zero if unsold.
-func (l *PlatformLead) AmountPaisa() int64 { return l.amountPaisa }
+// IsAvailable reports whether the lead is still openly listed given the
+// supplied tier default limit (purchase count below the effective limit).
+func (l *PlatformLead) IsAvailable(tierDefaultLimit int) bool {
+	return l.PurchaseCount() < l.EffectiveSaleLimit(tierDefaultLimit)
+}
+
+// BuyerTenantIDs returns a copy of the loaded buyer set (the tenants that
+// already hold a purchase row). Used by test fakes to deep-copy state.
+func (l *PlatformLead) BuyerTenantIDs() []TenantID {
+	if len(l.buyers) == 0 {
+		return nil
+	}
+	out := make([]TenantID, len(l.buyers))
+	copy(out, l.buyers)
+	return out
+}
+
+// HasBuyer reports whether the given tenant already holds a purchase row.
+func (l *PlatformLead) HasBuyer(tenantID TenantID) bool {
+	for _, b := range l.buyers {
+		if b == tenantID {
+			return true
+		}
+	}
+	return false
+}
 
 // VerifiedAt returns the verification timestamp.
 func (l *PlatformLead) VerifiedAt() time.Time { return l.verifiedAt }
@@ -196,43 +302,76 @@ func (l *PlatformLead) CreatedAt() time.Time { return l.createdAt }
 
 // ----- State transitions ----------------------------------------------------
 
-// Purchase transitions an Available lead to Sold. amountPaisa is recorded
-// for audit only; the LeadCredit balance debit happens on a sibling
-// aggregate in the same UoW tx. Returns [ErrAlreadySold] on a sold lead.
-func (l *PlatformLead) Purchase(
+// RecordPurchase adds one buyer to the lead (ADR 0065 multi-buyer). It
+// enforces the two invariants that make this the lead's consistency boundary:
+// no-double-buy (the tenant must not already hold a purchase row) and the
+// sale limit (purchase count must stay below the effective limit). The
+// caller supplies the resolved purchase price (amountPaisa, computed by the
+// pricing service) and the tier's default sale limit (for the coalesce).
+//
+// The new LeadPurchase is appended to pendingPurchases for the repository to
+// INSERT; the LeadCredit debit happens on a sibling aggregate in the same UoW
+// tx. The buyer set must have been hydrated under a row lock (the repo's
+// UpdateByID locks the lead) so the count check is race-free.
+func (l *PlatformLead) RecordPurchase(
+	purchaseID string,
 	tenantID TenantID,
 	purchasingMembershipID unverifiedcontact.MembershipID,
 	amountPaisa int64,
+	tierDefaultLimit int,
 	now time.Time,
 ) error {
-	if tenantID.IsZero() {
-		return fmt.Errorf("%w: tenantID required", ErrInvalid)
+	if err := validateUUID("purchaseID", purchaseID); err != nil {
+		return err
 	}
-	if purchasingMembershipID.IsZero() {
-		return fmt.Errorf("%w: purchasingMembershipID required", ErrInvalid)
+	if err := validateUUID("tenantID", tenantID.String()); err != nil {
+		return err
+	}
+	if err := validateUUID("purchasingMembershipID", purchasingMembershipID.String()); err != nil {
+		return err
 	}
 	if amountPaisa <= 0 {
 		return fmt.Errorf("%w: amountPaisa must be positive (got %d)", ErrInvalid, amountPaisa)
 	}
-	if !l.soldToTenantID.IsZero() {
-		// Idempotent retry: same tenant + same price is a no-op.
-		if l.soldToTenantID == tenantID && l.amountPaisa == amountPaisa {
-			return nil
-		}
-		return ErrAlreadySold
+	if tierDefaultLimit <= 0 {
+		return fmt.Errorf("%w: tierDefaultLimit must be positive (got %d)", ErrInvalid, tierDefaultLimit)
 	}
-	l.soldToTenantID = tenantID
-	l.soldAt = now
-	l.soldToMembershipID = purchasingMembershipID
-	l.amountPaisa = amountPaisa
+	if l.HasBuyer(tenantID) {
+		return ErrAlreadyPurchased
+	}
+	if l.PurchaseCount() >= l.EffectiveSaleLimit(tierDefaultLimit) {
+		return ErrSoldOut
+	}
+	lp := &LeadPurchase{
+		id:           purchaseID,
+		leadID:       l.id,
+		tenantID:     tenantID,
+		membershipID: purchasingMembershipID,
+		amountPaisa:  amountPaisa,
+		purchasedAt:  now,
+	}
+	l.buyers = append(l.buyers, tenantID)
+	l.pendingPurchases = append(l.pendingPurchases, lp)
 	l.recordEvent(PurchasedEvent{
 		PlatformLeadID:          l.id,
+		PurchaseID:              purchaseID,
 		TenantID:                tenantID,
 		PurchasedAt:             now,
 		PurchasedByMembershipID: purchasingMembershipID,
 		AmountPaisa:             amountPaisa,
 	})
 	return nil
+}
+
+// PullPendingPurchases drains the purchases recorded this session so the
+// repository can INSERT them. Mirrors PullEvents.
+func (l *PlatformLead) PullPendingPurchases() []*LeadPurchase {
+	if len(l.pendingPurchases) == 0 {
+		return nil
+	}
+	out := l.pendingPurchases
+	l.pendingPurchases = nil
+	return out
 }
 
 // ----- Events --------------------------------------------------------------
@@ -263,9 +402,12 @@ type VerifiedEvent struct {
 
 func (VerifiedEvent) isPlatformLeadEvent() {}
 
-// PurchasedEvent fires on the Available → Sold transition.
+// PurchasedEvent fires on each [RecordPurchase] (one per buyer). Suppressed
+// by the integration-event mapper — the handler emits LeadPurchasedV1
+// directly with the lead snapshot (ADR 0065 per-purchase event).
 type PurchasedEvent struct {
 	PlatformLeadID          ID
+	PurchaseID              string
 	TenantID                TenantID
 	PurchasedAt             time.Time
 	PurchasedByMembershipID unverifiedcontact.MembershipID

@@ -14,40 +14,47 @@ import (
 	"github.com/leadkart/leadkart-go/internal/platform/integrationevents"
 )
 
-// PurchaseLeadCommand is the tenant "buy this lead" input. AmountPaisa
-// is the price in INR paise (never float); Slice 1 charges 1 credit per
-// lead, so AmountPaisa is forensic + future price-tier headroom.
+// PurchaseLeadCommand is the tenant "buy this lead" input. The price is
+// computed server-side at purchase time (ADR 0065 dynamic pricing) — the
+// client does not propose an amount.
 type PurchaseLeadCommand struct {
 	PlatformLeadID         platformlead.ID
 	PurchasingTenantID     platformlead.TenantID
 	PurchasingMembershipID unverifiedcontact.MembershipID
-	AmountPaisa            int64
 }
 
 // PurchaseLeadResult holds the purchase ID — the UUID that also rides
 // LeadPurchasedV1.PurchaseID for downstream correlation (CRM's
-// LeadPurchasedV1 → CrmLead projection).
+// LeadPurchasedV1 → CrmLead projection) — plus the amount the buyer was
+// charged (computed price, snapshotted on the lead_purchases row).
 type PurchaseLeadResult struct {
-	PurchaseID string // UUIDv7
+	PurchaseID  string // UUIDv7
+	AmountPaisa int64  // computed price the buyer paid
 }
 
 // ErrLeadNotFound signals an unknown cmd.PlatformLeadID.
 var ErrLeadNotFound = errors.New("purchase lead: lead not found")
 
-// ErrLeadAlreadySold signals the lead is sold to another tenant; HTTP maps to 409.
-var ErrLeadAlreadySold = errors.New("purchase lead: lead already sold")
+// ErrLeadSoldOut signals the lead has reached its sale limit; HTTP maps to 409.
+var ErrLeadSoldOut = errors.New("purchase lead: lead sold out")
+
+// ErrLeadAlreadyPurchased signals the buying tenant already owns this lead;
+// HTTP maps to 409.
+var ErrLeadAlreadyPurchased = errors.New("purchase lead: already purchased by tenant")
 
 // ErrInsufficientCredits signals a balance below the charge; HTTP maps to 422.
 var ErrInsufficientCredits = errors.New("purchase lead: insufficient credits")
 
 // PurchaseLeadHandler runs the marketplace-purchase flow in one
-// TxScopePlatform tx: charge the buyer's LeadCredit row, mark the
-// PlatformLead sold, then enqueue LeadPurchasedV1. ErrConflict on the
-// credit row retries up to 3 times with jitter (ADR 0059).
+// TxScopePlatform tx: charge the buyer's LeadCredit row, record a
+// PlatformLead purchase (under a row lock so the sale limit is race-free),
+// then enqueue LeadPurchasedV1. ErrConflict on the credit row retries up to
+// 3 times with jitter (ADR 0059 + 0065).
 type PurchaseLeadHandler struct {
 	uow           pg.UnitOfWork
 	leads         platformlead.Repository
 	credits       leadcredit.Repository
+	tiers         TierReader
 	outboxEnq     OutboxEnqueuer
 	now           func() time.Time
 	newPurchaseID func() string
@@ -61,10 +68,14 @@ func NewPurchaseLeadHandler(
 	uow pg.UnitOfWork,
 	leads platformlead.Repository,
 	credits leadcredit.Repository,
+	tiers TierReader,
 	outboxEnq OutboxEnqueuer,
 	now func() time.Time,
 	newPurchaseID func() string,
 ) PurchaseLeadHandler {
+	if tiers == nil {
+		panic("command: NewPurchaseLeadHandler tiers reader required")
+	}
 	if newPurchaseID == nil {
 		panic("command: NewPurchaseLeadHandler newPurchaseID required")
 	}
@@ -72,14 +83,20 @@ func NewPurchaseLeadHandler(
 		now = time.Now
 	}
 	return PurchaseLeadHandler{
-		uow: uow, leads: leads, credits: credits, outboxEnq: outboxEnq,
+		uow: uow, leads: leads, credits: credits, tiers: tiers, outboxEnq: outboxEnq,
 		now: now, newPurchaseID: newPurchaseID,
 	}
 }
 
-// purchaseChargeCredits is the per-lead cost in Slice 1 (BRD §4.2: one
-// credit per purchase). Future slices may vary it by price band.
+// purchaseChargeCredits is the per-lead cost (BRD §4.2: one credit per
+// purchase). The credit debit is flat; the money price (amount_paisa) is the
+// dynamic, tier-based value recorded on the purchase row.
 const purchaseChargeCredits int64 = 1
+
+// purchasePackageDiscountBps is the buyer's subscription-package discount in
+// basis points. Zero until the tenant subscription/package concept lands
+// (ADR 0065 — the pricing hook is wired, the input defaults to 0).
+const purchasePackageDiscountBps = 0
 
 // purchaseMaxRetries caps the optimistic-concurrency retries on the
 // LeadCredit row (ADR 0059).
@@ -94,16 +111,13 @@ func (h PurchaseLeadHandler) Handle(
 	ctx context.Context,
 	cmd PurchaseLeadCommand,
 ) (PurchaseLeadResult, error) {
-	if cmd.AmountPaisa <= 0 {
-		return PurchaseLeadResult{}, errors.New("purchase lead: amount must be positive")
-	}
 	purchaseID := h.newPurchaseID()
 
 	var lastErr error
 	for attempt := range purchaseMaxRetries {
-		err := h.runOnce(ctx, cmd, purchaseID)
+		amountPaisa, err := h.runOnce(ctx, cmd, purchaseID)
 		if err == nil {
-			return PurchaseLeadResult{PurchaseID: purchaseID}, nil
+			return PurchaseLeadResult{PurchaseID: purchaseID, AmountPaisa: amountPaisa}, nil
 		}
 		// ErrConflict is the only retryable shape.
 		if !errors.Is(err, leadcredit.ErrConflict) {
@@ -150,17 +164,19 @@ func sleepJitter(ctx context.Context, max time.Duration) error {
 	}
 }
 
-// runOnce is one purchase attempt, split out to keep Handle's retry
-// loop readable.
+// runOnce is one purchase attempt, split out to keep Handle's retry loop
+// readable. Returns the computed price charged on success.
 func (h PurchaseLeadHandler) runOnce(
 	ctx context.Context,
 	cmd PurchaseLeadCommand,
 	purchaseID string,
-) error {
+) (int64, error) {
 	now := h.now()
-	return h.uow.WithinTx(ctx, pg.TxScopePlatform, func(ctx context.Context) error {
-		// Charge first: never mark the lead sold before the debit
-		// succeeds, so a failed payment leaves the lead available.
+	var chargedPaisa int64
+	err := h.uow.WithinTx(ctx, pg.TxScopePlatform, func(ctx context.Context) error {
+		// Charge first: never record the purchase before the debit succeeds,
+		// so a failed payment leaves the lead available. The credit cost is a
+		// flat 1 (BRD §4.2); the money price is computed below.
 		credit, err := h.credits.GetByTenant(ctx, leadcredit.TenantID(cmd.PurchasingTenantID.String()))
 		if err != nil {
 			if errors.Is(err, leadcredit.ErrNotFound) {
@@ -185,24 +201,48 @@ func (h PurchaseLeadHandler) runOnce(
 			return err // bubble ErrConflict so the outer loop retries
 		}
 
-		// Mark the lead sold. The mechanical mapper suppresses the
-		// PurchasedEvent so we emit LeadPurchasedV1 directly below.
-		err = h.leads.UpdateByID(ctx, cmd.PlatformLeadID, func(l *platformlead.PlatformLead) (bool, error) {
-			return true, l.Purchase(
-				cmd.PurchasingTenantID,
-				cmd.PurchasingMembershipID,
-				cmd.AmountPaisa,
-				now,
-			)
-		})
+		// Resolve the lead's tier config (base price + default sale limit)
+		// for pricing + the limit invariant.
+		lead0, err := h.leads.GetByID(ctx, cmd.PlatformLeadID)
 		if err != nil {
 			if errors.Is(err, platformlead.ErrNotFound) {
 				return ErrLeadNotFound
 			}
-			if errors.Is(err, platformlead.ErrAlreadySold) {
-				return ErrLeadAlreadySold
+			return fmt.Errorf("load lead: %w", err)
+		}
+		tierCfg, err := h.tiers.GetTier(ctx, lead0.Tier())
+		if err != nil {
+			return fmt.Errorf("resolve tier %q: %w", lead0.Tier(), err)
+		}
+
+		// Record the purchase under a row lock (the repo's UpdateByID locks the
+		// lead + hydrates the buyer set) so the count-based limit is race-free.
+		// Price is computed from the locked purchase count. The mapper
+		// suppresses PurchasedEvent — we emit LeadPurchasedV1 directly below.
+		err = h.leads.UpdateByID(ctx, cmd.PlatformLeadID, func(l *platformlead.PlatformLead) (bool, error) {
+			price := platformlead.ComputePurchasePricePaisa(
+				tierCfg.BasePricePaisa, l.PurchaseCount(), purchasePackageDiscountBps)
+			chargedPaisa = price
+			return true, l.RecordPurchase(
+				purchaseID,
+				cmd.PurchasingTenantID,
+				cmd.PurchasingMembershipID,
+				price,
+				tierCfg.DefaultSaleLimit,
+				now,
+			)
+		})
+		if err != nil {
+			switch {
+			case errors.Is(err, platformlead.ErrNotFound):
+				return ErrLeadNotFound
+			case errors.Is(err, platformlead.ErrSoldOut):
+				return ErrLeadSoldOut
+			case errors.Is(err, platformlead.ErrAlreadyPurchased):
+				return ErrLeadAlreadyPurchased
+			default:
+				return fmt.Errorf("record purchase: %w", err)
 			}
-			return fmt.Errorf("mark lead sold: %w", err)
 		}
 
 		// Re-load to grab the LeadSnapshot for the wire event.
@@ -211,15 +251,16 @@ func (h PurchaseLeadHandler) runOnce(
 			return fmt.Errorf("reload lead: %w", err)
 		}
 
-		// Emit LeadPurchasedV1 (TenantScoped to the purchaser) with a
-		// full snapshot for CRM autonomy. UUIDs ride as strings (ADR 0059).
+		// Emit LeadPurchasedV1 (TenantScoped to the purchaser) with a full
+		// snapshot for CRM autonomy. Per-purchase event (ADR 0065). UUIDs ride
+		// as strings (ADR 0059).
 		purchasedEv := integrationevents.LeadPurchasedV1{
 			PurchaseID:              purchaseID,
 			TenantID:                cmd.PurchasingTenantID.String(),
 			PlatformLeadID:          cmd.PlatformLeadID.String(),
 			PurchasedAt:             now.UTC(),
 			PurchasedByMembershipID: cmd.PurchasingMembershipID.String(),
-			AmountPaisa:             cmd.AmountPaisa,
+			AmountPaisa:             chargedPaisa,
 			LeadSnapshot:            integrationevents.SnapshotFromForm(lead.Form()),
 		}
 		if err := h.outboxEnq.EnqueueInTx(ctx, purchasedEv); err != nil {
@@ -227,4 +268,5 @@ func (h PurchaseLeadHandler) runOnce(
 		}
 		return nil
 	})
+	return chargedPaisa, err
 }

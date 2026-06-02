@@ -13,6 +13,7 @@ import (
 	"github.com/leadkart/leadkart-go/internal/common/pg"
 	"github.com/leadkart/leadkart-go/internal/platform/app/query"
 	"github.com/leadkart/leadkart-go/internal/platform/domain/leadcredit/leadcredittest"
+	"github.com/leadkart/leadkart-go/internal/platform/domain/platformlead"
 	"github.com/leadkart/leadkart-go/internal/platform/domain/platformlead/platformleadtest"
 	"github.com/leadkart/leadkart-go/internal/platform/domain/unverifiedcontact/unverifiedcontacttest"
 	"github.com/leadkart/leadkart-go/internal/platform/domain/verificationcall/verificationcalltest"
@@ -106,6 +107,29 @@ func (u *FakeUnitOfWork) WithinTx(ctx context.Context, _ pg.TxScope, fn func(ctx
 		}
 	}
 	return err
+}
+
+// ----- FakeTierReader -------------------------------------------------------
+
+// FakeTierReader is a stand-in command.TierReader. Default config mirrors the
+// standard tier seed (base 50000 paise, limit 6) so first-buyer pricing is
+// 50000. Set Cfg to override.
+type FakeTierReader struct {
+	Cfg platformlead.TierConfig
+}
+
+// NewFakeTierReader returns a reader with the standard-tier defaults.
+func NewFakeTierReader() *FakeTierReader {
+	return &FakeTierReader{Cfg: platformlead.TierConfig{
+		Code:             platformlead.TierStandard,
+		DefaultSaleLimit: 6,
+		BasePricePaisa:   50000,
+	}}
+}
+
+// GetTier returns the configured tier config regardless of the requested tier.
+func (r *FakeTierReader) GetTier(_ context.Context, _ platformlead.Tier) (platformlead.TierConfig, error) {
+	return r.Cfg, nil
 }
 
 // ----- FakeOutbox ----------------------------------------------------------

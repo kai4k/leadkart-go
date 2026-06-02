@@ -690,6 +690,7 @@ func buildPlatformApp(pool *pgxpool.Pool, now func() time.Time) platformWiringRe
 	calls := platformadapters.NewVerificationCallRepository(pool, tx)
 	leads := platformadapters.NewPlatformLeadRepository(pool, tx)
 	credits := platformadapters.NewLeadCreditRepository(pool, tx)
+	tiers := platformadapters.NewLeadTierReader(pool)
 	contactReader := platformadapters.NewUnverifiedContactReader(pool, tx)
 	outboxEnq := platformadapters.NewOutboxEnqueuer()
 
@@ -707,7 +708,7 @@ func buildPlatformApp(pool *pgxpool.Pool, now func() time.Time) platformWiringRe
 				LogVerificationCall:     platformcommand.NewLogVerificationCallHandler(tx, calls, contacts, now, newCallID),
 				VerifyUnverifiedContact: platformcommand.NewVerifyUnverifiedContactHandler(tx, contacts, leads, outboxEnq, now, newLeadID),
 				RejectUnverifiedContact: platformcommand.NewRejectUnverifiedContactHandler(contacts, now),
-				PurchaseLead:            platformcommand.NewPurchaseLeadHandler(tx, leads, credits, outboxEnq, now, newPurchaseID),
+				PurchaseLead:            platformcommand.NewPurchaseLeadHandler(tx, leads, credits, tiers, outboxEnq, now, newPurchaseID),
 				TopupLeadCredits:        platformcommand.NewTopupLeadCreditsHandler(tx, credits, now),
 			},
 			Queries: platformapp.Queries{

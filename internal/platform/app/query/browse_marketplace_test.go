@@ -91,19 +91,34 @@ func TestBrowseMarketplace_ReturnsUnsoldLeads_NoPII(t *testing.T) {
 	}
 }
 
-// TestBrowseMarketplace_ExcludesSoldLeads — a purchased lead leaves the browse
-// stream; only the purchaser sees it via /v1/me/leads (Slice 2). C2.
-func TestBrowseMarketplace_ExcludesSoldLeads(t *testing.T) {
+// TestBrowseMarketplace_ExcludesSoldOutLeads — a lead at its sale limit leaves
+// the browse stream (ADR 0065 availability = purchase count < limit). Here a
+// per-lead sale_limit override of 1 makes a single purchase sell it out. C2.
+func TestBrowseMarketplace_ExcludesSoldOutLeads(t *testing.T) {
 	t.Parallel()
 
 	leads := platformtest.NewFakePlatformLeadRepository()
-	leadID := seedLead(t, leads)
+	one := 1
+	leadID := platformlead.ID(ids.NewV7().String())
+	l := platformlead.UnmarshalFromDB(platformlead.Snapshot{
+		ID:                     leadID,
+		SourceContactID:        unverifiedcontact.ID(ids.NewV7().String()),
+		Form:                   qSampleForm(t),
+		Tier:                   platformlead.TierStandard,
+		SaleLimit:              &one, // sells out after one purchase
+		VerifiedAt:             qNow(),
+		VerifiedByMembershipID: unverifiedcontact.MembershipID(ids.NewV7().String()),
+		CreatedAt:              qNow(),
+	})
+	if err := leads.Add(t.Context(), l); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
 
-	// Mark sold directly, bypassing the handler.
+	// Record the single allowed purchase, bypassing the handler.
 	tenantID := platformlead.TenantID(ids.NewV7().String())
 	memberID := unverifiedcontact.MembershipID(ids.NewV7().String())
 	err := leads.UpdateByID(t.Context(), leadID, func(l *platformlead.PlatformLead) (bool, error) {
-		return true, l.Purchase(tenantID, memberID, 50000, qNow())
+		return true, l.RecordPurchase(ids.NewV7().String(), tenantID, memberID, 50000, 6, qNow())
 	})
 	if err != nil {
 		t.Fatalf("seed purchase: %v", err)
@@ -117,7 +132,7 @@ func TestBrowseMarketplace_ExcludesSoldLeads(t *testing.T) {
 		t.Fatalf("handle: %v", err)
 	}
 	if len(page.Items) != 0 {
-		t.Errorf("expected sold lead excluded from browse, got %d items", len(page.Items))
+		t.Errorf("expected sold-out lead excluded from browse, got %d items", len(page.Items))
 	}
 }
 
