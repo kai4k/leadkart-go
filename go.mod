@@ -1,13 +1,17 @@
 module github.com/leadkart/leadkart-go
 
-go 1.26.3
+go 1.26.4
 
-// Tracks ADR 0034 — Go 1.26+ with quarterly toolchain refresh. The
-// `toolchain` directive above auto-fetches the matching toolchain on
-// first build for contributors running an older system Go (Go 1.21+
+// Tracks ADR 0034 — Go 1.26+ with quarterly toolchain refresh. With
+// GOTOOLCHAIN=auto the `go` directive auto-fetches the matching toolchain
+// on first build for contributors running an older system Go (Go 1.21+
 // feature per https://go.dev/doc/toolchain).
 //
-// 1.26.3 closes 6 stdlib advisories surfaced by govulncheck:
+// 1.26.4 closes 2 further stdlib advisories surfaced by govulncheck:
+//   GO-2026-5039 (net/textproto includes arbitrary input in errors unescaped),
+//   GO-2026-5037 (crypto/x509 inefficient candidate hostname parsing).
+//
+// 1.26.3 had already closed 6 advisories:
 //   GO-2026-4986 + GO-2026-4977 (net/mail quadratic concat),
 //   GO-2026-4982 + GO-2026-4980 (html/template XSS escaper bypass),
 //   GO-2026-4971 (net Dial/LookupPort NUL-byte panic on Windows),
