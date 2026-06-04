@@ -35,7 +35,7 @@ TDL ports/adapters (NOT Cockburn). Interfaces live with their consumer (domain o
 
 | Concern | Choice | ADR |
 |---|---|---|
-| Go | 1.26.3 | 0034 |
+| Go | 1.26.4 | 0034 |
 | DB | sqlc (pinned v1.31.1) + pgx/v5 (squirrel retired) | 0004 |
 | Migrations | goose | 0005 |
 | Multi-tenancy | Postgres RLS (tenant plane only) + tx-local set_config via Transactor | 0006 |
