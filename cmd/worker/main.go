@@ -67,6 +67,8 @@ import (
 	crmsubscribers "github.com/leadkart/leadkart-go/internal/crm/ports/subscribers"
 	"github.com/leadkart/leadkart-go/internal/identity/adapters"
 	"github.com/leadkart/leadkart-go/internal/identity/ports/subscribers"
+	inventoryadapters "github.com/leadkart/leadkart-go/internal/inventory/adapters"
+	inventoryjobs "github.com/leadkart/leadkart-go/internal/inventory/app/jobs"
 	platformadapters "github.com/leadkart/leadkart-go/internal/platform/adapters"
 	platformcommand "github.com/leadkart/leadkart-go/internal/platform/app/command"
 	platformsubscribers "github.com/leadkart/leadkart-go/internal/platform/ports/subscribers"
@@ -322,6 +324,15 @@ func run(ctx context.Context, stdout *os.File) error {
 	)); err != nil {
 		return fmt.Errorf("register crm mature-lead scan worker: %w", err)
 	}
+	// Inventory expiry + reorder daily scans (BRD §6.5) — emit alert events
+	// for batches nearing expiry / products below reorder level.
+	inventoryAlertScan := inventoryadapters.NewAlertScanRepository(pool)
+	if err := river.AddWorkerSafely(workers, inventoryjobs.NewExpiryScanWorker(inventoryAlertScan, logger, time.Now)); err != nil {
+		return fmt.Errorf("register inventory expiry scan worker: %w", err)
+	}
+	if err := river.AddWorkerSafely(workers, inventoryjobs.NewReorderScanWorker(inventoryAlertScan, logger, time.Now)); err != nil {
+		return fmt.Errorf("register inventory reorder scan worker: %w", err)
+	}
 	periodics := []*river.PeriodicJob{
 		river.NewPeriodicJob(
 			river.PeriodicInterval(audit.PurgeInterval),
@@ -334,6 +345,20 @@ func run(ctx context.Context, stdout *os.File) error {
 			river.PeriodicInterval(crmjobs.MatureLeadScanInterval),
 			func() (river.JobArgs, *river.InsertOpts) {
 				return crmjobs.MatureLeadScanJob{}, nil
+			},
+			&river.PeriodicJobOpts{RunOnStart: false},
+		),
+		river.NewPeriodicJob(
+			river.PeriodicInterval(inventoryjobs.ExpiryScanInterval),
+			func() (river.JobArgs, *river.InsertOpts) {
+				return inventoryjobs.ExpiryScanJob{}, nil
+			},
+			&river.PeriodicJobOpts{RunOnStart: false},
+		),
+		river.NewPeriodicJob(
+			river.PeriodicInterval(inventoryjobs.ReorderScanInterval),
+			func() (river.JobArgs, *river.InsertOpts) {
+				return inventoryjobs.ReorderScanJob{}, nil
 			},
 			&river.PeriodicJobOpts{RunOnStart: false},
 		),

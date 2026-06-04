@@ -38,7 +38,10 @@
 package batchtest
 
 import (
+	"cmp"
 	"context"
+	"slices"
+	"time"
 
 	"github.com/leadkart/leadkart-go/internal/common/pagination"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
@@ -205,4 +208,46 @@ func (r *FakeRepository) AnyLiveWithStockForProduct(_ context.Context, _ tenant.
 		return r.AnyLiveStockOn, nil
 	}
 	return false, nil
+}
+
+// ListFefoForProduct returns the live, in-stock, not-yet-expired
+// batches for productID in tenantID, ordered (expiry_date ASC, id ASC)
+// — mirrors the SQL adapter's
+// `WHERE NOT is_deleted AND quantity_on_hand > 0 AND expiry_date > now`
+// filter + ORDER BY clause.
+//
+// FEFO ordering canon: the dispatch picker pulls the soonest-to-expire
+// batch first. `now` is the wall-clock instant the caller threads in;
+// the fake compares strict greater-than (matches the SQL `expiry_date
+// > $2`).
+func (r *FakeRepository) ListFefoForProduct(_ context.Context, tenantID tenant.ID, productID product.ID, now time.Time) ([]*batch.Batch, error) {
+	out := make([]*batch.Batch, 0)
+	for _, b := range r.Batches {
+		if b.IsDeleted() {
+			continue
+		}
+		if b.TenantID() != tenantID {
+			continue
+		}
+		if b.ProductID() != productID {
+			continue
+		}
+		if b.QuantityOnHand() <= 0 {
+			continue
+		}
+		if !b.ExpiryDate().After(now) {
+			continue
+		}
+		out = append(out, b)
+	}
+	slices.SortStableFunc(out, func(a, b *batch.Batch) int {
+		if !a.ExpiryDate().Equal(b.ExpiryDate()) {
+			if a.ExpiryDate().Before(b.ExpiryDate()) {
+				return -1
+			}
+			return 1
+		}
+		return cmp.Compare(a.ID(), b.ID())
+	})
+	return out, nil
 }

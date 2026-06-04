@@ -52,6 +52,7 @@ import (
 	"github.com/leadkart/leadkart-go/internal/common/obs"
 	"github.com/leadkart/leadkart-go/internal/common/openapi"
 	"github.com/leadkart/leadkart-go/internal/common/pg"
+	"github.com/leadkart/leadkart-go/internal/common/refdata"
 	"github.com/leadkart/leadkart-go/internal/identity/adapters"
 	"github.com/leadkart/leadkart-go/internal/identity/app"
 	"github.com/leadkart/leadkart-go/internal/identity/app/argon2"
@@ -314,7 +315,7 @@ func run(ctx context.Context, stdout *os.File, _ []string) error {
 
 	// Inventory module wiring (ADR 0061 — Phase 2 Slice 1). Same
 	// pool + transactor + middleware story as Platform.
-	inventoryAppInstance := buildInventoryApp(pool)
+	inventoryAppInstance := buildInventoryApp(pool, hybridCache)
 
 	// CRM module wiring (ADR 0060 — Phase 2 Slice 1). Same pattern as
 	// Platform: shares the pool + transactor; HTTP routes gate on
@@ -730,11 +731,12 @@ func buildPlatformApp(pool *pgxpool.Pool, now func() time.Time) platformWiringRe
 // All inventory adapters share the same pgxpool + Transactor as identity
 // per CLAUDE.md "Each module owns its Postgres schema. No cross-schema
 // joins" — same connection pool, distinct schemas, distinct outboxes.
-func buildInventoryApp(pool *pgxpool.Pool) inventoryapp.Application {
+func buildInventoryApp(pool *pgxpool.Pool, hybridCache *cache.HybridCache) inventoryapp.Application {
 	tx := pg.NewTransactor(pool)
 	products := inventoryadapters.NewProductRepository(pool, tx)
 	batches := inventoryadapters.NewBatchRepository(pool, tx)
 	movements := inventoryadapters.NewStockMovementRepository(pool, tx)
+	gstDefaults := refdata.NewGstDefaultReaderPG(pool, hybridCache)
 
 	// Inventory aggregate-ID factories (Pure Domain refactor).
 	newProductID := func() product.ID { return product.ID(ids.NewV7().String()) }
@@ -743,7 +745,7 @@ func buildInventoryApp(pool *pgxpool.Pool) inventoryapp.Application {
 
 	return inventoryapp.Application{
 		Commands: inventoryapp.Commands{
-			CreateProduct:    inventorycommand.NewCreateProductHandler(products, time.Now, newProductID),
+			CreateProduct:    inventorycommand.NewCreateProductHandler(products, gstDefaults, time.Now, newProductID),
 			UpdateProduct:    inventorycommand.NewUpdateProductHandler(products, time.Now),
 			DeleteProduct:    inventorycommand.NewDeleteProductHandler(products, batches, time.Now),
 			AddBatch:         inventorycommand.NewAddBatchHandler(tx, products, batches, time.Now, newBatchID),
@@ -755,6 +757,7 @@ func buildInventoryApp(pool *pgxpool.Pool) inventoryapp.Application {
 			GetBatch:               inventoryquery.NewGetBatchHandler(batches),
 			ListBatchesByProduct:   inventoryquery.NewListBatchesByProductHandler(batches),
 			ListBatchMovementsPage: inventoryquery.NewListBatchMovementsPageHandler(movements),
+			FefoBatches:            inventoryquery.NewFefoBatchesHandler(batches, time.Now),
 		},
 	}
 }

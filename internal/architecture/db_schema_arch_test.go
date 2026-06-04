@@ -593,6 +593,7 @@ func TestArch_AuditChainColumnsOnTenantTables(t *testing.T) {
 		"identity.role_hierarchy_edges":            "rolehierarchy* family (carries established_by_membership_id)",
 		// Append-only ledgers / event-stream aggregates:
 		"inventory.stock_movements":   "event-stream aggregate (carries actor_membership_id)",
+		"inventory.alert_emissions":   "system-emitted dedup ledger — no human author; subject_id+kind+day PK",
 		"platform.verification_calls": "append-only ledger (carries logged_by_membership_id)",
 		"crm.call_logs":               "append-only call audit (carries logged_by_membership_id) per ADR 0060",
 		"crm.assignment_history":      "append-only assignment audit (carries assigned_by_membership_id) per ADR 0060",

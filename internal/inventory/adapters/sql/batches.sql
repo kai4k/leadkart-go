@@ -89,3 +89,71 @@ SELECT EXISTS (
     AND    NOT is_deleted
     AND    quantity_on_hand > 0
 );
+
+-- name: ListFefoBatchesForProduct :many
+-- FEFO (First Expired First Out) ordering per BRD §6.5 — feeds the
+-- dispatch picker so warehouse staff pull oldest-expiring inventory
+-- first. Filters: live + in-stock + not-yet-expired. Order: expiry_date
+-- ASC, id ASC. No pagination — the dispatch picker needs the FULL set.
+-- today (UTC, date-only) bounds the not-yet-expired filter. Column order
+-- MUST match inventory.batches so sqlc returns the db.InventoryBatch model.
+SELECT id, product_id, tenant_id, batch_number,
+       manufacture_date, expiry_date,
+       manufacturer_name, manufacturing_licence_number,
+       mrp_paise, purchase_price_paise,
+       quantity_on_hand, version,
+       created_at, updated_at,
+       is_deleted, deleted_at, deleted_by, created_by_membership_id
+FROM   inventory.batches
+WHERE  product_id = $1
+AND    NOT is_deleted
+AND    quantity_on_hand > 0
+AND    expiry_date > sqlc.arg('today')::date
+ORDER  BY expiry_date ASC, id ASC;
+
+-- name: ListBatchesNearExpiryForTenant :many
+-- ExpiryScanJob workhorse. Per-tenant scan returning batches whose
+-- expiry_date <= (today + product.expiry_alert_threshold_days).
+-- Excludes soft-deleted batches + zero-on-hand + threshold==0.
+-- $1 = tenant_id, $2 = today (UTC, date-only).
+SELECT b.id, b.product_id, b.tenant_id, b.batch_number,
+       b.manufacture_date, b.expiry_date,
+       b.manufacturer_name, b.manufacturing_licence_number,
+       b.mrp_paise, b.purchase_price_paise,
+       b.quantity_on_hand, b.version,
+       b.created_at, b.updated_at,
+       b.is_deleted, b.deleted_at, b.deleted_by,
+       p.expiry_alert_threshold_days
+FROM   inventory.batches b
+JOIN   inventory.products p
+    ON p.id        = b.product_id
+   AND p.tenant_id = b.tenant_id
+WHERE  b.tenant_id = $1
+AND    NOT b.is_deleted
+AND    NOT p.is_deleted
+AND    b.quantity_on_hand > 0
+AND    p.expiry_alert_threshold_days > 0
+AND    b.expiry_date <= (sqlc.arg('today')::date + p.expiry_alert_threshold_days)
+ORDER  BY b.expiry_date ASC, b.id ASC;
+
+-- name: ListProductsBelowReorderForTenant :many
+-- ReorderScanJob workhorse. Per-tenant scan returning products where
+--   reorder_level > 0 AND
+--   SUM(live + not-expired batches' quantity_on_hand) < reorder_level
+-- LEFT JOIN so products with NO live batches still surface.
+-- $1 = tenant_id, $2 = today (UTC, date-only).
+SELECT p.id, p.sku, p.reorder_level,
+       COALESCE(SUM(b.quantity_on_hand), 0)::bigint AS stock_on_hand
+FROM   inventory.products p
+LEFT JOIN inventory.batches b
+    ON  b.product_id = p.id
+    AND b.tenant_id  = p.tenant_id
+    AND NOT b.is_deleted
+    AND b.quantity_on_hand > 0
+    AND b.expiry_date > sqlc.arg('today')::date
+WHERE  p.tenant_id = $1
+AND    NOT p.is_deleted
+AND    p.reorder_level > 0
+GROUP  BY p.id, p.sku, p.reorder_level
+HAVING COALESCE(SUM(b.quantity_on_hand), 0) < p.reorder_level
+ORDER  BY p.id ASC;

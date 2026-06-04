@@ -1726,6 +1726,26 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/ListBatchesResponse' }
 
+  /api/v1/inventory/products/{productId}/fefo-batches:
+    get:
+      tags: [inventory]
+      summary: List FEFO-ordered live batches for a Product
+      description: |
+        Requires `inventory.stock.read` OR `inventory.stock.manage`.
+        Returns LIVE, in-stock, not-yet-expired batches for the
+        supplied product, ordered (expiry_date ASC, id ASC) per BRD §6.5
+        First-Expired-First-Out canon. No pagination — feeds the
+        dispatch picker which needs the full eligible set to compute
+        multi-batch allocations against a single order quantity.
+      parameters:
+        - { $ref: '#/components/parameters/ProductId' }
+      responses:
+        '200':
+          description: FEFO-ordered batch list
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/FefoBatchesResponse' }
+
   /api/v1/inventory/batches/{batchId}:
     get:
       tags: [inventory]
@@ -3425,6 +3445,14 @@ components:
       required: [batch_id]
       properties:
         batch_id: { type: string, format: uuid }
+
+    FefoBatchesResponse:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/BatchDto' }
 
     ListBatchesResponse:
       type: object

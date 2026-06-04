@@ -198,6 +198,11 @@ func insertProductRow(ctx context.Context, q *db.Queries, p *product.Product) er
 		IsActive:     p.IsActive(),
 		CreatedAt:    pgconv.PgRequiredTimestamp(p.CreatedAt()),
 		UpdatedAt:    pgconv.PgRequiredTimestamp(p.UpdatedAt()),
+		//nolint:gosec // bounded by aggregate invariant (>= 0)
+		ReorderLevel: int32(p.ReorderLevel()),
+		//nolint:gosec // bounded by aggregate invariant (>= 0)
+		ExpiryAlertThresholdDays: int32(p.ExpiryAlertThresholdDays()),
+		ProductCategory:          p.ProductCategory(),
 	})
 	if err != nil {
 		if isSKUUniqueViolation(err) {
@@ -233,6 +238,11 @@ func persistProductState(ctx context.Context, q *db.Queries, p *product.Product)
 		Manufacturer: p.Manufacturer(),
 		IsActive:     p.IsActive(),
 		UpdatedAt:    pgconv.PgRequiredTimestamp(p.UpdatedAt()),
+		//nolint:gosec // bounded by aggregate invariant (>= 0)
+		ReorderLevel: int32(p.ReorderLevel()),
+		//nolint:gosec // bounded by aggregate invariant (>= 0)
+		ExpiryAlertThresholdDays: int32(p.ExpiryAlertThresholdDays()),
+		ProductCategory:          p.ProductCategory(),
 	})
 	if err != nil {
 		if isSKUUniqueViolation(err) {
@@ -251,21 +261,24 @@ func rowToProduct(row db.InventoryProduct) (*product.Product, error) {
 		deletedBy = *row.DeletedBy
 	}
 	return product.UnmarshalFromDB(product.Snapshot{
-		ID:           pid,
-		TenantID:     tid,
-		SKU:          row.Sku,
-		Name:         row.Name,
-		DosageForm:   row.DosageForm,
-		PackSize:     row.PackSize,
-		HSNCode:      row.HsnCode,
-		GSTRateBps:   int(row.GstRateBps),
-		Manufacturer: row.Manufacturer,
-		IsActive:     row.IsActive,
-		CreatedAt:    pgconv.TimeFromPg(row.CreatedAt),
-		UpdatedAt:    pgconv.TimeFromPg(row.UpdatedAt),
-		IsDeleted:    row.IsDeleted,
-		DeletedAt:    pgconv.TimeFromPg(row.DeletedAt),
-		DeletedBy:    deletedBy,
+		ID:                       pid,
+		TenantID:                 tid,
+		SKU:                      row.Sku,
+		Name:                     row.Name,
+		DosageForm:               row.DosageForm,
+		PackSize:                 row.PackSize,
+		HSNCode:                  row.HsnCode,
+		GSTRateBps:               int(row.GstRateBps),
+		Manufacturer:             row.Manufacturer,
+		IsActive:                 row.IsActive,
+		ReorderLevel:             int(row.ReorderLevel),
+		ExpiryAlertThresholdDays: int(row.ExpiryAlertThresholdDays),
+		ProductCategory:          row.ProductCategory,
+		CreatedAt:                pgconv.TimeFromPg(row.CreatedAt),
+		UpdatedAt:                pgconv.TimeFromPg(row.UpdatedAt),
+		IsDeleted:                row.IsDeleted,
+		DeletedAt:                pgconv.TimeFromPg(row.DeletedAt),
+		DeletedBy:                deletedBy,
 	}), nil
 }
 

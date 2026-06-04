@@ -76,6 +76,8 @@ func AddRoutes(mux *http.ServeMux, log *slog.Logger, a app.Application, verifier
 		stockManage(handleAddBatch(log, a)))
 	mux.Handle("GET /api/v1/inventory/products/{productId}/batches",
 		stockRead(handleListBatchesForProduct(log, a)))
+	mux.Handle("GET /api/v1/inventory/products/{productId}/fefo-batches",
+		stockRead(handleFefoBatches(log, a)))
 	mux.Handle("GET /api/v1/inventory/batches/{batchId}",
 		stockRead(handleGetBatch(log, a)))
 
@@ -498,6 +500,34 @@ func handleListBatchMovements(log *slog.Logger, a app.Application) http.Handler 
 			HasMore:    page.HasMore,
 			NextCursor: page.NextCursor,
 		})
+	})
+}
+
+func handleFefoBatches(log *slog.Logger, a app.Application) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		c, ok := authn.ClaimsFromContext(r.Context())
+		if !ok {
+			writeError(w, http.StatusUnauthorized, ErrCodeUnauthenticated, "")
+			return
+		}
+		productID, ok := parsePathUUID(w, r, "productId")
+		if !ok {
+			return
+		}
+		batches, err := a.Queries.FefoBatches.Handle(r.Context(), query.FefoBatchesQuery{
+			TenantID:  tenant.ID(c.TenantID),
+			ProductID: product.ID(productID.String()),
+		})
+		if err != nil {
+			log.ErrorContext(r.Context(), "fefo batches failed", "err", err)
+			writeError(w, http.StatusInternalServerError, ErrCodeInternalError, "")
+			return
+		}
+		items := make([]BatchDto, 0, len(batches))
+		for _, b := range batches {
+			items = append(items, batchViewToDto(b))
+		}
+		writeJSON(w, http.StatusOK, FefoBatchesResponse{Items: items})
 	})
 }
 

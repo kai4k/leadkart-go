@@ -436,11 +436,11 @@ func TestArch_MutatorsEmitEventsOnStateChange(t *testing.T) {
 	// events by design (e.g. boolean is-getters that perform a small
 	// check).
 	allowMethods := map[string]bool{
-		"PullEvents":   true, // canonical event-drain method
-		"Validate":     true,
-		"IsActive":     true,
-		"IsDeleted":    true,
-		"Equal":        true,
+		"PullEvents": true, // canonical event-drain method
+		"Validate":   true,
+		"IsActive":   true,
+		"IsDeleted":  true,
+		"Equal":      true,
 	}
 
 	// Specific aggregate.Method pairs that mutate in-place without
@@ -450,11 +450,12 @@ func TestArch_MutatorsEmitEventsOnStateChange(t *testing.T) {
 	// version column.
 	type recv struct{ typ, method string }
 	allowMethodsPerType := map[recv]bool{
-		{"Batch", "ApplyMovement"}:    true, // paired StockMovement emits the inventory.* event
-		{"Batch", "SoftDelete"}:       true, // version bump only; deletion auditing via outbox row
-		{"Role", "ChangeHierarchyLevel"}: true, // hierarchy edges aggregate owns the event surface (ADR 0058)
-		{"Order", "AttachInvoice"}:     true, // event emitted via advance(StateInvoiced, ...) per ADR 0063 §4 state-machine canon
-		{"Order", "AttachConsignment"}: true, // event emitted via advance(StateDispatched, ...) per ADR 0063 §4 state-machine canon
+		{"Batch", "ApplyMovement"}:          true, // paired StockMovement emits the inventory.* event
+		{"Batch", "SoftDelete"}:             true, // version bump only; deletion auditing via outbox row
+		{"Role", "ChangeHierarchyLevel"}:    true, // hierarchy edges aggregate owns the event surface (ADR 0058)
+		{"Order", "AttachInvoice"}:          true, // event emitted via advance(StateInvoiced, ...) per ADR 0063 §4 state-machine canon
+		{"Order", "AttachConsignment"}:      true, // event emitted via advance(StateDispatched, ...) per ADR 0063 §4 state-machine canon
+		{"Product", "applyExtendedUpdates"}: true, // sub-applier of Update; the single UpdatedEvent is emitted by Update after merging changed-field sets
 	}
 
 	type violation struct {
