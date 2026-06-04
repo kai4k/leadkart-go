@@ -91,6 +91,14 @@ func AddRoutes(mux *http.ServeMux, log *slog.Logger, a app.Application, verifier
 	mux.Handle("POST /api/v1/crm/leads/{leadId}/calls", manage(handleLogCall(log, a)))
 	mux.Handle("POST /api/v1/crm/leads/{leadId}/convert", manage(handleConvertLead(log, a)))
 	mux.Handle("POST /api/v1/crm/leads/{leadId}/lose", manage(handleLoseLead(log, a)))
+
+	// Reminder surface — auto-created reminders (callback / mature_lead)
+	// are minted off the bus / scheduler; manual creation + lifecycle
+	// mutations come through here per BRD §4.6.
+	mux.Handle("POST /api/v1/crm/leads/{leadId}/reminders", manage(handleCreateReminder(log, a)))
+	mux.Handle("GET /api/v1/crm/reminders", read(handleListReminders(log, a)))
+	mux.Handle("POST /api/v1/crm/reminders/{reminderId}/sent", manage(handleMarkReminderSent(log, a)))
+	mux.Handle("POST /api/v1/crm/reminders/{reminderId}/cancel", manage(handleCancelReminder(log, a)))
 }
 
 // ----- Handlers --------------------------------------------------------------

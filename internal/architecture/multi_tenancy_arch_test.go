@@ -418,6 +418,11 @@ func TestArch_RepoTenantScopedReadsUseTxScopeTenant(t *testing.T) {
 		"internal/platform/adapters/verification_call_repository_pg.go",
 		"internal/platform/adapters/platform_lead_reader_pg.go",
 		"internal/platform/adapters/outbox_forwarder.go",
+		// CRM mature-lead scan runs cross-tenant under TxScopePlatform
+		// per BRD §4.7 — one daily sweep across every tenant's
+		// crm.crm_leads. Per-row reminder writes happen via the
+		// CreateReminderHandler under TxScopeTenant.
+		"internal/crm/adapters/mature_lead_scanner_pg.go",
 	}
 
 	type violation struct {

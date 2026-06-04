@@ -95,7 +95,7 @@ func wireCrmRouter(t *testing.T, pool *pgxpool.Pool) (*gochannel.GoChannel, func
 	if err != nil {
 		t.Fatalf("NewEventProcessor: %v", err)
 	}
-	for _, h := range subscribers.Handlers(ingest) {
+	for _, h := range subscribers.Handlers(ingest, nil) {
 		if err := router.AddCqrsHandler(ep, h); err != nil {
 			t.Fatalf("AddCqrsHandler: %v", err)
 		}

@@ -93,14 +93,16 @@ type CrmAssignmentHistory struct {
 
 // CallLog aggregate per ADR 0060. Append-only. Tenant-scoped FORCE RLS.
 type CrmCallLog struct {
-	ID                   pgtype.UUID
-	TenantID             pgtype.UUID
-	LeadID               pgtype.UUID
-	Outcome              string
-	Notes                string
-	LoggedByMembershipID pgtype.UUID
-	LoggedAt             pgtype.Timestamptz
-	CreatedAt            pgtype.Timestamptz
+	ID                    pgtype.UUID
+	TenantID              pgtype.UUID
+	LeadID                pgtype.UUID
+	Outcome               string
+	Notes                 string
+	LoggedByMembershipID  pgtype.UUID
+	LoggedAt              pgtype.Timestamptz
+	CreatedAt             pgtype.Timestamptz
+	CallbackWindowStartAt pgtype.Timestamptz
+	CallbackWindowEndAt   pgtype.Timestamptz
 }
 
 // CrmLead aggregate per ADR 0060 + BRD §6.3. Stage state machine + independent temperature axis. source_purchase_id is the idempotency key for the lead-purchased subscriber.
@@ -136,6 +138,26 @@ type CrmCrmLead struct {
 	LostReason              string
 	CreatedAt               pgtype.Timestamptz
 	CreatedByMembershipID   pgtype.UUID
+}
+
+// Reminder aggregate per BRD §4.5/§4.6/§4.7 + slice A.2. Notification surface — pending → sent | cancelled state machine. Auto-created by the CallLogged subscriber (callback type) + mature-lead daily scan (mature_lead type); manual type via HTTP.
+type CrmReminder struct {
+	ID                       pgtype.UUID
+	TenantID                 pgtype.UUID
+	LeadID                   pgtype.UUID
+	AssignedToMembershipID   pgtype.UUID
+	CreatedByMembershipID    pgtype.UUID
+	SourceCallLogID          pgtype.UUID
+	Type                     string
+	State                    string
+	DueAt                    pgtype.Timestamptz
+	Notes                    string
+	SentAt                   pgtype.Timestamptz
+	MarkedSentByMembershipID pgtype.UUID
+	CancelledAt              pgtype.Timestamptz
+	CancelledByMembershipID  pgtype.UUID
+	CancelReason             string
+	CreatedAt                pgtype.Timestamptz
 }
 
 // Transport document per shipment (ADR 0063). State machine: pending → dispatched → in_transit → delivered | failed. One per order via UNIQUE(tenant_id, order_id). Tenant-scoped RLS.

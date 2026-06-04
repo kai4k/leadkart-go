@@ -101,13 +101,26 @@ func (e CrmLeadTemperatureChangedV1) TenantID() uuid.UUID { return e.TenantIDCla
 
 // CrmCallLoggedV1 — a CallLog was created against a lead. Wire alias:
 // `crm.call_logged.v1`. Append-only — no subsequent update / delete events.
+//
+// CallbackWindowStartAt + CallbackWindowEndAt are populated when the
+// caller stamped a callback window per BRD §4.5. Both zero when no
+// callback was requested. The CRM Reminder slice's CallLogged
+// subscriber consumes Start to mint a callback reminder due at that
+// time; when both are zero the subscriber short-circuits.
+//
+// Note: extending an existing V1 event with *additive, omitzero* fields
+// is wire-stable per messaging.md "Event versioning" — old consumers
+// ignore the new fields, new consumers tolerate their absence on old
+// events. A breaking shape change would require a V2 alias.
 type CrmCallLoggedV1 struct {
-	CallID               uuid.UUID `json:"call_id"`
-	LeadID               uuid.UUID `json:"lead_id"`
-	TenantIDClaim        uuid.UUID `json:"tenant_id"`
-	Outcome              string    `json:"outcome"`
-	LoggedByMembershipID uuid.UUID `json:"logged_by_membership_id"`
-	OccurredAtUTC        time.Time `json:"occurred_at_utc"`
+	CallID                uuid.UUID `json:"call_id"`
+	LeadID                uuid.UUID `json:"lead_id"`
+	TenantIDClaim         uuid.UUID `json:"tenant_id"`
+	Outcome               string    `json:"outcome"`
+	LoggedByMembershipID  uuid.UUID `json:"logged_by_membership_id"`
+	CallbackWindowStartAt time.Time `json:"callback_window_start_at,omitzero"`
+	CallbackWindowEndAt   time.Time `json:"callback_window_end_at,omitzero"`
+	OccurredAtUTC         time.Time `json:"occurred_at_utc"`
 }
 
 // Topic returns the canonical wire alias.

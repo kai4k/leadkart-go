@@ -97,6 +97,57 @@ type LoseLeadRequest struct {
 	Reason string `json:"reason"`
 }
 
+// ----- Reminder DTOs --------------------------------------------------------
+
+// ReminderDto is the wire shape returned by GET /api/v1/crm/reminders
+// items + the reminder mutation endpoints' 200/201 paths.
+type ReminderDto struct {
+	ID                       string    `json:"id"`
+	TenantID                 string    `json:"tenant_id"`
+	LeadID                   string    `json:"lead_id"`
+	AssignedToMembershipID   string    `json:"assigned_to_membership_id"`
+	CreatedByMembershipID    string    `json:"created_by_membership_id,omitzero"`
+	SourceCallLogID          string    `json:"source_call_log_id,omitzero"`
+	Type                     string    `json:"type"`
+	State                    string    `json:"state"`
+	DueAt                    time.Time `json:"due_at"`
+	Notes                    string    `json:"notes,omitzero"`
+	SentAt                   time.Time `json:"sent_at,omitzero"`
+	MarkedSentByMembershipID string    `json:"marked_sent_by_membership_id,omitzero"`
+	CancelledAt              time.Time `json:"cancelled_at,omitzero"`
+	CancelledByMembershipID  string    `json:"cancelled_by_membership_id,omitzero"`
+	CancelReason             string    `json:"cancel_reason,omitzero"`
+	CreatedAt                time.Time `json:"created_at"`
+}
+
+// ListRemindersResponse is the cursor-paginated reminder page shape.
+type ListRemindersResponse struct {
+	Items      []ReminderDto `json:"items"`
+	HasMore    bool          `json:"has_more"`
+	NextCursor string        `json:"next_cursor,omitzero"`
+}
+
+// CreateReminderRequest is the body for POST /api/v1/crm/leads/{leadId}/reminders.
+//
+// `assigned_to_membership_id` is REQUIRED. `due_at` is REQUIRED, an
+// RFC 3339 timestamp. `notes` is optional + free-text.
+type CreateReminderRequest struct {
+	AssignedToMembershipID string    `json:"assigned_to_membership_id"`
+	DueAt                  time.Time `json:"due_at"`
+	Notes                  string    `json:"notes,omitzero"`
+}
+
+// CreateReminderResponse returns the new reminder ID.
+type CreateReminderResponse struct {
+	ReminderID string `json:"reminder_id"`
+}
+
+// CancelReminderRequest is the body for POST /api/v1/crm/reminders/{reminderId}/cancel.
+// `reason` is REQUIRED (audit doctrine).
+type CancelReminderRequest struct {
+	Reason string `json:"reason"`
+}
+
 // ----- Error code constants -------------------------------------------------
 
 const (
@@ -113,6 +164,10 @@ const (
 	errCodeForbidden           = "forbidden"
 	errCodeUnauthenticated     = "unauthenticated"
 	errCodeInternalError       = "internal_error"
+	errCodeInvalidReminderID   = "invalid_reminder_id"
+	errCodeInvalidDueAt        = "invalid_due_at"
+	errCodeReminderNotFound    = "reminder_not_found"
+	errCodeReminderTerminal    = "reminder_terminal"
 )
 
 // errorResponse is the wire shape for non-success responses. RFC 9457

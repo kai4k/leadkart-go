@@ -61,7 +61,9 @@ import (
 	"github.com/leadkart/leadkart-go/internal/common/pg"
 	crmadapters "github.com/leadkart/leadkart-go/internal/crm/adapters"
 	crmcommand "github.com/leadkart/leadkart-go/internal/crm/app/command"
+	crmjobs "github.com/leadkart/leadkart-go/internal/crm/app/jobs"
 	"github.com/leadkart/leadkart-go/internal/crm/domain/crmlead"
+	crmreminder "github.com/leadkart/leadkart-go/internal/crm/domain/reminder"
 	crmsubscribers "github.com/leadkart/leadkart-go/internal/crm/ports/subscribers"
 	"github.com/leadkart/leadkart-go/internal/identity/adapters"
 	"github.com/leadkart/leadkart-go/internal/identity/ports/subscribers"
@@ -153,6 +155,8 @@ func healthcheck() error {
 }
 
 // run is the testable entrypoint per Mat Ryer 2024.
+//
+//nolint:cyclop // composition root — wiring depth scales with subscriber + worker count by design; refactoring into helpers obscures the single-place dependency graph the manual-wiring canon protects.
 func run(ctx context.Context, stdout *os.File) error {
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -245,9 +249,14 @@ func run(ctx context.Context, stdout *os.File) error {
 	}
 
 	crmLeads := crmadapters.NewCrmLeadRepository(pool, tx)
+	crmReminders := crmadapters.NewReminderRepository(pool, tx)
+	crmMatureScanner := crmadapters.NewMatureLeadScannerPG(pool, tx)
 	newCrmLeadID := func() crmlead.ID { return crmlead.ID(ids.NewV7().String()) }
+	newCrmReminderID := func() crmreminder.ID { return crmreminder.ID(ids.NewV7().String()) }
+	crmCreateReminder := crmcommand.NewCreateReminderHandler(crmLeads, crmReminders, time.Now, newCrmReminderID)
 	crmIngest := crmsubscribers.NewPurchasedLeadIngestor(
 		crmcommand.NewIngestPurchasedLeadHandler(crmLeads, time.Now, newCrmLeadID), logger)
+	crmCallback := crmsubscribers.NewCallbackReminderCreator(crmCreateReminder, logger)
 
 	// Platform subscriber: identity.tenant_registered.v1 → init a zero-balance
 	// LeadCredit row for the new tenant (BRD §6.2). Cross-module consumer of
@@ -283,10 +292,11 @@ func run(ctx context.Context, stdout *os.File) error {
 	// Gather every module's typed handlers. buildEmailSender panics on a
 	// malformed no-reply address — string literal, init-time only, so
 	// fail-fast at boot is the right shape (CLAUDE.md "MustNewX init-time
-	// only"). CRM's lead-purchased handler is a cross-module consumer of
-	// the Platform `platform.lead_purchased.v1` event (ADR 0060).
+	// only"). CRM consumes the Platform lead-purchased event + its own
+	// call-logged event (callback reminders); Platform consumes the
+	// Identity tenant-registered event.
 	cqrsHandlers := subscribers.Handlers(subWiring.Families, subWiring.StampCache, buildEmailSender(logger), logger, time.Now)
-	cqrsHandlers = append(cqrsHandlers, crmsubscribers.Handlers(crmIngest)...)
+	cqrsHandlers = append(cqrsHandlers, crmsubscribers.Handlers(crmIngest, crmCallback)...)
 	cqrsHandlers = append(cqrsHandlers, platformsubscribers.Handlers(platformTenantRegistered)...)
 	for _, h := range cqrsHandlers {
 		if err := router.AddCqrsHandler(eventProcessor, h); err != nil {
@@ -305,11 +315,25 @@ func run(ctx context.Context, stdout *os.File) error {
 	if err := river.AddWorkerSafely(workers, audit.NewPurgeWorker(pool, logger, time.Now)); err != nil {
 		return fmt.Errorf("register audit purge worker: %w", err)
 	}
+	// CRM mature-lead daily scan (BRD §4.7) — flags converted leads
+	// with no reorder activity in the configured window.
+	if err := river.AddWorkerSafely(workers, crmjobs.NewMatureLeadScanWorker(
+		crmMatureScanner, crmCreateReminder, logger, time.Now,
+	)); err != nil {
+		return fmt.Errorf("register crm mature-lead scan worker: %w", err)
+	}
 	periodics := []*river.PeriodicJob{
 		river.NewPeriodicJob(
 			river.PeriodicInterval(audit.PurgeInterval),
 			func() (river.JobArgs, *river.InsertOpts) {
 				return audit.PurgeJob{}, nil
+			},
+			&river.PeriodicJobOpts{RunOnStart: false},
+		),
+		river.NewPeriodicJob(
+			river.PeriodicInterval(crmjobs.MatureLeadScanInterval),
+			func() (river.JobArgs, *river.InsertOpts) {
+				return crmjobs.MatureLeadScanJob{}, nil
 			},
 			&river.PeriodicJobOpts{RunOnStart: false},
 		),

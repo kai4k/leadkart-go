@@ -11,6 +11,8 @@ import (
 	"github.com/leadkart/leadkart-go/internal/crm/domain/calllog/calllogtest"
 	"github.com/leadkart/leadkart-go/internal/crm/domain/crmlead"
 	"github.com/leadkart/leadkart-go/internal/crm/domain/crmlead/crmleadtest"
+	"github.com/leadkart/leadkart-go/internal/crm/domain/reminder"
+	"github.com/leadkart/leadkart-go/internal/crm/domain/reminder/remindertest"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
 
@@ -24,6 +26,7 @@ func newFakeCallLogs() *calllogtest.FakeRepository { return calllogtest.NewFakeR
 func newFakeHistory() *assignmenthistorytest.FakeRepository {
 	return assignmenthistorytest.NewFakeRepository()
 }
+func newFakeReminders() *remindertest.FakeRepository { return remindertest.NewFakeRepository() }
 
 // testTenantID is the tenant used by seedLead + every test command
 // that needs a tenant scope. Pinning a single value keeps the
@@ -49,3 +52,7 @@ func newTestCallID() calllog.ID { return calllog.ID(ids.NewV7().String()) }
 
 // newTestHistoryID is the test-side AssignmentHistory ID factory.
 func newTestHistoryID() assignmenthistory.ID { return assignmenthistory.ID(ids.NewV7().String()) }
+
+// newTestReminderID is the test-side Reminder ID factory injected into
+// command handlers per the `TestArch_HandlersInjectIDFactory` discipline.
+func newTestReminderID() reminder.ID { return reminder.ID(ids.NewV7().String()) }

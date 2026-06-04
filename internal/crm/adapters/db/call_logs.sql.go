@@ -13,7 +13,8 @@ import (
 
 const getCallLogByID = `-- name: GetCallLogByID :one
 SELECT id, tenant_id, lead_id, outcome, notes,
-       logged_by_membership_id, logged_at, created_at
+       logged_by_membership_id, logged_at, created_at,
+       callback_window_start_at, callback_window_end_at
 FROM   crm.call_logs
 WHERE  id = $1
 `
@@ -30,6 +31,8 @@ func (q *Queries) GetCallLogByID(ctx context.Context, id pgtype.UUID) (CrmCallLo
 		&i.LoggedByMembershipID,
 		&i.LoggedAt,
 		&i.CreatedAt,
+		&i.CallbackWindowStartAt,
+		&i.CallbackWindowEndAt,
 	)
 	return i, err
 }
@@ -38,23 +41,31 @@ const insertCallLog = `-- name: InsertCallLog :exec
 
 INSERT INTO crm.call_logs (
     id, tenant_id, lead_id, outcome, notes,
-    logged_by_membership_id, logged_at, created_at
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+    logged_by_membership_id, logged_at, created_at,
+    callback_window_start_at, callback_window_end_at
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 `
 
 type InsertCallLogParams struct {
-	ID                   pgtype.UUID
-	TenantID             pgtype.UUID
-	LeadID               pgtype.UUID
-	Outcome              string
-	Notes                string
-	LoggedByMembershipID pgtype.UUID
-	LoggedAt             pgtype.Timestamptz
-	CreatedAt            pgtype.Timestamptz
+	ID                    pgtype.UUID
+	TenantID              pgtype.UUID
+	LeadID                pgtype.UUID
+	Outcome               string
+	Notes                 string
+	LoggedByMembershipID  pgtype.UUID
+	LoggedAt              pgtype.Timestamptz
+	CreatedAt             pgtype.Timestamptz
+	CallbackWindowStartAt pgtype.Timestamptz
+	CallbackWindowEndAt   pgtype.Timestamptz
 }
 
 // CallLog queries — crm.call_logs is RLS+FORCE per ADR 0006 +
 // migration 20260602000001. Append-only: no UPDATE / DELETE queries.
+//
+// Slice A.2 (migration 20260603000602) added callback_window_start_at
+// + callback_window_end_at columns per BRD §4.5. The CallLogged
+// integration event carries them so the Reminder slice's subscriber
+// can mint a callback reminder when the caller stamped a window.
 func (q *Queries) InsertCallLog(ctx context.Context, arg InsertCallLogParams) error {
 	_, err := q.db.Exec(ctx, insertCallLog,
 		arg.ID,
@@ -65,13 +76,16 @@ func (q *Queries) InsertCallLog(ctx context.Context, arg InsertCallLogParams) er
 		arg.LoggedByMembershipID,
 		arg.LoggedAt,
 		arg.CreatedAt,
+		arg.CallbackWindowStartAt,
+		arg.CallbackWindowEndAt,
 	)
 	return err
 }
 
 const listCallLogsByLead = `-- name: ListCallLogsByLead :many
 SELECT id, tenant_id, lead_id, outcome, notes,
-       logged_by_membership_id, logged_at, created_at
+       logged_by_membership_id, logged_at, created_at,
+       callback_window_start_at, callback_window_end_at
 FROM   crm.call_logs
 WHERE  lead_id = $1
 ORDER  BY logged_at DESC, id DESC
@@ -95,6 +109,8 @@ func (q *Queries) ListCallLogsByLead(ctx context.Context, leadID pgtype.UUID) ([
 			&i.LoggedByMembershipID,
 			&i.LoggedAt,
 			&i.CreatedAt,
+			&i.CallbackWindowStartAt,
+			&i.CallbackWindowEndAt,
 		); err != nil {
 			return nil, err
 		}
