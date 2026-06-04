@@ -14,13 +14,16 @@ import (
 const getProductByID = `-- name: GetProductByID :one
 SELECT id, tenant_id, sku, name, dosage_form, pack_size, hsn_code,
        gst_rate_bps, manufacturer, is_active,
-       created_at, updated_at,
-       is_deleted, deleted_at, deleted_by, created_by_membership_id
+       created_at, updated_at, is_deleted, deleted_at, deleted_by,
+       created_by_membership_id, reorder_level, expiry_alert_threshold_days,
+       product_category
 FROM   inventory.products
 WHERE  id = $1
 AND    NOT is_deleted
 `
 
+// Column order MUST match the inventory.products table column order so sqlc
+// returns the db.InventoryProduct model (not a custom row).
 func (q *Queries) GetProductByID(ctx context.Context, id pgtype.UUID) (InventoryProduct, error) {
 	row := q.db.QueryRow(ctx, getProductByID, id)
 	var i InventoryProduct
@@ -41,6 +44,9 @@ func (q *Queries) GetProductByID(ctx context.Context, id pgtype.UUID) (Inventory
 		&i.DeletedAt,
 		&i.DeletedBy,
 		&i.CreatedByMembershipID,
+		&i.ReorderLevel,
+		&i.ExpiryAlertThresholdDays,
+		&i.ProductCategory,
 	)
 	return i, err
 }
@@ -49,26 +55,31 @@ const insertProduct = `-- name: InsertProduct :exec
 
 INSERT INTO inventory.products (
     id, tenant_id, sku, name, dosage_form, pack_size, hsn_code,
-    gst_rate_bps, manufacturer, is_active, created_at, updated_at
+    gst_rate_bps, manufacturer, is_active, created_at, updated_at,
+    reorder_level, expiry_alert_threshold_days, product_category
 ) VALUES (
     $1, $2, $3, $4, $5, $6, $7,
-    $8, $9, $10, $11, $12
+    $8, $9, $10, $11, $12,
+    $13, $14, $15
 )
 `
 
 type InsertProductParams struct {
-	ID           pgtype.UUID
-	TenantID     pgtype.UUID
-	Sku          string
-	Name         string
-	DosageForm   string
-	PackSize     string
-	HsnCode      string
-	GstRateBps   int32
-	Manufacturer string
-	IsActive     bool
-	CreatedAt    pgtype.Timestamptz
-	UpdatedAt    pgtype.Timestamptz
+	ID                       pgtype.UUID
+	TenantID                 pgtype.UUID
+	Sku                      string
+	Name                     string
+	DosageForm               string
+	PackSize                 string
+	HsnCode                  string
+	GstRateBps               int32
+	Manufacturer             string
+	IsActive                 bool
+	CreatedAt                pgtype.Timestamptz
+	UpdatedAt                pgtype.Timestamptz
+	ReorderLevel             int32
+	ExpiryAlertThresholdDays int32
+	ProductCategory          string
 }
 
 // Product queries — inventory.products is tenant-scoped + RLS-FORCE.
@@ -89,6 +100,9 @@ func (q *Queries) InsertProduct(ctx context.Context, arg InsertProductParams) er
 		arg.IsActive,
 		arg.CreatedAt,
 		arg.UpdatedAt,
+		arg.ReorderLevel,
+		arg.ExpiryAlertThresholdDays,
+		arg.ProductCategory,
 	)
 	return err
 }
@@ -96,8 +110,9 @@ func (q *Queries) InsertProduct(ctx context.Context, arg InsertProductParams) er
 const listProductsByTenantPage = `-- name: ListProductsByTenantPage :many
 SELECT id, tenant_id, sku, name, dosage_form, pack_size, hsn_code,
        gst_rate_bps, manufacturer, is_active,
-       created_at, updated_at,
-       is_deleted, deleted_at, deleted_by, created_by_membership_id
+       created_at, updated_at, is_deleted, deleted_at, deleted_by,
+       created_by_membership_id, reorder_level, expiry_alert_threshold_days,
+       product_category
 FROM   inventory.products
 WHERE  tenant_id = $1
 AND    NOT is_deleted
@@ -158,6 +173,9 @@ func (q *Queries) ListProductsByTenantPage(ctx context.Context, arg ListProducts
 			&i.DeletedAt,
 			&i.DeletedBy,
 			&i.CreatedByMembershipID,
+			&i.ReorderLevel,
+			&i.ExpiryAlertThresholdDays,
+			&i.ProductCategory,
 		); err != nil {
 			return nil, err
 		}
@@ -198,22 +216,28 @@ func (q *Queries) SoftDeleteProduct(ctx context.Context, arg SoftDeleteProductPa
 
 const updateProduct = `-- name: UpdateProduct :exec
 UPDATE inventory.products
-SET    name         = $2,
-       gst_rate_bps = $3,
-       manufacturer = $4,
-       is_active    = $5,
-       updated_at   = $6
+SET    name                        = $2,
+       gst_rate_bps                = $3,
+       manufacturer                = $4,
+       is_active                   = $5,
+       updated_at                  = $6,
+       reorder_level               = $7,
+       expiry_alert_threshold_days = $8,
+       product_category            = $9
 WHERE  id = $1
 AND    NOT is_deleted
 `
 
 type UpdateProductParams struct {
-	ID           pgtype.UUID
-	Name         string
-	GstRateBps   int32
-	Manufacturer string
-	IsActive     bool
-	UpdatedAt    pgtype.Timestamptz
+	ID                       pgtype.UUID
+	Name                     string
+	GstRateBps               int32
+	Manufacturer             string
+	IsActive                 bool
+	UpdatedAt                pgtype.Timestamptz
+	ReorderLevel             int32
+	ExpiryAlertThresholdDays int32
+	ProductCategory          string
 }
 
 // General-purpose update covering Product.Update mutator + SoftDelete.
@@ -227,6 +251,9 @@ func (q *Queries) UpdateProduct(ctx context.Context, arg UpdateProductParams) er
 		arg.Manufacturer,
 		arg.IsActive,
 		arg.UpdatedAt,
+		arg.ReorderLevel,
+		arg.ExpiryAlertThresholdDays,
+		arg.ProductCategory,
 	)
 	return err
 }

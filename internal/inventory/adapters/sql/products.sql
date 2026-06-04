@@ -6,17 +6,22 @@
 -- name: InsertProduct :exec
 INSERT INTO inventory.products (
     id, tenant_id, sku, name, dosage_form, pack_size, hsn_code,
-    gst_rate_bps, manufacturer, is_active, created_at, updated_at
+    gst_rate_bps, manufacturer, is_active, created_at, updated_at,
+    reorder_level, expiry_alert_threshold_days, product_category
 ) VALUES (
     $1, $2, $3, $4, $5, $6, $7,
-    $8, $9, $10, $11, $12
+    $8, $9, $10, $11, $12,
+    $13, $14, $15
 );
 
 -- name: GetProductByID :one
+-- Column order MUST match the inventory.products table column order so sqlc
+-- returns the db.InventoryProduct model (not a custom row).
 SELECT id, tenant_id, sku, name, dosage_form, pack_size, hsn_code,
        gst_rate_bps, manufacturer, is_active,
-       created_at, updated_at,
-       is_deleted, deleted_at, deleted_by, created_by_membership_id
+       created_at, updated_at, is_deleted, deleted_at, deleted_by,
+       created_by_membership_id, reorder_level, expiry_alert_threshold_days,
+       product_category
 FROM   inventory.products
 WHERE  id = $1
 AND    NOT is_deleted;
@@ -26,11 +31,14 @@ AND    NOT is_deleted;
 -- The aggregate persists ALL its current state on every write; the
 -- repo doesn't try to compute a partial UPDATE.
 UPDATE inventory.products
-SET    name         = $2,
-       gst_rate_bps = $3,
-       manufacturer = $4,
-       is_active    = $5,
-       updated_at   = $6
+SET    name                        = $2,
+       gst_rate_bps                = $3,
+       manufacturer                = $4,
+       is_active                   = $5,
+       updated_at                  = $6,
+       reorder_level               = $7,
+       expiry_alert_threshold_days = $8,
+       product_category            = $9
 WHERE  id = $1
 AND    NOT is_deleted;
 
@@ -51,8 +59,9 @@ AND    NOT is_deleted;
 -- $6 = page_size + 1 (peek-one-extra per pagination.BuildPage).
 SELECT id, tenant_id, sku, name, dosage_form, pack_size, hsn_code,
        gst_rate_bps, manufacturer, is_active,
-       created_at, updated_at,
-       is_deleted, deleted_at, deleted_by, created_by_membership_id
+       created_at, updated_at, is_deleted, deleted_at, deleted_by,
+       created_by_membership_id, reorder_level, expiry_alert_threshold_days,
+       product_category
 FROM   inventory.products
 WHERE  tenant_id = $1
 AND    NOT is_deleted

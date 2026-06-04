@@ -37,6 +37,16 @@ const (
 	ManufacturerMaxLen  = 200
 	GSTRateBpsMin       = 0     // 0%
 	GSTRateBpsMax       = 10000 // 100% — practical ceiling; basis points
+	// ReorderLevelMin floors the reorder_level field. 0 disables the
+	// per-product reorder alert (the ReorderScanJob skips zero rows).
+	ReorderLevelMin = 0
+	// ExpiryAlertThresholdDaysMin / Default — per BRD §6.5.
+	ExpiryAlertThresholdDaysMin     = 0
+	ExpiryAlertThresholdDaysDefault = 90
+	// ProductCategory bounds — mirror the migration's CHECK + DEFAULT.
+	ProductCategoryMinLength = 1
+	ProductCategoryMaxLength = 64
+	ProductCategoryDefault   = "General"
 )
 
 // ErrInvalid is returned (wrapped via %w) by [New] and [Update] on invariant violation.
@@ -56,23 +66,29 @@ func (i ID) String() string { return string(i) }
 
 // Spec is the input to [New]. Invariants are validated inside New.
 type Spec struct {
-	SKU          string
-	Name         string
-	DosageForm   string
-	PackSize     string
-	HSNCode      string
-	GSTRateBps   int
-	Manufacturer string
+	SKU                      string
+	Name                     string
+	DosageForm               string
+	PackSize                 string
+	HSNCode                  string
+	GSTRateBps               int
+	Manufacturer             string
+	ReorderLevel             int
+	ExpiryAlertThresholdDays int
+	ProductCategory          string
 }
 
 // UpdateSpec is the partial-update input for [Product.Update].
 // Only non-nil fields are applied; matching values are no-ops (no event emitted).
 // ChangedFields on the resulting event surfaces the diff.
 type UpdateSpec struct {
-	Name         *string
-	GSTRateBps   *int
-	IsActive     *bool
-	Manufacturer *string
+	Name                     *string
+	GSTRateBps               *int
+	IsActive                 *bool
+	Manufacturer             *string
+	ReorderLevel             *int
+	ExpiryAlertThresholdDays *int
+	ProductCategory          *string
 }
 
 // Product is the aggregate root.
@@ -86,22 +102,25 @@ type UpdateSpec struct {
 //   - GSTRateBps in [0, 10000] (basis points; 1200 = 12%)
 //   - Manufacturer trimmed, <=ManufacturerMaxLen
 type Product struct {
-	id           ID
-	tenantID     tenant.ID
-	sku          string
-	name         string
-	dosageForm   string
-	packSize     string
-	hsnCode      string
-	gstRateBps   int
-	manufacturer string
-	isActive     bool
-	createdAt    time.Time
-	updatedAt    time.Time
-	deleted      bool
-	deletedAt    time.Time
-	deletedBy    string
-	events       []Event
+	id                       ID
+	tenantID                 tenant.ID
+	sku                      string
+	name                     string
+	dosageForm               string
+	packSize                 string
+	hsnCode                  string
+	gstRateBps               int
+	manufacturer             string
+	isActive                 bool
+	reorderLevel             int
+	expiryAlertThresholdDays int
+	productCategory          string
+	createdAt                time.Time
+	updatedAt                time.Time
+	deleted                  bool
+	deletedAt                time.Time
+	deletedBy                string
+	events                   []Event
 }
 
 // validateUUID enforces the H6 reviewer rule: every domain ID must parse as a
@@ -160,20 +179,39 @@ func New(id ID, tenantID tenant.ID, actorID membership.ID, spec Spec, now time.T
 		return nil, fmt.Errorf("%w: manufacturer too long (max %d, got %d)",
 			ErrInvalid, ManufacturerMaxLen, len(manufacturer))
 	}
+	if spec.ReorderLevel < ReorderLevelMin {
+		return nil, fmt.Errorf("%w: reorder_level must be >= %d (got %d)",
+			ErrInvalid, ReorderLevelMin, spec.ReorderLevel)
+	}
+	if spec.ExpiryAlertThresholdDays < ExpiryAlertThresholdDaysMin {
+		return nil, fmt.Errorf("%w: expiry_alert_threshold_days must be >= %d (got %d)",
+			ErrInvalid, ExpiryAlertThresholdDaysMin, spec.ExpiryAlertThresholdDays)
+	}
+	category := strings.TrimSpace(spec.ProductCategory)
+	if category == "" {
+		category = ProductCategoryDefault
+	}
+	if len(category) < ProductCategoryMinLength || len(category) > ProductCategoryMaxLength {
+		return nil, fmt.Errorf("%w: product_category length %d not in [%d,%d]",
+			ErrInvalid, len(category), ProductCategoryMinLength, ProductCategoryMaxLength)
+	}
 	now = now.UTC()
 	p := &Product{
-		id:           id,
-		tenantID:     tenantID,
-		sku:          sku,
-		name:         name,
-		dosageForm:   dosage,
-		packSize:     packSize,
-		hsnCode:      hsn,
-		gstRateBps:   spec.GSTRateBps,
-		manufacturer: manufacturer,
-		isActive:     true,
-		createdAt:    now,
-		updatedAt:    now,
+		id:                       id,
+		tenantID:                 tenantID,
+		sku:                      sku,
+		name:                     name,
+		dosageForm:               dosage,
+		packSize:                 packSize,
+		hsnCode:                  hsn,
+		gstRateBps:               spec.GSTRateBps,
+		manufacturer:             manufacturer,
+		isActive:                 true,
+		reorderLevel:             spec.ReorderLevel,
+		expiryAlertThresholdDays: spec.ExpiryAlertThresholdDays,
+		productCategory:          category,
+		createdAt:                now,
+		updatedAt:                now,
 	}
 	p.recordEvent(CreatedEvent{
 		ProductID:    id,
@@ -222,7 +260,22 @@ func (p *Product) Manufacturer() string { return p.manufacturer }
 // A soft-deleted product is never visible regardless of this flag.
 func (p *Product) IsActive() bool { return p.isActive }
 
-// IsDeleted reports soft-deleted state. Live reads filter these out; intended for forensic tooling.
+// ReorderLevel returns the per-product reorder threshold (units). When
+// total live-batch quantity_on_hand falls strictly below this value the
+// daily ReorderScanJob emits ProductBelowReorderLevelV1. 0 disables.
+func (p *Product) ReorderLevel() int { return p.reorderLevel }
+
+// ExpiryAlertThresholdDays returns the look-ahead window (days) the
+// ExpiryScanJob uses to detect batches nearing expiry. BRD default 90.
+func (p *Product) ExpiryAlertThresholdDays() int { return p.expiryAlertThresholdDays }
+
+// ProductCategory returns the product's BRD §6.5 category. Drives the
+// default GST percentage (resolved via shared.product_category_gst_defaults)
+// and matches lead ProductRanges for catalogue browsing.
+func (p *Product) ProductCategory() string { return p.productCategory }
+
+// IsDeleted reports whether the product has been soft-deleted. Live
+// read paths filter these; this getter is for forensic tooling.
 func (p *Product) IsDeleted() bool { return p.deleted }
 
 // DeletedAt returns the soft-delete timestamp; zero if the product is live.
@@ -287,6 +340,11 @@ func (p *Product) Update(actorID membership.ID, spec UpdateSpec, now time.Time) 
 			changed = append(changed, "manufacturer")
 		}
 	}
+	ext, err := p.applyExtendedUpdates(spec)
+	if err != nil {
+		return err
+	}
+	changed = append(changed, ext...)
 	if len(changed) == 0 {
 		return nil
 	}
@@ -301,6 +359,50 @@ func (p *Product) Update(actorID membership.ID, spec UpdateSpec, now time.Time) 
 		At:            now,
 	})
 	return nil
+}
+
+// applyExtendedUpdates applies the Phase A.3 optional fields (reorder level,
+// expiry-alert threshold, product category), returning the changed-field names.
+// Split out of [Update] to keep that method under the cyclomatic-complexity gate.
+func (p *Product) applyExtendedUpdates(spec UpdateSpec) ([]string, error) {
+	changed := []string{}
+	if spec.ReorderLevel != nil {
+		v := *spec.ReorderLevel
+		if v < ReorderLevelMin {
+			return nil, fmt.Errorf("%w: reorder_level must be >= %d (got %d)",
+				ErrInvalid, ReorderLevelMin, v)
+		}
+		if v != p.reorderLevel {
+			p.reorderLevel = v
+			changed = append(changed, "reorder_level")
+		}
+	}
+	if spec.ExpiryAlertThresholdDays != nil {
+		v := *spec.ExpiryAlertThresholdDays
+		if v < ExpiryAlertThresholdDaysMin {
+			return nil, fmt.Errorf("%w: expiry_alert_threshold_days must be >= %d (got %d)",
+				ErrInvalid, ExpiryAlertThresholdDaysMin, v)
+		}
+		if v != p.expiryAlertThresholdDays {
+			p.expiryAlertThresholdDays = v
+			changed = append(changed, "expiry_alert_threshold_days")
+		}
+	}
+	if spec.ProductCategory != nil {
+		c := strings.TrimSpace(*spec.ProductCategory)
+		if c == "" {
+			c = ProductCategoryDefault
+		}
+		if len(c) < ProductCategoryMinLength || len(c) > ProductCategoryMaxLength {
+			return nil, fmt.Errorf("%w: product_category length %d not in [%d,%d]",
+				ErrInvalid, len(c), ProductCategoryMinLength, ProductCategoryMaxLength)
+		}
+		if c != p.productCategory {
+			p.productCategory = c
+			changed = append(changed, "product_category")
+		}
+	}
+	return changed, nil
 }
 
 // Activate sets is_active = true via [Update].
@@ -357,42 +459,52 @@ func (p *Product) SoftDelete(actorID membership.ID, now time.Time) error {
 
 // Snapshot is the persistence-layer projection consumed by [UnmarshalFromDB].
 type Snapshot struct {
-	ID           ID
-	TenantID     tenant.ID
-	SKU          string
-	Name         string
-	DosageForm   string
-	PackSize     string
-	HSNCode      string
-	GSTRateBps   int
-	Manufacturer string
-	IsActive     bool
-	CreatedAt    time.Time
-	UpdatedAt    time.Time
-	IsDeleted    bool
-	DeletedAt    time.Time
-	DeletedBy    string
+	ID                       ID
+	TenantID                 tenant.ID
+	SKU                      string
+	Name                     string
+	DosageForm               string
+	PackSize                 string
+	HSNCode                  string
+	GSTRateBps               int
+	Manufacturer             string
+	IsActive                 bool
+	ReorderLevel             int
+	ExpiryAlertThresholdDays int
+	ProductCategory          string
+	CreatedAt                time.Time
+	UpdatedAt                time.Time
+	IsDeleted                bool
+	DeletedAt                time.Time
+	DeletedBy                string
 }
 
 // UnmarshalFromDB re-hydrates a Product from persistence.
 // Repository-only — does not re-validate (trust the DB) and does not emit events.
 func UnmarshalFromDB(s Snapshot) *Product {
+	cat := s.ProductCategory
+	if cat == "" {
+		cat = ProductCategoryDefault
+	}
 	return &Product{
-		id:           s.ID,
-		tenantID:     s.TenantID,
-		sku:          s.SKU,
-		name:         s.Name,
-		dosageForm:   s.DosageForm,
-		packSize:     s.PackSize,
-		hsnCode:      s.HSNCode,
-		gstRateBps:   s.GSTRateBps,
-		manufacturer: s.Manufacturer,
-		isActive:     s.IsActive,
-		createdAt:    s.CreatedAt,
-		updatedAt:    s.UpdatedAt,
-		deleted:      s.IsDeleted,
-		deletedAt:    s.DeletedAt,
-		deletedBy:    s.DeletedBy,
+		id:                       s.ID,
+		tenantID:                 s.TenantID,
+		sku:                      s.SKU,
+		name:                     s.Name,
+		dosageForm:               s.DosageForm,
+		packSize:                 s.PackSize,
+		hsnCode:                  s.HSNCode,
+		gstRateBps:               s.GSTRateBps,
+		manufacturer:             s.Manufacturer,
+		isActive:                 s.IsActive,
+		reorderLevel:             s.ReorderLevel,
+		expiryAlertThresholdDays: s.ExpiryAlertThresholdDays,
+		productCategory:          cat,
+		createdAt:                s.CreatedAt,
+		updatedAt:                s.UpdatedAt,
+		deleted:                  s.IsDeleted,
+		deletedAt:                s.DeletedAt,
+		deletedBy:                s.DeletedBy,
 	}
 }
 

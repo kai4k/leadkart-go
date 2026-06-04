@@ -12,7 +12,7 @@ import (
 func TestCreateProductHandler_HappyPath_Persists(t *testing.T) {
 	t.Parallel()
 	repo := newFakeProductRepo()
-	h := command.NewCreateProductHandler(repo, func() time.Time { return fixedNow }, testNewProductID)
+	h := command.NewCreateProductHandler(repo, nil, func() time.Time { return fixedNow }, testNewProductID)
 	tid := newTenantID(t)
 	actor := newMembershipID(t)
 
@@ -38,7 +38,7 @@ func TestCreateProductHandler_HappyPath_Persists(t *testing.T) {
 func TestCreateProductHandler_RejectsInvalidSpec(t *testing.T) {
 	t.Parallel()
 	repo := newFakeProductRepo()
-	h := command.NewCreateProductHandler(repo, func() time.Time { return fixedNow }, testNewProductID)
+	h := command.NewCreateProductHandler(repo, nil, func() time.Time { return fixedNow }, testNewProductID)
 	tid := newTenantID(t)
 	actor := newMembershipID(t)
 
@@ -60,7 +60,7 @@ func TestCreateProductHandler_RejectsInvalidSpec(t *testing.T) {
 func TestCreateProductHandler_DuplicateSKU_ReturnsErrSKUTaken(t *testing.T) {
 	t.Parallel()
 	repo := newFakeProductRepo()
-	h := command.NewCreateProductHandler(repo, func() time.Time { return fixedNow }, testNewProductID)
+	h := command.NewCreateProductHandler(repo, nil, func() time.Time { return fixedNow }, testNewProductID)
 	tid := newTenantID(t)
 	actor := newMembershipID(t)
 	_ = seedProduct(t, repo, tid, actor, "DUP-1") // arch-test:ignore-err — seed helper, error reported via t.Fatalf inside helper
@@ -81,7 +81,7 @@ func TestCreateProductHandler_RepoAddError_Propagates(t *testing.T) {
 	t.Parallel()
 	repo := newFakeProductRepo()
 	repo.AddErr = errSentinel
-	h := command.NewCreateProductHandler(repo, func() time.Time { return fixedNow }, testNewProductID)
+	h := command.NewCreateProductHandler(repo, nil, func() time.Time { return fixedNow }, testNewProductID)
 	tid := newTenantID(t)
 	actor := newMembershipID(t)
 

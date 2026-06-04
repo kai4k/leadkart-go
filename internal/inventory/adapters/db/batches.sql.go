@@ -201,6 +201,225 @@ func (q *Queries) ListBatchesByProductPage(ctx context.Context, arg ListBatchesB
 	return items, nil
 }
 
+const listBatchesNearExpiryForTenant = `-- name: ListBatchesNearExpiryForTenant :many
+SELECT b.id, b.product_id, b.tenant_id, b.batch_number,
+       b.manufacture_date, b.expiry_date,
+       b.manufacturer_name, b.manufacturing_licence_number,
+       b.mrp_paise, b.purchase_price_paise,
+       b.quantity_on_hand, b.version,
+       b.created_at, b.updated_at,
+       b.is_deleted, b.deleted_at, b.deleted_by,
+       p.expiry_alert_threshold_days
+FROM   inventory.batches b
+JOIN   inventory.products p
+    ON p.id        = b.product_id
+   AND p.tenant_id = b.tenant_id
+WHERE  b.tenant_id = $1
+AND    NOT b.is_deleted
+AND    NOT p.is_deleted
+AND    b.quantity_on_hand > 0
+AND    p.expiry_alert_threshold_days > 0
+AND    b.expiry_date <= ($2::date + p.expiry_alert_threshold_days)
+ORDER  BY b.expiry_date ASC, b.id ASC
+`
+
+type ListBatchesNearExpiryForTenantParams struct {
+	TenantID pgtype.UUID
+	Today    pgtype.Date
+}
+
+type ListBatchesNearExpiryForTenantRow struct {
+	ID                         pgtype.UUID
+	ProductID                  pgtype.UUID
+	TenantID                   pgtype.UUID
+	BatchNumber                string
+	ManufactureDate            pgtype.Date
+	ExpiryDate                 pgtype.Date
+	ManufacturerName           string
+	ManufacturingLicenceNumber string
+	MrpPaise                   int64
+	PurchasePricePaise         int64
+	QuantityOnHand             int64
+	Version                    int64
+	CreatedAt                  pgtype.Timestamptz
+	UpdatedAt                  pgtype.Timestamptz
+	IsDeleted                  bool
+	DeletedAt                  pgtype.Timestamptz
+	DeletedBy                  *string
+	ExpiryAlertThresholdDays   int32
+}
+
+// ExpiryScanJob workhorse. Per-tenant scan returning batches whose
+// expiry_date <= (today + product.expiry_alert_threshold_days).
+// Excludes soft-deleted batches + zero-on-hand + threshold==0.
+// $1 = tenant_id, $2 = today (UTC, date-only).
+func (q *Queries) ListBatchesNearExpiryForTenant(ctx context.Context, arg ListBatchesNearExpiryForTenantParams) ([]ListBatchesNearExpiryForTenantRow, error) {
+	rows, err := q.db.Query(ctx, listBatchesNearExpiryForTenant, arg.TenantID, arg.Today)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListBatchesNearExpiryForTenantRow
+	for rows.Next() {
+		var i ListBatchesNearExpiryForTenantRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.ProductID,
+			&i.TenantID,
+			&i.BatchNumber,
+			&i.ManufactureDate,
+			&i.ExpiryDate,
+			&i.ManufacturerName,
+			&i.ManufacturingLicenceNumber,
+			&i.MrpPaise,
+			&i.PurchasePricePaise,
+			&i.QuantityOnHand,
+			&i.Version,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.IsDeleted,
+			&i.DeletedAt,
+			&i.DeletedBy,
+			&i.ExpiryAlertThresholdDays,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listFefoBatchesForProduct = `-- name: ListFefoBatchesForProduct :many
+SELECT id, product_id, tenant_id, batch_number,
+       manufacture_date, expiry_date,
+       manufacturer_name, manufacturing_licence_number,
+       mrp_paise, purchase_price_paise,
+       quantity_on_hand, version,
+       created_at, updated_at,
+       is_deleted, deleted_at, deleted_by, created_by_membership_id
+FROM   inventory.batches
+WHERE  product_id = $1
+AND    NOT is_deleted
+AND    quantity_on_hand > 0
+AND    expiry_date > $2::date
+ORDER  BY expiry_date ASC, id ASC
+`
+
+type ListFefoBatchesForProductParams struct {
+	ProductID pgtype.UUID
+	Today     pgtype.Date
+}
+
+// FEFO (First Expired First Out) ordering per BRD §6.5 — feeds the
+// dispatch picker so warehouse staff pull oldest-expiring inventory
+// first. Filters: live + in-stock + not-yet-expired. Order: expiry_date
+// ASC, id ASC. No pagination — the dispatch picker needs the FULL set.
+// today (UTC, date-only) bounds the not-yet-expired filter. Column order
+// MUST match inventory.batches so sqlc returns the db.InventoryBatch model.
+func (q *Queries) ListFefoBatchesForProduct(ctx context.Context, arg ListFefoBatchesForProductParams) ([]InventoryBatch, error) {
+	rows, err := q.db.Query(ctx, listFefoBatchesForProduct, arg.ProductID, arg.Today)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []InventoryBatch
+	for rows.Next() {
+		var i InventoryBatch
+		if err := rows.Scan(
+			&i.ID,
+			&i.ProductID,
+			&i.TenantID,
+			&i.BatchNumber,
+			&i.ManufactureDate,
+			&i.ExpiryDate,
+			&i.ManufacturerName,
+			&i.ManufacturingLicenceNumber,
+			&i.MrpPaise,
+			&i.PurchasePricePaise,
+			&i.QuantityOnHand,
+			&i.Version,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.IsDeleted,
+			&i.DeletedAt,
+			&i.DeletedBy,
+			&i.CreatedByMembershipID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listProductsBelowReorderForTenant = `-- name: ListProductsBelowReorderForTenant :many
+SELECT p.id, p.sku, p.reorder_level,
+       COALESCE(SUM(b.quantity_on_hand), 0)::bigint AS stock_on_hand
+FROM   inventory.products p
+LEFT JOIN inventory.batches b
+    ON  b.product_id = p.id
+    AND b.tenant_id  = p.tenant_id
+    AND NOT b.is_deleted
+    AND b.quantity_on_hand > 0
+    AND b.expiry_date > $2::date
+WHERE  p.tenant_id = $1
+AND    NOT p.is_deleted
+AND    p.reorder_level > 0
+GROUP  BY p.id, p.sku, p.reorder_level
+HAVING COALESCE(SUM(b.quantity_on_hand), 0) < p.reorder_level
+ORDER  BY p.id ASC
+`
+
+type ListProductsBelowReorderForTenantParams struct {
+	TenantID pgtype.UUID
+	Today    pgtype.Date
+}
+
+type ListProductsBelowReorderForTenantRow struct {
+	ID           pgtype.UUID
+	Sku          string
+	ReorderLevel int32
+	StockOnHand  int64
+}
+
+// ReorderScanJob workhorse. Per-tenant scan returning products where
+//
+//	reorder_level > 0 AND
+//	SUM(live + not-expired batches' quantity_on_hand) < reorder_level
+//
+// LEFT JOIN so products with NO live batches still surface.
+// $1 = tenant_id, $2 = today (UTC, date-only).
+func (q *Queries) ListProductsBelowReorderForTenant(ctx context.Context, arg ListProductsBelowReorderForTenantParams) ([]ListProductsBelowReorderForTenantRow, error) {
+	rows, err := q.db.Query(ctx, listProductsBelowReorderForTenant, arg.TenantID, arg.Today)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListProductsBelowReorderForTenantRow
+	for rows.Next() {
+		var i ListProductsBelowReorderForTenantRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Sku,
+			&i.ReorderLevel,
+			&i.StockOnHand,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const lockBatchForUpdate = `-- name: LockBatchForUpdate :one
 SELECT id
 FROM   inventory.batches

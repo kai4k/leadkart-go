@@ -88,7 +88,7 @@ func newE2EFixture(t *testing.T) e2eFixture {
 	if err != nil {
 		t.Fatalf("buildIdentityApp: %v", err)
 	}
-	srv := httptest.NewServer(newServer(silentLogger(), wiring.App, platformapp.Application{}, buildInventoryApp(pool), crmapp.Application{}, wiring.Issuer, wiring.StampValidator))
+	srv := httptest.NewServer(newServer(silentLogger(), wiring.App, platformapp.Application{}, buildInventoryApp(pool, nil), crmapp.Application{}, wiring.Issuer, wiring.StampValidator))
 	t.Cleanup(srv.Close)
 	return e2eFixture{
 		URL:     srv.URL,
@@ -596,10 +596,10 @@ func TestE2E_PlatformOperator_ListsAllTenants(t *testing.T) {
 // Per-helper contribution to the stats counters (encoded as a contract
 // the helpers + assertions share, not magic numbers in the test body):
 //
-//   registerAndLogin → +1 tenant, +1 person, +1 active membership
-//   mintPlatformToken → +1 person (the synthetic operator Person);
-//                       no tenant, no membership (TenantID claim is
-//                       synthetic, no DB row)
+//	registerAndLogin → +1 tenant, +1 person, +1 active membership
+//	mintPlatformToken → +1 person (the synthetic operator Person);
+//	                    no tenant, no membership (TenantID claim is
+//	                    synthetic, no DB row)
 func TestE2E_PlatformStats_ReflectsState(t *testing.T) {
 	f := newE2EFixture(t)
 	admins := []registeredTenant{

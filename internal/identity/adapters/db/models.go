@@ -373,6 +373,15 @@ type IdentityTenantMembership struct {
 	CreatedByMembershipID pgtype.UUID
 }
 
+// Per-day dedup ledger for ExpiryScanJob + ReorderScanJob emissions. PK ensures second-run-same-day = no-op.
+type InventoryAlertEmission struct {
+	TenantID    pgtype.UUID
+	Kind        string
+	SubjectID   pgtype.UUID
+	EmittedDate pgtype.Date
+	EmittedAt   pgtype.Timestamptz
+}
+
 // Batch aggregate. Tenant-scoped, FORCE RLS. Composite-FK to products enforces same-tenant linkage. `version` column drives optimistic-concurrency retry.
 type InventoryBatch struct {
 	ID                         pgtype.UUID
@@ -415,6 +424,12 @@ type InventoryProduct struct {
 	DeletedBy    *string
 	// Audit chain — Membership that created this product. NULL = system-bootstrapped (seed / import). Wave 1.5 ADR 0027.
 	CreatedByMembershipID pgtype.UUID
+	// When SUM(batches.quantity_on_hand WHERE NOT is_deleted AND NOT expired) < reorder_level, the daily ReorderScanJob emits ProductBelowReorderLevelV1. 0 disables the alert (BRD §6.5).
+	ReorderLevel int32
+	// Batches with expiry_date <= now() + this days threshold trigger BatchExpiringSoonV1 via the daily ExpiryScanJob. Default 90 per BRD §6.5.
+	ExpiryAlertThresholdDays int32
+	// Drives the default GST percentage via shared.product_category_gst_defaults; also matches lead ProductRanges for catalogue browsing (BRD §6.5 + Appendix C.5).
+	ProductCategory string
 }
 
 // Append-only stock-movement ledger. Tenant-scoped, FORCE RLS. NO update/delete policies (Vernon IDDD append-only aggregate).
@@ -535,4 +550,11 @@ type PlatformVerificationCall struct {
 	CallbackWindowEndAt   pgtype.Timestamptz
 	LoggedAt              pgtype.Timestamptz
 	LoggedByMembershipID  pgtype.UUID
+}
+
+// Default GST rate (basis points) per ProductCategory. BRD Appendix C.5 seed. Read-only for tenants; SuperAdmin write endpoint TODO.
+type SharedProductCategoryGstDefault struct {
+	Category          string
+	DefaultGstRateBps int32
+	UpdatedAt         pgtype.Timestamptz
 }

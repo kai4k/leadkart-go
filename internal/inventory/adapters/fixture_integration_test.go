@@ -55,11 +55,13 @@ var testNow = fixedNow
 // after m.Run() to catch goroutine leaks.
 func TestMain(m *testing.M) {
 	code := pgtest.RunMain(m, pgtest.Config{
-		// USAGE on these schemas. "app" is implicit.
-		Schemas: []string{"identity", "inventory"},
+		// USAGE on these schemas. "app" is implicit. "shared" carries the
+		// product_category_gst_defaults reference table the GST-default reader
+		// queries (Phase A.3).
+		Schemas: []string{"identity", "inventory", "shared"},
 		// identity included: inventory tests seed real tenant rows via
 		// identity.TenantRepository to satisfy the composite FK.
-		Grants: []string{"identity", "inventory"},
+		Grants: []string{"identity", "inventory", "shared"},
 	}, func(c *pgtest.Container) {
 		sharedPG = c
 	})

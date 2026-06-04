@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -193,6 +194,37 @@ func (r *BatchRepository) ListByProductPage(ctx context.Context, tenantID tenant
 		page.Items = []*batch.Batch{}
 	}
 	return page, nil
+}
+
+// ListFefoForProduct satisfies [batch.Repository]. Tenant-scoped read
+// — GUC bound from the explicit tenantID parameter (TDL canon per
+// ADR 0062). FEFO ordering (expiry_date ASC, id ASC) per BRD §6.5;
+// expired batches filtered at the SQL level using `now`.
+func (r *BatchRepository) ListFefoForProduct(ctx context.Context, tenantID tenant.ID, productID product.ID, now time.Time) ([]*batch.Batch, error) {
+	pid, err := uuid.Parse(productID.String())
+	if err != nil {
+		return nil, fmt.Errorf("batch repo: parse product id: %w", err)
+	}
+	var out []*batch.Batch
+	err = r.tx.WithinTxPgxTenant(ctx, tenantID.String(), func(ctx context.Context, tx pgx.Tx) error {
+		q := r.q.WithTx(tx)
+		rows, err := q.ListFefoBatchesForProduct(ctx, db.ListFefoBatchesForProductParams{
+			ProductID: pgconv.PgUUID(pid),
+			Today:     pgconv.PgDate(now),
+		})
+		if err != nil {
+			return fmt.Errorf("batch repo: list fefo: %w", err)
+		}
+		for _, row := range rows {
+			b, perr := rowToBatch(row)
+			if perr != nil {
+				return perr
+			}
+			out = append(out, b)
+		}
+		return nil
+	})
+	return out, err
 }
 
 // AnyLiveWithStockForProduct satisfies [batch.Repository]. GUC bound

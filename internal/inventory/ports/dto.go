@@ -118,6 +118,13 @@ type ListBatchesResponse struct {
 	NextCursor string     `json:"next_cursor,omitzero"`
 }
 
+// FefoBatchesResponse — GET /api/v1/inventory/products/{productId}/fefo-batches.
+// No pagination: dispatch pickers need the FULL eligible set to compute
+// multi-batch allocations against a single order quantity (BRD §6.5).
+type FefoBatchesResponse struct {
+	Items []BatchDto `json:"items"`
+}
+
 // ----- StockMovement ---------------------------------------------------------
 
 // MovementDto is the wire shape for a single ledger row.

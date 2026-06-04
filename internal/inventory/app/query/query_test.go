@@ -101,6 +101,13 @@ func (r *fakeBatchRepo) AnyLiveWithStockForProduct(context.Context, tenant.ID, p
 	return false, nil
 }
 
+func (r *fakeBatchRepo) ListFefoForProduct(_ context.Context, _ tenant.ID, _ product.ID, _ time.Time) ([]*batch.Batch, error) {
+	if r.listErr != nil {
+		return nil, r.listErr
+	}
+	return r.listPage.Items, nil
+}
+
 type fakeMovementRepo struct {
 	listPage pagination.Page[*stockmovement.Movement]
 	listErr  error
@@ -307,5 +314,33 @@ func TestListBatchMovementsPageHandler_RepoError_Propagates(t *testing.T) {
 	})
 	if !errors.Is(err, errSentinel) {
 		t.Fatalf("err: got %v want errSentinel propagated", err)
+	}
+}
+
+// ----- FefoBatches ---------------------------------------------------------
+
+func TestFefoBatchesHandler_HappyPath_ReturnsItems(t *testing.T) {
+	t.Parallel()
+	repo := newFakeBatchRepo()
+	repo.listPage = pagination.Page[*batch.Batch]{Items: []*batch.Batch{}}
+	h := query.NewFefoBatchesHandler(repo, func() time.Time { return fixedNow })
+	_, err := h.Handle(t.Context(), query.FefoBatchesQuery{
+		TenantID: newTenantID(t), ProductID: product.ID("p"),
+	})
+	if err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+}
+
+func TestFefoBatchesHandler_RepoError_Propagates(t *testing.T) {
+	t.Parallel()
+	repo := newFakeBatchRepo()
+	repo.listErr = errSentinel
+	h := query.NewFefoBatchesHandler(repo, func() time.Time { return fixedNow })
+	_, err := h.Handle(t.Context(), query.FefoBatchesQuery{
+		TenantID: newTenantID(t), ProductID: product.ID("p"),
+	})
+	if !errors.Is(err, errSentinel) {
+		t.Fatalf("err: got %v want errSentinel", err)
 	}
 }

@@ -2,6 +2,7 @@ package batch
 
 import (
 	"context"
+	"time"
 
 	"github.com/leadkart/leadkart-go/internal/common/errs"
 	"github.com/leadkart/leadkart-go/internal/common/pagination"
@@ -66,4 +67,17 @@ type Repository interface {
 	// Used by the DeleteProductHandler to enforce the "no live stock"
 	// guard.
 	AnyLiveWithStockForProduct(ctx context.Context, tenantID tenant.ID, productID product.ID) (bool, error)
+
+	// ListFefoForProduct returns live, in-stock, not-yet-expired batches
+	// for productID in tenantID, ordered by (expiry_date ASC, id ASC)
+	// — First-Expired-First-Out per BRD §6.5.
+	//
+	// `now` is the wall-clock instant used to determine expiry; passed
+	// in explicitly per the clock-injection refactor so the handler +
+	// adapter share one moment for the filter predicate.
+	//
+	// Returns ALL eligible batches (no cursor pagination) because the
+	// dispatch picker needs the full set to compute multi-batch
+	// allocations against a single order quantity.
+	ListFefoForProduct(ctx context.Context, tenantID tenant.ID, productID product.ID, now time.Time) ([]*Batch, error)
 }
