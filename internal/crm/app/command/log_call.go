@@ -17,12 +17,19 @@ import (
 //
 // TenantID is the caller's tenant scope (TDL canon per ADR 0062 —
 // flows through as an explicit value, not via ctx-tenancy).
+//
+// CallbackWindow is the optional caller-supplied window the contact
+// asked to be called back in per BRD §4.5. Zero when no callback was
+// requested. Non-zero values fan out to the persisted row + the
+// CallLogged integration event so the Reminder slice's CallLogged
+// subscriber can mint a callback reminder due at Start.
 type LogCallCommand struct {
 	TenantID             tenant.ID
 	LeadID               crmlead.ID
 	Outcome              calllog.Outcome
 	Notes                string
 	LoggedByMembershipID string
+	CallbackWindow       calllog.CallbackWindow
 }
 
 // LogCallResult returns the new call-log ID for the caller.
@@ -86,7 +93,7 @@ func (h LogCallHandler) Handle(ctx context.Context, cmd LogCallCommand) (LogCall
 		return LogCallResult{}, ErrLeadTerminal
 	}
 
-	c, err := calllog.New(
+	c, err := calllog.NewWithCallback(
 		h.newCallID(),
 		cmd.TenantID,
 		cmd.LeadID,
@@ -94,6 +101,7 @@ func (h LogCallHandler) Handle(ctx context.Context, cmd LogCallCommand) (LogCall
 		cmd.Notes,
 		cmd.LoggedByMembershipID,
 		h.now(),
+		cmd.CallbackWindow,
 	)
 	if err != nil {
 		return LogCallResult{}, fmt.Errorf("crm log_call: factory: %w", err)

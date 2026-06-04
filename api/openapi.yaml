@@ -2061,6 +2061,133 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
 
+  /api/v1/crm/leads/{leadId}/reminders:
+    post:
+      tags: [crm]
+      summary: Create a manual reminder against a lead
+      description: |
+        Creates a `manual` Reminder owned by the supplied assignee.
+        `callback` + `mature_lead` reminders are auto-created by the
+        CallLogged subscriber (BRD §4.5) + the mature-lead daily scan
+        (BRD §4.7) respectively; the HTTP surface only mints manual ones.
+        Emits `crm.reminder_created.v1`.
+      parameters:
+        - { $ref: '#/components/parameters/LeadId' }
+        - { $ref: '#/components/parameters/XCommandId' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateReminderRequest' }
+      responses:
+        '201':
+          description: Reminder created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CreateReminderResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422':
+          description: Invalid due_at / assignee
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /api/v1/crm/reminders:
+    get:
+      tags: [crm]
+      summary: List pending reminders (cursor-paginated)
+      description: |
+        Returns a cursor-paginated page of pending reminders in the
+        caller's tenant, sorted by `due_at` ASC (overdue first,
+        upcoming after). Filters: `type`, `assignee`, `lead_id`.
+
+        Callers WITHOUT `crm.leads.read_all` see only their own
+        assignee bucket per ADR 0060.
+      parameters:
+        - { $ref: '#/components/parameters/Cursor' }
+        - { $ref: '#/components/parameters/PageSize' }
+        - name: type
+          in: query
+          required: false
+          schema: { type: string, enum: [callback, mature_lead, manual] }
+        - name: assignee
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+        - name: lead_id
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Cursor-paginated reminder page
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ListRemindersResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403':
+          description: Caller probed another assignee without crm.leads.read_all
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '500': { $ref: '#/components/responses/InternalServerError' }
+
+  /api/v1/crm/reminders/{reminderId}/sent:
+    post:
+      tags: [crm]
+      summary: Mark a pending reminder as sent (terminal)
+      description: |
+        Flips state to `sent`. Refused on already-terminal reminders.
+        Emits `crm.reminder_marked_sent.v1`.
+      parameters:
+        - { $ref: '#/components/parameters/ReminderId' }
+        - { $ref: '#/components/parameters/XCommandId' }
+      responses:
+        '204': { description: Marked sent }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: Reminder is already in a terminal state
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /api/v1/crm/reminders/{reminderId}/cancel:
+    post:
+      tags: [crm]
+      summary: Cancel a pending reminder (terminal; reason required)
+      description: |
+        Flips state to `cancelled`. `reason` is REQUIRED (audit
+        doctrine). Refused on already-terminal reminders. Emits
+        `crm.reminder_cancelled.v1`.
+      parameters:
+        - { $ref: '#/components/parameters/ReminderId' }
+        - { $ref: '#/components/parameters/XCommandId' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CancelReminderRequest' }
+      responses:
+        '204': { description: Cancelled }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: Reminder is already in a terminal state
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '422':
+          description: Reason missing
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
 components:
   securitySchemes:
     BearerAuth:
@@ -2129,6 +2256,12 @@ components:
       description: Generic resource path-parameter (Platform module routes).
     LeadId:
       name: leadId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+
+    ReminderId:
+      name: reminderId
       in: path
       required: true
       schema: { type: string, format: uuid }
@@ -3034,6 +3167,57 @@ components:
       required: [call_id]
       properties:
         call_id: { type: string, format: uuid }
+
+    ReminderDto:
+      type: object
+      required: [id, tenant_id, lead_id, assigned_to_membership_id, type, state, due_at, created_at]
+      properties:
+        id:                            { type: string, format: uuid }
+        tenant_id:                     { type: string, format: uuid }
+        lead_id:                       { type: string, format: uuid }
+        assigned_to_membership_id:     { type: string, format: uuid }
+        created_by_membership_id:      { type: string, format: uuid }
+        source_call_log_id:            { type: string, format: uuid, description: 'populated only for type=callback' }
+        type:                          { type: string, enum: [callback, mature_lead, manual] }
+        state:                         { type: string, enum: [pending, sent, cancelled] }
+        due_at:                        { type: string, format: date-time }
+        notes:                         { type: string }
+        sent_at:                       { type: string, format: date-time }
+        marked_sent_by_membership_id:  { type: string, format: uuid }
+        cancelled_at:                  { type: string, format: date-time }
+        cancelled_by_membership_id:    { type: string, format: uuid }
+        cancel_reason:                 { type: string }
+        created_at:                    { type: string, format: date-time }
+
+    ListRemindersResponse:
+      type: object
+      required: [items, has_more]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/ReminderDto' }
+        has_more:    { type: boolean }
+        next_cursor: { type: string }
+
+    CreateReminderRequest:
+      type: object
+      required: [assigned_to_membership_id, due_at]
+      properties:
+        assigned_to_membership_id: { type: string, format: uuid }
+        due_at:                    { type: string, format: date-time }
+        notes:                     { type: string }
+
+    CreateReminderResponse:
+      type: object
+      required: [reminder_id]
+      properties:
+        reminder_id: { type: string, format: uuid }
+
+    CancelReminderRequest:
+      type: object
+      required: [reason]
+      properties:
+        reason: { type: string }
 
     VerifyUnverifiedContactResponse:
       type: object

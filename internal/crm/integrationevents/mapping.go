@@ -7,6 +7,7 @@ import (
 
 	"github.com/leadkart/leadkart-go/internal/crm/domain/calllog"
 	"github.com/leadkart/leadkart-go/internal/crm/domain/crmlead"
+	"github.com/leadkart/leadkart-go/internal/crm/domain/reminder"
 )
 
 // FromDomainEvent translates ANY recognised CRM domain event into its
@@ -206,13 +207,119 @@ func FromDomainEvent(d any) (Event, error) {
 		if err != nil {
 			return nil, err
 		}
-		return CrmCallLoggedV1{
+		out := CrmCallLoggedV1{
 			CallID:               callID,
 			LeadID:               leadID,
 			TenantIDClaim:        tenantID,
 			Outcome:              e.Outcome.String(),
 			LoggedByMembershipID: loggedBy,
 			OccurredAtUTC:        e.At.UTC(),
+		}
+		// Per BRD §4.5: the CallbackWindow fields ride the V1 event as
+		// additive omitzero values when the caller stamped a callback
+		// window on the log_call request.
+		if !e.CallbackWindowStart.IsZero() {
+			out.CallbackWindowStartAt = e.CallbackWindowStart.UTC()
+		}
+		if !e.CallbackWindowEnd.IsZero() {
+			out.CallbackWindowEndAt = e.CallbackWindowEnd.UTC()
+		}
+		return out, nil
+
+	// ----- reminder aggregate ----------------------------------------
+
+	case reminder.CreatedEvent:
+		reminderID, err := parseUUID("reminder_id", e.ReminderID.String())
+		if err != nil {
+			return nil, err
+		}
+		tenantID, err := parseUUID("tenant_id", e.TenantID.String())
+		if err != nil {
+			return nil, err
+		}
+		leadID, err := parseUUID("lead_id", e.LeadID.String())
+		if err != nil {
+			return nil, err
+		}
+		assignedTo, err := parseUUID("assigned_to_membership_id", e.AssignedToMembershipID)
+		if err != nil {
+			return nil, err
+		}
+		var sourceCall uuid.UUID
+		if e.SourceCallLogID != "" {
+			sourceCall, err = parseUUID("source_call_log_id", e.SourceCallLogID)
+			if err != nil {
+				return nil, err
+			}
+		}
+		var createdBy uuid.UUID
+		if e.CreatedByMembershipID != "" {
+			createdBy, err = parseUUID("created_by_membership_id", e.CreatedByMembershipID)
+			if err != nil {
+				return nil, err
+			}
+		}
+		return CrmReminderCreatedV1{
+			ReminderID:             reminderID,
+			TenantIDClaim:          tenantID,
+			LeadID:                 leadID,
+			AssignedToMembershipID: assignedTo,
+			Type:                   e.Type.String(),
+			DueAtUTC:               e.DueAt.UTC(),
+			SourceCallLogID:        sourceCall,
+			CreatedByMembershipID:  createdBy,
+			OccurredAtUTC:          e.At.UTC(),
+		}, nil
+
+	case reminder.MarkedSentEvent:
+		reminderID, err := parseUUID("reminder_id", e.ReminderID.String())
+		if err != nil {
+			return nil, err
+		}
+		tenantID, err := parseUUID("tenant_id", e.TenantID.String())
+		if err != nil {
+			return nil, err
+		}
+		leadID, err := parseUUID("lead_id", e.LeadID.String())
+		if err != nil {
+			return nil, err
+		}
+		markedBy, err := parseUUID("marked_by_membership_id", e.MarkedByMembershipID)
+		if err != nil {
+			return nil, err
+		}
+		return CrmReminderMarkedSentV1{
+			ReminderID:           reminderID,
+			TenantIDClaim:        tenantID,
+			LeadID:               leadID,
+			MarkedByMembershipID: markedBy,
+			OccurredAtUTC:        e.At.UTC(),
+		}, nil
+
+	case reminder.CancelledEvent:
+		reminderID, err := parseUUID("reminder_id", e.ReminderID.String())
+		if err != nil {
+			return nil, err
+		}
+		tenantID, err := parseUUID("tenant_id", e.TenantID.String())
+		if err != nil {
+			return nil, err
+		}
+		leadID, err := parseUUID("lead_id", e.LeadID.String())
+		if err != nil {
+			return nil, err
+		}
+		cancelledBy, err := parseUUID("cancelled_by_membership_id", e.CancelledByMembershipID)
+		if err != nil {
+			return nil, err
+		}
+		return CrmReminderCancelledV1{
+			ReminderID:              reminderID,
+			TenantIDClaim:           tenantID,
+			LeadID:                  leadID,
+			CancelledByMembershipID: cancelledBy,
+			Reason:                  e.Reason,
+			OccurredAtUTC:           e.At.UTC(),
 		}, nil
 
 	default:

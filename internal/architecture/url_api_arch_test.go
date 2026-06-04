@@ -255,6 +255,7 @@ func TestArch_RoutesUsePluralNouns(t *testing.T) {
 		"approve":                true,
 		"cancel":                 true,
 		"deny":                   true,
+		"sent":                   true, // CRM Reminder mark-sent state-transition sub-action (ADR 0060 + BRD §4.6)
 		// CRM lead-aggregate state-transition sub-actions per Stripe canon
 		// (POST /charges/{id}/capture). ADR 0060 + URL design rule (Wave 8):
 		// state transitions are POSTs to a verb-segment under the parent.

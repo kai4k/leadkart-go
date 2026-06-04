@@ -63,15 +63,18 @@ func (r *CallLogRepository) addOnTx(ctx context.Context, tx pgx.Tx, c *calllog.C
 	if err != nil {
 		return fmt.Errorf("crm call_log repo: parse logged_by membership id %q: %w", c.LoggedByMembershipID(), err)
 	}
+	window := c.CallbackWindow()
 	if err := q.InsertCallLog(ctx, db.InsertCallLogParams{
-		ID:                   pgconv.PgUUID(cid),
-		TenantID:             pgconv.PgUUID(tid),
-		LeadID:               pgconv.PgUUID(lid),
-		Outcome:              c.Outcome().String(),
-		Notes:                c.Notes(),
-		LoggedByMembershipID: pgconv.PgUUID(loggedByID),
-		LoggedAt:             pgconv.PgRequiredTimestamp(c.LoggedAt()),
-		CreatedAt:            pgconv.PgRequiredTimestamp(c.CreatedAt()),
+		ID:                    pgconv.PgUUID(cid),
+		TenantID:              pgconv.PgUUID(tid),
+		LeadID:                pgconv.PgUUID(lid),
+		Outcome:               c.Outcome().String(),
+		Notes:                 c.Notes(),
+		LoggedByMembershipID:  pgconv.PgUUID(loggedByID),
+		LoggedAt:              pgconv.PgRequiredTimestamp(c.LoggedAt()),
+		CreatedAt:             pgconv.PgRequiredTimestamp(c.CreatedAt()),
+		CallbackWindowStartAt: pgconv.PgTimestamp(window.Start),
+		CallbackWindowEndAt:   pgconv.PgTimestamp(window.End),
 	}); err != nil {
 		return fmt.Errorf("crm call_log repo: insert: %w", err)
 	}
@@ -157,5 +160,9 @@ func rowToCallLog(row db.CrmCallLog) *calllog.CallLog {
 		LoggedByMembershipID: pgconv.UUIDFromPg(row.LoggedByMembershipID).String(),
 		LoggedAt:             pgconv.TimeFromPg(row.LoggedAt),
 		CreatedAt:            pgconv.TimeFromPg(row.CreatedAt),
+		CallbackWindow: calllog.CallbackWindow{
+			Start: pgconv.TimeFromPg(row.CallbackWindowStartAt),
+			End:   pgconv.TimeFromPg(row.CallbackWindowEndAt),
+		},
 	})
 }

@@ -94,6 +94,7 @@ import (
 	"github.com/leadkart/leadkart-go/internal/crm/domain/assignmenthistory"
 	"github.com/leadkart/leadkart-go/internal/crm/domain/calllog"
 	"github.com/leadkart/leadkart-go/internal/crm/domain/crmlead"
+	crmreminder "github.com/leadkart/leadkart-go/internal/crm/domain/reminder"
 	crmports "github.com/leadkart/leadkart-go/internal/crm/ports"
 )
 
@@ -776,10 +777,12 @@ func buildCrmApp(pool *pgxpool.Pool, now func() time.Time) crmWiringResult {
 	leads := crmadapters.NewCrmLeadRepository(pool, tx)
 	calls := crmadapters.NewCallLogRepository(pool, tx)
 	history := crmadapters.NewAssignmentHistoryRepository(pool, tx)
+	reminders := crmadapters.NewReminderRepository(pool, tx)
 
 	newCrmLeadID := func() crmlead.ID { return crmlead.ID(ids.NewV7().String()) }
 	newCallLogID := func() calllog.ID { return calllog.ID(ids.NewV7().String()) }
 	newHistoryID := func() assignmenthistory.ID { return assignmenthistory.ID(ids.NewV7().String()) }
+	newReminderID := func() crmreminder.ID { return crmreminder.ID(ids.NewV7().String()) }
 
 	return crmWiringResult{
 		App: crmapp.Application{
@@ -791,10 +794,14 @@ func buildCrmApp(pool *pgxpool.Pool, now func() time.Time) crmWiringResult {
 				LogCall:               crmcommand.NewLogCallHandler(leads, calls, now, newCallLogID),
 				ConvertLead:           crmcommand.NewConvertLeadHandler(leads, now),
 				LoseLead:              crmcommand.NewLoseLeadHandler(leads, now),
+				CreateReminder:        crmcommand.NewCreateReminderHandler(leads, reminders, now, newReminderID),
+				MarkReminderSent:      crmcommand.NewMarkReminderSentHandler(reminders, now),
+				CancelReminder:        crmcommand.NewCancelReminderHandler(reminders, now),
 			},
 			Queries: crmapp.Queries{
-				GetLead:   crmquery.NewGetLeadHandler(leads),
-				ListLeads: crmquery.NewListLeadsHandler(leads),
+				GetLead:              crmquery.NewGetLeadHandler(leads),
+				ListLeads:            crmquery.NewListLeadsHandler(leads),
+				ListPendingReminders: crmquery.NewListPendingRemindersHandler(reminders),
 			},
 		},
 	}

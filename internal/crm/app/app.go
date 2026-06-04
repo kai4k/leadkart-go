@@ -29,18 +29,22 @@ type Application struct {
 // New use cases extend this struct, never reach into a shared service
 // abstraction.
 type Commands struct {
-	IngestPurchasedLead command.IngestPurchasedLeadHandler
-	AssignLead          command.AssignLeadHandler
-	ChangeLeadStage     command.ChangeLeadStageHandler
+	IngestPurchasedLead   command.IngestPurchasedLeadHandler
+	AssignLead            command.AssignLeadHandler
+	ChangeLeadStage       command.ChangeLeadStageHandler
 	ChangeLeadTemperature command.ChangeLeadTemperatureHandler
-	LogCall             command.LogCallHandler
-	ConvertLead         command.ConvertLeadHandler
-	LoseLead            command.LoseLeadHandler
+	LogCall               command.LogCallHandler
+	ConvertLead           command.ConvertLeadHandler
+	LoseLead              command.LoseLeadHandler
+	CreateReminder        command.CreateReminderHandler
+	MarkReminderSent      command.MarkReminderSentHandler
+	CancelReminder        command.CancelReminderHandler
 }
 
 // Queries aggregates all CRM query handlers. Read-side only — no state
 // mutation.
 type Queries struct {
-	GetLead   query.GetLeadHandler
-	ListLeads query.ListLeadsHandler
+	GetLead              query.GetLeadHandler
+	ListLeads            query.ListLeadsHandler
+	ListPendingReminders query.ListPendingRemindersHandler
 }

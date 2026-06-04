@@ -92,15 +92,34 @@ func ParseOutcome(raw string) (Outcome, error) {
 
 const notesMaxLen = 4000
 
+// CallbackWindow is the optional caller-supplied window the contact
+// asked to be called back in (BRD §4.5). When present, the CallLogged
+// integration event carries Start + End on the wire, the Reminder
+// slice's subscriber mints a callback reminder due at Start, and the
+// row persists both timestamps for forensics.
+//
+// All-or-nothing invariant: either both Start + End are non-zero (and
+// End >= Start) OR both are zero. Enforced by [validateCallbackWindow]
+// + mirrored at the DB layer by chk_call_logs_callback_window.
+type CallbackWindow struct {
+	Start time.Time
+	End   time.Time
+}
+
+// IsZero reports whether the window is unset (the call did not request
+// a callback). Both fields must be zero for IsZero to return true.
+func (w CallbackWindow) IsZero() bool { return w.Start.IsZero() && w.End.IsZero() }
+
 // CallLog is the aggregate root. Append-only — exposes [Add] via the
 // repository but has NO state-mutation methods after [New].
 //
-// Invariants enforced by [New]:
+// Invariants enforced by [New] / [NewWithCallback]:
 //   - ID + TenantID + LeadID non-zero.
 //   - Outcome is a valid catalogue entry.
 //   - LoggedByMembershipID non-empty.
 //   - Notes ≤ notesMaxLen.
 //   - LoggedAt non-zero (caller supplies — typically time.Now()).
+//   - CallbackWindow all-or-nothing; End >= Start when present.
 type CallLog struct {
 	id                   ID
 	tenantID             tenant.ID
@@ -110,19 +129,37 @@ type CallLog struct {
 	loggedByMembershipID string
 	loggedAt             time.Time
 	createdAt            time.Time
+	callbackWindow       CallbackWindow
 
 	events []Event
 }
 
-// New constructs a brand-new CallLog + emits [LoggedEvent]. The repository
-// drains the event via [PullEvents] when persisting.
+// New constructs a brand-new CallLog WITHOUT a callback window +
+// emits [LoggedEvent]. Convenience wrapper for the LogCallHandler hot
+// path that does not request a callback. The repository drains the
+// event via [PullEvents] when persisting.
 //
 // loggedAt MUST be non-zero — caller passes the wall-clock time the
-// call happened (typically time.Now()). For slice 1, log_call handlers
-// pass the injected `now` for both `loggedAt` and `createdAt`; future
-// flows that backfill historical calls (manual import slice 2+) can
-// pass divergent values.
+// call happened (typically time.Now()).
 func New(id ID, tenantID tenant.ID, leadID crmlead.ID, outcome Outcome, notes, loggedBy string, loggedAt time.Time) (*CallLog, error) {
+	return NewWithCallback(id, tenantID, leadID, outcome, notes, loggedBy, loggedAt, CallbackWindow{})
+}
+
+// NewWithCallback is the full-shape factory. window may be the zero
+// [CallbackWindow] (no callback requested) — that's the no-op identical
+// to [New]. When window is non-zero, the all-or-nothing invariant is
+// enforced + the emitted [LoggedEvent] carries Start + End so the
+// Reminder slice's CallLogged subscriber can mint a callback reminder.
+func NewWithCallback(
+	id ID,
+	tenantID tenant.ID,
+	leadID crmlead.ID,
+	outcome Outcome,
+	notes string,
+	loggedBy string,
+	loggedAt time.Time,
+	window CallbackWindow,
+) (*CallLog, error) {
 	if id.IsZero() {
 		return nil, fmt.Errorf("%w: id required", ErrInvalid)
 	}
@@ -150,6 +187,9 @@ func New(id ID, tenantID tenant.ID, leadID crmlead.ID, outcome Outcome, notes, l
 	if loggedAt.IsZero() {
 		return nil, fmt.Errorf("%w: logged_at required", ErrInvalid)
 	}
+	if err := validateCallbackWindow(window); err != nil {
+		return nil, err
+	}
 	// createdAt mirrors loggedAt for slice 1 — callers (LogCallHandler)
 	// pass the same injected `now` for both. Future slices that backfill
 	// historical calls can pass divergent values by extending this
@@ -163,19 +203,49 @@ func New(id ID, tenantID tenant.ID, leadID crmlead.ID, outcome Outcome, notes, l
 		loggedByMembershipID: loggedBy,
 		loggedAt:             loggedAt,
 		createdAt:            loggedAt,
+		callbackWindow:       normaliseWindow(window),
 	}
 	c.recordEvent(LoggedEvent{
-		CallID:               id,
-		LeadID:               leadID,
-		TenantID:             tenantID,
-		Outcome:              outcome,
-		LoggedByMembershipID: loggedBy,
-		At:                   loggedAt,
+		CallID:                id,
+		LeadID:                leadID,
+		TenantID:              tenantID,
+		Outcome:               outcome,
+		LoggedByMembershipID:  loggedBy,
+		CallbackWindowStart:   c.callbackWindow.Start,
+		CallbackWindowEnd:     c.callbackWindow.End,
+		At:                    loggedAt,
 	})
 	return c, nil
 }
 
+// validateCallbackWindow enforces the all-or-nothing + ordering
+// invariant. Returns nil for the zero window.
+func validateCallbackWindow(w CallbackWindow) error {
+	if w.IsZero() {
+		return nil
+	}
+	if w.Start.IsZero() || w.End.IsZero() {
+		return fmt.Errorf("%w: callback window: start + end required together", ErrInvalid)
+	}
+	if w.End.Before(w.Start) {
+		return fmt.Errorf("%w: callback window: end must be >= start", ErrInvalid)
+	}
+	return nil
+}
+
+// normaliseWindow forces every populated window to UTC for storage +
+// wire stability. Zero window passes through unchanged.
+func normaliseWindow(w CallbackWindow) CallbackWindow {
+	if w.IsZero() {
+		return CallbackWindow{}
+	}
+	return CallbackWindow{Start: w.Start.UTC(), End: w.End.UTC()}
+}
+
 // Snapshot is the persistence-layer DTO consumed by [UnmarshalFromDB].
+//
+// CallbackWindow is set when the caller stamped a callback window per
+// BRD §4.5; the zero value means the call did not request a callback.
 type Snapshot struct {
 	ID                   ID
 	TenantID             tenant.ID
@@ -185,6 +255,7 @@ type Snapshot struct {
 	LoggedByMembershipID string
 	LoggedAt             time.Time
 	CreatedAt            time.Time
+	CallbackWindow       CallbackWindow
 }
 
 // UnmarshalFromDB re-hydrates a CallLog from persistence. Used ONLY by
@@ -199,6 +270,7 @@ func UnmarshalFromDB(s Snapshot) *CallLog {
 		loggedByMembershipID: s.LoggedByMembershipID,
 		loggedAt:             s.LoggedAt,
 		createdAt:            s.CreatedAt,
+		callbackWindow:       s.CallbackWindow,
 	}
 }
 
@@ -224,6 +296,10 @@ func (c *CallLog) LoggedByMembershipID() string { return c.loggedByMembershipID 
 
 // LoggedAt returns the wall-clock time the call happened.
 func (c *CallLog) LoggedAt() time.Time { return c.loggedAt }
+
+// CallbackWindow returns the optional callback window the contact
+// requested per BRD §4.5. Zero when the call did not request a callback.
+func (c *CallLog) CallbackWindow() CallbackWindow { return c.callbackWindow }
 
 // CreatedAt returns the row-insert timestamp.
 func (c *CallLog) CreatedAt() time.Time { return c.createdAt }
