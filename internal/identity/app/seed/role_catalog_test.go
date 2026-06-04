@@ -69,27 +69,50 @@ func TestDefaultRoleCatalog_CompanyOwnerCarriesTenantAdmin(t *testing.T) {
 }
 
 // TestDefaultRoleCatalog_OperationalRolesCarryInventoryGrants pins the
-// ADR 0061 amendment 1 grant policy: PurchaseManager gets Inventory
-// Manage, SalesManager + OfficeAdministrator get Inventory Read.
-// Non-operational roles (Executives, HR, Dispatch, the top-tier
-// Administrator + SeniorManager) ship empty placeholders for product
-// UX to populate per-membership.
+// ADR 0061 amendment 1 Inventory grant policy + the Phase C.2 Tasks
+// grant policy (BRD §6.8): every tenant role gets baseline Read +
+// Manage on tasks.work_items; manager-tier + OfficeAdministrator +
+// CompanyOwner additionally get ReadAll + Reassign.
+//
+// Inventory grants:
+//   - PurchaseManager → Catalog.Manage + Stock.Manage
+//   - SalesManager + OfficeAdministrator → Catalog.Read + Stock.Read
+//   - all others: none
+//
+// Tasks grants:
+//   - tasksMember = Read + Manage (every non-Owner role)
+//   - tasksManager = Read + ReadAll + Manage + Reassign (Administrator,
+//     SeniorManager, OfficeAdministrator, SalesManager, PurchaseManager,
+//     DispatchManager, HrManager — i.e. every *Manager + Administrator +
+//     OfficeAdministrator)
 func TestDefaultRoleCatalog_OperationalRolesCarryInventoryGrants(t *testing.T) {
 	t.Parallel()
 	specs := seed.DefaultRoleCatalog()
+	p := permission.IdentityPermissions
+	tasksMember := []string{p.Tasks.WorkItems.Read, p.Tasks.WorkItems.Manage}
+	tasksManager := []string{
+		p.Tasks.WorkItems.Read, p.Tasks.WorkItems.ReadAll,
+		p.Tasks.WorkItems.Manage, p.Tasks.WorkItems.Reassign,
+	}
 	want := map[string][]string{
-		role.SystemRoles.Tenant.PurchaseManager: {
-			permission.IdentityPermissions.Inventory.Catalog.Manage,
-			permission.IdentityPermissions.Inventory.Stock.Manage,
-		},
-		role.SystemRoles.Tenant.SalesManager: {
-			permission.IdentityPermissions.Inventory.Catalog.Read,
-			permission.IdentityPermissions.Inventory.Stock.Read,
-		},
-		role.SystemRoles.Tenant.OfficeAdministrator: {
-			permission.IdentityPermissions.Inventory.Catalog.Read,
-			permission.IdentityPermissions.Inventory.Stock.Read,
-		},
+		role.SystemRoles.Tenant.Administrator: tasksManager,
+		role.SystemRoles.Tenant.SeniorManager: tasksManager,
+		role.SystemRoles.Tenant.OfficeAdministrator: append([]string{
+			p.Inventory.Catalog.Read, p.Inventory.Stock.Read,
+		}, tasksManager...),
+		role.SystemRoles.Tenant.OfficeExecutive: tasksMember,
+		role.SystemRoles.Tenant.SalesManager: append([]string{
+			p.Inventory.Catalog.Read, p.Inventory.Stock.Read,
+		}, tasksManager...),
+		role.SystemRoles.Tenant.SalesExecutive: tasksMember,
+		role.SystemRoles.Tenant.PurchaseManager: append([]string{
+			p.Inventory.Catalog.Manage, p.Inventory.Stock.Manage,
+		}, tasksManager...),
+		role.SystemRoles.Tenant.PurchaseExecutive: tasksMember,
+		role.SystemRoles.Tenant.DispatchManager:   tasksManager,
+		role.SystemRoles.Tenant.DispatchExecutive: tasksMember,
+		role.SystemRoles.Tenant.HrManager:         tasksManager,
+		role.SystemRoles.Tenant.HrExecutive:       tasksMember,
 	}
 	for _, s := range specs {
 		if s.Name == role.SystemRoles.Tenant.CompanyOwner {
@@ -98,16 +121,13 @@ func TestDefaultRoleCatalog_OperationalRolesCarryInventoryGrants(t *testing.T) {
 		if s.IsSystemDefault {
 			t.Errorf("non-Owner role %q is system-default — only CompanyOwner should be", s.Name)
 		}
-		if wantPerms, ok := want[s.Name]; ok {
-			if !slices.Equal(s.Permissions, wantPerms) {
-				t.Errorf("role %q permissions: got %v want %v", s.Name, s.Permissions, wantPerms)
-			}
+		wantPerms, ok := want[s.Name]
+		if !ok {
+			t.Errorf("role %q has no expected-permission entry — update test if catalog grew", s.Name)
 			continue
 		}
-		if len(s.Permissions) != 0 {
-			t.Errorf("non-operational role %q ships with permissions: %v "+
-				"(only PurchaseManager/SalesManager/OfficeAdministrator carry inventory grants per ADR 0061)",
-				s.Name, s.Permissions)
+		if !slices.Equal(s.Permissions, wantPerms) {
+			t.Errorf("role %q permissions:\n  got  %v\n  want %v", s.Name, s.Permissions, wantPerms)
 		}
 	}
 }
@@ -203,15 +223,29 @@ func TestApplyDefaultRoles_FreshTenant_CreatesAllSpecs(t *testing.T) {
 	if len(listed) != len(roles) {
 		t.Fatalf("repo state: got %d want %d", len(listed), len(roles))
 	}
-	// CompanyOwner must carry Meta.TenantAdmin after apply.
+	// CompanyOwner must carry Meta.TenantAdmin + the full Tasks
+	// manager bundle (BRD §6.8) after apply.
 	for _, r := range roles {
-		if r.Name() == role.SystemRoles.Tenant.CompanyOwner {
-			if len(r.Permissions()) != 1 ||
-				r.Permissions()[0].Name() != permission.IdentityPermissions.Meta.TenantAdmin {
-				t.Fatalf("CompanyOwner permissions after apply: got %v", r.Permissions())
-			}
-			return
+		if r.Name() != role.SystemRoles.Tenant.CompanyOwner {
+			continue
 		}
+		names := make([]string, 0, len(r.Permissions()))
+		for _, p := range r.Permissions() {
+			names = append(names, p.Name())
+		}
+		mustInclude := []string{
+			permission.IdentityPermissions.Meta.TenantAdmin,
+			permission.IdentityPermissions.Tasks.WorkItems.Read,
+			permission.IdentityPermissions.Tasks.WorkItems.ReadAll,
+			permission.IdentityPermissions.Tasks.WorkItems.Manage,
+			permission.IdentityPermissions.Tasks.WorkItems.Reassign,
+		}
+		for _, want := range mustInclude {
+			if !slices.Contains(names, want) {
+				t.Fatalf("CompanyOwner missing %q after apply: got %v", want, names)
+			}
+		}
+		return
 	}
 	t.Fatal("CompanyOwner not in apply result")
 }

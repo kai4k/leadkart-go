@@ -97,6 +97,13 @@ import (
 	"github.com/leadkart/leadkart-go/internal/crm/domain/crmlead"
 	crmreminder "github.com/leadkart/leadkart-go/internal/crm/domain/reminder"
 	crmports "github.com/leadkart/leadkart-go/internal/crm/ports"
+
+	tasksadapters "github.com/leadkart/leadkart-go/internal/tasks/adapters"
+	tasksapp "github.com/leadkart/leadkart-go/internal/tasks/app"
+	taskscommand "github.com/leadkart/leadkart-go/internal/tasks/app/command"
+	tasksquery "github.com/leadkart/leadkart-go/internal/tasks/app/query"
+	"github.com/leadkart/leadkart-go/internal/tasks/domain/workitem"
+	tasksports "github.com/leadkart/leadkart-go/internal/tasks/ports"
 )
 
 // HTTP server timeouts — public listener tuning per OWASP API Security
@@ -322,6 +329,9 @@ func run(ctx context.Context, stdout *os.File, _ []string) error {
 	// identity.authn via the shared verifier + stamp validator.
 	crmWiring := buildCrmApp(pool, time.Now)
 
+	// Tasks module wiring (Phase C.2 — BRD §6.8). Same pattern as CRM.
+	tasksAppInstance := buildTasksApp(pool, time.Now)
+
 	// NOTE: outbox forwarder + messaging.Router + subscribers.Register
 	// live in cmd/worker — see that binary's package doc. The API host
 	// only writes integration events (via the per-handler outbox writes
@@ -359,7 +369,7 @@ func run(ctx context.Context, stdout *os.File, _ []string) error {
 		},
 	})
 	publicHandler := otelhttp.NewHandler(
-		mwChain(newServer(logger, wiring.App, platformWiring.App, inventoryAppInstance, crmWiring.App, wiring.Issuer, wiring.StampValidator)),
+		mwChain(newServer(logger, wiring.App, platformWiring.App, inventoryAppInstance, crmWiring.App, tasksAppInstance, wiring.Issuer, wiring.StampValidator)),
 		"leadkart-api",
 	)
 	srv := &http.Server{
@@ -427,6 +437,7 @@ func newServer(
 	platformApp platformapp.Application,
 	inventoryAppInstance inventoryapp.Application,
 	crmApp crmapp.Application,
+	tasksApp tasksapp.Application,
 	verifier authn.Verifier,
 	validator authn.StampValidator,
 ) http.Handler {
@@ -436,6 +447,7 @@ func newServer(
 	platformports.AddRoutes(mux, log, platformApp, verifier, validator)
 	inventoryports.AddRoutes(mux, log, inventoryAppInstance, verifier, validator)
 	crmports.AddRoutes(mux, log, crmApp, verifier, validator)
+	tasksports.AddRoutes(mux, log, tasksApp, verifier, validator)
 	return mux
 }
 
@@ -806,6 +818,40 @@ func buildCrmApp(pool *pgxpool.Pool, now func() time.Time) crmWiringResult {
 				ListLeads:            crmquery.NewListLeadsHandler(leads),
 				ListPendingReminders: crmquery.NewListPendingRemindersHandler(reminders),
 			},
+		},
+	}
+}
+
+// ----- Tasks wiring ----------------------------------------------------------
+
+// buildTasksApp wires the Tasks module per BRD §6.8 (Phase C.2). Shares
+// the pool + transactor with Identity / Platform / CRM. HierarchyReader
+// + MembershipReader bind to the identity-side composition-root
+// adapters declared in tasks_hierarchy_bridge.go.
+func buildTasksApp(pool *pgxpool.Pool, now func() time.Time) tasksapp.Application {
+	tx := pg.NewTransactor(pool)
+
+	repo := tasksadapters.NewWorkItemRepository(pool, tx)
+	hierarchy := newTasksHierarchyAdapter(pool, tx)
+	members := newTasksMembershipAdapter(pool, tx)
+	newWorkItemID := func() workitem.ID { return workitem.ID(ids.NewV7().String()) }
+
+	return tasksapp.Application{
+		Commands: tasksapp.Commands{
+			CreateWorkItem:        taskscommand.NewCreateWorkItemHandler(repo, members, now, newWorkItemID),
+			StartWorkItem:         taskscommand.NewStartWorkItemHandler(repo, now),
+			CompleteWorkItem:      taskscommand.NewCompleteWorkItemHandler(repo, now),
+			CancelWorkItem:        taskscommand.NewCancelWorkItemHandler(repo, now),
+			ReassignWorkItem:      taskscommand.NewReassignWorkItemHandler(repo, hierarchy, members, now),
+			MarkOverdue:           taskscommand.NewMarkOverdueHandler(repo, now),
+			AutoCreateFromCallLog: taskscommand.NewAutoCreateFromCallLogHandler(repo, now, newWorkItemID),
+			AutoCreateFollowUp:    taskscommand.NewAutoCreateFollowUpHandler(repo, now, newWorkItemID),
+			AutoCompleteBySource:  taskscommand.NewAutoCompleteBySourceHandler(repo, now),
+		},
+		Queries: tasksapp.Queries{
+			GetWorkItem:   tasksquery.NewGetWorkItemHandler(repo),
+			ListWorkItems: tasksquery.NewListWorkItemsHandler(repo),
+			Dashboard:     tasksquery.NewDashboardHandler(repo, hierarchy, now),
 		},
 	}
 }

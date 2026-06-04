@@ -127,6 +127,21 @@ type inventoryPermissions struct {
 	Catalog inventoryCatalogPermissions
 	Stock   inventoryStockPermissions
 }
+
+// tasksWorkItemsPermissions cover the Tasks WorkItem aggregate per
+// BRD §6.8. Every tenant member gets Read + Manage (own tasks);
+// Manager-tier + OfficeAdministrator + CompanyOwner additionally get
+// ReadAll (team-wide visibility via the org hierarchy) + Reassign
+// (move a work item to a different membership in the manager's chain
+// per §6.7 visibility rule).
+type tasksWorkItemsPermissions struct{ Read, ReadAll, Manage, Reassign string }
+
+// tasksPermissions groups the Tasks bounded context surface. Slice 1
+// only ships the WorkItems namespace; future Reminders / Templates
+// aggregates extend.
+type tasksPermissions struct {
+	WorkItems tasksWorkItemsPermissions
+}
 // IdentityPermissions is the closed catalogue of every permission the
 // system recognises. Mirror of the .NET `IdentityPermissions` static
 // class. Maintain in lockstep with the intern-table list.
@@ -160,6 +175,9 @@ var IdentityPermissions = struct {
 	// Inventory bounded context (ADR 0061) — Product / Batch /
 	// StockMovement aggregates per BRD §6.5.
 	Inventory inventoryPermissions
+
+	// Tasks bounded context — WorkItem aggregate per BRD §6.8.
+	Tasks tasksPermissions
 }{
 	Meta: metaPermissions{
 		TenantAdmin:                "tenant.admin",
@@ -233,6 +251,15 @@ var IdentityPermissions = struct {
 			Manage: "inventory.stock.manage",
 		},
 	},
+
+	Tasks: tasksPermissions{
+		WorkItems: tasksWorkItemsPermissions{
+			Read:     "tasks.work_items.read",
+			ReadAll:  "tasks.work_items.read_all",
+			Manage:   "tasks.work_items.manage",
+			Reassign: "tasks.work_items.reassign",
+		},
+	},
 }
 
 func allNames() []string {
@@ -261,6 +288,10 @@ func allNames() []string {
 		// Inventory bounded context (ADR 0061).
 		p.Inventory.Catalog.Read, p.Inventory.Catalog.Manage,
 		p.Inventory.Stock.Read, p.Inventory.Stock.Manage,
+
+		// Tasks bounded context (BRD §6.8).
+		p.Tasks.WorkItems.Read, p.Tasks.WorkItems.ReadAll,
+		p.Tasks.WorkItems.Manage, p.Tasks.WorkItems.Reassign,
 	}
 }
 

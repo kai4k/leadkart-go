@@ -273,6 +273,12 @@ func TestArch_RoutesUsePluralNouns(t *testing.T) {
 		"grant":                  true,
 		"revoke":                 true,
 		"anonymise":              true,
+		// Tasks work-item state-transition sub-actions per Stripe canon
+		// (POST /work-items/{id}/start). BRD §6.8 state machine.
+		"start":                  true,
+		"complete":               true,
+		"reassign":               true,
+		"dashboard":              true,
 		"global-suspend":         true,
 		"lift-global-suspension": true,
 		"by-slug":                true,
