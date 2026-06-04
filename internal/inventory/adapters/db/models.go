@@ -558,3 +558,28 @@ type SharedProductCategoryGstDefault struct {
 	DefaultGstRateBps int32
 	UpdatedAt         pgtype.Timestamptz
 }
+
+// WorkItem aggregate per BRD §6.8. State machine: pending → in_progress → completed | overdue | cancelled. Auto-creation idempotency via (source_entity_type, source_entity_id) partial unique index. Bulk assignment via batch_id.
+type TasksWorkItem struct {
+	ID                     pgtype.UUID
+	TenantID               pgtype.UUID
+	Type                   string
+	Priority               string
+	State                  string
+	Title                  string
+	Description            string
+	AssignedToMembershipID pgtype.UUID
+	AssignedByMembershipID pgtype.UUID
+	DueAt                  pgtype.Timestamptz
+	CompletedAt            pgtype.Timestamptz
+	CancelledAt            pgtype.Timestamptz
+	CancellationReason     string
+	BatchID                pgtype.UUID
+	SourceModule           string
+	SourceEntityType       *string
+	SourceEntityID         *string
+	CreatedAt              pgtype.Timestamptz
+	CreatedByMembershipID  pgtype.UUID
+	IsDeleted              bool
+	DeletedAt              pgtype.Timestamptz
+}

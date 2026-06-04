@@ -77,6 +77,8 @@ tags:
     description: Product / Batch / StockMovement aggregates per BRD §6.5 (ADR 0061)
   - name: crm
     description: CRM lead lifecycle — assignment, stage/temperature, calls, convert/lose (ADR 0060)
+  - name: tasks
+    description: WorkItem aggregate — task creation, state machine, hierarchy-gated reassignment, dashboards (BRD §6.8)
 
 security:
   - BearerAuth: []
@@ -2050,6 +2052,222 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
 
+  # ----- Tasks module (BRD §6.8) ---------------------------------------------
+
+  /api/v1/tasks/work-items:
+    post:
+      tags: [tasks]
+      summary: Create a manual work item
+      description: |
+        Creates a new manual task in the caller's tenant. The caller's
+        membership becomes the AssignedByMembershipID; the request body's
+        `assigned_to_membership_id` must reference an active membership in
+        the same tenant (otherwise 422 `assignee_inactive`). Emits
+        `tasks.work_item_created.v1`.
+      parameters:
+        - { $ref: '#/components/parameters/XCommandId' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateWorkItemRequest' }
+      responses:
+        '201':
+          description: Work item created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CreateWorkItemResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+        '500': { $ref: '#/components/responses/InternalServerError' }
+    get:
+      tags: [tasks]
+      summary: List work items (cursor-paginated, filterable)
+      description: |
+        Cursor-paginated list. Callers WITHOUT `tasks.work_items.read_all`
+        see only their own tasks (a `?assignee=` that points elsewhere
+        returns 403).
+      parameters:
+        - { $ref: '#/components/parameters/Cursor' }
+        - { $ref: '#/components/parameters/PageSize' }
+        - name: state
+          in: query
+          required: false
+          schema: { type: string, enum: [pending, in_progress, completed, overdue, cancelled] }
+        - name: type
+          in: query
+          required: false
+          schema: { type: string, enum: [manual, callback_reminder, reorder_reminder, follow_up, custom] }
+        - name: priority
+          in: query
+          required: false
+          schema: { type: string, enum: [low, medium, high, urgent] }
+        - name: assignee
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+        - name: batch_id
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+        - name: due_before
+          in: query
+          required: false
+          schema: { type: string, format: date-time }
+        - name: due_after
+          in: query
+          required: false
+          schema: { type: string, format: date-time }
+      responses:
+        '200':
+          description: Cursor-paginated work-item page
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ListWorkItemsResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '500': { $ref: '#/components/responses/InternalServerError' }
+
+  /api/v1/tasks/work-items/dashboard:
+    get:
+      tags: [tasks]
+      summary: Dashboard counts (today / upcoming / overdue / completed-today / total-pending)
+      description: |
+        Returns the BRD §6.8 dashboard tallies. By default scoped to the
+        caller's own tasks; pass `?include_team=true` to expand to the
+        actor's subordinate scope via the hierarchy traversal (requires
+        `tasks.work_items.read_all`).
+      parameters:
+        - name: include_team
+          in: query
+          required: false
+          schema: { type: boolean, default: false }
+      responses:
+        '200':
+          description: Dashboard counts
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DashboardResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '500': { $ref: '#/components/responses/InternalServerError' }
+
+  /api/v1/tasks/work-items/{workItemId}:
+    get:
+      tags: [tasks]
+      summary: Get a single work item
+      parameters:
+        - { $ref: '#/components/parameters/WorkItemId' }
+      responses:
+        '200':
+          description: Work item
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/WorkItemDto' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/InternalServerError' }
+
+  /api/v1/tasks/work-items/{workItemId}/start:
+    post:
+      tags: [tasks]
+      summary: Flip work item to in_progress
+      parameters:
+        - { $ref: '#/components/parameters/WorkItemId' }
+        - { $ref: '#/components/parameters/XCommandId' }
+      responses:
+        '204': { description: Started }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: Work item is in a terminal / overdue state
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /api/v1/tasks/work-items/{workItemId}/complete:
+    post:
+      tags: [tasks]
+      summary: Terminal-complete a work item
+      parameters:
+        - { $ref: '#/components/parameters/WorkItemId' }
+        - { $ref: '#/components/parameters/XCommandId' }
+      responses:
+        '204': { description: Completed }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: Cannot complete a cancelled task
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /api/v1/tasks/work-items/{workItemId}/cancel:
+    post:
+      tags: [tasks]
+      summary: Terminal-cancel a work item (with required reason)
+      parameters:
+        - { $ref: '#/components/parameters/WorkItemId' }
+        - { $ref: '#/components/parameters/XCommandId' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CancelWorkItemRequest' }
+      responses:
+        '204': { description: Cancelled }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: Cannot cancel a completed task
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '422':
+          description: Reason missing
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /api/v1/tasks/work-items/{workItemId}/reassign:
+    post:
+      tags: [tasks]
+      summary: Reassign a work item (hierarchy-gated per BRD §6.7)
+      description: |
+        Moves the task to a new membership. The caller must hold
+        `tasks.work_items.reassign` AND the new assignee must be in the
+        caller's subordinate scope (or be the caller themselves). 403
+        `reassign_forbidden` otherwise.
+      parameters:
+        - { $ref: '#/components/parameters/WorkItemId' }
+        - { $ref: '#/components/parameters/XCommandId' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ReassignWorkItemRequest' }
+      responses:
+        '204': { description: Reassigned }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: Cannot reassign a terminal task
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '422':
+          description: New assignee not active in tenant
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
   /api/v1/crm/leads/{leadId}/lose:
     post:
       tags: [crm]
@@ -2276,6 +2494,11 @@ components:
       description: Generic resource path-parameter (Platform module routes).
     LeadId:
       name: leadId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    WorkItemId:
+      name: workItemId
       in: path
       required: true
       schema: { type: string, format: uuid }
@@ -3510,3 +3733,79 @@ components:
       required: [reason]
       properties:
         reason: { type: string }
+
+    # ===== Tasks ===========================================================
+    WorkItemDto:
+      type: object
+      required: [id, tenant_id, type, priority, state, title, assigned_to_membership_id, assigned_by_membership_id, due_at, created_at, created_by_membership_id]
+      properties:
+        id:                        { type: string, format: uuid }
+        tenant_id:                 { type: string, format: uuid }
+        type:                      { type: string, enum: [manual, callback_reminder, reorder_reminder, follow_up, custom] }
+        priority:                  { type: string, enum: [low, medium, high, urgent] }
+        state:                     { type: string, enum: [pending, in_progress, completed, overdue, cancelled] }
+        title:                     { type: string }
+        description:               { type: string }
+        assigned_to_membership_id: { type: string, format: uuid }
+        assigned_by_membership_id: { type: string, format: uuid }
+        due_at:                    { type: string, format: date-time }
+        completed_at:              { type: string, format: date-time }
+        cancelled_at:              { type: string, format: date-time }
+        cancellation_reason:       { type: string }
+        batch_id:                  { type: string, format: uuid }
+        source_module:             { type: string }
+        source_entity_type:        { type: string }
+        source_entity_id:          { type: string }
+        created_at:                { type: string, format: date-time }
+        created_by_membership_id:  { type: string, format: uuid }
+
+    ListWorkItemsResponse:
+      type: object
+      required: [items, has_more]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/WorkItemDto' }
+        has_more:    { type: boolean }
+        next_cursor: { type: string }
+
+    CreateWorkItemRequest:
+      type: object
+      required: [type, title, assigned_to_membership_id, due_at]
+      properties:
+        type:                      { type: string, enum: [manual, callback_reminder, reorder_reminder, follow_up, custom] }
+        priority:                  { type: string, enum: [low, medium, high, urgent] }
+        title:                     { type: string, minLength: 1, maxLength: 200 }
+        description:               { type: string }
+        assigned_to_membership_id: { type: string, format: uuid }
+        batch_id:                  { type: string, format: uuid }
+        due_at:                    { type: string, format: date-time }
+
+    CreateWorkItemResponse:
+      type: object
+      required: [work_item_id]
+      properties:
+        work_item_id: { type: string, format: uuid }
+
+    CancelWorkItemRequest:
+      type: object
+      required: [reason]
+      properties:
+        reason: { type: string, minLength: 1, maxLength: 1000 }
+
+    ReassignWorkItemRequest:
+      type: object
+      required: [new_assignee_membership_id]
+      properties:
+        new_assignee_membership_id: { type: string, format: uuid }
+        reason:                     { type: string }
+
+    DashboardResponse:
+      type: object
+      required: [today, upcoming, overdue, completed_today, total_pending]
+      properties:
+        today:           { type: integer, minimum: 0 }
+        upcoming:        { type: integer, minimum: 0 }
+        overdue:         { type: integer, minimum: 0 }
+        completed_today: { type: integer, minimum: 0 }
+        total_pending:   { type: integer, minimum: 0 }

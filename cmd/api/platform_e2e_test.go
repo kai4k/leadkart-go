@@ -45,6 +45,7 @@ import (
 	"github.com/leadkart/leadkart-go/internal/platform/domain/unverifiedcontact"
 	"github.com/leadkart/leadkart-go/internal/platform/domain/verificationcall"
 	platformports "github.com/leadkart/leadkart-go/internal/platform/ports"
+	tasksapp "github.com/leadkart/leadkart-go/internal/tasks/app"
 
 	"net/http/httptest"
 )
@@ -103,7 +104,7 @@ func newPlatformE2E(t *testing.T) platformE2E {
 		},
 	}
 
-	srv := httptest.NewServer(newServer(silentLogger(), wiring.App, platformApp, inventoryapp.Application{}, crmapp.Application{}, wiring.Issuer, wiring.StampValidator))
+	srv := httptest.NewServer(newServer(silentLogger(), wiring.App, platformApp, inventoryapp.Application{}, crmapp.Application{}, tasksapp.Application{}, wiring.Issuer, wiring.StampValidator))
 	t.Cleanup(srv.Close)
 
 	return platformE2E{

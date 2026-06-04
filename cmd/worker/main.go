@@ -72,6 +72,11 @@ import (
 	platformadapters "github.com/leadkart/leadkart-go/internal/platform/adapters"
 	platformcommand "github.com/leadkart/leadkart-go/internal/platform/app/command"
 	platformsubscribers "github.com/leadkart/leadkart-go/internal/platform/ports/subscribers"
+	tasksadapters "github.com/leadkart/leadkart-go/internal/tasks/adapters"
+	taskscommand "github.com/leadkart/leadkart-go/internal/tasks/app/command"
+	tasksjobs "github.com/leadkart/leadkart-go/internal/tasks/app/jobs"
+	"github.com/leadkart/leadkart-go/internal/tasks/domain/workitem"
+	taskssubscribers "github.com/leadkart/leadkart-go/internal/tasks/ports/subscribers"
 )
 
 // Tunings — same shape as cmd/api/main.go so the two binaries' admin
@@ -267,6 +272,19 @@ func run(ctx context.Context, stdout *os.File) error {
 	platformTenantRegistered := platformsubscribers.NewTenantRegisteredIngestor(
 		platformcommand.NewInitialiseLeadCreditsHandler(tx, platformCredits, time.Now), logger)
 
+	// Tasks module (Phase C.2 — BRD §6.8). Writes ride the shared
+	// common.outbox; the single Watermill Forwarder relays them. Tasks
+	// consumes CRM's call_logged + lead_converted events for follow-up
+	// auto-creation and source auto-completion.
+	tasksRepo := tasksadapters.NewWorkItemRepository(pool, tx)
+	newWorkItemID := func() workitem.ID { return workitem.ID(ids.NewV7().String()) }
+	tasksAutoCreateFromCallLog := taskscommand.NewAutoCreateFromCallLogHandler(tasksRepo, time.Now, newWorkItemID)
+	tasksAutoCreateFollowUp := taskscommand.NewAutoCreateFollowUpHandler(tasksRepo, time.Now, newWorkItemID)
+	tasksAutoComplete := taskscommand.NewAutoCompleteBySourceHandler(tasksRepo, time.Now)
+	tasksMarkOverdue := taskscommand.NewMarkOverdueHandler(tasksRepo, time.Now)
+	tasksCallLoggedSub := taskssubscribers.NewCallLoggedSubscriber(tasksAutoCreateFromCallLog, tasksAutoComplete, logger)
+	tasksLeadConvertedSub := taskssubscribers.NewLeadConvertedSubscriber(tasksAutoCreateFollowUp, logger, time.Now)
+
 	router, err := messaging.NewRouter(messaging.Deps{
 		Subscriber:       pubsub,
 		Publisher:        pubsub,
@@ -300,6 +318,7 @@ func run(ctx context.Context, stdout *os.File) error {
 	cqrsHandlers := subscribers.Handlers(subWiring.Families, subWiring.StampCache, buildEmailSender(logger), logger, time.Now)
 	cqrsHandlers = append(cqrsHandlers, crmsubscribers.Handlers(crmIngest, crmCallback)...)
 	cqrsHandlers = append(cqrsHandlers, platformsubscribers.Handlers(platformTenantRegistered)...)
+	cqrsHandlers = append(cqrsHandlers, taskssubscribers.Handlers(tasksCallLoggedSub, tasksLeadConvertedSub)...)
 	for _, h := range cqrsHandlers {
 		if err := router.AddCqrsHandler(eventProcessor, h); err != nil {
 			return fmt.Errorf("register cqrs handler: %w", err)
@@ -333,6 +352,13 @@ func run(ctx context.Context, stdout *os.File) error {
 	if err := river.AddWorkerSafely(workers, inventoryjobs.NewReorderScanWorker(inventoryAlertScan, logger, time.Now)); err != nil {
 		return fmt.Errorf("register inventory reorder scan worker: %w", err)
 	}
+	// Tasks module river jobs (Phase C.2 — BRD §6.8): overdue scan + purge.
+	if err := river.AddWorkerSafely(workers, tasksjobs.NewOverdueScanWorker(tasksRepo, tasksMarkOverdue, logger, time.Now)); err != nil {
+		return fmt.Errorf("register tasks overdue scan worker: %w", err)
+	}
+	if err := river.AddWorkerSafely(workers, tasksjobs.NewPurgeWorker(tasksRepo, logger, time.Now)); err != nil {
+		return fmt.Errorf("register tasks purge worker: %w", err)
+	}
 	periodics := []*river.PeriodicJob{
 		river.NewPeriodicJob(
 			river.PeriodicInterval(audit.PurgeInterval),
@@ -359,6 +385,20 @@ func run(ctx context.Context, stdout *os.File) error {
 			river.PeriodicInterval(inventoryjobs.ReorderScanInterval),
 			func() (river.JobArgs, *river.InsertOpts) {
 				return inventoryjobs.ReorderScanJob{}, nil
+			},
+			&river.PeriodicJobOpts{RunOnStart: false},
+		),
+		river.NewPeriodicJob(
+			river.PeriodicInterval(tasksjobs.OverdueScanInterval),
+			func() (river.JobArgs, *river.InsertOpts) {
+				return tasksjobs.OverdueScanJob{}, nil
+			},
+			&river.PeriodicJobOpts{RunOnStart: false},
+		),
+		river.NewPeriodicJob(
+			river.PeriodicInterval(tasksjobs.PurgeInterval),
+			func() (river.JobArgs, *river.InsertOpts) {
+				return tasksjobs.PurgeJob{}, nil
 			},
 			&river.PeriodicJobOpts{RunOnStart: false},
 		),

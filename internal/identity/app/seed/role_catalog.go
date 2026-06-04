@@ -66,46 +66,98 @@ type RoleSpec struct {
 // admin-tier gets Read).
 func DefaultRoleCatalog() []RoleSpec {
 	p := permission.IdentityPermissions
+
+	// Tasks permission policy per BRD §6.8 + §6.7 visibility:
+	//   - Every tenant role gets Read + Manage (own tasks — create + complete
+	//     + cancel — is a baseline workflow capability).
+	//   - Manager-tier roles (SalesManager / PurchaseManager / DispatchManager /
+	//     HrManager) + OfficeAdministrator + CompanyOwner additionally get
+	//     ReadAll + Reassign (team-wide visibility + hierarchy-gated
+	//     reassignment per §6.7 visibility rule).
+	//   - Administrator / SeniorManager are above the operational tier and
+	//     inherit the same manager-grade Tasks bundle.
+	tasksMember := []string{p.Tasks.WorkItems.Read, p.Tasks.WorkItems.Manage}
+	tasksManager := []string{
+		p.Tasks.WorkItems.Read, p.Tasks.WorkItems.ReadAll,
+		p.Tasks.WorkItems.Manage, p.Tasks.WorkItems.Reassign,
+	}
+
 	return []RoleSpec{
 		{
 			Name:            role.SystemRoles.Tenant.CompanyOwner,
 			IsSystemDefault: true,
 			HierarchyLevel:  0,
-			Permissions:     []string{p.Meta.TenantAdmin},
+			Permissions:     append([]string{p.Meta.TenantAdmin}, tasksManager...),
 		},
-		{Name: role.SystemRoles.Tenant.Administrator, HierarchyLevel: 10},
-		{Name: role.SystemRoles.Tenant.SeniorManager, HierarchyLevel: 20},
+		{
+			Name:           role.SystemRoles.Tenant.Administrator,
+			HierarchyLevel: 10,
+			Permissions:    tasksManager,
+		},
+		{
+			Name:           role.SystemRoles.Tenant.SeniorManager,
+			HierarchyLevel: 20,
+			Permissions:    tasksManager,
+		},
 		{
 			Name:           role.SystemRoles.Tenant.OfficeAdministrator,
 			HierarchyLevel: role.HierarchyLevelDefault,
-			Permissions: []string{
+			Permissions: append([]string{
 				p.Inventory.Catalog.Read,
 				p.Inventory.Stock.Read,
-			},
+			}, tasksManager...),
 		},
-		{Name: role.SystemRoles.Tenant.OfficeExecutive, HierarchyLevel: role.HierarchyLevelDefault},
+		{
+			Name:           role.SystemRoles.Tenant.OfficeExecutive,
+			HierarchyLevel: role.HierarchyLevelDefault,
+			Permissions:    tasksMember,
+		},
 		{
 			Name:           role.SystemRoles.Tenant.SalesManager,
 			HierarchyLevel: role.HierarchyLevelDefault,
-			Permissions: []string{
+			Permissions: append([]string{
 				p.Inventory.Catalog.Read,
 				p.Inventory.Stock.Read,
-			},
+			}, tasksManager...),
 		},
-		{Name: role.SystemRoles.Tenant.SalesExecutive, HierarchyLevel: role.HierarchyLevelDefault},
+		{
+			Name:           role.SystemRoles.Tenant.SalesExecutive,
+			HierarchyLevel: role.HierarchyLevelDefault,
+			Permissions:    tasksMember,
+		},
 		{
 			Name:           role.SystemRoles.Tenant.PurchaseManager,
 			HierarchyLevel: role.HierarchyLevelDefault,
-			Permissions: []string{
+			Permissions: append([]string{
 				p.Inventory.Catalog.Manage,
 				p.Inventory.Stock.Manage,
-			},
+			}, tasksManager...),
 		},
-		{Name: role.SystemRoles.Tenant.PurchaseExecutive, HierarchyLevel: role.HierarchyLevelDefault},
-		{Name: role.SystemRoles.Tenant.DispatchManager, HierarchyLevel: role.HierarchyLevelDefault},
-		{Name: role.SystemRoles.Tenant.DispatchExecutive, HierarchyLevel: role.HierarchyLevelDefault},
-		{Name: role.SystemRoles.Tenant.HrManager, HierarchyLevel: role.HierarchyLevelDefault},
-		{Name: role.SystemRoles.Tenant.HrExecutive, HierarchyLevel: role.HierarchyLevelDefault},
+		{
+			Name:           role.SystemRoles.Tenant.PurchaseExecutive,
+			HierarchyLevel: role.HierarchyLevelDefault,
+			Permissions:    tasksMember,
+		},
+		{
+			Name:           role.SystemRoles.Tenant.DispatchManager,
+			HierarchyLevel: role.HierarchyLevelDefault,
+			Permissions:    tasksManager,
+		},
+		{
+			Name:           role.SystemRoles.Tenant.DispatchExecutive,
+			HierarchyLevel: role.HierarchyLevelDefault,
+			Permissions:    tasksMember,
+		},
+		{
+			Name:           role.SystemRoles.Tenant.HrManager,
+			HierarchyLevel: role.HierarchyLevelDefault,
+			Permissions:    tasksManager,
+		},
+		{
+			Name:           role.SystemRoles.Tenant.HrExecutive,
+			HierarchyLevel: role.HierarchyLevelDefault,
+			Permissions:    tasksMember,
+		},
 	}
 }
 
