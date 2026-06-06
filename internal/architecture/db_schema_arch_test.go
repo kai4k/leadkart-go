@@ -601,6 +601,13 @@ func TestArch_AuditChainColumnsOnTenantTables(t *testing.T) {
 		"platform.platform_leads":      "marketplace global (carries verified_by_membership_id + sold_to_membership_id)",
 		"platform.lead_credits":        "balance aggregate (no creation event)",
 		"platform.unverified_contacts": "platform-only Lead Agent queue (already carries created_by_membership_id NOT NULL)",
+		// Orders append-only ledgers (ADR 0063) — carry actor columns under
+		// document-specific names; orders.orders + orders.quotations carry
+		// created_by_membership_id directly and are NOT exempt.
+		"orders.invoices":                 "append-only tax invoice (carries issued_by_membership_id) per BRD §A-014",
+		"orders.credit_notes":             "append-only reversal (carries issued_by_membership_id) per BRD §A-014",
+		"orders.payments":                 "append-only receipts ledger (carries recorded_by_membership_id) per BRD §6.4",
+		"orders.invoice_number_sequences": "gapless counter infra — no human author; (tenant, fy, kind) PK (ADR 0063 §3)",
 	}
 
 	// Match CREATE TABLE <schema>.<name> ( ... ); for any schema.
