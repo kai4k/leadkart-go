@@ -77,6 +77,11 @@ import (
 	tasksjobs "github.com/leadkart/leadkart-go/internal/tasks/app/jobs"
 	"github.com/leadkart/leadkart-go/internal/tasks/domain/workitem"
 	taskssubscribers "github.com/leadkart/leadkart-go/internal/tasks/ports/subscribers"
+
+	dispatchadapters "github.com/leadkart/leadkart-go/internal/dispatch/adapters"
+	dispatchcommand "github.com/leadkart/leadkart-go/internal/dispatch/app/command"
+	"github.com/leadkart/leadkart-go/internal/dispatch/domain/consignmentnote"
+	dispatchsubscribers "github.com/leadkart/leadkart-go/internal/dispatch/ports/subscribers"
 )
 
 // Tunings — same shape as cmd/api/main.go so the two binaries' admin
@@ -285,6 +290,14 @@ func run(ctx context.Context, stdout *os.File) error {
 	tasksCallLoggedSub := taskssubscribers.NewCallLoggedSubscriber(tasksAutoCreateFromCallLog, tasksAutoComplete, logger)
 	tasksLeadConvertedSub := taskssubscribers.NewLeadConvertedSubscriber(tasksAutoCreateFollowUp, logger, time.Now)
 
+	// Dispatch module (ADR 0063 — BRD §6.6). Consumes the Orders
+	// `orders.order_packed.v1` event → mint a pending ConsignmentNote slot.
+	// Idempotent via the natural-key (order_id) precheck in the command.
+	dispatchRepo := dispatchadapters.NewConsignmentNoteRepository(pool, tx)
+	newConsignmentNoteID := func() consignmentnote.ID { return consignmentnote.ID(ids.NewV7().String()) }
+	dispatchCreate := dispatchcommand.NewCreateConsignmentNoteHandler(tx, dispatchRepo, time.Now, newConsignmentNoteID)
+	dispatchOrderPacked := dispatchsubscribers.NewOrderPackedIngestor(dispatchCreate, logger)
+
 	router, err := messaging.NewRouter(messaging.Deps{
 		Subscriber:       pubsub,
 		Publisher:        pubsub,
@@ -319,6 +332,7 @@ func run(ctx context.Context, stdout *os.File) error {
 	cqrsHandlers = append(cqrsHandlers, crmsubscribers.Handlers(crmIngest, crmCallback)...)
 	cqrsHandlers = append(cqrsHandlers, platformsubscribers.Handlers(platformTenantRegistered)...)
 	cqrsHandlers = append(cqrsHandlers, taskssubscribers.Handlers(tasksCallLoggedSub, tasksLeadConvertedSub)...)
+	cqrsHandlers = append(cqrsHandlers, dispatchsubscribers.Handlers(dispatchOrderPacked)...)
 	for _, h := range cqrsHandlers {
 		if err := router.AddCqrsHandler(eventProcessor, h); err != nil {
 			return fmt.Errorf("register cqrs handler: %w", err)

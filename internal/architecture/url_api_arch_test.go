@@ -259,26 +259,32 @@ func TestArch_RoutesUsePluralNouns(t *testing.T) {
 		// CRM lead-aggregate state-transition sub-actions per Stripe canon
 		// (POST /charges/{id}/capture). ADR 0060 + URL design rule (Wave 8):
 		// state transitions are POSTs to a verb-segment under the parent.
-		"convert":                true,
-		"assign":                 true,
-		"lose":                   true,
-		"stage":                  true,
-		"temperature":            true,
-		"purchase":               true,
-		"topup":                  true,
-		"balance":                true,
-		"browse":                 true,
-		"parent":                 true,
-		"manager":                true,
-		"grant":                  true,
-		"revoke":                 true,
-		"anonymise":              true,
+		"convert":     true,
+		"assign":      true,
+		"lose":        true,
+		"stage":       true,
+		"temperature": true,
+		"purchase":    true,
+		"topup":       true,
+		"balance":     true,
+		"browse":      true,
+		"parent":      true,
+		"manager":     true,
+		"grant":       true,
+		"revoke":      true,
+		"anonymise":   true,
 		// Tasks work-item state-transition sub-actions per Stripe canon
 		// (POST /work-items/{id}/start). BRD §6.8 state machine.
-		"start":                  true,
-		"complete":               true,
-		"reassign":               true,
-		"dashboard":              true,
+		"start":     true,
+		"complete":  true,
+		"reassign":  true,
+		"dashboard": true,
+		// Dispatch consignment-note state-transition sub-actions per Stripe
+		// canon (POST /consignment-notes/{id}/dispatch). BRD §6.6 state
+		// machine (pending → dispatched → in_transit → delivered | failed).
+		"in-transit":             true,
+		"delivered":              true,
+		"failed":                 true,
 		"global-suspend":         true,
 		"lift-global-suspension": true,
 		"by-slug":                true,
@@ -458,8 +464,8 @@ func TestArch_ProblemDetailsErrorShape(t *testing.T) {
 	t.Parallel()
 
 	canonicalRefs := map[string]bool{
-		"#/components/schemas/ErrorResponse":   true,
-		"#/components/schemas/ProblemDetails":  true,
+		"#/components/schemas/ErrorResponse":  true,
+		"#/components/schemas/ProblemDetails": true,
 	}
 
 	type violation struct {
@@ -786,4 +792,3 @@ func TestArch_GracefulShutdownViaErrgroup(t *testing.T) {
 		}
 	}
 }
-

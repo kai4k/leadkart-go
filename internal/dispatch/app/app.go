@@ -10,13 +10,17 @@
 // constructor + assembling the facade.
 package app
 
-import "github.com/leadkart/leadkart-go/internal/dispatch/app/command"
+import (
+	"github.com/leadkart/leadkart-go/internal/dispatch/app/command"
+	"github.com/leadkart/leadkart-go/internal/dispatch/app/query"
+)
 
 // Application is the Dispatch facade. Every external port (HTTP +
 // subscribers) takes an Application + dispatches directly into its
 // handler fields.
 type Application struct {
 	Commands Commands
+	Queries  Queries
 }
 
 // Commands aggregates all Dispatch command handlers.
@@ -26,4 +30,10 @@ type Commands struct {
 	MarkInTransit         command.MarkInTransitHandler
 	MarkDelivered         command.MarkDeliveredHandler
 	MarkFailed            command.MarkFailedHandler
+}
+
+// Queries aggregates all Dispatch query handlers.
+type Queries struct {
+	GetConsignmentNote        query.GetConsignmentNoteHandler
+	GetConsignmentNoteByOrder query.GetConsignmentNoteByOrderHandler
 }

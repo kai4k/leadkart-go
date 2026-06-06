@@ -104,6 +104,13 @@ import (
 	tasksquery "github.com/leadkart/leadkart-go/internal/tasks/app/query"
 	"github.com/leadkart/leadkart-go/internal/tasks/domain/workitem"
 	tasksports "github.com/leadkart/leadkart-go/internal/tasks/ports"
+
+	dispatchadapters "github.com/leadkart/leadkart-go/internal/dispatch/adapters"
+	dispatchapp "github.com/leadkart/leadkart-go/internal/dispatch/app"
+	dispatchcommand "github.com/leadkart/leadkart-go/internal/dispatch/app/command"
+	dispatchquery "github.com/leadkart/leadkart-go/internal/dispatch/app/query"
+	"github.com/leadkart/leadkart-go/internal/dispatch/domain/consignmentnote"
+	dispatchports "github.com/leadkart/leadkart-go/internal/dispatch/ports"
 )
 
 // HTTP server timeouts — public listener tuning per OWASP API Security
@@ -332,6 +339,10 @@ func run(ctx context.Context, stdout *os.File, _ []string) error {
 	// Tasks module wiring (Phase C.2 — BRD §6.8). Same pattern as CRM.
 	tasksAppInstance := buildTasksApp(pool, time.Now)
 
+	// Dispatch module wiring (ADR 0063 — BRD §6.6). HTTP read + status
+	// transitions; the OrderPacked subscriber lives in cmd/worker.
+	dispatchAppInstance := buildDispatchApp(pool, time.Now)
+
 	// NOTE: outbox forwarder + messaging.Router + subscribers.Register
 	// live in cmd/worker — see that binary's package doc. The API host
 	// only writes integration events (via the per-handler outbox writes
@@ -369,7 +380,7 @@ func run(ctx context.Context, stdout *os.File, _ []string) error {
 		},
 	})
 	publicHandler := otelhttp.NewHandler(
-		mwChain(newServer(logger, wiring.App, platformWiring.App, inventoryAppInstance, crmWiring.App, tasksAppInstance, wiring.Issuer, wiring.StampValidator)),
+		mwChain(newServer(logger, wiring.App, platformWiring.App, inventoryAppInstance, crmWiring.App, tasksAppInstance, dispatchAppInstance, wiring.Issuer, wiring.StampValidator)),
 		"leadkart-api",
 	)
 	srv := &http.Server{
@@ -438,6 +449,7 @@ func newServer(
 	inventoryAppInstance inventoryapp.Application,
 	crmApp crmapp.Application,
 	tasksApp tasksapp.Application,
+	dispatchApp dispatchapp.Application,
 	verifier authn.Verifier,
 	validator authn.StampValidator,
 ) http.Handler {
@@ -448,6 +460,7 @@ func newServer(
 	inventoryports.AddRoutes(mux, log, inventoryAppInstance, verifier, validator)
 	crmports.AddRoutes(mux, log, crmApp, verifier, validator)
 	tasksports.AddRoutes(mux, log, tasksApp, verifier, validator)
+	dispatchports.AddRoutes(mux, log, dispatchApp, verifier, validator)
 	return mux
 }
 
@@ -852,6 +865,29 @@ func buildTasksApp(pool *pgxpool.Pool, now func() time.Time) tasksapp.Applicatio
 			GetWorkItem:   tasksquery.NewGetWorkItemHandler(repo),
 			ListWorkItems: tasksquery.NewListWorkItemsHandler(repo),
 			Dashboard:     tasksquery.NewDashboardHandler(repo, hierarchy, now),
+		},
+	}
+}
+
+// buildDispatchApp wires the Dispatch module per ADR 0063 (BRD §6.6).
+// Shares the pool + transactor; the create command runs under a UoW while
+// the status transitions use the repository's own UpdateByID tx.
+func buildDispatchApp(pool *pgxpool.Pool, now func() time.Time) dispatchapp.Application {
+	tx := pg.NewTransactor(pool)
+	repo := dispatchadapters.NewConsignmentNoteRepository(pool, tx)
+	newID := func() consignmentnote.ID { return consignmentnote.ID(ids.NewV7().String()) }
+
+	return dispatchapp.Application{
+		Commands: dispatchapp.Commands{
+			CreateConsignmentNote: dispatchcommand.NewCreateConsignmentNoteHandler(tx, repo, now, newID),
+			MarkDispatched:        dispatchcommand.NewMarkDispatchedHandler(repo, now),
+			MarkInTransit:         dispatchcommand.NewMarkInTransitHandler(repo, now),
+			MarkDelivered:         dispatchcommand.NewMarkDeliveredHandler(repo, now),
+			MarkFailed:            dispatchcommand.NewMarkFailedHandler(repo, now),
+		},
+		Queries: dispatchapp.Queries{
+			GetConsignmentNote:        dispatchquery.NewGetConsignmentNoteHandler(repo),
+			GetConsignmentNoteByOrder: dispatchquery.NewGetConsignmentNoteByOrderHandler(repo),
 		},
 	}
 }

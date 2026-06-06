@@ -94,6 +94,7 @@ func TestDefaultRoleCatalog_OperationalRolesCarryInventoryGrants(t *testing.T) {
 		p.Tasks.WorkItems.Read, p.Tasks.WorkItems.ReadAll,
 		p.Tasks.WorkItems.Manage, p.Tasks.WorkItems.Reassign,
 	}
+	dispatchOps := []string{p.Dispatch.ConsignmentNotes.Read, p.Dispatch.ConsignmentNotes.Manage}
 	want := map[string][]string{
 		role.SystemRoles.Tenant.Administrator: tasksManager,
 		role.SystemRoles.Tenant.SeniorManager: tasksManager,
@@ -109,8 +110,8 @@ func TestDefaultRoleCatalog_OperationalRolesCarryInventoryGrants(t *testing.T) {
 			p.Inventory.Catalog.Manage, p.Inventory.Stock.Manage,
 		}, tasksManager...),
 		role.SystemRoles.Tenant.PurchaseExecutive: tasksMember,
-		role.SystemRoles.Tenant.DispatchManager:   tasksManager,
-		role.SystemRoles.Tenant.DispatchExecutive: tasksMember,
+		role.SystemRoles.Tenant.DispatchManager:   append(append([]string{}, tasksManager...), dispatchOps...),
+		role.SystemRoles.Tenant.DispatchExecutive: append(append([]string{}, tasksMember...), dispatchOps...),
 		role.SystemRoles.Tenant.HrManager:         tasksManager,
 		role.SystemRoles.Tenant.HrExecutive:       tasksMember,
 	}

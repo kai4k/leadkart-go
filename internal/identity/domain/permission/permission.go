@@ -142,6 +142,19 @@ type tasksWorkItemsPermissions struct{ Read, ReadAll, Manage, Reassign string }
 type tasksPermissions struct {
 	WorkItems tasksWorkItemsPermissions
 }
+
+// dispatchConsignmentNotesPermissions cover the Dispatch ConsignmentNote
+// aggregate per BRD §6.6. Read = view notes (operator + saga visibility);
+// Manage = create slots + drive carrier status transitions (dispatched /
+// in_transit / delivered / failed).
+type dispatchConsignmentNotesPermissions struct{ Read, Manage string }
+
+// dispatchPermissions groups the Dispatch bounded context surface (ADR
+// 0063). Ships the ConsignmentNotes namespace.
+type dispatchPermissions struct {
+	ConsignmentNotes dispatchConsignmentNotesPermissions
+}
+
 // IdentityPermissions is the closed catalogue of every permission the
 // system recognises. Mirror of the .NET `IdentityPermissions` static
 // class. Maintain in lockstep with the intern-table list.
@@ -178,6 +191,10 @@ var IdentityPermissions = struct {
 
 	// Tasks bounded context — WorkItem aggregate per BRD §6.8.
 	Tasks tasksPermissions
+
+	// Dispatch bounded context (ADR 0063) — ConsignmentNote aggregate
+	// per BRD §6.6.
+	Dispatch dispatchPermissions
 }{
 	Meta: metaPermissions{
 		TenantAdmin:                "tenant.admin",
@@ -260,6 +277,13 @@ var IdentityPermissions = struct {
 			Reassign: "tasks.work_items.reassign",
 		},
 	},
+
+	Dispatch: dispatchPermissions{
+		ConsignmentNotes: dispatchConsignmentNotesPermissions{
+			Read:   "dispatch.consignment_notes.read",
+			Manage: "dispatch.consignment_notes.manage",
+		},
+	},
 }
 
 func allNames() []string {
@@ -292,6 +316,9 @@ func allNames() []string {
 		// Tasks bounded context (BRD §6.8).
 		p.Tasks.WorkItems.Read, p.Tasks.WorkItems.ReadAll,
 		p.Tasks.WorkItems.Manage, p.Tasks.WorkItems.Reassign,
+
+		// Dispatch bounded context (ADR 0063).
+		p.Dispatch.ConsignmentNotes.Read, p.Dispatch.ConsignmentNotes.Manage,
 	}
 }
 

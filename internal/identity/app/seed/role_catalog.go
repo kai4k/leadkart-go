@@ -82,12 +82,18 @@ func DefaultRoleCatalog() []RoleSpec {
 		p.Tasks.WorkItems.Manage, p.Tasks.WorkItems.Reassign,
 	}
 
+	// Dispatch permission policy per BRD §6.6: the Dispatch roles own the
+	// ConsignmentNote workflow (create slots + drive carrier status). Read
+	// + Manage both go to DispatchManager + DispatchExecutive; CompanyOwner
+	// carries the bundle for tenant-wide oversight.
+	dispatchOps := []string{p.Dispatch.ConsignmentNotes.Read, p.Dispatch.ConsignmentNotes.Manage}
+
 	return []RoleSpec{
 		{
 			Name:            role.SystemRoles.Tenant.CompanyOwner,
 			IsSystemDefault: true,
 			HierarchyLevel:  0,
-			Permissions:     append([]string{p.Meta.TenantAdmin}, tasksManager...),
+			Permissions:     append(append([]string{p.Meta.TenantAdmin}, tasksManager...), dispatchOps...),
 		},
 		{
 			Name:           role.SystemRoles.Tenant.Administrator,
@@ -141,12 +147,12 @@ func DefaultRoleCatalog() []RoleSpec {
 		{
 			Name:           role.SystemRoles.Tenant.DispatchManager,
 			HierarchyLevel: role.HierarchyLevelDefault,
-			Permissions:    tasksManager,
+			Permissions:    append(append([]string{}, tasksManager...), dispatchOps...),
 		},
 		{
 			Name:           role.SystemRoles.Tenant.DispatchExecutive,
 			HierarchyLevel: role.HierarchyLevelDefault,
-			Permissions:    tasksMember,
+			Permissions:    append(append([]string{}, tasksMember...), dispatchOps...),
 		},
 		{
 			Name:           role.SystemRoles.Tenant.HrManager,
