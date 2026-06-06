@@ -447,6 +447,103 @@ type InventoryStockMovement struct {
 	OccurredAt          pgtype.Timestamptz
 }
 
+// CreditNote aggregate per BRD §A-014. Append-only; credit_note (post-delivery) stacks, cancellation_note (pre-delivery) at most one per invoice.
+type OrdersCreditNote struct {
+	ID                   pgtype.UUID
+	TenantID             pgtype.UUID
+	InvoiceID            pgtype.UUID
+	NumberKind           string
+	NumberFinancialYear  string
+	NumberSeq            int64
+	NumberDisplay        string
+	Reason               string
+	AmountPaise          int64
+	IssuedAt             pgtype.Timestamptz
+	IssuedByMembershipID pgtype.UUID
+}
+
+// Invoice aggregate per BRD §A-014. Append-only — one per order; gapless number allocated via orders.invoice_number_sequences.
+type OrdersInvoice struct {
+	ID                   pgtype.UUID
+	TenantID             pgtype.UUID
+	OrderID              pgtype.UUID
+	NumberKind           string
+	NumberFinancialYear  string
+	NumberSeq            int64
+	NumberDisplay        string
+	LineItems            []byte
+	TaxLines             []byte
+	SubtotalPaise        int64
+	TaxPaise             int64
+	GrandTotalPaise      int64
+	IssuedAt             pgtype.Timestamptz
+	IssuedByMembershipID pgtype.UUID
+}
+
+// Gapless invoice-number counters per (tenant, financial_year, kind) per ADR 0063 §3. Allocator increments last_used inside the order UoW tx; rollback rolls back the increment.
+type OrdersInvoiceNumberSequence struct {
+	TenantID      pgtype.UUID
+	FinancialYear string
+	Kind          string
+	LastUsed      int64
+}
+
+// Order aggregate per BRD §6.4 + ADR 0063 fulfillment saga. Strict state machine quotation_approved → … → complete | cancelled. Confirmed items + totals snapshotted at creation.
+type OrdersOrder struct {
+	ID                    pgtype.UUID
+	TenantID              pgtype.UUID
+	ApprovedQuotationID   pgtype.UUID
+	CustomerLeadID        pgtype.UUID
+	State                 string
+	ConfirmedItems        []byte
+	SubtotalPaise         int64
+	TaxPaise              int64
+	GrandTotalPaise       int64
+	InvoiceID             pgtype.UUID
+	ConsignmentNoteID     pgtype.UUID
+	ConfirmedAt           pgtype.Timestamptz
+	PackedAt              pgtype.Timestamptz
+	InvoicedAt            pgtype.Timestamptz
+	DispatchedAt          pgtype.Timestamptz
+	DeliveredAt           pgtype.Timestamptz
+	CompletedAt           pgtype.Timestamptz
+	CancelledAt           pgtype.Timestamptz
+	CancellationReason    string
+	CreatedAt             pgtype.Timestamptz
+	CreatedByMembershipID pgtype.UUID
+}
+
+// Payment aggregate per BRD §6.4. Append-only receipts ledger; external_reference unique per tenant for webhook idempotency.
+type OrdersPayment struct {
+	ID                     pgtype.UUID
+	TenantID               pgtype.UUID
+	OrderID                pgtype.UUID
+	Kind                   string
+	Method                 string
+	AmountPaise            int64
+	ExternalReference      string
+	Notes                  string
+	ReceivedAt             pgtype.Timestamptz
+	RecordedAt             pgtype.Timestamptz
+	RecordedByMembershipID pgtype.UUID
+}
+
+// Quotation aggregate per BRD §6.4. Revisions stored as JSONB; state machine draft → approved | rejected, superseded on revise-after-approve.
+type OrdersQuotation struct {
+	ID                     pgtype.UUID
+	TenantID               pgtype.UUID
+	CustomerLeadID         pgtype.UUID
+	State                  string
+	Revisions              []byte
+	ApprovedAt             pgtype.Timestamptz
+	ApprovedByMembershipID pgtype.UUID
+	RejectedAt             pgtype.Timestamptz
+	RejectedByMembershipID pgtype.UUID
+	RejectionReason        string
+	CreatedAt              pgtype.Timestamptz
+	CreatedByMembershipID  pgtype.UUID
+}
+
 // Per-tenant credit balance. Optimistic concurrency: every UPDATE checks WHERE version = $old_version + sets version = $old_version + 1; 0 rows affected → conflict → command handler retries with backoff. Per ADR 0059.
 type PlatformLeadCredit struct {
 	TenantID  pgtype.UUID
