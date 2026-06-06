@@ -38,6 +38,7 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/identitytest"
 	identityports "github.com/leadkart/leadkart-go/internal/identity/ports"
 	inventoryapp "github.com/leadkart/leadkart-go/internal/inventory/app"
+	ordersapp "github.com/leadkart/leadkart-go/internal/orders/app"
 	platformadapters "github.com/leadkart/leadkart-go/internal/platform/adapters"
 	platformapp "github.com/leadkart/leadkart-go/internal/platform/app"
 	platformcommand "github.com/leadkart/leadkart-go/internal/platform/app/command"
@@ -105,7 +106,7 @@ func newPlatformE2E(t *testing.T) platformE2E {
 		},
 	}
 
-	srv := httptest.NewServer(newServer(silentLogger(), wiring.App, platformApp, inventoryapp.Application{}, crmapp.Application{}, tasksapp.Application{}, dispatchapp.Application{}, wiring.Issuer, wiring.StampValidator))
+	srv := httptest.NewServer(newServer(silentLogger(), wiring.App, platformApp, inventoryapp.Application{}, crmapp.Application{}, tasksapp.Application{}, dispatchapp.Application{}, ordersapp.Application{}, wiring.Issuer, wiring.StampValidator))
 	t.Cleanup(srv.Close)
 
 	return platformE2E{

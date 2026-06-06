@@ -111,6 +111,17 @@ import (
 	dispatchquery "github.com/leadkart/leadkart-go/internal/dispatch/app/query"
 	"github.com/leadkart/leadkart-go/internal/dispatch/domain/consignmentnote"
 	dispatchports "github.com/leadkart/leadkart-go/internal/dispatch/ports"
+
+	ordersadapters "github.com/leadkart/leadkart-go/internal/orders/adapters"
+	ordersapp "github.com/leadkart/leadkart-go/internal/orders/app"
+	orderscommand "github.com/leadkart/leadkart-go/internal/orders/app/command"
+	ordersquery "github.com/leadkart/leadkart-go/internal/orders/app/query"
+	"github.com/leadkart/leadkart-go/internal/orders/domain/creditnote"
+	"github.com/leadkart/leadkart-go/internal/orders/domain/invoice"
+	"github.com/leadkart/leadkart-go/internal/orders/domain/order"
+	"github.com/leadkart/leadkart-go/internal/orders/domain/payment"
+	"github.com/leadkart/leadkart-go/internal/orders/domain/quotation"
+	ordersports "github.com/leadkart/leadkart-go/internal/orders/ports"
 )
 
 // HTTP server timeouts — public listener tuning per OWASP API Security
@@ -343,6 +354,10 @@ func run(ctx context.Context, stdout *os.File, _ []string) error {
 	// transitions; the OrderPacked subscriber lives in cmd/worker.
 	dispatchAppInstance := buildDispatchApp(pool, time.Now)
 
+	// Orders module wiring (ADR 0063 — BRD §6.4). Quote→order lifecycle +
+	// gapless FY invoice numbering; saga subscribers live in cmd/worker.
+	ordersAppInstance := buildOrdersApp(pool, time.Now)
+
 	// NOTE: outbox forwarder + messaging.Router + subscribers.Register
 	// live in cmd/worker — see that binary's package doc. The API host
 	// only writes integration events (via the per-handler outbox writes
@@ -380,7 +395,7 @@ func run(ctx context.Context, stdout *os.File, _ []string) error {
 		},
 	})
 	publicHandler := otelhttp.NewHandler(
-		mwChain(newServer(logger, wiring.App, platformWiring.App, inventoryAppInstance, crmWiring.App, tasksAppInstance, dispatchAppInstance, wiring.Issuer, wiring.StampValidator)),
+		mwChain(newServer(logger, wiring.App, platformWiring.App, inventoryAppInstance, crmWiring.App, tasksAppInstance, dispatchAppInstance, ordersAppInstance, wiring.Issuer, wiring.StampValidator)),
 		"leadkart-api",
 	)
 	srv := &http.Server{
@@ -450,6 +465,7 @@ func newServer(
 	crmApp crmapp.Application,
 	tasksApp tasksapp.Application,
 	dispatchApp dispatchapp.Application,
+	ordersApp ordersapp.Application,
 	verifier authn.Verifier,
 	validator authn.StampValidator,
 ) http.Handler {
@@ -461,6 +477,7 @@ func newServer(
 	crmports.AddRoutes(mux, log, crmApp, verifier, validator)
 	tasksports.AddRoutes(mux, log, tasksApp, verifier, validator)
 	dispatchports.AddRoutes(mux, log, dispatchApp, verifier, validator)
+	ordersports.AddRoutes(mux, log, ordersApp, verifier, validator)
 	return mux
 }
 
@@ -888,6 +905,51 @@ func buildDispatchApp(pool *pgxpool.Pool, now func() time.Time) dispatchapp.Appl
 		Queries: dispatchapp.Queries{
 			GetConsignmentNote:        dispatchquery.NewGetConsignmentNoteHandler(repo),
 			GetConsignmentNoteByOrder: dispatchquery.NewGetConsignmentNoteByOrderHandler(repo),
+		},
+	}
+}
+
+// buildOrdersApp wires the Orders module per ADR 0063 (BRD §6.4): the
+// quote→order lifecycle, gapless FY invoice numbering, payments + credit
+// notes. Saga subscribers (auto-invoice, consignment-created/delivered) live
+// in cmd/worker.
+func buildOrdersApp(pool *pgxpool.Pool, now func() time.Time) ordersapp.Application {
+	tx := pg.NewTransactor(pool)
+	quotations := ordersadapters.NewQuotationRepository(pool, tx)
+	orders := ordersadapters.NewOrderRepository(pool, tx)
+	invoices := ordersadapters.NewInvoiceRepository(pool, tx)
+	creditNotes := ordersadapters.NewCreditNoteRepository(pool, tx)
+	payments := ordersadapters.NewPaymentRepository(pool, tx)
+	allocator := ordersadapters.NewInvoiceNumberAllocator(pool)
+	enqueuer := ordersadapters.NewOutboxEnqueuer()
+	newQuotationID := func() quotation.ID { return quotation.ID(ids.NewV7().String()) }
+	newOrderID := func() order.ID { return order.ID(ids.NewV7().String()) }
+	newInvoiceID := func() invoice.ID { return invoice.ID(ids.NewV7().String()) }
+	newCreditNoteID := func() creditnote.ID { return creditnote.ID(ids.NewV7().String()) }
+	newPaymentID := func() payment.ID { return payment.ID(ids.NewV7().String()) }
+
+	return ordersapp.Application{
+		Commands: ordersapp.Commands{
+			CreateQuotation:    orderscommand.NewCreateQuotationHandler(quotations, now, newQuotationID),
+			ReviseQuotation:    orderscommand.NewReviseQuotationHandler(quotations, now),
+			ApproveQuotation:   orderscommand.NewApproveQuotationHandler(tx, quotations, orders, now, newOrderID),
+			RejectQuotation:    orderscommand.NewRejectQuotationHandler(quotations, now),
+			RecordTokenPayment: orderscommand.NewRecordTokenPaymentHandler(tx, orders, payments, now, newPaymentID),
+			ConfirmOrder:       orderscommand.NewConfirmOrderHandler(tx, orders, enqueuer, now),
+			PackOrder:          orderscommand.NewPackOrderHandler(tx, orders, enqueuer, now),
+			InvoiceOrder:       orderscommand.NewInvoiceOrderHandler(tx, orders, invoices, allocator, now, newInvoiceID),
+			AttachConsignment:  orderscommand.NewAttachConsignmentHandler(orders, now),
+			MarkOrderDelivered: orderscommand.NewMarkOrderDeliveredHandler(orders, now),
+			CompleteOrder:      orderscommand.NewCompleteOrderHandler(orders, now),
+			CancelOrder:        orderscommand.NewCancelOrderHandler(orders, now),
+			RecordPayment:      orderscommand.NewRecordPaymentHandler(payments, now, newPaymentID),
+			MintCreditNote:     orderscommand.NewMintCreditNoteHandler(tx, creditNotes, allocator, now, newCreditNoteID),
+		},
+		Queries: ordersapp.Queries{
+			GetOrder:            ordersquery.NewGetOrderHandler(orders),
+			GetQuotation:        ordersquery.NewGetQuotationHandler(quotations),
+			GetInvoiceByOrder:   ordersquery.NewGetInvoiceByOrderHandler(invoices),
+			ListPaymentsByOrder: ordersquery.NewListPaymentsByOrderHandler(payments),
 		},
 	}
 }

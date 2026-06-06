@@ -80,8 +80,13 @@ import (
 
 	dispatchadapters "github.com/leadkart/leadkart-go/internal/dispatch/adapters"
 	dispatchcommand "github.com/leadkart/leadkart-go/internal/dispatch/app/command"
+
 	"github.com/leadkart/leadkart-go/internal/dispatch/domain/consignmentnote"
 	dispatchsubscribers "github.com/leadkart/leadkart-go/internal/dispatch/ports/subscribers"
+	ordersadapters "github.com/leadkart/leadkart-go/internal/orders/adapters"
+	orderscommand "github.com/leadkart/leadkart-go/internal/orders/app/command"
+	"github.com/leadkart/leadkart-go/internal/orders/domain/invoice"
+	orderssubscribers "github.com/leadkart/leadkart-go/internal/orders/ports/subscribers"
 )
 
 // Tunings — same shape as cmd/api/main.go so the two binaries' admin
@@ -298,6 +303,21 @@ func run(ctx context.Context, stdout *os.File) error {
 	dispatchCreate := dispatchcommand.NewCreateConsignmentNoteHandler(tx, dispatchRepo, time.Now, newConsignmentNoteID)
 	dispatchOrderPacked := dispatchsubscribers.NewOrderPackedIngestor(dispatchCreate, logger)
 
+	// Orders module saga subscribers (ADR 0063 §4 — BRD §6.4):
+	//   orders.order_packed.v1            → auto-invoice (packed → invoiced)
+	//   dispatch.consignment_note_created → AttachConsignment (invoiced → dispatched)
+	//   dispatch.consignment_delivered    → MarkDelivered (dispatched → delivered)
+	ordersOrderRepo := ordersadapters.NewOrderRepository(pool, tx)
+	ordersInvoiceRepo := ordersadapters.NewInvoiceRepository(pool, tx)
+	ordersAllocator := ordersadapters.NewInvoiceNumberAllocator(pool)
+	newOrdersInvoiceID := func() invoice.ID { return invoice.ID(ids.NewV7().String()) }
+	ordersInvoiceOrder := orderscommand.NewInvoiceOrderHandler(tx, ordersOrderRepo, ordersInvoiceRepo, ordersAllocator, time.Now, newOrdersInvoiceID)
+	ordersAttach := orderscommand.NewAttachConsignmentHandler(ordersOrderRepo, time.Now)
+	ordersDeliver := orderscommand.NewMarkOrderDeliveredHandler(ordersOrderRepo, time.Now)
+	ordersAutoInvoiceSub := orderssubscribers.NewAutoInvoiceSubscriber(ordersInvoiceOrder, logger)
+	ordersConsignmentCreatedSub := orderssubscribers.NewConsignmentCreatedSubscriber(ordersAttach, logger)
+	ordersConsignmentDeliveredSub := orderssubscribers.NewConsignmentDeliveredSubscriber(ordersDeliver, logger)
+
 	router, err := messaging.NewRouter(messaging.Deps{
 		Subscriber:       pubsub,
 		Publisher:        pubsub,
@@ -333,6 +353,7 @@ func run(ctx context.Context, stdout *os.File) error {
 	cqrsHandlers = append(cqrsHandlers, platformsubscribers.Handlers(platformTenantRegistered)...)
 	cqrsHandlers = append(cqrsHandlers, taskssubscribers.Handlers(tasksCallLoggedSub, tasksLeadConvertedSub)...)
 	cqrsHandlers = append(cqrsHandlers, dispatchsubscribers.Handlers(dispatchOrderPacked)...)
+	cqrsHandlers = append(cqrsHandlers, orderssubscribers.Handlers(ordersAutoInvoiceSub, ordersConsignmentCreatedSub, ordersConsignmentDeliveredSub)...)
 	for _, h := range cqrsHandlers {
 		if err := router.AddCqrsHandler(eventProcessor, h); err != nil {
 			return fmt.Errorf("register cqrs handler: %w", err)

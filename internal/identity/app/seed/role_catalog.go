@@ -15,6 +15,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/leadkart/leadkart-go/internal/common/ids"
@@ -88,12 +89,33 @@ func DefaultRoleCatalog() []RoleSpec {
 	// carries the bundle for tenant-wide oversight.
 	dispatchOps := []string{p.Dispatch.ConsignmentNotes.Read, p.Dispatch.ConsignmentNotes.Manage}
 
+	// Orders permission policy per BRD §6.4: sales roles own the quote→order
+	// flow. ordersFull (managers + owner) drives the full lifecycle; ordersExec
+	// (sales executives) can quote + record payments + view; ordersRead
+	// (office back-office) is view-only.
+	ordersFull := []string{
+		p.Orders.Quotations.Read, p.Orders.Quotations.Manage,
+		p.Orders.Orders.Read, p.Orders.Orders.Manage,
+		p.Orders.Payments.Read, p.Orders.Payments.Record,
+		p.Orders.Invoices.Read,
+	}
+	ordersExec := []string{
+		p.Orders.Quotations.Read, p.Orders.Quotations.Manage,
+		p.Orders.Orders.Read,
+		p.Orders.Payments.Read, p.Orders.Payments.Record,
+		p.Orders.Invoices.Read,
+	}
+	ordersRead := []string{
+		p.Orders.Quotations.Read, p.Orders.Orders.Read,
+		p.Orders.Payments.Read, p.Orders.Invoices.Read,
+	}
+
 	return []RoleSpec{
 		{
 			Name:            role.SystemRoles.Tenant.CompanyOwner,
 			IsSystemDefault: true,
 			HierarchyLevel:  0,
-			Permissions:     append(append([]string{p.Meta.TenantAdmin}, tasksManager...), dispatchOps...),
+			Permissions:     slices.Concat([]string{p.Meta.TenantAdmin}, tasksManager, dispatchOps, ordersFull),
 		},
 		{
 			Name:           role.SystemRoles.Tenant.Administrator,
@@ -108,10 +130,10 @@ func DefaultRoleCatalog() []RoleSpec {
 		{
 			Name:           role.SystemRoles.Tenant.OfficeAdministrator,
 			HierarchyLevel: role.HierarchyLevelDefault,
-			Permissions: append([]string{
-				p.Inventory.Catalog.Read,
-				p.Inventory.Stock.Read,
-			}, tasksManager...),
+			Permissions: slices.Concat(
+				[]string{p.Inventory.Catalog.Read, p.Inventory.Stock.Read},
+				tasksManager, ordersRead,
+			),
 		},
 		{
 			Name:           role.SystemRoles.Tenant.OfficeExecutive,
@@ -121,15 +143,15 @@ func DefaultRoleCatalog() []RoleSpec {
 		{
 			Name:           role.SystemRoles.Tenant.SalesManager,
 			HierarchyLevel: role.HierarchyLevelDefault,
-			Permissions: append([]string{
-				p.Inventory.Catalog.Read,
-				p.Inventory.Stock.Read,
-			}, tasksManager...),
+			Permissions: slices.Concat(
+				[]string{p.Inventory.Catalog.Read, p.Inventory.Stock.Read},
+				tasksManager, ordersFull,
+			),
 		},
 		{
 			Name:           role.SystemRoles.Tenant.SalesExecutive,
 			HierarchyLevel: role.HierarchyLevelDefault,
-			Permissions:    tasksMember,
+			Permissions:    slices.Concat(tasksMember, ordersExec),
 		},
 		{
 			Name:           role.SystemRoles.Tenant.PurchaseManager,

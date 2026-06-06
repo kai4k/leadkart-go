@@ -81,6 +81,8 @@ tags:
     description: WorkItem aggregate — task creation, state machine, hierarchy-gated reassignment, dashboards (BRD §6.8)
   - name: dispatch
     description: ConsignmentNote aggregate — slot creation + carrier status lifecycle (pending → dispatched → in_transit → delivered | failed) per BRD §6.6 (ADR 0063)
+  - name: orders
+    description: Quotation / Order / Invoice / CreditNote / Payment aggregates — quote→order fulfillment lifecycle + gapless FY invoice numbering per BRD §6.4 (ADR 0063)
 
 security:
   - BearerAuth: []
@@ -2426,6 +2428,322 @@ paths:
         '422': { $ref: '#/components/responses/Unprocessable' }
         '500': { $ref: '#/components/responses/InternalServerError' }
 
+  /api/v1/orders/quotations:
+    post:
+      tags: [orders]
+      summary: Create a draft quotation
+      parameters:
+        - { $ref: '#/components/parameters/XCommandId' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateQuotationRequest' }
+      responses:
+        '201':
+          description: Quotation created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CreateQuotationResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+        '500': { $ref: '#/components/responses/InternalServerError' }
+
+  /api/v1/orders/quotations/{quotationId}:
+    get:
+      tags: [orders]
+      summary: Get a quotation
+      parameters:
+        - { $ref: '#/components/parameters/QuotationId' }
+      responses:
+        '200':
+          description: Quotation
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/QuotationDto' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/InternalServerError' }
+
+  /api/v1/orders/quotations/{quotationId}/revise:
+    post:
+      tags: [orders]
+      summary: Append a quotation revision
+      parameters:
+        - { $ref: '#/components/parameters/QuotationId' }
+        - { $ref: '#/components/parameters/XCommandId' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ReviseQuotationRequest' }
+      responses:
+        '204': { description: Revised }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: Quotation is terminal
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+        '500': { $ref: '#/components/responses/InternalServerError' }
+
+  /api/v1/orders/quotations/{quotationId}/approve:
+    post:
+      tags: [orders]
+      summary: Approve a quotation (seeds the Order)
+      parameters:
+        - { $ref: '#/components/parameters/QuotationId' }
+        - { $ref: '#/components/parameters/XCommandId' }
+      responses:
+        '200':
+          description: Approved; Order created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApproveQuotationResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: Quotation already rejected
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+        '500': { $ref: '#/components/responses/InternalServerError' }
+
+  /api/v1/orders/quotations/{quotationId}/reject:
+    post:
+      tags: [orders]
+      summary: Reject a quotation (with reason)
+      parameters:
+        - { $ref: '#/components/parameters/QuotationId' }
+        - { $ref: '#/components/parameters/XCommandId' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RejectQuotationRequest' }
+      responses:
+        '204': { description: Rejected }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: Quotation already approved
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '500': { $ref: '#/components/responses/InternalServerError' }
+
+  /api/v1/orders/orders/{orderId}:
+    get:
+      tags: [orders]
+      summary: Get an order
+      parameters:
+        - { $ref: '#/components/parameters/OrderId' }
+      responses:
+        '200':
+          description: Order
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OrderDto' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/InternalServerError' }
+
+  /api/v1/orders/orders/{orderId}/token-payment:
+    post:
+      tags: [orders]
+      summary: Record the token payment + advance to token_paid
+      parameters:
+        - { $ref: '#/components/parameters/OrderId' }
+        - { $ref: '#/components/parameters/XCommandId' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RecordTokenPaymentRequest' }
+      responses:
+        '204': { description: Recorded }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: Invalid transition or duplicate payment reference
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+        '500': { $ref: '#/components/responses/InternalServerError' }
+
+  /api/v1/orders/orders/{orderId}/confirm:
+    post:
+      tags: [orders]
+      summary: Confirm an order (token_paid → confirmed)
+      parameters:
+        - { $ref: '#/components/parameters/OrderId' }
+        - { $ref: '#/components/parameters/XCommandId' }
+      responses:
+        '204': { description: Confirmed }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: Invalid state transition
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '500': { $ref: '#/components/responses/InternalServerError' }
+
+  /api/v1/orders/orders/{orderId}/pack:
+    post:
+      tags: [orders]
+      summary: Pack an order (confirmed → packed)
+      parameters:
+        - { $ref: '#/components/parameters/OrderId' }
+        - { $ref: '#/components/parameters/XCommandId' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PackOrderRequest' }
+      responses:
+        '204': { description: Packed }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: Invalid state transition
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '500': { $ref: '#/components/responses/InternalServerError' }
+
+  /api/v1/orders/orders/{orderId}/invoice:
+    get:
+      tags: [orders]
+      summary: Get the order's invoice
+      parameters:
+        - { $ref: '#/components/parameters/OrderId' }
+      responses:
+        '200':
+          description: Invoice
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/InvoiceDto' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/InternalServerError' }
+    post:
+      tags: [orders]
+      summary: Invoice an order (packed → invoiced, gapless number)
+      parameters:
+        - { $ref: '#/components/parameters/OrderId' }
+        - { $ref: '#/components/parameters/XCommandId' }
+      responses:
+        '200':
+          description: Invoiced
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/InvoiceOrderResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: Invalid transition or invoice already exists
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '500': { $ref: '#/components/responses/InternalServerError' }
+
+  /api/v1/orders/orders/{orderId}/cancel:
+    post:
+      tags: [orders]
+      summary: Cancel an order (with reason)
+      parameters:
+        - { $ref: '#/components/parameters/OrderId' }
+        - { $ref: '#/components/parameters/XCommandId' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CancelOrderRequest' }
+      responses:
+        '204': { description: Cancelled }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: Order already terminal
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '500': { $ref: '#/components/responses/InternalServerError' }
+
+  /api/v1/orders/orders/{orderId}/complete:
+    post:
+      tags: [orders]
+      summary: Complete an order (delivered → complete)
+      parameters:
+        - { $ref: '#/components/parameters/OrderId' }
+        - { $ref: '#/components/parameters/XCommandId' }
+      responses:
+        '204': { description: Completed }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: Invalid state transition
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '500': { $ref: '#/components/responses/InternalServerError' }
+
+  /api/v1/orders/orders/{orderId}/payments:
+    get:
+      tags: [orders]
+      summary: List an order's payments
+      parameters:
+        - { $ref: '#/components/parameters/OrderId' }
+      responses:
+        '200':
+          description: Payments
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ListPaymentsResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '500': { $ref: '#/components/responses/InternalServerError' }
+    post:
+      tags: [orders]
+      summary: Record a payment receipt (balance / full / refund)
+      parameters:
+        - { $ref: '#/components/parameters/OrderId' }
+        - { $ref: '#/components/parameters/XCommandId' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RecordPaymentRequest' }
+      responses:
+        '201':
+          description: Recorded
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RecordPaymentResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '409':
+          description: Duplicate external reference
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+        '500': { $ref: '#/components/responses/InternalServerError' }
+
   /api/v1/crm/leads/{leadId}/lose:
     post:
       tags: [crm]
@@ -2679,6 +2997,16 @@ components:
       schema: { type: string, format: uuid }
     ConsignmentNoteId:
       name: consignmentNoteId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    QuotationId:
+      name: quotationId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    OrderId:
+      name: orderId
       in: path
       required: true
       schema: { type: string, format: uuid }
@@ -4022,3 +4350,165 @@ components:
       required: [reason]
       properties:
         reason: { type: string, minLength: 1 }
+
+    OrderLineItemDto:
+      type: object
+      required: [product_id, sku, quantity, unit_sale_paise, gst_rate_bps]
+      properties:
+        product_id:      { type: string, format: uuid }
+        sku:             { type: string }
+        description:     { type: string }
+        quantity:        { type: integer, format: int32, minimum: 1 }
+        unit_mrp_paise:  { type: integer, format: int64, minimum: 0 }
+        unit_sale_paise: { type: integer, format: int64, minimum: 1 }
+        gst_rate_bps:    { type: integer, format: int32, minimum: 0, maximum: 10000 }
+
+    CreateQuotationRequest:
+      type: object
+      required: [customer_lead_id, items]
+      properties:
+        customer_lead_id: { type: string, format: uuid }
+        items: { type: array, items: { $ref: '#/components/schemas/OrderLineItemDto' } }
+        note:  { type: string }
+
+    CreateQuotationResponse:
+      type: object
+      required: [quotation_id]
+      properties:
+        quotation_id: { type: string, format: uuid }
+
+    ReviseQuotationRequest:
+      type: object
+      required: [items]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/OrderLineItemDto' } }
+        note:  { type: string }
+
+    RejectQuotationRequest:
+      type: object
+      required: [reason]
+      properties:
+        reason: { type: string, minLength: 1 }
+
+    ApproveQuotationResponse:
+      type: object
+      required: [order_id]
+      properties:
+        order_id: { type: string, format: uuid }
+
+    QuotationDto:
+      type: object
+      required: [id, tenant_id, customer_lead_id, state, revision_number, items, created_at]
+      properties:
+        id:               { type: string, format: uuid }
+        tenant_id:        { type: string, format: uuid }
+        customer_lead_id: { type: string, format: uuid }
+        state:            { type: string, enum: [draft, approved, rejected] }
+        revision_number:  { type: integer, format: int64 }
+        items: { type: array, items: { $ref: '#/components/schemas/OrderLineItemDto' } }
+        rejection_reason: { type: string }
+        created_at:       { type: string, format: date-time }
+
+    OrderDto:
+      type: object
+      required: [id, tenant_id, approved_quotation_id, customer_lead_id, state, items, subtotal_paise, tax_paise, grand_total_paise, created_at]
+      properties:
+        id:                    { type: string, format: uuid }
+        tenant_id:             { type: string, format: uuid }
+        approved_quotation_id: { type: string, format: uuid }
+        customer_lead_id:      { type: string, format: uuid }
+        state: { type: string, enum: [quotation_draft, quotation_approved, token_paid, confirmed, packed, invoiced, dispatched, delivered, complete, cancelled] }
+        items: { type: array, items: { $ref: '#/components/schemas/OrderLineItemDto' } }
+        subtotal_paise:      { type: integer, format: int64 }
+        tax_paise:           { type: integer, format: int64 }
+        grand_total_paise:   { type: integer, format: int64 }
+        invoice_id:          { type: string, format: uuid }
+        consignment_note_id: { type: string, format: uuid }
+        confirmed_at:        { type: string, format: date-time }
+        packed_at:           { type: string, format: date-time }
+        invoiced_at:         { type: string, format: date-time }
+        dispatched_at:       { type: string, format: date-time }
+        delivered_at:        { type: string, format: date-time }
+        completed_at:        { type: string, format: date-time }
+        cancelled_at:        { type: string, format: date-time }
+        cancellation_reason: { type: string }
+        created_at:          { type: string, format: date-time }
+
+    RecordTokenPaymentRequest:
+      type: object
+      required: [method, amount_paise]
+      properties:
+        method:             { type: string, enum: [upi, neft, rtgs, imps, cheque, cash, card_offline] }
+        amount_paise:       { type: integer, format: int64, minimum: 1 }
+        external_reference: { type: string }
+        notes:              { type: string }
+
+    PackOrderRequest:
+      type: object
+      required: [carrier_name, box_count, weight_grams]
+      properties:
+        carrier_name:         { type: string, minLength: 1 }
+        box_count:            { type: integer, format: int32, minimum: 1 }
+        weight_grams:         { type: integer, format: int64, minimum: 1 }
+        expected_delivery_at: { type: string, format: date-time }
+
+    InvoiceOrderResponse:
+      type: object
+      required: [invoice_id, number_display]
+      properties:
+        invoice_id:     { type: string, format: uuid }
+        number_display: { type: string }
+
+    CancelOrderRequest:
+      type: object
+      required: [reason]
+      properties:
+        reason: { type: string, minLength: 1 }
+
+    RecordPaymentRequest:
+      type: object
+      required: [kind, method, amount_paise]
+      properties:
+        kind:               { type: string, enum: [token, full, refund] }
+        method:             { type: string, enum: [upi, neft, rtgs, imps, cheque, cash, card_offline] }
+        amount_paise:       { type: integer, format: int64, minimum: 1 }
+        external_reference: { type: string }
+        notes:              { type: string }
+        received_at:        { type: string, format: date-time }
+
+    RecordPaymentResponse:
+      type: object
+      required: [payment_id]
+      properties:
+        payment_id: { type: string, format: uuid }
+
+    PaymentDto:
+      type: object
+      required: [id, order_id, kind, method, amount_paise, received_at]
+      properties:
+        id:                 { type: string, format: uuid }
+        order_id:           { type: string, format: uuid }
+        kind:               { type: string, enum: [token, full, refund] }
+        method:             { type: string, enum: [upi, neft, rtgs, imps, cheque, cash, card_offline] }
+        amount_paise:       { type: integer, format: int64 }
+        external_reference: { type: string }
+        received_at:        { type: string, format: date-time }
+
+    ListPaymentsResponse:
+      type: object
+      required: [payments]
+      properties:
+        payments: { type: array, items: { $ref: '#/components/schemas/PaymentDto' } }
+
+    InvoiceDto:
+      type: object
+      required: [id, order_id, number_display, items, subtotal_paise, tax_paise, grand_total_paise, issued_at]
+      properties:
+        id:                { type: string, format: uuid }
+        order_id:          { type: string, format: uuid }
+        number_display:    { type: string }
+        items: { type: array, items: { $ref: '#/components/schemas/OrderLineItemDto' } }
+        subtotal_paise:    { type: integer, format: int64 }
+        tax_paise:         { type: integer, format: int64 }
+        grand_total_paise: { type: integer, format: int64 }
+        issued_at:         { type: string, format: date-time }

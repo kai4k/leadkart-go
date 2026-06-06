@@ -355,13 +355,16 @@ func TestArch_ListHandlersBoundedByPaginationShape(t *testing.T) {
 		// Bounded by per-process in-memory store size; admin operator surface.
 		"handleListImpersonationSessions": "active impersonation sessions bounded by in-memory store size",
 		// Bounded by per-tenant role count (small N + soft cap by domain).
-		"handleListRoles":                "roles per tenant bounded by domain invariant (system + small custom set)",
-		"handleListAllTenants":           "platform list of tenants — paginated by HasMore/NextCursor response shape",
-		"handleListUsers":                "delegates to ListUsersPaged → pagination.Page[UserView]",
-		"handleListProducts":             "delegates to ListProductsPage → pagination.Page[ProductView]",
-		"handleListBatchesForProduct":    "delegates to ListBatchesByProduct → bounded set per parent product",
-		"handleListBatchMovements":       "delegates to ListBatchMovementsPage → pagination.Page[]",
-		"handleListUnverifiedContacts":   "delegates to ListUnverifiedContactsPage → pagination.Page[]",
+		"handleListRoles":              "roles per tenant bounded by domain invariant (system + small custom set)",
+		"handleListAllTenants":         "platform list of tenants — paginated by HasMore/NextCursor response shape",
+		"handleListUsers":              "delegates to ListUsersPaged → pagination.Page[UserView]",
+		"handleListProducts":           "delegates to ListProductsPage → pagination.Page[ProductView]",
+		"handleListBatchesForProduct":  "delegates to ListBatchesByProduct → bounded set per parent product",
+		"handleListBatchMovements":     "delegates to ListBatchMovementsPage → pagination.Page[]",
+		"handleListUnverifiedContacts": "delegates to ListUnverifiedContactsPage → pagination.Page[]",
+		// Bounded by domain: payments per order are a tiny set (token +
+		// balance/full + optional refund — typically 1-3) per BRD §6.4.
+		"handleListPayments": "payments per order bounded by domain invariant (token + balance + optional refund)",
 	}
 
 	type violation struct {

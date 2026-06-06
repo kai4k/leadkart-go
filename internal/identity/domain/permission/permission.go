@@ -155,6 +155,29 @@ type dispatchPermissions struct {
 	ConsignmentNotes dispatchConsignmentNotesPermissions
 }
 
+// ordersQuotationsPermissions cover the Quotation aggregate (BRD §6.4):
+// Read = view; Manage = create / revise / approve / reject.
+type ordersQuotationsPermissions struct{ Read, Manage string }
+
+// ordersOrdersPermissions cover the Order aggregate: Read = view; Manage =
+// drive the fulfillment lifecycle (token / confirm / pack / invoice / cancel).
+type ordersOrdersPermissions struct{ Read, Manage string }
+
+// ordersPaymentsPermissions cover the Payment ledger: Read = view; Record =
+// record a receipt.
+type ordersPaymentsPermissions struct{ Read, Record string }
+
+// ordersInvoicesPermissions cover the Invoice / CreditNote read surface.
+type ordersInvoicesPermissions struct{ Read string }
+
+// ordersPermissions groups the Orders bounded context surface (ADR 0063).
+type ordersPermissions struct {
+	Quotations ordersQuotationsPermissions
+	Orders     ordersOrdersPermissions
+	Payments   ordersPaymentsPermissions
+	Invoices   ordersInvoicesPermissions
+}
+
 // IdentityPermissions is the closed catalogue of every permission the
 // system recognises. Mirror of the .NET `IdentityPermissions` static
 // class. Maintain in lockstep with the intern-table list.
@@ -195,6 +218,10 @@ var IdentityPermissions = struct {
 	// Dispatch bounded context (ADR 0063) — ConsignmentNote aggregate
 	// per BRD §6.6.
 	Dispatch dispatchPermissions
+
+	// Orders bounded context (ADR 0063) — Quotation / Order / Invoice /
+	// CreditNote / Payment aggregates per BRD §6.4.
+	Orders ordersPermissions
 }{
 	Meta: metaPermissions{
 		TenantAdmin:                "tenant.admin",
@@ -284,6 +311,24 @@ var IdentityPermissions = struct {
 			Manage: "dispatch.consignment_notes.manage",
 		},
 	},
+
+	Orders: ordersPermissions{
+		Quotations: ordersQuotationsPermissions{
+			Read:   "orders.quotations.read",
+			Manage: "orders.quotations.manage",
+		},
+		Orders: ordersOrdersPermissions{
+			Read:   "orders.orders.read",
+			Manage: "orders.orders.manage",
+		},
+		Payments: ordersPaymentsPermissions{
+			Read:   "orders.payments.read",
+			Record: "orders.payments.record",
+		},
+		Invoices: ordersInvoicesPermissions{
+			Read: "orders.invoices.read",
+		},
+	},
 }
 
 func allNames() []string {
@@ -319,6 +364,12 @@ func allNames() []string {
 
 		// Dispatch bounded context (ADR 0063).
 		p.Dispatch.ConsignmentNotes.Read, p.Dispatch.ConsignmentNotes.Manage,
+
+		// Orders bounded context (ADR 0063).
+		p.Orders.Quotations.Read, p.Orders.Quotations.Manage,
+		p.Orders.Orders.Read, p.Orders.Orders.Manage,
+		p.Orders.Payments.Read, p.Orders.Payments.Record,
+		p.Orders.Invoices.Read,
 	}
 }
 

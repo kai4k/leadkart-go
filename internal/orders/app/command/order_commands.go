@@ -157,7 +157,11 @@ type PackOrderCommand struct {
 	PackedByMembership membership.ID
 }
 
-// PackOrderHandler runs the pack flow.
+// PackOrderHandler runs the pack flow (confirmed → packed) + emits
+// OrderPackedV1. Invoicing is a SEPARATE step: the auto-invoice subscriber on
+// orders.order_packed.v1 (default path) or the manual InvoiceOrder route runs
+// InvoiceOrder, which advances packed → invoiced. The AttachConsignment saga
+// handler tolerates the not-yet-invoiced window via retry (ADR 0063 §4).
 type PackOrderHandler struct {
 	uow      pg.UnitOfWork
 	orders   order.Repository

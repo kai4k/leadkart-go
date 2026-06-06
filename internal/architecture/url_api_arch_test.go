@@ -282,9 +282,16 @@ func TestArch_RoutesUsePluralNouns(t *testing.T) {
 		// Dispatch consignment-note state-transition sub-actions per Stripe
 		// canon (POST /consignment-notes/{id}/dispatch). BRD §6.6 state
 		// machine (pending → dispatched → in_transit → delivered | failed).
-		"in-transit":             true,
-		"delivered":              true,
-		"failed":                 true,
+		"in-transit": true,
+		"delivered":  true,
+		"failed":     true,
+		// Orders quotation/order lifecycle sub-actions per Stripe canon
+		// (POST /orders/{id}/pack). BRD §6.4 state machine.
+		"revise":                 true,
+		"confirm":                true,
+		"pack":                   true,
+		"invoice":                true,
+		"token-payment":          true,
 		"global-suspend":         true,
 		"lift-global-suspension": true,
 		"by-slug":                true,

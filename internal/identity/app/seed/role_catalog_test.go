@@ -95,17 +95,35 @@ func TestDefaultRoleCatalog_OperationalRolesCarryInventoryGrants(t *testing.T) {
 		p.Tasks.WorkItems.Manage, p.Tasks.WorkItems.Reassign,
 	}
 	dispatchOps := []string{p.Dispatch.ConsignmentNotes.Read, p.Dispatch.ConsignmentNotes.Manage}
+	ordersFull := []string{
+		p.Orders.Quotations.Read, p.Orders.Quotations.Manage,
+		p.Orders.Orders.Read, p.Orders.Orders.Manage,
+		p.Orders.Payments.Read, p.Orders.Payments.Record,
+		p.Orders.Invoices.Read,
+	}
+	ordersExec := []string{
+		p.Orders.Quotations.Read, p.Orders.Quotations.Manage,
+		p.Orders.Orders.Read,
+		p.Orders.Payments.Read, p.Orders.Payments.Record,
+		p.Orders.Invoices.Read,
+	}
+	ordersRead := []string{
+		p.Orders.Quotations.Read, p.Orders.Orders.Read,
+		p.Orders.Payments.Read, p.Orders.Invoices.Read,
+	}
 	want := map[string][]string{
 		role.SystemRoles.Tenant.Administrator: tasksManager,
 		role.SystemRoles.Tenant.SeniorManager: tasksManager,
-		role.SystemRoles.Tenant.OfficeAdministrator: append([]string{
-			p.Inventory.Catalog.Read, p.Inventory.Stock.Read,
-		}, tasksManager...),
+		role.SystemRoles.Tenant.OfficeAdministrator: slices.Concat(
+			[]string{p.Inventory.Catalog.Read, p.Inventory.Stock.Read},
+			tasksManager, ordersRead,
+		),
 		role.SystemRoles.Tenant.OfficeExecutive: tasksMember,
-		role.SystemRoles.Tenant.SalesManager: append([]string{
-			p.Inventory.Catalog.Read, p.Inventory.Stock.Read,
-		}, tasksManager...),
-		role.SystemRoles.Tenant.SalesExecutive: tasksMember,
+		role.SystemRoles.Tenant.SalesManager: slices.Concat(
+			[]string{p.Inventory.Catalog.Read, p.Inventory.Stock.Read},
+			tasksManager, ordersFull,
+		),
+		role.SystemRoles.Tenant.SalesExecutive: slices.Concat(tasksMember, ordersExec),
 		role.SystemRoles.Tenant.PurchaseManager: append([]string{
 			p.Inventory.Catalog.Manage, p.Inventory.Stock.Manage,
 		}, tasksManager...),
