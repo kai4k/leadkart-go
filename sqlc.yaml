@@ -141,3 +141,23 @@ sql:
         emit_all_enum_values: false
         output_db_file_name: db.go
         output_models_file_name: models.go
+
+  # Orders bounded context — ADR 0063 fulfillment saga (BRD §6.4).
+  # Mirrors the dispatch / tasks layout.
+  - engine: postgresql
+    queries: internal/orders/adapters/sql
+    schema: migrations
+    gen:
+      go:
+        package: db
+        out: internal/orders/adapters/db
+        sql_package: pgx/v5
+        emit_pointers_for_null_types: true
+        emit_json_tags: false
+        emit_prepared_queries: false
+        emit_interface: false
+        emit_exact_table_names: false
+        emit_enum_valid_method: true
+        emit_all_enum_values: false
+        output_db_file_name: db.go
+        output_models_file_name: models.go
