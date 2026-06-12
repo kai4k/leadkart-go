@@ -13,7 +13,6 @@ const (
 	errCodePaymentConflict    = "payment_duplicate_reference"
 	errCodeReasonRequired     = "reason_required"
 	errCodeValidation         = "validation_failed"
-	errCodeForbidden          = "forbidden"
 	errCodeUnauthenticated    = "unauthenticated"
 	errCodeInternalError      = "internal_error"
 )

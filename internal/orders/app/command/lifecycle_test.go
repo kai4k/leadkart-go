@@ -169,6 +169,67 @@ func TestCancelOrder(t *testing.T) {
 	require.Equal(t, order.StateCancelled, got.State())
 }
 
+// TestCompensateOrderCancellation pins the cancel-compensation command: an
+// invoiced-state cancel mints a cancellation note for the invoice grand
+// total; a replay is an idempotent no-op; non-reversal prior states mint
+// nothing.
+func TestCompensateOrderCancellation(t *testing.T) {
+	t.Parallel()
+	tid := tenant.ID(uuid.NewString())
+	actor := membership.ID(uuid.NewString())
+	ctx := t.Context()
+	invoices := invoicetest.NewFakeRepository()
+	creditNotes := creditnotetest.NewFakeRepository()
+	alloc := invoicenumbertest.NewFakeAllocator()
+	uow := fakeUoW{}
+	orderID := order.ID(uuid.NewString())
+
+	// Seed the invoice the compensation reverses.
+	num, err := alloc.Allocate(ctx, tid, "2026-27", "invoice")
+	require.NoError(t, err)
+	inv, err := invoice.New(invoice.NewInput{
+		ID: invID(), TenantID: tid, OrderID: orderID, Number: num,
+		LineItems: []quotation.LineItem{{
+			ProductID: uuid.NewString(), SKU: "S", Quantity: 1, UnitSalePaise: 90000, GstRateBps: 1200,
+		}},
+		SubtotalPaise: 90000, TaxPaise: 10800, GrandTotalPaise: 100800,
+		IssuedAt: now(), IssuedByMembershipID: actor,
+	})
+	require.NoError(t, err)
+	require.NoError(t, invoices.Add(ctx, inv))
+
+	mint := command.NewMintCreditNoteHandler(uow, creditNotes, alloc, now, cnID)
+	h := command.NewCompensateOrderCancellationHandler(invoices, mint)
+
+	cmd := command.CompensateOrderCancellationCommand{
+		TenantID: tid, OrderID: orderID, PriorState: order.StateInvoiced,
+		Reason: "customer withdrew", IssuedByMembership: actor,
+	}
+	res, err := h.Handle(ctx, cmd)
+	require.NoError(t, err)
+	require.True(t, res.Minted)
+	require.NotEmpty(t, res.CreditNoteID.String())
+	notes, err := creditNotes.ListByInvoice(ctx, tid, inv.ID())
+	require.NoError(t, err)
+	require.Len(t, notes, 1)
+	require.Equal(t, int64(100800), notes[0].AmountPaise())
+
+	// Replay → no error, nothing new.
+	res, err = h.Handle(ctx, cmd)
+	require.NoError(t, err)
+	require.False(t, res.Minted)
+
+	// Prior states outside the reversal window mint nothing.
+	for _, prior := range []order.State{order.StateTokenPaid, order.StateDelivered} {
+		res, err = h.Handle(ctx, command.CompensateOrderCancellationCommand{
+			TenantID: tid, OrderID: order.ID(uuid.NewString()), PriorState: prior,
+			Reason: "x", IssuedByMembership: actor,
+		})
+		require.NoError(t, err)
+		require.False(t, res.Minted)
+	}
+}
+
 // TestMintCreditNote mints a cancellation note with a gapless CN number.
 func TestMintCreditNote(t *testing.T) {
 	t.Parallel()

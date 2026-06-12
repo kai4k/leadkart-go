@@ -88,12 +88,11 @@ func FromDomainEvent(d any) (Event, error) {
 		// rather than parsing the StatusChanged envelope.
 		switch e.NewStatus {
 		case consignmentnote.StatusDispatched:
-			// We don't carry docket_number on StatusChangedEvent
-			// (it's stored on the aggregate, not the event). The adapter
-			// re-reads the aggregate's DocketNumber() when persisting.
-			// In this pure-domain layer mapping we surface empty + a
-			// follow-up integration-side enrichment occurs in the
-			// adapter (B.3 work).
+			// StatusChangedEvent doesn't carry docket_number (it lives on
+			// the aggregate). Surfaced empty here; the repository's
+			// drainConsignmentNoteEvents enriches it from
+			// cn.DocketNumber() before the outbox write — the event never
+			// ships empty.
 			return ConsignmentNoteDispatchedV1{
 				ConsignmentNoteID:        cnID,
 				TenantIDClaim:            tID,
@@ -124,7 +123,7 @@ func FromDomainEvent(d any) (Event, error) {
 				ConsignmentNoteID:        cnID,
 				TenantIDClaim:            tID,
 				OrderID:                  oID,
-				Reason:                   "", // enriched by adapter from the aggregate's FailureReason()
+				Reason:                   "", // enriched from cn.FailureReason() in drainConsignmentNoteEvents before the outbox write
 				FailedAtUTC:              e.TransitionedAt.UTC(),
 				TransitionedByMembership: actor,
 				OccurredAtUTC:            e.TransitionedAt.UTC(),

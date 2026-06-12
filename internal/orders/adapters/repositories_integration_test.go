@@ -141,9 +141,11 @@ func TestInvoiceRepository_AllocatedNumberRoundTrip(t *testing.T) {
 	tx := pg.NewTransactor(ordersPool(t))
 	alloc := adapters.NewInvoiceNumberAllocator(ordersPool(t))
 	repo := adapters.NewInvoiceRepository(ordersPool(t), tx)
+	orderRepo := adapters.NewOrderRepository(ordersPool(t), tx)
 	tid := tenant.ID(uuid.NewString())
-	orderID := order.ID(uuid.NewString())
 	actor := membership.ID(uuid.NewString())
+	// invoices.order_id now FKs orders.orders — seed the parent order.
+	orderID := newApprovedOrder(t, orderRepo, tid, actor).ID()
 	fy := invoicenumber.FromDate(nowUTC())
 
 	var inv *invoice.Invoice

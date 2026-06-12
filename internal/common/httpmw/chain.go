@@ -80,6 +80,7 @@ type PublicChainConfig struct {
 //	SecurityHeaders   — OWASP Secure Headers floor on every response
 //	RequestLog        — start/end structured log line
 //	Recover           — catch panics → 500
+//	BodyLimit         — 1 MiB request-body cap (OWASP API4)
 //	IPRateLimit       — per-IP token bucket
 //	Idempotency       — X-Command-Id replay protection
 //	(per-route auth + handler — wired by ports.AddRoutes)
@@ -112,6 +113,7 @@ func PublicChain(cfg PublicChainConfig) Middleware {
 		SecurityHeaders(),
 		RequestLog(cfg.Logger),
 		Recover(cfg.Logger),
+		BodyLimit(DefaultMaxBodyBytes),
 		ipLimiter.Middleware(),
 		idempotency.Middleware(cfg.IdempotencyStore, cfg.Now, cfg.IdempotencyTTL, cfg.IdempotencyKeyer),
 	)

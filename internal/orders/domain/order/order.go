@@ -342,9 +342,22 @@ func (o *Order) AttachInvoice(invoiceID string, actor membership.ID, now time.Ti
 // AttachConsignment transitions invoiced → dispatched and links the
 // consignment-note ID. The note lives in the Dispatch schema; Order stores the
 // FK as text (cross-schema reference).
+//
+// Replay-tolerant (at-least-once saga delivery): re-attaching the SAME
+// consignment is a no-op regardless of how far the order has advanced since
+// (delivered/complete included). Attaching a DIFFERENT consignment when one is
+// already linked is ErrInvalid — Dispatch enforces one note per order, so a
+// second ID is a producer bug, never a legitimate replacement.
 func (o *Order) AttachConsignment(consignmentID string, actor membership.ID, now time.Time) error {
-	if strings.TrimSpace(consignmentID) == "" {
+	consignmentID = strings.TrimSpace(consignmentID)
+	if consignmentID == "" {
 		return fmt.Errorf("%w: consignment_id required", ErrInvalid)
+	}
+	if o.consignmentNoteID == consignmentID {
+		return nil // replay — already attached
+	}
+	if o.consignmentNoteID != "" {
+		return fmt.Errorf("%w: consignment %s already attached", ErrInvalid, o.consignmentNoteID)
 	}
 	if err := o.advance(StateDispatched, actor, now); err != nil {
 		return err
@@ -358,13 +371,18 @@ func (o *Order) AttachConsignment(consignmentID string, actor membership.ID, now
 
 // MarkDelivered transitions dispatched → delivered. Driven by the Dispatch
 // subscriber on carrier delivery confirmation.
+//
+// Replay-tolerant: once deliveredAt is stamped, later replays are no-ops even
+// after the order completes (terminal) — the saga's at-least-once redelivery
+// must never error on an already-delivered order.
 func (o *Order) MarkDelivered(actor membership.ID, now time.Time) error {
+	if o.deliveredAt != nil {
+		return nil // replay — already delivered (possibly already complete)
+	}
 	if err := o.advance(StateDelivered, actor, now); err != nil {
 		return err
 	}
-	if o.deliveredAt == nil {
-		o.deliveredAt = &now
-	}
+	o.deliveredAt = &now
 	return nil
 }
 

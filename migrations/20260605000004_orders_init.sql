@@ -104,7 +104,7 @@ CREATE TABLE orders.orders (
     delivered_at                timestamptz NULL,
     completed_at                timestamptz NULL,
     cancelled_at                timestamptz NULL,
-    cancellation_reason         text        NOT NULL DEFAULT '',
+    cancellation_reason         text        NOT NULL DEFAULT '' CHECK (length(cancellation_reason) <= 1000),
 
     created_at                  timestamptz NOT NULL,
     created_by_membership_id    uuid        NOT NULL,
@@ -159,7 +159,12 @@ CREATE TABLE orders.invoices (
     issued_at                   timestamptz NOT NULL,
     issued_by_membership_id     uuid        NOT NULL,
 
-    PRIMARY KEY (tenant_id, id)
+    PRIMARY KEY (tenant_id, id),
+
+    -- Same-module referential integrity (CRM precedent: same-schema children
+    -- carry FKs; only CROSS-module references stay bare per ADR 0001).
+    -- RESTRICT (default): financial documents block parent deletion.
+    FOREIGN KEY (tenant_id, order_id) REFERENCES orders.orders (tenant_id, id)
 );
 
 -- One invoice per order (BRD §A-014). Cancellation mints a CreditNote, never
@@ -197,13 +202,17 @@ CREATE TABLE orders.credit_notes (
     number_seq                  bigint      NOT NULL CHECK (number_seq > 0),
     number_display              text        NOT NULL,
 
-    reason                      text        NOT NULL,
+    reason                      text        NOT NULL CHECK (length(reason) BETWEEN 1 AND 1000),
     amount_paise                bigint      NOT NULL CHECK (amount_paise > 0),
 
     issued_at                   timestamptz NOT NULL,
     issued_by_membership_id     uuid        NOT NULL,
 
-    PRIMARY KEY (tenant_id, id)
+    PRIMARY KEY (tenant_id, id),
+
+    -- Same-module referential integrity: a credit note always reverses a
+    -- real invoice in this schema.
+    FOREIGN KEY (tenant_id, invoice_id) REFERENCES orders.invoices (tenant_id, id)
 );
 
 -- At most one cancellation note per invoice (pre-delivery cancellation is a
@@ -239,8 +248,8 @@ CREATE TABLE orders.payments (
     kind                        text        NOT NULL CHECK (kind IN ('token','full','refund')),
     method                      text        NOT NULL CHECK (method IN ('upi','neft','rtgs','imps','cheque','cash','card_offline')),
     amount_paise                bigint      NOT NULL CHECK (amount_paise > 0),
-    external_reference          text        NOT NULL DEFAULT '',
-    notes                       text        NOT NULL DEFAULT '',
+    external_reference          text        NOT NULL DEFAULT '' CHECK (length(external_reference) <= 100),
+    notes                       text        NOT NULL DEFAULT '' CHECK (length(notes) <= 2000),
 
     received_at                 timestamptz NOT NULL,
     recorded_at                 timestamptz NOT NULL,

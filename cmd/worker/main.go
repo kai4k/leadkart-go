@@ -80,11 +80,13 @@ import (
 
 	dispatchadapters "github.com/leadkart/leadkart-go/internal/dispatch/adapters"
 	dispatchcommand "github.com/leadkart/leadkart-go/internal/dispatch/app/command"
+	dispatchquery "github.com/leadkart/leadkart-go/internal/dispatch/app/query"
 
 	"github.com/leadkart/leadkart-go/internal/dispatch/domain/consignmentnote"
 	dispatchsubscribers "github.com/leadkart/leadkart-go/internal/dispatch/ports/subscribers"
 	ordersadapters "github.com/leadkart/leadkart-go/internal/orders/adapters"
 	orderscommand "github.com/leadkart/leadkart-go/internal/orders/app/command"
+	"github.com/leadkart/leadkart-go/internal/orders/domain/creditnote"
 	"github.com/leadkart/leadkart-go/internal/orders/domain/invoice"
 	orderssubscribers "github.com/leadkart/leadkart-go/internal/orders/ports/subscribers"
 )
@@ -296,27 +298,41 @@ func run(ctx context.Context, stdout *os.File) error {
 	tasksLeadConvertedSub := taskssubscribers.NewLeadConvertedSubscriber(tasksAutoCreateFollowUp, logger, time.Now)
 
 	// Dispatch module (ADR 0063 — BRD §6.6). Consumes the Orders
-	// `orders.order_packed.v1` event → mint a pending ConsignmentNote slot.
-	// Idempotent via the natural-key (order_id) precheck in the command.
+	// `orders.order_packed.v1` event → mint a pending ConsignmentNote slot;
+	// `orders.order_cancelled.v1` → fail the consignment (compensation).
 	dispatchRepo := dispatchadapters.NewConsignmentNoteRepository(pool, tx)
 	newConsignmentNoteID := func() consignmentnote.ID { return consignmentnote.ID(ids.NewV7().String()) }
 	dispatchCreate := dispatchcommand.NewCreateConsignmentNoteHandler(tx, dispatchRepo, time.Now, newConsignmentNoteID)
 	dispatchOrderPacked := dispatchsubscribers.NewOrderPackedIngestor(dispatchCreate, logger)
+	dispatchOrderCancelled := dispatchsubscribers.NewOrderCancelledSubscriber(
+		dispatchquery.NewGetConsignmentNoteByOrderHandler(dispatchRepo),
+		dispatchcommand.NewMarkFailedHandler(dispatchRepo, time.Now),
+		logger,
+	)
 
-	// Orders module saga subscribers (ADR 0063 §4 — BRD §6.4):
+	// Orders module saga subscribers (ADR 0063 §4 — BRD §6.4). Catch-up
+	// convergence: each consignment handler subsumes its predecessors
+	// (ensure-invoiced → attach → deliver), so cross-topic interleavings
+	// converge without burning retry budget:
 	//   orders.order_packed.v1            → auto-invoice (packed → invoiced)
-	//   dispatch.consignment_note_created → AttachConsignment (invoiced → dispatched)
-	//   dispatch.consignment_delivered    → MarkDelivered (dispatched → delivered)
+	//   dispatch.consignment_note_created → ensure-invoiced + attach (→ dispatched)
+	//   dispatch.consignment_delivered    → ensure-invoiced + attach + deliver
+	//   orders.order_cancelled.v1         → cancellation-note compensation
 	ordersOrderRepo := ordersadapters.NewOrderRepository(pool, tx)
 	ordersInvoiceRepo := ordersadapters.NewInvoiceRepository(pool, tx)
+	ordersCreditNoteRepo := ordersadapters.NewCreditNoteRepository(pool, tx)
 	ordersAllocator := ordersadapters.NewInvoiceNumberAllocator(pool)
 	newOrdersInvoiceID := func() invoice.ID { return invoice.ID(ids.NewV7().String()) }
+	newOrdersCreditNoteID := func() creditnote.ID { return creditnote.ID(ids.NewV7().String()) }
 	ordersInvoiceOrder := orderscommand.NewInvoiceOrderHandler(tx, ordersOrderRepo, ordersInvoiceRepo, ordersAllocator, time.Now, newOrdersInvoiceID)
 	ordersAttach := orderscommand.NewAttachConsignmentHandler(ordersOrderRepo, time.Now)
 	ordersDeliver := orderscommand.NewMarkOrderDeliveredHandler(ordersOrderRepo, time.Now)
+	ordersMint := orderscommand.NewMintCreditNoteHandler(tx, ordersCreditNoteRepo, ordersAllocator, time.Now, newOrdersCreditNoteID)
+	ordersCompensate := orderscommand.NewCompensateOrderCancellationHandler(ordersInvoiceRepo, ordersMint)
 	ordersAutoInvoiceSub := orderssubscribers.NewAutoInvoiceSubscriber(ordersInvoiceOrder, logger)
-	ordersConsignmentCreatedSub := orderssubscribers.NewConsignmentCreatedSubscriber(ordersAttach, logger)
-	ordersConsignmentDeliveredSub := orderssubscribers.NewConsignmentDeliveredSubscriber(ordersDeliver, logger)
+	ordersConsignmentCreatedSub := orderssubscribers.NewConsignmentCreatedSubscriber(ordersInvoiceOrder, ordersAttach, logger)
+	ordersConsignmentDeliveredSub := orderssubscribers.NewConsignmentDeliveredSubscriber(ordersInvoiceOrder, ordersAttach, ordersDeliver, logger)
+	ordersCancelCompensationSub := orderssubscribers.NewCancelCompensationSubscriber(ordersCompensate, logger)
 
 	router, err := messaging.NewRouter(messaging.Deps{
 		Subscriber:       pubsub,
@@ -352,8 +368,8 @@ func run(ctx context.Context, stdout *os.File) error {
 	cqrsHandlers = append(cqrsHandlers, crmsubscribers.Handlers(crmIngest, crmCallback)...)
 	cqrsHandlers = append(cqrsHandlers, platformsubscribers.Handlers(platformTenantRegistered)...)
 	cqrsHandlers = append(cqrsHandlers, taskssubscribers.Handlers(tasksCallLoggedSub, tasksLeadConvertedSub)...)
-	cqrsHandlers = append(cqrsHandlers, dispatchsubscribers.Handlers(dispatchOrderPacked)...)
-	cqrsHandlers = append(cqrsHandlers, orderssubscribers.Handlers(ordersAutoInvoiceSub, ordersConsignmentCreatedSub, ordersConsignmentDeliveredSub)...)
+	cqrsHandlers = append(cqrsHandlers, dispatchsubscribers.Handlers(dispatchOrderPacked, dispatchOrderCancelled)...)
+	cqrsHandlers = append(cqrsHandlers, orderssubscribers.Handlers(ordersAutoInvoiceSub, ordersConsignmentCreatedSub, ordersConsignmentDeliveredSub, ordersCancelCompensationSub)...)
 	for _, h := range cqrsHandlers {
 		if err := router.AddCqrsHandler(eventProcessor, h); err != nil {
 			return fmt.Errorf("register cqrs handler: %w", err)

@@ -316,11 +316,20 @@ type ReviseInput struct {
 	Now                 time.Time
 }
 
+// MaxRevisions caps the negotiation history. The full revision list persists
+// as one JSONB column rewritten on every Revise, so an unbounded history is
+// O(N²) marshal work over the quotation's lifetime + row bloat; 50 rounds is
+// far beyond any real negotiation. Hitting the cap means start a fresh quote.
+const MaxRevisions = 50
+
 // Revise appends a revision with the supplied items. Rejected in
 // terminal states; items must be non-empty and each [LineItem.Validate].
 func (q *Quotation) Revise(in ReviseInput) error {
 	if q.state.IsTerminal() {
 		return fmt.Errorf("%w: cannot revise quotation in state %s", ErrInvalidTransition, q.state)
+	}
+	if len(q.revisions) >= MaxRevisions {
+		return fmt.Errorf("%w: revision limit %d reached — raise a fresh quotation", ErrInvalid, MaxRevisions)
 	}
 	if len(in.Items) == 0 {
 		return fmt.Errorf("%w: revision items must be non-empty", ErrInvalid)

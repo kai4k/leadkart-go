@@ -21,6 +21,7 @@ func Handlers(
 	autoInvoice *AutoInvoiceSubscriber,
 	consignmentCreated *ConsignmentCreatedSubscriber,
 	consignmentDelivered *ConsignmentDeliveredSubscriber,
+	cancelCompensation *CancelCompensationSubscriber,
 ) []cqrs.EventHandler {
 	var handlers []cqrs.EventHandler
 	if autoInvoice != nil {
@@ -31,6 +32,9 @@ func Handlers(
 	}
 	if consignmentDelivered != nil {
 		handlers = append(handlers, cqrs.NewEventHandler(HandlerConsignmentDelivered, consignmentDelivered.Handle))
+	}
+	if cancelCompensation != nil {
+		handlers = append(handlers, cqrs.NewEventHandler(HandlerCancelCompensation, cancelCompensation.Handle))
 	}
 	return handlers
 }

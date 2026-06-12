@@ -306,10 +306,11 @@ func NewCompleteOrderHandler(orders order.Repository, now func() time.Time) Comp
 // Handle runs the complete transition.
 func (h CompleteOrderHandler) Handle(ctx context.Context, cmd CompleteOrderCommand) error {
 	return h.orders.UpdateByID(ctx, cmd.TenantID, cmd.OrderID, func(o *order.Order) (bool, error) {
+		prior := o.State()
 		if err := o.MarkComplete(cmd.TransitionedByMembership, h.now().UTC()); err != nil {
 			return false, fmt.Errorf("orders complete_order: %w", err)
 		}
-		return true, nil
+		return o.State() != prior, nil
 	})
 }
 

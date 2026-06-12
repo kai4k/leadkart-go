@@ -29,6 +29,15 @@ func tenantFromContext(r *http.Request) (tenant.ID, bool) {
 
 // AddRoutes registers Orders HTTP handlers on mux per Mat Ryer 2024 canon.
 //
+// NOTE on the /orders/orders/{orderId} shape: the module hosts TWO
+// collections (quotations + orders) under one prefix, so a flat
+// /api/v1/orders/{orderId} wildcard is ambiguous against
+// /api/v1/orders/quotations/{quotationId} in Go 1.22 ServeMux (e.g.
+// GET {orderId}/invoice vs quotations/{quotationId} both match
+// /orders/quotations/invoice — neither more specific; registration panics,
+// proven by TestArch_RouteRegistration_NoConflicts). The explicit collection
+// segment is therefore deliberate, not an oversight.
+//
 // Routes (all under /api/v1/orders/):
 //
 //	POST quotations                          create draft (quotations.manage)
@@ -37,7 +46,7 @@ func tenantFromContext(r *http.Request) (tenant.ID, bool) {
 //	POST quotations/{quotationId}/approve    approve+seed order (quotations.manage)
 //	POST quotations/{quotationId}/reject     reject       (quotations.manage)
 //	GET  orders/{orderId}                    read         (orders.read)
-//	POST orders/{orderId}/token-payment      token + advance (orders.manage)
+//	POST orders/{orderId}/token-payment      token + advance (payments.record — it WRITES a payment row)
 //	POST orders/{orderId}/confirm            confirm      (orders.manage)
 //	POST orders/{orderId}/pack               pack         (orders.manage)
 //	POST orders/{orderId}/invoice            invoice      (orders.manage)
@@ -65,7 +74,7 @@ func AddRoutes(mux *http.ServeMux, log *slog.Logger, a app.Application, verifier
 	mux.Handle("POST /api/v1/orders/quotations/{quotationId}/reject", quoteManage(handleRejectQuotation(log, a)))
 
 	mux.Handle("GET /api/v1/orders/orders/{orderId}", orderRead(handleGetOrder(log, a)))
-	mux.Handle("POST /api/v1/orders/orders/{orderId}/token-payment", orderManage(handleRecordTokenPayment(log, a)))
+	mux.Handle("POST /api/v1/orders/orders/{orderId}/token-payment", paymentRecord(handleRecordTokenPayment(log, a)))
 	mux.Handle("POST /api/v1/orders/orders/{orderId}/confirm", orderManage(handleConfirmOrder(log, a)))
 	mux.Handle("POST /api/v1/orders/orders/{orderId}/pack", orderManage(handlePackOrder(log, a)))
 	mux.Handle("POST /api/v1/orders/orders/{orderId}/invoice", orderManage(handleInvoiceOrder(log, a)))
