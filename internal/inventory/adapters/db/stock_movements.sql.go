@@ -11,6 +11,30 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const countReservationsForSource = `-- name: CountReservationsForSource :one
+SELECT COUNT(*)
+FROM   inventory.stock_movements
+WHERE  tenant_id = $1
+AND    source_reference = $2
+AND    type = 'reservation'
+`
+
+type CountReservationsForSourceParams struct {
+	TenantID        pgtype.UUID
+	SourceReference *string
+}
+
+// True-hold idempotency probe (ADR 0063 §4). Returns the number of
+// reservation rows logged against an order (source_reference). The reserve
+// handler no-ops when this is > 0 — an at-least-once redelivery of
+// orders.order_confirmed.v1 must not double-reserve.
+func (q *Queries) CountReservationsForSource(ctx context.Context, arg CountReservationsForSourceParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countReservationsForSource, arg.TenantID, arg.SourceReference)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const getStockMovementByID = `-- name: GetStockMovementByID :one
 SELECT id, batch_id, product_id, tenant_id,
        type, quantity, quantity_on_hand_after,
@@ -139,6 +163,66 @@ func (q *Queries) ListMovementsByBatchPage(ctx context.Context, arg ListMovement
 			&i.SourceReference,
 			&i.OccurredAt,
 		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listOutstandingReservationsForSource = `-- name: ListOutstandingReservationsForSource :many
+SELECT batch_id,
+       product_id,
+       COALESCE(SUM(
+           CASE type
+               WHEN 'reservation' THEN quantity
+               WHEN 'release'     THEN -quantity
+               ELSE 0
+           END), 0)::bigint AS net_reserved
+FROM   inventory.stock_movements
+WHERE  tenant_id = $1
+AND    source_reference = $2
+GROUP  BY batch_id, product_id
+HAVING COALESCE(SUM(
+           CASE type
+               WHEN 'reservation' THEN quantity
+               WHEN 'release'     THEN -quantity
+               ELSE 0
+           END), 0) > 0
+`
+
+type ListOutstandingReservationsForSourceParams struct {
+	TenantID        pgtype.UUID
+	SourceReference *string
+}
+
+type ListOutstandingReservationsForSourceRow struct {
+	BatchID     pgtype.UUID
+	ProductID   pgtype.UUID
+	NetReserved int64
+}
+
+// Net outstanding reserved quantity per batch for an order (source_reference):
+//
+//	net = Σ reservation − Σ release
+//
+// (Outbound rows are excluded — they reduce on-hand, not the reserved hold.)
+// Returns only batches still holding > 0, which doubles as the release/consume
+// idempotency signal: a fully-released or fully-consumed order yields zero rows
+// → the handler no-ops. product_id rides along for movement construction.
+func (q *Queries) ListOutstandingReservationsForSource(ctx context.Context, arg ListOutstandingReservationsForSourceParams) ([]ListOutstandingReservationsForSourceRow, error) {
+	rows, err := q.db.Query(ctx, listOutstandingReservationsForSource, arg.TenantID, arg.SourceReference)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListOutstandingReservationsForSourceRow
+	for rows.Next() {
+		var i ListOutstandingReservationsForSourceRow
+		if err := rows.Scan(&i.BatchID, &i.ProductID, &i.NetReserved); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

@@ -83,9 +83,11 @@ func (m MovementType) IsValid() bool {
 	}
 }
 
-// IsMutating reports whether m changes quantity_on_hand.
-// Reservation + Release are audit-only (the future Orders module
-// tracks reserved qty separately).
+// IsMutating reports whether m changes quantity_on_hand specifically.
+// Reservation + Release move quantity_reserved (not quantity_on_hand),
+// so they are NOT on-hand-mutating — but they DO mutate batch state
+// (the reserved counter + version). See ApplyMovement for the
+// true-hold reservation semantics adopted per ADR 0063 §4.
 func (m MovementType) IsMutating() bool {
 	switch m {
 	case MovementInbound, MovementOutbound, MovementAdjustment:
@@ -101,6 +103,17 @@ var ErrInvalid = errs.New(errs.KindInvalidInput, "batch", "invalid batch")
 
 // ErrInsufficientStock — Outbound quantity exceeds quantity_on_hand.
 var ErrInsufficientStock = errs.New(errs.KindConflict, "batch", "insufficient stock for outbound movement")
+
+// ErrInsufficientAvailable — a Reservation requested more than the batch's
+// AVAILABLE quantity (quantity_on_hand − quantity_reserved). This is the
+// true-hold oversell guard (ADR 0063 §4): two orders cannot both reserve the
+// same physical units.
+var ErrInsufficientAvailable = errs.New(errs.KindConflict, "batch", "insufficient available stock to reserve")
+
+// ErrReleaseExceedsReserved — a Release requested more than the batch's
+// currently-reserved quantity (a programmer/saga bug; releases must mirror
+// prior reservations exactly).
+var ErrReleaseExceedsReserved = errs.New(errs.KindInvalidInput, "batch", "release exceeds reserved quantity")
 
 // ErrExpired — Inbound rejected because the batch's expiry date is in
 // the past. Outbound from an expired batch IS allowed (write-off /
@@ -146,6 +159,8 @@ type Spec struct {
 //   - purchasePricePaise >= 0
 //   - manufactureDate + expiryDate non-zero; expiry > manufacture
 //   - quantityOnHand >= 0 at all times
+//   - quantityReserved >= 0 and quantityReserved <= quantityOnHand at all
+//     times (available = on-hand − reserved is never negative)
 type Batch struct {
 	id                         ID
 	productID                  product.ID
@@ -158,6 +173,7 @@ type Batch struct {
 	mrpPaise                   int64
 	purchasePricePaise         int64
 	quantityOnHand             int64
+	quantityReserved           int64
 	version                    int64
 	createdAt                  time.Time
 	updatedAt                  time.Time
@@ -292,9 +308,19 @@ func (b *Batch) MRPPaise() int64 { return b.mrpPaise }
 // PurchasePricePaise returns the actual purchase cost in paise.
 func (b *Batch) PurchasePricePaise() int64 { return b.purchasePricePaise }
 
-// QuantityOnHand returns the current stock count (running total updated
-// by ApplyMovement).
+// QuantityOnHand returns the current physical stock count (running total
+// updated by ApplyMovement Inbound/Outbound/Adjustment).
 func (b *Batch) QuantityOnHand() int64 { return b.quantityOnHand }
+
+// QuantityReserved returns the quantity soft-committed to confirmed orders
+// but not yet shipped (moved by Reservation/Release/consume). Never exceeds
+// QuantityOnHand.
+func (b *Batch) QuantityReserved() int64 { return b.quantityReserved }
+
+// AvailableQuantity returns the stock free to reserve: on-hand minus
+// reserved. This is the figure the reservation guard checks — the
+// oversell-prevention invariant (ADR 0063 §4).
+func (b *Batch) AvailableQuantity() int64 { return b.quantityOnHand - b.quantityReserved }
 
 // Version returns the optimistic-concurrency token. The adapter writes
 // `WHERE version = $current` + bumps to current+1 on UPDATE; mismatch
@@ -327,22 +353,30 @@ func (b *Batch) IsExpired(now time.Time) bool {
 
 // ----- State transitions ----------------------------------------------------
 
-// ApplyMovement mutates quantity_on_hand per the given movement type +
+// ApplyMovement mutates batch state per the given movement type +
 // quantity. Bumps the optimistic-concurrency version on every successful
-// mutation (including non-mutating Reservation / Release, so audit-trail
-// row counts line up with version increments).
+// call (including Reservation / Release, which move quantity_reserved
+// rather than quantity_on_hand).
 //
-// quantity is the SIGNED magnitude:
-//   - Inbound / Reservation / Release: quantity MUST be > 0; rejected otherwise.
-//   - Outbound: quantity MUST be > 0; subtracted from on-hand.
+// True-hold reservation (ADR 0063 §4 — supersedes the earlier audit-only
+// stance): Reservation soft-commits AVAILABLE stock to a confirmed order;
+// Release returns it. Outbound/Adjustment may only touch UNRESERVED stock,
+// preserving the invariant 0 <= quantity_reserved <= quantity_on_hand.
+// Order fulfilment consumes a reservation as a Release + an Outbound in one
+// tx (reserved−q, on-hand−q), realising the hold as a physical shipment.
+//
+// quantity is the magnitude:
+//   - Inbound / Outbound / Reservation / Release: quantity MUST be > 0.
 //   - Adjustment: quantity may be any non-zero (negative for shrinkage,
 //     positive for count correction). Zero rejected.
 //
 // Rejections:
-//   - ErrDeleted        — batch is soft-deleted.
-//   - ErrExpired        — Inbound against an expired batch.
-//   - ErrInsufficientStock — Outbound would drive on-hand negative.
-//   - ErrInvalid        — bad type / zero quantity / negative on Inbound etc.
+//   - ErrDeleted              — batch is soft-deleted.
+//   - ErrExpired              — Inbound against an expired batch.
+//   - ErrInsufficientStock    — Outbound/Adjustment would drive on-hand below reserved.
+//   - ErrInsufficientAvailable — Reservation exceeds available (on-hand − reserved).
+//   - ErrReleaseExceedsReserved — Release exceeds currently-reserved.
+//   - ErrInvalid              — bad type / zero quantity / negative on Inbound etc.
 //
 // No domain event emitted from ApplyMovement — the StockMovement
 // aggregate emits the canonical movement event. Batch just updates its
@@ -372,8 +406,11 @@ func (b *Batch) ApplyMovement(movement MovementType, quantity int64, now time.Ti
 		if quantity <= 0 {
 			return fmt.Errorf("%w: outbound quantity must be > 0 (got %d)", ErrInvalid, quantity)
 		}
-		if quantity > b.quantityOnHand {
-			return fmt.Errorf("%w: requested %d, on-hand %d", ErrInsufficientStock, quantity, b.quantityOnHand)
+		// Outbound may only ship UNRESERVED stock — reserved units are
+		// held for confirmed orders and leave via consume (Release+Outbound).
+		if quantity > b.AvailableQuantity() {
+			return fmt.Errorf("%w: requested %d, available %d (on-hand %d, reserved %d)",
+				ErrInsufficientStock, quantity, b.AvailableQuantity(), b.quantityOnHand, b.quantityReserved)
 		}
 		b.quantityOnHand -= quantity
 	case MovementAdjustment:
@@ -381,18 +418,30 @@ func (b *Batch) ApplyMovement(movement MovementType, quantity int64, now time.Ti
 			return fmt.Errorf("%w: adjustment quantity must be non-zero", ErrInvalid)
 		}
 		next := b.quantityOnHand + quantity
-		if next < 0 {
-			return fmt.Errorf("%w: adjustment would drive on-hand negative (current %d, delta %d)",
-				ErrInsufficientStock, b.quantityOnHand, quantity)
+		// Adjustment-down cannot drop on-hand below the reserved hold.
+		if next < b.quantityReserved {
+			return fmt.Errorf("%w: adjustment would drive on-hand (%d) below reserved (%d), delta %d",
+				ErrInsufficientStock, b.quantityOnHand, b.quantityReserved, quantity)
 		}
 		b.quantityOnHand = next
-	case MovementReservation, MovementRelease:
+	case MovementReservation:
 		if quantity <= 0 {
-			return fmt.Errorf("%w: %s quantity must be > 0 (got %d)", ErrInvalid, movement, quantity)
+			return fmt.Errorf("%w: reservation quantity must be > 0 (got %d)", ErrInvalid, quantity)
 		}
-		// Non-mutating: the future Orders module tracks reserved-qty
-		// separately. We bump version anyway so concurrent writers
-		// surface the conflict.
+		// True-hold oversell guard: cannot reserve beyond available.
+		if quantity > b.AvailableQuantity() {
+			return fmt.Errorf("%w: requested %d, available %d (on-hand %d, reserved %d)",
+				ErrInsufficientAvailable, quantity, b.AvailableQuantity(), b.quantityOnHand, b.quantityReserved)
+		}
+		b.quantityReserved += quantity
+	case MovementRelease:
+		if quantity <= 0 {
+			return fmt.Errorf("%w: release quantity must be > 0 (got %d)", ErrInvalid, quantity)
+		}
+		if quantity > b.quantityReserved {
+			return fmt.Errorf("%w: requested %d, reserved %d", ErrReleaseExceedsReserved, quantity, b.quantityReserved)
+		}
+		b.quantityReserved -= quantity
 	}
 	b.version++
 	b.updatedAt = now.UTC()
@@ -436,6 +485,7 @@ type Snapshot struct {
 	MRPPaise                   int64
 	PurchasePricePaise         int64
 	QuantityOnHand             int64
+	QuantityReserved           int64
 	Version                    int64
 	CreatedAt                  time.Time
 	UpdatedAt                  time.Time
@@ -459,6 +509,7 @@ func UnmarshalFromDB(s Snapshot) *Batch {
 		mrpPaise:                   s.MRPPaise,
 		purchasePricePaise:         s.PurchasePricePaise,
 		quantityOnHand:             s.QuantityOnHand,
+		quantityReserved:           s.QuantityReserved,
 		version:                    s.Version,
 		createdAt:                  s.CreatedAt,
 		updatedAt:                  s.UpdatedAt,

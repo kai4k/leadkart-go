@@ -35,7 +35,8 @@ SELECT id, product_id, tenant_id, batch_number,
        mrp_paise, purchase_price_paise,
        quantity_on_hand, version,
        created_at, updated_at,
-       is_deleted, deleted_at, deleted_by, created_by_membership_id
+       is_deleted, deleted_at, deleted_by, created_by_membership_id,
+       quantity_reserved
 FROM   inventory.batches
 WHERE  id = $1
 AND    NOT is_deleted
@@ -63,6 +64,7 @@ func (q *Queries) GetBatchByID(ctx context.Context, id pgtype.UUID) (InventoryBa
 		&i.DeletedAt,
 		&i.DeletedBy,
 		&i.CreatedByMembershipID,
+		&i.QuantityReserved,
 	)
 	return i, err
 }
@@ -133,7 +135,8 @@ SELECT id, product_id, tenant_id, batch_number,
        mrp_paise, purchase_price_paise,
        quantity_on_hand, version,
        created_at, updated_at,
-       is_deleted, deleted_at, deleted_by, created_by_membership_id
+       is_deleted, deleted_at, deleted_by, created_by_membership_id,
+       quantity_reserved
 FROM   inventory.batches
 WHERE  product_id = $1
 AND    NOT is_deleted
@@ -190,6 +193,7 @@ func (q *Queries) ListBatchesByProductPage(ctx context.Context, arg ListBatchesB
 			&i.DeletedAt,
 			&i.DeletedBy,
 			&i.CreatedByMembershipID,
+			&i.QuantityReserved,
 		); err != nil {
 			return nil, err
 		}
@@ -299,7 +303,8 @@ SELECT id, product_id, tenant_id, batch_number,
        mrp_paise, purchase_price_paise,
        quantity_on_hand, version,
        created_at, updated_at,
-       is_deleted, deleted_at, deleted_by, created_by_membership_id
+       is_deleted, deleted_at, deleted_by, created_by_membership_id,
+       quantity_reserved
 FROM   inventory.batches
 WHERE  product_id = $1
 AND    NOT is_deleted
@@ -347,6 +352,7 @@ func (q *Queries) ListFefoBatchesForProduct(ctx context.Context, arg ListFefoBat
 			&i.DeletedAt,
 			&i.DeletedBy,
 			&i.CreatedByMembershipID,
+			&i.QuantityReserved,
 		); err != nil {
 			return nil, err
 		}
@@ -449,9 +455,10 @@ SET    quantity_on_hand = $2,
        deleted_by       = $7,
        batch_number     = $8,
        manufacturer_name = $9,
-       manufacturing_licence_number = $10
+       manufacturing_licence_number = $10,
+       quantity_reserved = $11
 WHERE  id = $1
-AND    version = $11
+AND    version = $12
 `
 
 type UpdateBatchWithVersionCheckParams struct {
@@ -465,6 +472,7 @@ type UpdateBatchWithVersionCheckParams struct {
 	BatchNumber                string
 	ManufacturerName           string
 	ManufacturingLicenceNumber string
+	QuantityReserved           int64
 	VersionExpected            int64
 }
 
@@ -484,6 +492,7 @@ func (q *Queries) UpdateBatchWithVersionCheck(ctx context.Context, arg UpdateBat
 		arg.BatchNumber,
 		arg.ManufacturerName,
 		arg.ManufacturingLicenceNumber,
+		arg.QuantityReserved,
 		arg.VersionExpected,
 	)
 	if err != nil {

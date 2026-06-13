@@ -12,6 +12,7 @@ import (
 	"github.com/leadkart/leadkart-go/internal/inventory/domain/product"
 	"github.com/leadkart/leadkart-go/internal/inventory/domain/product/producttest"
 	"github.com/leadkart/leadkart-go/internal/inventory/domain/stockmovement"
+	"github.com/leadkart/leadkart-go/internal/inventory/domain/stockmovement/stockmovementtest"
 )
 
 // Test-local aggregate-ID factories mirroring the production wiring shape.
@@ -82,4 +83,61 @@ func seedBatch(t *testing.T, repo *batchtest.FakeRepository, p *product.Product,
 		t.Fatalf("repo.Add: %v", err)
 	}
 	return b
+}
+
+// seedBatchExpiryStock creates a live Batch with an explicit expiry date then
+// stocks it via an Inbound movement (so FEFO ordering + available are testable).
+func seedBatchExpiryStock(t *testing.T, repo *batchtest.FakeRepository, p *product.Product, actor membership.ID, batchNumber string, expiry time.Time, qty int64) *batch.Batch {
+	t.Helper()
+	mfg := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	b, err := batch.New(
+		batch.ID(ids.NewV7().String()),
+		p.ID(), p.TenantID(), actor,
+		batch.Spec{
+			BatchNumber:                batchNumber,
+			ManufactureDate:            mfg,
+			ExpiryDate:                 expiry,
+			ManufacturerName:           "Acme",
+			ManufacturingLicenceNumber: "ML-1",
+			MRPPaise:                   25000,
+			PurchasePricePaise:         18000,
+		},
+		fixedNow,
+	)
+	if err != nil {
+		t.Fatalf("batch.New: %v", err)
+	}
+	if qty > 0 {
+		if merr := b.ApplyMovement(batch.MovementInbound, qty, fixedNow); merr != nil {
+			t.Fatalf("seed inbound: %v", merr)
+		}
+	}
+	if err := repo.Add(t.Context(), b); err != nil {
+		t.Fatalf("repo.Add: %v", err)
+	}
+	return b
+}
+
+// seedBatchWithStock seeds a batch (default 2028 expiry) carrying qty on-hand.
+func seedBatchWithStock(t *testing.T, repo *batchtest.FakeRepository, p *product.Product, actor membership.ID, batchNumber string, qty int64) *batch.Batch {
+	t.Helper()
+	return seedBatchExpiryStock(t, repo, p, actor, batchNumber, time.Date(2028, 1, 1, 0, 0, 0, 0, time.UTC), qty)
+}
+
+// seedBatchLaterExpiryWithStock seeds a batch with a 2029 expiry (sorts AFTER a
+// default 2028 batch under FEFO) carrying qty on-hand.
+func seedBatchLaterExpiryWithStock(t *testing.T, repo *batchtest.FakeRepository, p *product.Product, actor membership.ID, batchNumber string, qty int64) *batch.Batch {
+	t.Helper()
+	return seedBatchExpiryStock(t, repo, p, actor, batchNumber, time.Date(2029, 1, 1, 0, 0, 0, 0, time.UTC), qty)
+}
+
+// countMovements counts ledger rows of a given movement type in the fake.
+func countMovements(repo *stockmovementtest.FakeRepository, mt batch.MovementType) int {
+	n := 0
+	for _, m := range repo.Movements {
+		if m.Type() == mt {
+			n++
+		}
+	}
+	return n
 }

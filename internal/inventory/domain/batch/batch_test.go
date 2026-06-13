@@ -252,7 +252,7 @@ func TestApplyMovement_AdjustmentIsSigned(t *testing.T) {
 	}
 }
 
-func TestApplyMovement_ReservationAndReleaseNonMutating(t *testing.T) {
+func TestApplyMovement_ReservationHoldsAvailableWithoutTouchingOnHand(t *testing.T) {
 	t.Parallel()
 	b := freshBatch(t)
 	if err := b.ApplyMovement(batch.MovementInbound, 100, fixedNow); err != nil {
@@ -264,11 +264,76 @@ func TestApplyMovement_ReservationAndReleaseNonMutating(t *testing.T) {
 	if b.QuantityOnHand() != 100 {
 		t.Fatalf("reservation must NOT mutate on-hand: %d", b.QuantityOnHand())
 	}
+	if b.QuantityReserved() != 25 {
+		t.Fatalf("reservation must raise reserved to 25: %d", b.QuantityReserved())
+	}
+	if b.AvailableQuantity() != 75 {
+		t.Fatalf("available = on-hand − reserved must be 75: %d", b.AvailableQuantity())
+	}
 	if err := b.ApplyMovement(batch.MovementRelease, 25, fixedNow); err != nil {
 		t.Fatalf("release: %v", err)
 	}
-	if b.QuantityOnHand() != 100 {
-		t.Fatalf("release must NOT mutate on-hand: %d", b.QuantityOnHand())
+	if b.QuantityOnHand() != 100 || b.QuantityReserved() != 0 || b.AvailableQuantity() != 100 {
+		t.Fatalf("release must restore reserved=0/available=100: on-hand %d reserved %d avail %d",
+			b.QuantityOnHand(), b.QuantityReserved(), b.AvailableQuantity())
+	}
+}
+
+func TestApplyMovement_ReservationRejectsBeyondAvailable(t *testing.T) {
+	t.Parallel()
+	b := freshBatch(t)
+	if err := b.ApplyMovement(batch.MovementInbound, 30, fixedNow); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if err := b.ApplyMovement(batch.MovementReservation, 20, fixedNow); err != nil {
+		t.Fatalf("first reservation: %v", err)
+	}
+	// available is now 10; reserving 11 must fail (oversell guard).
+	if err := b.ApplyMovement(batch.MovementReservation, 11, fixedNow); !errors.Is(err, batch.ErrInsufficientAvailable) {
+		t.Fatalf("expected ErrInsufficientAvailable, got %v", err)
+	}
+	// state unchanged after the rejected reservation.
+	if b.QuantityReserved() != 20 || b.AvailableQuantity() != 10 {
+		t.Fatalf("rejected reservation must not mutate: reserved %d avail %d", b.QuantityReserved(), b.AvailableQuantity())
+	}
+}
+
+func TestApplyMovement_ReleaseRejectsBeyondReserved(t *testing.T) {
+	t.Parallel()
+	b := freshBatch(t)
+	if err := b.ApplyMovement(batch.MovementInbound, 50, fixedNow); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if err := b.ApplyMovement(batch.MovementReservation, 10, fixedNow); err != nil {
+		t.Fatalf("reservation: %v", err)
+	}
+	if err := b.ApplyMovement(batch.MovementRelease, 11, fixedNow); !errors.Is(err, batch.ErrReleaseExceedsReserved) {
+		t.Fatalf("expected ErrReleaseExceedsReserved, got %v", err)
+	}
+}
+
+func TestApplyMovement_OutboundCannotShipReservedStock(t *testing.T) {
+	t.Parallel()
+	b := freshBatch(t)
+	if err := b.ApplyMovement(batch.MovementInbound, 40, fixedNow); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if err := b.ApplyMovement(batch.MovementReservation, 30, fixedNow); err != nil {
+		t.Fatalf("reservation: %v", err)
+	}
+	// available is 10; shipping 11 must fail (reserved units are held).
+	if err := b.ApplyMovement(batch.MovementOutbound, 11, fixedNow); !errors.Is(err, batch.ErrInsufficientStock) {
+		t.Fatalf("expected ErrInsufficientStock, got %v", err)
+	}
+	// consume path: release then outbound the freed units succeeds.
+	if err := b.ApplyMovement(batch.MovementRelease, 30, fixedNow); err != nil {
+		t.Fatalf("release: %v", err)
+	}
+	if err := b.ApplyMovement(batch.MovementOutbound, 40, fixedNow); err != nil {
+		t.Fatalf("outbound after release: %v", err)
+	}
+	if b.QuantityOnHand() != 0 || b.QuantityReserved() != 0 {
+		t.Fatalf("consumed batch must be empty: on-hand %d reserved %d", b.QuantityOnHand(), b.QuantityReserved())
 	}
 }
 
@@ -343,10 +408,14 @@ func TestUnmarshalFromDB_RoundTripsState(t *testing.T) {
 		MRPPaise:                   100,
 		PurchasePricePaise:         50,
 		QuantityOnHand:             42,
+		QuantityReserved:           12,
 		Version:                    7,
 	})
 	if b.QuantityOnHand() != 42 || b.Version() != 7 {
 		t.Fatalf("round trip: %d v%d", b.QuantityOnHand(), b.Version())
+	}
+	if b.QuantityReserved() != 12 || b.AvailableQuantity() != 30 {
+		t.Fatalf("reserved round trip: reserved %d avail %d", b.QuantityReserved(), b.AvailableQuantity())
 	}
 	if len(b.PullEvents()) != 0 {
 		t.Fatal("UnmarshalFromDB should NOT emit events")

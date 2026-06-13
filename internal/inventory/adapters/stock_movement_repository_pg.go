@@ -130,6 +130,80 @@ func (r *StockMovementRepository) ListByBatchPage(ctx context.Context, tenantID 
 	return page, nil
 }
 
+// CountReservationsForOrder returns how many reservation rows exist for an
+// order (source_reference) in the supplied tenant — the reserve handler's
+// idempotency probe (ADR 0063 §4). Joins the ambient UoW tx when present,
+// else opens its own tenant-scoped read tx. Satisfies command.ReservationLedger.
+func (r *StockMovementRepository) CountReservationsForOrder(ctx context.Context, tenantID tenant.ID, orderRef string) (int64, error) {
+	tid, err := uuid.Parse(tenantID.String())
+	if err != nil {
+		return 0, fmt.Errorf("movement repo: parse tenant id: %w", err)
+	}
+	ref := orderRef
+	run := func(ctx context.Context, tx pgx.Tx) (int64, error) {
+		return r.q.WithTx(tx).CountReservationsForSource(ctx, db.CountReservationsForSourceParams{
+			TenantID:        pgconv.PgUUID(tid),
+			SourceReference: &ref,
+		})
+	}
+	if tx, ok := pg.TxFromContext(ctx); ok {
+		return run(ctx, tx)
+	}
+	var n int64
+	err = r.tx.WithinTxPgxTenant(ctx, tenantID.String(), func(ctx context.Context, tx pgx.Tx) error {
+		got, qerr := run(ctx, tx)
+		if qerr != nil {
+			return fmt.Errorf("movement repo: count reservations: %w", qerr)
+		}
+		n = got
+		return nil
+	})
+	return n, err
+}
+
+// ListOutstandingReservationsForOrder returns the net still-held reserved
+// quantity per batch for an order — the release/consume handlers iterate these
+// to know which batches to release/ship (ADR 0063 §4). Joins the ambient UoW
+// tx when present. Satisfies command.ReservationLedger.
+func (r *StockMovementRepository) ListOutstandingReservationsForOrder(ctx context.Context, tenantID tenant.ID, orderRef string) ([]stockmovement.OutstandingReservation, error) {
+	tid, err := uuid.Parse(tenantID.String())
+	if err != nil {
+		return nil, fmt.Errorf("movement repo: parse tenant id: %w", err)
+	}
+	ref := orderRef
+	run := func(ctx context.Context, tx pgx.Tx) ([]stockmovement.OutstandingReservation, error) {
+		rows, qerr := r.q.WithTx(tx).ListOutstandingReservationsForSource(ctx, db.ListOutstandingReservationsForSourceParams{
+			TenantID:        pgconv.PgUUID(tid),
+			SourceReference: &ref,
+		})
+		if qerr != nil {
+			return nil, fmt.Errorf("movement repo: list outstanding reservations: %w", qerr)
+		}
+		out := make([]stockmovement.OutstandingReservation, 0, len(rows))
+		for _, row := range rows {
+			out = append(out, stockmovement.OutstandingReservation{
+				BatchID:   batch.ID(pgconv.UUIDFromPg(row.BatchID).String()),
+				ProductID: product.ID(pgconv.UUIDFromPg(row.ProductID).String()),
+				Quantity:  row.NetReserved,
+			})
+		}
+		return out, nil
+	}
+	if tx, ok := pg.TxFromContext(ctx); ok {
+		return run(ctx, tx)
+	}
+	var out []stockmovement.OutstandingReservation
+	err = r.tx.WithinTxPgxTenant(ctx, tenantID.String(), func(ctx context.Context, tx pgx.Tx) error {
+		got, qerr := run(ctx, tx)
+		if qerr != nil {
+			return qerr
+		}
+		out = got
+		return nil
+	})
+	return out, err
+}
+
 // ----- Helpers ---------------------------------------------------------------
 
 func insertMovementRow(ctx context.Context, q *db.Queries, m *stockmovement.Movement) error {

@@ -21,12 +21,13 @@
 //   - Outbound: negative (Spec.Quantity caller-supplied as negative)
 //   - Adjustment: any non-zero (negative for shrinkage; positive for count
 //     correction)
-//   - Reservation / Release: positive (audit-only; non-mutating to
-//     batch.quantity_on_hand)
+//   - Reservation / Release: positive (move batch.quantity_reserved, not
+//     quantity_on_hand — the true-hold ledger per ADR 0063 §4)
 //
 // This convention means SUM(quantity) over Inbound/Outbound/Adjustment
-// rows for a batch equals batch.quantity_on_hand — useful for ledger
-// reconciliation queries.
+// rows for a batch equals batch.quantity_on_hand, while
+// SUM(reservation) − SUM(release) keyed by source_reference is an order's
+// outstanding hold — both are reconstructable from the ledger.
 package stockmovement
 
 import (

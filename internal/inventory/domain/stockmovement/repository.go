@@ -7,6 +7,7 @@ import (
 	"github.com/leadkart/leadkart-go/internal/common/pagination"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 	"github.com/leadkart/leadkart-go/internal/inventory/domain/batch"
+	"github.com/leadkart/leadkart-go/internal/inventory/domain/product"
 )
 
 // ErrNotFound — no movement matched the supplied ID in the caller's
@@ -37,4 +38,19 @@ type Repository interface {
 	// ListByBatchPage returns the per-batch ledger in the supplied
 	// tenant, keyset-paginated by (occurred_at DESC, id DESC) per ADR 0038.
 	ListByBatchPage(ctx context.Context, tenantID tenant.ID, batchID batch.ID, req PageRequest) (pagination.Page[*Movement], error)
+}
+
+// OutstandingReservation is the net still-held reserved quantity for one
+// (order, batch) pair, reconstructed from the ledger:
+//
+//	net = Σ reservation − Σ release   (for a given source_reference)
+//
+// Returned only for batches with net > 0. The true-hold release/consume
+// handlers (ADR 0063 §4) iterate these to know exactly which batches to
+// release/ship and by how much — the order events carry no line snapshot,
+// so the ledger is the source of truth.
+type OutstandingReservation struct {
+	BatchID   batch.ID
+	ProductID product.ID
+	Quantity  int64
 }

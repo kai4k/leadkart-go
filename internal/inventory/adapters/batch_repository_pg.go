@@ -322,6 +322,7 @@ func persistBatchState(ctx context.Context, q *db.Queries, b *batch.Batch, expec
 	rowsAffected, err := q.UpdateBatchWithVersionCheck(ctx, db.UpdateBatchWithVersionCheckParams{
 		ID:                         pgconv.PgUUID(bid),
 		QuantityOnHand:             b.QuantityOnHand(),
+		QuantityReserved:           b.QuantityReserved(),
 		Version:                    b.Version(),
 		UpdatedAt:                  pgconv.PgRequiredTimestamp(b.UpdatedAt()),
 		IsDeleted:                  b.IsDeleted(),
@@ -378,6 +379,7 @@ func rowToBatch(row db.InventoryBatch) (*batch.Batch, error) {
 		MRPPaise:                   row.MrpPaise,
 		PurchasePricePaise:         row.PurchasePricePaise,
 		QuantityOnHand:             row.QuantityOnHand,
+		QuantityReserved:           row.QuantityReserved,
 		Version:                    row.Version,
 		CreatedAt:                  pgconv.TimeFromPg(row.CreatedAt),
 		UpdatedAt:                  pgconv.TimeFromPg(row.UpdatedAt),

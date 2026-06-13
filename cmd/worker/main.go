@@ -68,7 +68,10 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/adapters"
 	"github.com/leadkart/leadkart-go/internal/identity/ports/subscribers"
 	inventoryadapters "github.com/leadkart/leadkart-go/internal/inventory/adapters"
+	inventorycommand "github.com/leadkart/leadkart-go/internal/inventory/app/command"
 	inventoryjobs "github.com/leadkart/leadkart-go/internal/inventory/app/jobs"
+	"github.com/leadkart/leadkart-go/internal/inventory/domain/stockmovement"
+	inventorysubscribers "github.com/leadkart/leadkart-go/internal/inventory/ports/subscribers"
 	platformadapters "github.com/leadkart/leadkart-go/internal/platform/adapters"
 	platformcommand "github.com/leadkart/leadkart-go/internal/platform/app/command"
 	platformsubscribers "github.com/leadkart/leadkart-go/internal/platform/ports/subscribers"
@@ -334,6 +337,25 @@ func run(ctx context.Context, stdout *os.File) error {
 	ordersConsignmentDeliveredSub := orderssubscribers.NewConsignmentDeliveredSubscriber(ordersInvoiceOrder, ordersAttach, ordersDeliver, logger)
 	ordersCancelCompensationSub := orderssubscribers.NewCancelCompensationSubscriber(ordersCompensate, logger)
 
+	// Inventory true-hold reservation subscribers (ADR 0063 §4 — BRD §6.5).
+	// Cross-module consumers of the Orders lifecycle keeping stock holds
+	// honest (oversell prevention):
+	//   orders.order_confirmed.v1 → reserve FEFO stock (guard: available)
+	//   orders.order_packed.v1    → consume the hold as a shipment (release + outbound)
+	//   orders.order_cancelled.v1 → release the hold if still held
+	// The StockMovementRepository doubles as the ReservationLedger (the
+	// outstanding-by-batch reads driving release/consume).
+	inventoryBatchRepo := inventoryadapters.NewBatchRepository(pool, tx)
+	inventoryMovementRepo := inventoryadapters.NewStockMovementRepository(pool, tx)
+	inventoryOutbox := inventoryadapters.NewOutboxEnqueuer()
+	newStockMovementID := func() stockmovement.ID { return stockmovement.ID(ids.NewV7().String()) }
+	inventoryReserve := inventorycommand.NewReserveOrderStockHandler(tx, inventoryBatchRepo, inventoryMovementRepo, inventoryMovementRepo, inventoryOutbox, time.Now, newStockMovementID)
+	inventoryConsume := inventorycommand.NewConsumeOrderStockHandler(tx, inventoryBatchRepo, inventoryMovementRepo, inventoryMovementRepo, time.Now, newStockMovementID)
+	inventoryRelease := inventorycommand.NewReleaseOrderStockHandler(tx, inventoryBatchRepo, inventoryMovementRepo, inventoryMovementRepo, time.Now, newStockMovementID)
+	inventoryReserveSub := inventorysubscribers.NewReserveStockSubscriber(inventoryReserve, logger)
+	inventoryConsumeSub := inventorysubscribers.NewConsumeStockSubscriber(inventoryConsume, logger)
+	inventoryReleaseSub := inventorysubscribers.NewReleaseStockSubscriber(inventoryRelease, logger)
+
 	router, err := messaging.NewRouter(messaging.Deps{
 		Subscriber:       pubsub,
 		Publisher:        pubsub,
@@ -370,6 +392,7 @@ func run(ctx context.Context, stdout *os.File) error {
 	cqrsHandlers = append(cqrsHandlers, taskssubscribers.Handlers(tasksCallLoggedSub, tasksLeadConvertedSub)...)
 	cqrsHandlers = append(cqrsHandlers, dispatchsubscribers.Handlers(dispatchOrderPacked, dispatchOrderCancelled)...)
 	cqrsHandlers = append(cqrsHandlers, orderssubscribers.Handlers(ordersAutoInvoiceSub, ordersConsignmentCreatedSub, ordersConsignmentDeliveredSub, ordersCancelCompensationSub)...)
+	cqrsHandlers = append(cqrsHandlers, inventorysubscribers.Handlers(inventoryReserveSub, inventoryConsumeSub, inventoryReleaseSub)...)
 	for _, h := range cqrsHandlers {
 		if err := router.AddCqrsHandler(eventProcessor, h); err != nil {
 			return fmt.Errorf("register cqrs handler: %w", err)

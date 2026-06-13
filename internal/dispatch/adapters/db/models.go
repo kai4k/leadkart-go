@@ -403,6 +403,8 @@ type InventoryBatch struct {
 	DeletedBy                  *string
 	// Audit chain — Membership that created this batch. NULL = system-bootstrapped (seed / import). Wave 1.5 ADR 0027.
 	CreatedByMembershipID pgtype.UUID
+	// Units soft-committed to confirmed orders but not yet shipped (ADR 0063 §4 true-hold). available = quantity_on_hand − quantity_reserved.
+	QuantityReserved int64
 }
 
 // Product aggregate. Tenant-scoped, FORCE RLS. SKU unique per tenant on live rows (partial index).
