@@ -296,6 +296,12 @@ func TestArch_RoutesUsePluralNouns(t *testing.T) {
 		"lift-global-suspension": true,
 		"by-slug":                true,
 		"resend":                 true,
+		// Notifications inbox sub-actions per Stripe canon (POST
+		// /notifications/{id}/read). BRD §6.9.
+		"read":         true,
+		"dismiss":      true,
+		"read-all":     true,
+		"unread-count": true,
 
 		// Plural English nouns the regex misses (no `s` suffix; or
 		// collective).

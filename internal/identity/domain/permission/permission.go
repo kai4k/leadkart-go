@@ -178,6 +178,17 @@ type ordersPermissions struct {
 	Invoices   ordersInvoicesPermissions
 }
 
+// notificationsInboxPermissions cover the recipient's own notification inbox
+// (BRD §6.9): Read = list + unread-count; Manage = mark-read / dismiss /
+// read-all on your OWN notifications. Both held by every tenant member — the
+// inbox is self-service; recipient scoping is enforced in the query.
+type notificationsInboxPermissions struct{ Read, Manage string }
+
+// notificationsPermissions groups the Notifications bounded context surface.
+type notificationsPermissions struct {
+	Inbox notificationsInboxPermissions
+}
+
 // IdentityPermissions is the closed catalogue of every permission the
 // system recognises. Mirror of the .NET `IdentityPermissions` static
 // class. Maintain in lockstep with the intern-table list.
@@ -222,6 +233,9 @@ var IdentityPermissions = struct {
 	// Orders bounded context (ADR 0063) — Quotation / Order / Invoice /
 	// CreditNote / Payment aggregates per BRD §6.4.
 	Orders ordersPermissions
+
+	// Notifications bounded context (BRD §6.9) — recipient inbox.
+	Notifications notificationsPermissions
 }{
 	Meta: metaPermissions{
 		TenantAdmin:                "tenant.admin",
@@ -329,6 +343,13 @@ var IdentityPermissions = struct {
 			Read: "orders.invoices.read",
 		},
 	},
+
+	Notifications: notificationsPermissions{
+		Inbox: notificationsInboxPermissions{
+			Read:   "notifications.inbox.read",
+			Manage: "notifications.inbox.manage",
+		},
+	},
 }
 
 func allNames() []string {
@@ -370,6 +391,9 @@ func allNames() []string {
 		p.Orders.Orders.Read, p.Orders.Orders.Manage,
 		p.Orders.Payments.Read, p.Orders.Payments.Record,
 		p.Orders.Invoices.Read,
+
+		// Notifications bounded context (BRD §6.9).
+		p.Notifications.Inbox.Read, p.Notifications.Inbox.Manage,
 	}
 }
 

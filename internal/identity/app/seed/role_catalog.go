@@ -110,7 +110,12 @@ func DefaultRoleCatalog() []RoleSpec {
 		p.Orders.Payments.Read, p.Orders.Invoices.Read,
 	}
 
-	return []RoleSpec{
+	// Notifications inbox is self-service: every tenant role can read +
+	// manage its OWN notifications (recipient scoping is enforced in the
+	// query, not by role). Folded into every spec below via the post-loop.
+	notificationsInbox := []string{p.Notifications.Inbox.Read, p.Notifications.Inbox.Manage}
+
+	specs := []RoleSpec{
 		{
 			Name:            role.SystemRoles.Tenant.CompanyOwner,
 			IsSystemDefault: true,
@@ -187,6 +192,12 @@ func DefaultRoleCatalog() []RoleSpec {
 			Permissions:    tasksMember,
 		},
 	}
+
+	// Grant the self-service notification inbox to every tenant role.
+	for i := range specs {
+		specs[i].Permissions = slices.Concat(specs[i].Permissions, notificationsInbox)
+	}
+	return specs
 }
 
 // ApplyDefaultRoles materialises the [DefaultRoleCatalog] entries for

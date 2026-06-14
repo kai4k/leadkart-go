@@ -2902,6 +2902,96 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
 
+  /api/v1/notifications:
+    get:
+      tags: [notifications]
+      summary: List the caller's notification inbox (cursor-paginated)
+      description: |
+        Returns the authenticated membership's own notifications, newest first.
+        Optional `?state=` and `?category=` filters. Recipient scoping is
+        enforced server-side — a caller only ever sees their own inbox.
+      parameters:
+        - { $ref: '#/components/parameters/Cursor' }
+        - { $ref: '#/components/parameters/PageSize' }
+        - name: state
+          in: query
+          required: false
+          schema: { type: string, enum: [unread, read, dismissed] }
+        - name: category
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [lead_assigned, lead_converted, order_confirmed, order_delivered, work_item_assigned, work_item_overdue, stock_expiring, stock_below_reorder, reminder]
+      responses:
+        '200':
+          description: Cursor-paginated notification page
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ListNotificationsResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '500': { $ref: '#/components/responses/InternalServerError' }
+
+  /api/v1/notifications/unread-count:
+    get:
+      tags: [notifications]
+      summary: Unread notification count for the caller (badge)
+      responses:
+        '200':
+          description: Unread count
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UnreadCountResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '500': { $ref: '#/components/responses/InternalServerError' }
+
+  /api/v1/notifications/read-all:
+    post:
+      tags: [notifications]
+      summary: Mark every unread notification read
+      parameters:
+        - { $ref: '#/components/parameters/XCommandId' }
+      responses:
+        '200':
+          description: Count of notifications flipped to read
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MarkAllReadResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '500': { $ref: '#/components/responses/InternalServerError' }
+
+  /api/v1/notifications/{notificationId}/read:
+    post:
+      tags: [notifications]
+      summary: Mark one notification read
+      parameters:
+        - { $ref: '#/components/parameters/NotificationId' }
+        - { $ref: '#/components/parameters/XCommandId' }
+      responses:
+        '204': { description: Marked read }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: Cannot mark a dismissed notification read
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /api/v1/notifications/{notificationId}/dismiss:
+    post:
+      tags: [notifications]
+      summary: Dismiss one notification
+      parameters:
+        - { $ref: '#/components/parameters/NotificationId' }
+        - { $ref: '#/components/parameters/XCommandId' }
+      responses:
+        '204': { description: Dismissed }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
 components:
   securitySchemes:
     BearerAuth:
@@ -2981,6 +3071,12 @@ components:
 
     ReminderId:
       name: reminderId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+
+    NotificationId:
+      name: notificationId
       in: path
       required: true
       schema: { type: string, format: uuid }
@@ -4512,3 +4608,43 @@ components:
         tax_paise:         { type: integer, format: int64 }
         grand_total_paise: { type: integer, format: int64 }
         issued_at:         { type: string, format: date-time }
+
+    # ===== Notifications ===================================================
+    NotificationDto:
+      type: object
+      required: [id, category, title, state, created_at]
+      properties:
+        id:                 { type: string, format: uuid }
+        category:           { type: string, enum: [lead_assigned, lead_converted, order_confirmed, order_delivered, work_item_assigned, work_item_overdue, stock_expiring, stock_below_reorder, reminder] }
+        title:              { type: string }
+        body:               { type: string }
+        state:              { type: string, enum: [unread, read, dismissed] }
+        source_module:      { type: string }
+        source_entity_type: { type: string }
+        source_entity_id:   { type: string }
+        deep_link:          { type: string }
+        created_at:         { type: string, format: date-time }
+        read_at:            { type: string, format: date-time }
+        dismissed_at:       { type: string, format: date-time }
+
+    ListNotificationsResponse:
+      type: object
+      required: [items, has_more]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/NotificationDto' }
+        has_more:    { type: boolean }
+        next_cursor: { type: string }
+
+    UnreadCountResponse:
+      type: object
+      required: [unread_count]
+      properties:
+        unread_count: { type: integer, format: int64 }
+
+    MarkAllReadResponse:
+      type: object
+      required: [marked_read]
+      properties:
+        marked_read: { type: integer, format: int64 }

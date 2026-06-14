@@ -72,6 +72,10 @@ import (
 	inventoryjobs "github.com/leadkart/leadkart-go/internal/inventory/app/jobs"
 	"github.com/leadkart/leadkart-go/internal/inventory/domain/stockmovement"
 	inventorysubscribers "github.com/leadkart/leadkart-go/internal/inventory/ports/subscribers"
+	notificationsadapters "github.com/leadkart/leadkart-go/internal/notifications/adapters"
+	notificationscommand "github.com/leadkart/leadkart-go/internal/notifications/app/command"
+	"github.com/leadkart/leadkart-go/internal/notifications/domain/notification"
+	notificationssubscribers "github.com/leadkart/leadkart-go/internal/notifications/ports/subscribers"
 	platformadapters "github.com/leadkart/leadkart-go/internal/platform/adapters"
 	platformcommand "github.com/leadkart/leadkart-go/internal/platform/app/command"
 	platformsubscribers "github.com/leadkart/leadkart-go/internal/platform/ports/subscribers"
@@ -356,6 +360,20 @@ func run(ctx context.Context, stdout *os.File) error {
 	inventoryConsumeSub := inventorysubscribers.NewConsumeStockSubscriber(inventoryConsume, logger)
 	inventoryReleaseSub := inventorysubscribers.NewReleaseStockSubscriber(inventoryRelease, logger)
 
+	// Notifications module (BRD §6.9 — subscriber-decides fan-out). Cross-module
+	// consumers map source events → recipient notifications:
+	//   crm.lead_assigned.v1        → new assignee
+	//   tasks.work_item_created.v1  → new task assignee
+	//   tasks.work_item_overdue.v1  → task assignee (cron-sourced)
+	//   orders.order_confirmed.v1   → order confirmer
+	notificationsRepo := notificationsadapters.NewNotificationRepository(pool, tx)
+	newNotificationID := func() notification.ID { return notification.ID(ids.NewV7().String()) }
+	notificationsCreate := notificationscommand.NewCreateNotificationHandler(notificationsRepo, time.Now, newNotificationID)
+	notificationsLeadAssignedSub := notificationssubscribers.NewLeadAssignedSubscriber(notificationsCreate, logger)
+	notificationsWorkItemCreatedSub := notificationssubscribers.NewWorkItemCreatedSubscriber(notificationsCreate, logger)
+	notificationsWorkItemOverdueSub := notificationssubscribers.NewWorkItemOverdueSubscriber(notificationsCreate, logger)
+	notificationsOrderConfirmedSub := notificationssubscribers.NewOrderConfirmedSubscriber(notificationsCreate, logger)
+
 	router, err := messaging.NewRouter(messaging.Deps{
 		Subscriber:       pubsub,
 		Publisher:        pubsub,
@@ -393,6 +411,7 @@ func run(ctx context.Context, stdout *os.File) error {
 	cqrsHandlers = append(cqrsHandlers, dispatchsubscribers.Handlers(dispatchOrderPacked, dispatchOrderCancelled)...)
 	cqrsHandlers = append(cqrsHandlers, orderssubscribers.Handlers(ordersAutoInvoiceSub, ordersConsignmentCreatedSub, ordersConsignmentDeliveredSub, ordersCancelCompensationSub)...)
 	cqrsHandlers = append(cqrsHandlers, inventorysubscribers.Handlers(inventoryReserveSub, inventoryConsumeSub, inventoryReleaseSub)...)
+	cqrsHandlers = append(cqrsHandlers, notificationssubscribers.Handlers(notificationsLeadAssignedSub, notificationsWorkItemCreatedSub, notificationsWorkItemOverdueSub, notificationsOrderConfirmedSub)...)
 	for _, h := range cqrsHandlers {
 		if err := router.AddCqrsHandler(eventProcessor, h); err != nil {
 			return fmt.Errorf("register cqrs handler: %w", err)

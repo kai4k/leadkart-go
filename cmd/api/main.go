@@ -122,6 +122,13 @@ import (
 	"github.com/leadkart/leadkart-go/internal/orders/domain/payment"
 	"github.com/leadkart/leadkart-go/internal/orders/domain/quotation"
 	ordersports "github.com/leadkart/leadkart-go/internal/orders/ports"
+
+	notificationsadapters "github.com/leadkart/leadkart-go/internal/notifications/adapters"
+	notificationsapp "github.com/leadkart/leadkart-go/internal/notifications/app"
+	notificationscommand "github.com/leadkart/leadkart-go/internal/notifications/app/command"
+	notificationsquery "github.com/leadkart/leadkart-go/internal/notifications/app/query"
+	"github.com/leadkart/leadkart-go/internal/notifications/domain/notification"
+	notificationsports "github.com/leadkart/leadkart-go/internal/notifications/ports"
 )
 
 // HTTP server timeouts — public listener tuning per OWASP API Security
@@ -357,6 +364,7 @@ func run(ctx context.Context, stdout *os.File, _ []string) error {
 	// Orders module wiring (ADR 0063 — BRD §6.4). Quote→order lifecycle +
 	// gapless FY invoice numbering; saga subscribers live in cmd/worker.
 	ordersAppInstance := buildOrdersApp(pool, time.Now)
+	notificationsAppInstance := buildNotificationsApp(pool, time.Now)
 
 	// NOTE: outbox forwarder + messaging.Router + subscribers.Register
 	// live in cmd/worker — see that binary's package doc. The API host
@@ -395,7 +403,7 @@ func run(ctx context.Context, stdout *os.File, _ []string) error {
 		},
 	})
 	publicHandler := otelhttp.NewHandler(
-		mwChain(newServer(logger, wiring.App, platformWiring.App, inventoryAppInstance, crmWiring.App, tasksAppInstance, dispatchAppInstance, ordersAppInstance, wiring.Issuer, wiring.StampValidator)),
+		mwChain(newServer(logger, wiring.App, platformWiring.App, inventoryAppInstance, crmWiring.App, tasksAppInstance, dispatchAppInstance, ordersAppInstance, notificationsAppInstance, wiring.Issuer, wiring.StampValidator)),
 		"leadkart-api",
 	)
 	srv := &http.Server{
@@ -466,6 +474,7 @@ func newServer(
 	tasksApp tasksapp.Application,
 	dispatchApp dispatchapp.Application,
 	ordersApp ordersapp.Application,
+	notificationsApp notificationsapp.Application,
 	verifier authn.Verifier,
 	validator authn.StampValidator,
 ) http.Handler {
@@ -478,6 +487,7 @@ func newServer(
 	tasksports.AddRoutes(mux, log, tasksApp, verifier, validator)
 	dispatchports.AddRoutes(mux, log, dispatchApp, verifier, validator)
 	ordersports.AddRoutes(mux, log, ordersApp, verifier, validator)
+	notificationsports.AddRoutes(mux, log, notificationsApp, verifier, validator)
 	return mux
 }
 
@@ -950,6 +960,28 @@ func buildOrdersApp(pool *pgxpool.Pool, now func() time.Time) ordersapp.Applicat
 			GetQuotation:        ordersquery.NewGetQuotationHandler(quotations),
 			GetInvoiceByOrder:   ordersquery.NewGetInvoiceByOrderHandler(invoices),
 			ListPaymentsByOrder: ordersquery.NewListPaymentsByOrderHandler(payments),
+		},
+	}
+}
+
+// buildNotificationsApp wires the Notifications module per BRD §6.9. The HTTP
+// inbox (this app) is the read + self-service-action side; the cross-module
+// fan-out subscribers live in cmd/worker.
+func buildNotificationsApp(pool *pgxpool.Pool, now func() time.Time) notificationsapp.Application {
+	tx := pg.NewTransactor(pool)
+	repo := notificationsadapters.NewNotificationRepository(pool, tx)
+	newID := func() notification.ID { return notification.ID(ids.NewV7().String()) }
+
+	return notificationsapp.Application{
+		Commands: notificationsapp.Commands{
+			CreateNotification: notificationscommand.NewCreateNotificationHandler(repo, now, newID),
+			MarkRead:           notificationscommand.NewMarkNotificationReadHandler(repo, now),
+			Dismiss:            notificationscommand.NewDismissNotificationHandler(repo, now),
+			MarkAllRead:        notificationscommand.NewMarkAllReadHandler(repo, now),
+		},
+		Queries: notificationsapp.Queries{
+			ListInbox:   notificationsquery.NewListInboxHandler(repo),
+			UnreadCount: notificationsquery.NewUnreadCountHandler(repo),
 		},
 	}
 }

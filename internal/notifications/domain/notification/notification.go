@@ -76,13 +76,13 @@ func ParseState(raw string) (State, error) {
 
 // Notification is the aggregate root.
 type Notification struct {
-	id                   ID
-	tenantID             tenant.ID
+	id                    ID
+	tenantID              tenant.ID
 	recipientMembershipID membership.ID
-	category             Category
-	title                string
-	body                 string
-	state                State
+	category              Category
+	title                 string
+	body                  string
+	state                 State
 
 	// Source-entity tracking (dedup key + click-through deep-link).
 	// SourceModule + SourceEntityType + SourceEntityID identify the
@@ -95,6 +95,12 @@ type Notification struct {
 	// Optional URL the recipient is sent to when they click the
 	// notification — relative path the BFF resolves against its origin.
 	deepLink string
+
+	// createdByMembershipID is the membership whose action triggered this
+	// notification (the lead-assigner, order-confirmer, …). Zero for
+	// system/cron-sourced notifications (e.g. overdue sweeps) that have no
+	// human actor. Authorship-in-row-state per the audit-chain canon.
+	createdByMembershipID membership.ID
 
 	createdAt   time.Time
 	readAt      *time.Time
@@ -116,6 +122,7 @@ type NewInput struct {
 	SourceEntityType      string
 	SourceEntityID        string
 	DeepLink              string
+	CreatedByMembershipID membership.ID // optional — zero for system/cron sources
 	Now                   time.Time
 }
 
@@ -164,6 +171,7 @@ func New(in NewInput) (*Notification, error) {
 		sourceEntityType:      in.SourceEntityType,
 		sourceEntityID:        in.SourceEntityID,
 		deepLink:              strings.TrimSpace(in.DeepLink),
+		createdByMembershipID: in.CreatedByMembershipID,
 		createdAt:             in.Now,
 	}
 	n.recordEvent(CreatedEvent{
@@ -192,6 +200,7 @@ type Snapshot struct {
 	SourceEntityType      string
 	SourceEntityID        string
 	DeepLink              string
+	CreatedByMembershipID membership.ID
 	CreatedAt             time.Time
 	ReadAt                *time.Time
 	DismissedAt           *time.Time
@@ -211,6 +220,7 @@ func UnmarshalFromDB(s Snapshot) *Notification {
 		sourceEntityType:      s.SourceEntityType,
 		sourceEntityID:        s.SourceEntityID,
 		deepLink:              s.DeepLink,
+		createdByMembershipID: s.CreatedByMembershipID,
 		createdAt:             s.CreatedAt,
 		readAt:                s.ReadAt,
 		dismissedAt:           s.DismissedAt,
@@ -252,6 +262,10 @@ func (n *Notification) SourceEntityID() string { return n.sourceEntityID }
 
 // DeepLink returns the click-through path.
 func (n *Notification) DeepLink() string { return n.deepLink }
+
+// CreatedByMembershipID returns the membership whose action triggered this
+// notification, or zero for system/cron-sourced notifications.
+func (n *Notification) CreatedByMembershipID() membership.ID { return n.createdByMembershipID }
 
 // CreatedAt returns the row-creation timestamp.
 func (n *Notification) CreatedAt() time.Time { return n.createdAt }

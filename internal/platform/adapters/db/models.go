@@ -449,6 +449,25 @@ type InventoryStockMovement struct {
 	OccurredAt          pgtype.Timestamptz
 }
 
+// Notification aggregate. Tenant-scoped, FORCE RLS. Recipient-scoped at query time. unread → read/dismissed lifecycle; purge cron (read 7d, unread 30d).
+type NotificationsNotification struct {
+	ID                    pgtype.UUID
+	TenantID              pgtype.UUID
+	RecipientMembershipID pgtype.UUID
+	Category              string
+	Title                 string
+	Body                  string
+	State                 string
+	SourceModule          string
+	SourceEntityType      string
+	SourceEntityID        string
+	DeepLink              string
+	CreatedByMembershipID pgtype.UUID
+	CreatedAt             pgtype.Timestamptz
+	ReadAt                pgtype.Timestamptz
+	DismissedAt           pgtype.Timestamptz
+}
+
 // CreditNote aggregate per BRD §A-014. Append-only; credit_note (post-delivery) stacks, cancellation_note (pre-delivery) at most one per invoice.
 type OrdersCreditNote struct {
 	ID                   pgtype.UUID

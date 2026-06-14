@@ -106,7 +106,7 @@ func newPlatformE2E(t *testing.T) platformE2E {
 		},
 	}
 
-	srv := httptest.NewServer(newServer(silentLogger(), wiring.App, platformApp, inventoryapp.Application{}, crmapp.Application{}, tasksapp.Application{}, dispatchapp.Application{}, ordersapp.Application{}, wiring.Issuer, wiring.StampValidator))
+	srv := httptest.NewServer(newServer(silentLogger(), wiring.App, platformApp, inventoryapp.Application{}, crmapp.Application{}, tasksapp.Application{}, dispatchapp.Application{}, ordersapp.Application{}, buildNotificationsApp(pool, nil), wiring.Issuer, wiring.StampValidator))
 	t.Cleanup(srv.Close)
 
 	return platformE2E{

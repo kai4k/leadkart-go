@@ -133,6 +133,12 @@ func TestDefaultRoleCatalog_OperationalRolesCarryInventoryGrants(t *testing.T) {
 		role.SystemRoles.Tenant.HrManager:         tasksManager,
 		role.SystemRoles.Tenant.HrExecutive:       tasksMember,
 	}
+	// Every tenant role additionally carries the self-service notification
+	// inbox bundle, appended last by DefaultRoleCatalog's post-loop.
+	notificationsInbox := []string{p.Notifications.Inbox.Read, p.Notifications.Inbox.Manage}
+	for name, perms := range want {
+		want[name] = slices.Concat(perms, notificationsInbox)
+	}
 	for _, s := range specs {
 		if s.Name == role.SystemRoles.Tenant.CompanyOwner {
 			continue
