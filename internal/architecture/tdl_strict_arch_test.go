@@ -487,15 +487,15 @@ func TestArch_TDL_NoMockGenerationTools(t *testing.T) {
 	root := internalDir(t)
 
 	forbidden := map[string]string{
-		"github.com/stretchr/testify/mock":     "testify/mock — use a hand-written FakeRepository per TDL canon §6",
-		"go.uber.org/mock":                     "gomock — use a hand-written FakeRepository per TDL canon §6",
-		"go.uber.org/mock/gomock":              "gomock — use a hand-written FakeRepository per TDL canon §6",
-		"github.com/golang/mock/gomock":        "gomock — use a hand-written FakeRepository per TDL canon §6",
-		"github.com/vektra/mockery":            "mockery — use a hand-written FakeRepository per TDL canon §6",
+		"github.com/stretchr/testify/mock": "testify/mock — use a hand-written FakeRepository per TDL canon §6",
+		"go.uber.org/mock":                 "gomock — use a hand-written FakeRepository per TDL canon §6",
+		"go.uber.org/mock/gomock":          "gomock — use a hand-written FakeRepository per TDL canon §6",
+		"github.com/golang/mock/gomock":    "gomock — use a hand-written FakeRepository per TDL canon §6",
+		"github.com/vektra/mockery":        "mockery — use a hand-written FakeRepository per TDL canon §6",
 	}
 
 	type violation struct {
-		file   string
+		file       string
 		importPath string
 	}
 	var violations []violation
@@ -510,7 +510,7 @@ func TestArch_TDL_NoMockGenerationTools(t *testing.T) {
 			pathLit := strings.Trim(imp.Path.Value, `"`)
 			if _, banned := forbidden[pathLit]; banned {
 				violations = append(violations, violation{
-					file:   pathToSlash(path),
+					file:       pathToSlash(path),
 					importPath: pathLit,
 				})
 			}
@@ -558,9 +558,9 @@ func TestArch_TDL_HandlerSignatureStrict(t *testing.T) {
 	root := internalDir(t)
 
 	type violation struct {
-		file   string
-		typ    string
-		issue  string
+		file  string
+		typ   string
+		issue string
 	}
 	var violations []violation
 

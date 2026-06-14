@@ -64,7 +64,7 @@ const MaxCallerIDLen = 200
 // response body / status / content-type are captured on the first
 // call's success and replayed verbatim on subsequent matches.
 type Record struct {
-	CallerID        string   // Per-caller scope (see package doc + migration 20260507000007)
+	CallerID        string // Per-caller scope (see package doc + migration 20260507000007)
 	Key             uuid.UUID
 	BodyHash        [32]byte // SHA-256 of the request body
 	ResponseStatus  int

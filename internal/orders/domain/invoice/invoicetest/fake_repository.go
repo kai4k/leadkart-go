@@ -13,8 +13,8 @@ import (
 // FakeRepository is an in-memory [invoice.Repository]. Zero-value-NOT-
 // usable — construct via [NewFakeRepository].
 type FakeRepository struct {
-	Store      map[invoice.ID]*invoice.Invoice
-	ByOrderID  map[order.ID]invoice.ID
+	Store     map[invoice.ID]*invoice.Invoice
+	ByOrderID map[order.ID]invoice.ID
 }
 
 // NewFakeRepository constructs an empty fake.

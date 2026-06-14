@@ -23,7 +23,7 @@ var fixedNow = time.Date(2026, 5, 24, 12, 0, 0, 0, time.UTC)
 // fakeAlertScanRepo is the in-memory test double for the AlertScanRepo
 // contract. Drives both worker tests without spinning Postgres.
 type fakeAlertScanRepo struct {
-	tenants         []uuid.UUID
+	tenants          []uuid.UUID
 	expiringByTenant map[uuid.UUID][]jobs.BatchExpiring
 	reorderByTenant  map[uuid.UUID][]jobs.ReorderProduct
 	emitted          []emittedAlert

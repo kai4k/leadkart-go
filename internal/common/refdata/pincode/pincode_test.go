@@ -24,14 +24,14 @@ func TestNew_HappyPath(t *testing.T) {
 func TestNew_Rejects(t *testing.T) {
 	t.Parallel()
 	cases := []string{
-		"",          // empty
-		"12345",     // too short
-		"1234567",   // too long
-		"012345",    // first digit 0 (India Post reserved)
-		"abcdef",    // non-numeric
-		"123 456",   // whitespace
-		"123-456",   // dash
-		"41100A",    // alpha tail
+		"",        // empty
+		"12345",   // too short
+		"1234567", // too long
+		"012345",  // first digit 0 (India Post reserved)
+		"abcdef",  // non-numeric
+		"123 456", // whitespace
+		"123-456", // dash
+		"41100A",  // alpha tail
 	}
 	for _, raw := range cases {
 		if _, err := pincode.New(raw); !errors.Is(err, pincode.ErrInvalid) {
@@ -55,10 +55,10 @@ func TestFakeReader_DefaultSeedCoversMetros(t *testing.T) {
 	r := pincodetest.NewFakeReader()
 
 	cases := []struct {
-		raw         string
-		wantState   string
+		raw           string
+		wantState     string
 		wantStateCode string
-		wantGST     string
+		wantGST       string
 	}{
 		{"411001", "Maharashtra", "MH", "27"},
 		{"400001", "Maharashtra", "MH", "27"},

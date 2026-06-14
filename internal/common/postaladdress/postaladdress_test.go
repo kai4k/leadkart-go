@@ -35,8 +35,8 @@ func TestNew_AcceptsValid(t *testing.T) {
 func TestNew_RejectsInvalid(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
-		name                                                 string
-		street, city, district, state, stateCode, pincode    string
+		name                                              string
+		street, city, district, state, stateCode, pincode string
 	}{
 		{"empty street", "", "Bangalore", "BU", "Karnataka", "KA", "560001"},
 		{"empty city", "Street", "", "BU", "Karnataka", "KA", "560001"},

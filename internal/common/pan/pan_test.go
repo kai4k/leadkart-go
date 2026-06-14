@@ -50,7 +50,7 @@ func TestNew_RejectsInvalid(t *testing.T) {
 		{"lowercase", "abcpe1234f"},
 		{"digit in alpha section", "ABC1E1234F"},
 		{"alpha in digit section", "ABCPEX234F"},
-		{"invalid entity type X", "ABCXE1234F"},  // X not in PFHCATBLJG
+		{"invalid entity type X", "ABCXE1234F"}, // X not in PFHCATBLJG
 		{"invalid entity type Z", "ABCZE1234F"},
 	}
 	for _, tc := range cases {

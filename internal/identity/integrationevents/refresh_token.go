@@ -32,13 +32,13 @@ func (e RefreshTokenFamilyCreatedV1) TenantID() uuid.UUID { return e.TenantIDCla
 // token consumed, new generation issued. Mostly an audit signal;
 // hot path so consumers stay light.
 type RefreshTokenRotatedV1 struct {
-	FamilyID            uuid.UUID `json:"family_id"`
-	PersonID            uuid.UUID `json:"person_id"`
-	TenantIDClaim       uuid.UUID `json:"tenant_id"`
-	ConsumedTokenID     uuid.UUID `json:"consumed_token_id"`
-	NewTokenID          uuid.UUID `json:"new_token_id"`
-	NewTokenGeneration  int32     `json:"new_token_generation"`
-	OccurredAtUTC       time.Time `json:"occurred_at_utc"`
+	FamilyID           uuid.UUID `json:"family_id"`
+	PersonID           uuid.UUID `json:"person_id"`
+	TenantIDClaim      uuid.UUID `json:"tenant_id"`
+	ConsumedTokenID    uuid.UUID `json:"consumed_token_id"`
+	NewTokenID         uuid.UUID `json:"new_token_id"`
+	NewTokenGeneration int32     `json:"new_token_generation"`
+	OccurredAtUTC      time.Time `json:"occurred_at_utc"`
 }
 
 // Topic returns the canonical wire alias.

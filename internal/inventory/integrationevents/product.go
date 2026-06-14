@@ -78,11 +78,11 @@ func (e ProductDeactivatedV1) TenantID() uuid.UUID { return e.TenantIDClaim }
 // Distinct from ProductDeactivatedV1 — soft-deleted rows are invisible
 // to LIVE reads regardless of is_active.
 type ProductSoftDeletedV1 struct {
-	ProductID                uuid.UUID `json:"product_id"`
-	TenantIDClaim            uuid.UUID `json:"tenant_id"`
-	SoftDeletedAt            time.Time `json:"soft_deleted_at"`
+	ProductID                 uuid.UUID `json:"product_id"`
+	TenantIDClaim             uuid.UUID `json:"tenant_id"`
+	SoftDeletedAt             time.Time `json:"soft_deleted_at"`
 	SoftDeletedByMembershipID uuid.UUID `json:"soft_deleted_by_membership_id"`
-	OccurredAtUTC            time.Time `json:"occurred_at_utc"`
+	OccurredAtUTC             time.Time `json:"occurred_at_utc"`
 }
 
 // Topic returns the canonical wire alias.

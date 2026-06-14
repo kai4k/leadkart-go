@@ -331,10 +331,10 @@ func (e PersonEmailChangeConfirmationRequestedV1) OccurredAt() time.Time { retur
 type PersonAccountLockedV1 struct {
 	platformMarker
 
-	PersonID        uuid.UUID `json:"person_id"`
-	LockedUntilUTC  time.Time `json:"locked_until_utc"`
-	FailedCount     int       `json:"failed_count"`
-	OccurredAtUTC   time.Time `json:"occurred_at_utc"`
+	PersonID       uuid.UUID `json:"person_id"`
+	LockedUntilUTC time.Time `json:"locked_until_utc"`
+	FailedCount    int       `json:"failed_count"`
+	OccurredAtUTC  time.Time `json:"occurred_at_utc"`
 }
 
 // Topic returns the canonical wire alias.

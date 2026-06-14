@@ -137,4 +137,3 @@ func TestInitialiseLeadCredits_TreatsRaceConflictAsAlreadyExisted(t *testing.T) 
 		t.Error("AlreadyExisted=false on conflict; expected true")
 	}
 }
-

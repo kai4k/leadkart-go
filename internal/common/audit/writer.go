@@ -93,14 +93,14 @@ func (w *Writer) Write(ctx context.Context, e Entry) error {
 	}
 
 	var (
-		userIDArg         any = nil
-		tenantIDArg       any = nil
-		correlationIDArg  any = nil
-		failureReasonArg  any = nil
-		payloadArg        any = nil
-		actOperatorIDArg  any = nil
-		actSessionIDArg   any = nil
-		actReasonArg      any = nil
+		userIDArg        any = nil
+		tenantIDArg      any = nil
+		correlationIDArg any = nil
+		failureReasonArg any = nil
+		payloadArg       any = nil
+		actOperatorIDArg any = nil
+		actSessionIDArg  any = nil
+		actReasonArg     any = nil
 	)
 	if e.UserID != uuid.Nil {
 		userIDArg = e.UserID

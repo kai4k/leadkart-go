@@ -104,9 +104,9 @@ func (h RevokeSessionHandler) Handle(ctx context.Context, cmd RevokeSessionComma
 // (typically the current device's family — "sign me out of OTHER
 // devices"). When ExceptFamilyID is zero, ALL families are revoked.
 type RevokeAllSessionsCommand struct {
-	PersonID        person.ID
-	ExceptFamilyID  refreshtoken.FamilyID // optional; zero = revoke all
-	Reason          string                // optional; defaults to "user_revoked_all"
+	PersonID       person.ID
+	ExceptFamilyID refreshtoken.FamilyID // optional; zero = revoke all
+	Reason         string                // optional; defaults to "user_revoked_all"
 }
 
 // RevokeAllSessionsResult reports how many families were revoked.

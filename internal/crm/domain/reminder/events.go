@@ -25,15 +25,15 @@ type Event interface {
 // / [NewManualReminder]). SourceCallLogID is empty for non-callback
 // types.
 type CreatedEvent struct {
-	ReminderID            ID
-	TenantID              tenant.ID
-	LeadID                crmlead.ID
+	ReminderID             ID
+	TenantID               tenant.ID
+	LeadID                 crmlead.ID
 	AssignedToMembershipID string
-	Type                  Type
-	DueAt                 time.Time
-	SourceCallLogID       string // empty for non-callback reminders
-	CreatedByMembershipID string // empty for subscriber/cron-created reminders
-	At                    time.Time
+	Type                   Type
+	DueAt                  time.Time
+	SourceCallLogID        string // empty for non-callback reminders
+	CreatedByMembershipID  string // empty for subscriber/cron-created reminders
+	At                     time.Time
 }
 
 func (CreatedEvent) isReminderEvent() {}
@@ -41,11 +41,11 @@ func (CreatedEvent) isReminderEvent() {}
 // MarkedSentEvent fires when [Reminder.MarkSent] flips state to
 // [StateSent]. Terminal — no further events from this reminder.
 type MarkedSentEvent struct {
-	ReminderID          ID
-	TenantID            tenant.ID
-	LeadID              crmlead.ID
+	ReminderID           ID
+	TenantID             tenant.ID
+	LeadID               crmlead.ID
 	MarkedByMembershipID string
-	At                  time.Time
+	At                   time.Time
 }
 
 func (MarkedSentEvent) isReminderEvent() {}

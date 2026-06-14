@@ -53,11 +53,11 @@ func TestFormat_INR_LakhsCroresStyle(t *testing.T) {
 		{100, "₹1.00"},
 		{12345, "₹123.45"},
 		{99999, "₹999.99"},
-		{100000, "₹1,000.00"},                  // 1 thousand
-		{1234567, "₹12,345.67"},                // ten thousand range
-		{12345678, "₹1,23,456.78"},             // one lakh — INR grouping kicks in
-		{1234567890, "₹1,23,45,678.90"},        // crore territory
-		{123456789012, "₹1,23,45,67,890.12"},   // big number — multiple groups of 2
+		{100000, "₹1,000.00"},                // 1 thousand
+		{1234567, "₹12,345.67"},              // ten thousand range
+		{12345678, "₹1,23,456.78"},           // one lakh — INR grouping kicks in
+		{1234567890, "₹1,23,45,678.90"},      // crore territory
+		{123456789012, "₹1,23,45,67,890.12"}, // big number — multiple groups of 2
 	}
 	for _, c := range cases {
 		got := money.Format(c.paise, money.INR)
@@ -127,12 +127,12 @@ func TestParsePaise_HappyPath(t *testing.T) {
 		{"₹12345678", 1234567800}, // no separators, no fractional
 		{"₹0.00", 0},
 		{"₹0", 0},
-		{"₹0.5", 50},                // one fractional digit padded
+		{"₹0.5", 50}, // one fractional digit padded
 		{"₹0.50", 50},
-		{"₹0.555", 55},              // rounded to two digits (truncated)
-		{"  ₹ 1,000.00  ", 100000},  // whitespace tolerance
-		{"-₹1.00", -100},            // negative outside symbol
-		{"₹-1.00", -100},            // negative inside (Indian banking style)
+		{"₹0.555", 55},             // rounded to two digits (truncated)
+		{"  ₹ 1,000.00  ", 100000}, // whitespace tolerance
+		{"-₹1.00", -100},           // negative outside symbol
+		{"₹-1.00", -100},           // negative inside (Indian banking style)
 	}
 	for _, c := range cases {
 		got, err := money.ParsePaise(c.raw)

@@ -46,8 +46,8 @@ var tenantOwningSchemas = map[string]bool{
 // For every CREATE TABLE <schema>.<table> in tenant-owning schemas:
 // the SAME migration file must declare:
 //
-//   ALTER TABLE <schema>.<table> ENABLE ROW LEVEL SECURITY;
-//   ALTER TABLE <schema>.<table> FORCE ROW LEVEL SECURITY;
+//	ALTER TABLE <schema>.<table> ENABLE ROW LEVEL SECURITY;
+//	ALTER TABLE <schema>.<table> FORCE ROW LEVEL SECURITY;
 //
 // Without FORCE, RLS is BYPASSED for the table owner role — so a
 // migration that creates without FORCE leaves the table exposed to
@@ -479,9 +479,9 @@ func TestArch_RepoTenantScopedReadsUseTxScopeTenant(t *testing.T) {
 // tenant access (`*Platform*`, `*Cross*`, `List<X>AcrossTenants`)
 // must either:
 //
-//   (a) appear under the `*PlatformHandler` receiver type whose path
-//       is the platform_http.go file (route-wired with RequirePlatform), or
-//   (b) contain an `IsPlatform()` check in the handler body.
+//	(a) appear under the `*PlatformHandler` receiver type whose path
+//	    is the platform_http.go file (route-wired with RequirePlatform), or
+//	(b) contain an `IsPlatform()` check in the handler body.
 //
 // This is a heuristic; misses a handler that does cross-tenant work
 // without the name pattern. Tracked as a known low-precision test.
@@ -553,11 +553,11 @@ func TestArch_NoBareTenantIDStrings(t *testing.T) {
 	// function operates at the substrate boundary (email gateway,
 	// subscriber dispatch by Watermill metadata string).
 	allowList := []string{
-		"internal/common/email/gateway.go",                              // gateway crosses substrate; ID is a metadata string
-		"internal/identity/ports/subscribers/revoke_families.go",        // Watermill metadata is plain string
-		"internal/common/pg/rlstest/rlstest.go",                         // test-helper in common/; same boundary constraint
-		"internal/common/pg/tenancy.go",                                 // pg substrate; can't import identity/domain/tenant per ADR 0047 — callers convert tenant.ID via .String() at the boundary
-		"internal/common/pg/transactor.go",                              // pg substrate; same boundary constraint
+		"internal/common/email/gateway.go",                       // gateway crosses substrate; ID is a metadata string
+		"internal/identity/ports/subscribers/revoke_families.go", // Watermill metadata is plain string
+		"internal/common/pg/rlstest/rlstest.go",                  // test-helper in common/; same boundary constraint
+		"internal/common/pg/tenancy.go",                          // pg substrate; can't import identity/domain/tenant per ADR 0047 — callers convert tenant.ID via .String() at the boundary
+		"internal/common/pg/transactor.go",                       // pg substrate; same boundary constraint
 	}
 
 	type violation struct {

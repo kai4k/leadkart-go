@@ -107,15 +107,15 @@ type Reminder struct {
 	rtype Type
 	state State
 
-	dueAt   time.Time
-	notes   string
+	dueAt time.Time
+	notes string
 
 	// Terminal-state metadata.
-	sentAt                  time.Time
+	sentAt                   time.Time
 	markedSentByMembershipID string
-	cancelledAt             time.Time
-	cancelledByMembershipID string
-	cancelReason            string
+	cancelledAt              time.Time
+	cancelledByMembershipID  string
+	cancelReason             string
 
 	createdAt time.Time
 
@@ -387,11 +387,11 @@ func (r *Reminder) MarkSent(markedBy string, now time.Time) error {
 	r.sentAt = now.UTC()
 	r.markedSentByMembershipID = markedBy
 	r.recordEvent(MarkedSentEvent{
-		ReminderID:          r.id,
-		TenantID:            r.tenantID,
-		LeadID:              r.leadID,
+		ReminderID:           r.id,
+		TenantID:             r.tenantID,
+		LeadID:               r.leadID,
 		MarkedByMembershipID: markedBy,
-		At:                  now.UTC(),
+		At:                   now.UTC(),
 	})
 	return nil
 }

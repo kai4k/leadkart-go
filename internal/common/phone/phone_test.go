@@ -10,11 +10,11 @@ import (
 func TestNew_AcceptsValidE164(t *testing.T) {
 	t.Parallel()
 	cases := []string{
-		"+919876543210",         // Indian
-		"+14155551234",          // US
-		"+447700900123",         // UK
-		"+8612345678901",        // China (13 digits)
-		"+19999999999999",       // 14 digits
+		"+919876543210",   // Indian
+		"+14155551234",    // US
+		"+447700900123",   // UK
+		"+8612345678901",  // China (13 digits)
+		"+19999999999999", // 14 digits
 	}
 	for _, raw := range cases {
 		t.Run(raw, func(t *testing.T) {
@@ -41,8 +41,8 @@ func TestNew_RejectsInvalid(t *testing.T) {
 	}{
 		{"empty", ""},
 		{"no plus", "919876543210"},
-		{"too short", "+1234567"},                // 7 digits after +
-		{"too long", "+1234567890123456"},        // 16 digits after +
+		{"too short", "+1234567"},         // 7 digits after +
+		{"too long", "+1234567890123456"}, // 16 digits after +
 		{"contains space", "+91 9876543210"},
 		{"contains hyphen", "+91-9876543210"},
 		{"contains parens", "+91(987)6543210"},

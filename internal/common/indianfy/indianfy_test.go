@@ -82,13 +82,13 @@ func TestContains(t *testing.T) {
 	t.Parallel()
 	fy := indianfy.FY("2026-27")
 	cases := map[time.Time]bool{
-		time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC):       true,    // lower bound INCLUSIVE
-		time.Date(2026, 12, 31, 23, 59, 59, 0, time.UTC):  true,
-		time.Date(2027, 1, 1, 0, 0, 0, 0, time.UTC):       true,
-		time.Date(2027, 3, 31, 23, 59, 59, 0, time.UTC):   true,
-		time.Date(2027, 4, 1, 0, 0, 0, 0, time.UTC):       false,   // upper bound EXCLUSIVE
-		time.Date(2026, 3, 31, 23, 59, 59, 0, time.UTC):   false,   // day before start
-		time.Date(2028, 4, 1, 0, 0, 0, 0, time.UTC):       false,
+		time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC):      true, // lower bound INCLUSIVE
+		time.Date(2026, 12, 31, 23, 59, 59, 0, time.UTC): true,
+		time.Date(2027, 1, 1, 0, 0, 0, 0, time.UTC):      true,
+		time.Date(2027, 3, 31, 23, 59, 59, 0, time.UTC):  true,
+		time.Date(2027, 4, 1, 0, 0, 0, 0, time.UTC):      false, // upper bound EXCLUSIVE
+		time.Date(2026, 3, 31, 23, 59, 59, 0, time.UTC):  false, // day before start
+		time.Date(2028, 4, 1, 0, 0, 0, 0, time.UTC):      false,
 	}
 	for ts, want := range cases {
 		got := fy.Contains(ts)

@@ -39,8 +39,8 @@ var gstPattern = regexp.MustCompile(`^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][0-9A-Z]Z[0-9
 // {Indian state codes per Census of India + GSTN canon: 01-37 active,
 // 97 = Other Territory. Compact enforcement: 1-37 OR 97.}
 const (
-	minStateCode = 1
-	maxStateCode = 37
+	minStateCode            = 1
+	maxStateCode            = 37
 	otherTerritoryStateCode = 97
 )
 

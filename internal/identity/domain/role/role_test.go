@@ -324,7 +324,7 @@ func TestReplacePermissions_EmptyTargetRevokesAll(t *testing.T) {
 	r := newRole(t)
 	view := permission.FromConstant(permission.IdentityPermissions.Users.View)
 	create := permission.FromConstant(permission.IdentityPermissions.Users.Create)
-	_ = r.GrantPermission(view, testNow) // arch-test:ignore-err - test fixture setup
+	_ = r.GrantPermission(view, testNow)   // arch-test:ignore-err - test fixture setup
 	_ = r.GrantPermission(create, testNow) // arch-test:ignore-err - test fixture setup
 	_ = r.PullEvents()
 
@@ -450,7 +450,6 @@ func TestUnmarshalFromDB_DoesNotEmitEvents(t *testing.T) {
 		t.Fatalf("UnmarshalFromDB emitted %d events (must be 0 — TDL canon)", len(events))
 	}
 }
-
 
 func TestHierarchyConstants(t *testing.T) {
 	t.Parallel()

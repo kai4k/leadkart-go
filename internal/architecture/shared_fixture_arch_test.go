@@ -129,4 +129,3 @@ func TestArch_TruncateAllImpliesSerial(t *testing.T) {
 		t.Logf("  %s:%d — %s", v.file, v.line, v.fn)
 	}
 }
-

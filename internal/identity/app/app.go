@@ -64,20 +64,20 @@ type Commands struct {
 	AnonymiseUser                  command.AnonymiseUserHandler
 
 	// Role management.
-	CreateRole              command.CreateRoleHandler
-	UpdateRole              command.UpdateRoleHandler
-	DeleteRole              command.DeleteRoleHandler
-	ReplaceRolePermissions  command.ReplaceRolePermissionsHandler
-	GrantRolePermission     command.GrantRolePermissionHandler
-	RevokeRolePermission    command.RevokeRolePermissionHandler
-	SetRoleParent           command.SetRoleParentHandler // ADR 0054
+	CreateRole             command.CreateRoleHandler
+	UpdateRole             command.UpdateRoleHandler
+	DeleteRole             command.DeleteRoleHandler
+	ReplaceRolePermissions command.ReplaceRolePermissionsHandler
+	GrantRolePermission    command.GrantRolePermissionHandler
+	RevokeRolePermission   command.RevokeRolePermissionHandler
+	SetRoleParent          command.SetRoleParentHandler // ADR 0054
 
 	// Platform — cross-tenant Person + tenant ops.
-	GlobalSuspendPerson         command.GlobalSuspendPersonHandler
-	LiftPersonGlobalSuspension  command.LiftPersonGlobalSuspensionHandler
-	AnonymisePerson             command.AnonymisePersonHandler
-	UpdatePersonProfile         command.UpdatePersonProfileHandler
-	HardDeleteTenant            command.HardDeleteTenantHandler
+	GlobalSuspendPerson        command.GlobalSuspendPersonHandler
+	LiftPersonGlobalSuspension command.LiftPersonGlobalSuspensionHandler
+	AnonymisePerson            command.AnonymisePersonHandler
+	UpdatePersonProfile        command.UpdatePersonProfileHandler
+	HardDeleteTenant           command.HardDeleteTenantHandler
 
 	// Platform — impersonation sessions.
 	CreateImpersonationSession command.CreateImpersonationSessionHandler
@@ -113,7 +113,7 @@ type Queries struct {
 	ListAuditEventsByUser     query.ListAuditEventsByUserHandler
 
 	// Permission-elevation approval workflow (ADR 0055).
-	GetPermissionRequest         query.GetPermissionRequestHandler
-	ListMyPermissionRequests     query.ListMyPermissionRequestsHandler
-	ListPendingForApprover       query.ListPendingForApproverHandler
+	GetPermissionRequest     query.GetPermissionRequestHandler
+	ListMyPermissionRequests query.ListMyPermissionRequestsHandler
+	ListPendingForApprover   query.ListPendingForApproverHandler
 }

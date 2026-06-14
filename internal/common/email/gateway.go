@@ -27,7 +27,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
 )
 
 // ErrInvalidMessage is returned by validation failures inside the

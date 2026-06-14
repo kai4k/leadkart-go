@@ -145,11 +145,11 @@ func (h UpdateTenantStatutoryHandler) Handle(ctx context.Context, cmd UpdateTena
 
 // UpdateTenantAdminContactCommand replaces admin phone + postal address.
 type UpdateTenantAdminContactCommand struct {
-	TenantID      tenant.ID
-	Phone         string
-	AddressStreet string
-	AddressCity   string
-	AddressDistrict string
+	TenantID         tenant.ID
+	Phone            string
+	AddressStreet    string
+	AddressCity      string
+	AddressDistrict  string
 	AddressState     string
 	AddressStateCode string
 	AddressPincode   string

@@ -36,9 +36,9 @@
 //
 // Production deploys:
 //
-//	1. Run after `migrate up` succeeds, before the api Deployment rolls.
-//	2. Run ONCE per environment OR every deploy (idempotent either way).
-//	3. Secret env vars come from the secrets manager, not committed files.
+//  1. Run after `migrate up` succeeds, before the api Deployment rolls.
+//  2. Run ONCE per environment OR every deploy (idempotent either way).
+//  3. Secret env vars come from the secrets manager, not committed files.
 package main
 
 import (
@@ -260,11 +260,11 @@ func seedSuperAdmin(ctx context.Context, tx *sql.Tx, email, password, firstName,
 // CI dry-runs + ops triage.
 func reportStatus(ctx context.Context, db *sql.DB, logger *slog.Logger) error {
 	var (
-		tenantID   sql.NullString
-		roleID     sql.NullString
-		personID   sql.NullString
-		hasMember  bool
-		hasAssign  bool
+		tenantID  sql.NullString
+		roleID    sql.NullString
+		personID  sql.NullString
+		hasMember bool
+		hasAssign bool
 	)
 
 	if err := db.QueryRowContext(ctx, `

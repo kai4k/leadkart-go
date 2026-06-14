@@ -129,19 +129,19 @@ func TestArch_NoInitDoingRealWork(t *testing.T) {
 	// pkg.fn pairs forbidden inside init(). Each pair is a substrate
 	// concern that belongs in a ctor.
 	forbidden := map[string]bool{
-		"os.Getenv":         true,
-		"os.LookupEnv":      true,
-		"os.Open":           true,
-		"os.ReadFile":       true,
-		"os.Create":         true,
-		"pgxpool.New":       true,
+		"os.Getenv":             true,
+		"os.LookupEnv":          true,
+		"os.Open":               true,
+		"os.ReadFile":           true,
+		"os.Create":             true,
+		"pgxpool.New":           true,
 		"pgxpool.NewWithConfig": true,
-		"sql.Open":          true,
-		"http.Get":          true,
-		"http.Post":         true,
-		"net.Dial":          true,
-		"redis.NewClient":   true,
-		"net.Listen":        true,
+		"sql.Open":              true,
+		"http.Get":              true,
+		"http.Post":             true,
+		"net.Dial":              true,
+		"redis.NewClient":       true,
+		"net.Listen":            true,
 	}
 
 	type violation struct {

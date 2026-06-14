@@ -185,8 +185,8 @@ func (PasswordResetRequestedEvent) isPersonEvent() {}
 //
 // Why two events at the same trigger:
 //   - PasswordResetRequestedEvent  = AUDIT signal (no plaintext; broad
-//                                    consumer set: SIEM, audit-log,
-//                                    forensics).
+//     consumer set: SIEM, audit-log,
+//     forensics).
 //   - PasswordResetEmailRequestedEvent = ACTION signal (plaintext;
 //     single consumer = email subscriber).
 //

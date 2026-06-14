@@ -314,9 +314,9 @@ func newSuperAdminRole(t *testing.T, tid tenant.ID) *role.Role {
 	r, err := role.New(
 		role.ID(ids.NewV7().String()), tid,
 		role.SystemRoles.Platform.SuperAdmin,
-		true,                       // IsSystemDefault
-		role.HierarchyLevelMin,     // top of tree
-		true,                       // IsSuperAdmin — the load-bearing flag,
+		true,                   // IsSystemDefault
+		role.HierarchyLevelMin, // top of tree
+		true,                   // IsSuperAdmin — the load-bearing flag,
 		testNow,
 	)
 	if err != nil {

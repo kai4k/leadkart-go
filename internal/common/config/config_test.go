@@ -22,9 +22,9 @@ func setEnv(t *testing.T, kv map[string]string) {
 // test whose subject isn't a missing-field path needs these set.
 func minRequired() map[string]string {
 	return map[string]string{
-		"LEADKART_POSTGRES__DSN":   "postgres://leadkart_app:pw@localhost:5432/leadkart?sslmode=disable",
-		"LEADKART_REDIS__ADDR":     "localhost:6379",
-		"LEADKART_JWT__KEY_ID":     "k1",
+		"LEADKART_POSTGRES__DSN":    "postgres://leadkart_app:pw@localhost:5432/leadkart?sslmode=disable",
+		"LEADKART_REDIS__ADDR":      "localhost:6379",
+		"LEADKART_JWT__KEY_ID":      "k1",
 		"LEADKART_JWT__SIGNING_KEY": validJWTKey,
 	}
 }

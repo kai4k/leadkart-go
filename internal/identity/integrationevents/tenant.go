@@ -101,14 +101,14 @@ func (e TenantSuspendedV1) OccurredAt() time.Time { return e.OccurredAtUTC }
 type TenantStatutoryUpdatedV1 struct {
 	platformMarker
 
-	TenantID         uuid.UUID `json:"tenant_id"`
-	OldGST           string    `json:"old_gst"`
-	OldPAN           string    `json:"old_pan"`
-	OldDrugLicence   string    `json:"old_drug_licence"`
-	NewGST           string    `json:"new_gst"`
-	NewPAN           string    `json:"new_pan"`
-	NewDrugLicence   string    `json:"new_drug_licence"`
-	OccurredAtUTC    time.Time `json:"occurred_at_utc"`
+	TenantID       uuid.UUID `json:"tenant_id"`
+	OldGST         string    `json:"old_gst"`
+	OldPAN         string    `json:"old_pan"`
+	OldDrugLicence string    `json:"old_drug_licence"`
+	NewGST         string    `json:"new_gst"`
+	NewPAN         string    `json:"new_pan"`
+	NewDrugLicence string    `json:"new_drug_licence"`
+	OccurredAtUTC  time.Time `json:"occurred_at_utc"`
 }
 
 // Topic returns the canonical wire alias.
@@ -124,22 +124,22 @@ func (e TenantStatutoryUpdatedV1) OccurredAt() time.Time { return e.OccurredAtUT
 type TenantAdminContactUpdatedV1 struct {
 	platformMarker
 
-	TenantID         uuid.UUID `json:"tenant_id"`
-	OldPhone         string    `json:"old_phone"`
-	OldStreet        string    `json:"old_street"`
-	OldCity          string    `json:"old_city"`
-	OldDistrict      string    `json:"old_district"`
-	OldState         string    `json:"old_state"`
-	OldStateCode     string    `json:"old_state_code"`
-	OldPincode       string    `json:"old_pincode"`
-	NewPhone         string    `json:"new_phone"`
-	NewStreet        string    `json:"new_street"`
-	NewCity          string    `json:"new_city"`
-	NewDistrict      string    `json:"new_district"`
-	NewState         string    `json:"new_state"`
-	NewStateCode     string    `json:"new_state_code"`
-	NewPincode       string    `json:"new_pincode"`
-	OccurredAtUTC    time.Time `json:"occurred_at_utc"`
+	TenantID      uuid.UUID `json:"tenant_id"`
+	OldPhone      string    `json:"old_phone"`
+	OldStreet     string    `json:"old_street"`
+	OldCity       string    `json:"old_city"`
+	OldDistrict   string    `json:"old_district"`
+	OldState      string    `json:"old_state"`
+	OldStateCode  string    `json:"old_state_code"`
+	OldPincode    string    `json:"old_pincode"`
+	NewPhone      string    `json:"new_phone"`
+	NewStreet     string    `json:"new_street"`
+	NewCity       string    `json:"new_city"`
+	NewDistrict   string    `json:"new_district"`
+	NewState      string    `json:"new_state"`
+	NewStateCode  string    `json:"new_state_code"`
+	NewPincode    string    `json:"new_pincode"`
+	OccurredAtUTC time.Time `json:"occurred_at_utc"`
 }
 
 // Topic returns the canonical wire alias.
@@ -158,22 +158,22 @@ func (e TenantAdminContactUpdatedV1) OccurredAt() time.Time { return e.OccurredA
 type TenantSettingsUpdatedV1 struct {
 	platformMarker
 
-	TenantID                uuid.UUID `json:"tenant_id"`
-	OldMinLength            int       `json:"old_min_length"`
-	OldRequireUppercase     bool      `json:"old_require_uppercase"`
-	OldRequireLowercase     bool      `json:"old_require_lowercase"`
-	OldRequireDigit         bool      `json:"old_require_digit"`
-	OldRequireSymbol        bool      `json:"old_require_symbol"`
-	OldMaxFailedAttempts    int       `json:"old_max_failed_attempts"`
-	OldLockoutMinutes       int       `json:"old_lockout_minutes"`
-	NewMinLength            int       `json:"new_min_length"`
-	NewRequireUppercase     bool      `json:"new_require_uppercase"`
-	NewRequireLowercase     bool      `json:"new_require_lowercase"`
-	NewRequireDigit         bool      `json:"new_require_digit"`
-	NewRequireSymbol        bool      `json:"new_require_symbol"`
-	NewMaxFailedAttempts    int       `json:"new_max_failed_attempts"`
-	NewLockoutMinutes       int       `json:"new_lockout_minutes"`
-	OccurredAtUTC           time.Time `json:"occurred_at_utc"`
+	TenantID             uuid.UUID `json:"tenant_id"`
+	OldMinLength         int       `json:"old_min_length"`
+	OldRequireUppercase  bool      `json:"old_require_uppercase"`
+	OldRequireLowercase  bool      `json:"old_require_lowercase"`
+	OldRequireDigit      bool      `json:"old_require_digit"`
+	OldRequireSymbol     bool      `json:"old_require_symbol"`
+	OldMaxFailedAttempts int       `json:"old_max_failed_attempts"`
+	OldLockoutMinutes    int       `json:"old_lockout_minutes"`
+	NewMinLength         int       `json:"new_min_length"`
+	NewRequireUppercase  bool      `json:"new_require_uppercase"`
+	NewRequireLowercase  bool      `json:"new_require_lowercase"`
+	NewRequireDigit      bool      `json:"new_require_digit"`
+	NewRequireSymbol     bool      `json:"new_require_symbol"`
+	NewMaxFailedAttempts int       `json:"new_max_failed_attempts"`
+	NewLockoutMinutes    int       `json:"new_lockout_minutes"`
+	OccurredAtUTC        time.Time `json:"occurred_at_utc"`
 }
 
 // Topic returns the canonical wire alias.
@@ -188,16 +188,16 @@ func (e TenantSettingsUpdatedV1) OccurredAt() time.Time { return e.OccurredAtUTC
 type TenantDisplayPreferencesUpdatedV1 struct {
 	platformMarker
 
-	TenantID       uuid.UUID `json:"tenant_id"`
-	OldLocale      string    `json:"old_locale"`
-	OldTimeZone    string    `json:"old_time_zone"`
-	OldDateFormat  string    `json:"old_date_format"`
-	OldCurrency    string    `json:"old_currency"`
-	NewLocale      string    `json:"new_locale"`
-	NewTimeZone    string    `json:"new_time_zone"`
-	NewDateFormat  string    `json:"new_date_format"`
-	NewCurrency    string    `json:"new_currency"`
-	OccurredAtUTC  time.Time `json:"occurred_at_utc"`
+	TenantID      uuid.UUID `json:"tenant_id"`
+	OldLocale     string    `json:"old_locale"`
+	OldTimeZone   string    `json:"old_time_zone"`
+	OldDateFormat string    `json:"old_date_format"`
+	OldCurrency   string    `json:"old_currency"`
+	NewLocale     string    `json:"new_locale"`
+	NewTimeZone   string    `json:"new_time_zone"`
+	NewDateFormat string    `json:"new_date_format"`
+	NewCurrency   string    `json:"new_currency"`
+	OccurredAtUTC time.Time `json:"occurred_at_utc"`
 }
 
 // Topic returns the canonical wire alias.
@@ -214,10 +214,10 @@ func (e TenantDisplayPreferencesUpdatedV1) OccurredAt() time.Time { return e.Occ
 type TenantMarkedForDeletionV1 struct {
 	platformMarker
 
-	TenantID         uuid.UUID `json:"tenant_id"`
-	Reason           string    `json:"reason"`
-	ScheduledAtUTC   time.Time `json:"scheduled_at_utc"`
-	OccurredAtUTC    time.Time `json:"occurred_at_utc"`
+	TenantID       uuid.UUID `json:"tenant_id"`
+	Reason         string    `json:"reason"`
+	ScheduledAtUTC time.Time `json:"scheduled_at_utc"`
+	OccurredAtUTC  time.Time `json:"occurred_at_utc"`
 }
 
 // Topic returns the canonical wire alias.

@@ -13,7 +13,6 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
 
-
 // freshMembership builds a brand-new Active Membership and drains the
 // CreatedEvent so per-test event assertions start from a clean slate.
 func freshMembership(t *testing.T) *membership.Membership {
@@ -144,7 +143,7 @@ func TestEffectivePermissions_UnionRolesPlusGrantsMinusRevokes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Manager role: %v", err)
 	}
-	_ = managerRole.GrantPermission(permission.FromConstant(permission.IdentityPermissions.Users.View), testNow) // arch-test:ignore-err - test fixture setup
+	_ = managerRole.GrantPermission(permission.FromConstant(permission.IdentityPermissions.Users.View), testNow)   // arch-test:ignore-err - test fixture setup
 	_ = managerRole.GrantPermission(permission.FromConstant(permission.IdentityPermissions.Users.Update), testNow) // arch-test:ignore-err - test fixture setup
 
 	auditorRole, err := role.New(
@@ -159,7 +158,7 @@ func TestEffectivePermissions_UnionRolesPlusGrantsMinusRevokes(t *testing.T) {
 
 	// Membership overlay: grant Anonymise, revoke Update.
 	_ = m.GrantPermission(permission.FromConstant(permission.IdentityPermissions.Users.Anonymise), time.Time{}, testNow) // arch-test:ignore-err - test fixture setup
-	_ = m.RevokePermission(permission.FromConstant(permission.IdentityPermissions.Users.Update), testNow) // arch-test:ignore-err - test fixture setup
+	_ = m.RevokePermission(permission.FromConstant(permission.IdentityPermissions.Users.Update), testNow)                // arch-test:ignore-err - test fixture setup
 
 	got := m.EffectivePermissions([]*role.Role{managerRole, auditorRole}, testNow)
 	gotSet := map[string]bool{}
@@ -198,7 +197,7 @@ func TestEffectivePermissions_RevokeWinsOverRoleGrant(t *testing.T) {
 		t.Fatalf("role.New: %v", err)
 	}
 	view := permission.FromConstant(permission.IdentityPermissions.Users.View)
-	_ = r.GrantPermission(view, testNow) // arch-test:ignore-err - test fixture setup
+	_ = r.GrantPermission(view, testNow)  // arch-test:ignore-err - test fixture setup
 	_ = m.RevokePermission(view, testNow) // overlay revoke beats role grant // arch-test:ignore-err - test fixture setup
 
 	got := m.EffectivePermissions([]*role.Role{r}, testNow)

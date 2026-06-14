@@ -48,7 +48,7 @@ const configFileEnvVar = "LEADKART_CONFIG_FILE"
 // to apply byte-length floors + placeholder rejection per [security.md]
 // "Secrets integrity — startup validator".
 type AppConfig struct {
-	Env      string         `koanf:"env"`       // "dev" | "staging" | "production"
+	Env      string         `koanf:"env"` // "dev" | "staging" | "production"
 	Listen   ListenConfig   `koanf:"listen"`
 	Postgres PostgresConfig `koanf:"postgres"`
 	Redis    RedisConfig    `koanf:"redis"`
@@ -79,18 +79,18 @@ type PostgresConfig struct {
 // JWT blacklist + (future) ITicketStore + idempotency store all share
 // this client per ADR 0015 (revised).
 type RedisConfig struct {
-	Addr     string `koanf:"addr"`                     // "localhost:6379"
-	Password string `koanf:"password" secret:"weak"`   // optional
-	DB       int    `koanf:"db"`                       // 0-15
+	Addr     string `koanf:"addr"`                   // "localhost:6379"
+	Password string `koanf:"password" secret:"weak"` // optional
+	DB       int    `koanf:"db"`                     // 0-15
 }
 
 // JWTConfig — HS256 signing key + kid header per [security.md] "JWT
 // signing key + key history". Production rotates by populating
 // `PreviousKeys` for the access-token-lifetime × 2 grace window.
 type JWTConfig struct {
-	KeyID        string                `koanf:"key_id"`
-	SigningKey   string                `koanf:"signing_key" secret:"strong"`
-	PreviousKeys []PreviousSigningKey  `koanf:"previous_keys"`
+	KeyID        string               `koanf:"key_id"`
+	SigningKey   string               `koanf:"signing_key" secret:"strong"`
+	PreviousKeys []PreviousSigningKey `koanf:"previous_keys"`
 }
 
 // PreviousSigningKey carries one rotated-out key during the validation
@@ -112,10 +112,10 @@ type RefreshConfig struct {
 // OTelConfig — OpenTelemetry exporter + service identity. Honors
 // [OTEL_EXPORTER_OTLP_ENDPOINT] when present.
 type OTelConfig struct {
-	ServiceName     string `koanf:"service_name"`
-	ServiceVersion  string `koanf:"service_version"`
-	OTLPEndpoint    string `koanf:"otlp_endpoint"`
-	SampleRatio     float64 `koanf:"sample_ratio"` // 0.0 to 1.0
+	ServiceName    string  `koanf:"service_name"`
+	ServiceVersion string  `koanf:"service_version"`
+	OTLPEndpoint   string  `koanf:"otlp_endpoint"`
+	SampleRatio    float64 `koanf:"sample_ratio"` // 0.0 to 1.0
 }
 
 // Defaults returns the baseline AppConfig with safe non-production

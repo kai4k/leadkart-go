@@ -202,9 +202,9 @@ func TestArch_NoRandInDomain(t *testing.T) {
 	t.Parallel()
 
 	forbidden := map[string]bool{
-		"crypto/rand":     true,
-		"math/rand":       true,
-		"math/rand/v2":    true,
+		"crypto/rand":  true,
+		"math/rand":    true,
+		"math/rand/v2": true,
 	}
 
 	type violation struct {
@@ -259,9 +259,9 @@ func TestArch_NoUUIDGenerationInDomain(t *testing.T) {
 	// We MATCH on file path suffix (forward slashes) so the allow-list
 	// stays stable across OS-specific path separators.
 	allowList := []string{
-		"internal/identity/domain/refreshtoken/family.go",      // Token children minted inside the Family aggregate (sub-entity composition)
-		"internal/identity/domain/person/credential.go",        // Reset-token + email-change-token (sub-VO mint inside credential rotation)
-		"internal/identity/domain/impersonation/session.go",    // Session ID minted via factory inside the aggregate (in-memory store; ADR 0051)
+		"internal/identity/domain/refreshtoken/family.go",   // Token children minted inside the Family aggregate (sub-entity composition)
+		"internal/identity/domain/person/credential.go",     // Reset-token + email-change-token (sub-VO mint inside credential rotation)
+		"internal/identity/domain/impersonation/session.go", // Session ID minted via factory inside the aggregate (in-memory store; ADR 0051)
 	}
 
 	type violation struct {
@@ -341,7 +341,7 @@ func TestArch_NoOsGetenvOutsideConfigAndMain(t *testing.T) {
 
 	allowedPathSubstrings := []string{
 		"/internal/common/config/",
-		"/cmd/",                 // catches cmd/api/main.go + cmd/worker/main.go etc.
+		"/cmd/", // catches cmd/api/main.go + cmd/worker/main.go etc.
 		"/scripts/devenv/",
 	}
 	isAllowed := func(slashPath string) bool {

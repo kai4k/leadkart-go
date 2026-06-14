@@ -556,15 +556,15 @@ func TestArch_DomainHasNoInfraImports(t *testing.T) {
 	t.Parallel()
 
 	forbiddenPrefixes := map[string]string{
-		"github.com/jackc/pgx":                                       "DB driver — substrate concern",
-		"github.com/ThreeDotsLabs/watermill":                         "message broker — substrate",
-		"net/http":                                                   "HTTP — transport concern",
-		"log/slog":                                                   "logger — substrate",
-		"encoding/json":                                              "serialisation — substrate",
-		"github.com/redis":                                           "cache substrate",
-		"github.com/leadkart/leadkart-go/internal/common/pg":         "DB transactor — substrate",
-		"github.com/leadkart/leadkart-go/internal/common/messaging":  "broker wrapper — substrate",
-		"github.com/leadkart/leadkart-go/internal/common/cache":      "cache wrapper — substrate",
+		"github.com/jackc/pgx":               "DB driver — substrate concern",
+		"github.com/ThreeDotsLabs/watermill": "message broker — substrate",
+		"net/http":                           "HTTP — transport concern",
+		"log/slog":                           "logger — substrate",
+		"encoding/json":                      "serialisation — substrate",
+		"github.com/redis":                   "cache substrate",
+		"github.com/leadkart/leadkart-go/internal/common/pg":        "DB transactor — substrate",
+		"github.com/leadkart/leadkart-go/internal/common/messaging": "broker wrapper — substrate",
+		"github.com/leadkart/leadkart-go/internal/common/cache":     "cache wrapper — substrate",
 	}
 
 	allowedCommonLeaves := map[string]bool{

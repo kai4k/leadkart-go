@@ -383,7 +383,7 @@ func TestFacade_TTL_L1ExpiryFallsThroughToL2(t *testing.T) {
 
 	// Wait past L1 TTL.
 	time.Sleep(120 * time.Millisecond) // arch-test:wait-justified — must exceed 50ms L1 TTL to assert L2 fallback
-	hc.L1.Clear() // belt-and-braces — ristretto TTL is best-effort
+	hc.L1.Clear()                      // belt-and-braces — ristretto TTL is best-effort
 
 	got, err := f.Get(t.Context(), "p1")
 	if err != nil {
@@ -396,7 +396,6 @@ func TestFacade_TTL_L1ExpiryFallsThroughToL2(t *testing.T) {
 		t.Fatalf("factory invoked after L1 expiry — L2 missed: got %d want 1", c)
 	}
 }
-
 
 // TestFacade_Invalidate_DuringFactory_DoesNotRePoisonCache pins the
 // stale-write fence: a factory call that captures the source BEFORE

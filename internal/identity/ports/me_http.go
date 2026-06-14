@@ -25,8 +25,8 @@ import (
 //   - tenant_id            → tenant_id
 //   - tenant_slug          → tenant_slug
 //   - is_platform          → is_platform (slug-anchored at issuance
-//                            per Phase 1.5 — true only if
-//                            tenant_slug == "platform")
+//     per Phase 1.5 — true only if
+//     tenant_slug == "platform")
 //   - is_super_user        → is_super_user
 //   - permission           → permissions[] (closed-set catalogue)
 //

@@ -147,4 +147,3 @@ func projectAuditEventsPage(p pagination.Page[query.AuditEventView]) ListAuditEv
 		NextCursor: p.NextCursor,
 	}
 }
-

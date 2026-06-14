@@ -80,9 +80,9 @@ func TestMeta_EveryAcceptedADRHasFitnessFunctionRef(t *testing.T) {
 		reason string
 	}
 	var (
-		missingList     []missing
-		grandfathered   []string
-		danglingRefs    []string
+		missingList   []missing
+		grandfathered []string
+		danglingRefs  []string
 	)
 
 	for _, e := range entries {

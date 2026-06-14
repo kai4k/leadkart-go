@@ -206,14 +206,14 @@ func NewWithCallback(
 		callbackWindow:       normaliseWindow(window),
 	}
 	c.recordEvent(LoggedEvent{
-		CallID:                id,
-		LeadID:                leadID,
-		TenantID:              tenantID,
-		Outcome:               outcome,
-		LoggedByMembershipID:  loggedBy,
-		CallbackWindowStart:   c.callbackWindow.Start,
-		CallbackWindowEnd:     c.callbackWindow.End,
-		At:                    loggedAt,
+		CallID:               id,
+		LeadID:               leadID,
+		TenantID:             tenantID,
+		Outcome:              outcome,
+		LoggedByMembershipID: loggedBy,
+		CallbackWindowStart:  c.callbackWindow.Start,
+		CallbackWindowEnd:    c.callbackWindow.End,
+		At:                   loggedAt,
 	})
 	return c, nil
 }

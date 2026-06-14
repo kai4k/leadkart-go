@@ -10,10 +10,10 @@ import (
 // gap). Consumed by Tasks/CRM/etc. for default permission-set seeding
 // + future hierarchy initialisation.
 type MembershipCreatedV1 struct {
-	MembershipID    uuid.UUID `json:"membership_id"`
-	PersonID        uuid.UUID `json:"person_id"`
-	TenantIDClaim   uuid.UUID `json:"tenant_id"`
-	OccurredAtUTC   time.Time `json:"occurred_at_utc"`
+	MembershipID  uuid.UUID `json:"membership_id"`
+	PersonID      uuid.UUID `json:"person_id"`
+	TenantIDClaim uuid.UUID `json:"tenant_id"`
+	OccurredAtUTC time.Time `json:"occurred_at_utc"`
 }
 
 // Topic returns the canonical wire alias.

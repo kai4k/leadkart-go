@@ -32,12 +32,12 @@ func TestParse_Rejects(t *testing.T) {
 	t.Parallel()
 	for _, raw := range []string{
 		"",
-		"OTC",          // case-sensitive
-		"Schedule H",   // wrong format (spaces)
-		"schedule-h",   // wrong separator
+		"OTC",           // case-sensitive
+		"Schedule H",    // wrong format (spaces)
+		"schedule-h",    // wrong separator
 		"NotApplicable", // wrong case
 		"garbage",
-		"schedule_z",   // not a real value
+		"schedule_z", // not a real value
 	} {
 		if _, err := drugschedule.Parse(raw); !errors.Is(err, drugschedule.ErrInvalid) {
 			t.Errorf("Parse(%q): got %v want ErrInvalid", raw, err)

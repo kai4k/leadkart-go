@@ -105,8 +105,8 @@ func TestArch_SingleMethodInterfacesUseErSuffix(t *testing.T) {
 		"ValueObject": true,
 		// Hexagonal substrate (ADR 0047) — interfaces with one method
 		// describing a process-control role.
-		"UnitOfWork":   true,
-		"Transactor":   true,
+		"UnitOfWork":    true,
+		"Transactor":    true,
 		"Transactional": true,
 		"TenantScoped":  true,
 		"Platform":      true, // platform-event marker interface

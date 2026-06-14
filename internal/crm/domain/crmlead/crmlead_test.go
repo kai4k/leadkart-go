@@ -523,17 +523,17 @@ func TestParseTemperature_HappyAndError(t *testing.T) {
 func TestUnmarshalFromDB_RoundTrip(t *testing.T) {
 	t.Parallel()
 	snap := crmlead.Snapshot{
-		ID:                      "lead-r",
-		TenantID:                "tenant-r",
-		Profile:                 validProfile(),
-		Stage:                   crmlead.StageNegotiation,
-		Temperature:             crmlead.TemperatureHot,
-		SourcePurchaseID:        "p-1",
-		SourcePlatformLeadID:    tidPlatformLead1,
-		AssigneeMembershipID:    tidMemA,
-		AssignedAt:              fixedNow,
-		CreatedAt:               fixedNow,
-		CreatedByMembershipID:   "mem-buyer",
+		ID:                    "lead-r",
+		TenantID:              "tenant-r",
+		Profile:               validProfile(),
+		Stage:                 crmlead.StageNegotiation,
+		Temperature:           crmlead.TemperatureHot,
+		SourcePurchaseID:      "p-1",
+		SourcePlatformLeadID:  tidPlatformLead1,
+		AssigneeMembershipID:  tidMemA,
+		AssignedAt:            fixedNow,
+		CreatedAt:             fixedNow,
+		CreatedByMembershipID: "mem-buyer",
 	}
 	l := crmlead.UnmarshalFromDB(snap)
 	if l.Stage() != crmlead.StageNegotiation || l.Temperature() != crmlead.TemperatureHot {

@@ -20,11 +20,11 @@ type Application struct {
 
 // Commands aggregates all Inventory command handlers.
 type Commands struct {
-	CreateProduct     command.CreateProductHandler
-	UpdateProduct     command.UpdateProductHandler
-	DeleteProduct     command.DeleteProductHandler
-	AddBatch          command.AddBatchHandler
-	LogStockMovement  command.LogStockMovementHandler
+	CreateProduct    command.CreateProductHandler
+	UpdateProduct    command.UpdateProductHandler
+	DeleteProduct    command.DeleteProductHandler
+	AddBatch         command.AddBatchHandler
+	LogStockMovement command.LogStockMovementHandler
 }
 
 // Queries aggregates all Inventory query handlers.
