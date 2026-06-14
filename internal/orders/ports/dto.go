@@ -162,6 +162,20 @@ type InvoiceDto struct {
 	IssuedAt        time.Time     `json:"issued_at"`
 }
 
+// MintCreditNoteRequest is the body for POST
+// /api/v1/orders/orders/{orderId}/credit-notes — an operator-driven
+// post-delivery return (BRD §A-014). Amount may be partial (≤ invoice total).
+type MintCreditNoteRequest struct {
+	Reason      string `json:"reason"`
+	AmountPaise int64  `json:"amount_paise"`
+}
+
+// MintCreditNoteResponse returns the new credit-note id + gapless display number.
+type MintCreditNoteResponse struct {
+	CreditNoteID  string `json:"credit_note_id"`
+	NumberDisplay string `json:"number_display"`
+}
+
 // errorResponse is the wire shape for non-success responses.
 type errorResponse struct {
 	Type    string              `json:"type,omitzero"`

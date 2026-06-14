@@ -13,7 +13,9 @@ import (
 	"github.com/leadkart/leadkart-go/internal/orders/app"
 	"github.com/leadkart/leadkart-go/internal/orders/app/command"
 	"github.com/leadkart/leadkart-go/internal/orders/app/query"
+	"github.com/leadkart/leadkart-go/internal/orders/domain/creditnote"
 	"github.com/leadkart/leadkart-go/internal/orders/domain/invoice"
+	"github.com/leadkart/leadkart-go/internal/orders/domain/invoicenumber"
 	"github.com/leadkart/leadkart-go/internal/orders/domain/order"
 	"github.com/leadkart/leadkart-go/internal/orders/domain/payment"
 	"github.com/leadkart/leadkart-go/internal/orders/domain/quotation"
@@ -55,6 +57,7 @@ func tenantFromContext(r *http.Request) (tenant.ID, bool) {
 //	GET  orders/{orderId}/invoice            read invoice (invoices.read)
 //	GET  orders/{orderId}/payments           list payments (orders.read)
 //	POST orders/{orderId}/payments           record payment (payments.record)
+//	POST orders/{orderId}/credit-notes       operator credit note / return (orders.manage)
 func AddRoutes(mux *http.ServeMux, log *slog.Logger, a app.Application, verifier authn.Verifier, stampValidator authn.StampValidator) {
 	if verifier == nil || stampValidator == nil {
 		return
@@ -83,6 +86,52 @@ func AddRoutes(mux *http.ServeMux, log *slog.Logger, a app.Application, verifier
 	mux.Handle("GET /api/v1/orders/orders/{orderId}/invoice", invoiceRead(handleGetInvoice(log, a)))
 	mux.Handle("GET /api/v1/orders/orders/{orderId}/payments", orderRead(handleListPayments(log, a)))
 	mux.Handle("POST /api/v1/orders/orders/{orderId}/payments", paymentRecord(handleRecordPayment(log, a)))
+	mux.Handle("POST /api/v1/orders/orders/{orderId}/credit-notes", orderManage(handleMintCreditNote(log, a)))
+}
+
+// handleMintCreditNote is the operator-driven post-delivery return (BRD §A-014):
+// mint a credit_note (partial amount allowed) against the order's invoice. The
+// pre-delivery cancellation_note is saga-only (the order-cancel compensation
+// subscriber), never issued here.
+func handleMintCreditNote(log *slog.Logger, a app.Application) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		actor, tid, orderID, ok := actorTenantOrder(w, r)
+		if !ok {
+			return
+		}
+		var req MintCreditNoteRequest
+		if !decode(w, r, &req) {
+			return
+		}
+		inv, err := a.Queries.GetInvoiceByOrder.Handle(r.Context(), query.GetInvoiceByOrderQuery{TenantID: tid, OrderID: orderID})
+		switch {
+		case errors.Is(err, query.ErrInvoiceNotFound):
+			writeError(w, http.StatusNotFound, errCodeInvoiceNotFound, "order has no invoice to credit")
+			return
+		case err != nil:
+			internal(w, log, r, "mint credit note: load invoice", err)
+			return
+		}
+		res, err := a.Commands.MintCreditNote.Handle(r.Context(), command.MintCreditNoteCommand{
+			TenantID:           tid,
+			InvoiceID:          invoice.ID(inv.ID),
+			Kind:               invoicenumber.KindCreditNote.String(),
+			Reason:             req.Reason,
+			AmountPaise:        req.AmountPaise,
+			IssuedByMembership: actor,
+		})
+		switch {
+		case errors.Is(err, creditnote.ErrInvalid):
+			writeError(w, http.StatusUnprocessableEntity, errCodeCreditNoteInvalid, err.Error())
+		case err != nil:
+			internal(w, log, r, "mint credit note", err)
+		default:
+			writeJSON(w, http.StatusCreated, MintCreditNoteResponse{
+				CreditNoteID:  res.CreditNoteID.String(),
+				NumberDisplay: res.NumberDisplay,
+			})
+		}
+	})
 }
 
 // ----- Quotation handlers ---------------------------------------------------

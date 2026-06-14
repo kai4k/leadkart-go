@@ -165,6 +165,22 @@ func TestE2E_Orders_QuoteToInvoiceLifecycle(t *testing.T) {
 	if ord.State != "invoiced" || ord.InvoiceID == "" {
 		t.Fatalf("order state=%s invoiceID=%q want invoiced + linked", ord.State, ord.InvoiceID)
 	}
+
+	// Operator credit note (post-delivery return, BRD §A-014): partial amount
+	// against the order's invoice → 201 with a gapless number.
+	resp = f.authedJSON(t, http.MethodPost, orderPath+"/credit-notes", tok, ordersports.MintCreditNoteRequest{
+		Reason: "partial return — 2 strips damaged", AmountPaise: 5000,
+	})
+	if resp.status != http.StatusCreated {
+		t.Fatalf("mint credit note: status %d body %s", resp.status, resp.body)
+	}
+	var cn ordersports.MintCreditNoteResponse
+	if err := json.Unmarshal(resp.body, &cn); err != nil {
+		t.Fatalf("credit note decode: %v", err)
+	}
+	if cn.CreditNoteID == "" || cn.NumberDisplay == "" {
+		t.Fatalf("credit note response = %+v want id + number", cn)
+	}
 }
 
 // TestE2E_Orders_CancelAndGuards covers the unhappy paths the lifecycle test

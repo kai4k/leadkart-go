@@ -2744,6 +2744,34 @@ paths:
         '422': { $ref: '#/components/responses/Unprocessable' }
         '500': { $ref: '#/components/responses/InternalServerError' }
 
+  /api/v1/orders/orders/{orderId}/credit-notes:
+    post:
+      tags: [orders]
+      summary: Mint an operator credit note against the order's invoice
+      description: |
+        Post-delivery return (BRD §A-014). Mints a credit_note (partial amount
+        allowed) against the order's invoice with a gapless number. Requires
+        `orders.orders.manage`. 404 if the order has no invoice.
+      parameters:
+        - { $ref: '#/components/parameters/OrderId' }
+        - { $ref: '#/components/parameters/XCommandId' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MintCreditNoteRequest' }
+      responses:
+        '201':
+          description: Credit note minted
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MintCreditNoteResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+        '500': { $ref: '#/components/responses/InternalServerError' }
+
   /api/v1/crm/leads/{leadId}/lose:
     post:
       tags: [crm]
@@ -4577,6 +4605,20 @@ components:
       required: [payment_id]
       properties:
         payment_id: { type: string, format: uuid }
+
+    MintCreditNoteRequest:
+      type: object
+      required: [reason, amount_paise]
+      properties:
+        reason:       { type: string, minLength: 1 }
+        amount_paise: { type: integer, format: int64, minimum: 1 }
+
+    MintCreditNoteResponse:
+      type: object
+      required: [credit_note_id, number_display]
+      properties:
+        credit_note_id: { type: string, format: uuid }
+        number_display: { type: string }
 
     PaymentDto:
       type: object
