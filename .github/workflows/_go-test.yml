@@ -75,7 +75,7 @@ jobs:
     timeout-minutes: ${{ inputs.timeout-minutes }}
     steps:
       # Caller does checkout-then-composite — composites can't self-bootstrap.
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - uses: ./.github/actions/go-setup
 
