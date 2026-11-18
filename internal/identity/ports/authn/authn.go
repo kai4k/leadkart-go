@@ -25,7 +25,6 @@ package authn
 import (
 	"context"
 	"net/http"
-	"slices"
 	"strings"
 
 	"github.com/leadkart/leadkart-go/internal/common/actclaim"
@@ -212,7 +211,7 @@ func RequirePermission(verifier Verifier, validator StampValidator, permName str
 	auth := RequireFreshStamp(verifier, validator)
 	return func(next http.Handler) http.Handler {
 		return auth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			c, ok := ClaimsFromContext(r.Context())
+			_, ok := ClaimsFromContext(r.Context())
 			if !ok {
 				// Defensive: RequireAuth should have either populated or
 				// short-circuited; this branch is a wiring bug.
@@ -220,11 +219,7 @@ func RequirePermission(verifier Verifier, validator StampValidator, permName str
 					"missing claims")
 				return
 			}
-			if c.IsSuperUser {
-				next.ServeHTTP(w, r)
-				return
-			}
-			if !slices.Contains(c.Permissions, permName) {
+			if !Satisfies(r.Context(), permName) {
 				writeError(w, http.StatusForbidden, errCodeForbidden,
 					"missing permission: "+permName)
 				return
@@ -262,18 +257,14 @@ func RequireAnyPermission(verifier Verifier, validator StampValidator, permNames
 	auth := RequireFreshStamp(verifier, validator)
 	return func(next http.Handler) http.Handler {
 		return auth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			c, ok := ClaimsFromContext(r.Context())
+			_, ok := ClaimsFromContext(r.Context())
 			if !ok {
 				writeError(w, http.StatusUnauthorized, errCodeUnauthenticated,
 					"missing claims")
 				return
 			}
-			if c.IsSuperUser {
-				next.ServeHTTP(w, r)
-				return
-			}
 			for _, p := range permNames {
-				if slices.Contains(c.Permissions, p) {
+				if Satisfies(r.Context(), p) {
 					next.ServeHTTP(w, r)
 					return
 				}
@@ -325,7 +316,7 @@ func RequireTenantContext(verifier Verifier, validator StampValidator, pathVar s
 			// audit trail. Platform bypass requires BOTH the
 			// is_platform flag AND the tenant_slug anchor (defense-
 			// in-depth — see [RequirePlatform] godoc).
-			if c.IsSuperUser || (c.IsPlatform && c.TenantSlug == PlatformTenantSlug) {
+			if c.IsSuperUser || isPlatformOperator(c) {
 				next.ServeHTTP(w, r)
 				return
 			}
