@@ -227,6 +227,9 @@ func handleReplaceRolePermissions(log *slog.Logger, a app.Application) http.Hand
 			writeError(w, http.StatusUnauthorized, ErrCodeInvalidCredentials, "")
 			return
 		}
+		if !requireGrantWithinAuthority(w, r, req.Permissions) {
+			return
+		}
 		err := a.Commands.ReplaceRolePermissions.Handle(r.Context(),
 			command.ReplaceRolePermissionsCommand{
 				TenantID:        tenant.ID(tid),
@@ -257,6 +260,9 @@ func handleGrantRolePermission(log *slog.Logger, a app.Application) http.Handler
 		tid, ok := tenancy.FromContext(r.Context())
 		if !ok || tid == "" {
 			writeError(w, http.StatusUnauthorized, ErrCodeInvalidCredentials, "")
+			return
+		}
+		if !requireGrantWithinAuthority(w, r, []string{req.Permission}) {
 			return
 		}
 		err := a.Commands.GrantRolePermission.Handle(r.Context(),

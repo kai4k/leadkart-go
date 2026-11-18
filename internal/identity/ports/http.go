@@ -16,6 +16,7 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/app"
 	"github.com/leadkart/leadkart-go/internal/identity/app/command"
 	"github.com/leadkart/leadkart-go/internal/identity/app/query"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/permission"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/refreshtoken"
 	"github.com/leadkart/leadkart-go/internal/identity/ports/authn"
@@ -94,19 +95,24 @@ func AddRoutes(mux *http.ServeMux, log *slog.Logger, a app.Application, verifier
 		mux.Handle("GET /api/v1/tenants/by-slug/{slug}",
 			auth(handleGetTenantBySlug(log, a)))
 
-		tenantCtx := authn.RequireTenantContext(verifier, stampValidator, "tenantId")
+		// Permission-gated per ADR 0036/0068: the permission must be
+		// satisfied IN THE PATH TENANT (tenant.admin only in its own).
+		p := permission.IdentityPermissions
+		tenantView := authn.RequireTenantPermission(verifier, stampValidator, "tenantId", p.Tenants.View)
+		tenantUpdate := authn.RequireTenantPermission(verifier, stampValidator, "tenantId", p.Tenants.Update)
+		tenantSettings := authn.RequireTenantPermission(verifier, stampValidator, "tenantId", p.Tenants.UpdateSettings)
 		mux.Handle("GET /api/v1/tenants/{tenantId}",
-			tenantCtx(handleGetTenant(log, a)))
+			tenantView(handleGetTenant(log, a)))
 		mux.Handle("PATCH /api/v1/tenants/{tenantId}/profile",
-			tenantCtx(handleUpdateTenantProfile(log, a)))
+			tenantUpdate(handleUpdateTenantProfile(log, a)))
 		mux.Handle("PATCH /api/v1/tenants/{tenantId}/statutory",
-			tenantCtx(handleUpdateTenantStatutory(log, a)))
+			tenantUpdate(handleUpdateTenantStatutory(log, a)))
 		mux.Handle("PATCH /api/v1/tenants/{tenantId}/admin-contact",
-			tenantCtx(handleUpdateTenantAdminContact(log, a)))
+			tenantUpdate(handleUpdateTenantAdminContact(log, a)))
 		mux.Handle("PATCH /api/v1/tenants/{tenantId}/settings",
-			tenantCtx(handleUpdateTenantSettings(log, a)))
+			tenantSettings(handleUpdateTenantSettings(log, a)))
 		mux.Handle("PATCH /api/v1/tenants/{tenantId}/display-preferences",
-			tenantCtx(handleUpdateTenantDisplayPreferences(log, a)))
+			tenantUpdate(handleUpdateTenantDisplayPreferences(log, a)))
 
 		// Lifecycle — Platform-only per multi-tenancy.md "SuperUser
 		// god-mode" + identity.tenants.{suspend,activate,delete}
@@ -122,29 +128,38 @@ func AddRoutes(mux *http.ServeMux, log *slog.Logger, a app.Application, verifier
 		mux.Handle("POST /api/v1/tenants/{tenantId}/restore",
 			platform(handleRestoreTenant(log, a)))
 
-		// User (Membership) management — all routes operate within the
-		// caller's tenant scope, enforced by the JWT-bridge middleware
-		// + RLS GUC. Cross-tenant access surfaces as 404 per
-		// security.md enumeration-safety rule.
-		mux.Handle("GET /api/v1/users", auth(handleListUsers(log, a)))
-		mux.Handle("GET /api/v1/users/{userId}", auth(handleGetUser(log, a)))
+		// User (Membership) management — permission-gated per ADR 0036/0068.
+		// notSelf forbids self-assigned roles/overrides/status/manager (D3).
+		usersView := authn.RequirePermission(verifier, stampValidator, p.Users.View)
+		usersCreate := authn.RequirePermission(verifier, stampValidator, p.Users.Create)
+		usersUpdate := authn.RequirePermission(verifier, stampValidator, p.Users.Update)
+		usersDeactivate := authn.RequirePermission(verifier, stampValidator, p.Users.Deactivate)
+		usersReactivate := authn.RequirePermission(verifier, stampValidator, p.Users.Reactivate)
+		usersUpdatePermissions := authn.RequirePermission(verifier, stampValidator, p.Users.UpdatePermissions)
+		rolesAssign := authn.RequirePermission(verifier, stampValidator, p.Roles.Assign)
+		rolesRevoke := authn.RequirePermission(verifier, stampValidator, p.Roles.Revoke)
+		userSelfOrView := authn.RequirePermissionOrSelf(verifier, stampValidator, "userId", p.Users.View)
+		userSelfOrUpdate := authn.RequirePermissionOrSelf(verifier, stampValidator, "userId", p.Users.Update)
+		notSelf := authn.DenySelfTarget("userId")
+		mux.Handle("GET /api/v1/users", usersView(handleListUsers(log, a)))
+		mux.Handle("GET /api/v1/users/{userId}", userSelfOrView(handleGetUser(log, a)))
 		mux.Handle("PATCH /api/v1/users/{userId}/profile",
-			auth(handleUpdateUserProfile(log, a)))
+			userSelfOrUpdate(handleUpdateUserProfile(log, a)))
 		mux.Handle("POST /api/v1/users/{userId}/deactivate",
-			auth(handleDeactivateUser(log, a)))
+			usersDeactivate(notSelf(handleDeactivateUser(log, a))))
 		mux.Handle("POST /api/v1/users/{userId}/reactivate",
-			auth(handleReactivateUser(log, a)))
+			usersReactivate(notSelf(handleReactivateUser(log, a))))
 		mux.Handle("POST /api/v1/users/{userId}/roles",
-			auth(handleAssignUserRole(log, a)))
+			rolesAssign(notSelf(handleAssignUserRole(log, a))))
 		mux.Handle("DELETE /api/v1/users/{userId}/roles/{roleId}",
-			auth(handleRevokeUserRole(log, a)))
+			rolesRevoke(notSelf(handleRevokeUserRole(log, a))))
 		mux.Handle("PATCH /api/v1/users/{userId}/permission-overrides",
-			auth(handleReplaceUserPermissionOverrides(log, a)))
+			usersUpdatePermissions(notSelf(handleReplaceUserPermissionOverrides(log, a))))
 		mux.Handle("PUT /api/v1/users/{userId}/manager",
-			auth(handleAssignUserManager(log, a)))
+			usersUpdate(notSelf(handleAssignUserManager(log, a))))
 		mux.Handle("DELETE /api/v1/users/{userId}/manager",
-			auth(handleRemoveUserManager(log, a)))
-		mux.Handle("POST /api/v1/users", auth(handleCreateUser(log, a)))
+			usersUpdate(notSelf(handleRemoveUserManager(log, a))))
+		mux.Handle("POST /api/v1/users", usersCreate(handleCreateUser(log, a)))
 
 		// Anonymise — DPDP §12 / GDPR Art. 17 right-to-erasure cascade.
 		// Cross-tenant blast radius (one Person ⇒ many Memberships)
@@ -153,22 +168,26 @@ func AddRoutes(mux *http.ServeMux, log *slog.Logger, a app.Application, verifier
 		mux.Handle("POST /api/v1/users/{userId}/anonymise",
 			platform(handleAnonymiseUser(log, a)))
 
-		// Role management — tenant-RLS scoped via JWT bridge.
-		mux.Handle("GET /api/v1/roles", auth(handleListRoles(log, a)))
-		mux.Handle("GET /api/v1/roles/{roleId}", auth(handleGetRole(log, a)))
-		mux.Handle("POST /api/v1/roles", auth(handleCreateRole(log, a)))
-		mux.Handle("PATCH /api/v1/roles/{roleId}", auth(handleUpdateRole(log, a)))
+		// Role management — permission-gated per ADR 0036/0068.
+		rolesView := authn.RequirePermission(verifier, stampValidator, p.Roles.View)
+		rolesCreate := authn.RequirePermission(verifier, stampValidator, p.Roles.Create)
+		rolesUpdate := authn.RequirePermission(verifier, stampValidator, p.Roles.Update)
+		rolesDelete := authn.RequirePermission(verifier, stampValidator, p.Roles.Delete)
+		mux.Handle("GET /api/v1/roles", rolesView(handleListRoles(log, a)))
+		mux.Handle("GET /api/v1/roles/{roleId}", rolesView(handleGetRole(log, a)))
+		mux.Handle("POST /api/v1/roles", rolesCreate(handleCreateRole(log, a)))
+		mux.Handle("PATCH /api/v1/roles/{roleId}", rolesUpdate(handleUpdateRole(log, a)))
 		mux.Handle("PUT /api/v1/roles/{roleId}/permissions",
-			auth(handleReplaceRolePermissions(log, a)))
+			rolesUpdate(handleReplaceRolePermissions(log, a)))
 		mux.Handle("POST /api/v1/roles/{roleId}/permissions/grant",
-			auth(handleGrantRolePermission(log, a)))
+			rolesUpdate(handleGrantRolePermission(log, a)))
 		mux.Handle("POST /api/v1/roles/{roleId}/permissions/revoke",
-			auth(handleRevokeRolePermission(log, a)))
+			rolesUpdate(handleRevokeRolePermission(log, a)))
 		// ADR 0054 — hierarchy sub-resource. Null/empty parent_role_id
 		// in the body clears the parent (role becomes a root).
 		mux.Handle("PATCH /api/v1/roles/{roleId}/parent",
-			auth(handleSetRoleParent(log, a)))
-		mux.Handle("DELETE /api/v1/roles/{roleId}", auth(handleDeleteRole(log, a)))
+			rolesUpdate(handleSetRoleParent(log, a)))
+		mux.Handle("DELETE /api/v1/roles/{roleId}", rolesDelete(handleDeleteRole(log, a)))
 
 		// Platform admin — all under /api/v1/platform/... gated on
 		// RequirePlatform per multi-tenancy.md "Platform admin endpoints"
@@ -258,7 +277,7 @@ func AddRoutes(mux *http.ServeMux, log *slog.Logger, a app.Application, verifier
 		// 5, making this route 6 segments deep — structurally distinct
 		// from /by-slug/{slug}.
 		mux.Handle("GET /api/v1/tenants/{tenantId}/audit/events",
-			tenantCtx(handleListTenantAuditEvents(log, a)))
+			tenantView(handleListTenantAuditEvents(log, a)))
 	}
 }
 

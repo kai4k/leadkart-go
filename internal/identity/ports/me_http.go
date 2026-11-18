@@ -72,14 +72,15 @@ func handleGetCapabilities(log *slog.Logger, a app.Application) http.Handler {
 		copy(perms, c.Permissions)
 
 		dto := CapabilitiesDto{
-			PersonID:     c.Subject,
-			MembershipID: c.MembershipID,
-			TenantID:     c.TenantID,
-			TenantSlug:   c.TenantSlug,
-			IsPlatform:   c.IsPlatform,
-			IsSuperUser:  c.IsSuperUser,
-			Permissions:  perms,
-			Roles:        []CapabilityRoleDto{}, // non-nil; populated below
+			PersonID:             c.Subject,
+			MembershipID:         c.MembershipID,
+			TenantID:             c.TenantID,
+			TenantSlug:           c.TenantSlug,
+			IsPlatform:           c.IsPlatform,
+			IsSuperUser:          c.IsSuperUser,
+			Permissions:          perms,
+			EffectivePermissions: authn.EffectivePermissions(c),
+			Roles:                []CapabilityRoleDto{}, // non-nil; populated below
 		}
 
 		// Enrichment via the cached query handler — populates email +

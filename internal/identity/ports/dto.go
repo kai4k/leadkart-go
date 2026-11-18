@@ -183,17 +183,20 @@ type SearchTenantHit struct {
 // each role carries is_super_admin so the frontend renders the
 // SuperAdmin chip without re-parsing permissions.
 type CapabilitiesDto struct {
-	PersonID     string              `json:"person_id"`
-	MembershipID string              `json:"membership_id"`
-	TenantID     string              `json:"tenant_id"`
-	TenantSlug   string              `json:"tenant_slug"`
-	Email        string              `json:"email,omitzero"`
-	FirstName    string              `json:"first_name,omitzero"`
-	LastName     string              `json:"last_name,omitzero"`
-	IsPlatform   bool                `json:"is_platform"`
-	IsSuperUser  bool                `json:"is_super_user"`
-	Permissions  []string            `json:"permissions"`
-	Roles        []CapabilityRoleDto `json:"roles"`
+	PersonID     string   `json:"person_id"`
+	MembershipID string   `json:"membership_id"`
+	TenantID     string   `json:"tenant_id"`
+	TenantSlug   string   `json:"tenant_slug"`
+	Email        string   `json:"email,omitzero"`
+	FirstName    string   `json:"first_name,omitzero"`
+	LastName     string   `json:"last_name,omitzero"`
+	IsPlatform   bool     `json:"is_platform"`
+	IsSuperUser  bool     `json:"is_super_user"`
+	Permissions  []string `json:"permissions"`
+	// EffectivePermissions: every catalogue permission the caller satisfies
+	// in their own tenant (tenant.admin expanded) — UI gating reads this.
+	EffectivePermissions []string            `json:"effective_permissions"`
+	Roles                []CapabilityRoleDto `json:"roles"`
 }
 
 // CapabilityRoleDto is one role inside the capabilities bundle: display

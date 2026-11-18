@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
-	"slices"
 	"strconv"
 	"strings"
 
@@ -137,7 +136,7 @@ func handleListLeads(log *slog.Logger, a app.Application) http.Handler {
 		// a SelfFilter-narrowed view. Platform / SuperUser short-circuit.
 		selfFilter := ""
 		if !c.IsSuperUser && !c.IsPlatform &&
-			!slices.Contains(c.Permissions, permission.IdentityPermissions.Crm.Leads.ReadAll) {
+			!authn.Satisfies(r.Context(), permission.IdentityPermissions.Crm.Leads.ReadAll) {
 			selfFilter = c.MembershipID
 		}
 

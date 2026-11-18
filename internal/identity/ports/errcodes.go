@@ -153,6 +153,11 @@ const (
 	// 400 surface.
 	ErrCodeInvalidManagerID = "invalid_manager_id"
 
+	// ErrCodeGrantExceedsAuthority — caller tried to confer a permission
+	// (directly, via role permission edit, or via role assignment) they do
+	// not hold (ADR 0068 D4). 403.
+	ErrCodeGrantExceedsAuthority = "grant_exceeds_authority"
+
 	// ErrCodePermissionUnknown — replace-permission-overrides request
 	// carried a permission name not in [permission.IdentityPermissions].
 	// 422 surface; offending name in message body.

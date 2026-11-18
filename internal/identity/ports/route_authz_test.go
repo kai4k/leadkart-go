@@ -1,0 +1,190 @@
+package ports_test
+
+import (
+	"encoding/json"
+	"errors"
+	"io"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
+	"slices"
+	"strings"
+	"testing"
+
+	"github.com/alicebob/miniredis/v2"
+	"github.com/redis/go-redis/v9"
+
+	"github.com/leadkart/leadkart-go/internal/common/cache"
+	"github.com/leadkart/leadkart-go/internal/common/httpmw"
+	"github.com/leadkart/leadkart-go/internal/identity/app"
+	"github.com/leadkart/leadkart-go/internal/identity/app/jwt"
+	"github.com/leadkart/leadkart-go/internal/identity/app/query"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/membership/membershiptest"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/permission"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/person/persontest"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/role/roletest"
+	"github.com/leadkart/leadkart-go/internal/identity/ports"
+)
+
+type tokenVerifier map[string]*jwt.Claims
+
+func (v tokenVerifier) Verify(tok string) (*jwt.Claims, error) {
+	if c, ok := v[tok]; ok {
+		return c, nil
+	}
+	return nil, errors.New("unknown token")
+}
+
+const (
+	azTenant = "0190a000-0000-7000-8000-000000000001"
+	azSelf   = "0190a000-0000-7000-8000-0000000000aa"
+	azOther  = "0190a000-0000-7000-8000-0000000000bb"
+	azRole   = "0190a000-0000-7000-8000-0000000000cc"
+)
+
+func azClaims(perms ...string) *jwt.Claims {
+	c := &jwt.Claims{TenantID: azTenant, TenantSlug: "acme", MembershipID: azSelf, SecurityStamp: "stamp", Permissions: perms}
+	c.Subject = "0190a000-0000-7000-8000-0000000000ff"
+	return c
+}
+
+func azServe(t *testing.T, c *jwt.Claims, method, path, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	return azServeApp(t, app.Application{}, c, method, path, body)
+}
+
+func azServeApp(t *testing.T, a app.Application, c *jwt.Claims, method, path, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	mux := http.NewServeMux()
+	ports.AddRoutes(mux, logger, a, tokenVerifier{"tok": c}, stubStampValidator{})
+	req := httptest.NewRequestWithContext(t.Context(), method, path, strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer tok")
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	httpmw.Recover(logger)(mux).ServeHTTP(rec, req)
+	return rec
+}
+
+func gatePassed(code int) bool {
+	return code != http.StatusUnauthorized && code != http.StatusForbidden
+}
+
+func TestRouteAuthz_IdentityRoutesRequirePermissions(t *testing.T) {
+	t.Parallel()
+	p := permission.IdentityPermissions
+	u, r, tn := "/api/v1/users/", "/api/v1/roles/", "/api/v1/tenants/"+azTenant
+	routes := []struct{ method, path, perm string }{
+		{"GET", "/api/v1/users", p.Users.View},
+		{"GET", u + azOther, p.Users.View},
+		{"PATCH", u + azOther + "/profile", p.Users.Update},
+		{"POST", u + azOther + "/deactivate", p.Users.Deactivate},
+		{"POST", u + azOther + "/reactivate", p.Users.Reactivate},
+		{"POST", u + azOther + "/roles", p.Roles.Assign},
+		{"DELETE", u + azOther + "/roles/" + azRole, p.Roles.Revoke},
+		{"PATCH", u + azOther + "/permission-overrides", p.Users.UpdatePermissions},
+		{"PUT", u + azOther + "/manager", p.Users.Update},
+		{"DELETE", u + azOther + "/manager", p.Users.Update},
+		{"POST", "/api/v1/users", p.Users.Create},
+		{"GET", "/api/v1/roles", p.Roles.View},
+		{"GET", r + azRole, p.Roles.View},
+		{"POST", "/api/v1/roles", p.Roles.Create},
+		{"PATCH", r + azRole, p.Roles.Update},
+		{"PUT", r + azRole + "/permissions", p.Roles.Update},
+		{"POST", r + azRole + "/permissions/grant", p.Roles.Update},
+		{"POST", r + azRole + "/permissions/revoke", p.Roles.Update},
+		{"PATCH", r + azRole + "/parent", p.Roles.Update},
+		{"DELETE", r + azRole, p.Roles.Delete},
+		{"GET", tn, p.Tenants.View},
+		{"PATCH", tn + "/profile", p.Tenants.Update},
+		{"PATCH", tn + "/statutory", p.Tenants.Update},
+		{"PATCH", tn + "/admin-contact", p.Tenants.Update},
+		{"PATCH", tn + "/settings", p.Tenants.UpdateSettings},
+		{"PATCH", tn + "/display-preferences", p.Tenants.Update},
+		{"GET", tn + "/audit/events", p.Tenants.View},
+	}
+	for _, rt := range routes {
+		t.Run(rt.method+" "+rt.path, func(t *testing.T) {
+			t.Parallel()
+			if rec := azServe(t, azClaims(), rt.method, rt.path, "{}"); rec.Code != http.StatusForbidden {
+				t.Errorf("member without %s: status %d, want 403", rt.perm, rec.Code)
+			}
+			if rec := azServe(t, azClaims(rt.perm), rt.method, rt.path, "{}"); !gatePassed(rec.Code) {
+				t.Errorf("holder of %s: status %d, want gate pass (body %s)", rt.perm, rec.Code, rec.Body.String())
+			}
+			if rec := azServe(t, azClaims(p.Meta.TenantAdmin), rt.method, rt.path, "{}"); !gatePassed(rec.Code) {
+				t.Errorf("tenant.admin: status %d, want gate pass (body %s)", rec.Code, rec.Body.String())
+			}
+		})
+	}
+}
+
+func TestRouteAuthz_SelfServiceAndSelfTarget(t *testing.T) {
+	t.Parallel()
+	p := permission.IdentityPermissions
+	u := "/api/v1/users/" + azSelf
+	for _, rt := range []struct{ method, path string }{{"GET", u}, {"PATCH", u + "/profile"}} {
+		if rec := azServe(t, azClaims(), rt.method, rt.path, "{}"); !gatePassed(rec.Code) {
+			t.Errorf("self %s %s: status %d, want gate pass", rt.method, rt.path, rec.Code)
+		}
+	}
+	for _, rt := range []struct{ method, path string }{
+		{"POST", u + "/deactivate"}, {"POST", u + "/reactivate"}, {"POST", u + "/roles"},
+		{"DELETE", u + "/roles/" + azRole}, {"PATCH", u + "/permission-overrides"},
+		{"PUT", u + "/manager"}, {"DELETE", u + "/manager"},
+	} {
+		rec := azServe(t, azClaims(p.Meta.TenantAdmin), rt.method, rt.path, "{}")
+		if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "self_modification_forbidden") {
+			t.Errorf("self-target %s %s: status %d body %s, want 403 self_modification_forbidden", rt.method, rt.path, rec.Code, rec.Body.String())
+		}
+	}
+}
+
+func TestRouteAuthz_GrantBeyondAuthorityRejected(t *testing.T) {
+	t.Parallel()
+	p := permission.IdentityPermissions
+	rec := azServe(t, azClaims(p.Users.UpdatePermissions), "PATCH", "/api/v1/users/"+azOther+"/permission-overrides",
+		`{"granted":["tenant.admin"],"revoked":[]}`)
+	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "grant_exceeds_authority") {
+		t.Fatalf("override escalation: %d %s", rec.Code, rec.Body.String())
+	}
+	rec = azServe(t, azClaims(p.Roles.Update), "POST", "/api/v1/roles/"+azRole+"/permissions/grant", `{"permission":"identity.users.view"}`)
+	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "grant_exceeds_authority") {
+		t.Fatalf("role grant escalation: %d %s", rec.Code, rec.Body.String())
+	}
+	rec = azServe(t, azClaims(p.Roles.Update), "PUT", "/api/v1/roles/"+azRole+"/permissions", `{"permissions":["identity.users.view"]}`)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("role replace escalation: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestCapabilities_ExposesEffectivePermissions(t *testing.T) {
+	t.Parallel()
+	// Empty fakes → enrichment returns membership-not-found → handler takes
+	// the documented degraded (JWT-only) path and still answers 200.
+	store := miniredis.RunT(t)
+	cli := redis.NewClient(&redis.Options{Addr: store.Addr()})
+	t.Cleanup(func() { _ = cli.Close() })
+	hc, err := cache.New(cache.Config{L1MaxItems: 100, L2: cli, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+	if err != nil {
+		t.Fatalf("cache.New: %v", err)
+	}
+	t.Cleanup(hc.Close)
+	mems := membershiptest.NewFakeRepository()
+	inner := query.NewGetCapabilitiesHandler(persontest.NewFakeRepository(), mems, roletest.NewFakeRepository())
+	var a app.Application
+	a.Queries.GetCapabilities = query.NewCachedGetCapabilitiesHandler(inner, hc, mems)
+	rec := azServeApp(t, a, azClaims(permission.IdentityPermissions.Meta.TenantAdmin), "GET", "/api/v1/auth/me/capabilities", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("capabilities: %d %s", rec.Code, rec.Body.String())
+	}
+	var dto struct {
+		EffectivePermissions []string `json:"effective_permissions"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &dto); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !slices.Contains(dto.EffectivePermissions, permission.IdentityPermissions.Users.View) {
+		t.Errorf("effective_permissions missing identity.users.view: %v", dto.EffectivePermissions)
+	}
+}

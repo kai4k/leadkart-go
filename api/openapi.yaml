@@ -36,6 +36,12 @@ info:
     `{ items, has_more, next_cursor }`; pass `cursor=<opaque>` to fetch
     next page. No total counts.
 
+    **Authorization error codes:** `403` responses carry `forbidden` (missing
+    permission or wrong tenant), `self_modification_forbidden` (caller targeted
+    their own roles, permission overrides, status or manager) and
+    `grant_exceeds_authority` (caller tried to confer a permission they do not
+    hold). ADR 0036 / ADR 0068.
+
     **Enumeration safety:** guessable-key lookups (`/by-slug/`, `?email=`)
     return 404 indistinguishably whether the resource doesn't exist OR
     the caller lacks access. Per ADR 0044.
@@ -384,6 +390,9 @@ paths:
     get:
       tags: [tenants]
       summary: Get tenant by UUID
+      description: |
+        Requires `identity.tenants.view` (satisfied by `tenant.admin` in the caller's own tenant, or by `platform.*` equivalents for platform operators; ADR 0068).
+      x-required-permissions: [identity.tenants.view]
       parameters: [{ $ref: '#/components/parameters/TenantId' }]
       responses:
         '200':
@@ -391,12 +400,16 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/TenantDto' }
+        '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
 
   /api/v1/tenants/{tenantId}/profile:
     patch:
       tags: [tenants]
       summary: Update tenant legal + display name
+      description: |
+        Requires `identity.tenants.update` (satisfied by `tenant.admin` in the caller's own tenant, or by `platform.*` equivalents for platform operators; ADR 0068).
+      x-required-permissions: [identity.tenants.update]
       parameters:
         - $ref: '#/components/parameters/XCommandId'
         - { $ref: '#/components/parameters/TenantId' }
@@ -407,6 +420,7 @@ paths:
             schema: { $ref: '#/components/schemas/UpdateTenantProfileRequest' }
       responses:
         '204': { description: Profile updated }
+        '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '422': { $ref: '#/components/responses/Unprocessable' }
 
@@ -418,6 +432,8 @@ paths:
         Empty strings clear the corresponding declaration; the aggregate
         accepts a zero Statutory VO for tenants that haven't yet
         onboarded their compliance IDs.
+        Requires `identity.tenants.update` (satisfied by `tenant.admin` in the caller's own tenant, or by `platform.*` equivalents for platform operators; ADR 0068).
+      x-required-permissions: [identity.tenants.update]
       parameters:
         - $ref: '#/components/parameters/XCommandId'
         - { $ref: '#/components/parameters/TenantId' }
@@ -428,6 +444,7 @@ paths:
             schema: { $ref: '#/components/schemas/UpdateTenantStatutoryRequest' }
       responses:
         '204': { description: Statutory updated }
+        '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '422': { $ref: '#/components/responses/Unprocessable' }
 
@@ -435,6 +452,9 @@ paths:
     patch:
       tags: [tenants]
       summary: Update tenant admin phone + postal address
+      description: |
+        Requires `identity.tenants.update` (satisfied by `tenant.admin` in the caller's own tenant, or by `platform.*` equivalents for platform operators; ADR 0068).
+      x-required-permissions: [identity.tenants.update]
       parameters:
         - $ref: '#/components/parameters/XCommandId'
         - { $ref: '#/components/parameters/TenantId' }
@@ -445,6 +465,7 @@ paths:
             schema: { $ref: '#/components/schemas/UpdateTenantAdminContactRequest' }
       responses:
         '204': { description: Admin contact updated }
+        '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '422': { $ref: '#/components/responses/Unprocessable' }
 
@@ -452,6 +473,9 @@ paths:
     patch:
       tags: [tenants]
       summary: Update tenant password policy
+      description: |
+        Requires `identity.tenants.update_settings` (satisfied by `tenant.admin` in the caller's own tenant, or by `platform.*` equivalents for platform operators; ADR 0068).
+      x-required-permissions: [identity.tenants.update_settings]
       parameters:
         - $ref: '#/components/parameters/XCommandId'
         - { $ref: '#/components/parameters/TenantId' }
@@ -462,6 +486,7 @@ paths:
             schema: { $ref: '#/components/schemas/UpdateTenantSettingsRequest' }
       responses:
         '204': { description: Settings updated }
+        '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '422': { $ref: '#/components/responses/Unprocessable' }
 
@@ -469,6 +494,9 @@ paths:
     patch:
       tags: [tenants]
       summary: Update tenant locale / time zone / date format / currency
+      description: |
+        Requires `identity.tenants.update` (satisfied by `tenant.admin` in the caller's own tenant, or by `platform.*` equivalents for platform operators; ADR 0068).
+      x-required-permissions: [identity.tenants.update]
       parameters:
         - $ref: '#/components/parameters/XCommandId'
         - { $ref: '#/components/parameters/TenantId' }
@@ -479,6 +507,7 @@ paths:
             schema: { $ref: '#/components/schemas/UpdateTenantDisplayPreferencesRequest' }
       responses:
         '204': { description: Display preferences updated }
+        '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '422': { $ref: '#/components/responses/Unprocessable' }
 
@@ -579,6 +608,9 @@ paths:
     get:
       tags: [audit]
       summary: Tenant-scoped audit-event feed (keyset-paginated)
+      description: |
+        Requires `identity.tenants.view` (satisfied by `tenant.admin` in the caller's own tenant, or by `platform.*` equivalents for platform operators; ADR 0068).
+      x-required-permissions: [identity.tenants.view]
       parameters:
         - $ref: '#/components/parameters/TenantId'
         - $ref: '#/components/parameters/Cursor'
@@ -589,12 +621,16 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ListAuditEventsResponse' }
+        '403': { $ref: '#/components/responses/Forbidden' }
 
   # ===== USERS ==========================================================
   /api/v1/users:
     get:
       tags: [users]
       summary: List active members of the caller's tenant (cursor-paginated)
+      description: |
+        Requires `identity.users.view` (satisfied by `tenant.admin` in the caller's own tenant, or by `platform.*` equivalents for platform operators; ADR 0068).
+      x-required-permissions: [identity.users.view]
       parameters:
         - $ref: '#/components/parameters/Cursor'
         - $ref: '#/components/parameters/PageSize'
@@ -604,11 +640,15 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ListUsersResponse' }
+        '403': { $ref: '#/components/responses/Forbidden' }
     post:
       parameters:
         - $ref: '#/components/parameters/XCommandId'
       tags: [users]
       summary: Create a user (find-or-create-by-email, per Auth0/Entra ID canon)
+      description: |
+        Requires `identity.users.create` (satisfied by `tenant.admin` in the caller's own tenant, or by `platform.*` equivalents for platform operators; ADR 0068).
+      x-required-permissions: [identity.users.create]
       requestBody:
         required: true
         content:
@@ -620,11 +660,15 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/CreateUserResponse' }
+        '403': { $ref: '#/components/responses/Forbidden' }
 
   /api/v1/users/{userId}:
     get:
       tags: [users]
       summary: Get one user (membership) by ID
+      description: |
+        Requires `identity.users.view` or self (path id equals the caller's membership) (satisfied by `tenant.admin` in the caller's own tenant, or by `platform.*` equivalents for platform operators; ADR 0068).
+      x-required-permissions: [identity.users.view, self]
       parameters: [{ $ref: '#/components/parameters/UserId' }]
       responses:
         '200':
@@ -632,12 +676,16 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/UserDto' }
+        '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
 
   /api/v1/users/{userId}/profile:
     patch:
       tags: [users]
       summary: Update user designation + department + status message
+      description: |
+        Requires `identity.users.update` or self (path id equals the caller's membership) (satisfied by `tenant.admin` in the caller's own tenant, or by `platform.*` equivalents for platform operators; ADR 0068).
+      x-required-permissions: [identity.users.update, self]
       parameters:
         - $ref: '#/components/parameters/XCommandId'
         - { $ref: '#/components/parameters/UserId' }
@@ -648,12 +696,16 @@ paths:
             schema: { $ref: '#/components/schemas/UpdateUserProfileRequest' }
       responses:
         '204': { description: Profile updated }
+        '403': { $ref: '#/components/responses/Forbidden' }
         '422': { $ref: '#/components/responses/Unprocessable' }
 
   /api/v1/users/{userId}/deactivate:
     post:
       tags: [users]
       summary: Deactivate a user (reason required)
+      description: |
+        Requires `identity.users.deactivate` (satisfied by `tenant.admin` in the caller's own tenant, or by `platform.*` equivalents for platform operators; ADR 0068). Self-target forbidden (`self_modification_forbidden`).
+      x-required-permissions: [identity.users.deactivate]
       parameters:
         - $ref: '#/components/parameters/XCommandId'
         - { $ref: '#/components/parameters/UserId' }
@@ -664,21 +716,29 @@ paths:
             schema: { $ref: '#/components/schemas/DeactivateUserRequest' }
       responses:
         '204': { description: Deactivated }
+        '403': { $ref: '#/components/responses/Forbidden' }
 
   /api/v1/users/{userId}/reactivate:
     post:
       tags: [users]
       summary: Reactivate a deactivated user
+      description: |
+        Requires `identity.users.reactivate` (satisfied by `tenant.admin` in the caller's own tenant, or by `platform.*` equivalents for platform operators; ADR 0068). Self-target forbidden (`self_modification_forbidden`).
+      x-required-permissions: [identity.users.reactivate]
       parameters:
         - $ref: '#/components/parameters/XCommandId'
         - { $ref: '#/components/parameters/UserId' }
       responses:
         '204': { description: Reactivated }
+        '403': { $ref: '#/components/responses/Forbidden' }
 
   /api/v1/users/{userId}/roles:
     post:
       tags: [users]
       summary: Assign a role to a user
+      description: |
+        Requires `identity.roles.assign` (satisfied by `tenant.admin` in the caller's own tenant, or by `platform.*` equivalents for platform operators; ADR 0068). Self-target forbidden (`self_modification_forbidden`). Conferring a permission the caller does not hold is rejected with `grant_exceeds_authority`. Only a super user may assign a super-admin role.
+      x-required-permissions: [identity.roles.assign]
       parameters:
         - $ref: '#/components/parameters/XCommandId'
         - { $ref: '#/components/parameters/UserId' }
@@ -689,16 +749,21 @@ paths:
             schema: { $ref: '#/components/schemas/AssignUserRoleRequest' }
       responses:
         '204': { description: Role assigned }
+        '403': { $ref: '#/components/responses/Forbidden' }
 
   /api/v1/users/{userId}/roles/{roleId}:
     delete:
       tags: [users]
       summary: Revoke a role from a user
+      description: |
+        Requires `identity.roles.revoke` (satisfied by `tenant.admin` in the caller's own tenant, or by `platform.*` equivalents for platform operators; ADR 0068). Self-target forbidden (`self_modification_forbidden`).
+      x-required-permissions: [identity.roles.revoke]
       parameters:
         - $ref: '#/components/parameters/UserId'
         - $ref: '#/components/parameters/RoleId'
       responses:
         '204': { description: Role revoked }
+        '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '422': { $ref: '#/components/responses/Unprocessable' }
 
@@ -710,6 +775,8 @@ paths:
         Empty arrays clear the corresponding overlay. Permission names
         MUST match the closed `permission.IdentityPermissions` catalogue;
         unknown names surface as 422 (`permission_unknown`).
+        Requires `identity.users.update_permissions` (satisfied by `tenant.admin` in the caller's own tenant, or by `platform.*` equivalents for platform operators; ADR 0068). Self-target forbidden (`self_modification_forbidden`). Conferring a permission the caller does not hold is rejected with `grant_exceeds_authority`.
+      x-required-permissions: [identity.users.update_permissions]
       parameters:
         - $ref: '#/components/parameters/XCommandId'
         - { $ref: '#/components/parameters/UserId' }
@@ -720,6 +787,7 @@ paths:
             schema: { $ref: '#/components/schemas/ReplaceUserPermissionOverridesRequest' }
       responses:
         '204': { description: Overrides replaced }
+        '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '422': { $ref: '#/components/responses/Unprocessable' }
 
@@ -730,6 +798,8 @@ paths:
       description: |
         ManagerID MUST be a Membership in the same tenant — composite FK
         at the schema layer enforces this; cross-tenant ID surfaces as 422.
+        Requires `identity.users.update` (satisfied by `tenant.admin` in the caller's own tenant, or by `platform.*` equivalents for platform operators; ADR 0068). Self-target forbidden (`self_modification_forbidden`).
+      x-required-permissions: [identity.users.update]
       parameters:
         - $ref: '#/components/parameters/XCommandId'
         - { $ref: '#/components/parameters/UserId' }
@@ -740,14 +810,19 @@ paths:
             schema: { $ref: '#/components/schemas/AssignUserManagerRequest' }
       responses:
         '204': { description: Manager assigned }
+        '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '422': { $ref: '#/components/responses/Unprocessable' }
     delete:
       tags: [users]
       summary: Remove user's reporting manager
+      description: |
+        Requires `identity.users.update` (satisfied by `tenant.admin` in the caller's own tenant, or by `platform.*` equivalents for platform operators; ADR 0068). Self-target forbidden (`self_modification_forbidden`).
+      x-required-permissions: [identity.users.update]
       parameters: [{ $ref: '#/components/parameters/UserId' }]
       responses:
         '204': { description: Manager removed }
+        '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
 
   /api/v1/users/{userId}/anonymise:
@@ -771,17 +846,24 @@ paths:
     get:
       tags: [roles]
       summary: List roles in the caller's tenant
+      description: |
+        Requires `identity.roles.view` (satisfied by `tenant.admin` in the caller's own tenant, or by `platform.*` equivalents for platform operators; ADR 0068).
+      x-required-permissions: [identity.roles.view]
       responses:
         '200':
           description: Roles
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ListRolesResponse' }
+        '403': { $ref: '#/components/responses/Forbidden' }
     post:
       parameters:
         - $ref: '#/components/parameters/XCommandId'
       tags: [roles]
       summary: Create a custom role
+      description: |
+        Requires `identity.roles.create` (satisfied by `tenant.admin` in the caller's own tenant, or by `platform.*` equivalents for platform operators; ADR 0068).
+      x-required-permissions: [identity.roles.create]
       requestBody:
         required: true
         content:
@@ -793,11 +875,15 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/CreateRoleResponse' }
+        '403': { $ref: '#/components/responses/Forbidden' }
 
   /api/v1/roles/{roleId}:
     get:
       tags: [roles]
       summary: Get role by ID
+      description: |
+        Requires `identity.roles.view` (satisfied by `tenant.admin` in the caller's own tenant, or by `platform.*` equivalents for platform operators; ADR 0068).
+      x-required-permissions: [identity.roles.view]
       parameters: [{ $ref: '#/components/parameters/RoleId' }]
       responses:
         '200':
@@ -805,6 +891,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/RoleDto' }
+        '403': { $ref: '#/components/responses/Forbidden' }
     patch:
       tags: [roles]
       summary: Rename a role and/or change its hierarchy level
@@ -812,6 +899,8 @@ paths:
         Both fields optional. Empty `name` skips rename. Omitting
         `hierarchy_level` (or sending `null`) skips re-level — using a
         pointer field instead of a -1 sentinel keeps the wire shape clean.
+        Requires `identity.roles.update` (satisfied by `tenant.admin` in the caller's own tenant, or by `platform.*` equivalents for platform operators; ADR 0068).
+      x-required-permissions: [identity.roles.update]
       parameters:
         - $ref: '#/components/parameters/XCommandId'
         - { $ref: '#/components/parameters/RoleId' }
@@ -822,6 +911,7 @@ paths:
             schema: { $ref: '#/components/schemas/UpdateRoleRequest' }
       responses:
         '204': { description: Role updated }
+        '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409':
           description: Role name already taken in this tenant
@@ -832,9 +922,13 @@ paths:
     delete:
       tags: [roles]
       summary: Soft-delete a role
+      description: |
+        Requires `identity.roles.delete` (satisfied by `tenant.admin` in the caller's own tenant, or by `platform.*` equivalents for platform operators; ADR 0068).
+      x-required-permissions: [identity.roles.delete]
       parameters: [{ $ref: '#/components/parameters/RoleId' }]
       responses:
         '204': { description: Role deleted }
+        '403': { $ref: '#/components/responses/Forbidden' }
 
   /api/v1/roles/{roleId}/parent:
     patch:
@@ -859,6 +953,8 @@ paths:
 
         Optional `reason` (10-1024 chars) is recorded onto the new
         edge OR the cleared edge for audit.
+        Requires `identity.roles.update` (satisfied by `tenant.admin` in the caller's own tenant, or by `platform.*` equivalents for platform operators; ADR 0068).
+      x-required-permissions: [identity.roles.update]
       parameters:
         - $ref: '#/components/parameters/XCommandId'
         - { $ref: '#/components/parameters/RoleId' }
@@ -870,6 +966,7 @@ paths:
       responses:
         '204': { description: Parent set / cleared }
         '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409':
           description: |
@@ -890,6 +987,8 @@ paths:
         Permission names MUST match the closed
         `permission.IdentityPermissions` catalogue; unknown names surface
         as 422 (`permission_unknown`).
+        Requires `identity.roles.update` (satisfied by `tenant.admin` in the caller's own tenant, or by `platform.*` equivalents for platform operators; ADR 0068). Conferring a permission the caller does not hold is rejected with `grant_exceeds_authority`.
+      x-required-permissions: [identity.roles.update]
       parameters:
         - $ref: '#/components/parameters/XCommandId'
         - { $ref: '#/components/parameters/RoleId' }
@@ -900,6 +999,7 @@ paths:
             schema: { $ref: '#/components/schemas/ReplaceRolePermissionsRequest' }
       responses:
         '204': { description: Permissions replaced }
+        '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '422': { $ref: '#/components/responses/Unprocessable' }
 
@@ -907,6 +1007,9 @@ paths:
     post:
       tags: [roles]
       summary: Grant a single permission to the role
+      description: |
+        Requires `identity.roles.update` (satisfied by `tenant.admin` in the caller's own tenant, or by `platform.*` equivalents for platform operators; ADR 0068). Conferring a permission the caller does not hold is rejected with `grant_exceeds_authority`.
+      x-required-permissions: [identity.roles.update]
       parameters:
         - $ref: '#/components/parameters/XCommandId'
         - { $ref: '#/components/parameters/RoleId' }
@@ -917,6 +1020,7 @@ paths:
             schema: { $ref: '#/components/schemas/RolePermissionRequest' }
       responses:
         '204': { description: Permission granted }
+        '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '422': { $ref: '#/components/responses/Unprocessable' }
 
@@ -924,6 +1028,9 @@ paths:
     post:
       tags: [roles]
       summary: Revoke a single permission from the role
+      description: |
+        Requires `identity.roles.update` (satisfied by `tenant.admin` in the caller's own tenant, or by `platform.*` equivalents for platform operators; ADR 0068).
+      x-required-permissions: [identity.roles.update]
       parameters:
         - $ref: '#/components/parameters/XCommandId'
         - { $ref: '#/components/parameters/RoleId' }
@@ -934,6 +1041,7 @@ paths:
             schema: { $ref: '#/components/schemas/RolePermissionRequest' }
       responses:
         '204': { description: Permission revoked }
+        '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '422': { $ref: '#/components/responses/Unprocessable' }
 
@@ -3269,7 +3377,7 @@ components:
     # ===== Capabilities ================================================
     CapabilitiesDto:
       type: object
-      required: [person_id, membership_id, tenant_id, tenant_slug, is_platform, is_super_user, permissions, roles]
+      required: [person_id, membership_id, tenant_id, tenant_slug, is_platform, is_super_user, permissions, effective_permissions, roles]
       properties:
         person_id:     { type: string, format: uuid }
         membership_id: { type: string, format: uuid }
@@ -3283,6 +3391,10 @@ components:
         permissions:
           type: array
           items: { type: string }
+        effective_permissions:
+          type: array
+          items: { type: string }
+          description: Every catalogue permission the caller satisfies in their own tenant (tenant.admin expanded). Use this, not permissions[], for UI gating.
         roles:
           type: array
           items: { $ref: '#/components/schemas/CapabilityRoleDto' }

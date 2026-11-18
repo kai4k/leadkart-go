@@ -5,7 +5,6 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
-	"slices"
 	"strconv"
 	"strings"
 
@@ -131,7 +130,7 @@ func handleListReminders(log *slog.Logger, a app.Application) http.Handler {
 
 		selfFilter := ""
 		if !c.IsSuperUser && !c.IsPlatform &&
-			!slices.Contains(c.Permissions, permission.IdentityPermissions.Crm.Leads.ReadAll) {
+			!authn.Satisfies(r.Context(), permission.IdentityPermissions.Crm.Leads.ReadAll) {
 			selfFilter = c.MembershipID
 		}
 		// Mirror of the leads-list privilege-probe guard (reviewer H8):

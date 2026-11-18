@@ -200,6 +200,27 @@ func handleAssignUserRole(log *slog.Logger, a app.Application) http.Handler {
 			writeError(w, http.StatusBadRequest, ErrCodeInvalidRoleID, "role_id must be a UUID")
 			return
 		}
+		// D4 (ADR 0068): assigning a role confers its permission set — the
+		// caller must themselves satisfy it; super-admin roles are super-user only.
+		view, rerr := a.Queries.GetRole.Handle(r.Context(), query.GetRoleQuery{TenantID: tenant.ID(tid), RoleID: role.ID(req.RoleID)})
+		switch {
+		case errors.Is(rerr, role.ErrNotFound):
+			writeError(w, http.StatusNotFound, ErrCodeRoleNotFound, "")
+			return
+		case rerr != nil:
+			log.ErrorContext(r.Context(), "assign user role: load role failed", "err", rerr)
+			writeError(w, http.StatusInternalServerError, ErrCodeInternalError, "")
+			return
+		}
+		if view.IsSuperAdmin {
+			if c, ok := authn.ClaimsFromContext(r.Context()); !ok || !c.IsSuperUser {
+				writeError(w, http.StatusForbidden, ErrCodeGrantExceedsAuthority, "only a super user can assign a super-admin role")
+				return
+			}
+		}
+		if !requireGrantWithinAuthority(w, r, view.Permissions) {
+			return
+		}
 		err := a.Commands.AssignUserRole.Handle(r.Context(), command.AssignUserRoleCommand{
 			TenantID:     tenant.ID(tid),
 			MembershipID: mid,
@@ -253,6 +274,9 @@ func handleReplaceUserPermissionOverrides(log *slog.Logger, a app.Application) h
 		var req ReplaceUserPermissionOverridesRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeError(w, http.StatusBadRequest, ErrCodeInvalidBody, "request body is not valid JSON")
+			return
+		}
+		if !requireGrantWithinAuthority(w, r, req.Granted) {
 			return
 		}
 		err := a.Commands.ReplaceUserPermissionOverrides.Handle(r.Context(),
