@@ -16,12 +16,17 @@ import (
 
 type fakeTenants map[string]bool
 
-func (f fakeTenants) TenantExists(_ context.Context, id string) (bool, error) { return f[id], nil }
+func (f fakeTenants) Lookup(_ context.Context, id string) (authn.TenantScopeState, error) {
+	if f[id] {
+		return authn.TenantScopeActive, nil
+	}
+	return authn.TenantScopeUnknown, nil
+}
 
 func scopeChain(c *jwt.Claims, s *sentinel) http.Handler {
 	v := &fakeVerifier{claims: withFreshness(c)}
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	return authn.TenantScope(v, fakeTenants{tenantB: true}.TenantExists, log)(authn.RequireFreshStamp(v, alwaysFresh{})(s.handler()))
+	return authn.TenantScope(fakeTenants{tenantB: true}.Lookup, log)(authn.RequireFreshStamp(v, alwaysFresh{})(s.handler()))
 }
 
 func scopeReq(t *testing.T, header string) *http.Request {
@@ -102,7 +107,7 @@ func TestTenantScope_SatisfiesHonoursEffectiveTenant(t *testing.T) {
 	var allowed bool
 	v := &fakeVerifier{claims: withFreshness(c)}
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	h := authn.TenantScope(v, fakeTenants{tenantB: true}.TenantExists, log)(authn.RequireFreshStamp(v, alwaysFresh{})(
+	h := authn.TenantScope(fakeTenants{tenantB: true}.Lookup, log)(authn.RequireFreshStamp(v, alwaysFresh{})(
 		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			allowed = authn.Satisfies(r.Context(), "identity.users.view")
 		})))
@@ -118,7 +123,7 @@ func TestTenantScope_PlatformEquivalentHoldsInScopedTenant(t *testing.T) {
 	var allowed bool
 	v := &fakeVerifier{claims: withFreshness(c)}
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	h := authn.TenantScope(v, fakeTenants{tenantB: true}.TenantExists, log)(authn.RequireFreshStamp(v, alwaysFresh{})(
+	h := authn.TenantScope(fakeTenants{tenantB: true}.Lookup, log)(authn.RequireFreshStamp(v, alwaysFresh{})(
 		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			allowed = authn.Satisfies(r.Context(), "identity.users.view")
 		})))
@@ -130,10 +135,9 @@ func TestTenantScope_PlatformEquivalentHoldsInScopedTenant(t *testing.T) {
 
 func TestTenantScope_AnonymousAndBadTokenPassThrough(t *testing.T) {
 	t.Parallel()
-	v := &fakeVerifier{err: context.Canceled}
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	var called bool
-	h := authn.TenantScope(v, fakeTenants{}.TenantExists, log)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	h := authn.TenantScope(fakeTenants{}.Lookup, log)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		called = true
 		w.WriteHeader(http.StatusTeapot)
 	}))
@@ -172,8 +176,8 @@ func TestEffectiveTenantID(t *testing.T) {
 	if id, ok := authn.EffectiveTenantID(tenancy.WithID(authn.WithClaims(t.Context(), c), tenancy.ID(tenantB))); !ok || id != tenantB {
 		t.Fatalf("bound tenant wins: %q %v", id, ok)
 	}
-	if id, ok := authn.EffectiveTenantID(authn.WithClaims(t.Context(), c)); !ok || id != tenantA {
-		t.Fatalf("falls back to claims tenant: %q %v", id, ok)
+	if id, ok := authn.EffectiveTenantID(authn.WithClaims(t.Context(), c)); ok || id != "" {
+		t.Fatalf("no bound tenant must fail closed, not fall back to claims: %q %v", id, ok)
 	}
 	if _, ok := authn.EffectiveTenantID(t.Context()); ok {
 		t.Fatal("no tenant, no claims -> not ok")
@@ -204,7 +208,7 @@ func TestRejectTenantScope(t *testing.T) {
 			s := &sentinel{}
 			v := &fakeVerifier{claims: withFreshness(tc.claims)}
 			log := slog.New(slog.NewTextHandler(io.Discard, nil))
-			h := authn.TenantScope(v, fakeTenants{tenantA: true, tenantB: true}.TenantExists, log)(
+			h := authn.TenantScope(fakeTenants{tenantA: true, tenantB: true}.Lookup, log)(
 				authn.RejectTenantScope(authn.RequireFreshStamp(v, alwaysFresh{})(s.handler())))
 			rec := httptest.NewRecorder()
 			h.ServeHTTP(rec, scopeReq(t, tc.header))

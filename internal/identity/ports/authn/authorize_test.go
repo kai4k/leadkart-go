@@ -160,7 +160,7 @@ func TestTenantScope_PathTenantRoutes(t *testing.T) {
 				v := &fakeVerifier{claims: withFreshness(op())}
 				s := &sentinel{}
 				log := slog.New(slog.NewTextHandler(io.Discard, nil))
-				h := authn.TenantScope(v, fakeTenants{tenantA: true, tenantB: true}.TenantExists, log)(build(v, s))
+				h := authn.TenantScope(fakeTenants{tenantA: true, tenantB: true}.Lookup, log)(build(v, s))
 				r := tenantReq(t, tc.path)
 				if tc.header != "" {
 					r.Header.Set(authn.TenantScopeHeader, tc.header)
@@ -188,7 +188,7 @@ func TestTenantScope_SelfTargetUsesCallerMembership(t *testing.T) {
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	for target, want := range map[string]int{self: 403, "0190a000-0000-7000-8000-0000000000bb": 200} {
 		s := &sentinel{}
-		h := authn.TenantScope(v, fakeTenants{tenantB: true}.TenantExists, log)(authn.RequireFreshStamp(v, alwaysFresh{})(authn.DenySelfTarget("id")(s.handler())))
+		h := authn.TenantScope(fakeTenants{tenantB: true}.Lookup, log)(authn.RequireFreshStamp(v, alwaysFresh{})(authn.DenySelfTarget("id")(s.handler())))
 		r := userReqWithVar(t, "id", target)
 		r.Header.Set(authn.TenantScopeHeader, tenantB)
 		rec := httptest.NewRecorder()

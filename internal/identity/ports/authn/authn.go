@@ -157,16 +157,10 @@ func RequireAuth(verifier Verifier) func(http.Handler) http.Handler {
 				return
 			}
 			ctx := WithClaims(r.Context(), claims)
-			tid := tenancy.ID(claims.TenantID)
-			if o, ok := scopeOverrideFor(r.Context(), claims); ok {
-				tid = o // ADR 0039: validated operator header scope
-			}
-			if scopeRejected(r.Context()) && !sameID(tid.String(), claims.TenantID) {
-				writeError(w, http.StatusForbidden, errCodeTenantScopeNotSupported,
-					"X-Tenant-Id is not supported on this route")
-				return
-			}
-			ctx = tenancy.WithID(ctx, tid)
+			// The operator X-Tenant-Id scope is NOT applied here: RequireFreshStamp
+			// applies it after the security stamp passes (ADR 0068 D7), so a
+			// revoked token never gets tenant-existence answers.
+			ctx = tenancy.WithID(ctx, tenancy.ID(claims.TenantID))
 			// Stash the RFC 8693 actor claim on ctx for downstream
 			// outbox-writer propagation per ADR 0056. Zero claim
 			// (non-impersonation hot path) is a no-op inside

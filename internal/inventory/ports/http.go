@@ -59,6 +59,11 @@ func AddRoutes(mux *http.ServeMux, log *slog.Logger, a app.Application, verifier
 	stockManage := authn.RequirePermission(verifier, stampValidator,
 		permission.IdentityPermissions.Inventory.Stock.Manage)
 
+	// Every gate also asserts an effective tenant is bound (fail closed, ADR 0039
+	// / M6): handlers read it via effectiveTenant and never fall back to claims.
+	catalogRead, catalogManage = withEffectiveTenant(catalogRead), withEffectiveTenant(catalogManage)
+	stockRead, stockManage = withEffectiveTenant(stockRead), withEffectiveTenant(stockManage)
+
 	// ----- Products -----------------------------------------------------------
 	mux.Handle("POST /api/v1/inventory/products",
 		catalogManage(handleCreateProduct(log, a)))
@@ -645,6 +650,20 @@ func movementViewToDto(v query.MovementView) MovementDto {
 		// ADR 0061 amendment 1 (M3) — View stores *string.
 		SourceReference: v.SourceReference,
 		OccurredAt:      v.OccurredAt,
+	}
+}
+
+// withEffectiveTenant wraps an auth gate so the handler only runs when the auth
+// layer bound an effective tenant on ctx; otherwise 401 (fail closed).
+func withEffectiveTenant(gate func(http.Handler) http.Handler) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return gate(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if _, ok := authn.EffectiveTenantID(r.Context()); !ok {
+				writeError(w, http.StatusUnauthorized, ErrCodeUnauthenticated, "")
+				return
+			}
+			next.ServeHTTP(w, r)
+		}))
 	}
 }
 

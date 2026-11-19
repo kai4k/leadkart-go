@@ -116,19 +116,25 @@ func AddRoutes(mux *http.ServeMux, log *slog.Logger, a app.Application, verifier
 		// permissions. Tenants do NOT self-suspend / self-restore via
 		// these routes; those flows go through Platform-tier APIs.
 		platform := authn.RequirePlatform(verifier, stampValidator)
+		// Tenant lifecycle writes stay possible against a suspended or pending-
+		// deletion tenant; a conflicting X-Tenant-Id is 400 (path wins).
+		lifecycle := authn.TenantScopeLifecycle("tenantId")
+		// Hard delete acts on the path tenant only: the header is conflict-checked,
+		// never applied.
+		scopePathOnly := authn.TenantScopePathOnly("tenantId")
 
 		// Tenant onboarding is operator-only (ADR 0053 "no public sign-up
 		// surface"; BRD PlatformManager onboarding; ADR 0068 D6).
 		tenantsCreate := authn.RequirePermission(verifier, stampValidator, p.Platform.TenantsCreate)
 		mux.Handle("POST /api/v1/tenants", platform(tenantsCreate(handleRegisterTenant(log, a))))
 		mux.Handle("POST /api/v1/tenants/{tenantId}/suspend",
-			platform(handleSuspendTenant(log, a)))
+			lifecycle(platform(handleSuspendTenant(log, a))))
 		mux.Handle("POST /api/v1/tenants/{tenantId}/activate",
-			platform(handleActivateTenant(log, a)))
+			lifecycle(platform(handleActivateTenant(log, a))))
 		mux.Handle("POST /api/v1/tenants/{tenantId}/mark-for-deletion",
-			platform(handleMarkTenantForDeletion(log, a)))
+			lifecycle(platform(handleMarkTenantForDeletion(log, a))))
 		mux.Handle("POST /api/v1/tenants/{tenantId}/restore",
-			platform(handleRestoreTenant(log, a)))
+			lifecycle(platform(handleRestoreTenant(log, a))))
 
 		// User (Membership) management — permission-gated per ADR 0036/0068.
 		// notSelf forbids self-assigned roles/overrides/status/manager (D3).
@@ -200,7 +206,7 @@ func AddRoutes(mux *http.ServeMux, log *slog.Logger, a app.Application, verifier
 		mux.Handle("GET /api/v1/platform/tenants",
 			platform(handleListAllTenants(log, a)))
 		mux.Handle("DELETE /api/v1/platform/tenants/{tenantId}",
-			platform(handleHardDeleteTenant(log, a)))
+			scopePathOnly(platform(handleHardDeleteTenant(log, a))))
 		mux.Handle("GET /api/v1/platform/persons/{personId}",
 			platform(handleGetPerson(log, a)))
 		// Platform-only cross-tenant identity probe by email. Query-

@@ -76,7 +76,6 @@ func extractMuxHandlerExpr(text string, pos int) string {
 //   - authn.RequirePermission
 //   - authn.RequireAnyPermission
 //   - authn.RequirePlatform
-//   - authn.RequireTenantContext
 //
 // We scan the SECOND ARG of the mux.Handle call for the marker. False
 // positives possible if a handler-wrapper alias re-exports the marker;
@@ -91,7 +90,6 @@ func TestArch_EveryAuthenticatedRouteHasMiddleware(t *testing.T) {
 		"authn.RequirePermission",
 		"authn.RequireAnyPermission",
 		"authn.RequirePlatform",
-		"authn.RequireTenantContext",
 	}
 
 	// Indirect markers are auto-discovered by scanning the file for

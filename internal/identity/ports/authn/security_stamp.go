@@ -124,7 +124,13 @@ func RequireFreshStamp(verifier Verifier, validator StampValidator) func(http.Ha
 					"session has been revoked")
 				return
 			}
-			next.ServeHTTP(w, r)
+			// Only a caller whose token AND stamp are valid gets the operator
+			// X-Tenant-Id scope validated, looked up and audited (ADR 0068 D7).
+			scoped, ok := applyScope(w, r, c)
+			if !ok {
+				return
+			}
+			next.ServeHTTP(w, scoped)
 		}))
 	}
 }

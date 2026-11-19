@@ -127,7 +127,8 @@ func RequireTenantPermission(verifier Verifier, validator StampValidator, pathVa
 	}
 	auth := RequireFreshStamp(verifier, validator)
 	return func(next http.Handler) http.Handler {
-		return auth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// The path tenant wins over X-Tenant-Id; a conflicting header is 400.
+		return TenantScopeMatchesPath(pathVar)(auth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			c, ok := ClaimsFromContext(r.Context())
 			if !ok {
 				writeError(w, http.StatusUnauthorized, errCodeUnauthenticated, "missing claims")
@@ -136,10 +137,6 @@ func RequireTenantPermission(verifier Verifier, validator StampValidator, pathVa
 			urlTenant, ok := CanonicalID(r.PathValue(pathVar))
 			if !ok {
 				writeError(w, http.StatusBadRequest, errCodeInvalidTenantID, pathVar+" path parameter must be a UUID")
-				return
-			}
-			if scopeConflicts(r.Context(), c, urlTenant) {
-				writeError(w, http.StatusBadRequest, errCodeTenantScopeConflict, "X-Tenant-Id conflicts with the tenant in the URL")
 				return
 			}
 			if !c.IsSuperUser && !IsPlatformOperator(c) && !sameID(urlTenant, c.TenantID) {
@@ -153,7 +150,7 @@ func RequireTenantPermission(verifier Verifier, validator StampValidator, pathVa
 				}
 			}
 			writeError(w, http.StatusForbidden, errCodeForbidden, "missing any of: "+strings.Join(permNames, ", "))
-		}))
+		})))
 	}
 }
 

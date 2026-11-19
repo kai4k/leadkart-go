@@ -493,7 +493,7 @@ func newServer(
 	}
 	// ADR 0039 per-request scope selection (ADR 0068 D7): the single place
 	// X-Tenant-Id is read, wrapping the whole mux.
-	return authn.TenantScope(verifier, ports.NewTenantScopeResolver(identityApp).TenantExists, log)(mux)
+	return authn.TenantScope(ports.NewTenantScopeResolver(identityApp).Lookup, log)(mux)
 }
 
 // addRootHelpers registers humane handlers for the cross-cutting URLs

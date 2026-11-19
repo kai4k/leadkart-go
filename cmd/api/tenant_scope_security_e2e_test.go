@@ -88,3 +88,73 @@ func TestE2E_TenantScope_LeadPurchaseRejectsScope(t *testing.T) {
 		t.Fatalf("purchase under scope: %d %s", r.status, r.body)
 	}
 }
+
+// I2: auth/* and platform/* routes ignore the header entirely — an operator
+// sending an UNKNOWN or malformed tenant id still gets a normal answer, and
+// POST /tenants (a new tenant has no target tenant) does too.
+func TestE2E_TenantScope_IgnoredOnAuthAndPlatformRoutes(t *testing.T) {
+	f := newE2EFixture(t)
+	op := f.mintPlatformTokenWith(t, nil, true)
+	for _, hdr := range []string{unknownTenantID, "not-a-uuid"} {
+		for _, path := range []string{"/api/v1/auth/me/capabilities", "/api/v1/auth/sessions", "/api/v1/auth/me/activity", "/api/v1/platform/stats", "/api/v1/platform/tenants"} {
+			if r := f.doWithHeaders(t, http.MethodGet, path, op, nil, scopeHdr(hdr)); r.status != http.StatusOK {
+				t.Errorf("GET %s with header %q: %d %s", path, hdr, r.status, r.body)
+			}
+		}
+	}
+	// The same header IS validated on a tenant-plane route (control).
+	if r := f.doWithHeaders(t, http.MethodGet, "/api/v1/users", op, nil, scopeHdr(unknownTenantID)); r.status != http.StatusNotFound {
+		t.Errorf("tenant-plane control: %d %s", r.status, r.body)
+	}
+	// POST /tenants with an unknown header: the registration runs (a bad body
+	// is the handler's 4xx, never tenant_scope_not_found).
+	r := f.doWithHeaders(t, http.MethodPost, "/api/v1/tenants", op, ports.RegisterTenantRequest{}, scopeHdr(unknownTenantID))
+	if code := decodeErrorCode(t, r.body); code == "tenant_scope_not_found" || code == "invalid_tenant_scope" {
+		t.Errorf("POST /tenants must ignore the header: %d %s", r.status, r.body)
+	}
+}
+
+// I3 + M4: lifecycle / hard-delete routes conflict-check the header against
+// the path tenant; scoped writes into a suspended tenant are 409 while reads
+// and the lifecycle routes still work.
+func TestE2E_TenantScope_LifecycleConflictAndSuspendedTenant(t *testing.T) {
+	f := newE2EFixture(t)
+	a := f.registerAndLogin(t, "lifea")
+	b := f.registerAndLogin(t, "lifeb")
+	op := f.mintPlatformTokenWith(t, []string{
+		permission.IdentityPermissions.Platform.TenantsManage,
+	}, true)
+
+	for _, route := range []struct{ method, path string }{
+		{http.MethodPost, "/api/v1/tenants/" + b.TenantID + "/suspend"},
+		{http.MethodPost, "/api/v1/tenants/" + b.TenantID + "/activate"},
+		{http.MethodPost, "/api/v1/tenants/" + b.TenantID + "/mark-for-deletion"},
+		{http.MethodPost, "/api/v1/tenants/" + b.TenantID + "/restore"},
+		{http.MethodDelete, "/api/v1/platform/tenants/" + b.TenantID},
+	} {
+		r := f.doWithHeaders(t, route.method, route.path, op, struct{}{}, scopeHdr(a.TenantID))
+		if r.status != http.StatusBadRequest || decodeErrorCode(t, r.body) != "tenant_scope_conflict" {
+			t.Errorf("%s %s with conflicting header: %d %s", route.method, route.path, r.status, r.body)
+		}
+	}
+
+	// Suspend B (header equal to the path tenant is fine).
+	if r := f.doWithHeaders(t, http.MethodPost, "/api/v1/tenants/"+b.TenantID+"/suspend", op, ports.SuspendTenantRequest{Reason: "e2e suspension"}, scopeHdr(b.TenantID)); r.status >= 300 {
+		t.Fatalf("suspend B: %d %s", r.status, r.body)
+	}
+	// Scoped read into the suspended tenant works; scoped write is 409.
+	if r := f.doWithHeaders(t, http.MethodGet, "/api/v1/users", op, nil, scopeHdr(b.TenantID)); r.status != http.StatusOK {
+		t.Errorf("scoped read into suspended tenant: %d %s", r.status, r.body)
+	}
+	w := f.doWithHeaders(t, http.MethodPost, "/api/v1/roles", op, ports.CreateRoleRequest{Name: "Nope", HierarchyLevel: 50}, scopeHdr(b.TenantID))
+	if w.status != http.StatusConflict || decodeErrorCode(t, w.body) != "tenant_not_active" {
+		t.Errorf("scoped write into suspended tenant: %d %s", w.status, w.body)
+	}
+	// Lifecycle route still works under scope, and writes resume afterwards.
+	if r := f.doWithHeaders(t, http.MethodPost, "/api/v1/tenants/"+b.TenantID+"/activate", op, struct{}{}, scopeHdr(b.TenantID)); r.status >= 300 {
+		t.Fatalf("activate B under scope: %d %s", r.status, r.body)
+	}
+	if r := f.doWithHeaders(t, http.MethodPost, "/api/v1/roles", op, ports.CreateRoleRequest{Name: "Fine", HierarchyLevel: 50}, scopeHdr(b.TenantID)); r.status != http.StatusCreated {
+		t.Errorf("scoped write after activation: %d %s", r.status, r.body)
+	}
+}
