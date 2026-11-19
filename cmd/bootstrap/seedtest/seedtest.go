@@ -158,3 +158,13 @@ func CountAllRoleAssignments(t testing.TB, ctx context.Context, db *sql.DB) int6
 	}
 	return n
 }
+
+// GetRoleHierarchyLevel returns the stored hierarchy_level of a role.
+func GetRoleHierarchyLevel(t testing.TB, ctx context.Context, db *sql.DB, roleID string) int {
+	t.Helper()
+	var level int
+	if err := db.QueryRowContext(ctx, `SELECT hierarchy_level FROM identity.roles WHERE id = $1`, roleID).Scan(&level); err != nil {
+		t.Fatalf("seedtest.GetRoleHierarchyLevel(%s): %v", roleID, err)
+	}
+	return level
+}

@@ -128,7 +128,6 @@ jobs:
               - '.github/workflows/**'
             openapi:
               - 'api/openapi.yaml'
-              - 'internal/common/openapi/all_routes.yaml'
               - '.spectral.yaml'
               - 'Taskfile.yml'
               - '.github/workflows/**'

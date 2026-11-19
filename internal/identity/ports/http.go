@@ -75,6 +75,13 @@ func AddRoutes(mux *http.ServeMux, log *slog.Logger, a app.Application, verifier
 		mux.Handle("DELETE /api/v1/auth/sessions/{familyId}", auth(handleRevokeSession(log, a)))
 		mux.Handle("DELETE /api/v1/auth/sessions", auth(handleRevokeAllSessions(log, a)))
 
+		p := permission.IdentityPermissions
+		// The two lookups return the tenant's full profile (statutory ids, admin
+		// contact, password policy): identity.tenants.view (tenant.admin implies it
+		// in its own tenant) or platform.tenants.view. The handlers keep the
+		// enumeration-safe answers inside the gate.
+		tenantLookup := authn.RequireAnyPermission(verifier, stampValidator, p.Tenants.View, p.Platform.TenantsView)
+
 		// Tenant management — permission-gated in the PATH tenant per
 		// authn.RequireTenantPermission (ADR 0068). A tenant Admin can
 		// manage their own tenant; slug-anchored Platform operators
@@ -83,18 +90,17 @@ func AddRoutes(mux *http.ServeMux, log *slog.Logger, a app.Application, verifier
 		// per ADR 0052 (Wave 9.1c). Returns {tenants: [0|1 match]}.
 		// Enumeration-safe per ADR 0044 (no-access = empty list).
 		mux.Handle("GET /api/v1/tenants",
-			auth(handleListTenantsByFilter(log, a)))
+			tenantLookup(handleListTenantsByFilter(log, a)))
 
 		// Slug lookup (deprecated — superseded by GET /tenants?slug=).
 		// Kept for v0.2 frontend-contract compatibility per ADR 0049
 		// grandfather rule. Remove in v0.4+ once frontend migrates.
 		// Enumeration-safe 404 inline authz per ADR 0044.
 		mux.Handle("GET /api/v1/tenants/by-slug/{slug}",
-			auth(handleGetTenantBySlug(log, a)))
+			tenantLookup(handleGetTenantBySlug(log, a)))
 
 		// Permission-gated per ADR 0036/0068: the permission must be
 		// satisfied IN THE PATH TENANT (tenant.admin only in its own).
-		p := permission.IdentityPermissions
 		tenantView := authn.RequireTenantPermission(verifier, stampValidator, "tenantId", p.Tenants.View)
 		tenantUpdate := authn.RequireTenantPermission(verifier, stampValidator, "tenantId", p.Tenants.Update)
 		tenantSettings := authn.RequireTenantPermission(verifier, stampValidator, "tenantId", p.Tenants.UpdateSettings)

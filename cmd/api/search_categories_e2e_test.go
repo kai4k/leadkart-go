@@ -16,7 +16,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/leadkart/leadkart-go/internal/common/pg"
+	"github.com/leadkart/leadkart-go/internal/identity/adapters"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/permission"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 	"github.com/leadkart/leadkart-go/internal/identity/ports"
 )
 
@@ -91,5 +94,42 @@ func TestE2E_Search_CacheDoesNotCrossCategories(t *testing.T) {
 	}
 	if len(sr.Persons) != 0 {
 		t.Errorf("persons leaked from a cache entry made for a wider caller: %d hits", len(sr.Persons))
+	}
+}
+
+// A tenant in the terminal `deleted` state is not searchable. The query used to
+// exclude a status ('hard_deleted') that does not exist, so deleted tenants kept
+// showing up in operator search.
+func TestE2E_Search_DoesNotReturnDeletedTenants(t *testing.T) {
+	f := newE2EFixture(t)
+	p := permission.IdentityPermissions
+	op := mintOperatorJWTExact(t, f.Issuer, f.persons, "", []string{p.Platform.TenantsView}, false)
+
+	live := bareTenant(t, f, "srchlive")
+	gone := bareTenant(t, f, "srchgone")
+	repo := adapters.NewTenantRepository(f.Pool, pg.NewTransactor(f.Pool))
+	if err := repo.UpdateByID(t.Context(), gone, func(tn *tenant.Tenant) (bool, error) {
+		return true, tn.HardDelete(testNow)
+	}); err != nil {
+		t.Fatalf("transition to deleted: %v", err)
+	}
+
+	r := f.authedJSON(t, http.MethodGet, "/api/v1/search?q=srch&include=tenants", op, nil)
+	if r.status != http.StatusOK {
+		t.Fatalf("search: %d %s", r.status, r.body)
+	}
+	var sr ports.SearchResponse
+	if err := json.Unmarshal(r.body, &sr); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	seen := map[string]bool{}
+	for _, h := range sr.Tenants {
+		seen[h.ID] = true
+	}
+	if !seen[string(live)] {
+		t.Errorf("control: the live tenant %s is missing from the results", live)
+	}
+	if seen[string(gone)] {
+		t.Errorf("the deleted tenant %s is returned by search", gone)
 	}
 }

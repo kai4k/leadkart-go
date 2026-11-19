@@ -64,7 +64,8 @@ services:
       target: migrate
     container_name: leadkart-migrate
     environment:
-      LEADKART_POSTGRES__DSN: "${LEADKART_POSTGRES__DSN:-postgres://leadkart:leadkart_dev@postgres:5432/leadkart?sslmode=disable}"
+      # OWNER role: DDL, grants, River migrations. The api below runs as leadkart_app.
+      LEADKART_POSTGRES__DSN: "${LEADKART_OWNER__DSN:-postgres://leadkart:leadkart_dev@postgres:5432/leadkart?sslmode=disable}"
     command: ["up"]
     depends_on:
       postgres:
@@ -95,7 +96,8 @@ services:
       target: bootstrap
     container_name: leadkart-bootstrap
     environment:
-      LEADKART_POSTGRES__DSN: "${LEADKART_POSTGRES__DSN:-postgres://leadkart:leadkart_dev@postgres:5432/leadkart?sslmode=disable}"
+      # OWNER role: seeds the platform tenant and SuperAdmin (writes across tenants).
+      LEADKART_POSTGRES__DSN: "${LEADKART_OWNER__DSN:-postgres://leadkart:leadkart_dev@postgres:5432/leadkart?sslmode=disable}"
       # SuperAdmin envs forwarded ONLY to bootstrap. The api service
       # never sees the password — once hashed into identity.persons,
       # the cred is no longer needed by anything.
@@ -131,7 +133,10 @@ services:
       - "8080:8080"   # public API
       - "9090:9090"   # admin (probes + pprof)
     environment:
-      LEADKART_POSTGRES__DSN: "${LEADKART_POSTGRES__DSN:-postgres://leadkart:leadkart_dev@postgres:5432/leadkart?sslmode=disable}"
+      # leadkart_app (non-owner): row-level security is ENFORCED in dev as in prod
+      # (the owner role bypasses it). init.sql creates the role; the migrate step
+      # (as owner) grants it its privileges; the api refuses to boot if it lacks any.
+      LEADKART_POSTGRES__DSN: "${LEADKART_POSTGRES__DSN:-postgres://leadkart_app:leadkart_app_dev_placeholder_rotate_in_prod@postgres:5432/leadkart?sslmode=disable}"
       LEADKART_REDIS__ADDR: "redis:6379"
       LEADKART_LISTEN__API: ":8080"
       LEADKART_LISTEN__ADMIN: ":9090"

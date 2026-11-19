@@ -51,6 +51,10 @@ info:
     is not a permission: it means "the caller's own membership" (the path
     user id equals the caller's `membership_id`).
 
+    **Email addresses:** `format: email` appears on request bodies only. Responses carry the
+    stored address as written (the server accepts internationalised domains and unusual local
+    parts that a strict `format: email` validator in a generated client would reject).
+
     **Enumeration safety:** guessable-key lookups (`/by-slug/`, `?email=`)
     return 404 indistinguishably whether the resource doesn't exist OR
     the caller lacks access. Per ADR 0044.
@@ -354,6 +358,11 @@ paths:
 
         v0.2 supports `slug` only; future filters (`status`, `created_after`)
         land per Stripe listing-endpoint canon.
+
+        Requires `identity.tenants.view` (held by a tenant admin through `tenant.admin`, in the
+        caller's own tenant) or `platform.tenants.view`; a caller holding neither is refused with
+        403 `forbidden`. The response carries the tenant's full profile.
+      x-required-permissions: [identity.tenants.view, platform.tenants.view]
       parameters:
         - name: slug
           in: query
@@ -370,6 +379,7 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/ListTenantsResponse' }
         '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
 
     post:
       parameters:
@@ -441,6 +451,7 @@ paths:
             schema: { $ref: '#/components/schemas/UpdateTenantProfileRequest' }
       responses:
         '204': { description: Profile updated }
+        '400': { $ref: '#/components/responses/BadRequest' }
         '403': { $ref: '#/components/responses/TenantScopeForbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '422': { $ref: '#/components/responses/Unprocessable' }
@@ -466,6 +477,7 @@ paths:
             schema: { $ref: '#/components/schemas/UpdateTenantStatutoryRequest' }
       responses:
         '204': { description: Statutory updated }
+        '400': { $ref: '#/components/responses/BadRequest' }
         '403': { $ref: '#/components/responses/TenantScopeForbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '422': { $ref: '#/components/responses/Unprocessable' }
@@ -488,6 +500,7 @@ paths:
             schema: { $ref: '#/components/schemas/UpdateTenantAdminContactRequest' }
       responses:
         '204': { description: Admin contact updated }
+        '400': { $ref: '#/components/responses/BadRequest' }
         '403': { $ref: '#/components/responses/TenantScopeForbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '422': { $ref: '#/components/responses/Unprocessable' }
@@ -510,6 +523,7 @@ paths:
             schema: { $ref: '#/components/schemas/UpdateTenantSettingsRequest' }
       responses:
         '204': { description: Settings updated }
+        '400': { $ref: '#/components/responses/BadRequest' }
         '403': { $ref: '#/components/responses/TenantScopeForbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '422': { $ref: '#/components/responses/Unprocessable' }
@@ -532,6 +546,7 @@ paths:
             schema: { $ref: '#/components/schemas/UpdateTenantDisplayPreferencesRequest' }
       responses:
         '204': { description: Display preferences updated }
+        '400': { $ref: '#/components/responses/BadRequest' }
         '403': { $ref: '#/components/responses/TenantScopeForbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '422': { $ref: '#/components/responses/Unprocessable' }
@@ -632,6 +647,11 @@ paths:
         access to this tenant" (response bodies byte-identical). Per
         ADR 0044 enumeration safety; same canon as GitHub
         `/orgs/{slug}`, Stripe customer lookup, Auth0 user lookup.
+
+        Requires `identity.tenants.view` (held by a tenant admin through `tenant.admin`, in the
+        caller's own tenant) or `platform.tenants.view`; a caller holding neither is refused with
+        403 `forbidden` before any lookup.
+      x-required-permissions: [identity.tenants.view, platform.tenants.view]
       parameters:
         - name: slug
           in: path
@@ -644,6 +664,7 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/TenantDto' }
         '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
 
   /api/v1/tenants/{tenantId}/audit/events:
@@ -744,6 +765,7 @@ paths:
             schema: { $ref: '#/components/schemas/UpdateUserProfileRequest' }
       responses:
         '204': { description: Profile updated }
+        '400': { $ref: '#/components/responses/BadRequest' }
         '403': { $ref: '#/components/responses/TenantScopeForbidden' }
         '422': { $ref: '#/components/responses/Unprocessable' }
 
@@ -826,7 +848,7 @@ paths:
       tags: [users]
       summary: Replace user's granted + revoked permission overlays atomically
       description: |
-        Empty arrays clear the corresponding overlay. Permission names
+        Both arrays are required; empty arrays clear the corresponding overlay. Permission names
         MUST match the closed `permission.IdentityPermissions` catalogue;
         unknown names surface as 422 (`permission_unknown`).
         Requires `identity.users.update_permissions` (satisfied by `tenant.admin` in the caller's own tenant, or by `platform.*` equivalents for platform operators; ADR 0068). Self-target forbidden (`self_modification_forbidden`). Conferring a permission the caller does not hold is rejected with `grant_exceeds_authority`.
@@ -842,6 +864,7 @@ paths:
             schema: { $ref: '#/components/schemas/ReplaceUserPermissionOverridesRequest' }
       responses:
         '204': { description: Overrides replaced }
+        '400': { $ref: '#/components/responses/BadRequest' }
         '403': { $ref: '#/components/responses/TenantScopeForbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '422': { $ref: '#/components/responses/Unprocessable' }
@@ -1219,6 +1242,7 @@ paths:
             schema: { $ref: '#/components/schemas/UpdatePersonProfileRequest' }
       responses:
         '204': { description: Profile updated }
+        '400': { $ref: '#/components/responses/BadRequest' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '422': { $ref: '#/components/responses/Unprocessable' }
@@ -3788,7 +3812,7 @@ components:
         membership_id: { type: string, format: uuid }
         tenant_id:     { type: string, format: uuid }
         tenant_slug:   { type: string }
-        email:         { type: string, format: email }
+        email:         { type: string }
         first_name:    { type: string }
         last_name:     { type: string }
         is_platform:   { type: boolean }
@@ -3913,12 +3937,16 @@ components:
 
     UpdateTenantProfileRequest:
       type: object
+      description: Full replace. Every field is required; a body that omits one is 400 `invalid_body` (the `errors` map names it) and nothing is changed.
+      required: [legal_name, display_name]
       properties:
         legal_name:   { type: string, maxLength: 200 }
         display_name: { type: string, maxLength: 200 }
 
     UpdateTenantStatutoryRequest:
       type: object
+      description: Full replace. Every field is required (an empty string clears that declaration); a body that omits one is 400 `invalid_body` and nothing is changed.
+      required: [gst_number, pan_number, drug_licence_number]
       properties:
         gst_number:           { type: string }
         pan_number:           { type: string }
@@ -3926,18 +3954,35 @@ components:
 
     UpdateTenantAdminContactRequest:
       type: object
+      description: Full replace. `phone` and `address` (with every address field) are required; a body that omits one is 400 `invalid_body` (the `errors` map names it, e.g. `address.pincode`) and nothing is changed.
+      required: [phone, address]
       properties:
         phone:   { type: string }
-        address: { $ref: '#/components/schemas/AdminAddressDto' }
+        address: { $ref: '#/components/schemas/AdminAddressInput' }
+
+    AdminAddressInput:
+      type: object
+      description: The admin address as written by PATCH admin-contact. Every field is required (an empty string clears it).
+      required: [street, city, district, state, state_code, pincode]
+      properties:
+        street:    { type: string }
+        city:      { type: string }
+        district:  { type: string }
+        state:     { type: string }
+        state_code: { type: string }
+        pincode:   { type: string }
 
     UpdateTenantSettingsRequest:
       type: object
+      description: Full replace. `password_policy` and each of its fields are required; a body that omits one is 400 `invalid_body` and nothing is changed.
       required: [password_policy]
       properties:
         password_policy: { $ref: '#/components/schemas/PasswordPolicyDto' }
 
     UpdateTenantDisplayPreferencesRequest:
       type: object
+      description: Full replace. Every field is required; a body that omits one is 400 `invalid_body` and nothing is changed.
+      required: [locale, time_zone, date_format, currency]
       properties:
         locale:      { type: string }
         time_zone:   { type: string }
@@ -3964,7 +4009,7 @@ components:
         membership_id:   { type: string, format: uuid }
         person_id:       { type: string, format: uuid }
         tenant_id:       { type: string, format: uuid }
-        email:           { type: string, format: email }
+        email:           { type: string }
         first_name:      { type: string }
         last_name:       { type: string }
         status:          { type: string, enum: [active, inactive] }
@@ -4007,6 +4052,8 @@ components:
 
     UpdateUserProfileRequest:
       type: object
+      description: Full replace. Every field is required (an empty string clears it); a body that omits one is 400 `invalid_body` and nothing is changed.
+      required: [designation, department, status_message]
       properties:
         designation:    { type: string }
         department:     { type: string }
@@ -4032,6 +4079,8 @@ components:
 
     ReplaceUserPermissionOverridesRequest:
       type: object
+      description: Atomic replace of both overlays. Both arrays are required (an empty array clears that overlay, `null` is not accepted); a body that omits one is 400 `invalid_body` and nothing is changed.
+      required: [granted, revoked]
       properties:
         granted:
           type: array
@@ -4148,7 +4197,7 @@ components:
       required: [id, email, first_name, last_name, is_active, is_anonymised, is_globally_suspended, created_at]
       properties:
         id:                       { type: string, format: uuid }
-        email:                    { type: string, format: email }
+        email:                    { type: string }
         first_name:               { type: string }
         last_name:                { type: string }
         is_active:                { type: boolean }
@@ -4275,7 +4324,7 @@ components:
       required: [id, email, first_name, last_name, created_at]
       properties:
         id:         { type: string, format: uuid }
-        email:      { type: string, format: email }
+        email:      { type: string }
         first_name: { type: string }
         last_name:  { type: string }
         created_at: { type: string, format: date-time }

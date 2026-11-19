@@ -1,7 +1,7 @@
 // Package openapi serves the canonical LeadKart HTTP API contract
 // per ADR 0046 — spec-first OpenAPI 3.1 + Scalar UI at /docs.
 //
-// The spec lives at repo-root api/openapi.yaml; this package embeds
+// The spec lives at repo-root api/openapi.yaml; package api embeds
 // it into the binary via //go:embed so the Chainguard distroless
 // image needs no external file dependency. Two handlers exposed:
 //
@@ -15,16 +15,16 @@
 package openapi
 
 import (
-	_ "embed"
 	"net/http"
+
+	"github.com/leadkart/leadkart-go/api"
 )
 
-// specYAML is the entire canonical spec embedded at build time.
-// Per ADR 0024 (Chainguard distroless static): the binary ships
-// self-contained; no /api/openapi.yaml file on the deployed image.
-//
-//go:embed all_routes.yaml
-var specYAML []byte
+// specYAML is the entire canonical spec, embedded at build time by package api
+// (api/openapi.yaml itself, no copy). Per ADR 0024 (Chainguard distroless
+// static): the binary ships self-contained; no /api/openapi.yaml file on the
+// deployed image.
+var specYAML = api.OpenAPIYAML
 
 // SpecHandler serves the raw OpenAPI YAML at the mount point.
 // Tooling (openapi-typescript, openapi-generator, Prism, Postman

@@ -141,6 +141,9 @@ func ClampPageSize(supplied int) int {
 // The slice argument may be mutated (peek row dropped); callers
 // should treat it as consumed.
 func BuildPage[T any](items []T, pageSize int, cursorFn func(T) Cursor) Page[T] { // arch-test:bare-any-generic — pure container builder.
+	if pageSize <= 0 {
+		pageSize = DefaultPageSize // defensive: never index items[-1] for a caller that forgot ClampPageSize
+	}
 	if len(items) > pageSize {
 		last := items[pageSize-1]
 		return Page[T]{

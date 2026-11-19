@@ -7,8 +7,8 @@
 # Run locally: `task ci:openapi`
 # Run in CI:   the `openapi-lint` job in .github/workflows/ci.yml
 #
-# Both gates run only when api/openapi.yaml (or this file, or the
-# embed at internal/common/openapi/all_routes.yaml) changes. Other PRs
+# Both gates run only when api/openapi.yaml (or this file) changes; the binary embeds that same file
+# (package api), there is no second copy. Other PRs
 # skip the spectral cost.
 
 extends:

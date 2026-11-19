@@ -72,8 +72,12 @@ const (
 	platformLegalName  = "LeadKart Platform"
 	platformDispName   = "Platform"
 
-	superAdminRoleName       = "SuperAdmin"
-	superAdminHierarchyLevel = 0
+	superAdminRoleName = "SuperAdmin"
+	// Level 0 is the Owner tier and belongs to the system CompanyOwner role alone:
+	// the authority policy ranks every other level-0 role as 1, and migration
+	// 20261119000001 re-levels existing ones to 1. Seed 1 so a fresh and a
+	// migrated environment agree.
+	superAdminHierarchyLevel = 1
 )
 
 func main() {

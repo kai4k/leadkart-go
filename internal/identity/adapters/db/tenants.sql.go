@@ -312,7 +312,7 @@ SELECT id, slug, legal_name, display_name, status, created_at,
            lower($1)
        ) AS rank
 FROM   identity.tenants
-WHERE  status != 'hard_deleted'
+WHERE  status != 'deleted'
 AND    (lower(slug) || ' ' || lower(legal_name) || ' ' || lower(display_name))
        ILIKE '%' || lower($1) || '%'
 ORDER  BY rank DESC, id DESC
@@ -341,7 +341,7 @@ type SearchTenantsByTextRow struct {
 // Tenants is non-RLS so this runs in any scope; the HTTP layer
 // gates on RequirePlatform anyway. similarity() ranking surfaces
 // closer matches first. Caller MUST bound query length at the
-// boundary (2-100 chars).
+// boundary (2-100 chars). Tenants in the terminal `deleted` state are excluded.
 func (q *Queries) SearchTenantsByText(ctx context.Context, arg SearchTenantsByTextParams) ([]SearchTenantsByTextRow, error) {
 	rows, err := q.db.Query(ctx, searchTenantsByText, arg.Query, arg.Limit)
 	if err != nil {

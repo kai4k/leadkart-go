@@ -68,3 +68,20 @@ func TestUnreadCount_CountsOnlyUnreadForRecipient(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, int64(4), n)
 }
+
+// A request without page_size (PageSize 0) against a non-empty inbox returns the
+// first page. Today only the Docker e2e covered this; the unclamped size used to
+// index items[-1] in pagination.BuildPage and panic.
+func TestListInbox_ZeroPageSizeReturnsFirstPage(t *testing.T) {
+	t.Parallel()
+	repo := notificationtest.NewFakeRepository()
+	tid := tenant.ID(ids.NewV7().String())
+	mine := membership.ID(ids.NewV7().String())
+	seed(t, repo, tid, mine, 3)
+
+	h := query.NewListInboxHandler(repo)
+	page, err := h.Handle(t.Context(), query.ListInboxQuery{TenantID: tid, RecipientMembershipID: mine, PageSize: 0})
+	require.NoError(t, err)
+	require.Len(t, page.Items, 3)
+	require.False(t, page.HasMore)
+}

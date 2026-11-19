@@ -37,10 +37,6 @@ var selfServiceRoutes = map[string]string{
 	"POST /api/v1/permission-requests/{requestId}/approve": "ADR 0055 §8: handler-inline manager-or-platform",
 	"POST /api/v1/permission-requests/{requestId}/deny":    "ADR 0055 §8: handler-inline manager-or-platform",
 	"POST /api/v1/permission-requests/{requestId}/cancel":  "ADR 0055 §8: handler-inline requester-only",
-	// Tenant lookups: enumeration-safe, authority decided in the handler (ADR 0044,
-	// authn.CanActAcrossTenants): the caller's own tenant, or an empty list.
-	"GET /api/v1/tenants":                "ADR 0044: handler-inline, own tenant or CanActAcrossTenants",
-	"GET /api/v1/tenants/by-slug/{slug}": "ADR 0044: handler-inline, own tenant or CanActAcrossTenants",
 	// Infrastructure served by cmd/api: no tenant data.
 	"GET /{$}":          "infra: root redirect to docs",
 	"GET /favicon.ico":  "infra",

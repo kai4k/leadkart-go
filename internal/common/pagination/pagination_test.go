@@ -171,3 +171,28 @@ func TestBuildPage_ExactlyPageSize(t *testing.T) {
 		t.Errorf("last page should have empty next_cursor; got %q", page.NextCursor)
 	}
 }
+
+// A non-positive page size from a caller that forgot to clamp must not index
+// items[-1]: BuildPage falls back to the default page size itself.
+func TestBuildPage_NonPositivePageSizeUsesDefault(t *testing.T) {
+	t.Parallel()
+	cursorFn := func(i int) pagination.Cursor {
+		return pagination.Cursor{SortValue: time.Unix(int64(i), 0).UTC(), ID: ""}
+	}
+	for _, size := range []int{0, -1, -100} {
+		items := []int{1, 2, 3}
+		page := pagination.BuildPage(items, size, cursorFn)
+		if len(page.Items) != 3 || page.HasMore || page.NextCursor != "" {
+			t.Errorf("pageSize %d with 3 items: items=%d hasMore=%v cursor=%q, want all 3 items on one page", size, len(page.Items), page.HasMore, page.NextCursor)
+		}
+	}
+
+	many := make([]int, pagination.DefaultPageSize+1)
+	for i := range many {
+		many[i] = i + 1
+	}
+	page := pagination.BuildPage(many, 0, cursorFn)
+	if len(page.Items) != pagination.DefaultPageSize || !page.HasMore || page.NextCursor == "" {
+		t.Errorf("pageSize 0 with %d items: items=%d hasMore=%v, want a full default page with a next cursor", len(many), len(page.Items), page.HasMore)
+	}
+}

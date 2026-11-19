@@ -198,8 +198,7 @@ func handleUpdateTenantProfile(log *slog.Logger, a app.Application) http.Handler
 			return
 		}
 		var req UpdateTenantProfileRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeError(w, http.StatusBadRequest, ErrCodeInvalidBody, "request body is not valid JSON")
+		if !decodeFullBody(w, r, &req) {
 			return
 		}
 		err := a.Commands.UpdateTenantProfile.Handle(r.Context(), command.UpdateTenantProfileCommand{
@@ -220,8 +219,7 @@ func handleUpdateTenantStatutory(log *slog.Logger, a app.Application) http.Handl
 			return
 		}
 		var req UpdateTenantStatutoryRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeError(w, http.StatusBadRequest, ErrCodeInvalidBody, "request body is not valid JSON")
+		if !decodeFullBody(w, r, &req) {
 			return
 		}
 		err := a.Commands.UpdateTenantStatutory.Handle(r.Context(), command.UpdateTenantStatutoryCommand{
@@ -243,8 +241,7 @@ func handleUpdateTenantAdminContact(log *slog.Logger, a app.Application) http.Ha
 			return
 		}
 		var req UpdateTenantAdminContactRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeError(w, http.StatusBadRequest, ErrCodeInvalidBody, "request body is not valid JSON")
+		if !decodeFullBody(w, r, &req) {
 			return
 		}
 		err := a.Commands.UpdateTenantAdminContact.Handle(r.Context(), command.UpdateTenantAdminContactCommand{
@@ -270,8 +267,7 @@ func handleUpdateTenantSettings(log *slog.Logger, a app.Application) http.Handle
 			return
 		}
 		var req UpdateTenantSettingsRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeError(w, http.StatusBadRequest, ErrCodeInvalidBody, "request body is not valid JSON")
+		if !decodeFullBody(w, r, &req) {
 			return
 		}
 		err := a.Commands.UpdateTenantSettings.Handle(r.Context(), command.UpdateTenantSettingsCommand{
@@ -297,8 +293,7 @@ func handleUpdateTenantDisplayPreferences(log *slog.Logger, a app.Application) h
 			return
 		}
 		var req UpdateTenantDisplayPreferencesRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeError(w, http.StatusBadRequest, ErrCodeInvalidBody, "request body is not valid JSON")
+		if !decodeFullBody(w, r, &req) {
 			return
 		}
 		err := a.Commands.UpdateTenantDisplayPreferences.Handle(r.Context(), command.UpdateTenantDisplayPreferencesCommand{

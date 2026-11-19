@@ -113,8 +113,7 @@ func handleUpdateUserProfile(log *slog.Logger, a app.Application) http.Handler {
 			return
 		}
 		var req UpdateUserProfileRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeError(w, http.StatusBadRequest, ErrCodeInvalidBody, "request body is not valid JSON")
+		if !decodeFullBody(w, r, &req) {
 			return
 		}
 		err := a.Commands.UpdateUserProfile.Handle(r.Context(), command.UpdateUserProfileCommand{
@@ -269,8 +268,7 @@ func handleReplaceUserPermissionOverrides(log *slog.Logger, a app.Application) h
 			return
 		}
 		var req ReplaceUserPermissionOverridesRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeError(w, http.StatusBadRequest, ErrCodeInvalidBody, "request body is not valid JSON")
+		if !decodeFullBody(w, r, &req) {
 			return
 		}
 		if !requireGrantWithinAuthority(w, r, req.Granted) {

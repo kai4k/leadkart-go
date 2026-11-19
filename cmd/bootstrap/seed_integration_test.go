@@ -105,6 +105,12 @@ func assertSeedState(t *testing.T, ctx context.Context, db *sql.DB, email, passw
 	if !isDefault {
 		t.Errorf("role.is_system_default = false, want true")
 	}
+	// Level 0 belongs to the system CompanyOwner role alone; the authority policy ranks
+	// every other level-0 role as 1 and migration 20261119000001 re-levels them, so a
+	// fresh bootstrap must seed 1 to agree with a migrated environment.
+	if level := seedtest.GetRoleHierarchyLevel(t, ctx, db, roleID); level != 1 {
+		t.Errorf("SuperAdmin role hierarchy_level = %d, want 1", level)
+	}
 
 	// Membership — Person ↔ platform tenant, status active.
 	membershipID, membershipStatus := seedtest.GetMembershipForPerson(t, ctx, db, personID, tenantID)

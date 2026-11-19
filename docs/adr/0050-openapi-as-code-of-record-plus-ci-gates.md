@@ -89,7 +89,7 @@ This matches the local `task test:arch` command exactly. Future arch-test additi
 | `go` | `**.go`, `go.mod`, `go.sum`, `migrations/**`, `internal/identity/adapters/sql/**`, `sqlc.yaml`, `.golangci.yml`, the workflow itself | `unit`, `architecture`, `integration` |
 | `docker` | `docker/**`, `scripts/smoke.sh`, `cmd/**`, `migrations/**`, `go.mod`, `go.sum`, the workflow | `docker-build`, `container-smoke` |
 | `migrations` | `migrations/**`, `cmd/migrate/**`, the workflow | `migrations-check` |
-| `openapi` (new in Wave 9.3) | `api/openapi.yaml`, `internal/common/openapi/all_routes.yaml`, `.spectral.yaml`, the workflow | `openapi-lint` |
+| `openapi` (new in Wave 9.3) | `api/openapi.yaml` (the one embedded spec), `.spectral.yaml`, the workflow | `openapi-lint` |
 
 Every downstream job carries `if: needs.changes.outputs.<area> == 'true' || github.event_name == 'push'`. **Push-to-main runs the full pipeline regardless** — this is the regression gate + the required-status-check freshness signal for branch protection. **Pull-request runs only jobs whose paths actually changed.** Pure-docs PRs skip the workflow entirely via the top-level `paths-ignore`.
 

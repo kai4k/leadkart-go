@@ -129,14 +129,14 @@ DELETE FROM identity.tenants WHERE id = $1;
 -- Tenants is non-RLS so this runs in any scope; the HTTP layer
 -- gates on RequirePlatform anyway. similarity() ranking surfaces
 -- closer matches first. Caller MUST bound query length at the
--- boundary (2-100 chars).
+-- boundary (2-100 chars). Tenants in the terminal `deleted` state are excluded.
 SELECT id, slug, legal_name, display_name, status, created_at,
        similarity(
            lower(slug) || ' ' || lower(legal_name) || ' ' || lower(display_name),
            lower(sqlc.arg(query))
        ) AS rank
 FROM   identity.tenants
-WHERE  status != 'hard_deleted'
+WHERE  status != 'deleted'
 AND    (lower(slug) || ' ' || lower(legal_name) || ' ' || lower(display_name))
        ILIKE '%' || lower(sqlc.arg(query)) || '%'
 ORDER  BY rank DESC, id DESC
