@@ -1,20 +1,27 @@
 package ports
 
 import (
+	"context"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/leadkart/leadkart-go/internal/common/tenancy"
 	"github.com/leadkart/leadkart-go/internal/identity/app/jwt"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 	"github.com/leadkart/leadkart-go/internal/identity/ports/authn"
 	"github.com/leadkart/leadkart-go/internal/tasks/app"
+	"github.com/leadkart/leadkart-go/internal/tasks/app/command"
 	"github.com/leadkart/leadkart-go/internal/tasks/app/query"
+	"github.com/leadkart/leadkart-go/internal/tasks/domain/workitem"
+	"github.com/leadkart/leadkart-go/internal/tasks/domain/workitem/workitemtest"
 )
 
 func canonicalTestCtx(t *testing.T, c *jwt.Claims) *http.Request {
@@ -82,5 +89,76 @@ func TestTaskBodyIDs_PaddedWrappedAndNilAreRejected(t *testing.T) {
 				t.Errorf("%s with %s id: %d %s, want 400", label, name, rec.Code, rec.Body.String())
 			}
 		}
+	}
+}
+
+// ----- canonical value reaches the command ----------------------------------
+
+type recordingMemberships struct {
+	mu   sync.Mutex
+	seen []string
+}
+
+func (m *recordingMemberships) ExistsActiveInTenant(_ context.Context, _ tenant.ID, membershipID string) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.seen = append(m.seen, membershipID)
+	return true, nil
+}
+
+// everyoneVisible makes every membership a subordinate, so the hierarchy gate
+// passes for whichever canonical id the command was handed.
+type everyoneVisible struct{ ids []string }
+
+func (h everyoneVisible) ListSubordinateMembershipIDs(context.Context, tenant.ID, string) ([]string, error) {
+	return h.ids, nil
+}
+
+func TestTaskBodyIDs_CanonicalValueReachesTheCommand(t *testing.T) {
+	t.Parallel()
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	assignee, batch, newAssignee := uuid.NewString(), uuid.NewString(), uuid.NewString()
+	claims := operatorClaims(uuid.NewString(), true)
+	repo := workitemtest.NewFakeRepository()
+	members := &recordingMemberships{}
+	now := func() time.Time { return time.Date(2026, 11, 20, 9, 0, 0, 0, time.UTC) }
+	a := app.Application{Commands: app.Commands{
+		CreateWorkItem:   command.NewCreateWorkItemHandler(repo, members, now, func() workitem.ID { return workitem.ID(uuid.NewString()) }),
+		ReassignWorkItem: command.NewReassignWorkItemHandler(repo, everyoneVisible{ids: []string{newAssignee}}, members, now),
+	}}
+	post := func(h http.Handler, body, pathID string) *httptest.ResponseRecorder {
+		r := canonicalTestCtx(t, claims)
+		r.Method = http.MethodPost
+		r.Body = httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/", strings.NewReader(body)).Body
+		if pathID != "" {
+			r.SetPathValue("workItemId", pathID)
+		}
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, r)
+		return rec
+	}
+
+	create := `{"type":"follow_up","assigned_to_membership_id":"` + strings.ToUpper(assignee) + `","batch_id":"` + strings.ToUpper(batch) + `","title":"t","due_at":"2030-01-01T00:00:00Z"}`
+	rec := post(handleCreateWorkItem(log, a), create, "")
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create: %d %s", rec.Code, rec.Body.String())
+	}
+	var created *workitem.WorkItem
+	for _, w := range repo.ByID {
+		created = w
+	}
+	if created.AssignedToMembershipID() != assignee || created.BatchID() != batch {
+		t.Fatalf("create stored assignee=%q batch=%q, want canonical %q / %q", created.AssignedToMembershipID(), created.BatchID(), assignee, batch)
+	}
+	if len(members.seen) != 1 || members.seen[0] != assignee {
+		t.Fatalf("membership probe saw %v, want [%s]", members.seen, assignee)
+	}
+
+	rec = post(handleReassignWorkItem(log, a), `{"new_assignee_membership_id":"`+strings.ToUpper(newAssignee)+`","reason":"cover"}`, created.ID().String())
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("reassign: %d %s", rec.Code, rec.Body.String())
+	}
+	if got := repo.ByID[created.ID()].AssignedToMembershipID(); got != newAssignee {
+		t.Fatalf("reassign stored assignee %q, want canonical %q", got, newAssignee)
 	}
 }

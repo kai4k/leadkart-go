@@ -205,7 +205,6 @@ func TestRouteAuthz_ImpersonationNeedsItsOwnPermission(t *testing.T) {
 	for _, rt := range []struct{ method, path, body string }{
 		{"POST", "/api/v1/platform/impersonation/sessions", body},
 		{"GET", "/api/v1/platform/impersonation/sessions", ""},
-		{"DELETE", "/api/v1/platform/impersonation/sessions/" + azRole, ""},
 	} {
 		t.Run(rt.method+" "+rt.path, func(t *testing.T) {
 			t.Parallel()

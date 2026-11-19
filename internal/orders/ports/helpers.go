@@ -137,16 +137,37 @@ func internal(w http.ResponseWriter, log *slog.Logger, r *http.Request, op strin
 
 // ----- request/response mapping ---------------------------------------------
 
-func toCmdItems(in []LineItemDto) []command.CreateQuotationLineItem {
+// canonicalBodyID returns the canonical form of a body id, or answers 400 and
+// reports false. An absent id passes through: a required id is the domain's
+// 422 to give, not a malformed id.
+func canonicalBodyID(w http.ResponseWriter, field, raw string) (string, bool) {
+	if raw == "" {
+		return "", true
+	}
+	id, ok := authn.CanonicalID(raw)
+	if !ok {
+		writeError(w, http.StatusBadRequest, errCodeInvalidBody, field+" must be a UUID")
+		return "", false
+	}
+	return id, true
+}
+
+// toCmdItems maps line items, with every product_id in canonical form; a
+// malformed one is answered 400 and reported as !ok.
+func toCmdItems(w http.ResponseWriter, in []LineItemDto) ([]command.CreateQuotationLineItem, bool) {
 	out := make([]command.CreateQuotationLineItem, len(in))
 	for i, li := range in {
+		product, ok := canonicalBodyID(w, "items[].product_id", li.ProductID)
+		if !ok {
+			return nil, false
+		}
 		out[i] = command.CreateQuotationLineItem{
-			ProductID: li.ProductID, SKU: li.SKU, Description: li.Description,
+			ProductID: product, SKU: li.SKU, Description: li.Description,
 			Quantity: li.Quantity, UnitMrpPaise: li.UnitMrpPaise,
 			UnitSalePaise: li.UnitSalePaise, GstRateBps: li.GstRateBps,
 		}
 	}
-	return out
+	return out, true
 }
 
 func viewItemsToDto(in []query.LineItemView) []LineItemDto {

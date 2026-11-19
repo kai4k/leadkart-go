@@ -30,6 +30,10 @@ type LogCallCommand struct {
 	Notes                string
 	LoggedByMembershipID string
 	CallbackWindow       calllog.CallbackWindow
+	// OnlyAssignedTo, when set, limits the command to a lead assigned to this
+	// membership: any other lead does not exist for the caller (ErrLeadNotFound).
+	// Empty means unrestricted (read_all callers, operators, system callers).
+	OnlyAssignedTo string
 }
 
 // LogCallResult returns the new call-log ID for the caller.
@@ -88,6 +92,9 @@ func (h LogCallHandler) Handle(ctx context.Context, cmd LogCallCommand) (LogCall
 			return LogCallResult{}, ErrLeadNotFound
 		}
 		return LogCallResult{}, fmt.Errorf("crm log_call: load lead: %w", err)
+	}
+	if !leadInScope(lead, cmd.OnlyAssignedTo) {
+		return LogCallResult{}, ErrLeadNotFound
 	}
 	if lead.Stage().IsTerminal() {
 		return LogCallResult{}, ErrLeadTerminal

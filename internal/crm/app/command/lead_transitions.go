@@ -24,6 +24,10 @@ type ChangeLeadStageCommand struct {
 	NewStage              crmlead.Stage
 	ChangedByMembershipID string
 	Reason                string
+	// OnlyAssignedTo, when set, limits the command to a lead assigned to this
+	// membership: any other lead does not exist for the caller (ErrLeadNotFound).
+	// Empty means unrestricted (read_all callers, operators, system callers).
+	OnlyAssignedTo string
 }
 
 // ChangeLeadStageHandler runs the stage-advance flow.
@@ -58,6 +62,9 @@ func (h ChangeLeadStageHandler) Handle(ctx context.Context, cmd ChangeLeadStageC
 	}
 	now := h.now()
 	err := h.leads.UpdateByID(ctx, cmd.TenantID, cmd.LeadID, func(l *crmlead.CrmLead) (bool, error) {
+		if !leadInScope(l, cmd.OnlyAssignedTo) {
+			return false, crmlead.ErrNotFound
+		}
 		oldStage := l.Stage()
 		if err := l.ChangeStage(cmd.NewStage, cmd.ChangedByMembershipID, cmd.Reason, now); err != nil {
 			return false, err
@@ -81,6 +88,10 @@ type ChangeLeadTemperatureCommand struct {
 	LeadID                crmlead.ID
 	NewTemperature        crmlead.Temperature
 	ChangedByMembershipID string
+	// OnlyAssignedTo, when set, limits the command to a lead assigned to this
+	// membership: any other lead does not exist for the caller (ErrLeadNotFound).
+	// Empty means unrestricted (read_all callers, operators, system callers).
+	OnlyAssignedTo string
 }
 
 // ChangeLeadTemperatureHandler runs the temperature-change flow.
@@ -114,6 +125,9 @@ func (h ChangeLeadTemperatureHandler) Handle(ctx context.Context, cmd ChangeLead
 	}
 	now := h.now()
 	err := h.leads.UpdateByID(ctx, cmd.TenantID, cmd.LeadID, func(l *crmlead.CrmLead) (bool, error) {
+		if !leadInScope(l, cmd.OnlyAssignedTo) {
+			return false, crmlead.ErrNotFound
+		}
 		oldTemp := l.Temperature()
 		if err := l.ChangeTemperature(cmd.NewTemperature, cmd.ChangedByMembershipID, now); err != nil {
 			return false, err
@@ -135,6 +149,10 @@ type ConvertLeadCommand struct {
 	TenantID                tenant.ID
 	LeadID                  crmlead.ID
 	ConvertedByMembershipID string
+	// OnlyAssignedTo, when set, limits the command to a lead assigned to this
+	// membership: any other lead does not exist for the caller (ErrLeadNotFound).
+	// Empty means unrestricted (read_all callers, operators, system callers).
+	OnlyAssignedTo string
 }
 
 // ConvertLeadHandler runs the convert flow.
@@ -168,6 +186,9 @@ func (h ConvertLeadHandler) Handle(ctx context.Context, cmd ConvertLeadCommand) 
 	}
 	now := h.now()
 	err := h.leads.UpdateByID(ctx, cmd.TenantID, cmd.LeadID, func(l *crmlead.CrmLead) (bool, error) {
+		if !leadInScope(l, cmd.OnlyAssignedTo) {
+			return false, crmlead.ErrNotFound
+		}
 		if err := l.Convert(cmd.ConvertedByMembershipID, now); err != nil {
 			return false, err
 		}
@@ -186,6 +207,10 @@ type LoseLeadCommand struct {
 	LeadID             crmlead.ID
 	LostByMembershipID string
 	Reason             string
+	// OnlyAssignedTo, when set, limits the command to a lead assigned to this
+	// membership: any other lead does not exist for the caller (ErrLeadNotFound).
+	// Empty means unrestricted (read_all callers, operators, system callers).
+	OnlyAssignedTo string
 }
 
 // LoseLeadHandler runs the lose flow.
@@ -223,6 +248,9 @@ func (h LoseLeadHandler) Handle(ctx context.Context, cmd LoseLeadCommand) error 
 	}
 	now := h.now()
 	err := h.leads.UpdateByID(ctx, cmd.TenantID, cmd.LeadID, func(l *crmlead.CrmLead) (bool, error) {
+		if !leadInScope(l, cmd.OnlyAssignedTo) {
+			return false, crmlead.ErrNotFound
+		}
 		if err := l.Lose(cmd.LostByMembershipID, cmd.Reason, now); err != nil {
 			return false, err
 		}
@@ -233,6 +261,13 @@ func (h LoseLeadHandler) Handle(ctx context.Context, cmd LoseLeadCommand) error 
 
 // mapLeadError collapses the common domain errors to the app-layer
 // sentinels HTTP handlers branch on.
+// leadInScope is the one in-command form of the single-lead access rule: a
+// command that carries OnlyAssignedTo reaches only a lead assigned to that
+// membership. Empty is unrestricted.
+func leadInScope(l *crmlead.CrmLead, onlyAssignedTo string) bool {
+	return onlyAssignedTo == "" || l.AssigneeMembershipID() == onlyAssignedTo
+}
+
 func mapLeadError(err error) error {
 	switch {
 	case err == nil:

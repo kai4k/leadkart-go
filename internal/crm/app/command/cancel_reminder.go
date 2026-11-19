@@ -18,6 +18,10 @@ type CancelReminderCommand struct {
 	ReminderID              reminder.ID
 	CancelledByMembershipID string
 	Reason                  string
+	// OnlyAssignedTo, when set, limits the command to a reminder assigned to
+	// this membership: any other reminder does not exist for the caller
+	// (ErrReminderNotFound). Empty means unrestricted.
+	OnlyAssignedTo string
 }
 
 // CancelReminderHandler runs the cancel flow.
@@ -55,6 +59,9 @@ func (h CancelReminderHandler) Handle(ctx context.Context, cmd CancelReminderCom
 	}
 	now := h.now()
 	err := h.reminders.UpdateByID(ctx, cmd.TenantID, cmd.ReminderID, func(r *reminder.Reminder) (bool, error) {
+		if !reminderInScope(r, cmd.OnlyAssignedTo) {
+			return false, reminder.ErrNotFound
+		}
 		if err := r.Cancel(cmd.CancelledByMembershipID, cmd.Reason, now); err != nil {
 			return false, err
 		}

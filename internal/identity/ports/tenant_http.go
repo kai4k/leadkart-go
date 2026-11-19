@@ -6,6 +6,11 @@ import (
 	"log/slog"
 	"net/http"
 
+	"github.com/leadkart/leadkart-go/internal/common/druglicence"
+	"github.com/leadkart/leadkart-go/internal/common/gst"
+	"github.com/leadkart/leadkart-go/internal/common/pan"
+	"github.com/leadkart/leadkart-go/internal/common/phone"
+	"github.com/leadkart/leadkart-go/internal/common/postaladdress"
 	"github.com/leadkart/leadkart-go/internal/common/slug"
 	"github.com/leadkart/leadkart-go/internal/identity/app"
 	"github.com/leadkart/leadkart-go/internal/identity/app/command"
@@ -403,6 +408,9 @@ func parseTenantIDPath(w http.ResponseWriter, r *http.Request) (tenant.ID, bool)
 //     transaction was rolled back, nothing changed)
 //   - tenant.ErrInvalid (wrapped from aggregate) → 422 (lifecycle
 //     transition rejected, over-length names, missing reason, etc.)
+//   - gst / pan / druglicence / phone / postaladdress ErrInvalid → 422
+//     validation_failed with a per-field `errors` entry (gst_number,
+//     pan_number, drug_licence_number, phone, address)
 //   - tenant.ErrSlugTaken → 409 (mostly relevant for register flow,
 //     included here for completeness when slug-update endpoints land)
 //   - anything else → 500 + slog.ErrorContext
@@ -421,10 +429,26 @@ func writeTenantMutationResult(w http.ResponseWriter, log *slog.Logger, r *http.
 			"the tenant still has dependent records (members, roles, ...) and cannot be deleted; nothing was changed")
 	case errors.Is(err, tenant.ErrInvalid):
 		writeError(w, http.StatusUnprocessableEntity, ErrCodeTenantInvalid, err.Error())
+	case errors.Is(err, gst.ErrInvalid):
+		writeFieldInvalid(w, "gst_number", "must be a valid 15-character GSTIN")
+	case errors.Is(err, pan.ErrInvalid):
+		writeFieldInvalid(w, "pan_number", "must be a valid 10-character PAN")
+	case errors.Is(err, druglicence.ErrInvalid):
+		writeFieldInvalid(w, "drug_licence_number", "is not a valid drug licence number")
+	case errors.Is(err, phone.ErrInvalid):
+		writeFieldInvalid(w, "phone", "must be an E.164 phone number")
+	case errors.Is(err, postaladdress.ErrInvalid):
+		writeFieldInvalid(w, "address", "is not a valid postal address")
 	default:
 		log.ErrorContext(r.Context(), "tenant mutation failed", "err", err)
 		writeError(w, http.StatusInternalServerError, ErrCodeInternalError, "")
 	}
+}
+
+// writeFieldInvalid answers 422 validation_failed with one per-field entry,
+// through the shared validation-error writer.
+func writeFieldInvalid(w http.ResponseWriter, field, problem string) {
+	writeValidationError(w, field+" "+problem, map[string][]string{field: {problem}})
 }
 
 // projectViewToDto bridges the application-layer query view to the

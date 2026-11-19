@@ -32,6 +32,10 @@ type AssignLeadCommand struct {
 	AssigneeMembershipID   string
 	AssignedByMembershipID string
 	Reason                 string
+	// OnlyAssignedTo, when set, limits the command to a lead assigned to this
+	// membership: any other lead does not exist for the caller (ErrLeadNotFound).
+	// Empty means unrestricted (read_all callers, operators, system callers).
+	OnlyAssignedTo string
 }
 
 // AssignLeadResult returns the persisted assignment-history row ID for
@@ -101,6 +105,9 @@ func (h AssignLeadHandler) Handle(ctx context.Context, cmd AssignLeadCommand) (A
 			noop     bool
 		}
 		err := h.leads.UpdateByID(ctx, cmd.TenantID, cmd.LeadID, func(l *crmlead.CrmLead) (bool, error) {
+			if !leadInScope(l, cmd.OnlyAssignedTo) {
+				return false, crmlead.ErrNotFound
+			}
 			captured.previous = l.AssigneeMembershipID()
 			if err := l.Assign(cmd.AssigneeMembershipID, cmd.AssignedByMembershipID, cmd.Reason, now); err != nil {
 				return false, err

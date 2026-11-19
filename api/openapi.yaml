@@ -464,6 +464,8 @@ paths:
         Empty strings clear the corresponding declaration; the aggregate
         accepts a zero Statutory VO for tenants that haven't yet
         onboarded their compliance IDs.
+        A malformed GST, PAN or drug-licence number is 422 `validation_failed` with an
+        `errors` entry under `gst_number`, `pan_number` or `drug_licence_number`.
         Requires `identity.tenants.update` (satisfied by `tenant.admin` in the caller's own tenant, or by `platform.*` equivalents for platform operators; ADR 0068).
       x-required-permissions: [identity.tenants.update]
       parameters:
@@ -487,6 +489,8 @@ paths:
       tags: [tenants]
       summary: Update tenant admin phone + postal address
       description: |
+        A malformed phone or postal address is 422 `validation_failed` with an `errors`
+        entry under `phone` or `address`.
         Requires `identity.tenants.update` (satisfied by `tenant.admin` in the caller's own tenant, or by `platform.*` equivalents for platform operators; ADR 0068).
       x-required-permissions: [identity.tenants.update]
       parameters:
@@ -1400,7 +1404,10 @@ paths:
         on the next request (security_stamp comparison via the
         impersonation-session resolver).
 
-        Requires `platform.impersonation.manage` held by a platform-tenant operator; platform-tenant membership alone, and `platform.tenants.manage`, are refused with 403 `forbidden`.
+        Needs only the platform anchor (a slug-anchored, non-impersonation platform operator), not
+        `platform.impersonation.manage`: only the session's own operator can end it (any other
+        session id is the idempotent 204 no-op), so an operator who lost the permission can still
+        close the session they opened. Principals that are not platform operators are refused with 403 `forbidden`.
       parameters:
         - name: sessionId
           in: path
@@ -2242,6 +2249,11 @@ paths:
     get:
       tags: [crm]
       summary: Get one CRM lead by ID
+      description: |
+        Single-lead access follows the list rule: a caller without `crm.leads.read_all`
+        (and without operator reach) reaches only a lead assigned to their own
+        membership; any other lead answers 404 `lead_not_found`, exactly like a lead that
+        does not exist.
       parameters:
         - { $ref: '#/components/parameters/LeadId' }
         - { $ref: '#/components/parameters/XCommandId' }
@@ -2264,6 +2276,11 @@ paths:
       description: |
         Sets the lead's current assignee. Atomic with an append to the
         AssignmentHistory audit table. Emits `crm.lead_assigned.v1`.
+        Single-lead access follows the list rule: a caller without `crm.leads.read_all`
+        (and without operator reach) reaches only a lead assigned to their own
+        membership; any other lead answers 404 `lead_not_found`, exactly like a lead that
+        does not exist.
+        The response echoes the canonical (lower-case, hyphenated) `assignee_membership_id`.
       parameters:
         - { $ref: '#/components/parameters/LeadId' }
         - { $ref: '#/components/parameters/XCommandId' }
@@ -2297,6 +2314,10 @@ paths:
         Non-terminal transitions only: New → Contacted → Interested →
         Negotiation. Use `/convert` or `/lose` for terminal transitions.
         Emits `crm.lead_stage_changed.v1`.
+        Single-lead access follows the list rule: a caller without `crm.leads.read_all`
+        (and without operator reach) reaches only a lead assigned to their own
+        membership; any other lead answers 404 `lead_not_found`, exactly like a lead that
+        does not exist.
       parameters:
         - { $ref: '#/components/parameters/LeadId' }
         - { $ref: '#/components/parameters/XCommandId' }
@@ -2326,6 +2347,10 @@ paths:
       description: |
         Independent of stage — Hot/Warm/Cold/Dead transition at any
         non-terminal stage. Emits `crm.lead_temperature_changed.v1`.
+        Single-lead access follows the list rule: a caller without `crm.leads.read_all`
+        (and without operator reach) reaches only a lead assigned to their own
+        membership; any other lead answers 404 `lead_not_found`, exactly like a lead that
+        does not exist.
       parameters:
         - { $ref: '#/components/parameters/LeadId' }
         - { $ref: '#/components/parameters/XCommandId' }
@@ -2354,6 +2379,10 @@ paths:
       description: |
         Creates a CallLog row + emits `crm.call_logged.v1`. Refused on
         terminal leads (converted / lost).
+        Single-lead access follows the list rule: a caller without `crm.leads.read_all`
+        (and without operator reach) reaches only a lead assigned to their own
+        membership; any other lead answers 404 `lead_not_found`, exactly like a lead that
+        does not exist.
       parameters:
         - { $ref: '#/components/parameters/LeadId' }
         - { $ref: '#/components/parameters/XCommandId' }
@@ -2386,6 +2415,10 @@ paths:
       description: |
         Sets the lead to `converted`. Emits `crm.lead_converted.v1` —
         this is the future Orders module's create-trigger per ADR 0060.
+        Single-lead access follows the list rule: a caller without `crm.leads.read_all`
+        (and without operator reach) reaches only a lead assigned to their own
+        membership; any other lead answers 404 `lead_not_found`, exactly like a lead that
+        does not exist.
       parameters:
         - { $ref: '#/components/parameters/LeadId' }
         - { $ref: '#/components/parameters/XCommandId' }
@@ -2813,6 +2846,10 @@ paths:
     post:
       tags: [orders]
       summary: Create a draft quotation
+      description: |
+        `customer_lead_id` and every `items[].product_id` must be UUIDs (any RFC 4122
+        spelling; stored and echoed in canonical form). A malformed one is 400
+        `invalid_body`; an absent one is the domain's 422 validation error.
       parameters:
         - { $ref: '#/components/parameters/XCommandId' }
         - $ref: '#/components/parameters/XTenantId'
@@ -2858,6 +2895,9 @@ paths:
     post:
       tags: [orders]
       summary: Append a quotation revision
+      description: |
+        Every `items[].product_id` must be a UUID (any RFC 4122 spelling, stored in
+        canonical form); a malformed one is 400 `invalid_body`.
       parameters:
         - { $ref: '#/components/parameters/QuotationId' }
         - { $ref: '#/components/parameters/XCommandId' }
@@ -3201,6 +3241,10 @@ paths:
       description: |
         Sets the lead to `lost`. `reason` is REQUIRED (audit doctrine).
         Emits `crm.lead_lost.v1`.
+        Single-lead access follows the list rule: a caller without `crm.leads.read_all`
+        (and without operator reach) reaches only a lead assigned to their own
+        membership; any other lead answers 404 `lead_not_found`, exactly like a lead that
+        does not exist.
       parameters:
         - { $ref: '#/components/parameters/LeadId' }
         - { $ref: '#/components/parameters/XCommandId' }
@@ -3237,6 +3281,10 @@ paths:
         CallLogged subscriber (BRD §4.5) + the mature-lead daily scan
         (BRD §4.7) respectively; the HTTP surface only mints manual ones.
         Emits `crm.reminder_created.v1`.
+        Single-lead access follows the list rule: a caller without `crm.leads.read_all`
+        (and without operator reach) reaches only a lead assigned to their own
+        membership; any other lead answers 404 `lead_not_found`, exactly like a lead that
+        does not exist.
       parameters:
         - { $ref: '#/components/parameters/LeadId' }
         - { $ref: '#/components/parameters/XCommandId' }
@@ -3311,6 +3359,9 @@ paths:
       description: |
         Flips state to `sent`. Refused on already-terminal reminders.
         Emits `crm.reminder_marked_sent.v1`.
+        A caller without `crm.leads.read_all` (and without operator reach) reaches only a
+        reminder assigned to their own membership; any other reminder answers 404
+        `reminder_not_found`.
       parameters:
         - { $ref: '#/components/parameters/ReminderId' }
         - { $ref: '#/components/parameters/XCommandId' }
@@ -3335,6 +3386,9 @@ paths:
         Flips state to `cancelled`. `reason` is REQUIRED (audit
         doctrine). Refused on already-terminal reminders. Emits
         `crm.reminder_cancelled.v1`.
+        A caller without `crm.leads.read_all` (and without operator reach) reaches only a
+        reminder assigned to their own membership; any other reminder answers 404
+        `reminder_not_found`.
       parameters:
         - { $ref: '#/components/parameters/ReminderId' }
         - { $ref: '#/components/parameters/XCommandId' }

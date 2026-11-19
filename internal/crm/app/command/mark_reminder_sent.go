@@ -18,6 +18,10 @@ type MarkReminderSentCommand struct {
 	TenantID             tenant.ID
 	ReminderID           reminder.ID
 	MarkedByMembershipID string
+	// OnlyAssignedTo, when set, limits the command to a reminder assigned to
+	// this membership: any other reminder does not exist for the caller
+	// (ErrReminderNotFound). Empty means unrestricted.
+	OnlyAssignedTo string
 }
 
 // MarkReminderSentHandler runs the mark-sent flow.
@@ -53,12 +57,21 @@ func (h MarkReminderSentHandler) Handle(ctx context.Context, cmd MarkReminderSen
 	}
 	now := h.now()
 	err := h.reminders.UpdateByID(ctx, cmd.TenantID, cmd.ReminderID, func(r *reminder.Reminder) (bool, error) {
+		if !reminderInScope(r, cmd.OnlyAssignedTo) {
+			return false, reminder.ErrNotFound
+		}
 		if err := r.MarkSent(cmd.MarkedByMembershipID, now); err != nil {
 			return false, err
 		}
 		return true, nil
 	})
 	return mapReminderError(err)
+}
+
+// reminderInScope mirrors leadInScope for a reminder: the caller's
+// OnlyAssignedTo must be the reminder's assignee. Empty is unrestricted.
+func reminderInScope(r *reminder.Reminder, onlyAssignedTo string) bool {
+	return onlyAssignedTo == "" || r.AssignedToMembershipID() == onlyAssignedTo
 }
 
 // mapReminderError collapses the common reminder errors to the app-layer

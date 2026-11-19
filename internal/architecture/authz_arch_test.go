@@ -30,6 +30,8 @@ var selfServiceRoutes = map[string]string{
 	"DELETE /api/v1/auth/sessions":            "self: own refresh families",
 	"GET /api/v1/auth/me/capabilities":        "self: projection of the caller's own token",
 	"GET /api/v1/auth/me/activity":            "self: own activity",
+	// Platform anchor only: the command ends a session solely when its operator is the caller.
+	"DELETE /api/v1/platform/impersonation/sessions/{sessionId}": "self: ends the caller's own impersonation session (platform-anchored; any other session id is the idempotent no-op)",
 	// Permission requests (REJECT scope): ADR 0055 section 8, handler-inline authority.
 	"POST /api/v1/permission-requests":                     "ADR 0055 §8: any caller may submit",
 	"GET /api/v1/permission-requests":                      "ADR 0055 §8: own and approver-visible requests, filtered in the handler",

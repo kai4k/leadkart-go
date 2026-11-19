@@ -137,9 +137,17 @@ func handleCreateQuotation(log *slog.Logger, a app.Application) http.Handler {
 		if !decode(w, r, &req) {
 			return
 		}
+		lead, ok := canonicalBodyID(w, "customer_lead_id", req.CustomerLeadID)
+		if !ok {
+			return
+		}
+		items, ok := toCmdItems(w, req.Items)
+		if !ok {
+			return
+		}
 		id, err := a.Commands.CreateQuotation.Handle(r.Context(), command.CreateQuotationCommand{
-			TenantID: tid, CustomerLeadID: req.CustomerLeadID,
-			Items: toCmdItems(req.Items), Note: req.Note, CreatedByMembershipID: actor,
+			TenantID: tid, CustomerLeadID: lead,
+			Items: items, Note: req.Note, CreatedByMembershipID: actor,
 		})
 		switch {
 		case err == nil:
@@ -186,8 +194,12 @@ func handleReviseQuotation(log *slog.Logger, a app.Application) http.Handler {
 		if !decode(w, r, &req) {
 			return
 		}
+		items, ok := toCmdItems(w, req.Items)
+		if !ok {
+			return
+		}
 		err := a.Commands.ReviseQuotation.Handle(r.Context(), command.ReviseQuotationCommand{
-			TenantID: tid, QuotationID: id, Items: toCmdItems(req.Items), Note: req.Note, RevisedByMembership: actor,
+			TenantID: tid, QuotationID: id, Items: items, Note: req.Note, RevisedByMembership: actor,
 		})
 		mapQuotationMutation(w, log, r, err, "revise quotation")
 	})

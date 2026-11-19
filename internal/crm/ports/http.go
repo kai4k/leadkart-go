@@ -84,11 +84,35 @@ func AddRoutes(mux *http.ServeMux, log *slog.Logger, a app.Application, verifier
 	mux.Handle("POST /api/v1/crm/reminders/{reminderId}/cancel", manage(handleCancelReminder(log, a)))
 }
 
+// noAssignee is a membership id no lead or reminder can carry; a restricted
+// caller whose claims hold no usable membership is scoped to it and so reaches
+// nothing.
+const noAssignee = "00000000-0000-0000-0000-000000000000"
+
+// assigneeScope is THE single-lead access rule, used by every list, single-lead
+// and reminder handler: a caller holding crm.leads.read_all (or operator reach)
+// is unrestricted and gets ""; everyone else is restricted to their own
+// membership. A restricted caller sees a lead assigned to someone else exactly
+// as a lead that does not exist (404), so a lead id reveals nothing.
+func assigneeScope(r *http.Request) string {
+	c, ok := authn.ClaimsFromContext(r.Context())
+	if !ok {
+		return noAssignee
+	}
+	if authn.CanActAcrossTenants(c) || authn.Satisfies(r.Context(), permission.IdentityPermissions.Crm.Leads.ReadAll) {
+		return ""
+	}
+	if own, ok := authn.CanonicalID(c.MembershipID); ok {
+		return own
+	}
+	return noAssignee
+}
+
 // ----- Handlers --------------------------------------------------------------
 
 func handleListLeads(log *slog.Logger, a app.Application) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		c, ok := authn.ClaimsFromContext(r.Context())
+		_, ok := authn.ClaimsFromContext(r.Context())
 		if !ok {
 			writeError(w, http.StatusUnauthorized, errCodeUnauthenticated, "")
 			return
@@ -119,11 +143,7 @@ func handleListLeads(log *slog.Logger, a app.Application) http.Handler {
 
 		// "Only my leads" gate: callers without crm.leads.read_all see
 		// a SelfFilter-narrowed view. Platform / SuperUser short-circuit.
-		selfFilter := ""
-		if !authn.CanActAcrossTenants(c) &&
-			!authn.Satisfies(r.Context(), permission.IdentityPermissions.Crm.Leads.ReadAll) {
-			selfFilter = c.MembershipID
-		}
+		selfFilter := assigneeScope(r)
 
 		// Per reviewer H8: when SelfFilter is active, a caller-supplied
 		// ?assignee=X that points at a DIFFERENT membership is a
@@ -181,6 +201,10 @@ func handleGetLead(log *slog.Logger, a app.Application) http.Handler {
 			writeError(w, http.StatusInternalServerError, errCodeInternalError, "")
 			return
 		}
+		if scope := assigneeScope(r); scope != "" && v.AssigneeMembershipID != scope {
+			writeError(w, http.StatusNotFound, errCodeLeadNotFound, "")
+			return
+		}
 		writeJSON(w, http.StatusOK, leadViewToDto(v))
 	})
 }
@@ -215,6 +239,7 @@ func handleAssignLead(log *slog.Logger, a app.Application) http.Handler {
 		out, err := a.Commands.AssignLead.Handle(r.Context(), command.AssignLeadCommand{
 			TenantID: tid, LeadID: id, AssigneeMembershipID: assignee,
 			AssignedByMembershipID: c.MembershipID, Reason: req.Reason,
+			OnlyAssignedTo: assigneeScope(r),
 		})
 		switch {
 		case errors.Is(err, command.ErrLeadNotFound):
@@ -230,7 +255,7 @@ func handleAssignLead(log *slog.Logger, a app.Application) http.Handler {
 		}
 		writeJSON(w, http.StatusOK, AssignLeadResponse{
 			AssignmentID:         out.AssignmentID.String(),
-			AssigneeMembershipID: req.AssigneeMembershipID,
+			AssigneeMembershipID: assignee,
 		})
 	})
 }
@@ -264,6 +289,7 @@ func handleChangeStage(log *slog.Logger, a app.Application) http.Handler {
 		}
 		err = a.Commands.ChangeLeadStage.Handle(r.Context(), command.ChangeLeadStageCommand{
 			TenantID: tid, LeadID: id, NewStage: stage, ChangedByMembershipID: c.MembershipID, Reason: req.Reason,
+			OnlyAssignedTo: assigneeScope(r),
 		})
 		mapMutationErr(w, log, r, err, "change stage")
 	})
@@ -298,6 +324,7 @@ func handleChangeTemperature(log *slog.Logger, a app.Application) http.Handler {
 		}
 		err = a.Commands.ChangeLeadTemperature.Handle(r.Context(), command.ChangeLeadTemperatureCommand{
 			TenantID: tid, LeadID: id, NewTemperature: temp, ChangedByMembershipID: c.MembershipID,
+			OnlyAssignedTo: assigneeScope(r),
 		})
 		mapMutationErr(w, log, r, err, "change temperature")
 	})
@@ -332,6 +359,7 @@ func handleLogCall(log *slog.Logger, a app.Application) http.Handler {
 		}
 		out, err := a.Commands.LogCall.Handle(r.Context(), command.LogCallCommand{
 			TenantID: tid, LeadID: id, Outcome: outcome, Notes: req.Notes, LoggedByMembershipID: c.MembershipID,
+			OnlyAssignedTo: assigneeScope(r),
 		})
 		switch {
 		case errors.Is(err, command.ErrLeadNotFound):
@@ -368,6 +396,7 @@ func handleConvertLead(log *slog.Logger, a app.Application) http.Handler {
 		}
 		err := a.Commands.ConvertLead.Handle(r.Context(), command.ConvertLeadCommand{
 			TenantID: tid, LeadID: id, ConvertedByMembershipID: c.MembershipID,
+			OnlyAssignedTo: assigneeScope(r),
 		})
 		mapMutationErr(w, log, r, err, "convert lead")
 	})
@@ -401,6 +430,7 @@ func handleLoseLead(log *slog.Logger, a app.Application) http.Handler {
 		}
 		err := a.Commands.LoseLead.Handle(r.Context(), command.LoseLeadCommand{
 			TenantID: tid, LeadID: id, LostByMembershipID: c.MembershipID, Reason: req.Reason,
+			OnlyAssignedTo: assigneeScope(r),
 		})
 		mapMutationErr(w, log, r, err, "lose lead")
 	})

@@ -245,8 +245,12 @@ func AddRoutes(mux *http.ServeMux, log *slog.Logger, a app.Application, verifier
 		// header pickup is post-launch operational work).
 		mux.Handle("POST /api/v1/platform/impersonation/sessions",
 			platform(p.Platform.ImpersonationManage)(handleCreateImpersonationSession(log, a)))
+		// Ending a session needs only the platform anchor: the command deletes a
+		// session solely when its operator is the caller (anyone else's id is the
+		// idempotent no-op), so an operator who lost platform.impersonation.manage
+		// can still close the session they opened.
 		mux.Handle("DELETE /api/v1/platform/impersonation/sessions/{sessionId}",
-			platform(p.Platform.ImpersonationManage)(handleEndImpersonationSession(log, a)))
+			authn.RequirePlatform(verifier, stampValidator)(handleEndImpersonationSession(log, a)))
 		mux.Handle("GET /api/v1/platform/impersonation/sessions",
 			platform(p.Platform.ImpersonationManage)(handleListImpersonationSessions(log, a)))
 

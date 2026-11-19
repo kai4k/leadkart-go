@@ -44,6 +44,10 @@ type CreateReminderCommand struct {
 	Type                   reminder.Type
 	DueAt                  time.Time
 	Notes                  string
+	// OnlyAssignedTo, when set, limits the command to a lead assigned to this
+	// membership: any other lead does not exist for the caller (ErrLeadNotFound).
+	// Empty means unrestricted (read_all callers, operators, system callers).
+	OnlyAssignedTo string
 }
 
 // CreateReminderResult returns the new reminder ID + an
@@ -122,11 +126,15 @@ func (h CreateReminderHandler) Handle(ctx context.Context, cmd CreateReminderCom
 
 	// Guard against typo'd lead_id at the app layer — surfaces as 404
 	// instead of as a hard FK error from the partial-unique-index path.
-	if _, err := h.leads.GetByID(ctx, cmd.TenantID, cmd.LeadID); err != nil {
+	lead, err := h.leads.GetByID(ctx, cmd.TenantID, cmd.LeadID)
+	if err != nil {
 		if errors.Is(err, crmlead.ErrNotFound) {
 			return CreateReminderResult{}, ErrLeadNotFound
 		}
 		return CreateReminderResult{}, fmt.Errorf("crm create_reminder: load lead: %w", err)
+	}
+	if !leadInScope(lead, cmd.OnlyAssignedTo) {
+		return CreateReminderResult{}, ErrLeadNotFound
 	}
 
 	now := h.now()

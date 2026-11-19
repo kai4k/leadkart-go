@@ -14,7 +14,6 @@ import (
 	"github.com/leadkart/leadkart-go/internal/crm/app/query"
 	"github.com/leadkart/leadkart-go/internal/crm/domain/crmlead"
 	"github.com/leadkart/leadkart-go/internal/crm/domain/reminder"
-	"github.com/leadkart/leadkart-go/internal/identity/domain/permission"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 	"github.com/leadkart/leadkart-go/internal/identity/ports/authn"
 )
@@ -60,6 +59,7 @@ func handleCreateReminder(log *slog.Logger, a app.Application) http.Handler {
 			Type:                   reminder.TypeManual,
 			DueAt:                  req.DueAt,
 			Notes:                  req.Notes,
+			OnlyAssignedTo:         assigneeScope(r),
 		})
 		switch {
 		case errors.Is(err, command.ErrLeadNotFound):
@@ -83,7 +83,7 @@ func handleCreateReminder(log *slog.Logger, a app.Application) http.Handler {
 // + Auth0 read:any canon (mirrors the leads list rule).
 func handleListReminders(log *slog.Logger, a app.Application) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		c, ok := authn.ClaimsFromContext(r.Context())
+		_, ok := authn.ClaimsFromContext(r.Context())
 		if !ok {
 			writeError(w, http.StatusUnauthorized, errCodeUnauthenticated, "")
 			return
@@ -132,11 +132,7 @@ func handleListReminders(log *slog.Logger, a app.Application) http.Handler {
 			filter.LeadID = crmlead.ID(canon)
 		}
 
-		selfFilter := ""
-		if !authn.CanActAcrossTenants(c) &&
-			!authn.Satisfies(r.Context(), permission.IdentityPermissions.Crm.Leads.ReadAll) {
-			selfFilter = c.MembershipID
-		}
+		selfFilter := assigneeScope(r)
 		// Mirror of the leads-list privilege-probe guard (reviewer H8):
 		// caller without read_all + an explicit assignee= that doesn't
 		// match their own membership is a probe.
@@ -186,6 +182,7 @@ func handleMarkReminderSent(log *slog.Logger, a app.Application) http.Handler {
 		}
 		err := a.Commands.MarkReminderSent.Handle(r.Context(), command.MarkReminderSentCommand{
 			TenantID: tid, ReminderID: id, MarkedByMembershipID: c.MembershipID,
+			OnlyAssignedTo: assigneeScope(r),
 		})
 		mapReminderMutationErr(w, log, r, err, "mark reminder sent")
 	})
@@ -220,6 +217,7 @@ func handleCancelReminder(log *slog.Logger, a app.Application) http.Handler {
 		}
 		err := a.Commands.CancelReminder.Handle(r.Context(), command.CancelReminderCommand{
 			TenantID: tid, ReminderID: id, CancelledByMembershipID: c.MembershipID, Reason: req.Reason,
+			OnlyAssignedTo: assigneeScope(r),
 		})
 		mapReminderMutationErr(w, log, r, err, "cancel reminder")
 	})
