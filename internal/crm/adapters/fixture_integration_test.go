@@ -56,10 +56,8 @@ var sharedPG *pgtest.Container
 // discipline lives in one file).
 func TestMain(m *testing.M) {
 	code := pgtest.RunMain(m, pgtest.Config{
-		// USAGE on these schemas. "app" is implicit.
-		Schemas: []string{"identity", "crm"},
-		// DML on these.
-		Grants: []string{"identity", "crm"},
+		// Schemas TruncateAll wipes.
+		TruncateSchemas: []string{"identity", "crm"},
 	}, func(c *pgtest.Container) {
 		sharedPG = c
 	})

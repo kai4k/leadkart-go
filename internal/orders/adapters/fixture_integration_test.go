@@ -29,8 +29,7 @@ var sharedPG *pgtest.Container
 // goleak's leak check.
 func TestMain(m *testing.M) {
 	code := pgtest.RunMain(m, pgtest.Config{
-		Schemas: []string{"orders"},
-		Grants:  []string{"orders"},
+		TruncateSchemas: []string{"orders"},
 	}, func(c *pgtest.Container) {
 		sharedPG = c
 	})

@@ -31,8 +31,7 @@
 //
 //	func TestMain(m *testing.M) {
 //	    code := pgtest.RunMain(m, pgtest.Config{
-//	        Schemas: []string{"app", "identity"},
-//	        Grants:  []string{"identity"},
+//	        TruncateSchemas: []string{"identity"},
 //	    }, func(c *pgtest.Container) {
 //	        sharedPG = c   // ← runs BEFORE m.Run() so tests see non-nil
 //	    })
@@ -84,28 +83,23 @@ const (
 	ownerPasswdLit = "leadkart_test" //nolint:gosec // hardcoded test-only role; ephemeral container
 )
 
-// Config configures what the shared container's bootstrap should look
-// like for THIS test package. Each module's TestMain supplies its own
-// schema list (which schemas to grant USAGE on) and grants list (which
-// schemas the app role gets DML on).
+// Config configures the shared container's bootstrap for THIS test package.
 //
-// Most modules need:
-//   - Schemas: app + their own module schema (+ identity for tenant FK)
-//   - Grants:  their own module schema (+ identity if the module's tests
-//     directly insert tenants/persons for cross-FK seeding)
+// The application role's privileges are NOT configured here: migration
+// 20260606000001 grants leadkart_app everything the application needs, and
+// the harness only creates the (non-superuser) role BEFORE running migrations,
+// exactly as docker/postgres/init.sql does in production. So tests run on the
+// grants production gets; a missing grant fails a test instead of being papered
+// over by the fixture.
 //
 // App role credentials are fixed test-only constants (see top of file).
 // Not exposed via Config to keep the surface tight + satisfy arch-test
 // discipline (no password fields on non-input DTOs).
 type Config struct {
-	// Schemas is the list of schemas the leadkart_app role gets USAGE
-	// permission on. Always includes "app" implicitly.
-	Schemas []string
-
-	// Grants is the list of schemas the leadkart_app role gets
-	// SELECT/INSERT/UPDATE/DELETE on ALL TABLES. Must be a subset of
-	// Schemas.
-	Grants []string
+	// TruncateSchemas is the list of schemas TruncateAll wipes (the module's
+	// own schema, plus identity when its tests seed tenants or persons). The
+	// shared "common" schema is always included.
+	TruncateSchemas []string
 
 	// PreserveTables are migration-seeded config/reference tables
 	// (qualified "schema.table") that TruncateAll must NOT wipe — e.g.
@@ -140,7 +134,7 @@ func (c *Container) AppDSN() string { return c.appDSN }
 // role. Useful for TRUNCATE / bypass-RLS reads in test helpers.
 func (c *Container) OwnerDSN() string { return c.ownerDSN }
 
-// TruncateAll wipes data from every table in the configured Grants
+// TruncateAll wipes data from every table in the configured TruncateSchemas
 // schemas (preserving the goose_db_version migration ledger). Use ONLY
 // for tests that NEED cross-tenant isolation — outbox forwarder tests,
 // platform-scope reads, "expect zero rows globally" assertions.
@@ -168,7 +162,7 @@ func (c *Container) TruncateAll(t testing.TB) {
 		preserve[p] = true
 	}
 
-	schemaList := "'" + strings.Join(c.cfg.Grants, "','") + "'"
+	schemaList := "'" + strings.Join(c.cfg.TruncateSchemas, "','") + "'"
 	q := `SELECT schemaname, tablename
 	      FROM pg_tables
 	      WHERE schemaname IN (` + schemaList + `)
@@ -281,7 +275,7 @@ func setupContainer(ctx context.Context, cfg Config) (*Container, error) {
 		return nil, errors.Join(fmt.Errorf("find migrations: %w", err), terminate(pg))
 	}
 
-	if err := applyMigrationsAndGrants(bootCtx, ownerDSN, migDir, cfg); err != nil {
+	if err := applyMigrations(bootCtx, ownerDSN, migDir); err != nil {
 		return nil, errors.Join(fmt.Errorf("bootstrap: %w", err), terminate(pg))
 	}
 
@@ -321,65 +315,40 @@ func setupContainer(ctx context.Context, cfg Config) (*Container, error) {
 	}, nil
 }
 
-// applyMigrationsAndGrants runs goose up then provisions the app role
-// with the configured schema grants. Mirrors the prior per-fixture
-// bootstrapTestDB, generalised for any module's grant list.
-func applyMigrationsAndGrants(ctx context.Context, ownerDSN, migDir string, cfg Config) error {
+// applyMigrations creates the application role (empty of privileges, exactly as
+// docker/postgres/init.sql does in production) and THEN runs goose up, so
+// migration 20260606000001 grants it what the application needs. Creating the
+// role first is what lets the migration's grants apply (it is a no-op when the
+// role does not exist).
+func applyMigrations(ctx context.Context, ownerDSN, migDir string) error {
 	gooseDB, err := goose.OpenDBWithDriver("pgx", ownerDSN)
 	if err != nil {
 		return fmt.Errorf("goose open: %w", err)
 	}
 	defer func() { _ = gooseDB.Close() }()
 
+	create := fmt.Sprintf(`CREATE ROLE %s LOGIN PASSWORD '%s' NOSUPERUSER NOINHERIT NOCREATEROLE NOCREATEDB`,
+		appRoleName, appRolePasswd)
+	if _, err := gooseDB.ExecContext(ctx, create); err != nil {
+		return fmt.Errorf("create %s: %w", appRoleName, err)
+	}
 	if err := pg.EnsureGooseDialect(); err != nil {
 		return fmt.Errorf("set dialect: %w", err)
 	}
 	if err := goose.UpContext(ctx, gooseDB, migDir); err != nil {
 		return fmt.Errorf("goose up: %w", err)
 	}
-
-	// "app" (RLS GUC helpers) and "common" (the shared watermill-sql outbox
-	// relay + cross-cutting infra every module writes through, per ADR
-	// 0064/0067) are universal — always provisioned regardless of the
-	// per-package Config, mirroring how "app" has always been implicit.
-	usageSchemas := dedupeSchemas(append([]string{"app", "common"}, cfg.Schemas...))
-	grantSchemas := dedupeSchemas(append([]string{"common"}, cfg.Grants...))
-	stmts := []string{
-		fmt.Sprintf(`CREATE ROLE %s LOGIN PASSWORD '%s' NOSUPERUSER NOINHERIT NOCREATEROLE NOCREATEDB`,
-			appRoleName, appRolePasswd),
-		fmt.Sprintf(`GRANT USAGE ON SCHEMA %s TO %s`, strings.Join(usageSchemas, ", "), appRoleName),
-		fmt.Sprintf(`GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA app TO %s`, appRoleName),
-	}
-	for _, schema := range grantSchemas {
-		stmts = append(stmts,
-			fmt.Sprintf(`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA %s TO %s`,
-				schema, appRoleName),
-			// Serial/identity columns need explicit sequence USAGE — GRANT ON
-			// ALL TABLES does NOT cover the backing sequences. Pair the two so
-			// any serial in a granted schema works (e.g. the watermill-sql
-			// relay common.outbox."offset" BIGSERIAL). Per ADR 0064/0067.
-			fmt.Sprintf(`GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA %s TO %s`,
-				schema, appRoleName))
-	}
-	for _, s := range stmts {
-		if _, err := gooseDB.ExecContext(ctx, s); err != nil {
-			return fmt.Errorf("provision %s: %s: %w", appRoleName, s, err)
-		}
-	}
 	return nil
 }
 
 // normalizeConfig prepends the universal "common" schema — the shared
 // watermill-sql outbox relay + cross-cutting infra every module reads and
-// writes (ADR 0064/0067) — to both Schemas and Grants. This makes `common`
-// implicit everywhere the Config is consumed: the app-role grants AND
-// TruncateAll's wipe scope. Without it, per-module fixtures (whose Grants
-// list only their own schema) leave common.outbox un-truncated, so its
-// rows accumulate across tests and outbox-count assertions see stale rows.
-// Mirrors how "app" has always been implicit.
+// writes (ADR 0064/0067) — to TruncateSchemas. Without it, per-module fixtures
+// (whose list names only their own schema) leave common.outbox un-truncated,
+// so its rows accumulate across tests and outbox-count assertions see stale
+// rows.
 func normalizeConfig(cfg Config) Config {
-	cfg.Schemas = dedupeSchemas(append([]string{"common"}, cfg.Schemas...))
-	cfg.Grants = dedupeSchemas(append([]string{"common"}, cfg.Grants...))
+	cfg.TruncateSchemas = dedupeSchemas(append([]string{"common"}, cfg.TruncateSchemas...))
 	return cfg
 }
 

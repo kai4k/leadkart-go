@@ -31,8 +31,7 @@ var sharedPG *pgtest.Container
 // schema; identity schema is included for the FK from audit_log_entry.
 func TestMain(m *testing.M) {
 	code := pgtest.RunMain(m, pgtest.Config{
-		Schemas: []string{"identity", "common"},
-		Grants:  []string{"identity", "common"},
+		TruncateSchemas: []string{"identity", "common"},
 	}, func(c *pgtest.Container) {
 		sharedPG = c
 	})

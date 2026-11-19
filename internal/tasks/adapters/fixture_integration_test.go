@@ -28,8 +28,7 @@ var sharedPG *pgtest.Container
 // hierarchy traversal bridge in cmd/api).
 func TestMain(m *testing.M) {
 	code := pgtest.RunMain(m, pgtest.Config{
-		Schemas: []string{"identity", "tasks"},
-		Grants:  []string{"identity", "tasks"},
+		TruncateSchemas: []string{"identity", "tasks"},
 	}, func(c *pgtest.Container) {
 		sharedPG = c
 	})

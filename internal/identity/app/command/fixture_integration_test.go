@@ -27,15 +27,14 @@ import (
 // nolint:gochecknoglobals // canonical TestMain shared-fixture pattern
 var sharedPG *pgtest.Container
 
-// TestMain bootstrap. Schemas + Grants reflect what the Register +
+// TestMain bootstrap. TruncateSchemas reflects what the Register +
 // Login + RotateRefresh flow tests touch: identity schema only.
 //
 // Wraps m.Run() with goleak after-test check; replaces the deleted
 // testmain_integration_test.go.
 func TestMain(m *testing.M) {
 	code := pgtest.RunMain(m, pgtest.Config{
-		Schemas: []string{"identity"},
-		Grants:  []string{"identity"},
+		TruncateSchemas: []string{"identity"},
 	}, func(c *pgtest.Container) {
 		sharedPG = c
 	})

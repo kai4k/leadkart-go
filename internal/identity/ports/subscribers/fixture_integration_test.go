@@ -31,7 +31,7 @@ import (
 // nolint:gochecknoglobals // canonical TestMain shared-fixture pattern
 var sharedPG *pgtest.Container
 
-// TestMain bootstrap. Schemas + Grants reflect the subscriber tests'
+// TestMain bootstrap. TruncateSchemas reflects the subscriber tests'
 // touch surface:
 //   - identity:         tenants/persons/refresh_token_families tables
 //   - common:   audit_log (cascade subscriber writes audit rows)
@@ -41,8 +41,7 @@ var sharedPG *pgtest.Container
 // testmain_integration_test.go.
 func TestMain(m *testing.M) {
 	code := pgtest.RunMain(m, pgtest.Config{
-		Schemas: []string{"identity", "common"},
-		Grants:  []string{"identity", "common", "app"},
+		TruncateSchemas: []string{"identity", "common", "app"},
 	}, func(c *pgtest.Container) {
 		sharedPG = c
 	})

@@ -34,8 +34,7 @@ var fixedNow = time.Date(2026, 6, 14, 12, 0, 0, 0, time.UTC)
 
 func TestMain(m *testing.M) {
 	code := pgtest.RunMain(m, pgtest.Config{
-		Schemas: []string{"identity", "notifications"},
-		Grants:  []string{"identity", "notifications"},
+		TruncateSchemas: []string{"identity", "notifications"},
 	}, func(c *pgtest.Container) {
 		sharedPG = c
 	})

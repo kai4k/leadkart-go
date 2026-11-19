@@ -32,12 +32,10 @@ var sharedPG *pgtest.Container
 // and checks for goroutine leaks after m.Run().
 func TestMain(m *testing.M) {
 	code := pgtest.RunMain(m, pgtest.Config{
-		// USAGE on these schemas. "app" is implicit.
-		Schemas: []string{"identity", "inventory"},
-		// DML on these. inventory is included because a handful of
+		// Schemas TruncateAll wipes. inventory is included because a handful of
 		// older tests cross the FK boundary (legacy from when identity
 		// and inventory shared a migrations bundle).
-		Grants: []string{"identity", "inventory"},
+		TruncateSchemas: []string{"identity", "inventory"},
 	}, func(c *pgtest.Container) {
 		sharedPG = c
 	})

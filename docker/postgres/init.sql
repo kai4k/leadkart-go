@@ -9,15 +9,23 @@
 -- says MigrationRunner owns ALL schema):
 --   1. Enable pg_stat_statements extension (compose `command:` preloads
 --      the .so but the EXTENSION must be installed once).
---   2. Create the leadkart_app + leadkart_test runtime roles. Migrations
---      run as the owner (POSTGRES_USER) and GRANT to these names — they
---      MUST exist when the migrate container runs.
+--   2. Create the leadkart_app + leadkart_test runtime roles, EMPTY of
+--      privileges. They MUST exist when the migrate container runs: migration
+--      20260606000001_application_role_grants.sql grants leadkart_app its
+--      privileges (and is a no-op if the role is missing).
 --
 -- Out of scope (NEVER add here — owned by migrations):
 --   - CREATE SCHEMA (migrations 20260505000001 + 20260505000002 + ...)
 --   - app.current_tenant() / app.is_platform() (migration 20260505000001)
---   - GRANT statements on specific schemas (migrations issue them after
---     creating the schemas)
+--   - GRANT / ALTER DEFAULT PRIVILEGES for leadkart_app: they live in
+--     migrations, starting with 20260606000001 (USAGE on every application
+--     schema; SELECT/INSERT/UPDATE/DELETE on tables; USAGE/SELECT on sequences;
+--     EXECUTE on app.* functions; default privileges so tables created later
+--     in those schemas by the migration owner are covered). A NEW schema is NOT
+--     covered automatically: its init migration must carry its own
+--     GRANT USAGE ON SCHEMA + ALTER DEFAULT PRIVILEGES for leadkart_app, and
+--     TestAppRoleHasPrivilegesOnEveryApplicationTable fails CI if it does not.
+--     leadkart_test is not granted anything by migrations (dev/test-runner role).
 --
 -- Password hygiene:
 --   The passwords below are PLACEHOLDERS for first-boot. Production MUST

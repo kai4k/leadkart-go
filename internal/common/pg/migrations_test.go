@@ -92,21 +92,15 @@ func applyMigrations(t *testing.T, dsn string) {
 // RLS actually fires — testcontainers' default user is a superuser, which
 // unconditionally bypasses RLS and would mask isolation bugs.
 //
+// Call it BEFORE applyMigrations: migration 20260606000001 grants the role its
+// privileges, so there are deliberately no GRANT statements here.
+//
 // The test uses `SET ROLE leadkart_app` inside the connection rather than
 // reconnecting, which is in-session and applies immediately.
 func createAppRole(t *testing.T, db *sql.DB) {
 	t.Helper()
-	ctx := t.Context()
-	stmts := []string{
-		`CREATE ROLE leadkart_app NOSUPERUSER NOINHERIT NOCREATEROLE NOCREATEDB`,
-		`GRANT USAGE ON SCHEMA app, identity TO leadkart_app`,
-		`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA identity TO leadkart_app`,
-		`GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA app TO leadkart_app`,
-	}
-	for _, s := range stmts {
-		if _, err := db.ExecContext(ctx, s); err != nil {
-			t.Fatalf("setup leadkart_app: %s: %v", s, err)
-		}
+	if _, err := db.ExecContext(t.Context(), `CREATE ROLE leadkart_app NOSUPERUSER NOINHERIT NOCREATEROLE NOCREATEDB`); err != nil {
+		t.Fatalf("setup leadkart_app: %v", err)
 	}
 }
 
@@ -261,7 +255,6 @@ func TestMigrationsApplyCleanly(t *testing.T) {
 // identity.tenant_memberships returns ONLY tenant X's rows.
 func TestRLSIsolatesTenants(t *testing.T) {
 	dsn := startPostgres(t)
-	applyMigrations(t, dsn)
 
 	db, err := sql.Open("pgx", dsn)
 	if err != nil {
@@ -270,6 +263,7 @@ func TestRLSIsolatesTenants(t *testing.T) {
 	defer db.Close()
 
 	createAppRole(t, db)
+	applyMigrations(t, dsn)
 
 	ctx := t.Context()
 	tenantA, tenantB := uuid.New(), uuid.New()
@@ -446,5 +440,216 @@ func TestSingleActiveMembershipInvariant(t *testing.T) {
 	got := err.Error()
 	if !strings.Contains(got, "23505") && !strings.Contains(got, "uq_memberships_person_active") {
 		t.Fatalf("expected unique violation on uq_memberships_person_active, got: %v", err)
+	}
+}
+
+// ----- Application role privileges (migration 20260606000001) ----------------
+
+// appSchemas returns every schema the migrations created (all but pg_*,
+// information_schema and public): a future module schema shows up here
+// automatically, which is what makes the privilege tests below fail CI when its
+// init migration forgets the grants.
+func appSchemas(t *testing.T, db *sql.DB) []string {
+	t.Helper()
+	return queryStrings(t, db, `
+		SELECT nspname FROM pg_namespace
+		WHERE nspname NOT LIKE 'pg\_%' AND nspname NOT IN ('information_schema', 'public')
+		ORDER BY nspname`)
+}
+
+func queryStrings(t *testing.T, db *sql.DB, q string, args ...any) []string {
+	t.Helper()
+	rows, err := db.QueryContext(t.Context(), q, args...)
+	if err != nil {
+		t.Fatalf("query: %v", err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var s string
+		if err := rows.Scan(&s); err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		out = append(out, s)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate: %v", err)
+	}
+	return out
+}
+
+// pgArray renders a text[] literal for ANY($1) without importing pgtype.
+func pgArray(items []string) string { return "{" + strings.Join(items, ",") + "}" }
+
+func hasPriv(t *testing.T, db *sql.DB, q string, args ...any) bool {
+	t.Helper()
+	var ok bool
+	if err := db.QueryRowContext(t.Context(), q, args...).Scan(&ok); err != nil {
+		t.Fatalf("%s %v: %v", q, args, err)
+	}
+	return ok
+}
+
+// leadkart_app, created before the migrations run (as docker/postgres/init.sql
+// does in production), ends with exactly the privileges the application needs
+// on every table, sequence and function of every application schema, and with
+// nothing more.
+func TestAppRoleHasPrivilegesOnEveryApplicationTable(t *testing.T) {
+	dsn := startPostgres(t)
+	db, err := sql.Open("pgx", dsn)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer db.Close()
+	createAppRole(t, db)
+	applyMigrations(t, dsn)
+
+	schemas := appSchemas(t, db)
+	if len(schemas) < 10 {
+		t.Fatalf("expected the application schemas, found %v", schemas)
+	}
+
+	var super, bypass, createDB, createRole bool
+	if err := db.QueryRowContext(t.Context(),
+		`SELECT rolsuper, rolbypassrls, rolcreatedb, rolcreaterole FROM pg_roles WHERE rolname = 'leadkart_app'`).
+		Scan(&super, &bypass, &createDB, &createRole); err != nil {
+		t.Fatalf("read role: %v", err)
+	}
+	if super || bypass || createDB || createRole {
+		t.Fatalf("leadkart_app must be a plain role: super=%v bypassrls=%v createdb=%v createrole=%v", super, bypass, createDB, createRole)
+	}
+	if owned := queryStrings(t, db, `
+		SELECT n.nspname || '.' || c.relname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+		WHERE c.relowner = (SELECT oid FROM pg_roles WHERE rolname = 'leadkart_app')`); len(owned) != 0 {
+		t.Fatalf("leadkart_app must own nothing, owns %v", owned)
+	}
+
+	for _, s := range schemas {
+		usage := hasPriv(t, db, `SELECT has_schema_privilege('leadkart_app', $1, 'USAGE')`, s)
+		create := hasPriv(t, db, `SELECT has_schema_privilege('leadkart_app', $1, 'CREATE')`, s)
+		if !usage || create {
+			t.Errorf("schema %s: USAGE=%v CREATE=%v, want USAGE only: a new schema needs the grants and default privileges of migration 20260606000001 in its own init migration", s, usage, create)
+		}
+	}
+
+	// Every table: DML yes; TRUNCATE / REFERENCES / TRIGGER no.
+	tables := queryStrings(t, db, `
+		SELECT n.nspname || '.' || c.relname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+		WHERE c.relkind IN ('r', 'p') AND n.nspname = ANY($1) ORDER BY 1`, pgArray(schemas))
+	if len(tables) < 40 {
+		t.Fatalf("expected the application tables, found %d", len(tables))
+	}
+	for _, tb := range tables {
+		for _, p := range []string{"SELECT", "INSERT", "UPDATE", "DELETE"} {
+			if !hasPriv(t, db, `SELECT has_table_privilege('leadkart_app', $1, $2)`, tb, p) {
+				t.Errorf("leadkart_app lacks %s on %s: the table's schema is missing the grants of migration 20260606000001", p, tb)
+			}
+		}
+		for _, p := range []string{"TRUNCATE", "REFERENCES", "TRIGGER"} {
+			if hasPriv(t, db, `SELECT has_table_privilege('leadkart_app', $1, $2)`, tb, p) {
+				t.Errorf("leadkart_app must not hold %s on %s", p, tb)
+			}
+		}
+	}
+
+	// Every sequence: USAGE + SELECT, not UPDATE.
+	for _, sq := range queryStrings(t, db, `
+		SELECT n.nspname || '.' || c.relname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+		WHERE c.relkind = 'S' AND n.nspname = ANY($1) ORDER BY 1`, pgArray(schemas)) {
+		usage := hasPriv(t, db, `SELECT has_sequence_privilege('leadkart_app', $1, 'USAGE')`, sq)
+		sel := hasPriv(t, db, `SELECT has_sequence_privilege('leadkart_app', $1, 'SELECT')`, sq)
+		upd := hasPriv(t, db, `SELECT has_sequence_privilege('leadkart_app', $1, 'UPDATE')`, sq)
+		if !usage || !sel || upd {
+			t.Errorf("sequence %s: USAGE=%v SELECT=%v UPDATE=%v, want USAGE+SELECT only", sq, usage, sel, upd)
+		}
+	}
+
+	// The RLS helper functions the policies call.
+	for _, fn := range []string{"app.current_tenant()", "app.is_platform()"} {
+		if !hasPriv(t, db, `SELECT has_function_privilege('leadkart_app', $1, 'EXECUTE')`, fn) {
+			t.Errorf("leadkart_app cannot EXECUTE %s", fn)
+		}
+	}
+
+	// goose keeps its ledger out of the application's reach.
+	if hasPriv(t, db, `SELECT has_table_privilege('leadkart_app', 'public.goose_db_version', 'SELECT')`) {
+		t.Error("leadkart_app must have no privileges on goose's version table")
+	}
+}
+
+// A real read against every RLS table, as leadkart_app (SET ROLE), proves the
+// grants are usable (no "permission denied") while row-level security is in
+// force for the role (migration-seeded config tables such as platform.lead_tiers
+// are readable by design, so row counts are not asserted).
+func TestAppRoleCanReadEveryApplicationTableUnderRLS(t *testing.T) {
+	dsn := startPostgres(t)
+	db, err := sql.Open("pgx", dsn)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer db.Close()
+	createAppRole(t, db)
+	applyMigrations(t, dsn)
+
+	tables := queryStrings(t, db, `
+		SELECT quote_ident(n.nspname) || '.' || quote_ident(c.relname) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+		WHERE c.relkind IN ('r', 'p') AND n.nspname = ANY($1) AND c.relrowsecurity ORDER BY 1`, pgArray(appSchemas(t, db)))
+	if len(tables) == 0 {
+		t.Fatal("no RLS tables found")
+	}
+	conn, err := db.Conn(t.Context())
+	if err != nil {
+		t.Fatalf("conn: %v", err)
+	}
+	defer conn.Close()
+	if _, err := conn.ExecContext(t.Context(), `SET ROLE leadkart_app`); err != nil {
+		t.Fatalf("set role: %v", err)
+	}
+	for _, tb := range tables {
+		var n int
+		if err := conn.QueryRowContext(t.Context(), `SELECT count(*) FROM `+tb).Scan(&n); err != nil {
+			t.Errorf("read %s as leadkart_app: %v", tb, err)
+		}
+	}
+}
+
+// Down then up again leaves the same privileges (reversible, idempotent). With
+// no leadkart_app role the migration is a no-op: TestMigrationsApplyCleanly
+// runs the whole set without one.
+func TestAppRoleGrantsMigration_DownThenUpIsIdempotent(t *testing.T) {
+	dsn := startPostgres(t)
+	db, err := sql.Open("pgx", dsn)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer db.Close()
+	createAppRole(t, db)
+	applyMigrations(t, dsn)
+
+	usage := func() bool {
+		return hasPriv(t, db, `SELECT has_schema_privilege('leadkart_app', 'identity', 'USAGE')`)
+	}
+	if !usage() {
+		t.Fatal("grants missing after up")
+	}
+	gdb, err := goose.OpenDBWithDriver("pgx", dsn)
+	if err != nil {
+		t.Fatalf("goose open: %v", err)
+	}
+	defer gdb.Close()
+	if err := pg.EnsureGooseDialect(); err != nil {
+		t.Fatalf("dialect: %v", err)
+	}
+	if err := goose.DownContext(t.Context(), gdb, migrationsDir(t)); err != nil {
+		t.Fatalf("goose down: %v", err)
+	}
+	if usage() {
+		t.Fatal("grants survived the down migration")
+	}
+	if err := goose.UpContext(t.Context(), gdb, migrationsDir(t)); err != nil {
+		t.Fatalf("goose up again: %v", err)
+	}
+	if !usage() {
+		t.Fatal("grants missing after re-up")
 	}
 }

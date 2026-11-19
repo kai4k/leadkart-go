@@ -284,35 +284,17 @@ func startWiredPostgresForHTTP(t *testing.T) *pgxpool.Pool {
 		_ = gooseDB.Close()
 		t.Fatalf("set dialect: %v", err)
 	}
+	// The application role exists BEFORE migrations run, exactly as
+	// docker/postgres/init.sql provisions it in production, so migration
+	// 20260606000001 grants it what the application needs. No hand-written
+	// GRANTs here: the tests run on the privileges production gets.
+	if _, err := gooseDB.ExecContext(ctx, `CREATE ROLE leadkart_app LOGIN PASSWORD 'leadkart_app_pw' NOSUPERUSER NOINHERIT NOCREATEROLE NOCREATEDB`); err != nil {
+		_ = gooseDB.Close()
+		t.Fatalf("create leadkart_app: %v", err)
+	}
 	if err := goose.UpContext(ctx, gooseDB, migrationsDir(t)); err != nil {
 		_ = gooseDB.Close()
 		t.Fatalf("goose up: %v", err)
-	}
-	for _, s := range []string{
-		`CREATE ROLE leadkart_app LOGIN PASSWORD 'leadkart_app_pw' NOSUPERUSER NOINHERIT NOCREATEROLE NOCREATEDB`,
-		// newServer wires EVERY module, so the app role needs every module
-		// schema (mirrors production provisioning + the pgtest harness).
-		`GRANT USAGE ON SCHEMA app, common, identity, platform, crm, inventory, tasks, dispatch, orders, notifications TO leadkart_app`,
-		// `common` holds the shared watermill-sql outbox relay that every
-		// module publishes through (ADR 0064/0067). Its "offset" BIGSERIAL
-		// needs sequence USAGE in addition to table DML — GRANT ON ALL TABLES
-		// does NOT cover the backing sequences.
-		`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA common TO leadkart_app`,
-		`GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA common TO leadkart_app`,
-		`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA identity TO leadkart_app`,
-		`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA platform TO leadkart_app`,
-		`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA crm TO leadkart_app`,
-		`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA inventory TO leadkart_app`,
-		`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA tasks TO leadkart_app`,
-		`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA dispatch TO leadkart_app`,
-		`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA orders TO leadkart_app`,
-		`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA notifications TO leadkart_app`,
-		`GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA app TO leadkart_app`,
-	} {
-		if _, err := gooseDB.ExecContext(ctx, s); err != nil {
-			_ = gooseDB.Close()
-			t.Fatalf("provision leadkart_app: %s: %v", s, err)
-		}
 	}
 	_ = gooseDB.Close()
 

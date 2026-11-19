@@ -37,10 +37,8 @@ var sharedPG *pgtest.Container
 // wraps m.Run() with goleak's leak check.
 func TestMain(m *testing.M) {
 	code := pgtest.RunMain(m, pgtest.Config{
-		// USAGE on these schemas ("app" implicit).
-		Schemas: []string{"identity", "platform"},
-		// DML on these.
-		Grants: []string{"identity", "platform"},
+		// Schemas TruncateAll wipes.
+		TruncateSchemas: []string{"identity", "platform"},
 		// Migration-seeded marketplace tier config — availability checks
 		// depend on its rows; TruncateAll must not wipe it (ADR 0065).
 		PreserveTables: []string{"platform.lead_tiers"},
