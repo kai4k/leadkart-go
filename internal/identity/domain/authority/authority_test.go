@@ -45,7 +45,7 @@ func mkMember(t *testing.T, n int, tid tenant.ID, active bool, reportsTo members
 	}
 	m := membership.UnmarshalFromDB(membership.Snapshot{ID: membership.ID(uid(n)), PersonID: person.ID(uid(n + 500)),
 		TenantID: tid, Status: status, JoinedAt: t0, RoleAssignments: ids, ReportsTo: reportsTo})
-	out, err := authority.MemberOf(m, roles, true)
+	out, err := authority.MemberOf(m, roles, t0, activePerson())
 	if err != nil {
 		t.Fatalf("MemberOf: %v", err)
 	}
@@ -135,18 +135,18 @@ func TestPolicy_DecisionTable(t *testing.T) {
 		{"impersonation on owner", aImp.MayActOn(owner1), authority.ErrInsufficientRank},
 		{"impersonation on manager", aImp.MayActOn(mgr), nil},
 		// H3 — grant ceiling
-		{"owner confers tenant.admin", aOwner.MayChangeOverrides(user, authority.Overrides{}, authority.Overrides{Granted: []string{p.Meta.TenantAdmin}}), nil},
-		{"admin confers tenant.admin", aAdmin.MayChangeOverrides(user, authority.Overrides{}, authority.Overrides{Granted: []string{p.Meta.TenantAdmin}}), authority.ErrGrantExceedsAuthority},
-		{"admin confers read_all", aAdmin.MayChangeOverrides(user, authority.Overrides{}, authority.Overrides{Granted: []string{p.Crm.Leads.ReadAll}}), nil},
-		{"manager confers unheld", aMgr.MayChangeOverrides(user, authority.Overrides{}, authority.Overrides{Granted: []string{p.Crm.Leads.Assign}}), authority.ErrGrantExceedsAuthority},
-		{"manager confers held", aMgr.MayChangeOverrides(user, authority.Overrides{}, authority.Overrides{Granted: []string{p.Crm.Leads.ReadAll}}), nil},
-		{"owner confers reserved", aOwner.MayChangeOverrides(user, authority.Overrides{}, authority.Overrides{Granted: []string{p.Platform.TenantsManage}}), authority.ErrGrantExceedsAuthority},
-		{"super confers reserved", aSuper.MayChangeOverrides(user, authority.Overrides{}, authority.Overrides{Granted: []string{p.Platform.TenantsManage}}), nil},
-		{"operator confers tenant.admin", aOp.MayChangeOverrides(user, authority.Overrides{}, authority.Overrides{Granted: []string{p.Meta.TenantAdmin}}), nil},
-		{"operator confers anonymise", aOp.MayChangeOverrides(user, authority.Overrides{}, authority.Overrides{Granted: []string{p.Users.Anonymise}}), authority.ErrGrantExceedsAuthority},
-		{"impersonation confers tenant.admin", aImp.MayChangeOverrides(user, authority.Overrides{}, authority.Overrides{Granted: []string{p.Meta.TenantAdmin}}), authority.ErrGrantExceedsAuthority},
-		{"impersonation confers crm", aImp.MayChangeOverrides(user, authority.Overrides{}, authority.Overrides{Granted: []string{p.Crm.Leads.Read}}), nil},
-		{"zero confers", zero.MayChangeOverrides(user, authority.Overrides{}, authority.Overrides{}), authority.ErrNoAuthority},
+		{"owner confers tenant.admin", aOwner.MayChangeOverrides(user, authority.Overrides{Granted: grants(p.Meta.TenantAdmin)}), nil},
+		{"admin confers tenant.admin", aAdmin.MayChangeOverrides(user, authority.Overrides{Granted: grants(p.Meta.TenantAdmin)}), authority.ErrGrantExceedsAuthority},
+		{"admin confers read_all", aAdmin.MayChangeOverrides(user, authority.Overrides{Granted: grants(p.Crm.Leads.ReadAll)}), nil},
+		{"manager confers unheld", aMgr.MayChangeOverrides(user, authority.Overrides{Granted: grants(p.Crm.Leads.Assign)}), authority.ErrGrantExceedsAuthority},
+		{"manager confers held", aMgr.MayChangeOverrides(user, authority.Overrides{Granted: grants(p.Crm.Leads.ReadAll)}), nil},
+		{"owner confers reserved", aOwner.MayChangeOverrides(user, authority.Overrides{Granted: grants(p.Platform.TenantsManage)}), authority.ErrGrantExceedsAuthority},
+		{"super confers reserved", aSuper.MayChangeOverrides(user, authority.Overrides{Granted: grants(p.Platform.TenantsManage)}), nil},
+		{"operator confers tenant.admin", aOp.MayChangeOverrides(user, authority.Overrides{Granted: grants(p.Meta.TenantAdmin)}), nil},
+		{"operator confers anonymise", aOp.MayChangeOverrides(user, authority.Overrides{Granted: grants(p.Users.Anonymise)}), authority.ErrGrantExceedsAuthority},
+		{"impersonation confers tenant.admin", aImp.MayChangeOverrides(user, authority.Overrides{Granted: grants(p.Meta.TenantAdmin)}), authority.ErrGrantExceedsAuthority},
+		{"impersonation confers crm", aImp.MayChangeOverrides(user, authority.Overrides{Granted: grants(p.Crm.Leads.Read)}), nil},
+		{"zero confers", zero.MayChangeOverrides(user, authority.Overrides{}), authority.ErrNoAuthority},
 		// H3 — roles
 		{"owner assigns owner role", aOwner.MayAssignRole(admin, ownerR), nil},
 		{"admin assigns admin role", aAdmin.MayAssignRole(mgr, adminR), authority.ErrInsufficientRank},
@@ -202,9 +202,9 @@ func TestPolicy_DecisionTable(t *testing.T) {
 		{"last owner", authority.GuardLastOwner(owner1, []authority.Member{owner1}), authority.ErrLastOwnerProtected},
 		{"second owner remains", authority.GuardLastOwner(owner1, []authority.Member{owner1, owner2}), nil},
 		{"non-owner target", authority.GuardLastOwner(admin, []authority.Member{owner1}), nil},
-		{"owner keeps tenant.admin", aOwner.MayChangeOverrides(owner2, authority.Overrides{}, authority.Overrides{Granted: []string{p.Meta.TenantAdmin}, Revoked: []string{p.Meta.TenantAdmin}}), authority.ErrOwnerProtected},
-		{"owner other revoke ok", aOwner.MayChangeOverrides(owner2, authority.Overrides{}, authority.Overrides{Granted: []string{p.Crm.Leads.Read}, Revoked: []string{p.Crm.Leads.Read}}), nil},
-		{"admin may lose tenant.admin override", aOwner.MayChangeOverrides(admin, authority.Overrides{}, authority.Overrides{Granted: []string{p.Meta.TenantAdmin}, Revoked: []string{p.Meta.TenantAdmin}}), nil},
+		{"owner keeps tenant.admin", aOwner.MayChangeOverrides(owner2, authority.Overrides{Granted: grants(p.Meta.TenantAdmin), Revoked: []string{p.Meta.TenantAdmin}}), authority.ErrOwnerProtected},
+		{"owner other revoke ok", aOwner.MayChangeOverrides(owner2, authority.Overrides{Granted: grants(p.Crm.Leads.Read), Revoked: []string{p.Crm.Leads.Read}}), nil},
+		{"admin may lose tenant.admin override", aOwner.MayChangeOverrides(admin, authority.Overrides{Granted: grants(p.Meta.TenantAdmin), Revoked: []string{p.Meta.TenantAdmin}}), nil},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -253,7 +253,7 @@ func TestNewActor_ValidationAndImpersonationRank(t *testing.T) {
 	if imp.Rank() != authority.RankAdmin {
 		t.Fatalf("impersonation rank = %d, want Admin", imp.Rank())
 	}
-	if imp.MayChangeOverrides(target, authority.Overrides{}, authority.Overrides{Granted: []string{"not.a.permission"}}) == nil || imp.MayChangeOverrides(target, authority.Overrides{}, authority.Overrides{Granted: []string{permission.IdentityPermissions.Crm.Leads.Read}}) != nil {
+	if imp.MayChangeOverrides(target, authority.Overrides{Granted: grants("not.a.permission")}) == nil || imp.MayChangeOverrides(target, authority.Overrides{Granted: grants(permission.IdentityPermissions.Crm.Leads.Read)}) != nil {
 		t.Fatal("unknown names dropped, known kept")
 	}
 	var zero authority.Actor
@@ -268,4 +268,48 @@ func TestDelta(t *testing.T) {
 	if fmt.Sprint(got) != "[a c]" {
 		t.Fatalf("Delta = %v, want [a c]", got)
 	}
+}
+
+// grants builds permanent grant entries.
+func grants(names ...string) []authority.Override {
+	out := make([]authority.Override, 0, len(names))
+	for _, n := range names {
+		out = append(out, authority.Override{Name: n})
+	}
+	return out
+}
+
+func activePerson() authority.PersonState {
+	return authority.NewPersonState(true, false, false, time.Time{}, t0)
+}
+
+func suspendedPerson() authority.PersonState {
+	return authority.NewPersonState(true, true, false, time.Time{}, t0)
+}
+
+// mkMemberOv builds an active member who already holds the given overrides
+// (granted with their expiry, revoked by name).
+func mkMemberOv(t *testing.T, n int, tid tenant.ID, granted []membership.GrantedOverride, revoked []string, roles ...*role.Role) authority.Member {
+	t.Helper()
+	rids := make([]role.ID, 0, len(roles))
+	for _, r := range roles {
+		rids = append(rids, r.ID())
+	}
+	rev := make([]*permission.Permission, 0, len(revoked))
+	for _, name := range revoked {
+		rev = append(rev, permission.FromConstant(name))
+	}
+	m := membership.UnmarshalFromDB(membership.Snapshot{ID: membership.ID(uid(n)), PersonID: person.ID(uid(n + 500)),
+		TenantID: tid, Status: membership.StatusActive, JoinedAt: t0, RoleAssignments: rids,
+		GrantedPermissions: granted, RevokedPermissions: rev})
+	out, err := authority.MemberOf(m, roles, t0, activePerson())
+	if err != nil {
+		t.Fatalf("MemberOf: %v", err)
+	}
+	return out
+}
+
+// permanent is a never-expiring grant of name.
+func permanent(name string) membership.GrantedOverride {
+	return membership.GrantedOverride{Permission: permission.FromConstant(name)}
 }

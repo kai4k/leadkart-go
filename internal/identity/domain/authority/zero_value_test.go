@@ -57,7 +57,7 @@ func TestZeroActorDeniesEveryDecision(t *testing.T) {
 	var zero authority.Actor
 	for name, err := range map[string]error{
 		"MayActOn":           zero.MayActOn(user),
-		"MayChangeOverrides": zero.MayChangeOverrides(user, authority.Overrides{}, authority.Overrides{}),
+		"MayChangeOverrides": zero.MayChangeOverrides(user, authority.Overrides{}),
 		"MayDeactivate":      zero.MayDeactivate(user, nil),
 		"MayDeleteRole":      zero.MayDeleteRole(userR),
 		"MayReplaceManager":  zero.MayReplaceManager(user, owner, nil),
@@ -99,7 +99,7 @@ func TestZeroMemberDeniesEveryDecision(t *testing.T) {
 			"MayActOn target":       a.MayActOn(zero),
 			"MayAssignRole target":  a.MayAssignRole(zero, userR),
 			"MayRevokeRole target":  a.MayRevokeRole(zero, userR, nil),
-			"MayChangeOverrides":    a.MayChangeOverrides(zero, authority.Overrides{}, authority.Overrides{}),
+			"MayChangeOverrides":    a.MayChangeOverrides(zero, authority.Overrides{}),
 			"MayDeactivate":         a.MayDeactivate(zero, nil),
 			"MayReplaceManager sub": a.MayReplaceManager(zero, owner, nil),
 			"MayReplaceManager mgr": a.MayReplaceManager(report, zero, &owner),
@@ -130,7 +130,7 @@ func TestMemberOf_RequiresTheFullTenantLocalRoleSet(t *testing.T) {
 	stray := mkRole(8, tA, "Stray", false, 40, false)
 
 	m := mkMembership(11, tA, true, "", ownerR, userR, deleted)
-	got, err := authority.MemberOf(m, []*role.Role{ownerR, userR, deleted}, true)
+	got, err := authority.MemberOf(m, []*role.Role{ownerR, userR, deleted}, t0, activePerson())
 	if err != nil || got.Rank() != authority.RankOwner || !got.IsOwner() || !got.Valid() {
 		t.Fatalf("complete set: (%+v, %v)", got, err)
 	}
@@ -141,32 +141,32 @@ func TestMemberOf_RequiresTheFullTenantLocalRoleSet(t *testing.T) {
 		"unassigned extra role":                {ownerR, userR, deleted, stray},
 		"nil entry":                            {ownerR, userR, deleted, nil},
 	} {
-		if got, err := authority.MemberOf(m, roles, true); !errors.Is(err, authority.ErrNoAuthority) || got.Valid() {
+		if got, err := authority.MemberOf(m, roles, t0, activePerson()); !errors.Is(err, authority.ErrNoAuthority) || got.Valid() {
 			t.Errorf("%s: MemberOf = (%+v, %v), want invalid Member and no authority", name, got, err)
 		}
 	}
 	cross := mkMembership(12, tA, true, "", foreignR)
-	if _, err := authority.MemberOf(cross, []*role.Role{foreignR}, true); !errors.Is(err, authority.ErrNoAuthority) {
+	if _, err := authority.MemberOf(cross, []*role.Role{foreignR}, t0, activePerson()); !errors.Is(err, authority.ErrNoAuthority) {
 		t.Errorf("role from another tenant: %v, want no authority", err)
 	}
-	if _, err := authority.MemberOf(nil, nil, true); !errors.Is(err, authority.ErrNoAuthority) {
+	if _, err := authority.MemberOf(nil, nil, t0, activePerson()); !errors.Is(err, authority.ErrNoAuthority) {
 		t.Errorf("nil membership: %v, want no authority", err)
 	}
 	bad := membership.UnmarshalFromDB(membership.Snapshot{ID: "not-a-uuid", PersonID: person.ID(uid(1)), TenantID: tA, Status: membership.StatusActive, JoinedAt: t0})
-	if _, err := authority.MemberOf(bad, nil, true); !errors.Is(err, authority.ErrNoAuthority) {
+	if _, err := authority.MemberOf(bad, nil, t0, activePerson()); !errors.Is(err, authority.ErrNoAuthority) {
 		t.Errorf("non-uuid membership id: %v, want no authority", err)
 	}
 	badTenant := membership.UnmarshalFromDB(membership.Snapshot{ID: membership.ID(uid(13)), PersonID: person.ID(uid(1)), TenantID: "", Status: membership.StatusActive, JoinedAt: t0})
-	if _, err := authority.MemberOf(badTenant, nil, true); !errors.Is(err, authority.ErrNoAuthority) {
+	if _, err := authority.MemberOf(badTenant, nil, t0, activePerson()); !errors.Is(err, authority.ErrNoAuthority) {
 		t.Errorf("zero tenant id: %v, want no authority", err)
 	}
 	badMgr := membership.UnmarshalFromDB(membership.Snapshot{ID: membership.ID(uid(13)), PersonID: person.ID(uid(1)), TenantID: tA, Status: membership.StatusActive, JoinedAt: t0, ReportsTo: "nope"})
-	if _, err := authority.MemberOf(badMgr, nil, true); !errors.Is(err, authority.ErrNoAuthority) {
+	if _, err := authority.MemberOf(badMgr, nil, t0, activePerson()); !errors.Is(err, authority.ErrNoAuthority) {
 		t.Errorf("non-uuid manager id: %v, want no authority", err)
 	}
 	upper := membership.UnmarshalFromDB(membership.Snapshot{ID: membership.ID(strings.ToUpper(uid(13))), PersonID: person.ID(uid(1)),
 		TenantID: tenant.ID(strings.ToUpper(tA.String())), Status: membership.StatusActive, JoinedAt: t0, ReportsTo: membership.ID(strings.ToUpper(uid(14)))})
-	canon, err := authority.MemberOf(upper, nil, true)
+	canon, err := authority.MemberOf(upper, nil, t0, activePerson())
 	if err != nil || canon.ID() != membership.ID(uid(13)) || canon.TenantID() != tA || canon.ReportsTo() != membership.ID(uid(14)) {
 		t.Errorf("uppercase ids not canonicalised: %+v, %v", canon, err)
 	}

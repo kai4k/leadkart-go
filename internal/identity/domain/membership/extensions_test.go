@@ -652,3 +652,49 @@ func TestAssignRevokeRole_BadRoleIDWrapsExactlyMembershipErrInvalid(t *testing.T
 		}
 	}
 }
+
+// TestReplacePermissionOverlays_KeepsLiveExpiries: a replace cannot extend a
+// time-bound grant or make it permanent. A name that is already granted and
+// still live keeps its expiry; a new name, or one whose grant has expired,
+// becomes a permanent grant; unlisted names go.
+func TestReplacePermissionOverlays_KeepsLiveExpiries(t *testing.T) {
+	t.Parallel()
+	m := freshMembership(t)
+	live := permission.FromConstant(permission.IdentityPermissions.Crm.Leads.Assign)
+	gone := permission.FromConstant(permission.IdentityPermissions.Crm.Leads.Read)
+	stale := permission.FromConstant(permission.IdentityPermissions.Crm.Leads.ReadAll)
+	fresh := permission.FromConstant(permission.IdentityPermissions.Inventory.Stock.Read)
+	liveUntil := testNow.Add(7 * 24 * time.Hour)
+	if err := m.GrantPermission(live, liveUntil, testNow); err != nil {
+		t.Fatalf("grant live: %v", err)
+	}
+	if err := m.GrantPermission(gone, testNow.Add(24*time.Hour), testNow); err != nil {
+		t.Fatalf("grant gone: %v", err)
+	}
+	if err := m.GrantPermission(stale, testNow.Add(time.Hour), testNow); err != nil {
+		t.Fatalf("grant stale: %v", err)
+	}
+	later := testNow.Add(2 * time.Hour) // stale has expired, live has not
+	if err := m.ReplacePermissionOverlays([]*permission.Permission{live, stale, fresh}, nil, later); err != nil {
+		t.Fatalf("replace: %v", err)
+	}
+	got := map[string]time.Time{}
+	for _, g := range m.GrantedPermissions() {
+		got[g.Permission.Name()] = g.ExpiresAt
+	}
+	if len(got) != 3 {
+		t.Fatalf("granted after replace = %v, want live, stale, fresh only", got)
+	}
+	if !got[live.Name()].Equal(liveUntil) {
+		t.Errorf("live grant expiry = %v, want it kept at %v", got[live.Name()], liveUntil)
+	}
+	if !got[stale.Name()].IsZero() {
+		t.Errorf("expired grant listed again expires at %v, want a fresh permanent grant", got[stale.Name()])
+	}
+	if !got[fresh.Name()].IsZero() {
+		t.Errorf("new grant expires at %v, want permanent", got[fresh.Name()])
+	}
+	if _, ok := got[gone.Name()]; ok {
+		t.Error("unlisted grant survived the replace")
+	}
+}

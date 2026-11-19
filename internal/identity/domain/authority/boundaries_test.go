@@ -122,9 +122,9 @@ func TestPolicy_Boundaries(t *testing.T) {
 		{"super replaces a more senior manager", aSuper.MayClearManager(reportsToOwner, &owner), nil},
 		{"operator approves in another tenant", aOp.MayApprove(unmanaged, p.Crm.Leads.Read), nil},
 		{"operator assigns a role in another tenant", aOp.MayAssignRole(unmanaged, ownerR), nil},
-		{"operator may not confer a platform-reserved name", aOp.MayChangeOverrides(unmanaged, authority.Overrides{}, authority.Overrides{Granted: []string{p.Platform.TenantsManage}}), authority.ErrGrantExceedsAuthority},
-		{"operator may confer anything tenant.admin implies", aOp.MayChangeOverrides(unmanaged, authority.Overrides{}, authority.Overrides{Granted: []string{p.Crm.Leads.ReadAll, p.Users.Anonymise}}), authority.ErrGrantExceedsAuthority},
-		{"operator confers a tenant permission", aOp.MayChangeOverrides(unmanaged, authority.Overrides{}, authority.Overrides{Granted: []string{p.Crm.Leads.ReadAll}}), nil},
+		{"operator may not confer a platform-reserved name", aOp.MayChangeOverrides(unmanaged, authority.Overrides{Granted: grants(p.Platform.TenantsManage)}), authority.ErrGrantExceedsAuthority},
+		{"operator may confer anything tenant.admin implies", aOp.MayChangeOverrides(unmanaged, authority.Overrides{Granted: grants(p.Crm.Leads.ReadAll, p.Users.Anonymise)}), authority.ErrGrantExceedsAuthority},
+		{"operator confers a tenant permission", aOp.MayChangeOverrides(unmanaged, authority.Overrides{Granted: grants(p.Crm.Leads.ReadAll)}), nil},
 		{"operator on its own tenant's member follows rank", aOp.MayActOn(platformUser), authority.ErrInsufficientRank},
 		{"operator creates in its own tenant follows rank", aOp.MayCreateRole(tP, 50, nil, nil), authority.ErrInsufficientRank},
 		{"operator edits a role in its own tenant follows rank", aOp.MayEditRole(platformUserR, authority.NoLevelChange), authority.ErrInsufficientRank},
@@ -135,12 +135,12 @@ func TestPolicy_Boundaries(t *testing.T) {
 		{"nor for a role edit", aNotOperator.MayEditRole(mgrR, authority.NoLevelChange), authority.ErrNoAuthority},
 		{"an operator without either manage permission is not exempt", act(opSelf.ID(), tP, rk(authority.RankNone), []string{p.Platform.TenantsView}, func(in *authority.ActorInput) { in.IsPlatformOperator = true }).MayActOn(unmanaged), authority.ErrNoAuthority},
 		// ceiling
-		{"an owner whose effective set lacks tenant.admin cannot confer it", aOwnerNoAdminPerm.MayChangeOverrides(unmanaged, authority.Overrides{}, authority.Overrides{Granted: []string{ta}}), authority.ErrGrantExceedsAuthority},
-		{"an actor that holds a platform-reserved name still cannot confer it", aHoldsReserved.MayChangeOverrides(unmanaged, authority.Overrides{}, authority.Overrides{Granted: []string{p.Platform.TenantsManage}}), authority.ErrGrantExceedsAuthority},
-		{"duplicates in a held set", aTL.MayChangeOverrides(unmanaged, authority.Overrides{}, authority.Overrides{Granted: []string{p.Crm.Leads.Read, p.Crm.Leads.Read}}), nil},
-		{"duplicates in an unheld set", aTL.MayChangeOverrides(unmanaged, authority.Overrides{}, authority.Overrides{Granted: []string{p.Crm.Leads.Assign, p.Crm.Leads.Assign}}), authority.ErrGrantExceedsAuthority},
-		{"a held name next to an unheld one", aTL.MayChangeOverrides(unmanaged, authority.Overrides{}, authority.Overrides{Granted: []string{p.Crm.Leads.Read, p.Crm.Leads.Assign}}), authority.ErrGrantExceedsAuthority},
-		{"an owner confers tenant.admin", aOwner.MayChangeOverrides(unmanaged, authority.Overrides{}, authority.Overrides{Granted: []string{ta}}), nil},
+		{"an owner whose effective set lacks tenant.admin cannot confer it", aOwnerNoAdminPerm.MayChangeOverrides(unmanaged, authority.Overrides{Granted: grants(ta)}), authority.ErrGrantExceedsAuthority},
+		{"an actor that holds a platform-reserved name still cannot confer it", aHoldsReserved.MayChangeOverrides(unmanaged, authority.Overrides{Granted: grants(p.Platform.TenantsManage)}), authority.ErrGrantExceedsAuthority},
+		{"duplicates in a held set", aTL.MayChangeOverrides(unmanaged, authority.Overrides{Granted: grants(p.Crm.Leads.Read, p.Crm.Leads.Read)}), nil},
+		{"duplicates in an unheld set", aTL.MayChangeOverrides(unmanaged, authority.Overrides{Granted: grants(p.Crm.Leads.Assign, p.Crm.Leads.Assign)}), authority.ErrGrantExceedsAuthority},
+		{"a held name next to an unheld one", aTL.MayChangeOverrides(unmanaged, authority.Overrides{Granted: grants(p.Crm.Leads.Read, p.Crm.Leads.Assign)}), authority.ErrGrantExceedsAuthority},
+		{"an owner confers tenant.admin", aOwner.MayChangeOverrides(unmanaged, authority.Overrides{Granted: grants(ta)}), nil},
 		{"impersonation assigns a level-11 role containing tenant.admin", aImp.MayAssignRole(unmanaged, lvl11TA), authority.ErrGrantExceedsAuthority},
 		{"impersonation assigns a level-11 role without it", aImp.MayAssignRole(unmanaged, mkRole(46, tA, "Plain 11", false, 11, false)), nil},
 		// self and super-admin rules
@@ -195,7 +195,7 @@ func TestMemberOf_IgnoresDeletedRolesForFlagsAndRank(t *testing.T) {
 	stray := mkRole(4, tA, "Stray", false, 40, false)
 
 	m := mkMembership(11, tA, true, "", userR, goneOwner, goneSuper)
-	got, err := authority.MemberOf(m, []*role.Role{userR, goneOwner, goneSuper}, true)
+	got, err := authority.MemberOf(m, []*role.Role{userR, goneOwner, goneSuper}, t0, activePerson())
 	if err != nil {
 		t.Fatalf("MemberOf: %v", err)
 	}
@@ -203,15 +203,15 @@ func TestMemberOf_IgnoresDeletedRolesForFlagsAndRank(t *testing.T) {
 		t.Errorf("deleted roles leaked: owner=%v super=%v rank=%d", got.IsOwner(), got.IsSuperAdmin(), got.Rank())
 	}
 	// Same number of roles as assigned, but one is not an assigned role.
-	if _, err := authority.MemberOf(m, []*role.Role{userR, goneOwner, stray}, true); !errors.Is(err, authority.ErrNoAuthority) {
+	if _, err := authority.MemberOf(m, []*role.Role{userR, goneOwner, stray}, t0, activePerson()); !errors.Is(err, authority.ErrNoAuthority) {
 		t.Errorf("a stray role standing in for an assigned one: %v, want no authority", err)
 	}
 	inactive := mkMembership(12, tA, false, "", userR)
-	if got, err := authority.MemberOf(inactive, []*role.Role{userR}, true); err != nil || got.IsActive() {
+	if got, err := authority.MemberOf(inactive, []*role.Role{userR}, t0, activePerson()); err != nil || got.IsActive() {
 		t.Errorf("inactive membership projected active: %+v, %v", got, err)
 	}
 	active := mkMembership(13, tA, true, "", userR)
-	if got, err := authority.MemberOf(active, []*role.Role{userR}, true); err != nil || !got.IsActive() {
+	if got, err := authority.MemberOf(active, []*role.Role{userR}, t0, activePerson()); err != nil || !got.IsActive() {
 		t.Errorf("active membership projected inactive: %+v, %v", got, err)
 	}
 }

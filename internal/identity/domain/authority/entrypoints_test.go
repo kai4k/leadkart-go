@@ -52,7 +52,9 @@ func TestGuardLastOwner_CountsOnlyActiveOwnersOfTheSameTenant(t *testing.T) {
 		{"a level-0 custom holder is not an owner", authority.GuardLastOwner(owner1, []authority.Member{owner1, rogue}), authority.ErrLastOwnerProtected},
 		{"a non-owner is not an owner", authority.GuardLastOwner(owner1, []authority.Member{owner1, admin}), authority.ErrLastOwnerProtected},
 		{"zero members in the list are skipped", authority.GuardLastOwner(owner1, []authority.Member{zero, owner1}), authority.ErrLastOwnerProtected},
-		{"inactive target loses nothing", authority.GuardLastOwner(inactiveOwner, nil), nil},
+		{"an inactive sole owner is still the last owner", authority.GuardLastOwner(inactiveOwner, nil), authority.ErrLastOwnerProtected},
+		{"an inactive owner beside an active one may go", authority.GuardLastOwner(inactiveOwner, []authority.Member{inactiveOwner, owner1}), nil},
+		{"an inactive owner beside only another inactive one is protected", authority.GuardLastOwner(inactiveOwner, []authority.Member{inactiveOwner, mkMember(t, 17, tA, false, "", ownerR)}), authority.ErrLastOwnerProtected},
 		{"non-owner target", authority.GuardLastOwner(admin, nil), nil},
 		{"zero target", authority.GuardLastOwner(zero, []authority.Member{owner1, owner2}), authority.ErrNoAuthority},
 	}) {
@@ -79,18 +81,18 @@ func TestMayChangeOverrides_ActsCeilingAndOwnerGuard(t *testing.T) {
 	ta := p.Meta.TenantAdmin
 
 	for _, m := range mismatches([]decision{
-		{"admin cannot touch an owner at all", aAdmin.MayChangeOverrides(owner1, authority.Overrides{}, authority.Overrides{Granted: []string{p.Crm.Leads.Read}}), authority.ErrInsufficientRank},
-		{"manager grants a permission it does not hold", aMgr.MayChangeOverrides(user, authority.Overrides{}, authority.Overrides{Granted: []string{p.Crm.Leads.Assign}}), authority.ErrGrantExceedsAuthority},
-		{"manager grants a held permission", aMgr.MayChangeOverrides(user, authority.Overrides{}, authority.Overrides{Granted: []string{p.Crm.Leads.Read}}), nil},
-		{"admin grants tenant.admin", aAdmin.MayChangeOverrides(user, authority.Overrides{}, authority.Overrides{Granted: []string{ta}}), authority.ErrGrantExceedsAuthority},
-		{"owner grants tenant.admin to a user", aOwner.MayChangeOverrides(user, authority.Overrides{}, authority.Overrides{Granted: []string{ta}}), nil},
-		{"owner revokes tenant.admin from another owner", aOwner.MayChangeOverrides(owner2, authority.Overrides{}, authority.Overrides{Granted: []string{ta}, Revoked: []string{ta}}), authority.ErrOwnerProtected},
-		{"owner changes another owner's other overrides", aOwner.MayChangeOverrides(owner2, authority.Overrides{}, authority.Overrides{Granted: []string{p.Crm.Leads.Read}, Revoked: []string{p.Crm.Leads.Read}}), nil},
-		{"owner revokes tenant.admin override from an admin", aOwner.MayChangeOverrides(admin, authority.Overrides{}, authority.Overrides{Granted: []string{ta}, Revoked: []string{ta}}), nil},
-		{"the owner guard binds a super user too", aSuper.MayChangeOverrides(owner2, authority.Overrides{}, authority.Overrides{Granted: []string{ta}, Revoked: []string{ta}}), authority.ErrOwnerProtected},
-		{"empty change on a valid target", aAdmin.MayChangeOverrides(user, authority.Overrides{}, authority.Overrides{}), nil},
-		{"unknown name in the delta", aAdmin.MayChangeOverrides(user, authority.Overrides{}, authority.Overrides{Granted: []string{"nope"}}), authority.ErrGrantExceedsAuthority},
-		{"self", aAdmin.MayChangeOverrides(admin, authority.Overrides{}, authority.Overrides{Granted: []string{p.Crm.Leads.Read}}), authority.ErrSelfTarget},
+		{"admin cannot touch an owner at all", aAdmin.MayChangeOverrides(owner1, authority.Overrides{Granted: grants(p.Crm.Leads.Read)}), authority.ErrInsufficientRank},
+		{"manager grants a permission it does not hold", aMgr.MayChangeOverrides(user, authority.Overrides{Granted: grants(p.Crm.Leads.Assign)}), authority.ErrGrantExceedsAuthority},
+		{"manager grants a held permission", aMgr.MayChangeOverrides(user, authority.Overrides{Granted: grants(p.Crm.Leads.Read)}), nil},
+		{"admin grants tenant.admin", aAdmin.MayChangeOverrides(user, authority.Overrides{Granted: grants(ta)}), authority.ErrGrantExceedsAuthority},
+		{"owner grants tenant.admin to a user", aOwner.MayChangeOverrides(user, authority.Overrides{Granted: grants(ta)}), nil},
+		{"owner revokes tenant.admin from another owner", aOwner.MayChangeOverrides(owner2, authority.Overrides{Granted: grants(ta), Revoked: []string{ta}}), authority.ErrOwnerProtected},
+		{"owner changes another owner's other overrides", aOwner.MayChangeOverrides(owner2, authority.Overrides{Granted: grants(p.Crm.Leads.Read), Revoked: []string{p.Crm.Leads.Read}}), nil},
+		{"owner revokes tenant.admin override from an admin", aOwner.MayChangeOverrides(admin, authority.Overrides{Granted: grants(ta), Revoked: []string{ta}}), nil},
+		{"the owner guard binds a super user too", aSuper.MayChangeOverrides(owner2, authority.Overrides{Granted: grants(ta), Revoked: []string{ta}}), authority.ErrOwnerProtected},
+		{"empty change on a valid target", aAdmin.MayChangeOverrides(user, authority.Overrides{}), nil},
+		{"unknown name in the delta", aAdmin.MayChangeOverrides(user, authority.Overrides{Granted: grants("nope")}), authority.ErrGrantExceedsAuthority},
+		{"self", aAdmin.MayChangeOverrides(admin, authority.Overrides{Granted: grants(p.Crm.Leads.Read)}), authority.ErrSelfTarget},
 	}) {
 		t.Error(m)
 	}

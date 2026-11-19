@@ -3,6 +3,7 @@ package authority
 import (
 	"fmt"
 	"slices"
+	"time"
 
 	"github.com/leadkart/leadkart-go/internal/common/ids"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/permission"
@@ -165,25 +166,73 @@ func (a Actor) MayRevokeRole(t Member, r *role.Role, owners []Member) error {
 	return nil
 }
 
-// Overrides is a member's permission overrides: the live (unexpired) grants
-// and the revoked names.
-type Overrides struct{ Granted, Revoked []string }
+// Override is one granted permission with its expiry; a zero ExpiresAt is a
+// permanent grant.
+type Override struct {
+	Name      string
+	ExpiresAt time.Time
+}
 
-// MayChangeOverrides — H2+H3+H6: may a replace t's overrides from before to
-// after? The ceiling set is computed here, never by the caller:
-// Delta(before.Granted, after.Granted) union Delta(before.Revoked, after.Revoked).
-// It is MayActOn + the ceiling over that set + the owner-keeps-tenant.admin
-// guard on after.Revoked (which binds every actor, super users too). Callers
-// pass live, unexpired grants.
-func (a Actor) MayChangeOverrides(t Member, before, after Overrides) error {
+// Overrides is a member's permission overrides: the live (unexpired) grants
+// with their expiry, and the revoked names.
+type Overrides struct {
+	Granted []Override
+	Revoked []string
+}
+
+// MayChangeOverrides — H2+H3+H6: may a replace t's overrides with after? The
+// "before" is the live snapshot MemberOf took of t, never a caller-supplied
+// value, so a forged or stale before cannot shrink the ceiling set. The set is
+// every granted or revoked name that is added or removed, plus every granted
+// name whose expiry differs (extending a time-bound grant or making it
+// permanent changes it). It is MayActOn + the ceiling over that set + the
+// owner-keeps-tenant.admin guard on after.Revoked (which binds every actor,
+// super users too).
+func (a Actor) MayChangeOverrides(t Member, after Overrides) error {
 	if err := a.MayActOn(t); err != nil {
 		return err
 	}
-	delta := slices.Concat(Delta(before.Granted, after.Granted), Delta(before.Revoked, after.Revoked))
-	if err := a.mayChangePermissions(t.tenantID, delta); err != nil {
+	delta := slices.Concat(grantDelta(t.overrides.Granted, after.Granted), Delta(t.overrides.Revoked, after.Revoked))
+	slices.Sort(delta)
+	if err := a.mayChangePermissions(t.tenantID, slices.Compact(delta)); err != nil {
 		return err
 	}
 	return guardOwnerOverrides(t, after.Revoked)
+}
+
+// grantDelta is the names added, removed or re-timed between two grant lists.
+// A name listed twice with different expiries counts as changed.
+func grantDelta(before, after []Override) []string {
+	type expiry struct {
+		at       time.Time
+		conflict bool
+	}
+	index := func(xs []Override) map[string]expiry {
+		m := make(map[string]expiry, len(xs))
+		for _, x := range xs {
+			if e, ok := m[x.Name]; ok {
+				e.conflict = e.conflict || !e.at.Equal(x.ExpiresAt)
+				m[x.Name] = e
+				continue
+			}
+			m[x.Name] = expiry{at: x.ExpiresAt}
+		}
+		return m
+	}
+	b, af := index(before), index(after)
+	out := []string{}
+	for n, be := range b {
+		if ae, ok := af[n]; !ok || be.conflict || ae.conflict || !be.at.Equal(ae.at) {
+			out = append(out, n)
+		}
+	}
+	for n := range af {
+		if _, ok := b[n]; !ok {
+			out = append(out, n)
+		}
+	}
+	slices.Sort(out)
+	return out
 }
 
 // MayDeactivate - H2+H6: may a deactivate t? MayActOn + GuardLastOwner against
@@ -413,12 +462,36 @@ func (a Actor) mayUnlinkManager(sub, current Member) error {
 	return fmt.Errorf("%w: the current manager is not more junior than you", ErrInsufficientRank)
 }
 
+// adminMustHold is the set of requestable permissions an Admin-tier approver
+// may approve only while holding them itself: tenant-wide authority (users,
+// roles, tenant settings, role approval) and money (marketplace purchase,
+// payment recording). Everything else requestable is approvable by the Admin
+// tier without holding it. Owners hold tenant.admin, which implies all of
+// these, so they are unaffected.
+var adminMustHold = func() map[string]struct{} {
+	p := permission.IdentityPermissions
+	names := []string{
+		p.Users.Create, p.Users.Update, p.Users.UpdatePermissions, p.Users.Deactivate, p.Users.Reactivate, p.Users.Unlock,
+		p.Roles.Create, p.Roles.Update, p.Roles.Delete, p.Roles.Assign, p.Roles.Revoke, p.Roles.Approve,
+		p.Tenants.Update, p.Tenants.UpdateSettings,
+		p.PlatformMarketplace.Purchase, p.Orders.Payments.Record,
+	}
+	m := make(map[string]struct{}, len(names))
+	for _, n := range names {
+		m[n] = struct{}{}
+	}
+	return m
+}()
+
+func mustHoldToApprove(name string) bool { _, ok := adminMustHold[name]; return ok }
+
 // MayApprove - H4: (a) the requester's manager, who holds roles.approve and
 // the permission; (b) any actor of Admin tier or above who strictly outranks
-// the requester, needing neither tenant.admin nor the permission ("admin sees
-// through everything and approves everything"); (c) a super user or an exempt
-// operator in another tenant. Never an impersonation session, never the
-// requester; perm must be requestable.
+// the requester and approves any requestable permission without holding it,
+// except the authority-and-money set (adminMustHold), which the Admin must
+// hold ("admin sees through everything and approves day-to-day work"); (c) a
+// super user or an exempt operator in another tenant. Never an impersonation
+// session, never the requester; perm must be requestable.
 func (a Actor) MayApprove(requester Member, perm string) error {
 	return a.mayDecide(requester, perm, true)
 }
@@ -443,6 +516,11 @@ func (a Actor) mayDecide(req Member, perm string, approving bool) error {
 	case !a.outranks(req.rank):
 		return fmt.Errorf("%w: approver rank %d does not outrank requester rank %d", ErrInsufficientRank, a.Rank(), req.rank)
 	case a.Rank() <= RankAdmin:
+		// Admin sees and approves through day-to-day work without holding it,
+		// but never confers authority or money it does not hold itself.
+		if approving && mustHoldToApprove(perm) && !a.holds(perm, req.tenantID) {
+			return fmt.Errorf("%w: an admin must hold %s to approve it", ErrGrantExceedsAuthority, perm)
+		}
 		return nil
 	case req.reportsTo != a.membershipID || !a.hasOwn(permission.IdentityPermissions.Roles.Approve):
 		return ErrNotApprover
@@ -454,16 +532,18 @@ func (a Actor) mayDecide(req Member, perm string, approving bool) error {
 
 // GuardLastOwner - H6: refuse removing target's ownership (deactivation,
 // CompanyOwner revocation) when no OTHER active owner of the same tenant
-// remains. owners is every current member holding the CompanyOwner role,
-// loaded in the same locked transaction; it is filtered here (IsOwner and
-// IsActive; the zero Member sets neither flag), so an inactive owner, a
-// non-owner, an invalid Member or another tenant's owner never counts as
-// "another owner". Applies to every actor.
+// remains. The target's own activity does not matter: a sole owner who is
+// already locked, suspended or deactivated is still the tenant's only owner.
+// owners is every current member holding the CompanyOwner role, loaded in the
+// same locked transaction; the active filter applies only to the OTHER owners
+// (IsOwner and IsActive; the zero Member sets neither flag), so an inactive
+// owner, a non-owner, an invalid Member or another tenant's owner never counts
+// as "another owner". Applies to every actor.
 func GuardLastOwner(target Member, owners []Member) error {
 	if !target.valid {
 		return ErrNoAuthority
 	}
-	if !target.owner || !target.active {
+	if !target.owner {
 		return nil
 	}
 	for _, o := range owners {

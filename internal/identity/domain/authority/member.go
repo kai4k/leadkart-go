@@ -2,6 +2,8 @@ package authority
 
 import (
 	"fmt"
+	"slices"
+	"time"
 
 	"github.com/leadkart/leadkart-go/internal/common/ids"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
@@ -21,7 +23,26 @@ type Member struct {
 	superAdmin bool
 	active     bool
 	reportsTo  membership.ID
+	overrides  Overrides
 }
+
+// PersonState is whether the person behind a membership can act at all. The
+// zero value means "not known" and counts as cannot act, so a loader that
+// forgets the person gets the safe answer. Build it with NewPersonState from
+// the person's facts, never from a bare bool.
+type PersonState struct{ canAct bool }
+
+// NewPersonState derives the state from the person's facts: active (not
+// deactivated), globally suspended, anonymised, and the lockout expiry
+// compared with now (a zero lockedUntil is never locked). The person can act
+// only when active, not suspended, not anonymised and not locked at now.
+func NewPersonState(active, globallySuspended, anonymised bool, lockedUntil, now time.Time) PersonState {
+	locked := !lockedUntil.IsZero() && lockedUntil.After(now)
+	return PersonState{canAct: active && !globallySuspended && !anonymised && !locked}
+}
+
+// CanAct reports whether the person can act; false for the zero PersonState.
+func (p PersonState) CanAct() bool { return p.canAct }
 
 // MemberOf projects m with every role it holds. roles must be exactly the
 // roles named by m.RoleAssignments(), deleted ones included (they are ignored
@@ -29,11 +50,14 @@ type Member struct {
 // owner look like the weakest member), and every role must belong to m's
 // tenant. Any mismatch, or an id that does not canonicalise, is ErrNoAuthority.
 //
-// personActive is whether the person behind m can act at all. The loader passes
-// false for a globally suspended, locked or anonymised person: such a member is
-// not active, so it never counts as "another active owner" (GuardLastOwner) and
-// is never an eligible manager.
-func MemberOf(m *membership.Membership, roles []*role.Role, personActive bool) (Member, error) {
+// now is the instant the caller decides at (the domain never reads the clock):
+// it separates the membership's live permission overrides from expired ones.
+// person says whether the person behind m can act at all (see PersonState): a
+// member whose person cannot act, or whose state is unknown, is not active, so
+// it never counts as "another active owner" (GuardLastOwner) and is never an
+// eligible manager. The member carries a snapshot of m's live overrides, which
+// is the "before" of every MayChangeOverrides decision.
+func MemberOf(m *membership.Membership, roles []*role.Role, now time.Time, person PersonState) (Member, error) {
 	if m == nil {
 		return Member{}, fmt.Errorf("%w: membership required", ErrNoAuthority)
 	}
@@ -55,7 +79,8 @@ func MemberOf(m *membership.Membership, roles []*role.Role, personActive bool) (
 		return Member{}, err
 	}
 	out := Member{valid: true, id: id, tenantID: tid, rank: RankOf(roles),
-		active: personActive && m.Status() == membership.StatusActive, reportsTo: reportsTo}
+		active: person.CanAct() && m.Status() == membership.StatusActive, reportsTo: reportsTo,
+		overrides: liveOverrides(m, now)}
 	for _, r := range roles {
 		if r.IsDeleted() {
 			continue
@@ -64,6 +89,25 @@ func MemberOf(m *membership.Membership, roles []*role.Role, personActive bool) (
 		out.superAdmin = out.superAdmin || r.IsSuperAdmin()
 	}
 	return out, nil
+}
+
+// liveOverrides snapshots m's overrides at now: grants not yet expired (the
+// same test the permission resolver applies) with their expiry, and the
+// revoked names.
+func liveOverrides(m *membership.Membership, now time.Time) Overrides {
+	out := Overrides{Granted: []Override{}, Revoked: []string{}}
+	for _, g := range m.GrantedPermissions() {
+		if g.Permission == nil || (!g.ExpiresAt.IsZero() && !now.Before(g.ExpiresAt)) {
+			continue
+		}
+		out.Granted = append(out.Granted, Override{Name: g.Permission.Name(), ExpiresAt: g.ExpiresAt})
+	}
+	for _, p := range m.RevokedPermissions() {
+		if p != nil {
+			out.Revoked = append(out.Revoked, p.Name())
+		}
+	}
+	return out
 }
 
 // checkRolesComplete: the loaded role ids equal m.RoleAssignments() as sets
@@ -133,6 +177,12 @@ func (m Member) IsSuperAdmin() bool { return m.valid && m.superAdmin }
 
 // IsActive reports whether the membership is active AND the person behind it can act.
 func (m Member) IsActive() bool { return m.valid && m.active }
+
+// Overrides is a copy of the member's live permission overrides as loaded by
+// MemberOf (empty for the zero Member).
+func (m Member) Overrides() Overrides {
+	return Overrides{Granted: slices.Clone(m.overrides.Granted), Revoked: slices.Clone(m.overrides.Revoked)}
+}
 
 // ReportsTo is the member's current manager (zero when none).
 func (m Member) ReportsTo() membership.ID { return m.reportsTo }

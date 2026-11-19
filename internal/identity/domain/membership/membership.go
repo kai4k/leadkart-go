@@ -542,13 +542,13 @@ func (m *Membership) EffectivePermissions(roles []*role.Role, now time.Time) []*
 // listeners care about "permissions changed for this Membership",
 // not per-permission deltas.
 //
-// nil entries in either slice are silently dropped. The granted slice
-// accepts perpetual permissions only via this entry point (every
-// permission becomes a GrantedOverride with zero ExpiresAt) — admin
-// bulk-replace flows never set time-bound grants. ADR 0055 approval-
-// workflow grants use [Membership.GrantPermission] with a non-zero
-// expiry; they survive ReplacePermissionOverlays calls by virtue of
-// being applied separately AFTER an admin bulk-replace.
+// nil entries in either slice are silently dropped. A name that is already
+// granted and still live at now keeps its existing GrantedOverride, expiry
+// included: a replace cannot extend a time-bound grant (ADR 0055 approval
+// workflow grants carry a non-zero expiry) or make it permanent. A name that
+// is not currently granted, or whose grant has expired, becomes a perpetual
+// GrantedOverride (zero ExpiresAt); an admin bulk-replace never sets a
+// time-bound grant. Names not listed are removed.
 //
 // CALLER NOTE: if a future flow needs bulk-replace WITH time-bound
 // grants, take a `[]GrantedOverride` shape instead. v0.2 has no such
@@ -560,9 +560,17 @@ func (m *Membership) ReplacePermissionOverlays(
 ) error {
 	g := make([]GrantedOverride, 0, len(granted))
 	for _, p := range granted {
-		if p != nil {
-			g = append(g, GrantedOverride{Permission: p})
+		if p == nil {
+			continue
 		}
+		entry := GrantedOverride{Permission: p}
+		for _, cur := range m.grantedPermissions {
+			if cur.Permission != nil && cur.Permission.Equal(p) && (cur.ExpiresAt.IsZero() || now.Before(cur.ExpiresAt)) {
+				entry = cur
+				break
+			}
+		}
+		g = append(g, entry)
 	}
 	r := make([]*permission.Permission, 0, len(revoked))
 	for _, p := range revoked {

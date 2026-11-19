@@ -101,7 +101,8 @@ func TestLevelZeroIsNeverMintedByAnyActor(t *testing.T) {
 }
 
 // TestOverridesAndRolePermissions_PolicyComputesTheDelta: I3 — callers hand over
-// before and after; nothing the policy trusts is computed by the caller.
+// only the new state; the "before" comes from the member MemberOf loaded, and
+// nothing the policy trusts is computed by the caller.
 func TestOverridesAndRolePermissions_PolicyComputesTheDelta(t *testing.T) {
 	t.Parallel()
 	p := permission.IdentityPermissions
@@ -121,21 +122,26 @@ func TestOverridesAndRolePermissions_PolicyComputesTheDelta(t *testing.T) {
 	aMgr := actorOf(t, mgr, authority.RankManager, p.Crm.Leads.Read, p.Crm.Leads.ReadAll)
 	aSuper := mkActor(t, authority.ActorInput{MembershipID: membership.ID(uid(90)), TenantID: tP, IsSuperUser: true})
 	mgrHoldingTA := mkMember(t, 16, tA, true, "", mgrR)
+	mgrGrantedTA := mkMemberOv(t, 19, tA, []membership.GrantedOverride{permanent(ta)}, nil, mgrR)
+	mgrRevokedTA := mkMemberOv(t, 20, tA, nil, []string{ta}, mgrR)
+	userGrantedAssign := mkMemberOv(t, 21, tA, []membership.GrantedOverride{permanent(p.Crm.Leads.Assign)}, nil, userR)
+	userGrantedRead := mkMemberOv(t, 22, tA, []membership.GrantedOverride{permanent(p.Crm.Leads.Read)}, nil, userR)
 
 	cases := []decision{
-		// overrides: the ceiling is over the symmetric difference of both sets
-		{"admin strips tenant.admin from a member who holds it (granted)", aAdmin.MayChangeOverrides(mgrHoldingTA, authority.Overrides{Granted: []string{ta}}, authority.Overrides{}), authority.ErrGrantExceedsAuthority},
-		{"admin lifts a tenant.admin revocation", aAdmin.MayChangeOverrides(mgrHoldingTA, authority.Overrides{Revoked: []string{ta}}, authority.Overrides{}), authority.ErrGrantExceedsAuthority},
-		{"admin adds a tenant.admin revocation", aAdmin.MayChangeOverrides(mgrHoldingTA, authority.Overrides{}, authority.Overrides{Revoked: []string{ta}}), authority.ErrGrantExceedsAuthority},
-		{"owner strips tenant.admin from a manager", aOwner.MayChangeOverrides(mgrHoldingTA, authority.Overrides{Granted: []string{ta}}, authority.Overrides{}), nil},
-		{"unchanged tenant.admin on both sides is no delta", aAdmin.MayChangeOverrides(mgrHoldingTA, authority.Overrides{Granted: []string{ta}}, authority.Overrides{Granted: []string{ta}}), nil},
-		{"unchanged unheld grant is no delta", aMgr.MayChangeOverrides(user, authority.Overrides{Granted: []string{p.Crm.Leads.Assign}}, authority.Overrides{Granted: []string{p.Crm.Leads.Assign, p.Crm.Leads.Read}}), nil},
-		{"adding an unheld grant", aMgr.MayChangeOverrides(user, authority.Overrides{Granted: []string{p.Crm.Leads.Read}}, authority.Overrides{Granted: []string{p.Crm.Leads.Read, p.Crm.Leads.Assign}}), authority.ErrGrantExceedsAuthority},
-		{"removing an unheld grant", aMgr.MayChangeOverrides(user, authority.Overrides{Granted: []string{p.Crm.Leads.Assign}}, authority.Overrides{}), authority.ErrGrantExceedsAuthority},
-		{"revoking an unheld permission", aMgr.MayChangeOverrides(user, authority.Overrides{}, authority.Overrides{Revoked: []string{p.Crm.Leads.Assign}}), authority.ErrGrantExceedsAuthority},
-		{"owner may not end with tenant.admin revoked", aOwner.MayChangeOverrides(owner2, authority.Overrides{}, authority.Overrides{Revoked: []string{ta}}), authority.ErrOwnerProtected},
-		{"the owner guard binds a super user", aSuper.MayChangeOverrides(owner2, authority.Overrides{}, authority.Overrides{Revoked: []string{ta}}), authority.ErrOwnerProtected},
-		{"an owner already revoked stays refused", aOwner.MayChangeOverrides(owner2, authority.Overrides{Revoked: []string{ta}}, authority.Overrides{Revoked: []string{ta}}), authority.ErrOwnerProtected},
+		// overrides: the ceiling is over what the replace adds or removes, measured
+		// against the member's own snapshot
+		{"admin strips tenant.admin from a member who holds it (granted)", aAdmin.MayChangeOverrides(mgrGrantedTA, authority.Overrides{}), authority.ErrGrantExceedsAuthority},
+		{"admin lifts a tenant.admin revocation", aAdmin.MayChangeOverrides(mgrRevokedTA, authority.Overrides{}), authority.ErrGrantExceedsAuthority},
+		{"admin adds a tenant.admin revocation", aAdmin.MayChangeOverrides(mgrHoldingTA, authority.Overrides{Revoked: []string{ta}}), authority.ErrGrantExceedsAuthority},
+		{"owner strips tenant.admin from a manager", aOwner.MayChangeOverrides(mgrGrantedTA, authority.Overrides{}), nil},
+		{"unchanged tenant.admin on both sides is no delta", aAdmin.MayChangeOverrides(mgrGrantedTA, authority.Overrides{Granted: grants(ta)}), nil},
+		{"unchanged unheld grant is no delta", aMgr.MayChangeOverrides(userGrantedAssign, authority.Overrides{Granted: grants(p.Crm.Leads.Assign, p.Crm.Leads.Read)}), nil},
+		{"adding an unheld grant", aMgr.MayChangeOverrides(userGrantedRead, authority.Overrides{Granted: grants(p.Crm.Leads.Read, p.Crm.Leads.Assign)}), authority.ErrGrantExceedsAuthority},
+		{"removing an unheld grant", aMgr.MayChangeOverrides(userGrantedAssign, authority.Overrides{}), authority.ErrGrantExceedsAuthority},
+		{"revoking an unheld permission", aMgr.MayChangeOverrides(user, authority.Overrides{Revoked: []string{p.Crm.Leads.Assign}}), authority.ErrGrantExceedsAuthority},
+		{"owner may not end with tenant.admin revoked", aOwner.MayChangeOverrides(owner2, authority.Overrides{Revoked: []string{ta}}), authority.ErrOwnerProtected},
+		{"the owner guard binds a super user", aSuper.MayChangeOverrides(owner2, authority.Overrides{Revoked: []string{ta}}), authority.ErrOwnerProtected},
+		{"an owner already revoked stays refused", aOwner.MayChangeOverrides(mkMemberOv(t, 17, tA, nil, []string{ta}, ownerR), authority.Overrides{Revoked: []string{ta}}), authority.ErrOwnerProtected},
 
 		// role permissions: delta of the stored set against the new set
 		{"replace with the identical set (unheld names already on the role)", aMgr.MayReplaceRolePermissions(routerR, []string{p.Crm.Leads.Read, p.Crm.Leads.Assign}), nil},
@@ -355,13 +361,17 @@ func TestMemberOf_PersonActive(t *testing.T) {
 	userR := mkRole(5, tA, role.SystemRoles.Tenant.SalesExecutive, false, 50, false)
 	adminR := mkRole(2, tA, role.SystemRoles.Tenant.Administrator, false, 10, false, p.Meta.TenantAdmin)
 
-	suspendedOwner, err := authority.MemberOf(mkMembership(11, tA, true, "", ownerR), []*role.Role{ownerR}, false)
+	suspendedOwner, err := authority.MemberOf(mkMembership(11, tA, true, "", ownerR), []*role.Role{ownerR}, t0, suspendedPerson())
+	if err != nil {
+		t.Fatalf("MemberOf: %v", err)
+	}
+	suspendedOwner2, err := authority.MemberOf(mkMembership(16, tA, true, "", ownerR), []*role.Role{ownerR}, t0, suspendedPerson())
 	if err != nil {
 		t.Fatalf("MemberOf: %v", err)
 	}
 	liveOwner := mkMember(t, 12, tA, true, "", ownerR)
 	otherOwner := mkMember(t, 13, tA, true, "", ownerR)
-	suspendedMgr, err := authority.MemberOf(mkMembership(14, tA, true, "", mgrR), []*role.Role{mgrR}, false)
+	suspendedMgr, err := authority.MemberOf(mkMembership(14, tA, true, "", mgrR), []*role.Role{mgrR}, t0, suspendedPerson())
 	if err != nil {
 		t.Fatalf("MemberOf: %v", err)
 	}
@@ -376,7 +386,9 @@ func TestMemberOf_PersonActive(t *testing.T) {
 	cases := []decision{
 		{"the only other owner's person is suspended: last owner", authority.GuardLastOwner(liveOwner, []authority.Member{liveOwner, suspendedOwner}), authority.ErrLastOwnerProtected},
 		{"a live other owner remains", authority.GuardLastOwner(liveOwner, []authority.Member{liveOwner, suspendedOwner, otherOwner}), nil},
-		{"a suspended owner is not a protected last owner", authority.GuardLastOwner(suspendedOwner, []authority.Member{suspendedOwner}), nil},
+		{"a suspended sole owner is still the last owner", authority.GuardLastOwner(suspendedOwner, []authority.Member{suspendedOwner}), authority.ErrLastOwnerProtected},
+		{"a suspended owner with a live other owner may go", authority.GuardLastOwner(suspendedOwner, []authority.Member{suspendedOwner, liveOwner}), nil},
+		{"a suspended owner whose only other owner is suspended too is protected", authority.GuardLastOwner(suspendedOwner, []authority.Member{suspendedOwner, suspendedOwner2}), authority.ErrLastOwnerProtected},
 		{"a manager whose person is suspended is not eligible", aAdmin.MayReplaceManager(user, suspendedMgr, nil), authority.ErrManagerNotEligible},
 		{"a live manager is eligible", aAdmin.MayReplaceManager(user, liveMgr, nil), nil},
 	}
@@ -544,16 +556,16 @@ func TestMemberOf_MalformedIdsNeverMatchEachOther(t *testing.T) {
 	for name, id := range map[string]string{"empty": "", "garbage": "garbage", "nil uuid": "00000000-0000-0000-0000-000000000000"} {
 		r := role.UnmarshalFromDB(role.Snapshot{ID: role.ID(id), TenantID: tA, Name: "Odd", HierarchyLevel: 50, CreatedAt: t0})
 		both := membership.UnmarshalFromDB(membership.Snapshot{ID: membership.ID(uid(11)), PersonID: person.ID(uid(511)), TenantID: tA, Status: membership.StatusActive, JoinedAt: t0, RoleAssignments: []role.ID{role.ID(id)}})
-		if got, err := authority.MemberOf(both, []*role.Role{r}, true); !errors.Is(err, authority.ErrNoAuthority) || got.Valid() {
+		if got, err := authority.MemberOf(both, []*role.Role{r}, t0, activePerson()); !errors.Is(err, authority.ErrNoAuthority) || got.Valid() {
 			t.Errorf("%s on both sides: (%+v, %v), want invalid and no authority", name, got, err)
 		}
 		assignedOnly := membership.UnmarshalFromDB(membership.Snapshot{ID: membership.ID(uid(12)), PersonID: person.ID(uid(512)), TenantID: tA, Status: membership.StatusActive, JoinedAt: t0, RoleAssignments: []role.ID{role.ID(id)}})
 		good := mkRole(5, tA, "Good", false, 50, false)
-		if _, err := authority.MemberOf(assignedOnly, []*role.Role{good}, true); !errors.Is(err, authority.ErrNoAuthority) {
+		if _, err := authority.MemberOf(assignedOnly, []*role.Role{good}, t0, activePerson()); !errors.Is(err, authority.ErrNoAuthority) {
 			t.Errorf("%s assigned, a different role loaded: %v, want no authority", name, err)
 		}
 		loadedOnly := mkMembership(13, tA, true, "", good)
-		if _, err := authority.MemberOf(loadedOnly, []*role.Role{good, r}, true); !errors.Is(err, authority.ErrNoAuthority) {
+		if _, err := authority.MemberOf(loadedOnly, []*role.Role{good, r}, t0, activePerson()); !errors.Is(err, authority.ErrNoAuthority) {
 			t.Errorf("%s loaded, not assigned: %v, want no authority", name, err)
 		}
 	}
