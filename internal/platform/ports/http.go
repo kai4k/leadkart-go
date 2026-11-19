@@ -508,19 +508,20 @@ func handleGetLeadCreditBalance(log *slog.Logger, a app.Application) http.Handle
 		// Balance is for the JWT's tenant. A platform user without
 		// impersonation sees the platform tenant's (usually zero) row;
 		// per-tenant operator views await a future GET .../tenants/{id}/balance.
-		c, ok := authn.ClaimsFromContext(r.Context())
+		// An operator scoped via X-Tenant-Id (ADR 0039) reads that tenant's row.
+		tenantID, ok := authn.EffectiveTenantID(r.Context())
 		if !ok {
 			writeError(w, http.StatusUnauthorized, ErrCodeMembershipContextRequired, "")
 			return
 		}
 		out, err := a.Queries.GetLeadCreditBalance.Handle(r.Context(), query.GetLeadCreditBalanceQuery{
-			TenantID: leadcredit.TenantID(c.TenantID),
+			TenantID: leadcredit.TenantID(tenantID),
 		})
 		switch {
 		case errors.Is(err, query.ErrCreditRowNotFound):
 			// No row yet → 200 + zero balance; row is INSERTed lazily on first topup.
 			writeJSON(w, http.StatusOK, LeadCreditBalanceResponse{
-				TenantID: c.TenantID,
+				TenantID: tenantID,
 				Balance:  0,
 			})
 			return

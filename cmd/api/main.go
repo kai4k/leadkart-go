@@ -488,7 +488,12 @@ func newServer(
 	dispatchports.AddRoutes(mux, log, dispatchApp, verifier, validator)
 	ordersports.AddRoutes(mux, log, ordersApp, verifier, validator)
 	notificationsports.AddRoutes(mux, log, notificationsApp, verifier, validator)
-	return mux
+	if verifier == nil {
+		return mux
+	}
+	// ADR 0039 per-request scope selection (ADR 0068 D7): the single place
+	// X-Tenant-Id is read, wrapping the whole mux.
+	return authn.TenantScope(verifier, ports.NewTenantScopeResolver(identityApp).TenantExists, log)(mux)
 }
 
 // addRootHelpers registers humane handlers for the cross-cutting URLs

@@ -103,7 +103,7 @@ func handleCreateProduct(log *slog.Logger, a app.Application) http.Handler {
 			return
 		}
 		out, err := a.Commands.CreateProduct.Handle(r.Context(), command.CreateProductCommand{
-			TenantID:          tenant.ID(c.TenantID),
+			TenantID:          effectiveTenant(r),
 			ActorMembershipID: membership.ID(c.MembershipID),
 			SKU:               req.SKU,
 			Name:              req.Name,
@@ -131,7 +131,7 @@ func handleCreateProduct(log *slog.Logger, a app.Application) http.Handler {
 
 func handleListProducts(log *slog.Logger, a app.Application) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		c, ok := authn.ClaimsFromContext(r.Context())
+		_, ok := authn.ClaimsFromContext(r.Context())
 		if !ok {
 			writeError(w, http.StatusUnauthorized, ErrCodeUnauthenticated, "")
 			return
@@ -145,7 +145,7 @@ func handleListProducts(log *slog.Logger, a app.Application) http.Handler {
 		pageSize := parsePageSize(q.Get("page_size"))
 		activeFilter := q.Get("active")
 		page, err := a.Queries.ListProductsPage.Handle(r.Context(), query.ListProductsPageQuery{
-			TenantID:     tenant.ID(c.TenantID),
+			TenantID:     effectiveTenant(r),
 			Cursor:       cursor,
 			PageSize:     pageSize,
 			ActiveOnly:   activeFilter == "true",
@@ -172,7 +172,7 @@ func handleListProducts(log *slog.Logger, a app.Application) http.Handler {
 
 func handleGetProduct(log *slog.Logger, a app.Application) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		c, ok := authn.ClaimsFromContext(r.Context())
+		_, ok := authn.ClaimsFromContext(r.Context())
 		if !ok {
 			writeError(w, http.StatusUnauthorized, ErrCodeUnauthenticated, "")
 			return
@@ -182,7 +182,7 @@ func handleGetProduct(log *slog.Logger, a app.Application) http.Handler {
 			return
 		}
 		v, err := a.Queries.GetProduct.Handle(r.Context(), query.GetProductQuery{
-			TenantID:  tenant.ID(c.TenantID),
+			TenantID:  effectiveTenant(r),
 			ProductID: product.ID(id.String()),
 		})
 		switch {
@@ -215,7 +215,7 @@ func handleUpdateProduct(log *slog.Logger, a app.Application) http.Handler {
 			return
 		}
 		err := a.Commands.UpdateProduct.Handle(r.Context(), command.UpdateProductCommand{
-			TenantID:          tenant.ID(c.TenantID),
+			TenantID:          effectiveTenant(r),
 			ProductID:         product.ID(id.String()),
 			ActorMembershipID: membership.ID(c.MembershipID),
 			Name:              req.Name,
@@ -254,7 +254,7 @@ func handleDeleteProduct(log *slog.Logger, a app.Application) http.Handler {
 			return
 		}
 		err := a.Commands.DeleteProduct.Handle(r.Context(), command.DeleteProductCommand{
-			TenantID:          tenant.ID(c.TenantID),
+			TenantID:          effectiveTenant(r),
 			ProductID:         product.ID(id.String()),
 			ActorMembershipID: membership.ID(c.MembershipID),
 		})
@@ -297,7 +297,7 @@ func handleAddBatch(log *slog.Logger, a app.Application) http.Handler {
 			return
 		}
 		out, err := a.Commands.AddBatch.Handle(r.Context(), command.AddBatchCommand{
-			TenantID:                   tenant.ID(c.TenantID),
+			TenantID:                   effectiveTenant(r),
 			ProductID:                  product.ID(productID.String()),
 			ActorMembershipID:          membership.ID(c.MembershipID),
 			BatchNumber:                req.BatchNumber,
@@ -329,7 +329,7 @@ func handleAddBatch(log *slog.Logger, a app.Application) http.Handler {
 
 func handleListBatchesForProduct(log *slog.Logger, a app.Application) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		c, ok := authn.ClaimsFromContext(r.Context())
+		_, ok := authn.ClaimsFromContext(r.Context())
 		if !ok {
 			writeError(w, http.StatusUnauthorized, ErrCodeUnauthenticated, "")
 			return
@@ -345,7 +345,7 @@ func handleListBatchesForProduct(log *slog.Logger, a app.Application) http.Handl
 			return
 		}
 		page, err := a.Queries.ListBatchesByProduct.Handle(r.Context(), query.ListBatchesByProductQuery{
-			TenantID:       tenant.ID(c.TenantID),
+			TenantID:       effectiveTenant(r),
 			ProductID:      product.ID(productID.String()),
 			Cursor:         cursor,
 			PageSize:       parsePageSize(q.Get("page_size")),
@@ -370,7 +370,7 @@ func handleListBatchesForProduct(log *slog.Logger, a app.Application) http.Handl
 
 func handleGetBatch(log *slog.Logger, a app.Application) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		c, ok := authn.ClaimsFromContext(r.Context())
+		_, ok := authn.ClaimsFromContext(r.Context())
 		if !ok {
 			writeError(w, http.StatusUnauthorized, ErrCodeUnauthenticated, "")
 			return
@@ -380,7 +380,7 @@ func handleGetBatch(log *slog.Logger, a app.Application) http.Handler {
 			return
 		}
 		v, err := a.Queries.GetBatch.Handle(r.Context(), query.GetBatchQuery{
-			TenantID: tenant.ID(c.TenantID),
+			TenantID: effectiveTenant(r),
 			BatchID:  batch.ID(id.String()),
 		})
 		switch {
@@ -413,7 +413,7 @@ func handleLogStockMovement(log *slog.Logger, a app.Application) http.Handler {
 			return
 		}
 		out, err := a.Commands.LogStockMovement.Handle(r.Context(), command.LogStockMovementCommand{
-			TenantID:          tenant.ID(c.TenantID),
+			TenantID:          effectiveTenant(r),
 			BatchID:           batch.ID(batchID.String()),
 			ActorMembershipID: membership.ID(c.MembershipID),
 			Type:              batch.MovementType(req.Type),
@@ -456,7 +456,7 @@ func handleLogStockMovement(log *slog.Logger, a app.Application) http.Handler {
 
 func handleListBatchMovements(log *slog.Logger, a app.Application) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		c, ok := authn.ClaimsFromContext(r.Context())
+		_, ok := authn.ClaimsFromContext(r.Context())
 		if !ok {
 			writeError(w, http.StatusUnauthorized, ErrCodeUnauthenticated, "")
 			return
@@ -476,7 +476,7 @@ func handleListBatchMovements(log *slog.Logger, a app.Application) http.Handler 
 			filterType = batch.MovementType(t)
 		}
 		page, err := a.Queries.ListBatchMovementsPage.Handle(r.Context(), query.ListBatchMovementsPageQuery{
-			TenantID: tenant.ID(c.TenantID),
+			TenantID: effectiveTenant(r),
 			BatchID:  batch.ID(batchID.String()),
 			Cursor:   cursor,
 			PageSize: parsePageSize(q.Get("page_size")),
@@ -505,7 +505,7 @@ func handleListBatchMovements(log *slog.Logger, a app.Application) http.Handler 
 
 func handleFefoBatches(log *slog.Logger, a app.Application) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		c, ok := authn.ClaimsFromContext(r.Context())
+		_, ok := authn.ClaimsFromContext(r.Context())
 		if !ok {
 			writeError(w, http.StatusUnauthorized, ErrCodeUnauthenticated, "")
 			return
@@ -515,7 +515,7 @@ func handleFefoBatches(log *slog.Logger, a app.Application) http.Handler {
 			return
 		}
 		batches, err := a.Queries.FefoBatches.Handle(r.Context(), query.FefoBatchesQuery{
-			TenantID:  tenant.ID(c.TenantID),
+			TenantID:  effectiveTenant(r),
 			ProductID: product.ID(productID.String()),
 		})
 		if err != nil {
@@ -646,4 +646,12 @@ func movementViewToDto(v query.MovementView) MovementDto {
 		SourceReference: v.SourceReference,
 		OccurredAt:      v.OccurredAt,
 	}
+}
+
+// effectiveTenant is the tenant the request acts in (ADR 0039): the caller's
+// own tenant, or the operator's validated X-Tenant-Id scope. Never read the
+// tenant from claims directly.
+func effectiveTenant(r *http.Request) tenant.ID {
+	id, _ := authn.EffectiveTenantID(r.Context())
+	return tenant.ID(id)
 }

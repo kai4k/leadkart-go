@@ -157,7 +157,11 @@ func RequireAuth(verifier Verifier) func(http.Handler) http.Handler {
 				return
 			}
 			ctx := WithClaims(r.Context(), claims)
-			ctx = tenancy.WithID(ctx, tenancy.ID(claims.TenantID))
+			tid := tenancy.ID(claims.TenantID)
+			if o, ok := scopeOverrideFor(r.Context(), claims); ok {
+				tid = o // ADR 0039: validated operator header scope
+			}
+			ctx = tenancy.WithID(ctx, tid)
 			// Stash the RFC 8693 actor claim on ctx for downstream
 			// outbox-writer propagation per ADR 0056. Zero claim
 			// (non-impersonation hot path) is a no-op inside
@@ -320,6 +324,10 @@ func RequireTenantContext(verifier Verifier, validator StampValidator, pathVar s
 			if !ok {
 				writeError(w, http.StatusBadRequest, errCodeInvalidTenantID,
 					pathVar+" path parameter must be a UUID")
+				return
+			}
+			if scopeConflicts(r.Context(), c, urlTenant) {
+				writeError(w, http.StatusBadRequest, errCodeTenantScopeConflict, "X-Tenant-Id conflicts with the tenant in the URL")
 				return
 			}
 			// SuperUser / Platform-tier operators bypass — they're

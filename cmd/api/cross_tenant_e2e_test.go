@@ -201,6 +201,18 @@ func (f e2eFixture) mintPlatformTokenWith(t *testing.T, perms []string, superUse
 // plain function so tests that do not use e2eFixture can mint operators too.
 func mintOperatorJWT(t *testing.T, issuer *jwt.Issuer, persons *adapters.PersonRepository, operatorPersonID string, extra []string, superUser bool) string {
 	t.Helper()
+	return mintOperatorJWTExact(t, issuer, persons, operatorPersonID, append([]string{
+		permission.IdentityPermissions.Platform.TenantsView,
+		permission.IdentityPermissions.Platform.TenantsManage,
+		permission.IdentityPermissions.Platform.UsersView,
+		permission.IdentityPermissions.Platform.UsersManage,
+	}, extra...), superUser)
+}
+
+// mintOperatorJWTExact mints a slug-anchored platform operator JWT carrying
+// exactly perms (no implicit defaults).
+func mintOperatorJWTExact(t *testing.T, issuer *jwt.Issuer, persons *adapters.PersonRepository, operatorPersonID string, perms []string, superUser bool) string {
+	t.Helper()
 	if operatorPersonID == "" {
 		operatorPersonID = ids.NewV7().String()
 	}
@@ -236,12 +248,7 @@ func mintOperatorJWT(t *testing.T, issuer *jwt.Issuer, persons *adapters.PersonR
 		SecurityStamp: op.SecurityStamp().String(),
 		IsPlatform:    true,
 		IsSuperUser:   superUser,
-		Permissions: append([]string{
-			permission.IdentityPermissions.Platform.TenantsView,
-			permission.IdentityPermissions.Platform.TenantsManage,
-			permission.IdentityPermissions.Platform.UsersView,
-			permission.IdentityPermissions.Platform.UsersManage,
-		}, extra...),
+		Permissions:   perms,
 	})
 	if err != nil {
 		t.Fatalf("mint platform token: %v", err)
@@ -263,6 +270,13 @@ func (f e2eFixture) authedJSON(t *testing.T, method, path, token string, body an
 
 func (f e2eFixture) do(t *testing.T, method, path, token string, body any) httpResp {
 	t.Helper()
+	return f.doWithHeaders(t, method, path, token, body, nil)
+}
+
+// doWithHeaders is [e2eFixture.do] plus extra request headers (for example
+// the ADR 0039 X-Tenant-Id operator scope header).
+func (f e2eFixture) doWithHeaders(t *testing.T, method, path, token string, body any, headers map[string]string) httpResp {
+	t.Helper()
 	var buf io.Reader
 	if body != nil {
 		b := &bytes.Buffer{}
@@ -280,6 +294,9 @@ func (f e2eFixture) do(t *testing.T, method, path, token string, body any) httpR
 	}
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	for k, v := range headers {
+		req.Header.Set(k, v)
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {

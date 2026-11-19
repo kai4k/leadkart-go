@@ -1,6 +1,8 @@
 package authn_test
 
 import (
+	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -127,6 +129,88 @@ func TestRequireTenantPermission(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestTenantScope_PathTenantRoutes(t *testing.T) {
+	t.Parallel()
+	p := permission.IdentityPermissions
+	op := func() *jwt.Claims {
+		return &jwt.Claims{TenantID: tenantA, TenantSlug: authn.PlatformTenantSlug, IsPlatform: true, Permissions: []string{p.Platform.TenantsView}}
+	}
+	gates := map[string]func(v authn.Verifier, s *sentinel) http.Handler{
+		"RequireTenantPermission": func(v authn.Verifier, s *sentinel) http.Handler {
+			return authn.RequireTenantPermission(v, alwaysFresh{}, "tenantId", p.Tenants.View)(s.handler())
+		},
+		"RequireTenantContext": func(v authn.Verifier, s *sentinel) http.Handler {
+			return authn.RequireTenantContext(v, alwaysFresh{}, "tenantId")(s.handler())
+		},
+	}
+	cases := []struct {
+		name   string
+		header string
+		path   string
+		want   int
+		body   string
+	}{
+		{"header differs from path", tenantA, tenantB, 400, "tenant_scope_conflict"},
+		{"header equals path", tenantB, tenantB, 200, ""},
+		{"no header path wins", "", tenantB, 200, ""},
+	}
+	for gate, build := range gates {
+		for _, tc := range cases {
+			t.Run(gate+"/"+tc.name, func(t *testing.T) {
+				t.Parallel()
+				v := &fakeVerifier{claims: withFreshness(op())}
+				s := &sentinel{}
+				log := slog.New(slog.NewTextHandler(io.Discard, nil))
+				h := authn.TenantScope(v, fakeTenants{tenantA: true, tenantB: true}.TenantExists, log)(build(v, s))
+				r := tenantReq(t, tc.path)
+				if tc.header != "" {
+					r.Header.Set(authn.TenantScopeHeader, tc.header)
+				}
+				rec := httptest.NewRecorder()
+				h.ServeHTTP(rec, r)
+				if rec.Code != tc.want || !strings.Contains(rec.Body.String(), tc.body) {
+					t.Fatalf("status %d want %d body %s", rec.Code, tc.want, rec.Body.String())
+				}
+				if tc.want == 200 && string(s.tenantID) != tc.path {
+					t.Fatalf("tenant %q want path tenant %q", s.tenantID, tc.path)
+				}
+			})
+		}
+	}
+}
+
+func TestTenantScope_SelfTargetUsesCallerMembership(t *testing.T) {
+	t.Parallel()
+	// Operator scoped to tenant B: DenySelfTarget still compares against the
+	// caller's OWN membership id, not anything tenant-derived.
+	const self = "0190a000-0000-7000-8000-0000000000aa"
+	c := &jwt.Claims{TenantID: tenantA, MembershipID: self, TenantSlug: authn.PlatformTenantSlug, IsPlatform: true}
+	v := &fakeVerifier{claims: withFreshness(c)}
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	for target, want := range map[string]int{self: 403, "0190a000-0000-7000-8000-0000000000bb": 200} {
+		s := &sentinel{}
+		h := authn.TenantScope(v, fakeTenants{tenantB: true}.TenantExists, log)(authn.RequireFreshStamp(v, alwaysFresh{})(authn.DenySelfTarget("id")(s.handler())))
+		r := userReqWithVar(t, "id", target)
+		r.Header.Set(authn.TenantScopeHeader, tenantB)
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, r)
+		if rec.Code != want {
+			t.Fatalf("target %s: status %d want %d", target, rec.Code, want)
+		}
+	}
+}
+
+func userReqWithVar(t *testing.T, name, value string) *http.Request {
+	t.Helper()
+	mux := http.NewServeMux()
+	var captured *http.Request
+	mux.HandleFunc("GET /u/{"+name+"}", func(_ http.ResponseWriter, r *http.Request) { captured = r })
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/u/"+value, nil)
+	mux.ServeHTTP(httptest.NewRecorder(), req)
+	captured.Header.Set("Authorization", "Bearer tok")
+	return captured
 }
 
 func userReq(t *testing.T, userID string) *http.Request {

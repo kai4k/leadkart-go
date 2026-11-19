@@ -353,15 +353,11 @@ func parseRoleIDPath(w http.ResponseWriter, r *http.Request) (role.ID, bool) {
 
 // actorMembershipFromContext extracts the caller's MembershipID from
 // the JWT claims so command handlers can populate audit columns.
-// Returns zero when no claims OR no membership claim is present
+// Returns zero when no claims, an operator header scope (see authn.ActorMembershipID), OR no membership claim is present
 // (system / bootstrap paths). HTTP callers under RequireFreshStamp
 // always have one.
 func actorMembershipFromContext(r *http.Request) membership.ID {
-	c, ok := authn.ClaimsFromContext(r.Context())
-	if !ok {
-		return membership.ID("")
-	}
-	return membership.ID(c.MembershipID)
+	return membership.ID(authn.ActorMembershipID(r.Context()))
 }
 
 func writeRoleMutationResult(w http.ResponseWriter, log *slog.Logger, r *http.Request, err error) {

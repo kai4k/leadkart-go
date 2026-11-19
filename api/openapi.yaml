@@ -24,8 +24,12 @@ info:
 
     **Multi-tenant scope:** every authenticated call carries the caller's
     `tenant_id` claim implicitly. Platform operators (`is_platform=true` JWT)
-    can override scope via the `X-Tenant-Id` header on reads, or open an
-    impersonation session for sustained tenant-scoped work (see
+    select a tenant per request via the `X-Tenant-Id` header (ADR 0039):
+    honoured only for platform operators; ignored for everyone else; the
+    path tenant wins on `/tenants/{tenantId}` routes. Errors: 400
+    `invalid_tenant_scope` / `tenant_scope_conflict`, 404
+    `tenant_scope_not_found`. Operators can also open an impersonation
+    session for sustained tenant-scoped work (see
     `POST /api/v1/platform/impersonation/sessions`).
 
     **Errors:** RFC 9457 Problem Details shape with LeadKart legacy
@@ -404,7 +408,9 @@ paths:
       description: |
         Requires `identity.tenants.view` (satisfied by `tenant.admin` in the caller's own tenant, or by `platform.*` equivalents for platform operators; ADR 0068).
       x-required-permissions: [identity.tenants.view]
-      parameters: [{ $ref: '#/components/parameters/TenantId' }]
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - $ref: '#/components/parameters/XTenantId'
       responses:
         '200':
           description: Tenant
@@ -424,6 +430,7 @@ paths:
       parameters:
         - $ref: '#/components/parameters/XCommandId'
         - { $ref: '#/components/parameters/TenantId' }
+        - $ref: '#/components/parameters/XTenantId'
       requestBody:
         required: true
         content:
@@ -448,6 +455,7 @@ paths:
       parameters:
         - $ref: '#/components/parameters/XCommandId'
         - { $ref: '#/components/parameters/TenantId' }
+        - $ref: '#/components/parameters/XTenantId'
       requestBody:
         required: true
         content:
@@ -469,6 +477,7 @@ paths:
       parameters:
         - $ref: '#/components/parameters/XCommandId'
         - { $ref: '#/components/parameters/TenantId' }
+        - $ref: '#/components/parameters/XTenantId'
       requestBody:
         required: true
         content:
@@ -490,6 +499,7 @@ paths:
       parameters:
         - $ref: '#/components/parameters/XCommandId'
         - { $ref: '#/components/parameters/TenantId' }
+        - $ref: '#/components/parameters/XTenantId'
       requestBody:
         required: true
         content:
@@ -511,6 +521,7 @@ paths:
       parameters:
         - $ref: '#/components/parameters/XCommandId'
         - { $ref: '#/components/parameters/TenantId' }
+        - $ref: '#/components/parameters/XTenantId'
       requestBody:
         required: true
         content:
@@ -530,6 +541,7 @@ paths:
       parameters:
         - $ref: '#/components/parameters/XCommandId'
         - { $ref: '#/components/parameters/TenantId' }
+        - $ref: '#/components/parameters/XTenantId'
       requestBody:
         required: true
         content:
@@ -547,6 +559,7 @@ paths:
       parameters:
         - $ref: '#/components/parameters/XCommandId'
         - { $ref: '#/components/parameters/TenantId' }
+        - $ref: '#/components/parameters/XTenantId'
       responses:
         '204': { description: Tenant activated }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -564,6 +577,7 @@ paths:
       parameters:
         - $ref: '#/components/parameters/XCommandId'
         - { $ref: '#/components/parameters/TenantId' }
+        - $ref: '#/components/parameters/XTenantId'
       requestBody:
         required: true
         content:
@@ -581,6 +595,7 @@ paths:
       parameters:
         - $ref: '#/components/parameters/XCommandId'
         - { $ref: '#/components/parameters/TenantId' }
+        - $ref: '#/components/parameters/XTenantId'
       responses:
         '204': { description: Tenant restored }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -626,6 +641,7 @@ paths:
         - $ref: '#/components/parameters/TenantId'
         - $ref: '#/components/parameters/Cursor'
         - $ref: '#/components/parameters/PageSize'
+        - $ref: '#/components/parameters/XTenantId'
       responses:
         '200':
           description: Activity page
@@ -645,6 +661,7 @@ paths:
       parameters:
         - $ref: '#/components/parameters/Cursor'
         - $ref: '#/components/parameters/PageSize'
+        - $ref: '#/components/parameters/XTenantId'
       responses:
         '200':
           description: Users page
@@ -655,6 +672,7 @@ paths:
     post:
       parameters:
         - $ref: '#/components/parameters/XCommandId'
+        - $ref: '#/components/parameters/XTenantId'
       tags: [users]
       summary: Create a user (find-or-create-by-email, per Auth0/Entra ID canon)
       description: |
@@ -680,7 +698,9 @@ paths:
       description: |
         Requires `identity.users.view` or self (path id equals the caller's membership) (satisfied by `tenant.admin` in the caller's own tenant, or by `platform.*` equivalents for platform operators; ADR 0068).
       x-required-permissions: [identity.users.view, self]
-      parameters: [{ $ref: '#/components/parameters/UserId' }]
+      parameters:
+        - { $ref: '#/components/parameters/UserId' }
+        - $ref: '#/components/parameters/XTenantId'
       responses:
         '200':
           description: User
@@ -700,6 +720,7 @@ paths:
       parameters:
         - $ref: '#/components/parameters/XCommandId'
         - { $ref: '#/components/parameters/UserId' }
+        - $ref: '#/components/parameters/XTenantId'
       requestBody:
         required: true
         content:
@@ -720,6 +741,7 @@ paths:
       parameters:
         - $ref: '#/components/parameters/XCommandId'
         - { $ref: '#/components/parameters/UserId' }
+        - $ref: '#/components/parameters/XTenantId'
       requestBody:
         required: true
         content:
@@ -739,6 +761,7 @@ paths:
       parameters:
         - $ref: '#/components/parameters/XCommandId'
         - { $ref: '#/components/parameters/UserId' }
+        - $ref: '#/components/parameters/XTenantId'
       responses:
         '204': { description: Reactivated }
         '403': { $ref: '#/components/responses/Forbidden' }
@@ -753,6 +776,7 @@ paths:
       parameters:
         - $ref: '#/components/parameters/XCommandId'
         - { $ref: '#/components/parameters/UserId' }
+        - $ref: '#/components/parameters/XTenantId'
       requestBody:
         required: true
         content:
@@ -774,6 +798,7 @@ paths:
       parameters:
         - $ref: '#/components/parameters/UserId'
         - $ref: '#/components/parameters/RoleId'
+        - $ref: '#/components/parameters/XTenantId'
       responses:
         '204': { description: Role revoked }
         '403': { $ref: '#/components/responses/Forbidden' }
@@ -793,6 +818,7 @@ paths:
       parameters:
         - $ref: '#/components/parameters/XCommandId'
         - { $ref: '#/components/parameters/UserId' }
+        - $ref: '#/components/parameters/XTenantId'
       requestBody:
         required: true
         content:
@@ -816,6 +842,7 @@ paths:
       parameters:
         - $ref: '#/components/parameters/XCommandId'
         - { $ref: '#/components/parameters/UserId' }
+        - $ref: '#/components/parameters/XTenantId'
       requestBody:
         required: true
         content:
@@ -832,7 +859,9 @@ paths:
       description: |
         Requires `identity.users.update` (satisfied by `tenant.admin` in the caller's own tenant, or by `platform.*` equivalents for platform operators; ADR 0068). Self-target forbidden (`self_modification_forbidden`).
       x-required-permissions: [identity.users.update]
-      parameters: [{ $ref: '#/components/parameters/UserId' }]
+      parameters:
+        - { $ref: '#/components/parameters/UserId' }
+        - $ref: '#/components/parameters/XTenantId'
       responses:
         '204': { description: Manager removed }
         '403': { $ref: '#/components/responses/Forbidden' }
@@ -849,6 +878,7 @@ paths:
       parameters:
         - $ref: '#/components/parameters/XCommandId'
         - { $ref: '#/components/parameters/UserId' }
+        - $ref: '#/components/parameters/XTenantId'
       responses:
         '204': { description: User anonymised }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -857,6 +887,8 @@ paths:
   # ===== ROLES ==========================================================
   /api/v1/roles:
     get:
+      parameters:
+        - $ref: '#/components/parameters/XTenantId'
       tags: [roles]
       summary: List roles in the caller's tenant
       description: |
@@ -872,6 +904,7 @@ paths:
     post:
       parameters:
         - $ref: '#/components/parameters/XCommandId'
+        - $ref: '#/components/parameters/XTenantId'
       tags: [roles]
       summary: Create a custom role
       description: |
@@ -897,7 +930,9 @@ paths:
       description: |
         Requires `identity.roles.view` (satisfied by `tenant.admin` in the caller's own tenant, or by `platform.*` equivalents for platform operators; ADR 0068).
       x-required-permissions: [identity.roles.view]
-      parameters: [{ $ref: '#/components/parameters/RoleId' }]
+      parameters:
+        - { $ref: '#/components/parameters/RoleId' }
+        - $ref: '#/components/parameters/XTenantId'
       responses:
         '200':
           description: Role
@@ -917,6 +952,7 @@ paths:
       parameters:
         - $ref: '#/components/parameters/XCommandId'
         - { $ref: '#/components/parameters/RoleId' }
+        - $ref: '#/components/parameters/XTenantId'
       requestBody:
         required: true
         content:
@@ -938,7 +974,9 @@ paths:
       description: |
         Requires `identity.roles.delete` (satisfied by `tenant.admin` in the caller's own tenant, or by `platform.*` equivalents for platform operators; ADR 0068).
       x-required-permissions: [identity.roles.delete]
-      parameters: [{ $ref: '#/components/parameters/RoleId' }]
+      parameters:
+        - { $ref: '#/components/parameters/RoleId' }
+        - $ref: '#/components/parameters/XTenantId'
       responses:
         '204': { description: Role deleted }
         '403': { $ref: '#/components/responses/Forbidden' }
@@ -971,6 +1009,7 @@ paths:
       parameters:
         - $ref: '#/components/parameters/XCommandId'
         - { $ref: '#/components/parameters/RoleId' }
+        - $ref: '#/components/parameters/XTenantId'
       requestBody:
         required: true
         content:
@@ -1005,6 +1044,7 @@ paths:
       parameters:
         - $ref: '#/components/parameters/XCommandId'
         - { $ref: '#/components/parameters/RoleId' }
+        - $ref: '#/components/parameters/XTenantId'
       requestBody:
         required: true
         content:
@@ -1026,6 +1066,7 @@ paths:
       parameters:
         - $ref: '#/components/parameters/XCommandId'
         - { $ref: '#/components/parameters/RoleId' }
+        - $ref: '#/components/parameters/XTenantId'
       requestBody:
         required: true
         content:
@@ -1047,6 +1088,7 @@ paths:
       parameters:
         - $ref: '#/components/parameters/XCommandId'
         - { $ref: '#/components/parameters/RoleId' }
+        - $ref: '#/components/parameters/XTenantId'
       requestBody:
         required: true
         content:
@@ -1305,6 +1347,7 @@ paths:
     post:
       parameters:
         - $ref: '#/components/parameters/XCommandId'
+        - $ref: '#/components/parameters/XTenantId'
       tags: [permission-requests]
       summary: Submit a permission-elevation request
       description: |
@@ -1347,6 +1390,7 @@ paths:
             default: requester
         - { $ref: '#/components/parameters/Cursor' }
         - { $ref: '#/components/parameters/PageSize' }
+        - $ref: '#/components/parameters/XTenantId'
       responses:
         '200':
           description: Page of requests
@@ -1365,6 +1409,7 @@ paths:
         collapse to 404 per ADR 0044 enumeration-safety canon.
       parameters:
         - { $ref: '#/components/parameters/PermissionRequestId' }
+        - $ref: '#/components/parameters/XTenantId'
       responses:
         '200':
           description: The request
@@ -1384,6 +1429,7 @@ paths:
       parameters:
         - $ref: '#/components/parameters/XCommandId'
         - { $ref: '#/components/parameters/PermissionRequestId' }
+        - $ref: '#/components/parameters/XTenantId'
       requestBody:
         required: false
         content:
@@ -1414,6 +1460,7 @@ paths:
       parameters:
         - $ref: '#/components/parameters/XCommandId'
         - { $ref: '#/components/parameters/PermissionRequestId' }
+        - $ref: '#/components/parameters/XTenantId'
       requestBody:
         required: true
         content:
@@ -1445,6 +1492,7 @@ paths:
       parameters:
         - $ref: '#/components/parameters/XCommandId'
         - { $ref: '#/components/parameters/PermissionRequestId' }
+        - $ref: '#/components/parameters/XTenantId'
       responses:
         '204': { description: Cancelled }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -3176,6 +3224,23 @@ components:
       in: query
       required: false
       schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
+    XTenantId:
+      name: X-Tenant-Id
+      in: header
+      required: false
+      description: |
+        Operator tenant scope (ADR 0039, ADR 0068 D7). Honoured ONLY for
+        slug-anchored, non-impersonation platform operators: the request
+        then runs in that tenant (RLS `app.tenant_id`) and permissions are
+        evaluated there via the `platform.*` equivalents. IGNORED for every
+        other caller (tenant members, impersonation tokens) and by
+        `GET /api/v1/auth/me/capabilities`. Without it, operators act in
+        their own tenant. On `/api/v1/tenants/{tenantId}` routes the path
+        tenant wins and a different header value is rejected.
+        Errors: 400 `invalid_tenant_scope` (not a UUID), 400
+        `tenant_scope_conflict` (differs from the path tenant), 404
+        `tenant_scope_not_found` (unknown or deleted tenant).
+      schema: { type: string, format: uuid }
     TenantId:
       name: tenantId
       in: path

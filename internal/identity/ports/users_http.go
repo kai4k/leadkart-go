@@ -373,10 +373,7 @@ func handleCreateUser(log *slog.Logger, a app.Application) http.Handler {
 		// upstream of this route; defensive fallback to zero ID
 		// keeps the command deterministic if a future code path
 		// invokes the handler without auth.
-		callerMembership := membership.ID("")
-		if claims, ok := authn.ClaimsFromContext(r.Context()); ok && claims != nil {
-			callerMembership = membership.ID(claims.MembershipID)
-		}
+		callerMembership := membership.ID(authn.ActorMembershipID(r.Context()))
 		out, err := a.Commands.CreateUser.Handle(r.Context(), command.CreateUserCommand{
 			TenantID:              tenant.ID(tid),
 			Email:                 addr,

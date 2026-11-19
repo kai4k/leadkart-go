@@ -146,6 +146,10 @@ func RequireTenantPermission(verifier Verifier, validator StampValidator, pathVa
 				writeError(w, http.StatusBadRequest, errCodeInvalidTenantID, pathVar+" path parameter must be a UUID")
 				return
 			}
+			if scopeConflicts(r.Context(), c, urlTenant) {
+				writeError(w, http.StatusBadRequest, errCodeTenantScopeConflict, "X-Tenant-Id conflicts with the tenant in the URL")
+				return
+			}
 			if !c.IsSuperUser && !isPlatformOperator(c) && !sameID(urlTenant, c.TenantID) {
 				writeError(w, http.StatusForbidden, errCodeForbidden, "tenant context does not match url")
 				return
