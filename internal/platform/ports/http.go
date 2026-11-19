@@ -42,27 +42,17 @@ func AddRoutes(
 		return
 	}
 
-	// chain wraps outer around an inner-wrapped handler — used to layer
-	// RequirePlatform atop RequirePermission on Platform-only routes.
-	chain := func(outer, inner func(http.Handler) http.Handler) func(http.Handler) http.Handler {
-		return func(h http.Handler) http.Handler {
-			return outer(inner(h))
-		}
-	}
-
-	// requirePlatform enforces both is_platform=true AND tenant_slug=="platform"
-	// on the JWT (multi-tenancy.md "Platform admin endpoints"). A tenant role
-	// mis-granted Platform.* permissions still can't reach these routes — its
-	// JWT carries is_platform=false. Defense-in-depth atop the permission gate.
-	requirePlatform := authn.RequirePlatform(verifier, stampValidator)
-
-	// UnverifiedContacts writes + the Platform-only LIST: permission gate plus
-	// requirePlatform. LIST is the most sensitive — it exposes the whole
-	// pipeline including PII.
-	manageContacts := authn.RequirePermission(verifier, stampValidator,
+	// RequirePlatformGate(...)(perm) = platform-tenant anchor (is_platform=true
+	// AND tenant_slug=="platform", multi-tenancy.md "Platform admin endpoints")
+	// AND the named permission, and it attributes the operator on the request's
+	// act claim (one implementation, shared with identity's platform routes). A
+	// tenant role mis-granted Platform.* permissions still can't reach these
+	// routes: its JWT carries is_platform=false.
+	//
+	// UnverifiedContacts writes + the Platform-only LIST: LIST is the most
+	// sensitive, it exposes the whole pipeline including PII.
+	platformContactsGate := authn.RequirePlatformGate(verifier, stampValidator)(
 		permission.IdentityPermissions.PlatformUnverifiedContacts.Manage)
-
-	platformContactsGate := chain(requirePlatform, manageContacts)
 	mux.Handle("POST /api/v1/platform/unverified-contacts",
 		platformContactsGate(handleCreateUnverifiedContact(log, a)))
 	mux.Handle("POST /api/v1/platform/unverified-contacts/{id}/calls",
@@ -86,12 +76,12 @@ func AddRoutes(
 	mux.Handle("POST /api/v1/platform/marketplace/leads/{id}/purchase",
 		authn.RejectTenantScope(purchase(handlePurchaseLead(log, a))))
 
-	// LeadCredits topup — Platform-tier only; requirePlatform atop the
-	// permission so a mis-granted tenant role still can't credit balances.
-	topup := authn.RequirePermission(verifier, stampValidator,
+	// LeadCredits topup — Platform-tier only: the anchor atop the permission so
+	// a mis-granted tenant role still can't credit balances.
+	topup := authn.RequirePlatformGate(verifier, stampValidator)(
 		permission.IdentityPermissions.PlatformLeadCredits.Topup)
 	mux.Handle("POST /api/v1/platform/lead-credits/topup",
-		chain(requirePlatform, topup)(handleTopupLeadCredits(log, a)))
+		topup(handleTopupLeadCredits(log, a)))
 
 	// LeadCredits read — held by every tenant role and Platform.
 	read := authn.RequirePermission(verifier, stampValidator,

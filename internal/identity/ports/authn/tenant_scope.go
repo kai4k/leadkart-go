@@ -26,6 +26,13 @@ const ScopeActReason = "tenant-via-header"
 // no X-Tenant-Id): the same durable attribution, a different provenance.
 const ScopeActReasonPath = "tenant-via-path"
 
+// ScopeActReasonPlatform is the act-claim reason for an anchored operator
+// running a platform-gated route ([RequirePlatformGate]) with no scope claim
+// already on the request: header-less lifecycle calls, hard delete, platform
+// person operations, platform-module writes. It makes the operator's person
+// id durable on every outbox and audit row those routes write.
+const ScopeActReasonPlatform = "platform-route"
+
 const (
 	errCodeInvalidTenantScope      = "invalid_tenant_scope"
 	errCodeTenantScopeNotFound     = "tenant_scope_not_found"
@@ -124,6 +131,13 @@ const (
 	scopePathLifecycle                       // as scopePathMatch; tenant lifecycle routes also act on inactive tenants
 	scopePathOnly                            // header is only conflict-checked, never applied
 )
+
+// pathTenant reports whether the route names its tenant in the URL. The URL
+// decides there: a header equal to it selects nothing (no scope authority, no
+// lookup), and the route's own permission gate authorises and attributes.
+func (k scopeRouteKind) pathTenant() bool {
+	return k == scopePathMatch || k == scopePathLifecycle || k == scopePathOnly
+}
 
 type scopeRoute struct {
 	kind     scopeRouteKind
@@ -251,9 +265,11 @@ func applyScope(w http.ResponseWriter, r *http.Request, c *jwt.Claims) (*http.Re
 	if ref := preLookupRefusal(r, c, route, id, own); ref != nil {
 		return reject(ref.status, ref.code, ref.msg, id)
 	}
-	if own || route.kind == scopePathOnly {
-		// Acting in the home tenant, or a path-only route that never applies
-		// the header: nothing to select.
+	if own || route.kind.pathTenant() {
+		// Acting in the home tenant, or a path-tenant route (the header equals
+		// the URL tenant, checked above): nothing to select. The route's own
+		// gate decides and attributes ([RequireTenantPermission] re-binds the
+		// path tenant, [RequirePlatformGate] stamps the operator).
 		sr.done = true
 		return r, true
 	}
@@ -299,7 +315,7 @@ func preLookupRefusal(r *http.Request, c *jwt.Claims, route scopeRoute, id strin
 		}
 	case scopeHonour:
 	}
-	if own || route.kind == scopePathOnly {
+	if own || route.kind.pathTenant() {
 		return nil
 	}
 	// Selecting a foreign tenant is itself an authority: platform-tenant

@@ -343,6 +343,13 @@ func RequirePlatform(verifier Verifier, validator StampValidator) func(http.Hand
 // tenant slug), so a platform route must name the permission that authorises
 // it; the factory panics at wiring time when none is given.
 //
+// It is also the ONE place platform routes attribute the operator: once every
+// gate has passed, a request with no act claim yet (no header scope, no path
+// re-bind, no impersonation) gets {OperatorID: caller, Reason:
+// [ScopeActReasonPlatform]}, so suspend, delete, anonymise and the platform
+// module's writes leave act_operator_id on their outbox rows. An existing
+// claim is never overwritten.
+//
 //	platform := authn.RequirePlatformGate(verifier, validator)
 //	mux.Handle("POST /api/v1/tenants/{tenantId}/suspend", platform(p.Tenants.Suspend)(h))
 func RequirePlatformGate(verifier Verifier, validator StampValidator) func(permNames ...string) func(http.Handler) http.Handler {
@@ -356,10 +363,25 @@ func RequirePlatformGate(verifier Verifier, validator StampValidator) func(permN
 			gates[i] = RequirePermission(verifier, validator, n)
 		}
 		return func(next http.Handler) http.Handler {
+			next = attributePlatformOperator(next)
 			for i := len(gates) - 1; i >= 0; i-- {
 				next = gates[i](next)
 			}
 			return anchor(next)
 		}
 	}
+}
+
+// attributePlatformOperator is the innermost wrapper of [RequirePlatformGate]:
+// it stamps the caller as the operator when no act claim is on the context yet.
+func attributePlatformOperator(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if _, has := actclaim.FromContext(r.Context()); !has {
+			if c, ok := ClaimsFromContext(r.Context()); ok {
+				r = r.WithContext(actclaim.WithContext(r.Context(),
+					actclaim.Claim{OperatorID: c.Subject, Reason: ScopeActReasonPlatform}))
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
 }

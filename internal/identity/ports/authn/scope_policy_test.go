@@ -222,7 +222,8 @@ func TestTenantScopePolicy_PathConflict(t *testing.T) {
 		tenant string
 	}{
 		{"lifecycle conflict", lifecycle, "POST", "/api/v1/tenants/" + tenantB + "/suspend", tenantA, 400, ""},
-		{"lifecycle same tenant", lifecycle, "POST", "/api/v1/tenants/" + tenantB + "/suspend", tenantB, 200, tenantB},
+		// A header equal to the path tenant selects nothing (F4): the home tenant stays bound.
+		{"lifecycle same tenant", lifecycle, "POST", "/api/v1/tenants/" + tenantB + "/suspend", tenantB, 200, tenantA},
 		{"lifecycle no header", lifecycle, "POST", "/api/v1/tenants/" + tenantB + "/suspend", "", 200, tenantA},
 		{"hard delete conflict", pathOnly, "DELETE", "/api/v1/platform/tenants/" + tenantB, tenantA, 400, ""},
 		{"hard delete same tenant", pathOnly, "DELETE", "/api/v1/platform/tenants/" + tenantB, tenantB, 200, tenantA},
@@ -452,5 +453,57 @@ func TestRequireTenantPermission_PathReBindCarriesActClaim(t *testing.T) {
 	admin := &jwt.Claims{TenantID: tenantA, TenantSlug: "acme", Permissions: []string{"tenant.admin"}}
 	if _, ok, code := probe(admin, tenantA); code != http.StatusOK || ok {
 		t.Fatalf("tenant admin on own path: %d act=%v", code, ok)
+	}
+}
+
+// F4: on a path-tenant route a header equal to the path tenant is not a scope
+// request at all: no scope authority, no lookup. The route's own permission gate
+// decides, so an operator holding only the route's permission is not refused
+// with tenant_scope_forbidden. A different header is still a 400 conflict.
+func TestTenantScopePolicy_PathTenantHeaderEqualToPathNeedsNoScopeAuthority(t *testing.T) {
+	t.Parallel()
+	noScopeAuthority := func() *jwt.Claims {
+		return &jwt.Claims{TenantID: tenantA, TenantSlug: authn.PlatformTenantSlug, IsPlatform: true, Permissions: []string{"platform.tenants.manage", "identity.tenants.suspend"}}
+	}
+	zeroPermission := func() *jwt.Claims {
+		return &jwt.Claims{TenantID: tenantA, TenantSlug: authn.PlatformTenantSlug, IsPlatform: true}
+	}
+	routes := []struct {
+		name   string
+		wrap   func(http.Handler) http.Handler
+		method string
+		path   string
+	}{
+		{"match", authn.TenantScopeMatchesPath("tenantId"), "PATCH", "/api/v1/tenants/" + tenantB + "/profile"},
+		{"lifecycle", authn.TenantScopeLifecycle("tenantId"), "POST", "/api/v1/tenants/" + tenantB + "/suspend"},
+		{"path only", authn.TenantScopePathOnly("tenantId"), "DELETE", "/api/v1/platform/tenants/" + tenantB},
+	}
+	for _, rt := range routes {
+		for _, who := range []struct {
+			name   string
+			claims func() *jwt.Claims
+		}{{"holder of the route permission only", noScopeAuthority}, {"zero-permission platform member", zeroPermission}} {
+			t.Run(rt.name+" header==path, "+who.name, func(t *testing.T) {
+				t.Parallel()
+				tn := activeTenants()
+				rec, s, logs := scopeServe(t, tn, who.claims(), alwaysFresh{}, rt.wrap, rt.method, rt.path, tenantB)
+				if rec.Code != http.StatusOK || !s.called {
+					t.Fatalf("header equal to the path tenant: %d %s, want the request to reach the route gate", rec.Code, rec.Body.String())
+				}
+				if tn.lookups.Load() != 0 {
+					t.Fatalf("no tenant lookup on a path-tenant route (%d)", tn.lookups.Load())
+				}
+				if strings.Contains(logs, "level=WARN") {
+					t.Fatalf("not a scope rejection: %s", logs)
+				}
+			})
+			t.Run(rt.name+" header!=path, "+who.name, func(t *testing.T) {
+				t.Parallel()
+				rec, s, _ := scopeServe(t, activeTenants(), who.claims(), alwaysFresh{}, rt.wrap, rt.method, rt.path, tenantA)
+				if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "tenant_scope_conflict") || s.called {
+					t.Fatalf("conflicting header: %d %s, want 400 tenant_scope_conflict", rec.Code, rec.Body.String())
+				}
+			})
+		}
 	}
 }
