@@ -115,7 +115,9 @@ func AddRoutes(mux *http.ServeMux, log *slog.Logger, a app.Application, verifier
 		// god-mode" + identity.tenants.{suspend,activate,delete}
 		// permissions. Tenants do NOT self-suspend / self-restore via
 		// these routes; those flows go through Platform-tier APIs.
-		platform := authn.RequirePlatform(verifier, stampValidator)
+		// platform(perm...) = platform-tenant anchor AND every named permission:
+		// platform-tenant membership alone authorises nothing.
+		platform := authn.RequirePlatformGate(verifier, stampValidator)
 		// Tenant lifecycle writes stay possible against a suspended or pending-
 		// deletion tenant; a conflicting X-Tenant-Id is 400 (path wins).
 		lifecycle := authn.TenantScopeLifecycle("tenantId")
@@ -125,16 +127,16 @@ func AddRoutes(mux *http.ServeMux, log *slog.Logger, a app.Application, verifier
 
 		// Tenant onboarding is operator-only (ADR 0053 "no public sign-up
 		// surface"; BRD PlatformManager onboarding; ADR 0068 D6).
-		tenantsCreate := authn.RequirePermission(verifier, stampValidator, p.Platform.TenantsCreate)
-		mux.Handle("POST /api/v1/tenants", platform(tenantsCreate(handleRegisterTenant(log, a))))
+		mux.Handle("POST /api/v1/tenants",
+			platform(p.Platform.TenantsCreate)(handleRegisterTenant(log, a)))
 		mux.Handle("POST /api/v1/tenants/{tenantId}/suspend",
-			lifecycle(platform(handleSuspendTenant(log, a))))
+			lifecycle(platform(p.Tenants.Suspend)(handleSuspendTenant(log, a))))
 		mux.Handle("POST /api/v1/tenants/{tenantId}/activate",
-			lifecycle(platform(handleActivateTenant(log, a))))
+			lifecycle(platform(p.Tenants.Activate)(handleActivateTenant(log, a))))
 		mux.Handle("POST /api/v1/tenants/{tenantId}/mark-for-deletion",
-			lifecycle(platform(handleMarkTenantForDeletion(log, a))))
+			lifecycle(platform(p.Tenants.Delete)(handleMarkTenantForDeletion(log, a))))
 		mux.Handle("POST /api/v1/tenants/{tenantId}/restore",
-			lifecycle(platform(handleRestoreTenant(log, a))))
+			lifecycle(platform(p.Tenants.Delete)(handleRestoreTenant(log, a))))
 
 		// User (Membership) management — permission-gated per ADR 0036/0068.
 		// notSelf forbids self-assigned roles/overrides/status/manager (D3).
@@ -174,7 +176,7 @@ func AddRoutes(mux *http.ServeMux, log *slog.Logger, a app.Application, verifier
 		// gates this on Platform tier per multi-tenancy.md
 		// "SuperUser god-mode" + identity.users.anonymise permission.
 		mux.Handle("POST /api/v1/users/{userId}/anonymise",
-			platform(handleAnonymiseUser(log, a)))
+			platform(p.Users.Anonymise)(handleAnonymiseUser(log, a)))
 
 		// Role management — permission-gated per ADR 0036/0068.
 		rolesView := authn.RequirePermission(verifier, stampValidator, p.Roles.View)
@@ -204,27 +206,27 @@ func AddRoutes(mux *http.ServeMux, log *slog.Logger, a app.Application, verifier
 		// existing platform middleware (impersonation flow lands in
 		// A.7.b — these endpoints don't require an active session).
 		mux.Handle("GET /api/v1/platform/tenants",
-			platform(handleListAllTenants(log, a)))
+			platform(p.Platform.TenantsView)(handleListAllTenants(log, a)))
 		mux.Handle("DELETE /api/v1/platform/tenants/{tenantId}",
-			scopePathOnly(platform(handleHardDeleteTenant(log, a))))
+			scopePathOnly(platform(p.Tenants.Delete)(handleHardDeleteTenant(log, a))))
 		mux.Handle("GET /api/v1/platform/persons/{personId}",
-			platform(handleGetPerson(log, a)))
+			platform(p.Platform.UsersView)(handleGetPerson(log, a)))
 		// Platform-only cross-tenant identity probe by email. Query-
 		// param keyed (NOT path) — emails contain `@` + `.` which
 		// confuse some URL parsers + access-log greps. Stripe/Auth0/
 		// GitHub all do ?email= here for the same reason.
 		mux.Handle("GET /api/v1/platform/persons",
-			platform(handleGetPersonByEmail(log, a)))
+			platform(p.Platform.UsersView)(handleGetPersonByEmail(log, a)))
 		mux.Handle("GET /api/v1/platform/persons/{personId}/memberships",
-			platform(handleListPersonMemberships(log, a)))
+			platform(p.Platform.UsersView)(handleListPersonMemberships(log, a)))
 		mux.Handle("PATCH /api/v1/platform/persons/{personId}/profile",
-			platform(handleUpdatePersonProfile(log, a)))
+			platform(p.Platform.UsersManage)(handleUpdatePersonProfile(log, a)))
 		mux.Handle("POST /api/v1/platform/persons/{personId}/global-suspend",
-			platform(handleGlobalSuspendPerson(log, a)))
+			platform(p.Platform.UsersManage)(handleGlobalSuspendPerson(log, a)))
 		mux.Handle("POST /api/v1/platform/persons/{personId}/lift-global-suspension",
-			platform(handleLiftPersonGlobalSuspension(log, a)))
+			platform(p.Platform.UsersManage)(handleLiftPersonGlobalSuspension(log, a)))
 		mux.Handle("POST /api/v1/platform/persons/{personId}/anonymise",
-			platform(handleAnonymisePerson(log, a)))
+			platform(p.Users.Anonymise)(handleAnonymisePerson(log, a)))
 
 		// Impersonation sessions per multi-tenancy.md "Impersonation".
 		// Reason captured ONCE at session creation; subsequent
@@ -233,21 +235,21 @@ func AddRoutes(mux *http.ServeMux, log *slog.Logger, a app.Application, verifier
 		// endpoints manage the session lifecycle but the per-request
 		// header pickup is post-launch operational work).
 		mux.Handle("POST /api/v1/platform/impersonation/sessions",
-			platform(handleCreateImpersonationSession(log, a)))
+			platform(p.Platform.TenantsManage)(handleCreateImpersonationSession(log, a)))
 		mux.Handle("DELETE /api/v1/platform/impersonation/sessions/{sessionId}",
-			platform(handleEndImpersonationSession(log, a)))
+			platform(p.Platform.TenantsManage)(handleEndImpersonationSession(log, a)))
 		mux.Handle("GET /api/v1/platform/impersonation/sessions",
-			platform(handleListImpersonationSessions(log, a)))
+			platform(p.Platform.TenantsManage)(handleListImpersonationSessions(log, a)))
 
 		// Operator dashboard at-a-glance stats.
 		mux.Handle("GET /api/v1/platform/stats",
-			platform(handlePlatformStats(log, a)))
+			platform(p.Platform.TenantsView)(handlePlatformStats(log, a)))
 
 		// Operator omni-search (Cmd+K) — parallel pg_trgm fanout
 		// across persons + tenants per ADR 0040. Platform-only at
 		// v0.2; tenant-scoped variant lands in a follow-up.
 		mux.Handle("GET /api/v1/search",
-			platform(handleSearch(log, a)))
+			platform(p.Platform.TenantsView, p.Platform.UsersView)(handleSearch(log, a)))
 
 		// Permission-elevation approval workflow (ADR 0055).
 		//

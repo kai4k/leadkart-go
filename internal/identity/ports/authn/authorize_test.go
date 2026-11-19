@@ -183,7 +183,7 @@ func TestTenantScope_SelfTargetUsesCallerMembership(t *testing.T) {
 	// Operator scoped to tenant B: DenySelfTarget still compares against the
 	// caller's OWN membership id, not anything tenant-derived.
 	const self = "0190a000-0000-7000-8000-0000000000aa"
-	c := &jwt.Claims{TenantID: tenantA, MembershipID: self, TenantSlug: authn.PlatformTenantSlug, IsPlatform: true}
+	c := &jwt.Claims{TenantID: tenantA, MembershipID: self, TenantSlug: authn.PlatformTenantSlug, IsPlatform: true, Permissions: []string{"platform.tenants.view"}}
 	v := &fakeVerifier{claims: withFreshness(c)}
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	for target, want := range map[string]int{self: 403, "0190a000-0000-7000-8000-0000000000bb": 200} {

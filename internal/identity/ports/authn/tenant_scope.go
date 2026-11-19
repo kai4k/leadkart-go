@@ -9,6 +9,7 @@ import (
 	"github.com/leadkart/leadkart-go/internal/common/actclaim"
 	"github.com/leadkart/leadkart-go/internal/common/tenancy"
 	"github.com/leadkart/leadkart-go/internal/identity/app/jwt"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/permission"
 )
 
 // TenantScopeHeader is the ADR 0039 operator scope override header.
@@ -25,6 +26,7 @@ const (
 	errCodeTenantScopeNotFound     = "tenant_scope_not_found"
 	errCodeTenantScopeConflict     = "tenant_scope_conflict"
 	errCodeTenantScopeNotSupported = "tenant_scope_not_supported"
+	errCodeTenantScopeForbidden    = "tenant_scope_forbidden"
 	errCodeTenantNotActive         = "tenant_not_active"
 	errCodeInternal                = "internal_error"
 )
@@ -34,11 +36,11 @@ const (
 type TenantScopeState int
 
 const (
-	// TenantScopeUnknown: no such tenant, or a deleted one. Never scoped into.
+	// TenantScopeUnknown means no such tenant, or a deleted one. Never scoped into.
 	TenantScopeUnknown TenantScopeState = iota
-	// TenantScopeActive: scope reads and writes are allowed.
+	// TenantScopeActive means scope reads and writes are allowed.
 	TenantScopeActive
-	// TenantScopeInactive: suspended or pending deletion. Scope reads and the
+	// TenantScopeInactive means suspended or pending deletion. Scope reads and the
 	// tenant lifecycle routes are allowed; other writes are 409.
 	TenantScopeInactive
 )
@@ -208,6 +210,12 @@ func applyScope(w http.ResponseWriter, r *http.Request, c *jwt.Claims) (*http.Re
 		}
 	case scopeHonour:
 	}
+	// Selecting a foreign tenant is itself an authority: platform-tenant
+	// membership proves nothing. Decided before any tenant lookup and with one
+	// uniform answer, so it cannot be used to probe which tenants exist.
+	if !own && !MaySelectTenantScope(c) {
+		return reject(http.StatusForbidden, errCodeTenantScopeForbidden, "X-Tenant-Id requires platform tenant scope authority", id)
+	}
 	if own {
 		return r, true // already acting in the home tenant: nothing to select
 	}
@@ -232,6 +240,14 @@ func applyScope(w http.ResponseWriter, r *http.Request, c *jwt.Claims) (*http.Re
 	ctx := tenancy.WithID(r.Context(), tenancy.ID(id))
 	ctx = actclaim.WithContext(ctx, actclaim.Claim{OperatorID: c.Subject, Reason: ScopeActReason})
 	return r.WithContext(ctx), true
+}
+
+// MaySelectTenantScope reports whether the caller may act in a tenant other
+// than its own through X-Tenant-Id: a super user, or a slug-anchored platform
+// operator holding platform.tenants.view (platform-reserved, so a tenant
+// principal never satisfies it whatever its claims say).
+func MaySelectTenantScope(c *jwt.Claims) bool {
+	return c != nil && satisfiesIn(c, tenancy.ID(c.TenantID), permission.IdentityPermissions.Platform.TenantsView)
 }
 
 func isReadMethod(m string) bool { return m == http.MethodGet || m == http.MethodHead }

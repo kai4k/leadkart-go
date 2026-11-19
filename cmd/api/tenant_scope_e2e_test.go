@@ -157,7 +157,7 @@ func TestE2E_TenantScope_AuthorisationEvaluatedInScopedTenant(t *testing.T) {
 	if r := f.doWithHeaders(t, http.MethodGet, "/api/v1/users", noView, nil, scopeHdr(a.TenantID)); r.status != http.StatusForbidden {
 		t.Errorf("operator without platform.users.view must get 403 under scope: %d %s", r.status, r.body)
 	}
-	withView := mintOperatorJWTExact(t, f.Issuer, f.persons, "", []string{p.Platform.UsersView}, false)
+	withView := mintOperatorJWTExact(t, f.Issuer, f.persons, "", []string{p.Platform.TenantsView, p.Platform.UsersView}, false)
 	if r := f.doWithHeaders(t, http.MethodGet, "/api/v1/users", withView, nil, scopeHdr(a.TenantID)); r.status != http.StatusOK {
 		t.Errorf("operator with platform.users.view must read scoped tenant: %d %s", r.status, r.body)
 	}

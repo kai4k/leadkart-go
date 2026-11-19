@@ -335,3 +335,31 @@ func RequirePlatform(verifier Verifier, validator StampValidator) func(http.Hand
 		}))
 	}
 }
+
+// RequirePlatformGate returns the factory for platform-tier routes: the
+// platform-tenant anchor ([RequirePlatform]) AND every named permission
+// ([RequirePermission], i.e. the one [Satisfies] decision). Membership of the
+// platform tenant proves nothing on its own (is_platform is minted from the
+// tenant slug), so a platform route must name the permission that authorises
+// it; the factory panics at wiring time when none is given.
+//
+//	platform := authn.RequirePlatformGate(verifier, validator)
+//	mux.Handle("POST /api/v1/tenants/{tenantId}/suspend", platform(p.Tenants.Suspend)(h))
+func RequirePlatformGate(verifier Verifier, validator StampValidator) func(permNames ...string) func(http.Handler) http.Handler {
+	anchor := RequirePlatform(verifier, validator)
+	return func(permNames ...string) func(http.Handler) http.Handler {
+		if len(permNames) == 0 {
+			panic("authn: RequirePlatformGate requires ≥1 permission name")
+		}
+		gates := make([]func(http.Handler) http.Handler, len(permNames))
+		for i, n := range permNames {
+			gates[i] = RequirePermission(verifier, validator, n)
+		}
+		return func(next http.Handler) http.Handler {
+			for i := len(gates) - 1; i >= 0; i-- {
+				next = gates[i](next)
+			}
+			return anchor(next)
+		}
+	}
+}

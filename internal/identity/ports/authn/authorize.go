@@ -19,7 +19,7 @@ const (
 	errCodeInvalidTenantID = "invalid_tenant_id"
 )
 
-// IsPlatformOperator: is_platform AND slug-anchored AND not an impersonation
+// IsPlatformOperator reports is_platform AND slug-anchored AND not an impersonation
 // token (ADR 0039 slug anchor; ADR 0045 downgrade).
 func IsPlatformOperator(c *jwt.Claims) bool {
 	return c != nil && c.IsPlatform && c.TenantSlug == PlatformTenantSlug && !c.IsImpersonation()

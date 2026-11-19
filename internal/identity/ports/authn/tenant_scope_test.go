@@ -41,7 +41,7 @@ func scopeReq(t *testing.T, header string) *http.Request {
 func TestTenantScope(t *testing.T) {
 	t.Parallel()
 	op := func() *jwt.Claims {
-		return &jwt.Claims{TenantID: tenantA, TenantSlug: authn.PlatformTenantSlug, IsPlatform: true}
+		return &jwt.Claims{TenantID: tenantA, TenantSlug: authn.PlatformTenantSlug, IsPlatform: true, Permissions: []string{"platform.tenants.view"}}
 	}
 	member := func() *jwt.Claims { return &jwt.Claims{TenantID: tenantA, TenantSlug: "acme"} }
 	imp := func() *jwt.Claims {
@@ -87,7 +87,7 @@ func TestTenantScope(t *testing.T) {
 
 func TestTenantScope_ErrorCodes(t *testing.T) {
 	t.Parallel()
-	op := &jwt.Claims{TenantID: tenantA, TenantSlug: authn.PlatformTenantSlug, IsPlatform: true}
+	op := &jwt.Claims{TenantID: tenantA, TenantSlug: authn.PlatformTenantSlug, IsPlatform: true, Permissions: []string{"platform.tenants.view"}}
 	for header, want := range map[string]string{
 		"nope":                                 "invalid_tenant_scope",
 		"0190a000-0000-7000-8000-0000000000ee": "tenant_scope_not_found",
@@ -103,12 +103,12 @@ func TestTenantScope_ErrorCodes(t *testing.T) {
 func TestTenantScope_SatisfiesHonoursEffectiveTenant(t *testing.T) {
 	t.Parallel()
 	// Operator holding tenant.admin in the PLATFORM tenant gains nothing in tenant B (D1 own-tenant rule).
-	c := &jwt.Claims{TenantID: tenantA, TenantSlug: authn.PlatformTenantSlug, IsPlatform: true, Permissions: []string{"tenant.admin"}}
+	c := &jwt.Claims{TenantID: tenantA, TenantSlug: authn.PlatformTenantSlug, IsPlatform: true, Permissions: []string{"tenant.admin", "platform.tenants.view"}}
 	var allowed bool
 	v := &fakeVerifier{claims: withFreshness(c)}
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	h := authn.TenantScope(fakeTenants{tenantB: true}.Lookup, log)(authn.RequireFreshStamp(v, alwaysFresh{})(
-		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 			allowed = authn.Satisfies(r.Context(), "identity.users.view")
 		})))
 	h.ServeHTTP(httptest.NewRecorder(), scopeReq(t, tenantB))
@@ -119,12 +119,12 @@ func TestTenantScope_SatisfiesHonoursEffectiveTenant(t *testing.T) {
 
 func TestTenantScope_PlatformEquivalentHoldsInScopedTenant(t *testing.T) {
 	t.Parallel()
-	c := &jwt.Claims{TenantID: tenantA, TenantSlug: authn.PlatformTenantSlug, IsPlatform: true, Permissions: []string{"platform.users.view"}}
+	c := &jwt.Claims{TenantID: tenantA, TenantSlug: authn.PlatformTenantSlug, IsPlatform: true, Permissions: []string{"platform.tenants.view", "platform.users.view"}}
 	var allowed bool
 	v := &fakeVerifier{claims: withFreshness(c)}
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	h := authn.TenantScope(fakeTenants{tenantB: true}.Lookup, log)(authn.RequireFreshStamp(v, alwaysFresh{})(
-		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 			allowed = authn.Satisfies(r.Context(), "identity.users.view")
 		})))
 	h.ServeHTTP(httptest.NewRecorder(), scopeReq(t, tenantB))
@@ -242,5 +242,39 @@ func TestIsPlatformOperator(t *testing.T) {
 		if got := authn.IsPlatformOperator(tc.c); got != tc.want {
 			t.Errorf("%s: got %v want %v", tc.name, got, tc.want)
 		}
+	}
+}
+
+// Selecting a foreign tenant needs platform tenant scope authority: a platform
+// member without platform.tenants.view gets ONE 403 whether the tenant exists,
+// is unknown or is inactive, and no lookup is made.
+func TestTenantScope_ForeignTenantNeedsScopeAuthority(t *testing.T) {
+	t.Parallel()
+	zero := &jwt.Claims{TenantID: tenantA, TenantSlug: authn.PlatformTenantSlug, IsPlatform: true}
+	manageOnly := &jwt.Claims{TenantID: tenantA, TenantSlug: authn.PlatformTenantSlug, IsPlatform: true, Permissions: []string{"platform.tenants.manage", "platform.users.manage"}}
+	super := &jwt.Claims{TenantID: tenantA, TenantSlug: authn.PlatformTenantSlug, IsPlatform: true, IsSuperUser: true}
+	for name, c := range map[string]*jwt.Claims{"zero": zero, "manage-only": manageOnly} {
+		var bodies []string
+		for _, hdr := range []string{tenantB, "0190a000-0000-7000-8000-0000000000ee"} {
+			tn := &countingTenants{states: map[string]authn.TenantScopeState{tenantB: authn.TenantScopeInactive}}
+			rec, s, _ := scopeServe(t, tn, c, alwaysFresh{}, nil, "GET", "/api/v1/users", hdr)
+			if rec.Code != 403 || !strings.Contains(rec.Body.String(), "tenant_scope_forbidden") || s.called {
+				t.Fatalf("%s/%s: %d %s called=%v", name, hdr, rec.Code, rec.Body.String(), s.called)
+			}
+			if tn.lookups.Load() != 0 {
+				t.Fatalf("%s/%s: the scope decision must precede any tenant lookup", name, hdr)
+			}
+			bodies = append(bodies, rec.Body.String())
+		}
+		if bodies[0] != bodies[1] {
+			t.Fatalf("%s: answers differ between existing and unknown tenant: %q vs %q", name, bodies[0], bodies[1])
+		}
+	}
+	if rec, _, _ := scopeServe(t, activeTenants(), super, alwaysFresh{}, nil, "GET", "/api/v1/users", tenantB); rec.Code != 200 {
+		t.Fatalf("super user must select a foreign tenant: %d", rec.Code)
+	}
+	// The caller's own tenant needs no authority.
+	if rec, _, _ := scopeServe(t, activeTenants(), zero, alwaysFresh{}, nil, "GET", "/api/v1/users", tenantA); rec.Code != 200 {
+		t.Fatalf("own-tenant header: %d", rec.Code)
 	}
 }

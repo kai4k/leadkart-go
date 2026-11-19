@@ -36,7 +36,7 @@ func activeTenants() *countingTenants {
 }
 
 func operatorClaims() *jwt.Claims {
-	return &jwt.Claims{TenantID: tenantA, TenantSlug: authn.PlatformTenantSlug, IsPlatform: true}
+	return &jwt.Claims{TenantID: tenantA, TenantSlug: authn.PlatformTenantSlug, IsPlatform: true, Permissions: []string{"platform.tenants.view"}}
 }
 
 // pathTenant returns the {tenantId} path value the real mux would have set.
@@ -58,7 +58,7 @@ func scopeServe(t *testing.T, tn *countingTenants, c *jwt.Claims, v authn.StampV
 	log := slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	ver := &fakeVerifier{claims: withFreshness(c)}
 	s := &sentinel{}
-	var h http.Handler = authn.RequireFreshStamp(ver, v)(s.handler())
+	h := authn.RequireFreshStamp(ver, v)(s.handler())
 	if wrap != nil {
 		h = wrap(h)
 	}

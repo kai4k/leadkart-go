@@ -570,7 +570,11 @@ func TestE2E_Auth_NoToken_Returns401(t *testing.T) {
 func TestE2E_PlatformOperator_BypassesTenantGate(t *testing.T) {
 	f := newE2EFixture(t)
 	tenantA := f.registerAndLogin(t, "acme")
-	platformTok := f.mintPlatformToken(t, "")
+	// Lifecycle routes name their own permissions (identity.tenants.suspend /
+	// activate): platform-tenant membership alone no longer opens them.
+	platformTok := f.mintPlatformTokenWith(t, []string{
+		permission.IdentityPermissions.Tenants.Suspend, permission.IdentityPermissions.Tenants.Activate,
+	}, false)
 
 	// Read any tenant.
 	read := f.authedJSON(t, http.MethodGet,

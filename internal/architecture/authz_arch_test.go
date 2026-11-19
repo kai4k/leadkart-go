@@ -23,7 +23,11 @@ var selfServiceMutationAllowList = map[string]string{
 	"POST /api/v1/permission-requests/{requestId}/cancel":  "ADR 0055 §8: handler-inline requester-only",
 }
 
-const authzFactories = `RequirePermission|RequireAnyPermission|RequirePlatform|RequireTenantPermission|RequirePermissionOrSelf`
+// authzFactories are the gates that AUTHORISE. authn.RequirePlatform alone is
+// deliberately absent: it proves platform-tenant membership, not a permission
+// (is_platform is minted from the tenant slug), so a route gated by it alone is
+// still unauthorised. RequirePlatformGate composes it with named permissions.
+const authzFactories = `RequirePermission|RequireAnyPermission|RequirePlatformGate|RequireTenantPermission|RequirePermissionOrSelf`
 
 var (
 	authzCallRE    = regexp.MustCompile(`authn\.(` + authzFactories + `)\(`)
@@ -118,6 +122,6 @@ func TestArch_MutatingRoutesRequireAuthorization(t *testing.T) {
 		}
 	}
 	for _, v := range violations {
-		t.Errorf("%s:%d %s — mutating route gated by authentication only; wrap in authn.RequirePermission/RequireAnyPermission/RequireTenantPermission/RequirePlatform, or (only if it acts solely on the caller's own identity) add it to selfServiceMutationAllowList with a reason", v.file, v.line, v.key)
+		t.Errorf("%s:%d %s — mutating route gated by authentication only; wrap in authn.RequirePermission/RequireAnyPermission/RequireTenantPermission/RequirePlatformGate, or (only if it acts solely on the caller's own identity) add it to selfServiceMutationAllowList with a reason", v.file, v.line, v.key)
 	}
 }

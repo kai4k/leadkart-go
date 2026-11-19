@@ -36,7 +36,7 @@ func TestE2E_TenantScope_NonSuperOperatorIdentityWrites(t *testing.T) {
 	b := f.registerAndLogin(t, "scopenonsuper")
 	p := permission.IdentityPermissions
 	op := mintOperatorJWTExact(t, f.Issuer, f.persons, "", []string{
-		p.Platform.UsersView, p.Platform.UsersManage, p.Platform.RolesView, p.Platform.RolesManage,
+		p.Platform.TenantsView, p.Platform.UsersView, p.Platform.UsersManage, p.Platform.RolesView, p.Platform.RolesManage,
 	}, false)
 
 	created := f.doWithHeaders(t, http.MethodPost, "/api/v1/users", op,
