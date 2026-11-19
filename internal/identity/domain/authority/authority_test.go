@@ -135,18 +135,18 @@ func TestPolicy_DecisionTable(t *testing.T) {
 		{"impersonation on owner", aImp.MayActOn(owner1), authority.ErrInsufficientRank},
 		{"impersonation on manager", aImp.MayActOn(mgr), nil},
 		// H3 — grant ceiling
-		{"owner confers tenant.admin", aOwner.MayChangePermissions(tA, []string{p.Meta.TenantAdmin}), nil},
-		{"admin confers tenant.admin", aAdmin.MayChangePermissions(tA, []string{p.Meta.TenantAdmin}), authority.ErrGrantExceedsAuthority},
-		{"admin confers read_all", aAdmin.MayChangePermissions(tA, []string{p.Crm.Leads.ReadAll}), nil},
-		{"manager confers unheld", aMgr.MayChangePermissions(tA, []string{p.Crm.Leads.Assign}), authority.ErrGrantExceedsAuthority},
-		{"manager confers held", aMgr.MayChangePermissions(tA, []string{p.Crm.Leads.ReadAll}), nil},
-		{"owner confers reserved", aOwner.MayChangePermissions(tA, []string{p.Platform.TenantsManage}), authority.ErrGrantExceedsAuthority},
-		{"super confers reserved", aSuper.MayChangePermissions(tA, []string{p.Platform.TenantsManage}), nil},
-		{"operator confers tenant.admin", aOp.MayChangePermissions(tA, []string{p.Meta.TenantAdmin}), nil},
-		{"operator confers anonymise", aOp.MayChangePermissions(tA, []string{p.Users.Anonymise}), authority.ErrGrantExceedsAuthority},
-		{"impersonation confers tenant.admin", aImp.MayChangePermissions(tA, []string{p.Meta.TenantAdmin}), authority.ErrGrantExceedsAuthority},
-		{"impersonation confers crm", aImp.MayChangePermissions(tA, []string{p.Crm.Leads.Read}), nil},
-		{"zero confers", zero.MayChangePermissions(tA, nil), authority.ErrNoAuthority},
+		{"owner confers tenant.admin", aOwner.MayChangeOverrides(user, []string{p.Meta.TenantAdmin}, nil), nil},
+		{"admin confers tenant.admin", aAdmin.MayChangeOverrides(user, []string{p.Meta.TenantAdmin}, nil), authority.ErrGrantExceedsAuthority},
+		{"admin confers read_all", aAdmin.MayChangeOverrides(user, []string{p.Crm.Leads.ReadAll}, nil), nil},
+		{"manager confers unheld", aMgr.MayChangeOverrides(user, []string{p.Crm.Leads.Assign}, nil), authority.ErrGrantExceedsAuthority},
+		{"manager confers held", aMgr.MayChangeOverrides(user, []string{p.Crm.Leads.ReadAll}, nil), nil},
+		{"owner confers reserved", aOwner.MayChangeOverrides(user, []string{p.Platform.TenantsManage}, nil), authority.ErrGrantExceedsAuthority},
+		{"super confers reserved", aSuper.MayChangeOverrides(user, []string{p.Platform.TenantsManage}, nil), nil},
+		{"operator confers tenant.admin", aOp.MayChangeOverrides(user, []string{p.Meta.TenantAdmin}, nil), nil},
+		{"operator confers anonymise", aOp.MayChangeOverrides(user, []string{p.Users.Anonymise}, nil), authority.ErrGrantExceedsAuthority},
+		{"impersonation confers tenant.admin", aImp.MayChangeOverrides(user, []string{p.Meta.TenantAdmin}, nil), authority.ErrGrantExceedsAuthority},
+		{"impersonation confers crm", aImp.MayChangeOverrides(user, []string{p.Crm.Leads.Read}, nil), nil},
+		{"zero confers", zero.MayChangeOverrides(user, nil, nil), authority.ErrNoAuthority},
 		// H3 — roles
 		{"owner assigns owner role", aOwner.MayAssignRole(admin, ownerR), nil},
 		{"admin assigns admin role", aAdmin.MayAssignRole(mgr, adminR), authority.ErrInsufficientRank},
@@ -157,7 +157,7 @@ func TestPolicy_DecisionTable(t *testing.T) {
 		{"admin assigns super role", aAdmin.MayAssignRole(user, superR), authority.ErrGrantExceedsAuthority},
 		{"impersonation assigns owner role", aImp.MayAssignRole(mgr, ownerR), authority.ErrInsufficientRank},
 		{"operator assigns owner role", aOp.MayAssignRole(user, ownerR), nil},
-		{"admin revokes admin role from admin", aAdmin.MayRevokeRole(admin2, adminR), authority.ErrInsufficientRank},
+		{"admin revokes admin role from admin", aAdmin.MayRevokeRole(admin2, adminR, nil), authority.ErrInsufficientRank},
 		{"admin creates level 11", aAdmin.MayCreateRole(tA, 11, nil), nil},
 		{"admin creates level 10", aAdmin.MayCreateRole(tA, 10, nil), authority.ErrInsufficientRank},
 		{"manager creates level 20", aMgr.MayCreateRole(tA, 20, nil), authority.ErrInsufficientRank},
@@ -173,15 +173,15 @@ func TestPolicy_DecisionTable(t *testing.T) {
 		{"clear parent", aAdmin.MaySetRoleParent(tlR, nil), nil},
 		{"junior edits parent", aTL.MaySetRoleParent(mgrR, adminR), authority.ErrInsufficientRank},
 		// H4 — managers
-		{"admin links user to manager", aAdmin.MaySetManager(user, mgr), nil},
-		{"upward link", aAdmin.MaySetManager(mgr, user), authority.ErrManagerNotEligible},
-		{"lateral link", aAdmin.MaySetManager(mgr, mgr2), authority.ErrManagerNotEligible},
-		{"inactive manager", aAdmin.MaySetManager(user, inactiveMgr), authority.ErrManagerNotEligible},
-		{"manager appoints self", aMgr.MaySetManager(puppet, mgr), nil},
-		{"team lead appoints senior", aTL.MaySetManager(user, mgr), authority.ErrInsufficientRank},
-		{"admin unlinks from manager", aAdmin.MayUnlinkManager(tl, mgr), nil},
-		{"team lead unlinks own report", aTL.MayUnlinkManager(user, tl), nil},
-		{"team lead unlinks senior's report", aTL.MayUnlinkManager(user, mgr), authority.ErrInsufficientRank},
+		{"admin links user to manager", aAdmin.MayReplaceManager(user, mgr, &tl), nil},
+		{"upward link", aAdmin.MayReplaceManager(mgr, user, nil), authority.ErrManagerNotEligible},
+		{"lateral link", aAdmin.MayReplaceManager(mgr, mgr2, nil), authority.ErrManagerNotEligible},
+		{"inactive manager", aAdmin.MayReplaceManager(user, inactiveMgr, &tl), authority.ErrManagerNotEligible},
+		{"manager appoints self", aMgr.MayReplaceManager(puppet, mgr, &mgr), nil},
+		{"team lead appoints senior", aTL.MayReplaceManager(user, mgr, &tl), authority.ErrInsufficientRank},
+		{"admin unlinks from manager", aAdmin.MayClearManager(tl, &mgr), nil},
+		{"team lead unlinks own report", aTL.MayClearManager(user, &tl), nil},
+		{"team lead unlinks senior's report", aTL.MayClearManager(puppet, &mgr), authority.ErrInsufficientRank},
 		// H4 — approvals
 		{"manager approves report held perm", aMgr.MayApprove(tl, p.Crm.Leads.ReadAll), nil},
 		{"manager approves unheld perm", aMgr.MayApprove(tl, p.Crm.Leads.Assign), authority.ErrGrantExceedsAuthority},
@@ -199,12 +199,12 @@ func TestPolicy_DecisionTable(t *testing.T) {
 		{"manager denies non-report", aMgr.MayDeny(user), authority.ErrNotApprover},
 		{"admin denies", aAdmin.MayDeny(user), nil},
 		// H6 — guards
-		{"last owner", authority.GuardLastOwner(owner1, []membership.ID{owner1.ID()}), authority.ErrLastOwnerProtected},
-		{"second owner remains", authority.GuardLastOwner(owner1, []membership.ID{owner1.ID(), owner2.ID()}), nil},
-		{"non-owner target", authority.GuardLastOwner(admin, []membership.ID{owner1.ID()}), nil},
-		{"owner keeps tenant.admin", authority.GuardOwnerOverrides(owner2, []string{p.Meta.TenantAdmin}), authority.ErrOwnerProtected},
-		{"owner other revoke ok", authority.GuardOwnerOverrides(owner2, []string{p.Crm.Leads.Read}), nil},
-		{"admin may lose tenant.admin override", authority.GuardOwnerOverrides(admin, []string{p.Meta.TenantAdmin}), nil},
+		{"last owner", authority.GuardLastOwner(owner1, []authority.Member{owner1}), authority.ErrLastOwnerProtected},
+		{"second owner remains", authority.GuardLastOwner(owner1, []authority.Member{owner1, owner2}), nil},
+		{"non-owner target", authority.GuardLastOwner(admin, []authority.Member{owner1}), nil},
+		{"owner keeps tenant.admin", aOwner.MayChangeOverrides(owner2, []string{p.Meta.TenantAdmin}, []string{p.Meta.TenantAdmin}), authority.ErrOwnerProtected},
+		{"owner other revoke ok", aOwner.MayChangeOverrides(owner2, []string{p.Crm.Leads.Read}, []string{p.Crm.Leads.Read}), nil},
+		{"admin may lose tenant.admin override", aOwner.MayChangeOverrides(admin, []string{p.Meta.TenantAdmin}, []string{p.Meta.TenantAdmin}), nil},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -249,10 +249,11 @@ func TestNewActor_ValidationAndImpersonationRank(t *testing.T) {
 	}
 	imp := mkActor(t, authority.ActorInput{MembershipID: membership.ID(uid(1)), TenantID: tA, Rank: rk(authority.RankOwner), IsImpersonation: true,
 		EffectivePermissions: []string{"not.a.permission", permission.IdentityPermissions.Crm.Leads.Read}})
+	target := mkMember(t, 18, tA, true, "", mkRole(5, tA, "Exec", false, 50, false))
 	if imp.Rank() != authority.RankAdmin {
 		t.Fatalf("impersonation rank = %d, want Admin", imp.Rank())
 	}
-	if imp.MayChangePermissions(tA, []string{"not.a.permission"}) == nil || imp.MayChangePermissions(tA, []string{permission.IdentityPermissions.Crm.Leads.Read}) != nil {
+	if imp.MayChangeOverrides(target, []string{"not.a.permission"}, nil) == nil || imp.MayChangeOverrides(target, []string{permission.IdentityPermissions.Crm.Leads.Read}, nil) != nil {
 		t.Fatal("unknown names dropped, known kept")
 	}
 	var zero authority.Actor

@@ -56,17 +56,19 @@ func TestZeroActorDeniesEveryDecision(t *testing.T) {
 	user := mkMember(t, 18, tA, true, "", userR)
 	var zero authority.Actor
 	for name, err := range map[string]error{
-		"MayActOn":             zero.MayActOn(user),
-		"MayChangePermissions": zero.MayChangePermissions(tA, nil),
-		"MayAssignRole":        zero.MayAssignRole(user, userR),
-		"MayRevokeRole":        zero.MayRevokeRole(user, userR),
-		"MayCreateRole":        zero.MayCreateRole(tA, 60, nil),
-		"MayEditRole":          zero.MayEditRole(userR, authority.NoLevelChange, nil),
-		"MaySetRoleParent":     zero.MaySetRoleParent(userR, nil),
-		"MaySetManager":        zero.MaySetManager(user, owner),
-		"MayUnlinkManager":     zero.MayUnlinkManager(user, owner),
-		"MayApprove":           zero.MayApprove(user, p.Crm.Leads.Read),
-		"MayDeny":              zero.MayDeny(user),
+		"MayActOn":           zero.MayActOn(user),
+		"MayChangeOverrides": zero.MayChangeOverrides(user, nil, nil),
+		"MayDeactivate":      zero.MayDeactivate(user, nil),
+		"MayDeleteRole":      zero.MayDeleteRole(userR),
+		"MayReplaceManager":  zero.MayReplaceManager(user, owner, nil),
+		"MayClearManager":    zero.MayClearManager(user, nil),
+		"MayAssignRole":      zero.MayAssignRole(user, userR),
+		"MayRevokeRole":      zero.MayRevokeRole(user, userR, nil),
+		"MayCreateRole":      zero.MayCreateRole(tA, 60, nil),
+		"MayEditRole":        zero.MayEditRole(userR, authority.NoLevelChange, nil),
+		"MaySetRoleParent":   zero.MaySetRoleParent(userR, nil),
+		"MayApprove":         zero.MayApprove(user, p.Crm.Leads.Read),
+		"MayDeny":            zero.MayDeny(user),
 	} {
 		if !errors.Is(err, authority.ErrNoAuthority) {
 			t.Errorf("zero Actor %s = %v, want no authority", name, err)
@@ -84,6 +86,7 @@ func TestZeroMemberDeniesEveryDecision(t *testing.T) {
 	userR := mkRole(5, tA, role.SystemRoles.Tenant.SalesExecutive, false, 50, false)
 	owner := mkMember(t, 11, tA, true, "", ownerR)
 	user := mkMember(t, 18, tA, true, "", userR)
+	report := mkMember(t, 20, tA, true, owner.ID(), userR)
 	var zero authority.Member
 	actors := map[string]authority.Actor{
 		"owner": mkActor(t, authority.ActorInput{MembershipID: owner.ID(), TenantID: tA, Rank: rk(authority.RankOwner), EffectivePermissions: adminEffective()}),
@@ -93,17 +96,19 @@ func TestZeroMemberDeniesEveryDecision(t *testing.T) {
 	}
 	for who, a := range actors {
 		for name, err := range map[string]error{
-			"MayActOn target":      a.MayActOn(zero),
-			"MayAssignRole target": a.MayAssignRole(zero, userR),
-			"MayRevokeRole target": a.MayRevokeRole(zero, userR),
-			"MaySetManager sub":    a.MaySetManager(zero, owner),
-			"MaySetManager mgr":    a.MaySetManager(user, zero),
-			"MayUnlinkManager sub": a.MayUnlinkManager(zero, owner),
-			"MayUnlinkManager cur": a.MayUnlinkManager(user, zero),
-			"MayApprove requester": a.MayApprove(zero, p.Crm.Leads.Read),
-			"MayDeny requester":    a.MayDeny(zero),
-			"GuardLastOwner":       authority.GuardLastOwner(zero, []membership.ID{owner.ID()}),
-			"GuardOwnerOverrides":  authority.GuardOwnerOverrides(zero, nil),
+			"MayActOn target":       a.MayActOn(zero),
+			"MayAssignRole target":  a.MayAssignRole(zero, userR),
+			"MayRevokeRole target":  a.MayRevokeRole(zero, userR, nil),
+			"MayChangeOverrides":    a.MayChangeOverrides(zero, nil, nil),
+			"MayDeactivate":         a.MayDeactivate(zero, nil),
+			"MayReplaceManager sub": a.MayReplaceManager(zero, owner, nil),
+			"MayReplaceManager mgr": a.MayReplaceManager(report, zero, &owner),
+			"MayReplaceManager cur": a.MayReplaceManager(report, user, &zero),
+			"MayClearManager sub":   a.MayClearManager(zero, nil),
+			"MayClearManager cur":   a.MayClearManager(report, &zero),
+			"MayApprove requester":  a.MayApprove(zero, p.Crm.Leads.Read),
+			"MayDeny requester":     a.MayDeny(zero),
+			"GuardLastOwner":        authority.GuardLastOwner(zero, []authority.Member{owner}),
 		} {
 			if !errors.Is(err, authority.ErrNoAuthority) {
 				t.Errorf("%s actor, zero Member, %s = %v, want no authority", who, name, err)

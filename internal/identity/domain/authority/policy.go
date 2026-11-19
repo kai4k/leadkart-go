@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"slices"
 
-	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/permission"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/role"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
@@ -65,10 +64,10 @@ func (a Actor) MayActOn(t Member) error {
 	return fmt.Errorf("%w: rank %d may not change a member of rank %d", ErrInsufficientRank, a.Rank(), t.rank)
 }
 
-// MayChangePermissions — H3: may a confer or remove every name in names inside
+// mayChangePermissions — H3: may a confer or remove every name in names inside
 // tenantID? Unknown or empty names are refused for everyone, super users
 // included. tenant.admin is owner-only (R5); platform-reserved names are super-only.
-func (a Actor) MayChangePermissions(tenantID tenant.ID, names []string) error {
+func (a Actor) mayChangePermissions(tenantID tenant.ID, names []string) error {
 	if !a.valid {
 		return ErrNoAuthority
 	}
@@ -116,11 +115,45 @@ func (a Actor) MayAssignRole(t Member, r *role.Role) error {
 	if !a.exemptIn(t.tenantID) && a.Rank() != RankOwner && !a.outranks(levelOf(r)) {
 		return fmt.Errorf("%w: role level %d is not below rank %d", ErrInsufficientRank, levelOf(r), a.Rank())
 	}
-	return a.MayChangePermissions(t.tenantID, PermissionNames(r.Permissions()))
+	return a.mayChangePermissions(t.tenantID, PermissionNames(r.Permissions()))
 }
 
-// MayRevokeRole is symmetric with MayAssignRole (H3).
-func (a Actor) MayRevokeRole(t Member, r *role.Role) error { return a.MayAssignRole(t, r) }
+// MayRevokeRole is symmetric with MayAssignRole (H3) and, when r is the
+// CompanyOwner role, also runs GuardLastOwner against owners (every current
+// member holding it, loaded in the same locked transaction).
+func (a Actor) MayRevokeRole(t Member, r *role.Role, owners []Member) error {
+	if err := a.MayAssignRole(t, r); err != nil {
+		return err
+	}
+	if r.IsCompanyOwner() {
+		return GuardLastOwner(t, owners)
+	}
+	return nil
+}
+
+// MayChangeOverrides - H2+H3+H6: may a replace t's permission overrides?
+// delta is everything the replace confers or removes (Delta of the granted
+// sets union Delta of the revoked sets); revokedAfter is the full revoked set
+// the member ends up with. It is MayActOn + the grant ceiling over delta + the
+// owner-keeps-tenant.admin guard (which binds every actor, super users too).
+func (a Actor) MayChangeOverrides(t Member, delta, revokedAfter []string) error {
+	if err := a.MayActOn(t); err != nil {
+		return err
+	}
+	if err := a.mayChangePermissions(t.tenantID, delta); err != nil {
+		return err
+	}
+	return guardOwnerOverrides(t, revokedAfter)
+}
+
+// MayDeactivate - H2+H6: may a deactivate t? MayActOn + GuardLastOwner against
+// owners (every current member holding the CompanyOwner role).
+func (a Actor) MayDeactivate(t Member, owners []Member) error {
+	if err := a.MayActOn(t); err != nil {
+		return err
+	}
+	return GuardLastOwner(t, owners)
+}
 
 // MayCreateRole — H3: a new role in tenantID with level and initial perms:
 // the level strictly below the actor, the tenant the actor's own unless
@@ -140,7 +173,7 @@ func (a Actor) MayCreateRole(tenantID tenant.ID, level int, perms []string) erro
 			return fmt.Errorf("%w: a new role's level %d must be below rank %d", ErrInsufficientRank, level, a.Rank())
 		}
 	}
-	return a.MayChangePermissions(tenantID, perms)
+	return a.mayChangePermissions(tenantID, perms)
 }
 
 // MayEditRole — H3: actor strictly more senior than the role's current level
@@ -170,7 +203,23 @@ func (a Actor) MayEditRole(r *role.Role, newLevel int, delta []string) error {
 			return fmt.Errorf("%w: new level %d is not below rank %d", ErrInsufficientRank, newLevel, a.Rank())
 		}
 	}
-	return a.MayChangePermissions(r.TenantID(), delta)
+	return a.mayChangePermissions(r.TenantID(), delta)
+}
+
+// MayDeleteRole - H3/H6: system-default roles are never deleted (any actor);
+// otherwise it is MayEditRole with the role's own permissions as the delta,
+// because deleting removes every one of them from every holder.
+func (a Actor) MayDeleteRole(r *role.Role) error {
+	if !a.valid {
+		return ErrNoAuthority
+	}
+	if r == nil {
+		return fmt.Errorf("%w: role required", ErrNoAuthority)
+	}
+	if r.IsSystemDefault() {
+		return fmt.Errorf("%w: %q is a system-default role", role.ErrSystemDefault, r.Name())
+	}
+	return a.MayEditRole(r, NoLevelChange, PermissionNames(r.Permissions()))
 }
 
 // MaySetRoleParent — ADR 0058 edges carry no authority (rank is level-only;
@@ -192,13 +241,58 @@ func (a Actor) MaySetRoleParent(child, parent *role.Role) error {
 	return nil
 }
 
-// MaySetManager — H4: actor outranks the subordinate; the manager is an active
-// same-tenant member strictly more senior than the subordinate (no lateral or
-// upward links); the actor is at least as senior as the manager.
-func (a Actor) MaySetManager(sub, mgr Member) error {
+// MayReplaceManager - H4: set or replace sub's manager with newMgr. current is
+// sub's present manager exactly as loaded (nil only when sub has none); a nil,
+// zero or mismatching current is ErrNoAuthority, never a pass-through. It is
+// maySetManager + (when sub has a manager) mayUnlinkManager.
+func (a Actor) MayReplaceManager(sub, newMgr Member, current *Member) error {
 	if err := a.MayActOn(sub); err != nil {
 		return err
 	}
+	if err := checkCurrentManager(sub, current); err != nil {
+		return err
+	}
+	if err := a.maySetManager(sub, newMgr); err != nil {
+		return err
+	}
+	if current != nil {
+		return a.mayUnlinkManager(sub, *current)
+	}
+	return nil
+}
+
+// MayClearManager - H4: remove sub's manager; current as for MayReplaceManager.
+// Clearing a manager that does not exist is only MayActOn.
+func (a Actor) MayClearManager(sub Member, current *Member) error {
+	if err := a.MayActOn(sub); err != nil {
+		return err
+	}
+	if err := checkCurrentManager(sub, current); err != nil {
+		return err
+	}
+	if current == nil {
+		return nil
+	}
+	return a.mayUnlinkManager(sub, *current)
+}
+
+// checkCurrentManager: current must be exactly sub's loaded manager.
+func checkCurrentManager(sub Member, current *Member) error {
+	switch {
+	case sub.reportsTo == "" && current == nil:
+		return nil
+	case current == nil:
+		return fmt.Errorf("%w: the member has a manager and it was not supplied", ErrNoAuthority)
+	case !current.valid || current.id != sub.reportsTo:
+		return fmt.Errorf("%w: the supplied current manager is not the member's manager", ErrNoAuthority)
+	}
+	return nil
+}
+
+// maySetManager - the manager is an active same-tenant member strictly more
+// senior than the subordinate (no lateral or upward links); the actor is at
+// least as senior as the manager. A manager from another tenant is "not eligible".
+func (a Actor) maySetManager(sub, mgr Member) error {
 	switch {
 	case !mgr.valid:
 		return ErrNoAuthority
@@ -214,12 +308,9 @@ func (a Actor) MaySetManager(sub, mgr Member) error {
 	return fmt.Errorf("%w: cannot appoint a manager more senior than yourself", ErrInsufficientRank)
 }
 
-// MayUnlinkManager — H4: removing or replacing current's authority over sub
-// needs the actor at least as senior as current.
-func (a Actor) MayUnlinkManager(sub, current Member) error {
-	if err := a.MayActOn(sub); err != nil {
-		return err
-	}
+// mayUnlinkManager - removing or replacing current's authority over sub needs
+// the actor at least as senior as current.
+func (a Actor) mayUnlinkManager(sub, current Member) error {
 	if !current.valid || !sameTenant(current.tenantID, sub.tenantID) {
 		return ErrNoAuthority
 	}
@@ -265,26 +356,29 @@ func (a Actor) mayDecide(req Member, perm string, approving bool) error {
 	return ErrNotApprover
 }
 
-// GuardLastOwner — H6: refuse removing target's ownership (deactivation,
-// CompanyOwner revocation) when no OTHER active owner remains. activeOwners is
-// loaded inside the same locked transaction.
-func GuardLastOwner(target Member, activeOwners []membership.ID) error {
+// GuardLastOwner - H6: refuse removing target's ownership (deactivation,
+// CompanyOwner revocation) when no OTHER active owner of the same tenant
+// remains. owners is every current member holding the CompanyOwner role,
+// loaded in the same locked transaction; it is filtered here (IsOwner and
+// IsActive), so an inactive owner, a non-owner, an invalid Member or another
+// tenant's owner never counts as "another owner". Applies to every actor.
+func GuardLastOwner(target Member, owners []Member) error {
 	if !target.valid {
 		return ErrNoAuthority
 	}
 	if !target.owner || !target.active {
 		return nil
 	}
-	for _, raw := range activeOwners {
-		if id, err := membership.ParseID(string(raw)); err == nil && id != target.id {
+	for _, o := range owners {
+		if o.valid && o.owner && o.active && o.id != target.id && sameTenant(o.tenantID, target.tenantID) {
 			return nil
 		}
 	}
 	return ErrLastOwnerProtected
 }
 
-// GuardOwnerOverrides — H6: an owner's effective set always includes tenant.admin.
-func GuardOwnerOverrides(target Member, revoked []string) error {
+// guardOwnerOverrides - H6: an owner's effective set always includes tenant.admin.
+func guardOwnerOverrides(target Member, revoked []string) error {
 	if !target.valid {
 		return ErrNoAuthority
 	}
