@@ -228,6 +228,13 @@ func run(ctx context.Context, stdout *os.File) error {
 	if err := pool.Ping(ctx); err != nil {
 		return fmt.Errorf("pgxpool ping: %w", err)
 	}
+	// Fail fast when the database role lacks a privilege the application
+	// needs (the grants migration is a no-op when the role did not exist
+	// at migration time). One query, run once; names the first missing
+	// privilege, never the DSN.
+	if err := pg.VerifyApplicationPrivileges(ctx, pool); err != nil {
+		return err
+	}
 	logger.InfoContext(ctx, "postgres connected")
 
 	// See cmd/api/main.go for the MaintNotificationsConfig rationale —
@@ -418,12 +425,13 @@ func run(ctx context.Context, stdout *os.File) error {
 		}
 	}
 
-	// River background-job pool. v0.2 ships one job — AuditLogPurgeJob —
-	// running daily to enforce the 7-year audit retention. River's
-	// migrations run in-process at boot for the v0.2 single-replica
-	// shape; v0.3 splits this into a dedicated cmd/migrate invocation.
-	if err := jobs.Migrate(ctx, pool); err != nil {
-		return fmt.Errorf("river migrate: %w", err)
+	// River background-job pool. v0.2 ships one job - AuditLogPurgeJob -
+	// running daily to enforce the 7-year audit retention. River's own
+	// migrations run from cmd/migrate as the owner role (this process runs as
+	// the application role and has no CREATE on public); fail fast if they have
+	// not been applied.
+	if err := jobs.RequireSchema(ctx, pool); err != nil {
+		return err
 	}
 	workers := river.NewWorkers()
 	if err := river.AddWorkerSafely(workers, audit.NewPurgeWorker(pool, logger, time.Now)); err != nil {

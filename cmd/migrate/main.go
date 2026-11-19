@@ -11,7 +11,7 @@
 //
 // Usage:
 //
-//	migrate up                    # apply all pending
+//	migrate up                    # apply all pending (goose, then River + its grants)
 //	migrate up-to <version>       # apply up to specific version
 //	migrate down                  # roll back one
 //	migrate status                # show applied vs pending
@@ -35,8 +35,10 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/pressly/goose/v3"
 
+	"github.com/leadkart/leadkart-go/internal/common/jobs"
 	"github.com/leadkart/leadkart-go/internal/common/pg"
 
 	// register pgx with database/sql
@@ -105,7 +107,33 @@ func run(ctx context.Context) error {
 	if err := goose.RunContext(ctx, command, db, migrationsDir, os.Args[2:]...); err != nil {
 		return fmt.Errorf("goose %s: %w", command, err)
 	}
+
+	// River (background jobs) keeps its own migration ledger, so it cannot ride
+	// goose. It needs CREATE on public, which only this owner-role process has;
+	// the grants for the application role follow (idempotent, so a fresh and an
+	// existing database both end up covered). `up` only: down and status must
+	// not touch River.
+	if command == "up" {
+		if err := migrateRiver(ctx, dsn); err != nil {
+			return err
+		}
+		logger.InfoContext(ctx, "river migrations applied and application role granted")
+	}
 	return nil
+}
+
+// migrateRiver applies River's migrations and grants the application role its
+// privileges on the river tables.
+func migrateRiver(ctx context.Context, dsn string) error {
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		return fmt.Errorf("river: open pool: %w", err)
+	}
+	defer pool.Close()
+	if err := jobs.Migrate(ctx, pool); err != nil {
+		return err
+	}
+	return jobs.GrantApplicationRole(ctx, pool)
 }
 
 // maskDSN returns the host:port + database portion of a DSN for safe
