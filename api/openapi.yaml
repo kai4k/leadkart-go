@@ -420,7 +420,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/TenantDto' }
-        '403': { $ref: '#/components/responses/Forbidden' }
+        '403': { $ref: '#/components/responses/TenantScopeForbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
 
   /api/v1/tenants/{tenantId}/profile:
@@ -441,7 +441,7 @@ paths:
             schema: { $ref: '#/components/schemas/UpdateTenantProfileRequest' }
       responses:
         '204': { description: Profile updated }
-        '403': { $ref: '#/components/responses/Forbidden' }
+        '403': { $ref: '#/components/responses/TenantScopeForbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '422': { $ref: '#/components/responses/Unprocessable' }
 
@@ -466,7 +466,7 @@ paths:
             schema: { $ref: '#/components/schemas/UpdateTenantStatutoryRequest' }
       responses:
         '204': { description: Statutory updated }
-        '403': { $ref: '#/components/responses/Forbidden' }
+        '403': { $ref: '#/components/responses/TenantScopeForbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '422': { $ref: '#/components/responses/Unprocessable' }
 
@@ -488,7 +488,7 @@ paths:
             schema: { $ref: '#/components/schemas/UpdateTenantAdminContactRequest' }
       responses:
         '204': { description: Admin contact updated }
-        '403': { $ref: '#/components/responses/Forbidden' }
+        '403': { $ref: '#/components/responses/TenantScopeForbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '422': { $ref: '#/components/responses/Unprocessable' }
 
@@ -510,7 +510,7 @@ paths:
             schema: { $ref: '#/components/schemas/UpdateTenantSettingsRequest' }
       responses:
         '204': { description: Settings updated }
-        '403': { $ref: '#/components/responses/Forbidden' }
+        '403': { $ref: '#/components/responses/TenantScopeForbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '422': { $ref: '#/components/responses/Unprocessable' }
 
@@ -532,7 +532,7 @@ paths:
             schema: { $ref: '#/components/schemas/UpdateTenantDisplayPreferencesRequest' }
       responses:
         '204': { description: Display preferences updated }
-        '403': { $ref: '#/components/responses/Forbidden' }
+        '403': { $ref: '#/components/responses/TenantScopeForbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '422': { $ref: '#/components/responses/Unprocessable' }
 
@@ -540,7 +540,10 @@ paths:
     post:
       tags: [tenants]
       summary: Suspend a tenant (Platform-only)
-      description: Reason is mandatory per data-retention.md audit canon.
+      description: |
+        Reason is mandatory per data-retention.md audit canon.
+
+        Requires `identity.tenants.suspend` held by a platform-tenant operator; platform-tenant membership alone is refused with 403 `forbidden`.
       parameters:
         - $ref: '#/components/parameters/XCommandId'
         - { $ref: '#/components/parameters/TenantId' }
@@ -552,6 +555,7 @@ paths:
             schema: { $ref: '#/components/schemas/SuspendTenantRequest' }
       responses:
         '204': { description: Tenant suspended }
+        '403': { $ref: '#/components/responses/TenantScopeForbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '422': { $ref: '#/components/responses/Unprocessable' }
 
@@ -559,12 +563,15 @@ paths:
     post:
       tags: [tenants]
       summary: Activate a pending or suspended tenant (Platform-only)
+      description: |
+        Requires `identity.tenants.activate` held by a platform-tenant operator; platform-tenant membership alone is refused with 403 `forbidden`.
       parameters:
         - $ref: '#/components/parameters/XCommandId'
         - { $ref: '#/components/parameters/TenantId' }
         - $ref: '#/components/parameters/XTenantId'
       responses:
         '204': { description: Tenant activated }
+        '403': { $ref: '#/components/responses/TenantScopeForbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '422': { $ref: '#/components/responses/Unprocessable' }
 
@@ -577,6 +584,8 @@ paths:
         Reason is mandatory (DPDP §12 + SOC2 CC4.1 audit requirement).
         Tenants holding an active SuperAdmin role refuse the transition
         with 422 (`platform_tenant_undeletable`).
+
+        Requires `identity.tenants.delete` held by a platform-tenant operator; platform-tenant membership alone is refused with 403 `forbidden`.
       parameters:
         - $ref: '#/components/parameters/XCommandId'
         - { $ref: '#/components/parameters/TenantId' }
@@ -588,6 +597,7 @@ paths:
             schema: { $ref: '#/components/schemas/MarkTenantForDeletionRequest' }
       responses:
         '204': { description: Tenant marked for deletion }
+        '403': { $ref: '#/components/responses/TenantScopeForbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '422': { $ref: '#/components/responses/Unprocessable' }
 
@@ -595,12 +605,15 @@ paths:
     post:
       tags: [tenants]
       summary: Restore a tenant from marked-for-deletion (Platform-only)
+      description: |
+        Requires `identity.tenants.delete` (there is no dedicated restore permission) held by a platform-tenant operator; platform-tenant membership alone is refused with 403 `forbidden`.
       parameters:
         - $ref: '#/components/parameters/XCommandId'
         - { $ref: '#/components/parameters/TenantId' }
         - $ref: '#/components/parameters/XTenantId'
       responses:
         '204': { description: Tenant restored }
+        '403': { $ref: '#/components/responses/TenantScopeForbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '422': { $ref: '#/components/responses/Unprocessable' }
 
@@ -651,7 +664,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ListAuditEventsResponse' }
-        '403': { $ref: '#/components/responses/Forbidden' }
+        '403': { $ref: '#/components/responses/TenantScopeForbidden' }
 
   # ===== USERS ==========================================================
   /api/v1/users:
@@ -671,7 +684,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ListUsersResponse' }
-        '403': { $ref: '#/components/responses/Forbidden' }
+        '403': { $ref: '#/components/responses/TenantScopeForbidden' }
     post:
       parameters:
         - $ref: '#/components/parameters/XCommandId'
@@ -692,7 +705,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/CreateUserResponse' }
-        '403': { $ref: '#/components/responses/Forbidden' }
+        '403': { $ref: '#/components/responses/TenantScopeForbidden' }
 
   /api/v1/users/{userId}:
     get:
@@ -710,7 +723,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/UserDto' }
-        '403': { $ref: '#/components/responses/Forbidden' }
+        '403': { $ref: '#/components/responses/TenantScopeForbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
 
   /api/v1/users/{userId}/profile:
@@ -731,7 +744,7 @@ paths:
             schema: { $ref: '#/components/schemas/UpdateUserProfileRequest' }
       responses:
         '204': { description: Profile updated }
-        '403': { $ref: '#/components/responses/Forbidden' }
+        '403': { $ref: '#/components/responses/TenantScopeForbidden' }
         '422': { $ref: '#/components/responses/Unprocessable' }
 
   /api/v1/users/{userId}/deactivate:
@@ -752,7 +765,7 @@ paths:
             schema: { $ref: '#/components/schemas/DeactivateUserRequest' }
       responses:
         '204': { description: Deactivated }
-        '403': { $ref: '#/components/responses/Forbidden' }
+        '403': { $ref: '#/components/responses/TenantScopeForbidden' }
 
   /api/v1/users/{userId}/reactivate:
     post:
@@ -767,7 +780,7 @@ paths:
         - $ref: '#/components/parameters/XTenantId'
       responses:
         '204': { description: Reactivated }
-        '403': { $ref: '#/components/responses/Forbidden' }
+        '403': { $ref: '#/components/responses/TenantScopeForbidden' }
 
   /api/v1/users/{userId}/roles:
     post:
@@ -788,7 +801,7 @@ paths:
       responses:
         '204': { description: Role assigned }
         '400': { description: "Malformed id: `invalid_user_id` (path) or `invalid_role_id` (body `role_id`)", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
-        '403': { $ref: '#/components/responses/Forbidden' }
+        '403': { $ref: '#/components/responses/TenantScopeForbidden' }
         '404': { description: "`role_not_found` — no live role with that id in the target tenant (or the user does not exist)", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
 
   /api/v1/users/{userId}/roles/{roleId}:
@@ -804,7 +817,7 @@ paths:
         - $ref: '#/components/parameters/XTenantId'
       responses:
         '204': { description: Role revoked }
-        '403': { $ref: '#/components/responses/Forbidden' }
+        '403': { $ref: '#/components/responses/TenantScopeForbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '422': { $ref: '#/components/responses/Unprocessable' }
 
@@ -829,7 +842,7 @@ paths:
             schema: { $ref: '#/components/schemas/ReplaceUserPermissionOverridesRequest' }
       responses:
         '204': { description: Overrides replaced }
-        '403': { $ref: '#/components/responses/Forbidden' }
+        '403': { $ref: '#/components/responses/TenantScopeForbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '422': { $ref: '#/components/responses/Unprocessable' }
 
@@ -853,7 +866,7 @@ paths:
             schema: { $ref: '#/components/schemas/AssignUserManagerRequest' }
       responses:
         '204': { description: Manager assigned }
-        '403': { $ref: '#/components/responses/Forbidden' }
+        '403': { $ref: '#/components/responses/TenantScopeForbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '422': { $ref: '#/components/responses/Unprocessable' }
     delete:
@@ -867,7 +880,7 @@ paths:
         - $ref: '#/components/parameters/XTenantId'
       responses:
         '204': { description: Manager removed }
-        '403': { $ref: '#/components/responses/Forbidden' }
+        '403': { $ref: '#/components/responses/TenantScopeForbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
 
   /api/v1/users/{userId}/anonymise:
@@ -878,12 +891,15 @@ paths:
         Cross-tenant blast radius — one Person can hold many Memberships;
         the cascade is gated on Platform tier per multi-tenancy.md
         "SuperUser god-mode" + `identity.users.anonymise` permission.
+
+        Requires `identity.users.anonymise` held by a platform-tenant operator; platform-tenant membership alone is refused with 403 `forbidden`.
       parameters:
         - $ref: '#/components/parameters/XCommandId'
         - { $ref: '#/components/parameters/UserId' }
         - $ref: '#/components/parameters/XTenantId'
       responses:
         '204': { description: User anonymised }
+        '403': { $ref: '#/components/responses/TenantScopeForbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '422': { $ref: '#/components/responses/Unprocessable' }
 
@@ -903,7 +919,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ListRolesResponse' }
-        '403': { $ref: '#/components/responses/Forbidden' }
+        '403': { $ref: '#/components/responses/TenantScopeForbidden' }
     post:
       parameters:
         - $ref: '#/components/parameters/XCommandId'
@@ -924,7 +940,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/CreateRoleResponse' }
-        '403': { $ref: '#/components/responses/Forbidden' }
+        '403': { $ref: '#/components/responses/TenantScopeForbidden' }
 
   /api/v1/roles/{roleId}:
     get:
@@ -942,7 +958,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/RoleDto' }
-        '403': { $ref: '#/components/responses/Forbidden' }
+        '403': { $ref: '#/components/responses/TenantScopeForbidden' }
     patch:
       tags: [roles]
       summary: Rename a role and/or change its hierarchy level
@@ -963,7 +979,7 @@ paths:
             schema: { $ref: '#/components/schemas/UpdateRoleRequest' }
       responses:
         '204': { description: Role updated }
-        '403': { $ref: '#/components/responses/Forbidden' }
+        '403': { $ref: '#/components/responses/TenantScopeForbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409':
           description: Role name already taken in this tenant
@@ -982,7 +998,7 @@ paths:
         - $ref: '#/components/parameters/XTenantId'
       responses:
         '204': { description: Role deleted }
-        '403': { $ref: '#/components/responses/Forbidden' }
+        '403': { $ref: '#/components/responses/TenantScopeForbidden' }
 
   /api/v1/roles/{roleId}/parent:
     patch:
@@ -1021,7 +1037,7 @@ paths:
       responses:
         '204': { description: Parent set / cleared }
         '400': { $ref: '#/components/responses/BadRequest' }
-        '403': { $ref: '#/components/responses/Forbidden' }
+        '403': { $ref: '#/components/responses/TenantScopeForbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409':
           description: |
@@ -1055,7 +1071,7 @@ paths:
             schema: { $ref: '#/components/schemas/ReplaceRolePermissionsRequest' }
       responses:
         '204': { description: Permissions replaced }
-        '403': { $ref: '#/components/responses/Forbidden' }
+        '403': { $ref: '#/components/responses/TenantScopeForbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '422': { $ref: '#/components/responses/Unprocessable' }
 
@@ -1077,7 +1093,7 @@ paths:
             schema: { $ref: '#/components/schemas/RolePermissionRequest' }
       responses:
         '204': { description: Permission granted }
-        '403': { $ref: '#/components/responses/Forbidden' }
+        '403': { $ref: '#/components/responses/TenantScopeForbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '422': { $ref: '#/components/responses/Unprocessable' }
 
@@ -1099,7 +1115,7 @@ paths:
             schema: { $ref: '#/components/schemas/RolePermissionRequest' }
       responses:
         '204': { description: Permission revoked }
-        '403': { $ref: '#/components/responses/Forbidden' }
+        '403': { $ref: '#/components/responses/TenantScopeForbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '422': { $ref: '#/components/responses/Unprocessable' }
 
@@ -1108,12 +1124,15 @@ paths:
     get:
       tags: [platform]
       summary: List all tenants (operator dashboard)
+      description: |
+        Requires `platform.tenants.view` held by a platform-tenant operator; platform-tenant membership alone is refused with 403 `forbidden`.
       responses:
         '200':
           description: Tenants
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ListAllTenantsResponse' }
+        '403': { $ref: '#/components/responses/Forbidden' }
 
   /api/v1/platform/tenants/{tenantId}:
     delete:
@@ -1123,12 +1142,15 @@ paths:
         Bypasses the marked-for-deletion lifecycle. Tenants holding an
         active SuperAdmin role refuse with 422
         (`platform_tenant_undeletable`).
+
+        Requires `identity.tenants.delete` held by a platform-tenant operator; platform-tenant membership alone is refused with 403 `forbidden`.
       parameters:
         - $ref: '#/components/parameters/TenantId'
         - $ref: '#/components/parameters/XTenantId'
       responses:
         '204': { description: Tenant hard-deleted }
         '400': { $ref: '#/components/responses/TenantScopeInvalid' }
+        '403': { $ref: '#/components/responses/TenantScopeForbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '422': { $ref: '#/components/responses/Unprocessable' }
 
@@ -1136,6 +1158,8 @@ paths:
     get:
       tags: [platform]
       summary: Get person by UUID (cross-tenant operator probe)
+      description: |
+        Requires `platform.users.view` held by a platform-tenant operator; platform-tenant membership alone is refused with 403 `forbidden`.
       parameters: [{ $ref: '#/components/parameters/PersonId' }]
       responses:
         '200':
@@ -1143,11 +1167,14 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/PersonDto' }
+        '403': { $ref: '#/components/responses/Forbidden' }
 
   /api/v1/platform/persons/{personId}/memberships:
     get:
       tags: [platform]
       summary: List every Membership a Person holds across tenants
+      description: |
+        Requires `platform.users.view` held by a platform-tenant operator; platform-tenant membership alone is refused with 403 `forbidden`.
       parameters: [{ $ref: '#/components/parameters/PersonId' }]
       responses:
         '200':
@@ -1155,6 +1182,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ListPersonMembershipsResponse' }
+        '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
 
   /api/v1/platform/persons/{personId}/profile:
@@ -1165,6 +1193,8 @@ paths:
         Updates Person.FirstName / Person.LastName — distinct from the
         per-Tenant designation/department/status_message which move via
         PATCH /api/v1/users/{userId}/profile.
+
+        Requires `platform.users.manage` held by a platform-tenant operator; platform-tenant membership alone is refused with 403 `forbidden`.
       parameters:
         - $ref: '#/components/parameters/XCommandId'
         - { $ref: '#/components/parameters/PersonId' }
@@ -1175,6 +1205,7 @@ paths:
             schema: { $ref: '#/components/schemas/UpdatePersonProfileRequest' }
       responses:
         '204': { description: Profile updated }
+        '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '422': { $ref: '#/components/responses/Unprocessable' }
 
@@ -1182,7 +1213,10 @@ paths:
     post:
       tags: [platform]
       summary: Globally suspend a Person across all tenants
-      description: Reason is mandatory per data-retention.md audit canon.
+      description: |
+        Reason is mandatory per data-retention.md audit canon.
+
+        Requires `platform.users.manage` held by a platform-tenant operator; platform-tenant membership alone is refused with 403 `forbidden`.
       parameters:
         - $ref: '#/components/parameters/XCommandId'
         - { $ref: '#/components/parameters/PersonId' }
@@ -1193,6 +1227,7 @@ paths:
             schema: { $ref: '#/components/schemas/GlobalSuspendPersonRequest' }
       responses:
         '204': { description: Person globally suspended }
+        '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '422': { $ref: '#/components/responses/Unprocessable' }
 
@@ -1200,11 +1235,14 @@ paths:
     post:
       tags: [platform]
       summary: Lift a previously applied global suspension
+      description: |
+        Requires `platform.users.manage` held by a platform-tenant operator; platform-tenant membership alone is refused with 403 `forbidden`.
       parameters:
         - $ref: '#/components/parameters/XCommandId'
         - { $ref: '#/components/parameters/PersonId' }
       responses:
         '204': { description: Suspension lifted }
+        '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '422': { $ref: '#/components/responses/Unprocessable' }
 
@@ -1212,11 +1250,14 @@ paths:
     post:
       tags: [platform]
       summary: Anonymise a Person record directly (DPDP §12 / GDPR Art. 17)
+      description: |
+        Requires `identity.users.anonymise` held by a platform-tenant operator; platform-tenant membership alone is refused with 403 `forbidden`.
       parameters:
         - $ref: '#/components/parameters/XCommandId'
         - { $ref: '#/components/parameters/PersonId' }
       responses:
         '204': { description: Person anonymised }
+        '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '422': { $ref: '#/components/responses/Unprocessable' }
 
@@ -1224,6 +1265,8 @@ paths:
     get:
       tags: [platform]
       summary: Get person by email (cross-tenant operator probe)
+      description: |
+        Requires `platform.users.view` held by a platform-tenant operator; platform-tenant membership alone is refused with 403 `forbidden`.
       parameters:
         - name: email
           in: query
@@ -1235,12 +1278,15 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/PersonDto' }
+        '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
 
   /api/v1/platform/stats:
     get:
       tags: [platform]
       summary: Operator dashboard counts (with optional time-window deltas)
+      description: |
+        Requires `platform.tenants.view` held by a platform-tenant operator; platform-tenant membership alone is refused with 403 `forbidden`.
       parameters:
         - name: delta_window
           in: query
@@ -1259,6 +1305,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/PlatformStatsResponse' }
+        '403': { $ref: '#/components/responses/Forbidden' }
 
   /api/v1/platform/impersonation/sessions:
     post:
@@ -1272,6 +1319,8 @@ paths:
         pinned to the target tenant. Frontend uses this token for the
         session lifetime (≤4h). The original operator's regular JWT is
         unaffected.
+
+        Requires `platform.tenants.manage` (there is no dedicated impersonation permission) held by a platform-tenant operator; platform-tenant membership alone is refused with 403 `forbidden`.
       requestBody:
         required: true
         content:
@@ -1283,6 +1332,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/CreateImpersonationSessionResponse' }
+        '403': { $ref: '#/components/responses/Forbidden' }
         '404':
           description: Target tenant not found
           content:
@@ -1292,12 +1342,15 @@ paths:
     get:
       tags: [platform]
       summary: List impersonation sessions
+      description: |
+        Requires `platform.tenants.manage` held by a platform-tenant operator; platform-tenant membership alone is refused with 403 `forbidden`.
       responses:
         '200':
           description: Sessions
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ListImpersonationSessionsResponse' }
+        '403': { $ref: '#/components/responses/Forbidden' }
 
   /api/v1/platform/impersonation/sessions/{sessionId}:
     delete:
@@ -1308,6 +1361,8 @@ paths:
         by POST /api/v1/platform/impersonation/sessions is invalidated
         on the next request (security_stamp comparison via the
         impersonation-session resolver).
+
+        Requires `platform.tenants.manage` held by a platform-tenant operator; platform-tenant membership alone is refused with 403 `forbidden`.
       parameters:
         - name: sessionId
           in: path
@@ -1316,12 +1371,15 @@ paths:
       responses:
         '204': { description: Session ended }
         '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
 
   # ===== SEARCH =========================================================
   /api/v1/search:
     get:
       tags: [search]
       summary: Operator omni-search (parallel pg_trgm fanout)
+      description: |
+        Requires `platform.tenants.view` and `platform.users.view` held by a platform-tenant operator; platform-tenant membership alone is refused with 403 `forbidden`.
       parameters:
         - name: q
           in: query
@@ -1347,6 +1405,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '403': { $ref: '#/components/responses/Forbidden' }
 
   # ===== PERMISSION REQUESTS (ADR 0055) =================================
   /api/v1/permission-requests:
@@ -1731,7 +1790,7 @@ paths:
               schema: { $ref: '#/components/schemas/LeadCreditBalanceResponse' }
         '400': { $ref: '#/components/responses/TenantScopeInvalid' }
         '401': { $ref: '#/components/responses/Unauthorized' }
-        '403': { $ref: '#/components/responses/Forbidden' }
+        '403': { $ref: '#/components/responses/TenantScopeForbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
 
   /api/v1/inventory/products:
@@ -1758,6 +1817,7 @@ paths:
               schema: { $ref: '#/components/schemas/CreateProductResponse' }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/TenantScopeReadOnly' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409':
           description: SKU already exists in this tenant
@@ -1803,6 +1863,7 @@ paths:
               schema: { $ref: '#/components/schemas/ListProductsResponse' }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/TenantScopeForbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
 
   /api/v1/inventory/products/{productId}:
@@ -1822,6 +1883,7 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/ProductDto' }
         '400': { $ref: '#/components/responses/TenantScopeInvalid' }
+        '403': { $ref: '#/components/responses/TenantScopeForbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
 
     patch:
@@ -1846,6 +1908,7 @@ paths:
       responses:
         '204': { description: Updated }
         '400': { $ref: '#/components/responses/TenantScopeInvalid' }
+        '403': { $ref: '#/components/responses/TenantScopeReadOnly' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409':
           description: Product is deleted
@@ -1867,6 +1930,7 @@ paths:
       responses:
         '204': { description: Deleted (or already deleted) }
         '400': { $ref: '#/components/responses/TenantScopeInvalid' }
+        '403': { $ref: '#/components/responses/TenantScopeReadOnly' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409':
           description: Product has live batches with non-zero stock
@@ -1898,6 +1962,7 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/AddBatchResponse' }
         '400': { $ref: '#/components/responses/TenantScopeInvalid' }
+        '403': { $ref: '#/components/responses/TenantScopeReadOnly' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409':
           description: batch_number already exists for this product
@@ -1929,6 +1994,7 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/ListBatchesResponse' }
         '400': { $ref: '#/components/responses/TenantScopeInvalid' }
+        '403': { $ref: '#/components/responses/TenantScopeForbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
 
   /api/v1/inventory/products/{productId}/fefo-batches:
@@ -1952,6 +2018,7 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/FefoBatchesResponse' }
         '400': { $ref: '#/components/responses/TenantScopeInvalid' }
+        '403': { $ref: '#/components/responses/TenantScopeForbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
 
   /api/v1/inventory/batches/{batchId}:
@@ -1971,6 +2038,7 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/BatchDto' }
         '400': { $ref: '#/components/responses/TenantScopeInvalid' }
+        '403': { $ref: '#/components/responses/TenantScopeForbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
 
   /api/v1/inventory/batches/{batchId}/movements:
@@ -2005,6 +2073,7 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/LogMovementResponse' }
         '400': { $ref: '#/components/responses/TenantScopeInvalid' }
+        '403': { $ref: '#/components/responses/TenantScopeReadOnly' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409':
           description: Insufficient stock / batch expired / concurrency conflict
@@ -2038,6 +2107,7 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/ListMovementsResponse' }
         '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/TenantScopeForbidden' }
   # ===== CRM ============================================================
         '404': { $ref: '#/components/responses/NotFound' }
   /api/v1/crm/leads:
@@ -2111,6 +2181,7 @@ paths:
               schema: { $ref: '#/components/schemas/ListLeadsResponse' }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/TenantScopeForbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '500': { $ref: '#/components/responses/InternalServerError' }
 
@@ -2130,6 +2201,7 @@ paths:
               schema: { $ref: '#/components/schemas/CrmLeadDto' }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/TenantScopeForbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
 
   /api/v1/crm/leads/{leadId}/assign:
@@ -2156,6 +2228,7 @@ paths:
               schema: { $ref: '#/components/schemas/AssignLeadResponse' }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/TenantScopeReadOnly' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409':
           description: Lead is in a terminal stage (converted / lost)
@@ -2184,6 +2257,7 @@ paths:
         '204': { description: Stage updated }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/TenantScopeReadOnly' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409':
           description: Lead is in a terminal stage OR transition is not allowed
@@ -2212,6 +2286,7 @@ paths:
         '204': { description: Temperature updated }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/TenantScopeReadOnly' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409':
           description: Lead is in a terminal stage
@@ -2243,6 +2318,7 @@ paths:
               schema: { $ref: '#/components/schemas/LogCallResponse' }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/TenantScopeReadOnly' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409':
           description: Lead is in a terminal stage
@@ -2265,6 +2341,7 @@ paths:
         '204': { description: Converted }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/TenantScopeReadOnly' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409':
           description: Lead is already in a terminal stage
@@ -2300,6 +2377,7 @@ paths:
               schema: { $ref: '#/components/schemas/CreateWorkItemResponse' }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/TenantScopeReadOnly' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/TenantNotActive' }
         '422': { $ref: '#/components/responses/Unprocessable' }
@@ -2351,7 +2429,7 @@ paths:
               schema: { $ref: '#/components/schemas/ListWorkItemsResponse' }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
-        '403': { $ref: '#/components/responses/Forbidden' }
+        '403': { $ref: '#/components/responses/TenantScopeForbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '500': { $ref: '#/components/responses/InternalServerError' }
 
@@ -2378,7 +2456,7 @@ paths:
               schema: { $ref: '#/components/schemas/DashboardResponse' }
         '400': { $ref: '#/components/responses/TenantScopeInvalid' }
         '401': { $ref: '#/components/responses/Unauthorized' }
-        '403': { $ref: '#/components/responses/Forbidden' }
+        '403': { $ref: '#/components/responses/TenantScopeForbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '500': { $ref: '#/components/responses/InternalServerError' }
 
@@ -2397,6 +2475,7 @@ paths:
               schema: { $ref: '#/components/schemas/WorkItemDto' }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/TenantScopeForbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '500': { $ref: '#/components/responses/InternalServerError' }
 
@@ -2412,6 +2491,7 @@ paths:
         '204': { description: Started }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/TenantScopeReadOnly' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409':
           description: Work item is in a terminal / overdue state
@@ -2431,6 +2511,7 @@ paths:
         '204': { description: Completed }
         '400': { $ref: '#/components/responses/TenantScopeInvalid' }
         '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/TenantScopeReadOnly' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409':
           description: Cannot complete a cancelled task
@@ -2455,6 +2536,7 @@ paths:
         '204': { description: Cancelled }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/TenantScopeReadOnly' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409':
           description: Cannot cancel a completed task
@@ -2489,7 +2571,7 @@ paths:
         '204': { description: Reassigned }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
-        '403': { $ref: '#/components/responses/Forbidden' }
+        '403': { $ref: '#/components/responses/TenantScopeReadOnly' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409':
           description: Cannot reassign a terminal task
@@ -2532,6 +2614,7 @@ paths:
               schema: { $ref: '#/components/schemas/CreateConsignmentNoteResponse' }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/TenantScopeReadOnly' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/TenantNotActive' }
         '422': { $ref: '#/components/responses/Unprocessable' }
@@ -2554,6 +2637,7 @@ paths:
               schema: { $ref: '#/components/schemas/ConsignmentNoteDto' }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/TenantScopeForbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '500': { $ref: '#/components/responses/InternalServerError' }
 
@@ -2572,6 +2656,7 @@ paths:
               schema: { $ref: '#/components/schemas/ConsignmentNoteDto' }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/TenantScopeForbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '500': { $ref: '#/components/responses/InternalServerError' }
 
@@ -2592,6 +2677,7 @@ paths:
         '204': { description: Dispatched }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/TenantScopeReadOnly' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409':
           description: Invalid status transition
@@ -2613,6 +2699,7 @@ paths:
         '204': { description: In transit }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/TenantScopeReadOnly' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409':
           description: Invalid status transition
@@ -2633,6 +2720,7 @@ paths:
         '204': { description: Delivered }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/TenantScopeReadOnly' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409':
           description: Invalid status transition
@@ -2658,6 +2746,7 @@ paths:
         '204': { description: Failed }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/TenantScopeReadOnly' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409':
           description: Invalid status transition
@@ -2687,6 +2776,7 @@ paths:
               schema: { $ref: '#/components/schemas/CreateQuotationResponse' }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/TenantScopeReadOnly' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/TenantNotActive' }
         '422': { $ref: '#/components/responses/Unprocessable' }
@@ -2707,6 +2797,7 @@ paths:
               schema: { $ref: '#/components/schemas/QuotationDto' }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/TenantScopeForbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '500': { $ref: '#/components/responses/InternalServerError' }
 
@@ -2727,6 +2818,7 @@ paths:
         '204': { description: Revised }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/TenantScopeReadOnly' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409':
           description: Quotation is terminal
@@ -2752,6 +2844,7 @@ paths:
               schema: { $ref: '#/components/schemas/ApproveQuotationResponse' }
         '400': { $ref: '#/components/responses/TenantScopeInvalid' }
         '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/TenantScopeReadOnly' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409':
           description: Quotation already rejected
@@ -2778,6 +2871,7 @@ paths:
         '204': { description: Rejected }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/TenantScopeReadOnly' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409':
           description: Quotation already approved
@@ -2801,6 +2895,7 @@ paths:
               schema: { $ref: '#/components/schemas/OrderDto' }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/TenantScopeForbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '500': { $ref: '#/components/responses/InternalServerError' }
 
@@ -2821,6 +2916,7 @@ paths:
         '204': { description: Recorded }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/TenantScopeReadOnly' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409':
           description: Invalid transition or duplicate payment reference
@@ -2842,6 +2938,7 @@ paths:
         '204': { description: Confirmed }
         '400': { $ref: '#/components/responses/TenantScopeInvalid' }
         '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/TenantScopeReadOnly' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409':
           description: Invalid state transition
@@ -2867,6 +2964,7 @@ paths:
         '204': { description: Packed }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/TenantScopeReadOnly' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409':
           description: Invalid state transition
@@ -2890,6 +2988,7 @@ paths:
               schema: { $ref: '#/components/schemas/InvoiceDto' }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/TenantScopeForbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '500': { $ref: '#/components/responses/InternalServerError' }
     post:
@@ -2907,6 +3006,7 @@ paths:
               schema: { $ref: '#/components/schemas/InvoiceOrderResponse' }
         '400': { $ref: '#/components/responses/TenantScopeInvalid' }
         '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/TenantScopeReadOnly' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409':
           description: Invalid transition or invoice already exists
@@ -2932,6 +3032,7 @@ paths:
         '204': { description: Cancelled }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/TenantScopeReadOnly' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409':
           description: Order already terminal
@@ -2952,6 +3053,7 @@ paths:
         '204': { description: Completed }
         '400': { $ref: '#/components/responses/TenantScopeInvalid' }
         '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/TenantScopeReadOnly' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409':
           description: Invalid state transition
@@ -2975,6 +3077,7 @@ paths:
               schema: { $ref: '#/components/schemas/ListPaymentsResponse' }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/TenantScopeForbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '500': { $ref: '#/components/responses/InternalServerError' }
     post:
@@ -2997,6 +3100,7 @@ paths:
               schema: { $ref: '#/components/schemas/RecordPaymentResponse' }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/TenantScopeReadOnly' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409':
           description: Duplicate external reference
@@ -3031,6 +3135,7 @@ paths:
               schema: { $ref: '#/components/schemas/MintCreditNoteResponse' }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/TenantScopeReadOnly' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/TenantNotActive' }
         '422': { $ref: '#/components/responses/Unprocessable' }
@@ -3056,6 +3161,7 @@ paths:
         '204': { description: Lost }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/TenantScopeReadOnly' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409':
           description: Lead is already in a terminal stage
@@ -3095,6 +3201,7 @@ paths:
               schema: { $ref: '#/components/schemas/CreateReminderResponse' }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/TenantScopeReadOnly' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/TenantNotActive' }
         '422':
@@ -3139,7 +3246,7 @@ paths:
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403':
-          description: Caller probed another assignee without crm.leads.read_all
+          description: Caller probed another assignee without crm.leads.read_all, lacks the permission (`forbidden`), or `X-Tenant-Id` was refused (`tenant_scope_forbidden`)
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
@@ -3161,6 +3268,7 @@ paths:
         '204': { description: Marked sent }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/TenantScopeReadOnly' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409':
           description: Reminder is already in a terminal state
@@ -3189,6 +3297,7 @@ paths:
         '204': { description: Cancelled }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/TenantScopeReadOnly' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409':
           description: Reminder is already in a terminal state
@@ -3236,17 +3345,13 @@ paths:
     get:
       tags: [notifications]
       summary: Unread notification count for the caller (badge)
-      parameters:
-        - $ref: '#/components/parameters/XTenantId'
       responses:
         '200':
           description: Unread count
           content:
             application/json:
               schema: { $ref: '#/components/schemas/UnreadCountResponse' }
-        '400': { $ref: '#/components/responses/TenantScopeInvalid' }
         '401': { $ref: '#/components/responses/Unauthorized' }
-        '404': { $ref: '#/components/responses/NotFound' }
         '500': { $ref: '#/components/responses/InternalServerError' }
 
   /api/v1/notifications/read-all:
@@ -3255,17 +3360,13 @@ paths:
       summary: Mark every unread notification read
       parameters:
         - { $ref: '#/components/parameters/XCommandId' }
-        - $ref: '#/components/parameters/XTenantId'
       responses:
         '200':
           description: Count of notifications flipped to read
           content:
             application/json:
               schema: { $ref: '#/components/schemas/MarkAllReadResponse' }
-        '400': { $ref: '#/components/responses/TenantScopeInvalid' }
         '401': { $ref: '#/components/responses/Unauthorized' }
-        '404': { $ref: '#/components/responses/NotFound' }
-        '409': { $ref: '#/components/responses/TenantNotActive' }
         '500': { $ref: '#/components/responses/InternalServerError' }
 
   /api/v1/notifications/{notificationId}/read:
@@ -3275,7 +3376,6 @@ paths:
       parameters:
         - { $ref: '#/components/parameters/NotificationId' }
         - { $ref: '#/components/parameters/XCommandId' }
-        - $ref: '#/components/parameters/XTenantId'
       responses:
         '204': { description: Marked read }
         '400': { $ref: '#/components/responses/BadRequest' }
@@ -3294,13 +3394,11 @@ paths:
       parameters:
         - { $ref: '#/components/parameters/NotificationId' }
         - { $ref: '#/components/parameters/XCommandId' }
-        - $ref: '#/components/parameters/XTenantId'
       responses:
         '204': { description: Dismissed }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { $ref: '#/components/responses/NotFound' }
-        '409': { $ref: '#/components/responses/TenantNotActive' }
 
 components:
   securitySchemes:
@@ -3344,26 +3442,44 @@ components:
       description: |
         Operator tenant scope (ADR 0039, ADR 0068 D7). Honoured ONLY for
         slug-anchored, non-impersonation platform operators whose token and
-        security stamp are valid: the request then runs in that tenant (RLS
-        `app.tenant_id`) and permissions are evaluated there via the
-        `platform.*` equivalents. IGNORED (no validation, no lookup, no
-        audit) for every other caller (tenant members, impersonation tokens)
-        and on routes where it cannot apply: all `/api/v1/auth/*` routes,
-        `/api/v1/platform/*` routes other than the lead-credit balance read,
-        `POST /api/v1/tenants`, `GET /api/v1/tenants`, the by-slug lookup and
-        `GET /api/v1/search`. Without it, operators act in their own tenant.
-        A scoped request is attributed durably: its outbox and audit rows
-        carry `act_operator_id` (the operator) with reason `tenant-via-header`.
+        security stamp are valid AND who may select a foreign tenant: a super
+        user, or an operator holding `platform.tenants.view`. The request then
+        runs in that tenant (RLS `app.tenant_id`) and permissions are evaluated
+        there via the `platform.*` equivalents. A platform-tenant member without
+        that authority who names a foreign tenant gets 403
+        `tenant_scope_forbidden`, decided before any tenant lookup and identical
+        for existing, unknown and suspended tenants. The header is IGNORED (no
+        validation, no lookup, no audit) for every other caller (tenant members,
+        impersonation tokens) and on routes where it cannot apply: all
+        `/api/v1/auth/*` routes, `/api/v1/notifications*` (the caller's own
+        inbox), `/api/v1/platform/*` routes other than the lead-credit balance
+        read, `POST /api/v1/tenants`, `GET /api/v1/tenants`, the by-slug lookup
+        and `GET /api/v1/search`. Without it, operators act in their own tenant.
+
+        Writes are read-only under a foreign header by default: a non-read
+        request is 403 `tenant_scope_read_only` unless the route is one of the
+        identity writes the operator scope tree uses (users, roles, role
+        permissions, permission overrides, manager changes, anonymise) or a
+        `/api/v1/tenants/{tenantId}/...` path-tenant route. crm, orders, tasks,
+        dispatch and inventory mutations are never accepted under a foreign
+        header.
+
+        A scoped request, or a write to another tenant through the URL alone, is
+        attributed durably: its outbox and audit rows carry `act_operator_id`
+        (the operator) with reason `tenant-via-header` (header) or
+        `tenant-via-path` (URL path only).
 
         Errors for an honoured header: 400 `invalid_tenant_scope` (not a UUID,
         or supplied more than once), 400 `tenant_scope_conflict` (differs from
         the path tenant on `/api/v1/tenants/{tenantId}` routes, where the path
-        wins; also on `DELETE /api/v1/platform/tenants/{tenantId}`), 404
-        `tenant_scope_not_found` (unknown or deleted tenant), 409
-        `tenant_not_active` (a write other than tenant lifecycle into a
-        suspended or pending-deletion tenant; reads are allowed), 403
-        `tenant_scope_not_supported` (routes that act on the caller's own
-        tenant only: permission requests and the marketplace lead purchase).
+        wins; also on `DELETE /api/v1/platform/tenants/{tenantId}`), 403
+        `tenant_scope_forbidden` (caller lacks scope authority), 403
+        `tenant_scope_read_only` (see above), 404 `tenant_scope_not_found`
+        (unknown or deleted tenant), 409 `tenant_not_active` (a write into a
+        suspended or pending-deletion tenant on a non-path route; reads and
+        path-tenant routes are allowed), 403 `tenant_scope_not_supported`
+        (routes that act on the caller's own tenant only: permission requests
+        and the marketplace lead purchase).
       schema: { type: string, format: uuid }
     TenantId:
       name: tenantId
@@ -3478,6 +3594,27 @@ components:
       content:
         application/json:
           schema: { $ref: '#/components/schemas/ErrorResponse' }
+    TenantScopeForbidden:
+      description: |
+        Forbidden. `error` is `forbidden` (the caller lacks the route's permission in the
+        effective tenant) or `tenant_scope_forbidden` (`X-Tenant-Id` names another tenant
+        and the caller is neither a super user nor a platform operator holding
+        `platform.tenants.view`). `tenant_scope_forbidden` is decided before any tenant
+        lookup and is identical for existing, unknown and suspended tenants, so it cannot
+        be used to probe which tenants exist.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+    TenantScopeReadOnly:
+      description: |
+        Forbidden. As `TenantScopeForbidden` (`forbidden`, `tenant_scope_forbidden`), plus
+        `tenant_scope_read_only`: the request is not a read, `X-Tenant-Id` names another
+        tenant, and this route is not one of the identity writes operators may perform
+        under scope. Writes to crm, orders, tasks, dispatch and inventory are never
+        accepted under a foreign `X-Tenant-Id`; call them as a member of the tenant.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
     TenantScopeInvalid:
       description: |
         `X-Tenant-Id` is malformed or supplied more than once (`invalid_tenant_scope`), or
@@ -3490,6 +3627,8 @@ components:
       description: |
         The tenant selected by `X-Tenant-Id` is suspended or pending deletion, so it can be
         read and its lifecycle managed but not written otherwise (`tenant_not_active`).
+        Routes that carry the tenant in the path (`/api/v1/tenants/{tenantId}/...`) are
+        exempt: the path is authoritative there, with or without the header.
       content:
         application/json:
           schema: { $ref: '#/components/schemas/ErrorResponse' }
