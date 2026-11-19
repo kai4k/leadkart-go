@@ -24,13 +24,10 @@ import (
 )
 
 // A NON-super operator holding only platform.users.manage / platform.roles.manage
-// performs identity writes in the scoped tenant through the platform equivalents,
-// but cannot assign a role that confers non-identity permissions (D4: no grant
-// beyond your own authority).
+// performs identity writes in the scoped tenant through the platform equivalents.
 //
-// This documents TODAY's behaviour. The rank-hierarchy plan
-// (docs/plans/2026-11-19-rank-hierarchy-and-grant-authority.md) redesigns grant
-// authority; update the 403 expectation below when that plan lands.
+// Grant authority is the rank-hierarchy plan's (ADR 0069): the exempt-operator
+// ceiling is tenant.admin and everything it implies.
 func TestE2E_TenantScope_NonSuperOperatorIdentityWrites(t *testing.T) {
 	f := newE2EFixture(t)
 	b := f.registerAndLogin(t, "scopenonsuper")
@@ -58,11 +55,15 @@ func TestE2E_TenantScope_NonSuperOperatorIdentityWrites(t *testing.T) {
 		ports.AssignUserRoleRequest{RoleID: emptyRoleID}, scopeHdr(b.TenantID)); r.status != http.StatusNoContent {
 		t.Errorf("assigning a role with no extra permissions: %d %s", r.status, r.body)
 	}
+	// ADR 0069 R3/R6: an exempt operator (platform.users.manage or
+	// platform.roles.manage, slug-anchored, acting in ANOTHER tenant) is exempt from
+	// rank and its grant ceiling is everything tenant.admin implies, so the role
+	// below, which a bare identity-only ceiling used to refuse, is assignable.
 	salesExec := f.roleIDByName(t, b.AccessToken, role.SystemRoles.Tenant.SalesExecutive)
 	r := f.doWithHeaders(t, http.MethodPost, "/api/v1/users/"+cu.MembershipID+"/roles", op,
 		ports.AssignUserRoleRequest{RoleID: salesExec}, scopeHdr(b.TenantID))
-	if r.status != http.StatusForbidden || decodeErrorCode(t, r.body) != "grant_exceeds_authority" {
-		t.Errorf("assigning a role that holds non-identity permissions: %d %s", r.status, r.body)
+	if r.status != http.StatusNoContent {
+		t.Errorf("exempt operator assigns a role holding non-identity permissions: %d %s, want 204", r.status, r.body)
 	}
 }
 

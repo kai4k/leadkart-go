@@ -33,6 +33,21 @@ type AuthorityLocker interface {
 // restored backup, a role id of another tenant); the commands refuse to guess.
 var ErrMemberRolesInconsistent = errors.New("authority: the member's assigned roles cannot be loaded consistently")
 
+// memberRolesInconsistentError is [ErrMemberRolesInconsistent] with the
+// membership and the policy's own wording for the log. It deliberately does
+// NOT unwrap to the cause: the cause is an authority sentinel (ErrNoAuthority)
+// and the wire answer for this state is its own 409, not a 403.
+type memberRolesInconsistentError struct {
+	membershipID membership.ID
+	cause        error
+}
+
+func (e *memberRolesInconsistentError) Error() string {
+	return fmt.Sprintf("%s: membership %s: %v", ErrMemberRolesInconsistent, e.membershipID, e.cause)
+}
+
+func (e *memberRolesInconsistentError) Is(target error) bool { return target == ErrMemberRolesInconsistent }
+
 // maxManagerChainDepth bounds the reports-to walk (cycle prevention).
 const maxManagerChainDepth = 64
 
@@ -67,7 +82,7 @@ func (f authorityFacts) member(ctx context.Context, tenantID tenant.ID, m *membe
 	state := authority.NewPersonState(p.IsActive(), p.IsGloballySuspended(), p.IsAnonymised(), p.LockedUntil(), now)
 	out, err := authority.MemberOf(m, roles, now, state)
 	if err != nil {
-		return authority.Member{}, fmt.Errorf("%w: membership %s: %s", ErrMemberRolesInconsistent, m.ID(), err.Error())
+		return authority.Member{}, &memberRolesInconsistentError{membershipID: m.ID(), cause: err}
 	}
 	return out, nil
 }
