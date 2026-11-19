@@ -18,7 +18,11 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/leadkart/leadkart-go/internal/common/pg"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/authority"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/role"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
 
@@ -96,27 +100,22 @@ type DeactivateUserCommand struct {
 	TenantID     tenant.ID
 	MembershipID membership.ID
 	Reason       string
+	// Actor is built once by the port via authn.AuthorityFrom; the zero value denies.
+	Actor authority.Actor
 }
 
 // DeactivateUserHandler runs the deactivate flow.
-type DeactivateUserHandler struct {
-	memberships membership.Repository
-	now         func() time.Time
-}
+type DeactivateUserHandler struct{ w authorityWriter }
 
 // NewDeactivateUserHandler wires the handler. `now` is the explicit
 // time source per the clock-injection refactor. Nil → time.Now.
-func NewDeactivateUserHandler(m membership.Repository, now func() time.Time) DeactivateUserHandler {
-	if m == nil {
-		panic("command: NewDeactivateUserHandler memberships repository required")
-	}
-	if now == nil {
-		now = time.Now
-	}
-	return DeactivateUserHandler{memberships: m, now: now}
+func NewDeactivateUserHandler(uow pg.UnitOfWork, lock AuthorityLocker, m membership.Repository, r role.Repository, p person.Repository, now func() time.Time) DeactivateUserHandler {
+	return DeactivateUserHandler{w: newAuthorityWriter("NewDeactivateUserHandler", uow, lock, m, r, p, now)}
 }
 
-// Handle dispatches to [Membership.Deactivate].
+// Handle decides [authority.Actor.MayDeactivate] under the tenant lock (the
+// owner set is loaded when the target is an owner, the only case the policy
+// reads it), then dispatches to [Membership.Deactivate].
 func (h DeactivateUserHandler) Handle(ctx context.Context, cmd DeactivateUserCommand) error {
 	if cmd.TenantID.IsZero() {
 		return errors.New("deactivate_user: tenant id required")
@@ -124,20 +123,24 @@ func (h DeactivateUserHandler) Handle(ctx context.Context, cmd DeactivateUserCom
 	if cmd.MembershipID.IsZero() {
 		return errors.New("deactivate_user: membership id required")
 	}
-	now := h.now()
-	err := h.memberships.UpdateByID(ctx, cmd.TenantID, cmd.MembershipID, func(m *membership.Membership) (bool, error) {
-		if err := m.Deactivate(cmd.Reason, now); err != nil {
-			return false, err
+	if !cmd.Actor.Valid() {
+		return authority.ErrNoAuthority
+	}
+	now := h.w.now()
+	err := h.w.updateMember(ctx, cmd.TenantID, cmd.MembershipID, now, func(ctx context.Context, m *membership.Membership, target authority.Member) error {
+		var owners []authority.Member
+		if target.IsOwner() {
+			var err error
+			if owners, err = h.w.facts.owners(ctx, cmd.TenantID, now); err != nil {
+				return err
+			}
 		}
-		return true, nil
+		if err := cmd.Actor.MayDeactivate(target, owners); err != nil {
+			return err
+		}
+		return m.Deactivate(cmd.Reason, now)
 	})
-	if errors.Is(err, membership.ErrNotFound) {
-		return ErrUserNotFound
-	}
-	if err != nil {
-		return fmt.Errorf("deactivate_user: %w", err)
-	}
-	return nil
+	return translateAuthorityWrite("deactivate_user", err)
 }
 
 // ----- ReactivateUser ------------------------------------------------------
@@ -153,28 +156,22 @@ func (h DeactivateUserHandler) Handle(ctx context.Context, cmd DeactivateUserCom
 type ReactivateUserCommand struct {
 	TenantID     tenant.ID
 	MembershipID membership.ID
+	// Actor is built once by the port via authn.AuthorityFrom; the zero value denies.
+	Actor authority.Actor
 }
 
 // ReactivateUserHandler runs the reactivate flow.
-type ReactivateUserHandler struct {
-	memberships membership.Repository
-	now         func() time.Time
-}
+type ReactivateUserHandler struct{ w authorityWriter }
 
 // NewReactivateUserHandler wires the handler. `now` is the explicit
 // time source per the clock-injection refactor. Nil → time.Now.
-func NewReactivateUserHandler(m membership.Repository, now func() time.Time) ReactivateUserHandler {
-	if m == nil {
-		panic("command: NewReactivateUserHandler memberships repository required")
-	}
-	if now == nil {
-		now = time.Now
-	}
-	return ReactivateUserHandler{memberships: m, now: now}
+func NewReactivateUserHandler(uow pg.UnitOfWork, lock AuthorityLocker, m membership.Repository, r role.Repository, p person.Repository, now func() time.Time) ReactivateUserHandler {
+	return ReactivateUserHandler{w: newAuthorityWriter("NewReactivateUserHandler", uow, lock, m, r, p, now)}
 }
 
-// Handle dispatches to [Membership.Reactivate]. Idempotent — already-
-// Active returns nil without an event.
+// Handle decides [authority.Actor.MayActOn] under the tenant lock and
+// dispatches to [Membership.Reactivate]. Idempotent — already-Active
+// returns nil without an event.
 func (h ReactivateUserHandler) Handle(ctx context.Context, cmd ReactivateUserCommand) error {
 	if cmd.TenantID.IsZero() {
 		return errors.New("reactivate_user: tenant id required")
@@ -182,18 +179,15 @@ func (h ReactivateUserHandler) Handle(ctx context.Context, cmd ReactivateUserCom
 	if cmd.MembershipID.IsZero() {
 		return errors.New("reactivate_user: membership id required")
 	}
-	now := h.now()
-	err := h.memberships.UpdateByID(ctx, cmd.TenantID, cmd.MembershipID, func(m *membership.Membership) (bool, error) {
-		if err := m.Reactivate(now); err != nil {
-			return false, err
+	if !cmd.Actor.Valid() {
+		return authority.ErrNoAuthority
+	}
+	now := h.w.now()
+	err := h.w.updateMember(ctx, cmd.TenantID, cmd.MembershipID, now, func(_ context.Context, m *membership.Membership, target authority.Member) error {
+		if err := cmd.Actor.MayActOn(target); err != nil {
+			return err
 		}
-		return true, nil
+		return m.Reactivate(now)
 	})
-	if errors.Is(err, membership.ErrNotFound) {
-		return ErrUserNotFound
-	}
-	if err != nil {
-		return fmt.Errorf("reactivate_user: %w", err)
-	}
-	return nil
+	return translateAuthorityWrite("reactivate_user", err)
 }

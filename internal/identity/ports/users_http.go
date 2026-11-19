@@ -149,6 +149,7 @@ func handleDeactivateUser(log *slog.Logger, a app.Application) http.Handler {
 			TenantID:     tenant.ID(tid),
 			MembershipID: id,
 			Reason:       req.Reason,
+			Actor:        authn.AuthorityFrom(r.Context()),
 		})
 		writeUserMutationResult(w, log, r, err)
 	})
@@ -170,6 +171,7 @@ func handleReactivateUser(log *slog.Logger, a app.Application) http.Handler {
 		err := a.Commands.ReactivateUser.Handle(r.Context(), command.ReactivateUserCommand{
 			TenantID:     tenant.ID(tid),
 			MembershipID: id,
+			Actor:        authn.AuthorityFrom(r.Context()),
 		})
 		writeUserMutationResult(w, log, r, err)
 	})
@@ -193,36 +195,16 @@ func handleAssignUserRole(log *slog.Logger, a app.Application) http.Handler {
 			writeError(w, http.StatusBadRequest, ErrCodeInvalidBody, "request body is not valid JSON")
 			return
 		}
-		roleID, ok := authn.CanonicalID(req.RoleID)
-		if !ok {
+		roleID, err := role.ParseID(req.RoleID)
+		if err != nil {
 			writeError(w, http.StatusBadRequest, ErrCodeInvalidRoleID, "role_id must be a UUID")
 			return
 		}
-		// D4 (ADR 0068): assigning a role confers its permission set — the
-		// caller must themselves satisfy it; super-admin roles are super-user only.
-		view, rerr := a.Queries.GetRole.Handle(r.Context(), query.GetRoleQuery{TenantID: tenant.ID(tid), RoleID: role.ID(roleID)})
-		switch {
-		case errors.Is(rerr, role.ErrNotFound):
-			writeError(w, http.StatusNotFound, ErrCodeRoleNotFound, "")
-			return
-		case rerr != nil:
-			log.ErrorContext(r.Context(), "assign user role: load role failed", "err", rerr)
-			writeError(w, http.StatusInternalServerError, ErrCodeInternalError, "")
-			return
-		}
-		if view.IsSuperAdmin {
-			if c, ok := authn.ClaimsFromContext(r.Context()); !ok || !c.IsSuperUser {
-				writeError(w, http.StatusForbidden, ErrCodeGrantExceedsAuthority, "only a super user can assign a super-admin role")
-				return
-			}
-		}
-		if !requireGrantWithinAuthority(w, r, view.Permissions) {
-			return
-		}
-		err := a.Commands.AssignUserRole.Handle(r.Context(), command.AssignUserRoleCommand{
+		err = a.Commands.AssignUserRole.Handle(r.Context(), command.AssignUserRoleCommand{
 			TenantID:     tenant.ID(tid),
 			MembershipID: mid,
-			RoleID:       role.ID(roleID),
+			RoleID:       roleID,
+			Actor:        authn.AuthorityFrom(r.Context()),
 		})
 		writeUserMutationResult(w, log, r, err)
 	})
@@ -249,6 +231,7 @@ func handleRevokeUserRole(log *slog.Logger, a app.Application) http.Handler {
 			TenantID:     tenant.ID(tid),
 			MembershipID: mid,
 			RoleID:       rid,
+			Actor:        authn.AuthorityFrom(r.Context()),
 		})
 		writeUserMutationResult(w, log, r, err)
 	})
@@ -271,15 +254,13 @@ func handleReplaceUserPermissionOverrides(log *slog.Logger, a app.Application) h
 		if !decodeFullBody(w, r, &req) {
 			return
 		}
-		if !requireGrantWithinAuthority(w, r, req.Granted) {
-			return
-		}
 		err := a.Commands.ReplaceUserPermissionOverrides.Handle(r.Context(),
 			command.ReplaceUserPermissionOverridesCommand{
 				TenantID:     tenant.ID(tid),
 				MembershipID: mid,
 				GrantedNames: req.Granted,
 				RevokedNames: req.Revoked,
+				Actor:        authn.AuthorityFrom(r.Context()),
 			})
 		if errors.Is(err, command.ErrPermissionUnknown) {
 			writeError(w, http.StatusUnprocessableEntity, ErrCodePermissionUnknown, err.Error())
@@ -307,15 +288,16 @@ func handleAssignUserManager(log *slog.Logger, a app.Application) http.Handler {
 			writeError(w, http.StatusBadRequest, ErrCodeInvalidBody, "request body is not valid JSON")
 			return
 		}
-		managerID, ok := authn.CanonicalID(req.ManagerID)
-		if !ok {
+		managerID, err := membership.ParseID(req.ManagerID)
+		if err != nil {
 			writeError(w, http.StatusBadRequest, ErrCodeInvalidManagerID, "manager_id must be a UUID")
 			return
 		}
-		err := a.Commands.AssignUserManager.Handle(r.Context(), command.AssignUserManagerCommand{
+		err = a.Commands.AssignUserManager.Handle(r.Context(), command.AssignUserManagerCommand{
 			TenantID:     tenant.ID(tid),
 			MembershipID: mid,
-			ManagerID:    membership.ID(managerID),
+			ManagerID:    managerID,
+			Actor:        authn.AuthorityFrom(r.Context()),
 		})
 		writeUserMutationResult(w, log, r, err)
 	})
@@ -337,6 +319,7 @@ func handleRemoveUserManager(log *slog.Logger, a app.Application) http.Handler {
 		err := a.Commands.RemoveUserManager.Handle(r.Context(), command.RemoveUserManagerCommand{
 			TenantID:     tenant.ID(tid),
 			MembershipID: mid,
+			Actor:        authn.AuthorityFrom(r.Context()),
 		})
 		writeUserMutationResult(w, log, r, err)
 	})
@@ -438,6 +421,8 @@ func parseUserIDPath(w http.ResponseWriter, r *http.Request) (membership.ID, boo
 // from a user-mutation command handler into HTTP responses.
 //
 //   - nil → 204
+//   - ADR 0069 authority refusals → [writeAuthorityError]
+//   - command.ErrRoleNotFound → 404 role_not_found
 //   - membership.ErrNotFound / command.ErrUserNotFound → 404
 //   - membership.ErrInvalid → 422
 //   - else → 500 + slog.ErrorContext
@@ -445,6 +430,10 @@ func writeUserMutationResult(w http.ResponseWriter, log *slog.Logger, r *http.Re
 	switch {
 	case err == nil:
 		w.WriteHeader(http.StatusNoContent)
+	case writeAuthorityError(w, err):
+		// ADR 0069 policy refusal, written by the shared translator.
+	case errors.Is(err, command.ErrRoleNotFound):
+		writeError(w, http.StatusNotFound, ErrCodeRoleNotFound, "")
 	case errors.Is(err, membership.ErrNotFound),
 		errors.Is(err, command.ErrUserNotFound):
 		writeError(w, http.StatusNotFound, ErrCodeUserNotFound, "")

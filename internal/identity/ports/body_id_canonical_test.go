@@ -7,13 +7,16 @@ import (
 	"testing"
 	"time"
 
+	"github.com/leadkart/leadkart-go/internal/common/email"
 	"github.com/leadkart/leadkart-go/internal/common/pg"
 	"github.com/leadkart/leadkart-go/internal/identity/app"
 	"github.com/leadkart/leadkart-go/internal/identity/app/command"
-	"github.com/leadkart/leadkart-go/internal/identity/app/query"
+	"github.com/leadkart/leadkart-go/internal/identity/app/jwt"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/authority"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership/membershiptest"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/permission"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/role"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/role/roletest"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/rolehierarchy"
@@ -48,6 +51,61 @@ func (inlineUoW) WithinTx(ctx context.Context, _ pg.TxScope, fn func(context.Con
 	return fn(ctx)
 }
 
+type bodyLock struct{}
+
+func (bodyLock) LockTenantAuthority(context.Context, tenant.ID) error { return nil }
+
+// bodyPersons answers GetByID with an active person for any id.
+type bodyPersons struct{ person.Repository }
+
+func (bodyPersons) GetByID(_ context.Context, id person.ID) (*person.Person, error) {
+	addr, err := email.New(strings.ReplaceAll(string(id), "-", "") + "@body.test")
+	if err != nil {
+		return nil, err
+	}
+	hash, err := person.NewPasswordHash("$argon2id$v=19$m=65536,t=3,p=4$YWJjZGVmZ2g$ZS1zdHViLWhhc2gtdGVzdC1maXh0dXJlLW9ubHk")
+	if err != nil {
+		return nil, err
+	}
+	return person.New(id, addr, "A", "B", hash, bodyNow)
+}
+
+// bodyAdminClaims are claims of an Administrator-rank caller (the actor the
+// port builds from them is rank 10).
+func bodyAdminClaims(perms ...string) *jwt.Claims {
+	c := azClaims(perms...)
+	rank := authority.RankAdmin.Int()
+	c.Rank = &rank
+	return c
+}
+
+const bodyMgrRole = "0190a000-0000-7000-8000-0000000000b1"
+
+// bodyManagerWorld holds a manager-level member (bodyManager) so the
+// manager-link command has an eligible, more senior manager to load.
+func bodyManagerWorld(t *testing.T, repo *membershiptest.FakeRepository) *roletest.FakeRepository {
+	t.Helper()
+	roles := roletest.NewFakeRepository()
+	r, err := role.New(role.ID(bodyMgrRole), tenant.ID(azTenant), "Mgr", false, 20, false, bodyNow)
+	if err != nil {
+		t.Fatalf("role.New: %v", err)
+	}
+	if err := roles.Add(t.Context(), r); err != nil {
+		t.Fatalf("roles.Add: %v", err)
+	}
+	m, err := membership.New(membership.ID(bodyManager), "0190a000-0000-7000-8000-0000000000e2", tenant.ID(azTenant), "", bodyNow)
+	if err != nil {
+		t.Fatalf("membership.New: %v", err)
+	}
+	if err := m.AssignRole(role.ID(bodyMgrRole), bodyNow); err != nil {
+		t.Fatalf("AssignRole: %v", err)
+	}
+	if err := repo.Add(t.Context(), m); err != nil {
+		t.Fatalf("repo.Add: %v", err)
+	}
+	return roles
+}
+
 func newBodyMembership(t *testing.T, repo *membershiptest.FakeRepository, id string) {
 	t.Helper()
 	m, err := membership.New(membership.ID(id), "0190a000-0000-7000-8000-0000000000e1", tenant.ID(azTenant), "", bodyNow)
@@ -66,9 +124,10 @@ func TestBodyID_ManagerIDReachesCommandCanonical(t *testing.T) {
 			t.Parallel()
 			repo := membershiptest.NewFakeRepository()
 			newBodyMembership(t, repo, azOther)
+			roles := bodyManagerWorld(t, repo)
 			var a app.Application
-			a.Commands.AssignUserManager = command.NewAssignUserManagerHandler(repo, func() time.Time { return bodyNow })
-			rec := azServeApp(t, a, azClaims(permission.IdentityPermissions.Users.Update), "PUT",
+			a.Commands.AssignUserManager = command.NewAssignUserManagerHandler(inlineUoW{}, bodyLock{}, repo, roles, bodyPersons{}, func() time.Time { return bodyNow })
+			rec := azServeApp(t, a, bodyAdminClaims(permission.IdentityPermissions.Users.Update), "PUT",
 				"/api/v1/users/"+azOther+"/manager", `{"manager_id":"`+spelled+`"}`)
 			if rec.Code != http.StatusNoContent {
 				t.Fatalf("status %d %s", rec.Code, rec.Body.String())
@@ -92,8 +151,8 @@ func TestBodyID_ManagerIDSelfSpellingRejected(t *testing.T) {
 			repo := membershiptest.NewFakeRepository()
 			newBodyMembership(t, repo, azOther)
 			var a app.Application
-			a.Commands.AssignUserManager = command.NewAssignUserManagerHandler(repo, func() time.Time { return bodyNow })
-			rec := azServeApp(t, a, azClaims(permission.IdentityPermissions.Users.Update), "PUT",
+			a.Commands.AssignUserManager = command.NewAssignUserManagerHandler(inlineUoW{}, bodyLock{}, repo, roletest.NewFakeRepository(), bodyPersons{}, func() time.Time { return bodyNow })
+			rec := azServeApp(t, a, bodyAdminClaims(permission.IdentityPermissions.Users.Update), "PUT",
 				"/api/v1/users/"+azOther+"/manager", `{"manager_id":"`+spelled+`"}`)
 			if rec.Code != http.StatusUnprocessableEntity {
 				t.Fatalf("status %d %s, want 422", rec.Code, rec.Body.String())
@@ -140,9 +199,8 @@ func TestBodyID_RoleIDReachesCommandCanonicalAndDedups(t *testing.T) {
 				t.Fatalf("roles.Add: %v", err)
 			}
 			var a app.Application
-			a.Commands.AssignUserRole = command.NewAssignUserRoleHandler(mems, func() time.Time { return bodyNow })
-			a.Queries.GetRole = query.NewGetRoleHandler(roles, nil)
-			claims := azClaims(permission.IdentityPermissions.Roles.Assign)
+			a.Commands.AssignUserRole = command.NewAssignUserRoleHandler(inlineUoW{}, bodyLock{}, mems, roles, bodyPersons{}, func() time.Time { return bodyNow })
+			claims := bodyAdminClaims(permission.IdentityPermissions.Roles.Assign)
 			path := "/api/v1/users/" + azOther + "/roles"
 			// Canonical assignment first, then the spelled one: the second must
 			// dedup (one assignment, canonical) exactly like a canonical repeat.

@@ -145,7 +145,8 @@ func AddRoutes(mux *http.ServeMux, log *slog.Logger, a app.Application, verifier
 			lifecycle(platform(p.Tenants.Delete)(handleRestoreTenant(log, a))))
 
 		// User (Membership) management — permission-gated per ADR 0036/0068.
-		// notSelf forbids self-assigned roles/overrides/status/manager (D3).
+		// Self-assigned roles/overrides/status/manager (D3) are refused by the
+		// authority policy inside each command (ADR 0069): one decision point.
 		// The identity writes the operator scope tree performs under X-Tenant-Id.
 		// Every other module's mutation is read-only under a foreign header.
 		writable := authn.TenantScopeWritable
@@ -159,25 +160,24 @@ func AddRoutes(mux *http.ServeMux, log *slog.Logger, a app.Application, verifier
 		rolesRevoke := authn.RequirePermission(verifier, stampValidator, p.Roles.Revoke)
 		userSelfOrView := authn.RequirePermissionOrSelf(verifier, stampValidator, "userId", p.Users.View)
 		userSelfOrUpdate := authn.RequirePermissionOrSelf(verifier, stampValidator, "userId", p.Users.Update)
-		notSelf := authn.DenySelfTarget("userId")
 		mux.Handle("GET /api/v1/users", usersView(handleListUsers(log, a)))
 		mux.Handle("GET /api/v1/users/{userId}", userSelfOrView(handleGetUser(log, a)))
 		mux.Handle("PATCH /api/v1/users/{userId}/profile",
 			writable(userSelfOrUpdate(handleUpdateUserProfile(log, a))))
 		mux.Handle("POST /api/v1/users/{userId}/deactivate",
-			writable(usersDeactivate(notSelf(handleDeactivateUser(log, a)))))
+			writable(usersDeactivate(handleDeactivateUser(log, a))))
 		mux.Handle("POST /api/v1/users/{userId}/reactivate",
-			writable(usersReactivate(notSelf(handleReactivateUser(log, a)))))
+			writable(usersReactivate(handleReactivateUser(log, a))))
 		mux.Handle("POST /api/v1/users/{userId}/roles",
-			writable(rolesAssign(notSelf(handleAssignUserRole(log, a)))))
+			writable(rolesAssign(handleAssignUserRole(log, a))))
 		mux.Handle("DELETE /api/v1/users/{userId}/roles/{roleId}",
-			writable(rolesRevoke(notSelf(handleRevokeUserRole(log, a)))))
+			writable(rolesRevoke(handleRevokeUserRole(log, a))))
 		mux.Handle("PATCH /api/v1/users/{userId}/permission-overrides",
-			writable(usersUpdatePermissions(notSelf(handleReplaceUserPermissionOverrides(log, a)))))
+			writable(usersUpdatePermissions(handleReplaceUserPermissionOverrides(log, a))))
 		mux.Handle("PUT /api/v1/users/{userId}/manager",
-			writable(usersUpdate(notSelf(handleAssignUserManager(log, a)))))
+			writable(usersUpdate(handleAssignUserManager(log, a))))
 		mux.Handle("DELETE /api/v1/users/{userId}/manager",
-			writable(usersUpdate(notSelf(handleRemoveUserManager(log, a)))))
+			writable(usersUpdate(handleRemoveUserManager(log, a))))
 		mux.Handle("POST /api/v1/users", writable(usersCreate(handleCreateUser(log, a))))
 
 		// Anonymise — DPDP §12 / GDPR Art. 17 right-to-erasure cascade.

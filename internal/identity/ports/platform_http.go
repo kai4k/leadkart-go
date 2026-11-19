@@ -262,6 +262,8 @@ func writePersonMutationResult(w http.ResponseWriter, log *slog.Logger, r *http.
 	switch {
 	case err == nil:
 		w.WriteHeader(http.StatusNoContent)
+	case writeAuthorityError(w, err):
+		// ADR 0069: a person-level change that would orphan a tenant (409 last_owner_protected).
 	case errors.Is(err, person.ErrNotFound),
 		errors.Is(err, command.ErrPersonNotFound):
 		writeError(w, http.StatusNotFound, ErrCodePersonNotFound, "")

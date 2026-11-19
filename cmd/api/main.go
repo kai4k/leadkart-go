@@ -566,6 +566,8 @@ func buildIdentityApp(pool *pgxpool.Pool, hybridCache *cache.HybridCache, cfg co
 	roleHierarchyEdges := adapters.NewRoleHierarchyEdgeRepository(pool, tx)
 	permissionRequests := adapters.NewPermissionRequestRepository(pool, tx)
 	authRouter := adapters.NewAuthRouterPG(pool, tx)
+	authorityLock := adapters.NewAuthorityLockPG()                                                         // ADR 0069: per-tenant lock for every authority-changing command
+	personChangeGuard := command.NewPersonChangeGuard(tx, authorityLock, memberships, roles, persons, now) // last-owner guard for person-level changes
 	permResolver := permissions.NewResolver(memberships, roles, time.Now)
 
 	// Read-side adapters per ADR 00xx boundary discipline (app/query/
@@ -663,15 +665,15 @@ func buildIdentityApp(pool *pgxpool.Pool, hybridCache *cache.HybridCache, cfg co
 				RestoreTenant:                  command.NewRestoreTenantHandler(tenants, now),
 
 				UpdateUserProfile:              command.NewUpdateUserProfileHandler(memberships, now),
-				DeactivateUser:                 command.NewDeactivateUserHandler(memberships, now),
-				ReactivateUser:                 command.NewReactivateUserHandler(memberships, now),
-				AssignUserRole:                 command.NewAssignUserRoleHandler(memberships, now),
-				RevokeUserRole:                 command.NewRevokeUserRoleHandler(memberships, now),
-				ReplaceUserPermissionOverrides: command.NewReplaceUserPermissionOverridesHandler(memberships, now),
-				AssignUserManager:              command.NewAssignUserManagerHandler(memberships, now),
-				RemoveUserManager:              command.NewRemoveUserManagerHandler(memberships, now),
+				DeactivateUser:                 command.NewDeactivateUserHandler(tx, authorityLock, memberships, roles, persons, now),
+				ReactivateUser:                 command.NewReactivateUserHandler(tx, authorityLock, memberships, roles, persons, now),
+				AssignUserRole:                 command.NewAssignUserRoleHandler(tx, authorityLock, memberships, roles, persons, now),
+				RevokeUserRole:                 command.NewRevokeUserRoleHandler(tx, authorityLock, memberships, roles, persons, now),
+				ReplaceUserPermissionOverrides: command.NewReplaceUserPermissionOverridesHandler(tx, authorityLock, memberships, roles, persons, now),
+				AssignUserManager:              command.NewAssignUserManagerHandler(tx, authorityLock, memberships, roles, persons, now),
+				RemoveUserManager:              command.NewRemoveUserManagerHandler(tx, authorityLock, memberships, roles, persons, now),
 				CreateUser:                     command.NewCreateUserHandler(tx, persons, memberships, now, newPersonID, newMembershipID),
-				AnonymiseUser:                  command.NewAnonymiseUserHandler(memberships, persons, now),
+				AnonymiseUser:                  command.NewAnonymiseUserHandler(personChangeGuard, memberships, persons, now),
 
 				CreateRole:             command.NewCreateRoleHandler(roles, roleHierarchyEdges, tx, now, newRoleID, newRoleHierarchyEdgeID),
 				UpdateRole:             command.NewUpdateRoleHandler(roles, now),
@@ -681,9 +683,9 @@ func buildIdentityApp(pool *pgxpool.Pool, hybridCache *cache.HybridCache, cfg co
 				RevokeRolePermission:   command.NewRevokeRolePermissionHandler(roles, now),
 				SetRoleParent:          command.NewSetRoleParentHandler(roleHierarchyEdges, tx, now, newRoleHierarchyEdgeID), // ADR 0058
 
-				GlobalSuspendPerson:        command.NewGlobalSuspendPersonHandler(persons, now),
+				GlobalSuspendPerson:        command.NewGlobalSuspendPersonHandler(personChangeGuard, persons, now),
 				LiftPersonGlobalSuspension: command.NewLiftPersonGlobalSuspensionHandler(persons, now),
-				AnonymisePerson:            command.NewAnonymisePersonHandler(persons, now),
+				AnonymisePerson:            command.NewAnonymisePersonHandler(personChangeGuard, persons, now),
 				UpdatePersonProfile:        command.NewUpdatePersonProfileHandler(persons, now),
 				HardDeleteTenant:           command.NewHardDeleteTenantHandler(tenants, memberships, tx, now),
 

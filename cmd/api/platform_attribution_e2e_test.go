@@ -91,6 +91,7 @@ func TestE2E_PlatformRoutes_DestructiveWritesCarryOperatorAttribution(t *testing
 	// arch-test:serial — shares the fixture and the outbox with its siblings.
 	t.Run("platform person anonymise", func(t *testing.T) {
 		v := f.registerAndLogin(t, "attranon")
+		f.addSecondOwner(t, v, "attranon-b") // the last owner cannot be anonymised (ADR 0069 H6)
 		opID := "0197c4a0-7000-7000-8000-00000000a003"
 		op := mintOperatorJWTExact(t, f.Issuer, f.persons, opID, []string{p.Users.Anonymise}, false)
 		if r := f.authedJSON(t, http.MethodPost, "/api/v1/platform/persons/"+v.PersonID+"/anonymise", op, nil); r.status != http.StatusNoContent {
@@ -102,6 +103,7 @@ func TestE2E_PlatformRoutes_DestructiveWritesCarryOperatorAttribution(t *testing
 	// arch-test:serial — shares the fixture and the outbox with its siblings.
 	t.Run("an existing header-scope claim is kept", func(t *testing.T) {
 		v := f.registerAndLogin(t, "attrkeep")
+		f.addSecondOwner(t, v, "attrkeep-b") // the last owner cannot be anonymised (ADR 0069 H6)
 		opID := "0197c4a0-7000-7000-8000-00000000a004"
 		op := mintOperatorJWTExact(t, f.Issuer, f.persons, opID, []string{p.Users.Anonymise, p.Platform.TenantsView}, false)
 		if r := f.doWithHeaders(t, http.MethodPost, "/api/v1/users/"+v.MembershipID+"/anonymise", op, nil, scopeHdr(v.TenantID)); r.status != http.StatusNoContent {

@@ -163,6 +163,56 @@ const (
 	// not hold (ADR 0068 D4). 403.
 	ErrCodeGrantExceedsAuthority = "grant_exceeds_authority"
 
+	// ErrCodeForbidden — a zero, cross-tenant or otherwise unauthorised
+	// actor (authority.ErrNoAuthority). 403 surface.
+	ErrCodeForbidden = "forbidden"
+
+	// ErrCodeSelfModificationForbidden — the caller targeted their own
+	// roles, permissions, status or manager (ADR 0068 D3). 403 surface.
+	ErrCodeSelfModificationForbidden = "self_modification_forbidden"
+
+	// ErrCodeInsufficientRank — the actor does not strictly outrank the
+	// target member or role (ADR 0069 H2/H3). 403 surface.
+	ErrCodeInsufficientRank = "insufficient_rank"
+
+	// ErrCodeImpersonationNotAllowed — the action is refused during an
+	// impersonation session (ADR 0069 H4). 403 surface.
+	ErrCodeImpersonationNotAllowed = "impersonation_not_allowed"
+
+	// ErrCodeNotApprover — the caller is not an eligible approver for the
+	// request (ADR 0069 H4). 403 surface.
+	ErrCodeNotApprover = "not_approver"
+
+	// ErrCodeLastOwnerProtected — the change would leave the tenant without
+	// an active owner (ADR 0069 H6). 409 surface.
+	ErrCodeLastOwnerProtected = "last_owner_protected"
+
+	// ErrCodeOwnerProtected — tenant.admin cannot be revoked from an owner
+	// (ADR 0069 H6). 409 surface.
+	ErrCodeOwnerProtected = "owner_protected"
+
+	// ErrCodeRoleSystemDefault — a system-default role cannot be changed
+	// (ADR 0069 H6). 409 surface.
+	ErrCodeRoleSystemDefault = "role_system_default"
+
+	// ErrCodeRoleDeleted — the role is soft-deleted and cannot be mutated.
+	// 409 surface (state conflict, like the other aggregates' ErrDeleted).
+	ErrCodeRoleDeleted = "role_deleted"
+
+	// ErrCodeManagerNotEligible — the proposed manager is not an active
+	// same-tenant member more senior than the subordinate, or the link would
+	// close a reporting cycle (ADR 0069 H4). 422 surface.
+	ErrCodeManagerNotEligible = "manager_not_eligible"
+
+	// ErrCodeRoleParentNotEligible — the proposed parent role is not more
+	// senior than its child (ADR 0069 H6). 422 surface.
+	ErrCodeRoleParentNotEligible = "role_parent_not_eligible"
+
+	// ErrCodeMemberRolesInconsistent — a membership's assigned roles cannot
+	// all be loaded as its tenant's roles, so its rank cannot be decided.
+	// 409 surface.
+	ErrCodeMemberRolesInconsistent = "member_roles_inconsistent"
+
 	// ErrCodePermissionUnknown — replace-permission-overrides request
 	// carried a permission name not in [permission.IdentityPermissions].
 	// 422 surface; offending name in message body.

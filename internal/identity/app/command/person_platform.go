@@ -34,33 +34,37 @@ type GlobalSuspendPersonCommand struct {
 
 // GlobalSuspendPersonHandler runs the suspension.
 type GlobalSuspendPersonHandler struct {
+	guard   PersonChangeGuard
 	persons person.Repository
 	now     func() time.Time
 }
 
 // NewGlobalSuspendPersonHandler wires the handler. `now` is the explicit
 // time source per the clock-injection refactor. Nil → time.Now.
-func NewGlobalSuspendPersonHandler(p person.Repository, now func() time.Time) GlobalSuspendPersonHandler {
+func NewGlobalSuspendPersonHandler(guard PersonChangeGuard, p person.Repository, now func() time.Time) GlobalSuspendPersonHandler {
 	if p == nil {
 		panic("command: NewGlobalSuspendPersonHandler persons repository required")
 	}
 	if now == nil {
 		now = time.Now
 	}
-	return GlobalSuspendPersonHandler{persons: p, now: now}
+	return GlobalSuspendPersonHandler{guard: guard, persons: p, now: now}
 }
 
-// Handle dispatches to [Person.GloballySuspend].
+// Handle dispatches to [Person.GloballySuspend] once the change is proven not
+// to leave any tenant without an active owner (ADR 0069 H6; every actor).
 func (h GlobalSuspendPersonHandler) Handle(ctx context.Context, cmd GlobalSuspendPersonCommand) error {
 	if cmd.PersonID.IsZero() {
 		return errors.New("global_suspend_person: person id required")
 	}
 	now := h.now()
-	err := h.persons.UpdateByID(ctx, cmd.PersonID, func(p *person.Person) (bool, error) {
-		if err := p.GloballySuspend(cmd.Reason, now); err != nil {
-			return false, err
-		}
-		return true, nil
+	err := h.guard.Run(ctx, cmd.PersonID, func(ctx context.Context) error {
+		return h.persons.UpdateByID(ctx, cmd.PersonID, func(p *person.Person) (bool, error) {
+			if err := p.GloballySuspend(cmd.Reason, now); err != nil {
+				return false, err
+			}
+			return true, nil
+		})
 	})
 	if errors.Is(err, person.ErrNotFound) {
 		return ErrPersonNotFound
@@ -131,20 +135,21 @@ type AnonymisePersonCommand struct {
 
 // AnonymisePersonHandler runs the cascade.
 type AnonymisePersonHandler struct {
+	guard   PersonChangeGuard
 	persons person.Repository
 	now     func() time.Time
 }
 
 // NewAnonymisePersonHandler wires the handler. `now` is the explicit
 // time source per the clock-injection refactor. Nil → time.Now.
-func NewAnonymisePersonHandler(p person.Repository, now func() time.Time) AnonymisePersonHandler {
+func NewAnonymisePersonHandler(guard PersonChangeGuard, p person.Repository, now func() time.Time) AnonymisePersonHandler {
 	if p == nil {
 		panic("command: NewAnonymisePersonHandler persons repository required")
 	}
 	if now == nil {
 		now = time.Now
 	}
-	return AnonymisePersonHandler{persons: p, now: now}
+	return AnonymisePersonHandler{guard: guard, persons: p, now: now}
 }
 
 // Handle dispatches to [Person.Anonymise]. Idempotent — already-
@@ -154,11 +159,13 @@ func (h AnonymisePersonHandler) Handle(ctx context.Context, cmd AnonymisePersonC
 		return errors.New("anonymise_person: person id required")
 	}
 	now := h.now()
-	err := h.persons.UpdateByID(ctx, cmd.PersonID, func(p *person.Person) (bool, error) {
-		if err := p.Anonymise(now); err != nil {
-			return false, err
-		}
-		return true, nil
+	err := h.guard.Run(ctx, cmd.PersonID, func(ctx context.Context) error {
+		return h.persons.UpdateByID(ctx, cmd.PersonID, func(p *person.Person) (bool, error) {
+			if err := p.Anonymise(now); err != nil {
+				return false, err
+			}
+			return true, nil
+		})
 	})
 	if errors.Is(err, person.ErrNotFound) {
 		return ErrPersonNotFound

@@ -30,7 +30,7 @@ func TestGlobalSuspendPerson_Succeeds(t *testing.T) {
 	t.Parallel()
 	p := newPersonWithPassword(t, "irrelevant")
 	repo := seedPersonRepo(t, p)
-	h := command.NewGlobalSuspendPersonHandler(repo, func() time.Time { return testNow })
+	h := command.NewGlobalSuspendPersonHandler(emptyGuard(), repo, func() time.Time { return testNow })
 	err := h.Handle(t.Context(), command.GlobalSuspendPersonCommand{
 		PersonID: p.ID(),
 		Reason:   "compliance: cross-tenant abuse 2026-05-07",
@@ -47,7 +47,7 @@ func TestGlobalSuspendPerson_RequiresReason(t *testing.T) {
 	t.Parallel()
 	p := newPersonWithPassword(t, "irrelevant")
 	repo := seedPersonRepo(t, p)
-	h := command.NewGlobalSuspendPersonHandler(repo, func() time.Time { return testNow })
+	h := command.NewGlobalSuspendPersonHandler(emptyGuard(), repo, func() time.Time { return testNow })
 	err := h.Handle(t.Context(), command.GlobalSuspendPersonCommand{
 		PersonID: p.ID(),
 	})
@@ -80,7 +80,7 @@ func TestAnonymisePerson_Succeeds(t *testing.T) {
 	t.Parallel()
 	p := newPersonWithPassword(t, "irrelevant")
 	repo := seedPersonRepo(t, p)
-	h := command.NewAnonymisePersonHandler(repo, func() time.Time { return testNow })
+	h := command.NewAnonymisePersonHandler(emptyGuard(), repo, func() time.Time { return testNow })
 	if err := h.Handle(t.Context(), command.AnonymisePersonCommand{
 		PersonID: p.ID(),
 	}); err != nil {
@@ -120,7 +120,7 @@ func TestPersonPlatformHandlers_NotFound(t *testing.T) {
 		fn   func() error
 	}{
 		{"GlobalSuspend", func() error {
-			return command.NewGlobalSuspendPersonHandler(repo, func() time.Time { return testNow }).Handle(t.Context(),
+			return command.NewGlobalSuspendPersonHandler(emptyGuard(), repo, func() time.Time { return testNow }).Handle(t.Context(),
 				command.GlobalSuspendPersonCommand{PersonID: bad, Reason: "x"})
 		}},
 		{"LiftSuspension", func() error {
@@ -128,7 +128,7 @@ func TestPersonPlatformHandlers_NotFound(t *testing.T) {
 				command.LiftPersonGlobalSuspensionCommand{PersonID: bad})
 		}},
 		{"Anonymise", func() error {
-			return command.NewAnonymisePersonHandler(repo, func() time.Time { return testNow }).Handle(t.Context(),
+			return command.NewAnonymisePersonHandler(emptyGuard(), repo, func() time.Time { return testNow }).Handle(t.Context(),
 				command.AnonymisePersonCommand{PersonID: bad})
 		}},
 		{"UpdateProfile", func() error {
@@ -157,7 +157,7 @@ func TestPersonPlatformHandlers_EmptyPersonID(t *testing.T) {
 		fn   func() error
 	}{
 		{"GlobalSuspend", func() error {
-			return command.NewGlobalSuspendPersonHandler(repo, func() time.Time { return testNow }).Handle(t.Context(),
+			return command.NewGlobalSuspendPersonHandler(emptyGuard(), repo, func() time.Time { return testNow }).Handle(t.Context(),
 				command.GlobalSuspendPersonCommand{PersonID: person.ID(""), Reason: "x"})
 		}},
 		{"LiftSuspension", func() error {
@@ -165,7 +165,7 @@ func TestPersonPlatformHandlers_EmptyPersonID(t *testing.T) {
 				command.LiftPersonGlobalSuspensionCommand{PersonID: person.ID("")})
 		}},
 		{"Anonymise", func() error {
-			return command.NewAnonymisePersonHandler(repo, func() time.Time { return testNow }).Handle(t.Context(),
+			return command.NewAnonymisePersonHandler(emptyGuard(), repo, func() time.Time { return testNow }).Handle(t.Context(),
 				command.AnonymisePersonCommand{PersonID: person.ID("")})
 		}},
 		{"UpdateProfile", func() error {
@@ -247,7 +247,7 @@ func TestPersonPlatformHandlers_GenericRepoError_Wrapped(t *testing.T) {
 		fn   func(repo person.Repository) error
 	}{
 		{"GlobalSuspend", func(repo person.Repository) error {
-			return command.NewGlobalSuspendPersonHandler(repo, func() time.Time { return testNow }).Handle(t.Context(),
+			return command.NewGlobalSuspendPersonHandler(emptyGuard(), repo, func() time.Time { return testNow }).Handle(t.Context(),
 				command.GlobalSuspendPersonCommand{PersonID: person.ID("some-id"), Reason: "x"})
 		}},
 		{"LiftSuspension", func(repo person.Repository) error {
@@ -255,7 +255,7 @@ func TestPersonPlatformHandlers_GenericRepoError_Wrapped(t *testing.T) {
 				command.LiftPersonGlobalSuspensionCommand{PersonID: person.ID("some-id")})
 		}},
 		{"Anonymise", func(repo person.Repository) error {
-			return command.NewAnonymisePersonHandler(repo, func() time.Time { return testNow }).Handle(t.Context(),
+			return command.NewAnonymisePersonHandler(emptyGuard(), repo, func() time.Time { return testNow }).Handle(t.Context(),
 				command.AnonymisePersonCommand{PersonID: person.ID("some-id")})
 		}},
 		{"UpdateProfile", func(repo person.Repository) error {

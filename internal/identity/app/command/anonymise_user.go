@@ -34,6 +34,7 @@ type AnonymiseUserCommand struct {
 
 // AnonymiseUserHandler runs the flow.
 type AnonymiseUserHandler struct {
+	guard       PersonChangeGuard
 	memberships membership.Repository
 	persons     person.Repository
 	now         func() time.Time
@@ -41,7 +42,7 @@ type AnonymiseUserHandler struct {
 
 // NewAnonymiseUserHandler wires the handler. `now` is the explicit
 // time source per the clock-injection refactor. Nil → time.Now.
-func NewAnonymiseUserHandler(m membership.Repository, p person.Repository, now func() time.Time) AnonymiseUserHandler {
+func NewAnonymiseUserHandler(guard PersonChangeGuard, m membership.Repository, p person.Repository, now func() time.Time) AnonymiseUserHandler {
 	if m == nil {
 		panic("command: NewAnonymiseUserHandler memberships repository required")
 	}
@@ -51,7 +52,7 @@ func NewAnonymiseUserHandler(m membership.Repository, p person.Repository, now f
 	if now == nil {
 		now = time.Now
 	}
-	return AnonymiseUserHandler{memberships: m, persons: p, now: now}
+	return AnonymiseUserHandler{guard: guard, memberships: m, persons: p, now: now}
 }
 
 // Handle resolves Membership → PersonID → Person.Anonymise(). The
@@ -74,11 +75,13 @@ func (h AnonymiseUserHandler) Handle(ctx context.Context, cmd AnonymiseUserComma
 	}
 	personID := m.PersonID()
 	now := h.now()
-	err = h.persons.UpdateByID(ctx, personID, func(p *person.Person) (bool, error) {
-		if err := p.Anonymise(now); err != nil {
-			return false, err
-		}
-		return true, nil
+	err = h.guard.Run(ctx, personID, func(ctx context.Context) error {
+		return h.persons.UpdateByID(ctx, personID, func(p *person.Person) (bool, error) {
+			if err := p.Anonymise(now); err != nil {
+				return false, err
+			}
+			return true, nil
+		})
 	})
 	if errors.Is(err, person.ErrNotFound) {
 		// Membership pointed at a missing Person — data-integrity

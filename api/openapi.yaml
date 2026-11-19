@@ -46,8 +46,13 @@ info:
     **Authorization error codes:** `403` responses carry `forbidden` (missing
     permission or wrong tenant), `self_modification_forbidden` (caller targeted
     their own roles, permission overrides, status or manager) and
-    `grant_exceeds_authority` (caller tried to confer a permission they do not
-    hold). ADR 0036 / ADR 0068. In `x-required-permissions`, the token `self`
+    `grant_exceeds_authority` (caller tried to confer or remove a permission
+    they do not hold), `insufficient_rank` (the caller does not strictly
+    outrank the target member or role), `impersonation_not_allowed` and
+    `not_approver`. ADR 0036 / ADR 0068 / ADR 0069. State conflicts on the
+    membership and person commands are `409`: `last_owner_protected`,
+    `owner_protected`, `member_roles_inconsistent`; an ineligible manager is
+    `422 manager_not_eligible`. In `x-required-permissions`, the token `self`
     is not a permission: it means "the caller's own membership" (the path
     user id equals the caller's `membership_id`).
 
@@ -778,7 +783,7 @@ paths:
       tags: [users]
       summary: Deactivate a user (reason required)
       description: |
-        Requires `identity.users.deactivate` (satisfied by `tenant.admin` in the caller's own tenant, or by `platform.*` equivalents for platform operators; ADR 0068). Self-target forbidden (`self_modification_forbidden`).
+        Requires `identity.users.deactivate` (satisfied by `tenant.admin` in the caller's own tenant, or by `platform.*` equivalents for platform operators; ADR 0068). Self-target forbidden (`self_modification_forbidden`). The caller must strictly outrank the target member (`insufficient_rank`; owners may act on owners; super users and exempt platform operators are exempt), decided inside the transaction that holds the tenant's authority lock (ADR 0069).
       x-required-permissions: [identity.users.deactivate]
       parameters:
         - $ref: '#/components/parameters/XCommandId'
@@ -791,14 +796,16 @@ paths:
             schema: { $ref: '#/components/schemas/DeactivateUserRequest' }
       responses:
         '204': { description: Deactivated }
-        '403': { $ref: '#/components/responses/TenantScopeForbidden' }
+        '403': { $ref: '#/components/responses/AuthorityForbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { description: "`last_owner_protected` — the change would leave the tenant without an active owner; `member_roles_inconsistent` — the member's assigned roles cannot be loaded as this tenant's roles, so its rank cannot be decided; nothing was changed (an assignment row written outside the commands, e.g. an operator repair or a restored backup, pointing at a role of another tenant)", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
 
   /api/v1/users/{userId}/reactivate:
     post:
       tags: [users]
       summary: Reactivate a deactivated user
       description: |
-        Requires `identity.users.reactivate` (satisfied by `tenant.admin` in the caller's own tenant, or by `platform.*` equivalents for platform operators; ADR 0068). Self-target forbidden (`self_modification_forbidden`).
+        Requires `identity.users.reactivate` (satisfied by `tenant.admin` in the caller's own tenant, or by `platform.*` equivalents for platform operators; ADR 0068). Self-target forbidden (`self_modification_forbidden`). The caller must strictly outrank the target member (`insufficient_rank`; owners may act on owners; super users and exempt platform operators are exempt), decided inside the transaction that holds the tenant's authority lock (ADR 0069).
       x-required-permissions: [identity.users.reactivate]
       parameters:
         - $ref: '#/components/parameters/XCommandId'
@@ -806,14 +813,16 @@ paths:
         - $ref: '#/components/parameters/XTenantId'
       responses:
         '204': { description: Reactivated }
-        '403': { $ref: '#/components/responses/TenantScopeForbidden' }
+        '403': { $ref: '#/components/responses/AuthorityForbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { description: "`member_roles_inconsistent` — the member's assigned roles cannot be loaded as this tenant's roles, so its rank cannot be decided; nothing was changed (an assignment row written outside the commands, e.g. an operator repair or a restored backup, pointing at a role of another tenant)", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
 
   /api/v1/users/{userId}/roles:
     post:
       tags: [users]
       summary: Assign a role to a user
       description: |
-        Requires `identity.roles.assign` (satisfied by `tenant.admin` in the caller's own tenant, or by `platform.*` equivalents for platform operators; ADR 0068). Self-target forbidden (`self_modification_forbidden`). Conferring a permission the caller does not hold is rejected with `grant_exceeds_authority`. Only a super user may assign a super-admin role.
+        Requires `identity.roles.assign` (satisfied by `tenant.admin` in the caller's own tenant, or by `platform.*` equivalents for platform operators; ADR 0068). Self-target forbidden (`self_modification_forbidden`). The caller must strictly outrank the target member (`insufficient_rank`; owners may act on owners; super users and exempt platform operators are exempt), decided inside the transaction that holds the tenant's authority lock (ADR 0069). Conferring a permission the caller does not hold is rejected with `grant_exceeds_authority`. Only a super user may assign a super-admin role. The role's level must be below the caller's rank (owners: any tenant role). A deleted or unknown role is `role_not_found`.
       x-required-permissions: [identity.roles.assign]
       parameters:
         - $ref: '#/components/parameters/XCommandId'
@@ -827,15 +836,16 @@ paths:
       responses:
         '204': { description: Role assigned }
         '400': { description: "Malformed id: `invalid_user_id` (path) or `invalid_role_id` (body `role_id`)", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
-        '403': { $ref: '#/components/responses/TenantScopeForbidden' }
+        '403': { $ref: '#/components/responses/AuthorityForbidden' }
         '404': { description: "`role_not_found` — no live role with that id in the target tenant (or the user does not exist)", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+        '409': { description: "`member_roles_inconsistent` — the member's assigned roles cannot be loaded as this tenant's roles, so its rank cannot be decided; nothing was changed (an assignment row written outside the commands, e.g. an operator repair or a restored backup, pointing at a role of another tenant)", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
 
   /api/v1/users/{userId}/roles/{roleId}:
     delete:
       tags: [users]
       summary: Revoke a role from a user
       description: |
-        Requires `identity.roles.revoke` (satisfied by `tenant.admin` in the caller's own tenant, or by `platform.*` equivalents for platform operators; ADR 0068). Self-target forbidden (`self_modification_forbidden`).
+        Requires `identity.roles.revoke` (satisfied by `tenant.admin` in the caller's own tenant, or by `platform.*` equivalents for platform operators; ADR 0068). Self-target forbidden (`self_modification_forbidden`). The caller must strictly outrank the target member (`insufficient_rank`; owners may act on owners; super users and exempt platform operators are exempt), decided inside the transaction that holds the tenant's authority lock (ADR 0069).
       x-required-permissions: [identity.roles.revoke]
       parameters:
         - $ref: '#/components/parameters/UserId'
@@ -843,8 +853,9 @@ paths:
         - $ref: '#/components/parameters/XTenantId'
       responses:
         '204': { description: Role revoked }
-        '403': { $ref: '#/components/responses/TenantScopeForbidden' }
+        '403': { $ref: '#/components/responses/AuthorityForbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
+        '409': { description: "`last_owner_protected` — the change would leave the tenant without an active owner; `member_roles_inconsistent` — the member's assigned roles cannot be loaded as this tenant's roles, so its rank cannot be decided; nothing was changed (an assignment row written outside the commands, e.g. an operator repair or a restored backup, pointing at a role of another tenant)", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
         '422': { $ref: '#/components/responses/Unprocessable' }
 
   /api/v1/users/{userId}/permission-overrides:
@@ -855,7 +866,7 @@ paths:
         Both arrays are required; empty arrays clear the corresponding overlay. Permission names
         MUST match the closed `permission.IdentityPermissions` catalogue;
         unknown names surface as 422 (`permission_unknown`).
-        Requires `identity.users.update_permissions` (satisfied by `tenant.admin` in the caller's own tenant, or by `platform.*` equivalents for platform operators; ADR 0068). Self-target forbidden (`self_modification_forbidden`). Conferring a permission the caller does not hold is rejected with `grant_exceeds_authority`.
+        Requires `identity.users.update_permissions` (satisfied by `tenant.admin` in the caller's own tenant, or by `platform.*` equivalents for platform operators; ADR 0068). Self-target forbidden (`self_modification_forbidden`). The caller must strictly outrank the target member (`insufficient_rank`; owners may act on owners; super users and exempt platform operators are exempt), decided inside the transaction that holds the tenant's authority lock (ADR 0069). Conferring a permission the caller does not hold is rejected with `grant_exceeds_authority`.
       x-required-permissions: [identity.users.update_permissions]
       parameters:
         - $ref: '#/components/parameters/XCommandId'
@@ -869,8 +880,9 @@ paths:
       responses:
         '204': { description: Overrides replaced }
         '400': { $ref: '#/components/responses/BadRequest' }
-        '403': { $ref: '#/components/responses/TenantScopeForbidden' }
+        '403': { $ref: '#/components/responses/AuthorityForbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
+        '409': { description: "`owner_protected` — tenant.admin cannot be revoked from an owner; `member_roles_inconsistent` — the member's assigned roles cannot be loaded as this tenant's roles, so its rank cannot be decided; nothing was changed (an assignment row written outside the commands, e.g. an operator repair or a restored backup, pointing at a role of another tenant)", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
         '422': { $ref: '#/components/responses/Unprocessable' }
 
   /api/v1/users/{userId}/manager:
@@ -880,7 +892,7 @@ paths:
       description: |
         ManagerID MUST be a Membership in the same tenant — composite FK
         at the schema layer enforces this; cross-tenant ID surfaces as 422.
-        Requires `identity.users.update` (satisfied by `tenant.admin` in the caller's own tenant, or by `platform.*` equivalents for platform operators; ADR 0068). Self-target forbidden (`self_modification_forbidden`).
+        Requires `identity.users.update` (satisfied by `tenant.admin` in the caller's own tenant, or by `platform.*` equivalents for platform operators; ADR 0068). Self-target forbidden (`self_modification_forbidden`). The caller must strictly outrank the target member (`insufficient_rank`; owners may act on owners; super users and exempt platform operators are exempt), decided inside the transaction that holds the tenant's authority lock (ADR 0069).
       x-required-permissions: [identity.users.update]
       parameters:
         - $ref: '#/components/parameters/XCommandId'
@@ -893,22 +905,24 @@ paths:
             schema: { $ref: '#/components/schemas/AssignUserManagerRequest' }
       responses:
         '204': { description: Manager assigned }
-        '403': { $ref: '#/components/responses/TenantScopeForbidden' }
+        '403': { $ref: '#/components/responses/AuthorityForbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
-        '422': { $ref: '#/components/responses/Unprocessable' }
+        '409': { description: "`member_roles_inconsistent` — the member's assigned roles cannot be loaded as this tenant's roles, so its rank cannot be decided; nothing was changed (an assignment row written outside the commands, e.g. an operator repair or a restored backup, pointing at a role of another tenant)", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+        '422': { description: "`manager_not_eligible` — the manager is not an active member of this tenant more senior than the member, or the link would close a reporting cycle; otherwise validation (`user_invalid`)", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
     delete:
       tags: [users]
       summary: Remove user's reporting manager
       description: |
-        Requires `identity.users.update` (satisfied by `tenant.admin` in the caller's own tenant, or by `platform.*` equivalents for platform operators; ADR 0068). Self-target forbidden (`self_modification_forbidden`).
+        Requires `identity.users.update` (satisfied by `tenant.admin` in the caller's own tenant, or by `platform.*` equivalents for platform operators; ADR 0068). Self-target forbidden (`self_modification_forbidden`). The caller must strictly outrank the target member (`insufficient_rank`; owners may act on owners; super users and exempt platform operators are exempt), decided inside the transaction that holds the tenant's authority lock (ADR 0069).
       x-required-permissions: [identity.users.update]
       parameters:
         - { $ref: '#/components/parameters/UserId' }
         - $ref: '#/components/parameters/XTenantId'
       responses:
         '204': { description: Manager removed }
-        '403': { $ref: '#/components/responses/TenantScopeForbidden' }
+        '403': { $ref: '#/components/responses/AuthorityForbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
+        '409': { description: "`member_roles_inconsistent` — the member's assigned roles cannot be loaded as this tenant's roles, so its rank cannot be decided; nothing was changed (an assignment row written outside the commands, e.g. an operator repair or a restored backup, pointing at a role of another tenant)", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
 
   /api/v1/users/{userId}/anonymise:
     post:
@@ -926,8 +940,9 @@ paths:
         - $ref: '#/components/parameters/XTenantId'
       responses:
         '204': { description: User anonymised }
-        '403': { $ref: '#/components/responses/TenantScopeForbidden' }
+        '403': { $ref: '#/components/responses/AuthorityForbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
+        '409': { description: "`last_owner_protected` — the person is the only active owner of a tenant; nothing was changed", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
         '422': { $ref: '#/components/responses/Unprocessable' }
 
   # ===== ROLES ==========================================================
@@ -1271,8 +1286,9 @@ paths:
             schema: { $ref: '#/components/schemas/GlobalSuspendPersonRequest' }
       responses:
         '204': { description: Person globally suspended }
-        '403': { $ref: '#/components/responses/Forbidden' }
+        '403': { $ref: '#/components/responses/AuthorityForbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
+        '409': { description: "`last_owner_protected` — the person is the only active owner of a tenant; nothing was changed", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
         '422': { $ref: '#/components/responses/Unprocessable' }
 
   /api/v1/platform/persons/{personId}/lift-global-suspension:
@@ -1303,8 +1319,9 @@ paths:
         - { $ref: '#/components/parameters/PersonId' }
       responses:
         '204': { description: Person anonymised }
-        '403': { $ref: '#/components/responses/Forbidden' }
+        '403': { $ref: '#/components/responses/AuthorityForbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
+        '409': { description: "`last_owner_protected` — the person is the only active owner of a tenant; nothing was changed", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
         '422': { $ref: '#/components/responses/Unprocessable' }
 
   /api/v1/platform/persons:
@@ -3707,6 +3724,17 @@ components:
         The route does not support the `X-Tenant-Id` operator scope (it acts on the
         caller's own tenant only) and the header selected a different tenant
         (`tenant_scope_not_supported`, ADR 0039).
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+    AuthorityForbidden:
+      description: |
+        Forbidden. `error` is one of: `forbidden` (the caller lacks the route's permission in
+        the effective tenant, or is not a valid actor), `tenant_scope_forbidden` (see
+        TenantScopeForbidden), `self_modification_forbidden` (the caller targeted themself),
+        `insufficient_rank` (the caller does not strictly outrank the target member or role,
+        ADR 0069), `grant_exceeds_authority` (the change confers or removes a permission the
+        caller does not hold, or `tenant.admin` as a non-owner).
       content:
         application/json:
           schema: { $ref: '#/components/schemas/ErrorResponse' }

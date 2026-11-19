@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/alicebob/miniredis/v2"
 	"github.com/redis/go-redis/v9"
@@ -17,14 +18,19 @@ import (
 	"github.com/leadkart/leadkart-go/internal/common/cache"
 	"github.com/leadkart/leadkart-go/internal/common/httpmw"
 	"github.com/leadkart/leadkart-go/internal/identity/app"
+	"github.com/leadkart/leadkart-go/internal/identity/app/command"
 	"github.com/leadkart/leadkart-go/internal/identity/app/jwt"
-	"github.com/leadkart/leadkart-go/internal/identity/ports/authn"
 	"github.com/leadkart/leadkart-go/internal/identity/app/query"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership/membershiptest"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/permission"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person/persontest"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/role"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/role/roletest"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 	"github.com/leadkart/leadkart-go/internal/identity/ports"
+	"github.com/leadkart/leadkart-go/internal/identity/ports/authn"
 )
 
 type tokenVerifier map[string]*jwt.Claims
@@ -129,26 +135,63 @@ func TestRouteAuthz_SelfServiceAndSelfTarget(t *testing.T) {
 			t.Errorf("self %s %s: status %d, want gate pass", rt.method, rt.path, rec.Code)
 		}
 	}
-	for _, rt := range []struct{ method, path string }{
-		{"POST", u + "/deactivate"}, {"POST", u + "/reactivate"}, {"POST", u + "/roles"},
-		{"DELETE", u + "/roles/" + azRole}, {"PATCH", u + "/permission-overrides"},
-		{"PUT", u + "/manager"}, {"DELETE", u + "/manager"},
+	// Self-target is refused by the authority policy inside each command
+	// (ADR 0069), so the routes run over real handlers on fakes.
+	a := selfTargetApp(t)
+	manager := `{"manager_id":"` + azOther + `"}`
+	for _, rt := range []struct{ method, path, body string }{
+		{"POST", u + "/deactivate", `{"reason":"self lockout attempt"}`}, {"POST", u + "/reactivate", ""},
+		{"POST", u + "/roles", `{"role_id":"` + azRole + `"}`},
+		{"DELETE", u + "/roles/" + azRole, ""}, {"PATCH", u + "/permission-overrides", `{"granted":[],"revoked":[]}`},
+		{"PUT", u + "/manager", manager}, {"DELETE", u + "/manager", ""},
 	} {
-		rec := azServe(t, azClaims(p.Meta.TenantAdmin), rt.method, rt.path, "{}")
+		rec := azServeApp(t, a, bodyAdminClaims(p.Meta.TenantAdmin), rt.method, rt.path, rt.body)
 		if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "self_modification_forbidden") {
 			t.Errorf("self-target %s %s: status %d body %s, want 403 self_modification_forbidden", rt.method, rt.path, rec.Code, rec.Body.String())
 		}
 	}
 }
 
+// selfTargetApp wires the seven authority commands over fakes holding the
+// caller's own membership (azSelf), a peer (azOther) and a role (azRole).
+func selfTargetApp(t *testing.T) app.Application {
+	t.Helper()
+	mems := membershiptest.NewFakeRepository()
+	for _, id := range []string{azSelf, azOther} {
+		m, err := membership.New(membership.ID(id), person.ID(id), tenant.ID(azTenant), "", bodyNow)
+		if err != nil {
+			t.Fatalf("membership.New: %v", err)
+		}
+		if err := mems.Add(t.Context(), m); err != nil {
+			t.Fatalf("mems.Add: %v", err)
+		}
+	}
+	roles := roletest.NewFakeRepository()
+	r, err := role.New(role.ID(azRole), tenant.ID(azTenant), "Rep", false, 60, false, bodyNow)
+	if err != nil {
+		t.Fatalf("role.New: %v", err)
+	}
+	if err := roles.Add(t.Context(), r); err != nil {
+		t.Fatalf("roles.Add: %v", err)
+	}
+	now := func() time.Time { return bodyNow }
+	var a app.Application
+	a.Commands.DeactivateUser = command.NewDeactivateUserHandler(inlineUoW{}, bodyLock{}, mems, roles, bodyPersons{}, now)
+	a.Commands.ReactivateUser = command.NewReactivateUserHandler(inlineUoW{}, bodyLock{}, mems, roles, bodyPersons{}, now)
+	a.Commands.AssignUserRole = command.NewAssignUserRoleHandler(inlineUoW{}, bodyLock{}, mems, roles, bodyPersons{}, now)
+	a.Commands.RevokeUserRole = command.NewRevokeUserRoleHandler(inlineUoW{}, bodyLock{}, mems, roles, bodyPersons{}, now)
+	a.Commands.ReplaceUserPermissionOverrides = command.NewReplaceUserPermissionOverridesHandler(inlineUoW{}, bodyLock{}, mems, roles, bodyPersons{}, now)
+	a.Commands.AssignUserManager = command.NewAssignUserManagerHandler(inlineUoW{}, bodyLock{}, mems, roles, bodyPersons{}, now)
+	a.Commands.RemoveUserManager = command.NewRemoveUserManagerHandler(inlineUoW{}, bodyLock{}, mems, roles, bodyPersons{}, now)
+	return a
+}
+
 func TestRouteAuthz_GrantBeyondAuthorityRejected(t *testing.T) {
 	t.Parallel()
 	p := permission.IdentityPermissions
-	rec := azServe(t, azClaims(p.Users.UpdatePermissions), "PATCH", "/api/v1/users/"+azOther+"/permission-overrides",
-		`{"granted":["tenant.admin"],"revoked":[]}`)
-	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "grant_exceeds_authority") {
-		t.Fatalf("override escalation: %d %s", rec.Code, rec.Body.String())
-	}
+	// Override escalation is decided by the authority policy inside the command
+	// (authority_commands_test, membership_rank_e2e_test); role edits stay here until A5.
+	var rec *httptest.ResponseRecorder
 	rec = azServe(t, azClaims(p.Roles.Update), "POST", "/api/v1/roles/"+azRole+"/permissions/grant", `{"permission":"identity.users.view"}`)
 	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "grant_exceeds_authority") {
 		t.Fatalf("role grant escalation: %d %s", rec.Code, rec.Body.String())
