@@ -111,7 +111,8 @@ func (a Actor) Rank() Rank {
 
 // holds reports whether the actor has the permission in a tenant it acts on:
 // super users hold everything known; an operator exempt for that tenant holds
-// tenant.admin and everything it implies (never platform-reserved names);
+// everything tenant.admin implies (never platform-reserved names, and never
+// tenant.admin itself, which only the ceiling in mayChangePermissions grants);
 // everyone else holds their own effective set. It is NOT the grant ceiling
 // (see MayChangePermissions): holding tenant.admin does not allow conferring it.
 func (a Actor) holds(name string, tenantID tenant.ID) bool {
@@ -121,7 +122,7 @@ func (a Actor) holds(name string, tenantID tenant.ID) bool {
 	case a.superUser:
 		return true
 	case a.exemptOperatorIn(tenantID):
-		return name == tenantAdminName() || permission.ImpliedByTenantAdmin(name)
+		return permission.ImpliedByTenantAdmin(name)
 	}
 	return a.hasOwn(name)
 }

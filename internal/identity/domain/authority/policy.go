@@ -360,8 +360,9 @@ func (a Actor) mayDecide(req Member, perm string, approving bool) error {
 // CompanyOwner revocation) when no OTHER active owner of the same tenant
 // remains. owners is every current member holding the CompanyOwner role,
 // loaded in the same locked transaction; it is filtered here (IsOwner and
-// IsActive), so an inactive owner, a non-owner, an invalid Member or another
-// tenant's owner never counts as "another owner". Applies to every actor.
+// IsActive; the zero Member sets neither flag), so an inactive owner, a
+// non-owner, an invalid Member or another tenant's owner never counts as
+// "another owner". Applies to every actor.
 func GuardLastOwner(target Member, owners []Member) error {
 	if !target.valid {
 		return ErrNoAuthority
@@ -370,7 +371,7 @@ func GuardLastOwner(target Member, owners []Member) error {
 		return nil
 	}
 	for _, o := range owners {
-		if o.valid && o.owner && o.active && o.id != target.id && sameTenant(o.tenantID, target.tenantID) {
+		if o.owner && o.active && o.id != target.id && sameTenant(o.tenantID, target.tenantID) {
 			return nil
 		}
 	}

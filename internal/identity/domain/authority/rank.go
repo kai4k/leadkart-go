@@ -33,7 +33,7 @@ const (
 // A value outside [0, 99] is no rank at all and reads as the user tier, never owner.
 func (r Rank) Tier() Tier {
 	switch {
-	case r < RankOwner || r > RankNone:
+	case r < RankOwner:
 		return TierUser
 	case r <= RankOwner:
 		return TierOwner
