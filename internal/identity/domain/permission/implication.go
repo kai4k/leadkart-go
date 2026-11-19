@@ -73,3 +73,8 @@ var platformEquivalents = func() map[string][]string {
 func PlatformEquivalents(name string) []string {
 	return slices.Clone(platformEquivalents[name])
 }
+
+// IsRequestable reports whether name may be the subject of a permission-
+// elevation request (ADR 0069 H4): exactly the permissions tenant.admin implies.
+// tenant.admin itself and every platform-reserved name are conferred only by role.
+func IsRequestable(name string) bool { return ImpliedByTenantAdmin(name) }

@@ -2,6 +2,7 @@ package membership_test
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -10,6 +11,7 @@ import (
 	"github.com/leadkart/leadkart-go/internal/common/tenancy"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/role"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
 
@@ -255,4 +257,33 @@ func newMembership(t *testing.T) *membership.Membership {
 		t.Fatalf("newMembership: %v", err)
 	}
 	return m
+}
+
+func TestMembership_CanonicalIDs(t *testing.T) {
+	t.Parallel()
+	const raw = "0190A000-0000-7000-8000-0000000000AA"
+	got, err := membership.ParseID("urn:uuid:" + raw)
+	if err != nil || got != membership.ID(strings.ToLower(raw)) {
+		t.Fatalf("ParseID = %q, %v", got, err)
+	}
+	if _, err := membership.ParseID("nope"); !errors.Is(err, membership.ErrInvalid) {
+		t.Fatalf("non-UUID: %v", err)
+	}
+	m := membership.UnmarshalFromDB(membership.Snapshot{ID: membership.ID("0190a000-0000-7000-8000-000000000001"),
+		PersonID: "0190a000-0000-7000-8000-000000000002", TenantID: "0190a000-0000-7000-8000-000000000003", Status: membership.StatusActive})
+	if err := m.AssignManager(membership.ID(strings.ToUpper(string(m.ID()))), testNow); !errors.Is(err, membership.ErrInvalid) {
+		t.Fatalf("uppercase self-manager must be rejected: %v", err)
+	}
+	rid := "0190a000-0000-7000-8000-0000000000bb"
+	for _, spelling := range []string{rid, strings.ToUpper(rid)} {
+		if err := m.AssignRole(role.ID(spelling), testNow); err != nil {
+			t.Fatalf("AssignRole(%q): %v", spelling, err)
+		}
+	}
+	if got := m.RoleAssignments(); len(got) != 1 || got[0] != role.ID(rid) {
+		t.Fatalf("assignments = %v, want one canonical id", got)
+	}
+	if n := len(m.PullEvents()); n != 1 {
+		t.Fatalf("events = %d, want 1 (spelling must not defeat dedup)", n)
+	}
 }

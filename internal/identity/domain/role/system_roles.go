@@ -13,11 +13,17 @@ package role
 // Hierarchy guidance (lower = higher authority):
 //
 //	Platform.SuperAdmin           — special, runs without hierarchy
-//	Tenant.CompanyOwner            — 0
-//	Tenant.Administrator           — 10
-//	Tenant.SeniorManager           — 20
-//	Tenant.{Office,Sales,Purchase,Dispatch,HR}{Manager,Executive,Administrator}
-//	                               — HierarchyLevelDefault (50)
+//	Tenant.CompanyOwner            — 0 (Owner tier)
+//	Tenant.Administrator,
+//	Tenant.OfficeAdministrator     — 10 (Admin tier)
+//	Tenant.SeniorManager           — 15 (Manager tier; outranks department managers)
+//	Tenant.{Sales,Purchase,Dispatch,HR}Manager
+//	                               — 20 (Manager tier)
+//	Tenant.TeamLead                — 30 (Team Lead tier)
+//	Tenant.{Office,Sales,Purchase,Dispatch,HR}Executive
+//	                               — HierarchyLevelDefault (50, User tier)
+//
+// Tiers and levels: ADR 0069 H1.
 var SystemRoles = struct {
 	Platform struct {
 		SuperAdmin      string
@@ -28,6 +34,7 @@ var SystemRoles = struct {
 		CompanyOwner        string
 		Administrator       string
 		SeniorManager       string
+		TeamLead            string
 		OfficeAdministrator string
 		OfficeExecutive     string
 		SalesManager        string
@@ -53,6 +60,7 @@ var SystemRoles = struct {
 		CompanyOwner        string
 		Administrator       string
 		SeniorManager       string
+		TeamLead            string
 		OfficeAdministrator string
 		OfficeExecutive     string
 		SalesManager        string
@@ -67,6 +75,7 @@ var SystemRoles = struct {
 		CompanyOwner:        "Company Owner",
 		Administrator:       "Administrator",
 		SeniorManager:       "Senior Manager",
+		TeamLead:            "Team Lead",
 		OfficeAdministrator: "Office Administrator",
 		OfficeExecutive:     "Office Executive",
 		SalesManager:        "Sales Manager",

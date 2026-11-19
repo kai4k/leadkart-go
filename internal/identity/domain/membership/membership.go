@@ -29,6 +29,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/leadkart/leadkart-go/internal/common/errs"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/permission"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
@@ -56,6 +58,16 @@ type ID string
 
 // IsZero reports whether the ID is unset.
 func (i ID) IsZero() bool { return i == "" }
+
+// ParseID canonicalises an untrusted membership id (any RFC 4122 spelling) to
+// the lowercase hyphenated form repositories store (ADR 0069, finding 1).
+func ParseID(raw string) (ID, error) {
+	u, err := uuid.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return "", fmt.Errorf("%w: membership id %q is not a UUID", ErrInvalid, raw)
+	}
+	return ID(u.String()), nil
+}
 
 // String returns the underlying UUID string.
 func (i ID) String() string { return string(i) }
@@ -346,9 +358,11 @@ func (m *Membership) Reactivate(now time.Time) error {
 // a doctrine violation per `multi-tenancy.md`. The DB-level composite
 // FK `(membership_id, tenant_id) → (id, tenant_id)` rejects mismatch.
 func (m *Membership) AssignRole(roleID role.ID, now time.Time) error {
-	if roleID.IsZero() {
-		return fmt.Errorf("%w: roleID required", ErrInvalid)
+	canonical, err := role.ParseID(string(roleID))
+	if err != nil {
+		return fmt.Errorf("%w: roleID: %w", ErrInvalid, err)
 	}
+	roleID = canonical
 	if slices.Contains(m.roleAssignments, roleID) {
 		return nil
 	}
@@ -367,9 +381,11 @@ func (m *Membership) AssignRole(roleID role.ID, now time.Time) error {
 // assignment list. Idempotent — revoking a non-assigned role is a
 // no-op (no event).
 func (m *Membership) RevokeRole(roleID role.ID, now time.Time) error {
-	if roleID.IsZero() {
-		return fmt.Errorf("%w: roleID required", ErrInvalid)
+	canonical, err := role.ParseID(string(roleID))
+	if err != nil {
+		return fmt.Errorf("%w: roleID: %w", ErrInvalid, err)
 	}
+	roleID = canonical
 	idx := slices.Index(m.roleAssignments, roleID)
 	if idx < 0 {
 		return nil
@@ -612,7 +628,18 @@ func (m *Membership) UpdateProfile(designation, department, statusMessage string
 // Emits ManagerAssignedEvent on set (with PreviousManager carried for
 // audit), ManagerRemovedEvent on clear.
 func (m *Membership) AssignManager(managerID ID, now time.Time) error {
-	if managerID == m.id {
+	if !managerID.IsZero() {
+		canonical, err := ParseID(string(managerID))
+		if err != nil {
+			return err
+		}
+		managerID = canonical
+	}
+	self, err := ParseID(string(m.id))
+	if err != nil {
+		return err
+	}
+	if managerID == self {
 		return fmt.Errorf("%w: cannot report to self", ErrInvalid)
 	}
 	if m.reportsTo == managerID {

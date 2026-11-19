@@ -216,7 +216,7 @@ func TestRevokeUserRole_NonExistentAssignment_Idempotent(t *testing.T) {
 	err := h.Handle(t.Context(), command.RevokeUserRoleCommand{
 		TenantID:     tenant.ID("33333333-3333-3333-3333-333333333333"),
 		MembershipID: m.ID(),
-		RoleID:       role.ID("not-assigned"),
+		RoleID:       role.ID("0190a000-0000-7000-8000-0000000000ee"),
 	})
 	if err != nil {
 		t.Fatalf("Handle: %v", err)

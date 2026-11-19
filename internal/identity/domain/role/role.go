@@ -19,6 +19,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/leadkart/leadkart-go/internal/common/errs"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/permission"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
@@ -31,6 +33,21 @@ const (
 	HierarchyLevelMin     = 0
 	HierarchyLevelMax     = 99
 	HierarchyLevelNoRole  = 99
+)
+
+// Tier anchors of the rank ladder Owner > Admin > Manager > Team Lead > User
+// (ADR 0069 H1). Tiers are bands; these are the seeded values within them.
+const (
+	// HierarchyLevelOwner is the Owner tier; reserved to system-default roles.
+	HierarchyLevelOwner = 0
+	// HierarchyLevelAdmin anchors the Admin tier (1-10).
+	HierarchyLevelAdmin = 10
+	// HierarchyLevelSeniorManager outranks department managers inside the Manager tier.
+	HierarchyLevelSeniorManager = 15
+	// HierarchyLevelManager anchors the Manager tier (11-20).
+	HierarchyLevelManager = 20
+	// HierarchyLevelTeamLead anchors the Team Lead tier (21-30).
+	HierarchyLevelTeamLead = 30
 )
 
 // Role.Name length bounds. Mirror of the .NET parent's Role.cs
@@ -261,6 +278,22 @@ func (r *Role) ChangeHierarchyLevel(level int) error {
 	}
 	r.hierarchyLevel = level
 	return nil
+}
+
+// IsCompanyOwner reports whether r is the tenant's CompanyOwner system role —
+// the Owner tier anchor (ADR 0069 H1/H6).
+func (r *Role) IsCompanyOwner() bool {
+	return r.isSystemDefault && !r.isSuperAdmin && r.name == SystemRoles.Tenant.CompanyOwner
+}
+
+// ParseID canonicalises an untrusted role id (any RFC 4122 spelling) to the
+// lowercase hyphenated form repositories store (ADR 0069, finding 1).
+func ParseID(raw string) (ID, error) {
+	u, err := uuid.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return "", fmt.Errorf("%w: role id %q is not a UUID", ErrInvalid, raw)
+	}
+	return ID(u.String()), nil
 }
 
 // HasPermission reports whether the role grants `p`. Used by the
