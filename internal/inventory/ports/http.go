@@ -592,13 +592,15 @@ func handleFefoBatches(log *slog.Logger, a app.Application) http.Handler {
 // returns (uuid.Nil, false) on bad input.
 func parsePathUUID(w http.ResponseWriter, r *http.Request, name string) (uuid.UUID, bool) {
 	raw := r.PathValue(name)
-	id, err := uuid.Parse(raw)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, ErrCodeInvalidID,
-			name+" path parameter must be a UUID")
-		return uuid.Nil, false
+	canon, ok := authn.CanonicalID(raw)
+	if ok {
+		if id, err := uuid.Parse(canon); err == nil {
+			return id, true
+		}
 	}
-	return id, true
+	writeError(w, http.StatusBadRequest, ErrCodeInvalidID,
+		name+" path parameter must be a UUID")
+	return uuid.Nil, false
 }
 
 // parsePageSize returns the supplied page_size as int, defaulting to 0

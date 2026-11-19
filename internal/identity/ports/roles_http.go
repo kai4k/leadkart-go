@@ -6,8 +6,6 @@ import (
 	"log/slog"
 	"net/http"
 
-	"github.com/google/uuid"
-
 	"github.com/leadkart/leadkart-go/internal/common/tenancy"
 	"github.com/leadkart/leadkart-go/internal/identity/app"
 	"github.com/leadkart/leadkart-go/internal/identity/app/command"
@@ -90,12 +88,13 @@ func handleCreateRole(log *slog.Logger, a app.Application) http.Handler {
 		}
 		var parent role.ID
 		if req.ParentRoleID != "" {
-			if _, perr := uuid.Parse(req.ParentRoleID); perr != nil {
+			canon, ok := authn.CanonicalID(req.ParentRoleID)
+			if !ok {
 				writeError(w, http.StatusBadRequest, ErrCodeInvalidRoleID,
 					"parent_role_id must be a UUID")
 				return
 			}
-			parent = role.ID(req.ParentRoleID)
+			parent = role.ID(canon)
 		}
 		actor := actorMembershipFromContext(r)
 		out, err := a.Commands.CreateRole.Handle(r.Context(), command.CreateRoleCommand{

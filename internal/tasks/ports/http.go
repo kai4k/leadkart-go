@@ -10,8 +10,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
-
 	"github.com/leadkart/leadkart-go/internal/common/pagination"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/permission"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
@@ -92,12 +90,14 @@ func handleCreateWorkItem(log *slog.Logger, a app.Application) http.Handler {
 			writeError(w, http.StatusBadRequest, errCodeInvalidPriority, err.Error())
 			return
 		}
-		if _, err := uuid.Parse(req.AssignedToMembershipID); err != nil {
+		assignedTo, ok := authn.CanonicalID(req.AssignedToMembershipID)
+		if !ok {
 			writeError(w, http.StatusBadRequest, errCodeInvalidMembershipID, "assigned_to_membership_id must be a UUID")
 			return
 		}
+		var batchID string
 		if req.BatchID != "" {
-			if _, err := uuid.Parse(req.BatchID); err != nil {
+			if batchID, ok = authn.CanonicalID(req.BatchID); !ok {
 				writeError(w, http.StatusBadRequest, errCodeInvalidBody, "batch_id must be a UUID")
 				return
 			}
@@ -112,9 +112,9 @@ func handleCreateWorkItem(log *slog.Logger, a app.Application) http.Handler {
 			Priority:               priority,
 			Title:                  req.Title,
 			Description:            req.Description,
-			AssignedToMembershipID: req.AssignedToMembershipID,
+			AssignedToMembershipID: assignedTo,
 			AssignedByMembershipID: c.MembershipID,
-			BatchID:                req.BatchID,
+			BatchID:                batchID,
 			DueAt:                  req.DueAt,
 		})
 		switch {
@@ -327,13 +327,14 @@ func handleReassignWorkItem(log *slog.Logger, a app.Application) http.Handler {
 			writeError(w, http.StatusBadRequest, errCodeInvalidBody, "request body is not valid JSON")
 			return
 		}
-		if _, err := uuid.Parse(req.NewAssigneeMembershipID); err != nil {
+		newAssignee, ok := authn.CanonicalID(req.NewAssigneeMembershipID)
+		if !ok {
 			writeError(w, http.StatusBadRequest, errCodeInvalidMembershipID, "new_assignee_membership_id must be a UUID")
 			return
 		}
 		err := a.Commands.ReassignWorkItem.Handle(r.Context(), command.ReassignWorkItemCommand{
 			TenantID: tid, WorkItemID: id,
-			NewAssigneeMembershipID:  req.NewAssigneeMembershipID,
+			NewAssigneeMembershipID:  newAssignee,
 			ReassignedByMembershipID: c.MembershipID,
 			Reason:                   req.Reason,
 		})
@@ -423,17 +424,19 @@ func parseListFilter(params url.Values) (workitem.ListFilter, error) {
 		}
 		f.Priority = p
 	}
-	if s := strings.TrimSpace(params.Get("assignee")); s != "" {
-		if _, err := uuid.Parse(s); err != nil {
+	if s := params.Get("assignee"); s != "" {
+		canon, ok := authn.CanonicalID(s)
+		if !ok {
 			return workitem.ListFilter{}, errors.New("assignee must be a UUID")
 		}
-		f.AssignedToMembershipID = s
+		f.AssignedToMembershipID = canon
 	}
-	if s := strings.TrimSpace(params.Get("batch_id")); s != "" {
-		if _, err := uuid.Parse(s); err != nil {
+	if s := params.Get("batch_id"); s != "" {
+		canon, ok := authn.CanonicalID(s)
+		if !ok {
 			return workitem.ListFilter{}, errors.New("batch_id must be a UUID")
 		}
-		f.BatchID = s
+		f.BatchID = canon
 	}
 	if s := strings.TrimSpace(params.Get("due_before")); s != "" {
 		t, err := time.Parse(time.RFC3339, s)

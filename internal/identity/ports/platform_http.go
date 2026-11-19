@@ -8,8 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
-
 	"github.com/leadkart/leadkart-go/internal/common/email"
 	"github.com/leadkart/leadkart-go/internal/identity/app"
 	"github.com/leadkart/leadkart-go/internal/identity/app/command"
@@ -309,7 +307,8 @@ func handleCreateImpersonationSession(log *slog.Logger, a app.Application) http.
 			writeError(w, http.StatusBadRequest, ErrCodeInvalidBody, "request body is not valid JSON")
 			return
 		}
-		if _, err := uuid.Parse(req.TargetTenantID); err != nil {
+		targetTenantID, ok := authn.CanonicalID(req.TargetTenantID)
+		if !ok {
 			writeError(w, http.StatusBadRequest, ErrCodeInvalidTenantID,
 				"target_tenant_id must be a UUID")
 			return
@@ -322,7 +321,7 @@ func handleCreateImpersonationSession(log *slog.Logger, a app.Application) http.
 			command.CreateImpersonationSessionCommand{
 				OperatorID:            c.Subject,
 				OperatorSecurityStamp: c.SecurityStamp, // NEW (Wave 4) — pass operator's stamp into scoped token
-				TargetTenantID:        tenant.ID(req.TargetTenantID),
+				TargetTenantID:        tenant.ID(targetTenantID),
 				Reason:                req.Reason,
 				Duration:              dur,
 			})

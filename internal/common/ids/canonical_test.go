@@ -46,6 +46,14 @@ func TestCanonical(t *testing.T) {
 		"non-hex":                  "0190a000-0000-7000-8000-00000000000g",
 		"braced with whitespace":   "{0190a000-0000-7000-8000-00000000000a} ",
 		"urn prefix with trailing": "urn:uuid:0190a000-0000-7000-8000-00000000000a\n",
+		// 38 characters: uuid.Parse strips the first and last byte without checking for braces.
+		"padded with spaces":      " 0190a000-0000-7000-8000-00000000000a ",
+		"tab and newline":         "\t0190a000-0000-7000-8000-00000000000a\n",
+		"arbitrary wrapper bytes": "x0190a000-0000-7000-8000-00000000000ay",
+		"parentheses":             "(0190a000-0000-7000-8000-00000000000a)",
+		"opening brace only":      "{0190a000-0000-7000-8000-00000000000a ",
+		"closing brace only":      " 0190a000-0000-7000-8000-00000000000a}",
+		"mismatched braces":       "{0190a000-0000-7000-8000-00000000000a)",
 	}
 	for name, in := range reject {
 		t.Run("rejects "+name, func(t *testing.T) {

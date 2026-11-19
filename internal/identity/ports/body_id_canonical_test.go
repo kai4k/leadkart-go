@@ -19,6 +19,7 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/domain/rolehierarchy"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/rolehierarchy/rolehierarchytest"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
+	"github.com/leadkart/leadkart-go/internal/identity/ports/authn"
 )
 
 // Ids supplied in a request BODY must reach the command in canonical form,
@@ -181,5 +182,53 @@ func TestBodyID_ParentRoleIDReachesCommandCanonical(t *testing.T) {
 				t.Errorf("ParentRoleID = %q, want canonical %q", got, bodyRoleB)
 			}
 		})
+	}
+}
+
+func TestBodyID_CreateRoleParentReachesCommandCanonical(t *testing.T) {
+	t.Parallel()
+	const newRole = "0190a000-0000-7000-8000-0000000000f2"
+	for name, spelled := range idSpellings(bodyRoleB) {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			roles, edges := roletest.NewFakeRepository(), rolehierarchytest.NewFakeRepository()
+			var a app.Application
+			a.Commands.CreateRole = command.NewCreateRoleHandler(roles, edges, inlineUoW{}, func() time.Time { return bodyNow },
+				func() role.ID { return newRole }, func() rolehierarchy.ID { return "0190a000-0000-7000-8000-0000000000f1" })
+			rec := azServeApp(t, a, azClaims(permission.IdentityPermissions.Roles.Create), "POST", "/api/v1/roles",
+				`{"name":"Field Rep","hierarchy_level":50,"parent_role_id":"`+spelled+`"}`)
+			if rec.Code != http.StatusCreated {
+				t.Fatalf("status %d %s", rec.Code, rec.Body.String())
+			}
+			e, err := edges.GetActiveByChild(t.Context(), tenant.ID(azTenant), role.ID(newRole))
+			if err != nil {
+				t.Fatalf("GetActiveByChild: %v", err)
+			}
+			if got := string(e.ParentRoleID()); got != bodyRoleB {
+				t.Errorf("ParentRoleID = %q, want canonical %q", got, bodyRoleB)
+			}
+		})
+	}
+}
+
+func TestBodyID_PaddedAndNilBodyIDsAreRejected(t *testing.T) {
+	t.Parallel()
+	p := permission.IdentityPermissions
+	op := azClaims(p.Platform.TenantsManage)
+	op.TenantSlug, op.IsPlatform = authn.PlatformTenantSlug, true
+	for name, bad := range map[string]string{
+		"leading space":  " " + bodyRoleB,
+		"trailing space": bodyRoleB + " ",
+		"wrapped":        " " + bodyRoleB + " ",
+		"nil uuid":       "00000000-0000-0000-0000-000000000000",
+	} {
+		rec := azServe(t, azClaims(p.Roles.Create), "POST", "/api/v1/roles", `{"name":"x","hierarchy_level":50,"parent_role_id":"`+bad+`"}`)
+		if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "invalid_role_id") {
+			t.Errorf("create role, parent %s: %d %s, want 400 invalid_role_id", name, rec.Code, rec.Body.String())
+		}
+		rec = azServe(t, op, "POST", "/api/v1/platform/impersonation/sessions", `{"target_tenant_id":"`+bad+`","reason":"support ticket 123"}`)
+		if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "invalid_tenant_id") {
+			t.Errorf("impersonation, target %s: %d %s, want 400 invalid_tenant_id", name, rec.Code, rec.Body.String())
+		}
 	}
 }

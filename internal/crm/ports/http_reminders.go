@@ -8,8 +8,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/google/uuid"
-
 	"github.com/leadkart/leadkart-go/internal/common/pagination"
 	"github.com/leadkart/leadkart-go/internal/crm/app"
 	"github.com/leadkart/leadkart-go/internal/crm/app/command"
@@ -45,7 +43,8 @@ func handleCreateReminder(log *slog.Logger, a app.Application) http.Handler {
 			writeError(w, http.StatusBadRequest, errCodeInvalidBody, "request body is not valid JSON")
 			return
 		}
-		if _, err := uuid.Parse(req.AssignedToMembershipID); err != nil {
+		assignedTo, ok := authn.CanonicalID(req.AssignedToMembershipID)
+		if !ok {
 			writeError(w, http.StatusBadRequest, errCodeInvalidMembershipID, "assigned_to_membership_id must be a UUID")
 			return
 		}
@@ -56,7 +55,7 @@ func handleCreateReminder(log *slog.Logger, a app.Application) http.Handler {
 		out, err := a.Commands.CreateReminder.Handle(r.Context(), command.CreateReminderCommand{
 			TenantID:               tid,
 			LeadID:                 leadID,
-			AssignedToMembershipID: req.AssignedToMembershipID,
+			AssignedToMembershipID: assignedTo,
 			CreatedByMembershipID:  c.MembershipID,
 			Type:                   reminder.TypeManual,
 			DueAt:                  req.DueAt,
@@ -116,19 +115,21 @@ func handleListReminders(log *slog.Logger, a app.Application) http.Handler {
 			}
 			filter.Type = parsed
 		}
-		if assignee := strings.TrimSpace(params.Get("assignee")); assignee != "" {
-			if _, perr := uuid.Parse(assignee); perr != nil {
+		if assignee := params.Get("assignee"); assignee != "" {
+			canon, ok := authn.CanonicalID(assignee)
+			if !ok {
 				writeError(w, http.StatusBadRequest, errCodeInvalidMembershipID, "assignee must be a UUID")
 				return
 			}
-			filter.AssigneeMembershipID = assignee
+			filter.AssigneeMembershipID = canon
 		}
-		if leadParam := strings.TrimSpace(params.Get("lead_id")); leadParam != "" {
-			if _, perr := uuid.Parse(leadParam); perr != nil {
+		if leadParam := params.Get("lead_id"); leadParam != "" {
+			canon, ok := authn.CanonicalID(leadParam)
+			if !ok {
 				writeError(w, http.StatusBadRequest, errCodeInvalidLeadID, "lead_id must be a UUID")
 				return
 			}
-			filter.LeadID = crmlead.ID(leadParam)
+			filter.LeadID = crmlead.ID(canon)
 		}
 
 		selfFilter := ""

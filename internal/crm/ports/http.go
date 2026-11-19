@@ -10,8 +10,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/google/uuid"
-
 	"github.com/leadkart/leadkart-go/internal/common/pagination"
 	"github.com/leadkart/leadkart-go/internal/crm/app"
 	"github.com/leadkart/leadkart-go/internal/crm/app/command"
@@ -209,12 +207,13 @@ func handleAssignLead(log *slog.Logger, a app.Application) http.Handler {
 			writeError(w, http.StatusBadRequest, errCodeInvalidBody, "request body is not valid JSON")
 			return
 		}
-		if _, err := uuid.Parse(req.AssigneeMembershipID); err != nil {
+		assignee, ok := authn.CanonicalID(req.AssigneeMembershipID)
+		if !ok {
 			writeError(w, http.StatusBadRequest, errCodeInvalidMembershipID, "assignee_membership_id must be a UUID")
 			return
 		}
 		out, err := a.Commands.AssignLead.Handle(r.Context(), command.AssignLeadCommand{
-			TenantID: tid, LeadID: id, AssigneeMembershipID: req.AssigneeMembershipID,
+			TenantID: tid, LeadID: id, AssigneeMembershipID: assignee,
 			AssignedByMembershipID: c.MembershipID, Reason: req.Reason,
 		})
 		switch {
@@ -444,11 +443,12 @@ func parseListFilter(params url.Values) (crmlead.ListFilter, error) {
 		}
 		f.Temperature = temp
 	}
-	if s := strings.TrimSpace(params.Get("assignee")); s != "" {
-		if _, err := uuid.Parse(s); err != nil {
+	if s := params.Get("assignee"); s != "" {
+		canon, ok := authn.CanonicalID(s)
+		if !ok {
 			return crmlead.ListFilter{}, errors.New("assignee must be a UUID")
 		}
-		f.AssigneeMembershipID = s
+		f.AssigneeMembershipID = canon
 	}
 	if pr := params["product_range"]; len(pr) > 0 {
 		f.ProductRanges = filterNonEmpty(pr)

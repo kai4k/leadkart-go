@@ -31,6 +31,12 @@ var ErrInvalidID = errs.New(errs.KindInvalidInput, "ids", "invalid id")
 // It REJECTS the empty string, the nil UUID, and any leading, trailing or
 // internal whitespace (no TrimSpace: a leading space, a trailing newline or NBSP+id is not an id).
 func Canonical(raw string) (string, error) {
+	// uuid.Parse drops the first and last byte of any 38-character input
+	// without checking they are braces, so " <uuid> " would parse. The braced
+	// form is the only valid 38-character spelling.
+	if len(raw) == 38 && (raw[0] != '{' || raw[37] != '}') {
+		return "", ErrInvalidID
+	}
 	u, err := uuid.Parse(raw)
 	if err != nil || u == uuid.Nil {
 		return "", ErrInvalidID

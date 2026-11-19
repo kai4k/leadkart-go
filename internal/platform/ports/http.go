@@ -9,8 +9,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/google/uuid"
-
 	"github.com/leadkart/leadkart-go/internal/common/pagination"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/permission"
 	"github.com/leadkart/leadkart-go/internal/identity/ports/authn"
@@ -458,7 +456,8 @@ func handleTopupLeadCredits(log *slog.Logger, a app.Application) http.Handler {
 			writeError(w, http.StatusBadRequest, ErrCodeInvalidBody, "request body is not valid JSON")
 			return
 		}
-		if _, err := uuid.Parse(req.TenantID); err != nil {
+		tenantID, ok := authn.CanonicalID(req.TenantID)
+		if !ok {
 			writeError(w, http.StatusBadRequest, ErrCodeInvalidTenantID, "tenant_id must be a UUID")
 			return
 		}
@@ -478,7 +477,7 @@ func handleTopupLeadCredits(log *slog.Logger, a app.Application) http.Handler {
 		}
 
 		out, err := a.Commands.TopupLeadCredits.Handle(r.Context(), command.TopupLeadCreditsCommand{
-			TenantID:   leadcredit.TenantID(req.TenantID),
+			TenantID:   leadcredit.TenantID(tenantID),
 			Delta:      req.Delta,
 			Reason:     req.Reason,
 			AdjustedBy: leadcredit.MembershipID(membershipID),
@@ -489,7 +488,7 @@ func handleTopupLeadCredits(log *slog.Logger, a app.Application) http.Handler {
 			return
 		}
 		writeJSON(w, http.StatusOK, TopupLeadCreditsResponse{
-			TenantID:   req.TenantID,
+			TenantID:   tenantID,
 			NewBalance: out.NewBalance,
 		})
 	})
