@@ -108,12 +108,12 @@ WITH spec(name, old_level, new_level, old_perms, add_perms) AS (
     ('Dispatch Executive', 50, 50,
      '["tasks.work_items.read","tasks.work_items.manage","dispatch.consignment_notes.read","dispatch.consignment_notes.manage","notifications.inbox.read","notifications.inbox.manage"]'::jsonb,
      '["identity.meta.request_permission_elevation"]'::jsonb),
-    -- HR Manager does not get identity.users.update yet: PUT /users/{id}/manager has
-    -- no rank check until the authority wiring lands (Task A4), and that permission
-    -- would let an HR Manager appoint themselves manager of anyone. A4 adds it back.
+    -- HR Manager keeps identity.users.update (reporting lines): the manager
+    -- commands decide through the authority policy (rank, ADR 0069 H4), so the
+    -- permission no longer lets an HR Manager appoint itself over a peer or senior.
     ('HR Manager', 50, 20,
      '["tasks.work_items.read","tasks.work_items.read_all","tasks.work_items.manage","tasks.work_items.reassign","notifications.inbox.read","notifications.inbox.manage"]'::jsonb,
-     '["identity.users.view","identity.roles.view","identity.roles.approve","identity.meta.request_permission_elevation"]'::jsonb),
+     '["identity.users.view","identity.roles.view","identity.roles.approve","identity.users.update","identity.meta.request_permission_elevation"]'::jsonb),
     ('HR Executive', 50, 50,
      '["tasks.work_items.read","tasks.work_items.manage","notifications.inbox.read","notifications.inbox.manage"]'::jsonb,
      '["identity.meta.request_permission_elevation"]'::jsonb)

@@ -85,7 +85,7 @@ func TestMigration_IdentityRoleTiers_RealisticPreState(t *testing.T) {
 		assertRoleHas(ctx, t, db, w.alpha, "Senior Manager", 15, []string{"identity.roles.approve", "crm.leads.read_all"}, nil)
 		assertRoleHas(ctx, t, db, w.alpha, "Sales Manager", 20, []string{"crm.leads.read_all", "identity.roles.approve", "identity.meta.request_permission_elevation"}, nil)
 		assertRoleHas(ctx, t, db, w.alpha, "Purchase Manager", 20, []string{"identity.roles.approve"}, nil)
-		assertRoleHas(ctx, t, db, w.alpha, "HR Manager", 20, []string{"identity.roles.approve"}, []string{"identity.users.update"})
+		assertRoleHas(ctx, t, db, w.alpha, "HR Manager", 20, []string{"identity.roles.approve", "identity.users.update"}, nil)
 		assertRoleHas(ctx, t, db, w.alpha, "Sales Executive", 50, []string{"crm.leads.read", "crm.leads.manage"}, nil)
 		assertRoleHas(ctx, t, db, w.alpha, "Company Owner", 0, []string{"tenant.admin"}, nil)
 		tl := assertRoleHas(ctx, t, db, w.alpha, "Team Lead", 30, []string{"tasks.work_items.reassign", "identity.roles.approve"}, []string{"crm.leads.read_all"})

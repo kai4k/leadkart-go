@@ -60,7 +60,7 @@ func (f e2eFixture) approveRequest(t *testing.T, token, requestID string) httpRe
 
 // TestE2E_PermissionRequest_ManagerSelfAppointmentChainIsClosed walks the
 // tenant-takeover chain: an HR Manager appoints themselves manager of a
-// colluding executive, the colluder requests tenant.admin, the HR Manager
+// colluding executive (allowed: they outrank them), the colluder requests tenant.admin, the HR Manager
 // approves, and the colluder assigns Company Owner to the HR Manager. Every
 // link that still works is reported; the chain must die at the request.
 func TestE2E_PermissionRequest_ManagerSelfAppointmentChainIsClosed(t *testing.T) {
@@ -72,18 +72,14 @@ func TestE2E_PermissionRequest_ManagerSelfAppointmentChainIsClosed(t *testing.T)
 	f.assignRole(t, owner.AccessToken, colluder.membershipID, f.roleIDByName(t, owner.AccessToken, role.SystemRoles.Tenant.SalesExecutive))
 	hrTok := f.loginToken(t, hr.email, hr.password)
 
-	// Link 1: the HR Manager makes themselves the colluder's manager. The
-	// seeded HR Manager must not hold identity.users.update any more.
-	armed := f.authedJSON(t, http.MethodPut, "/api/v1/users/"+colluder.membershipID+"/manager", hrTok,
-		ports.AssignUserManagerRequest{ManagerID: hr.membershipID})
-	if armed.status != http.StatusForbidden {
-		t.Errorf("link 1: HR Manager set a manager: %d %s, want 403", armed.status, armed.body)
-	}
-	// Whatever link 1 did, make the HR Manager the colluder's manager as the
-	// owner would, so the remaining links are exercised on their own.
-	if r := f.authedJSON(t, http.MethodPut, "/api/v1/users/"+colluder.membershipID+"/manager", owner.AccessToken,
+	// Link 1: the HR Manager makes themselves the manager of a member they
+	// outrank. That is ordinary team organisation and is allowed (the HR Manager
+	// holds identity.users.update again, ADR 0069); the chain must die later, at
+	// the request. The cases an HR Manager must NOT be able to do are in
+	// TestE2E_HrManager_CannotAppointOverPeersOrTakeReportsFromEquals.
+	if r := f.authedJSON(t, http.MethodPut, "/api/v1/users/"+colluder.membershipID+"/manager", hrTok,
 		ports.AssignUserManagerRequest{ManagerID: hr.membershipID}); r.status != http.StatusNoContent {
-		t.Fatalf("owner sets manager: %d %s", r.status, r.body)
+		t.Fatalf("link 1: HR Manager sets themselves manager of an executive: %d %s, want 204", r.status, r.body)
 	}
 
 	// Link 2: the colluder asks for tenant.admin.
@@ -251,5 +247,56 @@ func TestE2E_PermissionRequest_PlatformTenantMembersCannotSelfElevate(t *testing
 	}
 	if ap := f.approveRequest(t, opTok, reqID); ap.status != http.StatusNoContent {
 		t.Errorf("operator with platform.tenants.view approves: %d %s, want 204", ap.status, ap.body)
+	}
+}
+
+// TestE2E_HrManager_CannotAppointOverPeersOrTakeReportsFromEquals: with
+// identity.users.update back in the HR Manager seed, the manager commands are
+// what keep the permission safe. An HR Manager cannot appoint themselves
+// manager of someone they do not outrank (a peer manager, an Administrator),
+// nor take a report from a manager of equal or higher rank, nor clear such a link.
+func TestE2E_HrManager_CannotAppointOverPeersOrTakeReportsFromEquals(t *testing.T) {
+	f := newE2EFixtureAt(t, time.Now)
+	owner := f.registerAndLogin(t, "hrrank")
+	roleID := func(name string) string { return f.roleIDByName(t, owner.AccessToken, name) }
+	hr := f.createMember(t, owner, "hr")
+	f.assignRole(t, owner.AccessToken, hr.membershipID, roleID(role.SystemRoles.Tenant.HrManager))
+	peer := f.createMember(t, owner, "peer")
+	f.assignRole(t, owner.AccessToken, peer.membershipID, roleID(role.SystemRoles.Tenant.SalesManager))
+	adminM := f.createMember(t, owner, "admin")
+	f.assignRole(t, owner.AccessToken, adminM.membershipID, roleID(role.SystemRoles.Tenant.Administrator))
+	senior := f.createMember(t, owner, "senior")
+	f.assignRole(t, owner.AccessToken, senior.membershipID, roleID(role.SystemRoles.Tenant.SeniorManager))
+	exec := f.createMember(t, owner, "exec")
+	f.assignRole(t, owner.AccessToken, exec.membershipID, roleID(role.SystemRoles.Tenant.SalesExecutive))
+	hrTok := f.loginToken(t, hr.email, hr.password)
+	put := func(sub, mgr string) httpResp {
+		return f.authedJSON(t, http.MethodPut, "/api/v1/users/"+sub+"/manager", hrTok, ports.AssignUserManagerRequest{ManagerID: mgr})
+	}
+	for name, sub := range map[string]string{"a peer manager": peer.membershipID, "an Administrator": adminM.membershipID, "a Senior Manager": senior.membershipID} {
+		r := put(sub, hr.membershipID)
+		if r.status != http.StatusForbidden || decodeError(t, r.body).Error != "insufficient_rank" {
+			t.Errorf("HR Manager appoints themselves manager of %s: %d %s, want 403 insufficient_rank", name, r.status, r.body)
+		}
+	}
+	// an executive reporting to an equal-rank (peer) and to a more senior manager
+	execPeer := f.createMember(t, owner, "exec-peer")
+	f.assignRole(t, owner.AccessToken, execPeer.membershipID, roleID(role.SystemRoles.Tenant.SalesExecutive))
+	for sub, mgr := range map[string]string{exec.membershipID: peer.membershipID, execPeer.membershipID: senior.membershipID} {
+		if r := f.authedJSON(t, http.MethodPut, "/api/v1/users/"+sub+"/manager", owner.AccessToken, ports.AssignUserManagerRequest{ManagerID: mgr}); r.status != http.StatusNoContent {
+			t.Fatalf("owner links %s: %d %s", sub, r.status, r.body)
+		}
+		if r := put(sub, hr.membershipID); r.status != http.StatusForbidden || decodeError(t, r.body).Error != "insufficient_rank" {
+			t.Errorf("HR Manager takes a report from an equal or senior manager: %d %s, want 403 insufficient_rank", r.status, r.body)
+		}
+		if r := f.authedJSON(t, http.MethodDelete, "/api/v1/users/"+sub+"/manager", hrTok, nil); r.status != http.StatusForbidden || decodeError(t, r.body).Error != "insufficient_rank" {
+			t.Errorf("HR Manager clears an equal or senior manager's link: %d %s, want 403 insufficient_rank", r.status, r.body)
+		}
+	}
+	// the safe case still works: an unmanaged executive can be taken into the HR team
+	free := f.createMember(t, owner, "exec-free")
+	f.assignRole(t, owner.AccessToken, free.membershipID, roleID(role.SystemRoles.Tenant.SalesExecutive))
+	if r := put(free.membershipID, hr.membershipID); r.status != http.StatusNoContent {
+		t.Errorf("HR Manager takes an unmanaged executive: %d %s, want 204", r.status, r.body)
 	}
 }

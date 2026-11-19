@@ -63,8 +63,8 @@ type RoleSpec struct {
 //     can see the people and roles they approve for; plus their daily work:
 //     Senior and Sales managers get the full CRM lead set, Purchase the
 //     inventory write set (ADR 0061 amendment 1), Dispatch the consignment and
-//     order-read set, HR the directory and approval set only (identity.users.update
-//     returns with the manager-assignment rank check, Task A4), Team Lead
+//     order-read set, HR the directory and approval set plus identity.users.update
+//     (reporting lines, rank-gated by the authority policy), Team Lead
 //     crm.leads.{read,manage} and the tasks it hands out
 //   - Sales Executive      → crm.leads.{read,manage} on top of quotes and orders
 //   - every non-owner role → identity.meta.request_permission_elevation
@@ -173,12 +173,11 @@ func DefaultRoleCatalog() []RoleSpec {
 		{
 			Name:           role.SystemRoles.Tenant.HrManager,
 			HierarchyLevel: role.HierarchyLevelManager,
-			// identity.users.update (reporting lines) is deliberately absent: it gates
-			// PUT /users/{id}/manager, which has no rank check until the authority
-			// wiring lands (Task A4). Held now, an HR Manager could appoint themselves
-			// manager of anyone and approve that person's elevation requests. A4 adds
-			// it back together with the check.
-			Permissions: slices.Concat(tasksManager, directory, approver),
+			// identity.users.update (reporting lines) gates PUT/DELETE /users/{id}/manager.
+			// Those commands decide through the authority policy (ADR 0069): an HR
+			// Manager can link or unlink only members it outranks, and cannot appoint
+			// itself over a peer or senior or take a report from an equal-rank manager.
+			Permissions: slices.Concat(tasksManager, directory, approver, []string{p.Users.Update}),
 		},
 		{
 			Name:           role.SystemRoles.Tenant.TeamLead,
