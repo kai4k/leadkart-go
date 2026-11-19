@@ -3,6 +3,8 @@ package authn_test
 import (
 	"bytes"
 	"context"
+	"github.com/leadkart/leadkart-go/internal/common/actclaim"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -274,5 +276,42 @@ func TestEffectiveTenantID_FailsClosedWithoutBoundTenant(t *testing.T) {
 	}
 	if id, ok := authn.EffectiveTenantID(tenancy.WithID(t.Context(), tenancy.ID(tenantB))); !ok || id != tenantB {
 		t.Fatalf("bound tenant is returned: %q %v", id, ok)
+	}
+}
+
+// I4: an accepted operator scope stamps the act claim on ctx so every
+// outbox / audit row written by the request carries act_operator_id; nothing
+// is stamped when the request stays in the home tenant or the header is ignored.
+func TestTenantScopePolicy_ActClaimOnScopedRequests(t *testing.T) {
+	t.Parallel()
+	const operatorID = "01999999-aaaa-7000-8000-aaaaaaaaaaaa" // withFreshness default subject
+	probe := func(t *testing.T, c *jwt.Claims, headers ...string) (actclaim.Claim, bool) {
+		t.Helper()
+		var got actclaim.Claim
+		var ok bool
+		ver := &fakeVerifier{claims: withFreshness(c)}
+		h := authn.TenantScope(activeTenants().Lookup, slog.New(slog.NewTextHandler(io.Discard, nil)))(
+			authn.RequireFreshStamp(ver, alwaysFresh{})(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+				got, ok = actclaim.FromContext(r.Context())
+			})))
+		r := httptest.NewRequestWithContext(t.Context(), "POST", "/api/v1/users", nil)
+		r.Header.Set("Authorization", "Bearer tok")
+		for _, hv := range headers {
+			r.Header.Add(authn.TenantScopeHeader, hv)
+		}
+		h.ServeHTTP(httptest.NewRecorder(), r)
+		return got, ok
+	}
+	if got, ok := probe(t, operatorClaims(), tenantB); !ok || got.OperatorID != operatorID || got.Reason != authn.ScopeActReason || got.SessionID != "" {
+		t.Fatalf("scoped operator must carry the act claim: %+v %v", got, ok)
+	}
+	if _, ok := probe(t, operatorClaims()); ok {
+		t.Fatal("no header: no act claim")
+	}
+	if _, ok := probe(t, operatorClaims(), tenantA); ok {
+		t.Fatal("header naming the home tenant: no act claim")
+	}
+	if _, ok := probe(t, &jwt.Claims{TenantID: tenantA, TenantSlug: "acme"}, tenantB); ok {
+		t.Fatal("tenant member header is ignored: no act claim")
 	}
 }

@@ -6,12 +6,19 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/leadkart/leadkart-go/internal/common/actclaim"
 	"github.com/leadkart/leadkart-go/internal/common/tenancy"
 	"github.com/leadkart/leadkart-go/internal/identity/app/jwt"
 )
 
 // TenantScopeHeader is the ADR 0039 operator scope override header.
 const TenantScopeHeader = "X-Tenant-Id"
+
+// ScopeActReason is the act-claim reason stamped on every request an operator
+// runs in a foreign tenant through the header. With the operator person id as
+// act_operator_id it makes the outbox and audit rows of a scoped write durably
+// attributable (ADR 0056), where the INFO log line alone is not.
+const ScopeActReason = "tenant-via-header"
 
 const (
 	errCodeInvalidTenantScope      = "invalid_tenant_scope"
@@ -222,7 +229,9 @@ func applyScope(w http.ResponseWriter, r *http.Request, c *jwt.Claims) (*http.Re
 		"scope_mode", "tenant-via-header", "effective_tenant_id", id,
 		"caller_tenant_id", c.TenantID, "operator_person_id", c.Subject,
 		"method", r.Method, "path", r.URL.Path)
-	return r.WithContext(tenancy.WithID(r.Context(), tenancy.ID(id))), true
+	ctx := tenancy.WithID(r.Context(), tenancy.ID(id))
+	ctx = actclaim.WithContext(ctx, actclaim.Claim{OperatorID: c.Subject, Reason: ScopeActReason})
+	return r.WithContext(ctx), true
 }
 
 func isReadMethod(m string) bool { return m == http.MethodGet || m == http.MethodHead }
@@ -245,8 +254,14 @@ func EffectiveTenantID(ctx context.Context) (string, bool) {
 // that carry a (membership_id, tenant_id) composite FK, or "" when the
 // request is operator-scoped into a foreign tenant: the operator's
 // membership lives in the platform tenant, so stamping it into the scoped
-// tenant's rows would violate the FK. Provenance for scoped writes is the
-// "operator tenant scope" audit log line (ADR 0039).
+// tenant's rows would violate the FK. Durable provenance for scoped writes is the
+// act claim (act_operator_id on the outbox / audit rows, see [ScopeActReason])
+// plus the "operator tenant scope" INFO log line (ADR 0039, ADR 0056).
+//
+// This is the ONE actor-membership policy: modules whose domain requires a
+// non-empty actor on every mutation (crm, orders, tasks, dispatch, inventory)
+// cannot adopt it without a product decision on what to record; see the
+// scope-fix report.
 func ActorMembershipID(ctx context.Context) string {
 	c, ok := ClaimsFromContext(ctx)
 	if !ok {

@@ -10,6 +10,9 @@ package main
 
 import (
 	"encoding/json"
+	"github.com/leadkart/leadkart-go/internal/common/ids"
+	"github.com/leadkart/leadkart-go/internal/common/messaging"
+	"github.com/leadkart/leadkart-go/internal/common/messaging/messagingtest"
 	"net/http"
 	"testing"
 
@@ -156,5 +159,53 @@ func TestE2E_TenantScope_LifecycleConflictAndSuspendedTenant(t *testing.T) {
 	}
 	if r := f.doWithHeaders(t, http.MethodPost, "/api/v1/roles", op, ports.CreateRoleRequest{Name: "Fine", HierarchyLevel: 50}, scopeHdr(b.TenantID)); r.status != http.StatusCreated {
 		t.Errorf("scoped write after activation: %d %s", r.status, r.body)
+	}
+}
+
+// I4: a scoped operator write leaves a durable trail: the outbox row carries
+// act_operator_id = the operator's person id, act_reason, and tenant_id = the
+// scoped tenant. A tenant user's own write (header ignored) carries none.
+func TestE2E_TenantScope_ScopedWriteCarriesOperatorAttribution(t *testing.T) {
+	f := newE2EFixture(t)
+	b := f.registerAndLogin(t, "scopeattr")
+	operatorID := ids.NewV7().String()
+	op := mintOperatorJWT(t, f.Issuer, f.persons, operatorID, nil, true)
+
+	r := f.doWithHeaders(t, http.MethodPost, "/api/v1/roles", op, ports.CreateRoleRequest{Name: "Attributed Role", HierarchyLevel: 50}, scopeHdr(b.TenantID))
+	if r.status != http.StatusCreated {
+		t.Fatalf("scoped create role: %d %s", r.status, r.body)
+	}
+	var scoped []messagingtest.OutboxRow
+	for _, row := range messagingtest.DrainOutbox(t.Context(), t, f.Pool) {
+		if row.Message.Metadata.Get(messaging.HeaderTenantID) == b.TenantID && row.Message.Metadata.Get(messaging.HeaderActOperatorID) != "" {
+			scoped = append(scoped, row)
+		}
+	}
+	if len(scoped) == 0 {
+		t.Fatal("scoped write must leave an attributed outbox row")
+	}
+	for _, row := range scoped {
+		if got := row.Message.Metadata.Get(messaging.HeaderActOperatorID); got != operatorID {
+			t.Errorf("act_operator_id = %s, want %s", got, operatorID)
+		}
+		if got := row.Message.Metadata.Get(messaging.HeaderActReason); got != "tenant-via-header" {
+			t.Errorf("act_reason = %s", got)
+		}
+	}
+	scopedCount := len(scoped)
+
+	// Control: the tenant admin's own role creation (header ignored) adds no
+	// act_operator_id row.
+	if r := f.doWithHeaders(t, http.MethodPost, "/api/v1/roles", b.AccessToken, ports.CreateRoleRequest{Name: "Own Role", HierarchyLevel: 40}, scopeHdr(unknownTenantID)); r.status != http.StatusCreated {
+		t.Fatalf("own create role: %d %s", r.status, r.body)
+	}
+	attributed := 0
+	for _, row := range messagingtest.DrainOutbox(t.Context(), t, f.Pool) {
+		if row.Message.Metadata.Get(messaging.HeaderTenantID) == b.TenantID && row.Message.Metadata.Get(messaging.HeaderActOperatorID) != "" {
+			attributed++
+		}
+	}
+	if attributed != scopedCount {
+		t.Errorf("a tenant user's own write must not carry act_operator_id (%d attributed rows, want %d)", attributed, scopedCount)
 	}
 }
