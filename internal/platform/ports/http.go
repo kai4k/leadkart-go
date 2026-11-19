@@ -96,8 +96,10 @@ func AddRoutes(
 	// LeadCredits read — held by every tenant role and Platform.
 	read := authn.RequirePermission(verifier, stampValidator,
 		permission.IdentityPermissions.PlatformLeadCredits.Read)
+	// Reads the SCOPED tenant's wallet: an explicit marker, because the
+	// /platform/ group is otherwise ignored by the central scope table.
 	mux.Handle("GET /api/v1/platform/lead-credits/balance",
-		read(handleGetLeadCreditBalance(log, a)))
+		authn.HonourTenantScope(read(handleGetLeadCreditBalance(log, a))))
 }
 
 // ----- Handlers ------------------------------------------------------------

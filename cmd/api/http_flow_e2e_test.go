@@ -292,7 +292,7 @@ func startWiredPostgresForHTTP(t *testing.T) *pgxpool.Pool {
 		`CREATE ROLE leadkart_app LOGIN PASSWORD 'leadkart_app_pw' NOSUPERUSER NOINHERIT NOCREATEROLE NOCREATEDB`,
 		// newServer wires EVERY module, so the app role needs every module
 		// schema (mirrors production provisioning + the pgtest harness).
-		`GRANT USAGE ON SCHEMA app, common, identity, platform, crm, inventory, tasks, dispatch, orders TO leadkart_app`,
+		`GRANT USAGE ON SCHEMA app, common, identity, platform, crm, inventory, tasks, dispatch, orders, notifications TO leadkart_app`,
 		// `common` holds the shared watermill-sql outbox relay that every
 		// module publishes through (ADR 0064/0067). Its "offset" BIGSERIAL
 		// needs sequence USAGE in addition to table DML — GRANT ON ALL TABLES
@@ -306,6 +306,7 @@ func startWiredPostgresForHTTP(t *testing.T) *pgxpool.Pool {
 		`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA tasks TO leadkart_app`,
 		`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA dispatch TO leadkart_app`,
 		`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA orders TO leadkart_app`,
+		`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA notifications TO leadkart_app`,
 		`GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA app TO leadkart_app`,
 	} {
 		if _, err := gooseDB.ExecContext(ctx, s); err != nil {

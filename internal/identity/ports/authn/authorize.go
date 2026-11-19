@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/leadkart/leadkart-go/internal/common/actclaim"
 	"github.com/leadkart/leadkart-go/internal/common/tenancy"
 	"github.com/leadkart/leadkart-go/internal/identity/app/jwt"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/permission"
@@ -145,7 +146,7 @@ func RequireTenantPermission(verifier Verifier, validator StampValidator, pathVa
 			}
 			for _, p := range permNames {
 				if satisfiesIn(c, tenancy.ID(urlTenant), p) {
-					next.ServeHTTP(w, bindTenant(r, urlTenant))
+					next.ServeHTTP(w, bindTenant(r, c, urlTenant))
 					return
 				}
 			}
@@ -226,7 +227,16 @@ func DenySelfTarget(pathVar string) func(http.Handler) http.Handler {
 }
 
 // bindTenant returns r with the tenancy context re-bound to the (canonical)
-// path tenant a gate has just authorised the caller for.
-func bindTenant(r *http.Request, canonicalTenant string) *http.Request {
-	return r.WithContext(tenancy.WithID(r.Context(), tenancy.ID(canonicalTenant)))
+// path tenant a gate has just authorised the caller for. An anchored operator
+// acting in a foreign tenant leaves the same durable attribution (act claim)
+// whether the tenant came from X-Tenant-Id or from the URL alone; a claim the
+// header scope already set is kept.
+func bindTenant(r *http.Request, c *jwt.Claims, canonicalTenant string) *http.Request {
+	ctx := tenancy.WithID(r.Context(), tenancy.ID(canonicalTenant))
+	if IsPlatformOperator(c) && !sameID(c.TenantID, canonicalTenant) {
+		if _, has := actclaim.FromContext(ctx); !has {
+			ctx = actclaim.WithContext(ctx, actclaim.Claim{OperatorID: c.Subject, Reason: ScopeActReasonPath})
+		}
+	}
+	return r.WithContext(ctx)
 }

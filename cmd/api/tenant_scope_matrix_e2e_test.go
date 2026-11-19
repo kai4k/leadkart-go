@@ -137,19 +137,20 @@ func TestE2E_TenantScope_ImpersonationTokenHeaderIgnored(t *testing.T) {
 	}
 }
 
-// Cross-module proof (orders): a scoped operator reads and writes in the
-// scoped tenant; the data is invisible to the other tenant (RLS).
-func TestE2E_TenantScope_OrdersScopedReadAndWrite(t *testing.T) {
+// Cross-module proof (orders): a scoped operator reads in the scoped tenant
+// (writes are read-only under a foreign header, so tenant A's own admin creates
+// the quotation); the data is invisible to the other tenant (RLS).
+func TestE2E_TenantScope_OrdersScopedRead(t *testing.T) {
 	f := newE2EFixture(t)
 	a := f.registerAndLogin(t, "scopeorda")
 	b := f.registerAndLogin(t, "scopeordb")
 	op := f.mintPlatformTokenWith(t, nil, true)
 
-	created := f.doWithHeaders(t, http.MethodPost, "/api/v1/orders/quotations", op, ordersports.CreateQuotationRequest{
+	created := f.authedJSON(t, http.MethodPost, "/api/v1/orders/quotations", a.AccessToken, ordersports.CreateQuotationRequest{
 		CustomerLeadID: uuid.NewString(), Items: ordersSampleItems(), Note: "scoped quote",
-	}, scopeHdr(a.TenantID))
+	})
 	if created.status != http.StatusCreated {
-		t.Fatalf("scoped create quotation in A: %d %s", created.status, created.body)
+		t.Fatalf("tenant A admin create quotation: %d %s", created.status, created.body)
 	}
 	var cq ordersports.CreateQuotationResponse
 	if err := json.Unmarshal(created.body, &cq); err != nil {

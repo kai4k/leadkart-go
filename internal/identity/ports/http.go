@@ -140,6 +140,9 @@ func AddRoutes(mux *http.ServeMux, log *slog.Logger, a app.Application, verifier
 
 		// User (Membership) management — permission-gated per ADR 0036/0068.
 		// notSelf forbids self-assigned roles/overrides/status/manager (D3).
+		// The identity writes the operator scope tree performs under X-Tenant-Id.
+		// Every other module's mutation is read-only under a foreign header.
+		writable := authn.TenantScopeWritable
 		usersView := authn.RequirePermission(verifier, stampValidator, p.Users.View)
 		usersCreate := authn.RequirePermission(verifier, stampValidator, p.Users.Create)
 		usersUpdate := authn.RequirePermission(verifier, stampValidator, p.Users.Update)
@@ -154,29 +157,29 @@ func AddRoutes(mux *http.ServeMux, log *slog.Logger, a app.Application, verifier
 		mux.Handle("GET /api/v1/users", usersView(handleListUsers(log, a)))
 		mux.Handle("GET /api/v1/users/{userId}", userSelfOrView(handleGetUser(log, a)))
 		mux.Handle("PATCH /api/v1/users/{userId}/profile",
-			userSelfOrUpdate(handleUpdateUserProfile(log, a)))
+			writable(userSelfOrUpdate(handleUpdateUserProfile(log, a))))
 		mux.Handle("POST /api/v1/users/{userId}/deactivate",
-			usersDeactivate(notSelf(handleDeactivateUser(log, a))))
+			writable(usersDeactivate(notSelf(handleDeactivateUser(log, a)))))
 		mux.Handle("POST /api/v1/users/{userId}/reactivate",
-			usersReactivate(notSelf(handleReactivateUser(log, a))))
+			writable(usersReactivate(notSelf(handleReactivateUser(log, a)))))
 		mux.Handle("POST /api/v1/users/{userId}/roles",
-			rolesAssign(notSelf(handleAssignUserRole(log, a))))
+			writable(rolesAssign(notSelf(handleAssignUserRole(log, a)))))
 		mux.Handle("DELETE /api/v1/users/{userId}/roles/{roleId}",
-			rolesRevoke(notSelf(handleRevokeUserRole(log, a))))
+			writable(rolesRevoke(notSelf(handleRevokeUserRole(log, a)))))
 		mux.Handle("PATCH /api/v1/users/{userId}/permission-overrides",
-			usersUpdatePermissions(notSelf(handleReplaceUserPermissionOverrides(log, a))))
+			writable(usersUpdatePermissions(notSelf(handleReplaceUserPermissionOverrides(log, a)))))
 		mux.Handle("PUT /api/v1/users/{userId}/manager",
-			usersUpdate(notSelf(handleAssignUserManager(log, a))))
+			writable(usersUpdate(notSelf(handleAssignUserManager(log, a)))))
 		mux.Handle("DELETE /api/v1/users/{userId}/manager",
-			usersUpdate(notSelf(handleRemoveUserManager(log, a))))
-		mux.Handle("POST /api/v1/users", usersCreate(handleCreateUser(log, a)))
+			writable(usersUpdate(notSelf(handleRemoveUserManager(log, a)))))
+		mux.Handle("POST /api/v1/users", writable(usersCreate(handleCreateUser(log, a))))
 
 		// Anonymise — DPDP §12 / GDPR Art. 17 right-to-erasure cascade.
 		// Cross-tenant blast radius (one Person ⇒ many Memberships)
 		// gates this on Platform tier per multi-tenancy.md
 		// "SuperUser god-mode" + identity.users.anonymise permission.
 		mux.Handle("POST /api/v1/users/{userId}/anonymise",
-			platform(p.Users.Anonymise)(handleAnonymiseUser(log, a)))
+			writable(platform(p.Users.Anonymise)(handleAnonymiseUser(log, a))))
 
 		// Role management — permission-gated per ADR 0036/0068.
 		rolesView := authn.RequirePermission(verifier, stampValidator, p.Roles.View)
@@ -185,19 +188,19 @@ func AddRoutes(mux *http.ServeMux, log *slog.Logger, a app.Application, verifier
 		rolesDelete := authn.RequirePermission(verifier, stampValidator, p.Roles.Delete)
 		mux.Handle("GET /api/v1/roles", rolesView(handleListRoles(log, a)))
 		mux.Handle("GET /api/v1/roles/{roleId}", rolesView(handleGetRole(log, a)))
-		mux.Handle("POST /api/v1/roles", rolesCreate(handleCreateRole(log, a)))
-		mux.Handle("PATCH /api/v1/roles/{roleId}", rolesUpdate(handleUpdateRole(log, a)))
+		mux.Handle("POST /api/v1/roles", writable(rolesCreate(handleCreateRole(log, a))))
+		mux.Handle("PATCH /api/v1/roles/{roleId}", writable(rolesUpdate(handleUpdateRole(log, a))))
 		mux.Handle("PUT /api/v1/roles/{roleId}/permissions",
-			rolesUpdate(handleReplaceRolePermissions(log, a)))
+			writable(rolesUpdate(handleReplaceRolePermissions(log, a))))
 		mux.Handle("POST /api/v1/roles/{roleId}/permissions/grant",
-			rolesUpdate(handleGrantRolePermission(log, a)))
+			writable(rolesUpdate(handleGrantRolePermission(log, a))))
 		mux.Handle("POST /api/v1/roles/{roleId}/permissions/revoke",
-			rolesUpdate(handleRevokeRolePermission(log, a)))
+			writable(rolesUpdate(handleRevokeRolePermission(log, a))))
 		// ADR 0054 — hierarchy sub-resource. Null/empty parent_role_id
 		// in the body clears the parent (role becomes a root).
 		mux.Handle("PATCH /api/v1/roles/{roleId}/parent",
-			rolesUpdate(handleSetRoleParent(log, a)))
-		mux.Handle("DELETE /api/v1/roles/{roleId}", rolesDelete(handleDeleteRole(log, a)))
+			writable(rolesUpdate(handleSetRoleParent(log, a))))
+		mux.Handle("DELETE /api/v1/roles/{roleId}", writable(rolesDelete(handleDeleteRole(log, a))))
 
 		// Platform admin — all under /api/v1/platform/... gated on
 		// RequirePlatform per multi-tenancy.md "Platform admin endpoints"

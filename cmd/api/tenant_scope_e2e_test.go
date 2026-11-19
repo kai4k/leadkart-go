@@ -170,18 +170,20 @@ func TestE2E_TenantScope_AuthorisationEvaluatedInScopedTenant(t *testing.T) {
 }
 
 // Cross-module proof (inventory): the operator's effective tenant reaches
-// another module's port and its RLS-scoped repository.
+// another module's port and its RLS-scoped repository for READS. Writes under a
+// foreign header are read-only (tenant_scope_read_only), so the product is
+// created by tenant A's own admin.
 func TestE2E_TenantScope_InventoryActsInScopedTenant(t *testing.T) {
 	f := newE2EFixture(t)
 	a := f.registerAndLogin(t, "scopeinva")
 	b := f.registerAndLogin(t, "scopeinvb")
 	op := f.mintPlatformTokenWith(t, nil, true)
 
-	created := f.doWithHeaders(t, http.MethodPost, "/api/v1/inventory/products", op, invports.CreateProductRequest{
+	created := f.authedJSON(t, http.MethodPost, "/api/v1/inventory/products", a.AccessToken, invports.CreateProductRequest{
 		SKU: "SCOPE-001", Name: "Scoped Tablet", DosageForm: "tablet", PackSize: "10x10", HSNCode: "30049099", GSTRateBps: 1200,
-	}, scopeHdr(a.TenantID))
+	})
 	if created.status != http.StatusCreated {
-		t.Fatalf("operator create product in A: %d %s", created.status, created.body)
+		t.Fatalf("tenant A admin create product: %d %s", created.status, created.body)
 	}
 	list := func(token string, hdr map[string]string) invports.ListProductsResponse {
 		r := f.doWithHeaders(t, http.MethodGet, "/api/v1/inventory/products", token, nil, hdr)

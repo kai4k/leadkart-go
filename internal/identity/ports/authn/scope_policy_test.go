@@ -92,6 +92,10 @@ func TestTenantScopePolicy_IgnoredRoutes(t *testing.T) {
 		{"GET", "/api/v1/tenants"},
 		{"GET", "/api/v1/tenants/by-slug/acme"},
 		{"GET", "/api/v1/search"},
+		{"GET", "/api/v1/notifications"},
+		{"GET", "/api/v1/notifications/unread-count"},
+		{"POST", "/api/v1/notifications/read-all"},
+		{"POST", "/api/v1/notifications/0190a000-0000-7000-8000-0000000000cc/read"},
 	}
 	for _, tc := range cases {
 		for _, hdr := range []string{unknownTenantHdr, "not-a-uuid"} {
@@ -116,15 +120,16 @@ func TestTenantScopePolicy_IgnoredRoutes(t *testing.T) {
 	}
 }
 
-// The scope-aware exceptions inside an ignored prefix still honour the header.
+// A route inside an ignored group that declares HonourTenantScope still reads
+// the header; without the marker the table ignores it.
 func TestTenantScopePolicy_BalanceHonoursHeader(t *testing.T) {
 	t.Parallel()
 	tn := activeTenants()
-	rec, s, _ := scopeServe(t, tn, operatorClaims(), alwaysFresh{}, nil, "GET", "/api/v1/platform/lead-credits/balance", tenantB)
+	rec, s, _ := scopeServe(t, tn, operatorClaims(), alwaysFresh{}, authn.HonourTenantScope, "GET", "/api/v1/platform/lead-credits/balance", tenantB)
 	if rec.Code != http.StatusOK || string(s.tenantID) != tenantB {
 		t.Fatalf("balance must honour the header: %d tenant %q", rec.Code, s.tenantID)
 	}
-	rec, _, _ = scopeServe(t, tn, operatorClaims(), alwaysFresh{}, nil, "GET", "/api/v1/platform/lead-credits/balance", unknownTenantHdr)
+	rec, _, _ = scopeServe(t, tn, operatorClaims(), alwaysFresh{}, authn.HonourTenantScope, "GET", "/api/v1/platform/lead-credits/balance", unknownTenantHdr)
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("balance with unknown tenant: %d", rec.Code)
 	}
@@ -245,7 +250,8 @@ func TestTenantScopePolicy_PathConflict(t *testing.T) {
 }
 
 // M4: scoped requests into a suspended / pending-deletion tenant: reads and
-// lifecycle routes pass; other writes are 409 tenant_not_active.
+// lifecycle and path-tenant routes pass; other (writable) writes are 409
+// tenant_not_active.
 func TestTenantScopePolicy_InactiveTenant(t *testing.T) {
 	t.Parallel()
 	tn := &countingTenants{states: map[string]authn.TenantScopeState{tenantB: authn.TenantScopeInactive}}
@@ -255,7 +261,7 @@ func TestTenantScopePolicy_InactiveTenant(t *testing.T) {
 		}
 	}
 	for _, m := range []string{"POST", "PATCH", "PUT", "DELETE"} {
-		rec, s, _ := scopeServe(t, tn, operatorClaims(), alwaysFresh{}, nil, m, "/api/v1/users", tenantB)
+		rec, s, _ := scopeServe(t, tn, operatorClaims(), alwaysFresh{}, authn.TenantScopeWritable, m, "/api/v1/users", tenantB)
 		if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "tenant_not_active") || s.called {
 			t.Fatalf("%s into inactive tenant: %d %s", m, rec.Code, rec.Body.String())
 		}
@@ -263,6 +269,11 @@ func TestTenantScopePolicy_InactiveTenant(t *testing.T) {
 	rec, _, _ := scopeServe(t, tn, operatorClaims(), alwaysFresh{}, authn.TenantScopeLifecycle("tenantId"), "POST", "/api/v1/tenants/"+tenantB+"/activate", tenantB)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("lifecycle write into inactive tenant: %d %s", rec.Code, rec.Body.String())
+	}
+	// The path is authoritative on {tenantId} routes: a write on a suspended
+	// tenant works with a matching header exactly as it does without one.
+	if rec, _, _ := scopeServe(t, tn, operatorClaims(), alwaysFresh{}, authn.TenantScopeMatchesPath("tenantId"), "PATCH", "/api/v1/tenants/"+tenantB+"/profile", tenantB); rec.Code != http.StatusOK {
+		t.Fatalf("path-tenant write into inactive tenant with header: %d", rec.Code)
 	}
 	// A deleted tenant is reported unknown (404), never scoped into.
 	if rec, _, _ := scopeServe(t, &countingTenants{}, operatorClaims(), alwaysFresh{}, nil, "GET", "/api/v1/users", tenantB); rec.Code != http.StatusNotFound {
@@ -297,7 +308,7 @@ func TestTenantScopePolicy_ActClaimOnScopedRequests(t *testing.T) {
 			authn.RequireFreshStamp(ver, alwaysFresh{})(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 				got, ok = actclaim.FromContext(r.Context())
 			})))
-		r := httptest.NewRequestWithContext(t.Context(), "POST", "/api/v1/users", nil)
+		r := httptest.NewRequestWithContext(t.Context(), "GET", "/api/v1/users", nil)
 		r.Header.Set("Authorization", "Bearer tok")
 		for _, hv := range headers {
 			r.Header.Add(authn.TenantScopeHeader, hv)
@@ -316,5 +327,130 @@ func TestTenantScopePolicy_ActClaimOnScopedRequests(t *testing.T) {
 	}
 	if _, ok := probe(t, &jwt.Claims{TenantID: tenantA, TenantSlug: "acme"}, tenantB); ok {
 		t.Fatal("tenant member header is ignored: no act claim")
+	}
+}
+
+// Deny-by-default writes: a non-read request that selects a foreign tenant is
+// 403 tenant_scope_read_only unless the route opted in with TenantScopeWritable
+// (or is a path-tenant route). Reads, the home-tenant header and non-operators
+// are unaffected.
+func TestTenantScopePolicy_ForeignWritesReadOnlyByDefault(t *testing.T) {
+	t.Parallel()
+	for _, m := range []string{"POST", "PUT", "PATCH", "DELETE"} {
+		tn := activeTenants()
+		rec, s, _ := scopeServe(t, tn, operatorClaims(), alwaysFresh{}, nil, m, "/api/v1/orders/quotations", tenantB)
+		if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "tenant_scope_read_only") || s.called {
+			t.Fatalf("%s unmarked route under foreign scope: %d %s", m, rec.Code, rec.Body.String())
+		}
+		if tn.lookups.Load() != 0 {
+			t.Fatalf("%s: the read-only decision must not look the tenant up", m)
+		}
+		if rec, s, _ := scopeServe(t, activeTenants(), operatorClaims(), alwaysFresh{}, authn.TenantScopeWritable, m, "/api/v1/roles", tenantB); rec.Code != http.StatusOK || string(s.tenantID) != tenantB {
+			t.Fatalf("%s writable route: %d tenant %q", m, rec.Code, s.tenantID)
+		}
+		if rec, _, _ := scopeServe(t, activeTenants(), operatorClaims(), alwaysFresh{}, authn.TenantScopeMatchesPath("tenantId"), m, "/api/v1/tenants/"+tenantB+"/profile", tenantB); rec.Code != http.StatusOK {
+			t.Fatalf("%s path-tenant route: %d", m, rec.Code)
+		}
+		if rec, _, _ := scopeServe(t, activeTenants(), operatorClaims(), alwaysFresh{}, nil, m, "/api/v1/orders/quotations", tenantA); rec.Code != http.StatusOK {
+			t.Fatalf("%s with the home tenant in the header: %d", m, rec.Code)
+		}
+		member := &jwt.Claims{TenantID: tenantA, TenantSlug: "acme"}
+		if rec, s, _ := scopeServe(t, activeTenants(), member, alwaysFresh{}, nil, m, "/api/v1/orders/quotations", tenantB); rec.Code != http.StatusOK || string(s.tenantID) != tenantA {
+			t.Fatalf("%s tenant member: header must stay ignored: %d", m, rec.Code)
+		}
+	}
+	if rec, _, _ := scopeServe(t, activeTenants(), operatorClaims(), alwaysFresh{}, nil, "GET", "/api/v1/orders/quotations", tenantB); rec.Code != http.StatusOK {
+		t.Fatalf("reads stay available under foreign scope: %d", rec.Code)
+	}
+}
+
+// A registration marker beats the central table: a marked route under an
+// ignored group is NOT silently run with the header ignored. This fails if the
+// table ever shadows a marker.
+func TestTenantScopePolicy_MarkerWinsOverTable(t *testing.T) {
+	t.Parallel()
+	const marked = "/api/v1/platform/anything/x"
+	if rec, s, _ := scopeServe(t, activeTenants(), operatorClaims(), alwaysFresh{}, nil, "GET", marked, unknownTenantHdr); rec.Code != http.StatusOK || !s.called {
+		t.Fatalf("control: an unmarked route under /platform/ ignores the header: %d", rec.Code)
+	}
+	for name, tc := range map[string]struct {
+		wrap func(http.Handler) http.Handler
+		want int
+	}{
+		"reject":   {authn.RejectTenantScope, http.StatusForbidden}, // refused before any lookup
+		"honour":   {authn.HonourTenantScope, http.StatusNotFound}, // header validated: unknown tenant
+		"writable": {authn.TenantScopeWritable, http.StatusNotFound},
+	} {
+		rec, s, _ := scopeServe(t, activeTenants(), operatorClaims(), alwaysFresh{}, tc.wrap, "GET", marked, unknownTenantHdr)
+		if rec.Code != tc.want || s.called {
+			t.Fatalf("%s: marker must beat the table: %d %s, want %d", name, rec.Code, rec.Body.String(), tc.want)
+		}
+	}
+	rec, _, _ := scopeServe(t, activeTenants(), operatorClaims(), alwaysFresh{}, authn.RejectTenantScope, "POST", marked, tenantB)
+	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "tenant_scope_not_supported") {
+		t.Fatalf("reject marker under /platform/: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+// Nested auth gates (platform anchor + permission gate each run the freshness
+// gate) apply the scope ONCE: one tenant lookup, one INFO line, and the inner
+// handler still sees the scoped tenant.
+func TestTenantScopePolicy_NestedGatesApplyScopeOnce(t *testing.T) {
+	t.Parallel()
+	tn := activeTenants()
+	var logBuf bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	ver := &fakeVerifier{claims: withFreshness(operatorClaims())}
+	s := &sentinel{}
+	gate := authn.RequireFreshStamp(ver, alwaysFresh{})
+	h := authn.TenantScope(tn.Lookup, log)(gate(gate(gate(s.handler()))))
+	r := httptest.NewRequestWithContext(t.Context(), "GET", "/api/v1/users", nil)
+	r.Header.Set("Authorization", "Bearer tok")
+	r.Header.Set(authn.TenantScopeHeader, tenantB)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, r)
+	if rec.Code != http.StatusOK || string(s.tenantID) != tenantB {
+		t.Fatalf("nested gates: %d tenant %q", rec.Code, s.tenantID)
+	}
+	if got := tn.lookups.Load(); got != 1 {
+		t.Fatalf("lookups = %d, want 1", got)
+	}
+	if n := strings.Count(logBuf.String(), "operator tenant scope"); n != 1 {
+		t.Fatalf("INFO lines = %d, want 1: %s", n, logBuf.String())
+	}
+}
+
+// An anchored operator acting in a foreign tenant through the PATH alone
+// (RequireTenantPermission, no header) carries the same act claim, with the
+// path reason; an operator on its own tenant's path does not.
+func TestRequireTenantPermission_PathReBindCarriesActClaim(t *testing.T) {
+	t.Parallel()
+	probe := func(c *jwt.Claims, pathTenant string) (actclaim.Claim, bool, int) {
+		var got actclaim.Claim
+		var ok bool
+		ver := &fakeVerifier{claims: withFreshness(c)}
+		h := authn.RequireTenantPermission(ver, alwaysFresh{}, "tenantId", "identity.tenants.update")(
+			http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+				got, ok = actclaim.FromContext(r.Context())
+			}))
+		r := httptest.NewRequestWithContext(t.Context(), "PATCH", "/api/v1/tenants/"+pathTenant+"/profile", nil)
+		r.SetPathValue("tenantId", pathTenant)
+		r.Header.Set("Authorization", "Bearer tok")
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, r)
+		return got, ok, rec.Code
+	}
+	op := operatorClaims()
+	op.Permissions = []string{"platform.tenants.manage"}
+	got, ok, code := probe(op, tenantB)
+	if code != http.StatusOK || !ok || got.OperatorID == "" || got.Reason != authn.ScopeActReasonPath {
+		t.Fatalf("path-only foreign write: %d %+v %v", code, got, ok)
+	}
+	if _, ok, code := probe(op, tenantA); code != http.StatusOK || ok {
+		t.Fatalf("own tenant path: %d act=%v", code, ok)
+	}
+	admin := &jwt.Claims{TenantID: tenantA, TenantSlug: "acme", Permissions: []string{"tenant.admin"}}
+	if _, ok, code := probe(admin, tenantA); code != http.StatusOK || ok {
+		t.Fatalf("tenant admin on own path: %d act=%v", code, ok)
 	}
 }
