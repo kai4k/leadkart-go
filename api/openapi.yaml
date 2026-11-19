@@ -1236,6 +1236,7 @@ paths:
         PATCH /api/v1/users/{userId}/profile.
 
         Requires `platform.users.manage` held by a platform-tenant operator; platform-tenant membership alone is refused with 403 `forbidden`.
+        An operator cannot change their own Person: the caller's own `personId` is refused with 403 `self_modification_forbidden` (super users exempt).
       parameters:
         - $ref: '#/components/parameters/XCommandId'
         - { $ref: '#/components/parameters/PersonId' }
@@ -1259,6 +1260,7 @@ paths:
         Reason is mandatory per data-retention.md audit canon.
 
         Requires `platform.users.manage` held by a platform-tenant operator; platform-tenant membership alone is refused with 403 `forbidden`.
+        An operator cannot change their own Person: the caller's own `personId` is refused with 403 `self_modification_forbidden` (super users exempt).
       parameters:
         - $ref: '#/components/parameters/XCommandId'
         - { $ref: '#/components/parameters/PersonId' }
@@ -1279,6 +1281,7 @@ paths:
       summary: Lift a previously applied global suspension
       description: |
         Requires `platform.users.manage` held by a platform-tenant operator; platform-tenant membership alone is refused with 403 `forbidden`.
+        An operator cannot change their own Person: the caller's own `personId` is refused with 403 `self_modification_forbidden` (super users exempt).
       parameters:
         - $ref: '#/components/parameters/XCommandId'
         - { $ref: '#/components/parameters/PersonId' }
@@ -1294,6 +1297,7 @@ paths:
       summary: Anonymise a Person record directly (DPDP §12 / GDPR Art. 17)
       description: |
         Requires `identity.users.anonymise` held by a platform-tenant operator; platform-tenant membership alone is refused with 403 `forbidden`.
+        An operator cannot change their own Person: the caller's own `personId` is refused with 403 `self_modification_forbidden` (super users exempt).
       parameters:
         - $ref: '#/components/parameters/XCommandId'
         - { $ref: '#/components/parameters/PersonId' }
@@ -3868,7 +3872,7 @@ components:
     # ===== Capabilities ================================================
     CapabilitiesDto:
       type: object
-      required: [person_id, membership_id, tenant_id, tenant_slug, is_platform, is_super_user, permissions, effective_permissions, roles]
+      required: [person_id, membership_id, tenant_id, tenant_slug, is_platform, is_super_user, permissions, effective_permissions, roles, rank, tier]
       properties:
         person_id:     { type: string, format: uuid }
         membership_id: { type: string, format: uuid }
@@ -3889,6 +3893,18 @@ components:
         roles:
           type: array
           items: { $ref: '#/components/schemas/CapabilityRoleDto' }
+        rank:
+          type: integer
+          minimum: 0
+          maximum: 99
+          description: |
+            Seniority from the access token's `rank` claim (ADR 0069): 0 = owner, lower is more senior,
+            99 = no role. Tokens minted before the claim existed read as 99. Hide actions on members whose
+            rank is not strictly greater than this (owners may also act on owners).
+        tier:
+          type: string
+          enum: [owner, admin, manager, team_lead, user]
+          description: 'Band of `rank`: owner 0; admin 1-10; manager 11-20; team_lead 21-30; user 31-99.'
 
     CapabilityRoleDto:
       type: object

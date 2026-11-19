@@ -197,6 +197,13 @@ type CapabilitiesDto struct {
 	// in their own tenant (tenant.admin expanded) — UI gating reads this.
 	EffectivePermissions []string            `json:"effective_permissions"`
 	Roles                []CapabilityRoleDto `json:"roles"`
+	// Rank / Tier: ADR 0069 seniority (0 = owner ... 99 = none; lower is more
+	// senior) and its band (owner|admin|manager|team_lead|user), from the rank
+	// claim through the same Actor the policy uses. A token without the claim
+	// reads as 99 / user. The UI hides actions on members whose rank is not
+	// strictly greater than this (owners: also on owners).
+	Rank int    `json:"rank"`
+	Tier string `json:"tier"`
 }
 
 // CapabilityRoleDto is one role inside the capabilities bundle: display

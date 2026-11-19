@@ -71,6 +71,7 @@ func handleGetCapabilities(log *slog.Logger, a app.Application) http.Handler {
 		perms := make([]string, len(c.Permissions))
 		copy(perms, c.Permissions)
 
+		actor := authn.AuthorityFrom(r.Context())
 		dto := CapabilitiesDto{
 			PersonID:             c.Subject,
 			MembershipID:         c.MembershipID,
@@ -81,6 +82,8 @@ func handleGetCapabilities(log *slog.Logger, a app.Application) http.Handler {
 			Permissions:          perms,
 			EffectivePermissions: authn.EffectivePermissions(c),
 			Roles:                []CapabilityRoleDto{}, // non-nil; populated below
+			Rank:                 actor.Rank().Int(),
+			Tier:                 string(actor.Rank().Tier()),
 		}
 
 		// Enrichment via the cached query handler — populates email +

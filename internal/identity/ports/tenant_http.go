@@ -12,9 +12,11 @@ import (
 	"github.com/leadkart/leadkart-go/internal/common/phone"
 	"github.com/leadkart/leadkart-go/internal/common/postaladdress"
 	"github.com/leadkart/leadkart-go/internal/common/slug"
+	"github.com/leadkart/leadkart-go/internal/common/tenancy"
 	"github.com/leadkart/leadkart-go/internal/identity/app"
 	"github.com/leadkart/leadkart-go/internal/identity/app/command"
 	"github.com/leadkart/leadkart-go/internal/identity/app/query"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/permission"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 	"github.com/leadkart/leadkart-go/internal/identity/ports/authn"
 )
@@ -73,14 +75,13 @@ func handleListTenantsByFilter(log *slog.Logger, a app.Application) http.Handler
 		}
 
 		// Inline authz — same as handleGetTenantBySlug; enumeration-safe.
-		c, ok := authn.ClaimsFromContext(r.Context())
+		_, ok := authn.ClaimsFromContext(r.Context())
 		if !ok {
 			log.ErrorContext(r.Context(), "list tenants: missing claims in authenticated handler")
 			writeError(w, http.StatusInternalServerError, ErrCodeInternalError, "")
 			return
 		}
-		operator := authn.CanActAcrossTenants(c)
-		if !operator && c.TenantID != view.ID {
+		if !authn.SatisfiesInTenant(r.Context(), tenancy.ID(view.ID), permission.IdentityPermissions.Tenants.View) {
 			// No access → empty list (NOT 200-with-result + NOT 404).
 			writeJSON(w, http.StatusOK, ListTenantsResponse{Tenants: []TenantDto{}})
 			return
@@ -147,19 +148,17 @@ func handleGetTenantBySlug(log *slog.Logger, a app.Application) http.Handler {
 		// Inline authz gate per ADR 0044 enumeration safety.
 		// RequireFreshStamp populated claims; missing-claims here is a
 		// wiring bug (defensive 500).
-		c, ok := authn.ClaimsFromContext(r.Context())
+		_, ok := authn.ClaimsFromContext(r.Context())
 		if !ok {
 			log.ErrorContext(r.Context(), "get tenant by slug: missing claims in authenticated handler")
 			writeError(w, http.StatusInternalServerError, ErrCodeInternalError, "")
 			return
 		}
 
-		// Operator bypass — slug-anchored, mirrors RequireTenantPermission +
-		// RequirePlatform discipline. Defense-in-depth: is_platform=true
-		// AND tenant_slug=="platform" must BOTH hold.
-		operator := authn.CanActAcrossTenants(c)
-
-		if !operator && c.TenantID != view.ID {
+		// One decision in the RESOLVED tenant: identity.tenants.view in the
+		// caller's own tenant, or the platform.tenants.view equivalent for a
+		// slug-anchored operator (authn.SatisfiesInTenant).
+		if !authn.SatisfiesInTenant(r.Context(), tenancy.ID(view.ID), permission.IdentityPermissions.Tenants.View) {
 			// Tenant exists, caller can't see it. Same 404 surface as
 			// "slug doesn't exist" — enumeration-safe per ADR 0044.
 			// NOTE: NOT 403 — that would confirm "this slug is real,

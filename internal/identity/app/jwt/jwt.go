@@ -89,6 +89,12 @@ type Claims struct {
 	IsSuperUser   bool     `json:"is_super_user"`
 	Permissions   []string `json:"permission,omitzero"` // multi-valued
 
+	// Rank is the ADR 0069 seniority (0 = owner ... 99 = none; lower is more
+	// senior). nil on tokens minted before the claim existed and on
+	// impersonation tokens: nil means RankNone (no authority), NEVER 0, which
+	// is the owner. Pointer + omitzero keeps "absent" distinct from 0.
+	Rank *int `json:"rank,omitzero"`
+
 	// Act carries the RFC 8693 actor claim for impersonation tokens.
 	// Nil for regular tokens. Read-only at the verification layer;
 	// only the Issue() path populates it.
@@ -139,6 +145,7 @@ type IssueArgs struct {
 	IsPlatform    bool
 	IsSuperUser   bool
 	Permissions   []string
+	Rank          *int // ADR 0069; nil omits the claim (impersonation tokens)
 
 	// Optional overrides for the impersonation path (ADR 0045).
 	Audience string        // default AudienceClaim
@@ -214,6 +221,7 @@ func (i *Issuer) Issue(args IssueArgs) (string, error) {
 		IsPlatform:    args.IsPlatform,
 		IsSuperUser:   args.IsSuperUser,
 		Permissions:   args.Permissions,
+		Rank:          args.Rank,
 		Act:           args.Act,
 	}
 	tok := jwtv5.NewWithClaims(jwtv5.SigningMethodHS256, claims)

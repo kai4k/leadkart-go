@@ -213,6 +213,7 @@ func (h RefreshHandler) Handle(ctx context.Context, cmd RefreshCommand) (Refresh
 		IsPlatform:    tn.Slug().String() == tenant.PlatformSlug, // match login.go — platform scope must survive refresh
 		IsSuperUser:   authClaims.IsSuperUser,
 		Permissions:   permissionNames(authClaims.Permissions),
+		Rank:          rankClaim(authClaims.Rank),
 	})
 	if err != nil {
 		return RefreshResult{}, fmt.Errorf("refresh: issue jwt: %w", err)

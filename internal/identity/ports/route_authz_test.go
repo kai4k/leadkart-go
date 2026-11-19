@@ -159,10 +159,11 @@ func TestRouteAuthz_GrantBeyondAuthorityRejected(t *testing.T) {
 	}
 }
 
-func TestCapabilities_ExposesEffectivePermissions(t *testing.T) {
-	t.Parallel()
-	// Empty fakes → enrichment returns membership-not-found → handler takes
-	// the documented degraded (JWT-only) path and still answers 200.
+// capabilitiesApp wires the real cached capabilities query over empty fakes:
+// enrichment returns membership-not-found, so the handler takes the documented
+// degraded (JWT-only) path and still answers 200.
+func capabilitiesApp(t *testing.T) app.Application {
+	t.Helper()
 	store := miniredis.RunT(t)
 	cli := redis.NewClient(&redis.Options{Addr: store.Addr()})
 	t.Cleanup(func() { _ = cli.Close() })
@@ -175,6 +176,12 @@ func TestCapabilities_ExposesEffectivePermissions(t *testing.T) {
 	inner := query.NewGetCapabilitiesHandler(persontest.NewFakeRepository(), mems, roletest.NewFakeRepository())
 	var a app.Application
 	a.Queries.GetCapabilities = query.NewCachedGetCapabilitiesHandler(inner, hc, mems)
+	return a
+}
+
+func TestCapabilities_ExposesEffectivePermissions(t *testing.T) {
+	t.Parallel()
+	a := capabilitiesApp(t)
 	rec := azServeApp(t, a, azClaims(permission.IdentityPermissions.Meta.TenantAdmin), "GET", "/api/v1/auth/me/capabilities", "")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("capabilities: %d %s", rec.Code, rec.Body.String())
@@ -225,3 +232,91 @@ func TestRouteAuthz_ImpersonationNeedsItsOwnPermission(t *testing.T) {
 		})
 	}
 }
+
+// An operator must not globally suspend, anonymise or edit their OWN person:
+// DenySelfPerson sits inside the platform gate on the four mutating person
+// routes. Reads and other people stay open; a super user is exempt.
+func TestRouteAuthz_PlatformPersonMutations_DenySelf(t *testing.T) {
+	t.Parallel()
+	p := permission.IdentityPermissions
+	const otherPerson = "0190a000-0000-7000-8000-0000000000ee"
+	selfPerson := azClaims().Subject
+	operator := func(super bool, perms ...string) *jwt.Claims {
+		c := azClaims(perms...)
+		c.TenantSlug, c.IsPlatform, c.IsSuperUser = authn.PlatformTenantSlug, true, super
+		return c
+	}
+	for _, rt := range []struct{ method, suffix, perm string }{
+		{"PATCH", "/profile", p.Platform.UsersManage},
+		{"POST", "/global-suspend", p.Platform.UsersManage},
+		{"POST", "/lift-global-suspension", p.Platform.UsersManage},
+		{"POST", "/anonymise", p.Users.Anonymise},
+	} {
+		t.Run(rt.method+" "+rt.suffix, func(t *testing.T) {
+			t.Parallel()
+			base := "/api/v1/platform/persons/"
+			rec := azServe(t, operator(false, rt.perm), rt.method, base+selfPerson+rt.suffix, "{}")
+			if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "self_modification_forbidden") {
+				t.Errorf("own person: %d %s, want 403 self_modification_forbidden", rec.Code, rec.Body.String())
+			}
+			rec = azServe(t, operator(false, rt.perm), rt.method, base+strings.ToUpper(selfPerson)+rt.suffix, "{}")
+			if rec.Code != http.StatusForbidden {
+				t.Errorf("own person, upper-case spelling: %d, want 403", rec.Code)
+			}
+			if rec := azServe(t, operator(false, rt.perm), rt.method, base+otherPerson+rt.suffix, "{}"); !gatePassed(rec.Code) {
+				t.Errorf("another person: %d %s, want gate pass", rec.Code, rec.Body.String())
+			}
+			if rec := azServe(t, operator(true), rt.method, base+selfPerson+rt.suffix, "{}"); !gatePassed(rec.Code) {
+				t.Errorf("super user on own person: %d %s, want gate pass", rec.Code, rec.Body.String())
+			}
+		})
+	}
+}
+
+// capabilities rank/tier come from the rank claim via the same Actor the
+// policy uses; an absent claim (old token) reads as rank 99 / tier user.
+func TestCapabilities_RankAndTier(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name     string
+		rank     *int
+		wantRank int
+		wantTier string
+	}{
+		{"owner", capRank(0), 0, "owner"},
+		{"admin", capRank(10), 10, "admin"},
+		{"senior manager", capRank(15), 15, "manager"},
+		{"manager", capRank(20), 20, "manager"},
+		{"team lead", capRank(30), 30, "team_lead"},
+		{"user", capRank(50), 50, "user"},
+		{"none", capRank(99), 99, "user"},
+		{"absent claim", nil, 99, "user"},
+		{"out of range clamps to none", capRank(-3), 99, "user"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			c := azClaims(permission.IdentityPermissions.Meta.TenantAdmin)
+			c.Rank = tc.rank
+			rec := azServeApp(t, capabilitiesApp(t), c, "GET", "/api/v1/auth/me/capabilities", "")
+			if rec.Code != http.StatusOK {
+				t.Fatalf("capabilities: %d %s", rec.Code, rec.Body.String())
+			}
+			var raw map[string]json.RawMessage
+			if err := json.Unmarshal(rec.Body.Bytes(), &raw); err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+			var dto struct {
+				Rank *int   `json:"rank"`
+				Tier string `json:"tier"`
+			}
+			if err := json.Unmarshal(rec.Body.Bytes(), &dto); err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+			if _, ok := raw["rank"]; !ok || dto.Rank == nil || *dto.Rank != tc.wantRank || dto.Tier != tc.wantTier {
+				t.Errorf("rank/tier = %v/%q, want %d/%q (body %s)", dto.Rank, dto.Tier, tc.wantRank, tc.wantTier, rec.Body.String())
+			}
+		})
+	}
+}
+
+func capRank(n int) *int { return &n }

@@ -9,6 +9,7 @@ import (
 
 	"github.com/leadkart/leadkart-go/internal/common/ids"
 	"github.com/leadkart/leadkart-go/internal/identity/app/permissions"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/authority"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/permission"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
@@ -418,5 +419,45 @@ func TestResolve_NoParent_FallsBackToFlatBehavior(t *testing.T) {
 	}
 	if !slices.Equal(names(got), []string{permission.IdentityPermissions.Roles.View}) {
 		t.Fatalf("Resolve flat: got %v want [Roles.View]", names(got))
+	}
+}
+
+func TestResolveAuth_Rank_MostSeniorLiveRole(t *testing.T) {
+	t.Parallel()
+	tid := freshTenantID(t)
+	m := newMembership(t, tid)
+	mk := func(name string, level int) *role.Role {
+		r, err := role.New(role.ID(ids.NewV7().String()), tid, name, false, level, false, testNow)
+		if err != nil {
+			t.Fatalf("role.New: %v", err)
+		}
+		if err := m.AssignRole(r.ID(), testNow); err != nil {
+			t.Fatalf("AssignRole: %v", err)
+		}
+		return r
+	}
+	r50, r20 := mk("Exec", 50), mk("Mgr", 20)
+	mems := &fakeMembershipRepo{memberships: map[membership.ID]*membership.Membership{m.ID(): m}}
+	roles := &fakeRoleRepo{roles: map[role.ID]*role.Role{r50.ID(): r50, r20.ID(): r20}}
+	got, err := permissions.NewResolver(mems, roles, time.Now).ResolveAuth(t.Context(), m)
+	if err != nil {
+		t.Fatalf("ResolveAuth: %v", err)
+	}
+	if got.Rank != authority.RankManager {
+		t.Fatalf("Rank = %d, want %d", got.Rank, authority.RankManager)
+	}
+}
+
+func TestResolveAuth_Rank_NoRolesIsNone(t *testing.T) {
+	t.Parallel()
+	tid := freshTenantID(t)
+	m := newMembership(t, tid)
+	mems := &fakeMembershipRepo{memberships: map[membership.ID]*membership.Membership{m.ID(): m}}
+	got, err := permissions.NewResolver(mems, &fakeRoleRepo{roles: map[role.ID]*role.Role{}}, time.Now).ResolveAuth(t.Context(), m)
+	if err != nil {
+		t.Fatalf("ResolveAuth: %v", err)
+	}
+	if got.Rank != authority.RankNone {
+		t.Fatalf("Rank = %d, want RankNone", got.Rank)
 	}
 }

@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/leadkart/leadkart-go/internal/identity/domain/authority"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/permission"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/role"
@@ -107,13 +108,15 @@ func (r *Resolver) ResolveForLoaded(
 // AuthClaims is the bundled output of [Resolver.ResolveAuth] — the two
 // values JWT-issuance paths need together: the effective permission set
 // + the SuperUser flag (true iff any of the Membership's RoleAssignments
-// references a Role with `IsSuperAdmin == true`).
+// references a Role with `IsSuperAdmin == true`) + the ADR 0069 rank
+// (authority.RankOf over the same loaded roles; RankNone without a live role).
 //
 // Loading the Roles once + folding both computations is cheaper than the
 // caller invoking Resolve + a parallel "is super-admin?" query.
 type AuthClaims struct {
 	Permissions []*permission.Permission
 	IsSuperUser bool
+	Rank        authority.Rank
 }
 
 // ResolveAuth computes [AuthClaims] for the supplied loaded Membership.
@@ -144,6 +147,7 @@ func (r *Resolver) ResolveAuth(
 	return AuthClaims{
 		Permissions: m.EffectivePermissions(roles, r.now()),
 		IsSuperUser: isSuper,
+		Rank:        authority.RankOf(roles),
 	}, nil
 }
 

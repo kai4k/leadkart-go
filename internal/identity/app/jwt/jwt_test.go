@@ -156,3 +156,34 @@ func TestIssue_RequiresPersonID(t *testing.T) {
 		t.Fatal("expected error on empty PersonID")
 	}
 }
+
+func TestIssue_RankClaim_RoundTripsAndStaysNilWhenAbsent(t *testing.T) {
+	t.Parallel()
+	iss := issuerWithSecret(t, "k1", hex32a, time.Date(2026, 5, 6, 12, 0, 0, 0, time.UTC))
+	for _, want := range []int{0, 20, 99} {
+		args := validArgs()
+		args.Rank = &want
+		tok, err := iss.Issue(args)
+		if err != nil {
+			t.Fatalf("Issue: %v", err)
+		}
+		c, err := iss.Verify(tok)
+		if err != nil {
+			t.Fatalf("Verify: %v", err)
+		}
+		if c.Rank == nil || *c.Rank != want {
+			t.Fatalf("rank round-trip: got %v want %d", c.Rank, want)
+		}
+	}
+	tok, err := iss.Issue(validArgs())
+	if err != nil {
+		t.Fatalf("Issue: %v", err)
+	}
+	c, err := iss.Verify(tok)
+	if err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	if c.Rank != nil {
+		t.Fatalf("absent rank must stay nil (never 0 = owner), got %d", *c.Rank)
+	}
+}

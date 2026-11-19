@@ -226,6 +226,45 @@ func DenySelfTarget(pathVar string) func(http.Handler) http.Handler {
 	}
 }
 
+// SatisfiesInTenant evaluates permName in an explicit tenant. Slug lookups
+// resolve the tenant from the DB, so the ctx or path tenant is not the one to
+// decide on. False without claims, for an unparseable tenant id and for names
+// outside the catalogue.
+func SatisfiesInTenant(ctx context.Context, tenantID tenancy.ID, permName string) bool {
+	c, ok := ClaimsFromContext(ctx)
+	if !ok {
+		return false
+	}
+	canonical, ok := CanonicalID(tenantID.String())
+	return ok && satisfiesIn(c, tenancy.ID(canonical), permName)
+}
+
+// DenySelfPerson refuses /platform/persons/{pathVar}/... mutations on the
+// caller's OWN person (an operator must not globally suspend, anonymise or edit
+// themselves). Ids are compared as UUID values; an unparseable path value
+// passes through to the handler, which answers 400. Super users are exempt.
+// INNER middleware: compose inside the platform gate.
+func DenySelfPerson(pathVar string) func(http.Handler) http.Handler {
+	if strings.TrimSpace(pathVar) == "" {
+		panic("authn: DenySelfPerson pathVar required")
+	}
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			c, ok := ClaimsFromContext(r.Context())
+			if !ok {
+				writeError(w, http.StatusUnauthorized, errCodeUnauthenticated, "missing claims")
+				return
+			}
+			if !c.IsSuperUser && sameID(r.PathValue(pathVar), c.Subject) {
+				writeError(w, http.StatusForbidden, errCodeSelfModificationForbidden,
+					"operators cannot change their own person")
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
 // bindTenant returns r with the tenancy context re-bound to the (canonical)
 // path tenant a gate has just authorised the caller for. An anchored operator
 // acting in a foreign tenant leaves the same durable attribution (act claim)

@@ -18,6 +18,7 @@ package command_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -607,6 +608,57 @@ func TestLogin_HappyPath_PermissionsClaimSorted(t *testing.T) {
 	}
 	if !slices.IsSorted(claims.Permissions) {
 		t.Errorf("permissions claim not sorted: %v", claims.Permissions)
+	}
+}
+
+// TestLogin_RankClaim_FromSameRoleLoadAsPermissions: the `rank` claim is the
+// most senior live role level (ADR 0069), minted from the load that yields the
+// permission claims; a member with no role gets RankNone (99), never absent.
+func TestLogin_RankClaim_FromSameRoleLoadAsPermissions(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name   string
+		levels []int
+		want   int
+	}{
+		{"no role", nil, 99},
+		{"manager and executive", []int{50, 20}, 20},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			rig := newLoginRig(t)
+			const plain = "complex-pw"
+			p := newPersonWithPassword(t, plain)
+			tn := newTenantWithSlug(t, "acme")
+			m := activeMembership(t, p, tn)
+			for i, lvl := range tc.levels {
+				r, err := role.New(role.ID(ids.NewV7().String()), tn.ID(), fmt.Sprintf("R%d", i), false, lvl, false, testNow)
+				if err != nil {
+					t.Fatalf("role.New: %v", err)
+				}
+				if err := rig.roles.Add(t.Context(), r); err != nil {
+					t.Fatalf("roles.Add: %v", err)
+				}
+				if err := m.AssignRole(r.ID(), testNow); err != nil {
+					t.Fatalf("AssignRole: %v", err)
+				}
+			}
+			seedLoginCandidate(t, rig, p, m)
+			if err := rig.tenants.Add(t.Context(), tn); err != nil {
+				t.Fatalf("tenants.Add: %v", err)
+			}
+			res, err := rig.handler.Handle(t.Context(), command.LoginCommand{Email: p.Email(), Password: plain, DeviceLabel: "Browser"})
+			if err != nil {
+				t.Fatalf("Handle: %v", err)
+			}
+			claims, err := rig.issuer.Verify(res.AccessToken)
+			if err != nil {
+				t.Fatalf("issuer.Verify: %v", err)
+			}
+			if claims.Rank == nil || *claims.Rank != tc.want {
+				t.Fatalf("rank claim = %v, want %d", claims.Rank, tc.want)
+			}
+		})
 	}
 }
 

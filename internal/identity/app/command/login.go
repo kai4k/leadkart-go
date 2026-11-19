@@ -292,6 +292,7 @@ func (h LoginHandler) Handle(ctx context.Context, cmd LoginCommand) (LoginResult
 		IsPlatform:    tn.Slug().String() == tenant.PlatformSlug,
 		IsSuperUser:   authClaims.IsSuperUser,
 		Permissions:   permissionNames(authClaims.Permissions),
+		Rank:          rankClaim(authClaims.Rank),
 	})
 	if err != nil {
 		return LoginResult{}, fmt.Errorf("login: issue jwt: %w", err)

@@ -218,6 +218,9 @@ func AddRoutes(mux *http.ServeMux, log *slog.Logger, a app.Application, verifier
 			platform(p.Platform.TenantsView)(handleListAllTenants(log, a)))
 		mux.Handle("DELETE /api/v1/platform/tenants/{tenantId}",
 			scopePathOnly(platform(p.Tenants.Delete)(handleHardDeleteTenant(log, a))))
+		// An operator must not suspend, anonymise or edit their own person; composed
+		// INSIDE the platform gate (DenySelfPerson is an inner middleware).
+		notSelfPerson := authn.DenySelfPerson("personId")
 		mux.Handle("GET /api/v1/platform/persons/{personId}",
 			platform(p.Platform.UsersView)(handleGetPerson(log, a)))
 		// Platform-only cross-tenant identity probe by email. Query-
@@ -229,13 +232,13 @@ func AddRoutes(mux *http.ServeMux, log *slog.Logger, a app.Application, verifier
 		mux.Handle("GET /api/v1/platform/persons/{personId}/memberships",
 			platform(p.Platform.UsersView)(handleListPersonMemberships(log, a)))
 		mux.Handle("PATCH /api/v1/platform/persons/{personId}/profile",
-			platform(p.Platform.UsersManage)(handleUpdatePersonProfile(log, a)))
+			platform(p.Platform.UsersManage)(notSelfPerson(handleUpdatePersonProfile(log, a))))
 		mux.Handle("POST /api/v1/platform/persons/{personId}/global-suspend",
-			platform(p.Platform.UsersManage)(handleGlobalSuspendPerson(log, a)))
+			platform(p.Platform.UsersManage)(notSelfPerson(handleGlobalSuspendPerson(log, a))))
 		mux.Handle("POST /api/v1/platform/persons/{personId}/lift-global-suspension",
-			platform(p.Platform.UsersManage)(handleLiftPersonGlobalSuspension(log, a)))
+			platform(p.Platform.UsersManage)(notSelfPerson(handleLiftPersonGlobalSuspension(log, a))))
 		mux.Handle("POST /api/v1/platform/persons/{personId}/anonymise",
-			platform(p.Users.Anonymise)(handleAnonymisePerson(log, a)))
+			platform(p.Users.Anonymise)(notSelfPerson(handleAnonymisePerson(log, a))))
 
 		// Impersonation sessions per multi-tenancy.md "Impersonation".
 		// Reason captured ONCE at session creation; subsequent

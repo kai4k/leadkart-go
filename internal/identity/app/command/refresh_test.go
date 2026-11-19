@@ -257,6 +257,36 @@ func TestRefresh_HappyPath_RotatesTokensAndReissuesJWT(t *testing.T) {
 	}
 }
 
+// TestRefresh_RankClaim_MintedLikeLogin: refresh re-mints the rank claim from
+// the member's CURRENT roles (ADR 0069), so a promotion or demotion shows at
+// the next refresh; no role gives RankNone (99).
+func TestRefresh_RankClaim_MintedLikeLogin(t *testing.T) {
+	t.Parallel()
+	rig := newRefreshRig(t)
+	fx := seedFullRefreshFixture(t, rig)
+	r, err := role.New(role.ID(ids.NewV7().String()), fx.tenant.ID(), "Mgr", false, 20, false, testNow)
+	if err != nil {
+		t.Fatalf("role.New: %v", err)
+	}
+	if err := rig.roles.Add(t.Context(), r); err != nil {
+		t.Fatalf("roles.Add: %v", err)
+	}
+	if err := fx.mem.AssignRole(r.ID(), testNow); err != nil {
+		t.Fatalf("AssignRole: %v", err)
+	}
+	res, err := rig.handler.Handle(t.Context(), command.RefreshCommand{RefreshTokenPlain: fx.plaintext})
+	if err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	claims, err := rig.issuer.Verify(res.AccessToken)
+	if err != nil {
+		t.Fatalf("issuer.Verify: %v", err)
+	}
+	if claims.Rank == nil || *claims.Rank != 20 {
+		t.Fatalf("rank claim = %v, want 20", claims.Rank)
+	}
+}
+
 // ----- malformed / unknown / lookup-error branches -------------------------
 
 // TestRefresh_MalformedPlaintext_RejectsCleanly covers the
