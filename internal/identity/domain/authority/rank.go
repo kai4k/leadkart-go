@@ -62,17 +62,20 @@ func ClampRank(n int) Rank {
 
 // levelOf is a role's effective level: out-of-range levels are RankNone, and
 // level 0 counts only on the CompanyOwner system role. On any other role it
-// counts as 1, so a stray level-0 custom role can never make its holder an
-// owner (ADR 0069 R2; the data migration that re-levels such rows is separate).
+// counts as the user tier (RankUser), so a stray level-0 custom role (POST
+// /roles decoded an omitted level as 0) fails closed instead of making its
+// holder the most senior non-owner. The data migration re-levels stored rows
+// the same way (ADR 0069 R2).
 func levelOf(r *role.Role) Rank {
 	lvl := ClampRank(r.HierarchyLevel())
 	if lvl == RankOwner && !r.IsCompanyOwner() {
-		return RankOwner + 1
+		return RankUser
 	}
 	return lvl
 }
 
 // RankOf returns the most senior level among live roles; RankNone when none.
+// A level-0 role that is not the CompanyOwner system role counts as RankUser.
 func RankOf(roles []*role.Role) Rank {
 	best := RankNone
 	for _, r := range roles {

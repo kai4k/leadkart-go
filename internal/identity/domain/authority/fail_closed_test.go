@@ -15,8 +15,8 @@ import (
 func TestRankOf_CustomLevelZeroIsNotOwner(t *testing.T) {
 	t.Parallel()
 	custom := mkRole(1, tA, "Imposter", false, 0, false)
-	if got := authority.RankOf([]*role.Role{custom}); got != authority.Rank(1) {
-		t.Fatalf("custom level-0 role: RankOf = %d, want 1 (only the CompanyOwner system role is rank 0)", got)
+	if got := authority.RankOf([]*role.Role{custom}); got != authority.RankUser {
+		t.Fatalf("custom level-0 role: RankOf = %d, want %d (the user tier: only the CompanyOwner system role is rank 0)", got, authority.RankUser)
 	}
 	owner := mkRole(2, tA, role.SystemRoles.Tenant.CompanyOwner, true, 0, false)
 	if got := authority.RankOf([]*role.Role{owner}); got != authority.RankOwner {

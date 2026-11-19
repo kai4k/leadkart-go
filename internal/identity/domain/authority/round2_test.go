@@ -322,7 +322,7 @@ func TestMayCreateRole_Parent(t *testing.T) {
 	p := permission.IdentityPermissions
 	ownerR := mkRole(1, tA, role.SystemRoles.Tenant.CompanyOwner, true, 0, false, p.Meta.TenantAdmin)
 	mgrR := mkRole(3, tA, role.SystemRoles.Tenant.SalesManager, false, 20, false)
-	legacyZero := mkRole(9, tA, "Legacy Zero", false, 0, false) // custom role stored at level 0: it ranks as 1
+	legacyZero := mkRole(9, tA, "Legacy Zero", false, 0, false) // custom role stored at level 0: it ranks as the user tier (50)
 	foreignMgr := mkRole(10, tB, "Foreign Manager", false, 20, false)
 	userR := mkRole(5, tA, role.SystemRoles.Tenant.SalesExecutive, false, 50, false)
 	owner := mkMember(t, 11, tA, true, "", ownerR)
@@ -334,10 +334,12 @@ func TestMayCreateRole_Parent(t *testing.T) {
 		{"parent more junior", aOwner.MayCreateRole(tA, 10, nil, mgrR), authority.ErrRoleParentNotEligible},
 		{"parent from another tenant", aOwner.MayCreateRole(tA, 30, nil, foreignMgr), authority.ErrNoAuthority},
 		{"no parent", aOwner.MayCreateRole(tA, 30, nil, nil), nil},
-		{"a level-0 custom parent ranks as 1: a level-1 child is not below it", aOwner.MayCreateRole(tA, 1, nil, legacyZero), authority.ErrRoleParentNotEligible},
-		{"a level-0 custom parent with a level-2 child", aOwner.MayCreateRole(tA, 2, nil, legacyZero), nil},
+		{"a level-0 custom parent ranks as 50: a level-2 child is not below it", aOwner.MayCreateRole(tA, 2, nil, legacyZero), authority.ErrRoleParentNotEligible},
+		{"a level-0 custom parent with a level-50 child", aOwner.MayCreateRole(tA, 50, nil, legacyZero), authority.ErrRoleParentNotEligible},
+		{"a level-0 custom parent with a level-51 child", aOwner.MayCreateRole(tA, 51, nil, legacyZero), nil},
 		{"set: a level-0 custom parent with a level-1 child", aOwner.MaySetRoleParent(mkRole(11, tA, "Level One", false, 1, false), legacyZero), authority.ErrRoleParentNotEligible},
-		{"set: a level-0 custom parent with a user child", aOwner.MaySetRoleParent(userR, legacyZero), nil},
+		{"set: a level-0 custom parent with a user child", aOwner.MaySetRoleParent(userR, legacyZero), authority.ErrRoleParentNotEligible},
+		{"set: a level-0 custom parent with a level-60 child", aOwner.MaySetRoleParent(mkRole(12, tA, "Level Sixty", false, 60, false), legacyZero), nil},
 	}
 	for _, m := range mismatches(cases) {
 		t.Error(m)
@@ -429,8 +431,8 @@ func TestNilRoleNeverPanics(t *testing.T) {
 	}
 }
 
-// TestLegacyLevelZeroCustomRole: a custom role stored at level 0 ranks as 1; an
-// owner repairs it, nobody below can touch it.
+// TestLegacyLevelZeroCustomRole: a custom role stored at level 0 ranks as the
+// user tier (fail closed); an owner repairs it, and an admin outranks it.
 func TestLegacyLevelZeroCustomRole(t *testing.T) {
 	t.Parallel()
 	p := permission.IdentityPermissions
@@ -442,22 +444,27 @@ func TestLegacyLevelZeroCustomRole(t *testing.T) {
 	holder := mkMember(t, 14, tA, true, "", legacy)
 	aOwner := actorOf(t, owner, authority.RankOwner, adminEffective()...)
 	aAdmin := actorOf(t, admin, authority.RankAdmin, adminEffective()...)
+	userR := mkRole(3, tA, role.SystemRoles.Tenant.SalesExecutive, false, 50, false)
+	user := mkMember(t, 15, tA, true, "", userR)
+	aUser := actorOf(t, user, authority.RankUser, adminEffective()...)
 
 	cases := []decision{
 		{"owner renames a legacy level-0 role", aOwner.MayEditRole(legacy, authority.NoLevelChange), nil},
 		{"owner re-levels a legacy level-0 role into the ladder", aOwner.MayEditRole(legacy, 5), nil},
 		{"owner deletes a legacy level-0 role", aOwner.MayDeleteRole(legacy), nil},
-		{"admin may not touch a legacy level-0 role (it ranks as 1)", aAdmin.MayEditRole(legacy, authority.NoLevelChange), authority.ErrInsufficientRank},
+		{"admin edits a legacy level-0 role (it ranks as the user tier)", aAdmin.MayEditRole(legacy, authority.NoLevelChange), nil},
+		{"a user-tier actor may not touch it", aUser.MayEditRole(legacy, authority.NoLevelChange), authority.ErrInsufficientRank},
 		{"admin may not assign it", aAdmin.MayAssignRole(admin, legacy), authority.ErrSelfTarget},
 		{"owner assigns it", aOwner.MayAssignRole(admin, legacy), nil},
-		{"admin may not act on its holder (ranks as 1)", aAdmin.MayActOn(holder), authority.ErrInsufficientRank},
+		{"admin acts on its holder (ranks as the user tier)", aAdmin.MayActOn(holder), nil},
+		{"a user-tier actor may not act on its holder", aUser.MayActOn(holder), authority.ErrInsufficientRank},
 		{"owner acts on its holder", aOwner.MayActOn(holder), nil},
 	}
 	for _, m := range mismatches(cases) {
 		t.Error(m)
 	}
-	if holder.Rank() != 1 || holder.IsOwner() {
-		t.Errorf("legacy level-0 holder: rank %d owner %v, want rank 1 and not an owner", holder.Rank(), holder.IsOwner())
+	if holder.Rank() != authority.RankUser || holder.IsOwner() {
+		t.Errorf("legacy level-0 holder: rank %d owner %v, want rank %d and not an owner", holder.Rank(), holder.IsOwner(), authority.RankUser)
 	}
 }
 
@@ -499,8 +506,13 @@ func TestSuperAdminSystemRoleHolderIsNotAnOwner(t *testing.T) {
 	if holder.IsOwner() || !holder.IsSuperAdmin() {
 		t.Errorf("super-admin holder: owner=%v superAdmin=%v, want a super admin who is not an owner", holder.IsOwner(), holder.IsSuperAdmin())
 	}
-	if holder.Rank() != 1 {
-		t.Errorf("super-admin holder ranks %d, want 1 (level 0 counts only on the CompanyOwner role)", holder.Rank())
+	if holder.Rank() != authority.RankUser {
+		t.Errorf("super-admin holder at level 0 ranks %d, want %d (level 0 counts only on the CompanyOwner role)", holder.Rank(), authority.RankUser)
+	}
+	// Bootstrap and the data migration store the SuperAdmin role at level 1.
+	migrated := mkMember(t, 24, tA, true, "", mkRole(8, tA, "SuperAdmin", true, 1, true))
+	if migrated.Rank() != 1 {
+		t.Errorf("super-admin holder at level 1 ranks %d, want 1", migrated.Rank())
 	}
 	if err := authority.GuardLastOwner(holder, nil); err != nil {
 		t.Errorf("a non-owner target is never the last owner: %v", err)

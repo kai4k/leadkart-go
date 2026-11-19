@@ -179,14 +179,14 @@ func TestCustomLevelZeroRoleHolderIsNotAnOwner(t *testing.T) {
 	rogueR := mkRole(9, tA, "Rogue", false, 0, false)
 	owner := mkMember(t, 11, tA, true, "", ownerR)
 	rogue := mkMember(t, 19, tA, true, "", rogueR)
-	if rogue.IsOwner() || rogue.Rank() != authority.Rank(1) {
-		t.Fatalf("level-0 custom holder: owner=%v rank=%d, want not owner, rank 1", rogue.IsOwner(), rogue.Rank())
+	if rogue.IsOwner() || rogue.Rank() != authority.RankUser {
+		t.Fatalf("level-0 custom holder: owner=%v rank=%d, want not owner, rank %d (user tier)", rogue.IsOwner(), rogue.Rank(), authority.RankUser)
 	}
 	ownerActor := mkActor(t, authority.ActorInput{MembershipID: owner.ID(), TenantID: tA, Rank: rk(authority.RankOwner), EffectivePermissions: adminEffective()})
 	if err := ownerActor.MayActOn(rogue); err != nil {
 		t.Errorf("owner acts on a custom level-0 holder: %v", err)
 	}
-	rogueActor := mkActor(t, authority.ActorInput{MembershipID: rogue.ID(), TenantID: tA, Rank: rk(1), EffectivePermissions: adminEffective()})
+	rogueActor := mkActor(t, authority.ActorInput{MembershipID: rogue.ID(), TenantID: tA, Rank: rk(authority.RankUser), EffectivePermissions: adminEffective()})
 	if err := rogueActor.MayActOn(owner); !errors.Is(err, authority.ErrInsufficientRank) {
 		t.Errorf("custom level-0 holder acts on a real owner: %v, want insufficient rank", err)
 	}
