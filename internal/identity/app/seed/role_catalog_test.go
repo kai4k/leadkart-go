@@ -22,8 +22,8 @@ var testNow = time.Date(2026, 5, 24, 12, 0, 0, 0, time.UTC)
 func TestDefaultRoleCatalog_ContainsExpectedNames(t *testing.T) {
 	t.Parallel()
 	specs := seed.DefaultRoleCatalog()
-	if len(specs) != 13 {
-		t.Fatalf("catalog size: got %d want 13 (mirrors .NET parent)", len(specs))
+	if len(specs) != 14 {
+		t.Fatalf("catalog size: got %d want 14 (13 .NET roles + Team Lead, ADR 0069)", len(specs))
 	}
 	want := []string{
 		role.SystemRoles.Tenant.CompanyOwner,
@@ -37,6 +37,7 @@ func TestDefaultRoleCatalog_ContainsExpectedNames(t *testing.T) {
 		role.SystemRoles.Tenant.PurchaseExecutive,
 		role.SystemRoles.Tenant.DispatchManager,
 		role.SystemRoles.Tenant.DispatchExecutive,
+		role.SystemRoles.Tenant.TeamLead,
 		role.SystemRoles.Tenant.HrManager,
 		role.SystemRoles.Tenant.HrExecutive,
 	}
@@ -111,33 +112,42 @@ func TestDefaultRoleCatalog_OperationalRolesCarryInventoryGrants(t *testing.T) {
 		p.Orders.Quotations.Read, p.Orders.Orders.Read,
 		p.Orders.Payments.Read, p.Orders.Invoices.Read,
 	}
+	elevation := []string{p.Meta.RequestPermissionElevation}
+	directory := []string{p.Users.View, p.Roles.View}
+	approver := []string{p.Roles.Approve}
+	crmManager := []string{p.Crm.Leads.Read, p.Crm.Leads.ReadAll, p.Crm.Leads.Assign, p.Crm.Leads.Manage}
+	crmExec := []string{p.Crm.Leads.Read, p.Crm.Leads.Manage}
+	invRead := []string{p.Inventory.Catalog.Read, p.Inventory.Stock.Read}
 	want := map[string][]string{
-		role.SystemRoles.Tenant.Administrator: tasksManager,
-		role.SystemRoles.Tenant.SeniorManager: tasksManager,
-		role.SystemRoles.Tenant.OfficeAdministrator: slices.Concat(
-			[]string{p.Inventory.Catalog.Read, p.Inventory.Stock.Read},
-			tasksManager, ordersRead,
-		),
+		role.SystemRoles.Tenant.Administrator:       slices.Concat([]string{p.Meta.TenantAdmin}, tasksManager),
+		role.SystemRoles.Tenant.OfficeAdministrator: slices.Concat([]string{p.Meta.TenantAdmin}, invRead, tasksManager, ordersRead),
+		role.SystemRoles.Tenant.SeniorManager: slices.Concat(tasksManager, directory, approver, crmManager, invRead,
+			[]string{p.Dispatch.ConsignmentNotes.Read}, ordersRead),
 		role.SystemRoles.Tenant.OfficeExecutive: tasksMember,
-		role.SystemRoles.Tenant.SalesManager: slices.Concat(
-			[]string{p.Inventory.Catalog.Read, p.Inventory.Stock.Read},
-			tasksManager, ordersFull,
-		),
-		role.SystemRoles.Tenant.SalesExecutive: slices.Concat(tasksMember, ordersExec),
-		role.SystemRoles.Tenant.PurchaseManager: append([]string{
-			p.Inventory.Catalog.Manage, p.Inventory.Stock.Manage,
-		}, tasksManager...),
+		role.SystemRoles.Tenant.SalesManager:    slices.Concat(invRead, tasksManager, ordersFull, directory, approver, crmManager),
+		role.SystemRoles.Tenant.SalesExecutive:  slices.Concat(tasksMember, ordersExec, crmExec),
+		role.SystemRoles.Tenant.PurchaseManager: slices.Concat([]string{p.Inventory.Catalog.Manage, p.Inventory.Stock.Manage},
+			tasksManager, directory, approver),
 		role.SystemRoles.Tenant.PurchaseExecutive: tasksMember,
-		role.SystemRoles.Tenant.DispatchManager:   append(append([]string{}, tasksManager...), dispatchOps...),
-		role.SystemRoles.Tenant.DispatchExecutive: append(append([]string{}, tasksMember...), dispatchOps...),
-		role.SystemRoles.Tenant.HrManager:         tasksManager,
+		role.SystemRoles.Tenant.DispatchManager: slices.Concat(tasksManager, dispatchOps, directory, approver,
+			[]string{p.Orders.Orders.Read, p.Inventory.Stock.Read}),
+		role.SystemRoles.Tenant.DispatchExecutive: slices.Concat(tasksMember, dispatchOps),
+		role.SystemRoles.Tenant.HrManager:         slices.Concat(tasksManager, directory, approver, []string{p.Users.Update}),
 		role.SystemRoles.Tenant.HrExecutive:       tasksMember,
+		role.SystemRoles.Tenant.TeamLead: slices.Concat(directory, approver, crmExec,
+			[]string{p.Tasks.WorkItems.Read, p.Tasks.WorkItems.Manage, p.Tasks.WorkItems.Reassign}),
 	}
 	// Every tenant role additionally carries the self-service notification
-	// inbox bundle, appended last by DefaultRoleCatalog's post-loop.
+	// inbox bundle, and every non-owner role may request elevation. The
+	// comparison is as a set: order and duplicates carry no meaning.
 	notificationsInbox := []string{p.Notifications.Inbox.Read, p.Notifications.Inbox.Manage}
+	asSet := func(xs []string) []string {
+		out := slices.Clone(xs)
+		slices.Sort(out)
+		return slices.Compact(out)
+	}
 	for name, perms := range want {
-		want[name] = slices.Concat(perms, notificationsInbox)
+		want[name] = asSet(slices.Concat(perms, notificationsInbox, elevation))
 	}
 	for _, s := range specs {
 		if s.Name == role.SystemRoles.Tenant.CompanyOwner {
@@ -151,8 +161,94 @@ func TestDefaultRoleCatalog_OperationalRolesCarryInventoryGrants(t *testing.T) {
 			t.Errorf("role %q has no expected-permission entry — update test if catalog grew", s.Name)
 			continue
 		}
-		if !slices.Equal(s.Permissions, wantPerms) {
-			t.Errorf("role %q permissions:\n  got  %v\n  want %v", s.Name, s.Permissions, wantPerms)
+		if got := asSet(s.Permissions); !slices.Equal(got, wantPerms) {
+			t.Errorf("role %q permissions:\n  got  %v\n  want %v", s.Name, got, wantPerms)
+		}
+	}
+}
+
+func TestDefaultRoleCatalog_TierLevels(t *testing.T) {
+	t.Parallel()
+	r := role.SystemRoles.Tenant
+	want := map[string]int{
+		r.CompanyOwner: 0, r.Administrator: 10, r.OfficeAdministrator: 10, r.SeniorManager: 15,
+		r.SalesManager: 20, r.PurchaseManager: 20, r.DispatchManager: 20, r.HrManager: 20, r.TeamLead: 30,
+		r.SalesExecutive: 50, r.PurchaseExecutive: 50, r.DispatchExecutive: 50, r.HrExecutive: 50, r.OfficeExecutive: 50,
+	}
+	specs := seed.DefaultRoleCatalog()
+	if len(specs) != len(want) {
+		t.Fatalf("catalog has %d roles, want %d", len(specs), len(want))
+	}
+	for _, s := range specs {
+		lvl, ok := want[s.Name]
+		if !ok {
+			t.Errorf("unexpected role %q", s.Name)
+			continue
+		}
+		if s.HierarchyLevel != lvl {
+			t.Errorf("%s level = %d, want %d", s.Name, s.HierarchyLevel, lvl)
+		}
+	}
+}
+
+func TestDefaultRoleCatalog_DailyWorkGrants(t *testing.T) {
+	t.Parallel()
+	p := permission.IdentityPermissions
+	r := role.SystemRoles.Tenant
+	must := map[string][]string{
+		r.Administrator:  {p.Meta.TenantAdmin, p.Meta.RequestPermissionElevation},
+		r.SalesManager:   {p.Users.View, p.Roles.View, p.Roles.Approve, p.Crm.Leads.ReadAll, p.Crm.Leads.Assign, p.Crm.Leads.Manage},
+		r.TeamLead:       {p.Users.View, p.Roles.View, p.Roles.Approve, p.Crm.Leads.Read, p.Crm.Leads.Manage, p.Tasks.WorkItems.Reassign},
+		r.SalesExecutive: {p.Crm.Leads.Read, p.Crm.Leads.Manage, p.Meta.RequestPermissionElevation},
+		r.HrManager:      {p.Users.Update, p.Roles.Approve},
+	}
+	mustNot := map[string][]string{
+		r.TeamLead:       {p.Tasks.WorkItems.ReadAll, p.Crm.Leads.ReadAll, p.Crm.Leads.Assign},
+		r.SalesExecutive: {p.Users.View, p.Roles.Approve},
+		r.CompanyOwner:   {p.Roles.Approve},
+	}
+	for _, s := range seed.DefaultRoleCatalog() {
+		for _, n := range must[s.Name] {
+			if !slices.Contains(s.Permissions, n) {
+				t.Errorf("%s missing %s", s.Name, n)
+			}
+		}
+		for _, n := range mustNot[s.Name] {
+			if slices.Contains(s.Permissions, n) {
+				t.Errorf("%s must not hold %s", s.Name, n)
+			}
+		}
+	}
+}
+
+// Every non-owner role can ask for elevation (the catalogue godoc says every
+// regular user holds it); the owner's tenant.admin already implies it.
+func TestDefaultRoleCatalog_EveryNonOwnerCanRequestElevation(t *testing.T) {
+	t.Parallel()
+	elevation := permission.IdentityPermissions.Meta.RequestPermissionElevation
+	for _, s := range seed.DefaultRoleCatalog() {
+		held := slices.Contains(s.Permissions, elevation)
+		if s.Name == role.SystemRoles.Tenant.CompanyOwner {
+			if held {
+				t.Errorf("%s carries %s redundantly", s.Name, elevation)
+			}
+			continue
+		}
+		if !held {
+			t.Errorf("%s missing %s", s.Name, elevation)
+		}
+	}
+}
+
+// Nothing in the seed holds a platform-reserved permission (tenant.admin, which
+// defines the Admin tier, is the one reserved name roles carry), and every name is in the catalogue.
+func TestDefaultRoleCatalog_OnlyKnownTenantPermissions(t *testing.T) {
+	t.Parallel()
+	for _, s := range seed.DefaultRoleCatalog() {
+		for _, n := range s.Permissions {
+			if !permission.IsKnown(n) || (permission.IsPlatformReserved(n) && n != permission.IdentityPermissions.Meta.TenantAdmin) {
+				t.Errorf("%s holds %q (unknown or platform-reserved)", s.Name, n)
+			}
 		}
 	}
 }

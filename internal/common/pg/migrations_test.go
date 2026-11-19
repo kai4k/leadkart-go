@@ -613,6 +613,9 @@ func TestAppRoleCanReadEveryApplicationTableUnderRLS(t *testing.T) {
 	}
 }
 
+// appRoleGrantsMigration is the version of 20260606000001_application_role_grants.sql.
+const appRoleGrantsMigration = 20260606000001
+
 // Down then up again leaves the same privileges (reversible, idempotent). With
 // no leadkart_app role the migration is a no-op: TestMigrationsApplyCleanly
 // runs the whole set without one.
@@ -640,7 +643,9 @@ func TestAppRoleGrantsMigration_DownThenUpIsIdempotent(t *testing.T) {
 	if err := pg.EnsureGooseDialect(); err != nil {
 		t.Fatalf("dialect: %v", err)
 	}
-	if err := goose.DownContext(t.Context(), gdb, migrationsDir(t)); err != nil {
+	// Roll back through the grants migration (and any migration added after it),
+	// not just the newest one: later migrations must not change what this pins.
+	if err := goose.DownToContext(t.Context(), gdb, migrationsDir(t), appRoleGrantsMigration-1); err != nil {
 		t.Fatalf("goose down: %v", err)
 	}
 	if usage() {

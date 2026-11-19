@@ -47,24 +47,30 @@ type RoleSpec struct {
 // Returns a fresh slice on each call (callers may mutate without
 // worrying about poisoning a shared package var).
 //
-// CompanyOwner carries the `Meta.TenantAdmin` bundle as the "this
-// person is the tenant admin" short-circuit. Per ADR 0061 amendment 1
-// (Inventory Slice 1 fix-pass), the operational tenant-tier roles
-// (PurchaseManager / SalesManager / OfficeAdministrator) ALSO ship with
-// the Inventory permissions their workflow implies — without those
-// grants every non-Owner membership received 403 on the 11 inventory
-// endpoints. The grant policy:
+// Rank ladder (ADR 0069 H1; BRD §6.7): Owner 0, Administrator and Office
+// Administrator 10, Senior Manager 15, the department managers 20, Team Lead
+// 30, every executive 50. Lower = more senior; a role only ever acts on roles
+// below it.
 //
-//   - PurchaseManager       → Catalog.Manage + Stock.Manage (full inventory write)
-//   - SalesManager          → Catalog.Read + Stock.Read (read-only for order context)
-//   - OfficeAdministrator   → Catalog.Read + Stock.Read (read-only for back-office)
+// Grant policy (ADR 0069 H5; BRD §3.2 and §6.7):
 //
-// Other tenant-tier roles (Executives, HR, Dispatch) ship empty —
-// product UX + admins populate per-membership overlays when their
-// workflow actually needs inventory access. As new modules add their
-// permission catalogues this pattern extends per the same rule of
-// thumb (managers in the relevant chain get Manage; cross-chain
-// admin-tier gets Read).
+//   - CompanyOwner         → tenant.admin + the Tasks, Dispatch and Orders bundles
+//   - Administrator, OfficeAdministrator → tenant.admin (new tenants; existing
+//     tenants opt in, ADR 0069 Q2) + the Tasks manager bundle; OfficeAdministrator
+//     also reads inventory and orders
+//   - managers (Senior, Sales, Purchase, Dispatch, HR) and Team Lead → the
+//     directory views (users.view, roles.view) and roles.approve, so a manager
+//     can see the people and roles they approve for; plus their daily work:
+//     Senior and Sales managers get the full CRM lead set, Purchase the
+//     inventory write set (ADR 0061 amendment 1), Dispatch the consignment and
+//     order-read set, HR identity.users.update (reporting lines), Team Lead
+//     crm.leads.{read,manage} and the tasks it hands out
+//   - Sales Executive      → crm.leads.{read,manage} on top of quotes and orders
+//   - every non-owner role → identity.meta.request_permission_elevation
+//   - Team Lead deliberately holds no read_all: today read_all is tenant-wide
+//
+// Returns a fresh slice on each call (callers may mutate without
+// worrying about poisoning a shared package var).
 func DefaultRoleCatalog() []RoleSpec {
 	p := permission.IdentityPermissions
 
@@ -115,30 +121,64 @@ func DefaultRoleCatalog() []RoleSpec {
 	// query, not by role). Folded into every spec below via the post-loop.
 	notificationsInbox := []string{p.Notifications.Inbox.Read, p.Notifications.Inbox.Manage}
 
+	// Rank-tier and daily-work bundles (ADR 0069 H1/H5; BRD §3.2, §6.7).
+	elevation := []string{p.Meta.RequestPermissionElevation}
+	directory := []string{p.Users.View, p.Roles.View}
+	approver := []string{p.Roles.Approve}
+	crmManager := []string{p.Crm.Leads.Read, p.Crm.Leads.ReadAll, p.Crm.Leads.Assign, p.Crm.Leads.Manage}
+	crmExec := []string{p.Crm.Leads.Read, p.Crm.Leads.Manage}
+	invRead := []string{p.Inventory.Catalog.Read, p.Inventory.Stock.Read}
+
 	specs := []RoleSpec{
 		{
 			Name:            role.SystemRoles.Tenant.CompanyOwner,
 			IsSystemDefault: true,
-			HierarchyLevel:  0,
+			HierarchyLevel:  role.HierarchyLevelOwner,
 			Permissions:     slices.Concat([]string{p.Meta.TenantAdmin}, tasksManager, dispatchOps, ordersFull),
 		},
 		{
 			Name:           role.SystemRoles.Tenant.Administrator,
-			HierarchyLevel: 10,
-			Permissions:    tasksManager,
-		},
-		{
-			Name:           role.SystemRoles.Tenant.SeniorManager,
-			HierarchyLevel: 20,
-			Permissions:    tasksManager,
+			HierarchyLevel: role.HierarchyLevelAdmin,
+			Permissions:    slices.Concat([]string{p.Meta.TenantAdmin}, tasksManager),
 		},
 		{
 			Name:           role.SystemRoles.Tenant.OfficeAdministrator,
-			HierarchyLevel: role.HierarchyLevelDefault,
-			Permissions: slices.Concat(
-				[]string{p.Inventory.Catalog.Read, p.Inventory.Stock.Read},
-				tasksManager, ordersRead,
-			),
+			HierarchyLevel: role.HierarchyLevelAdmin,
+			Permissions:    slices.Concat([]string{p.Meta.TenantAdmin}, invRead, tasksManager, ordersRead),
+		},
+		{
+			Name:           role.SystemRoles.Tenant.SeniorManager,
+			HierarchyLevel: role.HierarchyLevelSeniorManager,
+			Permissions: slices.Concat(tasksManager, directory, approver, crmManager, invRead,
+				[]string{p.Dispatch.ConsignmentNotes.Read}, ordersRead),
+		},
+		{
+			Name:           role.SystemRoles.Tenant.SalesManager,
+			HierarchyLevel: role.HierarchyLevelManager,
+			Permissions:    slices.Concat(invRead, tasksManager, ordersFull, directory, approver, crmManager),
+		},
+		{
+			Name:           role.SystemRoles.Tenant.PurchaseManager,
+			HierarchyLevel: role.HierarchyLevelManager,
+			Permissions: slices.Concat([]string{p.Inventory.Catalog.Manage, p.Inventory.Stock.Manage},
+				tasksManager, directory, approver),
+		},
+		{
+			Name:           role.SystemRoles.Tenant.DispatchManager,
+			HierarchyLevel: role.HierarchyLevelManager,
+			Permissions: slices.Concat(tasksManager, dispatchOps, directory, approver,
+				[]string{p.Orders.Orders.Read, p.Inventory.Stock.Read}),
+		},
+		{
+			Name:           role.SystemRoles.Tenant.HrManager,
+			HierarchyLevel: role.HierarchyLevelManager,
+			Permissions:    slices.Concat(tasksManager, directory, approver, []string{p.Users.Update}),
+		},
+		{
+			Name:           role.SystemRoles.Tenant.TeamLead,
+			HierarchyLevel: role.HierarchyLevelTeamLead,
+			Permissions: slices.Concat(directory, approver, crmExec,
+				[]string{p.Tasks.WorkItems.Read, p.Tasks.WorkItems.Manage, p.Tasks.WorkItems.Reassign}),
 		},
 		{
 			Name:           role.SystemRoles.Tenant.OfficeExecutive,
@@ -146,25 +186,9 @@ func DefaultRoleCatalog() []RoleSpec {
 			Permissions:    tasksMember,
 		},
 		{
-			Name:           role.SystemRoles.Tenant.SalesManager,
-			HierarchyLevel: role.HierarchyLevelDefault,
-			Permissions: slices.Concat(
-				[]string{p.Inventory.Catalog.Read, p.Inventory.Stock.Read},
-				tasksManager, ordersFull,
-			),
-		},
-		{
 			Name:           role.SystemRoles.Tenant.SalesExecutive,
 			HierarchyLevel: role.HierarchyLevelDefault,
-			Permissions:    slices.Concat(tasksMember, ordersExec),
-		},
-		{
-			Name:           role.SystemRoles.Tenant.PurchaseManager,
-			HierarchyLevel: role.HierarchyLevelDefault,
-			Permissions: append([]string{
-				p.Inventory.Catalog.Manage,
-				p.Inventory.Stock.Manage,
-			}, tasksManager...),
+			Permissions:    slices.Concat(tasksMember, ordersExec, crmExec),
 		},
 		{
 			Name:           role.SystemRoles.Tenant.PurchaseExecutive,
@@ -172,19 +196,9 @@ func DefaultRoleCatalog() []RoleSpec {
 			Permissions:    tasksMember,
 		},
 		{
-			Name:           role.SystemRoles.Tenant.DispatchManager,
-			HierarchyLevel: role.HierarchyLevelDefault,
-			Permissions:    append(append([]string{}, tasksManager...), dispatchOps...),
-		},
-		{
 			Name:           role.SystemRoles.Tenant.DispatchExecutive,
 			HierarchyLevel: role.HierarchyLevelDefault,
-			Permissions:    append(append([]string{}, tasksMember...), dispatchOps...),
-		},
-		{
-			Name:           role.SystemRoles.Tenant.HrManager,
-			HierarchyLevel: role.HierarchyLevelDefault,
-			Permissions:    tasksManager,
+			Permissions:    slices.Concat(tasksMember, dispatchOps),
 		},
 		{
 			Name:           role.SystemRoles.Tenant.HrExecutive,
@@ -193,9 +207,15 @@ func DefaultRoleCatalog() []RoleSpec {
 		},
 	}
 
-	// Grant the self-service notification inbox to every tenant role.
+	// Every tenant role gets the self-service notification inbox. Every role
+	// except the owner may also request a permission elevation (the
+	// permission catalogue says every regular user holds it); the owner's
+	// tenant.admin already implies it.
 	for i := range specs {
 		specs[i].Permissions = slices.Concat(specs[i].Permissions, notificationsInbox)
+		if specs[i].Name != role.SystemRoles.Tenant.CompanyOwner {
+			specs[i].Permissions = slices.Concat(specs[i].Permissions, elevation)
+		}
 	}
 	return specs
 }
