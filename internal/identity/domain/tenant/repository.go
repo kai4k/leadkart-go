@@ -16,6 +16,11 @@ var ErrNotFound = errs.New(errs.KindNotFound, "tenant", "tenant not found")
 // (DB unique constraint translated to this typed error).
 var ErrSlugTaken = errs.New(errs.KindAlreadyExists, "tenant", "slug already taken")
 
+// ErrHasDependents is returned by Repository.HardDeleteRow when other rows still
+// reference the tenant (memberships, roles, ...): the delete is refused, never
+// cascaded. The caller's transaction rolls back, so nothing else changes.
+var ErrHasDependents = errs.New(errs.KindConflict, "tenant", "tenant still has dependent rows")
+
 // Repository persists Tenant aggregates. Declared in the domain package so the
 // consumer (app layer) owns the contract; adapters in internal/identity/adapters/
 // implement it (Cheney: "accept interfaces, return structs").
@@ -51,6 +56,9 @@ type Repository interface {
 	// window (data-retention.md). Callers must first run Tenant.HardDelete via
 	// UpdateByID so the audit trail records the terminal event.
 	// Idempotent: no-ops if the row is already gone.
+	// Joins the ambient UnitOfWork transaction (the command runs it in the same
+	// transaction as the transition). Returns [ErrHasDependents] when other rows
+	// still reference the tenant.
 	HardDeleteRow(ctx context.Context, id ID) error
 }
 

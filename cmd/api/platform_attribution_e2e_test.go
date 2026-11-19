@@ -78,12 +78,12 @@ func TestE2E_PlatformRoutes_DestructiveWritesCarryOperatorAttribution(t *testing
 			t.Fatalf("mark-for-deletion: %d %s", r.status, r.body)
 		}
 		assertAttributed(t, outboxActFor(t, f, "tenant_marked_for_deletion"), opID, "mark for deletion")
-		// The route gate must pass. The final SQL DELETE of a tenant that still has
-		// memberships fails the tenant_memberships FK (500, a deletion-saga gap that
-		// predates and is outside this test); the aggregate transition and its
-		// outbox row are committed before that, which is what this asserts.
-		if r := f.authedJSON(t, http.MethodDelete, "/api/v1/platform/tenants/"+v.TenantID, op, nil); r.status == http.StatusUnauthorized || r.status == http.StatusForbidden || r.status == http.StatusBadRequest {
-			t.Fatalf("hard delete refused by a gate: %d %s", r.status, r.body)
+		// The hard delete runs on a tenant without dependents (a registered tenant
+		// has members, which now refuse the delete with 409; see
+		// hard_delete_tenant_e2e_test.go), so it succeeds and writes its row.
+		free := bareTenant(t, f, "attrfree")
+		if r := f.authedJSON(t, http.MethodDelete, "/api/v1/platform/tenants/"+string(free), op, nil); r.status != http.StatusNoContent {
+			t.Fatalf("hard delete: %d %s", r.status, r.body)
 		}
 		assertAttributed(t, outboxActFor(t, f, "tenant_deleted"), opID, "hard delete")
 	})

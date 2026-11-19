@@ -685,7 +685,7 @@ func buildIdentityApp(pool *pgxpool.Pool, hybridCache *cache.HybridCache, cfg co
 				LiftPersonGlobalSuspension: command.NewLiftPersonGlobalSuspensionHandler(persons, now),
 				AnonymisePerson:            command.NewAnonymisePersonHandler(persons, now),
 				UpdatePersonProfile:        command.NewUpdatePersonProfileHandler(persons, now),
-				HardDeleteTenant:           command.NewHardDeleteTenantHandler(tenants, memberships, now),
+				HardDeleteTenant:           command.NewHardDeleteTenantHandler(tenants, memberships, tx, now),
 
 				CreateImpersonationSession: command.NewCreateImpersonationSessionHandler(impersonationStore, tenants, issuer, now),
 				EndImpersonationSession:    command.NewEndImpersonationSessionHandler(impersonationStore),

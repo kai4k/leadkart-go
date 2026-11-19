@@ -131,6 +131,11 @@ const (
 	// 20260507000008's deletion guard.
 	ErrCodePlatformTenantUndeletable = "platform_tenant_undeletable"
 
+	// ErrCodeTenantHasDependents — hard delete refused because other rows (memberships,
+	// roles, ...) still reference the tenant. 409 surface. The whole operation is
+	// rolled back: the tenant keeps its status and no tenant_deleted event is published.
+	ErrCodeTenantHasDependents = "tenant_has_dependents"
+
 	// ErrCodeUserNotFound — membership ID has no row in caller's
 	// tenant. 404 surface; collapses "wrong tenant" + "doesn't exist"
 	// per security.md enumeration safety.

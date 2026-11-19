@@ -126,16 +126,24 @@ func (r *TenantRepository) ListAll(ctx context.Context) ([]*tenant.Tenant, error
 }
 
 // HardDeleteRow issues the physical DELETE for the post-saga cleanup.
-// Caller must have invoked Tenant.HardDelete() first. Platform-tier only.
+// Caller must have invoked Tenant.HardDelete() first, in the SAME transaction
+// (the command opens it; runInTx joins it): a foreign-key violation (the tenant
+// still has memberships, roles, ...) is returned as [tenant.ErrHasDependents] so
+// the caller rolls the transition and its outbox row back. Platform-tier only.
 func (r *TenantRepository) HardDeleteRow(ctx context.Context, id tenant.ID) error {
 	uid, err := parseTenantID(id)
 	if err != nil {
 		return err
 	}
-	if err := r.q.HardDeleteTenant(ctx, pgconv.PgUUID(uid)); err != nil {
-		return fmt.Errorf("tenant repo: hard delete: %w", err)
-	}
-	return nil
+	return r.runInTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
+		if err := r.q.WithTx(tx).HardDeleteTenant(ctx, pgconv.PgUUID(uid)); err != nil {
+			if pgErr, ok := errors.AsType[*pgconn.PgError](err); ok && pgErr.Code == pg.SQLStateForeignKeyViolation {
+				return fmt.Errorf("tenant repo: hard delete: %w", tenant.ErrHasDependents)
+			}
+			return fmt.Errorf("tenant repo: hard delete: %w", err)
+		}
+		return nil
+	})
 }
 
 // ----- Helpers ---------------------------------------------------------------

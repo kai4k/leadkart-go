@@ -1143,6 +1143,12 @@ paths:
         active SuperAdmin role refuse with 422
         (`platform_tenant_undeletable`).
 
+        The transition to `deleted`, its `tenant_deleted` outbox event and the row delete
+        run in ONE transaction. A tenant that still has dependent records (members, roles,
+        ...) is refused with 409 `tenant_has_dependents`: nothing is changed, the tenant
+        keeps its status and no event is published. Remove or reassign the dependents first;
+        there is no cascade.
+
         Requires `identity.tenants.delete` held by a platform-tenant operator; platform-tenant membership alone is refused with 403 `forbidden`.
         The tenant comes from the path only: `X-Tenant-Id` is never applied here, and a
         value that differs from the path tenant is 400 `tenant_scope_conflict`. The
@@ -1155,6 +1161,11 @@ paths:
         '400': { $ref: '#/components/responses/TenantScopeInvalid' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: The tenant still has dependent records (`tenant_has_dependents`); nothing was changed
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
         '422': { $ref: '#/components/responses/Unprocessable' }
 
   /api/v1/platform/persons/{personId}:

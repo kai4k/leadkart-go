@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/leadkart/leadkart-go/internal/common/pg"
 	"github.com/leadkart/leadkart-go/internal/identity/app/command"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant/tenanttest"
@@ -23,7 +24,7 @@ func TestNewHardDeleteTenantHandler_PanicsOnNilDeps(t *testing.T) {
 				t.Error("expected panic on nil tenants repo")
 			}
 		}()
-		_ = command.NewHardDeleteTenantHandler(nil, newFakeMembershipRepo(), func() time.Time { return testNow }) // arch-test:ignore-err - test fixture setup
+		_ = command.NewHardDeleteTenantHandler(nil, newFakeMembershipRepo(), fakeUoW{}, func() time.Time { return testNow }) // arch-test:ignore-err - test fixture setup
 	})
 
 	t.Run("nil memberships", func(t *testing.T) {
@@ -33,7 +34,7 @@ func TestNewHardDeleteTenantHandler_PanicsOnNilDeps(t *testing.T) {
 				t.Error("expected panic on nil memberships repo")
 			}
 		}()
-		_ = command.NewHardDeleteTenantHandler(newFakeTenantRepo(), nil, func() time.Time { return testNow }) // arch-test:ignore-err - test fixture setup
+		_ = command.NewHardDeleteTenantHandler(newFakeTenantRepo(), nil, fakeUoW{}, func() time.Time { return testNow }) // arch-test:ignore-err - test fixture setup
 	})
 }
 
@@ -42,7 +43,7 @@ func TestHardDeleteTenant_RejectsZeroTenantID(t *testing.T) {
 	t.Parallel()
 	tenants := newFakeTenantRepo()
 	members := newFakeMembershipRepo()
-	h := command.NewHardDeleteTenantHandler(tenants, members, func() time.Time { return testNow })
+	h := command.NewHardDeleteTenantHandler(tenants, members, fakeUoW{}, func() time.Time { return testNow })
 
 	err := h.Handle(t.Context(), command.HardDeleteTenantCommand{TenantID: tenant.ID("")})
 	if err == nil {
@@ -56,7 +57,7 @@ func TestHardDeleteTenant_NotFound_ReturnsErrTenantNotFound(t *testing.T) {
 	t.Parallel()
 	tenants := newFakeTenantRepo()
 	members := newFakeMembershipRepo()
-	h := command.NewHardDeleteTenantHandler(tenants, members, func() time.Time { return testNow })
+	h := command.NewHardDeleteTenantHandler(tenants, members, fakeUoW{}, func() time.Time { return testNow })
 
 	err := h.Handle(t.Context(), command.HardDeleteTenantCommand{
 		TenantID: tenant.ID("99999999-9999-9999-9999-999999999999"),
@@ -85,7 +86,7 @@ func TestHardDeleteTenant_RowDeletedAfterAggregateTransition(t *testing.T) {
 	tn.PullEvents()
 	_ = tenants.Add(t.Context(), tn) // arch-test:ignore-err - test fixture setup
 
-	h := command.NewHardDeleteTenantHandler(tenants, members, func() time.Time { return testNow })
+	h := command.NewHardDeleteTenantHandler(tenants, members, fakeUoW{}, func() time.Time { return testNow })
 	if err := h.Handle(t.Context(), command.HardDeleteTenantCommand{TenantID: tn.ID()}); err != nil {
 		t.Fatalf("Handle: %v", err)
 	}
@@ -112,7 +113,7 @@ func TestHardDeleteTenant_PlatformTenant_RejectsBeforeRowTouch(t *testing.T) {
 	tn.PullEvents()
 	_ = tenants.Add(t.Context(), tn) // arch-test:ignore-err
 
-	h := command.NewHardDeleteTenantHandler(tenants, members, func() time.Time { return testNow })
+	h := command.NewHardDeleteTenantHandler(tenants, members, fakeUoW{}, func() time.Time { return testNow })
 	err := h.Handle(t.Context(), command.HardDeleteTenantCommand{TenantID: tn.ID()})
 	if !errors.Is(err, command.ErrPlatformTenantUndeletable) {
 		t.Fatalf("err = %v, want ErrPlatformTenantUndeletable", err)
@@ -126,8 +127,10 @@ func TestHardDeleteTenant_PlatformTenant_RejectsBeforeRowTouch(t *testing.T) {
 }
 
 // TestHardDeleteTenant_RowDeleteFails_AfterAggregateTransitionSucceeds — the
-// aggregate transitioned but the SQL DELETE failed: the handler surfaces a
-// wrapped error without panicking (the saga reconciles the inconsistency).
+// SQL DELETE failed after the in-memory aggregate transitioned: the handler
+// surfaces a wrapped error without panicking. (The in-memory fake has no
+// rollback; that the real transaction undoes the transition is asserted by
+// TestHardDeleteTenant_DependentsFailTheWholeTransaction and the e2e test.)
 func TestHardDeleteTenant_RowDeleteFails_AfterAggregateTransitionSucceeds(t *testing.T) {
 	t.Parallel()
 	inner := newFakeTenantRepo()
@@ -148,7 +151,7 @@ func TestHardDeleteTenant_RowDeleteFails_AfterAggregateTransitionSucceeds(t *tes
 	}
 	members := newFakeMembershipRepo()
 
-	h := command.NewHardDeleteTenantHandler(repo, members, func() time.Time { return testNow })
+	h := command.NewHardDeleteTenantHandler(repo, members, fakeUoW{}, func() time.Time { return testNow })
 
 	defer func() {
 		if r := recover(); r != nil {
@@ -173,4 +176,105 @@ type failingHardDeleteTenantRepo struct {
 
 func (r *failingHardDeleteTenantRepo) HardDeleteRow(_ context.Context, _ tenant.ID) error {
 	return r.hardDeleteErr
+}
+
+// scopeRecordingUoW records the scope a handler opens and whether fn failed (a
+// real transaction rolls back on that), and marks the ctx it hands to fn so the
+// test can see which repository calls ran inside it.
+type scopeRecordingUoW struct {
+	scopes []pg.TxScope
+	failed bool
+}
+
+type inTxKey struct{}
+
+func (u *scopeRecordingUoW) WithinTx(ctx context.Context, scope pg.TxScope, fn func(context.Context) error) error {
+	u.scopes = append(u.scopes, scope)
+	err := fn(context.WithValue(ctx, inTxKey{}, true))
+	u.failed = err != nil
+	return err
+}
+
+// txProbeTenantRepo notes whether UpdateByID and HardDeleteRow ran inside the
+// unit of work, and can fail the row delete with a given error.
+type txProbeTenantRepo struct {
+	*tenanttest.FakeRepository
+	updateInTx, deleteInTx bool
+	deleteErr              error
+}
+
+func (r *txProbeTenantRepo) UpdateByID(ctx context.Context, id tenant.ID, fn func(*tenant.Tenant) (bool, error)) error {
+	r.updateInTx, _ = ctx.Value(inTxKey{}).(bool)
+	return r.FakeRepository.UpdateByID(ctx, id, fn)
+}
+
+func (r *txProbeTenantRepo) HardDeleteRow(ctx context.Context, id tenant.ID) error {
+	r.deleteInTx, _ = ctx.Value(inTxKey{}).(bool)
+	if r.deleteErr != nil {
+		return r.deleteErr
+	}
+	return r.FakeRepository.HardDeleteRow(ctx, id)
+}
+
+func pendingDeletionTenant(t *testing.T, repo *tenanttest.FakeRepository) *tenant.Tenant {
+	t.Helper()
+	tn := newTenant(t)
+	if err := tn.Activate(testNow); err != nil {
+		t.Fatalf("Activate: %v", err)
+	}
+	if err := tn.MarkForDeletion("operator: test", testNow); err != nil {
+		t.Fatalf("MarkForDeletion: %v", err)
+	}
+	tn.PullEvents()
+	_ = repo.Add(t.Context(), tn) // arch-test:ignore-err - test fixture setup
+	return tn
+}
+
+// The transition and the row delete are ONE transaction: both run inside a
+// single platform-scoped unit of work.
+func TestHardDeleteTenant_TransitionAndRowDeleteShareOnePlatformTransaction(t *testing.T) {
+	t.Parallel()
+	repo := &txProbeTenantRepo{FakeRepository: newFakeTenantRepo()}
+	tn := pendingDeletionTenant(t, repo.FakeRepository)
+	uow := &scopeRecordingUoW{}
+	h := command.NewHardDeleteTenantHandler(repo, newFakeMembershipRepo(), uow, func() time.Time { return testNow })
+
+	if err := h.Handle(t.Context(), command.HardDeleteTenantCommand{TenantID: tn.ID()}); err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	if len(uow.scopes) != 1 || uow.scopes[0] != pg.TxScopePlatform {
+		t.Fatalf("unit of work scopes = %v, want exactly one platform-scoped transaction", uow.scopes)
+	}
+	if !repo.updateInTx || !repo.deleteInTx {
+		t.Errorf("inside the transaction: transition=%v row delete=%v, want both true", repo.updateInTx, repo.deleteInTx)
+	}
+}
+
+// A tenant that still has dependents: the error is matchable (the HTTP layer
+// answers 409) and the unit of work saw a failure, so the real transaction
+// rolls the transition and its outbox row back.
+func TestHardDeleteTenant_DependentsFailTheWholeTransaction(t *testing.T) {
+	t.Parallel()
+	repo := &txProbeTenantRepo{FakeRepository: newFakeTenantRepo(), deleteErr: tenant.ErrHasDependents}
+	tn := pendingDeletionTenant(t, repo.FakeRepository)
+	uow := &scopeRecordingUoW{}
+	h := command.NewHardDeleteTenantHandler(repo, newFakeMembershipRepo(), uow, func() time.Time { return testNow })
+
+	err := h.Handle(t.Context(), command.HardDeleteTenantCommand{TenantID: tn.ID()})
+	if !errors.Is(err, tenant.ErrHasDependents) {
+		t.Fatalf("err = %v, want it to match tenant.ErrHasDependents", err)
+	}
+	if !uow.failed {
+		t.Error("the unit of work did not see the failure: the transition would be committed")
+	}
+}
+
+func TestNewHardDeleteTenantHandler_PanicsOnNilUnitOfWork(t *testing.T) {
+	t.Parallel()
+	defer func() {
+		if r := recover(); r == nil {
+			t.Error("expected panic on nil unit of work")
+		}
+	}()
+	_ = command.NewHardDeleteTenantHandler(newFakeTenantRepo(), newFakeMembershipRepo(), nil, func() time.Time { return testNow }) // arch-test:ignore-err - test fixture setup
 }

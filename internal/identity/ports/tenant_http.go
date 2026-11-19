@@ -404,6 +404,8 @@ func parseTenantIDPath(w http.ResponseWriter, r *http.Request) (tenant.ID, bool)
 //
 //   - nil          → 204 No Content
 //   - tenant.ErrNotFound / command.ErrTenantNotFound → 404
+//   - tenant.ErrHasDependents → 409 tenant_has_dependents (hard delete only; the
+//     transaction was rolled back, nothing changed)
 //   - tenant.ErrInvalid (wrapped from aggregate) → 422 (lifecycle
 //     transition rejected, over-length names, missing reason, etc.)
 //   - tenant.ErrSlugTaken → 409 (mostly relevant for register flow,
@@ -419,6 +421,9 @@ func writeTenantMutationResult(w http.ResponseWriter, log *slog.Logger, r *http.
 	case errors.Is(err, command.ErrPlatformTenantUndeletable):
 		writeError(w, http.StatusUnprocessableEntity, ErrCodePlatformTenantUndeletable,
 			"this tenant holds an active SuperAdmin role and cannot be deleted via the standard lifecycle API")
+	case errors.Is(err, tenant.ErrHasDependents):
+		writeError(w, http.StatusConflict, ErrCodeTenantHasDependents,
+			"the tenant still has dependent records (members, roles, ...) and cannot be deleted; nothing was changed")
 	case errors.Is(err, tenant.ErrInvalid):
 		writeError(w, http.StatusUnprocessableEntity, ErrCodeTenantInvalid, err.Error())
 	default:
