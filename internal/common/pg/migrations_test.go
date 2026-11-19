@@ -7,11 +7,14 @@ import (
 	"database/sql"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/google/go-cmp/cmp"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/pressly/goose/v3"
 
@@ -532,30 +535,63 @@ func TestAppRoleHasPrivilegesOnEveryApplicationTable(t *testing.T) {
 		}
 	}
 
-	// Every table: DML yes; TRUNCATE / REFERENCES / TRIGGER no.
+	// Every table: exactly the expected privileges, checked in both directions
+	// (each of the seven table privileges is either expected or must be absent).
+	// Default = DML; the pinned exceptions below are the only narrower sets.
+	// The Go side (pg.TablePrivilegeExceptions / SchemaTablePrivileges, read by
+	// the start-up check) must say the same.
+	dml := []string{"SELECT", "INSERT", "UPDATE", "DELETE"}
+	wantSchemaPrivs := map[string][]string{"shared": {"SELECT"}}
+	wantTableExceptions := map[string][]string{
+		"common.audit_log_entry":           {"SELECT", "INSERT", "DELETE"},
+		"common.admin_impersonation_audit": {"SELECT", "INSERT"},
+	}
+	if diff := cmp.Diff(wantSchemaPrivs, pg.SchemaTablePrivileges()); diff != "" {
+		t.Errorf("pg.SchemaTablePrivileges differs from the pinned set (-want +got):\n%s", diff)
+	}
+	if diff := cmp.Diff(wantTableExceptions, pg.TablePrivilegeExceptions()); diff != "" {
+		t.Errorf("pg.TablePrivilegeExceptions differs from the pinned set (-want +got):\n%s", diff)
+	}
+	if diff := cmp.Diff(dml, pg.DefaultTablePrivileges()); diff != "" {
+		t.Errorf("pg.DefaultTablePrivileges differs (-want +got):\n%s", diff)
+	}
+	if diff := cmp.Diff(schemas, slices.Sorted(slices.Values(pg.ApplicationSchemas()))); diff != "" {
+		t.Errorf("pg.ApplicationSchemas differs from the schemas the migrations created (-database +go):\n%s", diff)
+	}
 	tables := queryStrings(t, db, `
 		SELECT n.nspname || '.' || c.relname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
 		WHERE c.relkind IN ('r', 'p') AND n.nspname = ANY($1) ORDER BY 1`, pgArray(schemas))
 	if len(tables) < 40 {
 		t.Fatalf("expected the application tables, found %d", len(tables))
 	}
-	for _, tb := range tables {
-		for _, p := range []string{"SELECT", "INSERT", "UPDATE", "DELETE"} {
-			if !hasPriv(t, db, `SELECT has_table_privilege('leadkart_app', $1, $2)`, tb, p) {
-				t.Errorf("leadkart_app lacks %s on %s: the table's schema is missing the grants of migration 20260606000001", p, tb)
-			}
+	for tb := range wantTableExceptions {
+		if !slices.Contains(tables, tb) {
+			t.Errorf("pinned exception table %s does not exist", tb)
 		}
-		for _, p := range []string{"TRUNCATE", "REFERENCES", "TRIGGER"} {
-			if hasPriv(t, db, `SELECT has_table_privilege('leadkart_app', $1, $2)`, tb, p) {
-				t.Errorf("leadkart_app must not hold %s on %s", p, tb)
+	}
+	for _, tb := range tables {
+		want := dml
+		if p, ok := wantTableExceptions[tb]; ok {
+			want = p
+		} else if p, ok := wantSchemaPrivs[strings.SplitN(tb, ".", 2)[0]]; ok {
+			want = p
+		}
+		for _, p := range []string{"SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE", "REFERENCES", "TRIGGER"} {
+			got := hasPriv(t, db, `SELECT has_table_privilege('leadkart_app', $1, $2)`, tb, p)
+			if expected := slices.Contains(want, p); got != expected {
+				t.Errorf("leadkart_app %s on %s: held=%v, want %v (a schema missing the grants of migration 20260606000001, or a privilege that should have been removed)", p, tb, got, expected)
 			}
 		}
 	}
 
-	// Every sequence: USAGE + SELECT, not UPDATE.
+	// Every sequence: USAGE + SELECT, not UPDATE (the read-only `shared` schema has none).
 	for _, sq := range queryStrings(t, db, `
 		SELECT n.nspname || '.' || c.relname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
 		WHERE c.relkind = 'S' AND n.nspname = ANY($1) ORDER BY 1`, pgArray(schemas)) {
+		if strings.HasPrefix(sq, "shared.") {
+			t.Errorf("sequence %s in the read-only shared schema: decide its privileges explicitly", sq)
+			continue
+		}
 		usage := hasPriv(t, db, `SELECT has_sequence_privilege('leadkart_app', $1, 'USAGE')`, sq)
 		sel := hasPriv(t, db, `SELECT has_sequence_privilege('leadkart_app', $1, 'SELECT')`, sq)
 		upd := hasPriv(t, db, `SELECT has_sequence_privilege('leadkart_app', $1, 'UPDATE')`, sq)
@@ -656,5 +692,222 @@ func TestAppRoleGrantsMigration_DownThenUpIsIdempotent(t *testing.T) {
 	}
 	if !usage() {
 		t.Fatal("grants missing after re-up")
+	}
+}
+
+// ----- RLS policies use the safe tenant helpers (migration 20261120000001) ---
+
+// seedTwoTenantsWithPermissionRequests inserts two tenants, one membership each
+// and one permission request each, as the owner (which bypasses RLS), and
+// returns tenant A, tenant B and B's request id.
+func seedTwoTenantsWithPermissionRequests(t *testing.T, db *sql.DB) (tenantA, tenantB, requestB uuid.UUID) {
+	t.Helper()
+	ctx := t.Context()
+	tenantA, tenantB, requestB = uuid.New(), uuid.New(), uuid.New()
+	for _, tid := range []uuid.UUID{tenantA, tenantB} {
+		person, membership, request := uuid.New(), uuid.New(), uuid.New()
+		if tid == tenantB {
+			request = requestB
+		}
+		if _, err := db.ExecContext(ctx, `
+			INSERT INTO identity.tenants (id, slug, legal_name, display_name, status, created_at)
+			VALUES ($1, $2, 'Acme Pharma', 'Acme', 'active', now())`, tid, "tenant-"+tid.String()[:8]); err != nil {
+			t.Fatalf("insert tenant: %v", err)
+		}
+		if _, err := db.ExecContext(ctx, `
+			INSERT INTO identity.persons (id, email, first_name, last_name, password_hash, security_stamp, created_at)
+			VALUES ($1, $2, 'First', 'Last', 'argon2id$...', $3, now())`, person, person.String()+"@example.test", uuid.New()); err != nil {
+			t.Fatalf("insert person: %v", err)
+		}
+		if _, err := db.ExecContext(ctx, `
+			INSERT INTO identity.tenant_memberships (id, person_id, tenant_id, status, joined_at)
+			VALUES ($1, $2, $3, 'active', now())`, membership, person, tid); err != nil {
+			t.Fatalf("insert membership: %v", err)
+		}
+		if _, err := db.ExecContext(ctx, `
+			INSERT INTO identity.permission_requests
+				(id, tenant_id, requester_membership_id, permission_constant, duration_days, reason, state)
+			VALUES ($1, $2, $3, 'crm.leads.view', 7, 'need it for the quarter close', 'pending')`, request, tid, membership); err != nil {
+			t.Fatalf("insert permission request: %v", err)
+		}
+	}
+	return tenantA, tenantB, requestB
+}
+
+// On ONE reused connection as leadkart_app: a platform-scoped transaction ends,
+// then a tenant-scoped read of another tenant's permission request by id must
+// answer "no rows". After the first transaction `app.is_platform` reads an empty string on
+// the pooled connection, and a raw `current_setting(...)::boolean` in a policy
+// raises 22P02 (a 500 plus an existence signal for foreign ids).
+func TestRLS_PermissionRequestsTenantReadAfterPlatformTxOnSameConnection(t *testing.T) {
+	dsn := startPostgres(t)
+	db, err := sql.Open("pgx", dsn)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer db.Close()
+	createAppRole(t, db)
+	applyMigrations(t, dsn)
+	tenantA, _, requestB := seedTwoTenantsWithPermissionRequests(t, db)
+
+	ctx := t.Context()
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		t.Fatalf("conn: %v", err)
+	}
+	defer conn.Close()
+	if _, err := conn.ExecContext(ctx, `SET ROLE leadkart_app`); err != nil {
+		t.Fatalf("set role: %v", err)
+	}
+
+	// Platform-scoped transaction (the setting is transaction-local).
+	ptx, err := conn.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("begin platform tx: %v", err)
+	}
+	if _, err := ptx.ExecContext(ctx, `SELECT set_config('app.is_platform','true',true)`); err != nil {
+		t.Fatalf("set is_platform: %v", err)
+	}
+	var all int
+	if err := ptx.QueryRowContext(ctx, `SELECT count(*) FROM identity.permission_requests`).Scan(&all); err != nil || all != 2 {
+		t.Fatalf("platform scope: count=%d err=%v, want 2", all, err)
+	}
+	if err := ptx.Commit(); err != nil {
+		t.Fatalf("commit platform tx: %v", err)
+	}
+
+	// Tenant-scoped transaction on the SAME connection.
+	ttx, err := conn.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("begin tenant tx: %v", err)
+	}
+	defer func() { _ = ttx.Rollback() }() // arch-test:ignore-err — cleanup; tx scope ends here
+	if _, err := ttx.ExecContext(ctx, `SELECT set_config('app.tenant_id',$1,true)`, tenantA.String()); err != nil {
+		t.Fatalf("set tenant_id: %v", err)
+	}
+	var got int
+	if err := ttx.QueryRowContext(ctx, `SELECT count(*) FROM identity.permission_requests WHERE id = $1`, requestB).Scan(&got); err != nil {
+		t.Fatalf("tenant A read of tenant B's request by id errored (want no rows): %v", err)
+	}
+	if got != 0 {
+		t.Fatalf("tenant A saw %d rows of tenant B's request, want 0", got)
+	}
+}
+
+// No policy anywhere may call current_setting() itself: an unset or reset
+// setting reads an empty string and the cast raises. Policies go through app.current_tenant()
+// / app.is_platform() (NULLIF + COALESCE). The sweep keeps the class from
+// returning with a new table.
+func TestRLS_NoPolicyUsesRawCurrentSetting(t *testing.T) {
+	dsn := startPostgres(t)
+	applyMigrations(t, dsn)
+	db, err := sql.Open("pgx", dsn)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer db.Close()
+
+	rows, err := db.QueryContext(t.Context(), `
+		SELECT schemaname || '.' || tablename || ' ' || policyname
+		FROM pg_policies
+		WHERE coalesce(qual, '') ILIKE '%current\_setting(%' OR coalesce(with_check, '') ILIKE '%current\_setting(%'
+		ORDER BY 1`)
+	if err != nil {
+		t.Fatalf("query pg_policies: %v", err)
+	}
+	defer rows.Close()
+	var bad []string
+	for rows.Next() {
+		var s string
+		if err := rows.Scan(&s); err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		bad = append(bad, s)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate: %v", err)
+	}
+	if len(bad) != 0 {
+		t.Fatalf("policies with a raw current_setting() (use app.current_tenant() / app.is_platform()): %v", bad)
+	}
+}
+
+// ----- Start-up privilege check ----------------------------------------------
+
+// appRoleConn opens a connection and switches it to leadkart_app, so
+// current_user (what the check inspects) is the application role.
+func appRoleConn(t *testing.T, dsn string) *pgx.Conn {
+	t.Helper()
+	conn, err := pgx.Connect(t.Context(), dsn)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close(context.Background()) }) // arch-test:context-background — t.Context() is cancelled when Cleanup runs
+	if _, err := conn.Exec(t.Context(), `SET ROLE leadkart_app`); err != nil {
+		t.Fatalf("set role: %v", err)
+	}
+	return conn
+}
+
+func TestVerifyApplicationPrivileges_PassesOnMigratedDatabase(t *testing.T) {
+	dsn := startPostgres(t)
+	db, err := sql.Open("pgx", dsn)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer db.Close()
+	createAppRole(t, db)
+	applyMigrations(t, dsn)
+
+	if err := pg.VerifyApplicationPrivileges(t.Context(), appRoleConn(t, dsn)); err != nil {
+		t.Fatalf("a correctly migrated database must pass (including the narrower audit and shared sets): %v", err)
+	}
+}
+
+// The grants migration records itself as applied without granting anything when
+// the role does not exist yet. Creating the role afterwards leaves it with
+// nothing, and the check must say so (and not leak the DSN).
+func TestVerifyApplicationPrivileges_FailsWhenRoleWasCreatedAfterMigrating(t *testing.T) {
+	dsn := startPostgres(t)
+	applyMigrations(t, dsn) // no leadkart_app yet: the grants migration is a no-op
+	db, err := sql.Open("pgx", dsn)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer db.Close()
+	createAppRole(t, db)
+
+	err = pg.VerifyApplicationPrivileges(t.Context(), appRoleConn(t, dsn))
+	if err == nil {
+		t.Fatal("check passed for a role that holds nothing")
+	}
+	for _, want := range []string{`"leadkart_app"`, "USAGE on schema"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q lacks %q", err, want)
+		}
+	}
+	if strings.Contains(err.Error(), "leadkart_test") || strings.Contains(err.Error(), "postgres://") {
+		t.Errorf("error leaks connection details: %v", err)
+	}
+}
+
+// A single missing table privilege is named, and the append-only exceptions are
+// enforced in the direction the check can see (DELETE on the audit log is needed).
+func TestVerifyApplicationPrivileges_NamesTheFirstMissingPrivilege(t *testing.T) {
+	dsn := startPostgres(t)
+	db, err := sql.Open("pgx", dsn)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer db.Close()
+	createAppRole(t, db)
+	applyMigrations(t, dsn)
+	if _, err := db.ExecContext(t.Context(), `REVOKE DELETE ON common.audit_log_entry FROM leadkart_app`); err != nil {
+		t.Fatalf("revoke: %v", err)
+	}
+
+	err = pg.VerifyApplicationPrivileges(t.Context(), appRoleConn(t, dsn))
+	if err == nil || !strings.Contains(err.Error(), "DELETE on table common.audit_log_entry") {
+		t.Fatalf("want an error naming DELETE on common.audit_log_entry, got: %v", err)
 	}
 }

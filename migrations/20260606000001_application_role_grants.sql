@@ -14,7 +14,14 @@
 --       app, common, identity, platform, crm, inventory, shared, tasks,
 --       dispatch, orders, notifications
 --   * SELECT, INSERT, UPDATE, DELETE on all tables of every schema except app
---     (app holds only the RLS helper functions)
+--     (app holds only the RLS helper functions) and except the narrower sets
+--     below
+--   * schema shared (reference data, read-only for tenants; its only reader is
+--     common/refdata/gst_default.go): SELECT only, on existing tables and, by
+--     default privileges, on tables added later; no sequence privileges
+--   * common.audit_log_entry: SELECT, INSERT, DELETE (the purge job). Never
+--     UPDATE: the audit trail is append-only for the application
+--   * common.admin_impersonation_audit: SELECT, INSERT. Never UPDATE or DELETE
 --   * USAGE, SELECT on all sequences of those schemas (serial / identity columns,
 --     e.g. common.outbox."offset"; GRANT ON TABLES does not cover sequences)
 --   * EXECUTE on the functions in schema app (app.current_tenant(),
@@ -39,9 +46,26 @@
 -- role is absent). TestAppRole_HasPrivilegesOnEveryApplicationTable fails CI
 -- when a schema or table is missed.
 --
+-- The exact privilege set (schemas, defaults, exceptions) is mirrored in Go by
+-- internal/common/pg/privileges.go: TestAppRoleHasPrivilegesOnEveryApplicationTable
+-- pins the database to it in both directions, and VerifyApplicationPrivileges
+-- checks it at start-up of cmd/api and cmd/worker.
+--
+-- MIGRATIONS MUST ALWAYS RUN AS THE SAME OWNER ROLE. ALTER DEFAULT PRIVILEGES
+-- below has no FOR ROLE clause, so it binds to the role running this migration:
+-- tables created later by a DIFFERENT role would not be granted to leadkart_app.
+-- The start-up check is what catches a violation: the API refuses to boot and
+-- names the first missing privilege.
+--
+-- RIVER (public.river_* tables) is not covered here: River has its own migration
+-- ledger, run by cmd/migrate AFTER goose, which then grants the application role
+-- DML on the river tables (internal/common/jobs GrantApplicationRole).
+--
 -- IDEMPOTENT: GRANT and ALTER DEFAULT PRIVILEGES are re-runnable. NO-OP where the
--- role does not exist (a database provisioned without docker/postgres/init.sql;
--- create the role first, then run migrations, or re-run this grant block).
+-- role does not exist (a database provisioned without docker/postgres/init.sql).
+-- goose records the migration as applied anyway, so a role created LATER has
+-- nothing; the start-up check fails fast on that. Fix: create the role, then roll
+-- this migration down and up again (or run the grant block by hand).
 
 -- +goose Up
 -- +goose StatementBegin
@@ -62,6 +86,10 @@ BEGIN
         IF s = 'app' THEN
             EXECUTE 'GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA app TO leadkart_app';
             EXECUTE 'ALTER DEFAULT PRIVILEGES IN SCHEMA app GRANT EXECUTE ON FUNCTIONS TO leadkart_app';
+        ELSIF s = 'shared' THEN
+            -- reference data: read-only for the application
+            EXECUTE 'GRANT SELECT ON ALL TABLES IN SCHEMA shared TO leadkart_app';
+            EXECUTE 'ALTER DEFAULT PRIVILEGES IN SCHEMA shared GRANT SELECT ON TABLES TO leadkart_app';
         ELSE
             EXECUTE format('GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA %I TO leadkart_app', s);
             EXECUTE format('GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA %I TO leadkart_app', s);
@@ -69,6 +97,14 @@ BEGIN
             EXECUTE format('ALTER DEFAULT PRIVILEGES IN SCHEMA %I GRANT USAGE, SELECT ON SEQUENCES TO leadkart_app', s);
         END IF;
     END LOOP;
+
+    -- Append-only audit tables: take back what the blanket grant above gave.
+    IF to_regclass('common.audit_log_entry') IS NOT NULL THEN
+        REVOKE UPDATE ON common.audit_log_entry FROM leadkart_app;
+    END IF;
+    IF to_regclass('common.admin_impersonation_audit') IS NOT NULL THEN
+        REVOKE UPDATE, DELETE ON common.admin_impersonation_audit FROM leadkart_app;
+    END IF;
 END
 $$;
 -- +goose StatementEnd
@@ -90,6 +126,9 @@ BEGIN
         IF s = 'app' THEN
             EXECUTE 'ALTER DEFAULT PRIVILEGES IN SCHEMA app REVOKE EXECUTE ON FUNCTIONS FROM leadkart_app';
             EXECUTE 'REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA app FROM leadkart_app';
+        ELSIF s = 'shared' THEN
+            EXECUTE 'ALTER DEFAULT PRIVILEGES IN SCHEMA shared REVOKE SELECT ON TABLES FROM leadkart_app';
+            EXECUTE 'REVOKE SELECT ON ALL TABLES IN SCHEMA shared FROM leadkart_app';
         ELSE
             EXECUTE format('ALTER DEFAULT PRIVILEGES IN SCHEMA %I REVOKE USAGE, SELECT ON SEQUENCES FROM leadkart_app', s);
             EXECUTE format('ALTER DEFAULT PRIVILEGES IN SCHEMA %I REVOKE SELECT, INSERT, UPDATE, DELETE ON TABLES FROM leadkart_app', s);

@@ -295,6 +295,13 @@ func run(ctx context.Context, stdout *os.File, _ []string) error {
 	if err := pool.Ping(ctx); err != nil {
 		return fmt.Errorf("pgxpool ping: %w", err)
 	}
+	// Fail fast when the database role lacks a privilege the application
+	// needs (the grants migration is a no-op when the role did not exist
+	// at migration time). One query, run once; names the first missing
+	// privilege, never the DSN.
+	if err := pg.VerifyApplicationPrivileges(ctx, pool); err != nil {
+		return err
+	}
 	logger.InfoContext(ctx, "postgres connected")
 
 	// Redis client is the single broker for the HybridCache L2 layer
