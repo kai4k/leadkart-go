@@ -9,7 +9,6 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/leadkart/leadkart-go/internal/common/tenancy"
 	"github.com/leadkart/leadkart-go/internal/dispatch/app"
 	"github.com/leadkart/leadkart-go/internal/dispatch/app/command"
 	"github.com/leadkart/leadkart-go/internal/dispatch/app/query"
@@ -19,16 +18,6 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 	"github.com/leadkart/leadkart-go/internal/identity/ports/authn"
 )
-
-// tenantFromContext extracts the caller's tenant ID from ctx (bound by
-// authn middleware).
-func tenantFromContext(r *http.Request) (tenant.ID, bool) {
-	tid, ok := tenancy.FromContext(r.Context())
-	if !ok || tid == "" {
-		return tenant.ID(""), false
-	}
-	return tenant.ID(tid), true
-}
 
 // AddRoutes registers Dispatch HTTP handlers on mux per Mat Ryer 2024
 // canon.
@@ -72,11 +61,12 @@ func handleCreate(log *slog.Logger, a app.Application) http.Handler {
 			writeError(w, http.StatusUnauthorized, errCodeUnauthenticated, "")
 			return
 		}
-		tid, ok := tenantFromContext(r)
+		effTenant, ok := authn.EffectiveTenantID(r.Context())
 		if !ok {
 			writeError(w, http.StatusUnauthorized, errCodeUnauthenticated, "")
 			return
 		}
+		tid := tenant.ID(effTenant)
 		var req CreateConsignmentNoteRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeError(w, http.StatusBadRequest, errCodeInvalidBody, "request body is not valid JSON")
@@ -116,11 +106,12 @@ func handleCreate(log *slog.Logger, a app.Application) http.Handler {
 
 func handleGet(log *slog.Logger, a app.Application) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		tid, ok := tenantFromContext(r)
+		effTenant, ok := authn.EffectiveTenantID(r.Context())
 		if !ok {
 			writeError(w, http.StatusUnauthorized, errCodeUnauthenticated, "")
 			return
 		}
+		tid := tenant.ID(effTenant)
 		id, ok := parseConsignmentNoteID(w, r)
 		if !ok {
 			return
@@ -142,11 +133,12 @@ func handleGet(log *slog.Logger, a app.Application) http.Handler {
 
 func handleGetByOrder(log *slog.Logger, a app.Application) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		tid, ok := tenantFromContext(r)
+		effTenant, ok := authn.EffectiveTenantID(r.Context())
 		if !ok {
 			writeError(w, http.StatusUnauthorized, errCodeUnauthenticated, "")
 			return
 		}
+		tid := tenant.ID(effTenant)
 		orderID := strings.TrimSpace(r.URL.Query().Get("order_id"))
 		if orderID == "" {
 			writeError(w, http.StatusBadRequest, errCodeOrderIDRequired, "order_id query parameter is required")
@@ -260,11 +252,12 @@ func actorTenantID(w http.ResponseWriter, r *http.Request) (membership.ID, tenan
 		writeError(w, http.StatusUnauthorized, errCodeUnauthenticated, "")
 		return "", "", "", false
 	}
-	tid, ok := tenantFromContext(r)
+	effTenant, ok := authn.EffectiveTenantID(r.Context())
 	if !ok {
 		writeError(w, http.StatusUnauthorized, errCodeUnauthenticated, "")
 		return "", "", "", false
 	}
+	tid := tenant.ID(effTenant)
 	id, ok := parseConsignmentNoteID(w, r)
 	if !ok {
 		return "", "", "", false

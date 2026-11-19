@@ -176,3 +176,36 @@ func TestRequireAnyPermission_TenantAdmin(t *testing.T) {
 		t.Fatalf("tenant.admin vs reserved: status %d want 403", rec.Code)
 	}
 }
+
+// CanActAcrossTenants is the one operator-reach predicate: super user, or an
+// anchored non-impersonation operator holding platform.tenants.view. Platform
+// membership alone, platform.tenants.manage alone, a tenant-plane grant and a
+// non-anchored is_platform flag all fail.
+func TestCanActAcrossTenants(t *testing.T) {
+	t.Parallel()
+	p := permission.IdentityPermissions
+	op := func(perms ...string) *jwt.Claims {
+		return &jwt.Claims{TenantID: tenantA, TenantSlug: authn.PlatformTenantSlug, IsPlatform: true, Permissions: perms}
+	}
+	cases := []struct {
+		name string
+		c    *jwt.Claims
+		want bool
+	}{
+		{"nil", nil, false},
+		{"super user", &jwt.Claims{TenantID: tenantA, IsSuperUser: true}, true},
+		{"operator with platform.tenants.view", op(p.Platform.TenantsView), true},
+		{"operator with no permission", op(), false},
+		{"operator with manage only", op(p.Platform.TenantsManage), false},
+		{"operator with identity.tenants.view only", op(p.Tenants.View), false},
+		{"operator with tenant.admin only", op(p.Meta.TenantAdmin), false},
+		{"non-anchored is_platform", &jwt.Claims{TenantID: tenantA, TenantSlug: "acme", IsPlatform: true, Permissions: []string{p.Platform.TenantsView}}, false},
+		{"impersonation token", &jwt.Claims{TenantID: tenantA, TenantSlug: authn.PlatformTenantSlug, IsPlatform: true, Permissions: []string{p.Platform.TenantsView}, Act: &jwt.ActClaim{Sub: "op"}}, false},
+		{"ordinary tenant admin", &jwt.Claims{TenantID: tenantA, TenantSlug: "acme", Permissions: []string{p.Meta.TenantAdmin}}, false},
+	}
+	for _, tc := range cases {
+		if got := authn.CanActAcrossTenants(tc.c); got != tc.want {
+			t.Errorf("%s: %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}

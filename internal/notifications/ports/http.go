@@ -9,7 +9,6 @@ import (
 	"strings"
 
 	"github.com/leadkart/leadkart-go/internal/common/pagination"
-	"github.com/leadkart/leadkart-go/internal/common/tenancy"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/permission"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
@@ -19,15 +18,6 @@ import (
 	"github.com/leadkart/leadkart-go/internal/notifications/app/query"
 	"github.com/leadkart/leadkart-go/internal/notifications/domain/notification"
 )
-
-// tenantFromContext extracts the caller's tenant ID from ctx (bound by authn).
-func tenantFromContext(r *http.Request) (tenant.ID, bool) {
-	tid, ok := tenancy.FromContext(r.Context())
-	if !ok || tid == "" {
-		return tenant.ID(""), false
-	}
-	return tenant.ID(tid), true
-}
 
 // AddRoutes registers Notifications HTTP handlers (Mat Ryer 2024 NewServer).
 //
@@ -204,11 +194,12 @@ func callerContext(w http.ResponseWriter, r *http.Request) (membership.ID, tenan
 		writeError(w, http.StatusUnauthorized, errCodeUnauthenticated, "")
 		return "", "", false
 	}
-	tid, ok := tenantFromContext(r)
+	effTenant, ok := authn.EffectiveTenantID(r.Context())
 	if !ok {
 		writeError(w, http.StatusUnauthorized, errCodeUnauthenticated, "")
 		return "", "", false
 	}
+	tid := tenant.ID(effTenant)
 	return membership.ID(c.MembershipID), tid, true
 }
 

@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/leadkart/leadkart-go/internal/common/tenancy"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/permission"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 	"github.com/leadkart/leadkart-go/internal/identity/ports/authn"
@@ -20,14 +19,6 @@ import (
 	"github.com/leadkart/leadkart-go/internal/orders/domain/payment"
 	"github.com/leadkart/leadkart-go/internal/orders/domain/quotation"
 )
-
-func tenantFromContext(r *http.Request) (tenant.ID, bool) {
-	tid, ok := tenancy.FromContext(r.Context())
-	if !ok || tid == "" {
-		return tenant.ID(""), false
-	}
-	return tenant.ID(tid), true
-}
 
 // AddRoutes registers Orders HTTP handlers on mux per Mat Ryer 2024 canon.
 //
@@ -163,11 +154,12 @@ func handleCreateQuotation(log *slog.Logger, a app.Application) http.Handler {
 
 func handleGetQuotation(log *slog.Logger, a app.Application) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		tid, ok := tenantFromContext(r)
+		effTenant, ok := authn.EffectiveTenantID(r.Context())
 		if !ok {
 			writeError(w, http.StatusUnauthorized, errCodeUnauthenticated, "")
 			return
 		}
+		tid := tenant.ID(effTenant)
 		id, ok := parseQuotationID(w, r)
 		if !ok {
 			return
@@ -250,11 +242,12 @@ func handleRejectQuotation(log *slog.Logger, a app.Application) http.Handler {
 
 func handleGetOrder(log *slog.Logger, a app.Application) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		tid, ok := tenantFromContext(r)
+		effTenant, ok := authn.EffectiveTenantID(r.Context())
 		if !ok {
 			writeError(w, http.StatusUnauthorized, errCodeUnauthenticated, "")
 			return
 		}
+		tid := tenant.ID(effTenant)
 		id, ok := parseOrderID(w, r)
 		if !ok {
 			return
@@ -380,11 +373,12 @@ func handleCompleteOrder(log *slog.Logger, a app.Application) http.Handler {
 
 func handleGetInvoice(log *slog.Logger, a app.Application) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		tid, ok := tenantFromContext(r)
+		effTenant, ok := authn.EffectiveTenantID(r.Context())
 		if !ok {
 			writeError(w, http.StatusUnauthorized, errCodeUnauthenticated, "")
 			return
 		}
+		tid := tenant.ID(effTenant)
 		id, ok := parseOrderID(w, r)
 		if !ok {
 			return
@@ -403,11 +397,12 @@ func handleGetInvoice(log *slog.Logger, a app.Application) http.Handler {
 
 func handleListPayments(log *slog.Logger, a app.Application) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		tid, ok := tenantFromContext(r)
+		effTenant, ok := authn.EffectiveTenantID(r.Context())
 		if !ok {
 			writeError(w, http.StatusUnauthorized, errCodeUnauthenticated, "")
 			return
 		}
+		tid := tenant.ID(effTenant)
 		id, ok := parseOrderID(w, r)
 		if !ok {
 			return

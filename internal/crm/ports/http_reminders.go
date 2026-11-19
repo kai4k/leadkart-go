@@ -17,6 +17,7 @@ import (
 	"github.com/leadkart/leadkart-go/internal/crm/domain/crmlead"
 	"github.com/leadkart/leadkart-go/internal/crm/domain/reminder"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/permission"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 	"github.com/leadkart/leadkart-go/internal/identity/ports/authn"
 )
 
@@ -24,11 +25,12 @@ import (
 // Creates a manual reminder against a lead. Gated by crm.leads.manage.
 func handleCreateReminder(log *slog.Logger, a app.Application) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		tid, ok := tenantFromContext(r)
+		effTenant, ok := authn.EffectiveTenantID(r.Context())
 		if !ok {
 			writeError(w, http.StatusUnauthorized, errCodeUnauthenticated, "")
 			return
 		}
+		tid := tenant.ID(effTenant)
 		leadID, ok := parseLeadID(w, r)
 		if !ok {
 			return
@@ -87,11 +89,12 @@ func handleListReminders(log *slog.Logger, a app.Application) http.Handler {
 			writeError(w, http.StatusUnauthorized, errCodeUnauthenticated, "")
 			return
 		}
-		tid, ok := tenantFromContext(r)
+		effTenant, ok := authn.EffectiveTenantID(r.Context())
 		if !ok {
 			writeError(w, http.StatusUnauthorized, errCodeUnauthenticated, "")
 			return
 		}
+		tid := tenant.ID(effTenant)
 		params := r.URL.Query()
 		cursor, err := pagination.Decode(params.Get("cursor"))
 		if err != nil {
@@ -129,7 +132,7 @@ func handleListReminders(log *slog.Logger, a app.Application) http.Handler {
 		}
 
 		selfFilter := ""
-		if !c.IsSuperUser && !authn.IsPlatformOperator(c) &&
+		if !authn.CanActAcrossTenants(c) &&
 			!authn.Satisfies(r.Context(), permission.IdentityPermissions.Crm.Leads.ReadAll) {
 			selfFilter = c.MembershipID
 		}
@@ -165,11 +168,12 @@ func handleListReminders(log *slog.Logger, a app.Application) http.Handler {
 // handleMarkReminderSent is POST /api/v1/crm/reminders/{reminderId}/sent.
 func handleMarkReminderSent(log *slog.Logger, a app.Application) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		tid, ok := tenantFromContext(r)
+		effTenant, ok := authn.EffectiveTenantID(r.Context())
 		if !ok {
 			writeError(w, http.StatusUnauthorized, errCodeUnauthenticated, "")
 			return
 		}
+		tid := tenant.ID(effTenant)
 		id, ok := parseReminderID(w, r)
 		if !ok {
 			return
@@ -189,11 +193,12 @@ func handleMarkReminderSent(log *slog.Logger, a app.Application) http.Handler {
 // handleCancelReminder is POST /api/v1/crm/reminders/{reminderId}/cancel.
 func handleCancelReminder(log *slog.Logger, a app.Application) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		tid, ok := tenantFromContext(r)
+		effTenant, ok := authn.EffectiveTenantID(r.Context())
 		if !ok {
 			writeError(w, http.StatusUnauthorized, errCodeUnauthenticated, "")
 			return
 		}
+		tid := tenant.ID(effTenant)
 		id, ok := parseReminderID(w, r)
 		if !ok {
 			return

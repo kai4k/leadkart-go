@@ -74,7 +74,7 @@ func handleListTenantsByFilter(log *slog.Logger, a app.Application) http.Handler
 			writeError(w, http.StatusInternalServerError, ErrCodeInternalError, "")
 			return
 		}
-		operator := c.IsSuperUser || authn.IsPlatformOperator(c)
+		operator := authn.CanActAcrossTenants(c)
 		if !operator && c.TenantID != view.ID {
 			// No access → empty list (NOT 200-with-result + NOT 404).
 			writeJSON(w, http.StatusOK, ListTenantsResponse{Tenants: []TenantDto{}})
@@ -152,7 +152,7 @@ func handleGetTenantBySlug(log *slog.Logger, a app.Application) http.Handler {
 		// Operator bypass — slug-anchored, mirrors RequireTenantPermission +
 		// RequirePlatform discipline. Defense-in-depth: is_platform=true
 		// AND tenant_slug=="platform" must BOTH hold.
-		operator := c.IsSuperUser || authn.IsPlatformOperator(c)
+		operator := authn.CanActAcrossTenants(c)
 
 		if !operator && c.TenantID != view.ID {
 			// Tenant exists, caller can't see it. Same 404 surface as

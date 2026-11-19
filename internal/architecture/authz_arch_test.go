@@ -31,13 +31,18 @@ const authzFactories = `RequirePermission|RequireAnyPermission|RequirePlatformGa
 
 var (
 	authzCallRE    = regexp.MustCompile(`authn\.(` + authzFactories + `)\(`)
-	authzBindingRE = regexp.MustCompile(`(?m)\b([a-zA-Z_]\w*)\s*:=\s*authn\.(` + authzFactories + `)\(`)
 	authzComposeRE = regexp.MustCompile(`(?m)\b([a-zA-Z_]\w*)\s*:=\s*\w+\s*\(([^)]*)\)`)
 )
 
-func authzAliases(text string) map[string]bool {
+func authzAliases(text string) map[string]bool { return aliasesOf(text, authzFactories) }
+
+// aliasesOf discovers the identifiers a ports file binds to authn.<factory>(...)
+// (factories is a regexp alternation), plus the identifiers composed from them
+// (`x := chain(a, b)` where a is already an alias), by closure.
+func aliasesOf(text, factories string) map[string]bool {
+	bindingRE := regexp.MustCompile(`(?m)\b([a-zA-Z_]\w*)\s*:=\s*authn\.(` + factories + `)\b`)
 	active := map[string]bool{}
-	for _, m := range authzBindingRE.FindAllStringSubmatch(text, -1) {
+	for _, m := range bindingRE.FindAllStringSubmatch(text, -1) {
 		active[m[1]] = true
 	}
 	for round := 0; round < 4; round++ {

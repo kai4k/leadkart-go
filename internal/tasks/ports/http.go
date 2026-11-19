@@ -13,7 +13,6 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/leadkart/leadkart-go/internal/common/pagination"
-	"github.com/leadkart/leadkart-go/internal/common/tenancy"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/permission"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 	"github.com/leadkart/leadkart-go/internal/identity/ports/authn"
@@ -22,16 +21,6 @@ import (
 	"github.com/leadkart/leadkart-go/internal/tasks/app/query"
 	"github.com/leadkart/leadkart-go/internal/tasks/domain/workitem"
 )
-
-// tenantFromContext extracts the caller's tenant ID from ctx (bound
-// by authn middleware).
-func tenantFromContext(r *http.Request) (tenant.ID, bool) {
-	tid, ok := tenancy.FromContext(r.Context())
-	if !ok || tid == "" {
-		return tenant.ID(""), false
-	}
-	return tenant.ID(tid), true
-}
 
 // AddRoutes registers Tasks HTTP handlers on mux per Mat Ryer 2024
 // canon.
@@ -82,11 +71,12 @@ func handleCreateWorkItem(log *slog.Logger, a app.Application) http.Handler {
 			writeError(w, http.StatusUnauthorized, errCodeUnauthenticated, "")
 			return
 		}
-		tid, ok := tenantFromContext(r)
+		effTenant, ok := authn.EffectiveTenantID(r.Context())
 		if !ok {
 			writeError(w, http.StatusUnauthorized, errCodeUnauthenticated, "")
 			return
 		}
+		tid := tenant.ID(effTenant)
 		var req CreateWorkItemRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeError(w, http.StatusBadRequest, errCodeInvalidBody, "request body is not valid JSON")
@@ -151,11 +141,12 @@ func handleListWorkItems(log *slog.Logger, a app.Application) http.Handler {
 			writeError(w, http.StatusUnauthorized, errCodeUnauthenticated, "")
 			return
 		}
-		tid, ok := tenantFromContext(r)
+		effTenant, ok := authn.EffectiveTenantID(r.Context())
 		if !ok {
 			writeError(w, http.StatusUnauthorized, errCodeUnauthenticated, "")
 			return
 		}
+		tid := tenant.ID(effTenant)
 		params := r.URL.Query()
 		cursor, err := pagination.Decode(params.Get("cursor"))
 		if err != nil {
@@ -176,7 +167,7 @@ func handleListWorkItems(log *slog.Logger, a app.Application) http.Handler {
 
 		// "Only my tasks" gate.
 		selfFilter := ""
-		if !c.IsSuperUser && !authn.IsPlatformOperator(c) &&
+		if !authn.CanActAcrossTenants(c) &&
 			!authn.Satisfies(r.Context(), permission.IdentityPermissions.Tasks.WorkItems.ReadAll) {
 			selfFilter = c.MembershipID
 		}
@@ -209,11 +200,12 @@ func handleListWorkItems(log *slog.Logger, a app.Application) http.Handler {
 
 func handleGetWorkItem(log *slog.Logger, a app.Application) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		tid, ok := tenantFromContext(r)
+		effTenant, ok := authn.EffectiveTenantID(r.Context())
 		if !ok {
 			writeError(w, http.StatusUnauthorized, errCodeUnauthenticated, "")
 			return
 		}
+		tid := tenant.ID(effTenant)
 		id, ok := parseWorkItemID(w, r)
 		if !ok {
 			return
@@ -234,11 +226,12 @@ func handleGetWorkItem(log *slog.Logger, a app.Application) http.Handler {
 
 func handleStartWorkItem(log *slog.Logger, a app.Application) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		tid, ok := tenantFromContext(r)
+		effTenant, ok := authn.EffectiveTenantID(r.Context())
 		if !ok {
 			writeError(w, http.StatusUnauthorized, errCodeUnauthenticated, "")
 			return
 		}
+		tid := tenant.ID(effTenant)
 		id, ok := parseWorkItemID(w, r)
 		if !ok {
 			return
@@ -257,11 +250,12 @@ func handleStartWorkItem(log *slog.Logger, a app.Application) http.Handler {
 
 func handleCompleteWorkItem(log *slog.Logger, a app.Application) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		tid, ok := tenantFromContext(r)
+		effTenant, ok := authn.EffectiveTenantID(r.Context())
 		if !ok {
 			writeError(w, http.StatusUnauthorized, errCodeUnauthenticated, "")
 			return
 		}
+		tid := tenant.ID(effTenant)
 		id, ok := parseWorkItemID(w, r)
 		if !ok {
 			return
@@ -280,11 +274,12 @@ func handleCompleteWorkItem(log *slog.Logger, a app.Application) http.Handler {
 
 func handleCancelWorkItem(log *slog.Logger, a app.Application) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		tid, ok := tenantFromContext(r)
+		effTenant, ok := authn.EffectiveTenantID(r.Context())
 		if !ok {
 			writeError(w, http.StatusUnauthorized, errCodeUnauthenticated, "")
 			return
 		}
+		tid := tenant.ID(effTenant)
 		id, ok := parseWorkItemID(w, r)
 		if !ok {
 			return
@@ -312,11 +307,12 @@ func handleCancelWorkItem(log *slog.Logger, a app.Application) http.Handler {
 
 func handleReassignWorkItem(log *slog.Logger, a app.Application) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		tid, ok := tenantFromContext(r)
+		effTenant, ok := authn.EffectiveTenantID(r.Context())
 		if !ok {
 			writeError(w, http.StatusUnauthorized, errCodeUnauthenticated, "")
 			return
 		}
+		tid := tenant.ID(effTenant)
 		id, ok := parseWorkItemID(w, r)
 		if !ok {
 			return
@@ -361,13 +357,14 @@ func handleDashboard(log *slog.Logger, a app.Application) http.Handler {
 			writeError(w, http.StatusUnauthorized, errCodeUnauthenticated, "")
 			return
 		}
-		tid, ok := tenantFromContext(r)
+		effTenant, ok := authn.EffectiveTenantID(r.Context())
 		if !ok {
 			writeError(w, http.StatusUnauthorized, errCodeUnauthenticated, "")
 			return
 		}
+		tid := tenant.ID(effTenant)
 		includeTeam := strings.EqualFold(r.URL.Query().Get("include_team"), "true")
-		if includeTeam && !c.IsSuperUser && !authn.IsPlatformOperator(c) &&
+		if includeTeam && !authn.CanActAcrossTenants(c) &&
 			!authn.Satisfies(r.Context(), permission.IdentityPermissions.Tasks.WorkItems.ReadAll) {
 			writeError(w, http.StatusForbidden, errCodeForbidden,
 				"caller lacks tasks.work_items.read_all for team view")

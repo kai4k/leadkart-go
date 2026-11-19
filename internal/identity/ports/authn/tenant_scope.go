@@ -304,7 +304,7 @@ func preLookupRefusal(r *http.Request, c *jwt.Claims, route scopeRoute, id strin
 	}
 	// Selecting a foreign tenant is itself an authority: platform-tenant
 	// membership proves nothing.
-	if !MaySelectTenantScope(c) {
+	if !CanActAcrossTenants(c) {
 		return &scopeRefusal{http.StatusForbidden, errCodeTenantScopeForbidden, "X-Tenant-Id requires platform tenant scope authority"}
 	}
 	// Writes under a foreign scope are opt-in: the operator's own membership
@@ -326,11 +326,14 @@ func withEffectiveScope(r *http.Request, c *jwt.Claims, effective string) *http.
 	return r.WithContext(ctx)
 }
 
-// MaySelectTenantScope reports whether the caller may act in a tenant other
-// than its own through X-Tenant-Id: a super user, or a slug-anchored platform
-// operator holding platform.tenants.view (platform-reserved, so a tenant
-// principal never satisfies it whatever its claims say).
-func MaySelectTenantScope(c *jwt.Claims) bool {
+// CanActAcrossTenants is THE operator-reach predicate: a super user, or a
+// slug-anchored, non-impersonation platform operator holding
+// platform.tenants.view (platform-reserved, so a tenant principal never
+// satisfies it whatever its claims say). Platform-tenant membership alone is
+// not authority. It decides who may select a foreign tenant through
+// X-Tenant-Id, who may look up tenants other than their own, and who is not
+// narrowed to their own caseload when reading another tenant's data.
+func CanActAcrossTenants(c *jwt.Claims) bool {
 	return c != nil && satisfiesIn(c, tenancy.ID(c.TenantID), permission.IdentityPermissions.Platform.TenantsView)
 }
 

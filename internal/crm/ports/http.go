@@ -13,7 +13,6 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/leadkart/leadkart-go/internal/common/pagination"
-	"github.com/leadkart/leadkart-go/internal/common/tenancy"
 	"github.com/leadkart/leadkart-go/internal/crm/app"
 	"github.com/leadkart/leadkart-go/internal/crm/app/command"
 	"github.com/leadkart/leadkart-go/internal/crm/app/query"
@@ -23,19 +22,6 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 	"github.com/leadkart/leadkart-go/internal/identity/ports/authn"
 )
-
-// tenantFromContext extracts the caller's tenant ID from ctx (bound by
-// authn middleware). Returns (zero, false) when missing — handlers
-// short-circuit to 401 in that case. Per ADR 0062 the explicit value
-// flows downstream to commands + queries; ctx-tenancy is only the
-// HTTP-boundary extraction point.
-func tenantFromContext(r *http.Request) (tenant.ID, bool) {
-	tid, ok := tenancy.FromContext(r.Context())
-	if !ok || tid == "" {
-		return tenant.ID(""), false
-	}
-	return tenant.ID(tid), true
-}
 
 // pincodeRE mirrors the CHECK constraint on crm.crm_leads.pincode
 // (Indian PIN code = 6 digits). Per reviewer M15, the HTTP handler
@@ -109,11 +95,12 @@ func handleListLeads(log *slog.Logger, a app.Application) http.Handler {
 			writeError(w, http.StatusUnauthorized, errCodeUnauthenticated, "")
 			return
 		}
-		tid, ok := tenantFromContext(r)
+		effTenant, ok := authn.EffectiveTenantID(r.Context())
 		if !ok {
 			writeError(w, http.StatusUnauthorized, errCodeUnauthenticated, "")
 			return
 		}
+		tid := tenant.ID(effTenant)
 		params := r.URL.Query()
 		cursor, err := pagination.Decode(params.Get("cursor"))
 		if err != nil {
@@ -135,7 +122,7 @@ func handleListLeads(log *slog.Logger, a app.Application) http.Handler {
 		// "Only my leads" gate: callers without crm.leads.read_all see
 		// a SelfFilter-narrowed view. Platform / SuperUser short-circuit.
 		selfFilter := ""
-		if !c.IsSuperUser && !authn.IsPlatformOperator(c) &&
+		if !authn.CanActAcrossTenants(c) &&
 			!authn.Satisfies(r.Context(), permission.IdentityPermissions.Crm.Leads.ReadAll) {
 			selfFilter = c.MembershipID
 		}
@@ -176,11 +163,12 @@ func handleListLeads(log *slog.Logger, a app.Application) http.Handler {
 
 func handleGetLead(log *slog.Logger, a app.Application) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		tid, ok := tenantFromContext(r)
+		effTenant, ok := authn.EffectiveTenantID(r.Context())
 		if !ok {
 			writeError(w, http.StatusUnauthorized, errCodeUnauthenticated, "")
 			return
 		}
+		tid := tenant.ID(effTenant)
 		id, ok := parseLeadID(w, r)
 		if !ok {
 			return
@@ -201,11 +189,12 @@ func handleGetLead(log *slog.Logger, a app.Application) http.Handler {
 
 func handleAssignLead(log *slog.Logger, a app.Application) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		tid, ok := tenantFromContext(r)
+		effTenant, ok := authn.EffectiveTenantID(r.Context())
 		if !ok {
 			writeError(w, http.StatusUnauthorized, errCodeUnauthenticated, "")
 			return
 		}
+		tid := tenant.ID(effTenant)
 		id, ok := parseLeadID(w, r)
 		if !ok {
 			return
@@ -249,11 +238,12 @@ func handleAssignLead(log *slog.Logger, a app.Application) http.Handler {
 
 func handleChangeStage(log *slog.Logger, a app.Application) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		tid, ok := tenantFromContext(r)
+		effTenant, ok := authn.EffectiveTenantID(r.Context())
 		if !ok {
 			writeError(w, http.StatusUnauthorized, errCodeUnauthenticated, "")
 			return
 		}
+		tid := tenant.ID(effTenant)
 		id, ok := parseLeadID(w, r)
 		if !ok {
 			return
@@ -282,11 +272,12 @@ func handleChangeStage(log *slog.Logger, a app.Application) http.Handler {
 
 func handleChangeTemperature(log *slog.Logger, a app.Application) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		tid, ok := tenantFromContext(r)
+		effTenant, ok := authn.EffectiveTenantID(r.Context())
 		if !ok {
 			writeError(w, http.StatusUnauthorized, errCodeUnauthenticated, "")
 			return
 		}
+		tid := tenant.ID(effTenant)
 		id, ok := parseLeadID(w, r)
 		if !ok {
 			return
@@ -315,11 +306,12 @@ func handleChangeTemperature(log *slog.Logger, a app.Application) http.Handler {
 
 func handleLogCall(log *slog.Logger, a app.Application) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		tid, ok := tenantFromContext(r)
+		effTenant, ok := authn.EffectiveTenantID(r.Context())
 		if !ok {
 			writeError(w, http.StatusUnauthorized, errCodeUnauthenticated, "")
 			return
 		}
+		tid := tenant.ID(effTenant)
 		id, ok := parseLeadID(w, r)
 		if !ok {
 			return
@@ -360,11 +352,12 @@ func handleLogCall(log *slog.Logger, a app.Application) http.Handler {
 
 func handleConvertLead(log *slog.Logger, a app.Application) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		tid, ok := tenantFromContext(r)
+		effTenant, ok := authn.EffectiveTenantID(r.Context())
 		if !ok {
 			writeError(w, http.StatusUnauthorized, errCodeUnauthenticated, "")
 			return
 		}
+		tid := tenant.ID(effTenant)
 		id, ok := parseLeadID(w, r)
 		if !ok {
 			return
@@ -383,11 +376,12 @@ func handleConvertLead(log *slog.Logger, a app.Application) http.Handler {
 
 func handleLoseLead(log *slog.Logger, a app.Application) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		tid, ok := tenantFromContext(r)
+		effTenant, ok := authn.EffectiveTenantID(r.Context())
 		if !ok {
 			writeError(w, http.StatusUnauthorized, errCodeUnauthenticated, "")
 			return
 		}
+		tid := tenant.ID(effTenant)
 		id, ok := parseLeadID(w, r)
 		if !ok {
 			return

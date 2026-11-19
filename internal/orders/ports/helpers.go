@@ -29,11 +29,12 @@ func actorTenant(w http.ResponseWriter, r *http.Request) (membership.ID, tenant.
 		writeError(w, http.StatusUnauthorized, errCodeUnauthenticated, "")
 		return "", "", false
 	}
-	tid, ok := tenantFromContext(r)
+	effTenant, ok := authn.EffectiveTenantID(r.Context())
 	if !ok {
 		writeError(w, http.StatusUnauthorized, errCodeUnauthenticated, "")
 		return "", "", false
 	}
+	tid := tenant.ID(effTenant)
 	return membership.ID(c.MembershipID), tid, true
 }
 

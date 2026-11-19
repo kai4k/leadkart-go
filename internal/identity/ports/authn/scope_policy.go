@@ -1,6 +1,9 @@
 package authn
 
-import "net/http"
+import (
+	"net/http"
+	"net/url"
+)
 
 // The central X-Tenant-Id route policy (ADR 0039 / ADR 0068 D7).
 //
@@ -52,4 +55,12 @@ func scopeIgnoredOn(r *http.Request) bool {
 	h, _ := scopeIgnoreTable.Handler(r)
 	_, ok := h.(ignoreMarker)
 	return ok
+}
+
+// ScopeIgnoredByTable reports whether the central table ignores X-Tenant-Id for
+// method + path (a concrete path; wildcard segments may be any literal). A
+// route marker may still override the table (see the package policy comment);
+// this exists so the architecture test can classify every registered route.
+func ScopeIgnoredByTable(method, path string) bool {
+	return scopeIgnoredOn(&http.Request{Method: method, URL: &url.URL{Path: path}})
 }
