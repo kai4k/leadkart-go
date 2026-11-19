@@ -83,9 +83,19 @@ func (r *PersonRepository) UpdateByID(
 	})
 }
 
+// reader returns the queries bound to the ambient UoW tx when there is one
+// (reads then see the same snapshot as the caller's other facts, ADR 0069),
+// else the pool.
+func (r *PersonRepository) reader(ctx context.Context) *db.Queries {
+	if tx, ok := pg.TxFromContext(ctx); ok {
+		return r.q.WithTx(tx)
+	}
+	return r.q
+}
+
 // GetByID satisfies [person.Repository]. Read-only.
 func (r *PersonRepository) GetByID(ctx context.Context, id person.ID) (*person.Person, error) {
-	return loadPerson(ctx, r.q, id)
+	return loadPerson(ctx, r.reader(ctx), id)
 }
 
 // GetByIDs satisfies [person.Repository]. Batched via WHERE id = ANY($1);
@@ -102,7 +112,7 @@ func (r *PersonRepository) GetByIDs(ctx context.Context, ids []person.ID) (map[p
 		}
 		uids = append(uids, pgconv.PgUUID(u))
 	}
-	rows, err := r.q.GetPersonsByIDs(ctx, uids)
+	rows, err := r.reader(ctx).GetPersonsByIDs(ctx, uids)
 	if err != nil {
 		return nil, fmt.Errorf("person repo: get by ids: %w", err)
 	}

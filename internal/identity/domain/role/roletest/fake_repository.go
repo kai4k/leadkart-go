@@ -183,6 +183,19 @@ func (f *FakeRepository) GetByIDs(_ context.Context, tenantID tenant.ID, ids []r
 	return out, nil
 }
 
+// GetByIDsIncludingDeleted is GetByIDs without the soft-delete filter.
+func (f *FakeRepository) GetByIDsIncludingDeleted(_ context.Context, tenantID tenant.ID, ids []role.ID) ([]*role.Role, error) {
+	out := make([]*role.Role, 0, len(ids))
+	for _, id := range ids {
+		r, ok := f.rows[id]
+		if !ok || r.TenantID() != tenantID {
+			continue
+		}
+		out = append(out, r)
+	}
+	return out, nil
+}
+
 // ListByTenant returns every live role for the tenant, ordered by
 // (hierarchy_level, name) — same order as the SQL adapter so callers
 // can rely on stable ordering.

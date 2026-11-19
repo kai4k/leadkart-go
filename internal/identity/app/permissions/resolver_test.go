@@ -81,6 +81,10 @@ func (f *fakeRoleRepo) GetByIDs(_ context.Context, tenantID tenant.ID, ids []rol
 	return out, nil
 }
 
+func (f *fakeRoleRepo) GetByIDsIncludingDeleted(context.Context, tenant.ID, []role.ID) ([]*role.Role, error) {
+	return nil, errors.New("fake: GetByIDsIncludingDeleted unused")
+}
+
 func (f *fakeRoleRepo) Add(context.Context, *role.Role) error {
 	return errors.New("fake: Add unused")
 }

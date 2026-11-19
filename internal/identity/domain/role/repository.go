@@ -72,6 +72,13 @@ type Repository interface {
 	// outside the tenant are silently dropped.
 	GetByIDs(ctx context.Context, tenantID tenant.ID, ids []ID) ([]*Role, error)
 
+	// GetByIDsIncludingDeleted is GetByIDs without the soft-delete filter.
+	// Authority decisions only (ADR 0069): a membership's assigned roles must
+	// be loaded COMPLETE, deleted ones included, because a deleted role
+	// confers nothing but a partial set would make the member look weaker
+	// than it is. IDs outside the tenant are still silently dropped.
+	GetByIDsIncludingDeleted(ctx context.Context, tenantID tenant.ID, ids []ID) ([]*Role, error)
+
 	// ListByTenant returns every live role for the supplied tenant,
 	// ordered by hierarchy_level, name.
 	ListByTenant(ctx context.Context, tenantID tenant.ID) ([]*Role, error)

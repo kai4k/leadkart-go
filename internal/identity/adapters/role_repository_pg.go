@@ -55,10 +55,19 @@ func (r *RoleRepository) addOnTx(ctx context.Context, tx pgx.Tx, ro *role.Role) 
 	return drainRoleEvents(ctx, tx, ro)
 }
 
+// runInTxTenant joins an ambient UoW tx when present, else opens a tenant tx
+// (ADR 0067 UoW-join contract) - so authority checks read under the lock's tx.
+func (r *RoleRepository) runInTxTenant(ctx context.Context, tenantID tenant.ID, fn func(ctx context.Context, tx pgx.Tx) error) error {
+	if tx, ok := pg.TxFromContext(ctx); ok {
+		return fn(ctx, tx)
+	}
+	return r.tx.WithinTxPgxTenant(ctx, tenantID.String(), fn)
+}
+
 // GetByID satisfies [role.Repository]. GUC bound from tenantID (ADR 0062).
 func (r *RoleRepository) GetByID(ctx context.Context, tenantID tenant.ID, id role.ID) (*role.Role, error) {
 	var out *role.Role
-	err := r.tx.WithinTxPgxTenant(ctx, tenantID.String(), func(ctx context.Context, tx pgx.Tx) error {
+	err := r.runInTxTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
 		q := r.q.WithTx(tx)
 		got, err := loadRole(ctx, q, id)
 		if err != nil {
@@ -85,7 +94,7 @@ func (r *RoleRepository) GetByTenantAndName(
 		return nil, err
 	}
 	var out *role.Role
-	err = r.tx.WithinTxPgxTenant(ctx, tenantID.String(), func(ctx context.Context, tx pgx.Tx) error {
+	err = r.runInTxTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
 		q := r.q.WithTx(tx)
 		row, err := q.GetRoleByTenantAndName(ctx, db.GetRoleByTenantAndNameParams{
 			TenantID: pgconv.PgUUID(tid),
@@ -125,11 +134,47 @@ func (r *RoleRepository) GetByIDs(ctx context.Context, tenantID tenant.ID, ids [
 		pgIDs = append(pgIDs, pgconv.PgUUID(uid))
 	}
 	var out []*role.Role
-	err := r.tx.WithinTxPgxTenant(ctx, tenantID.String(), func(ctx context.Context, tx pgx.Tx) error {
+	err := r.runInTxTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
 		q := r.q.WithTx(tx)
 		rows, err := q.GetRolesByIDs(ctx, pgIDs)
 		if err != nil {
 			return fmt.Errorf("role repo: get by ids: %w", err)
+		}
+		out = make([]*role.Role, 0, len(rows))
+		for _, row := range rows {
+			got, perr := rowToRole(row)
+			if perr != nil {
+				return perr
+			}
+			out = append(out, got)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// GetByIDsIncludingDeleted satisfies [role.Repository]. Like GetByIDs but
+// soft-deleted rows are returned too (authority facts only, ADR 0069).
+func (r *RoleRepository) GetByIDsIncludingDeleted(ctx context.Context, tenantID tenant.ID, ids []role.ID) ([]*role.Role, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	pgIDs := make([]pgtype.UUID, 0, len(ids))
+	for _, id := range ids {
+		uid, err := uuid.Parse(id.String())
+		if err != nil {
+			return nil, fmt.Errorf("role repo: parse id %q: %w", id, err)
+		}
+		pgIDs = append(pgIDs, pgconv.PgUUID(uid))
+	}
+	var out []*role.Role
+	err := r.runInTxTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		rows, err := r.q.WithTx(tx).GetRolesByIDsIncludingDeleted(ctx, pgIDs)
+		if err != nil {
+			return fmt.Errorf("role repo: get by ids including deleted: %w", err)
 		}
 		out = make([]*role.Role, 0, len(rows))
 		for _, row := range rows {
@@ -158,7 +203,7 @@ func (r *RoleRepository) ListByTenant(
 		return nil, err
 	}
 	var out []*role.Role
-	err = r.tx.WithinTxPgxTenant(ctx, tenantID.String(), func(ctx context.Context, tx pgx.Tx) error {
+	err = r.runInTxTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
 		q := r.q.WithTx(tx)
 		rows, err := q.ListRolesByTenant(ctx, pgconv.PgUUID(tid))
 		if err != nil {

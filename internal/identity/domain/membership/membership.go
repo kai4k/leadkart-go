@@ -589,6 +589,45 @@ func (m *Membership) ReplacePermissionOverlays(
 	return nil
 }
 
+// ReplacePermissionOverrides sets both overlay lists to EXACTLY what the caller
+// decided on: each granted entry carries its expiry as approved (zero =
+// permanent) and no liveness is recomputed here, so the instant the policy
+// snapshotted at and the state written cannot diverge. nil permissions are
+// dropped; a name listed twice keeps its first entry.
+func (m *Membership) ReplacePermissionOverrides(
+	granted []GrantedOverride,
+	revoked []*permission.Permission,
+	now time.Time,
+) error {
+	g := make([]GrantedOverride, 0, len(granted))
+	seen := make(map[string]struct{}, len(granted))
+	for _, e := range granted {
+		if e.Permission == nil {
+			continue
+		}
+		if _, dup := seen[e.Permission.Name()]; dup {
+			continue
+		}
+		seen[e.Permission.Name()] = struct{}{}
+		g = append(g, e)
+	}
+	r := make([]*permission.Permission, 0, len(revoked))
+	for _, p := range revoked {
+		if p != nil {
+			r = append(r, p)
+		}
+	}
+	m.grantedPermissions = g
+	m.revokedPermissions = r
+	m.recordEvent(PermissionsUpdatedEvent{
+		MembershipID: m.id,
+		PersonID:     m.personID,
+		TenantID:     m.tenantID,
+		At:           now.UTC(),
+	})
+	return nil
+}
+
 // ----- Per-tenant profile + manager hierarchy --------------------------------
 
 // UpdateProfile sets `designation` / `department` / `statusMessage`

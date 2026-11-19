@@ -315,6 +315,16 @@ func (f *fakeRoleRepo) GetByIDs(_ context.Context, tenantID tenant.ID, ids []rol
 	return out, nil
 }
 
+func (f *fakeRoleRepo) GetByIDsIncludingDeleted(_ context.Context, tenantID tenant.ID, ids []role.ID) ([]*role.Role, error) {
+	out := make([]*role.Role, 0, len(ids))
+	for _, id := range ids {
+		if r, ok := f.roles[id]; ok && r.TenantID() == tenantID {
+			out = append(out, r)
+		}
+	}
+	return out, nil
+}
+
 func (f *fakeRoleRepo) ListByTenant(_ context.Context, tenantID tenant.ID) ([]*role.Role, error) {
 	out := []*role.Role{}
 	for _, r := range f.roles {

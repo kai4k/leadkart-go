@@ -56,6 +56,17 @@ FROM   identity.roles
 WHERE  id = ANY($1::uuid[])
   AND  NOT is_deleted;
 
+-- name: GetRolesByIDsIncludingDeleted :many
+-- Authority facts (ADR 0069): the roles a membership is assigned INCLUDING
+-- soft-deleted ones. A deleted role confers nothing but must still be present
+-- in the loaded set, so a partial load cannot make a member look weaker than
+-- it is. Authority use only; every other reader uses GetRolesByIDs.
+SELECT id, tenant_id, name, is_system_default, is_super_admin,
+       hierarchy_level, permissions, created_at,
+       is_deleted, deleted_at, deleted_by, created_by_membership_id
+FROM   identity.roles
+WHERE  id = ANY($1::uuid[]);
+
 -- name: UpdateRole :exec
 -- Persists the mutable Role state — name, hierarchy_level, permissions
 -- — under the UpdateFn pattern (Task 17). is_system_default +

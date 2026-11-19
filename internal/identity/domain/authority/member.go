@@ -61,6 +61,9 @@ func MemberOf(m *membership.Membership, roles []*role.Role, now time.Time, perso
 	if m == nil {
 		return Member{}, fmt.Errorf("%w: membership required", ErrNoAuthority)
 	}
+	if now.IsZero() {
+		return Member{}, fmt.Errorf("%w: the decision instant is required", ErrNoAuthority)
+	}
 	id, err := membership.ParseID(string(m.ID()))
 	if err != nil {
 		return Member{}, fmt.Errorf("%w: membership id is not a canonical uuid", ErrNoAuthority)

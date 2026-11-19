@@ -121,6 +121,51 @@ func (q *Queries) GetRolesByIDs(ctx context.Context, dollar_1 []pgtype.UUID) ([]
 	return items, nil
 }
 
+const getRolesByIDsIncludingDeleted = `-- name: GetRolesByIDsIncludingDeleted :many
+SELECT id, tenant_id, name, is_system_default, is_super_admin,
+       hierarchy_level, permissions, created_at,
+       is_deleted, deleted_at, deleted_by, created_by_membership_id
+FROM   identity.roles
+WHERE  id = ANY($1::uuid[])
+`
+
+// Authority facts (ADR 0069): the roles a membership is assigned INCLUDING
+// soft-deleted ones. A deleted role confers nothing but must still be present
+// in the loaded set, so a partial load cannot make a member look weaker than
+// it is. Authority use only; every other reader uses GetRolesByIDs.
+func (q *Queries) GetRolesByIDsIncludingDeleted(ctx context.Context, dollar_1 []pgtype.UUID) ([]IdentityRole, error) {
+	rows, err := q.db.Query(ctx, getRolesByIDsIncludingDeleted, dollar_1)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []IdentityRole
+	for rows.Next() {
+		var i IdentityRole
+		if err := rows.Scan(
+			&i.ID,
+			&i.TenantID,
+			&i.Name,
+			&i.IsSystemDefault,
+			&i.IsSuperAdmin,
+			&i.HierarchyLevel,
+			&i.Permissions,
+			&i.CreatedAt,
+			&i.IsDeleted,
+			&i.DeletedAt,
+			&i.DeletedBy,
+			&i.CreatedByMembershipID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const insertRole = `-- name: InsertRole :exec
 
 INSERT INTO identity.roles (

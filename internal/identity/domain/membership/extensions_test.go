@@ -698,3 +698,31 @@ func TestReplacePermissionOverlays_KeepsLiveExpiries(t *testing.T) {
 		t.Error("unlisted grant survived the replace")
 	}
 }
+
+// TestReplacePermissionOverrides_WritesExactlyWhatWasDecided: the aggregate
+// recomputes no liveness. An entry whose expiry has already passed at `now` is
+// still written with that expiry (never turned into a permanent grant), and a
+// duplicate name keeps its first entry.
+func TestReplacePermissionOverrides_WritesExactlyWhatWasDecided(t *testing.T) {
+	t.Parallel()
+	m := freshMembership(t)
+	x := permission.FromConstant(permission.IdentityPermissions.Crm.Leads.Assign)
+	y := permission.FromConstant(permission.IdentityPermissions.Crm.Leads.Read)
+	past := testNow.Add(-time.Hour)
+	week := testNow.Add(7 * 24 * time.Hour)
+	if err := m.ReplacePermissionOverrides([]membership.GrantedOverride{
+		{Permission: x, ExpiresAt: past}, {Permission: x, ExpiresAt: week}, {Permission: y}, {},
+	}, []*permission.Permission{y, nil}, testNow); err != nil {
+		t.Fatalf("ReplacePermissionOverrides: %v", err)
+	}
+	got := m.GrantedPermissions()
+	if len(got) != 2 || !got[0].ExpiresAt.Equal(past) || !got[1].ExpiresAt.IsZero() {
+		t.Fatalf("grants = %+v, want [x@past, y@permanent]", got)
+	}
+	if len(m.RevokedPermissions()) != 1 {
+		t.Fatalf("revoked = %v", m.RevokedPermissions())
+	}
+	if ev := m.PullEvents(); len(ev) != 1 {
+		t.Fatalf("events = %d, want 1 PermissionsUpdated", len(ev))
+	}
+}
