@@ -89,6 +89,9 @@ func TestTenantScopePolicy_IgnoredRoutes(t *testing.T) {
 		{"POST", "/api/v1/platform/impersonation/sessions"},
 		{"POST", "/api/v1/platform/lead-credits/topup"},
 		{"POST", "/api/v1/tenants"},
+		{"GET", "/api/v1/tenants"},
+		{"GET", "/api/v1/tenants/by-slug/acme"},
+		{"GET", "/api/v1/search"},
 	}
 	for _, tc := range cases {
 		for _, hdr := range []string{unknownTenantHdr, "not-a-uuid"} {

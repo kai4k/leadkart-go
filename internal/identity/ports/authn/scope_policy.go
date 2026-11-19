@@ -35,6 +35,11 @@ var scopePolicy = func() *http.ServeMux {
 	reg("/api/v1/platform/", scopeIgnore)
 	// Tenant onboarding creates a NEW tenant; there is no target tenant.
 	reg("POST /api/v1/tenants", scopeIgnore)
+	// Platform-wide lookups with no effective tenant: slug resolution and the
+	// operator omni-search read across tenants by design.
+	reg("GET /api/v1/tenants", scopeIgnore)
+	reg("GET /api/v1/tenants/by-slug/{slug}", scopeIgnore)
+	reg("GET /api/v1/search", scopeIgnore)
 
 	// Exceptions inside /api/v1/platform/ that interpret the header.
 	reg("GET /api/v1/platform/lead-credits/balance", scopeAware)             // reads the scoped tenant's wallet

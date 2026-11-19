@@ -26,9 +26,12 @@ info:
     `tenant_id` claim implicitly. Platform operators (`is_platform=true` JWT)
     select a tenant per request via the `X-Tenant-Id` header (ADR 0039):
     honoured only for platform operators; ignored for everyone else; the
-    path tenant wins on `/tenants/{tenantId}` routes. Errors: 400
+    path tenant wins on `/tenants/{tenantId}` routes; routes where it cannot
+    apply (auth, platform-wide) ignore it. Errors: 400
     `invalid_tenant_scope` / `tenant_scope_conflict`, 404
-    `tenant_scope_not_found`. Operators can also open an impersonation
+    `tenant_scope_not_found`, 409 `tenant_not_active`, 403
+    `tenant_scope_not_supported` (see the `X-Tenant-Id` parameter).
+    Operators can also open an impersonation
     session for sustained tenant-scoped work (see
     `POST /api/v1/platform/impersonation/sessions`).
 
@@ -1120,9 +1123,12 @@ paths:
         Bypasses the marked-for-deletion lifecycle. Tenants holding an
         active SuperAdmin role refuse with 422
         (`platform_tenant_undeletable`).
-      parameters: [{ $ref: '#/components/parameters/TenantId' }]
+      parameters:
+        - $ref: '#/components/parameters/TenantId'
+        - $ref: '#/components/parameters/XTenantId'
       responses:
         '204': { description: Tenant hard-deleted }
+        '400': { $ref: '#/components/responses/TenantScopeInvalid' }
         '404': { $ref: '#/components/responses/NotFound' }
         '422': { $ref: '#/components/responses/Unprocessable' }
 
@@ -1715,19 +1721,24 @@ paths:
     get:
       tags: [Platform]
       summary: Get current tenant's lead-credit balance
+      parameters:
+        - $ref: '#/components/parameters/XTenantId'
       responses:
         '200':
           description: OK
           content:
             application/json:
               schema: { $ref: '#/components/schemas/LeadCreditBalanceResponse' }
+        '400': { $ref: '#/components/responses/TenantScopeInvalid' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
 
   /api/v1/inventory/products:
     post:
       parameters:
         - $ref: '#/components/parameters/XCommandId'
+        - $ref: '#/components/parameters/XTenantId'
       tags: [inventory]
       summary: Create a Product
       description: |
@@ -1747,6 +1758,7 @@ paths:
               schema: { $ref: '#/components/schemas/CreateProductResponse' }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
         '409':
           description: SKU already exists in this tenant
           content:
@@ -1782,6 +1794,7 @@ paths:
           required: false
           schema: { type: string }
           description: pg_trgm fuzzy match on (sku || name) per ADR 0040.
+        - $ref: '#/components/parameters/XTenantId'
       responses:
         '200':
           description: Page of products
@@ -1790,6 +1803,7 @@ paths:
               schema: { $ref: '#/components/schemas/ListProductsResponse' }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
 
   /api/v1/inventory/products/{productId}:
     get:
@@ -1800,12 +1814,14 @@ paths:
         as 404 per ADR 0044 enumeration-safety.
       parameters:
         - { $ref: '#/components/parameters/ProductId' }
+        - $ref: '#/components/parameters/XTenantId'
       responses:
         '200':
           description: Product view
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ProductDto' }
+        '400': { $ref: '#/components/responses/TenantScopeInvalid' }
         '404': { $ref: '#/components/responses/NotFound' }
 
     patch:
@@ -1821,6 +1837,7 @@ paths:
       parameters:
         - $ref: '#/components/parameters/XCommandId'
         - { $ref: '#/components/parameters/ProductId' }
+        - $ref: '#/components/parameters/XTenantId'
       requestBody:
         required: true
         content:
@@ -1828,6 +1845,7 @@ paths:
             schema: { $ref: '#/components/schemas/UpdateProductRequest' }
       responses:
         '204': { description: Updated }
+        '400': { $ref: '#/components/responses/TenantScopeInvalid' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409':
           description: Product is deleted
@@ -1845,8 +1863,11 @@ paths:
         live batch with quantity_on_hand > 0 exists.
       parameters:
         - { $ref: '#/components/parameters/ProductId' }
+        - $ref: '#/components/parameters/XTenantId'
       responses:
         '204': { description: Deleted (or already deleted) }
+        '400': { $ref: '#/components/responses/TenantScopeInvalid' }
+        '404': { $ref: '#/components/responses/NotFound' }
         '409':
           description: Product has live batches with non-zero stock
           content:
@@ -1864,6 +1885,7 @@ paths:
       parameters:
         - $ref: '#/components/parameters/XCommandId'
         - { $ref: '#/components/parameters/ProductId' }
+        - $ref: '#/components/parameters/XTenantId'
       requestBody:
         required: true
         content:
@@ -1875,6 +1897,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/AddBatchResponse' }
+        '400': { $ref: '#/components/responses/TenantScopeInvalid' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409':
           description: batch_number already exists for this product
@@ -1898,12 +1921,15 @@ paths:
           in: query
           required: false
           schema: { type: string, enum: ['true', 'false'] }
+        - $ref: '#/components/parameters/XTenantId'
       responses:
         '200':
           description: Page of batches
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ListBatchesResponse' }
+        '400': { $ref: '#/components/responses/TenantScopeInvalid' }
+        '404': { $ref: '#/components/responses/NotFound' }
 
   /api/v1/inventory/products/{productId}/fefo-batches:
     get:
@@ -1918,12 +1944,15 @@ paths:
         multi-batch allocations against a single order quantity.
       parameters:
         - { $ref: '#/components/parameters/ProductId' }
+        - $ref: '#/components/parameters/XTenantId'
       responses:
         '200':
           description: FEFO-ordered batch list
           content:
             application/json:
               schema: { $ref: '#/components/schemas/FefoBatchesResponse' }
+        '400': { $ref: '#/components/responses/TenantScopeInvalid' }
+        '404': { $ref: '#/components/responses/NotFound' }
 
   /api/v1/inventory/batches/{batchId}:
     get:
@@ -1934,12 +1963,14 @@ paths:
         Cross-tenant access surfaces as 404 per ADR 0044.
       parameters:
         - { $ref: '#/components/parameters/BatchId' }
+        - $ref: '#/components/parameters/XTenantId'
       responses:
         '200':
           description: Batch view
           content:
             application/json:
               schema: { $ref: '#/components/schemas/BatchDto' }
+        '400': { $ref: '#/components/responses/TenantScopeInvalid' }
         '404': { $ref: '#/components/responses/NotFound' }
 
   /api/v1/inventory/batches/{batchId}/movements:
@@ -1961,6 +1992,7 @@ paths:
       parameters:
         - $ref: '#/components/parameters/XCommandId'
         - { $ref: '#/components/parameters/BatchId' }
+        - $ref: '#/components/parameters/XTenantId'
       requestBody:
         required: true
         content:
@@ -1972,6 +2004,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/LogMovementResponse' }
+        '400': { $ref: '#/components/responses/TenantScopeInvalid' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409':
           description: Insufficient stock / batch expired / concurrency conflict
@@ -1997,6 +2030,7 @@ paths:
           schema:
             type: string
             enum: [inbound, outbound, adjustment, reservation, release]
+        - $ref: '#/components/parameters/XTenantId'
       responses:
         '200':
           description: Page of movements
@@ -2005,6 +2039,7 @@ paths:
               schema: { $ref: '#/components/schemas/ListMovementsResponse' }
         '400': { $ref: '#/components/responses/BadRequest' }
   # ===== CRM ============================================================
+        '404': { $ref: '#/components/responses/NotFound' }
   /api/v1/crm/leads:
     get:
       tags: [crm]
@@ -2067,6 +2102,7 @@ paths:
           schema: { type: array, items: { type: string } }
           style: form
           explode: true
+        - $ref: '#/components/parameters/XTenantId'
       responses:
         '200':
           description: Cursor-paginated lead page
@@ -2075,6 +2111,7 @@ paths:
               schema: { $ref: '#/components/schemas/ListLeadsResponse' }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
         '500': { $ref: '#/components/responses/InternalServerError' }
 
   /api/v1/crm/leads/{leadId}:
@@ -2084,6 +2121,7 @@ paths:
       parameters:
         - { $ref: '#/components/parameters/LeadId' }
         - { $ref: '#/components/parameters/XCommandId' }
+        - $ref: '#/components/parameters/XTenantId'
       responses:
         '200':
           description: The lead
@@ -2104,6 +2142,7 @@ paths:
       parameters:
         - { $ref: '#/components/parameters/LeadId' }
         - { $ref: '#/components/parameters/XCommandId' }
+        - $ref: '#/components/parameters/XTenantId'
       requestBody:
         required: true
         content:
@@ -2135,6 +2174,7 @@ paths:
       parameters:
         - { $ref: '#/components/parameters/LeadId' }
         - { $ref: '#/components/parameters/XCommandId' }
+        - $ref: '#/components/parameters/XTenantId'
       requestBody:
         required: true
         content:
@@ -2162,6 +2202,7 @@ paths:
       parameters:
         - { $ref: '#/components/parameters/LeadId' }
         - { $ref: '#/components/parameters/XCommandId' }
+        - $ref: '#/components/parameters/XTenantId'
       requestBody:
         required: true
         content:
@@ -2188,6 +2229,7 @@ paths:
       parameters:
         - { $ref: '#/components/parameters/LeadId' }
         - { $ref: '#/components/parameters/XCommandId' }
+        - $ref: '#/components/parameters/XTenantId'
       requestBody:
         required: true
         content:
@@ -2218,6 +2260,7 @@ paths:
       parameters:
         - { $ref: '#/components/parameters/LeadId' }
         - { $ref: '#/components/parameters/XCommandId' }
+        - $ref: '#/components/parameters/XTenantId'
       responses:
         '204': { description: Converted }
         '400': { $ref: '#/components/responses/BadRequest' }
@@ -2243,6 +2286,7 @@ paths:
         `tasks.work_item_created.v1`.
       parameters:
         - { $ref: '#/components/parameters/XCommandId' }
+        - $ref: '#/components/parameters/XTenantId'
       requestBody:
         required: true
         content:
@@ -2256,6 +2300,8 @@ paths:
               schema: { $ref: '#/components/schemas/CreateWorkItemResponse' }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/TenantNotActive' }
         '422': { $ref: '#/components/responses/Unprocessable' }
         '500': { $ref: '#/components/responses/InternalServerError' }
     get:
@@ -2296,6 +2342,7 @@ paths:
           in: query
           required: false
           schema: { type: string, format: date-time }
+        - $ref: '#/components/parameters/XTenantId'
       responses:
         '200':
           description: Cursor-paginated work-item page
@@ -2305,6 +2352,7 @@ paths:
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
         '500': { $ref: '#/components/responses/InternalServerError' }
 
   /api/v1/tasks/work-items/dashboard:
@@ -2321,14 +2369,17 @@ paths:
           in: query
           required: false
           schema: { type: boolean, default: false }
+        - $ref: '#/components/parameters/XTenantId'
       responses:
         '200':
           description: Dashboard counts
           content:
             application/json:
               schema: { $ref: '#/components/schemas/DashboardResponse' }
+        '400': { $ref: '#/components/responses/TenantScopeInvalid' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
         '500': { $ref: '#/components/responses/InternalServerError' }
 
   /api/v1/tasks/work-items/{workItemId}:
@@ -2337,6 +2388,7 @@ paths:
       summary: Get a single work item
       parameters:
         - { $ref: '#/components/parameters/WorkItemId' }
+        - $ref: '#/components/parameters/XTenantId'
       responses:
         '200':
           description: Work item
@@ -2355,6 +2407,7 @@ paths:
       parameters:
         - { $ref: '#/components/parameters/WorkItemId' }
         - { $ref: '#/components/parameters/XCommandId' }
+        - $ref: '#/components/parameters/XTenantId'
       responses:
         '204': { description: Started }
         '400': { $ref: '#/components/responses/BadRequest' }
@@ -2373,8 +2426,10 @@ paths:
       parameters:
         - { $ref: '#/components/parameters/WorkItemId' }
         - { $ref: '#/components/parameters/XCommandId' }
+        - $ref: '#/components/parameters/XTenantId'
       responses:
         '204': { description: Completed }
+        '400': { $ref: '#/components/responses/TenantScopeInvalid' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409':
@@ -2390,6 +2445,7 @@ paths:
       parameters:
         - { $ref: '#/components/parameters/WorkItemId' }
         - { $ref: '#/components/parameters/XCommandId' }
+        - $ref: '#/components/parameters/XTenantId'
       requestBody:
         required: true
         content:
@@ -2423,6 +2479,7 @@ paths:
       parameters:
         - { $ref: '#/components/parameters/WorkItemId' }
         - { $ref: '#/components/parameters/XCommandId' }
+        - $ref: '#/components/parameters/XTenantId'
       requestBody:
         required: true
         content:
@@ -2456,6 +2513,7 @@ paths:
         a pre-existing note returns 200 with `already_existed: true`.
       parameters:
         - { $ref: '#/components/parameters/XCommandId' }
+        - $ref: '#/components/parameters/XTenantId'
       requestBody:
         required: true
         content:
@@ -2474,6 +2532,8 @@ paths:
               schema: { $ref: '#/components/schemas/CreateConsignmentNoteResponse' }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/TenantNotActive' }
         '422': { $ref: '#/components/responses/Unprocessable' }
         '500': { $ref: '#/components/responses/InternalServerError' }
     get:
@@ -2485,6 +2545,7 @@ paths:
           in: query
           required: true
           schema: { type: string, format: uuid }
+        - $ref: '#/components/parameters/XTenantId'
       responses:
         '200':
           description: Consignment note
@@ -2502,6 +2563,7 @@ paths:
       summary: Get a single consignment note
       parameters:
         - { $ref: '#/components/parameters/ConsignmentNoteId' }
+        - $ref: '#/components/parameters/XTenantId'
       responses:
         '200':
           description: Consignment note
@@ -2520,6 +2582,7 @@ paths:
       parameters:
         - { $ref: '#/components/parameters/ConsignmentNoteId' }
         - { $ref: '#/components/parameters/XCommandId' }
+        - $ref: '#/components/parameters/XTenantId'
       requestBody:
         required: true
         content:
@@ -2545,6 +2608,7 @@ paths:
       parameters:
         - { $ref: '#/components/parameters/ConsignmentNoteId' }
         - { $ref: '#/components/parameters/XCommandId' }
+        - $ref: '#/components/parameters/XTenantId'
       responses:
         '204': { description: In transit }
         '400': { $ref: '#/components/responses/BadRequest' }
@@ -2564,6 +2628,7 @@ paths:
       parameters:
         - { $ref: '#/components/parameters/ConsignmentNoteId' }
         - { $ref: '#/components/parameters/XCommandId' }
+        - $ref: '#/components/parameters/XTenantId'
       responses:
         '204': { description: Delivered }
         '400': { $ref: '#/components/responses/BadRequest' }
@@ -2583,6 +2648,7 @@ paths:
       parameters:
         - { $ref: '#/components/parameters/ConsignmentNoteId' }
         - { $ref: '#/components/parameters/XCommandId' }
+        - $ref: '#/components/parameters/XTenantId'
       requestBody:
         required: true
         content:
@@ -2607,6 +2673,7 @@ paths:
       summary: Create a draft quotation
       parameters:
         - { $ref: '#/components/parameters/XCommandId' }
+        - $ref: '#/components/parameters/XTenantId'
       requestBody:
         required: true
         content:
@@ -2620,6 +2687,8 @@ paths:
               schema: { $ref: '#/components/schemas/CreateQuotationResponse' }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/TenantNotActive' }
         '422': { $ref: '#/components/responses/Unprocessable' }
         '500': { $ref: '#/components/responses/InternalServerError' }
 
@@ -2629,6 +2698,7 @@ paths:
       summary: Get a quotation
       parameters:
         - { $ref: '#/components/parameters/QuotationId' }
+        - $ref: '#/components/parameters/XTenantId'
       responses:
         '200':
           description: Quotation
@@ -2647,6 +2717,7 @@ paths:
       parameters:
         - { $ref: '#/components/parameters/QuotationId' }
         - { $ref: '#/components/parameters/XCommandId' }
+        - $ref: '#/components/parameters/XTenantId'
       requestBody:
         required: true
         content:
@@ -2672,12 +2743,14 @@ paths:
       parameters:
         - { $ref: '#/components/parameters/QuotationId' }
         - { $ref: '#/components/parameters/XCommandId' }
+        - $ref: '#/components/parameters/XTenantId'
       responses:
         '200':
           description: Approved; Order created
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ApproveQuotationResponse' }
+        '400': { $ref: '#/components/responses/TenantScopeInvalid' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409':
@@ -2695,6 +2768,7 @@ paths:
       parameters:
         - { $ref: '#/components/parameters/QuotationId' }
         - { $ref: '#/components/parameters/XCommandId' }
+        - $ref: '#/components/parameters/XTenantId'
       requestBody:
         required: true
         content:
@@ -2718,6 +2792,7 @@ paths:
       summary: Get an order
       parameters:
         - { $ref: '#/components/parameters/OrderId' }
+        - $ref: '#/components/parameters/XTenantId'
       responses:
         '200':
           description: Order
@@ -2736,6 +2811,7 @@ paths:
       parameters:
         - { $ref: '#/components/parameters/OrderId' }
         - { $ref: '#/components/parameters/XCommandId' }
+        - $ref: '#/components/parameters/XTenantId'
       requestBody:
         required: true
         content:
@@ -2761,8 +2837,10 @@ paths:
       parameters:
         - { $ref: '#/components/parameters/OrderId' }
         - { $ref: '#/components/parameters/XCommandId' }
+        - $ref: '#/components/parameters/XTenantId'
       responses:
         '204': { description: Confirmed }
+        '400': { $ref: '#/components/responses/TenantScopeInvalid' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409':
@@ -2779,6 +2857,7 @@ paths:
       parameters:
         - { $ref: '#/components/parameters/OrderId' }
         - { $ref: '#/components/parameters/XCommandId' }
+        - $ref: '#/components/parameters/XTenantId'
       requestBody:
         required: true
         content:
@@ -2802,6 +2881,7 @@ paths:
       summary: Get the order's invoice
       parameters:
         - { $ref: '#/components/parameters/OrderId' }
+        - $ref: '#/components/parameters/XTenantId'
       responses:
         '200':
           description: Invoice
@@ -2818,12 +2898,14 @@ paths:
       parameters:
         - { $ref: '#/components/parameters/OrderId' }
         - { $ref: '#/components/parameters/XCommandId' }
+        - $ref: '#/components/parameters/XTenantId'
       responses:
         '200':
           description: Invoiced
           content:
             application/json:
               schema: { $ref: '#/components/schemas/InvoiceOrderResponse' }
+        '400': { $ref: '#/components/responses/TenantScopeInvalid' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409':
@@ -2840,6 +2922,7 @@ paths:
       parameters:
         - { $ref: '#/components/parameters/OrderId' }
         - { $ref: '#/components/parameters/XCommandId' }
+        - $ref: '#/components/parameters/XTenantId'
       requestBody:
         required: true
         content:
@@ -2864,8 +2947,10 @@ paths:
       parameters:
         - { $ref: '#/components/parameters/OrderId' }
         - { $ref: '#/components/parameters/XCommandId' }
+        - $ref: '#/components/parameters/XTenantId'
       responses:
         '204': { description: Completed }
+        '400': { $ref: '#/components/responses/TenantScopeInvalid' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409':
@@ -2881,6 +2966,7 @@ paths:
       summary: List an order's payments
       parameters:
         - { $ref: '#/components/parameters/OrderId' }
+        - $ref: '#/components/parameters/XTenantId'
       responses:
         '200':
           description: Payments
@@ -2889,6 +2975,7 @@ paths:
               schema: { $ref: '#/components/schemas/ListPaymentsResponse' }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
         '500': { $ref: '#/components/responses/InternalServerError' }
     post:
       tags: [orders]
@@ -2896,6 +2983,7 @@ paths:
       parameters:
         - { $ref: '#/components/parameters/OrderId' }
         - { $ref: '#/components/parameters/XCommandId' }
+        - $ref: '#/components/parameters/XTenantId'
       requestBody:
         required: true
         content:
@@ -2909,6 +2997,7 @@ paths:
               schema: { $ref: '#/components/schemas/RecordPaymentResponse' }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
         '409':
           description: Duplicate external reference
           content:
@@ -2928,6 +3017,7 @@ paths:
       parameters:
         - { $ref: '#/components/parameters/OrderId' }
         - { $ref: '#/components/parameters/XCommandId' }
+        - $ref: '#/components/parameters/XTenantId'
       requestBody:
         required: true
         content:
@@ -2942,6 +3032,7 @@ paths:
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/TenantNotActive' }
         '422': { $ref: '#/components/responses/Unprocessable' }
         '500': { $ref: '#/components/responses/InternalServerError' }
 
@@ -2955,6 +3046,7 @@ paths:
       parameters:
         - { $ref: '#/components/parameters/LeadId' }
         - { $ref: '#/components/parameters/XCommandId' }
+        - $ref: '#/components/parameters/XTenantId'
       requestBody:
         required: true
         content:
@@ -2989,6 +3081,7 @@ paths:
       parameters:
         - { $ref: '#/components/parameters/LeadId' }
         - { $ref: '#/components/parameters/XCommandId' }
+        - $ref: '#/components/parameters/XTenantId'
       requestBody:
         required: true
         content:
@@ -3003,6 +3096,7 @@ paths:
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/TenantNotActive' }
         '422':
           description: Invalid due_at / assignee
           content:
@@ -3035,6 +3129,7 @@ paths:
           in: query
           required: false
           schema: { type: string, format: uuid }
+        - $ref: '#/components/parameters/XTenantId'
       responses:
         '200':
           description: Cursor-paginated reminder page
@@ -3048,6 +3143,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '404': { $ref: '#/components/responses/NotFound' }
         '500': { $ref: '#/components/responses/InternalServerError' }
 
   /api/v1/crm/reminders/{reminderId}/sent:
@@ -3060,6 +3156,7 @@ paths:
       parameters:
         - { $ref: '#/components/parameters/ReminderId' }
         - { $ref: '#/components/parameters/XCommandId' }
+        - $ref: '#/components/parameters/XTenantId'
       responses:
         '204': { description: Marked sent }
         '400': { $ref: '#/components/responses/BadRequest' }
@@ -3082,6 +3179,7 @@ paths:
       parameters:
         - { $ref: '#/components/parameters/ReminderId' }
         - { $ref: '#/components/parameters/XCommandId' }
+        - $ref: '#/components/parameters/XTenantId'
       requestBody:
         required: true
         content:
@@ -3138,13 +3236,17 @@ paths:
     get:
       tags: [notifications]
       summary: Unread notification count for the caller (badge)
+      parameters:
+        - $ref: '#/components/parameters/XTenantId'
       responses:
         '200':
           description: Unread count
           content:
             application/json:
               schema: { $ref: '#/components/schemas/UnreadCountResponse' }
+        '400': { $ref: '#/components/responses/TenantScopeInvalid' }
         '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
         '500': { $ref: '#/components/responses/InternalServerError' }
 
   /api/v1/notifications/read-all:
@@ -3153,13 +3255,17 @@ paths:
       summary: Mark every unread notification read
       parameters:
         - { $ref: '#/components/parameters/XCommandId' }
+        - $ref: '#/components/parameters/XTenantId'
       responses:
         '200':
           description: Count of notifications flipped to read
           content:
             application/json:
               schema: { $ref: '#/components/schemas/MarkAllReadResponse' }
+        '400': { $ref: '#/components/responses/TenantScopeInvalid' }
         '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/TenantNotActive' }
         '500': { $ref: '#/components/responses/InternalServerError' }
 
   /api/v1/notifications/{notificationId}/read:
@@ -3169,6 +3275,7 @@ paths:
       parameters:
         - { $ref: '#/components/parameters/NotificationId' }
         - { $ref: '#/components/parameters/XCommandId' }
+        - $ref: '#/components/parameters/XTenantId'
       responses:
         '204': { description: Marked read }
         '400': { $ref: '#/components/responses/BadRequest' }
@@ -3187,11 +3294,13 @@ paths:
       parameters:
         - { $ref: '#/components/parameters/NotificationId' }
         - { $ref: '#/components/parameters/XCommandId' }
+        - $ref: '#/components/parameters/XTenantId'
       responses:
         '204': { description: Dismissed }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/TenantNotActive' }
 
 components:
   securitySchemes:
@@ -3234,16 +3343,27 @@ components:
       required: false
       description: |
         Operator tenant scope (ADR 0039, ADR 0068 D7). Honoured ONLY for
-        slug-anchored, non-impersonation platform operators: the request
-        then runs in that tenant (RLS `app.tenant_id`) and permissions are
-        evaluated there via the `platform.*` equivalents. IGNORED for every
-        other caller (tenant members, impersonation tokens) and by
-        `GET /api/v1/auth/me/capabilities`. Without it, operators act in
-        their own tenant. On `/api/v1/tenants/{tenantId}` routes the path
-        tenant wins and a different header value is rejected.
-        Errors: 400 `invalid_tenant_scope` (not a UUID), 400
-        `tenant_scope_conflict` (differs from the path tenant), 404
-        `tenant_scope_not_found` (unknown or deleted tenant).
+        slug-anchored, non-impersonation platform operators whose token and
+        security stamp are valid: the request then runs in that tenant (RLS
+        `app.tenant_id`) and permissions are evaluated there via the
+        `platform.*` equivalents. IGNORED (no validation, no lookup, no
+        audit) for every other caller (tenant members, impersonation tokens)
+        and on routes where it cannot apply: all `/api/v1/auth/*` routes,
+        `/api/v1/platform/*` routes other than the lead-credit balance read,
+        `POST /api/v1/tenants`, `GET /api/v1/tenants`, the by-slug lookup and
+        `GET /api/v1/search`. Without it, operators act in their own tenant.
+        A scoped request is attributed durably: its outbox and audit rows
+        carry `act_operator_id` (the operator) with reason `tenant-via-header`.
+
+        Errors for an honoured header: 400 `invalid_tenant_scope` (not a UUID,
+        or supplied more than once), 400 `tenant_scope_conflict` (differs from
+        the path tenant on `/api/v1/tenants/{tenantId}` routes, where the path
+        wins; also on `DELETE /api/v1/platform/tenants/{tenantId}`), 404
+        `tenant_scope_not_found` (unknown or deleted tenant), 409
+        `tenant_not_active` (a write other than tenant lifecycle into a
+        suspended or pending-deletion tenant; reads are allowed), 403
+        `tenant_scope_not_supported` (routes that act on the caller's own
+        tenant only: permission requests and the marketplace lead purchase).
       schema: { type: string, format: uuid }
     TenantId:
       name: tenantId
@@ -3355,6 +3475,21 @@ components:
         The route does not support the `X-Tenant-Id` operator scope (it acts on the
         caller's own tenant only) and the header selected a different tenant
         (`tenant_scope_not_supported`, ADR 0039).
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+    TenantScopeInvalid:
+      description: |
+        `X-Tenant-Id` is malformed or supplied more than once (`invalid_tenant_scope`), or
+        differs from the tenant in the URL (`tenant_scope_conflict`). Only operators who
+        may use the header ever see it; every other caller has the header ignored.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+    TenantNotActive:
+      description: |
+        The tenant selected by `X-Tenant-Id` is suspended or pending deletion, so it can be
+        read and its lifecycle managed but not written otherwise (`tenant_not_active`).
       content:
         application/json:
           schema: { $ref: '#/components/schemas/ErrorResponse' }
