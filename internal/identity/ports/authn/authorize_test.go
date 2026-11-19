@@ -76,6 +76,9 @@ func TestEffectivePermissions_TenantAdminExpandsAndSorts(t *testing.T) {
 	if slices.Contains(got, p.Platform.TenantsManage) {
 		t.Error("tenant.admin must not expand to platform.tenants.manage")
 	}
+	if slices.Contains(got, p.Platform.ImpersonationManage) {
+		t.Error("tenant.admin must not expand to platform.impersonation.manage")
+	}
 }
 
 func TestRequirePermission_TenantAdminPasses(t *testing.T) {

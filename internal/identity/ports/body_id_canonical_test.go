@@ -214,7 +214,7 @@ func TestBodyID_CreateRoleParentReachesCommandCanonical(t *testing.T) {
 func TestBodyID_PaddedAndNilBodyIDsAreRejected(t *testing.T) {
 	t.Parallel()
 	p := permission.IdentityPermissions
-	op := azClaims(p.Platform.TenantsManage)
+	op := azClaims(p.Platform.ImpersonationManage)
 	op.TenantSlug, op.IsPlatform = authn.PlatformTenantSlug, true
 	for name, bad := range map[string]string{
 		"leading space":  " " + bodyRoleB,

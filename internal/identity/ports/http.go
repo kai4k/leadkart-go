@@ -238,11 +238,11 @@ func AddRoutes(mux *http.ServeMux, log *slog.Logger, a app.Application, verifier
 		// endpoints manage the session lifecycle but the per-request
 		// header pickup is post-launch operational work).
 		mux.Handle("POST /api/v1/platform/impersonation/sessions",
-			platform(p.Platform.TenantsManage)(handleCreateImpersonationSession(log, a)))
+			platform(p.Platform.ImpersonationManage)(handleCreateImpersonationSession(log, a)))
 		mux.Handle("DELETE /api/v1/platform/impersonation/sessions/{sessionId}",
-			platform(p.Platform.TenantsManage)(handleEndImpersonationSession(log, a)))
+			platform(p.Platform.ImpersonationManage)(handleEndImpersonationSession(log, a)))
 		mux.Handle("GET /api/v1/platform/impersonation/sessions",
-			platform(p.Platform.TenantsManage)(handleListImpersonationSessions(log, a)))
+			platform(p.Platform.ImpersonationManage)(handleListImpersonationSessions(log, a)))
 
 		// Operator dashboard at-a-glance stats.
 		mux.Handle("GET /api/v1/platform/stats",

@@ -18,6 +18,7 @@ import (
 	"github.com/leadkart/leadkart-go/internal/common/httpmw"
 	"github.com/leadkart/leadkart-go/internal/identity/app"
 	"github.com/leadkart/leadkart-go/internal/identity/app/jwt"
+	"github.com/leadkart/leadkart-go/internal/identity/ports/authn"
 	"github.com/leadkart/leadkart-go/internal/identity/app/query"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership/membershiptest"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/permission"
@@ -186,5 +187,42 @@ func TestCapabilities_ExposesEffectivePermissions(t *testing.T) {
 	}
 	if !slices.Contains(dto.EffectivePermissions, permission.IdentityPermissions.Users.View) {
 		t.Errorf("effective_permissions missing identity.users.view: %v", dto.EffectivePermissions)
+	}
+}
+
+// Impersonation mints a tenant.admin token for any tenant, so its three routes
+// need their own permission: platform.tenants.manage (who may edit tenants)
+// opens none of them, and tenant.admin never does.
+func TestRouteAuthz_ImpersonationNeedsItsOwnPermission(t *testing.T) {
+	t.Parallel()
+	p := permission.IdentityPermissions
+	operator := func(perms ...string) *jwt.Claims {
+		c := azClaims(perms...)
+		c.TenantSlug, c.IsPlatform = authn.PlatformTenantSlug, true
+		return c
+	}
+	body := `{"target_tenant_id":"` + azOther + `","reason":"support ticket 4711"}`
+	for _, rt := range []struct{ method, path, body string }{
+		{"POST", "/api/v1/platform/impersonation/sessions", body},
+		{"GET", "/api/v1/platform/impersonation/sessions", ""},
+		{"DELETE", "/api/v1/platform/impersonation/sessions/" + azRole, ""},
+	} {
+		t.Run(rt.method+" "+rt.path, func(t *testing.T) {
+			t.Parallel()
+			for name, c := range map[string]*jwt.Claims{
+				"no permission":               operator(),
+				"platform.tenants.manage":     operator(p.Platform.TenantsManage),
+				"platform.users.manage":       operator(p.Platform.UsersManage, p.Platform.RolesManage),
+				"tenant.admin of the tenant":  azClaims(p.Meta.TenantAdmin),
+				"platform.impersonation only": azClaims(p.Platform.ImpersonationManage), // not a platform-tenant operator
+			} {
+				if rec := azServe(t, c, rt.method, rt.path, rt.body); rec.Code != http.StatusForbidden {
+					t.Errorf("%s: status %d, want 403 (body %s)", name, rec.Code, rec.Body.String())
+				}
+			}
+			if rec := azServe(t, operator(p.Platform.ImpersonationManage), rt.method, rt.path, rt.body); !gatePassed(rec.Code) {
+				t.Errorf("platform operator holding platform.impersonation.manage: status %d, want gate pass (body %s)", rec.Code, rec.Body.String())
+			}
+		})
 	}
 }

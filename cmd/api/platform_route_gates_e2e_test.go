@@ -108,7 +108,7 @@ func TestE2E_PlatformGates_ZeroPermissionMemberRefused(t *testing.T) {
 		}
 	}
 	// None of the attempts above may have opened an impersonation session.
-	lister := mintOperatorJWTExact(t, f.Issuer, f.persons, "", []string{permission.IdentityPermissions.Platform.TenantsManage}, false)
+	lister := mintOperatorJWTExact(t, f.Issuer, f.persons, "", []string{permission.IdentityPermissions.Platform.ImpersonationManage}, false)
 	lr := f.authedJSON(t, http.MethodGet, "/api/v1/platform/impersonation/sessions", lister, nil)
 	var sessions ports.ListImpersonationSessionsResponse
 	if err := json.Unmarshal(lr.body, &sessions); err != nil || lr.status != http.StatusOK {
@@ -201,9 +201,17 @@ func TestE2E_PlatformGates_RightPermissionSucceeds(t *testing.T) {
 	if r := f.authedJSON(t, http.MethodPost, "/api/v1/platform/impersonation/sessions", users, ports.CreateImpersonationSessionRequest{TargetTenantID: x.TenantID, Reason: "ticket #2 gate test", DurationMinutes: 30}); r.status != http.StatusForbidden {
 		t.Errorf("platform.users.manage must not open impersonation: %d %s", r.status, r.body)
 	}
-	tenants := mintOperatorJWTExact(t, f.Issuer, f.persons, "", []string{p.Platform.TenantsManage}, false)
-	if r := f.authedJSON(t, http.MethodPost, "/api/v1/platform/impersonation/sessions", tenants, ports.CreateImpersonationSessionRequest{TargetTenantID: x.TenantID, Reason: "ticket #3 gate test", DurationMinutes: 30}); r.status != http.StatusCreated {
-		t.Errorf("platform.tenants.manage impersonation create: %d %s, want 201", r.status, r.body)
+	// Being allowed to edit tenants is not being allowed to become their admin.
+	tenants := mintOperatorJWTExact(t, f.Issuer, f.persons, "", []string{p.Platform.TenantsView, p.Platform.TenantsManage}, false)
+	if r := f.authedJSON(t, http.MethodPost, "/api/v1/platform/impersonation/sessions", tenants, ports.CreateImpersonationSessionRequest{TargetTenantID: x.TenantID, Reason: "ticket #3 gate test", DurationMinutes: 30}); r.status != http.StatusForbidden {
+		t.Errorf("platform.tenants.manage without platform.impersonation.manage: impersonation create %d %s, want 403", r.status, r.body)
+	}
+	if r := f.authedJSON(t, http.MethodGet, "/api/v1/platform/impersonation/sessions", tenants, nil); r.status != http.StatusForbidden {
+		t.Errorf("platform.tenants.manage without platform.impersonation.manage: impersonation list %d %s, want 403", r.status, r.body)
+	}
+	imp := mintOperatorJWTExact(t, f.Issuer, f.persons, "", []string{p.Platform.ImpersonationManage}, false)
+	if r := f.authedJSON(t, http.MethodPost, "/api/v1/platform/impersonation/sessions", imp, ports.CreateImpersonationSessionRequest{TargetTenantID: x.TenantID, Reason: "ticket #4 gate test", DurationMinutes: 30}); r.status != http.StatusCreated {
+		t.Errorf("platform.impersonation.manage impersonation create: %d %s, want 201", r.status, r.body)
 	}
 }
 

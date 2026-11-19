@@ -206,6 +206,7 @@ func mintOperatorJWT(t *testing.T, issuer *jwt.Issuer, persons *adapters.PersonR
 		permission.IdentityPermissions.Platform.TenantsManage,
 		permission.IdentityPermissions.Platform.UsersView,
 		permission.IdentityPermissions.Platform.UsersManage,
+		permission.IdentityPermissions.Platform.ImpersonationManage,
 	}, extra...), superUser)
 }
 

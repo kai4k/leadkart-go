@@ -69,6 +69,12 @@ type platformPermissions struct {
 	TenantsView, TenantsCreate, TenantsManage string
 	UsersView, UsersCreate, UsersManage       string
 	RolesView, RolesManage                    string
+	// ImpersonationManage opens, lists and ends impersonation sessions
+	// (POST/GET/DELETE /platform/impersonation/sessions). A session mints a
+	// tenant.admin token for any tenant, so it is its own permission: being
+	// allowed to edit tenants (TenantsManage) must not imply it. Platform-
+	// reserved, and no tenant-plane permission maps onto it.
+	ImpersonationManage string
 }
 type tenantsPermissions struct {
 	View, Update, UpdateSettings, Suspend, Activate, Delete string
@@ -242,14 +248,15 @@ var IdentityPermissions = struct {
 		RequestPermissionElevation: "identity.meta.request_permission_elevation",
 	},
 	Platform: platformPermissions{
-		TenantsView:   "platform.tenants.view",
-		TenantsCreate: "platform.tenants.create",
-		TenantsManage: "platform.tenants.manage",
-		UsersView:     "platform.users.view",
-		UsersCreate:   "platform.users.create",
-		UsersManage:   "platform.users.manage",
-		RolesView:     "platform.roles.view",
-		RolesManage:   "platform.roles.manage",
+		TenantsView:         "platform.tenants.view",
+		TenantsCreate:       "platform.tenants.create",
+		TenantsManage:       "platform.tenants.manage",
+		UsersView:           "platform.users.view",
+		UsersCreate:         "platform.users.create",
+		UsersManage:         "platform.users.manage",
+		RolesView:           "platform.roles.view",
+		RolesManage:         "platform.roles.manage",
+		ImpersonationManage: "platform.impersonation.manage",
 	},
 	Tenants: tenantsPermissions{
 		View:           "identity.tenants.view",
@@ -358,7 +365,7 @@ func allNames() []string {
 		p.Meta.TenantAdmin, p.Meta.RequestPermissionElevation,
 		p.Platform.TenantsView, p.Platform.TenantsCreate, p.Platform.TenantsManage,
 		p.Platform.UsersView, p.Platform.UsersCreate, p.Platform.UsersManage,
-		p.Platform.RolesView, p.Platform.RolesManage,
+		p.Platform.RolesView, p.Platform.RolesManage, p.Platform.ImpersonationManage,
 		p.Tenants.View, p.Tenants.Update, p.Tenants.UpdateSettings,
 		p.Tenants.Suspend, p.Tenants.Activate, p.Tenants.Delete,
 		p.Users.View, p.Users.Create, p.Users.Update,

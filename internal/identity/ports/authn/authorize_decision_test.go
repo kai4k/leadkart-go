@@ -63,6 +63,14 @@ func TestSatisfies_DecisionTable_Hardening(t *testing.T) {
 		{"operator platform equivalent not for crm", operator(p.Platform.UsersManage, p.Platform.RolesManage), tenantB, p.Crm.Leads.Read, false},
 		{"operator users.manage gives users.deactivate other tenant", operator(p.Platform.UsersManage), tenantB, p.Users.Deactivate, true},
 		{"operator users.manage is not users.anonymise", operator(p.Platform.UsersManage), tenantB, p.Users.Anonymise, false},
+		// platform.impersonation.manage: reserved, stands alone
+		{"operator explicit platform.impersonation.manage", operator(p.Platform.ImpersonationManage), tenantB, p.Platform.ImpersonationManage, true},
+		{"operator platform.tenants.manage is not impersonation", operator(p.Platform.TenantsManage), tenantB, p.Platform.ImpersonationManage, false},
+		{"operator platform.users.manage + roles.manage are not impersonation", operator(p.Platform.UsersManage, p.Platform.RolesManage), tenantB, p.Platform.ImpersonationManage, false},
+		{"operator tenant.admin is not impersonation", operator(p.Meta.TenantAdmin), tenantA, p.Platform.ImpersonationManage, false},
+		{"tenant user explicit platform.impersonation.manage", &jwt.Claims{TenantID: tenantA, Permissions: []string{p.Platform.ImpersonationManage}}, tenantA, p.Platform.ImpersonationManage, false},
+		{"impersonation token never impersonates", impersonation, tenantB, p.Platform.ImpersonationManage, false},
+		{"super user holds it", &jwt.Claims{TenantID: tenantA, IsSuperUser: true}, tenantA, p.Platform.ImpersonationManage, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

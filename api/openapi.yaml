@@ -1323,7 +1323,7 @@ paths:
         session lifetime (≤4h). The original operator's regular JWT is
         unaffected.
 
-        Requires `platform.tenants.manage` (there is no dedicated impersonation permission) held by a platform-tenant operator; platform-tenant membership alone is refused with 403 `forbidden`.
+        Requires `platform.impersonation.manage` held by a platform-tenant operator; platform-tenant membership alone, and `platform.tenants.manage`, are refused with 403 `forbidden` (a session mints a `tenant.admin` token for the target tenant, so it has its own permission; `tenant.admin` never implies it).
       requestBody:
         required: true
         content:
@@ -1346,7 +1346,7 @@ paths:
       tags: [platform]
       summary: List impersonation sessions
       description: |
-        Requires `platform.tenants.manage` held by a platform-tenant operator; platform-tenant membership alone is refused with 403 `forbidden`.
+        Requires `platform.impersonation.manage` held by a platform-tenant operator; platform-tenant membership alone, and `platform.tenants.manage`, are refused with 403 `forbidden`.
       responses:
         '200':
           description: Sessions
@@ -1365,7 +1365,7 @@ paths:
         on the next request (security_stamp comparison via the
         impersonation-session resolver).
 
-        Requires `platform.tenants.manage` held by a platform-tenant operator; platform-tenant membership alone is refused with 403 `forbidden`.
+        Requires `platform.impersonation.manage` held by a platform-tenant operator; platform-tenant membership alone, and `platform.tenants.manage`, are refused with 403 `forbidden`.
       parameters:
         - name: sessionId
           in: path

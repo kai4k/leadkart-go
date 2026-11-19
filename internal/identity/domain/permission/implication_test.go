@@ -20,6 +20,7 @@ func TestImpliedByTenantAdmin(t *testing.T) {
 		{p.PlatformMarketplace.Purchase, true}, {p.PlatformLeadCredits.Read, true},
 		{p.Meta.TenantAdmin, false},
 		{p.Platform.TenantsView, false}, {p.Platform.UsersManage, false}, {p.Platform.RolesManage, false},
+		{p.Platform.ImpersonationManage, false},
 		{p.PlatformUnverifiedContacts.Manage, false}, {p.PlatformLeadCredits.Topup, false},
 		{p.Tenants.Suspend, false}, {p.Tenants.Activate, false}, {p.Tenants.Delete, false},
 		{p.Users.Anonymise, false},
@@ -51,6 +52,8 @@ func TestPlatformEquivalents(t *testing.T) {
 		{p.Tenants.UpdateSettings, []string{p.Platform.TenantsManage}},
 		{p.Crm.Leads.Read, nil},
 		{p.Users.Anonymise, nil},
+		// Impersonation has no tenant-plane twin: no tenant permission maps onto it.
+		{p.Platform.ImpersonationManage, nil},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -67,7 +70,7 @@ func TestIsPlatformReserved(t *testing.T) {
 	p := permission.IdentityPermissions
 	for name, want := range map[string]bool{
 		p.Meta.TenantAdmin: true, p.Platform.TenantsManage: true, p.Tenants.Suspend: true,
-		p.Users.Anonymise: true, p.PlatformLeadCredits.Topup: true,
+		p.Users.Anonymise: true, p.PlatformLeadCredits.Topup: true, p.Platform.ImpersonationManage: true,
 		p.Users.View: false, p.Crm.Leads.Read: false, "not.a.permission": false, "": false,
 	} {
 		if got := permission.IsPlatformReserved(name); got != want {
@@ -83,5 +86,26 @@ func TestPlatformEquivalents_ReturnsCopy(t *testing.T) {
 	first[0] = "tampered"
 	if got := permission.PlatformEquivalents(p.Users.View); got[0] != p.Platform.UsersView {
 		t.Fatalf("shared state mutated: %v", got)
+	}
+}
+
+// platform.impersonation.manage opens POST/GET/DELETE /platform/impersonation/sessions
+// and so mints a tenant.admin token for any tenant. It is in the catalogue, is
+// platform-reserved (tenant.admin never implies it), and is not the platform
+// equivalent of any tenant-plane permission, so no tenant permission can stand in for it.
+func TestImpersonationManage_IsReservedAndStandsAlone(t *testing.T) {
+	t.Parallel()
+	name := permission.IdentityPermissions.Platform.ImpersonationManage
+	if name != "platform.impersonation.manage" || !permission.IsKnown(name) {
+		t.Fatalf("catalogue entry %q known=%v, want platform.impersonation.manage in the catalogue", name, permission.IsKnown(name))
+	}
+	if !permission.IsPlatformReserved(name) || permission.ImpliedByTenantAdmin(name) || permission.IsRequestable(name) {
+		t.Errorf("reserved=%v impliedByTenantAdmin=%v requestable=%v, want true false false",
+			permission.IsPlatformReserved(name), permission.ImpliedByTenantAdmin(name), permission.IsRequestable(name))
+	}
+	for _, p := range permission.All() {
+		if slices.Contains(permission.PlatformEquivalents(p.Name()), name) {
+			t.Errorf("%s lists %s among its platform equivalents", p.Name(), name)
+		}
 	}
 }
