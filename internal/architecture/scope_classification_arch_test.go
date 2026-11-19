@@ -5,7 +5,6 @@
 package architecture_test
 
 import (
-	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
@@ -47,120 +46,79 @@ const (
 )
 
 type classifiedRoute struct {
-	line     int
-	key      string
+	reg      routeReg
 	class    string
 	writable bool
 	problems []string
 }
 
-var (
-	scopeRejectRE     = regexp.MustCompile(`authn\.RejectTenantScope\(`)
-	scopePathMarkerRE = regexp.MustCompile(`authn\.TenantScope(MatchesPath|Lifecycle|PathOnly)\(`)
-	scopeWritableRE   = regexp.MustCompile(`authn\.TenantScopeWritable\b`)
-	scopeHonourRE     = regexp.MustCompile(`authn\.HonourTenantScope\(`)
-	scopePlatformRE   = regexp.MustCompile(`authn\.RequirePlatform\(`)
-	scopeWildcardRE   = regexp.MustCompile(`\{[^}]+\}`)
-)
+var scopeWildcardRE = regexp.MustCompile(`\{[^}]+\}`)
 
-func exprUses(expr string, aliases map[string]bool) bool {
-	for name := range aliases {
-		if regexp.MustCompile(`\b` + regexp.QuoteMeta(name) + `\b`).MatchString(expr) {
-			return true
-		}
+// classifyScopeRoute classifies one scanned route from its wrapper tags.
+// Routes outside /api/v1/ (cmd/api's root, docs and openapi helpers) carry no
+// tenant scope and are not classified.
+func classifyScopeRoute(reg routeReg) (classifiedRoute, bool) {
+	if !strings.HasPrefix(reg.Path, "/api/v1/") {
+		return classifiedRoute{}, false
 	}
-	return false
-}
-
-// classifyScopeRoutes classifies every mux.Handle in one ports file by
-// textual scan (the same technique as the other route arch tests).
-func classifyScopeRoutes(text string) []classifiedRoute {
-	aliases := authzAliases(text)
-	pathAliases := aliasesOf(text, `RequireTenantPermission|TenantScopeMatchesPath|TenantScopeLifecycle|TenantScopePathOnly`)
-	writableAliases := aliasesOf(text, `TenantScopeWritable`)
-	platformAliases := aliasesOf(text, `RequirePlatform`)
-
-	var out []classifiedRoute
-	for _, m := range muxHandleRE.FindAllStringSubmatchIndex(text, -1) {
-		key := text[m[2]:m[3]]
-		if publicRoutesAllowList[key] {
-			continue
-		}
-		expr := extractMuxHandlerExpr(text, m[1])
-		method, path, _ := strings.Cut(key, " ")
-		concrete := scopeWildcardRE.ReplaceAllString(path, "x")
-
-		reject := scopeRejectRE.MatchString(expr)
-		pathTenant := scopePathMarkerRE.MatchString(expr) || authzPathGateRE.MatchString(expr) || exprUses(expr, pathAliases)
-		writable := scopeWritableRE.MatchString(expr) || exprUses(expr, writableAliases)
-		marked := reject || pathTenant || writable || scopeHonourRE.MatchString(expr)
-		authorised := exprHasAuthz(expr, aliases)
-		usesPlatformAnchor := scopePlatformRE.MatchString(expr) || exprUses(expr, platformAliases)
-
-		r := classifiedRoute{line: 1 + strings.Count(text[:m[0]], "\n"), key: key, writable: writable}
-		switch {
-		case reject:
-			r.class = scopeClassReject
-		case pathTenant:
-			r.class = scopeClassPath
-		case authn.ScopeIgnoredByTable(method, concrete) && !marked:
-			r.class = scopeClassIgnore
-		default:
-			r.class = scopeClassHonour
-		}
-		if r.class == scopeClassHonour && !authorised {
-			r.problems = append(r.problems, "honours X-Tenant-Id but is gated by authentication or platform membership only: add a permission gate evaluated in the scoped tenant, or declare the route IGNORE (authn scope_policy table) / REJECT (authn.RejectTenantScope)")
-		}
-		if usesPlatformAnchor && !authorised {
-			r.problems = append(r.problems, "platform-tenant membership (authn.RequirePlatform) is not a permission: use authn.RequirePlatformGate with the permission that authorises the route")
-		}
-		if writable && r.class != scopeClassHonour {
-			r.problems = append(r.problems, "authn.TenantScopeWritable on a route that is not an honoured tenant-plane route ("+r.class+")")
-		}
-		out = append(out, r)
+	concrete := scopeWildcardRE.ReplaceAllString(reg.Path, "x")
+	marked := reg.has(tagReject) || reg.has(tagPath) || reg.has(tagWritable) || reg.has(tagHonour)
+	r := classifiedRoute{reg: reg, writable: reg.has(tagWritable)}
+	switch {
+	case reg.has(tagReject):
+		r.class = scopeClassReject
+	case reg.has(tagPath):
+		r.class = scopeClassPath
+	case authn.ScopeIgnoredByTable(reg.Method, concrete) && !marked:
+		r.class = scopeClassIgnore
+	default:
+		r.class = scopeClassHonour
 	}
-	return out
+	r.problems = markersBeforeGate(reg)
+	if r.class == scopeClassHonour && !reg.has(tagAuthz) {
+		r.problems = append(r.problems, "honours X-Tenant-Id but carries no permission gate evaluated in the scoped tenant: add one, or declare the route IGNORE (authn scope_policy table) / REJECT (authn.RejectTenantScope)")
+	}
+	if r.writable && r.class != scopeClassHonour {
+		r.problems = append(r.problems, "authn.TenantScopeWritable on a route that is not an honoured tenant-plane route ("+r.class+")")
+	}
+	return r, true
 }
-
-var authzPathGateRE = regexp.MustCompile(`authn\.RequireTenantPermission\(`)
 
 // TestArch_EveryRouteIsScopeClassified fails when a registered route is not
 // exactly one of: IGNORE group, REJECT, path-tenant, or honour + permission
-// gate evaluated in the scoped tenant; when a route is gated by
-// authentication or platform-tenant membership alone outside the IGNORE and
-// REJECT groups (GETs included); or when the set of routes that may write under
-// a foreign X-Tenant-Id differs from scopeWritableRoutes.
+// gate evaluated in the scoped tenant; when a scope marker is wrapped inside
+// the auth gate (it would run after the scope is applied and do nothing); when
+// a registration cannot be read by the shared scanner (see route_scan_test.go);
+// or when the set of routes that may write under a foreign X-Tenant-Id differs
+// from scopeWritableRoutes.
 //
-// Scope: production — route registrations live in ports/http.go; test files register none.
+// Scope: production — every non-test file under each module's ports/ and cmd/api.
 //
-// Negative coverage: TestScopeClassifier_FlagsUnclassifiedAndUnauthorisedRoutes
-// runs the classifier over synthetic offenders (a plain test, so it also runs
-// in the unit suite).
+// Negative coverage: TestRouteScanner_* (route_scan_test.go) run the shared
+// scanner and verdict over synthetic offenders, and
+// TestScopeClassifier_FlagsMisclassifiedRoutes covers this classifier.
 //
-// arch-test:no-negative-fixture (RED proof: wrap any honoured identity route in `auth(` only, or bind a route to authn.RequirePlatform alone → this test fails; see the synthetic offenders in TestScopeClassifier_FlagsUnclassifiedAndUnauthorisedRoutes)
+// arch-test:no-negative-fixture (RED proof: wrap any honoured identity route in `auth(` only, or move a marker inside its gate → this test fails; synthetic offenders in the TestRouteScanner_* and TestScopeClassifier_* tests)
 func TestArch_EveryRouteIsScopeClassified(t *testing.T) {
 	t.Parallel()
+	routes, offences := scanAllRoutes(t)
+	failOnOffences(t, offences)
 	var writable []string
 	total := 0
 	counts := map[string]int{}
-	for _, mod := range modulesUnderInternal(t) {
-		portsDir := filepath.Join(internalDir(t), mod, "ports")
-		walkGoFiles(t, portsDir, false, func(path string, src []byte) {
-			slash := pathToSlash(path)
-			if !strings.HasSuffix(slash, "/ports/http.go") && !strings.HasSuffix(slash, "_http.go") {
-				return
-			}
-			for _, r := range classifyScopeRoutes(string(src)) {
-				total++
-				counts[r.class]++
-				if r.writable {
-					writable = append(writable, r.key)
-				}
-				for _, p := range r.problems {
-					t.Errorf("%s:%d %s [%s] — %s", slash, r.line, r.key, r.class, p)
-				}
-			}
-		})
+	for _, reg := range routes {
+		r, ok := classifyScopeRoute(reg)
+		if !ok {
+			continue
+		}
+		total++
+		counts[r.class]++
+		if r.writable {
+			writable = append(writable, reg.Pattern)
+		}
+		for _, p := range r.problems {
+			t.Errorf("%s:%d %s [%s] — %s", reg.File, reg.Line, reg.Pattern, r.class, p)
+		}
 	}
 	if total == 0 || counts[scopeClassHonour] == 0 || counts[scopeClassIgnore] == 0 || counts[scopeClassReject] == 0 || counts[scopeClassPath] == 0 {
 		t.Fatalf("classifier found no routes in some class (total=%d %v): the scan is broken", total, counts)
@@ -173,37 +131,39 @@ func TestArch_EveryRouteIsScopeClassified(t *testing.T) {
 	}
 }
 
-// TestScopeClassifier_FlagsUnclassifiedAndUnauthorisedRoutes is the negative
-// proof for TestArch_EveryRouteIsScopeClassified: each offender below must be
-// reported, each compliant route must not.
-func TestScopeClassifier_FlagsUnclassifiedAndUnauthorisedRoutes(t *testing.T) {
+// TestScopeClassifier_FlagsMisclassifiedRoutes is the negative proof for the
+// classifier half of TestArch_EveryRouteIsScopeClassified.
+func TestScopeClassifier_FlagsMisclassifiedRoutes(t *testing.T) {
 	t.Parallel()
-	src := `package ports
-func AddRoutes() {
+	const src = `package ports
+import ("net/http"; "github.com/leadkart/leadkart-go/internal/identity/ports/authn")
+func AddRoutes(mux *http.ServeMux, v authn.Verifier, s authn.StampValidator) {
 	auth := authn.RequireFreshStamp(v, s)
-	anchor := authn.RequirePlatform(v, s)
 	read := authn.RequirePermission(v, s, p.Orders.Read)
 	manage := authn.RequirePermission(v, s, p.Orders.Manage)
 	gate := authn.RequirePlatformGate(v, s)
 	mux.Handle("GET /api/v1/orders/authonly", auth(h))
-	mux.Handle("GET /api/v1/orders/anchoronly", anchor(h))
-	mux.Handle("GET /api/v1/platform/stats-anchor", anchor(h))
 	mux.Handle("POST /api/v1/orders/ok", manage(h))
 	mux.Handle("GET /api/v1/orders/ok", read(h))
 	mux.Handle("GET /api/v1/platform/stats-ok", gate(p.Platform.TenantsView)(h))
 	mux.Handle("GET /api/v1/auth/sessions", auth(h))
 	mux.Handle("POST /api/v1/permission-requests", authn.RejectTenantScope(auth(h)))
 	mux.Handle("POST /api/v1/orders/writable-ignored", authn.TenantScopeWritable(authn.RejectTenantScope(manage(h))))
+	mux.Handle("GET /api/v1/orders/marker-inside", read(authn.RejectTenantScope(h)))
 }`
+	routes, off := scanRouteSource("internal/x/ports/http.go", []byte(src))
+	if len(off) != 0 {
+		t.Fatalf("offences: %v", off)
+	}
 	got := map[string][]string{}
-	for _, r := range classifyScopeRoutes(src) {
-		got[r.key] = r.problems
+	for _, reg := range routes {
+		r, _ := classifyScopeRoute(reg)
+		got[reg.Pattern] = r.problems
 	}
 	for _, key := range []string{
 		"GET /api/v1/orders/authonly",          // honoured, authentication only
-		"GET /api/v1/orders/anchoronly",        // honoured, platform membership only
-		"GET /api/v1/platform/stats-anchor",    // IGNORE group but membership-only authorisation
 		"POST /api/v1/orders/writable-ignored", // writable on a REJECT route
+		"GET /api/v1/orders/marker-inside",     // marker inside the gate
 	} {
 		if len(got[key]) == 0 {
 			t.Errorf("%s must be flagged", key)

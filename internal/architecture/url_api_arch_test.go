@@ -59,24 +59,15 @@ func specPaths(t *testing.T) []string {
 	return out
 }
 
-// codeRoutes returns the (METHOD, PATH) tuples from every
-// internal/<mod>/ports/*.go file.
+// codeRoutes returns the "METHOD /path" patterns of every registration the
+// shared scanner reads; unreadable registrations fail the calling test.
 func codeRoutes(t *testing.T) []string {
 	t.Helper()
-	re := regexp.MustCompile(`mux\.Handle\(\s*"([A-Z]+ [^"]+)"`)
-	out := []string{}
-	for _, mod := range modulesUnderInternal(t) {
-		portsDir := filepath.Join(internalDir(t), mod, "ports")
-		walkGoFiles(t, portsDir, false, func(path string, src []byte) {
-			slashPath := pathToSlash(path)
-			if !strings.HasSuffix(slashPath, "/ports/http.go") &&
-				!strings.HasSuffix(slashPath, "_http.go") {
-				return
-			}
-			for _, m := range re.FindAllStringSubmatch(string(src), -1) {
-				out = append(out, m[1])
-			}
-		})
+	routes, offences := scanAllRoutes(t)
+	failOnOffences(t, offences)
+	out := make([]string, 0, len(routes))
+	for _, r := range routes {
+		out = append(out, r.Pattern)
 	}
 	slices.Sort(out)
 	return out
@@ -535,49 +526,11 @@ func TestArch_ProblemDetailsErrorShape(t *testing.T) {
 // Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_HTTPMethodExplicit(t *testing.T) {
 	t.Parallel()
-
-	// Only flag mux.Handle calls; mux.HandleFunc + http.Handle are out
-	// of scope. The pattern: first arg is a string literal; must start
-	// with an uppercase HTTP method token.
-	methodRE := regexp.MustCompile(`^[A-Z]+\s+/`)
-	rawHandleRE := regexp.MustCompile(`mux\.Handle\(\s*"([^"]+)"`)
-
-	type violation struct {
-		file string
-		line int
-		key  string
-	}
-	var violations []violation
-
-	for _, mod := range modulesUnderInternal(t) {
-		portsDir := filepath.Join(internalDir(t), mod, "ports")
-		walkGoFiles(t, portsDir, false, func(path string, src []byte) {
-			slashPath := pathToSlash(path)
-			if !strings.HasSuffix(slashPath, "/ports/http.go") &&
-				!strings.HasSuffix(slashPath, "_http.go") {
-				return
-			}
-			text := string(src)
-			matches := rawHandleRE.FindAllStringSubmatchIndex(text, -1)
-			for _, m := range matches {
-				key := text[m[2]:m[3]]
-				if methodRE.MatchString(key) {
-					continue
-				}
-				line := 1 + strings.Count(text[:m[0]], "\n")
-				violations = append(violations, violation{file: path, line: line, key: key})
-			}
-		})
-	}
-
-	if len(violations) > 0 {
-		t.Logf("BARE-METHOD mux.Handle VIOLATIONS — %d", len(violations))
-		t.Logf("Per Go 1.22 ServeMux + ADR 0007: every route uses")
-		t.Logf("`METHOD /path`. Bare `/path` matches all methods.")
-		for _, v := range violations {
-			t.Errorf("%s:%d — %q lacks HTTP method prefix", v.file, v.line, v.key)
-		}
-	}
+	// The shared scanner reports a method-less pattern (and every other
+	// registration it cannot read) as an offence; HandleFunc, any receiver name,
+	// variables and loops included.
+	_, offences := scanAllRoutes(t)
+	failOnOffences(t, offences)
 }
 
 // ----------------------------------------------------------------------------

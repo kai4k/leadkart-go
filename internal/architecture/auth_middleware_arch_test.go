@@ -15,195 +15,58 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// publicRoutesAllowList enumerates routes that legitimately ship
-// without an auth wrapper. These are the cross-cutting endpoints that
-// either pre-date the JWT exchange (login / password-reset) or serve
-// non-product surface (health, openapi).
+// publicRoutesAllowList enumerates routes that legitimately ship with NO auth
+// gate at all: the endpoints that pre-date the JWT exchange (login /
+// password-reset) or serve non-product surface (docs, openapi). Asserted
+// exactly: an unlisted route without a gate fails, a listed one that is not
+// registered (or has a gate) fails. health/alive/ready are registered by
+// internal/common/obs, outside the scanned surface.
 var publicRoutesAllowList = map[string]bool{
-	"GET /":                     true, // root redirect to docs
-	"GET /favicon.ico":          true,
-	"GET /docs":                 true,
-	"GET /docs/":                true,
-	"GET /openapi.yaml":         true,
-	"GET /health":               true,
-	"GET /alive":                true,
-	"GET /ready":                true,
-	"POST /api/v1/auth/login":   true,
-	"POST /api/v1/auth/refresh": true,
-	"POST /api/v1/auth/logout":  true,
+	"GET /{$}":                                 true, // root redirect to docs
+	"GET /favicon.ico":                         true,
+	"GET /docs":                                true,
+	"GET /docs/":                               true,
+	"GET /openapi.yaml":                        true,
+	"POST /api/v1/auth/login":                  true,
+	"POST /api/v1/auth/refresh":                true,
+	"POST /api/v1/auth/logout":                 true,
 	"POST /api/v1/auth/request-password-reset": true,
 	"POST /api/v1/auth/reset-password":         true,
 	"POST /api/v1/auth/confirm-email-change":   true,
-}
-
-// muxHandleRE captures `mux.Handle("METHOD /path", ...)`. We pull
-// the quoted route key; the trailing `...)` body is extracted by
-// balanced-paren scanning (the regex captures the START position of
-// the handler expression).
-var muxHandleRE = regexp.MustCompile(`mux\.Handle\(\s*"([A-Z]+ [^"]+)"\s*,\s*`)
-
-// extractMuxHandlerExpr returns the handler expression (everything
-// between the `,` after the route key and the matching `)` that
-// closes mux.Handle). pos is the index in text immediately after the
-// `,\s*` capture.
-func extractMuxHandlerExpr(text string, pos int) string {
-	depth := 1
-	start := pos
-	for i := pos; i < len(text); i++ {
-		switch text[i] {
-		case '(':
-			depth++
-		case ')':
-			depth--
-			if depth == 0 {
-				return text[start:i]
-			}
-		}
-	}
-	return text[start:]
 }
 
 // ----------------------------------------------------------------------------
 // Test 43: TestArch_EveryAuthenticatedRouteHasMiddleware
 // ----------------------------------------------------------------------------
 //
-// For every mux.Handle("METHOD /path", expr) call in
-// internal/<mod>/ports/http.go (and sibling *_http.go files): either
-// the path is in publicRoutesAllowList, OR the expr contains one of
-// the canonical auth wrappers:
-//   - auth(            (RequireAuth alias)
-//   - authn.RequireAuth
-//   - authn.RequirePermission
-//   - authn.RequireAnyPermission
-//   - authn.RequirePlatform
-//
-// We scan the SECOND ARG of the mux.Handle call for the marker. False
-// positives possible if a handler-wrapper alias re-exports the marker;
-// the test allow-list (per file) is the escape hatch.
+// Every registration the shared scanner reads (route_scan_test.go) is either in
+// publicRoutesAllowList or carries an auth gate (RequireAuth / RequireFreshStamp
+// / a permission gate / RequirePlatform...), recognised as identifiers in call
+// position, never as words in the source.
 // Scope: production — applies to non-test files; test-side discipline lives under Principle TD/TP.
 func TestArch_EveryAuthenticatedRouteHasMiddleware(t *testing.T) {
 	t.Parallel()
-
-	// Markers that ALWAYS indicate an auth wrap.
-	directMarkers := []string{
-		"authn.RequireAuth",
-		"authn.RequirePermission",
-		"authn.RequireAnyPermission",
-		"authn.RequirePlatform",
+	routes, offences := scanAllRoutes(t)
+	failOnOffences(t, offences)
+	if len(routes) == 0 {
+		t.Fatal("scanner found no routes")
 	}
-
-	// Indirect markers are auto-discovered by scanning the file for
-	// `<name> := authn.Require...` bindings — see the loop below.
-
-	type violation struct {
-		file string
-		line int
-		key  string
+	registered := map[string]routeReg{}
+	for _, reg := range routes {
+		registered[reg.Pattern] = reg
+		if publicRoutesAllowList[reg.Pattern] {
+			if reg.firstGate() >= 0 {
+				t.Errorf("publicRoutesAllowList entry %q carries an auth gate — remove it from the list", reg.Pattern)
+			}
+			continue
+		}
+		if reg.firstGate() < 0 {
+			t.Errorf("%s:%d — %s lacks an authn.Require* gate (add the gate, or list it in publicRoutesAllowList if it is intentionally unauthenticated)", reg.File, reg.Line, reg.Pattern)
+		}
 	}
-	var violations []violation
-
-	for _, mod := range modulesUnderInternal(t) {
-		portsDir := filepath.Join(internalDir(t), mod, "ports")
-		walkGoFiles(t, portsDir, false, func(path string, src []byte) {
-			slashPath := pathToSlash(path)
-			if !strings.HasSuffix(slashPath, "/ports/http.go") &&
-				!strings.HasSuffix(slashPath, "_http.go") {
-				return
-			}
-			text := string(src)
-			// Auto-discover middleware-alias bindings.
-			//
-			// Pass 1: direct binding to authn.Require* (canonical shape).
-			indirectActive := map[string]bool{}
-			directBindingRE := regexp.MustCompile(`(?m)\b([a-zA-Z_]\w*)\s*:=\s*authn\.Require\w*\(`)
-			for _, m := range directBindingRE.FindAllStringSubmatch(text, -1) {
-				indirectActive[m[1]+"("] = true
-			}
-			// Pass 2: chain/compose helpers that wrap an existing
-			// alias. We accept any `<name> := chain(<X>, ...)` or
-			// `<name> := <X>(<Y>)` where <X> resolves through any
-			// already-active marker. Two-pass closure-resolution.
-			composeBindingRE := regexp.MustCompile(`(?m)\b([a-zA-Z_]\w*)\s*:=\s*\w+\s*\(([^)]*)\)`)
-			for round := 0; round < 4; round++ {
-				added := false
-				for _, m := range composeBindingRE.FindAllStringSubmatch(text, -1) {
-					lhs := m[1]
-					if indirectActive[lhs+"("] {
-						continue
-					}
-					rhs := m[2]
-					for activeMarker := range indirectActive {
-						if strings.Contains(rhs, strings.TrimSuffix(activeMarker, "(")) {
-							indirectActive[lhs+"("] = true
-							added = true
-							break
-						}
-					}
-					// Also: a chain whose direct arg contains
-					// `authn.Require` qualifies as a marker.
-					if strings.Contains(rhs, "authn.Require") {
-						indirectActive[lhs+"("] = true
-						added = true
-					}
-				}
-				if !added {
-					break
-				}
-			}
-			// `auth(` is bound at the route-group level by the existing
-			// identity ports/http.go pattern; trust it without textual
-			// rebinding check (the pattern is canonical + audited).
-			indirectActive["auth("] = true
-			// `chain(requirePlatform, ...)` invoked inline in mux.Handle
-			// is canonical too — the route call itself contains the
-			// `authn.Require...`-shaped name `requirePlatform`. We
-			// detect this by string-matching authn.Require markers
-			// inside the route expression below.
-
-			matches := muxHandleRE.FindAllStringSubmatchIndex(text, -1)
-			for _, m := range matches {
-				key := text[m[2]:m[3]]
-				expr := extractMuxHandlerExpr(text, m[1])
-				line := 1 + strings.Count(text[:m[0]], "\n")
-				if publicRoutesAllowList[key] {
-					continue
-				}
-				hasMarker := false
-				for _, marker := range directMarkers {
-					if strings.Contains(expr, marker) {
-						hasMarker = true
-						break
-					}
-				}
-				if !hasMarker {
-					for marker := range indirectActive {
-						name := strings.TrimSuffix(marker, "(")
-						// Match the marker either as a CALL (`name(`)
-						// or as a function-passed argument (`name,`
-						// `name)` `name ` `,name`).
-						if strings.Contains(expr, name+"(") ||
-							strings.Contains(expr, name+",") ||
-							strings.Contains(expr, name+")") ||
-							strings.Contains(expr, " "+name+" ") {
-							hasMarker = true
-							break
-						}
-					}
-				}
-				if !hasMarker {
-					violations = append(violations, violation{file: path, line: line, key: key})
-				}
-			}
-		})
-	}
-
-	if len(violations) > 0 {
-		t.Logf("ROUTE WITHOUT AUTH-MIDDLEWARE VIOLATIONS — %d", len(violations))
-		t.Logf("Every mux.Handle outside the public allow-list must wrap the")
-		t.Logf("handler with an authn.Require* middleware. Add the route to")
-		t.Logf("publicRoutesAllowList if it's intentionally unauthenticated.")
-		for _, v := range violations {
-			t.Errorf("%s:%d — %s lacks Require* auth wrapper", v.file, v.line, v.key)
+	for key := range publicRoutesAllowList {
+		if _, ok := registered[key]; !ok {
+			t.Errorf("publicRoutesAllowList entry %q is not registered — remove it", key)
 		}
 	}
 }
