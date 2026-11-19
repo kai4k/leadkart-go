@@ -98,12 +98,34 @@ func TestE2E_PlatformGates_ZeroPermissionMemberRefused(t *testing.T) {
 				hdr = scopeHdr(v.TenantID)
 				label = rt.name + " with X-Tenant-Id"
 			}
+			before := f.getUser(t, v.AccessToken, v.MembershipID)
 			r := f.doWithHeaders(t, rt.method, rt.path(v), zero, rt.body(v), hdr)
 			if r.status != http.StatusForbidden {
 				t.Errorf("%s: zero-permission platform member got %d %s, want 403", label, r.status, r.body)
 			}
 			f.assertVictimIntact(t, label, v)
+			f.assertPersonNamesUnchanged(t, label, v, before)
 		}
+	}
+	// None of the attempts above may have opened an impersonation session.
+	lister := mintOperatorJWTExact(t, f.Issuer, f.persons, "", []string{permission.IdentityPermissions.Platform.TenantsManage}, false)
+	lr := f.authedJSON(t, http.MethodGet, "/api/v1/platform/impersonation/sessions", lister, nil)
+	var sessions ports.ListImpersonationSessionsResponse
+	if err := json.Unmarshal(lr.body, &sessions); err != nil || lr.status != http.StatusOK {
+		t.Fatalf("list impersonation sessions: %d %s", lr.status, lr.body)
+	}
+	if len(sessions.Sessions) != 0 {
+		t.Errorf("%d impersonation session(s) exist after zero-permission attempts, want none: %s", len(sessions.Sessions), lr.body)
+	}
+}
+
+// assertPersonNamesUnchanged proves the victim person's names are what they
+// were before the attempt (the platform profile-update route renames).
+func (f e2eFixture) assertPersonNamesUnchanged(t *testing.T, what string, v registeredTenant, before ports.UserDto) {
+	t.Helper()
+	u := f.getUser(t, v.AccessToken, v.MembershipID)
+	if u.FirstName != before.FirstName || u.LastName != before.LastName {
+		t.Errorf("%s: person names changed to %q %q, want %q %q", what, u.FirstName, u.LastName, before.FirstName, before.LastName)
 	}
 }
 

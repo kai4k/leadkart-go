@@ -183,3 +183,62 @@ func TestHandleListLeads_H8_ReadAllBypassesGate(t *testing.T) {
 			repo.last.AssigneeMembershipID, otherMembership)
 	}
 }
+
+// operatorClaims builds a platform-tenant member (is_platform + platform slug
+// anchor) holding exactly perms; super lifts it to a super user.
+func operatorClaims(membershipID string, super bool, perms ...string) *jwt.Claims {
+	return &jwt.Claims{
+		MembershipID: membershipID,
+		TenantID:     uuid.NewString(),
+		TenantSlug:   authn.PlatformTenantSlug,
+		IsPlatform:   true,
+		IsSuperUser:  super,
+		Permissions:  perms,
+	}
+}
+
+// Platform-tenant membership is not scope authority: a zero-permission platform
+// member is narrowed to their own caseload exactly like any tenant member
+// (probing another assignee is 403), while a super user and an operator holding
+// platform.tenants.view are not narrowed.
+func TestHandleListLeads_PlatformMemberNarrowing(t *testing.T) {
+	t.Parallel()
+	view := permission.IdentityPermissions.Platform.TenantsView
+	other := uuid.NewString()
+	tests := []struct {
+		name         string
+		claims       func(self string) *jwt.Claims
+		wantSelf     bool // SelfFilter forwarded to the repository
+		probeOther   int  // status for ?assignee=<other>
+		probeOtherOK bool // repository reached
+	}{
+		{"zero-permission platform member is narrowed", func(m string) *jwt.Claims { return operatorClaims(m, false) }, true, http.StatusForbidden, false},
+		{"super user is not narrowed", func(m string) *jwt.Claims { return operatorClaims(m, true) }, false, http.StatusOK, true},
+		{"operator with platform.tenants.view is not narrowed", func(m string) *jwt.Claims { return operatorClaims(m, false, view) }, false, http.StatusOK, true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			self := uuid.NewString()
+			repo := &recordingLeadsRepo{}
+			h := handleListLeads(silentLog(), newH8App(repo))
+
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, httptest.NewRequestWithContext(h8Ctx(t.Context(), tc.claims(self)), http.MethodGet, "/api/v1/crm/leads", nil))
+			if rec.Code != http.StatusOK || repo.calls != 1 {
+				t.Fatalf("plain list: %d %s (repo calls %d)", rec.Code, rec.Body.String(), repo.calls)
+			}
+			if gotSelf := repo.last.SelfFilter == self; gotSelf != tc.wantSelf {
+				t.Fatalf("SelfFilter forwarded = %q, narrowed=%v, want narrowed=%v", repo.last.SelfFilter, gotSelf, tc.wantSelf)
+			}
+
+			repo2 := &recordingLeadsRepo{}
+			rec = httptest.NewRecorder()
+			handleListLeads(silentLog(), newH8App(repo2)).ServeHTTP(rec,
+				httptest.NewRequestWithContext(h8Ctx(t.Context(), tc.claims(self)), http.MethodGet, "/api/v1/crm/leads?assignee="+other, nil))
+			if rec.Code != tc.probeOther || (repo2.calls == 1) != tc.probeOtherOK {
+				t.Fatalf("?assignee=other: %d %s (repo calls %d), want %d reached=%v", rec.Code, rec.Body.String(), repo2.calls, tc.probeOther, tc.probeOtherOK)
+			}
+		})
+	}
+}

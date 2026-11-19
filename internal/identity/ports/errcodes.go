@@ -242,6 +242,10 @@ const (
 	// must be requested.
 	ErrCodeInvalidSearchInclude = "invalid_search_include"
 
+	// ErrCodeSearchCategoryForbidden — GET /v1/search ?include= names a
+	// category (persons / tenants) the caller lacks the permission for.
+	ErrCodeSearchCategoryForbidden = "search_category_forbidden"
+
 	// ErrCodeAuditEventsRangeInvalid — audit-log read endpoints
 	// received an invalid since/until range (since > until or
 	// non-RFC-3339 timestamp). 400 surface.

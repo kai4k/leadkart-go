@@ -8,6 +8,8 @@ import (
 
 	"github.com/leadkart/leadkart-go/internal/identity/app"
 	"github.com/leadkart/leadkart-go/internal/identity/app/query"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/permission"
+	"github.com/leadkart/leadkart-go/internal/identity/ports/authn"
 )
 
 // handleSearch serves GET /api/v1/search?q=...&limit=...
@@ -17,14 +19,17 @@ import (
 //
 //   - ?q=<text>                 — REQUIRED, 2-100 chars after trim
 //   - ?limit=<int>              — per-category cap; default 5, max 20
-//   - ?include=persons,tenants  — comma-separated; default both
+//   - ?include=persons,tenants  — comma-separated; default: every category the
+//     caller is authorised for (persons: platform.users.view, tenants:
+//     platform.tenants.view); an explicit category the caller may not see is 403
 //
 // Categories returned:
 //
 //   - persons  — global identity match (email + first/last name)
 //   - tenants  — global tenant match (slug + legal/display name)
 //
-// Auth: REQUIRES is_platform=true (RequirePlatform middleware).
+// Auth: platform anchor AND any of platform.tenants.view / platform.users.view
+// at the route; each category is then gated on its own permission here.
 // Tenant-scoped omni-search (for tenant admins searching their own
 // users) lands in a v0.3 follow-up via a JOIN-based query against
 // the existing trigram + composite indexes.
@@ -44,24 +49,44 @@ func handleSearch(log *slog.Logger, a app.Application) http.Handler {
 		// default (5). Above 20 gets capped to 20.
 		limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 
-		// Default to both categories; honor explicit ?include= when set.
-		includePersons := true
-		includeTenants := true
+		// Each category needs its own permission. No ?include= returns the
+		// authorised subset; an explicitly requested category the caller may not
+		// see is a 403 naming it. The query below only ever runs for the
+		// authorised categories, so its cache key (which includes the category
+		// flags) can never hand one caller another's categories.
+		mayPersons := authn.Satisfies(r.Context(), permission.IdentityPermissions.Platform.UsersView)
+		mayTenants := authn.Satisfies(r.Context(), permission.IdentityPermissions.Platform.TenantsView)
+		includePersons, includeTenants := mayPersons, mayTenants
 		if inc := r.URL.Query().Get("include"); inc != "" {
-			includePersons = false
-			includeTenants = false
+			wantPersons, wantTenants := false, false
 			for _, cat := range splitCSV(inc) {
 				switch cat {
 				case "persons":
-					includePersons = true
+					wantPersons = true
 				case "tenants":
-					includeTenants = true
+					wantTenants = true
 				}
 			}
+			if !wantPersons && !wantTenants {
+				writeError(w, http.StatusBadRequest, ErrCodeInvalidSearchInclude,
+					"at least one of include=persons|tenants is required")
+				return
+			}
+			if wantPersons && !mayPersons {
+				writeError(w, http.StatusForbidden, ErrCodeSearchCategoryForbidden,
+					"include=persons requires "+permission.IdentityPermissions.Platform.UsersView)
+				return
+			}
+			if wantTenants && !mayTenants {
+				writeError(w, http.StatusForbidden, ErrCodeSearchCategoryForbidden,
+					"include=tenants requires "+permission.IdentityPermissions.Platform.TenantsView)
+				return
+			}
+			includePersons, includeTenants = wantPersons, wantTenants
 		}
 		if !includePersons && !includeTenants {
-			writeError(w, http.StatusBadRequest, ErrCodeInvalidSearchInclude,
-				"at least one of include=persons|tenants is required")
+			// Unreachable behind the route gate (it needs one of the two); fail closed.
+			writeError(w, http.StatusForbidden, ErrCodeSearchCategoryForbidden, "no searchable category is authorised")
 			return
 		}
 

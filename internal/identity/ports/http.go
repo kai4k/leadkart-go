@@ -251,8 +251,13 @@ func AddRoutes(mux *http.ServeMux, log *slog.Logger, a app.Application, verifier
 		// Operator omni-search (Cmd+K) — parallel pg_trgm fanout
 		// across persons + tenants per ADR 0040. Platform-only at
 		// v0.2; tenant-scoped variant lands in a follow-up.
+		// The route needs ANY of the two category permissions; handleSearch gates
+		// each category on its own (persons: platform.users.view, tenants:
+		// platform.tenants.view), so a tenants-only operator still searches tenants.
 		mux.Handle("GET /api/v1/search",
-			platform(p.Platform.TenantsView, p.Platform.UsersView)(handleSearch(log, a)))
+			authn.RequirePlatform(verifier, stampValidator)(
+				authn.RequireAnyPermission(verifier, stampValidator, p.Platform.TenantsView, p.Platform.UsersView)(
+					handleSearch(log, a))))
 
 		// Permission-elevation approval workflow (ADR 0055).
 		//

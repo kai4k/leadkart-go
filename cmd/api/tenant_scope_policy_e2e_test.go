@@ -14,15 +14,21 @@ import (
 	"encoding/json"
 	"net/http"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/leadkart/leadkart-go/internal/common/ids"
 	"github.com/leadkart/leadkart-go/internal/common/messaging"
 	"github.com/leadkart/leadkart-go/internal/common/messaging/messagingtest"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/permission"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 	"github.com/leadkart/leadkart-go/internal/identity/ports"
 	invports "github.com/leadkart/leadkart-go/internal/inventory/ports"
+	notificationscommand "github.com/leadkart/leadkart-go/internal/notifications/app/command"
+	"github.com/leadkart/leadkart-go/internal/notifications/domain/notification"
+	nports "github.com/leadkart/leadkart-go/internal/notifications/ports"
 	ordersports "github.com/leadkart/leadkart-go/internal/orders/ports"
 )
 
@@ -70,11 +76,43 @@ func TestE2E_TenantScope_NotificationsIgnoreHeader(t *testing.T) {
 	b := f.registerAndLogin(t, "notifscope")
 	p := permission.IdentityPermissions
 	op := mintOperatorJWTExact(t, f.Issuer, f.persons, "", []string{p.Platform.TenantsView, p.Notifications.Inbox.Read}, false)
+
+	// Tenant B's admin has one notification. Control: B's admin sees it. The
+	// operator, with any header (including B's own id), sees only its own inbox.
+	f.seedNotification(t, b.TenantID, b.MembershipID, "Tenant B admin only")
+	own := f.authedJSON(t, http.MethodGet, "/api/v1/notifications", b.AccessToken, nil)
+	var ownList nports.ListNotificationsResponse
+	if err := json.Unmarshal(own.body, &ownList); err != nil || own.status != http.StatusOK || len(ownList.Items) != 1 {
+		t.Fatalf("control: tenant B admin inbox %d %s, want exactly the seeded notification", own.status, own.body)
+	}
 	for _, hdr := range []string{b.TenantID, unknownTenantID, "not-a-uuid"} {
 		r := f.doWithHeaders(t, http.MethodGet, "/api/v1/notifications", op, nil, scopeHdr(hdr))
 		if r.status != http.StatusOK {
 			t.Errorf("notifications with header %q: %d %s, want 200 (header ignored)", hdr, r.status, r.body)
+			continue
 		}
+		var list nports.ListNotificationsResponse
+		if err := json.Unmarshal(r.body, &list); err != nil {
+			t.Fatalf("decode inbox: %v", err)
+		}
+		if len(list.Items) != 0 {
+			t.Errorf("notifications with header %q: operator sees %d item(s) from the scoped tenant, want its own (empty) inbox: %s", hdr, len(list.Items), r.body)
+		}
+	}
+}
+
+// seedNotification creates one unread notification for a membership through the
+// notifications command, the same path the subscribers use.
+func (f e2eFixture) seedNotification(t *testing.T, tenantID, membershipID, title string) {
+	t.Helper()
+	notif := buildNotificationsApp(f.Pool, time.Now)
+	if _, err := notif.Commands.CreateNotification.Handle(t.Context(), notificationscommand.CreateNotificationCommand{
+		TenantID:              tenant.ID(tenantID),
+		RecipientMembershipID: membership.ID(membershipID),
+		Category:              notification.CategoryReminder,
+		Title:                 title,
+	}); err != nil {
+		t.Fatalf("seed notification: %v", err)
 	}
 }
 
@@ -91,11 +129,11 @@ func TestE2E_TenantScope_PathWriteOnSuspendedTenantIgnoresHeaderState(t *testing
 	body := ports.UpdateTenantProfileRequest{LegalName: "Renamed Pharma Pvt Ltd", DisplayName: "Renamed"}
 	without := f.doWithHeaders(t, http.MethodPatch, "/api/v1/tenants/"+b.TenantID+"/profile", op, body, nil)
 	with := f.doWithHeaders(t, http.MethodPatch, "/api/v1/tenants/"+b.TenantID+"/profile", op, body, scopeHdr(b.TenantID))
-	if with.status != without.status {
-		t.Errorf("suspended tenant path write differs by header: without=%d %s with=%d %s", without.status, without.body, with.status, with.body)
+	if without.status < 200 || without.status > 299 {
+		t.Errorf("suspended tenant path write without header: %d %s, want 2xx", without.status, without.body)
 	}
-	if with.status == http.StatusConflict {
-		t.Errorf("path write on a suspended tenant must not be tenant_not_active: %d %s", with.status, with.body)
+	if with.status < 200 || with.status > 299 {
+		t.Errorf("suspended tenant path write with matching header: %d %s, want 2xx (not tenant_not_active)", with.status, with.body)
 	}
 }
 

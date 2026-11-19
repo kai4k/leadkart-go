@@ -623,12 +623,5 @@ func membershipIDFromCtx(r *http.Request) (string, bool) {
 	if !ok {
 		return "", false
 	}
-	m := strings.TrimSpace(c.MembershipID)
-	if m == "" {
-		return "", false
-	}
-	if _, err := uuid.Parse(m); err != nil {
-		return "", false
-	}
-	return m, true
+	return authn.CanonicalID(c.MembershipID)
 }

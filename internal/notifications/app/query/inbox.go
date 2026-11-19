@@ -68,7 +68,7 @@ func NewListInboxHandler(repo notification.Repository) ListInboxHandler {
 
 // Handle returns the inbox page projected to Views.
 func (h ListInboxHandler) Handle(ctx context.Context, q ListInboxQuery) (pagination.Page[NotificationView], error) {
-	page, err := h.repo.ListPageForRecipient(ctx, q.TenantID, q.RecipientMembershipID, q.Filter, q.Cursor, q.PageSize)
+	page, err := h.repo.ListPageForRecipient(ctx, q.TenantID, q.RecipientMembershipID, q.Filter, q.Cursor, pagination.ClampPageSize(q.PageSize))
 	if err != nil {
 		return pagination.Page[NotificationView]{}, fmt.Errorf("list inbox: %w", err)
 	}

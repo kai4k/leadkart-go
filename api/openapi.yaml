@@ -1144,13 +1144,16 @@ paths:
         (`platform_tenant_undeletable`).
 
         Requires `identity.tenants.delete` held by a platform-tenant operator; platform-tenant membership alone is refused with 403 `forbidden`.
+        The tenant comes from the path only: `X-Tenant-Id` is never applied here, and a
+        value that differs from the path tenant is 400 `tenant_scope_conflict`. The
+        operator is attributed on the outbox row (`act_operator_id`, reason `platform-route`).
       parameters:
         - $ref: '#/components/parameters/TenantId'
         - $ref: '#/components/parameters/XTenantId'
       responses:
         '204': { description: Tenant hard-deleted }
         '400': { $ref: '#/components/responses/TenantScopeInvalid' }
-        '403': { $ref: '#/components/responses/TenantScopeForbidden' }
+        '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '422': { $ref: '#/components/responses/Unprocessable' }
 
@@ -1379,7 +1382,10 @@ paths:
       tags: [search]
       summary: Operator omni-search (parallel pg_trgm fanout)
       description: |
-        Requires `platform.tenants.view` and `platform.users.view` held by a platform-tenant operator; platform-tenant membership alone is refused with 403 `forbidden`.
+        Requires `platform.tenants.view` OR `platform.users.view` held by a platform-tenant operator; platform-tenant membership alone is refused with 403 `forbidden`.
+        Each category needs its own permission: `persons` needs `platform.users.view`, `tenants` needs `platform.tenants.view`.
+        Without `include` the response carries the categories the caller is authorised for; naming a
+        category the caller may not see is 403 `search_category_forbidden` (the message names the category).
       parameters:
         - name: q
           in: query
@@ -1393,7 +1399,7 @@ paths:
           in: query
           required: false
           schema: { type: string, default: 'persons,tenants' }
-          description: Comma-separated category list. Currently `persons`, `tenants`.
+          description: Comma-separated category list. Currently `persons`, `tenants`. Default is every category the caller is authorised for.
       responses:
         '200':
           description: Search results
@@ -1405,7 +1411,11 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
-        '403': { $ref: '#/components/responses/Forbidden' }
+        '403':
+          description: Missing both permissions (`forbidden`), or an explicitly requested category the caller lacks the permission for (`search_category_forbidden`)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
 
   # ===== PERMISSION REQUESTS (ADR 0055) =================================
   /api/v1/permission-requests:
@@ -3220,7 +3230,9 @@ paths:
         upcoming after). Filters: `type`, `assignee`, `lead_id`.
 
         Callers WITHOUT `crm.leads.read_all` see only their own
-        assignee bucket per ADR 0060.
+        assignee bucket per ADR 0060; probing another assignee is 403
+        `forbidden`. The route honours `X-Tenant-Id` (reads only), so it can
+        also answer the scope errors below.
       parameters:
         - { $ref: '#/components/parameters/Cursor' }
         - { $ref: '#/components/parameters/PageSize' }
@@ -3243,13 +3255,9 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ListRemindersResponse' }
-        '400': { $ref: '#/components/responses/BadRequest' }
+        '400': { $ref: '#/components/responses/TenantScopeInvalid' }
         '401': { $ref: '#/components/responses/Unauthorized' }
-        '403':
-          description: Caller probed another assignee without crm.leads.read_all, lacks the permission (`forbidden`), or `X-Tenant-Id` was refused (`tenant_scope_forbidden`)
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '403': { $ref: '#/components/responses/TenantScopeForbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '500': { $ref: '#/components/responses/InternalServerError' }
 
@@ -3467,7 +3475,14 @@ components:
         A scoped request, or a write to another tenant through the URL alone, is
         attributed durably: its outbox and audit rows carry `act_operator_id`
         (the operator) with reason `tenant-via-header` (header) or
-        `tenant-via-path` (URL path only).
+        `tenant-via-path` (URL path only). Platform-gated routes that carry
+        neither (header-less lifecycle calls, hard delete, platform person
+        operations, platform-module writes) use reason `platform-route`.
+
+        On a path-tenant route (`/api/v1/tenants/{tenantId}/...`, lifecycle,
+        hard delete) a header equal to the path tenant selects nothing: no scope
+        authority is needed and no tenant is looked up, so the answer is the
+        route's own permission gate whether or not the header is sent.
 
         Errors for an honoured header: 400 `invalid_tenant_scope` (not a UUID,
         or supplied more than once), 400 `tenant_scope_conflict` (differs from
@@ -3599,7 +3614,10 @@ components:
         Forbidden. `error` is `forbidden` (the caller lacks the route's permission in the
         effective tenant) or `tenant_scope_forbidden` (`X-Tenant-Id` names another tenant
         and the caller is neither a super user nor a platform operator holding
-        `platform.tenants.view`). `tenant_scope_forbidden` is decided before any tenant
+        `platform.tenants.view`). On path-tenant routes (`/api/v1/tenants/{tenantId}/...`,
+        the lifecycle routes) a header equal to the path tenant is not a scope request, so
+        `tenant_scope_forbidden` is never returned there: the route's own permission
+        decides, with `forbidden`. `tenant_scope_forbidden` is decided before any tenant
         lookup and is identical for existing, unknown and suspended tenants, so it cannot
         be used to probe which tenants exist.
       content:
@@ -3618,8 +3636,11 @@ components:
     TenantScopeInvalid:
       description: |
         `X-Tenant-Id` is malformed or supplied more than once (`invalid_tenant_scope`), or
-        differs from the tenant in the URL (`tenant_scope_conflict`). Only operators who
-        may use the header ever see it; every other caller has the header ignored.
+        differs from the tenant in the URL (`tenant_scope_conflict`). Every platform-tenant
+        member (is_platform with the platform slug anchor, not an impersonation token) can
+        see it, whether or not they hold scope authority; every other caller has the header
+        ignored. The same 400 also covers an invalid list filter or cursor on routes that
+        take them.
       content:
         application/json:
           schema: { $ref: '#/components/schemas/ErrorResponse' }
@@ -3840,7 +3861,7 @@ components:
         slug:         { type: string }
         legal_name:   { type: string }
         display_name: { type: string }
-        status:       { type: string, enum: [pending, active, suspended, marked_for_deletion, hard_deleted] }
+        status:       { type: string, enum: [pending, active, suspended, pending_deletion, deleted] }
         created_at:   { type: string, format: date-time }
         activated_at: { type: string, format: date-time }
         suspended_at: { type: string, format: date-time }

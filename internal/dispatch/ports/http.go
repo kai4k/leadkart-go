@@ -7,8 +7,6 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/google/uuid"
-
 	"github.com/leadkart/leadkart-go/internal/dispatch/app"
 	"github.com/leadkart/leadkart-go/internal/dispatch/app/command"
 	"github.com/leadkart/leadkart-go/internal/dispatch/app/query"
@@ -72,13 +70,14 @@ func handleCreate(log *slog.Logger, a app.Application) http.Handler {
 			writeError(w, http.StatusBadRequest, errCodeInvalidBody, "request body is not valid JSON")
 			return
 		}
-		if _, err := uuid.Parse(strings.TrimSpace(req.OrderID)); err != nil {
+		orderID, ok := authn.CanonicalID(req.OrderID)
+		if !ok {
 			writeError(w, http.StatusBadRequest, errCodeInvalidOrderID, "order_id must be a UUID")
 			return
 		}
 		out, err := a.Commands.CreateConsignmentNote.Handle(r.Context(), command.CreateConsignmentNoteCommand{
 			TenantID:              tid,
-			OrderID:               consignmentnote.OrderID(req.OrderID),
+			OrderID:               consignmentnote.OrderID(orderID),
 			CarrierName:           req.CarrierName,
 			BoxCount:              req.BoxCount,
 			WeightGrams:           req.WeightGrams,
@@ -139,12 +138,13 @@ func handleGetByOrder(log *slog.Logger, a app.Application) http.Handler {
 			return
 		}
 		tid := tenant.ID(effTenant)
-		orderID := strings.TrimSpace(r.URL.Query().Get("order_id"))
-		if orderID == "" {
+		rawOrderID := r.URL.Query().Get("order_id")
+		if rawOrderID == "" {
 			writeError(w, http.StatusBadRequest, errCodeOrderIDRequired, "order_id query parameter is required")
 			return
 		}
-		if _, err := uuid.Parse(orderID); err != nil {
+		orderID, ok := authn.CanonicalID(rawOrderID)
+		if !ok {
 			writeError(w, http.StatusBadRequest, errCodeInvalidOrderID, "order_id must be a UUID")
 			return
 		}
