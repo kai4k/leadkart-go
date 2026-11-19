@@ -6,8 +6,6 @@ import (
 	"log/slog"
 	"net/http"
 
-	"github.com/google/uuid"
-
 	"github.com/leadkart/leadkart-go/internal/common/slug"
 	"github.com/leadkart/leadkart-go/internal/identity/app"
 	"github.com/leadkart/leadkart-go/internal/identity/app/command"
@@ -392,13 +390,13 @@ func handleRestoreTenant(log *slog.Logger, a app.Application) http.Handler {
 // parameter. Writes a 400 with [ErrCodeInvalidTenantID] on failure
 // and returns ok=false; caller short-circuits.
 func parseTenantIDPath(w http.ResponseWriter, r *http.Request) (tenant.ID, bool) {
-	raw := r.PathValue("tenantId")
-	if _, err := uuid.Parse(raw); err != nil {
+	id, ok := authn.CanonicalID(r.PathValue("tenantId"))
+	if !ok {
 		writeError(w, http.StatusBadRequest, ErrCodeInvalidTenantID,
 			"tenantId path parameter must be a UUID")
 		return "", false
 	}
-	return tenant.ID(raw), true
+	return tenant.ID(id), true
 }
 
 // writeTenantMutationResult collapses the small set of expected

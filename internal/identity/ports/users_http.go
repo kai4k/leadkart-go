@@ -243,16 +243,14 @@ func handleRevokeUserRole(log *slog.Logger, a app.Application) http.Handler {
 		if !ok {
 			return
 		}
-		raw := r.PathValue("roleId")
-		if _, err := uuid.Parse(raw); err != nil {
-			writeError(w, http.StatusBadRequest, ErrCodeInvalidRoleID,
-				"roleId path parameter must be a UUID")
+		rid, ok := parseRoleIDPath(w, r)
+		if !ok {
 			return
 		}
 		err := a.Commands.RevokeUserRole.Handle(r.Context(), command.RevokeUserRoleCommand{
 			TenantID:     tenant.ID(tid),
 			MembershipID: mid,
-			RoleID:       role.ID(raw),
+			RoleID:       rid,
 		})
 		writeUserMutationResult(w, log, r, err)
 	})
@@ -432,13 +430,13 @@ func handleAnonymiseUser(log *slog.Logger, a app.Application) http.Handler {
 // ----- helpers --------------------------------------------------------------
 
 func parseUserIDPath(w http.ResponseWriter, r *http.Request) (membership.ID, bool) {
-	raw := r.PathValue("userId")
-	if _, err := uuid.Parse(raw); err != nil {
+	id, ok := authn.CanonicalID(r.PathValue("userId"))
+	if !ok {
 		writeError(w, http.StatusBadRequest, ErrCodeInvalidUserID,
 			"userId path parameter must be a UUID")
 		return "", false
 	}
-	return membership.ID(raw), true
+	return membership.ID(id), true
 }
 
 // writeUserMutationResult collapses the small set of expected outcomes

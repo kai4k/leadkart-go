@@ -78,10 +78,10 @@ func AddRoutes(mux *http.ServeMux, log *slog.Logger, a app.Application, verifier
 		mux.Handle("DELETE /api/v1/auth/sessions/{familyId}", auth(handleRevokeSession(log, a)))
 		mux.Handle("DELETE /api/v1/auth/sessions", auth(handleRevokeAllSessions(log, a)))
 
-		// Tenant management — same-tenant-or-platform gate per
-		// authn.RequireTenantContext. A tenant Admin can manage their
-		// own tenant; Platform / SuperUser operators can manage any
-		// (post-impersonation per multi-tenancy.md).
+		// Tenant management — permission-gated in the PATH tenant per
+		// authn.RequireTenantPermission (ADR 0068). A tenant Admin can
+		// manage their own tenant; slug-anchored Platform operators
+		// (via platform.* equivalents) and SuperUsers can manage any.
 		// Canonical slug lookup — Stripe/Auth0 listing-with-filter shape
 		// per ADR 0052 (Wave 9.1c). Returns {tenants: [0|1 match]}.
 		// Enumeration-safe per ADR 0044 (no-access = empty list).
@@ -266,7 +266,8 @@ func AddRoutes(mux *http.ServeMux, log *slog.Logger, a app.Application, verifier
 		// Audit-log reads per ADR 0027 (outbox doubles as audit) +
 		// ADR 0038 (keyset pagination). Self-read is always allowed
 		// (privacy default); tenant-scoped read goes through the
-		// same RequireTenantContext gate as the rest of /tenants/{id}.
+		// same authn.RequireTenantContext gate as the rest of /tenants/{id}
+		// (same-tenant-or-operator; no permission name).
 		mux.Handle("GET /api/v1/auth/me/activity",
 			auth(handleListMyAuditEvents(log, a)))
 		// Sub-resource path (`/audit/events`) deliberately ≠ the by-slug

@@ -13,6 +13,7 @@ package main
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/leadkart/leadkart-go/internal/common/ids"
@@ -121,5 +122,31 @@ func TestE2E_Authz_CompanyOwnerManagesViaTenantAdmin(t *testing.T) {
 		ports.DeactivateUserRequest{Reason: "self lockout attempt"})
 	if resp.status != http.StatusForbidden || decodeError(t, resp.body).Error != "self_modification_forbidden" {
 		t.Errorf("owner self-deactivate: %d %s", resp.status, resp.body)
+	}
+}
+
+// The self-target gate compares ids as UUID values: spelling the caller's own
+// membership id differently (upper case, urn prefix, no hyphens) must not
+// bypass it, even though the handler/repository normalise the same spelling.
+func TestE2E_Authz_SelfTargetCannotBeBypassedBySpelling(t *testing.T) {
+	f := newE2EFixture(t)
+	owner := f.registerAndLogin(t, "selfspell")
+	salesExec := f.roleIDByName(t, owner.AccessToken, role.SystemRoles.Tenant.SalesExecutive)
+	spellings := map[string]string{
+		"uppercase":  strings.ToUpper(owner.MembershipID),
+		"urn":        "urn:uuid:" + owner.MembershipID,
+		"hyphenless": strings.ReplaceAll(owner.MembershipID, "-", ""),
+	}
+	for name, own := range spellings {
+		deact := f.authedJSON(t, http.MethodPost, "/api/v1/users/"+own+"/deactivate", owner.AccessToken,
+			ports.DeactivateUserRequest{Reason: "self lockout attempt"})
+		if deact.status != http.StatusForbidden || decodeError(t, deact.body).Error != "self_modification_forbidden" {
+			t.Errorf("%s deactivate: %d %s, want 403 self_modification_forbidden", name, deact.status, deact.body)
+		}
+		assign := f.authedJSON(t, http.MethodPost, "/api/v1/users/"+own+"/roles", owner.AccessToken,
+			ports.AssignUserRoleRequest{RoleID: salesExec})
+		if assign.status != http.StatusForbidden || decodeError(t, assign.body).Error != "self_modification_forbidden" {
+			t.Errorf("%s assign role: %d %s, want 403 self_modification_forbidden", name, assign.status, assign.body)
+		}
 	}
 }

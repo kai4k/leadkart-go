@@ -167,18 +167,41 @@ func TestRequirePermissionOrSelf(t *testing.T) {
 	}
 }
 
+// selfSpellings are every spelling uuid.Parse accepts for the same value as
+// selfMem — the handler/repository treat them all as the caller's own id.
+var selfSpellings = []struct{ name, path string }{
+	{"canonical", selfMem},
+	{"uppercase", strings.ToUpper(selfMem)},
+	{"urn prefix", "urn:uuid:" + selfMem},
+	{"encoded braces", "%7B" + selfMem + "%7D"},
+	{"hyphenless", strings.ReplaceAll(selfMem, "-", "")},
+}
+
 func TestDenySelfTarget(t *testing.T) {
 	t.Parallel()
-	for _, tc := range []struct {
+	const other = "0190a000-0000-7000-8000-0000000000bb"
+	type row struct {
 		name   string
 		claims *jwt.Claims
 		path   string
 		want   int
-	}{
-		{"self denied", &jwt.Claims{TenantID: tenantA, MembershipID: selfMem}, selfMem, 403},
-		{"other allowed", &jwt.Claims{TenantID: tenantA, MembershipID: selfMem}, "0190a000-0000-7000-8000-0000000000bb", 200},
-		{"super user self allowed", &jwt.Claims{TenantID: tenantA, MembershipID: selfMem, IsSuperUser: true}, selfMem, 200},
-	} {
+		code   string
+	}
+	rows := []row{
+		{"self denied", &jwt.Claims{TenantID: tenantA, MembershipID: selfMem}, selfMem, 403, "self_modification_forbidden"},
+		{"other allowed", &jwt.Claims{TenantID: tenantA, MembershipID: selfMem}, other, 200, ""},
+		{"super user self allowed", &jwt.Claims{TenantID: tenantA, MembershipID: selfMem, IsSuperUser: true}, selfMem, 200, ""},
+		{"super user self uppercase allowed", &jwt.Claims{TenantID: tenantA, MembershipID: selfMem, IsSuperUser: true}, strings.ToUpper(selfMem), 200, ""},
+		{"platform operator self denied", &jwt.Claims{TenantID: tenantA, MembershipID: selfMem, TenantSlug: authn.PlatformTenantSlug, IsPlatform: true}, selfMem, 403, "self_modification_forbidden"},
+		{"empty membership claim denied", &jwt.Claims{TenantID: tenantA}, other, 403, "forbidden"},
+		{"unparseable membership claim denied", &jwt.Claims{TenantID: tenantA, MembershipID: "not-a-uuid"}, other, 403, "forbidden"},
+		{"unparseable path 400", &jwt.Claims{TenantID: tenantA, MembershipID: selfMem}, "nope", 400, "invalid_user_id"},
+		{"uppercase membership claim vs canonical path denied", &jwt.Claims{TenantID: tenantA, MembershipID: strings.ToUpper(selfMem)}, selfMem, 403, "self_modification_forbidden"},
+	}
+	for _, sp := range selfSpellings {
+		rows = append(rows, row{"self as " + sp.name, &jwt.Claims{TenantID: tenantA, MembershipID: selfMem}, sp.path, 403, "self_modification_forbidden"})
+	}
+	for _, tc := range rows {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			s := &sentinel{}
@@ -186,11 +209,104 @@ func TestDenySelfTarget(t *testing.T) {
 			rec := httptest.NewRecorder()
 			h.ServeHTTP(rec, userReq(t, tc.path))
 			if rec.Code != tc.want {
-				t.Fatalf("status %d want %d", rec.Code, tc.want)
+				t.Fatalf("status %d want %d (body %s)", rec.Code, tc.want, rec.Body.String())
 			}
-			if tc.want == 403 && !strings.Contains(rec.Body.String(), "self_modification_forbidden") {
-				t.Fatalf("body %s", rec.Body.String())
+			if tc.code != "" && !strings.Contains(rec.Body.String(), `"`+tc.code+`"`) {
+				t.Fatalf("body %s, want code %s", rec.Body.String(), tc.code)
+			}
+			if (tc.want == 200) != s.called {
+				t.Fatalf("handler called = %v with status %d", s.called, tc.want)
 			}
 		})
+	}
+}
+
+func TestDenySelfTarget_NoClaims_401(t *testing.T) {
+	t.Parallel()
+	s := &sentinel{}
+	rec := httptest.NewRecorder()
+	authn.DenySelfTarget("userId")(s.handler()).ServeHTTP(rec, userReq(t, selfMem))
+	if rec.Code != http.StatusUnauthorized || s.called {
+		t.Fatalf("status %d called %v, want 401 false", rec.Code, s.called)
+	}
+}
+
+func TestDenySelfTarget_MissingPathVar_400(t *testing.T) {
+	t.Parallel()
+	s := &sentinel{}
+	h := authn.RequireFreshStamp(&fakeVerifier{claims: withFreshness(&jwt.Claims{TenantID: tenantA, MembershipID: selfMem})}, alwaysFresh{})(authn.DenySelfTarget("userId")(s.handler()))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, newRequest(t, "Bearer tok")) // no mux → PathValue("userId") == ""
+	if rec.Code != http.StatusBadRequest || s.called {
+		t.Fatalf("status %d called %v, want 400 false", rec.Code, s.called)
+	}
+}
+
+func TestRequirePermissionOrSelf_SpellingsOfSelf(t *testing.T) {
+	t.Parallel()
+	for _, sp := range selfSpellings {
+		t.Run(sp.name, func(t *testing.T) {
+			t.Parallel()
+			s := &sentinel{}
+			claims := withFreshness(&jwt.Claims{TenantID: tenantA, MembershipID: selfMem})
+			h := authn.RequirePermissionOrSelf(&fakeVerifier{claims: claims}, alwaysFresh{}, "userId", permission.IdentityPermissions.Users.View)(s.handler())
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, userReq(t, sp.path))
+			if rec.Code != 200 {
+				t.Fatalf("status %d want 200", rec.Code)
+			}
+		})
+	}
+	t.Run("empty membership claim is not self", func(t *testing.T) {
+		t.Parallel()
+		s := &sentinel{}
+		h := authn.RequirePermissionOrSelf(&fakeVerifier{claims: withFreshness(&jwt.Claims{TenantID: tenantA})}, alwaysFresh{}, "userId", permission.IdentityPermissions.Users.View)(s.handler())
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, userReq(t, selfMem))
+		if rec.Code != 403 {
+			t.Fatalf("status %d want 403", rec.Code)
+		}
+	})
+}
+
+func TestRequireTenantPermission_PathTenantCompared_AsUUIDValue(t *testing.T) {
+	t.Parallel()
+	p := permission.IdentityPermissions
+	for _, path := range []string{strings.ToUpper(tenantA), "urn:uuid:" + tenantA, strings.ReplaceAll(tenantA, "-", "")} {
+		t.Run(path, func(t *testing.T) {
+			t.Parallel()
+			s := &sentinel{}
+			claims := withFreshness(&jwt.Claims{TenantID: tenantA, Permissions: []string{p.Meta.TenantAdmin}})
+			h := authn.RequireTenantPermission(&fakeVerifier{claims: claims}, alwaysFresh{}, "tenantId", p.Tenants.View)(s.handler())
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, tenantReq(t, path))
+			if rec.Code != 200 {
+				t.Fatalf("status %d want 200 (own tenant, other spelling)", rec.Code)
+			}
+		})
+	}
+}
+
+func TestRequireTenantPermission_BadPathValue_400InvalidTenantID(t *testing.T) {
+	t.Parallel()
+	p := permission.IdentityPermissions
+	for _, path := range []string{"not-a-uuid"} {
+		s := &sentinel{}
+		claims := withFreshness(&jwt.Claims{TenantID: tenantA, Permissions: []string{p.Meta.TenantAdmin}})
+		h := authn.RequireTenantPermission(&fakeVerifier{claims: claims}, alwaysFresh{}, "tenantId", p.Tenants.View)(s.handler())
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, tenantReq(t, path))
+		if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), `"invalid_tenant_id"`) || s.called {
+			t.Fatalf("status %d body %s called %v, want 400 invalid_tenant_id", rec.Code, rec.Body.String(), s.called)
+		}
+	}
+	// missing path variable entirely (no mux) → 400, not 403 "forbidden"
+	s := &sentinel{}
+	claims := withFreshness(&jwt.Claims{TenantID: tenantA, Permissions: []string{p.Meta.TenantAdmin}})
+	h := authn.RequireTenantPermission(&fakeVerifier{claims: claims}, alwaysFresh{}, "tenantId", p.Tenants.View)(s.handler())
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, newRequest(t, "Bearer tok"))
+	if rec.Code != http.StatusBadRequest || s.called {
+		t.Fatalf("missing var: status %d called %v, want 400", rec.Code, s.called)
 	}
 }

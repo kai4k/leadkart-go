@@ -342,13 +342,13 @@ func handleDeleteRole(log *slog.Logger, a app.Application) http.Handler {
 // ----- helpers --------------------------------------------------------------
 
 func parseRoleIDPath(w http.ResponseWriter, r *http.Request) (role.ID, bool) {
-	raw := r.PathValue("roleId")
-	if _, err := uuid.Parse(raw); err != nil {
+	id, ok := authn.CanonicalID(r.PathValue("roleId"))
+	if !ok {
 		writeError(w, http.StatusBadRequest, ErrCodeInvalidRoleID,
 			"roleId path parameter must be a UUID")
 		return "", false
 	}
-	return role.ID(raw), true
+	return role.ID(id), true
 }
 
 // actorMembershipFromContext extracts the caller's MembershipID from

@@ -11,7 +11,13 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/domain/permission"
 )
 
-const errCodeSelfModificationForbidden = "self_modification_forbidden"
+const (
+	errCodeSelfModificationForbidden = "self_modification_forbidden"
+	// Bad-id codes mirror ports.ErrCodeInvalid{User,Role,Tenant}ID (the
+	// handlers' own codes for the same malformed path value).
+	errCodeInvalidUserID   = "invalid_user_id"
+	errCodeInvalidTenantID = "invalid_tenant_id"
+)
 
 // isPlatformOperator: is_platform AND slug-anchored AND not an impersonation
 // token (ADR 0039 slug anchor; ADR 0045 downgrade).
@@ -102,12 +108,12 @@ func RequireTenantPermission(verifier Verifier, validator StampValidator, pathVa
 				writeError(w, http.StatusUnauthorized, errCodeUnauthenticated, "missing claims")
 				return
 			}
-			urlTenant := strings.TrimSpace(r.PathValue(pathVar))
-			if urlTenant == "" {
-				writeError(w, http.StatusBadRequest, errCodeForbidden, "path missing "+pathVar+" parameter")
+			urlTenant, ok := CanonicalID(r.PathValue(pathVar))
+			if !ok {
+				writeError(w, http.StatusBadRequest, errCodeInvalidTenantID, pathVar+" path parameter must be a UUID")
 				return
 			}
-			if !c.IsSuperUser && !isPlatformOperator(c) && urlTenant != strings.TrimSpace(c.TenantID) {
+			if !c.IsSuperUser && !isPlatformOperator(c) && !sameID(urlTenant, c.TenantID) {
 				writeError(w, http.StatusForbidden, errCodeForbidden, "tenant context does not match url")
 				return
 			}
@@ -140,7 +146,7 @@ func RequirePermissionOrSelf(verifier Verifier, validator StampValidator, pathVa
 				writeError(w, http.StatusUnauthorized, errCodeUnauthenticated, "missing claims")
 				return
 			}
-			if c.MembershipID != "" && strings.TrimSpace(r.PathValue(pathVar)) == c.MembershipID {
+			if sameID(r.PathValue(pathVar), c.MembershipID) {
 				next.ServeHTTP(w, r)
 				return
 			}
@@ -155,7 +161,8 @@ func RequirePermissionOrSelf(verifier Verifier, validator StampValidator, pathVa
 
 // DenySelfTarget refuses requests whose path membership id is the caller's
 // own (no self-assigned roles/overrides/status/manager — ADR 0068 D3).
-// Super users are exempt. INNER middleware: compose inside an auth gate.
+// Ids are compared as UUID values, never as strings. Super users are exempt
+// (D3), nobody else. INNER middleware: compose inside an auth gate.
 func DenySelfTarget(pathVar string) func(http.Handler) http.Handler {
 	if strings.TrimSpace(pathVar) == "" {
 		panic("authn: DenySelfTarget pathVar required")
@@ -167,7 +174,22 @@ func DenySelfTarget(pathVar string) func(http.Handler) http.Handler {
 				writeError(w, http.StatusUnauthorized, errCodeUnauthenticated, "missing claims")
 				return
 			}
-			if !c.IsSuperUser && c.MembershipID != "" && strings.TrimSpace(r.PathValue(pathVar)) == c.MembershipID {
+			if c.IsSuperUser {
+				next.ServeHTTP(w, r)
+				return
+			}
+			target, ok := CanonicalID(r.PathValue(pathVar))
+			if !ok {
+				writeError(w, http.StatusBadRequest, errCodeInvalidUserID, pathVar+" path parameter must be a UUID")
+				return
+			}
+			self, ok := CanonicalID(c.MembershipID)
+			if !ok {
+				// Cannot prove the target is someone else → fail closed.
+				writeError(w, http.StatusForbidden, errCodeForbidden, "caller identity unavailable")
+				return
+			}
+			if target == self {
 				writeError(w, http.StatusForbidden, errCodeSelfModificationForbidden,
 					"callers cannot change their own roles, permissions, status or manager")
 				return
