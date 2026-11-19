@@ -33,6 +33,7 @@ func TestPolicy_Boundaries(t *testing.T) {
 	foreignUserR := mkRole(11, tB, role.SystemRoles.Tenant.SalesExecutive, false, 50, false)
 	foreignMgrR := mkRole(12, tB, role.SystemRoles.Tenant.SalesManager, false, 20, false)
 	platformUserR := mkRole(13, tP, "Platform Exec", false, 50, false)
+	customSuperR := mkRole(14, tA, "Custom Super", false, 20, true) // a super-admin role that is not system-default
 
 	owner := mkMember(t, 21, tA, true, "", ownerR)
 	admin := mkMember(t, 22, tA, true, "", adminR)
@@ -73,12 +74,12 @@ func TestPolicy_Boundaries(t *testing.T) {
 
 	cases := []decision{
 		// strict comparisons
-		{"re-level to exactly the actor's rank", aAdmin.MayEditRole(mgrR, 10, nil), authority.ErrInsufficientRank},
-		{"re-level to one below the actor's rank", aAdmin.MayEditRole(mgrR, 11, nil), nil},
-		{"edit a role at exactly the actor's rank", aAdmin.MayEditRole(mkRole(40, tA, "Peer Admin", false, 10, false), authority.NoLevelChange, nil), authority.ErrInsufficientRank},
-		{"edit a role one below the actor's rank", aAdmin.MayEditRole(mkRole(41, tA, "Junior Admin", false, 11, false), authority.NoLevelChange, nil), nil},
-		{"create a role at exactly the actor's rank", aAdmin.MayCreateRole(tA, 10, nil), authority.ErrInsufficientRank},
-		{"create a role one below the actor's rank", aAdmin.MayCreateRole(tA, 11, nil), nil},
+		{"re-level to exactly the actor's rank", aAdmin.MayEditRole(mgrR, 10), authority.ErrInsufficientRank},
+		{"re-level to one below the actor's rank", aAdmin.MayEditRole(mgrR, 11), nil},
+		{"edit a role at exactly the actor's rank", aAdmin.MayEditRole(mkRole(40, tA, "Peer Admin", false, 10, false), authority.NoLevelChange), authority.ErrInsufficientRank},
+		{"edit a role one below the actor's rank", aAdmin.MayEditRole(mkRole(41, tA, "Junior Admin", false, 11, false), authority.NoLevelChange), nil},
+		{"create a role at exactly the actor's rank", aAdmin.MayCreateRole(tA, 10, nil, nil), authority.ErrInsufficientRank},
+		{"create a role one below the actor's rank", aAdmin.MayCreateRole(tA, 11, nil, nil), nil},
 		{"assign a role at exactly the actor's rank", aTL.MayAssignRole(unmanaged, mkRole(42, tA, "Peer TL", false, 30, false)), authority.ErrInsufficientRank},
 		{"assign a role one below the actor's rank", aTL.MayAssignRole(unmanaged, mkRole(43, tA, "Junior TL", false, 31, false)), nil},
 		{"admin approves a peer admin", aAdmin.MayApprove(admin2, p.Crm.Leads.Read), authority.ErrInsufficientRank},
@@ -89,57 +90,57 @@ func TestPolicy_Boundaries(t *testing.T) {
 		{"parent in another tenant", aAdmin.MaySetRoleParent(tlR, foreignRole), authority.ErrNoAuthority},
 		{"admin appoints a peer admin as manager", aAdmin.MayReplaceManager(unmanaged, admin2, nil), nil},
 		{"manager at the subordinate's rank", aAdmin.MayReplaceManager(unmanaged, mkMember(t, 45, tA, true, "", userR), nil), authority.ErrManagerNotEligible},
-		{"unlink an equal-rank manager that is not the actor", aAdmin.MayClearManager(reportsToAdmin2, &admin2), nil},
+		{"unlink an equal-rank manager that is not the actor", aAdmin.MayClearManager(reportsToAdmin2, &admin2), authority.ErrInsufficientRank},
 		{"unlink a more senior manager", aTL.MayClearManager(reportsToOwner, &owner), authority.ErrInsufficientRank},
 		{"replacing a senior manager with oneself still needs the unlink right", aTL.MayReplaceManager(reportsToOwner, tl, &owner), authority.ErrInsufficientRank},
 		// level range
-		{"create at level 99", aAdmin.MayCreateRole(tA, 99, nil), nil},
-		{"create at level 100", aAdmin.MayCreateRole(tA, 100, nil), authority.ErrInsufficientRank},
-		{"create at level -1", aAdmin.MayCreateRole(tA, -1, nil), authority.ErrInsufficientRank},
-		{"super creates at level 0 (the aggregate reserves it, not the policy)", aSuper.MayCreateRole(tA, 0, nil), nil},
-		{"re-level to 150", aAdmin.MayEditRole(mgrR, 150, nil), authority.ErrInsufficientRank},
-		{"re-level to -5", aAdmin.MayEditRole(mgrR, -5, nil), authority.ErrInsufficientRank},
-		{"super re-levels to 150", aSuper.MayEditRole(mgrR, 150, nil), authority.ErrInsufficientRank},
+		{"create at level 99", aAdmin.MayCreateRole(tA, 99, nil, nil), nil},
+		{"create at level 100", aAdmin.MayCreateRole(tA, 100, nil, nil), authority.ErrInsufficientRank},
+		{"create at level -1", aAdmin.MayCreateRole(tA, -1, nil, nil), authority.ErrInsufficientRank},
+		{"super creates at level 0 (level 0 is only ever seeded)", aSuper.MayCreateRole(tA, 0, nil, nil), authority.ErrInsufficientRank},
+		{"re-level to 150", aAdmin.MayEditRole(mgrR, 150), authority.ErrInsufficientRank},
+		{"re-level to -5", aAdmin.MayEditRole(mgrR, -5), authority.ErrInsufficientRank},
+		{"super re-levels to 150", aSuper.MayEditRole(mgrR, 150), authority.ErrInsufficientRank},
 		// tenant checks
 		{"approve a requester of another tenant", aAdmin.MayApprove(foreignUser, p.Crm.Leads.Read), authority.ErrNoAuthority},
 		{"deny a requester of another tenant", aAdmin.MayDeny(foreignUser), authority.ErrNoAuthority},
 		{"clear a manager that belongs to another tenant", aAdmin.MayClearManager(crossLinked, &foreignMgr), authority.ErrNoAuthority},
-		{"edit another tenant's role", aAdmin.MayEditRole(foreignRole, authority.NoLevelChange, nil), authority.ErrNoAuthority},
+		{"edit another tenant's role", aAdmin.MayEditRole(foreignRole, authority.NoLevelChange), authority.ErrNoAuthority},
 		{"assign another tenant's role", aAdmin.MayAssignRole(unmanaged, foreignRole), authority.ErrNoAuthority},
 		{"a super user assigns another tenant's role", aSuper.MayAssignRole(unmanaged, foreignRole), authority.ErrNoAuthority},
-		{"a super user edits another tenant's role", aSuper.MayEditRole(foreignRole, authority.NoLevelChange, nil), nil},
-		{"create a role in another tenant", aAdmin.MayCreateRole(tB, 50, nil), authority.ErrNoAuthority},
+		{"a super user edits another tenant's role", aSuper.MayEditRole(foreignRole, authority.NoLevelChange), nil},
+		{"create a role in another tenant", aAdmin.MayCreateRole(tB, 50, nil, nil), authority.ErrNoAuthority},
 		{"act on another tenant's member", aAdmin.MayActOn(foreignUser), authority.ErrNoAuthority},
 		// exempt branches
-		{"super creates a role in another tenant", aSuper.MayCreateRole(tB, 11, nil), nil},
-		{"operator creates a role in another tenant", aOp.MayCreateRole(tB, 11, nil), nil},
-		{"operator edits another tenant's senior role", aOp.MayEditRole(adminR, authority.NoLevelChange, []string{p.Crm.Leads.Read}), nil},
-		{"super edits another tenant's senior role", aSuper.MayEditRole(adminR, authority.NoLevelChange, []string{p.Crm.Leads.Read}), nil},
+		{"super creates a role in another tenant", aSuper.MayCreateRole(tB, 11, nil, nil), nil},
+		{"operator creates a role in another tenant", aOp.MayCreateRole(tB, 11, nil, nil), nil},
+		{"operator edits another tenant's senior role", aOp.MayGrantRolePermission(adminR, p.Crm.Leads.Read), nil},
+		{"super edits another tenant's senior role", aSuper.MayGrantRolePermission(adminR, p.Crm.Leads.Read), nil},
 		{"operator sets a manager more senior than itself", aOp.MayReplaceManager(unmanaged, mgr, nil), nil},
 		{"super sets a manager more senior than itself", aSuper.MayReplaceManager(unmanaged, mgr, nil), nil},
 		{"operator replaces a more senior manager", aOp.MayClearManager(reportsToOwner, &owner), nil},
 		{"super replaces a more senior manager", aSuper.MayClearManager(reportsToOwner, &owner), nil},
 		{"operator approves in another tenant", aOp.MayApprove(unmanaged, p.Crm.Leads.Read), nil},
 		{"operator assigns a role in another tenant", aOp.MayAssignRole(unmanaged, ownerR), nil},
-		{"operator may not confer a platform-reserved name", aOp.MayChangeOverrides(unmanaged, []string{p.Platform.TenantsManage}, nil), authority.ErrGrantExceedsAuthority},
-		{"operator may confer anything tenant.admin implies", aOp.MayChangeOverrides(unmanaged, []string{p.Crm.Leads.ReadAll, p.Users.Anonymise}, nil), authority.ErrGrantExceedsAuthority},
-		{"operator confers a tenant permission", aOp.MayChangeOverrides(unmanaged, []string{p.Crm.Leads.ReadAll}, nil), nil},
+		{"operator may not confer a platform-reserved name", aOp.MayChangeOverrides(unmanaged, authority.Overrides{}, authority.Overrides{Granted: []string{p.Platform.TenantsManage}}), authority.ErrGrantExceedsAuthority},
+		{"operator may confer anything tenant.admin implies", aOp.MayChangeOverrides(unmanaged, authority.Overrides{}, authority.Overrides{Granted: []string{p.Crm.Leads.ReadAll, p.Users.Anonymise}}), authority.ErrGrantExceedsAuthority},
+		{"operator confers a tenant permission", aOp.MayChangeOverrides(unmanaged, authority.Overrides{}, authority.Overrides{Granted: []string{p.Crm.Leads.ReadAll}}), nil},
 		{"operator on its own tenant's member follows rank", aOp.MayActOn(platformUser), authority.ErrInsufficientRank},
-		{"operator creates in its own tenant follows rank", aOp.MayCreateRole(tP, 50, nil), authority.ErrInsufficientRank},
-		{"operator edits a role in its own tenant follows rank", aOp.MayEditRole(platformUserR, authority.NoLevelChange, nil), authority.ErrInsufficientRank},
+		{"operator creates in its own tenant follows rank", aOp.MayCreateRole(tP, 50, nil, nil), authority.ErrInsufficientRank},
+		{"operator edits a role in its own tenant follows rank", aOp.MayEditRole(platformUserR, authority.NoLevelChange), authority.ErrInsufficientRank},
 		// exemption conditions
 		{"platform.roles.manage alone exempts", aOpRolesOnly.MayActOn(unmanaged), nil},
 		{"platform.users.manage alone exempts", aOp.MayActOn(unmanaged), nil},
 		{"users.manage and roles.manage without the operator flag do not exempt", aNotOperator.MayActOn(unmanaged), authority.ErrNoAuthority},
-		{"nor for a role edit", aNotOperator.MayEditRole(mgrR, authority.NoLevelChange, nil), authority.ErrNoAuthority},
+		{"nor for a role edit", aNotOperator.MayEditRole(mgrR, authority.NoLevelChange), authority.ErrNoAuthority},
 		{"an operator without either manage permission is not exempt", act(opSelf.ID(), tP, rk(authority.RankNone), []string{p.Platform.TenantsView}, func(in *authority.ActorInput) { in.IsPlatformOperator = true }).MayActOn(unmanaged), authority.ErrNoAuthority},
 		// ceiling
-		{"an owner whose effective set lacks tenant.admin cannot confer it", aOwnerNoAdminPerm.MayChangeOverrides(unmanaged, []string{ta}, nil), authority.ErrGrantExceedsAuthority},
-		{"an actor that holds a platform-reserved name still cannot confer it", aHoldsReserved.MayChangeOverrides(unmanaged, []string{p.Platform.TenantsManage}, nil), authority.ErrGrantExceedsAuthority},
-		{"duplicates in a held set", aTL.MayChangeOverrides(unmanaged, []string{p.Crm.Leads.Read, p.Crm.Leads.Read}, nil), nil},
-		{"duplicates in an unheld set", aTL.MayChangeOverrides(unmanaged, []string{p.Crm.Leads.Assign, p.Crm.Leads.Assign}, nil), authority.ErrGrantExceedsAuthority},
-		{"a held name next to an unheld one", aTL.MayChangeOverrides(unmanaged, []string{p.Crm.Leads.Read, p.Crm.Leads.Assign}, nil), authority.ErrGrantExceedsAuthority},
-		{"an owner confers tenant.admin", aOwner.MayChangeOverrides(unmanaged, []string{ta}, nil), nil},
+		{"an owner whose effective set lacks tenant.admin cannot confer it", aOwnerNoAdminPerm.MayChangeOverrides(unmanaged, authority.Overrides{}, authority.Overrides{Granted: []string{ta}}), authority.ErrGrantExceedsAuthority},
+		{"an actor that holds a platform-reserved name still cannot confer it", aHoldsReserved.MayChangeOverrides(unmanaged, authority.Overrides{}, authority.Overrides{Granted: []string{p.Platform.TenantsManage}}), authority.ErrGrantExceedsAuthority},
+		{"duplicates in a held set", aTL.MayChangeOverrides(unmanaged, authority.Overrides{}, authority.Overrides{Granted: []string{p.Crm.Leads.Read, p.Crm.Leads.Read}}), nil},
+		{"duplicates in an unheld set", aTL.MayChangeOverrides(unmanaged, authority.Overrides{}, authority.Overrides{Granted: []string{p.Crm.Leads.Assign, p.Crm.Leads.Assign}}), authority.ErrGrantExceedsAuthority},
+		{"a held name next to an unheld one", aTL.MayChangeOverrides(unmanaged, authority.Overrides{}, authority.Overrides{Granted: []string{p.Crm.Leads.Read, p.Crm.Leads.Assign}}), authority.ErrGrantExceedsAuthority},
+		{"an owner confers tenant.admin", aOwner.MayChangeOverrides(unmanaged, authority.Overrides{}, authority.Overrides{Granted: []string{ta}}), nil},
 		{"impersonation assigns a level-11 role containing tenant.admin", aImp.MayAssignRole(unmanaged, lvl11TA), authority.ErrGrantExceedsAuthority},
 		{"impersonation assigns a level-11 role without it", aImp.MayAssignRole(unmanaged, mkRole(46, tA, "Plain 11", false, 11, false)), nil},
 		// self and super-admin rules
@@ -148,9 +149,10 @@ func TestPolicy_Boundaries(t *testing.T) {
 		{"exempt operator approving itself", aOp.MayApprove(opSelf, p.Crm.Leads.Read), authority.ErrSelfTarget},
 		{"impersonation denies", aImp.MayDeny(unmanaged), authority.ErrImpersonationNotAllowed},
 		{"impersonation approves", aImp.MayApprove(unmanaged, p.Crm.Leads.Read), authority.ErrImpersonationNotAllowed},
-		{"a super-admin role cannot be edited by an owner", aOwner.MayEditRole(superR, authority.NoLevelChange, nil), authority.ErrInsufficientRank},
-		{"a super user edits a super-admin role", aSuper.MayEditRole(superR, authority.NoLevelChange, nil), nil},
-		{"an operator cannot edit a super-admin role", aOp.MayEditRole(superR, authority.NoLevelChange, nil), authority.ErrInsufficientRank},
+		{"a super-admin role cannot be edited by an owner", aOwner.MayEditRole(customSuperR, authority.NoLevelChange), authority.ErrInsufficientRank},
+		{"a super user edits a super-admin role", aSuper.MayEditRole(customSuperR, authority.NoLevelChange), nil},
+		{"a system-default super-admin role is immutable even for a super user", aSuper.MayEditRole(superR, authority.NoLevelChange), role.ErrSystemDefault},
+		{"an operator cannot edit a super-admin role", aOp.MayEditRole(customSuperR, authority.NoLevelChange), authority.ErrInsufficientRank},
 		{"an owner cannot assign a super-admin role", aOwner.MayAssignRole(unmanaged, superR), authority.ErrGrantExceedsAuthority},
 		{"a super user assigns a super-admin role", aSuper.MayAssignRole(unmanaged, superR), nil},
 		// self shortcuts: the rank claim may be older than the roles
@@ -193,7 +195,7 @@ func TestMemberOf_IgnoresDeletedRolesForFlagsAndRank(t *testing.T) {
 	stray := mkRole(4, tA, "Stray", false, 40, false)
 
 	m := mkMembership(11, tA, true, "", userR, goneOwner, goneSuper)
-	got, err := authority.MemberOf(m, []*role.Role{userR, goneOwner, goneSuper})
+	got, err := authority.MemberOf(m, []*role.Role{userR, goneOwner, goneSuper}, true)
 	if err != nil {
 		t.Fatalf("MemberOf: %v", err)
 	}
@@ -201,15 +203,15 @@ func TestMemberOf_IgnoresDeletedRolesForFlagsAndRank(t *testing.T) {
 		t.Errorf("deleted roles leaked: owner=%v super=%v rank=%d", got.IsOwner(), got.IsSuperAdmin(), got.Rank())
 	}
 	// Same number of roles as assigned, but one is not an assigned role.
-	if _, err := authority.MemberOf(m, []*role.Role{userR, goneOwner, stray}); !errors.Is(err, authority.ErrNoAuthority) {
+	if _, err := authority.MemberOf(m, []*role.Role{userR, goneOwner, stray}, true); !errors.Is(err, authority.ErrNoAuthority) {
 		t.Errorf("a stray role standing in for an assigned one: %v, want no authority", err)
 	}
 	inactive := mkMembership(12, tA, false, "", userR)
-	if got, err := authority.MemberOf(inactive, []*role.Role{userR}); err != nil || got.IsActive() {
+	if got, err := authority.MemberOf(inactive, []*role.Role{userR}, true); err != nil || got.IsActive() {
 		t.Errorf("inactive membership projected active: %+v, %v", got, err)
 	}
 	active := mkMembership(13, tA, true, "", userR)
-	if got, err := authority.MemberOf(active, []*role.Role{userR}); err != nil || !got.IsActive() {
+	if got, err := authority.MemberOf(active, []*role.Role{userR}, true); err != nil || !got.IsActive() {
 		t.Errorf("active membership projected inactive: %+v, %v", got, err)
 	}
 }

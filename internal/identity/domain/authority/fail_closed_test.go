@@ -56,10 +56,10 @@ func TestOperator_InOwnTenantFollowsRank(t *testing.T) {
 	if err := op.MayApprove(platformOwner, p.Crm.Leads.Read); !errors.Is(err, authority.ErrInsufficientRank) {
 		t.Errorf("operator approving own-tenant owner: %v, want insufficient rank", err)
 	}
-	if err := op.MayChangeOverrides(mkMember(t, 35, tP, true, ""), []string{p.Meta.TenantAdmin}, nil); !errors.Is(err, authority.ErrGrantExceedsAuthority) {
+	if err := op.MayChangeOverrides(mkMember(t, 35, tP, true, ""), authority.Overrides{}, authority.Overrides{Granted: []string{p.Meta.TenantAdmin}}); !errors.Is(err, authority.ErrGrantExceedsAuthority) {
 		t.Errorf("operator conferring tenant.admin inside its own tenant: %v, want grant exceeds authority", err)
 	}
-	if err := op.MayChangeOverrides(foreignUser, []string{p.Meta.TenantAdmin}, nil); err != nil {
+	if err := op.MayChangeOverrides(foreignUser, authority.Overrides{}, authority.Overrides{Granted: []string{p.Meta.TenantAdmin}}); err != nil {
 		t.Errorf("operator conferring tenant.admin in another tenant: %v, want nil", err)
 	}
 	if err := op.MayAssignRole(mkMember(t, 34, tP, true, ""), ownerR); !errors.Is(err, authority.ErrInsufficientRank) {
@@ -98,7 +98,7 @@ func TestNewActor_ExpandsTenantAdmin(t *testing.T) {
 	p := permission.IdentityPermissions
 	a := mkActor(t, authority.ActorInput{MembershipID: membership.ID(uid(1)), TenantID: tA, Rank: rk(authority.RankAdmin),
 		EffectivePermissions: []string{p.Meta.TenantAdmin}})
-	if err := a.MayChangeOverrides(mkMember(t, 18, tA, true, ""), []string{p.Crm.Leads.ReadAll}, nil); err != nil {
+	if err := a.MayChangeOverrides(mkMember(t, 18, tA, true, ""), authority.Overrides{}, authority.Overrides{Granted: []string{p.Crm.Leads.ReadAll}}); err != nil {
 		t.Fatalf("admin holding only tenant.admin may not confer read_all: %v", err)
 	}
 }
@@ -110,7 +110,7 @@ func TestMayChangeOverrides_UnknownAndEmptyRefusedForEveryone(t *testing.T) {
 	target := mkMember(t, 18, tA, true, "")
 	for _, who := range []authority.Actor{super, admin} {
 		for _, name := range []string{"", "not.a.permission"} {
-			if err := who.MayChangeOverrides(target, []string{name}, nil); !errors.Is(err, authority.ErrGrantExceedsAuthority) {
+			if err := who.MayChangeOverrides(target, authority.Overrides{}, authority.Overrides{Granted: []string{name}}); !errors.Is(err, authority.ErrGrantExceedsAuthority) {
 				t.Errorf("name %q: %v, want grant exceeds authority", name, err)
 			}
 		}

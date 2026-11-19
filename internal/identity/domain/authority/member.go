@@ -28,7 +28,12 @@ type Member struct {
 // for rank and flags but must be present, so a partial load cannot make an
 // owner look like the weakest member), and every role must belong to m's
 // tenant. Any mismatch, or an id that does not canonicalise, is ErrNoAuthority.
-func MemberOf(m *membership.Membership, roles []*role.Role) (Member, error) {
+//
+// personActive is whether the person behind m can act at all. The loader passes
+// false for a globally suspended, locked or anonymised person: such a member is
+// not active, so it never counts as "another active owner" (GuardLastOwner) and
+// is never an eligible manager.
+func MemberOf(m *membership.Membership, roles []*role.Role, personActive bool) (Member, error) {
 	if m == nil {
 		return Member{}, fmt.Errorf("%w: membership required", ErrNoAuthority)
 	}
@@ -50,7 +55,7 @@ func MemberOf(m *membership.Membership, roles []*role.Role) (Member, error) {
 		return Member{}, err
 	}
 	out := Member{valid: true, id: id, tenantID: tid, rank: RankOf(roles),
-		active: m.Status() == membership.StatusActive, reportsTo: reportsTo}
+		active: personActive && m.Status() == membership.StatusActive, reportsTo: reportsTo}
 	for _, r := range roles {
 		if r.IsDeleted() {
 			continue
@@ -126,7 +131,7 @@ func (m Member) IsOwner() bool { return m.valid && m.owner }
 // IsSuperAdmin reports whether the member holds a super-admin role.
 func (m Member) IsSuperAdmin() bool { return m.valid && m.superAdmin }
 
-// IsActive reports whether the membership is active.
+// IsActive reports whether the membership is active AND the person behind it can act.
 func (m Member) IsActive() bool { return m.valid && m.active }
 
 // ReportsTo is the member's current manager (zero when none).

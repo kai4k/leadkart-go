@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"slices"
 
+	"github.com/leadkart/leadkart-go/internal/common/ids"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/permission"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/role"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
@@ -13,7 +14,18 @@ import (
 // command.UpdateRoleCommand's -1).
 const NoLevelChange = -1
 
+// minLevel is the most senior level a role may be created at or moved to, for
+// EVERY actor: level 0 is only ever seeded (the CompanyOwner system role).
+const minLevel = role.HierarchyLevelOwner + 1
+
 func tenantAdminName() string { return permission.IdentityPermissions.Meta.TenantAdmin }
+
+// validTenant: the id canonicalises. An exemption is only ever granted for a
+// tenant that is a real, canonical id; garbage is not "another tenant".
+func validTenant(t tenant.ID) bool {
+	_, err := ids.Canonical(string(t))
+	return err == nil
+}
 
 // operatorExempt: slug-anchored non-impersonation operator holding
 // platform.users.manage or platform.roles.manage (ADR 0069 R3).
@@ -26,20 +38,22 @@ func (a Actor) operatorExempt() bool {
 }
 
 // exemptOperatorIn: the operator exemption (R3) is for cross-tenant repair
-// only. Inside the operator's own tenant it follows rank like anyone else.
+// only, and only for a valid tenant id. Inside the operator's own tenant it
+// follows rank like anyone else.
 func (a Actor) exemptOperatorIn(tenantID tenant.ID) bool {
-	return a.operatorExempt() && !sameTenant(tenantID, a.tenantID)
+	return a.operatorExempt() && validTenant(tenantID) && !sameTenant(tenantID, a.tenantID)
 }
 
-// exemptIn: super users everywhere, exempt operators in other tenants.
+// exemptIn: super users and exempt operators in other tenants; never for a
+// tenant id that does not canonicalise.
 func (a Actor) exemptIn(tenantID tenant.ID) bool {
-	return a.valid && (a.superUser || a.exemptOperatorIn(tenantID))
+	return a.valid && validTenant(tenantID) && (a.superUser || a.exemptOperatorIn(tenantID))
 }
 
 func (a Actor) outranks(r Rank) bool { return a.valid && a.Rank() < r }
 
-// validLevel: a role level is in [HierarchyLevelMin, HierarchyLevelMax].
-func validLevel(n int) bool { return n >= role.HierarchyLevelMin && n <= role.HierarchyLevelMax }
+// validLevel: a created or re-levelled role is in [1, HierarchyLevelMax].
+func validLevel(n int) bool { return n >= minLevel && n <= role.HierarchyLevelMax }
 
 // MayActOn — H2: may a change member t (roles, overrides, status, manager)?
 func (a Actor) MayActOn(t Member) error {
@@ -65,10 +79,11 @@ func (a Actor) MayActOn(t Member) error {
 }
 
 // mayChangePermissions — H3: may a confer or remove every name in names inside
-// tenantID? Unknown or empty names are refused for everyone, super users
-// included. tenant.admin is owner-only (R5); platform-reserved names are super-only.
+// tenantID? The tenant must canonicalise; unknown or empty names are refused
+// for everyone, super users included. tenant.admin is owner-only (R5);
+// platform-reserved names are super-only.
 func (a Actor) mayChangePermissions(tenantID tenant.ID, names []string) error {
-	if !a.valid {
+	if !a.valid || !validTenant(tenantID) {
 		return ErrNoAuthority
 	}
 	for _, n := range names {
@@ -95,11 +110,12 @@ func (a Actor) mayChangePermissions(tenantID tenant.ID, names []string) error {
 	return nil
 }
 
-// MayAssignRole — H3: role level strictly below the actor (owners: any
-// tenant role), super-admin roles super-only, the role in the target's own
-// tenant for every actor, and the role's whole permission set within the
-// ceiling. Revocation is symmetric.
-func (a Actor) MayAssignRole(t Member, r *role.Role) error {
+// mayTouchRole: the rank, tenant and super-admin rules shared by assigning and
+// revoking r on t. The role's level is strictly below the actor (owners: any
+// tenant role), super-admin roles are super-only, and the role is in the
+// target's own tenant for every actor. The permission ceiling is applied by
+// the callers.
+func (a Actor) mayTouchRole(t Member, r *role.Role) error {
 	if err := a.MayActOn(t); err != nil {
 		return err
 	}
@@ -115,15 +131,33 @@ func (a Actor) MayAssignRole(t Member, r *role.Role) error {
 	if !a.exemptIn(t.tenantID) && a.Rank() != RankOwner && !a.outranks(levelOf(r)) {
 		return fmt.Errorf("%w: role level %d is not below rank %d", ErrInsufficientRank, levelOf(r), a.Rank())
 	}
+	return nil
+}
+
+// MayAssignRole — H3: mayTouchRole, a live role (a deleted role is never
+// assigned), and the role's whole permission set within the ceiling.
+func (a Actor) MayAssignRole(t Member, r *role.Role) error {
+	if err := a.mayTouchRole(t, r); err != nil {
+		return err
+	}
+	if r.IsDeleted() {
+		return fmt.Errorf("%w: %s", role.ErrDeleted, r.Name())
+	}
 	return a.mayChangePermissions(t.tenantID, PermissionNames(r.Permissions()))
 }
 
 // MayRevokeRole is symmetric with MayAssignRole (H3) and, when r is the
 // CompanyOwner role, also runs GuardLastOwner against owners (every current
-// member holding it, loaded in the same locked transaction).
+// member holding it, loaded in the same locked transaction). A deleted role is
+// revoked on rank alone (no ceiling) so its holders can always be cleaned up.
 func (a Actor) MayRevokeRole(t Member, r *role.Role, owners []Member) error {
-	if err := a.MayAssignRole(t, r); err != nil {
+	if err := a.mayTouchRole(t, r); err != nil {
 		return err
+	}
+	if !r.IsDeleted() {
+		if err := a.mayChangePermissions(t.tenantID, PermissionNames(r.Permissions())); err != nil {
+			return err
+		}
 	}
 	if r.IsCompanyOwner() {
 		return GuardLastOwner(t, owners)
@@ -131,19 +165,25 @@ func (a Actor) MayRevokeRole(t Member, r *role.Role, owners []Member) error {
 	return nil
 }
 
-// MayChangeOverrides - H2+H3+H6: may a replace t's permission overrides?
-// delta is everything the replace confers or removes (Delta of the granted
-// sets union Delta of the revoked sets); revokedAfter is the full revoked set
-// the member ends up with. It is MayActOn + the grant ceiling over delta + the
-// owner-keeps-tenant.admin guard (which binds every actor, super users too).
-func (a Actor) MayChangeOverrides(t Member, delta, revokedAfter []string) error {
+// Overrides is a member's permission overrides: the live (unexpired) grants
+// and the revoked names.
+type Overrides struct{ Granted, Revoked []string }
+
+// MayChangeOverrides — H2+H3+H6: may a replace t's overrides from before to
+// after? The ceiling set is computed here, never by the caller:
+// Delta(before.Granted, after.Granted) union Delta(before.Revoked, after.Revoked).
+// It is MayActOn + the ceiling over that set + the owner-keeps-tenant.admin
+// guard on after.Revoked (which binds every actor, super users too). Callers
+// pass live, unexpired grants.
+func (a Actor) MayChangeOverrides(t Member, before, after Overrides) error {
 	if err := a.MayActOn(t); err != nil {
 		return err
 	}
+	delta := slices.Concat(Delta(before.Granted, after.Granted), Delta(before.Revoked, after.Revoked))
 	if err := a.mayChangePermissions(t.tenantID, delta); err != nil {
 		return err
 	}
-	return guardOwnerOverrides(t, revokedAfter)
+	return guardOwnerOverrides(t, after.Revoked)
 }
 
 // MayDeactivate - H2+H6: may a deactivate t? MayActOn + GuardLastOwner against
@@ -155,39 +195,66 @@ func (a Actor) MayDeactivate(t Member, owners []Member) error {
 	return GuardLastOwner(t, owners)
 }
 
-// MayCreateRole — H3: a new role in tenantID with level and initial perms:
-// the level strictly below the actor, the tenant the actor's own unless
-// exempt, and perms within the ceiling.
-func (a Actor) MayCreateRole(tenantID tenant.ID, level int, perms []string) error {
-	if !a.valid {
+// MayCreateRole — H3: a new role in tenantID with level and initial perms.
+// The tenant must canonicalise (every actor); the level is in [1, 99] for every
+// actor, strictly below the actor, in the actor's own tenant unless exempt;
+// perms are within the ceiling. parent is optional: when present it must be in
+// the same tenant, live, and strictly more senior than level.
+func (a Actor) MayCreateRole(tenantID tenant.ID, level int, perms []string, parent *role.Role) error {
+	tid, err := tenant.ParseID(string(tenantID))
+	if err != nil || !a.valid {
 		return ErrNoAuthority
 	}
 	if !validLevel(level) {
-		return fmt.Errorf("%w: level %d is outside [%d, %d]", ErrInsufficientRank, level, role.HierarchyLevelMin, role.HierarchyLevelMax)
+		return fmt.Errorf("%w: level %d is outside [%d, %d]", ErrInsufficientRank, level, minLevel, role.HierarchyLevelMax)
 	}
-	if !a.exemptIn(tenantID) {
-		if !sameTenant(tenantID, a.tenantID) {
+	if !a.exemptIn(tid) {
+		if !sameTenant(tid, a.tenantID) {
 			return ErrNoAuthority
 		}
 		if !a.outranks(Rank(level)) {
 			return fmt.Errorf("%w: a new role's level %d must be below rank %d", ErrInsufficientRank, level, a.Rank())
 		}
 	}
-	return a.mayChangePermissions(tenantID, perms)
+	if err := a.mayChangePermissions(tid, perms); err != nil {
+		return err
+	}
+	if parent == nil {
+		return nil
+	}
+	if !sameTenant(parent.TenantID(), tid) {
+		return ErrNoAuthority
+	}
+	return parentEligible(parent, Rank(level))
 }
 
-// MayEditRole — H3: actor strictly more senior than the role's current level
-// and (if changing) its new level; delta (added ∪ removed permissions) within
-// the ceiling. Covers rename, re-level, permission edits, parent and delete.
-func (a Actor) MayEditRole(r *role.Role, newLevel int, delta []string) error {
+// parentEligible: a parent role is live and strictly more senior than the child level.
+func parentEligible(parent *role.Role, childLevel Rank) error {
+	if parent.IsDeleted() {
+		return fmt.Errorf("%w: parent role %q is deleted", ErrRoleParentNotEligible, parent.Name())
+	}
+	if levelOf(parent) >= childLevel {
+		return fmt.Errorf("%w: parent level %d must be below child level %d", ErrRoleParentNotEligible, levelOf(parent), childLevel)
+	}
+	return nil
+}
+
+// mayMutateRole — the rules every role-mutating decision shares: a valid
+// actor, a role, never a system-default role (any actor), super-admin roles
+// super-only, a new level in [1, 99], and the actor strictly more senior than
+// the role's current level and (when re-levelling) its new level, unless exempt.
+func (a Actor) mayMutateRole(r *role.Role, newLevel int) error {
 	if !a.valid {
 		return ErrNoAuthority
 	}
 	if r == nil {
 		return fmt.Errorf("%w: role required", ErrNoAuthority)
 	}
+	if r.IsSystemDefault() {
+		return fmt.Errorf("%w: %q is a system-default role", role.ErrSystemDefault, r.Name())
+	}
 	if newLevel != NoLevelChange && !validLevel(newLevel) {
-		return fmt.Errorf("%w: new level %d is outside [%d, %d]", ErrInsufficientRank, newLevel, role.HierarchyLevelMin, role.HierarchyLevelMax)
+		return fmt.Errorf("%w: new level %d is outside [%d, %d]", ErrInsufficientRank, newLevel, minLevel, role.HierarchyLevelMax)
 	}
 	if !a.superUser && r.IsSuperAdmin() {
 		return fmt.Errorf("%w: only a super user may edit a super-admin role", ErrInsufficientRank)
@@ -203,30 +270,58 @@ func (a Actor) MayEditRole(r *role.Role, newLevel int, delta []string) error {
 			return fmt.Errorf("%w: new level %d is not below rank %d", ErrInsufficientRank, newLevel, a.Rank())
 		}
 	}
-	return a.mayChangePermissions(r.TenantID(), delta)
+	return nil
 }
 
-// MayDeleteRole - H3/H6: system-default roles are never deleted (any actor);
-// otherwise it is MayEditRole with the role's own permissions as the delta,
-// because deleting removes every one of them from every holder.
+// MayEditRole — H3: rename and re-level only (newLevel = NoLevelChange keeps
+// the level). The actor must be strictly more senior than the role's current
+// and new level; a system-default role is refused for every actor
+// (role.ErrSystemDefault). Permission changes go through
+// MayReplaceRolePermissions, MayGrantRolePermission and MayRevokeRolePermission,
+// which compute their own delta.
+func (a Actor) MayEditRole(r *role.Role, newLevel int) error { return a.mayMutateRole(r, newLevel) }
+
+// MayReplaceRolePermissions — H3: mayMutateRole + the ceiling over
+// Delta(the role's current permissions, after).
+func (a Actor) MayReplaceRolePermissions(r *role.Role, after []string) error {
+	if err := a.mayMutateRole(r, NoLevelChange); err != nil {
+		return err
+	}
+	return a.mayChangePermissions(r.TenantID(), Delta(PermissionNames(r.Permissions()), after))
+}
+
+// MayGrantRolePermission — H3: adding name to r; a name r already holds changes nothing.
+func (a Actor) MayGrantRolePermission(r *role.Role, name string) error {
+	if err := a.mayMutateRole(r, NoLevelChange); err != nil {
+		return err
+	}
+	return a.mayChangePermissions(r.TenantID(), Delta(PermissionNames(r.Permissions()), append(PermissionNames(r.Permissions()), name)))
+}
+
+// MayRevokeRolePermission — H3: removing name from r; a name r does not hold changes nothing.
+func (a Actor) MayRevokeRolePermission(r *role.Role, name string) error {
+	if err := a.mayMutateRole(r, NoLevelChange); err != nil {
+		return err
+	}
+	cur := PermissionNames(r.Permissions())
+	return a.mayChangePermissions(r.TenantID(), Delta(cur, slices.DeleteFunc(slices.Clone(cur), func(n string) bool { return n == name })))
+}
+
+// MayDeleteRole — H3/H6: mayMutateRole + the ceiling over the role's own
+// permissions, because deleting removes every one of them from every holder.
 func (a Actor) MayDeleteRole(r *role.Role) error {
-	if !a.valid {
-		return ErrNoAuthority
+	if err := a.mayMutateRole(r, NoLevelChange); err != nil {
+		return err
 	}
-	if r == nil {
-		return fmt.Errorf("%w: role required", ErrNoAuthority)
-	}
-	if r.IsSystemDefault() {
-		return fmt.Errorf("%w: %q is a system-default role", role.ErrSystemDefault, r.Name())
-	}
-	return a.MayEditRole(r, NoLevelChange, PermissionNames(r.Permissions()))
+	return a.mayChangePermissions(r.TenantID(), PermissionNames(r.Permissions()))
 }
 
 // MaySetRoleParent — ADR 0058 edges carry no authority (rank is level-only;
-// the approver chain is reports_to) but must agree with the ladder: the
-// parent is strictly more senior than the child. parent nil = clear.
+// the approver chain is reports_to) but must agree with the ladder: the actor
+// may edit the child, and the parent is live, in the child's tenant and
+// strictly more senior than the child. parent nil = clear.
 func (a Actor) MaySetRoleParent(child, parent *role.Role) error {
-	if err := a.MayEditRole(child, NoLevelChange, nil); err != nil {
+	if err := a.mayMutateRole(child, NoLevelChange); err != nil {
 		return err
 	}
 	if parent == nil {
@@ -235,10 +330,7 @@ func (a Actor) MaySetRoleParent(child, parent *role.Role) error {
 	if !sameTenant(parent.TenantID(), child.TenantID()) {
 		return ErrNoAuthority
 	}
-	if levelOf(parent) >= levelOf(child) {
-		return fmt.Errorf("%w: parent level %d must be below child level %d", ErrRoleParentNotEligible, levelOf(parent), levelOf(child))
-	}
-	return nil
+	return parentEligible(parent, levelOf(child))
 }
 
 // MayReplaceManager - H4: set or replace sub's manager with newMgr. current is
@@ -308,26 +400,30 @@ func (a Actor) maySetManager(sub, mgr Member) error {
 	return fmt.Errorf("%w: cannot appoint a manager more senior than yourself", ErrInsufficientRank)
 }
 
-// mayUnlinkManager - removing or replacing current's authority over sub needs
-// the actor at least as senior as current.
+// mayUnlinkManager - the hierarchy is strict: to remove or replace sub's
+// current manager the actor must be that manager, or strictly outrank it (or be
+// exempt). An equal-rank manager is not enough.
 func (a Actor) mayUnlinkManager(sub, current Member) error {
 	if !current.valid || !sameTenant(current.tenantID, sub.tenantID) {
 		return ErrNoAuthority
 	}
-	if a.exemptIn(sub.tenantID) || current.id == a.membershipID || current.rank >= a.Rank() {
+	if a.exemptIn(sub.tenantID) || current.id == a.membershipID || a.outranks(current.rank) {
 		return nil
 	}
-	return fmt.Errorf("%w: the current manager is more senior than you", ErrInsufficientRank)
+	return fmt.Errorf("%w: the current manager is not more junior than you", ErrInsufficientRank)
 }
 
-// MayApprove — H4: (a) qualified manager, (b) tenant.admin holder, (c) super
-// or exempt operator (in another tenant); never impersonation, never self; perm
-// must be requestable and held by the approver.
+// MayApprove - H4: (a) the requester's manager, who holds roles.approve and
+// the permission; (b) any actor of Admin tier or above who strictly outranks
+// the requester, needing neither tenant.admin nor the permission ("admin sees
+// through everything and approves everything"); (c) a super user or an exempt
+// operator in another tenant. Never an impersonation session, never the
+// requester; perm must be requestable.
 func (a Actor) MayApprove(requester Member, perm string) error {
 	return a.mayDecide(requester, perm, true)
 }
 
-// MayDeny — H4 eligibility without "holds the permission".
+// MayDeny - H4 eligibility without "holds the permission".
 func (a Actor) MayDeny(requester Member) error { return a.mayDecide(requester, "", false) }
 
 func (a Actor) mayDecide(req Member, perm string, approving bool) error {
@@ -346,14 +442,14 @@ func (a Actor) mayDecide(req Member, perm string, approving bool) error {
 		return ErrNoAuthority
 	case !a.outranks(req.rank):
 		return fmt.Errorf("%w: approver rank %d does not outrank requester rank %d", ErrInsufficientRank, a.Rank(), req.rank)
+	case a.Rank() <= RankAdmin:
+		return nil
+	case req.reportsTo != a.membershipID || !a.hasOwn(permission.IdentityPermissions.Roles.Approve):
+		return ErrNotApprover
 	case approving && !a.holds(perm, req.tenantID):
 		return fmt.Errorf("%w: approver does not hold %s", ErrGrantExceedsAuthority, perm)
-	case a.hasOwn(tenantAdminName()):
-		return nil
-	case req.reportsTo == a.membershipID && a.hasOwn(permission.IdentityPermissions.Roles.Approve):
-		return nil
 	}
-	return ErrNotApprover
+	return nil
 }
 
 // GuardLastOwner - H6: refuse removing target's ownership (deactivation,

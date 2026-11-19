@@ -63,3 +63,27 @@ func TestMayChangePermissions_ZeroActorDenies(t *testing.T) {
 		}
 	}
 }
+
+// A tenant id that does not canonicalise is never "another tenant": no
+// exemption, no holding, and no ceiling decision for it, whoever asks.
+func TestTenantHelpers_RefuseNonCanonicalTenants(t *testing.T) {
+	t.Parallel()
+	p := permission.IdentityPermissions
+	super := newActorT(t, ActorInput{MembershipID: "0190a000-0000-7000-8000-000000000001", TenantID: tenantOne, IsSuperUser: true})
+	op := newActorT(t, ActorInput{MembershipID: "0190a000-0000-7000-8000-000000000002", TenantID: tenantOne, IsPlatformOperator: true,
+		EffectivePermissions: []string{p.Platform.UsersManage}})
+	for _, bad := range []tenant.ID{"", "garbage", "00000000-0000-0000-0000-000000000000", " " + tenantTwo, tenantTwo + "\n"} {
+		if op.exemptOperatorIn(bad) || op.exemptIn(bad) || super.exemptIn(bad) {
+			t.Errorf("tenant %q: exempt, want never", bad)
+		}
+		if op.holds(p.Crm.Leads.ReadAll, bad) {
+			t.Errorf("tenant %q: exempt operator holds a name, want false", bad)
+		}
+		if err := super.mayChangePermissions(bad, nil); !errors.Is(err, ErrNoAuthority) {
+			t.Errorf("tenant %q: super mayChangePermissions = %v, want no authority", bad, err)
+		}
+	}
+	if !op.exemptOperatorIn(tenantTwo) || !super.exemptIn(tenantTwo) {
+		t.Error("a canonical other tenant must still be exempt")
+	}
+}

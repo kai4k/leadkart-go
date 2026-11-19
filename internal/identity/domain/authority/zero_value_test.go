@@ -57,15 +57,15 @@ func TestZeroActorDeniesEveryDecision(t *testing.T) {
 	var zero authority.Actor
 	for name, err := range map[string]error{
 		"MayActOn":           zero.MayActOn(user),
-		"MayChangeOverrides": zero.MayChangeOverrides(user, nil, nil),
+		"MayChangeOverrides": zero.MayChangeOverrides(user, authority.Overrides{}, authority.Overrides{}),
 		"MayDeactivate":      zero.MayDeactivate(user, nil),
 		"MayDeleteRole":      zero.MayDeleteRole(userR),
 		"MayReplaceManager":  zero.MayReplaceManager(user, owner, nil),
 		"MayClearManager":    zero.MayClearManager(user, nil),
 		"MayAssignRole":      zero.MayAssignRole(user, userR),
 		"MayRevokeRole":      zero.MayRevokeRole(user, userR, nil),
-		"MayCreateRole":      zero.MayCreateRole(tA, 60, nil),
-		"MayEditRole":        zero.MayEditRole(userR, authority.NoLevelChange, nil),
+		"MayCreateRole":      zero.MayCreateRole(tA, 60, nil, nil),
+		"MayEditRole":        zero.MayEditRole(userR, authority.NoLevelChange),
 		"MaySetRoleParent":   zero.MaySetRoleParent(userR, nil),
 		"MayApprove":         zero.MayApprove(user, p.Crm.Leads.Read),
 		"MayDeny":            zero.MayDeny(user),
@@ -99,7 +99,7 @@ func TestZeroMemberDeniesEveryDecision(t *testing.T) {
 			"MayActOn target":       a.MayActOn(zero),
 			"MayAssignRole target":  a.MayAssignRole(zero, userR),
 			"MayRevokeRole target":  a.MayRevokeRole(zero, userR, nil),
-			"MayChangeOverrides":    a.MayChangeOverrides(zero, nil, nil),
+			"MayChangeOverrides":    a.MayChangeOverrides(zero, authority.Overrides{}, authority.Overrides{}),
 			"MayDeactivate":         a.MayDeactivate(zero, nil),
 			"MayReplaceManager sub": a.MayReplaceManager(zero, owner, nil),
 			"MayReplaceManager mgr": a.MayReplaceManager(report, zero, &owner),
@@ -130,7 +130,7 @@ func TestMemberOf_RequiresTheFullTenantLocalRoleSet(t *testing.T) {
 	stray := mkRole(8, tA, "Stray", false, 40, false)
 
 	m := mkMembership(11, tA, true, "", ownerR, userR, deleted)
-	got, err := authority.MemberOf(m, []*role.Role{ownerR, userR, deleted})
+	got, err := authority.MemberOf(m, []*role.Role{ownerR, userR, deleted}, true)
 	if err != nil || got.Rank() != authority.RankOwner || !got.IsOwner() || !got.Valid() {
 		t.Fatalf("complete set: (%+v, %v)", got, err)
 	}
@@ -141,32 +141,32 @@ func TestMemberOf_RequiresTheFullTenantLocalRoleSet(t *testing.T) {
 		"unassigned extra role":                {ownerR, userR, deleted, stray},
 		"nil entry":                            {ownerR, userR, deleted, nil},
 	} {
-		if got, err := authority.MemberOf(m, roles); !errors.Is(err, authority.ErrNoAuthority) || got.Valid() {
+		if got, err := authority.MemberOf(m, roles, true); !errors.Is(err, authority.ErrNoAuthority) || got.Valid() {
 			t.Errorf("%s: MemberOf = (%+v, %v), want invalid Member and no authority", name, got, err)
 		}
 	}
 	cross := mkMembership(12, tA, true, "", foreignR)
-	if _, err := authority.MemberOf(cross, []*role.Role{foreignR}); !errors.Is(err, authority.ErrNoAuthority) {
+	if _, err := authority.MemberOf(cross, []*role.Role{foreignR}, true); !errors.Is(err, authority.ErrNoAuthority) {
 		t.Errorf("role from another tenant: %v, want no authority", err)
 	}
-	if _, err := authority.MemberOf(nil, nil); !errors.Is(err, authority.ErrNoAuthority) {
+	if _, err := authority.MemberOf(nil, nil, true); !errors.Is(err, authority.ErrNoAuthority) {
 		t.Errorf("nil membership: %v, want no authority", err)
 	}
 	bad := membership.UnmarshalFromDB(membership.Snapshot{ID: "not-a-uuid", PersonID: person.ID(uid(1)), TenantID: tA, Status: membership.StatusActive, JoinedAt: t0})
-	if _, err := authority.MemberOf(bad, nil); !errors.Is(err, authority.ErrNoAuthority) {
+	if _, err := authority.MemberOf(bad, nil, true); !errors.Is(err, authority.ErrNoAuthority) {
 		t.Errorf("non-uuid membership id: %v, want no authority", err)
 	}
 	badTenant := membership.UnmarshalFromDB(membership.Snapshot{ID: membership.ID(uid(13)), PersonID: person.ID(uid(1)), TenantID: "", Status: membership.StatusActive, JoinedAt: t0})
-	if _, err := authority.MemberOf(badTenant, nil); !errors.Is(err, authority.ErrNoAuthority) {
+	if _, err := authority.MemberOf(badTenant, nil, true); !errors.Is(err, authority.ErrNoAuthority) {
 		t.Errorf("zero tenant id: %v, want no authority", err)
 	}
 	badMgr := membership.UnmarshalFromDB(membership.Snapshot{ID: membership.ID(uid(13)), PersonID: person.ID(uid(1)), TenantID: tA, Status: membership.StatusActive, JoinedAt: t0, ReportsTo: "nope"})
-	if _, err := authority.MemberOf(badMgr, nil); !errors.Is(err, authority.ErrNoAuthority) {
+	if _, err := authority.MemberOf(badMgr, nil, true); !errors.Is(err, authority.ErrNoAuthority) {
 		t.Errorf("non-uuid manager id: %v, want no authority", err)
 	}
 	upper := membership.UnmarshalFromDB(membership.Snapshot{ID: membership.ID(strings.ToUpper(uid(13))), PersonID: person.ID(uid(1)),
 		TenantID: tenant.ID(strings.ToUpper(tA.String())), Status: membership.StatusActive, JoinedAt: t0, ReportsTo: membership.ID(strings.ToUpper(uid(14)))})
-	canon, err := authority.MemberOf(upper, nil)
+	canon, err := authority.MemberOf(upper, nil, true)
 	if err != nil || canon.ID() != membership.ID(uid(13)) || canon.TenantID() != tA || canon.ReportsTo() != membership.ID(uid(14)) {
 		t.Errorf("uppercase ids not canonicalised: %+v, %v", canon, err)
 	}
@@ -202,16 +202,16 @@ func TestMayCreateRole_TenantAndInitialPermissions(t *testing.T) {
 		got  error
 		want error
 	}{
-		"admin, own tenant":                        {admin.MayCreateRole(tA, 11, []string{p.Crm.Leads.Read}), nil},
-		"admin, other tenant":                      {admin.MayCreateRole(tB, 11, nil), authority.ErrNoAuthority},
-		"admin, tenant.admin in initial perms":     {admin.MayCreateRole(tA, 11, []string{p.Meta.TenantAdmin}), authority.ErrGrantExceedsAuthority},
-		"admin, reserved in initial perms":         {admin.MayCreateRole(tA, 11, []string{p.Platform.TenantsManage}), authority.ErrGrantExceedsAuthority},
-		"admin, unknown in initial perms":          {admin.MayCreateRole(tA, 11, []string{"nope"}), authority.ErrGrantExceedsAuthority},
-		"admin, level above 99":                    {admin.MayCreateRole(tA, 100, nil), authority.ErrInsufficientRank},
-		"admin, negative level":                    {admin.MayCreateRole(tA, -1, nil), authority.ErrInsufficientRank},
-		"super, other tenant":                      {super.MayCreateRole(tB, 11, []string{p.Platform.TenantsManage}), nil},
-		"exempt operator, other tenant, level 11":  {op.MayCreateRole(tB, 11, []string{p.Meta.TenantAdmin}), nil},
-		"exempt operator, own tenant follows rank": {op.MayCreateRole(tP, 11, nil), authority.ErrInsufficientRank},
+		"admin, own tenant":                        {admin.MayCreateRole(tA, 11, []string{p.Crm.Leads.Read}, nil), nil},
+		"admin, other tenant":                      {admin.MayCreateRole(tB, 11, nil, nil), authority.ErrNoAuthority},
+		"admin, tenant.admin in initial perms":     {admin.MayCreateRole(tA, 11, []string{p.Meta.TenantAdmin}, nil), authority.ErrGrantExceedsAuthority},
+		"admin, reserved in initial perms":         {admin.MayCreateRole(tA, 11, []string{p.Platform.TenantsManage}, nil), authority.ErrGrantExceedsAuthority},
+		"admin, unknown in initial perms":          {admin.MayCreateRole(tA, 11, []string{"nope"}, nil), authority.ErrGrantExceedsAuthority},
+		"admin, level above 99":                    {admin.MayCreateRole(tA, 100, nil, nil), authority.ErrInsufficientRank},
+		"admin, negative level":                    {admin.MayCreateRole(tA, -1, nil, nil), authority.ErrInsufficientRank},
+		"super, other tenant":                      {super.MayCreateRole(tB, 11, []string{p.Platform.TenantsManage}, nil), nil},
+		"exempt operator, other tenant, level 11":  {op.MayCreateRole(tB, 11, []string{p.Meta.TenantAdmin}, nil), nil},
+		"exempt operator, own tenant follows rank": {op.MayCreateRole(tP, 11, nil, nil), authority.ErrInsufficientRank},
 	}
 	for name, c := range cases {
 		if c.want == nil && c.got != nil || c.want != nil && !errors.Is(c.got, c.want) {
