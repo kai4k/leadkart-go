@@ -40,7 +40,9 @@ info:
     permission or wrong tenant), `self_modification_forbidden` (caller targeted
     their own roles, permission overrides, status or manager) and
     `grant_exceeds_authority` (caller tried to confer a permission they do not
-    hold). ADR 0036 / ADR 0068.
+    hold). ADR 0036 / ADR 0068. In `x-required-permissions`, the token `self`
+    is not a permission: it means "the caller's own membership" (the path
+    user id equals the caller's `membership_id`).
 
     **Enumeration safety:** guessable-key lookups (`/by-slug/`, `?email=`)
     return 404 indistinguishably whether the resource doesn't exist OR
@@ -749,7 +751,9 @@ paths:
             schema: { $ref: '#/components/schemas/AssignUserRoleRequest' }
       responses:
         '204': { description: Role assigned }
+        '400': { description: "Malformed id: `invalid_user_id` (path) or `invalid_role_id` (body `role_id`)", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
         '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { description: "`role_not_found` — no live role with that id in the target tenant (or the user does not exist)", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
 
   /api/v1/users/{userId}/roles/{roleId}:
     delete:

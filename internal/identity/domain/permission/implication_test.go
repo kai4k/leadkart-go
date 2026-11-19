@@ -61,3 +61,27 @@ func TestPlatformEquivalents(t *testing.T) {
 		})
 	}
 }
+
+func TestIsPlatformReserved(t *testing.T) {
+	t.Parallel()
+	p := permission.IdentityPermissions
+	for name, want := range map[string]bool{
+		p.Meta.TenantAdmin: true, p.Platform.TenantsManage: true, p.Tenants.Suspend: true,
+		p.Users.Anonymise: true, p.PlatformLeadCredits.Topup: true,
+		p.Users.View: false, p.Crm.Leads.Read: false, "not.a.permission": false, "": false,
+	} {
+		if got := permission.IsPlatformReserved(name); got != want {
+			t.Errorf("IsPlatformReserved(%q) = %v, want %v", name, got, want)
+		}
+	}
+}
+
+func TestPlatformEquivalents_ReturnsCopy(t *testing.T) {
+	t.Parallel()
+	p := permission.IdentityPermissions
+	first := permission.PlatformEquivalents(p.Users.View)
+	first[0] = "tampered"
+	if got := permission.PlatformEquivalents(p.Users.View); got[0] != p.Platform.UsersView {
+		t.Fatalf("shared state mutated: %v", got)
+	}
+}

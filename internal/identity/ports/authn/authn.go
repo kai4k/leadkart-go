@@ -293,6 +293,11 @@ func RequireAnyPermission(verifier Verifier, validator StampValidator, permNames
 //
 //   - 401 if the token is missing / invalid / stale.
 //   - 403 if neither tenant matches NOR the operator flags are set.
+//   - 400 invalid_tenant_id if the path value is not a UUID.
+//
+// Ids compare as UUID values; on success the request's tenancy context is
+// re-bound to the canonical path tenant (same contract as
+// [RequireTenantPermission]).
 func RequireTenantContext(verifier Verifier, validator StampValidator, pathVar string) func(http.Handler) http.Handler {
 	if verifier == nil {
 		panic("authn: RequireTenantContext verifier required")
@@ -311,28 +316,24 @@ func RequireTenantContext(verifier Verifier, validator StampValidator, pathVar s
 				writeError(w, http.StatusUnauthorized, errCodeUnauthenticated, "missing claims")
 				return
 			}
+			urlTenant, ok := CanonicalID(r.PathValue(pathVar))
+			if !ok {
+				writeError(w, http.StatusBadRequest, errCodeInvalidTenantID,
+					pathVar+" path parameter must be a UUID")
+				return
+			}
 			// SuperUser / Platform-tier operators bypass — they're
 			// expected to operate cross-tenant under the impersonation
 			// audit trail. Platform bypass requires BOTH the
 			// is_platform flag AND the tenant_slug anchor (defense-
-			// in-depth — see [RequirePlatform] godoc).
-			if c.IsSuperUser || isPlatformOperator(c) {
-				next.ServeHTTP(w, r)
-				return
-			}
-			urlTenant := strings.TrimSpace(r.PathValue(pathVar))
-			jwtTenant := strings.TrimSpace(c.TenantID)
-			if urlTenant == "" {
-				writeError(w, http.StatusBadRequest, errCodeForbidden,
-					"path missing "+pathVar+" parameter")
-				return
-			}
-			if urlTenant != jwtTenant {
+			// in-depth — see [RequirePlatform] godoc). Impersonation
+			// tokens never bypass (see isPlatformOperator).
+			if !c.IsSuperUser && !isPlatformOperator(c) && !sameID(urlTenant, c.TenantID) {
 				writeError(w, http.StatusForbidden, errCodeForbidden,
 					"tenant context does not match url")
 				return
 			}
-			next.ServeHTTP(w, r)
+			next.ServeHTTP(w, bindTenant(r, urlTenant))
 		}))
 	}
 }

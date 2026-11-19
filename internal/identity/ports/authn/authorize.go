@@ -25,18 +25,45 @@ func isPlatformOperator(c *jwt.Claims) bool {
 	return c != nil && c.IsPlatform && c.TenantSlug == PlatformTenantSlug && !c.IsImpersonation()
 }
 
-// satisfiesIn is THE authorization decision (ADR 0036 + ADR 0068):
-// super user → yes; explicit grant → yes; tenant.admin implies every
-// non-reserved permission in the holder's OWN tenant; a platform operator's
-// platform.* grant satisfies the identity.* equivalent on any tenant.
+// sameTenant reports whether two tenant ids denote the same tenant: equal
+// as UUID values, or (for non-UUID ids used by fakes) byte-equal and
+// non-empty.
+func sameTenant(a, b string) bool {
+	return (a != "" && a == b) || sameID(a, b)
+}
+
+// satisfiesIn is THE authorization decision (ADR 0036 + ADR 0068). Rules,
+// in order:
+//  1. no claims, or a name outside the catalogue (incl. "") -> deny
+//  2. super user -> allow
+//  3. explicit grant of the name:
+//     - platform-reserved name other than tenant.admin -> allow only for a
+//     slug-anchored, non-impersonation platform operator (defence in depth:
+//     a tenant principal never exercises platform authority, whatever its
+//     claims say);
+//     - any other name (incl. tenant.admin itself) -> allow only when the
+//     effective tenant is the caller's own (D2: cross-tenant reach comes
+//     only from platform.* equivalents, never from a tenant-plane grant)
+//  4. tenant.admin implies every non-reserved name in the caller's OWN tenant
+//  5. a platform operator's platform.* grant satisfies the identity.*
+//     equivalent in any tenant
 func satisfiesIn(c *jwt.Claims, effective tenancy.ID, required string) bool {
-	if c == nil {
+	if c == nil || !permission.IsKnown(required) {
 		return false
 	}
-	if c.IsSuperUser || slices.Contains(c.Permissions, required) {
+	if c.IsSuperUser {
 		return true
 	}
-	if tenancy.ID(c.TenantID) == effective &&
+	own := sameTenant(c.TenantID, effective.String())
+	if slices.Contains(c.Permissions, required) {
+		if permission.IsPlatformReserved(required) && required != permission.IdentityPermissions.Meta.TenantAdmin {
+			return isPlatformOperator(c)
+		}
+		if own {
+			return true
+		}
+	}
+	if own &&
 		slices.Contains(c.Permissions, permission.IdentityPermissions.Meta.TenantAdmin) &&
 		permission.ImpliedByTenantAdmin(required) {
 		return true
@@ -52,9 +79,12 @@ func satisfiesIn(c *jwt.Claims, effective tenancy.ID, required string) bool {
 }
 
 // Satisfies reports whether the authenticated caller on ctx may exercise
-// permName in the request's effective tenant (tenancy ctx bound by
-// RequireAuth; falls back to the claims tenant). Use for handler-inline
-// checks (e.g. read_all narrowing) in every module. False without claims.
+// permName in the request's effective tenant: the tenancy ctx bound by
+// RequireAuth (the caller's own tenant) or re-bound to the PATH tenant by
+// RequireTenantPermission / RequireTenantContext, so an inline check under a
+// path-scoped gate agrees with the gate. With no tenant on ctx it falls back
+// to the caller's own tenant. Use for handler-inline checks (e.g. read_all
+// narrowing) in every module. False without claims or for unknown names.
 func Satisfies(ctx context.Context, permName string) bool {
 	c, ok := ClaimsFromContext(ctx)
 	if !ok {
@@ -86,7 +116,10 @@ func EffectivePermissions(c *jwt.Claims) []string {
 // RequireTenantPermission gates /tenants/{pathVar}/... routes: freshness-
 // checked JWT AND (path tenant == claims tenant OR caller is super user /
 // platform operator) AND at least one of permNames satisfied IN THE PATH
-// TENANT. Replaces RequireTenantContext for routes that need a permission.
+// TENANT. On success the request context's tenant is re-bound to the
+// canonical path tenant so everything downstream (inline Satisfies,
+// repositories) sees the one tenant the gate decided on (tdl_canon §4).
+// Replaces RequireTenantContext for routes that need a permission.
 func RequireTenantPermission(verifier Verifier, validator StampValidator, pathVar string, permNames ...string) func(http.Handler) http.Handler {
 	if verifier == nil || validator == nil {
 		panic("authn: RequireTenantPermission verifier + validator required")
@@ -119,7 +152,7 @@ func RequireTenantPermission(verifier Verifier, validator StampValidator, pathVa
 			}
 			for _, p := range permNames {
 				if satisfiesIn(c, tenancy.ID(urlTenant), p) {
-					next.ServeHTTP(w, r)
+					next.ServeHTTP(w, bindTenant(r, urlTenant))
 					return
 				}
 			}
@@ -197,4 +230,10 @@ func DenySelfTarget(pathVar string) func(http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 		})
 	}
+}
+
+// bindTenant returns r with the tenancy context re-bound to the (canonical)
+// path tenant a gate has just authorised the caller for.
+func bindTenant(r *http.Request, canonicalTenant string) *http.Request {
+	return r.WithContext(tenancy.WithID(r.Context(), tenancy.ID(canonicalTenant)))
 }

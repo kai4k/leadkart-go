@@ -2,14 +2,14 @@ package permission
 
 import "slices"
 
-// platformReservedNames are catalogue entries that tenant.admin NEVER implies:
+// platformReserved are catalogue entries that tenant.admin NEVER implies:
 // platform-operator authority plus tenant-lifecycle and cross-tenant erasure
 // actions reserved for the Platform tier (ADR 0036 + multi-tenancy.md
 // "Platform admin endpoints"). tenant.admin itself is listed so a requirement
-// for it is satisfied only by holding it explicitly.
-func platformReservedNames() []string {
+// for it is satisfied only by holding it explicitly. Built once; never mutated.
+var platformReserved = func() map[string]struct{} {
 	p := IdentityPermissions
-	return []string{
+	names := []string{
 		p.Meta.TenantAdmin,
 		p.Platform.TenantsView, p.Platform.TenantsCreate, p.Platform.TenantsManage,
 		p.Platform.UsersView, p.Platform.UsersCreate, p.Platform.UsersManage,
@@ -19,6 +19,19 @@ func platformReservedNames() []string {
 		p.Tenants.Suspend, p.Tenants.Activate, p.Tenants.Delete,
 		p.Users.Anonymise,
 	}
+	m := make(map[string]struct{}, len(names))
+	for _, n := range names {
+		m[n] = struct{}{}
+	}
+	return m
+}()
+
+// IsPlatformReserved reports whether name is a platform-reserved permission
+// (see platformReserved). tenant.admin is included: it is satisfied only by
+// holding it. Unknown names return false.
+func IsPlatformReserved(name string) bool {
+	_, ok := platformReserved[name]
+	return ok
 }
 
 // ImpliedByTenantAdmin reports whether holding tenant.admin satisfies a
@@ -28,34 +41,35 @@ func platformReservedNames() []string {
 // recorded in ADR 0068. Unknown and platform-reserved names return false.
 // Callers MUST also check that the effective tenant is the holder's own.
 func ImpliedByTenantAdmin(name string) bool {
-	if !IsKnown(name) {
-		return false
-	}
-	return !slices.Contains(platformReservedNames(), name)
+	return IsKnown(name) && !IsPlatformReserved(name)
 }
+
+// platformEquivalents maps a tenant-plane identity permission to the
+// platform-tier permissions that satisfy it. Built once; never mutated.
+var platformEquivalents = func() map[string][]string {
+	p := IdentityPermissions
+	m := map[string][]string{
+		p.Tenants.View:           {p.Platform.TenantsView, p.Platform.TenantsManage},
+		p.Tenants.Update:         {p.Platform.TenantsManage},
+		p.Tenants.UpdateSettings: {p.Platform.TenantsManage},
+		p.Users.View:             {p.Platform.UsersView, p.Platform.UsersManage},
+		p.Users.Create:           {p.Platform.UsersCreate, p.Platform.UsersManage},
+		p.Roles.View:             {p.Platform.RolesView, p.Platform.RolesManage},
+	}
+	for _, n := range []string{p.Users.Update, p.Users.Deactivate, p.Users.Reactivate, p.Users.Unlock, p.Users.UpdatePermissions} {
+		m[n] = []string{p.Platform.UsersManage}
+	}
+	for _, n := range []string{p.Roles.Create, p.Roles.Update, p.Roles.Delete, p.Roles.Assign, p.Roles.Revoke} {
+		m[n] = []string{p.Platform.RolesManage}
+	}
+	return m
+}()
 
 // PlatformEquivalents returns the platform-tier permissions that satisfy a
 // tenant-plane identity permission when held by a slug-anchored Platform
 // operator on the unified /v1/users, /v1/roles, /v1/tenants surface
 // (ADR 0039 Context; mirrors the .NET PlatformTenant*Endpoints gates).
-// Nil when name has no platform equivalent.
+// Nil when name has no platform equivalent. The returned slice is a copy.
 func PlatformEquivalents(name string) []string {
-	p := IdentityPermissions
-	switch name {
-	case p.Tenants.View:
-		return []string{p.Platform.TenantsView, p.Platform.TenantsManage}
-	case p.Tenants.Update, p.Tenants.UpdateSettings:
-		return []string{p.Platform.TenantsManage}
-	case p.Users.View:
-		return []string{p.Platform.UsersView, p.Platform.UsersManage}
-	case p.Users.Create:
-		return []string{p.Platform.UsersCreate, p.Platform.UsersManage}
-	case p.Users.Update, p.Users.Deactivate, p.Users.Reactivate, p.Users.Unlock, p.Users.UpdatePermissions:
-		return []string{p.Platform.UsersManage}
-	case p.Roles.View:
-		return []string{p.Platform.RolesView, p.Platform.RolesManage}
-	case p.Roles.Create, p.Roles.Update, p.Roles.Delete, p.Roles.Assign, p.Roles.Revoke:
-		return []string{p.Platform.RolesManage}
-	}
-	return nil
+	return slices.Clone(platformEquivalents[name])
 }
