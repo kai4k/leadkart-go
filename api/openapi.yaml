@@ -982,7 +982,20 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/CreateRoleResponse' }
-        '403': { $ref: '#/components/responses/TenantScopeForbidden' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/AuthorityForbidden' }
+        '409':
+          description: Role name already taken in this tenant (`role_name_taken`)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '422':
+          description: |
+            `role_invalid` (name length, `hierarchy_level` outside 1-99) or `role_parent_not_eligible`
+            (the parent is missing, deleted, or not strictly more senior than the new role's level).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
 
   /api/v1/roles/{roleId}:
     get:
@@ -1021,10 +1034,12 @@ paths:
             schema: { $ref: '#/components/schemas/UpdateRoleRequest' }
       responses:
         '204': { description: Role updated }
-        '403': { $ref: '#/components/responses/TenantScopeForbidden' }
+        '403': { $ref: '#/components/responses/AuthorityForbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409':
-          description: Role name already taken in this tenant
+          description: |
+            `role_name_taken`, or `role_system_default` (a system-default role, Company Owner among them, cannot be
+            renamed or re-levelled by anyone, super users included).
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
@@ -1034,13 +1049,23 @@ paths:
       summary: Soft-delete a role
       description: |
         Requires `identity.roles.delete` (satisfied by `tenant.admin` in the caller's own tenant, or by `platform.*` equivalents for platform operators; ADR 0068).
+        The caller must hold every permission the role carries (deleting removes them from every holder).
+        A role still held by an ACTIVE member is refused with 409 `role_in_use` (`errors.active_holders` is the
+        count); a role held only by inactive members is deleted and their assignments are removed in the same
+        transaction.
       x-required-permissions: [identity.roles.delete]
       parameters:
         - { $ref: '#/components/parameters/RoleId' }
         - $ref: '#/components/parameters/XTenantId'
       responses:
         '204': { description: Role deleted }
-        '403': { $ref: '#/components/responses/TenantScopeForbidden' }
+        '403': { $ref: '#/components/responses/AuthorityForbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: '`role_in_use` (an active member holds the role) or `role_system_default` (system-default roles cannot be deleted)'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
 
   /api/v1/roles/{roleId}/parent:
     patch:
@@ -1053,7 +1078,8 @@ paths:
         resolution stays flat per role; the hierarchy is consumed by
         approval workflows + reporting.
 
-        Pass `{"parent_role_id": null}` (or omit / empty string) to
+        The `parent_role_id` key is REQUIRED (a body without it is 400
+        `invalid_body`): pass `{"parent_role_id": null}` (or an empty string) to
         clear the parent (role becomes a root). Pass a UUID referencing
         a role in the SAME tenant to set / re-point the parent.
 
@@ -1079,24 +1105,33 @@ paths:
       responses:
         '204': { description: Parent set / cleared }
         '400': { $ref: '#/components/responses/BadRequest' }
-        '403': { $ref: '#/components/responses/TenantScopeForbidden' }
+        '403': { $ref: '#/components/responses/AuthorityForbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409':
           description: |
-            Role already has an active parent edge (single-parent
+            `role_system_default` (a system-default role's parent cannot change), or role already has an active parent edge (single-parent
             invariant: at most one active edge per child). Caller
             should reload to discover the existing edge before
             retrying.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
-        '422': { $ref: '#/components/responses/Unprocessable' }
+        '422':
+          description: |
+            `role_parent_not_eligible` (the parent is missing, deleted, in another tenant, or not strictly more
+            senior than the child), or a cycle / cross-tenant refusal.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
 
   /api/v1/roles/{roleId}/permissions:
     put:
       tags: [roles]
       summary: Replace the role's permission set atomically
       description: |
+        The `permissions` key is REQUIRED and may not be `null`: `{}` and `{"permissions": null}` are 400
+        `invalid_body`; an explicit `[]` clears the role. Changing the set requires the caller to hold every
+        permission added AND every permission removed.
         Permission names MUST match the closed
         `permission.IdentityPermissions` catalogue; unknown names surface
         as 422 (`permission_unknown`).
@@ -1113,8 +1148,14 @@ paths:
             schema: { $ref: '#/components/schemas/ReplaceRolePermissionsRequest' }
       responses:
         '204': { description: Permissions replaced }
-        '403': { $ref: '#/components/responses/TenantScopeForbidden' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/AuthorityForbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: '`role_system_default` (system-default roles, Company Owner among them, cannot be changed by anyone)'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
         '422': { $ref: '#/components/responses/Unprocessable' }
 
   /api/v1/roles/{roleId}/permissions/grant:
@@ -1135,8 +1176,13 @@ paths:
             schema: { $ref: '#/components/schemas/RolePermissionRequest' }
       responses:
         '204': { description: Permission granted }
-        '403': { $ref: '#/components/responses/TenantScopeForbidden' }
+        '403': { $ref: '#/components/responses/AuthorityForbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: '`role_system_default` (system-default roles cannot be changed by anyone)'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
         '422': { $ref: '#/components/responses/Unprocessable' }
 
   /api/v1/roles/{roleId}/permissions/revoke:
@@ -1157,8 +1203,13 @@ paths:
             schema: { $ref: '#/components/schemas/RolePermissionRequest' }
       responses:
         '204': { description: Permission revoked }
-        '403': { $ref: '#/components/responses/TenantScopeForbidden' }
+        '403': { $ref: '#/components/responses/AuthorityForbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: '`role_system_default` (system-default roles cannot be changed by anyone)'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
         '422': { $ref: '#/components/responses/Unprocessable' }
 
   # ===== PLATFORM =======================================================
@@ -4233,7 +4284,7 @@ components:
       required: [name, hierarchy_level]
       properties:
         name:             { type: string, minLength: 2, maxLength: 100 }
-        hierarchy_level:  { type: integer, minimum: 0, maximum: 99 }
+        hierarchy_level:  { type: integer, minimum: 1, maximum: 99, description: 'REQUIRED (an omitted level is 400). 0 is the Owner tier, reserved to system roles. Must be strictly below the caller rank.' }
         parent_role_id:
           type: string
           format: uuid
@@ -4258,7 +4309,7 @@ components:
         pointer field instead of a -1 sentinel keeps the wire shape clean.
       properties:
         name:            { type: string, minLength: 2, maxLength: 100 }
-        hierarchy_level: { type: integer, minimum: 0, maximum: 99, nullable: true }
+        hierarchy_level: { type: integer, minimum: 1, maximum: 99, nullable: true }
 
     ReplaceRolePermissionsRequest:
       type: object
@@ -4288,6 +4339,7 @@ components:
           type: string
           format: uuid
           nullable: true
+          description: The key is required; an explicit null clears the parent.
         reason:
           type: string
           minLength: 10

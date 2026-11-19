@@ -6,6 +6,7 @@ import (
 
 	"github.com/leadkart/leadkart-go/internal/common/errs"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/role"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
 
@@ -115,4 +116,9 @@ type Repository interface {
 	// index idx_roles_super_admin (O(1) where-clause) so the call is
 	// cheap enough to execute on every lifecycle command.
 	HasActiveSuperAdmin(ctx context.Context, tenantID tenant.ID) (bool, error)
+
+	// ListHoldingRole returns every Membership of the tenant (active or not)
+	// that holds roleID, fully hydrated. Powers the role-in-use rule of
+	// DeleteRole; the caller holds the tenant authority lock.
+	ListHoldingRole(ctx context.Context, tenantID tenant.ID, roleID role.ID) ([]*Membership, error)
 }

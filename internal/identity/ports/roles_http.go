@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"strconv"
 
 	"github.com/leadkart/leadkart-go/internal/common/tenancy"
 	"github.com/leadkart/leadkart-go/internal/identity/app"
@@ -82,8 +83,10 @@ func handleCreateRole(log *slog.Logger, a app.Application) http.Handler {
 			return
 		}
 		var req CreateRoleRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeError(w, http.StatusBadRequest, ErrCodeInvalidBody, "request body is not valid JSON")
+		if !decodeFullBody(w, r, &req) {
+			return
+		}
+		if !validRoleLevel(w, req.HierarchyLevel) {
 			return
 		}
 		var parent role.ID
@@ -103,8 +106,11 @@ func handleCreateRole(log *slog.Logger, a app.Application) http.Handler {
 			HierarchyLevel:    req.HierarchyLevel,
 			ParentRoleID:      parent,
 			ActorMembershipID: actor,
+			Actor:             authn.AuthorityFrom(r.Context()),
 		})
 		switch {
+		case writeAuthorityError(w, err):
+			return
 		case errors.Is(err, command.ErrRoleNameTaken):
 			writeError(w, http.StatusConflict, ErrCodeRoleNameTaken,
 				"a role with this name already exists")
@@ -151,8 +157,7 @@ func handleSetRoleParent(log *slog.Logger, a app.Application) http.Handler {
 			return
 		}
 		var req SetRoleParentRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeError(w, http.StatusBadRequest, ErrCodeInvalidBody, "request body is not valid JSON")
+		if !decodeFullBody(w, r, &req) {
 			return
 		}
 		var newParent role.ID
@@ -172,6 +177,7 @@ func handleSetRoleParent(log *slog.Logger, a app.Application) http.Handler {
 			NewParentID:       newParent,
 			ActorMembershipID: actor,
 			Reason:            req.Reason,
+			Actor:             authn.AuthorityFrom(r.Context()),
 		})
 		writeRoleMutationResult(w, log, r, err)
 	})
@@ -192,6 +198,9 @@ func handleUpdateRole(log *slog.Logger, a app.Application) http.Handler {
 		}
 		hl := -1
 		if req.HierarchyLevel != nil {
+			if !validRoleLevel(w, *req.HierarchyLevel) {
+				return
+			}
 			hl = *req.HierarchyLevel
 		}
 		tid, ok := tenancy.FromContext(r.Context())
@@ -204,6 +213,7 @@ func handleUpdateRole(log *slog.Logger, a app.Application) http.Handler {
 			RoleID:         id,
 			Name:           req.Name,
 			HierarchyLevel: hl,
+			Actor:          authn.AuthorityFrom(r.Context()),
 		})
 		writeRoleMutationResult(w, log, r, err)
 	})
@@ -218,8 +228,9 @@ func handleReplaceRolePermissions(log *slog.Logger, a app.Application) http.Hand
 			return
 		}
 		var req ReplaceRolePermissionsRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeError(w, http.StatusBadRequest, ErrCodeInvalidBody, "request body is not valid JSON")
+		// A missing or null "permissions" would decode to nil and clear the role;
+		// an explicit [] is the only way to say "clear all".
+		if !decodeFullBody(w, r, &req) {
 			return
 		}
 		tid, ok := tenancy.FromContext(r.Context())
@@ -227,19 +238,13 @@ func handleReplaceRolePermissions(log *slog.Logger, a app.Application) http.Hand
 			writeError(w, http.StatusUnauthorized, ErrCodeInvalidCredentials, "")
 			return
 		}
-		if !requireGrantWithinAuthority(w, r, req.Permissions) {
-			return
-		}
 		err := a.Commands.ReplaceRolePermissions.Handle(r.Context(),
 			command.ReplaceRolePermissionsCommand{
 				TenantID:        tenant.ID(tid),
 				RoleID:          id,
 				PermissionNames: req.Permissions,
+				Actor:           authn.AuthorityFrom(r.Context()),
 			})
-		if errors.Is(err, command.ErrPermissionUnknown) {
-			writeError(w, http.StatusUnprocessableEntity, ErrCodePermissionUnknown, err.Error())
-			return
-		}
 		writeRoleMutationResult(w, log, r, err)
 	})
 }
@@ -262,19 +267,13 @@ func handleGrantRolePermission(log *slog.Logger, a app.Application) http.Handler
 			writeError(w, http.StatusUnauthorized, ErrCodeInvalidCredentials, "")
 			return
 		}
-		if !requireGrantWithinAuthority(w, r, []string{req.Permission}) {
-			return
-		}
 		err := a.Commands.GrantRolePermission.Handle(r.Context(),
 			command.GrantRolePermissionCommand{
 				TenantID:       tenant.ID(tid),
 				RoleID:         id,
 				PermissionName: req.Permission,
+				Actor:          authn.AuthorityFrom(r.Context()),
 			})
-		if errors.Is(err, command.ErrPermissionUnknown) {
-			writeError(w, http.StatusUnprocessableEntity, ErrCodePermissionUnknown, err.Error())
-			return
-		}
 		writeRoleMutationResult(w, log, r, err)
 	})
 }
@@ -302,11 +301,8 @@ func handleRevokeRolePermission(log *slog.Logger, a app.Application) http.Handle
 				TenantID:       tenant.ID(tid),
 				RoleID:         id,
 				PermissionName: req.Permission,
+				Actor:          authn.AuthorityFrom(r.Context()),
 			})
-		if errors.Is(err, command.ErrPermissionUnknown) {
-			writeError(w, http.StatusUnprocessableEntity, ErrCodePermissionUnknown, err.Error())
-			return
-		}
 		writeRoleMutationResult(w, log, r, err)
 	})
 }
@@ -334,12 +330,24 @@ func handleDeleteRole(log *slog.Logger, a app.Application) http.Handler {
 			TenantID:  tenant.ID(tid),
 			RoleID:    id,
 			DeletedBy: c.Subject,
+			Actor:     authn.AuthorityFrom(r.Context()),
 		})
 		writeRoleMutationResult(w, log, r, err)
 	})
 }
 
 // ----- helpers --------------------------------------------------------------
+
+// validRoleLevel: a created or re-levelled role is in [1, 99] (0 is the Owner
+// tier, reserved to system roles). Writes 422 role_invalid and returns false
+// otherwise.
+func validRoleLevel(w http.ResponseWriter, level int) bool {
+	if level < role.HierarchyLevelOwner+1 || level > role.HierarchyLevelMax {
+		writeError(w, http.StatusUnprocessableEntity, ErrCodeRoleInvalid, "hierarchy_level must be between 1 and 99")
+		return false
+	}
+	return true
+}
 
 func parseRoleIDPath(w http.ResponseWriter, r *http.Request) (role.ID, bool) {
 	id, ok := authn.CanonicalID(r.PathValue("roleId"))
@@ -364,6 +372,22 @@ func writeRoleMutationResult(w http.ResponseWriter, log *slog.Logger, r *http.Re
 	switch {
 	case err == nil:
 		w.WriteHeader(http.StatusNoContent)
+	case writeAuthorityError(w, err):
+		// ADR 0069 policy refusal, written by the shared translator.
+	case errors.Is(err, command.ErrRoleInUse):
+		var inUse *command.RoleInUseError
+		holders := 0
+		if errors.As(err, &inUse) {
+			holders = inUse.ActiveHolders
+		}
+		msg := "the role is still held by " + strconv.Itoa(holders) + " active member(s); reassign them first"
+		writeJSON(w, http.StatusConflict, ErrorResponse{
+			Type: problemType(ErrCodeRoleInUse), Title: http.StatusText(http.StatusConflict), Status: http.StatusConflict,
+			Detail: msg, Error: ErrCodeRoleInUse, Message: msg,
+			Errors: map[string][]string{"active_holders": {strconv.Itoa(holders)}},
+		})
+	case errors.Is(err, command.ErrPermissionUnknown):
+		writeError(w, http.StatusUnprocessableEntity, ErrCodePermissionUnknown, err.Error())
 	case errors.Is(err, role.ErrNotFound),
 		errors.Is(err, command.ErrRoleNotFound):
 		writeError(w, http.StatusNotFound, ErrCodeRoleNotFound, "")

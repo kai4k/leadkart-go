@@ -481,3 +481,68 @@ func TestParseID_IsTheCanonicalFormOrErrInvalid(t *testing.T) {
 		}
 	}
 }
+
+// ----- ADR 0069 A5: system roles are immutable; level 0 is reserved -----------
+
+func newSystemRole(t *testing.T, perms ...string) *role.Role {
+	t.Helper()
+	ps := make([]*permission.Permission, 0, len(perms))
+	for _, n := range perms {
+		ps = append(ps, permission.FromConstant(n))
+	}
+	r, err := role.NewWithPermissions(role.ID(ids.NewV7().String()), tenant.ID(ids.NewV7().String()),
+		role.SystemRoles.Tenant.CompanyOwner, true, role.HierarchyLevelOwner, false, ps, testNow)
+	if err != nil {
+		t.Fatalf("NewWithPermissions: %v", err)
+	}
+	return r
+}
+
+func TestNewWithPermissions_SeedsAFixedPermissionSet(t *testing.T) {
+	t.Parallel()
+	admin := permission.IdentityPermissions.Meta.TenantAdmin
+	r := newSystemRole(t, admin, admin) // duplicate dropped
+	if got := len(r.Permissions()); got != 1 || !r.HasPermission(permission.FromConstant(admin)) {
+		t.Fatalf("permissions = %v, want exactly tenant.admin", r.Permissions())
+	}
+	if evs := r.PullEvents(); len(evs) != 2 { // Created + one PermissionGranted
+		t.Fatalf("events = %d, want 2", len(evs))
+	}
+}
+
+func TestSystemDefaultRole_RefusesEveryPermissionChange(t *testing.T) {
+	t.Parallel()
+	admin := permission.IdentityPermissions.Meta.TenantAdmin
+	read := permission.FromConstant(permission.IdentityPermissions.Crm.Leads.Read)
+	r := newSystemRole(t, admin)
+	for name, err := range map[string]error{
+		"grant":   r.GrantPermission(read, testNow),
+		"revoke":  r.RevokePermission(permission.FromConstant(admin), testNow),
+		"replace": r.ReplacePermissions(nil, testNow),
+	} {
+		if !errors.Is(err, role.ErrSystemDefault) {
+			t.Errorf("%s: %v, want ErrSystemDefault", name, err)
+		}
+	}
+	if !r.HasPermission(permission.FromConstant(admin)) || len(r.Permissions()) != 1 {
+		t.Errorf("a refused change altered the role: %v", r.Permissions())
+	}
+}
+
+func TestLevelZeroIsReservedToSystemRoles(t *testing.T) {
+	t.Parallel()
+	id, tid := role.ID(ids.NewV7().String()), tenant.ID(ids.NewV7().String())
+	if _, err := role.New(id, tid, "Custom Owner", false, 0, false, testNow); !errors.Is(err, role.ErrInvalid) {
+		t.Errorf("New level 0 non-system: %v, want ErrInvalid", err)
+	}
+	if _, err := role.New(id, tid, "System Zero", true, 0, false, testNow); err != nil {
+		t.Errorf("New level 0 system: %v", err)
+	}
+	r := newRole(t)
+	if err := r.ChangeHierarchyLevel(0); !errors.Is(err, role.ErrInvalid) {
+		t.Errorf("ChangeHierarchyLevel(0): %v, want ErrInvalid", err)
+	}
+	if r.HierarchyLevel() != role.HierarchyLevelDefault {
+		t.Errorf("level changed to %d", r.HierarchyLevel())
+	}
+}

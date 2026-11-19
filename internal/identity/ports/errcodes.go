@@ -199,6 +199,10 @@ const (
 	// 409 surface (state conflict, like the other aggregates' ErrDeleted).
 	ErrCodeRoleDeleted = "role_deleted"
 
+	// ErrCodeRoleInUse — the role is still held by active members; the body's
+	// errors.holders carries the count. 409.
+	ErrCodeRoleInUse = "role_in_use"
+
 	// ErrCodeManagerNotEligible — the proposed manager is not an active
 	// same-tenant member more senior than the subordinate, or the link would
 	// close a reporting cycle (ADR 0069 H4). 422 surface.

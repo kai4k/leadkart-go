@@ -257,6 +257,8 @@ func translateAuthorityWrite(op string, err error) error {
 		return ErrUserNotFound
 	case errors.Is(err, role.ErrNotFound):
 		return ErrRoleNotFound
+	case errors.Is(err, role.ErrNameTaken):
+		return ErrRoleNameTaken
 	}
 	return fmt.Errorf("%s: %w", op, err)
 }

@@ -675,13 +675,13 @@ func buildIdentityApp(pool *pgxpool.Pool, hybridCache *cache.HybridCache, cfg co
 				CreateUser:                     command.NewCreateUserHandler(tx, persons, memberships, now, newPersonID, newMembershipID),
 				AnonymiseUser:                  command.NewAnonymiseUserHandler(personChangeGuard, memberships, persons, now),
 
-				CreateRole:             command.NewCreateRoleHandler(roles, roleHierarchyEdges, tx, now, newRoleID, newRoleHierarchyEdgeID),
-				UpdateRole:             command.NewUpdateRoleHandler(roles, now),
-				DeleteRole:             command.NewDeleteRoleHandler(roles, now),
-				ReplaceRolePermissions: command.NewReplaceRolePermissionsHandler(roles, now),
-				GrantRolePermission:    command.NewGrantRolePermissionHandler(roles, now),
-				RevokeRolePermission:   command.NewRevokeRolePermissionHandler(roles, now),
-				SetRoleParent:          command.NewSetRoleParentHandler(roleHierarchyEdges, tx, now, newRoleHierarchyEdgeID), // ADR 0058
+				CreateRole:             command.NewCreateRoleHandler(tx, authorityLock, memberships, roles, persons, roleHierarchyEdges, now, newRoleID, newRoleHierarchyEdgeID),
+				UpdateRole:             command.NewUpdateRoleHandler(tx, authorityLock, memberships, roles, persons, now),
+				DeleteRole:             command.NewDeleteRoleHandler(tx, authorityLock, memberships, roles, persons, now),
+				ReplaceRolePermissions: command.NewReplaceRolePermissionsHandler(tx, authorityLock, memberships, roles, persons, now),
+				GrantRolePermission:    command.NewGrantRolePermissionHandler(tx, authorityLock, memberships, roles, persons, now),
+				RevokeRolePermission:   command.NewRevokeRolePermissionHandler(tx, authorityLock, memberships, roles, persons, now),
+				SetRoleParent:          command.NewSetRoleParentHandler(tx, authorityLock, memberships, roles, persons, roleHierarchyEdges, now, newRoleHierarchyEdgeID), // ADR 0058
 
 				GlobalSuspendPerson:        command.NewGlobalSuspendPersonHandler(personChangeGuard, persons, now),
 				LiftPersonGlobalSuspension: command.NewLiftPersonGlobalSuspensionHandler(persons, now),

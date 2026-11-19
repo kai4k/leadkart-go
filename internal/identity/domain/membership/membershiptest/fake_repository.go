@@ -42,6 +42,7 @@ import (
 
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/role"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
 
@@ -192,6 +193,21 @@ func (f *FakeRepository) ListForTenant(_ context.Context, tenantID tenant.ID) ([
 	}
 	slices.SortFunc(out, func(a, b *membership.Membership) int {
 		return a.JoinedAt().Compare(b.JoinedAt())
+	})
+	return out, nil
+}
+
+// ListHoldingRole returns every Membership of the tenant (any status) holding
+// roleID, joined_at then id ascending (the adapter's order).
+func (f *FakeRepository) ListHoldingRole(_ context.Context, tenantID tenant.ID, roleID role.ID) ([]*membership.Membership, error) {
+	var out []*membership.Membership
+	for _, m := range f.rows {
+		if m.TenantID() == tenantID && slices.Contains(m.RoleAssignments(), roleID) {
+			out = append(out, m)
+		}
+	}
+	slices.SortFunc(out, func(a, b *membership.Membership) int {
+		return cmp.Or(a.JoinedAt().Compare(b.JoinedAt()), cmp.Compare(a.ID().String(), b.ID().String()))
 	})
 	return out, nil
 }

@@ -235,6 +235,49 @@ func (r *MembershipRepository) ListForTenant(
 	return out, nil
 }
 
+// ListHoldingRole satisfies [membership.Repository]: every membership of the
+// tenant holding roleID, one indexed query plus the per-row hydration
+// ListForTenant does (holders only, not the whole tenant).
+func (r *MembershipRepository) ListHoldingRole(
+	ctx context.Context,
+	tenantID tenant.ID,
+	roleID role.ID,
+) ([]*membership.Membership, error) {
+	rid, err := uuid.Parse(roleID.String())
+	if err != nil {
+		return nil, fmt.Errorf("membership repo: parse role id %q: %w", roleID, err)
+	}
+	var out []*membership.Membership
+	err = r.runInTxTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		q := r.q.WithTx(tx)
+		rows, err := q.ListMembershipsHoldingRole(ctx, pgconv.PgUUID(rid))
+		if err != nil {
+			return fmt.Errorf("membership repo: list holding role: %w", err)
+		}
+		out = make([]*membership.Membership, 0, len(rows))
+		for _, row := range rows {
+			roleIDs, lerr := loadRoleAssignments(ctx, q, pgconv.UUIDFromPg(row.ID))
+			if lerr != nil {
+				return lerr
+			}
+			granted, revoked, lerr := loadPermissionOverrides(ctx, q, pgconv.UUIDFromPg(row.ID))
+			if lerr != nil {
+				return lerr
+			}
+			m, perr := rowToMembership(row, roleIDs, granted, revoked)
+			if perr != nil {
+				return perr
+			}
+			out = append(out, m)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // ListForTenantPage satisfies [membership.Repository]. Keyset-paginated
 // active-only listing (ADR 0038); backed by
 // idx_memberships_tenant_active_joined. limit = page_size+1 (peek-one-extra).

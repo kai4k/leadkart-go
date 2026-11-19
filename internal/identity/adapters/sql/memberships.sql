@@ -80,6 +80,18 @@ WHERE  status = 'active'
 ORDER  BY joined_at DESC, id DESC
 LIMIT  sqlc.arg('limit');
 
+-- name: ListMembershipsHoldingRole :many
+-- Every membership of the current tenant (active or not) that holds the role.
+-- Powers the role-in-use rule of DeleteRole (ADR 0069 A5). The role id is
+-- the junction PK prefix, so this is an index range scan.
+SELECT m.id, m.person_id, m.tenant_id, m.status, m.joined_at, m.left_at,
+       m.designation, m.department, m.status_message, m.reports_to,
+       m.created_by_membership_id
+FROM   identity.tenant_memberships m
+JOIN   identity.role_assignments   ra ON ra.membership_id = m.id
+WHERE  ra.role_id = $1
+ORDER  BY m.joined_at, m.id;
+
 -- name: ListSuperAdminMembershipsInTenant :many
 -- Returns the active Memberships in the supplied tenant that hold a
 -- role flagged is_super_admin=true. Powers the platform-tenant

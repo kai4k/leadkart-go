@@ -3,6 +3,7 @@ package ports_test
 import (
 	"context"
 	"net/http"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -77,6 +78,25 @@ func bodyAdminClaims(perms ...string) *jwt.Claims {
 	rank := authority.RankAdmin.Int()
 	c.Rank = &rank
 	return c
+}
+
+// bodyRoles is a role repository holding one live custom role per id at the
+// given hierarchy level (tenant azTenant).
+func bodyRoles(t *testing.T, levels map[string]int) *roletest.FakeRepository {
+	t.Helper()
+	repo := roletest.NewFakeRepository()
+	n := 0
+	for id, level := range levels {
+		n++
+		r, err := role.New(role.ID(id), tenant.ID(azTenant), "Custom Role "+strconv.Itoa(n), false, level, false, bodyNow)
+		if err != nil {
+			t.Fatalf("role.New: %v", err)
+		}
+		if err := repo.Add(t.Context(), r); err != nil {
+			t.Fatalf("roles.Add: %v", err)
+		}
+	}
+	return repo
 }
 
 const bodyMgrRole = "0190a000-0000-7000-8000-0000000000b1"
@@ -224,10 +244,11 @@ func TestBodyID_ParentRoleIDReachesCommandCanonical(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			edges := rolehierarchytest.NewFakeRepository()
+			roles := bodyRoles(t, map[string]int{azRole: 60, bodyRoleB: 40})
 			var a app.Application
-			a.Commands.SetRoleParent = command.NewSetRoleParentHandler(edges, inlineUoW{}, func() time.Time { return bodyNow },
-				func() rolehierarchy.ID { return "0190a000-0000-7000-8000-0000000000f1" })
-			rec := azServeApp(t, a, azClaims(permission.IdentityPermissions.Roles.Update), "PATCH",
+			a.Commands.SetRoleParent = command.NewSetRoleParentHandler(inlineUoW{}, bodyLock{}, membershiptest.NewFakeRepository(), roles, bodyPersons{}, edges,
+				func() time.Time { return bodyNow }, func() rolehierarchy.ID { return "0190a000-0000-7000-8000-0000000000f1" })
+			rec := azServeApp(t, a, bodyAdminClaims(permission.IdentityPermissions.Roles.Update), "PATCH",
 				"/api/v1/roles/"+azRole+"/parent", `{"parent_role_id":"`+spelled+`","reason":"reorganise the tree"}`)
 			if rec.Code != http.StatusNoContent {
 				t.Fatalf("status %d %s", rec.Code, rec.Body.String())
@@ -249,11 +270,11 @@ func TestBodyID_CreateRoleParentReachesCommandCanonical(t *testing.T) {
 	for name, spelled := range idSpellings(bodyRoleB) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			roles, edges := roletest.NewFakeRepository(), rolehierarchytest.NewFakeRepository()
+			roles, edges := bodyRoles(t, map[string]int{bodyRoleB: 40}), rolehierarchytest.NewFakeRepository()
 			var a app.Application
-			a.Commands.CreateRole = command.NewCreateRoleHandler(roles, edges, inlineUoW{}, func() time.Time { return bodyNow },
-				func() role.ID { return newRole }, func() rolehierarchy.ID { return "0190a000-0000-7000-8000-0000000000f1" })
-			rec := azServeApp(t, a, azClaims(permission.IdentityPermissions.Roles.Create), "POST", "/api/v1/roles",
+			a.Commands.CreateRole = command.NewCreateRoleHandler(inlineUoW{}, bodyLock{}, membershiptest.NewFakeRepository(), roles, bodyPersons{}, edges,
+				func() time.Time { return bodyNow }, func() role.ID { return newRole }, func() rolehierarchy.ID { return "0190a000-0000-7000-8000-0000000000f1" })
+			rec := azServeApp(t, a, bodyAdminClaims(permission.IdentityPermissions.Roles.Create), "POST", "/api/v1/roles",
 				`{"name":"Field Rep","hierarchy_level":50,"parent_role_id":"`+spelled+`"}`)
 			if rec.Code != http.StatusCreated {
 				t.Fatalf("status %d %s", rec.Code, rec.Body.String())

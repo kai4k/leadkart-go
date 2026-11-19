@@ -307,6 +307,51 @@ func (q *Queries) ListMembershipsForPerson(ctx context.Context, personID pgtype.
 	return items, nil
 }
 
+const listMembershipsHoldingRole = `-- name: ListMembershipsHoldingRole :many
+SELECT m.id, m.person_id, m.tenant_id, m.status, m.joined_at, m.left_at,
+       m.designation, m.department, m.status_message, m.reports_to,
+       m.created_by_membership_id
+FROM   identity.tenant_memberships m
+JOIN   identity.role_assignments   ra ON ra.membership_id = m.id
+WHERE  ra.role_id = $1
+ORDER  BY m.joined_at, m.id
+`
+
+// Every membership of the current tenant (active or not) that holds the role.
+// Powers the role-in-use rule of DeleteRole (ADR 0069 A5). The role id is
+// the junction PK prefix, so this is an index range scan.
+func (q *Queries) ListMembershipsHoldingRole(ctx context.Context, roleID pgtype.UUID) ([]IdentityTenantMembership, error) {
+	rows, err := q.db.Query(ctx, listMembershipsHoldingRole, roleID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []IdentityTenantMembership
+	for rows.Next() {
+		var i IdentityTenantMembership
+		if err := rows.Scan(
+			&i.ID,
+			&i.PersonID,
+			&i.TenantID,
+			&i.Status,
+			&i.JoinedAt,
+			&i.LeftAt,
+			&i.Designation,
+			&i.Department,
+			&i.StatusMessage,
+			&i.ReportsTo,
+			&i.CreatedByMembershipID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listMembershipsInCurrentTenant = `-- name: ListMembershipsInCurrentTenant :many
 SELECT id, person_id, tenant_id, status, joined_at, left_at,
        designation, department, status_message, reports_to,

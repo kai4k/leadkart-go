@@ -10,7 +10,10 @@ import (
 )
 
 // decodeFullBody decodes a FULL-REPLACE request body: every json-tagged field of
-// T (and of nested struct fields) must be present as a key and not null. The
+// T (and of nested struct fields) must be present as a key and not null.
+// Two struct tags relax that per field: `optional:"true"` (the key may be
+// absent or null) and `nullable:"true"` (the key must be present but may be
+// null, e.g. "null clears the parent"). The
 // handlers behind these bodies write exactly what they receive, so a field the
 // client left out would silently clear the stored value; the spec marks every
 // such field `required`, and this makes the handler agree. A missing field is a
@@ -64,8 +67,12 @@ func missingRequiredKeys(t reflect.Type, keys map[string]json.RawMessage, prefix
 		if name == "" || name == "-" || !f.IsExported() {
 			continue
 		}
+		if f.Tag.Get("optional") == "true" {
+			continue // may be absent or null (create-time fields with a default)
+		}
 		raw, present := keys[name]
-		if !present || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		isNull := bytes.Equal(bytes.TrimSpace(raw), []byte("null"))
+		if !present || (isNull && f.Tag.Get("nullable") != "true") {
 			missing = append(missing, prefix+name)
 			continue
 		}

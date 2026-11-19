@@ -183,6 +183,9 @@ func selfTargetApp(t *testing.T) app.Application {
 	a.Commands.ReplaceUserPermissionOverrides = command.NewReplaceUserPermissionOverridesHandler(inlineUoW{}, bodyLock{}, mems, roles, bodyPersons{}, now)
 	a.Commands.AssignUserManager = command.NewAssignUserManagerHandler(inlineUoW{}, bodyLock{}, mems, roles, bodyPersons{}, now)
 	a.Commands.RemoveUserManager = command.NewRemoveUserManagerHandler(inlineUoW{}, bodyLock{}, mems, roles, bodyPersons{}, now)
+	a.Commands.ReplaceRolePermissions = command.NewReplaceRolePermissionsHandler(inlineUoW{}, bodyLock{}, mems, roles, bodyPersons{}, now)
+	a.Commands.GrantRolePermission = command.NewGrantRolePermissionHandler(inlineUoW{}, bodyLock{}, mems, roles, bodyPersons{}, now)
+	a.Commands.RevokeRolePermission = command.NewRevokeRolePermissionHandler(inlineUoW{}, bodyLock{}, mems, roles, bodyPersons{}, now)
 	return a
 }
 
@@ -190,15 +193,20 @@ func TestRouteAuthz_GrantBeyondAuthorityRejected(t *testing.T) {
 	t.Parallel()
 	p := permission.IdentityPermissions
 	// Override escalation is decided by the authority policy inside the command
-	// (authority_commands_test, membership_rank_e2e_test); role edits stay here until A5.
-	var rec *httptest.ResponseRecorder
-	rec = azServe(t, azClaims(p.Roles.Update), "POST", "/api/v1/roles/"+azRole+"/permissions/grant", `{"permission":"identity.users.view"}`)
-	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "grant_exceeds_authority") {
-		t.Fatalf("role grant escalation: %d %s", rec.Code, rec.Body.String())
-	}
-	rec = azServe(t, azClaims(p.Roles.Update), "PUT", "/api/v1/roles/"+azRole+"/permissions", `{"permissions":["identity.users.view"]}`)
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("role replace escalation: %d %s", rec.Code, rec.Body.String())
+	// (authority_commands_test, membership_rank_e2e_test); role edits are decided
+	// the same way (role_management_test, role_authority_e2e_test) and reach it
+	// here through the real handlers: a caller holding only roles.update confers
+	// nothing it does not hold.
+	a := selfTargetApp(t)
+	claims := bodyAdminClaims(p.Roles.Update)
+	for _, rt := range []struct{ method, path, body string }{
+		{"POST", "/api/v1/roles/" + azRole + "/permissions/grant", `{"permission":"identity.users.view"}`},
+		{"PUT", "/api/v1/roles/" + azRole + "/permissions", `{"permissions":["identity.users.view"]}`},
+	} {
+		rec := azServeApp(t, a, claims, rt.method, rt.path, rt.body)
+		if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "grant_exceeds_authority") {
+			t.Errorf("role escalation %s %s: %d %s, want 403 grant_exceeds_authority", rt.method, rt.path, rec.Code, rec.Body.String())
+		}
 	}
 }
 

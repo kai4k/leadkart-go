@@ -432,15 +432,16 @@ type ListRolesResponse struct {
 	Roles []RoleDto `json:"roles"`
 }
 
-// CreateRoleRequest — POST /api/v1/roles. HierarchyLevel in
-// [HierarchyLevelMin, HierarchyLevelMax]. IsSuperAdmin is absent on
+// CreateRoleRequest — POST /api/v1/roles. name and hierarchy_level are
+// REQUIRED (decodeFullBody: an omitted level would otherwise be stored as 0);
+// HierarchyLevel in [1, 99]. IsSuperAdmin is absent on
 // purpose (seed-only; see CreateRoleCommand). ParentRoleID (ADR 0054)
 // optional — omit/empty/null = root; same-tenant only, DB enforces
 // cross-tenant + cycle prevention.
 type CreateRoleRequest struct {
 	Name           string `json:"name"`
 	HierarchyLevel int    `json:"hierarchy_level"`
-	ParentRoleID   string `json:"parent_role_id,omitzero"`
+	ParentRoleID   string `json:"parent_role_id,omitzero" optional:"true"`
 }
 
 // CreateRoleResponse — POST /api/v1/roles 201 body.
@@ -467,13 +468,13 @@ type RolePermissionRequest struct {
 }
 
 // SetRoleParentRequest — PATCH /api/v1/roles/{roleId}/parent (ADR 0058).
-// Pointer-string so JSON null (or empty) clears the parent (soft-deletes
-// the active edge → root). Non-empty must be a same-tenant role UUID; DB
+// The parent_role_id KEY is required; an explicit JSON null (or empty) clears
+// the parent (soft-deletes the active edge → root), a missing key is 400. Non-empty must be a same-tenant role UUID; DB
 // rejects cross-tenant + cycle. reason is optional audit text, 10-1024
 // chars when set.
 type SetRoleParentRequest struct {
-	ParentRoleID *string `json:"parent_role_id"`
-	Reason       string  `json:"reason,omitzero"`
+	ParentRoleID *string `json:"parent_role_id" nullable:"true"`
+	Reason       string  `json:"reason,omitzero" optional:"true"`
 }
 
 // ----- Tenant management -----------------------------------------------------

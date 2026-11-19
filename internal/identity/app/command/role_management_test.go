@@ -3,24 +3,19 @@ package command_test
 import (
 	"context"
 	"errors"
+	"strconv"
 	"testing"
-	"time"
 
 	"github.com/leadkart/leadkart-go/internal/common/ids"
-	"github.com/leadkart/leadkart-go/internal/common/pagination"
 	"github.com/leadkart/leadkart-go/internal/common/pg"
 	"github.com/leadkart/leadkart-go/internal/identity/app/command"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/authority"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/permission"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/role"
-	"github.com/leadkart/leadkart-go/internal/identity/domain/role/roletest"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/rolehierarchy"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/rolehierarchy/rolehierarchytest"
-	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
-
-// newFakeRoleRepo aliases the co-located roletest fake.
-func newFakeRoleRepo() *roletest.FakeRepository { return roletest.NewFakeRepository() }
 
 // newFakeEdgeRepo aliases the co-located rolehierarchytest fake.
 func newFakeEdgeRepo() *rolehierarchytest.FakeRepository {
@@ -35,267 +30,384 @@ func (fakeUoW) WithinTx(ctx context.Context, _ pg.TxScope, fn func(context.Conte
 	return fn(ctx)
 }
 
-// nowFunc returns a stable wall-clock for deterministic tests.
-func nowFunc() time.Time {
-	return time.Date(2026, 5, 23, 12, 0, 0, 0, time.UTC)
+func newRoleID() role.ID { return role.ID(ids.NewV7().String()) }
+func newEdgeID() rolehierarchy.ID {
+	return rolehierarchy.ID(ids.NewV7().String())
 }
 
-// Keep pagination + membership imports reachable.
-var _ = pagination.Cursor{}
+// roleHandlers are the seven role commands over one authzWorld.
+type roleHandlers struct {
+	create  command.CreateRoleHandler
+	update  command.UpdateRoleHandler
+	replace command.ReplaceRolePermissionsHandler
+	grant   command.GrantRolePermissionHandler
+	revoke  command.RevokeRolePermissionHandler
+	del     command.DeleteRoleHandler
+	parent  command.SetRoleParentHandler
+	edges   *rolehierarchytest.FakeRepository
+}
 
-var _ = membership.ID("")
+func (w *authzWorld) roleHandlersWith(edges rolehierarchy.Repository, uow pg.UnitOfWork) roleHandlers {
+	l := command.AuthorityLocker(w.lock)
+	p := anyPersons{}
+	fe, _ := edges.(*rolehierarchytest.FakeRepository)
+	return roleHandlers{
+		create:  command.NewCreateRoleHandler(uow, l, w.members, w.roles, p, edges, awClock, newRoleID, newEdgeID),
+		update:  command.NewUpdateRoleHandler(uow, l, w.members, w.roles, p, awClock),
+		replace: command.NewReplaceRolePermissionsHandler(uow, l, w.members, w.roles, p, awClock),
+		grant:   command.NewGrantRolePermissionHandler(uow, l, w.members, w.roles, p, awClock),
+		revoke:  command.NewRevokeRolePermissionHandler(uow, l, w.members, w.roles, p, awClock),
+		del:     command.NewDeleteRoleHandler(uow, l, w.members, w.roles, p, awClock),
+		parent:  command.NewSetRoleParentHandler(uow, l, w.members, w.roles, p, edges, awClock, newEdgeID),
+		edges:   fe,
+	}
+}
 
-func newCustomRole(t *testing.T, repo *roletest.FakeRepository, name string) *role.Role {
+func (w *authzWorld) roleHandlers() roleHandlers {
+	return w.roleHandlersWith(newFakeEdgeRepo(), fakeUoW{})
+}
+
+// customRole adds a live custom role at level to the world's repository.
+func (w *authzWorld) customRole(t *testing.T, name string, level int, perms ...string) *role.Role {
 	t.Helper()
-	tid := tenant.ID("33333333-3333-3333-3333-333333333333")
-	r, err := role.New(role.ID(ids.NewV7().String()), tid, name, false, 50, false, testNow)
-	if err != nil {
-		t.Fatalf("role.New: %v", err)
-	}
-	r.PullEvents()
-	_ = repo.Add(t.Context(), r) // arch-test:ignore-err - test fixture setup
-	return r
+	w.next++
+	return w.addRoleSnap(t, role.Snapshot{ID: role.ID(awID(w.next)), TenantID: awTenant, Name: name, HierarchyLevel: level, CreatedAt: testNow}, perms...)
 }
 
-func TestCreateRole_Succeeds(t *testing.T) {
-	t.Parallel()
-	repo := newFakeRoleRepo()
-	h := command.NewCreateRoleHandler(repo, newFakeEdgeRepo(), fakeUoW{}, nowFunc, func() role.ID { return role.ID(ids.NewV7().String()) }, func() rolehierarchy.ID { return rolehierarchy.ID(ids.NewV7().String()) })
-	out, err := h.Handle(t.Context(), command.CreateRoleCommand{
-		TenantID:       tenant.ID("33333333-3333-3333-3333-333333333333"),
-		Name:           "Sales Lead",
-		HierarchyLevel: 40,
-	})
-	if err != nil {
-		t.Fatalf("Handle: %v", err)
-	}
-	if out.RoleID.IsZero() {
-		t.Error("expected non-empty RoleID")
-	}
+func (w *authzWorld) adminActor(t *testing.T) authority.Actor {
+	t.Helper()
+	return actorAs(t, w.member(t, w.admin).ID(), authority.RankAdmin, tenantAdminEffective()...)
 }
 
-func TestCreateRole_RejectsDuplicateName(t *testing.T) {
+func TestRoleCommands_ZeroActorDeniedBeforeLock(t *testing.T) {
 	t.Parallel()
-	repo := newFakeRoleRepo()
-	_ = newCustomRole(t, repo, "Sales Manager") // arch-test:ignore-err - test fixture setup
-	h := command.NewCreateRoleHandler(repo, newFakeEdgeRepo(), fakeUoW{}, nowFunc, func() role.ID { return role.ID(ids.NewV7().String()) }, func() rolehierarchy.ID { return rolehierarchy.ID(ids.NewV7().String()) })
-	_, err := h.Handle(t.Context(), command.CreateRoleCommand{
-		TenantID:       tenant.ID("33333333-3333-3333-3333-333333333333"),
-		Name:           "Sales Manager",
-		HierarchyLevel: 50,
-	})
-	if !errors.Is(err, command.ErrRoleNameTaken) {
-		t.Fatalf("err = %v, want ErrRoleNameTaken", err)
+	w := newAuthzWorld(t)
+	r := w.customRole(t, "Custom", 60)
+	h := w.roleHandlers()
+	ctx := t.Context()
+	_, createErr := h.create.Handle(ctx, command.CreateRoleCommand{TenantID: awTenant, Name: "X Role", HierarchyLevel: 40})
+	cases := map[string]error{
+		"create":  createErr,
+		"update":  h.update.Handle(ctx, command.UpdateRoleCommand{TenantID: awTenant, RoleID: r.ID(), Name: "Y Role", HierarchyLevel: -1}),
+		"replace": h.replace.Handle(ctx, command.ReplaceRolePermissionsCommand{TenantID: awTenant, RoleID: r.ID(), PermissionNames: []string{}}),
+		"grant":   h.grant.Handle(ctx, command.GrantRolePermissionCommand{TenantID: awTenant, RoleID: r.ID(), PermissionName: permission.IdentityPermissions.Crm.Leads.Read}),
+		"revoke":  h.revoke.Handle(ctx, command.RevokeRolePermissionCommand{TenantID: awTenant, RoleID: r.ID(), PermissionName: permission.IdentityPermissions.Crm.Leads.Read}),
+		"delete":  h.del.Handle(ctx, command.DeleteRoleCommand{TenantID: awTenant, RoleID: r.ID()}),
+		"parent":  h.parent.Handle(ctx, command.SetRoleParentCommand{TenantID: awTenant, RoleID: r.ID()}),
+	}
+	for name, err := range cases {
+		if !errors.Is(err, authority.ErrNoAuthority) {
+			t.Errorf("%s: err=%v, want ErrNoAuthority", name, err)
+		}
+	}
+	if w.lock.calls != 0 {
+		t.Fatalf("lock taken %d times for a zero actor, want 0", w.lock.calls)
 	}
 }
 
-func TestUpdateRole_RenameSucceeds(t *testing.T) {
+func TestRoleCommands_RunUnderTheTenantLock(t *testing.T) {
 	t.Parallel()
-	repo := newFakeRoleRepo()
-	r := newCustomRole(t, repo, "Old Name")
-	h := command.NewUpdateRoleHandler(repo, func() time.Time { return testNow })
-	if err := h.Handle(t.Context(), command.UpdateRoleCommand{
-		TenantID:       tenant.ID("33333333-3333-3333-3333-333333333333"),
-		RoleID:         r.ID(),
-		Name:           "New Name",
-		HierarchyLevel: -1,
-	}); err != nil {
-		t.Fatalf("Handle: %v", err)
+	w := newAuthzWorld(t)
+	r := w.customRole(t, "Custom", 60, permission.IdentityPermissions.Crm.Leads.Read)
+	h := w.roleHandlers()
+	admin := w.adminActor(t)
+	ctx := t.Context()
+	steps := []func() error{
+		func() error {
+			_, err := h.create.Handle(ctx, command.CreateRoleCommand{TenantID: awTenant, Name: "Lead", HierarchyLevel: 40, Actor: admin})
+			return err
+		},
+		func() error {
+			return h.update.Handle(ctx, command.UpdateRoleCommand{TenantID: awTenant, RoleID: r.ID(), Name: "Renamed", HierarchyLevel: -1, Actor: admin})
+		},
+		func() error {
+			return h.replace.Handle(ctx, command.ReplaceRolePermissionsCommand{TenantID: awTenant, RoleID: r.ID(), PermissionNames: []string{permission.IdentityPermissions.Crm.Leads.Read}, Actor: admin})
+		},
+		func() error {
+			return h.grant.Handle(ctx, command.GrantRolePermissionCommand{TenantID: awTenant, RoleID: r.ID(), PermissionName: permission.IdentityPermissions.Crm.Leads.ReadAll, Actor: admin})
+		},
+		func() error {
+			return h.revoke.Handle(ctx, command.RevokeRolePermissionCommand{TenantID: awTenant, RoleID: r.ID(), PermissionName: permission.IdentityPermissions.Crm.Leads.ReadAll, Actor: admin})
+		},
+		func() error {
+			return h.parent.Handle(ctx, command.SetRoleParentCommand{TenantID: awTenant, RoleID: r.ID(), NewParentID: w.manager.ID(), Actor: admin})
+		},
+		func() error {
+			return h.del.Handle(ctx, command.DeleteRoleCommand{TenantID: awTenant, RoleID: r.ID(), Actor: admin})
+		},
 	}
-	if r.Name() != "New Name" {
-		t.Errorf("Name = %q, want New Name", r.Name())
-	}
-}
-
-func TestUpdateRole_NotFound(t *testing.T) {
-	t.Parallel()
-	repo := newFakeRoleRepo()
-	h := command.NewUpdateRoleHandler(repo, func() time.Time { return testNow })
-	err := h.Handle(t.Context(), command.UpdateRoleCommand{
-		TenantID: tenant.ID("33333333-3333-3333-3333-333333333333"),
-		RoleID:   role.ID("99999999-9999-9999-9999-999999999999"),
-		Name:     "x",
-	})
-	if !errors.Is(err, command.ErrRoleNotFound) {
-		t.Fatalf("err = %v, want ErrRoleNotFound", err)
-	}
-}
-
-func TestReplaceRolePermissions_RejectsUnknown(t *testing.T) {
-	t.Parallel()
-	repo := newFakeRoleRepo()
-	r := newCustomRole(t, repo, "Sales Manager")
-	h := command.NewReplaceRolePermissionsHandler(repo, func() time.Time { return testNow })
-	err := h.Handle(t.Context(), command.ReplaceRolePermissionsCommand{
-		TenantID:        tenant.ID("33333333-3333-3333-3333-333333333333"),
-		RoleID:          r.ID(),
-		PermissionNames: []string{"identity.totally.fake"},
-	})
-	if !errors.Is(err, command.ErrPermissionUnknown) {
-		t.Fatalf("err = %v, want ErrPermissionUnknown", err)
-	}
-}
-
-func TestGrantRolePermission_AddsPermission(t *testing.T) {
-	t.Parallel()
-	repo := newFakeRoleRepo()
-	r := newCustomRole(t, repo, "Sales Manager")
-	h := command.NewGrantRolePermissionHandler(repo, func() time.Time { return testNow })
-	if err := h.Handle(t.Context(), command.GrantRolePermissionCommand{
-		TenantID:       tenant.ID("33333333-3333-3333-3333-333333333333"),
-		RoleID:         r.ID(),
-		PermissionName: permission.IdentityPermissions.Tenants.View,
-	}); err != nil {
-		t.Fatalf("Handle: %v", err)
-	}
-	if got := len(r.Permissions()); got != 1 {
-		t.Errorf("Permissions count = %d, want 1", got)
-	}
-}
-
-func TestRevokeRolePermission_RoundTrip(t *testing.T) {
-	t.Parallel()
-	repo := newFakeRoleRepo()
-	r := newCustomRole(t, repo, "Sales Manager")
-	_ = r.GrantPermission(permission.FromConstant(permission.IdentityPermissions.Tenants.View), testNow) // arch-test:ignore-err - test fixture setup
-	r.PullEvents()
-
-	h := command.NewRevokeRolePermissionHandler(repo, func() time.Time { return testNow })
-	if err := h.Handle(t.Context(), command.RevokeRolePermissionCommand{
-		TenantID:       tenant.ID("33333333-3333-3333-3333-333333333333"),
-		RoleID:         r.ID(),
-		PermissionName: permission.IdentityPermissions.Tenants.View,
-	}); err != nil {
-		t.Fatalf("Handle: %v", err)
-	}
-	if got := len(r.Permissions()); got != 0 {
-		t.Errorf("Permissions count = %d, want 0", got)
-	}
-}
-
-func TestDeleteRole_Succeeds(t *testing.T) {
-	t.Parallel()
-	repo := newFakeRoleRepo()
-	r := newCustomRole(t, repo, "Sales Manager")
-	h := command.NewDeleteRoleHandler(repo, func() time.Time { return testNow })
-	if err := h.Handle(t.Context(), command.DeleteRoleCommand{
-		TenantID:  tenant.ID("33333333-3333-3333-3333-333333333333"),
-		RoleID:    r.ID(),
-		DeletedBy: "11111111-1111-1111-1111-111111111111",
-	}); err != nil {
-		t.Fatalf("Handle: %v", err)
+	for i, step := range steps {
+		if err := step(); err != nil {
+			t.Fatalf("step %d: %v", i, err)
+		}
+		if w.lock.calls != i+1 {
+			t.Fatalf("after step %d lock calls = %d, want %d", i, w.lock.calls, i+1)
+		}
 	}
 	if !r.IsDeleted() {
-		t.Error("expected role marked deleted")
+		t.Error("custom role not deleted by the Administrator")
 	}
 }
 
-// ----- SetRoleParent (ADR 0058) --------------------------------------------
-
-func TestSetRoleParent_SetsParentOnRootChild(t *testing.T) {
+func TestCreateRole_PolicyDecides(t *testing.T) {
 	t.Parallel()
-	repo := newFakeRoleRepo()
-	edges := newFakeEdgeRepo()
-	tid := tenant.ID("33333333-3333-3333-3333-333333333333")
-	child := newCustomRole(t, repo, "Junior")
-	parent := newCustomRole(t, repo, "Manager")
-
-	h := command.NewSetRoleParentHandler(edges, fakeUoW{}, nowFunc, func() rolehierarchy.ID { return rolehierarchy.ID(ids.NewV7().String()) })
-	if err := h.Handle(t.Context(), command.SetRoleParentCommand{
-		TenantID:    tid,
-		RoleID:      child.ID(),
-		NewParentID: parent.ID(),
-	}); err != nil {
-		t.Fatalf("Handle: %v", err)
+	w := newAuthzWorld(t)
+	h := w.roleHandlers()
+	mgrM := w.member(t, w.manager)
+	mgr := actorAs(t, mgrM.ID(), authority.RankManager, permission.IdentityPermissions.Crm.Leads.Read)
+	create := func(a authority.Actor, level int, parent role.ID) error {
+		_, err := h.create.Handle(t.Context(), command.CreateRoleCommand{TenantID: awTenant, Name: "Brand New", HierarchyLevel: level, ParentRoleID: parent, Actor: a})
+		return err
 	}
-	got, err := edges.GetActiveByChild(t.Context(), tid, child.ID())
-	if err != nil {
-		t.Fatalf("GetActiveByChild: %v", err)
+	if err := create(mgr, role.HierarchyLevelManager, ""); !errors.Is(err, authority.ErrInsufficientRank) {
+		t.Errorf("manager creates at their own level: %v, want ErrInsufficientRank", err)
 	}
-	if got.ParentRoleID() != parent.ID() {
-		t.Errorf("ParentRoleID = %s, want %s", got.ParentRoleID(), parent.ID())
+	if err := create(mgr, role.HierarchyLevelAdmin, ""); !errors.Is(err, authority.ErrInsufficientRank) {
+		t.Errorf("manager creates above themselves: %v, want ErrInsufficientRank", err)
+	}
+	if err := create(mgr, 0, ""); !errors.Is(err, authority.ErrInsufficientRank) {
+		t.Errorf("level 0: %v, want ErrInsufficientRank", err)
+	}
+	if err := create(mgr, role.HierarchyLevelTeamLead, role.ID(awID(4040))); !errors.Is(err, authority.ErrRoleParentNotEligible) {
+		t.Errorf("missing parent: %v, want ErrRoleParentNotEligible", err)
+	}
+	// a parent that is not strictly more senior than the child
+	peer := w.customRole(t, "Peer", 40)
+	if err := create(mgr, role.HierarchyLevelTeamLead, peer.ID()); !errors.Is(err, authority.ErrRoleParentNotEligible) {
+		t.Errorf("parent at level 40 over a level-30 child: %v, want ErrRoleParentNotEligible", err)
+	}
+	if err := create(mgr, role.HierarchyLevelTeamLead, w.manager.ID()); err != nil {
+		t.Errorf("manager creates a team-lead-level role under the manager role: %v", err)
 	}
 }
 
-func TestSetRoleParent_ReplacesExistingParent(t *testing.T) {
+func TestUpdateRole_PolicyDecides(t *testing.T) {
 	t.Parallel()
-	repo := newFakeRoleRepo()
-	edges := newFakeEdgeRepo()
-	tid := tenant.ID("33333333-3333-3333-3333-333333333333")
-	child := newCustomRole(t, repo, "Junior")
-	oldParent := newCustomRole(t, repo, "OldManager")
-	newParent := newCustomRole(t, repo, "NewManager")
-
-	h := command.NewSetRoleParentHandler(edges, fakeUoW{}, nowFunc, func() rolehierarchy.ID { return rolehierarchy.ID(ids.NewV7().String()) })
-	// Seed initial parent.
-	if err := h.Handle(t.Context(), command.SetRoleParentCommand{
-		TenantID:    tid,
-		RoleID:      child.ID(),
-		NewParentID: oldParent.ID(),
-	}); err != nil {
-		t.Fatalf("seed: %v", err)
+	w := newAuthzWorld(t)
+	h := w.roleHandlers()
+	r := w.customRole(t, "Custom", 60)
+	mgrM := w.member(t, w.manager)
+	mgr := actorAs(t, mgrM.ID(), authority.RankManager)
+	up := func(a authority.Actor, id role.ID, name string, level int) error {
+		return h.update.Handle(t.Context(), command.UpdateRoleCommand{TenantID: awTenant, RoleID: id, Name: name, HierarchyLevel: level, Actor: a})
 	}
-	// Replace.
-	if err := h.Handle(t.Context(), command.SetRoleParentCommand{
-		TenantID:    tid,
-		RoleID:      child.ID(),
-		NewParentID: newParent.ID(),
-	}); err != nil {
-		t.Fatalf("replace: %v", err)
+	if err := up(mgr, r.ID(), "", role.HierarchyLevelAdmin); !errors.Is(err, authority.ErrInsufficientRank) {
+		t.Errorf("re-level above the actor: %v, want ErrInsufficientRank", err)
 	}
-	got, err := edges.GetActiveByChild(t.Context(), tid, child.ID())
-	if err != nil {
-		t.Fatalf("GetActiveByChild: %v", err)
+	if r.HierarchyLevel() != 60 {
+		t.Errorf("level changed to %d by a refused call", r.HierarchyLevel())
 	}
-	if got.ParentRoleID() != newParent.ID() {
-		t.Errorf("ParentRoleID = %s, want %s", got.ParentRoleID(), newParent.ID())
+	if err := up(superActor(t), w.owner.ID(), "Pwned Owner", -1); !errors.Is(err, role.ErrSystemDefault) {
+		t.Errorf("super user renames a system role: %v, want ErrSystemDefault", err)
+	}
+	if got := w.owner.Name(); got != role.SystemRoles.Tenant.CompanyOwner {
+		t.Errorf("system role renamed to %q", got)
+	}
+	if err := up(mgr, r.ID(), "Renamed", 70); err != nil {
+		t.Fatalf("manager renames and re-levels a role below them: %v", err)
+	}
+	if r.Name() != "Renamed" || r.HierarchyLevel() != 70 {
+		t.Errorf("role = %q at %d, want Renamed at 70", r.Name(), r.HierarchyLevel())
+	}
+	if err := up(w.adminActor(t), role.ID(awID(404)), "x", -1); !errors.Is(err, command.ErrRoleNotFound) {
+		t.Errorf("unknown role: %v, want ErrRoleNotFound", err)
 	}
 }
 
-func TestSetRoleParent_ClearsParent(t *testing.T) {
+func TestRolePermissions_PolicyDecides(t *testing.T) {
 	t.Parallel()
-	repo := newFakeRoleRepo()
-	edges := newFakeEdgeRepo()
-	tid := tenant.ID("33333333-3333-3333-3333-333333333333")
-	child := newCustomRole(t, repo, "Junior")
-	parent := newCustomRole(t, repo, "Manager")
+	p := permission.IdentityPermissions
+	w := newAuthzWorld(t)
+	h := w.roleHandlers()
+	ctx := t.Context()
+	custom := w.customRole(t, "Custom", 60, p.Crm.Leads.Read, p.Roles.Update)
+	mgrM := w.member(t, w.manager)
+	mgr := actorAs(t, mgrM.ID(), authority.RankManager, p.Crm.Leads.Read, p.Crm.Leads.ReadAll)
 
-	h := command.NewSetRoleParentHandler(edges, fakeUoW{}, nowFunc, func() rolehierarchy.ID { return rolehierarchy.ID(ids.NewV7().String()) })
-	if err := h.Handle(t.Context(), command.SetRoleParentCommand{
-		TenantID: tid, RoleID: child.ID(), NewParentID: parent.ID(),
-	}); err != nil {
-		t.Fatalf("seed: %v", err)
+	// the Company Owner role is immutable for every actor, whatever they hold
+	for name, err := range map[string]error{
+		"admin revokes tenant.admin": h.revoke.Handle(ctx, command.RevokeRolePermissionCommand{TenantID: awTenant, RoleID: w.owner.ID(), PermissionName: p.Meta.TenantAdmin, Actor: w.adminActor(t)}),
+		"super revokes tenant.admin": h.revoke.Handle(ctx, command.RevokeRolePermissionCommand{TenantID: awTenant, RoleID: w.owner.ID(), PermissionName: p.Meta.TenantAdmin, Actor: superActor(t)}),
+		"admin PUT []":               h.replace.Handle(ctx, command.ReplaceRolePermissionsCommand{TenantID: awTenant, RoleID: w.owner.ID(), PermissionNames: []string{}, Actor: w.adminActor(t)}),
+		"super PUT []":               h.replace.Handle(ctx, command.ReplaceRolePermissionsCommand{TenantID: awTenant, RoleID: w.owner.ID(), PermissionNames: []string{}, Actor: superActor(t)}),
+		"super grants":               h.grant.Handle(ctx, command.GrantRolePermissionCommand{TenantID: awTenant, RoleID: w.owner.ID(), PermissionName: p.Crm.Leads.Read, Actor: superActor(t)}),
+		"super deletes":              h.del.Handle(ctx, command.DeleteRoleCommand{TenantID: awTenant, RoleID: w.owner.ID(), Actor: superActor(t)}),
+	} {
+		if !errors.Is(err, role.ErrSystemDefault) {
+			t.Errorf("%s: %v, want ErrSystemDefault", name, err)
+		}
 	}
-	// Clear by passing zero parent + reason long enough for the audit floor.
-	if err := h.Handle(t.Context(), command.SetRoleParentCommand{
-		TenantID: tid,
-		RoleID:   child.ID(),
-		Reason:   "promotion to root role for org restructure",
-	}); err != nil {
-		t.Fatalf("clear: %v", err)
+	if !w.owner.HasPermission(permission.FromConstant(p.Meta.TenantAdmin)) {
+		t.Fatal("Company Owner lost tenant.admin")
 	}
-	if _, err := edges.GetActiveByChild(t.Context(), tid, child.ID()); !errors.Is(err, rolehierarchy.ErrEdgeNotFound) {
-		t.Fatalf("expected no active edge after clear, got: %v", err)
+	// a manager cannot confer what they do not hold, nor remove what they do not hold
+	if err := h.grant.Handle(ctx, command.GrantRolePermissionCommand{TenantID: awTenant, RoleID: custom.ID(), PermissionName: p.Crm.Leads.Assign, Actor: mgr}); !errors.Is(err, authority.ErrGrantExceedsAuthority) {
+		t.Errorf("grant unheld: %v, want ErrGrantExceedsAuthority", err)
+	}
+	if err := h.revoke.Handle(ctx, command.RevokeRolePermissionCommand{TenantID: awTenant, RoleID: custom.ID(), PermissionName: p.Roles.Update, Actor: mgr}); !errors.Is(err, authority.ErrGrantExceedsAuthority) {
+		t.Errorf("revoke unheld: %v, want ErrGrantExceedsAuthority", err)
+	}
+	if err := h.replace.Handle(ctx, command.ReplaceRolePermissionsCommand{TenantID: awTenant, RoleID: custom.ID(), PermissionNames: []string{}, Actor: mgr}); !errors.Is(err, authority.ErrGrantExceedsAuthority) {
+		t.Errorf("empty the role (removes unheld roles.update): %v, want ErrGrantExceedsAuthority", err)
+	}
+	if got := len(custom.Permissions()); got != 2 {
+		t.Errorf("refused calls changed the role: %d permissions, want 2", got)
+	}
+	if err := h.grant.Handle(ctx, command.GrantRolePermissionCommand{TenantID: awTenant, RoleID: custom.ID(), PermissionName: p.Crm.Leads.ReadAll, Actor: mgr}); err != nil {
+		t.Errorf("grant held: %v", err)
+	}
+	if err := h.replace.Handle(ctx, command.ReplaceRolePermissionsCommand{TenantID: awTenant, RoleID: custom.ID(), PermissionNames: []string{"identity.totally.fake"}, Actor: mgr}); !errors.Is(err, command.ErrPermissionUnknown) {
+		t.Errorf("unknown name: %v, want ErrPermissionUnknown", err)
 	}
 }
 
-func TestSetRoleParent_RejectsSelfReference(t *testing.T) {
+func TestDeleteRole_RoleInUseAndCeiling(t *testing.T) {
 	t.Parallel()
-	repo := newFakeRoleRepo()
-	edges := newFakeEdgeRepo()
-	tid := tenant.ID("33333333-3333-3333-3333-333333333333")
-	child := newCustomRole(t, repo, "Junior")
+	p := permission.IdentityPermissions
+	w := newAuthzWorld(t)
+	h := w.roleHandlers()
+	ctx := t.Context()
 
-	h := command.NewSetRoleParentHandler(edges, fakeUoW{}, nowFunc, func() rolehierarchy.ID { return rolehierarchy.ID(ids.NewV7().String()) })
-	err := h.Handle(t.Context(), command.SetRoleParentCommand{
-		TenantID: tid, RoleID: child.ID(), NewParentID: child.ID(),
-	})
-	if !errors.Is(err, rolehierarchy.ErrSelfReference) {
-		t.Fatalf("err = %v, want ErrSelfReference", err)
+	carrier := w.customRole(t, "Carries Admin", 60, p.Meta.TenantAdmin)
+	noAdmin := actorAs(t, w.member(t, w.admin).ID(), authority.RankAdmin, p.Crm.Leads.Read)
+	if err := h.del.Handle(ctx, command.DeleteRoleCommand{TenantID: awTenant, RoleID: carrier.ID(), Actor: noAdmin}); !errors.Is(err, authority.ErrGrantExceedsAuthority) {
+		t.Errorf("Admin without tenant.admin deletes a role carrying it: %v, want ErrGrantExceedsAuthority", err)
+	}
+	if carrier.IsDeleted() {
+		t.Fatal("role deleted by a refused call")
+	}
+
+	custom := w.customRole(t, "Held", 60)
+	active := w.member(t, custom)
+	inactive := w.memberSnap(t, membership.Snapshot{RoleAssignments: []role.ID{custom.ID(), w.exec.ID()}, Status: membership.StatusInactive})
+	admin := w.adminActor(t)
+	err := h.del.Handle(ctx, command.DeleteRoleCommand{TenantID: awTenant, RoleID: custom.ID(), Actor: admin})
+	var inUse *command.RoleInUseError
+	if !errors.Is(err, command.ErrRoleInUse) || !errors.As(err, &inUse) || inUse.ActiveHolders != 1 {
+		t.Fatalf("delete with an active holder: %v, want RoleInUseError with 1 holder", err)
+	}
+	if custom.IsDeleted() || len(inactive.RoleAssignments()) != 2 {
+		t.Fatalf("a refused delete changed state: deleted=%v inactive roles=%v", custom.IsDeleted(), inactive.RoleAssignments())
+	}
+
+	// the active holder moves on; only an inactive holder remains
+	if err := w.members.UpdateByID(ctx, awTenant, active.ID(), func(m *membership.Membership) (bool, error) {
+		return true, m.RevokeRole(custom.ID(), testNow)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.del.Handle(ctx, command.DeleteRoleCommand{TenantID: awTenant, RoleID: custom.ID(), Actor: admin}); err != nil {
+		t.Fatalf("delete with only an inactive holder: %v", err)
+	}
+	if !custom.IsDeleted() {
+		t.Error("role not deleted")
+	}
+	if got := inactive.RoleAssignments(); len(got) != 1 || got[0] != w.exec.ID() {
+		t.Errorf("inactive holder's assignments = %v, want only the exec role (the deleted role revoked)", got)
 	}
 }
 
-// ----- CreateRole — input + parent-edge branch coverage --------------------
+func TestSetRoleParent_PolicyDecides(t *testing.T) {
+	t.Parallel()
+	w := newAuthzWorld(t)
+	h := w.roleHandlers()
+	ctx := t.Context()
+	admin := w.adminActor(t)
+	child := w.customRole(t, "Child", 60)
+	peer := w.customRole(t, "Peer", 60)
+	if err := h.parent.Handle(ctx, command.SetRoleParentCommand{TenantID: awTenant, RoleID: child.ID(), NewParentID: peer.ID(), Actor: admin}); !errors.Is(err, authority.ErrRoleParentNotEligible) {
+		t.Errorf("equal-level parent: %v, want ErrRoleParentNotEligible", err)
+	}
+	if err := h.parent.Handle(ctx, command.SetRoleParentCommand{TenantID: awTenant, RoleID: child.ID(), NewParentID: role.ID(awID(404)), Actor: admin}); !errors.Is(err, authority.ErrRoleParentNotEligible) {
+		t.Errorf("missing parent: %v, want ErrRoleParentNotEligible", err)
+	}
+	if err := h.parent.Handle(ctx, command.SetRoleParentCommand{TenantID: awTenant, RoleID: w.owner.ID(), NewParentID: w.exec.ID(), Actor: superActor(t)}); !errors.Is(err, role.ErrSystemDefault) {
+		t.Errorf("edit a system role's parent: %v, want ErrSystemDefault", err)
+	}
+	if err := h.parent.Handle(ctx, command.SetRoleParentCommand{TenantID: awTenant, RoleID: child.ID(), NewParentID: w.manager.ID(), Actor: admin}); err != nil {
+		t.Fatalf("senior parent: %v", err)
+	}
+	got, err := h.edges.GetActiveByChild(ctx, awTenant, child.ID())
+	if err != nil || got.ParentRoleID() != w.manager.ID() {
+		t.Fatalf("edge = %v, %v; want parent %s", got, err, w.manager.ID())
+	}
+	// replace, then clear
+	if err := h.parent.Handle(ctx, command.SetRoleParentCommand{TenantID: awTenant, RoleID: child.ID(), NewParentID: w.teamLead.ID(), Actor: admin}); err != nil {
+		t.Fatalf("replace parent: %v", err)
+	}
+	if got, _ := h.edges.GetActiveByChild(ctx, awTenant, child.ID()); got == nil || got.ParentRoleID() != w.teamLead.ID() {
+		t.Errorf("edge after replace = %v, want parent %s", got, w.teamLead.ID())
+	}
+	if err := h.parent.Handle(ctx, command.SetRoleParentCommand{TenantID: awTenant, RoleID: child.ID(), Reason: "promotion to root role for org restructure", Actor: admin}); err != nil {
+		t.Fatalf("clear parent: %v", err)
+	}
+	if _, err := h.edges.GetActiveByChild(ctx, awTenant, child.ID()); !errors.Is(err, rolehierarchy.ErrEdgeNotFound) {
+		t.Errorf("edge after clear: %v, want ErrEdgeNotFound", err)
+	}
+	// self reference is refused by the aggregate (the child is not "more senior than itself" either)
+	if err := h.parent.Handle(ctx, command.SetRoleParentCommand{TenantID: awTenant, RoleID: child.ID(), NewParentID: child.ID(), Actor: admin}); err == nil {
+		t.Error("self-parent accepted")
+	}
+}
+
+func TestCreateRole_InputAndEdgeErrors(t *testing.T) {
+	t.Parallel()
+	w := newAuthzWorld(t)
+	admin := w.adminActor(t)
+	h := w.roleHandlers()
+	if _, err := h.create.Handle(t.Context(), command.CreateRoleCommand{Name: "Sales Lead", HierarchyLevel: 40, Actor: admin}); err == nil {
+		t.Error("zero tenant accepted")
+	}
+	if _, err := h.create.Handle(t.Context(), command.CreateRoleCommand{TenantID: awTenant, Name: "", HierarchyLevel: 40, Actor: admin}); !errors.Is(err, role.ErrInvalid) {
+		t.Errorf("empty name: %v, want role.ErrInvalid", err)
+	}
+	if _, err := h.create.Handle(t.Context(), command.CreateRoleCommand{TenantID: awTenant, Name: "Sales Lead", HierarchyLevel: 9999, Actor: admin}); !errors.Is(err, authority.ErrInsufficientRank) {
+		t.Errorf("level 9999: %v, want ErrInsufficientRank", err)
+	}
+	w.customRole(t, "Sales Manager Two", 60)
+	if _, err := h.create.Handle(t.Context(), command.CreateRoleCommand{TenantID: awTenant, Name: "Sales Manager Two", HierarchyLevel: 50, Actor: admin}); !errors.Is(err, command.ErrRoleNameTaken) {
+		t.Errorf("duplicate name: %v, want ErrRoleNameTaken", err)
+	}
+	for i, injected := range []error{rolehierarchy.ErrCycle, rolehierarchy.ErrCrossTenant, rolehierarchy.ErrEdgeAlreadyExists} {
+		edges := &failingEdgesRepo{FakeRepository: rolehierarchytest.NewFakeRepository(), addErr: injected}
+		hh := w.roleHandlersWith(edges, fakeUoW{})
+		_, err := hh.create.Handle(t.Context(), command.CreateRoleCommand{TenantID: awTenant, Name: "Child Role " + strconv.Itoa(i), HierarchyLevel: 70, ParentRoleID: w.manager.ID(), Actor: admin})
+		if !errors.Is(err, injected) {
+			t.Errorf("edge error %v: got %v", injected, err)
+		}
+	}
+	hh := w.roleHandlersWith(newFakeEdgeRepo(), failingTxUoW{err: errBoom})
+	if _, err := hh.create.Handle(t.Context(), command.CreateRoleCommand{TenantID: awTenant, Name: "Child Role", HierarchyLevel: 70, ParentRoleID: w.manager.ID(), Actor: admin}); !errors.Is(err, errBoom) {
+		t.Errorf("tx error: %v, want errBoom in the chain", err)
+	}
+}
+
+func TestRoleHandlers_WiringIsRequired(t *testing.T) {
+	t.Parallel()
+	w := newAuthzWorld(t)
+	l := command.AuthorityLocker(w.lock)
+	for name, fn := range map[string]func(){
+		"create without edges": func() {
+			command.NewCreateRoleHandler(fakeUoW{}, l, w.members, w.roles, anyPersons{}, nil, awClock, newRoleID, newEdgeID)
+		},
+		"set parent without edges": func() {
+			command.NewSetRoleParentHandler(fakeUoW{}, l, w.members, w.roles, anyPersons{}, nil, awClock, newEdgeID)
+		},
+		"update without the lock":    func() { command.NewUpdateRoleHandler(fakeUoW{}, nil, w.members, w.roles, anyPersons{}, awClock) },
+		"delete without memberships": func() { command.NewDeleteRoleHandler(fakeUoW{}, l, nil, w.roles, anyPersons{}, awClock) },
+	} {
+		func() {
+			defer func() {
+				if recover() == nil {
+					t.Errorf("%s: no panic", name)
+				}
+			}()
+			fn()
+		}()
+	}
+}
+
+// ----- test doubles ----------------------------------------------------------
 
 // failingEdgesRepo overrides Add to inject rolehierarchy.Err* values.
 type failingEdgesRepo struct {
@@ -317,177 +429,4 @@ type failingTxUoW struct {
 
 func (u failingTxUoW) WithinTx(_ context.Context, _ pg.TxScope, _ func(context.Context) error) error {
 	return u.err
-}
-
-func TestCreateRole_RejectsZeroTenantID(t *testing.T) {
-	t.Parallel()
-	repo := newFakeRoleRepo()
-	h := command.NewCreateRoleHandler(repo, newFakeEdgeRepo(), fakeUoW{}, nowFunc, func() role.ID { return role.ID(ids.NewV7().String()) }, func() rolehierarchy.ID { return rolehierarchy.ID(ids.NewV7().String()) })
-	_, err := h.Handle(t.Context(), command.CreateRoleCommand{
-		TenantID:       tenant.ID(""),
-		Name:           "Sales Lead",
-		HierarchyLevel: 40,
-	})
-	if err == nil {
-		t.Fatal("expected error for zero TenantID, got nil")
-	}
-}
-
-func TestCreateRole_AggregateInvariant_EmptyName(t *testing.T) {
-	t.Parallel()
-	repo := newFakeRoleRepo()
-	h := command.NewCreateRoleHandler(repo, newFakeEdgeRepo(), fakeUoW{}, nowFunc, func() role.ID { return role.ID(ids.NewV7().String()) }, func() rolehierarchy.ID { return rolehierarchy.ID(ids.NewV7().String()) })
-	_, err := h.Handle(t.Context(), command.CreateRoleCommand{
-		TenantID:       tenant.ID("33333333-3333-3333-3333-333333333333"),
-		Name:           "", // aggregate ctor rejects
-		HierarchyLevel: 40,
-	})
-	if !errors.Is(err, role.ErrInvalid) {
-		t.Fatalf("err = %v, want wraps role.ErrInvalid", err)
-	}
-}
-
-func TestCreateRole_AggregateInvariant_BadHierarchyLevel(t *testing.T) {
-	t.Parallel()
-	repo := newFakeRoleRepo()
-	h := command.NewCreateRoleHandler(repo, newFakeEdgeRepo(), fakeUoW{}, nowFunc, func() role.ID { return role.ID(ids.NewV7().String()) }, func() rolehierarchy.ID { return rolehierarchy.ID(ids.NewV7().String()) })
-	_, err := h.Handle(t.Context(), command.CreateRoleCommand{
-		TenantID:       tenant.ID("33333333-3333-3333-3333-333333333333"),
-		Name:           "Sales Lead",
-		HierarchyLevel: 9999, // out of [0,99] range
-	})
-	if !errors.Is(err, role.ErrInvalid) {
-		t.Fatalf("err = %v, want wraps role.ErrInvalid", err)
-	}
-}
-
-// TestCreateRole_ParentEdgeRequiresWiring — a set ParentRoleID with nil edges
-// or uow is refused as a composition-time wiring error.
-func TestCreateRole_ParentEdgeRequiresWiring(t *testing.T) {
-	t.Parallel()
-	repo := newFakeRoleRepo()
-	parent := newCustomRole(t, repo, "Manager")
-	cases := []struct {
-		name  string
-		edges rolehierarchy.Repository
-		uow   pg.UnitOfWork
-	}{
-		{"nil edges + nil uow", nil, nil},
-		{"nil edges + ok uow", nil, fakeUoW{}},
-		{"ok edges + nil uow", newFakeEdgeRepo(), nil},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			t.Parallel()
-			h := command.NewCreateRoleHandler(repo, c.edges, c.uow, nowFunc, func() role.ID { return role.ID(ids.NewV7().String()) }, func() rolehierarchy.ID { return rolehierarchy.ID(ids.NewV7().String()) })
-			_, err := h.Handle(t.Context(), command.CreateRoleCommand{
-				TenantID:       tenant.ID("33333333-3333-3333-3333-333333333333"),
-				Name:           "Child Role",
-				HierarchyLevel: 40,
-				ParentRoleID:   parent.ID(),
-			})
-			if err == nil {
-				t.Fatal("expected wiring error for nil edges/uow, got nil")
-			}
-		})
-	}
-}
-
-// TestCreateRole_ParentEdgeError_Propagated — rolehierarchy.Err* sentinels
-// propagate so errors.Is still matches.
-func TestCreateRole_ParentEdgeError_Propagated(t *testing.T) {
-	t.Parallel()
-	cases := []struct {
-		name string
-		err  error
-	}{
-		{"ErrCycle", rolehierarchy.ErrCycle},
-		{"ErrCrossTenant", rolehierarchy.ErrCrossTenant},
-		{"ErrEdgeAlreadyExists", rolehierarchy.ErrEdgeAlreadyExists},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			t.Parallel()
-			repo := newFakeRoleRepo()
-			parent := newCustomRole(t, repo, "Manager_"+c.name)
-			edges := &failingEdgesRepo{
-				FakeRepository: rolehierarchytest.NewFakeRepository(),
-				addErr:         c.err,
-			}
-			h := command.NewCreateRoleHandler(repo, edges, fakeUoW{}, nowFunc, func() role.ID { return role.ID(ids.NewV7().String()) }, func() rolehierarchy.ID { return rolehierarchy.ID(ids.NewV7().String()) })
-			_, err := h.Handle(t.Context(), command.CreateRoleCommand{
-				TenantID:       tenant.ID("33333333-3333-3333-3333-333333333333"),
-				Name:           "Child Role " + c.name,
-				HierarchyLevel: 40,
-				ParentRoleID:   parent.ID(),
-			})
-			if !errors.Is(err, c.err) {
-				t.Fatalf("err = %v, want errors.Is(_, %v)", err, c.err)
-			}
-		})
-	}
-}
-
-// TestCreateRole_ParentEdge_GenericTxError_Wrapped — a non-sentinel tx error
-// wraps as "create_role".
-func TestCreateRole_ParentEdge_GenericTxError_Wrapped(t *testing.T) {
-	t.Parallel()
-	repo := newFakeRoleRepo()
-	parent := newCustomRole(t, repo, "Manager")
-	uow := failingTxUoW{err: errBoom}
-	h := command.NewCreateRoleHandler(repo, newFakeEdgeRepo(), uow, nowFunc, func() role.ID { return role.ID(ids.NewV7().String()) }, func() rolehierarchy.ID { return rolehierarchy.ID(ids.NewV7().String()) })
-	_, err := h.Handle(t.Context(), command.CreateRoleCommand{
-		TenantID:       tenant.ID("33333333-3333-3333-3333-333333333333"),
-		Name:           "Child Role",
-		HierarchyLevel: 40,
-		ParentRoleID:   parent.ID(),
-	})
-	if !errors.Is(err, errBoom) {
-		t.Fatalf("err = %v, want chain includes errBoom", err)
-	}
-}
-
-// TestUpdateRole_HierarchyLevelChange — Role.ChangeHierarchyLevel emits no
-// event; asserts state mutation only.
-func TestUpdateRole_HierarchyLevelChange(t *testing.T) {
-	t.Parallel()
-	repo := newFakeRoleRepo()
-	r := newCustomRole(t, repo, "Sales Manager")
-	beforeLevel := r.HierarchyLevel()
-	newLevel := beforeLevel + 5 // default 50 → 55
-	h := command.NewUpdateRoleHandler(repo, func() time.Time { return testNow })
-	if err := h.Handle(t.Context(), command.UpdateRoleCommand{
-		TenantID:       tenant.ID("33333333-3333-3333-3333-333333333333"),
-		RoleID:         r.ID(),
-		HierarchyLevel: newLevel,
-	}); err != nil {
-		t.Fatalf("Handle: %v", err)
-	}
-	if got := r.HierarchyLevel(); got != newLevel {
-		t.Errorf("HierarchyLevel = %d, want %d", got, newLevel)
-	}
-}
-
-func TestSetRoleParent_RejectsMultiHopCycle(t *testing.T) {
-	t.Parallel()
-	repo := newFakeRoleRepo()
-	edges := newFakeEdgeRepo()
-	tid := tenant.ID("33333333-3333-3333-3333-333333333333")
-	a := newCustomRole(t, repo, "RoleA")
-	b := newCustomRole(t, repo, "RoleB")
-
-	h := command.NewSetRoleParentHandler(edges, fakeUoW{}, nowFunc, func() rolehierarchy.ID { return rolehierarchy.ID(ids.NewV7().String()) })
-	// b → a (legal).
-	if err := h.Handle(t.Context(), command.SetRoleParentCommand{
-		TenantID: tid, RoleID: b.ID(), NewParentID: a.ID(),
-	}); err != nil {
-		t.Fatalf("b → a: %v", err)
-	}
-	// a → b would close the loop.
-	err := h.Handle(t.Context(), command.SetRoleParentCommand{
-		TenantID: tid, RoleID: a.ID(), NewParentID: b.ID(),
-	})
-	if !errors.Is(err, rolehierarchy.ErrCycle) {
-		t.Fatalf("expected ErrCycle, got: %v", err)
-	}
 }

@@ -240,7 +240,7 @@ func DefaultRoleCatalog() []RoleSpec {
 // to the right tenant via INSERT WITH CHECK.
 //
 // CompanyOwner's Meta.TenantAdmin permission is granted via
-// Role.GrantPermission BEFORE Add — emits PermissionGrantedEvent
+// role.NewWithPermissions BEFORE Add — emits PermissionGrantedEvent
 // alongside the CreatedEvent on the same drain.
 func ApplyDefaultRoles(
 	ctx context.Context,
@@ -266,27 +266,28 @@ func ApplyDefaultRoles(
 			return nil, fmt.Errorf("seed: lookup %q: %w", spec.Name, err)
 		}
 
-		r, err := role.New(
-			role.ID(ids.NewV7().String()),
-			tenantID,
-			spec.Name,
-			spec.IsSystemDefault,
-			spec.HierarchyLevel,
-			spec.IsSuperAdmin,
-			now,
-		)
-		if err != nil {
-			return nil, fmt.Errorf("seed: build role %q: %w", spec.Name, err)
-		}
+		perms := make([]*permission.Permission, 0, len(spec.Permissions))
 		for _, pname := range spec.Permissions {
 			p, perr := permission.TryFromConstant(pname)
 			if perr != nil {
 				return nil, fmt.Errorf("seed: unknown permission %q in spec %q: %w",
 					pname, spec.Name, perr)
 			}
-			if err := r.GrantPermission(p, now); err != nil {
-				return nil, fmt.Errorf("seed: grant %q on %q: %w", pname, spec.Name, err)
-			}
+			perms = append(perms, p)
+		}
+		// A system-default role's permission set is fixed at construction.
+		r, err := role.NewWithPermissions(
+			role.ID(ids.NewV7().String()),
+			tenantID,
+			spec.Name,
+			spec.IsSystemDefault,
+			spec.HierarchyLevel,
+			spec.IsSuperAdmin,
+			perms,
+			now,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("seed: build role %q: %w", spec.Name, err)
 		}
 		if err := repo.Add(ctx, r); err != nil {
 			return nil, fmt.Errorf("seed: add role %q: %w", spec.Name, err)

@@ -133,6 +133,25 @@ func New(
 	isSuperAdmin bool,
 	now time.Time,
 ) (*Role, error) {
+	return NewWithPermissions(id, tenantID, name, isSystemDefault, hierarchyLevel, isSuperAdmin, nil, now)
+}
+
+// NewWithPermissions constructs a Role that starts with the given permissions
+// (nil entries and duplicates dropped). It is the ONLY way a system-default
+// role gets its permission set: [Role.GrantPermission], [Role.RevokePermission]
+// and [Role.ReplacePermissions] refuse a system-default role, so seed code
+// builds it complete here. Level 0 (the Owner tier) is reserved to
+// system-default roles; every other role is in [1, HierarchyLevelMax].
+func NewWithPermissions(
+	id ID,
+	tenantID tenant.ID,
+	name string,
+	isSystemDefault bool,
+	hierarchyLevel int,
+	isSuperAdmin bool,
+	perms []*permission.Permission,
+	now time.Time,
+) (*Role, error) {
 	if id.IsZero() {
 		return nil, fmt.Errorf("%w: id required", ErrInvalid)
 	}
@@ -146,6 +165,9 @@ func New(
 	if hierarchyLevel < HierarchyLevelMin || hierarchyLevel > HierarchyLevelMax {
 		return nil, fmt.Errorf("%w: hierarchyLevel %d not in [%d,%d]",
 			ErrInvalid, hierarchyLevel, HierarchyLevelMin, HierarchyLevelMax)
+	}
+	if hierarchyLevel == HierarchyLevelOwner && !isSystemDefault {
+		return nil, fmt.Errorf("%w: hierarchyLevel 0 is reserved to system-default roles", ErrInvalid)
 	}
 
 	now = now.UTC()
@@ -167,6 +189,13 @@ func New(
 		IsSuperAdmin:    isSuperAdmin,
 		At:              now,
 	})
+	for _, p := range perms {
+		if p == nil || slices.ContainsFunc(r.permissions, p.Equal) {
+			continue
+		}
+		r.permissions = append(r.permissions, p)
+		r.recordEvent(PermissionGrantedEvent{RoleID: id, TenantID: tenantID, Permission: p.Name(), At: now})
+	}
 	return r, nil
 }
 
@@ -268,9 +297,9 @@ func (r *Role) ChangeHierarchyLevel(level int) error {
 	if r.isSystemDefault {
 		return fmt.Errorf("%w: %s", ErrSystemDefault, r.name)
 	}
-	if level < HierarchyLevelMin || level > HierarchyLevelMax {
+	if level <= HierarchyLevelOwner || level > HierarchyLevelMax {
 		return fmt.Errorf("%w: hierarchyLevel %d not in [%d,%d]",
-			ErrInvalid, level, HierarchyLevelMin, HierarchyLevelMax)
+			ErrInvalid, level, HierarchyLevelOwner+1, HierarchyLevelMax)
 	}
 	if level == r.hierarchyLevel {
 		return nil
@@ -311,7 +340,7 @@ func (r *Role) HasPermission(p *permission.Permission) bool {
 //
 // `now` is the explicit instant for the emitted event's `At`.
 func (r *Role) GrantPermission(p *permission.Permission, now time.Time) error {
-	if err := r.ensureMutable(); err != nil {
+	if err := r.ensureEditable(); err != nil {
 		return err
 	}
 	if p == nil {
@@ -335,7 +364,7 @@ func (r *Role) GrantPermission(p *permission.Permission, now time.Time) error {
 //
 // `now` is the explicit instant for the emitted event's `At`.
 func (r *Role) RevokePermission(p *permission.Permission, now time.Time) error {
-	if err := r.ensureMutable(); err != nil {
+	if err := r.ensureEditable(); err != nil {
 		return err
 	}
 	if p == nil {
@@ -367,7 +396,7 @@ func (r *Role) RevokePermission(p *permission.Permission, now time.Time) error {
 // event so audit consumers see one timestamp per ReplacePermissions
 // operation.
 func (r *Role) ReplacePermissions(target []*permission.Permission, now time.Time) error {
-	if err := r.ensureMutable(); err != nil {
+	if err := r.ensureEditable(); err != nil {
 		return err
 	}
 	now = now.UTC()
@@ -491,6 +520,19 @@ func UnmarshalFromDB(s Snapshot) *Role {
 		deletedAt:       s.DeletedAt,
 		deletedBy:       s.DeletedBy,
 	}
+}
+
+// ensureEditable is [Role.ensureMutable] plus the system-default refusal: a
+// system-default role's permission set is fixed at construction (see
+// [NewWithPermissions]).
+func (r *Role) ensureEditable() error {
+	if err := r.ensureMutable(); err != nil {
+		return err
+	}
+	if r.isSystemDefault {
+		return fmt.Errorf("%w: %s", ErrSystemDefault, r.name)
+	}
+	return nil
 }
 
 // ensureMutable rejects mutations on a deleted role. Internal helper
