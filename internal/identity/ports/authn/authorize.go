@@ -25,13 +25,6 @@ func isPlatformOperator(c *jwt.Claims) bool {
 	return c != nil && c.IsPlatform && c.TenantSlug == PlatformTenantSlug && !c.IsImpersonation()
 }
 
-// sameTenant reports whether two tenant ids denote the same tenant: equal
-// as UUID values, or (for non-UUID ids used by fakes) byte-equal and
-// non-empty.
-func sameTenant(a, b string) bool {
-	return (a != "" && a == b) || sameID(a, b)
-}
-
 // satisfiesIn is THE authorization decision (ADR 0036 + ADR 0068). Rules,
 // in order:
 //  1. no claims, or a name outside the catalogue (incl. "") -> deny
@@ -54,7 +47,7 @@ func satisfiesIn(c *jwt.Claims, effective tenancy.ID, required string) bool {
 	if c.IsSuperUser {
 		return true
 	}
-	own := sameTenant(c.TenantID, effective.String())
+	own := sameID(c.TenantID, effective.String())
 	if slices.Contains(c.Permissions, required) {
 		if permission.IsPlatformReserved(required) && required != permission.IdentityPermissions.Meta.TenantAdmin {
 			return isPlatformOperator(c)
@@ -81,7 +74,7 @@ func satisfiesIn(c *jwt.Claims, effective tenancy.ID, required string) bool {
 // Satisfies reports whether the authenticated caller on ctx may exercise
 // permName in the request's effective tenant: the tenancy ctx bound by
 // RequireAuth (the caller's own tenant) or re-bound to the PATH tenant by
-// RequireTenantPermission / RequireTenantContext, so an inline check under a
+// RequireTenantPermission, so an inline check under a
 // path-scoped gate agrees with the gate. With no tenant on ctx it falls back
 // to the caller's own tenant. Use for handler-inline checks (e.g. read_all
 // narrowing) in every module. False without claims or for unknown names.
@@ -119,7 +112,6 @@ func EffectivePermissions(c *jwt.Claims) []string {
 // TENANT. On success the request context's tenant is re-bound to the
 // canonical path tenant so everything downstream (inline Satisfies,
 // repositories) sees the one tenant the gate decided on (tdl_canon §4).
-// Replaces RequireTenantContext for routes that need a permission.
 func RequireTenantPermission(verifier Verifier, validator StampValidator, pathVar string, permNames ...string) func(http.Handler) http.Handler {
 	if verifier == nil || validator == nil {
 		panic("authn: RequireTenantPermission verifier + validator required")

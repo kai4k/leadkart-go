@@ -141,9 +141,6 @@ func TestTenantScope_PathTenantRoutes(t *testing.T) {
 		"RequireTenantPermission": func(v authn.Verifier, s *sentinel) http.Handler {
 			return authn.RequireTenantPermission(v, alwaysFresh{}, "tenantId", p.Tenants.View)(s.handler())
 		},
-		"RequireTenantContext": func(v authn.Verifier, s *sentinel) http.Handler {
-			return authn.RequireTenantContext(v, alwaysFresh{}, "tenantId")(s.handler())
-		},
 	}
 	cases := []struct {
 		name   string

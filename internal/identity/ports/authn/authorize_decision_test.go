@@ -106,6 +106,7 @@ func TestRequireTenantPermission_MoreCases(t *testing.T) {
 		{"impersonation token other tenant", &jwt.Claims{TenantID: tenantA, Permissions: []string{p.Meta.TenantAdmin}, Act: &jwt.ActClaim{Sub: "op"}}, tenantB, []string{p.Tenants.View}, 403},
 		{"impersonation token target tenant", &jwt.Claims{TenantID: tenantB, Permissions: []string{p.Meta.TenantAdmin}, Act: &jwt.ActClaim{Sub: "op"}}, tenantB, []string{p.Tenants.View}, 200},
 		{"any-of second permission satisfied", &jwt.Claims{TenantID: tenantA, Permissions: []string{p.Tenants.Update}}, tenantA, []string{p.Tenants.View, p.Tenants.Update}, 200},
+		{"unparseable path", &jwt.Claims{TenantID: tenantA, Permissions: []string{p.Tenants.View}}, "nope", []string{p.Tenants.View}, 400},
 		{"any-of none satisfied", &jwt.Claims{TenantID: tenantA, Permissions: []string{p.Users.View}}, tenantA, []string{p.Tenants.View, p.Tenants.Update}, 403},
 	}
 	for _, tc := range cases {
@@ -123,15 +124,20 @@ func TestRequireTenantPermission_MoreCases(t *testing.T) {
 }
 
 // Item 4: the gate decides in the PATH tenant and re-binds ctx to it, so an
-// inline Satisfies(ctx) under the gate answers for the same tenant.
+// inline Satisfies(ctx) under the gate answers for the same tenant. The
+// operator holds tenant.admin, which implies non-reserved permissions only in
+// the operator's OWN tenant (tenantA): checked inline in the path tenant
+// (tenantB) roles.view must be denied. Without the re-bind the ctx would still
+// carry tenantA and the inline check would wrongly pass.
 func TestRequireTenantPermission_GateAndInlineDecisionAgree(t *testing.T) {
 	t.Parallel()
 	p := permission.IdentityPermissions
-	operator := &jwt.Claims{TenantID: tenantA, TenantSlug: authn.PlatformTenantSlug, IsPlatform: true, Permissions: []string{p.Platform.UsersView}}
-	var inline bool
+	operator := &jwt.Claims{TenantID: tenantA, TenantSlug: authn.PlatformTenantSlug, IsPlatform: true, Permissions: []string{p.Platform.UsersView, p.Meta.TenantAdmin}}
+	var inline, inlineTenantDependent bool
 	var bound tenancy.ID
 	probe := http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		inline = authn.Satisfies(r.Context(), p.Users.View)
+		inlineTenantDependent = authn.Satisfies(r.Context(), p.Roles.View)
 		bound, _ = tenancy.FromContext(r.Context())
 	})
 	h := authn.RequireTenantPermission(&fakeVerifier{claims: withFreshness(operator)}, alwaysFresh{}, "tenantId", p.Users.View)(probe)
@@ -139,6 +145,9 @@ func TestRequireTenantPermission_GateAndInlineDecisionAgree(t *testing.T) {
 	h.ServeHTTP(rec, tenantReq(t, strings.ToUpper(tenantB)))
 	if rec.Code != 200 {
 		t.Fatalf("gate status %d", rec.Code)
+	}
+	if inlineTenantDependent {
+		t.Error("inline Satisfies(roles.view) passed via tenant.admin in a foreign path tenant: ctx was not re-bound to the path tenant")
 	}
 	if string(bound) != tenantB {
 		t.Fatalf("ctx tenant = %q, want canonical path tenant %q", bound, tenantB)
@@ -166,46 +175,4 @@ func TestRequireAnyPermission_TenantAdmin(t *testing.T) {
 	if rec.Code != 403 {
 		t.Fatalf("tenant.admin vs reserved: status %d want 403", rec.Code)
 	}
-}
-
-func TestRequireTenantContext(t *testing.T) {
-	t.Parallel()
-	cases := []struct {
-		name   string
-		claims *jwt.Claims
-		path   string
-		want   int
-	}{
-		{"member own tenant", &jwt.Claims{TenantID: tenantA}, tenantA, 200},
-		{"member own tenant uppercase", &jwt.Claims{TenantID: tenantA}, strings.ToUpper(tenantA), 200},
-		{"member other tenant", &jwt.Claims{TenantID: tenantA}, tenantB, 403},
-		{"platform operator other tenant", &jwt.Claims{TenantID: tenantA, TenantSlug: authn.PlatformTenantSlug, IsPlatform: true}, tenantB, 200},
-		{"platform flag without slug anchor", &jwt.Claims{TenantID: tenantA, TenantSlug: "acme", IsPlatform: true}, tenantB, 403},
-		{"impersonation token does not bypass", &jwt.Claims{TenantID: tenantA, TenantSlug: authn.PlatformTenantSlug, IsPlatform: true, Act: &jwt.ActClaim{Sub: "op"}}, tenantB, 403},
-		{"impersonation token own target tenant", &jwt.Claims{TenantID: tenantB, Act: &jwt.ActClaim{Sub: "op"}}, tenantB, 200},
-		{"super user other tenant", &jwt.Claims{TenantID: tenantA, IsSuperUser: true}, tenantB, 200},
-		{"unparseable path", &jwt.Claims{TenantID: tenantA}, "nope", 400},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			s := &sentinel{}
-			h := authn.RequireTenantContext(&fakeVerifier{claims: withFreshness(tc.claims)}, alwaysFresh{}, "tenantId")(s.handler())
-			rec := httptest.NewRecorder()
-			h.ServeHTTP(rec, tenantReq(t, tc.path))
-			if rec.Code != tc.want {
-				t.Fatalf("status %d want %d (%s)", rec.Code, tc.want, rec.Body.String())
-			}
-		})
-	}
-	t.Run("missing path variable", func(t *testing.T) {
-		t.Parallel()
-		s := &sentinel{}
-		h := authn.RequireTenantContext(&fakeVerifier{claims: withFreshness(&jwt.Claims{TenantID: tenantA})}, alwaysFresh{}, "tenantId")(s.handler())
-		rec := httptest.NewRecorder()
-		h.ServeHTTP(rec, newRequest(t, "Bearer tok"))
-		if rec.Code != 400 || !strings.Contains(rec.Body.String(), `"invalid_tenant_id"`) {
-			t.Fatalf("status %d body %s, want 400 invalid_tenant_id", rec.Code, rec.Body.String())
-		}
-	})
 }

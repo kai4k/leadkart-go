@@ -9,8 +9,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
-
 	"github.com/leadkart/leadkart-go/internal/common/email"
 	"github.com/leadkart/leadkart-go/internal/common/slug"
 	"github.com/leadkart/leadkart-go/internal/identity/app"
@@ -270,8 +268,8 @@ func AddRoutes(mux *http.ServeMux, log *slog.Logger, a app.Application, verifier
 		// Audit-log reads per ADR 0027 (outbox doubles as audit) +
 		// ADR 0038 (keyset pagination). Self-read is always allowed
 		// (privacy default); tenant-scoped read goes through the
-		// same authn.RequireTenantContext gate as the rest of /tenants/{id}
-		// (same-tenant-or-operator; no permission name).
+		// same path-tenant gate as the rest of /tenants/{id}
+		// (authn.RequireTenantPermission, tenants.view in the path tenant).
 		mux.Handle("GET /api/v1/auth/me/activity",
 			auth(handleListMyAuditEvents(log, a)))
 		// Sub-resource path (`/audit/events`) deliberately ≠ the by-slug
@@ -578,15 +576,13 @@ func handleRevokeSession(log *slog.Logger, a app.Application) http.Handler {
 			writeError(w, http.StatusUnauthorized, ErrCodeInvalidCredentials, "")
 			return
 		}
-		raw := r.PathValue("familyId")
-		if _, err := uuid.Parse(raw); err != nil {
-			writeError(w, http.StatusBadRequest, ErrCodeInvalidFamilyID,
-				"familyId path parameter must be a UUID")
+		familyID, ok := parseFamilyIDPath(w, r)
+		if !ok {
 			return
 		}
 		err := a.Commands.RevokeSession.Handle(r.Context(), command.RevokeSessionCommand{
 			PersonID: person.ID(c.Subject),
-			FamilyID: refreshtoken.FamilyID(raw),
+			FamilyID: familyID,
 		})
 		switch {
 		case errors.Is(err, command.ErrSessionNotFound):
@@ -601,6 +597,18 @@ func handleRevokeSession(log *slog.Logger, a app.Application) http.Handler {
 		}
 		w.WriteHeader(http.StatusNoContent)
 	})
+}
+
+// parseFamilyIDPath extracts + canonicalises {familyId}; writes the 400
+// itself on failure.
+func parseFamilyIDPath(w http.ResponseWriter, r *http.Request) (refreshtoken.FamilyID, bool) {
+	id, ok := authn.CanonicalID(r.PathValue("familyId"))
+	if !ok {
+		writeError(w, http.StatusBadRequest, ErrCodeInvalidFamilyID,
+			"familyId path parameter must be a UUID")
+		return "", false
+	}
+	return refreshtoken.FamilyID(id), true
 }
 
 func handleRevokeAllSessions(log *slog.Logger, a app.Application) http.Handler {

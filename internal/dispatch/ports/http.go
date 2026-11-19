@@ -273,12 +273,12 @@ func actorTenantID(w http.ResponseWriter, r *http.Request) (membership.ID, tenan
 }
 
 func parseConsignmentNoteID(w http.ResponseWriter, r *http.Request) (consignmentnote.ID, bool) {
-	raw := r.PathValue("consignmentNoteId")
-	if _, err := uuid.Parse(raw); err != nil {
+	id, ok := authn.CanonicalID(r.PathValue("consignmentNoteId"))
+	if !ok {
 		writeError(w, http.StatusBadRequest, errCodeInvalidConsignmentID, "consignmentNoteId must be a UUID")
 		return "", false
 	}
-	return consignmentnote.ID(raw), true
+	return consignmentnote.ID(id), true
 }
 
 func mapMutationErr(w http.ResponseWriter, log *slog.Logger, r *http.Request, err error, op string) {

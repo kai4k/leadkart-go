@@ -233,13 +233,25 @@ func handleUpdatePersonProfile(log *slog.Logger, a app.Application) http.Handler
 // ----- helpers --------------------------------------------------------------
 
 func parsePersonIDPath(w http.ResponseWriter, r *http.Request) (person.ID, bool) {
-	raw := r.PathValue("personId")
-	if _, err := uuid.Parse(raw); err != nil {
+	id, ok := authn.CanonicalID(r.PathValue("personId"))
+	if !ok {
 		writeError(w, http.StatusBadRequest, ErrCodeInvalidPersonID,
 			"personId path parameter must be a UUID")
 		return "", false
 	}
-	return person.ID(raw), true
+	return person.ID(id), true
+}
+
+// parseSessionIDPath extracts + canonicalises {sessionId}; writes the 400
+// itself on failure.
+func parseSessionIDPath(w http.ResponseWriter, r *http.Request) (string, bool) {
+	id, ok := authn.CanonicalID(r.PathValue("sessionId"))
+	if !ok {
+		writeError(w, http.StatusBadRequest, ErrCodeInvalidSessionID,
+			"sessionId path parameter must be a UUID")
+		return "", false
+	}
+	return id, true
 }
 
 // writePersonMutationResult collapses Person command outcomes:
@@ -346,16 +358,14 @@ func handleEndImpersonationSession(log *slog.Logger, a app.Application) http.Han
 			writeError(w, http.StatusUnauthorized, ErrCodeInvalidCredentials, "")
 			return
 		}
-		raw := r.PathValue("sessionId")
-		if _, err := uuid.Parse(raw); err != nil {
-			writeError(w, http.StatusBadRequest, ErrCodeInvalidSessionID,
-				"sessionId path parameter must be a UUID")
+		sessionID, ok := parseSessionIDPath(w, r)
+		if !ok {
 			return
 		}
 		err := a.Commands.EndImpersonationSession.Handle(r.Context(),
 			command.EndImpersonationSessionCommand{
 				OperatorID: c.Subject,
-				SessionID:  raw,
+				SessionID:  sessionID,
 			})
 		if err != nil {
 			log.ErrorContext(r.Context(), "end impersonation session failed", "err", err)

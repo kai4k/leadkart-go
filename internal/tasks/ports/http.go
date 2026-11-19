@@ -395,12 +395,12 @@ func handleDashboard(log *slog.Logger, a app.Application) http.Handler {
 // ----- Helpers --------------------------------------------------------------
 
 func parseWorkItemID(w http.ResponseWriter, r *http.Request) (workitem.ID, bool) {
-	raw := r.PathValue("workItemId")
-	if _, err := uuid.Parse(raw); err != nil {
+	id, ok := authn.CanonicalID(r.PathValue("workItemId"))
+	if !ok {
 		writeError(w, http.StatusBadRequest, errCodeInvalidWorkItemID, "workItemId must be a UUID")
 		return "", false
 	}
-	return workitem.ID(raw), true
+	return workitem.ID(id), true
 }
 
 func parseListFilter(params url.Values) (workitem.ListFilter, error) {

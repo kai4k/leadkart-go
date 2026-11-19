@@ -132,7 +132,7 @@ func ActorMembershipID(ctx context.Context) string {
 	if !ok {
 		return ""
 	}
-	if eff, ok := tenancy.FromContext(ctx); ok && !eff.IsZero() && !sameTenant(c.TenantID, eff.String()) {
+	if eff, ok := tenancy.FromContext(ctx); ok && !eff.IsZero() && !sameID(c.TenantID, eff.String()) {
 		return ""
 	}
 	return c.MembershipID

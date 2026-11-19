@@ -323,7 +323,7 @@ func decodeError(t *testing.T, body []byte) ports.ErrorResponse {
 
 // TestE2E_CrossTenant_TenantRouteRejectedAsForbidden — Tenant A admin
 // hitting /api/v1/tenants/{tenantBId}/profile. The
-// RequireTenantContext middleware short-circuits at 403 BEFORE the
+// path-tenant gate (RequireTenantPermission) short-circuits at 403 BEFORE the
 // repository sees the request — the JWT tenant_id claim doesn't
 // match the URL path tenant.
 func TestE2E_CrossTenant_TenantRouteRejectedAsForbidden(t *testing.T) {
@@ -566,7 +566,7 @@ func TestE2E_Auth_NoToken_Returns401(t *testing.T) {
 // TestE2E_PlatformOperator_BypassesTenantGate — a Platform-tier token
 // can read/mutate any tenant's resources via /api/v1/tenants/{id}/...
 // routes. This is the "is_platform=true" bypass the
-// RequireTenantContext middleware honours.
+// path-tenant gate (RequireTenantPermission) honours.
 func TestE2E_PlatformOperator_BypassesTenantGate(t *testing.T) {
 	f := newE2EFixture(t)
 	tenantA := f.registerAndLogin(t, "acme")

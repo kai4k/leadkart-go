@@ -82,7 +82,7 @@ func newRequest(t *testing.T, authHeader string) *http.Request {
 
 func TestRequireAuth_MissingHeader_Returns401(t *testing.T) {
 	t.Parallel()
-	v := &fakeVerifier{claims: &jwt.Claims{TenantID: "tenant-test"}}
+	v := &fakeVerifier{claims: &jwt.Claims{TenantID: tenantA}}
 	s := &sentinel{}
 	mw := authn.RequireAuth(v)(s.handler())
 
@@ -224,7 +224,7 @@ func TestRequireAuth_EmptyTenantIDClaim_Returns401(t *testing.T) {
 
 func TestRequireAuth_AcceptsCaseInsensitiveScheme(t *testing.T) {
 	t.Parallel()
-	v := &fakeVerifier{wantToken: "tok", claims: &jwt.Claims{TenantID: "tenant-test"}}
+	v := &fakeVerifier{wantToken: "tok", claims: &jwt.Claims{TenantID: tenantA}}
 	s := &sentinel{}
 	mw := authn.RequireAuth(v)(s.handler())
 	rec := httptest.NewRecorder()
@@ -256,7 +256,7 @@ func TestRequirePermission_ClaimsLackPermission_Returns403(t *testing.T) {
 	v := &fakeVerifier{
 		wantToken: "tok",
 		claims: withFreshness(&jwt.Claims{
-			TenantID:    "tenant-test",
+			TenantID:    tenantA,
 			Permissions: []string{permission.IdentityPermissions.Users.View}, // not Roles.View
 		}),
 	}
@@ -281,7 +281,7 @@ func TestRequirePermission_PermissionPresent_Returns200(t *testing.T) {
 	v := &fakeVerifier{
 		wantToken: "tok",
 		claims: withFreshness(&jwt.Claims{
-			TenantID: "tenant-test",
+			TenantID: tenantA,
 			Permissions: []string{
 				permission.IdentityPermissions.Roles.View,
 				permission.IdentityPermissions.Users.View,
@@ -305,7 +305,7 @@ func TestRequirePermission_SuperUser_BypassesCheck(t *testing.T) {
 	v := &fakeVerifier{
 		wantToken: "tok",
 		claims: withFreshness(&jwt.Claims{
-			TenantID:    "tenant-test",
+			TenantID:    tenantA,
 			IsSuperUser: true,
 			// nil perms: SuperUser short-circuits the check.
 			Permissions: nil,
@@ -352,7 +352,7 @@ func TestRequireAnyPermission_OneOfManyPresent_Returns200(t *testing.T) {
 	v := &fakeVerifier{
 		wantToken: "tok",
 		claims: withFreshness(&jwt.Claims{
-			TenantID:    "tenant-test",
+			TenantID:    tenantA,
 			Permissions: []string{permission.IdentityPermissions.Roles.View},
 		}),
 	}
@@ -373,7 +373,7 @@ func TestRequireAnyPermission_NonePresent_Returns403(t *testing.T) {
 	v := &fakeVerifier{
 		wantToken: "tok",
 		claims: withFreshness(&jwt.Claims{
-			TenantID:    "tenant-test",
+			TenantID:    tenantA,
 			Permissions: []string{permission.IdentityPermissions.Users.View},
 		}),
 	}
@@ -393,7 +393,7 @@ func TestRequireAnyPermission_SuperUser_Bypass(t *testing.T) {
 	t.Parallel()
 	v := &fakeVerifier{
 		wantToken: "tok",
-		claims:    withFreshness(&jwt.Claims{TenantID: "tenant-test", IsSuperUser: true}),
+		claims:    withFreshness(&jwt.Claims{TenantID: tenantA, IsSuperUser: true}),
 	}
 	s := &sentinel{}
 	mw := authn.RequireAnyPermission(v, alwaysFresh{},
@@ -425,7 +425,7 @@ func TestRequirePlatform_TokenIsPlatform_Returns200(t *testing.T) {
 	v := &fakeVerifier{
 		wantToken: "tok",
 		claims: withFreshness(&jwt.Claims{
-			TenantID:   "tenant-test",
+			TenantID:   tenantA,
 			TenantSlug: authn.PlatformTenantSlug,
 			IsPlatform: true,
 		}),
@@ -445,7 +445,7 @@ func TestRequirePlatform_IsPlatformWithoutSlug_Returns403(t *testing.T) {
 	v := &fakeVerifier{
 		wantToken: "tok",
 		claims: withFreshness(&jwt.Claims{
-			TenantID:   "tenant-test",
+			TenantID:   tenantA,
 			TenantSlug: "some-other-slug",
 			IsPlatform: true,
 		}),
@@ -463,7 +463,7 @@ func TestRequirePlatform_TenantToken_Returns403(t *testing.T) {
 	t.Parallel()
 	v := &fakeVerifier{
 		wantToken: "tok",
-		claims:    withFreshness(&jwt.Claims{TenantID: "tenant-test", IsPlatform: false}),
+		claims:    withFreshness(&jwt.Claims{TenantID: tenantA, IsPlatform: false}),
 	}
 	s := &sentinel{}
 	mw := authn.RequirePlatform(v, alwaysFresh{})(s.handler())

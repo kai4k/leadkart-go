@@ -7,8 +7,6 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/google/uuid"
-
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 	"github.com/leadkart/leadkart-go/internal/identity/ports/authn"
@@ -64,21 +62,21 @@ func actorTenantOrder(w http.ResponseWriter, r *http.Request) (membership.ID, te
 }
 
 func parseQuotationID(w http.ResponseWriter, r *http.Request) (quotation.ID, bool) {
-	raw := r.PathValue("quotationId")
-	if _, err := uuid.Parse(raw); err != nil {
+	id, ok := authn.CanonicalID(r.PathValue("quotationId"))
+	if !ok {
 		writeError(w, http.StatusBadRequest, errCodeInvalidQuotationID, "quotationId must be a UUID")
 		return "", false
 	}
-	return quotation.ID(raw), true
+	return quotation.ID(id), true
 }
 
 func parseOrderID(w http.ResponseWriter, r *http.Request) (order.ID, bool) {
-	raw := r.PathValue("orderId")
-	if _, err := uuid.Parse(raw); err != nil {
+	id, ok := authn.CanonicalID(r.PathValue("orderId"))
+	if !ok {
 		writeError(w, http.StatusBadRequest, errCodeInvalidOrderID, "orderId must be a UUID")
 		return "", false
 	}
-	return order.ID(raw), true
+	return order.ID(id), true
 }
 
 // decode reads a JSON body, writing a 400 + returning false on malformed input.

@@ -416,12 +416,12 @@ func handleLoseLead(log *slog.Logger, a app.Application) http.Handler {
 // ----- Helpers --------------------------------------------------------------
 
 func parseLeadID(w http.ResponseWriter, r *http.Request) (crmlead.ID, bool) {
-	raw := r.PathValue("leadId")
-	if _, err := uuid.Parse(raw); err != nil {
+	id, ok := authn.CanonicalID(r.PathValue("leadId"))
+	if !ok {
 		writeError(w, http.StatusBadRequest, errCodeInvalidLeadID, "leadId path parameter must be a UUID")
 		return "", false
 	}
-	return crmlead.ID(raw), true
+	return crmlead.ID(id), true
 }
 
 func parseListFilter(params url.Values) (crmlead.ListFilter, error) {

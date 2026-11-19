@@ -222,12 +222,12 @@ func handleCancelReminder(log *slog.Logger, a app.Application) http.Handler {
 // ----- Helpers --------------------------------------------------------------
 
 func parseReminderID(w http.ResponseWriter, r *http.Request) (reminder.ID, bool) {
-	raw := r.PathValue("reminderId")
-	if _, err := uuid.Parse(raw); err != nil {
+	id, ok := authn.CanonicalID(r.PathValue("reminderId"))
+	if !ok {
 		writeError(w, http.StatusBadRequest, errCodeInvalidReminderID, "reminderId path parameter must be a UUID")
 		return "", false
 	}
-	return reminder.ID(raw), true
+	return reminder.ID(id), true
 }
 
 func mapReminderMutationErr(w http.ResponseWriter, log *slog.Logger, r *http.Request, err error, op string) {

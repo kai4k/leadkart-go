@@ -6,13 +6,10 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/google/uuid"
-
 	"github.com/leadkart/leadkart-go/internal/common/pagination"
 	"github.com/leadkart/leadkart-go/internal/identity/app"
 	"github.com/leadkart/leadkart-go/internal/identity/app/query"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
-	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 	"github.com/leadkart/leadkart-go/internal/identity/ports/authn"
 )
 
@@ -60,21 +57,17 @@ func handleListMyAuditEvents(log *slog.Logger, a app.Application) http.Handler {
 // handleListTenantAuditEvents serves
 // GET /api/v1/tenants/{tenantId}/audit/events.
 //
-// Returns the audit-event feed scoped to one tenant. Caller MUST be
-// either a same-tenant admin (RequireTenantContext middleware
-// validates) or a platform operator with X-Tenant-Id override per
-// ADR 0039. Path UUID parse failures surface as 400.
-//
-// Auth: gated by RequireTenantContext at the route table; this
-// handler trusts the middleware to have enforced caller↔tenant
-// authorization.
+// Returns the audit-event feed scoped to one tenant. Auth: the route is
+// gated by authn.RequireTenantPermission (tenants.view in the PATH tenant:
+// a same-tenant caller holding it or tenant.admin, a super user, or a
+// slug-anchored platform operator). An X-Tenant-Id operator scope is accepted
+// only when it names the same tenant as the path; a different one is a 400
+// (ADR 0039). The gate re-binds the request tenant to the canonical path
+// tenant; this handler only parses that path value (400 on a non-UUID).
 func handleListTenantAuditEvents(log *slog.Logger, a app.Application) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		raw := r.PathValue("tenantId")
-		tid, err := uuid.Parse(raw)
-		if err != nil {
-			writeError(w, http.StatusBadRequest, ErrCodeInvalidTenantID,
-				"tenantId path parameter must be a valid UUID")
+		tid, ok := parseTenantIDPath(w, r)
+		if !ok {
 			return
 		}
 
@@ -84,7 +77,7 @@ func handleListTenantAuditEvents(log *slog.Logger, a app.Application) http.Handl
 		}
 
 		page, err := a.Queries.ListAuditEventsByTenant.Handle(r.Context(), query.ListAuditEventsByTenantQuery{
-			TenantID: tenant.ID(tid.String()),
+			TenantID: tid,
 			Cursor:   cursor,
 			PageSize: pageSize,
 		})

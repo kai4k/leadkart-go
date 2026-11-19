@@ -96,7 +96,7 @@ func handleListTenantsByFilter(log *slog.Logger, a app.Application) http.Handler
 // "slug doesn't exist" (security.md enumeration-safety canon; ADR 0044).
 //
 // The mounting middleware is `auth` (RequireFreshStamp), NOT
-// `RequireTenantContext` — the tenant identity isn't in the path as
+// `RequireTenantPermission` — the tenant identity isn't in the path as
 // a UUID; it's a slug that needs DB resolution before the authz
 // comparison. The handler does the gate inline:
 //
@@ -106,7 +106,7 @@ func handleListTenantsByFilter(log *slog.Logger, a app.Application) http.Handler
 //	otherwise → 404
 //
 // Vs the existing GET /api/v1/tenants/{tenantId} route which uses
-// RequireTenantContext middleware and returns 403 on mismatch.
+// RequireTenantPermission middleware and returns 403 on mismatch.
 // 403-vs-404 is acceptable for UUID paths (UUIDs aren't guessable, so
 // enumeration is infeasible); slugs need 404 for the same security
 // property. This is the standard GitHub / Stripe / Auth0 pattern for
@@ -149,7 +149,7 @@ func handleGetTenantBySlug(log *slog.Logger, a app.Application) http.Handler {
 			return
 		}
 
-		// Operator bypass — slug-anchored, mirrors RequireTenantContext +
+		// Operator bypass — slug-anchored, mirrors RequireTenantPermission +
 		// RequirePlatform discipline. Defense-in-depth: is_platform=true
 		// AND tenant_slug=="platform" must BOTH hold.
 		operator := c.IsSuperUser || (c.IsPlatform && c.TenantSlug == authn.PlatformTenantSlug)

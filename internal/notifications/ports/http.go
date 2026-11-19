@@ -8,8 +8,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/google/uuid"
-
 	"github.com/leadkart/leadkart-go/internal/common/pagination"
 	"github.com/leadkart/leadkart-go/internal/common/tenancy"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
@@ -215,12 +213,12 @@ func callerContext(w http.ResponseWriter, r *http.Request) (membership.ID, tenan
 }
 
 func parseNotificationID(w http.ResponseWriter, r *http.Request) (notification.ID, bool) {
-	raw := r.PathValue("notificationId")
-	if _, err := uuid.Parse(raw); err != nil {
+	id, ok := authn.CanonicalID(r.PathValue("notificationId"))
+	if !ok {
 		writeError(w, http.StatusBadRequest, errCodeInvalidNotificationID, "notificationId must be a UUID")
 		return "", false
 	}
-	return notification.ID(raw), true
+	return notification.ID(id), true
 }
 
 func mapMutationErr(w http.ResponseWriter, log *slog.Logger, r *http.Request, err error, op string) {

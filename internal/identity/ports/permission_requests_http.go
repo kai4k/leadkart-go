@@ -7,8 +7,6 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/google/uuid"
-
 	"github.com/leadkart/leadkart-go/internal/common/pagination"
 	"github.com/leadkart/leadkart-go/internal/common/tenancy"
 	"github.com/leadkart/leadkart-go/internal/identity/app"
@@ -377,13 +375,13 @@ func handleCancelPermissionRequest(log *slog.Logger, a app.Application) http.Han
 // the URL. Writes the 400 response itself on failure and returns
 // (zero, false).
 func parsePermissionRequestIDPath(w http.ResponseWriter, r *http.Request) (permissionrequest.ID, bool) {
-	raw := r.PathValue("requestId")
-	if _, err := uuid.Parse(raw); err != nil {
+	id, ok := authn.CanonicalID(r.PathValue("requestId"))
+	if !ok {
 		writeError(w, http.StatusBadRequest, ErrCodeInvalidPermissionRequestID,
 			"requestId path parameter must be a UUID")
 		return "", false
 	}
-	return permissionrequest.ID(raw), true
+	return permissionrequest.ID(id), true
 }
 
 // projectPermissionRequestViewToDto maps the query-view onto the wire
