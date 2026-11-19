@@ -135,7 +135,7 @@ func handleListLeads(log *slog.Logger, a app.Application) http.Handler {
 		// "Only my leads" gate: callers without crm.leads.read_all see
 		// a SelfFilter-narrowed view. Platform / SuperUser short-circuit.
 		selfFilter := ""
-		if !c.IsSuperUser && !c.IsPlatform &&
+		if !c.IsSuperUser && !authn.IsPlatformOperator(c) &&
 			!authn.Satisfies(r.Context(), permission.IdentityPermissions.Crm.Leads.ReadAll) {
 			selfFilter = c.MembershipID
 		}

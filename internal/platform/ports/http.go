@@ -84,7 +84,7 @@ func AddRoutes(
 	purchase := authn.RequirePermission(verifier, stampValidator,
 		permission.IdentityPermissions.PlatformMarketplace.Purchase)
 	mux.Handle("POST /api/v1/platform/marketplace/leads/{id}/purchase",
-		purchase(handlePurchaseLead(log, a)))
+		authn.RejectTenantScope(purchase(handlePurchaseLead(log, a))))
 
 	// LeadCredits topup — Platform-tier only; requirePlatform atop the
 	// permission so a mis-granted tenant role still can't credit balances.

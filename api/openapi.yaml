@@ -1367,6 +1367,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/CreatePermissionRequestResponse' }
+        '403': { $ref: '#/components/responses/TenantScopeNotSupported' }
         '409':
           description: Another pending request already exists for this (membership, permission) tuple
           content:
@@ -1398,6 +1399,7 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/ListPermissionRequestsResponse' }
         '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/TenantScopeNotSupported' }
 
   /api/v1/permission-requests/{requestId}:
     get:
@@ -1416,6 +1418,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/PermissionRequestDto' }
+        '403': { $ref: '#/components/responses/TenantScopeNotSupported' }
         '404': { $ref: '#/components/responses/NotFound' }
 
   /api/v1/permission-requests/{requestId}/approve:
@@ -1438,7 +1441,7 @@ paths:
       responses:
         '204': { description: Approved + grant created }
         '403':
-          description: Caller is not the manager and not a Platform operator
+          description: Caller is not the manager and not a Platform operator, OR `X-Tenant-Id` selected a foreign tenant (`tenant_scope_not_supported`)
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
@@ -1469,7 +1472,7 @@ paths:
       responses:
         '204': { description: Denied }
         '403':
-          description: Caller is not the manager and not a Platform operator
+          description: Caller is not the manager and not a Platform operator, OR `X-Tenant-Id` selected a foreign tenant (`tenant_scope_not_supported`)
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
@@ -1495,6 +1498,7 @@ paths:
         - $ref: '#/components/parameters/XTenantId'
       responses:
         '204': { description: Cancelled }
+        '403': { $ref: '#/components/responses/TenantScopeNotSupported' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409':
           description: Request is not in pending state
@@ -1677,7 +1681,7 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/PurchaseLeadResponse' }
         '401': { $ref: '#/components/responses/Unauthorized' }
-        '403': { $ref: '#/components/responses/Forbidden' }
+        '403': { $ref: '#/components/responses/TenantScopeNotSupported' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409':
           description: Lead already sold OR credit-row concurrency conflict
@@ -3343,6 +3347,14 @@ components:
           schema: { $ref: '#/components/schemas/ErrorResponse' }
     Forbidden:
       description: Authenticated but missing the required permission
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+    TenantScopeNotSupported:
+      description: |
+        The route does not support the `X-Tenant-Id` operator scope (it acts on the
+        caller's own tenant only) and the header selected a different tenant
+        (`tenant_scope_not_supported`, ADR 0039).
       content:
         application/json:
           schema: { $ref: '#/components/schemas/ErrorResponse' }

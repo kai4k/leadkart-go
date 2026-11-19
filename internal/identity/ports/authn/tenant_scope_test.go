@@ -179,3 +179,64 @@ func TestEffectiveTenantID(t *testing.T) {
 		t.Fatal("no tenant, no claims -> not ok")
 	}
 }
+
+func TestRejectTenantScope(t *testing.T) {
+	t.Parallel()
+	op := func() *jwt.Claims {
+		return &jwt.Claims{TenantID: tenantA, TenantSlug: authn.PlatformTenantSlug, IsPlatform: true}
+	}
+	member := func() *jwt.Claims { return &jwt.Claims{TenantID: tenantA, TenantSlug: "acme"} }
+	cases := []struct {
+		name       string
+		claims     *jwt.Claims
+		header     string
+		wantStatus int
+		wantCode   string
+	}{
+		{"operator scoped away is rejected", op(), tenantB, http.StatusForbidden, "tenant_scope_not_supported"},
+		{"operator without header passes", op(), "", http.StatusOK, ""},
+		{"operator header naming own tenant passes", op(), tenantA, http.StatusOK, ""},
+		{"member header ignored, passes", member(), tenantB, http.StatusOK, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			s := &sentinel{}
+			v := &fakeVerifier{claims: withFreshness(tc.claims)}
+			log := slog.New(slog.NewTextHandler(io.Discard, nil))
+			h := authn.TenantScope(v, fakeTenants{tenantA: true, tenantB: true}.TenantExists, log)(
+				authn.RejectTenantScope(authn.RequireFreshStamp(v, alwaysFresh{})(s.handler())))
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, scopeReq(t, tc.header))
+			if rec.Code != tc.wantStatus {
+				t.Fatalf("status %d want %d body %s", rec.Code, tc.wantStatus, rec.Body.String())
+			}
+			if tc.wantCode != "" && !strings.Contains(rec.Body.String(), tc.wantCode) {
+				t.Fatalf("body %s want code %s", rec.Body.String(), tc.wantCode)
+			}
+			if tc.wantStatus != http.StatusOK && s.called {
+				t.Fatal("handler must not run on a rejected scope")
+			}
+		})
+	}
+}
+
+func TestIsPlatformOperator(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		c    *jwt.Claims
+		want bool
+	}{
+		{"nil", nil, false},
+		{"slug-anchored platform member", &jwt.Claims{IsPlatform: true, TenantSlug: authn.PlatformTenantSlug}, true},
+		{"is_platform without slug", &jwt.Claims{IsPlatform: true, TenantSlug: "acme"}, false},
+		{"slug without is_platform", &jwt.Claims{TenantSlug: authn.PlatformTenantSlug}, false},
+		{"impersonation token", &jwt.Claims{IsPlatform: true, TenantSlug: authn.PlatformTenantSlug, Act: &jwt.ActClaim{Sub: "op"}}, false},
+	}
+	for _, tc := range cases {
+		if got := authn.IsPlatformOperator(tc.c); got != tc.want {
+			t.Errorf("%s: got %v want %v", tc.name, got, tc.want)
+		}
+	}
+}

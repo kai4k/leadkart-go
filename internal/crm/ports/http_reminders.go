@@ -129,7 +129,7 @@ func handleListReminders(log *slog.Logger, a app.Application) http.Handler {
 		}
 
 		selfFilter := ""
-		if !c.IsSuperUser && !c.IsPlatform &&
+		if !c.IsSuperUser && !authn.IsPlatformOperator(c) &&
 			!authn.Satisfies(r.Context(), permission.IdentityPermissions.Crm.Leads.ReadAll) {
 			selfFilter = c.MembershipID
 		}

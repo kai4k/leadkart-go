@@ -19,9 +19,9 @@ const (
 	errCodeInvalidTenantID = "invalid_tenant_id"
 )
 
-// isPlatformOperator: is_platform AND slug-anchored AND not an impersonation
+// IsPlatformOperator: is_platform AND slug-anchored AND not an impersonation
 // token (ADR 0039 slug anchor; ADR 0045 downgrade).
-func isPlatformOperator(c *jwt.Claims) bool {
+func IsPlatformOperator(c *jwt.Claims) bool {
 	return c != nil && c.IsPlatform && c.TenantSlug == PlatformTenantSlug && !c.IsImpersonation()
 }
 
@@ -50,7 +50,7 @@ func satisfiesIn(c *jwt.Claims, effective tenancy.ID, required string) bool {
 	own := sameID(c.TenantID, effective.String())
 	if slices.Contains(c.Permissions, required) {
 		if permission.IsPlatformReserved(required) && required != permission.IdentityPermissions.Meta.TenantAdmin {
-			return isPlatformOperator(c)
+			return IsPlatformOperator(c)
 		}
 		if own {
 			return true
@@ -61,7 +61,7 @@ func satisfiesIn(c *jwt.Claims, effective tenancy.ID, required string) bool {
 		permission.ImpliedByTenantAdmin(required) {
 		return true
 	}
-	if isPlatformOperator(c) {
+	if IsPlatformOperator(c) {
 		for _, eq := range permission.PlatformEquivalents(required) {
 			if slices.Contains(c.Permissions, eq) {
 				return true
@@ -142,7 +142,7 @@ func RequireTenantPermission(verifier Verifier, validator StampValidator, pathVa
 				writeError(w, http.StatusBadRequest, errCodeTenantScopeConflict, "X-Tenant-Id conflicts with the tenant in the URL")
 				return
 			}
-			if !c.IsSuperUser && !isPlatformOperator(c) && !sameID(urlTenant, c.TenantID) {
+			if !c.IsSuperUser && !IsPlatformOperator(c) && !sameID(urlTenant, c.TenantID) {
 				writeError(w, http.StatusForbidden, errCodeForbidden, "tenant context does not match url")
 				return
 			}

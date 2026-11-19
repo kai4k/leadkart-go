@@ -14,10 +14,11 @@ import (
 const TenantScopeHeader = "X-Tenant-Id"
 
 const (
-	errCodeInvalidTenantScope  = "invalid_tenant_scope"
-	errCodeTenantScopeNotFound = "tenant_scope_not_found"
-	errCodeTenantScopeConflict = "tenant_scope_conflict"
-	errCodeInternal            = "internal_error"
+	errCodeInvalidTenantScope      = "invalid_tenant_scope"
+	errCodeTenantScopeNotFound     = "tenant_scope_not_found"
+	errCodeTenantScopeConflict     = "tenant_scope_conflict"
+	errCodeTenantScopeNotSupported = "tenant_scope_not_supported"
+	errCodeInternal                = "internal_error"
 )
 
 // TenantExistsFunc validates a header-supplied target tenant: it reports
@@ -42,7 +43,7 @@ type scopeOverride struct {
 //
 // This is the ONE place the header is read. The override is bound to the
 // verified person id, so a stashed value can never be consumed for a
-// different principal, and RequireAuth re-checks isPlatformOperator.
+// different principal, and RequireAuth re-checks IsPlatformOperator.
 func TenantScope(verifier Verifier, tenantExists TenantExistsFunc, log *slog.Logger) func(http.Handler) http.Handler {
 	if verifier == nil || tenantExists == nil || log == nil {
 		panic("authn: TenantScope verifier, tenantExists and log required")
@@ -60,7 +61,7 @@ func TenantScope(verifier Verifier, tenantExists TenantExistsFunc, log *slog.Log
 				next.ServeHTTP(w, r)
 				return
 			}
-			if !isPlatformOperator(c) {
+			if !IsPlatformOperator(c) {
 				log.DebugContext(r.Context(), "X-Tenant-Id ignored for non-platform caller", "caller_tenant_id", c.TenantID)
 				next.ServeHTTP(w, r)
 				return
@@ -93,7 +94,7 @@ func TenantScope(verifier Verifier, tenantExists TenantExistsFunc, log *slog.Log
 // scopeOverrideFor returns the validated header tenant for this principal.
 func scopeOverrideFor(ctx context.Context, c *jwt.Claims) (tenancy.ID, bool) {
 	o, ok := ctx.Value(scopeOverrideKey{}).(scopeOverride)
-	if !ok || c == nil || o.personID != c.Subject || !isPlatformOperator(c) {
+	if !ok || c == nil || o.personID != c.Subject || !IsPlatformOperator(c) {
 		return "", false
 	}
 	return o.tenantID, true
@@ -136,4 +137,27 @@ func ActorMembershipID(ctx context.Context) string {
 		return ""
 	}
 	return c.MembershipID
+}
+
+type rejectScopeKey struct{}
+
+// RejectTenantScope marks a route as not supporting the X-Tenant-Id operator
+// scope: when the header would move the request out of the caller's own
+// tenant, the auth gate answers 403 tenant_scope_not_supported instead of
+// running the handler. Wrap OUTSIDE the auth middleware:
+//
+//	mux.Handle(pattern, authn.RejectTenantScope(auth(handler)))
+//
+// For routes whose effect is bound to the caller's own tenant (wallet debit,
+// self-service approval workflows) where acting "as" another tenant would be
+// silently wrong. Headers from non-operators are ignored as everywhere else.
+func RejectTenantScope(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), rejectScopeKey{}, true)))
+	})
+}
+
+func scopeRejected(ctx context.Context) bool {
+	v, _ := ctx.Value(rejectScopeKey{}).(bool)
+	return v
 }

@@ -161,6 +161,11 @@ func RequireAuth(verifier Verifier) func(http.Handler) http.Handler {
 			if o, ok := scopeOverrideFor(r.Context(), claims); ok {
 				tid = o // ADR 0039: validated operator header scope
 			}
+			if scopeRejected(r.Context()) && !sameID(tid.String(), claims.TenantID) {
+				writeError(w, http.StatusForbidden, errCodeTenantScopeNotSupported,
+					"X-Tenant-Id is not supported on this route")
+				return
+			}
 			ctx = tenancy.WithID(ctx, tid)
 			// Stash the RFC 8693 actor claim on ctx for downstream
 			// outbox-writer propagation per ADR 0056. Zero claim
@@ -327,7 +332,7 @@ func RequirePlatform(verifier Verifier, validator StampValidator) func(http.Hand
 			// slug anchor must agree. Either-or would let an attacker
 			// who can forge a JWT (or a buggy issuer path) bypass with
 			// just one of the two.
-			if !c.IsPlatform || c.TenantSlug != PlatformTenantSlug {
+			if !IsPlatformOperator(c) {
 				writeError(w, http.StatusForbidden, errCodeForbidden,
 					"platform-tier access required")
 				return

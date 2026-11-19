@@ -253,17 +253,17 @@ func AddRoutes(mux *http.ServeMux, log *slog.Logger, a app.Application, verifier
 		// requires loading the requester membership which we can't do
 		// in middleware).
 		mux.Handle("POST /api/v1/permission-requests",
-			auth(handleCreatePermissionRequest(log, a)))
+			authn.RejectTenantScope(auth(handleCreatePermissionRequest(log, a))))
 		mux.Handle("GET /api/v1/permission-requests",
-			auth(handleListPermissionRequests(log, a)))
+			authn.RejectTenantScope(auth(handleListPermissionRequests(log, a))))
 		mux.Handle("GET /api/v1/permission-requests/{requestId}",
-			auth(handleGetPermissionRequest(log, a)))
+			authn.RejectTenantScope(auth(handleGetPermissionRequest(log, a))))
 		mux.Handle("POST /api/v1/permission-requests/{requestId}/approve",
-			auth(handleApprovePermissionRequest(log, a)))
+			authn.RejectTenantScope(auth(handleApprovePermissionRequest(log, a))))
 		mux.Handle("POST /api/v1/permission-requests/{requestId}/deny",
-			auth(handleDenyPermissionRequest(log, a)))
+			authn.RejectTenantScope(auth(handleDenyPermissionRequest(log, a))))
 		mux.Handle("POST /api/v1/permission-requests/{requestId}/cancel",
-			auth(handleCancelPermissionRequest(log, a)))
+			authn.RejectTenantScope(auth(handleCancelPermissionRequest(log, a))))
 
 		// Audit-log reads per ADR 0027 (outbox doubles as audit) +
 		// ADR 0038 (keyset pagination). Self-read is always allowed

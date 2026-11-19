@@ -176,7 +176,7 @@ func handleListWorkItems(log *slog.Logger, a app.Application) http.Handler {
 
 		// "Only my tasks" gate.
 		selfFilter := ""
-		if !c.IsSuperUser && !c.IsPlatform &&
+		if !c.IsSuperUser && !authn.IsPlatformOperator(c) &&
 			!authn.Satisfies(r.Context(), permission.IdentityPermissions.Tasks.WorkItems.ReadAll) {
 			selfFilter = c.MembershipID
 		}
@@ -367,7 +367,7 @@ func handleDashboard(log *slog.Logger, a app.Application) http.Handler {
 			return
 		}
 		includeTeam := strings.EqualFold(r.URL.Query().Get("include_team"), "true")
-		if includeTeam && !c.IsSuperUser && !c.IsPlatform &&
+		if includeTeam && !c.IsSuperUser && !authn.IsPlatformOperator(c) &&
 			!authn.Satisfies(r.Context(), permission.IdentityPermissions.Tasks.WorkItems.ReadAll) {
 			writeError(w, http.StatusForbidden, errCodeForbidden,
 				"caller lacks tasks.work_items.read_all for team view")

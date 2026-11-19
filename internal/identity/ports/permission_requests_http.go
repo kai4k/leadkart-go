@@ -205,7 +205,7 @@ func handleGetPermissionRequest(log *slog.Logger, a app.Application) http.Handle
 		// Caller must be either the requester, the named approver, OR
 		// a Platform operator. Cross-caller reads collapse to 404 per
 		// ADR 0044 enumeration-safety canon.
-		isPlatform := c.IsPlatform
+		isPlatform := authn.IsPlatformOperator(c)
 		isRequester := view.RequesterMembershipID == c.MembershipID
 		isApprover := view.ApproverMembershipID != "" && view.ApproverMembershipID == c.MembershipID
 		if !isPlatform && !isRequester && !isApprover {
@@ -245,7 +245,7 @@ func handleApprovePermissionRequest(log *slog.Logger, a app.Application) http.Ha
 				TenantID:             tenant.ID(tid),
 				RequestID:            id,
 				ApproverMembershipID: membership.ID(c.MembershipID),
-				IsPlatformOperator:   c.IsPlatform,
+				IsPlatformOperator:   authn.IsPlatformOperator(c),
 				DecisionReason:       req.DecisionReason,
 			})
 		switch {
@@ -301,7 +301,7 @@ func handleDenyPermissionRequest(log *slog.Logger, a app.Application) http.Handl
 				TenantID:             tenant.ID(tid),
 				RequestID:            id,
 				ApproverMembershipID: membership.ID(c.MembershipID),
-				IsPlatformOperator:   c.IsPlatform,
+				IsPlatformOperator:   authn.IsPlatformOperator(c),
 				DecisionReason:       req.DecisionReason,
 			})
 		switch {
