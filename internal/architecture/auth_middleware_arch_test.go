@@ -34,7 +34,6 @@ var publicRoutesAllowList = map[string]bool{
 	"POST /api/v1/auth/request-password-reset": true,
 	"POST /api/v1/auth/reset-password":         true,
 	"POST /api/v1/auth/confirm-email-change":   true,
-	"POST /api/v1/tenants":                     true, // open signup; rate-limited at IP
 }
 
 // muxHandleRE captures `mux.Handle("METHOD /path", ...)`. We pull

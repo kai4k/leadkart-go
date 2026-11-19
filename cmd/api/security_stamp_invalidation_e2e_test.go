@@ -55,6 +55,7 @@ import (
 	"github.com/leadkart/leadkart-go/internal/common/ids"
 	"github.com/leadkart/leadkart-go/internal/common/messaging"
 	crmapp "github.com/leadkart/leadkart-go/internal/crm/app"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/permission"
 	"github.com/leadkart/leadkart-go/internal/identity/ports"
 	"github.com/leadkart/leadkart-go/internal/identity/ports/subscribers"
 	platformapp "github.com/leadkart/leadkart-go/internal/platform/app"
@@ -170,7 +171,9 @@ func TestSecurityStampInvalidation_PasswordChange_Returns401WithinFastPath(t *te
 	regSlug := "stamp-flow-" + full[len(full)-8:]
 	regEmail := "stamp-admin-" + full[len(full)-8:] + "@flow.test"
 	const password = "correct horse battery staple"
-	if r := postJSON(t, srv.URL+"/api/v1/tenants", ports.RegisterTenantRequest{
+	// Tenant registration is operator-only (ADR 0053/0068 D6).
+	opTok := mintOperatorJWT(t, wiring.Issuer, wiring.Persons, "", []string{permission.IdentityPermissions.Platform.TenantsCreate}, true)
+	if r := postJSONWithBearer(t, srv.URL+"/api/v1/tenants", opTok, ports.RegisterTenantRequest{
 		Slug:           regSlug,
 		LegalName:      "Stamp Flow Pharma Pvt Ltd",
 		DisplayName:    "Stamp Flow",

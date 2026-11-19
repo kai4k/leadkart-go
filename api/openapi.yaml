@@ -369,7 +369,13 @@ paths:
         - $ref: '#/components/parameters/XCommandId'
       tags: [tenants]
       summary: Register a new tenant + initial admin user
-      security: []
+      description: |
+        Platform operators only (is_platform + slug anchor) — ADR 0068. Tenant
+        onboarding is operator-led (ADR 0053 "no public sign-up surface").
+        Requires `platform.tenants.create`.
+      security:
+        - BearerAuth: []
+      x-required-permissions: [platform.tenants.create]
       requestBody:
         required: true
         content:
@@ -382,11 +388,14 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/RegisterTenantResponse' }
         '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
         '409':
           description: Email already has an active membership in another tenant
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
 
   /api/v1/tenants/{tenantId}:
     get:
@@ -3269,6 +3278,15 @@ components:
           schema: { $ref: '#/components/schemas/ErrorResponse' }
     Forbidden:
       description: Authenticated but missing the required permission
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+    TooManyRequests:
+      description: Rate limit exceeded; `Retry-After` carries the seconds to wait.
+      headers:
+        Retry-After:
+          description: Seconds until the request may be retried.
+          schema: { type: integer }
       content:
         application/json:
           schema: { $ref: '#/components/schemas/ErrorResponse' }

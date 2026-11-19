@@ -42,13 +42,12 @@ import (
 //
 // Routes registered here:
 //
-//	POST /api/v1/tenants                   register a new tenant + admin user
+//	POST /api/v1/tenants                   platform operator (platform.tenants.create): register a new tenant + admin user
 //	POST /api/v1/auth/login                exchange credentials for ⟨access, refresh⟩
 //	POST /api/v1/auth/refresh              rotate refresh token + reissue access
 //	POST /api/v1/auth/logout               revoke a refresh-token family
 //	POST /api/v1/auth/change-password      authenticated; rotate own password
 func AddRoutes(mux *http.ServeMux, log *slog.Logger, a app.Application, verifier authn.Verifier, stampValidator authn.StampValidator) {
-	mux.Handle("POST /api/v1/tenants", handleRegisterTenant(log, a))
 	mux.Handle("POST /api/v1/auth/login", handleLogin(log, a))
 	mux.Handle("POST /api/v1/auth/refresh", handleRefresh(log, a))
 	mux.Handle("POST /api/v1/auth/logout", handleLogout(log, a))
@@ -119,6 +118,11 @@ func AddRoutes(mux *http.ServeMux, log *slog.Logger, a app.Application, verifier
 		// permissions. Tenants do NOT self-suspend / self-restore via
 		// these routes; those flows go through Platform-tier APIs.
 		platform := authn.RequirePlatform(verifier, stampValidator)
+
+		// Tenant onboarding is operator-only (ADR 0053 "no public sign-up
+		// surface"; BRD PlatformManager onboarding; ADR 0068 D6).
+		tenantsCreate := authn.RequirePermission(verifier, stampValidator, p.Platform.TenantsCreate)
+		mux.Handle("POST /api/v1/tenants", platform(tenantsCreate(handleRegisterTenant(log, a))))
 		mux.Handle("POST /api/v1/tenants/{tenantId}/suspend",
 			platform(handleSuspendTenant(log, a)))
 		mux.Handle("POST /api/v1/tenants/{tenantId}/activate",

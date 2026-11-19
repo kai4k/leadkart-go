@@ -21,7 +21,7 @@ ADMIN_URL="${ADMIN_URL:-http://localhost:9090}"
 RUN_ID="smoke-$(date +%s)-${RANDOM}"
 TENANT_SLUG="${RUN_ID}-co"
 ADMIN_EMAIL="${RUN_ID}@smoke.test"
-ADMIN_PASSWORD="correct-horse-battery-staple-1234"
+ADMIN_PASSWORD="Correct-Horse-Battery-Staple-1234!"
 
 red()    { printf '\033[31m%s\033[0m\n' "$1" >&2; }
 green()  { printf '\033[32m%s\033[0m\n' "$1"; }
@@ -41,6 +41,17 @@ curl -fsS "${ADMIN_URL}/ready"  >/dev/null || fail "admin /ready not 200 (postgr
 curl -fsS "${ADMIN_URL}/health" >/dev/null || fail "admin /health not 200"
 green "    ✓ all three probes 200"
 
+# ------ Operator login (tenant registration is operator-only) --------------
+# ADR 0053/0068 D6: POST /tenants needs platform.tenants.create. The
+# bootstrap superadmin (cmd/bootstrap, docker/.env) is the operator.
+SUPERADMIN_EMAIL="${SUPERADMIN_EMAIL:-superadmin@leadkart.local}"
+SUPERADMIN_PASSWORD="${SUPERADMIN_PASSWORD:-LeadKart!Dev2026}"
+OP_RESP=$(curl -fsS -X POST "${API_URL}/api/v1/auth/login" -H "Content-Type: application/json" \
+    -d "{\"email\":\"${SUPERADMIN_EMAIL}\",\"password\":\"${SUPERADMIN_PASSWORD}\",\"device_label\":\"smoke-operator\"}") \
+    || fail "superadmin login failed (run task docker:env + bootstrap)"
+OP_TOKEN=$(echo "${OP_RESP}" | sed -n 's/.*"access_token":"\([^"]*\)".*/\1/p')
+[[ -n "${OP_TOKEN}" ]] || fail "superadmin access_token absent"
+
 # ------ Tenant registration -----------------------------------------------
 yellow "[2/5] Register tenant ${TENANT_SLUG}"
 
@@ -58,6 +69,7 @@ EOF
 )
 
 REG_RESP=$(curl -fsS -X POST "${API_URL}/api/v1/tenants" \
+    -H "Authorization: Bearer ${OP_TOKEN}" \
     -H "Content-Type: application/json" \
     -d "${REG_BODY}") || fail "tenant registration failed"
 

@@ -37,6 +37,7 @@ import (
 	"github.com/leadkart/leadkart-go/internal/common/config"
 	"github.com/leadkart/leadkart-go/internal/common/ids"
 	crmapp "github.com/leadkart/leadkart-go/internal/crm/app"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/permission"
 	"github.com/leadkart/leadkart-go/internal/identity/ports"
 	platformapp "github.com/leadkart/leadkart-go/internal/platform/app"
 )
@@ -90,7 +91,9 @@ func TestHTTPFlow_RegisterLoginRefreshLogout(t *testing.T) {
 	registerSlug := "http-acme-" + full[len(full)-8:]
 
 	// 1. Register tenant.
-	reg := postJSON(t, srv.URL+"/api/v1/tenants", ports.RegisterTenantRequest{
+	// Tenant registration is operator-only (ADR 0053/0068 D6).
+	opTok := mintOperatorJWT(t, wiring.Issuer, wiring.Persons, "", []string{permission.IdentityPermissions.Platform.TenantsCreate}, true)
+	reg := postJSONWithBearer(t, srv.URL+"/api/v1/tenants", opTok, ports.RegisterTenantRequest{
 		Slug:           registerSlug,
 		LegalName:      "HTTP Acme Pharma Pvt Ltd",
 		DisplayName:    "HTTP Acme",

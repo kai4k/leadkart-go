@@ -40,9 +40,11 @@ import (
 	"github.com/leadkart/leadkart-go/internal/common/config"
 	"github.com/leadkart/leadkart-go/internal/common/email"
 	"github.com/leadkart/leadkart-go/internal/common/ids"
+	"github.com/leadkart/leadkart-go/internal/common/slug"
 	crmapp "github.com/leadkart/leadkart-go/internal/crm/app"
 	"github.com/leadkart/leadkart-go/internal/identity/adapters"
 	"github.com/leadkart/leadkart-go/internal/identity/app"
+	"github.com/leadkart/leadkart-go/internal/identity/app/command"
 	"github.com/leadkart/leadkart-go/internal/identity/app/jwt"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/permission"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
@@ -120,28 +122,29 @@ type registeredTenant struct {
 func (f e2eFixture) registerAndLogin(t *testing.T, namePrefix string) registeredTenant {
 	t.Helper()
 	suffix := ids.NewV7().String()[len(ids.NewV7().String())-8:]
-	slug := namePrefix + "-" + suffix
-	email := namePrefix + "-admin-" + suffix + "@e2e.test"
-	password := "correct horse battery staple " + suffix
+	slugStr := namePrefix + "-" + suffix
+	adminAddr := namePrefix + "-admin-" + suffix + "@e2e.test"
+	password := "Correct-Horse-Battery-9!" + suffix
 
-	regResp := f.postJSON(t, "/api/v1/tenants", ports.RegisterTenantRequest{
-		Slug:           slug,
-		LegalName:      namePrefix + " Pharma Pvt Ltd",
-		DisplayName:    namePrefix,
-		AdminEmail:     email,
-		AdminPassword:  password,
-		AdminFirstName: namePrefix,
-		AdminLastName:  "Admin",
-	})
-	if regResp.status != http.StatusCreated {
-		t.Fatalf("register %s: status %d body %s", namePrefix, regResp.status, regResp.body)
+	// Tenant registration is operator-only over HTTP (ADR 0053/0068 D6);
+	// fixtures onboard through the command, the same path cmd/bootstrap uses.
+	slugVO, err := slug.New(slugStr)
+	if err != nil {
+		t.Fatalf("slug %s: %v", slugStr, err)
 	}
-	var reg ports.RegisterTenantResponse
-	if err := json.Unmarshal(regResp.body, &reg); err != nil {
-		t.Fatalf("register %s decode: %v", namePrefix, err)
+	adminEmail, err := email.New(adminAddr)
+	if err != nil {
+		t.Fatalf("email %s: %v", adminAddr, err)
+	}
+	regOut, err := f.app.Commands.RegisterTenant.Handle(t.Context(), command.RegisterTenantCommand{
+		Slug: slugVO, LegalName: namePrefix + " Pharma Pvt Ltd", DisplayName: namePrefix,
+		AdminEmail: adminEmail, AdminPassword: password, AdminFirstName: namePrefix, AdminLastName: "Admin",
+	})
+	if err != nil {
+		t.Fatalf("register %s: %v", namePrefix, err)
 	}
 	loginResp := f.postJSON(t, "/api/v1/auth/login", ports.LoginRequest{
-		Email:       email,
+		Email:       adminAddr,
 		Password:    password,
 		DeviceLabel: "e2e test device " + suffix,
 	})
@@ -153,11 +156,11 @@ func (f e2eFixture) registerAndLogin(t *testing.T, namePrefix string) registered
 		t.Fatalf("login %s decode: %v", namePrefix, err)
 	}
 	return registeredTenant{
-		TenantID:     reg.TenantID,
-		PersonID:     reg.PersonID,
-		MembershipID: reg.MembershipID,
-		Slug:         slug,
-		Email:        email,
+		TenantID:     string(regOut.TenantID),
+		PersonID:     string(regOut.PersonID),
+		MembershipID: string(regOut.MembershipID),
+		Slug:         slugStr,
+		Email:        adminAddr,
 		Password:     password,
 		AccessToken:  login.AccessToken,
 		RefreshToken: login.RefreshToken,
@@ -182,6 +185,22 @@ func (f e2eFixture) registerAndLogin(t *testing.T, namePrefix string) registered
 // pass an explicit ID; the helper still inserts a Person under that ID.
 func (f e2eFixture) mintPlatformToken(t *testing.T, operatorPersonID string) string {
 	t.Helper()
+	return mintOperatorJWT(t, f.Issuer, f.persons, operatorPersonID, nil, false)
+}
+
+// mintPlatformTokenWith mints a platform-operator JWT that always carries
+// platform.tenants.create plus the standard operator permissions and any
+// extra permissions; superUser sets the is_super_user claim.
+func (f e2eFixture) mintPlatformTokenWith(t *testing.T, perms []string, superUser bool) string {
+	t.Helper()
+	return mintOperatorJWT(t, f.Issuer, f.persons, "",
+		append([]string{permission.IdentityPermissions.Platform.TenantsCreate}, perms...), superUser)
+}
+
+// mintOperatorJWT is the shared body behind the fixture helpers; it is a
+// plain function so tests that do not use e2eFixture can mint operators too.
+func mintOperatorJWT(t *testing.T, issuer *jwt.Issuer, persons *adapters.PersonRepository, operatorPersonID string, extra []string, superUser bool) string {
+	t.Helper()
 	if operatorPersonID == "" {
 		operatorPersonID = ids.NewV7().String()
 	}
@@ -205,23 +224,24 @@ func (f e2eFixture) mintPlatformToken(t *testing.T, operatorPersonID string) str
 	if err != nil {
 		t.Fatalf("operator person.New: %v", err)
 	}
-	if err := f.persons.Add(t.Context(), op); err != nil {
+	if err := persons.Add(t.Context(), op); err != nil {
 		t.Fatalf("operator persons.Add: %v", err)
 	}
 
-	tok, err := f.Issuer.Issue(jwt.IssueArgs{
+	tok, err := issuer.Issue(jwt.IssueArgs{
 		PersonID:      operatorPersonID,
 		TenantID:      ids.NewV7().String(), // synthetic — Platform doesn't bind to a real tenant for these tests
 		TenantSlug:    "platform",
 		MembershipID:  ids.NewV7().String(),
 		SecurityStamp: op.SecurityStamp().String(),
 		IsPlatform:    true,
-		Permissions: []string{
+		IsSuperUser:   superUser,
+		Permissions: append([]string{
 			permission.IdentityPermissions.Platform.TenantsView,
 			permission.IdentityPermissions.Platform.TenantsManage,
 			permission.IdentityPermissions.Platform.UsersView,
 			permission.IdentityPermissions.Platform.UsersManage,
-		},
+		}, extra...),
 	})
 	if err != nil {
 		t.Fatalf("mint platform token: %v", err)
@@ -647,7 +667,7 @@ func TestE2E_RegisterTenant_SameAdminEmailRejected(t *testing.T) {
 
 	// Same email, different slug → second register attempt MUST fail.
 	suffix := ids.NewV7().String()[len(ids.NewV7().String())-8:]
-	resp := f.postJSON(t, "/api/v1/tenants", ports.RegisterTenantRequest{
+	resp := f.authedJSON(t, http.MethodPost, "/api/v1/tenants", f.mintPlatformTokenWith(t, nil, true), ports.RegisterTenantRequest{
 		Slug:           "globex-" + suffix,
 		LegalName:      "Globex Pharma Pvt Ltd",
 		DisplayName:    "Globex",
