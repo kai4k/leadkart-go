@@ -158,12 +158,13 @@ func handleSetRoleParent(log *slog.Logger, a app.Application) http.Handler {
 		}
 		var newParent role.ID
 		if req.ParentRoleID != nil && *req.ParentRoleID != "" {
-			if _, perr := uuid.Parse(*req.ParentRoleID); perr != nil {
+			parentID, pok := authn.CanonicalID(*req.ParentRoleID)
+			if !pok {
 				writeError(w, http.StatusBadRequest, ErrCodeInvalidRoleID,
 					"parent_role_id must be a UUID or null")
 				return
 			}
-			newParent = role.ID(*req.ParentRoleID)
+			newParent = role.ID(parentID)
 		}
 		actor := actorMembershipFromContext(r)
 		err := a.Commands.SetRoleParent.Handle(r.Context(), command.SetRoleParentCommand{

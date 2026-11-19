@@ -7,8 +7,6 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/google/uuid"
-
 	"github.com/leadkart/leadkart-go/internal/common/email"
 	"github.com/leadkart/leadkart-go/internal/common/pagination"
 	"github.com/leadkart/leadkart-go/internal/common/tenancy"
@@ -196,13 +194,14 @@ func handleAssignUserRole(log *slog.Logger, a app.Application) http.Handler {
 			writeError(w, http.StatusBadRequest, ErrCodeInvalidBody, "request body is not valid JSON")
 			return
 		}
-		if _, err := uuid.Parse(req.RoleID); err != nil {
+		roleID, ok := authn.CanonicalID(req.RoleID)
+		if !ok {
 			writeError(w, http.StatusBadRequest, ErrCodeInvalidRoleID, "role_id must be a UUID")
 			return
 		}
 		// D4 (ADR 0068): assigning a role confers its permission set — the
 		// caller must themselves satisfy it; super-admin roles are super-user only.
-		view, rerr := a.Queries.GetRole.Handle(r.Context(), query.GetRoleQuery{TenantID: tenant.ID(tid), RoleID: role.ID(req.RoleID)})
+		view, rerr := a.Queries.GetRole.Handle(r.Context(), query.GetRoleQuery{TenantID: tenant.ID(tid), RoleID: role.ID(roleID)})
 		switch {
 		case errors.Is(rerr, role.ErrNotFound):
 			writeError(w, http.StatusNotFound, ErrCodeRoleNotFound, "")
@@ -224,7 +223,7 @@ func handleAssignUserRole(log *slog.Logger, a app.Application) http.Handler {
 		err := a.Commands.AssignUserRole.Handle(r.Context(), command.AssignUserRoleCommand{
 			TenantID:     tenant.ID(tid),
 			MembershipID: mid,
-			RoleID:       role.ID(req.RoleID),
+			RoleID:       role.ID(roleID),
 		})
 		writeUserMutationResult(w, log, r, err)
 	})
@@ -310,14 +309,15 @@ func handleAssignUserManager(log *slog.Logger, a app.Application) http.Handler {
 			writeError(w, http.StatusBadRequest, ErrCodeInvalidBody, "request body is not valid JSON")
 			return
 		}
-		if _, err := uuid.Parse(req.ManagerID); err != nil {
+		managerID, ok := authn.CanonicalID(req.ManagerID)
+		if !ok {
 			writeError(w, http.StatusBadRequest, ErrCodeInvalidManagerID, "manager_id must be a UUID")
 			return
 		}
 		err := a.Commands.AssignUserManager.Handle(r.Context(), command.AssignUserManagerCommand{
 			TenantID:     tenant.ID(tid),
 			MembershipID: mid,
-			ManagerID:    membership.ID(req.ManagerID),
+			ManagerID:    membership.ID(managerID),
 		})
 		writeUserMutationResult(w, log, r, err)
 	})

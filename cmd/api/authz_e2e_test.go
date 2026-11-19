@@ -13,6 +13,7 @@ package main
 import (
 	"encoding/json"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 
@@ -132,10 +133,12 @@ func TestE2E_Authz_SelfTargetCannotBeBypassedBySpelling(t *testing.T) {
 	f := newE2EFixture(t)
 	owner := f.registerAndLogin(t, "selfspell")
 	salesExec := f.roleIDByName(t, owner.AccessToken, role.SystemRoles.Tenant.SalesExecutive)
+	before := f.getUser(t, owner.AccessToken, owner.MembershipID)
 	spellings := map[string]string{
 		"uppercase":  strings.ToUpper(owner.MembershipID),
 		"urn":        "urn:uuid:" + owner.MembershipID,
 		"hyphenless": strings.ReplaceAll(owner.MembershipID, "-", ""),
+		"braces":     "%7B" + owner.MembershipID + "%7D",
 	}
 	for name, own := range spellings {
 		deact := f.authedJSON(t, http.MethodPost, "/api/v1/users/"+own+"/deactivate", owner.AccessToken,
@@ -148,5 +151,85 @@ func TestE2E_Authz_SelfTargetCannotBeBypassedBySpelling(t *testing.T) {
 		if assign.status != http.StatusForbidden || decodeError(t, assign.body).Error != "self_modification_forbidden" {
 			t.Errorf("%s assign role: %d %s, want 403 self_modification_forbidden", name, assign.status, assign.body)
 		}
+	}
+	// The rejections must also have had no effect: still active, same roles.
+	after := f.getUser(t, owner.AccessToken, owner.MembershipID)
+	if after.Status != before.Status || after.Status != "active" {
+		t.Errorf("owner status = %q (was %q), want unchanged \"active\"", after.Status, before.Status)
+	}
+	if !slices.Equal(after.RoleIDs, before.RoleIDs) {
+		t.Errorf("owner role set changed: %v -> %v", before.RoleIDs, after.RoleIDs)
+	}
+}
+
+func (f e2eFixture) getUser(t *testing.T, token, id string) ports.UserDto {
+	t.Helper()
+	resp := f.authedJSON(t, http.MethodGet, "/api/v1/users/"+id, token, nil)
+	if resp.status != http.StatusOK {
+		t.Fatalf("get user %s: %d %s", id, resp.status, resp.body)
+	}
+	var u ports.UserDto
+	if err := json.Unmarshal(resp.body, &u); err != nil {
+		t.Fatalf("decode user: %v", err)
+	}
+	return u
+}
+
+// Ids in the request BODY are compared as UUID values too: spelling a
+// member's own id differently as manager_id must be rejected exactly like the
+// canonical self-manager attempt, and re-assigning an already-assigned role
+// through another spelling of role_id must behave exactly like the canonical
+// repeat (no error, no duplicate assignment).
+func TestE2E_Authz_BodyIDSpellingCannotBypassDomainRules(t *testing.T) {
+	f := newE2EFixture(t)
+	owner := f.registerAndLogin(t, "bodyspell")
+	memberID, _ := f.createMemberAndLogin(t, owner, "bodymember")
+	salesExec := f.roleIDByName(t, owner.AccessToken, role.SystemRoles.Tenant.SalesExecutive)
+
+	managerPath := "/api/v1/users/" + memberID + "/manager"
+	canon := f.authedJSON(t, http.MethodPut, managerPath, owner.AccessToken, ports.AssignUserManagerRequest{ManagerID: memberID})
+	if canon.status != http.StatusUnprocessableEntity {
+		t.Fatalf("canonical self-manager: %d %s, want 422", canon.status, canon.body)
+	}
+	for name, mgr := range map[string]string{
+		"uppercase":  strings.ToUpper(memberID),
+		"urn":        "urn:uuid:" + memberID,
+		"hyphenless": strings.ReplaceAll(memberID, "-", ""),
+		"braces":     "{" + memberID + "}",
+	} {
+		resp := f.authedJSON(t, http.MethodPut, managerPath, owner.AccessToken, ports.AssignUserManagerRequest{ManagerID: mgr})
+		if resp.status != canon.status || decodeErrorCode(t, resp.body) != decodeErrorCode(t, canon.body) {
+			t.Errorf("%s self-manager: %d %s, want same as canonical %d %s", name, resp.status, resp.body, canon.status, canon.body)
+		}
+	}
+	if u := f.getUser(t, owner.AccessToken, memberID); u.ReportsTo != "" {
+		t.Errorf("member reports_to = %q after rejected attempts, want empty", u.ReportsTo)
+	}
+
+	rolesPath := "/api/v1/users/" + memberID + "/roles"
+	first := f.authedJSON(t, http.MethodPost, rolesPath, owner.AccessToken, ports.AssignUserRoleRequest{RoleID: salesExec})
+	repeat := f.authedJSON(t, http.MethodPost, rolesPath, owner.AccessToken, ports.AssignUserRoleRequest{RoleID: salesExec})
+	if first.status != http.StatusNoContent || repeat.status != first.status {
+		t.Fatalf("canonical assign/repeat: %d / %d", first.status, repeat.status)
+	}
+	for name, rid := range map[string]string{
+		"uppercase":  strings.ToUpper(salesExec),
+		"urn":        "urn:uuid:" + salesExec,
+		"hyphenless": strings.ReplaceAll(salesExec, "-", ""),
+	} {
+		resp := f.authedJSON(t, http.MethodPost, rolesPath, owner.AccessToken, ports.AssignUserRoleRequest{RoleID: rid})
+		if resp.status != repeat.status {
+			t.Errorf("%s repeat assign: %d %s, want %d like the canonical repeat", name, resp.status, resp.body, repeat.status)
+		}
+	}
+	got := f.getUser(t, owner.AccessToken, memberID)
+	n := 0
+	for _, r := range got.RoleIDs {
+		if r == salesExec {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Errorf("role %s assigned %d times, want exactly once (role_ids=%v)", salesExec, n, got.RoleIDs)
 	}
 }
