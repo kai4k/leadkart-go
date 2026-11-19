@@ -27,7 +27,7 @@ func (f e2eFixture) pendingRequestIn(t *testing.T, owner registeredTenant, prefi
 	t.Helper()
 	membershipID, memberToken = f.createMemberAndLogin(t, owner, prefix)
 	resp := f.authedJSON(t, http.MethodPost, "/api/v1/permission-requests", memberToken, ports.CreatePermissionRequestRequest{
-		Permission: permission.IdentityPermissions.Meta.TenantAdmin,
+		Permission: permission.IdentityPermissions.Users.View,
 		Reason:     "needs admin access for the quarter",
 	})
 	if resp.status != http.StatusCreated {

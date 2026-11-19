@@ -1464,8 +1464,11 @@ paths:
         Caller (the requester) asks for a time-bound elevated permission.
         The named approver is the requester's current manager
         (`tenant_memberships.reports_to`). If the requester has no
-        manager, only Platform operators can approve.
+        manager, only an operator holding operator authority can approve.
         At most one pending request per (membership, permission) tuple.
+        `tenant.admin`, platform-reserved permissions and names outside the catalogue are not
+        requestable: they are conferred by role only, and the request is refused with 422
+        (`permission_not_requestable`).
       requestBody:
         required: true
         content:
@@ -1538,7 +1541,11 @@ paths:
       description: |
         Transitions Pending → Approved AND lands a time-bound grant on
         the requester's membership overlay (single transaction). Caller
-        MUST be either the requester's manager OR carry `is_platform=true`.
+        MUST be either the requester's manager OR hold operator authority (a super user, or a
+        platform operator holding `platform.tenants.view`; membership of the platform tenant alone
+        does not count). A stored request whose permission is not requestable (for example one
+        submitted before that rule existed) is refused with 422 (`permission_not_requestable`) and
+        stays pending; the approver can deny it and the requester can cancel it.
       parameters:
         - $ref: '#/components/parameters/XCommandId'
         - { $ref: '#/components/parameters/PermissionRequestId' }
@@ -1551,7 +1558,7 @@ paths:
       responses:
         '204': { description: Approved + grant created }
         '403':
-          description: Caller is not the manager and not a Platform operator, OR `X-Tenant-Id` selected a foreign tenant (`tenant_scope_not_supported`)
+          description: Caller is not the manager and holds no operator authority, OR `X-Tenant-Id` selected a foreign tenant (`tenant_scope_not_supported`)
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
@@ -1569,7 +1576,8 @@ paths:
       summary: Deny a pending request (manager or platform operator)
       description: |
         Transitions Pending → Denied. `decision_reason` is REQUIRED on
-        Deny per ADR 0055 audit canon. Same caller-authorization as Approve.
+        Deny per ADR 0055 audit canon. Same caller-authorization as Approve (the requester's
+        manager, or operator authority; platform-tenant membership alone does not count).
       parameters:
         - $ref: '#/components/parameters/XCommandId'
         - { $ref: '#/components/parameters/PermissionRequestId' }
@@ -1582,7 +1590,7 @@ paths:
       responses:
         '204': { description: Denied }
         '403':
-          description: Caller is not the manager and not a Platform operator, OR `X-Tenant-Id` selected a foreign tenant (`tenant_scope_not_supported`)
+          description: Caller is not the manager and holds no operator authority, OR `X-Tenant-Id` selected a foreign tenant (`tenant_scope_not_supported`)
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
@@ -4389,7 +4397,7 @@ components:
       required: [request_id, status]
       properties:
         request_id:               { type: string, format: uuid }
-        approver_membership_id:   { type: string, format: uuid, description: 'Requester current manager. Empty when the requester has no manager — only Platform operators can approve.' }
+        approver_membership_id:   { type: string, format: uuid, description: 'Requester current manager. Empty when the requester has no manager — only an operator holding operator authority can approve.' }
         status:                   { type: string, enum: [pending] }
 
     ApprovePermissionRequestRequest:

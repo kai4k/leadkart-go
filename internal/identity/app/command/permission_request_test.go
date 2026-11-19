@@ -227,7 +227,7 @@ func TestApprovePermissionRequest_MissingManagerRequiresPlatform(t *testing.T) {
 		TenantID:             requester.TenantID(),
 		RequestID:            out.RequestID,
 		ApproverMembershipID: membership.ID(ids.NewV7().String()),
-		IsPlatformOperator:   false,
+		OperatorAuthority:    false,
 	})
 	if !errors.Is(err, command.ErrPermissionRequestForbidden) {
 		t.Fatalf("non-platform err = %v, want ErrPermissionRequestForbidden", err)
@@ -238,7 +238,7 @@ func TestApprovePermissionRequest_MissingManagerRequiresPlatform(t *testing.T) {
 		TenantID:             requester.TenantID(),
 		RequestID:            out.RequestID,
 		ApproverMembershipID: membership.ID(ids.NewV7().String()),
-		IsPlatformOperator:   true,
+		OperatorAuthority:    true,
 	}); err != nil {
 		t.Fatalf("platform Approve: %v", err)
 	}
@@ -668,7 +668,7 @@ func TestApprovePermissionRequest_NonPendingAtLoad(t *testing.T) {
 		TenantID:             requester.TenantID(),
 		RequestID:            out.RequestID,
 		ApproverMembershipID: membership.ID(ids.NewV7().String()),
-		IsPlatformOperator:   true,
+		OperatorAuthority:    true,
 	})
 	if !errors.Is(err, command.ErrPermissionRequestNotPending) {
 		t.Fatalf("err = %v, want ErrPermissionRequestNotPending", err)
@@ -741,7 +741,7 @@ func TestApprovePermissionRequest_NonManagerAndNonPlatform_Forbidden(t *testing.
 		TenantID:             requester.TenantID(),
 		RequestID:            out.RequestID,
 		ApproverMembershipID: other,
-		IsPlatformOperator:   false,
+		OperatorAuthority:    false,
 	})
 	if !errors.Is(err, command.ErrPermissionRequestForbidden) {
 		t.Fatalf("err = %v, want ErrPermissionRequestForbidden", err)
@@ -910,7 +910,7 @@ func TestDenyPermissionRequest_NonPendingAtLoad(t *testing.T) {
 		TenantID:             requester.TenantID(),
 		RequestID:            out.RequestID,
 		ApproverMembershipID: membership.ID(ids.NewV7().String()),
-		IsPlatformOperator:   true,
+		OperatorAuthority:    true,
 		DecisionReason:       "scope too broad; rethink and re-submit",
 	})
 	if !errors.Is(err, command.ErrPermissionRequestNotPending) {
@@ -969,7 +969,7 @@ func TestDenyPermissionRequest_MissingManagerAndNonPlatform_Forbidden(t *testing
 		TenantID:             requester.TenantID(),
 		RequestID:            out.RequestID,
 		ApproverMembershipID: membership.ID(ids.NewV7().String()), // not the manager
-		IsPlatformOperator:   false,
+		OperatorAuthority:    false,
 		DecisionReason:       "scope too broad; rethink and re-submit",
 	})
 	if !errors.Is(err, command.ErrPermissionRequestForbidden) {
@@ -1075,3 +1075,56 @@ var (
 	_ pagination.Cursor
 	_ *person.Person
 )
+
+// A request stored before requestability was enforced may name tenant.admin or
+// a platform-reserved permission. Approve refuses it (even for an operator),
+// grants nothing, and leaves it pending so it can still be denied or cancelled.
+func TestApprovePermissionRequest_StoredNonRequestableNameIsRefusedAndStaysPending(t *testing.T) {
+	t.Parallel()
+
+	for _, name := range []string{
+		permission.IdentityPermissions.Meta.TenantAdmin,
+		permission.IdentityPermissions.Platform.ImpersonationManage,
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			reqs := newFakePermissionRequestRepo()
+			mems := newFakeMembershipRepoForPermReq()
+			requester := freshMembershipForPermReq(t)
+			manager := freshMembershipForPermReq(t)
+			_ = requester.AssignManager(manager.ID(), testNow) // arch-test:ignore-err - test fixture setup
+			_ = requester.PullEvents()
+			_ = mems.Add(t.Context(), requester) // arch-test:ignore-err - test fixture setup
+			stored := permissionrequest.UnmarshalFromDB(permissionrequest.Snapshot{
+				ID:                    permissionrequest.ID(ids.NewV7().String()),
+				TenantID:              requester.TenantID(),
+				RequesterMembershipID: requester.ID(),
+				Permission:            permission.FromConstant(name),
+				DurationDays:          7,
+				Reason:                "need elevated access for the rollout this week",
+				State:                 permissionrequest.StatePending,
+				CreatedAt:             testNow,
+				UpdatedAt:             testNow,
+			})
+			_ = reqs.Add(t.Context(), stored) // arch-test:ignore-err - test fixture setup
+
+			approveH := command.NewApprovePermissionRequestHandler(fakeUoW{}, reqs, mems, fixedTimeFn(), ids.NewV7)
+			for _, cmd := range []command.ApprovePermissionRequestCommand{
+				{TenantID: requester.TenantID(), RequestID: stored.ID(), ApproverMembershipID: manager.ID()},
+				{TenantID: requester.TenantID(), RequestID: stored.ID(), ApproverMembershipID: membership.ID(ids.NewV7().String()), OperatorAuthority: true},
+			} {
+				if err := approveH.Handle(t.Context(), cmd); !errors.Is(err, permissionrequest.ErrPermissionNotRequestable) {
+					t.Fatalf("approve err = %v, want ErrPermissionNotRequestable", err)
+				}
+			}
+			got, err := reqs.GetByID(t.Context(), requester.TenantID(), stored.ID())
+			if err != nil || got.State() != permissionrequest.StatePending {
+				t.Fatalf("after refused approve: state %v err %v, want pending", got.State(), err)
+			}
+			after, _ := mems.GetByID(t.Context(), requester.TenantID(), requester.ID()) // arch-test:ignore-err - test fixture read
+			if n := len(after.GrantedPermissions()); n != 0 {
+				t.Fatalf("refused approve left %d grants on the requester", n)
+			}
+		})
+	}
+}

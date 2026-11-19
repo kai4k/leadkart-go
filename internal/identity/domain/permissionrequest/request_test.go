@@ -208,8 +208,8 @@ func TestNew_RejectsPermissionNotInCatalogue(t *testing.T) {
 		"need elevated access for the rollout this week",
 		fixedClock(),
 	)
-	if !errors.Is(err, permissionrequest.ErrInvalidPermission) {
-		t.Fatalf("err = %v, want ErrInvalidPermission", err)
+	if !errors.Is(err, permissionrequest.ErrPermissionNotRequestable) {
+		t.Fatalf("err = %v, want ErrPermissionNotRequestable", err)
 	}
 }
 
@@ -674,5 +674,50 @@ func TestIsTerminal_TrueForApprovedDeniedCancelled(t *testing.T) {
 				t.Errorf("State(%q).IsTerminal() = %v, want %v", tc.state, got, tc.want)
 			}
 		})
+	}
+}
+
+// TestNew_RefusesEveryNonRequestableName: tenant.admin and every
+// platform-reserved name are conferred by role only; New is the single door
+// every request goes through, so the refusal lives here.
+func TestNew_RefusesEveryNonRequestableName(t *testing.T) {
+	t.Parallel()
+	refused := 0
+	accepted := 0
+	for _, p := range permission.All() {
+		_, err := permissionrequest.New(
+			permissionrequest.ID(ids.NewV7().String()),
+			tenant.ID(ids.NewV7().String()),
+			membership.ID(ids.NewV7().String()),
+			p, 7, "need elevated access for the rollout this week", fixedClock(),
+		)
+		if permission.IsRequestable(p.Name()) {
+			accepted++
+			if err != nil {
+				t.Errorf("%s: requestable but refused: %v", p.Name(), err)
+			}
+			continue
+		}
+		refused++
+		if !errors.Is(err, permissionrequest.ErrPermissionNotRequestable) {
+			t.Errorf("%s: err = %v, want ErrPermissionNotRequestable", p.Name(), err)
+		}
+	}
+	if refused == 0 || accepted == 0 {
+		t.Fatalf("catalogue split is degenerate: refused=%d accepted=%d", refused, accepted)
+	}
+	for _, name := range []string{
+		permission.IdentityPermissions.Meta.TenantAdmin,
+		permission.IdentityPermissions.Platform.ImpersonationManage,
+	} {
+		_, err := permissionrequest.New(
+			permissionrequest.ID(ids.NewV7().String()),
+			tenant.ID(ids.NewV7().String()),
+			membership.ID(ids.NewV7().String()),
+			permission.FromConstant(name), 7, "need elevated access for the rollout this week", fixedClock(),
+		)
+		if !errors.Is(err, permissionrequest.ErrPermissionNotRequestable) {
+			t.Errorf("%s: err = %v, want ErrPermissionNotRequestable", name, err)
+		}
 	}
 }

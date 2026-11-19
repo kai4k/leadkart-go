@@ -17,7 +17,7 @@ import (
 func newPermissionRequest(t *testing.T, id permissionrequest.ID, tenantID tenant.ID, requester membership.ID) *permissionrequest.Request {
 	t.Helper()
 	r, err := permissionrequest.New(
-		id, tenantID, requester, metaTenantAdminPermission(t),
+		id, tenantID, requester, requestablePermission(t),
 		7, "diagnose pending issue with onboarding flow", testNow,
 	)
 	if err != nil {

@@ -194,7 +194,7 @@ func TestE2E_TenantScope_PermissionRequestSubmitListCancelRejectScope(t *testing
 		method, path string
 		body         any
 	}{
-		{http.MethodPost, "/api/v1/permission-requests", ports.CreatePermissionRequestRequest{Permission: p.Meta.TenantAdmin, Reason: "needs admin access for the quarter"}},
+		{http.MethodPost, "/api/v1/permission-requests", ports.CreatePermissionRequestRequest{Permission: p.Users.View, Reason: "needs admin access for the quarter"}},
 		{http.MethodGet, "/api/v1/permission-requests", nil},
 		{http.MethodPost, "/api/v1/permission-requests/" + reqID + "/cancel", nil},
 	} {

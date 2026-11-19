@@ -203,10 +203,11 @@ func newFullyPopulatedTenant(t *testing.T) *tenant.Tenant {
 	return tn
 }
 
-// metaTenantAdminPermission returns the catalogue Meta.TenantAdmin permission.
-func metaTenantAdminPermission(t *testing.T) *permission.Permission {
+// requestablePermission returns a catalogue permission a request may name
+// (tenant.admin is not requestable).
+func requestablePermission(t *testing.T) *permission.Permission {
 	t.Helper()
-	p, err := permission.Create(permission.IdentityPermissions.Meta.TenantAdmin)
+	p, err := permission.Create(permission.IdentityPermissions.Users.View)
 	if err != nil {
 		t.Fatalf("permission.Create: %v", err)
 	}

@@ -13,6 +13,8 @@ import (
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/leadkart/leadkart-go/internal/common/pg/rlstest"
 )
 
 // GetSecurityStamp returns the live security_stamp value stored on
@@ -30,4 +32,27 @@ func GetSecurityStamp(t testing.TB, pool *pgxpool.Pool, personID string) string 
 		t.Fatalf("identitytest.GetSecurityStamp(%s): %v", personID, err)
 	}
 	return stamp
+}
+
+// SetPermissionRequestPermission rewrites the permission name stored on one
+// permission-request row, in a platform-scoped transaction (the application
+// role is bound by row-level security). It exists to put a row into the shape
+// older code stored, so tests can prove the current code refuses to act on
+// it. Exactly one row must change.
+func SetPermissionRequestPermission(t testing.TB, pool *pgxpool.Pool, requestID, permission string) {
+	t.Helper()
+	tx, err := pool.Begin(t.Context())
+	if err != nil {
+		t.Fatalf("identitytest.SetPermissionRequestPermission: begin: %v", err)
+	}
+	defer tx.Rollback(t.Context()) //nolint:errcheck // rollback after commit is a no-op
+	rlstest.SetSessionPlatformLocal(t, t.Context(), tx)
+	const q = `UPDATE identity.permission_requests SET permission_constant = $1 WHERE id = $2`
+	tag, err := tx.Exec(t.Context(), q, permission, requestID)
+	if err != nil || tag.RowsAffected() != 1 {
+		t.Fatalf("identitytest.SetPermissionRequestPermission(%s): rows %d err %v, want exactly 1 row", requestID, tag.RowsAffected(), err)
+	}
+	if err := tx.Commit(t.Context()); err != nil {
+		t.Fatalf("identitytest.SetPermissionRequestPermission: commit: %v", err)
+	}
 }

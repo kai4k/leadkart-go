@@ -275,6 +275,11 @@ const (
 	// (short reason, out-of-bounds duration, malformed input). 422.
 	ErrCodePermissionRequestInvalid = "permission_request_invalid"
 
+	// ErrCodePermissionNotRequestable — the permission is not requestable
+	// (tenant.admin, a platform-reserved name, or a name outside the
+	// catalogue); on approve, a stored request names one. 422 surface.
+	ErrCodePermissionNotRequestable = "permission_not_requestable"
+
 	// ErrCodePermissionRequestPendingExists — at-most-one-pending
 	// invariant rejected the submission. 409 Conflict.
 	ErrCodePermissionRequestPendingExists = "permission_request_pending_exists"

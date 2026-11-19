@@ -27,7 +27,8 @@ import (
 //     membership_id from JWT is mandatory for every operation.
 //   - Submit (POST .../permission-requests): caller IS the requester.
 //   - Approve/Deny: handler-inline check (caller IS requester's manager
-//     OR caller's JWT carries is_platform=true).
+//     OR the caller holds operator authority — authn.CanActAcrossTenants; a
+//     platform-tenant slug alone does not count).
 //   - Cancel: handler-inline check (caller IS the requester; mismatch
 //     collapses to 404 per ADR 0044 enumeration-safety canon).
 //   - List my requests / pending-for-approver: caller IS the membership
@@ -81,9 +82,11 @@ func handleCreatePermissionRequest(log *slog.Logger, a app.Application) http.Han
 			writeError(w, http.StatusConflict, ErrCodePermissionRequestPendingExists,
 				"a pending request for this permission already exists")
 			return
+		case errors.Is(err, permissionrequest.ErrPermissionNotRequestable):
+			writeError(w, http.StatusUnprocessableEntity, ErrCodePermissionNotRequestable, err.Error())
+			return
 		case errors.Is(err, permissionrequest.ErrInvalidRequest),
-			errors.Is(err, permissionrequest.ErrInvalidDuration),
-			errors.Is(err, permissionrequest.ErrInvalidPermission):
+			errors.Is(err, permissionrequest.ErrInvalidDuration):
 			writeError(w, http.StatusUnprocessableEntity, ErrCodePermissionRequestInvalid, err.Error())
 			return
 		case err != nil:
@@ -245,7 +248,7 @@ func handleApprovePermissionRequest(log *slog.Logger, a app.Application) http.Ha
 				TenantID:             tenant.ID(tid),
 				RequestID:            id,
 				ApproverMembershipID: membership.ID(c.MembershipID),
-				IsPlatformOperator:   authn.IsPlatformOperator(c),
+				OperatorAuthority:    authn.CanActAcrossTenants(c),
 				DecisionReason:       req.DecisionReason,
 			})
 		switch {
@@ -260,6 +263,9 @@ func handleApprovePermissionRequest(log *slog.Logger, a app.Application) http.Ha
 			return
 		case errors.Is(err, command.ErrPermissionRequestForbidden):
 			writeError(w, http.StatusForbidden, ErrCodePermissionRequestForbidden, "")
+			return
+		case errors.Is(err, permissionrequest.ErrPermissionNotRequestable):
+			writeError(w, http.StatusUnprocessableEntity, ErrCodePermissionNotRequestable, err.Error())
 			return
 		case errors.Is(err, permissionrequest.ErrInvalidRequest):
 			writeError(w, http.StatusUnprocessableEntity, ErrCodePermissionRequestInvalid, err.Error())
@@ -301,7 +307,7 @@ func handleDenyPermissionRequest(log *slog.Logger, a app.Application) http.Handl
 				TenantID:             tenant.ID(tid),
 				RequestID:            id,
 				ApproverMembershipID: membership.ID(c.MembershipID),
-				IsPlatformOperator:   authn.IsPlatformOperator(c),
+				OperatorAuthority:    authn.CanActAcrossTenants(c),
 				DecisionReason:       req.DecisionReason,
 			})
 		switch {

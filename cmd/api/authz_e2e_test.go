@@ -24,6 +24,16 @@ import (
 
 func (f e2eFixture) createMemberAndLogin(t *testing.T, owner registeredTenant, prefix string) (string, string) {
 	t.Helper()
+	m := f.createMember(t, owner, prefix)
+	return m.membershipID, f.loginToken(t, m.email, m.password)
+}
+
+// createdMember is a member the owner created over HTTP, with the
+// credentials needed to log in again after its roles change.
+type createdMember struct{ membershipID, personID, email, password string }
+
+func (f e2eFixture) createMember(t *testing.T, owner registeredTenant, prefix string) createdMember {
+	t.Helper()
 	id := ids.NewV7().String()
 	suffix := id[len(id)-8:]
 	email := prefix + "-" + suffix + "@e2e.test"
@@ -37,7 +47,7 @@ func (f e2eFixture) createMemberAndLogin(t *testing.T, owner registeredTenant, p
 	if err := json.Unmarshal(resp.body, &cu); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	return cu.MembershipID, f.loginToken(t, email, password)
+	return createdMember{membershipID: cu.MembershipID, personID: cu.PersonID, email: email, password: password}
 }
 
 func (f e2eFixture) loginToken(t *testing.T, email, password string) string {

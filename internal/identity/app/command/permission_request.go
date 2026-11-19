@@ -180,8 +180,10 @@ func (h RequestPermissionElevationHandler) Handle(
 
 // ApprovePermissionRequestCommand carries the approval input.
 // ApproverMembershipID is the caller's Membership (populated from JWT
-// by the HTTP layer); IsPlatformOperator is true when the caller's JWT
-// has is_platform=true — used to short-circuit the manager-check for
+// by the HTTP layer); OperatorAuthority is true when the caller holds real
+// operator authority (authn.CanActAcrossTenants: a super user, or a platform
+// operator holding platform.tenants.view — slug membership alone is not
+// authority). It short-circuits the manager-check for
 // orphan / root memberships per ADR 0055.
 //
 // TenantID is the caller's tenant scope (injected from JWT context by
@@ -191,7 +193,7 @@ type ApprovePermissionRequestCommand struct {
 	TenantID             tenant.ID
 	RequestID            permissionrequest.ID
 	ApproverMembershipID membership.ID
-	IsPlatformOperator   bool
+	OperatorAuthority    bool
 	DecisionReason       string
 }
 
@@ -282,6 +284,12 @@ func (h ApprovePermissionRequestHandler) Handle(
 	if req.State() != permissionrequest.StatePending {
 		return ErrPermissionRequestNotPending
 	}
+	// A row stored before requestability was enforced may name tenant.admin or
+	// a platform-reserved permission. It stays pending (the approver can deny
+	// it, the requester can cancel it) and can never be approved.
+	if !permission.IsRequestable(req.Permission().Name()) {
+		return fmt.Errorf("%w: %q", permissionrequest.ErrPermissionNotRequestable, req.Permission().Name())
+	}
 	if cmd.ApproverMembershipID == req.RequesterMembershipID() {
 		return ErrPermissionRequestSelfApproval
 	}
@@ -345,7 +353,7 @@ func (h ApprovePermissionRequestHandler) callerCanApprove(
 	cmd ApprovePermissionRequestCommand,
 	requester *membership.Membership,
 ) bool {
-	if cmd.IsPlatformOperator {
+	if cmd.OperatorAuthority {
 		return true
 	}
 	manager := requester.ReportsTo()
@@ -368,7 +376,7 @@ type DenyPermissionRequestCommand struct {
 	TenantID             tenant.ID
 	RequestID            permissionrequest.ID
 	ApproverMembershipID membership.ID
-	IsPlatformOperator   bool
+	OperatorAuthority    bool
 	DecisionReason       string
 }
 
@@ -432,7 +440,7 @@ func (h DenyPermissionRequestHandler) Handle(
 		}
 		return fmt.Errorf("deny_permission_request: load requester: %w", err)
 	}
-	if !canApproveSimilar(cmd.IsPlatformOperator, cmd.ApproverMembershipID, requester) {
+	if !canApproveSimilar(cmd.OperatorAuthority, cmd.ApproverMembershipID, requester) {
 		return ErrPermissionRequestForbidden
 	}
 

@@ -98,10 +98,12 @@ var ErrPendingRequestExists = errs.New(errs.KindAlreadyExists, "permission_reque
 // from non-existent rows per ADR 0044 enumeration safety).
 var ErrNotFound = errs.New(errs.KindNotFound, "permission_request", "permission request not found")
 
-// ErrInvalidPermission surfaces when [New] is supplied a permission
-// pointer that's not in the closed-set catalogue. Belt-and-suspenders
-// alongside the HTTP-layer validation via [permission.TryFromConstant].
-var ErrInvalidPermission = errs.New(errs.KindInvalidInput, "permission_request", "permission is not in the closed-set catalogue")
+// ErrPermissionNotRequestable surfaces when [New] is supplied a permission
+// that [permission.IsRequestable] refuses: tenant.admin, a platform-reserved
+// name, or a name outside the catalogue. Those are conferred by role only
+// (ADR 0069 H4); a request for one would let a manager mint authority the
+// workflow was never meant to carry. 422.
+var ErrPermissionNotRequestable = errs.New(errs.KindInvalidInput, "permission_request", "permission cannot be requested")
 
 // ErrInvalidDuration surfaces when durationDays is outside
 // [MinDurationDays, MaxDurationDays].
@@ -168,8 +170,8 @@ type Request struct {
 
 // New constructs a brand-new Pending Request. Returns [ErrInvalidRequest]
 // (wrapped) on missing identifiers / short reason; [ErrInvalidDuration]
-// on out-of-bounds duration; [ErrInvalidPermission] on a catalogue
-// miss.
+// on out-of-bounds duration; [ErrPermissionNotRequestable] on any name that
+// is not requestable (tenant.admin, platform-reserved, unknown).
 //
 // `now` is the wall-clock used for createdAt / updatedAt — caller
 // (handler) injects so tests can pin via fake clock.
@@ -194,8 +196,8 @@ func New(
 	if perm == nil {
 		return nil, fmt.Errorf("%w: permission required", ErrInvalidRequest)
 	}
-	if !permission.IsKnown(perm.Name()) {
-		return nil, fmt.Errorf("%w: %q", ErrInvalidPermission, perm.Name())
+	if !permission.IsRequestable(perm.Name()) {
+		return nil, fmt.Errorf("%w: %q", ErrPermissionNotRequestable, perm.Name())
 	}
 	if durationDays < MinDurationDays || durationDays > MaxDurationDays {
 		return nil, fmt.Errorf("%w: %d not in [%d, %d]",

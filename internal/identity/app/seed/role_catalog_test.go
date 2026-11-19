@@ -132,7 +132,7 @@ func TestDefaultRoleCatalog_OperationalRolesCarryInventoryGrants(t *testing.T) {
 		role.SystemRoles.Tenant.DispatchManager: slices.Concat(tasksManager, dispatchOps, directory, approver,
 			[]string{p.Orders.Orders.Read, p.Inventory.Stock.Read}),
 		role.SystemRoles.Tenant.DispatchExecutive: slices.Concat(tasksMember, dispatchOps),
-		role.SystemRoles.Tenant.HrManager:         slices.Concat(tasksManager, directory, approver, []string{p.Users.Update}),
+		role.SystemRoles.Tenant.HrManager:         slices.Concat(tasksManager, directory, approver),
 		role.SystemRoles.Tenant.HrExecutive:       tasksMember,
 		role.SystemRoles.Tenant.TeamLead: slices.Concat(directory, approver, crmExec,
 			[]string{p.Tasks.WorkItems.Read, p.Tasks.WorkItems.Manage, p.Tasks.WorkItems.Reassign}),
@@ -200,12 +200,15 @@ func TestDefaultRoleCatalog_DailyWorkGrants(t *testing.T) {
 		r.SalesManager:   {p.Users.View, p.Roles.View, p.Roles.Approve, p.Crm.Leads.ReadAll, p.Crm.Leads.Assign, p.Crm.Leads.Manage},
 		r.TeamLead:       {p.Users.View, p.Roles.View, p.Roles.Approve, p.Crm.Leads.Read, p.Crm.Leads.Manage, p.Tasks.WorkItems.Reassign},
 		r.SalesExecutive: {p.Crm.Leads.Read, p.Crm.Leads.Manage, p.Meta.RequestPermissionElevation},
-		r.HrManager:      {p.Users.Update, p.Roles.Approve},
+		r.HrManager:      {p.Roles.Approve},
 	}
 	mustNot := map[string][]string{
 		r.TeamLead:       {p.Tasks.WorkItems.ReadAll, p.Crm.Leads.ReadAll, p.Crm.Leads.Assign},
 		r.SalesExecutive: {p.Users.View, p.Roles.Approve},
 		r.CompanyOwner:   {p.Roles.Approve},
+		// Until PUT /users/{id}/manager is authority-gated (Task A4) an HR
+		// Manager holding users.update could appoint themselves manager of anyone.
+		r.HrManager: {p.Users.Update},
 	}
 	for _, s := range seed.DefaultRoleCatalog() {
 		for _, n := range must[s.Name] {

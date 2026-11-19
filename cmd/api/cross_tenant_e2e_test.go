@@ -74,6 +74,15 @@ type e2eFixture struct {
 
 func newE2EFixture(t *testing.T) e2eFixture {
 	t.Helper()
+	return newE2EFixtureAt(t, func() time.Time { return time.Date(2026, 5, 7, 12, 0, 0, 0, time.UTC) })
+}
+
+// newE2EFixtureAt wires the fixture on the given clock. Flows that grant
+// time-bound permissions need the real clock: effective permissions are
+// resolved against wall time, so a grant minted on a frozen past clock is
+// already expired.
+func newE2EFixtureAt(t *testing.T, now func() time.Time) e2eFixture {
+	t.Helper()
 	pool := startWiredPostgresForHTTP(t)
 	cfg := config.AppConfig{
 		JWT: config.JWTConfig{
@@ -84,7 +93,6 @@ func newE2EFixture(t *testing.T) e2eFixture {
 			AbsoluteTTL: 14 * 24 * time.Hour,
 		},
 	}
-	now := func() time.Time { return time.Date(2026, 5, 7, 12, 0, 0, 0, time.UTC) }
 	hybrid := newTestHybridCache(t)
 	wiring, err := buildIdentityApp(pool, hybrid, cfg, now)
 	if err != nil {
