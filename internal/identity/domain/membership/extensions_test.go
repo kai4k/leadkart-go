@@ -623,3 +623,32 @@ func TestUnmarshalFromDB_RoleAssignmentsRoundTrip(t *testing.T) {
 		t.Fatalf("UnmarshalFromDB emitted %d events", len(events))
 	}
 }
+
+func TestParseID_IsTheCanonicalFormOrErrInvalid(t *testing.T) {
+	t.Parallel()
+	got, err := membership.ParseID("0190A000-0000-7000-8000-00000000000A")
+	if err != nil || got != membership.ID("0190a000-0000-7000-8000-00000000000a") {
+		t.Fatalf("ParseID(upper) = %q, %v", got, err)
+	}
+	for _, bad := range []string{"", " 0190a000-0000-7000-8000-00000000000a", "0190a000-0000-7000-8000-00000000000a\n", "0190a000-0000-7000-8000-00000000000a ", "00000000-0000-0000-0000-000000000000", "nope"} {
+		if _, err := membership.ParseID(bad); !errors.Is(err, membership.ErrInvalid) {
+			t.Errorf("ParseID(%q) err = %v, want membership.ErrInvalid", bad, err)
+		}
+	}
+}
+
+func TestAssignRevokeRole_BadRoleIDWrapsExactlyMembershipErrInvalid(t *testing.T) {
+	t.Parallel()
+	m := freshMembership(t)
+	for name, err := range map[string]error{
+		"assign": m.AssignRole(role.ID("not-a-uuid"), testNow),
+		"revoke": m.RevokeRole(role.ID("not-a-uuid"), testNow),
+	} {
+		if !errors.Is(err, membership.ErrInvalid) {
+			t.Errorf("%s: %v does not wrap membership.ErrInvalid", name, err)
+		}
+		if errors.Is(err, role.ErrInvalid) {
+			t.Errorf("%s: %v also wraps role.ErrInvalid (two sentinels)", name, err)
+		}
+	}
+}

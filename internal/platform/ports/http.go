@@ -568,7 +568,7 @@ func problemType(code string) string {
 // parsePathUUID returns the named path param if it's a valid UUID, else
 // writes a 400 and returns ok=false.
 func parsePathUUID(w http.ResponseWriter, r *http.Request, name, errCode string) (string, bool) {
-	id, ok := authn.CanonicalID(strings.TrimSpace(r.PathValue(name)))
+	id, ok := authn.CanonicalID(r.PathValue(name))
 	if !ok {
 		writeError(w, http.StatusBadRequest, errCode, name+" must be a UUID")
 		return "", false

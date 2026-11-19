@@ -29,9 +29,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
-
 	"github.com/leadkart/leadkart-go/internal/common/errs"
+	"github.com/leadkart/leadkart-go/internal/common/ids"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/permission"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/role"
@@ -62,11 +61,11 @@ func (i ID) IsZero() bool { return i == "" }
 // ParseID canonicalises an untrusted membership id (any RFC 4122 spelling) to
 // the lowercase hyphenated form repositories store (ADR 0069, finding 1).
 func ParseID(raw string) (ID, error) {
-	u, err := uuid.Parse(strings.TrimSpace(raw))
+	c, err := ids.Canonical(raw)
 	if err != nil {
 		return "", fmt.Errorf("%w: membership id %q is not a UUID", ErrInvalid, raw)
 	}
-	return ID(u.String()), nil
+	return ID(c), nil
 }
 
 // String returns the underlying UUID string.
@@ -360,7 +359,7 @@ func (m *Membership) Reactivate(now time.Time) error {
 func (m *Membership) AssignRole(roleID role.ID, now time.Time) error {
 	canonical, err := role.ParseID(string(roleID))
 	if err != nil {
-		return fmt.Errorf("%w: roleID: %w", ErrInvalid, err)
+		return fmt.Errorf("%w: roleID is not a UUID", ErrInvalid)
 	}
 	roleID = canonical
 	if slices.Contains(m.roleAssignments, roleID) {
@@ -383,7 +382,7 @@ func (m *Membership) AssignRole(roleID role.ID, now time.Time) error {
 func (m *Membership) RevokeRole(roleID role.ID, now time.Time) error {
 	canonical, err := role.ParseID(string(roleID))
 	if err != nil {
-		return fmt.Errorf("%w: roleID: %w", ErrInvalid, err)
+		return fmt.Errorf("%w: roleID is not a UUID", ErrInvalid)
 	}
 	roleID = canonical
 	idx := slices.Index(m.roleAssignments, roleID)

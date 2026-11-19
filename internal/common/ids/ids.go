@@ -1,4 +1,5 @@
-// Package ids generates UUIDv7 identifiers.
+// Package ids generates UUIDv7 identifiers and owns the ONE canonical form
+// every untrusted identifier is reduced to before it is compared or stored.
 //
 // UUIDv7 (RFC 9562) puts a Unix-millisecond timestamp in the leading bits,
 // giving B-tree-friendly time-ordering for primary keys (matters at scale —
@@ -6,14 +7,36 @@
 //
 // All bounded-context typed IDs (TenantID, PersonID, MembershipID, ...) wrap
 // `uuid.UUID` returned from this package. Per-domain wrappers stay in their
-// own packages; this package owns generation only.
+// own packages; this package owns generation and [Canonical].
 package ids
 
 import (
 	"fmt"
 
 	"github.com/google/uuid"
+
+	"github.com/leadkart/leadkart-go/internal/common/errs"
 )
+
+// ErrInvalidID is returned by [Canonical] for anything that is not exactly one
+// non-nil UUID. Domain ParseID wrappers re-wrap it with their own sentinel.
+var ErrInvalidID = errs.New(errs.KindInvalidInput, "ids", "invalid id")
+
+// Canonical is the single canonical-id function (ADR 0069, finding 1): every
+// layer that turns an untrusted id into a comparable value goes through it, so
+// two spellings of one id can never be treated as two ids.
+//
+// It accepts the spellings uuid.Parse accepts (upper case, "urn:uuid:" prefix,
+// "{...}" braces, hyphenless 32-hex) and returns the lowercase hyphenated form.
+// It REJECTS the empty string, the nil UUID, and any leading, trailing or
+// internal whitespace (no TrimSpace: a leading space, a trailing newline or NBSP+id is not an id).
+func Canonical(raw string) (string, error) {
+	u, err := uuid.Parse(raw)
+	if err != nil || u == uuid.Nil {
+		return "", ErrInvalidID
+	}
+	return u.String(), nil
+}
 
 // NewV7 returns a fresh UUIDv7.
 //

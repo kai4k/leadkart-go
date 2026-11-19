@@ -30,8 +30,11 @@ const (
 )
 
 // Tier bands: 0 owner; 1–10 admin; 11–20 manager; 21–30 team lead; 31–99 user.
+// A value outside [0, 99] is no rank at all and reads as the user tier, never owner.
 func (r Rank) Tier() Tier {
 	switch {
+	case r < RankOwner || r > RankNone:
+		return TierUser
 	case r <= RankOwner:
 		return TierOwner
 	case r <= RankAdmin:
@@ -57,6 +60,18 @@ func ClampRank(n int) Rank {
 	return Rank(n)
 }
 
+// levelOf is a role's effective level: out-of-range levels are RankNone, and
+// level 0 counts only on the CompanyOwner system role. On any other role it
+// counts as 1, so a stray level-0 custom role can never make its holder an
+// owner (ADR 0069 R2; the data migration that re-levels such rows is separate).
+func levelOf(r *role.Role) Rank {
+	lvl := ClampRank(r.HierarchyLevel())
+	if lvl == RankOwner && !r.IsCompanyOwner() {
+		return RankOwner + 1
+	}
+	return lvl
+}
+
 // RankOf returns the most senior level among live roles; RankNone when none.
 func RankOf(roles []*role.Role) Rank {
 	best := RankNone
@@ -64,7 +79,7 @@ func RankOf(roles []*role.Role) Rank {
 		if r == nil || r.IsDeleted() {
 			continue
 		}
-		if lvl := Rank(r.HierarchyLevel()); lvl < best {
+		if lvl := levelOf(r); lvl < best {
 			best = lvl
 		}
 	}

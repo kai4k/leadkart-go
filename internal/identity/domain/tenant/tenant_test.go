@@ -1132,3 +1132,16 @@ func newSuspendedTenant(t *testing.T) *tenant.Tenant {
 	}
 	return tn
 }
+
+func TestParseID_IsTheCanonicalFormOrErrInvalid(t *testing.T) {
+	t.Parallel()
+	got, err := tenant.ParseID("0190A000-0000-7000-8000-00000000000A")
+	if err != nil || got != tenant.ID("0190a000-0000-7000-8000-00000000000a") {
+		t.Fatalf("ParseID(upper) = %q, %v", got, err)
+	}
+	for _, bad := range []string{"", " 0190a000-0000-7000-8000-00000000000a", "0190a000-0000-7000-8000-00000000000a\n", "00000000-0000-0000-0000-000000000000", "nope"} {
+		if _, err := tenant.ParseID(bad); !errors.Is(err, tenant.ErrInvalid) {
+			t.Errorf("ParseID(%q) err = %v, want tenant.ErrInvalid", bad, err)
+		}
+	}
+}

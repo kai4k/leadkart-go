@@ -33,19 +33,27 @@ func mkRole(n int, tid tenant.ID, name string, sys bool, level int, super bool, 
 		IsSystemDefault: sys, IsSuperAdmin: super, HierarchyLevel: level, Permissions: ps, CreatedAt: t0})
 }
 
-func mkMember(n int, tid tenant.ID, active bool, reportsTo membership.ID, roles ...*role.Role) authority.Member {
+func mkMember(t *testing.T, n int, tid tenant.ID, active bool, reportsTo membership.ID, roles ...*role.Role) authority.Member {
 	ids := make([]role.ID, 0, len(roles))
 	for _, r := range roles {
 		ids = append(ids, r.ID())
 	}
+	t.Helper()
 	status := membership.StatusActive
 	if !active {
 		status = membership.StatusInactive
 	}
 	m := membership.UnmarshalFromDB(membership.Snapshot{ID: membership.ID(uid(n)), PersonID: person.ID(uid(n + 500)),
 		TenantID: tid, Status: status, JoinedAt: t0, RoleAssignments: ids, ReportsTo: reportsTo})
-	return authority.MemberOf(m, roles)
+	out, err := authority.MemberOf(m, roles)
+	if err != nil {
+		t.Fatalf("MemberOf: %v", err)
+	}
+	return out
 }
+
+// rk is the *int the optional rank claim takes.
+func rk(r authority.Rank) *int { n := int(r); return &n }
 
 func adminEffective() []string {
 	out := []string{permission.IdentityPermissions.Meta.TenantAdmin}
@@ -77,30 +85,31 @@ func TestPolicy_DecisionTable(t *testing.T) {
 	assignR := mkRole(6, tA, "Lead Router", false, 40, false, p.Crm.Leads.Assign)
 	superR := mkRole(7, tA, "SuperAdmin", true, 0, true)
 
-	owner1 := mkMember(11, tA, true, "", ownerR)
-	owner2 := mkMember(12, tA, true, "", ownerR)
-	admin := mkMember(13, tA, true, "", adminR)
-	admin2 := mkMember(14, tA, true, "", adminR)
-	mgr := mkMember(15, tA, true, "", mgrR)
-	mgr2 := mkMember(16, tA, true, "", mgrR)
-	tl := mkMember(17, tA, true, mgr.ID(), tlR)
-	user := mkMember(18, tA, true, tl.ID(), userR)
-	puppet := mkMember(19, tA, true, mgr.ID())
-	staleAdmin := mkMember(20, tA, true, mgr.ID(), adminR) // upward link left over from an old rank
-	inactiveMgr := mkMember(21, tA, false, "", mgrR)
-	foreign := mkMember(22, tB, true, "", userR)
-	superMember := mkMember(23, tA, true, "", superR)
+	owner1 := mkMember(t, 11, tA, true, "", ownerR)
+	owner2 := mkMember(t, 12, tA, true, "", ownerR)
+	admin := mkMember(t, 13, tA, true, "", adminR)
+	admin2 := mkMember(t, 14, tA, true, "", adminR)
+	mgr := mkMember(t, 15, tA, true, "", mgrR)
+	mgr2 := mkMember(t, 16, tA, true, "", mgrR)
+	tl := mkMember(t, 17, tA, true, mgr.ID(), tlR)
+	user := mkMember(t, 18, tA, true, tl.ID(), userR)
+	puppet := mkMember(t, 19, tA, true, mgr.ID())
+	staleAdmin := mkMember(t, 20, tA, true, mgr.ID(), adminR) // upward link left over from an old rank
+	inactiveMgr := mkMember(t, 21, tA, false, "", mgrR)
+	userRB := mkRole(25, tB, role.SystemRoles.Tenant.SalesExecutive, false, 50, false)
+	foreign := mkMember(t, 22, tB, true, "", userRB)
+	superMember := mkMember(t, 23, tA, true, "", superR)
 
-	aOwner := mkActor(t, authority.ActorInput{MembershipID: owner1.ID(), TenantID: tA, Rank: authority.RankOwner, EffectivePermissions: adminEffective()})
-	aAdmin := mkActor(t, authority.ActorInput{MembershipID: admin.ID(), TenantID: tA, Rank: authority.RankAdmin, EffectivePermissions: adminEffective()})
-	aMgr := mkActor(t, authority.ActorInput{MembershipID: mgr.ID(), TenantID: tA, Rank: authority.RankManager, EffectivePermissions: []string{p.Crm.Leads.Read, p.Crm.Leads.ReadAll, p.Roles.Approve}})
-	aMgrNoApprove := mkActor(t, authority.ActorInput{MembershipID: mgr.ID(), TenantID: tA, Rank: authority.RankManager, EffectivePermissions: []string{p.Crm.Leads.Read, p.Crm.Leads.ReadAll}})
-	aTL := mkActor(t, authority.ActorInput{MembershipID: tl.ID(), TenantID: tA, Rank: authority.RankTeamLead, EffectivePermissions: []string{p.Crm.Leads.Read, p.Roles.Approve}})
-	aUser := mkActor(t, authority.ActorInput{MembershipID: user.ID(), TenantID: tA, Rank: authority.RankUser, EffectivePermissions: []string{p.Crm.Leads.Read}})
-	aSuper := mkActor(t, authority.ActorInput{MembershipID: membership.ID(uid(90)), TenantID: tP, Rank: authority.RankOwner, IsSuperUser: true})
-	aOp := mkActor(t, authority.ActorInput{MembershipID: membership.ID(uid(91)), TenantID: tP, Rank: authority.RankNone, IsPlatformOperator: true, EffectivePermissions: []string{p.Platform.UsersManage}})
-	aOpNoManage := mkActor(t, authority.ActorInput{MembershipID: membership.ID(uid(92)), TenantID: tP, Rank: authority.RankNone, IsPlatformOperator: true, EffectivePermissions: []string{p.Platform.TenantsView}})
-	aImp := mkActor(t, authority.ActorInput{MembershipID: membership.ID(uid(93)), TenantID: tA, Rank: authority.RankOwner, IsImpersonation: true, EffectivePermissions: adminEffective()})
+	aOwner := mkActor(t, authority.ActorInput{MembershipID: owner1.ID(), TenantID: tA, Rank: rk(authority.RankOwner), EffectivePermissions: adminEffective()})
+	aAdmin := mkActor(t, authority.ActorInput{MembershipID: admin.ID(), TenantID: tA, Rank: rk(authority.RankAdmin), EffectivePermissions: adminEffective()})
+	aMgr := mkActor(t, authority.ActorInput{MembershipID: mgr.ID(), TenantID: tA, Rank: rk(authority.RankManager), EffectivePermissions: []string{p.Crm.Leads.Read, p.Crm.Leads.ReadAll, p.Roles.Approve}})
+	aMgrNoApprove := mkActor(t, authority.ActorInput{MembershipID: mgr.ID(), TenantID: tA, Rank: rk(authority.RankManager), EffectivePermissions: []string{p.Crm.Leads.Read, p.Crm.Leads.ReadAll}})
+	aTL := mkActor(t, authority.ActorInput{MembershipID: tl.ID(), TenantID: tA, Rank: rk(authority.RankTeamLead), EffectivePermissions: []string{p.Crm.Leads.Read, p.Roles.Approve}})
+	aUser := mkActor(t, authority.ActorInput{MembershipID: user.ID(), TenantID: tA, Rank: rk(authority.RankUser), EffectivePermissions: []string{p.Crm.Leads.Read}})
+	aSuper := mkActor(t, authority.ActorInput{MembershipID: membership.ID(uid(90)), TenantID: tP, Rank: rk(authority.RankOwner), IsSuperUser: true})
+	aOp := mkActor(t, authority.ActorInput{MembershipID: membership.ID(uid(91)), TenantID: tP, Rank: rk(authority.RankNone), IsPlatformOperator: true, EffectivePermissions: []string{p.Platform.UsersManage}})
+	aOpNoManage := mkActor(t, authority.ActorInput{MembershipID: membership.ID(uid(92)), TenantID: tP, Rank: rk(authority.RankNone), IsPlatformOperator: true, EffectivePermissions: []string{p.Platform.TenantsView}})
+	aImp := mkActor(t, authority.ActorInput{MembershipID: membership.ID(uid(93)), TenantID: tA, Rank: rk(authority.RankOwner), IsImpersonation: true, EffectivePermissions: adminEffective()})
 	var zero authority.Actor
 
 	cases := []struct {
@@ -126,18 +135,18 @@ func TestPolicy_DecisionTable(t *testing.T) {
 		{"impersonation on owner", aImp.MayActOn(owner1), authority.ErrInsufficientRank},
 		{"impersonation on manager", aImp.MayActOn(mgr), nil},
 		// H3 — grant ceiling
-		{"owner confers tenant.admin", aOwner.MayChangePermissions([]string{p.Meta.TenantAdmin}), nil},
-		{"admin confers tenant.admin", aAdmin.MayChangePermissions([]string{p.Meta.TenantAdmin}), authority.ErrGrantExceedsAuthority},
-		{"admin confers read_all", aAdmin.MayChangePermissions([]string{p.Crm.Leads.ReadAll}), nil},
-		{"manager confers unheld", aMgr.MayChangePermissions([]string{p.Crm.Leads.Assign}), authority.ErrGrantExceedsAuthority},
-		{"manager confers held", aMgr.MayChangePermissions([]string{p.Crm.Leads.ReadAll}), nil},
-		{"owner confers reserved", aOwner.MayChangePermissions([]string{p.Platform.TenantsManage}), authority.ErrGrantExceedsAuthority},
-		{"super confers reserved", aSuper.MayChangePermissions([]string{p.Platform.TenantsManage}), nil},
-		{"operator confers tenant.admin", aOp.MayChangePermissions([]string{p.Meta.TenantAdmin}), nil},
-		{"operator confers anonymise", aOp.MayChangePermissions([]string{p.Users.Anonymise}), authority.ErrGrantExceedsAuthority},
-		{"impersonation confers tenant.admin", aImp.MayChangePermissions([]string{p.Meta.TenantAdmin}), authority.ErrGrantExceedsAuthority},
-		{"impersonation confers crm", aImp.MayChangePermissions([]string{p.Crm.Leads.Read}), nil},
-		{"zero confers", zero.MayChangePermissions(nil), authority.ErrNoAuthority},
+		{"owner confers tenant.admin", aOwner.MayChangePermissions(tA, []string{p.Meta.TenantAdmin}), nil},
+		{"admin confers tenant.admin", aAdmin.MayChangePermissions(tA, []string{p.Meta.TenantAdmin}), authority.ErrGrantExceedsAuthority},
+		{"admin confers read_all", aAdmin.MayChangePermissions(tA, []string{p.Crm.Leads.ReadAll}), nil},
+		{"manager confers unheld", aMgr.MayChangePermissions(tA, []string{p.Crm.Leads.Assign}), authority.ErrGrantExceedsAuthority},
+		{"manager confers held", aMgr.MayChangePermissions(tA, []string{p.Crm.Leads.ReadAll}), nil},
+		{"owner confers reserved", aOwner.MayChangePermissions(tA, []string{p.Platform.TenantsManage}), authority.ErrGrantExceedsAuthority},
+		{"super confers reserved", aSuper.MayChangePermissions(tA, []string{p.Platform.TenantsManage}), nil},
+		{"operator confers tenant.admin", aOp.MayChangePermissions(tA, []string{p.Meta.TenantAdmin}), nil},
+		{"operator confers anonymise", aOp.MayChangePermissions(tA, []string{p.Users.Anonymise}), authority.ErrGrantExceedsAuthority},
+		{"impersonation confers tenant.admin", aImp.MayChangePermissions(tA, []string{p.Meta.TenantAdmin}), authority.ErrGrantExceedsAuthority},
+		{"impersonation confers crm", aImp.MayChangePermissions(tA, []string{p.Crm.Leads.Read}), nil},
+		{"zero confers", zero.MayChangePermissions(tA, nil), authority.ErrNoAuthority},
 		// H3 — roles
 		{"owner assigns owner role", aOwner.MayAssignRole(admin, ownerR), nil},
 		{"admin assigns admin role", aAdmin.MayAssignRole(mgr, adminR), authority.ErrInsufficientRank},
@@ -149,9 +158,9 @@ func TestPolicy_DecisionTable(t *testing.T) {
 		{"impersonation assigns owner role", aImp.MayAssignRole(mgr, ownerR), authority.ErrInsufficientRank},
 		{"operator assigns owner role", aOp.MayAssignRole(user, ownerR), nil},
 		{"admin revokes admin role from admin", aAdmin.MayRevokeRole(admin2, adminR), authority.ErrInsufficientRank},
-		{"admin creates level 11", aAdmin.MayCreateRole(11), nil},
-		{"admin creates level 10", aAdmin.MayCreateRole(10), authority.ErrInsufficientRank},
-		{"manager creates level 20", aMgr.MayCreateRole(20), authority.ErrInsufficientRank},
+		{"admin creates level 11", aAdmin.MayCreateRole(tA, 11, nil), nil},
+		{"admin creates level 10", aAdmin.MayCreateRole(tA, 10, nil), authority.ErrInsufficientRank},
+		{"manager creates level 20", aMgr.MayCreateRole(tA, 20, nil), authority.ErrInsufficientRank},
 		{"admin relevels manager role to 15", aAdmin.MayEditRole(mgrR, 15, nil), nil},
 		{"admin relevels manager role to 5", aAdmin.MayEditRole(mgrR, 5, nil), authority.ErrInsufficientRank},
 		{"admin edits admin role", aAdmin.MayEditRole(adminR, authority.NoLevelChange, nil), authority.ErrInsufficientRank},
@@ -238,16 +247,16 @@ func TestNewActor_ValidationAndImpersonationRank(t *testing.T) {
 	if _, err := authority.NewActor(authority.ActorInput{MembershipID: membership.ID(uid(1)), TenantID: tA, IsImpersonation: true, IsPlatformOperator: true}); !errors.Is(err, authority.ErrNoAuthority) {
 		t.Fatalf("impersonating operator: %v", err)
 	}
-	imp := mkActor(t, authority.ActorInput{MembershipID: membership.ID(uid(1)), TenantID: tA, Rank: authority.RankOwner, IsImpersonation: true,
+	imp := mkActor(t, authority.ActorInput{MembershipID: membership.ID(uid(1)), TenantID: tA, Rank: rk(authority.RankOwner), IsImpersonation: true,
 		EffectivePermissions: []string{"not.a.permission", permission.IdentityPermissions.Crm.Leads.Read}})
 	if imp.Rank() != authority.RankAdmin {
 		t.Fatalf("impersonation rank = %d, want Admin", imp.Rank())
 	}
-	if imp.Holds("not.a.permission") || !imp.Holds(permission.IdentityPermissions.Crm.Leads.Read) {
+	if imp.MayChangePermissions(tA, []string{"not.a.permission"}) == nil || imp.MayChangePermissions(tA, []string{permission.IdentityPermissions.Crm.Leads.Read}) != nil {
 		t.Fatal("unknown names dropped, known kept")
 	}
 	var zero authority.Actor
-	if zero.Valid() || zero.Rank() != authority.RankNone || zero.Holds(permission.IdentityPermissions.Crm.Leads.Read) {
+	if zero.Valid() || zero.Rank() != authority.RankNone {
 		t.Fatal("zero Actor must hold nothing and rank RankNone")
 	}
 }

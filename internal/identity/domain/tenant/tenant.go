@@ -12,6 +12,7 @@ import (
 
 	"github.com/leadkart/leadkart-go/internal/common/email"
 	"github.com/leadkart/leadkart-go/internal/common/errs"
+	"github.com/leadkart/leadkart-go/internal/common/ids"
 	"github.com/leadkart/leadkart-go/internal/common/slug"
 )
 
@@ -33,6 +34,17 @@ func (i ID) IsZero() bool { return i == "" }
 
 // String returns the underlying UUID string.
 func (i ID) String() string { return string(i) }
+
+// ParseID canonicalises an untrusted tenant id (any RFC 4122 spelling) to the
+// lowercase hyphenated form repositories store; whitespace, empty and the nil
+// UUID are rejected (ADR 0069, finding 1).
+func ParseID(raw string) (ID, error) {
+	c, err := ids.Canonical(raw)
+	if err != nil {
+		return "", fmt.Errorf("%w: tenant id %q is not a UUID", ErrInvalid, raw)
+	}
+	return ID(c), nil
+}
 
 // nameMaxLen caps legal and display names to keep audit logs and UI predictable.
 const nameMaxLen = 200

@@ -468,3 +468,16 @@ func TestID_IsZero(t *testing.T) {
 		t.Fatal("non-empty ID should not be zero")
 	}
 }
+
+func TestParseID_IsTheCanonicalFormOrErrInvalid(t *testing.T) {
+	t.Parallel()
+	got, err := role.ParseID("0190A000-0000-7000-8000-00000000000A")
+	if err != nil || got != role.ID("0190a000-0000-7000-8000-00000000000a") {
+		t.Fatalf("ParseID(upper) = %q, %v", got, err)
+	}
+	for _, bad := range []string{"", " 0190a000-0000-7000-8000-00000000000a", "0190a000-0000-7000-8000-00000000000a\n", "0190a000-0000-7000-8000-00000000000a ", "00000000-0000-0000-0000-000000000000", "nope"} {
+		if _, err := role.ParseID(bad); !errors.Is(err, role.ErrInvalid) {
+			t.Errorf("ParseID(%q) err = %v, want role.ErrInvalid", bad, err)
+		}
+	}
+}

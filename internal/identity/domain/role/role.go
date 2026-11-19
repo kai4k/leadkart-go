@@ -19,9 +19,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
-
 	"github.com/leadkart/leadkart-go/internal/common/errs"
+	"github.com/leadkart/leadkart-go/internal/common/ids"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/permission"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
@@ -289,11 +288,11 @@ func (r *Role) IsCompanyOwner() bool {
 // ParseID canonicalises an untrusted role id (any RFC 4122 spelling) to the
 // lowercase hyphenated form repositories store (ADR 0069, finding 1).
 func ParseID(raw string) (ID, error) {
-	u, err := uuid.Parse(strings.TrimSpace(raw))
+	c, err := ids.Canonical(raw)
 	if err != nil {
 		return "", fmt.Errorf("%w: role id %q is not a UUID", ErrInvalid, raw)
 	}
-	return ID(u.String()), nil
+	return ID(c), nil
 }
 
 // HasPermission reports whether the role grants `p`. Used by the
