@@ -255,7 +255,9 @@ func applyScope(w http.ResponseWriter, r *http.Request, c *jwt.Claims) (*http.Re
 	if len(sr.values) > 1 {
 		return reject(http.StatusBadRequest, errCodeInvalidTenantScope, "X-Tenant-Id must be supplied at most once", "")
 	}
-	raw := strings.TrimSpace(sr.values[0])
+	// No trimming: a padded value is malformed. CanonicalID is the single
+	// judge of what a tenant id looks like.
+	raw := sr.values[0]
 	id, ok := CanonicalID(raw)
 	if !ok {
 		return reject(http.StatusBadRequest, errCodeInvalidTenantScope, "X-Tenant-Id must be a tenant UUID", raw)
