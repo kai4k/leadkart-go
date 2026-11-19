@@ -193,7 +193,7 @@ func TestE2E_Impersonation_TargetTenantNotFound(t *testing.T) {
 		"/api/v1/platform/impersonation/sessions",
 		platformTok,
 		ports.CreateImpersonationSessionRequest{
-			TargetTenantID:  "00000000-0000-0000-0000-000000000000",
+			TargetTenantID:  "0190a000-0000-7000-8000-0000000000ee", // well-formed, no such tenant (the nil UUID is a 400)
 			Reason:          "session against ghost tenant",
 			DurationMinutes: 30,
 		})
