@@ -84,6 +84,15 @@ func TestE2E_Round6_AnOwnerEditsACustomRoleTheyHold(t *testing.T) {
 	w := newAttackWorld(t)
 	p := permission.IdentityPermissions
 	custom := w.roles[customRoleName]
+	// The world's custom role holds identity.users.create as stale data (owner ruling 2026-11-21:
+	// a role below the Administrator tier may not contain it). It cannot be assigned, and an edit
+	// that would leave it in the role is refused, until the owner removes it; removing it is allowed.
+	if r := w.f.authedJSON(t, http.MethodPost, "/api/v1/roles/"+custom+"/permissions/grant", w.owner.AccessToken, ports.RolePermissionRequest{Permission: p.Crm.Leads.Read}); r.status != http.StatusForbidden || errCodeOf(r) != "admin_tier_required" {
+		t.Fatalf("grant on a role that still holds the stale permission: %d %s, want 403 admin_tier_required", r.status, r.body)
+	}
+	if r := w.f.authedJSON(t, http.MethodPost, "/api/v1/roles/"+custom+"/permissions/revoke", w.owner.AccessToken, ports.RolePermissionRequest{Permission: p.Users.Create}); r.status != http.StatusNoContent {
+		t.Fatalf("remove the stale permission from the role: %d %s, want 204", r.status, r.body)
+	}
 	w.f.assignRole(t, w.owner.AccessToken, w.mid(t, "owner2"), custom)
 	w.relogin(t, "owner2")
 	r := w.f.authedJSON(t, http.MethodPost, "/api/v1/roles/"+custom+"/permissions/grant", w.tok(t, "owner2"), ports.RolePermissionRequest{Permission: p.Crm.Leads.Read})
