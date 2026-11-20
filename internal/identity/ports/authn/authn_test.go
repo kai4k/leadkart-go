@@ -12,6 +12,7 @@ import (
 	"github.com/leadkart/leadkart-go/internal/common/tenancy"
 	"github.com/leadkart/leadkart-go/internal/identity/app/jwt"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/permission"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 	"github.com/leadkart/leadkart-go/internal/identity/ports/authn"
 )
 
@@ -41,6 +42,12 @@ func (alwaysFresh) IsFresh(_ context.Context, _, _ string) (bool, error) {
 	return true, nil
 }
 
+// IsSessionLive: these tests are about routing and authorization of an
+// impersonation token, not its liveness (see security_stamp_test.go).
+func (alwaysFresh) IsSessionLive(_ context.Context, _, _ string, _ tenant.ID) (bool, error) {
+	return true, nil
+}
+
 // withFreshness fills Subject + SecurityStamp so RequireFreshStamp's empty-claim
 // guards don't fire, letting non-freshness branch tests reach their assertion.
 func withFreshness(c *jwt.Claims) *jwt.Claims {
@@ -49,6 +56,12 @@ func withFreshness(c *jwt.Claims) *jwt.Claims {
 	}
 	if c.SecurityStamp == "" {
 		c.SecurityStamp = "00000000-0000-7000-8000-000000000001"
+	}
+	if c.Act != nil { // a real session token names its session and its operator (the subject)
+		if c.Act.SessionID == "" {
+			c.Act.SessionID = "0190a000-0000-7000-8000-0000000000a1"
+		}
+		c.Act.Sub = c.Subject
 	}
 	return c
 }

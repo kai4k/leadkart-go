@@ -43,26 +43,30 @@ type AuthorizePermissionRequestViewCommand struct {
 
 // AuthorizePermissionRequestViewHandler decides read visibility of one request:
 // the requester, and anyone who may deny it (the policy's approver eligibility).
+// Like approve and the queue it decides on the FRESH actor (the caller's own
+// membership read again), in one read transaction.
 type AuthorizePermissionRequestViewHandler struct {
+	uow      pg.UnitOfWork
 	requests permissionrequest.Repository
 	facts    authorityFacts
 	now      func() time.Time
 }
 
 // NewAuthorizePermissionRequestViewHandler wires the handler.
-func NewAuthorizePermissionRequestViewHandler(requests permissionrequest.Repository, m membership.Repository, r role.Repository, p person.Repository, now func() time.Time) AuthorizePermissionRequestViewHandler {
-	if requests == nil || m == nil || r == nil || p == nil {
-		panic("command: NewAuthorizePermissionRequestViewHandler requests, memberships, roles and persons required")
+func NewAuthorizePermissionRequestViewHandler(uow pg.UnitOfWork, requests permissionrequest.Repository, m membership.Repository, r role.Repository, p person.Repository, now func() time.Time) AuthorizePermissionRequestViewHandler {
+	if uow == nil || requests == nil || m == nil || r == nil || p == nil {
+		panic("command: NewAuthorizePermissionRequestViewHandler uow, requests, memberships, roles and persons required")
 	}
 	if now == nil {
 		now = time.Now
 	}
-	return AuthorizePermissionRequestViewHandler{requests: requests, facts: authorityFacts{memberships: m, roles: r, persons: p}, now: now}
+	return AuthorizePermissionRequestViewHandler{uow: uow, requests: requests, facts: authorityFacts{memberships: m, roles: r, persons: p}, now: now}
 }
 
 // Handle returns nil when the request exists in the tenant and Actor may see it;
-// every other outcome (missing, other tenant, not eligible, facts that cannot be
-// loaded) is [ErrPermissionRequestNotFound], indistinguishable from a missing id.
+// every other outcome (missing, other tenant, not eligible, an actor who can no
+// longer act, facts that cannot be loaded) is [ErrPermissionRequestNotFound],
+// indistinguishable from a missing id.
 func (h AuthorizePermissionRequestViewHandler) Handle(ctx context.Context, cmd AuthorizePermissionRequestViewCommand) error {
 	if cmd.TenantID.IsZero() || cmd.RequestID.IsZero() {
 		return errors.New("authorize_permission_request_view: tenant id and request id required")
@@ -70,24 +74,34 @@ func (h AuthorizePermissionRequestViewHandler) Handle(ctx context.Context, cmd A
 	if !cmd.Actor.Valid() {
 		return ErrPermissionRequestNotFound
 	}
-	req, err := h.requests.GetByID(ctx, cmd.TenantID, cmd.RequestID)
-	if err != nil {
-		if errors.Is(err, permissionrequest.ErrNotFound) {
+	now := h.now()
+	return h.uow.WithinTx(tenancy.WithID(ctx, tenancy.ID(cmd.TenantID.String())), pg.TxScopeTenant, func(ctx context.Context) error {
+		actor, err := h.facts.freshActor(ctx, cmd.TenantID, cmd.Actor, now)
+		if errors.Is(err, authority.ErrNoAuthority) {
 			return ErrPermissionRequestNotFound
 		}
-		return fmt.Errorf("authorize_permission_request_view: %w", err)
-	}
-	if req.RequesterMembershipID() == cmd.Actor.MembershipID() {
+		if err != nil {
+			return fmt.Errorf("authorize_permission_request_view: %w", err)
+		}
+		req, err := h.requests.GetByID(ctx, cmd.TenantID, cmd.RequestID)
+		if err != nil {
+			if errors.Is(err, permissionrequest.ErrNotFound) {
+				return ErrPermissionRequestNotFound
+			}
+			return fmt.Errorf("authorize_permission_request_view: %w", err)
+		}
+		if req.RequesterMembershipID() == actor.MembershipID() {
+			return nil
+		}
+		_, requester, err := h.facts.memberByID(ctx, cmd.TenantID, req.RequesterMembershipID(), now)
+		if err != nil {
+			return ErrPermissionRequestNotFound
+		}
+		if actor.MayDeny(requester) != nil {
+			return ErrPermissionRequestNotFound
+		}
 		return nil
-	}
-	_, requester, err := h.facts.memberByID(ctx, cmd.TenantID, req.RequesterMembershipID(), h.now())
-	if err != nil {
-		return ErrPermissionRequestNotFound
-	}
-	if cmd.Actor.MayDeny(requester) != nil {
-		return ErrPermissionRequestNotFound
-	}
-	return nil
+	})
 }
 
 // ListDecidablePermissionRequestsQuery asks for one window of the approver queue.

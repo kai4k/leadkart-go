@@ -552,24 +552,26 @@ type CancelPermissionRequestCommand struct {
 	RequesterMembershipID membership.ID
 }
 
-// CancelPermissionRequestHandler runs the cancel flow.
+// CancelPermissionRequestHandler runs the cancel flow. A cancel decides who a
+// request ended with, so it serialises with approve and deny: it runs in the
+// tenant's authority lock like they do (it needs no fresh actor: the requester
+// withdraws their own request and nothing is conferred).
 type CancelPermissionRequestHandler struct {
+	w        authorityWriter
 	requests permissionrequest.Repository
-	now      func() time.Time
 }
 
 // NewCancelPermissionRequestHandler wires the handler.
 func NewCancelPermissionRequestHandler(
+	uow pg.UnitOfWork,
+	lock AuthorityLocker,
 	requests permissionrequest.Repository,
 	now func() time.Time,
 ) CancelPermissionRequestHandler {
 	if requests == nil {
 		panic("command: NewCancelPermissionRequestHandler requests repository required")
 	}
-	if now == nil {
-		now = time.Now
-	}
-	return CancelPermissionRequestHandler{requests: requests, now: now}
+	return CancelPermissionRequestHandler{w: newTenantLockWriter("NewCancelPermissionRequestHandler", uow, lock, now), requests: requests}
 }
 
 // Handle cancels the request. Caller MUST equal the requester
@@ -588,36 +590,33 @@ func (h CancelPermissionRequestHandler) Handle(
 		return errors.New("cancel_permission_request: requester membership id required")
 	}
 
-	req, err := h.requests.GetByID(ctx, cmd.TenantID, cmd.RequestID)
-	if err != nil {
-		if errors.Is(err, permissionrequest.ErrNotFound) {
-			return ErrPermissionRequestNotFound
+	now := h.w.now()
+	err := h.w.locked(ctx, cmd.TenantID, authority.Actor{}, now, func(ctx context.Context, _ authority.Actor) error {
+		req, err := h.requests.GetByID(ctx, cmd.TenantID, cmd.RequestID)
+		if err != nil {
+			return err
 		}
-		return fmt.Errorf("cancel_permission_request: load: %w", err)
-	}
-	if req.RequesterMembershipID() != cmd.RequesterMembershipID {
-		// Cross-requester cancel — 404 per enumeration-safety canon.
+		if req.RequesterMembershipID() != cmd.RequesterMembershipID {
+			// Cross-requester cancel: 404 per enumeration-safety canon.
+			return permissionrequest.ErrNotFound
+		}
+		if req.State() != permissionrequest.StatePending {
+			return ErrPermissionRequestNotPending
+		}
+		return h.requests.UpdateByID(ctx, cmd.TenantID, cmd.RequestID, func(loaded *permissionrequest.Request) (bool, error) {
+			if err := loaded.Cancel(now); err != nil {
+				return false, err
+			}
+			return true, nil
+		})
+	})
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, ErrPermissionRequestNotPending), errors.Is(err, permissionrequest.ErrNotPending):
+		return ErrPermissionRequestNotPending
+	case errors.Is(err, permissionrequest.ErrNotFound):
 		return ErrPermissionRequestNotFound
 	}
-	if req.State() != permissionrequest.StatePending {
-		return ErrPermissionRequestNotPending
-	}
-
-	now := h.now()
-	if err := h.requests.UpdateByID(ctx, cmd.TenantID, cmd.RequestID, func(loaded *permissionrequest.Request) (bool, error) {
-		if err := loaded.Cancel(now); err != nil {
-			return false, err
-		}
-		return true, nil
-	}); err != nil {
-		switch {
-		case errors.Is(err, permissionrequest.ErrNotPending):
-			return ErrPermissionRequestNotPending
-		case errors.Is(err, permissionrequest.ErrNotFound):
-			return ErrPermissionRequestNotFound
-		default:
-			return fmt.Errorf("cancel_permission_request: update: %w", err)
-		}
-	}
-	return nil
+	return fmt.Errorf("cancel_permission_request: %w", err)
 }

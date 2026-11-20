@@ -4,6 +4,9 @@
 //   pgtest container (per-package); pgxpool internal conn timeouts +
 //   package-level `task ci:test:int -timeout=15m` already bound execution.
 //
+// arch-test:no-synctest - the row-lock test crosses two real Postgres
+//   transactions; a virtual clock cannot order a lock wait.
+//
 // arch-test:parallel-safe — every Test* uses the shared pgtest container
 //   + a fresh tenant_id per test bound via tenancy.WithID(); RLS isolates
 //   rows by tenant so parallel runs cannot see each others state.
@@ -173,5 +176,82 @@ func TestPermissionRequestRepository_ListPendingInTenant_ReportsToFilter(t *test
 	none, err := reqs.ListPendingInTenant(ctx, tn.ID(), mine, 10, pagination.Cursor{})
 	if err != nil || len(none.Items) != 0 {
 		t.Fatalf("a member without reports has a queue of %v, %v; want empty", ids3(none), err)
+	}
+}
+
+// Race (hierarchy round 6, I2): two writers of one request serialise on its row.
+// The cancel is held between its read and its write while an approval tries to
+// commit in that gap. Without the row lock the approval commits and the cancel
+// then overwrites it from its stale snapshot (cancelled, approver wiped, while
+// the approval answered success). With the lock the approval waits for the
+// cancel and finds it no longer pending. Either way what each caller was told
+// must be what is stored.
+func TestPermissionRequestRepository_UpdateByID_WritersSerialiseOnTheRow(t *testing.T) {
+	t.Parallel()
+	pool := repoFixture(t)
+	tx := pg.NewTransactor(pool)
+	persons := adapters.NewPersonRepository(pool, tx)
+	memberships := adapters.NewMembershipRepository(pool, tx)
+	tenants := adapters.NewTenantRepository(pool, tx)
+	reqs := adapters.NewPermissionRequestRepository(pool, tx)
+	tn := seedTenant(t, tenants)
+	ctx := tenancy.WithID(t.Context(), tenancy.ID(tn.ID().String()))
+	member := func(email string) membership.ID {
+		pe := seedPerson(t, persons, email)
+		m, err := membership.New(membership.ID(ids.NewV7().String()), pe.ID(), tn.ID(), "", testNow)
+		if err != nil {
+			t.Fatalf("membership.New: %v", err)
+		}
+		if err := memberships.Add(ctx, m); err != nil {
+			t.Fatalf("Add membership: %v", err)
+		}
+		return m.ID()
+	}
+	requester, approver := member("race-requester@example.test"), member("race-approver@example.test")
+	r, err := permissionrequest.New(permissionrequest.ID(ids.NewV7().String()), tn.ID(), requester, permission.FromConstant(permission.IdentityPermissions.Crm.Leads.Read), 7, "needed for the quarterly close", testNow)
+	if err != nil {
+		t.Fatalf("permissionrequest.New: %v", err)
+	}
+	if err := reqs.Add(ctx, r); err != nil {
+		t.Fatalf("Add request: %v", err)
+	}
+
+	loaded, approvalDone := make(chan struct{}), make(chan struct{})
+	cancelErr := make(chan error, 1)
+	go func() {
+		cancelErr <- reqs.UpdateByID(ctx, tn.ID(), r.ID(), func(loadedReq *permissionrequest.Request) (bool, error) {
+			close(loaded) // the cancel has read the request as pending
+			select {
+			case <-approvalDone: // the approval committed in the gap (no row lock)
+			case <-time.After(2 * time.Second): // the approval is waiting for this transaction (row lock)
+			}
+			return true, loadedReq.Cancel(testNow.Add(time.Minute))
+		})
+	}()
+	<-loaded
+	approveErr := reqs.UpdateByID(ctx, tn.ID(), r.ID(), func(loadedReq *permissionrequest.Request) (bool, error) {
+		return true, loadedReq.Approve(approver, "go ahead", ids.NewV7(), testNow.Add(24*time.Hour), testNow.Add(time.Minute))
+	})
+	close(approvalDone)
+	cancelResult := <-cancelErr
+
+	got, err := reqs.GetByID(ctx, tn.ID(), r.ID())
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	switch got.State() {
+	case permissionrequest.StateApproved:
+		if cancelResult == nil || approveErr != nil || got.ApproverMembershipID() != approver {
+			t.Fatalf("stored approved (approver %q) but approve answered %v and cancel answered %v", got.ApproverMembershipID(), approveErr, cancelResult)
+		}
+	case permissionrequest.StateCancelled:
+		if cancelResult != nil || approveErr == nil {
+			t.Fatalf("stored cancelled but cancel answered %v and approve answered %v: an approval that said success was erased", cancelResult, approveErr)
+		}
+		if got.ApproverMembershipID() != "" {
+			t.Fatalf("cancelled request still carries approver %q", got.ApproverMembershipID())
+		}
+	default:
+		t.Fatalf("request ended %s", got.State())
 	}
 }

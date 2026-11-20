@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/leadkart/leadkart-go/internal/identity/app/jwt"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 	"github.com/leadkart/leadkart-go/internal/identity/ports/authn"
 )
 
@@ -259,4 +260,116 @@ func TestRequireFreshStamp_PanicsOnNilValidator(t *testing.T) {
 		}
 	}()
 	_ = authn.RequireFreshStamp(&fakeVerifier{}, nil) // arch-test:ignore-err - test fixture setup
+}
+
+// sessionStampValidator is a stamp validator that can also vouch for impersonation sessions.
+type sessionStampValidator struct {
+	fakeStampValidator
+	live         bool
+	err          error
+	sessionCalls atomic.Int64
+	gotSession   string
+	gotOperator  string
+	gotTenant    tenant.ID
+}
+
+func (s *sessionStampValidator) IsSessionLive(_ context.Context, sessionID, operatorID string, tenantID tenant.ID) (bool, error) {
+	s.sessionCalls.Add(1)
+	s.gotSession, s.gotOperator, s.gotTenant = sessionID, operatorID, tenantID
+	return s.live, s.err
+}
+
+func impersonationClaims(sub, actSub, session string) *jwt.Claims {
+	c := freshClaims(stampFresh)
+	c.Subject = sub
+	c.Act = &jwt.ActClaim{Sub: actSub, SessionID: session, Reason: "a long enough reason"}
+	return c
+}
+
+func serveWith(t *testing.T, claims *jwt.Claims, validator authn.StampValidator) (*httptest.ResponseRecorder, *sentinel) {
+	t.Helper()
+	s := &sentinel{}
+	mw := authn.RequireFreshStamp(&fakeVerifier{wantToken: "tok", claims: claims}, validator)(s.handler())
+	rec := httptest.NewRecorder()
+	mw.ServeHTTP(rec, newRequest(t, "Bearer tok"))
+	return rec, s
+}
+
+func TestRequireFreshStamp_ImpersonationToken_LiveSessionPassesWithTheTokensOwnIdentity(t *testing.T) {
+	t.Parallel()
+	v := &sessionStampValidator{fakeStampValidator: fakeStampValidator{fresh: true}, live: true}
+	rec, s := serveWith(t, impersonationClaims(stampPersonID, stampPersonID, "sess-1"), v)
+	if rec.Code != http.StatusOK || !s.called {
+		t.Fatalf("live session: status %d called %v; want 200 and next to run", rec.Code, s.called)
+	}
+	if v.gotSession != "sess-1" || v.gotOperator != stampPersonID || v.gotTenant != tenant.ID("tenant-test") {
+		t.Fatalf("validator asked about (%q, %q, %q); want the token's session, operator and tenant", v.gotSession, v.gotOperator, v.gotTenant)
+	}
+}
+
+func TestRequireFreshStamp_ImpersonationToken_DeadSessionIs401StaleToken(t *testing.T) {
+	t.Parallel()
+	v := &sessionStampValidator{fakeStampValidator: fakeStampValidator{fresh: true}, live: false}
+	rec, s := serveWith(t, impersonationClaims(stampPersonID, stampPersonID, "sess-1"), v)
+	body, _ := io.ReadAll(rec.Body)
+	if rec.Code != http.StatusUnauthorized || s.called || !strings.Contains(string(body), `"stale_token"`) {
+		t.Fatalf("dead session: status %d called %v body %q; want 401 stale_token and no next", rec.Code, s.called, body)
+	}
+}
+
+func TestRequireFreshStamp_ImpersonationToken_StoreFailureIs401Unauthenticated(t *testing.T) {
+	t.Parallel()
+	v := &sessionStampValidator{fakeStampValidator: fakeStampValidator{fresh: true}, err: errors.New("store down")}
+	rec, s := serveWith(t, impersonationClaims(stampPersonID, stampPersonID, "sess-1"), v)
+	body, _ := io.ReadAll(rec.Body)
+	if rec.Code != http.StatusUnauthorized || s.called || !strings.Contains(string(body), `"unauthenticated"`) {
+		t.Fatalf("store failure: status %d called %v body %q; want 401 unauthenticated", rec.Code, s.called, body)
+	}
+}
+
+func TestRequireFreshStamp_ImpersonationToken_FailsClosedWhenTheValidatorCannotVouch(t *testing.T) {
+	t.Parallel()
+	rec, s := serveWith(t, impersonationClaims(stampPersonID, stampPersonID, "sess-1"), &fakeStampValidator{fresh: true})
+	if rec.Code != http.StatusUnauthorized || s.called {
+		t.Fatalf("validator without session support: status %d called %v; want 401 and no next", rec.Code, s.called)
+	}
+}
+
+func TestRequireFreshStamp_ImpersonationToken_ActorMustBeTheSubjectAndNamedSession(t *testing.T) {
+	t.Parallel()
+	for name, c := range map[string]*jwt.Claims{
+		"act.sub is another person": impersonationClaims(stampPersonID, "someone-else", "sess-1"),
+		"no session id":             impersonationClaims(stampPersonID, stampPersonID, ""),
+		"no act.sub":                impersonationClaims(stampPersonID, "", "sess-1"),
+	} {
+		v := &sessionStampValidator{fakeStampValidator: fakeStampValidator{fresh: true}, live: true}
+		rec, s := serveWith(t, c, v)
+		if rec.Code != http.StatusUnauthorized || s.called {
+			t.Errorf("%s: status %d called %v; want 401", name, rec.Code, s.called)
+		}
+		if v.sessionCalls.Load() != 0 {
+			t.Errorf("%s: the store was asked about a session the token does not name", name)
+		}
+	}
+}
+
+func TestRequireFreshStamp_OrdinaryTokenNeverAsksAboutSessions(t *testing.T) {
+	t.Parallel()
+	v := &sessionStampValidator{fakeStampValidator: fakeStampValidator{fresh: true}}
+	rec, s := serveWith(t, freshClaims(stampFresh), v)
+	if rec.Code != http.StatusOK || !s.called {
+		t.Fatalf("ordinary token: status %d called %v", rec.Code, s.called)
+	}
+	if v.sessionCalls.Load() != 0 {
+		t.Fatalf("an ordinary token cost %d session lookups; want 0", v.sessionCalls.Load())
+	}
+}
+
+func TestRequireFreshStamp_ImpersonationToken_StaleOperatorStampStillWinsFirst(t *testing.T) {
+	t.Parallel()
+	v := &sessionStampValidator{fakeStampValidator: fakeStampValidator{fresh: false}, live: true}
+	rec, _ := serveWith(t, impersonationClaims(stampPersonID, stampPersonID, "sess-1"), v)
+	if rec.Code != http.StatusUnauthorized || v.sessionCalls.Load() != 0 {
+		t.Fatalf("stale operator stamp: status %d session calls %d; want 401 before any session lookup", rec.Code, v.sessionCalls.Load())
+	}
 }

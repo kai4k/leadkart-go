@@ -196,18 +196,54 @@ func TestNeedsFreshFacts(t *testing.T) {
 		tenant tenant.ID
 		want   bool
 	}{
-		"ordinary member, own tenant":                    {mk(ActorInput{}), tenantOne, true},
-		"ordinary member, another tenant":                {mk(ActorInput{}), tenantTwo, true},
-		"super user":                                     {mk(ActorInput{IsSuperUser: true}), tenantOne, false},
-		"impersonation session":                          {mk(ActorInput{IsImpersonation: true}), tenantOne, false},
-		"exempt operator in another tenant":              {mk(ActorInput{IsPlatformOperator: true, EffectivePermissions: opManage}), tenantTwo, false},
-		"operator in its OWN tenant follows rank":        {mk(ActorInput{IsPlatformOperator: true, EffectivePermissions: opManage}), tenantOne, true},
-		"operator without the exemption permission":      {mk(ActorInput{IsPlatformOperator: true, EffectivePermissions: []string{p.Platform.TenantsView}}), tenantTwo, true},
-		"operator, tenant id that does not canonicalise": {mk(ActorInput{IsPlatformOperator: true, EffectivePermissions: opManage}), "garbage", true},
+		"ordinary member, own tenant":                      {mk(ActorInput{}), tenantOne, true},
+		"ordinary member, another tenant":                  {mk(ActorInput{}), tenantTwo, true},
+		"super user, own tenant (re-read)":                 {mk(ActorInput{IsSuperUser: true}), tenantOne, true},
+		"super user, another tenant (bounded by stamp)":    {mk(ActorInput{IsSuperUser: true}), tenantTwo, false},
+		"super user, tenant id that does not canonicalise": {mk(ActorInput{IsSuperUser: true}), "garbage", false},
+		"impersonation session":                            {mk(ActorInput{IsImpersonation: true}), tenantOne, false},
+		"exempt operator in another tenant":                {mk(ActorInput{IsPlatformOperator: true, EffectivePermissions: opManage}), tenantTwo, false},
+		"operator in its OWN tenant follows rank":          {mk(ActorInput{IsPlatformOperator: true, EffectivePermissions: opManage}), tenantOne, true},
+		"operator without the exemption permission":        {mk(ActorInput{IsPlatformOperator: true, EffectivePermissions: []string{p.Platform.TenantsView}}), tenantTwo, true},
+		"operator, tenant id that does not canonicalise":   {mk(ActorInput{IsPlatformOperator: true, EffectivePermissions: opManage}), "garbage", true},
 		"zero actor": {Actor{}, tenantOne, false},
 	} {
 		if got := c.actor.NeedsFreshFacts(c.tenant); got != c.want {
 			t.Errorf("%s: NeedsFreshFacts = %v, want %v", name, got, c.want)
 		}
+	}
+}
+
+// A super user acting in their own tenant is decided on the stored membership: the
+// super-admin role must still be held (the token's flag is a fact of the membership).
+func TestNarrowedBy_ASuperUserMustStillHoldTheSuperAdminRole(t *testing.T) {
+	t.Parallel()
+	superRole := role.UnmarshalFromDB(role.Snapshot{ID: role.ID("0190a000-0000-7000-8000-000000000990"), TenantID: tenantOne,
+		Name: "Super Admin", IsSystemDefault: true, IsSuperAdmin: true, HierarchyLevel: 0})
+	plain := freshRole(1, tenantOne, 10, false)
+	r := RankOwner.Int()
+	super := newActorT(t, ActorInput{MembershipID: freshMemberID, TenantID: tenantOne, Rank: &r, IsSuperUser: true})
+
+	holds := freshMemberOf(t, freshMemberID, tenantOne, membership.StatusActive, canAct(), superRole)
+	if got := super.NarrowedBy(holds, nil, nil); !got.Valid() || !got.IsSuperUser() {
+		t.Errorf("a super admin who still holds the role: valid=%v super=%v, want a valid super user", got.Valid(), got.IsSuperUser())
+	}
+	lost := freshMemberOf(t, freshMemberID, tenantOne, membership.StatusActive, canAct(), plain)
+	if got := super.NarrowedBy(lost, nil, nil); got.Valid() {
+		t.Error("a super user whose super-admin role was removed still acts")
+	}
+	deleted := role.UnmarshalFromDB(role.Snapshot{ID: superRole.ID(), TenantID: tenantOne, Name: "Super Admin", IsSuperAdmin: true, IsDeleted: true})
+	gone := freshMemberOf(t, freshMemberID, tenantOne, membership.StatusActive, canAct(), deleted)
+	if got := super.NarrowedBy(gone, nil, nil); got.Valid() {
+		t.Error("a super user whose super-admin role was deleted still acts")
+	}
+	inactive := freshMemberOf(t, freshMemberID, tenantOne, membership.StatusInactive, canAct(), superRole)
+	if got := super.NarrowedBy(inactive, nil, nil); got.Valid() {
+		t.Error("a deactivated super user still acts")
+	}
+	// An ordinary actor never needs the role.
+	ordinary := tokenActor(t, RankAdmin)
+	if got := ordinary.NarrowedBy(lost, nil, nil); !got.Valid() {
+		t.Error("the super-admin requirement leaked onto an ordinary actor")
 	}
 }

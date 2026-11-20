@@ -4,6 +4,9 @@ import (
 	"context"
 	"net/http"
 	"strings"
+
+	"github.com/leadkart/leadkart-go/internal/identity/app/jwt"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
 
 // StampValidator is the consumer-side interface RequireFreshStamp needs
@@ -18,6 +21,21 @@ import (
 //   - (_, err)      — repository / cache transport failure → 401 unauthenticated.
 type StampValidator interface {
 	IsFresh(ctx context.Context, personID string, claimStamp string) (bool, error)
+}
+
+// SessionValidator is the second capability RequireFreshStamp asks of the same
+// validator value it already receives on every route: whether the impersonation
+// session a token names is still alive. A validator that does not implement it
+// cannot vouch for any impersonation token, so those tokens are refused (fail
+// closed); an ordinary token never reaches it.
+//
+// IsSessionLive contract:
+//   - (true, nil)  - the session exists, has not expired, belongs to operatorID
+//     and targets tenantID.
+//   - (false, nil) - it does not (ended, expired, someone else's, other tenant).
+//   - (_, err)     - the store failed: 401 unauthenticated.
+type SessionValidator interface {
+	IsSessionLive(ctx context.Context, sessionID, operatorID string, tenantID tenant.ID) (bool, error)
 }
 
 // errCodeStaleToken signals that the bearer's signature/expiry checks
@@ -124,6 +142,13 @@ func RequireFreshStamp(verifier Verifier, validator StampValidator) func(http.Ha
 					"session has been revoked")
 				return
 			}
+			// An impersonation token is only as alive as its session (ADR 0069 D2):
+			// ended, expired, or not this operator's / this tenant's session means
+			// the token is dead on every route. Ordinary tokens carry no act claim
+			// and pay nothing here (one nil check, no I/O).
+			if c.Act != nil && !sessionLive(w, r, validator, c) {
+				return
+			}
 			// Only a caller whose token AND stamp are valid gets the operator
 			// X-Tenant-Id scope validated, looked up and audited (ADR 0068 D7).
 			scoped, ok := applyScope(w, r, c)
@@ -133,4 +158,30 @@ func RequireFreshStamp(verifier Verifier, validator StampValidator) func(http.Ha
 			next.ServeHTTP(w, scoped)
 		}))
 	}
+}
+
+// sessionLive answers whether the impersonation session c names is alive and
+// writes the 401 itself when it is not. The act subject must be the token's own
+// subject (the operator whose stamp was just checked).
+func sessionLive(w http.ResponseWriter, r *http.Request, validator StampValidator, c *jwt.Claims) bool {
+	sv, ok := validator.(SessionValidator)
+	if !ok {
+		writeError(w, http.StatusUnauthorized, errCodeUnauthenticated, "impersonation sessions cannot be validated")
+		return false
+	}
+	sessionID, operatorID := strings.TrimSpace(c.Act.SessionID), strings.TrimSpace(c.Act.Sub)
+	if sessionID == "" || operatorID == "" || operatorID != strings.TrimSpace(c.Subject) {
+		writeError(w, http.StatusUnauthorized, errCodeStaleToken, "impersonation session has ended")
+		return false
+	}
+	live, err := sv.IsSessionLive(r.Context(), sessionID, operatorID, tenant.ID(strings.TrimSpace(c.TenantID)))
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, errCodeUnauthenticated, "impersonation session validation failed")
+		return false
+	}
+	if !live {
+		writeError(w, http.StatusUnauthorized, errCodeStaleToken, "impersonation session has ended")
+		return false
+	}
+	return true
 }

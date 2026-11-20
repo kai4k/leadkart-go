@@ -461,6 +461,7 @@ func TestArch_PortsAdaptersDontDefineInterfaces(t *testing.T) {
 		{"identity/ports/subscribers/invalidate_cache.go", "SecurityStampInvalidator"}: true,
 		{"identity/ports/authn/authn.go", "Verifier"}:                                  true,
 		{"identity/ports/authn/security_stamp.go", "StampValidator"}:                   true,
+		{"identity/ports/authn/security_stamp.go", "SessionValidator"}:                 true, // same consumer (RequireFreshStamp), same validator value
 	}
 
 	type violation struct {

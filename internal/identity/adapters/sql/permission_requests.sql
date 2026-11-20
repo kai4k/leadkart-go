@@ -24,6 +24,20 @@ SELECT id, tenant_id, requester_membership_id, permission_constant,
 FROM   identity.permission_requests
 WHERE  id = $1;
 
+-- name: GetPermissionRequestByIDForUpdate :one
+-- The aggregate-writer load (UpdateByID): takes the row lock so every writer of a
+-- request (approve, deny, cancel) serialises on it and decides on a snapshot read
+-- after the previous writer committed (hierarchy round 6, I2). FOR NO KEY UPDATE,
+-- like the membership and person writer loads: it conflicts with every other
+-- writer but not with the FOR KEY SHARE a foreign-key check takes.
+SELECT id, tenant_id, requester_membership_id, permission_constant,
+       duration_days, reason, state, approver_membership_id,
+       decided_at, decision_reason, granted_override_id, expires_at,
+       created_at, updated_at
+FROM   identity.permission_requests
+WHERE  id = $1
+FOR NO KEY UPDATE;
+
 -- name: UpdatePermissionRequestDecision :exec
 -- Approve / Deny / Cancel sets the decision-side columns under
 -- the UpdateFn pattern. State enforced at the application layer via

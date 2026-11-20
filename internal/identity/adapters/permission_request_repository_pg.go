@@ -118,7 +118,7 @@ func (r *PermissionRequestRepository) updateOnTx(
 	updateFn func(*permissionrequest.Request) (bool, error),
 ) error {
 	q := r.q.WithTx(tx)
-	req, err := loadPermissionRequest(ctx, q, id)
+	req, err := loadPermissionRequestForUpdate(ctx, q, id)
 	if err != nil {
 		return err
 	}
@@ -282,11 +282,36 @@ func loadPermissionRequest(
 	q *db.Queries,
 	id permissionrequest.ID,
 ) (*permissionrequest.Request, error) {
+	return loadPermissionRequestWith(ctx, q, id, false)
+}
+
+// loadPermissionRequestForUpdate reads the request under its row lock (writers:
+// UpdateByID), so approve, deny and cancel of one request cannot interleave.
+func loadPermissionRequestForUpdate(
+	ctx context.Context,
+	q *db.Queries,
+	id permissionrequest.ID,
+) (*permissionrequest.Request, error) {
+	return loadPermissionRequestWith(ctx, q, id, true)
+}
+
+// loadPermissionRequestWith is the one load body; forUpdate picks the locking query.
+func loadPermissionRequestWith(
+	ctx context.Context,
+	q *db.Queries,
+	id permissionrequest.ID,
+	forUpdate bool,
+) (*permissionrequest.Request, error) {
 	rid, err := uuid.Parse(id.String())
 	if err != nil {
 		return nil, fmt.Errorf("permreq repo: parse id %q: %w", id, err)
 	}
-	row, err := q.GetPermissionRequestByID(ctx, pgconv.PgUUID(rid))
+	var row db.IdentityPermissionRequest
+	if forUpdate {
+		row, err = q.GetPermissionRequestByIDForUpdate(ctx, pgconv.PgUUID(rid))
+	} else {
+		row, err = q.GetPermissionRequestByID(ctx, pgconv.PgUUID(rid))
+	}
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, permissionrequest.ErrNotFound

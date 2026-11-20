@@ -579,7 +579,13 @@ func buildIdentityApp(pool *pgxpool.Pool, hybridCache *cache.HybridCache, cfg co
 	var statsReader query.PlatformStatsReader = adapters.NewPlatformStatsReaderPG(pool, tx)
 
 	stampCache := adapters.NewSecurityStampCache(hybridCache, persons)
-	stampValidator := adapters.NewSecurityStampValidator(stampCache)
+	// One impersonation session store serves the session commands AND the request
+	// gate (ADR 0069 D2): an impersonation token is live only while its session is.
+	// v0.2 ships in-memory (single-process / integration-test fit); production
+	// multi-replica drops in a Redis-backed implementation behind the same
+	// [impersonation.Store] interface - composition root change only.
+	impersonationStore := adapters.NewImpersonationInMemoryStore(now)
+	stampValidator := adapters.NewSecurityStampValidator(stampCache).WithImpersonationSessions(impersonationStore)
 
 	previous := make([]jwt.SigningKey, len(cfg.JWT.PreviousKeys))
 	for i, p := range cfg.JWT.PreviousKeys {
@@ -612,12 +618,6 @@ func buildIdentityApp(pool *pgxpool.Pool, hybridCache *cache.HybridCache, cfg co
 	//
 	// Composition-root simplification: no recorder + no no-reply
 	// address wiring here; that's the worker's concern.
-
-	// Impersonation session store. v0.2 ships in-memory (single-
-	// process / integration-test fit); production multi-replica
-	// drops in a Redis-backed implementation behind the same
-	// [impersonation.Store] interface — composition root change only.
-	impersonationStore := adapters.NewImpersonationInMemoryStore(now)
 
 	// Aggregate-ID factories per the Pure Domain refactor (ADR 0047 +
 	// Khorikov §8). Handlers depend on `func() <T>.ID` injected at
@@ -696,9 +696,9 @@ func buildIdentityApp(pool *pgxpool.Pool, hybridCache *cache.HybridCache, cfg co
 				RequestPermissionElevation: command.NewRequestPermissionElevationHandler(permissionRequests, memberships, now, newPermissionRequestID),
 				ApprovePermissionRequest:   command.NewApprovePermissionRequestHandler(tx, authorityLock, permissionRequests, memberships, roles, persons, now, newOverrideID),
 				DenyPermissionRequest:      command.NewDenyPermissionRequestHandler(tx, authorityLock, permissionRequests, memberships, roles, persons, now),
-				CancelPermissionRequest:    command.NewCancelPermissionRequestHandler(permissionRequests, now),
+				CancelPermissionRequest:    command.NewCancelPermissionRequestHandler(tx, authorityLock, permissionRequests, now),
 
-				AuthorizePermissionRequestView:  command.NewAuthorizePermissionRequestViewHandler(permissionRequests, memberships, roles, persons, now),
+				AuthorizePermissionRequestView:  command.NewAuthorizePermissionRequestViewHandler(tx, permissionRequests, memberships, roles, persons, now),
 				ListDecidablePermissionRequests: command.NewListDecidablePermissionRequestsHandler(tx, permissionRequests, memberships, roles, persons, now),
 			},
 			Queries: app.Queries{

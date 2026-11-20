@@ -44,7 +44,7 @@ func newPRWorld(t *testing.T) *prWorld {
 	l, p := command.AuthorityLocker(w.lock), anyPersons{rotations: &w.rotations}
 	w.approve = command.NewApprovePermissionRequestHandler(fakeUoW{}, l, w.reqs, w.members, w.roles, p, awClock, func() uuid.UUID { return uuid.MustParse(awID(7000)) })
 	w.deny = command.NewDenyPermissionRequestHandler(fakeUoW{}, l, w.reqs, w.members, w.roles, p, awClock)
-	w.view = command.NewAuthorizePermissionRequestViewHandler(w.reqs, w.members, w.roles, p, awClock)
+	w.view = command.NewAuthorizePermissionRequestViewHandler(fakeUoW{}, w.reqs, w.members, w.roles, p, awClock)
 	w.reqs.ManagerLookup(func(id membership.ID) membership.ID {
 		m, err := w.members.GetByID(t.Context(), awTenant, id)
 		if err != nil {

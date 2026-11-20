@@ -165,15 +165,18 @@ func TestE2E_PermissionRequests_ApprovalDecidedByPolicy(t *testing.T) {
 	t.Run("an impersonation session cannot decide or submit", func(t *testing.T) {
 		_, eTok := w.exec(t)
 		_, id := f.requestElevation(t, eTok, p.Tasks.WorkItems.Reassign)
-		imp, err := f.Issuer.Issue(jwt.IssueArgs{
-			PersonID: w.tl.personID, TenantID: w.owner.TenantID, TenantSlug: w.owner.Slug, MembershipID: w.tl.membershipID,
-			SecurityStamp: identitytest.GetSecurityStamp(t, f.Pool, w.tl.personID),
-			Permissions:   []string{p.Meta.TenantAdmin}, Audience: jwt.ImpersonationAudienceClaim, TTL: time.Hour,
-			Act: &jwt.ActClaim{Sub: "01a1f625-2aff-792d-ba5e-4ecb47aeda01", SessionID: "01a1f625-2aff-792d-ba5e-4ecb47aeda02", Reason: "support ticket 4711"},
-		})
-		if err != nil {
-			t.Fatalf("mint impersonation token: %v", err)
+		// A real session (the request gate keeps an impersonation token alive only while its session is).
+		opTok := mintOperatorJWTExact(t, f.Issuer, f.persons, "", []string{p.Platform.ImpersonationManage, p.Platform.TenantsView}, false)
+		sess := f.authedJSON(t, http.MethodPost, "/api/v1/platform/impersonation/sessions", opTok,
+			ports.CreateImpersonationSessionRequest{TargetTenantID: w.owner.TenantID, Reason: "support ticket 4711", DurationMinutes: 30})
+		if sess.status != http.StatusCreated {
+			t.Fatalf("create session: %d %s", sess.status, sess.body)
 		}
+		var created ports.CreateImpersonationSessionResponse
+		if err := json.Unmarshal(sess.body, &created); err != nil {
+			t.Fatalf("decode session: %v", err)
+		}
+		imp := created.AccessToken
 		f.wantForbidden(t, "approve while impersonating", w.decide(t, "approve", imp, id), http.StatusForbidden, "impersonation_not_allowed")
 		f.wantForbidden(t, "deny while impersonating", w.decide(t, "deny", imp, id), http.StatusForbidden, "impersonation_not_allowed")
 		sub, _ := f.requestElevation(t, imp, p.Crm.Leads.ReadAll)

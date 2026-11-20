@@ -143,14 +143,20 @@ func effectiveSet(names []string) map[string]struct{} {
 
 // NeedsFreshFacts reports whether a decision inside tenantID must be taken on
 // the actor's freshly loaded membership ([Actor.NarrowedBy]) instead of on the
-// token alone: every actor except super users (they hold everything and have
-// no tenant membership to read), impersonation sessions (a synthetic
-// membership; the session store and the operator's stamp bound them) and
-// operators acting under the cross-tenant exemption (their authority is the
-// platform permission, not a membership of that tenant). The zero Actor needs
-// nothing: it already denies.
+// token alone: every actor except impersonation sessions (a synthetic
+// membership; the request gate keeps them alive only while their session is in
+// the store, ADR 0069 D2) and the two cross-tenant uses, which are not an act of
+// a membership of the target tenant: an operator under the cross-tenant
+// exemption (their authority is the platform permission) and a super user acting
+// in a tenant other than their own (bounded by the security stamp). A super user
+// acting in their OWN tenant (the platform tenant, where they hold the super
+// admin role through a real membership) is re-read like anyone else. The zero
+// Actor needs nothing: it already denies.
 func (a Actor) NeedsFreshFacts(tenantID tenant.ID) bool {
-	return a.valid && !a.superUser && !a.impersonation && !a.exemptOperatorIn(tenantID)
+	if !a.valid || a.impersonation || a.exemptOperatorIn(tenantID) {
+		return false
+	}
+	return !a.superUser || sameTenant(tenantID, a.tenantID)
 }
 
 // NarrowedBy returns the actor the policy should decide with once the actor's
@@ -164,14 +170,19 @@ func (a Actor) NeedsFreshFacts(tenantID tenant.ID) bool {
 // It returns the zero Actor (which denies everything) when fresh is not valid,
 // is not the membership the token names (canonical id and tenant comparison),
 // or cannot act (inactive membership, or a person who is suspended, locked,
-// anonymised or deactivated). Super-user, platform-operator and impersonation
-// flags are carried over unchanged; they are not facts of the membership.
+// anonymised or deactivated). A super user must still hold a super-admin role:
+// the flag in the token is a fact of the membership, so a super user whose role
+// was removed is the zero actor. Platform-operator and impersonation flags are
+// carried over unchanged; they are not facts of the membership.
 //
 // freshViaRoles is the union of the permissions of the member's live roles; with
 // the member's live overrides it tells which permissions the member holds only
 // through a time-bound grant (recorded for [Actor.CapApprovalExpiry]).
 func (a Actor) NarrowedBy(fresh Member, freshEffective, freshViaRoles []string) Actor {
 	if !a.valid || !fresh.valid || !fresh.active || fresh.id != a.membershipID || !sameTenant(fresh.tenantID, a.tenantID) {
+		return Actor{}
+	}
+	if a.superUser && !fresh.superAdmin {
 		return Actor{}
 	}
 	out := a

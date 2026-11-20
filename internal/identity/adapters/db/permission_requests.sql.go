@@ -42,6 +42,43 @@ func (q *Queries) GetPermissionRequestByID(ctx context.Context, id pgtype.UUID) 
 	return i, err
 }
 
+const getPermissionRequestByIDForUpdate = `-- name: GetPermissionRequestByIDForUpdate :one
+SELECT id, tenant_id, requester_membership_id, permission_constant,
+       duration_days, reason, state, approver_membership_id,
+       decided_at, decision_reason, granted_override_id, expires_at,
+       created_at, updated_at
+FROM   identity.permission_requests
+WHERE  id = $1
+FOR NO KEY UPDATE
+`
+
+// The aggregate-writer load (UpdateByID): takes the row lock so every writer of a
+// request (approve, deny, cancel) serialises on it and decides on a snapshot read
+// after the previous writer committed (hierarchy round 6, I2). FOR NO KEY UPDATE,
+// like the membership and person writer loads: it conflicts with every other
+// writer but not with the FOR KEY SHARE a foreign-key check takes.
+func (q *Queries) GetPermissionRequestByIDForUpdate(ctx context.Context, id pgtype.UUID) (IdentityPermissionRequest, error) {
+	row := q.db.QueryRow(ctx, getPermissionRequestByIDForUpdate, id)
+	var i IdentityPermissionRequest
+	err := row.Scan(
+		&i.ID,
+		&i.TenantID,
+		&i.RequesterMembershipID,
+		&i.PermissionConstant,
+		&i.DurationDays,
+		&i.Reason,
+		&i.State,
+		&i.ApproverMembershipID,
+		&i.DecidedAt,
+		&i.DecisionReason,
+		&i.GrantedOverrideID,
+		&i.ExpiresAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const insertPermissionRequest = `-- name: InsertPermissionRequest :exec
 
 INSERT INTO identity.permission_requests (

@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/alicebob/miniredis/v2"
 	"github.com/redis/go-redis/v9"
@@ -14,7 +15,9 @@ import (
 	"github.com/leadkart/leadkart-go/internal/common/cache"
 	"github.com/leadkart/leadkart-go/internal/common/email"
 	"github.com/leadkart/leadkart-go/internal/identity/adapters"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/impersonation"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
 
 // fakePersonReader is a controllable [adapters.PersonStampReader].
@@ -230,5 +233,64 @@ func TestSecurityStampValidator_IsFresh_RepoError_PropagatesAsError(t *testing.T
 	}
 	if !errors.Is(err, person.ErrNotFound) {
 		t.Fatalf("IsFresh err: got %v, want wrapping person.ErrNotFound", err)
+	}
+}
+
+// TestSecurityStampValidator_IsSessionLive pins what ends an impersonation token
+// (ADR 0069 D2): the session being ended, expiring, belonging to someone else or
+// aiming at another tenant; and that a validator without a store vouches for none.
+func TestSecurityStampValidator_IsSessionLive(t *testing.T) {
+	t.Parallel()
+	pid := person.ID("01999999-7777-7000-8000-000000000007")
+	fx := newHybridFixture(t, pid, testStamp1)
+	clock := time.Date(2026, 5, 7, 12, 0, 0, 0, time.UTC)
+	store := adapters.NewImpersonationInMemoryStore(func() time.Time { return clock })
+	v := adapters.NewSecurityStampValidator(fx.stamps).WithImpersonationSessions(store)
+	sess, err := impersonation.NewSession("op-1", "tenant-1", "audit: investigating ticket 1", 30*time.Minute, clock)
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	if err := store.Put(t.Context(), sess); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	live := func(id, op string, tid tenant.ID) bool {
+		t.Helper()
+		got, err := v.IsSessionLive(t.Context(), id, op, tid)
+		if err != nil {
+			t.Fatalf("IsSessionLive: %v", err)
+		}
+		return got
+	}
+	if !live(sess.ID(), "op-1", tenant.ID("tenant-1")) {
+		t.Error("the operator's own live session must be live")
+	}
+	if live(sess.ID(), "op-2", tenant.ID("tenant-1")) {
+		t.Error("another operator's session must not be live")
+	}
+	if live(sess.ID(), "op-1", tenant.ID("tenant-2")) {
+		t.Error("a session aimed at another tenant must not be live")
+	}
+	if live("", "op-1", tenant.ID("tenant-1")) || live("no-such-session", "op-1", tenant.ID("tenant-1")) {
+		t.Error("a missing session must not be live")
+	}
+	if bare := adapters.NewSecurityStampValidator(fx.stamps); func() bool {
+		got, _ := bare.IsSessionLive(t.Context(), sess.ID(), "op-1", tenant.ID("tenant-1"))
+		return got
+	}() {
+		t.Error("a validator without a session store must vouch for nothing")
+	}
+	clock = clock.Add(31 * time.Minute)
+	if live(sess.ID(), "op-1", tenant.ID("tenant-1")) {
+		t.Error("an expired session must not be live")
+	}
+	clock = clock.Add(-31 * time.Minute)
+	if err := store.Put(t.Context(), sess); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	if err := store.Delete(t.Context(), sess.ID()); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if live(sess.ID(), "op-1", tenant.ID("tenant-1")) {
+		t.Error("an ended session must not be live")
 	}
 }

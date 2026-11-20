@@ -377,6 +377,21 @@ func newAuthorityWriter(ctor string, uow pg.UnitOfWork, lock AuthorityLocker, m 
 	return authorityWriter{uow: uow, lock: lock, facts: authorityFacts{memberships: m, roles: r, persons: p}, now: now}
 }
 
+// newTenantLockWriter is the writer of a command that needs the tenant authority
+// lock and the transaction but decides nothing about anyone's authority (a
+// requester withdrawing their own request): it is only ever run with the zero
+// actor, which [authorityFacts.freshActor] passes through without a read, so it
+// carries no facts.
+func newTenantLockWriter(ctor string, uow pg.UnitOfWork, lock AuthorityLocker, now func() time.Time) authorityWriter {
+	if uow == nil || lock == nil {
+		panic("command: " + ctor + " uow and lock required")
+	}
+	if now == nil {
+		now = time.Now
+	}
+	return authorityWriter{uow: uow, lock: lock, now: now}
+}
+
 // freshActor is the actor the policy decides with: the token's actor narrowed
 // by the actor's own membership read INSIDE the locked transaction. The more
 // junior of the token's rank and the stored rank, and the intersection of the

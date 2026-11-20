@@ -2,10 +2,13 @@ package adapters
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/leadkart/leadkart-go/internal/common/cache"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/impersonation"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
 
 // PersonStampReader is the interface [SecurityStampCache] requires from
@@ -73,7 +76,8 @@ func (c *SecurityStampCache) Invalidate(ctx context.Context, id person.ID) error
 // SecurityStampValidator wraps the cache for claim-vs-stored comparison.
 // Consumed by the authn middleware via [authn.StampValidator].
 type SecurityStampValidator struct {
-	cache *SecurityStampCache
+	cache    *SecurityStampCache
+	sessions impersonation.Store
 }
 
 // NewSecurityStampValidator wires the validator.
@@ -100,4 +104,31 @@ func (v *SecurityStampValidator) IsFresh(
 		return false, fmt.Errorf("security stamp validate: %w", err)
 	}
 	return stored == claimStamp, nil
+}
+
+// WithImpersonationSessions gives the validator the impersonation session store
+// (the same one the session commands use) so it can vouch for impersonation
+// tokens. Without it no impersonation token is live.
+func (v *SecurityStampValidator) WithImpersonationSessions(s impersonation.Store) *SecurityStampValidator {
+	v.sessions = s
+	return v
+}
+
+// IsSessionLive reports whether the impersonation session is alive: present in
+// the store (an expired session reads as absent), the operator's own, and aimed
+// at tenantID. The store is process-local, so this is one mutex-guarded map read
+// and no network or database I/O; there is no second cache to invalidate.
+// Implements [authn.SessionValidator].
+func (v *SecurityStampValidator) IsSessionLive(ctx context.Context, sessionID, operatorID string, tenantID tenant.ID) (bool, error) {
+	if v.sessions == nil || sessionID == "" {
+		return false, nil
+	}
+	sess, err := v.sessions.Get(ctx, sessionID)
+	if errors.Is(err, impersonation.ErrSessionNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("impersonation session validate: %w", err)
+	}
+	return sess.OperatorID() == operatorID && sess.TargetTenantID() == tenantID.String(), nil
 }

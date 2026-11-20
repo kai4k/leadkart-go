@@ -440,3 +440,88 @@ func TestAssignUserManager_LongChainsAreAcceptedUpToTheBound(t *testing.T) {
 		t.Errorf("a chain of 64 links above the manager (the walk bound): %v, want ErrManagerNotEligible", err)
 	}
 }
+
+// TestAuthorityCommands_ASuperUserInTheirOwnTenantIsReRead: a super user acting in
+// the tenant their membership lives in (the platform tenant) is decided on the
+// stored membership like everyone else: the super-admin role must still be held,
+// and the membership active. Acting in another tenant stays bounded by the stamp
+// (TestAuthorityCommands_ExemptActorsNeedNoMembershipInTheTenant).
+func TestAuthorityCommands_ASuperUserInTheirOwnTenantIsReRead(t *testing.T) {
+	t.Parallel()
+	superToken := func(t *testing.T, id membership.ID) authority.Actor {
+		r := authority.RankOwner.Int()
+		a, err := authority.NewActor(authority.ActorInput{MembershipID: id, TenantID: awTenant, Rank: &r, IsSuperUser: true})
+		if err != nil {
+			t.Fatalf("NewActor: %v", err)
+		}
+		return a
+	}
+	setup := func(t *testing.T) (*authzWorld, *role.Role) {
+		w := newAuthzWorld(t)
+		return w, w.addRoleSnap(t, role.Snapshot{ID: role.ID(awID(60)), TenantID: awTenant, Name: "Super Admin", IsSystemDefault: true, IsSuperAdmin: true,
+			HierarchyLevel: role.HierarchyLevelOwner, CreatedAt: testNow})
+	}
+	for name, c := range map[string]struct {
+		member func(w *authzWorld, super *role.Role) *membership.Membership
+		ok     bool
+	}{
+		"still holds the super-admin role": {func(w *authzWorld, super *role.Role) *membership.Membership {
+			return w.memberSnap(t, membership.Snapshot{RoleAssignments: []role.ID{super.ID()}})
+		}, true},
+		"the super-admin role was removed": {func(w *authzWorld, _ *role.Role) *membership.Membership { return w.member(t, w.exec) }, false},
+		"the membership is inactive": {func(w *authzWorld, super *role.Role) *membership.Membership {
+			return w.memberSnap(t, membership.Snapshot{Status: membership.StatusInactive, RoleAssignments: []role.ID{super.ID()}})
+		}, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			w, super := setup(t)
+			actor := superToken(t, c.member(w, super).ID())
+			target := w.member(t)
+			err := w.handlers().assign.Handle(t.Context(), command.AssignUserRoleCommand{TenantID: awTenant, MembershipID: target.ID(), RoleID: w.exec.ID(), Actor: actor})
+			if c.ok && err != nil {
+				t.Fatalf("a super admin acting in their own tenant: %v", err)
+			}
+			if !c.ok && !isErr(err, authority.ErrNoAuthority) {
+				t.Fatalf("err = %v, want ErrNoAuthority", err)
+			}
+			if !c.ok && len(target.RoleAssignments()) != 0 {
+				t.Error("the refused command changed the target")
+			}
+		})
+	}
+}
+
+// TestViewPermissionRequest_TheViewerIsReReadToo: the single-request view decides
+// on the stored facts like approve and the queue. A team lead demoted to an
+// executive since the token was minted no longer sees their ex-report's request,
+// and a requester who was deactivated no longer sees their own.
+func TestViewPermissionRequest_TheViewerIsReReadToo(t *testing.T) {
+	t.Parallel()
+	p := permission.IdentityPermissions
+	w := newPRWorld(t)
+	c := w.cast(t)
+	r := w.pending(t, c.exec, p.Crm.Leads.Read, 0)
+	view := func(a authority.Actor) error {
+		return w.view.Handle(t.Context(), command.AuthorizePermissionRequestViewCommand{TenantID: awTenant, RequestID: r.ID(), Actor: a})
+	}
+	if err := view(actorAs(t, c.tl.ID(), authority.RankTeamLead, p.Roles.Approve)); err != nil {
+		t.Fatalf("control: the team lead sees their report's request: %v", err)
+	}
+	if err := view(actorAs(t, c.exec.ID(), authority.RankUser)); err != nil {
+		t.Fatalf("control: the requester sees their own request: %v", err)
+	}
+	// A team lead demoted to an executive since the token was minted, still the requester's manager on record.
+	demoted := w.member(t, w.exec)
+	reportOfDemoted := w.memberReporting(t, demoted.ID(), w.exec)
+	r3 := w.pending(t, reportOfDemoted, p.Crm.Leads.Read, 0)
+	stale := actorAs(t, demoted.ID(), authority.RankTeamLead, p.Roles.Approve)
+	if err := w.view.Handle(t.Context(), command.AuthorizePermissionRequestViewCommand{TenantID: awTenant, RequestID: r3.ID(), Actor: stale}); !errors.Is(err, command.ErrPermissionRequestNotFound) {
+		t.Errorf("a demoted viewer: err = %v, want not found", err)
+	}
+	gone := w.memberSnap(t, membership.Snapshot{Status: membership.StatusInactive, RoleAssignments: []role.ID{w.exec.ID()}})
+	r2 := w.pending(t, gone, p.Crm.Leads.Read, 0)
+	if err := w.view.Handle(t.Context(), command.AuthorizePermissionRequestViewCommand{TenantID: awTenant, RequestID: r2.ID(), Actor: actorAs(t, gone.ID(), authority.RankUser)}); !errors.Is(err, command.ErrPermissionRequestNotFound) {
+		t.Errorf("a deactivated requester viewing their own request: err = %v, want not found", err)
+	}
+}

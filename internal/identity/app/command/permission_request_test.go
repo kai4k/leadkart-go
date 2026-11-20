@@ -146,7 +146,7 @@ func TestCancelPermissionRequest_OnlyRequesterCanCancel(t *testing.T) {
 		Reason:                "need to onboard 5 users for monthly sales drive",
 	})
 
-	cancelH := command.NewCancelPermissionRequestHandler(reqs, fixedTimeFn())
+	cancelH := command.NewCancelPermissionRequestHandler(fakeUoW{}, &fakeAuthorityLock{}, reqs, fixedTimeFn())
 	// Different caller → 404 (enumeration-safe).
 	err := cancelH.Handle(t.Context(), command.CancelPermissionRequestCommand{
 		TenantID:              requester.TenantID(),
@@ -463,6 +463,7 @@ func TestCancelPermissionRequest_InputValidation(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			h := command.NewCancelPermissionRequestHandler(
+				fakeUoW{}, &fakeAuthorityLock{},
 				newFakePermissionRequestRepo(),
 				fixedTimeFn(),
 			)
@@ -492,7 +493,7 @@ func TestCancelPermissionRequest_NonPending(t *testing.T) {
 		Reason:                "need to onboard 5 users for monthly sales drive",
 	})
 
-	cancelH := command.NewCancelPermissionRequestHandler(reqs, fixedTimeFn())
+	cancelH := command.NewCancelPermissionRequestHandler(fakeUoW{}, &fakeAuthorityLock{}, reqs, fixedTimeFn())
 	if err := cancelH.Handle(t.Context(), command.CancelPermissionRequestCommand{
 		TenantID:              requester.TenantID(),
 		RequestID:             out.RequestID,
@@ -508,5 +509,37 @@ func TestCancelPermissionRequest_NonPending(t *testing.T) {
 	})
 	if !errors.Is(err, command.ErrPermissionRequestNotPending) {
 		t.Fatalf("err = %v, want ErrPermissionRequestNotPending", err)
+	}
+}
+
+// A cancel decides how a request ended, so it takes the same tenant authority
+// lock as approve and deny (hierarchy round 6, I2); a refused cancel (someone
+// else's request) took it too and changed nothing.
+func TestCancelPermissionRequest_TakesTheTenantAuthorityLock(t *testing.T) {
+	t.Parallel()
+	reqs := newFakePermissionRequestRepo()
+	mems := newFakeMembershipRepoForPermReq()
+	requester := freshMembershipForPermReq(t)
+	_ = mems.Add(t.Context(), requester) // arch-test:ignore-err - test fixture setup
+	submitH := command.NewRequestPermissionElevationHandler(reqs, mems, fixedTimeFn(), func() permissionrequest.ID { return permissionrequest.ID(ids.NewV7().String()) })
+	out, _ := submitH.Handle(t.Context(), command.RequestPermissionElevationCommand{
+		Actor: submitterActor(t), TenantID: requester.TenantID(), RequesterMembershipID: requester.ID(),
+		Permission: permission.FromConstant(permission.IdentityPermissions.Users.Create),
+		Reason:     "need to onboard 5 users for monthly sales drive",
+	})
+	lock := &fakeAuthorityLock{}
+	cancelH := command.NewCancelPermissionRequestHandler(fakeUoW{}, lock, reqs, fixedTimeFn())
+	if err := cancelH.Handle(t.Context(), command.CancelPermissionRequestCommand{
+		TenantID: requester.TenantID(), RequestID: out.RequestID, RequesterMembershipID: membership.ID(ids.NewV7().String()),
+	}); !errors.Is(err, command.ErrPermissionRequestNotFound) {
+		t.Fatalf("cross-caller err = %v, want not found", err)
+	}
+	if err := cancelH.Handle(t.Context(), command.CancelPermissionRequestCommand{
+		TenantID: requester.TenantID(), RequestID: out.RequestID, RequesterMembershipID: requester.ID(),
+	}); err != nil {
+		t.Fatalf("Cancel: %v", err)
+	}
+	if lock.calls != 2 {
+		t.Fatalf("tenant authority lock taken %d times for two cancels, want 2", lock.calls)
 	}
 }

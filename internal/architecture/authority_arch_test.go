@@ -33,7 +33,6 @@ var authorityWriteMethods = map[string][]string{
 // a new bypass cannot hide behind an old reason. Key: "<file>:<receiver>.<func>".
 var authorityWriteExceptions = map[string]string{
 	"register_tenant.go:RegisterTenantHandler.seedRolesAndAssignOwner": "the first Company Owner of a brand-new tenant: no other member, no actor, nothing to decide",
-	"permission_request.go:CancelPermissionRequestHandler.Handle":      "the requester withdraws their own request; it is not a decision and confers nothing",
 }
 
 // authorityWriteOffences returns "<file>:<line> <what>" for every authority
