@@ -120,6 +120,7 @@ func newWiredApp(t *testing.T) wiredApp {
 	login := command.NewLoginHandler(
 		authRouter, families, tenants, persons, permResolver, issuer, now, refreshTTL, dummyHash,
 		func() refreshtoken.FamilyID { return refreshtoken.FamilyID(ids.NewV7().String()) },
+		adapters.NewInMemoryPhantomLockout(1000),
 	)
 	refresh := command.NewRefreshHandler(families, persons, memberships, tenants, permResolver, issuer, now, refreshTTL)
 	logout := command.NewLogoutHandler(families, now)

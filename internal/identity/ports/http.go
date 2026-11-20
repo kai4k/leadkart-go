@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/leadkart/leadkart-go/internal/common/email"
+	"github.com/leadkart/leadkart-go/internal/common/httpmw"
 	"github.com/leadkart/leadkart-go/internal/common/slug"
 	"github.com/leadkart/leadkart-go/internal/identity/app"
 	"github.com/leadkart/leadkart-go/internal/identity/app/command"
@@ -691,8 +692,25 @@ func handleRevokeAllSessions(log *slog.Logger, a app.Application) http.Handler {
 	})
 }
 
+// passwordResetResponseFloor is the earliest the request-password-reset answer
+// leaves the server (ADR 0068 D12): the known-account path persists a reset token
+// and the unknown-account path does not, so without a floor the response time says
+// whether the address has an account. It must exceed the p99 of the known-account
+// path (one indexed lookup plus one row update, single-digit milliseconds); 300 ms
+// leaves two orders of magnitude of headroom and is imperceptible on an emailed flow.
+const passwordResetResponseFloor = 300 * time.Millisecond
+
+// handleRequestPasswordReset applies the response floor INSIDE the handler, not at
+// the registration: the route scanner admits only authn functions as outer wrappers
+// of a registered handler, and this route is anonymous.
 func handleRequestPasswordReset(log *slog.Logger, a app.Application) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	return newRequestPasswordResetHandler(log, a, httpmw.MinDuration(passwordResetResponseFloor))
+}
+
+// newRequestPasswordResetHandler is the handler over a given floor middleware, so
+// a test can inject a clock (see TestRequestPasswordReset_*).
+func newRequestPasswordResetHandler(log *slog.Logger, a app.Application, floor httpmw.Middleware) http.Handler {
+	return floor(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req RequestPasswordResetRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeError(w, http.StatusBadRequest, ErrCodeInvalidBody, "request body is not valid JSON")
@@ -718,7 +736,7 @@ func handleRequestPasswordReset(log *slog.Logger, a app.Application) http.Handle
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
-	})
+	}))
 }
 
 func handleResetPassword(log *slog.Logger, a app.Application) http.Handler {

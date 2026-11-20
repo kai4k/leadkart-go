@@ -175,6 +175,10 @@ const (
 	// throttling brute-force credential stuffing.
 	apiIPRatePerSecond = 10.0
 	apiIPRateBurst     = 60
+
+	// phantomLockoutMaxEntries bounds the in-memory lockout counter for login
+	// attempts with no usable account (ADR 0068 D12): ~100 bytes each, so ~10 MB.
+	phantomLockoutMaxEntries = 100_000
 )
 
 func main() {
@@ -674,7 +678,7 @@ func buildIdentityApp(pool *pgxpool.Pool, hybridCache *cache.HybridCache, cfg co
 		App: app.Application{
 			Commands: app.Commands{
 				RegisterTenant:       command.NewRegisterTenantHandler(tx, tenants, persons, memberships, roles, now, newTenantID, newPersonID, newMembershipID),
-				Login:                command.NewLoginHandler(authRouter, families, tenants, persons, permResolver, issuer, now, cfg.Refresh.AbsoluteTTL, dummyHash, newFamilyID),
+				Login:                command.NewLoginHandler(authRouter, families, tenants, persons, permResolver, issuer, now, cfg.Refresh.AbsoluteTTL, dummyHash, newFamilyID, adapters.NewInMemoryPhantomLockout(phantomLockoutMaxEntries)),
 				Refresh:              command.NewRefreshHandler(families, persons, memberships, tenants, permResolver, issuer, now, cfg.Refresh.AbsoluteTTL),
 				Logout:               command.NewLogoutHandler(families, now),
 				ChangePassword:       command.NewChangePasswordHandler(persons, breachChecker, now),

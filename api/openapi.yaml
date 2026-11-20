@@ -185,6 +185,9 @@ paths:
             failed login attempts within [person.LockoutWindow] per
             NIST 800-63B §5.2.2 + ADR 0053. Retry-After header carries
             integer seconds until unlock (RFC 7231 §7.1.3 delta-seconds).
+            An email with no usable account (unknown, deactivated, anonymised) locks on the
+            same schedule and answers identically, so 423 does not reveal that an account exists
+            (ADR 0068 D12). While locked, even the correct password answers 423.
           headers:
             Retry-After:
               description: Seconds until the account unlocks.
@@ -241,7 +244,10 @@ paths:
         - $ref: '#/components/parameters/XCommandId'
       tags: [auth]
       summary: Request password reset email
-      description: ALWAYS returns 204 regardless of whether the email is registered (Auth0/Okta canon — defeats account enumeration).
+      description: |
+        ALWAYS returns 204 regardless of whether the email is registered (Auth0/Okta canon — defeats account
+        enumeration). The answer is released no earlier than a fixed 300 ms after the request is read, so
+        response time does not reveal whether the address has an account either.
       security: []
       requestBody:
         required: true

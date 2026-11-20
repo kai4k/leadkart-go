@@ -92,6 +92,13 @@ func (f *fakeAuthRouter) ResolveByEmail(_ context.Context, e email.Address) (*pe
 // through to the success path.
 func loginHandlerForFailurePaths(t *testing.T, router command.AuthRouter, persons person.Repository) command.LoginHandler {
 	t.Helper()
+	return loginHandlerWithPhantom(t, router, persons, newFakePhantomLockout())
+}
+
+// loginHandlerWithPhantom is loginHandlerForFailurePaths over a caller-supplied
+// phantom lockout, so enumeration tests can observe what the handler asks of it.
+func loginHandlerWithPhantom(t *testing.T, router command.AuthRouter, persons person.Repository, phantom command.PhantomLockout) command.LoginHandler {
+	t.Helper()
 	dummy, err := argon2.Hash("dummy-handler-unit-test")
 	if err != nil {
 		t.Fatalf("dummyHash: %v", err)
@@ -107,6 +114,7 @@ func loginHandlerForFailurePaths(t *testing.T, router command.AuthRouter, person
 		0, // refreshTTL — not reached on failure
 		dummy,
 		func() refreshtoken.FamilyID { return refreshtoken.FamilyID("never-minted-on-failure") },
+		phantom,
 	)
 }
 
@@ -161,7 +169,7 @@ func newLoginRig(t *testing.T) wiredLoginRig {
 
 	h := command.NewLoginHandler(
 		router, families, tenants, persons, resolver, issuer,
-		now, 14*24*time.Hour, dummy, mintFamilyID,
+		now, 14*24*time.Hour, dummy, mintFamilyID, newFakePhantomLockout(),
 	)
 	return wiredLoginRig{
 		handler: h, router: router, families: families, tenants: tenants,
@@ -674,8 +682,9 @@ func TestLogin_RankClaim_FromSameRoleLoadAsPermissions(t *testing.T) {
 
 // TestLogin_AlreadyLocked_ReturnsLockedErrorBeforeVerify covers the
 // pre-verify lockout gate per NIST 800-63B §5.2.2 + ADR 0053. Locked
-// Persons surface ErrAccountLocked + a LockedUntil timestamp BEFORE
-// argon2.Verify runs (timing-leak avoidance).
+// Persons surface ErrAccountLocked + a LockedUntil timestamp WITHOUT the real
+// password ever being verified; one dummy verify keeps the branch as slow as a
+// wrong password (ADR 0068 D12; see login_enumeration_test.go).
 func TestLogin_AlreadyLocked_ReturnsLockedErrorBeforeVerify(t *testing.T) {
 	t.Parallel()
 	const plain = "the-real-password"
