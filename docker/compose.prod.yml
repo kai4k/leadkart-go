@@ -13,6 +13,7 @@
 # Startup order (orchestrated by depends_on + healthcheck conditions):
 #   postgres → redis → migrate (applies migrations as owner, exits)
 #                  └─→ api (connects as leadkart_app under FORCE RLS)
+#                  └─→ worker (outbox forwarder + subscribers + River jobs; NOT optional)
 #                  └─→ caddy (when Web BFF lands; reverse-proxy + auto-SSL)
 #
 # CI is NOT re-run here — branch protection on main + green CI gate the
@@ -25,7 +26,12 @@
 #   POSTGRES_APP_PASSWORD                     — leadkart_app runtime role
 #   REDIS_PASSWORD                            — redis-cli AUTH
 #   JWT_KEY_ID, JWT_SIGNING_KEY               — JWT issuance (>=32 bytes)
+#   LEADKART_IDENTITY__LOCKOUT_KEY            — phantom-lockout HMAC key (openssl rand -base64 32)
+#   LEADKART_HTTP__TRUSTED_PROXIES            — the BFF's address / dedicated subnet, or "none"
 #   API_IMAGE                                 — ghcr.io/<org>/leadkart-go-api:<tag>
+#   WORKER_IMAGE                              — ghcr.io/<org>/leadkart-go-worker:<tag>
+#
+# Deployment checklist (one page, with the alerts to set): docs/deploy/production-checklist.md
 #   MIGRATE_IMAGE                             — ghcr.io/<org>/leadkart-go-migrate:<tag>
 # ============================================================================
 
@@ -150,6 +156,23 @@ services:
       # Bounds on concurrent Argon2id work (docker/.env.example "Argon2 concurrency").
       LEADKART_ARGON2__MAX_CONCURRENT: "${LEADKART_ARGON2__MAX_CONCURRENT:-16}"
       LEADKART_ARGON2__QUEUE_TIMEOUT: "${LEADKART_ARGON2__QUEUE_TIMEOUT:-2s}"
+      # Password work is fair per client and part of the gate is kept for signed-in
+      # users (docker/.env.example "Argon2 concurrency").
+      LEADKART_ARGON2__MAX_PER_CLIENT: "${LEADKART_ARGON2__MAX_PER_CLIENT:-2}"
+      LEADKART_ARGON2__RESERVED_AUTHENTICATED: "${LEADKART_ARGON2__RESERVED_AUTHENTICATED:-4}"
+      # Go heap ceiling: 16 Argon2 slots x ~19.5 MiB = ~312 MiB of LIVE memory, and the
+      # collector needs headroom on top of it (garbage of past hashes, the pool, the
+      # caches), so the live figure is not the container figure. GOMEMLIMIT makes the
+      # runtime collect harder as the heap nears the limit instead of growing until the
+      # kernel kills the container: ~900 MiB for the 1 GiB limit below, leaving ~100 MiB
+      # for stacks, cgo-free runtime structures and the non-heap rest. Raise
+      # MAX_CONCURRENT only together with the container limit AND this value.
+      GOMEMLIMIT: "${GOMEMLIMIT:-900MiB}"
+      # REQUIRED in production (config.Validate): the key of the phantom failed-login
+      # counter, dedicated so a JWT signing-key rotation cannot reset it. base64 of >= 32
+      # random bytes: openssl rand -base64 32. Rotating it restarts the phantom counters
+      # (a short 423-vs-401 window), so rotate deliberately, never routinely.
+      LEADKART_IDENTITY__LOCKOUT_KEY: "${LEADKART_IDENTITY__LOCKOUT_KEY:?set to openssl rand -base64 32 (a dedicated secret, not the JWT key)}"
       # Production mode: the api refuses to start when its database role is an owner /
       # superuser or lacks a privilege (pg.VerifyApplicationPrivileges), and when
       # LEADKART_HTTP__TRUSTED_PROXIES is unset or too wide (config.Validate).
@@ -159,7 +182,7 @@ services:
       # /32 IPv6), or the word "none" when the api is directly exposed. Unset = the
       # container does not start: an unset list puts every user in one rate-limit
       # bucket per credential route.
-      LEADKART_HTTP__TRUSTED_PROXIES: "${LEADKART_HTTP__TRUSTED_PROXIES:?set to the BFF address or CIDR (e.g. 172.16.0.0/12), or none if the api is directly exposed}"
+      LEADKART_HTTP__TRUSTED_PROXIES: "${LEADKART_HTTP__TRUSTED_PROXIES:?set to the BFF's fixed address or a dedicated subnet (NOT 172.16.0.0/12: that trusts every Docker network on the host), or none if the api is directly exposed}"
       TZ: "UTC"
     healthcheck:
       test: ["CMD", "/api", "-healthcheck"]
@@ -180,21 +203,49 @@ services:
           memory: 1G
           cpus: "1.5"
 
-  # ---- Worker (river background jobs — Phase 2+) ---------------------------
-  # Declared but commented out — cmd/worker ships in v0.3 with the Platform
-  # module. Uncomment when MIGRATE_IMAGE picks up the worker target.
-  #
-  # worker:
-  #   image: ${WORKER_IMAGE:-ghcr.io/leadkart/leadkart-go-worker:latest}
-  #   container_name: leadkart-worker
-  #   restart: unless-stopped
-  #   environment: { /* same as api */ }
-  #   depends_on:
-  #     migrate:
-  #       condition: service_completed_successfully
-  #   deploy:
-  #     resources:
-  #       limits: { memory: 512M, cpus: "0.5" }
+  # ---- Worker (outbox forwarder + subscribers + River jobs) ---------------
+  # PART OF PRODUCTION. Without it: no outbox row is ever delivered, so the
+  # subscribers never run (security-stamp cache eviction, the refresh-family
+  # revocation backstop, suspension / anonymisation / deactivation cascades, audit,
+  # email), the phantom failed-login table is never purged and River jobs never run.
+  # The api shows a dead worker: the gauge leadkart.outbox.oldest_unacked_age_seconds
+  # and a WARN at boot (docs/deploy/production-checklist.md lists the alerts).
+  # The worker validates only what it uses (config.ValidateWorker): it needs no
+  # trusted-proxy list, no lockout key and no Argon2 settings.
+  worker:
+    image: ${WORKER_IMAGE:-ghcr.io/leadkart/leadkart-go-worker:latest}
+    container_name: leadkart-worker
+    restart: unless-stopped
+    environment:
+      LEADKART_POSTGRES__DSN: "postgres://leadkart_app:${POSTGRES_APP_PASSWORD}@postgres:5432/leadkart?sslmode=disable"
+      LEADKART_REDIS__ADDR: "redis:6379"
+      LEADKART_REDIS__PASSWORD: "${REDIS_PASSWORD}"
+      LEADKART_LISTEN__WORKER_ADMIN: ":9091"
+      LEADKART_JWT__KEY_ID: "${JWT_KEY_ID}"
+      LEADKART_JWT__SIGNING_KEY: "${JWT_SIGNING_KEY}"
+      LEADKART_REFRESH__ABSOLUTE_TTL: "336h"
+      LEADKART_ENV: "production"
+      TZ: "UTC"
+    healthcheck:
+      # The binary is its own probe (distroless, no shell): GET /alive on the worker
+      # admin listener, the same pattern as the api.
+      test: ["CMD", "/worker", "-healthcheck"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "0.5"
 
   # ---- Web (Svelte SPA) — image pulled from a SEPARATE repo per ADR 0025 ---
   # Per the master plan: frontend lives in its OWN git repo (e.g.

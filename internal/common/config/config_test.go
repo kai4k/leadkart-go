@@ -87,6 +87,7 @@ otel:
 
 	setEnv(t, minRequired())
 	t.Setenv("LEADKART_CONFIG_FILE", yamlFile)
+	t.Setenv("LEADKART_IDENTITY__LOCKOUT_KEY", "GuFuceASeYJI/9HY9E67i3iDbGag7KAH9bmR2CKvObQ=")
 	t.Setenv("LEADKART_LISTEN__API", ":7777") // env should win over file
 
 	cfg, err := config.Load()
@@ -168,7 +169,7 @@ func TestLoad_HTTPAndRateLimitDefaults(t *testing.T) {
 	if cfg.RateLimit != want {
 		t.Fatalf("RateLimit defaults = %+v, want %+v", cfg.RateLimit, want)
 	}
-	if cfg.Argon2 != (config.Argon2Config{MaxConcurrent: 16, QueueTimeout: 2 * time.Second}) {
+	if cfg.Argon2 != (config.Argon2Config{MaxConcurrent: 16, QueueTimeout: 2 * time.Second, MaxPerClient: 2, ReservedAuthenticated: 4}) {
 		t.Fatalf("Argon2 defaults = %+v", cfg.Argon2)
 	}
 }

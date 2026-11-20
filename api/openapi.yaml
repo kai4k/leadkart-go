@@ -402,6 +402,23 @@ paths:
         uses this to drive nav / tier / button-visibility without decoding
         the JWT. Allowed while `must_change_password` is pending (the response
         reports it, so the front-end can render the forced-change screen).
+
+        `password_policy` is the password policy that binds the caller: the policy
+        of the caller's OWN tenant (the tenant of the token, never an operator's
+        acted-on `X-Tenant-Id`, which this route ignores), the system default when
+        the tenant has none. It is the same policy `POST /auth/change-password`
+        enforces, so the change-password page (including the forced screen) can show
+        the rules before the first attempt. It is read fresh on every call, not from
+        the cached bundle. An impersonation session reads this route and sees the
+        impersonated tenant's rules (the token's tenant is the impersonated one);
+        change-password itself is refused to it.
+
+        There is deliberately NO anonymous policy endpoint. The password-reset page
+        learns the rules only from the 422 `password_policy_violation` answer to a
+        reset made with a valid token (`errors` lists the failed rule codes): a
+        holder of a valid emailed token is the only anonymous party that is told
+        anything about the tenant's settings, and the answer is limited to rule
+        codes.
       responses:
         '429': { $ref: '#/components/responses/TooManyRequests' }
         '200':
@@ -4463,7 +4480,7 @@ components:
     # ===== Capabilities ================================================
     CapabilitiesDto:
       type: object
-      required: [person_id, membership_id, tenant_id, tenant_slug, is_platform, is_super_user, must_change_password, permissions, effective_permissions, roles, rank, tier]
+      required: [person_id, membership_id, tenant_id, tenant_slug, is_platform, is_super_user, must_change_password, permissions, effective_permissions, roles, rank, tier, password_policy]
       properties:
         person_id:     { type: string, format: uuid }
         membership_id: { type: string, format: uuid }
@@ -4499,6 +4516,29 @@ components:
           type: string
           enum: [owner, admin, manager, team_lead, user]
           description: 'Band of `rank`: owner 0; admin 1-10; manager 11-20; team_lead 21-30; user 31-99.'
+        password_policy:
+          $ref: '#/components/schemas/PasswordRulesDto'
+
+    PasswordRulesDto:
+      type: object
+      description: |
+        The password rules that bind the caller (the caller's own tenant's policy, or the system
+        default), under the same names as the rule codes of the 422 `password_policy_violation`
+        answer. A class rule applies only when its flag is true.
+      required: [min_length, max_length, requires_uppercase, requires_lowercase, requires_digit, requires_symbol]
+      properties:
+        min_length:
+          type: integer
+          minimum: 8
+          maximum: 128
+          description: Minimum length in characters (Unicode code points).
+        max_length:
+          type: integer
+          description: Size bound in BYTES (1024); a longer password fails the rule `max_length`. Not configurable per tenant.
+        requires_uppercase: { type: boolean }
+        requires_lowercase: { type: boolean }
+        requires_digit:     { type: boolean }
+        requires_symbol:    { type: boolean, description: 'A symbol is punctuation or a symbol character; whitespace is not one.' }
 
     CapabilityRoleDto:
       type: object

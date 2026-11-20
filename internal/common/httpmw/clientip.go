@@ -253,6 +253,33 @@ func keyOf(ip string) string {
 	return netip.PrefixFrom(a, ipv6KeyBits).Masked().String()
 }
 
+// ipv6BlockKeyBits is the prefix of the second, coarser bucket the credential routes
+// apply to IPv6 clients: one /48 is one site, and its 65 536 /64s must not be 65 536
+// free buckets for anyone who can pick source addresses.
+const ipv6BlockKeyBits = 48
+
+// IPv6BlockRateMultiplier is how much more the per-/48 bucket admits than the
+// per-/64 bucket of the same route: a site shares it, so it is wider, but it is
+// finite.
+const IPv6BlockRateMultiplier = 4
+
+// ClientBlockKey is the coarse rate-limit identity of an IPv6 caller: its /48.
+// IPv4 (and anything that is not an IPv6 address) has none ("") and is limited by
+// [ClientKey] alone.
+func ClientBlockKey(r *http.Request, trusted []netip.Prefix) string {
+	a, err := netip.ParseAddr(ClientIP(r, trusted))
+	if err != nil || !a.Is6() || a.Is4In6() {
+		return ""
+	}
+	return netip.PrefixFrom(a, ipv6BlockKeyBits).Masked().String()
+}
+
+// ClientBlockKeyer keys the coarse IPv6 bucket by [ClientBlockKey]; an empty key
+// (IPv4) skips the limit.
+func ClientBlockKeyer(trusted []netip.Prefix) LimiterKeyer {
+	return func(r *http.Request) LimiterKey { return LimiterKey(ClientBlockKey(r, trusted)) }
+}
+
 // ClientIPKeyer keys rate-limit buckets by [ClientKey].
 func ClientIPKeyer(trusted []netip.Prefix) LimiterKeyer {
 	return func(r *http.Request) LimiterKey { return LimiterKey(ClientKey(r, trusted)) }

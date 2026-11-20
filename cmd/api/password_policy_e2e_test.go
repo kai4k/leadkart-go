@@ -10,6 +10,7 @@ package main
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"net/http"
 	"slices"
 	"strings"
@@ -17,6 +18,7 @@ import (
 	"time"
 
 	"github.com/leadkart/leadkart-go/internal/common/ids"
+	"github.com/leadkart/leadkart-go/internal/common/obs"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
 	"github.com/leadkart/leadkart-go/internal/identity/ports"
 )
@@ -180,5 +182,89 @@ func TestE2E_PasswordPolicy_ResetUsesTheActiveMembershipsTenant(t *testing.T) {
 	if r := f.postJSON(t, "/api/v1/auth/reset-password",
 		ports.ResetPasswordRequest{Token: token, NewPassword: lenientPw}); r.status != http.StatusNoContent {
 		t.Fatalf("length-only policy: %d %s", r.status, r.body)
+	}
+}
+
+func (f e2eFixture) capabilitiesPolicy(t *testing.T, token string, headers map[string]string) ports.PasswordRulesDto {
+	t.Helper()
+	r := f.doWithHeaders(t, http.MethodGet, "/api/v1/auth/me/capabilities", token, nil, headers)
+	if r.status != http.StatusOK {
+		t.Fatalf("capabilities: %d %s", r.status, r.body)
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(r.body, &raw); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := raw["password_policy"]; !ok {
+		t.Fatalf("capabilities has no password_policy (it is required): %s", r.body)
+	}
+	var cd ports.CapabilitiesDto
+	if err := json.Unmarshal(r.body, &cd); err != nil {
+		t.Fatal(err)
+	}
+	return cd.PasswordPolicy
+}
+
+// A2: GET /auth/me/capabilities carries the policy of the caller's OWN tenant: the
+// system default until the tenant sets one, read fresh (a change shows on the next
+// call, not after a cache window), per tenant, and never an operator's acted-on
+// scope.
+func TestE2E_PasswordPolicy_CapabilitiesReportsTheCallersOwnTenantsPolicy(t *testing.T) {
+	f := newE2EFixture(t)
+	lenient := f.registerAndLogin(t, "pwcl")
+	strict := f.registerAndLogin(t, "pwcs")
+	def := ports.PasswordRulesDto{MinLength: 12, MaxLength: 1024, RequiresUppercase: true, RequiresLowercase: true, RequiresDigit: true, RequiresSymbol: true}
+
+	if got := f.capabilitiesPolicy(t, lenient.AccessToken, nil); got != def {
+		t.Fatalf("default policy = %+v, want %+v", got, def)
+	}
+	f.setPolicy(t, lenient, 8, false)
+	wantLenient := ports.PasswordRulesDto{MinLength: 8, MaxLength: 1024}
+	if got := f.capabilitiesPolicy(t, lenient.AccessToken, nil); got != wantLenient {
+		t.Fatalf("policy right after the change = %+v, want %+v (read fresh, not from the capabilities cache)", got, wantLenient)
+	}
+	if got := f.capabilitiesPolicy(t, strict.AccessToken, nil); got != def {
+		t.Fatalf("another tenant's policy = %+v, want the default", got)
+	}
+	// A header naming another tenant changes nothing for a tenant member (and the
+	// route ignores it for everyone: self-service identity is never scoped).
+	if got := f.capabilitiesPolicy(t, strict.AccessToken, map[string]string{"X-Tenant-Id": lenient.TenantID}); got != def {
+		t.Fatalf("with X-Tenant-Id naming another tenant = %+v, want the caller's own (default)", got)
+	}
+	// The rules are the ones change-password enforces: a password that meets exactly
+	// the reported length-only rules is accepted for the lenient tenant.
+	if r := f.authedJSON(t, http.MethodPost, "/api/v1/auth/change-password", lenient.AccessToken,
+		ports.ChangePasswordRequest{CurrentPassword: lenient.Password, NewPassword: strings.Repeat("a", wantLenient.MinLength)}); r.status >= 400 {
+		t.Fatalf("change-password with a password that meets the reported rules = %d %s", r.status, r.body)
+	}
+}
+
+// An operator acting in a tenant through X-Tenant-Id still reads the policy of its OWN
+// tenant (the token's), not the acted-on tenant's: the rules bind the person who is
+// setting a password, which is the operator.
+func TestE2E_PasswordPolicy_CapabilitiesIgnoresAnOperatorsActedOnScope(t *testing.T) {
+	f := newE2EFixture(t)
+	target := f.registerAndLogin(t, "pwop")
+	f.setPolicy(t, target, 8, false)
+	operator := f.mintPlatformTokenWith(t, nil, true)
+
+	got := f.capabilitiesPolicy(t, operator, map[string]string{"X-Tenant-Id": target.TenantID})
+	if got.MinLength == 8 || got.RequiresUppercase == false {
+		t.Fatalf("an operator acting in a lenient tenant was shown that tenant's rules: %+v", got)
+	}
+}
+
+// Item 4: the backlog probes a dead worker shows up in run against the real schema: the
+// outbox age is the age of the oldest unacked row (0 when none), the phantom count is
+// the table's rows. (The staleness arithmetic is the SQL; the outbox table is never
+// seeded from a test, per the outbox doctrine.)
+func TestE2E_BacklogProbes_ReadTheRealTables(t *testing.T) {
+	f := newE2EFixture(t)
+	age, rows, err := obs.ProbeBacklog(t.Context(), f.Pool)
+	if err != nil {
+		t.Fatalf("probe: %v", err)
+	}
+	if age < 0 || rows < 0 {
+		t.Fatalf("negative figures: %v %d", age, rows)
 	}
 }

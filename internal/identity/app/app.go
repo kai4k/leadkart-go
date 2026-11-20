@@ -100,6 +100,7 @@ type Commands struct {
 type Queries struct {
 	ListSessions              query.ListSessionsHandler
 	GetCapabilities           query.CachedGetCapabilitiesHandler
+	GetOwnPasswordPolicy      query.GetOwnPasswordPolicyHandler
 	GetTenant                 query.GetTenantHandler
 	GetTenantBySlug           query.GetTenantBySlugHandler
 	GetUser                   query.GetUserHandler

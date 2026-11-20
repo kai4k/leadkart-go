@@ -14,9 +14,10 @@
 --
 -- WHAT IS STORED. key is HMAC-SHA-256(server-derived key, canonical email): the
 -- table never holds an email, a plain hash of one, or anything an attacker could
--- recompute without the server secret (the key derives from the JWT signing
--- secret with a fixed label, see adapters.NewPhantomLockoutRepository). Rotating
--- that secret simply restarts the counters, which live for 15 minutes anyway.
+-- recompute without the server secret (the key derives, with a fixed label,
+-- from LEADKART_IDENTITY__LOCKOUT_KEY, required in production; outside it from the
+-- JWT signing key, see adapters.NewPhantomLockoutRepository). Rotating that
+-- secret simply restarts the counters, which live for 15 minutes anyway.
 -- failed_count / last_failed_at / locked_until carry exactly the semantics of the
 -- identically named identity.persons columns.
 --
@@ -31,14 +32,19 @@
 --
 -- GROWTH. A failing attempt touches one row; a row whose 15-minute window and
 -- lock have both passed is dead weight. A River periodic job
--- (identity.login_phantom_purge, every 5 minutes) deletes such rows in bounded
--- batches. Worst case (theoretical ceiling): the per-client login limiter admits
--- 30 attempts a minute per source and holds at most 50,000 sources per process,
--- and a row lives at most 15 minutes of window plus up to 5 minutes until the
--- next purge: 50,000 x 30 x 20 = 30 million rows (about 4.5 GB with its index),
--- which needs 50,000 distinct /64 or IPv4 sources each sustaining the limit for
--- twenty minutes. A realistic botnet of 1,000 sources is 600,000 rows (about
--- 90 MB), purged within 20 minutes of the attack ending.
+-- (identity.login_phantom_purge, every 5 minutes, run by the WORKER) deletes such
+-- rows in bounded batches. The real bound on growth is the THROUGHPUT of the
+-- password-work gate, not the number of sources: every failed attempt needs one
+-- Argon2 verify under it (16 slots, at most 2 in flight per client), so the table
+-- cannot receive rows faster than the gate verifies, about 45,000 rows per 20
+-- minutes (one 15-minute window plus up to 5 minutes until the next purge). The
+-- earlier "30 million rows" figure multiplied the per-source limiter by the number
+-- of sources it can track; the gate caps that product long before. While the worker
+-- is down NOTHING purges, so growth is unbounded in time: roughly 45,000 rows per 20
+-- minutes of sustained attack, kept for as long as the outage lasts. The api exposes
+-- the row count (gauge leadkart.identity.login_phantom_failures.rows) so that a dead
+-- worker is seen before the table is large; production runs the worker
+-- (docker/compose.prod.yml).
 --
 -- Down drops the table; the counters restart empty, nothing else depends on it.
 

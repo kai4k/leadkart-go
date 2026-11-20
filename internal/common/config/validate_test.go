@@ -281,6 +281,7 @@ func TestValidate_ProductionRequiresATrustedProxyDecision(t *testing.T) {
 		c := validBaseConfig()
 		c.Env = "production"
 		c.HTTP.TrustedProxies = in
+		c.Identity.LockoutKey = validLockoutKey
 		return config.Validate(c)
 	}
 	for _, in := range []string{"", "  ", ","} {
@@ -335,12 +336,18 @@ func TestValidate_RateLimitRejectsNonFiniteRatesAndHugeBursts(t *testing.T) {
 func TestValidate_Argon2Bounds(t *testing.T) {
 	t.Parallel()
 	for _, bad := range []config.Argon2Config{
-		{MaxConcurrent: 0, QueueTimeout: time.Second},
-		{MaxConcurrent: -1, QueueTimeout: time.Second},
-		{MaxConcurrent: 65, QueueTimeout: time.Second},
-		{MaxConcurrent: 16, QueueTimeout: 0},
-		{MaxConcurrent: 16, QueueTimeout: 99 * time.Millisecond},
-		{MaxConcurrent: 16, QueueTimeout: 31 * time.Second},
+		{MaxConcurrent: 0, QueueTimeout: time.Second, MaxPerClient: 1},
+		{MaxConcurrent: -1, QueueTimeout: time.Second, MaxPerClient: 1},
+		{MaxConcurrent: 65, QueueTimeout: time.Second, MaxPerClient: 1},
+		{MaxConcurrent: 16, QueueTimeout: 0, MaxPerClient: 2},
+		{MaxConcurrent: 16, QueueTimeout: 99 * time.Millisecond, MaxPerClient: 2},
+		{MaxConcurrent: 16, QueueTimeout: 31 * time.Second, MaxPerClient: 2},
+		// Fix round 12: the per-client cap and the reserved share.
+		{MaxConcurrent: 16, QueueTimeout: time.Second, MaxPerClient: 0},
+		{MaxConcurrent: 16, QueueTimeout: time.Second, MaxPerClient: 17},
+		{MaxConcurrent: 16, QueueTimeout: time.Second, MaxPerClient: 2, ReservedAuthenticated: -1},
+		{MaxConcurrent: 16, QueueTimeout: time.Second, MaxPerClient: 2, ReservedAuthenticated: 16},
+		{MaxConcurrent: 1, QueueTimeout: time.Second, MaxPerClient: 1, ReservedAuthenticated: 1},
 	} {
 		c := validBaseConfig()
 		c.Argon2 = bad
@@ -349,8 +356,9 @@ func TestValidate_Argon2Bounds(t *testing.T) {
 		}
 	}
 	for _, ok := range []config.Argon2Config{
-		{MaxConcurrent: 1, QueueTimeout: 100 * time.Millisecond},
-		{MaxConcurrent: 64, QueueTimeout: 30 * time.Second},
+		{MaxConcurrent: 1, QueueTimeout: 100 * time.Millisecond, MaxPerClient: 1},
+		{MaxConcurrent: 64, QueueTimeout: 30 * time.Second, MaxPerClient: 64, ReservedAuthenticated: 63},
+		{MaxConcurrent: 16, QueueTimeout: time.Second, MaxPerClient: 2, ReservedAuthenticated: 0},
 	} {
 		c := validBaseConfig()
 		c.Argon2 = ok
@@ -366,5 +374,65 @@ func TestValidate_ChangePasswordLimitIsValidatedLikeTheRouteLimits(t *testing.T)
 	c.RateLimit.ChangePassword = config.RouteLimit{PerMinute: 0, Burst: 5}
 	if err := config.Validate(c); err == nil || !strings.Contains(err.Error(), "RateLimit.change_password") {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+// A random 32-byte key, base64.
+const validLockoutKey = "GuFuceASeYJI/9HY9E67i3iDbGag7KAH9bmR2CKvObQ="
+
+func TestValidate_LockoutKey(t *testing.T) {
+	t.Parallel()
+	base := func() config.AppConfig {
+		c := validBaseConfig()
+		c.Env = "production"
+		c.HTTP.TrustedProxies = "none"
+		c.Identity.LockoutKey = validLockoutKey
+		return c
+	}
+	if err := config.Validate(base()); err != nil {
+		t.Fatalf("a valid production config: %v", err)
+	}
+	c := base()
+	c.Identity.LockoutKey = ""
+	if err := config.Validate(c); !errors.Is(err, config.ErrMissingLockoutKey) {
+		t.Errorf("production without a lockout key: %v, want ErrMissingLockoutKey", err)
+	}
+	for name, bad := range map[string]string{
+		"not base64":     "!!!not-base64-at-all!!!",
+		"too short":      "c2hvcnQ=",
+		"placeholder":    "CHANGE_ME_CHANGE_ME_CHANGE_ME_CHANGE_ME_CHANGE_ME",
+		"low entropy":    "QUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUE=",
+		"the signing key": validJWTKey,
+	} {
+		c := base()
+		c.Identity.LockoutKey = bad
+		if err := config.Validate(c); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+	// Outside production an empty key is allowed (the caller falls back and warns).
+	dev := validBaseConfig()
+	if err := config.Validate(dev); err != nil {
+		t.Errorf("dev without a lockout key: %v", err)
+	}
+}
+
+// The worker has no listener, limits or password work: it validates what it uses.
+func TestValidateWorker_DoesNotDemandTheAPIsSettings(t *testing.T) {
+	t.Parallel()
+	c := validBaseConfig()
+	c.Env = "production"
+	c.HTTP.TrustedProxies = "" // the API would refuse this in production
+	c.Identity.LockoutKey = ""
+	c.Argon2 = config.Argon2Config{}
+	if err := config.ValidateWorker(c); err != nil {
+		t.Fatalf("a production worker without the API's settings: %v", err)
+	}
+	if err := config.Validate(c); err == nil {
+		t.Fatal("the API accepted the same config")
+	}
+	c.Postgres.DSN = ""
+	if err := config.ValidateWorker(c); !errors.Is(err, config.ErrMissingPostgres) {
+		t.Fatalf("the worker must still require the database: %v", err)
 	}
 }

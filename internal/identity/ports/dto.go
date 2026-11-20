@@ -210,6 +210,25 @@ type CapabilitiesDto struct {
 	// strictly greater than this (owners: also on owners).
 	Rank int    `json:"rank"`
 	Tier string `json:"tier"`
+	// PasswordPolicy is the policy of the CALLER'S OWN tenant (the token's tenant,
+	// never an operator's acted-on scope), the same one change-password enforces, so
+	// the change-password page (the forced-change screen included) can show the rules
+	// before the first attempt. Read fresh, not from the capabilities cache.
+	PasswordPolicy PasswordRulesDto `json:"password_policy"`
+}
+
+// PasswordRulesDto is the password policy as a member sees it: the rules a new
+// password must satisfy, under the same names as the rule codes of the 422
+// password_policy_violation answer. min_length counts characters (Unicode code
+// points); max_length is a size bound in BYTES (a password over it fails the rule
+// max_length); a class is a rule only when its flag is true.
+type PasswordRulesDto struct {
+	MinLength         int  `json:"min_length"`
+	MaxLength         int  `json:"max_length"`
+	RequiresUppercase bool `json:"requires_uppercase"`
+	RequiresLowercase bool `json:"requires_lowercase"`
+	RequiresDigit     bool `json:"requires_digit"`
+	RequiresSymbol    bool `json:"requires_symbol"`
 }
 
 // CapabilityRoleDto is one role inside the capabilities bundle: display

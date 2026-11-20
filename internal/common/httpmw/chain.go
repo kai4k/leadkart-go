@@ -152,7 +152,23 @@ func PublicChain(cfg PublicChainConfig) Middleware {
 	}
 	if len(cfg.RouteRateLimits) > 0 {
 		mws = append(mws, routeRateLimit(cfg.RouteRateLimits, keyer, cfg.limiterClock()))
+		// A second, coarser bucket per route for IPv6 clients, keyed by /48 at
+		// IPv6BlockRateMultiplier times the per-/64 rate: without it one /48 is 65 536
+		// /64s, each with its own full bucket. IPv4 has no block key and is unaffected.
+		mws = append(mws, routeRateLimit(scaledRouteLimits(cfg.RouteRateLimits, IPv6BlockRateMultiplier), ClientBlockKeyer(cfg.TrustedProxies), cfg.limiterClock()))
 	}
 	mws = append(mws, idempotency.Middleware(cfg.IdempotencyStore, cfg.Now, cfg.IdempotencyTTL, idemKeyer))
 	return Chain(mws...)
+}
+
+// scaledRouteLimits returns routes with every bucket's rate and burst multiplied by
+// factor.
+func scaledRouteLimits(routes RouteRateLimits, factor int) RouteRateLimits {
+	out := make(RouteRateLimits, len(routes))
+	for route, c := range routes {
+		c.RatePerSecond *= float64(factor)
+		c.Burst *= factor
+		out[route] = c
+	}
+	return out
 }

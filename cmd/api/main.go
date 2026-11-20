@@ -33,6 +33,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/netip"
 	"os"
 	"os/signal"
 	"strings"
@@ -346,6 +347,12 @@ func run(ctx context.Context, stdout *os.File, _ []string) error {
 	}
 	defer hybridCache.Close()
 
+	// A dead worker must be visible from here: the API writes the outbox and the
+	// phantom-lockout table, only the worker drains and purges them.
+	if err := obs.RegisterBacklogGauges(ctx, pool, logger); err != nil {
+		return fmt.Errorf("backlog gauges: %w", err)
+	}
+
 	wiring, err := buildIdentityApp(pool, hybridCache, cfg, time.Now)
 	if err != nil {
 		return fmt.Errorf("build identity app: %w", err)
@@ -479,7 +486,7 @@ func buildPublicChain(cfg config.AppConfig, logger *slog.Logger, store idempoten
 	if len(trustedProxies) == 0 {
 		logger.Warn("no trusted proxies: X-Forwarded-For is ignored, so behind a BFF all clients share one rate-limit bucket (set LEADKART_HTTP__TRUSTED_PROXIES; production refuses to start without a decision)")
 	}
-	return httpmw.PublicChain(httpmw.PublicChainConfig{
+	return httpmw.Chain(argonClientContext(trustedProxies), httpmw.PublicChain(httpmw.PublicChainConfig{
 		Logger:           logger,
 		IdempotencyStore: store,
 		Now:              now,
@@ -490,7 +497,18 @@ func buildPublicChain(cfg config.AppConfig, logger *slog.Logger, store idempoten
 		TrustedProxies:   trustedProxies,
 		RouteRateLimits:  routeRateLimits(cfg.RateLimit),
 		IdempotencyKeyer: authn.IdempotencyCallerKeyer(verifier),
-	}), nil
+	})), nil
+}
+
+// argonClientContext names the caller (the rate-limit key: the forwarded client,
+// IPv6 per /64) in the request context, so the Argon2 gate can bound the password
+// work one client has in flight (ADR 0068 D12, fix round 12 item 3).
+func argonClientContext(trusted []netip.Prefix) httpmw.Middleware {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			next.ServeHTTP(w, r.WithContext(argon2.WithClient(r.Context(), httpmw.ClientKey(r, trusted))))
+		})
+	}
 }
 
 // routeRateLimits maps the per-route settings onto the exact "METHOD /path"
@@ -704,7 +722,8 @@ func buildIdentityApp(pool *pgxpool.Pool, hybridCache *cache.HybridCache, cfg co
 	if argonCfg.MaxConcurrent == 0 {
 		argonCfg = config.Defaults().Argon2 // partial test configs; Validate guarantees it in production
 	}
-	argonGate := argon2.NewGate(argonCfg.MaxConcurrent, argonCfg.QueueTimeout)
+	argonGate := argon2.NewGate(argonCfg.MaxConcurrent, argonCfg.QueueTimeout,
+		argon2.WithPerClient(argonCfg.MaxPerClient), argon2.WithReserved(argonCfg.ReservedAuthenticated))
 	changePasswordLimit := cfg.RateLimit.ChangePassword
 	if changePasswordLimit.Burst == 0 {
 		changePasswordLimit = config.Defaults().RateLimit.ChangePassword
@@ -715,7 +734,18 @@ func buildIdentityApp(pool *pgxpool.Pool, hybridCache *cache.HybridCache, cfg co
 	})
 	// The phantom counter's key derives from the server secret (the JWT signing
 	// key), so no plain or unsalted-hashed address of a non-user is ever stored.
-	phantomLockout := adapters.NewPhantomLockoutRepository(pool, tx, []byte(cfg.JWT.SigningKey))
+	// A dedicated key (LEADKART_IDENTITY__LOCKOUT_KEY) so that rotating the JWT signing
+	// key does not reset the phantom counters while real accounts stay locked. Outside
+	// production an unset key falls back to the signing key, with a WARN.
+	lockoutKey, err := cfg.Identity.LockoutKeyBytes()
+	if err != nil {
+		return identityWiring{}, err
+	}
+	if lockoutKey == nil {
+		slog.Warn("LEADKART_IDENTITY__LOCKOUT_KEY is not set: the phantom lockout key is derived from the JWT signing key, so a signing-key rotation resets the phantom counters while real accounts stay locked (a short 423-vs-401 oracle). Required in production.")
+		lockoutKey = []byte(cfg.JWT.SigningKey)
+	}
+	phantomLockout := adapters.NewPhantomLockoutRepository(pool, tx, lockoutKey)
 
 	return identityWiring{
 		ArgonGate:      argonGate,
@@ -792,6 +822,7 @@ func buildIdentityApp(pool *pgxpool.Pool, hybridCache *cache.HybridCache, cfg co
 					hybridCache,
 					memberships,
 				),
+				GetOwnPasswordPolicy:      query.NewGetOwnPasswordPolicyHandler(tenants),
 				GetTenant:                 query.NewGetTenantHandler(tenants),
 				GetTenantBySlug:           query.NewGetTenantBySlugHandler(tenants),
 				GetUser:                   query.NewGetUserHandler(memberships, persons),

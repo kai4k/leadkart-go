@@ -63,6 +63,56 @@ const minStrongEntropyBits = 60.0
 // Production fails strict on every gate. Dev relaxes nothing — same
 // rules everywhere so contributors don't bisect "works on my machine".
 func Validate(cfg AppConfig) error {
+	if err := validateShared(cfg); err != nil {
+		return err
+	}
+	if err := validateHTTP(cfg); err != nil {
+		return err
+	}
+	if err := validateLockoutKey(cfg); err != nil {
+		return err
+	}
+	return validateArgon2(cfg.Argon2)
+}
+
+// ValidateWorker is [Validate] for the worker binary: the gates every binary shares
+// (database, cache, JWT keys, refresh TTLs, telemetry) and none of the API's own
+// (trusted proxies and per-route limits, the Argon2 gate, the phantom lockout key).
+// A worker started with LEADKART_ENV=production and no trusted-proxy value used to
+// refuse to boot, silently, because it was held to listener settings it never uses.
+func ValidateWorker(cfg AppConfig) error { return validateShared(cfg) }
+
+// validateLockoutKey: required in production, never a placeholder, at least 32
+// random bytes once decoded, and not the JWT signing key (the point of a separate
+// secret). Elsewhere an empty key is allowed (the caller derives one and warns).
+func validateLockoutKey(cfg AppConfig) error {
+	raw := strings.TrimSpace(cfg.Identity.LockoutKey)
+	if raw == "" {
+		if cfg.Env == "production" {
+			return ErrMissingLockoutKey
+		}
+		return nil
+	}
+	if isPlaceholder(raw) {
+		return fmt.Errorf("%w: Identity.LockoutKey", ErrPlaceholderSecret)
+	}
+	b, err := cfg.Identity.LockoutKeyBytes()
+	if err != nil {
+		return err
+	}
+	if len(b) < 32 {
+		return fmt.Errorf("config: Identity.LockoutKey must decode to at least 32 bytes (got %d)", len(b))
+	}
+	if h := shannonEntropyBits(string(b)); h < minStrongEntropyBits {
+		return fmt.Errorf("config: Identity.LockoutKey entropy too low: %.1f bits < %.0f bits floor", h, minStrongEntropyBits)
+	}
+	if raw == strings.TrimSpace(cfg.JWT.SigningKey) {
+		return errors.New("config: Identity.LockoutKey must differ from JWT.SigningKey (a dedicated secret is the point)")
+	}
+	return nil
+}
+
+func validateShared(cfg AppConfig) error {
 	if strings.TrimSpace(cfg.Postgres.DSN) == "" {
 		return ErrMissingPostgres
 	}
@@ -125,16 +175,11 @@ func Validate(cfg AppConfig) error {
 		return errors.New("config: Refresh.FamilyCap must be ≥1")
 	}
 
-	if err := validateHTTP(cfg); err != nil {
-		return err
-	}
-
 	// OTel sanity.
 	if cfg.OTel.SampleRatio < 0 || cfg.OTel.SampleRatio > 1 {
 		return fmt.Errorf("config: OTel.SampleRatio must be in [0,1] (got %v)", cfg.OTel.SampleRatio)
 	}
-
-	return validateArgon2(cfg.Argon2)
+	return nil
 }
 
 // Bounds of the Argon2 gate: at least one slot, and not so many that the memory
@@ -151,6 +196,12 @@ func validateArgon2(c Argon2Config) error {
 	}
 	if c.QueueTimeout < minArgon2Queue || c.QueueTimeout > maxArgon2Queue {
 		return fmt.Errorf("config: Argon2.QueueTimeout must be in [%s,%s] (got %s)", minArgon2Queue, maxArgon2Queue, c.QueueTimeout)
+	}
+	if c.MaxPerClient < 1 || c.MaxPerClient > c.MaxConcurrent {
+		return fmt.Errorf("config: Argon2.MaxPerClient must be in [1,%d] (got %d)", c.MaxConcurrent, c.MaxPerClient)
+	}
+	if c.ReservedAuthenticated < 0 || c.ReservedAuthenticated >= c.MaxConcurrent {
+		return fmt.Errorf("config: Argon2.ReservedAuthenticated must be in [0,%d) so anonymous work keeps at least one slot (got %d)", c.MaxConcurrent, c.ReservedAuthenticated)
 	}
 	return nil
 }

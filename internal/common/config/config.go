@@ -17,6 +17,7 @@
 package config
 
 import (
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"os"
@@ -59,6 +60,36 @@ type AppConfig struct {
 	HTTP      HTTPConfig      `koanf:"http"`
 	RateLimit RateLimitConfig `koanf:"rate_limit"`
 	Argon2    Argon2Config    `koanf:"argon2"`
+	Identity  IdentityConfig  `koanf:"identity"`
+}
+
+// IdentityConfig holds the Identity module's own secrets.
+type IdentityConfig struct {
+	// LockoutKey keys the failed-login counter of addresses with no usable account
+	// (the phantom lockout, ADR 0068 D12): the table stores HMAC(key, email), never an
+	// email. A dedicated secret, base64 (or hex) of at least 32 random bytes, so that
+	// routine JWT signing-key rotation cannot reset every phantom counter while real
+	// accounts stay locked (a short 423-vs-401 oracle after each rotation). REQUIRED
+	// when Env is "production"; elsewhere an empty value falls back to a key derived
+	// from the JWT signing key, with a boot WARN. Rotating it restarts the phantom
+	// counters (they live 15 minutes) and has the same short oracle window, so rotate
+	// it deliberately, not routinely. Generate with `openssl rand -base64 32`.
+	LockoutKey string `koanf:"lockout_key" secret:"strong"`
+}
+
+// LockoutKeyBytes decodes LockoutKey (standard or URL base64, padded or not; a hex
+// string decodes as base64 too). Empty returns nil, nil: the caller falls back.
+func (i IdentityConfig) LockoutKeyBytes() ([]byte, error) {
+	s := strings.TrimSpace(i.LockoutKey)
+	if s == "" {
+		return nil, nil
+	}
+	for _, enc := range []*base64.Encoding{base64.StdEncoding, base64.RawStdEncoding, base64.URLEncoding, base64.RawURLEncoding} {
+		if b, err := enc.DecodeString(s); err == nil {
+			return b, nil
+		}
+	}
+	return nil, errors.New("config: Identity.LockoutKey is not base64 (generate one with `openssl rand -base64 32`)")
 }
 
 // ListenConfig holds network bind addresses for the API + admin
@@ -164,9 +195,18 @@ type RateLimitConfig struct {
 // simultaneous logins; MaxConcurrent slots keep the worst case at
 // MaxConcurrent x ~19.5 MiB. A request that cannot get a slot within
 // QueueTimeout answers 503 + Retry-After.
+//
+// Two more bounds keep one source from starving everyone (fix round 12, item 3):
+// MaxPerClient caps the operations of one client key (the rate-limit key: the
+// address, IPv6 per /64) in flight at once, refused with the same 503 before they
+// queue; ReservedAuthenticated keeps that many slots for signed-in work
+// (change-password, create user, a reset confirmation with a valid token), so
+// anonymous login and registration can use at most MaxConcurrent - ReservedAuthenticated.
 type Argon2Config struct {
-	MaxConcurrent int           `koanf:"max_concurrent"`
-	QueueTimeout  time.Duration `koanf:"queue_timeout"`
+	MaxConcurrent         int           `koanf:"max_concurrent"`
+	QueueTimeout          time.Duration `koanf:"queue_timeout"`
+	MaxPerClient          int           `koanf:"max_per_client"`
+	ReservedAuthenticated int           `koanf:"reserved_authenticated"`
 }
 
 // Defaults returns the baseline AppConfig with safe non-production
@@ -199,10 +239,12 @@ func Defaults() AppConfig {
 			TenantRegistration:   RouteLimit{PerMinute: 10, Burst: 5},
 			ChangePassword:       RouteLimit{PerMinute: 5, Burst: 5},
 		},
-		// 16 slots x ~19.5 MiB = ~312 MiB worst case inside the 1 GiB container
-		// (the rest is heap, the connection pool and the L1 cache); at ~30-50 ms an
-		// operation that is ~300-500 verifications a second per core budget.
-		Argon2: Argon2Config{MaxConcurrent: 16, QueueTimeout: 2 * time.Second},
+		// 16 slots x ~19.5 MiB = ~312 MiB of live Argon2 memory (the Go collector needs
+		// headroom on top of it, which is why production sets GOMEMLIMIT, see
+		// docker/compose.prod.yml); at ~30-50 ms an operation that is ~300-500
+		// verifications a second per core budget. 2 in flight per client key; 4 of the
+		// 16 slots are kept for signed-in work.
+		Argon2: Argon2Config{MaxConcurrent: 16, QueueTimeout: 2 * time.Second, MaxPerClient: 2, ReservedAuthenticated: 4},
 	}
 }
 
@@ -210,7 +252,15 @@ func Defaults() AppConfig {
 //
 // Returns the parsed config + a non-nil error if any provider failed
 // to load OR if [Validate] rejects the merged result.
-func Load() (AppConfig, error) {
+func Load() (AppConfig, error) { return load(Validate) }
+
+// LoadWorker is [Load] for the worker binary: the same sources, validated with
+// [ValidateWorker] (it has no HTTP listener, no rate limits, no password work and
+// no phantom lockout key, so a production worker without a trusted-proxy decision
+// boots).
+func LoadWorker() (AppConfig, error) { return load(ValidateWorker) }
+
+func load(validate func(AppConfig) error) (AppConfig, error) {
 	k := koanf.New(".")
 
 	cfg := Defaults()
@@ -244,7 +294,7 @@ func Load() (AppConfig, error) {
 		return AppConfig{}, fmt.Errorf("config: unmarshal: %w", err)
 	}
 
-	if err := Validate(out); err != nil {
+	if err := validate(out); err != nil {
 		return AppConfig{}, err
 	}
 	return out, nil
@@ -297,7 +347,9 @@ func structToMap(cfg AppConfig) map[string]any {
 		"argon2": map[string]any{
 			"max_concurrent": cfg.Argon2.MaxConcurrent,
 			"queue_timeout":  cfg.Argon2.QueueTimeout.String(),
+			"max_per_client": cfg.Argon2.MaxPerClient, "reserved_authenticated": cfg.Argon2.ReservedAuthenticated,
 		},
+		"identity": map[string]any{"lockout_key": cfg.Identity.LockoutKey},
 		"listen": map[string]any{
 			"api":          cfg.Listen.API,
 			"admin":        cfg.Listen.Admin,
@@ -341,6 +393,9 @@ var ErrMissingJWTKeyID = errors.New("config: JWT.KeyID required (set LEADKART_JW
 
 // ErrJWTKeyTooShort is returned when JWT.SigningKey < 32 bytes (RFC 7518 §3.2).
 var ErrJWTKeyTooShort = errors.New("config: JWT.SigningKey must be ≥32 bytes (RFC 7518 §3.2)")
+
+// ErrMissingLockoutKey is returned in production when Identity.LockoutKey is empty.
+var ErrMissingLockoutKey = errors.New("config: Identity.LockoutKey required in production (set LEADKART_IDENTITY__LOCKOUT_KEY to `openssl rand -base64 32`)")
 
 // ErrPlaceholderSecret is returned when a `secret:` field carries a
 // known-placeholder value (e.g. `CHANGE_ME`, dev defaults). Refuses

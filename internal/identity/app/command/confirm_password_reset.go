@@ -132,6 +132,10 @@ func (h ConfirmPasswordResetHandler) Handle(ctx context.Context, cmd ConfirmPass
 	if p.IsAnonymised() || p.IsGloballySuspended() {
 		return ErrResetTokenInvalid
 	}
+	// The token matched a pending reset: from here on this is authenticated work (the
+	// holder proved they received the emailed token), which keeps a share of the gate
+	// that anonymous load cannot take. Everything before this point costs no hashing.
+	ctx = argon2.WithAuthenticated(ctx)
 
 	// The policy, before any hashing. A person has at most one active membership
 	// (409 person_active_elsewhere), so the tenant is unambiguous; with none, or

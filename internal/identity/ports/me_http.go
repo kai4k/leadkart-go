@@ -1,6 +1,7 @@
 package ports
 
 import (
+	"context"
 	"log/slog"
 	"net/http"
 
@@ -85,6 +86,7 @@ func handleGetCapabilities(log *slog.Logger, a app.Application) http.Handler {
 			Roles:                []CapabilityRoleDto{}, // non-nil; populated below
 			Rank:                 actor.Rank().Int(),
 			Tier:                 string(actor.Rank().Tier()),
+			PasswordPolicy:       passwordRules(r.Context(), log, a, tenant.ID(c.TenantID)),
 		}
 
 		// Enrichment via the cached query handler — populates email +
@@ -120,4 +122,28 @@ func handleGetCapabilities(log *slog.Logger, a app.Application) http.Handler {
 
 		writeJSON(w, http.StatusOK, dto)
 	})
+}
+
+// passwordRules is the caller's own tenant's password policy as the wire shape: the
+// tenant of the TOKEN (never an operator's acted-on scope, which this route ignores),
+// the default policy when the tenant row is gone, the same rule change-password
+// applies. An impersonation session carries the impersonated tenant as its own, so it
+// sees that tenant's rules (change-password itself is refused to it). On a read
+// failure the default rules are returned and the failure logged: the form is a
+// courtesy, the server enforces whatever the policy really is and answers 422 with
+// the failed rule codes.
+func passwordRules(ctx context.Context, log *slog.Logger, a app.Application, tenantID tenant.ID) PasswordRulesDto {
+	view, err := a.Queries.GetOwnPasswordPolicy.Handle(ctx, tenantID)
+	if err != nil {
+		log.WarnContext(ctx, "capabilities: password policy unavailable, returning the default rules", "err", err)
+		view, _ = query.GetOwnPasswordPolicyHandler{}.Handle(ctx, "") // the zero handler answers the default
+	}
+	return PasswordRulesDto{
+		MinLength:         view.MinLength,
+		MaxLength:         view.MaxLength,
+		RequiresUppercase: view.RequiresUppercase,
+		RequiresLowercase: view.RequiresLowercase,
+		RequiresDigit:     view.RequiresDigit,
+		RequiresSymbol:    view.RequiresSymbol,
+	}
 }

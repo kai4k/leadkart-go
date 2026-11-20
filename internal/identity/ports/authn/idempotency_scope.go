@@ -48,7 +48,15 @@ const (
 // everyone else it is ignored there, so it must not be able to change the scope
 // here (varying it would defeat replay protection). A value the scope middleware
 // will refuse (not a UUID, several values) hashes as a constant marker, so all
-// such requests share one scope that ends in a 4xx, which is never stored.
+// such requests share one scope. On a route that APPLIES the header that scope ends in
+// a 4xx, which is never stored. On a route the scope policy ignores (/api/v1/auth/*,
+// the platform group, ... see scope_policy.go) the header is never validated: the
+// request answers normally and is stored under the constant marker. That is harmless
+// (the scope still holds tenant, person, membership, session and route), and the keyer
+// deliberately does NOT consult the policy table: a route marker overrides the table
+// (marker wins), and the keyer, which runs before the mux, cannot see markers, so
+// ignoring the header on table-ignored routes would let two different acted-on tenants
+// share a scope on a marked route inside an ignored group.
 //
 // The keyer runs before the scope middleware (it sits in the host chain), so it
 // validates the header itself and decides nothing about authorisation.

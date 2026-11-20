@@ -71,6 +71,11 @@ func TestE2E_MustChangePassword_BlocksEveryRouteUntilThePasswordIsChanged(t *tes
 	if err := json.Unmarshal(caps.body, &cd); err != nil || caps.status != http.StatusOK || !cd.MustChangePassword {
 		t.Fatalf("capabilities: %d %s (must be 200 with must_change_password=true)", caps.status, caps.body)
 	}
+	// The forced-change screen shows the rules that bind the new password: the
+	// caller's own tenant's policy (here the system default).
+	if want := (ports.PasswordRulesDto{MinLength: 12, MaxLength: 1024, RequiresUppercase: true, RequiresLowercase: true, RequiresDigit: true, RequiresSymbol: true}); cd.PasswordPolicy != want {
+		t.Fatalf("capabilities.password_policy = %+v, want %+v", cd.PasswordPolicy, want)
+	}
 
 	// Refresh keeps the flag: in the response and in the new token.
 	ref := f.postJSON(t, "/api/v1/auth/refresh", ports.RefreshRequest{RefreshToken: login.RefreshToken})

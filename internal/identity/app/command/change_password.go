@@ -144,6 +144,9 @@ func (h ChangePasswordHandler) Handle(ctx context.Context, cmd ChangePasswordCom
 	if cmd.NewPassword == "" {
 		return ErrNewPasswordRequired
 	}
+	// A signed-in session asks for this: authenticated work, which keeps a share of
+	// the gate that anonymous load cannot take.
+	ctx = argon2.WithAuthenticated(ctx)
 
 	// 0. Per-person attempt budget. The current password is checked here on a
 	// route any signed-in session can reach, so a hijacked session could guess it

@@ -245,14 +245,17 @@ func TestE2E_Login_ConcurrentWrongPasswordsAnswerIdenticallyForEveryAddressKind(
 			start = make(chan struct{})
 			out   = map[surface]int{}
 		)
-		for range person.MaxFailedLogins {
+		for i := range person.MaxFailedLogins {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
 				<-start
+				// One client may have only two password operations in flight (fix round 12,
+				// item 3), so the ten simultaneous attempts come from ten clients: the
+				// subject here is the account's counter, not one source's share.
 				r, err := f.tryDo(t.Context(), http.MethodPost, "/api/v1/auth/login", "",
 					ports.LoginRequest{Email: k.email, Password: "Wrong-Password-1!", DeviceLabel: "parity"},
-					map[string]string{"X-Forwarded-For": k.xff})
+					map[string]string{"X-Forwarded-For": "203.0.113." + strconv.Itoa(10+i)})
 				if err != nil {
 					t.Errorf("%s: %v", k.name, err)
 					return
@@ -361,6 +364,85 @@ func TestE2E_PasswordRoutes_Answer503WhenTheArgonGateIsSaturated(t *testing.T) {
 	// The refused change-password changed nothing: the old password still works.
 	if r := login(admin.Email, "A-Brand-New-Passphrase-77!"); r.status == http.StatusOK {
 		t.Fatal("the password changed although the gate refused")
+	}
+}
+
+// Fix round 12, item 3: password work is fair per client and part of the gate is kept
+// for signed-in users, through the production wiring (the client key comes from the
+// forwarded address). One client cannot hold more than two operations: its third is
+// the same 503 on every login branch, while other clients are served; and with
+// anonymous work filling its share, a signed-in change-password still gets a slot.
+func TestE2E_PasswordWork_IsFairPerClientAndSignedInWorkKeepsItsShare(t *testing.T) {
+	f, wiring := newE2EChainFixture(t, func(c *config.AppConfig) {
+		c.Argon2 = config.Argon2Config{MaxConcurrent: 6, QueueTimeout: 100 * time.Millisecond, MaxPerClient: 2, ReservedAuthenticated: 2}
+	})
+	admin := f.registerAndLogin(t, "fair")
+	unknown := "nobody-" + ids.NewV7().String()[24:] + "@e2e.test"
+	login := func(addr, pw, xff string) httpResp {
+		return f.doWithHeaders(t, http.MethodPost, "/api/v1/auth/login", "", ports.LoginRequest{Email: addr, Password: pw, DeviceLabel: "fair"},
+			map[string]string{"X-Forwarded-For": xff})
+	}
+	hold := func(client string, n int) (release func()) {
+		var held []func()
+		for range n {
+			r, err := wiring.ArgonGate.Acquire(argon2.WithClient(t.Context(), client))
+			if err != nil {
+				t.Fatalf("holding a slot for %s: %v", client, err)
+			}
+			held = append(held, r)
+		}
+		var once sync.Once
+		return func() {
+			once.Do(func() {
+				for _, r := range held {
+					r()
+				}
+			})
+		}
+	}
+
+	// Client A holds its two operations: its next login, on EVERY branch, is the same 503.
+	releaseA := hold("198.51.100.50", 2)
+	defer releaseA()
+	var ref surface
+	for name, r := range map[string]httpResp{
+		"real, correct": login(admin.Email, admin.Password, "198.51.100.50"),
+		"real, wrong":   login(admin.Email, "Wrong-Password-1!", "198.51.100.50"),
+		"unknown":       login(unknown, "Wrong-Password-1!", "198.51.100.50"),
+	} {
+		if r.status != http.StatusServiceUnavailable || decodeError(t, r.body).Error != ports.ErrCodeServiceBusy {
+			t.Fatalf("login (%s) from a client at its cap = %d %s, want 503 service_busy", name, r.status, r.body)
+		}
+		if ref == (surface{}) {
+			ref = surfaceOf(r)
+		} else if got := surfaceOf(r); got != ref {
+			t.Errorf("login (%s) differs: %+v vs %+v", name, got, ref)
+		}
+	}
+	// Another client is served.
+	if r := login(admin.Email, admin.Password, "198.51.100.51"); r.status != http.StatusOK {
+		t.Fatalf("another client's login = %d %s, want 200", r.status, r.body)
+	}
+	// A refused attempt counted nothing against the account: the password still works.
+	releaseA()
+	if r := login(admin.Email, admin.Password, "198.51.100.50"); r.status != http.StatusOK {
+		t.Fatalf("login after the client's operations finished = %d %s", r.status, r.body)
+	}
+
+	// Anonymous load fills the anonymous share (6 slots - 2 reserved = 4): login is refused,
+	// a signed-in change-password still gets a reserved slot.
+	releaseB := hold("203.0.113.1", 2)
+	defer releaseB()
+	releaseC := hold("203.0.113.2", 2)
+	defer releaseC()
+	if r := login(admin.Email, admin.Password, "198.51.100.52"); r.status != http.StatusServiceUnavailable {
+		t.Fatalf("login with the anonymous share full = %d %s, want 503", r.status, r.body)
+	}
+	r := f.doWithHeaders(t, http.MethodPost, "/api/v1/auth/change-password", admin.AccessToken,
+		ports.ChangePasswordRequest{CurrentPassword: admin.Password, NewPassword: "A-Brand-New-Passphrase-77!"},
+		map[string]string{"X-Forwarded-For": "198.51.100.53"})
+	if r.status != http.StatusNoContent && r.status != http.StatusOK {
+		t.Fatalf("change-password with the anonymous share full = %d %s, want success from the reserved share", r.status, r.body)
 	}
 }
 

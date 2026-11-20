@@ -195,7 +195,9 @@ func (h CreateUserHandler) hashPassword(ctx context.Context, plain string) (pers
 	if plain == "" {
 		return person.PasswordHash{}, errors.New("create user: password required")
 	}
-	raw, err := h.gate.Hash(ctx, plain)
+	// A signed-in member with the create-user permission asks for this: authenticated
+	// work, which keeps a share of the gate that anonymous load cannot take.
+	raw, err := h.gate.Hash(argon2.WithAuthenticated(ctx), plain)
 	if err != nil {
 		return person.PasswordHash{}, fmt.Errorf("create user: hash password: %w", err)
 	}
