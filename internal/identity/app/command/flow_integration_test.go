@@ -154,7 +154,7 @@ func TestFlow_RegisterLoginRefreshLogout(t *testing.T) {
 		LegalName:      "Acme Flow Pharma Pvt Ltd",
 		DisplayName:    "Acme Flow",
 		AdminEmail:     adminEmail,
-		AdminPassword:  "correct horse battery staple",
+		AdminPassword:  "Correct-Horse-Battery-9!",
 		AdminFirstName: "Alice",
 		AdminLastName:  "Admin",
 	})
@@ -168,7 +168,7 @@ func TestFlow_RegisterLoginRefreshLogout(t *testing.T) {
 	// 2. Login with the registered admin.
 	loginOut, err := login.Handle(ctx, command.LoginCommand{
 		Email:       adminEmail,
-		Password:    "correct horse battery staple",
+		Password:    "Correct-Horse-Battery-9!",
 		DeviceLabel: "iPhone 15 / Safari",
 	})
 	if err != nil {
@@ -249,7 +249,7 @@ func TestFlow_RegisterDuplicateActiveEmail_Blocked(t *testing.T) {
 		LegalName:      "Tenant A Pharma",
 		DisplayName:    "A",
 		AdminEmail:     addr,
-		AdminPassword:  "pw",
+		AdminPassword:  "Pw-Strong-Pass-2026!x",
 		AdminFirstName: "Alice",
 		AdminLastName:  "A",
 	}); err != nil {
@@ -263,7 +263,7 @@ func TestFlow_RegisterDuplicateActiveEmail_Blocked(t *testing.T) {
 		LegalName:      "Tenant B Pharma",
 		DisplayName:    "B",
 		AdminEmail:     addr, // same email — already an Active Membership
-		AdminPassword:  "pw2",
+		AdminPassword:  "Pw2-Strong-Pass-2026!x",
 		AdminFirstName: "Alice",
 		AdminLastName:  "B",
 	})
@@ -305,7 +305,7 @@ func TestE2E_LoginThenRequirePermissionGate(t *testing.T) {
 		LegalName:      "E2E Gate Pharma Pvt Ltd",
 		DisplayName:    "E2E",
 		AdminEmail:     adminEmail,
-		AdminPassword:  "correct horse battery staple",
+		AdminPassword:  "Correct-Horse-Battery-9!",
 		AdminFirstName: "Eve",
 		AdminLastName:  "Admin",
 	}); err != nil {
@@ -315,7 +315,7 @@ func TestE2E_LoginThenRequirePermissionGate(t *testing.T) {
 	// 2. Login → real JWT signed by the wired Issuer.
 	loginOut, err := login.Handle(ctx, command.LoginCommand{
 		Email:       adminEmail,
-		Password:    "correct horse battery staple",
+		Password:    "Correct-Horse-Battery-9!",
 		DeviceLabel: "E2E Test Browser",
 	})
 	if err != nil {

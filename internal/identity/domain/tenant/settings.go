@@ -1,8 +1,12 @@
 package tenant
 
 import (
+	"errors"
 	"fmt"
+	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 )
 
 // PasswordPolicy defines per-tenant password rules (security.md). Values may
@@ -129,3 +133,86 @@ func (s Settings) IsZero() bool { return s.passwordPolicy.IsZero() }
 
 // Equal reports whether s and other are identical.
 func (s Settings) Equal(other Settings) bool { return s.passwordPolicy.Equal(other.passwordPolicy) }
+
+// MaxPasswordBytes bounds a password's size in bytes (1 KiB, roughly 256 typical
+// characters; NIST SP 800-63B asks verifiers to accept at least 64). It is checked
+// FIRST by [PasswordPolicy.Check], before any counting, and every command that
+// sets a password calls Check before it hashes: a request body can be 1 MiB, and
+// neither the class counting nor an Argon2id hash should run over that.
+const MaxPasswordBytes = 1024
+
+// ErrPasswordPolicy is the sentinel for a password that fails the policy.
+var ErrPasswordPolicy = errors.New("tenant: password does not satisfy the password policy")
+
+// Wire-stable rule codes surfaced in the 422 `errors` map (the web renders one
+// message per code). Adding a code is additive; renaming one breaks clients.
+const (
+	PasswordRuleMinLength = "min_length"
+	PasswordRuleMaxLength = "max_length"
+	PasswordRuleUppercase = "requires_uppercase"
+	PasswordRuleLowercase = "requires_lowercase"
+	PasswordRuleDigit     = "requires_digit"
+	PasswordRuleSymbol    = "requires_symbol"
+)
+
+// PasswordPolicyViolation lists every failed rule, in a fixed order. Its message
+// carries rule codes only, never the password.
+type PasswordPolicyViolation struct{ Rules []string }
+
+// Error implements error.
+func (v *PasswordPolicyViolation) Error() string {
+	return ErrPasswordPolicy.Error() + ": " + strings.Join(v.Rules, ", ")
+}
+
+// Unwrap lets errors.Is(err, ErrPasswordPolicy) match.
+func (v *PasswordPolicyViolation) Unwrap() error { return ErrPasswordPolicy }
+
+// Check validates plaintext against the policy: size bound first, then length in
+// runes, then the required classes by unicode category. A symbol is punctuation
+// or a symbol (unicode.IsPunct or IsSymbol); whitespace is not one. A zero policy
+// (a row that predates settings) is evaluated as [DefaultPasswordPolicy].
+//
+// Check does no I/O and never reads the stored hash, so it cannot tell a caller
+// anything about the account: the answer is a function of the policy and the
+// candidate alone.
+func (p PasswordPolicy) Check(plaintext string) error {
+	if len(plaintext) > MaxPasswordBytes {
+		return &PasswordPolicyViolation{Rules: []string{PasswordRuleMaxLength}}
+	}
+	if p.IsZero() {
+		p = DefaultPasswordPolicy()
+	}
+	var upper, lower, digit, symbol bool
+	for _, r := range plaintext {
+		switch {
+		case unicode.IsUpper(r):
+			upper = true
+		case unicode.IsLower(r):
+			lower = true
+		case unicode.IsDigit(r):
+			digit = true
+		case unicode.IsPunct(r) || unicode.IsSymbol(r):
+			symbol = true
+		}
+	}
+	var failed []string
+	if utf8.RuneCountInString(plaintext) < p.minLength {
+		failed = append(failed, PasswordRuleMinLength)
+	}
+	if p.requireUppercase && !upper {
+		failed = append(failed, PasswordRuleUppercase)
+	}
+	if p.requireLowercase && !lower {
+		failed = append(failed, PasswordRuleLowercase)
+	}
+	if p.requireDigit && !digit {
+		failed = append(failed, PasswordRuleDigit)
+	}
+	if p.requireSymbol && !symbol {
+		failed = append(failed, PasswordRuleSymbol)
+	}
+	if len(failed) > 0 {
+		return &PasswordPolicyViolation{Rules: failed}
+	}
+	return nil
+}

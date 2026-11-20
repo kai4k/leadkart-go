@@ -82,7 +82,7 @@ func b2RegisterCmd(t *testing.T) command.RegisterTenantCommand {
 		LegalName:      "Acme Pharma Pvt Ltd",
 		DisplayName:    "Acme",
 		AdminEmail:     addr,
-		AdminPassword:  "initial-temp-password-strong-enough",
+		AdminPassword:  "Initial-Temp-Password-9!",
 		AdminFirstName: "Alice",
 		AdminLastName:  "Admin",
 	}

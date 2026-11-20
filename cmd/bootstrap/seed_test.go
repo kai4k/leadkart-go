@@ -102,3 +102,19 @@ func TestArgon2HashRoundTrip(t *testing.T) {
 		t.Fatal("Verify accepted wrong password")
 	}
 }
+
+// The first operator's password meets the default policy before anything is
+// written, and the refusal names rules, not the password.
+func TestCheckSuperAdminPassword(t *testing.T) {
+	t.Parallel()
+	if err := checkSuperAdminPassword("LeadKart!Dev2026"); err != nil {
+		t.Fatalf("the documented dev password must pass: %v", err)
+	}
+	err := checkSuperAdminPassword("changeme")
+	if err == nil {
+		t.Fatal("a weak password must be refused")
+	}
+	if strings.Contains(err.Error(), "changeme") || !strings.Contains(err.Error(), "min_length") {
+		t.Fatalf("error %q must list the rules and not the password", err)
+	}
+}

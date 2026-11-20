@@ -764,7 +764,7 @@ func TestE2E_RegisterTenant_SameAdminEmailRejected(t *testing.T) {
 		LegalName:      "Globex Pharma Pvt Ltd",
 		DisplayName:    "Globex",
 		AdminEmail:     tenantA.Email, // collision
-		AdminPassword:  "different-password-still-rejected",
+		AdminPassword:  "Different-Password-Still-9!",
 		AdminFirstName: "Globex",
 		AdminLastName:  "Admin",
 	})

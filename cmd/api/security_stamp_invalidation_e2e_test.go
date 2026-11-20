@@ -100,7 +100,7 @@ func TestSecurityStampInvalidation_PasswordChange_Returns401WithinFastPath(t *te
 	full := ids.NewV7().String()
 	regSlug := "stamp-flow-" + full[len(full)-8:]
 	regEmail := "stamp-admin-" + full[len(full)-8:] + "@flow.test"
-	const password = "correct horse battery staple"
+	const password = "Correct-Horse-Battery-9!"
 	// Tenant registration is operator-only (ADR 0053/0068 D6).
 	opTok := mintOperatorJWT(t, wiring.Issuer, wiring.Persons, "", []string{permission.IdentityPermissions.Platform.TenantsCreate}, true)
 	if r := postJSONWithBearer(t, srv.URL+"/api/v1/tenants", opTok, ports.RegisterTenantRequest{

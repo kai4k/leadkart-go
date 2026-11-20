@@ -375,6 +375,8 @@ func handleCreateUser(log *slog.Logger, a app.Application) http.Handler {
 			CreatedByMembershipID: callerMembership,
 		})
 		switch {
+		case writePasswordPolicyError(w, "password", err):
+			return
 		case writePasswordWorkRefusal(w, err):
 			return
 		case errors.Is(err, command.ErrEmailHasActiveMembership):

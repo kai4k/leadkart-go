@@ -9,11 +9,13 @@ import (
 	"github.com/leadkart/leadkart-go/internal/common/ids"
 	"github.com/leadkart/leadkart-go/internal/identity/app/command"
 	"github.com/leadkart/leadkart-go/internal/identity/app/refreshmint"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/membership/membershiptest"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/passwordpolicy"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/refreshtoken"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/refreshtoken/refreshtokentest"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant/tenanttest"
 )
 
 // Fix round item 1: a credential replacement ends the person's sessions in the
@@ -54,7 +56,7 @@ func TestChangePassword_RevokesEveryFamilyOfThePerson(t *testing.T) {
 	mine := []refreshtoken.FamilyID{seedActiveFamily(t, families, p.ID()), seedActiveFamily(t, families, p.ID())}
 	other := seedActiveFamily(t, families, person.ID("someone-else"))
 
-	h := command.NewChangePasswordHandler(repo, families, fakeUoW{}, passwordpolicy.Noop{}, func() time.Time { return testNow })
+	h := command.NewChangePasswordHandler(repo, families, tenanttest.NewFakeRepository(), fakeUoW{}, passwordpolicy.Noop{}, func() time.Time { return testNow })
 	if err := h.Handle(t.Context(), command.ChangePasswordCommand{
 		PersonID: p.ID(), CurrentPassword: currentPlain, NewPassword: "Tr0ub4dor&3-newly-strong-passphrase!",
 	}); err != nil {
@@ -79,7 +81,7 @@ func TestChangePassword_RejectedChangeRevokesNothing(t *testing.T) {
 	families := refreshtokentest.NewFakeRepository()
 	id := seedActiveFamily(t, families, p.ID())
 
-	h := command.NewChangePasswordHandler(repo, families, fakeUoW{}, passwordpolicy.Noop{}, func() time.Time { return testNow })
+	h := command.NewChangePasswordHandler(repo, families, tenanttest.NewFakeRepository(), fakeUoW{}, passwordpolicy.Noop{}, func() time.Time { return testNow })
 	if err := h.Handle(t.Context(), command.ChangePasswordCommand{
 		PersonID: p.ID(), CurrentPassword: "wrong", NewPassword: "Tr0ub4dor&3-newly-strong-passphrase!",
 	}); !errors.Is(err, command.ErrIncorrectCurrentPassword) {
@@ -104,7 +106,7 @@ func TestConfirmPasswordReset_RevokesEveryFamilyOfThePerson(t *testing.T) {
 		Handle(t.Context(), command.RequestPasswordResetCommand{Email: addr}); err != nil {
 		t.Fatalf("Request: %v", err)
 	}
-	h := command.NewConfirmPasswordResetHandler(repo, families, fakeUoW{}, passwordpolicy.Noop{}, func() time.Time { return testNow })
+	h := command.NewConfirmPasswordResetHandler(repo, families, membershiptest.NewFakeRepository(), tenanttest.NewFakeRepository(), fakeUoW{}, passwordpolicy.Noop{}, func() time.Time { return testNow })
 	if err := h.Handle(t.Context(), command.ConfirmPasswordResetCommand{RawToken: repo.emailRequestedToken(t), NewPassword: "Tr0ub4dor&3-newly-strong"}); err != nil {
 		t.Fatalf("Confirm: %v", err)
 	}
@@ -122,7 +124,7 @@ func TestConfirmPasswordReset_BadTokenRevokesNothing(t *testing.T) {
 	repo := newResettableRepo(t, p)
 	families := refreshtokentest.NewFakeRepository()
 	id := seedActiveFamily(t, families, p.ID())
-	h := command.NewConfirmPasswordResetHandler(repo, families, fakeUoW{}, passwordpolicy.Noop{}, func() time.Time { return testNow })
+	h := command.NewConfirmPasswordResetHandler(repo, families, membershiptest.NewFakeRepository(), tenanttest.NewFakeRepository(), fakeUoW{}, passwordpolicy.Noop{}, func() time.Time { return testNow })
 	if err := h.Handle(t.Context(), command.ConfirmPasswordResetCommand{RawToken: "not-a-real-token", NewPassword: "Tr0ub4dor&3-newly-strong"}); !errors.Is(err, command.ErrResetTokenInvalid) {
 		t.Fatalf("err = %v, want ErrResetTokenInvalid", err)
 	}

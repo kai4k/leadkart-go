@@ -80,6 +80,14 @@ const (
 	//nolint:gosec // G101: error code, not a credential
 	ErrCodePasswordBreached = "password_breached"
 
+	// ErrCodePasswordPolicyViolation - the password does not satisfy the
+	// tenant password policy (ADR 0068 D13). 422 surface with the failed rule
+	// codes under the offending field of the `errors` map (min_length,
+	// max_length, requires_uppercase, requires_lowercase, requires_digit,
+	// requires_symbol); the web renders one message per code.
+	//nolint:gosec // G101: error code, not a credential
+	ErrCodePasswordPolicyViolation = "password_policy_violation"
+
 	// ErrCodePasswordSameAsCurrent — change-password caller supplied
 	// new == current. 422 surface. Per Auth0 + Okta canon: reject the
 	// no-op rather than silently committing nothing.

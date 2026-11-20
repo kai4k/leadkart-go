@@ -726,11 +726,11 @@ func buildIdentityApp(pool *pgxpool.Pool, hybridCache *cache.HybridCache, cfg co
 				Login:                command.NewLoginHandler(authRouter, families, tenants, persons, permResolver, issuer, now, cfg.Refresh.AbsoluteTTL, dummyHash, newFamilyID, phantomLockout).WithArgonGate(argonGate),
 				Refresh:              command.NewRefreshHandler(families, persons, memberships, tenants, permResolver, issuer, now, cfg.Refresh.AbsoluteTTL, cfg.Refresh.GraceWindow, successorKey),
 				Logout:               command.NewLogoutHandler(families, now),
-				ChangePassword:       command.NewChangePasswordHandler(persons, families, tx, breachChecker, now).WithArgonGate(argonGate).WithAttemptLimiter(changePasswordAttempts),
+				ChangePassword:       command.NewChangePasswordHandler(persons, families, tenants, tx, breachChecker, now).WithArgonGate(argonGate).WithAttemptLimiter(changePasswordAttempts),
 				RevokeSession:        command.NewRevokeSessionHandler(families, now),
 				RevokeAllSessions:    command.NewRevokeAllSessionsHandler(families, now),
 				RequestPasswordReset: command.NewRequestPasswordResetHandler(persons, now),
-				ConfirmPasswordReset: command.NewConfirmPasswordResetHandler(persons, families, tx, breachChecker, now).WithArgonGate(argonGate),
+				ConfirmPasswordReset: command.NewConfirmPasswordResetHandler(persons, families, memberships, tenants, tx, breachChecker, now).WithArgonGate(argonGate),
 				RequestEmailChange:   command.NewRequestEmailChangeHandler(persons, now),
 				ConfirmEmailChange:   command.NewConfirmEmailChangeHandler(persons, now),
 
@@ -752,7 +752,7 @@ func buildIdentityApp(pool *pgxpool.Pool, hybridCache *cache.HybridCache, cfg co
 				ReplaceUserPermissionOverrides: command.NewReplaceUserPermissionOverridesHandler(tx, authorityLock, memberships, roles, persons, now),
 				AssignUserManager:              command.NewAssignUserManagerHandler(tx, authorityLock, memberships, roles, persons, now),
 				RemoveUserManager:              command.NewRemoveUserManagerHandler(tx, authorityLock, memberships, roles, persons, now),
-				CreateUser:                     command.NewCreateUserHandler(tx, persons, memberships, now, newPersonID, newMembershipID).WithArgonGate(argonGate),
+				CreateUser:                     command.NewCreateUserHandler(tx, persons, memberships, tenants, now, newPersonID, newMembershipID).WithArgonGate(argonGate),
 				AnonymiseUser:                  command.NewAnonymiseUserHandler(personChangeGuard, memberships, persons, now),
 
 				CreateRole:             command.NewCreateRoleHandler(tx, authorityLock, memberships, roles, persons, roleHierarchyEdges, now, newRoleID, newRoleHierarchyEdgeID),

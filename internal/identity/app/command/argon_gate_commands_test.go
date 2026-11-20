@@ -8,9 +8,11 @@ import (
 	"github.com/leadkart/leadkart-go/internal/common/email"
 	"github.com/leadkart/leadkart-go/internal/identity/app/argon2"
 	"github.com/leadkart/leadkart-go/internal/identity/app/command"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/membership/membershiptest"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/passwordpolicy"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/refreshtoken/refreshtokentest"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant/tenanttest"
 )
 
 // saturatedGate returns a one-slot gate whose only slot is held for the whole
@@ -37,9 +39,9 @@ func TestPasswordCommands_RefuseWithErrBusyWhenTheGateIsSaturated(t *testing.T) 
 		p := newPersonWithPassword(t, "real-current-pw")
 		before := p.PasswordHash().String()
 		repo := seedPersonRepo(t, p)
-		h := command.NewChangePasswordHandler(repo, refreshtokentest.NewFakeRepository(), fakeUoW{}, passwordpolicy.Noop{}, now).
+		h := command.NewChangePasswordHandler(repo, refreshtokentest.NewFakeRepository(), tenanttest.NewFakeRepository(), fakeUoW{}, passwordpolicy.Noop{}, now).
 			WithArgonGate(saturatedGate(t))
-		err := h.Handle(t.Context(), command.ChangePasswordCommand{PersonID: p.ID(), CurrentPassword: "real-current-pw", NewPassword: "a-brand-new-passphrase-9"})
+		err := h.Handle(t.Context(), command.ChangePasswordCommand{PersonID: p.ID(), CurrentPassword: "real-current-pw", NewPassword: "A-Brand-New-Passphrase-9"})
 		if !errors.Is(err, argon2.ErrBusy) {
 			t.Fatalf("err = %v, want ErrBusy", err)
 		}
@@ -58,7 +60,7 @@ func TestPasswordCommands_RefuseWithErrBusyWhenTheGateIsSaturated(t *testing.T) 
 		}
 		raw := repo.emailRequestedToken(t)
 		stamp := p.SecurityStamp().String()
-		h := command.NewConfirmPasswordResetHandler(repo, refreshtokentest.NewFakeRepository(), fakeUoW{}, passwordpolicy.Noop{}, now).
+		h := command.NewConfirmPasswordResetHandler(repo, refreshtokentest.NewFakeRepository(), membershiptest.NewFakeRepository(), tenanttest.NewFakeRepository(), fakeUoW{}, passwordpolicy.Noop{}, now).
 			WithArgonGate(saturatedGate(t))
 		err := h.Handle(t.Context(), command.ConfirmPasswordResetCommand{RawToken: raw, NewPassword: "Tr0ub4dor&3-newly-strong"})
 		if !errors.Is(err, argon2.ErrBusy) {
@@ -73,7 +75,7 @@ func TestPasswordCommands_RefuseWithErrBusyWhenTheGateIsSaturated(t *testing.T) 
 		t.Parallel()
 		addr, _ := email.New("recruit@example.test")
 		persons := seedPersonRepo(t, nil)
-		h := command.NewCreateUserHandler(fakeUoW{}, persons, newFakeMembershipRepo(), now, testNewPersonID, testNewMembershipID).
+		h := command.NewCreateUserHandler(fakeUoW{}, persons, newFakeMembershipRepo(), defaultTenantRepo(t), now, testNewPersonID, testNewMembershipID).
 			WithArgonGate(saturatedGate(t))
 		_, err := h.Handle(t.Context(), command.CreateUserCommand{
 			TenantID: tenant.ID("11111111-1111-1111-1111-111111111111"), Email: addr,

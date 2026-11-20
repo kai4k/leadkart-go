@@ -35,7 +35,7 @@ import (
 )
 
 const (
-	rigOldPassword = "correct horse battery staple"
+	rigOldPassword = "Correct-Horse-Battery-9!"
 	rigNewPassword = "Tr0ub4dor&3-newly-strong-passphrase!"
 )
 
@@ -76,8 +76,8 @@ func newSessionRig(t *testing.T) sessionRig {
 	}
 	return sessionRig{
 		app: app, persons: persons, families: families,
-		change:   newChangePasswordHandler(persons, families, tx, now),
-		confirm:  newConfirmPasswordResetHandler(persons, families, tx, now),
+		change:   newChangePasswordHandler(app.pool, persons, families, tx, now),
+		confirm:  newConfirmPasswordResetHandler(app.pool, persons, families, tx, now),
 		email:    addr,
 		personID: reg.PersonID,
 	}

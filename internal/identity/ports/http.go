@@ -20,6 +20,7 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/domain/permission"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/refreshtoken"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 	"github.com/leadkart/leadkart-go/internal/identity/ports/authn"
 )
 
@@ -348,6 +349,8 @@ func handleRegisterTenant(log *slog.Logger, a app.Application) http.Handler {
 			AdminLastName:  req.AdminLastName,
 		})
 		switch {
+		case writePasswordPolicyError(w, "admin_password", err):
+			return
 		case writePasswordWorkRefusal(w, err):
 			return
 		case errors.Is(err, command.ErrEmailHasActiveMembership):
@@ -366,6 +369,29 @@ func handleRegisterTenant(log *slog.Logger, a app.Application) http.Handler {
 			MembershipID: out.MembershipID.String(),
 		})
 	})
+}
+
+// writePasswordPolicyError answers 422 password_policy_violation with the failed
+// rule codes under field (RFC 9457 `errors` extension) when err is a
+// [tenant.PasswordPolicyViolation]. The detail is a fixed sentence: the answer
+// carries rule codes and never the password. It reports whether it wrote a
+// response.
+func writePasswordPolicyError(w http.ResponseWriter, field string, err error) bool {
+	var v *tenant.PasswordPolicyViolation
+	if !errors.As(err, &v) {
+		return false
+	}
+	const detail = "password does not satisfy the tenant password policy"
+	writeJSON(w, http.StatusUnprocessableEntity, ErrorResponse{
+		Type:    problemType(ErrCodePasswordPolicyViolation),
+		Title:   http.StatusText(http.StatusUnprocessableEntity),
+		Status:  http.StatusUnprocessableEntity,
+		Detail:  detail,
+		Error:   ErrCodePasswordPolicyViolation,
+		Message: detail,
+		Errors:  map[string][]string{field: v.Rules},
+	})
+	return true
 }
 
 // argonBusyRetryAfter is the Retry-After (seconds) of a 503 from the password-work
@@ -574,11 +600,16 @@ func handleChangePassword(log *slog.Logger, a app.Application) http.Handler {
 		}
 
 		err := a.Commands.ChangePassword.Handle(r.Context(), command.ChangePasswordCommand{
-			PersonID:        person.ID(c.Subject),
+			PersonID: person.ID(c.Subject),
+			// The caller's OWN tenant from the token, not an operator's acted-on
+			// scope: change-password is self-service.
+			TenantID:        tenant.ID(c.TenantID),
 			CurrentPassword: req.CurrentPassword,
 			NewPassword:     req.NewPassword,
 		})
 		switch {
+		case writePasswordPolicyError(w, "new_password", err):
+			return
 		case writePasswordWorkRefusal(w, err):
 			return
 		case errors.Is(err, command.ErrIncorrectCurrentPassword):
@@ -792,6 +823,8 @@ func handleResetPassword(log *slog.Logger, a app.Application) http.Handler {
 			NewPassword: req.NewPassword,
 		})
 		switch {
+		case writePasswordPolicyError(w, "new_password", err):
+			return
 		case writePasswordWorkRefusal(w, err):
 			return
 		case errors.Is(err, command.ErrResetTokenInvalid):

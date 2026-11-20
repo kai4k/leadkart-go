@@ -280,6 +280,13 @@ paths:
     post:
       tags: [auth]
       summary: Confirm password reset using emailed token
+      description: |
+        The new password is checked against the policy of the tenant of the person's active
+        membership (the default policy when there is none). The check runs after the token is
+        validated and before the token is spent: only a holder of a valid token can see a
+        `422 password_policy_violation` (field `errors.new_password`); an invalid or expired
+        token answers `400 reset_token_invalid` whatever the password is, so the answer
+        reveals nothing about whether an account exists or which tenant it belongs to.
       security: []
       requestBody:
         required: true
@@ -290,7 +297,13 @@ paths:
         '503': { $ref: '#/components/responses/ServiceBusy' }
         '204': { description: Password reset complete }
         '400': { $ref: '#/components/responses/BadRequest' }
-        '422': { $ref: '#/components/responses/Unprocessable' }
+        '422':
+          description: |
+            `password_policy_violation` (see PasswordPolicyViolation; field `new_password`),
+            `password_breached`, or `password_same_as_current`.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
         '429': { $ref: '#/components/responses/TooManyRequests' }
 
   /api/v1/auth/change-password:
@@ -306,6 +319,12 @@ paths:
         Contract: `204`; the access token used is now `401 stale_token`; every refresh
         token the person held is now `401` on refresh; the caller signs in again with the
         new password, and that login (and its refreshes) carries no flag.
+
+        The new password is checked against the password policy of the caller's OWN tenant
+        (the token's `tenant_id`, never an operator's acted-on scope; the default policy when
+        that tenant is gone) BEFORE the current password is verified, so a refused password
+        costs no hashing: `422 password_policy_violation` with `errors.new_password`. A current
+        password over 1024 bytes is answered as an incorrect one without being hashed.
       requestBody:
         required: true
         content:
@@ -321,7 +340,13 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
-        '422': { $ref: '#/components/responses/Unprocessable' }
+        '422':
+          description: |
+            `password_policy_violation` (see PasswordPolicyViolation; field `errors.new_password`),
+            `password_breached`, or `password_same_as_current`.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
         '400': { $ref: '#/components/responses/BadRequest' }
 
   /api/v1/auth/request-email-change:
@@ -495,6 +520,10 @@ paths:
         Platform operators only (is_platform + slug anchor) — ADR 0068. Tenant
         onboarding is operator-led (ADR 0053 "no public sign-up surface").
         Requires `platform.tenants.create`.
+
+        The first admin's temporary password is checked against the DEFAULT password policy
+        (the new tenant has no stored policy yet): `422 password_policy_violation` with
+        `errors.admin_password`. Nothing is created on a violation.
       security:
         - BearerAuth: []
       x-required-permissions: [platform.tenants.create]
@@ -518,6 +547,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '422': { $ref: '#/components/responses/PasswordPolicyViolation' }
         '429': { $ref: '#/components/responses/TooManyRequests' }
 
   /api/v1/tenants/{tenantId}:
@@ -853,6 +883,11 @@ paths:
       summary: Create a user (find-or-create-by-email, per Auth0/Entra ID canon)
       description: |
         Requires `identity.users.create` (satisfied by `tenant.admin` in the caller's own tenant, or by `platform.*` equivalents for platform operators; ADR 0068).
+
+        The temporary password is checked against the password policy of the TARGET tenant
+        (the effective tenant: the caller's own, or the one an operator acts in through
+        `X-Tenant-Id`): `422 password_policy_violation` with `errors.password`. Nothing is
+        created on a violation.
       x-required-permissions: [identity.users.create]
       requestBody:
         required: true
@@ -870,7 +905,7 @@ paths:
         '403': { $ref: '#/components/responses/TenantScopeForbidden' }
         '400': { description: "`invalid_body` — the body is not valid JSON; `invalid_email` — the email is not a valid address", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
         '409': { description: "`email_has_active_membership` — the email already has an active membership in another tenant", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
-        '422': { description: "`user_invalid` — the new membership violates a domain invariant (see `message`)", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+        '422': { description: "`password_policy_violation` — the password fails the target tenant's policy (field `errors.password`, see PasswordPolicyViolation); `user_invalid` — the new membership violates a domain invariant (see `message`)", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
 
   /api/v1/users/{userId}:
     get:
@@ -4299,6 +4334,21 @@ components:
         Retry-After:
           description: Seconds until the request may be retried.
           schema: { type: integer }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+    PasswordPolicyViolation:
+      description: |
+        The password does not satisfy the tenant password policy (ADR 0068 D13). `error` is
+        `password_policy_violation`; `errors.<field>` lists the failed rule codes, in this
+        order, for the field that carried the password: `min_length`, `max_length`,
+        `requires_uppercase`, `requires_lowercase`, `requires_digit`, `requires_symbol`.
+        `max_length` is answered alone: a password over 1024 bytes is refused before any
+        class counting or hashing. `detail` is a fixed sentence; the answer never echoes the
+        password. A violation changes nothing (a reset token stays valid, the session stays
+        alive). Which tenant's policy applies is stated on each operation. The policy is
+        enforced when a password is SET: a weakened policy never locks an existing member out
+        and a strengthened one applies at the next password set, not at login.
       content:
         application/json:
           schema: { $ref: '#/components/schemas/ErrorResponse' }

@@ -146,8 +146,9 @@ func NewRegisterTenantHandler(
 //
 // Steps:
 //
-//  1. Argon2id-hash the admin password OUTSIDE the tx (CPU-bound;
-//     no reason to hold a connection).
+//  1. Check the admin password against the default password policy, then
+//     Argon2id-hash it OUTSIDE the tx (CPU-bound; no reason to hold a
+//     connection).
 //  2. Pre-tx existence check: same-email Person already has an Active
 //     Membership? Surfaces ErrEmailHasActiveMembership early so the
 //     caller sees a friendly error, not a SQLSTATE 23505 conflict.
@@ -165,6 +166,12 @@ func (h RegisterTenantHandler) Handle(
 	ctx context.Context,
 	cmd RegisterTenantCommand,
 ) (RegisterTenantResult, error) {
+	// The first admin's temporary password is held to the default policy (the new
+	// tenant has no stored one yet; ADR 0068 D13). Checked, size bound first,
+	// BEFORE anything is hashed.
+	if err := tenant.DefaultPasswordPolicy().Check(cmd.AdminPassword); err != nil {
+		return RegisterTenantResult{}, err
+	}
 	pwd, err := h.hashAdminPassword(ctx, cmd.AdminPassword)
 	if err != nil {
 		return RegisterTenantResult{}, err

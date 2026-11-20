@@ -3,18 +3,21 @@ package command_test
 import (
 	"context"
 	"errors"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/leadkart/leadkart-go/internal/common/email"
 	"github.com/leadkart/leadkart-go/internal/common/ids"
+	"github.com/leadkart/leadkart-go/internal/common/slug"
 	"github.com/leadkart/leadkart-go/internal/identity/app/command"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership/membershiptest"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person/persontest"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant/tenanttest"
 )
 
 // failingMembersRepo injects errors on GetActiveForPerson + Add.
@@ -75,19 +78,19 @@ func TestNewCreateUserHandler_PanicsOnNilDeps(t *testing.T) {
 		{
 			name: "nil uow",
 			fn: func() {
-				_ = command.NewCreateUserHandler(nil, seedPersonRepo(t, nil), newFakeMembershipRepo(), func() time.Time { return testNow }, testNewPersonID, testNewMembershipID) // arch-test:ignore-err - test fixture setup
+				_ = command.NewCreateUserHandler(nil, seedPersonRepo(t, nil), newFakeMembershipRepo(), defaultTenantRepo(t), func() time.Time { return testNow }, testNewPersonID, testNewMembershipID) // arch-test:ignore-err - test fixture setup
 			},
 		},
 		{
 			name: "nil persons",
 			fn: func() {
-				_ = command.NewCreateUserHandler(fakeUoW{}, nil, newFakeMembershipRepo(), func() time.Time { return testNow }, testNewPersonID, testNewMembershipID) // arch-test:ignore-err - test fixture setup
+				_ = command.NewCreateUserHandler(fakeUoW{}, nil, newFakeMembershipRepo(), defaultTenantRepo(t), func() time.Time { return testNow }, testNewPersonID, testNewMembershipID) // arch-test:ignore-err - test fixture setup
 			},
 		},
 		{
 			name: "nil memberships",
 			fn: func() {
-				_ = command.NewCreateUserHandler(fakeUoW{}, seedPersonRepo(t, nil), nil, func() time.Time { return testNow }, testNewPersonID, testNewMembershipID) // arch-test:ignore-err - test fixture setup
+				_ = command.NewCreateUserHandler(fakeUoW{}, seedPersonRepo(t, nil), nil, defaultTenantRepo(t), func() time.Time { return testNow }, testNewPersonID, testNewMembershipID) // arch-test:ignore-err - test fixture setup
 			},
 		},
 	}
@@ -111,7 +114,7 @@ func TestCreateUser_RejectsZeroTenantID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("email.New: %v", err)
 	}
-	h := command.NewCreateUserHandler(fakeUoW{}, seedPersonRepo(t, nil), newFakeMembershipRepo(), func() time.Time { return testNow }, testNewPersonID, testNewMembershipID)
+	h := command.NewCreateUserHandler(fakeUoW{}, seedPersonRepo(t, nil), newFakeMembershipRepo(), defaultTenantRepo(t), func() time.Time { return testNow }, testNewPersonID, testNewMembershipID)
 
 	_, err = h.Handle(t.Context(), command.CreateUserCommand{
 		TenantID: tenant.ID(""),
@@ -126,7 +129,7 @@ func TestCreateUser_RejectsZeroTenantID(t *testing.T) {
 // TestCreateUser_RejectsZeroEmail — guard-in-depth on the email VO.
 func TestCreateUser_RejectsZeroEmail(t *testing.T) {
 	t.Parallel()
-	h := command.NewCreateUserHandler(fakeUoW{}, seedPersonRepo(t, nil), newFakeMembershipRepo(), func() time.Time { return testNow }, testNewPersonID, testNewMembershipID)
+	h := command.NewCreateUserHandler(fakeUoW{}, seedPersonRepo(t, nil), newFakeMembershipRepo(), defaultTenantRepo(t), func() time.Time { return testNow }, testNewPersonID, testNewMembershipID)
 
 	_, err := h.Handle(t.Context(), command.CreateUserCommand{
 		TenantID: tenant.ID("11111111-1111-1111-1111-111111111111"),
@@ -148,7 +151,7 @@ func TestCreateUser_BrandNewPerson_HappyPath(t *testing.T) {
 	}
 	persons := seedPersonRepo(t, nil)
 	members := newFakeMembershipRepo()
-	h := command.NewCreateUserHandler(fakeUoW{}, persons, members, func() time.Time { return testNow }, testNewPersonID, testNewMembershipID)
+	h := command.NewCreateUserHandler(fakeUoW{}, persons, members, defaultTenantRepo(t), func() time.Time { return testNow }, testNewPersonID, testNewMembershipID)
 
 	res, err := h.Handle(t.Context(), command.CreateUserCommand{
 		TenantID:  tenant.ID("11111111-1111-1111-1111-111111111111"),
@@ -179,7 +182,7 @@ func TestCreateUser_RejectsEmptyPassword(t *testing.T) {
 	if err != nil {
 		t.Fatalf("email.New: %v", err)
 	}
-	h := command.NewCreateUserHandler(fakeUoW{}, seedPersonRepo(t, nil), newFakeMembershipRepo(), func() time.Time { return testNow }, testNewPersonID, testNewMembershipID)
+	h := command.NewCreateUserHandler(fakeUoW{}, seedPersonRepo(t, nil), newFakeMembershipRepo(), defaultTenantRepo(t), func() time.Time { return testNow }, testNewPersonID, testNewMembershipID)
 	_, err = h.Handle(t.Context(), command.CreateUserCommand{
 		TenantID: tenant.ID("11111111-1111-1111-1111-111111111111"),
 		Email:    addr,
@@ -206,7 +209,7 @@ func TestCreateUser_PersonsGetByEmail_NonNotFoundError_Wrapped(t *testing.T) {
 		FakeRepository: persontest.NewFakeRepository(),
 		getByEmailErr:  errBoom,
 	}
-	h := command.NewCreateUserHandler(fakeUoW{}, persons, newFakeMembershipRepo(), func() time.Time { return testNow }, testNewPersonID, testNewMembershipID)
+	h := command.NewCreateUserHandler(fakeUoW{}, persons, newFakeMembershipRepo(), defaultTenantRepo(t), func() time.Time { return testNow }, testNewPersonID, testNewMembershipID)
 	_, err = h.Handle(t.Context(), command.CreateUserCommand{
 		TenantID: tenant.ID("11111111-1111-1111-1111-111111111111"),
 		Email:    addr,
@@ -234,7 +237,7 @@ func TestCreateUser_PreExistingPerson_ActiveLookupError_Wrapped(t *testing.T) {
 		getActiveErr:   errBoom,
 	}
 
-	h := command.NewCreateUserHandler(fakeUoW{}, persons, members, func() time.Time { return testNow }, testNewPersonID, testNewMembershipID)
+	h := command.NewCreateUserHandler(fakeUoW{}, persons, members, defaultTenantRepo(t), func() time.Time { return testNow }, testNewPersonID, testNewMembershipID)
 	_, err = h.Handle(t.Context(), command.CreateUserCommand{
 		TenantID: tenant.ID("11111111-1111-1111-1111-111111111111"),
 		Email:    addr,
@@ -273,7 +276,7 @@ func TestCreateUser_PreExistingPerson_ActiveMembershipFound_RejectsAsHasActive(t
 		t.Fatalf("seed Add: %v", addErr)
 	}
 
-	h := command.NewCreateUserHandler(fakeUoW{}, persons, members, func() time.Time { return testNow }, testNewPersonID, testNewMembershipID)
+	h := command.NewCreateUserHandler(fakeUoW{}, persons, members, defaultTenantRepo(t), func() time.Time { return testNow }, testNewPersonID, testNewMembershipID)
 	_, err = h.Handle(t.Context(), command.CreateUserCommand{
 		TenantID: tenant.ID("11111111-1111-1111-1111-111111111111"),
 		Email:    addr,
@@ -292,7 +295,7 @@ func TestCreateUser_FindOrCreatePerson_AggregateError_Wrapped(t *testing.T) {
 	if err != nil {
 		t.Fatalf("email.New: %v", err)
 	}
-	h := command.NewCreateUserHandler(fakeUoW{}, seedPersonRepo(t, nil), newFakeMembershipRepo(), func() time.Time { return testNow }, testNewPersonID, testNewMembershipID)
+	h := command.NewCreateUserHandler(fakeUoW{}, seedPersonRepo(t, nil), newFakeMembershipRepo(), defaultTenantRepo(t), func() time.Time { return testNow }, testNewPersonID, testNewMembershipID)
 	_, err = h.Handle(t.Context(), command.CreateUserCommand{
 		TenantID:  tenant.ID("11111111-1111-1111-1111-111111111111"),
 		Email:     addr,
@@ -317,7 +320,7 @@ func TestCreateUser_PersonsAdd_EmailTakenRace_TranslatedToHasActive(t *testing.T
 		FakeRepository: persontest.NewFakeRepository(),
 		addErr:         person.ErrEmailTaken,
 	}
-	h := command.NewCreateUserHandler(fakeUoW{}, persons, newFakeMembershipRepo(), func() time.Time { return testNow }, testNewPersonID, testNewMembershipID)
+	h := command.NewCreateUserHandler(fakeUoW{}, persons, newFakeMembershipRepo(), defaultTenantRepo(t), func() time.Time { return testNow }, testNewPersonID, testNewMembershipID)
 	_, err = h.Handle(t.Context(), command.CreateUserCommand{
 		TenantID:  tenant.ID("11111111-1111-1111-1111-111111111111"),
 		Email:     addr,
@@ -343,7 +346,7 @@ func TestCreateUser_MembershipsAdd_AlreadyActiveRace_TranslatedToHasActive(t *te
 		FakeRepository: membershiptest.NewFakeRepository(),
 		addErr:         membership.ErrAlreadyActive,
 	}
-	h := command.NewCreateUserHandler(fakeUoW{}, seedPersonRepo(t, nil), members, func() time.Time { return testNow }, testNewPersonID, testNewMembershipID)
+	h := command.NewCreateUserHandler(fakeUoW{}, seedPersonRepo(t, nil), members, defaultTenantRepo(t), func() time.Time { return testNow }, testNewPersonID, testNewMembershipID)
 	_, err = h.Handle(t.Context(), command.CreateUserCommand{
 		TenantID:  tenant.ID("11111111-1111-1111-1111-111111111111"),
 		Email:     addr,
@@ -368,7 +371,7 @@ func TestCreateUser_PreExistingPerson_NoActiveMembership_AttachesAndReports(t *t
 	persons := seedPersonRepo(t, existing)
 	members := newFakeMembershipRepo() // no Active Memberships seeded
 
-	h := command.NewCreateUserHandler(fakeUoW{}, persons, members, func() time.Time { return testNow }, testNewPersonID, testNewMembershipID)
+	h := command.NewCreateUserHandler(fakeUoW{}, persons, members, defaultTenantRepo(t), func() time.Time { return testNow }, testNewPersonID, testNewMembershipID)
 	res, err := h.Handle(t.Context(), command.CreateUserCommand{
 		TenantID:  tenant.ID("11111111-1111-1111-1111-111111111111"),
 		Email:     addr,
@@ -408,4 +411,30 @@ func newPersonWithEmail(t *testing.T, addrStr, first, last string) *person.Perso
 	}
 	_ = p.PullEvents()
 	return p
+}
+
+// defaultTenantRepo seeds the two tenants the create-user tests address, each
+// with the default password policy: CreateUser loads the target tenant's policy.
+func defaultTenantRepo(t *testing.T) *tenanttest.FakeRepository {
+	t.Helper()
+	repo := tenanttest.NewFakeRepository()
+	for i, id := range []tenant.ID{"11111111-1111-1111-1111-111111111111", "22222222-2222-2222-2222-222222222222"} {
+		s, err := slug.New("seeded-" + strconv.Itoa(i))
+		if err != nil {
+			t.Fatalf("slug.New: %v", err)
+		}
+		admin, err := email.New("admin" + strconv.Itoa(i) + "@seeded.test")
+		if err != nil {
+			t.Fatalf("email.New: %v", err)
+		}
+		tn, err := tenant.New(id, s, "Seeded Pharma Pvt Ltd", "Seeded", admin, testNow)
+		if err != nil {
+			t.Fatalf("tenant.New: %v", err)
+		}
+		tn.PullEvents()
+		if err := repo.Add(t.Context(), tn); err != nil {
+			t.Fatalf("tenants.Add: %v", err)
+		}
+	}
+	return repo
 }

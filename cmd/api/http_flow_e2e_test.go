@@ -98,7 +98,7 @@ func TestHTTPFlow_RegisterLoginRefreshLogout(t *testing.T) {
 		LegalName:      "HTTP Acme Pharma Pvt Ltd",
 		DisplayName:    "HTTP Acme",
 		AdminEmail:     "http-admin@flow.test",
-		AdminPassword:  "correct horse battery staple",
+		AdminPassword:  "Correct-Horse-Battery-9!",
 		AdminFirstName: "HTTP",
 		AdminLastName:  "Admin",
 	})
@@ -116,7 +116,7 @@ func TestHTTPFlow_RegisterLoginRefreshLogout(t *testing.T) {
 	// 2. Login.
 	login := postJSON(t, srv.URL+"/api/v1/auth/login", ports.LoginRequest{
 		Email:       "http-admin@flow.test",
-		Password:    "correct horse battery staple",
+		Password:    "Correct-Horse-Battery-9!",
 		DeviceLabel: "iPhone 15 / Safari",
 	})
 	if login.status != http.StatusOK {

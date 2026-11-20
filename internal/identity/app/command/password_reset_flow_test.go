@@ -8,10 +8,12 @@ import (
 
 	"github.com/leadkart/leadkart-go/internal/common/email"
 	"github.com/leadkart/leadkart-go/internal/identity/app/command"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/membership/membershiptest"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/passwordpolicy"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person/persontest"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/refreshtoken/refreshtokentest"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant/tenanttest"
 )
 
 // errBoom is the marker error the doubles below return so tests assert
@@ -169,7 +171,7 @@ func TestConfirmPasswordReset_HappyPath_RotatesPasswordAndStamp(t *testing.T) {
 	rawToken := repo.emailRequestedToken(t)
 	stampBefore := p.SecurityStamp()
 
-	confirmHandler := command.NewConfirmPasswordResetHandler(repo, refreshtokentest.NewFakeRepository(), fakeUoW{}, passwordpolicy.Noop{}, func() time.Time { return testNow })
+	confirmHandler := command.NewConfirmPasswordResetHandler(repo, refreshtokentest.NewFakeRepository(), membershiptest.NewFakeRepository(), tenanttest.NewFakeRepository(), fakeUoW{}, passwordpolicy.Noop{}, func() time.Time { return testNow })
 	if err := confirmHandler.Handle(t.Context(), command.ConfirmPasswordResetCommand{
 		RawToken:    rawToken,
 		NewPassword: "Tr0ub4dor&3-newly-strong",
@@ -187,7 +189,7 @@ func TestConfirmPasswordReset_HappyPath_RotatesPasswordAndStamp(t *testing.T) {
 func TestConfirmPasswordReset_BadToken_ReturnsTokenInvalid(t *testing.T) {
 	t.Parallel()
 	repo := newResettableRepo(t, newPersonWithPassword(t, "current-pw"))
-	h := command.NewConfirmPasswordResetHandler(repo, refreshtokentest.NewFakeRepository(), fakeUoW{}, passwordpolicy.Noop{}, func() time.Time { return testNow })
+	h := command.NewConfirmPasswordResetHandler(repo, refreshtokentest.NewFakeRepository(), membershiptest.NewFakeRepository(), tenanttest.NewFakeRepository(), fakeUoW{}, passwordpolicy.Noop{}, func() time.Time { return testNow })
 	err := h.Handle(t.Context(), command.ConfirmPasswordResetCommand{
 		RawToken:    "totally-bogus-token",
 		NewPassword: "anything",
@@ -223,7 +225,7 @@ func TestConfirmPasswordReset_InputRejections(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
 			repo := persontest.NewFakeRepository()
-			h := command.NewConfirmPasswordResetHandler(repo, refreshtokentest.NewFakeRepository(), fakeUoW{}, passwordpolicy.Noop{}, func() time.Time { return testNow })
+			h := command.NewConfirmPasswordResetHandler(repo, refreshtokentest.NewFakeRepository(), membershiptest.NewFakeRepository(), tenanttest.NewFakeRepository(), fakeUoW{}, passwordpolicy.Noop{}, func() time.Time { return testNow })
 			err := h.Handle(t.Context(), c.cmd)
 			if !errors.Is(err, c.want) {
 				t.Fatalf("err = %v, want %v", err, c.want)
@@ -241,7 +243,7 @@ func TestConfirmPasswordReset_LookupError_Wrapped(t *testing.T) {
 		FakeRepository:     persontest.NewFakeRepository(),
 		failGetByTokenHash: true,
 	}
-	h := command.NewConfirmPasswordResetHandler(repo, refreshtokentest.NewFakeRepository(), fakeUoW{}, passwordpolicy.Noop{}, func() time.Time { return testNow })
+	h := command.NewConfirmPasswordResetHandler(repo, refreshtokentest.NewFakeRepository(), membershiptest.NewFakeRepository(), tenanttest.NewFakeRepository(), fakeUoW{}, passwordpolicy.Noop{}, func() time.Time { return testNow })
 	err := h.Handle(t.Context(), command.ConfirmPasswordResetCommand{
 		RawToken:    "non-empty-token-bytes",
 		NewPassword: "Tr0ub4dor&3-strong",
@@ -271,7 +273,7 @@ func TestConfirmPasswordReset_AnonymisedPerson_ReturnsTokenInvalid(t *testing.T)
 		t.Fatalf("Anonymise: %v", err)
 	}
 
-	confirm := command.NewConfirmPasswordResetHandler(repo, refreshtokentest.NewFakeRepository(), fakeUoW{}, passwordpolicy.Noop{}, func() time.Time { return testNow })
+	confirm := command.NewConfirmPasswordResetHandler(repo, refreshtokentest.NewFakeRepository(), membershiptest.NewFakeRepository(), tenanttest.NewFakeRepository(), fakeUoW{}, passwordpolicy.Noop{}, func() time.Time { return testNow })
 	err := confirm.Handle(t.Context(), command.ConfirmPasswordResetCommand{
 		RawToken:    rawToken,
 		NewPassword: "Tr0ub4dor&3-strong",
@@ -297,7 +299,7 @@ func TestConfirmPasswordReset_GloballySuspendedPerson_ReturnsTokenInvalid(t *tes
 		t.Fatalf("GloballySuspend: %v", err)
 	}
 
-	confirm := command.NewConfirmPasswordResetHandler(repo, refreshtokentest.NewFakeRepository(), fakeUoW{}, passwordpolicy.Noop{}, func() time.Time { return testNow })
+	confirm := command.NewConfirmPasswordResetHandler(repo, refreshtokentest.NewFakeRepository(), membershiptest.NewFakeRepository(), tenanttest.NewFakeRepository(), fakeUoW{}, passwordpolicy.Noop{}, func() time.Time { return testNow })
 	err := confirm.Handle(t.Context(), command.ConfirmPasswordResetCommand{
 		RawToken:    rawToken,
 		NewPassword: "Tr0ub4dor&3-strong",
@@ -311,7 +313,7 @@ func TestConfirmPasswordReset_GloballySuspendedPerson_ReturnsTokenInvalid(t *tes
 // suppression (the aggregate doesn't enforce it).
 func TestConfirmPasswordReset_SameAsCurrent_Rejected(t *testing.T) {
 	t.Parallel()
-	const samePw = "current-pw-and-also-new"
+	const samePw = "Current-Pw-And-Also-New-9!"
 	addr, _ := email.New("alice@example.test")
 	p := newPersonWithPassword(t, samePw)
 	repo := newResettableRepo(t, p)
@@ -321,7 +323,7 @@ func TestConfirmPasswordReset_SameAsCurrent_Rejected(t *testing.T) {
 	}
 	rawToken := repo.emailRequestedToken(t)
 
-	confirm := command.NewConfirmPasswordResetHandler(repo, refreshtokentest.NewFakeRepository(), fakeUoW{}, passwordpolicy.Noop{}, func() time.Time { return testNow })
+	confirm := command.NewConfirmPasswordResetHandler(repo, refreshtokentest.NewFakeRepository(), membershiptest.NewFakeRepository(), tenanttest.NewFakeRepository(), fakeUoW{}, passwordpolicy.Noop{}, func() time.Time { return testNow })
 	err := confirm.Handle(t.Context(), command.ConfirmPasswordResetCommand{
 		RawToken:    rawToken,
 		NewPassword: samePw,
@@ -344,7 +346,7 @@ func TestConfirmPasswordReset_BreachCheckerError_Wrapped(t *testing.T) {
 	}
 	rawToken := repo.emailRequestedToken(t)
 
-	confirm := command.NewConfirmPasswordResetHandler(repo, refreshtokentest.NewFakeRepository(), fakeUoW{}, failingBreachChecker{}, func() time.Time { return testNow })
+	confirm := command.NewConfirmPasswordResetHandler(repo, refreshtokentest.NewFakeRepository(), membershiptest.NewFakeRepository(), tenanttest.NewFakeRepository(), fakeUoW{}, failingBreachChecker{}, func() time.Time { return testNow })
 	err := confirm.Handle(t.Context(), command.ConfirmPasswordResetCommand{
 		RawToken:    rawToken,
 		NewPassword: "Tr0ub4dor&3-strong",
@@ -367,10 +369,10 @@ func TestConfirmPasswordReset_Breached_Rejected(t *testing.T) {
 	}
 	rawToken := repo.emailRequestedToken(t)
 
-	confirm := command.NewConfirmPasswordResetHandler(repo, refreshtokentest.NewFakeRepository(), fakeUoW{}, breachingChecker{}, func() time.Time { return testNow })
+	confirm := command.NewConfirmPasswordResetHandler(repo, refreshtokentest.NewFakeRepository(), membershiptest.NewFakeRepository(), tenanttest.NewFakeRepository(), fakeUoW{}, breachingChecker{}, func() time.Time { return testNow })
 	err := confirm.Handle(t.Context(), command.ConfirmPasswordResetCommand{
 		RawToken:    rawToken,
-		NewPassword: "any-password-the-checker-will-flag",
+		NewPassword: "Any-Password-The-Checker-Flags-9!",
 	})
 	if !errors.Is(err, command.ErrPasswordBreached) {
 		t.Fatalf("err = %v, want ErrPasswordBreached", err)
@@ -395,7 +397,7 @@ func TestConfirmPasswordReset_PersistInvalid_CollapsesToTokenInvalid(t *testing.
 		failUpdateByID: true,
 		failUpdateErr:  person.ErrInvalid,
 	}
-	confirm := command.NewConfirmPasswordResetHandler(repo, refreshtokentest.NewFakeRepository(), fakeUoW{}, passwordpolicy.Noop{}, func() time.Time { return testNow })
+	confirm := command.NewConfirmPasswordResetHandler(repo, refreshtokentest.NewFakeRepository(), membershiptest.NewFakeRepository(), tenanttest.NewFakeRepository(), fakeUoW{}, passwordpolicy.Noop{}, func() time.Time { return testNow })
 	err := confirm.Handle(t.Context(), command.ConfirmPasswordResetCommand{
 		RawToken:    rawToken,
 		NewPassword: "Tr0ub4dor&3-strong",
@@ -423,7 +425,7 @@ func TestConfirmPasswordReset_PersistError_Wrapped(t *testing.T) {
 		failUpdateByID: true,
 		failUpdateErr:  errBoom,
 	}
-	confirm := command.NewConfirmPasswordResetHandler(repo, refreshtokentest.NewFakeRepository(), fakeUoW{}, passwordpolicy.Noop{}, func() time.Time { return testNow })
+	confirm := command.NewConfirmPasswordResetHandler(repo, refreshtokentest.NewFakeRepository(), membershiptest.NewFakeRepository(), tenanttest.NewFakeRepository(), fakeUoW{}, passwordpolicy.Noop{}, func() time.Time { return testNow })
 	err := confirm.Handle(t.Context(), command.ConfirmPasswordResetCommand{
 		RawToken:    rawToken,
 		NewPassword: "Tr0ub4dor&3-strong",
@@ -555,7 +557,7 @@ func TestNewConfirmPasswordResetHandler_PanicsOnNilDeps(t *testing.T) {
 				t.Error("expected panic on nil persons repo")
 			}
 		}()
-		_ = command.NewConfirmPasswordResetHandler(nil, refreshtokentest.NewFakeRepository(), fakeUoW{}, passwordpolicy.Noop{}, func() time.Time { return testNow }) // arch-test:ignore-err - test fixture setup
+		_ = command.NewConfirmPasswordResetHandler(nil, refreshtokentest.NewFakeRepository(), membershiptest.NewFakeRepository(), tenanttest.NewFakeRepository(), fakeUoW{}, passwordpolicy.Noop{}, func() time.Time { return testNow }) // arch-test:ignore-err - test fixture setup
 	})
 	t.Run("nil breach checker", func(t *testing.T) {
 		t.Parallel()
@@ -564,6 +566,6 @@ func TestNewConfirmPasswordResetHandler_PanicsOnNilDeps(t *testing.T) {
 				t.Error("expected panic on nil breach checker")
 			}
 		}()
-		_ = command.NewConfirmPasswordResetHandler(persontest.NewFakeRepository(), refreshtokentest.NewFakeRepository(), fakeUoW{}, nil, func() time.Time { return testNow }) // arch-test:ignore-err - test fixture setup
+		_ = command.NewConfirmPasswordResetHandler(persontest.NewFakeRepository(), refreshtokentest.NewFakeRepository(), membershiptest.NewFakeRepository(), tenanttest.NewFakeRepository(), fakeUoW{}, nil, func() time.Time { return testNow }) // arch-test:ignore-err - test fixture setup
 	})
 }

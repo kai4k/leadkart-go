@@ -72,7 +72,7 @@ func registerRealAccount(t *testing.T, app wiredApp) email.Address {
 	}
 	if _, err := app.register.Handle(t.Context(), command.RegisterTenantCommand{
 		Slug: s, LegalName: "Conc Pharma Pvt Ltd", DisplayName: "Conc", AdminEmail: addr,
-		AdminPassword: "correct horse battery staple", AdminFirstName: "A", AdminLastName: "B",
+		AdminPassword: "Correct-Horse-Battery-9!", AdminFirstName: "A", AdminLastName: "B",
 	}); err != nil {
 		t.Fatalf("register: %v", err)
 	}
@@ -117,7 +117,7 @@ func TestLogin_ConcurrentWrongPasswords_RealAndUnknownAddressesAnswerIdentically
 		}
 	}
 	// ...and the CORRECT password stays refused while locked.
-	_, err = app.login.Handle(t.Context(), command.LoginCommand{Email: realAddr, Password: "correct horse battery staple", DeviceLabel: "t"})
+	_, err = app.login.Handle(t.Context(), command.LoginCommand{Email: realAddr, Password: "Correct-Horse-Battery-9!", DeviceLabel: "t"})
 	if !errors.Is(err, command.ErrAccountLocked) {
 		t.Fatalf("correct password while locked: %v, want ErrAccountLocked", err)
 	}

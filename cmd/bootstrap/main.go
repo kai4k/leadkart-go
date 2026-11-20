@@ -58,6 +58,7 @@ import (
 
 	"github.com/leadkart/leadkart-go/internal/common/ids"
 	"github.com/leadkart/leadkart-go/internal/identity/app/argon2"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
 
 const (
@@ -127,6 +128,10 @@ func run(ctx context.Context) error {
 		return nil
 	}
 
+	if err := checkSuperAdminPassword(password); err != nil {
+		return err
+	}
+
 	firstName := strings.TrimSpace(os.Getenv(envSuperAdminFirstName))
 	if firstName == "" {
 		firstName = "Platform"
@@ -154,6 +159,17 @@ func run(ctx context.Context) error {
 		return fmt.Errorf("commit: %w", err)
 	}
 	committed = true
+	return nil
+}
+
+// checkSuperAdminPassword holds the first operator's password to the default
+// password policy, like every other password set (ADR 0068 D13); the platform
+// tenant has no stored policy to prefer yet. The error names the failed rules,
+// never the password.
+func checkSuperAdminPassword(password string) error {
+	if err := tenant.DefaultPasswordPolicy().Check(password); err != nil {
+		return fmt.Errorf("%s does not satisfy the password policy: %w", envSuperAdminPassword, err)
+	}
 	return nil
 }
 

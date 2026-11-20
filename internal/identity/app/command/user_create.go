@@ -63,6 +63,7 @@ type CreateUserHandler struct {
 	uow             pg.UnitOfWork
 	persons         person.Repository
 	memberships     membership.Repository
+	tenants         tenant.Repository
 	now             func() time.Time
 	newPersonID     func() person.ID
 	newMembershipID func() membership.ID
@@ -83,11 +84,12 @@ func NewCreateUserHandler(
 	uow pg.UnitOfWork,
 	persons person.Repository,
 	memberships membership.Repository,
+	tenants tenant.Repository,
 	now func() time.Time,
 	newPersonID func() person.ID,
 	newMembershipID func() membership.ID,
 ) CreateUserHandler {
-	if uow == nil || persons == nil || memberships == nil {
+	if uow == nil || persons == nil || memberships == nil || tenants == nil {
 		panic("command: NewCreateUserHandler all dependencies required")
 	}
 	if newPersonID == nil {
@@ -103,6 +105,7 @@ func NewCreateUserHandler(
 		uow:             uow,
 		persons:         persons,
 		memberships:     memberships,
+		tenants:         tenants,
 		now:             now,
 		newPersonID:     newPersonID,
 		newMembershipID: newMembershipID,
@@ -111,7 +114,8 @@ func NewCreateUserHandler(
 
 // Handle runs the flow:
 //
-//  1. Argon2id-hash the supplied password OUTSIDE the tx.
+//  1. Check the supplied temporary password against the TARGET tenant's
+//     password policy (size bound first), then Argon2id-hash it OUTSIDE the tx.
 //  2. Pre-tx: lookup Person by email globally. If one is found AND
 //     has an Active Membership somewhere → ErrEmailHasActiveMembership
 //     (single-Active-Membership invariant per `multi-tenancy.md`).
@@ -129,6 +133,16 @@ func (h CreateUserHandler) Handle(
 		return CreateUserResult{}, errors.New("create user: email required")
 	}
 
+	if cmd.Password == "" {
+		return CreateUserResult{}, errors.New("create user: password required")
+	}
+	tn, err := h.tenants.GetByID(ctx, cmd.TenantID)
+	if err != nil {
+		return CreateUserResult{}, fmt.Errorf("create user: load tenant: %w", err)
+	}
+	if err := tn.Settings().PasswordPolicy().Check(cmd.Password); err != nil {
+		return CreateUserResult{}, err
+	}
 	pwd, err := h.hashPassword(ctx, cmd.Password)
 	if err != nil {
 		return CreateUserResult{}, err

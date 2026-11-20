@@ -11,6 +11,7 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/domain/passwordpolicy"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/refreshtoken"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
 
 // ChangePasswordCommand carries the plaintext credentials. Per
@@ -23,7 +24,11 @@ import (
 // + tenancy.WithID bridge per A.2.3); it's NOT supplied in the request
 // body. The Application command layer trusts the boundary check.
 type ChangePasswordCommand struct {
-	PersonID        person.ID
+	PersonID person.ID
+	// TenantID is the caller's own tenant from the verified token (never an
+	// operator's acted-on scope): its password policy governs NewPassword. Zero
+	// means "no tenant context" and applies the default policy.
+	TenantID        tenant.ID
 	CurrentPassword string
 	NewPassword     string
 }
@@ -68,7 +73,9 @@ var ErrPersonIDRequired = errors.New("change_password: person id required")
 //
 //  1. Load person by ID (from JWT).
 //  2. Reject anonymised / globally-suspended (mirror login gates).
-//  3. Verify current password against stored hash.
+//  3. Check the new password against the caller's tenant password policy
+//     (size bound first; nothing has been hashed yet), then verify the
+//     current password against the stored hash.
 //  4. Reject same-as-current (no-op + audit-noise reduction).
 //  5. Run breach check on new password.
 //  6. Hash new password with Argon2id.
@@ -81,6 +88,7 @@ var ErrPersonIDRequired = errors.New("change_password: person id required")
 type ChangePasswordHandler struct {
 	persons       person.Repository
 	families      refreshtoken.Repository
+	tenants       tenant.Repository
 	uow           pg.UnitOfWork
 	breachChecker passwordpolicy.Checker
 	now           func() time.Time
@@ -92,12 +100,15 @@ type ChangePasswordHandler struct {
 // non-nil — a nil checker silently weakens security per security.md.
 // `now` is the explicit time source per the clock-injection refactor.
 // Nil → time.Now.
-func NewChangePasswordHandler(persons person.Repository, families refreshtoken.Repository, uow pg.UnitOfWork, breachChecker passwordpolicy.Checker, now func() time.Time) ChangePasswordHandler {
+func NewChangePasswordHandler(persons person.Repository, families refreshtoken.Repository, tenants tenant.Repository, uow pg.UnitOfWork, breachChecker passwordpolicy.Checker, now func() time.Time) ChangePasswordHandler {
 	if persons == nil {
 		panic("command: NewChangePasswordHandler persons repository required")
 	}
 	if families == nil {
 		panic("command: NewChangePasswordHandler families repository required")
+	}
+	if tenants == nil {
+		panic("command: NewChangePasswordHandler tenants repository required")
 	}
 	if uow == nil {
 		panic("command: NewChangePasswordHandler unit of work required")
@@ -111,6 +122,7 @@ func NewChangePasswordHandler(persons person.Repository, families refreshtoken.R
 	return ChangePasswordHandler{
 		persons:       persons,
 		families:      families,
+		tenants:       tenants,
 		uow:           uow,
 		breachChecker: breachChecker,
 		now:           now,
@@ -144,7 +156,20 @@ func (h ChangePasswordHandler) Handle(ctx context.Context, cmd ChangePasswordCom
 		return err
 	}
 
-	// 3. Verify current password.
+	// 3a. The new password against the caller's tenant policy. Cheap, bounded
+	// (size first) and before any hashing, so a refused password costs no Argon2id
+	// run. The answer tells the caller nothing about the account: it is a function
+	// of the tenant's policy and the candidate alone.
+	if err := h.checkPolicy(ctx, cmd.TenantID, cmd.NewPassword); err != nil {
+		return err
+	}
+
+	// 3b. Verify current password. A current password over the size bound cannot
+	// be the stored one (every password was bounded when it was set), so it is
+	// answered as a mismatch without hashing it.
+	if len(cmd.CurrentPassword) > tenant.MaxPasswordBytes {
+		return ErrIncorrectCurrentPassword
+	}
 	if err := h.gate.Verify(ctx, cmd.CurrentPassword, p.PasswordHash().String()); err != nil {
 		if errors.Is(err, argon2.ErrMismatch) || errors.Is(err, argon2.ErrFormat) {
 			return ErrIncorrectCurrentPassword
@@ -206,6 +231,25 @@ func (h ChangePasswordHandler) Handle(ctx context.Context, cmd ChangePasswordCom
 	return nil
 }
 
+// policyFor returns the password policy of the caller's tenant, or the default
+// when the command carries no tenant or the tenant row is gone (a person whose
+// tenant was hard-deleted can still rotate the credential). Any other read
+// failure is an error, never a silent fallback to a weaker rule.
+func (h ChangePasswordHandler) policyFor(ctx context.Context, id tenant.ID) (tenant.PasswordPolicy, error) {
+	if id.IsZero() {
+		return tenant.DefaultPasswordPolicy(), nil
+	}
+	tn, err := h.tenants.GetByID(ctx, id)
+	switch {
+	case err == nil:
+		return tn.Settings().PasswordPolicy(), nil
+	case errors.Is(err, tenant.ErrNotFound):
+		return tenant.DefaultPasswordPolicy(), nil
+	default:
+		return tenant.PasswordPolicy{}, fmt.Errorf("change_password: load tenant: %w", err)
+	}
+}
+
 // WithArgonGate returns the handler with its password hashing and verification running under
 // g (see [argon2.Gate]); a saturated gate refuses with [argon2.ErrBusy], which the
 // HTTP layer answers 503. Without it the work is unbounded (tests only).
@@ -263,4 +307,13 @@ func (h ChangePasswordHandler) loadChangeable(ctx context.Context, id person.ID)
 		return nil, ErrIncorrectCurrentPassword
 	}
 	return p, nil
+}
+
+// checkPolicy checks plaintext against the policy [ChangePasswordHandler.policyFor] resolves.
+func (h ChangePasswordHandler) checkPolicy(ctx context.Context, id tenant.ID, plaintext string) error {
+	policy, err := h.policyFor(ctx, id)
+	if err != nil {
+		return err
+	}
+	return policy.Check(plaintext)
 }

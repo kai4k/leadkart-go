@@ -10,9 +10,11 @@ import (
 
 	"github.com/leadkart/leadkart-go/internal/common/pg"
 	"github.com/leadkart/leadkart-go/internal/identity/app/argon2"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/passwordpolicy"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/refreshtoken"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
 
 // ConfirmPasswordResetCommand carries the user-presented plaintext
@@ -39,6 +41,8 @@ var ErrResetTokenInvalid = errors.New("confirm_password_reset: token invalid or 
 type ConfirmPasswordResetHandler struct {
 	persons       person.Repository
 	families      refreshtoken.Repository
+	memberships   membership.Repository
+	tenants       tenant.Repository
 	uow           pg.UnitOfWork
 	breachChecker passwordpolicy.Checker
 	now           func() time.Time
@@ -47,12 +51,18 @@ type ConfirmPasswordResetHandler struct {
 
 // NewConfirmPasswordResetHandler wires the handler. `now` is the
 // explicit time source per the clock-injection refactor. Nil → time.Now.
-func NewConfirmPasswordResetHandler(persons person.Repository, families refreshtoken.Repository, uow pg.UnitOfWork, breachChecker passwordpolicy.Checker, now func() time.Time) ConfirmPasswordResetHandler {
+func NewConfirmPasswordResetHandler(persons person.Repository, families refreshtoken.Repository, memberships membership.Repository, tenants tenant.Repository, uow pg.UnitOfWork, breachChecker passwordpolicy.Checker, now func() time.Time) ConfirmPasswordResetHandler {
 	if persons == nil {
 		panic("command: NewConfirmPasswordResetHandler persons repository required")
 	}
 	if families == nil {
 		panic("command: NewConfirmPasswordResetHandler families repository required")
+	}
+	if memberships == nil {
+		panic("command: NewConfirmPasswordResetHandler memberships repository required")
+	}
+	if tenants == nil {
+		panic("command: NewConfirmPasswordResetHandler tenants repository required")
 	}
 	if uow == nil {
 		panic("command: NewConfirmPasswordResetHandler unit of work required")
@@ -66,6 +76,8 @@ func NewConfirmPasswordResetHandler(persons person.Repository, families refresht
 	return ConfirmPasswordResetHandler{
 		persons:       persons,
 		families:      families,
+		memberships:   memberships,
+		tenants:       tenants,
 		uow:           uow,
 		breachChecker: breachChecker,
 		now:           now,
@@ -79,10 +91,14 @@ func NewConfirmPasswordResetHandler(persons person.Repository, families refresht
 //  3. Lookup Person by hash. Not found → ErrResetTokenInvalid (NEVER
 //     leak which arm matched).
 //  4. Reject anonymised / globally-suspended (mirror request-side).
-//  5. Reject same-as-current (defeats no-op).
-//  6. Run breach check on new password.
-//  7. Hash new password.
-//  8. UpdateByID closure: Person.ConfirmPasswordReset(presentedHash,
+//  5. Check the new password against the password policy of the tenant of the
+//     person's active membership (the default when there is none), size bound
+//     first. Only a holder of a valid token reaches this step, so the answer
+//     discloses nothing the token does not already prove.
+//  6. Reject same-as-current (defeats no-op).
+//  7. Run breach check on new password.
+//  8. Hash new password.
+//  9. UpdateByID closure: Person.ConfirmPasswordReset(presentedHash,
 //     newHash). Aggregate enforces token mismatch + expiry checks +
 //     rotates SecurityStamp + clears pending reset. In the SAME unit of
 //     work every refresh family of the Person is revoked (reason
@@ -115,6 +131,13 @@ func (h ConfirmPasswordResetHandler) Handle(ctx context.Context, cmd ConfirmPass
 
 	if p.IsAnonymised() || p.IsGloballySuspended() {
 		return ErrResetTokenInvalid
+	}
+
+	// The policy, before any hashing. A person has at most one active membership
+	// (409 person_active_elsewhere), so the tenant is unambiguous; with none, or
+	// when the tenant row is gone, the default applies.
+	if err := h.checkPolicy(ctx, p.ID(), cmd.NewPassword); err != nil {
+		return err
 	}
 
 	// Reject same-as-current. The aggregate doesn't enforce this in
@@ -167,6 +190,29 @@ func (h ConfirmPasswordResetHandler) Handle(ctx context.Context, cmd ConfirmPass
 	return nil
 }
 
+// policyFor returns the password policy of the tenant of the person's active
+// membership, or the default when the person has none (every membership ended)
+// or the tenant row is gone. Any other read failure is an error, never a silent
+// fallback to a weaker rule.
+func (h ConfirmPasswordResetHandler) policyFor(ctx context.Context, id person.ID) (tenant.PasswordPolicy, error) {
+	m, err := h.memberships.GetActiveForPerson(ctx, id)
+	switch {
+	case errors.Is(err, membership.ErrNotFound):
+		return tenant.DefaultPasswordPolicy(), nil
+	case err != nil:
+		return tenant.PasswordPolicy{}, fmt.Errorf("confirm_password_reset: load active membership: %w", err)
+	}
+	tn, err := h.tenants.GetByID(ctx, m.TenantID())
+	switch {
+	case err == nil:
+		return tn.Settings().PasswordPolicy(), nil
+	case errors.Is(err, tenant.ErrNotFound):
+		return tenant.DefaultPasswordPolicy(), nil
+	default:
+		return tenant.PasswordPolicy{}, fmt.Errorf("confirm_password_reset: load tenant: %w", err)
+	}
+}
+
 func hashResetToken(plaintext string) string {
 	sum := sha256.Sum256([]byte(plaintext))
 	return hex.EncodeToString(sum[:])
@@ -178,4 +224,13 @@ func hashResetToken(plaintext string) string {
 func (h ConfirmPasswordResetHandler) WithArgonGate(g *argon2.Gate) ConfirmPasswordResetHandler {
 	h.gate = g
 	return h
+}
+
+// checkPolicy checks plaintext against the policy [ConfirmPasswordResetHandler.policyFor] resolves.
+func (h ConfirmPasswordResetHandler) checkPolicy(ctx context.Context, id person.ID, plaintext string) error {
+	policy, err := h.policyFor(ctx, id)
+	if err != nil {
+		return err
+	}
+	return policy.Check(plaintext)
 }
