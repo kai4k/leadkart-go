@@ -184,6 +184,10 @@ func (t *Tenant) DisplayName() string { return t.displayName }
 // Status returns the current lifecycle state.
 func (t *Tenant) Status() Status { return t.status }
 
+// MembersMaySignIn reports whether the tenant's members may open or keep a session
+// (see [Status.MembersMaySignIn] for the per-status answers and the reasons).
+func (t *Tenant) MembersMaySignIn() bool { return t.status.MembersMaySignIn() }
+
 // CreatedAt returns the registration timestamp.
 func (t *Tenant) CreatedAt() time.Time { return t.createdAt }
 

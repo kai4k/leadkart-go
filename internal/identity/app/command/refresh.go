@@ -59,6 +59,18 @@ var ErrRefreshRejected = errors.New("refresh: rejected")
 // token does not know, and it is the only refusal the answer names.
 var ErrSessionExpired = errors.New("refresh: session reached its absolute lifetime")
 
+// idleLifetime is the lifetime of one refresh token: the idle lifetime
+// (Refresh.SlidingTTL), never more than the absolute one. An unset (or too long)
+// idle lifetime means the absolute lifetime alone bounds the session; the host
+// always passes a validated value (config.Validate: positive and shorter than the
+// absolute lifetime), the fallback only keeps hand-built configurations working.
+func idleLifetime(idle, absolute time.Duration) time.Duration {
+	if idle <= 0 || idle > absolute {
+		return absolute
+	}
+	return idle
+}
+
 // ----- Handler ---------------------------------------------------------------
 
 // RefreshHandler rotates the refresh-token chain + reissues a JWT.
@@ -71,10 +83,13 @@ type RefreshHandler struct {
 	resolver    *permissions.Resolver
 	jwt         *jwt.Issuer
 	now         func() time.Time
-	// refreshTTL is Refresh.AbsoluteTTL: the lifetime of one refresh token AND the
-	// absolute lifetime of a family counted from its creation (a rotation never
-	// extends a session past it, see Family.RotateWithGrace).
+	// refreshTTL is Refresh.AbsoluteTTL: the absolute lifetime of a family counted
+	// from its creation (a rotation never extends a session past it, see
+	// Family.RotateWithGrace).
 	refreshTTL time.Duration
+	// idleTTL is Refresh.SlidingTTL: the lifetime of ONE refresh token, extended by
+	// every rotation up to the absolute deadline.
+	idleTTL time.Duration
 	// graceWindow is how long a just-rotated token may be presented again and
 	// receive the same successor (zero: strict rotation, ADR 0068 D10).
 	graceWindow time.Duration
@@ -119,6 +134,7 @@ func NewRefreshHandler(
 	jwtIssuer *jwt.Issuer,
 	now func() time.Time,
 	refreshTTL time.Duration,
+	idleTTL time.Duration,
 	graceWindow time.Duration,
 	successorKey []byte,
 ) RefreshHandler {
@@ -148,7 +164,7 @@ func NewRefreshHandler(
 		jwt:          jwtIssuer,
 		now:          now,
 		refreshTTL:   refreshTTL,
-
+		idleTTL:      idleTTL,
 		graceWindow:  graceWindow,
 		successorKey: successorKey,
 	}
@@ -210,7 +226,7 @@ func (h RefreshHandler) Handle(ctx context.Context, cmd RefreshCommand) (Refresh
 		outcome, err := f.RotateWithGrace(refreshtoken.RotationParams{
 			Presented:   presentedHash,
 			Candidate:   mintPair.Hash,
-			TTL:         h.refreshTTL,
+			TTL:         idleLifetime(h.idleTTL, h.refreshTTL),
 			AbsoluteTTL: h.refreshTTL,
 			GraceWindow: h.graceWindow,
 			Client:      client,
@@ -262,9 +278,9 @@ func (h RefreshHandler) Handle(ctx context.Context, cmd RefreshCommand) (Refresh
 		return RefreshResult{}, ErrRefreshRejected
 	}
 
-	tn, err := h.tenants.GetByID(ctx, family.TenantID())
+	tn, err := h.usableTenant(ctx, family, now)
 	if err != nil {
-		return RefreshResult{}, fmt.Errorf("refresh: resolve tenant: %w", err)
+		return RefreshResult{}, err
 	}
 
 	m, err := h.memberships.GetActiveForPerson(ctx, p.ID())
@@ -342,6 +358,35 @@ func (h RefreshHandler) Handle(ctx context.Context, cmd RefreshCommand) (Refresh
 		MembershipID:         m.ID(),
 		MustChangePassword:   p.MustChangePassword(),
 	}, nil
+}
+
+// usableTenant loads the family's tenant and ends the session of a suspended or
+// deleted company's member: the family is revoked, so the silent refresh never mints
+// a token for it, and the next sign-in answers the login's own tenant_suspended. A
+// reactivated tenant does not bring the family back; its members sign in again. A
+// suspended tenant answers [ErrRefreshRejected] together with [ErrTenantSuspended]
+// (the BFF shows "your company is suspended"); any other unusable status is a plain
+// [ErrRefreshRejected].
+func (h RefreshHandler) usableTenant(ctx context.Context, family *refreshtoken.Family, now time.Time) (*tenant.Tenant, error) {
+	tn, err := h.tenants.GetByID(ctx, family.TenantID())
+	if err != nil {
+		return nil, fmt.Errorf("refresh: resolve tenant: %w", err)
+	}
+	if tn.MembersMaySignIn() {
+		return tn, nil
+	}
+	reason, rejected := "tenant_unavailable", ErrRefreshRejected
+	switch tn.Status() {
+	case tenant.StatusSuspended:
+		reason = "tenant_suspended"
+		rejected = fmt.Errorf("%w (%w)", ErrRefreshRejected, ErrTenantSuspended)
+	case tenant.StatusDeleted:
+		reason = "tenant_deleted"
+	}
+	_ = h.families.UpdateByID(ctx, family.ID(), func(f *refreshtoken.Family) (bool, error) {
+		return true, f.Revoke(reason, now)
+	})
+	return nil, rejected
 }
 
 // recordGrace counts and logs a presentation of a just-rotated token (the three

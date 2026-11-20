@@ -63,6 +63,13 @@ type LoginResult struct {
 // enumeration per OWASP "Authentication Cheat Sheet" + RFC 6749 §5.2.
 var ErrInvalidCredentials = errors.New("login: invalid credentials")
 
+// ErrTenantSuspended is returned by login when the password was verified and the
+// person's tenant is suspended: the members of a suspended company cannot sign in.
+// It is only ever returned AFTER the password check, so it tells someone who does
+// not know the password nothing (a wrong password or an unknown email still answers
+// [ErrInvalidCredentials]). Refresh wraps it together with [ErrRefreshRejected].
+var ErrTenantSuspended = errors.New("tenant suspended")
+
 // ErrAccountLocked surfaces when the calling Person hit the
 // [person.MaxFailedLogins] threshold within [person.LockoutWindow] and
 // is currently inside the [person.LockoutDuration] cool-off. HTTP layer
@@ -176,7 +183,11 @@ type LoginHandler struct {
 	resolver   *permissions.Resolver
 	jwt        *jwt.Issuer
 	now        func() time.Time
+	// refreshTTL is Refresh.AbsoluteTTL (the family's absolute lifetime).
 	refreshTTL time.Duration
+	// idleTTL is Refresh.SlidingTTL: the lifetime of ONE refresh token, so a session
+	// not refreshed for that long ends. Never above refreshTTL ([sessionTTLs]).
+	idleTTL time.Duration
 
 	// newFamilyID mints the refresh-token family ID per the
 	// `TestArch_HandlersInjectIDFactory` discipline. Production wires
@@ -268,6 +279,7 @@ func NewLoginHandler(
 	jwtIssuer *jwt.Issuer,
 	now func() time.Time,
 	refreshTTL time.Duration,
+	idleTTL time.Duration,
 	dummyHash string,
 	newFamilyID func() refreshtoken.FamilyID,
 	phantom PhantomFailureCounter,
@@ -295,6 +307,7 @@ func NewLoginHandler(
 		jwt:         jwtIssuer,
 		now:         now,
 		refreshTTL:  refreshTTL,
+		idleTTL:     idleTTL,
 		dummyHash:   dummyHash,
 		newFamilyID: newFamilyID,
 		phantom:     phantom,
@@ -312,7 +325,9 @@ func NewLoginHandler(
 //  4. Reject anonymised + inactive Persons → ErrInvalidCredentials.
 //  5. Load the full membership + the Tenant (tenant_slug claim).
 //  6. In ONE transaction: re-read the person under a SHARE lock, refuse when the
-//     credential is no longer the verified one, insert the refresh family.
+//     credential is no longer the verified one or the tenant's members may not sign
+//     in (suspended: [ErrTenantSuspended]; deleted: [ErrInvalidCredentials]), insert
+//     the refresh family.
 //  7. Issue JWT with per-Membership claims and the stamp read under that lock.
 //
 // The failure branches take the same steps in the same order and cost the same
@@ -347,7 +362,7 @@ func (h LoginHandler) Handle(ctx context.Context, cmd LoginCommand) (LoginResult
 		tn.ID(),
 		cmd.DeviceLabel,
 		mintPair.Hash,
-		h.refreshTTL,
+		idleLifetime(h.idleTTL, h.refreshTTL),
 		h.now(),
 	)
 	if err != nil {
@@ -459,7 +474,16 @@ func (h LoginHandler) openSession(ctx context.Context, id person.ID, verified pe
 			}
 			return fmt.Errorf("login: re-read membership: %w", err)
 		}
-		if !target.MembershipActive || target.PersonID != id || target.TenantID != family.TenantID() || target.TenantStatus == tenant.StatusDeleted {
+		if !target.MembershipActive || target.PersonID != id || target.TenantID != family.TenantID() {
+			return ErrInvalidCredentials
+		}
+		// The password was verified (and is still the stored one, above), so naming
+		// the suspension reveals nothing to someone who does not know it. A deleted
+		// (or otherwise unusable) tenant stays the ordinary refusal.
+		if !target.TenantStatus.MembersMaySignIn() {
+			if target.TenantStatus == tenant.StatusSuspended {
+				return ErrTenantSuspended
+			}
 			return ErrInvalidCredentials
 		}
 		if err := h.families.Add(ctx, family); err != nil {

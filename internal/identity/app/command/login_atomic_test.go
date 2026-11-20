@@ -56,7 +56,7 @@ func (s *verifySpy) snapshot() []verifyCall {
 // hash and phantom counter (loginHandlerWithPhantom fixes the first two).
 func handlerWith(t *testing.T, router command.AuthRouter, persons person.Repository, phantom command.PhantomFailureCounter, dummy string, now func() time.Time) command.LoginHandler {
 	t.Helper()
-	return command.NewLoginHandler(router, nil, nil, persons, nil, nil, now, 0, dummy,
+	return command.NewLoginHandler(router, nil, nil, persons, nil, nil, now, 0, 0, dummy,
 		func() refreshtoken.FamilyID { return refreshtoken.FamilyID("never-minted-on-failure") }, phantom, fakeUoW{})
 }
 

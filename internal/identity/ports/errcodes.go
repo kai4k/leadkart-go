@@ -33,9 +33,11 @@ const (
 	ErrCodeEmailHasActiveMembership = "email_has_active_membership"
 
 	// ErrCodeInvalidCredentials — login wrong-password / unknown-
-	// email / suspended-tenant / no-active-membership all collapse
+	// email / deleted-tenant / no-active-membership all collapse
 	// to this code per `security.md` "Login flow — enumeration safety".
-	// NEVER differentiate the cause in the response body.
+	// NEVER differentiate the cause in the response body. (A SUSPENDED tenant is
+	// the one exception, [ErrCodeTenantSuspended], and only after the password was
+	// verified.)
 	ErrCodeInvalidCredentials = "invalid_credentials" //nolint:gosec // G101: error code, not a credential
 
 	// ErrCodeAccountLocked — Person hit the [person.MaxFailedLogins]
@@ -55,10 +57,23 @@ const (
 	ErrCodeRefreshRejected = "refresh_rejected"
 
 	// RefreshReasonSessionExpired is the `reason` of a refresh_rejected answer for
-	// a session that reached its absolute lifetime (Refresh.AbsoluteTTL from the
-	// login): the web shows "your session ended, sign in again". The only arm of
-	// refresh_rejected that names itself; the others stay indistinguishable.
+	// a session that ended by time: it reached its absolute lifetime
+	// (Refresh.AbsoluteTTL from the login) or sat idle for longer than
+	// Refresh.SlidingTTL. The web shows "your session ended, sign in again".
 	RefreshReasonSessionExpired = "session_expired"
+
+	// RefreshReasonTenantSuspended is the `reason` of a refresh_rejected answer for a
+	// session of a suspended company: its members hold no session until the tenant is
+	// reactivated (and then sign in again). It is only given for a refresh token the
+	// caller already holds, so it reveals nothing about anyone else.
+	RefreshReasonTenantSuspended = "tenant_suspended"
+
+	// ErrCodeTenantSuspended — login with the CORRECT password for a member of a
+	// suspended company (403). It is only ever answered after the password was
+	// verified, so a wrong password or an unknown email still answers
+	// invalid_credentials and the code names nothing to someone who does not know the
+	// password. The web shows "your company's account is suspended; contact support".
+	ErrCodeTenantSuspended = "tenant_suspended"
 
 	// ErrCodeInternalError — generic 500 surface. Detail goes to
 	// slog.ErrorContext server-side; HTTP body stays empty to avoid

@@ -5,6 +5,7 @@ import (
 
 	"github.com/leadkart/leadkart-go/internal/common/errs"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
 
 // ErrNotFound is returned when no family matches the lookup key.
@@ -41,4 +42,9 @@ type Repository interface {
 	// Used by the user "manage sessions" UI + the family-cap-per-person
 	// enforcement at family creation time.
 	ListActiveForPerson(ctx context.Context, personID person.ID) ([]*Family, error)
+
+	// ListActiveForTenant returns at most limit non-revoked families bound to the
+	// tenant (oldest first). The tenant-suspension cascade revokes a page and asks
+	// again until the page is empty.
+	ListActiveForTenant(ctx context.Context, tenantID tenant.ID, limit int) ([]*Family, error)
 }

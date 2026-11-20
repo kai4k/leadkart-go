@@ -72,7 +72,7 @@ type fakeAuthRouter struct {
 	resolveErr error
 	loads      atomic.Int32
 	// tenantStatus is what CheckSessionTarget reports for every membership's tenant
-	// (the zero value, StatusUnknown, is "not deleted"); a test sets it to simulate a
+	// (the zero value, StatusUnknown, is reported as active); a test sets it to simulate a
 	// tenant that changed between the verify and the session insert.
 	tenantStatus tenant.Status
 }
@@ -82,11 +82,15 @@ type fakeAuthRouter struct {
 func (f *fakeAuthRouter) CheckSessionTarget(_ context.Context, id membership.ID) (command.SessionTarget, error) {
 	for _, row := range f.byEmail {
 		if row.m != nil && row.m.ID() == id {
+			status := f.tenantStatus
+			if status == tenant.StatusUnknown {
+				status = tenant.StatusActive
+			}
 			return command.SessionTarget{
 				PersonID:         row.m.PersonID(),
 				TenantID:         row.m.TenantID(),
 				MembershipActive: row.m.Status() == membership.StatusActive,
-				TenantStatus:     f.tenantStatus,
+				TenantStatus:     status,
 			}, nil
 		}
 	}
@@ -146,6 +150,7 @@ func loginHandlerWithPhantom(t *testing.T, router command.AuthRouter, persons pe
 		nil, // jwt issuer — not reached on failure
 		func() time.Time { return testNow },
 		0, // refreshTTL — not reached on failure
+		0, // idleTTL — not reached on failure
 		dummy,
 		func() refreshtoken.FamilyID { return refreshtoken.FamilyID("never-minted-on-failure") },
 		phantom,
@@ -204,7 +209,7 @@ func newLoginRig(t *testing.T) wiredLoginRig {
 
 	h := command.NewLoginHandler(
 		router, families, tenants, persons, resolver, issuer,
-		now, 14*24*time.Hour, dummy, mintFamilyID, newFakePhantomLockout(), fakeUoW{},
+		now, 14*24*time.Hour, 14*24*time.Hour, dummy, mintFamilyID, newFakePhantomLockout(), fakeUoW{},
 	)
 	return wiredLoginRig{
 		handler: h, router: router, families: families, tenants: tenants,

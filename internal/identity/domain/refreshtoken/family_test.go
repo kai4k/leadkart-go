@@ -640,3 +640,126 @@ func TestRotateWithGrace_ClientBinding(t *testing.T) {
 		}
 	})
 }
+
+// ----- idle timeout + reuse after expiry (final fix round, commit 2 items 2 and 5) --
+
+func TestRotateWithGrace_IdleTimeout(t *testing.T) {
+	t.Parallel()
+	const idle, abs = 2 * time.Hour, 14 * 24 * time.Hour
+	newIdleFamily := func(t *testing.T) *refreshtoken.Family {
+		t.Helper()
+		f, err := refreshtoken.NewFamily(newFamilyID(t), newPersonID(t), newTenantID(t), "Chrome", hash("a"), idle, baseTime)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return f
+	}
+	present := func(f *refreshtoken.Family, presented, candidate refreshtoken.TokenHash, at time.Time) (refreshtoken.RotationOutcome, error) {
+		return f.RotateWithGrace(refreshtoken.RotationParams{Presented: presented, Candidate: candidate, TTL: idle, AbsoluteTTL: abs, GraceWindow: 30 * time.Second, Now: at})
+	}
+
+	t.Run("a token unused past its idle lifetime ends the session and revokes the family", func(t *testing.T) {
+		t.Parallel()
+		f := newIdleFamily(t)
+		_ = f.PullEvents()
+		_, err := present(f, f.CurrentToken().Hash(), hash("s1"), baseTime.Add(idle+time.Second))
+		if !errors.Is(err, refreshtoken.ErrSessionExpired) || !errors.Is(err, refreshtoken.ErrExpired) {
+			t.Fatalf("got %v, want ErrSessionExpired (and still ErrExpired)", err)
+		}
+		if !f.IsRevoked() || f.RevokeReason() != refreshtoken.RevokeReasonIdleTimeout {
+			t.Fatalf("revoked=%v reason=%q, want revoked with idle_timeout", f.IsRevoked(), f.RevokeReason())
+		}
+		evs := f.PullEvents()
+		if len(evs) != 1 {
+			t.Fatalf("%d events, want exactly the revocation", len(evs))
+		}
+		if rev, ok := evs[0].(refreshtoken.RevokedEvent); !ok || rev.Reason != refreshtoken.RevokeReasonIdleTimeout {
+			t.Fatalf("event %#v, want a RevokedEvent with idle_timeout", evs[0])
+		}
+	})
+	t.Run("exactly at the idle deadline still rotates; the successor lives a fresh idle lifetime", func(t *testing.T) {
+		t.Parallel()
+		f := newIdleFamily(t)
+		at := baseTime.Add(idle)
+		if _, err := present(f, f.CurrentToken().Hash(), hash("s1"), at); err != nil {
+			t.Fatalf("at the idle deadline: %v", err)
+		}
+		if got, want := f.CurrentToken().ExpiresAt(), at.Add(idle); !got.Equal(want) {
+			t.Fatalf("successor expires %v, want %v (a rotation extends the idle deadline)", got, want)
+		}
+	})
+	t.Run("a rotation extends the idle deadline but never the absolute one", func(t *testing.T) {
+		t.Parallel()
+		f := newIdleFamily(t)
+		cur := f.CurrentToken().Hash()
+		at := baseTime
+		// Refresh every hour for 13 days and 23 hours: always inside the idle bound.
+		for at.Add(time.Hour).Before(baseTime.Add(abs)) {
+			at = at.Add(time.Hour)
+			next := hash("s" + at.Format(time.RFC3339))
+			if _, err := present(f, cur, next, at); err != nil {
+				t.Fatalf("rotation at %v: %v", at, err)
+			}
+			cur = next
+		}
+		if got, want := f.CurrentToken().ExpiresAt(), baseTime.Add(abs); got.After(want) {
+			t.Fatalf("token expires %v, past the absolute deadline %v", got, want)
+		}
+	})
+	t.Run("a grace replay extends nothing", func(t *testing.T) {
+		t.Parallel()
+		f := newIdleFamily(t)
+		first := f.CurrentToken().Hash()
+		rotatedAt := baseTime.Add(time.Hour)
+		if _, err := f.RotateWithGrace(refreshtoken.RotationParams{Presented: first, Candidate: hash("s1"), TTL: idle, AbsoluteTTL: abs, GraceWindow: 30 * time.Second, Client: "c", Now: rotatedAt}); err != nil {
+			t.Fatal(err)
+		}
+		before := f.CurrentToken().ExpiresAt()
+		out, err := f.RotateWithGrace(refreshtoken.RotationParams{Presented: first, Candidate: hash("s1"), TTL: idle, AbsoluteTTL: abs, GraceWindow: 30 * time.Second, Client: "c", Now: rotatedAt.Add(10 * time.Second)})
+		if err != nil || out != refreshtoken.RotationGraceReplay {
+			t.Fatalf("replay: %v %v", out, err)
+		}
+		if got := f.CurrentToken().ExpiresAt(); !got.Equal(before) {
+			t.Fatalf("a grace replay moved the idle deadline from %v to %v", before, got)
+		}
+	})
+}
+
+func TestRotateWithGrace_ConsumedTokenAfterTheDeadlineIsReuse(t *testing.T) {
+	t.Parallel()
+	const ttl, abs, grace = 14 * 24 * time.Hour, 24 * time.Hour, 30 * time.Second
+	present := func(f *refreshtoken.Family, presented, candidate refreshtoken.TokenHash, client string, at time.Time) (refreshtoken.RotationOutcome, error) {
+		return f.RotateWithGrace(refreshtoken.RotationParams{Presented: presented, Candidate: candidate, TTL: ttl, AbsoluteTTL: abs, GraceWindow: grace, Client: client, Now: at})
+	}
+	t.Run("an old consumed token presented after the deadline is recorded as reuse", func(t *testing.T) {
+		t.Parallel()
+		f := newFamily(t)
+		first := f.CurrentToken().Hash()
+		if _, err := present(f, first, hash("s1"), "c", baseTime.Add(time.Hour)); err != nil {
+			t.Fatal(err)
+		}
+		_ = f.PullEvents()
+		_, err := present(f, first, hash("s1"), "thief", baseTime.Add(abs+time.Hour))
+		if !errors.Is(err, refreshtoken.ErrReuseDetected) || !errors.Is(err, refreshtoken.ErrSessionExpired) {
+			t.Fatalf("got %v, want ErrReuseDetected and ErrSessionExpired", err)
+		}
+		if !f.IsRevoked() || f.RevokeReason() != refreshtoken.RevokeReasonReuseAfterExpiry {
+			t.Fatalf("revoked=%v reason=%q, want reuse_after_expiry", f.IsRevoked(), f.RevokeReason())
+		}
+		evs := f.PullEvents()
+		if len(evs) != 1 {
+			t.Fatalf("%d events, want the one revocation", len(evs))
+		}
+		if rev, ok := evs[0].(refreshtoken.RevokedEvent); !ok || rev.Reason != refreshtoken.RevokeReasonReuseAfterExpiry {
+			t.Fatalf("event %#v, want a RevokedEvent with reuse_after_expiry", evs[0])
+		}
+	})
+	t.Run("the CURRENT token after the deadline stays a plain absolute expiry", func(t *testing.T) {
+		t.Parallel()
+		f := newFamily(t)
+		_, err := present(f, f.CurrentToken().Hash(), hash("s1"), "c", baseTime.Add(abs+time.Second))
+		if !errors.Is(err, refreshtoken.ErrSessionExpired) || errors.Is(err, refreshtoken.ErrReuseDetected) || f.RevokeReason() != refreshtoken.RevokeReasonAbsoluteTTL {
+			t.Fatalf("got %v reason %q, want ErrSessionExpired with absolute_ttl and no reuse", err, f.RevokeReason())
+		}
+	})
+}

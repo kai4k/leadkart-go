@@ -27,20 +27,42 @@
 -- DML; the new columns inherit it, so nothing to GRANT and the start-up privilege
 -- check is unaffected.
 --
+-- LOCKING (final fix round). identity.refresh_tokens grows with every rotation, so
+-- the CHECKs are added NOT VALID and validated by separate statements, not inline on
+-- ADD COLUMN (an inline CHECK is verified by a scan under ACCESS EXCLUSIVE), and
+-- SET LOCAL lock_timeout makes the migration fail fast, and roll back whole, when the
+-- table is busy instead of queueing behind a long transaction and stalling every
+-- refresh behind it. goose runs a file in one transaction, so the ACCESS EXCLUSIVE of
+-- the DDL is held until the file commits whatever the order; the split keeps the
+-- validation scan off the ADD COLUMN statement and is the shape to copy when a later
+-- migration runs outside a transaction. No earlier migration sets a lock_timeout or
+-- uses NOT VALID: migration 20261120000005 starts the convention.
+--
 -- Up adds both columns; Down drops them (the replay budget of a token still inside
 -- its window is lost, nothing else depends on them).
 
 -- +goose Up
+SET LOCAL lock_timeout = '5s';
+
 ALTER TABLE identity.refresh_tokens
-    ADD COLUMN consumed_client_binding text     NULL
-        CONSTRAINT chk_refresh_tokens_client_binding CHECK (consumed_client_binding IS NULL OR length(consumed_client_binding) = 64),
-    ADD COLUMN grace_replays           smallint NOT NULL DEFAULT 0
-        CONSTRAINT chk_refresh_tokens_grace_replays CHECK (grace_replays >= 0);
+    ADD COLUMN consumed_client_binding text     NULL,
+    ADD COLUMN grace_replays           smallint NOT NULL DEFAULT 0;
+
+ALTER TABLE identity.refresh_tokens
+    ADD CONSTRAINT chk_refresh_tokens_client_binding CHECK (consumed_client_binding IS NULL OR length(consumed_client_binding) = 64) NOT VALID,
+    ADD CONSTRAINT chk_refresh_tokens_grace_replays CHECK (grace_replays >= 0) NOT VALID;
+
+ALTER TABLE identity.refresh_tokens
+    VALIDATE CONSTRAINT chk_refresh_tokens_client_binding;
+ALTER TABLE identity.refresh_tokens
+    VALIDATE CONSTRAINT chk_refresh_tokens_grace_replays;
 
 COMMENT ON COLUMN identity.refresh_tokens.consumed_client_binding IS 'hex(HMAC-SHA256) binding of the client that consumed this token; never an address. NULL = none recorded (strict: a replay is reuse). ADR 0068 D10.';
 COMMENT ON COLUMN identity.refresh_tokens.grace_replays IS 'Grace replays honoured for this consumed token (at most 3), counted under the family row lock. ADR 0068 D10.';
 
 -- +goose Down
+SET LOCAL lock_timeout = '5s';
+
 ALTER TABLE identity.refresh_tokens
     DROP COLUMN IF EXISTS grace_replays,
     DROP COLUMN IF EXISTS consumed_client_binding;

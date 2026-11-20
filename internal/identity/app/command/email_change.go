@@ -88,7 +88,7 @@ func (h RequestEmailChangeHandler) Handle(ctx context.Context, cmd RequestEmailC
 		return fmt.Errorf("request_email_change: lookup: %w", err)
 	}
 
-	if p.IsAnonymised() || p.IsGloballySuspended() {
+	if !p.MaySignIn() {
 		return ErrEmailChangeRejected
 	}
 	if p.Email().String() == cmd.NewEmail.String() {
@@ -174,7 +174,7 @@ func (h ConfirmEmailChangeHandler) Handle(ctx context.Context, cmd ConfirmEmailC
 		return fmt.Errorf("confirm_email_change: lookup: %w", err)
 	}
 
-	if p.IsAnonymised() || p.IsGloballySuspended() {
+	if !p.MaySignIn() {
 		return ErrEmailChangeTokenInvalid
 	}
 

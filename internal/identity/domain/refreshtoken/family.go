@@ -70,6 +70,16 @@ var ErrSessionExpired = errs.New(errs.KindUnauthenticated, "refreshtoken", "sess
 // absolute lifetime.
 const RevokeReasonAbsoluteTTL = "absolute_ttl"
 
+// RevokeReasonIdleTimeout is the revocation reason of a family whose current token
+// expired unused: the session was idle for longer than Refresh.SlidingTTL.
+const RevokeReasonIdleTimeout = "idle_timeout"
+
+// RevokeReasonReuseAfterExpiry is the revocation reason when an already CONSUMED
+// token is presented after the family reached its absolute lifetime. It is reuse (a
+// stolen old token) and is reported as such to the SIEM, with a reason of its own so
+// the late presentation stays distinguishable from reuse inside the lifetime.
+const RevokeReasonReuseAfterExpiry = "reuse_after_expiry"
+
 // ----- Family aggregate -----------------------------------------------------
 
 // Family is the aggregate root.
@@ -289,7 +299,7 @@ type RotationParams struct {
 	// Candidate is the successor the caller derived from the presented token
 	// (deterministic, so a replay derives the hash that is already stored).
 	Candidate TokenHash
-	// TTL is the lifetime of a token minted by this rotation (never beyond the
+	// TTL is the idle lifetime of a token minted by this rotation (never beyond the
 	// family's absolute deadline).
 	TTL time.Duration
 	// AbsoluteTTL is the lifetime of the whole family counted from its creation; 0
@@ -325,7 +335,13 @@ type RotationParams struct {
 //     rule above does not hold (outside the window, a token two generations
 //     old, a successor already used, a different candidate). The family is
 //     revoked as a side effect; emits [RevokedEvent] (RFC 9700 §4.13).
-//   - [ErrExpired]: presented token has passed its absolute expiry.
+//   - [ErrExpired]: presented token has passed its own expiry (the idle lifetime:
+//     each token lives TTL from its issue, never past the absolute deadline). The
+//     family is revoked with [RevokeReasonIdleTimeout] and the error also matches
+//     [ErrSessionExpired].
+//   - [ErrSessionExpired]: the family passed its absolute lifetime. A CONSUMED token
+//     presented after it also matches [ErrReuseDetected] and is revoked with
+//     [RevokeReasonReuseAfterExpiry].
 //
 // On [RotationIssued], emits [RotatedEvent].
 //
@@ -357,15 +373,27 @@ func (f *Family) RotateWithGrace(rp RotationParams) (RotationOutcome, error) {
 	if rp.AbsoluteTTL > 0 {
 		deadline = f.createdAt.Add(rp.AbsoluteTTL)
 		if now.After(deadline) {
+			// An already CONSUMED token presented now is a stolen (or long-stale)
+			// token, not an ordinary session end: record it as reuse so the SIEM sees
+			// it, unless it is a replay the grace rule would have honoured (the same
+			// client, inside the window, with budget left: a second tab at the very
+			// boundary). The public answer is the same either way: the session ended.
+			reason, cause := RevokeReasonAbsoluteTTL, error(nil)
+			if f.tokens[idx].IsConsumed() && !f.isHonouredGraceReplay(idx, rp) {
+				reason, cause = RevokeReasonReuseAfterExpiry, ErrReuseDetected
+			}
 			f.revokedAt = now
-			f.revokeReason = RevokeReasonAbsoluteTTL
+			f.revokeReason = reason
 			f.recordEvent(RevokedEvent{
 				FamilyID: f.id,
 				PersonID: f.personID,
 				TenantID: f.tenantID,
-				Reason:   RevokeReasonAbsoluteTTL,
+				Reason:   reason,
 				At:       now,
 			})
+			if cause != nil {
+				return 0, fmt.Errorf("%w (%w)", ErrSessionExpired, cause)
+			}
 			return 0, fmt.Errorf("%w", ErrSessionExpired)
 		}
 	}
@@ -400,7 +428,20 @@ func (f *Family) RotateWithGrace(rp RotationParams) (RotationOutcome, error) {
 	}
 
 	if f.tokens[idx].IsExpired(now) {
-		return 0, fmt.Errorf("%w: token expired at %v", ErrExpired, f.tokens[idx].ExpiresAt())
+		// The current token ran out before the absolute deadline: the session sat
+		// idle for longer than its idle lifetime (each token lives the idle lifetime
+		// from its issue, which every rotation renews). The session is over for good,
+		// so the family is revoked, and the answer names itself like the absolute end.
+		f.revokedAt = now
+		f.revokeReason = RevokeReasonIdleTimeout
+		f.recordEvent(RevokedEvent{
+			FamilyID: f.id,
+			PersonID: f.personID,
+			TenantID: f.tenantID,
+			Reason:   RevokeReasonIdleTimeout,
+			At:       now,
+		})
+		return 0, fmt.Errorf("%w (%w: token expired at %v)", ErrSessionExpired, ErrExpired, f.tokens[idx].ExpiresAt())
 	}
 
 	// Mint next generation.
@@ -436,6 +477,21 @@ func (f *Family) RotateWithGrace(rp RotationParams) (RotationOutcome, error) {
 		At:                 now,
 	})
 	return RotationIssued, nil
+}
+
+// isHonouredGraceReplay reports whether presenting the consumed token at idx would
+// be answered as a grace replay: inside the window with an intact chain, by the
+// client that consumed it, with replay budget left. The candidate is not known to
+// the caller of the absolute check, so the chain test uses the head's own hash.
+func (f *Family) isHonouredGraceReplay(idx int, rp RotationParams) bool {
+	head := f.CurrentToken()
+	if head == nil {
+		return false
+	}
+	consumed := f.tokens[idx]
+	return f.isGraceCase(idx, head.hash, rp.GraceWindow, rp.Now.UTC()) &&
+		consumed.consumedClient != "" && consumed.consumedClient == rp.Client &&
+		consumed.graceReplays < MaxGraceReplays
 }
 
 // isGraceCase reports whether presenting the consumed token at idx again is

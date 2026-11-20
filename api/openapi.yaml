@@ -188,6 +188,19 @@ paths:
               schema: { $ref: '#/components/schemas/LoginResponse' }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
+        '403':
+          description: |
+            `tenant_suspended`: the password was CORRECT but the person's company is
+            suspended (an operator suspended it; reactivation restores sign-in). It is
+            answered only after the password was verified, so a wrong password or an unknown
+            email still answers `401 invalid_credentials` and the code tells a stranger
+            nothing. A deleted company, and one with no usable membership, stay `401
+            invalid_credentials`. A freshly registered company is `pending`, which signs in
+            normally. A company in `pending_deletion` still signs in for now (an open owner
+            decision, ADR 0069).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
         '423':
           description: |
             Account locked after [person.MaxFailedLogins] consecutive
@@ -237,9 +250,18 @@ paths:
         `LEADKART_REFRESH__ABSOLUTE_TTL`) after the login that opened it, however often
         it was refreshed: the first refresh after that answers `401 refresh_rejected`
         with `reason: session_expired` (sign in again) and the family is revoked
-        (`absolute_ttl`). `Refresh.SlidingTTL` (default 2 hours) is validated to be shorter
-        than the absolute lifetime but is not applied as an idle timeout. A globally
-        suspended person is refused (the family is revoked).
+        (`absolute_ttl`). A session also ends when it sits IDLE: each refresh token lives
+        `Refresh.SlidingTTL` (default 2 hours, `LEADKART_REFRESH__SLIDING_TTL`) from its
+        issue, never past the absolute deadline, and every rotation renews it (a grace
+        replay does not). The first refresh after the token ran out answers the same
+        `401 refresh_rejected` with `reason: session_expired` and the family is revoked
+        (`idle_timeout`). A globally suspended person is refused (the family is revoked),
+        and so is a member of a SUSPENDED company: `401 refresh_rejected` with
+        `reason: tenant_suspended` (the family is revoked as `tenant_suspended`; a
+        reactivated company's members sign in again, the old session does not return).
+        A deleted company's members are refused without a reason. Suspending a company
+        also revokes its members' families (outbox subscriber), but an access token
+        already issued stays valid until its own expiry (600 s).
       requestBody:
         required: true
         content:
@@ -254,7 +276,9 @@ paths:
         '401':
           description: |
             Refresh rejected (consumed / expired / family revoked / reuse). For a session that
-            reached its absolute lifetime the body carries `reason: session_expired`.
+            ended by time (absolute lifetime or idle timeout) the body carries
+            `reason: session_expired`; for a member of a suspended company
+            `reason: tenant_suspended`.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
@@ -4431,8 +4455,9 @@ components:
           type: string
           description: |
             Refines `error` where a client must react differently to one failure of a code
-            (RFC 9457 extension). Present only on `401 refresh_rejected` for a session that
-            reached its absolute lifetime: `session_expired`. Absent everywhere else.
+            (RFC 9457 extension). Present only on `401 refresh_rejected`: `session_expired`
+            (the session reached its absolute lifetime or sat idle past `Refresh.SlidingTTL`) or
+            `tenant_suspended` (the person's company is suspended). Absent everywhere else.
         errors:
           type: object
           description: 'Field-level errors (RFC 9457 §3.1 extension). Key = JSON field name; value = list of error strings.'

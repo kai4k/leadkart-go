@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 
+	"github.com/leadkart/leadkart-go/internal/identity/domain/refreshtoken"
 	"github.com/leadkart/leadkart-go/internal/identity/integrationevents"
 )
 
@@ -42,13 +43,17 @@ func NewReuseDetectedSIEM(log *slog.Logger) *ReuseDetectedSIEM {
 func (h *ReuseDetectedSIEM) Handle(
 	ctx context.Context, evt *integrationevents.RefreshTokenFamilyRevokedV1,
 ) error {
-	if evt.Reason != "reuse_detected" {
+	// reuse_after_expiry: a CONSUMED token presented after the family's absolute
+	// lifetime (a stolen old token, recorded as reuse even though the session had
+	// ended anyway).
+	if evt.Reason != "reuse_detected" && evt.Reason != refreshtoken.RevokeReasonReuseAfterExpiry {
 		return nil
 	}
 	// Structured WARN log — operator dashboards + log-aggregators
 	// (Loki/Datadog/etc.) alert on this combination.
 	h.log.WarnContext(ctx,
 		"RFC 9700 §4.13 refresh-token reuse detected — security incident",
+		"reason", evt.Reason,
 		"family_id", evt.FamilyID,
 		"person_id", evt.PersonID,
 		"tenant_id", evt.TenantIDClaim,

@@ -30,6 +30,9 @@ func (s *stubFamilyRepo) GetByTokenHash(_ context.Context, _ refreshtoken.TokenH
 func (s *stubFamilyRepo) ListActiveForPerson(_ context.Context, _ person.ID) ([]*refreshtoken.Family, error) {
 	return s.families, s.listErr
 }
+func (s *stubFamilyRepo) ListActiveForTenant(_ context.Context, _ tenant.ID, _ int) ([]*refreshtoken.Family, error) {
+	return nil, nil
+}
 
 var _ refreshtoken.Repository = (*stubFamilyRepo)(nil)
 

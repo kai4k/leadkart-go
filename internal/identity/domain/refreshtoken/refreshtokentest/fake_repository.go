@@ -33,9 +33,11 @@ package refreshtokentest
 
 import (
 	"context"
+	"slices"
 
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/refreshtoken"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
 
 // FakeRepository is the in-memory implementation of
@@ -176,6 +178,22 @@ func (f *FakeRepository) ListActiveForPerson(_ context.Context, personID person.
 		if fam.PersonID() == personID && !fam.IsRevoked() {
 			out = append(out, fam)
 		}
+	}
+	return out, nil
+}
+
+// ListActiveForTenant returns at most limit non-revoked families bound to the
+// tenant, oldest first (the SQL adapter's order).
+func (f *FakeRepository) ListActiveForTenant(_ context.Context, tenantID tenant.ID, limit int) ([]*refreshtoken.Family, error) {
+	var out []*refreshtoken.Family
+	for _, fam := range f.families {
+		if fam.TenantID() == tenantID && !fam.IsRevoked() {
+			out = append(out, fam)
+		}
+	}
+	slices.SortFunc(out, func(a, b *refreshtoken.Family) int { return a.CreatedAt().Compare(b.CreatedAt()) })
+	if limit > 0 && len(out) > limit {
+		out = out[:limit]
 	}
 	return out, nil
 }

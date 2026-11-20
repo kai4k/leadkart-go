@@ -173,6 +173,56 @@ func (q *Queries) ListActiveFamiliesForPerson(ctx context.Context, personID pgty
 	return items, nil
 }
 
+const listActiveFamiliesForTenant = `-- name: ListActiveFamiliesForTenant :many
+SELECT id, person_id, tenant_id, device_label,
+       created_at, last_used_at, revoked_at, revoke_reason
+FROM   identity.refresh_token_families
+WHERE  tenant_id  = $1
+  AND  revoked_at IS NULL
+ORDER  BY created_at
+LIMIT  $2
+`
+
+type ListActiveFamiliesForTenantParams struct {
+	TenantID pgtype.UUID
+	Limit    int32
+}
+
+// One bounded page (the caller revokes the page and asks again until it is empty)
+// of the non-revoked families bound to a tenant. Used by the tenant-suspension
+// cascade (RevokeFamiliesOnSecurityChange.HandleTenantSuspended). Cross-person,
+// non-RLS table per refresh_token canon. No index leads with tenant_id; a
+// suspension is a rare operator action and the partial index on active families
+// keeps the scan to the live rows.
+func (q *Queries) ListActiveFamiliesForTenant(ctx context.Context, arg ListActiveFamiliesForTenantParams) ([]IdentityRefreshTokenFamily, error) {
+	rows, err := q.db.Query(ctx, listActiveFamiliesForTenant, arg.TenantID, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []IdentityRefreshTokenFamily
+	for rows.Next() {
+		var i IdentityRefreshTokenFamily
+		if err := rows.Scan(
+			&i.ID,
+			&i.PersonID,
+			&i.TenantID,
+			&i.DeviceLabel,
+			&i.CreatedAt,
+			&i.LastUsedAt,
+			&i.RevokedAt,
+			&i.RevokeReason,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listRefreshTokensInFamily = `-- name: ListRefreshTokensInFamily :many
 SELECT id, family_id, token_hash, generation,
        issued_at, expires_at, consumed_at, replaced_by_id,

@@ -77,6 +77,21 @@ WHERE  person_id  = $1
   AND  revoked_at IS NULL
 ORDER  BY created_at;
 
+-- name: ListActiveFamiliesForTenant :many
+-- One bounded page (the caller revokes the page and asks again until it is empty)
+-- of the non-revoked families bound to a tenant. Used by the tenant-suspension
+-- cascade (RevokeFamiliesOnSecurityChange.HandleTenantSuspended). Cross-person,
+-- non-RLS table per refresh_token canon. No index leads with tenant_id; a
+-- suspension is a rare operator action and the partial index on active families
+-- keeps the scan to the live rows.
+SELECT id, person_id, tenant_id, device_label,
+       created_at, last_used_at, revoked_at, revoke_reason
+FROM   identity.refresh_token_families
+WHERE  tenant_id  = $1
+  AND  revoked_at IS NULL
+ORDER  BY created_at
+LIMIT  $2;
+
 -- name: UpdateRefreshTokenFamily :exec
 -- Persists family-level mutable state: last_used_at on every rotate;
 -- revoked_at + revoke_reason on Revoke or reuse-detected.

@@ -320,7 +320,7 @@ func (h ChangePasswordHandler) spendAttempt(id person.ID) error {
 
 // loadChangeable loads the person and answers every refusal the way a wrong
 // current password is answered, so ids and account states cannot be enumerated:
-// no such person, anonymised, globally suspended.
+// no such person, anonymised, globally suspended, deactivated (not [person.Person.MaySignIn]).
 func (h ChangePasswordHandler) loadChangeable(ctx context.Context, id person.ID) (*person.Person, error) {
 	p, err := h.persons.GetByID(ctx, id)
 	if err != nil {
@@ -329,7 +329,7 @@ func (h ChangePasswordHandler) loadChangeable(ctx context.Context, id person.ID)
 		}
 		return nil, fmt.Errorf("change_password: load person: %w", err)
 	}
-	if p.IsAnonymised() || p.IsGloballySuspended() {
+	if !p.MaySignIn() {
 		return nil, ErrIncorrectCurrentPassword
 	}
 	return p, nil

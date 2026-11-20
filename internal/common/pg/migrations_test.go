@@ -8,6 +8,7 @@ import (
 	"database/sql"
 	"io"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"runtime"
 	"slices"
@@ -887,13 +888,36 @@ func TestVerifyApplicationPrivileges_FailsWhenRoleWasCreatedAfterMigrating(t *te
 	if err == nil {
 		t.Fatal("check passed for a role that holds nothing")
 	}
-	for _, want := range []string{`"leadkart_app"`, "USAGE on schema"} {
+	for _, want := range []string{`"leadkart_app"`, "USAGE on schema", "20260606000001", "by hand", "production-checklist"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error %q lacks %q", err, want)
 		}
 	}
+	// `migrate up` does NOT re-apply the application grants (goose will not run
+	// 20260606000001 again); the message must not say it does.
+	if strings.Contains(err.Error(), "re-applies the grants") {
+		t.Errorf("error claims migrate up re-applies the grants: %v", err)
+	}
 	if strings.Contains(err.Error(), "leadkart_test") || strings.Contains(err.Error(), "postgres://") {
 		t.Errorf("error leaks connection details: %v", err)
+	}
+
+	// The documented manual fix works: run the Up block of the grants migration as
+	// the owner (the production checklist's sed | psql, here through the driver).
+	raw, rerr := os.ReadFile(filepath.Join(migrationsDir(t), "20260606000001_application_role_grants.sql"))
+	if rerr != nil {
+		t.Fatalf("read grants migration: %v", rerr)
+	}
+	up, _, ok := strings.Cut(string(raw), "-- +goose Down")
+	_, up, ok2 := strings.Cut(up, "-- +goose Up")
+	if !ok || !ok2 {
+		t.Fatal("grants migration lost its goose Up/Down markers")
+	}
+	if _, xerr := db.ExecContext(t.Context(), up); xerr != nil {
+		t.Fatalf("manual fix (Up block): %v", xerr)
+	}
+	if verr := pg.VerifyApplicationPrivileges(t.Context(), appRoleConn(t, dsn), pg.PrivilegeCheck{Production: true, Logger: discardLogger()}); verr != nil {
+		t.Fatalf("check still fails after the documented manual fix: %v", verr)
 	}
 }
 

@@ -242,3 +242,57 @@ func TestRefreshTokenFamilyRepository_UpdateByID_PersistsTheClientBindingAndTheR
 // Business-rule and state-machine scenarios (ReuseDetection, Revoke,
 // ListActiveForPerson revoked-filter) live in
 // refreshtokentest.FakeRepository unit tests.
+
+// SQL-contract (final fix round): ListActiveForTenant returns only the live families
+// of ONE tenant, oldest first, at most limit of them; a revoked family leaves the list
+// (the tenant-suspension cascade relies on "revoke a page, ask again, until empty").
+func TestRefreshTokenFamilyRepository_ListActiveForTenant_ScopesPagesAndSkipsRevoked(t *testing.T) {
+	t.Parallel()
+	pool := repoFixture(t)
+	tx := pg.NewTransactor(pool)
+	families := adapters.NewRefreshTokenFamilyRepository(pool, tx)
+	persons := adapters.NewPersonRepository(pool, tx)
+	tenants := adapters.NewTenantRepository(pool, tx)
+
+	mine := seedFamily(t, persons, tenants, families, "tenant-list-1")
+	others := seedFamily(t, persons, tenants, families, "tenant-list-2") // another tenant (seedFamily makes one per call)
+	if mine.TenantID() == others.TenantID() {
+		t.Fatal("setup: the two families must belong to different tenants")
+	}
+	// A second live family and a revoked one in the first tenant.
+	extra := func(secret string, revoke bool) *refreshtoken.Family {
+		p := seedPerson(t, persons, "rt-"+ids.NewV7().String()+"@example.test")
+		f, err := refreshtoken.NewFamily(refreshtoken.FamilyID(ids.NewV7().String()), p.ID(), mine.TenantID(), "d", hashOf(t, secret), tokenTTL, time.Now().UTC().Add(time.Second))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := families.Add(t.Context(), f); err != nil {
+			t.Fatal(err)
+		}
+		if revoke {
+			if err := families.UpdateByID(t.Context(), f.ID(), func(loaded *refreshtoken.Family) (bool, error) {
+				return true, loaded.Revoke("test", time.Now().UTC())
+			}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return f
+	}
+	second := extra("tenant-list-3", false)
+	extra("tenant-list-4", true)
+
+	got, err := families.ListActiveForTenant(t.Context(), mine.TenantID(), 10)
+	if err != nil {
+		t.Fatalf("ListActiveForTenant: %v", err)
+	}
+	if len(got) != 2 || got[0].ID() != mine.ID() || got[1].ID() != second.ID() {
+		t.Fatalf("got %d families, want the two live ones of the tenant, oldest first", len(got))
+	}
+	page, err := families.ListActiveForTenant(t.Context(), mine.TenantID(), 1)
+	if err != nil || len(page) != 1 || page[0].ID() != mine.ID() {
+		t.Fatalf("limit 1: %d families (%v), want the oldest", len(page), err)
+	}
+	if _, err := families.ListActiveForTenant(t.Context(), mine.TenantID(), 0); err == nil {
+		t.Fatal("limit 0 must be refused")
+	}
+}

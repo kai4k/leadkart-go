@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"time"
 
 	"github.com/google/uuid"
@@ -156,6 +157,41 @@ func (r *RefreshTokenFamilyRepository) ListActiveForPerson(ctx context.Context, 
 		familyRows, err := q.ListActiveFamiliesForPerson(ctx, pgconv.PgUUID(uid))
 		if err != nil {
 			return fmt.Errorf("refresh token repo: list active: %w", err)
+		}
+		for _, row := range familyRows {
+			f, herr := hydrateFamily(ctx, q, row)
+			if herr != nil {
+				return herr
+			}
+			out = append(out, f)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// ListActiveForTenant returns at most limit non-revoked families bound to the
+// tenant, oldest first. The tenant-suspension cascade revokes a page and asks again.
+func (r *RefreshTokenFamilyRepository) ListActiveForTenant(ctx context.Context, tenantID tenant.ID, limit int) ([]*refreshtoken.Family, error) {
+	tid, err := parseTenantIDForRefresh(tenantID)
+	if err != nil {
+		return nil, err
+	}
+	if limit <= 0 || limit > math.MaxInt32 {
+		return nil, fmt.Errorf("refresh token repo: list active for tenant: limit %d out of range", limit)
+	}
+	var out []*refreshtoken.Family
+	err = r.runInTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
+		q := r.q.WithTx(tx)
+		familyRows, err := q.ListActiveFamiliesForTenant(ctx, db.ListActiveFamiliesForTenantParams{
+			TenantID: pgconv.PgUUID(tid),
+			Limit:    int32(limit), //nolint:gosec // G115: bounded to MaxInt32 above.
+		})
+		if err != nil {
+			return fmt.Errorf("refresh token repo: list active for tenant: %w", err)
 		}
 		for _, row := range familyRows {
 			f, herr := hydrateFamily(ctx, q, row)

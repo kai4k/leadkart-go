@@ -158,10 +158,13 @@ const MaxRefreshGraceWindow = 120 * time.Second
 //     past it answers 401 refresh_rejected with reason session_expired and the
 //     family is revoked with reason absolute_ttl). It is also the lifetime of each
 //     refresh token, clamped to that deadline.
-//   - SlidingTTL (default 2h): validated (positive, and AbsoluteTTL must exceed it)
-//     but NOT applied as an idle timeout: an idle session is bounded by AbsoluteTTL
-//     alone. Kept for the configuration surface; a pending ADR 0069 item asks the
-//     owner whether to enforce it or drop it.
+//   - SlidingTTL (default 2h, LEADKART_REFRESH__SLIDING_TTL): the IDLE timeout. Each
+//     refresh token lives SlidingTTL from its issue (min(issued + SlidingTTL, family
+//     created + AbsoluteTTL)); a rotation renews it, a grace replay does not. A
+//     session not refreshed for that long answers 401 refresh_rejected with reason
+//     session_expired and the family is revoked with reason idle_timeout. Validated:
+//     positive, shorter than AbsoluteTTL, longer than GraceWindow. The 2h default is
+//     pending the owner's confirmation (ADR 0069).
 //   - GraceWindow (default 30s, LEADKART_REFRESH__GRACE_WINDOW, 0 = strict
 //     rotation, at most [MaxRefreshGraceWindow]): ADR 0068 D10.
 type RefreshConfig struct {

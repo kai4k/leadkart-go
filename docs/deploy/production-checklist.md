@@ -48,6 +48,39 @@ matters and how to check it.
     retry (a phone switching networks) is treated as reuse and signed out: that is the
     price of the binding.
 
+## The application role
+
+`leadkart_app` is the runtime role of the api and the worker (non-owner, row-level
+security applies to it). Migration `20260606000001_application_role_grants` GRANTs it
+its privileges, but it is a **no-op when the role does not exist yet**: goose then
+records it as applied and **will not run it again**, and `migrate up` re-applies only
+River's own grants. So on a managed Postgres, or any database that was migrated before
+the role was created, the api and the worker refuse to boot with
+`database role "leadkart_app" lacks ...`.
+
+*Prevent it.* As the database owner (a superuser or the provisioning role), before the
+FIRST `migrate up`:
+
+```sql
+CREATE ROLE leadkart_app WITH LOGIN NOSUPERUSER NOINHERIT NOCREATEROLE NOCREATEDB PASSWORD '<from the secrets store>';
+```
+
+and run **every** migration as the same owner role (`POSTGRES_OWNER`): default privileges
+bind to the role that ran the migration, so tables created later by a different owner
+would not be granted to `leadkart_app`.
+
+*Repair it* (the role was created late, or two owners migrated). As the owner role that
+ran the migrations, apply the Up block of the grants migration by hand, then run
+`migrate up` once more for River's grants. The block is idempotent:
+
+```bash
+sed -n '/^-- +goose Up/,/^-- +goose Down/p' migrations/20260606000001_application_role_grants.sql   | psql -v ON_ERROR_STOP=1 "$OWNER_DATABASE_URL"
+```
+
+(the goose markers are SQL comments, so `psql` reads the block as is; the migrations
+directory is in the repository at the release tag, the `migrate` image has no shell or
+`psql`). Re-run `docker compose ... up -d api worker`: the boot check passes.
+
 ## After the deploy
 
 10. **The request log's `client_ip` shows public addresses**, not the BFF's or a Docker
@@ -59,7 +92,13 @@ matters and how to check it.
     401 `stale_token` at once (stamp eviction, ADR 0068 D12). If the counter
     `leadkart.identity.stamp_evict_failures` rises, the cache is unreachable and old
     tokens live up to 30 s.
-13. **Verify a suspended person cannot sign in.** With a throwaway account: global-suspend
+13. **Verify a suspended company cannot sign in.** With a throwaway tenant and member:
+    suspend the tenant (`POST /api/v1/tenants/{id}/suspend`); the member's login with the
+    right password answers 403 `tenant_suspended` (a wrong password: 401
+    `invalid_credentials`), a refresh of an older session answers 401 `refresh_rejected`
+    with reason `tenant_suspended`; reactivate (`POST /api/v1/tenants/{id}/activate`) and
+    the login works again. Access tokens already issued live up to 600 s.
+14. **Verify a suspended person cannot sign in.** With a throwaway account: global-suspend
     it (`POST /api/v1/platform/persons/{id}/global-suspend`), then log in with the right
     password (expect 401 `invalid_credentials`, the same answer as a wrong password),
     refresh an older session (401), and lift the suspension (the login works again).
@@ -87,5 +126,5 @@ matters and how to check it.
 | `LEADKART_IDENTITY__LOCKOUT_KEY` | none (required in production) | base64, at least 32 bytes |
 | `LEADKART_REFRESH__GRACE_WINDOW` | 30s | 0 (strict rotation) .. 120s, below `SLIDING_TTL` |
 | `LEADKART_REFRESH__ABSOLUTE_TTL` | 336h (14 days; a session ends this long after its login) | above `SLIDING_TTL` |
-| `LEADKART_REFRESH__SLIDING_TTL` | 2h (validated, not applied as an idle timeout) | above `GRACE_WINDOW`, below `ABSOLUTE_TTL` |
+| `LEADKART_REFRESH__SLIDING_TTL` | 2h: the IDLE timeout (a session not refreshed for this long ends, 401 `session_expired`; a rotation renews it, never past `ABSOLUTE_TTL`). Default pending the owner's confirmation (ADR 0069) | above `GRACE_WINDOW`, below `ABSOLUTE_TTL` |
 | `GOMEMLIMIT` | 900MiB (compose) | Go runtime setting |

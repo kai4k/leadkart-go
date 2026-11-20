@@ -152,6 +152,14 @@ var refreshTestSuccessorKey = []byte("0123456789abcdef0123456789abcdef")
 // advances through the pointer. Grace 0 is the strict rotation.
 func newRefreshRigGrace(t *testing.T, grace time.Duration, clock *time.Time) *refreshRig {
 	t.Helper()
+	return newRefreshRigIdleGrace(t, 14*24*time.Hour, grace, clock)
+}
+
+// newRefreshRigIdleGrace is the rig with an explicit idle lifetime (SlidingTTL); the
+// absolute lifetime is 14 days. An idle lifetime equal to the absolute one is the
+// pre-idle-timeout behaviour the older tests were written against.
+func newRefreshRigIdleGrace(t *testing.T, idle, grace time.Duration, clock *time.Time) *refreshRig {
+	t.Helper()
 	now := func() time.Time { return *clock }
 	issuer, err := jwt.NewIssuer(refreshTestSigningKey, nil, now)
 	if err != nil {
@@ -166,7 +174,7 @@ func newRefreshRigGrace(t *testing.T, grace time.Duration, clock *time.Time) *re
 
 	h := command.NewRefreshHandler(
 		families, persons, memberships, tenants, resolver, issuer,
-		now, 14*24*time.Hour, grace, refreshTestSuccessorKey,
+		now, 14*24*time.Hour, idle, grace, refreshTestSuccessorKey,
 	)
 	return &refreshRig{
 		handler: h, families: families, persons: persons,
@@ -180,6 +188,13 @@ func newRefreshRigGrace(t *testing.T, grace time.Duration, clock *time.Time) *re
 // production wiring.
 func seedFamilyForPerson(t *testing.T, rig *refreshRig, p *person.Person, tn *tenant.Tenant) string {
 	t.Helper()
+	return seedFamilyForPersonTTL(t, rig, p, tn, 14*24*time.Hour)
+}
+
+// seedFamilyForPersonTTL is seedFamilyForPerson with the first token's lifetime
+// (login mints it with the idle lifetime).
+func seedFamilyForPersonTTL(t *testing.T, rig *refreshRig, p *person.Person, tn *tenant.Tenant, ttl time.Duration) string {
+	t.Helper()
 	pair, err := refreshmint.Mint()
 	if err != nil {
 		t.Fatalf("refreshmint.Mint: %v", err)
@@ -188,7 +203,7 @@ func seedFamilyForPerson(t *testing.T, rig *refreshRig, p *person.Person, tn *te
 		refreshtoken.FamilyID(ids.NewV7().String()),
 		p.ID(), tn.ID(),
 		"test-device", pair.Hash,
-		14*24*time.Hour, testNow,
+		ttl, testNow,
 	)
 	if err != nil {
 		t.Fatalf("NewFamily: %v", err)
@@ -212,6 +227,11 @@ type refreshFixture struct {
 
 func seedFullRefreshFixture(t *testing.T, rig *refreshRig) refreshFixture {
 	t.Helper()
+	return seedFullRefreshFixtureTTL(t, rig, 14*24*time.Hour)
+}
+
+func seedFullRefreshFixtureTTL(t *testing.T, rig *refreshRig, ttl time.Duration) refreshFixture {
+	t.Helper()
 	p := newPersonWithPassword(t, "anything")
 	if err := rig.persons.Add(t.Context(), p); err != nil {
 		t.Fatalf("persons.Add: %v", err)
@@ -224,7 +244,7 @@ func seedFullRefreshFixture(t *testing.T, rig *refreshRig) refreshFixture {
 	if err := rig.memberships.Add(t.Context(), m); err != nil {
 		t.Fatalf("memberships.Add: %v", err)
 	}
-	pt := seedFamilyForPerson(t, rig, p, tn)
+	pt := seedFamilyForPersonTTL(t, rig, p, tn, ttl)
 	return refreshFixture{plaintext: pt, person: p, tenant: tn, mem: m}
 }
 
@@ -740,7 +760,7 @@ func TestRefresh_ResolverError_Wrapped(t *testing.T) {
 	resolver := permissions.NewResolver(rig.memberships, failRoles, func() time.Time { return testNow })
 	h := command.NewRefreshHandler(
 		rig.families, rig.persons, rig.memberships, rig.tenants,
-		resolver, rig.issuer, func() time.Time { return testNow }, 14*24*time.Hour,
+		resolver, rig.issuer, func() time.Time { return testNow }, 14*24*time.Hour, 14*24*time.Hour,
 		0, refreshTestSuccessorKey,
 	)
 	// Sanity — silence unused.
@@ -984,7 +1004,7 @@ func TestNewRefreshHandler_ShortSuccessorKeyPanics(t *testing.T) {
 			t.Fatal("a successor key under 32 bytes must panic at construction")
 		}
 	}()
-	_ = command.NewRefreshHandler(nil, nil, nil, nil, nil, nil, nil, time.Hour, time.Second, []byte("short")) // arch-test:ignore-err - test fixture setup
+	_ = command.NewRefreshHandler(nil, nil, nil, nil, nil, nil, nil, time.Hour, time.Hour, time.Second, []byte("short")) // arch-test:ignore-err - test fixture setup
 }
 
 // ----- absolute lifetime (fix round 13, item 12) -------------------------------

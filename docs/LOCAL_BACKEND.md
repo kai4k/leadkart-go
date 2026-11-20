@@ -34,6 +34,10 @@ LEADKART_RATE_LIMIT__CHANGE_PASSWORD__PER_MINUTE=60
 LEADKART_RATE_LIMIT__CHANGE_PASSWORD__BURST=30
 LEADKART_ARGON2__MAX_PER_CLIENT=8
 LEADKART_ARGON2__QUEUE_TIMEOUT=10s
+# Idle timeout: a session not refreshed for this long ends (default 2h; the web refreshes
+# whenever its 10-minute access token runs out, so only a parked tab idles). A day keeps a
+# development tab signed in overnight.
+LEADKART_REFRESH__SLIDING_TTL=24h
 EOF
 task docker:up:full    # postgres:5432, redis:6379, migrate, bootstrap, api (:8080 public, :9090 admin)
 sleep 8; curl -fsS http://localhost:9090/ready ; echo
@@ -313,6 +317,8 @@ free again after `docker:down`.
 | `docker exec leadkart-api sh` fails | the api image is distroless, no shell | use `docker logs leadkart-api` and `curl :9090/...` |
 | every route answers `403 password_change_required` | the account is flagged | change the password (section 4) |
 | `401 stale_token` right after a password change | by design: every session of that person ended | sign in again |
+| `401 refresh_rejected` with `reason: session_expired` after the app sat unused | the idle timeout (`LEADKART_REFRESH__SLIDING_TTL`, default 2h; this runbook's `.env` block sets 24h) or the 14-day absolute lifetime ended the session | sign in again |
+| login answers `403 tenant_suspended` (right password) | the person's company is suspended (`POST /tenants/{id}/suspend`); members cannot sign in or refresh until it is reactivated (`POST /tenants/{id}/activate`); a freshly registered company is `pending`, which signs in normally | reactivate the tenant as the SuperAdmin |
 | login answers `429` | the per-route or the global (10/s, burst 60) limit | section 6 |
 | login answers `503 service_busy` | the Argon2 gate: a wait ran out or a client's line of 8 was full | raise `MAX_PER_CLIENT` / `QUEUE_TIMEOUT` (section 6) |
 | every user is throttled together | trusted proxies unset or not matching: all clients share the gateway address | section 2: check `trusted proxies in effect` in the api log and the WARN about an unusable header |

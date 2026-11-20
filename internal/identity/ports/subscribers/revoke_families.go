@@ -8,6 +8,7 @@ import (
 
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/refreshtoken"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 	"github.com/leadkart/leadkart-go/internal/identity/integrationevents"
 )
 
@@ -116,6 +117,78 @@ func (h *RevokeFamiliesOnSecurityChange) HandleMembershipDeactivated(
 	ctx context.Context, evt *integrationevents.MembershipDeactivatedV1,
 ) error {
 	return h.revokeForTenant(ctx, evt.PersonID.String(), evt.TenantIDClaim.String(), "membership_deactivated")
+}
+
+// tenantRevokePage is how many families one pass of the tenant cascade loads and
+// revokes before it asks the repository again; tenantRevokeMaxPages bounds the
+// passes (50 000 sessions at the default) so a bug cannot spin the handler.
+const (
+	tenantRevokePage     = 500
+	tenantRevokeMaxPages = 100
+)
+
+// HandleTenantSuspended handles `identity.tenant_suspended.v1`: every session of the
+// suspended company's members ends (login and refresh already refuse them; this
+// kills the families that exist). Access tokens already issued live out their own
+// expiry (600 s); that residual is recorded in ADR 0069.
+func (h *RevokeFamiliesOnSecurityChange) HandleTenantSuspended(
+	ctx context.Context, evt *integrationevents.TenantSuspendedV1,
+) error {
+	return h.revokeAllForTenant(ctx, evt.TenantID.String(), "tenant_suspended")
+}
+
+// HandleTenantDeleted handles `identity.tenant_deleted.v1` (the terminal hard
+// delete): same cascade. A tenant row that still has families cannot be deleted
+// (foreign key), so this is the defence for a future that removes the constraint.
+func (h *RevokeFamiliesOnSecurityChange) HandleTenantDeleted(
+	ctx context.Context, evt *integrationevents.TenantDeletedV1,
+) error {
+	return h.revokeAllForTenant(ctx, evt.TenantID.String(), "tenant_deleted")
+}
+
+// revokeAllForTenant revokes every active family bound to the tenant, a page at a
+// time. Each family is revoked in its own UpdateByID (one family row lock at a time,
+// never two: no lock-order edge with the person or membership paths). Revoked
+// families leave the active list, so the loop ends when the page is empty. Idempotent
+// like every cascade here: a redelivery finds nothing active, and Family.Revoke is a
+// no-op on an already revoked family.
+func (h *RevokeFamiliesOnSecurityChange) revokeAllForTenant(ctx context.Context, tenantID, reason string) error {
+	tid := tenant.ID(tenantID)
+	total := 0
+	for range tenantRevokeMaxPages {
+		page, err := h.families.ListActiveForTenant(ctx, tid, tenantRevokePage)
+		if err != nil {
+			return fmt.Errorf("subscribers: list families for tenant %s: %w", tenantID, err)
+		}
+		if len(page) == 0 {
+			if total > 0 {
+				h.log.InfoContext(ctx, "revoked families on tenant status change",
+					"tenant_id", tenantID, "reason", reason, "count", total)
+			}
+			return nil
+		}
+		now := h.now()
+		for _, f := range page {
+			fid := f.ID()
+			if err := h.families.UpdateByID(ctx, fid, func(family *refreshtoken.Family) (bool, error) {
+				if family.IsRevoked() {
+					return false, nil
+				}
+				if err := family.Revoke(reason, now); err != nil {
+					return false, err
+				}
+				return true, nil
+			}); err != nil {
+				h.log.ErrorContext(ctx, "revoke family failed",
+					"tenant_id", tenantID, "family_id", fid, "reason", reason, "err", err)
+				return fmt.Errorf("revoke family %s: %w", fid, err)
+			}
+			total++
+		}
+	}
+	// More than tenantRevokeMaxPages pages: return an error so the router retries
+	// (the next delivery continues with what is left).
+	return fmt.Errorf("subscribers: tenant %s still has active families after %d pages", tenantID, tenantRevokeMaxPages)
 }
 
 // revokeForTenant lists families for the Person + revokes ONLY those

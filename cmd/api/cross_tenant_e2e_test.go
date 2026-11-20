@@ -111,6 +111,13 @@ func newE2EFixtureWith(t *testing.T, now func() time.Time, cascade bool) e2eFixt
 // the strict rotation every other fixture runs).
 func newE2EFixtureGrace(t *testing.T, now func() time.Time, cascade bool, grace time.Duration) e2eFixture {
 	t.Helper()
+	return newE2EFixtureIdle(t, now, cascade, grace, 0)
+}
+
+// newE2EFixtureIdle is newE2EFixtureGrace plus the idle lifetime (Refresh.SlidingTTL);
+// zero leaves only the absolute lifetime (every older fixture's behaviour).
+func newE2EFixtureIdle(t *testing.T, now func() time.Time, cascade bool, grace, idle time.Duration) e2eFixture {
+	t.Helper()
 	pool := startWiredPostgresForHTTP(t)
 	cfg := config.AppConfig{
 		JWT: config.JWTConfig{
@@ -119,6 +126,7 @@ func newE2EFixtureGrace(t *testing.T, now func() time.Time, cascade bool, grace 
 		},
 		Refresh: config.RefreshConfig{
 			AbsoluteTTL: 14 * 24 * time.Hour,
+			SlidingTTL:  idle,
 			GraceWindow: grace,
 		},
 	}

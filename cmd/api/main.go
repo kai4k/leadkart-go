@@ -761,8 +761,8 @@ func buildIdentityApp(pool *pgxpool.Pool, hybridCache *cache.HybridCache, cfg co
 		App: app.Application{
 			Commands: app.Commands{
 				RegisterTenant:       command.NewRegisterTenantHandler(tx, tenants, persons, memberships, roles, now, newTenantID, newPersonID, newMembershipID).WithArgonGate(argonGate),
-				Login:                command.NewLoginHandler(authRouter, families, tenants, persons, permResolver, issuer, now, cfg.Refresh.AbsoluteTTL, dummyHash, newFamilyID, phantomLockout, tx).WithArgonGate(argonGate),
-				Refresh:              command.NewRefreshHandler(families, persons, memberships, tenants, permResolver, issuer, now, cfg.Refresh.AbsoluteTTL, cfg.Refresh.GraceWindow, successorKey),
+				Login:                command.NewLoginHandler(authRouter, families, tenants, persons, permResolver, issuer, now, cfg.Refresh.AbsoluteTTL, cfg.Refresh.SlidingTTL, dummyHash, newFamilyID, phantomLockout, tx).WithArgonGate(argonGate),
+				Refresh:              command.NewRefreshHandler(families, persons, memberships, tenants, permResolver, issuer, now, cfg.Refresh.AbsoluteTTL, cfg.Refresh.SlidingTTL, cfg.Refresh.GraceWindow, successorKey),
 				Logout:               command.NewLogoutHandler(families, now),
 				ChangePassword:       command.NewChangePasswordHandler(persons, families, tenants, tx, breachChecker, now).WithArgonGate(argonGate).WithAttemptLimiter(changePasswordAttempts),
 				RevokeSession:        command.NewRevokeSessionHandler(families, now),
