@@ -6,7 +6,7 @@ Go rebuild of LeadKart (multi-tenant Indian PCD pharma SaaS). Reference port fro
 
 **Phase 1.5 closed + Waves 1–9 shipped.** The Identity bounded context runs the full surface: register-tenant + login (with NIST-aligned account lockout) + refresh + logout, password + email change flows, 60+ HTTP routes, scoped-JWT impersonation (RFC 8693), role hierarchy + permission-elevation approval workflows, OpenAPI 3.1 spec as code-of-record with `Spectral` lint + drift gate, layer-boundary arch tests, EDA-driven email + audit-log enrichment.
 
-For the wave-by-wave delivery history (Phase 1.5 + Waves 1–9), see [`CLAUDE.md`](CLAUDE.md) § *Current state*. For architecture decisions, see [`docs/adr/`](docs/adr/) (50 ADRs through 0067, Michael Nygard format).
+For the wave-by-wave delivery history (Phase 1.5 + Waves 1–9), see [`CLAUDE.md`](CLAUDE.md) § *Current state*. Before a production deploy, read the [production checklist](docs/deploy/production-checklist.md). For architecture decisions, see [`docs/adr/`](docs/adr/) (50 ADRs through 0067, Michael Nygard format).
 
 **Next:** Phase 2 — Platform bounded context (marketplace + lead credits + verification calls). See [`BRD.md`](BRD.md) + the master plan.
 

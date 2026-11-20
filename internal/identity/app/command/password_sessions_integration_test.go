@@ -210,6 +210,14 @@ func TestPasswordResetConfirm_EndsEveryRefreshFamilyWithoutAWorker(t *testing.T)
 // after it, must not hand out an unflagged token from a revoked family. Whatever
 // the interleaving: the family ends revoked, and a refresh that succeeded carries
 // the OLD stamp (dead on arrival), never the new one. Run with -count=20.
+//
+// This test is an interleaving SWEEP, not a proof: the scheduler picks the
+// interleaving, so a single run may never hit the narrow one. The proof is the
+// deterministic sibling TestFamilyUpdate_RotationAndRevocationSerialiseOnTheFamilyRow
+// (the two writers are ordered by a barrier on the family row lock) together with
+// TestRefresh_FamilyRevokedAfterThePersonRead_IsRejected (the revoke lands exactly
+// between refresh's person read and its family re-read); this one guards against an
+// interleaving neither of them names.
 func TestPasswordChange_ConcurrentRefreshNeverYieldsAUsableTokenFromARevokedFamily(t *testing.T) {
 	t.Parallel()
 	r := newSessionRig(t)

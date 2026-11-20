@@ -13,6 +13,7 @@
 package main
 
 import (
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"sort"
@@ -150,6 +151,19 @@ func (f e2eFixture) loginAs(t *testing.T, k loginKind, password string) httpResp
 		map[string]string{"X-Forwarded-For": k.xff})
 }
 
+// assertLockCountdown pins a Retry-After to the lock it counts down: the lock is
+// person.LockoutDuration long and was set at some instant in [crossStart, done], so
+// the advertised seconds are within [LockoutDuration - ceil(done-crossStart),
+// LockoutDuration]. The tolerance is the measured duration of the run, never a guess.
+func assertLockCountdown(t *testing.T, what string, got int, crossStart, done time.Time) {
+	t.Helper()
+	full := int(person.LockoutDuration.Seconds())
+	elapsed := int(math.Ceil(done.Sub(crossStart).Seconds()))
+	if got > full || got < full-elapsed {
+		t.Errorf("%s: Retry-After = %d, want within [%d, %d] (lock %ds, run took <= %ds)", what, got, full-elapsed, full, full, elapsed)
+	}
+}
+
 // Through the real chain, every kind of address answers every failed attempt the
 // same: status, full body and every header (the countdown within a few seconds),
 // for twelve sequential wrong passwords (the tenth locks) and for the correct
@@ -162,14 +176,21 @@ func TestE2E_Login_EveryAddressKindAnswersIdenticallyThroughTheRealChain(t *test
 	type run struct {
 		answers []httpResp
 		afterOK httpResp // the correct password, once locked
+		// crossStart is the instant before the threshold-crossing request was sent,
+		// done is the instant the last answer arrived: the lock was set between them.
+		crossStart, done time.Time
 	}
 	runs := map[string]run{}
 	for _, k := range kinds {
 		var r run
-		for range attempts {
+		for i := range attempts {
+			if i == person.MaxFailedLogins-1 {
+				r.crossStart = time.Now()
+			}
 			r.answers = append(r.answers, f.loginAs(t, k, "Wrong-Password-1!"))
 		}
 		r.afterOK = f.loginAs(t, k, k.password)
+		r.done = time.Now()
 		runs[k.name] = r
 	}
 	ref := runs["unknown"]
@@ -185,13 +206,18 @@ func TestE2E_Login_EveryAddressKindAnswersIdenticallyThroughTheRealChain(t *test
 			if got, want := surfaceOf(r.answers[i]), surfaceOf(ref.answers[i]); got != want {
 				t.Errorf("%s, attempt %d:\n got  %+v\n want %+v", k.name, i+1, got, want)
 			}
-			if d := retryAfter(t, r.answers[i]) - retryAfter(t, ref.answers[i]); d < -5 || d > 5 {
-				t.Errorf("%s, attempt %d: Retry-After differs by %ds", k.name, i+1, d)
+			// Exact: a lock set between crossStart and done, LockoutDuration long, leaves a
+			// countdown of at most LockoutDuration (the lock cannot be longer: a phantom
+			// lock four seconds too long fails here) and of at least LockoutDuration minus
+			// the time the whole run took, rounded up (it cannot be shorter either).
+			if i >= person.MaxFailedLogins-1 {
+				assertLockCountdown(t, k.name+", attempt "+strconv.Itoa(i+1), retryAfter(t, r.answers[i]), r.crossStart, r.done)
 			}
 		}
 		if got, want := surfaceOf(r.afterOK), surfaceOf(ref.afterOK); got != want || r.afterOK.status != http.StatusLocked {
 			t.Errorf("%s, correct password once locked:\n got  %+v\n want %+v (423)", k.name, got, want)
 		}
+		assertLockCountdown(t, k.name+", correct password once locked", retryAfter(t, r.afterOK), r.crossStart, r.done)
 	}
 }
 
