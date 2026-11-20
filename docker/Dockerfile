@@ -28,8 +28,9 @@
 #              /health, /debug/pprof/*). HEALTHCHECK invokes `/api -healthcheck`
 #              against the admin listener — distroless static has no shell,
 #              so the binary itself is the probe (chainguard canonical pattern).
-#   worker   — river background jobs. Built only when cmd/worker exists
-#              (Phase 2+ Platform module). Today the COPY is a no-op guard.
+#   worker   — outbox forwarder + subscribers + River jobs. EXPOSE 9091 (worker
+#              admin: /alive). HEALTHCHECK invokes `/worker -healthcheck`. Part of
+#              production (docker/compose.prod.yml requires WORKER_IMAGE).
 #   migrate  — goose runner; image carries /migrate + /migrations sidecar.
 #              One-shot container — exits after `up` / `status` / etc.
 #
@@ -61,9 +62,9 @@ ARG VERSION=dev
 
 # Build with cache mounts for go build + go mod. Three binaries from one
 # `go build` invocation each (Go's compiler caches inter-package work).
-# The `if [ -d ... ]` guards future-proof the worker target — when
-# cmd/worker ships in v0.3 the build kicks in automatically without
-# Dockerfile churn.
+# cmd/worker exists and the worker image is part of production, so a missing
+# cmd/worker fails the build loudly (the old `if [ -d ... ]` guard would have
+# produced an image without /worker).
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     --mount=type=bind,target=. \
@@ -125,11 +126,10 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
 ENTRYPOINT ["/api"]
 
 # ===========================================================================
-# Stage 3 — Final stage: Worker (river background jobs — Phase 2+)
+# Stage 3 — Final stage: Worker (outbox forwarder + subscribers + River jobs)
 # ===========================================================================
-# Built only when cmd/worker exists in source. Today the COPY would fail
-# (no /out/worker) — keep target declared so Dockerfile shape is stable
-# across the v0.3 worker landing.
+# Part of production: without it no outbox row is delivered (see
+# docker/compose.prod.yml). Published by release.yml next to api + migrate.
 FROM cgr.dev/chainguard/static:latest AS worker
 
 ARG VERSION=dev
@@ -139,10 +139,18 @@ LABEL org.opencontainers.image.source="https://github.com/kai4k/leadkart-go"
 LABEL org.opencontainers.image.licenses="Proprietary"
 LABEL org.opencontainers.image.version=$VERSION
 
+ENV LEADKART_LISTEN__WORKER_ADMIN=":9091"
 ENV TZ="UTC"
 
 COPY --from=build /out/worker /worker
 USER nonroot:nonroot
+EXPOSE 9091
+
+# Same distroless pattern as the api: the binary is its own probe
+# (GET /alive on the worker admin listener). docker/compose.prod.yml sets
+# the identical healthcheck; baking it here covers `docker run` too.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3     CMD ["/worker", "-healthcheck"]
+
 ENTRYPOINT ["/worker"]
 
 # ===========================================================================

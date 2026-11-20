@@ -228,7 +228,7 @@ jobs:
     uses: ./.github/workflows/_migrations.yml
 
   # ---------------------------------------------------------------------------
-  # docker — build api + migrate images, then boot full compose + smoke.
+  # docker — build api + worker + migrate images, then boot full compose + smoke.
   # Two-job chain inside the reusable workflow (build → smoke).
   # ---------------------------------------------------------------------------
   docker:

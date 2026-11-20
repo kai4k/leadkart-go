@@ -30,9 +30,12 @@
 #   LEADKART_HTTP__TRUSTED_PROXIES            — the BFF's address / dedicated subnet, or "none"
 #   API_IMAGE                                 — ghcr.io/<org>/leadkart-go-api:<tag>
 #   WORKER_IMAGE                              — ghcr.io/<org>/leadkart-go-worker:<tag>
-#
-# Deployment checklist (one page, with the alerts to set): docs/deploy/production-checklist.md
 #   MIGRATE_IMAGE                             — ghcr.io/<org>/leadkart-go-migrate:<tag>
+#
+# All three images are built, signed and published by .github/workflows/release.yml
+# (TestArch_ProdComposeImagesAreReleased fails when this file pulls an image the
+# release does not build).
+# Deployment checklist (one page, with the alerts to set): docs/deploy/production-checklist.md
 # ============================================================================
 
 services:

@@ -16,8 +16,10 @@ name: Release
 #   Syft       = SPDX SBOM attested via cosign attest
 #   Trivy      = CRITICAL/HIGH gating + SARIF upload to Security tab
 #
-# Two images per release: api + migrate. (worker target lives in Dockerfile
-# but cmd/worker doesn't exist yet — image build guards conditionally.)
+# Three images per release: api + worker + migrate. docker/compose.prod.yml
+# requires all three (API_IMAGE, WORKER_IMAGE, MIGRATE_IMAGE); the test
+# TestArch_ProdComposeImagesAreReleased fails when a service image the compose
+# file pulls is not built by the matrix below.
 # ============================================================================
 
 on:
@@ -57,6 +59,7 @@ jobs:
       matrix:
         target:
           - api
+          - worker
           - migrate
 
     steps:
