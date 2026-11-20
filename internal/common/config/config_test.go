@@ -142,3 +142,56 @@ func writeFile(t *testing.T, path, content string) {
 		t.Fatalf("write %q: %v", path, err)
 	}
 }
+
+// arch-test:serial — uses t.Setenv (incompatible with t.Parallel)
+func TestLoad_HTTPAndRateLimitDefaults(t *testing.T) {
+	setEnv(t, minRequired())
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.HTTP.TrustedProxies != "" {
+		t.Fatalf("TrustedProxies default %q, want empty (trust nobody)", cfg.HTTP.TrustedProxies)
+	}
+	want := config.RateLimitConfig{
+		Login:                config.RouteLimit{PerMinute: 30, Burst: 10},
+		Refresh:              config.RouteLimit{PerMinute: 120, Burst: 30},
+		PasswordResetRequest: config.RouteLimit{PerMinute: 5, Burst: 5},
+		PasswordReset:        config.RouteLimit{PerMinute: 10, Burst: 5},
+		EmailChangeConfirm:   config.RouteLimit{PerMinute: 10, Burst: 5},
+		TenantRegistration:   config.RouteLimit{PerMinute: 10, Burst: 5},
+	}
+	if cfg.RateLimit != want {
+		t.Fatalf("RateLimit defaults = %+v, want %+v", cfg.RateLimit, want)
+	}
+}
+
+// arch-test:serial — uses t.Setenv (incompatible with t.Parallel)
+func TestLoad_HTTPAndRateLimitEnvOverrides(t *testing.T) {
+	setEnv(t, minRequired())
+	t.Setenv("LEADKART_HTTP__TRUSTED_PROXIES", "10.0.0.0/8")
+	t.Setenv("LEADKART_RATE_LIMIT__LOGIN__PER_MINUTE", "600")
+	t.Setenv("LEADKART_RATE_LIMIT__LOGIN__BURST", "50")
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.HTTP.TrustedProxies != "10.0.0.0/8" {
+		t.Fatalf("TrustedProxies = %q", cfg.HTTP.TrustedProxies)
+	}
+	if got := cfg.RateLimit.Login; got.PerMinute != 600 || got.Burst != 50 {
+		t.Fatalf("Login = %+v, want {600 50}", got)
+	}
+	if cfg.RateLimit.Refresh.PerMinute != 120 {
+		t.Fatalf("an untouched route lost its default: %+v", cfg.RateLimit.Refresh)
+	}
+}
+
+// arch-test:serial — uses t.Setenv (incompatible with t.Parallel)
+func TestLoad_RejectsBadTrustedProxies(t *testing.T) {
+	setEnv(t, minRequired())
+	t.Setenv("LEADKART_HTTP__TRUSTED_PROXIES", "10.0.0.0/33")
+	if _, err := config.Load(); err == nil {
+		t.Fatal("Load accepted an invalid CIDR")
+	}
+}

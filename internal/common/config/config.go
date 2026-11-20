@@ -55,6 +55,9 @@ type AppConfig struct {
 	JWT      JWTConfig      `koanf:"jwt"`
 	Refresh  RefreshConfig  `koanf:"refresh"`
 	OTel     OTelConfig     `koanf:"otel"`
+
+	HTTP      HTTPConfig      `koanf:"http"`
+	RateLimit RateLimitConfig `koanf:"rate_limit"`
 }
 
 // ListenConfig holds network bind addresses for the API + admin
@@ -118,6 +121,37 @@ type OTelConfig struct {
 	SampleRatio    float64 `koanf:"sample_ratio"` // 0.0 to 1.0
 }
 
+// HTTPConfig — public listener behaviour.
+//
+// TrustedProxies is a comma-separated list of CIDRs / bare IPs of the reverse
+// proxies (the web BFF, an ingress) whose X-Forwarded-For is believed (ADR
+// 0030 / 0068 D11). Only a request whose TCP peer is in the list has its
+// X-Forwarded-For read, rightmost-untrusted hop first. Empty (the default)
+// trusts nobody: every client is its socket address, so behind a BFF all
+// clients then share one rate-limit bucket. A /0 range is refused.
+type HTTPConfig struct {
+	TrustedProxies string `koanf:"trusted_proxies"`
+}
+
+// RouteLimit is one per-route, per-client token bucket: PerMinute is the
+// steady refill rate, Burst the bucket size. Both must be positive.
+type RouteLimit struct {
+	PerMinute float64 `koanf:"per_minute"`
+	Burst     int     `koanf:"burst"`
+}
+
+// RateLimitConfig — tighter per-client limits on the anonymous credential
+// routes, on top of the global per-IP limiter (ADR 0068 D11). In-memory per
+// process: with N replicas the effective limit is N times the setting.
+type RateLimitConfig struct {
+	Login                RouteLimit `koanf:"login"`                  // POST /api/v1/auth/login
+	Refresh              RouteLimit `koanf:"refresh"`                // POST /api/v1/auth/refresh
+	PasswordResetRequest RouteLimit `koanf:"password_reset_request"` // POST /api/v1/auth/request-password-reset
+	PasswordReset        RouteLimit `koanf:"password_reset"`         // POST /api/v1/auth/reset-password
+	EmailChangeConfirm   RouteLimit `koanf:"email_change_confirm"`   // POST /api/v1/auth/confirm-email-change
+	TenantRegistration   RouteLimit `koanf:"tenant_registration"`    // POST /api/v1/tenants
+}
+
 // Defaults returns the baseline AppConfig with safe non-production
 // values. Loader merges this first, then file, then env; env wins.
 func Defaults() AppConfig {
@@ -138,6 +172,14 @@ func Defaults() AppConfig {
 			ServiceName:    "leadkart-api",
 			ServiceVersion: "dev",
 			SampleRatio:    1.0,
+		},
+		RateLimit: RateLimitConfig{
+			Login:                RouteLimit{PerMinute: 30, Burst: 10},
+			Refresh:              RouteLimit{PerMinute: 120, Burst: 30},
+			PasswordResetRequest: RouteLimit{PerMinute: 5, Burst: 5},
+			PasswordReset:        RouteLimit{PerMinute: 10, Burst: 5},
+			EmailChangeConfirm:   RouteLimit{PerMinute: 10, Burst: 5},
+			TenantRegistration:   RouteLimit{PerMinute: 10, Burst: 5},
 		},
 	}
 }
@@ -215,8 +257,20 @@ func structToMap(cfg AppConfig) map[string]any {
 	for i, p := range cfg.JWT.PreviousKeys {
 		previous[i] = map[string]any{"key_id": p.KeyID, "signing_key": p.SigningKey}
 	}
+	rl := func(l RouteLimit) map[string]any {
+		return map[string]any{"per_minute": l.PerMinute, "burst": l.Burst}
+	}
 	return map[string]any{
-		"env": cfg.Env,
+		"env":  cfg.Env,
+		"http": map[string]any{"trusted_proxies": cfg.HTTP.TrustedProxies},
+		"rate_limit": map[string]any{
+			"login":                  rl(cfg.RateLimit.Login),
+			"refresh":                rl(cfg.RateLimit.Refresh),
+			"password_reset_request": rl(cfg.RateLimit.PasswordResetRequest),
+			"password_reset":         rl(cfg.RateLimit.PasswordReset),
+			"email_change_confirm":   rl(cfg.RateLimit.EmailChangeConfirm),
+			"tenant_registration":    rl(cfg.RateLimit.TenantRegistration),
+		},
 		"listen": map[string]any{
 			"api":          cfg.Listen.API,
 			"admin":        cfg.Listen.Admin,

@@ -20,6 +20,10 @@
 //	LEADKART_LISTEN__API          listen address (default ":8080")
 //	LEADKART_LISTEN__ADMIN        pprof + metrics listener (default ":9090")
 //	LEADKART_REFRESH__ABSOLUTE_TTL  default 336h (14d)
+//	LEADKART_HTTP__TRUSTED_PROXIES  CIDRs/IPs whose X-Forwarded-For is believed (default empty = none)
+//	LEADKART_RATE_LIMIT__<ROUTE>__PER_MINUTE / __BURST  per-route limits (LOGIN, REFRESH,
+//	                              PASSWORD_RESET_REQUEST, PASSWORD_RESET, EMAIL_CHANGE_CONFIRM,
+//	                              TENANT_REGISTRATION)
 //	LEADKART_CONFIG_FILE          optional YAML overlay before env
 package main
 
@@ -400,6 +404,13 @@ func run(ctx context.Context, stdout *os.File, _ []string) error {
 	// PostgresStore is durable across restarts + safe across replicas.
 	// InMemoryStore (the previous default) loses every record on
 	// rollout, defeating the idempotency contract during deploys.
+	trustedProxies, err := httpmw.ParseTrustedProxies(cfg.HTTP.TrustedProxies)
+	if err != nil {
+		return fmt.Errorf("trusted proxies: %w", err)
+	}
+	if len(trustedProxies) == 0 {
+		logger.Warn("no trusted proxies configured (LEADKART_HTTP__TRUSTED_PROXIES): X-Forwarded-For is ignored, so behind a BFF all clients share one rate-limit bucket")
+	}
 	mwChain := httpmw.PublicChain(httpmw.PublicChainConfig{
 		Logger:           logger,
 		IdempotencyStore: idempotency.NewPostgresStore(pool),
@@ -408,6 +419,9 @@ func run(ctx context.Context, stdout *os.File, _ []string) error {
 			RatePerSecond: apiIPRatePerSecond,
 			Burst:         apiIPRateBurst,
 		},
+		TrustedProxies:   trustedProxies,
+		RouteRateLimits:  routeRateLimits(cfg.RateLimit),
+		IdempotencyKeyer: authn.IdempotencyCallerKeyer(wiring.Issuer, func(r *http.Request) string { return httpmw.ClientIP(r, trustedProxies) }),
 	})
 	publicHandler := otelhttp.NewHandler(
 		mwChain(newServer(logger, wiring.App, platformWiring.App, inventoryAppInstance, crmWiring.App, tasksAppInstance, dispatchAppInstance, ordersAppInstance, notificationsAppInstance, wiring.Issuer, wiring.StampValidator)),
@@ -458,6 +472,23 @@ func run(ctx context.Context, stdout *os.File, _ []string) error {
 		return err
 	}
 	return nil
+}
+
+// routeRateLimits maps the per-route settings onto the exact "METHOD /path"
+// patterns the host registers (TestRouteRateLimits_KeysAreRegisteredRoutes pins
+// each key to a real route, so a renamed path cannot silently lose its limit).
+func routeRateLimits(rl config.RateLimitConfig) httpmw.RouteRateLimits {
+	perSecond := func(l config.RouteLimit) httpmw.LimiterConfig {
+		return httpmw.LimiterConfig{RatePerSecond: l.PerMinute / 60, Burst: l.Burst}
+	}
+	return httpmw.RouteRateLimits{
+		"POST /api/v1/auth/login":                  perSecond(rl.Login),
+		"POST /api/v1/auth/refresh":                perSecond(rl.Refresh),
+		"POST /api/v1/auth/request-password-reset": perSecond(rl.PasswordResetRequest),
+		"POST /api/v1/auth/reset-password":         perSecond(rl.PasswordReset),
+		"POST /api/v1/auth/confirm-email-change":   perSecond(rl.EmailChangeConfirm),
+		"POST /api/v1/tenants":                     perSecond(rl.TenantRegistration),
+	}
 }
 
 // newServer builds the public HTTP handler tree per Mat Ryer 2024.

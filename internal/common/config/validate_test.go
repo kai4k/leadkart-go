@@ -232,3 +232,44 @@ func TestValidate_AcceptsHighEntropyJWTKey(t *testing.T) {
 		t.Fatalf("hex 32-byte key should pass: %v", err)
 	}
 }
+
+func TestValidate_TrustedProxies(t *testing.T) {
+	t.Parallel()
+	for _, in := range []string{"", "10.0.0.0/8, 127.0.0.1, ::1"} {
+		c := validBaseConfig()
+		c.HTTP.TrustedProxies = in
+		if err := config.Validate(c); err != nil {
+			t.Errorf("TrustedProxies=%q: %v", in, err)
+		}
+	}
+	for _, in := range []string{"10.0.0.0/33", "not-an-ip", "0.0.0.0/0"} {
+		c := validBaseConfig()
+		c.HTTP.TrustedProxies = in
+		err := config.Validate(c)
+		if err == nil || !strings.Contains(err.Error(), "HTTP.TrustedProxies") {
+			t.Errorf("TrustedProxies=%q: err = %v, want a TrustedProxies error", in, err)
+		}
+	}
+}
+
+func TestValidate_RateLimitRoutesNeedPositiveRateAndBurst(t *testing.T) {
+	t.Parallel()
+	set := map[string]func(*config.RateLimitConfig, config.RouteLimit){
+		"login":                  func(r *config.RateLimitConfig, l config.RouteLimit) { r.Login = l },
+		"refresh":                func(r *config.RateLimitConfig, l config.RouteLimit) { r.Refresh = l },
+		"password_reset_request": func(r *config.RateLimitConfig, l config.RouteLimit) { r.PasswordResetRequest = l },
+		"password_reset":         func(r *config.RateLimitConfig, l config.RouteLimit) { r.PasswordReset = l },
+		"email_change_confirm":   func(r *config.RateLimitConfig, l config.RouteLimit) { r.EmailChangeConfirm = l },
+		"tenant_registration":    func(r *config.RateLimitConfig, l config.RouteLimit) { r.TenantRegistration = l },
+	}
+	for name, apply := range set {
+		for _, bad := range []config.RouteLimit{{PerMinute: 0, Burst: 5}, {PerMinute: 5, Burst: 0}, {PerMinute: -1, Burst: 5}} {
+			c := validBaseConfig()
+			apply(&c.RateLimit, bad)
+			err := config.Validate(c)
+			if err == nil || !strings.Contains(err.Error(), "RateLimit."+name) {
+				t.Errorf("%s %+v: err = %v, want a RateLimit.%s error", name, bad, err, name)
+			}
+		}
+	}
+}

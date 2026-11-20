@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"math"
 	"strings"
+
+	"github.com/leadkart/leadkart-go/internal/common/httpmw"
 )
 
 // placeholderMarkers are CASE-INSENSITIVE SUBSTRINGS the validator
@@ -122,11 +124,40 @@ func Validate(cfg AppConfig) error {
 		return errors.New("config: Refresh.FamilyCap must be ≥1")
 	}
 
+	if err := validateHTTP(cfg); err != nil {
+		return err
+	}
+
 	// OTel sanity.
 	if cfg.OTel.SampleRatio < 0 || cfg.OTel.SampleRatio > 1 {
 		return fmt.Errorf("config: OTel.SampleRatio must be in [0,1] (got %v)", cfg.OTel.SampleRatio)
 	}
 
+	return nil
+}
+
+// validateHTTP gates the trusted-proxy list (empty = trust nobody) and the
+// per-route rate limits.
+func validateHTTP(cfg AppConfig) error {
+	if _, err := httpmw.ParseTrustedProxies(cfg.HTTP.TrustedProxies); err != nil {
+		return fmt.Errorf("config: HTTP.TrustedProxies: %w", err)
+	}
+	for _, r := range []struct {
+		name  string
+		limit RouteLimit
+	}{
+		{"login", cfg.RateLimit.Login},
+		{"refresh", cfg.RateLimit.Refresh},
+		{"password_reset_request", cfg.RateLimit.PasswordResetRequest},
+		{"password_reset", cfg.RateLimit.PasswordReset},
+		{"email_change_confirm", cfg.RateLimit.EmailChangeConfirm},
+		{"tenant_registration", cfg.RateLimit.TenantRegistration},
+	} {
+		if !(r.limit.PerMinute > 0) || r.limit.Burst < 1 { // !(>0) also rejects NaN
+			return fmt.Errorf("config: RateLimit.%s needs PerMinute > 0 and Burst >= 1 (got %v, %d)",
+				r.name, r.limit.PerMinute, r.limit.Burst)
+		}
+	}
 	return nil
 }
 

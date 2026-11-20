@@ -3,9 +3,11 @@ package httpmw
 import (
 	"log/slog"
 	"net/http"
+	"net/netip"
 	"time"
 
 	"github.com/leadkart/leadkart-go/internal/common/idempotency"
+	"github.com/leadkart/leadkart-go/internal/common/tenancy"
 )
 
 // Middleware is the canonical http.Handler-shaped middleware
@@ -67,10 +69,22 @@ type PublicChainConfig struct {
 	// per security.md.
 	IPRateLimit LimiterConfig
 
-	// IdempotencyKeyer overrides the default tenant→IP fallback used by
-	// the idempotency middleware to scope X-Command-Id keys per caller.
-	// Nil → idempotency.DefaultCallerKeyer.
+	// IdempotencyKeyer overrides the default scope used by the idempotency
+	// middleware to key X-Command-Id records per caller. Nil → the tenant from
+	// ctx (never set this early in the chain) else "anon:<client ip>" with the
+	// trusted-proxy client address. cmd/api passes authn.IdempotencyCallerKeyer
+	// so the scope is the verified tenant + person + route.
 	IdempotencyKeyer idempotency.CallerKeyer
+
+	// TrustedProxies are the reverse proxies (the web BFF, an ingress) whose
+	// X-Forwarded-For is believed; see [ClientIP]. Empty = trust nobody: every
+	// client is keyed by its socket address.
+	TrustedProxies []netip.Prefix
+
+	// RouteRateLimits are the tighter per-route buckets for credential and
+	// abuse-prone anonymous routes, applied after the global IP limiter. Empty =
+	// none.
+	RouteRateLimits RouteRateLimits
 }
 
 // PublicChain returns the canonical middleware chain for the public
@@ -81,7 +95,8 @@ type PublicChainConfig struct {
 //	RequestLog        — start/end structured log line
 //	Recover           — catch panics → 500
 //	BodyLimit         — 1 MiB request-body cap (OWASP API4)
-//	IPRateLimit       — per-IP token bucket
+//	IPRateLimit       — per-client-IP token bucket (trusted-proxy aware)
+//	RouteRateLimit    — tighter per-route, per-client buckets (when configured)
 //	Idempotency       — X-Command-Id replay protection
 //	(per-route auth + handler — wired by ports.AddRoutes)
 //
@@ -106,15 +121,33 @@ func PublicChain(cfg PublicChainConfig) Middleware {
 		panic("httpmw: PublicChain IPRateLimit must set RatePerSecond and Burst")
 	}
 
-	ipLimiter := NewRateLimiter(cfg.IPRateLimit, IPLimiterKeyer)
+	keyer := ClientIPKeyer(cfg.TrustedProxies)
+	ipLimiter := NewRateLimiter(cfg.IPRateLimit, keyer)
 
-	return Chain(
+	idemKeyer := cfg.IdempotencyKeyer
+	if idemKeyer == nil {
+		idemKeyer = func(r *http.Request) string {
+			if id, ok := tenancy.FromContext(r.Context()); ok && !id.IsZero() {
+				return "tenant:" + id.String()
+			}
+			if ip := ClientIP(r, cfg.TrustedProxies); ip != "" {
+				return "anon:" + ip
+			}
+			return ""
+		}
+	}
+
+	mws := []Middleware{
 		Correlation(),
 		SecurityHeaders(),
 		RequestLog(cfg.Logger),
 		Recover(cfg.Logger),
 		BodyLimit(DefaultMaxBodyBytes),
 		ipLimiter.Middleware(),
-		idempotency.Middleware(cfg.IdempotencyStore, cfg.Now, cfg.IdempotencyTTL, cfg.IdempotencyKeyer),
-	)
+	}
+	if len(cfg.RouteRateLimits) > 0 {
+		mws = append(mws, RouteRateLimit(cfg.RouteRateLimits, keyer))
+	}
+	mws = append(mws, idempotency.Middleware(cfg.IdempotencyStore, cfg.Now, cfg.IdempotencyTTL, idemKeyer))
+	return Chain(mws...)
 }

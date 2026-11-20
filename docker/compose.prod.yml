@@ -147,6 +147,8 @@ services:
       LEADKART_JWT__KEY_ID: "${JWT_KEY_ID}"
       LEADKART_JWT__SIGNING_KEY: "${JWT_SIGNING_KEY}"
       LEADKART_REFRESH__ABSOLUTE_TTL: "336h"
+      # CIDRs/IPs of the BFF (and any ingress) in front of the api; empty = trust nobody.
+      LEADKART_HTTP__TRUSTED_PROXIES: "${LEADKART_HTTP__TRUSTED_PROXIES:-}"
       TZ: "UTC"
     healthcheck:
       test: ["CMD", "/api", "-healthcheck"]
