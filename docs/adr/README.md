@@ -59,4 +59,6 @@ One decision per file, Michael Nygard format (Context / Decision / Consequences 
 | 0068 | Authorization hardening — tenant.admin implication, X-Tenant-Id, must-change enforcement, refresh grace | Accepted |
 | 0069 | Rank hierarchy and grant authority — tiers, act-downward, grant ceiling, role edits act on holders, approver rule, owner invariants | Accepted |
 
+Companion to 0068 and 0069 (not an ADR): [every API change the web BFF must handle](../BFF_API_CHANGES.md).
+
 ADRs 0011–0026 + 0032 land as the relevant code lands per the master plan.

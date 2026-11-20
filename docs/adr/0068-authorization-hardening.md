@@ -1,6 +1,6 @@
 # ADR 0068 — Authorization hardening: tenant.admin implication, self-service rules, X-Tenant-Id scoping, must-change enforcement, refresh grace
 
-**Status:** Accepted
+**Status:** Accepted; text is as built at merge (this ADR was written on the unmerged branch `fix/identity-authz-and-bff-security` and is not on `main`, so it was corrected in place until the merge; it is sealed from then on)
 **Date:** 2026-11-19
 **Supersedes (in part):** [ADR 0036](0036-permission-model.md) (resolution rule), [ADR 0053](0053-must-change-password-and-account-lockout.md) (deferred work #1), [ADR 0039](0039-per-request-scope-selection.md) (no-header operator scope)
 **Builds on:** [ADR 0044](0044-enumeration-safety-404-on-no-access.md), [ADR 0045](0045-scoped-jwt-impersonation-act-claim.md), [ADR 0055](0055-permission-elevation-approval-workflow.md)
@@ -116,6 +116,9 @@ No cycle: edges only go (A) to (B) to (C) to (D) to (E), and (D) to (F); nothing
 
 ## Consequences
 
+Every API change the web BFF must handle, in one table: [bff-consequences-0068-0069.md](../BFF_API_CHANGES.md).
+
+
 - Ordinary members (for example a Sales Executive) lose the tenant directory (`GET /users`, `GET /roles`) and tenant profile (`GET /tenants/{id}`) unless granted `*.view`.
 - The web's operator console is the only tenant-registration caller; anonymous registration is gone.
 - The default password policy requires all four character classes, contrary to NIST 800-63B composition guidance; the stored policy is enforced as is, and the owner may relax `DefaultPasswordPolicy` later.
@@ -125,7 +128,7 @@ No cycle: edges only go (A) to (B) to (C) to (D) to (E), and (D) to (F); nothing
 
 ## Follow-up work (not in this ADR's scope)
 
-- **No last-CompanyOwner protection.** The domain has no invariant preventing the last owner being deactivated by a `users.deactivate` holder. A domain invariant is follow-up work.
+- ~~No last-CompanyOwner protection.~~ Done by [ADR 0069](0069-rank-hierarchy-and-grant-authority.md) D7: the last active owner cannot be deactivated, have the owner role revoked or be anonymised (409 `last_owner_protected`).
 - **Impersonation session store is in memory**, so the D9 liveness check is only correct with a single replica (acceptable for v0.2, ADR 0030). A Redis-backed store is follow-up work.
 - **Redis-backed rate limiter** (D11) is deferred with ADR 0030; limits are per replica until then (N replicas admit N times the configured rate). The failed-login counters (D12) are in Postgres and already shared.
 

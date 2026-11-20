@@ -1,6 +1,6 @@
 # ADR 0069 — Rank hierarchy and grant authority: tiers, acting downward, the grant ceiling, approvals and owner invariants
 
-**Status:** Accepted
+**Status:** Accepted; text is as built at merge (this ADR was written on the unmerged branch `fix/identity-authz-and-bff-security` and is not on `main`, so it was corrected in place until the merge; it is sealed from then on)
 **Date:** 2026-11-20
 **Supersedes (in part):** [ADR 0055](0055-permission-elevation-approval-workflow.md) §4 (approver rule) and §8 (approve/deny inline check); amends [ADR 0068](0068-authorization-hardening.md) D3 (re-stated in the domain), D4 (moved into commands, symmetric, delta-based) and D5 (the permission-request routes stay authentication-only at the route; the authorisation lives in the commands' policy)
 **Builds on:** [ADR 0036](0036-permission-model.md), [ADR 0045](0045-scoped-jwt-impersonation-act-claim.md), [ADR 0058](0058-role-hierarchy-as-join-table-aggregate.md), [ADR 0062](0062-tdl-test-pyramid-fakes-canon.md), [ADR 0068](0068-authorization-hardening.md)
@@ -236,6 +236,9 @@ Rulings made by the owner on **2026-11-20**. They are decisions, not defaults: t
 Still open, NOT decided here: whether an impersonation session, or an operator acting in a tenant scope, may create members (item 25).
 
 ## Consequences
+
+Every API change the web BFF must handle, in one table: [bff-consequences-0068-0069.md](../BFF_API_CHANGES.md).
+
 
 * **Front-end.** Hide an action on a member whose `rank` is not strictly greater than the caller's (owners: also on owners) (`/auth/me/capabilities` `rank`, `tier`). Treat 401 `stale_token` with `WWW-Authenticate` as "refresh silently": the session survives an authority change and the refreshed token carries the new rank and permissions; a deactivated member's refresh is refused. The approver queue items carry `can_approve`: enable Approve only when it is true, Deny always. Approve and deny answer 404 to a caller who may not decide the request. Role edits can answer 403 `insufficient_rank` / `self_modification_forbidden` (holders), 422 `role_level_breaks_reporting`, 409 `role_in_use`; `PATCH /roles/{id}` with no `name` and no `hierarchy_level` is 400 `invalid_body`. Reactivating a person who is active in another company is 409 `person_active_elsewhere`. An impersonation token answers 401 `stale_token` once its session is ended. 409 `person_memberships_changing` is retryable.
 * Existing tenants are re-tiered only where pristine; Administrators of existing tenants do not gain `tenant.admin`; custom roles keep their levels and permissions.
