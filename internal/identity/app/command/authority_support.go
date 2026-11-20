@@ -343,3 +343,13 @@ func translateAuthorityWrite(op string, err error) error {
 	}
 	return fmt.Errorf("%s: %w", op, err)
 }
+
+// lockPerson takes the person's row lock (FOR NO KEY UPDATE, the lock a person
+// write takes) for the rest of the transaction without changing anything. Order
+// everywhere: tenant authority lock, membership row, THEN person row.
+func (w authorityWriter) lockPerson(ctx context.Context, id person.ID) error {
+	if err := w.facts.persons.UpdateByID(ctx, id, func(*person.Person) (bool, error) { return false, nil }); err != nil {
+		return fmt.Errorf("lock person %s: %w", id, err)
+	}
+	return nil
+}

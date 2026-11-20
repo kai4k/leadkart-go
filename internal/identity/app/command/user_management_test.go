@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/leadkart/leadkart-go/internal/identity/app/command"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/authority"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership/membershiptest"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
@@ -41,8 +42,9 @@ func TestUpdateUserProfile_Succeeds(t *testing.T) {
 	m := newMembership(t)
 	_ = repo.Add(t.Context(), m) // arch-test:ignore-err - test fixture setup
 
-	h := command.NewUpdateUserProfileHandler(repo, func() time.Time { return testNow })
+	h := command.NewUpdateUserProfileHandler(fakeUoW{}, &fakeAuthorityLock{}, repo, roletest.NewFakeRepository(), anyPersons{}, func() time.Time { return testNow })
 	if err := h.Handle(t.Context(), command.UpdateUserProfileCommand{
+		Actor:         actorAs(t, m.ID(), authority.RankUser), // editing their own profile
 		TenantID:      tenant.ID("33333333-3333-3333-3333-333333333333"),
 		MembershipID:  m.ID(),
 		Designation:   "Sales Manager",
@@ -62,8 +64,10 @@ func TestUpdateUserProfile_Succeeds(t *testing.T) {
 func TestUpdateUserProfile_NotFound(t *testing.T) {
 	t.Parallel()
 	repo := newFakeMembershipRepo()
-	h := command.NewUpdateUserProfileHandler(repo, func() time.Time { return testNow })
+	roles := roletest.NewFakeRepository()
+	h := command.NewUpdateUserProfileHandler(fakeUoW{}, &fakeAuthorityLock{}, repo, roles, anyPersons{}, func() time.Time { return testNow })
 	err := h.Handle(t.Context(), command.UpdateUserProfileCommand{
+		Actor:        seedAdmin(t, repo, roles),
 		TenantID:     tenant.ID("33333333-3333-3333-3333-333333333333"),
 		MembershipID: membership.ID("99999999-9999-9999-9999-999999999999"),
 	})
@@ -144,7 +148,9 @@ func TestNewHandlers_PanicOnNilRepo(t *testing.T) {
 		name string
 		fn   func()
 	}{
-		{"UpdateUserProfile", func() { _ = command.NewUpdateUserProfileHandler(nil, func() time.Time { return testNow }) }},
+		{"UpdateUserProfile", func() {
+			_ = command.NewUpdateUserProfileHandler(fakeUoW{}, &fakeAuthorityLock{}, nil, roletest.NewFakeRepository(), anyPersons{}, func() time.Time { return testNow }) // arch-test:ignore-err - constructor panics, return unused
+		}},
 		{"DeactivateUser", func() {
 			_ = command.NewDeactivateUserHandler(fakeUoW{}, &fakeAuthorityLock{}, nil, roletest.NewFakeRepository(), anyPersons{}, func() time.Time { return testNow }) // arch-test:ignore-err - constructor panics, return unused
 		}},
@@ -178,11 +184,11 @@ func TestUserManagementHandlers_InputRejections(t *testing.T) {
 		fn   func() error
 	}{
 		{"UpdateUserProfile zero tenant", func() error {
-			return command.NewUpdateUserProfileHandler(newFakeMembershipRepo(), func() time.Time { return testNow }).Handle(
+			return command.NewUpdateUserProfileHandler(fakeUoW{}, &fakeAuthorityLock{}, newFakeMembershipRepo(), roletest.NewFakeRepository(), anyPersons{}, func() time.Time { return testNow }).Handle(
 				t.Context(), command.UpdateUserProfileCommand{TenantID: zeroTID, MembershipID: someMID})
 		}},
 		{"UpdateUserProfile zero membership", func() error {
-			return command.NewUpdateUserProfileHandler(newFakeMembershipRepo(), func() time.Time { return testNow }).Handle(
+			return command.NewUpdateUserProfileHandler(fakeUoW{}, &fakeAuthorityLock{}, newFakeMembershipRepo(), roletest.NewFakeRepository(), anyPersons{}, func() time.Time { return testNow }).Handle(
 				t.Context(), command.UpdateUserProfileCommand{TenantID: someTID, MembershipID: zeroMID})
 		}},
 		{"DeactivateUser zero tenant", func() error {
@@ -277,8 +283,9 @@ func TestUpdateUserProfile_HappyPath_NoLengthRejection(t *testing.T) {
 	_ = repo.Add(t.Context(), m) // arch-test:ignore-err
 
 	longMsg := strings.Repeat("a", 500)
-	h := command.NewUpdateUserProfileHandler(repo, func() time.Time { return testNow })
+	h := command.NewUpdateUserProfileHandler(fakeUoW{}, &fakeAuthorityLock{}, repo, roletest.NewFakeRepository(), anyPersons{}, func() time.Time { return testNow })
 	if err := h.Handle(t.Context(), command.UpdateUserProfileCommand{
+		Actor:         actorAs(t, m.ID(), authority.RankUser),
 		TenantID:      tenant.ID("33333333-3333-3333-3333-333333333333"),
 		MembershipID:  m.ID(),
 		Designation:   "Sales Manager",

@@ -31,3 +31,6 @@ var ErrManagerNotEligible = errs.New(errs.KindInvalidInput, "authority", "manage
 
 // ErrRoleParentNotEligible is returned when the proposed parent role is not more senior than its child.
 var ErrRoleParentNotEligible = errs.New(errs.KindInvalidInput, "authority", "a parent role must be more senior than its child")
+
+// ErrOwnershipAuthorityRequired is returned when a cross-tenant operator under the operator exemption (R3) tries to change who OWNS a customer tenant (the Company Owner role, tenant.admin, an owner's status) without platform.tenants.ownership.
+var ErrOwnershipAuthorityRequired = errs.New(errs.KindPermissionDenied, "authority", "changing a tenant's ownership from outside it needs platform.tenants.ownership")

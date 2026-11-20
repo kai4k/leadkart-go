@@ -7,6 +7,7 @@ import (
 
 	"github.com/leadkart/leadkart-go/internal/identity/app/command"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/authority"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person/persontest"
 )
@@ -78,5 +79,55 @@ func TestPersonChangeGuard_SecondOwnerAndNoMembershipsAllowTheChange(t *testing.
 	var zero command.PersonChangeGuard
 	if err := zero.Run(t.Context(), lone.ID(), func(context.Context) error { return nil }); err == nil {
 		t.Fatal("zero guard ran the change")
+	}
+}
+
+// scriptedMemberships answers ListAllForPerson from a script (the last entry
+// repeats), simulating memberships that change between the guard's reads.
+type scriptedMemberships struct {
+	membership.Repository
+	lists [][]*membership.Membership
+	calls int
+}
+
+func (s *scriptedMemberships) ListAllForPerson(context.Context, person.ID) ([]*membership.Membership, error) {
+	i := min(s.calls, len(s.lists)-1)
+	s.calls++
+	return s.lists[i], nil
+}
+
+// The guard takes the person row, re-reads the memberships inside the change
+// transaction, and starts over when their active set is not the one it checked.
+func TestPersonChangeGuard_RestartsWhenTheActiveSetChangedAndNeverAppliesOnAStaleCheck(t *testing.T) {
+	t.Parallel()
+	w := newAuthzWorld(t)
+	persons := persontest.NewFakeRepository()
+	m := w.member(t, w.exec) // an active, non-owner membership: passes the last-owner check
+	p := personFor(t, persons, m.PersonID())
+	for name, c := range map[string]struct {
+		script       [][]*membership.Membership
+		wantApplied  int
+		wantErr      error
+		wantListCall int
+	}{
+		"stable: checked once, re-read once, applied once": {[][]*membership.Membership{{m}}, 1, nil, 2},
+		"one reactivation between the check and the change: the first attempt is dropped": {
+			[][]*membership.Membership{{}, {m}, {m}, {m}}, 1, nil, 4},
+		"it never settles: nothing is applied": {
+			[][]*membership.Membership{{}, {m}, {}, {m}, {}, {m}}, 0, command.ErrPersonMembershipsChanging, 6},
+	} {
+		repo := &scriptedMemberships{Repository: w.members, lists: c.script}
+		guard := command.NewPersonChangeGuard(fakeUoW{}, w.lock, repo, w.roles, persons, awClock)
+		applied := 0
+		err := guard.Run(t.Context(), p.ID(), func(context.Context) error { applied++; return nil })
+		if !errors.Is(err, c.wantErr) || (c.wantErr == nil && err != nil) {
+			t.Errorf("%s: err = %v, want %v", name, err, c.wantErr)
+		}
+		if applied != c.wantApplied {
+			t.Errorf("%s: change applied %d times, want %d", name, applied, c.wantApplied)
+		}
+		if repo.calls != c.wantListCall {
+			t.Errorf("%s: memberships listed %d times, want %d", name, repo.calls, c.wantListCall)
+		}
 	}
 }

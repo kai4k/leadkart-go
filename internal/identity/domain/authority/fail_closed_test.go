@@ -59,8 +59,8 @@ func TestOperator_InOwnTenantFollowsRank(t *testing.T) {
 	if err := op.MayChangeOverrides(mkMember(t, 35, tP, true, ""), authority.Overrides{Granted: grants(p.Meta.TenantAdmin)}); !errors.Is(err, authority.ErrGrantExceedsAuthority) {
 		t.Errorf("operator conferring tenant.admin inside its own tenant: %v, want grant exceeds authority", err)
 	}
-	if err := op.MayChangeOverrides(foreignUser, authority.Overrides{Granted: grants(p.Meta.TenantAdmin)}); err != nil {
-		t.Errorf("operator conferring tenant.admin in another tenant: %v, want nil", err)
+	if err := op.MayChangeOverrides(foreignUser, authority.Overrides{Granted: grants(p.Meta.TenantAdmin)}); !errors.Is(err, authority.ErrOwnershipAuthorityRequired) {
+		t.Errorf("operator conferring tenant.admin in another tenant: %v, want ownership authority required (platform.tenants.ownership)", err)
 	}
 	if err := op.MayAssignRole(mkMember(t, 34, tP, true, ""), ownerR); !errors.Is(err, authority.ErrInsufficientRank) {
 		t.Errorf("operator assigning CompanyOwner inside own tenant: %v, want insufficient rank", err)

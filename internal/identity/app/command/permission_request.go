@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/google/uuid"
@@ -307,6 +308,17 @@ func (h ApprovePermissionRequestHandler) Handle(ctx context.Context, cmd Approve
 		if err != nil {
 			return err
 		}
+		expiresAt := now.Add(time.Duration(req.DurationDays()) * 24 * time.Hour)
+		// A name on the requester's REVOKED list is a deliberate "this member must
+		// not have it": approving it is an un-revoke and needs the authority to
+		// change their overrides (act on the member, hold the name under the
+		// ceiling rules) on top of the approval rule. Still an authority decision,
+		// so it precedes the state checks.
+		if permission.IsRequestable(perm.Name()) && slices.Contains(requester.Overrides().Revoked, perm.Name()) {
+			if err := mayUnrevoke(actor, requester, perm, expiresAt); err != nil {
+				return err
+			}
+		}
 		if req.State() != permissionrequest.StatePending {
 			return ErrPermissionRequestNotPending
 		}
@@ -316,7 +328,6 @@ func (h ApprovePermissionRequestHandler) Handle(ctx context.Context, cmd Approve
 		if !requester.IsActive() {
 			return ErrPermissionRequestRequesterInactive
 		}
-		expiresAt := now.Add(time.Duration(req.DurationDays()) * 24 * time.Hour)
 		overrideID := h.newOverrideID()
 		if err := h.requests.UpdateByID(ctx, cmd.TenantID, cmd.RequestID, func(loaded *permissionrequest.Request) (bool, error) {
 			return true, loaded.Approve(cmd.Actor.MembershipID(), cmd.DecisionReason, overrideID, expiresAt, now)
@@ -345,6 +356,21 @@ func (h ApprovePermissionRequestHandler) Handle(ctx context.Context, cmd Approve
 		return ErrPermissionRequestNotFound
 	}
 	return fmt.Errorf("approve_permission_request: %w", err)
+}
+
+// mayUnrevoke decides the un-revoke an approval of a revoked name amounts to:
+// the override state approvedOverrides would write, put to
+// [authority.Actor.MayChangeOverrides] exactly like an overrides replace.
+func mayUnrevoke(actor authority.Actor, requester authority.Member, perm *permission.Permission, expiresAt time.Time) error {
+	granted, revoked, err := approvedOverrides(requester, perm, expiresAt)
+	if err != nil {
+		return err
+	}
+	after := authority.Overrides{Granted: make([]authority.Override, 0, len(granted)), Revoked: authority.PermissionNames(revoked)}
+	for _, g := range granted {
+		after.Granted = append(after.Granted, authority.Override{Name: g.Permission.Name(), ExpiresAt: g.ExpiresAt})
+	}
+	return actor.MayChangeOverrides(requester, after)
 }
 
 // approvedOverrides is the requester's override state after the approval, as

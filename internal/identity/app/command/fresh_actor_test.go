@@ -319,3 +319,124 @@ func TestAssignRole_AnOwnerDemotedToManagerKeepsOnlyManagerRank(t *testing.T) {
 		t.Error("the refused assignment changed the target")
 	}
 }
+
+// ----- profile edits of other members ---------------------------------------
+
+// Editing ANOTHER member's profile is an authority decision (MayActOn); editing
+// one's own is unchanged.
+func TestUpdateUserProfile_OtherMembersAreRankGated(t *testing.T) {
+	t.Parallel()
+	w := newAuthzWorld(t)
+	edit := func(actor authority.Actor, target *membership.Membership) error {
+		return command.NewUpdateUserProfileHandler(fakeUoW{}, w.lock, w.members, w.roles, anyPersons{rotations: &w.rotations}, awClock).Handle(t.Context(),
+			command.UpdateUserProfileCommand{TenantID: awTenant, MembershipID: target.ID(), Designation: "edited", Actor: actor})
+	}
+	hr := w.member(t, w.manager) // identity.users.update by role or override, rank 20
+	hrActor := actorAs(t, hr.ID(), authority.RankManager, permission.IdentityPermissions.Users.Update)
+	owner := w.member(t, w.owner)
+	admin := w.member(t, w.admin)
+	peer := w.member(t, w.manager)
+	exec := w.member(t, w.exec)
+
+	for name, target := range map[string]*membership.Membership{"an owner": owner, "an Administrator": admin, "a peer manager": peer} {
+		if err := edit(hrActor, target); !isErr(err, authority.ErrInsufficientRank) {
+			t.Errorf("a manager edits %s's profile: %v, want ErrInsufficientRank", name, err)
+		}
+		if target.Designation() == "edited" {
+			t.Errorf("the refused edit of %s's profile was written", name)
+		}
+	}
+	if err := edit(hrActor, exec); err != nil || exec.Designation() != "edited" {
+		t.Errorf("a manager edits an executive's profile: %v (designation %q), want allowed", err, exec.Designation())
+	}
+	// Self-edit is unchanged, for any rank.
+	self := w.member(t, w.exec)
+	if err := edit(actorAs(t, self.ID(), authority.RankUser), self); err != nil || self.Designation() != "edited" {
+		t.Errorf("an executive edits their own profile: %v", err)
+	}
+	// The edit runs under the tenant lock and re-reads the acting member.
+	if w.lock.calls == 0 {
+		t.Error("profile edits do not take the tenant authority lock")
+	}
+	gone := actorAs(t, membership.ID(awID(88888)), authority.RankOwner, tenantAdminEffective()...)
+	if err := edit(gone, exec); !isErr(err, authority.ErrNoAuthority) {
+		t.Errorf("a stale actor edits a profile: %v, want ErrNoAuthority", err)
+	}
+	if err := edit(authority.Actor{}, exec); !isErr(err, authority.ErrNoAuthority) {
+		t.Errorf("zero actor: %v, want ErrNoAuthority", err)
+	}
+	if len(w.rotations) != 0 {
+		t.Errorf("a profile edit rotated stamps: %v", w.rotations)
+	}
+}
+
+// ----- AssignUserManager: authority is decided before eligibility ------------
+
+// A caller who may not act on the subordinate must not learn anything about the
+// manager or the reporting chain: they get the authority answer, not
+// manager_not_eligible.
+func TestAssignUserManager_AuthorityIsDecidedBeforeEligibility(t *testing.T) {
+	t.Parallel()
+	w := newAuthzWorld(t)
+	h := w.handlers().setMgr
+	mgrActorMember := w.member(t, w.manager)
+	actor := actorAs(t, mgrActorMember.ID(), authority.RankManager, tenantAdminEffective()...)
+	admin := w.member(t, w.admin) // the actor does not outrank an Administrator
+	reportsToAdmin := w.memberReporting(t, admin.ID(), w.exec)
+
+	for name, mgrID := range map[string]membership.ID{
+		"the manager does not exist":        membership.ID(awID(99999)),
+		"the manager would form a cycle":    reportsToAdmin.ID(), // reports to admin, so admin -> reportsToAdmin closes a loop
+		"the manager is less senior (rank)": w.member(t, w.exec).ID(),
+	} {
+		err := h.Handle(t.Context(), command.AssignUserManagerCommand{TenantID: awTenant, MembershipID: admin.ID(), ManagerID: mgrID, Actor: actor})
+		if !isErr(err, authority.ErrInsufficientRank) {
+			t.Errorf("%s: %v, want ErrInsufficientRank (authority first)", name, err)
+		}
+		if isErr(err, authority.ErrManagerNotEligible) {
+			t.Errorf("%s: the answer leaks eligibility information: %v", name, err)
+		}
+	}
+	// An authorised caller still gets the eligibility answers.
+	owner := actorAs(t, w.member(t, w.owner).ID(), authority.RankOwner, tenantAdminEffective()...)
+	sub := w.member(t, w.exec)
+	if err := h.Handle(t.Context(), command.AssignUserManagerCommand{TenantID: awTenant, MembershipID: sub.ID(), ManagerID: membership.ID(awID(99999)), Actor: owner}); !isErr(err, authority.ErrManagerNotEligible) {
+		t.Errorf("authorised caller, missing manager: %v, want ErrManagerNotEligible", err)
+	}
+	if err := h.Handle(t.Context(), command.AssignUserManagerCommand{TenantID: awTenant, MembershipID: admin.ID(), ManagerID: reportsToAdmin.ID(), Actor: owner}); !isErr(err, authority.ErrManagerNotEligible) {
+		t.Errorf("authorised caller, cycle: %v, want ErrManagerNotEligible", err)
+	}
+}
+
+// A legitimate reporting chain of several levels is accepted; only a chain
+// deeper than the walk bound is refused.
+func TestAssignUserManager_LongChainsAreAcceptedUpToTheBound(t *testing.T) {
+	t.Parallel()
+	owner := func(w *authzWorld) authority.Actor {
+		return actorAs(t, w.member(t, w.owner).ID(), authority.RankOwner, tenantAdminEffective()...)
+	}
+	for _, depth := range []int{1, 3, 5, 20, 63} {
+		w := newAuthzWorld(t)
+		// top <- ... <- manager at the bottom of a chain of `depth` links, all admin-or-above ranks.
+		cur := w.member(t, w.admin)
+		for range depth {
+			cur = w.memberReporting(t, cur.ID(), w.manager)
+		}
+		sub := w.member(t, w.exec)
+		if err := w.handlers().setMgr.Handle(t.Context(), command.AssignUserManagerCommand{TenantID: awTenant, MembershipID: sub.ID(), ManagerID: cur.ID(), Actor: owner(w)}); err != nil {
+			t.Errorf("chain of %d levels above the manager: %v, want accepted", depth, err)
+		}
+		if sub.ReportsTo() != cur.ID() {
+			t.Errorf("chain of %d levels: reports_to = %q, want %q", depth, sub.ReportsTo(), cur.ID())
+		}
+	}
+	w := newAuthzWorld(t)
+	cur := w.member(t, w.admin)
+	for range 64 {
+		cur = w.memberReporting(t, cur.ID(), w.manager)
+	}
+	sub := w.member(t, w.exec)
+	if err := w.handlers().setMgr.Handle(t.Context(), command.AssignUserManagerCommand{TenantID: awTenant, MembershipID: sub.ID(), ManagerID: cur.ID(), Actor: owner(w)}); !isErr(err, authority.ErrManagerNotEligible) {
+		t.Errorf("a chain of 64 links above the manager (the walk bound): %v, want ErrManagerNotEligible", err)
+	}
+}

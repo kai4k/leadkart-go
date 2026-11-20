@@ -15,7 +15,6 @@ package command
 import (
 	"context"
 	"errors"
-	"fmt"
 	"time"
 
 	"github.com/leadkart/leadkart-go/internal/common/pg"
@@ -45,27 +44,25 @@ type UpdateUserProfileCommand struct {
 	Designation   string
 	Department    string
 	StatusMessage string
+	// Actor is built once by the port via authn.AuthorityFrom; the zero value denies.
+	Actor authority.Actor
 }
 
 // UpdateUserProfileHandler runs the profile update.
-type UpdateUserProfileHandler struct {
-	memberships membership.Repository
-	now         func() time.Time
-}
+type UpdateUserProfileHandler struct{ w authorityWriter }
 
 // NewUpdateUserProfileHandler wires the handler. `now` is the explicit
 // time source per the clock-injection refactor. Nil → time.Now.
-func NewUpdateUserProfileHandler(m membership.Repository, now func() time.Time) UpdateUserProfileHandler {
-	if m == nil {
-		panic("command: NewUpdateUserProfileHandler memberships repository required")
-	}
-	if now == nil {
-		now = time.Now
-	}
-	return UpdateUserProfileHandler{memberships: m, now: now}
+func NewUpdateUserProfileHandler(uow pg.UnitOfWork, lock AuthorityLocker, m membership.Repository, r role.Repository, p person.Repository, now func() time.Time) UpdateUserProfileHandler {
+	return UpdateUserProfileHandler{w: newAuthorityWriter("NewUpdateUserProfileHandler", uow, lock, m, r, p, now)}
 }
 
-// Handle dispatches to [Membership.UpdateProfile].
+// Handle dispatches to [Membership.UpdateProfile] under the tenant lock. A
+// member editing their OWN profile is unchanged; editing ANOTHER member's
+// profile is an authority decision ([authority.Actor.MayActOn]: the caller must
+// strictly outrank them, owners may act on owners), so identity.users.update
+// alone no longer lets an HR manager rewrite an owner's profile. No stamp is
+// rotated: a profile edit changes no authority.
 func (h UpdateUserProfileHandler) Handle(ctx context.Context, cmd UpdateUserProfileCommand) error {
 	if cmd.TenantID.IsZero() {
 		return errors.New("update_user_profile: tenant id required")
@@ -73,20 +70,22 @@ func (h UpdateUserProfileHandler) Handle(ctx context.Context, cmd UpdateUserProf
 	if cmd.MembershipID.IsZero() {
 		return errors.New("update_user_profile: membership id required")
 	}
-	now := h.now()
-	err := h.memberships.UpdateByID(ctx, cmd.TenantID, cmd.MembershipID, func(m *membership.Membership) (bool, error) {
-		if err := m.UpdateProfile(cmd.Designation, cmd.Department, cmd.StatusMessage, now); err != nil {
-			return false, err
+	if !cmd.Actor.Valid() {
+		return authority.ErrNoAuthority
+	}
+	now := h.w.now()
+	err := h.w.updateMember(ctx, cmd.TenantID, cmd.MembershipID, cmd.Actor, now, func(_ context.Context, actor authority.Actor, m *membership.Membership, target authority.Member) error {
+		if target.ID() != actor.MembershipID() {
+			if err := actor.MayActOn(target); err != nil {
+				return err
+			}
 		}
-		return true, nil
+		return m.UpdateProfile(cmd.Designation, cmd.Department, cmd.StatusMessage, now)
 	})
 	if errors.Is(err, membership.ErrNotFound) {
 		return ErrUserNotFound
 	}
-	if err != nil {
-		return fmt.Errorf("update_user_profile: %w", err)
-	}
-	return nil
+	return translateAuthorityWrite("update_user_profile", err)
 }
 
 // ----- DeactivateUser ------------------------------------------------------
@@ -193,6 +192,11 @@ func (h ReactivateUserHandler) Handle(ctx context.Context, cmd ReactivateUserCom
 		if err := m.Reactivate(now); err != nil {
 			return err
 		}
+		// The stamp rotation takes the person row (FOR NO KEY UPDATE) before this
+		// transaction can commit: the same row a person-level change holds from its
+		// membership check to its write (PersonChangeGuard), so a reactivation
+		// cannot commit in between. Removing the rotation reopens that race
+		// (TestE2E_PersonChangeGuard_ReactivationCannotCommit...).
 		return h.w.rotateStampIfChanged(ctx, m, "reactivated", now)
 	})
 	return translateAuthorityWrite("reactivate_user", err)

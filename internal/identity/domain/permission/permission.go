@@ -75,6 +75,13 @@ type platformPermissions struct {
 	// allowed to edit tenants (TenantsManage) must not imply it. Platform-
 	// reserved, and no tenant-plane permission maps onto it.
 	ImpersonationManage string
+	// TenantsOwnership changes who OWNS a customer tenant from outside it: assigning
+	// or revoking the Company Owner role, conferring or removing tenant.admin
+	// (by role or override) and deactivating an owner. The cross-tenant operator
+	// exemption (platform.users.manage / platform.roles.manage) covers day-to-day
+	// repair but not ownership. Platform-reserved, never implied by tenant.admin,
+	// not requestable, no tenant-plane equivalent, granted to no seeded role.
+	TenantsOwnership string
 }
 type tenantsPermissions struct {
 	View, Update, UpdateSettings, Suspend, Activate, Delete string
@@ -257,6 +264,7 @@ var IdentityPermissions = struct {
 		RolesView:           "platform.roles.view",
 		RolesManage:         "platform.roles.manage",
 		ImpersonationManage: "platform.impersonation.manage",
+		TenantsOwnership:    "platform.tenants.ownership",
 	},
 	Tenants: tenantsPermissions{
 		View:           "identity.tenants.view",
@@ -365,7 +373,7 @@ func allNames() []string {
 		p.Meta.TenantAdmin, p.Meta.RequestPermissionElevation,
 		p.Platform.TenantsView, p.Platform.TenantsCreate, p.Platform.TenantsManage,
 		p.Platform.UsersView, p.Platform.UsersCreate, p.Platform.UsersManage,
-		p.Platform.RolesView, p.Platform.RolesManage, p.Platform.ImpersonationManage,
+		p.Platform.RolesView, p.Platform.RolesManage, p.Platform.ImpersonationManage, p.Platform.TenantsOwnership,
 		p.Tenants.View, p.Tenants.Update, p.Tenants.UpdateSettings,
 		p.Tenants.Suspend, p.Tenants.Activate, p.Tenants.Delete,
 		p.Users.View, p.Users.Create, p.Users.Update,

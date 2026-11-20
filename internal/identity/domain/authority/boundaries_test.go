@@ -121,7 +121,7 @@ func TestPolicy_Boundaries(t *testing.T) {
 		{"operator replaces a more senior manager", aOp.MayClearManager(reportsToOwner, &owner), nil},
 		{"super replaces a more senior manager", aSuper.MayClearManager(reportsToOwner, &owner), nil},
 		{"operator approves in another tenant", aOp.MayApprove(unmanaged, p.Crm.Leads.Read), nil},
-		{"operator assigns a role in another tenant", aOp.MayAssignRole(unmanaged, ownerR), nil},
+		{"operator assigns the Company Owner role in another tenant", aOp.MayAssignRole(unmanaged, ownerR), authority.ErrOwnershipAuthorityRequired},
 		{"operator may not confer a platform-reserved name", aOp.MayChangeOverrides(unmanaged, authority.Overrides{Granted: grants(p.Platform.TenantsManage)}), authority.ErrGrantExceedsAuthority},
 		{"operator may confer anything tenant.admin implies", aOp.MayChangeOverrides(unmanaged, authority.Overrides{Granted: grants(p.Crm.Leads.ReadAll, p.Users.Anonymise)}), authority.ErrGrantExceedsAuthority},
 		{"operator confers a tenant permission", aOp.MayChangeOverrides(unmanaged, authority.Overrides{Granted: grants(p.Crm.Leads.ReadAll)}), nil},

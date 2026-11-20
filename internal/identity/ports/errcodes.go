@@ -175,6 +175,16 @@ const (
 	// target member or role (ADR 0069 H2/H3). 403 surface.
 	ErrCodeInsufficientRank = "insufficient_rank"
 
+	// ErrCodePersonMembershipsChanging — a person-level change (global suspend,
+	// anonymise) kept racing membership changes and was not applied; retry. 409 surface.
+	ErrCodePersonMembershipsChanging = "person_memberships_changing"
+
+	// ErrCodeOwnershipAuthorityRequired — a cross-tenant operator under the
+	// operator exemption tried to change who owns the tenant (assign or revoke
+	// Company Owner, confer or remove tenant.admin, deactivate an owner) without
+	// platform.tenants.ownership. 403 surface.
+	ErrCodeOwnershipAuthorityRequired = "ownership_authority_required"
+
 	// ErrCodeImpersonationNotAllowed — the action is refused during an
 	// impersonation session (ADR 0069 H4). 403 surface.
 	ErrCodeImpersonationNotAllowed = "impersonation_not_allowed"

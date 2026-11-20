@@ -45,6 +45,25 @@ func (a Actor) exemptOperatorIn(tenantID tenant.ID) bool {
 	return a.operatorExempt() && validTenant(tenantID) && !sameTenant(tenantID, a.tenantID)
 }
 
+// ownershipName is platform.tenants.ownership, the permission that lifts the
+// ownership gate for an exempt operator.
+func ownershipName() string { return permission.IdentityPermissions.Platform.TenantsOwnership }
+
+// mayChangeOwnershipIn is the ownership gate of the operator exemption (R3,
+// amended in hierarchy round 4): the exemption covers day-to-day repair of a
+// customer tenant, but who OWNS it, which is assigning or revoking the Company
+// Owner role, conferring or removing tenant.admin (by role or by override) and
+// deactivating an owner, needs platform.tenants.ownership. It is the one place
+// that rule lives; every ownership decision below calls it. It binds only an
+// operator acting under the exemption; super users and every actor deciding in
+// their own tenant are not touched.
+func (a Actor) mayChangeOwnershipIn(tenantID tenant.ID) error {
+	if a.superUser || !a.exemptOperatorIn(tenantID) || a.hasOwn(ownershipName()) {
+		return nil
+	}
+	return fmt.Errorf("%w: needs %s", ErrOwnershipAuthorityRequired, ownershipName())
+}
+
 // exemptIn: super users and exempt operators in other tenants; never for a
 // tenant id that does not canonicalise.
 func (a Actor) exemptIn(tenantID tenant.ID) bool {
@@ -98,7 +117,13 @@ func (a Actor) mayChangePermissions(tenantID tenant.ID, names []string) error {
 	for _, n := range names {
 		switch {
 		case n == tenantAdminName():
-			if a.exemptOperatorIn(tenantID) || (a.Rank() == RankOwner && a.hasOwn(n)) {
+			if a.exemptOperatorIn(tenantID) {
+				if err := a.mayChangeOwnershipIn(tenantID); err != nil {
+					return err
+				}
+				continue
+			}
+			if a.Rank() == RankOwner && a.hasOwn(n) {
 				continue
 			}
 			return fmt.Errorf("%w: only an owner may confer or remove %s", ErrGrantExceedsAuthority, n)
@@ -125,6 +150,11 @@ func (a Actor) mayTouchRole(t Member, r *role.Role) error {
 	}
 	if !sameTenant(r.TenantID(), t.tenantID) {
 		return ErrNoAuthority
+	}
+	if r.IsCompanyOwner() {
+		if err := a.mayChangeOwnershipIn(t.tenantID); err != nil {
+			return err
+		}
 	}
 	if r.IsSuperAdmin() && !a.superUser {
 		return fmt.Errorf("%w: only a super user may assign or revoke a super-admin role", ErrGrantExceedsAuthority)
@@ -240,6 +270,11 @@ func grantDelta(before, after []Override) []string {
 func (a Actor) MayDeactivate(t Member, owners []Member) error {
 	if err := a.MayActOn(t); err != nil {
 		return err
+	}
+	if t.owner {
+		if err := a.mayChangeOwnershipIn(t.tenantID); err != nil {
+			return err
+		}
 	}
 	return GuardLastOwner(t, owners)
 }

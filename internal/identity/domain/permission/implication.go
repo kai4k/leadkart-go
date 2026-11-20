@@ -13,7 +13,7 @@ var platformReserved = func() map[string]struct{} {
 		p.Meta.TenantAdmin,
 		p.Platform.TenantsView, p.Platform.TenantsCreate, p.Platform.TenantsManage,
 		p.Platform.UsersView, p.Platform.UsersCreate, p.Platform.UsersManage,
-		p.Platform.RolesView, p.Platform.RolesManage, p.Platform.ImpersonationManage,
+		p.Platform.RolesView, p.Platform.RolesManage, p.Platform.ImpersonationManage, p.Platform.TenantsOwnership,
 		p.PlatformUnverifiedContacts.Manage,
 		p.PlatformLeadCredits.Topup,
 		p.Tenants.Suspend, p.Tenants.Activate, p.Tenants.Delete,

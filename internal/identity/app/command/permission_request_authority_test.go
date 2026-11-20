@@ -490,3 +490,51 @@ func TestApproverQueue_LoadsEachRequesterOnce(t *testing.T) {
 		t.Error("HasMore with a window larger than the queue")
 	}
 }
+
+// ----- approving a name that is on the requester's revoked list ---------------
+
+// A revoked override is a deliberate "this member must not have X". Approving X
+// for them is an un-revoke, so it needs the same authority as changing their
+// overrides (authority.MayChangeOverrides: act on the member and hold X under
+// the ceiling rules) on top of MayApprove.
+func TestApprove_UnrevokeNeedsTheAuthorityToChangeOverrides(t *testing.T) {
+	t.Parallel()
+	p := permission.IdentityPermissions
+	w := newPRWorld(t)
+	tl := w.member(t, w.teamLead)
+	revokedExec := func() *membership.Membership {
+		return w.memberSnap(t, membership.Snapshot{RoleAssignments: []role.ID{w.exec.ID()}, ReportsTo: tl.ID(),
+			RevokedPermissions: []*permission.Permission{permission.FromConstant(p.Crm.Leads.Assign)}})
+	}
+	// An Administrator without tenant.admin approves day-to-day permissions without holding them...
+	adminM := w.member(t, w.admin)
+	admin := actorAs(t, adminM.ID(), authority.RankAdmin, p.Crm.Leads.Read)
+	plain := w.memberSnap(t, membership.Snapshot{RoleAssignments: []role.ID{w.exec.ID()}, ReportsTo: tl.ID()})
+	if err := w.approveAs(admin, w.pending(t, plain, p.Crm.Leads.Assign, 0)); err != nil {
+		t.Fatalf("control: the Administrator approves a day-to-day permission that is not revoked: %v", err)
+	}
+	// ...but cannot un-revoke one, because changing overrides needs the permission itself.
+	exec := revokedExec()
+	r := w.pending(t, exec, p.Crm.Leads.Assign, 0)
+	w.rotations = nil
+	if err := w.approveAs(admin, r); !isErr(err, authority.ErrGrantExceedsAuthority) {
+		t.Fatalf("an approver who does not hold the name un-revokes it: %v, want ErrGrantExceedsAuthority", err)
+	}
+	if got, _ := w.reqs.GetByID(t.Context(), awTenant, r.ID()); got.State() != permissionrequest.StatePending {
+		t.Errorf("the refused approval left the request %s, want pending", got.State())
+	}
+	if len(exec.RevokedPermissions()) != 1 || len(exec.GrantedPermissions()) != 0 || len(w.rotations) != 0 {
+		t.Errorf("the refused approval changed state: revoked %v, granted %v, rotations %v", exec.RevokedPermissions(), exec.GrantedPermissions(), w.rotations)
+	}
+	// The owner holds everything: the approval un-revokes.
+	owner := actorAs(t, w.member(t, w.owner).ID(), authority.RankOwner, tenantAdminEffective()...)
+	if err := w.approveAs(owner, r); err != nil {
+		t.Fatalf("owner approves the un-revoke: %v", err)
+	}
+	if len(exec.RevokedPermissions()) != 0 {
+		t.Errorf("the revoke is still there after the owner's approval: %v", exec.RevokedPermissions())
+	}
+	if _, ok := grantOf(exec, p.Crm.Leads.Assign); !ok {
+		t.Error("the approved permission was not granted")
+	}
+}

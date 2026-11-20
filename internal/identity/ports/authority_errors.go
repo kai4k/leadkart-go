@@ -22,6 +22,8 @@ func writeAuthorityError(w http.ResponseWriter, err error) bool {
 		writeError(w, http.StatusForbidden, ErrCodeInsufficientRank, "the caller does not outrank the target")
 	case errors.Is(err, authority.ErrGrantExceedsAuthority):
 		writeError(w, http.StatusForbidden, ErrCodeGrantExceedsAuthority, "the change confers or removes a permission beyond the caller's authority")
+	case errors.Is(err, authority.ErrOwnershipAuthorityRequired):
+		writeError(w, http.StatusForbidden, ErrCodeOwnershipAuthorityRequired, "changing a tenant's ownership from outside it needs platform.tenants.ownership")
 	case errors.Is(err, authority.ErrImpersonationNotAllowed):
 		writeError(w, http.StatusForbidden, ErrCodeImpersonationNotAllowed, "not available during an impersonation session")
 	case errors.Is(err, authority.ErrNotApprover):
@@ -32,6 +34,8 @@ func writeAuthorityError(w http.ResponseWriter, err error) bool {
 		writeError(w, http.StatusConflict, ErrCodeLastOwnerProtected, "the tenant's last active owner cannot be deactivated or demoted")
 	case errors.Is(err, authority.ErrOwnerProtected):
 		writeError(w, http.StatusConflict, ErrCodeOwnerProtected, "tenant.admin cannot be revoked from an owner")
+	case errors.Is(err, command.ErrPersonMembershipsChanging):
+		writeError(w, http.StatusConflict, ErrCodePersonMembershipsChanging, "the person's memberships changed while the change was checked; retry")
 	case errors.Is(err, command.ErrMemberRolesInconsistent):
 		writeError(w, http.StatusConflict, ErrCodeMemberRolesInconsistent, "the member's assigned roles cannot be loaded consistently")
 	case errors.Is(err, authority.ErrManagerNotEligible):

@@ -202,16 +202,17 @@ func TestMayCreateRole_TenantAndInitialPermissions(t *testing.T) {
 		got  error
 		want error
 	}{
-		"admin, own tenant":                        {admin.MayCreateRole(tA, 11, []string{p.Crm.Leads.Read}, nil), nil},
-		"admin, other tenant":                      {admin.MayCreateRole(tB, 11, nil, nil), authority.ErrNoAuthority},
-		"admin, tenant.admin in initial perms":     {admin.MayCreateRole(tA, 11, []string{p.Meta.TenantAdmin}, nil), authority.ErrGrantExceedsAuthority},
-		"admin, reserved in initial perms":         {admin.MayCreateRole(tA, 11, []string{p.Platform.TenantsManage}, nil), authority.ErrGrantExceedsAuthority},
-		"admin, unknown in initial perms":          {admin.MayCreateRole(tA, 11, []string{"nope"}, nil), authority.ErrGrantExceedsAuthority},
-		"admin, level above 99":                    {admin.MayCreateRole(tA, 100, nil, nil), authority.ErrInsufficientRank},
-		"admin, negative level":                    {admin.MayCreateRole(tA, -1, nil, nil), authority.ErrInsufficientRank},
-		"super, other tenant":                      {super.MayCreateRole(tB, 11, []string{p.Platform.TenantsManage}, nil), nil},
-		"exempt operator, other tenant, level 11":  {op.MayCreateRole(tB, 11, []string{p.Meta.TenantAdmin}, nil), nil},
-		"exempt operator, own tenant follows rank": {op.MayCreateRole(tP, 11, nil, nil), authority.ErrInsufficientRank},
+		"admin, own tenant":                    {admin.MayCreateRole(tA, 11, []string{p.Crm.Leads.Read}, nil), nil},
+		"admin, other tenant":                  {admin.MayCreateRole(tB, 11, nil, nil), authority.ErrNoAuthority},
+		"admin, tenant.admin in initial perms": {admin.MayCreateRole(tA, 11, []string{p.Meta.TenantAdmin}, nil), authority.ErrGrantExceedsAuthority},
+		"admin, reserved in initial perms":     {admin.MayCreateRole(tA, 11, []string{p.Platform.TenantsManage}, nil), authority.ErrGrantExceedsAuthority},
+		"admin, unknown in initial perms":      {admin.MayCreateRole(tA, 11, []string{"nope"}, nil), authority.ErrGrantExceedsAuthority},
+		"admin, level above 99":                {admin.MayCreateRole(tA, 100, nil, nil), authority.ErrInsufficientRank},
+		"admin, negative level":                {admin.MayCreateRole(tA, -1, nil, nil), authority.ErrInsufficientRank},
+		"super, other tenant":                  {super.MayCreateRole(tB, 11, []string{p.Platform.TenantsManage}, nil), nil},
+		"exempt operator, other tenant, level 11, tenant.admin in initial perms": {op.MayCreateRole(tB, 11, []string{p.Meta.TenantAdmin}, nil), authority.ErrOwnershipAuthorityRequired},
+		"exempt operator, other tenant, level 11":                                {op.MayCreateRole(tB, 11, []string{p.Crm.Leads.Read}, nil), nil},
+		"exempt operator, own tenant follows rank":                               {op.MayCreateRole(tP, 11, nil, nil), authority.ErrInsufficientRank},
 	}
 	for name, c := range cases {
 		if c.want == nil && c.got != nil || c.want != nil && !errors.Is(c.got, c.want) {

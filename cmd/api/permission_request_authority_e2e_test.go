@@ -308,3 +308,73 @@ func TestE2E_PermissionRequests_PlatformTenantFollowsRank(t *testing.T) {
 		t.Errorf("platform owner approves: %d %s", r.status, r.body)
 	}
 }
+
+// Approving a name that is on the requester's REVOKED list is an un-revoke. It
+// needs the authority to change their overrides on top of the approval rule, so
+// an Administrator who does not hold the name cannot quietly reverse a
+// deliberate revocation; an owner (who holds everything) can.
+func TestE2E_PermissionRequests_ApprovingARevokedNameIsAnUnrevoke(t *testing.T) {
+	w := newPRE2E(t)
+	f := w.f
+	p := permission.IdentityPermissions
+	// day-to-day names: an Administrator may approve them without holding them. The
+	// Team Lead (the requester's manager) holds Reassign but not Assign.
+	assign, reassign := p.Crm.Leads.Assign, p.Tasks.WorkItems.Reassign
+	holds := func(e createdMember, name string) bool {
+		f.evictStamp(t, e.personID) // the overrides change rotated the stamp
+		claims := tokenClaims(t, f.loginToken(t, e.email, e.password))
+		perms, _ := claims["permission"].([]any)
+		for _, x := range perms {
+			if x == name {
+				return true
+			}
+		}
+		return false
+	}
+	setup := func(t *testing.T, revoked string) (createdMember, string, string) {
+		t.Helper()
+		e, _ := w.exec(t)
+		f.grantOverrides(t, w.owner.AccessToken, e.membershipID, []string{}, []string{revoked})
+		f.evictStamp(t, e.personID)
+		eTok := f.loginToken(t, e.email, e.password)
+		sub, id := f.requestElevation(t, eTok, revoked)
+		if sub.status != http.StatusCreated {
+			t.Fatalf("submit: %d %s", sub.status, sub.body)
+		}
+		return e, eTok, id
+	}
+	// arch-test:serial — subtests share one fixture and one tenant.
+	t.Run("an Administrator who does not hold the name cannot un-revoke it", func(t *testing.T) {
+		e, eTok, id := setup(t, assign)
+		r := w.decide(t, "approve", w.adTok, id)
+		f.wantForbidden(t, "admin approves a name an admin revoked", r, http.StatusForbidden, "grant_exceeds_authority")
+		got := f.authedJSON(t, http.MethodGet, "/api/v1/permission-requests/"+id, eTok, nil)
+		var dto ports.PermissionRequestDto
+		if err := json.Unmarshal(got.body, &dto); err != nil || dto.State != "pending" {
+			t.Errorf("the refused approval left the request: %d %s, want pending", got.status, got.body)
+		}
+		if holds(e, assign) {
+			t.Error("the refused approval un-revoked the permission")
+		}
+	})
+	// arch-test:serial — subtests share one fixture and one tenant.
+	t.Run("the owner can: the revoke is gone", func(t *testing.T) {
+		e, _, id := setup(t, assign)
+		if r := w.decide(t, "approve", w.owner.AccessToken, id); r.status != http.StatusNoContent {
+			t.Fatalf("owner approves the un-revoke: %d %s, want 204", r.status, r.body)
+		}
+		if !holds(e, assign) {
+			t.Error("the owner's approval did not restore the permission")
+		}
+	})
+	// arch-test:serial — subtests share one fixture and one tenant.
+	t.Run("a manager who holds the name still can (pinned: the policy has no record of who revoked)", func(t *testing.T) {
+		e, _, id := setup(t, reassign)
+		if r := w.decide(t, "approve", w.tlTok, id); r.status != http.StatusNoContent {
+			t.Fatalf("the requester's manager (who holds %s) approves: %d %s", reassign, r.status, r.body)
+		}
+		if !holds(e, reassign) {
+			t.Error("the manager's approval did not restore the permission")
+		}
+	})
+}

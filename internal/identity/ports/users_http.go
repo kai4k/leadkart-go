@@ -122,6 +122,7 @@ func handleUpdateUserProfile(log *slog.Logger, a app.Application) http.Handler {
 			Designation:   req.Designation,
 			Department:    req.Department,
 			StatusMessage: req.StatusMessage,
+			Actor:         authn.AuthorityFrom(r.Context()),
 		})
 		writeUserMutationResult(w, log, r, err)
 	})

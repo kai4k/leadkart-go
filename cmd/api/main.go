@@ -664,7 +664,7 @@ func buildIdentityApp(pool *pgxpool.Pool, hybridCache *cache.HybridCache, cfg co
 				MarkTenantForDeletion:          command.NewMarkTenantForDeletionHandler(tenants, memberships, now),
 				RestoreTenant:                  command.NewRestoreTenantHandler(tenants, now),
 
-				UpdateUserProfile:              command.NewUpdateUserProfileHandler(memberships, now),
+				UpdateUserProfile:              command.NewUpdateUserProfileHandler(tx, authorityLock, memberships, roles, persons, now),
 				DeactivateUser:                 command.NewDeactivateUserHandler(tx, authorityLock, memberships, roles, persons, now),
 				ReactivateUser:                 command.NewReactivateUserHandler(tx, authorityLock, memberships, roles, persons, now),
 				AssignUserRole:                 command.NewAssignUserRoleHandler(tx, authorityLock, memberships, roles, persons, now),

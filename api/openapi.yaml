@@ -60,7 +60,9 @@ info:
     their own roles, permission overrides, status or manager) and
     `grant_exceeds_authority` (caller tried to confer or remove a permission
     they do not hold), `insufficient_rank` (the caller does not strictly
-    outrank the target member or role), `impersonation_not_allowed` and
+    outrank the target member or role), `ownership_authority_required` (a platform
+    operator under `X-Tenant-Id` changing a tenant's ownership without
+    `platform.tenants.ownership`), `impersonation_not_allowed` and
     `not_approver`. ADR 0036 / ADR 0068 / ADR 0069. State conflicts on the
     membership and person commands are `409`: `last_owner_protected`,
     `owner_protected`, `member_roles_inconsistent`; an ineligible manager is
@@ -773,7 +775,7 @@ paths:
       tags: [users]
       summary: Update user designation + department + status message
       description: |
-        Requires `identity.users.update` or self (path id equals the caller's membership) (satisfied by `tenant.admin` in the caller's own tenant, or by `platform.*` equivalents for platform operators; ADR 0068).
+        Requires `identity.users.update` or self (path id equals the caller's membership) (satisfied by `tenant.admin` in the caller's own tenant, or by `platform.*` equivalents for platform operators; ADR 0068).  Editing ANOTHER member's profile is also an authority decision: the caller must strictly outrank the member (`insufficient_rank`; owners may act on owners; super users and exempt platform operators are exempt), decided under the tenant's authority lock (ADR 0069); editing one's own profile is unchanged.
       x-required-permissions: [identity.users.update, self]
       parameters:
         - $ref: '#/components/parameters/XCommandId'
@@ -787,7 +789,7 @@ paths:
       responses:
         '204': { description: Profile updated }
         '400': { $ref: '#/components/responses/BadRequest' }
-        '403': { $ref: '#/components/responses/TenantScopeForbidden' }
+        '403': { $ref: '#/components/responses/AuthorityForbidden' }
         '422': { $ref: '#/components/responses/Unprocessable' }
 
   /api/v1/users/{userId}/deactivate:
@@ -954,7 +956,7 @@ paths:
         '204': { description: User anonymised }
         '403': { $ref: '#/components/responses/AuthorityForbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
-        '409': { description: "`last_owner_protected` — the person is the only active owner of a tenant; nothing was changed", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+        '409': { description: "`last_owner_protected` — the person is the only active owner of a tenant; nothing was changed. `person_memberships_changing` — the person's memberships kept changing while the change was checked (a reactivation raced it); nothing was changed, retry", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
         '422': { $ref: '#/components/responses/Unprocessable' }
 
   # ===== ROLES ==========================================================
@@ -1351,7 +1353,7 @@ paths:
         '204': { description: Person globally suspended }
         '403': { $ref: '#/components/responses/AuthorityForbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
-        '409': { description: "`last_owner_protected` — the person is the only active owner of a tenant; nothing was changed", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+        '409': { description: "`last_owner_protected` — the person is the only active owner of a tenant; nothing was changed. `person_memberships_changing` — the person's memberships kept changing while the change was checked (a reactivation raced it); nothing was changed, retry", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
         '422': { $ref: '#/components/responses/Unprocessable' }
 
   /api/v1/platform/persons/{personId}/lift-global-suspension:
@@ -1384,7 +1386,7 @@ paths:
         '204': { description: Person anonymised }
         '403': { $ref: '#/components/responses/AuthorityForbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
-        '409': { description: "`last_owner_protected` — the person is the only active owner of a tenant; nothing was changed", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+        '409': { description: "`last_owner_protected` — the person is the only active owner of a tenant; nothing was changed. `person_memberships_changing` — the person's memberships kept changing while the change was checked (a reactivation raced it); nothing was changed, retry", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
         '422': { $ref: '#/components/responses/Unprocessable' }
 
   /api/v1/platform/persons:
@@ -1651,7 +1653,10 @@ paths:
         without holding it, except user/role management, tenant settings, marketplace purchase and
         payment recording, which the Administrator must hold); or a super user / exempt operator
         acting in ANOTHER tenant (in the platform tenant an operator follows rank like anyone else).
-        Never an impersonation session and never the requester.
+        Never an impersonation session and never the requester. When the requested permission is on the
+        requester's REVOKED list the approval is an un-revoke and additionally needs the authority to change
+        their overrides (act on the member and hold the permission itself): otherwise 403
+        `grant_exceeds_authority`, the request stays pending.
 
         Check order: unknown request (404) → authority (403, whatever the request's state) → state
         (409 `permission_request_not_pending`) → requestability (422 `permission_not_requestable`: a
@@ -3824,7 +3829,10 @@ components:
         TenantScopeForbidden), `self_modification_forbidden` (the caller targeted themself),
         `insufficient_rank` (the caller does not strictly outrank the target member or role,
         ADR 0069), `grant_exceeds_authority` (the change confers or removes a permission the
-        caller does not hold, or `tenant.admin` as a non-owner).
+        caller does not hold, or `tenant.admin` as a non-owner), `ownership_authority_required`
+        (a platform operator acting under `X-Tenant-Id` tried to change who OWNS the tenant:
+        assign or revoke Company Owner, confer or remove `tenant.admin` by role or override, or
+        deactivate an owner, without `platform.tenants.ownership`; super users are unaffected).
       content:
         application/json:
           schema: { $ref: '#/components/schemas/ErrorResponse' }

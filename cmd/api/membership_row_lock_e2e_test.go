@@ -16,6 +16,7 @@
 package main
 
 import (
+	"context"
 	"net/http"
 	"slices"
 	"sync"
@@ -24,6 +25,7 @@ import (
 
 	"github.com/leadkart/leadkart-go/internal/common/pg"
 	"github.com/leadkart/leadkart-go/internal/identity/adapters"
+	"github.com/leadkart/leadkart-go/internal/identity/app/command"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/role"
@@ -219,5 +221,62 @@ func TestE2E_PersonRowLock_StampRotationCannotRevertAPasswordChange(t *testing.T
 	}
 	if lr := f.postJSON(t, "/api/v1/auth/login", ports.LoginRequest{Email: owner.Email, Password: newPassword, DeviceLabel: "e2e"}); lr.status != http.StatusOK {
 		t.Fatalf("login with the NEW password: %d %s — a stale person write reverted the password change", lr.status, lr.body)
+	}
+}
+
+// TestE2E_PersonChangeGuard_ReactivationCannotCommitBetweenTheCheckAndTheChange:
+// the guard lists a person's memberships and, finding no active one, used to
+// apply the person-level change with no lock at all, so a reactivation of that
+// person in another tenant could commit between the check and the change and
+// leave that tenant with an owner nobody guarded. The guard now holds the person
+// row for the change (reactivation takes the same row first), so the membership
+// set the guard checked is the set the change sees.
+func TestE2E_PersonChangeGuard_ReactivationCannotCommitBetweenTheCheckAndTheChange(t *testing.T) {
+	f := newE2EFixtureAt(t, time.Now)
+	q := f.registerAndLogin(t, "guard-race")
+	p := f.addSecondOwner(t, q, "owner-p")
+	if r := f.authedJSON(t, http.MethodPost, "/api/v1/users/"+p.membershipID+"/deactivate", q.AccessToken,
+		ports.DeactivateUserRequest{Reason: "setup: P inactive"}); r.status != http.StatusNoContent {
+		t.Fatalf("deactivate P: %d %s", r.status, r.body)
+	}
+	tx := pg.NewTransactor(f.Pool)
+	memberships := adapters.NewMembershipRepository(f.Pool, tx)
+	guard := command.NewPersonChangeGuard(tx, adapters.NewAuthorityLockPG(), memberships, adapters.NewRoleRepository(f.Pool, tx),
+		adapters.NewPersonRepository(f.Pool, tx), time.Now)
+
+	inChange := make(chan struct{})
+	reactivated := make(chan struct{})
+	var activeDuringChange bool
+	var wg sync.WaitGroup
+	wg.Go(func() {
+		err := guard.Run(t.Context(), person.ID(p.personID), func(_ context.Context) error {
+			close(inChange)
+			select {
+			case <-reactivated:
+			case <-time.After(staleProfileWindow):
+			}
+			// Read what is COMMITTED right now, from outside the guard's transaction.
+			all, err := memberships.ListAllForPerson(t.Context(), person.ID(p.personID))
+			if err != nil {
+				return err
+			}
+			for _, m := range all {
+				activeDuringChange = activeDuringChange || m.Status() == membership.StatusActive
+			}
+			return nil
+		})
+		if err != nil {
+			t.Errorf("guard.Run: %v", err)
+		}
+	})
+	<-inChange
+	r := f.authedJSON(t, http.MethodPost, "/api/v1/users/"+p.membershipID+"/reactivate", q.AccessToken, nil)
+	close(reactivated)
+	wg.Wait()
+	if r.status != http.StatusNoContent {
+		t.Fatalf("reactivate P: %d %s, want 204 (it may only wait for the guarded change, not fail)", r.status, r.body)
+	}
+	if activeDuringChange {
+		t.Fatal("a reactivation committed while the guard was applying a person-level change it had checked against a membership set without it")
 	}
 }

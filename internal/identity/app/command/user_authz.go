@@ -338,9 +338,12 @@ func NewAssignUserManagerHandler(uow pg.UnitOfWork, lock AuthorityLocker, m memb
 	return AssignUserManagerHandler{w: newAuthorityWriter("NewAssignUserManagerHandler", uow, lock, m, r, p, now)}
 }
 
-// Handle walks the proposed manager's chain for a cycle, decides
-// [authority.Actor.MayReplaceManager] under the tenant lock and dispatches
-// to [Membership.AssignManager]. Self-management is rejected up front.
+// Handle decides, under the tenant lock and in this order: may the caller act on
+// the subordinate ([authority.Actor.MayActOn]), then is the manager eligible
+// (exists, no reporting cycle), then [authority.Actor.MayReplaceManager], and
+// dispatches to [Membership.AssignManager]. Authority comes first so a caller
+// who may not act on the subordinate learns nothing about the reporting chain.
+// Self-management is rejected up front.
 func (h AssignUserManagerHandler) Handle(ctx context.Context, cmd AssignUserManagerCommand) error {
 	if cmd.TenantID.IsZero() {
 		return errors.New("assign_user_manager: tenant id required")
@@ -367,19 +370,24 @@ func (h AssignUserManagerHandler) Handle(ctx context.Context, cmd AssignUserMana
 	}
 	now := h.w.now()
 	err = h.w.locked(ctx, cmd.TenantID, cmd.Actor, now, func(ctx context.Context, actor authority.Actor) error {
-		mgrM, mgr, err := h.w.facts.memberByID(ctx, cmd.TenantID, mgrID, now)
-		if errors.Is(err, membership.ErrNotFound) {
-			return fmt.Errorf("%w: manager not found in tenant", authority.ErrManagerNotEligible)
-		}
-		if err != nil {
-			return err
-		}
-		if err := h.w.facts.rejectManagerCycle(ctx, cmd.TenantID, mgrM, subID); err != nil {
-			return err
-		}
 		return h.w.facts.memberships.UpdateByID(ctx, cmd.TenantID, subID, func(m *membership.Membership) (bool, error) {
 			sub, err := h.w.facts.member(ctx, cmd.TenantID, m, now)
 			if err != nil {
+				return false, err
+			}
+			// Authority first: a caller who may not act on the subordinate learns
+			// nothing about the proposed manager or the reporting chain.
+			if err := actor.MayActOn(sub); err != nil {
+				return false, err
+			}
+			mgrM, mgr, err := h.w.facts.memberByID(ctx, cmd.TenantID, mgrID, now)
+			if errors.Is(err, membership.ErrNotFound) {
+				return false, fmt.Errorf("%w: manager not found in tenant", authority.ErrManagerNotEligible)
+			}
+			if err != nil {
+				return false, err
+			}
+			if err := h.w.facts.rejectManagerCycle(ctx, cmd.TenantID, mgrM, subID); err != nil {
 				return false, err
 			}
 			cur, found, err := h.w.facts.currentManager(ctx, cmd.TenantID, m, now)
