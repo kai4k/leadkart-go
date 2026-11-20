@@ -54,29 +54,24 @@ func (s Status) String() string {
 }
 
 // MembersMaySignIn reports whether the members of a tenant in this status may open
-// or keep a session (login, refresh). It is the ONE predicate behind both:
+// or keep a session (login, refresh). It is the ONE predicate behind both. Owner
+// ruling 2026-11-21: "If a Company is not Active no one can login from that org."
+// So:
 //
-//   - pending: yes. A tenant is created pending and nothing activates it on
-//     registration, so its first admin must be able to sign in.
-//   - active: yes.
+//   - active: yes. The only one.
+//   - pending: no. A company an operator registers is created ACTIVE (controller
+//     default, ADR 0069), so pending is produced by no current route; it stays in the
+//     domain for a future self-signup flow whose approval activates it.
 //   - suspended: no. An operator or billing suspension ends the members' access.
-//   - pending_deletion: yes, for now. The tenant can be restored within the grace
-//     window and whether its members may work meanwhile is an open owner decision
-//     (ADR 0069); the status keeps today's behaviour.
+//   - pending_deletion: no. The company can be restored within the grace window
+//     (operators act into it to do so); its members wait.
 //   - deleted: no (terminal).
 //   - unknown (the zero value, never persisted): no, fail closed.
 //
 // Platform operators acting INTO a tenant do not pass through this predicate: their
 // session belongs to the platform tenant (see authn.TenantScope).
 func (s Status) MembersMaySignIn() bool {
-	switch s {
-	case StatusPending, StatusActive, StatusPendingDeletion:
-		return true
-	case StatusUnknown, StatusSuspended, StatusDeleted:
-		return false
-	default:
-		return false
-	}
+	return s == StatusActive
 }
 
 // ParseStatus decodes the snake_case string produced by [Status.String].

@@ -104,7 +104,9 @@ func (h SuspendTenantHandler) Handle(ctx context.Context, cmd SuspendTenantComma
 
 // ----- ActivateTenant -------------------------------------------------------
 
-// ActivateTenantCommand activates a suspended OR pending tenant.
+// ActivateTenantCommand activates a suspended OR pending tenant. An already-active
+// tenant is a harmless no-op (204, no event, nothing changes): registration creates
+// companies active, so a client approving a "new" company meets this answer.
 type ActivateTenantCommand struct {
 	TenantID tenant.ID
 }

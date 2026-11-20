@@ -96,3 +96,35 @@ func TestRevokeFamilies_TenantSuspended_RecordsTheReason(t *testing.T) {
 		t.Fatalf("revoked=%v reason=%q err=%v, want tenant_suspended", got.IsRevoked(), got.RevokeReason(), err)
 	}
 }
+
+// Owner ruling 2026-11-21: a company marked for deletion is not active, so its
+// members' sessions end like a suspension's. Restoring needs nothing (the revoked
+// families stay dead; members sign in again).
+func TestRevokeFamilies_TenantMarkedForDeletion_RevokesEveryActiveFamilyOfThatTenantOnly(t *testing.T) {
+	t.Parallel()
+	repo := refreshtokentest.NewFakeRepository()
+	marked := tenant.ID(uuid.NewString())
+	other := tenant.ID(uuid.NewString())
+	f1 := seedTenantFamily(t, repo, marked, 1)
+	seedTenantFamily(t, repo, marked, 2)
+	survivor := seedTenantFamily(t, repo, other, 3)
+
+	h := subscribers.NewRevokeFamiliesOnSecurityChange(repo, slog.New(slog.NewTextHandler(io.Discard, nil)), func() time.Time { return tenantCascadeNow })
+	evt := &integrationevents.TenantMarkedForDeletionV1{TenantID: uuid.MustParse(marked.String()), Reason: "closing", OccurredAtUTC: tenantCascadeNow}
+	if err := h.HandleTenantMarkedForDeletion(t.Context(), evt); err != nil {
+		t.Fatalf("HandleTenantMarkedForDeletion: %v", err)
+	}
+	if left, err := repo.ListActiveForTenant(t.Context(), marked, 100); err != nil || len(left) != 0 {
+		t.Fatalf("%d active families left for the marked tenant (%v), want 0", len(left), err)
+	}
+	got, _ := repo.GetByID(t.Context(), f1.ID())
+	if !got.IsRevoked() || got.RevokeReason() != "tenant_not_active" {
+		t.Fatalf("revoked=%v reason=%q, want tenant_not_active", got.IsRevoked(), got.RevokeReason())
+	}
+	if s, _ := repo.GetByID(t.Context(), survivor.ID()); s.IsRevoked() {
+		t.Fatal("another tenant's family was revoked")
+	}
+	if err := h.HandleTenantMarkedForDeletion(t.Context(), evt); err != nil {
+		t.Fatalf("redelivery: %v", err)
+	}
+}

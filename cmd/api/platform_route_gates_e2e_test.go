@@ -72,7 +72,7 @@ func (f e2eFixture) assertVictimIntact(t *testing.T, what string, v registeredTe
 }
 
 // victimTenantStatus is the status of a freshly registered tenant.
-const victimTenantStatus = "pending"
+const victimTenantStatus = "active" // owner ruling 2026-11-21: registration creates active companies
 
 func (f e2eFixture) tenantStatus(t *testing.T, v registeredTenant) string {
 	t.Helper()

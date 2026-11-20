@@ -35,7 +35,9 @@ func (TenantRegisteredV1) Topic() string { return "identity.tenant_registered.v1
 // OccurredAt returns the domain timestamp.
 func (e TenantRegisteredV1) OccurredAt() time.Time { return e.OccurredAtUTC }
 
-// TenantActivatedV1 — operator transitioned a tenant from Pending or
+// TenantActivatedV1 — a tenant became Active: operator-registered companies
+// are created active (it follows tenant_registered in the same transaction), or an
+// operator transitioned a tenant from Pending or
 // Suspended to Active. Consumed by CRM (re-enable lead operations) +
 // any module that gated work on `Tenant.Status`.
 type TenantActivatedV1 struct {

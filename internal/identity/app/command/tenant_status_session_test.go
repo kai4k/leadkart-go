@@ -97,27 +97,76 @@ func TestLogin_DeletedTenant_IsRefusedLikeABadCredential(t *testing.T) {
 	}
 }
 
-// A newly registered tenant is PENDING and nothing activates it: its first admin
-// must still sign in (registration -> first login).
-func TestLogin_PendingTenant_FirstAdminSignsIn(t *testing.T) {
+// Owner ruling 2026-11-21: "If a Company is not Active no one can login from that
+// org." Pending and pending_deletion members are refused after the password check,
+// with their own answer; the unknown/wrong-password surfaces do not change.
+func TestLogin_NotActiveTenant_CorrectPasswordIsRefusedAsTenantNotActive(t *testing.T) {
 	t.Parallel()
-	rig := newLoginRig(t)
-	p, families := seedTenantMember(t, rig, tenant.StatusPending)
+	for _, status := range []tenant.Status{tenant.StatusPending, tenant.StatusPendingDeletion} {
+		t.Run(status.String(), func(t *testing.T) {
+			t.Parallel()
+			rig := newLoginRig(t)
+			p, families := seedTenantMember(t, rig, status)
 
-	if err := loginAs(t, rig, p, tenantStatusPlain); err != nil {
-		t.Fatalf("pending tenant, right password = %v, want a session", err)
-	}
-	if n := families(); n != 1 {
-		t.Fatalf("%d families, want 1", n)
+			err := loginAs(t, rig, p, tenantStatusPlain)
+			if !errors.Is(err, command.ErrTenantNotActive) {
+				t.Fatalf("%s tenant, right password = %v, want ErrTenantNotActive", status, err)
+			}
+			if errors.Is(err, command.ErrTenantSuspended) || errors.Is(err, command.ErrInvalidCredentials) {
+				t.Fatalf("%s tenant answered %v: must be its own answer", status, err)
+			}
+			if n := families(); n != 0 {
+				t.Fatalf("%d refresh families for a refused login, want 0", n)
+			}
+			// Enumeration: a wrong password is the ordinary wrong password.
+			if err := loginAs(t, rig, p, "not the password at all"); err != command.ErrInvalidCredentials { //nolint:errorlint // identity: the surface must be byte-identical
+				t.Fatalf("%s tenant, wrong password = %v, want exactly ErrInvalidCredentials", status, err)
+			}
+		})
 	}
 }
 
-func TestLogin_PendingDeletionTenant_StillSignsIn_PendingTheOwnersDecision(t *testing.T) {
+// A company registered by an operator is created active (the controller default,
+// ADR 0069), so its first admin signs in: registration -> first login.
+func TestLogin_RegisteredTenant_FirstAdminSignsIn(t *testing.T) {
+	t.Parallel()
+	deps := b2NewRegisterDeps()
+	cmd := b2RegisterCmd(t)
+	out, err := b2NewRegisterHandler(deps).Handle(t.Context(), cmd)
+	if err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	tn, err := deps.tenants.GetByID(t.Context(), out.TenantID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rig := newLoginRig(t)
+	p := newPersonWithPassword(t, tenantStatusPlain)
+	m := activeMembership(t, p, tn)
+	seedLoginCandidate(t, rig, p, m)
+	if err := rig.tenants.Add(t.Context(), tn); err != nil {
+		t.Fatal(err)
+	}
+	rig.router.tenantStatus = tn.Status() // what the router reads for the registered tenant
+	if err := loginAs(t, rig, p, tenantStatusPlain); err != nil {
+		t.Fatalf("first admin of a just-registered tenant (status %s) = %v, want a session", tn.Status(), err)
+	}
+}
+
+// A company restored from deletion lets its members sign in again.
+func TestLogin_RestoredTenant_SignsInAgain(t *testing.T) {
 	t.Parallel()
 	rig := newLoginRig(t)
-	p, _ := seedTenantMember(t, rig, tenant.StatusPendingDeletion)
+	p, families := seedTenantMember(t, rig, tenant.StatusPendingDeletion)
+	if err := loginAs(t, rig, p, tenantStatusPlain); !errors.Is(err, command.ErrTenantNotActive) {
+		t.Fatalf("while pending deletion: %v", err)
+	}
+	rig.router.tenantStatus = tenant.StatusActive
 	if err := loginAs(t, rig, p, tenantStatusPlain); err != nil {
-		t.Fatalf("pending_deletion tenant = %v, want a session (open owner question, ADR 0069)", err)
+		t.Fatalf("after restore: %v", err)
+	}
+	if n := families(); n != 1 {
+		t.Fatalf("%d families, want 1", n)
 	}
 }
 
@@ -199,16 +248,51 @@ func TestRefresh_DeletedTenant_IsRejectedAndTheFamilyRevoked(t *testing.T) {
 	}
 }
 
-func TestRefresh_PendingTenant_StillRefreshes(t *testing.T) {
+// Owner ruling 2026-11-21: a pending or pending-deletion company's sessions end at
+// the next refresh, with reason tenant_not_active, and the family is revoked with the
+// same reason. Restoring the company does not bring the family back.
+func TestRefresh_NotActiveTenant_IsRejectedWithItsReasonAndTheFamilyRevoked(t *testing.T) {
 	t.Parallel()
-	rig := newRefreshRig(t)
-	fx := seedFullRefreshFixture(t, rig)
-	if fx.tenant.Status() != tenant.StatusPending {
-		t.Fatalf("fixture tenant is %s, want pending (what registration creates)", fx.tenant.Status())
+	for _, status := range []tenant.Status{tenant.StatusPending, tenant.StatusPendingDeletion} {
+		t.Run(status.String(), func(t *testing.T) {
+			t.Parallel()
+			rig := newRefreshRig(t)
+			fx := seedFullRefreshFixture(t, rig)
+			if err := rig.tenants.UpdateByID(t.Context(), fx.tenant.ID(), func(loaded *tenant.Tenant) (bool, error) {
+				if status == tenant.StatusPendingDeletion {
+					return true, loaded.MarkForDeletion("closed", testNow)
+				}
+				return true, setStatusPending(loaded)
+			}); err != nil {
+				t.Fatalf("move tenant to %s: %v", status, err)
+			}
+
+			res, err := rig.handler.Handle(t.Context(), command.RefreshCommand{RefreshTokenPlain: fx.plaintext})
+			if !errors.Is(err, command.ErrRefreshRejected) || !errors.Is(err, command.ErrTenantNotActive) {
+				t.Fatalf("%s tenant refresh = %v, want ErrRefreshRejected + ErrTenantNotActive", status, err)
+			}
+			if res.AccessToken != "" || res.RefreshTokenPlain != "" {
+				t.Fatalf("a token was minted for a %s tenant: %+v", status, res)
+			}
+			fam, gerr := rig.families.GetByTokenHash(t.Context(), refreshmintHashOf(t, fx.plaintext))
+			if gerr != nil {
+				t.Fatal(gerr)
+			}
+			if !fam.IsRevoked() || fam.RevokeReason() != "tenant_not_active" {
+				t.Fatalf("family revoked=%v reason=%q, want revoked with tenant_not_active", fam.IsRevoked(), fam.RevokeReason())
+			}
+		})
 	}
-	if _, err := rig.handler.Handle(t.Context(), command.RefreshCommand{RefreshTokenPlain: fx.plaintext}); err != nil {
-		t.Fatalf("pending tenant refresh: %v", err)
-	}
+}
+
+// setStatusPending rebuilds the tenant as the pending one a future self-signup flow
+// would create (the aggregate has no transition INTO pending; the snapshot does).
+func setStatusPending(tn *tenant.Tenant) error {
+	*tn = *tenant.UnmarshalFromDB(tenant.Snapshot{
+		ID: tn.ID(), Slug: tn.Slug(), LegalName: tn.LegalName(), DisplayName: tn.DisplayName(),
+		Status: tenant.StatusPending, CreatedAt: tn.CreatedAt(),
+	})
+	return nil
 }
 
 // The family revoked while the tenant was suspended stays dead after the tenant is

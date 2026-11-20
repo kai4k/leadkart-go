@@ -13,14 +13,14 @@ INSERT INTO identity.tenants (
     password_require_digit, password_require_symbol,
     password_max_failed_attempts, password_lockout_minutes,
     locale, time_zone, date_format, currency,
-    deletion_scheduled_at, deletion_reason, hard_deleted_at
+    deletion_scheduled_at, deletion_reason, hard_deleted_at, activated_at
 ) VALUES (
     $1, $2, $3, $4, $5, $6,
     $7, $8, $9,
     $10, $11, $12, $13, $14, $15, $16,
     $17, $18, $19, $20, $21, $22, $23,
     $24, $25, $26, $27,
-    $28, $29, $30
+    $28, $29, $30, $31
 );
 
 -- name: GetTenantByID :one

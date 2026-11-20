@@ -137,6 +137,16 @@ func (h *RevokeFamiliesOnSecurityChange) HandleTenantSuspended(
 	return h.revokeAllForTenant(ctx, evt.TenantID.String(), "tenant_suspended")
 }
 
+// HandleTenantMarkedForDeletion handles `identity.tenant_marked_for_deletion.v1`: a
+// company in its deletion grace window is not active (owner ruling 2026-11-21), so
+// its members' sessions end like a suspension's. Restoring the company needs no
+// handler: the families stay revoked and its members sign in again.
+func (h *RevokeFamiliesOnSecurityChange) HandleTenantMarkedForDeletion(
+	ctx context.Context, evt *integrationevents.TenantMarkedForDeletionV1,
+) error {
+	return h.revokeAllForTenant(ctx, evt.TenantID.String(), "tenant_not_active")
+}
+
 // HandleTenantDeleted handles `identity.tenant_deleted.v1` (the terminal hard
 // delete): same cascade. A tenant row that still has families cannot be deleted
 // (foreign key), so this is the defence for a future that removes the constraint.

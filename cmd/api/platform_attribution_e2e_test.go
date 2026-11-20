@@ -69,11 +69,7 @@ func TestE2E_PlatformRoutes_DestructiveWritesCarryOperatorAttribution(t *testing
 	t.Run("mark for deletion and hard delete without header", func(t *testing.T) {
 		v := f.registerAndLogin(t, "attrdel")
 		opID := "0197c4a0-7000-7000-8000-00000000a002"
-		op := mintOperatorJWTExact(t, f.Issuer, f.persons, opID, []string{p.Tenants.Delete, p.Tenants.Activate}, false)
-		// A freshly registered tenant is pending; only an active one enters the grace window.
-		if r := f.authedJSON(t, http.MethodPost, "/api/v1/tenants/"+v.TenantID+"/activate", op, nil); r.status != http.StatusNoContent {
-			t.Fatalf("activate: %d %s", r.status, r.body)
-		}
+		op := mintOperatorJWTExact(t, f.Issuer, f.persons, opID, []string{p.Tenants.Delete}, false)
 		if r := f.authedJSON(t, http.MethodPost, "/api/v1/tenants/"+v.TenantID+"/mark-for-deletion", op, ports.MarkTenantForDeletionRequest{Reason: "attribution test"}); r.status != http.StatusNoContent {
 			t.Fatalf("mark-for-deletion: %d %s", r.status, r.body)
 		}

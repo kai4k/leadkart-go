@@ -265,6 +265,16 @@ func (h RegisterTenantHandler) persistAggregatesInTx(
 		if terr != nil {
 			return fmt.Errorf("construct tenant: %w", terr)
 		}
+		// Owner ruling 2026-11-21: only an ACTIVE company's members sign in. A company
+		// an operator registers (the only registration route, platform.tenants.create)
+		// is approved by that very act, so it is created active: the first admin signs
+		// in. This is the controller's default, pending the owner's confirmation (ADR
+		// 0069). Activate records the activation time and the tenant_activated event
+		// next to tenant_registered; pending stays in the domain for a future
+		// self-signup flow and is produced by no current route.
+		if terr := t.Activate(now); terr != nil {
+			return fmt.Errorf("activate tenant: %w", terr)
+		}
 		// ctx carries the active tx — repository .Add joins it via
 		// pg.TxFromContext. Boundary stays clean of pgx.
 		if terr := h.tenants.Add(ctx, t); terr != nil {

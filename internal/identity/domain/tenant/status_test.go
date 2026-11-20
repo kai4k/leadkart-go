@@ -71,3 +71,24 @@ func TestParseStatus(t *testing.T) {
 		})
 	}
 }
+
+// Owner ruling 2026-11-21: "If a Company is not Active no one can login from that
+// org." Only active members sign in; every other status, including the zero value,
+// fails closed.
+func TestStatus_MembersMaySignIn_OnlyActive(t *testing.T) {
+	t.Parallel()
+	cases := map[tenant.Status]bool{
+		tenant.StatusUnknown:         false,
+		tenant.StatusPending:         false,
+		tenant.StatusActive:          true,
+		tenant.StatusSuspended:       false,
+		tenant.StatusPendingDeletion: false,
+		tenant.StatusDeleted:         false,
+		tenant.Status(99):            false,
+	}
+	for st, want := range cases {
+		if got := st.MembersMaySignIn(); got != want {
+			t.Errorf("%s.MembersMaySignIn() = %v, want %v", st, got, want)
+		}
+	}
+}

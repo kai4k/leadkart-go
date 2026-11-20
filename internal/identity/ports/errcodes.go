@@ -68,12 +68,27 @@ const (
 	// caller already holds, so it reveals nothing about anyone else.
 	RefreshReasonTenantSuspended = "tenant_suspended"
 
+	// RefreshReasonTenantNotActive is the `reason` of a refresh_rejected answer for a
+	// session of a company that is not active for any reason other than suspension: it
+	// is pending, or marked for deletion (owner ruling 2026-11-21: "If a Company is not
+	// Active no one can login from that org."). The family is revoked as
+	// `tenant_not_active`; restoring the company does not bring it back, its members
+	// sign in again. Only given for a refresh token the caller already holds.
+	RefreshReasonTenantNotActive = "tenant_not_active"
+
 	// ErrCodeTenantSuspended — login with the CORRECT password for a member of a
 	// suspended company (403). It is only ever answered after the password was
 	// verified, so a wrong password or an unknown email still answers
 	// invalid_credentials and the code names nothing to someone who does not know the
 	// password. The web shows "your company's account is suspended; contact support".
 	ErrCodeTenantSuspended = "tenant_suspended"
+
+	// ErrCodeTenantNotActive — login with the CORRECT password for a member of a
+	// company that is pending or marked for deletion (403). Answered only after the
+	// password was verified, exactly like [ErrCodeTenantSuspended]; a deleted company
+	// stays invalid_credentials. The web shows "your company is not active; contact
+	// support".
+	ErrCodeTenantNotActive = "tenant_not_active"
 
 	// ErrCodeInternalError — generic 500 surface. Detail goes to
 	// slog.ErrorContext server-side; HTTP body stays empty to avoid

@@ -70,6 +70,13 @@ var ErrInvalidCredentials = errors.New("login: invalid credentials")
 // [ErrInvalidCredentials]). Refresh wraps it together with [ErrRefreshRejected].
 var ErrTenantSuspended = errors.New("tenant suspended")
 
+// ErrTenantNotActive is returned by login when the password was verified and the
+// person's company is neither active nor suspended nor deleted: it is pending or
+// marked for deletion. Owner ruling 2026-11-21: "If a Company is not Active no one
+// can login from that org." Like [ErrTenantSuspended] it is only ever returned AFTER
+// the password check. Refresh wraps it together with [ErrRefreshRejected].
+var ErrTenantNotActive = errors.New("tenant not active")
+
 // ErrAccountLocked surfaces when the calling Person hit the
 // [person.MaxFailedLogins] threshold within [person.LockoutWindow] and
 // is currently inside the [person.LockoutDuration] cool-off. HTTP layer
@@ -326,7 +333,8 @@ func NewLoginHandler(
 //  5. Load the full membership + the Tenant (tenant_slug claim).
 //  6. In ONE transaction: re-read the person under a SHARE lock, refuse when the
 //     credential is no longer the verified one or the tenant's members may not sign
-//     in (suspended: [ErrTenantSuspended]; deleted: [ErrInvalidCredentials]), insert
+//     in (suspended: [ErrTenantSuspended]; pending or marked for deletion:
+//     [ErrTenantNotActive]; deleted: [ErrInvalidCredentials]), insert
 //     the refresh family.
 //  7. Issue JWT with per-Membership claims and the stamp read under that lock.
 //
@@ -478,13 +486,17 @@ func (h LoginHandler) openSession(ctx context.Context, id person.ID, verified pe
 			return ErrInvalidCredentials
 		}
 		// The password was verified (and is still the stored one, above), so naming
-		// the suspension reveals nothing to someone who does not know it. A deleted
-		// (or otherwise unusable) tenant stays the ordinary refusal.
+		// the status reveals nothing to someone who does not know it. A deleted (or
+		// otherwise unusable) tenant stays the ordinary refusal.
 		if !target.TenantStatus.MembersMaySignIn() {
-			if target.TenantStatus == tenant.StatusSuspended {
+			switch target.TenantStatus {
+			case tenant.StatusSuspended:
 				return ErrTenantSuspended
+			case tenant.StatusPending, tenant.StatusPendingDeletion:
+				return ErrTenantNotActive
+			default:
+				return ErrInvalidCredentials
 			}
-			return ErrInvalidCredentials
 		}
 		if err := h.families.Add(ctx, family); err != nil {
 			return fmt.Errorf("login: persist family: %w", err)

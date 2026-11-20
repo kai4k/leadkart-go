@@ -236,6 +236,11 @@ func TestRegisterTenant_HappyPath_FreshPerson(t *testing.T) {
 	if tn.Slug().String() != cmd.Slug.String() {
 		t.Errorf("tenant slug = %q, want %q", tn.Slug().String(), cmd.Slug.String())
 	}
+	// Controller default (ADR 0069, pending owner confirmation): a company an
+	// operator registers is created active, so its first admin can sign in.
+	if tn.Status() != tenant.StatusActive || !tn.ActivatedAt().Equal(testNow) {
+		t.Errorf("registered tenant status=%s activated_at=%v, want active at %v", tn.Status(), tn.ActivatedAt(), testNow)
+	}
 
 	p, err := deps.persons.GetByID(t.Context(), out.PersonID)
 	if err != nil {

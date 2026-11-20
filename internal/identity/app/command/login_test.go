@@ -329,6 +329,11 @@ func newTenantWithSlug(t *testing.T, sStr string) *tenant.Tenant {
 	if err != nil {
 		t.Fatalf("tenant.New: %v", err)
 	}
+	// Owner ruling 2026-11-21: only an active company's members sign in, and
+	// registration creates an active company; the fixture is the registered shape.
+	if err := tn.Activate(testNow); err != nil {
+		t.Fatalf("tenant.Activate: %v", err)
+	}
 	tn.PullEvents()
 	return tn
 }

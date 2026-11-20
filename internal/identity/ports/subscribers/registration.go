@@ -46,6 +46,7 @@ const (
 	HandlerRevokeOnMembershipDeactivate = "identity.subscribers.RevokeFamiliesOnMembershipDeactivate"
 	HandlerRevokeOnTenantSuspended      = "identity.subscribers.RevokeFamiliesOnTenantSuspended"
 	HandlerRevokeOnTenantDeleted        = "identity.subscribers.RevokeFamiliesOnTenantDeleted"
+	HandlerRevokeOnTenantMarkedDeletion = "identity.subscribers.RevokeFamiliesOnTenantMarkedForDeletion"
 
 	// SIEM subscriber.
 	HandlerReuseDetectedSIEM = "identity.subscribers.ReuseDetectedSIEM"
@@ -101,6 +102,7 @@ func Handlers(
 		cqrs.NewEventHandler(HandlerRevokeOnEmailChanged, revoke.HandleEmailChanged),
 		cqrs.NewEventHandler(HandlerRevokeOnMembershipDeactivate, revoke.HandleMembershipDeactivated),
 		cqrs.NewEventHandler(HandlerRevokeOnTenantSuspended, revoke.HandleTenantSuspended),
+		cqrs.NewEventHandler(HandlerRevokeOnTenantMarkedDeletion, revoke.HandleTenantMarkedForDeletion),
 		cqrs.NewEventHandler(HandlerRevokeOnTenantDeleted, revoke.HandleTenantDeleted),
 
 		// SIEM.

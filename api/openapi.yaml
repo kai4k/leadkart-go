@@ -199,10 +199,13 @@ paths:
             suspended (an operator suspended it; reactivation restores sign-in). It is
             answered only after the password was verified, so a wrong password or an unknown
             email still answers `401 invalid_credentials` and the code tells a stranger
-            nothing. A deleted company, and one with no usable membership, stay `401
-            invalid_credentials`. A freshly registered company is `pending`, which signs in
-            normally. A company in `pending_deletion` still signs in for now (an open owner
-            decision, ADR 0069).
+            nothing. `tenant_not_active`: the password was CORRECT but the company is
+            neither active nor suspended nor deleted, that is `pending` or marked for
+            deletion (`pending_deletion`); same rule (owner ruling 2026-11-21: only an active
+            company's members sign in; restoring the company or an operator's activation
+            brings them back). A company registered by an operator is created `active`, so
+            its first admin signs in. A deleted company, and one with no usable membership,
+            stay `401 invalid_credentials`.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
@@ -264,9 +267,12 @@ paths:
         and so is a member of a SUSPENDED company: `401 refresh_rejected` with
         `reason: tenant_suspended` (the family is revoked as `tenant_suspended`; a
         reactivated company's members sign in again, the old session does not return).
-        A deleted company's members are refused without a reason. Suspending a company
-        also revokes its members' families (outbox subscriber), but an access token
-        already issued stays valid until its own expiry (600 s).
+        A member of a company that is `pending` or marked for deletion is refused the same
+        way with `reason: tenant_not_active` (the family is revoked as `tenant_not_active`;
+        a restored company's members sign in again). A deleted company's members are
+        refused without a reason. Suspending a company or marking it for deletion also
+        revokes its members' families (outbox subscriber), but an access token already
+        issued stays valid until its own expiry (600 s).
       requestBody:
         required: true
         content:
@@ -283,7 +289,8 @@ paths:
             Refresh rejected (consumed / expired / family revoked / reuse). For a session that
             ended by time (absolute lifetime or idle timeout) the body carries
             `reason: session_expired`; for a member of a suspended company
-            `reason: tenant_suspended`.
+            `reason: tenant_suspended`; for a member of a pending or marked-for-deletion
+            company `reason: tenant_not_active`.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
@@ -602,6 +609,10 @@ paths:
         onboarding is operator-led (ADR 0053 "no public sign-up surface").
         Requires `platform.tenants.create`.
 
+        The company is created `active` (the operator's registration is the approval; owner
+        ruling 2026-11-21: only an active company's members sign in), so its first admin
+        signs in at once. `pending` is produced by no route today.
+
         The first admin's temporary password is checked against the DEFAULT password policy
         (the new tenant has no stored policy yet): `422 password_policy_violation` with
         `errors.admin_password`. Nothing is created on a violation.
@@ -815,6 +826,10 @@ paths:
       tags: [tenants]
       summary: Activate a pending or suspended tenant (Platform-only)
       description: |
+        A company registered through `POST /api/v1/tenants` is created `active`, so activating
+        it answers 204 and changes nothing (no event, `activated_at` is kept): idempotent, not
+        an error. Activating a company in `pending_deletion` is 422 `tenant_invalid` (restore it instead) and a
+        deleted one is 422 `tenant_invalid`.
         Requires `identity.tenants.activate` held by a platform-tenant operator; platform-tenant membership alone is refused with 403 `forbidden`.
       parameters:
         - $ref: '#/components/parameters/XCommandId'
@@ -4487,7 +4502,8 @@ components:
             Refines `error` where a client must react differently to one failure of a code
             (RFC 9457 extension). Present only on `401 refresh_rejected`: `session_expired`
             (the session reached its absolute lifetime or sat idle past `Refresh.SlidingTTL`) or
-            `tenant_suspended` (the person's company is suspended). Absent everywhere else.
+            `tenant_suspended` (the person's company is suspended) or `tenant_not_active` (it is
+            pending or marked for deletion). Absent everywhere else.
         errors:
           type: object
           description: 'Field-level errors (RFC 9457 §3.1 extension). Key = JSON field name; value = list of error strings.'

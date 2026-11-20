@@ -204,6 +204,7 @@ func insertTenantRow(ctx context.Context, q *db.Queries, t *tenant.Tenant) error
 		DeletionScheduledAt:       pgconv.PgTimestamp(t.DeletionScheduledAt()),
 		DeletionReason:            t.DeletionReason(),
 		HardDeletedAt:             pgconv.PgTimestamp(t.HardDeletedAt()),
+		ActivatedAt:               pgconv.PgTimestamp(t.ActivatedAt()),
 	})
 	if err != nil {
 		if isUniqueViolation(err) {

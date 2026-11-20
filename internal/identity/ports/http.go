@@ -494,6 +494,10 @@ func handleLogin(log *slog.Logger, a app.Application) http.Handler {
 			// The password was verified: naming the suspension tells a stranger nothing.
 			writeError(w, http.StatusForbidden, ErrCodeTenantSuspended, "")
 			return
+		case errors.Is(err, command.ErrTenantNotActive):
+			// Same rule: only after the password was verified.
+			writeError(w, http.StatusForbidden, ErrCodeTenantNotActive, "")
+			return
 		case err != nil:
 			log.ErrorContext(r.Context(), "login failed", "err", err)
 			writeError(w, http.StatusInternalServerError, ErrCodeInternalError, "")
@@ -562,6 +566,15 @@ func handleRefresh(log *slog.Logger, a app.Application) http.Handler {
 				Status: http.StatusUnauthorized,
 				Error:  ErrCodeRefreshRejected,
 				Reason: RefreshReasonTenantSuspended,
+			})
+			return
+		case errors.Is(err, command.ErrTenantNotActive):
+			writeJSON(w, http.StatusUnauthorized, ErrorResponse{
+				Type:   problemType(ErrCodeRefreshRejected),
+				Title:  http.StatusText(http.StatusUnauthorized),
+				Status: http.StatusUnauthorized,
+				Error:  ErrCodeRefreshRejected,
+				Reason: RefreshReasonTenantNotActive,
 			})
 			return
 		case errors.Is(err, command.ErrRefreshRejected):
