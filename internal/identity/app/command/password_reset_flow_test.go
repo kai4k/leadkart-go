@@ -266,7 +266,7 @@ func TestConfirmPasswordReset_AnonymisedPerson_ReturnsTokenInvalid(t *testing.T)
 		t.Fatalf("Request: %v", err)
 	}
 	rawToken := repo.emailRequestedToken(t)
-	if err := p.Anonymise(testNow); err != nil {
+	if err := p.Anonymise("test reason", testNow); err != nil {
 		t.Fatalf("Anonymise: %v", err)
 	}
 
@@ -469,7 +469,7 @@ func TestRequestPasswordReset_AnonymisedPerson_SilentSuccess(t *testing.T) {
 	t.Parallel()
 	addr, _ := email.New("alice@example.test")
 	p := newPersonWithPassword(t, "current-pw")
-	if err := p.Anonymise(testNow); err != nil {
+	if err := p.Anonymise("test reason", testNow); err != nil {
 		t.Fatalf("Anonymise: %v", err)
 	}
 	repo := newResettableRepo(t, p)

@@ -192,6 +192,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
 
   /api/v1/auth/logout:
     post:
@@ -205,6 +206,7 @@ paths:
             schema: { $ref: '#/components/schemas/LogoutRequest' }
       responses:
         '204': { description: Logged out (idempotent) }
+        '400': { $ref: '#/components/responses/BadRequest' }
 
   /api/v1/auth/request-password-reset:
     post:
@@ -221,6 +223,7 @@ paths:
             schema: { $ref: '#/components/schemas/RequestPasswordResetRequest' }
       responses:
         '204': { description: Reset request accepted (silent success) }
+        '400': { $ref: '#/components/responses/BadRequest' }
 
   /api/v1/auth/reset-password:
     post:
@@ -259,6 +262,7 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
         '422': { $ref: '#/components/responses/Unprocessable' }
+        '400': { $ref: '#/components/responses/BadRequest' }
 
   /api/v1/auth/request-email-change:
     post:
@@ -333,6 +337,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ListAuditEventsResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
 
   # ===== SESSIONS =======================================================
   /api/v1/auth/sessions:
@@ -370,6 +375,8 @@ paths:
           schema: { type: string, format: uuid }
       responses:
         '204': { description: Session revoked (idempotent) }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
 
   # ===== TENANTS ========================================================
   /api/v1/tenants:
@@ -460,6 +467,7 @@ paths:
               schema: { $ref: '#/components/schemas/TenantDto' }
         '403': { $ref: '#/components/responses/TenantScopeForbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
+        '400': { $ref: '#/components/responses/BadRequest' }
 
   /api/v1/tenants/{tenantId}/profile:
     patch:
@@ -483,6 +491,7 @@ paths:
         '403': { $ref: '#/components/responses/TenantScopeForbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '422': { $ref: '#/components/responses/Unprocessable' }
+        '409': { description: "Conflict with the current state of the resource (see the `error` code)", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
 
   /api/v1/tenants/{tenantId}/statutory:
     patch:
@@ -511,6 +520,7 @@ paths:
         '403': { $ref: '#/components/responses/TenantScopeForbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '422': { $ref: '#/components/responses/Unprocessable' }
+        '409': { description: "Conflict with the current state of the resource (see the `error` code)", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
 
   /api/v1/tenants/{tenantId}/admin-contact:
     patch:
@@ -536,6 +546,7 @@ paths:
         '403': { $ref: '#/components/responses/TenantScopeForbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '422': { $ref: '#/components/responses/Unprocessable' }
+        '409': { description: "Conflict with the current state of the resource (see the `error` code)", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
 
   /api/v1/tenants/{tenantId}/settings:
     patch:
@@ -559,6 +570,7 @@ paths:
         '403': { $ref: '#/components/responses/TenantScopeForbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '422': { $ref: '#/components/responses/Unprocessable' }
+        '409': { description: "Conflict with the current state of the resource (see the `error` code)", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
 
   /api/v1/tenants/{tenantId}/display-preferences:
     patch:
@@ -582,6 +594,7 @@ paths:
         '403': { $ref: '#/components/responses/TenantScopeForbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '422': { $ref: '#/components/responses/Unprocessable' }
+        '409': { description: "Conflict with the current state of the resource (see the `error` code)", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
 
   /api/v1/tenants/{tenantId}/suspend:
     post:
@@ -605,6 +618,8 @@ paths:
         '403': { $ref: '#/components/responses/TenantScopeForbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '422': { $ref: '#/components/responses/Unprocessable' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '409': { description: "Conflict with the current state of the resource (see the `error` code)", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
 
   /api/v1/tenants/{tenantId}/activate:
     post:
@@ -621,6 +636,8 @@ paths:
         '403': { $ref: '#/components/responses/TenantScopeForbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '422': { $ref: '#/components/responses/Unprocessable' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '409': { description: "Conflict with the current state of the resource (see the `error` code)", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
 
   /api/v1/tenants/{tenantId}/mark-for-deletion:
     post:
@@ -647,6 +664,8 @@ paths:
         '403': { $ref: '#/components/responses/TenantScopeForbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '422': { $ref: '#/components/responses/Unprocessable' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '409': { description: "Conflict with the current state of the resource (see the `error` code)", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
 
   /api/v1/tenants/{tenantId}/restore:
     post:
@@ -663,6 +682,8 @@ paths:
         '403': { $ref: '#/components/responses/TenantScopeForbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '422': { $ref: '#/components/responses/Unprocessable' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '409': { description: "Conflict with the current state of the resource (see the `error` code)", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
 
   /api/v1/tenants/by-slug/{slug}:
     get:
@@ -718,6 +739,7 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/ListAuditEventsResponse' }
         '403': { $ref: '#/components/responses/TenantScopeForbidden' }
+        '400': { $ref: '#/components/responses/BadRequest' }
 
   # ===== USERS ==========================================================
   /api/v1/users:
@@ -738,6 +760,7 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/ListUsersResponse' }
         '403': { $ref: '#/components/responses/TenantScopeForbidden' }
+        '400': { $ref: '#/components/responses/BadRequest' }
     post:
       parameters:
         - $ref: '#/components/parameters/XCommandId'
@@ -759,6 +782,9 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/CreateUserResponse' }
         '403': { $ref: '#/components/responses/TenantScopeForbidden' }
+        '400': { description: "`invalid_body` — the body is not valid JSON; `invalid_email` — the email is not a valid address", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+        '409': { description: "`email_has_active_membership` — the email already has an active membership in another tenant", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+        '422': { description: "`user_invalid` — the new membership violates a domain invariant (see `message`)", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
 
   /api/v1/users/{userId}:
     get:
@@ -778,6 +804,7 @@ paths:
               schema: { $ref: '#/components/schemas/UserDto' }
         '403': { $ref: '#/components/responses/TenantScopeForbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
+        '400': { $ref: '#/components/responses/BadRequest' }
 
   /api/v1/users/{userId}/profile:
     patch:
@@ -800,6 +827,8 @@ paths:
         '400': { $ref: '#/components/responses/BadRequest' }
         '403': { $ref: '#/components/responses/AuthorityForbidden' }
         '422': { $ref: '#/components/responses/Unprocessable' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { description: "Conflict with the current state of the resource (see the `error` code)", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
 
   /api/v1/users/{userId}/deactivate:
     post:
@@ -822,6 +851,8 @@ paths:
         '403': { $ref: '#/components/responses/AuthorityForbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { description: "`last_owner_protected` — the change would leave the tenant without an active owner; `member_roles_inconsistent` — the member's assigned roles cannot be loaded as this tenant's roles, so its rank cannot be decided; nothing was changed (an assignment row written outside the commands, e.g. an operator repair or a restored backup, pointing at a role of another tenant)", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
 
   /api/v1/users/{userId}/reactivate:
     post:
@@ -839,6 +870,8 @@ paths:
         '403': { $ref: '#/components/responses/AuthorityForbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { description: "`person_active_elsewhere` — the person already has an active membership in another company (a person is active in at most one); nothing was changed; `member_roles_inconsistent` — the member's assigned roles cannot be loaded as this tenant's roles, so its rank cannot be decided; nothing was changed", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
 
   /api/v1/users/{userId}/roles:
     post:
@@ -862,6 +895,7 @@ paths:
         '403': { $ref: '#/components/responses/AuthorityForbidden' }
         '404': { description: "`role_not_found` — no live role with that id in the target tenant (or the user does not exist)", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
         '409': { description: "`member_roles_inconsistent` — the member's assigned roles cannot be loaded as this tenant's roles, so its rank cannot be decided; nothing was changed (an assignment row written outside the commands, e.g. an operator repair or a restored backup, pointing at a role of another tenant)", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+        '422': { $ref: '#/components/responses/Unprocessable' }
 
   /api/v1/users/{userId}/roles/{roleId}:
     delete:
@@ -880,6 +914,7 @@ paths:
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { description: "`last_owner_protected` — the change would leave the tenant without an active owner; `member_roles_inconsistent` — the member's assigned roles cannot be loaded as this tenant's roles, so its rank cannot be decided; nothing was changed (an assignment row written outside the commands, e.g. an operator repair or a restored backup, pointing at a role of another tenant)", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
         '422': { $ref: '#/components/responses/Unprocessable' }
+        '400': { $ref: '#/components/responses/BadRequest' }
 
   /api/v1/users/{userId}/permission-overrides:
     patch:
@@ -932,6 +967,7 @@ paths:
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { description: "`member_roles_inconsistent` — the member's assigned roles cannot be loaded as this tenant's roles, so its rank cannot be decided; nothing was changed (an assignment row written outside the commands, e.g. an operator repair or a restored backup, pointing at a role of another tenant)", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
         '422': { description: "`manager_not_eligible` — the manager is not an active member of this tenant more senior than the member, or the link would close a reporting cycle; otherwise validation (`user_invalid`)", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
     delete:
       tags: [users]
       summary: Remove user's reporting manager
@@ -946,6 +982,8 @@ paths:
         '403': { $ref: '#/components/responses/AuthorityForbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { description: "`member_roles_inconsistent` — the member's assigned roles cannot be loaded as this tenant's roles, so its rank cannot be decided; nothing was changed (an assignment row written outside the commands, e.g. an operator repair or a restored backup, pointing at a role of another tenant)", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
 
   /api/v1/users/{userId}/anonymise:
     post:
@@ -961,12 +999,18 @@ paths:
         - $ref: '#/components/parameters/XCommandId'
         - { $ref: '#/components/parameters/UserId' }
         - $ref: '#/components/parameters/XTenantId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AnonymiseRequest' }
       responses:
         '204': { description: User anonymised }
         '403': { $ref: '#/components/responses/AuthorityForbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { description: "`last_owner_protected` — the person is the only active owner of a tenant; nothing was changed. `person_memberships_changing` — the person's memberships kept changing while the change was checked (a reactivation raced it); nothing was changed, retry", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
         '422': { $ref: '#/components/responses/Unprocessable' }
+        '400': { $ref: '#/components/responses/BadRequest' }
 
   # ===== ROLES ==========================================================
   /api/v1/roles:
@@ -1019,6 +1063,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '404': { $ref: '#/components/responses/NotFound' }
 
   /api/v1/roles/{roleId}:
     get:
@@ -1037,6 +1082,8 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/RoleDto' }
         '403': { $ref: '#/components/responses/TenantScopeForbidden' }
+        '400': { description: "`invalid_role_id` — the path id is not a role id", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+        '404': { description: "`role_not_found`", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
     patch:
       tags: [roles]
       summary: Rename a role and/or change its hierarchy level
@@ -1108,6 +1155,8 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
 
   /api/v1/roles/{roleId}/parent:
     patch:
@@ -1236,6 +1285,7 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
         '422': { $ref: '#/components/responses/Unprocessable' }
+        '400': { $ref: '#/components/responses/BadRequest' }
 
   /api/v1/roles/{roleId}/permissions/revoke:
     post:
@@ -1268,6 +1318,7 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
         '422': { $ref: '#/components/responses/Unprocessable' }
+        '400': { $ref: '#/components/responses/BadRequest' }
 
   # ===== PLATFORM =======================================================
   /api/v1/platform/tenants:
@@ -1332,6 +1383,8 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/PersonDto' }
         '403': { $ref: '#/components/responses/Forbidden' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { description: "`person_not_found`", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
 
   /api/v1/platform/persons/{personId}/memberships:
     get:
@@ -1348,6 +1401,7 @@ paths:
               schema: { $ref: '#/components/schemas/ListPersonMembershipsResponse' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
+        '400': { $ref: '#/components/responses/BadRequest' }
 
   /api/v1/platform/persons/{personId}/profile:
     patch:
@@ -1374,6 +1428,7 @@ paths:
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '422': { $ref: '#/components/responses/Unprocessable' }
+        '409': { description: "Conflict with the current state of the resource (see the `error` code)", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
 
   /api/v1/platform/persons/{personId}/global-suspend:
     post:
@@ -1398,6 +1453,7 @@ paths:
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { description: "`last_owner_protected` — the person is the only active owner of a tenant; nothing was changed. `person_memberships_changing` — the person's memberships kept changing while the change was checked (a reactivation raced it); nothing was changed, retry", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
         '422': { $ref: '#/components/responses/Unprocessable' }
+        '400': { $ref: '#/components/responses/BadRequest' }
 
   /api/v1/platform/persons/{personId}/lift-global-suspension:
     post:
@@ -1414,6 +1470,8 @@ paths:
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '422': { $ref: '#/components/responses/Unprocessable' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '409': { description: "Conflict with the current state of the resource (see the `error` code)", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
 
   /api/v1/platform/persons/{personId}/anonymise:
     post:
@@ -1425,12 +1483,18 @@ paths:
       parameters:
         - $ref: '#/components/parameters/XCommandId'
         - { $ref: '#/components/parameters/PersonId' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AnonymiseRequest' }
       responses:
         '204': { description: Person anonymised }
         '403': { $ref: '#/components/responses/AuthorityForbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { description: "`last_owner_protected` — the person is the only active owner of a tenant; nothing was changed. `person_memberships_changing` — the person's memberships kept changing while the change was checked (a reactivation raced it); nothing was changed, retry", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
         '422': { $ref: '#/components/responses/Unprocessable' }
+        '400': { $ref: '#/components/responses/BadRequest' }
 
   /api/v1/platform/persons:
     get:
@@ -1451,6 +1515,7 @@ paths:
               schema: { $ref: '#/components/schemas/PersonDto' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
+        '400': { $ref: '#/components/responses/BadRequest' }
 
   /api/v1/platform/stats:
     get:
@@ -1477,6 +1542,7 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/PlatformStatsResponse' }
         '403': { $ref: '#/components/responses/Forbidden' }
+        '400': { $ref: '#/components/responses/BadRequest' }
 
   /api/v1/platform/impersonation/sessions:
     post:
@@ -1510,6 +1576,7 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
         '422': { $ref: '#/components/responses/Unprocessable' }
+        '400': { $ref: '#/components/responses/BadRequest' }
     get:
       tags: [platform]
       summary: List impersonation sessions
@@ -1687,6 +1754,7 @@ paths:
               schema: { $ref: '#/components/schemas/PermissionRequestDto' }
         '403': { $ref: '#/components/responses/TenantScopeNotSupported' }
         '404': { $ref: '#/components/responses/NotFound' }
+        '400': { $ref: '#/components/responses/BadRequest' }
 
   /api/v1/permission-requests/{requestId}/approve:
     post:
@@ -1744,6 +1812,7 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
         '422': { $ref: '#/components/responses/Unprocessable' }
+        '400': { $ref: '#/components/responses/BadRequest' }
 
   /api/v1/permission-requests/{requestId}/deny:
     post:
@@ -1779,6 +1848,7 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
         '422': { $ref: '#/components/responses/Unprocessable' }
+        '400': { $ref: '#/components/responses/BadRequest' }
 
   /api/v1/permission-requests/{requestId}/cancel:
     post:
@@ -1801,6 +1871,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
 
   # ============================================================================
   # Platform bounded context (ADR 0059) — Slice 1
@@ -1828,6 +1899,7 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '422': { $ref: '#/components/responses/ValidationError' }
+        '400': { $ref: '#/components/responses/BadRequest' }
     get:
       tags: [Platform]
       summary: List unverified contacts (Platform-only)
@@ -1847,6 +1919,7 @@ paths:
               schema: { $ref: '#/components/schemas/ListUnverifiedContactsResponse' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
+        '400': { $ref: '#/components/responses/BadRequest' }
 
   /api/v1/platform/unverified-contacts/{id}/calls:
     post:
@@ -1873,6 +1946,7 @@ paths:
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '422': { $ref: '#/components/responses/ValidationError' }
+        '400': { $ref: '#/components/responses/BadRequest' }
 
   /api/v1/platform/unverified-contacts/{id}/verify:
     post:
@@ -1902,6 +1976,7 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
         '422': { $ref: '#/components/responses/ValidationError' }
+        '400': { $ref: '#/components/responses/BadRequest' }
 
   /api/v1/platform/unverified-contacts/{id}/reject:
     post:
@@ -1921,6 +1996,7 @@ paths:
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '422': { $ref: '#/components/responses/ValidationError' }
+        '400': { $ref: '#/components/responses/BadRequest' }
 
   /api/v1/platform/marketplace/leads:
     get:
@@ -1954,6 +2030,7 @@ paths:
               schema: { $ref: '#/components/schemas/BrowseMarketplaceResponse' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
+        '400': { $ref: '#/components/responses/BadRequest' }
 
   /api/v1/platform/marketplace/leads/{id}/purchase:
     post:
@@ -1985,6 +2062,7 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
         '422': { $ref: '#/components/responses/ValidationError' }
+        '400': { $ref: '#/components/responses/BadRequest' }
 
   /api/v1/platform/lead-credits/topup:
     post:
@@ -2006,6 +2084,7 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '422': { $ref: '#/components/responses/ValidationError' }
+        '400': { $ref: '#/components/responses/BadRequest' }
 
   /api/v1/platform/lead-credits/balance:
     get:
@@ -2168,6 +2247,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
 
   /api/v1/inventory/products/{productId}/batches:
     post:
@@ -2542,6 +2622,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
 
   /api/v1/crm/leads/{leadId}/calls:
     post:
@@ -2605,6 +2686,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
 
   # ----- Tasks module (BRD §6.8) ---------------------------------------------
 
@@ -2755,6 +2837,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
 
   /api/v1/tasks/work-items/{workItemId}/complete:
     post:
@@ -2775,6 +2858,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
 
   /api/v1/tasks/work-items/{workItemId}/cancel:
     post:
@@ -2964,6 +3048,7 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
         '500': { $ref: '#/components/responses/InternalServerError' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
 
   /api/v1/dispatch/consignment-notes/{consignmentNoteId}/delivered:
     post:
@@ -2985,6 +3070,7 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
         '500': { $ref: '#/components/responses/InternalServerError' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
 
   /api/v1/dispatch/consignment-notes/{consignmentNoteId}/failed:
     post:
@@ -3143,6 +3229,7 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
         '500': { $ref: '#/components/responses/InternalServerError' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
 
   /api/v1/orders/orders/{orderId}:
     get:
@@ -3210,6 +3297,7 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
         '500': { $ref: '#/components/responses/InternalServerError' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
 
   /api/v1/orders/orders/{orderId}/pack:
     post:
@@ -3236,6 +3324,7 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
         '500': { $ref: '#/components/responses/InternalServerError' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
 
   /api/v1/orders/orders/{orderId}/invoice:
     get:
@@ -3304,6 +3393,7 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
         '500': { $ref: '#/components/responses/InternalServerError' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
 
   /api/v1/orders/orders/{orderId}/complete:
     post:
@@ -3325,6 +3415,7 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
         '500': { $ref: '#/components/responses/InternalServerError' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
 
   /api/v1/orders/orders/{orderId}/payments:
     get:
@@ -3548,6 +3639,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
 
   /api/v1/crm/reminders/{reminderId}/cancel:
     post:
@@ -3675,6 +3767,7 @@ paths:
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { $ref: '#/components/responses/NotFound' }
+        '409': { description: "Conflict with the current state of the resource (see the `error` code)", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
 
 components:
   securitySchemes:
@@ -4504,6 +4597,16 @@ components:
       required: [reason]
       properties:
         reason: { type: string, minLength: 1 }
+
+    AnonymiseRequest:
+      type: object
+      required: [reason]
+      description: |
+        The operator's free-text justification for an irreversible erasure. It is kept on the audit/outbox
+        event (`identity.person_anonymised.v1`, field `reason`) and never logged. It must describe the
+        request (a ticket number, the data-subject request), not contain the erased person's data.
+      properties:
+        reason: { type: string, minLength: 1, description: 'Not blank after trimming (same bound as a global suspension).' }
 
     UpdatePersonProfileRequest:
       type: object

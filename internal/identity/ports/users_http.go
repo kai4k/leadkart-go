@@ -14,6 +14,7 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/app/command"
 	"github.com/leadkart/leadkart-go/internal/identity/app/query"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/role"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 	"github.com/leadkart/leadkart-go/internal/identity/ports/authn"
@@ -407,9 +408,14 @@ func handleAnonymiseUser(log *slog.Logger, a app.Application) http.Handler {
 		if !ok {
 			return
 		}
+		var req AnonymiseRequest
+		if !decodeFullBody(w, r, &req) {
+			return
+		}
 		err := a.Commands.AnonymiseUser.Handle(r.Context(), command.AnonymiseUserCommand{
 			TenantID:     tenant.ID(tid),
 			MembershipID: mid,
+			Reason:       req.Reason,
 		})
 		writeUserMutationResult(w, log, r, err)
 	})
@@ -451,6 +457,10 @@ func writeUserMutationResult(w http.ResponseWriter, log *slog.Logger, r *http.Re
 		writeError(w, http.StatusConflict, ErrCodePersonActiveElsewhere, "this person already has an active membership in another company")
 	case errors.Is(err, membership.ErrInvalid):
 		writeError(w, http.StatusUnprocessableEntity, ErrCodeUserInvalid, err.Error())
+	case errors.Is(err, person.ErrInvalid):
+		// the erasure reason is blank after trimming; the message names the rule,
+		// never the person's data
+		writeError(w, http.StatusUnprocessableEntity, ErrCodePersonInvalid, err.Error())
 	default:
 		log.ErrorContext(r.Context(), "user mutation failed", "err", err)
 		writeError(w, http.StatusInternalServerError, ErrCodeInternalError, "")

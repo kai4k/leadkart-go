@@ -115,7 +115,10 @@ func (e PersonGlobalSuspensionLiftedV1) OccurredAt() time.Time { return e.Occurr
 type PersonAnonymisedV1 struct {
 	platformMarker
 
-	PersonID      uuid.UUID `json:"person_id"`
+	PersonID uuid.UUID `json:"person_id"`
+	// Reason is the operator's free-text justification (never the erased
+	// person's data); additive to the V1 payload.
+	Reason        string    `json:"reason"`
 	OccurredAtUTC time.Time `json:"occurred_at_utc"`
 }
 

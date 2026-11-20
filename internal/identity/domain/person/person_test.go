@@ -257,7 +257,7 @@ func TestUpdateProfile_RejectsEmptyAndOverlong(t *testing.T) {
 func TestUpdateProfile_RefusedOnAnonymisedPerson(t *testing.T) {
 	t.Parallel()
 	p := newPerson(t)
-	_ = p.Anonymise(testNow) // arch-test:ignore-err - test fixture setup
+	_ = p.Anonymise("test reason", testNow) // arch-test:ignore-err - test fixture setup
 	_ = p.PullEvents()
 
 	err := p.UpdateProfile("Alice", "Sharma", testNow)
@@ -349,7 +349,7 @@ func TestRequestPasswordReset_RejectedOnAnonymisedAndSuspended(t *testing.T) {
 	h := mustResetHash(t, validResetHash)
 
 	pAnon := newPerson(t)
-	_ = pAnon.Anonymise(testNow) // arch-test:ignore-err - test fixture setup
+	_ = pAnon.Anonymise("test reason", testNow) // arch-test:ignore-err - test fixture setup
 	if err := pAnon.RequestPasswordReset("plaintext", h, time.Hour, testNow); !errors.Is(err, person.ErrInvalid) {
 		t.Errorf("anonymised: expected ErrInvalid, got %v", err)
 	}
@@ -812,7 +812,7 @@ func TestGloballySuspend_RejectedOnDifferentReason(t *testing.T) {
 func TestGloballySuspend_RejectedOnAnonymisedPerson(t *testing.T) {
 	t.Parallel()
 	p := newPerson(t)
-	_ = p.Anonymise(testNow) // arch-test:ignore-err - test fixture setup
+	_ = p.Anonymise("test reason", testNow) // arch-test:ignore-err - test fixture setup
 	if err := p.GloballySuspend("fraud", testNow); !errors.Is(err, person.ErrInvalid) {
 		t.Errorf("expected ErrInvalid on anonymised person, got %v", err)
 	}
@@ -866,7 +866,7 @@ func TestAnonymise_MarksAnonymisedAndScrubsFields(t *testing.T) {
 	p := newPerson(t)
 	_ = p.PullEvents()
 
-	if err := p.Anonymise(testNow); err != nil {
+	if err := p.Anonymise("test reason", testNow); err != nil {
 		t.Fatalf("Anonymise: %v", err)
 	}
 	if !p.IsAnonymised() {
@@ -897,12 +897,12 @@ func TestAnonymise_Idempotent(t *testing.T) {
 	p := newPerson(t)
 	_ = p.PullEvents()
 
-	if err := p.Anonymise(testNow); err != nil {
+	if err := p.Anonymise("test reason", testNow); err != nil {
 		t.Fatalf("first Anonymise: %v", err)
 	}
 	_ = p.PullEvents()
 
-	if err := p.Anonymise(testNow); err != nil {
+	if err := p.Anonymise("test reason", testNow); err != nil {
 		t.Fatalf("second Anonymise: %v", err)
 	}
 	if got := p.PullEvents(); len(got) != 0 {
@@ -1002,5 +1002,29 @@ func TestRotateSecurityStamp_EveryCallRotatesAgain(t *testing.T) {
 	}
 	if p.SecurityStamp().Equal(first) {
 		t.Error("a second rotation kept the first stamp")
+	}
+}
+
+func TestAnonymise_RequiresAReasonAndCarriesItOnTheEvent(t *testing.T) {
+	t.Parallel()
+	p := newPerson(t)
+	_ = p.PullEvents()
+	for _, blank := range []string{"", "   ", "\t\n"} {
+		if err := p.Anonymise(blank, testNow); !errors.Is(err, person.ErrInvalid) {
+			t.Errorf("Anonymise(%q) = %v, want ErrInvalid", blank, err)
+		}
+	}
+	if p.IsAnonymised() || len(p.PullEvents()) != 0 {
+		t.Fatal("a refused anonymisation changed the person or emitted an event")
+	}
+	if err := p.Anonymise("data-subject erasure request #4711", testNow); err != nil {
+		t.Fatal(err)
+	}
+	evs := p.PullEvents()
+	if len(evs) != 1 {
+		t.Fatalf("events = %d", len(evs))
+	}
+	if ev, ok := evs[0].(person.AnonymisedEvent); !ok || ev.Reason != "data-subject erasure request #4711" {
+		t.Errorf("event = %#v, want AnonymisedEvent carrying the reason", evs[0])
 	}
 }

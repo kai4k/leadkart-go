@@ -813,7 +813,10 @@ func (p *Person) LiftGlobalSuspension(now time.Time) error {
 // NOTE: This is the aggregate-level scrub. A separate orchestrator
 // fans out [AnonymisedEvent] to other modules so they scrub their own
 // PII (CRM lead notes, Tasks comments, etc.).
-func (p *Person) Anonymise(now time.Time) error {
+func (p *Person) Anonymise(reason string, now time.Time) error {
+	if strings.TrimSpace(reason) == "" {
+		return fmt.Errorf("%w: anonymisation reason required for audit", ErrInvalid)
+	}
 	if p.isAnonymised {
 		return nil
 	}
@@ -826,6 +829,7 @@ func (p *Person) Anonymise(now time.Time) error {
 	p.securityStamp = NewSecurityStamp()
 	p.recordEvent(AnonymisedEvent{
 		PersonID: p.id,
+		Reason:   reason,
 		At:       now,
 	})
 	return nil

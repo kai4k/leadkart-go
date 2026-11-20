@@ -156,12 +156,12 @@ func TestE2E_PersonLevel_LastOwnerCannotBeSuspendedOrAnonymised(t *testing.T) {
 	})
 	// arch-test:serial — subtests share one fixture and one tenant.
 	t.Run("person anonymise", func(t *testing.T) {
-		r := f.authedJSON(t, http.MethodPost, "/api/v1/platform/persons/"+v.PersonID+"/anonymise", op, nil)
+		r := f.authedJSON(t, http.MethodPost, "/api/v1/platform/persons/"+v.PersonID+"/anonymise", op, map[string]string{"reason": "erasure request, ticket 4711"})
 		f.wantForbidden(t, "anonymise the only owner", r, http.StatusConflict, "last_owner_protected")
 	})
 	// arch-test:serial — subtests share one fixture and one tenant.
 	t.Run("user anonymise", func(t *testing.T) {
-		r := f.doWithHeaders(t, http.MethodPost, "/api/v1/users/"+v.MembershipID+"/anonymise", op, nil, scopeHdr(v.TenantID))
+		r := f.doWithHeaders(t, http.MethodPost, "/api/v1/users/"+v.MembershipID+"/anonymise", op, map[string]string{"reason": "erasure request, ticket 4711"}, scopeHdr(v.TenantID))
 		f.wantForbidden(t, "anonymise the only owner via the membership route", r, http.StatusConflict, "last_owner_protected")
 	})
 	// arch-test:serial — subtests share one fixture and one tenant.

@@ -199,8 +199,12 @@ func handleAnonymisePerson(log *slog.Logger, a app.Application) http.Handler {
 		if !ok {
 			return
 		}
+		var req AnonymiseRequest
+		if !decodeFullBody(w, r, &req) {
+			return
+		}
 		err := a.Commands.AnonymisePerson.Handle(r.Context(),
-			command.AnonymisePersonCommand{PersonID: id})
+			command.AnonymisePersonCommand{PersonID: id, Reason: req.Reason})
 		writePersonMutationResult(w, log, r, err)
 	})
 }

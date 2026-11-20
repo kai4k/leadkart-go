@@ -204,6 +204,7 @@ func FromDomainEvent(d any) (Event, error) {
 	case person.AnonymisedEvent:
 		return PersonAnonymisedV1{
 			PersonID:      mustParseUUID(e.PersonID.String()),
+			Reason:        e.Reason,
 			OccurredAtUTC: e.At.UTC(),
 		}, nil
 

@@ -177,7 +177,7 @@ func TestE2E_PlatformGates_RightPermissionSucceeds(t *testing.T) {
 	anon := mintOperatorJWTExact(t, f.Issuer, f.persons, "", []string{scope, p.Users.Anonymise}, false)
 	v := f.registerAndLogin(t, "okanon")
 	f.addSecondOwner(t, v, "okanon-b") // the last owner cannot be anonymised (ADR 0069 H6)
-	if r := f.doWithHeaders(t, http.MethodPost, "/api/v1/users/"+v.MembershipID+"/anonymise", anon, nil, scopeHdr(v.TenantID)); r.status != http.StatusNoContent {
+	if r := f.doWithHeaders(t, http.MethodPost, "/api/v1/users/"+v.MembershipID+"/anonymise", anon, map[string]string{"reason": "erasure request, ticket 4711"}, scopeHdr(v.TenantID)); r.status != http.StatusNoContent {
 		t.Errorf("operator with identity.users.anonymise: %d %s, want 204", r.status, r.body)
 	}
 

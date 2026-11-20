@@ -320,6 +320,15 @@ type GlobalSuspendPersonRequest struct {
 	Reason string `json:"reason"`
 }
 
+// AnonymiseRequest — POST /api/v1/platform/persons/{personId}/anonymise and
+// POST /api/v1/users/{userId}/anonymise. Reason is REQUIRED: the operator's
+// free-text justification for an irreversible erasure (same bound as a global
+// suspension's: not blank). It must not contain the person's data; it is kept
+// on the audit/outbox event and never logged.
+type AnonymiseRequest struct {
+	Reason string `json:"reason"`
+}
+
 // UpdatePersonProfileRequest — PATCH /api/v1/platform/persons/{personId}/profile.
 // Updates the GLOBAL Person profile, distinct from the per-Tenant fields
 // in [UpdateUserProfileRequest].

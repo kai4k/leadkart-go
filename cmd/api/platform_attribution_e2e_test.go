@@ -94,7 +94,7 @@ func TestE2E_PlatformRoutes_DestructiveWritesCarryOperatorAttribution(t *testing
 		f.addSecondOwner(t, v, "attranon-b") // the last owner cannot be anonymised (ADR 0069 H6)
 		opID := "0197c4a0-7000-7000-8000-00000000a003"
 		op := mintOperatorJWTExact(t, f.Issuer, f.persons, opID, []string{p.Users.Anonymise}, false)
-		if r := f.authedJSON(t, http.MethodPost, "/api/v1/platform/persons/"+v.PersonID+"/anonymise", op, nil); r.status != http.StatusNoContent {
+		if r := f.authedJSON(t, http.MethodPost, "/api/v1/platform/persons/"+v.PersonID+"/anonymise", op, map[string]string{"reason": "erasure request, ticket 4711"}); r.status != http.StatusNoContent {
 			t.Fatalf("anonymise person: %d %s", r.status, r.body)
 		}
 		assertAttributed(t, outboxActFor(t, f, "person_anonymised"), opID, "person anonymise")
@@ -106,7 +106,7 @@ func TestE2E_PlatformRoutes_DestructiveWritesCarryOperatorAttribution(t *testing
 		f.addSecondOwner(t, v, "attrkeep-b") // the last owner cannot be anonymised (ADR 0069 H6)
 		opID := "0197c4a0-7000-7000-8000-00000000a004"
 		op := mintOperatorJWTExact(t, f.Issuer, f.persons, opID, []string{p.Users.Anonymise, p.Platform.TenantsView}, false)
-		if r := f.doWithHeaders(t, http.MethodPost, "/api/v1/users/"+v.MembershipID+"/anonymise", op, nil, scopeHdr(v.TenantID)); r.status != http.StatusNoContent {
+		if r := f.doWithHeaders(t, http.MethodPost, "/api/v1/users/"+v.MembershipID+"/anonymise", op, map[string]string{"reason": "erasure request, ticket 4711"}, scopeHdr(v.TenantID)); r.status != http.StatusNoContent {
 			t.Fatalf("anonymise via header: %d %s", r.status, r.body)
 		}
 		rows := outboxActFor(t, f, "person_anonymised")

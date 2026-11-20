@@ -68,7 +68,7 @@ func TestAnonymiseUser_Cascades(t *testing.T) {
 	_ = mRepo.Add(t.Context(), m) // arch-test:ignore-err - test fixture setup
 
 	h := command.NewAnonymiseUserHandler(emptyGuard(), mRepo, pRepo, func() time.Time { return testNow })
-	if err := h.Handle(t.Context(), command.AnonymiseUserCommand{
+	if err := h.Handle(t.Context(), command.AnonymiseUserCommand{Reason: "test reason",
 		TenantID:     tenant.ID("33333333-3333-3333-3333-333333333333"),
 		MembershipID: m.ID(),
 	}); err != nil {
@@ -84,7 +84,7 @@ func TestAnonymiseUser_NotFound(t *testing.T) {
 	mRepo := newFakeMembershipRepo()
 	pRepo := seedPersonRepo(t, nil)
 	h := command.NewAnonymiseUserHandler(emptyGuard(), mRepo, pRepo, func() time.Time { return testNow })
-	err := h.Handle(t.Context(), command.AnonymiseUserCommand{
+	err := h.Handle(t.Context(), command.AnonymiseUserCommand{Reason: "test reason",
 		TenantID:     tenant.ID("33333333-3333-3333-3333-333333333333"),
 		MembershipID: membership.ID("99999999-9999-9999-9999-999999999999"),
 	})
@@ -103,14 +103,14 @@ func TestAnonymiseUser_InputRejections(t *testing.T) {
 	}{
 		{
 			name: "zero tenant id",
-			cmd: command.AnonymiseUserCommand{
+			cmd: command.AnonymiseUserCommand{Reason: "test reason",
 				TenantID:     tenant.ID(""),
 				MembershipID: membership.ID("11111111-1111-1111-1111-111111111111"),
 			},
 		},
 		{
 			name: "zero membership id",
-			cmd: command.AnonymiseUserCommand{
+			cmd: command.AnonymiseUserCommand{Reason: "test reason",
 				TenantID:     tenant.ID("33333333-3333-3333-3333-333333333333"),
 				MembershipID: membership.ID(""),
 			},
@@ -138,7 +138,7 @@ func TestAnonymiseUser_GetByIDError_Wrapped(t *testing.T) {
 	}
 	pRepo := seedPersonRepo(t, nil)
 	h := command.NewAnonymiseUserHandler(emptyGuard(), mRepo, pRepo, func() time.Time { return testNow })
-	err := h.Handle(t.Context(), command.AnonymiseUserCommand{
+	err := h.Handle(t.Context(), command.AnonymiseUserCommand{Reason: "test reason",
 		TenantID:     tenant.ID("33333333-3333-3333-3333-333333333333"),
 		MembershipID: membership.ID("11111111-1111-1111-1111-111111111111"),
 	})
@@ -177,7 +177,7 @@ func TestAnonymiseUser_PersonNotFound_DataIntegrityErrorWrapped(t *testing.T) {
 	pRepo := persontest.NewFakeRepository()
 
 	h := command.NewAnonymiseUserHandler(emptyGuard(), mRepo, pRepo, func() time.Time { return testNow })
-	err = h.Handle(t.Context(), command.AnonymiseUserCommand{
+	err = h.Handle(t.Context(), command.AnonymiseUserCommand{Reason: "test reason",
 		TenantID:     tenant.ID("33333333-3333-3333-3333-333333333333"),
 		MembershipID: m.ID(),
 	})
@@ -220,7 +220,7 @@ func TestAnonymiseUser_PersonUpdateOtherError_Wrapped(t *testing.T) {
 	}
 
 	h := command.NewAnonymiseUserHandler(emptyGuard(), mRepo, pRepo, func() time.Time { return testNow })
-	err = h.Handle(t.Context(), command.AnonymiseUserCommand{
+	err = h.Handle(t.Context(), command.AnonymiseUserCommand{Reason: "test reason",
 		TenantID:     tenant.ID("33333333-3333-3333-3333-333333333333"),
 		MembershipID: m.ID(),
 	})

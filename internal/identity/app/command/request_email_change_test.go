@@ -200,7 +200,7 @@ func TestRequestEmailChange_GetByID_NonNotFoundError_Wrapped(t *testing.T) {
 func TestRequestEmailChange_AnonymisedPerson_Rejected(t *testing.T) {
 	t.Parallel()
 	p := newPersonWithPassword(t, "irrelevant")
-	if err := p.Anonymise(testNow); err != nil {
+	if err := p.Anonymise("test reason", testNow); err != nil {
 		t.Fatalf("Anonymise: %v", err)
 	}
 	repo := seedPersonRepo(t, p)
@@ -410,7 +410,7 @@ func TestConfirmEmailChange_AnonymisedPerson_TokenInvalid(t *testing.T) {
 	newAddr, _ := email.New("rotated@example.test")
 	p := newPersonWithPassword(t, "irrelevant")
 	_ = b2SeedPendingEmailChange(t, p, newAddr) // arch-test:ignore-err - seed-only; plaintext not needed
-	if err := p.Anonymise(testNow); err != nil {
+	if err := p.Anonymise("test reason", testNow); err != nil {
 		t.Fatalf("Anonymise: %v", err)
 	}
 	// The fake still returns the row (no state filter) — the handler must

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
@@ -30,6 +31,9 @@ import (
 type AnonymiseUserCommand struct {
 	TenantID     tenant.ID
 	MembershipID membership.ID
+	// Reason is the operator's required free-text justification for the
+	// irreversible erasure; it goes on the audit/outbox event and is never logged.
+	Reason string
 }
 
 // AnonymiseUserHandler runs the flow.
@@ -66,6 +70,9 @@ func (h AnonymiseUserHandler) Handle(ctx context.Context, cmd AnonymiseUserComma
 	if cmd.MembershipID.IsZero() {
 		return errors.New("anonymise_user: membership id required")
 	}
+	if strings.TrimSpace(cmd.Reason) == "" {
+		return fmt.Errorf("anonymise_user: %w: reason required", person.ErrInvalid)
+	}
 	m, err := h.memberships.GetByID(ctx, cmd.TenantID, cmd.MembershipID)
 	if err != nil {
 		if errors.Is(err, membership.ErrNotFound) {
@@ -77,7 +84,7 @@ func (h AnonymiseUserHandler) Handle(ctx context.Context, cmd AnonymiseUserComma
 	now := h.now()
 	err = h.guard.Run(ctx, personID, func(ctx context.Context) error {
 		return h.persons.UpdateByID(ctx, personID, func(p *person.Person) (bool, error) {
-			if err := p.Anonymise(now); err != nil {
+			if err := p.Anonymise(cmd.Reason, now); err != nil {
 				return false, err
 			}
 			return true, nil

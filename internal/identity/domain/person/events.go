@@ -63,8 +63,13 @@ func (ProfileUpdatedEvent) isPersonEvent() {}
 //
 // Cross-module subscribers MUST scrub their own PII (CRM lead notes,
 // Tasks comments, audit-row author labels, etc.) per DPDP / GDPR.
+//
+// Reason is the operator's free-text justification for the (irreversible)
+// erasure, kept on the audit/outbox event like a global suspension's. It is
+// the operator's text, never the erased person's data: it must not be logged.
 type AnonymisedEvent struct {
 	PersonID ID
+	Reason   string
 	At       time.Time
 }
 

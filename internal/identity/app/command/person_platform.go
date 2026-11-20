@@ -10,6 +10,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
@@ -131,6 +132,9 @@ func (h LiftPersonGlobalSuspensionHandler) Handle(ctx context.Context, cmd LiftP
 // /api/v1/platform/persons/{personId}/anonymise.
 type AnonymisePersonCommand struct {
 	PersonID person.ID
+	// Reason is the operator's required free-text justification for the
+	// irreversible erasure; it goes on the audit/outbox event and is never logged.
+	Reason string
 }
 
 // AnonymisePersonHandler runs the cascade.
@@ -158,10 +162,13 @@ func (h AnonymisePersonHandler) Handle(ctx context.Context, cmd AnonymisePersonC
 	if cmd.PersonID.IsZero() {
 		return errors.New("anonymise_person: person id required")
 	}
+	if strings.TrimSpace(cmd.Reason) == "" {
+		return fmt.Errorf("anonymise_person: %w: reason required", person.ErrInvalid)
+	}
 	now := h.now()
 	err := h.guard.Run(ctx, cmd.PersonID, func(ctx context.Context) error {
 		return h.persons.UpdateByID(ctx, cmd.PersonID, func(p *person.Person) (bool, error) {
-			if err := p.Anonymise(now); err != nil {
+			if err := p.Anonymise(cmd.Reason, now); err != nil {
 				return false, err
 			}
 			return true, nil

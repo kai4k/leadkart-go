@@ -111,3 +111,67 @@ func TestDecodeFullBody_EmptyArraysArePresent(t *testing.T) {
 		t.Error("null `granted` must be rejected")
 	}
 }
+
+func TestDecodeFullBody_RejectsDuplicateKeysAndTrailingData(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct{ name, body string }{
+		{"case-variant duplicate", `{"legal_name":"A","display_name":"B","Legal_Name":null}`},
+		{"case-variant duplicate with a value", `{"legal_name":"A","display_name":"B","LEGAL_NAME":"C"}`},
+		{"exact duplicate", `{"legal_name":"A","legal_name":"C","display_name":"B"}`},
+		{"trailing value", `{"legal_name":"A","display_name":"B"} {"x":1}`},
+		{"trailing garbage", `{"legal_name":"A","display_name":"B"} x`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			_, rec, ok := decodeFull[UpdateTenantProfileRequest](t, tc.body)
+			if ok || rec.Code != http.StatusBadRequest {
+				t.Fatalf("accepted (ok=%v status=%d): %s", ok, rec.Code, tc.body)
+			}
+		})
+	}
+}
+
+func TestDecodeFullBody_ATypeErrorIsReportedAsATypeError(t *testing.T) {
+	t.Parallel()
+	_, rec, ok := decodeFull[UpdateTenantProfileRequest](t, `{"legal_name":5,"display_name":"B"}`)
+	if ok || rec.Code != http.StatusBadRequest {
+		t.Fatalf("ok=%v status=%d", ok, rec.Code)
+	}
+	var resp ErrorResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if got := resp.Errors["legal_name"]; len(got) != 1 || got[0] != "invalid_type" {
+		t.Errorf("errors = %v, want legal_name: [invalid_type] (not \"required\")", resp.Errors)
+	}
+	if strings.Contains(rec.Body.String(), "required") {
+		t.Errorf("a wrong-typed value was reported as missing: %s", rec.Body)
+	}
+}
+
+func TestDecodeFullBody_ANonObjectNestedValueIsATypeErrorNotRequired(t *testing.T) {
+	t.Parallel()
+	_, rec, ok := decodeFull[UpdateTenantAdminContactRequest](t, `{"phone":"x","address":"nope"}`)
+	if ok {
+		t.Fatal("accepted a non-object address")
+	}
+	var resp ErrorResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if got := resp.Errors["address"]; len(got) != 1 || got[0] != "invalid_type" {
+		t.Errorf("errors = %v, want address: [invalid_type]", resp.Errors)
+	}
+}
+
+func TestDecodeFullBody_AnonymiseRequiresAReason(t *testing.T) {
+	t.Parallel()
+	for _, body := range []string{``, `{}`, `{"reason":null}`} {
+		if _, rec, ok := decodeFull[AnonymiseRequest](t, body); ok || rec.Code != http.StatusBadRequest {
+			t.Errorf("body %q: ok=%v status=%d, want 400", body, ok, rec.Code)
+		}
+	}
+	if got, _, ok := decodeFull[AnonymiseRequest](t, `{"reason":"erasure request"}`); !ok || got.Reason != "erasure request" {
+		t.Errorf("valid body rejected: %+v", got)
+	}
+}

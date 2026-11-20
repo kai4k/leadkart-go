@@ -3,6 +3,8 @@ package ports
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 	"reflect"
 	"slices"
@@ -25,8 +27,21 @@ func decodeFullBody[T any](w http.ResponseWriter, r *http.Request, dst *T) bool 
 	// like every other handler it is decoded with json.NewDecoder, here once into raw
 	// bytes so the keys can be checked before the typed decode.
 	var data json.RawMessage
-	if err := json.NewDecoder(r.Body).Decode(&data); err != nil {
+	dec := json.NewDecoder(r.Body)
+	if err := dec.Decode(&data); err != nil {
 		writeError(w, http.StatusBadRequest, ErrCodeInvalidBody, "request body is not valid JSON")
+		return false
+	}
+	// Exactly one JSON value: anything after it is not part of this request.
+	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, ErrCodeInvalidBody, "request body must be a single JSON object")
+		return false
+	}
+	// encoding/json matches keys case-insensitively and the last duplicate wins,
+	// so {"granted":[...],"Granted":null} would pass the presence check on one
+	// spelling and decode the other. A repeated key is ambiguous: refuse it.
+	if dup := duplicateKey(data); dup != "" {
+		writeError(w, http.StatusBadRequest, ErrCodeInvalidBody, "request body repeats the key "+dup+" (keys are matched case-insensitively)")
 		return false
 	}
 	var keys map[string]json.RawMessage
@@ -51,10 +66,62 @@ func decodeFullBody[T any](w http.ResponseWriter, r *http.Request, dst *T) bool 
 		return false
 	}
 	if err := json.Unmarshal(data, dst); err != nil {
+		var typeErr *json.UnmarshalTypeError
+		if errors.As(err, &typeErr) && typeErr.Field != "" {
+			msg := "field " + typeErr.Field + " must be of type " + typeErr.Type.String()
+			writeJSON(w, http.StatusBadRequest, ErrorResponse{
+				Type: problemType(ErrCodeInvalidBody), Title: http.StatusText(http.StatusBadRequest), Status: http.StatusBadRequest,
+				Detail: msg, Error: ErrCodeInvalidBody, Message: msg,
+				Errors: map[string][]string{typeErr.Field: {"invalid_type"}},
+			})
+			return false
+		}
 		writeError(w, http.StatusBadRequest, ErrCodeInvalidBody, "request body is not valid JSON")
 		return false
 	}
 	return true
+}
+
+// duplicateKey returns the first object key that repeats, compared
+// case-insensitively, at any depth of the JSON value, or "".
+func duplicateKey(data []byte) string {
+	dec := json.NewDecoder(bytes.NewReader(data))
+	var walk func() string
+	walk = func() string {
+		tok, err := dec.Token()
+		if err != nil {
+			return ""
+		}
+		switch d, _ := tok.(json.Delim); d {
+		case '{':
+			seen := map[string]bool{}
+			for dec.More() {
+				kt, err := dec.Token()
+				if err != nil {
+					return ""
+				}
+				key, _ := kt.(string)
+				folded := strings.ToLower(key)
+				if seen[folded] {
+					return key
+				}
+				seen[folded] = true
+				if dup := walk(); dup != "" {
+					return dup
+				}
+			}
+			_, _ = dec.Token() // the closing brace
+		case '[':
+			for dec.More() {
+				if dup := walk(); dup != "" {
+					return dup
+				}
+			}
+			_, _ = dec.Token()
+		}
+		return ""
+	}
+	return walk()
 }
 
 // missingRequiredKeys lists, sorted, the dotted JSON paths of every json-tagged
@@ -77,10 +144,12 @@ func missingRequiredKeys(t reflect.Type, keys map[string]json.RawMessage, prefix
 			continue
 		}
 		if f.Type.Kind() == reflect.Struct {
+			if isNull {
+				continue // already reported above for a non-nullable field
+			}
 			var nested map[string]json.RawMessage
 			if err := json.Unmarshal(raw, &nested); err != nil || nested == nil {
-				missing = append(missing, prefix+name) // not an object: unusable
-				continue
+				continue // not an object: the typed decode reports it as a type error
 			}
 			missing = append(missing, missingRequiredKeys(f.Type, nested, prefix+name+".")...)
 		}

@@ -38,7 +38,7 @@ func TestPersonChangeGuard_LastOwnerCannotBeSuspendedOrAnonymised(t *testing.T) 
 	if err := suspend.Handle(t.Context(), command.GlobalSuspendPersonCommand{PersonID: p1.ID(), Reason: "compliance hold"}); !errors.Is(err, authority.ErrLastOwnerProtected) {
 		t.Fatalf("suspend the only owner: %v, want ErrLastOwnerProtected", err)
 	}
-	if err := anon.Handle(t.Context(), command.AnonymisePersonCommand{PersonID: p1.ID()}); !errors.Is(err, authority.ErrLastOwnerProtected) {
+	if err := anon.Handle(t.Context(), command.AnonymisePersonCommand{Reason: "test reason", PersonID: p1.ID()}); !errors.Is(err, authority.ErrLastOwnerProtected) {
 		t.Fatalf("anonymise the only owner: %v, want ErrLastOwnerProtected", err)
 	}
 	if p1.IsGloballySuspended() || p1.IsAnonymised() {

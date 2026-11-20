@@ -308,7 +308,7 @@ func TestAttack_Races_PersonsAgainstTheirMemberships(t *testing.T) {
 				verb := "/global-suspend"
 				var body any = ports.GlobalSuspendPersonRequest{Reason: "race"}
 				if kind == "anonymisation" {
-					verb, body = "/anonymise", nil
+					verb, body = "/anonymise", map[string]string{"reason": "erasure request, ticket 4711"}
 				}
 				res := w.raceOnce(t,
 					w.call(http.MethodPost, "/api/v1/platform/persons/"+zOwner.PersonID+verb, op, body),

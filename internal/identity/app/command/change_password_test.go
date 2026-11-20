@@ -165,7 +165,7 @@ func TestChangePassword_AnonymisedPerson_ReturnsIncorrectCurrentPassword(t *test
 	t.Parallel()
 	currentPlain := "irrelevant"
 	p := newPersonWithPassword(t, currentPlain)
-	if err := p.Anonymise(testNow); err != nil {
+	if err := p.Anonymise("test reason", testNow); err != nil {
 		t.Fatalf("Anonymise: %v", err)
 	}
 	repo := seedPersonRepo(t, p)

@@ -81,7 +81,7 @@ func TestAnonymisePerson_Succeeds(t *testing.T) {
 	p := newPersonWithPassword(t, "irrelevant")
 	repo := seedPersonRepo(t, p)
 	h := command.NewAnonymisePersonHandler(emptyGuard(), repo, func() time.Time { return testNow })
-	if err := h.Handle(t.Context(), command.AnonymisePersonCommand{
+	if err := h.Handle(t.Context(), command.AnonymisePersonCommand{Reason: "test reason",
 		PersonID: p.ID(),
 	}); err != nil {
 		t.Fatalf("Handle: %v", err)
@@ -129,7 +129,7 @@ func TestPersonPlatformHandlers_NotFound(t *testing.T) {
 		}},
 		{"Anonymise", func() error {
 			return command.NewAnonymisePersonHandler(emptyGuard(), repo, func() time.Time { return testNow }).Handle(t.Context(),
-				command.AnonymisePersonCommand{PersonID: bad})
+				command.AnonymisePersonCommand{Reason: "test reason", PersonID: bad})
 		}},
 		{"UpdateProfile", func() error {
 			return command.NewUpdatePersonProfileHandler(repo, func() time.Time { return testNow }).Handle(t.Context(),
@@ -166,7 +166,7 @@ func TestPersonPlatformHandlers_EmptyPersonID(t *testing.T) {
 		}},
 		{"Anonymise", func() error {
 			return command.NewAnonymisePersonHandler(emptyGuard(), repo, func() time.Time { return testNow }).Handle(t.Context(),
-				command.AnonymisePersonCommand{PersonID: person.ID("")})
+				command.AnonymisePersonCommand{Reason: "test reason", PersonID: person.ID("")})
 		}},
 		{"UpdateProfile", func() error {
 			return command.NewUpdatePersonProfileHandler(repo, func() time.Time { return testNow }).Handle(t.Context(),
@@ -222,7 +222,7 @@ func TestPersonPlatformHandlers_AggregateRejection_Wrapped(t *testing.T) {
 	t.Run("UpdateProfile on anonymised person rejected", func(t *testing.T) {
 		t.Parallel()
 		p := newPersonWithPassword(t, "irrelevant")
-		if err := p.Anonymise(testNow); err != nil {
+		if err := p.Anonymise("test reason", testNow); err != nil {
 			t.Fatalf("Anonymise setup: %v", err)
 		}
 		repo := seedPersonRepo(t, p)
@@ -256,7 +256,7 @@ func TestPersonPlatformHandlers_GenericRepoError_Wrapped(t *testing.T) {
 		}},
 		{"Anonymise", func(repo person.Repository) error {
 			return command.NewAnonymisePersonHandler(emptyGuard(), repo, func() time.Time { return testNow }).Handle(t.Context(),
-				command.AnonymisePersonCommand{PersonID: person.ID("some-id")})
+				command.AnonymisePersonCommand{Reason: "test reason", PersonID: person.ID("some-id")})
 		}},
 		{"UpdateProfile", func(repo person.Repository) error {
 			return command.NewUpdatePersonProfileHandler(repo, func() time.Time { return testNow }).Handle(t.Context(),
@@ -278,5 +278,19 @@ func TestPersonPlatformHandlers_GenericRepoError_Wrapped(t *testing.T) {
 				t.Fatal("generic repo error must NOT collapse to ErrPersonNotFound")
 			}
 		})
+	}
+}
+
+func TestAnonymisePerson_RefusesABlankReasonAndChangesNothing(t *testing.T) {
+	t.Parallel()
+	p := newPersonWithPassword(t, "irrelevant")
+	repo := seedPersonRepo(t, p)
+	h := command.NewAnonymisePersonHandler(emptyGuard(), repo, func() time.Time { return testNow })
+	err := h.Handle(t.Context(), command.AnonymisePersonCommand{PersonID: p.ID(), Reason: "  "})
+	if !errors.Is(err, person.ErrInvalid) {
+		t.Fatalf("blank reason: %v, want person.ErrInvalid", err)
+	}
+	if p.IsAnonymised() {
+		t.Fatal("a person was anonymised without a reason")
 	}
 }
