@@ -819,7 +819,7 @@ paths:
       tags: [users]
       summary: Reactivate a deactivated user
       description: |
-        Requires `identity.users.reactivate` (satisfied by `tenant.admin` in the caller's own tenant, or by `platform.*` equivalents for platform operators; ADR 0068). Self-target forbidden (`self_modification_forbidden`). The caller must strictly outrank the target member (`insufficient_rank`; owners may act on owners; super users and exempt platform operators are exempt), decided inside the transaction that holds the tenant's authority lock (ADR 0069).
+        Requires `identity.users.reactivate` (satisfied by `tenant.admin` in the caller's own tenant, or by `platform.*` equivalents for platform operators; ADR 0068). Self-target forbidden (`self_modification_forbidden`). The caller must strictly outrank the target member (`insufficient_rank`; owners may act on owners; super users and exempt platform operators are exempt), decided inside the transaction that holds the tenant's authority lock (ADR 0069). Reactivating an OWNER from outside the tenant (a platform operator under `X-Tenant-Id`) needs `platform.tenants.ownership` (`ownership_authority_required`), like deactivating one.
       x-required-permissions: [identity.users.reactivate]
       parameters:
         - $ref: '#/components/parameters/XCommandId'
@@ -1035,6 +1035,13 @@ paths:
         Both fields optional. Empty `name` skips rename. Omitting
         `hierarchy_level` (or sending `null`) skips re-level — using a
         pointer field instead of a -1 sentinel keeps the wire shape clean.
+        Changing what a role confers, re-levelling it or deleting it is acting on every ACTIVE member who holds it: the
+        caller must strictly outrank each active holder (owners may act on owners) and must not hold the role
+        themself (`insufficient_rank`, `self_modification_forbidden`); a rename acts on nobody. Every active holder's
+        session ends the way an authority change on the member does: their old token answers 401 `stale_token`, the
+        refresh succeeds with the new permissions and rank.
+        A re-level is refused with 422 `role_level_breaks_reporting` when it would leave an active holder not strictly
+        junior to their manager, or a direct report of a holder not strictly junior to the holder.
         Requires `identity.roles.update` (satisfied by `tenant.admin` in the caller's own tenant, or by `platform.*` equivalents for platform operators; ADR 0068).
       x-required-permissions: [identity.roles.update]
       parameters:
@@ -1057,13 +1064,20 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
-        '422': { $ref: '#/components/responses/Unprocessable' }
+        '422':
+          description: |
+            `validation_failed` / `role_invalid`, or `role_level_breaks_reporting` (the new level would leave an active
+            holder not strictly junior to their manager, or a direct report of a holder not strictly junior to the holder).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
     delete:
       tags: [roles]
       summary: Soft-delete a role
       description: |
         Requires `identity.roles.delete` (satisfied by `tenant.admin` in the caller's own tenant, or by `platform.*` equivalents for platform operators; ADR 0068).
-        The caller must hold every permission the role carries (deleting removes them from every holder).
+        The caller must hold every permission the role carries (deleting removes them from every holder) and must
+        be allowed to act on every active holder (answered before `role_in_use`).
         A role still held by an ACTIVE member is refused with 409 `role_in_use` (`errors.active_holders` is the
         count); a role held only by inactive members is deleted and their assignments are removed in the same
         transaction.
@@ -1150,6 +1164,11 @@ paths:
         `permission.IdentityPermissions` catalogue; unknown names surface
         as 422 (`permission_unknown`).
         Requires `identity.roles.update` (satisfied by `tenant.admin` in the caller's own tenant, or by `platform.*` equivalents for platform operators; ADR 0068). Conferring a permission the caller does not hold is rejected with `grant_exceeds_authority`.
+        Changing what a role confers, re-levelling it or deleting it is acting on every ACTIVE member who holds it: the
+        caller must strictly outrank each active holder (owners may act on owners) and must not hold the role
+        themself (`insufficient_rank`, `self_modification_forbidden`); a rename acts on nobody. Every active holder's
+        session ends the way an authority change on the member does: their old token answers 401 `stale_token`, the
+        refresh succeeds with the new permissions and rank.
       x-required-permissions: [identity.roles.update]
       parameters:
         - $ref: '#/components/parameters/XCommandId'
@@ -1178,6 +1197,11 @@ paths:
       summary: Grant a single permission to the role
       description: |
         Requires `identity.roles.update` (satisfied by `tenant.admin` in the caller's own tenant, or by `platform.*` equivalents for platform operators; ADR 0068). Conferring a permission the caller does not hold is rejected with `grant_exceeds_authority`.
+        Changing what a role confers, re-levelling it or deleting it is acting on every ACTIVE member who holds it: the
+        caller must strictly outrank each active holder (owners may act on owners) and must not hold the role
+        themself (`insufficient_rank`, `self_modification_forbidden`); a rename acts on nobody. Every active holder's
+        session ends the way an authority change on the member does: their old token answers 401 `stale_token`, the
+        refresh succeeds with the new permissions and rank.
       x-required-permissions: [identity.roles.update]
       parameters:
         - $ref: '#/components/parameters/XCommandId'
@@ -1205,6 +1229,11 @@ paths:
       summary: Revoke a single permission from the role
       description: |
         Requires `identity.roles.update` (satisfied by `tenant.admin` in the caller's own tenant, or by `platform.*` equivalents for platform operators; ADR 0068).
+        Changing what a role confers, re-levelling it or deleting it is acting on every ACTIVE member who holds it: the
+        caller must strictly outrank each active holder (owners may act on owners) and must not hold the role
+        themself (`insufficient_rank`, `self_modification_forbidden`); a rename acts on nobody. Every active holder's
+        session ends the way an authority change on the member does: their old token answers 401 `stale_token`, the
+        refresh succeeds with the new permissions and rank.
       x-required-permissions: [identity.roles.update]
       parameters:
         - $ref: '#/components/parameters/XCommandId'
@@ -3832,7 +3861,10 @@ components:
         caller does not hold, or `tenant.admin` as a non-owner), `ownership_authority_required`
         (a platform operator acting under `X-Tenant-Id` tried to change who OWNS the tenant:
         assign or revoke Company Owner, confer or remove `tenant.admin` by role or override, or
-        deactivate an owner, without `platform.tenants.ownership`; super users are unaffected).
+        deactivate or reactivate an owner, without `platform.tenants.ownership`; super users are unaffected).
+        Editing a role acts on its active holders (`insufficient_rank`, `self_modification_forbidden`); lifting a
+        member's explicit revoke (an overrides change, or approving a request for a revoked name) needs the Admin
+        tier or above (`grant_exceeds_authority`).
       content:
         application/json:
           schema: { $ref: '#/components/schemas/ErrorResponse' }

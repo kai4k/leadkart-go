@@ -40,6 +40,8 @@ func writeAuthorityError(w http.ResponseWriter, err error) bool {
 		writeError(w, http.StatusConflict, ErrCodeMemberRolesInconsistent, "the member's assigned roles cannot be loaded consistently")
 	case errors.Is(err, authority.ErrManagerNotEligible):
 		writeError(w, http.StatusUnprocessableEntity, ErrCodeManagerNotEligible, "the manager must be an active member of this tenant, more senior than the member, and the reporting line must not form a cycle")
+	case errors.Is(err, authority.ErrRoleLevelBreaksReporting):
+		writeError(w, http.StatusUnprocessableEntity, ErrCodeRoleLevelBreaksReporting, "the new level would leave a member not strictly junior to their manager, or a direct report not strictly junior to them")
 	case errors.Is(err, authority.ErrRoleParentNotEligible):
 		writeError(w, http.StatusUnprocessableEntity, ErrCodeRoleParentNotEligible, "a parent role must be more senior than its child")
 	case errors.Is(err, role.ErrSystemDefault):

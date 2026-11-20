@@ -89,12 +89,81 @@ func (f authorityFacts) project(ctx context.Context, tenantID tenant.ID, m *memb
 	if err != nil {
 		return authority.Member{}, nil, fmt.Errorf("authority facts: load person %s: %w", m.PersonID(), err)
 	}
+	return memberFrom(m, roles, p, now)
+}
+
+// memberFrom is the one place a membership, its roles and its person become an
+// authority.Member (the single-member and the batch loaders both end here).
+func memberFrom(m *membership.Membership, roles []*role.Role, p *person.Person, now time.Time) (authority.Member, []*role.Role, error) {
 	state := authority.NewPersonState(p.IsActive(), p.IsGloballySuspended(), p.IsAnonymised(), p.LockedUntil(), now)
 	out, err := authority.MemberOf(m, roles, now, state)
 	if err != nil {
 		return authority.Member{}, nil, &memberRolesInconsistentError{membershipID: m.ID(), cause: err}
 	}
 	return out, roles, nil
+}
+
+// projectMany projects every membership in ms with a FIXED number of reads
+// however many there are: one role read for the union of their role ids and one
+// person read for the union of their persons (an empty ms reads nothing). A role
+// or person that does not load is the same inconsistency a single projection
+// reports.
+func (f authorityFacts) projectMany(ctx context.Context, tenantID tenant.ID, ms []*membership.Membership, now time.Time) ([]authority.Member, error) {
+	if now.IsZero() {
+		return nil, fmt.Errorf("%w: the decision instant is required", authority.ErrNoAuthority)
+	}
+	if len(ms) == 0 {
+		return nil, nil
+	}
+	var roleIDs []role.ID
+	seenRole := make(map[role.ID]struct{})
+	personIDs := make([]person.ID, 0, len(ms))
+	seenPerson := make(map[person.ID]struct{}, len(ms))
+	for _, m := range ms {
+		for _, id := range m.RoleAssignments() {
+			if _, dup := seenRole[id]; !dup {
+				seenRole[id] = struct{}{}
+				roleIDs = append(roleIDs, id)
+			}
+		}
+		if _, dup := seenPerson[m.PersonID()]; !dup {
+			seenPerson[m.PersonID()] = struct{}{}
+			personIDs = append(personIDs, m.PersonID())
+		}
+	}
+	byRole := make(map[role.ID]*role.Role, len(roleIDs))
+	if len(roleIDs) > 0 {
+		loaded, err := f.roles.GetByIDsIncludingDeleted(ctx, tenantID, roleIDs)
+		if err != nil {
+			return nil, fmt.Errorf("authority facts: load roles: %w", err)
+		}
+		for _, r := range loaded {
+			byRole[r.ID()] = r
+		}
+	}
+	persons, err := f.persons.GetByIDs(ctx, personIDs)
+	if err != nil {
+		return nil, fmt.Errorf("authority facts: load persons: %w", err)
+	}
+	out := make([]authority.Member, 0, len(ms))
+	for _, m := range ms {
+		p, ok := persons[m.PersonID()]
+		if !ok {
+			return nil, fmt.Errorf("authority facts: load person %s: %w", m.PersonID(), person.ErrNotFound)
+		}
+		roles := make([]*role.Role, 0, len(m.RoleAssignments()))
+		for _, id := range m.RoleAssignments() {
+			if r, ok := byRole[id]; ok {
+				roles = append(roles, r)
+			}
+		}
+		member, _, err := memberFrom(m, roles, p, now)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, member)
+	}
+	return out, nil
 }
 
 // memberByID loads a membership and projects it. membership.ErrNotFound
@@ -208,6 +277,66 @@ func (f authorityFacts) rejectManagerCycle(ctx context.Context, tenantID tenant.
 	return fmt.Errorf("%w: reporting line deeper than %d levels", authority.ErrManagerNotEligible, maxManagerChainDepth)
 }
 
+// loadedHolders is a role's holders as one command loaded them: the raw
+// memberships (any status; the command writes through them) and the projections
+// the policy decides on.
+type loadedHolders struct {
+	memberships []*membership.Membership
+	set         authority.RoleHolders
+}
+
+// roleHolders loads the members that hold roleID, once per command, with a FIXED
+// number of repository reads whatever their count: the holders (ListHoldingRole),
+// one role read and one person read ([authorityFacts.projectMany]). With
+// withReporting (a re-level) it reads the tenant's members once instead
+// (ListForTenant) and also projects the managers and direct reports of the
+// holders that do not hold the role, which the reporting rule needs; the cost is
+// then one tenant-wide read, still independent of the number of holders.
+func (f authorityFacts) roleHolders(ctx context.Context, tenantID tenant.ID, roleID role.ID, now time.Time, withReporting bool) (loadedHolders, error) {
+	var holders, linked []*membership.Membership
+	if !withReporting {
+		var err error
+		if holders, err = f.memberships.ListHoldingRole(ctx, tenantID, roleID); err != nil {
+			return loadedHolders{}, fmt.Errorf("list holders: %w", err)
+		}
+	} else {
+		all, err := f.memberships.ListForTenant(ctx, tenantID)
+		if err != nil {
+			return loadedHolders{}, fmt.Errorf("authority facts: list members: %w", err)
+		}
+		holds := func(m *membership.Membership) bool { return slices.Contains(m.RoleAssignments(), roleID) }
+		holderIDs := make(map[membership.ID]struct{})
+		managerIDs := make(map[membership.ID]struct{})
+		for _, m := range all {
+			if holds(m) {
+				holders = append(holders, m)
+				holderIDs[m.ID()] = struct{}{}
+				if !m.ReportsTo().IsZero() {
+					managerIDs[m.ReportsTo()] = struct{}{}
+				}
+			}
+		}
+		for _, m := range all {
+			if holds(m) {
+				continue
+			}
+			_, isManager := managerIDs[m.ID()]
+			_, reportsToHolder := holderIDs[m.ReportsTo()]
+			if isManager || reportsToHolder {
+				linked = append(linked, m)
+			}
+		}
+	}
+	projected, err := f.projectMany(ctx, tenantID, slices.Concat(holders, linked), now)
+	if err != nil {
+		return loadedHolders{}, err
+	}
+	return loadedHolders{
+		memberships: holders,
+		set:         authority.RoleHolders{Holders: projected[:len(holders)], Linked: projected[len(holders):]},
+	}, nil
+}
+
 // authorityWriter bundles one UnitOfWork + the tenant authority lock + facts.
 type authorityWriter struct {
 	uow   pg.UnitOfWork
@@ -319,7 +448,13 @@ func (w authorityWriter) rotateStampIfChanged(ctx context.Context, m *membership
 	if !m.HasPendingEvents() {
 		return nil
 	}
-	err := w.facts.persons.UpdateByID(ctx, m.PersonID(), func(p *person.Person) (bool, error) {
+	return w.rotateStamp(ctx, m.PersonID(), reason, now)
+}
+
+// rotateStamp rotates one person's security stamp in the caller's transaction
+// (the one mechanism: Person.RotateSecurityStamp and its event).
+func (w authorityWriter) rotateStamp(ctx context.Context, id person.ID, reason string, now time.Time) error {
+	err := w.facts.persons.UpdateByID(ctx, id, func(p *person.Person) (bool, error) {
 		return true, p.RotateSecurityStamp(reason, now)
 	})
 	if err != nil {

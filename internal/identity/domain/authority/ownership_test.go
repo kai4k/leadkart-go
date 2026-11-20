@@ -77,12 +77,14 @@ func TestOwnership_ExemptOperatorNeedsTheOwnershipPermission(t *testing.T) {
 		{"deactivate an owner (another owner remains)", func(a authority.Actor) error {
 			return a.MayDeactivate(w.owner1, []authority.Member{w.owner1, w.owner2})
 		}},
-		{"grant tenant.admin to a role", func(a authority.Actor) error { return a.MayGrantRolePermission(w.leadsR, p.Meta.TenantAdmin) }},
+		{"grant tenant.admin to a role", func(a authority.Actor) error {
+			return a.MayGrantRolePermission(w.leadsR, p.Meta.TenantAdmin, authority.RoleHolders{})
+		}},
 		{"replace a role's permissions with tenant.admin", func(a authority.Actor) error {
-			return a.MayReplaceRolePermissions(w.leadsR, []string{p.Meta.TenantAdmin})
+			return a.MayReplaceRolePermissions(w.leadsR, []string{p.Meta.TenantAdmin}, authority.RoleHolders{})
 		}},
 		{"revoke tenant.admin from the Administrator role", func(a authority.Actor) error {
-			return a.MayRevokeRolePermission(mkRole(7, tA, "Custom Admin", false, 30, false, p.Meta.TenantAdmin), p.Meta.TenantAdmin)
+			return a.MayRevokeRolePermission(mkRole(7, tA, "Custom Admin", false, 30, false, p.Meta.TenantAdmin), p.Meta.TenantAdmin, authority.RoleHolders{})
 		}},
 		{"create a role carrying tenant.admin", func(a authority.Actor) error { return a.MayCreateRole(tA, 30, []string{p.Meta.TenantAdmin}, nil) }},
 	}
@@ -117,9 +119,9 @@ func TestOwnership_EverythingElseTheExemptionAllowsStays(t *testing.T) {
 		"deactivate an Administrator":          w.opManage.MayDeactivate(w.admin, nil),
 		"reactivate-class act-on an owner":     w.opManage.MayActOn(w.owner1),
 		"create a role without tenant.admin":   w.opRoles.MayCreateRole(tA, 30, []string{p.Crm.Leads.Read}, nil),
-		"grant a day-to-day role permission":   w.opRoles.MayGrantRolePermission(w.leadsR, p.Crm.Leads.Read),
+		"grant a day-to-day role permission":   w.opRoles.MayGrantRolePermission(w.leadsR, p.Crm.Leads.Read, authority.RoleHolders{}),
 		"clear a manager":                      w.opManage.MayClearManager(w.exec, nil),
-		"delete a role without tenant.admin":   w.opRoles.MayDeleteRole(w.leadsR),
+		"delete a role without tenant.admin":   w.opRoles.MayDeleteRole(w.leadsR, authority.RoleHolders{}),
 		"approve-class: act on the sole owner": w.opManage.MayActOn(w.owner1),
 	} {
 		if err != nil {

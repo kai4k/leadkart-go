@@ -61,9 +61,9 @@ func TestRoleDecisions_GarbageRoleTenantNeverExempts(t *testing.T) {
 		r := mkRole(41, bad, "Corrupt", false, 50, false, p.Crm.Leads.Read)
 		for name, a := range map[string]authority.Actor{"operator": op, "super": super} {
 			cases = append(cases,
-				decision{name + " edits a role of tenant " + string(bad), a.MayEditRole(r, authority.NoLevelChange), authority.ErrNoAuthority},
-				decision{name + " replaces permissions of a role of tenant " + string(bad), a.MayReplaceRolePermissions(r, nil), authority.ErrNoAuthority},
-				decision{name + " deletes a role of tenant " + string(bad), a.MayDeleteRole(r), authority.ErrNoAuthority},
+				decision{name + " edits a role of tenant " + string(bad), a.MayEditRole(r, authority.NoLevelChange, authority.RoleHolders{}), authority.ErrNoAuthority},
+				decision{name + " replaces permissions of a role of tenant " + string(bad), a.MayReplaceRolePermissions(r, nil, authority.RoleHolders{}), authority.ErrNoAuthority},
+				decision{name + " deletes a role of tenant " + string(bad), a.MayDeleteRole(r, authority.RoleHolders{}), authority.ErrNoAuthority},
 			)
 		}
 	}
@@ -89,11 +89,11 @@ func TestLevelZeroIsNeverMintedByAnyActor(t *testing.T) {
 		{"operator creates level 0 elsewhere", aOp.MayCreateRole(tA, 0, nil, nil), authority.ErrInsufficientRank},
 		{"owner creates level 1", aOwner.MayCreateRole(tA, 1, nil, nil), nil},
 		{"super creates level 1", aSuper.MayCreateRole(tA, 1, nil, nil), nil},
-		{"owner re-levels to 0", aOwner.MayEditRole(mgrR, 0), authority.ErrInsufficientRank},
-		{"super re-levels to 0", aSuper.MayEditRole(mgrR, 0), authority.ErrInsufficientRank},
-		{"operator re-levels to 0", aOp.MayEditRole(mgrR, 0), authority.ErrInsufficientRank},
-		{"owner re-levels to 1", aOwner.MayEditRole(mgrR, 1), nil},
-		{"super re-levels to 1", aSuper.MayEditRole(mgrR, 1), nil},
+		{"owner re-levels to 0", aOwner.MayEditRole(mgrR, 0, authority.RoleHolders{}), authority.ErrInsufficientRank},
+		{"super re-levels to 0", aSuper.MayEditRole(mgrR, 0, authority.RoleHolders{}), authority.ErrInsufficientRank},
+		{"operator re-levels to 0", aOp.MayEditRole(mgrR, 0, authority.RoleHolders{}), authority.ErrInsufficientRank},
+		{"owner re-levels to 1", aOwner.MayEditRole(mgrR, 1, authority.RoleHolders{}), nil},
+		{"super re-levels to 1", aSuper.MayEditRole(mgrR, 1, authority.RoleHolders{}), nil},
 	}
 	for _, m := range mismatches(cases) {
 		t.Error(m)
@@ -144,17 +144,17 @@ func TestOverridesAndRolePermissions_PolicyComputesTheDelta(t *testing.T) {
 		{"an owner already revoked stays refused", aOwner.MayChangeOverrides(mkMemberOv(t, 17, tA, nil, []string{ta}, ownerR), authority.Overrides{Revoked: []string{ta}}), authority.ErrOwnerProtected},
 
 		// role permissions: delta of the stored set against the new set
-		{"replace with the identical set (unheld names already on the role)", aMgr.MayReplaceRolePermissions(routerR, []string{p.Crm.Leads.Read, p.Crm.Leads.Assign}), nil},
-		{"replace dropping an unheld name", aMgr.MayReplaceRolePermissions(routerR, []string{p.Crm.Leads.Read}), authority.ErrGrantExceedsAuthority},
-		{"replace adding a held name", aMgr.MayReplaceRolePermissions(routerR, []string{p.Crm.Leads.Read, p.Crm.Leads.Assign, p.Crm.Leads.ReadAll}), nil},
-		{"replace adding tenant.admin as admin", aAdmin.MayReplaceRolePermissions(routerR, []string{ta}), authority.ErrGrantExceedsAuthority},
-		{"grant a name the role holds (no change)", aMgr.MayGrantRolePermission(routerR, p.Crm.Leads.Assign), nil},
-		{"grant an unheld name", aMgr.MayGrantRolePermission(routerR, p.Crm.Leads.Manage), authority.ErrGrantExceedsAuthority},
-		{"grant a held name", aMgr.MayGrantRolePermission(routerR, p.Crm.Leads.ReadAll), nil},
-		{"grant an unknown name", aSuper.MayGrantRolePermission(routerR, "nope"), authority.ErrGrantExceedsAuthority},
-		{"revoke a name the role lacks (no change)", aMgr.MayRevokeRolePermission(routerR, p.Crm.Leads.Manage), nil},
-		{"revoke an unheld name the role holds", aMgr.MayRevokeRolePermission(routerR, p.Crm.Leads.Assign), authority.ErrGrantExceedsAuthority},
-		{"revoke a held name", aMgr.MayRevokeRolePermission(routerR, p.Crm.Leads.Read), nil},
+		{"replace with the identical set (unheld names already on the role)", aMgr.MayReplaceRolePermissions(routerR, []string{p.Crm.Leads.Read, p.Crm.Leads.Assign}, authority.RoleHolders{}), nil},
+		{"replace dropping an unheld name", aMgr.MayReplaceRolePermissions(routerR, []string{p.Crm.Leads.Read}, authority.RoleHolders{}), authority.ErrGrantExceedsAuthority},
+		{"replace adding a held name", aMgr.MayReplaceRolePermissions(routerR, []string{p.Crm.Leads.Read, p.Crm.Leads.Assign, p.Crm.Leads.ReadAll}, authority.RoleHolders{}), nil},
+		{"replace adding tenant.admin as admin", aAdmin.MayReplaceRolePermissions(routerR, []string{ta}, authority.RoleHolders{}), authority.ErrGrantExceedsAuthority},
+		{"grant a name the role holds (no change)", aMgr.MayGrantRolePermission(routerR, p.Crm.Leads.Assign, authority.RoleHolders{}), nil},
+		{"grant an unheld name", aMgr.MayGrantRolePermission(routerR, p.Crm.Leads.Manage, authority.RoleHolders{}), authority.ErrGrantExceedsAuthority},
+		{"grant a held name", aMgr.MayGrantRolePermission(routerR, p.Crm.Leads.ReadAll, authority.RoleHolders{}), nil},
+		{"grant an unknown name", aSuper.MayGrantRolePermission(routerR, "nope", authority.RoleHolders{}), authority.ErrGrantExceedsAuthority},
+		{"revoke a name the role lacks (no change)", aMgr.MayRevokeRolePermission(routerR, p.Crm.Leads.Manage, authority.RoleHolders{}), nil},
+		{"revoke an unheld name the role holds", aMgr.MayRevokeRolePermission(routerR, p.Crm.Leads.Assign, authority.RoleHolders{}), authority.ErrGrantExceedsAuthority},
+		{"revoke a held name", aMgr.MayRevokeRolePermission(routerR, p.Crm.Leads.Read, authority.RoleHolders{}), nil},
 	}
 	for _, m := range mismatches(cases) {
 		t.Error(m)
@@ -180,12 +180,12 @@ func TestSystemDefaultRolesAreImmutableForEveryActor(t *testing.T) {
 	var cases []decision
 	for name, a := range map[string]authority.Actor{"owner": aOwner, "super": aSuper, "operator": aOp} {
 		cases = append(cases,
-			decision{name + " renames", a.MayEditRole(ownerR, authority.NoLevelChange), role.ErrSystemDefault},
-			decision{name + " re-levels", a.MayEditRole(ownerR, 5), role.ErrSystemDefault},
-			decision{name + " replaces permissions", a.MayReplaceRolePermissions(ownerR, nil), role.ErrSystemDefault},
-			decision{name + " grants", a.MayGrantRolePermission(ownerR, p.Crm.Leads.Read), role.ErrSystemDefault},
-			decision{name + " revokes tenant.admin", a.MayRevokeRolePermission(ownerR, ta), role.ErrSystemDefault},
-			decision{name + " deletes", a.MayDeleteRole(ownerR), role.ErrSystemDefault},
+			decision{name + " renames", a.MayEditRole(ownerR, authority.NoLevelChange, authority.RoleHolders{}), role.ErrSystemDefault},
+			decision{name + " re-levels", a.MayEditRole(ownerR, 5, authority.RoleHolders{}), role.ErrSystemDefault},
+			decision{name + " replaces permissions", a.MayReplaceRolePermissions(ownerR, nil, authority.RoleHolders{}), role.ErrSystemDefault},
+			decision{name + " grants", a.MayGrantRolePermission(ownerR, p.Crm.Leads.Read, authority.RoleHolders{}), role.ErrSystemDefault},
+			decision{name + " revokes tenant.admin", a.MayRevokeRolePermission(ownerR, ta, authority.RoleHolders{}), role.ErrSystemDefault},
+			decision{name + " deletes", a.MayDeleteRole(ownerR, authority.RoleHolders{}), role.ErrSystemDefault},
 			decision{name + " sets the parent of a system role", a.MaySetRoleParent(sysChild, mgrR), role.ErrSystemDefault},
 		)
 	}
@@ -408,10 +408,10 @@ func TestSameTenantIsCanonical(t *testing.T) {
 	other := mkRole(43, tB, "Other Manager", false, 20, false)
 
 	cases := []decision{
-		{"operator edits a role of its own tenant spelled in upper case: follows rank", op.MayEditRole(upperOwn, authority.NoLevelChange), authority.ErrInsufficientRank},
-		{"operator edits a role of its own tenant spelled with braces", op.MayEditRole(braced, authority.NoLevelChange), authority.ErrInsufficientRank},
-		{"operator deletes a role of its own tenant in upper case", op.MayDeleteRole(upperOwn), authority.ErrInsufficientRank},
-		{"operator edits another tenant's role", op.MayEditRole(other, authority.NoLevelChange), nil},
+		{"operator edits a role of its own tenant spelled in upper case: follows rank", op.MayEditRole(upperOwn, authority.NoLevelChange, authority.RoleHolders{}), authority.ErrInsufficientRank},
+		{"operator edits a role of its own tenant spelled with braces", op.MayEditRole(braced, authority.NoLevelChange, authority.RoleHolders{}), authority.ErrInsufficientRank},
+		{"operator deletes a role of its own tenant in upper case", op.MayDeleteRole(upperOwn, authority.RoleHolders{}), authority.ErrInsufficientRank},
+		{"operator edits another tenant's role", op.MayEditRole(other, authority.NoLevelChange, authority.RoleHolders{}), nil},
 	}
 	for _, m := range mismatches(cases) {
 		t.Error(m)
@@ -431,11 +431,11 @@ func TestNilRoleNeverPanics(t *testing.T) {
 	cases := []decision{
 		{"assign nil", aAdmin.MayAssignRole(user, nil), authority.ErrNoAuthority},
 		{"revoke nil", aAdmin.MayRevokeRole(user, nil, nil), authority.ErrNoAuthority},
-		{"edit nil", aAdmin.MayEditRole(nil, authority.NoLevelChange), authority.ErrNoAuthority},
-		{"replace permissions of nil", aAdmin.MayReplaceRolePermissions(nil, nil), authority.ErrNoAuthority},
-		{"grant on nil", aAdmin.MayGrantRolePermission(nil, "crm.leads.read"), authority.ErrNoAuthority},
-		{"revoke on nil", aAdmin.MayRevokeRolePermission(nil, "crm.leads.read"), authority.ErrNoAuthority},
-		{"delete nil", aAdmin.MayDeleteRole(nil), authority.ErrNoAuthority},
+		{"edit nil", aAdmin.MayEditRole(nil, authority.NoLevelChange, authority.RoleHolders{}), authority.ErrNoAuthority},
+		{"replace permissions of nil", aAdmin.MayReplaceRolePermissions(nil, nil, authority.RoleHolders{}), authority.ErrNoAuthority},
+		{"grant on nil", aAdmin.MayGrantRolePermission(nil, "crm.leads.read", authority.RoleHolders{}), authority.ErrNoAuthority},
+		{"revoke on nil", aAdmin.MayRevokeRolePermission(nil, "crm.leads.read", authority.RoleHolders{}), authority.ErrNoAuthority},
+		{"delete nil", aAdmin.MayDeleteRole(nil, authority.RoleHolders{}), authority.ErrNoAuthority},
 		{"set parent of nil child", aAdmin.MaySetRoleParent(nil, userR), authority.ErrNoAuthority},
 	}
 	for _, m := range mismatches(cases) {
@@ -461,11 +461,11 @@ func TestLegacyLevelZeroCustomRole(t *testing.T) {
 	aUser := actorOf(t, user, authority.RankUser, adminEffective()...)
 
 	cases := []decision{
-		{"owner renames a legacy level-0 role", aOwner.MayEditRole(legacy, authority.NoLevelChange), nil},
-		{"owner re-levels a legacy level-0 role into the ladder", aOwner.MayEditRole(legacy, 5), nil},
-		{"owner deletes a legacy level-0 role", aOwner.MayDeleteRole(legacy), nil},
-		{"admin edits a legacy level-0 role (it ranks as the user tier)", aAdmin.MayEditRole(legacy, authority.NoLevelChange), nil},
-		{"a user-tier actor may not touch it", aUser.MayEditRole(legacy, authority.NoLevelChange), authority.ErrInsufficientRank},
+		{"owner renames a legacy level-0 role", aOwner.MayEditRole(legacy, authority.NoLevelChange, authority.RoleHolders{}), nil},
+		{"owner re-levels a legacy level-0 role into the ladder", aOwner.MayEditRole(legacy, 5, authority.RoleHolders{}), nil},
+		{"owner deletes a legacy level-0 role", aOwner.MayDeleteRole(legacy, authority.RoleHolders{}), nil},
+		{"admin edits a legacy level-0 role (it ranks as the user tier)", aAdmin.MayEditRole(legacy, authority.NoLevelChange, authority.RoleHolders{}), nil},
+		{"a user-tier actor may not touch it", aUser.MayEditRole(legacy, authority.NoLevelChange, authority.RoleHolders{}), authority.ErrInsufficientRank},
 		{"admin may not assign it", aAdmin.MayAssignRole(admin, legacy), authority.ErrSelfTarget},
 		{"owner assigns it", aOwner.MayAssignRole(admin, legacy), nil},
 		{"admin acts on its holder (ranks as the user tier)", aAdmin.MayActOn(holder), nil},
@@ -500,7 +500,7 @@ func TestOutOfRangeRoleLevelsRankNone(t *testing.T) {
 		t.Errorf("holder of a negative-level role ranks %d, want RankNone", holder.Rank())
 	}
 	cases := []decision{
-		{"admin edits a negative-level role (it is the weakest)", aAdmin.MayEditRole(negative, authority.NoLevelChange), nil},
+		{"admin edits a negative-level role (it is the weakest)", aAdmin.MayEditRole(negative, authority.NoLevelChange, authority.RoleHolders{}), nil},
 		{"admin assigns a negative-level role", aAdmin.MayAssignRole(holder, negative), nil},
 		{"a negative-level role is not a valid parent", aAdmin.MaySetRoleParent(huge, negative), authority.ErrRoleParentNotEligible},
 	}

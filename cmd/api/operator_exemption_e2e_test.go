@@ -96,6 +96,15 @@ func TestE2E_OperatorExemption_OwnershipNeedsItsOwnPermission(t *testing.T) {
 		if r := f.doWithHeaders(t, http.MethodPost, user(second, "/deactivate"), withOwnership, ports.DeactivateUserRequest{Reason: "ownership test"}, hdr); r.status != http.StatusNoContent {
 			t.Fatalf("deactivate an owner with platform.tenants.ownership: %d %s, want 204", r.status, r.body)
 		}
+		// Bringing an owner back is the same ownership decision (hierarchy round 5).
+		f.wantForbidden(t, "users.manage only reactivates an owner",
+			f.doWithHeaders(t, http.MethodPost, user(second, "/reactivate"), usersOnly, nil, hdr), http.StatusForbidden, ownershipRequired)
+		if u := f.getUser(t, b.AccessToken, second.membershipID); u.Status != "inactive" {
+			t.Errorf("the refused reactivation left the owner %q, want inactive", u.Status)
+		}
+		if r := f.doWithHeaders(t, http.MethodPost, user(second, "/reactivate"), withOwnership, nil, hdr); r.status != http.StatusNoContent {
+			t.Fatalf("reactivate an owner with platform.tenants.ownership: %d %s, want 204", r.status, r.body)
+		}
 	})
 	// arch-test:serial — subtests share one fixture and one tenant.
 	t.Run("everything else the exemption allows stays allowed", func(t *testing.T) {
@@ -108,6 +117,9 @@ func TestE2E_OperatorExemption_OwnershipNeedsItsOwnPermission(t *testing.T) {
 		}
 		if r := f.doWithHeaders(t, http.MethodPost, user(exec, "/deactivate"), usersOnly, ports.DeactivateUserRequest{Reason: "day-to-day repair"}, hdr); r.status != http.StatusNoContent {
 			t.Errorf("deactivate a non-owner without ownership: %d %s, want 204", r.status, r.body)
+		}
+		if r := f.doWithHeaders(t, http.MethodPost, user(exec, "/reactivate"), usersOnly, nil, hdr); r.status != http.StatusNoContent {
+			t.Errorf("reactivate a non-owner without ownership: %d %s, want 204", r.status, r.body)
 		}
 	})
 }

@@ -61,6 +61,19 @@ func (a anyPersons) UpdateByID(ctx context.Context, id person.ID, fn func(*perso
 	return nil
 }
 
+// GetByIDs synthesises every requested person, like GetByID.
+func (a anyPersons) GetByIDs(ctx context.Context, ids []person.ID) (map[person.ID]*person.Person, error) {
+	out := make(map[person.ID]*person.Person, len(ids))
+	for _, id := range ids {
+		p, err := a.GetByID(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		out[id] = p
+	}
+	return out, nil
+}
+
 func (anyPersons) GetByID(_ context.Context, id person.ID) (*person.Person, error) {
 	addr, err := email.New(strings.ReplaceAll(string(id), "-", "") + "@authz.test")
 	if err != nil {

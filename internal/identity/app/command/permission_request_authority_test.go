@@ -343,10 +343,20 @@ func TestApprove_KeepsExistingOverridesAndNeverShortensAGrant(t *testing.T) {
 		RevokedPermissions: []*permission.Permission{revoked, permission.FromConstant(p.Orders.Orders.Read)},
 	})
 	actor := actorAs(t, tl.ID(), authority.RankTeamLead, p.Roles.Approve, p.Crm.Leads.ReadAll, p.Crm.Leads.Assign, p.Crm.Leads.Read)
-	for _, perm := range []string{p.Crm.Leads.ReadAll, p.Crm.Leads.Assign, p.Crm.Leads.Read} {
+	for _, perm := range []string{p.Crm.Leads.ReadAll, p.Crm.Leads.Assign} {
 		if err := w.approveAs(actor, w.pending(t, exec, perm, 7)); err != nil {
 			t.Fatalf("approve %s: %v", perm, err)
 		}
+	}
+	// A name on the revoked list is an un-revoke: a Team Lead may not lift it
+	// even while holding the name (hierarchy round 5); an Administrator may.
+	rq := w.pending(t, exec, revoked.Name(), 7)
+	if err := w.approveAs(actor, rq); !errors.Is(err, authority.ErrGrantExceedsAuthority) {
+		t.Fatalf("Team Lead approves a revoked name: %v, want ErrGrantExceedsAuthority", err)
+	}
+	adm := w.member(t, w.admin)
+	if err := w.approveAs(actorAs(t, adm.ID(), authority.RankAdmin, tenantAdminEffective()...), rq); err != nil {
+		t.Fatalf("Administrator approves the revoked name: %v", err)
 	}
 	if g, _ := grantOf(exec, permanent.Name()); !g.ExpiresAt.IsZero() {
 		t.Errorf("a permanent grant became time-bound: %v", g.ExpiresAt)

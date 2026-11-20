@@ -165,17 +165,17 @@ func TestMayDeleteRole(t *testing.T) {
 	aSuper := mkActor(t, authority.ActorInput{MembershipID: membership.ID(uid(90)), TenantID: tP, IsSuperUser: true})
 
 	for _, m := range mismatches([]decision{
-		{"admin deletes a custom role it may confer", aAdmin.MayDeleteRole(custom), nil},
-		{"admin deletes a role carrying tenant.admin", aAdmin.MayDeleteRole(rogue), authority.ErrGrantExceedsAuthority},
-		{"owner deletes a role carrying tenant.admin", aOwner.MayDeleteRole(rogue), nil},
-		{"manager deletes a role with a permission it lacks", aMgr.MayDeleteRole(custom), authority.ErrGrantExceedsAuthority},
-		{"manager deletes a team lead role it holds the permissions of", aMgr.MayDeleteRole(tlR), nil},
-		{"system default roles are never deleted by the owner", aOwner.MayDeleteRole(adminR), role.ErrSystemDefault},
-		{"nor by a super user", aSuper.MayDeleteRole(ownerR), role.ErrSystemDefault},
-		{"another tenant's role", aAdmin.MayDeleteRole(foreign), authority.ErrNoAuthority},
-		{"a super-admin role needs a super user", aAdmin.MayDeleteRole(superR), authority.ErrInsufficientRank},
-		{"a super user deletes it", aSuper.MayDeleteRole(superR), nil},
-		{"nil role", aOwner.MayDeleteRole(nil), authority.ErrNoAuthority},
+		{"admin deletes a custom role it may confer", aAdmin.MayDeleteRole(custom, authority.RoleHolders{}), nil},
+		{"admin deletes a role carrying tenant.admin", aAdmin.MayDeleteRole(rogue, authority.RoleHolders{}), authority.ErrGrantExceedsAuthority},
+		{"owner deletes a role carrying tenant.admin", aOwner.MayDeleteRole(rogue, authority.RoleHolders{}), nil},
+		{"manager deletes a role with a permission it lacks", aMgr.MayDeleteRole(custom, authority.RoleHolders{}), authority.ErrGrantExceedsAuthority},
+		{"manager deletes a team lead role it holds the permissions of", aMgr.MayDeleteRole(tlR, authority.RoleHolders{}), nil},
+		{"system default roles are never deleted by the owner", aOwner.MayDeleteRole(adminR, authority.RoleHolders{}), role.ErrSystemDefault},
+		{"nor by a super user", aSuper.MayDeleteRole(ownerR, authority.RoleHolders{}), role.ErrSystemDefault},
+		{"another tenant's role", aAdmin.MayDeleteRole(foreign, authority.RoleHolders{}), authority.ErrNoAuthority},
+		{"a super-admin role needs a super user", aAdmin.MayDeleteRole(superR, authority.RoleHolders{}), authority.ErrInsufficientRank},
+		{"a super user deletes it", aSuper.MayDeleteRole(superR, authority.RoleHolders{}), nil},
+		{"nil role", aOwner.MayDeleteRole(nil, authority.RoleHolders{}), authority.ErrNoAuthority},
 	}) {
 		t.Error(m)
 	}

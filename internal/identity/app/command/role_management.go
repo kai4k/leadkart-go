@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/leadkart/leadkart-go/internal/common/pg"
@@ -51,13 +53,68 @@ func (e *RoleInUseError) Is(target error) bool { return target == ErrRoleInUse }
 // facts loader and one clock.
 type roleWriter struct{ authorityWriter }
 
-// updateRole runs fn (decide, then mutate) on the live role under the lock;
-// a soft-deleted or foreign role is role.ErrNotFound.
-func (w roleWriter) updateRole(ctx context.Context, tenantID tenant.ID, id role.ID, actor authority.Actor, now time.Time, fn func(actor authority.Actor, r *role.Role) error) error {
+// holderScope says which of a role's holders an edit loads.
+type holderScope int
+
+const (
+	// holdersNone: the edit does not act on holders (a rename).
+	holdersNone holderScope = iota
+	// holdersOnly: the holders (permission changes, delete).
+	holdersOnly
+	// holdersAndReporting: the holders and the members linked to them by
+	// reports_to (a re-level).
+	holdersAndReporting
+)
+
+// roleDefinition is what a role confers and where it stands: the part of a role
+// whose change reaches every holder's tokens.
+type roleDefinition struct {
+	level   int
+	perms   string
+	deleted bool
+}
+
+func definitionOf(r *role.Role) roleDefinition {
+	names := authority.PermissionNames(r.Permissions())
+	slices.Sort(names)
+	return roleDefinition{level: r.HierarchyLevel(), perms: strings.Join(names, ","), deleted: r.IsDeleted()}
+}
+
+// updateRole runs fn (decide, then mutate) on the live role under the lock; a
+// soft-deleted or foreign role is role.ErrNotFound. It is the one path every
+// role-definition edit takes, so it is also the one place the holders are
+// loaded (once, per scope) and the one place their stamps end: when fn changed
+// what the role confers, its level or its deleted state, every ACTIVE holder's
+// security stamp is rotated in the same transaction, so their tokens carrying the
+// old permissions and rank answer 401 stale_token on the next request in any
+// module. A rename-only edit loads no holders and rotates nothing. Cost: the
+// holders' reads are fixed ([authorityFacts.roleHolders]); the rotation is one
+// person write per active holder, which the per-person security-stamp event
+// requires.
+func (w roleWriter) updateRole(ctx context.Context, tenantID tenant.ID, id role.ID, actor authority.Actor, now time.Time, scope holderScope,
+	fn func(actor authority.Actor, r *role.Role, holders loadedHolders) error) error {
 	return w.locked(ctx, tenantID, actor, now, func(ctx context.Context, actor authority.Actor) error {
 		return w.facts.roles.UpdateByID(ctx, tenantID, id, func(r *role.Role) (bool, error) {
-			if err := fn(actor, r); err != nil {
+			var holders loadedHolders
+			if scope != holdersNone {
+				var err error
+				if holders, err = w.facts.roleHolders(ctx, tenantID, id, now, scope == holdersAndReporting); err != nil {
+					return false, err
+				}
+			}
+			before := definitionOf(r)
+			if err := fn(actor, r, holders); err != nil {
 				return false, err
+			}
+			if scope != holdersNone && definitionOf(r) != before {
+				for _, m := range holders.memberships {
+					if m.Status() != membership.StatusActive {
+						continue
+					}
+					if err := w.rotateStamp(ctx, m.PersonID(), "role_definition_changed", now); err != nil {
+						return false, err
+					}
+				}
 			}
 			return true, nil
 		})
@@ -214,8 +271,12 @@ func (h UpdateRoleHandler) Handle(ctx context.Context, cmd UpdateRoleCommand) er
 	if cmd.HierarchyLevel >= 0 {
 		newLevel = cmd.HierarchyLevel
 	}
-	err := h.updateRole(ctx, cmd.TenantID, cmd.RoleID, cmd.Actor, now, func(actor authority.Actor, r *role.Role) error {
-		if err := actor.MayEditRole(r, newLevel); err != nil {
+	scope := holdersNone
+	if newLevel != authority.NoLevelChange {
+		scope = holdersAndReporting
+	}
+	err := h.updateRole(ctx, cmd.TenantID, cmd.RoleID, cmd.Actor, now, scope, func(actor authority.Actor, r *role.Role, holders loadedHolders) error {
+		if err := actor.MayEditRole(r, newLevel, holders.set); err != nil {
 			return err
 		}
 		if cmd.Name != "" {
@@ -263,8 +324,8 @@ func (h ReplaceRolePermissionsHandler) Handle(ctx context.Context, cmd ReplaceRo
 		return err
 	}
 	now := h.now()
-	upErr := h.updateRole(ctx, cmd.TenantID, cmd.RoleID, cmd.Actor, now, func(actor authority.Actor, r *role.Role) error {
-		if err := actor.MayReplaceRolePermissions(r, authority.PermissionNames(target)); err != nil {
+	upErr := h.updateRole(ctx, cmd.TenantID, cmd.RoleID, cmd.Actor, now, holdersOnly, func(actor authority.Actor, r *role.Role, holders loadedHolders) error {
+		if err := actor.MayReplaceRolePermissions(r, authority.PermissionNames(target), holders.set); err != nil {
 			return err
 		}
 		return r.ReplacePermissions(target, now)
@@ -301,8 +362,8 @@ func (h GrantRolePermissionHandler) Handle(ctx context.Context, cmd GrantRolePer
 		return fmt.Errorf("%w: %q", ErrPermissionUnknown, cmd.PermissionName)
 	}
 	now := h.now()
-	upErr := h.updateRole(ctx, cmd.TenantID, cmd.RoleID, cmd.Actor, now, func(actor authority.Actor, r *role.Role) error {
-		if err := actor.MayGrantRolePermission(r, p.Name()); err != nil {
+	upErr := h.updateRole(ctx, cmd.TenantID, cmd.RoleID, cmd.Actor, now, holdersOnly, func(actor authority.Actor, r *role.Role, holders loadedHolders) error {
+		if err := actor.MayGrantRolePermission(r, p.Name(), holders.set); err != nil {
 			return err
 		}
 		return r.GrantPermission(p, now)
@@ -339,8 +400,8 @@ func (h RevokeRolePermissionHandler) Handle(ctx context.Context, cmd RevokeRoleP
 		return fmt.Errorf("%w: %q", ErrPermissionUnknown, cmd.PermissionName)
 	}
 	now := h.now()
-	upErr := h.updateRole(ctx, cmd.TenantID, cmd.RoleID, cmd.Actor, now, func(actor authority.Actor, r *role.Role) error {
-		if err := actor.MayRevokeRolePermission(r, p.Name()); err != nil {
+	upErr := h.updateRole(ctx, cmd.TenantID, cmd.RoleID, cmd.Actor, now, holdersOnly, func(actor authority.Actor, r *role.Role, holders loadedHolders) error {
+		if err := actor.MayRevokeRolePermission(r, p.Name(), holders.set); err != nil {
 			return err
 		}
 		return r.RevokePermission(p, now)
@@ -380,16 +441,12 @@ func (h DeleteRoleHandler) Handle(ctx context.Context, cmd DeleteRoleCommand) er
 		return err
 	}
 	now := h.now()
-	err := h.updateRole(ctx, cmd.TenantID, cmd.RoleID, cmd.Actor, now, func(actor authority.Actor, r *role.Role) error {
-		if err := actor.MayDeleteRole(r); err != nil {
+	err := h.updateRole(ctx, cmd.TenantID, cmd.RoleID, cmd.Actor, now, holdersOnly, func(actor authority.Actor, r *role.Role, holders loadedHolders) error {
+		if err := actor.MayDeleteRole(r, holders.set); err != nil {
 			return err
 		}
-		holders, err := h.facts.memberships.ListHoldingRole(ctx, cmd.TenantID, cmd.RoleID)
-		if err != nil {
-			return fmt.Errorf("list holders: %w", err)
-		}
 		active := 0
-		for _, m := range holders {
+		for _, m := range holders.memberships {
 			if m.Status() == membership.StatusActive {
 				active++
 			}
@@ -397,7 +454,7 @@ func (h DeleteRoleHandler) Handle(ctx context.Context, cmd DeleteRoleCommand) er
 		if active > 0 {
 			return &RoleInUseError{ActiveHolders: active}
 		}
-		for _, m := range holders {
+		for _, m := range holders.memberships {
 			if err := h.facts.memberships.UpdateByID(ctx, cmd.TenantID, m.ID(), func(held *membership.Membership) (bool, error) {
 				return true, held.RevokeRole(cmd.RoleID, now)
 			}); err != nil {

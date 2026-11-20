@@ -34,3 +34,6 @@ var ErrRoleParentNotEligible = errs.New(errs.KindInvalidInput, "authority", "a p
 
 // ErrOwnershipAuthorityRequired is returned when a cross-tenant operator under the operator exemption (R3) tries to change who OWNS a customer tenant (the Company Owner role, tenant.admin, an owner's status) without platform.tenants.ownership.
 var ErrOwnershipAuthorityRequired = errs.New(errs.KindPermissionDenied, "authority", "changing a tenant's ownership from outside it needs platform.tenants.ownership")
+
+// ErrRoleLevelBreaksReporting is returned when re-levelling a role would leave one of its active holders not strictly junior to their manager, or a direct report of a holder not strictly junior to the holder.
+var ErrRoleLevelBreaksReporting = errs.New(errs.KindInvalidInput, "authority", "the new role level would break a reporting line: a member must stay strictly junior to their manager")

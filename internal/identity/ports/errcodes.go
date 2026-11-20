@@ -210,13 +210,19 @@ const (
 	ErrCodeRoleDeleted = "role_deleted"
 
 	// ErrCodeRoleInUse — the role is still held by active members; the body's
-	// errors.holders carries the count. 409.
+	// errors.active_holders carries the count. 409.
 	ErrCodeRoleInUse = "role_in_use"
 
 	// ErrCodeManagerNotEligible — the proposed manager is not an active
 	// same-tenant member more senior than the subordinate, or the link would
 	// close a reporting cycle (ADR 0069 H4). 422 surface.
 	ErrCodeManagerNotEligible = "manager_not_eligible"
+
+	// ErrCodeRoleLevelBreaksReporting — re-levelling a role would leave one of
+	// its active holders not strictly junior to their manager, or a direct
+	// report of a holder not strictly junior to the holder (ADR 0069 H3).
+	// 422 surface.
+	ErrCodeRoleLevelBreaksReporting = "role_level_breaks_reporting"
 
 	// ErrCodeRoleParentNotEligible — the proposed parent role is not more
 	// senior than its child (ADR 0069 H6). 422 surface.

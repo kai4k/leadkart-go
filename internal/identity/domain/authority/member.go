@@ -24,6 +24,13 @@ type Member struct {
 	active     bool
 	reportsTo  membership.ID
 	overrides  Overrides
+	// statusActive is the membership's own status (active), without the person
+	// state `active` also folds in: a locked or suspended person still holds
+	// their roles, so a role edit acts on them.
+	statusActive bool
+	// levels is the effective level of every live role the member holds, by role
+	// id: the input of "what would this member's rank be if role X moved to L".
+	levels map[role.ID]Rank
 }
 
 // PersonState is whether the person behind a membership can act at all. The
@@ -83,11 +90,13 @@ func MemberOf(m *membership.Membership, roles []*role.Role, now time.Time, perso
 	}
 	out := Member{valid: true, id: id, tenantID: tid, rank: RankOf(roles),
 		active: person.CanAct() && m.Status() == membership.StatusActive, reportsTo: reportsTo,
-		overrides: liveOverrides(m, now)}
+		overrides: liveOverrides(m, now), statusActive: m.Status() == membership.StatusActive,
+		levels: make(map[role.ID]Rank, len(roles))}
 	for _, r := range roles {
 		if r.IsDeleted() {
 			continue
 		}
+		out.levels[r.ID()] = levelOf(r)
 		out.owner = out.owner || r.IsCompanyOwner()
 		out.superAdmin = out.superAdmin || r.IsSuperAdmin()
 	}
@@ -177,6 +186,23 @@ func (m Member) IsOwner() bool { return m.valid && m.owner }
 
 // IsSuperAdmin reports whether the member holds a super-admin role.
 func (m Member) IsSuperAdmin() bool { return m.valid && m.superAdmin }
+
+// rankIfRoleMovedTo is the member's rank were the role rid at level l: the most
+// senior of l and the levels of every other live role the member holds
+// (RankNone when there is none). A member who does not hold rid keeps their rank.
+func (m Member) rankIfRoleMovedTo(rid role.ID, l Rank) Rank {
+	if _, holds := m.levels[rid]; !holds {
+		return m.rank
+	}
+	best := RankNone
+	for id, lvl := range m.levels {
+		if id == rid {
+			lvl = l
+		}
+		best = min(best, lvl)
+	}
+	return best
+}
 
 // IsActive reports whether the membership is active AND the person behind it can act.
 func (m Member) IsActive() bool { return m.valid && m.active }

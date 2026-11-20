@@ -171,8 +171,9 @@ func NewReactivateUserHandler(uow pg.UnitOfWork, lock AuthorityLocker, m members
 	return ReactivateUserHandler{w: newAuthorityWriter("NewReactivateUserHandler", uow, lock, m, r, p, now)}
 }
 
-// Handle decides [authority.Actor.MayActOn] under the tenant lock and
-// dispatches to [Membership.Reactivate]. Idempotent — already-Active
+// Handle decides [authority.Actor.MayReactivate] (MayActOn, plus the ownership
+// gate when the target is an owner) under the tenant lock and dispatches to
+// [Membership.Reactivate]. Idempotent — already-Active
 // returns nil without an event.
 func (h ReactivateUserHandler) Handle(ctx context.Context, cmd ReactivateUserCommand) error {
 	if cmd.TenantID.IsZero() {
@@ -186,7 +187,7 @@ func (h ReactivateUserHandler) Handle(ctx context.Context, cmd ReactivateUserCom
 	}
 	now := h.w.now()
 	err := h.w.updateMember(ctx, cmd.TenantID, cmd.MembershipID, cmd.Actor, now, func(ctx context.Context, actor authority.Actor, m *membership.Membership, target authority.Member) error {
-		if err := actor.MayActOn(target); err != nil {
+		if err := actor.MayReactivate(target); err != nil {
 			return err
 		}
 		if err := m.Reactivate(now); err != nil {

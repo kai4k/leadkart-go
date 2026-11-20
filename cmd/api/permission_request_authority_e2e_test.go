@@ -368,13 +368,33 @@ func TestE2E_PermissionRequests_ApprovingARevokedNameIsAnUnrevoke(t *testing.T) 
 		}
 	})
 	// arch-test:serial — subtests share one fixture and one tenant.
-	t.Run("a manager who holds the name still can (pinned: the policy has no record of who revoked)", func(t *testing.T) {
-		e, _, id := setup(t, reassign)
-		if r := w.decide(t, "approve", w.tlTok, id); r.status != http.StatusNoContent {
-			t.Fatalf("the requester's manager (who holds %s) approves: %d %s", reassign, r.status, r.body)
+	t.Run("a manager who holds the name cannot un-revoke it (an explicit revoke needs the Admin tier)", func(t *testing.T) {
+		e, eTok, id := setup(t, reassign)
+		r := w.decide(t, "approve", w.tlTok, id)
+		f.wantForbidden(t, "the requester's manager (who holds "+reassign+") approves", r, http.StatusForbidden, "grant_exceeds_authority")
+		got := f.authedJSON(t, http.MethodGet, "/api/v1/permission-requests/"+id, eTok, nil)
+		var dto ports.PermissionRequestDto
+		if err := json.Unmarshal(got.body, &dto); err != nil || dto.State != "pending" {
+			t.Errorf("the refused approval left the request: %d %s, want pending", got.status, got.body)
 		}
-		if !holds(e, reassign) {
-			t.Error("the manager's approval did not restore the permission")
+		if holds(e, reassign) {
+			t.Error("the refused approval un-revoked the permission")
+		}
+	})
+	// arch-test:serial — subtests share one fixture and one tenant.
+	t.Run("the overrides route has the same rule: a manager cannot lift a revoke either", func(t *testing.T) {
+		e, _ := w.exec(t)
+		f.grantOverrides(t, w.owner.AccessToken, e.membershipID, []string{}, []string{reassign})
+		f.grantOverrides(t, w.owner.AccessToken, w.mgr.membershipID, []string{p.Users.UpdatePermissions, reassign}, nil)
+		f.evictStamp(t, w.mgr.personID)
+		mTok := f.loginToken(t, w.mgr.email, w.mgr.password)
+		r := f.authedJSON(t, http.MethodPatch, "/api/v1/users/"+e.membershipID+"/permission-overrides", mTok,
+			ports.ReplaceUserPermissionOverridesRequest{Granted: []string{}, Revoked: []string{}})
+		f.wantForbidden(t, "manager lifts a revoke", r, http.StatusForbidden, "grant_exceeds_authority")
+		// The Administrator tier and above may.
+		if r := f.authedJSON(t, http.MethodPatch, "/api/v1/users/"+e.membershipID+"/permission-overrides", w.owner.AccessToken,
+			ports.ReplaceUserPermissionOverridesRequest{Granted: []string{}, Revoked: []string{}}); r.status != http.StatusNoContent {
+			t.Errorf("owner lifts the revoke: %d %s, want 204", r.status, r.body)
 		}
 	})
 }

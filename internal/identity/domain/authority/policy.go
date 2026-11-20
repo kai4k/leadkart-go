@@ -3,9 +3,11 @@ package authority
 import (
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/leadkart/leadkart-go/internal/common/ids"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/permission"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/role"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
@@ -71,6 +73,9 @@ func (a Actor) exemptIn(tenantID tenant.ID) bool {
 }
 
 func (a Actor) outranks(r Rank) bool { return a.valid && a.Rank() < r }
+
+// outranksOrEquals: the actor is at least as senior as r.
+func (a Actor) outranksOrEquals(r Rank) bool { return a.valid && a.Rank() <= r }
 
 // validLevel: a created or re-levelled role is in [1, HierarchyLevelMax].
 func validLevel(n int) bool { return n >= minLevel && n <= role.HierarchyLevelMax }
@@ -222,12 +227,33 @@ func (a Actor) MayChangeOverrides(t Member, after Overrides) error {
 	if err := a.MayActOn(t); err != nil {
 		return err
 	}
+	if err := a.mayUnrevoke(t, after.Revoked); err != nil {
+		return err
+	}
 	delta := slices.Concat(grantDelta(t.overrides.Granted, after.Granted), Delta(t.overrides.Revoked, after.Revoked))
 	slices.Sort(delta)
 	if err := a.mayChangePermissions(t.tenantID, slices.Compact(delta)); err != nil {
 		return err
 	}
 	return guardOwnerOverrides(t, after.Revoked)
+}
+
+// mayUnrevoke - H3: an explicit revoke is a deliberate denial, so taking a name
+// OFF a member's revoked list (by an overrides change or by approving a
+// request) needs seniority, not just holding the name: the actor must be Admin
+// tier or above (rank <= RankAdmin; an impersonation session is Admin-equivalent),
+// or exempt in the member's tenant. Putting names ON the list is unaffected.
+func (a Actor) mayUnrevoke(t Member, afterRevoked []string) error {
+	var removed []string
+	for _, n := range t.overrides.Revoked {
+		if !slices.Contains(afterRevoked, n) {
+			removed = append(removed, n)
+		}
+	}
+	if len(removed) == 0 || a.exemptIn(t.tenantID) || a.outranksOrEquals(RankAdmin) {
+		return nil
+	}
+	return fmt.Errorf("%w: only the Admin tier or above may lift a revocation (%s)", ErrGrantExceedsAuthority, strings.Join(removed, ", "))
 }
 
 // grantDelta is the names added, removed or re-timed between two grant lists.
@@ -277,6 +303,20 @@ func (a Actor) MayDeactivate(t Member, owners []Member) error {
 		}
 	}
 	return GuardLastOwner(t, owners)
+}
+
+// MayReactivate - H2+H6: may a reactivate t? MayActOn, and when t is an owner,
+// the ownership gate: bringing an owner back is as much an ownership change as
+// deactivating one, so an operator acting from outside the tenant needs
+// platform.tenants.ownership for it too.
+func (a Actor) MayReactivate(t Member) error {
+	if err := a.MayActOn(t); err != nil {
+		return err
+	}
+	if t.owner {
+		return a.mayChangeOwnershipIn(t.tenantID)
+	}
+	return nil
 }
 
 // MayCreateRole — H3: a new role in tenantID with level and initial perms.
@@ -357,47 +397,162 @@ func (a Actor) mayMutateRole(r *role.Role, newLevel int) error {
 	return nil
 }
 
+// RoleHolders is the input of every decision that changes what a role confers
+// or where it stands: every member holding the role (any status, as loaded by
+// the command's facts loader, once per command) and, for a re-level, the members
+// the holders are linked to by reports_to that do not hold the role themselves
+// (their managers and their direct reports).
+type RoleHolders struct {
+	Holders []Member
+	Linked  []Member
+}
+
+// ChangesLevel reports whether newLevel moves r (NoLevelChange and the current
+// level do not). Commands use it to decide whether the holders must be loaded
+// for a rename-and-re-level edit; the policy uses the same test.
+func ChangesLevel(r *role.Role, newLevel int) bool {
+	return r != nil && newLevel != NoLevelChange && newLevel != r.HierarchyLevel()
+}
+
+// mayChangeRoleFor - H3: changing what a role confers (grant, revoke, replace
+// permissions, delete) or re-levelling it is ACTING ON EVERY ACTIVE MEMBER WHO
+// HOLDS IT. A role's level need not match its holders' ranks, so the role-level
+// checks alone let a manager confer on, or strip from, peers and seniors, and
+// let a member make a time-bound permission permanent for themself. The actor
+// must be allowed to act on each active holder ([Actor.MayActOn]: strictly
+// senior, owners over owners, exempt operators and super users); a holder who is
+// the actor is refused ErrSelfTarget (an owner editing a non-system role they
+// hold is refused too: they can drop the role first). It is the ONE place the
+// rule lives, reached through every role decision below, which all take the
+// holders as a parameter so no command can leave them out.
+func (a Actor) mayChangeRoleFor(h RoleHolders) error {
+	for _, m := range h.Holders {
+		if !m.valid {
+			return ErrNoAuthority
+		}
+		if !m.statusActive {
+			continue // an inactive membership is not acted on: nothing reaches a session
+		}
+		if err := a.MayActOn(m); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// reportingHolds - H3: after r moves to newLevel every reporting line that
+// touches an active holder must still be strictly ordered: the holder strictly
+// junior to their manager, and every direct report of the holder strictly
+// junior to the holder. The holder's new rank is the most senior of newLevel and
+// the levels of the other live roles they hold; members who do not hold r keep
+// their rank. Applies to every actor (it is data integrity, not authority). A
+// manager that was not loaded fails closed.
+func reportingHolds(r *role.Role, newLevel int, h RoleHolders) error {
+	byID := make(map[membership.ID]Member, len(h.Holders)+len(h.Linked))
+	holder := make(map[membership.ID]struct{}, len(h.Holders))
+	for _, m := range h.Holders {
+		byID[m.id] = m
+		holder[m.id] = struct{}{}
+	}
+	for _, m := range h.Linked {
+		byID[m.id] = m
+	}
+	after := func(m Member) Rank {
+		if _, ok := holder[m.id]; ok {
+			return m.rankIfRoleMovedTo(r.ID(), Rank(newLevel))
+		}
+		return m.rank
+	}
+	for _, hm := range h.Holders {
+		if !hm.valid || !hm.statusActive {
+			continue
+		}
+		if hm.reportsTo != "" {
+			mgr, ok := byID[hm.reportsTo]
+			if !ok {
+				return fmt.Errorf("%w: the manager of a holder was not loaded", ErrNoAuthority)
+			}
+			if after(hm) <= after(mgr) {
+				return fmt.Errorf("%w: a holder would be rank %d under their manager at rank %d", ErrRoleLevelBreaksReporting, after(hm), after(mgr))
+			}
+		}
+		for _, x := range byID {
+			if x.reportsTo == hm.id && after(x) <= after(hm) {
+				return fmt.Errorf("%w: a holder would be rank %d over a direct report at rank %d", ErrRoleLevelBreaksReporting, after(hm), after(x))
+			}
+		}
+	}
+	return nil
+}
+
 // MayEditRole — H3: rename and re-level only (newLevel = NoLevelChange keeps
 // the level). The actor must be strictly more senior than the role's current
 // and new level; a system-default role is refused for every actor
-// (role.ErrSystemDefault). Permission changes go through
-// MayReplaceRolePermissions, MayGrantRolePermission and MayRevokeRolePermission,
-// which compute their own delta.
-func (a Actor) MayEditRole(r *role.Role, newLevel int) error { return a.mayMutateRole(r, newLevel) }
+// (role.ErrSystemDefault). A re-level also acts on the holders
+// ([Actor.mayChangeRoleFor]) and must keep every reporting line strictly
+// ordered (ErrRoleLevelBreaksReporting); a rename needs no holders. Permission
+// changes go through MayReplaceRolePermissions, MayGrantRolePermission and
+// MayRevokeRolePermission, which compute their own delta.
+func (a Actor) MayEditRole(r *role.Role, newLevel int, holders RoleHolders) error {
+	if err := a.mayMutateRole(r, newLevel); err != nil {
+		return err
+	}
+	if !ChangesLevel(r, newLevel) {
+		return nil
+	}
+	if err := a.mayChangeRoleFor(holders); err != nil {
+		return err
+	}
+	return reportingHolds(r, newLevel, holders)
+}
 
 // MayReplaceRolePermissions — H3: mayMutateRole + the ceiling over
-// Delta(the role's current permissions, after).
-func (a Actor) MayReplaceRolePermissions(r *role.Role, after []string) error {
+// Delta(the role's current permissions, after) + the holders rule.
+func (a Actor) MayReplaceRolePermissions(r *role.Role, after []string, holders RoleHolders) error {
 	if err := a.mayMutateRole(r, NoLevelChange); err != nil {
 		return err
 	}
-	return a.mayChangePermissions(r.TenantID(), Delta(PermissionNames(r.Permissions()), after))
+	if err := a.mayChangePermissions(r.TenantID(), Delta(PermissionNames(r.Permissions()), after)); err != nil {
+		return err
+	}
+	return a.mayChangeRoleFor(holders)
 }
 
 // MayGrantRolePermission — H3: adding name to r; a name r already holds changes nothing.
-func (a Actor) MayGrantRolePermission(r *role.Role, name string) error {
+func (a Actor) MayGrantRolePermission(r *role.Role, name string, holders RoleHolders) error {
 	if err := a.mayMutateRole(r, NoLevelChange); err != nil {
 		return err
 	}
-	return a.mayChangePermissions(r.TenantID(), Delta(PermissionNames(r.Permissions()), append(PermissionNames(r.Permissions()), name)))
+	if err := a.mayChangePermissions(r.TenantID(), Delta(PermissionNames(r.Permissions()), append(PermissionNames(r.Permissions()), name))); err != nil {
+		return err
+	}
+	return a.mayChangeRoleFor(holders)
 }
 
 // MayRevokeRolePermission — H3: removing name from r; a name r does not hold changes nothing.
-func (a Actor) MayRevokeRolePermission(r *role.Role, name string) error {
+func (a Actor) MayRevokeRolePermission(r *role.Role, name string, holders RoleHolders) error {
 	if err := a.mayMutateRole(r, NoLevelChange); err != nil {
 		return err
 	}
 	cur := PermissionNames(r.Permissions())
-	return a.mayChangePermissions(r.TenantID(), Delta(cur, slices.DeleteFunc(slices.Clone(cur), func(n string) bool { return n == name })))
+	if err := a.mayChangePermissions(r.TenantID(), Delta(cur, slices.DeleteFunc(slices.Clone(cur), func(n string) bool { return n == name }))); err != nil {
+		return err
+	}
+	return a.mayChangeRoleFor(holders)
 }
 
 // MayDeleteRole — H3/H6: mayMutateRole + the ceiling over the role's own
-// permissions, because deleting removes every one of them from every holder.
-func (a Actor) MayDeleteRole(r *role.Role) error {
+// permissions, because deleting removes every one of them from every holder, +
+// the holders rule (answered before the role-in-use rule, so a caller who may
+// not act on the holders learns nothing about them).
+func (a Actor) MayDeleteRole(r *role.Role, holders RoleHolders) error {
 	if err := a.mayMutateRole(r, NoLevelChange); err != nil {
 		return err
 	}
-	return a.mayChangePermissions(r.TenantID(), PermissionNames(r.Permissions()))
+	if err := a.mayChangePermissions(r.TenantID(), PermissionNames(r.Permissions())); err != nil {
+		return err
+	}
+	return a.mayChangeRoleFor(holders)
 }
 
 // MaySetRoleParent — ADR 0058 edges carry no authority (rank is level-only;
