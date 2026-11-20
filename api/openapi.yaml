@@ -63,10 +63,18 @@ info:
     outrank the target member or role), `ownership_authority_required` (a platform
     operator under `X-Tenant-Id` changing a tenant's ownership without
     `platform.tenants.ownership`), `impersonation_not_allowed` and
-    `not_approver`. ADR 0036 / ADR 0068 / ADR 0069. State conflicts on the
-    membership and person commands are `409`: `last_owner_protected`,
-    `owner_protected`, `member_roles_inconsistent`; an ineligible manager is
-    `422 manager_not_eligible`. In `x-required-permissions`, the token `self`
+    `not_approver` (no longer returned by approve and deny: a caller who may not
+    decide a request is answered `404 permission_request_not_found`). Editing a
+    role acts on its active holders (`insufficient_rank`,
+    `self_modification_forbidden`); lifting a member's explicit revoke needs the
+    Admin tier (`grant_exceeds_authority`). Rank is `GET /auth/me/capabilities`
+    `rank` / `tier` (0 owner, 1-10 admin, 11-20 manager, 21-30 team_lead, 31-99
+    user; lower is more senior). ADR 0036 / ADR 0068 / ADR 0069. State conflicts
+    on the membership, role and person commands are `409`: `last_owner_protected`,
+    `owner_protected`, `member_roles_inconsistent`, `role_system_default`,
+    `role_in_use`, `person_memberships_changing`; input the policy refuses is `422`:
+    `manager_not_eligible`, `role_parent_not_eligible`,
+    `role_level_breaks_reporting`, `permission_not_requestable`. In `x-required-permissions`, the token `self`
     is not a permission: it means "the caller's own membership" (the path
     user id equals the caller's `membership_id`).
 

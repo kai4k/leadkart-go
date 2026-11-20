@@ -57,5 +57,6 @@ One decision per file, Michael Nygard format (Context / Decision / Consequences 
 | 0066 | Go 1.24–1.26 canon sweep + shared pgconv + arch-gate upgrades (transitive guard, depguard, visibility) | Accepted |
 | 0067 | Canonical Watermill cqrs messaging stack — EventBus/EventProcessor + wire-alias marshaler + resilience + durable DLQ (completes 0064; supersedes 0008/0009 in part) | Accepted |
 | 0068 | Authorization hardening — tenant.admin implication, X-Tenant-Id, must-change enforcement, refresh grace | Accepted |
+| 0069 | Rank hierarchy and grant authority — tiers, act-downward, grant ceiling, role edits act on holders, approver rule, owner invariants | Accepted |
 
 ADRs 0011–0026 + 0032 land as the relevant code lands per the master plan.
