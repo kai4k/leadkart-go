@@ -28,8 +28,10 @@ type RevokeSessionCommand struct {
 }
 
 // ErrSessionNotFound surfaces when the FamilyID doesn't exist OR
-// belongs to a different Person OR is already revoked. All three cases
-// collapse to one error per `security.md` enumeration-safety rule.
+// belongs to a different Person. Both collapse to one error per
+// `security.md` enumeration-safety rule. The caller's OWN family that is
+// already revoked is NOT an error: revoking it again is an idempotent no-op
+// (HTTP 204).
 var ErrSessionNotFound = errors.New("revoke_session: session not found")
 
 // RevokeSessionHandler revokes a single family.

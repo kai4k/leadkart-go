@@ -7,12 +7,37 @@ matters and how to check it.
 
 ## Before the deploy
 
-1. **Run `migrate` before the api and the worker.** `compose.prod.yml` orders it
-   (`depends_on: migrate: service_completed_successfully`); when deploying by hand,
-   never start a new api against an old schema.
+1. **Deploy order: `migrate`, then the worker, then the api.** `compose.prod.yml`
+   makes both `api` and `worker` wait for `migrate` (`depends_on: migrate:
+   service_completed_successfully`); when deploying by hand, never start a new api or
+   worker against an old schema, and start the worker before the api so the first rows
+   the new api writes to the outbox (stamp evictions, family revocations, the tenant
+   suspension cascade) find a consumer. All three images (`API_IMAGE`, `WORKER_IMAGE`,
+   `MIGRATE_IMAGE`) must carry the SAME release tag: `.github/workflows/release.yml`
+   builds, signs and publishes the three together, and
+   `TestArch_ProdComposeImagesAreReleased` fails when the compose file pulls an image
+   the release does not build.
+
+   *May the OLD api keep running while `migrate` runs?* For migrations 20261120000004,
+   `...05` and `...06` yes: they only add a table and columns with defaults
+   (`persons.password_reset_failed_attempts integer NOT NULL DEFAULT 0`,
+   `refresh_tokens.grace_replays smallint NOT NULL DEFAULT 0`,
+   `refresh_tokens.consumed_client_binding text NULL`), which the old statements never
+   name, so old inserts and updates keep working (read from the SQL; not run against an
+   old binary). NOT for this release as a whole: `20261119000001_identity_role_tiers`
+   rewrites role levels and permission sets of existing tenants under the old api, and
+   `20261120000002` repairs self-managed memberships and adds a CHECK. Treat the old api as unsafe once
+   `migrate` has started: stop it first (a short outage) or accept that it serves stale
+   role data until it is replaced. Each of 05 and 06 sets `lock_timeout = 5s`: if a busy
+   table makes `migrate` fail with a lock timeout, nothing was applied from that file,
+   re-run it in a quieter minute.
 2. **`LEADKART_ENV=production`** on api and worker. The api then refuses to start on
    a missing trusted-proxy decision, a missing lockout key, a weak or placeholder
-   secret, or a database role that is an owner or lacks a privilege.
+   secret, or a database role that is an owner or a superuser. The privilege check
+   itself (`pg.VerifyApplicationPrivileges`) runs for the api AND the worker in EVERY
+   environment, not only production: a role that LACKS a privilege stops both at boot
+   everywhere; only "the role is an owner / superuser / BYPASSRLS" is an error in
+   production and a logged warning elsewhere. See "The application role" below.
 3. **`LEADKART_HTTP__TRUSTED_PROXIES`** = the BFF's fixed address, or a dedicated
    subnet only the BFF lives in, or `none` when the api is directly exposed. **Never
    `172.16.0.0/12`**: that range trusts every Docker network on the host and anything
@@ -22,9 +47,15 @@ matters and how to check it.
    the JWT key. Required in production. Rotating it restarts the phantom failed-login
    counters and opens a short 423-versus-401 window, so rotate deliberately.
 5. **The worker is deployed and healthy.** It is part of `compose.prod.yml`
-   (`worker`, health check `/worker -healthcheck`). Without it: no outbox row is
-   delivered (stamp-cache and family-revocation backstops, cascades, audit, email) and
-   the phantom failed-login table is never purged.
+   (`worker`, image `WORKER_IMAGE` = `ghcr.io/<org>/leadkart-go-worker:<tag>`, health
+   check `/worker -healthcheck`). Without it: no outbox row is delivered (stamp-cache
+   and family-revocation backstops, cascades, audit, email, **the tenant-suspension
+   revocation of live sessions**) and the phantom failed-login table is never purged.
+   Its admin listener (`/alive`, probed by the health check) is
+   **`LEADKART_LISTEN__WORKER_ADMIN`** (default `:9091`; the compose file and the
+   image set it): it is distinct from the api's `LEADKART_LISTEN__ADMIN` (`:9090`),
+   must not be published outside the host, and the probe reads the same variable, so
+   changing one without the other makes the container unhealthy.
 6. **`GOMEMLIMIT`** (900MiB for the 1 GiB api container; set in `compose.prod.yml`).
    Raise `LEADKART_ARGON2__MAX_CONCURRENT` only together with the container limit and
    `GOMEMLIMIT` (16 slots hold about 312 MiB of live Argon2 memory, and the collector
@@ -102,6 +133,20 @@ directory is in the repository at the release tag, the `migrate` image has no sh
     it (`POST /api/v1/platform/persons/{id}/global-suspend`), then log in with the right
     password (expect 401 `invalid_credentials`, the same answer as a wrong password),
     refresh an older session (401), and lift the suspension (the login works again).
+
+## Residual risks accepted
+
+These are known, plain-language limits of this release. None is a bug to fix before the deploy; each is a conscious acceptance (several are pending the owner, ADR 0069).
+
+- **A misconfigured proxy puts everyone in one rate-limit bucket.** Per-client limits, the failed-login lockout and the refresh grace binding all key on the client address the api derives from `X-Forwarded-For`. If `LEADKART_HTTP__TRUSTED_PROXIES` or the BFF's `XFF_DEPTH` is wrong, every user shares one key: the limits throttle everybody together and the grace binding proves nothing (items 3, 7, 10).
+- **Grace-window takeover from behind the victim's NAT.** The refresh grace replay (30 s, at most 3 times) is bound to the client ADDRESS, so someone who holds a just-rotated token AND sits behind the same public address as its owner (one office, one carrier NAT) can still replay it inside the window.
+- **Sessions last up to 14 days** from login (the absolute lifetime), refreshed or not; the idle timeout (2 h default, pending the owner) ends an unused one sooner.
+- **On deploy, sessions older than 14 days end and flagged accounts must change their password.** The absolute lifetime counts from each family's creation, so every family created more than 14 days ago is refused at its next refresh (`session_expired`), and every person still flagged `must_change_password` is forced to change it at the next sign-in (owner decision (a) in ADR 0069).
+- **A security stamp can be 30 s stale.** An old access token dies at once when Redis is reachable (the api evicts the cached stamp after the commit); with the cache unreachable it lives up to 30 s.
+- **Rotating the JWT signing key signs some people out** (item 8: the grace successor derives from it), and access tokens issued before a **tenant suspension live up to 600 s**.
+- **Someone who holds a CONSUMED refresh token can force a sign-out.** Presenting a consumed token revokes the whole family (reuse detection): a stolen old token can end the owner's session. That is the price of detecting theft.
+- **Residual timing differences between login branches** (a right password is distinguishable by design; one branch writes an extra row) are below database jitter next to the Argon2 time (ADR 0068 D12).
+- **Impersonation sessions live in one process's memory.** A restart of the api ends every session; with more than one api instance a session is only known to the instance that created it (ADR 0045).
 
 ## Alerts to configure
 

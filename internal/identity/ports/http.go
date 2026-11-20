@@ -713,8 +713,9 @@ func handleRevokeSession(log *slog.Logger, a app.Application) http.Handler {
 		})
 		switch {
 		case errors.Is(err, command.ErrSessionNotFound):
-			// 404 — collapses "wrong owner" + "doesn't exist" + "already
-			// revoked" per security.md enumeration-safety rule.
+			// 404 — collapses "wrong owner" + "doesn't exist" per security.md
+			// enumeration-safety rule. The caller's OWN already-revoked family is
+			// the idempotent 204 below (the command treats it as a no-op).
 			writeError(w, http.StatusNotFound, ErrCodeSessionNotFound, "")
 			return
 		case err != nil:

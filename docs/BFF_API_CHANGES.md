@@ -1,6 +1,6 @@
 # What the web BFF (leadkart-web) must handle after ADRs 0068 and 0069
 
-Companion to [ADR 0068](adr/0068-authorization-hardening.md) and [ADR 0069](adr/0069-rank-hierarchy-and-grant-authority.md); it is the one list of every API change on branch `fix/identity-authz-and-bff-security` that the BFF or the web UI has to act on. Status: as built at the end of fix round 13. The contract itself is `api/openapi.yaml` (regenerate the web types from it); local setup is [docs/LOCAL_BACKEND.md](LOCAL_BACKEND.md). Codes in the `status / code` column are the `error` field of the JSON body; switch on it, never on the message (messages are fixed strings and may change).
+Companion to [ADR 0068](adr/0068-authorization-hardening.md) and [ADR 0069](adr/0069-rank-hierarchy-and-grant-authority.md); it is the one list of every API change on branch `fix/identity-authz-and-bff-security` that the BFF or the web UI has to act on. Status: as built at the end of the final fix round (after fix round 13). The contract itself is `api/openapi.yaml` (regenerate the web types from it); local setup is [docs/LOCAL_BACKEND.md](LOCAL_BACKEND.md). Codes in the `status / code` column are the `error` field of the JSON body; switch on it, never on the message (messages are fixed strings and may change).
 
 ## 1. Contract-wide rules
 
@@ -32,6 +32,12 @@ Companion to [ADR 0068](adr/0068-authorization-hardening.md) and [ADR 0069](adr/
 | `GET /tenants?slug=`, `GET /tenants/by-slug/{slug}` | Now gated: `identity.tenants.view` (owners: `tenant.admin`, own tenant only) or `platform.tenants.view`. A zero-permission member used to get their own tenant or an empty list and now gets 403. | 403 `forbidden` | Read the tenant through another source, or grant the permission. |
 | `GET /tenants/{id}`, `GET /users`, `GET /roles`, audit feed | Need `*.view` permissions; ordinary members (for example a Sales Executive) no longer see the tenant directory. Self-service `GET` and `PATCH /users/{own membership}` still work for everyone. | 403 `forbidden` | Hide the screens without the permission. |
 | `GET /search` | Deleted tenants are no longer returned. Categories need their own permission (`persons`: `platform.users.view`, `tenants`: `platform.tenants.view`); with no `include` the authorised subset is returned. | 403 `search_category_forbidden` for an explicitly requested category the caller may not see | Request only categories the operator may see. |
+| `POST /auth/login` (suspended company) | A member whose company is SUSPENDED gets a distinct answer, but only AFTER the password was verified: a wrong password or an unknown email is still the ordinary 401 (same body and headers, same lockout counting), so the code reveals nothing to a stranger. A DELETED company, and a member with no usable membership, stay 401 `invalid_credentials`. A freshly registered company is `pending` and signs in normally; `pending_deletion` still signs in (open owner question, ADR 0069). Reactivating the company restores sign-in with the same password. | 403 `tenant_suspended` | Show "your company's account is suspended; contact support" on this code. Do not treat it as a wrong password and do not retry. |
+| `POST /auth/refresh` (suspended company) | A refresh token of a member of a suspended company is refused and its family is revoked (`tenant_suspended`); suspending a company also revokes every live family of its members (worker subscriber), so the session ends at the next refresh. An access token already issued stays valid until its own expiry (600 s at most). A deleted company's members are refused without a reason. A reactivated company does not bring the revoked session back: the member signs in again. | 401 `refresh_rejected` with `reason: tenant_suspended` | Clear the session cookies and send the member to sign-in with the "company suspended" message. Operators acting into the suspended tenant are unaffected (their session belongs to the platform tenant). |
+| `POST /auth/refresh` (idle timeout) | A session now ends when it is IDLE: each refresh token lives `Refresh.SlidingTTL` (default 2 hours; pending the owner's confirmation, ADR 0069) from its issue, never past the absolute lifetime, and every successful rotation renews it (a grace replay does not). The first refresh after the token ran out ends the session and revokes the family (`idle_timeout`). The web refreshes whenever its 10-minute access token runs out, so an open and used session never idles; a parked tab does. | 401 `refresh_rejected` with `reason: session_expired` (the same as the 14-day absolute end) | Treat like the absolute end: "your session ended, sign in again". Do not retry. |
+| `reason` on `refresh_rejected` | The body carries `reason` ONLY for these: `session_expired` (absolute lifetime or idle timeout) and `tenant_suspended`. Every other refusal (unknown, revoked, reuse, deleted company) has none and must stay indistinguishable. | 401 | Switch on `reason` when present; otherwise "sign in again". |
+| `DELETE /auth/sessions/{familyId}` | Traced to the handler (the earlier review suspected a 404 where the spec said an idempotent 204): the CALLER'S OWN session is 204, and revoking it again is 204 as well; an id that does not exist and another person's session are both 404 `session_not_found` with identical bodies (no session-id enumeration). The spec and this row now say exactly that. | 204; 404 `session_not_found`; 400 `invalid_family_id`; 403 in an impersonation session | A 404 on a session the UI listed means it was already removed: refresh the list. |
+| `POST /auth/change-password`, `POST /auth/request-email-change`, email-change confirm (deactivated person) | These three ask the same predicate as login (`Person.MaySignIn`), so a deactivated person is refused exactly like an anonymised or globally suspended one. | the existing refusal of each (401 `incorrect_current_password`; email change rejected) | Nothing new to render. |
 
 ## 3. Tenant scope, registration and impersonation
 
@@ -46,6 +52,12 @@ Companion to [ADR 0068](adr/0068-authorization-hardening.md) and [ADR 0069](adr/
 | impersonation routes (session create, list, end) | Authorised by the new platform-reserved permission `platform.impersonation.manage`, NOT `platform.tenants.manage`; the capabilities permission list shows it. | 403 `forbidden` without it | Guard the impersonation UI on that permission. |
 | any route, impersonation token | The scoped token acts as the target tenant's admin on tenant routes. Self-service routes (change-password, email change, sessions, `/me/activity`, permission-request submit, approve, deny, cancel), `/platform/*`, tenant register and lifecycle, search and anonymise are refused. The audience and the `act` claim must agree. The token is live only while its session is. Two tenant-plane reads under `/platform/` (`GET /platform/marketplace/leads`, `GET /platform/lead-credits/balance`) stay open to a session. | 403 `impersonation_not_allowed`; 401 `unauthenticated` (aud/act mismatch); 401 `stale_token` once the session ended | Hide those UIs during impersonation; on "stop impersonating" use the operator's own tokens. |
 | `POST /users` with an impersonation token | Allowed (accepted risk, ADR 0069 item 25); the creation rows carry the operator and reason. | 201 (was 500) | none |
+| tenant lifecycle: `POST /tenants/{id}/suspend`, `/activate`, `/mark-for-deletion`, `/restore`; `DELETE /platform/tenants/{id}` | Each needs a platform operator holding its own permission: `identity.tenants.suspend`, `identity.tenants.activate`, `identity.tenants.delete` (mark-for-deletion, restore and hard delete). On `main` any platform token sufficed. Platform-tenant membership alone authorises nothing. | 403 `forbidden` | Show these actions only when `capabilities.effective_permissions` holds the permission. Section 6 lists every gate. |
+| platform persons, stats, tenant list, hard delete | `GET /platform/persons`, `/{id}`, `/{id}/memberships`: `platform.users.view`. `PATCH /platform/persons/{id}/profile`, `/global-suspend`, `/lift-global-suspension`: `platform.users.manage` (and never on yourself). `POST /platform/persons/{id}/anonymise`: `identity.users.anonymise` (not on yourself). `GET /platform/tenants` and `GET /platform/stats`: `platform.tenants.view`. `DELETE /platform/tenants/{id}`: `identity.tenants.delete`. `POST /tenants`: `platform.tenants.create`. Impersonation: `platform.impersonation.manage` to create and list; ending a session needs only the platform anchor. `GET /search`: any of `platform.tenants.view`, `platform.users.view`. | 403 `forbidden` | Gate the operator console on the permission, not on "is a platform operator". |
+| identity mutations: `/users*`, `/roles*`, `PATCH /tenants/{id}/*` | Gated by `identity.*` permissions, not only the `*.view` reads: `identity.users.create / update / deactivate / reactivate / update_permissions`, `identity.roles.assign / revoke / create / update / delete`, `identity.tenants.update / update_settings` (in the PATH tenant). The full route-to-permission table is section 6 (generated, so it cannot drift). | 403 `forbidden` | Hide each action without its permission; a zero-permission member sees the self-service routes only. |
+| `PATCH /users/{userId}/profile`, `PATCH /users/{userId}/permission-overrides` (full replace) | The profile body requires ALL of `designation`, `department` and `status_message` (send the current value to keep it; an empty string clears it). The overrides body requires BOTH `granted` and `revoked` (empty arrays clear them); a missing field or a JSON `null` is refused and nothing changes. | 400 `invalid_body` with `errors.<field>: ["required"]` | Always send the whole object the form shows. |
+| `X-Tenant-Id` on other modules | The header also applies to the inventory, CRM, tasks, dispatch and orders routes and to `GET /platform/lead-credits/balance` (the spec lists the `XTenantId` parameter on each): an operator holding the scope authority READS the scoped tenant's data; a WRITE under a foreign scope on any route that is not in the pinned writable identity set is refused. Everyone else's header is ignored. | 403 `tenant_scope_read_only` for a foreign-scope write; the codes of the `X-Tenant-Id` row above otherwise | Keep sending the header only from the `lk_op_tenant` cookie; render read-only banners in the operator scope tree. |
+| CRM lead self-scoping | A caller WITHOUT `crm.leads.read_all` (and without operator reach) reaches only leads assigned to their own membership: any other lead is 404 `lead_not_found` on `GET /crm/leads/{id}` AND on every sub-route (assign, stage, temperature, calls, convert, lose, reminders), exactly like a lead that does not exist. On `main` only the list was filtered. Reminders follow the same rule. | 404 `lead_not_found` | Treat a 404 on a lead the user just saw as "no longer yours"; do not retry. |
 
 ## 4. Authority: rank, roles, overrides, approvals
 
@@ -69,3 +81,80 @@ Rank is `capabilities.rank` / `tier` (0 owner, 1 to 10 admin, 11 to 20 manager, 
 ## 5. Not decided yet (do not build around these)
 
 The pending-owner list in [ADR 0069](adr/0069-rank-hierarchy-and-grant-authority.md#pending-owner-confirmation) holds every controller or implementer default (rate-limit numbers, the Argon2 numbers of 2 running and 8 waiting, the 30 s refresh grace, the default password policy, whether a session may create members, ...). Only the three rulings in "Decided by the owner" are decisions; the rest may change by configuration or a later ADR.
+
+## 6. Who may call what: the identity route gates (generated)
+
+Generated from `ports.AddRoutes` by `TestArch_BFFRouteGateTable` (the test fails when this block differs from the code; regenerate with `go test ./internal/architecture -run TestArch_BFFRouteGateTable -update-route-gates`). "Signed in" = a valid, fresh access token and nothing more. A permission listed here is checked against the caller's EFFECTIVE permissions (`capabilities.effective_permissions`); `tenant.admin` implies the permissions of its own tenant. The last column is the `X-Tenant-Id` behaviour for a platform operator (the BFF is its only writer).
+
+<!-- route-gates:begin (generated by TestArch_BFFRouteGateTable; do not edit by hand) -->
+| Route | Who may call it | `X-Tenant-Id` (operators) |
+|---|---|---|
+| `POST /api/v1/auth/login` | public (no token) | n/a |
+| `POST /api/v1/auth/refresh` | public (no token) | n/a |
+| `POST /api/v1/auth/logout` | public (no token) | n/a |
+| `POST /api/v1/auth/request-password-reset` | public (no token) | n/a |
+| `POST /api/v1/auth/reset-password` | public (no token) | n/a |
+| `POST /api/v1/auth/confirm-email-change` | public (no token) | n/a |
+| `POST /api/v1/auth/change-password` | signed in (any member) | default: reads honoured for an operator; a write is refused (403 `tenant_scope_read_only`) |
+| `POST /api/v1/auth/request-email-change` | signed in (any member) | default: reads honoured for an operator; a write is refused (403 `tenant_scope_read_only`) |
+| `GET /api/v1/auth/sessions` | signed in (any member) | default: reads honoured for an operator; a write is refused (403 `tenant_scope_read_only`) |
+| `GET /api/v1/auth/me/capabilities` | signed in (any member) | default: reads honoured for an operator; a write is refused (403 `tenant_scope_read_only`) |
+| `DELETE /api/v1/auth/sessions/{familyId}` | signed in (any member) | default: reads honoured for an operator; a write is refused (403 `tenant_scope_read_only`) |
+| `DELETE /api/v1/auth/sessions` | signed in (any member) | default: reads honoured for an operator; a write is refused (403 `tenant_scope_read_only`) |
+| `GET /api/v1/tenants` | any of `identity.tenants.view`, `platform.tenants.view` | default: reads honoured for an operator; a write is refused (403 `tenant_scope_read_only`) |
+| `GET /api/v1/tenants/by-slug/{slug}` | any of `identity.tenants.view`, `platform.tenants.view` | default: reads honoured for an operator; a write is refused (403 `tenant_scope_read_only`) |
+| `GET /api/v1/tenants/{tenantId}` | `identity.tenants.view` in the path tenant | path tenant (the URL names the tenant; a header that differs is 400 `tenant_scope_conflict`) |
+| `PATCH /api/v1/tenants/{tenantId}/profile` | `identity.tenants.update` in the path tenant | path tenant (the URL names the tenant; a header that differs is 400 `tenant_scope_conflict`) |
+| `PATCH /api/v1/tenants/{tenantId}/statutory` | `identity.tenants.update` in the path tenant | path tenant (the URL names the tenant; a header that differs is 400 `tenant_scope_conflict`) |
+| `PATCH /api/v1/tenants/{tenantId}/admin-contact` | `identity.tenants.update` in the path tenant | path tenant (the URL names the tenant; a header that differs is 400 `tenant_scope_conflict`) |
+| `PATCH /api/v1/tenants/{tenantId}/settings` | `identity.tenants.update_settings` in the path tenant | path tenant (the URL names the tenant; a header that differs is 400 `tenant_scope_conflict`) |
+| `PATCH /api/v1/tenants/{tenantId}/display-preferences` | `identity.tenants.update` in the path tenant | path tenant (the URL names the tenant; a header that differs is 400 `tenant_scope_conflict`) |
+| `POST /api/v1/tenants` | platform operator and `platform.tenants.create` | default: reads honoured for an operator; a write is refused (403 `tenant_scope_read_only`) |
+| `POST /api/v1/tenants/{tenantId}/suspend` | platform operator and `identity.tenants.suspend` | path tenant (the URL names the tenant; a header that differs is 400 `tenant_scope_conflict`) |
+| `POST /api/v1/tenants/{tenantId}/activate` | platform operator and `identity.tenants.activate` | path tenant (the URL names the tenant; a header that differs is 400 `tenant_scope_conflict`) |
+| `POST /api/v1/tenants/{tenantId}/mark-for-deletion` | platform operator and `identity.tenants.delete` | path tenant (the URL names the tenant; a header that differs is 400 `tenant_scope_conflict`) |
+| `POST /api/v1/tenants/{tenantId}/restore` | platform operator and `identity.tenants.delete` | path tenant (the URL names the tenant; a header that differs is 400 `tenant_scope_conflict`) |
+| `GET /api/v1/users` | `identity.users.view` | default: reads honoured for an operator; a write is refused (403 `tenant_scope_read_only`) |
+| `GET /api/v1/users/{userId}` | `identity.users.view`, or the member's own record (`{userId}`) | default: reads honoured for an operator; a write is refused (403 `tenant_scope_read_only`) |
+| `PATCH /api/v1/users/{userId}/profile` | `identity.users.update`, or the member's own record (`{userId}`) | honoured; writes allowed |
+| `POST /api/v1/users/{userId}/deactivate` | `identity.users.deactivate` | honoured; writes allowed |
+| `POST /api/v1/users/{userId}/reactivate` | `identity.users.reactivate` | honoured; writes allowed |
+| `POST /api/v1/users/{userId}/roles` | `identity.roles.assign` | honoured; writes allowed |
+| `DELETE /api/v1/users/{userId}/roles/{roleId}` | `identity.roles.revoke` | honoured; writes allowed |
+| `PATCH /api/v1/users/{userId}/permission-overrides` | `identity.users.update_permissions` | honoured; writes allowed |
+| `PUT /api/v1/users/{userId}/manager` | `identity.users.update` | honoured; writes allowed |
+| `DELETE /api/v1/users/{userId}/manager` | `identity.users.update` | honoured; writes allowed |
+| `POST /api/v1/users` | `identity.users.create` | honoured; writes allowed |
+| `POST /api/v1/users/{userId}/anonymise` | platform operator and `identity.users.anonymise` | honoured; writes allowed |
+| `GET /api/v1/roles` | `identity.roles.view` | default: reads honoured for an operator; a write is refused (403 `tenant_scope_read_only`) |
+| `GET /api/v1/roles/{roleId}` | `identity.roles.view` | default: reads honoured for an operator; a write is refused (403 `tenant_scope_read_only`) |
+| `POST /api/v1/roles` | `identity.roles.create` | honoured; writes allowed |
+| `PATCH /api/v1/roles/{roleId}` | `identity.roles.update` | honoured; writes allowed |
+| `PUT /api/v1/roles/{roleId}/permissions` | `identity.roles.update` | honoured; writes allowed |
+| `POST /api/v1/roles/{roleId}/permissions/grant` | `identity.roles.update` | honoured; writes allowed |
+| `POST /api/v1/roles/{roleId}/permissions/revoke` | `identity.roles.update` | honoured; writes allowed |
+| `PATCH /api/v1/roles/{roleId}/parent` | `identity.roles.update` | honoured; writes allowed |
+| `DELETE /api/v1/roles/{roleId}` | `identity.roles.delete` | honoured; writes allowed |
+| `GET /api/v1/platform/tenants` | platform operator and `platform.tenants.view` | default: reads honoured for an operator; a write is refused (403 `tenant_scope_read_only`) |
+| `DELETE /api/v1/platform/tenants/{tenantId}` | platform operator and `identity.tenants.delete` | path tenant (the URL names the tenant; a header that differs is 400 `tenant_scope_conflict`) |
+| `GET /api/v1/platform/persons/{personId}` | platform operator and `platform.users.view` | default: reads honoured for an operator; a write is refused (403 `tenant_scope_read_only`) |
+| `GET /api/v1/platform/persons` | platform operator and `platform.users.view` | default: reads honoured for an operator; a write is refused (403 `tenant_scope_read_only`) |
+| `GET /api/v1/platform/persons/{personId}/memberships` | platform operator and `platform.users.view` | default: reads honoured for an operator; a write is refused (403 `tenant_scope_read_only`) |
+| `PATCH /api/v1/platform/persons/{personId}/profile` | platform operator and `platform.users.manage`; not on yourself | default: reads honoured for an operator; a write is refused (403 `tenant_scope_read_only`) |
+| `POST /api/v1/platform/persons/{personId}/global-suspend` | platform operator and `platform.users.manage`; not on yourself | default: reads honoured for an operator; a write is refused (403 `tenant_scope_read_only`) |
+| `POST /api/v1/platform/persons/{personId}/lift-global-suspension` | platform operator and `platform.users.manage`; not on yourself | default: reads honoured for an operator; a write is refused (403 `tenant_scope_read_only`) |
+| `POST /api/v1/platform/persons/{personId}/anonymise` | platform operator and `identity.users.anonymise`; not on yourself | default: reads honoured for an operator; a write is refused (403 `tenant_scope_read_only`) |
+| `POST /api/v1/platform/impersonation/sessions` | platform operator and `platform.impersonation.manage` | default: reads honoured for an operator; a write is refused (403 `tenant_scope_read_only`) |
+| `DELETE /api/v1/platform/impersonation/sessions/{sessionId}` | platform operator | default: reads honoured for an operator; a write is refused (403 `tenant_scope_read_only`) |
+| `GET /api/v1/platform/impersonation/sessions` | platform operator and `platform.impersonation.manage` | default: reads honoured for an operator; a write is refused (403 `tenant_scope_read_only`) |
+| `GET /api/v1/platform/stats` | platform operator and `platform.tenants.view` | default: reads honoured for an operator; a write is refused (403 `tenant_scope_read_only`) |
+| `GET /api/v1/search` | platform operator; any of `platform.tenants.view`, `platform.users.view` | default: reads honoured for an operator; a write is refused (403 `tenant_scope_read_only`) |
+| `POST /api/v1/permission-requests` | `identity.meta.request_permission_elevation` | not supported (403 `tenant_scope_not_supported`) |
+| `GET /api/v1/permission-requests` | signed in (any member) | not supported (403 `tenant_scope_not_supported`) |
+| `GET /api/v1/permission-requests/{requestId}` | signed in (any member) | not supported (403 `tenant_scope_not_supported`) |
+| `POST /api/v1/permission-requests/{requestId}/approve` | signed in (any member) | not supported (403 `tenant_scope_not_supported`) |
+| `POST /api/v1/permission-requests/{requestId}/deny` | signed in (any member) | not supported (403 `tenant_scope_not_supported`) |
+| `POST /api/v1/permission-requests/{requestId}/cancel` | signed in (any member) | not supported (403 `tenant_scope_not_supported`) |
+| `GET /api/v1/auth/me/activity` | signed in (any member) | default: reads honoured for an operator; a write is refused (403 `tenant_scope_read_only`) |
+| `GET /api/v1/tenants/{tenantId}/audit/events` | `identity.tenants.view` in the path tenant | path tenant (the URL names the tenant; a header that differs is 400 `tenant_scope_conflict`) |
+<!-- route-gates:end -->

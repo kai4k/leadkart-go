@@ -60,7 +60,10 @@ info:
     travel together, otherwise the token is `401`) is only as alive as its session:
     once the session ends or expires every route answers `401 stale_token`. While it
     lives it is Admin-equivalent in the target tenant and is refused with `403
-    impersonation_not_allowed` on every `/api/v1/platform/*` route, on tenant
+    impersonation_not_allowed` on every `/api/v1/platform/*` route EXCEPT two reads of
+    the scoped tenant's own data, `GET /api/v1/platform/marketplace/leads` and
+    `GET /api/v1/platform/lead-credits/balance` (they are gated by tenant permissions;
+    the marketplace purchase stays refused), on tenant
     registration, tenant suspend / activate / mark-for-deletion / restore,
     `GET /api/v1/search`, `POST /api/v1/users/{userId}/anonymise`, and the routes that
     act on "the caller": change password, request email change, sessions, own
@@ -537,9 +540,16 @@ paths:
       responses:
         '429': { $ref: '#/components/responses/TooManyRequests' }
         '403': { $ref: '#/components/responses/SessionRefused' }
-        '204': { description: Session revoked (idempotent) }
+        '204': { description: "The caller's own session is revoked now, or already was (idempotent for the owner)" }
         '400': { $ref: '#/components/responses/BadRequest' }
-        '404': { $ref: '#/components/responses/NotFound' }
+        '404':
+          description: |
+            `session_not_found`: no such session, OR it belongs to another person. The two are
+            indistinguishable on purpose (no session-id enumeration); a session of the caller
+            that is already revoked is 204, not 404.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
 
   # ===== TENANTS ========================================================
   /api/v1/tenants:
