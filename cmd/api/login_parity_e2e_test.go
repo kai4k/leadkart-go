@@ -195,6 +195,44 @@ func TestE2E_Login_EveryAddressKindAnswersIdenticallyThroughTheRealChain(t *test
 	}
 }
 
+// A1: a password over the size bound is answered exactly like a wrong one on every
+// kind of address: the same status, body and headers at every attempt of the lockout
+// schedule (the threshold-crossing one included), so it is neither a cheaper nor a
+// dearer path and reveals nothing. Odd attempts send 1025 bytes, even ones a short
+// wrong password; every answer is compared with the same attempt of an unknown
+// address that only ever got short wrong passwords.
+func TestE2E_Login_OverlongPasswordAnswersLikeAWrongPasswordOnEveryAddressKind(t *testing.T) {
+	f, _ := newE2EChainFixture(t, nil)
+	kinds := seedLoginKinds(t, f)
+	overlong := strings.Repeat("x", 1025)
+	const attempts = 12
+
+	unknown := kinds[len(kinds)-1]
+	var ref []httpResp
+	for range attempts {
+		ref = append(ref, f.loginAs(t, unknown, "Wrong-Password-1!"))
+	}
+	for _, k := range kinds[:len(kinds)-1] {
+		for i := range attempts {
+			password := "Wrong-Password-1!"
+			if i%2 == 0 {
+				password = overlong
+			}
+			got := f.loginAs(t, k, password)
+			if g, w := surfaceOf(got), surfaceOf(ref[i]); g != w {
+				t.Errorf("%s, attempt %d (over-long=%v):\n got  %+v\n want %+v", k.name, i+1, i%2 == 0, g, w)
+			}
+		}
+	}
+	// The over-long password of the unknown kind itself, on a fresh address.
+	fresh := loginKind{"unknown2", "nobody2-" + ids.NewV7().String()[24:] + "@e2e.test", "x", "198.51.100.16"}
+	for i := range attempts {
+		if g, w := surfaceOf(f.loginAs(t, fresh, overlong)), surfaceOf(ref[i]); g != w {
+			t.Errorf("unknown address, over-long attempt %d:\n got  %+v\n want %+v", i+1, g, w)
+		}
+	}
+}
+
 // The same ten simultaneous wrong logins, per kind: nine 401s and one 423, with
 // identical bodies and headers, whatever the address is.
 func TestE2E_Login_ConcurrentWrongPasswordsAnswerIdenticallyForEveryAddressKind(t *testing.T) {

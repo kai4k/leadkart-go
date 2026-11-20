@@ -380,8 +380,8 @@ func TestPhantomLockoutRepository_PurgeExpired_DeletesOnlyDeadRowsInBatches(t *t
 	if err != nil || n != 0 {
 		t.Fatalf("third purge deleted %d (err %v), want 0", n, err)
 	}
-	if until, err := repo.LockedUntil(t.Context(), lockedStill, now); err != nil || until.IsZero() {
-		t.Fatalf("an active lock was purged: until=%v err=%v", until, err)
+	if out, err := repo.RegisterFailure(t.Context(), lockedStill, now); err != nil || !out.LockedAt(now) {
+		t.Fatalf("an active lock was purged: outcome=%+v err=%v", out, err)
 	}
 	var left int
 	if err := pool.QueryRow(t.Context(), `SELECT count(*) FROM identity.login_phantom_failures`).Scan(&left); err != nil || left != 2 {

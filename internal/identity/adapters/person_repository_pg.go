@@ -22,9 +22,33 @@ import (
 // a global aggregate (non-RLS); writes run under platform scope to satisfy
 // the outbox INSERT policy.
 type PersonRepository struct {
-	pool *pgxpool.Pool
-	tx   *pg.Transactor
-	q    *db.Queries
+	pool   *pgxpool.Pool
+	tx     *pg.Transactor
+	q      *db.Queries
+	stamps person.StampEvictor
+}
+
+// WithStampEvictor makes every committed write that rotates a person's security
+// stamp evict the cached stamp synchronously, right after the commit, in this
+// process (see [PersonRepository.UpdateByID]). Optional: the outbox subscriber
+// that does the same from the worker stays as the backstop.
+func (r *PersonRepository) WithStampEvictor(e person.StampEvictor) *PersonRepository {
+	r.stamps = e
+	return r
+}
+
+// evictStampOnCommit schedules the eviction for after the surrounding transaction
+// commits (never before: a read in between would refill the cache with the old
+// stamp). Best-effort — the TTL and the subscriber bound a failure.
+func (r *PersonRepository) evictStampOnCommit(ctx context.Context, id person.ID) {
+	if r.stamps == nil {
+		return
+	}
+	pg.OnCommit(ctx, func(ctx context.Context) {
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
+		defer cancel()
+		_ = r.stamps.Invalidate(ctx, id)
+	})
 }
 
 // NewPersonRepository wires the repository against a pool + transactor.
@@ -70,6 +94,7 @@ func (r *PersonRepository) UpdateByID(
 		if err != nil {
 			return err
 		}
+		stampBefore := p.SecurityStamp()
 		shouldPersist, err := updateFn(p)
 		if err != nil {
 			return err
@@ -79,6 +104,9 @@ func (r *PersonRepository) UpdateByID(
 		}
 		if err := persistPerson(ctx, q, p); err != nil {
 			return err
+		}
+		if p.SecurityStamp() != stampBefore {
+			r.evictStampOnCommit(ctx, id)
 		}
 		return drainPersonEvents(ctx, tx, p)
 	})
@@ -128,36 +156,63 @@ func (r *PersonRepository) GetByIDs(ctx context.Context, ids []person.ID) (map[p
 	return out, nil
 }
 
-// UpdateLockoutState satisfies [person.Repository]. Touches only the
-// four lockout columns and drains lock/unlock events. Cheaper than the
-// full-aggregate UpdateByID on every failed-login attempt (high frequency
-// under brute-force). Runs under TxScopePlatform; joins a parent UoW tx
-// when present.
-func (r *PersonRepository) UpdateLockoutState(ctx context.Context, p *person.Person) error {
-	if tx, ok := pg.TxFromContext(ctx); ok {
-		return r.updateLockoutOnTx(ctx, tx, p)
+// UpdateAfterSuccessfulLogin satisfies [person.Repository]: one conditional
+// statement (see sql/persons.sql) clears the counters unless a lock is in force.
+func (r *PersonRepository) UpdateAfterSuccessfulLogin(ctx context.Context, id person.ID, now, ownLock time.Time) (person.LockoutClear, error) {
+	uid, err := parsePersonID(id)
+	if err != nil {
+		return person.LockoutClear{}, err
 	}
-	return r.tx.WithinTxPgx(ctx, pg.TxScopePlatform, func(ctx context.Context, tx pgx.Tx) error {
-		return r.updateLockoutOnTx(ctx, tx, p)
+	var out person.LockoutClear
+	err = r.runInTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
+		row, err := r.q.WithTx(tx).RegisterPersonSuccessfulLogin(ctx, db.RegisterPersonSuccessfulLoginParams{
+			ID:      pgconv.PgUUID(uid),
+			Now:     pgconv.PgRequiredTimestamp(now),
+			OwnLock: pgconv.PgTimestamp(ownLock),
+		})
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return person.ErrNotFound
+			}
+			return fmt.Errorf("person repo: register successful login: %w", err)
+		}
+		if !row.Cleared {
+			out = person.LockoutClear{LockedUntil: pgconv.TimeFromPg(row.PrevLockedUntil)}
+			return nil
+		}
+		out = person.LockoutClear{Cleared: true}
+		// The attempt registered itself (count 1) before it was verified; anything
+		// beyond that, or a lock that has expired, is a real unlock.
+		if row.PrevFailedCount <= 1 && !row.PrevLockedUntil.Valid {
+			return nil
+		}
+		mapped, err := mapDomainEvents([]any{person.AccountUnlockedEvent{PersonID: id, At: now.UTC()}})
+		if err != nil {
+			return fmt.Errorf("person repo: map events: %w", err)
+		}
+		return writeOutboxEvents(ctx, tx, uuid.Nil, mapped)
 	})
+	if err != nil {
+		return person.LockoutClear{}, err
+	}
+	return out, nil
 }
 
-func (r *PersonRepository) updateLockoutOnTx(ctx context.Context, tx pgx.Tx, p *person.Person) error {
-	q := r.q.WithTx(tx)
-	uid, err := parsePersonID(p.ID())
+// GetByIDForShare satisfies [person.Repository]: the read takes a SHARE lock, so
+// it belongs inside the unit of work whose lifetime the lock should cover.
+func (r *PersonRepository) GetByIDForShare(ctx context.Context, id person.ID) (*person.Person, error) {
+	uid, err := parsePersonID(id)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	params := db.UpdatePersonLockoutStateParams{
-		ID:                pgconv.PgUUID(uid),
-		FailedLoginCount:  int32(p.FailedLoginCount()), //nolint:gosec // bounded by MaxFailedLogins (=10)
-		LockedUntil:       pgconv.PgTimestamp(p.LockedUntil()),
-		LastFailedLoginAt: pgconv.PgTimestamp(p.LastFailedLoginAt()),
+	row, err := r.reader(ctx).GetPersonByIDForShare(ctx, pgconv.PgUUID(uid))
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, person.ErrNotFound
+		}
+		return nil, fmt.Errorf("person repo: get by id for share: %w", err)
 	}
-	if err := q.UpdatePersonLockoutState(ctx, params); err != nil {
-		return fmt.Errorf("person repo: update lockout state: %w", err)
-	}
-	return drainPersonEvents(ctx, tx, p)
+	return rowToPerson(row)
 }
 
 // UpdateAfterFailedLogin satisfies [person.Repository]: one atomic statement counts

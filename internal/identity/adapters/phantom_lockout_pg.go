@@ -22,7 +22,7 @@ import (
 // too, and a key reused as-is across purposes is a different protocol per use.
 const phantomKeyLabel = "leadkart/identity/login-phantom-failures/v1"
 
-// PhantomLockoutRepository is the Postgres-backed command.PhantomLockout: the
+// PhantomLockoutRepository is the Postgres-backed command.PhantomFailureCounter: the
 // failed-login counter for addresses with no usable account (unknown,
 // deactivated, anonymised), with the same thresholds and the same atomic
 // statement shape as a real account's counter (sql/phantom_lockout.sql next to
@@ -60,25 +60,7 @@ func (r *PhantomLockoutRepository) rowKey(e email.Address) []byte {
 	return mac.Sum(nil)
 }
 
-// LockedUntil implements command.PhantomLockout: the active lock expiry for the
-// address, zero when none. A read only; nothing is written.
-func (r *PhantomLockoutRepository) LockedUntil(ctx context.Context, e email.Address, now time.Time) (time.Time, error) {
-	var until time.Time
-	err := r.runInTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
-		v, err := r.q.WithTx(tx).GetPhantomLoginLock(ctx, db.GetPhantomLoginLockParams{
-			Key: r.rowKey(e),
-			Now: pgconv.PgRequiredTimestamp(now),
-		})
-		if err != nil {
-			return fmt.Errorf("phantom lockout: read: %w", err)
-		}
-		until = pgconv.TimeFromPg(v)
-		return nil
-	})
-	return until, err
-}
-
-// RegisterFailure implements command.PhantomLockout: one atomic upsert counts the
+// RegisterFailure implements command.PhantomFailureCounter: one atomic upsert counts the
 // attempt and applies the lock policy, and the answer is read from the row it
 // wrote.
 func (r *PhantomLockoutRepository) RegisterFailure(ctx context.Context, e email.Address, now time.Time) (person.LockoutOutcome, error) {

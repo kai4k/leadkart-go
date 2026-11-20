@@ -37,20 +37,6 @@ type Repository interface {
 	// (true, nil) to commit; (false, nil) for no-op; (_, err) to rollback.
 	UpdateByID(ctx context.Context, id ID, updateFn func(*Person) (bool, error)) error
 
-	// UpdateLockoutState is the hot-path direct-update for the Login
-	// flow's wrong-password + lockout-clear branches per Wave 9.2 +
-	// ADR 0053. Touches ONLY the four lockout columns
-	// (failed_login_count / locked_until / last_failed_login_at /
-	// must_change_password unchanged) + drains any recorded
-	// [PersonAccountLockedEvent] / [PersonAccountUnlockedEvent] to
-	// the outbox.
-	//
-	// Caller is responsible for invoking [Person.RegisterFailedLogin]
-	// / [Person.RegisterSuccessfulLogin] BEFORE this method —
-	// repository writes whatever the aggregate currently says (TDL
-	// canon).
-	UpdateLockoutState(ctx context.Context, p *Person) error
-
 	// UpdateAfterFailedLogin counts one failed password attempt for the person and
 	// applies the lock policy in ONE atomic statement (row locked, new count and
 	// lock computed from the locked version, no read-modify-write in Go), so
@@ -61,6 +47,25 @@ type Repository interface {
 	// event, in the same transaction, for the attempt that crosses the threshold.
 	// Returns [ErrNotFound] when the person does not exist.
 	UpdateAfterFailedLogin(ctx context.Context, id ID, now time.Time) (LockoutOutcome, error)
+
+	// UpdateAfterSuccessfulLogin undoes the attempt's own count after the password
+	// verified, in ONE atomic statement that never clears a lock set by anyone else:
+	// the counters are reset only when no lock is in force at now, or the lock in
+	// force is ownLock (the one THIS attempt's registration set when it crossed the
+	// threshold; zero for every other attempt). A concurrent failure may have locked
+	// the account while this attempt was being verified. LockoutClear reports
+	// whether it cleared and, when not, the lock that prevented it. Records
+	// the account-unlocked event, in the same transaction, when failures or an
+	// expired lock preceded this attempt. Returns [ErrNotFound] when the person
+	// does not exist.
+	UpdateAfterSuccessfulLogin(ctx context.Context, id ID, now, ownLock time.Time) (LockoutClear, error)
+
+	// GetByIDForShare returns the Person read under a row SHARE lock (it waits for
+	// a password writer that is committing and blocks a writer that starts later
+	// until the caller's transaction ends). The login's session insert uses it to
+	// confirm the credential it verified is still the stored one. Must run inside a
+	// unit of work to mean anything; returns [ErrNotFound] when missing.
+	GetByIDForShare(ctx context.Context, id ID) (*Person, error)
 
 	// GetByID returns the Person or [ErrNotFound]. Read-only path.
 	GetByID(ctx context.Context, id ID) (*Person, error)
@@ -93,4 +98,11 @@ type Repository interface {
 	// email-change matches the supplied hash, or [ErrNotFound].
 	// Same hash-only lookup pattern as GetByPasswordResetTokenHash.
 	GetByEmailChangeTokenHash(ctx context.Context, hash EmailChangeTokenHash) (*Person, error)
+}
+
+// StampEvictor drops a person's cached security stamp. The person repository
+// calls it after a committed write that rotated the stamp; the stamp cache
+// implements it.
+type StampEvictor interface {
+	Invalidate(ctx context.Context, id ID) error
 }

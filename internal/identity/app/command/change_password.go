@@ -94,6 +94,10 @@ type ChangePasswordHandler struct {
 	now           func() time.Time
 	gate          *argon2.Gate
 	attempts      AttemptLimiter
+
+	// verify overrides the gate's verify; nil in production. Tests swap it
+	// (export_test.go) to run something between the verify and the write.
+	verify func(ctx context.Context, password, encoded string) error
 }
 
 // NewChangePasswordHandler wires the handler. breachChecker MUST be
@@ -170,7 +174,8 @@ func (h ChangePasswordHandler) Handle(ctx context.Context, cmd ChangePasswordCom
 	if len(cmd.CurrentPassword) > tenant.MaxPasswordBytes {
 		return ErrIncorrectCurrentPassword
 	}
-	if err := h.gate.Verify(ctx, cmd.CurrentPassword, p.PasswordHash().String()); err != nil {
+	verifiedHash := p.PasswordHash() // by value: the stored one may change before the write
+	if err := h.verifyPassword(ctx, cmd.CurrentPassword, verifiedHash.String()); err != nil {
 		if errors.Is(err, argon2.ErrMismatch) || errors.Is(err, argon2.ErrFormat) {
 			return ErrIncorrectCurrentPassword
 		}
@@ -208,27 +213,45 @@ func (h ChangePasswordHandler) Handle(ctx context.Context, cmd ChangePasswordCom
 	now := h.now()
 	err = h.uow.WithinTx(ctx, pg.TxScopePlatform, func(ctx context.Context) error {
 		if err := h.persons.UpdateByID(ctx, cmd.PersonID, func(p *person.Person) (bool, error) {
-			if err := p.ChangePassword(newHash, now); err != nil {
-				return false, err
-			}
-			// Pending password-reset (if any) is invalidated by the direct
-			// change — no point letting an emailed token unlock a password
-			// the user just rotated. Aggregate's CancelPasswordReset is
-			// idempotent (no-op when no pending), so this is safe to
-			// always call.
-			if err := p.CancelPasswordReset("password-changed-directly", now); err != nil {
-				return false, err
-			}
-			return true, nil
+			return true, applyPasswordChange(p, verifiedHash, newHash, now)
 		}); err != nil {
 			return err
 		}
 		return revokeAllFamilies(ctx, h.families, cmd.PersonID, "password_changed", now)
 	})
 	if err != nil {
+		if errors.Is(err, ErrIncorrectCurrentPassword) {
+			return ErrIncorrectCurrentPassword
+		}
 		return fmt.Errorf("change_password: persist: %w", err)
 	}
 	return nil
+}
+
+// applyPasswordChange runs inside the person's row lock. The person is loaded under
+// that lock, so its hash is the committed password: if it is no longer the one the
+// current password was verified against, a reset or another change committed in the
+// gap, the proof the caller gave is for a credential that no longer exists, and
+// writing now would let a stale session overwrite the victim's recovery.
+func applyPasswordChange(p *person.Person, verified, newHash person.PasswordHash, now time.Time) error {
+	if p.PasswordHash() != verified {
+		return ErrIncorrectCurrentPassword
+	}
+	if err := p.ChangePassword(newHash, now); err != nil {
+		return err
+	}
+	// A pending password reset is invalidated by the direct change: no point letting
+	// an emailed token unlock a password the user just rotated. CancelPasswordReset
+	// is idempotent (no-op when none is pending).
+	return p.CancelPasswordReset("password-changed-directly", now)
+}
+
+// verifyPassword is the one place the handler checks the current password.
+func (h ChangePasswordHandler) verifyPassword(ctx context.Context, password, encoded string) error {
+	if h.verify != nil {
+		return h.verify(ctx, password, encoded)
+	}
+	return h.gate.Verify(ctx, password, encoded)
 }
 
 // policyFor returns the password policy of the caller's tenant, or the default

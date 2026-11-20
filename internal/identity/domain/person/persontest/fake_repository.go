@@ -123,19 +123,6 @@ func (f *FakeRepository) UpdateByID(_ context.Context, id person.ID, updateFn fu
 	return nil
 }
 
-// UpdateLockoutState is the hot-path direct-update for the Login
-// flow's wrong-password + lockout-clear branches. In the fake this is
-// a no-op: the aggregate already carries the mutated lockout state
-// (caller invokes [person.RegisterFailedLogin] etc. BEFORE this
-// method), and we don't separately project columns. The pg adapter
-// drains events same-tx; in the fake no outbox exists, so events
-// recorded on the aggregate stay on the aggregate until a caller
-// explicitly PullEvents() — same semantics as Add/UpdateByID.
-func (f *FakeRepository) UpdateLockoutState(_ context.Context, _ *person.Person) error {
-
-	return nil
-}
-
 // UpdateAfterFailedLogin applies the aggregate's own lockout policy to the stored
 // person and reports the outcome, the in-memory twin of the adapter's atomic
 // statement (an integration parity test pins the two together).
@@ -151,6 +138,25 @@ func (f *FakeRepository) UpdateAfterFailedLogin(_ context.Context, id person.ID,
 		LockedUntil: p.LockedUntil(),
 		JustLocked:  !wasLocked && p.IsLocked(now),
 	}, nil
+}
+
+// UpdateAfterSuccessfulLogin applies the aggregate's own success rule, refusing to
+// clear a lock in force: the in-memory twin of the adapter's conditional statement.
+func (f *FakeRepository) UpdateAfterSuccessfulLogin(_ context.Context, id person.ID, now, ownLock time.Time) (person.LockoutClear, error) {
+	p, ok := f.rows[id]
+	if !ok {
+		return person.LockoutClear{}, person.ErrNotFound
+	}
+	if p.IsLocked(now) && !p.LockedUntil().Equal(ownLock) {
+		return person.LockoutClear{LockedUntil: p.LockedUntil()}, nil
+	}
+	p.RegisterSuccessfulLogin(now)
+	return person.LockoutClear{Cleared: true}, nil
+}
+
+// GetByIDForShare is [FakeRepository.GetByID]: the fake has no row locks.
+func (f *FakeRepository) GetByIDForShare(ctx context.Context, id person.ID) (*person.Person, error) {
+	return f.GetByID(ctx, id)
 }
 
 // GetByID returns the Person or [person.ErrNotFound].

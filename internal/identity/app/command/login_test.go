@@ -16,6 +16,7 @@
 package command_test
 
 import (
+	"sync/atomic"
 	"context"
 	"errors"
 	"fmt"
@@ -69,6 +70,7 @@ type fakeAuthRouter struct {
 		m *membership.Membership
 	}
 	resolveErr error
+	loads      atomic.Int32
 }
 
 func (f *fakeAuthRouter) ResolveByEmail(_ context.Context, e email.Address) (*person.Person, *membership.Membership, error) {
@@ -80,6 +82,18 @@ func (f *fakeAuthRouter) ResolveByEmail(_ context.Context, e email.Address) (*pe
 		return nil, nil, person.ErrNotFound
 	}
 	return row.p, row.m, nil
+}
+
+// LoadMembership returns the seeded membership by id (the real adapter hydrates
+// roles and overrides here; the fake rows are hydrated already).
+func (f *fakeAuthRouter) LoadMembership(_ context.Context, id membership.ID) (*membership.Membership, error) {
+	f.loads.Add(1)
+	for _, row := range f.byEmail {
+		if row.m != nil && row.m.ID() == id {
+			return row.m, nil
+		}
+	}
+	return nil, membership.ErrNotFound
 }
 
 // loginHandlerForFailurePaths constructs a LoginHandler wired with the
@@ -97,7 +111,7 @@ func loginHandlerForFailurePaths(t *testing.T, router command.AuthRouter, person
 
 // loginHandlerWithPhantom is loginHandlerForFailurePaths over a caller-supplied
 // phantom lockout, so enumeration tests can observe what the handler asks of it.
-func loginHandlerWithPhantom(t *testing.T, router command.AuthRouter, persons person.Repository, phantom command.PhantomLockout) command.LoginHandler {
+func loginHandlerWithPhantom(t *testing.T, router command.AuthRouter, persons person.Repository, phantom command.PhantomFailureCounter) command.LoginHandler {
 	t.Helper()
 	dummy, err := argon2.Hash("dummy-handler-unit-test")
 	if err != nil {
@@ -115,6 +129,7 @@ func loginHandlerWithPhantom(t *testing.T, router command.AuthRouter, persons pe
 		dummy,
 		func() refreshtoken.FamilyID { return refreshtoken.FamilyID("never-minted-on-failure") },
 		phantom,
+		fakeUoW{},
 	)
 }
 
@@ -169,7 +184,7 @@ func newLoginRig(t *testing.T) wiredLoginRig {
 
 	h := command.NewLoginHandler(
 		router, families, tenants, persons, resolver, issuer,
-		now, 14*24*time.Hour, dummy, mintFamilyID, newFakePhantomLockout(),
+		now, 14*24*time.Hour, dummy, mintFamilyID, newFakePhantomLockout(), fakeUoW{},
 	)
 	return wiredLoginRig{
 		handler: h, router: router, families: families, tenants: tenants,

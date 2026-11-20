@@ -54,10 +54,10 @@ func (s *verifySpy) snapshot() []verifyCall {
 
 // handlerWith builds a failure-path handler over caller-supplied clock, dummy
 // hash and phantom counter (loginHandlerWithPhantom fixes the first two).
-func handlerWith(t *testing.T, router command.AuthRouter, persons person.Repository, phantom command.PhantomLockout, dummy string, now func() time.Time) command.LoginHandler {
+func handlerWith(t *testing.T, router command.AuthRouter, persons person.Repository, phantom command.PhantomFailureCounter, dummy string, now func() time.Time) command.LoginHandler {
 	t.Helper()
 	return command.NewLoginHandler(router, nil, nil, persons, nil, nil, now, 0, dummy,
-		func() refreshtoken.FamilyID { return refreshtoken.FamilyID("never-minted-on-failure") }, phantom)
+		func() refreshtoken.FamilyID { return refreshtoken.FamilyID("never-minted-on-failure") }, phantom, fakeUoW{})
 }
 
 // Every branch that has no real hash to check runs its one verify against the
@@ -209,7 +209,9 @@ func TestLogin_RealAndPhantomLocksStartAtTheSameInstantRelativeToTheVerify(t *te
 
 // When the password work cannot start (the gate is saturated) EVERY branch answers
 // the same refusal, and none of them counts an attempt: a refusal that only the
-// unknown-email (or only the real-account) branch gave would be an oracle.
+// unknown-email (or only the real-account) branch gave would be an oracle. The slot
+// is taken BEFORE the attempt is registered (fix round 12, item 2), so the refusal
+// is injected at the acquisition; the assertions are unchanged.
 func TestLogin_AGateRefusalIsTheSameOnEveryBranchAndCountsNothing(t *testing.T) {
 	t.Parallel()
 	const plain = "the-real-password"
@@ -246,8 +248,9 @@ func TestLogin_AGateRefusalIsTheSameOnEveryBranchAndCountsNothing(t *testing.T) 
 			t.Parallel()
 			router, repo, addr := b.build(t)
 			phantom := newFakePhantomLockout()
-			spy := &verifySpy{err: argon2.ErrBusy}
-			h := loginHandlerWithPhantom(t, router, repo, phantom).WithPasswordVerifier(spy.verify)
+			spy := &verifySpy{}
+			h := loginHandlerWithPhantom(t, router, repo, phantom).WithPasswordVerifier(spy.verify).
+				WithGateAcquire(func(context.Context) (func(), error) { return nil, argon2.ErrBusy })
 			_, err := h.Handle(t.Context(), command.LoginCommand{Email: addr, Password: "WRONG-8"})
 			if !errors.Is(err, argon2.ErrBusy) {
 				t.Fatalf("err = %v, want argon2.ErrBusy on every branch", err)
@@ -262,8 +265,27 @@ func TestLogin_AGateRefusalIsTheSameOnEveryBranchAndCountsNothing(t *testing.T) 
 	}
 }
 
-// A cancelled request is a refusal too, not a wrong password.
+// A request that is gone before its slot is taken is a refusal too, not a wrong
+// password: nothing was registered. (A request that goes away MID-verify had
+// started its work and is counted: the attempt was registered before the verify.)
 func TestLogin_ACancelledRequestIsNotCountedAsAFailedAttempt(t *testing.T) {
+	t.Parallel()
+	p := newPersonWithPassword(t, "the-real-password")
+	repo := seedPersonRepo(t, p)
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	h := loginHandlerForFailurePaths(t, routerFor(p, someMembership(t, p)), repo).
+		WithGateAcquire(func(ctx context.Context) (func(), error) { return nil, ctx.Err() })
+	_, err := h.Handle(ctx, command.LoginCommand{Email: p.Email(), Password: "WRONG-9"})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", err)
+	}
+	if p.FailedLoginCount() != 0 {
+		t.Fatalf("a cancelled request counted as a failure: %d", p.FailedLoginCount())
+	}
+}
+
+func TestLogin_ARequestCancelledMidVerifyIsCountedOnce(t *testing.T) {
 	t.Parallel()
 	p := newPersonWithPassword(t, "the-real-password")
 	repo := seedPersonRepo(t, p)
@@ -274,7 +296,7 @@ func TestLogin_ACancelledRequestIsNotCountedAsAFailedAttempt(t *testing.T) {
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("err = %v, want context.Canceled", err)
 	}
-	if p.FailedLoginCount() != 0 {
-		t.Fatalf("a cancelled request counted as a failure: %d", p.FailedLoginCount())
+	if p.FailedLoginCount() != 1 {
+		t.Fatalf("a request cancelled mid-verify was registered %d times, want exactly once", p.FailedLoginCount())
 	}
 }

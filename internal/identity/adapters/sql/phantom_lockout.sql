@@ -25,17 +25,6 @@ ON CONFLICT (key) DO UPDATE SET
     END
 RETURNING t.failed_count, t.last_failed_at, t.locked_until;
 
--- name: GetPhantomLoginLock :one
--- The active lock of an address with no usable account. Always one row (a scalar
--- subquery), NULL when the address is not locked, so "not locked" is a value and
--- not a missing-row error.
-SELECT (
-    SELECT locked_until
-    FROM   identity.login_phantom_failures
-    WHERE  key = sqlc.arg(key)
-      AND  locked_until > sqlc.arg(now)::timestamptz
-)::timestamptz AS locked_until;
-
 -- name: PurgePhantomLoginFailures :execrows
 -- Deletes a bounded batch of rows whose window AND lock have both passed.
 -- sqlc.arg(window_cutoff) is now minus the lockout window; sqlc.arg(now) ends any lock.

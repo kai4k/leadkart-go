@@ -632,6 +632,10 @@ func buildIdentityApp(pool *pgxpool.Pool, hybridCache *cache.HybridCache, cfg co
 	var statsReader query.PlatformStatsReader = adapters.NewPlatformStatsReaderPG(pool, tx)
 
 	stampCache := adapters.NewSecurityStampCache(hybridCache, persons)
+	// A committed write that rotates a stamp evicts the cached one right after the
+	// commit, in this process: the old access token stops working at once instead
+	// of up to the 30 s TTL (the cache is the shared L2, so every instance sees it).
+	persons.WithStampEvictor(stampCache)
 	// One impersonation session store serves the session commands AND the request
 	// gate (ADR 0069 D2): an impersonation token is live only while its session is.
 	// v0.2 ships in-memory (single-process / integration-test fit); production
@@ -723,7 +727,7 @@ func buildIdentityApp(pool *pgxpool.Pool, hybridCache *cache.HybridCache, cfg co
 		App: app.Application{
 			Commands: app.Commands{
 				RegisterTenant:       command.NewRegisterTenantHandler(tx, tenants, persons, memberships, roles, now, newTenantID, newPersonID, newMembershipID).WithArgonGate(argonGate),
-				Login:                command.NewLoginHandler(authRouter, families, tenants, persons, permResolver, issuer, now, cfg.Refresh.AbsoluteTTL, dummyHash, newFamilyID, phantomLockout).WithArgonGate(argonGate),
+				Login:                command.NewLoginHandler(authRouter, families, tenants, persons, permResolver, issuer, now, cfg.Refresh.AbsoluteTTL, dummyHash, newFamilyID, phantomLockout, tx).WithArgonGate(argonGate),
 				Refresh:              command.NewRefreshHandler(families, persons, memberships, tenants, permResolver, issuer, now, cfg.Refresh.AbsoluteTTL, cfg.Refresh.GraceWindow, successorKey),
 				Logout:               command.NewLogoutHandler(families, now),
 				ChangePassword:       command.NewChangePasswordHandler(persons, families, tenants, tx, breachChecker, now).WithArgonGate(argonGate).WithAttemptLimiter(changePasswordAttempts),

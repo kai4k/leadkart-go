@@ -11,30 +11,6 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-const getPhantomLoginLock = `-- name: GetPhantomLoginLock :one
-SELECT (
-    SELECT locked_until
-    FROM   identity.login_phantom_failures
-    WHERE  key = $1
-      AND  locked_until > $2::timestamptz
-)::timestamptz AS locked_until
-`
-
-type GetPhantomLoginLockParams struct {
-	Key []byte
-	Now pgtype.Timestamptz
-}
-
-// The active lock of an address with no usable account. Always one row (a scalar
-// subquery), NULL when the address is not locked, so "not locked" is a value and
-// not a missing-row error.
-func (q *Queries) GetPhantomLoginLock(ctx context.Context, arg GetPhantomLoginLockParams) (pgtype.Timestamptz, error) {
-	row := q.db.QueryRow(ctx, getPhantomLoginLock, arg.Key, arg.Now)
-	var locked_until pgtype.Timestamptz
-	err := row.Scan(&locked_until)
-	return locked_until, err
-}
-
 const purgePhantomLoginFailures = `-- name: PurgePhantomLoginFailures :execrows
 DELETE FROM identity.login_phantom_failures
 WHERE key IN (

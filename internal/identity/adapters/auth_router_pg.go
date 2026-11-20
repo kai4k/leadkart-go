@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -126,17 +127,7 @@ func (r *AuthRouterPG) ResolveByEmail(
 			CreatedByMembershipID: row.CreatedByMembershipID,
 		}
 
-		mid := pgconv.UUIDFromPg(row.MembershipID)
-		roleIDs, err := loadRoleAssignments(ctx, q, mid)
-		if err != nil {
-			return err
-		}
-		granted, revoked, err := loadPermissionOverrides(ctx, q, mid)
-		if err != nil {
-			return err
-		}
-
-		hm, err := rowToMembership(membershipRow, roleIDs, granted, revoked)
+		hm, err := rowToMembership(membershipRow, nil, nil, nil)
 		if err != nil {
 			return err
 		}
@@ -147,4 +138,43 @@ func (r *AuthRouterPG) ResolveByEmail(
 		return nil, nil, err
 	}
 	return p, m, nil
+}
+
+// LoadMembership satisfies the consumer-defined `command.AuthRouter`: the fully
+// hydrated membership (role assignments and permission overrides), read only
+// after the password verified so the failing branches never pay for it.
+func (r *AuthRouterPG) LoadMembership(ctx context.Context, id membership.ID) (*membership.Membership, error) {
+	uid, err := uuid.Parse(id.String())
+	if err != nil {
+		return nil, fmt.Errorf("auth router: parse membership id %q: %w", id, err)
+	}
+	var m *membership.Membership
+	err = r.tx.WithinTxPgx(ctx, pg.TxScopePlatform, func(ctx context.Context, tx pgx.Tx) error {
+		q := r.q.WithTx(tx)
+		row, err := q.GetMembershipByID(ctx, pgconv.PgUUID(uid))
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return membership.ErrNotFound
+			}
+			return fmt.Errorf("auth router: get membership: %w", err)
+		}
+		roleIDs, err := loadRoleAssignments(ctx, q, uid)
+		if err != nil {
+			return err
+		}
+		granted, revoked, err := loadPermissionOverrides(ctx, q, uid)
+		if err != nil {
+			return err
+		}
+		hm, err := rowToMembership(row, roleIDs, granted, revoked)
+		if err != nil {
+			return err
+		}
+		m = hm
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return m, nil
 }

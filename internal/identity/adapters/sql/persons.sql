@@ -52,6 +52,28 @@ FROM   identity.persons
 WHERE  id = $1
 FOR NO KEY UPDATE;
 
+-- name: GetPersonByIDForShare :one
+-- The login's session-insert check (fix round 12, item 1): reads the credential
+-- under a SHARE lock in the transaction that inserts the new refresh family.
+-- FOR SHARE conflicts with the FOR NO KEY UPDATE every password writer takes, so
+-- the read waits for a change that is committing and then sees its result; a change
+-- that starts afterwards waits for this transaction (which ends right after the
+-- family insert) and then revokes the family it finds. Two logins of one person
+-- share the lock and do not serialise. Lock order: person (share) -> the NEW family
+-- row; nothing in this transaction locks an existing family or takes a stronger
+-- person lock (the lockout writes run in their own transactions, before and after).
+SELECT id, email, first_name, last_name, password_hash, security_stamp,
+       is_active, is_anonymised, created_at, anonymised_at,
+       is_globally_suspended, global_suspension_reason, globally_suspended_at,
+       password_reset_token_hash, password_reset_expires_at,
+       pending_email_change_new_email, pending_email_change_token_hash,
+       pending_email_change_expires_at,
+       created_by_person_id,
+       must_change_password, failed_login_count, locked_until, last_failed_login_at
+FROM   identity.persons
+WHERE  id = $1
+FOR SHARE;
+
 -- name: GetPersonsByIDs :many
 -- Batched hydration — single round-trip via `id = ANY(...)` instead of
 -- N GetPersonByID calls. Column list mirrors GetPersonByID exactly so
@@ -192,23 +214,40 @@ SET    email                            = $2,
        last_failed_login_at             = $21
 WHERE  id = $1;
 
--- name: UpdatePersonLockoutState :exec
--- Hot-path lockout-counter update used by the Login flow's
--- wrong-password + lockout-cleared branches. Cheaper than running the
--- whole UpdatePerson when only the four lockout columns change — saves
--- a row-rewrite on every failed-login attempt (high frequency under
--- brute-force).
---
--- Does NOT touch security_stamp / password_hash / anonymisation state
--- — those go through UpdateByID + UpdatePerson to ensure event drain.
--- This query is event-less by design (the domain event is recorded on
--- the aggregate and drained by the calling repository before the
--- write).
-UPDATE identity.persons
-SET    failed_login_count   = $2,
-       locked_until         = $3,
-       last_failed_login_at = $4
-WHERE  id = $1;
+-- name: RegisterPersonSuccessfulLogin :one
+-- The success half of the lockout (ADR 0068 D12). A login registers its attempt
+-- BEFORE it verifies (RegisterPersonFailedLogin), so a correct password has to
+-- undo that count - and it must never undo a LOCK: the row is locked, and the
+-- counters are cleared only when no lock is in force at sqlc.arg(now) - or the lock
+-- in force is sqlc.narg(own_lock), the one this very attempt's registration set when
+-- it crossed the threshold (NULL for every other attempt), so that nine wrong
+-- passwords plus the right one still sign in while a right password arriving after
+-- SOMEONE ELSE's lock never does. Zero
+-- cleared = a concurrent failure locked the account while this attempt was being
+-- verified; the caller answers 423 with the returned lock and opens no session.
+-- Returns what the row held before the clear, so the caller can tell a real
+-- unlock from the attempt's own count.
+WITH cur AS (
+    SELECT t.id, t.failed_login_count, t.locked_until
+    FROM   identity.persons AS t
+    WHERE  t.id = sqlc.arg(id)
+    FOR NO KEY UPDATE OF t
+), cleared AS (
+    UPDATE identity.persons p
+    SET    failed_login_count   = 0,
+           locked_until         = NULL,
+           last_failed_login_at = NULL
+    FROM   cur
+    WHERE  p.id = cur.id
+      AND  (cur.locked_until IS NULL
+            OR cur.locked_until <= sqlc.arg(now)::timestamptz
+            OR cur.locked_until = sqlc.narg(own_lock)::timestamptz)
+    RETURNING p.id
+)
+SELECT cur.failed_login_count AS prev_failed_count,
+       cur.locked_until       AS prev_locked_until,
+       EXISTS (SELECT 1 FROM cleared) AS cleared
+FROM   cur;
 
 
 -- name: RegisterPersonFailedLogin :one
@@ -216,7 +255,7 @@ WHERE  id = $1;
 -- D12). The old flow read the row, bumped the counter in Go ~30 ms of argon2
 -- later and wrote an absolute value, so concurrent wrong passwords lost updates
 -- and a batch could guess past the lock. Here the row is locked FOR NO KEY UPDATE
--- (compatible with the key-share lock a login's refresh-family insert takes), the
+-- (compatible with the key-share lock a login's refresh-family insert takes; it conflicts with the FOR SHARE the login's session insert takes, which is why the two never share a transaction), the
 -- new count and lock are computed from the locked version, and the caller decides
 -- "locked" from the RETURNING row.
 --

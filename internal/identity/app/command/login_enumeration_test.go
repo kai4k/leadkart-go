@@ -236,7 +236,11 @@ func TestLogin_InactivePersonWithALeftoverRealLock_AnswersLikeAnUnknownEmail(t *
 	}
 }
 
-func TestLogin_LockedRealAccount_CorrectPasswordStaysLockedAndCountsNothing(t *testing.T) {
+// Fix round 12 (item 2) changed this deliberately: every attempt registers
+// atomically BEFORE its password is checked, the locked ones included (the phantom
+// counter does exactly the same, so the two stay one shape). What must never move
+// is the LOCK: it is not extended and a correct password does not clear it.
+func TestLogin_LockedRealAccount_CorrectPasswordStaysLocked_LockNeverMoves(t *testing.T) {
 	t.Parallel()
 	const plain = "the-real-password"
 	p := newPersonAlreadyLocked(t, plain)
@@ -246,9 +250,12 @@ func TestLogin_LockedRealAccount_CorrectPasswordStaysLockedAndCountsNothing(t *t
 	if classify(t, err) != outcomeLocked {
 		t.Fatalf("got %v, want locked", err)
 	}
-	if p.FailedLoginCount() != before || !p.LockedUntil().Equal(until) {
-		t.Fatalf("a locked attempt moved the counter: %d -> %d, lockedUntil %v -> %v",
-			before, p.FailedLoginCount(), until, p.LockedUntil())
+	if !p.LockedUntil().Equal(until) || !p.IsLocked(testNow) {
+		t.Fatalf("a locked attempt moved the lock: lockedUntil %v -> %v", until, p.LockedUntil())
+	}
+	if p.FailedLoginCount() != before+1 {
+		t.Fatalf("a locked attempt registered %d attempts, want exactly one (%d -> %d)",
+			p.FailedLoginCount()-before, before, p.FailedLoginCount())
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -49,7 +50,7 @@ func (r *RefreshTokenFamilyRepository) Add(ctx context.Context, f *refreshtoken.
 		if err := insertFamilyRow(ctx, q, f); err != nil {
 			return err
 		}
-		if err := upsertFamilyTokens(ctx, q, f); err != nil {
+		if err := upsertFamilyTokens(ctx, q, f, nil); err != nil {
 			return err
 		}
 		return drainFamilyEvents(ctx, tx, f)
@@ -69,6 +70,7 @@ func (r *RefreshTokenFamilyRepository) UpdateByID(
 		if err != nil {
 			return err
 		}
+		loaded := tokenStates(f)
 		shouldPersist, err := updateFn(f)
 		if err != nil {
 			return err
@@ -79,7 +81,10 @@ func (r *RefreshTokenFamilyRepository) UpdateByID(
 		if err := persistFamilyState(ctx, q, f); err != nil {
 			return err
 		}
-		if err := upsertFamilyTokens(ctx, q, f); err != nil {
+		// Only the tokens the update touched are written: a revocation (one per
+		// family of a person, under the person lock) changes the family row alone
+		// and must not rewrite every token row of every family.
+		if err := upsertFamilyTokens(ctx, q, f, loaded); err != nil {
 			return err
 		}
 		return drainFamilyEvents(ctx, tx, f)
@@ -215,7 +220,28 @@ func persistFamilyState(ctx context.Context, q *db.Queries, f *refreshtoken.Fami
 	return nil
 }
 
-func upsertFamilyTokens(ctx context.Context, q *db.Queries, f *refreshtoken.Family) error {
+// tokenState is the mutable part of a token row (everything else is immutable
+// after issuance): what UpdateByID compares to find the rows an update touched.
+type tokenState struct {
+	consumedAt time.Time
+	replacedBy refreshtoken.TokenID
+}
+
+// tokenStates snapshots the family's tokens as loaded.
+func tokenStates(f *refreshtoken.Family) map[refreshtoken.TokenID]tokenState {
+	tokens := f.AllTokens()
+	out := make(map[refreshtoken.TokenID]tokenState, len(tokens))
+	for _, t := range tokens {
+		out[t.ID()] = tokenState{consumedAt: t.ConsumedAt(), replacedBy: t.ReplacedByID()}
+	}
+	return out
+}
+
+// upsertFamilyTokens writes the family's tokens. loaded, when non-nil, is the
+// state the tokens were loaded in: a token present there with the same mutable
+// state is skipped (its row is already right), a new or changed one is written.
+// nil writes every token (a brand-new family).
+func upsertFamilyTokens(ctx context.Context, q *db.Queries, f *refreshtoken.Family, loaded map[refreshtoken.TokenID]tokenState) error {
 	fid, err := parseFamilyID(f.ID())
 	if err != nil {
 		return err
@@ -226,6 +252,9 @@ func upsertFamilyTokens(ctx context.Context, q *db.Queries, f *refreshtoken.Fami
 	tokens := f.AllTokens()
 	for i := len(tokens) - 1; i >= 0; i-- {
 		t := tokens[i]
+		if before, ok := loaded[t.ID()]; ok && before.consumedAt.Equal(t.ConsumedAt()) && before.replacedBy == t.ReplacedByID() {
+			continue
+		}
 		tid, err := parseTokenID(t.ID())
 		if err != nil {
 			return err

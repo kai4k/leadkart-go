@@ -97,6 +97,15 @@ func (g *Gate) Hash(ctx context.Context, password string) (string, error) {
 	return g.hash(password)
 }
 
+// VerifyHeld is [Verify] for a caller that already holds a slot from [Gate.Acquire]
+// (the login takes the slot before it registers the attempt and verifies inside it).
+func (g *Gate) VerifyHeld(password, stored string) error {
+	if g == nil {
+		return Verify(password, stored)
+	}
+	return g.verify(password, stored)
+}
+
 // Verify is [Verify] under the gate.
 func (g *Gate) Verify(ctx context.Context, password, stored string) error {
 	release, err := g.Acquire(ctx)

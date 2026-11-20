@@ -20,3 +20,12 @@ type LockoutOutcome struct {
 func (o LockoutOutcome) LockedAt(now time.Time) bool {
 	return !o.LockedUntil.IsZero() && now.Before(o.LockedUntil)
 }
+
+// LockoutClear is what the atomic success registration returns.
+type LockoutClear struct {
+	// Cleared is true when the counters were reset. False means a lock was in force:
+	// the attempt must be answered as locked and open no session.
+	Cleared bool
+	// LockedUntil is the lock that prevented the clear, zero when Cleared.
+	LockedUntil time.Time
+}

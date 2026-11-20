@@ -83,7 +83,8 @@ func (t *Transactor) WithinTxPgx(
 		return err
 	}
 
-	if err := fn(ctx, tx); err != nil {
+	hooks := &commitHooks{}
+	if err := fn(withCommitHooks(ctx, hooks), tx); err != nil {
 		return err
 	}
 
@@ -91,6 +92,7 @@ func (t *Transactor) WithinTxPgx(
 		return fmt.Errorf("pg: commit tx: %w", err)
 	}
 	committed = true
+	hooks.run(ctx)
 	return nil
 }
 
@@ -136,7 +138,8 @@ func (t *Transactor) WithinTxPgxTenant(
 		return err
 	}
 
-	if err := fn(ctx, tx); err != nil {
+	hooks := &commitHooks{}
+	if err := fn(withCommitHooks(ctx, hooks), tx); err != nil {
 		return err
 	}
 
@@ -144,6 +147,7 @@ func (t *Transactor) WithinTxPgxTenant(
 		return fmt.Errorf("pg: commit tx: %w", err)
 	}
 	committed = true
+	hooks.run(ctx)
 	return nil
 }
 

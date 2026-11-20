@@ -9,3 +9,17 @@ func (h LoginHandler) WithPasswordVerifier(verify func(password, encoded string)
 	h.verify = func(_ context.Context, password, encoded string) error { return verify(password, encoded) }
 	return h
 }
+
+// WithPasswordVerifier swaps the current-password verifier so a test can run a
+// competing writer between the verify and the write.
+func (h ChangePasswordHandler) WithPasswordVerifier(verify func(password, encoded string) error) ChangePasswordHandler {
+	h.verify = func(_ context.Context, password, encoded string) error { return verify(password, encoded) }
+	return h
+}
+
+// WithGateAcquire swaps the slot acquisition so a test can refuse an attempt
+// before it is registered, the way a saturated gate or a gone request does.
+func (h LoginHandler) WithGateAcquire(acquire func(ctx context.Context) (func(), error)) LoginHandler {
+	h.acquire = acquire
+	return h
+}
