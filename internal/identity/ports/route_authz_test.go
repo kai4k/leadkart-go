@@ -157,10 +157,18 @@ func TestRouteAuthz_SelfServiceAndSelfTarget(t *testing.T) {
 func selfTargetApp(t *testing.T) app.Application {
 	t.Helper()
 	mems := membershiptest.NewFakeRepository()
+	const adminLite = "0190a000-0000-7000-8000-0000000000ad"
 	for _, id := range []string{azSelf, azOther} {
 		m, err := membership.New(membership.ID(id), person.ID(id), tenant.ID(azTenant), "", bodyNow)
 		if err != nil {
 			t.Fatalf("membership.New: %v", err)
+		}
+		if id == azSelf {
+			// The caller is a rank-Admin member holding only roles.update: the facts the
+			// commands re-read for the acting member (rank 10, one permission).
+			if err := m.AssignRole(role.ID(adminLite), bodyNow); err != nil {
+				t.Fatalf("AssignRole: %v", err)
+			}
 		}
 		if err := mems.Add(t.Context(), m); err != nil {
 			t.Fatalf("mems.Add: %v", err)
@@ -172,6 +180,16 @@ func selfTargetApp(t *testing.T) app.Application {
 		t.Fatalf("role.New: %v", err)
 	}
 	if err := roles.Add(t.Context(), r); err != nil {
+		t.Fatalf("roles.Add: %v", err)
+	}
+	lite, err := role.New(role.ID(adminLite), tenant.ID(azTenant), "Admin Lite", false, role.HierarchyLevelAdmin, false, bodyNow)
+	if err != nil {
+		t.Fatalf("role.New: %v", err)
+	}
+	if err := lite.GrantPermission(permission.FromConstant(permission.IdentityPermissions.Roles.Update), bodyNow); err != nil {
+		t.Fatalf("GrantPermission: %v", err)
+	}
+	if err := roles.Add(t.Context(), lite); err != nil {
 		t.Fatalf("roles.Add: %v", err)
 	}
 	now := func() time.Time { return bodyNow }

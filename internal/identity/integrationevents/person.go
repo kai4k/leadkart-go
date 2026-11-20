@@ -396,3 +396,31 @@ var (
 	_ = register(PersonAccountLockedV1{})
 	_ = register(PersonAccountUnlockedV1{})
 )
+
+// PersonSecurityStampRotatedV1 — the Person's SecurityStamp was rotated because
+// an authority fact of one of their memberships changed (role assigned or
+// revoked, permission overrides replaced, membership deactivated or
+// reactivated). Access tokens minted before now answer 401 stale_token; the
+// session is NOT ended — subscribers evict the cached stamp and MUST NOT
+// revoke refresh-token families (the BFF's silent refresh re-mints the token
+// from the current roles).
+type PersonSecurityStampRotatedV1 struct {
+	platformMarker
+
+	PersonID      uuid.UUID `json:"person_id"`
+	Reason        string    `json:"reason"`
+	OccurredAtUTC time.Time `json:"occurred_at_utc"`
+}
+
+// Topic returns the canonical wire alias.
+func (PersonSecurityStampRotatedV1) Topic() string {
+	return "identity.person_security_stamp_rotated.v1"
+}
+
+// OccurredAt returns the domain timestamp.
+func (e PersonSecurityStampRotatedV1) OccurredAt() time.Time { return e.OccurredAtUTC }
+
+var (
+	_ Platform = PersonSecurityStampRotatedV1{}
+	_          = register(PersonSecurityStampRotatedV1{})
+)

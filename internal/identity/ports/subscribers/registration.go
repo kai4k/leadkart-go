@@ -36,6 +36,7 @@ const (
 	HandlerInvalidateCacheOnAnonymised        = "identity.subscribers.InvalidateCacheOnAnonymised"
 	HandlerInvalidateCacheOnGloballySuspended = "identity.subscribers.InvalidateCacheOnGloballySuspended"
 	HandlerInvalidateCacheOnEmailChanged      = "identity.subscribers.InvalidateCacheOnEmailChanged"
+	HandlerInvalidateCacheOnStampRotated      = "identity.subscribers.InvalidateCacheOnStampRotated"
 
 	// Family-revocation subscribers (Subscriber B — must-succeed).
 	HandlerRevokeOnPasswordChange       = "identity.subscribers.RevokeFamiliesOnPasswordChange"
@@ -89,6 +90,7 @@ func Handlers(
 		cqrs.NewEventHandler(HandlerInvalidateCacheOnAnonymised, invalidate.HandleAnonymised),
 		cqrs.NewEventHandler(HandlerInvalidateCacheOnGloballySuspended, invalidate.HandleGloballySuspended),
 		cqrs.NewEventHandler(HandlerInvalidateCacheOnEmailChanged, invalidate.HandleEmailChanged),
+		cqrs.NewEventHandler(HandlerInvalidateCacheOnStampRotated, invalidate.HandleSecurityStampRotated),
 
 		// Family-revoke (must-succeed).
 		cqrs.NewEventHandler(HandlerRevokeOnPasswordChange, revoke.HandlePasswordChanged),

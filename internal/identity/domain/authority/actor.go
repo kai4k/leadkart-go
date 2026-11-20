@@ -65,20 +65,7 @@ func NewActor(in ActorInput) (Actor, error) {
 	if in.IsImpersonation {
 		rank = RankAdmin
 	}
-	eff := make(map[string]struct{}, len(in.EffectivePermissions))
-	for _, n := range in.EffectivePermissions {
-		if permission.IsKnown(n) {
-			eff[n] = struct{}{}
-		}
-	}
-	if _, ok := eff[tenantAdminName()]; ok {
-		for _, p := range permission.All() {
-			if permission.ImpliedByTenantAdmin(p.Name()) {
-				eff[p.Name()] = struct{}{}
-			}
-		}
-	}
-	return Actor{valid: true, membershipID: mid, tenantID: tid, rank: rank, effective: eff,
+	return Actor{valid: true, membershipID: mid, tenantID: tid, rank: rank, effective: effectiveSet(in.EffectivePermissions),
 		superUser: in.IsSuperUser, platformOperator: in.IsPlatformOperator, impersonation: in.IsImpersonation}, nil
 }
 
@@ -128,3 +115,64 @@ func (a Actor) holds(name string, tenantID tenant.ID) bool {
 }
 
 func (a Actor) hasOwn(name string) bool { _, ok := a.effective[name]; return ok }
+
+// effectiveSet is the set of known permission names in names, with every name
+// tenant.admin implies added when tenant.admin itself is listed. It is the one
+// place the expansion happens (NewActor and NarrowedBy both use it).
+func effectiveSet(names []string) map[string]struct{} {
+	eff := make(map[string]struct{}, len(names))
+	for _, n := range names {
+		if permission.IsKnown(n) {
+			eff[n] = struct{}{}
+		}
+	}
+	if _, ok := eff[tenantAdminName()]; ok {
+		for _, p := range permission.All() {
+			if permission.ImpliedByTenantAdmin(p.Name()) {
+				eff[p.Name()] = struct{}{}
+			}
+		}
+	}
+	return eff
+}
+
+// NeedsFreshFacts reports whether a decision inside tenantID must be taken on
+// the actor's freshly loaded membership ([Actor.NarrowedBy]) instead of on the
+// token alone: every actor except super users (they hold everything and have
+// no tenant membership to read), impersonation sessions (a synthetic
+// membership; the session store and the operator's stamp bound them) and
+// operators acting under the cross-tenant exemption (their authority is the
+// platform permission, not a membership of that tenant). The zero Actor needs
+// nothing: it already denies.
+func (a Actor) NeedsFreshFacts(tenantID tenant.ID) bool {
+	return a.valid && !a.superUser && !a.impersonation && !a.exemptOperatorIn(tenantID)
+}
+
+// NarrowedBy returns the actor the policy should decide with once the actor's
+// own membership has been read again inside the locked transaction: the MORE
+// JUNIOR of the token's rank and fresh.Rank(), and the INTERSECTION of the
+// token's effective permissions and freshEffective (the permissions freshly
+// resolved from the stored roles and overrides, tenant.admin expanded as in
+// NewActor). A token can therefore only ever lose authority relative to the
+// stored facts, never gain it.
+//
+// It returns the zero Actor (which denies everything) when fresh is not valid,
+// is not the membership the token names (canonical id and tenant comparison),
+// or cannot act (inactive membership, or a person who is suspended, locked,
+// anonymised or deactivated). Super-user, platform-operator and impersonation
+// flags are carried over unchanged; they are not facts of the membership.
+func (a Actor) NarrowedBy(fresh Member, freshEffective []string) Actor {
+	if !a.valid || !fresh.valid || !fresh.active || fresh.id != a.membershipID || !sameTenant(fresh.tenantID, a.tenantID) {
+		return Actor{}
+	}
+	out := a
+	out.rank = max(a.rank, fresh.rank)
+	out.effective = make(map[string]struct{}, len(a.effective))
+	have := effectiveSet(freshEffective)
+	for n := range a.effective {
+		if _, ok := have[n]; ok {
+			out.effective[n] = struct{}{}
+		}
+	}
+	return out
+}

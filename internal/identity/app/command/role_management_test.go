@@ -49,7 +49,7 @@ type roleHandlers struct {
 
 func (w *authzWorld) roleHandlersWith(edges rolehierarchy.Repository, uow pg.UnitOfWork) roleHandlers {
 	l := command.AuthorityLocker(w.lock)
-	p := anyPersons{}
+	p := anyPersons{rotations: &w.rotations}
 	fe, _ := edges.(*rolehierarchytest.FakeRepository)
 	return roleHandlers{
 		create:  command.NewCreateRoleHandler(uow, l, w.members, w.roles, p, edges, awClock, newRoleID, newEdgeID),

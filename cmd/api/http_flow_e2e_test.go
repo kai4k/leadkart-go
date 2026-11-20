@@ -218,6 +218,8 @@ func TestHTTPFlow_LoginInvalidCredentials_Returns401(t *testing.T) {
 type httpResp struct {
 	status int
 	body   []byte
+	// header is the response header (set by the fixture helpers that go through doWithHeaders).
+	header http.Header
 }
 
 func postJSON(t *testing.T, url string, body interface{}) httpResp {

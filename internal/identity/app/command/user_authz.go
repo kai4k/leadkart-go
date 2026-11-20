@@ -65,7 +65,7 @@ func (h AssignUserRoleHandler) Handle(ctx context.Context, cmd AssignUserRoleCom
 		return authority.ErrNoAuthority
 	}
 	now := h.w.now()
-	err := h.w.locked(ctx, cmd.TenantID, func(ctx context.Context) error {
+	err := h.w.locked(ctx, cmd.TenantID, cmd.Actor, now, func(ctx context.Context, actor authority.Actor) error {
 		r, err := h.w.facts.role(ctx, cmd.TenantID, cmd.RoleID)
 		if err != nil {
 			return err
@@ -78,10 +78,13 @@ func (h AssignUserRoleHandler) Handle(ctx context.Context, cmd AssignUserRoleCom
 			if err != nil {
 				return false, err
 			}
-			if err := cmd.Actor.MayAssignRole(target, r); err != nil {
+			if err := actor.MayAssignRole(target, r); err != nil {
 				return false, err
 			}
-			return true, m.AssignRole(cmd.RoleID, now)
+			if err := m.AssignRole(cmd.RoleID, now); err != nil {
+				return false, err
+			}
+			return true, h.w.rotateStampIfChanged(ctx, m, "role_assigned", now)
 		})
 	})
 	return translateAuthorityWrite("assign_user_role", err)
@@ -124,7 +127,7 @@ func (h RevokeUserRoleHandler) Handle(ctx context.Context, cmd RevokeUserRoleCom
 		return authority.ErrNoAuthority
 	}
 	now := h.w.now()
-	err := h.w.locked(ctx, cmd.TenantID, func(ctx context.Context) error {
+	err := h.w.locked(ctx, cmd.TenantID, cmd.Actor, now, func(ctx context.Context, actor authority.Actor) error {
 		r, err := h.w.facts.role(ctx, cmd.TenantID, cmd.RoleID)
 		if errors.Is(err, role.ErrNotFound) {
 			r = nil // not a role of this tenant: nothing is conferred, only rank applies
@@ -137,7 +140,7 @@ func (h RevokeUserRoleHandler) Handle(ctx context.Context, cmd RevokeUserRoleCom
 				return false, err
 			}
 			if r == nil {
-				err = cmd.Actor.MayActOn(target)
+				err = actor.MayActOn(target)
 			} else {
 				var owners []authority.Member
 				if r.IsCompanyOwner() {
@@ -145,12 +148,15 @@ func (h RevokeUserRoleHandler) Handle(ctx context.Context, cmd RevokeUserRoleCom
 						return false, err
 					}
 				}
-				err = cmd.Actor.MayRevokeRole(target, r, owners)
+				err = actor.MayRevokeRole(target, r, owners)
 			}
 			if err != nil {
 				return false, err
 			}
-			return true, m.RevokeRole(cmd.RoleID, now)
+			if err := m.RevokeRole(cmd.RoleID, now); err != nil {
+				return false, err
+			}
+			return true, h.w.rotateStampIfChanged(ctx, m, "role_revoked", now)
 		})
 	})
 	return translateAuthorityWrite("revoke_user_role", err)
@@ -227,14 +233,17 @@ func (h ReplaceUserPermissionOverridesHandler) Handle(ctx context.Context, cmd R
 		return &OverridesConflictError{Names: both}
 	}
 	now := h.w.now()
-	upErr := h.w.updateMember(ctx, cmd.TenantID, cmd.MembershipID, now, func(_ context.Context, m *membership.Membership, target authority.Member) error {
+	upErr := h.w.updateMember(ctx, cmd.TenantID, cmd.MembershipID, cmd.Actor, now, func(ctx context.Context, actor authority.Actor, m *membership.Membership, target authority.Member) error {
 		after, approved := overridesAfter(target, granted, revoked)
-		if err := cmd.Actor.MayChangeOverrides(target, after); err != nil {
+		if err := actor.MayChangeOverrides(target, after); err != nil {
 			return err
 		}
 		// The aggregate writes exactly what the policy approved, at the one
 		// clock reading taken above.
-		return m.ReplacePermissionOverrides(approved, revoked, now)
+		if err := m.ReplacePermissionOverrides(approved, revoked, now); err != nil {
+			return err
+		}
+		return h.w.rotateStampIfChanged(ctx, m, "overrides_replaced", now)
 	})
 	return translateAuthorityWrite("replace_user_permission_overrides", upErr)
 }
@@ -357,7 +366,7 @@ func (h AssignUserManagerHandler) Handle(ctx context.Context, cmd AssignUserMana
 		return fmt.Errorf("%w: cannot report to self", membership.ErrInvalid)
 	}
 	now := h.w.now()
-	err = h.w.locked(ctx, cmd.TenantID, func(ctx context.Context) error {
+	err = h.w.locked(ctx, cmd.TenantID, cmd.Actor, now, func(ctx context.Context, actor authority.Actor) error {
 		mgrM, mgr, err := h.w.facts.memberByID(ctx, cmd.TenantID, mgrID, now)
 		if errors.Is(err, membership.ErrNotFound) {
 			return fmt.Errorf("%w: manager not found in tenant", authority.ErrManagerNotEligible)
@@ -377,7 +386,7 @@ func (h AssignUserManagerHandler) Handle(ctx context.Context, cmd AssignUserMana
 			if err != nil {
 				return false, err
 			}
-			if err := cmd.Actor.MayReplaceManager(sub, mgr, asCurrent(cur, found)); err != nil {
+			if err := actor.MayReplaceManager(sub, mgr, asCurrent(cur, found)); err != nil {
 				return false, err
 			}
 			return true, m.AssignManager(mgrID, now)
@@ -419,12 +428,12 @@ func (h RemoveUserManagerHandler) Handle(ctx context.Context, cmd RemoveUserMana
 		return authority.ErrNoAuthority
 	}
 	now := h.w.now()
-	err := h.w.updateMember(ctx, cmd.TenantID, cmd.MembershipID, now, func(ctx context.Context, m *membership.Membership, target authority.Member) error {
+	err := h.w.updateMember(ctx, cmd.TenantID, cmd.MembershipID, cmd.Actor, now, func(ctx context.Context, actor authority.Actor, m *membership.Membership, target authority.Member) error {
 		cur, found, err := h.w.facts.currentManager(ctx, cmd.TenantID, m, now)
 		if err != nil {
 			return err
 		}
-		if err := cmd.Actor.MayClearManager(target, asCurrent(cur, found)); err != nil {
+		if err := actor.MayClearManager(target, asCurrent(cur, found)); err != nil {
 			return err
 		}
 		return m.RemoveManager(now)

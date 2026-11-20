@@ -58,7 +58,7 @@ func (g PersonChangeGuard) Run(ctx context.Context, personID person.ID, change f
 	})
 	for i, m := range active {
 		last := i == len(active)-1
-		err := g.w.locked(ctx, m.TenantID(), func(ctx context.Context) error {
+		err := g.w.locked(ctx, m.TenantID(), authority.Actor{}, now, func(ctx context.Context, _ authority.Actor) error {
 			// Re-read under the lock: the list above was taken without it.
 			cur, member, err := g.w.facts.memberByID(ctx, m.TenantID(), m.ID(), now)
 			switch {

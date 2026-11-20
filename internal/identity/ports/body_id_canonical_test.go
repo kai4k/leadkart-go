@@ -145,6 +145,7 @@ func TestBodyID_ManagerIDReachesCommandCanonical(t *testing.T) {
 			repo := membershiptest.NewFakeRepository()
 			newBodyMembership(t, repo, azOther)
 			roles := bodyManagerWorld(t, repo)
+			seedBodyActor(t, repo, roles)
 			var a app.Application
 			a.Commands.AssignUserManager = command.NewAssignUserManagerHandler(inlineUoW{}, bodyLock{}, repo, roles, bodyPersons{}, func() time.Time { return bodyNow })
 			rec := azServeApp(t, a, bodyAdminClaims(permission.IdentityPermissions.Users.Update), "PUT",
@@ -218,6 +219,7 @@ func TestBodyID_RoleIDReachesCommandCanonicalAndDedups(t *testing.T) {
 			if err := roles.Add(t.Context(), r); err != nil {
 				t.Fatalf("roles.Add: %v", err)
 			}
+			seedBodyActor(t, mems, roles)
 			var a app.Application
 			a.Commands.AssignUserRole = command.NewAssignUserRoleHandler(inlineUoW{}, bodyLock{}, mems, roles, bodyPersons{}, func() time.Time { return bodyNow })
 			claims := bodyAdminClaims(permission.IdentityPermissions.Roles.Assign)
@@ -245,8 +247,10 @@ func TestBodyID_ParentRoleIDReachesCommandCanonical(t *testing.T) {
 			t.Parallel()
 			edges := rolehierarchytest.NewFakeRepository()
 			roles := bodyRoles(t, map[string]int{azRole: 60, bodyRoleB: 40})
+			mems := membershiptest.NewFakeRepository()
+			seedBodyActor(t, mems, roles)
 			var a app.Application
-			a.Commands.SetRoleParent = command.NewSetRoleParentHandler(inlineUoW{}, bodyLock{}, membershiptest.NewFakeRepository(), roles, bodyPersons{}, edges,
+			a.Commands.SetRoleParent = command.NewSetRoleParentHandler(inlineUoW{}, bodyLock{}, mems, roles, bodyPersons{}, edges,
 				func() time.Time { return bodyNow }, func() rolehierarchy.ID { return "0190a000-0000-7000-8000-0000000000f1" })
 			rec := azServeApp(t, a, bodyAdminClaims(permission.IdentityPermissions.Roles.Update), "PATCH",
 				"/api/v1/roles/"+azRole+"/parent", `{"parent_role_id":"`+spelled+`","reason":"reorganise the tree"}`)
@@ -271,8 +275,10 @@ func TestBodyID_CreateRoleParentReachesCommandCanonical(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			roles, edges := bodyRoles(t, map[string]int{bodyRoleB: 40}), rolehierarchytest.NewFakeRepository()
+			mems := membershiptest.NewFakeRepository()
+			seedBodyActor(t, mems, roles)
 			var a app.Application
-			a.Commands.CreateRole = command.NewCreateRoleHandler(inlineUoW{}, bodyLock{}, membershiptest.NewFakeRepository(), roles, bodyPersons{}, edges,
+			a.Commands.CreateRole = command.NewCreateRoleHandler(inlineUoW{}, bodyLock{}, mems, roles, bodyPersons{}, edges,
 				func() time.Time { return bodyNow }, func() role.ID { return newRole }, func() rolehierarchy.ID { return "0190a000-0000-7000-8000-0000000000f1" })
 			rec := azServeApp(t, a, bodyAdminClaims(permission.IdentityPermissions.Roles.Create), "POST", "/api/v1/roles",
 				`{"name":"Field Rep","hierarchy_level":50,"parent_role_id":"`+spelled+`"}`)
@@ -310,4 +316,45 @@ func TestBodyID_PaddedAndNilBodyIDsAreRejected(t *testing.T) {
 			t.Errorf("impersonation, target %s: %d %s, want 400 invalid_tenant_id", name, rec.Code, rec.Body.String())
 		}
 	}
+}
+
+const bodyActorRole = "0190a000-0000-7000-8000-0000000000a9"
+
+// seedBodyActor stores the caller's own membership (azSelf) holding an
+// Administrator-level role with tenant.admin, the facts the commands re-read
+// for the acting member inside the locked transaction; bodyAdminClaims is what
+// a token for that member carries.
+func seedBodyActor(t *testing.T, mems *membershiptest.FakeRepository, roles *roletest.FakeRepository) {
+	t.Helper()
+	r, err := role.New(role.ID(bodyActorRole), tenant.ID(azTenant), "Body Admin", false, role.HierarchyLevelAdmin, false, bodyNow)
+	if err != nil {
+		t.Fatalf("role.New: %v", err)
+	}
+	if err := r.GrantPermission(permission.FromConstant(permission.IdentityPermissions.Meta.TenantAdmin), bodyNow); err != nil {
+		t.Fatalf("GrantPermission: %v", err)
+	}
+	if err := roles.Add(t.Context(), r); err != nil {
+		t.Fatalf("roles.Add: %v", err)
+	}
+	m, err := membership.New(membership.ID(azSelf), person.ID(azSelf), tenant.ID(azTenant), "", bodyNow)
+	if err != nil {
+		t.Fatalf("membership.New: %v", err)
+	}
+	if err := m.AssignRole(r.ID(), bodyNow); err != nil {
+		t.Fatalf("AssignRole: %v", err)
+	}
+	if err := mems.Add(t.Context(), m); err != nil {
+		t.Fatalf("mems.Add: %v", err)
+	}
+}
+
+// UpdateByID runs fn on a synthesised person; nothing is persisted (the stamp
+// rotation that follows an authority change needs a writable person).
+func (p bodyPersons) UpdateByID(ctx context.Context, id person.ID, fn func(*person.Person) (bool, error)) error {
+	got, err := p.GetByID(ctx, id)
+	if err != nil {
+		return err
+	}
+	_, err = fn(got)
+	return err
 }

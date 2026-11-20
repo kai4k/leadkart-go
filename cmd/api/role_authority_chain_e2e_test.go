@@ -70,6 +70,8 @@ func (w chainWorld) walk(t *testing.T) (httpResp, string) {
 	}
 	ap := w.f.approveRequest(t, w.tTok, reqID)
 	t.Logf("step 3: Team Lead approves identity.roles.update for their report: %d %s", ap.status, ap.body)
+	// The approval rotated E's stamp (their old token is stale by design); log in again.
+	w.f.evictStamp(t, w.exec.personID)
 	return ap, w.f.loginToken(t, w.exec.email, w.exec.password)
 }
 

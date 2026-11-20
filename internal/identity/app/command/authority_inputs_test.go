@@ -21,7 +21,7 @@ func TestAssignUserRole_AddsAssignment(t *testing.T) {
 	w := newAuthzWorld(t)
 	target := w.member(t)
 	if err := w.handlers().assign.Handle(t.Context(), command.AssignUserRoleCommand{
-		TenantID: awTenant, MembershipID: target.ID(), RoleID: w.exec.ID(), Actor: testAdminActor(t),
+		TenantID: awTenant, MembershipID: target.ID(), RoleID: w.exec.ID(), Actor: w.adminActor(t),
 	}); err != nil {
 		t.Fatalf("Handle: %v", err)
 	}
@@ -35,7 +35,7 @@ func TestRevokeUserRole_RemovesAssignment(t *testing.T) {
 	w := newAuthzWorld(t)
 	target := w.member(t, w.exec)
 	if err := w.handlers().revoke.Handle(t.Context(), command.RevokeUserRoleCommand{
-		TenantID: awTenant, MembershipID: target.ID(), RoleID: w.exec.ID(), Actor: testAdminActor(t),
+		TenantID: awTenant, MembershipID: target.ID(), RoleID: w.exec.ID(), Actor: w.adminActor(t),
 	}); err != nil {
 		t.Fatalf("Handle: %v", err)
 	}
@@ -49,7 +49,7 @@ func TestRevokeUserRole_NonExistentAssignment_Idempotent(t *testing.T) {
 	w := newAuthzWorld(t)
 	target := w.member(t)
 	if err := w.handlers().revoke.Handle(t.Context(), command.RevokeUserRoleCommand{
-		TenantID: awTenant, MembershipID: target.ID(), RoleID: role.ID("0190a000-0000-7000-8000-0000000000ee"), Actor: testAdminActor(t),
+		TenantID: awTenant, MembershipID: target.ID(), RoleID: role.ID("0190a000-0000-7000-8000-0000000000ee"), Actor: w.adminActor(t),
 	}); err != nil {
 		t.Fatalf("Handle: %v", err)
 	}
@@ -63,7 +63,7 @@ func TestReplaceUserPermissionOverrides_RejectsUnknownPermission(t *testing.T) {
 	w := newAuthzWorld(t)
 	target := w.member(t)
 	err := w.handlers().override.Handle(t.Context(), command.ReplaceUserPermissionOverridesCommand{
-		TenantID: awTenant, MembershipID: target.ID(), GrantedNames: []string{"not.a.permission"}, Actor: testAdminActor(t),
+		TenantID: awTenant, MembershipID: target.ID(), GrantedNames: []string{"not.a.permission"}, Actor: w.adminActor(t),
 	})
 	if !errors.Is(err, command.ErrPermissionUnknown) {
 		t.Fatalf("err = %v, want ErrPermissionUnknown", err)
@@ -75,7 +75,7 @@ func TestReplaceUserPermissionOverrides_GrantsAndRevokes_BothApplied(t *testing.
 	w := newAuthzWorld(t)
 	target := w.member(t)
 	if err := w.handlers().override.Handle(t.Context(), command.ReplaceUserPermissionOverridesCommand{
-		TenantID: awTenant, MembershipID: target.ID(), Actor: testAdminActor(t),
+		TenantID: awTenant, MembershipID: target.ID(), Actor: w.adminActor(t),
 		GrantedNames: []string{permission.IdentityPermissions.Tenants.View, permission.IdentityPermissions.Users.Create},
 		RevokedNames: []string{permission.IdentityPermissions.Users.Unlock, permission.IdentityPermissions.Roles.Delete},
 	}); err != nil {
@@ -94,7 +94,7 @@ func TestRemoveUserManager_AlreadyNoManager_Idempotent(t *testing.T) {
 	w := newAuthzWorld(t)
 	target := w.member(t)
 	if err := w.handlers().clearMgr.Handle(t.Context(), command.RemoveUserManagerCommand{
-		TenantID: awTenant, MembershipID: target.ID(), Actor: testAdminActor(t),
+		TenantID: awTenant, MembershipID: target.ID(), Actor: w.adminActor(t),
 	}); err != nil {
 		t.Fatalf("Handle: %v", err)
 	}
@@ -107,7 +107,7 @@ func TestAuthzHandlers_InputRejections(t *testing.T) {
 	t.Parallel()
 	w := newAuthzWorld(t)
 	h := w.handlers()
-	actor := testAdminActor(t)
+	actor := w.adminActor(t)
 	someM, someR := membership.ID("11111111-1111-1111-1111-111111111111"), role.ID("44444444-4444-4444-4444-444444444444")
 	cases := map[string]error{
 		"AssignUserRole zero tenant":      h.assign.Handle(t.Context(), command.AssignUserRoleCommand{MembershipID: someM, RoleID: someR, Actor: actor}),
@@ -137,7 +137,7 @@ func TestAuthzHandlers_NotFound(t *testing.T) {
 	t.Parallel()
 	w := newAuthzWorld(t)
 	h := w.handlers()
-	actor := testAdminActor(t)
+	actor := w.adminActor(t)
 	bad := membership.ID("99999999-9999-9999-9999-999999999999")
 	mgr := w.member(t, w.manager)
 	cases := map[string]error{
@@ -169,7 +169,7 @@ func TestReplaceUserPermissionOverrides_RevokedDuplicatesStoredOnce(t *testing.T
 	target := w.member(t)
 	n := permission.IdentityPermissions.Users.Unlock
 	if err := w.handlers().override.Handle(t.Context(), command.ReplaceUserPermissionOverridesCommand{
-		TenantID: awTenant, MembershipID: target.ID(), Actor: testAdminActor(t), RevokedNames: []string{n, n, n},
+		TenantID: awTenant, MembershipID: target.ID(), Actor: w.adminActor(t), RevokedNames: []string{n, n, n},
 	}); err != nil {
 		t.Fatalf("Handle: %v", err)
 	}
@@ -187,7 +187,7 @@ func TestReplaceUserPermissionOverrides_NameInBothListsIsAFieldError(t *testing.
 	target := w.member(t)
 	n := permission.IdentityPermissions.Users.Unlock
 	err := w.handlers().override.Handle(t.Context(), command.ReplaceUserPermissionOverridesCommand{
-		TenantID: awTenant, MembershipID: target.ID(), Actor: testAdminActor(t), GrantedNames: []string{n}, RevokedNames: []string{n},
+		TenantID: awTenant, MembershipID: target.ID(), Actor: w.adminActor(t), GrantedNames: []string{n}, RevokedNames: []string{n},
 	})
 	if !errors.Is(err, command.ErrOverridesConflict) {
 		t.Fatalf("err = %v, want ErrOverridesConflict", err)

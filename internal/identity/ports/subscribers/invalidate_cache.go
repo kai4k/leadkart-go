@@ -106,6 +106,19 @@ func (h *InvalidateSecurityStampCache) HandleEmailChanged(
 	return nil
 }
 
+// HandleSecurityStampRotated handles `identity.person_security_stamp_rotated.v1`:
+// an authority fact of one of the person's memberships changed. Evicting the
+// cached stamp makes the person's old access token answer 401 stale_token on its
+// very next request (not after the 30 s TTL). There is deliberately NO
+// family-revocation counterpart: the session must survive so the BFF's silent
+// refresh can re-mint the token from the current roles.
+func (h *InvalidateSecurityStampCache) HandleSecurityStampRotated(
+	ctx context.Context, evt *integrationevents.PersonSecurityStampRotatedV1,
+) error {
+	h.invalidate(ctx, evt.PersonID.String(), "stamp_rotated:"+evt.Reason)
+	return nil
+}
+
 // invalidate is the shared cache-eviction body. Always succeeds from the
 // caller's view — see the type docstring for the "WARN-and-continue, TTL
 // is the contract" rationale.

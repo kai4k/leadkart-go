@@ -172,6 +172,8 @@ func TestE2E_PermissionRequest_OrdinaryPermissionStillFlows(t *testing.T) {
 	if ap := f.approveRequest(t, mgrTok, reqID); ap.status != http.StatusNoContent {
 		t.Fatalf("approve: %d %s", ap.status, ap.body)
 	}
+	// The approval rotated the requester's stamp (their old token is stale by design); log in again.
+	f.evictStamp(t, req.personID)
 	reqTok = f.loginToken(t, req.email, req.password)
 	if r := f.authedJSON(t, http.MethodGet, "/api/v1/users", reqTok, nil); r.status != http.StatusOK {
 		t.Errorf("requester lists users after the grant: %d %s, want 200", r.status, r.body)

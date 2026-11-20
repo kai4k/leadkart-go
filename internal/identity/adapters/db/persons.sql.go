@@ -278,6 +278,57 @@ func (q *Queries) GetPersonByID(ctx context.Context, id pgtype.UUID) (IdentityPe
 	return i, err
 }
 
+const getPersonByIDForUpdate = `-- name: GetPersonByIDForUpdate :one
+SELECT id, email, first_name, last_name, password_hash, security_stamp,
+       is_active, is_anonymised, created_at, anonymised_at,
+       is_globally_suspended, global_suspension_reason, globally_suspended_at,
+       password_reset_token_hash, password_reset_expires_at,
+       pending_email_change_new_email, pending_email_change_token_hash,
+       pending_email_change_expires_at,
+       created_by_person_id,
+       must_change_password, failed_login_count, locked_until, last_failed_login_at
+FROM   identity.persons
+WHERE  id = $1
+FOR NO KEY UPDATE
+`
+
+// The aggregate-writer load (UpdateByID): takes the row lock so every writer of
+// a person serialises on it (UpdatePerson rewrites every column from the
+// loaded snapshot, so an unlocked load can write back a stale password hash,
+// stamp or suspension). FOR NO KEY UPDATE: conflicts with other writers but not
+// with the FOR KEY SHARE a foreign-key check takes (memberships, refresh
+// families referencing the person).
+func (q *Queries) GetPersonByIDForUpdate(ctx context.Context, id pgtype.UUID) (IdentityPerson, error) {
+	row := q.db.QueryRow(ctx, getPersonByIDForUpdate, id)
+	var i IdentityPerson
+	err := row.Scan(
+		&i.ID,
+		&i.Email,
+		&i.FirstName,
+		&i.LastName,
+		&i.PasswordHash,
+		&i.SecurityStamp,
+		&i.IsActive,
+		&i.IsAnonymised,
+		&i.CreatedAt,
+		&i.AnonymisedAt,
+		&i.IsGloballySuspended,
+		&i.GlobalSuspensionReason,
+		&i.GloballySuspendedAt,
+		&i.PasswordResetTokenHash,
+		&i.PasswordResetExpiresAt,
+		&i.PendingEmailChangeNewEmail,
+		&i.PendingEmailChangeTokenHash,
+		&i.PendingEmailChangeExpiresAt,
+		&i.CreatedByPersonID,
+		&i.MustChangePassword,
+		&i.FailedLoginCount,
+		&i.LockedUntil,
+		&i.LastFailedLoginAt,
+	)
+	return i, err
+}
+
 const getPersonByPasswordResetTokenHash = `-- name: GetPersonByPasswordResetTokenHash :one
 SELECT id, email, first_name, last_name, password_hash, security_stamp,
        is_active, is_anonymised, created_at, anonymised_at,

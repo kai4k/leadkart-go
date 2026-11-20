@@ -49,6 +49,7 @@ import (
 
 	"github.com/ThreeDotsLabs/watermill"
 	"github.com/ThreeDotsLabs/watermill/pubsub/gochannel"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/leadkart/leadkart-go/internal/common/audit"
 	"github.com/leadkart/leadkart-go/internal/common/config"
@@ -89,79 +90,7 @@ func TestSecurityStampInvalidation_PasswordChange_Returns401WithinFastPath(t *te
 		t.Fatalf("buildIdentityApp: %v", err)
 	}
 
-	// Wire the same outbox-forwarder + router + subscribers stack
-	// cmd/api/main.go runs in production. Without this, the
-	// PersonPasswordChangedV1 event the ChangePassword handler emits
-	// to the outbox would never reach the cascade subscriber.
-	pubsub := gochannel.NewGoChannel(gochannel.Config{}, watermill.NewSlogLogger(silentLogger()))
-	t.Cleanup(func() { _ = pubsub.Close() })
-
-	outboxForwarder, err := messaging.NewOutboxForwarder(pool, pubsub, watermill.NewSlogLogger(silentLogger()))
-	if err != nil {
-		t.Fatalf("messaging.NewOutboxForwarder: %v", err)
-	}
-	router, err := messaging.NewRouter(messaging.Deps{
-		Subscriber:       pubsub,
-		Publisher:        pubsub,
-		Logger:           silentLogger(),
-		IdempotencyInbox: messaging.NewIdempotentReceiver(pool),
-		AuditWriter:      audit.NewWriter(pool, silentLogger(), time.Now),
-		DeadLetters:      messaging.NewDeadLetterWriter(pool, silentLogger(), time.Now),
-		CloseTimeout:     2 * time.Second,
-		Retry: messaging.RetryConfig{
-			MaxRetries:      1,
-			InitialInterval: 10 * time.Millisecond,
-			MaxInterval:     50 * time.Millisecond,
-			Multiplier:      2.0,
-		},
-	})
-	if err != nil {
-		t.Fatalf("messaging.NewRouter: %v", err)
-	}
-	// ADR 0067 — Register was deleted; build the cqrs EventProcessor over
-	// the router + register every identity handler with the canonical
-	// resilience stack (mirrors registerIdentityHandlers in the subscribers
-	// integration test, inlined here since that helper is in another package).
-	ep, err := messaging.NewEventProcessor(router.RawRouter(), pubsub, watermill.NewSlogLogger(silentLogger()))
-	if err != nil {
-		t.Fatalf("messaging.NewEventProcessor: %v", err)
-	}
-	for _, h := range subscribers.Handlers(wiring.Families, wiring.StampCache, nil, silentLogger(), time.Now) {
-		if err := router.AddCqrsHandler(ep, h); err != nil {
-			t.Fatalf("AddCqrsHandler: %v", err)
-		}
-	}
-
-	stackCtx, stackCancel := context.WithCancel(t.Context())
-	t.Cleanup(stackCancel)
-
-	go func() {
-		if err := outboxForwarder.Run(stackCtx); err != nil && !errors.Is(err, context.Canceled) {
-			t.Logf("forwarder: %v", err)
-		}
-	}()
-	t.Cleanup(func() { _ = outboxForwarder.Close() })
-
-	routerDone := make(chan struct{})
-	go func() {
-		defer close(routerDone)
-		if err := router.Run(stackCtx); err != nil && !errors.Is(err, context.Canceled) {
-			t.Errorf("router.Run: %v", err)
-		}
-	}()
-	t.Cleanup(func() {
-		stackCancel()
-		select {
-		case <-routerDone:
-		case <-time.After(3 * time.Second):
-			t.Error("router did not stop within 3s")
-		}
-	})
-	select {
-	case <-router.Running():
-	case <-time.After(2 * time.Second):
-		t.Fatal("router did not start within 2s")
-	}
+	startStampCascade(t, pool, wiring)
 
 	srv := httptest.NewServer(newServer(silentLogger(), wiring.App, platformapp.Application{}, buildInventoryApp(pool, nil), crmapp.Application{}, buildTasksApp(pool, nil), buildDispatchApp(pool, nil), buildOrdersApp(pool, nil), buildNotificationsApp(pool, nil), wiring.Issuer, wiring.StampValidator))
 	t.Cleanup(srv.Close)
@@ -300,4 +229,82 @@ func postJSONWithBearer(t *testing.T, url, bearer string, body any) httpResp {
 		t.Fatalf("read body: %v", err)
 	}
 	return httpResp{status: resp.StatusCode, body: respBody}
+}
+
+// startStampCascade wires the same outbox-forwarder + router + subscribers stack
+// cmd/api/main.go runs in production. Without it, the events the commands emit
+// to the outbox (password change, stamp rotation, membership deactivation) never
+// reach the cascade subscribers (cache eviction, family revocation).
+func startStampCascade(t *testing.T, pool *pgxpool.Pool, wiring identityWiring) {
+	t.Helper()
+
+	pubsub := gochannel.NewGoChannel(gochannel.Config{}, watermill.NewSlogLogger(silentLogger()))
+	t.Cleanup(func() { _ = pubsub.Close() })
+
+	outboxForwarder, err := messaging.NewOutboxForwarder(pool, pubsub, watermill.NewSlogLogger(silentLogger()))
+	if err != nil {
+		t.Fatalf("messaging.NewOutboxForwarder: %v", err)
+	}
+	router, err := messaging.NewRouter(messaging.Deps{
+		Subscriber:       pubsub,
+		Publisher:        pubsub,
+		Logger:           silentLogger(),
+		IdempotencyInbox: messaging.NewIdempotentReceiver(pool),
+		AuditWriter:      audit.NewWriter(pool, silentLogger(), time.Now),
+		DeadLetters:      messaging.NewDeadLetterWriter(pool, silentLogger(), time.Now),
+		CloseTimeout:     2 * time.Second,
+		Retry: messaging.RetryConfig{
+			MaxRetries:      1,
+			InitialInterval: 10 * time.Millisecond,
+			MaxInterval:     50 * time.Millisecond,
+			Multiplier:      2.0,
+		},
+	})
+	if err != nil {
+		t.Fatalf("messaging.NewRouter: %v", err)
+	}
+	// ADR 0067 — Register was deleted; build the cqrs EventProcessor over
+	// the router + register every identity handler with the canonical
+	// resilience stack (mirrors registerIdentityHandlers in the subscribers
+	// integration test, inlined here since that helper is in another package).
+	ep, err := messaging.NewEventProcessor(router.RawRouter(), pubsub, watermill.NewSlogLogger(silentLogger()))
+	if err != nil {
+		t.Fatalf("messaging.NewEventProcessor: %v", err)
+	}
+	for _, h := range subscribers.Handlers(wiring.Families, wiring.StampCache, nil, silentLogger(), time.Now) {
+		if err := router.AddCqrsHandler(ep, h); err != nil {
+			t.Fatalf("AddCqrsHandler: %v", err)
+		}
+	}
+
+	stackCtx, stackCancel := context.WithCancel(t.Context())
+	t.Cleanup(stackCancel)
+
+	go func() {
+		if err := outboxForwarder.Run(stackCtx); err != nil && !errors.Is(err, context.Canceled) {
+			t.Logf("forwarder: %v", err)
+		}
+	}()
+	t.Cleanup(func() { _ = outboxForwarder.Close() })
+
+	routerDone := make(chan struct{})
+	go func() {
+		defer close(routerDone)
+		if err := router.Run(stackCtx); err != nil && !errors.Is(err, context.Canceled) {
+			t.Errorf("router.Run: %v", err)
+		}
+	}()
+	t.Cleanup(func() {
+		stackCancel()
+		select {
+		case <-routerDone:
+		case <-time.After(3 * time.Second):
+			t.Error("router did not stop within 3s")
+		}
+	})
+	select {
+	case <-router.Running():
+	case <-time.After(2 * time.Second):
+		t.Fatal("router did not start within 2s")
+	}
 }

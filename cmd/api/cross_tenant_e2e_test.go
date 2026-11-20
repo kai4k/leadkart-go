@@ -70,6 +70,10 @@ type e2eFixture struct {
 	Pool    *pgxpool.Pool
 	app     app.Application
 	persons *adapters.PersonRepository
+	// stamps is the stamp cache the route freshness gate reads; tests that rotate a
+	// person's stamp and then log the person in again evict it (evictStamp), as the
+	// production stamp-rotation subscriber does.
+	stamps *adapters.SecurityStampCache
 }
 
 func newE2EFixture(t *testing.T) e2eFixture {
@@ -82,6 +86,20 @@ func newE2EFixture(t *testing.T) e2eFixture {
 // resolved against wall time, so a grant minted on a frozen past clock is
 // already expired.
 func newE2EFixtureAt(t *testing.T, now func() time.Time) e2eFixture {
+	t.Helper()
+	return newE2EFixtureWith(t, now, false)
+}
+
+// newE2EFixtureWithCascade is newE2EFixtureAt plus the outbox forwarder, router
+// and identity subscribers production runs: stamp-rotation events evict the
+// stamp cache and membership deactivation revokes refresh families, so a rotated
+// stamp answers 401 stale_token on the very next request.
+func newE2EFixtureWithCascade(t *testing.T, now func() time.Time) e2eFixture {
+	t.Helper()
+	return newE2EFixtureWith(t, now, true)
+}
+
+func newE2EFixtureWith(t *testing.T, now func() time.Time, cascade bool) e2eFixture {
 	t.Helper()
 	pool := startWiredPostgresForHTTP(t)
 	cfg := config.AppConfig{
@@ -98,6 +116,9 @@ func newE2EFixtureAt(t *testing.T, now func() time.Time) e2eFixture {
 	if err != nil {
 		t.Fatalf("buildIdentityApp: %v", err)
 	}
+	if cascade {
+		startStampCascade(t, pool, wiring)
+	}
 	srv := httptest.NewServer(newServer(silentLogger(), wiring.App, platformapp.Application{}, buildInventoryApp(pool, nil), crmapp.Application{}, buildTasksApp(pool, nil), buildDispatchApp(pool, nil), buildOrdersApp(pool, nil), buildNotificationsApp(pool, nil), wiring.Issuer, wiring.StampValidator))
 	t.Cleanup(srv.Close)
 	return e2eFixture{
@@ -106,6 +127,18 @@ func newE2EFixtureAt(t *testing.T, now func() time.Time) e2eFixture {
 		Pool:    pool,
 		app:     wiring.App,
 		persons: wiring.Persons,
+		stamps:  wiring.StampCache,
+	}
+}
+
+// evictStamp drops the person's cached security stamp so the next freshness
+// check reads the stored (rotated) one. The fixtures without the cascade need it
+// between a stamp-rotating change and a fresh login of the same person; the
+// cascade fixture does it through the subscriber.
+func (f e2eFixture) evictStamp(t *testing.T, personID string) {
+	t.Helper()
+	if err := f.stamps.Invalidate(t.Context(), person.ID(personID)); err != nil {
+		t.Fatalf("evict stamp: %v", err)
 	}
 }
 
@@ -316,7 +349,7 @@ func (f e2eFixture) doWithHeaders(t *testing.T, method, path, token string, body
 	if err != nil {
 		t.Fatalf("read body: %v", err)
 	}
-	return httpResp{status: resp.StatusCode, body: respBody}
+	return httpResp{status: resp.StatusCode, body: respBody, header: resp.Header}
 }
 
 func decodeError(t *testing.T, body []byte) ports.ErrorResponse {

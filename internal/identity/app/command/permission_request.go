@@ -290,19 +290,19 @@ func (h ApprovePermissionRequestHandler) Handle(ctx context.Context, cmd Approve
 		return authority.ErrNoAuthority
 	}
 	now := h.w.now()
-	err := h.w.locked(ctx, cmd.TenantID, func(ctx context.Context) error {
+	err := h.w.locked(ctx, cmd.TenantID, cmd.Actor, now, func(ctx context.Context, actor authority.Actor) error {
 		req, requester, err := h.w.loadForDecision(ctx, h.requests, cmd.TenantID, cmd.RequestID, now)
 		if err != nil {
 			return err
 		}
 		perm := req.Permission()
 		if permission.IsRequestable(perm.Name()) {
-			err = cmd.Actor.MayApprove(requester, perm.Name())
+			err = actor.MayApprove(requester, perm.Name())
 		} else {
 			// A stored row from before requestability was enforced: eligibility to
 			// decide at all is still the policy's call (the 422 below is for those
 			// who may), and the row can only be denied or cancelled.
-			err = cmd.Actor.MayDeny(requester)
+			err = actor.MayDeny(requester)
 		}
 		if err != nil {
 			return err
@@ -328,7 +328,10 @@ func (h ApprovePermissionRequestHandler) Handle(ctx context.Context, cmd Approve
 			return err
 		}
 		return h.w.facts.memberships.UpdateByID(ctx, cmd.TenantID, req.RequesterMembershipID(), func(m *membership.Membership) (bool, error) {
-			return true, m.ReplacePermissionOverrides(granted, revoked, now)
+			if err := m.ReplacePermissionOverrides(granted, revoked, now); err != nil {
+				return false, err
+			}
+			return true, h.w.rotateStampIfChanged(ctx, m, "permission_approved", now)
 		})
 	})
 	switch {
@@ -435,12 +438,12 @@ func (h DenyPermissionRequestHandler) Handle(ctx context.Context, cmd DenyPermis
 		return authority.ErrNoAuthority
 	}
 	now := h.w.now()
-	err := h.w.locked(ctx, cmd.TenantID, func(ctx context.Context) error {
+	err := h.w.locked(ctx, cmd.TenantID, cmd.Actor, now, func(ctx context.Context, actor authority.Actor) error {
 		req, requester, err := h.w.loadForDecision(ctx, h.requests, cmd.TenantID, cmd.RequestID, now)
 		if err != nil {
 			return err
 		}
-		if err := cmd.Actor.MayDeny(requester); err != nil {
+		if err := actor.MayDeny(requester); err != nil {
 			return err
 		}
 		if req.State() != permissionrequest.StatePending {

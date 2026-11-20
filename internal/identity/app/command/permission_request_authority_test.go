@@ -41,7 +41,7 @@ type prWorld struct {
 func newPRWorld(t *testing.T) *prWorld {
 	t.Helper()
 	w := &prWorld{authzWorld: newAuthzWorld(t), reqs: permissionrequesttest.NewFakeRepository(), t: t}
-	l, p := command.AuthorityLocker(w.lock), anyPersons{}
+	l, p := command.AuthorityLocker(w.lock), anyPersons{rotations: &w.rotations}
 	w.approve = command.NewApprovePermissionRequestHandler(fakeUoW{}, l, w.reqs, w.members, w.roles, p, awClock, func() uuid.UUID { return uuid.MustParse(awID(7000)) })
 	w.deny = command.NewDenyPermissionRequestHandler(fakeUoW{}, l, w.reqs, w.members, w.roles, p, awClock)
 	w.view = command.NewAuthorizePermissionRequestViewHandler(w.reqs, w.members, w.roles, p, awClock)
@@ -226,7 +226,7 @@ func TestApprove_WhoMay(t *testing.T) {
 	}
 	// a read-only platform operator in the platform tenant follows rank like anyone else
 	platRank := authority.RankNone.Int()
-	plat, _ := authority.NewActor(authority.ActorInput{MembershipID: membership.ID(awID(8100)), TenantID: awTenant, Rank: &platRank,
+	plat, _ := authority.NewActor(authority.ActorInput{MembershipID: w.member(t).ID(), TenantID: awTenant, Rank: &platRank,
 		IsPlatformOperator: true, EffectivePermissions: []string{p.Platform.TenantsView}})
 	if err := w.approveAs(plat, w.pending(t, c.other, p.Crm.Leads.Read, 0)); !errors.Is(err, authority.ErrInsufficientRank) {
 		t.Errorf("read-only operator in its own tenant: %v, want ErrInsufficientRank", err)
@@ -326,7 +326,10 @@ func TestApprove_KeepsExistingOverridesAndNeverShortensAGrant(t *testing.T) {
 	t.Parallel()
 	p := permission.IdentityPermissions
 	w := newPRWorld(t)
-	tl := w.member(t, w.teamLead)
+	// The approver holds, by override, what they approve: the policy decides on the
+	// permissions resolved from the stored facts, not on the token's claim alone.
+	tl := w.memberSnap(t, membership.Snapshot{RoleAssignments: []role.ID{w.teamLead.ID()}, GrantedPermissions: []membership.GrantedOverride{
+		{Permission: permission.FromConstant(p.Crm.Leads.ReadAll)}, {Permission: permission.FromConstant(p.Crm.Leads.Assign)}}})
 	permanent := permission.FromConstant(p.Crm.Leads.ReadAll)
 	timed := permission.FromConstant(p.Crm.Leads.Assign)
 	revoked := permission.FromConstant(p.Crm.Leads.Read)

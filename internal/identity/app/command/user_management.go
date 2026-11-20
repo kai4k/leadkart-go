@@ -127,7 +127,7 @@ func (h DeactivateUserHandler) Handle(ctx context.Context, cmd DeactivateUserCom
 		return authority.ErrNoAuthority
 	}
 	now := h.w.now()
-	err := h.w.updateMember(ctx, cmd.TenantID, cmd.MembershipID, now, func(ctx context.Context, m *membership.Membership, target authority.Member) error {
+	err := h.w.updateMember(ctx, cmd.TenantID, cmd.MembershipID, cmd.Actor, now, func(ctx context.Context, actor authority.Actor, m *membership.Membership, target authority.Member) error {
 		var owners []authority.Member
 		if target.IsOwner() {
 			var err error
@@ -135,10 +135,13 @@ func (h DeactivateUserHandler) Handle(ctx context.Context, cmd DeactivateUserCom
 				return err
 			}
 		}
-		if err := cmd.Actor.MayDeactivate(target, owners); err != nil {
+		if err := actor.MayDeactivate(target, owners); err != nil {
 			return err
 		}
-		return m.Deactivate(cmd.Reason, now)
+		if err := m.Deactivate(cmd.Reason, now); err != nil {
+			return err
+		}
+		return h.w.rotateStampIfChanged(ctx, m, "deactivated", now)
 	})
 	return translateAuthorityWrite("deactivate_user", err)
 }
@@ -183,11 +186,14 @@ func (h ReactivateUserHandler) Handle(ctx context.Context, cmd ReactivateUserCom
 		return authority.ErrNoAuthority
 	}
 	now := h.w.now()
-	err := h.w.updateMember(ctx, cmd.TenantID, cmd.MembershipID, now, func(_ context.Context, m *membership.Membership, target authority.Member) error {
-		if err := cmd.Actor.MayActOn(target); err != nil {
+	err := h.w.updateMember(ctx, cmd.TenantID, cmd.MembershipID, cmd.Actor, now, func(ctx context.Context, actor authority.Actor, m *membership.Membership, target authority.Member) error {
+		if err := actor.MayActOn(target); err != nil {
 			return err
 		}
-		return m.Reactivate(now)
+		if err := m.Reactivate(now); err != nil {
+			return err
+		}
+		return h.w.rotateStampIfChanged(ctx, m, "reactivated", now)
 	})
 	return translateAuthorityWrite("reactivate_user", err)
 }

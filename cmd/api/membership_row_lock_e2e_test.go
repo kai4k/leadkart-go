@@ -25,6 +25,7 @@ import (
 	"github.com/leadkart/leadkart-go/internal/common/pg"
 	"github.com/leadkart/leadkart-go/internal/identity/adapters"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/role"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 	"github.com/leadkart/leadkart-go/internal/identity/ports"
@@ -179,5 +180,44 @@ func TestE2E_Overrides_DuplicateRevokedIsOneAndOverlapIsAFieldError(t *testing.T
 	er := decodeError(t, r.body)
 	if er.Error != "validation_failed" || len(er.Errors["revoked"]) != 1 {
 		t.Fatalf("422 body = %s, want validation_failed with errors.revoked naming the permission", r.body)
+	}
+}
+
+// TestE2E_PersonRowLock_StampRotationCannotRevertAPasswordChange: the person
+// aggregate is persisted whole (UpdatePerson rewrites every column), so a
+// writer holding a stale load — here a stamp rotation — must not write back the
+// old password hash over a password change that committed meanwhile.
+func TestE2E_PersonRowLock_StampRotationCannotRevertAPasswordChange(t *testing.T) {
+	f := newE2EFixtureAt(t, time.Now)
+	owner := f.registerAndLogin(t, "personlock")
+	persons := adapters.NewPersonRepository(f.Pool, pg.NewTransactor(f.Pool))
+
+	loaded := make(chan struct{})
+	changed := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Go(func() {
+		err := persons.UpdateByID(t.Context(), person.ID(owner.PersonID), func(p *person.Person) (bool, error) {
+			close(loaded)
+			select {
+			case <-changed:
+			case <-time.After(staleProfileWindow):
+			}
+			return true, p.RotateSecurityStamp("role_revoked", time.Now())
+		})
+		if err != nil {
+			t.Errorf("slow stamp rotation: %v", err)
+		}
+	})
+	<-loaded
+	newPassword := owner.Password + "-v2"
+	r := f.authedJSON(t, http.MethodPost, "/api/v1/auth/change-password", owner.AccessToken,
+		ports.ChangePasswordRequest{CurrentPassword: owner.Password, NewPassword: newPassword})
+	close(changed)
+	wg.Wait()
+	if r.status != http.StatusNoContent {
+		t.Fatalf("change-password: %d %s", r.status, r.body)
+	}
+	if lr := f.postJSON(t, "/api/v1/auth/login", ports.LoginRequest{Email: owner.Email, Password: newPassword, DeviceLabel: "e2e"}); lr.status != http.StatusOK {
+		t.Fatalf("login with the NEW password: %d %s — a stale person write reverted the password change", lr.status, lr.body)
 	}
 }

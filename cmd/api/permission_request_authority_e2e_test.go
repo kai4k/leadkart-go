@@ -262,6 +262,7 @@ func TestE2E_PermissionRequests_ApprovalDecidedByPolicy(t *testing.T) {
 	t.Run("submitting needs identity.meta.request_permission_elevation", func(t *testing.T) {
 		_, eTok := w.exec(t)
 		f.grantOverrides(t, w.owner.AccessToken, w.tl.membershipID, []string{}, []string{p.Meta.RequestPermissionElevation})
+		f.evictStamp(t, w.tl.personID) // the override change rotated the stamp; log in again
 		tok := f.loginToken(t, w.tl.email, w.tl.password)
 		sub, _ := f.requestElevation(t, tok, p.Crm.Leads.ReadAll)
 		f.wantForbidden(t, "submit without the elevation permission", sub, http.StatusForbidden, "forbidden")

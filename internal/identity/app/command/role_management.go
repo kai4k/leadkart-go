@@ -53,10 +53,10 @@ type roleWriter struct{ authorityWriter }
 
 // updateRole runs fn (decide, then mutate) on the live role under the lock;
 // a soft-deleted or foreign role is role.ErrNotFound.
-func (w roleWriter) updateRole(ctx context.Context, tenantID tenant.ID, id role.ID, fn func(r *role.Role) error) error {
-	return w.locked(ctx, tenantID, func(ctx context.Context) error {
+func (w roleWriter) updateRole(ctx context.Context, tenantID tenant.ID, id role.ID, actor authority.Actor, now time.Time, fn func(actor authority.Actor, r *role.Role) error) error {
+	return w.locked(ctx, tenantID, actor, now, func(ctx context.Context, actor authority.Actor) error {
 		return w.facts.roles.UpdateByID(ctx, tenantID, id, func(r *role.Role) (bool, error) {
-			if err := fn(r); err != nil {
+			if err := fn(actor, r); err != nil {
 				return false, err
 			}
 			return true, nil
@@ -142,7 +142,7 @@ func (h CreateRoleHandler) Handle(ctx context.Context, cmd CreateRoleCommand) (C
 	}
 	now := h.now()
 	var created role.ID
-	err := h.locked(ctx, cmd.TenantID, func(ctx context.Context) error {
+	err := h.locked(ctx, cmd.TenantID, cmd.Actor, now, func(ctx context.Context, actor authority.Actor) error {
 		var parent *role.Role
 		if !cmd.ParentRoleID.IsZero() {
 			p, err := h.facts.role(ctx, cmd.TenantID, cmd.ParentRoleID)
@@ -154,7 +154,7 @@ func (h CreateRoleHandler) Handle(ctx context.Context, cmd CreateRoleCommand) (C
 			}
 			parent = p
 		}
-		if err := cmd.Actor.MayCreateRole(cmd.TenantID, cmd.HierarchyLevel, nil, parent); err != nil {
+		if err := actor.MayCreateRole(cmd.TenantID, cmd.HierarchyLevel, nil, parent); err != nil {
 			return err
 		}
 		r, err := role.New(h.newRoleID(), cmd.TenantID, cmd.Name,
@@ -214,8 +214,8 @@ func (h UpdateRoleHandler) Handle(ctx context.Context, cmd UpdateRoleCommand) er
 	if cmd.HierarchyLevel >= 0 {
 		newLevel = cmd.HierarchyLevel
 	}
-	err := h.updateRole(ctx, cmd.TenantID, cmd.RoleID, func(r *role.Role) error {
-		if err := cmd.Actor.MayEditRole(r, newLevel); err != nil {
+	err := h.updateRole(ctx, cmd.TenantID, cmd.RoleID, cmd.Actor, now, func(actor authority.Actor, r *role.Role) error {
+		if err := actor.MayEditRole(r, newLevel); err != nil {
 			return err
 		}
 		if cmd.Name != "" {
@@ -263,8 +263,8 @@ func (h ReplaceRolePermissionsHandler) Handle(ctx context.Context, cmd ReplaceRo
 		return err
 	}
 	now := h.now()
-	upErr := h.updateRole(ctx, cmd.TenantID, cmd.RoleID, func(r *role.Role) error {
-		if err := cmd.Actor.MayReplaceRolePermissions(r, authority.PermissionNames(target)); err != nil {
+	upErr := h.updateRole(ctx, cmd.TenantID, cmd.RoleID, cmd.Actor, now, func(actor authority.Actor, r *role.Role) error {
+		if err := actor.MayReplaceRolePermissions(r, authority.PermissionNames(target)); err != nil {
 			return err
 		}
 		return r.ReplacePermissions(target, now)
@@ -301,8 +301,8 @@ func (h GrantRolePermissionHandler) Handle(ctx context.Context, cmd GrantRolePer
 		return fmt.Errorf("%w: %q", ErrPermissionUnknown, cmd.PermissionName)
 	}
 	now := h.now()
-	upErr := h.updateRole(ctx, cmd.TenantID, cmd.RoleID, func(r *role.Role) error {
-		if err := cmd.Actor.MayGrantRolePermission(r, p.Name()); err != nil {
+	upErr := h.updateRole(ctx, cmd.TenantID, cmd.RoleID, cmd.Actor, now, func(actor authority.Actor, r *role.Role) error {
+		if err := actor.MayGrantRolePermission(r, p.Name()); err != nil {
 			return err
 		}
 		return r.GrantPermission(p, now)
@@ -339,8 +339,8 @@ func (h RevokeRolePermissionHandler) Handle(ctx context.Context, cmd RevokeRoleP
 		return fmt.Errorf("%w: %q", ErrPermissionUnknown, cmd.PermissionName)
 	}
 	now := h.now()
-	upErr := h.updateRole(ctx, cmd.TenantID, cmd.RoleID, func(r *role.Role) error {
-		if err := cmd.Actor.MayRevokeRolePermission(r, p.Name()); err != nil {
+	upErr := h.updateRole(ctx, cmd.TenantID, cmd.RoleID, cmd.Actor, now, func(actor authority.Actor, r *role.Role) error {
+		if err := actor.MayRevokeRolePermission(r, p.Name()); err != nil {
 			return err
 		}
 		return r.RevokePermission(p, now)
@@ -380,8 +380,8 @@ func (h DeleteRoleHandler) Handle(ctx context.Context, cmd DeleteRoleCommand) er
 		return err
 	}
 	now := h.now()
-	err := h.updateRole(ctx, cmd.TenantID, cmd.RoleID, func(r *role.Role) error {
-		if err := cmd.Actor.MayDeleteRole(r); err != nil {
+	err := h.updateRole(ctx, cmd.TenantID, cmd.RoleID, cmd.Actor, now, func(actor authority.Actor, r *role.Role) error {
+		if err := actor.MayDeleteRole(r); err != nil {
 			return err
 		}
 		holders, err := h.facts.memberships.ListHoldingRole(ctx, cmd.TenantID, cmd.RoleID)
@@ -460,7 +460,7 @@ func (h SetRoleParentHandler) Handle(ctx context.Context, cmd SetRoleParentComma
 		return err
 	}
 	now := h.now()
-	err := h.locked(ctx, cmd.TenantID, func(ctx context.Context) error {
+	err := h.locked(ctx, cmd.TenantID, cmd.Actor, now, func(ctx context.Context, actor authority.Actor) error {
 		child, err := h.facts.role(ctx, cmd.TenantID, cmd.RoleID)
 		if err != nil {
 			return err
@@ -478,7 +478,7 @@ func (h SetRoleParentHandler) Handle(ctx context.Context, cmd SetRoleParentComma
 				return err
 			}
 		}
-		if err := cmd.Actor.MaySetRoleParent(child, parent); err != nil {
+		if err := actor.MaySetRoleParent(child, parent); err != nil {
 			return err
 		}
 		existing, gErr := h.edges.GetActiveByChild(ctx, cmd.TenantID, cmd.RoleID)

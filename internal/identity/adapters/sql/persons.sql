@@ -33,6 +33,25 @@ SELECT id, email, first_name, last_name, password_hash, security_stamp,
 FROM   identity.persons
 WHERE  id = $1;
 
+-- name: GetPersonByIDForUpdate :one
+-- The aggregate-writer load (UpdateByID): takes the row lock so every writer of
+-- a person serialises on it (UpdatePerson rewrites every column from the
+-- loaded snapshot, so an unlocked load can write back a stale password hash,
+-- stamp or suspension). FOR NO KEY UPDATE: conflicts with other writers but not
+-- with the FOR KEY SHARE a foreign-key check takes (memberships, refresh
+-- families referencing the person).
+SELECT id, email, first_name, last_name, password_hash, security_stamp,
+       is_active, is_anonymised, created_at, anonymised_at,
+       is_globally_suspended, global_suspension_reason, globally_suspended_at,
+       password_reset_token_hash, password_reset_expires_at,
+       pending_email_change_new_email, pending_email_change_token_hash,
+       pending_email_change_expires_at,
+       created_by_person_id,
+       must_change_password, failed_login_count, locked_until, last_failed_login_at
+FROM   identity.persons
+WHERE  id = $1
+FOR NO KEY UPDATE;
+
 -- name: GetPersonsByIDs :many
 -- Batched hydration — single round-trip via `id = ANY(...)` instead of
 -- N GetPersonByID calls. Column list mirrors GetPersonByID exactly so

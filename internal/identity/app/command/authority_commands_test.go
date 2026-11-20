@@ -36,7 +36,30 @@ func (l *fakeAuthorityLock) LockTenantAuthority(_ context.Context, _ tenant.ID) 
 
 // anyPersons answers GetByID with an active, unlocked person for any id: the
 // command tests that do not care about person state need not seed one.
-type anyPersons struct{ person.Repository }
+type anyPersons struct {
+	person.Repository
+	// rotations, when set, collects the reason of every stamp rotation applied through UpdateByID.
+	rotations *[]string
+}
+
+// UpdateByID runs fn on a synthesised person (nothing is persisted) and
+// records the reasons of the stamp rotations it caused.
+func (a anyPersons) UpdateByID(ctx context.Context, id person.ID, fn func(*person.Person) (bool, error)) error {
+	p, err := a.GetByID(ctx, id)
+	if err != nil {
+		return err
+	}
+	ok, err := fn(p)
+	if err != nil || !ok {
+		return err
+	}
+	for _, e := range p.PullEvents() {
+		if ev, isRotation := e.(person.SecurityStampRotatedEvent); isRotation && a.rotations != nil {
+			*a.rotations = append(*a.rotations, ev.Reason)
+		}
+	}
+	return nil
+}
 
 func (anyPersons) GetByID(_ context.Context, id person.ID) (*person.Person, error) {
 	addr, err := email.New(strings.ReplaceAll(string(id), "-", "") + "@authz.test")
@@ -60,7 +83,9 @@ func (u authzScopeUoW) WithinTx(ctx context.Context, _ pg.TxScope, fn func(conte
 }
 
 type authzWorld struct {
-	members                               *membershiptest.FakeRepository
+	members *membershiptest.FakeRepository
+	// rotations collects the reason of every stamp rotation the handlers applied.
+	rotations                             []string
 	roles                                 *roletest.FakeRepository
 	lock                                  *fakeAuthorityLock
 	owner, admin, manager, teamLead, exec *role.Role
@@ -176,7 +201,7 @@ type handlers struct {
 
 func (w *authzWorld) handlersAt(now func() time.Time) handlers {
 	l := command.AuthorityLocker(w.lock)
-	p := anyPersons{}
+	p := anyPersons{rotations: &w.rotations}
 	return handlers{
 		assign:   command.NewAssignUserRoleHandler(fakeUoW{}, l, w.members, w.roles, p, now),
 		revoke:   command.NewRevokeUserRoleHandler(fakeUoW{}, l, w.members, w.roles, p, now),
@@ -223,7 +248,7 @@ func TestAuthorityCommands_TransactionIsBoundToTheTargetTenant(t *testing.T) {
 	h := command.NewAssignUserRoleHandler(authzScopeUoW{tenants: &bound}, w.lock, w.members, w.roles, anyPersons{}, awClock)
 	// the request context carries ANOTHER tenant (an operator's home tenant)
 	ctx := tenancy.WithID(t.Context(), tenancy.ID(awID(4242)))
-	if err := h.Handle(ctx, command.AssignUserRoleCommand{TenantID: awTenant, MembershipID: target.ID(), RoleID: w.exec.ID(), Actor: testAdminActor(t)}); err != nil {
+	if err := h.Handle(ctx, command.AssignUserRoleCommand{TenantID: awTenant, MembershipID: target.ID(), RoleID: w.exec.ID(), Actor: w.adminActor(t)}); err != nil {
 		t.Fatalf("Handle: %v", err)
 	}
 	if len(bound) != 1 || bound[0] != awTenant.String() {
@@ -555,4 +580,22 @@ func TestRemoveUserManager_JuniorCannotUnlinkSenior(t *testing.T) {
 // memberships: for handler tests that do not exercise the last-owner guard.
 func emptyGuard() command.PersonChangeGuard {
 	return command.NewPersonChangeGuard(fakeUoW{}, &fakeAuthorityLock{}, membershiptest.NewFakeRepository(), roletest.NewFakeRepository(), anyPersons{}, awClock)
+}
+
+// seedAdmin adds an Administrator role and an active member holding it to the
+// given repositories (the tenant of awTenant) and returns the actor a login for
+// that member would mint: rank Admin, tenant.admin expanded.
+func seedAdmin(t *testing.T, members *membershiptest.FakeRepository, roles *roletest.FakeRepository) authority.Actor {
+	t.Helper()
+	r := role.UnmarshalFromDB(role.Snapshot{ID: role.ID(awID(8001)), TenantID: awTenant, Name: role.SystemRoles.Tenant.Administrator,
+		HierarchyLevel: role.HierarchyLevelAdmin, Permissions: []*permission.Permission{permission.FromConstant(permission.IdentityPermissions.Meta.TenantAdmin)}, CreatedAt: testNow})
+	if err := roles.Add(t.Context(), r); err != nil {
+		t.Fatalf("seed admin role: %v", err)
+	}
+	m := membership.UnmarshalFromDB(membership.Snapshot{ID: membership.ID(awID(8002)), PersonID: person.ID(awID(8003)), TenantID: awTenant,
+		Status: membership.StatusActive, JoinedAt: testNow, RoleAssignments: []role.ID{r.ID()}})
+	if err := members.Add(t.Context(), m); err != nil {
+		t.Fatalf("seed admin member: %v", err)
+	}
+	return actorAs(t, m.ID(), authority.RankAdmin, tenantAdminEffective()...)
 }

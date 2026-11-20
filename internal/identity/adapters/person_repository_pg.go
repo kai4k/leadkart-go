@@ -65,7 +65,7 @@ func (r *PersonRepository) UpdateByID(
 ) error {
 	return r.runInTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
 		q := r.q.WithTx(tx)
-		p, err := loadPerson(ctx, q, id)
+		p, err := loadPersonForUpdate(ctx, q, id)
 		if err != nil {
 			return err
 		}
@@ -207,12 +207,29 @@ func (r *PersonRepository) GetByEmailChangeTokenHash(ctx context.Context, hash p
 
 // ----- Helpers ---------------------------------------------------------------
 
+// loadPerson reads the person without locking it (read paths).
 func loadPerson(ctx context.Context, q *db.Queries, id person.ID) (*person.Person, error) {
+	return loadPersonWith(ctx, q, id, false)
+}
+
+// loadPersonForUpdate reads the person under the row lock (writers: UpdateByID),
+// so every writer of one person serialises and persists a snapshot read after
+// the previous writer committed.
+func loadPersonForUpdate(ctx context.Context, q *db.Queries, id person.ID) (*person.Person, error) {
+	return loadPersonWith(ctx, q, id, true)
+}
+
+func loadPersonWith(ctx context.Context, q *db.Queries, id person.ID, forUpdate bool) (*person.Person, error) {
 	uid, err := parsePersonID(id)
 	if err != nil {
 		return nil, err
 	}
-	row, err := q.GetPersonByID(ctx, pgconv.PgUUID(uid))
+	var row db.IdentityPerson
+	if forUpdate {
+		row, err = q.GetPersonByIDForUpdate(ctx, pgconv.PgUUID(uid))
+	} else {
+		row, err = q.GetPersonByID(ctx, pgconv.PgUUID(uid))
+	}
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, person.ErrNotFound

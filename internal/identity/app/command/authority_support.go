@@ -46,7 +46,9 @@ func (e *memberRolesInconsistentError) Error() string {
 	return fmt.Sprintf("%s: membership %s: %v", ErrMemberRolesInconsistent, e.membershipID, e.cause)
 }
 
-func (e *memberRolesInconsistentError) Is(target error) bool { return target == ErrMemberRolesInconsistent }
+func (e *memberRolesInconsistentError) Is(target error) bool {
+	return target == ErrMemberRolesInconsistent
+}
 
 // maxManagerChainDepth bounds the reports-to walk (cycle prevention).
 const maxManagerChainDepth = 64
@@ -65,26 +67,34 @@ type authorityFacts struct {
 // its person's state, decided at now. A role set that does not load
 // completely is [ErrMemberRolesInconsistent].
 func (f authorityFacts) member(ctx context.Context, tenantID tenant.ID, m *membership.Membership, now time.Time) (authority.Member, error) {
+	out, _, err := f.project(ctx, tenantID, m, now)
+	return out, err
+}
+
+// project is [authorityFacts.member] that also returns the roles it loaded
+// (soft-deleted included, exactly the roles m is assigned), so a caller that
+// needs the effective permissions does not load them a second time.
+func (f authorityFacts) project(ctx context.Context, tenantID tenant.ID, m *membership.Membership, now time.Time) (authority.Member, []*role.Role, error) {
 	if now.IsZero() {
-		return authority.Member{}, fmt.Errorf("%w: the decision instant is required", authority.ErrNoAuthority)
+		return authority.Member{}, nil, fmt.Errorf("%w: the decision instant is required", authority.ErrNoAuthority)
 	}
 	var roles []*role.Role
 	if ids := m.RoleAssignments(); len(ids) > 0 {
 		var err error
 		if roles, err = f.roles.GetByIDsIncludingDeleted(ctx, tenantID, ids); err != nil {
-			return authority.Member{}, fmt.Errorf("authority facts: load roles: %w", err)
+			return authority.Member{}, nil, fmt.Errorf("authority facts: load roles: %w", err)
 		}
 	}
 	p, err := f.persons.GetByID(ctx, m.PersonID())
 	if err != nil {
-		return authority.Member{}, fmt.Errorf("authority facts: load person %s: %w", m.PersonID(), err)
+		return authority.Member{}, nil, fmt.Errorf("authority facts: load person %s: %w", m.PersonID(), err)
 	}
 	state := authority.NewPersonState(p.IsActive(), p.IsGloballySuspended(), p.IsAnonymised(), p.LockedUntil(), now)
 	out, err := authority.MemberOf(m, roles, now, state)
 	if err != nil {
-		return authority.Member{}, &memberRolesInconsistentError{membershipID: m.ID(), cause: err}
+		return authority.Member{}, nil, &memberRolesInconsistentError{membershipID: m.ID(), cause: err}
 	}
-	return out, nil
+	return out, roles, nil
 }
 
 // memberByID loads a membership and projects it. membership.ErrNotFound
@@ -216,35 +226,106 @@ func newAuthorityWriter(ctor string, uow pg.UnitOfWork, lock AuthorityLocker, m 
 	return authorityWriter{uow: uow, lock: lock, facts: authorityFacts{memberships: m, roles: r, persons: p}, now: now}
 }
 
+// freshActor is the actor the policy decides with: the token's actor narrowed
+// by the actor's own membership read INSIDE the locked transaction. The more
+// junior of the token's rank and the stored rank, and the intersection of the
+// token's permissions with the ones resolved now from the stored roles and
+// overrides: a token can only ever lose authority relative to the stored
+// facts, never gain it. A membership that is missing, inactive, or whose
+// person cannot act yields the zero actor, which denies every decision.
+//
+// Actors that need no fresh read ([authority.Actor.NeedsFreshFacts]: the zero
+// actor, super users, impersonation sessions, operators under the cross-tenant
+// exemption) are returned as they are.
+func (f authorityFacts) freshActor(ctx context.Context, tenantID tenant.ID, token authority.Actor, now time.Time) (authority.Actor, error) {
+	if !token.NeedsFreshFacts(tenantID) {
+		return token, nil
+	}
+	m, err := f.memberships.GetByID(ctx, tenantID, token.MembershipID())
+	if errors.Is(err, membership.ErrNotFound) {
+		return authority.Actor{}, fmt.Errorf("%w: the acting member no longer exists in this tenant", authority.ErrNoAuthority)
+	}
+	if err != nil {
+		return authority.Actor{}, fmt.Errorf("authority facts: load acting member: %w", err)
+	}
+	fresh, roles, err := f.project(ctx, tenantID, m, now)
+	if errors.Is(err, ErrMemberRolesInconsistent) {
+		return authority.Actor{}, fmt.Errorf("%w: the acting member's roles cannot be decided", authority.ErrNoAuthority)
+	}
+	if err != nil {
+		return authority.Actor{}, err
+	}
+	live := make([]*role.Role, 0, len(roles))
+	for _, r := range roles {
+		if !r.IsDeleted() {
+			live = append(live, r)
+		}
+	}
+	narrowed := token.NarrowedBy(fresh, permissionNames(m.EffectivePermissions(live, now)))
+	if !narrowed.Valid() {
+		return authority.Actor{}, fmt.Errorf("%w: the acting member cannot act", authority.ErrNoAuthority)
+	}
+	return narrowed, nil
+}
+
 // locked runs fn in ONE transaction under the TARGET tenant's row-level
 // security scope (the tenant is bound from tenantID, whatever the request
-// context carried), after taking that tenant's authority lock.
-func (w authorityWriter) locked(ctx context.Context, tenantID tenant.ID, fn func(ctx context.Context) error) error {
+// context carried), after taking that tenant's authority lock. It is the one
+// place every authority command passes through, so it is also the one place
+// the acting member is re-read: fn receives the actor the policy must decide
+// with ([authorityFacts.freshActor]) and MUST NOT use the token's actor. A
+// zero actor is passed through untouched (it denies every decision).
+func (w authorityWriter) locked(ctx context.Context, tenantID tenant.ID, actor authority.Actor, now time.Time, fn func(ctx context.Context, actor authority.Actor) error) error {
 	ctx = tenancy.WithID(ctx, tenancy.ID(tenantID.String()))
 	return w.uow.WithinTx(ctx, pg.TxScopeTenant, func(ctx context.Context) error {
 		if err := w.lock.LockTenantAuthority(ctx, tenantID); err != nil {
 			return fmt.Errorf("authority lock: %w", err)
 		}
-		return fn(ctx)
+		fresh, err := w.facts.freshActor(ctx, tenantID, actor, now)
+		if err != nil {
+			return err
+		}
+		return fn(ctx, fresh)
 	})
 }
 
 // updateMember loads the target under the lock, projects its facts, and lets
-// decide authorise + mutate it.
-func (w authorityWriter) updateMember(ctx context.Context, tenantID tenant.ID, id membership.ID, now time.Time,
-	decide func(ctx context.Context, m *membership.Membership, target authority.Member) error) error {
-	return w.locked(ctx, tenantID, func(ctx context.Context) error {
+// decide authorise + mutate it with the fresh actor.
+func (w authorityWriter) updateMember(ctx context.Context, tenantID tenant.ID, id membership.ID, actor authority.Actor, now time.Time,
+	decide func(ctx context.Context, actor authority.Actor, m *membership.Membership, target authority.Member) error) error {
+	return w.locked(ctx, tenantID, actor, now, func(ctx context.Context, actor authority.Actor) error {
 		return w.facts.memberships.UpdateByID(ctx, tenantID, id, func(m *membership.Membership) (bool, error) {
 			target, err := w.facts.member(ctx, tenantID, m, now)
 			if err != nil {
 				return false, err
 			}
-			if err := decide(ctx, m, target); err != nil {
+			if err := decide(ctx, actor, m, target); err != nil {
 				return false, err
 			}
 			return true, nil
 		})
 	})
+}
+
+// rotateStampIfChanged ends the access tokens of m's person when the mutation
+// just applied to m recorded an authority change (a role, the overrides or the
+// status; an idempotent no-op records nothing and rotates nothing). It runs in
+// the command's own transaction, so the change and the rotation commit or roll
+// back together; the event it records makes the subscriber evict the cached
+// stamp, and the member's next request answers 401 stale_token. It is the one
+// rotation call every authority command uses; manager changes and profile edits
+// do NOT call it.
+func (w authorityWriter) rotateStampIfChanged(ctx context.Context, m *membership.Membership, reason string, now time.Time) error {
+	if !m.HasPendingEvents() {
+		return nil
+	}
+	err := w.facts.persons.UpdateByID(ctx, m.PersonID(), func(p *person.Person) (bool, error) {
+		return true, p.RotateSecurityStamp(reason, now)
+	})
+	if err != nil {
+		return fmt.Errorf("rotate security stamp: %w", err)
+	}
+	return nil
 }
 
 // translateAuthorityWrite maps repository sentinels to command sentinels;

@@ -947,3 +947,60 @@ func newPerson(t *testing.T) *person.Person {
 	}
 	return p
 }
+
+// ----- RotateSecurityStamp --------------------------------------------------
+
+func TestRotateSecurityStamp_RotatesStampAndEmitsOneEventWithoutTouchingCredentials(t *testing.T) {
+	t.Parallel()
+	p := newPerson(t)
+	_ = p.PullEvents()
+	stamp, hash := p.SecurityStamp(), p.PasswordHash()
+
+	if err := p.RotateSecurityStamp("role_revoked", testNow); err != nil {
+		t.Fatalf("RotateSecurityStamp: %v", err)
+	}
+	if p.SecurityStamp().Equal(stamp) {
+		t.Fatal("SecurityStamp did not rotate")
+	}
+	if p.PasswordHash().String() != hash.String() {
+		t.Error("the password hash changed")
+	}
+	events := p.PullEvents()
+	if len(events) != 1 {
+		t.Fatalf("events = %d, want 1", len(events))
+	}
+	ev, ok := events[0].(person.SecurityStampRotatedEvent)
+	if !ok || ev.Reason != "role_revoked" || ev.PersonID != p.ID() {
+		t.Errorf("event = %#v, want SecurityStampRotatedEvent{role_revoked}", events[0])
+	}
+}
+
+func TestRotateSecurityStamp_ReasonIsRequiredAndNothingChangesWithout(t *testing.T) {
+	t.Parallel()
+	p := newPerson(t)
+	_ = p.PullEvents()
+	stamp := p.SecurityStamp()
+	for _, reason := range []string{"", "   ", "\t\n"} {
+		if err := p.RotateSecurityStamp(reason, testNow); !errors.Is(err, person.ErrInvalid) {
+			t.Errorf("reason %q: err = %v, want ErrInvalid", reason, err)
+		}
+	}
+	if !p.SecurityStamp().Equal(stamp) || len(p.PullEvents()) != 0 {
+		t.Error("a refused rotation changed the stamp or recorded an event")
+	}
+}
+
+func TestRotateSecurityStamp_EveryCallRotatesAgain(t *testing.T) {
+	t.Parallel()
+	p := newPerson(t)
+	if err := p.RotateSecurityStamp("role_assigned", testNow); err != nil {
+		t.Fatalf("first rotation: %v", err)
+	}
+	first := p.SecurityStamp()
+	if err := p.RotateSecurityStamp("role_assigned", testNow); err != nil {
+		t.Fatalf("second rotation: %v", err)
+	}
+	if p.SecurityStamp().Equal(first) {
+		t.Error("a second rotation kept the first stamp")
+	}
+}

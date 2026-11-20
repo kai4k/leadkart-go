@@ -273,3 +273,21 @@ type AccountUnlockedEvent struct {
 }
 
 func (AccountUnlockedEvent) isPersonEvent() {}
+
+// SecurityStampRotatedEvent fires when [Person.RotateSecurityStamp] ends the
+// access tokens minted before an authority change (a role, a permission
+// override or the membership status changed) WITHOUT ending the session:
+// refresh-token families stay valid, so the next refresh re-mints the token
+// from the current facts. Reason is a stable machine label for the audit trail
+// (role_assigned, role_revoked, overrides_replaced, deactivated, ...).
+//
+// Subscribers evict the cached stamp (the 401 stale_token follows on the very
+// next request); NONE revokes families — that is what distinguishes it from
+// the credential events (password change, anonymise, global suspend).
+type SecurityStampRotatedEvent struct {
+	PersonID ID
+	Reason   string
+	At       time.Time
+}
+
+func (SecurityStampRotatedEvent) isPersonEvent() {}

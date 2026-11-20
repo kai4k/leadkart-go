@@ -688,6 +688,11 @@ func (m *Membership) RemoveManager(now time.Time) error {
 
 // ----- Event handling -------------------------------------------------------
 
+// HasPendingEvents reports whether the aggregate recorded a change since it was
+// loaded (without draining the events). Idempotent no-ops record none, so a
+// command can tell "something changed" from "already so".
+func (m *Membership) HasPendingEvents() bool { return len(m.events) > 0 }
+
 // PullEvents drains recorded events. See [tenant.Tenant.PullEvents] for semantics.
 func (m *Membership) PullEvents() []Event {
 	if len(m.events) == 0 {

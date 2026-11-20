@@ -333,6 +333,29 @@ func (p *Person) ChangePassword(newHash PasswordHash, now time.Time) error {
 	return nil
 }
 
+// RotateSecurityStamp rotates the SecurityStamp because an authority fact of
+// one of the Person's memberships changed (role assigned or revoked, permission
+// overrides replaced, membership deactivated or reactivated). Every access token
+// minted before now fails the stamp check with 401 stale_token on its next
+// request; refresh-token families are NOT revoked (the event carries no
+// family-revocation subscriber), so the BFF's silent refresh re-mints the token
+// from the current roles and permissions. Credentials are untouched.
+//
+// reason MUST be non-empty (stable machine label for the audit trail).
+// Idempotency: NOT idempotent. Each call rotates the stamp + emits an event.
+func (p *Person) RotateSecurityStamp(reason string, now time.Time) error {
+	if strings.TrimSpace(reason) == "" {
+		return fmt.Errorf("%w: stamp rotation reason required for audit", ErrInvalid)
+	}
+	p.securityStamp = NewSecurityStamp()
+	p.recordEvent(SecurityStampRotatedEvent{
+		PersonID: p.id,
+		Reason:   reason,
+		At:       now.UTC(),
+	})
+	return nil
+}
+
 // UpdateProfile changes the Person's display name (FirstName + LastName).
 //
 // Validation mirrors [New]: both fields required, trimmed-non-empty, capped

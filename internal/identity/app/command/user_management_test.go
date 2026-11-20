@@ -75,10 +75,11 @@ func TestUpdateUserProfile_NotFound(t *testing.T) {
 func TestDeactivateUser_RequiresReason(t *testing.T) {
 	t.Parallel()
 	repo := newFakeMembershipRepo()
+	roles := roletest.NewFakeRepository()
 	m := newMembership(t)
 	_ = repo.Add(t.Context(), m) // arch-test:ignore-err - test fixture setup
-	h := command.NewDeactivateUserHandler(fakeUoW{}, &fakeAuthorityLock{}, repo, roletest.NewFakeRepository(), anyPersons{}, func() time.Time { return testNow })
-	err := h.Handle(t.Context(), command.DeactivateUserCommand{Actor: testAdminActor(t),
+	h := command.NewDeactivateUserHandler(fakeUoW{}, &fakeAuthorityLock{}, repo, roles, anyPersons{}, func() time.Time { return testNow })
+	err := h.Handle(t.Context(), command.DeactivateUserCommand{Actor: seedAdmin(t, repo, roles),
 		TenantID: tenant.ID("33333333-3333-3333-3333-333333333333"), MembershipID: m.ID()})
 	if !errors.Is(err, membership.ErrInvalid) {
 		t.Fatalf("err = %v, want wraps membership.ErrInvalid (empty reason)", err)
@@ -88,10 +89,11 @@ func TestDeactivateUser_RequiresReason(t *testing.T) {
 func TestDeactivateUser_Succeeds(t *testing.T) {
 	t.Parallel()
 	repo := newFakeMembershipRepo()
+	roles := roletest.NewFakeRepository()
 	m := newMembership(t)
 	_ = repo.Add(t.Context(), m) // arch-test:ignore-err - test fixture setup
-	h := command.NewDeactivateUserHandler(fakeUoW{}, &fakeAuthorityLock{}, repo, roletest.NewFakeRepository(), anyPersons{}, func() time.Time { return testNow })
-	if err := h.Handle(t.Context(), command.DeactivateUserCommand{Actor: testAdminActor(t),
+	h := command.NewDeactivateUserHandler(fakeUoW{}, &fakeAuthorityLock{}, repo, roles, anyPersons{}, func() time.Time { return testNow })
+	if err := h.Handle(t.Context(), command.DeactivateUserCommand{Actor: seedAdmin(t, repo, roles),
 		TenantID:     tenant.ID("33333333-3333-3333-3333-333333333333"),
 		MembershipID: m.ID(),
 		Reason:       "left-the-company",
@@ -106,13 +108,14 @@ func TestDeactivateUser_Succeeds(t *testing.T) {
 func TestReactivateUser_RoundTrip(t *testing.T) {
 	t.Parallel()
 	repo := newFakeMembershipRepo()
+	roles := roletest.NewFakeRepository()
 	m := newMembership(t)
 	_ = m.Deactivate("temporary-leave", testNow) // arch-test:ignore-err - test fixture setup
 	m.PullEvents()
 	_ = repo.Add(t.Context(), m) // arch-test:ignore-err - test fixture setup
 
-	h := command.NewReactivateUserHandler(fakeUoW{}, &fakeAuthorityLock{}, repo, roletest.NewFakeRepository(), anyPersons{}, func() time.Time { return testNow })
-	if err := h.Handle(t.Context(), command.ReactivateUserCommand{Actor: testAdminActor(t),
+	h := command.NewReactivateUserHandler(fakeUoW{}, &fakeAuthorityLock{}, repo, roles, anyPersons{}, func() time.Time { return testNow })
+	if err := h.Handle(t.Context(), command.ReactivateUserCommand{Actor: seedAdmin(t, repo, roles),
 		TenantID: tenant.ID("33333333-3333-3333-3333-333333333333"), MembershipID: m.ID()}); err != nil {
 		t.Fatalf("Handle: %v", err)
 	}
@@ -124,8 +127,9 @@ func TestReactivateUser_RoundTrip(t *testing.T) {
 func TestReactivateUser_NotFound(t *testing.T) {
 	t.Parallel()
 	repo := newFakeMembershipRepo()
-	h := command.NewReactivateUserHandler(fakeUoW{}, &fakeAuthorityLock{}, repo, roletest.NewFakeRepository(), anyPersons{}, func() time.Time { return testNow })
-	err := h.Handle(t.Context(), command.ReactivateUserCommand{Actor: testAdminActor(t),
+	roles := roletest.NewFakeRepository()
+	h := command.NewReactivateUserHandler(fakeUoW{}, &fakeAuthorityLock{}, repo, roles, anyPersons{}, func() time.Time { return testNow })
+	err := h.Handle(t.Context(), command.ReactivateUserCommand{Actor: seedAdmin(t, repo, roles),
 		TenantID:     tenant.ID("33333333-3333-3333-3333-333333333333"),
 		MembershipID: membership.ID("99999999-9999-9999-9999-999999999999"),
 	})
@@ -214,6 +218,7 @@ func TestUserManagementHandlers_InputRejections(t *testing.T) {
 func TestDeactivateUser_AlreadyInactive_Idempotent(t *testing.T) {
 	t.Parallel()
 	repo := newFakeMembershipRepo()
+	roles := roletest.NewFakeRepository()
 	m := newMembership(t)
 	if err := m.Deactivate("initial-leave", testNow); err != nil {
 		t.Fatalf("setup Deactivate: %v", err)
@@ -221,8 +226,8 @@ func TestDeactivateUser_AlreadyInactive_Idempotent(t *testing.T) {
 	_ = m.PullEvents()
 	_ = repo.Add(t.Context(), m) // arch-test:ignore-err
 
-	h := command.NewDeactivateUserHandler(fakeUoW{}, &fakeAuthorityLock{}, repo, roletest.NewFakeRepository(), anyPersons{}, func() time.Time { return testNow })
-	if err := h.Handle(t.Context(), command.DeactivateUserCommand{Actor: testAdminActor(t),
+	h := command.NewDeactivateUserHandler(fakeUoW{}, &fakeAuthorityLock{}, repo, roles, anyPersons{}, func() time.Time { return testNow })
+	if err := h.Handle(t.Context(), command.DeactivateUserCommand{Actor: seedAdmin(t, repo, roles),
 		TenantID:     tenant.ID("33333333-3333-3333-3333-333333333333"),
 		MembershipID: m.ID(),
 		Reason:       "second-deactivate-attempt",
@@ -242,12 +247,13 @@ func TestDeactivateUser_AlreadyInactive_Idempotent(t *testing.T) {
 func TestReactivateUser_AlreadyActive_Idempotent(t *testing.T) {
 	t.Parallel()
 	repo := newFakeMembershipRepo()
+	roles := roletest.NewFakeRepository()
 	m := newMembership(t) // StatusActive by default
 	_ = m.PullEvents()
 	_ = repo.Add(t.Context(), m) // arch-test:ignore-err
 
-	h := command.NewReactivateUserHandler(fakeUoW{}, &fakeAuthorityLock{}, repo, roletest.NewFakeRepository(), anyPersons{}, func() time.Time { return testNow })
-	if err := h.Handle(t.Context(), command.ReactivateUserCommand{Actor: testAdminActor(t),
+	h := command.NewReactivateUserHandler(fakeUoW{}, &fakeAuthorityLock{}, repo, roles, anyPersons{}, func() time.Time { return testNow })
+	if err := h.Handle(t.Context(), command.ReactivateUserCommand{Actor: seedAdmin(t, repo, roles),
 		TenantID:     tenant.ID("33333333-3333-3333-3333-333333333333"),
 		MembershipID: m.ID(),
 	}); err != nil {

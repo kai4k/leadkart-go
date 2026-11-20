@@ -21,6 +21,18 @@ info:
     **Auth:** Bearer JWT in `Authorization` header. Tokens obtained via
     `POST /api/v1/auth/login`. Access tokens TTL ~10 minutes; refresh via
     `POST /api/v1/auth/refresh` with the refresh token from the login body.
+    A change to a member's roles, permission overrides or status (assign or revoke a
+    role, replace overrides, deactivate, reactivate, approve a permission request)
+    rotates that person's security stamp: their next request with the old access
+    token answers `401` with `error: stale_token` and `WWW-Authenticate: Bearer
+    realm="leadkart"`, the same answer as a password change, and a refresh
+    re-mints the token from the current roles (new `rank` and permissions). The
+    refresh session is NOT ended, except by deactivation, which also revokes the
+    member's refresh tokens. Every authority command also decides on the acting
+    member's CURRENT roles and permissions, never on the token alone: a token can
+    only lose authority relative to the stored facts (403 `forbidden` when the acting
+    member no longer exists or is inactive, otherwise the usual `insufficient_rank` /
+    `grant_exceeds_authority`).
 
     **Multi-tenant scope:** every authenticated call carries the caller's
     `tenant_id` claim implicitly. Platform operators (`is_platform=true` JWT)
