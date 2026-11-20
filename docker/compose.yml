@@ -161,9 +161,9 @@ services:
       LEADKART_RATE_LIMIT__PASSWORD_RESET__BURST: "${LEADKART_RATE_LIMIT__PASSWORD_RESET__BURST:-5}"
       LEADKART_RATE_LIMIT__PASSWORD_RESET__PER_MINUTE: "${LEADKART_RATE_LIMIT__PASSWORD_RESET__PER_MINUTE:-10}"
       # Idle timeout of a session (Refresh.SlidingTTL): a session not refreshed for this
-      # long ends. 2h is the code default; raise it locally if a parked browser tab
-      # should survive longer (docs/LOCAL_BACKEND.md).
-      LEADKART_REFRESH__SLIDING_TTL: "${LEADKART_REFRESH__SLIDING_TTL:-2h}"
+      # long ends. 24h is the code default (owner ruling 2026-11-21); change it locally
+      # only to test the idle path (docs/LOCAL_BACKEND.md).
+      LEADKART_REFRESH__SLIDING_TTL: "${LEADKART_REFRESH__SLIDING_TTL:-24h}"
       LEADKART_RATE_LIMIT__REFRESH__BURST: "${LEADKART_RATE_LIMIT__REFRESH__BURST:-30}"
       LEADKART_RATE_LIMIT__REFRESH__PER_MINUTE: "${LEADKART_RATE_LIMIT__REFRESH__PER_MINUTE:-120}"
       LEADKART_RATE_LIMIT__TENANT_REGISTRATION__BURST: "${LEADKART_RATE_LIMIT__TENANT_REGISTRATION__BURST:-5}"

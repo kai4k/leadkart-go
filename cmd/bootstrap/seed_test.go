@@ -110,11 +110,21 @@ func TestCheckSuperAdminPassword(t *testing.T) {
 	if err := checkSuperAdminPassword("LeadKart!Dev2026"); err != nil {
 		t.Fatalf("the documented dev password must pass: %v", err)
 	}
+	// Owner ruling 2026-11-21: the default is 8 characters with four classes, so the
+	// 8-character "changeme" fails on its classes, not its length; 7 characters fail
+	// min_length, and 8 with four classes pass.
 	err := checkSuperAdminPassword("changeme")
 	if err == nil {
 		t.Fatal("a weak password must be refused")
 	}
-	if strings.Contains(err.Error(), "changeme") || !strings.Contains(err.Error(), "min_length") {
+	if strings.Contains(err.Error(), "changeme") || !strings.Contains(err.Error(), "requires_uppercase") {
 		t.Fatalf("error %q must list the rules and not the password", err)
+	}
+	err = checkSuperAdminPassword("Ab1!cde")
+	if err == nil || !strings.Contains(err.Error(), "min_length") || strings.Contains(err.Error(), "Ab1!cde") {
+		t.Fatalf("7 characters: error %v must list min_length and not the password", err)
+	}
+	if err := checkSuperAdminPassword("Ab1!cdef"); err != nil {
+		t.Fatalf("8 characters with four classes must pass: %v", err)
 	}
 }

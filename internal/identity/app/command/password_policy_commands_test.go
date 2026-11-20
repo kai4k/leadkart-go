@@ -73,10 +73,12 @@ func TestCreateUser_EnforcesTheTargetTenantsPolicy(t *testing.T) {
 		t.Fatalf("lenient tenant, compliant password: %v", err)
 	}
 
-	// The default-policy tenant refuses the same password.
+	// The default-policy tenant refuses the same password (owner ruling 2026-11-21: the
+	// default length is now 8, so the ten characters of "longenough" no longer fail
+	// min_length; the missing classes still refuse it).
 	other, _ := email.New("other@example.test")
 	_, err = h.Handle(t.Context(), command.CreateUserCommand{Actor: superActor(t), TenantID: strictID, Email: other, Password: "longenough", FirstName: "O", LastName: "T"})
-	requireViolation(t, err, tenant.PasswordRuleMinLength, tenant.PasswordRuleUppercase, tenant.PasswordRuleDigit, tenant.PasswordRuleSymbol)
+	requireViolation(t, err, tenant.PasswordRuleUppercase, tenant.PasswordRuleDigit, tenant.PasswordRuleSymbol)
 }
 
 func TestCreateUser_PolicyIsCheckedBeforeHashing(t *testing.T) {
@@ -115,10 +117,10 @@ func TestChangePassword_EnforcesTheCallersTenantPolicy(t *testing.T) {
 		newPw    string
 		rules    []string // nil = accepted
 	}{
-		{"strict tenant refuses a length-only password", strictID, "abcdefgh12", []string{tenant.PasswordRuleMinLength, tenant.PasswordRuleUppercase, tenant.PasswordRuleSymbol}},
+		{"strict tenant refuses a password without the classes (10 characters meet the 8-character default)", strictID, "abcdefgh12", []string{tenant.PasswordRuleUppercase, tenant.PasswordRuleSymbol}},
 		{"lenient tenant accepts it", lenientID, "abcdefgh12", nil},
-		{"no tenant context applies the default", "", "abcdefgh12", []string{tenant.PasswordRuleMinLength, tenant.PasswordRuleUppercase, tenant.PasswordRuleSymbol}},
-		{"a tenant that is gone applies the default", tenant.ID("33333333-3333-3333-3333-333333333333"), "abcdefgh12", []string{tenant.PasswordRuleMinLength, tenant.PasswordRuleUppercase, tenant.PasswordRuleSymbol}},
+		{"no tenant context applies the default", "", "abcdefgh12", []string{tenant.PasswordRuleUppercase, tenant.PasswordRuleSymbol}},
+		{"a tenant that is gone applies the default", tenant.ID("33333333-3333-3333-3333-333333333333"), "abcdefgh12", []string{tenant.PasswordRuleUppercase, tenant.PasswordRuleSymbol}},
 		{"a compliant password passes the default", strictID, "Brand-New-Passphrase-9!", nil},
 	}
 	for _, tc := range cases {
@@ -186,9 +188,9 @@ func TestConfirmPasswordReset_AppliesThePolicyOfTheActiveMembershipsTenant(t *te
 		newPw    string
 		rules    []string
 	}{
-		{"strict tenant", strictID, "abcdefgh12", []string{tenant.PasswordRuleMinLength, tenant.PasswordRuleUppercase, tenant.PasswordRuleSymbol}},
+		{"strict tenant", strictID, "abcdefgh12", []string{tenant.PasswordRuleUppercase, tenant.PasswordRuleSymbol}},
 		{"lenient tenant", lenientID, "abcdefgh12", nil},
-		{"no active membership applies the default", "", "abcdefgh12", []string{tenant.PasswordRuleMinLength, tenant.PasswordRuleUppercase, tenant.PasswordRuleSymbol}},
+		{"no active membership applies the default", "", "abcdefgh12", []string{tenant.PasswordRuleUppercase, tenant.PasswordRuleSymbol}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

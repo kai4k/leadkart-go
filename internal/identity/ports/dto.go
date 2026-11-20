@@ -722,7 +722,7 @@ type ListPermissionRequestsResponse struct {
 //	  "message": "One or more fields are invalid",             // LeadKart legacy
 //	  "errors": {                                              // RFC 9457 ext
 //	    "email":    ["must be a valid email address"],
-//	    "password": ["must be at least 12 characters", "must contain a digit"]
+//	    "password": ["must be at least 8 characters", "must contain a digit"]
 //	  }
 //	}
 type ErrorResponse struct {

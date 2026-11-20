@@ -77,14 +77,16 @@ func TestE2E_PasswordPolicy_CreateUserUsesTheTargetTenantsPolicy(t *testing.T) {
 	strict := f.registerAndLogin(t, "pwstr")
 	f.setPolicy(t, lenient, 8, false)
 
-	// The same password: accepted where the policy is length-only, refused where it is the default.
+	// The same password: accepted where the policy is length-only, refused where it is the
+	// default (owner ruling 2026-11-21: 8 characters are long enough for the default now,
+	// so only the missing classes refuse it).
 	if r := f.authedJSON(t, http.MethodPost, "/api/v1/users", lenient.AccessToken,
 		ports.CreateUserRequest{Email: "len@e2e.test", Password: lenientPw, FirstName: "L", LastName: "N"}); r.status != http.StatusCreated {
 		t.Fatalf("lenient tenant: %d %s", r.status, r.body)
 	}
 	r := f.authedJSON(t, http.MethodPost, "/api/v1/users", strict.AccessToken,
 		ports.CreateUserRequest{Email: "str@e2e.test", Password: lenientPw, FirstName: "S", LastName: "T"})
-	f.requirePolicyViolation(t, r, "password", []string{"min_length", "requires_uppercase", "requires_digit", "requires_symbol"})
+	f.requirePolicyViolation(t, r, "password", []string{"requires_uppercase", "requires_digit", "requires_symbol"})
 }
 
 func TestE2E_PasswordPolicy_ChangePassword(t *testing.T) {
@@ -122,7 +124,8 @@ func TestE2E_PasswordPolicy_ChangesApplyAtTheNextPasswordSet(t *testing.T) {
 		t.Fatalf("create under the lenient policy: %d %s", r.status, r.body)
 	}
 
-	// Strengthen back to the default: the member's existing weak password still signs in.
+	// Strengthen to a stored 12 (a tenant that explicitly carries 12 stays at 12 although the
+	// default is 8 now): the member's existing weak password still signs in.
 	f.setPolicy(t, owner, 12, true)
 	pair := f.loginPair(t, "drift@e2e.test", lenientPw)
 
@@ -213,7 +216,7 @@ func TestE2E_PasswordPolicy_CapabilitiesReportsTheCallersOwnTenantsPolicy(t *tes
 	f := newE2EFixture(t)
 	lenient := f.registerAndLogin(t, "pwcl")
 	strict := f.registerAndLogin(t, "pwcs")
-	def := ports.PasswordRulesDto{MinLength: 12, MaxLength: 1024, RequiresUppercase: true, RequiresLowercase: true, RequiresDigit: true, RequiresSymbol: true}
+	def := ports.PasswordRulesDto{MinLength: 8, MaxLength: 1024, RequiresUppercase: true, RequiresLowercase: true, RequiresDigit: true, RequiresSymbol: true}
 
 	if got := f.capabilitiesPolicy(t, lenient.AccessToken, nil); got != def {
 		t.Fatalf("default policy = %+v, want %+v", got, def)
@@ -245,11 +248,11 @@ func TestE2E_PasswordPolicy_CapabilitiesReportsTheCallersOwnTenantsPolicy(t *tes
 func TestE2E_PasswordPolicy_CapabilitiesIgnoresAnOperatorsActedOnScope(t *testing.T) {
 	f := newE2EFixture(t)
 	target := f.registerAndLogin(t, "pwop")
-	f.setPolicy(t, target, 8, false)
+	f.setPolicy(t, target, 10, false)
 	operator := f.mintPlatformTokenWith(t, nil, true)
 
 	got := f.capabilitiesPolicy(t, operator, map[string]string{"X-Tenant-Id": target.TenantID})
-	if got.MinLength == 8 || got.RequiresUppercase == false {
+	if got.MinLength == 10 || got.RequiresUppercase == false {
 		t.Fatalf("an operator acting in a lenient tenant was shown that tenant's rules: %+v", got)
 	}
 }
@@ -266,5 +269,29 @@ func TestE2E_BacklogProbes_ReadTheRealTables(t *testing.T) {
 	}
 	if age < 0 || rows < 0 {
 		t.Fatalf("negative figures: %v %d", age, rows)
+	}
+}
+
+// Owner ruling 2026-11-21: the default policy is 8 characters with four classes. A
+// tenant that never set a policy accepts an 8-character four-class password on create
+// and change, and refuses 7 with min_length alone.
+func TestE2E_PasswordPolicy_DefaultIsEightCharactersWithFourClasses(t *testing.T) {
+	f := newE2EFixture(t)
+	owner := f.registerAndLogin(t, "pweight")
+	const eight, seven = "Ab1!cdef", "Ab1!cde"
+
+	req := ports.CreateUserRequest{Email: "seven@e2e.test", Password: seven, FirstName: "S", LastName: "V"}
+	f.requirePolicyViolation(t, f.authedJSON(t, http.MethodPost, "/api/v1/users", owner.AccessToken, req), "password", []string{"min_length"})
+	req.Password = eight
+	if r := f.authedJSON(t, http.MethodPost, "/api/v1/users", owner.AccessToken, req); r.status != http.StatusCreated {
+		t.Fatalf("create with 8 characters and four classes: %d %s", r.status, r.body)
+	}
+
+	r := f.authedJSON(t, http.MethodPost, "/api/v1/auth/change-password", owner.AccessToken,
+		ports.ChangePasswordRequest{CurrentPassword: owner.Password, NewPassword: seven})
+	f.requirePolicyViolation(t, r, "new_password", []string{"min_length"})
+	if r := f.authedJSON(t, http.MethodPost, "/api/v1/auth/change-password", owner.AccessToken,
+		ports.ChangePasswordRequest{CurrentPassword: owner.Password, NewPassword: eight}); r.status != http.StatusNoContent {
+		t.Fatalf("change to 8 characters and four classes: %d %s", r.status, r.body)
 	}
 }

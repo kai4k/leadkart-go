@@ -83,3 +83,58 @@ func TestPasswordPolicy_Check_ErrorListsRulesNotThePassword(t *testing.T) {
 		t.Fatalf("error %q should list the failed rules", err.Error())
 	}
 }
+
+// Owner ruling 2026-11-21: the default is 8 characters with all four classes, equal to
+// the validated floor. A tenant with no stored policy (the zero policy) is checked as
+// the default, so it picks the new default up; a stored 12 stays 12.
+func TestDefaultPasswordPolicy_IsEightCharactersWithFourClasses(t *testing.T) {
+	t.Parallel()
+	d := tenant.DefaultPasswordPolicy()
+	if d.MinLength() != 8 {
+		t.Fatalf("default MinLength = %d, want 8", d.MinLength())
+	}
+	if _, err := tenant.NewPasswordPolicy(8, true, true, true, true, 5, 15); err != nil {
+		t.Fatalf("the default's length is not the validated floor: %v", err)
+	}
+	if _, err := tenant.NewPasswordPolicy(7, true, true, true, true, 5, 15); err == nil {
+		t.Fatal("a stored policy below 8 must stay refused")
+	}
+	if !d.RequireUppercase() || !d.RequireLowercase() || !d.RequireDigit() || !d.RequireSymbol() {
+		t.Fatalf("the four classes stay required: %+v", d)
+	}
+
+	twelve, err := tenant.NewPasswordPolicy(12, true, true, true, true, 5, 15)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		name   string
+		policy tenant.PasswordPolicy
+		pw     string
+		rules  []string
+	}{
+		{"default accepts 8 with four classes", d, "Ab1!cdef", nil},
+		{"default refuses 7 with four classes", d, "Ab1!cde", []string{tenant.PasswordRuleMinLength}},
+		{"a tenant with no stored policy accepts 8", tenant.PasswordPolicy{}, "Ab1!cdef", nil},
+		{"a tenant with no stored policy refuses 7", tenant.PasswordPolicy{}, "Ab1!cde", []string{tenant.PasswordRuleMinLength}},
+		{"a stored 12 stays 12 (8 refused)", twelve, "Ab1!cdef", []string{tenant.PasswordRuleMinLength}},
+		{"a stored 12 accepts 12", twelve, "Ab1!cdefghij", nil},
+		{"8 without the classes is still refused", d, "abcdefgh", []string{tenant.PasswordRuleUppercase, tenant.PasswordRuleDigit, tenant.PasswordRuleSymbol}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			err := tc.policy.Check(tc.pw)
+			var v *tenant.PasswordPolicyViolation
+			if tc.rules == nil {
+				if err != nil {
+					t.Fatalf("unexpected %v", err)
+				}
+				return
+			}
+			if !errors.As(err, &v) || !slices.Equal(v.Rules, tc.rules) {
+				t.Fatalf("got %v, want rules %v", err, tc.rules)
+			}
+		})
+	}
+}

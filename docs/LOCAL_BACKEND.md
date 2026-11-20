@@ -34,10 +34,10 @@ LEADKART_RATE_LIMIT__CHANGE_PASSWORD__PER_MINUTE=60
 LEADKART_RATE_LIMIT__CHANGE_PASSWORD__BURST=30
 LEADKART_ARGON2__MAX_PER_CLIENT=8
 LEADKART_ARGON2__QUEUE_TIMEOUT=10s
-# Idle timeout: a session not refreshed for this long ends (default 2h; the web refreshes
-# whenever its 10-minute access token runs out, so only a parked tab idles). A day keeps a
-# development tab signed in overnight.
-LEADKART_REFRESH__SLIDING_TTL=24h
+# Idle timeout: a session not refreshed for this long ends (default 24h, the owner's ruling
+# of 2026-11-21; the web refreshes whenever its 10-minute access token runs out, so only a
+# parked tab idles). Shorten it here only to test the idle path, for example 2m.
+# LEADKART_REFRESH__SLIDING_TTL=24h
 EOF
 task docker:up:full    # postgres:5432, redis:6379, migrate, bootstrap, api (:8080 public, :9090 admin)
 sleep 8; curl -fsS http://localhost:9090/ready ; echo
@@ -109,8 +109,8 @@ NODE_ENV=development
 
 ## 4. Passwords and the forced change (read before writing fixtures)
 
-- **Every password must satisfy the default tenant policy**: at least 12 characters with
-  an upper-case letter, a lower-case letter, a digit and a symbol (a space is not a
+- **Every password must satisfy the default tenant policy**: at least 8 characters (it was
+  12 before the owner's ruling of 2026-11-21) with an upper-case letter, a lower-case letter, a digit and a symbol (a space is not a
   symbol). A weaker one is `422 password_policy_violation` with the failed rule codes in
   `errors.<field>`. The bootstrap SuperAdmin password `LeadKart!Dev2026` (from
   `scripts/devenv`) complies; so do the example passwords here.
@@ -325,7 +325,7 @@ free again after `docker:down`.
 | `docker exec leadkart-api sh` fails | the api image is distroless, no shell | use `docker logs leadkart-api` and `curl :9090/...` |
 | every route answers `403 password_change_required` | the account is flagged | change the password (section 4) |
 | `401 stale_token` right after a password change | by design: every session of that person ended | sign in again |
-| `401 refresh_rejected` with `reason: session_expired` after the app sat unused | the idle timeout (`LEADKART_REFRESH__SLIDING_TTL`, default 2h; this runbook's `.env` block sets 24h) or the 14-day absolute lifetime ended the session | sign in again |
+| `401 refresh_rejected` with `reason: session_expired` after the app sat unused | the idle timeout (`LEADKART_REFRESH__SLIDING_TTL`, default 24h) or the 14-day absolute lifetime ended the session | sign in again |
 | login answers `403 tenant_suspended` (right password) | the person's company is suspended (`POST /tenants/{id}/suspend`); members cannot sign in or refresh until it is reactivated (`POST /tenants/{id}/activate`) | reactivate the tenant as the SuperAdmin |
 | login answers `403 tenant_not_active` (right password) | owner ruling 2026-11-21: only an ACTIVE company's members sign in. The company is `pending` or marked for deletion (`pending_deletion`); a refresh answers `401 refresh_rejected` with `reason: tenant_not_active`. A company registered through `POST /tenants` is created active, so the persona flow in section 5 signs in as before. **A dev database created before this change holds tenants registered as `pending`**: migration `20261121000002_identity_pending_tenants_active` activates them on the next `task docker:up:full` (the `migrate` service), so nothing to do; if you stopped before migrating, run it, or `POST /tenants/{id}/activate` as the SuperAdmin | restore the company (`POST /tenants/{id}/restore`) or activate it, as the SuperAdmin |
 | `POST /tenants/{id}/activate` answers 204 for a company you just registered | it is already active (registration creates it active): activating an active company changes nothing, no event | none |

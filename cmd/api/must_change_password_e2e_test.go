@@ -73,7 +73,7 @@ func TestE2E_MustChangePassword_BlocksEveryRouteUntilThePasswordIsChanged(t *tes
 	}
 	// The forced-change screen shows the rules that bind the new password: the
 	// caller's own tenant's policy (here the system default).
-	if want := (ports.PasswordRulesDto{MinLength: 12, MaxLength: 1024, RequiresUppercase: true, RequiresLowercase: true, RequiresDigit: true, RequiresSymbol: true}); cd.PasswordPolicy != want {
+	if want := (ports.PasswordRulesDto{MinLength: 8, MaxLength: 1024, RequiresUppercase: true, RequiresLowercase: true, RequiresDigit: true, RequiresSymbol: true}); cd.PasswordPolicy != want {
 		t.Fatalf("capabilities.password_policy = %+v, want %+v", cd.PasswordPolicy, want)
 	}
 

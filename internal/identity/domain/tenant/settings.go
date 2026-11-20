@@ -11,10 +11,13 @@ import (
 
 // PasswordPolicy defines per-tenant password rules (security.md). A tenant admin
 // may choose any values inside the validated bounds below, INCLUDING rules weaker
-// than [DefaultPasswordPolicy] (12 characters, all four classes): MinLength may be
-// as low as 8 (NIST SP 800-63B floor) with any subset of the character classes,
-// none included. The bounds are floors and ceilings, not "never weaker than the
-// default": MinLength 8-128, MaxFailedAttempts 3-50, LockoutMinutes 0-1440.
+// than [DefaultPasswordPolicy] (8 characters, all four classes): the classes may be
+// any subset, none included, and MinLength may be as low as 8 (the NIST SP 800-63B
+// floor), which is also the default's length. The bounds are floors and ceilings:
+// MinLength 8-128, MaxFailedAttempts 3-50, LockoutMinutes 0-1440. A tenant with no
+// stored policy (a zero policy: every tenant that never edited it) is checked as the
+// default, so it follows the default whenever the default changes; a tenant whose
+// stored policy says 12 stays at 12.
 //
 // MaxFailedAttempts and LockoutMinutes are stored and returned but NOT ENFORCED:
 // login uses the fixed platform thresholds ([person.MaxFailedLogins] failures inside
@@ -74,11 +77,12 @@ func NewPasswordPolicy(minLength int, requireUppercase, requireLowercase, requir
 	}, nil
 }
 
-// DefaultPasswordPolicy returns the system default: minLength=12,
-// all character classes required, 5 attempts, 15 min lockout.
+// DefaultPasswordPolicy returns the system default: minLength=8 (owner ruling
+// 2026-11-21; it was 12, and 8 is also the validated floor), all four character
+// classes required, 5 attempts, 15 min lockout (the last two are stored, not enforced).
 func DefaultPasswordPolicy() PasswordPolicy {
 	return PasswordPolicy{
-		minLength:         12,
+		minLength:         8,
 		requireUppercase:  true,
 		requireLowercase:  true,
 		requireDigit:      true,

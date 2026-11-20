@@ -140,7 +140,7 @@ These are known, plain-language limits of this release. None is a bug to fix bef
 
 - **A misconfigured proxy puts everyone in one rate-limit bucket.** Per-client limits, the failed-login lockout and the refresh grace binding all key on the client address the api derives from `X-Forwarded-For`. If `LEADKART_HTTP__TRUSTED_PROXIES` or the BFF's `XFF_DEPTH` is wrong, every user shares one key: the limits throttle everybody together and the grace binding proves nothing (items 3, 7, 10).
 - **Grace-window takeover from behind the victim's NAT.** The refresh grace replay (30 s, at most 3 times) is bound to the client ADDRESS, so someone who holds a just-rotated token AND sits behind the same public address as its owner (one office, one carrier NAT) can still replay it inside the window.
-- **Sessions last up to 14 days** from login (the absolute lifetime), refreshed or not; the idle timeout (2 h default, pending the owner) ends an unused one sooner.
+- **Sessions last up to 14 days** from login (the absolute lifetime), refreshed or not; the idle timeout (24 h, the owner's ruling of 2026-11-21) ends a session unused for that long sooner.
 - **On deploy, sessions older than 14 days end and flagged accounts must change their password.** The absolute lifetime counts from each family's creation, so every family created more than 14 days ago is refused at its next refresh (`session_expired`), and every person still flagged `must_change_password` is forced to change it at the next sign-in (owner decision (a) in ADR 0069).
 - **A security stamp can be 30 s stale.** An old access token dies at once when Redis is reachable (the api evicts the cached stamp after the commit); with the cache unreachable it lives up to 30 s.
 - **Rotating the JWT signing key signs some people out** (item 8: the grace successor derives from it), and access tokens issued before a **tenant suspension live up to 600 s**.
@@ -171,5 +171,5 @@ These are known, plain-language limits of this release. None is a bug to fix bef
 | `LEADKART_IDENTITY__LOCKOUT_KEY` | none (required in production) | base64, at least 32 bytes |
 | `LEADKART_REFRESH__GRACE_WINDOW` | 30s | 0 (strict rotation) .. 120s, below `SLIDING_TTL` |
 | `LEADKART_REFRESH__ABSOLUTE_TTL` | 336h (14 days; a session ends this long after its login) | above `SLIDING_TTL` |
-| `LEADKART_REFRESH__SLIDING_TTL` | 2h: the IDLE timeout (a session not refreshed for this long ends, 401 `session_expired`; a rotation renews it, never past `ABSOLUTE_TTL`). Default pending the owner's confirmation (ADR 0069) | above `GRACE_WINDOW`, below `ABSOLUTE_TTL` |
+| `LEADKART_REFRESH__SLIDING_TTL` | 24h: the IDLE timeout (a session unused for this long ends, 401 `session_expired`; a rotation renews it, never past `ABSOLUTE_TTL`). The owner's ruling of 2026-11-21 (it was 2h) | above `GRACE_WINDOW`, below `ABSOLUTE_TTL` |
 | `GOMEMLIMIT` | 900MiB (compose) | Go runtime setting |

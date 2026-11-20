@@ -158,13 +158,13 @@ const MaxRefreshGraceWindow = 120 * time.Second
 //     past it answers 401 refresh_rejected with reason session_expired and the
 //     family is revoked with reason absolute_ttl). It is also the lifetime of each
 //     refresh token, clamped to that deadline.
-//   - SlidingTTL (default 2h, LEADKART_REFRESH__SLIDING_TTL): the IDLE timeout. Each
+//   - SlidingTTL (default 24h, LEADKART_REFRESH__SLIDING_TTL): the IDLE timeout. Each
 //     refresh token lives SlidingTTL from its issue (min(issued + SlidingTTL, family
 //     created + AbsoluteTTL)); a rotation renews it, a grace replay does not. A
 //     session not refreshed for that long answers 401 refresh_rejected with reason
 //     session_expired and the family is revoked with reason idle_timeout. Validated:
-//     positive, shorter than AbsoluteTTL, longer than GraceWindow. The 2h default is
-//     pending the owner's confirmation (ADR 0069).
+//     positive, shorter than AbsoluteTTL, longer than GraceWindow. The 24h default is
+//     the owner's ruling of 2026-11-21 ("a session unused for 24 hours ends"; it was 2h).
 //   - GraceWindow (default 30s, LEADKART_REFRESH__GRACE_WINDOW, 0 = strict
 //     rotation, at most [MaxRefreshGraceWindow]): ADR 0068 D10.
 type RefreshConfig struct {
@@ -252,7 +252,7 @@ func Defaults() AppConfig {
 		},
 		Refresh: RefreshConfig{
 			AbsoluteTTL: 14 * 24 * time.Hour,
-			SlidingTTL:  2 * time.Hour,
+			SlidingTTL:  24 * time.Hour,
 			GraceWindow: 30 * time.Second,
 			FamilyCap:   5,
 		},

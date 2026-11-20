@@ -157,8 +157,8 @@ services:
       LEADKART_JWT__SIGNING_KEY: "${JWT_SIGNING_KEY}"
       LEADKART_REFRESH__ABSOLUTE_TTL: "336h"
       # Idle timeout (Refresh.SlidingTTL): a session not refreshed for this long ends
-      # (ADR 0069: the 2h default is pending the owner's confirmation).
-      LEADKART_REFRESH__SLIDING_TTL: "${LEADKART_REFRESH__SLIDING_TTL:-2h}"
+      # (owner ruling 2026-11-21: 24 hours).
+      LEADKART_REFRESH__SLIDING_TTL: "${LEADKART_REFRESH__SLIDING_TTL:-24h}"
       # Bounds on concurrent Argon2id work (docker/.env.example "Argon2 concurrency").
       LEADKART_ARGON2__MAX_CONCURRENT: "${LEADKART_ARGON2__MAX_CONCURRENT:-16}"
       LEADKART_ARGON2__QUEUE_TIMEOUT: "${LEADKART_ARGON2__QUEUE_TIMEOUT:-2s}"

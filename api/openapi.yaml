@@ -259,7 +259,7 @@ paths:
         it was refreshed: the first refresh after that answers `401 refresh_rejected`
         with `reason: session_expired` (sign in again) and the family is revoked
         (`absolute_ttl`). A session also ends when it sits IDLE: each refresh token lives
-        `Refresh.SlidingTTL` (default 2 hours, `LEADKART_REFRESH__SLIDING_TTL`) from its
+        `Refresh.SlidingTTL` (default 24 hours, `LEADKART_REFRESH__SLIDING_TTL`; a session unused for 24 hours ends) from its
         issue, never past the absolute deadline, and every rotation renews it (a grace
         replay does not). The first refresh after the token ran out answers the same
         `401 refresh_rejected` with `reason: session_expired` and the family is revoked
@@ -470,7 +470,10 @@ paths:
         `password_policy` is the password policy that binds the caller: the policy
         of the caller's OWN tenant (the tenant of the token, never an operator's
         acted-on `X-Tenant-Id`, which this route ignores), the system default when
-        the tenant has none. It is the same policy `POST /auth/change-password`
+        the tenant has none. The system default is 8 characters minimum with an upper-case
+        letter, a lower-case letter, a digit and a symbol (owner ruling 2026-11-21; it was 12;
+        8 is also the lowest minimum a tenant may set); a tenant that stored its own policy,
+        including a stored 12, keeps it. It is the same policy `POST /auth/change-password`
         enforces, so the change-password page (including the forced screen) can show
         the rules before the first attempt. It is read fresh on every call, not from
         the cached bundle. An impersonation session reads this route and sees the
@@ -614,7 +617,8 @@ paths:
         signs in at once. `pending` is produced by no route today.
 
         The first admin's temporary password is checked against the DEFAULT password policy
-        (the new tenant has no stored policy yet): `422 password_policy_violation` with
+        (the new tenant has no stored policy yet; default: 8 characters minimum with an
+        upper-case letter, a lower-case letter, a digit and a symbol): `422 password_policy_violation` with
         `errors.admin_password`. Nothing is created on a violation.
       security:
         - BearerAuth: []
@@ -4466,7 +4470,9 @@ components:
         password. A violation changes nothing (a reset token stays valid, the session stays
         alive). Which tenant's policy applies is stated on each operation. The policy is
         enforced when a password is SET: a weakened policy never locks an existing member out
-        and a strengthened one applies at the next password set, not at login.
+        and a strengthened one applies at the next password set, not at login. The system
+        default, used by a tenant that never stored a policy, is 8 characters minimum (so
+        `min_length` is the failure for 7 characters) with all four classes.
       content:
         application/json:
           schema: { $ref: '#/components/schemas/ErrorResponse' }
@@ -4565,14 +4571,14 @@ components:
       required: [token, new_password]
       properties:
         token:        { type: string }
-        new_password: { type: string, format: password, minLength: 12 }
+        new_password: { type: string, format: password, minLength: 8 }
 
     ChangePasswordRequest:
       type: object
       required: [current_password, new_password]
       properties:
         current_password: { type: string, format: password }
-        new_password:     { type: string, format: password, minLength: 12 }
+        new_password:     { type: string, format: password, minLength: 8 }
 
     RequestEmailChangeRequest:
       type: object
@@ -4697,7 +4703,7 @@ components:
         legal_name:       { type: string, maxLength: 200 }
         display_name:     { type: string, maxLength: 200 }
         admin_email:      { type: string, format: email }
-        admin_password:   { type: string, format: password, minLength: 12 }
+        admin_password:   { type: string, format: password, minLength: 8 }
         admin_first_name: { type: string }
         admin_last_name:  { type: string }
 
@@ -4882,7 +4888,7 @@ components:
       required: [email, password, first_name, last_name]
       properties:
         email:      { type: string, format: email }
-        password:   { type: string, format: password, minLength: 12 }
+        password:   { type: string, format: password, minLength: 8 }
         first_name: { type: string }
         last_name:  { type: string }
 

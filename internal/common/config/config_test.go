@@ -30,6 +30,25 @@ func minRequired() map[string]string {
 	}
 }
 
+// Owner ruling 2026-11-21: "a session unused for 24 hours ends" (idle timeout), the
+// absolute session length stays 14 days, and the default still passes validation
+// (SlidingTTL must exceed GraceWindow and stay below AbsoluteTTL).
+//
+// arch-test:serial — uses t.Setenv (incompatible with t.Parallel)
+func TestLoad_RefreshLifetimeDefaults(t *testing.T) {
+	setEnv(t, minRequired())
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Refresh.SlidingTTL != 24*time.Hour {
+		t.Fatalf("default Refresh.SlidingTTL (idle timeout) = %v, want 24h", cfg.Refresh.SlidingTTL)
+	}
+	if cfg.Refresh.AbsoluteTTL != 14*24*time.Hour {
+		t.Fatalf("default Refresh.AbsoluteTTL = %v, want 336h (14 days)", cfg.Refresh.AbsoluteTTL)
+	}
+}
+
 // arch-test:serial — uses t.Setenv (incompatible with t.Parallel)
 func TestLoad_DefaultsApplied(t *testing.T) {
 	setEnv(t, minRequired())
