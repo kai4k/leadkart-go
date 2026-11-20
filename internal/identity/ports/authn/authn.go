@@ -104,7 +104,11 @@ const (
 
 func writeError(w http.ResponseWriter, status int, code, message string) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.Header().Set("WWW-Authenticate", `Bearer realm="leadkart"`)
+	// RFC 6750: the challenge belongs to 401 only. The BFF reads 401 + this header as
+	// "refresh silently", so a 403 or 400 must not carry it.
+	if status == http.StatusUnauthorized {
+		w.Header().Set("WWW-Authenticate", `Bearer realm="leadkart"`)
+	}
 	w.WriteHeader(status)
 	// {"error":"<code>","message":"<msg>"} — same shape as ports.ErrorResponse.
 	body := `{"error":"` + code + `","message":"` + message + `"}`

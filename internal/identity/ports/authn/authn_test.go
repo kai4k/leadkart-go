@@ -283,6 +283,10 @@ func TestRequirePermission_ClaimsLackPermission_Returns403(t *testing.T) {
 	if s.called {
 		t.Fatal("next ran despite missing permission")
 	}
+	// The BFF reads 401 + WWW-Authenticate as "refresh silently": a 403 must not carry it.
+	if got := rec.Header().Get("WWW-Authenticate"); got != "" {
+		t.Fatalf("WWW-Authenticate on a 403 = %q, want none", got)
+	}
 	body, _ := io.ReadAll(rec.Body)
 	if !strings.Contains(string(body), "forbidden") {
 		t.Fatalf("body: got %q want forbidden code", string(body))

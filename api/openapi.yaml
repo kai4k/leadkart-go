@@ -19,8 +19,12 @@ info:
     LeadKart Identity + Platform API. Multi-tenant SaaS for Indian PCD pharma.
 
     **Auth:** Bearer JWT in `Authorization` header. Tokens obtained via
-    `POST /api/v1/auth/login`. Access tokens TTL ~10 minutes; refresh via
-    `POST /api/v1/auth/refresh` with the refresh token from the login body.
+    `POST /api/v1/auth/login`. Access tokens live 600 seconds (10 minutes,
+    `jwt.AccessTokenTTL`); `access_token_expires_at` in the login and refresh body is
+    authoritative, so refresh before it. Refresh via `POST /api/v1/auth/refresh` with
+    the refresh token from the login body. `401` with `WWW-Authenticate: Bearer` means
+    re-authenticate (`unauthenticated` or `stale_token`); a `403` or `400` never carries
+    the challenge.
     A change to a member's roles, permission overrides or status (assign or revoke a
     role, replace overrides, deactivate, reactivate, approve a permission request)
     rotates that person's security stamp: their next request with the old access
@@ -4424,7 +4428,7 @@ components:
       properties:
         access_token:   { type: string }
         refresh_token:  { type: string }
-        access_token_expires_at: { type: string, format: date-time }
+        access_token_expires_at: { type: string, format: date-time, description: 'UTC expiry of access_token (issued + 600 s).' }
         token_type:     { type: string, enum: [Bearer] }
         must_change_password:
           type: boolean
