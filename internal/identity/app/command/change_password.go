@@ -6,9 +6,11 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/leadkart/leadkart-go/internal/common/pg"
 	"github.com/leadkart/leadkart-go/internal/identity/app/argon2"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/passwordpolicy"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/refreshtoken"
 )
 
 // ChangePasswordCommand carries the plaintext credentials. Per
@@ -70,12 +72,16 @@ var ErrPersonIDRequired = errors.New("change_password: person id required")
 //  4. Reject same-as-current (no-op + audit-noise reduction).
 //  5. Run breach check on new password.
 //  6. Hash new password with Argon2id.
-//  7. UpdateByID closure: Person.ChangePassword(newHash) — rotates
-//     SecurityStamp + emits PasswordChangedEvent. Outbox subscriber
-//     revokes every refresh-token family for this Person across
-//     tenants (logout-all-sessions choreography).
+//  7. In ONE unit of work: UpdateByID closure Person.ChangePassword(newHash)
+//     — rotates SecurityStamp + emits PasswordChangedEvent — and then every
+//     refresh-token family of the Person is revoked (reason "password_changed").
+//     The access token carries no family id, so the caller's own session is
+//     ended too: the BFF signs in again with the new password. The outbox
+//     subscriber that reacts to the event stays as an idempotent backstop.
 type ChangePasswordHandler struct {
 	persons       person.Repository
+	families      refreshtoken.Repository
+	uow           pg.UnitOfWork
 	breachChecker passwordpolicy.Checker
 	now           func() time.Time
 }
@@ -84,9 +90,15 @@ type ChangePasswordHandler struct {
 // non-nil — a nil checker silently weakens security per security.md.
 // `now` is the explicit time source per the clock-injection refactor.
 // Nil → time.Now.
-func NewChangePasswordHandler(persons person.Repository, breachChecker passwordpolicy.Checker, now func() time.Time) ChangePasswordHandler {
+func NewChangePasswordHandler(persons person.Repository, families refreshtoken.Repository, uow pg.UnitOfWork, breachChecker passwordpolicy.Checker, now func() time.Time) ChangePasswordHandler {
 	if persons == nil {
 		panic("command: NewChangePasswordHandler persons repository required")
+	}
+	if families == nil {
+		panic("command: NewChangePasswordHandler families repository required")
+	}
+	if uow == nil {
+		panic("command: NewChangePasswordHandler unit of work required")
 	}
 	if breachChecker == nil {
 		panic("command: NewChangePasswordHandler breach checker required (use passwordpolicy.Noop only in tests)")
@@ -96,6 +108,8 @@ func NewChangePasswordHandler(persons person.Repository, breachChecker passwordp
 	}
 	return ChangePasswordHandler{
 		persons:       persons,
+		families:      families,
+		uow:           uow,
 		breachChecker: breachChecker,
 		now:           now,
 	}
@@ -169,23 +183,29 @@ func (h ChangePasswordHandler) Handle(ctx context.Context, cmd ChangePasswordCom
 		return fmt.Errorf("change_password: wrap new hash: %w", err)
 	}
 
-	// 7. UpdateByID — aggregate handles the SecurityStamp rotation +
-	// event recording. Repository drains events into outbox in the
-	// same tx.
+	// 7. One unit of work: the password write + stamp rotation (aggregate +
+	// outbox event) and the revocation of every refresh family. A crash or a
+	// failure between the two rolls both back; the old password stays valid
+	// together with the old sessions, never the new password with the old sessions.
 	now := h.now()
-	err = h.persons.UpdateByID(ctx, cmd.PersonID, func(p *person.Person) (bool, error) {
-		if err := p.ChangePassword(newHash, now); err != nil {
-			return false, err
+	err = h.uow.WithinTx(ctx, pg.TxScopePlatform, func(ctx context.Context) error {
+		if err := h.persons.UpdateByID(ctx, cmd.PersonID, func(p *person.Person) (bool, error) {
+			if err := p.ChangePassword(newHash, now); err != nil {
+				return false, err
+			}
+			// Pending password-reset (if any) is invalidated by the direct
+			// change — no point letting an emailed token unlock a password
+			// the user just rotated. Aggregate's CancelPasswordReset is
+			// idempotent (no-op when no pending), so this is safe to
+			// always call.
+			if err := p.CancelPasswordReset("password-changed-directly", now); err != nil {
+				return false, err
+			}
+			return true, nil
+		}); err != nil {
+			return err
 		}
-		// Pending password-reset (if any) is invalidated by the direct
-		// change — no point letting an emailed token unlock a password
-		// the user just rotated. Aggregate's CancelPasswordReset is
-		// idempotent (no-op when no pending), so this is safe to
-		// always call.
-		if err := p.CancelPasswordReset("password-changed-directly", now); err != nil {
-			return false, err
-		}
-		return true, nil
+		return revokeAllFamilies(ctx, h.families, cmd.PersonID, "password_changed", now)
 	})
 	if err != nil {
 		return fmt.Errorf("change_password: persist: %w", err)

@@ -42,8 +42,12 @@ info:
     `POST /api/v1/auth/change-password` and `GET /api/v1/auth/me/capabilities`
     answers `403` with `error: password_change_required` (no `WWW-Authenticate`:
     this is not a session problem, do not refresh). Changing the password rotates
-    the security stamp, so the flagged token answers `401 stale_token` afterwards and
-    the next login or refresh carries no flag. Login, refresh, logout and the
+    the security stamp AND ends every refresh session of the person in the same
+    transaction (the access token carries no session id, so the caller's own session
+    is not spared): the flagged token answers `401 stale_token`, every refresh token
+    the person held answers `401`, and the next LOGIN with the new password carries no
+    flag. A password reset (`POST /api/v1/auth/reset-password`) ends all sessions the
+    same way. Login, refresh, logout and the
     emailed-token flows are anonymous and unaffected. Tokens minted before the
     claim existed carry no flag.
 
@@ -286,7 +290,12 @@ paths:
       description: |
         Current password verified even when authenticated (security.md "Password change").
         Allowed while `must_change_password` is pending: this is the way out of the
-        forced-change state. The change rotates the security stamp and clears the flag.
+        forced-change state. The change rotates the security stamp, clears the flag and,
+        in the same transaction, revokes EVERY refresh session of the person (the access
+        token carries no session id, so the caller's own session is ended too).
+        Contract: `204`; the access token used is now `401 stale_token`; every refresh
+        token the person held is now `401` on refresh; the caller signs in again with the
+        new password, and that login (and its refreshes) carries no flag.
       requestBody:
         required: true
         content:

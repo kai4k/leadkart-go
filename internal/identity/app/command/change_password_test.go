@@ -12,6 +12,7 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/domain/passwordpolicy"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person/persontest"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/refreshtoken/refreshtokentest"
 )
 
 // seedPersonRepo returns a fresh persontest fake seeded with p (if non-nil).
@@ -53,7 +54,7 @@ func TestChangePassword_Succeeds(t *testing.T) {
 	currentPlain := "correct horse battery staple"
 	p := newPersonWithPassword(t, currentPlain)
 	repo := seedPersonRepo(t, p)
-	h := command.NewChangePasswordHandler(repo, passwordpolicy.Noop{}, func() time.Time { return testNow })
+	h := command.NewChangePasswordHandler(repo, refreshtokentest.NewFakeRepository(), fakeUoW{}, passwordpolicy.Noop{}, func() time.Time { return testNow })
 
 	err := h.Handle(t.Context(), command.ChangePasswordCommand{
 		PersonID:        p.ID(),
@@ -81,7 +82,7 @@ func TestChangePassword_RejectsIncorrectCurrentPassword(t *testing.T) {
 	p := newPersonWithPassword(t, "real-current-pw")
 	originalHash := p.PasswordHash().String()
 	repo := seedPersonRepo(t, p)
-	h := command.NewChangePasswordHandler(repo, passwordpolicy.Noop{}, func() time.Time { return testNow })
+	h := command.NewChangePasswordHandler(repo, refreshtokentest.NewFakeRepository(), fakeUoW{}, passwordpolicy.Noop{}, func() time.Time { return testNow })
 
 	err := h.Handle(t.Context(), command.ChangePasswordCommand{
 		PersonID:        p.ID(),
@@ -102,7 +103,7 @@ func TestChangePassword_PersonNotFound_ReturnsIncorrectCurrentPassword(t *testin
 	// "no such person" collapses to "wrong password" to defeat ID-enumeration.
 	t.Parallel()
 	repo := seedPersonRepo(t, nil) // no Person seeded
-	h := command.NewChangePasswordHandler(repo, passwordpolicy.Noop{}, func() time.Time { return testNow })
+	h := command.NewChangePasswordHandler(repo, refreshtokentest.NewFakeRepository(), fakeUoW{}, passwordpolicy.Noop{}, func() time.Time { return testNow })
 
 	err := h.Handle(t.Context(), command.ChangePasswordCommand{
 		PersonID:        person.ID("p-does-not-exist"),
@@ -121,7 +122,7 @@ func TestChangePassword_RejectsBreachedPassword(t *testing.T) {
 	originalHash := p.PasswordHash().String()
 	repo := seedPersonRepo(t, p)
 	// Offline list — "password" is in defaultBreachedSet.
-	h := command.NewChangePasswordHandler(repo, adapters.NewOfflinePasswordList(), func() time.Time { return testNow })
+	h := command.NewChangePasswordHandler(repo, refreshtokentest.NewFakeRepository(), fakeUoW{}, adapters.NewOfflinePasswordList(), func() time.Time { return testNow })
 
 	err := h.Handle(t.Context(), command.ChangePasswordCommand{
 		PersonID:        p.ID(),
@@ -143,7 +144,7 @@ func TestChangePassword_RejectsSameAsCurrent(t *testing.T) {
 	p := newPersonWithPassword(t, plain)
 	originalHash := p.PasswordHash().String()
 	repo := seedPersonRepo(t, p)
-	h := command.NewChangePasswordHandler(repo, passwordpolicy.Noop{}, func() time.Time { return testNow })
+	h := command.NewChangePasswordHandler(repo, refreshtokentest.NewFakeRepository(), fakeUoW{}, passwordpolicy.Noop{}, func() time.Time { return testNow })
 
 	err := h.Handle(t.Context(), command.ChangePasswordCommand{
 		PersonID:        p.ID(),
@@ -169,7 +170,7 @@ func TestChangePassword_AnonymisedPerson_ReturnsIncorrectCurrentPassword(t *test
 		t.Fatalf("Anonymise: %v", err)
 	}
 	repo := seedPersonRepo(t, p)
-	h := command.NewChangePasswordHandler(repo, passwordpolicy.Noop{}, func() time.Time { return testNow })
+	h := command.NewChangePasswordHandler(repo, refreshtokentest.NewFakeRepository(), fakeUoW{}, passwordpolicy.Noop{}, func() time.Time { return testNow })
 
 	err := h.Handle(t.Context(), command.ChangePasswordCommand{
 		PersonID:        p.ID(),
@@ -184,7 +185,7 @@ func TestChangePassword_AnonymisedPerson_ReturnsIncorrectCurrentPassword(t *test
 func TestChangePassword_RejectsZeroPersonID(t *testing.T) {
 	t.Parallel()
 	repo := seedPersonRepo(t, nil)
-	h := command.NewChangePasswordHandler(repo, passwordpolicy.Noop{}, func() time.Time { return testNow })
+	h := command.NewChangePasswordHandler(repo, refreshtokentest.NewFakeRepository(), fakeUoW{}, passwordpolicy.Noop{}, func() time.Time { return testNow })
 
 	err := h.Handle(t.Context(), command.ChangePasswordCommand{
 		PersonID:        person.ID(""),
@@ -200,7 +201,7 @@ func TestChangePassword_RejectsEmptyNewPassword(t *testing.T) {
 	t.Parallel()
 	p := newPersonWithPassword(t, "real-current-pw")
 	repo := seedPersonRepo(t, p)
-	h := command.NewChangePasswordHandler(repo, passwordpolicy.Noop{}, func() time.Time { return testNow })
+	h := command.NewChangePasswordHandler(repo, refreshtokentest.NewFakeRepository(), fakeUoW{}, passwordpolicy.Noop{}, func() time.Time { return testNow })
 
 	err := h.Handle(t.Context(), command.ChangePasswordCommand{
 		PersonID:        p.ID(),
@@ -221,7 +222,25 @@ func TestNewChangePasswordHandler_PanicsOnNilDeps(t *testing.T) {
 				t.Error("expected panic on nil persons repo")
 			}
 		}()
-		_ = command.NewChangePasswordHandler(nil, passwordpolicy.Noop{}, func() time.Time { return testNow }) // arch-test:ignore-err - test fixture setup
+		_ = command.NewChangePasswordHandler(nil, refreshtokentest.NewFakeRepository(), fakeUoW{}, passwordpolicy.Noop{}, func() time.Time { return testNow }) // arch-test:ignore-err - test fixture setup
+	})
+	t.Run("nil families", func(t *testing.T) {
+		t.Parallel()
+		defer func() {
+			if r := recover(); r == nil {
+				t.Error("expected panic on nil families repo")
+			}
+		}()
+		_ = command.NewChangePasswordHandler(persontest.NewFakeRepository(), nil, fakeUoW{}, passwordpolicy.Noop{}, func() time.Time { return testNow }) // arch-test:ignore-err - test fixture setup
+	})
+	t.Run("nil unit of work", func(t *testing.T) {
+		t.Parallel()
+		defer func() {
+			if r := recover(); r == nil {
+				t.Error("expected panic on nil unit of work")
+			}
+		}()
+		_ = command.NewChangePasswordHandler(persontest.NewFakeRepository(), refreshtokentest.NewFakeRepository(), nil, passwordpolicy.Noop{}, func() time.Time { return testNow }) // arch-test:ignore-err - test fixture setup
 	})
 	t.Run("nil breach checker", func(t *testing.T) {
 		t.Parallel()
@@ -230,6 +249,6 @@ func TestNewChangePasswordHandler_PanicsOnNilDeps(t *testing.T) {
 				t.Error("expected panic on nil breach checker")
 			}
 		}()
-		_ = command.NewChangePasswordHandler(persontest.NewFakeRepository(), nil, func() time.Time { return testNow }) // arch-test:ignore-err - test fixture setup
+		_ = command.NewChangePasswordHandler(persontest.NewFakeRepository(), refreshtokentest.NewFakeRepository(), fakeUoW{}, nil, func() time.Time { return testNow }) // arch-test:ignore-err - test fixture setup
 	})
 }

@@ -8,9 +8,11 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/leadkart/leadkart-go/internal/common/pg"
 	"github.com/leadkart/leadkart-go/internal/identity/app/argon2"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/passwordpolicy"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/refreshtoken"
 )
 
 // ConfirmPasswordResetCommand carries the user-presented plaintext
@@ -36,15 +38,23 @@ var ErrResetTokenInvalid = errors.New("confirm_password_reset: token invalid or 
 // ConfirmPasswordResetHandler runs the confirm-side of the reset flow.
 type ConfirmPasswordResetHandler struct {
 	persons       person.Repository
+	families      refreshtoken.Repository
+	uow           pg.UnitOfWork
 	breachChecker passwordpolicy.Checker
 	now           func() time.Time
 }
 
 // NewConfirmPasswordResetHandler wires the handler. `now` is the
 // explicit time source per the clock-injection refactor. Nil → time.Now.
-func NewConfirmPasswordResetHandler(persons person.Repository, breachChecker passwordpolicy.Checker, now func() time.Time) ConfirmPasswordResetHandler {
+func NewConfirmPasswordResetHandler(persons person.Repository, families refreshtoken.Repository, uow pg.UnitOfWork, breachChecker passwordpolicy.Checker, now func() time.Time) ConfirmPasswordResetHandler {
 	if persons == nil {
 		panic("command: NewConfirmPasswordResetHandler persons repository required")
+	}
+	if families == nil {
+		panic("command: NewConfirmPasswordResetHandler families repository required")
+	}
+	if uow == nil {
+		panic("command: NewConfirmPasswordResetHandler unit of work required")
 	}
 	if breachChecker == nil {
 		panic("command: NewConfirmPasswordResetHandler breach checker required")
@@ -54,6 +64,8 @@ func NewConfirmPasswordResetHandler(persons person.Repository, breachChecker pas
 	}
 	return ConfirmPasswordResetHandler{
 		persons:       persons,
+		families:      families,
+		uow:           uow,
 		breachChecker: breachChecker,
 		now:           now,
 	}
@@ -71,7 +83,10 @@ func NewConfirmPasswordResetHandler(persons person.Repository, breachChecker pas
 //  7. Hash new password.
 //  8. UpdateByID closure: Person.ConfirmPasswordReset(presentedHash,
 //     newHash). Aggregate enforces token mismatch + expiry checks +
-//     rotates SecurityStamp + clears pending reset.
+//     rotates SecurityStamp + clears pending reset. In the SAME unit of
+//     work every refresh family of the Person is revoked (reason
+//     "password_reset"): whoever held the old credential is signed out
+//     before the new password can be used.
 func (h ConfirmPasswordResetHandler) Handle(ctx context.Context, cmd ConfirmPasswordResetCommand) error {
 	if cmd.RawToken == "" {
 		return ErrResetTokenInvalid
@@ -126,11 +141,16 @@ func (h ConfirmPasswordResetHandler) Handle(ctx context.Context, cmd ConfirmPass
 	}
 
 	now := h.now()
-	if err := h.persons.UpdateByID(ctx, p.ID(), func(loaded *person.Person) (bool, error) {
-		if err := loaded.ConfirmPasswordReset(tokenHash, newHash, now); err != nil {
-			return false, err
+	if err := h.uow.WithinTx(ctx, pg.TxScopePlatform, func(ctx context.Context) error {
+		if err := h.persons.UpdateByID(ctx, p.ID(), func(loaded *person.Person) (bool, error) {
+			if err := loaded.ConfirmPasswordReset(tokenHash, newHash, now); err != nil {
+				return false, err
+			}
+			return true, nil
+		}); err != nil {
+			return err
 		}
-		return true, nil
+		return revokeAllFamilies(ctx, h.families, p.ID(), "password_reset", now)
 	}); err != nil {
 		// Domain-layer rejections (token mismatch, expired, no pending
 		// reset) collapse to ErrResetTokenInvalid per the same

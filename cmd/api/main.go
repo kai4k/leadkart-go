@@ -681,11 +681,11 @@ func buildIdentityApp(pool *pgxpool.Pool, hybridCache *cache.HybridCache, cfg co
 				Login:                command.NewLoginHandler(authRouter, families, tenants, persons, permResolver, issuer, now, cfg.Refresh.AbsoluteTTL, dummyHash, newFamilyID, adapters.NewInMemoryPhantomLockout(phantomLockoutMaxEntries)),
 				Refresh:              command.NewRefreshHandler(families, persons, memberships, tenants, permResolver, issuer, now, cfg.Refresh.AbsoluteTTL),
 				Logout:               command.NewLogoutHandler(families, now),
-				ChangePassword:       command.NewChangePasswordHandler(persons, breachChecker, now),
+				ChangePassword:       command.NewChangePasswordHandler(persons, families, tx, breachChecker, now),
 				RevokeSession:        command.NewRevokeSessionHandler(families, now),
 				RevokeAllSessions:    command.NewRevokeAllSessionsHandler(families, now),
 				RequestPasswordReset: command.NewRequestPasswordResetHandler(persons, now),
-				ConfirmPasswordReset: command.NewConfirmPasswordResetHandler(persons, breachChecker, now),
+				ConfirmPasswordReset: command.NewConfirmPasswordResetHandler(persons, families, tx, breachChecker, now),
 				RequestEmailChange:   command.NewRequestEmailChangeHandler(persons, now),
 				ConfirmEmailChange:   command.NewConfirmEmailChangeHandler(persons, now),
 

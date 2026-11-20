@@ -206,7 +206,21 @@ func (h RefreshHandler) Handle(ctx context.Context, cmd RefreshCommand) (Refresh
 		return RefreshResult{}, fmt.Errorf("refresh: resolve permissions: %w", err)
 	}
 
-	// 7. Issue new JWT.
+	// 7. Re-read the family AFTER the person was read. A password change revokes
+	//    every family in the transaction that rotates the stamp; if the person
+	//    read above already saw the new stamp, the revocation is visible here too,
+	//    and a family that was rotated a moment before the change must not turn
+	//    into an unflagged token for the new stamp. If the person read saw the old
+	//    stamp, the token carries it and is stale on arrival.
+	current, err := h.families.GetByID(ctx, family.ID())
+	if err != nil {
+		return RefreshResult{}, fmt.Errorf("refresh: re-read family: %w", err)
+	}
+	if current.IsRevoked() {
+		return RefreshResult{}, ErrRefreshRejected
+	}
+
+	// 8. Issue new JWT.
 	access, err := h.jwt.Issue(jwt.IssueArgs{
 		PersonID:      p.ID().String(),
 		TenantID:      tn.ID().String(),

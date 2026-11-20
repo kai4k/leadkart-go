@@ -65,7 +65,7 @@ func (r *RefreshTokenFamilyRepository) UpdateByID(
 ) error {
 	return r.runInTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
 		q := r.q.WithTx(tx)
-		f, err := loadFamilyByID(ctx, q, id)
+		f, err := loadFamilyForUpdate(ctx, q, id)
 		if err != nil {
 			return err
 		}
@@ -276,11 +276,26 @@ func drainFamilyEvents(ctx context.Context, tx pgx.Tx, f *refreshtoken.Family) e
 }
 
 func loadFamilyByID(ctx context.Context, q *db.Queries, id refreshtoken.FamilyID) (*refreshtoken.Family, error) {
+	return loadFamily(ctx, q, id, false)
+}
+
+// loadFamilyForUpdate is the aggregate-writer load: it takes the family row lock
+// so a rotation and a revocation serialise instead of overwriting each other.
+func loadFamilyForUpdate(ctx context.Context, q *db.Queries, id refreshtoken.FamilyID) (*refreshtoken.Family, error) {
+	return loadFamily(ctx, q, id, true)
+}
+
+func loadFamily(ctx context.Context, q *db.Queries, id refreshtoken.FamilyID, forUpdate bool) (*refreshtoken.Family, error) {
 	uid, err := parseFamilyID(id)
 	if err != nil {
 		return nil, err
 	}
-	row, err := q.GetRefreshTokenFamilyByID(ctx, pgconv.PgUUID(uid))
+	var row db.IdentityRefreshTokenFamily
+	if forUpdate {
+		row, err = q.GetRefreshTokenFamilyByIDForUpdate(ctx, pgconv.PgUUID(uid))
+	} else {
+		row, err = q.GetRefreshTokenFamilyByID(ctx, pgconv.PgUUID(uid))
+	}
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, refreshtoken.ErrNotFound

@@ -81,13 +81,20 @@ func (r *rtErrFamilies) UpdateByID(ctx context.Context, id refreshtoken.FamilyID
 type personErrRepo struct {
 	*persontest.FakeRepository
 	getByIDErr error
+	// afterGetByID runs after a successful read: it stands in for a writer that
+	// commits right after the handler read the person.
+	afterGetByID func()
 }
 
 func (r *personErrRepo) GetByID(ctx context.Context, id person.ID) (*person.Person, error) {
 	if r.getByIDErr != nil {
 		return nil, r.getByIDErr
 	}
-	return r.FakeRepository.GetByID(ctx, id)
+	p, err := r.FakeRepository.GetByID(ctx, id)
+	if err == nil && r.afterGetByID != nil {
+		r.afterGetByID()
+	}
+	return p, err
 }
 
 type tenantErrRepo struct {

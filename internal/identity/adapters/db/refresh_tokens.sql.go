@@ -59,6 +59,38 @@ func (q *Queries) GetRefreshTokenFamilyByID(ctx context.Context, id pgtype.UUID)
 	return i, err
 }
 
+const getRefreshTokenFamilyByIDForUpdate = `-- name: GetRefreshTokenFamilyByIDForUpdate :one
+SELECT id, person_id, tenant_id, device_label,
+       created_at, last_used_at, revoked_at, revoke_reason
+FROM   identity.refresh_token_families
+WHERE  id = $1
+FOR NO KEY UPDATE
+`
+
+// The aggregate-writer load (UpdateByID): takes the row lock so a rotation and a
+// revocation of the same family serialise. UpdateRefreshTokenFamily rewrites
+// revoked_at from the loaded snapshot, so an unlocked load let a rotation that
+// started before a password change write revoked_at = NULL back over it
+// (resurrecting the family). FOR NO KEY UPDATE: conflicts with other writers but
+// not with the FOR KEY SHARE the token rows' foreign key takes.
+// Lock order (identity): person row first, then family rows. Nothing that holds a
+// family lock takes a person lock.
+func (q *Queries) GetRefreshTokenFamilyByIDForUpdate(ctx context.Context, id pgtype.UUID) (IdentityRefreshTokenFamily, error) {
+	row := q.db.QueryRow(ctx, getRefreshTokenFamilyByIDForUpdate, id)
+	var i IdentityRefreshTokenFamily
+	err := row.Scan(
+		&i.ID,
+		&i.PersonID,
+		&i.TenantID,
+		&i.DeviceLabel,
+		&i.CreatedAt,
+		&i.LastUsedAt,
+		&i.RevokedAt,
+		&i.RevokeReason,
+	)
+	return i, err
+}
+
 const insertRefreshTokenFamily = `-- name: InsertRefreshTokenFamily :exec
 
 INSERT INTO identity.refresh_token_families (
