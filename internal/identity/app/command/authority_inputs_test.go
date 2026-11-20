@@ -159,3 +159,47 @@ func TestAuthzHandlers_NotFound(t *testing.T) {
 		t.Errorf("cross-tenant target: %v", err)
 	}
 }
+
+// TestReplaceUserPermissionOverrides_RevokedDuplicatesStoredOnce: the same
+// revoked name listed twice is one revocation (it used to reach the primary
+// key and answer 500).
+func TestReplaceUserPermissionOverrides_RevokedDuplicatesStoredOnce(t *testing.T) {
+	t.Parallel()
+	w := newAuthzWorld(t)
+	target := w.member(t)
+	n := permission.IdentityPermissions.Users.Unlock
+	if err := w.handlers().override.Handle(t.Context(), command.ReplaceUserPermissionOverridesCommand{
+		TenantID: awTenant, MembershipID: target.ID(), Actor: testAdminActor(t), RevokedNames: []string{n, n, n},
+	}); err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	if got := len(target.RevokedPermissions()); got != 1 {
+		t.Errorf("revoked count = %d, want 1", got)
+	}
+}
+
+// TestReplaceUserPermissionOverrides_NameInBothListsIsAFieldError: a name that
+// is both granted and revoked is refused before anything is locked or loaded,
+// naming the field and the name.
+func TestReplaceUserPermissionOverrides_NameInBothListsIsAFieldError(t *testing.T) {
+	t.Parallel()
+	w := newAuthzWorld(t)
+	target := w.member(t)
+	n := permission.IdentityPermissions.Users.Unlock
+	err := w.handlers().override.Handle(t.Context(), command.ReplaceUserPermissionOverridesCommand{
+		TenantID: awTenant, MembershipID: target.ID(), Actor: testAdminActor(t), GrantedNames: []string{n}, RevokedNames: []string{n},
+	})
+	if !errors.Is(err, command.ErrOverridesConflict) {
+		t.Fatalf("err = %v, want ErrOverridesConflict", err)
+	}
+	var ce *command.OverridesConflictError
+	if !errors.As(err, &ce) || len(ce.Names) != 1 || ce.Names[0] != n {
+		t.Fatalf("err = %#v, want an OverridesConflictError naming %s", err, n)
+	}
+	if w.lock.calls != 0 {
+		t.Errorf("tenant lock taken %d times for a malformed request", w.lock.calls)
+	}
+	if len(target.GrantedPermissions())+len(target.RevokedPermissions()) != 0 {
+		t.Errorf("a refused replace changed the overrides")
+	}
+}

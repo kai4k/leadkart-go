@@ -631,11 +631,12 @@ func TestReplacePermissionOverrides_WritesExactlyWhatWasDecided(t *testing.T) {
 	m := freshMembership(t)
 	x := permission.FromConstant(permission.IdentityPermissions.Crm.Leads.Assign)
 	y := permission.FromConstant(permission.IdentityPermissions.Crm.Leads.Read)
+	z := permission.FromConstant(permission.IdentityPermissions.Crm.Leads.Manage)
 	past := testNow.Add(-time.Hour)
 	week := testNow.Add(7 * 24 * time.Hour)
 	if err := m.ReplacePermissionOverrides([]membership.GrantedOverride{
 		{Permission: x, ExpiresAt: past}, {Permission: x, ExpiresAt: week}, {Permission: y}, {},
-	}, []*permission.Permission{y, nil}, testNow); err != nil {
+	}, []*permission.Permission{z, nil}, testNow); err != nil {
 		t.Fatalf("ReplacePermissionOverrides: %v", err)
 	}
 	got := m.GrantedPermissions()
@@ -647,5 +648,42 @@ func TestReplacePermissionOverrides_WritesExactlyWhatWasDecided(t *testing.T) {
 	}
 	if ev := m.PullEvents(); len(ev) != 1 {
 		t.Fatalf("events = %d, want 1 PermissionsUpdated", len(ev))
+	}
+}
+
+// TestReplacePermissionOverrides_RevokedNamesAreDeduped: a revoked name listed
+// twice is stored once (the primary key would otherwise reject the second row).
+func TestReplacePermissionOverrides_RevokedNamesAreDeduped(t *testing.T) {
+	t.Parallel()
+	m := freshMembership(t)
+	x := permission.FromConstant(permission.IdentityPermissions.Crm.Leads.Assign)
+	if err := m.ReplacePermissionOverrides(nil, []*permission.Permission{x, x, nil, x}, testNow); err != nil {
+		t.Fatalf("ReplacePermissionOverrides: %v", err)
+	}
+	if got := m.RevokedPermissions(); len(got) != 1 {
+		t.Fatalf("revoked = %v, want one entry", got)
+	}
+}
+
+// TestReplacePermissionOverrides_NameInBothListsIsInvalid: a name that is both
+// granted and revoked is contradictory input; nothing changes.
+func TestReplacePermissionOverrides_NameInBothListsIsInvalid(t *testing.T) {
+	t.Parallel()
+	m := freshMembership(t)
+	x := permission.FromConstant(permission.IdentityPermissions.Crm.Leads.Assign)
+	y := permission.FromConstant(permission.IdentityPermissions.Crm.Leads.Read)
+	if err := m.ReplacePermissionOverrides([]membership.GrantedOverride{{Permission: x}}, nil, testNow); err != nil {
+		t.Fatalf("seed grant: %v", err)
+	}
+	m.PullEvents()
+	err := m.ReplacePermissionOverrides([]membership.GrantedOverride{{Permission: x}, {Permission: y}}, []*permission.Permission{y}, testNow)
+	if !errors.Is(err, membership.ErrInvalid) {
+		t.Fatalf("err = %v, want membership.ErrInvalid", err)
+	}
+	if got := m.GrantedPermissions(); len(got) != 1 || got[0].Permission != x {
+		t.Errorf("grants changed by a refused replace: %+v", got)
+	}
+	if ev := m.PullEvents(); len(ev) != 0 {
+		t.Errorf("a refused replace recorded %d events", len(ev))
 	}
 }

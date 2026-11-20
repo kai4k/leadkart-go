@@ -865,7 +865,7 @@ paths:
       description: |
         Both arrays are required; empty arrays clear the corresponding overlay. Permission names
         MUST match the closed `permission.IdentityPermissions` catalogue;
-        unknown names surface as 422 (`permission_unknown`).
+        unknown names surface as 422 (`permission_unknown`). A name listed twice in one array is stored once; a name present in BOTH arrays is a 422 `validation_failed` with the names under `errors.revoked`.
         Requires `identity.users.update_permissions` (satisfied by `tenant.admin` in the caller's own tenant, or by `platform.*` equivalents for platform operators; ADR 0068). Self-target forbidden (`self_modification_forbidden`). The caller must strictly outrank the target member (`insufficient_rank`; owners may act on owners; super users and exempt platform operators are exempt), decided inside the transaction that holds the tenant's authority lock (ADR 0069). Conferring a permission the caller does not hold is rejected with `grant_exceeds_authority`.
       x-required-permissions: [identity.users.update_permissions]
       parameters:

@@ -22,6 +22,20 @@ SELECT id, person_id, tenant_id, status, joined_at, left_at,
 FROM   identity.tenant_memberships
 WHERE  id = $1;
 
+-- name: GetMembershipByIDForUpdate :one
+-- The aggregate-writer load (UpdateByID): takes the row lock so every writer of a
+-- membership serialises on it and persists a snapshot read after the previous
+-- writer committed (hierarchy round 4, I1). FOR NO KEY UPDATE, not FOR UPDATE:
+-- it conflicts with itself and every other writer but not with the FOR KEY SHARE
+-- a foreign-key check takes (role_assignments, reports_to, created_by inserts), so
+-- unrelated inserts referencing the row are never blocked and cannot deadlock.
+SELECT id, person_id, tenant_id, status, joined_at, left_at,
+       designation, department, status_message, reports_to,
+       created_by_membership_id
+FROM   identity.tenant_memberships
+WHERE  id = $1
+FOR NO KEY UPDATE;
+
 -- name: GetActiveMembershipByPersonAndTenant :one
 SELECT id, person_id, tenant_id, status, joined_at, left_at,
        designation, department, status_message, reports_to,

@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/leadkart/leadkart-go/internal/common/pg"
@@ -175,6 +177,21 @@ type ReplaceUserPermissionOverridesCommand struct {
 // Wire shape: 422 with the offending name in the message.
 var ErrPermissionUnknown = errors.New("user: unknown permission")
 
+// ErrOverridesConflict surfaces when a permission name is in both the granted
+// and the revoked list of one request. Wire shape: 422 validation_failed with
+// the offending names under errors.revoked.
+var ErrOverridesConflict = errors.New("user: a permission cannot be both granted and revoked")
+
+// OverridesConflictError carries the names listed in both lists.
+type OverridesConflictError struct{ Names []string }
+
+func (e *OverridesConflictError) Error() string {
+	return fmt.Sprintf("%s: %s", ErrOverridesConflict, strings.Join(e.Names, ", "))
+}
+
+// Is makes errors.Is(err, ErrOverridesConflict) match.
+func (e *OverridesConflictError) Is(target error) bool { return target == ErrOverridesConflict }
+
 // ReplaceUserPermissionOverridesHandler runs the overlay replacement.
 type ReplaceUserPermissionOverridesHandler struct{ w authorityWriter }
 
@@ -204,6 +221,10 @@ func (h ReplaceUserPermissionOverridesHandler) Handle(ctx context.Context, cmd R
 	revoked, err := resolvePermissions(cmd.RevokedNames)
 	if err != nil {
 		return err
+	}
+	revoked = dedupeByName(revoked)
+	if both := namesInBoth(granted, revoked); len(both) > 0 {
+		return &OverridesConflictError{Names: both}
 	}
 	now := h.w.now()
 	upErr := h.w.updateMember(ctx, cmd.TenantID, cmd.MembershipID, now, func(_ context.Context, m *membership.Membership, target authority.Member) error {
@@ -238,6 +259,36 @@ func overridesAfter(target authority.Member, granted, revoked []*permission.Perm
 		approved = append(approved, membership.GrantedOverride{Permission: p, ExpiresAt: exp})
 	}
 	return after, approved
+}
+
+// dedupeByName keeps the first entry of each permission name.
+func dedupeByName(in []*permission.Permission) []*permission.Permission {
+	seen := make(map[string]struct{}, len(in))
+	out := make([]*permission.Permission, 0, len(in))
+	for _, p := range in {
+		if _, dup := seen[p.Name()]; dup {
+			continue
+		}
+		seen[p.Name()] = struct{}{}
+		out = append(out, p)
+	}
+	return out
+}
+
+// namesInBoth lists, sorted, the names present in both slices.
+func namesInBoth(a, b []*permission.Permission) []string {
+	inA := make(map[string]struct{}, len(a))
+	for _, p := range a {
+		inA[p.Name()] = struct{}{}
+	}
+	var out []string
+	for _, p := range b {
+		if _, ok := inA[p.Name()]; ok {
+			out = append(out, p.Name())
+		}
+	}
+	slices.Sort(out)
+	return slices.Compact(out)
 }
 
 // resolvePermissions maps untrusted permission-name strings to

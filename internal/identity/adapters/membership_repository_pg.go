@@ -92,9 +92,17 @@ func (r *MembershipRepository) runInTxTenant(ctx context.Context, tenantID tenan
 	return r.tx.WithinTxPgxTenant(ctx, tenantID.String(), fn)
 }
 
-// UpdateByID satisfies [membership.Repository]. Persists full aggregate
-// state (status, profile, role_assignments, permission_overrides) under
-// replace-all semantics, then drains events.
+// UpdateByID satisfies [membership.Repository]. Loads the membership under the
+// row lock (FOR NO KEY UPDATE), so every writer of one membership serialises
+// and the snapshot it persists was read after the previous writer committed.
+// Persists full aggregate state (status, profile, role_assignments,
+// permission_overrides) under replace-all semantics, then drains events.
+//
+// Lock order: the authority commands take the tenant advisory lock FIRST and
+// then this row lock; every other writer takes only this one row lock. A
+// transaction holding a membership row lock never waits for the advisory lock
+// or for another membership row (the multi-row writers all hold the advisory
+// lock), so the waits-for graph has no cycle.
 func (r *MembershipRepository) UpdateByID(
 	ctx context.Context,
 	tenantID tenant.ID,
@@ -103,7 +111,7 @@ func (r *MembershipRepository) UpdateByID(
 ) error {
 	return r.runInTxTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
 		q := r.q.WithTx(tx)
-		m, err := loadMembership(ctx, q, id)
+		m, err := loadMembershipForUpdate(ctx, q, id)
 		if err != nil {
 			return err
 		}
@@ -403,12 +411,30 @@ func (r *MembershipRepository) ListAllForPerson(
 
 // ----- Helpers ---------------------------------------------------------------
 
+// loadMembership reads the membership without locking it (read paths).
 func loadMembership(ctx context.Context, q *db.Queries, id membership.ID) (*membership.Membership, error) {
+	return loadMembershipWith(ctx, q, id, false)
+}
+
+// loadMembershipForUpdate reads the membership under the row lock (writers:
+// UpdateByID). Role assignments and overrides are read AFTER the lock is held,
+// so a writer that waited sees what the previous writer committed.
+func loadMembershipForUpdate(ctx context.Context, q *db.Queries, id membership.ID) (*membership.Membership, error) {
+	return loadMembershipWith(ctx, q, id, true)
+}
+
+// loadMembershipWith is the one load body; forUpdate picks the locking query.
+func loadMembershipWith(ctx context.Context, q *db.Queries, id membership.ID, forUpdate bool) (*membership.Membership, error) {
 	uid, err := parseMembershipID(id)
 	if err != nil {
 		return nil, err
 	}
-	row, err := q.GetMembershipByID(ctx, pgconv.PgUUID(uid))
+	var row db.IdentityTenantMembership
+	if forUpdate {
+		row, err = q.GetMembershipByIDForUpdate(ctx, pgconv.PgUUID(uid))
+	} else {
+		row, err = q.GetMembershipByID(ctx, pgconv.PgUUID(uid))
+	}
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, membership.ErrNotFound

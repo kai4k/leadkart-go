@@ -95,6 +95,40 @@ func (q *Queries) GetMembershipByID(ctx context.Context, id pgtype.UUID) (Identi
 	return i, err
 }
 
+const getMembershipByIDForUpdate = `-- name: GetMembershipByIDForUpdate :one
+SELECT id, person_id, tenant_id, status, joined_at, left_at,
+       designation, department, status_message, reports_to,
+       created_by_membership_id
+FROM   identity.tenant_memberships
+WHERE  id = $1
+FOR NO KEY UPDATE
+`
+
+// The aggregate-writer load (UpdateByID): takes the row lock so every writer of a
+// membership serialises on it and persists a snapshot read after the previous
+// writer committed (hierarchy round 4, I1). FOR NO KEY UPDATE, not FOR UPDATE:
+// it conflicts with itself and every other writer but not with the FOR KEY SHARE
+// a foreign-key check takes (role_assignments, reports_to, created_by inserts), so
+// unrelated inserts referencing the row are never blocked and cannot deadlock.
+func (q *Queries) GetMembershipByIDForUpdate(ctx context.Context, id pgtype.UUID) (IdentityTenantMembership, error) {
+	row := q.db.QueryRow(ctx, getMembershipByIDForUpdate, id)
+	var i IdentityTenantMembership
+	err := row.Scan(
+		&i.ID,
+		&i.PersonID,
+		&i.TenantID,
+		&i.Status,
+		&i.JoinedAt,
+		&i.LeftAt,
+		&i.Designation,
+		&i.Department,
+		&i.StatusMessage,
+		&i.ReportsTo,
+		&i.CreatedByMembershipID,
+	)
+	return i, err
+}
+
 const insertMembership = `-- name: InsertMembership :exec
 
 INSERT INTO identity.tenant_memberships (

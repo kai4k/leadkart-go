@@ -266,6 +266,15 @@ func handleReplaceUserPermissionOverrides(log *slog.Logger, a app.Application) h
 			writeError(w, http.StatusUnprocessableEntity, ErrCodePermissionUnknown, err.Error())
 			return
 		}
+		var conflict *command.OverridesConflictError
+		if errors.As(err, &conflict) {
+			msgs := make([]string, 0, len(conflict.Names))
+			for _, n := range conflict.Names {
+				msgs = append(msgs, n+" is listed in both granted and revoked")
+			}
+			writeValidationError(w, "a permission cannot be both granted and revoked", map[string][]string{"revoked": msgs})
+			return
+		}
 		writeUserMutationResult(w, log, r, err)
 	})
 }

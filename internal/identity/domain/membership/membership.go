@@ -541,7 +541,8 @@ func (m *Membership) EffectivePermissions(roles []*role.Role, now time.Time) []*
 // decided on: each granted entry carries its expiry as approved (zero =
 // permanent) and no liveness is recomputed here, so the instant the policy
 // snapshotted at and the state written cannot diverge. nil permissions are
-// dropped; a name listed twice keeps its first entry.
+// dropped; a name listed twice keeps its first entry (granted and revoked
+// alike). A name in BOTH lists is contradictory: ErrInvalid, nothing changes.
 func (m *Membership) ReplacePermissionOverrides(
 	granted []GrantedOverride,
 	revoked []*permission.Permission,
@@ -560,10 +561,19 @@ func (m *Membership) ReplacePermissionOverrides(
 		g = append(g, e)
 	}
 	r := make([]*permission.Permission, 0, len(revoked))
+	seenRevoked := make(map[string]struct{}, len(revoked))
 	for _, p := range revoked {
-		if p != nil {
-			r = append(r, p)
+		if p == nil {
+			continue
 		}
+		if _, dup := seenRevoked[p.Name()]; dup {
+			continue
+		}
+		if _, both := seen[p.Name()]; both {
+			return fmt.Errorf("%w: permission %q is both granted and revoked", ErrInvalid, p.Name())
+		}
+		seenRevoked[p.Name()] = struct{}{}
+		r = append(r, p)
 	}
 	m.grantedPermissions = g
 	m.revokedPermissions = r
