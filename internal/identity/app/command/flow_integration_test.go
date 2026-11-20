@@ -50,6 +50,7 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/refreshtoken"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
+	"github.com/leadkart/leadkart-go/internal/identity/identitytest"
 	"github.com/leadkart/leadkart-go/internal/identity/ports/authn"
 )
 
@@ -372,7 +373,11 @@ func TestE2E_LoginThenRequirePermissionGate(t *testing.T) {
 		t.Fatalf("Register: %v", err)
 	}
 
-	// 2. Login → real JWT signed by the wired Issuer.
+	// 2. Login → real JWT signed by the wired Issuer. The registered admin holds a
+	//    temporary credential (must_change_password, enforced on every route since
+	//    733c6a2: the gate would answer 403 password_change_required); this test is
+	//    about the permission gate, so clear the flag first, as the cmd/api fixtures do.
+	identitytest.ClearMustChangePassword(t, app.pool, adminEmail.String())
 	loginOut, err := login.Handle(ctx, command.LoginCommand{
 		Email:       adminEmail,
 		Password:    "Correct-Horse-Battery-9!",
