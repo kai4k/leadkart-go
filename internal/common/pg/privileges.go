@@ -2,7 +2,9 @@ package pg
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
@@ -49,6 +51,10 @@ func ApplicationRLSFunctions() []string {
 	return []string{"current_tenant", "is_platform"}
 }
 
+// riverLedger is River's own migration ledger; only cmd/migrate (as the owner)
+// touches it, so the application role holds nothing on it and the check skips it.
+const riverLedger = "river_migration"
+
 // privilegeQuery returns the FIRST privilege the current role lacks, or no row.
 // $1 schemas; $2/$3/$4 rules as parallel arrays (schema, table or '*', privilege);
 // $5 the default table privileges. A table's required privileges are its own
@@ -59,7 +65,9 @@ WITH rules AS (
 ), tbl AS (
     SELECT c.oid, n.nspname AS s, c.relname AS t
     FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
-    WHERE c.relkind IN ('r', 'p') AND n.nspname = ANY($1::text[])
+    WHERE c.relkind IN ('r', 'p')
+      AND (n.nspname = ANY($1::text[])
+           OR (n.nspname = 'public' AND c.relname LIKE 'river\_%' AND c.relname <> $7::text))
 ), need AS (
     SELECT tbl.oid, tbl.s, tbl.t, p.priv
     FROM tbl CROSS JOIN LATERAL (
@@ -72,36 +80,94 @@ WITH rules AS (
             WHERE NOT EXISTS (SELECT 1 FROM rules r3 WHERE r3.s = tbl.s AND r3.t IN (tbl.t, '*'))
     ) p
 )
-SELECT current_user::text, missing FROM (
-    SELECT 1 AS ord, 'USAGE on schema ' || n.nspname AS missing
+SELECT current_user::text, absent, missing FROM (
+    SELECT 0 AS ord, true AS absent, 'schema ' || s AS missing
+    FROM unnest($1::text[]) AS s
+    WHERE NOT EXISTS (SELECT 1 FROM pg_namespace n WHERE n.nspname = s)
+    UNION ALL
+    SELECT 0, true, 'function app.' || f || '()'
+    FROM unnest($6::text[]) AS f
+    WHERE NOT EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+                      WHERE n.nspname = 'app' AND p.proname = f)
+    UNION ALL
+    SELECT 1, false, 'USAGE on schema ' || n.nspname
     FROM pg_namespace n
     WHERE n.nspname = ANY($1::text[]) AND NOT has_schema_privilege(n.oid, 'USAGE')
     UNION ALL
-    SELECT 2, priv || ' on table ' || s || '.' || t FROM need WHERE NOT has_table_privilege(oid, priv)
+    SELECT 2, false, priv || ' on table ' || s || '.' || t FROM need WHERE NOT has_table_privilege(oid, priv)
     UNION ALL
-    SELECT 3, 'USAGE on sequence ' || n.nspname || '.' || c.relname
+    SELECT 3, false, 'USAGE on sequence ' || n.nspname || '.' || c.relname
     FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
-    WHERE c.relkind = 'S' AND n.nspname = ANY($1::text[])
+    WHERE c.relkind = 'S'
+      AND (n.nspname = ANY($1::text[]) OR (n.nspname = 'public' AND c.relname LIKE 'river\_%'))
       AND NOT EXISTS (SELECT 1 FROM rules WHERE rules.s = n.nspname AND rules.t = '*')
       AND NOT (CASE WHEN c.relkind = 'S' THEN has_sequence_privilege(c.oid, 'USAGE') ELSE true END)
     UNION ALL
-    SELECT 4, 'EXECUTE on function ' || n.nspname || '.' || p.proname || '()'
+    SELECT 4, false, 'EXECUTE on function ' || n.nspname || '.' || p.proname || '()'
     FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
     WHERE n.nspname = 'app' AND p.proname = ANY($6::text[]) AND NOT has_function_privilege(p.oid, 'EXECUTE')
 ) missing ORDER BY ord, missing LIMIT 1`
 
-// VerifyApplicationPrivileges fails when the current database role lacks a
-// privilege the application needs on the application schemas, naming the first
-// one. Migration 20260606000001 is a no-op when leadkart_app does not exist yet,
-// and default privileges bind to whichever role ran the migration, so a
-// database provisioned in the wrong order, or migrated by two different owners,
-// would otherwise only fail later, per request, with "permission denied". One
-// query, run once at boot by cmd/api and cmd/worker. The message names the
-// role and the privilege, never the DSN or a credential. A superuser or an
-// owner passes (their privileges are implicit), which is what dev runs as.
+// excessQuery returns the FIRST reason the current role holds more than the
+// application should: superuser and BYPASSRLS each switch row-level security
+// off, and the owner of a table is exempt from its policies. Membership counts
+// (pg_has_role MEMBER, even for a NOINHERIT role, because it can SET ROLE), so
+// a plain role granted one of those roles is caught too. $1 application schemas.
+const excessQuery = `
+SELECT reason FROM (
+    SELECT 0 AS ord, 'is a superuser' AS reason
+    FROM pg_roles r WHERE r.rolname = current_user AND r.rolsuper
+    UNION ALL
+    SELECT 1, 'has BYPASSRLS'
+    FROM pg_roles r WHERE r.rolname = current_user AND r.rolbypassrls
+    UNION ALL
+    SELECT 2, 'is a member of the superuser role ' || quote_ident(r.rolname)
+    FROM pg_roles r WHERE r.rolsuper AND r.rolname <> current_user AND pg_has_role(current_user, r.oid, 'MEMBER')
+    UNION ALL
+    SELECT 3, 'is a member of the BYPASSRLS role ' || quote_ident(r.rolname)
+    FROM pg_roles r WHERE r.rolbypassrls AND r.rolname <> current_user AND pg_has_role(current_user, r.oid, 'MEMBER')
+    UNION ALL
+    SELECT 4, 'owns table ' || n.nspname || '.' || c.relname
+    FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE c.relkind IN ('r', 'p') AND n.nspname = ANY($1::text[]) AND pg_has_role(current_user, c.relowner, 'MEMBER')
+) x ORDER BY ord, reason LIMIT 1`
+
+// PrivilegeCheck configures [VerifyApplicationPrivileges].
+type PrivilegeCheck struct {
+	// Production makes a role with TOO MUCH privilege (superuser, BYPASSRLS,
+	// owner of an application table) a start-up failure. Outside production it
+	// is logged as a warning, because the dev compose database is owned by a
+	// superuser. The caller derives it from the existing config.AppConfig.Env
+	// ("production"); this package does not read configuration.
+	Production bool
+	// Logger receives the warning. Required (loggers are injected, never
+	// slog.Default()).
+	Logger *slog.Logger
+}
+
+// VerifyApplicationPrivileges checks the database role the process runs as
+// against the privilege contract above, in this order:
+//
+//  1. every application schema and RLS helper function EXISTS (an unmigrated
+//     database yields no rows in any later check, so absence is asserted first);
+//  2. the role holds every privilege the application needs, on the application
+//     schemas and on River's public.river_* tables, naming the first missing one;
+//  3. the role does not hold MORE than it should: a superuser, a BYPASSRLS role
+//     or the owner of an application table is exempt from row-level security.
+//     That is an error in production and a logged warning elsewhere.
+//
+// Migration 20260606000001 is a no-op when leadkart_app does not exist yet, and
+// default privileges bind to whichever role ran the migration, so a database
+// provisioned in the wrong order, or migrated by two different owners, would
+// otherwise only fail later, per request, with "permission denied". One or two
+// catalog queries, run once at boot by cmd/api and cmd/worker. Messages name the
+// role and the privilege, never the DSN or a credential.
 func VerifyApplicationPrivileges(ctx context.Context, db interface {
 	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
-}) error {
+}, check PrivilegeCheck) error {
+	if check.Logger == nil {
+		return errors.New("pg: PrivilegeCheck.Logger is required")
+	}
 	var ruleSchema, ruleTable, rulePriv []string
 	for s, privs := range SchemaTablePrivileges() {
 		for _, p := range privs {
@@ -119,23 +185,63 @@ func VerifyApplicationPrivileges(ctx context.Context, db interface {
 	}
 
 	args := []any{ApplicationSchemas(), ruleSchema, ruleTable, rulePriv,
-		DefaultTablePrivileges(), ApplicationRLSFunctions()}
-	rows, err := db.Query(ctx, privilegeQuery, args...)
+		DefaultTablePrivileges(), ApplicationRLSFunctions(), riverLedger}
+	role, absent, missing, found, err := firstRow3(ctx, db, privilegeQuery, args)
+	if err != nil {
+		return fmt.Errorf("pg: verify application privileges: %w", err)
+	}
+	if found && absent {
+		return fmt.Errorf("pg: database is not migrated: %s does not exist (checked as role %q). "+
+			"Run `migrate up` as the owner role before starting the application", missing, role)
+	}
+	if found {
+		return fmt.Errorf("pg: database role %q lacks %s: the grants migration (20260606000001) did not reach this role. "+
+			"Create the role BEFORE running migrations, run every migration as the same owner role, then re-run `migrate up` "+
+			"(it re-applies the grants and River's)", role, missing)
+	}
+
+	var reason string
+	rows, err := db.Query(ctx, excessQuery, ApplicationSchemas())
 	if err != nil {
 		return fmt.Errorf("pg: verify application privileges: %w", err)
 	}
 	defer rows.Close()
-	var role, missing string
 	if rows.Next() {
-		if err := rows.Scan(&role, &missing); err != nil {
+		if err := rows.Scan(&reason); err != nil {
 			return fmt.Errorf("pg: verify application privileges: %w", err)
 		}
-		return fmt.Errorf("pg: database role %q lacks %s: the grants migration (20260606000001) did not reach this role. "+
-			"Create the role BEFORE running migrations, run every migration as the same owner role, then re-run `migrate up` "+
-			"(it re-applies the grants)", role, missing)
 	}
 	if err := rows.Err(); err != nil {
 		return fmt.Errorf("pg: verify application privileges: %w", err)
 	}
+	if reason == "" {
+		return nil
+	}
+	const consequence = "row-level security does not apply to it, so tenant isolation is not enforced. " +
+		"Run the application as a plain role (leadkart_app) that owns nothing; keep the owner role for `migrate` and `bootstrap`"
+	if check.Production {
+		return errors.New("pg: refusing to start in production: the application's database role " + reason + "; " + consequence)
+	}
+	check.Logger.WarnContext(ctx, "database role is more privileged than the application needs; "+
+		"fine for local development, a start-up error in production",
+		"reason", reason, "consequence", consequence)
 	return nil
+}
+
+// firstRow3 runs query and returns its first (text, bool, text) row, if any.
+func firstRow3(ctx context.Context, db interface {
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+}, query string, args []any) (role string, absent bool, missing string, found bool, err error) {
+	rows, err := db.Query(ctx, query, args...)
+	if err != nil {
+		return "", false, "", false, err
+	}
+	defer rows.Close()
+	if rows.Next() {
+		if err := rows.Scan(&role, &absent, &missing); err != nil {
+			return "", false, "", false, err
+		}
+		found = true
+	}
+	return role, absent, missing, found, rows.Err()
 }

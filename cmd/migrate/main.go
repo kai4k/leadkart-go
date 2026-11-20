@@ -12,7 +12,8 @@
 // Usage:
 //
 //	migrate up                    # apply all pending (goose, then River + its grants)
-//	migrate up-to <version>       # apply up to specific version
+//	migrate up-to <version>       # apply up to specific version (then River + its grants)
+//	migrate up-by-one | redo      # likewise run River + its grants after the goose step
 //	migrate down                  # roll back one
 //	migrate status                # show applied vs pending
 //	migrate version               # current version
@@ -111,15 +112,28 @@ func run(ctx context.Context) error {
 	// River (background jobs) keeps its own migration ledger, so it cannot ride
 	// goose. It needs CREATE on public, which only this owner-role process has;
 	// the grants for the application role follow (idempotent, so a fresh and an
-	// existing database both end up covered). `up` only: down and status must
-	// not touch River.
-	if command == "up" {
+	// existing database both end up covered). Every sub-command that APPLIES
+	// goose migrations (up, up-by-one, up-to, redo) runs it, so no path leaves a
+	// database with the application schema but without River; the sub-commands
+	// that roll back, inspect or only parse do not touch River (it is independent
+	// of the goose version, and nothing here ever drops its tables).
+	if migratesRiver(command) {
 		if err := migrateRiver(ctx, dsn); err != nil {
 			return err
 		}
 		logger.InfoContext(ctx, "river migrations applied and application role granted")
 	}
 	return nil
+}
+
+// migratesRiver reports whether a goose sub-command is followed by River's
+// migrations and grants: exactly those that apply migrations forward.
+func migratesRiver(command string) bool {
+	switch command {
+	case "up", "up-by-one", "up-to", "redo":
+		return true
+	}
+	return false
 }
 
 // migrateRiver applies River's migrations and grants the application role its

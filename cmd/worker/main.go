@@ -232,7 +232,7 @@ func run(ctx context.Context, stdout *os.File) error {
 	// needs (the grants migration is a no-op when the role did not exist
 	// at migration time). One query, run once; names the first missing
 	// privilege, never the DSN.
-	if err := pg.VerifyApplicationPrivileges(ctx, pool); err != nil {
+	if err := pg.VerifyApplicationPrivileges(ctx, pool, pg.PrivilegeCheck{Production: cfg.Env == "production", Logger: logger}); err != nil {
 		return err
 	}
 	logger.InfoContext(ctx, "postgres connected")

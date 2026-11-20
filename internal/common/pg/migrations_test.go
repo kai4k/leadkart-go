@@ -3,8 +3,11 @@
 package pg_test
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
+	"io"
+	"log/slog"
 	"path/filepath"
 	"runtime"
 	"slices"
@@ -849,6 +852,8 @@ func appRoleConn(t *testing.T, dsn string) *pgx.Conn {
 	return conn
 }
 
+func discardLogger() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
+
 func TestVerifyApplicationPrivileges_PassesOnMigratedDatabase(t *testing.T) {
 	dsn := startPostgres(t)
 	db, err := sql.Open("pgx", dsn)
@@ -859,7 +864,7 @@ func TestVerifyApplicationPrivileges_PassesOnMigratedDatabase(t *testing.T) {
 	createAppRole(t, db)
 	applyMigrations(t, dsn)
 
-	if err := pg.VerifyApplicationPrivileges(t.Context(), appRoleConn(t, dsn)); err != nil {
+	if err := pg.VerifyApplicationPrivileges(t.Context(), appRoleConn(t, dsn), pg.PrivilegeCheck{Production: true, Logger: discardLogger()}); err != nil {
 		t.Fatalf("a correctly migrated database must pass (including the narrower audit and shared sets): %v", err)
 	}
 }
@@ -877,7 +882,7 @@ func TestVerifyApplicationPrivileges_FailsWhenRoleWasCreatedAfterMigrating(t *te
 	defer db.Close()
 	createAppRole(t, db)
 
-	err = pg.VerifyApplicationPrivileges(t.Context(), appRoleConn(t, dsn))
+	err = pg.VerifyApplicationPrivileges(t.Context(), appRoleConn(t, dsn), pg.PrivilegeCheck{Production: true, Logger: discardLogger()})
 	if err == nil {
 		t.Fatal("check passed for a role that holds nothing")
 	}
@@ -906,8 +911,114 @@ func TestVerifyApplicationPrivileges_NamesTheFirstMissingPrivilege(t *testing.T)
 		t.Fatalf("revoke: %v", err)
 	}
 
-	err = pg.VerifyApplicationPrivileges(t.Context(), appRoleConn(t, dsn))
+	err = pg.VerifyApplicationPrivileges(t.Context(), appRoleConn(t, dsn), pg.PrivilegeCheck{Production: true, Logger: discardLogger()})
 	if err == nil || !strings.Contains(err.Error(), "DELETE on table common.audit_log_entry") {
 		t.Fatalf("want an error naming DELETE on common.audit_log_entry, got: %v", err)
+	}
+}
+
+// An UNMIGRATED database yields no rows in any catalog check, so it used to
+// pass. The check now asserts the schemas and RLS helpers exist and points at
+// `migrate up`.
+func TestVerifyApplicationPrivileges_FailsOnUnmigratedDatabase(t *testing.T) {
+	dsn := startPostgres(t)
+	db, err := sql.Open("pgx", dsn)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer db.Close()
+	createAppRole(t, db)
+
+	err = pg.VerifyApplicationPrivileges(t.Context(), appRoleConn(t, dsn), pg.PrivilegeCheck{Logger: discardLogger()})
+	if err == nil {
+		t.Fatal("an unmigrated database passed the start-up check")
+	}
+	for _, want := range []string{"not migrated", "does not exist", "migrate up"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q lacks %q", err, want)
+		}
+	}
+}
+
+// A role with too much privilege silently switches row-level security off.
+// Production refuses to start; every other environment logs a warning and runs.
+func TestVerifyApplicationPrivileges_RefusesAnOverPrivilegedRoleInProduction(t *testing.T) {
+	dsn := startPostgres(t)
+	db, err := sql.Open("pgx", dsn)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer db.Close()
+	createAppRole(t, db)
+	applyMigrations(t, dsn)
+	exec := func(q string) {
+		t.Helper()
+		if _, err := db.ExecContext(t.Context(), q); err != nil {
+			t.Fatalf("%s: %v", q, err)
+		}
+	}
+
+	for _, tc := range []struct{ name, grant, revert, want string }{
+		{"superuser", `ALTER ROLE leadkart_app SUPERUSER`, `ALTER ROLE leadkart_app NOSUPERUSER`, "is a superuser"},
+		{"bypassrls", `ALTER ROLE leadkart_app BYPASSRLS`, `ALTER ROLE leadkart_app NOBYPASSRLS`, "BYPASSRLS"},
+		{"owner of an application table", `ALTER TABLE identity.persons OWNER TO leadkart_app`,
+			`ALTER TABLE identity.persons OWNER TO leadkart; GRANT SELECT, INSERT, UPDATE, DELETE ON identity.persons TO leadkart_app`, "owns table identity.persons"},
+		{"member of a bypassrls role", `CREATE ROLE rls_bypasser BYPASSRLS; GRANT rls_bypasser TO leadkart_app`,
+			`REVOKE rls_bypasser FROM leadkart_app; DROP ROLE rls_bypasser`, "member of the BYPASSRLS role rls_bypasser"},
+	} {
+		t.Run(tc.name, func(t *testing.T) { // arch-test:serial — each case mutates and restores the one shared role
+			exec(tc.grant)
+			defer exec(tc.revert)
+
+			err := pg.VerifyApplicationPrivileges(t.Context(), appRoleConn(t, dsn), pg.PrivilegeCheck{Production: true, Logger: discardLogger()})
+			if err == nil || !strings.Contains(err.Error(), tc.want) || !strings.Contains(err.Error(), "production") {
+				t.Fatalf("production: want a refusal containing %q, got %v", tc.want, err)
+			}
+
+			var logs bytes.Buffer
+			logger := slog.New(slog.NewTextHandler(&logs, nil))
+			if err := pg.VerifyApplicationPrivileges(t.Context(), appRoleConn(t, dsn), pg.PrivilegeCheck{Logger: logger}); err != nil {
+				t.Fatalf("outside production the check must only warn, got %v", err)
+			}
+			if !strings.Contains(logs.String(), "level=WARN") || !strings.Contains(logs.String(), tc.want) {
+				t.Errorf("want a WARN naming %q, got %q", tc.want, logs.String())
+			}
+			if strings.Contains(logs.String(), dsn) || strings.Contains(logs.String(), "leadkart_test") {
+				t.Errorf("warning leaks connection details: %q", logs.String())
+			}
+		})
+	}
+}
+
+// River's tables are part of the contract: a role that lost DML on river_job
+// fails the check at boot, and the ledger table (owner-only) is not required.
+func TestVerifyApplicationPrivileges_CoversRiverTables(t *testing.T) {
+	dsn := startPostgres(t)
+	db, err := sql.Open("pgx", dsn)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer db.Close()
+	createAppRole(t, db)
+	applyMigrations(t, dsn)
+	for _, q := range []string{
+		`CREATE TABLE public.river_job (id bigserial PRIMARY KEY)`,
+		`CREATE TABLE public.river_migration (line text, version bigint)`,
+		`GRANT SELECT, INSERT, UPDATE, DELETE ON public.river_job TO leadkart_app`,
+		`GRANT USAGE, SELECT ON SEQUENCE public.river_job_id_seq TO leadkart_app`,
+	} {
+		if _, err := db.ExecContext(t.Context(), q); err != nil {
+			t.Fatalf("%s: %v", q, err)
+		}
+	}
+	if err := pg.VerifyApplicationPrivileges(t.Context(), appRoleConn(t, dsn), pg.PrivilegeCheck{Production: true, Logger: discardLogger()}); err != nil {
+		t.Fatalf("river tables granted (ledger not required): %v", err)
+	}
+	if _, err := db.ExecContext(t.Context(), `REVOKE DELETE ON public.river_job FROM leadkart_app`); err != nil {
+		t.Fatalf("revoke: %v", err)
+	}
+	err = pg.VerifyApplicationPrivileges(t.Context(), appRoleConn(t, dsn), pg.PrivilegeCheck{Production: true, Logger: discardLogger()})
+	if err == nil || !strings.Contains(err.Error(), "DELETE on table public.river_job") {
+		t.Fatalf("want an error naming DELETE on public.river_job, got %v", err)
 	}
 }
