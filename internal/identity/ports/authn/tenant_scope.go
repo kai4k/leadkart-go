@@ -391,6 +391,13 @@ func ActorMembershipID(ctx context.Context) string {
 	if !ok {
 		return ""
 	}
+	// An impersonation token carries a synthetic membership id (the session's),
+	// not a row of identity.tenant_memberships: stamping it as a creator would
+	// violate the foreign key. The operator is attributed through the act claim
+	// (audit), so the creator stays empty exactly as on the scope-header path.
+	if c.Act != nil {
+		return ""
+	}
 	if eff, ok := tenancy.FromContext(ctx); ok && !eff.IsZero() && !sameID(c.TenantID, eff.String()) {
 		return ""
 	}

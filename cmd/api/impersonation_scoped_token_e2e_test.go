@@ -205,3 +205,70 @@ func TestE2E_Impersonation_TargetTenantNotFound(t *testing.T) {
 		t.Errorf("error code: got %q, want %q", er.Error, ports.ErrCodeTenantNotFound)
 	}
 }
+
+// POST /users under an impersonation session used to answer 500: the session's
+// synthetic membership id was stamped as the new member's creator and the
+// foreign key refused it. The operator is attributed through the act claim; the
+// membership creator stays NULL (the same policy as the X-Tenant-Id scope path).
+func TestE2E_Impersonation_CreateUserIsNot500(t *testing.T) {
+	f := newE2EFixture(t)
+	tenantA := f.registerAndLogin(t, "acme")
+	platformTok := f.mintPlatformToken(t, "")
+	resp := f.authedJSON(t, http.MethodPost, "/api/v1/platform/impersonation/sessions", platformTok,
+		ports.CreateImpersonationSessionRequest{TargetTenantID: tenantA.TenantID, Reason: "ticket #77 create a member", DurationMinutes: 30})
+	if resp.status != http.StatusCreated {
+		t.Fatalf("create session: %d %s", resp.status, resp.body)
+	}
+	var out ports.CreateImpersonationSessionResponse
+	if err := json.Unmarshal(resp.body, &out); err != nil {
+		t.Fatal(err)
+	}
+	r := f.authedJSON(t, http.MethodPost, "/api/v1/users", out.AccessToken, ports.CreateUserRequest{
+		Email: "created-under-impersonation@example.test", Password: "Sup3r-secret-pass!", FirstName: "Imp", LastName: "Created",
+	})
+	if r.status != http.StatusCreated {
+		t.Fatalf("POST /users under an impersonation session: status %d body %s, want 201 (not 500)", r.status, r.body)
+	}
+}
+
+// Sweep: no identity write route may answer 500 under an impersonation token (a
+// synthetic membership id reaching a foreign key was the one cause found).
+func TestE2E_Impersonation_IdentityWritesNeverAnswer500(t *testing.T) {
+	f := newE2EFixture(t)
+	tenantA := f.registerAndLogin(t, "acme")
+	platformTok := f.mintPlatformToken(t, "")
+	resp := f.authedJSON(t, http.MethodPost, "/api/v1/platform/impersonation/sessions", platformTok,
+		ports.CreateImpersonationSessionRequest{TargetTenantID: tenantA.TenantID, Reason: "ticket #78 write sweep", DurationMinutes: 30})
+	if resp.status != http.StatusCreated {
+		t.Fatalf("create session: %d %s", resp.status, resp.body)
+	}
+	var out ports.CreateImpersonationSessionResponse
+	if err := json.Unmarshal(resp.body, &out); err != nil {
+		t.Fatal(err)
+	}
+	const otherID = "01923400-0000-7000-8000-00000000dead"
+	m := tenantA.MembershipID
+	for _, c := range []struct {
+		name, method, path string
+		body               any
+	}{
+		{"create role", http.MethodPost, "/api/v1/roles", ports.CreateRoleRequest{Name: "Imp Role", HierarchyLevel: 60}},
+		{"update role", http.MethodPatch, "/api/v1/roles/" + otherID, map[string]any{"name": "x"}},
+		{"delete role", http.MethodDelete, "/api/v1/roles/" + otherID, nil},
+		{"update user profile", http.MethodPatch, "/api/v1/users/" + m + "/profile", ports.UpdateUserProfileRequest{Designation: "d", Department: "e", StatusMessage: "s"}},
+		{"deactivate user", http.MethodPost, "/api/v1/users/" + m + "/deactivate", ports.DeactivateUserRequest{Reason: "sweep"}},
+		{"reactivate user", http.MethodPost, "/api/v1/users/" + m + "/reactivate", nil},
+		{"assign role", http.MethodPost, "/api/v1/users/" + m + "/roles", map[string]any{"role_id": otherID}},
+		{"assign manager", http.MethodPut, "/api/v1/users/" + m + "/manager", map[string]any{"manager_id": otherID}},
+		{"remove manager", http.MethodDelete, "/api/v1/users/" + m + "/manager", nil},
+		{"overrides", http.MethodPatch, "/api/v1/users/" + m + "/permission-overrides", map[string]any{"granted": []string{}, "revoked": []string{}}},
+		{"permission request", http.MethodPost, "/api/v1/permission-requests", ports.CreatePermissionRequestRequest{Permission: "crm.leads.read", DurationDays: 1, Reason: "sweep"}},
+		{"tenant profile", http.MethodPatch, "/api/v1/tenants/" + tenantA.TenantID + "/profile", ports.UpdateTenantProfileRequest{LegalName: "L", DisplayName: "D"}},
+		{"change password", http.MethodPost, "/api/v1/auth/change-password", map[string]any{"current_password": "x", "new_password": "Y-new-pass-2026!x"}},
+	} {
+		r := f.authedJSON(t, c.method, c.path, out.AccessToken, c.body)
+		if r.status >= 500 {
+			t.Errorf("%s: %s %s answered %d under an impersonation token: %s", c.name, c.method, c.path, r.status, r.body)
+		}
+	}
+}
