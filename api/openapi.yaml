@@ -302,6 +302,7 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/ChangePasswordRequest' }
       responses:
+        '403': { $ref: '#/components/responses/ImpersonationNotAllowed' }
         '204': { description: Password changed }
         '401':
           description: Incorrect current password, or the access token is stale (`stale_token`)
@@ -330,6 +331,7 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/RequestEmailChangeRequest' }
       responses:
+        '403': { $ref: '#/components/responses/SessionRefused' }
         '204': { description: Email-change request accepted (silent on collision) }
         '400': { $ref: '#/components/responses/BadRequest' }
 
@@ -381,6 +383,7 @@ paths:
         - $ref: '#/components/parameters/Cursor'
         - $ref: '#/components/parameters/PageSize'
       responses:
+        '403': { $ref: '#/components/responses/SessionRefused' }
         '200':
           description: Activity page
           content:
@@ -394,6 +397,7 @@ paths:
       tags: [sessions]
       summary: List active sessions for the caller
       responses:
+        '403': { $ref: '#/components/responses/SessionRefused' }
         '200':
           description: Sessions
           content:
@@ -407,6 +411,7 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/RevokeAllSessionsRequest' }
       responses:
+        '403': { $ref: '#/components/responses/SessionRefused' }
         '200':
           description: Sessions revoked
           content:
@@ -423,6 +428,7 @@ paths:
           required: true
           schema: { type: string, format: uuid }
       responses:
+        '403': { $ref: '#/components/responses/SessionRefused' }
         '204': { description: Session revoked (idempotent) }
         '400': { $ref: '#/components/responses/BadRequest' }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -3749,6 +3755,7 @@ paths:
             type: string
             enum: [lead_assigned, lead_converted, order_confirmed, order_delivered, work_item_assigned, work_item_overdue, stock_expiring, stock_below_reorder, reminder]
       responses:
+        '403': { $ref: '#/components/responses/PasswordChangeRequired' }
         '200':
           description: Cursor-paginated notification page
           content:
@@ -3763,6 +3770,7 @@ paths:
       tags: [notifications]
       summary: Unread notification count for the caller (badge)
       responses:
+        '403': { $ref: '#/components/responses/PasswordChangeRequired' }
         '200':
           description: Unread count
           content:
@@ -3778,6 +3786,7 @@ paths:
       parameters:
         - { $ref: '#/components/parameters/XCommandId' }
       responses:
+        '403': { $ref: '#/components/responses/PasswordChangeRequired' }
         '200':
           description: Count of notifications flipped to read
           content:
@@ -3794,6 +3803,7 @@ paths:
         - { $ref: '#/components/parameters/NotificationId' }
         - { $ref: '#/components/parameters/XCommandId' }
       responses:
+        '403': { $ref: '#/components/responses/PasswordChangeRequired' }
         '204': { description: Marked read }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
@@ -3812,6 +3822,7 @@ paths:
         - { $ref: '#/components/parameters/NotificationId' }
         - { $ref: '#/components/parameters/XCommandId' }
       responses:
+        '403': { $ref: '#/components/responses/PasswordChangeRequired' }
         '204': { description: Dismissed }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
@@ -4007,7 +4018,41 @@ components:
         application/json:
           schema: { $ref: '#/components/schemas/ErrorResponse' }
     Forbidden:
-      description: Authenticated but missing the required permission
+      description: |
+        Authenticated but missing the required permission. Every authenticated operation
+        outside the forced-change allowlist can also answer `403` with
+        `error: password_change_required` while the token carries `must_change_password`
+        (see the API description; no `WWW-Authenticate`, do not refresh), and an
+        impersonation token answers `403 impersonation_not_allowed` on the routes it may
+        not reach (platform plane, tenant lifecycle, search, anonymise, self-service).
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+    PasswordChangeRequired:
+      description: |
+        `error: password_change_required`. The token carries `must_change_password`: the
+        person holds a temporary credential and must change it first. Only
+        `POST /api/v1/auth/change-password` and `GET /api/v1/auth/me/capabilities` are
+        reachable. The response carries no `WWW-Authenticate` (this is not a session
+        problem: do not refresh). Applies to every authenticated operation outside that
+        allowlist; operations that document a more specific 403 carry it in that
+        response's description.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+    SessionRefused:
+      description: |
+        `error: impersonation_not_allowed` (the token is an impersonation token, and this
+        account route is never reachable with one) or `error: password_change_required`
+        (the token carries `must_change_password`). Neither carries `WWW-Authenticate`.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+    ImpersonationNotAllowed:
+      description: |
+        `error: impersonation_not_allowed`. The token is an impersonation token; changing
+        a password is never reachable with one. (This operation is on the forced-change
+        allowlist, so `password_change_required` does not apply.)
       content:
         application/json:
           schema: { $ref: '#/components/schemas/ErrorResponse' }
@@ -4016,6 +4061,7 @@ components:
         The route does not support the `X-Tenant-Id` operator scope (it acts on the
         caller's own tenant only) and the header selected a different tenant
         (`tenant_scope_not_supported`, ADR 0039).
+        (Like every authenticated operation, also `403 password_change_required` while the token carries `must_change_password`.)
       content:
         application/json:
           schema: { $ref: '#/components/schemas/ErrorResponse' }
@@ -4033,6 +4079,7 @@ components:
         Editing a role acts on its active holders (`insufficient_rank`, `self_modification_forbidden`); lifting a
         member's explicit revoke (an overrides change, or approving a request for a revoked name) needs the Admin
         tier or above (`grant_exceeds_authority`).
+        (Like every authenticated operation, also `403 password_change_required` while the token carries `must_change_password`.)
       content:
         application/json:
           schema: { $ref: '#/components/schemas/ErrorResponse' }
@@ -4047,6 +4094,7 @@ components:
         decides, with `forbidden`. `tenant_scope_forbidden` is decided before any tenant
         lookup and is identical for existing, unknown and suspended tenants, so it cannot
         be used to probe which tenants exist.
+        (Like every authenticated operation, also `403 password_change_required` while the token carries `must_change_password`.)
       content:
         application/json:
           schema: { $ref: '#/components/schemas/ErrorResponse' }
@@ -4057,6 +4105,7 @@ components:
         tenant, and this route is not one of the identity writes operators may perform
         under scope. Writes to crm, orders, tasks, dispatch and inventory are never
         accepted under a foreign `X-Tenant-Id`; call them as a member of the tenant.
+        (Like every authenticated operation, also `403 password_change_required` while the token carries `must_change_password`.)
       content:
         application/json:
           schema: { $ref: '#/components/schemas/ErrorResponse' }
