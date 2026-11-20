@@ -118,3 +118,31 @@ func TestAttack_Members_RoleConferralTables(t *testing.T) {
 	}
 	w.assertGrouped(t, slices.Clone(rows))
 }
+
+// TestAttack_Members_ManagerLinksCannotLoopOrInvert is goal 5 for the reporting
+// chain, with an actor who is entitled to act (the owner): the link itself must
+// still be refused when it would close a loop, put a junior or a peer over a
+// member, name an inactive or foreign member, or point at the member itself.
+func TestAttack_Members_ManagerLinksCannotLoopOrInvert(t *testing.T) {
+	w := newAttackWorld(t)
+	// chain: exec -> lead -> sales -> senior -> admin ; exec2 -> lead ; hr -> senior
+	put := func(what, member, manager string, status int, code string) attack {
+		return attack{who: "owner", what: what, method: http.MethodPut, path: "/api/v1/users/" + member + "/manager",
+			body: ports.AssignUserManagerRequest{ManagerID: manager}, status: status, code: code}
+	}
+	m := func(key string) string { return w.mid(t, key) }
+	w.assertRows(t, []attack{
+		put("close the loop: the top of the chain reports to the bottom", m("admin"), m("exec"), http.StatusUnprocessableEntity, "manager_not_eligible"),
+		put("close a loop one step up", m("senior"), m("lead"), http.StatusUnprocessableEntity, "manager_not_eligible"),
+		put("a junior over a senior", m("senior"), m("exec2"), http.StatusUnprocessableEntity, "manager_not_eligible"),
+		put("a peer over a peer (managers)", m("sales"), m("hr"), http.StatusUnprocessableEntity, "manager_not_eligible"),
+		put("a peer over a peer (executives)", m("exec"), m("exec2"), http.StatusUnprocessableEntity, "manager_not_eligible"),
+		put("an unroled member over an executive", m("exec"), m("norole"), http.StatusUnprocessableEntity, "manager_not_eligible"),
+		put("an inactive member as the manager", m("lead"), w.goneOwner.membershipID, http.StatusUnprocessableEntity, "manager_not_eligible"),
+		put("another tenant's member as the manager", m("lead"), w.vExec.membershipID, http.StatusUnprocessableEntity, "manager_not_eligible"),
+		put("a member that does not exist as the manager", m("lead"), "01a1f6e5-0000-7000-8000-000000000001", http.StatusUnprocessableEntity, "manager_not_eligible"),
+		put("a member as their own manager", m("lead"), m("lead"), http.StatusUnprocessableEntity, "user_invalid"),
+		// Administrator over the Senior Manager is the one valid direction; the tenant's owners have no manager
+		put("an executive over an owner", m("owner2"), m("exec"), http.StatusUnprocessableEntity, "manager_not_eligible"),
+	})
+}

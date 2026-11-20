@@ -20,6 +20,7 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/domain/permission"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/role"
 	"github.com/leadkart/leadkart-go/internal/identity/ports"
+	invports "github.com/leadkart/leadkart-go/internal/inventory/ports"
 )
 
 // anyRefusal is the set of codes any gate may answer an unauthorised caller with.
@@ -53,6 +54,9 @@ func TestAttack_Operators_OneNarrowPermissionReachesNothingInATenant(t *testing.
 		{"grant tenant.admin to a role", http.MethodPost, "/api/v1/roles/" + shell + "/permissions/grant", ports.RolePermissionRequest{Permission: p.Meta.TenantAdmin}},
 		{"delete a role", http.MethodDelete, "/api/v1/roles/" + shell, nil},
 		{"submit a permission request", http.MethodPost, "/api/v1/permission-requests", ports.CreatePermissionRequestRequest{Permission: p.Users.View, Reason: elevationReason}},
+		{"write a product (business module)", http.MethodPost, "/api/v1/inventory/products", invports.CreateProductRequest{SKU: "ATK-001", Name: "Attack", DosageForm: "tablet", PackSize: "10x10", HSNCode: "30049099", GSTRateBps: 1200}},
+		{"read the catalogue (business module)", http.MethodGet, "/api/v1/inventory/products", nil},
+		{"list the approver queue", http.MethodGet, "/api/v1/permission-requests?role=approver", nil},
 		{"suspend the tenant", http.MethodPost, "/api/v1/tenants/" + w.owner.TenantID + "/suspend", map[string]any{"reason": "operator attack"}},
 	}
 	narrow := []string{p.Platform.TenantsView, p.Platform.TenantsCreate, p.Platform.TenantsManage, p.Platform.UsersView, p.Platform.UsersCreate,
@@ -66,6 +70,9 @@ func TestAttack_Operators_OneNarrowPermissionReachesNothingInATenant(t *testing.
 		for _, rt := range routes {
 			// the one write a single permission may legitimately make on its own is exercised by the platform-gate suite
 			for _, h := range []map[string]string{hdr, nil} {
+				if h == nil && rt.what == "list the approver queue" {
+					continue // without a header it is the operator's own (empty) queue: nothing of the tenant's
+				}
 				if h == nil && rt.method == http.MethodPost && rt.path == "/api/v1/users" {
 					continue // a synthetic operator token's tenant does not exist: create-user would fail on the foreign key, an artifact of the fixture
 				}

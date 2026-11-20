@@ -107,7 +107,15 @@ type attackWorld struct {
 // tokens. Every change is made BEFORE any persona logs in, so no token is stale.
 func newAttackWorld(t *testing.T) *attackWorld {
 	t.Helper()
-	f := newE2EFixtureAt(t, time.Now)
+	return newAttackWorldWith(t, false)
+}
+
+// newAttackWorldWith is [newAttackWorld] on the production stack when cascade is
+// set: stamp rotations evict the stamp cache and deactivations revoke refresh
+// families, so a stale token answers 401 on the next request.
+func newAttackWorldWith(t *testing.T, cascade bool) *attackWorld {
+	t.Helper()
+	f := newE2EFixtureWith(t, time.Now, cascade)
 	w := &attackWorld{f: f, owner: f.registerAndLogin(t, "atk"), victim: f.registerAndLogin(t, "atkvic"),
 		roles: map[string]string{}, who: map[string]*atkPersona{}}
 	ownTok := w.owner.AccessToken
