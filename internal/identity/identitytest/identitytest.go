@@ -43,7 +43,7 @@ func GetSecurityStamp(t testing.TB, pool *pgxpool.Pool, personID string) string 
 // Exactly one row must change.
 func ClearMustChangePassword(t testing.TB, pool *pgxpool.Pool, email string) {
 	t.Helper()
-	tag, err := pool.Exec(t.Context(), `UPDATE identity.persons SET must_change_password = false WHERE email = $1`, email)
+	tag, err := pool.Exec(t.Context(), `UPDATE identity.persons SET must_change_password = false WHERE email = lower($1)`, email)
 	if err != nil {
 		t.Fatalf("identitytest.ClearMustChangePassword(%s): %v", email, err)
 	}

@@ -3,6 +3,7 @@ package authn
 import (
 	"net/http"
 	"slices"
+	"strings"
 )
 
 // errCodePasswordChangeRequired is the 403 a token carrying must_change_password
@@ -37,4 +38,71 @@ func PendingPasswordChangeAllowlist() []string { return slices.Clone(pendingPass
 // with a must_change_password token.
 func pendingPasswordChangeAllowed(r *http.Request) bool {
 	return r.Pattern != "" && slices.Contains(pendingPasswordChangeAllowlist, r.Pattern)
+}
+
+// errCodeImpersonationNotAllowed mirrors ports.ErrCodeImpersonationNotAllowed
+// (the authority commands answer the same code from inside the handler).
+const errCodeImpersonationNotAllowed = "impersonation_not_allowed"
+
+// impersonationRefusedPrefix: the platform plane. Every /api/v1/platform/ route is
+// platform-wide by doctrine (CLAUDE.md of the web repo, rule 9): impersonation
+// sessions (no sub-impersonation, no listing, no ending), person administration,
+// tenant deletion, stats, the unverified-contact queue, the lead marketplace
+// (purchase spends tenant lead credits: refused while impersonating, pending owner
+// confirmation, ADR 0069) and lead-credit top-ups. An impersonation token never
+// reaches any of them, however many permissions its Admin-equivalent authority
+// would satisfy.
+const impersonationRefusedPrefix = "/api/v1/platform/"
+
+// impersonationRefusedRoutes are the routes OUTSIDE the platform prefix an
+// impersonation token must never reach, as ServeMux patterns (matched against the
+// request's r.Pattern, like the allowlist above):
+//
+//   - the platform-anchored routes that live on tenant paths: tenant registration,
+//     the lifecycle commands (suspend, activate, mark-for-deletion, restore), the
+//     operator omni-search and user anonymisation (cross-tenant blast radius);
+//   - the self-service routes that act on "the caller": credential, email,
+//     sessions and activity of the synthetic membership an impersonation token
+//     carries, and the permission-request commands (an impersonation session
+//     cannot submit, approve, deny or cancel; the command refuses it too).
+//
+// Everything else is reachable with the Admin-equivalent authority the policy
+// grants a session (never owner-level, never tenant.admin: the authority policy,
+// not this list, decides that). GET /auth/me/capabilities stays open (the
+// front-end renders the session from it) and so do the two permission-request
+// reads (they list and show requests of the synthetic member: empty by design).
+// An architecture test asserts this list against the registered routes.
+var impersonationRefusedRoutes = []string{
+	"DELETE /api/v1/auth/sessions",
+	"DELETE /api/v1/auth/sessions/{familyId}",
+	"GET /api/v1/auth/me/activity",
+	"GET /api/v1/auth/sessions",
+	"GET /api/v1/search",
+	"POST /api/v1/auth/change-password",
+	"POST /api/v1/auth/request-email-change",
+	"POST /api/v1/permission-requests",
+	"POST /api/v1/permission-requests/{requestId}/approve",
+	"POST /api/v1/permission-requests/{requestId}/cancel",
+	"POST /api/v1/permission-requests/{requestId}/deny",
+	"POST /api/v1/tenants",
+	"POST /api/v1/tenants/{tenantId}/activate",
+	"POST /api/v1/tenants/{tenantId}/mark-for-deletion",
+	"POST /api/v1/tenants/{tenantId}/restore",
+	"POST /api/v1/tenants/{tenantId}/suspend",
+	"POST /api/v1/users/{userId}/anonymise",
+}
+
+// ImpersonationRefusals returns a copy of the pinned refusal list (the routes
+// outside the platform prefix), for the tests that assert it.
+func ImpersonationRefusals() []string { return slices.Clone(impersonationRefusedRoutes) }
+
+// ImpersonationRefused reports whether an impersonation token is refused on the
+// route registered as pattern ("METHOD /path"): the platform plane or the pinned
+// list. An empty pattern (not served by a ServeMux) is never refused here.
+func ImpersonationRefused(pattern string) bool {
+	if slices.Contains(impersonationRefusedRoutes, pattern) {
+		return true
+	}
+	_, path, ok := strings.Cut(pattern, " ")
+	return ok && strings.HasPrefix(path, impersonationRefusedPrefix)
 }

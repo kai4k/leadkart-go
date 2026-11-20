@@ -256,12 +256,13 @@ func (i *Issuer) Issue(args IssueArgs) (string, error) {
 //   - exp + nbf checked with ClockSkew leeway.
 //   - kid header MUST match a known key id (current OR previous).
 //   - iss MUST equal [IssuerClaim] (RFC 7519 §4.1.1 + RFC 8725 §3.10).
-//   - aud MUST contain [AudienceClaim] OR [ImpersonationAudienceClaim]
-//     (RFC 7519 §4.1.3 + RFC 8725 §3.11). The accepted set is closed —
-//     any other audience fails. Route-level middleware inspects the
-//     parsed Claims.Audience to enforce per-route audience policy
-//     (e.g. /v1/platform/impersonation/sessions rejects impersonation
-//     tokens to prevent sub-impersonation).
+//   - aud MUST be exactly one of [AudienceClaim] OR
+//     [ImpersonationAudienceClaim] (RFC 7519 §4.1.3 + RFC 8725 §3.11). The
+//     accepted set is closed; any other audience, or more than one, fails.
+//   - the impersonation audience and the act claim agree: aud is
+//     [ImpersonationAudienceClaim] if and only if act is present. Per-route
+//     reach of an impersonation token (the refusal list) is authn's, keyed on
+//     the act claim this check makes trustworthy.
 func (i *Issuer) Verify(token string) (*Claims, error) {
 	parser := jwtv5.NewParser(
 		jwtv5.WithValidMethods([]string{"HS256"}),
@@ -302,6 +303,13 @@ func (i *Issuer) Verify(token string) (*Claims, error) {
 	if !audienceAccepted(claims.Audience) {
 		return nil, fmt.Errorf("%w: unexpected audience %v", ErrInvalidToken, claims.Audience)
 	}
+	// ONE audience rule (ADR 0045, plan D9): the impersonation audience and the
+	// act claim travel together. An ordinary token is never an impersonation
+	// token, and an impersonation token never passes as an ordinary one: a token
+	// with exactly one of the two is malformed whichever route it reaches.
+	if (claims.Audience[0] == ImpersonationAudienceClaim) != (claims.Act != nil) {
+		return nil, fmt.Errorf("%w: audience %v disagrees with the act claim", ErrInvalidToken, claims.Audience)
+	}
 	return claims, nil
 }
 
@@ -309,12 +317,9 @@ func (i *Issuer) Verify(token string) (*Claims, error) {
 // LeadKart-accepted set (regular API tokens + impersonation tokens).
 // Anything else is treated as ErrInvalidToken.
 func audienceAccepted(aud jwtv5.ClaimStrings) bool {
-	for _, a := range aud {
-		if a == AudienceClaim || a == ImpersonationAudienceClaim {
-			return true
-		}
-	}
-	return false
+	// Exactly one audience, from the closed set: a multi-audience token could
+	// satisfy both the ordinary and the impersonation rule at once.
+	return len(aud) == 1 && (aud[0] == AudienceClaim || aud[0] == ImpersonationAudienceClaim)
 }
 
 // newJTI returns a 32-char hex-encoded random id — entropy source is

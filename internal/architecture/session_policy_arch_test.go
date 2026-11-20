@@ -28,6 +28,7 @@ import (
 	dispatchports "github.com/leadkart/leadkart-go/internal/dispatch/ports"
 	identityapp "github.com/leadkart/leadkart-go/internal/identity/app"
 	"github.com/leadkart/leadkart-go/internal/identity/app/jwt"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 	identityports "github.com/leadkart/leadkart-go/internal/identity/ports"
 	"github.com/leadkart/leadkart-go/internal/identity/ports/authn"
 	inventoryapp "github.com/leadkart/leadkart-go/internal/inventory/app"
@@ -69,6 +70,11 @@ func (v tokenFake) Verify(tok string) (*jwt.Claims, error) {
 type liveValidator struct{}
 
 func (liveValidator) IsFresh(context.Context, string, string) (bool, error) { return true, nil }
+
+// IsSessionLive makes liveValidator a authn.SessionValidator: every session is live.
+func (liveValidator) IsSessionLive(context.Context, string, string, tenant.ID) (bool, error) {
+	return true, nil
+}
 
 // allRoutesMux registers every module's routes exactly as cmd/api newServer
 // does (same AddRoutes), against zero-value applications.
@@ -184,6 +190,104 @@ func TestArch_MustChangePassword_BlocksEveryRouteButThePinnedAllowlist(t *testin
 		}
 		if slices.Contains(anonymousAPIRoutes, entry) {
 			t.Errorf("allowlist entry %q is anonymous: it needs no entry", entry)
+		}
+	}
+}
+
+// impersonationRefusedOutsideThePlatformPlane is the exact list of routes, outside
+// /api/v1/platform/, an impersonation token is refused on (plan D9). It restates
+// authn.ImpersonationRefusals on purpose: changing the policy is a deliberate edit
+// of both, reviewed together.
+var impersonationRefusedOutsideThePlatformPlane = []string{
+	"DELETE /api/v1/auth/sessions",
+	"DELETE /api/v1/auth/sessions/{familyId}",
+	"GET /api/v1/auth/me/activity",
+	"GET /api/v1/auth/sessions",
+	"GET /api/v1/search",
+	"POST /api/v1/auth/change-password",
+	"POST /api/v1/auth/request-email-change",
+	"POST /api/v1/permission-requests",
+	"POST /api/v1/permission-requests/{requestId}/approve",
+	"POST /api/v1/permission-requests/{requestId}/cancel",
+	"POST /api/v1/permission-requests/{requestId}/deny",
+	"POST /api/v1/tenants",
+	"POST /api/v1/tenants/{tenantId}/activate",
+	"POST /api/v1/tenants/{tenantId}/mark-for-deletion",
+	"POST /api/v1/tenants/{tenantId}/restore",
+	"POST /api/v1/tenants/{tenantId}/suspend",
+	"POST /api/v1/users/{userId}/anonymise",
+}
+
+// impersonationOpenSelfService are the routes with no permission gate that an
+// impersonation token may still reach: the session's own capabilities (the
+// front-end renders the session from them) and the two permission-request reads
+// (read-only, empty for the synthetic member). Every OTHER route that acts on "the
+// caller" without a permission gate must be on the refusal list.
+var impersonationOpenSelfService = []string{
+	"GET /api/v1/auth/me/capabilities",
+	"GET /api/v1/permission-requests",
+	"GET /api/v1/permission-requests/{requestId}",
+}
+
+// TestArch_ImpersonationToken_RefusedExactlyWhereTheListSays (plan D9): for EVERY
+// registered /api/v1 route, an impersonation token (a live session carrying
+// tenant.admin, i.e. Admin-equivalent authority that would satisfy the permission
+// gates)
+//   - is answered 403 impersonation_not_allowed on the platform plane and on the
+//     pinned list, and only there;
+//   - is refused on every platform-anchored route, wherever it lives;
+//   - is refused on every self-service route (no permission gate) except the
+//     pinned open ones, so a new self-service route has to be decided.
+//
+// The list is also pinned exactly and every entry must be a registered route.
+//
+// Scope: production — every route registered by every module's ports and cmd/api.
+//
+// arch-test:no-negative-fixture (RED proof: add a route under authn.RequirePlatform outside /api/v1/platform/, or a self-service route without a decision → this test fails)
+func TestArch_ImpersonationToken_RefusedExactlyWhereTheListSays(t *testing.T) {
+	t.Parallel()
+	imp := tenantClaims()
+	imp.Permissions = []string{"tenant.admin"}
+	imp.Act = &jwt.ActClaim{Sub: imp.Subject, SessionID: "0190a000-0000-7000-8000-0000000000e1", Reason: "architecture test session"}
+	h := allRoutesMux(tokenFake{imp}, liveValidator{})
+
+	if got := authn.ImpersonationRefusals(); !slices.Equal(got, impersonationRefusedOutsideThePlatformPlane) {
+		t.Errorf("authn.ImpersonationRefusals changed.\n got:  %v\n want: %v\nChanging what an impersonation session may reach is a reviewed decision: update both lists and the ADR.", got, impersonationRefusedOutsideThePlatformPlane)
+	}
+	registered := map[string]bool{}
+	for _, reg := range apiRoutes(t) {
+		registered[reg.Pattern] = true
+		want := authn.ImpersonationRefused(reg.Pattern)
+		rec := serveRoute(t, h, reg)
+		got := isCode(rec, http.StatusForbidden, "impersonation_not_allowed")
+		anonymous := reg.firstGate() < 0
+		switch {
+		case anonymous:
+			if got {
+				t.Errorf("%s is anonymous but answered impersonation_not_allowed", reg.Pattern)
+			}
+			continue
+		case got != want:
+			t.Errorf("%s:%d %s: impersonation token got %d %s; refused = %v, want %v", reg.File, reg.Line, reg.Pattern, rec.Code, rec.Body.String(), got, want)
+		}
+		if reg.has(tagAnchor) && !want {
+			t.Errorf("%s:%d %s is platform-anchored but an impersonation token is not refused on it", reg.File, reg.Line, reg.Pattern)
+		}
+		if !reg.has(tagAuthz) && !reg.has(tagAnchor) && !want && !slices.Contains(impersonationOpenSelfService, reg.Pattern) {
+			t.Errorf("%s:%d %s is a self-service route (no permission gate) an impersonation token may reach: refuse it (authn.impersonationRefusedRoutes) or pin it in impersonationOpenSelfService with a reason", reg.File, reg.Line, reg.Pattern)
+		}
+	}
+	for _, entry := range impersonationRefusedOutsideThePlatformPlane {
+		if !registered[entry] {
+			t.Errorf("refusal-list entry %q is not a registered route: remove it", entry)
+		}
+		if _, path, _ := strings.Cut(entry, " "); strings.HasPrefix(path, "/api/v1/platform/") {
+			t.Errorf("refusal-list entry %q is under the platform prefix, which is refused as a whole: remove it", entry)
+		}
+	}
+	for _, entry := range impersonationOpenSelfService {
+		if !registered[entry] {
+			t.Errorf("impersonationOpenSelfService entry %q is not a registered route: remove it", entry)
 		}
 	}
 }

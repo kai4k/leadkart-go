@@ -220,3 +220,43 @@ func TestIssue_MustChangePasswordClaim_RoundTripsAndDefaultsFalse(t *testing.T) 
 		t.Fatal("absent claim must verify as false")
 	}
 }
+
+// ADR 0045 / plan D9: the impersonation audience and the act claim travel
+// together. A token with one and not the other is never valid.
+func TestVerify_AudienceAndActClaimMustAgree(t *testing.T) {
+	t.Parallel()
+	iss := issuerWithSecret(t, "k1", hex32a, time.Date(2026, 5, 6, 12, 0, 0, 0, time.UTC))
+	act := &jwt.ActClaim{Sub: "12345678-1234-1234-1234-123456789012", SessionID: "s1", Reason: "support ticket"}
+
+	cases := []struct {
+		name     string
+		audience string
+		act      *jwt.ActClaim
+		ok       bool
+	}{
+		{"ordinary token", "", nil, true},
+		{"impersonation token", jwt.ImpersonationAudienceClaim, act, true},
+		{"impersonation audience without act", jwt.ImpersonationAudienceClaim, nil, false},
+		{"ordinary audience with act", jwt.AudienceClaim, act, false},
+		{"default audience with act", "", act, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			args := validArgs()
+			args.Audience = tc.audience
+			args.Act = tc.act
+			tok, err := iss.Issue(args)
+			if err != nil {
+				t.Fatalf("Issue: %v", err)
+			}
+			_, err = iss.Verify(tok)
+			if tc.ok && err != nil {
+				t.Fatalf("Verify: %v", err)
+			}
+			if !tc.ok && !errors.Is(err, jwt.ErrInvalidToken) {
+				t.Fatalf("Verify err = %v, want ErrInvalidToken", err)
+			}
+		})
+	}
+}

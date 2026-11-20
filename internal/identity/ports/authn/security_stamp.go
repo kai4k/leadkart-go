@@ -149,6 +149,13 @@ func RequireFreshStamp(verifier Verifier, validator StampValidator) func(http.Ha
 			if c.Act != nil && !sessionLive(w, r, validator, c) {
 				return
 			}
+			// An impersonation token never reaches the platform plane or the pinned
+			// self-service / cross-tenant routes (plan D9): ONE list, checked here for
+			// every route, after the session proved alive (a dead session is 401 first).
+			if c.Act != nil && ImpersonationRefused(r.Pattern) {
+				writeForbidden(w, errCodeImpersonationNotAllowed, "not available during an impersonation session")
+				return
+			}
 			// Forced password change (plan D8): a token minted for a person who still
 			// holds a temporary credential reaches the pinned allowlist and nothing
 			// else. Checked here, once, for every authenticated route: a route that

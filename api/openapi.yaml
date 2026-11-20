@@ -47,6 +47,18 @@ info:
     emailed-token flows are anonymous and unaffected. Tokens minted before the
     claim existed carry no flag.
 
+    **Impersonation tokens (ADR 0045 / ADR 0069):** a token minted by an impersonation
+    session (`aud: leadkart-impersonation`, with an `act` claim; the two always
+    travel together, otherwise the token is `401`) is only as alive as its session:
+    once the session ends or expires every route answers `401 stale_token`. While it
+    lives it is Admin-equivalent in the target tenant and is refused with `403
+    impersonation_not_allowed` on every `/api/v1/platform/*` route, on tenant
+    registration, tenant suspend / activate / mark-for-deletion / restore,
+    `GET /api/v1/search`, `POST /api/v1/users/{userId}/anonymise`, and the routes that
+    act on "the caller": change password, request email change, sessions, own
+    activity, and permission-request submit / approve / deny / cancel. Capabilities
+    and the permission-request reads stay available.
+
     **Multi-tenant scope:** every authenticated call carries the caller's
     `tenant_id` claim implicitly. Platform operators (`is_platform=true` JWT)
     select a tenant per request via the `X-Tenant-Id` header (ADR 0039):
