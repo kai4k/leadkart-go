@@ -52,13 +52,35 @@ const (
 //
 // There is no default keyer: the caller scope is a security decision the
 // composition root makes (cmd/api passes authn.IdempotencyCallerKeyer).
+//
+// A keyer may return [Ineligible] to say "idempotency does not apply to this
+// request": the middleware then ignores X-Command-Id and stores nothing.
 type CallerKeyer func(r *http.Request) string
+
+// Ineligible is the scope a [CallerKeyer] returns for a request that must never
+// be stored or replayed (credential exchanges, anonymous callers). It is not a
+// valid scope string for any real caller, so it cannot collide with one.
+const Ineligible = "\x00ineligible"
+
+// replayableMethod reports whether idempotency applies to the method. A safe,
+// read-only request (GET, HEAD, OPTIONS, TRACE) has no command to deduplicate
+// and its answer must not be frozen; the header is ignored on it.
+func replayableMethod(m string) bool {
+	switch m {
+	case http.MethodGet, http.MethodHead, http.MethodOptions, http.MethodTrace:
+		return false
+	}
+	return true
+}
 
 // Middleware wraps next in idempotency handling per [CommandIDHeader].
 //
 // Behaviour:
 //
 //   - Header absent → call next directly (opt-in).
+//   - Safe method (GET, HEAD, OPTIONS, TRACE) → header ignored, call next.
+//   - Keyer says [Ineligible] (credential routes, anonymous callers) → header
+//     ignored, nothing stored, call next.
 //   - Header malformed (not a UUID) → 400 idempotency.invalid_command_id.
 //   - Caller scope missing → 400 idempotency.invalid_command_id.
 //   - Cached match → replay stored response with X-Idempotent-Replay: true.
@@ -93,8 +115,14 @@ func Middleware(store Store, now func() time.Time, ttl time.Duration, keyer Call
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			raw := strings.TrimSpace(r.Header.Get(CommandIDHeader))
-			if raw == "" {
+			if raw == "" || !replayableMethod(r.Method) {
 				// Opt-in: no header, no idempotency. Call through.
+				next.ServeHTTP(w, r)
+				return
+			}
+			callerID := keyer(r)
+			if callerID == Ineligible {
+				// Not a command to replay: the header is ignored, even a malformed one.
 				next.ServeHTTP(w, r)
 				return
 			}
@@ -104,7 +132,6 @@ func Middleware(store Store, now func() time.Time, ttl time.Duration, keyer Call
 					"X-Command-Id must be a UUID")
 				return
 			}
-			callerID := keyer(r)
 			if callerID == "" {
 				writeJSONError(w, http.StatusBadRequest, errCodeInvalidCommandID,
 					"X-Command-Id requires an authenticated caller scope")

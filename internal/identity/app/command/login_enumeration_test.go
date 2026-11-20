@@ -20,40 +20,72 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
 )
 
-// fakePhantomLockout mirrors the adapter's threshold rule: it locks the key on
-// the person.MaxFailedLogins-th failure and counts every call it receives.
+// fakePhantomLockout mirrors the Postgres statement's policy (the same one the
+// Person aggregate applies): the count restarts when the previous failure is older
+// than the window, a lock in force is kept, reaching person.MaxFailedLogins locks
+// for person.LockoutDuration. It counts every call it receives and records the
+// addresses it was asked about.
 type fakePhantomLockout struct {
-	mu          sync.Mutex
-	counts      map[string]int
-	lockedUntil map[string]time.Time
-	calls       int
+	mu        sync.Mutex
+	rows      map[string]*phantomRow
+	calls     int
+	registers int
+	seen      []string
+}
+
+type phantomRow struct {
+	count       int
+	lastFailed  time.Time
+	lockedUntil time.Time
 }
 
 func newFakePhantomLockout() *fakePhantomLockout {
-	return &fakePhantomLockout{counts: map[string]int{}, lockedUntil: map[string]time.Time{}}
+	return &fakePhantomLockout{rows: map[string]*phantomRow{}}
 }
 
-func (f *fakePhantomLockout) LockedUntil(_ context.Context, key string, now time.Time) time.Time {
+func (f *fakePhantomLockout) LockedUntil(_ context.Context, e email.Address, now time.Time) (time.Time, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls++
-	if until := f.lockedUntil[key]; now.Before(until) {
-		return until
+	f.seen = append(f.seen, e.String())
+	if r := f.rows[e.String()]; r != nil && now.Before(r.lockedUntil) {
+		return r.lockedUntil, nil
 	}
-	return time.Time{}
+	return time.Time{}, nil
 }
 
-func (f *fakePhantomLockout) RegisterFailure(_ context.Context, key string, now time.Time) time.Time {
+func (f *fakePhantomLockout) RegisterFailure(_ context.Context, e email.Address, now time.Time) (person.LockoutOutcome, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls++
-	f.counts[key]++
-	if f.counts[key] >= person.MaxFailedLogins {
-		f.counts[key] = 0
-		f.lockedUntil[key] = now.Add(person.LockoutDuration)
-		return f.lockedUntil[key]
+	f.registers++
+	f.seen = append(f.seen, e.String())
+	r := f.rows[e.String()]
+	if r == nil {
+		r = &phantomRow{}
+		f.rows[e.String()] = r
 	}
-	return time.Time{}
+	elapsed := !r.lastFailed.IsZero() && now.Sub(r.lastFailed) > person.LockoutWindow
+	if elapsed {
+		r.count = 0
+	}
+	r.count++
+	r.lastFailed = now
+	stillLocked := now.Before(r.lockedUntil)
+	switch {
+	case stillLocked:
+	case r.count >= person.MaxFailedLogins:
+		r.lockedUntil = now.Add(person.LockoutDuration)
+	case elapsed:
+		r.lockedUntil = time.Time{}
+	}
+	return person.LockoutOutcome{FailedCount: r.count, LockedUntil: r.lockedUntil, JustLocked: !stillLocked && now.Before(r.lockedUntil)}, nil
+}
+
+func (f *fakePhantomLockout) registerCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.registers
 }
 
 func (f *fakePhantomLockout) callCount() int {

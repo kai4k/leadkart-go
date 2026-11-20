@@ -88,6 +88,7 @@ type RegisterTenantHandler struct {
 	newTenantID     func() tenant.ID
 	newPersonID     func() person.ID
 	newMembershipID func() membership.ID
+	gate            *argon2.Gate
 }
 
 // NewRegisterTenantHandler wires the handler against domain
@@ -164,7 +165,7 @@ func (h RegisterTenantHandler) Handle(
 	ctx context.Context,
 	cmd RegisterTenantCommand,
 ) (RegisterTenantResult, error) {
-	pwd, err := h.hashAdminPassword(cmd.AdminPassword)
+	pwd, err := h.hashAdminPassword(ctx, cmd.AdminPassword)
 	if err != nil {
 		return RegisterTenantResult{}, err
 	}
@@ -200,8 +201,8 @@ func (h RegisterTenantHandler) Handle(
 // crypto/rand, no reason to hold a connection. Wraps the raw PHC
 // string in the [person.PasswordHash] VO so domain validators have
 // already passed by the time we hit the persist step.
-func (h RegisterTenantHandler) hashAdminPassword(plain string) (person.PasswordHash, error) {
-	rawHash, err := argon2.Hash(plain)
+func (h RegisterTenantHandler) hashAdminPassword(ctx context.Context, plain string) (person.PasswordHash, error) {
+	rawHash, err := h.gate.Hash(ctx, plain)
 	if err != nil {
 		return person.PasswordHash{}, fmt.Errorf("register tenant: hash password: %w", err)
 	}
@@ -392,4 +393,12 @@ func findCompanyOwner(roles []*role.Role) (*role.Role, bool) {
 		}
 	}
 	return nil, false
+}
+
+// WithArgonGate returns the handler with its password hashing running under
+// g (see [argon2.Gate]); a saturated gate refuses with [argon2.ErrBusy], which the
+// HTTP layer answers 503. Without it the work is unbounded (tests only).
+func (h RegisterTenantHandler) WithArgonGate(g *argon2.Gate) RegisterTenantHandler {
+	h.gate = g
+	return h
 }

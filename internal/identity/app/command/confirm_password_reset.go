@@ -42,6 +42,7 @@ type ConfirmPasswordResetHandler struct {
 	uow           pg.UnitOfWork
 	breachChecker passwordpolicy.Checker
 	now           func() time.Time
+	gate          *argon2.Gate
 }
 
 // NewConfirmPasswordResetHandler wires the handler. `now` is the
@@ -119,8 +120,11 @@ func (h ConfirmPasswordResetHandler) Handle(ctx context.Context, cmd ConfirmPass
 	// Reject same-as-current. The aggregate doesn't enforce this in
 	// ConfirmPasswordReset — applying the rule here keeps the audit
 	// log free of "user reset to the same password" no-ops.
-	if argon2.Verify(cmd.NewPassword, p.PasswordHash().String()) == nil {
+	switch err := h.gate.Verify(ctx, cmd.NewPassword, p.PasswordHash().String()); {
+	case err == nil:
 		return ErrPasswordSameAsCurrent
+	case errors.Is(err, argon2.ErrBusy) || ctx.Err() != nil:
+		return fmt.Errorf("confirm_password_reset: verify current: %w", err)
 	}
 
 	breached, err := h.breachChecker.IsBreached(ctx, cmd.NewPassword)
@@ -131,7 +135,7 @@ func (h ConfirmPasswordResetHandler) Handle(ctx context.Context, cmd ConfirmPass
 		return ErrPasswordBreached
 	}
 
-	newHashStr, err := argon2.Hash(cmd.NewPassword)
+	newHashStr, err := h.gate.Hash(ctx, cmd.NewPassword)
 	if err != nil {
 		return fmt.Errorf("confirm_password_reset: hash new: %w", err)
 	}
@@ -166,4 +170,12 @@ func (h ConfirmPasswordResetHandler) Handle(ctx context.Context, cmd ConfirmPass
 func hashResetToken(plaintext string) string {
 	sum := sha256.Sum256([]byte(plaintext))
 	return hex.EncodeToString(sum[:])
+}
+
+// WithArgonGate returns the handler with its password hashing and verification running under
+// g (see [argon2.Gate]); a saturated gate refuses with [argon2.ErrBusy], which the
+// HTTP layer answers 503. Without it the work is unbounded (tests only).
+func (h ConfirmPasswordResetHandler) WithArgonGate(g *argon2.Gate) ConfirmPasswordResetHandler {
+	h.gate = g
+	return h
 }

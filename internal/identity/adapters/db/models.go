@@ -188,6 +188,14 @@ type IdentityAuthRouting struct {
 	UpdatedAt      pgtype.Timestamptz
 }
 
+// Failed-login counter for addresses with no usable account. key = HMAC-SHA-256(server key, canonical email): never an email. Same atomic statement shape as identity.persons lockout. Purged by identity.login_phantom_purge. ADR 0068 D12.
+type IdentityLoginPhantomFailure struct {
+	Key          []byte
+	FailedCount  int32
+	LastFailedAt pgtype.Timestamptz
+	LockedUntil  pgtype.Timestamptz
+}
+
 // Per-Membership permission overlay. Effective set = role union ∪ granted \ revoked.
 type IdentityMembershipPermissionOverride struct {
 	MembershipID   pgtype.UUID

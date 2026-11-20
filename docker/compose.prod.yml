@@ -147,6 +147,9 @@ services:
       LEADKART_JWT__KEY_ID: "${JWT_KEY_ID}"
       LEADKART_JWT__SIGNING_KEY: "${JWT_SIGNING_KEY}"
       LEADKART_REFRESH__ABSOLUTE_TTL: "336h"
+      # Bounds on concurrent Argon2id work (docker/.env.example "Argon2 concurrency").
+      LEADKART_ARGON2__MAX_CONCURRENT: "${LEADKART_ARGON2__MAX_CONCURRENT:-16}"
+      LEADKART_ARGON2__QUEUE_TIMEOUT: "${LEADKART_ARGON2__QUEUE_TIMEOUT:-2s}"
       # Production mode: the api refuses to start when its database role is an owner /
       # superuser or lacks a privilege (pg.VerifyApplicationPrivileges), and when
       # LEADKART_HTTP__TRUSTED_PROXIES is unset or too wide (config.Validate).

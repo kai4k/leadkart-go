@@ -59,6 +59,15 @@ const (
 	// leaking stack traces / SQL fragments to clients.
 	ErrCodeInternalError = "internal_error"
 
+	// ErrCodeServiceBusy - the process-wide bound on concurrent Argon2id work was
+	// full for longer than the queue timeout (503 + Retry-After). Every login
+	// branch answers it the same way, so it is no existence oracle.
+	ErrCodeServiceBusy = "service_busy"
+
+	// ErrCodeRateLimited - a per-person budget is spent (429 + Retry-After). The
+	// same wire code the HTTP middleware's limiters use.
+	ErrCodeRateLimited = "rate_limited"
+
 	// ErrCodeIncorrectCurrentPassword — change-password verify-current
 	// gate failed. 401 surface — same shape as login's invalid_credentials
 	// per `security.md` "Password change" + Auth0/Okta canon: never

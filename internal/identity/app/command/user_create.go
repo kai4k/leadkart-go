@@ -66,6 +66,7 @@ type CreateUserHandler struct {
 	now             func() time.Time
 	newPersonID     func() person.ID
 	newMembershipID func() membership.ID
+	gate            *argon2.Gate
 }
 
 // NewCreateUserHandler wires the handler against interfaces only. `now`
@@ -128,7 +129,7 @@ func (h CreateUserHandler) Handle(
 		return CreateUserResult{}, errors.New("create user: email required")
 	}
 
-	pwd, err := h.hashPassword(cmd.Password)
+	pwd, err := h.hashPassword(ctx, cmd.Password)
 	if err != nil {
 		return CreateUserResult{}, err
 	}
@@ -176,11 +177,11 @@ func (h CreateUserHandler) Handle(
 	return result, nil
 }
 
-func (h CreateUserHandler) hashPassword(plain string) (person.PasswordHash, error) {
+func (h CreateUserHandler) hashPassword(ctx context.Context, plain string) (person.PasswordHash, error) {
 	if plain == "" {
 		return person.PasswordHash{}, errors.New("create user: password required")
 	}
-	raw, err := argon2.Hash(plain)
+	raw, err := h.gate.Hash(ctx, plain)
 	if err != nil {
 		return person.PasswordHash{}, fmt.Errorf("create user: hash password: %w", err)
 	}
@@ -239,4 +240,12 @@ func (h CreateUserHandler) createMembership(
 		return nil, fmt.Errorf("create user: persist membership: %w", err)
 	}
 	return m, nil
+}
+
+// WithArgonGate returns the handler with its password hashing running under
+// g (see [argon2.Gate]); a saturated gate refuses with [argon2.ErrBusy], which the
+// HTTP layer answers 503. Without it the work is unbounded (tests only).
+func (h CreateUserHandler) WithArgonGate(g *argon2.Gate) CreateUserHandler {
+	h.gate = g
+	return h
 }

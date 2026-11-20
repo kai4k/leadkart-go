@@ -407,6 +407,10 @@ func TestArch_RepoTenantScopedReadsUseTxScopeTenant(t *testing.T) {
 		// Cross-tenant tenant management
 		"internal/identity/adapters/tenant_repository_pg.go",
 		"internal/identity/adapters/person_repository_pg.go",
+		// Failed-login counter for addresses with no usable account: keyed by an
+		// HMAC of the address, no tenant column, reachable only through the login
+		// path under the platform scope (migration 20261120000004).
+		"internal/identity/adapters/phantom_lockout_pg.go",
 		// Platform module adapters are platform-scoped by default.
 		// lead_credit_repository_pg.go is OMITTED here per ADR 0062 —
 		// post-refactor it binds the GUC from the EXPLICIT tenantID

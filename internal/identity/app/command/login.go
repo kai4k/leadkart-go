@@ -2,12 +2,9 @@ package command
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"slices"
-	"strings"
 	"time"
 
 	"github.com/leadkart/leadkart-go/internal/common/email"
@@ -129,16 +126,22 @@ type AuthRouter interface {
 }
 
 // PhantomLockout mirrors the per-account lockout for login attempts that
-// have no usable account (unknown email, inactive, anonymised) so 423 vs
+// have no usable account (unknown email, deactivated, anonymised) so 423 vs
 // 401 carries no existence signal (ADR 0044 + ADR 0053; ADR 0068 D12).
-// Keys are SHA-256 hex of the normalised email — never the email itself.
-// Best-effort like the real counter: implementations swallow storage errors.
+//
+// The implementation must keep the same thresholds and the same ATOMIC statement
+// shape as person.Repository.UpdateAfterFailedLogin: one row write per failed
+// attempt, decided in the database from the locked row, so that an unknown
+// address and a real one do the same work and answer the same under concurrency.
+// The Postgres implementation keys rows by an HMAC of the address; no address,
+// plain or unsalted-hashed, is ever stored.
 type PhantomLockout interface {
-	// LockedUntil returns the active lockout expiry for key, zero if none.
-	LockedUntil(ctx context.Context, key string, now time.Time) time.Time
-	// RegisterFailure records a failed attempt; returns the lockout expiry
-	// when this attempt crosses person.MaxFailedLogins, zero otherwise.
-	RegisterFailure(ctx context.Context, key string, now time.Time) time.Time
+	// LockedUntil returns the active lockout expiry for the address, zero if none.
+	// A read; nothing is written.
+	LockedUntil(ctx context.Context, e email.Address, now time.Time) (time.Time, error)
+	// RegisterFailure counts one failed attempt and returns the outcome read from
+	// the row the same statement wrote.
+	RegisterFailure(ctx context.Context, e email.Address, now time.Time) (person.LockoutOutcome, error)
 }
 
 // LoginHandler verifies credentials + issues a JWT + opens a refresh
@@ -170,9 +173,37 @@ type LoginHandler struct {
 	// phantom is the lockout counter for attempts with no usable account.
 	phantom PhantomLockout
 
-	// verify checks a password against an encoded hash. Always [argon2.Verify]
-	// in production; tests swap it (export_test.go) to count hash operations.
-	verify func(password, encoded string) error
+	// gate bounds concurrent Argon2id work (nil = unbounded, tests only);
+	// production wiring passes the configured gate via [LoginHandler.WithArgonGate].
+	gate *argon2.Gate
+
+	// verify overrides the gate's verify; nil in production. Tests swap it
+	// (export_test.go) to count and inspect hash operations.
+	verify func(ctx context.Context, password, encoded string) error
+}
+
+// WithArgonGate returns the handler with every password verification running
+// under g, so a burst of logins queues (and then answers 503) instead of
+// allocating ~19 MiB each until the process is killed.
+func (h LoginHandler) WithArgonGate(g *argon2.Gate) LoginHandler {
+	h.gate = g
+	return h
+}
+
+// verifyPassword is the one place the handler checks a password.
+func (h LoginHandler) verifyPassword(ctx context.Context, password, encoded string) error {
+	if h.verify != nil {
+		return h.verify(ctx, password, encoded)
+	}
+	return h.gate.Verify(ctx, password, encoded)
+}
+
+// dummyVerify spends one password verification against the throwaway hash so a
+// branch with no real hash costs what a wrong password costs. Only a refusal to
+// run it at all (the gate is saturated, the request is gone) is an error: every
+// branch must answer that the same way, or the branch would be visible.
+func (h LoginHandler) dummyVerify(ctx context.Context, password string) error {
+	return verifyRefusal(ctx, h.verifyPassword(ctx, password, h.dummyHash))
 }
 
 // NewLoginHandler wires the handler. dummyHash MUST be a valid
@@ -225,7 +256,6 @@ func NewLoginHandler(
 		dummyHash:   dummyHash,
 		newFamilyID: newFamilyID,
 		phantom:     phantom,
-		verify:      argon2.Verify,
 	}
 }
 
@@ -363,17 +393,18 @@ func permissionNames(perms []*permission.Permission) []string {
 // resolveAndVerify covers steps 1-4: lookup (Person + Active
 // Membership), check lockout BEFORE password verify (NIST 800-63B
 // §5.2.2 + ADR 0053 — avoid timing leak), verify password, reject
-// inactive/anonymised/no-active-membership. On wrong password,
-// increment the FailedLoginCount + persist via UpdateLockoutState;
-// on correct, clear via the same. Returns both aggregates so Handle
-// can avoid the separate memberships.GetActiveForPerson call.
+// inactive/anonymised/no-active-membership. On wrong password the failure is
+// counted by ONE atomic statement and the answer (401 or the threshold-crossing
+// 423) is read from the row it wrote; on correct, the counter is cleared.
 //
-// Every failure branch runs exactly one password verify before returning:
-// against the real hash for a wrong password, against dummyHash for an unknown
-// email, a terminal Person and a locked account. Attempts with no usable account
-// also feed the phantom lockout (see [PhantomLockout], [LoginHandler.failWithoutAccount]).
-// Timing parity is structural: the same number of argon2 operations on every
-// branch, so wall-clock cannot tell the branches apart.
+// Every failure branch does the same work: one password verify (against the real
+// hash for a wrong password, against dummyHash for an unknown email, a terminal
+// Person and a locked account) and, unless the account is already locked, one
+// row write (the person's counter, or the phantom counter for an address with no
+// usable account). Both counters are the same atomic statement shape, so the
+// branches cannot be told apart by count, status, body, header or concurrency
+// behaviour. The clock is read once, AFTER the verify, on every branch, so
+// Retry-After and the lock length match to the second.
 func (h LoginHandler) resolveAndVerify(ctx context.Context, cmd LoginCommand) (*person.Person, *membership.Membership, error) {
 	p, m, err := h.authRouter.ResolveByEmail(ctx, cmd.Email)
 	switch {
@@ -399,9 +430,13 @@ func (h LoginHandler) resolveAndVerify(ctx context.Context, cmd LoginCommand) (*
 	// attacker the account exists and is under attack. The answer is the same
 	// 423 + Retry-After a threshold-crossing wrong password gets.
 	if p.IsLocked(h.now()) {
-		_ = h.verify(cmd.Password, h.dummyHash)
+		if err := h.dummyVerify(ctx, cmd.Password); err != nil {
+			return nil, nil, err
+		}
 		return nil, nil, newLockedError(p.LockedUntil())
 	}
+
+	verifyErr := h.verifyPassword(ctx, cmd.Password, p.PasswordHash().String())
 
 	if m == nil {
 		// Person exists but has no Active Membership — same surface as
@@ -414,81 +449,87 @@ func (h LoginHandler) resolveAndVerify(ctx context.Context, cmd LoginCommand) (*
 		// and must not accrue lockout. The threshold-crossing attempt answers
 		// 423 like the wrong-password branch, so the two cannot be told apart
 		// by the tenth attempt.
-		if h.verify(cmd.Password, p.PasswordHash().String()) != nil {
-			h.registerFailedLoginBestEffort(ctx, p)
-			if p.IsLocked(h.now()) {
-				return nil, nil, newLockedError(p.LockedUntil())
+		if verifyErr != nil {
+			if refusal := verifyRefusal(ctx, verifyErr); refusal != nil {
+				return nil, nil, refusal
 			}
+			return nil, nil, h.failedAttempt(ctx, p)
 		}
 		return nil, nil, ErrInvalidCredentials
 	}
 
-	if err := h.verify(cmd.Password, p.PasswordHash().String()); err != nil {
-		if errors.Is(err, argon2.ErrMismatch) || errors.Is(err, argon2.ErrFormat) {
-			h.registerFailedLoginBestEffort(ctx, p)
-			// Re-check IsLocked post-increment so the threshold-crossing
-			// attempt surfaces ErrAccountLocked instead of "wrong
-			// password, try again" — Auth0/Okta UX canon.
-			if p.IsLocked(h.now()) {
-				return nil, nil, newLockedError(p.LockedUntil())
-			}
-			return nil, nil, ErrInvalidCredentials
+	if verifyErr != nil {
+		if errors.Is(verifyErr, argon2.ErrMismatch) || errors.Is(verifyErr, argon2.ErrFormat) {
+			return nil, nil, h.failedAttempt(ctx, p)
 		}
-		return nil, nil, fmt.Errorf("login: verify password: %w", err)
+		if refusal := verifyRefusal(ctx, verifyErr); refusal != nil {
+			return nil, nil, refusal
+		}
+		return nil, nil, fmt.Errorf("login: verify password: %w", verifyErr)
 	}
 
-	// Successful credential verify — clear counter + lockout in the
-	// SAME tx the rest of the login flow runs in (caller persists via
-	// UpdateLockoutState below, before refresh-family creation, so a
-	// late failure leaves the unlock visible).
+	// Successful credential verify — clear counter + lockout.
 	h.registerSuccessfulLoginBestEffort(ctx, p)
 
 	return p, m, nil
 }
 
-// failWithoutAccount is the single failure surface for login attempts with no
-// usable account (unknown email, deactivated, anonymised). It runs one dummy
-// verify (timing parity with the real wrong-password path) and the phantom
-// lockout, so the tenth attempt in the window answers 423 exactly where a real
-// account would: 423 then reveals nothing about whether the email exists.
-func (h LoginHandler) failWithoutAccount(ctx context.Context, cmd LoginCommand) error {
-	key := phantomKey(cmd.Email)
-	now := h.now()
-	_ = h.verify(cmd.Password, h.dummyHash)
-	if until := h.phantom.LockedUntil(ctx, key, now); !until.IsZero() {
-		return newLockedError(until)
+// verifyRefusal returns the error to answer when the verification could not run
+// at all (gate saturated, request cancelled), nil when it ran (whatever its
+// result).
+func verifyRefusal(ctx context.Context, err error) error {
+	switch {
+	case errors.Is(err, argon2.ErrBusy):
+		return fmt.Errorf("login: %w", err)
+	case ctx.Err() != nil && err != nil:
+		return fmt.Errorf("login: %w", ctx.Err())
 	}
-	if until := h.phantom.RegisterFailure(ctx, key, now); !until.IsZero() {
-		return newLockedError(until)
+	return nil
+}
+
+// failedAttempt counts one failed attempt against a real account and returns the
+// error to answer: the 423 when THIS attempt's own atomic statement left the
+// account locked (it crossed the threshold, or a concurrent attempt had), the
+// plain invalid-credentials otherwise. now is read here, after the verify.
+//
+// Best-effort like the rest of the lockout (ADR 0053): a storage error is
+// swallowed and answers 401, because failing the login on a counter error would
+// hand an attacker a way to turn database trouble into 500s.
+func (h LoginHandler) failedAttempt(ctx context.Context, p *person.Person) error {
+	now := h.now()
+	out, err := h.persons.UpdateAfterFailedLogin(ctx, p.ID(), now)
+	if err == nil && out.LockedAt(now) {
+		return newLockedError(out.LockedUntil)
 	}
 	return ErrInvalidCredentials
 }
 
-// phantomKey is the SHA-256 hex of the normalised email, so the in-memory
-// store never holds an address.
-func phantomKey(e email.Address) string {
-	sum := sha256.Sum256([]byte(strings.ToLower(strings.TrimSpace(e.String()))))
-	return hex.EncodeToString(sum[:])
-}
-
-// registerFailedLoginBestEffort applies [Person.RegisterFailedLogin]
-// + persists via [person.Repository.UpdateLockoutState]. Errors are
-// logged-and-swallowed: a transient DB hiccup MUST NOT prevent the
-// caller from returning ErrInvalidCredentials, and the worst case is
-// a single missed increment (the next attempt will re-increment;
-// brute-force protection is statistical, not transactional).
-//
-// Per ADR 0053: persist-best-effort beats fail-the-login-on-persist-
-// error because the latter creates a denial-of-service vector
-// (attacker flaps DB; legitimate users see 500s).
-func (h LoginHandler) registerFailedLoginBestEffort(ctx context.Context, p *person.Person) {
-	p.RegisterFailedLogin(h.now())
-	_ = h.persons.UpdateLockoutState(ctx, p)
+// failWithoutAccount is the single failure surface for login attempts with no
+// usable account (unknown email, deactivated, anonymised). It does exactly what
+// a real account's wrong-password branch does: check the lock (a read), run one
+// dummy verify, and — unless already locked — register one failed attempt with
+// the same atomic statement shape, so the tenth attempt in the window answers 423
+// exactly where a real account would and 423 reveals nothing about whether the
+// email exists.
+func (h LoginHandler) failWithoutAccount(ctx context.Context, cmd LoginCommand) error {
+	until, lockErr := h.phantom.LockedUntil(ctx, cmd.Email, h.now())
+	if err := h.dummyVerify(ctx, cmd.Password); err != nil {
+		return err
+	}
+	if lockErr == nil && !until.IsZero() {
+		return newLockedError(until)
+	}
+	now := h.now()
+	out, err := h.phantom.RegisterFailure(ctx, cmd.Email, now)
+	if err == nil && out.LockedAt(now) {
+		return newLockedError(out.LockedUntil)
+	}
+	return ErrInvalidCredentials
 }
 
 // registerSuccessfulLoginBestEffort applies [Person.RegisterSuccessfulLogin]
-// + persists via [person.Repository.UpdateLockoutState]. Same
-// best-effort posture as the failed-login path.
+// + persists via [person.Repository.UpdateLockoutState]. Best-effort like the
+// failed-login path.
 func (h LoginHandler) registerSuccessfulLoginBestEffort(ctx context.Context, p *person.Person) {
 	p.RegisterSuccessfulLogin(h.now())
 	_ = h.persons.UpdateLockoutState(ctx, p)

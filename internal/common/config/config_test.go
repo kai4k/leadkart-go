@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/leadkart/leadkart-go/internal/common/config"
 )
@@ -162,9 +163,31 @@ func TestLoad_HTTPAndRateLimitDefaults(t *testing.T) {
 		PasswordReset:        config.RouteLimit{PerMinute: 10, Burst: 5},
 		EmailChangeConfirm:   config.RouteLimit{PerMinute: 10, Burst: 5},
 		TenantRegistration:   config.RouteLimit{PerMinute: 10, Burst: 5},
+		ChangePassword:       config.RouteLimit{PerMinute: 5, Burst: 5},
 	}
 	if cfg.RateLimit != want {
 		t.Fatalf("RateLimit defaults = %+v, want %+v", cfg.RateLimit, want)
+	}
+	if cfg.Argon2 != (config.Argon2Config{MaxConcurrent: 16, QueueTimeout: 2 * time.Second}) {
+		t.Fatalf("Argon2 defaults = %+v", cfg.Argon2)
+	}
+}
+
+// arch-test:serial — uses t.Setenv (incompatible with t.Parallel)
+func TestLoad_Argon2AndChangePasswordEnvOverrides(t *testing.T) {
+	setEnv(t, minRequired())
+	t.Setenv("LEADKART_ARGON2__MAX_CONCURRENT", "8")
+	t.Setenv("LEADKART_ARGON2__QUEUE_TIMEOUT", "500ms")
+	t.Setenv("LEADKART_RATE_LIMIT__CHANGE_PASSWORD__PER_MINUTE", "2")
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Argon2.MaxConcurrent != 8 || cfg.Argon2.QueueTimeout != 500*time.Millisecond {
+		t.Fatalf("Argon2 = %+v", cfg.Argon2)
+	}
+	if got := cfg.RateLimit.ChangePassword; got.PerMinute != 2 || got.Burst != 5 {
+		t.Fatalf("ChangePassword = %+v, want {2 5}", got)
 	}
 }
 

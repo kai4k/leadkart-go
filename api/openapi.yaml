@@ -176,6 +176,7 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/LoginRequest' }
       responses:
+        '503': { $ref: '#/components/responses/ServiceBusy' }
         '200':
           description: Tokens issued
           content:
@@ -244,8 +245,6 @@ paths:
 
   /api/v1/auth/request-password-reset:
     post:
-      parameters:
-        - $ref: '#/components/parameters/XCommandId'
       tags: [auth]
       summary: Request password reset email
       description: |
@@ -265,8 +264,6 @@ paths:
 
   /api/v1/auth/reset-password:
     post:
-      parameters:
-        - $ref: '#/components/parameters/XCommandId'
       tags: [auth]
       summary: Confirm password reset using emailed token
       security: []
@@ -276,6 +273,7 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/ResetPasswordRequest' }
       responses:
+        '503': { $ref: '#/components/responses/ServiceBusy' }
         '204': { description: Password reset complete }
         '400': { $ref: '#/components/responses/BadRequest' }
         '422': { $ref: '#/components/responses/Unprocessable' }
@@ -283,8 +281,6 @@ paths:
 
   /api/v1/auth/change-password:
     post:
-      parameters:
-        - $ref: '#/components/parameters/XCommandId'
       tags: [auth]
       summary: Change own password (authenticated)
       description: |
@@ -302,6 +298,8 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/ChangePasswordRequest' }
       responses:
+        '503': { $ref: '#/components/responses/ServiceBusy' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '403': { $ref: '#/components/responses/ImpersonationNotAllowed' }
         '204': { description: Password changed }
         '401':
@@ -314,8 +312,6 @@ paths:
 
   /api/v1/auth/request-email-change:
     post:
-      parameters:
-        - $ref: '#/components/parameters/XCommandId'
       tags: [auth]
       summary: Request email-change confirmation link (authenticated)
       description: |
@@ -337,8 +333,6 @@ paths:
 
   /api/v1/auth/confirm-email-change:
     post:
-      parameters:
-        - $ref: '#/components/parameters/XCommandId'
       tags: [auth]
       summary: Confirm email change via emailed token
       description: |
@@ -489,6 +483,7 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/RegisterTenantRequest' }
       responses:
+        '503': { $ref: '#/components/responses/ServiceBusy' }
         '201':
           description: Tenant registered
           content:
@@ -831,6 +826,7 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/CreateUserRequest' }
       responses:
+        '503': { $ref: '#/components/responses/ServiceBusy' }
         '201':
           description: User created (or attached to existing global Person)
           content:
@@ -2562,7 +2558,6 @@ paths:
         does not exist.
       parameters:
         - { $ref: '#/components/parameters/LeadId' }
-        - { $ref: '#/components/parameters/XCommandId' }
         - $ref: '#/components/parameters/XTenantId'
       responses:
         '200':
@@ -3846,12 +3841,18 @@ components:
       in: header
       required: false
       description: |
-        Per-caller idempotency key (UUIDv4/v7, lowercase). When supplied
-        the server replays the original response within the
-        idempotency-store retention window (24h, Stripe canon). Per
-        ADR 0031 — required by every state-mutating endpoint (POST /
-        PUT / PATCH) except auth/login, auth/refresh, auth/logout
-        (token operations are idempotent at the token-family level).
+        Per-caller idempotency key (UUID). When supplied on an authenticated, state-changing
+        request (POST / PUT / PATCH / DELETE) the server replays the original 2xx response
+        within the retention window (24h, Stripe canon). The scope is the verified
+        tenant + person + membership + impersonation session + acted-on tenant
+        (`X-Tenant-Id`, operators only) + method and path, so the same key on another
+        route, tenant or session is a different command. Only 2xx answers are stored.
+
+        The header is IGNORED (not rejected, nothing stored or replayed) on every
+        operation under `/api/v1/auth/` (login and refresh answers carry plaintext refresh
+        tokens and their request bodies carry passwords), on anonymous requests, and on
+        safe methods (GET, HEAD, OPTIONS, TRACE); it is therefore not declared on those
+        operations. Per ADR 0031 and ADR 0068 D11.
       schema: { type: string, format: uuid, minLength: 36, maxLength: 36 }
     Cursor:
       name: cursor
@@ -4134,7 +4135,21 @@ components:
         Rate limit exceeded; `Retry-After` carries the seconds to wait. The bucket is the
         client address (the end client the BFF forwards in `X-Forwarded-For`, never the BFF).
         Login, refresh, request-password-reset, reset-password, confirm-email-change and tenant
-        registration also carry their own tighter per-client limit.
+        registration also carry their own tighter per-client limit. change-password is limited per
+        PERSON (5 per minute, burst 5, whichever address the requests come from).
+      headers:
+        Retry-After:
+          description: Seconds until the request may be retried.
+          schema: { type: integer }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+    ServiceBusy:
+      description: |
+        Every password-hashing slot of this process was busy for longer than the queue
+        timeout (the process bounds concurrent Argon2id work, ADR 0068 D12). Nothing was
+        done and nothing was counted; retry after `Retry-After` seconds. Every login branch
+        (real account, unknown email, locked account) answers this the same way.
       headers:
         Retry-After:
           description: Seconds until the request may be retried.

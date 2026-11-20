@@ -64,12 +64,21 @@ const (
 // which is an attack, and refusing new sources during it costs far less than
 // letting the process grow until the container is killed.
 type RateLimiter struct {
+	*KeyedLimiter
+	keyer LimiterKeyer
+}
+
+// KeyedLimiter is the bucket store behind [RateLimiter]: one token bucket per
+// string key, with the idle sweep and the hard key cap described there. It is
+// exported for callers that limit by something other than the request (the
+// change-password handler limits per person) and satisfies their consumer-side
+// interfaces.
+type KeyedLimiter struct {
 	mu        sync.Mutex
 	limiters  map[LimiterKey]*rate.Limiter
 	r         rate.Limit
 	burst     int
 	maxKeys   int
-	keyer     LimiterKeyer
 	now       func() time.Time
 	lastSweep time.Time
 }
@@ -81,32 +90,66 @@ func NewRateLimiter(cfg LimiterConfig, keyer LimiterKeyer) *RateLimiter {
 }
 
 func newRateLimiter(cfg LimiterConfig, keyer LimiterKeyer, now func() time.Time) *RateLimiter {
+	if keyer == nil {
+		panic("httpmw: RateLimiter requires keyer")
+	}
+	return &RateLimiter{KeyedLimiter: newKeyedLimiter(cfg, now), keyer: keyer}
+}
+
+// NewKeyedLimiter constructs a keyed bucket store; see [KeyedLimiter].
+func NewKeyedLimiter(cfg LimiterConfig) *KeyedLimiter {
+	return newKeyedLimiter(cfg, time.Now)
+}
+
+func newKeyedLimiter(cfg LimiterConfig, now func() time.Time) *KeyedLimiter {
 	if cfg.RatePerSecond <= 0 {
 		panic("httpmw: RateLimiter requires RatePerSecond > 0")
 	}
 	if cfg.Burst <= 0 {
 		panic("httpmw: RateLimiter requires Burst > 0")
 	}
-	if keyer == nil {
-		panic("httpmw: RateLimiter requires keyer")
-	}
 	maxKeys := cfg.MaxKeys
 	if maxKeys <= 0 {
 		maxKeys = DefaultMaxLimiterKeys
 	}
-	return &RateLimiter{
+	return &KeyedLimiter{
 		limiters: make(map[LimiterKey]*rate.Limiter),
 		r:        rate.Limit(cfg.RatePerSecond),
 		burst:    cfg.Burst,
 		maxKeys:  maxKeys,
-		keyer:    keyer,
 		now:      now,
 	}
 }
 
+// Allow spends one token of key's bucket. When none is left (or the key is new
+// and the map is at its cap) it returns false and how long until a token is
+// available, to be sent as Retry-After after rounding up.
+func (l *KeyedLimiter) Allow(key string) (ok bool, retryAfter time.Duration) {
+	ok, retryAfter, _ = l.allowAt(LimiterKey(key), l.now())
+	return ok, retryAfter
+}
+
+// allowAt is Allow at an explicit instant; capped reports a refusal because the
+// key map is full rather than because the key's own bucket is empty.
+func (l *KeyedLimiter) allowAt(key LimiterKey, now time.Time) (ok bool, retryAfter time.Duration, capped bool) {
+	limiter, found := l.limiterFor(key, now)
+	if !found {
+		return false, limiterSweepEvery, true
+	}
+	if limiter.AllowN(now, 1) {
+		return true, 0, false
+	}
+	// Reserve() reserves a token regardless of allow/deny, so Cancel() right
+	// after puts it back: the refused path consumes none.
+	reservation := limiter.ReserveN(now, 1)
+	wait := reservation.DelayFrom(now)
+	reservation.CancelAt(now)
+	return false, wait, false
+}
+
 // sweepLocked deletes every bucket that has refilled to its burst. Caller holds
 // the mutex; runs at most once per [limiterSweepEvery] unless force is set.
-func (l *RateLimiter) sweepLocked(now time.Time, force bool) {
+func (l *KeyedLimiter) sweepLocked(now time.Time, force bool) {
 	if !force && !l.lastSweep.IsZero() && now.Sub(l.lastSweep) < limiterSweepEvery {
 		return
 	}
@@ -120,7 +163,7 @@ func (l *RateLimiter) sweepLocked(now time.Time, force bool) {
 
 // limiterFor returns the per-key bucket, creating it on first use. ok is false
 // when the key is new and the map is full even after a sweep.
-func (l *RateLimiter) limiterFor(key LimiterKey, now time.Time) (*rate.Limiter, bool) {
+func (l *KeyedLimiter) limiterFor(key LimiterKey, now time.Time) (*rate.Limiter, bool) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.sweepLocked(now, false)
@@ -170,18 +213,12 @@ func (l *RateLimiter) Middleware() func(http.Handler) http.Handler {
 				next.ServeHTTP(w, r)
 				return
 			}
-			now := l.now()
-			limiter, ok := l.limiterFor(key, now)
+			ok, wait, capped := l.allowAt(key, l.now())
 			if !ok {
-				writeRateLimited(w, int(limiterSweepEvery/time.Second))
-				return
-			}
-			if !limiter.AllowN(now, 1) {
-				// Reserve() reserves a token regardless of allow/deny, so
-				// Cancel() right after puts it back: the 429 path consumes none.
-				reservation := limiter.ReserveN(now, 1)
-				wait := reservation.DelayFrom(now)
-				reservation.CancelAt(now)
+				if capped {
+					writeRateLimited(w, int(limiterSweepEvery/time.Second))
+					return
+				}
 				writeRateLimited(w, retryAfterSeconds(wait))
 				return
 			}

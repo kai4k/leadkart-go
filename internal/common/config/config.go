@@ -58,6 +58,7 @@ type AppConfig struct {
 
 	HTTP      HTTPConfig      `koanf:"http"`
 	RateLimit RateLimitConfig `koanf:"rate_limit"`
+	Argon2    Argon2Config    `koanf:"argon2"`
 }
 
 // ListenConfig holds network bind addresses for the API + admin
@@ -150,6 +151,22 @@ type RateLimitConfig struct {
 	PasswordReset        RouteLimit `koanf:"password_reset"`         // POST /api/v1/auth/reset-password
 	EmailChangeConfirm   RouteLimit `koanf:"email_change_confirm"`   // POST /api/v1/auth/confirm-email-change
 	TenantRegistration   RouteLimit `koanf:"tenant_registration"`    // POST /api/v1/tenants
+
+	// ChangePassword is the per-PERSON budget of current-password checks on
+	// POST /api/v1/auth/change-password (a signed-in route, so keyed by the
+	// person, not the client address).
+	ChangePassword RouteLimit `koanf:"change_password"`
+}
+
+// Argon2Config bounds concurrent password hashing and verification in this
+// process (ADR 0068 D12). Each Argon2id operation holds ~19 MiB for its whole
+// duration, so the API container's 1 GiB limit is reached by roughly fifty
+// simultaneous logins; MaxConcurrent slots keep the worst case at
+// MaxConcurrent x ~19.5 MiB. A request that cannot get a slot within
+// QueueTimeout answers 503 + Retry-After.
+type Argon2Config struct {
+	MaxConcurrent int           `koanf:"max_concurrent"`
+	QueueTimeout  time.Duration `koanf:"queue_timeout"`
 }
 
 // Defaults returns the baseline AppConfig with safe non-production
@@ -180,7 +197,12 @@ func Defaults() AppConfig {
 			PasswordReset:        RouteLimit{PerMinute: 10, Burst: 5},
 			EmailChangeConfirm:   RouteLimit{PerMinute: 10, Burst: 5},
 			TenantRegistration:   RouteLimit{PerMinute: 10, Burst: 5},
+			ChangePassword:       RouteLimit{PerMinute: 5, Burst: 5},
 		},
+		// 16 slots x ~19.5 MiB = ~312 MiB worst case inside the 1 GiB container
+		// (the rest is heap, the connection pool and the L1 cache); at ~30-50 ms an
+		// operation that is ~300-500 verifications a second per core budget.
+		Argon2: Argon2Config{MaxConcurrent: 16, QueueTimeout: 2 * time.Second},
 	}
 }
 
@@ -270,6 +292,11 @@ func structToMap(cfg AppConfig) map[string]any {
 			"password_reset":         rl(cfg.RateLimit.PasswordReset),
 			"email_change_confirm":   rl(cfg.RateLimit.EmailChangeConfirm),
 			"tenant_registration":    rl(cfg.RateLimit.TenantRegistration),
+			"change_password":        rl(cfg.RateLimit.ChangePassword),
+		},
+		"argon2": map[string]any{
+			"max_concurrent": cfg.Argon2.MaxConcurrent,
+			"queue_timeout":  cfg.Argon2.QueueTimeout.String(),
 		},
 		"listen": map[string]any{
 			"api":          cfg.Listen.API,

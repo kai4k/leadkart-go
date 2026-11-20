@@ -252,3 +252,68 @@ func TestNewChangePasswordHandler_PanicsOnNilDeps(t *testing.T) {
 		_ = command.NewChangePasswordHandler(persontest.NewFakeRepository(), refreshtokentest.NewFakeRepository(), fakeUoW{}, nil, func() time.Time { return testNow }) // arch-test:ignore-err - test fixture setup
 	})
 }
+
+// spyAttempts is a budget of n attempts per key that records every key it was
+// asked about.
+type spyAttempts struct {
+	left int
+	keys []string
+}
+
+func (s *spyAttempts) Allow(key string) (bool, time.Duration) {
+	s.keys = append(s.keys, key)
+	if s.left <= 0 {
+		return false, 12*time.Second + 300*time.Millisecond
+	}
+	s.left--
+	return true, 0
+}
+
+// The current password is checked at most as often as the person's budget allows;
+// a refused attempt does no password work at all and changes nothing.
+func TestChangePassword_PerPersonAttemptBudget(t *testing.T) {
+	t.Parallel()
+	p := newPersonWithPassword(t, "real-current-pw")
+	originalHash := p.PasswordHash().String()
+	repo := seedPersonRepo(t, p)
+	budget := &spyAttempts{left: 2}
+	h := command.NewChangePasswordHandler(repo, refreshtokentest.NewFakeRepository(), fakeUoW{}, passwordpolicy.Noop{}, func() time.Time { return testNow }).
+		WithAttemptLimiter(budget)
+	guess := func() error {
+		return h.Handle(t.Context(), command.ChangePasswordCommand{PersonID: p.ID(), CurrentPassword: "wrong-guess", NewPassword: "a-new-strong-passphrase-1"})
+	}
+	for i := range 2 {
+		if err := guess(); !errors.Is(err, command.ErrIncorrectCurrentPassword) {
+			t.Fatalf("attempt %d: %v, want the ordinary wrong-password answer", i+1, err)
+		}
+	}
+	err := guess()
+	var tooMany *command.TooManyAttemptsError
+	if !errors.As(err, &tooMany) || tooMany.RetryAfter != 12*time.Second+300*time.Millisecond {
+		t.Fatalf("third attempt: %v, want TooManyAttemptsError carrying the wait", err)
+	}
+	for _, k := range budget.keys {
+		if k != p.ID().String() {
+			t.Fatalf("budget keyed by %q, want the person id", k)
+		}
+	}
+	got, _ := repo.GetByID(t.Context(), p.ID())
+	if got.PasswordHash().String() != originalHash {
+		t.Error("a refused attempt changed the hash")
+	}
+}
+
+// An invalid command spends no attempt (it never reaches the password check).
+func TestChangePassword_InvalidCommandsSpendNoAttempt(t *testing.T) {
+	t.Parallel()
+	p := newPersonWithPassword(t, "real-current-pw")
+	budget := &spyAttempts{left: 5}
+	h := command.NewChangePasswordHandler(seedPersonRepo(t, p), refreshtokentest.NewFakeRepository(), fakeUoW{}, passwordpolicy.Noop{}, func() time.Time { return testNow }).
+		WithAttemptLimiter(budget)
+	if err := h.Handle(t.Context(), command.ChangePasswordCommand{PersonID: p.ID(), CurrentPassword: "x"}); !errors.Is(err, command.ErrNewPasswordRequired) {
+		t.Fatalf("err = %v", err)
+	}
+	if len(budget.keys) != 0 {
+		t.Fatalf("budget consulted for a command that never checks a password: %v", budget.keys)
+	}
+}

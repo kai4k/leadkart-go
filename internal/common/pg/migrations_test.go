@@ -133,8 +133,9 @@ func TestMigrationsApplyCleanly(t *testing.T) {
 		// common.outbox relay (migration 20260604000002).
 		"processed_messages",                                           // 20260507000001
 		"roles", "role_assignments", "membership_permission_overrides", // 20260507000002
-		"permission_requests",  // 20260523000003 (Wave 9.1e / ADR 0055)
-		"role_hierarchy_edges", // 20260523000007 (Wave 9.4 / ADR 0058)
+		"permission_requests",    // 20260523000003 (Wave 9.1e / ADR 0055)
+		"role_hierarchy_edges",   // 20260523000007 (Wave 9.4 / ADR 0058)
+		"login_phantom_failures", // 20261120000004 (failed-login counter of unusable addresses / ADR 0068 D12)
 	}
 	var count int
 	if err := db.QueryRow(`
@@ -1020,5 +1021,60 @@ func TestVerifyApplicationPrivileges_CoversRiverTables(t *testing.T) {
 	err = pg.VerifyApplicationPrivileges(t.Context(), appRoleConn(t, dsn), pg.PrivilegeCheck{Production: true, Logger: discardLogger()})
 	if err == nil || !strings.Contains(err.Error(), "DELETE on table public.river_job") {
 		t.Fatalf("want an error naming DELETE on public.river_job, got %v", err)
+	}
+}
+
+// phantomFailuresMigration is the version of 20261120000004_identity_login_phantom_failures.sql.
+const phantomFailuresMigration = 20261120000004
+
+// The phantom failed-login table is created with DML for the application role,
+// dropped by Down and recreated by Up again, and the start-up privilege check
+// passes with it present.
+func TestLoginPhantomFailuresMigration_UpDownUpAndGrants(t *testing.T) {
+	dsn := startPostgres(t)
+	db, err := sql.Open("pgx", dsn)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer db.Close()
+	createAppRole(t, db)
+	applyMigrations(t, dsn)
+
+	exists := func() bool {
+		return hasPriv(t, db, `SELECT to_regclass('identity.login_phantom_failures') IS NOT NULL`)
+	}
+	dml := func() bool {
+		return hasPriv(t, db, `SELECT bool_and(has_table_privilege('leadkart_app', 'identity.login_phantom_failures', p))
+			FROM unnest(ARRAY['SELECT','INSERT','UPDATE','DELETE']) AS p`)
+	}
+	if !exists() || !dml() {
+		t.Fatalf("after up: table=%v dml=%v, want both", exists(), dml())
+	}
+	if hasPriv(t, db, `SELECT has_table_privilege('leadkart_app', 'identity.login_phantom_failures', 'TRUNCATE')`) {
+		t.Fatal("the application role must not hold TRUNCATE on the counter")
+	}
+	if err := pg.VerifyApplicationPrivileges(t.Context(), appRoleConn(t, dsn), pg.PrivilegeCheck{Production: true, Logger: discardLogger()}); err != nil {
+		t.Fatalf("start-up privilege check with the new table: %v", err)
+	}
+
+	gdb, err := goose.OpenDBWithDriver("pgx", dsn)
+	if err != nil {
+		t.Fatalf("goose open: %v", err)
+	}
+	defer gdb.Close()
+	if err := pg.EnsureGooseDialect(); err != nil {
+		t.Fatalf("dialect: %v", err)
+	}
+	if err := goose.DownToContext(t.Context(), gdb, migrationsDir(t), phantomFailuresMigration-1); err != nil {
+		t.Fatalf("goose down: %v", err)
+	}
+	if exists() {
+		t.Fatal("the table survived the down migration")
+	}
+	if err := goose.UpContext(t.Context(), gdb, migrationsDir(t)); err != nil {
+		t.Fatalf("goose up again: %v", err)
+	}
+	if !exists() || !dml() {
+		t.Fatalf("after re-up: table=%v dml=%v, want both", exists(), dml())
 	}
 }

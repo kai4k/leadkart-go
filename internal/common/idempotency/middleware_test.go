@@ -317,3 +317,79 @@ func TestMiddleware_TTLExpiry_RetriesDownstream(t *testing.T) {
 		t.Errorf("downstream called %d times, want 2 (TTL expired should re-execute)", calls.Load())
 	}
 }
+
+// Safe methods carry no command: the header is ignored (not even validated), the
+// answer is never stored, and a second identical GET runs again.
+func TestMiddleware_SafeMethodsIgnoreTheHeaderAndStoreNothing(t *testing.T) {
+	t.Parallel()
+	for _, method := range []string{http.MethodGet, http.MethodHead, http.MethodOptions, http.MethodTrace} {
+		t.Run(method, func(t *testing.T) {
+			t.Parallel()
+			calls := &atomic.Int32{}
+			d := &downstream{calls: calls, status: 200, body: `{"ok":true}`}
+			store := idempotency.NewInMemoryStore(nil)
+			mw := idempotency.Middleware(store, nil, 0, defaultTestKeyer)(d.handler())
+			key := uuid.NewString()
+			for i := range 2 {
+				req := httptest.NewRequestWithContext(t.Context(), method, "/api/v1/things", nil)
+				req.Header.Set(idempotency.CommandIDHeader, key)
+				rec := httptest.NewRecorder()
+				mw.ServeHTTP(rec, req)
+				if rec.Header().Get(idempotency.ReplayHeader) != "" {
+					t.Fatalf("%s call %d was replayed", method, i+1)
+				}
+			}
+			if calls.Load() != 2 {
+				t.Fatalf("handler ran %d times, want 2 (nothing replayed)", calls.Load())
+			}
+			// A malformed id on a safe method is not a 400: the header is ignored.
+			req := httptest.NewRequestWithContext(t.Context(), method, "/api/v1/things", nil)
+			req.Header.Set(idempotency.CommandIDHeader, "not-a-uuid")
+			rec := httptest.NewRecorder()
+			mw.ServeHTTP(rec, req)
+			if rec.Code != 200 {
+				t.Fatalf("malformed id on %s = %d, want it ignored", method, rec.Code)
+			}
+		})
+	}
+}
+
+// A keyer that says Ineligible (credential routes, anonymous callers) makes the
+// middleware ignore the header entirely: no 400 for a malformed one, nothing
+// stored, the body never buffered, the handler runs every time.
+func TestMiddleware_IneligibleRequestsPassThroughAndStoreNothing(t *testing.T) {
+	t.Parallel()
+	calls := &atomic.Int32{}
+	d := &downstream{calls: calls, status: 200, body: `{"refresh_token":"secret"}`}
+	store := idempotency.NewInMemoryStore(nil)
+	mw := idempotency.Middleware(store, nil, 0, func(*http.Request) string { return idempotency.Ineligible })(d.handler())
+	key := uuid.NewString()
+	for range 2 {
+		rec := httptest.NewRecorder()
+		mw.ServeHTTP(rec, newPOST(t, `{"password":"hunter2"}`, key))
+		if rec.Code != 200 || rec.Header().Get(idempotency.ReplayHeader) != "" {
+			t.Fatalf("ineligible request: %d replay=%q", rec.Code, rec.Header().Get(idempotency.ReplayHeader))
+		}
+	}
+	rec := httptest.NewRecorder()
+	mw.ServeHTTP(rec, newPOST(t, `{}`, "not-a-uuid"))
+	if rec.Code != 200 {
+		t.Fatalf("malformed id on an ineligible request = %d, want it ignored", rec.Code)
+	}
+	if calls.Load() != 3 {
+		t.Fatalf("handler ran %d times, want 3", calls.Load())
+	}
+	if n := store.Len(); n != 0 {
+		t.Fatalf("%d records stored for ineligible requests", n)
+	}
+}
+
+func TestMiddleware_RefusesToBuildWithoutAKeyer(t *testing.T) {
+	t.Parallel()
+	defer func() {
+		if recover() == nil {
+			t.Fatal("want a panic: there is no default scope")
+		}
+	}()
+	idempotency.Middleware(idempotency.NewInMemoryStore(nil), nil, 0, nil)
+}

@@ -14,6 +14,7 @@ import (
 	"github.com/leadkart/leadkart-go/internal/common/httpmw"
 	"github.com/leadkart/leadkart-go/internal/common/slug"
 	"github.com/leadkart/leadkart-go/internal/identity/app"
+	"github.com/leadkart/leadkart-go/internal/identity/app/argon2"
 	"github.com/leadkart/leadkart-go/internal/identity/app/command"
 	"github.com/leadkart/leadkart-go/internal/identity/app/query"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/permission"
@@ -347,6 +348,8 @@ func handleRegisterTenant(log *slog.Logger, a app.Application) http.Handler {
 			AdminLastName:  req.AdminLastName,
 		})
 		switch {
+		case writePasswordWorkRefusal(w, err):
+			return
 		case errors.Is(err, command.ErrEmailHasActiveMembership):
 			writeError(w, http.StatusConflict, ErrCodeEmailHasActiveMembership,
 				"this email already has an active membership in another tenant")
@@ -363,6 +366,33 @@ func handleRegisterTenant(log *slog.Logger, a app.Application) http.Handler {
 			MembershipID: out.MembershipID.String(),
 		})
 	})
+}
+
+// argonBusyRetryAfter is the Retry-After (seconds) of a 503 from the password-work
+// gate: roughly the queue timeout, enough for the queue to drain.
+const argonBusyRetryAfter = "2"
+
+// writePasswordWorkRefusal answers the two refusals any password-hashing route can
+// meet before it has done any work: the gate is saturated (503 + Retry-After) or
+// the person's attempt budget is spent (429 + Retry-After). It reports whether it
+// wrote a response.
+func writePasswordWorkRefusal(w http.ResponseWriter, err error) bool {
+	var tooMany *command.TooManyAttemptsError
+	switch {
+	case errors.Is(err, argon2.ErrBusy):
+		w.Header().Set("Retry-After", argonBusyRetryAfter)
+		writeError(w, http.StatusServiceUnavailable, ErrCodeServiceBusy, "")
+		return true
+	case errors.As(err, &tooMany):
+		secs := int(math.Ceil(tooMany.RetryAfter.Seconds()))
+		if secs < 1 {
+			secs = 1
+		}
+		w.Header().Set("Retry-After", strconv.Itoa(secs))
+		writeError(w, http.StatusTooManyRequests, ErrCodeRateLimited, "")
+		return true
+	}
+	return false
 }
 
 // resolveDeviceLabel derives a humane device label for the
@@ -422,6 +452,8 @@ func handleLogin(log *slog.Logger, a app.Application) http.Handler {
 			DeviceLabel: resolveDeviceLabel(req.DeviceLabel, r),
 		})
 		switch {
+		case writePasswordWorkRefusal(w, err):
+			return
 		case errors.Is(err, command.ErrAccountLocked):
 			// 423 Locked per RFC 4918 §11.3 + ADR 0053. Retry-After
 			// header carries integer seconds until unlock per RFC 7231
@@ -547,6 +579,8 @@ func handleChangePassword(log *slog.Logger, a app.Application) http.Handler {
 			NewPassword:     req.NewPassword,
 		})
 		switch {
+		case writePasswordWorkRefusal(w, err):
+			return
 		case errors.Is(err, command.ErrIncorrectCurrentPassword):
 			// 401 — same status as login's invalid_credentials so an
 			// attacker holding a stolen access token can't distinguish
@@ -758,6 +792,8 @@ func handleResetPassword(log *slog.Logger, a app.Application) http.Handler {
 			NewPassword: req.NewPassword,
 		})
 		switch {
+		case writePasswordWorkRefusal(w, err):
+			return
 		case errors.Is(err, command.ErrResetTokenInvalid):
 			writeError(w, http.StatusBadRequest, ErrCodeResetTokenInvalid, "")
 			return

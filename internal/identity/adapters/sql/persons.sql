@@ -211,6 +211,48 @@ SET    failed_login_count   = $2,
 WHERE  id = $1;
 
 
+-- name: RegisterPersonFailedLogin :one
+-- ONE atomic statement decides the failed-login count and the lock (ADR 0068
+-- D12). The old flow read the row, bumped the counter in Go ~30 ms of argon2
+-- later and wrote an absolute value, so concurrent wrong passwords lost updates
+-- and a batch could guess past the lock. Here the row is locked FOR NO KEY UPDATE
+-- (compatible with the key-share lock a login's refresh-family insert takes), the
+-- new count and lock are computed from the locked version, and the caller decides
+-- "locked" from the RETURNING row.
+--
+-- Mirrors person.RegisterFailedLogin exactly (a parity test pins it): the window
+-- resets the count to 1 when the previous failure is OLDER than sqlc.arg(window_secs); a
+-- lock still in force is kept; otherwise reaching sqlc.arg(max_failed) locks for
+-- sqlc.arg(lock_secs); an expired lock is cleared only when the window has elapsed.
+-- prev_locked_until lets the repository emit the account-locked event only for
+-- the attempt that actually crossed the threshold.
+UPDATE identity.persons p
+SET    failed_login_count   = c.cnt,
+       last_failed_login_at = sqlc.arg(now)::timestamptz,
+       locked_until         = CASE
+           WHEN c.prev_locked > sqlc.arg(now)::timestamptz THEN c.prev_locked
+           WHEN c.cnt >= sqlc.arg(max_failed)::int         THEN sqlc.arg(now)::timestamptz + (sqlc.arg(lock_secs)::float8 * interval '1 second')
+           WHEN c.elapsed                         THEN NULL
+           ELSE c.prev_locked
+       END
+FROM (
+    SELECT s.id, s.prev_locked, s.elapsed,
+           CASE WHEN s.elapsed THEN 1 ELSE s.cur_count + 1 END AS cnt
+    FROM (
+        SELECT cur.id,
+               cur.locked_until       AS prev_locked,
+               cur.failed_login_count AS cur_count,
+               (cur.last_failed_login_at IS NOT NULL
+                AND cur.last_failed_login_at < sqlc.arg(now)::timestamptz - (sqlc.arg(window_secs)::float8 * interval '1 second')) AS elapsed
+        FROM   identity.persons AS cur
+        WHERE  cur.id = sqlc.arg(id)
+        FOR NO KEY UPDATE OF cur
+    ) s
+) c
+WHERE  p.id = c.id
+RETURNING p.failed_login_count, p.last_failed_login_at, p.locked_until, c.prev_locked AS prev_locked_until;
+
+
 -- name: SearchPersonsByText :many
 -- Cross-tenant person search per ADR 0040 (pg_trgm). Backed by
 -- idx_persons_search_trgm (GIN over lower(email||' '||first_name||

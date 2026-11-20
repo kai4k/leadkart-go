@@ -331,3 +331,40 @@ func TestValidate_RateLimitRejectsNonFiniteRatesAndHugeBursts(t *testing.T) {
 		t.Errorf("Burst 1000 is the ceiling and must pass: %v", err)
 	}
 }
+
+func TestValidate_Argon2Bounds(t *testing.T) {
+	t.Parallel()
+	for _, bad := range []config.Argon2Config{
+		{MaxConcurrent: 0, QueueTimeout: time.Second},
+		{MaxConcurrent: -1, QueueTimeout: time.Second},
+		{MaxConcurrent: 65, QueueTimeout: time.Second},
+		{MaxConcurrent: 16, QueueTimeout: 0},
+		{MaxConcurrent: 16, QueueTimeout: 99 * time.Millisecond},
+		{MaxConcurrent: 16, QueueTimeout: 31 * time.Second},
+	} {
+		c := validBaseConfig()
+		c.Argon2 = bad
+		if err := config.Validate(c); err == nil || !strings.Contains(err.Error(), "Argon2.") {
+			t.Errorf("%+v: err = %v, want an Argon2 error", bad, err)
+		}
+	}
+	for _, ok := range []config.Argon2Config{
+		{MaxConcurrent: 1, QueueTimeout: 100 * time.Millisecond},
+		{MaxConcurrent: 64, QueueTimeout: 30 * time.Second},
+	} {
+		c := validBaseConfig()
+		c.Argon2 = ok
+		if err := config.Validate(c); err != nil {
+			t.Errorf("%+v: %v", ok, err)
+		}
+	}
+}
+
+func TestValidate_ChangePasswordLimitIsValidatedLikeTheRouteLimits(t *testing.T) {
+	t.Parallel()
+	c := validBaseConfig()
+	c.RateLimit.ChangePassword = config.RouteLimit{PerMinute: 0, Burst: 5}
+	if err := config.Validate(c); err == nil || !strings.Contains(err.Error(), "RateLimit.change_password") {
+		t.Fatalf("err = %v", err)
+	}
+}

@@ -33,6 +33,7 @@ package persontest
 
 import (
 	"context"
+	"time"
 
 	"github.com/leadkart/leadkart-go/internal/common/email"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
@@ -133,6 +134,23 @@ func (f *FakeRepository) UpdateByID(_ context.Context, id person.ID, updateFn fu
 func (f *FakeRepository) UpdateLockoutState(_ context.Context, _ *person.Person) error {
 
 	return nil
+}
+
+// UpdateAfterFailedLogin applies the aggregate's own lockout policy to the stored
+// person and reports the outcome, the in-memory twin of the adapter's atomic
+// statement (an integration parity test pins the two together).
+func (f *FakeRepository) UpdateAfterFailedLogin(_ context.Context, id person.ID, now time.Time) (person.LockoutOutcome, error) {
+	p, ok := f.rows[id]
+	if !ok {
+		return person.LockoutOutcome{}, person.ErrNotFound
+	}
+	wasLocked := p.IsLocked(now)
+	p.RegisterFailedLogin(now)
+	return person.LockoutOutcome{
+		FailedCount: p.FailedLoginCount(),
+		LockedUntil: p.LockedUntil(),
+		JustLocked:  !wasLocked && p.IsLocked(now),
+	}, nil
 }
 
 // GetByID returns the Person or [person.ErrNotFound].

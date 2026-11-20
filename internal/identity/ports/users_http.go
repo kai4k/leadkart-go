@@ -375,6 +375,8 @@ func handleCreateUser(log *slog.Logger, a app.Application) http.Handler {
 			CreatedByMembershipID: callerMembership,
 		})
 		switch {
+		case writePasswordWorkRefusal(w, err):
+			return
 		case errors.Is(err, command.ErrEmailHasActiveMembership):
 			writeError(w, http.StatusConflict, ErrCodeEmailHasActiveMembership,
 				"this email already has an active membership in another tenant")

@@ -513,6 +513,81 @@ func (q *Queries) InsertPerson(ctx context.Context, arg InsertPersonParams) erro
 	return err
 }
 
+const registerPersonFailedLogin = `-- name: RegisterPersonFailedLogin :one
+UPDATE identity.persons p
+SET    failed_login_count   = c.cnt,
+       last_failed_login_at = $1::timestamptz,
+       locked_until         = CASE
+           WHEN c.prev_locked > $1::timestamptz THEN c.prev_locked
+           WHEN c.cnt >= $2::int         THEN $1::timestamptz + ($3::float8 * interval '1 second')
+           WHEN c.elapsed                         THEN NULL
+           ELSE c.prev_locked
+       END
+FROM (
+    SELECT s.id, s.prev_locked, s.elapsed,
+           CASE WHEN s.elapsed THEN 1 ELSE s.cur_count + 1 END AS cnt
+    FROM (
+        SELECT cur.id,
+               cur.locked_until       AS prev_locked,
+               cur.failed_login_count AS cur_count,
+               (cur.last_failed_login_at IS NOT NULL
+                AND cur.last_failed_login_at < $1::timestamptz - ($4::float8 * interval '1 second')) AS elapsed
+        FROM   identity.persons AS cur
+        WHERE  cur.id = $5
+        FOR NO KEY UPDATE OF cur
+    ) s
+) c
+WHERE  p.id = c.id
+RETURNING p.failed_login_count, p.last_failed_login_at, p.locked_until, c.prev_locked AS prev_locked_until
+`
+
+type RegisterPersonFailedLoginParams struct {
+	Now        pgtype.Timestamptz
+	MaxFailed  int32
+	LockSecs   float64
+	WindowSecs float64
+	ID         pgtype.UUID
+}
+
+type RegisterPersonFailedLoginRow struct {
+	FailedLoginCount  int32
+	LastFailedLoginAt pgtype.Timestamptz
+	LockedUntil       pgtype.Timestamptz
+	PrevLockedUntil   pgtype.Timestamptz
+}
+
+// ONE atomic statement decides the failed-login count and the lock (ADR 0068
+// D12). The old flow read the row, bumped the counter in Go ~30 ms of argon2
+// later and wrote an absolute value, so concurrent wrong passwords lost updates
+// and a batch could guess past the lock. Here the row is locked FOR NO KEY UPDATE
+// (compatible with the key-share lock a login's refresh-family insert takes), the
+// new count and lock are computed from the locked version, and the caller decides
+// "locked" from the RETURNING row.
+//
+// Mirrors person.RegisterFailedLogin exactly (a parity test pins it): the window
+// resets the count to 1 when the previous failure is OLDER than sqlc.arg(window_secs); a
+// lock still in force is kept; otherwise reaching sqlc.arg(max_failed) locks for
+// sqlc.arg(lock_secs); an expired lock is cleared only when the window has elapsed.
+// prev_locked_until lets the repository emit the account-locked event only for
+// the attempt that actually crossed the threshold.
+func (q *Queries) RegisterPersonFailedLogin(ctx context.Context, arg RegisterPersonFailedLoginParams) (RegisterPersonFailedLoginRow, error) {
+	row := q.db.QueryRow(ctx, registerPersonFailedLogin,
+		arg.Now,
+		arg.MaxFailed,
+		arg.LockSecs,
+		arg.WindowSecs,
+		arg.ID,
+	)
+	var i RegisterPersonFailedLoginRow
+	err := row.Scan(
+		&i.FailedLoginCount,
+		&i.LastFailedLoginAt,
+		&i.LockedUntil,
+		&i.PrevLockedUntil,
+	)
+	return i, err
+}
+
 const searchPersonsByText = `-- name: SearchPersonsByText :many
 SELECT id, email, first_name, last_name, created_at,
        similarity(

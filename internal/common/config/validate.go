@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"strings"
+	"time"
 
 	"github.com/leadkart/leadkart-go/internal/common/httpmw"
 )
@@ -133,6 +134,24 @@ func Validate(cfg AppConfig) error {
 		return fmt.Errorf("config: OTel.SampleRatio must be in [0,1] (got %v)", cfg.OTel.SampleRatio)
 	}
 
+	return validateArgon2(cfg.Argon2)
+}
+
+// Bounds of the Argon2 gate: at least one slot, and not so many that the memory
+// the gate exists to bound (slots x ~19.5 MiB) could reach the container limit.
+const (
+	maxArgon2Concurrent = 64
+	minArgon2Queue      = 100 * time.Millisecond
+	maxArgon2Queue      = 30 * time.Second
+)
+
+func validateArgon2(c Argon2Config) error {
+	if c.MaxConcurrent < 1 || c.MaxConcurrent > maxArgon2Concurrent {
+		return fmt.Errorf("config: Argon2.MaxConcurrent must be in [1,%d] (got %d)", maxArgon2Concurrent, c.MaxConcurrent)
+	}
+	if c.QueueTimeout < minArgon2Queue || c.QueueTimeout > maxArgon2Queue {
+		return fmt.Errorf("config: Argon2.QueueTimeout must be in [%s,%s] (got %s)", minArgon2Queue, maxArgon2Queue, c.QueueTimeout)
+	}
 	return nil
 }
 
@@ -172,6 +191,7 @@ func validateHTTP(cfg AppConfig) error {
 		{"password_reset", cfg.RateLimit.PasswordReset},
 		{"email_change_confirm", cfg.RateLimit.EmailChangeConfirm},
 		{"tenant_registration", cfg.RateLimit.TenantRegistration},
+		{"change_password", cfg.RateLimit.ChangePassword},
 	} {
 		// !(>0) also rejects NaN; IsInf rejects +Inf (a limit that never limits).
 		if !(r.limit.PerMinute > 0) || math.IsInf(r.limit.PerMinute, 0) || r.limit.Burst < 1 || r.limit.Burst > maxRouteBurst {

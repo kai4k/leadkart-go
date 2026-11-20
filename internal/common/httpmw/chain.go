@@ -68,11 +68,10 @@ type PublicChainConfig struct {
 	// per security.md.
 	IPRateLimit LimiterConfig
 
-	// IdempotencyKeyer overrides the default scope used by the idempotency
-	// middleware to key X-Command-Id records per caller. Nil → the tenant from
-	// ctx (never set this early in the chain) else "anon:<client ip>" with the
-	// trusted-proxy client address. cmd/api passes authn.IdempotencyCallerKeyer
-	// so the scope is the verified tenant + person + route.
+	// IdempotencyKeyer scopes X-Command-Id records per caller (and may mark a
+	// request [idempotency.Ineligible]). Nil means idempotency is off: the header
+	// is ignored. cmd/api passes authn.IdempotencyCallerKeyer, whose scope is the
+	// verified tenant + person + membership + session + tenant scope + route.
 	IdempotencyKeyer idempotency.CallerKeyer
 
 	// LimiterNow is the clock of the limiters' sweeps and refills. Nil means
@@ -136,15 +135,10 @@ func PublicChain(cfg PublicChainConfig) Middleware {
 
 	idemKeyer := cfg.IdempotencyKeyer
 	if idemKeyer == nil {
-		// Never set this early in the chain: the context carries no tenant yet,
-		// so the default is the anonymous scope. cmd/api passes
-		// authn.IdempotencyCallerKeyer for the verified scope.
-		idemKeyer = func(r *http.Request) string {
-			if key := ClientKey(r, cfg.TrustedProxies); key != "" {
-				return "anon:" + key
-			}
-			return ""
-		}
+		// No scope policy, no idempotency: X-Command-Id is ignored. A scope is a
+		// security decision (who may replay whose answer), so there is no default
+		// that guesses one; cmd/api passes authn.IdempotencyCallerKeyer.
+		idemKeyer = func(*http.Request) string { return idempotency.Ineligible }
 	}
 
 	mws := []Middleware{

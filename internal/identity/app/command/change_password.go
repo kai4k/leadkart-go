@@ -84,6 +84,8 @@ type ChangePasswordHandler struct {
 	uow           pg.UnitOfWork
 	breachChecker passwordpolicy.Checker
 	now           func() time.Time
+	gate          *argon2.Gate
+	attempts      AttemptLimiter
 }
 
 // NewChangePasswordHandler wires the handler. breachChecker MUST be
@@ -127,32 +129,23 @@ func (h ChangePasswordHandler) Handle(ctx context.Context, cmd ChangePasswordCom
 		return ErrNewPasswordRequired
 	}
 
-	// 1. Load person — read path so we can verify the current
-	// password BEFORE entering the UpdateByID transaction. Failing
-	// inside the closure would still work but eats a tx for the
-	// happy-path-rejection case.
-	p, err := h.persons.GetByID(ctx, cmd.PersonID)
-	if err != nil {
-		if errors.Is(err, person.ErrNotFound) {
-			// Surface as ErrIncorrectCurrentPassword — same as if
-			// the password verify failed. Defeats user-id
-			// enumeration via timing/error-shape probing.
-			return ErrIncorrectCurrentPassword
-		}
-		return fmt.Errorf("change_password: load person: %w", err)
+	// 0. Per-person attempt budget. The current password is checked here on a
+	// route any signed-in session can reach, so a hijacked session could guess it
+	// at the rate the global limiter allows (and burn an Argon2id verify per
+	// guess). The check runs before any password work.
+	if err := h.spendAttempt(cmd.PersonID); err != nil {
+		return err
 	}
 
-	// 2. Gates that mirror login — anonymised / globally-suspended
-	// Person can't change password.
-	if p.IsAnonymised() {
-		return ErrIncorrectCurrentPassword
-	}
-	if p.IsGloballySuspended() {
-		return ErrIncorrectCurrentPassword
+	// 1-2. Load the person (a read, so the current password is verified BEFORE
+	// the UpdateByID transaction) and refuse the states that mirror login.
+	p, err := h.loadChangeable(ctx, cmd.PersonID)
+	if err != nil {
+		return err
 	}
 
 	// 3. Verify current password.
-	if err := argon2.Verify(cmd.CurrentPassword, p.PasswordHash().String()); err != nil {
+	if err := h.gate.Verify(ctx, cmd.CurrentPassword, p.PasswordHash().String()); err != nil {
 		if errors.Is(err, argon2.ErrMismatch) || errors.Is(err, argon2.ErrFormat) {
 			return ErrIncorrectCurrentPassword
 		}
@@ -174,7 +167,7 @@ func (h ChangePasswordHandler) Handle(ctx context.Context, cmd ChangePasswordCom
 	}
 
 	// 6. Hash.
-	newHashStr, err := argon2.Hash(cmd.NewPassword)
+	newHashStr, err := h.gate.Hash(ctx, cmd.NewPassword)
 	if err != nil {
 		return fmt.Errorf("change_password: hash new: %w", err)
 	}
@@ -211,4 +204,63 @@ func (h ChangePasswordHandler) Handle(ctx context.Context, cmd ChangePasswordCom
 		return fmt.Errorf("change_password: persist: %w", err)
 	}
 	return nil
+}
+
+// WithArgonGate returns the handler with its password hashing and verification running under
+// g (see [argon2.Gate]); a saturated gate refuses with [argon2.ErrBusy], which the
+// HTTP layer answers 503. Without it the work is unbounded (tests only).
+func (h ChangePasswordHandler) WithArgonGate(g *argon2.Gate) ChangePasswordHandler {
+	h.gate = g
+	return h
+}
+
+// AttemptLimiter is the per-key attempt budget the handler consults: Allow
+// spends one attempt for key and, when the budget is exhausted, says how long
+// until the next one. Consumer-defined; httpmw.KeyedLimiter implements it.
+type AttemptLimiter interface {
+	Allow(key string) (ok bool, retryAfter time.Duration)
+}
+
+// TooManyAttemptsError is returned when the person's attempt budget is spent.
+// The HTTP layer answers 429 with Retry-After (rounded up to whole seconds).
+type TooManyAttemptsError struct {
+	RetryAfter time.Duration
+}
+
+func (e *TooManyAttemptsError) Error() string { return "change_password: too many attempts" }
+
+// WithAttemptLimiter returns the handler checking the current password at most
+// as often as l allows, per person (ADR 0068 D12). Nil = unlimited (tests only).
+func (h ChangePasswordHandler) WithAttemptLimiter(l AttemptLimiter) ChangePasswordHandler {
+	h.attempts = l
+	return h
+}
+
+// spendAttempt takes one attempt from the person's budget, or refuses with
+// [TooManyAttemptsError] carrying the wait.
+func (h ChangePasswordHandler) spendAttempt(id person.ID) error {
+	if h.attempts == nil {
+		return nil
+	}
+	if ok, wait := h.attempts.Allow(id.String()); !ok {
+		return &TooManyAttemptsError{RetryAfter: wait}
+	}
+	return nil
+}
+
+// loadChangeable loads the person and answers every refusal the way a wrong
+// current password is answered, so ids and account states cannot be enumerated:
+// no such person, anonymised, globally suspended.
+func (h ChangePasswordHandler) loadChangeable(ctx context.Context, id person.ID) (*person.Person, error) {
+	p, err := h.persons.GetByID(ctx, id)
+	if err != nil {
+		if errors.Is(err, person.ErrNotFound) {
+			return nil, ErrIncorrectCurrentPassword
+		}
+		return nil, fmt.Errorf("change_password: load person: %w", err)
+	}
+	if p.IsAnonymised() || p.IsGloballySuspended() {
+		return nil, ErrIncorrectCurrentPassword
+	}
+	return p, nil
 }

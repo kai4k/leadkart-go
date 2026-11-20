@@ -175,10 +175,6 @@ const (
 	// throttling brute-force credential stuffing.
 	apiIPRatePerSecond = 10.0
 	apiIPRateBurst     = 60
-
-	// phantomLockoutMaxEntries bounds the in-memory lockout counter for login
-	// attempts with no usable account (ADR 0068 D12): ~100 bytes each, so ~10 MB.
-	phantomLockoutMaxEntries = 100_000
 )
 
 func main() {
@@ -492,7 +488,7 @@ func buildPublicChain(cfg config.AppConfig, logger *slog.Logger, store idempoten
 		},
 		TrustedProxies:   trustedProxies,
 		RouteRateLimits:  routeRateLimits(cfg.RateLimit),
-		IdempotencyKeyer: authn.IdempotencyCallerKeyer(verifier, func(r *http.Request) string { return httpmw.ClientKey(r, trustedProxies) }),
+		IdempotencyKeyer: authn.IdempotencyCallerKeyer(verifier),
 	}), nil
 }
 
@@ -595,6 +591,9 @@ type identityWiring struct {
 	StampValidator *adapters.SecurityStampValidator
 	Families       *adapters.RefreshTokenFamilyRepository
 	Persons        *adapters.PersonRepository
+	// ArgonGate bounds concurrent Argon2id work for every command that hashes or
+	// verifies a password (exposed so a wiring test can saturate it).
+	ArgonGate *argon2.Gate
 }
 
 // ----- Identity wiring -------------------------------------------------------
@@ -687,7 +686,27 @@ func buildIdentityApp(pool *pgxpool.Pool, hybridCache *cache.HybridCache, cfg co
 	newRoleID := func() role.ID { return role.ID(ids.NewV7().String()) }
 	newRoleHierarchyEdgeID := func() rolehierarchy.ID { return rolehierarchy.ID(ids.NewV7().String()) }
 
+	// Every command that hashes or verifies a password runs under ONE gate: the
+	// process-wide bound on concurrent Argon2id work (ADR 0068 D12).
+	argonCfg := cfg.Argon2
+	if argonCfg.MaxConcurrent == 0 {
+		argonCfg = config.Defaults().Argon2 // partial test configs; Validate guarantees it in production
+	}
+	argonGate := argon2.NewGate(argonCfg.MaxConcurrent, argonCfg.QueueTimeout)
+	changePasswordLimit := cfg.RateLimit.ChangePassword
+	if changePasswordLimit.Burst == 0 {
+		changePasswordLimit = config.Defaults().RateLimit.ChangePassword
+	}
+	changePasswordAttempts := httpmw.NewKeyedLimiter(httpmw.LimiterConfig{
+		RatePerSecond: changePasswordLimit.PerMinute / 60,
+		Burst:         changePasswordLimit.Burst,
+	})
+	// The phantom counter's key derives from the server secret (the JWT signing
+	// key), so no plain or unsalted-hashed address of a non-user is ever stored.
+	phantomLockout := adapters.NewPhantomLockoutRepository(pool, tx, []byte(cfg.JWT.SigningKey))
+
 	return identityWiring{
+		ArgonGate:      argonGate,
 		Issuer:         issuer,
 		StampCache:     stampCache,
 		StampValidator: stampValidator,
@@ -695,15 +714,15 @@ func buildIdentityApp(pool *pgxpool.Pool, hybridCache *cache.HybridCache, cfg co
 		Persons:        persons,
 		App: app.Application{
 			Commands: app.Commands{
-				RegisterTenant:       command.NewRegisterTenantHandler(tx, tenants, persons, memberships, roles, now, newTenantID, newPersonID, newMembershipID),
-				Login:                command.NewLoginHandler(authRouter, families, tenants, persons, permResolver, issuer, now, cfg.Refresh.AbsoluteTTL, dummyHash, newFamilyID, adapters.NewInMemoryPhantomLockout(phantomLockoutMaxEntries)),
+				RegisterTenant:       command.NewRegisterTenantHandler(tx, tenants, persons, memberships, roles, now, newTenantID, newPersonID, newMembershipID).WithArgonGate(argonGate),
+				Login:                command.NewLoginHandler(authRouter, families, tenants, persons, permResolver, issuer, now, cfg.Refresh.AbsoluteTTL, dummyHash, newFamilyID, phantomLockout).WithArgonGate(argonGate),
 				Refresh:              command.NewRefreshHandler(families, persons, memberships, tenants, permResolver, issuer, now, cfg.Refresh.AbsoluteTTL),
 				Logout:               command.NewLogoutHandler(families, now),
-				ChangePassword:       command.NewChangePasswordHandler(persons, families, tx, breachChecker, now),
+				ChangePassword:       command.NewChangePasswordHandler(persons, families, tx, breachChecker, now).WithArgonGate(argonGate).WithAttemptLimiter(changePasswordAttempts),
 				RevokeSession:        command.NewRevokeSessionHandler(families, now),
 				RevokeAllSessions:    command.NewRevokeAllSessionsHandler(families, now),
 				RequestPasswordReset: command.NewRequestPasswordResetHandler(persons, now),
-				ConfirmPasswordReset: command.NewConfirmPasswordResetHandler(persons, families, tx, breachChecker, now),
+				ConfirmPasswordReset: command.NewConfirmPasswordResetHandler(persons, families, tx, breachChecker, now).WithArgonGate(argonGate),
 				RequestEmailChange:   command.NewRequestEmailChangeHandler(persons, now),
 				ConfirmEmailChange:   command.NewConfirmEmailChangeHandler(persons, now),
 
@@ -725,7 +744,7 @@ func buildIdentityApp(pool *pgxpool.Pool, hybridCache *cache.HybridCache, cfg co
 				ReplaceUserPermissionOverrides: command.NewReplaceUserPermissionOverridesHandler(tx, authorityLock, memberships, roles, persons, now),
 				AssignUserManager:              command.NewAssignUserManagerHandler(tx, authorityLock, memberships, roles, persons, now),
 				RemoveUserManager:              command.NewRemoveUserManagerHandler(tx, authorityLock, memberships, roles, persons, now),
-				CreateUser:                     command.NewCreateUserHandler(tx, persons, memberships, now, newPersonID, newMembershipID),
+				CreateUser:                     command.NewCreateUserHandler(tx, persons, memberships, now, newPersonID, newMembershipID).WithArgonGate(argonGate),
 				AnonymiseUser:                  command.NewAnonymiseUserHandler(personChangeGuard, memberships, persons, now),
 
 				CreateRole:             command.NewCreateRoleHandler(tx, authorityLock, memberships, roles, persons, roleHierarchyEdges, now, newRoleID, newRoleHierarchyEdgeID),

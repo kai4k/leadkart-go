@@ -66,6 +66,7 @@ import (
 	crmreminder "github.com/leadkart/leadkart-go/internal/crm/domain/reminder"
 	crmsubscribers "github.com/leadkart/leadkart-go/internal/crm/ports/subscribers"
 	"github.com/leadkart/leadkart-go/internal/identity/adapters"
+	identityjobs "github.com/leadkart/leadkart-go/internal/identity/app/jobs"
 	"github.com/leadkart/leadkart-go/internal/identity/ports/subscribers"
 	inventoryadapters "github.com/leadkart/leadkart-go/internal/inventory/adapters"
 	inventorycommand "github.com/leadkart/leadkart-go/internal/inventory/app/command"
@@ -453,6 +454,13 @@ func run(ctx context.Context, stdout *os.File) error {
 	if err := river.AddWorkerSafely(workers, inventoryjobs.NewReorderScanWorker(inventoryAlertScan, logger, time.Now)); err != nil {
 		return fmt.Errorf("register inventory reorder scan worker: %w", err)
 	}
+	// Identity: purge dead rows of the phantom failed-login counter (ADR 0068 D12).
+	// The repository is built with the same server secret the API uses, but the
+	// purge never touches a key; it deletes by age.
+	phantomLockout := adapters.NewPhantomLockoutRepository(pool, tx, []byte(cfg.JWT.SigningKey))
+	if err := river.AddWorkerSafely(workers, identityjobs.NewLoginPhantomPurgeWorker(phantomLockout, logger, time.Now)); err != nil {
+		return fmt.Errorf("register login phantom purge worker: %w", err)
+	}
 	// Tasks module river jobs (Phase C.2 — BRD §6.8): overdue scan + purge.
 	if err := river.AddWorkerSafely(workers, tasksjobs.NewOverdueScanWorker(tasksRepo, tasksMarkOverdue, logger, time.Now)); err != nil {
 		return fmt.Errorf("register tasks overdue scan worker: %w", err)
@@ -465,6 +473,13 @@ func run(ctx context.Context, stdout *os.File) error {
 			river.PeriodicInterval(audit.PurgeInterval),
 			func() (river.JobArgs, *river.InsertOpts) {
 				return audit.PurgeJob{}, nil
+			},
+			&river.PeriodicJobOpts{RunOnStart: false},
+		),
+		river.NewPeriodicJob(
+			river.PeriodicInterval(identityjobs.LoginPhantomPurgeInterval),
+			func() (river.JobArgs, *river.InsertOpts) {
+				return identityjobs.LoginPhantomPurgeJob{}, nil
 			},
 			&river.PeriodicJobOpts{RunOnStart: false},
 		),

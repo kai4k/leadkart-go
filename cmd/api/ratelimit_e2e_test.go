@@ -75,11 +75,9 @@ func TestE2E_Idempotency_ScopedPerVerifiedTenantNotPerBFF(t *testing.T) {
 	var runs atomic.Int32
 	chain := httpmw.PublicChain(httpmw.PublicChainConfig{
 		Logger: silentLogger(), IdempotencyStore: idempotency.NewPostgresStore(f.Pool), Now: time.Now,
-		IPRateLimit:    httpmw.LimiterConfig{RatePerSecond: 100, Burst: 100},
-		TrustedProxies: trusted,
-		IdempotencyKeyer: authn.IdempotencyCallerKeyer(f.Issuer, func(r *http.Request) string {
-			return httpmw.ClientIP(r, trusted)
-		}),
+		IPRateLimit:      httpmw.LimiterConfig{RatePerSecond: 100, Burst: 100},
+		TrustedProxies:   trusted,
+		IdempotencyKeyer: authn.IdempotencyCallerKeyer(f.Issuer),
 	})
 	srv := httptest.NewServer(chain(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		runs.Add(1)

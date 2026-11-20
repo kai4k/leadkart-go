@@ -213,14 +213,12 @@ func TestArch_IdempotencyOnMutationEndpoints(t *testing.T) {
 		t.Fatal("openapi.yaml has no paths object")
 	}
 
-	// Paths that explicitly DON'T accept X-Command-Id (e.g. auth/login
-	// is itself idempotent at the JWT exchange level; logout has no
-	// state to replay).
-	exempt := map[string]bool{
-		"POST /api/v1/auth/login":   true,
-		"POST /api/v1/auth/logout":  true,
-		"POST /api/v1/auth/refresh": true,
-	}
+	// Everything under /api/v1/auth/ ignores X-Command-Id (ADR 0068 D11): login and
+	// refresh answers carry plaintext refresh tokens, request bodies carry passwords,
+	// and a credential exchange is not a command to replay. The header is therefore
+	// not declared there; the middleware ignores it and stores nothing
+	// (authn.IdempotencyCallerKeyer returns idempotency.Ineligible).
+	exempt := map[string]bool{}
 
 	type violation struct {
 		op string
@@ -235,7 +233,7 @@ func TestArch_IdempotencyOnMutationEndpoints(t *testing.T) {
 				continue
 			}
 			key := method + " " + pathKey
-			if exempt[key] {
+			if exempt[key] || strings.HasPrefix(pathKey, "/api/v1/auth/") {
 				continue
 			}
 			op, _ := opRaw.(map[string]any)

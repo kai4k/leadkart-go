@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -157,6 +158,57 @@ func (r *PersonRepository) updateLockoutOnTx(ctx context.Context, tx pgx.Tx, p *
 		return fmt.Errorf("person repo: update lockout state: %w", err)
 	}
 	return drainPersonEvents(ctx, tx, p)
+}
+
+// UpdateAfterFailedLogin satisfies [person.Repository]: one atomic statement counts
+// the attempt and applies the lock policy (see sql/persons.sql). The policy
+// constants come from the aggregate, so Go and SQL cannot drift apart (an
+// integration test replays sequences through both). The attempt that crosses the
+// threshold also records [person.AccountLockedEvent] in the same transaction.
+func (r *PersonRepository) UpdateAfterFailedLogin(ctx context.Context, id person.ID, now time.Time) (person.LockoutOutcome, error) {
+	uid, err := parsePersonID(id)
+	if err != nil {
+		return person.LockoutOutcome{}, err
+	}
+	var out person.LockoutOutcome
+	err = r.runInTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
+		row, err := r.q.WithTx(tx).RegisterPersonFailedLogin(ctx, db.RegisterPersonFailedLoginParams{
+			ID:         pgconv.PgUUID(uid),
+			Now:        pgconv.PgRequiredTimestamp(now),
+			WindowSecs: person.LockoutWindow.Seconds(),
+			MaxFailed:  person.MaxFailedLogins,
+			LockSecs:   person.LockoutDuration.Seconds(),
+		})
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return person.ErrNotFound
+			}
+			return fmt.Errorf("person repo: register failed login: %w", err)
+		}
+		out = person.LockoutOutcome{
+			FailedCount: int(row.FailedLoginCount),
+			LockedUntil: pgconv.TimeFromPg(row.LockedUntil),
+		}
+		prevActive := row.PrevLockedUntil.Valid && row.PrevLockedUntil.Time.After(now)
+		out.JustLocked = out.LockedAt(now) && !prevActive
+		if !out.JustLocked {
+			return nil
+		}
+		mapped, err := mapDomainEvents([]any{person.AccountLockedEvent{
+			PersonID:    id,
+			LockedUntil: out.LockedUntil,
+			FailedCount: out.FailedCount,
+			At:          now,
+		}})
+		if err != nil {
+			return fmt.Errorf("person repo: map events: %w", err)
+		}
+		return writeOutboxEvents(ctx, tx, uuid.Nil, mapped)
+	})
+	if err != nil {
+		return person.LockoutOutcome{}, err
+	}
+	return out, nil
 }
 
 // GetByEmail satisfies [person.Repository]. Looks up by globally-unique email.

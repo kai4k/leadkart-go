@@ -2,6 +2,7 @@ package person
 
 import (
 	"context"
+	"time"
 
 	"github.com/leadkart/leadkart-go/internal/common/email"
 	"github.com/leadkart/leadkart-go/internal/common/errs"
@@ -49,6 +50,17 @@ type Repository interface {
 	// repository writes whatever the aggregate currently says (TDL
 	// canon).
 	UpdateLockoutState(ctx context.Context, p *Person) error
+
+	// UpdateAfterFailedLogin counts one failed password attempt for the person and
+	// applies the lock policy in ONE atomic statement (row locked, new count and
+	// lock computed from the locked version, no read-modify-write in Go), so
+	// concurrent attempts neither lose updates nor guess past the lock. now is the
+	// attempt's time, taken by the caller after its password check. It implements
+	// exactly [Person.RegisterFailedLogin]'s policy (MaxFailedLogins within
+	// LockoutWindow, locked for LockoutDuration) and records the account-locked
+	// event, in the same transaction, for the attempt that crosses the threshold.
+	// Returns [ErrNotFound] when the person does not exist.
+	UpdateAfterFailedLogin(ctx context.Context, id ID, now time.Time) (LockoutOutcome, error)
 
 	// GetByID returns the Person or [ErrNotFound]. Read-only path.
 	GetByID(ctx context.Context, id ID) (*Person, error)
