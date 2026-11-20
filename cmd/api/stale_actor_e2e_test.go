@@ -163,7 +163,13 @@ func TestE2E_StaleActor_DemotedAdminCannotConferWhatTheyNoLongerOutrank(t *testi
 	// A level-15 role was within the old rank 10; it is not within rank 20.
 	r := f.authedJSON(t, http.MethodPost, "/api/v1/users/"+helper.membershipID+"/roles", adminTok,
 		ports.AssignUserRoleRequest{RoleID: roleID(role.SystemRoles.Tenant.SeniorManager)})
-	f.wantForbidden(t, "demoted admin assigns Senior Manager", r, http.StatusForbidden, "insufficient_rank")
+	// Since round 12 the api evicts the cached stamp at commit, so the demoted admin's
+	// old token is normally refused outright at the gate (401 stale_token): the exploit
+	// ends there. When the cache missed the eviction (it was unreachable) the token
+	// passes the gate and the policy's fresh read of the actor must still refuse (403).
+	if r.status != http.StatusUnauthorized || errCodeOf(r) != "stale_token" {
+		f.wantForbidden(t, "demoted admin assigns Senior Manager", r, http.StatusForbidden, "insufficient_rank")
+	}
 	if u := f.getUser(t, owner.AccessToken, helper.membershipID); len(u.RoleIDs) != 0 {
 		t.Errorf("the helper holds roles %v after refused assignments", u.RoleIDs)
 	}
@@ -203,7 +209,11 @@ func TestE2E_StaleActor_RevokedPermissionCannotBeConferred(t *testing.T) {
 	// The stale token still lists identity.users.view; conferring it again must be refused.
 	r := f.authedJSON(t, http.MethodPatch, "/api/v1/users/"+exec2.membershipID+"/permission-overrides", mgrTok,
 		ports.ReplaceUserPermissionOverridesRequest{Granted: []string{p.Users.View, p.Crm.Leads.Read}, Revoked: []string{}})
-	f.wantForbidden(t, "manager confers a permission revoked from them a minute ago", r, http.StatusForbidden, "grant_exceeds_authority")
+	// Evicted at commit since round 12: normally 401 stale_token at the gate; when the
+	// eviction was missed the fresh intersection must still refuse (403).
+	if r.status != http.StatusUnauthorized || errCodeOf(r) != "stale_token" {
+		f.wantForbidden(t, "manager confers a permission revoked from them a minute ago", r, http.StatusForbidden, "grant_exceeds_authority")
+	}
 }
 
 // TestE2E_StaleActor_RoleChangeAnswersStaleTokenAndRefreshMintsTheNewRank is

@@ -104,6 +104,8 @@ func TestE2E_PermissionRequests_ApprovalDecidedByPolicy(t *testing.T) {
 		if u := f.getUser(t, w.owner.AccessToken, e.membershipID); u.Status != "active" {
 			t.Errorf("requester status %q", u.Status)
 		}
+		// The approval ended the requester's old token (stamp evicted at commit): sign in again.
+		eTok = f.loginToken(t, e.email, e.password)
 		got := f.authedJSON(t, http.MethodGet, "/api/v1/permission-requests/"+id, eTok, nil)
 		var dto ports.PermissionRequestDto
 		if err := json.Unmarshal(got.body, &dto); err != nil || dto.State != "approved" || dto.ApproverMembershipID != w.tl.membershipID {
@@ -148,11 +150,13 @@ func TestE2E_PermissionRequests_ApprovalDecidedByPolicy(t *testing.T) {
 	})
 	// arch-test:serial — subtests share one fixture and one tenant.
 	t.Run("an Administrator without tenant.admin approves day-to-day work but not the must-hold set", func(t *testing.T) {
-		_, eTok := w.exec(t)
+		e, eTok := w.exec(t)
 		_, day := f.requestElevation(t, eTok, p.Tasks.WorkItems.Reassign)
 		if r := w.decide(t, "approve", w.adTok, day); r.status != http.StatusNoContent {
 			t.Errorf("admin approves a day-to-day permission for a user: %d %s", r.status, r.body)
 		}
+		// The approval ended the requester's old token (stamp evicted at commit): sign in again.
+		eTok = f.loginToken(t, e.email, e.password)
 		_, must := f.requestElevation(t, eTok, p.Roles.Update)
 		r := w.decide(t, "approve", w.adTok, must)
 		f.wantForbidden(t, "admin approves identity.roles.update it does not hold", r, http.StatusForbidden, "grant_exceeds_authority")

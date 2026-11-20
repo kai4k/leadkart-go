@@ -37,7 +37,6 @@ func TestE2E_ApproverQueue_CanApproveIsWhatApproveAnswers(t *testing.T) {
 	f := w.f
 	p := permission.IdentityPermissions
 	e, eTok := w.exec(t)
-	_ = e
 	// held by the Team Lead (approvable) and not held (listed, but not approvable)
 	for _, perm := range []string{p.Tasks.WorkItems.Reassign, p.Roles.Update, p.Users.Create} {
 		if sub, _ := f.requestElevation(t, eTok, perm); sub.status != http.StatusCreated {
@@ -69,6 +68,8 @@ func TestE2E_ApproverQueue_CanApproveIsWhatApproveAnswers(t *testing.T) {
 	}
 
 	// The own-requests list carries no can_approve; the executive's queue is empty.
+	// The approvals above ended the executive's old token (stamp evicted at commit).
+	eTok = f.loginToken(t, e.email, e.password)
 	mine := f.authedJSON(t, http.MethodGet, "/api/v1/permission-requests", eTok, nil)
 	var own ports.ListPermissionRequestsResponse
 	if err := json.Unmarshal(mine.body, &own); err != nil || len(own.Requests) == 0 || own.Requests[0].CanApprove != nil {

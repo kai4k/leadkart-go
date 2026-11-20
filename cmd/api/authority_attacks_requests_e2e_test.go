@@ -23,6 +23,10 @@ import (
 // when the request is refused.
 func (w *attackWorld) submitFor(t *testing.T, who, perm string) string {
 	t.Helper()
+	// An approval rotates the requester's stamp and the api evicts the cached stamp at
+	// once (round 12, ADR 0068 D12), so a persona approved earlier holds a stale token:
+	// sign in again, as the BFF's silent refresh would.
+	w.relogin(t, who)
 	r, id := w.f.requestElevation(t, w.tok(t, who), perm)
 	if r.status != http.StatusCreated {
 		t.Fatalf("%s submits %s: %d %s", who, perm, r.status, r.body)

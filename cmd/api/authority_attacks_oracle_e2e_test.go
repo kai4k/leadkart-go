@@ -134,6 +134,7 @@ func TestAttack_Oracles_RequestsOfOthersAreIndistinguishableFromMissingOnes(t *t
 	if r := f.authedJSON(t, http.MethodPost, "/api/v1/permission-requests/"+denied+"/deny", w.tok(t, "admin"), ports.DenyPermissionRequestRequest{DecisionReason: "no"}); r.status != http.StatusNoContent {
 		t.Fatalf("deny: %d %s", r.status, r.body)
 	}
+	w.relogin(t, "exec2") // the approval above ended exec2's old token (stamp evicted at commit)
 	if r := f.authedJSON(t, http.MethodPost, "/api/v1/permission-requests/"+cancelled+"/cancel", w.tok(t, "exec2"), nil); r.status != http.StatusNoContent {
 		t.Fatalf("cancel: %d %s", r.status, r.body)
 	}
