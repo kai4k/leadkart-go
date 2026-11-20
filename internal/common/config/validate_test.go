@@ -1,6 +1,7 @@
 package config_test
 
 import (
+	"encoding/base64"
 	"errors"
 	"math"
 	"strings"
@@ -455,4 +456,54 @@ func TestValidate_AcceptsGraceAtTheCapAndZero(t *testing.T) {
 			t.Errorf("grace %s: %v", g, err)
 		}
 	}
+}
+
+// Fix round 13, item 10: the lockout key must differ from the JWT key as BYTES, not
+// as strings: base64 of the signing key's bytes (or another encoding of the same
+// bytes) is the same secret.
+func TestValidate_LockoutKeyIsNotTheJWTKeyInAnotherEncoding(t *testing.T) {
+	t.Parallel()
+	const strongJWT = "Xk9dQ2mZp7LwR4vTb8NcYeHs1AfJu6Gq" // 32 bytes used as-is by the issuer
+	prod := func() config.AppConfig {
+		c := validBaseConfig()
+		c.Env = "production"
+		c.HTTP.TrustedProxies = "none"
+		return c
+	}
+	t.Run("base64 of the signing key's bytes", func(t *testing.T) {
+		t.Parallel()
+		c := prod()
+		c.JWT.SigningKey = strongJWT
+		c.Identity.LockoutKey = base64.StdEncoding.EncodeToString([]byte(strongJWT))
+		err := config.Validate(c)
+		if err == nil || !strings.Contains(err.Error(), "differ from JWT.SigningKey") {
+			t.Fatalf("lockout key = base64(JWT key): %v, want the must-differ error", err)
+		}
+	})
+	t.Run("the JWT key is itself base64 and the lockout key is the same bytes in another alphabet", func(t *testing.T) {
+		t.Parallel()
+		raw, err := base64.StdEncoding.DecodeString(validLockoutKey)
+		if err != nil {
+			t.Fatal(err)
+		}
+		c := prod()
+		c.JWT.SigningKey = validLockoutKey // the std, padded encoding
+		c.Identity.LockoutKey = base64.RawURLEncoding.EncodeToString(raw)
+		if c.Identity.LockoutKey == c.JWT.SigningKey {
+			t.Fatal("setup: the two strings must differ")
+		}
+		err = config.Validate(c)
+		if err == nil || !strings.Contains(err.Error(), "differ from JWT.SigningKey") {
+			t.Fatalf("same decoded bytes: %v, want the must-differ error", err)
+		}
+	})
+	t.Run("an unrelated key is fine", func(t *testing.T) {
+		t.Parallel()
+		c := prod()
+		c.JWT.SigningKey = strongJWT
+		c.Identity.LockoutKey = validLockoutKey
+		if err := config.Validate(c); err != nil {
+			t.Fatalf("independent keys: %v", err)
+		}
+	})
 }

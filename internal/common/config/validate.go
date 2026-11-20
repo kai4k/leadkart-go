@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"math"
@@ -106,10 +107,29 @@ func validateLockoutKey(cfg AppConfig) error {
 	if h := shannonEntropyBits(string(b)); h < minStrongEntropyBits {
 		return fmt.Errorf("config: Identity.LockoutKey entropy too low: %.1f bits < %.0f bits floor", h, minStrongEntropyBits)
 	}
-	if raw == strings.TrimSpace(cfg.JWT.SigningKey) {
+	if sameSecret(raw, b, cfg.JWT.SigningKey) {
 		return errors.New("config: Identity.LockoutKey must differ from JWT.SigningKey (a dedicated secret is the point)")
 	}
 	return nil
+}
+
+// sameSecret reports whether the lockout key (as written, and as decoded bytes) is
+// the JWT signing key in ANY of the forms the signing key can be read: the string as
+// written, its UTF-8 bytes (what the issuer signs with), and, when it is itself
+// base64, the bytes it decodes to. Comparing only the strings let
+// LOCKOUT_KEY = base64(JWT key bytes) pass as a "dedicated" secret.
+func sameSecret(lockoutRaw string, lockout []byte, jwtKey string) bool {
+	jwt := strings.TrimSpace(jwtKey)
+	if jwt == "" {
+		return false
+	}
+	if lockoutRaw == jwt || bytes.Equal(lockout, []byte(jwt)) {
+		return true
+	}
+	if decoded, ok := decodeBase64Any(jwt); ok && len(decoded) > 0 && bytes.Equal(lockout, decoded) {
+		return true
+	}
+	return false
 }
 
 func validateShared(cfg AppConfig) error {

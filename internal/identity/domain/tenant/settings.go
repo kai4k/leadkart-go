@@ -9,9 +9,19 @@ import (
 	"unicode/utf8"
 )
 
-// PasswordPolicy defines per-tenant password rules (security.md). Values may
-// tighten but never relax system defaults: MinLength ≥ 8 (NIST SP 800-63B),
-// MaxFailedAttempts ≥ 3, LockoutMinutes ≥ 0.
+// PasswordPolicy defines per-tenant password rules (security.md). A tenant admin
+// may choose any values inside the validated bounds below, INCLUDING rules weaker
+// than [DefaultPasswordPolicy] (12 characters, all four classes): MinLength may be
+// as low as 8 (NIST SP 800-63B floor) with any subset of the character classes,
+// none included. The bounds are floors and ceilings, not "never weaker than the
+// default": MinLength 8-128, MaxFailedAttempts 3-50, LockoutMinutes 0-1440.
+//
+// MaxFailedAttempts and LockoutMinutes are stored and returned but NOT ENFORCED:
+// login uses the fixed platform thresholds ([person.MaxFailedLogins] failures inside
+// [person.LockoutWindow], locked for [person.LockoutDuration]); a per-tenant
+// threshold would also break the enumeration parity of the phantom counter, which
+// has to use the same fixed numbers for every address (ADR 0068 D12). ADR 0069
+// item 54 recommends removing them.
 type PasswordPolicy struct {
 	minLength         int
 	requireUppercase  bool

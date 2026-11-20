@@ -84,12 +84,20 @@ func (i IdentityConfig) LockoutKeyBytes() ([]byte, error) {
 	if s == "" {
 		return nil, nil
 	}
-	for _, enc := range []*base64.Encoding{base64.StdEncoding, base64.RawStdEncoding, base64.URLEncoding, base64.RawURLEncoding} {
-		if b, err := enc.DecodeString(s); err == nil {
-			return b, nil
-		}
+	if b, ok := decodeBase64Any(s); ok {
+		return b, nil
 	}
 	return nil, errors.New("config: Identity.LockoutKey is not base64 (generate one with `openssl rand -base64 32`)")
+}
+
+// decodeBase64Any decodes s as standard or URL base64, padded or not.
+func decodeBase64Any(s string) ([]byte, bool) {
+	for _, enc := range []*base64.Encoding{base64.StdEncoding, base64.RawStdEncoding, base64.URLEncoding, base64.RawURLEncoding} {
+		if b, err := enc.DecodeString(s); err == nil {
+			return b, true
+		}
+	}
+	return nil, false
 }
 
 // ListenConfig holds network bind addresses for the API + admin

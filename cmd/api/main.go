@@ -46,6 +46,7 @@ import (
 	"golang.org/x/sync/errgroup"
 
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+	"go.opentelemetry.io/otel"
 
 	"github.com/leadkart/leadkart-go/internal/common/ids"
 
@@ -654,6 +655,9 @@ func buildIdentityApp(pool *pgxpool.Pool, hybridCache *cache.HybridCache, cfg co
 	// commit, in this process: the old access token stops working at once instead
 	// of up to the 30 s TTL (the cache is the shared L2, so every instance sees it).
 	persons.WithStampEvictor(stampCache)
+	// A stamp eviction that fails after the commit is counted and logged (rate-limited),
+	// not swallowed: until the cache expires the old access token still works.
+	persons.WithEvictionTelemetry(slog.Default(), otel.Meter("leadkart/identity"))
 	// One impersonation session store serves the session commands AND the request
 	// gate (ADR 0069 D2): an impersonation token is live only while its session is.
 	// v0.2 ships in-memory (single-process / integration-test fit); production

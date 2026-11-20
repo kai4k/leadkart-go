@@ -4,12 +4,16 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/metric"
 
 	"github.com/leadkart/leadkart-go/internal/common/email"
 	"github.com/leadkart/leadkart-go/internal/common/pg"
@@ -26,6 +30,61 @@ type PersonRepository struct {
 	tx     *pg.Transactor
 	q      *db.Queries
 	stamps person.StampEvictor
+
+	// evict is the telemetry of a failed stamp eviction (see [evictTelemetry]).
+	evict evictTelemetry
+}
+
+// evictWarnEvery is the minimum gap between two WARN lines about failed stamp
+// evictions: a cache that is down fails every password change, and one line per
+// failure would bury the log.
+const evictWarnEvery = 30 * time.Second
+
+// evictTelemetry reports a failed stamp eviction: the counter
+// leadkart.identity.stamp_evict_failures on every failure and a WARN at most every
+// [evictWarnEvery]. A failed eviction is not an error for the writer (the commit
+// happened; the cached stamp expires within its 30 s TTL), but it IS the moment a
+// changed password stops being "dead on every instance at once", so it must be visible.
+type evictTelemetry struct {
+	log      *slog.Logger
+	failures metric.Int64Counter
+	lastWarn atomic.Int64
+}
+
+// report counts the failure and logs it unless a line was logged recently.
+func (t *evictTelemetry) report(ctx context.Context, id person.ID, err error, now time.Time) {
+	if t.failures != nil {
+		t.failures.Add(ctx, 1)
+	}
+	prev := t.lastWarn.Load()
+	if now.UnixNano()-prev < int64(evictWarnEvery) || !t.lastWarn.CompareAndSwap(prev, now.UnixNano()) {
+		return
+	}
+	if t.log == nil {
+		return // the counter above is the signal when no logger was wired (tests)
+	}
+	t.log.WarnContext(ctx, "security-stamp cache eviction failed: the person's old access tokens stay valid until the cached stamp expires (at most 30 s); is the cache reachable?",
+		"person_id", id.String(), "err", err)
+}
+
+// WithEvictionTelemetry sets the logger the failed evictions are logged to and the
+// meter that counts them (default: no log line, the global meter provider). The host
+// wires both.
+func (r *PersonRepository) WithEvictionTelemetry(log *slog.Logger, meter metric.Meter) *PersonRepository {
+	r.evict.log = log
+	if meter != nil {
+		r.evict.failures = newEvictCounter(meter)
+	}
+	return r
+}
+
+func newEvictCounter(meter metric.Meter) metric.Int64Counter {
+	c, err := meter.Int64Counter("leadkart.identity.stamp_evict_failures",
+		metric.WithDescription("Security-stamp cache evictions that failed after a committed stamp rotation."))
+	if err != nil {
+		return nil
+	}
+	return c
 }
 
 // WithStampEvictor makes every committed write that rotates a person's security
@@ -47,13 +106,17 @@ func (r *PersonRepository) evictStampOnCommit(ctx context.Context, id person.ID)
 	pg.OnCommit(ctx, func(ctx context.Context) {
 		ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
 		defer cancel()
-		_ = r.stamps.Invalidate(ctx, id)
+		if err := r.stamps.Invalidate(ctx, id); err != nil {
+			r.evict.report(ctx, id, err, time.Now())
+		}
 	})
 }
 
 // NewPersonRepository wires the repository against a pool + transactor.
 func NewPersonRepository(pool *pgxpool.Pool, tx *pg.Transactor) *PersonRepository {
-	return &PersonRepository{pool: pool, tx: tx, q: db.New(pool)}
+	r := &PersonRepository{pool: pool, tx: tx, q: db.New(pool)}
+	r.evict.failures = newEvictCounter(otel.Meter("leadkart/identity"))
+	return r
 }
 
 // Add satisfies [person.Repository]. Joins an ambient UoW tx when present;

@@ -56,7 +56,13 @@ matters and how to check it.
 11. `GET /health` on the admin listener (`:9090`) and the worker's `/alive` (`:9091`)
    answer 200; `docker compose ps` shows api and worker healthy.
 12. A test login and a test change-password succeed; the old access token then answers
-    401 `stale_token` at once (stamp eviction, ADR 0068 D12).
+    401 `stale_token` at once (stamp eviction, ADR 0068 D12). If the counter
+    `leadkart.identity.stamp_evict_failures` rises, the cache is unreachable and old
+    tokens live up to 30 s.
+13. **Verify a suspended person cannot sign in.** With a throwaway account: global-suspend
+    it (`POST /api/v1/platform/persons/{id}/global-suspend`), then log in with the right
+    password (expect 401 `invalid_credentials`, the same answer as a wrong password),
+    refresh an older session (401), and lift the suspension (the login works again).
 
 ## Alerts to configure
 
@@ -75,6 +81,8 @@ matters and how to check it.
 | `LEADKART_ARGON2__MAX_CONCURRENT` | 16 | 1..64 |
 | `LEADKART_ARGON2__QUEUE_TIMEOUT` | 2s | 100ms..30s |
 | `LEADKART_ARGON2__MAX_PER_CLIENT` | 2 (slots one client holds; up to 8 more of its operations wait, a fixed bound in code) | 1..MAX_CONCURRENT |
+
+**Customers behind one NAT address (an office, a carrier-grade NAT).** The rate limits and the password-work gate count per client ADDRESS (IPv6 per /64). One address runs at most 2 password operations at once and queues 8 more for up to the 2 s queue timeout; with Argon2id at about 30 to 50 ms per verify that is roughly 40 to 60 logins per second for the whole address before a 503, which is ample for an office of a few hundred people signing in over a minute but not for several hundred signing in within seconds (a shift start). The per-route limits are also per address (login 30 per minute, burst 10; refresh 120 per minute, burst 30; reset-password 10 per minute): a NAT-heavy customer needs `LEADKART_RATE_LIMIT__LOGIN__PER_MINUTE` / `BURST` raised, and the per-client ceiling `LEADKART_ARGON2__MAX_PER_CLIENT` is the other knob. These numbers are defaults pending the owner (ADR 0069 items 34 and 50).
 | `LEADKART_ARGON2__RESERVED_AUTHENTICATED` | 4 | 0..MAX_CONCURRENT-1 |
 | `LEADKART_IDENTITY__LOCKOUT_KEY` | none (required in production) | base64, at least 32 bytes |
 | `LEADKART_REFRESH__GRACE_WINDOW` | 30s | 0 (strict rotation) .. 120s, below `SLIDING_TTL` |

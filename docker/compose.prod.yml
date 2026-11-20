@@ -133,7 +133,7 @@ services:
           memory: 256M
           cpus: "0.5"
 
-  # ---- API + outbox forwarder ----------------------------------------------
+  # ---- API (HTTP only: the outbox forwarder, subscribers and jobs run in the worker below) ----
   api:
     image: ${API_IMAGE:-ghcr.io/leadkart/leadkart-go-api:latest}
     container_name: leadkart-api

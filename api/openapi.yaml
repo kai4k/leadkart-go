@@ -342,7 +342,9 @@ paths:
         forced-change state. The change rotates the security stamp, clears the flag and,
         in the same transaction, revokes EVERY refresh session of the person (the access
         token carries no session id, so the caller's own session is ended too).
-        Contract: `204`; the access token used is now `401 stale_token`; every refresh
+        Contract: `204`; the access token used is now `401 stale_token` (at once on every instance
+        when the api's cache is reachable, otherwise within the 30 s lifetime of the cached
+        stamp); every refresh
         token the person held is now `401` on refresh; the caller signs in again with the
         new password, and that login (and its refreshes) carries no flag.
 
@@ -4673,15 +4675,38 @@ components:
 
     PasswordPolicyDto:
       type: object
+      description: |
+        A tenant's password policy as stored. A tenant admin may set any rule inside the
+        validated bounds below, INCLUDING rules weaker than the platform default (12
+        characters and all four classes): `min_length` may go down to 8 and any subset of
+        the four classes, none included, may be required. The platform guarantees only the
+        floors, not the default. `max_failed_attempts` and `lockout_minutes` are accepted,
+        stored and returned but NOT ENFORCED: the platform lockout is fixed (10 failures in
+        15 minutes locks for 15 minutes, for every account, so that a locked answer reveals
+        nothing about which emails exist). Clients should not show them.
       required: [min_length, require_uppercase, require_lowercase, require_digit, require_symbol, max_failed_attempts, lockout_minutes]
       properties:
-        min_length:           { type: integer }
+        min_length:
+          type: integer
+          minimum: 8
+          maximum: 128
+          description: Minimum password length in characters (8 to 128; counted in characters, not bytes).
         require_uppercase:    { type: boolean }
         require_lowercase:    { type: boolean }
         require_digit:        { type: boolean }
         require_symbol:       { type: boolean }
-        max_failed_attempts:  { type: integer }
-        lockout_minutes:      { type: integer }
+        max_failed_attempts:
+          type: integer
+          minimum: 3
+          maximum: 50
+          deprecated: true
+          description: Stored, not enforced - the platform lockout is fixed. Validated to 3..50. Hide it in the UI.
+        lockout_minutes:
+          type: integer
+          minimum: 0
+          maximum: 1440
+          deprecated: true
+          description: Stored, not enforced - the platform lockout is fixed. Validated to 0..1440. Hide it in the UI.
 
     UpdateTenantProfileRequest:
       type: object
