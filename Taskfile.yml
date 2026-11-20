@@ -404,7 +404,11 @@ tasks:
     # also makes "compose treats it as missing" impossible.
     status:
       - test -f docker/.env
-      - 'grep -Eq ''^LEADKART_JWT__SIGNING_KEY=[a-f0-9]{32,}\s*$'' docker/.env'
+      # No {n,} interval here: Task's embedded shell mangles braces even inside quotes
+      # (the check then exits 2 and the file was regenerated on EVERY run, wiping any
+      # line appended after minting). Hex-only, then a length floor of 32 characters.
+      - 'grep -Eq ''^LEADKART_JWT__SIGNING_KEY=[a-f0-9]+[[:space:]]*$'' docker/.env'
+      - 'test "$(sed -n ''s/^LEADKART_JWT__SIGNING_KEY=//p'' docker/.env | tr -d ''[:space:]'' | wc -c)" -ge 32'
     cmds:
       - mkdir -p docker
       - go run ./scripts/devenv > docker/.env
