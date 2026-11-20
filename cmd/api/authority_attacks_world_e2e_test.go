@@ -220,11 +220,17 @@ func (w *attackWorld) overridesOf(t *testing.T, tenantID, membershipID string) s
 // snapshot renders every fact an attack could move, in both tenants, as one string.
 func (w *attackWorld) snapshot(t *testing.T) string {
 	t.Helper()
+	return w.snapshotOf(t, w.owner) + w.snapshotOf(t, w.victim) + w.snapshotRequests(t)
+}
+
+// snapshotOf renders the members, roles, role permissions and overrides of one tenant.
+func (w *attackWorld) snapshotOf(t *testing.T, reg registeredTenant) string {
+	t.Helper()
 	var b strings.Builder
 	for _, ten := range []struct {
 		name string
 		reg  registeredTenant
-	}{{"T", w.owner}, {"V", w.victim}} {
+	}{{reg.Slug, reg}} {
 		users := w.listUsers(t, ten.reg.AccessToken)
 		slices.SortFunc(users, func(a, c ports.UserDto) int { return strings.Compare(a.MembershipID, c.MembershipID) })
 		for _, u := range users {
@@ -245,6 +251,13 @@ func (w *attackWorld) snapshot(t *testing.T) string {
 			fmt.Fprintf(&b, "%s role %s %q lvl=%d parent=%s perms=%v\n", ten.name, rd.ID, rd.Name, rd.HierarchyLevel, rd.ParentRoleID, ps)
 		}
 	}
+	return b.String()
+}
+
+// snapshotRequests renders the watched permission requests and the owner's approver queue.
+func (w *attackWorld) snapshotRequests(t *testing.T) string {
+	t.Helper()
+	var b strings.Builder
 	for _, id := range w.watched {
 		r := w.f.authedJSON(t, http.MethodGet, "/api/v1/permission-requests/"+id, w.owner.AccessToken, nil)
 		var d ports.PermissionRequestDto
