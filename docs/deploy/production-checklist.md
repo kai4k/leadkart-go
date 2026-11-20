@@ -51,7 +51,7 @@ matters and how to check it.
 | `leadkart.outbox.oldest_unacked_age_seconds` (gauge) | age of the oldest outbox row the worker has not acknowledged | above 300 for 5 minutes (a dead or wedged worker; the api also logs a WARN at boot) |
 | `leadkart.identity.login_phantom_failures.rows` (gauge) | rows in the phantom failed-login table | still growing for 30 minutes, or above 100,000 (the purge job is not running) |
 | River job failures (`river_job` with state `discarded`, or the worker's job error log) | background jobs failing, `identity.login_phantom_purge` included | any discarded job |
-| `service_busy` 503 rate on the password routes | the Argon2 gate is saturated or a client is at its cap | sustained above 1% of login requests |
+| `service_busy` 503 rate on the password routes | the Argon2 gate is saturated, or a client's wait ran out or its line of 8 was full | sustained above 1% of login requests |
 
 ## Configuration reference (password work)
 
@@ -59,7 +59,7 @@ matters and how to check it.
 |---|---|---|
 | `LEADKART_ARGON2__MAX_CONCURRENT` | 16 | 1..64 |
 | `LEADKART_ARGON2__QUEUE_TIMEOUT` | 2s | 100ms..30s |
-| `LEADKART_ARGON2__MAX_PER_CLIENT` | 2 | 1..MAX_CONCURRENT |
+| `LEADKART_ARGON2__MAX_PER_CLIENT` | 2 (slots one client holds; up to 8 more of its operations wait, a fixed bound in code) | 1..MAX_CONCURRENT |
 | `LEADKART_ARGON2__RESERVED_AUTHENTICATED` | 4 | 0..MAX_CONCURRENT-1 |
 | `LEADKART_IDENTITY__LOCKOUT_KEY` | none (required in production) | base64, at least 32 bytes |
 | `GOMEMLIMIT` | 900MiB (compose) | Go runtime setting |

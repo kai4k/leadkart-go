@@ -9,8 +9,8 @@ import (
 
 // ErrBusy is returned when a password operation could not start within the
 // queue timeout because every slot of the [Gate] was taken, or because the client
-// already has its share of operations in flight. The HTTP layer maps it to
-// 503 + Retry-After, the same answer on every login branch.
+// already has its share of operations running and a full line of its own waiting.
+// The HTTP layer maps it to 503 + Retry-After, the same answer on every login branch.
 var ErrBusy = errors.New("argon2: too many concurrent password operations")
 
 // Class says who is asking for password work. Anonymous work (login, tenant
@@ -73,10 +73,14 @@ func clientOf(ctx context.Context) string {
 // that cannot get a slot within queueTimeout (or whose request context ends
 // first) gets [ErrBusy] / the context error and does no work.
 //
-// Two more bounds keep one source from starving everyone (fix round 12, item 3).
-// Per client: at most perClient operations of one client key are in flight (running
-// OR queued); the next is refused at once with [ErrBusy], before it queues, so a
-// source that holds its share cannot also fill the queue. Per class: anonymous work
+// Two more bounds keep one source from starving everyone (fix rounds 12 and 13).
+// Per client: a client key (the limiters' key) holds at most perClient SLOTS at
+// once. Its further operations do not fail: they wait in a per-client FIFO line,
+// at most maxWaiting places long, within the same queue timeout and never past the
+// request's context, because an office of reps behind one NAT address that all sign
+// in at the start of the day will overlap and a refused sign-in is a visible
+// failure. A client whose line is full is refused at once with [ErrBusy] before it
+// takes a place, so one source cannot also fill the queue. Per class: anonymous work
 // can use at most size-reserved slots, so authenticated work always finds one.
 //
 // A nil *Gate runs without a bound; it exists for tests and command-line tools.
@@ -88,9 +92,10 @@ type Gate struct {
 	anon         chan struct{} // nil when nothing is reserved
 	queueTimeout time.Duration
 	perClient    int // 0 = unlimited
+	maxWaiting   int // places in one client's line
 
-	mu       sync.Mutex
-	inflight map[string]int // client key -> operations running or queued; deleted at zero
+	mu      sync.Mutex
+	clients map[string]*clientState // client keys with an operation running or waiting; deleted at zero
 
 	// hash and verify are the work under the gate; tests swap them for blocking
 	// fakes so the bound is observed with barriers, not stopwatches.
@@ -101,9 +106,33 @@ type Gate struct {
 // GateOption tunes a [Gate].
 type GateOption func(*Gate)
 
-// WithPerClient bounds the operations of one client key in flight at once.
+// DefaultMaxWaiting is the length of one client's line when [WithMaxWaiting] is not
+// given (default pending the owner's confirmation).
+const DefaultMaxWaiting = 8
+
+// WithPerClient bounds the slots one client key holds at once; its further
+// operations wait their turn (see [WithMaxWaiting]).
 func WithPerClient(n int) GateOption {
 	return func(g *Gate) { g.perClient = n }
+}
+
+// WithMaxWaiting sets how many operations of one client key may wait behind its
+// running ones; the next is refused at once. 0 means no waiting.
+func WithMaxWaiting(n int) GateOption {
+	return func(g *Gate) { g.maxWaiting = n }
+}
+
+// clientState is the bookkeeping of one client key.
+type clientState struct {
+	running int       // slots held (a grant to a waiter keeps the count)
+	waiters []*waiter // FIFO
+}
+
+// waiter is one queued operation; granted is set under the gate's lock when a
+// finishing operation hands its slot over.
+type waiter struct {
+	ready   chan struct{}
+	granted bool
 }
 
 // WithReserved keeps n of the slots for [Authenticated] work.
@@ -124,7 +153,7 @@ func NewGate(size int, queueTimeout time.Duration, opts ...GateOption) *Gate {
 	if queueTimeout <= 0 {
 		panic("argon2: NewGate queueTimeout must be positive")
 	}
-	g := &Gate{slots: make(chan struct{}, size), queueTimeout: queueTimeout, inflight: map[string]int{}, hash: Hash, verify: Verify} // arch-test:bounded-justified size is the configured slot count (1..64, validated by config.Validate); the channel is the semaphore itself
+	g := &Gate{slots: make(chan struct{}, size), queueTimeout: queueTimeout, clients: map[string]*clientState{}, maxWaiting: DefaultMaxWaiting, hash: Hash, verify: Verify} // arch-test:bounded-justified size is the configured slot count (1..64, validated by config.Validate); the channel is the semaphore itself
 	for _, o := range opts {
 		o(g)
 	}
@@ -147,8 +176,8 @@ func (g *Gate) Size() int {
 // so a wiring test can saturate the real gate. The client and class come from ctx
 // ([WithClient], [WithAuthenticated]).
 //
-// The per-client check comes first and never waits: a client at its cap is refused
-// with [ErrBusy] before it takes a queue place.
+// A client at its slot cap waits in its own line first (a full line is refused at
+// once); then the class's place and a slot are taken. One timer covers all of it.
 func (g *Gate) Acquire(ctx context.Context) (release func(), err error) {
 	if g == nil {
 		return func() {}, nil
@@ -156,11 +185,13 @@ func (g *Gate) Acquire(ctx context.Context) (release func(), err error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	dropClient, err := g.admitClient(clientOf(ctx))
+	timer := time.NewTimer(g.queueTimeout)
+	defer timer.Stop()
+	dropClient, err := g.admitClient(ctx, clientOf(ctx), timer)
 	if err != nil {
 		return nil, err
 	}
-	dropSlots, err := g.takeSlots(ctx, classOf(ctx))
+	dropSlots, err := g.takeSlots(ctx, classOf(ctx), timer)
 	if err != nil {
 		dropClient()
 		return nil, err
@@ -171,44 +202,104 @@ func (g *Gate) Acquire(ctx context.Context) (release func(), err error) {
 	}, nil
 }
 
-// admitClient counts one more operation for the client or refuses at the cap. The
-// map holds only clients with an operation running or queued: an entry is deleted
-// when its count reaches zero, so memory is bounded by the requests in flight.
-func (g *Gate) admitClient(key string) (drop func(), err error) {
+// admitClient gives the client one of its slots, waiting in its FIFO line when it
+// holds the cap, or refuses when the line is full. The map holds only clients with
+// an operation running or waiting: an entry is deleted when both are gone, so
+// memory is bounded by the requests in flight (and each line by maxWaiting).
+func (g *Gate) admitClient(ctx context.Context, key string, timer *time.Timer) (drop func(), err error) {
 	if g.perClient <= 0 || key == "" {
 		return func() {}, nil
 	}
 	g.mu.Lock()
-	if g.inflight[key] >= g.perClient {
+	st := g.clients[key]
+	if st == nil {
+		st = &clientState{}
+		g.clients[key] = st
+	}
+	if st.running < g.perClient {
+		st.running++
+		g.mu.Unlock()
+		return func() { g.dropClient(key) }, nil
+	}
+	if len(st.waiters) >= g.maxWaiting {
 		g.mu.Unlock()
 		return nil, ErrBusy
 	}
-	g.inflight[key]++
+	w := &waiter{ready: make(chan struct{})}
+	st.waiters = append(st.waiters, w)
 	g.mu.Unlock()
-	return func() {
-		g.mu.Lock()
-		if g.inflight[key] <= 1 {
-			delete(g.inflight, key)
-		} else {
-			g.inflight[key]--
-		}
+
+	var cause error
+	select {
+	case <-w.ready:
+		return func() { g.dropClient(key) }, nil
+	case <-timer.C:
+		cause = ErrBusy
+	case <-ctx.Done():
+		cause = ctx.Err()
+	}
+	g.mu.Lock()
+	if w.granted { // the hand-over won the race: we hold a slot, pass it on
 		g.mu.Unlock()
-	}, nil
+		g.dropClient(key)
+		return nil, cause
+	}
+	st = g.clients[key]
+	for i, x := range st.waiters {
+		if x == w {
+			st.waiters = append(st.waiters[:i], st.waiters[i+1:]...)
+			break
+		}
+	}
+	g.forgetIfIdle(key, st)
+	g.mu.Unlock()
+	return nil, cause
 }
 
-// trackedClients is the number of client keys with an operation in flight.
+// dropClient gives a slot back: to the first waiter of the key when there is one
+// (the count stays), else it lowers the count.
+func (g *Gate) dropClient(key string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	st := g.clients[key]
+	if len(st.waiters) > 0 {
+		w := st.waiters[0]
+		st.waiters = st.waiters[1:]
+		w.granted = true
+		close(w.ready)
+		return
+	}
+	st.running--
+	g.forgetIfIdle(key, st)
+}
+
+func (g *Gate) forgetIfIdle(key string, st *clientState) {
+	if st.running == 0 && len(st.waiters) == 0 {
+		delete(g.clients, key)
+	}
+}
+
+// trackedClients is the number of client keys with an operation running or waiting.
 func (g *Gate) trackedClients() int {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	return len(g.inflight)
+	return len(g.clients)
+}
+
+// waiting is the number of operations of key queued behind its running ones.
+func (g *Gate) waiting(key string) int {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if st := g.clients[key]; st != nil {
+		return len(st.waiters)
+	}
+	return 0
 }
 
 // takeSlots acquires the class's place (anonymous work first takes one of the
 // size-reserved anonymous places) and then a slot, both within the one queue
 // timeout.
-func (g *Gate) takeSlots(ctx context.Context, class Class) (drop func(), err error) {
-	timer := time.NewTimer(g.queueTimeout)
-	defer timer.Stop()
+func (g *Gate) takeSlots(ctx context.Context, class Class, timer *time.Timer) (drop func(), err error) {
 	var drops []func()
 	undo := func() {
 		for i := len(drops) - 1; i >= 0; i-- {

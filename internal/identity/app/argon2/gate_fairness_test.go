@@ -23,12 +23,12 @@ func blockingGateWith(size int, queue time.Duration, opts ...GateOption) (g *Gat
 	return g, release, inside
 }
 
-// One client key holds at most perClient operations (running or queued): the next is
+// One client key holds at most perClient slots; with no line of its own (WithMaxWaiting(0)) the next is
 // refused at once with ErrBusy, BEFORE it queues, so a source cannot also fill the
 // queue; another key is untouched; and the bookkeeping map is empty when all are done.
 func TestGate_OneClientCannotHoldMoreThanItsShare(t *testing.T) {
 	t.Parallel()
-	g, release, inside := blockingGateWith(8, 30*time.Second, WithPerClient(2))
+	g, release, inside := blockingGateWith(8, 30*time.Second, WithPerClient(2), WithMaxWaiting(0))
 	ctxA := WithClient(t.Context(), "198.51.100.1")
 	ctxB := WithClient(t.Context(), "198.51.100.2")
 
@@ -72,7 +72,7 @@ func TestGate_OneClientCannotHoldMoreThanItsShare(t *testing.T) {
 // client's own two release and it can take two again.
 func TestGate_RefusalsDoNotLeakClientCounts(t *testing.T) {
 	t.Parallel()
-	g, release, inside := blockingGateWith(8, 30*time.Second, WithPerClient(1))
+	g, release, inside := blockingGateWith(8, 30*time.Second, WithPerClient(1), WithMaxWaiting(0))
 	ctx := WithClient(t.Context(), "k")
 	var wg sync.WaitGroup
 	wg.Go(func() { _ = g.Verify(ctx, "p", "s") })

@@ -197,9 +197,10 @@ type RateLimitConfig struct {
 // QueueTimeout answers 503 + Retry-After.
 //
 // Two more bounds keep one source from starving everyone (fix round 12, item 3):
-// MaxPerClient caps the operations of one client key (the rate-limit key: the
-// address, IPv6 per /64) in flight at once, refused with the same 503 before they
-// queue; ReservedAuthenticated keeps that many slots for signed-in work
+// MaxPerClient caps the slots one client key (the rate-limit key: the address, IPv6
+// per /64) holds at once; its further operations wait their turn in a line of
+// argon2.DefaultMaxWaiting places within QueueTimeout, and a full line is refused
+// with the same 503; ReservedAuthenticated keeps that many slots for signed-in work
 // (change-password, create user, a reset confirmation with a valid token), so
 // anonymous login and registration can use at most MaxConcurrent - ReservedAuthenticated.
 type Argon2Config struct {
@@ -242,7 +243,7 @@ func Defaults() AppConfig {
 		// 16 slots x ~19.5 MiB = ~312 MiB of live Argon2 memory (the Go collector needs
 		// headroom on top of it, which is why production sets GOMEMLIMIT, see
 		// docker/compose.prod.yml); at ~30-50 ms an operation that is ~300-500
-		// verifications a second per core budget. 2 in flight per client key; 4 of the
+		// verifications a second per core budget. 2 slots per client key (8 more may wait); 4 of the
 		// 16 slots are kept for signed-in work.
 		Argon2: Argon2Config{MaxConcurrent: 16, QueueTimeout: 2 * time.Second, MaxPerClient: 2, ReservedAuthenticated: 4},
 	}

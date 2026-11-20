@@ -4344,9 +4344,13 @@ components:
     ServiceBusy:
       description: |
         Every password-hashing slot of this process was busy for longer than the queue
-        timeout (the process bounds concurrent Argon2id work, ADR 0068 D12). Nothing was
-        done and nothing was counted; retry after `Retry-After` seconds. Every login branch
-        (real account, unknown email, locked account) answers this the same way.
+        timeout (the process bounds concurrent Argon2id work, ADR 0068 D12), or the caller's
+        own address already had its share of operations running and a full line of waiting
+        ones. A caller's operations beyond its share WAIT their turn (within the same queue
+        timeout) instead of failing, so a burst from one office address is served; only the
+        wait that runs out, or the line that is full, answers this. Nothing was done and
+        nothing was counted; retry after `Retry-After` seconds. Every login branch (real
+        account, unknown email, locked account) answers this the same way.
       headers:
         Retry-After:
           description: Seconds until the request may be retried.
