@@ -3,13 +3,17 @@
 // spec parity, explicit methods).
 //
 // It parses and TYPE-CHECKS with go/parser + go/types, never regex over source.
-// go/types runs per package with a stub net/http (so *http.ServeMux, its Handle
-// and HandleFunc methods and the package-level http.Handle resolve to real
-// objects) and every other import faked by path (so the authn package is
-// identified by its import path, and an identifier that merely is NAMED authn
-// is not it). Unresolved expressions are tolerated: the scanner only needs
-// objects, not full types. golang.org/x/tools is deliberately not used: this
-// needs no export data and no `go list`, so it is fast and offline.
+// go/types runs per package. The standard library is imported from source with
+// the standard importer (go/importer, "source"), so *http.ServeMux, context,
+// fmt and the rest are REAL types, once per process; every other import is faked
+// by path (so the authn package is identified by its import path, and an
+// identifier that merely is NAMED authn is not it). Type-checking the module's
+// own and third-party packages from source costs over a minute, so an
+// expression whose type comes from one of them stays unresolved. The scanner
+// therefore FAILS CLOSED: a Handle/HandleFunc call or method value whose
+// receiver it cannot resolve, a ServeMux that flows anywhere it cannot follow,
+// and a wrapper it cannot identify are offences, never skipped.
+// golang.org/x/tools is deliberately not used.
 //
 // Reading a route. A registration must have the plain form
 //
@@ -18,13 +22,24 @@
 // so the scanner can read it. Anything else is an OFFENCE, not a style to be
 // taught: method-less patterns, patterns held in variables or built in loops,
 // registrations inside function literals (local helpers, package-level
-// `var _ = func(){...}()`), the default mux, and any (*http.ServeMux).Handle /
-// HandleFunc or http.Handle / http.HandleFunc that is bound without being called
-// (method values and method expressions).
+// `var _ = func(){...}()`), the default mux, any Handle / HandleFunc that is
+// bound without being called (method values and method expressions, on a
+// ServeMux or on an interface), and a Handle / HandleFunc registration whose
+// receiver is not a *http.ServeMux (an interface, a wrapper, an unresolved type).
+//
+// The mux itself. A *http.ServeMux value may be the receiver of a direct call,
+// be assigned to a ServeMux-typed (or http.Handler-typed) variable, field,
+// parameter or result, or be passed to a function of the module's ports or authn
+// packages. Any other use is an offence: an alias of the type
+// (`type Mux = http.ServeMux`, which would hide the receiver from the scanner in
+// another package), a conversion or assignment to an interface that has Handle,
+// to `any` (reflection) or to a function it cannot resolve.
 //
 // Gates. A route's tags come ONLY from the callee chain and the LAST argument
 // (the handler) of each call, so a gate passed as an ignored argument counts for
-// nothing. A gate is an `<authn>.<Factory>` selector whose qualifier resolves to
+// nothing, and every wrapper from the outside down to the first authorising gate
+// must itself be an authn function (a wrapper that is not could discard the gate
+// it wraps: `fallback(raw, read(h))`). A gate is an `<authn>.<Factory>` selector whose qualifier resolves to
 // the authn import path, or a variable bound once to such an expression. A
 // variable that is written anywhere else (assignment, :=, ++, &x) is dropped, and
 // variables are keyed by their object, so block shadowing cannot launder a gate.
@@ -41,7 +56,9 @@ package architecture_test
 import (
 	"bytes"
 	"go/ast"
+	"go/build"
 	"go/build/constraint"
+	"go/importer"
 	"go/parser"
 	"go/token"
 	"go/types"
@@ -177,6 +194,36 @@ func (scanImporter) Import(p string) (*types.Package, error) {
 	return pkg, nil
 }
 
+// routeImporter resolves the standard library to REAL types, imported from source
+// with go/importer once per process (about two seconds), and fakes everything
+// else by path through scanImporter. The standard importer is not safe for
+// concurrent use, so every import goes through one lock.
+type routeImporter struct{}
+
+var (
+	stdOnce sync.Once
+	stdMu   sync.Mutex
+	stdImp  types.Importer
+)
+
+func (routeImporter) Import(p string) (*types.Package, error) {
+	if first, _, _ := strings.Cut(p, "/"); strings.Contains(first, ".") || p == "C" || p == "unsafe" {
+		return scanImporter{}.Import(p)
+	}
+	stdOnce.Do(func() {
+		// No cgo: the source importer would otherwise run the cgo tool for
+		// net, os/user and friends. The scanner only needs declarations.
+		build.Default.CgoEnabled = false
+		stdImp = importer.ForCompiler(token.NewFileSet(), "source", nil)
+	})
+	stdMu.Lock()
+	defer stdMu.Unlock()
+	if pkg, err := stdImp.Import(p); err == nil {
+		return pkg, nil
+	}
+	return scanImporter{}.Import(p)
+}
+
 // pkgScan is one type-checked package.
 type pkgScan struct {
 	fset    *token.FileSet
@@ -193,7 +240,7 @@ func newPkgScan(fset *token.FileSet, files []*ast.File) *pkgScan {
 		Selections: map[*ast.SelectorExpr]*types.Selection{},
 		Implicits:  map[ast.Node]types.Object{},
 	}
-	conf := types.Config{Importer: scanImporter{}, Error: func(error) {}, FakeImportC: true}
+	conf := types.Config{Importer: routeImporter{}, Error: func(error) {}, FakeImportC: true}
 	_, _ = conf.Check("scanned", fset, files, info) // errors (unresolved imports) are expected and ignored
 	s := &pkgScan{fset: fset, info: info, defs: map[types.Object]ast.Expr{}, written: map[types.Object]bool{}}
 	for _, f := range files {
@@ -369,6 +416,254 @@ func parentOf(stack []ast.Node) ast.Node {
 	return stack[len(stack)-2]
 }
 
+// modulePortsRE matches the import path of a module's ports package.
+var modulePortsRE = regexp.MustCompile(`^github\.com/leadkart/leadkart-go/internal/[a-z]+/ports$`)
+
+// isServeMux reports whether t is net/http.ServeMux or a pointer to it.
+func isServeMux(t types.Type) bool {
+	if p, ok := t.(*types.Pointer); ok {
+		t = p.Elem()
+	}
+	n, ok := t.(*types.Named)
+	return ok && n.Obj().Pkg() != nil && n.Obj().Pkg().Path() == "net/http" && n.Obj().Name() == "ServeMux"
+}
+
+// muxDestOK reports whether a ServeMux may be stored in (or passed as) dest: a
+// ServeMux itself, or a non-empty interface that cannot register routes
+// (http.Handler). `any`, an interface with Handle, and anything unresolved are not.
+func muxDestOK(dest types.Type) bool {
+	if dest == nil || dest == types.Typ[types.Invalid] {
+		return false
+	}
+	if isServeMux(dest) {
+		return true
+	}
+	iface, ok := dest.Underlying().(*types.Interface)
+	if !ok || iface.NumMethods() == 0 {
+		return false
+	}
+	for m := range iface.Methods() {
+		if m.Name() == "Handle" || m.Name() == "HandleFunc" {
+			return false
+		}
+	}
+	return true
+}
+
+// calleeRootPackage is the import path of the package a call's function is
+// selected from (`pkg.F`, `pkg.F(args)(...)`), or "".
+func (s *pkgScan) calleeRootPackage(fun ast.Expr) string {
+	for {
+		switch f := ast.Unparen(fun).(type) {
+		case *ast.CallExpr:
+			fun = f.Fun
+		case *ast.SelectorExpr:
+			if id, ok := f.X.(*ast.Ident); ok {
+				if pn, ok := s.info.Uses[id].(*types.PkgName); ok {
+					return pn.Imported().Path()
+				}
+			}
+			return ""
+		default:
+			return ""
+		}
+	}
+}
+
+const muxFlowMsg = "a *http.ServeMux is used other than as the receiver of a direct mux.Handle(\"METHOD /path\", ...) call, or stored in / passed as a ServeMux or http.Handler (an interface with Handle, `any`, reflection or an unresolved function could register routes the gates cannot see)"
+
+// muxFlow judges where a *http.ServeMux expression (the last node on the stack)
+// goes; it returns "" for the permitted uses and a message for every other.
+func (s *pkgScan) muxFlow(stack []ast.Node) string {
+	bad := muxFlowMsg
+	child := stack[len(stack)-1]
+	for k := len(stack) - 2; k >= 0; k-- {
+		switch p := stack[k].(type) {
+		case *ast.ParenExpr:
+			child = p
+		case *ast.UnaryExpr:
+			if p.Op != token.AND {
+				return bad
+			}
+			child = p
+		case *ast.SelectorExpr:
+			if p.X == child {
+				return "" // a method or field of the mux; Handle/HandleFunc as a value is judged where the selector is
+			}
+			return bad
+		case *ast.BinaryExpr:
+			if (p.Op == token.EQL || p.Op == token.NEQ) && (isNilIdent(p.X) || isNilIdent(p.Y)) {
+				return ""
+			}
+			return bad
+		case *ast.CallExpr:
+			return s.muxArgument(p, child)
+		case *ast.AssignStmt:
+			for i, r := range p.Rhs {
+				if r != child {
+					continue
+				}
+				if len(p.Lhs) != len(p.Rhs) {
+					return bad
+				}
+				if id, ok := p.Lhs[i].(*ast.Ident); ok && (id.Name == "_" || (p.Tok == token.DEFINE && s.info.Defs[id] != nil)) {
+					return ""
+				}
+				if muxDestOK(s.info.Types[p.Lhs[i]].Type) {
+					return ""
+				}
+			}
+			return bad
+		case *ast.ValueSpec:
+			if p.Type == nil || muxDestOK(s.info.Types[p.Type].Type) {
+				return ""
+			}
+			return bad
+		case *ast.ReturnStmt:
+			for i, r := range p.Results {
+				if r != child {
+					continue
+				}
+				if sig := s.enclosingSignature(stack[:k]); sig != nil && sig.Results().Len() == len(p.Results) && muxDestOK(sig.Results().At(i).Type()) {
+					return ""
+				}
+			}
+			return bad
+		case *ast.KeyValueExpr:
+			if p.Value != child || k == 0 {
+				return bad
+			}
+			lit, ok := stack[k-1].(*ast.CompositeLit)
+			if !ok {
+				return bad
+			}
+			if muxDestOK(s.compositeElemType(lit, p.Key, -1)) {
+				return ""
+			}
+			return bad
+		case *ast.CompositeLit:
+			for i, e := range p.Elts {
+				if e == child && muxDestOK(s.compositeElemType(p, nil, i)) {
+					return ""
+				}
+			}
+			return bad
+		default:
+			return bad
+		}
+	}
+	return bad
+}
+
+func isNilIdent(e ast.Expr) bool {
+	id, ok := ast.Unparen(e).(*ast.Ident)
+	return ok && id.Name == "nil"
+}
+
+// enclosingSignature is the signature of the innermost function on the stack.
+func (s *pkgScan) enclosingSignature(stack []ast.Node) *types.Signature {
+	for i := len(stack) - 1; i >= 0; i-- {
+		switch f := stack[i].(type) {
+		case *ast.FuncLit:
+			sig, _ := s.info.Types[f].Type.(*types.Signature)
+			return sig
+		case *ast.FuncDecl:
+			if o := s.info.Defs[f.Name]; o != nil {
+				sig, _ := o.Type().(*types.Signature)
+				return sig
+			}
+			return nil
+		}
+	}
+	return nil
+}
+
+// compositeElemType is the type an element of a composite literal is stored in:
+// the struct field named by key (or at position idx), or the slice/array/map element.
+func (s *pkgScan) compositeElemType(lit *ast.CompositeLit, key ast.Expr, idx int) types.Type {
+	t := s.info.Types[lit].Type
+	if t == nil {
+		return nil
+	}
+	switch u := t.Underlying().(type) {
+	case *types.Struct:
+		if id, ok := key.(*ast.Ident); ok {
+			for f := range u.Fields() {
+				if f.Name() == id.Name {
+					return f.Type()
+				}
+			}
+			return nil
+		}
+		if idx >= 0 && idx < u.NumFields() {
+			return u.Field(idx).Type()
+		}
+	case *types.Slice:
+		return u.Elem()
+	case *types.Array:
+		return u.Elem()
+	case *types.Map:
+		return u.Elem()
+	}
+	return nil
+}
+
+// muxArgument judges a ServeMux passed as an argument of call c: the matching
+// parameter must accept it (muxDestOK); a callee that cannot be resolved is
+// accepted only when it is a function of a module ports package or of authn,
+// whose own bodies are scanned and judged.
+func (s *pkgScan) muxArgument(c *ast.CallExpr, arg ast.Node) string {
+	idx := -1
+	for i, a := range c.Args {
+		if a == arg {
+			idx = i
+		}
+	}
+	if idx < 0 {
+		return muxFlowMsg
+	}
+	tv, ok := s.info.Types[c.Fun]
+	switch {
+	case ok && tv.IsType():
+		if muxDestOK(tv.Type) {
+			return ""
+		}
+		return muxFlowMsg
+	case ok && tv.Type != nil:
+		if sig, isSig := tv.Type.Underlying().(*types.Signature); isSig {
+			params := sig.Params()
+			var pt types.Type
+			switch {
+			case sig.Variadic() && idx >= params.Len()-1:
+				if sl, isSlice := params.At(params.Len() - 1).Type().(*types.Slice); isSlice {
+					pt = sl.Elem()
+				}
+			case idx < params.Len():
+				pt = params.At(idx).Type()
+			}
+			if muxDestOK(pt) {
+				return ""
+			}
+			return muxFlowMsg
+		}
+	}
+	if root := s.calleeRootPackage(c.Fun); root == authnImportPath || modulePortsRE.MatchString(root) {
+		return ""
+	}
+	return muxFlowMsg + " (the function it is passed to cannot be resolved)"
+}
+
+// handleLike reports whether a function or method named Handle/HandleFunc
+// resolved to obj has the shape of a route registration (first parameter a string).
+func handleLike(obj types.Object) bool {
+	fn, ok := obj.(*types.Func)
+	if !ok {
+		return false
+	}
+	sig, ok := fn.Type().(*types.Signature)
+	return ok && sig.Params().Len() > 0 && isStringType(sig.Params().At(0).Type())
+}
+
 // scanFile reads every registration of one parsed file.
 func (s *pkgScan) scanFile(file string, f *ast.File) ([]routeReg, []routeOffence) {
 	var routes []routeReg
@@ -393,11 +688,30 @@ func (s *pkgScan) scanFile(file string, f *ast.File) ([]routeReg, []routeOffence
 		line := s.fset.Position(n.Pos()).Line
 		off := func(msg string) { offences = append(offences, routeOffence{file, line, msg}) }
 
+		// Every ServeMux-typed expression: where does it go?
+		if e, ok := n.(ast.Expr); ok {
+			if _, paren := n.(*ast.ParenExpr); !paren {
+				if tv, known := s.info.Types[e]; known && !tv.IsType() && tv.Type != nil && isServeMux(tv.Type) {
+					if msg := s.muxFlow(stack); msg != "" {
+						off(msg)
+					}
+				}
+			}
+		}
+
 		switch x := n.(type) {
+		case *ast.TypeSpec:
+			if x.Assign.IsValid() && s.mentionsServeMux(x.Type) {
+				off("type alias of http.ServeMux: an alias hides the mux type from the scanner in every other package; use *http.ServeMux")
+			}
 		case *ast.SelectorExpr:
-			if !callFuns[x] {
-				if _, _, ok := netHTTPHandleFunc(s.calleeObject(x)); ok {
-					off("(*http.ServeMux).Handle/HandleFunc or http.Handle/HandleFunc used as a value or method expression, not called: write mux.Handle(\"METHOD /path\", ...) directly")
+			if callFuns[x] {
+				return true
+			}
+			if name := x.Sel.Name; name == "Handle" || name == "HandleFunc" {
+				obj := s.calleeObject(x)
+				if _, _, ok := netHTTPHandleFunc(obj); ok || obj == nil || handleLike(obj) {
+					off(name + " used as a value or method expression, not called (or on a receiver the scanner cannot resolve): write mux.Handle(\"METHOD /path\", ...) directly")
 				}
 			}
 		case *ast.Ident:
@@ -414,13 +728,24 @@ func (s *pkgScan) scanFile(file string, f *ast.File) ([]routeReg, []routeOffence
 			if name != "Handle" && name != "HandleFunc" {
 				return true
 			}
-			fn, onMux, isHTTP := netHTTPHandleFunc(s.calleeObject(x.Fun))
-			if isHTTP && !onMux {
+			obj := s.calleeObject(x.Fun)
+			fn, onMux, isHTTP := netHTTPHandleFunc(obj)
+			switch {
+			case isHTTP && !onMux:
 				off("registers on the default ServeMux (http." + fn.Name() + "): register on the module's mux")
 				return true
-			}
-			if !isHTTP && !s.registrationLike(x) {
+			case isHTTP:
+				// the one accepted receiver: read below
+			case obj != nil && !handleLike(obj):
 				return true // a command/query handler's Handle(ctx, cmd), not a route
+			case obj != nil:
+				off(name + " registers through a receiver that is not a *http.ServeMux (an interface or wrapper): register on the mux directly, mux.Handle(\"METHOD /path\", ...)")
+				return true
+			default: // the callee cannot be resolved: a route unless its first argument provably is not a pattern
+				if !s.firstArgProvablyNotPattern(x) {
+					off(name + " on a receiver the scanner cannot resolve: it cannot be told from a route registration (fail closed); register on the mux directly")
+				}
+				return true
 			}
 			reg, msg := s.readRegistration(file, line, x, stack)
 			if msg != "" {
@@ -435,25 +760,174 @@ func (s *pkgScan) scanFile(file string, f *ast.File) ([]routeReg, []routeOffence
 	return routes, offences
 }
 
-// registrationLike decides whether a Handle/HandleFunc call that does not
-// resolve to net/http is a route registration: its first parameter or argument
-// is a string (an interface or wrapper type with Handle(pattern string, h)).
-func (s *pkgScan) registrationLike(c *ast.CallExpr) bool {
+// firstArgProvablyNotPattern is true when the first argument of a Handle call has
+// a RESOLVED type that is not a string (a command handler's context, say).
+func (s *pkgScan) firstArgProvablyNotPattern(c *ast.CallExpr) bool {
 	if len(c.Args) == 0 {
+		return true
+	}
+	tv, ok := s.info.Types[c.Args[0]]
+	return ok && tv.Type != nil && !containsInvalid(tv.Type) && !isStringType(tv.Type)
+}
+
+// containsInvalid reports whether a type is, or is built from, an unresolved type.
+func containsInvalid(t types.Type) bool {
+	switch x := t.(type) {
+	case *types.Basic:
+		return x.Kind() == types.Invalid
+	case *types.Pointer:
+		return containsInvalid(x.Elem())
+	case *types.Slice:
+		return containsInvalid(x.Elem())
+	}
+	return false
+}
+
+// mentionsServeMux reports whether a type expression is (a pointer to) http.ServeMux.
+func (s *pkgScan) mentionsServeMux(e ast.Expr) bool {
+	if tv, ok := s.info.Types[e]; ok && tv.Type != nil && isServeMux(tv.Type) {
+		return true
+	}
+	switch x := ast.Unparen(e).(type) {
+	case *ast.StarExpr:
+		return s.mentionsServeMux(x.X)
+	case *ast.SelectorExpr:
+		return x.Sel.Name == "ServeMux"
+	}
+	return false
+}
+
+// outerWrappers checks the wrappers of a handler expression from the outside
+// down to the first authorising gate: each must be an authn function, or a
+// wrapper could discard the gate beneath it (`fallback(raw, read(h))`). A
+// terminal handler (a function value, a conversion, a constructor whose last
+// argument is plainly data) ends the walk. It returns "" or the offence.
+func (s *pkgScan) outerWrappers(e ast.Expr, seen map[types.Object]bool) string {
+	switch x := ast.Unparen(e).(type) {
+	case *ast.Ident:
+		o := s.info.Uses[x]
+		if v, ok := o.(*types.Var); ok && !s.written[o] && !seen[o] {
+			if def, ok := s.defs[v]; ok {
+				seen[o] = true
+				defer delete(seen, o)
+				return s.outerWrappers(def, seen)
+			}
+		}
+	case *ast.CallExpr:
+		if tv, ok := s.info.Types[x.Fun]; ok && tv.IsType() {
+			return "" // a conversion such as http.HandlerFunc(f)
+		}
+		if len(x.Args) == 0 || !s.wraps(x) {
+			return "" // constructs a handler from data
+		}
+		if !s.authnCallee(x.Fun, map[types.Object]bool{}) {
+			return "wrapped in " + wrapperName(x.Fun) + ", which is not an authn function, before any authorising gate: a wrapper can discard the gate it wraps. Put the authn gate outermost"
+		}
+		if slices.Contains(s.tags(x.Fun, map[types.Object]bool{}), tagAuthz) {
+			return ""
+		}
+		return s.outerWrappers(x.Args[len(x.Args)-1], seen)
+	}
+	return ""
+}
+
+func wrapperName(e ast.Expr) string {
+	switch x := ast.Unparen(e).(type) {
+	case *ast.Ident:
+		return x.Name
+	case *ast.SelectorExpr:
+		return wrapperName(x.X) + "." + x.Sel.Name
+	case *ast.CallExpr:
+		return wrapperName(x.Fun) + "(...)"
+	}
+	return "an expression"
+}
+
+// authnCallee reports whether the function of a call is an authn factory, or a
+// call of one, or a variable bound once to either.
+func (s *pkgScan) authnCallee(fun ast.Expr, seen map[types.Object]bool) bool {
+	switch f := ast.Unparen(fun).(type) {
+	case *ast.SelectorExpr:
+		id, ok := f.X.(*ast.Ident)
+		if !ok {
+			return false
+		}
+		pn, ok := s.info.Uses[id].(*types.PkgName)
+		return ok && pn.Imported().Path() == authnImportPath
+	case *ast.CallExpr:
+		return s.authnCallee(f.Fun, seen)
+	case *ast.Ident:
+		o := s.info.Uses[f]
+		v, ok := o.(*types.Var)
+		if !ok || s.written[o] || seen[o] {
+			return false
+		}
+		def, ok := s.defs[v]
+		if !ok {
+			return false
+		}
+		seen[o] = true
+		defer delete(seen, o)
+		return s.authnCallee(def, seen)
+	}
+	return false
+}
+
+// wraps reports whether a call is a wrapper (it takes a handler as its last
+// argument) rather than a constructor of a handler from data. A callee whose
+// signature resolves is judged by its last parameter; otherwise by the last
+// argument, where anything unresolved counts as a handler (fail closed). A
+// resolved callee whose last parameter has a type from outside the standard
+// library is a constructor: only net/http handler shapes make a wrapper.
+func (s *pkgScan) wraps(c *ast.CallExpr) bool {
+	if tv, ok := s.info.Types[c.Fun]; ok && tv.Type != nil {
+		if sig, isSig := tv.Type.Underlying().(*types.Signature); isSig && sig.Params().Len() > 0 {
+			pt := sig.Params().At(sig.Params().Len() - 1).Type()
+			if sl, isSlice := pt.(*types.Slice); isSlice && sig.Variadic() {
+				pt = sl.Elem()
+			}
+			// a parameter type that does not resolve comes from a package outside the
+			// standard library (a deps struct, an application facade): data, not an
+			// http.Handler, func(w, r) or anything with ServeHTTP from net/http
+			return !containsInvalid(pt) && handlerShaped(pt)
+		}
+	}
+	return s.mayBeHandler(c.Args[len(c.Args)-1])
+}
+
+// handlerShaped reports whether t is a handler: unresolved, http.Handler-like
+// (has ServeHTTP) or a func(w, r).
+func handlerShaped(t types.Type) bool {
+	if t == nil || containsInvalid(t) {
+		return true
+	}
+	if sig, isSig := t.Underlying().(*types.Signature); isSig {
+		return sig.Params().Len() == 2 && sig.Results().Len() == 0
+	}
+	obj, _, _ := types.LookupFieldOrMethod(t, true, nil, "ServeHTTP")
+	if obj != nil {
+		return true
+	}
+	iface, ok := t.Underlying().(*types.Interface)
+	if !ok {
 		return false
 	}
-	if fn, ok := s.calleeObject(c.Fun).(*types.Func); ok {
-		if sig, ok := fn.Type().(*types.Signature); ok && sig.Params().Len() > 0 && isStringType(sig.Params().At(0).Type()) {
+	for m := range iface.Methods() {
+		if m.Name() == "ServeHTTP" {
 			return true
 		}
 	}
-	if bl, ok := c.Args[0].(*ast.BasicLit); ok && bl.Kind == token.STRING {
-		return true
-	}
-	if tv, ok := s.info.Types[c.Args[0]]; ok && isStringType(tv.Type) {
-		return true
-	}
 	return false
+}
+
+// mayBeHandler is false only when e provably is data (a resolved type that is
+// neither a function nor has ServeHTTP); anything unresolved may be a handler.
+func (s *pkgScan) mayBeHandler(e ast.Expr) bool {
+	tv, ok := s.info.Types[e]
+	if !ok || tv.Type == nil || containsInvalid(tv.Type) {
+		return true
+	}
+	return handlerShaped(tv.Type)
 }
 
 // readRegistration applies the plain-form rules to one registration call.
@@ -476,6 +950,9 @@ func (s *pkgScan) readRegistration(file string, line int, c *ast.CallExpr, stack
 		case *ast.FuncLit:
 			return nil, "registered inside a function literal (local helper): " + pattern
 		}
+	}
+	if msg := s.outerWrappers(c.Args[1], map[types.Object]bool{}); msg != "" {
+		return nil, pattern + " is " + msg
 	}
 	method, p, _ := strings.Cut(pattern, " ")
 	return &routeReg{File: file, Line: line, Pattern: pattern, Method: method, Path: p, Tags: s.tags(c.Args[1], map[types.Object]bool{})}, ""
@@ -637,10 +1114,12 @@ func scanRepoFiles(files map[string][]byte, realRepo bool) ([]routeReg, []routeO
 		}
 		byDir[dir][rel] = src
 	}
-	// every registration method is named Handle or HandleFunc: a package without
-	// the word needs no type-check
+	// every registration method is named Handle or HandleFunc, and every
+	// registrar starts from a ServeMux: a package with neither word needs no type-check
 	for dir, fs := range byDir {
-		if !slices.ContainsFunc(sortedKeys(fs), func(rel string) bool { return bytes.Contains(fs[rel], []byte("Handle")) }) {
+		if !slices.ContainsFunc(sortedKeys(fs), func(rel string) bool {
+			return bytes.Contains(fs[rel], []byte("Handle")) || bytes.Contains(fs[rel], []byte("ServeMux"))
+		}) {
 			delete(byDir, dir)
 		}
 	}
@@ -940,7 +1419,7 @@ func (x g) add(mux *http.ServeMux) {
 			}
 			routes, off := scanSynthetic(t, "internal/x/ports/http.go", head+tc.body)
 			if len(off) != 0 {
-				t.Fatalf("unexpected offences: %v", off)
+				return // refused outright: a wrapper that is not an authn function is an offence
 			}
 			if len(routes) != 1 {
 				t.Fatalf("want 1 route, got %d", len(routes))
@@ -1180,5 +1659,99 @@ func TestRouteScanner_VerdictRejectsUnauthorisedAndMisplacedGates(t *testing.T) 
 	selfService := map[string]string{"GET /api/v1/platform/x": "test"}
 	if v := routeVerdict(byPattern["GET /api/v1/platform/x"], selfService); len(v) != 0 {
 		t.Errorf("allow-listed route: %v", v)
+	}
+}
+
+// Indirections that used to keep every arch gate green while serving an ungated
+// route. One synthetic offender per bypass; the scanner must refuse each.
+func TestRouteScanner_RejectsIndirectRegistration(t *testing.T) {
+	t.Parallel()
+	offenders := []struct{ name, body string }{
+		{"registrar interface: method value", `type registrar interface{ Handle(string, http.Handler) }
+func AddRoutes(r registrar) { handle := r.Handle; handle("GET /api/v1/crm/leads-export", h) }`},
+		{"registrar interface: literal call", `type registrar interface{ Handle(string, http.Handler) }
+func AddRoutes(r registrar) { r.Handle("GET /api/v1/crm/leads-export", h) }`},
+		{"mux converted to a registrar interface", `type registrar interface{ Handle(string, http.Handler) }
+func AddRoutes(mux *http.ServeMux) { var r registrar = mux; _ = r }`},
+		{"mux passed to a registrar parameter", `type registrar interface{ Handle(string, http.Handler) }
+func add(r registrar) {}
+func AddRoutes(mux *http.ServeMux) { add(mux) }`},
+		{"mux through reflection", `import "reflect"
+func AddRoutes(mux *http.ServeMux) {
+	reflect.ValueOf(mux).MethodByName("Handle").Call(nil)
+}`},
+		{"mux stored as any", `func AddRoutes(mux *http.ServeMux) { var x any = mux; _ = x }`},
+		{"mux passed to an unresolved function", `import "example.com/other"
+func AddRoutes(mux *http.ServeMux) { other.Register(mux) }`},
+		{"alias of the mux type", `type Mux = http.ServeMux`},
+		{"alias of a pointer to the mux type", `type Mux = *http.ServeMux`},
+		{"unresolved receiver with a Sprintf pattern", `import ("fmt"; "example.com/other")
+func AddRoutes() { mux := other.NewMux(); mux.Handle(fmt.Sprintf("GET /api/v1/%s", "x"), h) }`},
+		{"unresolved receiver with a literal pattern", `import "example.com/other"
+func AddRoutes() { mux := other.NewMux(); mux.Handle("GET /api/v1/x", h) }`},
+		{"unresolved method value", `import "example.com/other"
+func AddRoutes() { mux := other.NewMux(); handle := mux.Handle; handle("GET /api/v1/x", h) }`},
+		{"wrapper that discards the gate", `func AddRoutes(mux *http.ServeMux, v authn.Verifier, s authn.StampValidator) {
+	read := authn.RequirePermission(v, s, perm)
+	mux.Handle("GET /api/v1/x", fallback(raw, read(h)))
+}`},
+		{"curried wrapper that discards the gate", `func AddRoutes(mux *http.ServeMux, v authn.Verifier, s authn.StampValidator) {
+	read := authn.RequirePermission(v, s, perm)
+	mux.Handle("GET /api/v1/x", preview(raw)(read(h)))
+}`},
+		{"non-authn wrapper outside an authentication-only gate", `func AddRoutes(mux *http.ServeMux, v authn.Verifier) {
+	mux.Handle("GET /api/v1/x", wrap(authn.RequireAuth(v)(h)))
+}`},
+	}
+	for _, tc := range offenders {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if bad, _ := rejected(map[string]string{"internal/x/ports/http.go": syntheticHead + tc.body}); !bad {
+				t.Fatalf("scanner accepted: %s", tc.body)
+			}
+		})
+	}
+
+	// the alias defined in ANOTHER package, used here with a Sprintf pattern: each
+	// file is refused on its own, and the pair certainly is
+	aliasFile := "package zz\nimport \"net/http\"\ntype Mux = http.ServeMux\nfunc New() *Mux { return http.NewServeMux() }\n"
+	userFile := "package ports\nimport (\"fmt\"; \"github.com/leadkart/leadkart-go/internal/common/zz\")\n" +
+		"func AddRoutes(p string) { mux := zz.New(); mux.Handle(fmt.Sprintf(\"GET /api/v1/crm/%s\", p), nil) }\n"
+	for name, files := range map[string]map[string]string{
+		"alias file alone":    {"internal/common/zz/mux.go": aliasFile},
+		"user file alone":     {"internal/crm/ports/x.go": userFile},
+		"cross-package alias": {"internal/common/zz/mux.go": aliasFile, "internal/crm/ports/x.go": userFile},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			if bad, _ := rejected(files); !bad {
+				t.Fatalf("accepted: %v", files)
+			}
+		})
+	}
+}
+
+// The honest ways of handling the mux stay accepted: direct registration, the
+// receiver of other methods, assignment to a ServeMux or http.Handler, passing
+// it to a function taking *http.ServeMux, and wrapping it in an authn middleware.
+func TestRouteScanner_AcceptsHonestMuxHandling(t *testing.T) {
+	t.Parallel()
+	const body = `import "log/slog"
+type holder struct{ inner *http.ServeMux }
+func register(mux *http.ServeMux, v authn.Verifier, s authn.StampValidator) {
+	mux.Handle("GET /api/v1/a", authn.RequirePermission(v, s, perm)(h))
+}
+func build(v authn.Verifier, s authn.StampValidator, log *slog.Logger) http.Handler {
+	mux := http.NewServeMux()
+	h := holder{inner: mux}
+	register(h.inner, v, s)
+	var serve http.Handler = mux
+	_ = serve
+	if mux == nil { return nil }
+	_, _ = mux.Handler(nil)
+	return authn.TenantScope(nil, log)(mux)
+}`
+	if bad, why := rejected(map[string]string{"internal/x/ports/http.go": syntheticHead + body}); bad {
+		t.Fatalf("rejected: %v", why)
 	}
 }
