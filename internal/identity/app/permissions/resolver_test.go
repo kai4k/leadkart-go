@@ -64,6 +64,10 @@ func (f *fakeMembershipRepo) ListHoldingRole(context.Context, tenant.ID, role.ID
 	return nil, errors.New("fake: ListHoldingRole unused")
 }
 
+func (f *fakeMembershipRepo) ListReportingLinks(context.Context, tenant.ID, []membership.ID) ([]*membership.Membership, error) {
+	return nil, errors.New("fake: ListReportingLinks unused")
+}
+
 func (f *fakeMembershipRepo) ListAllForPerson(context.Context, person.ID) ([]*membership.Membership, error) {
 	return nil, errors.New("fake: ListAllForPerson unused")
 }

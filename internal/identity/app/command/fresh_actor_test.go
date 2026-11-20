@@ -525,3 +525,43 @@ func TestViewPermissionRequest_TheViewerIsReReadToo(t *testing.T) {
 		t.Errorf("a deactivated requester viewing their own request: err = %v, want not found", err)
 	}
 }
+
+// TestReplaceOverrides_AnUnchangedSaveWritesNothingAndRotatesNothing: the same
+// overrides again (in any order) leave the member untouched and do not rotate their security stamp; a real change still rotates once.
+func TestReplaceOverrides_AnUnchangedSaveWritesNothingAndRotatesNothing(t *testing.T) {
+	t.Parallel()
+	p := permission.IdentityPermissions
+	w := newAuthzWorld(t)
+	admin := adminMember(t, w, membership.StatusActive)
+	actor := actorAs(t, admin.ID(), authority.RankAdmin, tenantAdminEffective()...)
+	target := w.member(t, w.exec)
+	save := func(granted, revoked []string) error {
+		return w.handlers().override.Handle(t.Context(), command.ReplaceUserPermissionOverridesCommand{TenantID: awTenant, MembershipID: target.ID(),
+			GrantedNames: granted, RevokedNames: revoked, Actor: actor})
+	}
+	if err := save([]string{p.Crm.Leads.Read, p.Crm.Leads.Assign}, []string{p.Inventory.Stock.Read}); err != nil {
+		t.Fatalf("first save: %v", err)
+	}
+	if len(w.rotations) != 1 {
+		t.Fatalf("a real change rotated %d times, want 1", len(w.rotations))
+	}
+	for _, again := range [][2][]string{
+		{{p.Crm.Leads.Read, p.Crm.Leads.Assign}, {p.Inventory.Stock.Read}},
+		{{p.Crm.Leads.Assign, p.Crm.Leads.Read}, {p.Inventory.Stock.Read}}, // other order
+	} {
+		if err := save(again[0], again[1]); err != nil {
+			t.Fatalf("repeat save: %v", err)
+		}
+		if len(w.rotations) != 1 {
+			t.Fatalf("an unchanged save rotated the stamp (%d rotations)", len(w.rotations))
+		}
+	}
+	if err := save([]string{p.Crm.Leads.Read}, []string{p.Inventory.Stock.Read}); err != nil || len(w.rotations) != 2 {
+		t.Fatalf("a real change: err %v, rotations %d, want 2", err, len(w.rotations))
+	}
+	// An empty change on an empty member is a no-op as well.
+	fresh := w.member(t, w.exec)
+	if err := w.handlers().override.Handle(t.Context(), command.ReplaceUserPermissionOverridesCommand{TenantID: awTenant, MembershipID: fresh.ID(), Actor: actor}); err != nil || len(w.rotations) != 2 {
+		t.Fatalf("empty save on an empty member: err %v, rotations %d, want no rotation", err, len(w.rotations))
+	}
+}

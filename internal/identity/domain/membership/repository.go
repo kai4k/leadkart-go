@@ -126,4 +126,12 @@ type Repository interface {
 	// that holds roleID, fully hydrated. Powers the role-in-use rule of
 	// DeleteRole; the caller holds the tenant authority lock.
 	ListHoldingRole(ctx context.Context, tenantID tenant.ID, roleID role.ID) ([]*Membership, error)
+
+	// ListReportingLinks returns the Memberships of the tenant (any status) that
+	// are the direct manager of, or a direct report of, any of ids, excluding the
+	// ids themselves. The result is bounded by the reporting lines of ids (their
+	// direct reports plus their distinct managers), never by the size of the
+	// tenant. Powers the re-level reporting rule; the caller holds the tenant
+	// authority lock.
+	ListReportingLinks(ctx context.Context, tenantID tenant.ID, ids []ID) ([]*Membership, error)
 }

@@ -18,11 +18,11 @@ func adminMustHoldNames() map[string]bool {
 	p := permission.IdentityPermissions
 	out := map[string]bool{}
 	for _, n := range []string{
-		p.Users.Create, p.Users.Update, p.Users.UpdatePermissions, p.Users.Deactivate, p.Users.Reactivate, p.Users.Unlock,
 		p.Roles.Create, p.Roles.Update, p.Roles.Delete, p.Roles.Assign, p.Roles.Revoke, p.Roles.Approve,
+		p.Users.UpdatePermissions,
 		p.Tenants.Update, p.Tenants.UpdateSettings,
 		p.PlatformMarketplace.Purchase, p.Orders.Payments.Record,
-		// added in hierarchy round 5
+		// visibility and the right to ask (hierarchy round 5)
 		p.Meta.RequestPermissionElevation, p.Users.View, p.Roles.View, p.Tenants.View,
 		p.Crm.Leads.ReadAll, p.Tasks.WorkItems.ReadAll,
 		p.Orders.Payments.Read, p.Orders.Invoices.Read, p.PlatformLeadCredits.Read,

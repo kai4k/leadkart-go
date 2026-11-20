@@ -162,6 +162,12 @@ type ReactivateUserCommand struct {
 	Actor authority.Actor
 }
 
+// ErrPersonActiveElsewhere surfaces when reactivating a membership would give
+// its person a second ACTIVE membership (the uq_memberships_person_active
+// invariant: a person is active in at most one company). Wire shape: 409
+// person_active_elsewhere.
+var ErrPersonActiveElsewhere = errors.New("reactivate_user: the person already has an active membership in another company")
+
 // ReactivateUserHandler runs the reactivate flow.
 type ReactivateUserHandler struct{ w authorityWriter }
 
@@ -200,5 +206,8 @@ func (h ReactivateUserHandler) Handle(ctx context.Context, cmd ReactivateUserCom
 		// (TestE2E_PersonChangeGuard_ReactivationCannotCommit...).
 		return h.w.rotateStampIfChanged(ctx, m, "reactivated", now)
 	})
+	if errors.Is(err, membership.ErrAlreadyActive) {
+		return ErrPersonActiveElsewhere
+	}
 	return translateAuthorityWrite("reactivate_user", err)
 }

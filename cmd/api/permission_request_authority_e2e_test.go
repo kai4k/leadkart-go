@@ -153,9 +153,9 @@ func TestE2E_PermissionRequests_ApprovalDecidedByPolicy(t *testing.T) {
 		if r := w.decide(t, "approve", w.adTok, day); r.status != http.StatusNoContent {
 			t.Errorf("admin approves a day-to-day permission for a user: %d %s", r.status, r.body)
 		}
-		_, must := f.requestElevation(t, eTok, p.Users.Update)
+		_, must := f.requestElevation(t, eTok, p.Roles.Update)
 		r := w.decide(t, "approve", w.adTok, must)
-		f.wantForbidden(t, "admin approves identity.users.update it does not hold", r, http.StatusForbidden, "grant_exceeds_authority")
+		f.wantForbidden(t, "admin approves identity.roles.update it does not hold", r, http.StatusForbidden, "grant_exceeds_authority")
 		// denying needs eligibility only
 		if r := w.decide(t, "deny", w.adTok, must); r.status != http.StatusNoContent {
 			t.Errorf("admin denies a must-hold request: %d %s", r.status, r.body)

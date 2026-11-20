@@ -105,6 +105,22 @@ WHERE  status = 'active'
 ORDER  BY joined_at DESC, id DESC
 LIMIT  sqlc.arg('limit');
 
+-- name: ListMembershipsLinkedTo :many
+-- The reporting neighbours of a set of memberships (RLS scopes them to the
+-- transaction tenant): their direct managers and their direct reports, never
+-- the members themselves. Powers the re-level reporting rule, which must look at
+-- the holders lines and nothing else. reports_to has idx_memberships_reports_to;
+-- the manager side is a primary-key lookup per listed member.
+SELECT m.id, m.person_id, m.tenant_id, m.status, m.joined_at, m.left_at,
+       m.designation, m.department, m.status_message, m.reports_to,
+       m.created_by_membership_id
+FROM   identity.tenant_memberships m
+WHERE  NOT (m.id = ANY($1::uuid[]))
+  AND  (m.reports_to = ANY($1::uuid[])
+        OR m.id IN (SELECT s.reports_to FROM identity.tenant_memberships s
+                    WHERE s.id = ANY($1::uuid[]) AND s.reports_to IS NOT NULL))
+ORDER  BY m.joined_at, m.id;
+
 -- name: ListMembershipsHoldingRole :many
 -- Every membership of the current tenant (active or not) that holds the role.
 -- Powers the role-in-use rule of DeleteRole (ADR 0069 A5). The role id is

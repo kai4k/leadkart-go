@@ -223,12 +223,12 @@ func TestApprove_WhoMay(t *testing.T) {
 	if err := w.approveAs(admin, r); err != nil {
 		t.Errorf("admin approves a day-to-day permission for a user: %v", err)
 	}
-	if err := w.approveAs(admin, w.pending(t, c.exec, p.Users.Update, 0)); !errors.Is(err, authority.ErrGrantExceedsAuthority) {
+	if err := w.approveAs(admin, w.pending(t, c.exec, p.Roles.Update, 0)); !errors.Is(err, authority.ErrGrantExceedsAuthority) {
 		t.Errorf("admin approves a must-hold permission they lack: %v, want ErrGrantExceedsAuthority", err)
 	}
 	// the owner approves anything requestable
 	owner := actorAs(t, w.member(t, w.owner).ID(), authority.RankOwner, tenantAdminEffective()...)
-	if err := w.approveAs(owner, w.pending(t, c.other, p.Users.Update, 0)); err != nil {
+	if err := w.approveAs(owner, w.pending(t, c.other, p.Roles.Update, 0)); err != nil {
 		t.Errorf("owner approves a must-hold permission: %v", err)
 	}
 	// a read-only platform operator in the platform tenant follows rank like anyone else

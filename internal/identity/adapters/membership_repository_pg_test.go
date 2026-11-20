@@ -453,3 +453,66 @@ func TestMembershipRepository_GetByIDs_PresentIdsOnly(t *testing.T) {
 		t.Fatalf("GetByIDs(nil) = %v, %v; want nothing", none, err)
 	}
 }
+
+// SQL-contract: ListReportingLinks returns the managers and direct reports of
+// the given memberships (any status), never the given ones themselves, never a
+// bystander, and nothing of another tenant. The result size follows the reporting
+// lines, not the tenant (hierarchy round 6).
+func TestMembershipRepository_ListReportingLinks_ManagersAndReportsOnly(t *testing.T) {
+	t.Parallel()
+	pool := repoFixture(t)
+	tx := pg.NewTransactor(pool)
+	persons := adapters.NewPersonRepository(pool, tx)
+	memberships := adapters.NewMembershipRepository(pool, tx)
+	tenants := adapters.NewTenantRepository(pool, tx)
+	tn, other := seedTenant(t, tenants), seedTenant(t, tenants)
+	ctx := tenancy.WithID(t.Context(), tenancy.ID(tn.ID().String()))
+	add := func(email string, manager membership.ID) membership.ID {
+		p := seedPerson(t, persons, email)
+		m, err := membership.New(membership.ID(ids.NewV7().String()), p.ID(), tn.ID(), membership.ID(""), testNow)
+		if err != nil {
+			t.Fatalf("membership.New: %v", err)
+		}
+		if err := memberships.Add(ctx, m); err != nil {
+			t.Fatalf("Add membership: %v", err)
+		}
+		if manager != "" {
+			if err := memberships.UpdateByID(ctx, tn.ID(), m.ID(), func(x *membership.Membership) (bool, error) {
+				return true, x.AssignManager(manager, testNow)
+			}); err != nil {
+				t.Fatalf("AssignManager: %v", err)
+			}
+		}
+		return m.ID()
+	}
+	boss := add("links-boss@example.test", "")
+	holderA := add("links-a@example.test", boss)
+	holderB := add("links-b@example.test", boss)
+	reportOfA := add("links-ra@example.test", holderA)
+	grandReport := add("links-gr@example.test", reportOfA)
+	add("links-bystander@example.test", "")
+	bystanderUnderBoss := add("links-sibling@example.test", boss)
+	_ = bystanderUnderBoss
+
+	got, err := memberships.ListReportingLinks(ctx, tn.ID(), []membership.ID{holderA, holderB})
+	if err != nil {
+		t.Fatalf("ListReportingLinks: %v", err)
+	}
+	have := map[membership.ID]bool{}
+	for _, m := range got {
+		have[m.ID()] = true
+	}
+	if len(got) != 2 || !have[boss] || !have[reportOfA] {
+		t.Fatalf("links of {A, B} = %v, want exactly the shared manager and A's report", have)
+	}
+	if have[holderA] || have[holderB] || have[grandReport] {
+		t.Errorf("the given members or a second-degree report came back: %v", have)
+	}
+	if none, err := memberships.ListReportingLinks(ctx, tn.ID(), nil); err != nil || len(none) != 0 {
+		t.Errorf("no ids: %d rows, %v; want none", len(none), err)
+	}
+	otherCtx := tenancy.WithID(t.Context(), tenancy.ID(other.ID().String()))
+	if cross, err := memberships.ListReportingLinks(otherCtx, other.ID(), []membership.ID{holderA}); err != nil || len(cross) != 0 {
+		t.Errorf("cross-tenant links = %d, %v; want none (RLS)", len(cross), err)
+	}
+}

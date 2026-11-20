@@ -65,14 +65,15 @@ info:
     `platform.tenants.ownership`), `impersonation_not_allowed` and
     `not_approver` (no longer returned by approve and deny: a caller who may not
     decide a request is answered `404 permission_request_not_found`). Editing a
-    role acts on its active holders (`insufficient_rank`,
-    `self_modification_forbidden`); lifting a member's explicit revoke needs the
-    Admin tier (`grant_exceeds_authority`). Rank is `GET /auth/me/capabilities`
+    role acts on its holders, active or not (`insufficient_rank`,
+    `self_modification_forbidden`; owners may edit a role they hold); lifting a member's explicit revoke needs the
+    Admin tier, and conferring a permission the caller holds only until a date
+    is refused (`grant_exceeds_authority`). Rank is `GET /auth/me/capabilities`
     `rank` / `tier` (0 owner, 1-10 admin, 11-20 manager, 21-30 team_lead, 31-99
     user; lower is more senior). ADR 0036 / ADR 0068 / ADR 0069. State conflicts
     on the membership, role and person commands are `409`: `last_owner_protected`,
     `owner_protected`, `member_roles_inconsistent`, `role_system_default`,
-    `role_in_use`, `person_memberships_changing`; input the policy refuses is `422`:
+    `role_in_use`, `person_memberships_changing`, `person_active_elsewhere`; input the policy refuses is `422`:
     `manager_not_eligible`, `role_parent_not_eligible`,
     `role_level_breaks_reporting`, `permission_not_requestable`. In `x-required-permissions`, the token `self`
     is not a permission: it means "the caller's own membership" (the path
@@ -837,7 +838,7 @@ paths:
         '204': { description: Reactivated }
         '403': { $ref: '#/components/responses/AuthorityForbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
-        '409': { description: "`member_roles_inconsistent` — the member's assigned roles cannot be loaded as this tenant's roles, so its rank cannot be decided; nothing was changed (an assignment row written outside the commands, e.g. an operator repair or a restored backup, pointing at a role of another tenant)", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+        '409': { description: "`person_active_elsewhere` — the person already has an active membership in another company (a person is active in at most one); nothing was changed; `member_roles_inconsistent` — the member's assigned roles cannot be loaded as this tenant's roles, so its rank cannot be decided; nothing was changed", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
 
   /api/v1/users/{userId}/roles:
     post:
@@ -1040,16 +1041,19 @@ paths:
       tags: [roles]
       summary: Rename a role and/or change its hierarchy level
       description: |
-        Both fields optional. Empty `name` skips rename. Omitting
-        `hierarchy_level` (or sending `null`) skips re-level — using a
-        pointer field instead of a -1 sentinel keeps the wire shape clean.
-        Changing what a role confers, re-levelling it or deleting it is acting on every ACTIVE member who holds it: the
-        caller must strictly outrank each active holder (owners may act on owners) and must not hold the role
-        themself (`insufficient_rank`, `self_modification_forbidden`); a rename acts on nobody. Every active holder's
+        At least one of `name` and `hierarchy_level` is required: a body that carries neither (`{}`, `null`) is
+        `400 invalid_body`. An empty `name` skips rename; omitting `hierarchy_level` (or sending `null`) skips
+        re-level — using a pointer field instead of a -1 sentinel keeps the wire shape clean.
+        Changing what a role confers, re-levelling it or deleting it is acting on every member who holds it, active or
+        not: the caller must strictly outrank each holder (owners may act on owners) and must not hold the role
+        themself, except an owner, who may edit a custom role they hold (`insufficient_rank`,
+        `self_modification_forbidden`); a rename acts on nobody. Every active holder's
         session ends the way an authority change on the member does: their old token answers 401 `stale_token`, the
         refresh succeeds with the new permissions and rank.
-        A re-level is refused with 422 `role_level_breaks_reporting` when it would leave an active holder not strictly
-        junior to their manager, or a direct report of a holder not strictly junior to the holder.
+        A re-level is refused with 422 `role_level_breaks_reporting` only when it would NEWLY break a reporting line: an
+        active holder that is strictly junior to their (active) manager would no longer be, or a direct report that is
+        strictly junior to a holder would no longer be. Lines that are already broken, and inactive managers or
+        reports, do not block it.
         Requires `identity.roles.update` (satisfied by `tenant.admin` in the caller's own tenant, or by `platform.*` equivalents for platform operators; ADR 0068).
       x-required-permissions: [identity.roles.update]
       parameters:
@@ -1062,6 +1066,7 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/UpdateRoleRequest' }
       responses:
+        '400': { $ref: '#/components/responses/BadRequest' }
         '204': { description: Role updated }
         '403': { $ref: '#/components/responses/AuthorityForbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -1074,8 +1079,9 @@ paths:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
         '422':
           description: |
-            `validation_failed` / `role_invalid`, or `role_level_breaks_reporting` (the new level would leave an active
-            holder not strictly junior to their manager, or a direct report of a holder not strictly junior to the holder).
+            `validation_failed` / `role_invalid`, or `role_level_breaks_reporting` (the new level would newly break a reporting
+            line of an active holder: no longer strictly junior to their manager, or a direct report no longer strictly
+            junior to the holder; lines already broken do not count).
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
@@ -1085,7 +1091,7 @@ paths:
       description: |
         Requires `identity.roles.delete` (satisfied by `tenant.admin` in the caller's own tenant, or by `platform.*` equivalents for platform operators; ADR 0068).
         The caller must hold every permission the role carries (deleting removes them from every holder) and must
-        be allowed to act on every active holder (answered before `role_in_use`).
+        be allowed to act on every holder, active or not (answered before `role_in_use`).
         A role still held by an ACTIVE member is refused with 409 `role_in_use` (`errors.active_holders` is the
         count); a role held only by inactive members is deleted and their assignments are removed in the same
         transaction.
@@ -1692,9 +1698,10 @@ paths:
         Decided by the authority policy (ADR 0069), never by the body: the requester's manager who
         holds `identity.roles.approve` AND the permission; or anyone of Administrator rank or above who
         strictly outranks the requester (an Administrator may approve any requestable permission
-        without holding it, except user/role management, tenant settings, marketplace purchase, payment and
-        invoice access, tenant-wide visibility (read-all, users, roles, tenants, lead credits) and the right to
-        request elevation, which the Administrator must hold); or a super user / exempt operator
+        without holding it, user lifecycle (create, update, deactivate, reactivate, unlock) included, except
+        role management and approval, changing a user's permissions, tenant settings, marketplace purchase, recording
+        payments, payment and invoice access, tenant-wide visibility (read-all, users, roles, tenants, lead credits)
+        and the right to request elevation, which the Administrator must hold); or a super user / exempt operator
         acting in ANOTHER tenant (in the platform tenant an operator follows rank like anyone else).
         Never an impersonation session and never the requester. The approved grant ends no later than the
         approver's own when the approver holds the permission only through a time-bound override. A caller who

@@ -153,6 +153,13 @@ func (c tallyMembers) ListHoldingRole(ctx context.Context, tid tenant.ID, id rol
 	return c.Repository.ListHoldingRole(ctx, tid, id)
 }
 
+func (c tallyMembers) ListReportingLinks(ctx context.Context, tid tenant.ID, ids []membership.ID) ([]*membership.Membership, error) {
+	c.n["members.ListReportingLinks"]++
+	got, err := c.Repository.ListReportingLinks(ctx, tid, ids)
+	c.n["members.ListReportingLinks.rows"] += len(got)
+	return got, err
+}
+
 func (c tallyMembers) ListForTenant(ctx context.Context, tid tenant.ID) ([]*membership.Membership, error) {
 	c.n["members.ListForTenant"]++
 	return c.Repository.ListForTenant(ctx, tid)
@@ -201,10 +208,13 @@ func (c tallyPersons) UpdateByID(ctx context.Context, id person.ID, fn func(*per
 // TestRoleEdits_HolderReadsDoNotGrowWithTheNumberOfHolders runs the same edit
 // over 3 and over 30 holders and compares the repository calls. The stated
 // bound: the holders and what the policy needs about them cost a FIXED number of
-// calls (one membership list, one role read, one person read; a re-level reads
-// the tenant's members once instead of listing holders); the stamp rotation is
+// calls (one membership list, one role read, one person read; a re-level adds one
+// targeted read of the holders' reporting neighbours); the stamp rotation is
 // one person write per ACTIVE holder, which the per-person security-stamp event
-// requires, and nothing else scales.
+// requires, and nothing else scales. A re-level adds ONE targeted read of the
+// holders' managers and direct reports (ListReportingLinks); the rows it returns
+// are the holders' reporting lines (here one manager), not the tenant: 40
+// unrelated members sit in the tenant and are never read.
 func TestRoleEdits_HolderReadsDoNotGrowWithTheNumberOfHolders(t *testing.T) {
 	t.Parallel()
 	p := permission.IdentityPermissions
@@ -222,6 +232,9 @@ func TestRoleEdits_HolderReadsDoNotGrowWithTheNumberOfHolders(t *testing.T) {
 			w.memberReporting(t, boss.ID(), r, w.exec)
 		}
 		w.memberSnap(t, membership.Snapshot{RoleAssignments: []role.ID{r.ID()}, Status: membership.StatusInactive})
+		for range 40 { // unrelated members: the tenant is bigger than the holders' lines
+			w.member(t, w.exec)
+		}
 		clear(n) // count the command only
 		ctx := t.Context()
 		if relevel {
@@ -242,14 +255,14 @@ func TestRoleEdits_HolderReadsDoNotGrowWithTheNumberOfHolders(t *testing.T) {
 	}
 	for _, relevel := range []bool{false, true} {
 		small, large := run(3, relevel), run(30, relevel)
-		for _, name := range []string{"members.ListHoldingRole", "members.ListForTenant", "members.GetByID", "roles.GetByIDsIncludingDeleted", "persons.GetByID", "persons.GetByIDs"} {
+		for _, name := range []string{"members.ListHoldingRole", "members.ListForTenant", "members.ListReportingLinks", "members.ListReportingLinks.rows", "members.GetByID", "roles.GetByIDsIncludingDeleted", "persons.GetByID", "persons.GetByIDs"} {
 			if small[name] != large[name] {
 				t.Errorf("relevel=%v: %s = %d over 3 holders but %d over 30: it must not grow per holder", relevel, name, small[name], large[name])
 			}
 		}
-		want := map[string]int{"members.ListHoldingRole": 1, "members.ListForTenant": 0, "persons.GetByIDs": 1}
+		want := map[string]int{"members.ListHoldingRole": 1, "members.ListForTenant": 0, "persons.GetByIDs": 1, "members.ListReportingLinks": 0}
 		if relevel {
-			want["members.ListHoldingRole"], want["members.ListForTenant"] = 0, 1
+			want["members.ListReportingLinks"], want["members.ListReportingLinks.rows"] = 1, 1 // the one manager, not the 40 bystanders
 		}
 		for name, v := range want {
 			if large[name] != v {
@@ -257,4 +270,42 @@ func TestRoleEdits_HolderReadsDoNotGrowWithTheNumberOfHolders(t *testing.T) {
 			}
 		}
 	}
+}
+
+// Hierarchy round 6: owners may edit a custom role they hold themself, and an
+// INACTIVE holder still counts for the holders rule, while only ACTIVE holders
+// have their stamp rotated.
+func TestRoleEdits_OwnersEditTheirOwnRoleAndInactiveHoldersCount(t *testing.T) {
+	t.Parallel()
+	p := permission.IdentityPermissions
+	t.Run("a sole owner edits a custom role they hold", func(t *testing.T) {
+		t.Parallel()
+		w := newAuthzWorld(t)
+		custom := w.customRole(t, "Owner Extra", 60, p.Crm.Leads.Read)
+		owner := w.member(t, w.owner, custom)
+		actor := actorAs(t, owner.ID(), authority.RankOwner, tenantAdminEffective()...)
+		h := w.roleHandlers()
+		if err := h.grant.Handle(t.Context(), command.GrantRolePermissionCommand{TenantID: awTenant, RoleID: custom.ID(), PermissionName: p.Crm.Leads.ReadAll, Actor: actor}); err != nil {
+			t.Fatalf("owner grants on a role they hold: %v", err)
+		}
+		if len(w.rotations) != 1 {
+			t.Errorf("the owner's own stamp rotated %d times, want 1 (the role changed for its holder)", len(w.rotations))
+		}
+	})
+	t.Run("a manager is refused when the only senior holder is inactive, and nobody is rotated", func(t *testing.T) {
+		t.Parallel()
+		w := newAuthzWorld(t)
+		custom := w.customRole(t, "Shared", 60, p.Crm.Leads.Read)
+		w.memberSnap(t, membership.Snapshot{Status: membership.StatusInactive, RoleAssignments: []role.ID{custom.ID(), w.admin.ID()}})
+		w.memberSnap(t, membership.Snapshot{RoleAssignments: []role.ID{custom.ID()}})
+		mgr := w.member(t, w.manager)
+		actor := actorAs(t, mgr.ID(), authority.RankManager, p.Crm.Leads.Read, p.Crm.Leads.ReadAll, p.Roles.Update, p.Roles.Approve)
+		err := w.roleHandlers().grant.Handle(t.Context(), command.GrantRolePermissionCommand{TenantID: awTenant, RoleID: custom.ID(), PermissionName: p.Crm.Leads.ReadAll, Actor: actor})
+		if !isErr(err, authority.ErrInsufficientRank) {
+			t.Fatalf("err = %v, want ErrInsufficientRank (an inactive senior holder still counts)", err)
+		}
+		if len(w.rotations) != 0 {
+			t.Errorf("a refused edit rotated %v", w.rotations)
+		}
+	})
 }

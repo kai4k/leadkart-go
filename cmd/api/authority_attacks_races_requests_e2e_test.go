@@ -255,10 +255,12 @@ func TestAttack_Races_PersonsAgainstTheirMemberships(t *testing.T) {
 				w.call(http.MethodPost, "/api/v1/users/"+cu.MembershipID+"/reactivate", w.victim.AccessToken, nil))
 			wins := 0
 			for _, r := range res {
-				// the loser SHOULD be a 409; today the unique index surfaces as a 500 (the FINDING pinned by
-				// TestAttack_Persons_ReactivatingWhileActiveElsewhereIsAConflict). It is tolerated here so the
-				// race still proves the invariant: exactly one winner, one active membership.
-				onlyStatuses(t, "reactivate", r, http.StatusNoContent, http.StatusConflict, http.StatusUnprocessableEntity, http.StatusInternalServerError)
+				// the loser is a 409 person_active_elsewhere (the unique index uq_memberships_person_active
+				// holds the invariant); exactly one winner, one active membership.
+				onlyStatuses(t, "reactivate", r, http.StatusNoContent, http.StatusConflict)
+				if r.status == http.StatusConflict && errCodeOf(r) != "person_active_elsewhere" {
+					t.Errorf("the loser answered %s, want person_active_elsewhere", r.body)
+				}
 				if r.status == http.StatusNoContent {
 					wins++
 				}
@@ -373,10 +375,9 @@ func ownerRoleOf2(w *attackWorld, tenantID, opTok string, t *testing.T) string {
 // TestAttack_Persons_ReactivatingWhileActiveElsewhereIsAConflict pins the secure
 // AND well-formed behaviour: reactivating a membership of a person who already has
 // an active membership in another tenant is a 4xx conflict, not an internal error.
-// Today the unique index uq_memberships_person_active holds the invariant but the
-// violation reaches the client as 500 internal_error.
+// The unique index uq_memberships_person_active holds the invariant; the command
+// maps its violation to 409 person_active_elsewhere.
 func TestAttack_Persons_ReactivatingWhileActiveElsewhereIsAConflict(t *testing.T) {
-	t.Skip("known violation: FINDING: reactivating a second membership of a person with an active one elsewhere answers 500 internal_error, want 409 (uq_memberships_person_active is unmapped in writeUserMutationResult / ReactivateUser)")
 	w := newAttackWorld(t)
 	f := w.f
 	m := f.createMember(t, w.owner, "twotenants")
@@ -394,7 +395,10 @@ func TestAttack_Persons_ReactivatingWhileActiveElsewhereIsAConflict(t *testing.T
 	if r := f.authedJSON(t, http.MethodPost, "/api/v1/users/"+m.membershipID+"/reactivate", w.owner.AccessToken, nil); r.status != http.StatusNoContent {
 		t.Fatalf("reactivate in T: %d %s", r.status, r.body)
 	}
-	if r := f.authedJSON(t, http.MethodPost, "/api/v1/users/"+cu.MembershipID+"/reactivate", w.victim.AccessToken, nil); r.status != http.StatusConflict {
-		t.Errorf("reactivate in V while active in T: %d %s, want 409", r.status, r.body)
+	if r := f.authedJSON(t, http.MethodPost, "/api/v1/users/"+cu.MembershipID+"/reactivate", w.victim.AccessToken, nil); r.status != http.StatusConflict || errCodeOf(r) != "person_active_elsewhere" {
+		t.Errorf("reactivate in V while active in T: %d %s, want 409 person_active_elsewhere", r.status, r.body)
+	}
+	if u := f.getUser(t, w.victim.AccessToken, cu.MembershipID); u.Status == "active" {
+		t.Error("the refused reactivation left the second membership active")
 	}
 }

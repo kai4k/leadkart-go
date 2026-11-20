@@ -20,6 +20,8 @@ type r5World struct {
 	super, op                authority.Actor
 	peerMgr, tlHolder, exec  authority.Member // holders of C (peerMgr holds Sales Manager too)
 	inactiveAdmin            authority.Member // an inactive admin holding C
+	inactiveExec             authority.Member // an inactive executive holding C
+	inactivePeer             authority.Member // an inactive peer manager holding C
 	ownerHolder, superHolder authority.Member
 	mgrHolder                authority.Member // the acting manager's own membership, holding C
 	ownerM                   authority.Member
@@ -43,6 +45,8 @@ func newR5World(t *testing.T) r5World {
 	w.tlHolder = mkMember(t, 17, tA, true, "", c)
 	w.exec = mkMember(t, 18, tA, true, "", userR, c)
 	w.inactiveAdmin = mkMember(t, 20, tA, false, "", adminR, c)
+	w.inactiveExec = mkMember(t, 24, tA, false, "", userR, c)
+	w.inactivePeer = mkMember(t, 25, tA, false, "", mgrR, c)
 	w.ownerHolder = mkMember(t, 12, tA, true, "", ownerR, c)
 	w.superHolder = mkMember(t, 23, tA, true, "", superR, c)
 
@@ -83,9 +87,15 @@ func TestRoleEdits_ActOnEveryActiveHolder(t *testing.T) {
 		{"manager, a junior executive holds it", w.mgr, hs(w.exec), nil},
 		{"manager, a junior and a peer hold it (one bad holder refuses all)", w.mgr, hs(w.exec, w.peerMgr), authority.ErrInsufficientRank},
 		{"manager, an active senior admin holds it", w.mgr, authority.RoleHolders{Holders: []authority.Member{mkMember(t, 21, tA, true, "", mkRole(2, tA, role.SystemRoles.Tenant.Administrator, false, 10, false), w.c)}}, authority.ErrInsufficientRank},
-		{"manager, the only senior holder is inactive", w.mgr, hs(w.exec, w.inactiveAdmin), nil},
+		// hierarchy round 6: an inactive holder counts (fail closed)
+		{"manager, the only senior holder is inactive", w.mgr, hs(w.exec, w.inactiveAdmin), authority.ErrInsufficientRank},
+		{"admin, an inactive junior holder", w.admin, hs(w.exec, w.inactiveExec), nil},
+		{"manager, an inactive peer holder", w.mgr, hs(w.exec, w.inactivePeer), authority.ErrInsufficientRank},
 		{"manager holds the role themself", w.mgr, hs(w.mgrHolder, w.exec), authority.ErrSelfTarget},
-		{"owner holds the role themself", w.owner, hs(w.ownerM, w.exec), authority.ErrSelfTarget},
+		// hierarchy round 6: owners are exempt from the self-holder refusal
+		{"owner holds the role themself", w.owner, hs(w.ownerM, w.exec), nil},
+		{"owner holds the role themself and another owner does too", w.owner, hs(w.ownerM, w.ownerHolder), nil},
+		{"admin holds the role themself", w.admin, hs(mkMember(t, 13, tA, true, "", mkRole(2, tA, role.SystemRoles.Tenant.Administrator, false, 10, false), w.c)), authority.ErrSelfTarget},
 		{"owner, another owner holds it", w.owner, hs(w.ownerHolder, w.exec), nil},
 		{"admin, an owner holds it", w.admin, hs(w.ownerHolder), authority.ErrInsufficientRank},
 		{"admin, a super-admin member holds it", w.admin, hs(w.superHolder), authority.ErrInsufficientRank},
@@ -147,6 +157,11 @@ func TestReLevel_KeepsReportingLinesStrictlyOrdered(t *testing.T) {
 	report := mkMember(t, 48, tA, true, boss.ID(), mkRole(33, tA, "Report", false, 60, false))
 	bossAndReport := mkMember(t, 49, tA, true, boss.ID(), execRole) // both boss and report hold the role
 
+	highR := mkRole(37, tA, "High", false, 15, false)
+	brokenUnder := mkMember(t, 50, tA, true, mgrM.ID(), highR) // rank 15 under a rank-20 manager: broken already
+	inactiveMgr := mkMember(t, 51, tA, false, "", mkRole(35, tA, "Gone manager", false, 40, false))
+	underInactiveMgr := mkMember(t, 52, tA, true, inactiveMgr.ID(), execRole)
+	inactiveReport := mkMember(t, 53, tA, false, boss.ID(), mkRole(36, tA, "Gone report", false, 60, false))
 	linked := func(ms ...authority.Member) []authority.Member { return ms }
 	h := func(holders []authority.Member, link ...authority.Member) authority.RoleHolders {
 		return authority.RoleHolders{Holders: holders, Linked: link}
@@ -164,7 +179,13 @@ func TestReLevel_KeepsReportingLinesStrictlyOrdered(t *testing.T) {
 		// the holder against their direct reports
 		{"a holder moved to or below their report breaks the line (the report is at 60)", admin.MayEditRole(execRole, 60, h(linked(boss), report)), authority.ErrRoleLevelBreaksReporting},
 		{"a holder moved just above their report holds", admin.MayEditRole(execRole, 59, h(linked(boss), report)), nil},
-		{"both ends hold the role: both move to the same level", admin.MayEditRole(execRole, 40, h(linked(boss, bossAndReport))), authority.ErrRoleLevelBreaksReporting},
+		// hierarchy round 6: only a NEWLY broken line blocks
+		{"both ends hold the role: they were equal already, so nothing is newly broken", admin.MayEditRole(execRole, 40, h(linked(boss, bossAndReport))), nil},
+		{"a line already broken and still broken does not block", admin.MayEditRole(highR, 18, h(linked(brokenUnder), mgrM)), nil},
+		{"a re-level that improves a broken line is allowed", admin.MayEditRole(highR, 25, h(linked(brokenUnder), mgrM)), nil},
+		{"an inactive manager is ignored", admin.MayEditRole(execRole, 40, h(linked(underInactiveMgr), inactiveMgr)), nil},
+		{"the same move against an active manager is refused", admin.MayEditRole(execRole, 20, h(linked(underMgr), mgrM)), authority.ErrRoleLevelBreaksReporting},
+		{"an inactive direct report is ignored", admin.MayEditRole(execRole, 60, h(linked(boss), inactiveReport)), nil},
 		// a re-level that moves nobody's rank
 		{"a no-op re-level is not checked", admin.MayEditRole(execRole, 50, h(linked(underMgr), mgrM)), nil},
 		{"the rule binds a super user too", super.MayEditRole(execRole, 20, h(linked(underMgr), mgrM)), authority.ErrRoleLevelBreaksReporting},
@@ -263,8 +284,8 @@ func TestApprove_AdminMustHoldList(t *testing.T) {
 	requester := mkMember(t, 18, tA, true, "", userR)
 	admin := mkMember(t, 13, tA, true, "", adminR)
 	mustHold := []string{
-		p.Users.Create, p.Users.Update, p.Users.UpdatePermissions, p.Users.Deactivate, p.Users.Reactivate, p.Users.Unlock,
 		p.Roles.Create, p.Roles.Update, p.Roles.Delete, p.Roles.Assign, p.Roles.Revoke, p.Roles.Approve,
+		p.Users.UpdatePermissions,
 		p.Tenants.Update, p.Tenants.UpdateSettings, p.PlatformMarketplace.Purchase, p.Orders.Payments.Record,
 		p.Meta.RequestPermissionElevation, p.Users.View, p.Roles.View, p.Tenants.View,
 		p.Crm.Leads.ReadAll, p.Tasks.WorkItems.ReadAll, p.Orders.Payments.Read, p.Orders.Invoices.Read, p.PlatformLeadCredits.Read,
@@ -278,7 +299,10 @@ func TestApprove_AdminMustHoldList(t *testing.T) {
 			decision{"an admin who does not hold " + name, bare.MayApprove(requester, name), authority.ErrGrantExceedsAuthority},
 		)
 	}
-	for _, name := range []string{p.Crm.Leads.Assign, p.Tasks.WorkItems.Reassign, p.Inventory.Stock.Read} {
+	// Hierarchy round 6 (the owner's ruling: Admin approves everything day-to-day): the
+	// user-lifecycle names left the list, so HR approvals are not owner-only.
+	for _, name := range []string{p.Crm.Leads.Assign, p.Tasks.WorkItems.Reassign, p.Inventory.Stock.Read,
+		p.Users.Create, p.Users.Update, p.Users.Deactivate, p.Users.Reactivate, p.Users.Unlock} {
 		cases = append(cases, decision{"an admin approves the day-to-day " + name + " without holding it", bare.MayApprove(requester, name), nil})
 	}
 	for _, m := range mismatches(cases) {
@@ -313,7 +337,7 @@ func TestCapApprovalExpiry(t *testing.T) {
 	mgrRole := narrow(16, authority.RankManager, []*role.Role{mgrRoleHoldsX}, nil, []string{p.Roles.Approve, x}, p.Roles.Approve, x)
 	mgrRoleAndTimed := narrow(20, authority.RankManager, []*role.Role{mgrRoleHoldsX}, []membership.GrantedOverride{timed(x, soon)}, []string{p.Roles.Approve, x}, p.Roles.Approve, x)
 	mgrBoth := narrow(17, authority.RankManager, []*role.Role{mgrR}, []membership.GrantedOverride{timed(x, soon), {Permission: permission.FromConstant(x)}}, []string{p.Roles.Approve}, p.Roles.Approve, x)
-	adminTimedMustHold := narrow(13, authority.RankAdmin, []*role.Role{adminR}, []membership.GrantedOverride{timed(p.Users.Create, soon)}, nil, p.Users.Create)
+	adminTimedMustHold := narrow(13, authority.RankAdmin, []*role.Role{adminR}, []membership.GrantedOverride{timed(p.Users.UpdatePermissions, soon)}, nil, p.Users.UpdatePermissions)
 	adminTimedDayToDay := narrow(14, authority.RankAdmin, []*role.Role{adminR}, []membership.GrantedOverride{timed(x, soon)}, nil, x)
 	mgrTimedAdminKey := narrow(19, authority.RankManager, []*role.Role{mgrR}, []membership.GrantedOverride{timed(p.Meta.TenantAdmin, soon)}, []string{p.Roles.Approve}, p.Roles.Approve, p.Meta.TenantAdmin, x)
 	super := mkActor(t, authority.ActorInput{MembershipID: membership.ID(uid(90)), TenantID: tP, IsSuperUser: true})
@@ -329,7 +353,7 @@ func TestCapApprovalExpiry(t *testing.T) {
 		{"manager holding X through a role is not capped", mgrRole.CapApprovalExpiry(req, x, later), later},
 		{"manager holding X through a role AND a timed override is not capped", mgrRoleAndTimed.CapApprovalExpiry(req, x, later), later},
 		{"manager with a permanent grant besides the timed one is not capped", mgrBoth.CapApprovalExpiry(req, x, later), later},
-		{"admin approving a must-hold name held only by a timed grant is capped", adminTimedMustHold.CapApprovalExpiry(req, p.Users.Create, later), soon},
+		{"admin approving a must-hold name held only by a timed grant is capped", adminTimedMustHold.CapApprovalExpiry(req, p.Users.UpdatePermissions, later), soon},
 		{"admin approving a day-to-day name needs no holding, so no cap", adminTimedDayToDay.CapApprovalExpiry(req, x, later), later},
 		{"a timed tenant.admin grant caps every name it implies", mgrTimedAdminKey.CapApprovalExpiry(req, x, later), soon},
 		{"super user is never capped", super.CapApprovalExpiry(reqB, x, later), later},

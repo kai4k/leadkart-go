@@ -227,6 +227,31 @@ func (f *FakeRepository) ListHoldingRole(_ context.Context, tenantID tenant.ID, 
 	return out, nil
 }
 
+// ListReportingLinks returns the managers and direct reports of ids that are not
+// in ids, any status, joined_at then id ascending (the adapter order).
+func (f *FakeRepository) ListReportingLinks(_ context.Context, tenantID tenant.ID, ids []membership.ID) ([]*membership.Membership, error) {
+	managers := make(map[membership.ID]struct{})
+	for _, id := range ids {
+		if m, ok := f.rows[id]; ok && m.TenantID() == tenantID && !m.ReportsTo().IsZero() {
+			managers[m.ReportsTo()] = struct{}{}
+		}
+	}
+	var out []*membership.Membership
+	for _, m := range f.rows {
+		if m.TenantID() != tenantID || slices.Contains(ids, m.ID()) {
+			continue
+		}
+		_, isManager := managers[m.ID()]
+		if isManager || (!m.ReportsTo().IsZero() && slices.Contains(ids, m.ReportsTo())) {
+			out = append(out, m)
+		}
+	}
+	slices.SortFunc(out, func(a, b *membership.Membership) int {
+		return cmp.Or(a.JoinedAt().Compare(b.JoinedAt()), cmp.Compare(a.ID().String(), b.ID().String()))
+	})
+	return out, nil
+}
+
 // ListForTenantPage returns the keyset-paginated slice of ACTIVE
 // Memberships per ADR 0038. Mirrors the SQL adapter's
 // ListActiveMembershipsInTenantPage:

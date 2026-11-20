@@ -233,6 +233,11 @@ const (
 	// 409 surface.
 	ErrCodeMemberRolesInconsistent = "member_roles_inconsistent"
 
+	// ErrCodePersonActiveElsewhere — reactivating a membership whose person is
+	// already active in another company (a person is active in at most one).
+	// 409 surface.
+	ErrCodePersonActiveElsewhere = "person_active_elsewhere"
+
 	// ErrCodePermissionUnknown — replace-permission-overrides request
 	// carried a permission name not in [permission.IdentityPermissions].
 	// 422 surface; offending name in message body.

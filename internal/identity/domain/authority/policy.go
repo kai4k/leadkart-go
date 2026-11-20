@@ -179,7 +179,11 @@ func (a Actor) MayAssignRole(t Member, r *role.Role) error {
 	if r.IsDeleted() {
 		return fmt.Errorf("%w: %s", role.ErrDeleted, r.Name())
 	}
-	return a.mayChangePermissions(t.tenantID, PermissionNames(r.Permissions()))
+	names := PermissionNames(r.Permissions())
+	if err := a.mayChangePermissions(t.tenantID, names); err != nil {
+		return err
+	}
+	return a.mayConfer(names)
 }
 
 // MayRevokeRole is symmetric with MayAssignRole (H3) and, when r is the
@@ -235,7 +239,80 @@ func (a Actor) MayChangeOverrides(t Member, after Overrides) error {
 	if err := a.mayChangePermissions(t.tenantID, slices.Compact(delta)); err != nil {
 		return err
 	}
+	if err := a.mayConfer(conferredByOverrides(t.overrides, after)); err != nil {
+		return err
+	}
 	return guardOwnerOverrides(t, after.Revoked)
+}
+
+// mayConfer - H3: conferring a permission on someone else is for durable
+// holders. An actor who holds a name ONLY through a time-bound grant (the fresh
+// read records that in the Actor) may not hand it to anyone through the
+// overrides route, a role's permission set, or a role assignment: the receiver
+// would keep it after the actor's own grant ended. (An approval is bounded
+// instead: [Actor.CapApprovalExpiry] ends it with the approver's grant.)
+// Removing a name is not conferring it and is not refused here.
+func (a Actor) mayConfer(names []string) error {
+	for _, n := range names {
+		if until, timed := a.holdUntil[n]; timed {
+			return fmt.Errorf("%w: %s is held only until %s; conferring it needs a durable grant", ErrGrantExceedsAuthority, n, until.UTC().Format(time.RFC3339))
+		}
+	}
+	return nil
+}
+
+// conferredByOverrides is what an overrides change hands the member: every name
+// newly granted, granted for longer (a later expiry, or permanent instead of
+// timed), or taken off the revoked list.
+func conferredByOverrides(before, after Overrides) []string {
+	was := make(map[string]time.Time, len(before.Granted))
+	for _, g := range before.Granted {
+		was[g.Name] = g.ExpiresAt
+	}
+	var out []string
+	for _, g := range after.Granted {
+		old, had := was[g.Name]
+		if !had || laterThan(g.ExpiresAt, old) {
+			out = append(out, g.Name)
+		}
+	}
+	for _, n := range before.Revoked {
+		if !slices.Contains(after.Revoked, n) {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
+// laterThan: expiry a outlasts expiry b (the zero time is "permanent").
+func laterThan(a, b time.Time) bool {
+	switch {
+	case b.IsZero():
+		return false
+	case a.IsZero():
+		return true
+	}
+	return a.After(b)
+}
+
+// Equal reports whether two override states are the same: the same granted
+// names with the same expiries and the same revoked names, in any order. A
+// change that leaves the state equal writes nothing and rotates nothing.
+func (o Overrides) Equal(other Overrides) bool {
+	if len(o.Granted) != len(other.Granted) || len(o.Revoked) != len(other.Revoked) {
+		return false
+	}
+	for _, g := range o.Granted {
+		if !slices.ContainsFunc(other.Granted, func(x Override) bool { return x.Name == g.Name && x.ExpiresAt.Equal(g.ExpiresAt) }) {
+			return false
+		}
+	}
+	for _, r := range o.Revoked {
+		if !slices.Contains(other.Revoked, r) {
+			return false
+		}
+	}
+	return true
 }
 
 // mayUnrevoke - H3: an explicit revoke is a deliberate denial, so taking a name
@@ -343,6 +420,9 @@ func (a Actor) MayCreateRole(tenantID tenant.ID, level int, perms []string, pare
 	if err := a.mayChangePermissions(tid, perms); err != nil {
 		return err
 	}
+	if err := a.mayConfer(perms); err != nil {
+		return err
+	}
 	if parent == nil {
 		return nil
 	}
@@ -415,23 +495,27 @@ func ChangesLevel(r *role.Role, newLevel int) bool {
 }
 
 // mayChangeRoleFor - H3: changing what a role confers (grant, revoke, replace
-// permissions, delete) or re-levelling it is ACTING ON EVERY ACTIVE MEMBER WHO
-// HOLDS IT. A role's level need not match its holders' ranks, so the role-level
-// checks alone let a manager confer on, or strip from, peers and seniors, and
-// let a member make a time-bound permission permanent for themself. The actor
-// must be allowed to act on each active holder ([Actor.MayActOn]: strictly
-// senior, owners over owners, exempt operators and super users); a holder who is
-// the actor is refused ErrSelfTarget (an owner editing a non-system role they
-// hold is refused too: they can drop the role first). It is the ONE place the
-// rule lives, reached through every role decision below, which all take the
-// holders as a parameter so no command can leave them out.
+// permissions, delete) or re-levelling it is ACTING ON EVERY MEMBER WHO HOLDS
+// IT, ACTIVE OR NOT. A role's level need not match its holders' ranks, so the
+// role-level checks alone let a manager confer on, or strip from, peers and
+// seniors, and let a member make a time-bound permission permanent for
+// themself. The actor must be allowed to act on each holder ([Actor.MayActOn]:
+// strictly senior, owners over owners, exempt operators and super users). An
+// inactive holder counts like any other (fail closed: reactivation does not
+// re-check what their roles now confer; whoever outranks them can still remove
+// the role from them). A holder who is the actor is refused ErrSelfTarget,
+// except for an owner (rank 0): an owner holds tenant.admin and gains nothing
+// by editing a custom role they also hold, and without the exemption a sole
+// owner could neither edit it nor drop it. It is the ONE place the rule lives,
+// reached through every role decision below, which all take the holders as a
+// parameter so no command can leave them out.
 func (a Actor) mayChangeRoleFor(h RoleHolders) error {
 	for _, m := range h.Holders {
 		if !m.valid {
 			return ErrNoAuthority
 		}
-		if !m.statusActive {
-			continue // an inactive membership is not acted on: nothing reaches a session
+		if m.id == a.membershipID && a.Rank() == RankOwner {
+			continue
 		}
 		if err := a.MayActOn(m); err != nil {
 			return err
@@ -440,13 +524,16 @@ func (a Actor) mayChangeRoleFor(h RoleHolders) error {
 	return nil
 }
 
-// reportingHolds - H3: after r moves to newLevel every reporting line that
-// touches an active holder must still be strictly ordered: the holder strictly
-// junior to their manager, and every direct report of the holder strictly
-// junior to the holder. The holder's new rank is the most senior of newLevel and
-// the levels of the other live roles they hold; members who do not hold r keep
-// their rank. Applies to every actor (it is data integrity, not authority). A
-// manager that was not loaded fails closed.
+// reportingHolds - H3: a re-level may not NEWLY break a reporting line. After r
+// moves to newLevel, every line that touches an active holder and was strictly
+// ordered before the move (holder junior to their manager; each direct report
+// junior to the holder) must still be. A line that is already broken, or whose
+// other end is inactive, does not block: ordinary commands (a role assigned or
+// revoked) can leave such lines behind, and refusing every re-level because of
+// them would lock administration. The holder's new rank is the most senior of
+// newLevel and the levels of the other live roles they hold; members who do not
+// hold r keep their rank. Applies to every actor (it is data integrity, not
+// authority). A manager that was not loaded fails closed.
 func reportingHolds(r *role.Role, newLevel int, h RoleHolders) error {
 	byID := make(map[membership.ID]Member, len(h.Holders)+len(h.Linked))
 	holder := make(map[membership.ID]struct{}, len(h.Holders))
@@ -463,6 +550,10 @@ func reportingHolds(r *role.Role, newLevel int, h RoleHolders) error {
 		}
 		return m.rank
 	}
+	// newlyBroken: strictly ordered before (junior below senior), not after.
+	newlyBroken := func(junior, senior Member) bool {
+		return junior.rank > senior.rank && after(junior) <= after(senior)
+	}
 	for _, hm := range h.Holders {
 		if !hm.valid || !hm.statusActive {
 			continue
@@ -472,12 +563,12 @@ func reportingHolds(r *role.Role, newLevel int, h RoleHolders) error {
 			if !ok {
 				return fmt.Errorf("%w: the manager of a holder was not loaded", ErrNoAuthority)
 			}
-			if after(hm) <= after(mgr) {
+			if mgr.statusActive && newlyBroken(hm, mgr) {
 				return fmt.Errorf("%w: a holder would be rank %d under their manager at rank %d", ErrRoleLevelBreaksReporting, after(hm), after(mgr))
 			}
 		}
 		for _, x := range byID {
-			if x.reportsTo == hm.id && after(x) <= after(hm) {
+			if x.reportsTo == hm.id && x.statusActive && newlyBroken(x, hm) {
 				return fmt.Errorf("%w: a holder would be rank %d over a direct report at rank %d", ErrRoleLevelBreaksReporting, after(hm), after(x))
 			}
 		}
@@ -512,10 +603,14 @@ func (a Actor) MayReplaceRolePermissions(r *role.Role, after []string, holders R
 	if err := a.mayMutateRole(r, NoLevelChange); err != nil {
 		return err
 	}
-	if err := a.mayChangePermissions(r.TenantID(), Delta(PermissionNames(r.Permissions()), after)); err != nil {
+	cur := PermissionNames(r.Permissions())
+	if err := a.mayChangePermissions(r.TenantID(), Delta(cur, after)); err != nil {
 		return err
 	}
-	return a.mayChangeRoleFor(holders)
+	if err := a.mayChangeRoleFor(holders); err != nil {
+		return err
+	}
+	return a.mayConfer(slices.DeleteFunc(slices.Clone(after), func(n string) bool { return slices.Contains(cur, n) }))
 }
 
 // MayGrantRolePermission — H3: adding name to r; a name r already holds changes nothing.
@@ -523,10 +618,17 @@ func (a Actor) MayGrantRolePermission(r *role.Role, name string, holders RoleHol
 	if err := a.mayMutateRole(r, NoLevelChange); err != nil {
 		return err
 	}
-	if err := a.mayChangePermissions(r.TenantID(), Delta(PermissionNames(r.Permissions()), append(PermissionNames(r.Permissions()), name))); err != nil {
+	cur := PermissionNames(r.Permissions())
+	if err := a.mayChangePermissions(r.TenantID(), Delta(cur, append(slices.Clone(cur), name))); err != nil {
 		return err
 	}
-	return a.mayChangeRoleFor(holders)
+	if err := a.mayChangeRoleFor(holders); err != nil {
+		return err
+	}
+	if slices.Contains(cur, name) {
+		return nil
+	}
+	return a.mayConfer([]string{name})
 }
 
 // MayRevokeRolePermission — H3: removing name from r; a name r does not hold changes nothing.
@@ -653,22 +755,23 @@ func (a Actor) mayUnlinkManager(sub, current Member) error {
 }
 
 // adminMustHold is the set of requestable permissions an Admin-tier approver
-// may approve only while holding them itself: tenant-wide authority (users,
-// roles, tenant settings, role approval), money (marketplace purchase, payment
-// and invoice access) and tenant-wide visibility (read-all, users, roles,
-// tenants, lead credits), plus the right to request elevation. Everything else requestable is
-// approvable by the Admin tier without holding it. Owners hold tenant.admin, which implies all of
-// these, so they are unaffected.
+// may approve only while holding them itself (the owner's ruling: "Admin sits
+// above all ... can approve everything", bounded so an Administrator whose owner
+// deliberately restricted the role cannot hand out what it does not hold):
+// authority over roles and permissions, tenant settings, money (marketplace
+// purchase, recording payments) and tenant-wide visibility, plus the right to
+// request elevation. Everything else requestable, notably the user-lifecycle
+// names identity.users.{create,update,deactivate,reactivate,unlock}, is
+// approvable by the Admin tier without holding it, so HR onboarding and
+// offboarding approvals are not owner-only in tenants whose Administrator holds
+// no tenant.admin. Owners hold tenant.admin, which implies all of these.
 var adminMustHold = func() map[string]struct{} {
 	p := permission.IdentityPermissions
 	names := []string{
-		p.Users.Create, p.Users.Update, p.Users.UpdatePermissions, p.Users.Deactivate, p.Users.Reactivate, p.Users.Unlock,
 		p.Roles.Create, p.Roles.Update, p.Roles.Delete, p.Roles.Assign, p.Roles.Revoke, p.Roles.Approve,
+		p.Users.UpdatePermissions,
 		p.Tenants.Update, p.Tenants.UpdateSettings,
 		p.PlatformMarketplace.Purchase, p.Orders.Payments.Record,
-		// Visibility across the tenant and the right to ask for more: an
-		// Administrator whose owner deliberately restricted the role cannot hand
-		// these out (a pristine Administrator holds all of them).
 		p.Meta.RequestPermissionElevation, p.Users.View, p.Roles.View, p.Tenants.View,
 		p.Crm.Leads.ReadAll, p.Tasks.WorkItems.ReadAll,
 		p.Orders.Payments.Read, p.Orders.Invoices.Read, p.PlatformLeadCredits.Read,

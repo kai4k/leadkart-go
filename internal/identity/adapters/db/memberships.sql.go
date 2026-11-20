@@ -473,6 +473,55 @@ func (q *Queries) ListMembershipsInCurrentTenant(ctx context.Context) ([]Identit
 	return items, nil
 }
 
+const listMembershipsLinkedTo = `-- name: ListMembershipsLinkedTo :many
+SELECT m.id, m.person_id, m.tenant_id, m.status, m.joined_at, m.left_at,
+       m.designation, m.department, m.status_message, m.reports_to,
+       m.created_by_membership_id
+FROM   identity.tenant_memberships m
+WHERE  NOT (m.id = ANY($1::uuid[]))
+  AND  (m.reports_to = ANY($1::uuid[])
+        OR m.id IN (SELECT s.reports_to FROM identity.tenant_memberships s
+                    WHERE s.id = ANY($1::uuid[]) AND s.reports_to IS NOT NULL))
+ORDER  BY m.joined_at, m.id
+`
+
+// The reporting neighbours of a set of memberships (RLS scopes them to the
+// transaction tenant): their direct managers and their direct reports, never
+// the members themselves. Powers the re-level reporting rule, which must look at
+// the holders lines and nothing else. reports_to has idx_memberships_reports_to;
+// the manager side is a primary-key lookup per listed member.
+func (q *Queries) ListMembershipsLinkedTo(ctx context.Context, dollar_1 []pgtype.UUID) ([]IdentityTenantMembership, error) {
+	rows, err := q.db.Query(ctx, listMembershipsLinkedTo, dollar_1)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []IdentityTenantMembership
+	for rows.Next() {
+		var i IdentityTenantMembership
+		if err := rows.Scan(
+			&i.ID,
+			&i.PersonID,
+			&i.TenantID,
+			&i.Status,
+			&i.JoinedAt,
+			&i.LeftAt,
+			&i.Designation,
+			&i.Department,
+			&i.StatusMessage,
+			&i.ReportsTo,
+			&i.CreatedByMembershipID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listPermissionOverridesByMembership = `-- name: ListPermissionOverridesByMembership :many
 SELECT membership_id, permission_name, kind, tenant_id, updated_at, expires_at
 FROM   identity.membership_permission_overrides

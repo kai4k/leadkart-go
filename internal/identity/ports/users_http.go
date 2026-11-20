@@ -447,6 +447,8 @@ func writeUserMutationResult(w http.ResponseWriter, log *slog.Logger, r *http.Re
 	case errors.Is(err, membership.ErrNotFound),
 		errors.Is(err, command.ErrUserNotFound):
 		writeError(w, http.StatusNotFound, ErrCodeUserNotFound, "")
+	case errors.Is(err, command.ErrPersonActiveElsewhere):
+		writeError(w, http.StatusConflict, ErrCodePersonActiveElsewhere, "this person already has an active membership in another company")
 	case errors.Is(err, membership.ErrInvalid):
 		writeError(w, http.StatusUnprocessableEntity, ErrCodeUserInvalid, err.Error())
 	default:

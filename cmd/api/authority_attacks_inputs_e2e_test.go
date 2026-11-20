@@ -224,10 +224,14 @@ func TestAttack_Inputs_BodyGamesAreRefusedAndMoveNothing(t *testing.T) {
 		if r.status >= 500 {
 			t.Errorf("[%s] %s %s: %d %s, want a 4xx", a.what, a.method, a.path, r.status, r.body)
 		}
-		// PATCH /roles/{id} is a partial update: an empty object, null or a body followed by garbage
-		// asks for no change at all and answers 204; the snapshot below proves nothing moved.
-		partialNoop := strings.HasPrefix(a.what, "edit role: ") && (strings.HasSuffix(a.what, "object missing every key") || strings.HasSuffix(a.what, ": null") || strings.HasSuffix(a.what, "trailing garbage"))
-		if r.status >= 200 && r.status < 300 && !partialNoop {
+		// PATCH /roles/{id} is a partial update, but a body that names nothing the route recognises
+		// (an empty object, null, a body followed by garbage) is refused 400 invalid_body (hierarchy
+		// round 6), not accepted as a silent no-op.
+		noFieldBody := strings.HasPrefix(a.what, "edit role: ") && (strings.HasSuffix(a.what, "object missing every key") || strings.HasSuffix(a.what, ": null") || strings.HasSuffix(a.what, "trailing garbage"))
+		if noFieldBody && (r.status != http.StatusBadRequest || errCodeOf(r) != "invalid_body") {
+			t.Errorf("[%s] %s %s: %d %s, want 400 invalid_body", a.what, a.method, a.path, r.status, r.body)
+		}
+		if r.status >= 200 && r.status < 300 {
 			t.Errorf("[%s] %s %s: %d %s, a hand-written body was accepted", a.what, a.method, a.path, r.status, r.body)
 		}
 	}

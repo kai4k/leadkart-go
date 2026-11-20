@@ -238,6 +238,11 @@ func (h ReplaceUserPermissionOverridesHandler) Handle(ctx context.Context, cmd R
 		if err := actor.MayChangeOverrides(target, after); err != nil {
 			return err
 		}
+		if after.Equal(target.Overrides()) {
+			// The same live overrides as stored: write nothing, record no event and
+			// rotate nobody's stamp (a replay could otherwise force silent refreshes).
+			return errNothingToWrite
+		}
 		// The aggregate writes exactly what the policy approved, at the one
 		// clock reading taken above.
 		if err := m.ReplacePermissionOverrides(approved, revoked, now); err != nil {

@@ -196,6 +196,11 @@ func handleUpdateRole(log *slog.Logger, a app.Application) http.Handler {
 			writeError(w, http.StatusBadRequest, ErrCodeInvalidBody, "request body is not valid JSON")
 			return
 		}
+		if req.Name == "" && req.HierarchyLevel == nil {
+			// {} , null or garbage: nothing the route recognises, so nothing to change.
+			writeError(w, http.StatusBadRequest, ErrCodeInvalidBody, "the body must carry a name or a hierarchy_level")
+			return
+		}
 		hl := -1
 		if req.HierarchyLevel != nil {
 			if !validRoleLevel(w, *req.HierarchyLevel) {

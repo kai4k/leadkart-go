@@ -742,3 +742,37 @@ func mustAssignNewRole(t *testing.T, m *membership.Membership) role.ID {
 	}
 	return r.ID()
 }
+
+// TestRefresh_PersonGloballySuspended_RevokesFamilyAndRejects: the silent refresh
+// must not mint a fresh token for a globally suspended person while the
+// suspension's cascade lags (hierarchy round 6).
+func TestRefresh_PersonGloballySuspended_RevokesFamilyAndRejects(t *testing.T) {
+	t.Parallel()
+	rig := newRefreshRig(t)
+	base := newPersonWithPassword(t, "suspended-pw")
+	p := person.UnmarshalFromDB(person.Snapshot{
+		ID: base.ID(), Email: base.Email(), FirstName: base.FirstName(), LastName: base.LastName(),
+		PasswordHash: base.PasswordHash(), SecurityStamp: base.SecurityStamp(), IsActive: true,
+		IsGloballySuspended: true, GlobalSuspensionReason: "fraud review", GloballySuspendedAt: testNow, CreatedAt: base.CreatedAt(),
+	})
+	if err := rig.persons.Add(t.Context(), p); err != nil {
+		t.Fatalf("persons.Add: %v", err)
+	}
+	tn := newTenantWithSlug(t, "susp-acme")
+	if err := rig.tenants.Add(t.Context(), tn); err != nil {
+		t.Fatalf("tenants.Add: %v", err)
+	}
+	if err := rig.memberships.Add(t.Context(), activeMembership(t, p, tn)); err != nil {
+		t.Fatalf("memberships.Add: %v", err)
+	}
+	pt := seedFamilyForPerson(t, rig, p, tn)
+
+	res, err := rig.handler.Handle(t.Context(), command.RefreshCommand{RefreshTokenPlain: pt})
+	if !errors.Is(err, command.ErrRefreshRejected) {
+		t.Fatalf("got %v (token %q), want ErrRefreshRejected for a suspended Person", err, res.AccessToken)
+	}
+	fams, err := rig.families.ListActiveForPerson(t.Context(), p.ID())
+	if err != nil || len(fams) != 0 {
+		t.Fatalf("ListActiveForPerson: %d families, %v; want the family revoked", len(fams), err)
+	}
+}

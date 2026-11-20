@@ -74,7 +74,7 @@ func TestAttack_Requests_ApprovalIsTheCeilingOfTheApprover(t *testing.T) {
 	w := newAttackWorld(t)
 	p := permission.IdentityPermissions
 	notHeld := w.submitFor(t, "exec2", p.Inventory.Catalog.Manage) // the Team Lead does not hold it
-	mustHold := w.submitFor(t, "exec2", p.Users.Deactivate)        // an Administrator must HOLD it to approve it
+	mustHold := w.submitFor(t, "exec2", p.Roles.Delete)            // an Administrator must HOLD it to approve it
 	decide := func(verb, id string) (string, any) {
 		path := "/api/v1/permission-requests/" + id + "/" + verb
 		if verb == "deny" {
@@ -100,7 +100,7 @@ func TestAttack_Requests_ApprovalIsTheCeilingOfTheApprover(t *testing.T) {
 	path, body := decide("approve", notHeld)
 	rows = append(rows, attack{who: "lead", what: "approve a name she does not hold", method: http.MethodPost, path: path, body: body,
 		status: http.StatusForbidden, code: "grant_exceeds_authority"})
-	// an Administrator without tenant.admin does not hold users.deactivate (must-hold set).
+	// an Administrator without tenant.admin does not hold roles.delete (must-hold set).
 	path, body = decide("approve", mustHold)
 	rows = append(rows, attack{who: "adminRO", what: "approve a must-hold name without holding it", method: http.MethodPost, path: path, body: body,
 		status: http.StatusForbidden, code: "grant_exceeds_authority"})

@@ -207,7 +207,7 @@ func TestPermissionRequestRepository_UpdateByID_WritersSerialiseOnTheRow(t *test
 		}
 		return m.ID()
 	}
-	requester, approver := member("race-requester@example.test"), member("race-approver@example.test")
+	requester, approver := member("race-requester-"+ids.NewV7().String()+"@example.test"), member("race-approver-"+ids.NewV7().String()+"@example.test")
 	r, err := permissionrequest.New(permissionrequest.ID(ids.NewV7().String()), tn.ID(), requester, permission.FromConstant(permission.IdentityPermissions.Crm.Leads.Read), 7, "needed for the quarterly close", testNow)
 	if err != nil {
 		t.Fatalf("permissionrequest.New: %v", err)

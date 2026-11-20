@@ -308,45 +308,27 @@ type loadedHolders struct {
 }
 
 // roleHolders loads the members that hold roleID, once per command, with a FIXED
-// number of repository reads whatever their count: the holders (ListHoldingRole),
-// one role read and one person read ([authorityFacts.projectMany]). With
-// withReporting (a re-level) it reads the tenant's members once instead
-// (ListForTenant) and also projects the managers and direct reports of the
-// holders that do not hold the role, which the reporting rule needs; the cost is
-// then one tenant-wide read, still independent of the number of holders.
+// number of repository reads whatever their count: the holders (ListHoldingRole,
+// any status), one role read and one person read ([authorityFacts.projectMany]).
+// With withReporting (a re-level) it also reads the reporting neighbours of the
+// holders that do not hold the role themselves, their managers and direct
+// reports, which the reporting rule needs, with ONE more targeted read
+// (ListReportingLinks); the cost is bounded by the holders' reporting lines
+// (their direct reports plus their distinct managers), never by the size of the
+// tenant.
 func (f authorityFacts) roleHolders(ctx context.Context, tenantID tenant.ID, roleID role.ID, now time.Time, withReporting bool) (loadedHolders, error) {
-	var holders, linked []*membership.Membership
-	if !withReporting {
-		var err error
-		if holders, err = f.memberships.ListHoldingRole(ctx, tenantID, roleID); err != nil {
-			return loadedHolders{}, fmt.Errorf("list holders: %w", err)
+	holders, err := f.memberships.ListHoldingRole(ctx, tenantID, roleID)
+	if err != nil {
+		return loadedHolders{}, fmt.Errorf("list holders: %w", err)
+	}
+	var linked []*membership.Membership
+	if withReporting && len(holders) > 0 {
+		holderIDs := make([]membership.ID, 0, len(holders))
+		for _, m := range holders {
+			holderIDs = append(holderIDs, m.ID())
 		}
-	} else {
-		all, err := f.memberships.ListForTenant(ctx, tenantID)
-		if err != nil {
-			return loadedHolders{}, fmt.Errorf("authority facts: list members: %w", err)
-		}
-		holds := func(m *membership.Membership) bool { return slices.Contains(m.RoleAssignments(), roleID) }
-		holderIDs := make(map[membership.ID]struct{})
-		managerIDs := make(map[membership.ID]struct{})
-		for _, m := range all {
-			if holds(m) {
-				holders = append(holders, m)
-				holderIDs[m.ID()] = struct{}{}
-				if !m.ReportsTo().IsZero() {
-					managerIDs[m.ReportsTo()] = struct{}{}
-				}
-			}
-		}
-		for _, m := range all {
-			if holds(m) {
-				continue
-			}
-			_, isManager := managerIDs[m.ID()]
-			_, reportsToHolder := holderIDs[m.ReportsTo()]
-			if isManager || reportsToHolder {
-				linked = append(linked, m)
-			}
+		if linked, err = f.memberships.ListReportingLinks(ctx, tenantID, holderIDs); err != nil {
+			return loadedHolders{}, fmt.Errorf("list reporting links: %w", err)
 		}
 	}
 	projected, err := f.projectMany(ctx, tenantID, slices.Concat(holders, linked), now)
@@ -457,8 +439,14 @@ func (w authorityWriter) locked(ctx context.Context, tenantID tenant.ID, actor a
 	})
 }
 
+// errNothingToWrite is what a decide function returns, after the policy said
+// yes, to say the change would leave the target exactly as it is: nothing is
+// written, no event recorded, nothing rotated, and the command succeeds.
+var errNothingToWrite = errors.New("authority: nothing to write")
+
 // updateMember loads the target under the lock, projects its facts, and lets
-// decide authorise + mutate it with the fresh actor.
+// decide authorise + mutate it with the fresh actor. A decide that returns
+// [errNothingToWrite] leaves the row unwritten (the lock on it is still held).
 func (w authorityWriter) updateMember(ctx context.Context, tenantID tenant.ID, id membership.ID, actor authority.Actor, now time.Time,
 	decide func(ctx context.Context, actor authority.Actor, m *membership.Membership, target authority.Member) error) error {
 	return w.locked(ctx, tenantID, actor, now, func(ctx context.Context, actor authority.Actor) error {
@@ -467,7 +455,10 @@ func (w authorityWriter) updateMember(ctx context.Context, tenantID tenant.ID, i
 			if err != nil {
 				return false, err
 			}
-			if err := decide(ctx, actor, m, target); err != nil {
+			switch err := decide(ctx, actor, m, target); {
+			case errors.Is(err, errNothingToWrite):
+				return false, nil
+			case err != nil:
 				return false, err
 			}
 			return true, nil

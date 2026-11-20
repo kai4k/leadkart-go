@@ -219,23 +219,9 @@ func (r *MembershipRepository) ListForTenant(
 			return fmt.Errorf("membership repo: list for tenant: %w", err)
 		}
 		// N+2 hydration per row; acceptable for this admin-path listing.
-		out = make([]*membership.Membership, 0, len(hydrated))
-		for _, row := range hydrated {
-			roleIDs, lerr := loadRoleAssignments(ctx, q, pgconv.UUIDFromPg(row.ID))
-			if lerr != nil {
-				return lerr
-			}
-			granted, revoked, lerr := loadPermissionOverrides(ctx, q, pgconv.UUIDFromPg(row.ID))
-			if lerr != nil {
-				return lerr
-			}
-			m, perr := rowToMembership(row, roleIDs, granted, revoked)
-			if perr != nil {
-				return perr
-			}
-			out = append(out, m)
-		}
-		return nil
+		var herr error
+		out, herr = hydrateMemberships(ctx, q, hydrated)
+		return herr
 	})
 	if err != nil {
 		return nil, err
@@ -268,26 +254,74 @@ func (r *MembershipRepository) GetByIDs(
 		if err != nil {
 			return fmt.Errorf("membership repo: list by ids: %w", err)
 		}
-		out = make([]*membership.Membership, 0, len(rows))
-		for _, row := range rows {
-			roleIDs, lerr := loadRoleAssignments(ctx, q, pgconv.UUIDFromPg(row.ID))
-			if lerr != nil {
-				return lerr
-			}
-			granted, revoked, lerr := loadPermissionOverrides(ctx, q, pgconv.UUIDFromPg(row.ID))
-			if lerr != nil {
-				return lerr
-			}
-			m, perr := rowToMembership(row, roleIDs, granted, revoked)
-			if perr != nil {
-				return perr
-			}
-			out = append(out, m)
-		}
-		return nil
+		var herr error
+		out, herr = hydrateMemberships(ctx, q, rows)
+		return herr
 	})
 	if err != nil {
 		return nil, err
+	}
+	return out, nil
+}
+
+// ListReportingLinks satisfies [membership.Repository]: the memberships that are
+// the manager of, or a direct report of, any of ids and are not in ids
+// themselves. Two indexed lookups (reports_to, primary key) plus the per-row
+// hydration the other list methods do; the result is bounded by the number of
+// direct reports of ids plus the number of distinct managers of ids, never by
+// the size of the tenant.
+func (r *MembershipRepository) ListReportingLinks(
+	ctx context.Context,
+	tenantID tenant.ID,
+	ids []membership.ID,
+) ([]*membership.Membership, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	uids := make([]pgtype.UUID, 0, len(ids))
+	for _, id := range ids {
+		u, err := uuid.Parse(id.String())
+		if err != nil {
+			return nil, fmt.Errorf("membership repo: parse id %q: %w", id, err)
+		}
+		uids = append(uids, pgconv.PgUUID(u))
+	}
+	var out []*membership.Membership
+	err := r.runInTxTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		q := r.q.WithTx(tx)
+		rows, err := q.ListMembershipsLinkedTo(ctx, uids)
+		if err != nil {
+			return fmt.Errorf("membership repo: list reporting links: %w", err)
+		}
+		var herr error
+		out, herr = hydrateMemberships(ctx, q, rows)
+		return herr
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// hydrateMemberships turns membership rows into aggregates: N+2 reads per row
+// (role assignments, permission overrides). The one place a list of rows is
+// hydrated.
+func hydrateMemberships(ctx context.Context, q *db.Queries, rows []db.IdentityTenantMembership) ([]*membership.Membership, error) {
+	out := make([]*membership.Membership, 0, len(rows))
+	for _, row := range rows {
+		roleIDs, err := loadRoleAssignments(ctx, q, pgconv.UUIDFromPg(row.ID))
+		if err != nil {
+			return nil, err
+		}
+		granted, revoked, err := loadPermissionOverrides(ctx, q, pgconv.UUIDFromPg(row.ID))
+		if err != nil {
+			return nil, err
+		}
+		m, err := rowToMembership(row, roleIDs, granted, revoked)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, m)
 	}
 	return out, nil
 }
@@ -311,23 +345,9 @@ func (r *MembershipRepository) ListHoldingRole(
 		if err != nil {
 			return fmt.Errorf("membership repo: list holding role: %w", err)
 		}
-		out = make([]*membership.Membership, 0, len(rows))
-		for _, row := range rows {
-			roleIDs, lerr := loadRoleAssignments(ctx, q, pgconv.UUIDFromPg(row.ID))
-			if lerr != nil {
-				return lerr
-			}
-			granted, revoked, lerr := loadPermissionOverrides(ctx, q, pgconv.UUIDFromPg(row.ID))
-			if lerr != nil {
-				return lerr
-			}
-			m, perr := rowToMembership(row, roleIDs, granted, revoked)
-			if perr != nil {
-				return perr
-			}
-			out = append(out, m)
-		}
-		return nil
+		var herr error
+		out, herr = hydrateMemberships(ctx, q, rows)
+		return herr
 	})
 	if err != nil {
 		return nil, err
@@ -365,23 +385,9 @@ func (r *MembershipRepository) ListForTenantPage(
 			return fmt.Errorf("membership repo: list-page: %w", qerr)
 		}
 		// N+2 hydration per row; page_size capped at 200 bounds the cost.
-		out = make([]*membership.Membership, 0, len(hydrated))
-		for _, row := range hydrated {
-			roleIDs, lerr := loadRoleAssignments(ctx, q, pgconv.UUIDFromPg(row.ID))
-			if lerr != nil {
-				return lerr
-			}
-			granted, revoked, lerr := loadPermissionOverrides(ctx, q, pgconv.UUIDFromPg(row.ID))
-			if lerr != nil {
-				return lerr
-			}
-			m, perr := rowToMembership(row, roleIDs, granted, revoked)
-			if perr != nil {
-				return perr
-			}
-			out = append(out, m)
-		}
-		return nil
+		var herr error
+		out, herr = hydrateMemberships(ctx, q, hydrated)
+		return herr
 	})
 	if err != nil {
 		return nil, err
@@ -434,23 +440,9 @@ func (r *MembershipRepository) ListAllForPerson(
 		if err != nil {
 			return fmt.Errorf("membership repo: list for person: %w", err)
 		}
-		out = make([]*membership.Membership, 0, len(rows))
-		for _, row := range rows {
-			roleIDs, lerr := loadRoleAssignments(ctx, q, pgconv.UUIDFromPg(row.ID))
-			if lerr != nil {
-				return lerr
-			}
-			granted, revoked, lerr := loadPermissionOverrides(ctx, q, pgconv.UUIDFromPg(row.ID))
-			if lerr != nil {
-				return lerr
-			}
-			m, perr := rowToMembership(row, roleIDs, granted, revoked)
-			if perr != nil {
-				return perr
-			}
-			out = append(out, m)
-		}
-		return nil
+		var herr error
+		out, herr = hydrateMemberships(ctx, q, rows)
+		return herr
 	})
 	if err != nil {
 		return nil, err
