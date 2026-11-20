@@ -736,6 +736,12 @@ type ErrorResponse struct {
 	Error   string `json:"error"`            // machine-parseable code
 	Message string `json:"message,omitzero"` // human-readable
 
+	// Reason refines Error where a client needs to react differently to one
+	// failure of a code (RFC 9457 extension). Today only
+	// 401 refresh_rejected carries one: "session_expired" (the session reached its
+	// absolute lifetime; sign in again). Empty otherwise.
+	Reason string `json:"reason,omitzero"`
+
 	// Field-level errors (RFC 9457 §3.1 extension; key = JSON field
 	// name, value = list of error messages). Populated by validation
 	// failures; nil for non-validation errors.

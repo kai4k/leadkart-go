@@ -194,9 +194,10 @@ paths:
             failed login attempts within [person.LockoutWindow] per
             NIST 800-63B §5.2.2 + ADR 0053. Retry-After header carries
             integer seconds until unlock (RFC 7231 §7.1.3 delta-seconds).
-            An email with no usable account (unknown, deactivated, anonymised) locks on the
-            same schedule and answers identically, so 423 does not reveal that an account exists
-            (ADR 0068 D12). While locked, even the correct password answers 423.
+            An email with no usable account (unknown, deactivated, anonymised, GLOBALLY
+            SUSPENDED) locks on the same schedule and answers identically, so 423 does not
+            reveal that an account exists (ADR 0068 D12). While locked, even the correct
+            password answers 423.
           headers:
             Retry-After:
               description: Seconds until the account unlocks.
@@ -226,6 +227,14 @@ paths:
         replay, whatever the window says (logout, password change and reset revoke
         every family of the person). The answer to a replay is indistinguishable
         from the first answer, apart from the access token's own issue time.
+
+        A session ends `Refresh.AbsoluteTTL` (default 14 days,
+        `LEADKART_REFRESH__ABSOLUTE_TTL`) after the login that opened it, however often
+        it was refreshed: the first refresh after that answers `401 refresh_rejected`
+        with `reason: session_expired` (sign in again) and the family is revoked
+        (`absolute_ttl`). `Refresh.SlidingTTL` (default 2 hours) is validated to be shorter
+        than the absolute lifetime but is not applied as an idle timeout. A globally
+        suspended person is refused (the family is revoked).
       requestBody:
         required: true
         content:
@@ -238,7 +247,9 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/LoginResponse' }
         '401':
-          description: Refresh rejected (consumed / expired / family revoked)
+          description: |
+            Refresh rejected (consumed / expired / family revoked / reuse). For a session that
+            reached its absolute lifetime the body carries `reason: session_expired`.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
@@ -285,12 +296,18 @@ paths:
       tags: [auth]
       summary: Confirm password reset using emailed token
       description: |
-        The new password is checked against the policy of the tenant of the person's active
-        membership (the default policy when there is none). The check runs after the token is
-        validated and before the token is spent: only a holder of a valid token can see a
-        `422 password_policy_violation` (field `errors.new_password`); an invalid or expired
-        token answers `400 reset_token_invalid` whatever the password is, so the answer
+        The token is validated FIRST (state and expiry), before any password work: an unknown,
+        consumed, expired, or suspended-person's token answers `400 reset_token_invalid`
+        whatever the password is (an expired pending reset is cleared), so the answer
         reveals nothing about whether an account exists or which tenant it belongs to.
+        Only then is the new password checked against the policy of the tenant of the person's
+        active membership (the default policy when there is none): only a holder of a live
+        token can see `422 password_policy_violation` (field `errors.new_password`) or
+        `422 password_breached`. A refused password leaves the token usable but counts: after
+        5 refusals the token is invalidated (`400 reset_token_invalid`), so a link cannot be
+        probed forever. There is no same-as-current check on a reset (with a valid token it
+        would be an oracle for the current password): resetting to the current password
+        succeeds.
       security: []
       requestBody:
         required: true
@@ -303,8 +320,8 @@ paths:
         '400': { $ref: '#/components/responses/BadRequest' }
         '422':
           description: |
-            `password_policy_violation` (see PasswordPolicyViolation; field `new_password`),
-            `password_breached`, or `password_same_as_current`.
+            `password_policy_violation` (see PasswordPolicyViolation; field `new_password`)
+            or `password_breached`. (`password_same_as_current` is change-password only.)
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
@@ -4403,6 +4420,12 @@ components:
         detail: { type: string, description: 'RFC 9457 §3.1.4 — human-readable detail' }
         error:  { type: string, description: 'machine-parseable code (LeadKart legacy)' }
         message: { type: string, description: 'human-readable message (LeadKart legacy)' }
+        reason:
+          type: string
+          description: |
+            Refines `error` where a client must react differently to one failure of a code
+            (RFC 9457 extension). Present only on `401 refresh_rejected` for a session that
+            reached its absolute lifetime: `session_expired`. Absent everywhere else.
         errors:
           type: object
           description: 'Field-level errors (RFC 9457 §3.1 extension). Key = JSON field name; value = list of error strings.'

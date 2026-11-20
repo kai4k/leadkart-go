@@ -11,14 +11,16 @@ INSERT INTO identity.persons (
     pending_email_change_new_email, pending_email_change_token_hash,
     pending_email_change_expires_at,
     created_by_person_id,
-    must_change_password, failed_login_count, locked_until, last_failed_login_at
+    must_change_password, failed_login_count, locked_until, last_failed_login_at,
+    password_reset_failed_attempts
 ) VALUES (
     $1, $2, $3, $4, $5, $6, $7, $8, $9,
     $10, $11, $12,
     $13, $14,
     $15, $16, $17,
     $18,
-    $19, $20, $21, $22
+    $19, $20, $21, $22,
+    $23
 );
 
 -- name: GetPersonByID :one
@@ -29,7 +31,8 @@ SELECT id, email, first_name, last_name, password_hash, security_stamp,
        pending_email_change_new_email, pending_email_change_token_hash,
        pending_email_change_expires_at,
        created_by_person_id,
-       must_change_password, failed_login_count, locked_until, last_failed_login_at
+       must_change_password, failed_login_count, locked_until, last_failed_login_at,
+       password_reset_failed_attempts
 FROM   identity.persons
 WHERE  id = $1;
 
@@ -47,7 +50,8 @@ SELECT id, email, first_name, last_name, password_hash, security_stamp,
        pending_email_change_new_email, pending_email_change_token_hash,
        pending_email_change_expires_at,
        created_by_person_id,
-       must_change_password, failed_login_count, locked_until, last_failed_login_at
+       must_change_password, failed_login_count, locked_until, last_failed_login_at,
+       password_reset_failed_attempts
 FROM   identity.persons
 WHERE  id = $1
 FOR NO KEY UPDATE;
@@ -69,7 +73,8 @@ SELECT id, email, first_name, last_name, password_hash, security_stamp,
        pending_email_change_new_email, pending_email_change_token_hash,
        pending_email_change_expires_at,
        created_by_person_id,
-       must_change_password, failed_login_count, locked_until, last_failed_login_at
+       must_change_password, failed_login_count, locked_until, last_failed_login_at,
+       password_reset_failed_attempts
 FROM   identity.persons
 WHERE  id = $1
 FOR SHARE;
@@ -85,7 +90,8 @@ SELECT id, email, first_name, last_name, password_hash, security_stamp,
        pending_email_change_new_email, pending_email_change_token_hash,
        pending_email_change_expires_at,
        created_by_person_id,
-       must_change_password, failed_login_count, locked_until, last_failed_login_at
+       must_change_password, failed_login_count, locked_until, last_failed_login_at,
+       password_reset_failed_attempts
 FROM   identity.persons
 WHERE  id = ANY(sqlc.arg(ids)::uuid[]);
 
@@ -97,7 +103,8 @@ SELECT id, email, first_name, last_name, password_hash, security_stamp,
        pending_email_change_new_email, pending_email_change_token_hash,
        pending_email_change_expires_at,
        created_by_person_id,
-       must_change_password, failed_login_count, locked_until, last_failed_login_at
+       must_change_password, failed_login_count, locked_until, last_failed_login_at,
+       password_reset_failed_attempts
 FROM   identity.persons
 WHERE  email = $1;
 
@@ -142,6 +149,7 @@ SELECT p.id                              AS person_id,
        p.failed_login_count,
        p.locked_until,
        p.last_failed_login_at,
+       p.password_reset_failed_attempts,
        m.id                              AS membership_id,
        m.tenant_id,
        m.status                          AS membership_status,
@@ -168,7 +176,8 @@ SELECT id, email, first_name, last_name, password_hash, security_stamp,
        pending_email_change_new_email, pending_email_change_token_hash,
        pending_email_change_expires_at,
        created_by_person_id,
-       must_change_password, failed_login_count, locked_until, last_failed_login_at
+       must_change_password, failed_login_count, locked_until, last_failed_login_at,
+       password_reset_failed_attempts
 FROM   identity.persons
 WHERE  password_reset_token_hash = $1;
 
@@ -181,7 +190,8 @@ SELECT id, email, first_name, last_name, password_hash, security_stamp,
        pending_email_change_new_email, pending_email_change_token_hash,
        pending_email_change_expires_at,
        created_by_person_id,
-       must_change_password, failed_login_count, locked_until, last_failed_login_at
+       must_change_password, failed_login_count, locked_until, last_failed_login_at,
+       password_reset_failed_attempts
 FROM   identity.persons
 WHERE  pending_email_change_token_hash = $1;
 
@@ -211,7 +221,8 @@ SET    email                            = $2,
        must_change_password             = $18,
        failed_login_count               = $19,
        locked_until                     = $20,
-       last_failed_login_at             = $21
+       last_failed_login_at             = $21,
+       password_reset_failed_attempts   = $22
 WHERE  id = $1;
 
 -- name: RegisterPersonSuccessfulLogin :one

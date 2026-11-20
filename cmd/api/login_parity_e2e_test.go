@@ -4,7 +4,7 @@
 //   internally; per-request HTTP uses t.Context().
 //
 // arch-test:raw-sql-justified — the account kinds a login can meet (deactivated,
-//   anonymised) have no HTTP path in this module; they are set by UPDATE, and the
+//   anonymised, suspended) have no HTTP path in this module; they are set by UPDATE, and the
 //   idempotency table is read to prove nothing was stored.
 
 // ADR 0068 D11/D12 through the REAL public chain (buildPublicChain, the constructor
@@ -107,9 +107,12 @@ func seedLoginKinds(t *testing.T, f e2eFixture) []loginKind {
 	known := f.registerOnly(t, "known")
 	deactivated := f.registerOnly(t, "deact")
 	anonymised := f.registerOnly(t, "anon")
+	suspended := f.registerOnly(t, "susp")
 	for _, q := range []struct{ sql, email string }{
 		{`UPDATE identity.persons SET is_active = false WHERE email = $1`, deactivated.Email},
 		{`UPDATE identity.persons SET is_anonymised = true, anonymised_at = now() WHERE email = $1`, anonymised.Email},
+		// A global suspension (fix round 13, item 1): the person is "active", the flag is the ban.
+		{`UPDATE identity.persons SET is_globally_suspended = true, global_suspension_reason = 'parity', globally_suspended_at = now() WHERE email = $1`, suspended.Email},
 	} {
 		if _, err := f.Pool.Exec(t.Context(), q.sql, q.email); err != nil {
 			t.Fatalf("seed kind: %v", err)
@@ -140,6 +143,7 @@ func seedLoginKinds(t *testing.T, f e2eFixture) []loginKind {
 		{"deactivated", deactivated.Email, deactivated.Password, "198.51.100.12"},
 		{"anonymised", anonymised.Email, anonymised.Password, "198.51.100.13"},
 		{"no membership", noMemberEmail, noMemberPassword, "198.51.100.14"},
+		{"suspended", suspended.Email, suspended.Password, "198.51.100.17"},
 		{"unknown", unknown, "Whatever-1-password", "198.51.100.15"},
 	}
 }

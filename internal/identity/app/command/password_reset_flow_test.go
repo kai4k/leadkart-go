@@ -309,9 +309,13 @@ func TestConfirmPasswordReset_GloballySuspendedPerson_ReturnsTokenInvalid(t *tes
 	}
 }
 
-// TestConfirmPasswordReset_SameAsCurrent_Rejected — handler-layer no-op
-// suppression (the aggregate doesn't enforce it).
-func TestConfirmPasswordReset_SameAsCurrent_Rejected(t *testing.T) {
+// TestConfirmPasswordReset_SameAsCurrent_IsAccepted — changed deliberately in fix
+// round 13 (it asserted ErrPasswordSameAsCurrent). With a valid reset token the
+// check was a silent oracle for the current password; the holder of a link must be
+// able to "reset" to the password they already have. Change-password keeps the check
+// (TestChangePassword_RejectsSameAsCurrent): its caller has just proved the current
+// password. The fuller coverage is TestConfirmPasswordReset_CurrentPassword_Succeeds_NoOracle.
+func TestConfirmPasswordReset_SameAsCurrent_IsAccepted(t *testing.T) {
 	t.Parallel()
 	const samePw = "Current-Pw-And-Also-New-9!"
 	addr, _ := email.New("alice@example.test")
@@ -324,12 +328,8 @@ func TestConfirmPasswordReset_SameAsCurrent_Rejected(t *testing.T) {
 	rawToken := repo.emailRequestedToken(t)
 
 	confirm := command.NewConfirmPasswordResetHandler(repo, refreshtokentest.NewFakeRepository(), membershiptest.NewFakeRepository(), tenanttest.NewFakeRepository(), fakeUoW{}, passwordpolicy.Noop{}, func() time.Time { return testNow })
-	err := confirm.Handle(t.Context(), command.ConfirmPasswordResetCommand{
-		RawToken:    rawToken,
-		NewPassword: samePw,
-	})
-	if !errors.Is(err, command.ErrPasswordSameAsCurrent) {
-		t.Fatalf("err = %v, want ErrPasswordSameAsCurrent", err)
+	if err := confirm.Handle(t.Context(), command.ConfirmPasswordResetCommand{RawToken: rawToken, NewPassword: samePw}); err != nil {
+		t.Fatalf("err = %v, want success", err)
 	}
 }
 

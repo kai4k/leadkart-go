@@ -129,6 +129,37 @@ func (q *Queries) GetMembershipByIDForUpdate(ctx context.Context, id pgtype.UUID
 	return i, err
 }
 
+const getSessionTarget = `-- name: GetSessionTarget :one
+SELECT m.person_id, m.tenant_id, m.status AS membership_status, t.status AS tenant_status
+FROM   identity.tenant_memberships m
+JOIN   identity.tenants t ON t.id = m.tenant_id
+WHERE  m.id = $1
+`
+
+type GetSessionTargetRow struct {
+	PersonID         pgtype.UUID
+	TenantID         pgtype.UUID
+	MembershipStatus string
+	TenantStatus     string
+}
+
+// The login's in-transaction re-check (fix round 13, item 8): the status, owner and
+// tenant of the membership a session is about to be opened for, and that tenant's
+// status, as they are NOW. A plain read - no FOR clause - so it takes no row lock and
+// adds no edge to the lock order (authority commands: tenant advisory -> membership
+// -> person; the login holds person (share) when it reads this).
+func (q *Queries) GetSessionTarget(ctx context.Context, id pgtype.UUID) (GetSessionTargetRow, error) {
+	row := q.db.QueryRow(ctx, getSessionTarget, id)
+	var i GetSessionTargetRow
+	err := row.Scan(
+		&i.PersonID,
+		&i.TenantID,
+		&i.MembershipStatus,
+		&i.TenantStatus,
+	)
+	return i, err
+}
+
 const insertMembership = `-- name: InsertMembership :exec
 
 INSERT INTO identity.tenant_memberships (

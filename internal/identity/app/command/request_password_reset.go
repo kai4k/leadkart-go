@@ -96,7 +96,7 @@ func (h RequestPasswordResetHandler) Handle(ctx context.Context, cmd RequestPass
 
 	// Anonymised / globally-suspended Persons cannot reset; surface as
 	// silent success too (avoid leaking suspension state).
-	if p.IsAnonymised() || p.IsGloballySuspended() {
+	if !p.MaySignIn() {
 		return nil
 	}
 

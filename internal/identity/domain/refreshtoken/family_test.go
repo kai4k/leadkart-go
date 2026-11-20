@@ -386,11 +386,11 @@ func TestRotateWithGrace(t *testing.T) {
 		f := newFamily(t)
 		_ = f.PullEvents()
 		first := f.CurrentToken().Hash()
-		if out, err := f.RotateWithGrace(first, hash("s1"), ttl, grace, baseTime); err != nil || out != refreshtoken.RotationIssued {
+		if out, err := rotateGrace(f, first, hash("s1"), ttl, grace, baseTime); err != nil || out != refreshtoken.RotationIssued {
 			t.Fatalf("rotate: %v %v", out, err)
 		}
 		_ = f.PullEvents()
-		out, err := f.RotateWithGrace(first, hash("s1"), ttl, grace, baseTime.Add(10*time.Second))
+		out, err := rotateGrace(f, first, hash("s1"), ttl, grace, baseTime.Add(10*time.Second))
 		if err != nil || out != refreshtoken.RotationGraceReplay {
 			t.Fatalf("replay: %v %v", out, err)
 		}
@@ -402,8 +402,8 @@ func TestRotateWithGrace(t *testing.T) {
 		t.Parallel()
 		f := newFamily(t)
 		first := f.CurrentToken().Hash()
-		_, _ = f.RotateWithGrace(first, hash("s1"), ttl, grace, baseTime)
-		if out, err := f.RotateWithGrace(first, hash("s1"), ttl, grace, baseTime.Add(grace)); err != nil || out != refreshtoken.RotationGraceReplay {
+		_, _ = rotateGrace(f, first, hash("s1"), ttl, grace, baseTime)
+		if out, err := rotateGrace(f, first, hash("s1"), ttl, grace, baseTime.Add(grace)); err != nil || out != refreshtoken.RotationGraceReplay {
 			t.Fatalf("edge: %v %v", out, err)
 		}
 	})
@@ -411,8 +411,8 @@ func TestRotateWithGrace(t *testing.T) {
 		t.Parallel()
 		f := newFamily(t)
 		first := f.CurrentToken().Hash()
-		_, _ = f.RotateWithGrace(first, hash("s1"), ttl, grace, baseTime)
-		if _, err := f.RotateWithGrace(first, hash("s1"), ttl, grace, baseTime.Add(31*time.Second)); !errors.Is(err, refreshtoken.ErrReuseDetected) || !f.IsRevoked() {
+		_, _ = rotateGrace(f, first, hash("s1"), ttl, grace, baseTime)
+		if _, err := rotateGrace(f, first, hash("s1"), ttl, grace, baseTime.Add(31*time.Second)); !errors.Is(err, refreshtoken.ErrReuseDetected) || !f.IsRevoked() {
 			t.Fatalf("want reuse+revoke, got %v revoked=%v", err, f.IsRevoked())
 		}
 	})
@@ -420,9 +420,9 @@ func TestRotateWithGrace(t *testing.T) {
 		t.Parallel()
 		f := newFamily(t)
 		first := f.CurrentToken().Hash()
-		_, _ = f.RotateWithGrace(first, hash("s1"), ttl, grace, baseTime)
-		_, _ = f.RotateWithGrace(hash("s1"), hash("s2"), ttl, grace, baseTime.Add(time.Second))
-		if _, err := f.RotateWithGrace(first, hash("s1"), ttl, grace, baseTime.Add(2*time.Second)); !errors.Is(err, refreshtoken.ErrReuseDetected) {
+		_, _ = rotateGrace(f, first, hash("s1"), ttl, grace, baseTime)
+		_, _ = rotateGrace(f, hash("s1"), hash("s2"), ttl, grace, baseTime.Add(time.Second))
+		if _, err := rotateGrace(f, first, hash("s1"), ttl, grace, baseTime.Add(2*time.Second)); !errors.Is(err, refreshtoken.ErrReuseDetected) {
 			t.Fatalf("want reuse, got %v", err)
 		}
 	})
@@ -430,10 +430,10 @@ func TestRotateWithGrace(t *testing.T) {
 		t.Parallel()
 		f := newFamily(t)
 		first := f.CurrentToken().Hash()
-		_, _ = f.RotateWithGrace(first, hash("s1"), ttl, grace, baseTime)
-		_, _ = f.RotateWithGrace(hash("s1"), hash("s2"), ttl, grace, baseTime.Add(time.Second))
+		_, _ = rotateGrace(f, first, hash("s1"), ttl, grace, baseTime)
+		_, _ = rotateGrace(f, hash("s1"), hash("s2"), ttl, grace, baseTime.Add(time.Second))
 		// the candidate a deterministic derivation would produce for the old token
-		if _, err := f.RotateWithGrace(first, hash("s1"), ttl, grace, baseTime.Add(time.Second)); !errors.Is(err, refreshtoken.ErrReuseDetected) || !f.IsRevoked() {
+		if _, err := rotateGrace(f, first, hash("s1"), ttl, grace, baseTime.Add(time.Second)); !errors.Is(err, refreshtoken.ErrReuseDetected) || !f.IsRevoked() {
 			t.Fatalf("want reuse+revoke, got %v", err)
 		}
 	})
@@ -441,8 +441,8 @@ func TestRotateWithGrace(t *testing.T) {
 		t.Parallel()
 		f := newFamily(t)
 		first := f.CurrentToken().Hash()
-		_, _ = f.RotateWithGrace(first, hash("s1"), ttl, grace, baseTime)
-		if _, err := f.RotateWithGrace(first, hash("other"), ttl, grace, baseTime.Add(time.Second)); !errors.Is(err, refreshtoken.ErrReuseDetected) {
+		_, _ = rotateGrace(f, first, hash("s1"), ttl, grace, baseTime)
+		if _, err := rotateGrace(f, first, hash("other"), ttl, grace, baseTime.Add(time.Second)); !errors.Is(err, refreshtoken.ErrReuseDetected) {
 			t.Fatalf("want reuse, got %v", err)
 		}
 	})
@@ -450,11 +450,11 @@ func TestRotateWithGrace(t *testing.T) {
 		t.Parallel()
 		f := newFamily(t)
 		first := f.CurrentToken().Hash()
-		_, _ = f.RotateWithGrace(first, hash("s1"), ttl, grace, baseTime)
+		_, _ = rotateGrace(f, first, hash("s1"), ttl, grace, baseTime)
 		if err := f.Revoke("password-changed", baseTime.Add(time.Second)); err != nil {
 			t.Fatal(err)
 		}
-		out, err := f.RotateWithGrace(first, hash("s1"), ttl, grace, baseTime.Add(2*time.Second))
+		out, err := rotateGrace(f, first, hash("s1"), ttl, grace, baseTime.Add(2*time.Second))
 		if !errors.Is(err, refreshtoken.ErrRevoked) || out == refreshtoken.RotationGraceReplay {
 			t.Fatalf("revoked family: %v %v", out, err)
 		}
@@ -466,9 +466,95 @@ func TestRotateWithGrace(t *testing.T) {
 		t.Parallel()
 		f := newFamily(t)
 		first := f.CurrentToken().Hash()
-		_, _ = f.RotateWithGrace(first, hash("s1"), ttl, 0, baseTime)
-		if _, err := f.RotateWithGrace(first, hash("s1"), ttl, 0, baseTime); !errors.Is(err, refreshtoken.ErrReuseDetected) {
+		_, _ = rotateGrace(f, first, hash("s1"), ttl, 0, baseTime)
+		if _, err := rotateGrace(f, first, hash("s1"), ttl, 0, baseTime); !errors.Is(err, refreshtoken.ErrReuseDetected) {
 			t.Fatalf("want reuse, got %v", err)
 		}
 	})
+}
+
+// rotateGrace is one presentation without an absolute lifetime (the grace
+// behaviour is what these tests are about).
+func rotateGrace(f *refreshtoken.Family, presented, candidate refreshtoken.TokenHash, ttl, grace time.Duration, now time.Time) (refreshtoken.RotationOutcome, error) {
+	return f.RotateWithGrace(refreshtoken.RotationParams{Presented: presented, Candidate: candidate, TTL: ttl, GraceWindow: grace, Now: now})
+}
+
+// ----- Absolute lifetime (fix round 13, item 12) ------------------------------
+
+func TestRotateWithGrace_AbsoluteLifetime(t *testing.T) {
+	t.Parallel()
+	const ttl, abs, grace = 14 * 24 * time.Hour, 24 * time.Hour, 30 * time.Second
+	present := func(f *refreshtoken.Family, presented, candidate refreshtoken.TokenHash, at time.Time) (refreshtoken.RotationOutcome, error) {
+		return f.RotateWithGrace(refreshtoken.RotationParams{Presented: presented, Candidate: candidate, TTL: ttl, AbsoluteTTL: abs, GraceWindow: grace, Now: at})
+	}
+	t.Run("one second before the deadline still rotates, and the new token never outlives it", func(t *testing.T) {
+		t.Parallel()
+		f := newFamily(t)
+		first := f.CurrentToken().Hash()
+		if _, err := present(f, first, hash("s1"), baseTime.Add(abs-time.Second)); err != nil {
+			t.Fatalf("rotate before the deadline: %v", err)
+		}
+		if got, want := f.CurrentToken().ExpiresAt(), baseTime.Add(abs); !got.Equal(want) {
+			t.Fatalf("minted token expires %v, want clamped to the absolute deadline %v", got, want)
+		}
+	})
+	t.Run("one second after the deadline is refused and revokes the family", func(t *testing.T) {
+		t.Parallel()
+		f := newFamily(t)
+		_ = f.PullEvents()
+		first := f.CurrentToken().Hash()
+		_, err := present(f, first, hash("s1"), baseTime.Add(abs+time.Second))
+		if !errors.Is(err, refreshtoken.ErrSessionExpired) {
+			t.Fatalf("got %v, want ErrSessionExpired", err)
+		}
+		if !f.IsRevoked() || f.RevokeReason() != refreshtoken.RevokeReasonAbsoluteTTL {
+			t.Fatalf("revoked=%v reason=%q, want revoked with absolute_ttl", f.IsRevoked(), f.RevokeReason())
+		}
+		if evs := f.PullEvents(); len(evs) != 1 {
+			t.Fatalf("%d events, want exactly the revocation", len(evs))
+		}
+	})
+	t.Run("a grace replay past the deadline is refused too", func(t *testing.T) {
+		t.Parallel()
+		f := newFamily(t)
+		first := f.CurrentToken().Hash()
+		rotatedAt := baseTime.Add(abs - 5*time.Second)
+		if _, err := present(f, first, hash("s1"), rotatedAt); err != nil {
+			t.Fatal(err)
+		}
+		// Inside the 30 s window but 10 s past the deadline.
+		if _, err := present(f, first, hash("s1"), rotatedAt.Add(15*time.Second)); !errors.Is(err, refreshtoken.ErrSessionExpired) || !f.IsRevoked() {
+			t.Fatalf("replay past the deadline: %v revoked=%v", err, f.IsRevoked())
+		}
+	})
+	t.Run("a revoked family keeps its own reason", func(t *testing.T) {
+		t.Parallel()
+		f := newFamily(t)
+		first := f.CurrentToken().Hash()
+		if err := f.Revoke("logout", baseTime.Add(time.Minute)); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := present(f, first, hash("s1"), baseTime.Add(abs+time.Hour)); !errors.Is(err, refreshtoken.ErrRevoked) || f.RevokeReason() != "logout" {
+			t.Fatalf("got %v reason %q", err, f.RevokeReason())
+		}
+	})
+}
+
+// The surviving mutant of the round-12 review: a replay inside the grace window is
+// refused when its successor (the chain head) has itself already expired. With a
+// token lifetime shorter than the window the head can be dead while the window is
+// still open.
+func TestRotateWithGrace_ExpiredHeadInsideTheWindowIsReuse(t *testing.T) {
+	t.Parallel()
+	const shortTTL, grace = 10 * time.Second, 30 * time.Second
+	f := newFamily(t)
+	first := f.CurrentToken().Hash()
+	if _, err := f.RotateWithGrace(refreshtoken.RotationParams{Presented: first, Candidate: hash("s1"), TTL: shortTTL, GraceWindow: grace, Now: baseTime}); err != nil {
+		t.Fatal(err)
+	}
+	// 20 s later: inside the 30 s window, past the successor's 10 s life.
+	_, err := f.RotateWithGrace(refreshtoken.RotationParams{Presented: first, Candidate: hash("s1"), TTL: shortTTL, GraceWindow: grace, Now: baseTime.Add(20 * time.Second)})
+	if !errors.Is(err, refreshtoken.ErrReuseDetected) || !f.IsRevoked() {
+		t.Fatalf("replay onto an expired head: %v revoked=%v, want reuse + revoked", err, f.IsRevoked())
+	}
 }

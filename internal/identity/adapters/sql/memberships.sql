@@ -22,6 +22,17 @@ SELECT id, person_id, tenant_id, status, joined_at, left_at,
 FROM   identity.tenant_memberships
 WHERE  id = $1;
 
+-- name: GetSessionTarget :one
+-- The login's in-transaction re-check (fix round 13, item 8): the status, owner and
+-- tenant of the membership a session is about to be opened for, and that tenant's
+-- status, as they are NOW. A plain read - no FOR clause - so it takes no row lock and
+-- adds no edge to the lock order (authority commands: tenant advisory -> membership
+-- -> person; the login holds person (share) when it reads this).
+SELECT m.person_id, m.tenant_id, m.status AS membership_status, t.status AS tenant_status
+FROM   identity.tenant_memberships m
+JOIN   identity.tenants t ON t.id = m.tenant_id
+WHERE  m.id = $1;
+
 -- name: ListMembershipsByIDs :many
 -- A batch read of memberships by id (RLS scopes them to the transaction's
 -- tenant); an id with no row is simply absent. Powers the approver queue, which

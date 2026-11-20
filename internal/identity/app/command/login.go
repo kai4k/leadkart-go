@@ -129,6 +129,21 @@ type AuthRouter interface {
 	// LoadMembership returns the membership fully hydrated (role assignments and
 	// permission overrides loaded) so the resolver can compute auth claims.
 	LoadMembership(ctx context.Context, id membership.ID) (*membership.Membership, error)
+	// CheckSessionTarget re-reads, in the ambient session transaction when there is
+	// one, the facts a new session depends on (the membership's status, owner and
+	// tenant, and the tenant's status) as they are NOW. A plain read: it takes no
+	// row lock, so it adds no edge to the lock order. [membership.ErrNotFound] when
+	// the membership is gone.
+	CheckSessionTarget(ctx context.Context, id membership.ID) (SessionTarget, error)
+}
+
+// SessionTarget is what [AuthRouter.CheckSessionTarget] re-reads inside the session
+// transaction: the facts a new session depends on, as they are NOW.
+type SessionTarget struct {
+	PersonID         person.ID
+	TenantID         tenant.ID
+	MembershipActive bool
+	TenantStatus     tenant.Status
 }
 
 // PhantomFailureCounter mirrors the per-account lockout for login attempts that
@@ -338,7 +353,7 @@ func (h LoginHandler) Handle(ctx context.Context, cmd LoginCommand) (LoginResult
 	if err != nil {
 		return LoginResult{}, fmt.Errorf("login: construct family: %w", err)
 	}
-	stamp, mustChange, err := h.openSession(ctx, p.ID(), v.verifiedHash, family)
+	stamp, mustChange, err := h.openSession(ctx, p.ID(), v.verifiedHash, m.ID(), family)
 	if err != nil {
 		return LoginResult{}, err
 	}
@@ -412,9 +427,20 @@ func (h LoginHandler) Handle(ctx context.Context, cmd LoginCommand) (LoginResult
 // starts after this read waits for this transaction to commit, then lists and
 // revokes the family. Either way no session survives a credential change.
 //
+// After the person read, in the same transaction, the membership and the tenant are
+// re-read ([AuthRouter.CheckSessionTarget]): a membership deactivated, moved to
+// another tenant or removed, or a tenant deleted, since the login resolved them
+// yields no session (the same 401 as a wrong password). That read takes NO lock (a
+// plain SELECT), so the lock order is unchanged: authority commands take tenant
+// advisory → membership → person; this transaction takes person (share) then the
+// NEW family row and only READS the membership, so there is no membership-after-
+// person edge. A deactivation that commits after this read is caught by its own
+// family revocation (it lists every family of the person once it commits) or, at
+// the latest, by the next refresh, which re-checks the membership.
+//
 // Lock order here: person (share) → the NEW family row. See sql/persons.sql.
 // Returns the security stamp and must-change flag read under that lock.
-func (h LoginHandler) openSession(ctx context.Context, id person.ID, verified person.PasswordHash, family *refreshtoken.Family) (stamp string, mustChange bool, err error) {
+func (h LoginHandler) openSession(ctx context.Context, id person.ID, verified person.PasswordHash, membershipID membership.ID, family *refreshtoken.Family) (stamp string, mustChange bool, err error) {
 	err = h.uow.WithinTx(ctx, pg.TxScopePlatform, func(ctx context.Context) error {
 		cur, err := h.persons.GetByIDForShare(ctx, id)
 		if err != nil {
@@ -423,7 +449,17 @@ func (h LoginHandler) openSession(ctx context.Context, id person.ID, verified pe
 			}
 			return fmt.Errorf("login: re-read person: %w", err)
 		}
-		if cur.PasswordHash() != verified || !cur.IsActive() || cur.IsAnonymised() {
+		if cur.PasswordHash() != verified || !cur.MaySignIn() {
+			return ErrInvalidCredentials
+		}
+		target, err := h.authRouter.CheckSessionTarget(ctx, membershipID)
+		if err != nil {
+			if errors.Is(err, membership.ErrNotFound) {
+				return ErrInvalidCredentials
+			}
+			return fmt.Errorf("login: re-read membership: %w", err)
+		}
+		if !target.MembershipActive || target.PersonID != id || target.TenantID != family.TenantID() || target.TenantStatus == tenant.StatusDeleted {
 			return ErrInvalidCredentials
 		}
 		if err := h.families.Add(ctx, family); err != nil {
@@ -525,13 +561,13 @@ func (h LoginHandler) resolveAndVerify(ctx context.Context, cmd LoginCommand) (v
 		return verifiedLogin{}, h.failWithoutAccount(ctx, cmd)
 	}
 
-	// Terminal Persons (deactivated, anonymised) are "no account" for login:
+	// Terminal Persons (deactivated, anonymised, globally suspended) are "no account" for login:
 	// they answer exactly like an unknown email, phantom counter included, and
 	// this check runs BEFORE the real lockout gate so a Person who was locked
 	// and then deactivated cannot answer 423 where an unknown email answers 401.
 	// Their real counter is never bumped — these are admin-controlled states,
 	// not credential attempts the user can recover from.
-	if !p.IsActive() || p.IsAnonymised() {
+	if !p.MaySignIn() {
 		return verifiedLogin{}, h.failWithoutAccount(ctx, cmd)
 	}
 

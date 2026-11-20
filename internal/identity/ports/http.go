@@ -542,6 +542,15 @@ func handleRefresh(log *slog.Logger, a app.Application) http.Handler {
 			RefreshTokenPlain: req.RefreshToken,
 		})
 		switch {
+		case errors.Is(err, command.ErrSessionExpired):
+			writeJSON(w, http.StatusUnauthorized, ErrorResponse{
+				Type:   problemType(ErrCodeRefreshRejected),
+				Title:  http.StatusText(http.StatusUnauthorized),
+				Status: http.StatusUnauthorized,
+				Error:  ErrCodeRefreshRejected,
+				Reason: RefreshReasonSessionExpired,
+			})
+			return
 		case errors.Is(err, command.ErrRefreshRejected):
 			writeError(w, http.StatusUnauthorized, ErrCodeRefreshRejected, "")
 			return

@@ -71,8 +71,9 @@ func (h PasswordResetTokenHash) Equal(other PasswordResetTokenHash) bool {
 // Microsoft Entra ID canonical password-reset semantics — the most
 // recent request wins, the previous email is silently invalidated.
 type PendingPasswordReset struct {
-	hash      PasswordResetTokenHash
-	expiresAt time.Time
+	hash           PasswordResetTokenHash
+	expiresAt      time.Time
+	failedAttempts int
 }
 
 // IsZero reports whether no reset is pending.
@@ -83,3 +84,7 @@ func (p PendingPasswordReset) Hash() PasswordResetTokenHash { return p.hash }
 
 // ExpiresAt returns the absolute expiry timestamp.
 func (p PendingPasswordReset) ExpiresAt() time.Time { return p.expiresAt }
+
+// FailedAttempts returns how many times this token was presented with a password
+// that was refused (policy or breach list) without being consumed.
+func (p PendingPasswordReset) FailedAttempts() int { return p.failedAttempts }

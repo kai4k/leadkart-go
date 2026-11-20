@@ -57,9 +57,18 @@ var ErrReuseDetected = errs.New(errs.KindUnauthenticated, "refreshtoken", "token
 // ErrRevoked is returned when rotation is attempted on a revoked family.
 var ErrRevoked = errs.New(errs.KindUnauthenticated, "refreshtoken", "family is revoked")
 
-// ErrExpired is returned when the presented token has passed its absolute
-// expiry (typically 14 days from family creation).
+// ErrExpired is returned when the presented token has passed its own expiry.
 var ErrExpired = errs.New(errs.KindUnauthenticated, "refreshtoken", "token expired")
+
+// ErrSessionExpired is returned when the family is older than its absolute
+// lifetime ([RotationParams.AbsoluteTTL], counted from the family's creation): no
+// rotation, however recent the last one, extends a session past it. The family is
+// revoked with [RevokeReasonAbsoluteTTL] as a side effect.
+var ErrSessionExpired = errs.New(errs.KindUnauthenticated, "refreshtoken", "session reached its absolute lifetime")
+
+// RevokeReasonAbsoluteTTL is the revocation reason of a family that outlived its
+// absolute lifetime.
+const RevokeReasonAbsoluteTTL = "absolute_ttl"
 
 // ----- Family aggregate -----------------------------------------------------
 
@@ -248,10 +257,32 @@ const (
 	RotationGraceReplay
 )
 
-// Rotate is the strict rotation: no grace window (see [Family.RotateWithGrace]).
+// Rotate is the strict rotation: no grace window, no absolute lifetime (see
+// [Family.RotateWithGrace]).
 func (f *Family) Rotate(presentedHash TokenHash, newHash TokenHash, ttl time.Duration, now time.Time) error {
-	_, err := f.RotateWithGrace(presentedHash, newHash, ttl, 0, now)
+	_, err := f.RotateWithGrace(RotationParams{Presented: presentedHash, Candidate: newHash, TTL: ttl, Now: now})
 	return err
+}
+
+// RotationParams is one presentation of a refresh token.
+type RotationParams struct {
+	// Presented is the hash of the token the client presented.
+	Presented TokenHash
+	// Candidate is the successor the caller derived from the presented token
+	// (deterministic, so a replay derives the hash that is already stored).
+	Candidate TokenHash
+	// TTL is the lifetime of a token minted by this rotation (never beyond the
+	// family's absolute deadline).
+	TTL time.Duration
+	// AbsoluteTTL is the lifetime of the whole family counted from its creation; 0
+	// disables the bound (domain tests only: the host always passes a value).
+	AbsoluteTTL time.Duration
+	// GraceWindow is how long after its rotation a consumed token may be presented
+	// again; 0 is the strict rotation.
+	GraceWindow time.Duration
+	// Now is the explicit instant: consumed-at, issued-at, last-used-at,
+	// revoked-at and the grace and absolute measurements all use it.
+	Now time.Time
 }
 
 // RotateWithGrace consumes the current token (presented by hash match) and
@@ -279,7 +310,8 @@ func (f *Family) Rotate(presentedHash TokenHash, newHash TokenHash, ttl time.Dur
 // `now` is the explicit instant: the consumed-at on the old token, issued-at on
 // the new token, lastUsedAt on the family and (on reuse-detect) revokedAt all
 // share it, and the grace window is measured against it.
-func (f *Family) RotateWithGrace(presentedHash, candidateSuccessor TokenHash, ttl, graceWindow time.Duration, now time.Time) (RotationOutcome, error) {
+func (f *Family) RotateWithGrace(rp RotationParams) (RotationOutcome, error) {
+	presentedHash, candidateSuccessor, ttl, graceWindow := rp.Presented, rp.Candidate, rp.TTL, rp.GraceWindow
 	if f.IsRevoked() {
 		return 0, fmt.Errorf("%w", ErrRevoked)
 	}
@@ -295,7 +327,26 @@ func (f *Family) RotateWithGrace(presentedHash, candidateSuccessor TokenHash, tt
 		return 0, fmt.Errorf("%w", ErrUnknownToken)
 	}
 
-	now = now.UTC()
+	now := rp.Now.UTC()
+	// The absolute lifetime binds EVERY presentation of a token of this family, a
+	// grace replay included: a session that reached it is over however recently it
+	// was rotated, and the family is revoked so it stays over.
+	deadline := time.Time{}
+	if rp.AbsoluteTTL > 0 {
+		deadline = f.createdAt.Add(rp.AbsoluteTTL)
+		if now.After(deadline) {
+			f.revokedAt = now
+			f.revokeReason = RevokeReasonAbsoluteTTL
+			f.recordEvent(RevokedEvent{
+				FamilyID: f.id,
+				PersonID: f.personID,
+				TenantID: f.tenantID,
+				Reason:   RevokeReasonAbsoluteTTL,
+				At:       now,
+			})
+			return 0, fmt.Errorf("%w", ErrSessionExpired)
+		}
+	}
 	if f.tokens[idx].IsConsumed() {
 		if f.isGraceReplay(idx, candidateSuccessor, graceWindow, now) {
 			return RotationGraceReplay, nil
@@ -319,12 +370,16 @@ func (f *Family) RotateWithGrace(presentedHash, candidateSuccessor TokenHash, tt
 
 	// Mint next generation.
 	nextID := TokenID(ids.NewV7().String())
+	expiresAt := now.Add(ttl)
+	if !deadline.IsZero() && expiresAt.After(deadline) {
+		expiresAt = deadline
+	}
 	next := Token{
 		id:         nextID,
 		hash:       candidateSuccessor,
 		generation: f.tokens[idx].generation + 1,
 		issuedAt:   now,
-		expiresAt:  now.Add(ttl),
+		expiresAt:  expiresAt,
 	}
 
 	// Mark presented token as consumed; cross-link to next.

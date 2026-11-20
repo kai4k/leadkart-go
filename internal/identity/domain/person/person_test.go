@@ -2,6 +2,7 @@ package person_test
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -1026,5 +1027,103 @@ func TestAnonymise_RequiresAReasonAndCarriesItOnTheEvent(t *testing.T) {
 	}
 	if ev, ok := evs[0].(person.AnonymisedEvent); !ok || ev.Reason != "data-subject erasure request #4711" {
 		t.Errorf("event = %#v, want AnonymisedEvent carrying the reason", evs[0])
+	}
+}
+
+// ----- MaySignIn (fix round 13, item 1) ---------------------------------------
+
+func TestMaySignIn_IsTheOnePredicate(t *testing.T) {
+	t.Parallel()
+	hash := mustHash(t)
+	snap := func(mutate func(*person.Snapshot)) *person.Person {
+		s := person.Snapshot{ID: newID(t), Email: mustEmail(t, "mx@example.test"), FirstName: "M", LastName: "X", PasswordHash: hash, IsActive: true, CreatedAt: testNow}
+		mutate(&s)
+		return person.UnmarshalFromDB(s)
+	}
+	for name, tc := range map[string]struct {
+		mutate func(*person.Snapshot)
+		want   bool
+	}{
+		"active":                       {func(*person.Snapshot) {}, true},
+		"deactivated":                  {func(s *person.Snapshot) { s.IsActive = false }, false},
+		"anonymised":                   {func(s *person.Snapshot) { s.IsAnonymised = true }, false},
+		"globally suspended":           {func(s *person.Snapshot) { s.IsGloballySuspended = true }, false},
+		"suspended and deactivated":    {func(s *person.Snapshot) { s.IsGloballySuspended, s.IsActive = true, false }, false},
+		"anonymised and suspended":     {func(s *person.Snapshot) { s.IsAnonymised, s.IsGloballySuspended = true, true }, false},
+		"deactivated and anonymised":   {func(s *person.Snapshot) { s.IsAnonymised, s.IsActive = true, false }, false},
+		"every terminal state at once": {func(s *person.Snapshot) { s.IsAnonymised, s.IsGloballySuspended, s.IsActive = true, true, false }, false},
+	} {
+		if got := snap(tc.mutate).MaySignIn(); got != tc.want {
+			t.Errorf("%s: MaySignIn() = %v, want %v", name, got, tc.want)
+		}
+	}
+	// The aggregate's own transitions land on the predicate.
+	p := snap(func(*person.Snapshot) {})
+	if err := p.GloballySuspend("fraud", testNow); err != nil || p.MaySignIn() {
+		t.Fatalf("after GloballySuspend: err=%v MaySignIn=%v, want false", err, p.MaySignIn())
+	}
+	if err := p.LiftGlobalSuspension(testNow); err != nil || !p.MaySignIn() {
+		t.Fatalf("after the lift: err=%v MaySignIn=%v, want true", err, p.MaySignIn())
+	}
+}
+
+// ----- pending-reset expiry and attempts (fix round 13, item 2) ----------------
+
+func resetHash(t *testing.T, s string) person.PasswordResetTokenHash {
+	t.Helper()
+	h, err := person.NewPasswordResetTokenHash(strings.Repeat(s, 40))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return h
+}
+
+func TestExpirePasswordReset(t *testing.T) {
+	t.Parallel()
+	p := newPerson(t)
+	h := resetHash(t, "a")
+	if err := p.RequestPasswordReset("", h, time.Hour, testNow); err != nil {
+		t.Fatal(err)
+	}
+	_ = p.PullEvents()
+	if p.ExpirePasswordReset(h, testNow.Add(time.Hour-time.Second)) || p.PendingPasswordReset().IsZero() {
+		t.Fatal("a live token must not be expired")
+	}
+	if p.ExpirePasswordReset(resetHash(t, "b"), testNow.Add(2*time.Hour)) || p.PendingPasswordReset().IsZero() {
+		t.Fatal("another token's expiry must not clear this one")
+	}
+	if !p.ExpirePasswordReset(h, testNow.Add(time.Hour)) || !p.PendingPasswordReset().IsZero() {
+		t.Fatal("an expired token must be cleared (at the expiry instant)")
+	}
+	if evs := p.PullEvents(); len(evs) != 1 {
+		t.Fatalf("%d events, want the one cancellation", len(evs))
+	}
+}
+
+func TestRecordRejectedPasswordResetAttempt(t *testing.T) {
+	t.Parallel()
+	p := newPerson(t)
+	h := resetHash(t, "a")
+	if err := p.RequestPasswordReset("", h, time.Hour, testNow); err != nil {
+		t.Fatal(err)
+	}
+	for i := 1; i < 3; i++ {
+		if err := p.RecordRejectedPasswordResetAttempt(h, 3, testNow); err != nil || p.PendingPasswordReset().FailedAttempts() != i {
+			t.Fatalf("attempt %d: err=%v count=%d", i, err, p.PendingPasswordReset().FailedAttempts())
+		}
+	}
+	if err := p.RecordRejectedPasswordResetAttempt(resetHash(t, "b"), 3, testNow); !errors.Is(err, person.ErrInvalid) {
+		t.Fatalf("another token: %v, want ErrInvalid", err)
+	}
+	_ = p.PullEvents()
+	if err := p.RecordRejectedPasswordResetAttempt(h, 3, testNow); err != nil || !p.PendingPasswordReset().IsZero() {
+		t.Fatalf("the limit: err=%v pending=%v, want cleared", err, !p.PendingPasswordReset().IsZero())
+	}
+	if err := p.RecordRejectedPasswordResetAttempt(h, 3, testNow); !errors.Is(err, person.ErrInvalid) {
+		t.Fatalf("no pending reset: %v, want ErrInvalid", err)
+	}
+	// A new request starts from zero.
+	if err := p.RequestPasswordReset("", h, time.Hour, testNow); err != nil || p.PendingPasswordReset().FailedAttempts() != 0 {
+		t.Fatalf("fresh request: err=%v count=%d", err, p.PendingPasswordReset().FailedAttempts())
 	}
 }

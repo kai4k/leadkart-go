@@ -21,6 +21,7 @@
 package command_test
 
 import (
+	"context"
 	"errors"
 	"io"
 	"log/slog"
@@ -284,6 +285,64 @@ func TestFlow_RegisterDuplicateActiveEmail_Blocked(t *testing.T) {
 	}
 	if count != 0 {
 		t.Fatalf("tenant B row count after failed register: got %d want 0 — pg.UnitOfWork did NOT roll back the tenant insert", count)
+	}
+}
+
+// The in-transaction re-read the login makes after the person's SHARE lock
+// (fix round 13, item 8) reports the CURRENT membership and tenant state, inside
+// the ambient transaction and outside one, and ErrNotFound for a missing membership.
+func TestFlow_CheckSessionTarget_ReadsTheCurrentState(t *testing.T) {
+	t.Parallel()
+	wired := newWiredApp(t)
+	ctx := t.Context()
+	full := ids.NewV7().String()
+	sl, _ := slug.New("sess-" + full[len(full)-8:])
+	addr, _ := email.New("sess-" + full[len(full)-8:] + "@flow.test")
+	reg, err := wired.register.Handle(ctx, command.RegisterTenantCommand{
+		Slug: sl, LegalName: "Session Target Pharma", DisplayName: "S", AdminEmail: addr,
+		AdminPassword: "Pw-Strong-Pass-2026!x", AdminFirstName: "S", AdminLastName: "T",
+	})
+	if err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	tx := pg.NewTransactor(wired.pool)
+	router := adapters.NewAuthRouterPG(wired.pool, tx)
+
+	got, err := router.CheckSessionTarget(ctx, reg.MembershipID)
+	if err != nil {
+		t.Fatalf("CheckSessionTarget: %v", err)
+	}
+	if got.PersonID != reg.PersonID || got.TenantID != reg.TenantID || !got.MembershipActive || got.TenantStatus == tenant.StatusDeleted {
+		t.Fatalf("fresh registration: %+v", got)
+	}
+
+	// Inside an ambient transaction (the session transaction's shape) it sees that
+	// transaction's own uncommitted change: it joined it rather than opening another.
+	if err := tx.WithinTx(ctx, pg.TxScopePlatform, func(ctx context.Context) error {
+		mtx, ok := pg.TxFromContext(ctx)
+		if !ok {
+			t.Fatal("no ambient transaction in WithinTx")
+		}
+		if _, err := mtx.Exec(ctx, `UPDATE identity.tenant_memberships SET status = 'inactive', left_at = now() WHERE id = $1`, reg.MembershipID.String()); err != nil {
+			return err
+		}
+		in, err := router.CheckSessionTarget(ctx, reg.MembershipID)
+		if err != nil {
+			return err
+		}
+		if in.MembershipActive {
+			t.Error("inside the transaction the deactivation must be visible (the read joined it)")
+		}
+		return errors.New("roll back")
+	}); err == nil || err.Error() != "roll back" {
+		t.Fatalf("transaction: %v", err)
+	}
+	if after, err := router.CheckSessionTarget(ctx, reg.MembershipID); err != nil || !after.MembershipActive {
+		t.Fatalf("after the rollback the membership is active again: %+v %v", after, err)
+	}
+
+	if _, err := router.CheckSessionTarget(ctx, membership.ID(ids.NewV7().String())); !errors.Is(err, membership.ErrNotFound) {
+		t.Fatalf("unknown membership: %v, want ErrNotFound", err)
 	}
 }
 

@@ -135,8 +135,20 @@ type PreviousSigningKey struct {
 	SigningKey string `koanf:"signing_key" secret:"strong"`
 }
 
-// RefreshConfig — refresh-token TTLs. Default 14d absolute / 2h sliding
-// per [security.md] "Refresh token — family pattern".
+// RefreshConfig — refresh-token lifetimes.
+//
+//   - AbsoluteTTL (default 14d, LEADKART_REFRESH__ABSOLUTE_TTL): a session ends this
+//     long after the login that opened its family, however often it was rotated
+//     (enforced in Family.RotateWithGrace from the family's created_at; a refresh
+//     past it answers 401 refresh_rejected with reason session_expired and the
+//     family is revoked with reason absolute_ttl). It is also the lifetime of each
+//     refresh token, clamped to that deadline.
+//   - SlidingTTL (default 2h): validated (positive, and AbsoluteTTL must exceed it)
+//     but NOT applied as an idle timeout: an idle session is bounded by AbsoluteTTL
+//     alone. Kept for the configuration surface; a pending ADR 0069 item asks the
+//     owner whether to enforce it or drop it.
+//   - GraceWindow (default 30s, LEADKART_REFRESH__GRACE_WINDOW, 0 = strict
+//     rotation): ADR 0068 D10.
 type RefreshConfig struct {
 	AbsoluteTTL time.Duration `koanf:"absolute_ttl"`
 	SlidingTTL  time.Duration `koanf:"sliding_ttl"`

@@ -976,3 +976,51 @@ func TestNewRefreshHandler_ShortSuccessorKeyPanics(t *testing.T) {
 	}()
 	_ = command.NewRefreshHandler(nil, nil, nil, nil, nil, nil, nil, time.Hour, time.Second, []byte("short")) // arch-test:ignore-err - test fixture setup
 }
+
+// ----- absolute lifetime (fix round 13, item 12) -------------------------------
+
+// A session ends at its absolute lifetime, counted from the login, however often it
+// was rotated: a family refreshed every day is refused on the first refresh after
+// day 14, answers 401 with the session-expired reason, and is revoked.
+func TestRefresh_AbsoluteLifetime_EndsAnOtherwiseHealthySession(t *testing.T) {
+	t.Parallel()
+	const abs = 14 * 24 * time.Hour
+	clock := testNow
+	rig := newRefreshRigGrace(t, 0, &clock)
+	fx := seedFullRefreshFixture(t, rig)
+
+	plain := fx.plaintext
+	for day := 1; day <= 13; day++ {
+		clock = testNow.Add(time.Duration(day) * 24 * time.Hour)
+		res, err := graceRefresh(t, rig, plain)
+		if err != nil {
+			t.Fatalf("day %d: %v", day, err)
+		}
+		plain = res.RefreshTokenPlain
+	}
+	// One second before the deadline: still allowed.
+	clock = testNow.Add(abs - time.Second)
+	res, err := graceRefresh(t, rig, plain)
+	if err != nil {
+		t.Fatalf("one second before the absolute lifetime: %v", err)
+	}
+	plain = res.RefreshTokenPlain
+
+	// One second after: refused, with the distinct reason, and the family is dead.
+	clock = testNow.Add(abs + time.Second)
+	_, err = graceRefresh(t, rig, plain)
+	if !errors.Is(err, command.ErrRefreshRejected) || !errors.Is(err, command.ErrSessionExpired) {
+		t.Fatalf("one second after: %v, want ErrRefreshRejected + ErrSessionExpired", err)
+	}
+	fam, gerr := rig.families.GetByTokenHash(t.Context(), refreshmintHashOf(t, plain))
+	if gerr != nil {
+		t.Fatal(gerr)
+	}
+	if !fam.IsRevoked() || fam.RevokeReason() != refreshtoken.RevokeReasonAbsoluteTTL {
+		t.Fatalf("family revoked=%v reason=%q, want revoked with absolute_ttl", fam.IsRevoked(), fam.RevokeReason())
+	}
+	// The reason is only the session's own: a plain unknown token has none.
+	if _, err := graceRefresh(t, rig, "unknown-token-plaintext"); errors.Is(err, command.ErrSessionExpired) {
+		t.Fatal("an unknown token must not answer session_expired")
+	}
+}

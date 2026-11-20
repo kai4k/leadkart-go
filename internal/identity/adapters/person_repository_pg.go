@@ -394,6 +394,7 @@ func applyPendingResetTo(p *db.InsertPersonParams, pr person.PendingPasswordRese
 	hash := pr.Hash().String()
 	p.PasswordResetTokenHash = &hash
 	p.PasswordResetExpiresAt = pgconv.PgTimestamp(pr.ExpiresAt())
+	p.PasswordResetFailedAttempts = int32(pr.FailedAttempts()) //nolint:gosec // bounded by command.PasswordResetMaxAttempts (=5)
 }
 
 func applyPendingEmailChangeTo(p *db.InsertPersonParams, ec person.PendingEmailChange) {
@@ -414,6 +415,7 @@ func applyPendingResetToUpdate(p *db.UpdatePersonParams, pr person.PendingPasswo
 	hash := pr.Hash().String()
 	p.PasswordResetTokenHash = &hash
 	p.PasswordResetExpiresAt = pgconv.PgTimestamp(pr.ExpiresAt())
+	p.PasswordResetFailedAttempts = int32(pr.FailedAttempts()) //nolint:gosec // bounded by command.PasswordResetMaxAttempts (=5)
 }
 
 func applyPendingEmailChangeToUpdate(p *db.UpdatePersonParams, ec person.PendingEmailChange) {
@@ -523,6 +525,7 @@ func rowToPerson(row db.IdentityPerson) (*person.Person, error) {
 		}
 		snap.PasswordResetTokenHash = resetHash
 		snap.PasswordResetExpiresAt = pgconv.TimeFromPg(row.PasswordResetExpiresAt)
+		snap.PasswordResetFailedAttempts = int(row.PasswordResetFailedAttempts)
 	}
 	if row.PendingEmailChangeTokenHash != nil && row.PendingEmailChangeNewEmail != nil {
 		newAddr, eerr := email.New(*row.PendingEmailChangeNewEmail)

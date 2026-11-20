@@ -35,6 +35,7 @@ SELECT p.id                              AS person_id,
        p.failed_login_count,
        p.locked_until,
        p.last_failed_login_at,
+       p.password_reset_failed_attempts,
        m.id                              AS membership_id,
        m.tenant_id,
        m.status                          AS membership_status,
@@ -75,6 +76,7 @@ type GetPersonAndActiveMembershipByEmailRow struct {
 	FailedLoginCount            int32
 	LockedUntil                 pgtype.Timestamptz
 	LastFailedLoginAt           pgtype.Timestamptz
+	PasswordResetFailedAttempts int32
 	MembershipID                pgtype.UUID
 	TenantID                    pgtype.UUID
 	MembershipStatus            *string
@@ -131,6 +133,7 @@ func (q *Queries) GetPersonAndActiveMembershipByEmail(ctx context.Context, email
 		&i.FailedLoginCount,
 		&i.LockedUntil,
 		&i.LastFailedLoginAt,
+		&i.PasswordResetFailedAttempts,
 		&i.MembershipID,
 		&i.TenantID,
 		&i.MembershipStatus,
@@ -153,7 +156,8 @@ SELECT id, email, first_name, last_name, password_hash, security_stamp,
        pending_email_change_new_email, pending_email_change_token_hash,
        pending_email_change_expires_at,
        created_by_person_id,
-       must_change_password, failed_login_count, locked_until, last_failed_login_at
+       must_change_password, failed_login_count, locked_until, last_failed_login_at,
+       password_reset_failed_attempts
 FROM   identity.persons
 WHERE  email = $1
 `
@@ -185,6 +189,7 @@ func (q *Queries) GetPersonByEmail(ctx context.Context, email string) (IdentityP
 		&i.FailedLoginCount,
 		&i.LockedUntil,
 		&i.LastFailedLoginAt,
+		&i.PasswordResetFailedAttempts,
 	)
 	return i, err
 }
@@ -197,7 +202,8 @@ SELECT id, email, first_name, last_name, password_hash, security_stamp,
        pending_email_change_new_email, pending_email_change_token_hash,
        pending_email_change_expires_at,
        created_by_person_id,
-       must_change_password, failed_login_count, locked_until, last_failed_login_at
+       must_change_password, failed_login_count, locked_until, last_failed_login_at,
+       password_reset_failed_attempts
 FROM   identity.persons
 WHERE  pending_email_change_token_hash = $1
 `
@@ -230,6 +236,7 @@ func (q *Queries) GetPersonByEmailChangeTokenHash(ctx context.Context, pendingEm
 		&i.FailedLoginCount,
 		&i.LockedUntil,
 		&i.LastFailedLoginAt,
+		&i.PasswordResetFailedAttempts,
 	)
 	return i, err
 }
@@ -242,7 +249,8 @@ SELECT id, email, first_name, last_name, password_hash, security_stamp,
        pending_email_change_new_email, pending_email_change_token_hash,
        pending_email_change_expires_at,
        created_by_person_id,
-       must_change_password, failed_login_count, locked_until, last_failed_login_at
+       must_change_password, failed_login_count, locked_until, last_failed_login_at,
+       password_reset_failed_attempts
 FROM   identity.persons
 WHERE  id = $1
 `
@@ -274,6 +282,7 @@ func (q *Queries) GetPersonByID(ctx context.Context, id pgtype.UUID) (IdentityPe
 		&i.FailedLoginCount,
 		&i.LockedUntil,
 		&i.LastFailedLoginAt,
+		&i.PasswordResetFailedAttempts,
 	)
 	return i, err
 }
@@ -286,7 +295,8 @@ SELECT id, email, first_name, last_name, password_hash, security_stamp,
        pending_email_change_new_email, pending_email_change_token_hash,
        pending_email_change_expires_at,
        created_by_person_id,
-       must_change_password, failed_login_count, locked_until, last_failed_login_at
+       must_change_password, failed_login_count, locked_until, last_failed_login_at,
+       password_reset_failed_attempts
 FROM   identity.persons
 WHERE  id = $1
 FOR SHARE
@@ -328,6 +338,7 @@ func (q *Queries) GetPersonByIDForShare(ctx context.Context, id pgtype.UUID) (Id
 		&i.FailedLoginCount,
 		&i.LockedUntil,
 		&i.LastFailedLoginAt,
+		&i.PasswordResetFailedAttempts,
 	)
 	return i, err
 }
@@ -340,7 +351,8 @@ SELECT id, email, first_name, last_name, password_hash, security_stamp,
        pending_email_change_new_email, pending_email_change_token_hash,
        pending_email_change_expires_at,
        created_by_person_id,
-       must_change_password, failed_login_count, locked_until, last_failed_login_at
+       must_change_password, failed_login_count, locked_until, last_failed_login_at,
+       password_reset_failed_attempts
 FROM   identity.persons
 WHERE  id = $1
 FOR NO KEY UPDATE
@@ -379,6 +391,7 @@ func (q *Queries) GetPersonByIDForUpdate(ctx context.Context, id pgtype.UUID) (I
 		&i.FailedLoginCount,
 		&i.LockedUntil,
 		&i.LastFailedLoginAt,
+		&i.PasswordResetFailedAttempts,
 	)
 	return i, err
 }
@@ -391,7 +404,8 @@ SELECT id, email, first_name, last_name, password_hash, security_stamp,
        pending_email_change_new_email, pending_email_change_token_hash,
        pending_email_change_expires_at,
        created_by_person_id,
-       must_change_password, failed_login_count, locked_until, last_failed_login_at
+       must_change_password, failed_login_count, locked_until, last_failed_login_at,
+       password_reset_failed_attempts
 FROM   identity.persons
 WHERE  password_reset_token_hash = $1
 `
@@ -426,6 +440,7 @@ func (q *Queries) GetPersonByPasswordResetTokenHash(ctx context.Context, passwor
 		&i.FailedLoginCount,
 		&i.LockedUntil,
 		&i.LastFailedLoginAt,
+		&i.PasswordResetFailedAttempts,
 	)
 	return i, err
 }
@@ -438,7 +453,8 @@ SELECT id, email, first_name, last_name, password_hash, security_stamp,
        pending_email_change_new_email, pending_email_change_token_hash,
        pending_email_change_expires_at,
        created_by_person_id,
-       must_change_password, failed_login_count, locked_until, last_failed_login_at
+       must_change_password, failed_login_count, locked_until, last_failed_login_at,
+       password_reset_failed_attempts
 FROM   identity.persons
 WHERE  id = ANY($1::uuid[])
 `
@@ -479,6 +495,7 @@ func (q *Queries) GetPersonsByIDs(ctx context.Context, ids []pgtype.UUID) ([]Ide
 			&i.FailedLoginCount,
 			&i.LockedUntil,
 			&i.LastFailedLoginAt,
+			&i.PasswordResetFailedAttempts,
 		); err != nil {
 			return nil, err
 		}
@@ -500,14 +517,16 @@ INSERT INTO identity.persons (
     pending_email_change_new_email, pending_email_change_token_hash,
     pending_email_change_expires_at,
     created_by_person_id,
-    must_change_password, failed_login_count, locked_until, last_failed_login_at
+    must_change_password, failed_login_count, locked_until, last_failed_login_at,
+    password_reset_failed_attempts
 ) VALUES (
     $1, $2, $3, $4, $5, $6, $7, $8, $9,
     $10, $11, $12,
     $13, $14,
     $15, $16, $17,
     $18,
-    $19, $20, $21, $22
+    $19, $20, $21, $22,
+    $23
 )
 `
 
@@ -534,6 +553,7 @@ type InsertPersonParams struct {
 	FailedLoginCount            int32
 	LockedUntil                 pgtype.Timestamptz
 	LastFailedLoginAt           pgtype.Timestamptz
+	PasswordResetFailedAttempts int32
 }
 
 // Person queries — identity.persons is non-RLS (global identity).
@@ -563,6 +583,7 @@ func (q *Queries) InsertPerson(ctx context.Context, arg InsertPersonParams) erro
 		arg.FailedLoginCount,
 		arg.LockedUntil,
 		arg.LastFailedLoginAt,
+		arg.PasswordResetFailedAttempts,
 	)
 	return err
 }
@@ -783,7 +804,8 @@ SET    email                            = $2,
        must_change_password             = $18,
        failed_login_count               = $19,
        locked_until                     = $20,
-       last_failed_login_at             = $21
+       last_failed_login_at             = $21,
+       password_reset_failed_attempts   = $22
 WHERE  id = $1
 `
 
@@ -809,6 +831,7 @@ type UpdatePersonParams struct {
 	FailedLoginCount            int32
 	LockedUntil                 pgtype.Timestamptz
 	LastFailedLoginAt           pgtype.Timestamptz
+	PasswordResetFailedAttempts int32
 }
 
 // General-purpose update covering ChangePassword + Anonymise + global
@@ -839,6 +862,7 @@ func (q *Queries) UpdatePerson(ctx context.Context, arg UpdatePersonParams) erro
 		arg.FailedLoginCount,
 		arg.LockedUntil,
 		arg.LastFailedLoginAt,
+		arg.PasswordResetFailedAttempts,
 	)
 	return err
 }

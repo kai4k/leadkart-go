@@ -46,6 +46,13 @@ type RefreshResult struct {
 // causes the family to be revoked as a side effect (RFC 9700 §4.13).
 var ErrRefreshRejected = errors.New("refresh: rejected")
 
+// ErrSessionExpired accompanies [ErrRefreshRejected] (both match errors.Is) when
+// the refused token belongs to a session that reached its absolute lifetime
+// (Refresh.AbsoluteTTL from the login): the BFF maps it to "your session ended,
+// sign in again" instead of a generic failure. It reveals nothing a holder of the
+// token does not know, and it is the only refusal the answer names.
+var ErrSessionExpired = errors.New("refresh: session reached its absolute lifetime")
+
 // ----- Handler ---------------------------------------------------------------
 
 // RefreshHandler rotates the refresh-token chain + reissues a JWT.
@@ -58,7 +65,10 @@ type RefreshHandler struct {
 	resolver    *permissions.Resolver
 	jwt         *jwt.Issuer
 	now         func() time.Time
-	refreshTTL  time.Duration
+	// refreshTTL is Refresh.AbsoluteTTL: the lifetime of one refresh token AND the
+	// absolute lifetime of a family counted from its creation (a rotation never
+	// extends a session past it, see Family.RotateWithGrace).
+	refreshTTL time.Duration
 	// graceWindow is how long a just-rotated token may be presented again and
 	// receive the same successor (zero: strict rotation, ADR 0068 D10).
 	graceWindow time.Duration
@@ -150,7 +160,14 @@ func (h RefreshHandler) Handle(ctx context.Context, cmd RefreshCommand) (Refresh
 	now := h.now()
 	var rotateErr error
 	uerr := h.families.UpdateByID(ctx, family.ID(), func(f *refreshtoken.Family) (bool, error) {
-		outcome, err := f.RotateWithGrace(presentedHash, mintPair.Hash, h.refreshTTL, h.graceWindow, now)
+		outcome, err := f.RotateWithGrace(refreshtoken.RotationParams{
+			Presented:   presentedHash,
+			Candidate:   mintPair.Hash,
+			TTL:         h.refreshTTL,
+			AbsoluteTTL: h.refreshTTL,
+			GraceWindow: h.graceWindow,
+			Now:         now,
+		})
 		if err == nil {
 			// A grace replay changed nothing: persist nothing, return the same
 			// successor. Every later step (person, membership, the family
@@ -160,7 +177,7 @@ func (h RefreshHandler) Handle(ctx context.Context, cmd RefreshCommand) (Refresh
 		// Reuse-detection mutates the aggregate (revokes); persist that
 		// mutation but propagate nothing — the outer Handle decides
 		// whether to translate to ErrRefreshRejected.
-		if errors.Is(err, refreshtoken.ErrReuseDetected) {
+		if errors.Is(err, refreshtoken.ErrReuseDetected) || errors.Is(err, refreshtoken.ErrSessionExpired) {
 			rotateErr = err
 			return true, nil
 		}
@@ -173,6 +190,9 @@ func (h RefreshHandler) Handle(ctx context.Context, cmd RefreshCommand) (Refresh
 		return RefreshResult{}, fmt.Errorf("refresh: persist rotation: %w", uerr)
 	}
 	if rotateErr != nil {
+		if errors.Is(rotateErr, refreshtoken.ErrSessionExpired) {
+			return RefreshResult{}, fmt.Errorf("%w (%w)", ErrRefreshRejected, ErrSessionExpired)
+		}
 		return RefreshResult{}, ErrRefreshRejected
 	}
 
@@ -181,7 +201,7 @@ func (h RefreshHandler) Handle(ctx context.Context, cmd RefreshCommand) (Refresh
 	if err != nil {
 		return RefreshResult{}, fmt.Errorf("refresh: resolve person: %w", err)
 	}
-	if !p.IsActive() || p.IsAnonymised() || p.IsGloballySuspended() {
+	if !p.MaySignIn() {
 		// Person was deactivated, anonymised or globally suspended AFTER family
 		// creation (a suspension's cascade may lag the next refresh): kill the
 		// family + reject, so the silent refresh never mints a token for them.

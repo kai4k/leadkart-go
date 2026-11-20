@@ -30,6 +30,11 @@ type ConfirmPasswordResetCommand struct {
 	NewPassword string
 }
 
+// PasswordResetMaxAttempts is how many times one valid reset token may be
+// presented with a password that is then refused (policy or breach list) before
+// the token is invalidated: the holder of a link cannot probe the rules forever.
+const PasswordResetMaxAttempts = 5
+
 // ErrResetTokenInvalid surfaces for ANY confirm-flow rejection: token
 // mismatch, expiry, no pending reset, terminal Person state, etc. Per
 // security.md "Password reset" + Auth0/Okta canon: the response shape
@@ -90,13 +95,19 @@ func NewConfirmPasswordResetHandler(persons person.Repository, families refresht
 //  2. Compute hash of presented plaintext.
 //  3. Lookup Person by hash. Not found → ErrResetTokenInvalid (NEVER
 //     leak which arm matched).
-//  4. Reject anonymised / globally-suspended (mirror request-side).
-//  5. Check the new password against the password policy of the tenant of the
+//  4. Reject a person who may not sign in (anonymised, deactivated, globally
+//     suspended: [person.Person.MaySignIn], the predicate every path asks).
+//  5. Validate the token's own state FIRST, before any password work: an expired
+//     token is cleared (persisted) and answers ErrResetTokenInvalid whatever the
+//     body is. Only then is the work authenticated (a valid token proves receipt of
+//     the emailed link), so only a holder of a live token reaches 6-7.
+//  6. Check the new password against the password policy of the tenant of the
 //     person's active membership (the default when there is none), size bound
-//     first. Only a holder of a valid token reaches this step, so the answer
-//     discloses nothing the token does not already prove.
-//  6. Reject same-as-current (defeats no-op).
-//  7. Run breach check on new password.
+//     first. A refusal counts toward [PasswordResetMaxAttempts] for this token.
+//     There is NO same-as-current check: with a valid token it would be a silent
+//     oracle for the current password (change-password keeps it; its caller just
+//     proved the current password).
+//  7. Run breach check on new password (a refusal counts like a policy refusal).
 //  8. Hash new password.
 //  9. UpdateByID closure: Person.ConfirmPasswordReset(presentedHash,
 //     newHash). Aggregate enforces token mismatch + expiry checks +
@@ -129,29 +140,35 @@ func (h ConfirmPasswordResetHandler) Handle(ctx context.Context, cmd ConfirmPass
 		return fmt.Errorf("confirm_password_reset: lookup: %w", err)
 	}
 
-	if p.IsAnonymised() || p.IsGloballySuspended() {
+	if !p.MaySignIn() {
 		return ErrResetTokenInvalid
 	}
-	// The token matched a pending reset: from here on this is authenticated work (the
-	// holder proved they received the emailed token), which keeps a share of the gate
-	// that anonymous load cannot take. Everything before this point costs no hashing.
+	now := h.now()
+	pending := p.PendingPasswordReset()
+	if pending.IsZero() || !pending.Hash().Equal(tokenHash) {
+		return ErrResetTokenInvalid
+	}
+	if !now.UTC().Before(pending.ExpiresAt()) {
+		// Dead before any password work. The clear is persisted so the row stops
+		// matching; a failure to persist is an infrastructure error, not an answer.
+		if err := h.persons.UpdateByID(ctx, p.ID(), func(loaded *person.Person) (bool, error) {
+			return loaded.ExpirePasswordReset(tokenHash, now), nil
+		}); err != nil {
+			return fmt.Errorf("confirm_password_reset: clear expired token: %w", err)
+		}
+		return ErrResetTokenInvalid
+	}
+	// The token matched a live pending reset: from here on this is authenticated work
+	// (the holder proved they received the emailed token), which keeps a share of the
+	// gate that anonymous load cannot take. Everything before this point costs no
+	// hashing.
 	ctx = argon2.WithAuthenticated(ctx)
 
 	// The policy, before any hashing. A person has at most one active membership
 	// (409 person_active_elsewhere), so the tenant is unambiguous; with none, or
 	// when the tenant row is gone, the default applies.
 	if err := h.checkPolicy(ctx, p.ID(), cmd.NewPassword); err != nil {
-		return err
-	}
-
-	// Reject same-as-current. The aggregate doesn't enforce this in
-	// ConfirmPasswordReset — applying the rule here keeps the audit
-	// log free of "user reset to the same password" no-ops.
-	switch err := h.gate.Verify(ctx, cmd.NewPassword, p.PasswordHash().String()); {
-	case err == nil:
-		return ErrPasswordSameAsCurrent
-	case errors.Is(err, argon2.ErrBusy) || ctx.Err() != nil:
-		return fmt.Errorf("confirm_password_reset: verify current: %w", err)
+		return h.refuse(ctx, p.ID(), tokenHash, now, err)
 	}
 
 	breached, err := h.breachChecker.IsBreached(ctx, cmd.NewPassword)
@@ -159,7 +176,7 @@ func (h ConfirmPasswordResetHandler) Handle(ctx context.Context, cmd ConfirmPass
 		return fmt.Errorf("confirm_password_reset: breach check: %w", err)
 	}
 	if breached {
-		return ErrPasswordBreached
+		return h.refuse(ctx, p.ID(), tokenHash, now, ErrPasswordBreached)
 	}
 
 	newHashStr, err := h.gate.Hash(ctx, cmd.NewPassword)
@@ -171,7 +188,6 @@ func (h ConfirmPasswordResetHandler) Handle(ctx context.Context, cmd ConfirmPass
 		return fmt.Errorf("confirm_password_reset: wrap new hash: %w", err)
 	}
 
-	now := h.now()
 	if err := h.uow.WithinTx(ctx, pg.TxScopePlatform, func(ctx context.Context) error {
 		if err := h.persons.UpdateByID(ctx, p.ID(), func(loaded *person.Person) (bool, error) {
 			if err := loaded.ConfirmPasswordReset(tokenHash, newHash, now); err != nil {
@@ -192,6 +208,26 @@ func (h ConfirmPasswordResetHandler) Handle(ctx context.Context, cmd ConfirmPass
 		return fmt.Errorf("confirm_password_reset: persist: %w", err)
 	}
 	return nil
+}
+
+// refuse counts one refused password against the token, then answers cause. The
+// count is persisted before the answer (a small transaction on the person row
+// alone, so it adds no lock-order edge). The attempt that reaches
+// [PasswordResetMaxAttempts] clears the token; a token that vanished meanwhile (a
+// newer request, a concurrent confirm) answers "invalid" instead of cause.
+func (h ConfirmPasswordResetHandler) refuse(ctx context.Context, id person.ID, tokenHash person.PasswordResetTokenHash, now time.Time, cause error) error {
+	if err := h.persons.UpdateByID(ctx, id, func(loaded *person.Person) (bool, error) {
+		if err := loaded.RecordRejectedPasswordResetAttempt(tokenHash, PasswordResetMaxAttempts, now); err != nil {
+			return false, err
+		}
+		return true, nil
+	}); err != nil {
+		if errors.Is(err, person.ErrInvalid) {
+			return ErrResetTokenInvalid
+		}
+		return fmt.Errorf("confirm_password_reset: count refused attempt: %w", err)
+	}
+	return cause
 }
 
 // policyFor returns the password policy of the tenant of the person's active

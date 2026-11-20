@@ -71,6 +71,26 @@ type fakeAuthRouter struct {
 	}
 	resolveErr error
 	loads      atomic.Int32
+	// tenantStatus is what CheckSessionTarget reports for every membership's tenant
+	// (the zero value, StatusUnknown, is "not deleted"); a test sets it to simulate a
+	// tenant that changed between the verify and the session insert.
+	tenantStatus tenant.Status
+}
+
+// CheckSessionTarget is the in-transaction re-read of the facts a session depends
+// on: the seeded membership's CURRENT status, owner and tenant, and tenantStatus.
+func (f *fakeAuthRouter) CheckSessionTarget(_ context.Context, id membership.ID) (command.SessionTarget, error) {
+	for _, row := range f.byEmail {
+		if row.m != nil && row.m.ID() == id {
+			return command.SessionTarget{
+				PersonID:         row.m.PersonID(),
+				TenantID:         row.m.TenantID(),
+				MembershipActive: row.m.Status() == membership.StatusActive,
+				TenantStatus:     f.tenantStatus,
+			}, nil
+		}
+	}
+	return command.SessionTarget{}, membership.ErrNotFound
 }
 
 func (f *fakeAuthRouter) ResolveByEmail(_ context.Context, e email.Address) (*person.Person, *membership.Membership, error) {

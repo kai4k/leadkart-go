@@ -170,6 +170,7 @@ type Snapshot struct {
 	GloballySuspendedAt         time.Time
 	PasswordResetTokenHash      PasswordResetTokenHash
 	PasswordResetExpiresAt      time.Time
+	PasswordResetFailedAttempts int
 	PendingEmailChangeNewEmail  email.Address
 	PendingEmailChangeHash      EmailChangeTokenHash
 	PendingEmailChangeExpiresAt time.Time
@@ -205,8 +206,9 @@ func UnmarshalFromDB(s Snapshot) *Person {
 	}
 	if !s.PasswordResetTokenHash.IsZero() {
 		p.pendingPasswordReset = PendingPasswordReset{
-			hash:      s.PasswordResetTokenHash,
-			expiresAt: s.PasswordResetExpiresAt,
+			hash:           s.PasswordResetTokenHash,
+			expiresAt:      s.PasswordResetExpiresAt,
+			failedAttempts: s.PasswordResetFailedAttempts,
 		}
 	}
 	if !s.PendingEmailChangeHash.IsZero() {
@@ -247,6 +249,16 @@ func (p *Person) IsActive() bool { return p.isActive }
 // IsAnonymised reports whether DPDP/GDPR right-to-erasure has been applied.
 // Anonymised Persons are terminal — never re-activate.
 func (p *Person) IsAnonymised() bool { return p.isAnonymised }
+
+// MaySignIn is THE predicate for "this person may be given a session": active,
+// not anonymised and not globally suspended. Login (before the verify and again
+// under the session insert's lock), refresh, the password-reset request and the
+// reset confirm all ask it, so a state added here cannot be forgotten on one path
+// (a suspended person once signed in again for exactly that reason). Everything
+// that answers "no" does so exactly like an unknown email on the anonymous routes.
+func (p *Person) MaySignIn() bool {
+	return p.isActive && !p.isAnonymised && !p.isGloballySuspended
+}
 
 // CreatedAt returns the registration timestamp.
 func (p *Person) CreatedAt() time.Time { return p.createdAt }
@@ -545,6 +557,41 @@ func (p *Person) ConfirmPasswordReset(presentedHash PasswordResetTokenHash, newH
 		PersonID: p.id,
 		At:       now,
 	})
+	return nil
+}
+
+// ExpirePasswordReset clears the pending reset when it is the one `presented`
+// names and its expiry has passed (now >= expiresAt), recording a cancellation
+// audit event with reason "expired". Reports whether it cleared anything: false for
+// a reset that is not pending, is another token, or has not expired. The confirm
+// flow calls it BEFORE any password work, so an expired link does nothing and costs
+// nothing.
+func (p *Person) ExpirePasswordReset(presented PasswordResetTokenHash, now time.Time) bool {
+	pr := p.pendingPasswordReset
+	if pr.IsZero() || !pr.hash.Equal(presented) || now.UTC().Before(pr.expiresAt) {
+		return false
+	}
+	p.pendingPasswordReset = PendingPasswordReset{}
+	p.recordEvent(PasswordResetCancelledEvent{PersonID: p.id, Reason: "expired", At: now.UTC()})
+	return true
+}
+
+// RecordRejectedPasswordResetAttempt counts one presentation of the pending reset
+// token with a password that was refused (the policy, the breach list) without
+// consuming the token. The token stays usable until maxAttempts rejections; the
+// maxAttempts-th clears it (cancellation event, reason "too_many_attempts"), so a
+// holder of the link cannot probe the password rules forever. Rejected with
+// [ErrInvalid] when no reset is pending or the pending one is not `presented`
+// (a newer request replaced it meanwhile), so the caller answers "token invalid".
+func (p *Person) RecordRejectedPasswordResetAttempt(presented PasswordResetTokenHash, maxAttempts int, now time.Time) error {
+	if p.pendingPasswordReset.IsZero() || !p.pendingPasswordReset.hash.Equal(presented) {
+		return fmt.Errorf("%w: no such pending password reset", ErrInvalid)
+	}
+	p.pendingPasswordReset.failedAttempts++
+	if p.pendingPasswordReset.failedAttempts >= maxAttempts {
+		p.pendingPasswordReset = PendingPasswordReset{}
+		p.recordEvent(PasswordResetCancelledEvent{PersonID: p.id, Reason: "too_many_attempts", At: now.UTC()})
+	}
 	return nil
 }
 

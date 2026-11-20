@@ -13,8 +13,10 @@ import (
 	"github.com/leadkart/leadkart-go/internal/common/pg"
 	"github.com/leadkart/leadkart-go/internal/common/pgconv"
 	"github.com/leadkart/leadkart-go/internal/identity/adapters/db"
+	"github.com/leadkart/leadkart-go/internal/identity/app/command"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
 
 // AuthRouterPG is the Postgres-backed authentication-routing adapter.
@@ -98,6 +100,7 @@ func (r *AuthRouterPG) ResolveByEmail(
 			FailedLoginCount:            row.FailedLoginCount,
 			LockedUntil:                 row.LockedUntil,
 			LastFailedLoginAt:           row.LastFailedLoginAt,
+			PasswordResetFailedAttempts: row.PasswordResetFailedAttempts,
 		}
 		hp, err := rowToPerson(personRow)
 		if err != nil {
@@ -138,6 +141,53 @@ func (r *AuthRouterPG) ResolveByEmail(
 		return nil, nil, err
 	}
 	return p, m, nil
+}
+
+// CheckSessionTarget satisfies the consumer-defined `command.AuthRouter`: one plain
+// SELECT (no row lock) of the membership's current status, owner and tenant and of
+// that tenant's status. It joins the ambient session transaction when there is one
+// (the login calls it after the person's SHARE read, in the same transaction, so it
+// does not take a second pooled connection while holding the first), else it runs
+// in its own platform-scoped one.
+func (r *AuthRouterPG) CheckSessionTarget(ctx context.Context, id membership.ID) (command.SessionTarget, error) {
+	uid, err := uuid.Parse(id.String())
+	if err != nil {
+		return command.SessionTarget{}, fmt.Errorf("auth router: parse membership id %q: %w", id, err)
+	}
+	var out command.SessionTarget
+	run := func(ctx context.Context, tx pgx.Tx) error {
+		row, err := r.q.WithTx(tx).GetSessionTarget(ctx, pgconv.PgUUID(uid))
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return membership.ErrNotFound
+			}
+			return fmt.Errorf("auth router: get session target: %w", err)
+		}
+		ms, err := membership.ParseStatus(row.MembershipStatus)
+		if err != nil {
+			return fmt.Errorf("auth router: session target membership status: %w", err)
+		}
+		ts, err := tenant.ParseStatus(row.TenantStatus)
+		if err != nil {
+			return fmt.Errorf("auth router: session target tenant status: %w", err)
+		}
+		out = command.SessionTarget{
+			PersonID:         person.ID(pgconv.UUIDFromPg(row.PersonID).String()),
+			TenantID:         tenant.ID(pgconv.UUIDFromPg(row.TenantID).String()),
+			MembershipActive: ms == membership.StatusActive,
+			TenantStatus:     ts,
+		}
+		return nil
+	}
+	if tx, ok := pg.TxFromContext(ctx); ok {
+		err = run(ctx, tx)
+	} else {
+		err = r.tx.WithinTxPgx(ctx, pg.TxScopePlatform, run)
+	}
+	if err != nil {
+		return command.SessionTarget{}, err
+	}
+	return out, nil
 }
 
 // LoadMembership satisfies the consumer-defined `command.AuthRouter`: the fully

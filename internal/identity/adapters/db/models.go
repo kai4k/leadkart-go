@@ -255,6 +255,8 @@ type IdentityPerson struct {
 	LockedUntil pgtype.Timestamptz
 	// Timestamp of the most recent failed login; drives the sliding-window counter reset. NULL when failed_login_count = 0.
 	LastFailedLoginAt pgtype.Timestamptz
+	// Refused presentations of the pending password-reset token (policy / breach list); the token is invalidated at command.PasswordResetMaxAttempts. 0 when no reset is pending.
+	PasswordResetFailedAttempts int32
 }
 
 // Per-handler inbox dedup. (message_id, handler_name) PK guarantees at-most-once-per-handler delivery.

@@ -201,6 +201,7 @@ func TestLogin_InactiveAndAnonymisedPersons_LockLikeAnUnknownEmail(t *testing.T)
 	for name, mk := range map[string]func(*testing.T) *person.Person{
 		"inactive":   func(t *testing.T) *person.Person { return newPersonInactive(t, "pw") },
 		"anonymised": newPersonAnonymised,
+		"suspended":  func(t *testing.T) *person.Person { return newPersonSuspended(t, "pw") },
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -307,6 +308,10 @@ func TestLogin_EveryFailureBranchRunsExactlyOneVerify_RealHashOnlyForWrongPasswo
 		}, "WRONG", true},
 		{"inactive", func(t *testing.T) rig { return realAccount(t, newPersonInactive(t, plain), nil) }, plain, false},
 		{"anonymised", func(t *testing.T) rig { return realAccount(t, newPersonAnonymised(t), nil) }, plain, false},
+		{"globally suspended", func(t *testing.T) rig {
+			p := newPersonSuspended(t, plain)
+			return realAccount(t, p, someMembership(t, p))
+		}, plain, false},
 		{"unknown email", func(t *testing.T) rig {
 			return rig{router: &fakeAuthRouter{}, repo: persontestRepo(t)}
 		}, plain, false},

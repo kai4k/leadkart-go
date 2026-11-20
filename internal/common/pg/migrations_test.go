@@ -1078,3 +1078,57 @@ func TestLoginPhantomFailuresMigration_UpDownUpAndGrants(t *testing.T) {
 		t.Fatalf("after re-up: table=%v dml=%v, want both", exists(), dml())
 	}
 }
+
+// resetAttemptsMigration is the version of 20261120000005_persons_password_reset_failed_attempts.sql.
+const resetAttemptsMigration = 20261120000005
+
+// The refused-reset-attempt counter is a NOT NULL column defaulting to 0 that
+// the application role can read and write through its table grant, is dropped by
+// Down and recreated by Up, and the start-up privilege check passes with it.
+func TestPersonsResetAttemptsMigration_UpDownUpAndGrants(t *testing.T) {
+	dsn := startPostgres(t)
+	db, err := sql.Open("pgx", dsn)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer db.Close()
+	createAppRole(t, db)
+	applyMigrations(t, dsn)
+
+	column := func() bool {
+		return hasPriv(t, db, `SELECT EXISTS (SELECT 1 FROM information_schema.columns
+			WHERE table_schema = 'identity' AND table_name = 'persons' AND column_name = 'password_reset_failed_attempts'
+			  AND is_nullable = 'NO' AND column_default = '0')`)
+	}
+	write := func() bool {
+		return hasPriv(t, db, `SELECT has_column_privilege('leadkart_app', 'identity.persons', 'password_reset_failed_attempts', 'UPDATE')
+			AND has_column_privilege('leadkart_app', 'identity.persons', 'password_reset_failed_attempts', 'SELECT')`)
+	}
+	if !column() || !write() {
+		t.Fatalf("after up: column(not null, default 0)=%v app read+write=%v, want both", column(), write())
+	}
+	if err := pg.VerifyApplicationPrivileges(t.Context(), appRoleConn(t, dsn), pg.PrivilegeCheck{Production: true, Logger: discardLogger()}); err != nil {
+		t.Fatalf("start-up privilege check with the new column: %v", err)
+	}
+
+	gdb, err := goose.OpenDBWithDriver("pgx", dsn)
+	if err != nil {
+		t.Fatalf("goose open: %v", err)
+	}
+	defer gdb.Close()
+	if err := pg.EnsureGooseDialect(); err != nil {
+		t.Fatalf("dialect: %v", err)
+	}
+	if err := goose.DownToContext(t.Context(), gdb, migrationsDir(t), resetAttemptsMigration-1); err != nil {
+		t.Fatalf("goose down: %v", err)
+	}
+	if column() {
+		t.Fatal("the column survived the down migration")
+	}
+	if err := goose.UpContext(t.Context(), gdb, migrationsDir(t)); err != nil {
+		t.Fatalf("goose up again: %v", err)
+	}
+	if !column() || !write() {
+		t.Fatalf("after re-up: column=%v app read+write=%v, want both", column(), write())
+	}
+}

@@ -54,6 +54,12 @@ const (
 	// reuse-detection signal to attacker holding stolen token.
 	ErrCodeRefreshRejected = "refresh_rejected"
 
+	// RefreshReasonSessionExpired is the `reason` of a refresh_rejected answer for
+	// a session that reached its absolute lifetime (Refresh.AbsoluteTTL from the
+	// login): the web shows "your session ended, sign in again". The only arm of
+	// refresh_rejected that names itself; the others stay indistinguishable.
+	RefreshReasonSessionExpired = "session_expired"
+
 	// ErrCodeInternalError — generic 500 surface. Detail goes to
 	// slog.ErrorContext server-side; HTTP body stays empty to avoid
 	// leaking stack traces / SQL fragments to clients.
