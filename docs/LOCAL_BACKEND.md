@@ -202,6 +202,14 @@ The script is not idempotent (the tenant slug and the emails exist after one run
 it again, reset first (section 9). Through the API the manager can list users (`GET /users`
 is `200`); the ordinary user gets `403` there.
 
+**Who may add users (owner ruling 2026-11-21):** only the tenant owner (and an Administrator) can
+`POST /users`; the manager and the ordinary user get `403` there, even though the manager can list
+users. Create more accounts as `owner@acme.local` (as the script does), as the SuperAdmin through
+`X-Tenant-Id`, or through an impersonation session. Nothing in this stack's database needs
+repair: the personas above never held the permission (the seeded Sales Manager and Sales
+Executive do not carry `identity.users.create`; had it been granted by hand, the migration would remove it), and the `migrate` step applies the cleaning
+migration `20261121000001` on the next start, which finds nothing to change here.
+
 **Personas for the web's real-backend smoke test (development-only credentials):**
 
 | Persona | Email | Password (after the forced change) | Rank / tier |
