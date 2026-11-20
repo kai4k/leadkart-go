@@ -66,7 +66,7 @@ func TestRequestPermissionElevation_HappyPath(t *testing.T) {
 		Actor:                 submitterActor(t),
 		TenantID:              requester.TenantID(),
 		RequesterMembershipID: requester.ID(),
-		Permission:            permission.FromConstant(permission.IdentityPermissions.Users.Create),
+		Permission:            permission.FromConstant(permission.IdentityPermissions.Users.Update),
 		Reason:                "need to onboard 5 users for monthly sales drive",
 	})
 	if err != nil {
@@ -90,7 +90,7 @@ func TestRequestPermissionElevation_NonExistentMembership(t *testing.T) {
 		Actor:                 submitterActor(t),
 		TenantID:              tenant.ID(ids.NewV7().String()),
 		RequesterMembershipID: membership.ID(ids.NewV7().String()),
-		Permission:            permission.FromConstant(permission.IdentityPermissions.Users.Create),
+		Permission:            permission.FromConstant(permission.IdentityPermissions.Users.Update),
 		Reason:                "need to onboard 5 users for monthly sales drive",
 	})
 	if !errors.Is(err, command.ErrUserNotFound) {
@@ -111,7 +111,7 @@ func TestRequestPermissionElevation_RejectsDuplicatePending(t *testing.T) {
 		Actor:                 submitterActor(t),
 		TenantID:              requester.TenantID(),
 		RequesterMembershipID: requester.ID(),
-		Permission:            permission.FromConstant(permission.IdentityPermissions.Users.Create),
+		Permission:            permission.FromConstant(permission.IdentityPermissions.Users.Update),
 		Reason:                "need to onboard 5 users for monthly sales drive",
 	}
 	if _, err := h.Handle(t.Context(), cmd); err != nil {
@@ -142,7 +142,7 @@ func TestCancelPermissionRequest_OnlyRequesterCanCancel(t *testing.T) {
 		Actor:                 submitterActor(t),
 		TenantID:              requester.TenantID(),
 		RequesterMembershipID: requester.ID(),
-		Permission:            permission.FromConstant(permission.IdentityPermissions.Users.Create),
+		Permission:            permission.FromConstant(permission.IdentityPermissions.Users.Update),
 		Reason:                "need to onboard 5 users for monthly sales drive",
 	})
 
@@ -259,7 +259,7 @@ func TestRequestPermissionElevation_InputValidation(t *testing.T) {
 	t.Parallel()
 	tid := tenant.ID(ids.NewV7().String())
 	mid := membership.ID(ids.NewV7().String())
-	perm := permission.FromConstant(permission.IdentityPermissions.Users.Create)
+	perm := permission.FromConstant(permission.IdentityPermissions.Users.Update)
 
 	cases := []struct {
 		name string
@@ -327,7 +327,7 @@ func TestRequestPermissionElevation_DefaultDurationApplied(t *testing.T) {
 		Actor:                 submitterActor(t),
 		TenantID:              requester.TenantID(),
 		RequesterMembershipID: requester.ID(),
-		Permission:            permission.FromConstant(permission.IdentityPermissions.Users.Create),
+		Permission:            permission.FromConstant(permission.IdentityPermissions.Users.Update),
 		// DurationDays omitted → handler MUST apply DefaultDurationDays.
 		Reason: "need to onboard 5 users for monthly sales drive",
 	})
@@ -357,7 +357,7 @@ func TestRequestPermissionElevation_LoadRequester_NonNotFoundError_Wrapped(t *te
 		Actor:                 submitterActor(t),
 		TenantID:              tenant.ID(ids.NewV7().String()),
 		RequesterMembershipID: membership.ID(ids.NewV7().String()),
-		Permission:            permission.FromConstant(permission.IdentityPermissions.Users.Create),
+		Permission:            permission.FromConstant(permission.IdentityPermissions.Users.Update),
 		Reason:                "need to onboard 5 users for monthly sales drive",
 	})
 	if !errors.Is(err, errB2Permreq) {
@@ -384,7 +384,7 @@ func TestRequestPermissionElevation_AggregateInvariantPropagated(t *testing.T) {
 		Actor:                 submitterActor(t),
 		TenantID:              requester.TenantID(),
 		RequesterMembershipID: requester.ID(),
-		Permission:            permission.FromConstant(permission.IdentityPermissions.Users.Create),
+		Permission:            permission.FromConstant(permission.IdentityPermissions.Users.Update),
 		Reason:                "short", // < MinReasonLength=10
 	})
 	if !errors.Is(err, permissionrequest.ErrInvalidRequest) {
@@ -407,7 +407,7 @@ func TestRequestPermissionElevation_AddPersist_NonPendingExistsError_Wrapped(t *
 		Actor:                 submitterActor(t),
 		TenantID:              requester.TenantID(),
 		RequesterMembershipID: requester.ID(),
-		Permission:            permission.FromConstant(permission.IdentityPermissions.Users.Create),
+		Permission:            permission.FromConstant(permission.IdentityPermissions.Users.Update),
 		Reason:                "need to onboard 5 users for monthly sales drive",
 	})
 	if !errors.Is(err, errB2Permreq) {
@@ -489,7 +489,7 @@ func TestCancelPermissionRequest_NonPending(t *testing.T) {
 		Actor:                 submitterActor(t),
 		TenantID:              requester.TenantID(),
 		RequesterMembershipID: requester.ID(),
-		Permission:            permission.FromConstant(permission.IdentityPermissions.Users.Create),
+		Permission:            permission.FromConstant(permission.IdentityPermissions.Users.Update),
 		Reason:                "need to onboard 5 users for monthly sales drive",
 	})
 
@@ -524,7 +524,7 @@ func TestCancelPermissionRequest_TakesTheTenantAuthorityLock(t *testing.T) {
 	submitH := command.NewRequestPermissionElevationHandler(reqs, mems, fixedTimeFn(), func() permissionrequest.ID { return permissionrequest.ID(ids.NewV7().String()) })
 	out, _ := submitH.Handle(t.Context(), command.RequestPermissionElevationCommand{
 		Actor: submitterActor(t), TenantID: requester.TenantID(), RequesterMembershipID: requester.ID(),
-		Permission: permission.FromConstant(permission.IdentityPermissions.Users.Create),
+		Permission: permission.FromConstant(permission.IdentityPermissions.Users.Update),
 		Reason:     "need to onboard 5 users for monthly sales drive",
 	})
 	lock := &fakeAuthorityLock{}

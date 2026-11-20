@@ -146,6 +146,12 @@ func (h RequestPermissionElevationHandler) Handle(
 	if cmd.Actor.IsImpersonation() {
 		return RequestPermissionElevationResult{}, authority.ErrImpersonationNotAllowed
 	}
+	// Owner ruling 2026-11-21: an admin-tier-only name (identity.users.create) is
+	// asked for only at the Administrator tier or above; the approval re-checks the
+	// requester's tier on fresh facts.
+	if err := cmd.Actor.MayRequest(cmd.Permission.Name()); err != nil {
+		return RequestPermissionElevationResult{}, err
+	}
 	duration := cmd.DurationDays
 	if duration == 0 {
 		duration = permissionrequest.DefaultDurationDays

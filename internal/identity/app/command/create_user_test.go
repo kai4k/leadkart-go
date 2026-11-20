@@ -114,9 +114,9 @@ func TestCreateUser_RejectsZeroTenantID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("email.New: %v", err)
 	}
-	h := command.NewCreateUserHandler(fakeUoW{}, seedPersonRepo(t, nil), newFakeMembershipRepo(), defaultTenantRepo(t), func() time.Time { return testNow }, testNewPersonID, testNewMembershipID)
+	h := newCreateUserHandlerT(fakeUoW{}, seedPersonRepo(t, nil), newFakeMembershipRepo(), defaultTenantRepo(t), func() time.Time { return testNow }, testNewPersonID, testNewMembershipID)
 
-	_, err = h.Handle(t.Context(), command.CreateUserCommand{
+	_, err = h.Handle(t.Context(), command.CreateUserCommand{Actor: superActor(t),
 		TenantID: tenant.ID(""),
 		Email:    addr,
 		Password: "Tr0ub4dor&3-fresh-passphrase",
@@ -129,9 +129,9 @@ func TestCreateUser_RejectsZeroTenantID(t *testing.T) {
 // TestCreateUser_RejectsZeroEmail — guard-in-depth on the email VO.
 func TestCreateUser_RejectsZeroEmail(t *testing.T) {
 	t.Parallel()
-	h := command.NewCreateUserHandler(fakeUoW{}, seedPersonRepo(t, nil), newFakeMembershipRepo(), defaultTenantRepo(t), func() time.Time { return testNow }, testNewPersonID, testNewMembershipID)
+	h := newCreateUserHandlerT(fakeUoW{}, seedPersonRepo(t, nil), newFakeMembershipRepo(), defaultTenantRepo(t), func() time.Time { return testNow }, testNewPersonID, testNewMembershipID)
 
-	_, err := h.Handle(t.Context(), command.CreateUserCommand{
+	_, err := h.Handle(t.Context(), command.CreateUserCommand{Actor: superActor(t),
 		TenantID: tenant.ID("11111111-1111-1111-1111-111111111111"),
 		Email:    email.Address{},
 		Password: "Tr0ub4dor&3-fresh-passphrase",
@@ -151,9 +151,9 @@ func TestCreateUser_BrandNewPerson_HappyPath(t *testing.T) {
 	}
 	persons := seedPersonRepo(t, nil)
 	members := newFakeMembershipRepo()
-	h := command.NewCreateUserHandler(fakeUoW{}, persons, members, defaultTenantRepo(t), func() time.Time { return testNow }, testNewPersonID, testNewMembershipID)
+	h := newCreateUserHandlerT(fakeUoW{}, persons, members, defaultTenantRepo(t), func() time.Time { return testNow }, testNewPersonID, testNewMembershipID)
 
-	res, err := h.Handle(t.Context(), command.CreateUserCommand{
+	res, err := h.Handle(t.Context(), command.CreateUserCommand{Actor: superActor(t),
 		TenantID:  tenant.ID("11111111-1111-1111-1111-111111111111"),
 		Email:     addr,
 		Password:  "Tr0ub4dor&3-fresh-passphrase",
@@ -182,8 +182,8 @@ func TestCreateUser_RejectsEmptyPassword(t *testing.T) {
 	if err != nil {
 		t.Fatalf("email.New: %v", err)
 	}
-	h := command.NewCreateUserHandler(fakeUoW{}, seedPersonRepo(t, nil), newFakeMembershipRepo(), defaultTenantRepo(t), func() time.Time { return testNow }, testNewPersonID, testNewMembershipID)
-	_, err = h.Handle(t.Context(), command.CreateUserCommand{
+	h := newCreateUserHandlerT(fakeUoW{}, seedPersonRepo(t, nil), newFakeMembershipRepo(), defaultTenantRepo(t), func() time.Time { return testNow }, testNewPersonID, testNewMembershipID)
+	_, err = h.Handle(t.Context(), command.CreateUserCommand{Actor: superActor(t),
 		TenantID: tenant.ID("11111111-1111-1111-1111-111111111111"),
 		Email:    addr,
 		Password: "", // empty
@@ -209,8 +209,8 @@ func TestCreateUser_PersonsGetByEmail_NonNotFoundError_Wrapped(t *testing.T) {
 		FakeRepository: persontest.NewFakeRepository(),
 		getByEmailErr:  errBoom,
 	}
-	h := command.NewCreateUserHandler(fakeUoW{}, persons, newFakeMembershipRepo(), defaultTenantRepo(t), func() time.Time { return testNow }, testNewPersonID, testNewMembershipID)
-	_, err = h.Handle(t.Context(), command.CreateUserCommand{
+	h := newCreateUserHandlerT(fakeUoW{}, persons, newFakeMembershipRepo(), defaultTenantRepo(t), func() time.Time { return testNow }, testNewPersonID, testNewMembershipID)
+	_, err = h.Handle(t.Context(), command.CreateUserCommand{Actor: superActor(t),
 		TenantID: tenant.ID("11111111-1111-1111-1111-111111111111"),
 		Email:    addr,
 		Password: "Tr0ub4dor&3-strong",
@@ -237,8 +237,8 @@ func TestCreateUser_PreExistingPerson_ActiveLookupError_Wrapped(t *testing.T) {
 		getActiveErr:   errBoom,
 	}
 
-	h := command.NewCreateUserHandler(fakeUoW{}, persons, members, defaultTenantRepo(t), func() time.Time { return testNow }, testNewPersonID, testNewMembershipID)
-	_, err = h.Handle(t.Context(), command.CreateUserCommand{
+	h := newCreateUserHandlerT(fakeUoW{}, persons, members, defaultTenantRepo(t), func() time.Time { return testNow }, testNewPersonID, testNewMembershipID)
+	_, err = h.Handle(t.Context(), command.CreateUserCommand{Actor: superActor(t),
 		TenantID: tenant.ID("11111111-1111-1111-1111-111111111111"),
 		Email:    addr,
 		Password: "Tr0ub4dor&3-strong",
@@ -276,8 +276,8 @@ func TestCreateUser_PreExistingPerson_ActiveMembershipFound_RejectsAsHasActive(t
 		t.Fatalf("seed Add: %v", addErr)
 	}
 
-	h := command.NewCreateUserHandler(fakeUoW{}, persons, members, defaultTenantRepo(t), func() time.Time { return testNow }, testNewPersonID, testNewMembershipID)
-	_, err = h.Handle(t.Context(), command.CreateUserCommand{
+	h := newCreateUserHandlerT(fakeUoW{}, persons, members, defaultTenantRepo(t), func() time.Time { return testNow }, testNewPersonID, testNewMembershipID)
+	_, err = h.Handle(t.Context(), command.CreateUserCommand{Actor: superActor(t),
 		TenantID: tenant.ID("11111111-1111-1111-1111-111111111111"),
 		Email:    addr,
 		Password: "Tr0ub4dor&3-strong",
@@ -295,8 +295,8 @@ func TestCreateUser_FindOrCreatePerson_AggregateError_Wrapped(t *testing.T) {
 	if err != nil {
 		t.Fatalf("email.New: %v", err)
 	}
-	h := command.NewCreateUserHandler(fakeUoW{}, seedPersonRepo(t, nil), newFakeMembershipRepo(), defaultTenantRepo(t), func() time.Time { return testNow }, testNewPersonID, testNewMembershipID)
-	_, err = h.Handle(t.Context(), command.CreateUserCommand{
+	h := newCreateUserHandlerT(fakeUoW{}, seedPersonRepo(t, nil), newFakeMembershipRepo(), defaultTenantRepo(t), func() time.Time { return testNow }, testNewPersonID, testNewMembershipID)
+	_, err = h.Handle(t.Context(), command.CreateUserCommand{Actor: superActor(t),
 		TenantID:  tenant.ID("11111111-1111-1111-1111-111111111111"),
 		Email:     addr,
 		Password:  "Tr0ub4dor&3-strong",
@@ -320,8 +320,8 @@ func TestCreateUser_PersonsAdd_EmailTakenRace_TranslatedToHasActive(t *testing.T
 		FakeRepository: persontest.NewFakeRepository(),
 		addErr:         person.ErrEmailTaken,
 	}
-	h := command.NewCreateUserHandler(fakeUoW{}, persons, newFakeMembershipRepo(), defaultTenantRepo(t), func() time.Time { return testNow }, testNewPersonID, testNewMembershipID)
-	_, err = h.Handle(t.Context(), command.CreateUserCommand{
+	h := newCreateUserHandlerT(fakeUoW{}, persons, newFakeMembershipRepo(), defaultTenantRepo(t), func() time.Time { return testNow }, testNewPersonID, testNewMembershipID)
+	_, err = h.Handle(t.Context(), command.CreateUserCommand{Actor: superActor(t),
 		TenantID:  tenant.ID("11111111-1111-1111-1111-111111111111"),
 		Email:     addr,
 		Password:  "Tr0ub4dor&3-strong",
@@ -346,8 +346,8 @@ func TestCreateUser_MembershipsAdd_AlreadyActiveRace_TranslatedToHasActive(t *te
 		FakeRepository: membershiptest.NewFakeRepository(),
 		addErr:         membership.ErrAlreadyActive,
 	}
-	h := command.NewCreateUserHandler(fakeUoW{}, seedPersonRepo(t, nil), members, defaultTenantRepo(t), func() time.Time { return testNow }, testNewPersonID, testNewMembershipID)
-	_, err = h.Handle(t.Context(), command.CreateUserCommand{
+	h := newCreateUserHandlerT(fakeUoW{}, seedPersonRepo(t, nil), members, defaultTenantRepo(t), func() time.Time { return testNow }, testNewPersonID, testNewMembershipID)
+	_, err = h.Handle(t.Context(), command.CreateUserCommand{Actor: superActor(t),
 		TenantID:  tenant.ID("11111111-1111-1111-1111-111111111111"),
 		Email:     addr,
 		Password:  "Tr0ub4dor&3-strong",
@@ -371,8 +371,8 @@ func TestCreateUser_PreExistingPerson_NoActiveMembership_AttachesAndReports(t *t
 	persons := seedPersonRepo(t, existing)
 	members := newFakeMembershipRepo() // no Active Memberships seeded
 
-	h := command.NewCreateUserHandler(fakeUoW{}, persons, members, defaultTenantRepo(t), func() time.Time { return testNow }, testNewPersonID, testNewMembershipID)
-	res, err := h.Handle(t.Context(), command.CreateUserCommand{
+	h := newCreateUserHandlerT(fakeUoW{}, persons, members, defaultTenantRepo(t), func() time.Time { return testNow }, testNewPersonID, testNewMembershipID)
+	res, err := h.Handle(t.Context(), command.CreateUserCommand{Actor: superActor(t),
 		TenantID:  tenant.ID("11111111-1111-1111-1111-111111111111"),
 		Email:     addr,
 		Password:  "Tr0ub4dor&3-strong",

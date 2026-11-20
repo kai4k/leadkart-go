@@ -180,6 +180,9 @@ func (a Actor) MayAssignRole(t Member, r *role.Role) error {
 		return fmt.Errorf("%w: %s", role.ErrDeleted, r.Name())
 	}
 	names := PermissionNames(r.Permissions())
+	if err := roleMayContain(r, names); err != nil {
+		return err
+	}
 	if err := a.mayChangePermissions(t.tenantID, names); err != nil {
 		return err
 	}
@@ -232,6 +235,9 @@ func (a Actor) MayChangeOverrides(t Member, after Overrides) error {
 		return err
 	}
 	if err := a.mayUnrevoke(t, after.Revoked); err != nil {
+		return err
+	}
+	if err := tierRefusal(t.Rank(), "a member", grantedNames(after)); err != nil {
 		return err
 	}
 	delta := slices.Concat(grantDelta(t.overrides.Granted, after.Granted), Delta(t.overrides.Revoked, after.Revoked))
@@ -431,6 +437,9 @@ func (a Actor) MayCreateRole(tenantID tenant.ID, level int, perms []string, pare
 	if !validLevel(level) {
 		return fmt.Errorf("%w: level %d is outside [%d, %d]", ErrInsufficientRank, level, minLevel, role.HierarchyLevelMax)
 	}
+	if err := roleTierRefusal(Rank(level), perms); err != nil {
+		return err
+	}
 	if !a.exemptIn(tid) {
 		if !sameTenant(tid, a.tenantID) {
 			return ErrNoAuthority
@@ -613,6 +622,9 @@ func (a Actor) MayEditRole(r *role.Role, newLevel int, holders RoleHolders) erro
 	if !ChangesLevel(r, newLevel) {
 		return nil
 	}
+	if err := roleTierRefusal(Rank(newLevel), PermissionNames(r.Permissions())); err != nil {
+		return err
+	}
 	if err := a.mayChangeRoleFor(holders); err != nil {
 		return err
 	}
@@ -626,6 +638,9 @@ func (a Actor) MayReplaceRolePermissions(r *role.Role, after []string, holders R
 		return err
 	}
 	cur := PermissionNames(r.Permissions())
+	if err := roleMayContain(r, after); err != nil {
+		return err
+	}
 	if err := a.mayChangePermissions(r.TenantID(), Delta(cur, after)); err != nil {
 		return err
 	}
@@ -641,6 +656,9 @@ func (a Actor) MayGrantRolePermission(r *role.Role, name string, holders RoleHol
 		return err
 	}
 	cur := PermissionNames(r.Permissions())
+	if err := roleMayContain(r, append(slices.Clone(cur), name)); err != nil {
+		return err
+	}
 	if err := a.mayChangePermissions(r.TenantID(), Delta(cur, append(slices.Clone(cur), name))); err != nil {
 		return err
 	}
@@ -882,6 +900,9 @@ func (a Actor) mayDecide(req Member, perm string, approving bool) error {
 		return ErrSelfTarget
 	case approving && !permission.IsRequestable(perm):
 		return fmt.Errorf("%w: %q is not requestable", ErrGrantExceedsAuthority, perm)
+	case approving && !MayHoldAt(req.Rank(), perm):
+		// Owner ruling 2026-11-21: nobody, an operator included, confers it below the tier.
+		return fmt.Errorf("%w: %s may not be approved for rank %d", ErrAdminTierOnly, perm, req.Rank())
 	case a.exemptIn(req.tenantID):
 		return nil
 	case !sameTenant(req.tenantID, a.tenantID):
@@ -970,6 +991,15 @@ func PermissionNames(ps []*permission.Permission) []string {
 		if p != nil {
 			out = append(out, p.Name())
 		}
+	}
+	return out
+}
+
+// grantedNames is the names an override state grants.
+func grantedNames(o Overrides) []string {
+	out := make([]string, 0, len(o.Granted))
+	for _, g := range o.Granted {
+		out = append(out, g.Name)
 	}
 	return out
 }

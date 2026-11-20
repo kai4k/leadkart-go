@@ -64,7 +64,8 @@ func TestSatisfies_NoClaims_False(t *testing.T) {
 func TestEffectivePermissions_TenantAdminExpandsAndSorts(t *testing.T) {
 	t.Parallel()
 	p := permission.IdentityPermissions
-	got := authn.EffectivePermissions(&jwt.Claims{TenantID: tenantA, Permissions: []string{p.Meta.TenantAdmin}})
+	adminRank := 10 // identity.users.create is listed at the Administrator tier or above (owner ruling 2026-11-21)
+	got := authn.EffectivePermissions(&jwt.Claims{TenantID: tenantA, Rank: &adminRank, Permissions: []string{p.Meta.TenantAdmin}})
 	if !slices.IsSorted(got) {
 		t.Fatal("not sorted")
 	}

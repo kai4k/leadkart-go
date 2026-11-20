@@ -69,7 +69,7 @@ func TestApproverQueue_CanApproveIsTheTruth(t *testing.T) {
 					t.Errorf("%s listed with can_approve but approve failed: %v", it.Request.Permission().Name(), err)
 				case !it.CanApprove && err == nil:
 					t.Errorf("%s listed without can_approve but approve succeeded", it.Request.Permission().Name())
-				case !it.CanApprove && !errors.Is(err, authority.ErrGrantExceedsAuthority) && !errors.Is(err, permissionrequest.ErrPermissionNotRequestable):
+				case !it.CanApprove && !errors.Is(err, authority.ErrGrantExceedsAuthority) && !errors.Is(err, authority.ErrAdminTierOnly) && !errors.Is(err, permissionrequest.ErrPermissionNotRequestable): // ErrAdminTierOnly: owner ruling 2026-11-21 (users.create for a rank-50 requester)
 					t.Errorf("%s: refused for the wrong reason: %v", it.Request.Permission().Name(), err)
 				}
 				if it.CanApprove {

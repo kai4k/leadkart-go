@@ -37,3 +37,6 @@ var ErrOwnershipAuthorityRequired = errs.New(errs.KindPermissionDenied, "authori
 
 // ErrRoleLevelBreaksReporting is returned when re-levelling a role would leave one of its active holders not strictly junior to their manager, or a direct report of a holder not strictly junior to the holder.
 var ErrRoleLevelBreaksReporting = errs.New(errs.KindInvalidInput, "authority", "the new role level would break a reporting line: a member must stay strictly junior to their manager")
+
+// ErrAdminTierOnly is returned when a permission that only the Administrator tier or above may hold (see [AdminTierOnlyPermissions]) would be held or conferred below that tier, or when a caller below that tier uses it. Owner ruling 2026-11-21: only the Company Owner and Administrator tier, and platform operators, may add users.
+var ErrAdminTierOnly = errs.New(errs.KindPermissionDenied, "authority", "this permission is held only at the Administrator tier or above")

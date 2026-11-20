@@ -9,6 +9,7 @@ import (
 	"github.com/leadkart/leadkart-go/internal/common/actclaim"
 	"github.com/leadkart/leadkart-go/internal/common/tenancy"
 	"github.com/leadkart/leadkart-go/internal/identity/app/jwt"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/authority"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/permission"
 )
 
@@ -49,15 +50,23 @@ func satisfiesIn(c *jwt.Claims, effective tenancy.ID, required string) bool {
 		return true
 	}
 	own := sameID(c.TenantID, effective.String())
+	// Owner ruling 2026-11-21: a permission in authority.AdminTierOnlyPermissions
+	// (identity.users.create) is satisfied through a TENANT-plane grant, explicit or
+	// implied by tenant.admin, only at the Administrator tier or above (an
+	// impersonation session is Admin-equivalent). A stale grant below the tier is
+	// inert here, which is also why it is absent from effective_permissions. The
+	// platform rule (super user above, the operator's platform equivalents below)
+	// is not a tenant tier and is unaffected.
+	tierOK := authority.MayHoldAt(authority.RankFromClaim(c.Rank), required) || c.IsImpersonation()
 	if slices.Contains(c.Permissions, required) {
 		if permission.IsPlatformReserved(required) && required != permission.IdentityPermissions.Meta.TenantAdmin {
 			return IsPlatformOperator(c)
 		}
-		if own {
+		if own && tierOK {
 			return true
 		}
 	}
-	if own &&
+	if own && tierOK &&
 		slices.Contains(c.Permissions, permission.IdentityPermissions.Meta.TenantAdmin) &&
 		permission.ImpliedByTenantAdmin(required) {
 		return true

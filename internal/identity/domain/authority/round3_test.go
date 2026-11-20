@@ -59,6 +59,17 @@ func TestApproval_AdminMustHoldAuthorityAndMoney(t *testing.T) {
 			continue
 		}
 		heldAdmin := actorOf(t, admin, authority.RankAdmin, n) // an Admin that holds exactly this permission
+		if authority.IsAdminTierOnly(n) {
+			// Owner ruling 2026-11-21: identity.users.create is not approvable for a
+			// requester below the Administrator tier by anyone (this requester is rank 50).
+			for who, a := range map[string]authority.Actor{"admin without it": aAdminHoldsNothing, "admin with it": heldAdmin, "owner": aOwner} {
+				if err := a.MayApprove(user, n); !errors.Is(err, authority.ErrAdminTierOnly) {
+					t.Errorf("%s approves %s for a rank-50 requester: %v, want ErrAdminTierOnly", who, n, err)
+				}
+			}
+			outOfList++
+			continue
+		}
 		if list[n] {
 			inList++
 			if err := aAdminHoldsNothing.MayApprove(user, n); !errors.Is(err, authority.ErrGrantExceedsAuthority) {

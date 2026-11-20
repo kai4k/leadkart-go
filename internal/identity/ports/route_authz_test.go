@@ -50,7 +50,10 @@ const (
 )
 
 func azClaims(perms ...string) *jwt.Claims {
-	c := &jwt.Claims{TenantID: azTenant, TenantSlug: "acme", MembershipID: azSelf, SecurityStamp: "stamp", Permissions: perms}
+	// Rank 10 (Administrator tier): identity.users.create is satisfied only at that tier
+	// or above (owner ruling 2026-11-21); the route table below is about permissions.
+	adminRank := 10
+	c := &jwt.Claims{TenantID: azTenant, TenantSlug: "acme", MembershipID: azSelf, SecurityStamp: "stamp", Rank: &adminRank, Permissions: perms}
 	c.Subject = "0190a000-0000-7000-8000-0000000000ff"
 	return c
 }
@@ -389,3 +392,25 @@ func TestCapabilities_RankAndTier(t *testing.T) {
 }
 
 func capRank(n int) *int { return &n }
+
+// Owner ruling 2026-11-21: POST /users answers 403 at the gate for a member below
+// the Administrator tier who holds identity.users.create (a stale grant) or
+// tenant.admin conferred on a manager.
+func TestRouteAuthz_AddUserIsRefusedBelowTheAdministratorTier(t *testing.T) {
+	t.Parallel()
+	p := permission.IdentityPermissions
+	for _, rank := range []int{11, 15, 20, 30, 50, 99} {
+		for _, perm := range []string{p.Users.Create, p.Meta.TenantAdmin} {
+			c := azClaims(perm)
+			c.Rank = &rank
+			if rec := azServe(t, c, "POST", "/api/v1/users", "{}"); rec.Code != http.StatusForbidden {
+				t.Errorf("rank %d holding %s: status %d, want 403 (body %s)", rank, perm, rec.Code, rec.Body.String())
+			}
+		}
+	}
+	noRank := azClaims(p.Users.Create)
+	noRank.Rank = nil
+	if rec := azServe(t, noRank, "POST", "/api/v1/users", "{}"); rec.Code != http.StatusForbidden {
+		t.Errorf("a token without a rank claim: status %d, want 403", rec.Code)
+	}
+}

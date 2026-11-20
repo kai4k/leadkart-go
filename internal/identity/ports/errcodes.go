@@ -213,6 +213,11 @@ const (
 	// target member or role (ADR 0069 H2/H3). 403 surface.
 	ErrCodeInsufficientRank = "insufficient_rank"
 
+	// ErrCodeAdminTierRequired — identity.users.create (the only permission in
+	// authority.AdminTierOnlyPermissions) was used, held, requested or conferred
+	// below the Administrator tier. Owner ruling 2026-11-21. 403 surface.
+	ErrCodeAdminTierRequired = "admin_tier_required"
+
 	// ErrCodePersonMembershipsChanging — a person-level change (global suspend,
 	// anonymise) kept racing membership changes and was not applied; retry. 409 surface.
 	ErrCodePersonMembershipsChanging = "person_memberships_changing"

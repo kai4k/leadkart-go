@@ -62,10 +62,13 @@ const (
 
 // atkRoutePerms are the identity route permissions every non-owner, non-admin persona is
 // given by override, so the route gate never answers before the policy does.
+// identity.users.create is NOT among them: the owner ruling of 2026-11-21 makes it
+// admin-tier-only, so the override route refuses it below the tier. The world plants
+// it as STALE DATA instead (plantStaleAddUsers), as an existing tenant holds it.
 func atkRoutePerms() []string {
 	p := permission.IdentityPermissions
 	return []string{
-		p.Users.View, p.Users.Create, p.Users.Update, p.Users.Deactivate, p.Users.Reactivate, p.Users.UpdatePermissions,
+		p.Users.View, p.Users.Update, p.Users.Deactivate, p.Users.Reactivate, p.Users.UpdatePermissions,
 		p.Roles.View, p.Roles.Create, p.Roles.Update, p.Roles.Delete, p.Roles.Assign, p.Roles.Revoke, p.Roles.Approve,
 	}
 }
@@ -162,6 +165,8 @@ func newAttackWorldWith(t *testing.T, cascade bool) *attackWorld {
 	}
 	w.vExec = f.createMember(t, w.victim, "vexec")
 	f.assignRole(t, w.victim.AccessToken, w.vExec.membershipID, f.roleIDByName(t, w.victim.AccessToken, rr.SalesExecutive))
+
+	w.plantStaleAddUsers(t)
 
 	for _, p := range w.who {
 		p.tok = f.loginToken(t, p.email, p.password)

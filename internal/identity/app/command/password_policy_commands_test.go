@@ -61,30 +61,30 @@ func TestCreateUser_EnforcesTheTargetTenantsPolicy(t *testing.T) {
 		}
 	}
 	persons := seedPersonRepo(t, nil)
-	h := command.NewCreateUserHandler(fakeUoW{}, persons, newFakeMembershipRepo(), lenient, policyNow, testNewPersonID, testNewMembershipID)
+	h := newCreateUserHandlerT(fakeUoW{}, persons, newFakeMembershipRepo(), lenient, policyNow, testNewPersonID, testNewMembershipID)
 
 	// Length-only tenant: "short" (5) fails, "longenough" (10) passes.
-	_, err := h.Handle(t.Context(), command.CreateUserCommand{TenantID: lenientID, Email: addr, Password: "short", FirstName: "R", LastName: "T"})
+	_, err := h.Handle(t.Context(), command.CreateUserCommand{Actor: superActor(t), TenantID: lenientID, Email: addr, Password: "short", FirstName: "R", LastName: "T"})
 	requireViolation(t, err, tenant.PasswordRuleMinLength)
 	if _, err := persons.GetByEmail(t.Context(), addr); !errors.Is(err, person.ErrNotFound) {
 		t.Fatalf("a refused create must not add the person: %v", err)
 	}
-	if _, err := h.Handle(t.Context(), command.CreateUserCommand{TenantID: lenientID, Email: addr, Password: "longenough", FirstName: "R", LastName: "T"}); err != nil {
+	if _, err := h.Handle(t.Context(), command.CreateUserCommand{Actor: superActor(t), TenantID: lenientID, Email: addr, Password: "longenough", FirstName: "R", LastName: "T"}); err != nil {
 		t.Fatalf("lenient tenant, compliant password: %v", err)
 	}
 
 	// The default-policy tenant refuses the same password.
 	other, _ := email.New("other@example.test")
-	_, err = h.Handle(t.Context(), command.CreateUserCommand{TenantID: strictID, Email: other, Password: "longenough", FirstName: "O", LastName: "T"})
+	_, err = h.Handle(t.Context(), command.CreateUserCommand{Actor: superActor(t), TenantID: strictID, Email: other, Password: "longenough", FirstName: "O", LastName: "T"})
 	requireViolation(t, err, tenant.PasswordRuleMinLength, tenant.PasswordRuleUppercase, tenant.PasswordRuleDigit, tenant.PasswordRuleSymbol)
 }
 
 func TestCreateUser_PolicyIsCheckedBeforeHashing(t *testing.T) {
 	t.Parallel()
 	addr, _ := email.New("recruit@example.test")
-	h := command.NewCreateUserHandler(fakeUoW{}, seedPersonRepo(t, nil), newFakeMembershipRepo(), defaultTenantRepo(t), policyNow, testNewPersonID, testNewMembershipID).
+	h := newCreateUserHandlerT(fakeUoW{}, seedPersonRepo(t, nil), newFakeMembershipRepo(), defaultTenantRepo(t), policyNow, testNewPersonID, testNewMembershipID).
 		WithArgonGate(saturatedGate(t))
-	_, err := h.Handle(t.Context(), command.CreateUserCommand{
+	_, err := h.Handle(t.Context(), command.CreateUserCommand{Actor: superActor(t),
 		TenantID: tenant.ID("11111111-1111-1111-1111-111111111111"), Email: addr,
 		Password: strings.Repeat("Ab1!", 600), FirstName: "R", LastName: "T",
 	})
@@ -94,8 +94,8 @@ func TestCreateUser_PolicyIsCheckedBeforeHashing(t *testing.T) {
 func TestCreateUser_UnknownTenantIsAnErrorNotASilentDefault(t *testing.T) {
 	t.Parallel()
 	addr, _ := email.New("recruit@example.test")
-	h := command.NewCreateUserHandler(fakeUoW{}, seedPersonRepo(t, nil), newFakeMembershipRepo(), tenanttest.NewFakeRepository(), policyNow, testNewPersonID, testNewMembershipID)
-	_, err := h.Handle(t.Context(), command.CreateUserCommand{
+	h := newCreateUserHandlerT(fakeUoW{}, seedPersonRepo(t, nil), newFakeMembershipRepo(), tenanttest.NewFakeRepository(), policyNow, testNewPersonID, testNewMembershipID)
+	_, err := h.Handle(t.Context(), command.CreateUserCommand{Actor: superActor(t),
 		TenantID: tenant.ID("33333333-3333-3333-3333-333333333333"), Email: addr, Password: "Tr0ub4dor&3-fresh-passphrase",
 	})
 	if !errors.Is(err, tenant.ErrNotFound) {

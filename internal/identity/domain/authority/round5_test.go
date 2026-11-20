@@ -302,9 +302,11 @@ func TestApprove_AdminMustHoldList(t *testing.T) {
 	// Hierarchy round 6 (the owner's ruling: Admin approves everything day-to-day): the
 	// user-lifecycle names left the list, so HR approvals are not owner-only.
 	for _, name := range []string{p.Crm.Leads.Assign, p.Tasks.WorkItems.Reassign, p.Inventory.Stock.Read,
-		p.Users.Create, p.Users.Update, p.Users.Deactivate, p.Users.Reactivate, p.Users.Unlock} {
+		p.Users.Update, p.Users.Deactivate, p.Users.Reactivate, p.Users.Unlock} {
 		cases = append(cases, decision{"an admin approves the day-to-day " + name + " without holding it", bare.MayApprove(requester, name), nil})
 	}
+	// Owner ruling 2026-11-21: users.create is admin-tier-only, so no approver confers it below the tier.
+	cases = append(cases, decision{"an admin approves identity.users.create for a rank-50 requester", bare.MayApprove(requester, p.Users.Create), authority.ErrAdminTierOnly})
 	for _, m := range mismatches(cases) {
 		t.Error(m)
 	}

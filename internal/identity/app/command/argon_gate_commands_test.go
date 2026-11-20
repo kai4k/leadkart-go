@@ -75,9 +75,9 @@ func TestPasswordCommands_RefuseWithErrBusyWhenTheGateIsSaturated(t *testing.T) 
 		t.Parallel()
 		addr, _ := email.New("recruit@example.test")
 		persons := seedPersonRepo(t, nil)
-		h := command.NewCreateUserHandler(fakeUoW{}, persons, newFakeMembershipRepo(), defaultTenantRepo(t), now, testNewPersonID, testNewMembershipID).
+		h := newCreateUserHandlerT(fakeUoW{}, persons, newFakeMembershipRepo(), defaultTenantRepo(t), now, testNewPersonID, testNewMembershipID).
 			WithArgonGate(saturatedGate(t))
-		_, err := h.Handle(t.Context(), command.CreateUserCommand{
+		_, err := h.Handle(t.Context(), command.CreateUserCommand{Actor: superActor(t),
 			TenantID: tenant.ID("11111111-1111-1111-1111-111111111111"), Email: addr,
 			Password: "Tr0ub4dor&3-fresh-passphrase", FirstName: "Recruit", LastName: "Test",
 		})

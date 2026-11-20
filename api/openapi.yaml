@@ -98,7 +98,9 @@ info:
     they do not hold), `insufficient_rank` (the caller does not strictly
     outrank the target member or role), `ownership_authority_required` (a platform
     operator under `X-Tenant-Id` changing a tenant's ownership without
-    `platform.tenants.ownership`), `impersonation_not_allowed`
+    `platform.tenants.ownership`), `admin_tier_required` (owner ruling 2026-11-21: only the Company Owner and
+    Administrator tier, and platform operators, add users, so `identity.users.create` is used, held, requested or
+    conferred only at that tier), `impersonation_not_allowed`
     (a caller who may not decide a request is answered
     `404 permission_request_not_found`). Editing a
     role acts on its holders, active or not (`insufficient_rank`,
@@ -963,6 +965,15 @@ paths:
       description: |
         Requires `identity.users.create` (satisfied by `tenant.admin` in the caller's own tenant, or by `platform.*` equivalents for platform operators; ADR 0068).
 
+        **Who may add users (owner ruling 2026-11-21):** a super user, a platform operator holding
+        `platform.users.create` or `platform.users.manage` (through `X-Tenant-Id` or an impersonation
+        session), and, inside a company, ONLY the Company Owner and the Administrator tier (rank 0 to 10).
+        Everyone below that tier is refused, even a member who still holds `identity.users.create` from
+        before the ruling: the route answers `403 forbidden` (the permission is not in the caller's
+        `effective_permissions`), and the command, deciding on the caller's stored roles under the tenant
+        lock, answers `403 admin_tier_required` for a stale token. A refused caller learns nothing about the
+        email (no `email_has_active_membership`).
+
         The temporary password is checked against the password policy of the TARGET tenant
         (the effective tenant: the caller's own, or the one an operator acts in through
         `X-Tenant-Id`): `422 password_policy_violation` with `errors.password`. Nothing is
@@ -981,7 +992,9 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/CreateUserResponse' }
-        '403': { $ref: '#/components/responses/TenantScopeForbidden' }
+        '403':
+          description: "`forbidden` (the caller lacks `identity.users.create`, including every member below the Administrator tier), `admin_tier_required` (the caller's stored rank is below the Administrator tier), or `tenant_scope_forbidden` (see TenantScopeForbidden)"
+          content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } }
         '400': { description: "`invalid_body` — the body is not valid JSON; `invalid_email` — the email is not a valid address", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
         '409': { description: "`email_has_active_membership` — the email already has an active membership in another tenant", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
         '422': { description: "`password_policy_violation` — the password fails the target tenant's policy (field `errors.password`, see PasswordPolicyViolation); `user_invalid` — the new membership violates a domain invariant (see `message`)", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
@@ -1907,7 +1920,8 @@ paths:
         At most one pending request per (membership, permission) tuple.
         `tenant.admin`, platform-reserved permissions and names outside the catalogue are not
         requestable: they are conferred by role only, and the request is refused with 422
-        (`permission_not_requestable`).
+        (`permission_not_requestable`). `identity.users.create` is requested only at the Administrator tier or
+        above (403 `admin_tier_required` below it; owner ruling 2026-11-21).
       requestBody:
         required: true
         content:
@@ -1923,6 +1937,7 @@ paths:
         '403':
           description: |
             `forbidden` (the caller lacks `identity.meta.request_permission_elevation`),
+            `admin_tier_required` (`identity.users.create` requested below the Administrator tier),
             `impersonation_not_allowed`, or `X-Tenant-Id` selected a foreign tenant (`tenant_scope_not_supported`)
           content:
             application/json:
@@ -2035,7 +2050,9 @@ paths:
         '403':
           description: |
             `grant_exceeds_authority` (the approver does not hold the permission, an Administrator lacks a
-            must-hold one, or the approval would lift a revoke without the Admin tier), `self_modification_forbidden`
+            must-hold one, or the approval would lift a revoke without the Admin tier), `admin_tier_required`
+            (a request for `identity.users.create` from a member below the Administrator tier: nobody approves
+            it, the request stays pending and can be denied or cancelled), `self_modification_forbidden`
             (own request), `impersonation_not_allowed`, `forbidden` (no valid or no longer active acting member), or
             `tenant_scope_not_supported` (`X-Tenant-Id` selected a foreign tenant). Callers who may not decide the
             request at all get 404 `permission_request_not_found`.
@@ -4329,7 +4346,10 @@ components:
         TenantScopeForbidden), `self_modification_forbidden` (the caller targeted themself),
         `insufficient_rank` (the caller does not strictly outrank the target member or role,
         ADR 0069), `grant_exceeds_authority` (the change confers or removes a permission the
-        caller does not hold, or `tenant.admin` as a non-owner), `ownership_authority_required`
+        caller does not hold, or `tenant.admin` as a non-owner), `admin_tier_required` (the change would give
+        `identity.users.create` to a role or a member below the Administrator tier: a role below the tier cannot
+        contain it, it cannot be an override of a member below the tier, and it cannot be requested or approved
+        below the tier; owner ruling 2026-11-21), `ownership_authority_required`
         (a platform operator acting under `X-Tenant-Id` tried to change who OWNS the tenant:
         assign or revoke Company Owner, confer or remove `tenant.admin` by role or override, or
         deactivate or reactivate an owner, without `platform.tenants.ownership`; super users are unaffected).

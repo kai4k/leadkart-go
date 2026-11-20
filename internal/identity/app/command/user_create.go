@@ -9,8 +9,10 @@ import (
 	"github.com/leadkart/leadkart-go/internal/common/email"
 	"github.com/leadkart/leadkart-go/internal/common/pg"
 	"github.com/leadkart/leadkart-go/internal/identity/app/argon2"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/authority"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/role"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
 
@@ -37,6 +39,11 @@ type CreateUserCommand struct {
 	// (currently only the bootstrap CLI; HTTP routes always have
 	// an authenticated caller, so HTTP callers always supply this).
 	CreatedByMembershipID membership.ID
+
+	// Actor is the caller, built once by the port (authn.AuthorityFrom); the zero
+	// value denies. Owner ruling 2026-11-21: only the Administrator tier or above,
+	// and platform operators, add users.
+	Actor authority.Actor
 }
 
 // CreateUserResult carries the IDs of the (Person, Membership) pair
@@ -68,6 +75,8 @@ type CreateUserHandler struct {
 	newPersonID     func() person.ID
 	newMembershipID func() membership.ID
 	gate            *argon2.Gate
+	lock            AuthorityLocker
+	roles           role.Repository
 }
 
 // NewCreateUserHandler wires the handler against interfaces only. `now`
@@ -136,6 +145,17 @@ func (h CreateUserHandler) Handle(
 	if cmd.Password == "" {
 		return CreateUserResult{}, errors.New("create user: password required")
 	}
+	// Owner ruling 2026-11-21: only the Administrator tier or above (and platform
+	// operators) add users. The token's actor is asked first, before the tenant is
+	// read, the password hashed or the email looked up, so a caller below the tier
+	// learns nothing, not even that the email is active in another company; the
+	// FRESH actor is asked again inside the transaction (below).
+	if err := cmd.Actor.MayCreateMembers(cmd.TenantID); err != nil {
+		return CreateUserResult{}, err
+	}
+	if h.lock == nil || h.roles == nil {
+		return CreateUserResult{}, errors.New("create user: authority dependencies not wired")
+	}
 	tn, err := h.tenants.GetByID(ctx, cmd.TenantID)
 	if err != nil {
 		return CreateUserResult{}, fmt.Errorf("create user: load tenant: %w", err)
@@ -170,6 +190,9 @@ func (h CreateUserHandler) Handle(
 	now := h.now()
 	var result CreateUserResult
 	err = h.uow.WithinTx(ctx, pg.TxScopePlatform, func(ctx context.Context) error {
+		if err := h.authorise(ctx, cmd, now); err != nil {
+			return err
+		}
 		p, perr := h.findOrCreatePerson(ctx, cmd, existing, pwd, now)
 		if perr != nil {
 			return perr
@@ -189,6 +212,27 @@ func (h CreateUserHandler) Handle(
 		return CreateUserResult{}, err
 	}
 	return result, nil
+}
+
+// authorise is the decision the caller's authority is asked inside the
+// transaction: the tenant authority lock FIRST (the one lock order), then the
+// acting member re-read, so a stale grant, a demotion or a deactivation since the
+// token was minted cannot be used. Operators admitted by the platform rule and
+// impersonation sessions are not re-read (their authority is not a membership of
+// this tenant; see [authority.Actor.NeedsFreshFactsToCreate]).
+func (h CreateUserHandler) authorise(ctx context.Context, cmd CreateUserCommand, now time.Time) error {
+	if err := h.lock.LockTenantAuthority(ctx, cmd.TenantID); err != nil {
+		return fmt.Errorf("authority lock: %w", err)
+	}
+	actor := cmd.Actor
+	if actor.NeedsFreshFactsToCreate(cmd.TenantID) {
+		facts := authorityFacts{memberships: h.memberships, roles: h.roles, persons: h.persons}
+		var err error
+		if actor, err = facts.freshActor(ctx, cmd.TenantID, cmd.Actor, now); err != nil {
+			return err
+		}
+	}
+	return actor.MayCreateMembers(cmd.TenantID)
 }
 
 func (h CreateUserHandler) hashPassword(ctx context.Context, plain string) (person.PasswordHash, error) {
@@ -256,6 +300,13 @@ func (h CreateUserHandler) createMembership(
 		return nil, fmt.Errorf("create user: persist membership: %w", err)
 	}
 	return m, nil
+}
+
+// WithAuthority wires what the fresh-actor decision needs: the tenant authority
+// lock and the roles of the acting member.
+func (h CreateUserHandler) WithAuthority(lock AuthorityLocker, roles role.Repository) CreateUserHandler {
+	h.lock, h.roles = lock, roles
+	return h
 }
 
 // WithArgonGate returns the handler with its password hashing running under

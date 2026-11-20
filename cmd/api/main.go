@@ -790,7 +790,7 @@ func buildIdentityApp(pool *pgxpool.Pool, hybridCache *cache.HybridCache, cfg co
 				ReplaceUserPermissionOverrides: command.NewReplaceUserPermissionOverridesHandler(tx, authorityLock, memberships, roles, persons, now),
 				AssignUserManager:              command.NewAssignUserManagerHandler(tx, authorityLock, memberships, roles, persons, now),
 				RemoveUserManager:              command.NewRemoveUserManagerHandler(tx, authorityLock, memberships, roles, persons, now),
-				CreateUser:                     command.NewCreateUserHandler(tx, persons, memberships, tenants, now, newPersonID, newMembershipID).WithArgonGate(argonGate),
+				CreateUser:                     command.NewCreateUserHandler(tx, persons, memberships, tenants, now, newPersonID, newMembershipID).WithAuthority(authorityLock, roles).WithArgonGate(argonGate),
 				AnonymiseUser:                  command.NewAnonymiseUserHandler(personChangeGuard, memberships, persons, now),
 
 				CreateRole:             command.NewCreateRoleHandler(tx, authorityLock, memberships, roles, persons, roleHierarchyEdges, now, newRoleID, newRoleHierarchyEdgeID),

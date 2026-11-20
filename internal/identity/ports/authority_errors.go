@@ -22,6 +22,8 @@ func writeAuthorityError(w http.ResponseWriter, err error) bool {
 		writeError(w, http.StatusForbidden, ErrCodeInsufficientRank, "the caller does not outrank the target")
 	case errors.Is(err, authority.ErrGrantExceedsAuthority):
 		writeError(w, http.StatusForbidden, ErrCodeGrantExceedsAuthority, "the change confers or removes a permission beyond the caller's authority")
+	case errors.Is(err, authority.ErrAdminTierOnly):
+		writeError(w, http.StatusForbidden, ErrCodeAdminTierRequired, "only the Company Owner and Administrator tier, and platform operators, may add users; this permission cannot be held, requested or conferred below that tier")
 	case errors.Is(err, authority.ErrOwnershipAuthorityRequired):
 		writeError(w, http.StatusForbidden, ErrCodeOwnershipAuthorityRequired, "changing a tenant's ownership from outside it needs platform.tenants.ownership")
 	case errors.Is(err, authority.ErrImpersonationNotAllowed):

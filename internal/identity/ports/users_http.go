@@ -373,8 +373,11 @@ func handleCreateUser(log *slog.Logger, a app.Application) http.Handler {
 			FirstName:             req.FirstName,
 			LastName:              req.LastName,
 			CreatedByMembershipID: callerMembership,
+			Actor:                 authn.AuthorityFrom(r.Context()),
 		})
 		switch {
+		case writeAuthorityError(w, err):
+			return
 		case writePasswordPolicyError(w, "password", err):
 			return
 		case writePasswordWorkRefusal(w, err):

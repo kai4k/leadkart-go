@@ -59,7 +59,8 @@ func TestE2E_Round6_AnAdministratorApprovesTheUserLifecycleWithoutHoldingIt(t *t
 		return w.f.authedJSON(t, http.MethodPost, "/api/v1/permission-requests/"+id+"/approve", w.tok(t, who), ports.ApprovePermissionRequestRequest{DecisionReason: "round 6"})
 	}
 	// adminRO is an Administrator whose tenant.admin was revoked: it holds none of these names.
-	for _, perm := range []string{p.Users.Create, p.Users.Update, p.Users.Deactivate, p.Users.Reactivate, p.Users.Unlock} {
+	// identity.users.create left this list with the owner ruling of 2026-11-21 (admin-tier-only: it is requested by, and approved for, the Administrator tier alone; see TestAttack_AddUsers_*).
+	for _, perm := range []string{p.Users.Update, p.Users.Deactivate, p.Users.Reactivate, p.Users.Unlock} {
 		id := w.submitFor(t, "exec2", perm)
 		if r := approve("adminRO", id); r.status != http.StatusNoContent {
 			t.Errorf("an Administrator approves %s without holding it: %d %s, want 204", perm, r.status, r.body)

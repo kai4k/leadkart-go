@@ -76,7 +76,8 @@ func TestReplaceUserPermissionOverrides_GrantsAndRevokes_BothApplied(t *testing.
 	target := w.member(t)
 	if err := w.handlers().override.Handle(t.Context(), command.ReplaceUserPermissionOverridesCommand{
 		TenantID: awTenant, MembershipID: target.ID(), Actor: w.adminActor(t),
-		GrantedNames: []string{permission.IdentityPermissions.Tenants.View, permission.IdentityPermissions.Users.Create},
+		// owner ruling 2026-11-21: identity.users.create is admin-tier-only, so this member (no role) is given another name.
+		GrantedNames: []string{permission.IdentityPermissions.Tenants.View, permission.IdentityPermissions.Crm.Leads.Read},
 		RevokedNames: []string{permission.IdentityPermissions.Users.Unlock, permission.IdentityPermissions.Roles.Delete},
 	}); err != nil {
 		t.Fatalf("Handle: %v", err)
