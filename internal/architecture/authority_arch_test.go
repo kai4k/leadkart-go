@@ -32,6 +32,23 @@
 //  4. decideRequest is only called inside such a literal.
 //  5. A function that adds a membership never also assigns it roles or overrides:
 //     a new membership carries no authority.
+//  6. A write method is flagged wherever it is SELECTED, not only where it is
+//     called: a method value (`f := repo.UpdateByID; f(...)`) is an offence.
+//  7. No interface other than a domain Repository may declare a method named Add
+//     or UpdateByID over *membership.Membership, *role.Role or
+//     *permissionrequest.Request: a structurally identical consumer-side
+//     interface would make the call resolve to the lookalike, not to the
+//     repository's method.
+//  8. An authority repository (or a struct holding one) passed to a function the
+//     scanner cannot resolve (a faked import: type errors are swallowed) is an
+//     offence, and so is any type error that names an identity-domain type.
+//
+// What this test cannot see, stated plainly: reflection; an `updateMember`
+// closure that never calls the policy (the closure runs under the lock and the
+// fresh actor, but nothing here proves it decides anything: that is the
+// behavioural tests' job); cmd/api (the composition root: it wires repositories
+// but is not scanned); and the adapters (they implement the repositories, so
+// their own writes are the implementation, and they are not scanned).
 package architecture_test
 
 import (
@@ -42,6 +59,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -97,6 +115,7 @@ var authorityWritePins = map[string]writePin{
 	"membership.UpdateByID permission_request.go:ApprovePermissionRequestHandler.Handle":     {"writes the approved grant on the requester's row inside the approval's locked transaction", true},
 	"membership.UpdateByID role_management.go:DeleteRoleHandler.Handle":                      {"removes a deleted role from its INACTIVE holders inside updateRole (an active holder refuses the delete)", true},
 	"membership.UpdateByID register_tenant.go:RegisterTenantHandler.seedRolesAndAssignOwner": {"the first Company Owner of a brand-new tenant: no other member, no actor, nothing to decide", false},
+	"unresolved register_tenant.go:RegisterTenantHandler.seedRolesAndAssignOwner":            {"passes the roles repository to seed.ApplyDefaultRoles (identity/app/seed), whose own write is the pinned seeding of a brand-new tenant's default roles", false},
 	"membership.Add register_tenant.go:RegisterTenantHandler.createMembership":               {"the first member of a brand-new tenant: no actor, carries no roles (the owner role is assigned in seedRolesAndAssignOwner)", false},
 	"role.Add seed/role_catalog.go:ApplyDefaultRoles":                                        {"seeds the default role catalogue of a brand-new tenant (RegisterTenant, before any member exists); it is not callable from a route", false},
 	"membership.Add user_create.go:CreateUserHandler.createMembership":                       {"a new member carries no roles and no overrides; roles are assigned later through AssignUserRole", false},
@@ -165,6 +184,10 @@ type scannedPkg struct {
 	fset  *token.FileSet
 	info  *types.Info
 	files []*ast.File
+	// typeErrs are the type-check errors (the importer fakes foreign packages, so
+	// most are benign "undefined: pkg.Name"); the ones that name an identity-domain
+	// type are failures (see domainTypeErrors).
+	typeErrs []string
 }
 
 func (im *sourceImporter) check(importPath string, files []*ast.File) *scannedPkg {
@@ -174,9 +197,123 @@ func (im *sourceImporter) check(importPath string, files []*ast.File) *scannedPk
 		Uses:       map[*ast.Ident]types.Object{},
 		Selections: map[*ast.SelectorExpr]*types.Selection{},
 	}
-	conf := types.Config{Importer: im, Error: func(error) {}, FakeImportC: true}
+	var errs []string
+	conf := types.Config{Importer: im, Error: func(err error) { errs = append(errs, err.Error()) }, FakeImportC: true}
 	pkg, _ := conf.Check(importPath, im.fset, files, info)
-	return &scannedPkg{path: importPath, pkg: pkg, fset: im.fset, info: info, files: files}
+	return &scannedPkg{path: importPath, pkg: pkg, fset: im.fset, info: info, files: files, typeErrs: errs}
+}
+
+// domainTypeErrorRE matches a type error that names a type of an identity-domain
+// package the scan relies on.
+var domainTypeErrorRE = regexp.MustCompile(`\b(membership|role|permissionrequest)\.[A-Z]`)
+
+// domainTypeErrors returns the type errors that involve the identity-domain
+// types: the scan resolves repository calls by object, so a package where those
+// types do not resolve could hide a write.
+func (p *scannedPkg) domainTypeErrors() []string {
+	var out []string
+	for _, e := range p.typeErrs {
+		if domainTypeErrorRE.MatchString(e) {
+			out = append(out, p.path+": "+e)
+		}
+	}
+	return out
+}
+
+// mentionsAuthorityRepo reports whether t is, points to, or (through at most
+// three levels of struct fields) holds one of the authority repositories.
+func mentionsAuthorityRepo(t types.Type, depth int) bool {
+	if t == nil || depth > 3 {
+		return false
+	}
+	switch x := t.(type) {
+	case *types.Pointer:
+		return mentionsAuthorityRepo(x.Elem(), depth+1)
+	case *types.Named:
+		if obj := x.Obj(); obj.Pkg() != nil && obj.Name() == "Repository" {
+			for _, r := range authorityRepos {
+				if obj.Pkg().Path() == r.pkg {
+					return true
+				}
+			}
+		}
+		return mentionsAuthorityRepo(x.Underlying(), depth+1)
+	case *types.Struct:
+		for f := range x.Fields() {
+			if mentionsAuthorityRepo(f.Type(), depth+1) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// mentionsAuthorityAggregate reports whether t mentions *membership.Membership,
+// *role.Role or *permissionrequest.Request (also inside func and slice types).
+func mentionsAuthorityAggregate(t types.Type, depth int) bool {
+	if t == nil || depth > 4 {
+		return false
+	}
+	switch x := t.(type) {
+	case *types.Pointer:
+		return mentionsAuthorityAggregate(x.Elem(), depth+1)
+	case *types.Slice:
+		return mentionsAuthorityAggregate(x.Elem(), depth+1)
+	case *types.Named:
+		if obj := x.Obj(); obj.Pkg() != nil {
+			for _, r := range authorityRepos {
+				if obj.Pkg().Path() == r.pkg && slices.Contains([]string{"Membership", "Role", "Request"}, obj.Name()) {
+					return true
+				}
+			}
+		}
+	case *types.Signature:
+		for v := range x.Params().Variables() {
+			if mentionsAuthorityAggregate(v.Type(), depth+1) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// isRepositoryInterface: iface is the Repository interface of its own domain
+// package (the one place Add / UpdateByID over the aggregate are declared).
+func (p *scannedPkg) isRepositoryInterface(iface *types.Interface) bool {
+	for _, r := range authorityRepos {
+		if p.path != r.pkg {
+			continue
+		}
+		if obj := p.pkg.Scope().Lookup("Repository"); obj != nil {
+			if u, ok := obj.Type().Underlying().(*types.Interface); ok && u == iface {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// lookalikeWriteMethods lists the explicitly declared Add / UpdateByID methods of
+// an interface that take an authority aggregate.
+func lookalikeWriteMethods(iface *types.Interface) []string {
+	var out []string
+	for i := range iface.NumExplicitMethods() {
+		m := iface.ExplicitMethod(i)
+		if m.Name() != "Add" && m.Name() != "UpdateByID" {
+			continue
+		}
+		sig, _ := m.Type().(*types.Signature)
+		if sig == nil {
+			continue
+		}
+		for v := range sig.Params().Variables() {
+			if mentionsAuthorityAggregate(v.Type(), 0) {
+				out = append(out, m.Name())
+				break
+			}
+		}
+	}
+	return out
 }
 
 // repoWrite reports which authority repository write fn is (false when it is
@@ -317,14 +454,48 @@ func authorityWriteOffences(p *scannedPkg, isCommand bool) (offences, usedPins [
 			}
 			var addsMembership, mutatesMembership bool
 			var addPos token.Pos
+			calledFun := map[ast.Node]bool{}
 			var walk func(n ast.Node, inside bool)
 			walk = func(n ast.Node, inside bool) {
 				ast.Inspect(n, func(c ast.Node) bool {
+					if it, isIface := c.(*ast.InterfaceType); isIface {
+						if tv, known := p.info.Types[it]; known && tv.Type != nil {
+							if iface, ok := tv.Type.Underlying().(*types.Interface); ok && !p.isRepositoryInterface(iface) {
+								for _, m := range lookalikeWriteMethods(iface) {
+									offences = append(offences, base+":"+strconv.Itoa(p.fset.Position(it.Pos()).Line)+" an interface declares "+m+" over an authority aggregate in "+owner+" — only the domain Repository interfaces may; a lookalike would make the call resolve to it, not to the repository (ADR 0069)")
+								}
+							}
+						}
+						return true
+					}
+					if se, isSel := c.(*ast.SelectorExpr); isSel && !calledFun[se] {
+						if sel := p.info.Selections[se]; sel != nil {
+							if fn, ok := sel.Obj().(*types.Func); ok {
+								if repo, method, isWrite := repoWrite(fn); isWrite {
+									offences = append(offences, base+":"+strconv.Itoa(p.fset.Position(se.Pos()).Line)+" "+repo.label+"."+method+" used as a method value in "+owner+" — a bound write cannot be attributed to the writer; call it directly inside authorityWriter")
+								}
+							}
+						}
+						return true
+					}
 					call, ok := c.(*ast.CallExpr)
 					if !ok {
 						return true
 					}
 					entry := p.isWriterEntry(call)
+					calledFun[ast.Unparen(call.Fun)] = true
+					if tv, known := p.info.Types[call.Fun]; !known || tv.Type == nil || tv.Type == types.Typ[types.Invalid] {
+						for _, a := range call.Args {
+							if atv, ok := p.info.Types[a]; ok && mentionsAuthorityRepo(atv.Type, 0) {
+								if _, pinned := authorityWritePins["unresolved "+base+":"+owner]; pinned && isCommand {
+									usedPins = append(usedPins, "unresolved "+base+":"+owner)
+									break
+								}
+								offences = append(offences, base+":"+strconv.Itoa(p.fset.Position(call.Pos()).Line)+" an authority repository is passed to a function the scanner cannot resolve in "+owner+" — what it does with it is invisible here")
+								break
+							}
+						}
+					}
 					walk(call.Fun, inside)
 					for _, a := range call.Args {
 						if lit, ok := a.(*ast.FuncLit); ok {
@@ -440,7 +611,11 @@ func TestArch_AuthorityWritesGoThroughTheAuthorityWriter(t *testing.T) {
 		}
 		scanned++
 		isCommand := filepath.Clean(dir) == filepath.Clean(commandDir)
-		off, pins := authorityWriteOffences(im.check(importPath, files), isCommand)
+		sp := im.check(importPath, files)
+		for _, e := range sp.domainTypeErrors() {
+			t.Errorf("type error naming an identity-domain type (the scan cannot be trusted for this package): %s", e)
+		}
+		off, pins := authorityWriteOffences(sp, isCommand)
 		used = append(used, pins...)
 		for _, o := range off {
 			t.Errorf("%s", o)
@@ -573,6 +748,29 @@ type time_ = struct{}`, 2},
 func (h handler) A(ctx context.Context, id permissionrequest.ID) error {
 	return h.requests.UpdateByID(ctx, "", id, nil)
 }`, 1},
+		{"a METHOD VALUE of a repository write (f := repo.UpdateByID; f(...))", header + `
+func (h handler) A(ctx context.Context, id membership.ID) error {
+	f := h.w.facts.memberships.UpdateByID
+	return f(ctx, "", id, nil)
+}`, 1},
+		{"a method value passed on as an argument", header + `
+func use(f func(ctx context.Context, tenantID string, id membership.ID, fn func(*membership.Membership) (bool, error)) error) {}
+func (h handler) A() { use(h.w.facts.memberships.UpdateByID) }`, 1},
+		{"a structurally identical consumer-side interface", header + `
+type mw interface {
+	UpdateByID(ctx context.Context, tenantID string, id membership.ID, fn func(*membership.Membership) (bool, error)) error
+}
+func (h handler) A(ctx context.Context, id membership.ID) error {
+	var x mw = h.w.facts.memberships
+	return x.UpdateByID(ctx, "", id, nil)
+}`, 1},
+		{"a lookalike Add over a role", header + `
+type adder interface{ Add(ctx context.Context, r *role.Role) error }
+func (h handler) A(ctx context.Context, r *role.Role) error { var x adder = h.w.facts.roles; return x.Add(ctx, r) }`, 1},
+		{"a repository passed through a function of a faked package", header + `import "example.com/fake"
+func (h handler) A() { fake.Wrap(h.w.facts.memberships) }`, 1},
+		{"a struct holding a repository passed through a faked package", header + `import "example.com/fake"
+func (h handler) A() { fake.Wrap(h.w.facts) }`, 1},
 		{"decideRequest outside the writer", header + `
 func (h handler) A(ctx context.Context, id permissionrequest.ID) error {
 	return h.w.decideRequest(ctx, h.requests, id, nil)
@@ -610,5 +808,40 @@ func (h handler) Update(ctx context.Context, id membership.ID) error {
 }`
 	if off := scanAuthoritySource(t, identityModulePath+"internal/identity/app/command", true, clean); len(off) != 0 {
 		t.Errorf("the writer's own homes, a read and a locked decideRequest were flagged: %v", off)
+	}
+}
+
+// A type error that names an identity-domain type fails the scan of its package:
+// the scan resolves repository calls by object, so a package where those types do
+// not resolve could hide a write. A benign error about a faked foreign package
+// does not.
+func TestAuthorityWriteScanner_TypeErrorsOnDomainTypesAreSurfaced(t *testing.T) {
+	t.Parallel()
+	im := newSourceImporter(t)
+	check := func(src string) []string {
+		f, err := parser.ParseFile(im.fset, "x.go", src, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return im.check(identityModulePath+"internal/identity/app/sidecar", []*ast.File{f}).domainTypeErrors()
+	}
+	if got := check(`package sidecar
+import "github.com/leadkart/leadkart-go/internal/identity/domain/membership"
+var x membership.NoSuchType
+`); len(got) == 0 {
+		t.Error("an unresolved identity-domain type was not surfaced")
+	}
+	if got := check(`package sidecar
+import "github.com/leadkart/leadkart-go/internal/identity/domain/membership"
+var x = membership.ID("a")
+var _ = x
+`); len(got) != 0 {
+		t.Errorf("a clean file produced domain type errors: %v", got)
+	}
+	if got := check(`package sidecar
+import "example.com/fake"
+var x = fake.Thing
+`); len(got) != 0 {
+		t.Errorf("a benign faked-import error was reported as a domain error: %v", got)
 	}
 }

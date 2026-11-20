@@ -40,12 +40,19 @@ type Member struct {
 type PersonState struct{ canAct bool }
 
 // NewPersonState derives the state from the person's facts: active (not
-// deactivated), globally suspended, anonymised, and the lockout expiry
-// compared with now (a zero lockedUntil is never locked). The person can act
-// only when active, not suspended, not anonymised and not locked at now.
-func NewPersonState(active, globallySuspended, anonymised bool, lockedUntil, now time.Time) PersonState {
-	locked := !lockedUntil.IsZero() && lockedUntil.After(now)
-	return PersonState{canAct: active && !globallySuspended && !anonymised && !locked}
+// deactivated), globally suspended, anonymised. The person can act only when
+// active, not suspended and not anonymised.
+//
+// A LOGIN LOCK (failed-login throttle) is deliberately not an input: it exists
+// to slow password guessing at the sign-in door and says nothing about a session
+// that is already authenticated. Counting it here would let anyone who knows an
+// administrator's email lock them out of administering by failing logins as them
+// (ADR 0069, "Pending owner confirmation": a login lock does not suspend
+// authority). Every reader of the state follows: a locked member acts, is an
+// active member of a tenant, is an eligible manager, counts as an owner for the
+// last-owner guard and as a holder.
+func NewPersonState(active, globallySuspended, anonymised bool) PersonState {
+	return PersonState{canAct: active && !globallySuspended && !anonymised}
 }
 
 // CanAct reports whether the person can act; false for the zero PersonState.

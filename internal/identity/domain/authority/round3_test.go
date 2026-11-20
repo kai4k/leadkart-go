@@ -143,19 +143,17 @@ func TestPersonState(t *testing.T) {
 	cases := []struct {
 		name               string
 		active, susp, anon bool
-		lockedUntil        time.Time
 		want               bool
 	}{
-		{"active, free", true, false, false, time.Time{}, true},
-		{"deactivated", false, false, false, time.Time{}, false},
-		{"globally suspended", true, true, false, time.Time{}, false},
-		{"anonymised", true, false, true, time.Time{}, false},
-		{"locked until later", true, false, false, now.Add(time.Minute), false},
-		{"lock expires exactly now", true, false, false, now, true},
-		{"lock expired", true, false, false, now.Add(-time.Minute), true},
+		{"active", true, false, false, true},
+		{"deactivated", false, false, false, false},
+		{"globally suspended", true, true, false, false},
+		{"anonymised", true, false, true, false},
+		{"suspended and anonymised", true, true, true, false},
+		{"deactivated and suspended", false, true, false, false},
 	}
 	for _, c := range cases {
-		if got := authority.NewPersonState(c.active, c.susp, c.anon, c.lockedUntil, now).CanAct(); got != c.want {
+		if got := authority.NewPersonState(c.active, c.susp, c.anon).CanAct(); got != c.want {
 			t.Errorf("%s: CanAct = %v, want %v", c.name, got, c.want)
 		}
 	}
@@ -168,9 +166,5 @@ func TestPersonState(t *testing.T) {
 	got, err := authority.MemberOf(m, []*role.Role{userR}, now, zero)
 	if err != nil || got.IsActive() {
 		t.Errorf("unknown person state: active=%v err=%v, want an inactive member", got.IsActive(), err)
-	}
-	locked, err := authority.MemberOf(m, []*role.Role{userR}, now, authority.NewPersonState(true, false, false, now.Add(time.Hour), now))
-	if err != nil || locked.IsActive() {
-		t.Errorf("locked person: active=%v err=%v, want inactive", locked.IsActive(), err)
 	}
 }

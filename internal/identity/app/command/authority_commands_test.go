@@ -612,3 +612,36 @@ func seedAdmin(t *testing.T, members *membershiptest.FakeRepository, roles *role
 	}
 	return actorAs(t, m.ID(), authority.RankAdmin, tenantAdminEffective()...)
 }
+
+// A name listed twice must not make a removal look like "no change": granted
+// ["read","read"] for a member holding {read, assign} removes assign.
+func TestReplaceOverrides_DuplicateGrantedNamesStillApplyTheRemoval(t *testing.T) {
+	t.Parallel()
+	p := permission.IdentityPermissions
+	w := newAuthzWorld(t)
+	exec := w.memberSnap(t, membership.Snapshot{RoleAssignments: []role.ID{w.exec.ID()},
+		GrantedPermissions: []membership.GrantedOverride{
+			{Permission: permission.FromConstant(p.Crm.Leads.Read)},
+			{Permission: permission.FromConstant(p.Crm.Leads.Assign)},
+		}})
+	mgrM := w.memberSnap(t, membership.Snapshot{RoleAssignments: []role.ID{w.manager.ID()},
+		GrantedPermissions: []membership.GrantedOverride{
+			{Permission: permission.FromConstant(p.Crm.Leads.Read)},
+			{Permission: permission.FromConstant(p.Crm.Leads.Assign)},
+		}})
+	mgr := actorAs(t, mgrM.ID(), authority.RankManager, p.Crm.Leads.Read, p.Crm.Leads.Assign)
+	h := w.handlers().override
+	if err := h.Handle(t.Context(), command.ReplaceUserPermissionOverridesCommand{TenantID: awTenant, MembershipID: exec.ID(),
+		GrantedNames: []string{p.Crm.Leads.Read, p.Crm.Leads.Read}, Actor: mgr}); err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	got := exec.GrantedPermissions()
+	if len(got) != 1 || got[0].Permission.Name() != p.Crm.Leads.Read {
+		t.Fatalf("grants after the replace = %+v, want only %s (the removed grant must be gone, not silently kept)", got, p.Crm.Leads.Read)
+	}
+	// and a real no-op still writes nothing
+	if err := h.Handle(t.Context(), command.ReplaceUserPermissionOverridesCommand{TenantID: awTenant, MembershipID: exec.ID(),
+		GrantedNames: []string{p.Crm.Leads.Read, p.Crm.Leads.Read}, Actor: mgr}); err != nil {
+		t.Fatalf("repeat: %v", err)
+	}
+}

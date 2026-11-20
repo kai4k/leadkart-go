@@ -162,20 +162,19 @@ func TestTimeBoundHoldings_Pins(t *testing.T) {
 	}
 }
 
-// TestHolderRules_SuspendedAndLockedHoldersStillHoldTheRole: a holder whose person
-// is suspended or locked keeps their roles, so a role edit still acts on them and
+// TestHolderRules_SuspendedHoldersStillHoldTheRole: a holder whose person
+// is suspended keeps their roles, so a role edit still acts on them and
 // the reporting rule still counts them.
-func TestHolderRules_SuspendedAndLockedHoldersStillHoldTheRole(t *testing.T) {
+func TestHolderRules_SuspendedHoldersStillHoldTheRole(t *testing.T) {
 	t.Parallel()
 	p := permission.IdentityPermissions
 	mgrR := mkRole(3, tA, role.SystemRoles.Tenant.SalesManager, false, 20, false, p.Crm.Leads.Read)
 	c := mkRole(30, tA, "Shared custom", false, 30, false, p.Crm.Leads.Read)
 	execRole := mkRole(31, tA, "Exec2", false, 50, false)
 	adminR := mkRole(2, tA, role.SystemRoles.Tenant.Administrator, false, 10, false, p.Meta.TenantAdmin)
-	locked := authority.NewPersonState(true, false, false, t0.Add(time.Hour), t0)
 	mgr := actorOf(t, mkMember(t, 15, tA, true, "", mgrR), authority.RankManager, p.Crm.Leads.Read)
 	admin := actorOf(t, mkMember(t, 13, tA, true, "", adminR), authority.RankAdmin, adminEffective()...)
-	for name, st := range map[string]authority.PersonState{"suspended": suspendedPerson(), "locked": locked} {
+	for name, st := range map[string]authority.PersonState{"suspended": suspendedPerson()} {
 		peer := mkMemberState(t, 16, st, "", mgrR, c)
 		if peer.IsActive() {
 			t.Fatalf("%s peer must not count as able to act", name)

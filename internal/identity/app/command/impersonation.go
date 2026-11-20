@@ -59,7 +59,7 @@ var ErrImpersonationTargetMissing = errors.New("impersonation: target tenant not
 // CreateImpersonationSessionHandler runs the create flow.
 //
 // Dependencies per ADR 0045:
-//   - store: session record persistence (Redis-backed in prod)
+//   - store: session record persistence (in-memory in this build, one process; see ADR 0069 "Impersonation sessions are alive")
 //   - tenants: resolve target tenant for slug-anchored authz checks
 //   - issuer: mint the scoped JWT pair
 //   - now: clock injection for tests
@@ -93,7 +93,7 @@ func NewCreateImpersonationSessionHandler(store impersonation.Store, tenants ten
 //
 //  1. Validate inputs (operator ID + target tenant ID present;
 //     reason length + duration cap enforced by impersonation.NewSession).
-//  2. Persist session record (existing Redis put).
+//  2. Persist session record (impersonation.Store.Put; the store is in-memory).
 //  3. Resolve target tenant for slug — needed so the scoped JWT
 //     carries the correct tenant_slug for slug-anchored authz checks.
 //  4. Derive synthetic membership_id from session_id (deterministic;
@@ -205,17 +205,15 @@ func syntheticMembershipFromSession(sessionID string) string {
 // EndImpersonationSessionCommand revokes the operator's session.
 // Idempotent — already-deleted sessions return nil.
 //
-// Per ADR 0045: the scoped access token continues to work until its
-// natural exp (capped at session.ExpiresAt). Deleting the session
-// record prevents NEW operations against this session ID + makes the
-// session unreachable from the operator's frontend "active sessions"
-// list. The token itself isn't on a denylist (would require redis
-// blacklist infra); its exp is short enough that a stolen token is
-// usable for ≤ 4h before natural expiry.
-//
-// If immediate token-level revocation becomes a requirement (Phase 6+
-// hardening), the path is to track session_id in a redis denylist
-// checked by the verifier middleware.
+// Ending the session kills its token at once (ADR 0069 D2): every authenticated
+// route asks the session store whether the session named by the token's act
+// claim is still there (SecurityStampValidator.IsSessionLive), so the next
+// request with the token answers 401 stale_token. The session also disappears
+// from the operator's "active sessions" list. The token needs no denylist: the
+// store IS the liveness record. Open constraint: the store is per process (see
+// ADR 0069), so with more than one API instance the end is seen only by the
+// instance that handled it until the token's natural exp (capped at
+// session.ExpiresAt).
 type EndImpersonationSessionCommand struct {
 	OperatorID string
 	SessionID  string

@@ -295,20 +295,42 @@ func laterThan(a, b time.Time) bool {
 	return a.After(b)
 }
 
-// Equal reports whether two override states are the same: the same granted
-// names with the same expiries and the same revoked names, in any order. A
-// change that leaves the state equal writes nothing and rotates nothing.
+// Equal reports whether two override states are the same SET of state: the same
+// granted names with the same expiries and the same revoked names, in any order
+// and however often a name is listed. It compares both ways (a name present on
+// one side only, or an extra name on either, makes them differ), so a change
+// that leaves the state equal writes nothing and rotates nothing, and a change
+// that does not can never be mistaken for one that does.
 func (o Overrides) Equal(other Overrides) bool {
-	if len(o.Granted) != len(other.Granted) || len(o.Revoked) != len(other.Revoked) {
+	grants := func(in []Override) map[string]time.Time {
+		m := make(map[string]time.Time, len(in))
+		for _, g := range in {
+			m[g.Name] = g.ExpiresAt
+		}
+		return m
+	}
+	revoked := func(in []string) map[string]struct{} {
+		m := make(map[string]struct{}, len(in))
+		for _, n := range in {
+			m[n] = struct{}{}
+		}
+		return m
+	}
+	a, b := grants(o.Granted), grants(other.Granted)
+	if len(a) != len(b) {
 		return false
 	}
-	for _, g := range o.Granted {
-		if !slices.ContainsFunc(other.Granted, func(x Override) bool { return x.Name == g.Name && x.ExpiresAt.Equal(g.ExpiresAt) }) {
+	for name, exp := range a {
+		if other, ok := b[name]; !ok || !exp.Equal(other) {
 			return false
 		}
 	}
-	for _, r := range o.Revoked {
-		if !slices.Contains(other.Revoked, r) {
+	ra, rb := revoked(o.Revoked), revoked(other.Revoked)
+	if len(ra) != len(rb) {
+		return false
+	}
+	for n := range ra {
+		if _, ok := rb[n]; !ok {
 			return false
 		}
 	}
@@ -884,7 +906,7 @@ func (a Actor) mayDecide(req Member, perm string, approving bool) error {
 // GuardLastOwner - H6: refuse removing target's ownership (deactivation,
 // CompanyOwner revocation) when no OTHER active owner of the same tenant
 // remains. The target's own activity does not matter: a sole owner who is
-// already locked, suspended or deactivated is still the tenant's only owner.
+// already suspended or deactivated is still the tenant's only owner.
 // owners is every current member holding the CompanyOwner role, loaded in the
 // same locked transaction; the active filter applies only to the OTHER owners
 // (IsOwner and IsActive; the zero Member sets neither flag), so an inactive

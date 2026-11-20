@@ -45,7 +45,7 @@ func freshMemberOf(t *testing.T, id membership.ID, tid tenant.ID, status members
 	return out
 }
 
-func canAct() PersonState { return NewPersonState(true, false, false, time.Time{}, freshNow) }
+func canAct() PersonState { return NewPersonState(true, false, false) }
 
 func tokenActor(t *testing.T, rank Rank, perms ...string) Actor {
 	t.Helper()
@@ -136,10 +136,9 @@ func TestNarrowedBy_DeniesWhenTheFreshMembershipCannotActForThisToken(t *testing
 	other := freshMemberOf(t, "0190a000-0000-7000-8000-0000000000a2", tenantOne, membership.StatusActive, canAct(), owner)
 	foreign := freshMemberOf(t, freshMemberID, tenantTwo, membership.StatusActive, canAct(), freshRole(2, tenantTwo, 0, true))
 	inactive := freshMemberOf(t, freshMemberID, tenantOne, membership.StatusInactive, canAct(), owner)
-	suspended := freshMemberOf(t, freshMemberID, tenantOne, membership.StatusActive, NewPersonState(true, true, false, time.Time{}, freshNow), owner)
-	locked := freshMemberOf(t, freshMemberID, tenantOne, membership.StatusActive, NewPersonState(true, false, false, freshNow.Add(time.Hour), freshNow), owner)
-	anonymised := freshMemberOf(t, freshMemberID, tenantOne, membership.StatusActive, NewPersonState(true, false, true, time.Time{}, freshNow), owner)
-	deactivatedPerson := freshMemberOf(t, freshMemberID, tenantOne, membership.StatusActive, NewPersonState(false, false, false, time.Time{}, freshNow), owner)
+	suspended := freshMemberOf(t, freshMemberID, tenantOne, membership.StatusActive, NewPersonState(true, true, false), owner)
+	anonymised := freshMemberOf(t, freshMemberID, tenantOne, membership.StatusActive, NewPersonState(true, false, true), owner)
+	deactivatedPerson := freshMemberOf(t, freshMemberID, tenantOne, membership.StatusActive, NewPersonState(false, false, false), owner)
 	unknownPerson := freshMemberOf(t, freshMemberID, tenantOne, membership.StatusActive, PersonState{}, owner)
 
 	admin := permission.IdentityPermissions.Meta.TenantAdmin
@@ -153,7 +152,6 @@ func TestNarrowedBy_DeniesWhenTheFreshMembershipCannotActForThisToken(t *testing
 		"same id in another tenant": foreign,
 		"inactive membership":       inactive,
 		"globally suspended person": suspended,
-		"locked person":             locked,
 		"anonymised person":         anonymised,
 		"deactivated person":        deactivatedPerson,
 		"person state not loaded":   unknownPerson,

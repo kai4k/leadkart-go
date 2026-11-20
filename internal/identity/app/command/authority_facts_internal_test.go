@@ -88,3 +88,58 @@ func TestOwnersLoader_OnlyTheCompanyOwnerSystemRoleCountsAsOwnership(t *testing.
 		}
 	}
 }
+
+// A person LOCKED by failed logins keeps their authority: the lock throttles
+// password sign-in, it is not a suspension, and counting it let anyone who knew
+// an administrator's email lock them out of administering. Deactivated,
+// globally suspended and anonymised persons still cannot act.
+func TestMemberFrom_AFailedLoginLockDoesNotRemoveAuthority(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 11, 20, 9, 0, 0, 0, time.UTC)
+	ownerRole := role.UnmarshalFromDB(role.Snapshot{ID: role.ID(factsID(1)), TenantID: factsTenant, Name: role.SystemRoles.Tenant.CompanyOwner,
+		IsSystemDefault: true, HierarchyLevel: 0, CreatedAt: now,
+		Permissions: []*permission.Permission{permission.FromConstant(permission.IdentityPermissions.Meta.TenantAdmin)}})
+	m := membership.UnmarshalFromDB(membership.Snapshot{ID: membership.ID(factsID(2)), PersonID: person.ID(factsID(3)), TenantID: factsTenant,
+		Status: membership.StatusActive, JoinedAt: now, RoleAssignments: []role.ID{ownerRole.ID()}})
+
+	newPerson := func() *person.Person {
+		p, err := factsPersons{}.GetByID(t.Context(), person.ID(factsID(3)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	locked := newPerson()
+	for range person.MaxFailedLogins {
+		locked.RegisterFailedLogin(now)
+	}
+	if !locked.IsLocked(now) {
+		t.Fatal("setup: the person is not locked")
+	}
+	suspended := newPerson()
+	if err := suspended.GloballySuspend("test", now); err != nil {
+		t.Fatal(err)
+	}
+	anonymised := newPerson()
+	if err := anonymised.Anonymise("test", now); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		name       string
+		p          *person.Person
+		wantActive bool
+	}{
+		{"locked by failed logins", locked, true},
+		{"never locked", newPerson(), true},
+		{"globally suspended", suspended, false},
+		{"anonymised", anonymised, false},
+	} {
+		got, _, err := memberFrom(m, []*role.Role{ownerRole}, c.p, now)
+		if err != nil {
+			t.Fatalf("%s: %v", c.name, err)
+		}
+		if got.IsActive() != c.wantActive {
+			t.Errorf("%s: member active = %v, want %v (it decides who can act, who is an eligible manager and who counts as another owner)", c.name, got.IsActive(), c.wantActive)
+		}
+	}
+}

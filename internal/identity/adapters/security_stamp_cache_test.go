@@ -294,3 +294,26 @@ func TestSecurityStampValidator_IsSessionLive(t *testing.T) {
 		t.Error("an ended session must not be live")
 	}
 }
+
+// failingSessionStore answers every Get with a store failure.
+type failingSessionStore struct{ impersonation.Store }
+
+func (failingSessionStore) Get(context.Context, string) (impersonation.Session, error) {
+	return impersonation.Session{}, errors.New("store unavailable")
+}
+
+// A store that cannot answer must never vouch for a session: the validator
+// returns (false, err), so the gate answers 401 (fail closed), never "live".
+func TestSecurityStampValidator_IsSessionLive_AStoreFailureIsNeverLive(t *testing.T) {
+	t.Parallel()
+	pid := person.ID("01999999-7777-7000-8000-000000000008")
+	fx := newHybridFixture(t, pid, testStamp1)
+	v := adapters.NewSecurityStampValidator(fx.stamps).WithImpersonationSessions(failingSessionStore{})
+	got, err := v.IsSessionLive(t.Context(), "some-session", "op-1", tenant.ID("tenant-1"))
+	if err == nil {
+		t.Fatal("a store failure was swallowed")
+	}
+	if got {
+		t.Fatal("a store failure vouched for the session")
+	}
+}

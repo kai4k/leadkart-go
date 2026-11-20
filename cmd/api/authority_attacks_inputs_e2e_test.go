@@ -309,3 +309,29 @@ func TestAttack_Inputs_ExtraFieldsConferNothing(t *testing.T) {
 		t.Errorf("the victim tenant changed: %s", snapshotDiff(vBefore, after))
 	}
 }
+
+// A name listed twice in "granted" must not turn a REMOVAL into a silent no-op:
+// the member holds {read, manage}; the save lists {read, read}; manage must go
+// (regression: the same-length, every-entry-present comparison answered 204 and
+// wrote nothing, so the member kept the permission the caller meant to remove).
+func TestAttack_Inputs_DuplicateGrantedNamesStillRemove(t *testing.T) {
+	w := newAttackWorld(t)
+	p := permission.IdentityPermissions
+	f := w.f
+	adm := w.tok(t, "admin")
+	target := w.mid(t, "norole")
+	path := "/api/v1/users/" + target + "/permission-overrides"
+
+	if r := f.authedJSON(t, http.MethodPatch, path, adm, ports.ReplaceUserPermissionOverridesRequest{
+		Granted: []string{p.Tasks.WorkItems.Read, p.Tasks.WorkItems.Manage}, Revoked: []string{}}); r.status != http.StatusNoContent {
+		t.Fatalf("setup grant: %d %s", r.status, r.body)
+	}
+	if r := f.authedJSON(t, http.MethodPatch, path, adm, rawBody(fmt.Sprintf(`{"granted":[%q,%q],"revoked":[]}`,
+		p.Tasks.WorkItems.Read, p.Tasks.WorkItems.Read))); r.status != http.StatusNoContent {
+		t.Fatalf("duplicate-name save: %d %s, want 204", r.status, r.body)
+	}
+	ov := w.overridesOf(t, w.owner.TenantID, target)
+	if strings.Contains(ov, p.Tasks.WorkItems.Manage) || !strings.Contains(ov, p.Tasks.WorkItems.Read) {
+		t.Errorf("override state = %s, want only %s (the removed grant must be gone)", ov, p.Tasks.WorkItems.Read)
+	}
+}

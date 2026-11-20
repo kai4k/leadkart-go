@@ -228,6 +228,9 @@ func (h ReplaceUserPermissionOverridesHandler) Handle(ctx context.Context, cmd R
 	if err != nil {
 		return err
 	}
+	// A name listed twice is one name: without this the after-state would hold the
+	// name twice, and a change that drops OTHER grants could be mistaken for no change.
+	granted = dedupeByName(granted)
 	revoked = dedupeByName(revoked)
 	if both := namesInBoth(granted, revoked); len(both) > 0 {
 		return &OverridesConflictError{Names: both}

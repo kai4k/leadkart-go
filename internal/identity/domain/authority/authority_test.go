@@ -280,11 +280,11 @@ func grants(names ...string) []authority.Override {
 }
 
 func activePerson() authority.PersonState {
-	return authority.NewPersonState(true, false, false, time.Time{}, t0)
+	return authority.NewPersonState(true, false, false)
 }
 
 func suspendedPerson() authority.PersonState {
-	return authority.NewPersonState(true, true, false, time.Time{}, t0)
+	return authority.NewPersonState(true, true, false)
 }
 
 // mkMemberOv builds an active member who already holds the given overrides
