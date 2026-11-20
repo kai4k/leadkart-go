@@ -6,10 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/google/uuid"
-
 	"github.com/leadkart/leadkart-go/internal/common/ids"
-	"github.com/leadkart/leadkart-go/internal/common/pagination"
 	"github.com/leadkart/leadkart-go/internal/identity/app/command"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership/membershiptest"
@@ -66,6 +63,7 @@ func TestRequestPermissionElevation_HappyPath(t *testing.T) {
 
 	h := command.NewRequestPermissionElevationHandler(reqs, mems, fixedTimeFn(), func() permissionrequest.ID { return permissionrequest.ID(ids.NewV7().String()) })
 	out, err := h.Handle(t.Context(), command.RequestPermissionElevationCommand{
+		Actor:                 submitterActor(t),
 		TenantID:              requester.TenantID(),
 		RequesterMembershipID: requester.ID(),
 		Permission:            permission.FromConstant(permission.IdentityPermissions.Users.Create),
@@ -89,6 +87,7 @@ func TestRequestPermissionElevation_NonExistentMembership(t *testing.T) {
 	h := command.NewRequestPermissionElevationHandler(reqs, mems, fixedTimeFn(), func() permissionrequest.ID { return permissionrequest.ID(ids.NewV7().String()) })
 
 	_, err := h.Handle(t.Context(), command.RequestPermissionElevationCommand{
+		Actor:                 submitterActor(t),
 		TenantID:              tenant.ID(ids.NewV7().String()),
 		RequesterMembershipID: membership.ID(ids.NewV7().String()),
 		Permission:            permission.FromConstant(permission.IdentityPermissions.Users.Create),
@@ -109,6 +108,7 @@ func TestRequestPermissionElevation_RejectsDuplicatePending(t *testing.T) {
 	h := command.NewRequestPermissionElevationHandler(reqs, mems, fixedTimeFn(), func() permissionrequest.ID { return permissionrequest.ID(ids.NewV7().String()) })
 
 	cmd := command.RequestPermissionElevationCommand{
+		Actor:                 submitterActor(t),
 		TenantID:              requester.TenantID(),
 		RequesterMembershipID: requester.ID(),
 		Permission:            permission.FromConstant(permission.IdentityPermissions.Users.Create),
@@ -125,161 +125,7 @@ func TestRequestPermissionElevation_RejectsDuplicatePending(t *testing.T) {
 
 // ----- ApprovePermissionRequest -------------------------------------------
 
-func TestApprovePermissionRequest_HappyPath(t *testing.T) {
-	t.Parallel()
-
-	reqs := newFakePermissionRequestRepo()
-	mems := newFakeMembershipRepoForPermReq()
-	requester := freshMembershipForPermReq(t)
-	manager := freshMembershipForPermReq(t)
-	_ = requester.AssignManager(manager.ID(), testNow) // arch-test:ignore-err - test fixture setup
-	_ = requester.PullEvents()
-	_ = mems.Add(t.Context(), requester) // arch-test:ignore-err - test fixture setup
-	_ = mems.Add(t.Context(), manager)   // arch-test:ignore-err - test fixture setup
-
-	submitH := command.NewRequestPermissionElevationHandler(reqs, mems, fixedTimeFn(), func() permissionrequest.ID { return permissionrequest.ID(ids.NewV7().String()) })
-	out, err := submitH.Handle(t.Context(), command.RequestPermissionElevationCommand{
-		TenantID:              requester.TenantID(),
-		RequesterMembershipID: requester.ID(),
-		Permission:            permission.FromConstant(permission.IdentityPermissions.Users.Create),
-		Reason:                "need to onboard 5 users for monthly sales drive",
-	})
-	if err != nil {
-		t.Fatalf("submit: %v", err)
-	}
-
-	approveH := command.NewApprovePermissionRequestHandler(fakeUoW{}, reqs, mems, fixedTimeFn(), ids.NewV7)
-	if err := approveH.Handle(t.Context(), command.ApprovePermissionRequestCommand{
-		TenantID:             requester.TenantID(),
-		RequestID:            out.RequestID,
-		ApproverMembershipID: manager.ID(),
-		DecisionReason:       "approved for the rollout",
-	}); err != nil {
-		t.Fatalf("approve: %v", err)
-	}
-
-	// Request state should be Approved.
-	req, _ := reqs.GetByID(t.Context(), requester.TenantID(), out.RequestID)
-	if req.State() != permissionrequest.StateApproved {
-		t.Errorf("State = %v, want approved", req.State())
-	}
-
-	// Membership overlay should hold a time-bound grant.
-	granted := requester.GrantedPermissions()
-	if len(granted) != 1 {
-		t.Fatalf("granted = %d, want 1", len(granted))
-	}
-	if !granted[0].Permission.Equal(permission.FromConstant(permission.IdentityPermissions.Users.Create)) {
-		t.Errorf("granted permission mismatch")
-	}
-	if granted[0].ExpiresAt.IsZero() {
-		t.Error("ExpiresAt should be set (time-bound grant)")
-	}
-}
-
-func TestApprovePermissionRequest_BlocksSelfApproval(t *testing.T) {
-	t.Parallel()
-
-	reqs := newFakePermissionRequestRepo()
-	mems := newFakeMembershipRepoForPermReq()
-	requester := freshMembershipForPermReq(t)
-	_ = mems.Add(t.Context(), requester) // arch-test:ignore-err - test fixture setup
-
-	submitH := command.NewRequestPermissionElevationHandler(reqs, mems, fixedTimeFn(), func() permissionrequest.ID { return permissionrequest.ID(ids.NewV7().String()) })
-	out, _ := submitH.Handle(t.Context(), command.RequestPermissionElevationCommand{
-		TenantID:              requester.TenantID(),
-		RequesterMembershipID: requester.ID(),
-		Permission:            permission.FromConstant(permission.IdentityPermissions.Users.Create),
-		Reason:                "need to onboard 5 users for monthly sales drive",
-	})
-
-	approveH := command.NewApprovePermissionRequestHandler(fakeUoW{}, reqs, mems, fixedTimeFn(), ids.NewV7)
-	err := approveH.Handle(t.Context(), command.ApprovePermissionRequestCommand{
-		TenantID:             requester.TenantID(),
-		RequestID:            out.RequestID,
-		ApproverMembershipID: requester.ID(), // self-approval
-	})
-	if !errors.Is(err, command.ErrPermissionRequestSelfApproval) {
-		t.Fatalf("err = %v, want ErrPermissionRequestSelfApproval", err)
-	}
-}
-
-func TestApprovePermissionRequest_MissingManagerRequiresPlatform(t *testing.T) {
-	t.Parallel()
-
-	reqs := newFakePermissionRequestRepo()
-	mems := newFakeMembershipRepoForPermReq()
-	requester := freshMembershipForPermReq(t)
-	// Orphan / root membership — no manager.
-	_ = mems.Add(t.Context(), requester) // arch-test:ignore-err - test fixture setup
-
-	submitH := command.NewRequestPermissionElevationHandler(reqs, mems, fixedTimeFn(), func() permissionrequest.ID { return permissionrequest.ID(ids.NewV7().String()) })
-	out, _ := submitH.Handle(t.Context(), command.RequestPermissionElevationCommand{
-		TenantID:              requester.TenantID(),
-		RequesterMembershipID: requester.ID(),
-		Permission:            permission.FromConstant(permission.IdentityPermissions.Users.Create),
-		Reason:                "need to onboard 5 users for monthly sales drive",
-	})
-
-	approveH := command.NewApprovePermissionRequestHandler(fakeUoW{}, reqs, mems, fixedTimeFn(), ids.NewV7)
-	// Non-platform random approver → Forbidden.
-	err := approveH.Handle(t.Context(), command.ApprovePermissionRequestCommand{
-		TenantID:             requester.TenantID(),
-		RequestID:            out.RequestID,
-		ApproverMembershipID: membership.ID(ids.NewV7().String()),
-		OperatorAuthority:    false,
-	})
-	if !errors.Is(err, command.ErrPermissionRequestForbidden) {
-		t.Fatalf("non-platform err = %v, want ErrPermissionRequestForbidden", err)
-	}
-
-	// Platform operator → allowed.
-	if err := approveH.Handle(t.Context(), command.ApprovePermissionRequestCommand{
-		TenantID:             requester.TenantID(),
-		RequestID:            out.RequestID,
-		ApproverMembershipID: membership.ID(ids.NewV7().String()),
-		OperatorAuthority:    true,
-	}); err != nil {
-		t.Fatalf("platform Approve: %v", err)
-	}
-}
-
 // ----- DenyPermissionRequest ----------------------------------------------
-
-func TestDenyPermissionRequest_HappyPath(t *testing.T) {
-	t.Parallel()
-
-	reqs := newFakePermissionRequestRepo()
-	mems := newFakeMembershipRepoForPermReq()
-	requester := freshMembershipForPermReq(t)
-	manager := freshMembershipForPermReq(t)
-	_ = requester.AssignManager(manager.ID(), testNow) // arch-test:ignore-err - test fixture setup
-	_ = requester.PullEvents()
-	_ = mems.Add(t.Context(), requester) // arch-test:ignore-err - test fixture setup
-	_ = mems.Add(t.Context(), manager)   // arch-test:ignore-err - test fixture setup
-
-	submitH := command.NewRequestPermissionElevationHandler(reqs, mems, fixedTimeFn(), func() permissionrequest.ID { return permissionrequest.ID(ids.NewV7().String()) })
-	out, _ := submitH.Handle(t.Context(), command.RequestPermissionElevationCommand{
-		TenantID:              requester.TenantID(),
-		RequesterMembershipID: requester.ID(),
-		Permission:            permission.FromConstant(permission.IdentityPermissions.Users.Create),
-		Reason:                "need to onboard 5 users for monthly sales drive",
-	})
-
-	denyH := command.NewDenyPermissionRequestHandler(reqs, mems, fixedTimeFn())
-	if err := denyH.Handle(t.Context(), command.DenyPermissionRequestCommand{
-		TenantID:             requester.TenantID(),
-		RequestID:            out.RequestID,
-		ApproverMembershipID: manager.ID(),
-		DecisionReason:       "scope too broad; rethink and re-submit",
-	}); err != nil {
-		t.Fatalf("Deny: %v", err)
-	}
-	req, _ := reqs.GetByID(t.Context(), requester.TenantID(), out.RequestID)
-	if req.State() != permissionrequest.StateDenied {
-		t.Errorf("State = %v, want denied", req.State())
-	}
-}
 
 // ----- CancelPermissionRequest --------------------------------------------
 
@@ -293,6 +139,7 @@ func TestCancelPermissionRequest_OnlyRequesterCanCancel(t *testing.T) {
 
 	submitH := command.NewRequestPermissionElevationHandler(reqs, mems, fixedTimeFn(), func() permissionrequest.ID { return permissionrequest.ID(ids.NewV7().String()) })
 	out, _ := submitH.Handle(t.Context(), command.RequestPermissionElevationCommand{
+		Actor:                 submitterActor(t),
 		TenantID:              requester.TenantID(),
 		RequesterMembershipID: requester.ID(),
 		Permission:            permission.FromConstant(permission.IdentityPermissions.Users.Create),
@@ -421,6 +268,7 @@ func TestRequestPermissionElevation_InputValidation(t *testing.T) {
 		{
 			name: "tenant id required",
 			cmd: command.RequestPermissionElevationCommand{
+				Actor:                 submitterActor(t),
 				TenantID:              tenant.ID(""),
 				RequesterMembershipID: mid,
 				Permission:            perm,
@@ -430,6 +278,7 @@ func TestRequestPermissionElevation_InputValidation(t *testing.T) {
 		{
 			name: "requester membership id required",
 			cmd: command.RequestPermissionElevationCommand{
+				Actor:                 submitterActor(t),
 				TenantID:              tid,
 				RequesterMembershipID: membership.ID(""),
 				Permission:            perm,
@@ -439,6 +288,7 @@ func TestRequestPermissionElevation_InputValidation(t *testing.T) {
 		{
 			name: "permission required",
 			cmd: command.RequestPermissionElevationCommand{
+				Actor:                 submitterActor(t),
 				TenantID:              tid,
 				RequesterMembershipID: mid,
 				Permission:            nil,
@@ -474,6 +324,7 @@ func TestRequestPermissionElevation_DefaultDurationApplied(t *testing.T) {
 	h := command.NewRequestPermissionElevationHandler(reqs, mems, fixedTimeFn(),
 		func() permissionrequest.ID { return permissionrequest.ID(ids.NewV7().String()) })
 	out, err := h.Handle(t.Context(), command.RequestPermissionElevationCommand{
+		Actor:                 submitterActor(t),
 		TenantID:              requester.TenantID(),
 		RequesterMembershipID: requester.ID(),
 		Permission:            permission.FromConstant(permission.IdentityPermissions.Users.Create),
@@ -503,6 +354,7 @@ func TestRequestPermissionElevation_LoadRequester_NonNotFoundError_Wrapped(t *te
 		func() permissionrequest.ID { return permissionrequest.ID(ids.NewV7().String()) })
 
 	_, err := h.Handle(t.Context(), command.RequestPermissionElevationCommand{
+		Actor:                 submitterActor(t),
 		TenantID:              tenant.ID(ids.NewV7().String()),
 		RequesterMembershipID: membership.ID(ids.NewV7().String()),
 		Permission:            permission.FromConstant(permission.IdentityPermissions.Users.Create),
@@ -529,6 +381,7 @@ func TestRequestPermissionElevation_AggregateInvariantPropagated(t *testing.T) {
 	h := command.NewRequestPermissionElevationHandler(reqs, mems, fixedTimeFn(),
 		func() permissionrequest.ID { return permissionrequest.ID(ids.NewV7().String()) })
 	_, err := h.Handle(t.Context(), command.RequestPermissionElevationCommand{
+		Actor:                 submitterActor(t),
 		TenantID:              requester.TenantID(),
 		RequesterMembershipID: requester.ID(),
 		Permission:            permission.FromConstant(permission.IdentityPermissions.Users.Create),
@@ -551,6 +404,7 @@ func TestRequestPermissionElevation_AddPersist_NonPendingExistsError_Wrapped(t *
 	h := command.NewRequestPermissionElevationHandler(reqs, mems, fixedTimeFn(),
 		func() permissionrequest.ID { return permissionrequest.ID(ids.NewV7().String()) })
 	_, err := h.Handle(t.Context(), command.RequestPermissionElevationCommand{
+		Actor:                 submitterActor(t),
 		TenantID:              requester.TenantID(),
 		RequesterMembershipID: requester.ID(),
 		Permission:            permission.FromConstant(permission.IdentityPermissions.Users.Create),
@@ -566,416 +420,7 @@ func TestRequestPermissionElevation_AddPersist_NonPendingExistsError_Wrapped(t *
 
 // ----- ApprovePermissionRequest — additional branches ---------------------
 
-func TestApprovePermissionRequest_InputValidation(t *testing.T) {
-	t.Parallel()
-	tid := tenant.ID(ids.NewV7().String())
-	rid := permissionrequest.ID(ids.NewV7().String())
-	mid := membership.ID(ids.NewV7().String())
-
-	cases := []struct {
-		name string
-		cmd  command.ApprovePermissionRequestCommand
-	}{
-		{
-			name: "tenant id required",
-			cmd: command.ApprovePermissionRequestCommand{
-				TenantID:             tenant.ID(""),
-				RequestID:            rid,
-				ApproverMembershipID: mid,
-			},
-		},
-		{
-			name: "request id required",
-			cmd: command.ApprovePermissionRequestCommand{
-				TenantID:             tid,
-				RequestID:            permissionrequest.ID(""),
-				ApproverMembershipID: mid,
-			},
-		},
-		{
-			name: "approver membership id required",
-			cmd: command.ApprovePermissionRequestCommand{
-				TenantID:             tid,
-				RequestID:            rid,
-				ApproverMembershipID: membership.ID(""),
-			},
-		},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			h := command.NewApprovePermissionRequestHandler(
-				fakeUoW{},
-				newFakePermissionRequestRepo(),
-				newFakeMembershipRepoForPermReq(),
-				fixedTimeFn(),
-				ids.NewV7,
-			)
-			if err := h.Handle(t.Context(), tc.cmd); err == nil {
-				t.Fatal("expected error, got nil")
-			}
-		})
-	}
-}
-
-func TestApprovePermissionRequest_RequestNotFound(t *testing.T) {
-	t.Parallel()
-
-	reqs := newFakePermissionRequestRepo()
-	mems := newFakeMembershipRepoForPermReq()
-	h := command.NewApprovePermissionRequestHandler(fakeUoW{}, reqs, mems, fixedTimeFn(), ids.NewV7)
-
-	err := h.Handle(t.Context(), command.ApprovePermissionRequestCommand{
-		TenantID:             tenant.ID(ids.NewV7().String()),
-		RequestID:            permissionrequest.ID(ids.NewV7().String()),
-		ApproverMembershipID: membership.ID(ids.NewV7().String()),
-	})
-	if !errors.Is(err, command.ErrPermissionRequestNotFound) {
-		t.Fatalf("err = %v, want ErrPermissionRequestNotFound", err)
-	}
-}
-
-func TestApprovePermissionRequest_NonPendingAtLoad(t *testing.T) {
-	// Submit + cancel, then re-approve → ErrPermissionRequestNotPending at the
-	// load-time state check.
-	t.Parallel()
-
-	reqs := newFakePermissionRequestRepo()
-	mems := newFakeMembershipRepoForPermReq()
-	requester := freshMembershipForPermReq(t)
-	_ = mems.Add(t.Context(), requester) // arch-test:ignore-err - test fixture setup
-
-	submitH := command.NewRequestPermissionElevationHandler(reqs, mems, fixedTimeFn(),
-		func() permissionrequest.ID { return permissionrequest.ID(ids.NewV7().String()) })
-	out, _ := submitH.Handle(t.Context(), command.RequestPermissionElevationCommand{
-		TenantID:              requester.TenantID(),
-		RequesterMembershipID: requester.ID(),
-		Permission:            permission.FromConstant(permission.IdentityPermissions.Users.Create),
-		Reason:                "need to onboard 5 users for monthly sales drive",
-	})
-	// Cancel terminates the request.
-	cancelH := command.NewCancelPermissionRequestHandler(reqs, fixedTimeFn())
-	if err := cancelH.Handle(t.Context(), command.CancelPermissionRequestCommand{
-		TenantID:              requester.TenantID(),
-		RequestID:             out.RequestID,
-		RequesterMembershipID: requester.ID(),
-	}); err != nil {
-		t.Fatalf("Cancel: %v", err)
-	}
-
-	approveH := command.NewApprovePermissionRequestHandler(fakeUoW{}, reqs, mems, fixedTimeFn(), ids.NewV7)
-	err := approveH.Handle(t.Context(), command.ApprovePermissionRequestCommand{
-		TenantID:             requester.TenantID(),
-		RequestID:            out.RequestID,
-		ApproverMembershipID: membership.ID(ids.NewV7().String()),
-		OperatorAuthority:    true,
-	})
-	if !errors.Is(err, command.ErrPermissionRequestNotPending) {
-		t.Fatalf("err = %v, want ErrPermissionRequestNotPending", err)
-	}
-}
-
-func TestApprovePermissionRequest_RequesterDeletedBetweenSubmitAndApprove(t *testing.T) {
-	// Requester GetByID returns ErrNotFound at approve time → collapse to
-	// ErrPermissionRequestNotFound (enumeration-safety).
-	t.Parallel()
-
-	reqs := newFakePermissionRequestRepo()
-	mems := newFakeMembershipRepoForPermReq()
-	requester := freshMembershipForPermReq(t)
-	manager := freshMembershipForPermReq(t)
-	_ = requester.AssignManager(manager.ID(), testNow) // arch-test:ignore-err - test fixture setup
-	_ = requester.PullEvents()
-	_ = mems.Add(t.Context(), requester) // arch-test:ignore-err - test fixture setup
-	_ = mems.Add(t.Context(), manager)   // arch-test:ignore-err - test fixture setup
-
-	submitH := command.NewRequestPermissionElevationHandler(reqs, mems, fixedTimeFn(),
-		func() permissionrequest.ID { return permissionrequest.ID(ids.NewV7().String()) })
-	out, _ := submitH.Handle(t.Context(), command.RequestPermissionElevationCommand{
-		TenantID:              requester.TenantID(),
-		RequesterMembershipID: requester.ID(),
-		Permission:            permission.FromConstant(permission.IdentityPermissions.Users.Create),
-		Reason:                "need to onboard 5 users for monthly sales drive",
-	})
-
-	// ErrNotFound on the next GetByID simulates the deletion race.
-	wrappedMems := &b2MemRepo{FakeRepository: mems}
-	wrappedMems.errOnGetByID = membership.ErrNotFound
-
-	approveH := command.NewApprovePermissionRequestHandler(fakeUoW{}, reqs, wrappedMems, fixedTimeFn(), ids.NewV7)
-	err := approveH.Handle(t.Context(), command.ApprovePermissionRequestCommand{
-		TenantID:             requester.TenantID(),
-		RequestID:            out.RequestID,
-		ApproverMembershipID: manager.ID(),
-	})
-	if !errors.Is(err, command.ErrPermissionRequestNotFound) {
-		t.Fatalf("err = %v, want ErrPermissionRequestNotFound", err)
-	}
-}
-
-func TestApprovePermissionRequest_NonManagerAndNonPlatform_Forbidden(t *testing.T) {
-	// Approver is neither the requester's manager nor a platform operator.
-	t.Parallel()
-
-	reqs := newFakePermissionRequestRepo()
-	mems := newFakeMembershipRepoForPermReq()
-	requester := freshMembershipForPermReq(t)
-	manager := freshMembershipForPermReq(t)
-	_ = requester.AssignManager(manager.ID(), testNow) // arch-test:ignore-err - test fixture setup
-	_ = requester.PullEvents()
-	_ = mems.Add(t.Context(), requester) // arch-test:ignore-err - test fixture setup
-	_ = mems.Add(t.Context(), manager)   // arch-test:ignore-err - test fixture setup
-
-	submitH := command.NewRequestPermissionElevationHandler(reqs, mems, fixedTimeFn(),
-		func() permissionrequest.ID { return permissionrequest.ID(ids.NewV7().String()) })
-	out, _ := submitH.Handle(t.Context(), command.RequestPermissionElevationCommand{
-		TenantID:              requester.TenantID(),
-		RequesterMembershipID: requester.ID(),
-		Permission:            permission.FromConstant(permission.IdentityPermissions.Users.Create),
-		Reason:                "need to onboard 5 users for monthly sales drive",
-	})
-
-	approveH := command.NewApprovePermissionRequestHandler(fakeUoW{}, reqs, mems, fixedTimeFn(), ids.NewV7)
-	other := membership.ID(ids.NewV7().String())
-	err := approveH.Handle(t.Context(), command.ApprovePermissionRequestCommand{
-		TenantID:             requester.TenantID(),
-		RequestID:            out.RequestID,
-		ApproverMembershipID: other,
-		OperatorAuthority:    false,
-	})
-	if !errors.Is(err, command.ErrPermissionRequestForbidden) {
-		t.Fatalf("err = %v, want ErrPermissionRequestForbidden", err)
-	}
-}
-
-func TestApprovePermissionRequest_GrantFailure_PropagatesError(t *testing.T) {
-	// The grant (membership UpdateByID) fails inside the UoW closure → wrapped
-	// error. The atomic rollback is covered at the SQL layer (the no-op test
-	// UoW can't model it).
-	t.Parallel()
-
-	reqs := newFakePermissionRequestRepo()
-	mems := newB2MemRepo()
-	requester := freshMembershipForPermReq(t)
-	manager := freshMembershipForPermReq(t)
-	_ = requester.AssignManager(manager.ID(), testNow) // arch-test:ignore-err - test fixture setup
-	_ = requester.PullEvents()
-	_ = mems.Add(t.Context(), requester) // arch-test:ignore-err - test fixture setup
-	_ = mems.Add(t.Context(), manager)   // arch-test:ignore-err - test fixture setup
-
-	submitH := command.NewRequestPermissionElevationHandler(reqs, mems, fixedTimeFn(),
-		func() permissionrequest.ID { return permissionrequest.ID(ids.NewV7().String()) })
-	out, _ := submitH.Handle(t.Context(), command.RequestPermissionElevationCommand{
-		TenantID:              requester.TenantID(),
-		RequesterMembershipID: requester.ID(),
-		Permission:            permission.FromConstant(permission.IdentityPermissions.Users.Create),
-		Reason:                "need to onboard 5 users for monthly sales drive",
-	})
-
-	mems.errOnUpdateByID = errB2Permreq
-
-	approveH := command.NewApprovePermissionRequestHandler(fakeUoW{}, reqs, mems, fixedTimeFn(), ids.NewV7)
-	err := approveH.Handle(t.Context(), command.ApprovePermissionRequestCommand{
-		TenantID:             requester.TenantID(),
-		RequestID:            out.RequestID,
-		ApproverMembershipID: manager.ID(),
-		DecisionReason:       "infra hiccup mid-grant",
-	})
-	if !errors.Is(err, errB2Permreq) {
-		t.Fatalf("err = %v, want wrapped errB2Permreq", err)
-	}
-	if got := len(requester.GrantedPermissions()); got != 0 {
-		t.Errorf("granted permissions = %d, want 0 (grant failed)", got)
-	}
-}
-
-// TestApprovePermissionRequest_UpdateByID_NonPendingTranslation — ErrNotPending
-// from the requests UpdateByID (a concurrent finalise race) translates to
-// ErrPermissionRequestNotPending.
-func TestApprovePermissionRequest_UpdateByID_NonPendingTranslation(t *testing.T) {
-	t.Parallel()
-
-	reqs := newB2PermReqRepo()
-	mems := newFakeMembershipRepoForPermReq()
-	requester := freshMembershipForPermReq(t)
-	manager := freshMembershipForPermReq(t)
-	_ = requester.AssignManager(manager.ID(), testNow) // arch-test:ignore-err - test fixture setup
-	_ = requester.PullEvents()
-	_ = mems.Add(t.Context(), requester) // arch-test:ignore-err - test fixture setup
-	_ = mems.Add(t.Context(), manager)   // arch-test:ignore-err - test fixture setup
-
-	submitH := command.NewRequestPermissionElevationHandler(reqs, mems, fixedTimeFn(),
-		func() permissionrequest.ID { return permissionrequest.ID(ids.NewV7().String()) })
-	out, _ := submitH.Handle(t.Context(), command.RequestPermissionElevationCommand{
-		TenantID:              requester.TenantID(),
-		RequesterMembershipID: requester.ID(),
-		Permission:            permission.FromConstant(permission.IdentityPermissions.Users.Create),
-		Reason:                "need to onboard 5 users for monthly sales drive",
-	})
-	reqs.errOnUpdateByID = permissionrequest.ErrNotPending
-
-	approveH := command.NewApprovePermissionRequestHandler(fakeUoW{}, reqs, mems, fixedTimeFn(), ids.NewV7)
-	err := approveH.Handle(t.Context(), command.ApprovePermissionRequestCommand{
-		TenantID:             requester.TenantID(),
-		RequestID:            out.RequestID,
-		ApproverMembershipID: manager.ID(),
-	})
-	if !errors.Is(err, command.ErrPermissionRequestNotPending) {
-		t.Fatalf("err = %v, want ErrPermissionRequestNotPending", err)
-	}
-}
-
 // ----- DenyPermissionRequest — additional branches ------------------------
-
-func TestDenyPermissionRequest_InputValidation(t *testing.T) {
-	t.Parallel()
-	tid := tenant.ID(ids.NewV7().String())
-	rid := permissionrequest.ID(ids.NewV7().String())
-	mid := membership.ID(ids.NewV7().String())
-
-	cases := []struct {
-		name string
-		cmd  command.DenyPermissionRequestCommand
-	}{
-		{
-			name: "tenant id required",
-			cmd: command.DenyPermissionRequestCommand{
-				TenantID:             tenant.ID(""),
-				RequestID:            rid,
-				ApproverMembershipID: mid,
-				DecisionReason:       "scope too broad",
-			},
-		},
-		{
-			name: "request id required",
-			cmd: command.DenyPermissionRequestCommand{
-				TenantID:             tid,
-				RequestID:            permissionrequest.ID(""),
-				ApproverMembershipID: mid,
-				DecisionReason:       "scope too broad",
-			},
-		},
-		{
-			name: "approver membership id required",
-			cmd: command.DenyPermissionRequestCommand{
-				TenantID:             tid,
-				RequestID:            rid,
-				ApproverMembershipID: membership.ID(""),
-				DecisionReason:       "scope too broad",
-			},
-		},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			h := command.NewDenyPermissionRequestHandler(
-				newFakePermissionRequestRepo(),
-				newFakeMembershipRepoForPermReq(),
-				fixedTimeFn(),
-			)
-			if err := h.Handle(t.Context(), tc.cmd); err == nil {
-				t.Fatal("expected error, got nil")
-			}
-		})
-	}
-}
-
-func TestDenyPermissionRequest_NonPendingAtLoad(t *testing.T) {
-	t.Parallel()
-
-	reqs := newFakePermissionRequestRepo()
-	mems := newFakeMembershipRepoForPermReq()
-	requester := freshMembershipForPermReq(t)
-	_ = mems.Add(t.Context(), requester) // arch-test:ignore-err - test fixture setup
-
-	submitH := command.NewRequestPermissionElevationHandler(reqs, mems, fixedTimeFn(),
-		func() permissionrequest.ID { return permissionrequest.ID(ids.NewV7().String()) })
-	out, _ := submitH.Handle(t.Context(), command.RequestPermissionElevationCommand{
-		TenantID:              requester.TenantID(),
-		RequesterMembershipID: requester.ID(),
-		Permission:            permission.FromConstant(permission.IdentityPermissions.Users.Create),
-		Reason:                "need to onboard 5 users for monthly sales drive",
-	})
-	cancelH := command.NewCancelPermissionRequestHandler(reqs, fixedTimeFn())
-	if err := cancelH.Handle(t.Context(), command.CancelPermissionRequestCommand{
-		TenantID:              requester.TenantID(),
-		RequestID:             out.RequestID,
-		RequesterMembershipID: requester.ID(),
-	}); err != nil {
-		t.Fatalf("Cancel: %v", err)
-	}
-
-	denyH := command.NewDenyPermissionRequestHandler(reqs, mems, fixedTimeFn())
-	err := denyH.Handle(t.Context(), command.DenyPermissionRequestCommand{
-		TenantID:             requester.TenantID(),
-		RequestID:            out.RequestID,
-		ApproverMembershipID: membership.ID(ids.NewV7().String()),
-		OperatorAuthority:    true,
-		DecisionReason:       "scope too broad; rethink and re-submit",
-	})
-	if !errors.Is(err, command.ErrPermissionRequestNotPending) {
-		t.Fatalf("err = %v, want ErrPermissionRequestNotPending", err)
-	}
-}
-
-func TestDenyPermissionRequest_SelfDeny_BlockedAsSelfApproval(t *testing.T) {
-	t.Parallel()
-
-	reqs := newFakePermissionRequestRepo()
-	mems := newFakeMembershipRepoForPermReq()
-	requester := freshMembershipForPermReq(t)
-	_ = mems.Add(t.Context(), requester) // arch-test:ignore-err - test fixture setup
-
-	submitH := command.NewRequestPermissionElevationHandler(reqs, mems, fixedTimeFn(),
-		func() permissionrequest.ID { return permissionrequest.ID(ids.NewV7().String()) })
-	out, _ := submitH.Handle(t.Context(), command.RequestPermissionElevationCommand{
-		TenantID:              requester.TenantID(),
-		RequesterMembershipID: requester.ID(),
-		Permission:            permission.FromConstant(permission.IdentityPermissions.Users.Create),
-		Reason:                "need to onboard 5 users for monthly sales drive",
-	})
-
-	denyH := command.NewDenyPermissionRequestHandler(reqs, mems, fixedTimeFn())
-	err := denyH.Handle(t.Context(), command.DenyPermissionRequestCommand{
-		TenantID:             requester.TenantID(),
-		RequestID:            out.RequestID,
-		ApproverMembershipID: requester.ID(), // self-deny
-		DecisionReason:       "changed my mind",
-	})
-	if !errors.Is(err, command.ErrPermissionRequestSelfApproval) {
-		t.Fatalf("err = %v, want ErrPermissionRequestSelfApproval", err)
-	}
-}
-
-func TestDenyPermissionRequest_MissingManagerAndNonPlatform_Forbidden(t *testing.T) {
-	t.Parallel()
-
-	reqs := newFakePermissionRequestRepo()
-	mems := newFakeMembershipRepoForPermReq()
-	requester := freshMembershipForPermReq(t) // no manager
-	_ = mems.Add(t.Context(), requester)      // arch-test:ignore-err - test fixture setup
-
-	submitH := command.NewRequestPermissionElevationHandler(reqs, mems, fixedTimeFn(),
-		func() permissionrequest.ID { return permissionrequest.ID(ids.NewV7().String()) })
-	out, _ := submitH.Handle(t.Context(), command.RequestPermissionElevationCommand{
-		TenantID:              requester.TenantID(),
-		RequesterMembershipID: requester.ID(),
-		Permission:            permission.FromConstant(permission.IdentityPermissions.Users.Create),
-		Reason:                "need to onboard 5 users for monthly sales drive",
-	})
-
-	denyH := command.NewDenyPermissionRequestHandler(reqs, mems, fixedTimeFn())
-	err := denyH.Handle(t.Context(), command.DenyPermissionRequestCommand{
-		TenantID:             requester.TenantID(),
-		RequestID:            out.RequestID,
-		ApproverMembershipID: membership.ID(ids.NewV7().String()), // not the manager
-		OperatorAuthority:    false,
-		DecisionReason:       "scope too broad; rethink and re-submit",
-	})
-	if !errors.Is(err, command.ErrPermissionRequestForbidden) {
-		t.Fatalf("err = %v, want ErrPermissionRequestForbidden", err)
-	}
-}
 
 // ----- CancelPermissionRequest — additional branches ----------------------
 
@@ -1040,6 +485,7 @@ func TestCancelPermissionRequest_NonPending(t *testing.T) {
 	submitH := command.NewRequestPermissionElevationHandler(reqs, mems, fixedTimeFn(),
 		func() permissionrequest.ID { return permissionrequest.ID(ids.NewV7().String()) })
 	out, _ := submitH.Handle(t.Context(), command.RequestPermissionElevationCommand{
+		Actor:                 submitterActor(t),
 		TenantID:              requester.TenantID(),
 		RequesterMembershipID: requester.ID(),
 		Permission:            permission.FromConstant(permission.IdentityPermissions.Users.Create),
@@ -1062,69 +508,5 @@ func TestCancelPermissionRequest_NonPending(t *testing.T) {
 	})
 	if !errors.Is(err, command.ErrPermissionRequestNotPending) {
 		t.Fatalf("err = %v, want ErrPermissionRequestNotPending", err)
-	}
-}
-
-// ----- Cross-cutting reachability checks ----------------------------------
-
-// Keep uuid + pagination + person imports reachable.
-//
-//nolint:gochecknoglobals // sentinel reachability marker for unused-import
-var (
-	_ = uuid.Nil
-	_ pagination.Cursor
-	_ *person.Person
-)
-
-// A request stored before requestability was enforced may name tenant.admin or
-// a platform-reserved permission. Approve refuses it (even for an operator),
-// grants nothing, and leaves it pending so it can still be denied or cancelled.
-func TestApprovePermissionRequest_StoredNonRequestableNameIsRefusedAndStaysPending(t *testing.T) {
-	t.Parallel()
-
-	for _, name := range []string{
-		permission.IdentityPermissions.Meta.TenantAdmin,
-		permission.IdentityPermissions.Platform.ImpersonationManage,
-	} {
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-			reqs := newFakePermissionRequestRepo()
-			mems := newFakeMembershipRepoForPermReq()
-			requester := freshMembershipForPermReq(t)
-			manager := freshMembershipForPermReq(t)
-			_ = requester.AssignManager(manager.ID(), testNow) // arch-test:ignore-err - test fixture setup
-			_ = requester.PullEvents()
-			_ = mems.Add(t.Context(), requester) // arch-test:ignore-err - test fixture setup
-			stored := permissionrequest.UnmarshalFromDB(permissionrequest.Snapshot{
-				ID:                    permissionrequest.ID(ids.NewV7().String()),
-				TenantID:              requester.TenantID(),
-				RequesterMembershipID: requester.ID(),
-				Permission:            permission.FromConstant(name),
-				DurationDays:          7,
-				Reason:                "need elevated access for the rollout this week",
-				State:                 permissionrequest.StatePending,
-				CreatedAt:             testNow,
-				UpdatedAt:             testNow,
-			})
-			_ = reqs.Add(t.Context(), stored) // arch-test:ignore-err - test fixture setup
-
-			approveH := command.NewApprovePermissionRequestHandler(fakeUoW{}, reqs, mems, fixedTimeFn(), ids.NewV7)
-			for _, cmd := range []command.ApprovePermissionRequestCommand{
-				{TenantID: requester.TenantID(), RequestID: stored.ID(), ApproverMembershipID: manager.ID()},
-				{TenantID: requester.TenantID(), RequestID: stored.ID(), ApproverMembershipID: membership.ID(ids.NewV7().String()), OperatorAuthority: true},
-			} {
-				if err := approveH.Handle(t.Context(), cmd); !errors.Is(err, permissionrequest.ErrPermissionNotRequestable) {
-					t.Fatalf("approve err = %v, want ErrPermissionNotRequestable", err)
-				}
-			}
-			got, err := reqs.GetByID(t.Context(), requester.TenantID(), stored.ID())
-			if err != nil || got.State() != permissionrequest.StatePending {
-				t.Fatalf("after refused approve: state %v err %v, want pending", got.State(), err)
-			}
-			after, _ := mems.GetByID(t.Context(), requester.TenantID(), requester.ID()) // arch-test:ignore-err - test fixture read
-			if n := len(after.GrantedPermissions()); n != 0 {
-				t.Fatalf("refused approve left %d grants on the requester", n)
-			}
-		})
 	}
 }

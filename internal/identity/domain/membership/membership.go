@@ -537,58 +537,6 @@ func (m *Membership) EffectivePermissions(roles []*role.Role, now time.Time) []*
 	return out
 }
 
-// ReplacePermissionOverlays sets both overlay slices atomically.
-// Single PermissionsUpdatedEvent fires regardless of diff size —
-// listeners care about "permissions changed for this Membership",
-// not per-permission deltas.
-//
-// nil entries in either slice are silently dropped. A name that is already
-// granted and still live at now keeps its existing GrantedOverride, expiry
-// included: a replace cannot extend a time-bound grant (ADR 0055 approval
-// workflow grants carry a non-zero expiry) or make it permanent. A name that
-// is not currently granted, or whose grant has expired, becomes a perpetual
-// GrantedOverride (zero ExpiresAt); an admin bulk-replace never sets a
-// time-bound grant. Names not listed are removed.
-//
-// CALLER NOTE: if a future flow needs bulk-replace WITH time-bound
-// grants, take a `[]GrantedOverride` shape instead. v0.2 has no such
-// caller, so this convenience signature stays.
-func (m *Membership) ReplacePermissionOverlays(
-	granted []*permission.Permission,
-	revoked []*permission.Permission,
-	now time.Time,
-) error {
-	g := make([]GrantedOverride, 0, len(granted))
-	for _, p := range granted {
-		if p == nil {
-			continue
-		}
-		entry := GrantedOverride{Permission: p}
-		for _, cur := range m.grantedPermissions {
-			if cur.Permission != nil && cur.Permission.Equal(p) && (cur.ExpiresAt.IsZero() || now.Before(cur.ExpiresAt)) {
-				entry = cur
-				break
-			}
-		}
-		g = append(g, entry)
-	}
-	r := make([]*permission.Permission, 0, len(revoked))
-	for _, p := range revoked {
-		if p != nil {
-			r = append(r, p)
-		}
-	}
-	m.grantedPermissions = g
-	m.revokedPermissions = r
-	m.recordEvent(PermissionsUpdatedEvent{
-		MembershipID: m.id,
-		PersonID:     m.personID,
-		TenantID:     m.tenantID,
-		At:           now.UTC(),
-	})
-	return nil
-}
-
 // ReplacePermissionOverrides sets both overlay lists to EXACTLY what the caller
 // decided on: each granted entry carries its expiry as approved (zero =
 // permanent) and no liveness is recomputed here, so the instant the policy

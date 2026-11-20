@@ -115,6 +115,7 @@ func TestE2E_PermissionRequest_StoredNonRequestableRequestCannotBeApproved(t *te
 	mgr := f.createMember(t, owner, "mgr")
 	req := f.createMember(t, owner, "req")
 	f.assignRole(t, owner.AccessToken, mgr.membershipID, f.roleIDByName(t, owner.AccessToken, role.SystemRoles.Tenant.SalesManager))
+	f.assignRole(t, owner.AccessToken, req.membershipID, f.roleIDByName(t, owner.AccessToken, role.SystemRoles.Tenant.SalesExecutive))
 	if r := f.authedJSON(t, http.MethodPut, "/api/v1/users/"+req.membershipID+"/manager", owner.AccessToken,
 		ports.AssignUserManagerRequest{ManagerID: mgr.membershipID}); r.status != http.StatusNoContent {
 		t.Fatalf("set manager: %d %s", r.status, r.body)
@@ -204,16 +205,30 @@ func (f e2eFixture) registerPlatformTenant(t *testing.T) registeredTenant {
 }
 
 // TestE2E_PermissionRequest_PlatformTenantMembersCannotSelfElevate: two
-// platform-tenant members with no permissions must not be able to mint
-// platform authority between them. Platform-tenant slug membership is not
-// approver authority; an operator holding platform.tenants.view still is.
+// platform-tenant members with no role must not be able to mint platform
+// authority between them. Platform-tenant slug membership is not approver
+// authority, and neither is platform.tenants.view: in the platform tenant an
+// operator follows rank like anyone else (the operator exemption is
+// cross-tenant only, ADR 0069 R3), so a read-only operator cannot approve.
 func TestE2E_PermissionRequest_PlatformTenantMembersCannotSelfElevate(t *testing.T) {
 	f := newE2EFixtureAt(t, time.Now)
 	plat := f.registerPlatformTenant(t)
 	a := f.createMember(t, plat, "plat-a")
 	b := f.createMember(t, plat, "plat-b")
-	aTok := f.loginToken(t, a.email, a.password)
-	bTok := f.loginToken(t, b.email, b.password)
+	mint := func(m createdMember, perms ...string) string {
+		tok, err := f.Issuer.Issue(jwt.IssueArgs{
+			PersonID: m.personID, TenantID: plat.TenantID, TenantSlug: tenant.PlatformSlug,
+			MembershipID: m.membershipID, SecurityStamp: identitytest.GetSecurityStamp(t, f.Pool, m.personID),
+			IsPlatform: true, Permissions: perms,
+		})
+		if err != nil {
+			t.Fatalf("mint: %v", err)
+		}
+		return tok
+	}
+	elev := permission.IdentityPermissions.Meta.RequestPermissionElevation
+	aTok := mint(a, elev)
+	bTok := mint(b)
 
 	sub, _ := f.requestElevation(t, aTok, permission.IdentityPermissions.Platform.ImpersonationManage)
 	if sub.status != http.StatusUnprocessableEntity || decodeError(t, sub.body).Error != "permission_not_requestable" {
@@ -234,19 +249,11 @@ func TestE2E_PermissionRequest_PlatformTenantMembersCannotSelfElevate(t *testing
 		t.Errorf("zero-permission platform member denies: %d %s, want 403", d.status, d.body)
 	}
 
-	// An operator with platform.tenants.view (real membership in the platform
-	// tenant) still approves.
-	opTok, err := f.Issuer.Issue(jwt.IssueArgs{
-		PersonID: b.personID, TenantID: plat.TenantID, TenantSlug: tenant.PlatformSlug,
-		MembershipID: b.membershipID, SecurityStamp: identitytest.GetSecurityStamp(t, f.Pool, b.personID),
-		IsPlatform:  true,
-		Permissions: []string{permission.IdentityPermissions.Platform.TenantsView},
-	})
-	if err != nil {
-		t.Fatalf("mint operator: %v", err)
-	}
-	if ap := f.approveRequest(t, opTok, reqID); ap.status != http.StatusNoContent {
-		t.Errorf("operator with platform.tenants.view approves: %d %s, want 204", ap.status, ap.body)
+	// A read-only operator (platform.tenants.view) in the platform tenant is
+	// refused too: it used to approve (204); it now follows rank.
+	opTok := mint(b, permission.IdentityPermissions.Platform.TenantsView)
+	if ap := f.approveRequest(t, opTok, reqID); ap.status != http.StatusForbidden || decodeError(t, ap.body).Error != "insufficient_rank" {
+		t.Errorf("read-only operator approves in the platform tenant: %d %s, want 403 insufficient_rank", ap.status, ap.body)
 	}
 }
 

@@ -694,9 +694,12 @@ func buildIdentityApp(pool *pgxpool.Pool, hybridCache *cache.HybridCache, cfg co
 
 				// Permission-elevation approval workflow (ADR 0055).
 				RequestPermissionElevation: command.NewRequestPermissionElevationHandler(permissionRequests, memberships, now, newPermissionRequestID),
-				ApprovePermissionRequest:   command.NewApprovePermissionRequestHandler(tx, permissionRequests, memberships, now, newOverrideID),
-				DenyPermissionRequest:      command.NewDenyPermissionRequestHandler(permissionRequests, memberships, now),
+				ApprovePermissionRequest:   command.NewApprovePermissionRequestHandler(tx, authorityLock, permissionRequests, memberships, roles, persons, now, newOverrideID),
+				DenyPermissionRequest:      command.NewDenyPermissionRequestHandler(tx, authorityLock, permissionRequests, memberships, roles, persons, now),
 				CancelPermissionRequest:    command.NewCancelPermissionRequestHandler(permissionRequests, now),
+
+				AuthorizePermissionRequestView:  command.NewAuthorizePermissionRequestViewHandler(permissionRequests, memberships, roles, persons, now),
+				ListDecidablePermissionRequests: command.NewListDecidablePermissionRequestsHandler(permissionRequests, memberships, roles, persons, now),
 			},
 			Queries: app.Queries{
 				ListSessions: query.NewListSessionsHandler(families),
@@ -731,7 +734,6 @@ func buildIdentityApp(pool *pgxpool.Pool, hybridCache *cache.HybridCache, cfg co
 				// Permission-elevation approval workflow (ADR 0055).
 				GetPermissionRequest:     query.NewGetPermissionRequestHandler(permissionRequests),
 				ListMyPermissionRequests: query.NewListMyPermissionRequestsHandler(permissionRequests),
-				ListPendingForApprover:   query.NewListPendingForApproverHandler(permissionRequests),
 			},
 		},
 	}, nil

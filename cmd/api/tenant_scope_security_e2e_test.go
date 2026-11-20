@@ -17,6 +17,7 @@ import (
 	"testing"
 
 	"github.com/leadkart/leadkart-go/internal/identity/domain/permission"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/role"
 	"github.com/leadkart/leadkart-go/internal/identity/ports"
 )
 
@@ -25,7 +26,9 @@ import (
 // membership id.
 func (f e2eFixture) pendingRequestIn(t *testing.T, owner registeredTenant, prefix string) (memberToken, requestID, membershipID string) {
 	t.Helper()
-	membershipID, memberToken = f.createMemberAndLogin(t, owner, prefix)
+	m := f.createMember(t, owner, prefix)
+	f.assignRole(t, owner.AccessToken, m.membershipID, f.roleIDByName(t, owner.AccessToken, role.SystemRoles.Tenant.SalesExecutive))
+	membershipID, memberToken = m.membershipID, f.loginToken(t, m.email, m.password)
 	resp := f.authedJSON(t, http.MethodPost, "/api/v1/permission-requests", memberToken, ports.CreatePermissionRequestRequest{
 		Permission: permission.IdentityPermissions.Users.View,
 		Reason:     "needs admin access for the quarter",

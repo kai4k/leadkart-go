@@ -46,15 +46,14 @@ type Repository interface {
 	// pending elevations").
 	GetPendingForMembership(ctx context.Context, tenantID tenant.ID, m membership.ID) ([]*Request, error)
 
-	// ListPendingApprovableBy returns the keyset-paginated queue of
-	// Pending requests where approver_membership_id matches the
-	// supplied Membership ID, scoped to tenantID. Per ADR 0038 cursor
-	// semantics; first page passes the zero pagination.Cursor + the
-	// adapter applies its own sentinel internally.
-	ListPendingApprovableBy(
+	// ListPendingInTenant returns the keyset-paginated queue of Pending
+	// requests of the whole tenant, newest first (created_at DESC, id DESC),
+	// scoped to tenantID. Who may DECIDE a request is the authority policy's
+	// call, not the store's: the approver queue filters this list through it
+	// (ADR 0069 A6). First page passes the zero pagination.Cursor.
+	ListPendingInTenant(
 		ctx context.Context,
 		tenantID tenant.ID,
-		approver membership.ID,
 		pageSize int,
 		cursor pagination.Cursor,
 	) (pagination.Page[*Request], error)

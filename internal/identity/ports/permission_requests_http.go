@@ -22,17 +22,20 @@ import (
 // Wave 9.1e — Permission-elevation approval workflow HTTP handlers
 // per ADR 0055.
 //
-// Authorization shape:
+// Authorization shape (ADR 0069 A6):
 //   - All routes require RequireFreshStamp (auth) — population of
 //     membership_id from JWT is mandatory for every operation.
-//   - Submit (POST .../permission-requests): caller IS the requester.
-//   - Approve/Deny: handler-inline check (caller IS requester's manager
-//     OR the caller holds operator authority — authn.CanActAcrossTenants; a
-//     platform-tenant slug alone does not count).
+//   - Submit (POST .../permission-requests): the route requires
+//     identity.meta.request_permission_elevation; an impersonation session
+//     cannot submit.
+//   - Approve/Deny: decided by the authority policy (MayApprove / MayDeny)
+//     inside the command, under the tenant lock; nothing here duplicates it.
+//   - Get: the requester and anyone who may deny the request; everyone else
+//     gets 404 (ADR 0044 enumeration-safety canon).
 //   - Cancel: handler-inline check (caller IS the requester; mismatch
-//     collapses to 404 per ADR 0044 enumeration-safety canon).
-//   - List my requests / pending-for-approver: caller IS the membership
-//     in the relevant role.
+//     collapses to 404).
+//   - List my requests: the caller's own. List role=approver: the pending
+//     requests the policy lets the caller decide.
 //
 // All routes are tenant-scoped: per ADR 0062 the TenantID is extracted
 // from the request's tenancy context and threaded explicitly through
@@ -73,8 +76,11 @@ func handleCreatePermissionRequest(log *slog.Logger, a app.Application) http.Han
 				Permission:            perm,
 				DurationDays:          req.DurationDays,
 				Reason:                req.Reason,
+				Actor:                 authn.AuthorityFrom(r.Context()),
 			})
 		switch {
+		case writeAuthorityError(w, err):
+			return
 		case errors.Is(err, command.ErrUserNotFound):
 			writeError(w, http.StatusNotFound, ErrCodeUserNotFound, "")
 			return
@@ -142,13 +148,18 @@ func handleListPermissionRequests(log *slog.Logger, a app.Application) http.Hand
 		var qerr error
 		switch role {
 		case "approver":
-			page, qerr = a.Queries.ListPendingForApprover.Handle(r.Context(),
-				query.ListPendingForApproverQuery{
-					TenantID:             tenant.ID(tid),
-					ApproverMembershipID: membership.ID(c.MembershipID),
-					Cursor:               cursor,
-					PageSize:             pageSize,
+			// The pending requests the policy lets the caller decide; a window
+			// of the tenant's queue per call (see command.approverQueueWindow),
+			// so a page may hold fewer items than page_size while has_more is true.
+			var decidable command.ListDecidablePermissionRequestsResult
+			decidable, qerr = a.Commands.ListDecidablePermissionRequests.Handle(r.Context(),
+				command.ListDecidablePermissionRequestsQuery{
+					TenantID: tenant.ID(tid),
+					Cursor:   cursor,
+					PageSize: pageSize,
+					Actor:    authn.AuthorityFrom(r.Context()),
 				})
+			page = query.PermissionRequestPage(decidable.Page)
 		default: // requester
 			page, qerr = a.Queries.ListMyPermissionRequests.Handle(r.Context(),
 				query.ListMyPermissionRequestsQuery{
@@ -194,6 +205,19 @@ func handleGetPermissionRequest(log *slog.Logger, a app.Application) http.Handle
 		if !ok {
 			return
 		}
+		// Visible to the requester and to anyone who may deny the request;
+		// everyone else (and a missing id) gets the same 404.
+		if err := a.Commands.AuthorizePermissionRequestView.Handle(r.Context(), command.AuthorizePermissionRequestViewCommand{
+			TenantID: tenant.ID(tid), RequestID: id, Actor: authn.AuthorityFrom(r.Context()),
+		}); err != nil {
+			if errors.Is(err, command.ErrPermissionRequestNotFound) {
+				writeError(w, http.StatusNotFound, ErrCodePermissionRequestNotFound, "")
+				return
+			}
+			log.ErrorContext(r.Context(), "authorize permission request view failed", "err", err)
+			writeError(w, http.StatusInternalServerError, ErrCodeInternalError, "")
+			return
+		}
 		view, err := a.Queries.GetPermissionRequest.Handle(r.Context(),
 			query.GetPermissionRequestQuery{TenantID: tenant.ID(tid), RequestID: id})
 		switch {
@@ -203,16 +227,6 @@ func handleGetPermissionRequest(log *slog.Logger, a app.Application) http.Handle
 		case err != nil:
 			log.ErrorContext(r.Context(), "get permission request failed", "err", err)
 			writeError(w, http.StatusInternalServerError, ErrCodeInternalError, "")
-			return
-		}
-		// Caller must be either the requester, the named approver, OR
-		// a Platform operator. Cross-caller reads collapse to 404 per
-		// ADR 0044 enumeration-safety canon.
-		isPlatform := authn.IsPlatformOperator(c)
-		isRequester := view.RequesterMembershipID == c.MembershipID
-		isApprover := view.ApproverMembershipID != "" && view.ApproverMembershipID == c.MembershipID
-		if !isPlatform && !isRequester && !isApprover {
-			writeError(w, http.StatusNotFound, ErrCodePermissionRequestNotFound, "")
 			return
 		}
 		writeJSON(w, http.StatusOK, projectPermissionRequestViewToDto(view))
@@ -245,24 +259,22 @@ func handleApprovePermissionRequest(log *slog.Logger, a app.Application) http.Ha
 		}
 		err := a.Commands.ApprovePermissionRequest.Handle(r.Context(),
 			command.ApprovePermissionRequestCommand{
-				TenantID:             tenant.ID(tid),
-				RequestID:            id,
-				ApproverMembershipID: membership.ID(c.MembershipID),
-				OperatorAuthority:    authn.CanActAcrossTenants(c),
-				DecisionReason:       req.DecisionReason,
+				TenantID:       tenant.ID(tid),
+				RequestID:      id,
+				DecisionReason: req.DecisionReason,
+				Actor:          authn.AuthorityFrom(r.Context()),
 			})
 		switch {
+		case writeAuthorityError(w, err):
+			return
 		case errors.Is(err, command.ErrPermissionRequestNotFound):
 			writeError(w, http.StatusNotFound, ErrCodePermissionRequestNotFound, "")
 			return
 		case errors.Is(err, command.ErrPermissionRequestNotPending):
 			writeError(w, http.StatusConflict, ErrCodePermissionRequestNotPending, "")
 			return
-		case errors.Is(err, command.ErrPermissionRequestSelfApproval):
-			writeError(w, http.StatusUnprocessableEntity, ErrCodePermissionRequestSelfApproval, "")
-			return
-		case errors.Is(err, command.ErrPermissionRequestForbidden):
-			writeError(w, http.StatusForbidden, ErrCodePermissionRequestForbidden, "")
+		case errors.Is(err, command.ErrPermissionRequestRequesterInactive):
+			writeError(w, http.StatusConflict, ErrCodePermissionRequestRequesterInactive, "the requester can no longer receive the grant")
 			return
 		case errors.Is(err, permissionrequest.ErrPermissionNotRequestable):
 			writeError(w, http.StatusUnprocessableEntity, ErrCodePermissionNotRequestable, err.Error())
@@ -304,24 +316,19 @@ func handleDenyPermissionRequest(log *slog.Logger, a app.Application) http.Handl
 		}
 		err := a.Commands.DenyPermissionRequest.Handle(r.Context(),
 			command.DenyPermissionRequestCommand{
-				TenantID:             tenant.ID(tid),
-				RequestID:            id,
-				ApproverMembershipID: membership.ID(c.MembershipID),
-				OperatorAuthority:    authn.CanActAcrossTenants(c),
-				DecisionReason:       req.DecisionReason,
+				TenantID:       tenant.ID(tid),
+				RequestID:      id,
+				DecisionReason: req.DecisionReason,
+				Actor:          authn.AuthorityFrom(r.Context()),
 			})
 		switch {
+		case writeAuthorityError(w, err):
+			return
 		case errors.Is(err, command.ErrPermissionRequestNotFound):
 			writeError(w, http.StatusNotFound, ErrCodePermissionRequestNotFound, "")
 			return
 		case errors.Is(err, command.ErrPermissionRequestNotPending):
 			writeError(w, http.StatusConflict, ErrCodePermissionRequestNotPending, "")
-			return
-		case errors.Is(err, command.ErrPermissionRequestSelfApproval):
-			writeError(w, http.StatusUnprocessableEntity, ErrCodePermissionRequestSelfApproval, "")
-			return
-		case errors.Is(err, command.ErrPermissionRequestForbidden):
-			writeError(w, http.StatusForbidden, ErrCodePermissionRequestForbidden, "")
 			return
 		case errors.Is(err, permissionrequest.ErrInvalidRequest):
 			writeError(w, http.StatusUnprocessableEntity, ErrCodePermissionRequestInvalid, err.Error())

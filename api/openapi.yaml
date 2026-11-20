@@ -1542,8 +1542,11 @@ paths:
       description: |
         Caller (the requester) asks for a time-bound elevated permission.
         The named approver is the requester's current manager
-        (`tenant_memberships.reports_to`). If the requester has no
-        manager, only an operator holding operator authority can approve.
+        (`tenant_memberships.reports_to`); a requester with no manager is decided by anyone of
+        Administrator rank or above who outranks them (ADR 0069). Requires
+        `identity.meta.request_permission_elevation` (every seeded non-owner role holds it;
+        `tenant.admin` implies it): without it the route is 403 `forbidden`. An impersonation session
+        cannot submit (403 `impersonation_not_allowed`).
         At most one pending request per (membership, permission) tuple.
         `tenant.admin`, platform-reserved permissions and names outside the catalogue are not
         requestable: they are conferred by role only, and the request is refused with 422
@@ -1559,7 +1562,13 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/CreatePermissionRequestResponse' }
-        '403': { $ref: '#/components/responses/TenantScopeNotSupported' }
+        '403':
+          description: |
+            `forbidden` (the caller lacks `identity.meta.request_permission_elevation`),
+            `impersonation_not_allowed`, or `X-Tenant-Id` selected a foreign tenant (`tenant_scope_not_supported`)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
         '409':
           description: Another pending request already exists for this (membership, permission) tuple
           content:
@@ -1571,8 +1580,12 @@ paths:
       summary: List the caller's requests (?role=requester|approver)
       description: |
         Default `role=requester` returns the caller's own history (all states).
-        `role=approver` returns the Pending queue waiting on the caller's
-        decision. Keyset-paginated per ADR 0038.
+        `role=approver` returns the Pending requests the caller may DECIDE under the authority policy
+        (ADR 0069): exactly those a deny by the caller would not refuse, so none of them answers 403
+        for authority reasons. One call examines a bounded window of the tenant's pending requests
+        (at most `page_size`, capped at 100); a page may therefore hold fewer items than `page_size`
+        while `has_more` is true, and `next_cursor` continues after the last request examined.
+        Keyset-paginated per ADR 0038.
       parameters:
         - name: role
           in: query
@@ -1598,9 +1611,9 @@ paths:
       tags: [permission-requests]
       summary: Get a single permission request
       description: |
-        Returns the request if the caller is either the requester, the
-        named approver, OR a Platform operator. Cross-caller reads
-        collapse to 404 per ADR 0044 enumeration-safety canon.
+        Returns the request to the requester and to anyone who may decide it (the same eligibility
+        as deny, ADR 0069); every other caller, and a missing id, get the same 404 per ADR 0044
+        enumeration-safety canon.
       parameters:
         - { $ref: '#/components/parameters/PermissionRequestId' }
         - $ref: '#/components/parameters/XTenantId'
@@ -1616,15 +1629,23 @@ paths:
   /api/v1/permission-requests/{requestId}/approve:
     post:
       tags: [permission-requests]
-      summary: Approve a pending request (manager or platform operator)
+      summary: Approve a pending request (decided by the authority policy)
       description: |
-        Transitions Pending → Approved AND lands a time-bound grant on
-        the requester's membership overlay (single transaction). Caller
-        MUST be either the requester's manager OR hold operator authority (a super user, or a
-        platform operator holding `platform.tenants.view`; membership of the platform tenant alone
-        does not count). A stored request whose permission is not requestable (for example one
-        submitted before that rule existed) is refused with 422 (`permission_not_requestable`) and
-        stays pending; the approver can deny it and the requester can cancel it.
+        Transitions Pending → Approved AND confers exactly the STORED request's permission on the
+        requester for the stored duration (single transaction under the tenant authority lock).
+        Decided by the authority policy (ADR 0069), never by the body: the requester's manager who
+        holds `identity.roles.approve` AND the permission; or anyone of Administrator rank or above who
+        strictly outranks the requester (an Administrator may approve any requestable permission
+        without holding it, except user/role management, tenant settings, marketplace purchase and
+        payment recording, which the Administrator must hold); or a super user / exempt operator
+        acting in ANOTHER tenant (in the platform tenant an operator follows rank like anyone else).
+        Never an impersonation session and never the requester.
+
+        Check order: unknown request (404) → authority (403, whatever the request's state) → state
+        (409 `permission_request_not_pending`) → requestability (422 `permission_not_requestable`: a
+        stored request whose permission is not requestable, for example one submitted before that rule
+        existed, stays pending; the approver can deny it and the requester can cancel it) → requester
+        still active (409 `permission_request_requester_inactive`; the request stays pending).
       parameters:
         - $ref: '#/components/parameters/XCommandId'
         - { $ref: '#/components/parameters/PermissionRequestId' }
@@ -1637,13 +1658,17 @@ paths:
       responses:
         '204': { description: Approved + grant created }
         '403':
-          description: Caller is not the manager and holds no operator authority, OR `X-Tenant-Id` selected a foreign tenant (`tenant_scope_not_supported`)
+          description: |
+            `not_approver` (not the requester's manager, or lacks `identity.roles.approve`),
+            `insufficient_rank`, `grant_exceeds_authority` (the approver does not hold the permission, or an
+            Administrator lacks a must-hold one), `self_modification_forbidden` (own request),
+            `impersonation_not_allowed`, `forbidden`, or `tenant_scope_not_supported` (`X-Tenant-Id` selected a foreign tenant)
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409':
-          description: Request is not in pending state
+          description: Request is not in pending state (`permission_request_not_pending`), or the requester can no longer receive the grant (`permission_request_requester_inactive`)
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
@@ -1652,11 +1677,11 @@ paths:
   /api/v1/permission-requests/{requestId}/deny:
     post:
       tags: [permission-requests]
-      summary: Deny a pending request (manager or platform operator)
+      summary: Deny a pending request (decided by the authority policy)
       description: |
         Transitions Pending → Denied. `decision_reason` is REQUIRED on
-        Deny per ADR 0055 audit canon. Same caller-authorization as Approve (the requester's
-        manager, or operator authority; platform-tenant membership alone does not count).
+        Deny per ADR 0055 audit canon. Same eligibility and check order as Approve, except that the
+        denier need not hold the requested permission (nor `identity.roles.approve` as an Administrator).
       parameters:
         - $ref: '#/components/parameters/XCommandId'
         - { $ref: '#/components/parameters/PermissionRequestId' }
@@ -1669,7 +1694,9 @@ paths:
       responses:
         '204': { description: Denied }
         '403':
-          description: Caller is not the manager and holds no operator authority, OR `X-Tenant-Id` selected a foreign tenant (`tenant_scope_not_supported`)
+          description: |
+            `not_approver`, `insufficient_rank`, `self_modification_forbidden`, `impersonation_not_allowed`,
+            `forbidden`, or `tenant_scope_not_supported` (`X-Tenant-Id` selected a foreign tenant)
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }

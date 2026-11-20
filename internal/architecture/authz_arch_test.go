@@ -33,11 +33,10 @@ var selfServiceRoutes = map[string]string{
 	// Platform anchor only: the command ends a session solely when its operator is the caller.
 	"DELETE /api/v1/platform/impersonation/sessions/{sessionId}": "self: ends the caller's own impersonation session (platform-anchored; any other session id is the idempotent no-op)",
 	// Permission requests (REJECT scope): ADR 0055 section 8, handler-inline authority.
-	"POST /api/v1/permission-requests":                     "ADR 0055 §8: any caller may submit",
-	"GET /api/v1/permission-requests":                      "ADR 0055 §8: own and approver-visible requests, filtered in the handler",
-	"GET /api/v1/permission-requests/{requestId}":          "ADR 0055 §8: requester or approver, checked in the handler",
-	"POST /api/v1/permission-requests/{requestId}/approve": "ADR 0055 §8: handler-inline manager-or-platform",
-	"POST /api/v1/permission-requests/{requestId}/deny":    "ADR 0055 §8: handler-inline manager-or-platform",
+	"GET /api/v1/permission-requests":                      "ADR 0055 §8 + ADR 0069 A6: own requests; the approver queue is filtered through the authority policy",
+	"GET /api/v1/permission-requests/{requestId}":          "ADR 0055 §8 + ADR 0069 A6: the requester and anyone who may deny it, decided by the authority policy in the handler",
+	"POST /api/v1/permission-requests/{requestId}/approve": "ADR 0069 A6: decided by authority.MayApprove / MayDeny inside the command",
+	"POST /api/v1/permission-requests/{requestId}/deny":    "ADR 0069 A6: decided by authority.MayApprove / MayDeny inside the command",
 	"POST /api/v1/permission-requests/{requestId}/cancel":  "ADR 0055 §8: handler-inline requester-only",
 	// Infrastructure served by cmd/api: no tenant data.
 	"GET /{$}":          "infra: root redirect to docs",

@@ -84,35 +84,21 @@ func (q *Queries) InsertPermissionRequest(ctx context.Context, arg InsertPermiss
 	return err
 }
 
-const listPendingPermissionRequestsByApproverPage = `-- name: ListPendingPermissionRequestsByApproverPage :many
+const listPendingPermissionRequestsForMembership = `-- name: ListPendingPermissionRequestsForMembership :many
 SELECT id, tenant_id, requester_membership_id, permission_constant,
        duration_days, reason, state, approver_membership_id,
        decided_at, decision_reason, granted_override_id, expires_at,
        created_at, updated_at
 FROM   identity.permission_requests
-WHERE  approver_membership_id = $1
-  AND  state                  = 'pending'
-  AND  (created_at, id) < ($2::timestamptz, $3::uuid)
-ORDER  BY created_at DESC, id DESC
-LIMIT  $4
+WHERE  requester_membership_id = $1
+  AND  state                   = 'pending'
+ORDER  BY created_at DESC
 `
 
-type ListPendingPermissionRequestsByApproverPageParams struct {
-	ApproverMembershipID pgtype.UUID
-	Column2              pgtype.Timestamptz
-	Column3              pgtype.UUID
-	Limit                int32
-}
-
-// Approver-side queue (state=pending). Same keyset semantics as the
-// requester page. Backed by idx_permission_requests_approver_pending.
-func (q *Queries) ListPendingPermissionRequestsByApproverPage(ctx context.Context, arg ListPendingPermissionRequestsByApproverPageParams) ([]IdentityPermissionRequest, error) {
-	rows, err := q.db.Query(ctx, listPendingPermissionRequestsByApproverPage,
-		arg.ApproverMembershipID,
-		arg.Column2,
-		arg.Column3,
-		arg.Limit,
-	)
+// Used by the requester-side endpoint + the at-most-one-pending
+// invariant guard at handler-time pre-validation.
+func (q *Queries) ListPendingPermissionRequestsForMembership(ctx context.Context, requesterMembershipID pgtype.UUID) ([]IdentityPermissionRequest, error) {
+	rows, err := q.db.Query(ctx, listPendingPermissionRequestsForMembership, requesterMembershipID)
 	if err != nil {
 		return nil, err
 	}
@@ -146,21 +132,38 @@ func (q *Queries) ListPendingPermissionRequestsByApproverPage(ctx context.Contex
 	return items, nil
 }
 
-const listPendingPermissionRequestsForMembership = `-- name: ListPendingPermissionRequestsForMembership :many
+const listPendingPermissionRequestsInTenantPage = `-- name: ListPendingPermissionRequestsInTenantPage :many
 SELECT id, tenant_id, requester_membership_id, permission_constant,
        duration_days, reason, state, approver_membership_id,
        decided_at, decision_reason, granted_override_id, expires_at,
        created_at, updated_at
 FROM   identity.permission_requests
-WHERE  requester_membership_id = $1
-  AND  state                   = 'pending'
-ORDER  BY created_at DESC
+WHERE  tenant_id = $1
+  AND  state     = 'pending'
+  AND  (created_at, id) < ($2::timestamptz, $3::uuid)
+ORDER  BY created_at DESC, id DESC
+LIMIT  $4
 `
 
-// Used by the requester-side endpoint + the at-most-one-pending
-// invariant guard at handler-time pre-validation.
-func (q *Queries) ListPendingPermissionRequestsForMembership(ctx context.Context, requesterMembershipID pgtype.UUID) ([]IdentityPermissionRequest, error) {
-	rows, err := q.db.Query(ctx, listPendingPermissionRequestsForMembership, requesterMembershipID)
+type ListPendingPermissionRequestsInTenantPageParams struct {
+	TenantID pgtype.UUID
+	Column2  pgtype.Timestamptz
+	Column3  pgtype.UUID
+	Limit    int32
+}
+
+// The tenant's pending queue (state=pending), keyset-paginated (created_at
+// DESC, id DESC); the approver queue filters it through the authority policy.
+// Backed by idx_permission_requests_tenant_pending (migration 20261120000003).
+// RLS already scopes the rows to the transaction's tenant; the explicit
+// tenant_id predicate keeps the plan on the partial index.
+func (q *Queries) ListPendingPermissionRequestsInTenantPage(ctx context.Context, arg ListPendingPermissionRequestsInTenantPageParams) ([]IdentityPermissionRequest, error) {
+	rows, err := q.db.Query(ctx, listPendingPermissionRequestsInTenantPage,
+		arg.TenantID,
+		arg.Column2,
+		arg.Column3,
+		arg.Limit,
+	)
 	if err != nil {
 		return nil, err
 	}

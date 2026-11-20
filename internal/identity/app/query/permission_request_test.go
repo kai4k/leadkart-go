@@ -142,9 +142,8 @@ func TestGetPermissionRequest_HappyPath_ApprovedPopulatesApprover(t *testing.T) 
 // reqsErrRepo injects failures on repo methods.
 type reqsErrRepo struct {
 	permissionrequest.Repository
-	getErr         error
-	listByReqErr   error
-	listPendingErr error
+	getErr       error
+	listByReqErr error
 }
 
 func (r reqsErrRepo) GetByID(_ context.Context, _ tenant.ID, _ permissionrequest.ID) (*permissionrequest.Request, error) {
@@ -154,13 +153,6 @@ func (r reqsErrRepo) GetByID(_ context.Context, _ tenant.ID, _ permissionrequest
 func (r reqsErrRepo) ListByRequester(_ context.Context, _ tenant.ID, _ membership.ID, _ int, _ pagination.Cursor) (pagination.Page[*permissionrequest.Request], error) {
 	if r.listByReqErr != nil {
 		return pagination.Page[*permissionrequest.Request]{}, r.listByReqErr
-	}
-	return pagination.Page[*permissionrequest.Request]{}, nil
-}
-
-func (r reqsErrRepo) ListPendingApprovableBy(_ context.Context, _ tenant.ID, _ membership.ID, _ int, _ pagination.Cursor) (pagination.Page[*permissionrequest.Request], error) {
-	if r.listPendingErr != nil {
-		return pagination.Page[*permissionrequest.Request]{}, r.listPendingErr
 	}
 	return pagination.Page[*permissionrequest.Request]{}, nil
 }
@@ -258,65 +250,5 @@ func TestListMyPermissionRequests_EmptyRepoReturnsEmptyPage(t *testing.T) {
 	}
 	if page.HasMore {
 		t.Errorf("HasMore = true on empty")
-	}
-}
-
-// ----- ListPendingForApproverHandler --------------------------------------
-
-func TestNewListPendingForApproverHandler_PanicsOnNilRepo(t *testing.T) {
-	t.Parallel()
-	defer func() {
-		if r := recover(); r == nil {
-			t.Error("expected panic")
-		}
-	}()
-	_ = query.NewListPendingForApproverHandler(nil) // arch-test:ignore-err - test fixture setup
-}
-
-func TestListPendingForApprover_RejectsZeroInputs(t *testing.T) {
-	t.Parallel()
-	h := query.NewListPendingForApproverHandler(permissionrequesttest.NewFakeRepository())
-	cases := []struct {
-		name string
-		q    query.ListPendingForApproverQuery
-	}{
-		{"zero tenant", query.ListPendingForApproverQuery{ApproverMembershipID: testApproverID}},
-		{"zero approver", query.ListPendingForApproverQuery{TenantID: testTenantID}},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			t.Parallel()
-			_, err := h.Handle(t.Context(), c.q)
-			if err == nil {
-				t.Fatal("expected error")
-			}
-		})
-	}
-}
-
-func TestListPendingForApprover_PropagatesError(t *testing.T) {
-	t.Parallel()
-	sentinel := errors.New("list-pending boom")
-	repo := reqsErrRepo{Repository: permissionrequesttest.NewFakeRepository(), listPendingErr: sentinel}
-	h := query.NewListPendingForApproverHandler(repo)
-	_, err := h.Handle(t.Context(), query.ListPendingForApproverQuery{
-		TenantID: testTenantID, ApproverMembershipID: testApproverID,
-	})
-	if !errors.Is(err, sentinel) {
-		t.Fatalf("err = %v, want sentinel", err)
-	}
-}
-
-func TestListPendingForApprover_EmptyRepoReturnsEmpty(t *testing.T) {
-	t.Parallel()
-	h := query.NewListPendingForApproverHandler(permissionrequesttest.NewFakeRepository())
-	page, err := h.Handle(t.Context(), query.ListPendingForApproverQuery{
-		TenantID: testTenantID, ApproverMembershipID: testApproverID,
-	})
-	if err != nil {
-		t.Fatalf("Handle: %v", err)
-	}
-	if len(page.Items) != 0 {
-		t.Errorf("len = %d, want 0", len(page.Items))
 	}
 }

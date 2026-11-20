@@ -57,6 +57,7 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/permission"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/role"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
 
@@ -347,5 +348,75 @@ func TestMembershipRepository_Add_RejectsCrossTenantRoleAssignment(t *testing.T)
 	err := memberships.Add(ctxA, m)
 	if err == nil {
 		t.Fatalf("Add: expected schema-level rejection of cross-tenant role assignment")
+	}
+}
+
+// SQL-contract: ListHoldingRole returns every membership of the tenant (any
+// status) that holds the role, hydrated, and nothing from another tenant or
+// another role (the role-in-use rule of DeleteRole, ADR 0069 A5).
+func TestMembershipRepository_ListHoldingRole_ActiveAndInactiveHoldersOnly(t *testing.T) {
+	t.Parallel()
+	pool := repoFixture(t)
+	tx := pg.NewTransactor(pool)
+	persons := adapters.NewPersonRepository(pool, tx)
+	memberships := adapters.NewMembershipRepository(pool, tx)
+	rolesRepo := adapters.NewRoleRepository(pool, tx)
+	tenants := adapters.NewTenantRepository(pool, tx)
+
+	tn, other := seedTenant(t, tenants), seedTenant(t, tenants)
+	ctx := tenancy.WithID(t.Context(), tenancy.ID(tn.ID().String()))
+	held, unheld := newRole(t, tn.ID(), "Held"), newRole(t, tn.ID(), "Unheld")
+	for _, r := range []*role.Role{held, unheld} {
+		if err := rolesRepo.Add(ctx, r); err != nil {
+			t.Fatalf("Add role: %v", err)
+		}
+	}
+	add := func(email string, roles ...*role.Role) *membership.Membership {
+		p := seedPerson(t, persons, email)
+		m, err := membership.New(membership.ID(ids.NewV7().String()), p.ID(), tn.ID(), membership.ID(""), testNow)
+		if err != nil {
+			t.Fatalf("membership.New: %v", err)
+		}
+		for _, r := range roles {
+			if err := m.AssignRole(r.ID(), testNow); err != nil {
+				t.Fatalf("AssignRole: %v", err)
+			}
+		}
+		if err := memberships.Add(ctx, m); err != nil {
+			t.Fatalf("Add membership: %v", err)
+		}
+		return m
+	}
+	active := add("holder-active@example.test", held)
+	inactive := add("holder-inactive@example.test", held, unheld)
+	add("not-a-holder@example.test", unheld)
+	if err := memberships.UpdateByID(ctx, tn.ID(), inactive.ID(), func(m *membership.Membership) (bool, error) {
+		return true, m.Deactivate("left", testNow)
+	}); err != nil {
+		t.Fatalf("Deactivate: %v", err)
+	}
+
+	got, err := memberships.ListHoldingRole(ctx, tn.ID(), held.ID())
+	if err != nil {
+		t.Fatalf("ListHoldingRole: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("holders = %d, want 2 (active and inactive)", len(got))
+	}
+	status := map[membership.ID]membership.Status{}
+	for _, m := range got {
+		status[m.ID()] = m.Status()
+		if len(m.RoleAssignments()) == 0 {
+			t.Errorf("holder %s not hydrated", m.ID())
+		}
+	}
+	if status[active.ID()] != membership.StatusActive || status[inactive.ID()] != membership.StatusInactive {
+		t.Errorf("holder statuses = %v", status)
+	}
+	// RLS: another tenant's scope sees no holders of this tenant's role.
+	otherCtx := tenancy.WithID(t.Context(), tenancy.ID(other.ID().String()))
+	none, err := memberships.ListHoldingRole(otherCtx, other.ID(), held.ID())
+	if err != nil || len(none) != 0 {
+		t.Errorf("cross-tenant holders = %d, %v; want none", len(none), err)
 	}
 }

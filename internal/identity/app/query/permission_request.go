@@ -134,51 +134,11 @@ func (h ListMyPermissionRequestsHandler) Handle(
 	return projectPermissionRequestPage(page), nil
 }
 
-// ----- ListPendingPermissionRequestsForApprover ----------------------------
-
-// ListPendingForApproverQuery returns every Pending request the supplied
-// Membership can act on. TenantID is the caller's JWT scope; passed explicitly per ADR 0062.
-type ListPendingForApproverQuery struct {
-	TenantID             tenant.ID
-	ApproverMembershipID membership.ID
-	Cursor               pagination.Cursor
-	PageSize             int
-}
-
-// ListPendingForApproverHandler runs the list.
-type ListPendingForApproverHandler struct {
-	requests permissionrequest.Repository
-}
-
-// NewListPendingForApproverHandler wires the handler.
-func NewListPendingForApproverHandler(r permissionrequest.Repository) ListPendingForApproverHandler {
-	if r == nil {
-		panic("query: NewListPendingForApproverHandler requests repository required")
-	}
-	return ListPendingForApproverHandler{requests: r}
-}
-
-// Handle returns one page of Pending requests where the supplied
-// Membership is the named approver.
-func (h ListPendingForApproverHandler) Handle(
-	ctx context.Context,
-	q ListPendingForApproverQuery,
-) (pagination.Page[PermissionRequestView], error) {
-	if q.TenantID.IsZero() {
-		return pagination.Page[PermissionRequestView]{},
-			errors.New("list_pending_for_approver: tenant id required")
-	}
-	if q.ApproverMembershipID.IsZero() {
-		return pagination.Page[PermissionRequestView]{},
-			errors.New("list_pending_for_approver: approver membership id required")
-	}
-	pageSize := pagination.ClampPageSize(q.PageSize)
-	page, err := h.requests.ListPendingApprovableBy(ctx, q.TenantID, q.ApproverMembershipID, pageSize, q.Cursor)
-	if err != nil {
-		return pagination.Page[PermissionRequestView]{},
-			fmt.Errorf("list_pending_for_approver: %w", err)
-	}
-	return projectPermissionRequestPage(page), nil
+// PermissionRequestPage maps a page of Request aggregates (the approver queue's
+// output, which lives in the command package beside the authority facts loader)
+// to a page of views.
+func PermissionRequestPage(page pagination.Page[*permissionrequest.Request]) pagination.Page[PermissionRequestView] {
+	return projectPermissionRequestPage(page)
 }
 
 // projectPermissionRequestPage maps a domain aggregate page to a view page.

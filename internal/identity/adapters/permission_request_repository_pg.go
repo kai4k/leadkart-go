@@ -60,15 +60,24 @@ func (r *PermissionRequestRepository) addOnTx(
 	return drainPermissionRequestEvents(ctx, tx, req)
 }
 
+// runInTxTenant joins an ambient UoW tx when present, else opens a tenant tx
+// (ADR 0067 UoW-join contract), so approval reads see the held tenant lock.
+func (r *PermissionRequestRepository) runInTxTenant(ctx context.Context, tenantID tenant.ID, fn func(ctx context.Context, tx pgx.Tx) error) error {
+	if tx, ok := pg.TxFromContext(ctx); ok {
+		return fn(ctx, tx)
+	}
+	return r.tx.WithinTxPgxTenant(ctx, tenantID.String(), fn)
+}
+
 // GetByID satisfies [permissionrequest.Repository]. GUC bound from the
-// explicit tenantID parameter (ADR 0062).
+// explicit tenantID parameter (ADR 0062); joins an ambient UoW transaction.
 func (r *PermissionRequestRepository) GetByID(
 	ctx context.Context,
 	tenantID tenant.ID,
 	id permissionrequest.ID,
 ) (*permissionrequest.Request, error) {
 	var out *permissionrequest.Request
-	err := r.tx.WithinTxPgxTenant(ctx, tenantID.String(), func(ctx context.Context, tx pgx.Tx) error {
+	err := r.runInTxTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
 		q := r.q.WithTx(tx)
 		got, err := loadPermissionRequest(ctx, q, id)
 		if err != nil {
@@ -160,34 +169,33 @@ func (r *PermissionRequestRepository) GetPendingForMembership(
 	return out, nil
 }
 
-// ListPendingApprovableBy satisfies [permissionrequest.Repository].
-// Keyset-paginated approver queue (ADR 0038). Zero cursor uses a far-
-// future sentinel to admit all rows. GUC bound from tenantID (ADR 0062).
-func (r *PermissionRequestRepository) ListPendingApprovableBy(
+// ListPendingInTenant satisfies [permissionrequest.Repository]. Keyset-paginated
+// pending queue of the tenant (ADR 0038). Zero cursor uses a far-future
+// sentinel to admit all rows. GUC bound from tenantID (ADR 0062).
+func (r *PermissionRequestRepository) ListPendingInTenant(
 	ctx context.Context,
 	tenantID tenant.ID,
-	approver membership.ID,
 	pageSize int,
 	cursor pagination.Cursor,
 ) (pagination.Page[*permissionrequest.Request], error) {
-	approverUUID, err := uuid.Parse(approver.String())
+	tid, err := uuid.Parse(tenantID.String())
 	if err != nil {
 		return pagination.Page[*permissionrequest.Request]{},
-			fmt.Errorf("permreq repo: parse approver id %q: %w", approver, err)
+			fmt.Errorf("permreq repo: parse tenant id %q: %w", tenantID, err)
 	}
 	beforeAt, beforeID := cursorOrPermReqSentinel(cursor)
 	limit := pageSize + 1
 	var rows []db.IdentityPermissionRequest
-	err = r.tx.WithinTxPgxTenant(ctx, tenantID.String(), func(ctx context.Context, tx pgx.Tx) error {
+	err = r.runInTxTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
 		q := r.q.WithTx(tx)
-		got, qerr := q.ListPendingPermissionRequestsByApproverPage(ctx, db.ListPendingPermissionRequestsByApproverPageParams{
-			ApproverMembershipID: pgconv.PgUUID(approverUUID),
-			Column2:              pgconv.PgRequiredTimestamp(beforeAt),
-			Column3:              pgconv.PgUUID(beforeID),
-			Limit:                int32(limit), //nolint:gosec // bounded by pagination.ClampPageSize (≤200)
+		got, qerr := q.ListPendingPermissionRequestsInTenantPage(ctx, db.ListPendingPermissionRequestsInTenantPageParams{
+			TenantID: pgconv.PgUUID(tid),
+			Column2:  pgconv.PgRequiredTimestamp(beforeAt),
+			Column3:  pgconv.PgUUID(beforeID),
+			Limit:    int32(limit), //nolint:gosec // bounded by the caller's page size (<=200)
 		})
 		if qerr != nil {
-			return fmt.Errorf("permreq repo: list pending by approver: %w", qerr)
+			return fmt.Errorf("permreq repo: list pending in tenant: %w", qerr)
 		}
 		rows = got
 		return nil

@@ -342,15 +342,11 @@ const (
 	// terminal-state request. 409 Conflict.
 	ErrCodePermissionRequestNotPending = "permission_request_not_pending"
 
-	// ErrCodePermissionRequestSelfApproval — approver matched requester.
-	// 422 — domain invariant breach.
-	ErrCodePermissionRequestSelfApproval = "permission_request_self_approval"
-
-	// ErrCodePermissionRequestForbidden — caller is not the requester's
-	// manager AND not a Platform operator (Approve/Deny path); OR caller
-	// is not the requester (Cancel path collapses to 404 enumeration-safe).
-	// 403 surface for Approve/Deny.
-	ErrCodePermissionRequestForbidden = "permission_request_forbidden"
+	// ErrCodePermissionRequestRequesterInactive - an approval found the
+	// requester no longer able to receive the grant (deactivated, suspended,
+	// locked or anonymised since the request was filed). 409; the request stays
+	// pending and can be denied or cancelled.
+	ErrCodePermissionRequestRequesterInactive = "permission_request_requester_inactive"
 
 	// ErrCodePermissionRequestRoleQuery — list endpoint's ?role= query
 	// param was outside the closed set {requester, approver}. 400 surface.

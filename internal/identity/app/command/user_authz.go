@@ -186,7 +186,7 @@ func NewReplaceUserPermissionOverridesHandler(uow pg.UnitOfWork, lock AuthorityL
 
 // Handle resolves each permission name through the closed catalogue,
 // decides [authority.Actor.MayChangeOverrides] under the tenant lock and
-// dispatches to [Membership.ReplacePermissionOverlays].
+// dispatches to [Membership.ReplacePermissionOverrides].
 func (h ReplaceUserPermissionOverridesHandler) Handle(ctx context.Context, cmd ReplaceUserPermissionOverridesCommand) error {
 	if cmd.TenantID.IsZero() {
 		return errors.New("replace_user_permission_overrides: tenant id required")

@@ -9,16 +9,20 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/leadkart/leadkart-go/internal/common/pg"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/authority"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/permission"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/permissionrequest"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/role"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
 
 // Wave 9.1e — Permission-elevation approval workflow command handlers.
 // Per ADR 0055. Each handler orchestrates the cross-aggregate flow
-// (Request lifecycle + optional same-tx Membership overlay grant on
-// Approve) under the TDL "handler IS the orchestrator" canon.
+// (Request lifecycle + same-tx Membership override grant on Approve) under
+// the TDL "handler IS the orchestrator" canon. Approve and Deny decide through
+// the authority policy (ADR 0069) under the tenant authority lock.
 
 // ----- Sentinel errors -----------------------------------------------------
 
@@ -36,14 +40,11 @@ var ErrPermissionRequestPendingExists = errors.New("permission_request: pending 
 // hits a non-Pending state. Maps to 409 Conflict at the HTTP layer.
 var ErrPermissionRequestNotPending = errors.New("permission_request: request is not pending")
 
-// ErrPermissionRequestSelfApproval surfaces when approverID equals
-// requesterID. Maps to 422.
-var ErrPermissionRequestSelfApproval = errors.New("permission_request: cannot self-approve")
-
-// ErrPermissionRequestForbidden surfaces when the caller is neither
-// the requester (for Cancel) nor an authorised approver (for Approve /
-// Deny). Maps to 403.
-var ErrPermissionRequestForbidden = errors.New("permission_request: caller cannot act on this request")
+// ErrPermissionRequestRequesterInactive surfaces when an approval finds the
+// requester no longer able to receive the grant (membership deactivated, person
+// suspended, locked or anonymised since the request was filed). 409; the
+// request stays pending and can be denied or cancelled.
+var ErrPermissionRequestRequesterInactive = errors.New("permission_request: requester is no longer active")
 
 // ----- RequestPermissionElevation ------------------------------------------
 
@@ -60,6 +61,10 @@ type RequestPermissionElevationCommand struct {
 	Permission            *permission.Permission
 	DurationDays          int
 	Reason                string
+	// Actor is the requester's own actor, built once by the port via
+	// authn.AuthorityFrom; the zero value denies and an impersonation session
+	// cannot submit (ErrImpersonationNotAllowed).
+	Actor authority.Actor
 }
 
 // RequestPermissionElevationResult is the wire-friendly outcome. The
@@ -134,6 +139,12 @@ func (h RequestPermissionElevationHandler) Handle(
 		return RequestPermissionElevationResult{},
 			errors.New("request_permission_elevation: permission required")
 	}
+	if !cmd.Actor.Valid() {
+		return RequestPermissionElevationResult{}, authority.ErrNoAuthority
+	}
+	if cmd.Actor.IsImpersonation() {
+		return RequestPermissionElevationResult{}, authority.ErrImpersonationNotAllowed
+	}
 	duration := cmd.DurationDays
 	if duration == 0 {
 		duration = permissionrequest.DefaultDurationDays
@@ -178,46 +189,40 @@ func (h RequestPermissionElevationHandler) Handle(
 
 // ----- ApprovePermissionRequest --------------------------------------------
 
-// ApprovePermissionRequestCommand carries the approval input.
-// ApproverMembershipID is the caller's Membership (populated from JWT
-// by the HTTP layer); OperatorAuthority is true when the caller holds real
-// operator authority (authn.CanActAcrossTenants: a super user, or a platform
-// operator holding platform.tenants.view — slug membership alone is not
-// authority). It short-circuits the manager-check for
-// orphan / root memberships per ADR 0055.
+// ApprovePermissionRequestCommand carries the approval input. The caller is
+// the Actor, built once by the port (authn.AuthorityFrom); the zero Actor is
+// refused before anything is locked or loaded. There is no "operator" flag:
+// the policy's operator rule (exempt only across tenants) decides, so in the
+// platform tenant an operator follows rank like anyone else.
 //
-// TenantID is the caller's tenant scope (injected from JWT context by
-// the HTTP layer) — flows explicitly through repository methods per
-// ADR 0062 (no ctx-tenancy GUC smuggling).
+// TenantID is the caller's tenant scope (injected from JWT context by the
+// HTTP layer) and flows explicitly through repository methods per ADR 0062.
 type ApprovePermissionRequestCommand struct {
-	TenantID             tenant.ID
-	RequestID            permissionrequest.ID
-	ApproverMembershipID membership.ID
-	OperatorAuthority    bool
-	DecisionReason       string
+	TenantID       tenant.ID
+	RequestID      permissionrequest.ID
+	DecisionReason string
+	// Actor is built once by the port via authn.AuthorityFrom; the zero value denies.
+	Actor authority.Actor
 }
 
 // ApprovePermissionRequestHandler runs the approve flow.
 //
-// Per ADR 0055: Approve is a multi-step state machine in ONE tx —
+// Per ADR 0055 + 0069 approval is a multi-step state machine in ONE
+// transaction under the tenant authority lock:
 //
-//  1. Load the Request + verify Pending state.
-//  2. Verify the approver is EITHER the requester's current manager
-//     OR a Platform operator (caller-supplied flag from JWT).
-//  3. Compute ExpiresAt = now + DurationDays.
-//  4. UpdateByID:
-//     a) Mutate Request (Pending → Approved, recording approverID,
-//     decision_reason, granted_override_id (UUIDv7), expires_at).
-//     b) Outbox event drained.
-//  5. Mutate Membership (GrantPermission with ExpiresAt, drain event).
+//  1. Load the STORED request (never trust the body for the permission).
+//  2. Load the requester as an authority.Member.
+//  3. Decide authority.Actor.MayApprove(requester, stored permission).
+//  4. Only then the state checks (pending, requestable, requester active).
+//  5. Mutate the request (Pending -> Approved) and confer exactly that
+//     permission on the requester for the stored duration, through
+//     Membership.ReplacePermissionOverrides (the policy's snapshot is the
+//     aggregate's input).
 //
-// Both writes share the SAME pg.UnitOfWork tx so either both succeed
-// or both fail — no orphan Approved-without-grant rows.
+// Both writes share the SAME tx so either both succeed or both fail.
 type ApprovePermissionRequestHandler struct {
-	uow           pg.UnitOfWork
+	w             authorityWriter
 	requests      permissionrequest.Repository
-	memberships   membership.Repository
-	now           func() time.Time
 	newOverrideID func() uuid.UUID
 }
 
@@ -229,109 +234,101 @@ type ApprovePermissionRequestHandler struct {
 // deterministic counter so the minted ID is pinnable.
 func NewApprovePermissionRequestHandler(
 	uow pg.UnitOfWork,
+	lock AuthorityLocker,
 	requests permissionrequest.Repository,
-	memberships membership.Repository,
+	m membership.Repository,
+	r role.Repository,
+	p person.Repository,
 	now func() time.Time,
 	newOverrideID func() uuid.UUID,
 ) ApprovePermissionRequestHandler {
-	if uow == nil || requests == nil || memberships == nil {
-		panic("command: NewApprovePermissionRequestHandler all dependencies required")
+	if requests == nil {
+		panic("command: NewApprovePermissionRequestHandler requests repository required")
 	}
 	if newOverrideID == nil {
 		panic("command: NewApprovePermissionRequestHandler newOverrideID required")
 	}
-	if now == nil {
-		now = time.Now
-	}
 	return ApprovePermissionRequestHandler{
-		uow: uow, requests: requests, memberships: memberships, now: now, newOverrideID: newOverrideID,
+		w:        newAuthorityWriter("NewApprovePermissionRequestHandler", uow, lock, m, r, p, now),
+		requests: requests, newOverrideID: newOverrideID,
 	}
 }
 
-// Handle approves the request + grants the time-bound permission.
-//
-// Authorization decision tree per ADR 0055:
-//   - approver is requester's current manager → allowed.
-//   - approver is Platform operator           → allowed.
-//   - otherwise                                → ErrPermissionRequestForbidden.
-//
-// The Platform-operator override exists so orphan memberships (e.g.
-// CompanyOwner with no manager) still have an approval path.
-func (h ApprovePermissionRequestHandler) Handle(
-	ctx context.Context,
-	cmd ApprovePermissionRequestCommand,
-) error {
+// loadForDecision loads the stored request and its requester under the held
+// lock. A missing request or requester is ErrPermissionRequestNotFound.
+func (w authorityWriter) loadForDecision(ctx context.Context, requests permissionrequest.Repository, tenantID tenant.ID,
+	id permissionrequest.ID, now time.Time) (*permissionrequest.Request, authority.Member, error) {
+	req, err := requests.GetByID(ctx, tenantID, id)
+	if err != nil {
+		if errors.Is(err, permissionrequest.ErrNotFound) {
+			return nil, authority.Member{}, ErrPermissionRequestNotFound
+		}
+		return nil, authority.Member{}, fmt.Errorf("load request: %w", err)
+	}
+	_, requester, err := w.facts.memberByID(ctx, tenantID, req.RequesterMembershipID(), now)
+	if err != nil {
+		if errors.Is(err, membership.ErrNotFound) {
+			// The requester membership is gone: collapse to "not found".
+			return nil, authority.Member{}, ErrPermissionRequestNotFound
+		}
+		return nil, authority.Member{}, err
+	}
+	return req, requester, nil
+}
+
+// Handle approves the request + grants the time-bound permission. Check
+// order: existence and tenant (404) -> authority (403) -> state and
+// requestability (409 / 422) -> requester still active (409).
+func (h ApprovePermissionRequestHandler) Handle(ctx context.Context, cmd ApprovePermissionRequestCommand) error {
 	if cmd.TenantID.IsZero() {
 		return errors.New("approve_permission_request: tenant id required")
 	}
 	if cmd.RequestID.IsZero() {
 		return errors.New("approve_permission_request: request id required")
 	}
-	if cmd.ApproverMembershipID.IsZero() {
-		return errors.New("approve_permission_request: approver membership id required")
+	if !cmd.Actor.Valid() {
+		return authority.ErrNoAuthority
 	}
-
-	// Load requester membership for the manager-check. We do this
-	// outside the UpdateByID closure so the authz decision is settled
-	// before the tx opens.
-	req, err := h.requests.GetByID(ctx, cmd.TenantID, cmd.RequestID)
-	if err != nil {
-		if errors.Is(err, permissionrequest.ErrNotFound) {
-			return ErrPermissionRequestNotFound
+	now := h.w.now()
+	err := h.w.locked(ctx, cmd.TenantID, func(ctx context.Context) error {
+		req, requester, err := h.w.loadForDecision(ctx, h.requests, cmd.TenantID, cmd.RequestID, now)
+		if err != nil {
+			return err
 		}
-		return fmt.Errorf("approve_permission_request: load: %w", err)
-	}
-	if req.State() != permissionrequest.StatePending {
-		return ErrPermissionRequestNotPending
-	}
-	// A row stored before requestability was enforced may name tenant.admin or
-	// a platform-reserved permission. It stays pending (the approver can deny
-	// it, the requester can cancel it) and can never be approved.
-	if !permission.IsRequestable(req.Permission().Name()) {
-		return fmt.Errorf("%w: %q", permissionrequest.ErrPermissionNotRequestable, req.Permission().Name())
-	}
-	if cmd.ApproverMembershipID == req.RequesterMembershipID() {
-		return ErrPermissionRequestSelfApproval
-	}
-
-	requester, err := h.memberships.GetByID(ctx, req.TenantID(), req.RequesterMembershipID())
-	if err != nil {
-		if errors.Is(err, membership.ErrNotFound) {
-			// The requester membership has been deleted between
-			// submission and now — collapse to "not found" so the
-			// approver sees a coherent error.
-			return ErrPermissionRequestNotFound
+		perm := req.Permission()
+		if permission.IsRequestable(perm.Name()) {
+			err = cmd.Actor.MayApprove(requester, perm.Name())
+		} else {
+			// A stored row from before requestability was enforced: eligibility to
+			// decide at all is still the policy's call (the 422 below is for those
+			// who may), and the row can only be denied or cancelled.
+			err = cmd.Actor.MayDeny(requester)
 		}
-		return fmt.Errorf("approve_permission_request: load requester: %w", err)
-	}
-
-	if !h.callerCanApprove(cmd, requester) {
-		return ErrPermissionRequestForbidden
-	}
-
-	now := h.now()
-	expiresAt := now.Add(time.Duration(req.DurationDays()) * 24 * time.Hour)
-	overrideID := h.newOverrideID()
-
-	// Approve the request and grant the overlay permission atomically.
-	// A grant without its approval record (or an approval with no grant)
-	// is a security-relevant inconsistency, so both writes share one tx;
-	// each repo joins it via pg.TxFromContext. Tenant scope binds from
-	// ctx-tenancy (set by the authn middleware).
-	err = h.uow.WithinTx(ctx, pg.TxScopeTenant, func(ctx context.Context) error {
+		if err != nil {
+			return err
+		}
+		if req.State() != permissionrequest.StatePending {
+			return ErrPermissionRequestNotPending
+		}
+		if !permission.IsRequestable(perm.Name()) {
+			return fmt.Errorf("%w: %q", permissionrequest.ErrPermissionNotRequestable, perm.Name())
+		}
+		if !requester.IsActive() {
+			return ErrPermissionRequestRequesterInactive
+		}
+		expiresAt := now.Add(time.Duration(req.DurationDays()) * 24 * time.Hour)
+		overrideID := h.newOverrideID()
 		if err := h.requests.UpdateByID(ctx, cmd.TenantID, cmd.RequestID, func(loaded *permissionrequest.Request) (bool, error) {
-			if err := loaded.Approve(cmd.ApproverMembershipID, cmd.DecisionReason, overrideID, expiresAt, now); err != nil {
-				return false, err
-			}
-			return true, nil
+			return true, loaded.Approve(cmd.Actor.MembershipID(), cmd.DecisionReason, overrideID, expiresAt, now)
 		}); err != nil {
 			return err
 		}
-		return h.memberships.UpdateByID(ctx, req.TenantID(), req.RequesterMembershipID(), func(m *membership.Membership) (bool, error) {
-			if err := m.GrantPermission(req.Permission(), expiresAt, now); err != nil {
-				return false, err
-			}
-			return true, nil
+		granted, revoked, err := approvedOverrides(requester, perm, expiresAt)
+		if err != nil {
+			return err
+		}
+		return h.w.facts.memberships.UpdateByID(ctx, cmd.TenantID, req.RequesterMembershipID(), func(m *membership.Membership) (bool, error) {
+			return true, m.ReplacePermissionOverrides(granted, revoked, now)
 		})
 	})
 	switch {
@@ -339,149 +336,131 @@ func (h ApprovePermissionRequestHandler) Handle(
 		return nil
 	case errors.Is(err, permissionrequest.ErrNotPending):
 		return ErrPermissionRequestNotPending
-	case errors.Is(err, permissionrequest.ErrSelfApproval):
-		return ErrPermissionRequestSelfApproval
 	case errors.Is(err, permissionrequest.ErrNotFound):
 		return ErrPermissionRequestNotFound
-	default:
-		return fmt.Errorf("approve_permission_request: %w", err)
+	case errors.Is(err, membership.ErrNotFound):
+		return ErrPermissionRequestNotFound
 	}
+	return fmt.Errorf("approve_permission_request: %w", err)
 }
 
-// callerCanApprove evaluates the manager-or-platform rule.
-func (h ApprovePermissionRequestHandler) callerCanApprove(
-	cmd ApprovePermissionRequestCommand,
-	requester *membership.Membership,
-) bool {
-	if cmd.OperatorAuthority {
-		return true
+// approvedOverrides is the requester's override state after the approval, as
+// the exact input of Membership.ReplacePermissionOverrides: every still-live
+// grant keeps its expiry, the approved permission is added (a permanent grant
+// stays permanent, a timed one is extended to the later expiry, never
+// shortened), and the permission leaves the revoked list (a grant overrides an
+// earlier override-revocation, as it always did).
+func approvedOverrides(requester authority.Member, perm *permission.Permission, expiresAt time.Time) ([]membership.GrantedOverride, []*permission.Permission, error) {
+	cur := requester.Overrides()
+	granted := make([]membership.GrantedOverride, 0, len(cur.Granted)+1)
+	have := false
+	for _, g := range cur.Granted {
+		p, err := permission.TryFromConstant(g.Name)
+		if err != nil {
+			return nil, nil, fmt.Errorf("stored grant %q: %w", g.Name, err)
+		}
+		exp := g.ExpiresAt
+		if g.Name == perm.Name() {
+			have = true
+			if !exp.IsZero() && exp.Before(expiresAt) {
+				exp = expiresAt
+			}
+		}
+		granted = append(granted, membership.GrantedOverride{Permission: p, ExpiresAt: exp})
 	}
-	manager := requester.ReportsTo()
-	if manager.IsZero() {
-		// Orphan / root membership — only Platform operators can approve.
-		return false
+	if !have {
+		granted = append(granted, membership.GrantedOverride{Permission: perm, ExpiresAt: expiresAt})
 	}
-	return manager == cmd.ApproverMembershipID
+	revoked := make([]*permission.Permission, 0, len(cur.Revoked))
+	for _, n := range cur.Revoked {
+		if n == perm.Name() {
+			continue
+		}
+		p, err := permission.TryFromConstant(n)
+		if err != nil {
+			return nil, nil, fmt.Errorf("stored revocation %q: %w", n, err)
+		}
+		revoked = append(revoked, p)
+	}
+	return granted, revoked, nil
 }
 
 // ----- DenyPermissionRequest -----------------------------------------------
 
 // DenyPermissionRequestCommand carries the denial input. DecisionReason
-// is REQUIRED on Deny per ADR 0055 (audit canon).
-//
-// TenantID is the caller's tenant scope (injected from JWT context by
-// the HTTP layer) — flows explicitly through repository methods per
-// ADR 0062 (no ctx-tenancy GUC smuggling).
+// is REQUIRED on Deny per ADR 0055 (audit canon). The caller is the Actor.
 type DenyPermissionRequestCommand struct {
-	TenantID             tenant.ID
-	RequestID            permissionrequest.ID
-	ApproverMembershipID membership.ID
-	OperatorAuthority    bool
-	DecisionReason       string
+	TenantID       tenant.ID
+	RequestID      permissionrequest.ID
+	DecisionReason string
+	// Actor is built once by the port via authn.AuthorityFrom; the zero value denies.
+	Actor authority.Actor
 }
 
 // DenyPermissionRequestHandler runs the deny flow.
 type DenyPermissionRequestHandler struct {
-	requests    permissionrequest.Repository
-	memberships membership.Repository
-	now         func() time.Time
+	w        authorityWriter
+	requests permissionrequest.Repository
 }
 
 // NewDenyPermissionRequestHandler wires the handler.
 func NewDenyPermissionRequestHandler(
+	uow pg.UnitOfWork,
+	lock AuthorityLocker,
 	requests permissionrequest.Repository,
-	memberships membership.Repository,
+	m membership.Repository,
+	r role.Repository,
+	p person.Repository,
 	now func() time.Time,
 ) DenyPermissionRequestHandler {
-	if requests == nil || memberships == nil {
-		panic("command: NewDenyPermissionRequestHandler all dependencies required")
+	if requests == nil {
+		panic("command: NewDenyPermissionRequestHandler requests repository required")
 	}
-	if now == nil {
-		now = time.Now
+	return DenyPermissionRequestHandler{
+		w:        newAuthorityWriter("NewDenyPermissionRequestHandler", uow, lock, m, r, p, now),
+		requests: requests,
 	}
-	return DenyPermissionRequestHandler{requests: requests, memberships: memberships, now: now}
 }
 
-// Handle rejects the request. Same authz tree as Approve: manager-or-
-// platform. Single-step state machine (no membership write) so a flat
-// UpdateByID call suffices.
-func (h DenyPermissionRequestHandler) Handle(
-	ctx context.Context,
-	cmd DenyPermissionRequestCommand,
-) error {
+// Handle rejects the request. Same facts and check order as Approve, decided by
+// [authority.Actor.MayDeny] (eligibility without "holds the permission").
+func (h DenyPermissionRequestHandler) Handle(ctx context.Context, cmd DenyPermissionRequestCommand) error {
 	if cmd.TenantID.IsZero() {
 		return errors.New("deny_permission_request: tenant id required")
 	}
 	if cmd.RequestID.IsZero() {
 		return errors.New("deny_permission_request: request id required")
 	}
-	if cmd.ApproverMembershipID.IsZero() {
-		return errors.New("deny_permission_request: approver membership id required")
+	if !cmd.Actor.Valid() {
+		return authority.ErrNoAuthority
 	}
-
-	req, err := h.requests.GetByID(ctx, cmd.TenantID, cmd.RequestID)
-	if err != nil {
-		if errors.Is(err, permissionrequest.ErrNotFound) {
-			return ErrPermissionRequestNotFound
-		}
-		return fmt.Errorf("deny_permission_request: load: %w", err)
-	}
-	if req.State() != permissionrequest.StatePending {
-		return ErrPermissionRequestNotPending
-	}
-	if cmd.ApproverMembershipID == req.RequesterMembershipID() {
-		return ErrPermissionRequestSelfApproval
-	}
-
-	requester, err := h.memberships.GetByID(ctx, req.TenantID(), req.RequesterMembershipID())
-	if err != nil {
-		if errors.Is(err, membership.ErrNotFound) {
-			return ErrPermissionRequestNotFound
-		}
-		return fmt.Errorf("deny_permission_request: load requester: %w", err)
-	}
-	if !canApproveSimilar(cmd.OperatorAuthority, cmd.ApproverMembershipID, requester) {
-		return ErrPermissionRequestForbidden
-	}
-
-	now := h.now()
-	if err := h.requests.UpdateByID(ctx, cmd.TenantID, cmd.RequestID, func(loaded *permissionrequest.Request) (bool, error) {
-		if err := loaded.Deny(cmd.ApproverMembershipID, cmd.DecisionReason, now); err != nil {
-			return false, err
-		}
-		return true, nil
-	}); err != nil {
-		switch {
-		case errors.Is(err, permissionrequest.ErrNotPending):
-			return ErrPermissionRequestNotPending
-		case errors.Is(err, permissionrequest.ErrSelfApproval):
-			return ErrPermissionRequestSelfApproval
-		case errors.Is(err, permissionrequest.ErrNotFound):
-			return ErrPermissionRequestNotFound
-		case errors.Is(err, permissionrequest.ErrInvalidRequest):
+	now := h.w.now()
+	err := h.w.locked(ctx, cmd.TenantID, func(ctx context.Context) error {
+		req, requester, err := h.w.loadForDecision(ctx, h.requests, cmd.TenantID, cmd.RequestID, now)
+		if err != nil {
 			return err
-		default:
-			return fmt.Errorf("deny_permission_request: update: %w", err)
 		}
+		if err := cmd.Actor.MayDeny(requester); err != nil {
+			return err
+		}
+		if req.State() != permissionrequest.StatePending {
+			return ErrPermissionRequestNotPending
+		}
+		return h.requests.UpdateByID(ctx, cmd.TenantID, cmd.RequestID, func(loaded *permissionrequest.Request) (bool, error) {
+			return true, loaded.Deny(cmd.Actor.MembershipID(), cmd.DecisionReason, now)
+		})
+	})
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, permissionrequest.ErrNotPending):
+		return ErrPermissionRequestNotPending
+	case errors.Is(err, permissionrequest.ErrNotFound):
+		return ErrPermissionRequestNotFound
+	case errors.Is(err, permissionrequest.ErrInvalidRequest):
+		return err
 	}
-	return nil
-}
-
-// canApproveSimilar is the shared authz check used by both Approve +
-// Deny — same rule (manager-or-platform).
-func canApproveSimilar(
-	isPlatform bool,
-	approver membership.ID,
-	requester *membership.Membership,
-) bool {
-	if isPlatform {
-		return true
-	}
-	mgr := requester.ReportsTo()
-	if mgr.IsZero() {
-		return false
-	}
-	return mgr == approver
+	return fmt.Errorf("deny_permission_request: %w", err)
 }
 
 // ----- CancelPermissionRequest ---------------------------------------------
@@ -568,11 +547,3 @@ func (h CancelPermissionRequestHandler) Handle(
 	}
 	return nil
 }
-
-// Compile-time guarantee that uuid + tenant.ID stay reachable; this
-// keeps the build green when the imports above are pruned by future
-// refactor passes that move type signatures around.
-var (
-	_ = uuid.Nil
-	_ tenant.ID
-)

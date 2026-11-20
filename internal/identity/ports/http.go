@@ -272,17 +272,19 @@ func AddRoutes(mux *http.ServeMux, log *slog.Logger, a app.Application, verifier
 				authn.RequireAnyPermission(verifier, stampValidator, p.Platform.TenantsView, p.Platform.UsersView)(
 					handleSearch(log, a))))
 
-		// Permission-elevation approval workflow (ADR 0055).
+		// Permission-elevation approval workflow (ADR 0055, ADR 0069 A6).
 		//
-		// Submit / list-my-requests / list-pending-for-approver / get /
-		// cancel — RequireFreshStamp (auth) is sufficient; the handlers
-		// inline-check requester / approver / platform-operator authz.
-		// Approve / Deny use the same auth() middleware + handler-inline
-		// manager-or-platform decision tree (the manager-tree lookup
-		// requires loading the requester membership which we can't do
-		// in middleware).
+		// Submit needs identity.meta.request_permission_elevation (below); the
+		// other routes need RequireFreshStamp (auth) only: approve / deny are
+		// decided by the authority policy inside the command under the tenant
+		// lock (loading the requester's facts cannot happen in middleware),
+		// get / list filter through the same policy, and cancel is
+		// requester-only.
+		// Submitting needs identity.meta.request_permission_elevation (every seeded
+		// non-owner role holds it; tenant.admin implies it), checked at the route.
 		mux.Handle("POST /api/v1/permission-requests",
-			authn.RejectTenantScope(auth(handleCreatePermissionRequest(log, a))))
+			authn.RejectTenantScope(authn.RequirePermission(verifier, stampValidator, p.Meta.RequestPermissionElevation)(
+				handleCreatePermissionRequest(log, a))))
 		mux.Handle("GET /api/v1/permission-requests",
 			authn.RejectTenantScope(auth(handleListPermissionRequests(log, a))))
 		mux.Handle("GET /api/v1/permission-requests/{requestId}",

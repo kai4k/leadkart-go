@@ -34,7 +34,9 @@
 package permissionrequesttest
 
 import (
+	"cmp"
 	"context"
+	"slices"
 
 	"github.com/leadkart/leadkart-go/internal/common/pagination"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
@@ -169,23 +171,20 @@ func (f *FakeRepository) GetPendingForMembership(_ context.Context, tenantID ten
 	return out, nil
 }
 
-// ListPendingApprovableBy returns the keyset-paginated queue of
-// Pending requests where approver_membership_id matches the supplied
-// Membership ID (scoped to tenantID). Per ADR 0038 cursor semantics:
-// first page passes the zero pagination.Cursor + the adapter applies
-// its own sentinel internally. The fake delegates page assembly to
-// [pagination.BuildPage] using (CreatedAt, ID) as the sort tuple.
-func (f *FakeRepository) ListPendingApprovableBy(_ context.Context, tenantID tenant.ID, approver membership.ID, pageSize int, _ pagination.Cursor) (pagination.Page[*permissionrequest.Request], error) {
-
+// ListPendingInTenant returns the keyset-paginated queue of Pending requests
+// of the tenant (scoped to tenantID), newest first. The fake delegates page
+// assembly to [pagination.BuildPage] using (CreatedAt, ID) as the sort tuple
+// and ignores the cursor like the other list fakes.
+func (f *FakeRepository) ListPendingInTenant(_ context.Context, tenantID tenant.ID, pageSize int, _ pagination.Cursor) (pagination.Page[*permissionrequest.Request], error) {
 	var items []*permissionrequest.Request
 	for _, x := range f.requests {
-		if x.TenantID() != tenantID {
-			continue
-		}
-		if x.ApproverMembershipID() == approver && x.State() == permissionrequest.StatePending {
+		if x.TenantID() == tenantID && x.State() == permissionrequest.StatePending {
 			items = append(items, x)
 		}
 	}
+	slices.SortFunc(items, func(a, b *permissionrequest.Request) int {
+		return cmp.Or(b.CreatedAt().Compare(a.CreatedAt()), cmp.Compare(b.ID().String(), a.ID().String()))
+	})
 	return pagination.BuildPage(items, pageSize, func(req *permissionrequest.Request) pagination.Cursor {
 		return pagination.Cursor{SortValue: req.CreatedAt(), ID: req.ID().String()}
 	}), nil

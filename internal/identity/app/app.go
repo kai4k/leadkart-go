@@ -88,6 +88,11 @@ type Commands struct {
 	ApprovePermissionRequest   command.ApprovePermissionRequestHandler
 	DenyPermissionRequest      command.DenyPermissionRequestHandler
 	CancelPermissionRequest    command.CancelPermissionRequestHandler
+	// AuthorizePermissionRequestView decides who may read one request;
+	// ListDecidablePermissionRequests is the approver queue (both are reads
+	// that share the authority facts loader, so they live with the commands).
+	AuthorizePermissionRequestView  command.AuthorizePermissionRequestViewHandler
+	ListDecidablePermissionRequests command.ListDecidablePermissionRequestsHandler
 }
 
 // Queries aggregates all Identity query handlers. Read-side only — no
@@ -115,5 +120,4 @@ type Queries struct {
 	// Permission-elevation approval workflow (ADR 0055).
 	GetPermissionRequest     query.GetPermissionRequestHandler
 	ListMyPermissionRequests query.ListMyPermissionRequestsHandler
-	ListPendingForApprover   query.ListPendingForApproverHandler
 }

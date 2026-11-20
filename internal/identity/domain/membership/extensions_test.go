@@ -377,37 +377,6 @@ func TestEffectivePermissions_PerpetualOverridesNeverExpire(t *testing.T) {
 	}
 }
 
-func TestReplacePermissionOverlays_SetsAtomically(t *testing.T) {
-	t.Parallel()
-	m := freshMembership(t)
-	view := permission.FromConstant(permission.IdentityPermissions.Users.View)
-	create := permission.FromConstant(permission.IdentityPermissions.Users.Create)
-	anonymise := permission.FromConstant(permission.IdentityPermissions.Users.Anonymise)
-	_ = m.GrantPermission(view, time.Time{}, testNow) // pre-existing state // arch-test:ignore-err - test fixture setup
-	_ = m.PullEvents()
-
-	if err := m.ReplacePermissionOverlays(
-		[]*permission.Permission{create, anonymise},
-		[]*permission.Permission{view},
-		testNow,
-	); err != nil {
-		t.Fatalf("Replace: %v", err)
-	}
-	if len(m.GrantedPermissions()) != 2 {
-		t.Fatalf("granted: %d want 2", len(m.GrantedPermissions()))
-	}
-	if len(m.RevokedPermissions()) != 1 {
-		t.Fatalf("revoked: %d want 1", len(m.RevokedPermissions()))
-	}
-	events := m.PullEvents()
-	if len(events) != 1 {
-		t.Fatalf("events: %d want 1 (single PermissionsUpdated)", len(events))
-	}
-	if _, ok := events[0].(membership.PermissionsUpdatedEvent); !ok {
-		t.Fatalf("event type: %T", events[0])
-	}
-}
-
 func TestUnmarshalFromDB_OverlayRoundTrip(t *testing.T) {
 	t.Parallel()
 	g := permission.FromConstant(permission.IdentityPermissions.Users.Anonymise)
@@ -650,52 +619,6 @@ func TestAssignRevokeRole_BadRoleIDWrapsExactlyMembershipErrInvalid(t *testing.T
 		if errors.Is(err, role.ErrInvalid) {
 			t.Errorf("%s: %v also wraps role.ErrInvalid (two sentinels)", name, err)
 		}
-	}
-}
-
-// TestReplacePermissionOverlays_KeepsLiveExpiries: a replace cannot extend a
-// time-bound grant or make it permanent. A name that is already granted and
-// still live keeps its expiry; a new name, or one whose grant has expired,
-// becomes a permanent grant; unlisted names go.
-func TestReplacePermissionOverlays_KeepsLiveExpiries(t *testing.T) {
-	t.Parallel()
-	m := freshMembership(t)
-	live := permission.FromConstant(permission.IdentityPermissions.Crm.Leads.Assign)
-	gone := permission.FromConstant(permission.IdentityPermissions.Crm.Leads.Read)
-	stale := permission.FromConstant(permission.IdentityPermissions.Crm.Leads.ReadAll)
-	fresh := permission.FromConstant(permission.IdentityPermissions.Inventory.Stock.Read)
-	liveUntil := testNow.Add(7 * 24 * time.Hour)
-	if err := m.GrantPermission(live, liveUntil, testNow); err != nil {
-		t.Fatalf("grant live: %v", err)
-	}
-	if err := m.GrantPermission(gone, testNow.Add(24*time.Hour), testNow); err != nil {
-		t.Fatalf("grant gone: %v", err)
-	}
-	if err := m.GrantPermission(stale, testNow.Add(time.Hour), testNow); err != nil {
-		t.Fatalf("grant stale: %v", err)
-	}
-	later := testNow.Add(2 * time.Hour) // stale has expired, live has not
-	if err := m.ReplacePermissionOverlays([]*permission.Permission{live, stale, fresh}, nil, later); err != nil {
-		t.Fatalf("replace: %v", err)
-	}
-	got := map[string]time.Time{}
-	for _, g := range m.GrantedPermissions() {
-		got[g.Permission.Name()] = g.ExpiresAt
-	}
-	if len(got) != 3 {
-		t.Fatalf("granted after replace = %v, want live, stale, fresh only", got)
-	}
-	if !got[live.Name()].Equal(liveUntil) {
-		t.Errorf("live grant expiry = %v, want it kept at %v", got[live.Name()], liveUntil)
-	}
-	if !got[stale.Name()].IsZero() {
-		t.Errorf("expired grant listed again expires at %v, want a fresh permanent grant", got[stale.Name()])
-	}
-	if !got[fresh.Name()].IsZero() {
-		t.Errorf("new grant expires at %v, want permanent", got[fresh.Name()])
-	}
-	if _, ok := got[gone.Name()]; ok {
-		t.Error("unlisted grant survived the replace")
 	}
 }
 
