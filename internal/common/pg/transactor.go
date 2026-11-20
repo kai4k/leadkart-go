@@ -146,3 +146,20 @@ func (t *Transactor) WithinTxPgxTenant(
 	committed = true
 	return nil
 }
+
+// TenantUnitOfWork is [UnitOfWork] for handlers that carry the tenant as an
+// explicit value (ADR 0062) rather than in the context: the transaction binds
+// that tenant's GUC and the closure's ctx carries the tx, so every adapter
+// called with that ctx joins it. Concrete implementation is [*Transactor].
+type TenantUnitOfWork interface {
+	WithinTenantTx(ctx context.Context, tenantID string, fn func(ctx context.Context) error) error
+}
+
+var _ TenantUnitOfWork = (*Transactor)(nil)
+
+// WithinTenantTx implements [TenantUnitOfWork] over [Transactor.WithinTxPgxTenant].
+func (t *Transactor) WithinTenantTx(ctx context.Context, tenantID string, fn func(ctx context.Context) error) error {
+	return t.WithinTxPgxTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		return fn(contextWithTx(ctx, tx))
+	})
+}

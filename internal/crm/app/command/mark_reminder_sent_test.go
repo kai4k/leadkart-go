@@ -2,6 +2,7 @@ package command_test
 
 import (
 	"errors"
+	"github.com/leadkart/leadkart-go/internal/crm/domain/crmlead/crmleadtest"
 	"testing"
 
 	"github.com/leadkart/leadkart-go/internal/crm/app/command"
@@ -14,7 +15,7 @@ func TestMarkReminderSent_HappyPath(t *testing.T) {
 	leads := newFakeLeads()
 	reminders := newFakeReminders()
 	leadID := seedLead(t, leads)
-	create := command.NewCreateReminderHandler(leads, reminders, fixedTime, newTestReminderID)
+	create := command.NewCreateReminderHandler(leads, reminders, crmleadtest.InlineTenantUoW{}, fixedTime, newTestReminderID)
 	out, err := create.Handle(t.Context(), command.CreateReminderCommand{
 		TenantID: testTenantID, LeadID: leadID,
 		AssignedToMembershipID: testReminderAssignee,
@@ -53,7 +54,7 @@ func TestMarkReminderSent_TerminalIsConflict(t *testing.T) {
 	leads := newFakeLeads()
 	reminders := newFakeReminders()
 	leadID := seedLead(t, leads)
-	create := command.NewCreateReminderHandler(leads, reminders, fixedTime, newTestReminderID)
+	create := command.NewCreateReminderHandler(leads, reminders, crmleadtest.InlineTenantUoW{}, fixedTime, newTestReminderID)
 	out, err := create.Handle(t.Context(), command.CreateReminderCommand{
 		TenantID: testTenantID, LeadID: leadID,
 		AssignedToMembershipID: testReminderAssignee,

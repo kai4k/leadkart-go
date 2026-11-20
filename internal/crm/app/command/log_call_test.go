@@ -2,6 +2,7 @@ package command_test
 
 import (
 	"errors"
+	"github.com/leadkart/leadkart-go/internal/crm/domain/crmlead/crmleadtest"
 	"testing"
 
 	"github.com/leadkart/leadkart-go/internal/crm/app/command"
@@ -15,7 +16,7 @@ func TestLogCall_HappyPath(t *testing.T) {
 	leads := newFakeLeads()
 	calls := newFakeCallLogs()
 	id := seedLead(t, leads)
-	h := command.NewLogCallHandler(leads, calls, fixedTime, newTestCallID)
+	h := command.NewLogCallHandler(leads, calls, crmleadtest.InlineTenantUoW{}, fixedTime, newTestCallID)
 	out, err := h.Handle(t.Context(), command.LogCallCommand{
 		TenantID: testTenantID, LeadID: id, Outcome: calllog.OutcomeInterested, Notes: "warm prospect", LoggedByMembershipID: "01923400-0000-7000-8000-cccccccc0004",
 	})
@@ -35,7 +36,7 @@ func TestLogCall_NotFound(t *testing.T) {
 	t.Parallel()
 	leads := newFakeLeads()
 	calls := newFakeCallLogs()
-	h := command.NewLogCallHandler(leads, calls, fixedTime, newTestCallID)
+	h := command.NewLogCallHandler(leads, calls, crmleadtest.InlineTenantUoW{}, fixedTime, newTestCallID)
 	_, err := h.Handle(t.Context(), command.LogCallCommand{
 		TenantID: testTenantID, LeadID: "missing", Outcome: calllog.OutcomeConnected, LoggedByMembershipID: "01923400-0000-7000-8000-cccccccc0004",
 	})
@@ -53,7 +54,7 @@ func TestLogCall_RefusesTerminalLead(t *testing.T) {
 	if err := convert.Handle(t.Context(), command.ConvertLeadCommand{TenantID: testTenantID, LeadID: id, ConvertedByMembershipID: "01923400-0000-7000-8000-cccccccc000a"}); err != nil {
 		t.Fatalf("convert: %v", err)
 	}
-	h := command.NewLogCallHandler(leads, calls, fixedTime, newTestCallID)
+	h := command.NewLogCallHandler(leads, calls, crmleadtest.InlineTenantUoW{}, fixedTime, newTestCallID)
 	_, err := h.Handle(t.Context(), command.LogCallCommand{
 		TenantID: testTenantID, LeadID: id, Outcome: calllog.OutcomeConnected, LoggedByMembershipID: "01923400-0000-7000-8000-cccccccc0004",
 	})
@@ -66,7 +67,7 @@ func TestLogCall_RefusesTerminalLead(t *testing.T) {
 
 func TestLogCall_RejectsZeroTenantID(t *testing.T) {
 	t.Parallel()
-	h := command.NewLogCallHandler(newFakeLeads(), newFakeCallLogs(), fixedTime, newTestCallID)
+	h := command.NewLogCallHandler(newFakeLeads(), newFakeCallLogs(), crmleadtest.InlineTenantUoW{}, fixedTime, newTestCallID)
 	_, err := h.Handle(t.Context(), command.LogCallCommand{
 		TenantID: tenant.ID(""), LeadID: crmlead.ID("01923400-0000-7000-8000-cccccccc0001"),
 		Outcome: calllog.OutcomeConnected, LoggedByMembershipID: "01923400-0000-7000-8000-cccccccc0004",
@@ -78,7 +79,7 @@ func TestLogCall_RejectsZeroTenantID(t *testing.T) {
 
 func TestLogCall_RejectsZeroLeadID(t *testing.T) {
 	t.Parallel()
-	h := command.NewLogCallHandler(newFakeLeads(), newFakeCallLogs(), fixedTime, newTestCallID)
+	h := command.NewLogCallHandler(newFakeLeads(), newFakeCallLogs(), crmleadtest.InlineTenantUoW{}, fixedTime, newTestCallID)
 	_, err := h.Handle(t.Context(), command.LogCallCommand{
 		TenantID: testTenantID, LeadID: crmlead.ID(""),
 		Outcome: calllog.OutcomeConnected, LoggedByMembershipID: "01923400-0000-7000-8000-cccccccc0004",
@@ -90,7 +91,7 @@ func TestLogCall_RejectsZeroLeadID(t *testing.T) {
 
 func TestLogCall_RejectsEmptyLoggedByMembershipID(t *testing.T) {
 	t.Parallel()
-	h := command.NewLogCallHandler(newFakeLeads(), newFakeCallLogs(), fixedTime, newTestCallID)
+	h := command.NewLogCallHandler(newFakeLeads(), newFakeCallLogs(), crmleadtest.InlineTenantUoW{}, fixedTime, newTestCallID)
 	_, err := h.Handle(t.Context(), command.LogCallCommand{
 		TenantID: testTenantID, LeadID: crmlead.ID("01923400-0000-7000-8000-cccccccc0001"),
 		Outcome: calllog.OutcomeConnected, LoggedByMembershipID: "",
@@ -111,7 +112,7 @@ func TestLogCall_FactoryRejection_Wrapped(t *testing.T) {
 	leads := newFakeLeads()
 	calls := newFakeCallLogs()
 	id := seedLead(t, leads)
-	h := command.NewLogCallHandler(leads, calls, fixedTime, newTestCallID)
+	h := command.NewLogCallHandler(leads, calls, crmleadtest.InlineTenantUoW{}, fixedTime, newTestCallID)
 	_, err := h.Handle(t.Context(), command.LogCallCommand{
 		TenantID: testTenantID, LeadID: id,
 		Outcome:              calllog.Outcome("not-in-catalogue"),

@@ -15,7 +15,8 @@
 -- self-approval). Every repaired row is recorded in common.audit_log_entry
 -- (system actor, the tenant, the membership id), which is also Down's ledger:
 -- Down drops the constraint and puts each recorded self-loop back, but only
--- while the membership has no manager (a link set since is left alone).
+-- while the membership has no manager (a link set since is left alone). Only
+-- rows with the system actor and the membership's own tenant count as ledger.
 
 -- +goose Up
 -- +goose StatementBegin
@@ -53,6 +54,7 @@ SET    reports_to = m.id
 FROM   common.audit_log_entry a
 WHERE  a.action = 'identity.membership.migrated'
   AND  a.payload ->> 'migration' = '20261120000002_membership_reports_to_not_self'
+  AND  a.user_id IS NULL AND a.tenant_id = m.tenant_id
   AND  (a.payload ->> 'membership_id')::uuid = m.id
   AND  m.reports_to IS NULL;
 -- +goose StatementEnd

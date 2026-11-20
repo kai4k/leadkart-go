@@ -53,6 +53,23 @@ SELECT id, tenant_id, source_purchase_id, source_platform_lead_id,
 FROM   crm.crm_leads
 WHERE  id = $1;
 
+-- name: GetCrmLeadByIDForUpdate :one
+-- UpdateByID load path: locks the row until the transaction ends, so a scope
+-- check made on the loaded lead cannot be overtaken by a concurrent reassignment.
+SELECT id, tenant_id, source_purchase_id, source_platform_lead_id,
+       stage, temperature,
+       contact_name, phone_e164, city, district, state, pincode,
+       business_type, medicine_system, order_value, buy_timeline,
+       has_drug_licence, has_gst, gst_verified,
+       product_ranges, dosage_forms, extra_profile,
+       assignee_membership_id, assigned_at,
+       converted_at, converted_by_membership_id,
+       lost_at, lost_by_membership_id, lost_reason,
+       created_at, created_by_membership_id
+FROM   crm.crm_leads
+WHERE  id = $1
+FOR UPDATE;
+
 -- name: GetCrmLeadByPurchaseID :one
 -- Subscriber idempotency lookup. NULL inputs are not valid here — the
 -- subscriber's command short-circuits before the call when PurchaseID

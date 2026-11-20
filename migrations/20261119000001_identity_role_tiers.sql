@@ -43,7 +43,12 @@
 -- Lead is deleted only while it is unchanged and has no assignment or active
 -- edge; a removed edge is restored only while its child has no active edge and
 -- the parent is again strictly more senior. Not restorable: roles changed
--- after Up (left as they are), and audit rows (append-only, kept).
+-- after Up (left as they are), and audit rows (append-only, kept). The ledger is
+-- trusted only for rows with the system actor (user_id NULL), and every join to
+-- a role or edge also matches the ledger row's tenant: the application role can
+-- INSERT into the audit table, so a forged row can neither name another
+-- tenant's role nor cause a delete. A Team Lead role that was soft-deleted
+-- meanwhile, or ever assigned or part of an edge, is never hard-deleted.
 
 -- +goose Up
 -- +goose StatementBegin
@@ -235,10 +240,11 @@ SELECT set_config('app.is_platform', 'true', true);
 -- Roles Up changed go back to the recorded before state, but only while they
 -- still equal the recorded after state (a role edited since is left alone).
 WITH ledger AS (
-    SELECT DISTINCT ON (a.payload->>'role_id') a.payload
+    SELECT DISTINCT ON (a.tenant_id, a.payload->>'role_id') a.tenant_id, a.payload
     FROM   common.audit_log_entry a
     WHERE  a.action = 'identity.role.migrated' AND a.payload->>'migration' = '20261119000001_identity_role_tiers'
-    ORDER  BY a.payload->>'role_id', a.occurred_at_utc DESC, a.id DESC
+      AND  a.user_id IS NULL AND a.tenant_id IS NOT NULL
+    ORDER  BY a.tenant_id, a.payload->>'role_id', a.occurred_at_utc DESC, a.id DESC
 ),
 target AS (
     SELECT r.id, r.tenant_id, r.name,
@@ -246,7 +252,7 @@ target AS (
            (l.payload #>> '{before,hierarchy_level}')::int AS old_level,
            l.payload #> '{before,permissions}' AS old_perms
     FROM   ledger l
-    JOIN   identity.roles r ON r.id = (l.payload->>'role_id')::uuid
+    JOIN   identity.roles r ON r.id = (l.payload->>'role_id')::uuid AND r.tenant_id = l.tenant_id
     WHERE  r.hierarchy_level = (l.payload #>> '{after,hierarchy_level}')::int
       AND  r.permissions @> (l.payload #> '{after,permissions}')
       AND  (l.payload #> '{after,permissions}') @> r.permissions
@@ -269,24 +275,27 @@ SELECT gen_random_uuid(), 'identity.role.migration_reverted', NULL, t.tenant_id,
            'after',  jsonb_build_object('hierarchy_level', t.old_level, 'permissions', t.old_perms))
 FROM   target t JOIN upd u ON u.id = t.id;
 
--- Team Lead roles Up created: deleted only while unchanged, unassigned and
--- without an active edge. Anything else stays.
+-- Team Lead roles Up created: deleted only while live, unchanged, never
+-- assigned and never part of an edge (active or removed: that is history).
+-- Anything else stays.
 WITH ledger AS (
-    SELECT DISTINCT ON (a.payload->>'role_id') a.payload
+    SELECT DISTINCT ON (a.tenant_id, a.payload->>'role_id') a.tenant_id, a.payload
     FROM   common.audit_log_entry a
     WHERE  a.action = 'identity.role.created' AND a.payload->>'migration' = '20261119000001_identity_role_tiers'
-    ORDER  BY a.payload->>'role_id', a.occurred_at_utc DESC, a.id DESC
+      AND  a.user_id IS NULL AND a.tenant_id IS NOT NULL
+    ORDER  BY a.tenant_id, a.payload->>'role_id', a.occurred_at_utc DESC, a.id DESC
 ),
 del AS (
     DELETE FROM identity.roles r
     USING  ledger l
-    WHERE  r.id = (l.payload->>'role_id')::uuid
+    WHERE  r.id = (l.payload->>'role_id')::uuid AND r.tenant_id = l.tenant_id
+      AND  NOT r.is_deleted
       AND  r.hierarchy_level = (l.payload #>> '{after,hierarchy_level}')::int
       AND  r.permissions @> (l.payload #> '{after,permissions}')
       AND  (l.payload #> '{after,permissions}') @> r.permissions
       AND  NOT EXISTS (SELECT 1 FROM identity.role_assignments ra WHERE ra.tenant_id = r.tenant_id AND ra.role_id = r.id)
       AND  NOT EXISTS (SELECT 1 FROM identity.role_hierarchy_edges e
-                       WHERE e.tenant_id = r.tenant_id AND e.removed_at IS NULL
+                       WHERE e.tenant_id = r.tenant_id
                          AND (e.child_role_id = r.id OR e.parent_role_id = r.id))
     RETURNING r.id, r.tenant_id, r.name
 )
@@ -302,15 +311,16 @@ FROM   del d;
 -- Edges Up removed come back when they are valid again and the child has no
 -- active edge of its own.
 WITH ledger AS (
-    SELECT DISTINCT ON (a.payload->>'child_role_id') a.payload
+    SELECT DISTINCT ON (a.tenant_id, a.payload->>'child_role_id') a.tenant_id, a.payload
     FROM   common.audit_log_entry a
     WHERE  a.action = 'identity.role_edge.removed' AND a.payload->>'migration' = '20261119000001_identity_role_tiers'
-    ORDER  BY a.payload->>'child_role_id', a.occurred_at_utc DESC, a.id DESC
+      AND  a.user_id IS NULL AND a.tenant_id IS NOT NULL
+    ORDER  BY a.tenant_id, a.payload->>'child_role_id', a.occurred_at_utc DESC, a.id DESC
 ),
 restorable AS (
     SELECT e.id, e.tenant_id, e.parent_role_id, e.child_role_id
     FROM   ledger l
-    JOIN   identity.role_hierarchy_edges e ON e.id = (l.payload->>'edge_id')::uuid
+    JOIN   identity.role_hierarchy_edges e ON e.id = (l.payload->>'edge_id')::uuid AND e.tenant_id = l.tenant_id
     JOIN   identity.roles p ON p.tenant_id = e.tenant_id AND p.id = e.parent_role_id
     JOIN   identity.roles c ON c.tenant_id = e.tenant_id AND c.id = e.child_role_id
     WHERE  e.removed_at IS NOT NULL

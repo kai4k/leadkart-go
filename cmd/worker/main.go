@@ -286,7 +286,7 @@ func run(ctx context.Context, stdout *os.File) error {
 	crmMatureScanner := crmadapters.NewMatureLeadScannerPG(pool, tx)
 	newCrmLeadID := func() crmlead.ID { return crmlead.ID(ids.NewV7().String()) }
 	newCrmReminderID := func() crmreminder.ID { return crmreminder.ID(ids.NewV7().String()) }
-	crmCreateReminder := crmcommand.NewCreateReminderHandler(crmLeads, crmReminders, time.Now, newCrmReminderID)
+	crmCreateReminder := crmcommand.NewCreateReminderHandler(crmLeads, crmReminders, tx, time.Now, newCrmReminderID)
 	crmIngest := crmsubscribers.NewPurchasedLeadIngestor(
 		crmcommand.NewIngestPurchasedLeadHandler(crmLeads, time.Now, newCrmLeadID), logger)
 	crmCallback := crmsubscribers.NewCallbackReminderCreator(crmCreateReminder, logger)

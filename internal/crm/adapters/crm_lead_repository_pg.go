@@ -75,7 +75,7 @@ func (r *CrmLeadRepository) GetByID(ctx context.Context, tenantID tenant.ID, id 
 	var out *crmlead.CrmLead
 	err := r.tx.WithinTxPgxTenant(ctx, tenantID.String(), func(ctx context.Context, tx pgx.Tx) error {
 		q := r.q.WithTx(tx)
-		got, err := loadLead(ctx, q, id)
+		got, err := loadLead(ctx, q, id, false)
 		if err != nil {
 			return err
 		}
@@ -144,7 +144,7 @@ func (r *CrmLeadRepository) updateOnTx(
 	updateFn func(*crmlead.CrmLead) (bool, error),
 ) error {
 	q := r.q.WithTx(tx)
-	l, err := loadLead(ctx, q, id)
+	l, err := loadLead(ctx, q, id, true)
 	if err != nil {
 		return err
 	}
@@ -240,10 +240,20 @@ func (r *CrmLeadRepository) ListPage(
 
 // ----- Helpers --------------------------------------------------------------
 
-func loadLead(ctx context.Context, q *db.Queries, id crmlead.ID) (*crmlead.CrmLead, error) {
+func loadLead(ctx context.Context, q *db.Queries, id crmlead.ID, forUpdate bool) (*crmlead.CrmLead, error) {
 	lid, err := uuid.Parse(id.String())
 	if err != nil {
 		return nil, fmt.Errorf("crm lead repo: parse id %q: %w", id, err)
+	}
+	if forUpdate {
+		row, err := q.GetCrmLeadByIDForUpdate(ctx, pgconv.PgUUID(lid))
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return nil, crmlead.ErrNotFound
+			}
+			return nil, fmt.Errorf("crm lead repo: lock by id: %w", err)
+		}
+		return rowToLead(row)
 	}
 	row, err := q.GetCrmLeadByID(ctx, pgconv.PgUUID(lid))
 	if err != nil {

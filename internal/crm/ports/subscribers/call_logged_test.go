@@ -55,7 +55,7 @@ func TestCallbackReminderCreator_NoWindow_NoOp(t *testing.T) {
 	leadID := seedLeadForCallback(t, leads, tenant.ID(tid.String()))
 
 	create := command.NewCreateReminderHandler(
-		leads, reminders, pinnedSubNow,
+		leads, reminders, crmleadtest.InlineTenantUoW{}, pinnedSubNow,
 		func() reminder.ID { return reminder.ID(ids.NewV7().String()) },
 	)
 	h := subscribers.NewCallbackReminderCreator(create, silentLog())
@@ -88,7 +88,7 @@ func TestCallbackReminderCreator_WithWindow_CreatesReminder(t *testing.T) {
 	due := pinnedSubNow().Add(2 * time.Hour)
 
 	create := command.NewCreateReminderHandler(
-		leads, reminders, pinnedSubNow,
+		leads, reminders, crmleadtest.InlineTenantUoW{}, pinnedSubNow,
 		func() reminder.ID { return reminder.ID(ids.NewV7().String()) },
 	)
 	h := subscribers.NewCallbackReminderCreator(create, silentLog())
@@ -133,7 +133,7 @@ func TestCallbackReminderCreator_DuplicateBrokerDelivery_Ack(t *testing.T) {
 	leadID := seedLeadForCallback(t, leads, tenant.ID(tid.String()))
 
 	create := command.NewCreateReminderHandler(
-		leads, reminders, pinnedSubNow,
+		leads, reminders, crmleadtest.InlineTenantUoW{}, pinnedSubNow,
 		func() reminder.ID { return reminder.ID(ids.NewV7().String()) },
 	)
 	h := subscribers.NewCallbackReminderCreator(create, silentLog())

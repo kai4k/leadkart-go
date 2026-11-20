@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/leadkart/leadkart-go/internal/common/pg"
 	"github.com/leadkart/leadkart-go/internal/crm/domain/crmlead"
 	"github.com/leadkart/leadkart-go/internal/crm/domain/reminder"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
@@ -64,6 +65,7 @@ type CreateReminderResult struct {
 type CreateReminderHandler struct {
 	leads         crmlead.Repository
 	reminders     reminder.Repository
+	uow           pg.TenantUnitOfWork
 	now           func() time.Time
 	newReminderID func() reminder.ID
 }
@@ -77,6 +79,7 @@ type CreateReminderHandler struct {
 func NewCreateReminderHandler(
 	leads crmlead.Repository,
 	reminders reminder.Repository,
+	uow pg.TenantUnitOfWork,
 	now func() time.Time,
 	newReminderID func() reminder.ID,
 ) CreateReminderHandler {
@@ -89,12 +92,16 @@ func NewCreateReminderHandler(
 	if newReminderID == nil {
 		panic("command: NewCreateReminderHandler newReminderID required")
 	}
+	if uow == nil {
+		panic("command: NewCreateReminderHandler uow required")
+	}
 	if now == nil {
 		now = time.Now
 	}
 	return CreateReminderHandler{
 		leads:         leads,
 		reminders:     reminders,
+		uow:           uow,
 		now:           now,
 		newReminderID: newReminderID,
 	}
@@ -124,34 +131,48 @@ func (h CreateReminderHandler) Handle(ctx context.Context, cmd CreateReminderCom
 		return CreateReminderResult{}, errors.New("crm create_reminder: due_at required")
 	}
 
-	// Guard against typo'd lead_id at the app layer — surfaces as 404
-	// instead of as a hard FK error from the partial-unique-index path.
-	lead, err := h.leads.GetByID(ctx, cmd.TenantID, cmd.LeadID)
-	if err != nil {
-		if errors.Is(err, crmlead.ErrNotFound) {
-			return CreateReminderResult{}, ErrLeadNotFound
+	// The lead's existence and scope are checked inside the SAME tenant
+	// transaction as the insert (UpdateByID locks the lead row), so a
+	// concurrent reassignment cannot slip between the check and the write.
+	// A typo'd lead_id surfaces as 404 rather than as a hard FK error.
+	var r *reminder.Reminder
+	err := h.uow.WithinTenantTx(ctx, cmd.TenantID.String(), func(ctx context.Context) error {
+		if err := h.leads.UpdateByID(ctx, cmd.TenantID, cmd.LeadID, func(l *crmlead.CrmLead) (bool, error) {
+			if !leadInScope(l, cmd.OnlyAssignedTo) {
+				return false, crmlead.ErrNotFound
+			}
+			return false, nil // a guard, nothing to persist
+		}); err != nil {
+			return err
 		}
-		return CreateReminderResult{}, fmt.Errorf("crm create_reminder: load lead: %w", err)
-	}
-	if !leadInScope(lead, cmd.OnlyAssignedTo) {
+		// Built only once the lead is known to be in scope: a lead outside the
+		// caller's scope is a 404 whatever else is wrong with the request.
+		var err error
+		if r, err = buildReminder(h.newReminderID(), cmd, h.now()); err != nil {
+			return fmt.Errorf("crm create_reminder: factory: %w", err)
+		}
+		// A unique violation aborts the transaction, so a duplicate leaves the
+		// closure as an error (rolling back) and is turned into the success
+		// path below.
+		if err := h.reminders.Add(ctx, r); err != nil {
+			if errors.Is(err, reminder.ErrAlreadyExists) {
+				return err
+			}
+			return fmt.Errorf("crm create_reminder: persist: %w", err)
+		}
+		return nil
+	})
+	switch {
+	case errors.Is(err, crmlead.ErrNotFound):
 		return CreateReminderResult{}, ErrLeadNotFound
-	}
-
-	now := h.now()
-	id := h.newReminderID()
-	r, err := buildReminder(id, cmd, now)
-	if err != nil {
-		return CreateReminderResult{}, fmt.Errorf("crm create_reminder: factory: %w", err)
-	}
-	if err := h.reminders.Add(ctx, r); err != nil {
-		if errors.Is(err, reminder.ErrAlreadyExists) {
-			// For mature-lead the scheduler can probe the existing row;
-			// for callback the subscriber needs neither — the partial
-			// unique guarantees AT MOST ONE pending row, so the
-			// already-existed branch is the success path.
-			return CreateReminderResult{AlreadyExisted: true}, nil
-		}
-		return CreateReminderResult{}, fmt.Errorf("crm create_reminder: persist: %w", err)
+	case errors.Is(err, reminder.ErrAlreadyExists):
+		// For mature-lead the scheduler can probe the existing row;
+		// for callback the subscriber needs neither — the partial
+		// unique guarantees AT MOST ONE pending row, so the
+		// already-existed branch is the success path.
+		return CreateReminderResult{AlreadyExisted: true}, nil
+	case err != nil:
+		return CreateReminderResult{}, err
 	}
 	return CreateReminderResult{ReminderID: r.ID()}, nil
 }

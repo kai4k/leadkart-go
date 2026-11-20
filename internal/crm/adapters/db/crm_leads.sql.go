@@ -65,6 +65,63 @@ func (q *Queries) GetCrmLeadByID(ctx context.Context, id pgtype.UUID) (CrmCrmLea
 	return i, err
 }
 
+const getCrmLeadByIDForUpdate = `-- name: GetCrmLeadByIDForUpdate :one
+SELECT id, tenant_id, source_purchase_id, source_platform_lead_id,
+       stage, temperature,
+       contact_name, phone_e164, city, district, state, pincode,
+       business_type, medicine_system, order_value, buy_timeline,
+       has_drug_licence, has_gst, gst_verified,
+       product_ranges, dosage_forms, extra_profile,
+       assignee_membership_id, assigned_at,
+       converted_at, converted_by_membership_id,
+       lost_at, lost_by_membership_id, lost_reason,
+       created_at, created_by_membership_id
+FROM   crm.crm_leads
+WHERE  id = $1
+FOR UPDATE
+`
+
+// UpdateByID load path: locks the row until the transaction ends, so a scope
+// check made on the loaded lead cannot be overtaken by a concurrent reassignment.
+func (q *Queries) GetCrmLeadByIDForUpdate(ctx context.Context, id pgtype.UUID) (CrmCrmLead, error) {
+	row := q.db.QueryRow(ctx, getCrmLeadByIDForUpdate, id)
+	var i CrmCrmLead
+	err := row.Scan(
+		&i.ID,
+		&i.TenantID,
+		&i.SourcePurchaseID,
+		&i.SourcePlatformLeadID,
+		&i.Stage,
+		&i.Temperature,
+		&i.ContactName,
+		&i.PhoneE164,
+		&i.City,
+		&i.District,
+		&i.State,
+		&i.Pincode,
+		&i.BusinessType,
+		&i.MedicineSystem,
+		&i.OrderValue,
+		&i.BuyTimeline,
+		&i.HasDrugLicence,
+		&i.HasGst,
+		&i.GstVerified,
+		&i.ProductRanges,
+		&i.DosageForms,
+		&i.ExtraProfile,
+		&i.AssigneeMembershipID,
+		&i.AssignedAt,
+		&i.ConvertedAt,
+		&i.ConvertedByMembershipID,
+		&i.LostAt,
+		&i.LostByMembershipID,
+		&i.LostReason,
+		&i.CreatedAt,
+		&i.CreatedByMembershipID,
+	)
+	return i, err
+}
+
 const getCrmLeadByPurchaseID = `-- name: GetCrmLeadByPurchaseID :one
 SELECT id, tenant_id, source_purchase_id, source_platform_lead_id,
        stage, temperature,

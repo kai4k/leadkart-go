@@ -76,7 +76,7 @@ func TestMatureLeadScanWorker_CreatesReminders(t *testing.T) {
 	leadA := seedConvertedLead(t, leads, tid, assignee)
 	leadB := seedConvertedLead(t, leads, tid, assignee)
 
-	create := command.NewCreateReminderHandler(leads, reminders, pinnedNow,
+	create := command.NewCreateReminderHandler(leads, reminders, crmleadtest.InlineTenantUoW{}, pinnedNow,
 		func() reminder.ID { return reminder.ID(ids.NewV7().String()) })
 
 	scanner := &stubScanner{candidates: []jobs.MatureLeadCandidate{
@@ -108,7 +108,7 @@ func TestMatureLeadScanWorker_DuplicateIsIdempotent(t *testing.T) {
 	assignee := "01923400-0000-7000-8000-aaaaaaaa0010"
 	leadA := seedConvertedLead(t, leads, tid, assignee)
 
-	create := command.NewCreateReminderHandler(leads, reminders, pinnedNow,
+	create := command.NewCreateReminderHandler(leads, reminders, crmleadtest.InlineTenantUoW{}, pinnedNow,
 		func() reminder.ID { return reminder.ID(ids.NewV7().String()) })
 
 	scanner := &stubScanner{candidates: []jobs.MatureLeadCandidate{
@@ -133,7 +133,7 @@ func TestMatureLeadScanWorker_ScannerErrorPropagates(t *testing.T) {
 	t.Parallel()
 	leads := crmleadtest.NewFakeRepository()
 	reminders := remindertest.NewFakeRepository()
-	create := command.NewCreateReminderHandler(leads, reminders, pinnedNow,
+	create := command.NewCreateReminderHandler(leads, reminders, crmleadtest.InlineTenantUoW{}, pinnedNow,
 		func() reminder.ID { return reminder.ID(ids.NewV7().String()) })
 	scanner := &stubScanner{err: errors.New("db down")}
 	w := jobs.NewMatureLeadScanWorker(scanner, create, silentLog(), pinnedNow)
@@ -150,7 +150,7 @@ func TestMatureLeadScanWorker_LeadDisappearedIsLoggedNotErrored(t *testing.T) {
 	tid := tenant.ID("01923400-0000-7000-8000-aaaaaaaa0001")
 	assignee := "01923400-0000-7000-8000-aaaaaaaa0010"
 
-	create := command.NewCreateReminderHandler(leads, reminders, pinnedNow,
+	create := command.NewCreateReminderHandler(leads, reminders, crmleadtest.InlineTenantUoW{}, pinnedNow,
 		func() reminder.ID { return reminder.ID(ids.NewV7().String()) })
 
 	// Candidate references a lead that does NOT exist in the leads

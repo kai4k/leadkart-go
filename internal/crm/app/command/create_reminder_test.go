@@ -2,6 +2,7 @@ package command_test
 
 import (
 	"errors"
+	"github.com/leadkart/leadkart-go/internal/crm/domain/crmlead/crmleadtest"
 	"testing"
 	"time"
 
@@ -28,7 +29,7 @@ func TestCreateReminder_ManualHappyPath(t *testing.T) {
 	leads := newFakeLeads()
 	reminders := newFakeReminders()
 	leadID := seedLead(t, leads)
-	h := command.NewCreateReminderHandler(leads, reminders, fixedTime, newTestReminderID)
+	h := command.NewCreateReminderHandler(leads, reminders, crmleadtest.InlineTenantUoW{}, fixedTime, newTestReminderID)
 	out, err := h.Handle(t.Context(), command.CreateReminderCommand{
 		TenantID: testTenantID, LeadID: leadID,
 		AssignedToMembershipID: testReminderAssignee,
@@ -52,7 +53,7 @@ func TestCreateReminder_LeadNotFound(t *testing.T) {
 	t.Parallel()
 	leads := newFakeLeads()
 	reminders := newFakeReminders()
-	h := command.NewCreateReminderHandler(leads, reminders, fixedTime, newTestReminderID)
+	h := command.NewCreateReminderHandler(leads, reminders, crmleadtest.InlineTenantUoW{}, fixedTime, newTestReminderID)
 	_, err := h.Handle(t.Context(), command.CreateReminderCommand{
 		TenantID: testTenantID, LeadID: crmlead.ID("01923400-0000-7000-8000-dddddddd0001"),
 		AssignedToMembershipID: testReminderAssignee,
@@ -70,7 +71,7 @@ func TestCreateReminder_ManualRequiresCreator(t *testing.T) {
 	leads := newFakeLeads()
 	reminders := newFakeReminders()
 	leadID := seedLead(t, leads)
-	h := command.NewCreateReminderHandler(leads, reminders, fixedTime, newTestReminderID)
+	h := command.NewCreateReminderHandler(leads, reminders, crmleadtest.InlineTenantUoW{}, fixedTime, newTestReminderID)
 	_, err := h.Handle(t.Context(), command.CreateReminderCommand{
 		TenantID: testTenantID, LeadID: leadID,
 		AssignedToMembershipID: testReminderAssignee,
@@ -90,7 +91,7 @@ func TestCreateReminder_CallbackHappyPath(t *testing.T) {
 	leads := newFakeLeads()
 	reminders := newFakeReminders()
 	leadID := seedLead(t, leads)
-	h := command.NewCreateReminderHandler(leads, reminders, fixedTime, newTestReminderID)
+	h := command.NewCreateReminderHandler(leads, reminders, crmleadtest.InlineTenantUoW{}, fixedTime, newTestReminderID)
 	out, err := h.Handle(t.Context(), command.CreateReminderCommand{
 		TenantID: testTenantID, LeadID: leadID,
 		AssignedToMembershipID: testReminderAssignee,
@@ -111,7 +112,7 @@ func TestCreateReminder_CallbackDuplicateIsAcked(t *testing.T) {
 	leads := newFakeLeads()
 	reminders := newFakeReminders()
 	leadID := seedLead(t, leads)
-	h := command.NewCreateReminderHandler(leads, reminders, fixedTime, newTestReminderID)
+	h := command.NewCreateReminderHandler(leads, reminders, crmleadtest.InlineTenantUoW{}, fixedTime, newTestReminderID)
 	cmd := command.CreateReminderCommand{
 		TenantID: testTenantID, LeadID: leadID,
 		AssignedToMembershipID: testReminderAssignee,
@@ -138,7 +139,7 @@ func TestCreateReminder_MatureLeadHappyPath(t *testing.T) {
 	leads := newFakeLeads()
 	reminders := newFakeReminders()
 	leadID := seedLead(t, leads)
-	h := command.NewCreateReminderHandler(leads, reminders, fixedTime, newTestReminderID)
+	h := command.NewCreateReminderHandler(leads, reminders, crmleadtest.InlineTenantUoW{}, fixedTime, newTestReminderID)
 	out, err := h.Handle(t.Context(), command.CreateReminderCommand{
 		TenantID: testTenantID, LeadID: leadID,
 		AssignedToMembershipID: testReminderAssignee,
@@ -158,7 +159,7 @@ func TestCreateReminder_MatureLeadDuplicateIsAcked(t *testing.T) {
 	leads := newFakeLeads()
 	reminders := newFakeReminders()
 	leadID := seedLead(t, leads)
-	h := command.NewCreateReminderHandler(leads, reminders, fixedTime, newTestReminderID)
+	h := command.NewCreateReminderHandler(leads, reminders, crmleadtest.InlineTenantUoW{}, fixedTime, newTestReminderID)
 	cmd := command.CreateReminderCommand{
 		TenantID: testTenantID, LeadID: leadID,
 		AssignedToMembershipID: testReminderAssignee,
@@ -181,7 +182,7 @@ func TestCreateReminder_MatureLeadDuplicateIsAcked(t *testing.T) {
 
 func TestCreateReminder_RejectsZeroTenantID(t *testing.T) {
 	t.Parallel()
-	h := command.NewCreateReminderHandler(newFakeLeads(), newFakeReminders(), fixedTime, newTestReminderID)
+	h := command.NewCreateReminderHandler(newFakeLeads(), newFakeReminders(), crmleadtest.InlineTenantUoW{}, fixedTime, newTestReminderID)
 	_, err := h.Handle(t.Context(), command.CreateReminderCommand{
 		TenantID: tenant.ID(""), LeadID: crmlead.ID("01923400-0000-7000-8000-bbbbbbbb0010"),
 		AssignedToMembershipID: testReminderAssignee, Type: reminder.TypeManual, DueAt: dueAt(),
@@ -193,7 +194,7 @@ func TestCreateReminder_RejectsZeroTenantID(t *testing.T) {
 
 func TestCreateReminder_RejectsZeroLeadID(t *testing.T) {
 	t.Parallel()
-	h := command.NewCreateReminderHandler(newFakeLeads(), newFakeReminders(), fixedTime, newTestReminderID)
+	h := command.NewCreateReminderHandler(newFakeLeads(), newFakeReminders(), crmleadtest.InlineTenantUoW{}, fixedTime, newTestReminderID)
 	_, err := h.Handle(t.Context(), command.CreateReminderCommand{
 		TenantID: testTenantID, LeadID: crmlead.ID(""),
 		AssignedToMembershipID: testReminderAssignee, Type: reminder.TypeManual, DueAt: dueAt(),
@@ -205,7 +206,7 @@ func TestCreateReminder_RejectsZeroLeadID(t *testing.T) {
 
 func TestCreateReminder_RejectsInvalidType(t *testing.T) {
 	t.Parallel()
-	h := command.NewCreateReminderHandler(newFakeLeads(), newFakeReminders(), fixedTime, newTestReminderID)
+	h := command.NewCreateReminderHandler(newFakeLeads(), newFakeReminders(), crmleadtest.InlineTenantUoW{}, fixedTime, newTestReminderID)
 	_, err := h.Handle(t.Context(), command.CreateReminderCommand{
 		TenantID: testTenantID, LeadID: crmlead.ID("01923400-0000-7000-8000-bbbbbbbb0010"),
 		AssignedToMembershipID: testReminderAssignee, Type: reminder.Type("invented"), DueAt: dueAt(),
@@ -217,7 +218,7 @@ func TestCreateReminder_RejectsInvalidType(t *testing.T) {
 
 func TestCreateReminder_RejectsZeroDueAt(t *testing.T) {
 	t.Parallel()
-	h := command.NewCreateReminderHandler(newFakeLeads(), newFakeReminders(), fixedTime, newTestReminderID)
+	h := command.NewCreateReminderHandler(newFakeLeads(), newFakeReminders(), crmleadtest.InlineTenantUoW{}, fixedTime, newTestReminderID)
 	_, err := h.Handle(t.Context(), command.CreateReminderCommand{
 		TenantID: testTenantID, LeadID: crmlead.ID("01923400-0000-7000-8000-bbbbbbbb0010"),
 		AssignedToMembershipID: testReminderAssignee, Type: reminder.TypeManual, DueAt: time.Time{},

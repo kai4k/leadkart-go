@@ -522,3 +522,52 @@ func diffSnapshots(want, got map[string]string) string {
 	slices.Sort(diffs)
 	return strings.Join(diffs, "\n")
 }
+
+// Down trusts only the system actor's ledger rows and matches the tenant on
+// every join; a Team Lead soft-deleted since Up is never hard-deleted.
+func TestMigration_IdentityRoleTiers_DownIgnoresForgedLedgerAndKeepsDeletedRoles(t *testing.T) {
+	dsn := startPostgres(t)
+	db, err := goose.OpenDBWithDriver("pgx", dsn)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if err := pg.EnsureGooseDialect(); err != nil {
+		t.Fatalf("dialect: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 4*time.Minute)
+	defer cancel()
+	if err := goose.UpToContext(ctx, db, migrationsDir(t), roleTiersMigration-1); err != nil {
+		t.Fatalf("up to previous: %v", err)
+	}
+	w := seedTierWorld(ctx, t, db)
+	if err := goose.UpToContext(ctx, db, migrationsDir(t), roleTiersMigration); err != nil {
+		t.Fatalf("up: %v", err)
+	}
+
+	// (1) a forged ledger row: tenant alpha, but naming bravo's role; its recorded
+	// "after" equals that role's current state, so only the tenant check stops it.
+	if _, err := db.ExecContext(ctx, `
+INSERT INTO common.audit_log_entry (id, action, user_id, tenant_id, occurred_at_utc, duration_ms, succeeded, payload)
+SELECT gen_random_uuid(), 'identity.role.created', NULL, $1::uuid, now(), 0, true,
+       jsonb_build_object('migration', '20261119000001_identity_role_tiers', 'role_id', r.id,
+           'after', jsonb_build_object('hierarchy_level', r.hierarchy_level, 'permissions', r.permissions))
+FROM identity.roles r WHERE r.tenant_id = $2::uuid AND r.name = 'Purchase Manager'`, w.alpha, w.bravo); err != nil {
+		t.Fatalf("forge: %v", err)
+	}
+	// (2) alpha's Team Lead is soft-deleted after Up.
+	if _, err := db.ExecContext(ctx, `UPDATE identity.roles SET is_deleted = true WHERE tenant_id = $1::uuid AND name = 'Team Lead'`, w.alpha); err != nil {
+		t.Fatalf("soft-delete: %v", err)
+	}
+
+	if err := goose.DownToContext(ctx, db, migrationsDir(t), roleTiersMigration-1); err != nil {
+		t.Fatalf("down: %v", err)
+	}
+	if n := countRoles(ctx, t, db, w.bravo, "Purchase Manager"); n != 1 {
+		t.Errorf("a forged cross-tenant ledger row deleted another tenant's role (rows left: %d)", n)
+	}
+	var left int
+	if err := db.QueryRowContext(ctx, `SELECT count(*) FROM identity.roles WHERE tenant_id = $1::uuid AND name = 'Team Lead'`, w.alpha).Scan(&left); err != nil || left != 1 {
+		t.Errorf("a soft-deleted Team Lead was hard-deleted by Down: rows=%d err=%v", left, err)
+	}
+}
