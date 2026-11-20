@@ -240,6 +240,7 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/LogoutRequest' }
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '204': { description: Logged out (idempotent) }
         '400': { $ref: '#/components/responses/BadRequest' }
 
@@ -249,8 +250,9 @@ paths:
       summary: Request password reset email
       description: |
         ALWAYS returns 204 regardless of whether the email is registered (Auth0/Okta canon — defeats account
-        enumeration). The answer is released no earlier than a fixed 300 ms after the request is read, so
-        response time does not reveal whether the address has an account either.
+        enumeration). The answer is released no earlier than a fixed 300 ms after the handler starts, so
+        response time does not reveal whether the address has an account either. The 300 ms is measured
+        from when the handler starts: the limiters and middleware before it are not included.
       security: []
       requestBody:
         required: true
@@ -327,6 +329,7 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/RequestEmailChangeRequest' }
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '403': { $ref: '#/components/responses/SessionRefused' }
         '204': { description: Email-change request accepted (silent on collision) }
         '400': { $ref: '#/components/responses/BadRequest' }
@@ -363,6 +366,7 @@ paths:
         the JWT. Allowed while `must_change_password` is pending (the response
         reports it, so the front-end can render the forced-change screen).
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '200':
           description: Capabilities
           content:
@@ -377,6 +381,7 @@ paths:
         - $ref: '#/components/parameters/Cursor'
         - $ref: '#/components/parameters/PageSize'
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '403': { $ref: '#/components/responses/SessionRefused' }
         '200':
           description: Activity page
@@ -391,6 +396,7 @@ paths:
       tags: [sessions]
       summary: List active sessions for the caller
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '403': { $ref: '#/components/responses/SessionRefused' }
         '200':
           description: Sessions
@@ -405,6 +411,7 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/RevokeAllSessionsRequest' }
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '403': { $ref: '#/components/responses/SessionRefused' }
         '200':
           description: Sessions revoked
@@ -422,6 +429,7 @@ paths:
           required: true
           schema: { type: string, format: uuid }
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '403': { $ref: '#/components/responses/SessionRefused' }
         '204': { description: Session revoked (idempotent) }
         '400': { $ref: '#/components/responses/BadRequest' }
@@ -457,6 +465,7 @@ paths:
             minLength: 1
             maxLength: 64
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '200':
           description: List of matching tenants (length 0 or 1)
           content:
@@ -510,6 +519,7 @@ paths:
         - { $ref: '#/components/parameters/TenantId' }
         - $ref: '#/components/parameters/XTenantId'
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '200':
           description: Tenant
           content:
@@ -536,6 +546,7 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/UpdateTenantProfileRequest' }
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '204': { description: Profile updated }
         '400': { $ref: '#/components/responses/BadRequest' }
         '403': { $ref: '#/components/responses/TenantScopeForbidden' }
@@ -565,6 +576,7 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/UpdateTenantStatutoryRequest' }
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '204': { description: Statutory updated }
         '400': { $ref: '#/components/responses/BadRequest' }
         '403': { $ref: '#/components/responses/TenantScopeForbidden' }
@@ -591,6 +603,7 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/UpdateTenantAdminContactRequest' }
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '204': { description: Admin contact updated }
         '400': { $ref: '#/components/responses/BadRequest' }
         '403': { $ref: '#/components/responses/TenantScopeForbidden' }
@@ -615,6 +628,7 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/UpdateTenantSettingsRequest' }
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '204': { description: Settings updated }
         '400': { $ref: '#/components/responses/BadRequest' }
         '403': { $ref: '#/components/responses/TenantScopeForbidden' }
@@ -639,6 +653,7 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/UpdateTenantDisplayPreferencesRequest' }
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '204': { description: Display preferences updated }
         '400': { $ref: '#/components/responses/BadRequest' }
         '403': { $ref: '#/components/responses/TenantScopeForbidden' }
@@ -664,6 +679,7 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/SuspendTenantRequest' }
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '204': { description: Tenant suspended }
         '403': { $ref: '#/components/responses/TenantScopeForbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -682,6 +698,7 @@ paths:
         - { $ref: '#/components/parameters/TenantId' }
         - $ref: '#/components/parameters/XTenantId'
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '204': { description: Tenant activated }
         '403': { $ref: '#/components/responses/TenantScopeForbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -710,6 +727,7 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/MarkTenantForDeletionRequest' }
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '204': { description: Tenant marked for deletion }
         '403': { $ref: '#/components/responses/TenantScopeForbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -728,6 +746,7 @@ paths:
         - { $ref: '#/components/parameters/TenantId' }
         - $ref: '#/components/parameters/XTenantId'
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '204': { description: Tenant restored }
         '403': { $ref: '#/components/responses/TenantScopeForbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -761,6 +780,7 @@ paths:
           required: true
           schema: { type: string, minLength: 2, maxLength: 100, pattern: '^[a-z0-9-]+$' }
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '200':
           description: Tenant
           content:
@@ -783,6 +803,7 @@ paths:
         - $ref: '#/components/parameters/PageSize'
         - $ref: '#/components/parameters/XTenantId'
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '200':
           description: Activity page
           content:
@@ -804,6 +825,7 @@ paths:
         - $ref: '#/components/parameters/PageSize'
         - $ref: '#/components/parameters/XTenantId'
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '200':
           description: Users page
           content:
@@ -826,6 +848,7 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/CreateUserRequest' }
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '503': { $ref: '#/components/responses/ServiceBusy' }
         '201':
           description: User created (or attached to existing global Person)
@@ -848,6 +871,7 @@ paths:
         - { $ref: '#/components/parameters/UserId' }
         - $ref: '#/components/parameters/XTenantId'
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '200':
           description: User
           content:
@@ -874,6 +898,7 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/UpdateUserProfileRequest' }
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '204': { description: Profile updated }
         '400': { $ref: '#/components/responses/BadRequest' }
         '403': { $ref: '#/components/responses/AuthorityForbidden' }
@@ -898,6 +923,7 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/DeactivateUserRequest' }
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '204': { description: Deactivated }
         '403': { $ref: '#/components/responses/AuthorityForbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -917,6 +943,7 @@ paths:
         - { $ref: '#/components/parameters/UserId' }
         - $ref: '#/components/parameters/XTenantId'
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '204': { description: Reactivated }
         '403': { $ref: '#/components/responses/AuthorityForbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -941,6 +968,7 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/AssignUserRoleRequest' }
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '204': { description: Role assigned }
         '400': { description: "Malformed id: `invalid_user_id` (path) or `invalid_role_id` (body `role_id`)", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
         '403': { $ref: '#/components/responses/AuthorityForbidden' }
@@ -960,6 +988,7 @@ paths:
         - $ref: '#/components/parameters/RoleId'
         - $ref: '#/components/parameters/XTenantId'
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '204': { description: Role revoked }
         '403': { $ref: '#/components/responses/AuthorityForbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -987,6 +1016,7 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/ReplaceUserPermissionOverridesRequest' }
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '204': { description: Overrides replaced }
         '400': { $ref: '#/components/responses/BadRequest' }
         '403': { $ref: '#/components/responses/AuthorityForbidden' }
@@ -1013,6 +1043,7 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/AssignUserManagerRequest' }
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '204': { description: Manager assigned }
         '403': { $ref: '#/components/responses/AuthorityForbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -1029,6 +1060,7 @@ paths:
         - { $ref: '#/components/parameters/UserId' }
         - $ref: '#/components/parameters/XTenantId'
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '204': { description: Manager removed }
         '403': { $ref: '#/components/responses/AuthorityForbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -1056,6 +1088,7 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/AnonymiseRequest' }
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '204': { description: User anonymised }
         '403': { $ref: '#/components/responses/AuthorityForbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -1074,6 +1107,7 @@ paths:
         Requires `identity.roles.view` (satisfied by `tenant.admin` in the caller's own tenant, or by `platform.*` equivalents for platform operators; ADR 0068).
       x-required-permissions: [identity.roles.view]
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '200':
           description: Roles
           content:
@@ -1095,6 +1129,7 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/CreateRoleRequest' }
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '201':
           description: Role created
           content:
@@ -1127,6 +1162,7 @@ paths:
         - { $ref: '#/components/parameters/RoleId' }
         - $ref: '#/components/parameters/XTenantId'
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '200':
           description: Role
           content:
@@ -1164,6 +1200,7 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/UpdateRoleRequest' }
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '400': { $ref: '#/components/responses/BadRequest' }
         '204': { description: Role updated }
         '403': { $ref: '#/components/responses/AuthorityForbidden' }
@@ -1198,6 +1235,7 @@ paths:
         - { $ref: '#/components/parameters/RoleId' }
         - $ref: '#/components/parameters/XTenantId'
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '204': { description: Role deleted }
         '403': { $ref: '#/components/responses/AuthorityForbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -1245,6 +1283,7 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/SetRoleParentRequest' }
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '204': { description: Parent set / cleared }
         '400': { $ref: '#/components/responses/BadRequest' }
         '403': { $ref: '#/components/responses/AuthorityForbidden' }
@@ -1294,6 +1333,7 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/ReplaceRolePermissionsRequest' }
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '204': { description: Permissions replaced }
         '400': { $ref: '#/components/responses/BadRequest' }
         '403': { $ref: '#/components/responses/AuthorityForbidden' }
@@ -1327,6 +1367,7 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/RolePermissionRequest' }
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '204': { description: Permission granted }
         '403': { $ref: '#/components/responses/AuthorityForbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -1360,6 +1401,7 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/RolePermissionRequest' }
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '204': { description: Permission revoked }
         '403': { $ref: '#/components/responses/AuthorityForbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -1379,6 +1421,7 @@ paths:
       description: |
         Requires `platform.tenants.view` held by a platform-tenant operator; platform-tenant membership alone is refused with 403 `forbidden`.
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '200':
           description: Tenants
           content:
@@ -1409,6 +1452,7 @@ paths:
         - $ref: '#/components/parameters/TenantId'
         - $ref: '#/components/parameters/XTenantId'
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '204': { description: Tenant hard-deleted }
         '400': { $ref: '#/components/responses/TenantScopeInvalid' }
         '403': { $ref: '#/components/responses/Forbidden' }
@@ -1428,6 +1472,7 @@ paths:
         Requires `platform.users.view` held by a platform-tenant operator; platform-tenant membership alone is refused with 403 `forbidden`.
       parameters: [{ $ref: '#/components/parameters/PersonId' }]
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '200':
           description: Person
           content:
@@ -1445,6 +1490,7 @@ paths:
         Requires `platform.users.view` held by a platform-tenant operator; platform-tenant membership alone is refused with 403 `forbidden`.
       parameters: [{ $ref: '#/components/parameters/PersonId' }]
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '200':
           description: Memberships
           content:
@@ -1474,6 +1520,7 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/UpdatePersonProfileRequest' }
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '204': { description: Profile updated }
         '400': { $ref: '#/components/responses/BadRequest' }
         '403': { $ref: '#/components/responses/Forbidden' }
@@ -1499,6 +1546,7 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/GlobalSuspendPersonRequest' }
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '204': { description: Person globally suspended }
         '403': { $ref: '#/components/responses/AuthorityForbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -1517,6 +1565,7 @@ paths:
         - $ref: '#/components/parameters/XCommandId'
         - { $ref: '#/components/parameters/PersonId' }
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '204': { description: Suspension lifted }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -1540,6 +1589,7 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/AnonymiseRequest' }
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '204': { description: Person anonymised }
         '403': { $ref: '#/components/responses/AuthorityForbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -1559,6 +1609,7 @@ paths:
           required: true
           schema: { type: string, format: email }
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '200':
           description: Person
           content:
@@ -1587,6 +1638,7 @@ paths:
             Empty = no deltas; otherwise emit `deltas` field with "new
             rows since now() - window" for each counter.
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '200':
           description: Stats
           content:
@@ -1615,6 +1667,7 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/CreateImpersonationSessionRequest' }
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '201':
           description: Session opened
           content:
@@ -1634,6 +1687,7 @@ paths:
       description: |
         Requires `platform.impersonation.manage` held by a platform-tenant operator; platform-tenant membership alone, and `platform.tenants.manage`, are refused with 403 `forbidden`.
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '200':
           description: Sessions
           content:
@@ -1661,6 +1715,7 @@ paths:
           required: true
           schema: { type: string, format: uuid }
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '204': { description: Session ended }
         '400': { $ref: '#/components/responses/BadRequest' }
         '403': { $ref: '#/components/responses/Forbidden' }
@@ -1690,6 +1745,7 @@ paths:
           schema: { type: string, default: 'persons,tenants' }
           description: Comma-separated category list. Currently `persons`, `tenants`. Default is every category the caller is authorised for.
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '200':
           description: Search results
           content:
@@ -1732,6 +1788,7 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/CreatePermissionRequestRequest' }
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '201':
           description: Request submitted
           content:
@@ -1778,6 +1835,7 @@ paths:
         - { $ref: '#/components/parameters/PageSize' }
         - $ref: '#/components/parameters/XTenantId'
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '200':
           description: Page of requests
           content:
@@ -1798,6 +1856,7 @@ paths:
         - { $ref: '#/components/parameters/PermissionRequestId' }
         - $ref: '#/components/parameters/XTenantId'
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '200':
           description: The request
           content:
@@ -1845,6 +1904,7 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/ApprovePermissionRequestRequest' }
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '204': { description: Approved + grant created }
         '403':
           description: |
@@ -1883,6 +1943,7 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/DenyPermissionRequestRequest' }
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '204': { description: Denied }
         '403':
           description: |
@@ -1914,6 +1975,7 @@ paths:
         - { $ref: '#/components/parameters/PermissionRequestId' }
         - $ref: '#/components/parameters/XTenantId'
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '204': { description: Cancelled }
         '403': { $ref: '#/components/responses/TenantScopeNotSupported' }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -1942,6 +2004,7 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/CreateUnverifiedContactRequest' }
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '201':
           description: Created
           content:
@@ -1963,6 +2026,7 @@ paths:
         - $ref: '#/components/parameters/Cursor'
         - $ref: '#/components/parameters/PageSize'
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '200':
           description: OK
           content:
@@ -1988,6 +2052,7 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/LogVerificationCallRequest' }
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '201':
           description: Logged
           content:
@@ -2013,6 +2078,7 @@ paths:
         - $ref: '#/components/parameters/XCommandId'
         - $ref: '#/components/parameters/PathID'
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '201':
           description: Promoted; new PlatformLead ID returned
           content:
@@ -2042,6 +2108,7 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/RejectUnverifiedContactRequest' }
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '204': { description: Rejected }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
@@ -2074,6 +2141,7 @@ paths:
         - $ref: '#/components/parameters/Cursor'
         - $ref: '#/components/parameters/PageSize'
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '200':
           description: OK
           content:
@@ -2099,6 +2167,7 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/PurchaseLeadRequest' }
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '201':
           description: Purchased
           content:
@@ -2127,6 +2196,7 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/TopupLeadCreditsRequest' }
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '200':
           description: Topped up
           content:
@@ -2144,6 +2214,7 @@ paths:
       parameters:
         - $ref: '#/components/parameters/XTenantId'
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '200':
           description: OK
           content:
@@ -2171,6 +2242,7 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/CreateProductRequest' }
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '201':
           description: Product created
           content:
@@ -2217,6 +2289,7 @@ paths:
           description: pg_trgm fuzzy match on (sku || name) per ADR 0040.
         - $ref: '#/components/parameters/XTenantId'
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '200':
           description: Page of products
           content:
@@ -2238,6 +2311,7 @@ paths:
         - { $ref: '#/components/parameters/ProductId' }
         - $ref: '#/components/parameters/XTenantId'
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '200':
           description: Product view
           content:
@@ -2267,6 +2341,7 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/UpdateProductRequest' }
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '204': { description: Updated }
         '400': { $ref: '#/components/responses/TenantScopeInvalid' }
         '403': { $ref: '#/components/responses/TenantScopeReadOnly' }
@@ -2289,6 +2364,7 @@ paths:
         - { $ref: '#/components/parameters/ProductId' }
         - $ref: '#/components/parameters/XTenantId'
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '204': { description: Deleted (or already deleted) }
         '400': { $ref: '#/components/responses/TenantScopeInvalid' }
         '403': { $ref: '#/components/responses/TenantScopeReadOnly' }
@@ -2318,6 +2394,7 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/AddBatchRequest' }
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '201':
           description: Batch added
           content:
@@ -2350,6 +2427,7 @@ paths:
           schema: { type: string, enum: ['true', 'false'] }
         - $ref: '#/components/parameters/XTenantId'
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '200':
           description: Page of batches
           content:
@@ -2374,6 +2452,7 @@ paths:
         - { $ref: '#/components/parameters/ProductId' }
         - $ref: '#/components/parameters/XTenantId'
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '200':
           description: FEFO-ordered batch list
           content:
@@ -2394,6 +2473,7 @@ paths:
         - { $ref: '#/components/parameters/BatchId' }
         - $ref: '#/components/parameters/XTenantId'
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '200':
           description: Batch view
           content:
@@ -2429,6 +2509,7 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/LogMovementRequest' }
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '201':
           description: Movement logged
           content:
@@ -2463,6 +2544,7 @@ paths:
             enum: [inbound, outbound, adjustment, reservation, release]
         - $ref: '#/components/parameters/XTenantId'
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '200':
           description: Page of movements
           content:
@@ -2536,6 +2618,7 @@ paths:
           explode: true
         - $ref: '#/components/parameters/XTenantId'
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '200':
           description: Cursor-paginated lead page
           content:
@@ -2560,6 +2643,7 @@ paths:
         - { $ref: '#/components/parameters/LeadId' }
         - $ref: '#/components/parameters/XTenantId'
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '200':
           description: The lead
           content:
@@ -2592,6 +2676,7 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/AssignLeadRequest' }
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '200':
           description: Assigned
           content:
@@ -2629,6 +2714,7 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/ChangeStageRequest' }
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '204': { description: Stage updated }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
@@ -2662,6 +2748,7 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/ChangeTemperatureRequest' }
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '204': { description: Temperature updated }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
@@ -2695,6 +2782,7 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/LogCallRequest' }
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '201':
           description: Call logged
           content:
@@ -2726,6 +2814,7 @@ paths:
         - { $ref: '#/components/parameters/XCommandId' }
         - $ref: '#/components/parameters/XTenantId'
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '204': { description: Converted }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
@@ -2759,6 +2848,7 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/CreateWorkItemRequest' }
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '201':
           description: Work item created
           content:
@@ -2811,6 +2901,7 @@ paths:
           schema: { type: string, format: date-time }
         - $ref: '#/components/parameters/XTenantId'
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '200':
           description: Cursor-paginated work-item page
           content:
@@ -2838,6 +2929,7 @@ paths:
           schema: { type: boolean, default: false }
         - $ref: '#/components/parameters/XTenantId'
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '200':
           description: Dashboard counts
           content:
@@ -2857,6 +2949,7 @@ paths:
         - { $ref: '#/components/parameters/WorkItemId' }
         - $ref: '#/components/parameters/XTenantId'
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '200':
           description: Work item
           content:
@@ -2877,6 +2970,7 @@ paths:
         - { $ref: '#/components/parameters/XCommandId' }
         - $ref: '#/components/parameters/XTenantId'
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '204': { description: Started }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
@@ -2898,6 +2992,7 @@ paths:
         - { $ref: '#/components/parameters/XCommandId' }
         - $ref: '#/components/parameters/XTenantId'
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '204': { description: Completed }
         '400': { $ref: '#/components/responses/TenantScopeInvalid' }
         '401': { $ref: '#/components/responses/Unauthorized' }
@@ -2924,6 +3019,7 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/CancelWorkItemRequest' }
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '204': { description: Cancelled }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
@@ -2959,6 +3055,7 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/ReassignWorkItemRequest' }
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '204': { description: Reassigned }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
@@ -2993,6 +3090,7 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/CreateConsignmentNoteRequest' }
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '201':
           description: Consignment note created
           content:
@@ -3021,6 +3119,7 @@ paths:
           schema: { type: string, format: uuid }
         - $ref: '#/components/parameters/XTenantId'
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '200':
           description: Consignment note
           content:
@@ -3040,6 +3139,7 @@ paths:
         - { $ref: '#/components/parameters/ConsignmentNoteId' }
         - $ref: '#/components/parameters/XTenantId'
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '200':
           description: Consignment note
           content:
@@ -3065,6 +3165,7 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/MarkDispatchedRequest' }
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '204': { description: Dispatched }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
@@ -3087,6 +3188,7 @@ paths:
         - { $ref: '#/components/parameters/XCommandId' }
         - $ref: '#/components/parameters/XTenantId'
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '204': { description: In transit }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
@@ -3109,6 +3211,7 @@ paths:
         - { $ref: '#/components/parameters/XCommandId' }
         - $ref: '#/components/parameters/XTenantId'
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '204': { description: Delivered }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
@@ -3136,6 +3239,7 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/MarkFailedRequest' }
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '204': { description: Failed }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
@@ -3166,6 +3270,7 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/CreateQuotationRequest' }
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '201':
           description: Quotation created
           content:
@@ -3187,6 +3292,7 @@ paths:
         - { $ref: '#/components/parameters/QuotationId' }
         - $ref: '#/components/parameters/XTenantId'
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '200':
           description: Quotation
           content:
@@ -3215,6 +3321,7 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/ReviseQuotationRequest' }
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '204': { description: Revised }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
@@ -3237,6 +3344,7 @@ paths:
         - { $ref: '#/components/parameters/XCommandId' }
         - $ref: '#/components/parameters/XTenantId'
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '200':
           description: Approved; Order created
           content:
@@ -3268,6 +3376,7 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/RejectQuotationRequest' }
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '204': { description: Rejected }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
@@ -3289,6 +3398,7 @@ paths:
         - { $ref: '#/components/parameters/OrderId' }
         - $ref: '#/components/parameters/XTenantId'
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '200':
           description: Order
           content:
@@ -3314,6 +3424,7 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/RecordTokenPaymentRequest' }
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '204': { description: Recorded }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
@@ -3336,6 +3447,7 @@ paths:
         - { $ref: '#/components/parameters/XCommandId' }
         - $ref: '#/components/parameters/XTenantId'
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '204': { description: Confirmed }
         '400': { $ref: '#/components/responses/TenantScopeInvalid' }
         '401': { $ref: '#/components/responses/Unauthorized' }
@@ -3363,6 +3475,7 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/PackOrderRequest' }
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '204': { description: Packed }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
@@ -3384,6 +3497,7 @@ paths:
         - { $ref: '#/components/parameters/OrderId' }
         - $ref: '#/components/parameters/XTenantId'
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '200':
           description: Invoice
           content:
@@ -3402,6 +3516,7 @@ paths:
         - { $ref: '#/components/parameters/XCommandId' }
         - $ref: '#/components/parameters/XTenantId'
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '200':
           description: Invoiced
           content:
@@ -3432,6 +3547,7 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/CancelOrderRequest' }
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '204': { description: Cancelled }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
@@ -3454,6 +3570,7 @@ paths:
         - { $ref: '#/components/parameters/XCommandId' }
         - $ref: '#/components/parameters/XTenantId'
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '204': { description: Completed }
         '400': { $ref: '#/components/responses/TenantScopeInvalid' }
         '401': { $ref: '#/components/responses/Unauthorized' }
@@ -3475,6 +3592,7 @@ paths:
         - { $ref: '#/components/parameters/OrderId' }
         - $ref: '#/components/parameters/XTenantId'
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '200':
           description: Payments
           content:
@@ -3498,6 +3616,7 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/RecordPaymentRequest' }
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '201':
           description: Recorded
           content:
@@ -3533,6 +3652,7 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/MintCreditNoteRequest' }
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '201':
           description: Credit note minted
           content:
@@ -3567,6 +3687,7 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/LoseLeadRequest' }
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '204': { description: Lost }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
@@ -3607,6 +3728,7 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/CreateReminderRequest' }
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '201':
           description: Reminder created
           content:
@@ -3653,6 +3775,7 @@ paths:
           schema: { type: string, format: uuid }
         - $ref: '#/components/parameters/XTenantId'
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '200':
           description: Cursor-paginated reminder page
           content:
@@ -3679,6 +3802,7 @@ paths:
         - { $ref: '#/components/parameters/XCommandId' }
         - $ref: '#/components/parameters/XTenantId'
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '204': { description: Marked sent }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
@@ -3712,6 +3836,7 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/CancelReminderRequest' }
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '204': { description: Cancelled }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
@@ -3750,6 +3875,7 @@ paths:
             type: string
             enum: [lead_assigned, lead_converted, order_confirmed, order_delivered, work_item_assigned, work_item_overdue, stock_expiring, stock_below_reorder, reminder]
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '403': { $ref: '#/components/responses/PasswordChangeRequired' }
         '200':
           description: Cursor-paginated notification page
@@ -3765,6 +3891,7 @@ paths:
       tags: [notifications]
       summary: Unread notification count for the caller (badge)
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '403': { $ref: '#/components/responses/PasswordChangeRequired' }
         '200':
           description: Unread count
@@ -3781,6 +3908,7 @@ paths:
       parameters:
         - { $ref: '#/components/parameters/XCommandId' }
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '403': { $ref: '#/components/responses/PasswordChangeRequired' }
         '200':
           description: Count of notifications flipped to read
@@ -3798,6 +3926,7 @@ paths:
         - { $ref: '#/components/parameters/NotificationId' }
         - { $ref: '#/components/parameters/XCommandId' }
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '403': { $ref: '#/components/responses/PasswordChangeRequired' }
         '204': { description: Marked read }
         '400': { $ref: '#/components/responses/BadRequest' }
@@ -3817,6 +3946,7 @@ paths:
         - { $ref: '#/components/parameters/NotificationId' }
         - { $ref: '#/components/parameters/XCommandId' }
       responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
         '403': { $ref: '#/components/responses/PasswordChangeRequired' }
         '204': { description: Dismissed }
         '400': { $ref: '#/components/responses/BadRequest' }
@@ -4132,11 +4262,14 @@ components:
           schema: { $ref: '#/components/schemas/ErrorResponse' }
     TooManyRequests:
       description: |
-        Rate limit exceeded; `Retry-After` carries the seconds to wait. The bucket is the
-        client address (the end client the BFF forwards in `X-Forwarded-For`, never the BFF).
-        Login, refresh, request-password-reset, reset-password, confirm-email-change and tenant
-        registration also carry their own tighter per-client limit. change-password is limited per
-        PERSON (5 per minute, burst 5, whichever address the requests come from).
+        Rate limit exceeded; `Retry-After` carries the whole seconds to wait (rounded up).
+        EVERY operation can answer this: a global per-client limiter (10 requests/s, burst 60)
+        runs in front of the whole API, and its key map is capped (a new client is refused while
+        the cap is full). The bucket is the client address (the end client the BFF forwards in
+        `X-Forwarded-For`, never the BFF; IPv6 clients share a bucket per /64). Login, refresh,
+        request-password-reset, reset-password, confirm-email-change and tenant registration also
+        carry their own tighter per-client limit. change-password is limited per PERSON (5 per
+        minute, burst 5, whichever address the requests come from).
       headers:
         Retry-After:
           description: Seconds until the request may be retried.
