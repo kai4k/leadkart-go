@@ -490,6 +490,7 @@ func handleRefresh(log *slog.Logger, a app.Application) http.Handler {
 			RefreshToken:         out.RefreshTokenPlain,
 			AccessTokenExpiresAt: out.AccessTokenExpiresAt,
 			TokenType:            "Bearer",
+			MustChangePassword:   out.MustChangePassword,
 		})
 	})
 }

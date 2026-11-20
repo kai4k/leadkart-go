@@ -34,6 +34,8 @@ type RefreshResult struct {
 	PersonID             person.ID
 	TenantID             tenant.ID
 	MembershipID         membership.ID
+	// MustChangePassword mirrors the claim minted into AccessToken.
+	MustChangePassword bool
 }
 
 // ----- Handler errors --------------------------------------------------------
@@ -215,6 +217,9 @@ func (h RefreshHandler) Handle(ctx context.Context, cmd RefreshCommand) (Refresh
 		IsSuperUser:   authClaims.IsSuperUser,
 		Permissions:   permissionNames(authClaims.Permissions),
 		Rank:          rankClaim(authClaims.Rank),
+		// Minted from the stored Person, like login: the flag survives refresh and
+		// is gone with the first token after the password change.
+		MustChangePassword: p.MustChangePassword(),
 	})
 	if err != nil {
 		return RefreshResult{}, fmt.Errorf("refresh: issue jwt: %w", err)
@@ -227,5 +232,6 @@ func (h RefreshHandler) Handle(ctx context.Context, cmd RefreshCommand) (Refresh
 		PersonID:             p.ID(),
 		TenantID:             tn.ID(),
 		MembershipID:         m.ID(),
+		MustChangePassword:   p.MustChangePassword(),
 	}, nil
 }

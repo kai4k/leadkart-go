@@ -293,6 +293,9 @@ func (h LoginHandler) Handle(ctx context.Context, cmd LoginCommand) (LoginResult
 		IsSuperUser:   authClaims.IsSuperUser,
 		Permissions:   permissionNames(authClaims.Permissions),
 		Rank:          rankClaim(authClaims.Rank),
+		// The flag rides in the token (plan D8): authn answers 403
+		// password_change_required on every non-allowlisted route until it clears.
+		MustChangePassword: p.MustChangePassword(),
 	})
 	if err != nil {
 		return LoginResult{}, fmt.Errorf("login: issue jwt: %w", err)

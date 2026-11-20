@@ -111,6 +111,15 @@ func writeError(w http.ResponseWriter, status int, code, message string) {
 	_, _ = w.Write([]byte(body))
 }
 
+// writeForbidden answers a 403 with the error body and NO WWW-Authenticate: the
+// BFF treats 401 + that header as "refresh silently", and a forbidden request
+// is not a stale session.
+func writeForbidden(w http.ResponseWriter, code, message string) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(http.StatusForbidden)
+	_, _ = w.Write([]byte(`{"error":"` + code + `","message":"` + message + `"}`))
+}
+
 // ----- RequireAuth ---------------------------------------------------------
 
 // RequireAuth verifies the bearer token + stashes the claims on ctx.

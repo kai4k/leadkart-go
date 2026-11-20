@@ -79,6 +79,7 @@ func handleGetCapabilities(log *slog.Logger, a app.Application) http.Handler {
 			TenantSlug:           c.TenantSlug,
 			IsPlatform:           c.IsPlatform,
 			IsSuperUser:          c.IsSuperUser,
+			MustChangePassword:   c.MustChangePassword,
 			Permissions:          perms,
 			EffectivePermissions: authn.EffectivePermissions(c),
 			Roles:                []CapabilityRoleDto{}, // non-nil; populated below

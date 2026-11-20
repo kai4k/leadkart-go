@@ -34,6 +34,24 @@ func GetSecurityStamp(t testing.TB, pool *pgxpool.Pool, personID string) string 
 	return stamp
 }
 
+// ClearMustChangePassword clears the forced-password-change flag of the person
+// with this email, without touching the credential or the security stamp. Since
+// the API enforces the flag (plan D8), a person created with a temporary password
+// (RegisterTenant, CreateUser) can only call change-password until it is cleared;
+// fixtures that need an ordinary logged-in member call this before the login so
+// the many tests that are not about the forced change keep their one-login flow.
+// Exactly one row must change.
+func ClearMustChangePassword(t testing.TB, pool *pgxpool.Pool, email string) {
+	t.Helper()
+	tag, err := pool.Exec(t.Context(), `UPDATE identity.persons SET must_change_password = false WHERE email = $1`, email)
+	if err != nil {
+		t.Fatalf("identitytest.ClearMustChangePassword(%s): %v", email, err)
+	}
+	if tag.RowsAffected() != 1 {
+		t.Fatalf("identitytest.ClearMustChangePassword(%s): %d rows changed, want 1", email, tag.RowsAffected())
+	}
+}
+
 // SetPermissionRequestPermission rewrites the permission name stored on one
 // permission-request row, in a platform-scoped transaction (the application
 // role is bound by row-level security). It exists to put a row into the shape

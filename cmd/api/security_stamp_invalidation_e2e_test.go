@@ -57,6 +57,7 @@ import (
 	"github.com/leadkart/leadkart-go/internal/common/messaging"
 	crmapp "github.com/leadkart/leadkart-go/internal/crm/app"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/permission"
+	"github.com/leadkart/leadkart-go/internal/identity/identitytest"
 	"github.com/leadkart/leadkart-go/internal/identity/ports"
 	"github.com/leadkart/leadkart-go/internal/identity/ports/subscribers"
 	platformapp "github.com/leadkart/leadkart-go/internal/platform/app"
@@ -113,6 +114,9 @@ func TestSecurityStampInvalidation_PasswordChange_Returns401WithinFastPath(t *te
 	}); r.status != http.StatusCreated {
 		t.Fatalf("register: status %d body %s", r.status, r.body)
 	}
+
+	// The admin holds a temporary credential; this test is about the stamp, not the forced change.
+	identitytest.ClearMustChangePassword(t, pool, regEmail)
 
 	// 2. Login → access token T1, security_stamp S1.
 	loginResp := postJSON(t, srv.URL+"/api/v1/auth/login", ports.LoginRequest{

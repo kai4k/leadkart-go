@@ -51,13 +51,15 @@ type LoginRequest struct {
 // Refresh-token plaintext is in the BODY (not a cookie) for bearer
 // clients; the BFF converts it to an HttpOnly cookie (security.md "BFF
 // cookie"). MustChangePassword is the BRD forced-rotation flag — the
-// frontend MUST route to change-password when true.
+// frontend MUST route to change-password when true. It is always present on
+// login AND refresh (the API enforces it too: the access token carries it and
+// every route outside the pinned allowlist answers 403 password_change_required).
 type LoginResponse struct {
 	AccessToken          string    `json:"access_token"`
 	RefreshToken         string    `json:"refresh_token"`
 	AccessTokenExpiresAt time.Time `json:"access_token_expires_at"`
 	TokenType            string    `json:"token_type"` // always "Bearer"
-	MustChangePassword   bool      `json:"must_change_password,omitzero"`
+	MustChangePassword   bool      `json:"must_change_password"`
 }
 
 // ----- Refresh ---------------------------------------------------------------
@@ -183,16 +185,20 @@ type SearchTenantHit struct {
 // each role carries is_super_admin so the frontend renders the
 // SuperAdmin chip without re-parsing permissions.
 type CapabilitiesDto struct {
-	PersonID     string   `json:"person_id"`
-	MembershipID string   `json:"membership_id"`
-	TenantID     string   `json:"tenant_id"`
-	TenantSlug   string   `json:"tenant_slug"`
-	Email        string   `json:"email,omitzero"`
-	FirstName    string   `json:"first_name,omitzero"`
-	LastName     string   `json:"last_name,omitzero"`
-	IsPlatform   bool     `json:"is_platform"`
-	IsSuperUser  bool     `json:"is_super_user"`
-	Permissions  []string `json:"permissions"`
+	PersonID     string `json:"person_id"`
+	MembershipID string `json:"membership_id"`
+	TenantID     string `json:"tenant_id"`
+	TenantSlug   string `json:"tenant_slug"`
+	Email        string `json:"email,omitzero"`
+	FirstName    string `json:"first_name,omitzero"`
+	LastName     string `json:"last_name,omitzero"`
+	IsPlatform   bool   `json:"is_platform"`
+	IsSuperUser  bool   `json:"is_super_user"`
+	// MustChangePassword mirrors the access token's flag: true while the person
+	// holds a temporary credential. A token with it reaches only change-password
+	// and this endpoint, so the front-end reads it here to render the forced screen.
+	MustChangePassword bool     `json:"must_change_password"`
+	Permissions        []string `json:"permissions"`
 	// EffectivePermissions: every catalogue permission the caller satisfies
 	// in their own tenant (tenant.admin expanded) — UI gating reads this.
 	EffectivePermissions []string            `json:"effective_permissions"`

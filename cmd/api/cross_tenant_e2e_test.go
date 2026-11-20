@@ -50,6 +50,7 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/app/jwt"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/permission"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
+	"github.com/leadkart/leadkart-go/internal/identity/identitytest"
 	"github.com/leadkart/leadkart-go/internal/identity/ports"
 	platformapp "github.com/leadkart/leadkart-go/internal/platform/app"
 )
@@ -164,6 +165,20 @@ type registeredTenant struct {
 // per-test uniqueness when running in parallel.
 func (f e2eFixture) registerAndLogin(t *testing.T, namePrefix string) registeredTenant {
 	t.Helper()
+	reg := f.registerOnly(t, namePrefix)
+	// The admin holds a temporary credential (flag set, enforced by the API); these
+	// fixtures are about everything else, so clear it. The forced-change flow has
+	// its own tests (must_change_password_e2e_test.go).
+	identitytest.ClearMustChangePassword(t, f.Pool, reg.Email)
+	login := f.loginPair(t, reg.Email, reg.Password)
+	reg.AccessToken, reg.RefreshToken = login.AccessToken, login.RefreshToken
+	return reg
+}
+
+// registerOnly registers a fresh tenant with its admin and does NOT log in: the
+// admin still holds the temporary credential (must_change_password).
+func (f e2eFixture) registerOnly(t *testing.T, namePrefix string) registeredTenant {
+	t.Helper()
 	suffix := ids.NewV7().String()[len(ids.NewV7().String())-8:]
 	slugStr := namePrefix + "-" + suffix
 	adminAddr := namePrefix + "-admin-" + suffix + "@e2e.test"
@@ -186,18 +201,6 @@ func (f e2eFixture) registerAndLogin(t *testing.T, namePrefix string) registered
 	if err != nil {
 		t.Fatalf("register %s: %v", namePrefix, err)
 	}
-	loginResp := f.postJSON(t, "/api/v1/auth/login", ports.LoginRequest{
-		Email:       adminAddr,
-		Password:    password,
-		DeviceLabel: "e2e test device " + suffix,
-	})
-	if loginResp.status != http.StatusOK {
-		t.Fatalf("login %s: status %d body %s", namePrefix, loginResp.status, loginResp.body)
-	}
-	var login ports.LoginResponse
-	if err := json.Unmarshal(loginResp.body, &login); err != nil {
-		t.Fatalf("login %s decode: %v", namePrefix, err)
-	}
 	return registeredTenant{
 		TenantID:     string(regOut.TenantID),
 		PersonID:     string(regOut.PersonID),
@@ -205,8 +208,6 @@ func (f e2eFixture) registerAndLogin(t *testing.T, namePrefix string) registered
 		Slug:         slugStr,
 		Email:        adminAddr,
 		Password:     password,
-		AccessToken:  login.AccessToken,
-		RefreshToken: login.RefreshToken,
 	}
 }
 

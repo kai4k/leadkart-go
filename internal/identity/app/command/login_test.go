@@ -517,6 +517,14 @@ func TestLogin_HappyPath_PropagatesMustChangePassword(t *testing.T) {
 	if !res.MustChangePassword {
 		t.Error("MustChangePassword = false; expected true for admin-provisioned credential")
 	}
+	// Plan D8: the flag is also in the token, where authn enforces it.
+	claims, err := rig.issuer.Verify(res.AccessToken)
+	if err != nil {
+		t.Fatalf("issuer.Verify: %v", err)
+	}
+	if !claims.MustChangePassword {
+		t.Error("must_change_password claim missing from the access token of a flagged Person")
+	}
 }
 
 // TestLogin_HappyPath_PlatformSlug_SetsIsPlatformClaim covers the

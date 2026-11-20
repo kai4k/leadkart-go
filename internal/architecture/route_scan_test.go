@@ -76,6 +76,7 @@ import (
 // Tags a wrapper contributes to a route, outermost first.
 const (
 	tagAuth     = "auth"     // authentication only (RequireAuth, RequireFreshStamp)
+	tagBareAuth = "bareauth" // authn.RequireAuth: verifies the token but skips the stamp / session / forced-password-change checks
 	tagAuthz    = "authz"    // a permission decision
 	tagAnchor   = "anchor"   // platform-tenant membership (not authorisation)
 	tagInner    = "inner"    // a guard that is neither (DenySelfTarget)
@@ -92,7 +93,7 @@ const authnImportPath = "github.com/leadkart/leadkart-go/internal/identity/ports
 // authnFactoryTags maps every authn wrapper a route can use to its tags.
 // RequireTenantPermission applies the path marker itself, outside its auth gate.
 var authnFactoryTags = map[string][]string{
-	"RequireAuth":             {tagAuth},
+	"RequireAuth":             {tagAuth, tagBareAuth},
 	"RequireFreshStamp":       {tagAuth},
 	"RequirePermission":       {tagAuthz},
 	"RequireAnyPermission":    {tagAuthz},

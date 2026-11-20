@@ -34,6 +34,19 @@ info:
     member no longer exists or is inactive, otherwise the usual `insufficient_rank` /
     `grant_exceeds_authority`).
 
+    **Forced password change (ADR 0053 / ADR 0068 D8):** a person provisioned with
+    a temporary credential (a tenant's first admin, a member created with
+    `POST /api/v1/users`) holds `must_change_password`. The API enforces it: the
+    access token carries the flag, login AND refresh mint it from the stored person
+    and return it as `must_change_password`, and every authenticated route except
+    `POST /api/v1/auth/change-password` and `GET /api/v1/auth/me/capabilities`
+    answers `403` with `error: password_change_required` (no `WWW-Authenticate`:
+    this is not a session problem, do not refresh). Changing the password rotates
+    the security stamp, so the flagged token answers `401 stale_token` afterwards and
+    the next login or refresh carries no flag. Login, refresh, logout and the
+    emailed-token flows are anonymous and unaffected. Tokens minted before the
+    claim existed carry no flag.
+
     **Multi-tenant scope:** every authenticated call carries the caller's
     `tenant_id` claim implicitly. Platform operators (`is_platform=true` JWT)
     select a tenant per request via the `X-Tenant-Id` header (ADR 0039):
@@ -248,7 +261,10 @@ paths:
         - $ref: '#/components/parameters/XCommandId'
       tags: [auth]
       summary: Change own password (authenticated)
-      description: Current password verified even when authenticated (security.md "Password change").
+      description: |
+        Current password verified even when authenticated (security.md "Password change").
+        Allowed while `must_change_password` is pending: this is the way out of the
+        forced-change state. The change rotates the security stamp and clears the flag.
       requestBody:
         required: true
         content:
@@ -257,7 +273,7 @@ paths:
       responses:
         '204': { description: Password changed }
         '401':
-          description: Incorrect current password
+          description: Incorrect current password, or the access token is stale (`stale_token`)
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
@@ -316,7 +332,8 @@ paths:
         Auth0 `/userinfo` canon. Returns JWT-resident fields (no DB hit) plus
         cached profile enrichment (email + name + role names). The frontend
         uses this to drive nav / tier / button-visibility without decoding
-        the JWT.
+        the JWT. Allowed while `must_change_password` is pending (the response
+        reports it, so the front-end can render the forced-change screen).
       responses:
         '200':
           description: Capabilities
@@ -4087,7 +4104,7 @@ components:
 
     LoginResponse:
       type: object
-      required: [access_token, refresh_token, access_token_expires_at, token_type]
+      required: [access_token, refresh_token, access_token_expires_at, token_type, must_change_password]
       properties:
         access_token:   { type: string }
         refresh_token:  { type: string }
@@ -4096,10 +4113,12 @@ components:
         must_change_password:
           type: boolean
           description: |
-            BRD line 241 + ADR 0053 — when true, the credential was
-            provisioned by an admin/operator and the frontend MUST
-            redirect to the change-password screen on first login.
-            Omitted from the wire shape when false.
+            BRD line 241 + ADR 0053 / ADR 0068 D8: when true, the credential was
+            provisioned by an admin/operator. The access token carries the flag and
+            every route except change-password and capabilities answers `403
+            password_change_required` until the password is changed. Always present
+            on login AND refresh (refresh mints it from the stored person, so a
+            front-end that lost its own gate restores it from here).
 
     RefreshRequest:
       type: object
@@ -4149,7 +4168,7 @@ components:
     # ===== Capabilities ================================================
     CapabilitiesDto:
       type: object
-      required: [person_id, membership_id, tenant_id, tenant_slug, is_platform, is_super_user, permissions, effective_permissions, roles, rank, tier]
+      required: [person_id, membership_id, tenant_id, tenant_slug, is_platform, is_super_user, must_change_password, permissions, effective_permissions, roles, rank, tier]
       properties:
         person_id:     { type: string, format: uuid }
         membership_id: { type: string, format: uuid }
@@ -4160,6 +4179,9 @@ components:
         last_name:     { type: string }
         is_platform:   { type: boolean }
         is_super_user: { type: boolean }
+        must_change_password:
+          type: boolean
+          description: Mirrors the access token's flag. True while the person holds a temporary credential; such a token reaches only change-password and this endpoint.
         permissions:
           type: array
           items: { type: string }

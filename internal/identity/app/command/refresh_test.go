@@ -21,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/leadkart/leadkart-go/internal/common/email"
 	"github.com/leadkart/leadkart-go/internal/common/ids"
 	"github.com/leadkart/leadkart-go/internal/identity/app/command"
 	"github.com/leadkart/leadkart-go/internal/identity/app/jwt"
@@ -254,6 +255,69 @@ func TestRefresh_HappyPath_RotatesTokensAndReissuesJWT(t *testing.T) {
 	}
 	if claims.IsPlatform {
 		t.Error("IsPlatform=true for non-platform tenant — refresh regression")
+	}
+}
+
+// TestRefresh_MustChangePassword_SurvivesRefreshAndClearsAfterChange: refresh mints
+// from the stored Person like login (plan D8), so the flag is in the new token and
+// in the result while the credential is temporary, and is gone once the Person has
+// changed it.
+func TestRefresh_MustChangePassword_SurvivesRefreshAndClearsAfterChange(t *testing.T) {
+	t.Parallel()
+	rig := newRefreshRig(t)
+	hash, err := person.NewPasswordHash("$argon2id$v=19$m=19456,t=2,p=1$c2FsdHkx$abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789")
+	if err != nil {
+		t.Fatalf("NewPasswordHash: %v", err)
+	}
+	addr, _ := email.New("invited-refresh@acme.test")
+	p, err := person.NewWithMustChangePassword(person.ID(ids.NewV7().String()), addr, "Invited", "User", hash, testNow)
+	if err != nil {
+		t.Fatalf("NewWithMustChangePassword: %v", err)
+	}
+	if err := rig.persons.Add(t.Context(), p); err != nil {
+		t.Fatalf("persons.Add: %v", err)
+	}
+	tn := newTenantWithSlug(t, "refresh-flagged")
+	if err := rig.tenants.Add(t.Context(), tn); err != nil {
+		t.Fatalf("tenants.Add: %v", err)
+	}
+	if err := rig.memberships.Add(t.Context(), activeMembership(t, p, tn)); err != nil {
+		t.Fatalf("memberships.Add: %v", err)
+	}
+	plain := seedFamilyForPerson(t, rig, p, tn)
+
+	res, err := rig.handler.Handle(t.Context(), command.RefreshCommand{RefreshTokenPlain: plain})
+	if err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	claims, err := rig.issuer.Verify(res.AccessToken)
+	if err != nil {
+		t.Fatalf("issuer.Verify: %v", err)
+	}
+	if !res.MustChangePassword || !claims.MustChangePassword {
+		t.Fatalf("flagged person: result=%v claim=%v, want both true", res.MustChangePassword, claims.MustChangePassword)
+	}
+
+	// The person changes the password: the next refresh carries no flag.
+	newHash, err := person.NewPasswordHash("$argon2id$v=19$m=19456,t=2,p=1$c2FsdHky$abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789")
+	if err != nil {
+		t.Fatalf("NewPasswordHash: %v", err)
+	}
+	if err := rig.persons.UpdateByID(t.Context(), p.ID(), func(stored *person.Person) (bool, error) {
+		return true, stored.ChangePassword(newHash, testNow)
+	}); err != nil {
+		t.Fatalf("persons.UpdateByID: %v", err)
+	}
+	res, err = rig.handler.Handle(t.Context(), command.RefreshCommand{RefreshTokenPlain: res.RefreshTokenPlain})
+	if err != nil {
+		t.Fatalf("Handle after change: %v", err)
+	}
+	claims, err = rig.issuer.Verify(res.AccessToken)
+	if err != nil {
+		t.Fatalf("issuer.Verify: %v", err)
+	}
+	if res.MustChangePassword || claims.MustChangePassword {
+		t.Fatalf("after change: result=%v claim=%v, want both false", res.MustChangePassword, claims.MustChangePassword)
 	}
 }
 

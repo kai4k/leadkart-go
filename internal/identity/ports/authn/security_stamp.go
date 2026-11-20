@@ -149,6 +149,14 @@ func RequireFreshStamp(verifier Verifier, validator StampValidator) func(http.Ha
 			if c.Act != nil && !sessionLive(w, r, validator, c) {
 				return
 			}
+			// Forced password change (plan D8): a token minted for a person who still
+			// holds a temporary credential reaches the pinned allowlist and nothing
+			// else. Checked here, once, for every authenticated route: a route that
+			// is added later is blocked unless it is added to the allowlist.
+			if c.MustChangePassword && !pendingPasswordChangeAllowed(r) {
+				writeForbidden(w, errCodePasswordChangeRequired, "password change required before using this endpoint")
+				return
+			}
 			// Only a caller whose token AND stamp are valid gets the operator
 			// X-Tenant-Id scope validated, looked up and audited (ADR 0068 D7).
 			scoped, ok := applyScope(w, r, c)

@@ -95,6 +95,14 @@ type Claims struct {
 	// is the owner. Pointer + omitzero keeps "absent" distinct from 0.
 	Rank *int `json:"rank,omitzero"`
 
+	// MustChangePassword is true while the Person behind the token holds a
+	// temporary credential (ADR 0053 / plan D8): every authenticated route
+	// except the pinned allowlist in authn answers 403 password_change_required.
+	// Login and refresh mint it from the stored Person, so it survives refresh and
+	// disappears with the first token minted after the password change. Tokens
+	// minted before the claim existed carry no flag and read as false.
+	MustChangePassword bool `json:"must_change_password,omitzero"`
+
 	// Act carries the RFC 8693 actor claim for impersonation tokens.
 	// Nil for regular tokens. Read-only at the verification layer;
 	// only the Issue() path populates it.
@@ -146,6 +154,10 @@ type IssueArgs struct {
 	IsSuperUser   bool
 	Permissions   []string
 	Rank          *int // ADR 0069; nil omits the claim (impersonation tokens)
+
+	// MustChangePassword mints the must_change_password claim (login and refresh
+	// pass the stored Person's flag; impersonation tokens never set it).
+	MustChangePassword bool
 
 	// Optional overrides for the impersonation path (ADR 0045).
 	Audience string        // default AudienceClaim
@@ -222,7 +234,9 @@ func (i *Issuer) Issue(args IssueArgs) (string, error) {
 		IsSuperUser:   args.IsSuperUser,
 		Permissions:   args.Permissions,
 		Rank:          args.Rank,
-		Act:           args.Act,
+
+		MustChangePassword: args.MustChangePassword,
+		Act:                args.Act,
 	}
 	tok := jwtv5.NewWithClaims(jwtv5.SigningMethodHS256, claims)
 	tok.Header["kid"] = i.current.KeyID

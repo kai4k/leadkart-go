@@ -32,12 +32,14 @@ import (
 
 	"github.com/leadkart/leadkart-go/internal/identity/domain/permission"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/role"
+	"github.com/leadkart/leadkart-go/internal/identity/identitytest"
 	"github.com/leadkart/leadkart-go/internal/identity/ports"
 )
 
 // loginPair logs in and returns the access AND refresh token.
 func (f e2eFixture) loginPair(t *testing.T, email, password string) ports.LoginResponse {
 	t.Helper()
+	identitytest.ClearMustChangePassword(t, f.Pool, email)
 	resp := f.postJSON(t, "/api/v1/auth/login", ports.LoginRequest{Email: email, Password: password, DeviceLabel: "e2e"})
 	if resp.status != http.StatusOK {
 		t.Fatalf("login %s: %d %s", email, resp.status, resp.body)

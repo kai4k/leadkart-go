@@ -187,3 +187,36 @@ func TestIssue_RankClaim_RoundTripsAndStaysNilWhenAbsent(t *testing.T) {
 		t.Fatalf("absent rank must stay nil (never 0 = owner), got %d", *c.Rank)
 	}
 }
+
+func TestIssue_MustChangePasswordClaim_RoundTripsAndDefaultsFalse(t *testing.T) {
+	t.Parallel()
+	iss := issuerWithSecret(t, "k1", hex32a, time.Date(2026, 5, 6, 12, 0, 0, 0, time.UTC))
+
+	args := validArgs()
+	args.MustChangePassword = true
+	tok, err := iss.Issue(args)
+	if err != nil {
+		t.Fatalf("Issue: %v", err)
+	}
+	c, err := iss.Verify(tok)
+	if err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	if !c.MustChangePassword {
+		t.Fatal("must_change_password claim lost in round trip")
+	}
+
+	// A token minted without the flag (every token minted before the claim
+	// existed) verifies as un-flagged.
+	tok, err = iss.Issue(validArgs())
+	if err != nil {
+		t.Fatalf("Issue: %v", err)
+	}
+	c, err = iss.Verify(tok)
+	if err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	if c.MustChangePassword {
+		t.Fatal("absent claim must verify as false")
+	}
+}
