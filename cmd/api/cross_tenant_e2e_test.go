@@ -27,11 +27,13 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -319,17 +321,36 @@ func (f e2eFixture) do(t *testing.T, method, path, token string, body any) httpR
 // the ADR 0039 X-Tenant-Id operator scope header).
 func (f e2eFixture) doWithHeaders(t *testing.T, method, path, token string, body any, headers map[string]string) httpResp {
 	t.Helper()
-	var buf io.Reader
-	if body != nil {
-		b := &bytes.Buffer{}
-		if err := json.NewEncoder(b).Encode(body); err != nil {
-			t.Fatalf("encode body: %v", err)
-		}
-		buf = b
-	}
-	req, err := http.NewRequestWithContext(t.Context(), method, f.URL+path, buf)
+	r, err := f.tryDo(t.Context(), method, path, token, body, headers)
 	if err != nil {
-		t.Fatalf("new request: %v", err)
+		t.Fatalf("%s %s: %v", method, path, err)
+	}
+	return r
+}
+
+// rawBody is a request body sent byte for byte (malformed, duplicate-key and other
+// hand-written JSON); every other body value is JSON-encoded.
+type rawBody string
+
+// tryDo is the request primitive behind [e2eFixture.doWithHeaders]. It returns the
+// error instead of failing the test, so goroutines (race tests) can use it:
+// t.Fatalf is only legal on the test's own goroutine.
+func (f e2eFixture) tryDo(ctx context.Context, method, path, token string, body any, headers map[string]string) (httpResp, error) {
+	var buf io.Reader
+	switch b := body.(type) {
+	case nil:
+	case rawBody:
+		buf = strings.NewReader(string(b))
+	default:
+		enc := &bytes.Buffer{}
+		if err := json.NewEncoder(enc).Encode(body); err != nil {
+			return httpResp{}, fmt.Errorf("encode body: %w", err)
+		}
+		buf = enc
+	}
+	req, err := http.NewRequestWithContext(ctx, method, f.URL+path, buf)
+	if err != nil {
+		return httpResp{}, fmt.Errorf("new request: %w", err)
 	}
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
@@ -342,14 +363,14 @@ func (f e2eFixture) doWithHeaders(t *testing.T, method, path, token string, body
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		t.Fatalf("do request: %v", err)
+		return httpResp{}, fmt.Errorf("do request: %w", err)
 	}
 	defer resp.Body.Close()
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		t.Fatalf("read body: %v", err)
+		return httpResp{}, fmt.Errorf("read body: %w", err)
 	}
-	return httpResp{status: resp.StatusCode, body: respBody, header: resp.Header}
+	return httpResp{status: resp.StatusCode, body: respBody, header: resp.Header}, nil
 }
 
 func decodeError(t *testing.T, body []byte) ports.ErrorResponse {
