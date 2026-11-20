@@ -47,7 +47,7 @@ BEGIN
         CREATE ROLE leadkart_app
             WITH LOGIN
                  NOSUPERUSER NOINHERIT NOCREATEROLE NOCREATEDB
-                 PASSWORD 'leadkart_app_dev_placeholder_rotate_in_prod';
+                 PASSWORD 'leadkart_app_dev_local_rotate_in_prod';
     END IF;
 
     IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'leadkart_test') THEN

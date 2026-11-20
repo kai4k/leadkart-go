@@ -136,7 +136,7 @@ services:
       # leadkart_app (non-owner): row-level security is ENFORCED in dev as in prod
       # (the owner role bypasses it). init.sql creates the role; the migrate step
       # (as owner) grants it its privileges; the api refuses to boot if it lacks any.
-      LEADKART_POSTGRES__DSN: "${LEADKART_POSTGRES__DSN:-${LEADKART_OWNER__DSN:+${LEADKART_POSTGRES__DSN:?LEADKART_OWNER__DSN is set but LEADKART_POSTGRES__DSN is not: the api would use the local container while migrate and bootstrap use your database. Set both or neither (docker/.env.example)}}postgres://leadkart_app:leadkart_app_dev_placeholder_rotate_in_prod@postgres:5432/leadkart?sslmode=disable}"
+      LEADKART_POSTGRES__DSN: "${LEADKART_POSTGRES__DSN:-${LEADKART_OWNER__DSN:+${LEADKART_POSTGRES__DSN:?LEADKART_OWNER__DSN is set but LEADKART_POSTGRES__DSN is not: the api would use the local container while migrate and bootstrap use your database. Set both or neither (docker/.env.example)}}postgres://leadkart_app:leadkart_app_dev_local_rotate_in_prod@postgres:5432/leadkart?sslmode=disable}"
       LEADKART_REDIS__ADDR: "redis:6379"
       LEADKART_LISTEN__API: ":8080"
       LEADKART_LISTEN__ADMIN: ":9090"
