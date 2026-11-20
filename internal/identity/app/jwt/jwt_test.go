@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	jwtv5 "github.com/golang-jwt/jwt/v5"
+
 	"github.com/leadkart/leadkart-go/internal/identity/app/jwt"
 )
 
@@ -256,6 +258,94 @@ func TestVerify_AudienceAndActClaimMustAgree(t *testing.T) {
 			}
 			if !tc.ok && !errors.Is(err, jwt.ErrInvalidToken) {
 				t.Fatalf("Verify err = %v, want ErrInvalidToken", err)
+			}
+		})
+	}
+}
+
+// signRaw hand-builds and signs a token, because Issue cannot produce malformed
+// audience / act shapes. The claims map is exactly what goes on the wire.
+func signRaw(t *testing.T, now time.Time, extra map[string]any) string {
+	t.Helper()
+	claims := jwtv5.MapClaims{
+		"iss":            jwt.IssuerClaim,
+		"sub":            "12345678-1234-1234-1234-123456789012",
+		"iat":            now.Unix(),
+		"nbf":            now.Unix(),
+		"exp":            now.Add(5 * time.Minute).Unix(),
+		"tenant_id":      "abcdef01-2345-6789-abcd-ef0123456789",
+		"security_stamp": "0123beef-2345-6789-abcd-ef0123456789",
+		"membership_id":  "deadbeef-1234-5678-9abc-def012345678",
+		"tenant_slug":    "acme",
+		"jti":            "raw-token-1",
+	}
+	for k, v := range extra {
+		if v == absent {
+			delete(claims, k)
+			continue
+		}
+		claims[k] = v
+	}
+	tok := jwtv5.NewWithClaims(jwtv5.SigningMethodHS256, claims)
+	tok.Header["kid"] = "k1"
+	signed, err := tok.SignedString([]byte(hex32a))
+	if err != nil {
+		t.Fatalf("sign: %v", err)
+	}
+	return signed
+}
+
+// absent marks a claim to delete from the wire form.
+const absent = "\x00absent"
+
+// The audience and act rules, asserted on the exact wire shapes an attacker (or a
+// buggy issuer) could produce. Each case states its outcome: a rejection is
+// ErrInvalidToken; the one accepted malformed-looking shape (act: null on an
+// ordinary token) verifies as a token with no act.
+func TestVerify_RawAudienceAndActShapes(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 5, 6, 12, 0, 0, 0, time.UTC)
+	iss := issuerWithSecret(t, "k1", hex32a, now)
+	fullAct := map[string]any{"sub": "12345678-1234-1234-1234-123456789012", "session_id": "s1", "reason": "support ticket"}
+
+	cases := []struct {
+		name      string
+		claims    map[string]any
+		wantOK    bool
+		wantNoAct bool
+	}{
+		{"aud array of two values", map[string]any{"aud": []string{jwt.AudienceClaim, jwt.ImpersonationAudienceClaim}, "act": fullAct}, false, false},
+		{"aud array of two ordinary values", map[string]any{"aud": []string{jwt.AudienceClaim, jwt.AudienceClaim}}, false, false},
+		{"aud missing", map[string]any{"aud": absent}, false, false},
+		{"aud empty string", map[string]any{"aud": ""}, false, false},
+		{"aud empty array", map[string]any{"aud": []string{}}, false, false},
+		{"aud wrong case", map[string]any{"aud": "LeadKart-API"}, false, false},
+		{"impersonation aud wrong case", map[string]any{"aud": "Leadkart-Impersonation", "act": fullAct}, false, false},
+		{"ordinary aud with empty act object", map[string]any{"aud": jwt.AudienceClaim, "act": map[string]any{}}, false, false},
+		{"impersonation aud with empty act object", map[string]any{"aud": jwt.ImpersonationAudienceClaim, "act": map[string]any{}}, false, false},
+		{"impersonation aud with act missing its session", map[string]any{"aud": jwt.ImpersonationAudienceClaim, "act": map[string]any{"sub": "12345678-1234-1234-1234-123456789012"}}, false, false},
+		{"ordinary aud with act null", map[string]any{"aud": jwt.AudienceClaim, "act": nil}, true, true},
+		{"impersonation aud with act null", map[string]any{"aud": jwt.ImpersonationAudienceClaim, "act": nil}, false, false},
+		{"impersonation aud, no act claim at all", map[string]any{"aud": jwt.ImpersonationAudienceClaim}, false, false},
+		{"ordinary aud with a full act", map[string]any{"aud": jwt.AudienceClaim, "act": fullAct}, false, false},
+		{"well-formed impersonation token", map[string]any{"aud": jwt.ImpersonationAudienceClaim, "act": fullAct}, true, false},
+		{"well-formed ordinary token", map[string]any{"aud": jwt.AudienceClaim}, true, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			c, err := iss.Verify(signRaw(t, now, tc.claims))
+			if !tc.wantOK {
+				if !errors.Is(err, jwt.ErrInvalidToken) {
+					t.Fatalf("Verify err = %v, want ErrInvalidToken", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Verify: %v", err)
+			}
+			if tc.wantNoAct && c.Act != nil {
+				t.Fatalf("act = %+v, want nil", c.Act)
 			}
 		})
 	}

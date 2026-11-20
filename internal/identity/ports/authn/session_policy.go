@@ -44,14 +44,17 @@ func pendingPasswordChangeAllowed(r *http.Request) bool {
 // (the authority commands answer the same code from inside the handler).
 const errCodeImpersonationNotAllowed = "impersonation_not_allowed"
 
-// impersonationRefusedPrefix: the platform plane. Every /api/v1/platform/ route is
-// platform-wide by doctrine (CLAUDE.md of the web repo, rule 9): impersonation
+// impersonationRefusedPrefix: the platform plane. Every /api/v1/platform/ route
+// except the two tenant-plane reads in impersonationOpenPlatformReads is
+// platform-wide or spends tenant money: impersonation
 // sessions (no sub-impersonation, no listing, no ending), person administration,
 // tenant deletion, stats, the unverified-contact queue, the lead marketplace
 // (purchase spends tenant lead credits: refused while impersonating, pending owner
 // confirmation, ADR 0069) and lead-credit top-ups. An impersonation token never
 // reaches any of them, however many permissions its Admin-equivalent authority
-// would satisfy.
+// would satisfy. (Marketplace browse and the lead-credit balance live under this
+// prefix but are tenant-plane reads gated by tenant permissions; they are the
+// pinned exception below.)
 const impersonationRefusedPrefix = "/api/v1/platform/"
 
 // impersonationRefusedRoutes are the routes OUTSIDE the platform prefix an
@@ -97,12 +100,39 @@ var impersonationRefusedRoutes = []string{
 func ImpersonationRefusals() []string { return slices.Clone(impersonationRefusedRoutes) }
 
 // ImpersonationRefused reports whether an impersonation token is refused on the
-// route registered as pattern ("METHOD /path"): the platform plane or the pinned
-// list. An empty pattern (not served by a ServeMux) is never refused here.
+// route registered as pattern ("METHOD /path"): the platform plane (less the two
+// pinned tenant-plane reads) or the pinned list. It fails CLOSED: an empty pattern
+// (a request not served by a ServeMux, or a wrapper that lost r.Pattern) is
+// refused, and a pattern with no method is read as a bare path, so the prefix rule
+// still applies to it.
 func ImpersonationRefused(pattern string) bool {
+	if pattern == "" {
+		return true
+	}
+	if slices.Contains(impersonationOpenPlatformReads, pattern) {
+		return false
+	}
 	if slices.Contains(impersonationRefusedRoutes, pattern) {
 		return true
 	}
-	_, path, ok := strings.Cut(pattern, " ")
-	return ok && strings.HasPrefix(path, impersonationRefusedPrefix)
+	path := pattern
+	if _, rest, ok := strings.Cut(pattern, " "); ok {
+		path = rest
+	}
+	return strings.HasPrefix(path, impersonationRefusedPrefix)
 }
+
+// impersonationOpenPlatformReads are the two tenant-plane reads that live under
+// /api/v1/platform/ but are gated by TENANT permissions (marketplace.browse,
+// lead_credits.read) and read the scoped tenant's own data. They are exempt from
+// the platform-prefix rule so an operator supporting a tenant can see its balance
+// and what it can buy. Exactly these two GET patterns; every other /platform/
+// route, the marketplace purchase (it spends credits) included, stays refused.
+var impersonationOpenPlatformReads = []string{
+	"GET /api/v1/platform/marketplace/leads",
+	"GET /api/v1/platform/lead-credits/balance",
+}
+
+// ImpersonationOpenPlatformReads returns a copy of the pinned exemption list, for
+// the tests that assert it exactly.
+func ImpersonationOpenPlatformReads() []string { return slices.Clone(impersonationOpenPlatformReads) }

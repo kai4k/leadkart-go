@@ -21,6 +21,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	jwtv5 "github.com/golang-jwt/jwt/v5"
@@ -309,6 +310,11 @@ func (i *Issuer) Verify(token string) (*Claims, error) {
 	// with exactly one of the two is malformed whichever route it reaches.
 	if (claims.Audience[0] == ImpersonationAudienceClaim) != (claims.Act != nil) {
 		return nil, fmt.Errorf("%w: audience %v disagrees with the act claim", ErrInvalidToken, claims.Audience)
+	}
+	// An act claim names the operator and the session: one without either (act: {})
+	// cannot be checked against the session store, so it is malformed.
+	if claims.Act != nil && (strings.TrimSpace(claims.Act.Sub) == "" || strings.TrimSpace(claims.Act.SessionID) == "") {
+		return nil, fmt.Errorf("%w: act claim without its operator or session", ErrInvalidToken)
 	}
 	return claims, nil
 }

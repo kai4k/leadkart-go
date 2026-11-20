@@ -17,6 +17,8 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"path"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -229,12 +231,75 @@ var impersonationOpenSelfService = []string{
 	"GET /api/v1/permission-requests/{requestId}",
 }
 
+// impersonationOpenPlatformReads restates authn.ImpersonationOpenPlatformReads on
+// purpose: the two tenant-plane reads that live under /api/v1/platform/ but are
+// gated by tenant permissions, and so stay open to a session. Exactly these.
+var impersonationOpenPlatformReads = []string{
+	"GET /api/v1/platform/marketplace/leads",
+	"GET /api/v1/platform/lead-credits/balance",
+}
+
+// impersonationOpenAuthRoutes are the authenticated /api/v1/auth/ routes an
+// impersonation token may reach. Every other authenticated route under that prefix
+// is on the refusal list. A route is in exactly one of the two sets: refused (the
+// list) or open (here); a new one in neither fails the test, whatever its gate.
+var impersonationOpenAuthRoutes = []string{
+	"GET /api/v1/auth/me/capabilities",
+}
+
+// undecidedAuthRoutes returns the authenticated /api/v1/auth/ patterns that are in
+// neither or in both of the two sets. Anonymous routes (login, refresh, ...) read no
+// token and are pinned by anonymousAPIRoutes instead.
+func undecidedAuthRoutes(patterns []string, refused func(string) bool, open []string) (neither, both []string) {
+	for _, pattern := range patterns {
+		if _, path, _ := strings.Cut(pattern, " "); !strings.HasPrefix(path, "/api/v1/auth/") {
+			continue
+		}
+		r, o := refused(pattern), slices.Contains(open, pattern)
+		switch {
+		case !r && !o:
+			neither = append(neither, pattern)
+		case r && o:
+			both = append(both, pattern)
+		}
+	}
+	return neither, both
+}
+
+// A future POST /auth/mfa/enroll or /auth/api-keys gated by a permission that
+// tenant.admin implies is not a "self-service route with no gate"; it still has to
+// be decided. The check is over the pattern list, so a synthetic offender proves it.
+func TestUndecidedAuthRoutes_FlagsEveryRouteInNeitherOrBothSets(t *testing.T) {
+	t.Parallel()
+	patterns := []string{
+		"GET /api/v1/auth/me/capabilities",  // open
+		"GET /api/v1/auth/sessions",         // refused
+		"POST /api/v1/auth/mfa/enroll",      // neither: a new gated route
+		"POST /api/v1/auth/api-keys",        // neither
+		"GET /api/v1/users",                 // not under /auth/: out of scope
+		"POST /api/v1/auth/change-password", // refused AND (wrongly) open below
+	}
+	open := append(slices.Clone(impersonationOpenAuthRoutes), "POST /api/v1/auth/change-password")
+	neither, both := undecidedAuthRoutes(patterns, authn.ImpersonationRefused, open)
+	if want := []string{"POST /api/v1/auth/mfa/enroll", "POST /api/v1/auth/api-keys"}; !slices.Equal(neither, want) {
+		t.Errorf("neither = %v; want %v", neither, want)
+	}
+	if want := []string{"POST /api/v1/auth/change-password"}; !slices.Equal(both, want) {
+		t.Errorf("both = %v; want %v", both, want)
+	}
+	if n, b := undecidedAuthRoutes(patterns[:2], authn.ImpersonationRefused, impersonationOpenAuthRoutes); len(n)+len(b) != 0 {
+		t.Errorf("decided routes flagged: %v %v", n, b)
+	}
+}
+
 // TestArch_ImpersonationToken_RefusedExactlyWhereTheListSays (plan D9): for EVERY
 // registered /api/v1 route, an impersonation token (a live session carrying
 // tenant.admin, i.e. Admin-equivalent authority that would satisfy the permission
 // gates)
-//   - is answered 403 impersonation_not_allowed on the platform plane and on the
-//     pinned list, and only there;
+//   - is answered 403 impersonation_not_allowed on the platform plane (less the
+//     two pinned tenant-plane reads) and on the pinned list, and only there;
+//   - for every authenticated /api/v1/auth/ route, whatever its gate, finds it in
+//     exactly one of two pinned sets (refused / open), so a new one must be decided;
 //   - is refused on every platform-anchored route, wherever it lives;
 //   - is refused on every self-service route (no permission gate) except the
 //     pinned open ones, so a new self-service route has to be decided.
@@ -254,9 +319,16 @@ func TestArch_ImpersonationToken_RefusedExactlyWhereTheListSays(t *testing.T) {
 	if got := authn.ImpersonationRefusals(); !slices.Equal(got, impersonationRefusedOutsideThePlatformPlane) {
 		t.Errorf("authn.ImpersonationRefusals changed.\n got:  %v\n want: %v\nChanging what an impersonation session may reach is a reviewed decision: update both lists and the ADR.", got, impersonationRefusedOutsideThePlatformPlane)
 	}
+	if got := authn.ImpersonationOpenPlatformReads(); !slices.Equal(got, impersonationOpenPlatformReads) {
+		t.Errorf("authn.ImpersonationOpenPlatformReads changed.\n got:  %v\n want: %v\nThe exemptions from the platform-plane refusal are a reviewed decision: update both lists and the ADR.", got, impersonationOpenPlatformReads)
+	}
 	registered := map[string]bool{}
+	var authenticatedAuth []string
 	for _, reg := range apiRoutes(t) {
 		registered[reg.Pattern] = true
+		if reg.firstGate() >= 0 {
+			authenticatedAuth = append(authenticatedAuth, reg.Pattern)
+		}
 		want := authn.ImpersonationRefused(reg.Pattern)
 		rec := serveRoute(t, h, reg)
 		got := isCode(rec, http.StatusForbidden, "impersonation_not_allowed")
@@ -269,6 +341,9 @@ func TestArch_ImpersonationToken_RefusedExactlyWhereTheListSays(t *testing.T) {
 			continue
 		case got != want:
 			t.Errorf("%s:%d %s: impersonation token got %d %s; refused = %v, want %v", reg.File, reg.Line, reg.Pattern, rec.Code, rec.Body.String(), got, want)
+		}
+		if slices.Contains(impersonationOpenPlatformReads, reg.Pattern) && (reg.has(tagAnchor) || !reg.has(tagAuthz)) {
+			t.Errorf("%s:%d %s is exempt from the platform-plane refusal but is not a plain tenant-permission route", reg.File, reg.Line, reg.Pattern)
 		}
 		if reg.has(tagAnchor) && !want {
 			t.Errorf("%s:%d %s is platform-anchored but an impersonation token is not refused on it", reg.File, reg.Line, reg.Pattern)
@@ -285,9 +360,63 @@ func TestArch_ImpersonationToken_RefusedExactlyWhereTheListSays(t *testing.T) {
 			t.Errorf("refusal-list entry %q is under the platform prefix, which is refused as a whole: remove it", entry)
 		}
 	}
+	neither, both := undecidedAuthRoutes(authenticatedAuth, authn.ImpersonationRefused, impersonationOpenAuthRoutes)
+	for _, p := range neither {
+		t.Errorf("%s is an authenticated /api/v1/auth/ route in neither list: refuse it for a session (authn.impersonationRefusedRoutes) or pin it in impersonationOpenAuthRoutes with a reason", p)
+	}
+	for _, p := range both {
+		t.Errorf("%s is both refused and pinned open: decide once", p)
+	}
+	for _, entry := range impersonationOpenPlatformReads {
+		if !registered[entry] {
+			t.Errorf("impersonationOpenPlatformReads entry %q is not a registered route: remove it", entry)
+		}
+	}
+	for _, entry := range impersonationOpenAuthRoutes {
+		if !registered[entry] {
+			t.Errorf("impersonationOpenAuthRoutes entry %q is not a registered route: remove it", entry)
+		}
+	}
 	for _, entry := range impersonationOpenSelfService {
 		if !registered[entry] {
 			t.Errorf("impersonationOpenSelfService entry %q is not a registered route: remove it", entry)
 		}
 	}
+}
+
+// TestArch_NoProductionCodeImportsATestHelperPackage: the *test helper packages
+// (identitytest and its siblings) hold fixtures that reach into the database and
+// clear security state (identitytest.ClearMustChangePassword); production code
+// must never link them. A non-_test.go file imports one only from inside another
+// *test helper package.
+//
+// Scope: production — every non-test file under internal/ and cmd/.
+//
+// arch-test:no-negative-fixture (RED proof: import internal/identity/identitytest from any production file → this test fails)
+func TestArch_NoProductionCodeImportsATestHelperPackage(t *testing.T) {
+	t.Parallel()
+	root := repoRoot(t)
+	var violations []string
+	for _, dir := range []string{"internal", "cmd"} {
+		walkGoFiles(t, filepath.Join(root, dir), false, func(path string, src []byte) {
+			slashed := filepath.ToSlash(path)
+			if strings.Contains(slashed, "/testdata/") || isTestHelperDir(filepath.Dir(slashed)) {
+				return
+			}
+			for _, imp := range parseImports(t, path, src) {
+				if isTestHelperDir(imp) {
+					violations = append(violations, slashed+" imports "+imp)
+				}
+			}
+		})
+	}
+	for _, v := range violations {
+		t.Errorf("production file imports a test helper package: %s", v)
+	}
+}
+
+// isTestHelperDir reports whether a directory or import path names a *test helper
+// package: the last element ends in "test" (identitytest, persontest, pgtest, ...).
+func isTestHelperDir(p string) bool {
+	return strings.HasSuffix(path.Base(p), "test")
 }

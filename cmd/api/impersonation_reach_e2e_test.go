@@ -105,7 +105,13 @@ func TestE2E_Impersonation_RefusalList_RefusedWithStateUnchangedAndOrdinaryRoute
 	f.requireImpersonationRefused(t, "anonymise a person", http.MethodPost, "/api/v1/platform/persons/"+tenantA.PersonID+"/anonymise", tok, map[string]string{"reason": "reach e2e anonymise"})
 	f.requireImpersonationRefused(t, "marketplace purchase", http.MethodPost, "/api/v1/platform/marketplace/leads/"+someID+"/purchase", tok, map[string]string{})
 	f.requireImpersonationRefused(t, "lead credit top-up", http.MethodPost, "/api/v1/platform/lead-credits/topup", tok, map[string]string{})
-	f.requireImpersonationRefused(t, "lead credit balance", http.MethodGet, "/api/v1/platform/lead-credits/balance", tok, nil)
+	// The two tenant-plane reads under /platform/ are NOT refused: they read the
+	// supported tenant's own wallet and catalogue under tenant permissions (ADR 0069).
+	for _, path := range []string{"/api/v1/platform/lead-credits/balance", "/api/v1/platform/marketplace/leads"} {
+		if r := f.authedJSON(t, http.MethodGet, path, tok, nil); errCodeOf(r) == "impersonation_not_allowed" {
+			t.Errorf("GET %s under a session answered %d %s; the tenant-plane reads stay open", path, r.status, r.body)
+		}
+	}
 
 	// Tenant-path routes that are platform-anchored.
 	f.requireImpersonationRefused(t, "register a tenant", http.MethodPost, "/api/v1/tenants", tok, map[string]string{})

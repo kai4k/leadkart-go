@@ -152,6 +152,7 @@ func RequireFreshStamp(verifier Verifier, validator StampValidator) func(http.Ha
 			// An impersonation token never reaches the platform plane or the pinned
 			// self-service / cross-tenant routes (plan D9): ONE list, checked here for
 			// every route, after the session proved alive (a dead session is 401 first).
+			// ImpersonationRefused fails closed: no route pattern means refused.
 			if c.Act != nil && ImpersonationRefused(r.Pattern) {
 				writeForbidden(w, errCodeImpersonationNotAllowed, "not available during an impersonation session")
 				return

@@ -32,6 +32,9 @@ func scopeChain(c *jwt.Claims, s *sentinel) http.Handler {
 func scopeReq(t *testing.T, header string) *http.Request {
 	t.Helper()
 	r := newRequest(t, "Bearer tok")
+	// An ordinary route pattern: an impersonation token with no pattern is refused
+	// (fail closed), and these cases are about the scope header, not that refusal.
+	r.Pattern = "GET /api/v1/users"
 	if header != "" {
 		r.Header.Set(authn.TenantScopeHeader, header)
 	}

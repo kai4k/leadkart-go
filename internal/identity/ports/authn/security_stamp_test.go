@@ -298,7 +298,9 @@ func serveWith(t *testing.T, claims *jwt.Claims, validator authn.StampValidator)
 func TestRequireFreshStamp_ImpersonationToken_LiveSessionPassesWithTheTokensOwnIdentity(t *testing.T) {
 	t.Parallel()
 	v := &sessionStampValidator{fakeStampValidator: fakeStampValidator{fresh: true}, live: true}
-	rec, s := serveWith(t, impersonationClaims(stampPersonID, stampPersonID, "sess-1"), v)
+	// Served on an ordinary route: with no route pattern an impersonation token is
+	// refused (fail closed), which TestRequireFreshStamp_ImpersonationToken_NoRoutePatternIsRefused covers.
+	rec, s := serveOnMux(t, "GET /api/v1/users", impersonationClaims(stampPersonID, stampPersonID, "sess-1"), v)
 	if rec.Code != http.StatusOK || !s.called {
 		t.Fatalf("live session: status %d called %v; want 200 and next to run", rec.Code, s.called)
 	}

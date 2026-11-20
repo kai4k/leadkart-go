@@ -60,3 +60,84 @@ func TestRequireFreshStamp_ImpersonationRefusal_DeadSessionIs401NotRefusal(t *te
 		t.Fatalf("status %d; an ended session is 401 stale_token before any refusal", rec.Code)
 	}
 }
+
+// ----- fail closed (fix round item 3) ----------------------------------------
+
+// A request that reaches the middleware without a matched route pattern (a router
+// or wrapper that lost it) cannot be checked against the list, so an
+// impersonation token is refused rather than waved through.
+func TestRequireFreshStamp_ImpersonationToken_NoRoutePatternIsRefused(t *testing.T) {
+	t.Parallel()
+	v := &sessionStampValidator{fakeStampValidator: fakeStampValidator{fresh: true}, live: true}
+	rec, s := serveWith(t, impersonationClaims(stampPersonID, stampPersonID, "sess-1"), v)
+	body := errCodeOf(rec)
+	if rec.Code != http.StatusForbidden || !strings.Contains(body, `"impersonation_not_allowed"`) || s.called {
+		t.Fatalf("no pattern: status %d called %v body %s; want 403 impersonation_not_allowed", rec.Code, s.called, body)
+	}
+}
+
+func TestImpersonationRefused_FailsClosedOnShapesItCannotParse(t *testing.T) {
+	t.Parallel()
+	cases := map[string]bool{
+		"":                            true, // no pattern at all
+		"/api/v1/platform/stats":      true, // method-less pattern: a path
+		"/api/v1/platform/{anything}": true,
+		"GET /api/v1/platform/stats":  true,
+		"/api/v1/users":               false, // method-less, outside the plane, not listed
+		"GET /api/v1/users":           false,
+		"GET /api/v1/auth/sessions":   true,  // pinned list
+		"/api/v1/platform":            false, // the prefix needs its trailing slash
+		"POST /api/v1/platform/marketplace/leads/{id}/purchase": true,
+	}
+	for pattern, want := range cases {
+		if got := authn.ImpersonationRefused(pattern); got != want {
+			t.Errorf("ImpersonationRefused(%q) = %v; want %v", pattern, got, want)
+		}
+	}
+}
+
+// ----- the two tenant-plane reads under /platform/ (fix round item 5) ---------
+
+func TestImpersonationRefused_TheTwoTenantPlaneReadsStayOpen(t *testing.T) {
+	t.Parallel()
+	open := []string{
+		"GET /api/v1/platform/marketplace/leads",
+		"GET /api/v1/platform/lead-credits/balance",
+	}
+	if got := authn.ImpersonationOpenPlatformReads(); !slicesEqual(got, open) {
+		t.Fatalf("ImpersonationOpenPlatformReads = %v; want exactly %v", got, open)
+	}
+	for _, pattern := range open {
+		if authn.ImpersonationRefused(pattern) {
+			t.Errorf("%s must be open to an impersonation session (a tenant-plane read gated by tenant permissions)", pattern)
+		}
+		v := &sessionStampValidator{fakeStampValidator: fakeStampValidator{fresh: true}, live: true}
+		rec, s := serveOnMux(t, pattern, impersonationClaims(stampPersonID, stampPersonID, "sess-1"), v)
+		if rec.Code != http.StatusOK || !s.called {
+			t.Errorf("%s: status %d called %v; want 200", pattern, rec.Code, s.called)
+		}
+	}
+	// Spending and every other platform route stay refused; the method matters.
+	for _, pattern := range []string{
+		"POST /api/v1/platform/marketplace/leads/{id}/purchase",
+		"POST /api/v1/platform/lead-credits/topup",
+		"POST /api/v1/platform/marketplace/leads", // same path, other method
+		"GET /api/v1/platform/stats",
+	} {
+		if !authn.ImpersonationRefused(pattern) {
+			t.Errorf("%s must stay refused", pattern)
+		}
+	}
+}
+
+func slicesEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
