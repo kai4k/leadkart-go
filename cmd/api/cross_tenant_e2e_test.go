@@ -52,7 +52,6 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
 	"github.com/leadkart/leadkart-go/internal/identity/identitytest"
 	"github.com/leadkart/leadkart-go/internal/identity/ports"
-	platformapp "github.com/leadkart/leadkart-go/internal/platform/app"
 )
 
 // testNow is the deterministic instant test fixtures pass to domain
@@ -122,7 +121,7 @@ func newE2EFixtureWith(t *testing.T, now func() time.Time, cascade bool) e2eFixt
 	if cascade {
 		startStampCascade(t, pool, wiring)
 	}
-	srv := httptest.NewServer(newServer(silentLogger(), wiring.App, platformapp.Application{}, buildInventoryApp(pool, nil), crmapp.Application{}, buildTasksApp(pool, nil), buildDispatchApp(pool, nil), buildOrdersApp(pool, nil), buildNotificationsApp(pool, nil), wiring.Issuer, wiring.StampValidator))
+	srv := httptest.NewServer(newServer(silentLogger(), wiring.App, buildPlatformApp(pool, now).App, buildInventoryApp(pool, nil), crmapp.Application{}, buildTasksApp(pool, nil), buildDispatchApp(pool, nil), buildOrdersApp(pool, nil), buildNotificationsApp(pool, nil), wiring.Issuer, wiring.StampValidator))
 	t.Cleanup(srv.Close)
 	return e2eFixture{
 		URL:     srv.URL,

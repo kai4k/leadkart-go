@@ -271,6 +271,11 @@ func TestFamilyUpdate_RotationAndRevocationSerialiseOnTheFamilyRow(t *testing.T)
 
 	loaded := make(chan struct{})
 	release := make(chan struct{})
+	var releaseOnce sync.Once
+	free := func() { releaseOnce.Do(func() { close(release) }) }
+	// A failed assertion must not leave the rotation parked on the channel: the pool
+	// would wait for its transaction forever and the run would hang instead of fail.
+	t.Cleanup(free)
 	rotated := make(chan error, 1)
 	go func() {
 		rotated <- r.families.UpdateByID(t.Context(), fam.ID(), func(f *refreshtoken.Family) (bool, error) {
@@ -292,7 +297,7 @@ func TestFamilyUpdate_RotationAndRevocationSerialiseOnTheFamilyRow(t *testing.T)
 		t.Fatalf("the revocation finished while a rotation held the family open (err %v): no row lock", err)
 	case <-time.After(500 * time.Millisecond):
 	}
-	close(release)
+	free()
 	if err := <-rotated; err != nil {
 		t.Fatalf("rotation: %v", err)
 	}

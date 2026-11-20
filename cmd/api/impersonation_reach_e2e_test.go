@@ -12,6 +12,7 @@ package main
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -107,10 +108,17 @@ func TestE2E_Impersonation_RefusalList_RefusedWithStateUnchangedAndOrdinaryRoute
 	f.requireImpersonationRefused(t, "lead credit top-up", http.MethodPost, "/api/v1/platform/lead-credits/topup", tok, map[string]string{})
 	// The two tenant-plane reads under /platform/ are NOT refused: they read the
 	// supported tenant's own wallet and catalogue under tenant permissions (ADR 0069).
-	for _, path := range []string{"/api/v1/platform/lead-credits/balance", "/api/v1/platform/marketplace/leads"} {
-		if r := f.authedJSON(t, http.MethodGet, path, tok, nil); errCodeOf(r) == "impersonation_not_allowed" {
-			t.Errorf("GET %s under a session answered %d %s; the tenant-plane reads stay open", path, r.status, r.body)
-		}
+	// Observed against Postgres: both answer 200. The wallet is the SUPPORTED
+	// tenant's (the token's tenant), the catalogue is the unfiltered marketplace.
+	if r := f.authedJSON(t, http.MethodGet, "/api/v1/platform/lead-credits/balance", tok, nil); r.status != http.StatusOK {
+		t.Errorf("GET lead-credits/balance under a session = %d %s; want 200", r.status, r.body)
+	} else if want := `{"tenant_id":"` + tenantA.TenantID + `","balance":0}`; strings.TrimSpace(string(r.body)) != want {
+		t.Errorf("GET lead-credits/balance under a session = %s; want %s", r.body, want)
+	}
+	if r := f.authedJSON(t, http.MethodGet, "/api/v1/platform/marketplace/leads", tok, nil); r.status != http.StatusOK {
+		t.Errorf("GET marketplace/leads under a session = %d %s; want 200", r.status, r.body)
+	} else if want := `{"items":[],"has_more":false}`; strings.TrimSpace(string(r.body)) != want {
+		t.Errorf("GET marketplace/leads under a session = %s; want %s", r.body, want)
 	}
 
 	// Tenant-path routes that are platform-anchored.
