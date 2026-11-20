@@ -64,6 +64,7 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/app/jwt"
 	"github.com/leadkart/leadkart-go/internal/identity/app/permissions"
 	"github.com/leadkart/leadkart-go/internal/identity/app/query"
+	"github.com/leadkart/leadkart-go/internal/identity/app/refreshmint"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/permissionrequest"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
@@ -651,6 +652,13 @@ func buildIdentityApp(pool *pgxpool.Pool, hybridCache *cache.HybridCache, cfg co
 		return identityWiring{}, fmt.Errorf("jwt issuer: %w", err)
 	}
 
+	// The refresh successor is derived, not stored: HMAC under a key derived from
+	// the JWT signing secret (ADR 0068 D10). Nothing new to provision.
+	successorKey, err := refreshmint.DeriveSuccessorKey([]byte(cfg.JWT.SigningKey))
+	if err != nil {
+		return identityWiring{}, fmt.Errorf("derive refresh successor key: %w", err)
+	}
+
 	dummyHash, err := argon2.Hash("dummy-for-timing-flatten")
 	if err != nil {
 		return identityWiring{}, fmt.Errorf("dummy hash: %w", err)
@@ -716,7 +724,7 @@ func buildIdentityApp(pool *pgxpool.Pool, hybridCache *cache.HybridCache, cfg co
 			Commands: app.Commands{
 				RegisterTenant:       command.NewRegisterTenantHandler(tx, tenants, persons, memberships, roles, now, newTenantID, newPersonID, newMembershipID).WithArgonGate(argonGate),
 				Login:                command.NewLoginHandler(authRouter, families, tenants, persons, permResolver, issuer, now, cfg.Refresh.AbsoluteTTL, dummyHash, newFamilyID, phantomLockout).WithArgonGate(argonGate),
-				Refresh:              command.NewRefreshHandler(families, persons, memberships, tenants, permResolver, issuer, now, cfg.Refresh.AbsoluteTTL),
+				Refresh:              command.NewRefreshHandler(families, persons, memberships, tenants, permResolver, issuer, now, cfg.Refresh.AbsoluteTTL, cfg.Refresh.GraceWindow, successorKey),
 				Logout:               command.NewLogoutHandler(families, now),
 				ChangePassword:       command.NewChangePasswordHandler(persons, families, tx, breachChecker, now).WithArgonGate(argonGate).WithAttemptLimiter(changePasswordAttempts),
 				RevokeSession:        command.NewRevokeSessionHandler(families, now),

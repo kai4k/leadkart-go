@@ -210,6 +210,18 @@ paths:
       tags: [auth]
       summary: Rotate refresh token + reissue access token
       security: []
+      description: >
+        Rotates the refresh token and reissues the access token. Re-presenting a
+        just-rotated token within the grace window (default 30 s,
+        `Refresh.GraceWindow`) returns the SAME successor (a deterministic
+        derivation: nothing is written, no new token row exists), so two tabs or a
+        retried request after a lost response do not end the session. Outside the
+        window, for a token two or more generations old, or once the successor has
+        been used, the presentation is token reuse: the whole family is revoked and
+        the answer is `401 refresh_rejected`. A revoked family never answers a
+        replay, whatever the window says (logout, password change and reset revoke
+        every family of the person). The answer to a replay is indistinguishable
+        from the first answer, apart from the access token's own issue time.
       requestBody:
         required: true
         content:

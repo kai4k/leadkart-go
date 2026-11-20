@@ -236,39 +236,70 @@ func (f *Family) AllTokens() []Token {
 
 // ----- State transitions ----------------------------------------------------
 
-// Rotate consumes the current token (presented by hash match) and issues
-// the next generation. Returns:
+// RotationOutcome distinguishes a fresh rotation from an idempotent replay.
+type RotationOutcome int
+
+const (
+	// RotationIssued means the presented token was consumed and a successor appended.
+	RotationIssued RotationOutcome = iota + 1
+	// RotationGraceReplay means the presented token was consumed at most the grace
+	// window ago and its successor is still the unconsumed chain head; nothing
+	// changed.
+	RotationGraceReplay
+)
+
+// Rotate is the strict rotation: no grace window (see [Family.RotateWithGrace]).
+func (f *Family) Rotate(presentedHash TokenHash, newHash TokenHash, ttl time.Duration, now time.Time) error {
+	_, err := f.RotateWithGrace(presentedHash, newHash, ttl, 0, now)
+	return err
+}
+
+// RotateWithGrace consumes the current token (presented by hash match) and
+// appends candidateSuccessor as the next generation, or, when the presented
+// token was consumed at most graceWindow ago AND its direct successor is still
+// the unconsumed, unexpired chain head AND that head's hash equals
+// candidateSuccessor, returns [RotationGraceReplay] with no state change and no
+// event (concurrent-refresh tolerance; ADR 0068 D10). The caller derives
+// candidateSuccessor deterministically from the presented token, so a replay
+// produces the hash that is already stored.
 //
-//   - [ErrRevoked]: family already revoked.
+// Errors:
+//
+//   - [ErrRevoked]: family already revoked. Checked FIRST: a revoked family
+//     never replays, whatever the window says.
 //   - [ErrUnknownToken]: presented hash matches no token in this family.
-//   - [ErrReuseDetected]: presented hash matches a CONSUMED token. Family
-//     is automatically revoked as a side effect; emits [RevokedEvent].
+//   - [ErrReuseDetected]: presented hash matches a CONSUMED token and the grace
+//     rule above does not hold (outside the window, a token two generations
+//     old, a successor already used, a different candidate). The family is
+//     revoked as a side effect; emits [RevokedEvent] (RFC 9700 §4.13).
 //   - [ErrExpired]: presented token has passed its absolute expiry.
 //
-// On success, emits [RotatedEvent].
+// On [RotationIssued], emits [RotatedEvent].
 //
-// `now` is the explicit instant — caller supplies a single value so the
-// consumed-at on the old token, issued-at on the new token, lastUsedAt
-// on the family, and (on reuse-detect) revokedAt all share the same
-// moment. Per the clock-injection refactor.
-func (f *Family) Rotate(presentedHash TokenHash, newHash TokenHash, ttl time.Duration, now time.Time) error {
+// `now` is the explicit instant: the consumed-at on the old token, issued-at on
+// the new token, lastUsedAt on the family and (on reuse-detect) revokedAt all
+// share it, and the grace window is measured against it.
+func (f *Family) RotateWithGrace(presentedHash, candidateSuccessor TokenHash, ttl, graceWindow time.Duration, now time.Time) (RotationOutcome, error) {
 	if f.IsRevoked() {
-		return fmt.Errorf("%w", ErrRevoked)
+		return 0, fmt.Errorf("%w", ErrRevoked)
 	}
-	if newHash.IsZero() {
-		return fmt.Errorf("%w: new token hash required", ErrInvalid)
+	if candidateSuccessor.IsZero() {
+		return 0, fmt.Errorf("%w: new token hash required", ErrInvalid)
 	}
 	if ttl <= 0 {
-		return fmt.Errorf("%w: ttl must be positive", ErrInvalid)
+		return 0, fmt.Errorf("%w: ttl must be positive", ErrInvalid)
 	}
 
 	idx := f.findToken(presentedHash)
 	if idx < 0 {
-		return fmt.Errorf("%w", ErrUnknownToken)
+		return 0, fmt.Errorf("%w", ErrUnknownToken)
 	}
 
 	now = now.UTC()
 	if f.tokens[idx].IsConsumed() {
+		if f.isGraceReplay(idx, candidateSuccessor, graceWindow, now) {
+			return RotationGraceReplay, nil
+		}
 		// REUSE DETECTED — revoke entire family per RFC 9700 §4.13.
 		f.revokedAt = now
 		f.revokeReason = "reuse_detected"
@@ -279,18 +310,18 @@ func (f *Family) Rotate(presentedHash TokenHash, newHash TokenHash, ttl time.Dur
 			Reason:   "reuse_detected",
 			At:       now,
 		})
-		return fmt.Errorf("%w", ErrReuseDetected)
+		return 0, fmt.Errorf("%w", ErrReuseDetected)
 	}
 
 	if f.tokens[idx].IsExpired(now) {
-		return fmt.Errorf("%w: token expired at %v", ErrExpired, f.tokens[idx].ExpiresAt())
+		return 0, fmt.Errorf("%w: token expired at %v", ErrExpired, f.tokens[idx].ExpiresAt())
 	}
 
 	// Mint next generation.
 	nextID := TokenID(ids.NewV7().String())
 	next := Token{
 		id:         nextID,
-		hash:       newHash,
+		hash:       candidateSuccessor,
 		generation: f.tokens[idx].generation + 1,
 		issuedAt:   now,
 		expiresAt:  now.Add(ttl),
@@ -312,7 +343,23 @@ func (f *Family) Rotate(presentedHash TokenHash, newHash TokenHash, ttl time.Dur
 		NewTokenGeneration: next.generation,
 		At:                 now,
 	})
-	return nil
+	return RotationIssued, nil
+}
+
+// isGraceReplay reports whether presenting the consumed token at idx again is
+// an idempotent replay: inside the window, its direct successor is the
+// unconsumed chain head (not a token further down), unexpired, and the
+// candidate is that head's hash.
+func (f *Family) isGraceReplay(idx int, candidate TokenHash, grace time.Duration, now time.Time) bool {
+	if grace <= 0 {
+		return false
+	}
+	consumed := f.tokens[idx]
+	if now.Sub(consumed.consumedAt) > grace {
+		return false
+	}
+	head := f.CurrentToken()
+	return head != nil && head.id.Equal(consumed.replacedByID) && head.hash.Equal(candidate) && !head.IsExpired(now)
 }
 
 // Revoke terminates the family (e.g. user-initiated logout or admin action).

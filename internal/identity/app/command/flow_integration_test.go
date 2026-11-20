@@ -122,7 +122,7 @@ func newWiredApp(t *testing.T) wiredApp {
 		func() refreshtoken.FamilyID { return refreshtoken.FamilyID(ids.NewV7().String()) },
 		adapters.NewPhantomLockoutRepository(pool, tx, []byte("flow-test-server-secret-0123456789")),
 	)
-	refresh := command.NewRefreshHandler(families, persons, memberships, tenants, permResolver, issuer, now, refreshTTL)
+	refresh := command.NewRefreshHandler(families, persons, memberships, tenants, permResolver, issuer, now, refreshTTL, 0, []byte("0123456789abcdef0123456789abcdef"))
 	logout := command.NewLogoutHandler(families, now)
 
 	return wiredApp{

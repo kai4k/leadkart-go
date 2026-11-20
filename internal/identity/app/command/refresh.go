@@ -59,6 +59,12 @@ type RefreshHandler struct {
 	jwt         *jwt.Issuer
 	now         func() time.Time
 	refreshTTL  time.Duration
+	// graceWindow is how long a just-rotated token may be presented again and
+	// receive the same successor (zero: strict rotation, ADR 0068 D10).
+	graceWindow time.Duration
+	// successorKey keys the deterministic successor derivation
+	// (refreshmint.DeriveSuccessorKey of the JWT signing secret).
+	successorKey []byte
 }
 
 // NewRefreshHandler wires the handler.
@@ -71,7 +77,12 @@ func NewRefreshHandler(
 	jwtIssuer *jwt.Issuer,
 	now func() time.Time,
 	refreshTTL time.Duration,
+	graceWindow time.Duration,
+	successorKey []byte,
 ) RefreshHandler {
+	if len(successorKey) < refreshmint.SuccessorKeyLen {
+		panic("command: NewRefreshHandler requires a successor key of at least 32 bytes")
+	}
 	if now == nil {
 		now = time.Now
 	}
@@ -84,6 +95,9 @@ func NewRefreshHandler(
 		jwt:         jwtIssuer,
 		now:         now,
 		refreshTTL:  refreshTTL,
+
+		graceWindow:  graceWindow,
+		successorKey: successorKey,
 	}
 }
 
@@ -91,8 +105,12 @@ func NewRefreshHandler(
 //
 //  1. Hash the presented plaintext.
 //  2. Look up family by hash → ErrRefreshRejected if not found.
-//  3. Mint new ⟨plaintext, hash⟩ pair.
-//  4. UpdateByID closure runs Family.Rotate(presentedHash, newHash).
+//  3. Derive the successor ⟨plaintext, hash⟩ from the presented token and the
+//     family id (deterministic: a re-presentation inside the grace window
+//     derives the SAME successor).
+//  4. UpdateByID closure (family row locked FOR NO KEY UPDATE) runs
+//     Family.RotateWithGrace(presentedHash, successorHash, grace).
+//     - A grace replay writes nothing and carries on with the same successor.
 //     - On reuse-detection: aggregate emits RevokedEvent; the closure
 //     returns shouldPersist=true alongside ErrReuseDetected so the
 //     revocation is committed. Caller receives ErrRefreshRejected.
@@ -114,10 +132,12 @@ func (h RefreshHandler) Handle(ctx context.Context, cmd RefreshCommand) (Refresh
 		return RefreshResult{}, fmt.Errorf("refresh: lookup family: %w", err)
 	}
 
-	// 3. Mint replacement.
-	mintPair, err := refreshmint.Mint()
+	// 3. Derive the successor. Deterministic (HMAC of family id and presented
+	//    plaintext under a key derived from the JWT secret): only the hash is
+	//    ever stored, and a replay inside the grace window yields the same one.
+	mintPair, err := refreshmint.Successor(h.successorKey, family.ID(), cmd.RefreshTokenPlain)
 	if err != nil {
-		return RefreshResult{}, fmt.Errorf("refresh: mint: %w", err)
+		return RefreshResult{}, fmt.Errorf("refresh: derive successor: %w", err)
 	}
 
 	// 4. Rotate inside UpdateByID closure.
@@ -130,9 +150,12 @@ func (h RefreshHandler) Handle(ctx context.Context, cmd RefreshCommand) (Refresh
 	now := h.now()
 	var rotateErr error
 	uerr := h.families.UpdateByID(ctx, family.ID(), func(f *refreshtoken.Family) (bool, error) {
-		err := f.Rotate(presentedHash, mintPair.Hash, h.refreshTTL, now)
+		outcome, err := f.RotateWithGrace(presentedHash, mintPair.Hash, h.refreshTTL, h.graceWindow, now)
 		if err == nil {
-			return true, nil
+			// A grace replay changed nothing: persist nothing, return the same
+			// successor. Every later step (person, membership, the family
+			// re-read) still runs, so a replay never outlives a revocation.
+			return outcome == refreshtoken.RotationIssued, nil
 		}
 		// Reuse-detection mutates the aggregate (revokes); persist that
 		// mutation but propagate nothing — the outer Handle decides

@@ -139,7 +139,18 @@ type refreshRig struct {
 
 func newRefreshRig(t *testing.T) *refreshRig {
 	t.Helper()
-	now := func() time.Time { return testNow }
+	clock := testNow
+	return newRefreshRigGrace(t, 0, &clock)
+}
+
+// refreshTestSuccessorKey is the successor HMAC key the rigs wire (32 bytes).
+var refreshTestSuccessorKey = []byte("0123456789abcdef0123456789abcdef")
+
+// newRefreshRigGrace builds the rig with a grace window and a clock the test
+// advances through the pointer. Grace 0 is the strict rotation.
+func newRefreshRigGrace(t *testing.T, grace time.Duration, clock *time.Time) *refreshRig {
+	t.Helper()
+	now := func() time.Time { return *clock }
 	issuer, err := jwt.NewIssuer(refreshTestSigningKey, nil, now)
 	if err != nil {
 		t.Fatalf("jwt.NewIssuer: %v", err)
@@ -153,7 +164,7 @@ func newRefreshRig(t *testing.T) *refreshRig {
 
 	h := command.NewRefreshHandler(
 		families, persons, memberships, tenants, resolver, issuer,
-		now, 14*24*time.Hour,
+		now, 14*24*time.Hour, grace, refreshTestSuccessorKey,
 	)
 	return &refreshRig{
 		handler: h, families: families, persons: persons,
@@ -728,6 +739,7 @@ func TestRefresh_ResolverError_Wrapped(t *testing.T) {
 	h := command.NewRefreshHandler(
 		rig.families, rig.persons, rig.memberships, rig.tenants,
 		resolver, rig.issuer, func() time.Time { return testNow }, 14*24*time.Hour,
+		0, refreshTestSuccessorKey,
 	)
 	// Sanity — silence unused.
 	_ = roleID
@@ -846,4 +858,121 @@ func TestRefresh_PersonGloballySuspended_RevokesFamilyAndRejects(t *testing.T) {
 	if err != nil || len(fams) != 0 {
 		t.Fatalf("ListActiveForPerson: %d families, %v; want the family revoked", len(fams), err)
 	}
+}
+
+// ----- grace window (ADR 0068 D10) -------------------------------------------
+
+func graceRefresh(t *testing.T, rig *refreshRig, plain string) (command.RefreshResult, error) {
+	t.Helper()
+	return rig.handler.Handle(t.Context(), command.RefreshCommand{RefreshTokenPlain: plain})
+}
+
+func TestRefresh_Grace_SameTokenTwiceGetsTheSameSuccessor(t *testing.T) {
+	t.Parallel()
+	clock := testNow
+	rig := newRefreshRigGrace(t, 30*time.Second, &clock)
+	fx := seedFullRefreshFixture(t, rig)
+
+	first, err := graceRefresh(t, rig, fx.plaintext)
+	if err != nil {
+		t.Fatalf("first: %v", err)
+	}
+	clock = clock.Add(10 * time.Second)
+	second, err := graceRefresh(t, rig, fx.plaintext)
+	if err != nil {
+		t.Fatalf("replay inside the window: %v", err)
+	}
+	if first.RefreshTokenPlain != second.RefreshTokenPlain || first.RefreshTokenPlain == fx.plaintext {
+		t.Fatalf("replay must return the same, new successor: %q vs %q", first.RefreshTokenPlain, second.RefreshTokenPlain)
+	}
+	fams, err := rig.families.ListActiveForPerson(t.Context(), fx.person.ID())
+	if err != nil || len(fams) != 1 {
+		t.Fatalf("family must stay active: %d %v", len(fams), err)
+	}
+	if n := len(fams[0].AllTokens()); n != 2 {
+		t.Fatalf("a replay writes no rotation: %d tokens, want 2", n)
+	}
+	// The returned successor is the real chain head: it rotates on.
+	if _, err := graceRefresh(t, rig, first.RefreshTokenPlain); err != nil {
+		t.Fatalf("successor must be usable: %v", err)
+	}
+}
+
+func TestRefresh_Grace_OutsideTheWindowIsReuse(t *testing.T) {
+	t.Parallel()
+	clock := testNow
+	rig := newRefreshRigGrace(t, 30*time.Second, &clock)
+	fx := seedFullRefreshFixture(t, rig)
+	if _, err := graceRefresh(t, rig, fx.plaintext); err != nil {
+		t.Fatalf("first: %v", err)
+	}
+	clock = clock.Add(31 * time.Second)
+	if _, err := graceRefresh(t, rig, fx.plaintext); !errors.Is(err, command.ErrRefreshRejected) {
+		t.Fatalf("late replay: got %v, want ErrRefreshRejected", err)
+	}
+	if fams, _ := rig.families.ListActiveForPerson(t.Context(), fx.person.ID()); len(fams) != 0 {
+		t.Fatalf("a late replay must revoke the family: %d active", len(fams))
+	}
+}
+
+func TestRefresh_Grace_TwoGenerationsOldIsReuseInsideTheWindow(t *testing.T) {
+	t.Parallel()
+	clock := testNow
+	rig := newRefreshRigGrace(t, 30*time.Second, &clock)
+	fx := seedFullRefreshFixture(t, rig)
+	first, err := graceRefresh(t, rig, fx.plaintext)
+	if err != nil {
+		t.Fatalf("first: %v", err)
+	}
+	if _, err := graceRefresh(t, rig, first.RefreshTokenPlain); err != nil {
+		t.Fatalf("second: %v", err)
+	}
+	clock = clock.Add(time.Second)
+	if _, err := graceRefresh(t, rig, fx.plaintext); !errors.Is(err, command.ErrRefreshRejected) {
+		t.Fatalf("a token two generations old: got %v, want ErrRefreshRejected", err)
+	}
+	if fams, _ := rig.families.ListActiveForPerson(t.Context(), fx.person.ID()); len(fams) != 0 {
+		t.Fatalf("family must be revoked: %d active", len(fams))
+	}
+}
+
+func TestRefresh_Grace_NeverReturnsATokenForARevokedFamily(t *testing.T) {
+	t.Parallel()
+	clock := testNow
+	rig := newRefreshRigGrace(t, 30*time.Second, &clock)
+	fx := seedFullRefreshFixture(t, rig)
+	first, err := graceRefresh(t, rig, fx.plaintext)
+	if err != nil {
+		t.Fatalf("first: %v", err)
+	}
+	fam, err := rig.families.GetByTokenHash(t.Context(), refreshmintHashOf(t, fx.plaintext))
+	if err != nil {
+		t.Fatalf("GetByTokenHash: %v", err)
+	}
+	if err := rig.families.UpdateByID(t.Context(), fam.ID(), func(f *refreshtoken.Family) (bool, error) {
+		return true, f.Revoke("password-changed", clock)
+	}); err != nil {
+		t.Fatalf("revoke: %v", err)
+	}
+	res, err := graceRefresh(t, rig, fx.plaintext)
+	if !errors.Is(err, command.ErrRefreshRejected) || res.AccessToken != "" || res.RefreshTokenPlain != "" {
+		t.Fatalf("replay on a revoked family: %+v %v", res, err)
+	}
+	if _, err := graceRefresh(t, rig, first.RefreshTokenPlain); !errors.Is(err, command.ErrRefreshRejected) {
+		t.Fatalf("successor on a revoked family: %v", err)
+	}
+	cur, _ := rig.families.GetByID(t.Context(), fam.ID())
+	if cur.RevokeReason() != "password-changed" {
+		t.Fatalf("revocation reason overwritten: %q", cur.RevokeReason())
+	}
+}
+
+func TestNewRefreshHandler_ShortSuccessorKeyPanics(t *testing.T) {
+	t.Parallel()
+	defer func() {
+		if recover() == nil {
+			t.Fatal("a successor key under 32 bytes must panic at construction")
+		}
+	}()
+	_ = command.NewRefreshHandler(nil, nil, nil, nil, nil, nil, nil, time.Hour, time.Second, []byte("short")) // arch-test:ignore-err - test fixture setup
 }

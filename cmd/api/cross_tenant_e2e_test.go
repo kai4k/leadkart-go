@@ -103,6 +103,13 @@ func newE2EFixtureWithCascade(t *testing.T, now func() time.Time) e2eFixture {
 
 func newE2EFixtureWith(t *testing.T, now func() time.Time, cascade bool) e2eFixture {
 	t.Helper()
+	return newE2EFixtureGrace(t, now, cascade, 0)
+}
+
+// newE2EFixtureGrace is newE2EFixtureWith plus the refresh grace window (zero is
+// the strict rotation every other fixture runs).
+func newE2EFixtureGrace(t *testing.T, now func() time.Time, cascade bool, grace time.Duration) e2eFixture {
+	t.Helper()
 	pool := startWiredPostgresForHTTP(t)
 	cfg := config.AppConfig{
 		JWT: config.JWTConfig{
@@ -111,6 +118,7 @@ func newE2EFixtureWith(t *testing.T, now func() time.Time, cascade bool) e2eFixt
 		},
 		Refresh: config.RefreshConfig{
 			AbsoluteTTL: 14 * 24 * time.Hour,
+			GraceWindow: grace,
 		},
 	}
 	hybrid := newTestHybridCache(t)

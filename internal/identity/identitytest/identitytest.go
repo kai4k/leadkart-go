@@ -74,3 +74,17 @@ func SetPermissionRequestPermission(t testing.TB, pool *pgxpool.Pool, requestID,
 		t.Fatalf("identitytest.SetPermissionRequestPermission: commit: %v", err)
 	}
 }
+
+// CountFamilyTokens returns how many token rows the refresh-token family that
+// holds the token with this SHA-256 hash has: one per generation, so a grace
+// replay (which writes nothing) leaves it unchanged.
+func CountFamilyTokens(t testing.TB, pool *pgxpool.Pool, tokenHash string) int {
+	t.Helper()
+	var n int
+	const q = `SELECT count(*) FROM identity.refresh_tokens
+		WHERE family_id = (SELECT family_id FROM identity.refresh_tokens WHERE token_hash = $1)`
+	if err := pool.QueryRow(t.Context(), q, tokenHash).Scan(&n); err != nil {
+		t.Fatalf("identitytest.CountFamilyTokens: %v", err)
+	}
+	return n
+}
