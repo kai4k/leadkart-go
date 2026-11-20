@@ -22,6 +22,17 @@ SELECT id, person_id, tenant_id, status, joined_at, left_at,
 FROM   identity.tenant_memberships
 WHERE  id = $1;
 
+-- name: ListMembershipsByIDs :many
+-- A batch read of memberships by id (RLS scopes them to the transaction's
+-- tenant); an id with no row is simply absent. Powers the approver queue, which
+-- projects each distinct requester once.
+SELECT id, person_id, tenant_id, status, joined_at, left_at,
+       designation, department, status_message, reports_to,
+       created_by_membership_id
+FROM   identity.tenant_memberships
+WHERE  id = ANY($1::uuid[])
+ORDER  BY joined_at, id;
+
 -- name: GetMembershipByIDForUpdate :one
 -- The aggregate-writer load (UpdateByID): takes the row lock so every writer of a
 -- membership serialises on it and persists a snapshot read after the previous

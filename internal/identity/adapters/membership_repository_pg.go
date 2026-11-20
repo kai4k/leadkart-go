@@ -243,6 +243,55 @@ func (r *MembershipRepository) ListForTenant(
 	return out, nil
 }
 
+// GetByIDs satisfies [membership.Repository]: one indexed read for all ids plus
+// the per-row hydration ListForTenant does.
+func (r *MembershipRepository) GetByIDs(
+	ctx context.Context,
+	tenantID tenant.ID,
+	ids []membership.ID,
+) ([]*membership.Membership, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	uids := make([]pgtype.UUID, 0, len(ids))
+	for _, id := range ids {
+		u, err := uuid.Parse(id.String())
+		if err != nil {
+			return nil, fmt.Errorf("membership repo: parse id %q: %w", id, err)
+		}
+		uids = append(uids, pgconv.PgUUID(u))
+	}
+	var out []*membership.Membership
+	err := r.runInTxTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		q := r.q.WithTx(tx)
+		rows, err := q.ListMembershipsByIDs(ctx, uids)
+		if err != nil {
+			return fmt.Errorf("membership repo: list by ids: %w", err)
+		}
+		out = make([]*membership.Membership, 0, len(rows))
+		for _, row := range rows {
+			roleIDs, lerr := loadRoleAssignments(ctx, q, pgconv.UUIDFromPg(row.ID))
+			if lerr != nil {
+				return lerr
+			}
+			granted, revoked, lerr := loadPermissionOverrides(ctx, q, pgconv.UUIDFromPg(row.ID))
+			if lerr != nil {
+				return lerr
+			}
+			m, perr := rowToMembership(row, roleIDs, granted, revoked)
+			if perr != nil {
+				return perr
+			}
+			out = append(out, m)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // ListHoldingRole satisfies [membership.Repository]: every membership of the
 // tenant holding roleID, one indexed query plus the per-row hydration
 // ListForTenant does (holders only, not the whole tenant).

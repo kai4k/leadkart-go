@@ -197,6 +197,21 @@ func (f *FakeRepository) ListForTenant(_ context.Context, tenantID tenant.ID) ([
 	return out, nil
 }
 
+// GetByIDs returns the memberships of the tenant with the given ids (any
+// status); ids with no row are absent. Order: joined_at, like the SQL.
+func (f *FakeRepository) GetByIDs(_ context.Context, tenantID tenant.ID, ids []membership.ID) ([]*membership.Membership, error) {
+	var out []*membership.Membership
+	for _, id := range ids {
+		if m, ok := f.rows[id]; ok && m.TenantID() == tenantID {
+			out = append(out, m)
+		}
+	}
+	slices.SortFunc(out, func(a, b *membership.Membership) int {
+		return a.JoinedAt().Compare(b.JoinedAt())
+	})
+	return out, nil
+}
+
 // ListHoldingRole returns every Membership of the tenant (any status) holding
 // roleID, joined_at then id ascending (the adapter's order).
 func (f *FakeRepository) ListHoldingRole(_ context.Context, tenantID tenant.ID, roleID role.ID) ([]*membership.Membership, error) {

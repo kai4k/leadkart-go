@@ -654,9 +654,10 @@ func (a Actor) mayUnlinkManager(sub, current Member) error {
 
 // adminMustHold is the set of requestable permissions an Admin-tier approver
 // may approve only while holding them itself: tenant-wide authority (users,
-// roles, tenant settings, role approval) and money (marketplace purchase,
-// payment recording). Everything else requestable is approvable by the Admin
-// tier without holding it. Owners hold tenant.admin, which implies all of
+// roles, tenant settings, role approval), money (marketplace purchase, payment
+// and invoice access) and tenant-wide visibility (read-all, users, roles,
+// tenants, lead credits), plus the right to request elevation. Everything else requestable is
+// approvable by the Admin tier without holding it. Owners hold tenant.admin, which implies all of
 // these, so they are unaffected.
 var adminMustHold = func() map[string]struct{} {
 	p := permission.IdentityPermissions
@@ -665,6 +666,12 @@ var adminMustHold = func() map[string]struct{} {
 		p.Roles.Create, p.Roles.Update, p.Roles.Delete, p.Roles.Assign, p.Roles.Revoke, p.Roles.Approve,
 		p.Tenants.Update, p.Tenants.UpdateSettings,
 		p.PlatformMarketplace.Purchase, p.Orders.Payments.Record,
+		// Visibility across the tenant and the right to ask for more: an
+		// Administrator whose owner deliberately restricted the role cannot hand
+		// these out (a pristine Administrator holds all of them).
+		p.Meta.RequestPermissionElevation, p.Users.View, p.Roles.View, p.Tenants.View,
+		p.Crm.Leads.ReadAll, p.Tasks.WorkItems.ReadAll,
+		p.Orders.Payments.Read, p.Orders.Invoices.Read, p.PlatformLeadCredits.Read,
 	}
 	m := make(map[string]struct{}, len(names))
 	for _, n := range names {
@@ -675,13 +682,64 @@ var adminMustHold = func() map[string]struct{} {
 
 func mustHoldToApprove(name string) bool { _, ok := adminMustHold[name]; return ok }
 
+// approvalNeedsHolding: does approving perm require the approver to hold it?
+// The manager path always does; the Admin tier only for adminMustHold. It is the
+// one definition mayDecide and CapApprovalExpiry share.
+func (a Actor) approvalNeedsHolding(perm string) bool {
+	return a.Rank() > RankAdmin || mustHoldToApprove(perm)
+}
+
+// CapApprovalExpiry - H4: an approval never outlives the approver's own grant.
+// When approving perm REQUIRED the approver to hold it (see approvalNeedsHolding)
+// and the approver holds it only through a time-bound override (the fresh read
+// records that in the Actor), the approved grant ends no later than the
+// approver's. Every other approver (held through a role or a permanent grant,
+// not required to hold it, exempt in the requester's tenant) gets wanted back.
+func (a Actor) CapApprovalExpiry(requester Member, perm string, wanted time.Time) time.Time {
+	if !a.valid || a.exemptIn(requester.tenantID) || !a.approvalNeedsHolding(perm) {
+		return wanted
+	}
+	if until, ok := a.holdUntil[perm]; ok && until.Before(wanted) {
+		return until
+	}
+	return wanted
+}
+
+// DecidesWholeTenant - H4: may the actor decide requests of members who do not
+// report to them? Exempt actors, and the Admin tier or above in their own tenant
+// (never an impersonation session). Every other decider is the requester's
+// manager (with identity.roles.approve), so the approver queue of such an actor
+// is exactly the requests of their own reports.
+func (a Actor) DecidesWholeTenant(tenantID tenant.ID) bool {
+	switch {
+	case !a.valid || a.impersonation:
+		return false
+	case a.exemptIn(tenantID):
+		return true
+	}
+	return sameTenant(tenantID, a.tenantID) && a.Rank() <= RankAdmin
+}
+
+// MayDecideAny - H4: can the actor decide ANY request in tenantID at all? It is
+// the cheap pre-check that lets the approver queue answer an empty page without
+// scanning anything: false for an impersonation session, an actor of another
+// tenant that is not exempt, and an actor below the Admin tier without
+// identity.roles.approve. True does not mean any particular request is
+// decidable; the per-request policy decides that.
+func (a Actor) MayDecideAny(tenantID tenant.ID) bool {
+	if a.DecidesWholeTenant(tenantID) {
+		return true
+	}
+	return a.valid && !a.impersonation && sameTenant(tenantID, a.tenantID) && a.hasOwn(permission.IdentityPermissions.Roles.Approve)
+}
+
 // MayApprove - H4: (a) the requester's manager, who holds roles.approve and
 // the permission; (b) any actor of Admin tier or above who strictly outranks
 // the requester and approves any requestable permission without holding it,
-// except the authority-and-money set (adminMustHold), which the Admin must
-// hold ("admin sees through everything and approves day-to-day work"); (c) a
-// super user or an exempt operator in another tenant. Never an impersonation
-// session, never the requester; perm must be requestable.
+// except the authority-and-money-and-visibility set (adminMustHold), which the
+// Admin must hold ("admin sees through everything and approves day-to-day
+// work"); (c) a super user or an exempt operator in another tenant. Never an
+// impersonation session, never the requester; perm must be requestable.
 func (a Actor) MayApprove(requester Member, perm string) error {
 	return a.mayDecide(requester, perm, true)
 }
@@ -708,7 +766,7 @@ func (a Actor) mayDecide(req Member, perm string, approving bool) error {
 	case a.Rank() <= RankAdmin:
 		// Admin sees and approves through day-to-day work without holding it,
 		// but never confers authority or money it does not hold itself.
-		if approving && mustHoldToApprove(perm) && !a.holds(perm, req.tenantID) {
+		if approving && a.approvalNeedsHolding(perm) && !a.holds(perm, req.tenantID) {
 			return fmt.Errorf("%w: an admin must hold %s to approve it", ErrGrantExceedsAuthority, perm)
 		}
 		return nil

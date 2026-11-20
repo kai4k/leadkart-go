@@ -133,15 +133,17 @@ func (q *Queries) ListPendingPermissionRequestsForMembership(ctx context.Context
 }
 
 const listPendingPermissionRequestsInTenantPage = `-- name: ListPendingPermissionRequestsInTenantPage :many
-SELECT id, tenant_id, requester_membership_id, permission_constant,
-       duration_days, reason, state, approver_membership_id,
-       decided_at, decision_reason, granted_override_id, expires_at,
-       created_at, updated_at
-FROM   identity.permission_requests
-WHERE  tenant_id = $1
-  AND  state     = 'pending'
-  AND  (created_at, id) < ($2::timestamptz, $3::uuid)
-ORDER  BY created_at DESC, id DESC
+SELECT pr.id, pr.tenant_id, pr.requester_membership_id, pr.permission_constant,
+       pr.duration_days, pr.reason, pr.state, pr.approver_membership_id,
+       pr.decided_at, pr.decision_reason, pr.granted_override_id, pr.expires_at,
+       pr.created_at, pr.updated_at
+FROM   identity.permission_requests pr
+WHERE  pr.tenant_id = $1
+  AND  pr.state     = 'pending'
+  AND  (pr.created_at, pr.id) < ($2::timestamptz, $3::uuid)
+  AND  ($5::uuid IS NULL OR pr.requester_membership_id IN (
+         SELECT m.id FROM identity.tenant_memberships m WHERE m.reports_to = $5::uuid))
+ORDER  BY pr.created_at DESC, pr.id DESC
 LIMIT  $4
 `
 
@@ -150,6 +152,7 @@ type ListPendingPermissionRequestsInTenantPageParams struct {
 	Column2  pgtype.Timestamptz
 	Column3  pgtype.UUID
 	Limit    int32
+	Column5  pgtype.UUID
 }
 
 // The tenant's pending queue (state=pending), keyset-paginated (created_at
@@ -157,12 +160,15 @@ type ListPendingPermissionRequestsInTenantPageParams struct {
 // Backed by idx_permission_requests_tenant_pending (migration 20261120000003).
 // RLS already scopes the rows to the transaction's tenant; the explicit
 // tenant_id predicate keeps the plan on the partial index.
+// $5 (nullable): only the requests of members who report to that membership
+// (the approver queue of a non-admin manager), via idx_memberships_reports_to.
 func (q *Queries) ListPendingPermissionRequestsInTenantPage(ctx context.Context, arg ListPendingPermissionRequestsInTenantPageParams) ([]IdentityPermissionRequest, error) {
 	rows, err := q.db.Query(ctx, listPendingPermissionRequestsInTenantPage,
 		arg.TenantID,
 		arg.Column2,
 		arg.Column3,
 		arg.Limit,
+		arg.Column5,
 	)
 	if err != nil {
 		return nil, err

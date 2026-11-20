@@ -117,6 +117,11 @@ type Repository interface {
 	// cheap enough to execute on every lifecycle command.
 	HasActiveSuperAdmin(ctx context.Context, tenantID tenant.ID) (bool, error)
 
+	// GetByIDs returns the Memberships of the tenant with the given ids, any
+	// status, in no particular order; an id with no row in the tenant is absent
+	// (not an error). One read however many ids: the batched form of GetByID.
+	GetByIDs(ctx context.Context, tenantID tenant.ID, ids []ID) ([]*Membership, error)
+
 	// ListHoldingRole returns every Membership of the tenant (active or not)
 	// that holds roleID, fully hydrated. Powers the role-in-use rule of
 	// DeleteRole; the caller holds the tenant authority lock.

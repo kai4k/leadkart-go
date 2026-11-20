@@ -145,6 +145,7 @@ func handleListPermissionRequests(log *slog.Logger, a app.Application) http.Hand
 		pageSize, _ := strconv.Atoi(r.URL.Query().Get("page_size"))
 
 		var page pagination.Page[query.PermissionRequestView]
+		var canApprove []bool // approver queue only, index-aligned with page.Items
 		var qerr error
 		switch role {
 		case "approver":
@@ -159,7 +160,12 @@ func handleListPermissionRequests(log *slog.Logger, a app.Application) http.Hand
 					PageSize: pageSize,
 					Actor:    authn.AuthorityFrom(r.Context()),
 				})
-			page = query.PermissionRequestPage(decidable.Page)
+			reqs := pagination.Page[*permissionrequest.Request]{HasMore: decidable.Page.HasMore, NextCursor: decidable.Page.NextCursor}
+			for _, d := range decidable.Page.Items {
+				reqs.Items = append(reqs.Items, d.Request)
+				canApprove = append(canApprove, d.CanApprove)
+			}
+			page = query.PermissionRequestPage(reqs)
 		default: // requester
 			page, qerr = a.Queries.ListMyPermissionRequests.Handle(r.Context(),
 				query.ListMyPermissionRequestsQuery{
@@ -168,6 +174,9 @@ func handleListPermissionRequests(log *slog.Logger, a app.Application) http.Hand
 					Cursor:                cursor,
 					PageSize:              pageSize,
 				})
+		}
+		if writeAuthorityError(w, qerr) {
+			return
 		}
 		if qerr != nil {
 			log.ErrorContext(r.Context(), "list permission requests failed", "err", qerr, "role", role)
@@ -180,8 +189,12 @@ func handleListPermissionRequests(log *slog.Logger, a app.Application) http.Hand
 			HasMore:    page.HasMore,
 			NextCursor: page.NextCursor,
 		}
-		for _, v := range page.Items {
-			out.Requests = append(out.Requests, projectPermissionRequestViewToDto(v))
+		for i, v := range page.Items {
+			dto := projectPermissionRequestViewToDto(v)
+			if canApprove != nil {
+				dto.CanApprove = &canApprove[i]
+			}
+			out.Requests = append(out.Requests, dto)
 		}
 		writeJSON(w, http.StatusOK, out)
 	})

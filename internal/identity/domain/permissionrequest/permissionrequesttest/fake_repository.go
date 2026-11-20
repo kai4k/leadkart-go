@@ -62,6 +62,12 @@ type FakeRepository struct {
 	// permission) tuple. UpdateByID maintains this index as state
 	// transitions out of Pending.
 	pending map[string]permissionrequest.ID
+
+	// managerOf answers "who does this requester report to" for the
+	// reportsTo filter of ListPendingInTenant; nil means nobody does.
+	managerOf func(membership.ID) membership.ID
+	// listPendingCalls counts ListPendingInTenant calls (the queue short-circuit test).
+	listPendingCalls int
 }
 
 // NewFakeRepository returns an empty in-memory request repository.
@@ -175,12 +181,21 @@ func (f *FakeRepository) GetPendingForMembership(_ context.Context, tenantID ten
 // of the tenant (scoped to tenantID), newest first. The fake delegates page
 // assembly to [pagination.BuildPage] using (CreatedAt, ID) as the sort tuple
 // and ignores the cursor like the other list fakes.
-func (f *FakeRepository) ListPendingInTenant(_ context.Context, tenantID tenant.ID, pageSize int, _ pagination.Cursor) (pagination.Page[*permissionrequest.Request], error) {
+//
+// reportsTo, when non-zero, keeps the requests whose requester reports to that
+// membership, as the SQL does; the fake has no membership store, so the test
+// that uses it installs [FakeRepository.ManagerLookup].
+func (f *FakeRepository) ListPendingInTenant(_ context.Context, tenantID tenant.ID, reportsTo membership.ID, pageSize int, _ pagination.Cursor) (pagination.Page[*permissionrequest.Request], error) {
+	f.listPendingCalls++
 	var items []*permissionrequest.Request
 	for _, x := range f.requests {
-		if x.TenantID() == tenantID && x.State() == permissionrequest.StatePending {
-			items = append(items, x)
+		if x.TenantID() != tenantID || x.State() != permissionrequest.StatePending {
+			continue
 		}
+		if !reportsTo.IsZero() && (f.managerOf == nil || f.managerOf(x.RequesterMembershipID()) != reportsTo) {
+			continue
+		}
+		items = append(items, x)
 	}
 	slices.SortFunc(items, func(a, b *permissionrequest.Request) int {
 		return cmp.Or(b.CreatedAt().Compare(a.CreatedAt()), cmp.Compare(b.ID().String(), a.ID().String()))
@@ -215,3 +230,10 @@ func (f *FakeRepository) ListByRequester(_ context.Context, tenantID tenant.ID, 
 func pendingKey(m membership.ID, perm string) string {
 	return m.String() + "|" + perm
 }
+
+// ManagerLookup installs the requester -> manager lookup the reportsTo filter of
+// ListPendingInTenant uses (the fake keeps no memberships).
+func (f *FakeRepository) ManagerLookup(fn func(membership.ID) membership.ID) { f.managerOf = fn }
+
+// ListPendingCalls is how many times ListPendingInTenant was called.
+func (f *FakeRepository) ListPendingCalls() int { return f.listPendingCalls }

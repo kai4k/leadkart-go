@@ -243,19 +243,19 @@ func TestE2E_PermissionRequest_PlatformTenantMembersCannotSelfElevate(t *testing
 	if sub.status != http.StatusCreated {
 		t.Fatalf("submit users.view: %d %s", sub.status, sub.body)
 	}
-	if ap := f.approveRequest(t, bTok, reqID); ap.status != http.StatusForbidden {
-		t.Errorf("zero-permission platform member approves: %d %s, want 403", ap.status, ap.body)
+	if ap := f.approveRequest(t, bTok, reqID); ap.status != http.StatusNotFound {
+		t.Errorf("zero-permission platform member approves: %d %s, want 404", ap.status, ap.body)
 	}
 	if d := f.authedJSON(t, http.MethodPost, "/api/v1/permission-requests/"+reqID+"/deny", bTok,
-		ports.DenyPermissionRequestRequest{DecisionReason: "not mine to decide"}); d.status != http.StatusForbidden {
-		t.Errorf("zero-permission platform member denies: %d %s, want 403", d.status, d.body)
+		ports.DenyPermissionRequestRequest{DecisionReason: "not mine to decide"}); d.status != http.StatusNotFound {
+		t.Errorf("zero-permission platform member denies: %d %s, want 404", d.status, d.body)
 	}
 
 	// A read-only operator (platform.tenants.view) in the platform tenant is
 	// refused too: it used to approve (204); it now follows rank.
 	opTok := mint(b, permission.IdentityPermissions.Platform.TenantsView)
-	if ap := f.approveRequest(t, opTok, reqID); ap.status != http.StatusForbidden || decodeError(t, ap.body).Error != "insufficient_rank" {
-		t.Errorf("read-only operator approves in the platform tenant: %d %s, want 403 insufficient_rank", ap.status, ap.body)
+	if ap := f.approveRequest(t, opTok, reqID); ap.status != http.StatusNotFound || decodeError(t, ap.body).Error != "permission_request_not_found" {
+		t.Errorf("read-only operator approves in the platform tenant: %d %s, want 404 permission_request_not_found", ap.status, ap.body)
 	}
 }
 

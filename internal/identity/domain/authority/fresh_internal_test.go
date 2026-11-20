@@ -73,7 +73,7 @@ func TestNarrowedBy_RankIsTheMoreJuniorOfTokenAndFresh(t *testing.T) {
 			roles = append(roles, freshRole(1, tenantOne, c.fresh, c.fresh == 0))
 		}
 		fresh := freshMemberOf(t, freshMemberID, tenantOne, membership.StatusActive, canAct(), roles...)
-		got := tokenActor(t, c.token).NarrowedBy(fresh, nil)
+		got := tokenActor(t, c.token).NarrowedBy(fresh, nil, nil)
 		if !got.Valid() || got.Rank() != c.want {
 			t.Errorf("%s: rank = %d (valid %v), want %d", name, got.Rank(), got.Valid(), c.want)
 		}
@@ -85,7 +85,7 @@ func TestNarrowedBy_PermissionsAreTheIntersection(t *testing.T) {
 	p := permission.IdentityPermissions
 	fresh := freshMemberOf(t, freshMemberID, tenantOne, membership.StatusActive, canAct())
 	tok := tokenActor(t, RankManager, p.Crm.Leads.Read, p.Crm.Leads.Manage, p.Users.View)
-	got := tok.NarrowedBy(fresh, []string{p.Crm.Leads.Read, p.Users.View, p.Crm.Leads.Assign})
+	got := tok.NarrowedBy(fresh, []string{p.Crm.Leads.Read, p.Users.View, p.Crm.Leads.Assign}, nil)
 	for name, c := range map[string]struct {
 		perm string
 		want bool
@@ -103,7 +103,7 @@ func TestNarrowedBy_PermissionsAreTheIntersection(t *testing.T) {
 		}
 	}
 	// An empty fresh set removes everything.
-	if none := tok.NarrowedBy(fresh, nil); none.hasOwn(p.Crm.Leads.Read) {
+	if none := tok.NarrowedBy(fresh, nil, nil); none.hasOwn(p.Crm.Leads.Read) {
 		t.Error("empty fresh set kept a token permission")
 	}
 }
@@ -114,17 +114,17 @@ func TestNarrowedBy_TenantAdminIsExpandedOnBothSides(t *testing.T) {
 	fresh := freshMemberOf(t, freshMemberID, tenantOne, membership.StatusActive, canAct())
 	admin := tokenActor(t, RankAdmin, p.Meta.TenantAdmin)
 	// Fresh still has tenant.admin: every implied name survives.
-	if got := admin.NarrowedBy(fresh, []string{p.Meta.TenantAdmin}); !got.hasOwn(p.Crm.Leads.ReadAll) || !got.hasOwn(p.Meta.TenantAdmin) {
+	if got := admin.NarrowedBy(fresh, []string{p.Meta.TenantAdmin}, nil); !got.hasOwn(p.Crm.Leads.ReadAll) || !got.hasOwn(p.Meta.TenantAdmin) {
 		t.Error("tenant.admin on both sides lost an implied permission")
 	}
 	// Fresh lost tenant.admin but still holds one implied name individually: only that one survives.
-	got := admin.NarrowedBy(fresh, []string{p.Crm.Leads.ReadAll})
+	got := admin.NarrowedBy(fresh, []string{p.Crm.Leads.ReadAll}, nil)
 	if got.hasOwn(p.Meta.TenantAdmin) || got.hasOwn(p.Users.Create) || !got.hasOwn(p.Crm.Leads.ReadAll) {
 		t.Error("a revoked tenant.admin kept its implied permissions")
 	}
 	// The token had no tenant.admin; fresh gained it: nothing is gained.
 	plain := tokenActor(t, RankAdmin, p.Crm.Leads.Read)
-	if got := plain.NarrowedBy(fresh, []string{p.Meta.TenantAdmin}); got.hasOwn(p.Users.Create) || got.hasOwn(p.Meta.TenantAdmin) {
+	if got := plain.NarrowedBy(fresh, []string{p.Meta.TenantAdmin}, nil); got.hasOwn(p.Users.Create) || got.hasOwn(p.Meta.TenantAdmin) {
 		t.Error("a token gained permissions the fresh facts hold")
 	}
 }
@@ -144,7 +144,7 @@ func TestNarrowedBy_DeniesWhenTheFreshMembershipCannotActForThisToken(t *testing
 
 	admin := permission.IdentityPermissions.Meta.TenantAdmin
 	tok := tokenActor(t, RankOwner, admin)
-	if !tok.NarrowedBy(ok, []string{admin}).Valid() {
+	if !tok.NarrowedBy(ok, []string{admin}, nil).Valid() {
 		t.Fatal("sanity: the matching active membership must keep the actor valid")
 	}
 	for name, fresh := range map[string]Member{
@@ -158,11 +158,11 @@ func TestNarrowedBy_DeniesWhenTheFreshMembershipCannotActForThisToken(t *testing
 		"deactivated person":        deactivatedPerson,
 		"person state not loaded":   unknownPerson,
 	} {
-		if got := tok.NarrowedBy(fresh, []string{admin}); got.Valid() {
+		if got := tok.NarrowedBy(fresh, []string{admin}, nil); got.Valid() {
 			t.Errorf("%s: actor stays valid, want the zero actor", name)
 		}
 	}
-	if (Actor{}).NarrowedBy(ok, nil).Valid() {
+	if (Actor{}).NarrowedBy(ok, nil, nil).Valid() {
 		t.Error("the zero actor became valid")
 	}
 }
@@ -172,12 +172,12 @@ func TestNarrowedBy_KeepsTheFlagsThatAreNotMembershipFacts(t *testing.T) {
 	p := permission.IdentityPermissions
 	fresh := freshMemberOf(t, freshMemberID, tenantOne, membership.StatusActive, canAct())
 	op := newActorT(t, ActorInput{MembershipID: freshMemberID, TenantID: tenantOne, IsPlatformOperator: true, EffectivePermissions: []string{p.Platform.UsersManage}})
-	got := op.NarrowedBy(fresh, []string{p.Platform.UsersManage})
+	got := op.NarrowedBy(fresh, []string{p.Platform.UsersManage}, nil)
 	if !got.IsPlatformOperator() || got.IsSuperUser() || got.IsImpersonation() || got.MembershipID() != op.MembershipID() || got.TenantID() != op.TenantID() {
 		t.Errorf("flags or identity changed: %+v", got)
 	}
 	// A narrowed operator that lost its platform permission is no longer exempt anywhere.
-	if lost := op.NarrowedBy(fresh, nil); lost.exemptOperatorIn(tenantTwo) {
+	if lost := op.NarrowedBy(fresh, nil, nil); lost.exemptOperatorIn(tenantTwo) {
 		t.Error("an operator whose platform permission is gone is still exempt")
 	}
 }

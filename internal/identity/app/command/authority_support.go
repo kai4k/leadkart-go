@@ -103,12 +103,36 @@ func memberFrom(m *membership.Membership, roles []*role.Role, p *person.Person, 
 	return out, roles, nil
 }
 
+// memberResult is one membership's projection, or why it has none.
+type memberResult struct {
+	member authority.Member
+	err    error
+}
+
 // projectMany projects every membership in ms with a FIXED number of reads
-// however many there are: one role read for the union of their role ids and one
-// person read for the union of their persons (an empty ms reads nothing). A role
-// or person that does not load is the same inconsistency a single projection
-// reports.
+// however many there are (see [authorityFacts.projectBatch]); the first
+// membership that does not project fails the call.
 func (f authorityFacts) projectMany(ctx context.Context, tenantID tenant.ID, ms []*membership.Membership, now time.Time) ([]authority.Member, error) {
+	results, err := f.projectBatch(ctx, tenantID, ms, now)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]authority.Member, 0, len(results))
+	for _, r := range results {
+		if r.err != nil {
+			return nil, r.err
+		}
+		out = append(out, r.member)
+	}
+	return out, nil
+}
+
+// projectBatch projects every membership in ms (results in the same order) with
+// a FIXED number of reads: one role read for the union of their role ids and one
+// person read for the union of their persons (an empty ms reads nothing). A role
+// set that is inconsistent or a person that does not load fails only that
+// membership's result; a failed read fails the call.
+func (f authorityFacts) projectBatch(ctx context.Context, tenantID tenant.ID, ms []*membership.Membership, now time.Time) ([]memberResult, error) {
 	if now.IsZero() {
 		return nil, fmt.Errorf("%w: the decision instant is required", authority.ErrNoAuthority)
 	}
@@ -145,11 +169,12 @@ func (f authorityFacts) projectMany(ctx context.Context, tenantID tenant.ID, ms 
 	if err != nil {
 		return nil, fmt.Errorf("authority facts: load persons: %w", err)
 	}
-	out := make([]authority.Member, 0, len(ms))
+	out := make([]memberResult, 0, len(ms))
 	for _, m := range ms {
 		p, ok := persons[m.PersonID()]
 		if !ok {
-			return nil, fmt.Errorf("authority facts: load person %s: %w", m.PersonID(), person.ErrNotFound)
+			out = append(out, memberResult{err: fmt.Errorf("authority facts: load person %s: %w", m.PersonID(), person.ErrNotFound)})
+			continue
 		}
 		roles := make([]*role.Role, 0, len(m.RoleAssignments()))
 		for _, id := range m.RoleAssignments() {
@@ -158,10 +183,7 @@ func (f authorityFacts) projectMany(ctx context.Context, tenantID tenant.ID, ms 
 			}
 		}
 		member, _, err := memberFrom(m, roles, p, now)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, member)
+		out = append(out, memberResult{member: member, err: err})
 	}
 	return out, nil
 }
@@ -385,12 +407,14 @@ func (f authorityFacts) freshActor(ctx context.Context, tenantID tenant.ID, toke
 		return authority.Actor{}, err
 	}
 	live := make([]*role.Role, 0, len(roles))
+	var viaRoles []string
 	for _, r := range roles {
 		if !r.IsDeleted() {
 			live = append(live, r)
+			viaRoles = append(viaRoles, authority.PermissionNames(r.Permissions())...)
 		}
 	}
-	narrowed := token.NarrowedBy(fresh, permissionNames(m.EffectivePermissions(live, now)))
+	narrowed := token.NarrowedBy(fresh, permissionNames(m.EffectivePermissions(live, now)), viaRoles)
 	if !narrowed.Valid() {
 		return authority.Actor{}, fmt.Errorf("%w: the acting member cannot act", authority.ErrNoAuthority)
 	}

@@ -420,3 +420,36 @@ func TestMembershipRepository_ListHoldingRole_ActiveAndInactiveHoldersOnly(t *te
 		t.Errorf("cross-tenant holders = %d, %v; want none", len(none), err)
 	}
 }
+
+// SQL-contract: GetByIDs reads the given memberships in one call; an id with no
+// row (or of another tenant, hidden by RLS) is simply absent.
+func TestMembershipRepository_GetByIDs_PresentIdsOnly(t *testing.T) {
+	t.Parallel()
+	pool := repoFixture(t)
+	tx := pg.NewTransactor(pool)
+	persons := adapters.NewPersonRepository(pool, tx)
+	memberships := adapters.NewMembershipRepository(pool, tx)
+	tenants := adapters.NewTenantRepository(pool, tx)
+	tn, other := seedTenant(t, tenants), seedTenant(t, tenants)
+	add := func(tid tenant.ID, email string) membership.ID {
+		pe := seedPerson(t, persons, email)
+		m, err := membership.New(membership.ID(ids.NewV7().String()), pe.ID(), tid, "", testNow)
+		if err != nil {
+			t.Fatalf("membership.New: %v", err)
+		}
+		if err := memberships.Add(tenancy.WithID(t.Context(), tenancy.ID(tid.String())), m); err != nil {
+			t.Fatalf("Add: %v", err)
+		}
+		return m.ID()
+	}
+	a, b := add(tn.ID(), "gbi-a@example.test"), add(tn.ID(), "gbi-b@example.test")
+	foreign := add(other.ID(), "gbi-c@example.test")
+	ctx := tenancy.WithID(t.Context(), tenancy.ID(tn.ID().String()))
+	got, err := memberships.GetByIDs(ctx, tn.ID(), []membership.ID{a, b, foreign, membership.ID(ids.NewV7().String())})
+	if err != nil || len(got) != 2 {
+		t.Fatalf("GetByIDs = %d rows, %v; want the 2 present ids of the tenant", len(got), err)
+	}
+	if none, err := memberships.GetByIDs(ctx, tn.ID(), nil); err != nil || len(none) != 0 {
+		t.Fatalf("GetByIDs(nil) = %v, %v; want nothing", none, err)
+	}
+}

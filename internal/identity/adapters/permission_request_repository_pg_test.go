@@ -76,14 +76,14 @@ func TestPermissionRequestRepository_ListPendingInTenant_PendingOnlyNewestFirstK
 		t.Fatalf("cancel: %v", err)
 	}
 
-	page, err := reqs.ListPendingInTenant(ctx, tn.ID(), 2, pagination.Cursor{})
+	page, err := reqs.ListPendingInTenant(ctx, tn.ID(), "", 2, pagination.Cursor{})
 	if err != nil {
 		t.Fatalf("first page: %v", err)
 	}
 	if len(page.Items) != 2 || page.Items[0].ID() != newest.ID() || page.Items[1].ID() != middle.ID() || !page.HasMore {
 		t.Fatalf("first page = %v (has_more %v), want [newest, middle] and more", ids3(page), page.HasMore)
 	}
-	next, err := reqs.ListPendingInTenant(ctx, tn.ID(), 2, decodeCursor(t, page.NextCursor))
+	next, err := reqs.ListPendingInTenant(ctx, tn.ID(), "", 2, decodeCursor(t, page.NextCursor))
 	if err != nil {
 		t.Fatalf("second page: %v", err)
 	}
@@ -92,7 +92,7 @@ func TestPermissionRequestRepository_ListPendingInTenant_PendingOnlyNewestFirstK
 	}
 	// RLS: the other tenant's scope sees only its own pending request.
 	otherCtx := tenancy.WithID(t.Context(), tenancy.ID(other.ID().String()))
-	theirs, err := reqs.ListPendingInTenant(otherCtx, other.ID(), 10, pagination.Cursor{})
+	theirs, err := reqs.ListPendingInTenant(otherCtx, other.ID(), "", 10, pagination.Cursor{})
 	if err != nil || len(theirs.Items) != 1 || theirs.Items[0].TenantID() != other.ID() {
 		t.Fatalf("other tenant's queue = %v, %v; want exactly its own request", ids3(theirs), err)
 	}
@@ -113,4 +113,65 @@ func decodeCursor(t *testing.T, raw string) pagination.Cursor {
 		t.Fatalf("decode cursor: %v", err)
 	}
 	return c
+}
+
+// SQL-contract: reportsTo keeps only the requests of members whose manager is
+// that membership, and (with the zero id) the whole tenant is listed; the
+// filter is in the query, so a window is never spent on other members' requests.
+func TestPermissionRequestRepository_ListPendingInTenant_ReportsToFilter(t *testing.T) {
+	t.Parallel()
+	pool := repoFixture(t)
+	tx := pg.NewTransactor(pool)
+	persons := adapters.NewPersonRepository(pool, tx)
+	memberships := adapters.NewMembershipRepository(pool, tx)
+	tenants := adapters.NewTenantRepository(pool, tx)
+	reqs := adapters.NewPermissionRequestRepository(pool, tx)
+	tn := seedTenant(t, tenants)
+	ctx := tenancy.WithID(t.Context(), tenancy.ID(tn.ID().String()))
+	member := func(email string, manager membership.ID) membership.ID {
+		pe := seedPerson(t, persons, email)
+		m, err := membership.New(membership.ID(ids.NewV7().String()), pe.ID(), tn.ID(), "", testNow)
+		if err != nil {
+			t.Fatalf("membership.New: %v", err)
+		}
+		if err := memberships.Add(ctx, m); err != nil {
+			t.Fatalf("Add membership: %v", err)
+		}
+		if manager != "" {
+			if err := memberships.UpdateByID(ctx, tn.ID(), m.ID(), func(mm *membership.Membership) (bool, error) {
+				return true, mm.AssignManager(manager, testNow)
+			}); err != nil {
+				t.Fatalf("assign manager: %v", err)
+			}
+		}
+		return m.ID()
+	}
+	boss := member("rt-boss@example.test", "")
+	mine := member("rt-mine@example.test", boss)
+	stranger := member("rt-stranger@example.test", "")
+	file := func(who membership.ID, at time.Time) *permissionrequest.Request {
+		r, err := permissionrequest.New(permissionrequest.ID(ids.NewV7().String()), tn.ID(), who, permission.FromConstant(permission.IdentityPermissions.Crm.Leads.Read), 7, "needed for the quarterly close", at)
+		if err != nil {
+			t.Fatalf("permissionrequest.New: %v", err)
+		}
+		if err := reqs.Add(ctx, r); err != nil {
+			t.Fatalf("Add request: %v", err)
+		}
+		return r
+	}
+	want := file(mine, testNow)
+	file(stranger, testNow.Add(time.Minute))
+
+	got, err := reqs.ListPendingInTenant(ctx, tn.ID(), boss, 10, pagination.Cursor{})
+	if err != nil || len(got.Items) != 1 || got.Items[0].ID() != want.ID() {
+		t.Fatalf("boss's queue = %v, %v; want only their report's request", ids3(got), err)
+	}
+	all, err := reqs.ListPendingInTenant(ctx, tn.ID(), "", 10, pagination.Cursor{})
+	if err != nil || len(all.Items) < 2 {
+		t.Fatalf("whole queue = %v, %v; want every pending request", ids3(all), err)
+	}
+	none, err := reqs.ListPendingInTenant(ctx, tn.ID(), mine, 10, pagination.Cursor{})
+	if err != nil || len(none.Items) != 0 {
+		t.Fatalf("a member without reports has a queue of %v, %v; want empty", ids3(none), err)
+	}
 }

@@ -175,6 +175,7 @@ func (r *PermissionRequestRepository) GetPendingForMembership(
 func (r *PermissionRequestRepository) ListPendingInTenant(
 	ctx context.Context,
 	tenantID tenant.ID,
+	reportsTo membership.ID,
 	pageSize int,
 	cursor pagination.Cursor,
 ) (pagination.Page[*permissionrequest.Request], error) {
@@ -185,6 +186,15 @@ func (r *PermissionRequestRepository) ListPendingInTenant(
 	}
 	beforeAt, beforeID := cursorOrPermReqSentinel(cursor)
 	limit := pageSize + 1
+	var manager pgtype.UUID // NULL: the whole tenant
+	if !reportsTo.IsZero() {
+		mgr, perr := uuid.Parse(reportsTo.String())
+		if perr != nil {
+			return pagination.Page[*permissionrequest.Request]{},
+				fmt.Errorf("permreq repo: parse manager id %q: %w", reportsTo, perr)
+		}
+		manager = pgconv.PgUUID(mgr)
+	}
 	var rows []db.IdentityPermissionRequest
 	err = r.runInTxTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
 		q := r.q.WithTx(tx)
@@ -193,6 +203,7 @@ func (r *PermissionRequestRepository) ListPendingInTenant(
 			Column2:  pgconv.PgRequiredTimestamp(beforeAt),
 			Column3:  pgconv.PgUUID(beforeID),
 			Limit:    int32(limit), //nolint:gosec // bounded by the caller's page size (<=200)
+			Column5:  manager,
 		})
 		if qerr != nil {
 			return fmt.Errorf("permreq repo: list pending in tenant: %w", qerr)

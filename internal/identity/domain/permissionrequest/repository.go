@@ -50,10 +50,14 @@ type Repository interface {
 	// requests of the whole tenant, newest first (created_at DESC, id DESC),
 	// scoped to tenantID. Who may DECIDE a request is the authority policy's
 	// call, not the store's: the approver queue filters this list through it
-	// (ADR 0069 A6). First page passes the zero pagination.Cursor.
+	// (ADR 0069 A6). reportsTo, when non-zero, keeps only the requests of
+	// members whose manager is that membership (the queue of a manager who is
+	// below the Admin tier, so it does not scan requests it can never decide).
+	// First page passes the zero pagination.Cursor.
 	ListPendingInTenant(
 		ctx context.Context,
 		tenantID tenant.ID,
+		reportsTo membership.ID,
 		pageSize int,
 		cursor pagination.Cursor,
 	) (pagination.Page[*Request], error)

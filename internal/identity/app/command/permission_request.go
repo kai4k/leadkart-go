@@ -256,30 +256,61 @@ func NewApprovePermissionRequestHandler(
 }
 
 // loadForDecision loads the stored request and its requester under the held
-// lock. A missing request or requester is ErrPermissionRequestNotFound.
+// lock. A missing request or requester is ErrPermissionRequestNotFound. The
+// request is returned even when the requester's roles do not load consistently
+// (the error is then ErrMemberRolesInconsistent), so the caller can decide who
+// may be told.
 func (w authorityWriter) loadForDecision(ctx context.Context, requests permissionrequest.Repository, tenantID tenant.ID,
-	id permissionrequest.ID, now time.Time) (*permissionrequest.Request, authority.Member, error) {
+	id permissionrequest.ID, now time.Time) (*permissionrequest.Request, *membership.Membership, authority.Member, error) {
 	req, err := requests.GetByID(ctx, tenantID, id)
 	if err != nil {
 		if errors.Is(err, permissionrequest.ErrNotFound) {
-			return nil, authority.Member{}, ErrPermissionRequestNotFound
+			return nil, nil, authority.Member{}, ErrPermissionRequestNotFound
 		}
-		return nil, authority.Member{}, fmt.Errorf("load request: %w", err)
+		return nil, nil, authority.Member{}, fmt.Errorf("load request: %w", err)
 	}
-	_, requester, err := w.facts.memberByID(ctx, tenantID, req.RequesterMembershipID(), now)
+	m, requester, err := w.facts.memberByID(ctx, tenantID, req.RequesterMembershipID(), now)
 	if err != nil {
 		if errors.Is(err, membership.ErrNotFound) {
 			// The requester membership is gone: collapse to "not found".
-			return nil, authority.Member{}, ErrPermissionRequestNotFound
+			return nil, nil, authority.Member{}, ErrPermissionRequestNotFound
 		}
-		return nil, authority.Member{}, err
+		return req, nil, authority.Member{}, err
 	}
-	return req, requester, nil
+	return req, m, requester, nil
+}
+
+// eligibleToDecide is the gate in front of every approval and denial: a caller
+// who is not the requester and may not even deny the request is told it does
+// not exist (404), exactly like the read route, so the response is no oracle
+// for the request or for relative rank. The requester themself keeps the
+// self-target answer. A requester whose roles do not load (a 409 for those who
+// could decide) is a 404 for everyone else.
+func eligibleToDecide(actor authority.Actor, tenantID tenant.ID, req *permissionrequest.Request, requester authority.Member, loadErr error) error {
+	if req != nil && req.RequesterMembershipID() == actor.MembershipID() {
+		return authority.ErrSelfTarget
+	}
+	if errors.Is(loadErr, ErrMemberRolesInconsistent) {
+		if actor.MayDecideAny(tenantID) {
+			return loadErr
+		}
+		return ErrPermissionRequestNotFound
+	}
+	if loadErr != nil {
+		return loadErr
+	}
+	if actor.MayDeny(requester) != nil {
+		return ErrPermissionRequestNotFound
+	}
+	return nil
 }
 
 // Handle approves the request + grants the time-bound permission. Check
-// order: existence and tenant (404) -> authority (403) -> state and
-// requestability (409 / 422) -> requester still active (409).
+// order: existence and tenant (404) -> eligibility to decide at all (404 for a
+// caller who may not even deny it) -> authority over this permission (403) ->
+// state and requestability (409 / 422) -> requester still active (409). The
+// grant ends no later than the approver's own grant when the approver holds the
+// permission only through a time-bound override.
 func (h ApprovePermissionRequestHandler) Handle(ctx context.Context, cmd ApprovePermissionRequestCommand) error {
 	if cmd.TenantID.IsZero() {
 		return errors.New("approve_permission_request: tenant id required")
@@ -290,35 +321,24 @@ func (h ApprovePermissionRequestHandler) Handle(ctx context.Context, cmd Approve
 	if !cmd.Actor.Valid() {
 		return authority.ErrNoAuthority
 	}
+	if cmd.Actor.IsImpersonation() {
+		// About the session, not the request, so it is answered before anything is
+		// read and tells a session nothing about which requests exist.
+		return authority.ErrImpersonationNotAllowed
+	}
 	now := h.w.now()
 	err := h.w.locked(ctx, cmd.TenantID, cmd.Actor, now, func(ctx context.Context, actor authority.Actor) error {
-		req, requester, err := h.w.loadForDecision(ctx, h.requests, cmd.TenantID, cmd.RequestID, now)
+		req, requesterM, requester, err := h.w.loadForDecision(ctx, h.requests, cmd.TenantID, cmd.RequestID, now)
+		if err != nil && req == nil {
+			return err
+		}
+		expiresAt, err := authorizeApproval(actor, cmd.TenantID, req, requesterM, requester, err, now)
 		if err != nil {
 			return err
 		}
 		perm := req.Permission()
-		if permission.IsRequestable(perm.Name()) {
-			err = actor.MayApprove(requester, perm.Name())
-		} else {
-			// A stored row from before requestability was enforced: eligibility to
-			// decide at all is still the policy's call (the 422 below is for those
-			// who may), and the row can only be denied or cancelled.
-			err = actor.MayDeny(requester)
-		}
-		if err != nil {
-			return err
-		}
-		expiresAt := now.Add(time.Duration(req.DurationDays()) * 24 * time.Hour)
-		// A name on the requester's REVOKED list is a deliberate "this member must
-		// not have it": approving it is an un-revoke and needs the authority to
-		// change their overrides (act on the member, hold the name under the
-		// ceiling rules) on top of the approval rule. Still an authority decision,
-		// so it precedes the state checks.
-		if permission.IsRequestable(perm.Name()) && slices.Contains(requester.Overrides().Revoked, perm.Name()) {
-			if err := mayUnrevoke(actor, requester, perm, expiresAt); err != nil {
-				return err
-			}
-		}
+		// A stored row from before requestability was enforced is decided by the
+		// eligibility above and can only be denied or cancelled (422 below).
 		if req.State() != permissionrequest.StatePending {
 			return ErrPermissionRequestNotPending
 		}
@@ -334,11 +354,10 @@ func (h ApprovePermissionRequestHandler) Handle(ctx context.Context, cmd Approve
 		}); err != nil {
 			return err
 		}
-		granted, revoked, err := approvedOverrides(requester, perm, expiresAt)
-		if err != nil {
-			return err
-		}
+		// Written on the row as it is NOW (locked): only the approved name changes,
+		// everything else, expired history included, is written back as it was.
 		return h.w.facts.memberships.UpdateByID(ctx, cmd.TenantID, req.RequesterMembershipID(), func(m *membership.Membership) (bool, error) {
+			granted, revoked := approvedOverrides(m.GrantedPermissions(), m.RevokedPermissions(), perm, expiresAt)
 			if err := m.ReplacePermissionOverrides(granted, revoked, now); err != nil {
 				return false, err
 			}
@@ -358,60 +377,82 @@ func (h ApprovePermissionRequestHandler) Handle(ctx context.Context, cmd Approve
 	return fmt.Errorf("approve_permission_request: %w", err)
 }
 
-// mayUnrevoke decides the un-revoke an approval of a revoked name amounts to:
-// the override state approvedOverrides would write, put to
-// [authority.Actor.MayChangeOverrides] exactly like an overrides replace.
-func mayUnrevoke(actor authority.Actor, requester authority.Member, perm *permission.Permission, expiresAt time.Time) error {
-	granted, revoked, err := approvedOverrides(requester, perm, expiresAt)
-	if err != nil {
-		return err
+// authorizeApproval is the authority phase of an approval, before any state is
+// looked at: eligibility to decide at all (404), then authority over this
+// permission (403), then the expiry the approval may have (the stored duration,
+// capped at the approver's own grant), then the un-revoke rule when the name is
+// on the requester's revoked list. It returns the instant the grant ends.
+func authorizeApproval(actor authority.Actor, tenantID tenant.ID, req *permissionrequest.Request, requesterM *membership.Membership,
+	requester authority.Member, loadErr error, now time.Time) (time.Time, error) {
+	if err := eligibleToDecide(actor, tenantID, req, requester, loadErr); err != nil {
+		return time.Time{}, err
 	}
+	perm := req.Permission()
+	expiresAt := now.Add(time.Duration(req.DurationDays()) * 24 * time.Hour)
+	if !permission.IsRequestable(perm.Name()) {
+		return expiresAt, nil // a stored legacy row: eligible to decide, only deny or cancel (422 later)
+	}
+	if err := actor.MayApprove(requester, perm.Name()); err != nil {
+		return time.Time{}, err
+	}
+	expiresAt = actor.CapApprovalExpiry(requester, perm.Name(), expiresAt)
+	// A name on the requester's REVOKED list is a deliberate "this member must
+	// not have it": approving it is an un-revoke and needs the authority to
+	// change their overrides (Admin tier or above, hold the name under the
+	// ceiling rules) on top of the approval rule. Still an authority decision,
+	// so it precedes the state checks.
+	if slices.Contains(requester.Overrides().Revoked, perm.Name()) {
+		if err := mayUnrevoke(actor, requester, requesterM, perm, expiresAt, now); err != nil {
+			return time.Time{}, err
+		}
+	}
+	return expiresAt, nil
+}
+
+// mayUnrevoke decides the un-revoke an approval of a revoked name amounts to:
+// the override state approvedOverrides would write (live entries only, the way
+// the policy sees a member), put to [authority.Actor.MayChangeOverrides] exactly
+// like an overrides replace.
+func mayUnrevoke(actor authority.Actor, requester authority.Member, requesterM *membership.Membership, perm *permission.Permission, expiresAt, now time.Time) error {
+	granted, revoked := approvedOverrides(requesterM.GrantedPermissions(), requesterM.RevokedPermissions(), perm, expiresAt)
 	after := authority.Overrides{Granted: make([]authority.Override, 0, len(granted)), Revoked: authority.PermissionNames(revoked)}
 	for _, g := range granted {
-		after.Granted = append(after.Granted, authority.Override{Name: g.Permission.Name(), ExpiresAt: g.ExpiresAt})
+		if g.ExpiresAt.IsZero() || now.Before(g.ExpiresAt) {
+			after.Granted = append(after.Granted, authority.Override{Name: g.Permission.Name(), ExpiresAt: g.ExpiresAt})
+		}
 	}
 	return actor.MayChangeOverrides(requester, after)
 }
 
 // approvedOverrides is the requester's override state after the approval, as
-// the exact input of Membership.ReplacePermissionOverrides: every still-live
-// grant keeps its expiry, the approved permission is added (a permanent grant
-// stays permanent, a timed one is extended to the later expiry, never
-// shortened), and the permission leaves the revoked list (a grant overrides an
-// earlier override-revocation, as it always did).
-func approvedOverrides(requester authority.Member, perm *permission.Permission, expiresAt time.Time) ([]membership.GrantedOverride, []*permission.Permission, error) {
-	cur := requester.Overrides()
-	granted := make([]membership.GrantedOverride, 0, len(cur.Granted)+1)
+// the exact input of Membership.ReplacePermissionOverrides, built from the rows
+// as they are stored: every grant keeps its row and expiry (expired ones too, so
+// someone else's approval does not erase history), the approved permission is
+// added (a permanent grant stays permanent, a timed one is extended to the later
+// expiry, never shortened), and the permission leaves the revoked list (a grant
+// overrides an earlier override-revocation, as it always did).
+func approvedOverrides(current []membership.GrantedOverride, currentRevoked []*permission.Permission, perm *permission.Permission, expiresAt time.Time) ([]membership.GrantedOverride, []*permission.Permission) {
+	granted := make([]membership.GrantedOverride, 0, len(current)+1)
 	have := false
-	for _, g := range cur.Granted {
-		p, err := permission.TryFromConstant(g.Name)
-		if err != nil {
-			return nil, nil, fmt.Errorf("stored grant %q: %w", g.Name, err)
-		}
-		exp := g.ExpiresAt
-		if g.Name == perm.Name() {
+	for _, g := range current {
+		if g.Permission != nil && g.Permission.Name() == perm.Name() {
 			have = true
-			if !exp.IsZero() && exp.Before(expiresAt) {
-				exp = expiresAt
+			if !g.ExpiresAt.IsZero() && g.ExpiresAt.Before(expiresAt) {
+				g.ExpiresAt = expiresAt
 			}
 		}
-		granted = append(granted, membership.GrantedOverride{Permission: p, ExpiresAt: exp})
+		granted = append(granted, g)
 	}
 	if !have {
 		granted = append(granted, membership.GrantedOverride{Permission: perm, ExpiresAt: expiresAt})
 	}
-	revoked := make([]*permission.Permission, 0, len(cur.Revoked))
-	for _, n := range cur.Revoked {
-		if n == perm.Name() {
-			continue
+	revoked := make([]*permission.Permission, 0, len(currentRevoked))
+	for _, r := range currentRevoked {
+		if r != nil && r.Name() != perm.Name() {
+			revoked = append(revoked, r)
 		}
-		p, err := permission.TryFromConstant(n)
-		if err != nil {
-			return nil, nil, fmt.Errorf("stored revocation %q: %w", n, err)
-		}
-		revoked = append(revoked, p)
 	}
-	return granted, revoked, nil
+	return granted, revoked
 }
 
 // ----- DenyPermissionRequest -----------------------------------------------
@@ -452,7 +493,8 @@ func NewDenyPermissionRequestHandler(
 }
 
 // Handle rejects the request. Same facts and check order as Approve, decided by
-// [authority.Actor.MayDeny] (eligibility without "holds the permission").
+// [authority.Actor.MayDeny] (eligibility without "holds the permission"); a
+// caller who may not deny it is told it does not exist.
 func (h DenyPermissionRequestHandler) Handle(ctx context.Context, cmd DenyPermissionRequestCommand) error {
 	if cmd.TenantID.IsZero() {
 		return errors.New("deny_permission_request: tenant id required")
@@ -463,13 +505,16 @@ func (h DenyPermissionRequestHandler) Handle(ctx context.Context, cmd DenyPermis
 	if !cmd.Actor.Valid() {
 		return authority.ErrNoAuthority
 	}
+	if cmd.Actor.IsImpersonation() {
+		return authority.ErrImpersonationNotAllowed
+	}
 	now := h.w.now()
 	err := h.w.locked(ctx, cmd.TenantID, cmd.Actor, now, func(ctx context.Context, actor authority.Actor) error {
-		req, requester, err := h.w.loadForDecision(ctx, h.requests, cmd.TenantID, cmd.RequestID, now)
-		if err != nil {
+		req, _, requester, err := h.w.loadForDecision(ctx, h.requests, cmd.TenantID, cmd.RequestID, now)
+		if err != nil && req == nil {
 			return err
 		}
-		if err := actor.MayDeny(requester); err != nil {
+		if err := eligibleToDecide(actor, cmd.TenantID, req, requester, err); err != nil {
 			return err
 		}
 		if req.State() != permissionrequest.StatePending {

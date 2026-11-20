@@ -158,6 +158,11 @@ func (c tallyMembers) ListForTenant(ctx context.Context, tid tenant.ID) ([]*memb
 	return c.Repository.ListForTenant(ctx, tid)
 }
 
+func (c tallyMembers) GetByIDs(ctx context.Context, tid tenant.ID, ids []membership.ID) ([]*membership.Membership, error) {
+	c.n["members.GetByIDs"]++
+	return c.Repository.GetByIDs(ctx, tid, ids)
+}
+
 func (c tallyMembers) GetByID(ctx context.Context, tid tenant.ID, id membership.ID) (*membership.Membership, error) {
 	c.n["members.GetByID"]++
 	return c.Repository.GetByID(ctx, tid, id)

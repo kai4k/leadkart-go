@@ -57,6 +57,9 @@ func (f *fakeMembershipRepo) GetActiveForPerson(context.Context, person.ID) (*me
 func (f *fakeMembershipRepo) ListForTenant(context.Context, tenant.ID) ([]*membership.Membership, error) {
 	return nil, errors.New("fake: ListForTenant unused")
 }
+func (f *fakeMembershipRepo) GetByIDs(context.Context, tenant.ID, []membership.ID) ([]*membership.Membership, error) {
+	return nil, errors.New("fake: GetByIDs unused")
+}
 func (f *fakeMembershipRepo) ListHoldingRole(context.Context, tenant.ID, role.ID) ([]*membership.Membership, error) {
 	return nil, errors.New("fake: ListHoldingRole unused")
 }

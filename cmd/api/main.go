@@ -699,7 +699,7 @@ func buildIdentityApp(pool *pgxpool.Pool, hybridCache *cache.HybridCache, cfg co
 				CancelPermissionRequest:    command.NewCancelPermissionRequestHandler(permissionRequests, now),
 
 				AuthorizePermissionRequestView:  command.NewAuthorizePermissionRequestViewHandler(permissionRequests, memberships, roles, persons, now),
-				ListDecidablePermissionRequests: command.NewListDecidablePermissionRequestsHandler(permissionRequests, memberships, roles, persons, now),
+				ListDecidablePermissionRequests: command.NewListDecidablePermissionRequestsHandler(tx, permissionRequests, memberships, roles, persons, now),
 			},
 			Queries: app.Queries{
 				ListSessions: query.NewListSessionsHandler(families),

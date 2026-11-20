@@ -11,6 +11,7 @@ package authority
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/permission"
@@ -41,6 +42,10 @@ type Actor struct {
 	superUser        bool
 	platformOperator bool
 	impersonation    bool
+	// holdUntil is, for a permission the actor holds ONLY through a time-bound
+	// override, when that override ends. Set by NarrowedBy from the fresh read;
+	// never present on a token-only actor.
+	holdUntil map[string]time.Time
 }
 
 // NewActor validates in. Both ids are canonicalised (a spelling that does not
@@ -161,7 +166,11 @@ func (a Actor) NeedsFreshFacts(tenantID tenant.ID) bool {
 // or cannot act (inactive membership, or a person who is suspended, locked,
 // anonymised or deactivated). Super-user, platform-operator and impersonation
 // flags are carried over unchanged; they are not facts of the membership.
-func (a Actor) NarrowedBy(fresh Member, freshEffective []string) Actor {
+//
+// freshViaRoles is the union of the permissions of the member's live roles; with
+// the member's live overrides it tells which permissions the member holds only
+// through a time-bound grant (recorded for [Actor.CapApprovalExpiry]).
+func (a Actor) NarrowedBy(fresh Member, freshEffective, freshViaRoles []string) Actor {
 	if !a.valid || !fresh.valid || !fresh.active || fresh.id != a.membershipID || !sameTenant(fresh.tenantID, a.tenantID) {
 		return Actor{}
 	}
@@ -172,6 +181,47 @@ func (a Actor) NarrowedBy(fresh Member, freshEffective []string) Actor {
 	for n := range a.effective {
 		if _, ok := have[n]; ok {
 			out.effective[n] = struct{}{}
+		}
+	}
+	out.holdUntil = timeBoundHoldings(fresh, out.effective, effectiveSet(freshViaRoles))
+	return out
+}
+
+// timeBoundHoldings: for every permission in held that the member does not get
+// from a role or a permanent grant, the latest time-bound grant that confers it
+// (a timed tenant.admin grant confers every name it implies until it ends).
+func timeBoundHoldings(fresh Member, held, viaRoles map[string]struct{}) map[string]time.Time {
+	permanent := make(map[string]struct{})
+	timed := make(map[string]time.Time)
+	for _, g := range fresh.overrides.Granted {
+		if g.ExpiresAt.IsZero() {
+			permanent[g.Name] = struct{}{}
+		} else if g.ExpiresAt.After(timed[g.Name]) {
+			timed[g.Name] = g.ExpiresAt
+		}
+	}
+	if _, ok := permanent[tenantAdminName()]; ok {
+		for n := range effectiveSet([]string{tenantAdminName()}) {
+			permanent[n] = struct{}{}
+		}
+	}
+	out := make(map[string]time.Time)
+	set := func(n string, until time.Time) {
+		_, byRole := viaRoles[n]
+		_, always := permanent[n]
+		if _, ok := held[n]; !ok || byRole || always {
+			return
+		}
+		if cur, ok := out[n]; !ok || until.After(cur) {
+			out[n] = until
+		}
+	}
+	for n, until := range timed {
+		set(n, until)
+	}
+	if until, ok := timed[tenantAdminName()]; ok {
+		for n := range effectiveSet([]string{tenantAdminName()}) {
+			set(n, until)
 		}
 	}
 	return out

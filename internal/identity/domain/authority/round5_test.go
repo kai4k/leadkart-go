@@ -3,11 +3,13 @@ package authority_test
 import (
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/leadkart/leadkart-go/internal/identity/domain/authority"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/permission"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/role"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
 
 // r5World is the cast of the hierarchy round 5 rules: a custom level-30 role C
@@ -247,5 +249,131 @@ func TestMayReactivate_OwnersFromOutsideNeedTheOwnershipPermission(t *testing.T)
 	}
 	for _, m := range mismatches(cases) {
 		t.Error(m)
+	}
+}
+
+// TestApprove_AdminMustHoldList pins both sides of every name an Admin-tier
+// approver may approve only while holding it (hierarchy round 5 added the last
+// nine); a day-to-day name stays approvable without holding it.
+func TestApprove_AdminMustHoldList(t *testing.T) {
+	t.Parallel()
+	p := permission.IdentityPermissions
+	adminR := mkRole(2, tA, role.SystemRoles.Tenant.Administrator, false, 10, false)
+	userR := mkRole(5, tA, role.SystemRoles.Tenant.SalesExecutive, false, 50, false)
+	requester := mkMember(t, 18, tA, true, "", userR)
+	admin := mkMember(t, 13, tA, true, "", adminR)
+	mustHold := []string{
+		p.Users.Create, p.Users.Update, p.Users.UpdatePermissions, p.Users.Deactivate, p.Users.Reactivate, p.Users.Unlock,
+		p.Roles.Create, p.Roles.Update, p.Roles.Delete, p.Roles.Assign, p.Roles.Revoke, p.Roles.Approve,
+		p.Tenants.Update, p.Tenants.UpdateSettings, p.PlatformMarketplace.Purchase, p.Orders.Payments.Record,
+		p.Meta.RequestPermissionElevation, p.Users.View, p.Roles.View, p.Tenants.View,
+		p.Crm.Leads.ReadAll, p.Tasks.WorkItems.ReadAll, p.Orders.Payments.Read, p.Orders.Invoices.Read, p.PlatformLeadCredits.Read,
+	}
+	var cases []decision
+	bare := actorOf(t, admin, authority.RankAdmin, p.Crm.Leads.Read)
+	for _, name := range mustHold {
+		holder := actorOf(t, admin, authority.RankAdmin, name)
+		cases = append(cases,
+			decision{"an admin who holds " + name, holder.MayApprove(requester, name), nil},
+			decision{"an admin who does not hold " + name, bare.MayApprove(requester, name), authority.ErrGrantExceedsAuthority},
+		)
+	}
+	for _, name := range []string{p.Crm.Leads.Assign, p.Tasks.WorkItems.Reassign, p.Inventory.Stock.Read} {
+		cases = append(cases, decision{"an admin approves the day-to-day " + name + " without holding it", bare.MayApprove(requester, name), nil})
+	}
+	for _, m := range mismatches(cases) {
+		t.Error(m)
+	}
+}
+
+// TestCapApprovalExpiry: an approval never outlives the approver's own grant.
+func TestCapApprovalExpiry(t *testing.T) {
+	t.Parallel()
+	p := permission.IdentityPermissions
+	x := p.Tasks.WorkItems.Reassign
+	mgrR := mkRole(3, tA, role.SystemRoles.Tenant.SalesManager, false, 20, false, p.Roles.Approve)
+	mgrRoleHoldsX := mkRole(4, tA, "Mgr with X", false, 20, false, p.Roles.Approve, x)
+	adminR := mkRole(2, tA, role.SystemRoles.Tenant.Administrator, false, 10, false)
+	userR := mkRole(5, tA, role.SystemRoles.Tenant.SalesExecutive, false, 50, false)
+	req := mkMember(t, 18, tA, true, "", userR)
+	soon, later := t0.Add(24*time.Hour), t0.Add(90*24*time.Hour)
+	timed := func(name string, at time.Time) membership.GrantedOverride {
+		return membership.GrantedOverride{Permission: permission.FromConstant(name), ExpiresAt: at}
+	}
+	narrow := func(n int, rank authority.Rank, roles []*role.Role, granted []membership.GrantedOverride, viaRoles []string, effective ...string) authority.Actor {
+		fresh := mkMemberOv(t, n, tA, granted, nil, roles...)
+		token := mkActor(t, authority.ActorInput{MembershipID: fresh.ID(), TenantID: tA, Rank: rk(rank), EffectivePermissions: effective})
+		a := token.NarrowedBy(fresh, effective, viaRoles)
+		if !a.Valid() {
+			t.Fatal("narrowed actor invalid")
+		}
+		return a
+	}
+	mgrTimed := narrow(15, authority.RankManager, []*role.Role{mgrR}, []membership.GrantedOverride{timed(x, soon)}, []string{p.Roles.Approve}, p.Roles.Approve, x)
+	mgrRole := narrow(16, authority.RankManager, []*role.Role{mgrRoleHoldsX}, nil, []string{p.Roles.Approve, x}, p.Roles.Approve, x)
+	mgrRoleAndTimed := narrow(20, authority.RankManager, []*role.Role{mgrRoleHoldsX}, []membership.GrantedOverride{timed(x, soon)}, []string{p.Roles.Approve, x}, p.Roles.Approve, x)
+	mgrBoth := narrow(17, authority.RankManager, []*role.Role{mgrR}, []membership.GrantedOverride{timed(x, soon), {Permission: permission.FromConstant(x)}}, []string{p.Roles.Approve}, p.Roles.Approve, x)
+	adminTimedMustHold := narrow(13, authority.RankAdmin, []*role.Role{adminR}, []membership.GrantedOverride{timed(p.Users.Create, soon)}, nil, p.Users.Create)
+	adminTimedDayToDay := narrow(14, authority.RankAdmin, []*role.Role{adminR}, []membership.GrantedOverride{timed(x, soon)}, nil, x)
+	mgrTimedAdminKey := narrow(19, authority.RankManager, []*role.Role{mgrR}, []membership.GrantedOverride{timed(p.Meta.TenantAdmin, soon)}, []string{p.Roles.Approve}, p.Roles.Approve, p.Meta.TenantAdmin, x)
+	super := mkActor(t, authority.ActorInput{MembershipID: membership.ID(uid(90)), TenantID: tP, IsSuperUser: true})
+	reqB := mkMember(t, 28, tB, true, "", mkRole(25, tB, role.SystemRoles.Tenant.SalesExecutive, false, 50, false))
+
+	cases := []struct {
+		name string
+		got  time.Time
+		want time.Time
+	}{
+		{"manager holding X only through a timed override is capped", mgrTimed.CapApprovalExpiry(req, x, later), soon},
+		{"an approval shorter than the approver's grant is untouched", mgrTimed.CapApprovalExpiry(req, x, soon.Add(-time.Hour)), soon.Add(-time.Hour)},
+		{"manager holding X through a role is not capped", mgrRole.CapApprovalExpiry(req, x, later), later},
+		{"manager holding X through a role AND a timed override is not capped", mgrRoleAndTimed.CapApprovalExpiry(req, x, later), later},
+		{"manager with a permanent grant besides the timed one is not capped", mgrBoth.CapApprovalExpiry(req, x, later), later},
+		{"admin approving a must-hold name held only by a timed grant is capped", adminTimedMustHold.CapApprovalExpiry(req, p.Users.Create, later), soon},
+		{"admin approving a day-to-day name needs no holding, so no cap", adminTimedDayToDay.CapApprovalExpiry(req, x, later), later},
+		{"a timed tenant.admin grant caps every name it implies", mgrTimedAdminKey.CapApprovalExpiry(req, x, later), soon},
+		{"super user is never capped", super.CapApprovalExpiry(reqB, x, later), later},
+		{"zero actor returns the wanted time", authority.Actor{}.CapApprovalExpiry(req, x, later), later},
+	}
+	for _, c := range cases {
+		if !c.got.Equal(c.want) {
+			t.Errorf("%s: %v, want %v", c.name, c.got, c.want)
+		}
+	}
+}
+
+func TestMayDecideAny(t *testing.T) {
+	t.Parallel()
+	p := permission.IdentityPermissions
+	ownerR := mkRole(1, tA, role.SystemRoles.Tenant.CompanyOwner, true, 0, false, p.Meta.TenantAdmin)
+	mgrR := mkRole(3, tA, role.SystemRoles.Tenant.SalesManager, false, 20, false)
+	userR := mkRole(5, tA, role.SystemRoles.Tenant.SalesExecutive, false, 50, false)
+	owner := actorOf(t, mkMember(t, 11, tA, true, "", ownerR), authority.RankOwner, adminEffective()...)
+	admin := actorOf(t, mkMember(t, 13, tA, true, "", mkRole(2, tA, "Administrator", false, 10, false)), authority.RankAdmin)
+	mgrApprover := actorOf(t, mkMember(t, 15, tA, true, "", mgrR), authority.RankManager, p.Roles.Approve)
+	mgrPlain := actorOf(t, mkMember(t, 16, tA, true, "", mgrR), authority.RankManager, p.Crm.Leads.Read)
+	user := actorOf(t, mkMember(t, 18, tA, true, "", userR), authority.RankUser, p.Crm.Leads.Read)
+	super := mkActor(t, authority.ActorInput{MembershipID: membership.ID(uid(90)), TenantID: tP, IsSuperUser: true})
+	op := mkActor(t, authority.ActorInput{MembershipID: membership.ID(uid(91)), TenantID: tP, Rank: rk(authority.RankNone), IsPlatformOperator: true, EffectivePermissions: []string{p.Platform.UsersManage}})
+	imp := mkActor(t, authority.ActorInput{MembershipID: membership.ID(uid(93)), TenantID: tA, Rank: rk(authority.RankOwner), IsImpersonation: true, EffectivePermissions: adminEffective()})
+	for name, c := range map[string]struct {
+		a    authority.Actor
+		in   tenant.ID
+		want bool
+	}{
+		"owner":                                {owner, tA, true},
+		"admin without any approve permission": {admin, tA, true},
+		"manager with roles.approve":           {mgrApprover, tA, true},
+		"manager without roles.approve":        {mgrPlain, tA, false},
+		"user without roles.approve":           {user, tA, false},
+		"owner asked about another tenant":     {owner, tB, false},
+		"super user anywhere":                  {super, tB, true},
+		"exempt operator in another tenant":    {op, tA, true},
+		"impersonation session":                {imp, tA, false},
+		"zero actor":                           {authority.Actor{}, tA, false},
+	} {
+		if got := c.a.MayDecideAny(c.in); got != c.want {
+			t.Errorf("%s: MayDecideAny = %v, want %v", name, got, c.want)
+		}
 	}
 }

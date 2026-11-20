@@ -652,6 +652,10 @@ type PermissionRequestDto struct {
 	ExpiresAt             time.Time `json:"expires_at,omitzero"`
 	CreatedAt             time.Time `json:"created_at"`
 	UpdatedAt             time.Time `json:"updated_at"`
+	// CanApprove is present only on the approver queue (GET ...?role=approver):
+	// whether the caller may approve the request as asked. Every listed request
+	// may be denied; approve succeeds iff can_approve is true.
+	CanApprove *bool `json:"can_approve,omitzero" optional:"true"`
 }
 
 // ListPermissionRequestsResponse — paginated GET response. requests

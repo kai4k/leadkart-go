@@ -1629,6 +1629,11 @@ paths:
         (at most `page_size`, capped at 100); a page may therefore hold fewer items than `page_size`
         while `has_more` is true, and `next_cursor` continues after the last request examined.
         Keyset-paginated per ADR 0038.
+        Every item of the approver queue carries `can_approve`: whether APPROVING it as asked would
+        pass for the caller (the stored permission is requestable and within their authority, decided on
+        the same stored facts approve uses). Deny is allowed for every listed item. A caller who can decide
+        nothing (below the Admin tier and without `identity.roles.approve`) gets an empty page; a manager
+        below the Admin tier sees only the requests of members who report to them.
       parameters:
         - name: role
           in: query
@@ -1679,15 +1684,19 @@ paths:
         Decided by the authority policy (ADR 0069), never by the body: the requester's manager who
         holds `identity.roles.approve` AND the permission; or anyone of Administrator rank or above who
         strictly outranks the requester (an Administrator may approve any requestable permission
-        without holding it, except user/role management, tenant settings, marketplace purchase and
-        payment recording, which the Administrator must hold); or a super user / exempt operator
+        without holding it, except user/role management, tenant settings, marketplace purchase, payment and
+        invoice access, tenant-wide visibility (read-all, users, roles, tenants, lead credits) and the right to
+        request elevation, which the Administrator must hold); or a super user / exempt operator
         acting in ANOTHER tenant (in the platform tenant an operator follows rank like anyone else).
-        Never an impersonation session and never the requester. When the requested permission is on the
+        Never an impersonation session and never the requester. The approved grant ends no later than the
+        approver's own when the approver holds the permission only through a time-bound override. A caller who
+        is not the requester and may not even deny the request (not its manager with `identity.roles.approve`,
+        not senior enough) is answered 404, like a request that does not exist. When the requested permission is on the
         requester's REVOKED list the approval is an un-revoke and additionally needs the authority to change
         their overrides (act on the member and hold the permission itself): otherwise 403
         `grant_exceeds_authority`, the request stays pending.
 
-        Check order: unknown request (404) → authority (403, whatever the request's state) → state
+        Check order: unknown request, or a caller who may not decide it (404) → authority over this permission (403, whatever the request's state) → state
         (409 `permission_request_not_pending`) → requestability (422 `permission_not_requestable`: a
         stored request whose permission is not requestable, for example one submitted before that rule
         existed, stays pending; the approver can deny it and the requester can cancel it) → requester
@@ -1705,10 +1714,11 @@ paths:
         '204': { description: Approved + grant created }
         '403':
           description: |
-            `not_approver` (not the requester's manager, or lacks `identity.roles.approve`),
-            `insufficient_rank`, `grant_exceeds_authority` (the approver does not hold the permission, or an
-            Administrator lacks a must-hold one), `self_modification_forbidden` (own request),
-            `impersonation_not_allowed`, `forbidden`, or `tenant_scope_not_supported` (`X-Tenant-Id` selected a foreign tenant)
+            `grant_exceeds_authority` (the approver does not hold the permission, an Administrator lacks a
+            must-hold one, or the approval would lift a revoke without the Admin tier), `self_modification_forbidden`
+            (own request), `impersonation_not_allowed`, `forbidden` (no valid or no longer active acting member), or
+            `tenant_scope_not_supported` (`X-Tenant-Id` selected a foreign tenant). Callers who may not decide the
+            request at all get 404, not `not_approver` / `insufficient_rank`.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
@@ -1741,8 +1751,9 @@ paths:
         '204': { description: Denied }
         '403':
           description: |
-            `not_approver`, `insufficient_rank`, `self_modification_forbidden`, `impersonation_not_allowed`,
-            `forbidden`, or `tenant_scope_not_supported` (`X-Tenant-Id` selected a foreign tenant)
+            `self_modification_forbidden` (own request), `impersonation_not_allowed`, `forbidden`, or
+            `tenant_scope_not_supported` (`X-Tenant-Id` selected a foreign tenant). Callers who may not decide the
+            request get 404.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
@@ -4664,6 +4675,9 @@ components:
         expires_at:               { type: string, format: date-time, description: 'When the bounded grant expires. Set only after Approve.' }
         created_at:               { type: string, format: date-time }
         updated_at:               { type: string, format: date-time }
+        can_approve:
+          type: boolean
+          description: 'Present only on the approver queue (`role=approver`): whether approving this request as asked would pass for the caller. Approve succeeds iff true (barring a change since the list was read).'
 
     ListPermissionRequestsResponse:
       type: object

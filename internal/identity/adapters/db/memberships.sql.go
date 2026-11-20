@@ -297,6 +297,50 @@ func (q *Queries) ListActiveMembershipsInTenantPage(ctx context.Context, arg Lis
 	return items, nil
 }
 
+const listMembershipsByIDs = `-- name: ListMembershipsByIDs :many
+SELECT id, person_id, tenant_id, status, joined_at, left_at,
+       designation, department, status_message, reports_to,
+       created_by_membership_id
+FROM   identity.tenant_memberships
+WHERE  id = ANY($1::uuid[])
+ORDER  BY joined_at, id
+`
+
+// A batch read of memberships by id (RLS scopes them to the transaction's
+// tenant); an id with no row is simply absent. Powers the approver queue, which
+// projects each distinct requester once.
+func (q *Queries) ListMembershipsByIDs(ctx context.Context, dollar_1 []pgtype.UUID) ([]IdentityTenantMembership, error) {
+	rows, err := q.db.Query(ctx, listMembershipsByIDs, dollar_1)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []IdentityTenantMembership
+	for rows.Next() {
+		var i IdentityTenantMembership
+		if err := rows.Scan(
+			&i.ID,
+			&i.PersonID,
+			&i.TenantID,
+			&i.Status,
+			&i.JoinedAt,
+			&i.LeftAt,
+			&i.Designation,
+			&i.Department,
+			&i.StatusMessage,
+			&i.ReportsTo,
+			&i.CreatedByMembershipID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listMembershipsForPerson = `-- name: ListMembershipsForPerson :many
 SELECT id, person_id, tenant_id, status, joined_at, left_at,
        designation, department, status_message, reports_to,

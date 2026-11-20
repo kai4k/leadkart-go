@@ -128,15 +128,15 @@ func TestE2E_PermissionRequests_ApprovalDecidedByPolicy(t *testing.T) {
 		_, id := f.requestElevation(t, eTok, p.Tasks.WorkItems.Reassign)
 		r := w.decide(t, "approve", w.mgrTok, id)
 		// the Sales Manager outranks the executive, but is not their manager
-		f.wantForbidden(t, "unrelated manager approves", r, http.StatusForbidden, "not_approver")
+		f.wantForbidden(t, "unrelated manager approves", r, http.StatusNotFound, "permission_request_not_found")
 		r = w.decide(t, "deny", w.mgrTok, id)
-		f.wantForbidden(t, "unrelated manager denies", r, http.StatusForbidden, "not_approver")
+		f.wantForbidden(t, "unrelated manager denies", r, http.StatusNotFound, "permission_request_not_found")
 	})
 	// arch-test:serial — subtests share one fixture and one tenant.
 	t.Run("a peer cannot approve a peer's request", func(t *testing.T) {
 		_, id := f.requestElevation(t, w.tlTok, p.Tasks.WorkItems.Reassign)
 		r := w.decide(t, "approve", w.peerTk, id)
-		f.wantForbidden(t, "peer approves", r, http.StatusForbidden, "insufficient_rank")
+		f.wantForbidden(t, "peer approves", r, http.StatusNotFound, "permission_request_not_found")
 	})
 	// arch-test:serial — subtests share one fixture and one tenant.
 	t.Run("self approval is refused", func(t *testing.T) {
@@ -187,7 +187,7 @@ func TestE2E_PermissionRequests_ApprovalDecidedByPolicy(t *testing.T) {
 			t.Fatalf("deny: %d %s", r.status, r.body)
 		}
 		f.wantForbidden(t, "eligible approver, decided request", w.decide(t, "approve", w.tlTok, id), http.StatusConflict, "permission_request_not_pending")
-		f.wantForbidden(t, "stranger, decided request", w.decide(t, "approve", w.peerTk, id), http.StatusForbidden, "not_approver")
+		f.wantForbidden(t, "stranger, decided request", w.decide(t, "approve", w.peerTk, id), http.StatusNotFound, "permission_request_not_found")
 		missing := w.decide(t, "approve", w.tlTok, "01a1f625-2aff-792d-ba5e-4ecb47aeda77")
 		f.wantForbidden(t, "unknown request", missing, http.StatusNotFound, "permission_request_not_found")
 		f.wantForbidden(t, "stranger, unknown request", w.decide(t, "approve", w.peerTk, "01a1f625-2aff-792d-ba5e-4ecb47aeda77"), http.StatusNotFound, "permission_request_not_found")
@@ -254,8 +254,8 @@ func TestE2E_PermissionRequests_ApprovalDecidedByPolicy(t *testing.T) {
 			}
 		}
 		// everything in a queue is decidable: denying each listed request never answers 403
-		if r := w.decide(t, "deny", w.mgrTok, id); r.status != http.StatusForbidden {
-			t.Errorf("the unrelated manager denies it anyway: %d %s", r.status, r.body)
+		if r := w.decide(t, "deny", w.mgrTok, id); r.status != http.StatusNotFound {
+			t.Errorf("the unrelated manager denies it anyway: %d %s, want 404", r.status, r.body)
 		}
 	})
 	// arch-test:serial — subtests share one fixture and one tenant.
@@ -300,9 +300,9 @@ func TestE2E_PermissionRequests_PlatformTenantFollowsRank(t *testing.T) {
 	if id == "" {
 		t.Fatal("platform member could not submit")
 	}
-	f.wantForbidden(t, "read-only operator approves", f.approveRequest(t, viewOnly, id), http.StatusForbidden, "insufficient_rank")
+	f.wantForbidden(t, "read-only operator approves", f.approveRequest(t, viewOnly, id), http.StatusNotFound, "permission_request_not_found")
 	f.wantForbidden(t, "read-only operator denies", f.authedJSON(t, http.MethodPost, "/api/v1/permission-requests/"+id+"/deny", viewOnly,
-		ports.DenyPermissionRequestRequest{DecisionReason: "not mine"}), http.StatusForbidden, "insufficient_rank")
+		ports.DenyPermissionRequestRequest{DecisionReason: "not mine"}), http.StatusNotFound, "permission_request_not_found")
 	// the platform tenant's owner (rank 0) decides
 	if r := f.approveRequest(t, plat.AccessToken, id); r.status != http.StatusNoContent {
 		t.Errorf("platform owner approves: %d %s", r.status, r.body)

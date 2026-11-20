@@ -45,7 +45,14 @@ func newPRWorld(t *testing.T) *prWorld {
 	w.approve = command.NewApprovePermissionRequestHandler(fakeUoW{}, l, w.reqs, w.members, w.roles, p, awClock, func() uuid.UUID { return uuid.MustParse(awID(7000)) })
 	w.deny = command.NewDenyPermissionRequestHandler(fakeUoW{}, l, w.reqs, w.members, w.roles, p, awClock)
 	w.view = command.NewAuthorizePermissionRequestViewHandler(w.reqs, w.members, w.roles, p, awClock)
-	w.queue = command.NewListDecidablePermissionRequestsHandler(w.reqs, w.members, w.roles, p, awClock)
+	w.reqs.ManagerLookup(func(id membership.ID) membership.ID {
+		m, err := w.members.GetByID(t.Context(), awTenant, id)
+		if err != nil {
+			return ""
+		}
+		return m.ReportsTo()
+	})
+	w.queue = command.NewListDecidablePermissionRequestsHandler(fakeUoW{}, w.reqs, w.members, w.roles, p, awClock)
 	return w
 }
 
@@ -182,8 +189,8 @@ func TestApprove_ManagerNeedsApproveAndTheHeldPermission(t *testing.T) {
 	// without identity.roles.approve the Team Lead is not an approver at all
 	noApprove := actorAs(t, c.tl.ID(), authority.RankTeamLead, p.Crm.Leads.Read)
 	again := w.pending(t, c.exec, p.Crm.Leads.ReadAll, 0)
-	if err := w.approveAs(noApprove, again); !errors.Is(err, authority.ErrNotApprover) {
-		t.Errorf("manager without roles.approve: %v, want ErrNotApprover", err)
+	if err := w.approveAs(noApprove, again); !errors.Is(err, command.ErrPermissionRequestNotFound) {
+		t.Errorf("manager without roles.approve: %v, want ErrPermissionRequestNotFound (a caller who may not even deny it sees no request)", err)
 	}
 }
 
@@ -195,12 +202,12 @@ func TestApprove_WhoMay(t *testing.T) {
 	r := w.pending(t, c.exec, p.Crm.Leads.Read, 0)
 
 	mgrActor := actorAs(t, c.mgr.ID(), authority.RankManager, p.Roles.Approve, p.Crm.Leads.Read)
-	if err := w.approveAs(mgrActor, r); !errors.Is(err, authority.ErrNotApprover) {
-		t.Errorf("a manager who is not the requester's manager: %v, want ErrNotApprover", err)
+	if err := w.approveAs(mgrActor, r); !errors.Is(err, command.ErrPermissionRequestNotFound) {
+		t.Errorf("a manager who is not the requester's manager: %v, want ErrPermissionRequestNotFound", err)
 	}
 	peerTL := actorAs(t, w.member(t, w.teamLead).ID(), authority.RankTeamLead, p.Roles.Approve, p.Crm.Leads.Read)
-	if err := w.approveAs(peerTL, w.pending(t, c.tl, p.Crm.Leads.Read, 0)); !errors.Is(err, authority.ErrInsufficientRank) {
-		t.Errorf("approve a peer's request: %v, want ErrInsufficientRank", err)
+	if err := w.approveAs(peerTL, w.pending(t, c.tl, p.Crm.Leads.Read, 0)); !errors.Is(err, command.ErrPermissionRequestNotFound) {
+		t.Errorf("approve a peer's request: %v, want ErrPermissionRequestNotFound", err)
 	}
 	self := actorAs(t, c.exec.ID(), authority.RankUser, p.Roles.Approve, p.Crm.Leads.Read)
 	if err := w.approveAs(self, r); !errors.Is(err, authority.ErrSelfTarget) {
@@ -209,7 +216,7 @@ func TestApprove_WhoMay(t *testing.T) {
 	rank := authority.RankOwner.Int()
 	imp, _ := authority.NewActor(authority.ActorInput{MembershipID: c.mgr.ID(), TenantID: awTenant, Rank: &rank, IsImpersonation: true, EffectivePermissions: tenantAdminEffective()})
 	if err := w.approveAs(imp, r); !errors.Is(err, authority.ErrImpersonationNotAllowed) {
-		t.Errorf("approve during impersonation: %v, want ErrImpersonationNotAllowed", err)
+		t.Errorf("approve during impersonation: %v, want ErrImpersonationNotAllowed (about the session, answered before any read)", err)
 	}
 	// an Administrator without tenant.admin approves day-to-day work, never the authority-and-money set
 	admin := actorAs(t, c.admin.ID(), authority.RankAdmin, p.Crm.Leads.Read)
@@ -228,8 +235,8 @@ func TestApprove_WhoMay(t *testing.T) {
 	platRank := authority.RankNone.Int()
 	plat, _ := authority.NewActor(authority.ActorInput{MembershipID: w.member(t).ID(), TenantID: awTenant, Rank: &platRank,
 		IsPlatformOperator: true, EffectivePermissions: []string{p.Platform.TenantsView}})
-	if err := w.approveAs(plat, w.pending(t, c.other, p.Crm.Leads.Read, 0)); !errors.Is(err, authority.ErrInsufficientRank) {
-		t.Errorf("read-only operator in its own tenant: %v, want ErrInsufficientRank", err)
+	if err := w.approveAs(plat, w.pending(t, c.other, p.Crm.Leads.Read, 0)); !errors.Is(err, command.ErrPermissionRequestNotFound) {
+		t.Errorf("read-only operator in its own tenant: %v, want ErrPermissionRequestNotFound", err)
 	}
 }
 
@@ -249,8 +256,8 @@ func TestApprove_CheckOrderAuthorityBeforeState(t *testing.T) {
 	if err := w.approveAs(tl, r); !errors.Is(err, command.ErrPermissionRequestNotPending) {
 		t.Errorf("eligible approver, decided request: %v, want ErrPermissionRequestNotPending", err)
 	}
-	if err := w.approveAs(stranger, r); !errors.Is(err, authority.ErrInsufficientRank) && !errors.Is(err, authority.ErrNotApprover) {
-		t.Errorf("stranger, decided request: %v, want an authority refusal", err)
+	if err := w.approveAs(stranger, r); !errors.Is(err, command.ErrPermissionRequestNotFound) {
+		t.Errorf("stranger, decided request: %v, want ErrPermissionRequestNotFound", err)
 	}
 	if err := w.denyAs(stranger, r); errors.Is(err, command.ErrPermissionRequestNotPending) {
 		t.Errorf("stranger denies a decided request and learns its state: %v", err)
@@ -364,8 +371,9 @@ func TestApprove_KeepsExistingOverridesAndNeverShortensAGrant(t *testing.T) {
 	if g, _ := grantOf(exec, timed.Name()); !g.ExpiresAt.Equal(testNow.Add(7 * 24 * time.Hour)) {
 		t.Errorf("a 2-day grant approved for 7 days expires at %v, want now+7d", g.ExpiresAt)
 	}
-	if _, ok := grantOf(exec, p.Inventory.Stock.Read); ok {
-		t.Error("an expired grant was written back")
+	// Someone else's approval leaves the expired row exactly as it was (history is not lost).
+	if g, ok := grantOf(exec, p.Inventory.Stock.Read); !ok || !g.ExpiresAt.Equal(testNow.Add(-time.Hour)) {
+		t.Errorf("the expired grant after an approval = %+v (found %v), want it untouched", g, ok)
 	}
 	if g, ok := grantOf(exec, revoked.Name()); !ok || g.ExpiresAt.IsZero() {
 		t.Errorf("approved leads.read = %+v (%v), want a timed grant", g, ok)
@@ -384,8 +392,8 @@ func TestDeny_Authority(t *testing.T) {
 	// denying needs eligibility only, not the permission
 	tl := actorAs(t, c.tl.ID(), authority.RankTeamLead, p.Roles.Approve)
 	mgr := actorAs(t, c.mgr.ID(), authority.RankManager, p.Roles.Approve)
-	if err := w.denyAs(mgr, r); !errors.Is(err, authority.ErrNotApprover) {
-		t.Errorf("deny by a non-manager manager: %v, want ErrNotApprover", err)
+	if err := w.denyAs(mgr, r); !errors.Is(err, command.ErrPermissionRequestNotFound) {
+		t.Errorf("deny by a non-manager manager: %v, want ErrPermissionRequestNotFound", err)
 	}
 	if err := w.denyAs(tl, r); err != nil {
 		t.Fatalf("deny by the manager: %v", err)
@@ -449,7 +457,7 @@ func TestPermissionRequestVisibilityAndQueue(t *testing.T) {
 		}
 		out := map[permissionrequest.ID]bool{}
 		for _, it := range res.Page.Items {
-			out[it.ID()] = true
+			out[it.Request.ID()] = true
 		}
 		return out
 	}
@@ -468,7 +476,15 @@ func TestPermissionRequestVisibilityAndQueue(t *testing.T) {
 // distinct requester once however many requests that requester filed.
 type countingMembers struct {
 	*membershiptest.FakeRepository
-	gets int
+	gets    int
+	batches int
+	batched int
+}
+
+func (c *countingMembers) GetByIDs(ctx context.Context, tid tenant.ID, ids []membership.ID) ([]*membership.Membership, error) {
+	c.batches++
+	c.batched += len(ids)
+	return c.FakeRepository.GetByIDs(ctx, tid, ids)
 }
 
 func (c *countingMembers) GetByID(ctx context.Context, tid tenant.ID, id membership.ID) (*membership.Membership, error) {
@@ -482,7 +498,7 @@ func TestApproverQueue_LoadsEachRequesterOnce(t *testing.T) {
 	w := newPRWorld(t)
 	c := w.cast(t)
 	cm := &countingMembers{FakeRepository: w.members}
-	queue := command.NewListDecidablePermissionRequestsHandler(w.reqs, cm, w.roles, anyPersons{}, awClock)
+	queue := command.NewListDecidablePermissionRequestsHandler(fakeUoW{}, w.reqs, cm, w.roles, anyPersons{}, awClock)
 	// one requester, many requests; a second requester with one
 	for _, perm := range []string{p.Crm.Leads.Read, p.Crm.Leads.ReadAll, p.Crm.Leads.Assign, p.Inventory.Stock.Read, p.Orders.Orders.Read} {
 		w.pending(t, c.exec, perm, 0)
@@ -493,8 +509,8 @@ func TestApproverQueue_LoadsEachRequesterOnce(t *testing.T) {
 	if err != nil || len(res.Page.Items) != 6 {
 		t.Fatalf("queue = %d items, %v; want 6", len(res.Page.Items), err)
 	}
-	if cm.gets != 2 {
-		t.Errorf("membership loads = %d, want 2 (one per distinct requester)", cm.gets)
+	if cm.gets != 1 || cm.batches != 1 || cm.batched != 2 {
+		t.Errorf("membership reads = %d single + %d batch of %d ids, want the caller once and ONE batch of the 2 distinct requesters", cm.gets, cm.batches, cm.batched)
 	}
 	if res.Page.HasMore {
 		t.Error("HasMore with a window larger than the queue")
