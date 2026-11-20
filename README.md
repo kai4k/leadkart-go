@@ -69,6 +69,9 @@ task run
 # listener at :9090 — never on the public listener (audit-checklist.md §12).
 ```
 
+The web BFF (leadkart-web) against the REAL backend, with seeded operator, owner, manager and user
+logins, trusted proxies, relaxed Playwright limits and the worker: [docs/LOCAL_BACKEND.md](docs/LOCAL_BACKEND.md).
+
 ## Repo layout
 
 ```
