@@ -129,6 +129,11 @@ directory is in the repository at the release tag, the `migrate` image has no sh
     `invalid_credentials`), a refresh of an older session answers 401 `refresh_rejected`
     with reason `tenant_suspended`; reactivate (`POST /api/v1/tenants/{id}/activate`) and
     the login works again. Access tokens already issued live up to 600 s.
+    Then mark the throwaway tenant for deletion (`POST /api/v1/tenants/{id}/mark-for-deletion`): the
+    right password now answers 403 `tenant_not_active` and an older session's refresh answers 401
+    `refresh_rejected` with reason `tenant_not_active`; restore it (`POST /api/v1/tenants/{id}/restore`)
+    and the login works again (owner ruling 2026-11-21: only an active company's members sign in).
+    Registering a tenant creates it ACTIVE, so its first admin signs in at once.
 14. **Verify a suspended person cannot sign in.** With a throwaway account: global-suspend
     it (`POST /api/v1/platform/persons/{id}/global-suspend`), then log in with the right
     password (expect 401 `invalid_credentials`, the same answer as a wrong password),
@@ -142,6 +147,8 @@ These are known, plain-language limits of this release. None is a bug to fix bef
 - **Grace-window takeover from behind the victim's NAT.** The refresh grace replay (30 s, at most 3 times) is bound to the client ADDRESS, so someone who holds a just-rotated token AND sits behind the same public address as its owner (one office, one carrier NAT) can still replay it inside the window.
 - **Sessions last up to 14 days** from login (the absolute lifetime), refreshed or not; the idle timeout (24 h, the owner's ruling of 2026-11-21) ends a session unused for that long sooner.
 - **On deploy, sessions older than 14 days end and flagged accounts must change their password.** The absolute lifetime counts from each family's creation, so every family created more than 14 days ago is refused at its next refresh (`session_expired`), and every person still flagged `must_change_password` is forced to change it at the next sign-in (owner decision (a) in ADR 0069).
+- **On deploy, every `pending` company becomes `active`.** Only an active company's members sign in (the owner's ruling of 2026-11-21), and registration created every company `pending` until now, so migration `20261121000002_identity_pending_tenants_active` activates them (one audit row each; `activated_at` is the deploy time). Without it every company registered before the deploy would be locked out. A company registered after the deploy is created active. A company in `pending_deletion` or `suspended` is left as it is: its members cannot sign in until an operator restores or reactivates it.
+- **Session values of this release** (owner rulings of 2026-11-21): idle timeout 24 h (`LEADKART_REFRESH__SLIDING_TTL`, was 2 h), absolute lifetime 14 days (`LEADKART_REFRESH__ABSOLUTE_TTL`), default password policy 8 characters with upper, lower, digit and symbol (was 12; tenants that stored their own policy keep it).
 - **A security stamp can be 30 s stale.** An old access token dies at once when Redis is reachable (the api evicts the cached stamp after the commit); with the cache unreachable it lives up to 30 s.
 - **Rotating the JWT signing key signs some people out** (item 8: the grace successor derives from it), and access tokens issued before a **tenant suspension live up to 600 s**.
 - **Someone who holds a CONSUMED refresh token can force a sign-out.** Presenting a consumed token revokes the whole family (reuse detection): a stolen old token can end the owner's session. That is the price of detecting theft.
