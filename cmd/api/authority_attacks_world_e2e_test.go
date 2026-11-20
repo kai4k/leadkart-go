@@ -97,6 +97,10 @@ type attackWorld struct {
 	roles  map[string]string
 	who    map[string]*atkPersona
 	gone   createdMember // a deactivated Sales Executive
+	// goneOwner is a deactivated Company Owner (the target of reactivation attacks).
+	goneOwner createdMember
+	// watched are permission-request ids whose state the snapshot records.
+	watched []string
 }
 
 // newAttackWorld builds the tenant, the personas, the reporting lines and the
@@ -142,6 +146,11 @@ func newAttackWorld(t *testing.T) *attackWorld {
 	f.assignRole(t, ownTok, w.gone.membershipID, w.roles[rr.SalesExecutive])
 	if r := f.authedJSON(t, http.MethodPost, "/api/v1/users/"+w.gone.membershipID+"/deactivate", ownTok, ports.DeactivateUserRequest{Reason: "world setup"}); r.status != http.StatusNoContent {
 		t.Fatalf("deactivate gone: %d %s", r.status, r.body)
+	}
+	w.goneOwner = f.createMember(t, w.owner, "goneowner")
+	f.assignRole(t, ownTok, w.goneOwner.membershipID, w.roles[rr.CompanyOwner])
+	if r := f.authedJSON(t, http.MethodPost, "/api/v1/users/"+w.goneOwner.membershipID+"/deactivate", ownTok, ports.DeactivateUserRequest{Reason: "world setup"}); r.status != http.StatusNoContent {
+		t.Fatalf("deactivate goneOwner: %d %s", r.status, r.body)
 	}
 	w.vExec = f.createMember(t, w.victim, "vexec")
 	f.assignRole(t, w.victim.AccessToken, w.vExec.membershipID, f.roleIDByName(t, w.victim.AccessToken, rr.SalesExecutive))
@@ -236,6 +245,22 @@ func (w *attackWorld) snapshot(t *testing.T) string {
 			fmt.Fprintf(&b, "%s role %s %q lvl=%d parent=%s perms=%v\n", ten.name, rd.ID, rd.Name, rd.HierarchyLevel, rd.ParentRoleID, ps)
 		}
 	}
+	for _, id := range w.watched {
+		r := w.f.authedJSON(t, http.MethodGet, "/api/v1/permission-requests/"+id, w.owner.AccessToken, nil)
+		var d ports.PermissionRequestDto
+		if r.status != http.StatusOK || json.Unmarshal(r.body, &d) != nil {
+			t.Fatalf("snapshot request %s: %d %s", id, r.status, r.body)
+		}
+		fmt.Fprintf(&b, "request %s %s by %s %s decider=%s expires=%s\n", d.ID, d.Permission, d.RequesterMembershipID, d.State, d.ApproverMembershipID, d.ExpiresAt.UTC().Format(time.RFC3339))
+	}
+	q := w.f.authedJSON(t, http.MethodGet, "/api/v1/permission-requests?role=approver&page_size=100", w.owner.AccessToken, nil)
+	var ql ports.ListPermissionRequestsResponse
+	if q.status != http.StatusOK || json.Unmarshal(q.body, &ql) != nil {
+		t.Fatalf("snapshot queue: %d %s", q.status, q.body)
+	}
+	for _, d := range ql.Requests {
+		fmt.Fprintf(&b, "queued %s %s by %s %s\n", d.ID, d.Permission, d.RequesterMembershipID, d.State)
+	}
 	return b.String()
 }
 
@@ -260,6 +285,7 @@ type attack struct {
 	body   any
 	hdr    map[string]string
 	status int
+	alt    int    // a second acceptable status (0 = none)
 	code   string // "" skips the code check (the status is still checked)
 	// allowChange marks a row that is a control: the request is expected to succeed
 	// and the world to change, so the unchanged-state check is skipped.
@@ -279,9 +305,9 @@ func (w *attackWorld) assertRows(t *testing.T, rows []attack) {
 			}
 			before := w.snapshot(t)
 			r := w.f.doWithHeaders(t, a.method, a.path, tok, a.body, a.hdr)
-			if r.status != a.status {
+			if r.status != a.status && (a.alt == 0 || r.status != a.alt) {
 				t.Errorf("%s %s: %d %s, want %d %s", a.method, a.path, r.status, r.body, a.status, a.code)
-			} else if a.code != "" && decodeError(t, r.body).Error != a.code {
+			} else if !codeMatches(a.code, r.body) {
 				t.Errorf("%s %s: %d %s, want code %s", a.method, a.path, r.status, r.body, a.code)
 			}
 			if a.allowChange {
@@ -338,9 +364,9 @@ func (w *attackWorld) assertGrouped(t *testing.T, rows []attack) {
 				if testing.Verbose() {
 					t.Logf("[%s] %s %s -> %d %s", a.what, a.method, a.path, r.status, errCodeOf(r))
 				}
-				if r.status != a.status {
+				if r.status != a.status && (a.alt == 0 || r.status != a.alt) {
 					t.Errorf("[%s] %s %s: %d %s, want %d %s", a.what, a.method, a.path, r.status, r.body, a.status, a.code)
-				} else if a.code != "" && decodeError(t, r.body).Error != a.code {
+				} else if !codeMatches(a.code, r.body) {
 					t.Errorf("[%s] %s %s: %d %s, want code %s", a.what, a.method, a.path, r.status, r.body, a.code)
 				}
 			}
@@ -358,4 +384,17 @@ func errCodeOf(r httpResp) string {
 		return ""
 	}
 	return er.Error
+}
+
+// codeMatches reports whether the response body carries one of the "|"-separated
+// error codes in want; an empty want accepts any code.
+func codeMatches(want string, body []byte) bool {
+	if want == "" {
+		return true
+	}
+	var er ports.ErrorResponse
+	if json.Unmarshal(body, &er) != nil {
+		return false
+	}
+	return slices.Contains(strings.Split(want, "|"), er.Error)
 }
