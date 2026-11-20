@@ -3,6 +3,7 @@ package httpmw
 import (
 	"log/slog"
 	"net/http"
+	"net/netip"
 	"time"
 
 	"github.com/leadkart/leadkart-go/internal/common/tenancy"
@@ -39,7 +40,8 @@ func (s *statusCapture) Write(b []byte) (int, error) {
 // RequestLog emits a structured slog line at request end with the
 // canonical observability fields (per audit-checklist.md §12):
 // method, path, status, duration, bytes, correlation_id, tenant_id
-// (when bound by RequireAuth), remote_addr, user_agent.
+// (when bound by RequireAuth), remote_addr (the socket peer: the BFF), client_ip
+// (the originating client per [ClientIP]), user_agent.
 //
 // Order policy: sits between Correlation and Recover so:
 //   - the log line carries the same correlation_id as inner logs
@@ -53,7 +55,7 @@ func (s *statusCapture) Write(b []byte) (int, error) {
 // investigate" and 5xx is the only class that always warrants that.
 // 4xx is client error — too noisy for Error in normal operation,
 // too important to bury at Debug.
-func RequestLog(log *slog.Logger) func(http.Handler) http.Handler {
+func RequestLog(log *slog.Logger, trusted []netip.Prefix) func(http.Handler) http.Handler {
 	if log == nil {
 		panic("httpmw: RequestLog log required")
 	}
@@ -73,7 +75,8 @@ func RequestLog(log *slog.Logger) func(http.Handler) http.Handler {
 				"duration_ms", latency.Milliseconds(),
 				"bytes", capture.bytes,
 				"correlation_id", CorrelationIDFromContext(r.Context()),
-				"remote_addr", r.RemoteAddr,
+				"remote_addr", PeerAddr(r),
+				"client_ip", ClientIP(r, trusted),
 				"user_agent", r.UserAgent(),
 			}
 			if tenantID != "" {

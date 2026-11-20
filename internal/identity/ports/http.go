@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"math"
 	"net/http"
 	"strconv"
 	"strings"
@@ -370,7 +371,7 @@ func handleRegisterTenant(log *slog.Logger, a app.Application) http.Handler {
 //
 //  1. trimmed `device_label` from the request body
 //  2. trimmed User-Agent header (truncated to 128 chars)
-//  3. RemoteAddr
+//  3. the originating client address (httpmw.ClientAddress; never the BFF's)
 //  4. literal "Unknown device"
 //
 // Matches Auth0 / Stripe / GitHub UX where the API derives the label so
@@ -386,8 +387,8 @@ func resolveDeviceLabel(supplied string, r *http.Request) string {
 	if ua := strings.TrimSpace(r.UserAgent()); ua != "" {
 		return truncateLabel(ua)
 	}
-	if r.RemoteAddr != "" {
-		return r.RemoteAddr
+	if ip := httpmw.ClientIPFromContext(r.Context()); ip != "" {
+		return ip
 	}
 	return "Unknown device"
 }
@@ -454,7 +455,13 @@ func handleLogin(log *slog.Logger, a app.Application) http.Handler {
 // emit 423 + a default Retry-After equal to person.LockoutDuration to
 // avoid leaking handler state.
 func writeLockoutError(w http.ResponseWriter, lockedUntil time.Time) {
-	retrySeconds := int(time.Until(lockedUntil).Seconds())
+	writeLockoutErrorAt(w, lockedUntil, time.Now())
+}
+
+func writeLockoutErrorAt(w http.ResponseWriter, lockedUntil, now time.Time) {
+	// Rounded UP: a client that waits the advertised time must not meet the
+	// lock again for the sub-second remainder.
+	retrySeconds := int(math.Ceil(lockedUntil.Sub(now).Seconds()))
 	if retrySeconds <= 0 {
 		// Defensive — locked-until is in the past or zero. Use a
 		// reasonable default so the client backs off instead of

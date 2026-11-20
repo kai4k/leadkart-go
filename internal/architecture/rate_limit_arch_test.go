@@ -14,8 +14,13 @@
 package architecture_test
 
 import (
+	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -121,3 +126,101 @@ func TestArch_RateLimitConfigExplicit(t *testing.T) {
 
 // (compile-anchor for regexp import — used by sibling files)
 var _ = regexp.MustCompile
+
+// clientAddressReaders are the only files allowed to read the connection's
+// address or a client-address forwarding header: everything else asks
+// httpmw.ClientIP / ClientKey / ClientIPFromContext, so the trusted-proxy rules
+// (and the /64 keying) cannot be bypassed by one more direct read.
+var clientAddressReaders = map[string]bool{
+	"internal/common/httpmw/clientip.go": true,
+}
+
+// forwardingHeaderNames are the headers that carry a client address in front of a
+// proxy. Compared exactly and case-insensitively against string literals.
+var forwardingHeaderNames = map[string]bool{
+	"x-forwarded-for":          true,
+	"x-real-ip":                true,
+	"forwarded":                true,
+	"true-client-ip":           true,
+	"cf-connecting-ip":         true,
+	"x-client-ip":              true,
+	"x-cluster-client-ip":      true,
+	"fastly-client-ip":         true,
+	"x-original-forwarded-for": true,
+}
+
+// clientAddressReads lists the offending reads in one source file: selectors
+// named RemoteAddr and string literals naming a forwarding header.
+func clientAddressReads(src []byte) []string {
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, "x.go", src, 0)
+	if err != nil {
+		return []string{"unparseable: " + err.Error()}
+	}
+	var out []string
+	ast.Inspect(f, func(n ast.Node) bool {
+		switch v := n.(type) {
+		case *ast.SelectorExpr:
+			if v.Sel.Name == "RemoteAddr" {
+				out = append(out, fmt.Sprintf("line %d: .RemoteAddr", fset.Position(v.Pos()).Line))
+			}
+		case *ast.BasicLit:
+			if v.Kind == token.STRING {
+				if s, err := strconv.Unquote(v.Value); err == nil && forwardingHeaderNames[strings.ToLower(strings.TrimSpace(s))] {
+					out = append(out, fmt.Sprintf("line %d: header literal %s", fset.Position(v.Pos()).Line, v.Value))
+				}
+			}
+		}
+		return true
+	})
+	return out
+}
+
+// TestArch_ClientAddressIsReadOnlyInClientIP pins ADR 0068 D11: r.RemoteAddr and
+// the forwarding header names are read in internal/common/httpmw/clientip.go and
+// nowhere else in production code.
+// Scope: production — non-test files under internal/ and cmd/.
+// arch-test:no-negative-fixture (the scanner itself is proven by TestClientAddressScan_FlagsSyntheticOffenders, which feeds it in-memory offenders)
+func TestArch_ClientAddressIsReadOnlyInClientIP(t *testing.T) {
+	t.Parallel()
+	root := repoRoot(t)
+	var bad []string
+	for _, dir := range []string{"internal", "cmd"} {
+		walkGoFiles(t, filepath.Join(root, dir), false, func(path string, src []byte) {
+			rel, err := filepath.Rel(root, path)
+			if err != nil || clientAddressReaders[filepath.ToSlash(rel)] {
+				return
+			}
+			for _, r := range clientAddressReads(src) {
+				bad = append(bad, filepath.ToSlash(rel)+": "+r)
+			}
+		})
+	}
+	if len(bad) > 0 {
+		t.Fatalf("the connection address / forwarding headers are read outside httpmw/clientip.go; use httpmw.ClientIP, ClientKey or ClientIPFromContext:\n  %s", strings.Join(bad, "\n  "))
+	}
+}
+
+func TestClientAddressScan_FlagsSyntheticOffenders(t *testing.T) {
+	t.Parallel()
+	for name, src := range map[string]string{
+		"RemoteAddr":      `package x; import "net/http"; func f(r *http.Request) string { return r.RemoteAddr }`,
+		"forwarded for":   `package x; import "net/http"; func f(r *http.Request) string { return r.Header.Get("x-forwarded-for") }`,
+		"real ip":         `package x; import "net/http"; func f(r *http.Request) string { return r.Header.Get("X-Real-IP") }`,
+		"forwarded":       `package x; import "net/http"; func f(r *http.Request) string { return r.Header.Get("Forwarded") }`,
+		"cloudflare":      `package x; import "net/http"; func f(r *http.Request) string { return r.Header.Get("CF-Connecting-IP") }`,
+		"through a field": `package x; type s struct{ a struct{ RemoteAddr string } }; func f(v s) string { return v.a.RemoteAddr }`,
+	} {
+		if len(clientAddressReads([]byte(src))) == 0 {
+			t.Errorf("%s: the scan missed an offender", name)
+		}
+	}
+	for name, src := range map[string]string{
+		"long message": `package x; var m = "X-Forwarded-For is ignored here"`,
+		"clean":        `package x; import "net/http"; func f(r *http.Request) string { return r.Host }`,
+	} {
+		if got := clientAddressReads([]byte(src)); len(got) != 0 {
+			t.Errorf("%s: false positive %v", name, got)
+		}
+	}
+}

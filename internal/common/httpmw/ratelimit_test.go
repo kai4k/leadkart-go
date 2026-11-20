@@ -14,7 +14,7 @@ func TestRateLimiter_AllowsUpToBurst_Then429(t *testing.T) {
 	rl := httpmw.NewRateLimiter(httpmw.LimiterConfig{
 		RatePerSecond: 1, // refill 1 per second; bucket effectively static for the test
 		Burst:         3,
-	}, httpmw.IPLimiterKeyer)
+	}, httpmw.ClientIPKeyer(nil))
 	mw := rl.Middleware()(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -47,7 +47,7 @@ func TestRateLimiter_DistinctIPs_HaveSeparateBuckets(t *testing.T) {
 	rl := httpmw.NewRateLimiter(httpmw.LimiterConfig{
 		RatePerSecond: 1,
 		Burst:         1,
-	}, httpmw.IPLimiterKeyer)
+	}, httpmw.ClientIPKeyer(nil))
 	mw := rl.Middleware()(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -106,10 +106,10 @@ func TestRateLimiter_PanicsOnInvalidConfig(t *testing.T) {
 		fn   func()
 	}{
 		{"zero rate", func() {
-			httpmw.NewRateLimiter(httpmw.LimiterConfig{RatePerSecond: 0, Burst: 1}, httpmw.IPLimiterKeyer)
+			httpmw.NewRateLimiter(httpmw.LimiterConfig{RatePerSecond: 0, Burst: 1}, httpmw.ClientIPKeyer(nil))
 		}},
 		{"zero burst", func() {
-			httpmw.NewRateLimiter(httpmw.LimiterConfig{RatePerSecond: 1, Burst: 0}, httpmw.IPLimiterKeyer)
+			httpmw.NewRateLimiter(httpmw.LimiterConfig{RatePerSecond: 1, Burst: 0}, httpmw.ClientIPKeyer(nil))
 		}},
 		{"nil keyer", func() {
 			httpmw.NewRateLimiter(httpmw.LimiterConfig{RatePerSecond: 1, Burst: 1}, nil)

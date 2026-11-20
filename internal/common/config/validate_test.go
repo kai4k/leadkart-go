@@ -2,6 +2,7 @@ package config_test
 
 import (
 	"errors"
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -271,5 +272,62 @@ func TestValidate_RateLimitRoutesNeedPositiveRateAndBurst(t *testing.T) {
 				t.Errorf("%s %+v: err = %v, want a RateLimit.%s error", name, bad, err, name)
 			}
 		}
+	}
+}
+
+func TestValidate_ProductionRequiresATrustedProxyDecision(t *testing.T) {
+	t.Parallel()
+	prod := func(in string) error {
+		c := validBaseConfig()
+		c.Env = "production"
+		c.HTTP.TrustedProxies = in
+		return config.Validate(c)
+	}
+	for _, in := range []string{"", "  ", ","} {
+		if err := prod(in); err == nil || !strings.Contains(err.Error(), "required in production") {
+			t.Errorf("production TrustedProxies=%q: err = %v, want the required-in-production error", in, err)
+		}
+	}
+	for _, in := range []string{"none", "172.16.0.0/12", "10.0.0.0/8, 127.0.0.1, ::1", "fd12:3456::/32"} {
+		if err := prod(in); err != nil {
+			t.Errorf("production TrustedProxies=%q: %v", in, err)
+		}
+	}
+	for _, in := range []string{"8.8.8.8", "203.0.113.0/24", "10.0.0.0/7", "2001:db8::/32", "fd00::/16", "172.0.0.0/8"} {
+		if err := prod(in); err == nil || !strings.Contains(err.Error(), "HTTP.TrustedProxies") {
+			t.Errorf("production TrustedProxies=%q: err = %v, want a TrustedProxies error", in, err)
+		}
+	}
+	// Outside production the wide dev-runbook range and the empty list stay valid.
+	for _, env := range []string{"dev", "staging"} {
+		c := validBaseConfig()
+		c.Env = env
+		for _, in := range []string{"", "172.16.0.0/12,192.168.0.0/16,127.0.0.1/32,::1/128", "8.8.8.8"} {
+			c.HTTP.TrustedProxies = in
+			if err := config.Validate(c); err != nil {
+				t.Errorf("%s TrustedProxies=%q: %v", env, in, err)
+			}
+		}
+	}
+}
+
+func TestValidate_RateLimitRejectsNonFiniteRatesAndHugeBursts(t *testing.T) {
+	t.Parallel()
+	for _, bad := range []config.RouteLimit{
+		{PerMinute: math.Inf(1), Burst: 5},
+		{PerMinute: math.NaN(), Burst: 5},
+		{PerMinute: 5, Burst: 1001},
+		{PerMinute: 5, Burst: 1 << 30},
+	} {
+		c := validBaseConfig()
+		c.RateLimit.Login = bad
+		if err := config.Validate(c); err == nil || !strings.Contains(err.Error(), "RateLimit.login") {
+			t.Errorf("%+v: err = %v, want a RateLimit.login error", bad, err)
+		}
+	}
+	c := validBaseConfig()
+	c.RateLimit.Login = config.RouteLimit{PerMinute: 30, Burst: 1000}
+	if err := config.Validate(c); err != nil {
+		t.Errorf("Burst 1000 is the ceiling and must pass: %v", err)
 	}
 }

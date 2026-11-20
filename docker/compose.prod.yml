@@ -147,8 +147,16 @@ services:
       LEADKART_JWT__KEY_ID: "${JWT_KEY_ID}"
       LEADKART_JWT__SIGNING_KEY: "${JWT_SIGNING_KEY}"
       LEADKART_REFRESH__ABSOLUTE_TTL: "336h"
-      # CIDRs/IPs of the BFF (and any ingress) in front of the api; empty = trust nobody.
-      LEADKART_HTTP__TRUSTED_PROXIES: "${LEADKART_HTTP__TRUSTED_PROXIES:-}"
+      # Production mode: the api refuses to start when its database role is an owner /
+      # superuser or lacks a privilege (pg.VerifyApplicationPrivileges), and when
+      # LEADKART_HTTP__TRUSTED_PROXIES is unset or too wide (config.Validate).
+      LEADKART_ENV: "production"
+      # REQUIRED: the address or CIDR of the BFF / ingress in front of the api
+      # (private, loopback, link-local, CGNAT or ULA; nothing wider than /8 IPv4 or
+      # /32 IPv6), or the word "none" when the api is directly exposed. Unset = the
+      # container does not start: an unset list puts every user in one rate-limit
+      # bucket per credential route.
+      LEADKART_HTTP__TRUSTED_PROXIES: "${LEADKART_HTTP__TRUSTED_PROXIES:?set to the BFF address or CIDR (e.g. 172.16.0.0/12), or none if the api is directly exposed}"
       TZ: "UTC"
     healthcheck:
       test: ["CMD", "/api", "-healthcheck"]

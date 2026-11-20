@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/leadkart/leadkart-go/internal/common/idempotency"
-	"github.com/leadkart/leadkart-go/internal/common/tenancy"
 )
 
 // Middleware is the canonical http.Handler-shaped middleware
@@ -23,13 +22,13 @@ type Middleware = func(http.Handler) http.Handler
 //
 //	handler := httpmw.Chain(
 //	    httpmw.Correlation(),
-//	    httpmw.RequestLog(log),
+//	    httpmw.RequestLog(log, trusted),
 //	    httpmw.Recover(log),
 //	)(mux)
 //
 // is equivalent to:
 //
-//	handler := httpmw.Correlation()(httpmw.RequestLog(log)(httpmw.Recover(log)(mux)))
+//	handler := httpmw.Correlation()(httpmw.RequestLog(log, trusted)(httpmw.Recover(log)(mux)))
 //
 // The first arg is the OUTERMOST layer; the last arg is the layer
 // closest to the inner handler.
@@ -76,6 +75,10 @@ type PublicChainConfig struct {
 	// so the scope is the verified tenant + person + route.
 	IdempotencyKeyer idempotency.CallerKeyer
 
+	// LimiterNow is the clock of the limiters' sweeps and refills. Nil means
+	// time.Now; tests inject a fixed or stepped clock.
+	LimiterNow func() time.Time
+
 	// TrustedProxies are the reverse proxies (the web BFF, an ingress) whose
 	// X-Forwarded-For is believed; see [ClientIP]. Empty = trust nobody: every
 	// client is keyed by its socket address.
@@ -85,6 +88,13 @@ type PublicChainConfig struct {
 	// abuse-prone anonymous routes, applied after the global IP limiter. Empty =
 	// none.
 	RouteRateLimits RouteRateLimits
+}
+
+func (c PublicChainConfig) limiterClock() func() time.Time {
+	if c.LimiterNow != nil {
+		return c.LimiterNow
+	}
+	return time.Now
 }
 
 // PublicChain returns the canonical middleware chain for the public
@@ -122,16 +132,16 @@ func PublicChain(cfg PublicChainConfig) Middleware {
 	}
 
 	keyer := ClientIPKeyer(cfg.TrustedProxies)
-	ipLimiter := NewRateLimiter(cfg.IPRateLimit, keyer)
+	ipLimiter := newRateLimiter(cfg.IPRateLimit, keyer, cfg.limiterClock())
 
 	idemKeyer := cfg.IdempotencyKeyer
 	if idemKeyer == nil {
+		// Never set this early in the chain: the context carries no tenant yet,
+		// so the default is the anonymous scope. cmd/api passes
+		// authn.IdempotencyCallerKeyer for the verified scope.
 		idemKeyer = func(r *http.Request) string {
-			if id, ok := tenancy.FromContext(r.Context()); ok && !id.IsZero() {
-				return "tenant:" + id.String()
-			}
-			if ip := ClientIP(r, cfg.TrustedProxies); ip != "" {
-				return "anon:" + ip
+			if key := ClientKey(r, cfg.TrustedProxies); key != "" {
+				return "anon:" + key
 			}
 			return ""
 		}
@@ -140,13 +150,14 @@ func PublicChain(cfg PublicChainConfig) Middleware {
 	mws := []Middleware{
 		Correlation(),
 		SecurityHeaders(),
-		RequestLog(cfg.Logger),
+		RequestLog(cfg.Logger, cfg.TrustedProxies),
 		Recover(cfg.Logger),
 		BodyLimit(DefaultMaxBodyBytes),
+		ClientAddress(cfg.Logger, cfg.TrustedProxies),
 		ipLimiter.Middleware(),
 	}
 	if len(cfg.RouteRateLimits) > 0 {
-		mws = append(mws, RouteRateLimit(cfg.RouteRateLimits, keyer))
+		mws = append(mws, routeRateLimit(cfg.RouteRateLimits, keyer, cfg.limiterClock()))
 	}
 	mws = append(mws, idempotency.Middleware(cfg.IdempotencyStore, cfg.Now, cfg.IdempotencyTTL, idemKeyer))
 	return Chain(mws...)

@@ -136,11 +136,31 @@ func Validate(cfg AppConfig) error {
 	return nil
 }
 
-// validateHTTP gates the trusted-proxy list (empty = trust nobody) and the
-// per-route rate limits.
+// maxRouteBurst bounds a per-route bucket: a burst in the thousands is a limit
+// in name only.
+const maxRouteBurst = 1000
+
+// validateHTTP gates the trusted-proxy list and the per-route rate limits.
+//
+// Outside production an empty list is allowed (trust nobody). In production the
+// operator must decide: a list of the proxy addresses, or the word "none" for a
+// directly exposed API. An unset value is a start-up error there, because
+// behind a BFF it silently puts every user into one rate-limit bucket per
+// credential route. A production list is also refused when it is wider than
+// /8 (IPv4) or /32 (IPv6), or leaves the private / loopback / link-local /
+// CGNAT / ULA ranges.
 func validateHTTP(cfg AppConfig) error {
-	if _, err := httpmw.ParseTrustedProxies(cfg.HTTP.TrustedProxies); err != nil {
+	trusted, err := httpmw.ParseTrustedProxies(cfg.HTTP.TrustedProxies)
+	if err != nil {
 		return fmt.Errorf("config: HTTP.TrustedProxies: %w", err)
+	}
+	if cfg.Env == "production" {
+		if len(trusted) == 0 && !strings.EqualFold(strings.TrimSpace(cfg.HTTP.TrustedProxies), httpmw.NoTrustedProxies) {
+			return errors.New("config: HTTP.TrustedProxies is required in production: set LEADKART_HTTP__TRUSTED_PROXIES to the address or CIDR of the BFF / ingress in front of the API, or to \"none\" if the API is directly exposed")
+		}
+		if err := httpmw.ValidateProductionTrustedProxies(trusted); err != nil {
+			return fmt.Errorf("config: HTTP.TrustedProxies: %w", err)
+		}
 	}
 	for _, r := range []struct {
 		name  string
@@ -153,9 +173,10 @@ func validateHTTP(cfg AppConfig) error {
 		{"email_change_confirm", cfg.RateLimit.EmailChangeConfirm},
 		{"tenant_registration", cfg.RateLimit.TenantRegistration},
 	} {
-		if !(r.limit.PerMinute > 0) || r.limit.Burst < 1 { // !(>0) also rejects NaN
-			return fmt.Errorf("config: RateLimit.%s needs PerMinute > 0 and Burst >= 1 (got %v, %d)",
-				r.name, r.limit.PerMinute, r.limit.Burst)
+		// !(>0) also rejects NaN; IsInf rejects +Inf (a limit that never limits).
+		if !(r.limit.PerMinute > 0) || math.IsInf(r.limit.PerMinute, 0) || r.limit.Burst < 1 || r.limit.Burst > maxRouteBurst {
+			return fmt.Errorf("config: RateLimit.%s needs a finite PerMinute > 0 and 1 <= Burst <= %d (got %v, %d)",
+				r.name, maxRouteBurst, r.limit.PerMinute, r.limit.Burst)
 		}
 	}
 	return nil

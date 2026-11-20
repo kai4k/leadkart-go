@@ -6,14 +6,11 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"net"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
-
-	"github.com/leadkart/leadkart-go/internal/common/tenancy"
 )
 
 // CommandIDHeader is the wire-stable header name. Mirrors Stripe's
@@ -53,27 +50,9 @@ const (
 // records without a caller scope; otherwise tenant A could collide
 // with tenant B's response cache).
 //
-// The default keyer ([DefaultCallerKeyer]) prefers the authenticated
-// tenant ID from ctx via [tenancy.FromContext]; if absent, falls back
-// to "anon:<remote-ip>" which is a defense-in-depth scope (callers
-// SHOULD only run this middleware on authenticated routes).
+// There is no default keyer: the caller scope is a security decision the
+// composition root makes (cmd/api passes authn.IdempotencyCallerKeyer).
 type CallerKeyer func(r *http.Request) string
-
-// DefaultCallerKeyer scopes by tenant from ctx, falling back to remote
-// IP. Wired by [Middleware] when no explicit keyer is supplied.
-func DefaultCallerKeyer(r *http.Request) string {
-	if id, ok := tenancy.FromContext(r.Context()); ok && !id.IsZero() {
-		return "tenant:" + id.String()
-	}
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil || host == "" {
-		host = strings.TrimSpace(r.RemoteAddr)
-	}
-	if host == "" {
-		return ""
-	}
-	return "anon:" + host
-}
 
 // Middleware wraps next in idempotency handling per [CommandIDHeader].
 //
@@ -109,7 +88,7 @@ func Middleware(store Store, now func() time.Time, ttl time.Duration, keyer Call
 		ttl = DefaultTTL
 	}
 	if keyer == nil {
-		keyer = DefaultCallerKeyer
+		panic("idempotency: Middleware keyer required")
 	}
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

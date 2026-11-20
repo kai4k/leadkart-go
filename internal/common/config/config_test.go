@@ -74,6 +74,8 @@ func TestLoad_FileThenEnv(t *testing.T) {
 	yamlFile := filepath.Join(dir, "leadkart.yaml")
 	yaml := `
 env: production
+http:
+  trusted_proxies: none
 listen:
   api: ":7000"
 otel:

@@ -15,7 +15,7 @@ func TestRequestLog_2xxLogsInfo(t *testing.T) {
 	t.Parallel()
 	buf := &safeBuffer{}
 	log := slog.New(slog.NewJSONHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	mw := httpmw.RequestLog(log)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	mw := httpmw.RequestLog(log, nil)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
@@ -38,7 +38,7 @@ func TestRequestLog_4xxLogsWarn(t *testing.T) {
 	t.Parallel()
 	buf := &safeBuffer{}
 	log := slog.New(slog.NewJSONHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	mw := httpmw.RequestLog(log)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	mw := httpmw.RequestLog(log, nil)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)
 	}))
 
@@ -55,7 +55,7 @@ func TestRequestLog_5xxLogsError(t *testing.T) {
 	t.Parallel()
 	buf := &safeBuffer{}
 	log := slog.New(slog.NewJSONHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	mw := httpmw.RequestLog(log)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	mw := httpmw.RequestLog(log, nil)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 	}))
 
@@ -75,7 +75,7 @@ func TestRequestLog_BindsCorrelationAndTenant(t *testing.T) {
 
 	// Inner handler asserts ctx already has correlation + tenant when
 	// the request log fires (it'll fire after handler returns).
-	chain := httpmw.Correlation()(httpmw.RequestLog(log)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	chain := httpmw.Correlation()(httpmw.RequestLog(log, nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Bind tenant inside handler — RequireFreshStamp does this in
 		// production; in this test we simulate by writing to the
 		// request scope inline.
@@ -104,7 +104,7 @@ func TestRequestLog_DefaultsImplicitWriteTo200(t *testing.T) {
 	// 200 per stdlib. The capture must record 200, not 0.
 	buf := &safeBuffer{}
 	log := slog.New(slog.NewJSONHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	mw := httpmw.RequestLog(log)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	mw := httpmw.RequestLog(log, nil)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte(`hello`))
 	}))
 

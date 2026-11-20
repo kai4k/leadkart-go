@@ -1,6 +1,9 @@
 package httpmw
 
-import "net/http"
+import (
+	"net/http"
+	"time"
+)
 
 // RouteRateLimits maps exact "METHOD /path" keys to tighter buckets.
 type RouteRateLimits map[string]LimiterConfig
@@ -14,12 +17,16 @@ type RouteRateLimits map[string]LimiterConfig
 // is a 404 from the mux, not a way around the limit. Each route has its own
 // buckets, keyed by keyer (the forwarded client, see [ClientIPKeyer]).
 func RouteRateLimit(routes RouteRateLimits, keyer LimiterKeyer) Middleware {
+	return routeRateLimit(routes, keyer, time.Now)
+}
+
+func routeRateLimit(routes RouteRateLimits, keyer LimiterKeyer, now func() time.Time) Middleware {
 	if keyer == nil {
 		panic("httpmw: RouteRateLimit keyer required")
 	}
 	limiters := make(map[string]*RateLimiter, len(routes))
 	for route, cfg := range routes {
-		limiters[route] = NewRateLimiter(cfg, keyer)
+		limiters[route] = newRateLimiter(cfg, keyer, now)
 	}
 	return func(next http.Handler) http.Handler {
 		wrapped := make(map[string]http.Handler, len(limiters))

@@ -142,7 +142,8 @@ services:
       LEADKART_LISTEN__ADMIN: ":9090"
       LEADKART_JWT__KEY_ID: "${LEADKART_JWT__KEY_ID:?missing JWT key id; set in .env}"
       # Reverse proxies (the web BFF) whose X-Forwarded-For is believed. Empty =
-      # trust nobody (docker/.env.example "Client IP and rate limits").
+      # trust nobody (fine for development; production, via compose.prod.yml,
+      # requires a value; see docker/.env.example "Client IP and rate limits").
       LEADKART_HTTP__TRUSTED_PROXIES: "${LEADKART_HTTP__TRUSTED_PROXIES:-}"
       # JWT signing key MUST come from the environment (or .env file).
       # No literal value lives in this checked-in compose to prevent

@@ -3,6 +3,7 @@ package idempotency_test
 import (
 	"bytes"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -13,6 +14,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/leadkart/leadkart-go/internal/common/idempotency"
+	"github.com/leadkart/leadkart-go/internal/common/tenancy"
 )
 
 // downstream returns an http.Handler that:
@@ -41,6 +43,24 @@ func (d *downstream) handler() http.Handler {
 	})
 }
 
+// defaultTestKeyer is the scope the middleware used to default to: the tenant
+// from the context, else the socket address. Production has no default (the
+// composition root passes authn.IdempotencyCallerKeyer); these tests exercise
+// the middleware's own behaviour with a minimal scope.
+func defaultTestKeyer(r *http.Request) string {
+	if id, ok := tenancy.FromContext(r.Context()); ok && !id.IsZero() {
+		return "tenant:" + id.String()
+	}
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil || host == "" {
+		host = strings.TrimSpace(r.RemoteAddr)
+	}
+	if host == "" {
+		return ""
+	}
+	return "anon:" + host
+}
+
 func newPOST(t *testing.T, body, commandID string) *http.Request {
 	t.Helper()
 	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/whatever", strings.NewReader(body))
@@ -55,7 +75,7 @@ func TestMiddleware_NoCommandIDHeader_PassesThrough(t *testing.T) {
 	calls := &atomic.Int32{}
 	d := &downstream{calls: calls, status: 200, body: `{"ok":true}`}
 	store := idempotency.NewInMemoryStore(nil)
-	mw := idempotency.Middleware(store, nil, 0, nil)(d.handler())
+	mw := idempotency.Middleware(store, nil, 0, defaultTestKeyer)(d.handler())
 
 	rec := httptest.NewRecorder()
 	mw.ServeHTTP(rec, newPOST(t, `{"x":1}`, ""))
@@ -76,7 +96,7 @@ func TestMiddleware_FirstCall_CachesAndReturns2xx(t *testing.T) {
 	calls := &atomic.Int32{}
 	d := &downstream{calls: calls, status: 201, body: `{"id":"abc"}`}
 	store := idempotency.NewInMemoryStore(nil)
-	mw := idempotency.Middleware(store, nil, 0, nil)(d.handler())
+	mw := idempotency.Middleware(store, nil, 0, defaultTestKeyer)(d.handler())
 
 	cmdID := uuid.NewString()
 	rec := httptest.NewRecorder()
@@ -104,7 +124,7 @@ func TestMiddleware_ReplaySameKeyAndBody_ReturnsCached(t *testing.T) {
 	calls := &atomic.Int32{}
 	d := &downstream{calls: calls, status: 201, body: `{"id":"abc"}`}
 	store := idempotency.NewInMemoryStore(nil)
-	mw := idempotency.Middleware(store, nil, 0, nil)(d.handler())
+	mw := idempotency.Middleware(store, nil, 0, defaultTestKeyer)(d.handler())
 
 	cmdID := uuid.NewString()
 	body := `{"x":1}`
@@ -139,7 +159,7 @@ func TestMiddleware_ReplayDifferentBody_Returns422(t *testing.T) {
 	calls := &atomic.Int32{}
 	d := &downstream{calls: calls, status: 201, body: `{"id":"abc"}`}
 	store := idempotency.NewInMemoryStore(nil)
-	mw := idempotency.Middleware(store, nil, 0, nil)(d.handler())
+	mw := idempotency.Middleware(store, nil, 0, defaultTestKeyer)(d.handler())
 
 	cmdID := uuid.NewString()
 	rec1 := httptest.NewRecorder()
@@ -164,7 +184,7 @@ func TestMiddleware_MalformedCommandID_Returns400(t *testing.T) {
 	calls := &atomic.Int32{}
 	d := &downstream{calls: calls, status: 200}
 	store := idempotency.NewInMemoryStore(nil)
-	mw := idempotency.Middleware(store, nil, 0, nil)(d.handler())
+	mw := idempotency.Middleware(store, nil, 0, defaultTestKeyer)(d.handler())
 
 	rec := httptest.NewRecorder()
 	mw.ServeHTTP(rec, newPOST(t, `{}`, "not-a-uuid"))
@@ -187,7 +207,7 @@ func TestMiddleware_NonSuccess_NotCached(t *testing.T) {
 	calls := &atomic.Int32{}
 	d := &downstream{calls: calls, status: 500, body: `{"error":"internal"}`}
 	store := idempotency.NewInMemoryStore(nil)
-	mw := idempotency.Middleware(store, nil, 0, nil)(d.handler())
+	mw := idempotency.Middleware(store, nil, 0, defaultTestKeyer)(d.handler())
 
 	cmdID := uuid.NewString()
 	rec1 := httptest.NewRecorder()
@@ -258,7 +278,7 @@ func TestMiddleware_OverSizedBody_Returns413(t *testing.T) {
 	calls := &atomic.Int32{}
 	d := &downstream{calls: calls, status: 200, body: `ok`}
 	store := idempotency.NewInMemoryStore(nil)
-	mw := idempotency.Middleware(store, nil, 0, nil)(d.handler())
+	mw := idempotency.Middleware(store, nil, 0, defaultTestKeyer)(d.handler())
 
 	// 2 MiB > MaxBodyBytes (1 MiB)
 	huge := strings.Repeat("a", 2<<20)
@@ -280,7 +300,7 @@ func TestMiddleware_TTLExpiry_RetriesDownstream(t *testing.T) {
 	store := idempotency.NewInMemoryStore(func() time.Time { return clock })
 	calls := &atomic.Int32{}
 	d := &downstream{calls: calls, status: 201, body: `{"id":"abc"}`}
-	mw := idempotency.Middleware(store, func() time.Time { return clock }, time.Hour, nil)(d.handler())
+	mw := idempotency.Middleware(store, func() time.Time { return clock }, time.Hour, defaultTestKeyer)(d.handler())
 
 	cmdID := uuid.NewString()
 	body := `{}`

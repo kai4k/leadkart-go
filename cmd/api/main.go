@@ -408,25 +408,10 @@ func run(ctx context.Context, stdout *os.File, _ []string) error {
 	// PostgresStore is durable across restarts + safe across replicas.
 	// InMemoryStore (the previous default) loses every record on
 	// rollout, defeating the idempotency contract during deploys.
-	trustedProxies, err := httpmw.ParseTrustedProxies(cfg.HTTP.TrustedProxies)
+	mwChain, err := buildPublicChain(cfg, logger, idempotency.NewPostgresStore(pool), wiring.Issuer, time.Now)
 	if err != nil {
-		return fmt.Errorf("trusted proxies: %w", err)
+		return err
 	}
-	if len(trustedProxies) == 0 {
-		logger.Warn("no trusted proxies configured (LEADKART_HTTP__TRUSTED_PROXIES): X-Forwarded-For is ignored, so behind a BFF all clients share one rate-limit bucket")
-	}
-	mwChain := httpmw.PublicChain(httpmw.PublicChainConfig{
-		Logger:           logger,
-		IdempotencyStore: idempotency.NewPostgresStore(pool),
-		Now:              time.Now,
-		IPRateLimit: httpmw.LimiterConfig{
-			RatePerSecond: apiIPRatePerSecond,
-			Burst:         apiIPRateBurst,
-		},
-		TrustedProxies:   trustedProxies,
-		RouteRateLimits:  routeRateLimits(cfg.RateLimit),
-		IdempotencyKeyer: authn.IdempotencyCallerKeyer(wiring.Issuer, func(r *http.Request) string { return httpmw.ClientIP(r, trustedProxies) }),
-	})
 	publicHandler := otelhttp.NewHandler(
 		mwChain(newServer(logger, wiring.App, platformWiring.App, inventoryAppInstance, crmWiring.App, tasksAppInstance, dispatchAppInstance, ordersAppInstance, notificationsAppInstance, wiring.Issuer, wiring.StampValidator)),
 		"leadkart-api",
@@ -476,6 +461,39 @@ func run(ctx context.Context, stdout *os.File, _ []string) error {
 		return err
 	}
 	return nil
+}
+
+// buildPublicChain assembles the public middleware chain from configuration.
+// main() and the wiring tests both build the chain here, so a test that drives it
+// exercises exactly what production runs: the trusted-proxy list, the global and
+// per-route limiters and the verified idempotency scope. now is the clock of the
+// idempotency records (and, unless a test overrides it, the limiters).
+func buildPublicChain(cfg config.AppConfig, logger *slog.Logger, store idempotency.Store, verifier authn.Verifier, now func() time.Time) (httpmw.Middleware, error) {
+	trustedProxies, err := httpmw.ParseTrustedProxies(cfg.HTTP.TrustedProxies)
+	if err != nil {
+		return nil, fmt.Errorf("trusted proxies: %w", err)
+	}
+	effective := make([]string, len(trustedProxies))
+	for i, p := range trustedProxies {
+		effective[i] = p.String()
+	}
+	logger.Info("trusted proxies in effect (X-Forwarded-For is read only from these peers)",
+		"trusted_proxies", effective, "env", cfg.Env)
+	if len(trustedProxies) == 0 {
+		logger.Warn("no trusted proxies: X-Forwarded-For is ignored, so behind a BFF all clients share one rate-limit bucket (set LEADKART_HTTP__TRUSTED_PROXIES; production refuses to start without a decision)")
+	}
+	return httpmw.PublicChain(httpmw.PublicChainConfig{
+		Logger:           logger,
+		IdempotencyStore: store,
+		Now:              now,
+		IPRateLimit: httpmw.LimiterConfig{
+			RatePerSecond: apiIPRatePerSecond,
+			Burst:         apiIPRateBurst,
+		},
+		TrustedProxies:   trustedProxies,
+		RouteRateLimits:  routeRateLimits(cfg.RateLimit),
+		IdempotencyKeyer: authn.IdempotencyCallerKeyer(verifier, func(r *http.Request) string { return httpmw.ClientKey(r, trustedProxies) }),
+	}), nil
 }
 
 // routeRateLimits maps the per-route settings onto the exact "METHOD /path"

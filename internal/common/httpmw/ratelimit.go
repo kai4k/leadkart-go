@@ -1,11 +1,11 @@
 package httpmw
 
 import (
-	"net"
+	"math"
 	"net/http"
 	"strconv"
-	"strings"
 	"sync"
+	"time"
 
 	"golang.org/x/time/rate"
 )
@@ -19,33 +19,10 @@ const errCodeRateLimited = "rate_limited"
 // healthchecks where RemoteAddr can't be parsed).
 type LimiterKey string
 
-// LimiterKeyer extracts the bucket key from a request. The IP-based
-// keyer ([IPLimiterKeyer]) is the v0.2 default; tenant-based keyers
-// can be composed by middleware that runs after auth has bound the
-// tenant ctx.
+// LimiterKeyer extracts the bucket key from a request. The client
+// keyer is [ClientIPKeyer]; tenant-based keyers can be composed by middleware
+// that runs after auth has bound the tenant ctx.
 type LimiterKeyer func(r *http.Request) LimiterKey
-
-// IPLimiterKeyer keys by the client IP, parsed out of the connection's
-// RemoteAddr. Returns empty if RemoteAddr is malformed — the limiter
-// treats empty as "skip" rather than degenerating to a single shared
-// bucket (which would make the limiter a global circuit breaker).
-//
-// X-Forwarded-For trust: NOT applied here. Per OWASP "Token Theft &
-// Replay", trusting client-supplied headers without an upstream proxy
-// allowlist lets attackers bypass per-IP limits by spoofing. v0.3
-// adds a [TrustedProxyKeyer] that pulls from XFF only when the
-// immediate connection is from a known reverse proxy CIDR.
-func IPLimiterKeyer(r *http.Request) LimiterKey {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		// Some test harnesses use bare-IP RemoteAddr; tolerate.
-		host = strings.TrimSpace(r.RemoteAddr)
-	}
-	if host == "" {
-		return ""
-	}
-	return LimiterKey(host)
-}
 
 // LimiterConfig tunes a [RateLimiter].
 type LimiterConfig struct {
@@ -55,32 +32,55 @@ type LimiterConfig struct {
 	// Burst is the maximum tokens the bucket can hold (i.e. the
 	// largest burst a key can absorb before throttling kicks in).
 	Burst int
+	// MaxKeys caps the number of distinct buckets held at once. Zero means
+	// [DefaultMaxLimiterKeys]. At the cap a request for a NEW key is answered
+	// 429 (fail closed) after an immediate sweep of idle buckets has failed to
+	// make room; keys already tracked keep their buckets.
+	MaxKeys int
 }
+
+const (
+	// DefaultMaxLimiterKeys bounds one limiter's map: ~200 bytes a key, so ~10 MB
+	// per limiter and ~70 MB for the global limiter plus the six route limiters,
+	// whatever the number of distinct sources.
+	DefaultMaxLimiterKeys = 50_000
+
+	// limiterSweepEvery spaces the idle sweeps: at most one scan a minute, run
+	// inline by the request that finds one due (no goroutine per key, none at all).
+	limiterSweepEvery = time.Minute
+)
 
 // RateLimiter is an in-memory per-key token bucket.
 //
-// v0.2 ships single-replica only — each API host runs its own
-// limiter map; horizontal scaling means N replicas multiply the
-// effective limit. Acceptable for the v0.2 single-replica deploy
-// shape per ADR 0024 (Chainguard distroless static, single pod);
-// v0.3 swaps to a Redis-backed limiter via the same surface.
+// v0.2 ships single-replica only: each API host runs its own limiter map; N
+// replicas multiply the effective limit (ADR 0024).
 //
-// Eviction: limiters never expire. With UUID-shaped keys (tenant IDs,
-// or a stable pool of client IPs), the map grows linearly with the
-// distinct keyspace. For the IP keyer + a million distinct attackers
-// per day, that's ~20 MB of *rate.Limiter instances — tolerable for
-// v0.2. Eviction lands in v0.3 alongside the Redis swap.
+// Memory is bounded two ways. A bucket whose tokens are back at the burst is
+// indistinguishable from a fresh one, so an idle sweep (at most once a minute)
+// deletes it and a later request re-creates it full. And the map has a hard cap
+// ([LimiterConfig.MaxKeys]); at the cap a new key is refused with 429 rather
+// than admitted unmetered. Fail-closed is the right side of that trade: reaching
+// the cap needs tens of thousands of distinct sources inside the sweep interval,
+// which is an attack, and refusing new sources during it costs far less than
+// letting the process grow until the container is killed.
 type RateLimiter struct {
-	mu       sync.Mutex
-	limiters map[LimiterKey]*rate.Limiter
-	r        rate.Limit
-	burst    int
-	keyer    LimiterKeyer
+	mu        sync.Mutex
+	limiters  map[LimiterKey]*rate.Limiter
+	r         rate.Limit
+	burst     int
+	maxKeys   int
+	keyer     LimiterKeyer
+	now       func() time.Time
+	lastSweep time.Time
 }
 
 // NewRateLimiter constructs an in-memory limiter against the supplied
 // keyer.
 func NewRateLimiter(cfg LimiterConfig, keyer LimiterKeyer) *RateLimiter {
+	return newRateLimiter(cfg, keyer, time.Now)
+}
+
+func newRateLimiter(cfg LimiterConfig, keyer LimiterKeyer, now func() time.Time) *RateLimiter {
 	if cfg.RatePerSecond <= 0 {
 		panic("httpmw: RateLimiter requires RatePerSecond > 0")
 	}
@@ -90,37 +90,78 @@ func NewRateLimiter(cfg LimiterConfig, keyer LimiterKeyer) *RateLimiter {
 	if keyer == nil {
 		panic("httpmw: RateLimiter requires keyer")
 	}
+	maxKeys := cfg.MaxKeys
+	if maxKeys <= 0 {
+		maxKeys = DefaultMaxLimiterKeys
+	}
 	return &RateLimiter{
 		limiters: make(map[LimiterKey]*rate.Limiter),
 		r:        rate.Limit(cfg.RatePerSecond),
 		burst:    cfg.Burst,
+		maxKeys:  maxKeys,
 		keyer:    keyer,
+		now:      now,
 	}
 }
 
-// limiterFor returns the per-key bucket, creating it on first use.
-func (l *RateLimiter) limiterFor(key LimiterKey) *rate.Limiter {
+// sweepLocked deletes every bucket that has refilled to its burst. Caller holds
+// the mutex; runs at most once per [limiterSweepEvery] unless force is set.
+func (l *RateLimiter) sweepLocked(now time.Time, force bool) {
+	if !force && !l.lastSweep.IsZero() && now.Sub(l.lastSweep) < limiterSweepEvery {
+		return
+	}
+	l.lastSweep = now
+	for k, lim := range l.limiters {
+		if lim.TokensAt(now) >= float64(l.burst) {
+			delete(l.limiters, k)
+		}
+	}
+}
+
+// limiterFor returns the per-key bucket, creating it on first use. ok is false
+// when the key is new and the map is full even after a sweep.
+func (l *RateLimiter) limiterFor(key LimiterKey, now time.Time) (*rate.Limiter, bool) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	l.sweepLocked(now, false)
 	if existing, ok := l.limiters[key]; ok {
-		return existing
+		return existing, true
+	}
+	if len(l.limiters) >= l.maxKeys {
+		l.sweepLocked(now, true)
+		if len(l.limiters) >= l.maxKeys {
+			return nil, false
+		}
 	}
 	created := rate.NewLimiter(l.r, l.burst)
 	l.limiters[key] = created
-	return created
+	return created, true
+}
+
+// retryAfterSeconds rounds a wait UP to whole seconds (minimum 1): a client that
+// waits the advertised time must not be refused again for the sub-second
+// remainder.
+func retryAfterSeconds(wait time.Duration) int {
+	secs := int(math.Ceil(wait.Seconds()))
+	if secs < 1 {
+		return 1
+	}
+	return secs
+}
+
+func writeRateLimited(w http.ResponseWriter, retryAfter int) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.Header().Set("Retry-After", strconv.Itoa(retryAfter))
+	w.WriteHeader(http.StatusTooManyRequests)
+	_, _ = w.Write([]byte(`{"error":"` + errCodeRateLimited + `","message":"too many requests"}`))
 }
 
 // Middleware returns the http.Handler-shaped middleware. Empty key
 // (keyer returned "") skips the limit — the request flows through.
 //
-// 429 response shape mirrors other LeadKart errors: JSON body with
-// error code + message PLUS a `Retry-After` header (RFC 6585 §4
-// + RFC 7231 §7.1.3 — well-behaved clients back off intelligently
-// rather than retrying immediately). The seconds count is computed
-// from the bucket's reservation: rate.Limiter.Reserve() returns
-// the wait until the next token + we round up to whole seconds for
-// the header value. This is the canonical Stripe / GitHub / AWS
-// shape ("Retry-After: 12").
+// The 429 carries a JSON body and a `Retry-After` header (RFC 6585 §4,
+// RFC 9110 §10.2.3) computed from the bucket's reservation, rounded up to whole
+// seconds.
 func (l *RateLimiter) Middleware() func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -129,23 +170,19 @@ func (l *RateLimiter) Middleware() func(http.Handler) http.Handler {
 				next.ServeHTTP(w, r)
 				return
 			}
-			limiter := l.limiterFor(key)
-			if !limiter.Allow() {
-				// Compute Retry-After from the bucket's reservation.
-				// Reserve() reserves a token regardless of allow/deny,
-				// so we Cancel() right after to put it back — the
-				// 429 path doesn't consume a token.
-				reservation := limiter.Reserve()
-				wait := reservation.Delay()
-				reservation.Cancel()
-				retryAfter := int(wait.Seconds())
-				if retryAfter < 1 {
-					retryAfter = 1
-				}
-				w.Header().Set("Content-Type", "application/json; charset=utf-8")
-				w.Header().Set("Retry-After", strconv.Itoa(retryAfter))
-				w.WriteHeader(http.StatusTooManyRequests)
-				_, _ = w.Write([]byte(`{"error":"` + errCodeRateLimited + `","message":"too many requests"}`))
+			now := l.now()
+			limiter, ok := l.limiterFor(key, now)
+			if !ok {
+				writeRateLimited(w, int(limiterSweepEvery/time.Second))
+				return
+			}
+			if !limiter.AllowN(now, 1) {
+				// Reserve() reserves a token regardless of allow/deny, so
+				// Cancel() right after puts it back: the 429 path consumes none.
+				reservation := limiter.ReserveN(now, 1)
+				wait := reservation.DelayFrom(now)
+				reservation.CancelAt(now)
+				writeRateLimited(w, retryAfterSeconds(wait))
 				return
 			}
 			next.ServeHTTP(w, r)
