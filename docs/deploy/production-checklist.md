@@ -33,14 +33,29 @@ matters and how to check it.
    never exceed, the number of proxies in front of the BFF. A larger depth lets a
    client choose the address the api sees.
 
+8. **Rotating the JWT signing key signs out some people: do it off-peak.** The
+    refresh grace window (item below) derives its successor token from the signing key;
+    after a rotation a token that was consumed less than the grace window ago and is
+    presented again (a lost response, a second tab) no longer matches, is treated as
+    reuse, and its session is revoked: that person signs in again. Everything else
+    carries over (`LEADKART_JWT__PREVIOUS_KEYS` keeps old access tokens valid).
+9. **`LEADKART_REFRESH__GRACE_WINDOW`** (default 30s, at most 120s, 0 = strict
+    rotation). A just-rotated refresh token may be presented again for this long, and
+    only by the SAME client that rotated it (the client address the rate limiters use:
+    it needs item 3 and item 7 right; with an untrusted or missing `X-Forwarded-For`
+    every user shares one client key and the binding proves nothing), at most 3 times.
+    A client whose address changes inside the window between a lost response and its
+    retry (a phone switching networks) is treated as reuse and signed out: that is the
+    price of the binding.
+
 ## After the deploy
 
-8. **The request log's `client_ip` shows public addresses**, not the BFF's or a Docker
+10. **The request log's `client_ip` shows public addresses**, not the BFF's or a Docker
    address. If every line shows one private address, items 3 and 7 are wrong and all
    users share one rate-limit bucket per credential route.
-9. `GET /health` on the admin listener (`:9090`) and the worker's `/alive` (`:9091`)
+11. `GET /health` on the admin listener (`:9090`) and the worker's `/alive` (`:9091`)
    answer 200; `docker compose ps` shows api and worker healthy.
-10. A test login and a test change-password succeed; the old access token then answers
+12. A test login and a test change-password succeed; the old access token then answers
     401 `stale_token` at once (stamp eviction, ADR 0068 D12).
 
 ## Alerts to configure
@@ -62,4 +77,7 @@ matters and how to check it.
 | `LEADKART_ARGON2__MAX_PER_CLIENT` | 2 (slots one client holds; up to 8 more of its operations wait, a fixed bound in code) | 1..MAX_CONCURRENT |
 | `LEADKART_ARGON2__RESERVED_AUTHENTICATED` | 4 | 0..MAX_CONCURRENT-1 |
 | `LEADKART_IDENTITY__LOCKOUT_KEY` | none (required in production) | base64, at least 32 bytes |
+| `LEADKART_REFRESH__GRACE_WINDOW` | 30s | 0 (strict rotation) .. 120s, below `SLIDING_TTL` |
+| `LEADKART_REFRESH__ABSOLUTE_TTL` | 336h (14 days; a session ends this long after its login) | above `SLIDING_TTL` |
+| `LEADKART_REFRESH__SLIDING_TTL` | 2h (validated, not applied as an idle timeout) | above `GRACE_WINDOW`, below `ABSOLUTE_TTL` |
 | `GOMEMLIMIT` | 900MiB (compose) | Go runtime setting |

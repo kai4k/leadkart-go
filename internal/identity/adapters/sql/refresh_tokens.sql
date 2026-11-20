@@ -14,14 +14,18 @@ INSERT INTO identity.refresh_token_families (
 -- emits the FULL token list on persist; rows whose (consumed_at,
 -- replaced_by_id) changed are updated, fresh tokens are inserted.
 -- Token id, hash, generation, issued_at, expires_at, family_id are
--- immutable post-issuance; only the consumed columns rotate.
+-- immutable post-issuance; only the consumed columns (consumed_at, replaced_by_id,
+-- the client binding and the grace-replay counter) change.
 INSERT INTO identity.refresh_tokens (
     id, family_id, token_hash, generation,
-    issued_at, expires_at, consumed_at, replaced_by_id
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+    issued_at, expires_at, consumed_at, replaced_by_id,
+    consumed_client_binding, grace_replays
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 ON CONFLICT (id) DO UPDATE SET
-    consumed_at    = EXCLUDED.consumed_at,
-    replaced_by_id = EXCLUDED.replaced_by_id;
+    consumed_at             = EXCLUDED.consumed_at,
+    replaced_by_id          = EXCLUDED.replaced_by_id,
+    consumed_client_binding = EXCLUDED.consumed_client_binding,
+    grace_replays           = EXCLUDED.grace_replays;
 
 -- name: GetRefreshTokenFamilyByID :one
 SELECT id, person_id, tenant_id, device_label,
@@ -48,13 +52,15 @@ FOR NO KEY UPDATE;
 -- Single indexed lookup by token hash — the rotation flow's entry point.
 -- Returns the token row; caller resolves the family via family_id.
 SELECT id, family_id, token_hash, generation,
-       issued_at, expires_at, consumed_at, replaced_by_id
+       issued_at, expires_at, consumed_at, replaced_by_id,
+       consumed_client_binding, grace_replays
 FROM   identity.refresh_tokens
 WHERE  token_hash = $1;
 
 -- name: ListRefreshTokensInFamily :many
 SELECT id, family_id, token_hash, generation,
-       issued_at, expires_at, consumed_at, replaced_by_id
+       issued_at, expires_at, consumed_at, replaced_by_id,
+       consumed_client_binding, grace_replays
 FROM   identity.refresh_tokens
 WHERE  family_id = $1
 ORDER  BY generation;

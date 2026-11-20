@@ -82,7 +82,20 @@ type Token struct {
 	expiresAt    time.Time
 	consumedAt   time.Time
 	replacedByID TokenID
+	// consumedClient is the binding (HMAC) of the client that consumed the token
+	// ("" = none recorded); graceReplays counts the replays honoured inside its grace
+	// window (fix round 13, item 3).
+	consumedClient string
+	graceReplays   int32
 }
+
+// ConsumedClient returns the binding of the client that consumed the token; "" for
+// a token that is current, or was consumed without a recorded client (including
+// every token consumed before the binding existed).
+func (t Token) ConsumedClient() string { return t.consumedClient }
+
+// GraceReplays returns how many replays this consumed token has honoured.
+func (t Token) GraceReplays() int32 { return t.graceReplays }
 
 // ID returns the token primary key.
 func (t Token) ID() TokenID { return t.id }
@@ -122,4 +135,7 @@ type TokenSnapshot struct {
 	ExpiresAt    time.Time
 	ConsumedAt   time.Time
 	ReplacedByID TokenID
+	// ConsumedClient and GraceReplays: see [Token].
+	ConsumedClient string
+	GraceReplays   int32
 }

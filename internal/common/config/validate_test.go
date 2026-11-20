@@ -129,6 +129,13 @@ func TestValidate_RejectsRefreshTTLInversion(t *testing.T) {
 			r.SlidingTTL = time.Second
 			r.GraceWindow = time.Minute
 		}},
+		{"grace above the cap", func(r *config.RefreshConfig) {
+			r.GraceWindow = config.MaxRefreshGraceWindow + time.Second
+			r.SlidingTTL = time.Hour
+		}},
+		{"grace negative", func(r *config.RefreshConfig) {
+			r.GraceWindow = -time.Second
+		}},
 		{"family cap zero", func(r *config.RefreshConfig) {
 			r.FamilyCap = 0
 		}},
@@ -434,5 +441,18 @@ func TestValidateWorker_DoesNotDemandTheAPIsSettings(t *testing.T) {
 	c.Postgres.DSN = ""
 	if err := config.ValidateWorker(c); !errors.Is(err, config.ErrMissingPostgres) {
 		t.Fatalf("the worker must still require the database: %v", err)
+	}
+}
+
+// The cap itself and the strict rotation (0) are valid.
+func TestValidate_AcceptsGraceAtTheCapAndZero(t *testing.T) {
+	t.Parallel()
+	for _, g := range []time.Duration{0, time.Second, config.MaxRefreshGraceWindow} {
+		c := validBaseConfig()
+		c.Refresh.SlidingTTL = time.Hour
+		c.Refresh.GraceWindow = g
+		if err := config.Validate(c); err != nil {
+			t.Errorf("grace %s: %v", g, err)
+		}
 	}
 }

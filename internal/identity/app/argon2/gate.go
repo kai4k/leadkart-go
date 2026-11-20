@@ -52,6 +52,13 @@ func WithClient(ctx context.Context, key string) context.Context {
 	return context.WithValue(ctx, clientKey, key)
 }
 
+// ClientFrom returns the client key [WithClient] stored in ctx ("" when there is
+// none: a worker, a command-line tool, a test). It is the request context's name for
+// the caller (the rate-limit key: the verified forwarded address, IPv6 per /64), so
+// a command that needs "the same client as before" (the refresh grace replay) reads
+// it here instead of reading headers.
+func ClientFrom(ctx context.Context) string { return clientOf(ctx) }
+
 func classOf(ctx context.Context) Class {
 	if c, ok := ctx.Value(classKey).(Class); ok {
 		return c

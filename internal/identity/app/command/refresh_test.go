@@ -17,12 +17,14 @@ package command_test
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/leadkart/leadkart-go/internal/common/email"
 	"github.com/leadkart/leadkart-go/internal/common/ids"
+	"github.com/leadkart/leadkart-go/internal/identity/app/argon2"
 	"github.com/leadkart/leadkart-go/internal/identity/app/command"
 	"github.com/leadkart/leadkart-go/internal/identity/app/jwt"
 	"github.com/leadkart/leadkart-go/internal/identity/app/permissions"
@@ -862,9 +864,17 @@ func TestRefresh_PersonGloballySuspended_RevokesFamilyAndRejects(t *testing.T) {
 
 // ----- grace window (ADR 0068 D10) -------------------------------------------
 
+// graceRefresh presents plain from the client "client-A".
 func graceRefresh(t *testing.T, rig *refreshRig, plain string) (command.RefreshResult, error) {
 	t.Helper()
-	return rig.handler.Handle(t.Context(), command.RefreshCommand{RefreshTokenPlain: plain})
+	return graceRefreshFrom(t, rig, "client-A", plain)
+}
+
+// graceRefreshFrom presents plain from the named client (the request context's
+// client key; "" is a request with no client).
+func graceRefreshFrom(t *testing.T, rig *refreshRig, client, plain string) (command.RefreshResult, error) {
+	t.Helper()
+	return rig.handler.Handle(argon2.WithClient(t.Context(), client), command.RefreshCommand{RefreshTokenPlain: plain})
 }
 
 func TestRefresh_Grace_SameTokenTwiceGetsTheSameSuccessor(t *testing.T) {
@@ -1022,5 +1032,131 @@ func TestRefresh_AbsoluteLifetime_EndsAnOtherwiseHealthySession(t *testing.T) {
 	// The reason is only the session's own: a plain unknown token has none.
 	if _, err := graceRefresh(t, rig, "unknown-token-plaintext"); errors.Is(err, command.ErrSessionExpired) {
 		t.Fatal("an unknown token must not answer session_expired")
+	}
+}
+
+// ----- grace replay is bound to the client that consumed the token (fix round 13, item 3) --
+
+func TestRefresh_Grace_AnotherClientIsReuse_AndTheFamilyIsRevoked(t *testing.T) {
+	t.Parallel()
+	clock := testNow
+	rig := newRefreshRigGrace(t, 30*time.Second, &clock)
+	fx := seedFullRefreshFixture(t, rig)
+	first, err := graceRefreshFrom(t, rig, "victim", fx.plaintext)
+	if err != nil {
+		t.Fatalf("first: %v", err)
+	}
+	clock = clock.Add(2 * time.Second)
+	res, err := graceRefreshFrom(t, rig, "thief", fx.plaintext)
+	if !errors.Is(err, command.ErrRefreshRejected) || res.RefreshTokenPlain != "" || res.AccessToken != "" {
+		t.Fatalf("another client inside the window: %+v %v, want ErrRefreshRejected and no token", res, err)
+	}
+	// The victim's successor is dead too: the family is revoked.
+	if _, err := graceRefreshFrom(t, rig, "victim", first.RefreshTokenPlain); !errors.Is(err, command.ErrRefreshRejected) {
+		t.Fatalf("the victim's successor after the theft: %v, want ErrRefreshRejected", err)
+	}
+	if fams, _ := rig.families.ListActiveForPerson(t.Context(), fx.person.ID()); len(fams) != 0 {
+		t.Fatalf("family must be revoked: %d active", len(fams))
+	}
+}
+
+func TestRefresh_Grace_ThreeReplaysThenReuse(t *testing.T) {
+	t.Parallel()
+	clock := testNow
+	rig := newRefreshRigGrace(t, 30*time.Second, &clock)
+	fx := seedFullRefreshFixture(t, rig)
+	first, err := graceRefresh(t, rig, fx.plaintext)
+	if err != nil {
+		t.Fatalf("first: %v", err)
+	}
+	for i := 1; i <= refreshtoken.MaxGraceReplays; i++ {
+		clock = clock.Add(time.Second)
+		again, err := graceRefresh(t, rig, fx.plaintext)
+		if err != nil || again.RefreshTokenPlain != first.RefreshTokenPlain {
+			t.Fatalf("replay %d: %v same=%v", i, err, again.RefreshTokenPlain == first.RefreshTokenPlain)
+		}
+	}
+	clock = clock.Add(time.Second)
+	if _, err := graceRefresh(t, rig, fx.plaintext); !errors.Is(err, command.ErrRefreshRejected) {
+		t.Fatalf("replay %d: %v, want ErrRefreshRejected", refreshtoken.MaxGraceReplays+1, err)
+	}
+	if fams, _ := rig.families.ListActiveForPerson(t.Context(), fx.person.ID()); len(fams) != 0 {
+		t.Fatalf("the budget overrun must revoke the family: %d active", len(fams))
+	}
+}
+
+// A request that carries no client (a worker, a test without the middleware) can
+// rotate, but its token is replayable by nobody.
+func TestRefresh_Grace_NoClientMeansNoReplay(t *testing.T) {
+	t.Parallel()
+	clock := testNow
+	rig := newRefreshRigGrace(t, 30*time.Second, &clock)
+	fx := seedFullRefreshFixture(t, rig)
+	if _, err := graceRefreshFrom(t, rig, "", fx.plaintext); err != nil {
+		t.Fatalf("rotate without a client: %v", err)
+	}
+	if _, err := graceRefreshFrom(t, rig, "", fx.plaintext); !errors.Is(err, command.ErrRefreshRejected) {
+		t.Fatalf("replay of a token consumed without a client: %v, want ErrRefreshRejected", err)
+	}
+}
+
+// Only a keyed hash of the client reaches storage, and it differs per family.
+func TestRefresh_Grace_StoresAnHMACOfTheClientNeverTheClient(t *testing.T) {
+	t.Parallel()
+	clock := testNow
+	rig := newRefreshRigGrace(t, 30*time.Second, &clock)
+	fx := seedFullRefreshFixture(t, rig)
+	const client = "203.0.113.77"
+	if _, err := graceRefreshFrom(t, rig, client, fx.plaintext); err != nil {
+		t.Fatal(err)
+	}
+	fam, err := rig.families.GetByTokenHash(t.Context(), refreshmintHashOf(t, fx.plaintext))
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored := fam.AllTokens()[0].ConsumedClient()
+	bindingKey, err := refreshmint.DeriveClientBindingKey(refreshTestSuccessorKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := refreshmint.ClientBinding(bindingKey, fam.ID(), client); stored != want || stored == "" || strings.Contains(stored, client) {
+		t.Fatalf("stored binding %q, want the HMAC %q and no trace of the address", stored, want)
+	}
+	if other := refreshmint.ClientBinding(bindingKey, refreshtoken.FamilyID("another-family"), client); other == stored {
+		t.Fatal("the binding must differ across families")
+	}
+}
+
+// Every grace presentation is logged (a WARN when refused) with the family and the
+// outcome and nothing about the client; the counter is a no-op without a provider.
+func TestRefresh_Grace_LogsEveryReplayWithoutTheClient(t *testing.T) {
+	t.Parallel()
+	clock := testNow
+	rig := newRefreshRigGrace(t, 30*time.Second, &clock)
+	var buf strings.Builder
+	rig.handler = rig.handler.WithLogger(slog.New(slog.NewTextHandler(&buf, nil)))
+	fx := seedFullRefreshFixture(t, rig)
+	if _, err := graceRefreshFrom(t, rig, "198.51.100.9", fx.plaintext); err != nil {
+		t.Fatal(err)
+	}
+	if buf.Len() != 0 {
+		t.Fatalf("a first rotation is not a replay, got a log line: %s", buf.String())
+	}
+	if _, err := graceRefreshFrom(t, rig, "198.51.100.9", fx.plaintext); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := graceRefreshFrom(t, rig, "198.51.100.66", fx.plaintext); !errors.Is(err, command.ErrRefreshRejected) {
+		t.Fatal("the other client must be refused")
+	}
+	out := buf.String()
+	for _, want := range []string{"outcome=same_client", "level=INFO", "outcome=refused_other_client", "level=WARN", "family_id="} {
+		if !strings.Contains(out, want) {
+			t.Errorf("log lacks %q in: %s", want, out)
+		}
+	}
+	for _, leak := range []string{"198.51.100", fx.plaintext} {
+		if strings.Contains(out, leak) {
+			t.Errorf("log leaks %q in: %s", leak, out)
+		}
 	}
 }

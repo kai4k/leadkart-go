@@ -41,6 +41,7 @@ import (
 
 	"github.com/leadkart/leadkart-go/internal/common/config"
 	"github.com/leadkart/leadkart-go/internal/common/email"
+	"github.com/leadkart/leadkart-go/internal/common/httpmw"
 	"github.com/leadkart/leadkart-go/internal/common/ids"
 	"github.com/leadkart/leadkart-go/internal/common/slug"
 	crmapp "github.com/leadkart/leadkart-go/internal/crm/app"
@@ -129,7 +130,15 @@ func newE2EFixtureGrace(t *testing.T, now func() time.Time, cascade bool, grace 
 	if cascade {
 		startStampCascade(t, pool, wiring)
 	}
-	srv := httptest.NewServer(newServer(silentLogger(), wiring.App, buildPlatformApp(pool, now).App, buildInventoryApp(pool, nil), crmapp.Application{}, buildTasksApp(pool, nil), buildDispatchApp(pool, nil), buildOrdersApp(pool, nil), buildNotificationsApp(pool, nil), wiring.Issuer, wiring.StampValidator))
+	// The request context names the client the way production does (httpmw.ClientKey
+	// behind argonClientContext), with the loopback peer a trusted proxy: a request
+	// is its own X-Forwarded-For client, or 127.0.0.1 without the header. A refresh
+	// grace replay is bound to that client (fix round 13, item 3).
+	trusted, err := httpmw.ParseTrustedProxies("127.0.0.0/8")
+	if err != nil {
+		t.Fatalf("trusted proxies: %v", err)
+	}
+	srv := httptest.NewServer(argonClientContext(trusted)(newServer(silentLogger(), wiring.App, buildPlatformApp(pool, now).App, buildInventoryApp(pool, nil), crmapp.Application{}, buildTasksApp(pool, nil), buildDispatchApp(pool, nil), buildOrdersApp(pool, nil), buildNotificationsApp(pool, nil), wiring.Issuer, wiring.StampValidator)))
 	t.Cleanup(srv.Close)
 	return e2eFixture{
 		URL:     srv.URL,

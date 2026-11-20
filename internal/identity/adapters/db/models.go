@@ -276,6 +276,10 @@ type IdentityRefreshToken struct {
 	ExpiresAt    pgtype.Timestamptz
 	ConsumedAt   pgtype.Timestamptz
 	ReplacedByID pgtype.UUID
+	// hex(HMAC-SHA256) binding of the client that consumed this token; never an address. NULL = none recorded (strict: a replay is reuse). ADR 0068 D10.
+	ConsumedClientBinding *string
+	// Grace replays honoured for this consumed token (at most 3), counted under the family row lock. ADR 0068 D10.
+	GraceReplays int16
 }
 
 // Refresh-token family per RFC 9700 §4.13 + ADR 0011. NOT tenant-scoped — session-management infrastructure.

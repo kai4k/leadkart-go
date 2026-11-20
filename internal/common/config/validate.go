@@ -171,6 +171,12 @@ func validateShared(cfg AppConfig) error {
 	if cfg.Refresh.SlidingTTL <= cfg.Refresh.GraceWindow {
 		return errors.New("config: Refresh.SlidingTTL must exceed Refresh.GraceWindow")
 	}
+	if cfg.Refresh.GraceWindow < 0 {
+		return errors.New("config: Refresh.GraceWindow must not be negative (0 is the strict rotation)")
+	}
+	if cfg.Refresh.GraceWindow > MaxRefreshGraceWindow {
+		return fmt.Errorf("config: Refresh.GraceWindow %s exceeds the %s cap: a longer window is a longer time a stolen just-rotated token can be raced", cfg.Refresh.GraceWindow, MaxRefreshGraceWindow)
+	}
 	if cfg.Refresh.FamilyCap < 1 {
 		return errors.New("config: Refresh.FamilyCap must be ≥1")
 	}

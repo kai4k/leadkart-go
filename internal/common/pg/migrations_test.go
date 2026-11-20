@@ -1132,3 +1132,59 @@ func TestPersonsResetAttemptsMigration_UpDownUpAndGrants(t *testing.T) {
 		t.Fatalf("after re-up: column=%v app read+write=%v, want both", column(), write())
 	}
 }
+
+// clientBindingMigration is the version of 20261120000006_refresh_tokens_client_binding.sql.
+const clientBindingMigration = 20261120000006
+
+// The refresh-token client binding is a nullable text column and the replay counter
+// a NOT NULL smallint defaulting to 0, both usable by the application role, both
+// dropped by Down and recreated by Up, with the start-up privilege check passing.
+func TestRefreshTokensClientBindingMigration_UpDownUpAndGrants(t *testing.T) {
+	dsn := startPostgres(t)
+	db, err := sql.Open("pgx", dsn)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer db.Close()
+	createAppRole(t, db)
+	applyMigrations(t, dsn)
+
+	columns := func() bool {
+		return hasPriv(t, db, `SELECT
+			EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'identity' AND table_name = 'refresh_tokens'
+			        AND column_name = 'consumed_client_binding' AND is_nullable = 'YES')
+			AND EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'identity' AND table_name = 'refresh_tokens'
+			        AND column_name = 'grace_replays' AND is_nullable = 'NO' AND column_default = '0')`)
+	}
+	write := func() bool {
+		return hasPriv(t, db, `SELECT bool_and(has_column_privilege('leadkart_app', 'identity.refresh_tokens', c, p))
+			FROM unnest(ARRAY['consumed_client_binding','grace_replays']) AS c, unnest(ARRAY['SELECT','INSERT','UPDATE']) AS p`)
+	}
+	if !columns() || !write() {
+		t.Fatalf("after up: columns=%v app select/insert/update=%v, want both", columns(), write())
+	}
+	if err := pg.VerifyApplicationPrivileges(t.Context(), appRoleConn(t, dsn), pg.PrivilegeCheck{Production: true, Logger: discardLogger()}); err != nil {
+		t.Fatalf("start-up privilege check with the new columns: %v", err)
+	}
+
+	gdb, err := goose.OpenDBWithDriver("pgx", dsn)
+	if err != nil {
+		t.Fatalf("goose open: %v", err)
+	}
+	defer gdb.Close()
+	if err := pg.EnsureGooseDialect(); err != nil {
+		t.Fatalf("dialect: %v", err)
+	}
+	if err := goose.DownToContext(t.Context(), gdb, migrationsDir(t), clientBindingMigration-1); err != nil {
+		t.Fatalf("goose down: %v", err)
+	}
+	if columns() {
+		t.Fatal("the columns survived the down migration")
+	}
+	if err := goose.UpContext(t.Context(), gdb, migrationsDir(t)); err != nil {
+		t.Fatalf("goose up again: %v", err)
+	}
+	if !columns() || !write() {
+		t.Fatalf("after re-up: columns=%v app select/insert/update=%v, want both", columns(), write())
+	}
+}

@@ -77,7 +77,7 @@ func SetPermissionRequestPermission(t testing.TB, pool *pgxpool.Pool, requestID,
 
 // CountFamilyTokens returns how many token rows the refresh-token family that
 // holds the token with this SHA-256 hash has: one per generation, so a grace
-// replay (which writes nothing) leaves it unchanged.
+// replay (which only moves the consumed token's replay counter) leaves it unchanged.
 func CountFamilyTokens(t testing.TB, pool *pgxpool.Pool, tokenHash string) int {
 	t.Helper()
 	var n int

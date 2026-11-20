@@ -189,6 +189,9 @@ func UnmarshalFromDB(s FamilySnapshot) *Family {
 			expiresAt:    ts.ExpiresAt,
 			consumedAt:   ts.ConsumedAt,
 			replacedByID: ts.ReplacedByID,
+
+			consumedClient: ts.ConsumedClient,
+			graceReplays:   ts.GraceReplays,
 		}
 	}
 	return f
@@ -252,10 +255,25 @@ const (
 	// RotationIssued means the presented token was consumed and a successor appended.
 	RotationIssued RotationOutcome = iota + 1
 	// RotationGraceReplay means the presented token was consumed at most the grace
-	// window ago and its successor is still the unconsumed chain head; nothing
-	// changed.
+	// window ago by the SAME client, its successor is still the unconsumed chain
+	// head, and fewer than [MaxGraceReplays] replays were already honoured: the
+	// replay counter of the consumed token moved, nothing else.
 	RotationGraceReplay
+	// RotationRefusedOtherClient is returned WITH [ErrReuseDetected] when the token
+	// was inside its grace window but presented by a client other than the one that
+	// consumed it (or by an unbound one, or the consumed token has no binding: rows
+	// from before the binding exist are strict).
+	RotationRefusedOtherClient
+	// RotationRefusedLimit is returned WITH [ErrReuseDetected] when the token was
+	// inside its grace window, presented by its own client, but [MaxGraceReplays]
+	// replays were already honoured.
+	RotationRefusedLimit
 )
+
+// MaxGraceReplays is how many replays one consumed token honours inside its grace
+// window: enough for a second and third tab and a retried request, not enough to
+// ride a session by mirroring the owner's refresh cadence.
+const MaxGraceReplays = 3
 
 // Rotate is the strict rotation: no grace window, no absolute lifetime (see
 // [Family.RotateWithGrace]).
@@ -280,6 +298,10 @@ type RotationParams struct {
 	// GraceWindow is how long after its rotation a consumed token may be presented
 	// again; 0 is the strict rotation.
 	GraceWindow time.Duration
+	// Client is the binding (an HMAC, never an address) of the client that presents
+	// the token: stored on the token when this rotation consumes it, compared on a
+	// grace replay. "" is a client that cannot be told apart from any other.
+	Client string
 	// Now is the explicit instant: consumed-at, issued-at, last-used-at,
 	// revoked-at and the grace and absolute measurements all use it.
 	Now time.Time
@@ -348,8 +370,21 @@ func (f *Family) RotateWithGrace(rp RotationParams) (RotationOutcome, error) {
 		}
 	}
 	if f.tokens[idx].IsConsumed() {
-		if f.isGraceReplay(idx, candidateSuccessor, graceWindow, now) {
-			return RotationGraceReplay, nil
+		// Outside the window, two generations old, a used successor or a different
+		// candidate: plain reuse. Inside the window the replay must also come from the
+		// client that consumed the token and stay within the replay budget.
+		var refusal RotationOutcome
+		if f.isGraceCase(idx, candidateSuccessor, graceWindow, now) {
+			consumed := &f.tokens[idx]
+			switch {
+			case consumed.consumedClient == "" || consumed.consumedClient != rp.Client:
+				refusal = RotationRefusedOtherClient
+			case consumed.graceReplays >= MaxGraceReplays:
+				refusal = RotationRefusedLimit
+			default:
+				consumed.graceReplays++
+				return RotationGraceReplay, nil
+			}
 		}
 		// REUSE DETECTED — revoke entire family per RFC 9700 §4.13.
 		f.revokedAt = now
@@ -361,7 +396,7 @@ func (f *Family) RotateWithGrace(rp RotationParams) (RotationOutcome, error) {
 			Reason:   "reuse_detected",
 			At:       now,
 		})
-		return 0, fmt.Errorf("%w", ErrReuseDetected)
+		return refusal, fmt.Errorf("%w", ErrReuseDetected)
 	}
 
 	if f.tokens[idx].IsExpired(now) {
@@ -382,9 +417,11 @@ func (f *Family) RotateWithGrace(rp RotationParams) (RotationOutcome, error) {
 		expiresAt:  expiresAt,
 	}
 
-	// Mark presented token as consumed; cross-link to next.
+	// Mark presented token as consumed by this client; cross-link to next.
 	f.tokens[idx].consumedAt = now
 	f.tokens[idx].replacedByID = nextID
+	f.tokens[idx].consumedClient = rp.Client
+	f.tokens[idx].graceReplays = 0
 
 	f.tokens = append(f.tokens, next)
 	f.lastUsedAt = now
@@ -401,11 +438,12 @@ func (f *Family) RotateWithGrace(rp RotationParams) (RotationOutcome, error) {
 	return RotationIssued, nil
 }
 
-// isGraceReplay reports whether presenting the consumed token at idx again is
-// an idempotent replay: inside the window, its direct successor is the
-// unconsumed chain head (not a token further down), unexpired, and the
-// candidate is that head's hash.
-func (f *Family) isGraceReplay(idx int, candidate TokenHash, grace time.Duration, now time.Time) bool {
+// isGraceCase reports whether presenting the consumed token at idx again is
+// inside its grace window with an intact chain: its direct successor is the
+// unconsumed chain head (not a token further down), unexpired, and the candidate is
+// that head's hash. Whether the presenter may be given that successor (same client,
+// replay budget left) is decided by the caller.
+func (f *Family) isGraceCase(idx int, candidate TokenHash, grace time.Duration, now time.Time) bool {
 	if grace <= 0 {
 		return false
 	}

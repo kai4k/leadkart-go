@@ -476,7 +476,12 @@ func TestRotateWithGrace(t *testing.T) {
 // rotateGrace is one presentation without an absolute lifetime (the grace
 // behaviour is what these tests are about).
 func rotateGrace(f *refreshtoken.Family, presented, candidate refreshtoken.TokenHash, ttl, grace time.Duration, now time.Time) (refreshtoken.RotationOutcome, error) {
-	return f.RotateWithGrace(refreshtoken.RotationParams{Presented: presented, Candidate: candidate, TTL: ttl, GraceWindow: grace, Now: now})
+	return rotateAs(f, "client-A", presented, candidate, ttl, grace, now)
+}
+
+// rotateAs is one presentation by the named client binding.
+func rotateAs(f *refreshtoken.Family, client string, presented, candidate refreshtoken.TokenHash, ttl, grace time.Duration, now time.Time) (refreshtoken.RotationOutcome, error) {
+	return f.RotateWithGrace(refreshtoken.RotationParams{Presented: presented, Candidate: candidate, TTL: ttl, GraceWindow: grace, Client: client, Now: now})
 }
 
 // ----- Absolute lifetime (fix round 13, item 12) ------------------------------
@@ -557,4 +562,81 @@ func TestRotateWithGrace_ExpiredHeadInsideTheWindowIsReuse(t *testing.T) {
 	if !errors.Is(err, refreshtoken.ErrReuseDetected) || !f.IsRevoked() {
 		t.Fatalf("replay onto an expired head: %v revoked=%v, want reuse + revoked", err, f.IsRevoked())
 	}
+}
+
+// ----- Client binding and replay limit (fix round 13, item 3) ------------------
+
+func TestRotateWithGrace_ClientBinding(t *testing.T) {
+	t.Parallel()
+	const ttl, grace = 14 * 24 * time.Hour, 30 * time.Second
+	rotated := func(t *testing.T, client string) (*refreshtoken.Family, refreshtoken.TokenHash) {
+		t.Helper()
+		f := newFamily(t)
+		first := f.CurrentToken().Hash()
+		if _, err := rotateAs(f, client, first, hash("s1"), ttl, grace, baseTime); err != nil {
+			t.Fatalf("rotate: %v", err)
+		}
+		_ = f.PullEvents()
+		return f, first
+	}
+
+	t.Run("the client that consumed the token is replayed up to the limit, then it is reuse", func(t *testing.T) {
+		t.Parallel()
+		f, first := rotated(t, "client-A")
+		for i := 1; i <= refreshtoken.MaxGraceReplays; i++ {
+			out, err := rotateAs(f, "client-A", first, hash("s1"), ttl, grace, baseTime.Add(time.Duration(i)*time.Second))
+			if err != nil || out != refreshtoken.RotationGraceReplay {
+				t.Fatalf("replay %d: %v %v", i, out, err)
+			}
+		}
+		out, err := rotateAs(f, "client-A", first, hash("s1"), ttl, grace, baseTime.Add(5*time.Second))
+		if !errors.Is(err, refreshtoken.ErrReuseDetected) || out != refreshtoken.RotationRefusedLimit || !f.IsRevoked() {
+			t.Fatalf("replay %d: %v %v revoked=%v, want reuse / refused_limit / revoked", refreshtoken.MaxGraceReplays+1, out, err, f.IsRevoked())
+		}
+		if evs := f.PullEvents(); len(evs) != 1 {
+			t.Fatalf("%d events, want exactly the revocation", len(evs))
+		}
+	})
+
+	t.Run("another client inside the window is reuse and revokes the family", func(t *testing.T) {
+		t.Parallel()
+		f, first := rotated(t, "client-A")
+		out, err := rotateAs(f, "client-B", first, hash("s1"), ttl, grace, baseTime.Add(time.Second))
+		if !errors.Is(err, refreshtoken.ErrReuseDetected) || out != refreshtoken.RotationRefusedOtherClient || !f.IsRevoked() {
+			t.Fatalf("other client: %v %v revoked=%v, want reuse / refused_other_client / revoked", out, err, f.IsRevoked())
+		}
+		if f.RevokeReason() != "reuse_detected" {
+			t.Fatalf("revoke reason %q, want reuse_detected (the SIEM subscriber's trigger)", f.RevokeReason())
+		}
+		if evs := f.PullEvents(); len(evs) != 1 {
+			t.Fatalf("%d events, want exactly the revocation", len(evs))
+		}
+	})
+
+	t.Run("a token consumed without a binding is strict", func(t *testing.T) {
+		t.Parallel()
+		// Consumed by a request with no client, or before the binding existed (a NULL
+		// column): nobody can prove they are the client that consumed it.
+		for _, client := range []string{"", "client-A"} {
+			g, firstG := rotated(t, "")
+			if out, err := rotateAs(g, client, firstG, hash("s1"), ttl, grace, baseTime.Add(time.Second)); !errors.Is(err, refreshtoken.ErrReuseDetected) || out != refreshtoken.RotationRefusedOtherClient {
+				t.Fatalf("unbound token replayed by %q: %v %v, want reuse", client, out, err)
+			}
+		}
+	})
+
+	t.Run("the replay counter lives on the consumed token and is not bound by the grace of another", func(t *testing.T) {
+		t.Parallel()
+		f, first := rotated(t, "client-A")
+		if _, err := rotateAs(f, "client-A", first, hash("s1"), ttl, grace, baseTime.Add(time.Second)); err != nil {
+			t.Fatal(err)
+		}
+		toks := f.AllTokens()
+		if toks[0].GraceReplays() != 1 || toks[1].GraceReplays() != 0 {
+			t.Fatalf("replays: consumed=%d head=%d, want 1 and 0", toks[0].GraceReplays(), toks[1].GraceReplays())
+		}
+		if toks[0].ConsumedClient() != "client-A" || toks[1].ConsumedClient() != "" {
+			t.Fatalf("bindings: consumed=%q head=%q, want client-A and empty", toks[0].ConsumedClient(), toks[1].ConsumedClient())
+		}
+	})
 }

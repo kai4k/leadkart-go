@@ -135,6 +135,13 @@ type PreviousSigningKey struct {
 	SigningKey string `koanf:"signing_key" secret:"strong"`
 }
 
+// MaxRefreshGraceWindow caps Refresh.GraceWindow: the window in which a client
+// that lost the response to a rotation may present the same token again. A
+// replay is bound to the client that rotated (ADR 0068 D10) but a longer window is
+// still a longer exposure for that client's own token; 2 minutes covers a slow
+// mobile retry. 0 (strict rotation) stays valid.
+const MaxRefreshGraceWindow = 120 * time.Second
+
 // RefreshConfig — refresh-token lifetimes.
 //
 //   - AbsoluteTTL (default 14d, LEADKART_REFRESH__ABSOLUTE_TTL): a session ends this
@@ -148,7 +155,7 @@ type PreviousSigningKey struct {
 //     alone. Kept for the configuration surface; a pending ADR 0069 item asks the
 //     owner whether to enforce it or drop it.
 //   - GraceWindow (default 30s, LEADKART_REFRESH__GRACE_WINDOW, 0 = strict
-//     rotation): ADR 0068 D10.
+//     rotation, at most [MaxRefreshGraceWindow]): ADR 0068 D10.
 type RefreshConfig struct {
 	AbsoluteTTL time.Duration `koanf:"absolute_ttl"`
 	SlidingTTL  time.Duration `koanf:"sliding_ttl"`

@@ -21,6 +21,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/leadkart/leadkart-go/internal/identity/app/refreshmint"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/refreshtoken"
 	"github.com/leadkart/leadkart-go/internal/identity/identitytest"
 	"github.com/leadkart/leadkart-go/internal/identity/ports"
 )
@@ -149,14 +150,17 @@ func TestE2E_Refresh_GraceNeverResurrectsARevokedFamily(t *testing.T) {
 	}
 }
 
-// N simultaneous presentations of one token: all get 200 and the SAME successor,
-// and exactly one rotation row is written.
+// Simultaneous presentations of one token from one client: all get 200 and the SAME
+// successor, and exactly one rotation row is written. One of them rotates and the
+// others are replays, so at most 1 + MaxGraceReplays (4) can be answered: changed
+// deliberately in fix round 13 (it ran 8 before replays were bounded; the 5th and
+// later are reuse, see TestE2E_Refresh_ReplayBudgetOverrunRevokes).
 func TestE2E_Refresh_ConcurrentPresentationsShareOneSuccessor(t *testing.T) {
 	clock := newGraceClock()
 	f := newE2EFixtureGrace(t, clock.now, false, e2eGrace)
 	tn := f.registerAndLogin(t, "grace-conc")
 
-	const n = 8
+	const n = 1 + refreshtoken.MaxGraceReplays
 	ctx, cancel := context.WithTimeout(t.Context(), 60*time.Second)
 	defer cancel()
 	start := make(chan struct{})

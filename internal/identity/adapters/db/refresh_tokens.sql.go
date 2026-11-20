@@ -13,7 +13,8 @@ import (
 
 const getRefreshTokenByHash = `-- name: GetRefreshTokenByHash :one
 SELECT id, family_id, token_hash, generation,
-       issued_at, expires_at, consumed_at, replaced_by_id
+       issued_at, expires_at, consumed_at, replaced_by_id,
+       consumed_client_binding, grace_replays
 FROM   identity.refresh_tokens
 WHERE  token_hash = $1
 `
@@ -32,6 +33,8 @@ func (q *Queries) GetRefreshTokenByHash(ctx context.Context, tokenHash string) (
 		&i.ExpiresAt,
 		&i.ConsumedAt,
 		&i.ReplacedByID,
+		&i.ConsumedClientBinding,
+		&i.GraceReplays,
 	)
 	return i, err
 }
@@ -172,7 +175,8 @@ func (q *Queries) ListActiveFamiliesForPerson(ctx context.Context, personID pgty
 
 const listRefreshTokensInFamily = `-- name: ListRefreshTokensInFamily :many
 SELECT id, family_id, token_hash, generation,
-       issued_at, expires_at, consumed_at, replaced_by_id
+       issued_at, expires_at, consumed_at, replaced_by_id,
+       consumed_client_binding, grace_replays
 FROM   identity.refresh_tokens
 WHERE  family_id = $1
 ORDER  BY generation
@@ -196,6 +200,8 @@ func (q *Queries) ListRefreshTokensInFamily(ctx context.Context, familyID pgtype
 			&i.ExpiresAt,
 			&i.ConsumedAt,
 			&i.ReplacedByID,
+			&i.ConsumedClientBinding,
+			&i.GraceReplays,
 		); err != nil {
 			return nil, err
 		}
@@ -237,29 +243,35 @@ func (q *Queries) UpdateRefreshTokenFamily(ctx context.Context, arg UpdateRefres
 const upsertRefreshToken = `-- name: UpsertRefreshToken :exec
 INSERT INTO identity.refresh_tokens (
     id, family_id, token_hash, generation,
-    issued_at, expires_at, consumed_at, replaced_by_id
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+    issued_at, expires_at, consumed_at, replaced_by_id,
+    consumed_client_binding, grace_replays
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 ON CONFLICT (id) DO UPDATE SET
-    consumed_at    = EXCLUDED.consumed_at,
-    replaced_by_id = EXCLUDED.replaced_by_id
+    consumed_at             = EXCLUDED.consumed_at,
+    replaced_by_id          = EXCLUDED.replaced_by_id,
+    consumed_client_binding = EXCLUDED.consumed_client_binding,
+    grace_replays           = EXCLUDED.grace_replays
 `
 
 type UpsertRefreshTokenParams struct {
-	ID           pgtype.UUID
-	FamilyID     pgtype.UUID
-	TokenHash    string
-	Generation   int32
-	IssuedAt     pgtype.Timestamptz
-	ExpiresAt    pgtype.Timestamptz
-	ConsumedAt   pgtype.Timestamptz
-	ReplacedByID pgtype.UUID
+	ID                    pgtype.UUID
+	FamilyID              pgtype.UUID
+	TokenHash             string
+	Generation            int32
+	IssuedAt              pgtype.Timestamptz
+	ExpiresAt             pgtype.Timestamptz
+	ConsumedAt            pgtype.Timestamptz
+	ReplacedByID          pgtype.UUID
+	ConsumedClientBinding *string
+	GraceReplays          int16
 }
 
 // INSERT-then-UPDATE-on-conflict by token id. The family aggregate
 // emits the FULL token list on persist; rows whose (consumed_at,
 // replaced_by_id) changed are updated, fresh tokens are inserted.
 // Token id, hash, generation, issued_at, expires_at, family_id are
-// immutable post-issuance; only the consumed columns rotate.
+// immutable post-issuance; only the consumed columns (consumed_at, replaced_by_id,
+// the client binding and the grace-replay counter) change.
 func (q *Queries) UpsertRefreshToken(ctx context.Context, arg UpsertRefreshTokenParams) error {
 	_, err := q.db.Exec(ctx, upsertRefreshToken,
 		arg.ID,
@@ -270,6 +282,8 @@ func (q *Queries) UpsertRefreshToken(ctx context.Context, arg UpsertRefreshToken
 		arg.ExpiresAt,
 		arg.ConsumedAt,
 		arg.ReplacedByID,
+		arg.ConsumedClientBinding,
+		arg.GraceReplays,
 	)
 	return err
 }

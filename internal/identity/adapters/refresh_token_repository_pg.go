@@ -223,8 +223,10 @@ func persistFamilyState(ctx context.Context, q *db.Queries, f *refreshtoken.Fami
 // tokenState is the mutable part of a token row (everything else is immutable
 // after issuance): what UpdateByID compares to find the rows an update touched.
 type tokenState struct {
-	consumedAt time.Time
-	replacedBy refreshtoken.TokenID
+	consumedAt     time.Time
+	replacedBy     refreshtoken.TokenID
+	consumedClient string
+	graceReplays   int32
 }
 
 // tokenStates snapshots the family's tokens as loaded.
@@ -232,7 +234,7 @@ func tokenStates(f *refreshtoken.Family) map[refreshtoken.TokenID]tokenState {
 	tokens := f.AllTokens()
 	out := make(map[refreshtoken.TokenID]tokenState, len(tokens))
 	for _, t := range tokens {
-		out[t.ID()] = tokenState{consumedAt: t.ConsumedAt(), replacedBy: t.ReplacedByID()}
+		out[t.ID()] = tokenState{consumedAt: t.ConsumedAt(), replacedBy: t.ReplacedByID(), consumedClient: t.ConsumedClient(), graceReplays: t.GraceReplays()}
 	}
 	return out
 }
@@ -252,7 +254,8 @@ func upsertFamilyTokens(ctx context.Context, q *db.Queries, f *refreshtoken.Fami
 	tokens := f.AllTokens()
 	for i := len(tokens) - 1; i >= 0; i-- {
 		t := tokens[i]
-		if before, ok := loaded[t.ID()]; ok && before.consumedAt.Equal(t.ConsumedAt()) && before.replacedBy == t.ReplacedByID() {
+		if before, ok := loaded[t.ID()]; ok && before.consumedAt.Equal(t.ConsumedAt()) && before.replacedBy == t.ReplacedByID() &&
+			before.consumedClient == t.ConsumedClient() && before.graceReplays == t.GraceReplays() {
 			continue
 		}
 		tid, err := parseTokenID(t.ID())
@@ -276,6 +279,9 @@ func upsertFamilyTokens(ctx context.Context, q *db.Queries, f *refreshtoken.Fami
 			ExpiresAt:    pgconv.PgRequiredTimestamp(t.ExpiresAt()),
 			ConsumedAt:   pgconv.PgTimestamp(t.ConsumedAt()),
 			ReplacedByID: replacedBy,
+
+			ConsumedClientBinding: pgconv.ZeroToNil(t.ConsumedClient()),
+			GraceReplays:          int16(t.GraceReplays()), //nolint:gosec // bounded by refreshtoken.MaxGraceReplays (=3)
 		})
 		if err != nil {
 			return fmt.Errorf("refresh token repo: upsert token: %w", err)
@@ -358,6 +364,10 @@ func hydrateFamily(ctx context.Context, q *db.Queries, row db.IdentityRefreshTok
 			ConsumedAt:   pgconv.TimeFromPg(t.ConsumedAt),
 			ReplacedByID: replacedBy,
 		}
+		if t.ConsumedClientBinding != nil {
+			tokenSnaps[i].ConsumedClient = *t.ConsumedClientBinding
+		}
+		tokenSnaps[i].GraceReplays = int32(t.GraceReplays)
 	}
 	var revokeReason string
 	if row.RevokeReason != nil {

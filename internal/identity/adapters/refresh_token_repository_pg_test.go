@@ -191,6 +191,54 @@ func TestRefreshTokenFamilyRepository_UpdateByID_RotateWritesNewTokenAndUpdatesO
 	}
 }
 
+// The client binding and the replay counter (migration 20261120000006) survive the
+// round trip through the SQL: written when the token is consumed, moved by a replay,
+// read back on the next load.
+func TestRefreshTokenFamilyRepository_UpdateByID_PersistsTheClientBindingAndTheReplayCounter(t *testing.T) {
+	t.Parallel()
+	pool := repoFixture(t)
+	tx := pg.NewTransactor(pool)
+	families := adapters.NewRefreshTokenFamilyRepository(pool, tx)
+	persons := adapters.NewPersonRepository(pool, tx)
+	tenants := adapters.NewTenantRepository(pool, tx)
+
+	f := seedFamily(t, persons, tenants, families, "bind-original")
+	original, next := hashOf(t, "bind-original"), hashOf(t, "bind-next")
+	binding := strings.Repeat("ab", 32)
+	now := time.Now().UTC()
+	rotate := func(client string, at time.Time) refreshtoken.RotationOutcome {
+		var out refreshtoken.RotationOutcome
+		if err := families.UpdateByID(t.Context(), f.ID(), func(f2 *refreshtoken.Family) (bool, error) {
+			var err error
+			out, err = f2.RotateWithGrace(refreshtoken.RotationParams{
+				Presented: original, Candidate: next, TTL: tokenTTL, GraceWindow: time.Minute, Client: client, Now: at,
+			})
+			return err == nil, err
+		}); err != nil {
+			t.Fatalf("rotate: %v", err)
+		}
+		return out
+	}
+	if out := rotate(binding, now); out != refreshtoken.RotationIssued {
+		t.Fatalf("first presentation: %v", out)
+	}
+	if out := rotate(binding, now.Add(time.Second)); out != refreshtoken.RotationGraceReplay {
+		t.Fatalf("replay: %v", out)
+	}
+
+	got, err := families.GetByID(t.Context(), f.ID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	tokens := got.AllTokens()
+	if tokens[0].ConsumedClient() != binding || tokens[0].GraceReplays() != 1 {
+		t.Fatalf("consumed token: binding %q replays %d, want %q and 1", tokens[0].ConsumedClient(), tokens[0].GraceReplays(), binding)
+	}
+	if tokens[1].ConsumedClient() != "" || tokens[1].GraceReplays() != 0 {
+		t.Fatalf("head token: binding %q replays %d, want none", tokens[1].ConsumedClient(), tokens[1].GraceReplays())
+	}
+}
+
 // Business-rule and state-machine scenarios (ReuseDetection, Revoke,
 // ListActiveForPerson revoked-filter) live in
 // refreshtokentest.FakeRepository unit tests.

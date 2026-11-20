@@ -217,13 +217,18 @@ paths:
       security: []
       description: >
         Rotates the refresh token and reissues the access token. Re-presenting a
-        just-rotated token within the grace window (default 30 s,
+        just-rotated token within the grace window (default 30 s, at most 120 s,
         `Refresh.GraceWindow`) returns the SAME successor (a deterministic
-        derivation: nothing is written, no new token row exists), so two tabs or a
-        retried request after a lost response do not end the session. Outside the
-        window, for a token two or more generations old, or once the successor has
-        been used, the presentation is token reuse: the whole family is revoked and
-        the answer is `401 refresh_rejected`. A revoked family never answers a
+        derivation: no new token row is written), so two tabs or a retried request
+        after a lost response do not end the session. That holds ONLY for the client
+        that rotated the token (the client address the rate limiters use: behind the
+        BFF its `X-Forwarded-For`; only a keyed hash of it is stored) and for at most
+        3 replays per token. A replay from another client, a 4th replay, a token
+        whose consumer was not recorded, a replay outside the window, a token two or
+        more generations old, or one whose successor has been used is token reuse:
+        the whole family is revoked and the answer is `401 refresh_rejected`. A
+        client whose address changes inside the window (a phone switching networks)
+        between a lost response and its retry is therefore signed out. A revoked family never answers a
         replay, whatever the window says (logout, password change and reset revoke
         every family of the person). The answer to a replay is indistinguishable
         from the first answer, apart from the access token's own issue time.

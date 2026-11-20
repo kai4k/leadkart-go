@@ -93,10 +93,57 @@ func Successor(key []byte, familyID refreshtoken.FamilyID, presentedPlain string
 	return Pair{Plaintext: plaintext, Hash: hash}, nil
 }
 
+// ClientBindingKeyInfo is the HKDF info label of the client-binding key.
+const ClientBindingKeyInfo = "leadkart refresh-token client binding v1"
+
+// DeriveClientBindingKey derives the key that binds a consumed refresh token to the
+// client that consumed it. Secret: the SUCCESSOR key (itself HKDF-SHA256 of the JWT
+// signing key under "leadkart refresh-token successor v1"); label: ClientBindingKeyInfo;
+// HKDF-SHA256, 32 bytes. Why this secret: a replay inside the grace window is already
+// undone by rotating the JWT signing key (the successor candidate changes), so the
+// binding has exactly the successor's lifetime and blast radius, it is always present
+// (the lockout key is optional outside production), and it needs no new setting. The
+// label keeps it independent of the successor derivation.
+func DeriveClientBindingKey(successorKey []byte) ([]byte, error) {
+	return hkdf.Key(sha256.New, successorKey, nil, ClientBindingKeyInfo, SuccessorKeyLen)
+}
+
+// ClientBinding is what is stored on a consumed token instead of the client's
+// address: hex(HMAC-SHA256(bindingKey, "leadkart-refresh-client-v1" NUL familyID NUL
+// clientKey)). The family id is in the input so the same client has unrelated values
+// in unrelated families, and the key means the database alone cannot be searched for
+// an address. An empty clientKey (no client in the request context) binds to nothing
+// and yields "" - the token is then replayable by nobody.
+func ClientBinding(bindingKey []byte, familyID refreshtoken.FamilyID, clientKey string) string {
+	if clientKey == "" {
+		return ""
+	}
+	mac := hmac.New(sha256.New, bindingKey)
+	mac.Write([]byte("leadkart-refresh-client-v1"))
+	mac.Write([]byte{0})
+	mac.Write([]byte(familyID.String()))
+	mac.Write([]byte{0})
+	mac.Write([]byte(clientKey))
+	return hex.EncodeToString(mac.Sum(nil))
+}
+
 // DeriveSuccessorKey derives the successor HMAC key from the JWT signing secret
 // with HKDF-SHA256 and a dedicated info label (RFC 5869 domain separation), so
-// no new secret has to be provisioned. Rotating the signing secret ends any
-// in-flight grace replay (it answers refresh_rejected; harmless).
+// no new secret has to be provisioned.
+//
+// Rotating the signing secret changes this key, so the successor a replay derives no
+// longer equals the hash that is stored: a replay inside the grace window then takes
+// the REUSE branch, the family is revoked and the answer is 401 refresh_rejected.
+// That is deliberate (it fails closed) and it is NOT harmless for the person: every
+// session whose token was consumed less than the grace window before the rotation
+// and is presented again afterwards (a lost response, a second tab) is signed out.
+// Rotate the key off-peak (docs/deploy/production-checklist.md). The client-binding
+// key derives from this one, so the same rotation ends those bindings too.
+//
+// The successor chain is deterministic: anyone holding the signing secret and any
+// historical token of a family can compute every later token of it. That is no new
+// exposure (a holder of the signing secret can already mint any access token) and
+// it is stated in ADR 0068 D10.
 func DeriveSuccessorKey(jwtSigningKey []byte) ([]byte, error) {
 	return hkdf.Key(sha256.New, jwtSigningKey, nil, "leadkart refresh-token successor v1", SuccessorKeyLen)
 }

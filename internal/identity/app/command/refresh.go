@@ -4,9 +4,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
+
 	"github.com/leadkart/leadkart-go/internal/common/tenancy"
+	"github.com/leadkart/leadkart-go/internal/identity/app/argon2"
 	"github.com/leadkart/leadkart-go/internal/identity/app/jwt"
 	"github.com/leadkart/leadkart-go/internal/identity/app/permissions"
 	"github.com/leadkart/leadkart-go/internal/identity/app/refreshmint"
@@ -75,7 +81,33 @@ type RefreshHandler struct {
 	// successorKey keys the deterministic successor derivation
 	// (refreshmint.DeriveSuccessorKey of the JWT signing secret).
 	successorKey []byte
+	// bindingKey keys the HMAC that binds a consumed token to its client
+	// (refreshmint.DeriveClientBindingKey of successorKey).
+	bindingKey []byte
+
+	// log and graceReplays are the telemetry of a grace replay: a structured line
+	// and the counter leadkart.identity.refresh_grace_replays{outcome}. log is nil
+	// until [RefreshHandler.WithLogger] (tests); the counter is a no-op without a
+	// meter provider.
+	log          *slog.Logger
+	graceReplays metric.Int64Counter
 }
+
+// WithLogger returns the handler logging every grace replay (a WARN for a refused
+// one). The line carries the family id and the outcome, never a token, a client
+// address or a binding.
+func (h RefreshHandler) WithLogger(log *slog.Logger) RefreshHandler {
+	h.log = log
+	return h
+}
+
+// Grace-replay outcomes: the values of the `outcome` attribute of
+// leadkart.identity.refresh_grace_replays and of the log line.
+const (
+	graceOutcomeSameClient         = "same_client"
+	graceOutcomeRefusedOtherClient = "refused_other_client"
+	graceOutcomeRefusedLimit       = "refused_limit"
+)
 
 // NewRefreshHandler wires the handler.
 func NewRefreshHandler(
@@ -96,15 +128,26 @@ func NewRefreshHandler(
 	if now == nil {
 		now = time.Now
 	}
+	bindingKey, err := refreshmint.DeriveClientBindingKey(successorKey)
+	if err != nil {
+		panic(fmt.Errorf("command: NewRefreshHandler client binding key: %w", err))
+	}
+	counter, cerr := otel.Meter("leadkart/identity").Int64Counter("leadkart.identity.refresh_grace_replays",
+		metric.WithDescription("Presentations of a just-rotated refresh token inside its grace window, by outcome."))
+	if cerr != nil {
+		counter = nil
+	}
 	return RefreshHandler{
-		families:    families,
-		persons:     persons,
-		memberships: memberships,
-		tenants:     tenants,
-		resolver:    resolver,
-		jwt:         jwtIssuer,
-		now:         now,
-		refreshTTL:  refreshTTL,
+		bindingKey:   bindingKey,
+		graceReplays: counter,
+		families:     families,
+		persons:      persons,
+		memberships:  memberships,
+		tenants:      tenants,
+		resolver:     resolver,
+		jwt:          jwtIssuer,
+		now:          now,
+		refreshTTL:   refreshTTL,
 
 		graceWindow:  graceWindow,
 		successorKey: successorKey,
@@ -158,7 +201,11 @@ func (h RefreshHandler) Handle(ctx context.Context, cmd RefreshCommand) (Refresh
 	//    return shouldPersist=true to commit that state, but the outer
 	//    Handle returns ErrRefreshRejected.
 	now := h.now()
+	// The client is the request context's name for the caller (the same key the
+	// rate limiters use); only an HMAC of it is stored.
+	client := refreshmint.ClientBinding(h.bindingKey, family.ID(), argon2.ClientFrom(ctx))
 	var rotateErr error
+	var graceOutcome refreshtoken.RotationOutcome
 	uerr := h.families.UpdateByID(ctx, family.ID(), func(f *refreshtoken.Family) (bool, error) {
 		outcome, err := f.RotateWithGrace(refreshtoken.RotationParams{
 			Presented:   presentedHash,
@@ -166,13 +213,16 @@ func (h RefreshHandler) Handle(ctx context.Context, cmd RefreshCommand) (Refresh
 			TTL:         h.refreshTTL,
 			AbsoluteTTL: h.refreshTTL,
 			GraceWindow: h.graceWindow,
+			Client:      client,
 			Now:         now,
 		})
+		graceOutcome = outcome
 		if err == nil {
-			// A grace replay changed nothing: persist nothing, return the same
-			// successor. Every later step (person, membership, the family
-			// re-read) still runs, so a replay never outlives a revocation.
-			return outcome == refreshtoken.RotationIssued, nil
+			// A grace replay moves one counter on the consumed token (persisted, under
+			// the family row lock) and returns the same successor. Every later step
+			// (person, membership, the family re-read) still runs, so a replay never
+			// outlives a revocation.
+			return true, nil
 		}
 		// Reuse-detection mutates the aggregate (revokes); persist that
 		// mutation but propagate nothing — the outer Handle decides
@@ -189,6 +239,7 @@ func (h RefreshHandler) Handle(ctx context.Context, cmd RefreshCommand) (Refresh
 	if uerr != nil {
 		return RefreshResult{}, fmt.Errorf("refresh: persist rotation: %w", uerr)
 	}
+	h.recordGrace(ctx, family.ID(), graceOutcome)
 	if rotateErr != nil {
 		if errors.Is(rotateErr, refreshtoken.ErrSessionExpired) {
 			return RefreshResult{}, fmt.Errorf("%w (%w)", ErrRefreshRejected, ErrSessionExpired)
@@ -291,4 +342,34 @@ func (h RefreshHandler) Handle(ctx context.Context, cmd RefreshCommand) (Refresh
 		MembershipID:         m.ID(),
 		MustChangePassword:   p.MustChangePassword(),
 	}, nil
+}
+
+// recordGrace counts and logs a presentation of a just-rotated token (the three
+// outcomes of RotationOutcome that are grace cases; a first rotation and every other
+// kind of reuse are not). The refused kinds also left a family revocation with reason
+// reuse_detected in the outbox (the SIEM subscriber's trigger): that is their audit
+// event, so none is added here.
+func (h RefreshHandler) recordGrace(ctx context.Context, id refreshtoken.FamilyID, outcome refreshtoken.RotationOutcome) {
+	var label string
+	switch outcome {
+	case refreshtoken.RotationGraceReplay:
+		label = graceOutcomeSameClient
+	case refreshtoken.RotationRefusedOtherClient:
+		label = graceOutcomeRefusedOtherClient
+	case refreshtoken.RotationRefusedLimit:
+		label = graceOutcomeRefusedLimit
+	default:
+		return
+	}
+	if h.graceReplays != nil {
+		h.graceReplays.Add(ctx, 1, metric.WithAttributes(attribute.String("outcome", label)))
+	}
+	if h.log == nil {
+		return
+	}
+	if outcome == refreshtoken.RotationGraceReplay {
+		h.log.InfoContext(ctx, "refresh token replayed inside its grace window", "outcome", label, "family_id", id.String())
+		return
+	}
+	h.log.WarnContext(ctx, "refresh token replay refused: the family is revoked", "outcome", label, "family_id", id.String())
 }
