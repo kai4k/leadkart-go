@@ -11,6 +11,7 @@ import (
 	"github.com/leadkart/leadkart-go/internal/common/tenancy"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/authority"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/permissionrequest"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/role"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
@@ -464,6 +465,16 @@ func (w authorityWriter) updateMember(ctx context.Context, tenantID tenant.ID, i
 			return true, nil
 		})
 	})
+}
+
+// decideRequest persists a permission-request decision (approve, deny, cancel)
+// on the request row, which UpdateByID locks (FOR NO KEY UPDATE) so every writer
+// of one request serialises. It is the one place a request decision is written
+// and it is only ever called inside [authorityWriter.locked], i.e. under the
+// tenant authority lock; the fitness test pins both.
+func (w authorityWriter) decideRequest(ctx context.Context, requests permissionrequest.Repository, tenantID tenant.ID, id permissionrequest.ID,
+	fn func(*permissionrequest.Request) (bool, error)) error {
+	return requests.UpdateByID(ctx, tenantID, id, fn)
 }
 
 // rotateStampIfChanged ends the access tokens of m's person when the mutation

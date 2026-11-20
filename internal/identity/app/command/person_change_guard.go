@@ -39,8 +39,10 @@ const maxGuardAttempts = 3
 // the write cannot be separated by a concurrent owner change there.
 //
 // The membership list the decision starts from is read outside any lock, so the
-// change transaction first takes the PERSON ROW lock (a reactivation takes the
-// same row before it reads the person) and reads the memberships again: when the
+// change transaction first takes the PERSON ROW lock (a reactivation reads the
+// person first and takes the same row lock when it rotates the stamp, before it
+// can commit, so it cannot commit between this guard's check and its write) and
+// reads the memberships again: when the
 // active set is not the one that was guarded, nothing is applied and the guard
 // starts over (at most [maxGuardAttempts] times, then [ErrPersonMembershipsChanging]).
 type PersonChangeGuard struct{ w authorityWriter }

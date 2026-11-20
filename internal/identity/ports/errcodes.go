@@ -189,10 +189,6 @@ const (
 	// impersonation session (ADR 0069 H4). 403 surface.
 	ErrCodeImpersonationNotAllowed = "impersonation_not_allowed"
 
-	// ErrCodeNotApprover — the caller is not an eligible approver for the
-	// request (ADR 0069 H4). 403 surface.
-	ErrCodeNotApprover = "not_approver"
-
 	// ErrCodeLastOwnerProtected — the change would leave the tenant without
 	// an active owner (ADR 0069 H6). 409 surface.
 	ErrCodeLastOwnerProtected = "last_owner_protected"
@@ -204,10 +200,6 @@ const (
 	// ErrCodeRoleSystemDefault — a system-default role cannot be changed
 	// (ADR 0069 H6). 409 surface.
 	ErrCodeRoleSystemDefault = "role_system_default"
-
-	// ErrCodeRoleDeleted — the role is soft-deleted and cannot be mutated.
-	// 409 surface (state conflict, like the other aggregates' ErrDeleted).
-	ErrCodeRoleDeleted = "role_deleted"
 
 	// ErrCodeRoleInUse — the role is still held by active members; the body's
 	// errors.active_holders carries the count. 409.

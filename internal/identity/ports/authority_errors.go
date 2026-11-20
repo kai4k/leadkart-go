@@ -26,9 +26,10 @@ func writeAuthorityError(w http.ResponseWriter, err error) bool {
 		writeError(w, http.StatusForbidden, ErrCodeOwnershipAuthorityRequired, "changing a tenant's ownership from outside it needs platform.tenants.ownership")
 	case errors.Is(err, authority.ErrImpersonationNotAllowed):
 		writeError(w, http.StatusForbidden, ErrCodeImpersonationNotAllowed, "not available during an impersonation session")
-	case errors.Is(err, authority.ErrNotApprover):
-		writeError(w, http.StatusForbidden, ErrCodeNotApprover, "the caller is not an eligible approver for this request")
-	case errors.Is(err, authority.ErrNoAuthority):
+	case errors.Is(err, authority.ErrNoAuthority), errors.Is(err, authority.ErrNotApprover):
+		// ErrNotApprover never reaches the wire from approve or deny (a caller who may
+		// not decide is answered 404 before the policy is asked about authority); if
+		// it ever did, it is the generic refusal, not a code of its own.
 		writeError(w, http.StatusForbidden, ErrCodeForbidden, "")
 	case errors.Is(err, authority.ErrLastOwnerProtected):
 		writeError(w, http.StatusConflict, ErrCodeLastOwnerProtected, "the tenant's last active owner cannot be deactivated or demoted")
@@ -47,7 +48,9 @@ func writeAuthorityError(w http.ResponseWriter, err error) bool {
 	case errors.Is(err, role.ErrSystemDefault):
 		writeError(w, http.StatusConflict, ErrCodeRoleSystemDefault, "system-default roles cannot be changed")
 	case errors.Is(err, role.ErrDeleted):
-		writeError(w, http.StatusConflict, ErrCodeRoleDeleted, "the role is deleted")
+		// Every command answers a deleted role with role.ErrNotFound before the policy sees it;
+		// this is the same 404 for a deleted role that gets through anyway.
+		writeError(w, http.StatusNotFound, ErrCodeRoleNotFound, "")
 	default:
 		return false
 	}

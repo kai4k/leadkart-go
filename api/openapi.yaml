@@ -62,9 +62,9 @@ info:
     they do not hold), `insufficient_rank` (the caller does not strictly
     outrank the target member or role), `ownership_authority_required` (a platform
     operator under `X-Tenant-Id` changing a tenant's ownership without
-    `platform.tenants.ownership`), `impersonation_not_allowed` and
-    `not_approver` (no longer returned by approve and deny: a caller who may not
-    decide a request is answered `404 permission_request_not_found`). Editing a
+    `platform.tenants.ownership`), `impersonation_not_allowed`
+    (a caller who may not decide a request is answered
+    `404 permission_request_not_found`). Editing a
     role acts on its holders, active or not (`insufficient_rank`,
     `self_modification_forbidden`; owners may edit a role they hold); lifting a member's explicit revoke needs the
     Admin tier, and conferring a permission the caller holds only until a date
@@ -1733,7 +1733,7 @@ paths:
             must-hold one, or the approval would lift a revoke without the Admin tier), `self_modification_forbidden`
             (own request), `impersonation_not_allowed`, `forbidden` (no valid or no longer active acting member), or
             `tenant_scope_not_supported` (`X-Tenant-Id` selected a foreign tenant). Callers who may not decide the
-            request at all get 404, not `not_approver` / `insufficient_rank`.
+            request at all get 404 `permission_request_not_found`.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }

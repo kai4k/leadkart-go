@@ -349,7 +349,7 @@ func (h ApprovePermissionRequestHandler) Handle(ctx context.Context, cmd Approve
 			return ErrPermissionRequestRequesterInactive
 		}
 		overrideID := h.newOverrideID()
-		if err := h.requests.UpdateByID(ctx, cmd.TenantID, cmd.RequestID, func(loaded *permissionrequest.Request) (bool, error) {
+		if err := h.w.decideRequest(ctx, h.requests, cmd.TenantID, cmd.RequestID, func(loaded *permissionrequest.Request) (bool, error) {
 			return true, loaded.Approve(cmd.Actor.MembershipID(), cmd.DecisionReason, overrideID, expiresAt, now)
 		}); err != nil {
 			return err
@@ -520,7 +520,7 @@ func (h DenyPermissionRequestHandler) Handle(ctx context.Context, cmd DenyPermis
 		if req.State() != permissionrequest.StatePending {
 			return ErrPermissionRequestNotPending
 		}
-		return h.requests.UpdateByID(ctx, cmd.TenantID, cmd.RequestID, func(loaded *permissionrequest.Request) (bool, error) {
+		return h.w.decideRequest(ctx, h.requests, cmd.TenantID, cmd.RequestID, func(loaded *permissionrequest.Request) (bool, error) {
 			return true, loaded.Deny(cmd.Actor.MembershipID(), cmd.DecisionReason, now)
 		})
 	})
@@ -603,7 +603,7 @@ func (h CancelPermissionRequestHandler) Handle(
 		if req.State() != permissionrequest.StatePending {
 			return ErrPermissionRequestNotPending
 		}
-		return h.requests.UpdateByID(ctx, cmd.TenantID, cmd.RequestID, func(loaded *permissionrequest.Request) (bool, error) {
+		return h.w.decideRequest(ctx, h.requests, cmd.TenantID, cmd.RequestID, func(loaded *permissionrequest.Request) (bool, error) {
 			if err := loaded.Cancel(now); err != nil {
 				return false, err
 			}
