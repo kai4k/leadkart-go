@@ -4633,6 +4633,20 @@ components:
           description: 'Band of `rank`: owner 0; admin 1-10; manager 11-20; team_lead 21-30; user 31-99.'
         password_policy:
           $ref: '#/components/schemas/PasswordRulesDto'
+        impersonation:
+          $ref: '#/components/schemas/ImpersonationContextDto'
+
+    ImpersonationContextDto:
+      type: object
+      description: |
+        Present ONLY when the bearer token is an impersonation session's own token. Names the session the
+        token belongs to and the company it acts in, so a reloaded page can print "Impersonating <company>"
+        without keeping the name in memory. Read fresh (a rename shows on the next read, never cached).
+        It carries nothing about any other session.
+      required: [session_id, tenant_display_name]
+      properties:
+        session_id:          { type: string, format: uuid }
+        tenant_display_name: { type: string, description: "The acted-in tenant's CURRENT display name; empty only if the tenant row is gone or unreadable." }
 
     PasswordRulesDto:
       type: object
@@ -5140,9 +5154,10 @@ components:
 
     CreateImpersonationSessionResponse:
       type: object
-      required: [session_id, expires_at_utc, access_token, access_token_expires_at_utc, token_type]
+      required: [session_id, tenant_display_name, expires_at_utc, access_token, access_token_expires_at_utc, token_type]
       properties:
         session_id:                  { type: string, format: uuid }
+        tenant_display_name:         { type: string, description: "The target tenant's current display name." }
         expires_at_utc:              { type: string, format: date-time }
         access_token:                { type: string, description: 'Scoped JWT (aud=leadkart-impersonation; is_platform=false). Bound to session lifetime.' }
         access_token_expires_at_utc: { type: string, format: date-time }
@@ -5150,11 +5165,12 @@ components:
 
     ImpersonationSessionDto:
       type: object
-      required: [session_id, operator_id, target_tenant_id, reason, created_at, expires_at]
+      required: [session_id, operator_id, target_tenant_id, tenant_display_name, reason, created_at, expires_at]
       properties:
         session_id:       { type: string, format: uuid }
         operator_id:      { type: string, format: uuid }
         target_tenant_id: { type: string, format: uuid }
+        tenant_display_name: { type: string, description: "The target tenant's CURRENT display name, read at response time (a rename shows on the next read); empty only if the tenant row is gone." }
         reason:           { type: string }
         created_at:       { type: string, format: date-time }
         expires_at:       { type: string, format: date-time }

@@ -215,6 +215,19 @@ type CapabilitiesDto struct {
 	// the change-password page (the forced-change screen included) can show the rules
 	// before the first attempt. Read fresh, not from the capabilities cache.
 	PasswordPolicy PasswordRulesDto `json:"password_policy"`
+	// Impersonation is present ONLY when the token is an impersonation session's
+	// own token: it names the session the token belongs to and the company it acts
+	// in, so a reloaded page (or a tab whose session was replaced by another tab's)
+	// can print "Impersonating <company>" without keeping the name in memory. The
+	// name is the tenant's CURRENT display name, read fresh (never from the
+	// capabilities cache). It carries nothing about any other session.
+	Impersonation *ImpersonationContextDto `json:"impersonation,omitzero"`
+}
+
+// ImpersonationContextDto is the session an impersonation token belongs to.
+type ImpersonationContextDto struct {
+	SessionID         string `json:"session_id"`
+	TenantDisplayName string `json:"tenant_display_name"`
 }
 
 // PasswordRulesDto is the password policy as a member sees it: the rules a new
@@ -398,6 +411,7 @@ type CreateImpersonationSessionRequest struct {
 // leadkart-impersonation; non-accepting routes reject it server-side.
 type CreateImpersonationSessionResponse struct {
 	SessionID               string    `json:"session_id"`
+	TenantDisplayName       string    `json:"tenant_display_name"`
 	ExpiresAtUTC            time.Time `json:"expires_at_utc"`
 	AccessToken             string    `json:"access_token"`
 	AccessTokenExpiresAtUTC time.Time `json:"access_token_expires_at_utc"`
@@ -409,9 +423,12 @@ type ImpersonationSessionDto struct {
 	SessionID      string    `json:"session_id"`
 	OperatorID     string    `json:"operator_id"`
 	TargetTenantID string    `json:"target_tenant_id"`
-	Reason         string    `json:"reason"`
-	CreatedAt      time.Time `json:"created_at"`
-	ExpiresAt      time.Time `json:"expires_at"`
+	// TenantDisplayName is the target tenant's current display name (read at
+	// response time, so a rename shows on the next read).
+	TenantDisplayName string    `json:"tenant_display_name"`
+	Reason            string    `json:"reason"`
+	CreatedAt         time.Time `json:"created_at"`
+	ExpiresAt         time.Time `json:"expires_at"`
 }
 
 // ListImpersonationSessionsResponse — GET .../impersonation/sessions.

@@ -42,6 +42,7 @@ type CreateImpersonationSessionCommand struct {
 // using it for their platform-tier requests outside the session.
 type CreateImpersonationSessionResult struct {
 	SessionID               string
+	TenantDisplayName       string // the target tenant's current display name
 	ExpiresAtUTC            time.Time
 	AccessToken             string    // NEW (Wave 4) — scoped JWT
 	AccessTokenExpiresAtUTC time.Time // NEW (Wave 4) — same as session expiry
@@ -175,6 +176,7 @@ func (h CreateImpersonationSessionHandler) Handle(ctx context.Context, cmd Creat
 
 	return CreateImpersonationSessionResult{
 		SessionID:               sess.ID(),
+		TenantDisplayName:       target.DisplayName(),
 		ExpiresAtUTC:            sess.ExpiresAt(),
 		AccessToken:             accessToken,
 		AccessTokenExpiresAtUTC: sess.ExpiresAt(),

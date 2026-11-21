@@ -89,6 +89,10 @@ func handleGetCapabilities(log *slog.Logger, a app.Application) http.Handler {
 			PasswordPolicy:       passwordRules(r.Context(), log, a, tenant.ID(c.TenantID)),
 		}
 
+		if c.Act != nil {
+			dto.Impersonation = impersonationContext(r.Context(), log, a, c.Act.SessionID, tenant.ID(c.TenantID))
+		}
+
 		// Enrichment via the cached query handler — populates email +
 		// first_name + last_name + role names. Cache hit returns
 		// sub-millisecond; miss runs the Person + Membership +
@@ -122,6 +126,21 @@ func handleGetCapabilities(log *slog.Logger, a app.Application) http.Handler {
 
 		writeJSON(w, http.StatusOK, dto)
 	})
+}
+
+// impersonationContext names the session the token belongs to and the company it
+// acts in (the token's own tenant): the one session this token can ever see. The
+// name is read fresh; when the tenant cannot be read the session id still answers
+// and the name is empty (the banner then falls back to its generic wording).
+func impersonationContext(ctx context.Context, log *slog.Logger, a app.Application, sessionID string, tenantID tenant.ID) *ImpersonationContextDto {
+	dto := &ImpersonationContextDto{SessionID: sessionID}
+	view, err := a.Queries.GetTenant.Handle(ctx, query.GetTenantQuery{TenantID: tenantID})
+	if err != nil {
+		log.WarnContext(ctx, "capabilities: impersonated tenant name unavailable", "err", err)
+		return dto
+	}
+	dto.TenantDisplayName = view.DisplayName
+	return dto
 }
 
 // passwordRules is the caller's own tenant's password policy as the wire shape: the

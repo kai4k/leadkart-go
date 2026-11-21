@@ -346,6 +346,7 @@ func handleCreateImpersonationSession(log *slog.Logger, a app.Application) http.
 		}
 		writeJSON(w, http.StatusCreated, CreateImpersonationSessionResponse{
 			SessionID:               out.SessionID,
+			TenantDisplayName:       out.TenantDisplayName,
 			ExpiresAtUTC:            out.ExpiresAtUTC,
 			AccessToken:             out.AccessToken,
 			AccessTokenExpiresAtUTC: out.AccessTokenExpiresAtUTC,
@@ -404,10 +405,11 @@ func handleListImpersonationSessions(log *slog.Logger, a app.Application) http.H
 			out.Sessions = append(out.Sessions, ImpersonationSessionDto{
 				SessionID:      v.SessionID,
 				OperatorID:     v.OperatorID,
-				TargetTenantID: v.TargetTenantID,
-				Reason:         v.Reason,
-				CreatedAt:      v.CreatedAt,
-				ExpiresAt:      v.ExpiresAt,
+				TargetTenantID:    v.TargetTenantID,
+				TenantDisplayName: v.TenantDisplayName,
+				Reason:            v.Reason,
+				CreatedAt:         v.CreatedAt,
+				ExpiresAt:         v.ExpiresAt,
 			})
 		}
 		writeJSON(w, http.StatusOK, out)

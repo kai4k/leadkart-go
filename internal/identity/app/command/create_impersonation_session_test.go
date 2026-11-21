@@ -194,3 +194,27 @@ func TestCreateImpersonationSession_HappyPath_MintsScopedToken(t *testing.T) {
 		t.Error("scoped impersonation token missing act claim — required per RFC 8693 §4.1")
 	}
 }
+
+// TestCreateImpersonationSession_ResultNamesTheTenant — the web names the company
+// in its banner; the result carries the target tenant's display name.
+func TestCreateImpersonationSession_ResultNamesTheTenant(t *testing.T) {
+	t.Parallel()
+	tenants := newFakeTenantRepo()
+	tn := newTenant(t)
+	_ = tenants.Add(t.Context(), tn) // arch-test:ignore-err - test fixture setup
+	store := adapters.NewImpersonationInMemoryStore(func() time.Time { return testNow })
+	h := command.NewCreateImpersonationSessionHandler(store, tenants, newImpersonationIssuer(t), func() time.Time { return testNow })
+
+	res, err := h.Handle(t.Context(), command.CreateImpersonationSessionCommand{
+		OperatorID:            "11111111-1111-1111-1111-111111111111",
+		OperatorSecurityStamp: "stamp-current",
+		TargetTenantID:        tn.ID(),
+		Reason:                "investigate-stuck-onboarding-ticket",
+	})
+	if err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	if res.TenantDisplayName != tn.DisplayName() || res.TenantDisplayName == "" {
+		t.Errorf("TenantDisplayName = %q, want %q", res.TenantDisplayName, tn.DisplayName())
+	}
+}
