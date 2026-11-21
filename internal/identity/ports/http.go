@@ -358,8 +358,8 @@ func handleRegisterTenant(log *slog.Logger, a app.Application) http.Handler {
 			writeError(w, http.StatusConflict, ErrCodeEmailHasActiveMembership,
 				"this email already has an active membership in another tenant")
 			return
-		case errors.Is(err, humantext.ErrInvalidCharacters):
-			writeRegisterInvalidCharacters(w, err)
+		case registerFieldRefusal(err):
+			writeRegisterInvalid(w, err)
 			return
 		case err != nil:
 			log.ErrorContext(r.Context(), "register tenant failed", "err", err)
@@ -375,17 +375,26 @@ func handleRegisterTenant(log *slog.Logger, a app.Application) http.Handler {
 	})
 }
 
-// writeRegisterInvalidCharacters answers a registration whose company or admin name
-// holds a refused character: 422 tenant_invalid for legal_name / display_name,
-// 422 person_invalid for the admin's name (the field is renamed to the request's
-// admin_first_name / admin_last_name).
-func writeRegisterInvalidCharacters(w http.ResponseWriter, err error) {
+// registerFieldRefusal reports a registration refusal that names a request field:
+// a company or admin name that is blank, too long or holds a refused character. Any
+// other aggregate invariant (an internal one: the inputs it checks were validated
+// before the command) is not a client error and stays a 500.
+func registerFieldRefusal(err error) bool {
+	var he *humantext.Error
+	return errors.As(err, &he) && (errors.Is(err, tenant.ErrInvalid) || errors.Is(err, person.ErrInvalid))
+}
+
+// writeRegisterInvalid answers a registration whose company or admin name is
+// refused: 422 tenant_invalid for legal_name / display_name, 422 person_invalid for
+// the admin's name (the field is renamed to the request's admin_first_name /
+// admin_last_name), with errors{<field>: [required | too_long | invalid_characters]}.
+func writeRegisterInvalid(w http.ResponseWriter, err error) {
 	var he *humantext.Error
 	if !errors.As(err, &he) {
 		return
 	}
 	if errors.Is(err, person.ErrInvalid) {
-		writeInvalid(w, ErrCodePersonInvalid, &humantext.Error{Field: "admin_" + he.Field})
+		writeInvalid(w, ErrCodePersonInvalid, &humantext.Error{Field: "admin_" + he.Field, Reason: he.Reason})
 		return
 	}
 	writeInvalid(w, ErrCodeTenantInvalid, he)
@@ -1068,7 +1077,7 @@ func writeInvalid(w http.ResponseWriter, code string, err error) {
 		Detail:  he.Error(),
 		Error:   code,
 		Message: he.Error(),
-		Errors:  map[string][]string{he.Field: {humantext.Code}},
+		Errors:  map[string][]string{he.Field: {he.WireCode()}},
 	})
 }
 

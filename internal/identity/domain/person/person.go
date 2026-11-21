@@ -99,16 +99,16 @@ func New(id ID, e email.Address, firstName, lastName string, passwordHash Passwo
 		return nil, fmt.Errorf("%w: email required", ErrInvalid)
 	}
 	if strings.TrimSpace(firstName) == "" {
-		return nil, fmt.Errorf("%w: first name required", ErrInvalid)
+		return nil, fmt.Errorf("%w: %w", ErrInvalid, humantext.Required("first_name"))
 	}
 	if strings.TrimSpace(lastName) == "" {
-		return nil, fmt.Errorf("%w: last name required", ErrInvalid)
+		return nil, fmt.Errorf("%w: %w", ErrInvalid, humantext.Required("last_name"))
 	}
 	if len(firstName) > nameMaxLen {
-		return nil, fmt.Errorf("%w: first name too long (max %d)", ErrInvalid, nameMaxLen)
+		return nil, fmt.Errorf("%w: %w", ErrInvalid, humantext.TooLong("first_name"))
 	}
 	if len(lastName) > nameMaxLen {
-		return nil, fmt.Errorf("%w: last name too long (max %d)", ErrInvalid, nameMaxLen)
+		return nil, fmt.Errorf("%w: %w", ErrInvalid, humantext.TooLong("last_name"))
 	}
 	if err := humantext.Check("first_name", firstName); err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrInvalid, err)
@@ -394,16 +394,16 @@ func (p *Person) UpdateProfile(firstName, lastName string, now time.Time) error 
 		return fmt.Errorf("%w: cannot update profile of anonymised person", ErrInvalid)
 	}
 	if strings.TrimSpace(firstName) == "" {
-		return fmt.Errorf("%w: first name required", ErrInvalid)
+		return fmt.Errorf("%w: %w", ErrInvalid, humantext.Required("first_name"))
 	}
 	if strings.TrimSpace(lastName) == "" {
-		return fmt.Errorf("%w: last name required", ErrInvalid)
+		return fmt.Errorf("%w: %w", ErrInvalid, humantext.Required("last_name"))
 	}
 	if len(firstName) > nameMaxLen {
-		return fmt.Errorf("%w: first name too long (max %d)", ErrInvalid, nameMaxLen)
+		return fmt.Errorf("%w: %w", ErrInvalid, humantext.TooLong("first_name"))
 	}
 	if len(lastName) > nameMaxLen {
-		return fmt.Errorf("%w: last name too long (max %d)", ErrInvalid, nameMaxLen)
+		return fmt.Errorf("%w: %w", ErrInvalid, humantext.TooLong("last_name"))
 	}
 	// A full replace re-sends the stored values: only a CHANGED value is checked.
 	if err := humantext.CheckChanged("first_name", p.firstName, firstName); err != nil {

@@ -50,26 +50,61 @@ import (
 	"unicode/utf8"
 )
 
-// Code is the stable validation code a field answers with on the wire:
-// `errors{<field>: ["invalid_characters"]}`.
-const Code = "invalid_characters"
+// Wire codes of a field error, stable. [Code] marks a refused character; a name
+// that is blank or too long is not a "character" problem but belongs to the same
+// field rule, so the aggregates report it through the same type and the HTTP layer
+// writes one shape: `errors{<field>: [<code>]}`.
+const (
+	// Code is the validation code of a value holding a refused character.
+	Code = "invalid_characters"
+	// CodeRequired is the code of a blank value.
+	CodeRequired = "required"
+	// CodeTooLong is the code of a value over its length limit.
+	CodeTooLong = "too_long"
+)
 
-// ErrInvalidCharacters is the sentinel an [*Error] matches with [errors.Is].
+// ErrInvalidCharacters is the sentinel an [*Error] with code [Code] matches with
+// [errors.Is].
 var ErrInvalidCharacters = errors.New("invalid characters")
 
-// Error names the wire field whose value was refused. It never carries the
+// Error names the wire field whose value was refused and why. It never carries the
 // value (it may hold spoofing characters that must not reach a log or a message).
 type Error struct {
 	// Field is the request field name as the client sends it (snake_case).
 	Field string
+	// Reason is the wire code: [Code] (also the meaning of ""), [CodeRequired] or
+	// [CodeTooLong].
+	Reason string
+}
+
+// Required is the error for a blank value of field.
+func Required(field string) *Error { return &Error{Field: field, Reason: CodeRequired} }
+
+// TooLong is the error for a value of field over its length limit.
+func TooLong(field string) *Error { return &Error{Field: field, Reason: CodeTooLong} }
+
+// WireCode is the code to put under errors.<Field>.
+func (e *Error) WireCode() string {
+	if e.Reason == "" {
+		return Code
+	}
+	return e.Reason
 }
 
 func (e *Error) Error() string {
+	switch e.WireCode() {
+	case CodeRequired:
+		return e.Field + " is required"
+	case CodeTooLong:
+		return e.Field + " is too long"
+	}
 	return e.Field + " must not contain control, direction-override or invisible formatting characters"
 }
 
-// Unwrap lets errors.Is(err, ErrInvalidCharacters) match.
-func (e *Error) Unwrap() error { return ErrInvalidCharacters }
+// Is makes errors.Is(err, ErrInvalidCharacters) match only a refused-character error.
+func (e *Error) Is(target error) bool {
+	return target == ErrInvalidCharacters && e.WireCode() == Code
+}
 
 // Valid reports whether s holds none of the refused characters.
 func Valid(s string) bool {

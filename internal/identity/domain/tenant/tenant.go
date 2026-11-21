@@ -89,16 +89,16 @@ func New(id ID, s slug.Slug, legalName, displayName string, adminEmail email.Add
 		return nil, fmt.Errorf("%w: slug required", ErrInvalid)
 	}
 	if strings.TrimSpace(legalName) == "" {
-		return nil, fmt.Errorf("%w: legal name required", ErrInvalid)
+		return nil, fmt.Errorf("%w: %w", ErrInvalid, humantext.Required("legal_name"))
 	}
 	if strings.TrimSpace(displayName) == "" {
-		return nil, fmt.Errorf("%w: display name required", ErrInvalid)
+		return nil, fmt.Errorf("%w: %w", ErrInvalid, humantext.Required("display_name"))
 	}
 	if len(legalName) > nameMaxLen {
-		return nil, fmt.Errorf("%w: legal name too long (max %d, got %d)", ErrInvalid, nameMaxLen, len(legalName))
+		return nil, fmt.Errorf("%w: %w", ErrInvalid, humantext.TooLong("legal_name"))
 	}
 	if len(displayName) > nameMaxLen {
-		return nil, fmt.Errorf("%w: display name too long (max %d, got %d)", ErrInvalid, nameMaxLen, len(displayName))
+		return nil, fmt.Errorf("%w: %w", ErrInvalid, humantext.TooLong("display_name"))
 	}
 	if err := humantext.Check("legal_name", legalName); err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrInvalid, err)
@@ -237,16 +237,16 @@ func (t *Tenant) DisplayPreferences() DisplayPreferences { return t.displayPrefe
 // suspended tenants may rename for legal reasons without re-activating.
 func (t *Tenant) UpdateProfile(legalName, displayName string, now time.Time) error {
 	if strings.TrimSpace(legalName) == "" {
-		return fmt.Errorf("%w: legal name required", ErrInvalid)
+		return fmt.Errorf("%w: %w", ErrInvalid, humantext.Required("legal_name"))
 	}
 	if strings.TrimSpace(displayName) == "" {
-		return fmt.Errorf("%w: display name required", ErrInvalid)
+		return fmt.Errorf("%w: %w", ErrInvalid, humantext.Required("display_name"))
 	}
 	if len(legalName) > nameMaxLen {
-		return fmt.Errorf("%w: legal name too long (max %d, got %d)", ErrInvalid, nameMaxLen, len(legalName))
+		return fmt.Errorf("%w: %w", ErrInvalid, humantext.TooLong("legal_name"))
 	}
 	if len(displayName) > nameMaxLen {
-		return fmt.Errorf("%w: display name too long (max %d, got %d)", ErrInvalid, nameMaxLen, len(displayName))
+		return fmt.Errorf("%w: %w", ErrInvalid, humantext.TooLong("display_name"))
 	}
 	// A full replace re-sends the stored values: only a CHANGED value is checked, so a
 	// name stored before the rule existed never blocks an untouched save.

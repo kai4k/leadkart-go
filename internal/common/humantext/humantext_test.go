@@ -196,3 +196,27 @@ func TestValid_InvisibleAndLineBreakingCharactersAreRefused(t *testing.T) {
 		})
 	}
 }
+
+func TestError_WireCodesAndSentinel(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		err          *humantext.Error
+		wantCode     string
+		wantSentinel bool
+	}{
+		{&humantext.Error{Field: "f"}, "invalid_characters", true},
+		{humantext.Required("f"), "required", false},
+		{humantext.TooLong("f"), "too_long", false},
+	}
+	for _, c := range cases {
+		if got := c.err.WireCode(); got != c.wantCode {
+			t.Errorf("WireCode = %q, want %q", got, c.wantCode)
+		}
+		if got := errors.Is(c.err, humantext.ErrInvalidCharacters); got != c.wantSentinel {
+			t.Errorf("%s: Is(ErrInvalidCharacters) = %v, want %v", c.wantCode, got, c.wantSentinel)
+		}
+		if c.err.Error() == "" {
+			t.Errorf("%s: empty message", c.wantCode)
+		}
+	}
+}

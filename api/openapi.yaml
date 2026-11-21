@@ -621,7 +621,7 @@ paths:
         upper-case letter, a lower-case letter, a digit and a symbol): `422 password_policy_violation` with
         `errors.admin_password`. Nothing is created on a violation.
 
-        Text a person types that other people read is refused when it holds control characters (including CR, LF and TAB), Unicode direction overrides, or invisible or line-breaking characters (zero-width space, soft hyphen, word joiner and invisible operators, Hangul fillers, line and paragraph separators, annotation, object-replacement and tag characters, BOM; a zero-width joiner or non-joiner is accepted only INSIDE a word, between two letters or marks): 422 `tenant_invalid (company names) / person_invalid (admin names)` with `errors{<field>: ["invalid_characters"]}` for `legal_name`, `display_name`, `admin_first_name`, `admin_last_name`, and nothing is written.
+        Text a person types that other people read is refused when it holds control characters (including CR, LF and TAB), Unicode direction overrides, or invisible or line-breaking characters (zero-width space, soft hyphen, word joiner and invisible operators, Hangul fillers, line and paragraph separators, annotation, object-replacement and tag characters, BOM; a zero-width joiner or non-joiner is accepted only INSIDE a word, between two letters or marks): 422 `tenant_invalid (company names) / person_invalid (admin names)` with `errors{<field>: ["invalid_characters"]}` (or `["required"]` / `["too_long"]` for a blank or over-long name) for `legal_name`, `display_name`, `admin_first_name`, `admin_last_name`, and nothing is written.
       security:
         - BearerAuth: []
       x-required-permissions: [platform.tenants.create]
@@ -645,7 +645,18 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
-        '422': { $ref: '#/components/responses/PasswordPolicyViolation' }
+        '422':
+          description: |
+            Invalid input, nothing is written. `password_policy_violation` with
+            `errors.admin_password` (rule codes). `tenant_invalid` (company names) or
+            `person_invalid` (admin names) with `errors{<field>: [<code>]}` for `legal_name`,
+            `display_name`, `admin_first_name`, `admin_last_name`; the code is `required`
+            (blank), `too_long` (company names over 200 bytes, admin names over 100) or
+            `invalid_characters`. A malformed `slug` or `admin_email` is a 400
+            (`invalid_slug` / `invalid_email`), not a 422. Never a 500.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
         '429': { $ref: '#/components/responses/TooManyRequests' }
 
   /api/v1/tenants/{tenantId}:
