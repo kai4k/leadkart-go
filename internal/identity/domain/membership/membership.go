@@ -30,6 +30,7 @@ import (
 	"time"
 
 	"github.com/leadkart/leadkart-go/internal/common/errs"
+	"github.com/leadkart/leadkart-go/internal/common/humantext"
 	"github.com/leadkart/leadkart-go/internal/common/ids"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/permission"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
@@ -302,6 +303,9 @@ func (m *Membership) ReportsTo() ID { return m.reportsTo }
 func (m *Membership) Deactivate(reason string, now time.Time) error {
 	if strings.TrimSpace(reason) == "" {
 		return fmt.Errorf("%w: deactivation reason required for audit", ErrInvalid)
+	}
+	if err := humantext.Check("reason", reason); err != nil {
+		return fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
 	if m.status == StatusInactive {
 		return nil
@@ -599,6 +603,17 @@ func (m *Membership) UpdateProfile(designation, department, statusMessage string
 	d := strings.TrimSpace(designation)
 	dep := strings.TrimSpace(department)
 	sm := strings.TrimSpace(statusMessage)
+	// A full replace re-sends the stored values: only a CHANGED field is checked, so a
+	// value stored before the rule existed never blocks an untouched save.
+	for _, f := range []struct{ field, stored, next string }{
+		{"designation", m.designation, d},
+		{"department", m.department, dep},
+		{"status_message", m.statusMessage, sm},
+	} {
+		if err := humantext.CheckChanged(f.field, f.stored, f.next); err != nil {
+			return fmt.Errorf("%w: %w", ErrInvalid, err)
+		}
+	}
 	if d == m.designation && dep == m.department && sm == m.statusMessage {
 		return nil
 	}

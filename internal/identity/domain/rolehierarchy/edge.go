@@ -36,6 +36,7 @@ import (
 	"time"
 
 	"github.com/leadkart/leadkart-go/internal/common/errs"
+	"github.com/leadkart/leadkart-go/internal/common/humantext"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/role"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
@@ -325,6 +326,9 @@ func validateReason(raw string) (string, error) {
 	if len(trimmed) < MinReasonLength || len(trimmed) > MaxReasonLength {
 		return "", fmt.Errorf("%w: length %d not in [%d, %d]",
 			ErrInvalidReason, len(trimmed), MinReasonLength, MaxReasonLength)
+	}
+	if err := humantext.Check("reason", trimmed); err != nil {
+		return "", fmt.Errorf("%w: %w", ErrInvalidReason, err)
 	}
 	return trimmed, nil
 }

@@ -427,7 +427,7 @@ func writeTenantMutationResult(w http.ResponseWriter, log *slog.Logger, r *http.
 		writeError(w, http.StatusConflict, ErrCodeTenantHasDependents,
 			"the tenant still has dependent records (members, roles, ...) and cannot be deleted; nothing was changed")
 	case errors.Is(err, tenant.ErrInvalid):
-		writeError(w, http.StatusUnprocessableEntity, ErrCodeTenantInvalid, err.Error())
+		writeInvalid(w, ErrCodeTenantInvalid, err)
 	case errors.Is(err, gst.ErrInvalid):
 		writeFieldInvalid(w, "gst_number", "must be a valid 15-character GSTIN")
 	case errors.Is(err, pan.ErrInvalid):

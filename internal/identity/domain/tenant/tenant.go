@@ -12,6 +12,7 @@ import (
 
 	"github.com/leadkart/leadkart-go/internal/common/email"
 	"github.com/leadkart/leadkart-go/internal/common/errs"
+	"github.com/leadkart/leadkart-go/internal/common/humantext"
 	"github.com/leadkart/leadkart-go/internal/common/ids"
 	"github.com/leadkart/leadkart-go/internal/common/slug"
 )
@@ -98,6 +99,12 @@ func New(id ID, s slug.Slug, legalName, displayName string, adminEmail email.Add
 	}
 	if len(displayName) > nameMaxLen {
 		return nil, fmt.Errorf("%w: display name too long (max %d, got %d)", ErrInvalid, nameMaxLen, len(displayName))
+	}
+	if err := humantext.Check("legal_name", legalName); err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrInvalid, err)
+	}
+	if err := humantext.Check("display_name", displayName); err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
 	if adminEmail.IsZero() {
 		return nil, fmt.Errorf("%w: admin email required for RegisteredEvent payload", ErrInvalid)
@@ -241,6 +248,14 @@ func (t *Tenant) UpdateProfile(legalName, displayName string, now time.Time) err
 	if len(displayName) > nameMaxLen {
 		return fmt.Errorf("%w: display name too long (max %d, got %d)", ErrInvalid, nameMaxLen, len(displayName))
 	}
+	// A full replace re-sends the stored values: only a CHANGED value is checked, so a
+	// name stored before the rule existed never blocks an untouched save.
+	if err := humantext.CheckChanged("legal_name", t.legalName, legalName); err != nil {
+		return fmt.Errorf("%w: %w", ErrInvalid, err)
+	}
+	if err := humantext.CheckChanged("display_name", t.displayName, displayName); err != nil {
+		return fmt.Errorf("%w: %w", ErrInvalid, err)
+	}
 	if legalName == t.legalName && displayName == t.displayName {
 		return nil
 	}
@@ -287,6 +302,9 @@ func (t *Tenant) Activate(now time.Time) error {
 func (t *Tenant) Suspend(reason string, now time.Time) error {
 	if strings.TrimSpace(reason) == "" {
 		return fmt.Errorf("%w: suspension reason required for audit", ErrInvalid)
+	}
+	if err := humantext.Check("reason", reason); err != nil {
+		return fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
 	if t.status == StatusSuspended {
 		return nil
@@ -405,6 +423,9 @@ func (t *Tenant) UpdateDisplayPreferences(d DisplayPreferences, now time.Time) e
 func (t *Tenant) MarkForDeletion(reason string, now time.Time) error {
 	if strings.TrimSpace(reason) == "" {
 		return fmt.Errorf("%w: deletion reason required for audit", ErrInvalid)
+	}
+	if err := humantext.CheckChanged("reason", t.deletionReason, reason); err != nil { // a replay of the stored reason stays idempotent
+		return fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
 	switch t.status {
 	case StatusActive, StatusSuspended:

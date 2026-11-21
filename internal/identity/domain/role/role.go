@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/leadkart/leadkart-go/internal/common/errs"
+	"github.com/leadkart/leadkart-go/internal/common/humantext"
 	"github.com/leadkart/leadkart-go/internal/common/ids"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/permission"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
@@ -162,6 +163,9 @@ func NewWithPermissions(
 	if err != nil {
 		return nil, err
 	}
+	if err := humantext.Check("name", trimmed); err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrInvalid, err)
+	}
 	if hierarchyLevel < HierarchyLevelMin || hierarchyLevel > HierarchyLevelMax {
 		return nil, fmt.Errorf("%w: hierarchyLevel %d not in [%d,%d]",
 			ErrInvalid, hierarchyLevel, HierarchyLevelMin, HierarchyLevelMax)
@@ -271,7 +275,10 @@ func (r *Role) Rename(newName string, now time.Time) error {
 		return err
 	}
 	if trimmed == r.name {
-		return nil
+		return nil // an unchanged (possibly legacy) name is accepted: only a changed one is checked
+	}
+	if err := humantext.Check("name", trimmed); err != nil {
+		return fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
 	old := r.name
 	r.name = trimmed

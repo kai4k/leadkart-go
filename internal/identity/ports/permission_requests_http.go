@@ -93,7 +93,7 @@ func handleCreatePermissionRequest(log *slog.Logger, a app.Application) http.Han
 			return
 		case errors.Is(err, permissionrequest.ErrInvalidRequest),
 			errors.Is(err, permissionrequest.ErrInvalidDuration):
-			writeError(w, http.StatusUnprocessableEntity, ErrCodePermissionRequestInvalid, err.Error())
+			writeInvalid(w, ErrCodePermissionRequestInvalid, err)
 			return
 		case err != nil:
 			log.ErrorContext(r.Context(), "create permission request failed", "err", err)
@@ -293,7 +293,7 @@ func handleApprovePermissionRequest(log *slog.Logger, a app.Application) http.Ha
 			writeError(w, http.StatusUnprocessableEntity, ErrCodePermissionNotRequestable, err.Error())
 			return
 		case errors.Is(err, permissionrequest.ErrInvalidRequest):
-			writeError(w, http.StatusUnprocessableEntity, ErrCodePermissionRequestInvalid, err.Error())
+			writeInvalid(w, ErrCodePermissionRequestInvalid, err)
 			return
 		case err != nil:
 			log.ErrorContext(r.Context(), "approve permission request failed", "err", err)
@@ -344,7 +344,7 @@ func handleDenyPermissionRequest(log *slog.Logger, a app.Application) http.Handl
 			writeError(w, http.StatusConflict, ErrCodePermissionRequestNotPending, "")
 			return
 		case errors.Is(err, permissionrequest.ErrInvalidRequest):
-			writeError(w, http.StatusUnprocessableEntity, ErrCodePermissionRequestInvalid, err.Error())
+			writeInvalid(w, ErrCodePermissionRequestInvalid, err)
 			return
 		case err != nil:
 			log.ErrorContext(r.Context(), "deny permission request failed", "err", err)

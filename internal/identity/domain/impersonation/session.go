@@ -26,6 +26,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/leadkart/leadkart-go/internal/common/humantext"
 	"github.com/leadkart/leadkart-go/internal/common/ids"
 )
 
@@ -87,6 +88,9 @@ func NewSession(operatorID, targetTenantID, reason string, duration time.Duratio
 	}
 	if len(reason) < MinReasonLength {
 		return Session{}, errors.New("impersonation: reason too short — DPDP / SOC2 audit minimum 10 chars")
+	}
+	if err := humantext.Check("reason", reason); err != nil {
+		return Session{}, err
 	}
 	if duration <= 0 {
 		duration = DefaultDuration

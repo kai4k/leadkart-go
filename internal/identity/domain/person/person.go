@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/leadkart/leadkart-go/internal/common/email"
+	"github.com/leadkart/leadkart-go/internal/common/humantext"
 )
 
 // ID is the Person primary key. UUIDv7 string for B-tree locality.
@@ -108,6 +109,12 @@ func New(id ID, e email.Address, firstName, lastName string, passwordHash Passwo
 	}
 	if len(lastName) > nameMaxLen {
 		return nil, fmt.Errorf("%w: last name too long (max %d)", ErrInvalid, nameMaxLen)
+	}
+	if err := humantext.Check("first_name", firstName); err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrInvalid, err)
+	}
+	if err := humantext.Check("last_name", lastName); err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
 	if passwordHash.IsZero() {
 		return nil, fmt.Errorf("%w: password hash required", ErrInvalid)
@@ -397,6 +404,13 @@ func (p *Person) UpdateProfile(firstName, lastName string, now time.Time) error 
 	}
 	if len(lastName) > nameMaxLen {
 		return fmt.Errorf("%w: last name too long (max %d)", ErrInvalid, nameMaxLen)
+	}
+	// A full replace re-sends the stored values: only a CHANGED value is checked.
+	if err := humantext.CheckChanged("first_name", p.firstName, firstName); err != nil {
+		return fmt.Errorf("%w: %w", ErrInvalid, err)
+	}
+	if err := humantext.CheckChanged("last_name", p.lastName, lastName); err != nil {
+		return fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
 	if firstName == p.firstName && lastName == p.lastName {
 		return nil
@@ -804,6 +818,9 @@ func (p *Person) GloballySuspend(reason string, now time.Time) error {
 	if strings.TrimSpace(reason) == "" {
 		return fmt.Errorf("%w: global suspension reason required for audit", ErrInvalid)
 	}
+	if err := humantext.CheckChanged("reason", p.globalSuspensionReason, reason); err != nil { // a replay of the stored reason stays idempotent
+		return fmt.Errorf("%w: %w", ErrInvalid, err)
+	}
 	if p.isAnonymised {
 		return fmt.Errorf("%w: cannot suspend anonymised person", ErrInvalid)
 	}
@@ -863,6 +880,9 @@ func (p *Person) LiftGlobalSuspension(now time.Time) error {
 func (p *Person) Anonymise(reason string, now time.Time) error {
 	if strings.TrimSpace(reason) == "" {
 		return fmt.Errorf("%w: anonymisation reason required for audit", ErrInvalid)
+	}
+	if err := humantext.Check("reason", reason); err != nil {
+		return fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
 	if p.isAnonymised {
 		return nil

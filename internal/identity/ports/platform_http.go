@@ -272,7 +272,7 @@ func writePersonMutationResult(w http.ResponseWriter, log *slog.Logger, r *http.
 		errors.Is(err, command.ErrPersonNotFound):
 		writeError(w, http.StatusNotFound, ErrCodePersonNotFound, "")
 	case errors.Is(err, person.ErrInvalid):
-		writeError(w, http.StatusUnprocessableEntity, ErrCodePersonInvalid, err.Error())
+		writeInvalid(w, ErrCodePersonInvalid, err)
 	default:
 		log.ErrorContext(r.Context(), "person mutation failed", "err", err)
 		writeError(w, http.StatusInternalServerError, ErrCodeInternalError, "")
@@ -332,7 +332,7 @@ func handleCreateImpersonationSession(log *slog.Logger, a app.Application) http.
 				Duration:              dur,
 			})
 		if errors.Is(err, command.ErrImpersonationInvalid) {
-			writeError(w, http.StatusUnprocessableEntity, ErrCodeImpersonationInvalid, err.Error())
+			writeInvalid(w, ErrCodeImpersonationInvalid, err)
 			return
 		}
 		if errors.Is(err, command.ErrImpersonationTargetMissing) {

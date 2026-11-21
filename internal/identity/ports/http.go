@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/leadkart/leadkart-go/internal/common/email"
+	"github.com/leadkart/leadkart-go/internal/common/humantext"
 	"github.com/leadkart/leadkart-go/internal/common/httpmw"
 	"github.com/leadkart/leadkart-go/internal/common/slug"
 	"github.com/leadkart/leadkart-go/internal/identity/app"
@@ -357,6 +358,9 @@ func handleRegisterTenant(log *slog.Logger, a app.Application) http.Handler {
 			writeError(w, http.StatusConflict, ErrCodeEmailHasActiveMembership,
 				"this email already has an active membership in another tenant")
 			return
+		case errors.Is(err, humantext.ErrInvalidCharacters):
+			writeRegisterInvalidCharacters(w, err)
+			return
 		case err != nil:
 			log.ErrorContext(r.Context(), "register tenant failed", "err", err)
 			writeError(w, http.StatusInternalServerError, ErrCodeInternalError, "")
@@ -369,6 +373,22 @@ func handleRegisterTenant(log *slog.Logger, a app.Application) http.Handler {
 			MembershipID: out.MembershipID.String(),
 		})
 	})
+}
+
+// writeRegisterInvalidCharacters answers a registration whose company or admin name
+// holds a refused character: 422 tenant_invalid for legal_name / display_name,
+// 422 person_invalid for the admin's name (the field is renamed to the request's
+// admin_first_name / admin_last_name).
+func writeRegisterInvalidCharacters(w http.ResponseWriter, err error) {
+	var he *humantext.Error
+	if !errors.As(err, &he) {
+		return
+	}
+	if errors.Is(err, person.ErrInvalid) {
+		writeInvalid(w, ErrCodePersonInvalid, &humantext.Error{Field: "admin_" + he.Field})
+		return
+	}
+	writeInvalid(w, ErrCodeTenantInvalid, he)
 }
 
 // writePasswordPolicyError answers 422 password_policy_violation with the failed
@@ -1026,6 +1046,29 @@ func writeValidationError(w http.ResponseWriter, detail string, fields map[strin
 		Error:   ErrCodeValidationFailed,
 		Message: detail,
 		Errors:  fields,
+	})
+}
+
+// writeInvalid answers an aggregate-invariant refusal (an ErrInvalid-class error
+// the route already maps to a 422 code) as 422 under that code. A refusal for text
+// that holds control, direction-override or invisible characters
+// ([humantext.Error]) also carries `errors{<field>: ["invalid_characters"]}` so a
+// form can mark the field; any other refusal keeps its message as before. The
+// answer never echoes the offending value.
+func writeInvalid(w http.ResponseWriter, code string, err error) {
+	var he *humantext.Error
+	if !errors.As(err, &he) {
+		writeError(w, http.StatusUnprocessableEntity, code, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusUnprocessableEntity, ErrorResponse{
+		Type:    problemType(code),
+		Title:   http.StatusText(http.StatusUnprocessableEntity),
+		Status:  http.StatusUnprocessableEntity,
+		Detail:  he.Error(),
+		Error:   code,
+		Message: he.Error(),
+		Errors:  map[string][]string{he.Field: {humantext.Code}},
 	})
 }
 

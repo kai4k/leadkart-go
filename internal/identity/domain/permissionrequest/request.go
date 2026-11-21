@@ -40,6 +40,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/leadkart/leadkart-go/internal/common/errs"
+	"github.com/leadkart/leadkart-go/internal/common/humantext"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/permission"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
@@ -212,6 +213,9 @@ func New(
 		return nil, fmt.Errorf("%w: reason length %d above ceiling %d",
 			ErrInvalidRequest, len(trimmed), MaxReasonLength)
 	}
+	if err := humantext.Check("reason", trimmed); err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrInvalidRequest, err)
+	}
 
 	r := &Request{
 		id:                    id,
@@ -324,6 +328,9 @@ func (r *Request) Approve(
 		return fmt.Errorf("%w: decision_reason length %d above ceiling %d",
 			ErrInvalidRequest, len(trimmed), MaxDecisionReasonLength)
 	}
+	if err := humantext.Check("decision_reason", trimmed); err != nil {
+		return fmt.Errorf("%w: %w", ErrInvalidRequest, err)
+	}
 	r.state = StateApproved
 	r.approverMembershipID = approverID
 	r.decidedAt = now.UTC()
@@ -368,6 +375,9 @@ func (r *Request) Deny(
 	if len(trimmed) > MaxDecisionReasonLength {
 		return fmt.Errorf("%w: decision_reason length %d above ceiling %d",
 			ErrInvalidRequest, len(trimmed), MaxDecisionReasonLength)
+	}
+	if err := humantext.Check("decision_reason", trimmed); err != nil {
+		return fmt.Errorf("%w: %w", ErrInvalidRequest, err)
 	}
 	r.state = StateDenied
 	r.approverMembershipID = approverID

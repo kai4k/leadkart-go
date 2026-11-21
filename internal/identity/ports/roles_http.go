@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/leadkart/leadkart-go/internal/common/humantext"
 	"github.com/leadkart/leadkart-go/internal/common/tenancy"
 	"github.com/leadkart/leadkart-go/internal/identity/app"
 	"github.com/leadkart/leadkart-go/internal/identity/app/command"
@@ -132,7 +133,7 @@ func handleCreateRole(log *slog.Logger, a app.Application) http.Handler {
 				"role already has an active parent edge")
 			return
 		case errors.Is(err, role.ErrInvalid):
-			writeError(w, http.StatusUnprocessableEntity, ErrCodeRoleInvalid, err.Error())
+			writeInvalid(w, ErrCodeRoleInvalid, err)
 			return
 		case err != nil:
 			log.ErrorContext(r.Context(), "create role failed", "err", err)
@@ -412,11 +413,13 @@ func writeRoleMutationResult(w http.ResponseWriter, log *slog.Logger, r *http.Re
 	case errors.Is(err, rolehierarchy.ErrEdgeAlreadyExists):
 		writeError(w, http.StatusConflict, ErrCodeRoleHierarchyEdgeExists,
 			"role already has an active parent edge")
+	case errors.Is(err, rolehierarchy.ErrInvalidReason) && errors.Is(err, humantext.ErrInvalidCharacters):
+		writeInvalid(w, ErrCodeRoleHierarchyInvalidReason, err)
 	case errors.Is(err, rolehierarchy.ErrInvalidReason):
 		writeError(w, http.StatusUnprocessableEntity, ErrCodeRoleHierarchyInvalidReason,
 			"reason must be 10-1024 characters when supplied")
 	case errors.Is(err, role.ErrInvalid):
-		writeError(w, http.StatusUnprocessableEntity, ErrCodeRoleInvalid, err.Error())
+		writeInvalid(w, ErrCodeRoleInvalid, err)
 	default:
 		log.ErrorContext(r.Context(), "role mutation failed", "err", err)
 		writeError(w, http.StatusInternalServerError, ErrCodeInternalError, "")

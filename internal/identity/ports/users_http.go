@@ -386,8 +386,9 @@ func handleCreateUser(log *slog.Logger, a app.Application) http.Handler {
 			writeError(w, http.StatusConflict, ErrCodeEmailHasActiveMembership,
 				"this email already has an active membership in another tenant")
 			return
-		case errors.Is(err, membership.ErrInvalid):
-			writeError(w, http.StatusUnprocessableEntity, ErrCodeUserInvalid, err.Error())
+		case errors.Is(err, membership.ErrInvalid), errors.Is(err, person.ErrInvalid):
+			// person.ErrInvalid: the new member's first or last name (the route's own code)
+			writeInvalid(w, ErrCodeUserInvalid, err)
 			return
 		case err != nil:
 			log.ErrorContext(r.Context(), "create user failed", "err", err)
@@ -463,11 +464,11 @@ func writeUserMutationResult(w http.ResponseWriter, log *slog.Logger, r *http.Re
 	case errors.Is(err, command.ErrPersonActiveElsewhere):
 		writeError(w, http.StatusConflict, ErrCodePersonActiveElsewhere, "this person already has an active membership in another company")
 	case errors.Is(err, membership.ErrInvalid):
-		writeError(w, http.StatusUnprocessableEntity, ErrCodeUserInvalid, err.Error())
+		writeInvalid(w, ErrCodeUserInvalid, err)
 	case errors.Is(err, person.ErrInvalid):
 		// the erasure reason is blank after trimming; the message names the rule,
 		// never the person's data
-		writeError(w, http.StatusUnprocessableEntity, ErrCodePersonInvalid, err.Error())
+		writeInvalid(w, ErrCodePersonInvalid, err)
 	default:
 		log.ErrorContext(r.Context(), "user mutation failed", "err", err)
 		writeError(w, http.StatusInternalServerError, ErrCodeInternalError, "")
