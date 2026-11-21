@@ -621,7 +621,7 @@ paths:
         upper-case letter, a lower-case letter, a digit and a symbol): `422 password_policy_violation` with
         `errors.admin_password`. Nothing is created on a violation.
 
-        Text a person types that other people read is refused when it holds control characters (including CR, LF and TAB), Unicode direction overrides or invisible formatting characters (U+200B-U+200D, U+2060, U+FEFF): 422 `tenant_invalid (company names) / person_invalid (admin names)` with `errors{<field>: ["invalid_characters"]}` for `legal_name`, `display_name`, `admin_first_name`, `admin_last_name`, and nothing is written.
+        Text a person types that other people read is refused when it holds control characters (including CR, LF and TAB), Unicode direction overrides, or invisible or line-breaking characters (zero-width space, soft hyphen, word joiner and invisible operators, Hangul fillers, line and paragraph separators, annotation, object-replacement and tag characters, BOM; a zero-width joiner or non-joiner is accepted only INSIDE a word, between two letters or marks): 422 `tenant_invalid (company names) / person_invalid (admin names)` with `errors{<field>: ["invalid_characters"]}` for `legal_name`, `display_name`, `admin_first_name`, `admin_last_name`, and nothing is written.
       security:
         - BearerAuth: []
       x-required-permissions: [platform.tenants.create]
@@ -676,7 +676,7 @@ paths:
       description: |
         Requires `identity.tenants.update` (satisfied by `tenant.admin` in the caller's own tenant, or by `platform.*` equivalents for platform operators; ADR 0068).
 
-        Text a person types that other people read is refused when it holds control characters (including CR, LF and TAB), Unicode direction overrides or invisible formatting characters (U+200B-U+200D, U+2060, U+FEFF): 422 `tenant_invalid` with `errors{<field>: ["invalid_characters"]}` for `legal_name`, `display_name`, and nothing is written. A full-replace body that re-sends a stored value UNCHANGED is accepted (a value stored before the rule existed never blocks an untouched save); only a changed value is checked.
+        Text a person types that other people read is refused when it holds control characters (including CR, LF and TAB), Unicode direction overrides, or invisible or line-breaking characters (zero-width space, soft hyphen, word joiner and invisible operators, Hangul fillers, line and paragraph separators, annotation, object-replacement and tag characters, BOM; a zero-width joiner or non-joiner is accepted only INSIDE a word, between two letters or marks): 422 `tenant_invalid` with `errors{<field>: ["invalid_characters"]}` for `legal_name`, `display_name`, and nothing is written. A full-replace body that re-sends a stored value UNCHANGED is accepted (a value stored before the rule existed never blocks an untouched save); only a changed value is checked.
       x-required-permissions: [identity.tenants.update]
       parameters:
         - $ref: '#/components/parameters/XCommandId'
@@ -812,7 +812,7 @@ paths:
 
         Requires `identity.tenants.suspend` held by a platform-tenant operator; platform-tenant membership alone is refused with 403 `forbidden`.
 
-        Text a person types that other people read is refused when it holds control characters (including CR, LF and TAB), Unicode direction overrides or invisible formatting characters (U+200B-U+200D, U+2060, U+FEFF): 422 `tenant_invalid` with `errors{<field>: ["invalid_characters"]}` for `reason`, and nothing is written.
+        Text a person types that other people read is refused when it holds control characters (including CR, LF and TAB), Unicode direction overrides, or invisible or line-breaking characters (zero-width space, soft hyphen, word joiner and invisible operators, Hangul fillers, line and paragraph separators, annotation, object-replacement and tag characters, BOM; a zero-width joiner or non-joiner is accepted only INSIDE a word, between two letters or marks): 422 `tenant_invalid` with `errors{<field>: ["invalid_characters"]}` for `reason`, and nothing is written.
       parameters:
         - $ref: '#/components/parameters/XCommandId'
         - { $ref: '#/components/parameters/TenantId' }
@@ -866,7 +866,7 @@ paths:
 
         Requires `identity.tenants.delete` held by a platform-tenant operator; platform-tenant membership alone is refused with 403 `forbidden`.
 
-        Text a person types that other people read is refused when it holds control characters (including CR, LF and TAB), Unicode direction overrides or invisible formatting characters (U+200B-U+200D, U+2060, U+FEFF): 422 `tenant_invalid` with `errors{<field>: ["invalid_characters"]}` for `reason`, and nothing is written.
+        Text a person types that other people read is refused when it holds control characters (including CR, LF and TAB), Unicode direction overrides, or invisible or line-breaking characters (zero-width space, soft hyphen, word joiner and invisible operators, Hangul fillers, line and paragraph separators, annotation, object-replacement and tag characters, BOM; a zero-width joiner or non-joiner is accepted only INSIDE a word, between two letters or marks): 422 `tenant_invalid` with `errors{<field>: ["invalid_characters"]}` for `reason`, and nothing is written.
       parameters:
         - $ref: '#/components/parameters/XCommandId'
         - { $ref: '#/components/parameters/TenantId' }
@@ -1006,7 +1006,7 @@ paths:
         `X-Tenant-Id`): `422 password_policy_violation` with `errors.password`. Nothing is
         created on a violation.
 
-        Text a person types that other people read is refused when it holds control characters (including CR, LF and TAB), Unicode direction overrides or invisible formatting characters (U+200B-U+200D, U+2060, U+FEFF): 422 `user_invalid` with `errors{<field>: ["invalid_characters"]}` for `first_name`, `last_name`, and nothing is written.
+        Text a person types that other people read is refused when it holds control characters (including CR, LF and TAB), Unicode direction overrides, or invisible or line-breaking characters (zero-width space, soft hyphen, word joiner and invisible operators, Hangul fillers, line and paragraph separators, annotation, object-replacement and tag characters, BOM; a zero-width joiner or non-joiner is accepted only INSIDE a word, between two letters or marks): 422 `user_invalid` with `errors{<field>: ["invalid_characters"]}` for `first_name`, `last_name`, and nothing is written.
       x-required-permissions: [identity.users.create]
       requestBody:
         required: true
@@ -1056,7 +1056,7 @@ paths:
       description: |
         Requires `identity.users.update` or self (path id equals the caller's membership) (satisfied by `tenant.admin` in the caller's own tenant, or by `platform.*` equivalents for platform operators; ADR 0068).  Editing ANOTHER member's profile is also an authority decision: the caller must strictly outrank the member (`insufficient_rank`; owners may act on owners; super users and exempt platform operators are exempt), decided under the tenant's authority lock (ADR 0069); editing one's own profile is unchanged.
 
-        Text a person types that other people read is refused when it holds control characters (including CR, LF and TAB), Unicode direction overrides or invisible formatting characters (U+200B-U+200D, U+2060, U+FEFF): 422 `user_invalid` with `errors{<field>: ["invalid_characters"]}` for `designation`, `department`, `status_message`, and nothing is written. A full-replace body that re-sends a stored value UNCHANGED is accepted (a value stored before the rule existed never blocks an untouched save); only a changed value is checked.
+        Text a person types that other people read is refused when it holds control characters (including CR, LF and TAB), Unicode direction overrides, or invisible or line-breaking characters (zero-width space, soft hyphen, word joiner and invisible operators, Hangul fillers, line and paragraph separators, annotation, object-replacement and tag characters, BOM; a zero-width joiner or non-joiner is accepted only INSIDE a word, between two letters or marks): 422 `user_invalid` with `errors{<field>: ["invalid_characters"]}` for `designation`, `department`, `status_message`, and nothing is written. A full-replace body that re-sends a stored value UNCHANGED is accepted (a value stored before the rule existed never blocks an untouched save); only a changed value is checked.
       x-required-permissions: [identity.users.update, self]
       parameters:
         - $ref: '#/components/parameters/XCommandId'
@@ -1083,7 +1083,7 @@ paths:
       description: |
         Requires `identity.users.deactivate` (satisfied by `tenant.admin` in the caller's own tenant, or by `platform.*` equivalents for platform operators; ADR 0068). Self-target forbidden (`self_modification_forbidden`). The caller must strictly outrank the target member (`insufficient_rank`; owners may act on owners; super users and exempt platform operators are exempt), decided inside the transaction that holds the tenant's authority lock (ADR 0069).
 
-        Text a person types that other people read is refused when it holds control characters (including CR, LF and TAB), Unicode direction overrides or invisible formatting characters (U+200B-U+200D, U+2060, U+FEFF): 422 `user_invalid` with `errors{<field>: ["invalid_characters"]}` for `reason`, and nothing is written.
+        Text a person types that other people read is refused when it holds control characters (including CR, LF and TAB), Unicode direction overrides, or invisible or line-breaking characters (zero-width space, soft hyphen, word joiner and invisible operators, Hangul fillers, line and paragraph separators, annotation, object-replacement and tag characters, BOM; a zero-width joiner or non-joiner is accepted only INSIDE a word, between two letters or marks): 422 `user_invalid` with `errors{<field>: ["invalid_characters"]}` for `reason`, and nothing is written.
       x-required-permissions: [identity.users.deactivate]
       parameters:
         - $ref: '#/components/parameters/XCommandId'
@@ -1251,7 +1251,7 @@ paths:
 
         Requires `identity.users.anonymise` held by a platform-tenant operator; platform-tenant membership alone is refused with 403 `forbidden`.
 
-        Text a person types that other people read is refused when it holds control characters (including CR, LF and TAB), Unicode direction overrides or invisible formatting characters (U+200B-U+200D, U+2060, U+FEFF): 422 `person_invalid` with `errors{<field>: ["invalid_characters"]}` for `reason`, and nothing is written.
+        Text a person types that other people read is refused when it holds control characters (including CR, LF and TAB), Unicode direction overrides, or invisible or line-breaking characters (zero-width space, soft hyphen, word joiner and invisible operators, Hangul fillers, line and paragraph separators, annotation, object-replacement and tag characters, BOM; a zero-width joiner or non-joiner is accepted only INSIDE a word, between two letters or marks): 422 `person_invalid` with `errors{<field>: ["invalid_characters"]}` for `reason`, and nothing is written.
       parameters:
         - $ref: '#/components/parameters/XCommandId'
         - { $ref: '#/components/parameters/UserId' }
@@ -1297,7 +1297,7 @@ paths:
       description: |
         Requires `identity.roles.create` (satisfied by `tenant.admin` in the caller's own tenant, or by `platform.*` equivalents for platform operators; ADR 0068).
 
-        Text a person types that other people read is refused when it holds control characters (including CR, LF and TAB), Unicode direction overrides or invisible formatting characters (U+200B-U+200D, U+2060, U+FEFF): 422 `role_invalid` with `errors{<field>: ["invalid_characters"]}` for `name`, and nothing is written.
+        Text a person types that other people read is refused when it holds control characters (including CR, LF and TAB), Unicode direction overrides, or invisible or line-breaking characters (zero-width space, soft hyphen, word joiner and invisible operators, Hangul fillers, line and paragraph separators, annotation, object-replacement and tag characters, BOM; a zero-width joiner or non-joiner is accepted only INSIDE a word, between two letters or marks): 422 `role_invalid` with `errors{<field>: ["invalid_characters"]}` for `name`, and nothing is written.
       x-required-permissions: [identity.roles.create]
       requestBody:
         required: true
@@ -1366,7 +1366,7 @@ paths:
         reports, do not block it.
         Requires `identity.roles.update` (satisfied by `tenant.admin` in the caller's own tenant, or by `platform.*` equivalents for platform operators; ADR 0068).
 
-        Text a person types that other people read is refused when it holds control characters (including CR, LF and TAB), Unicode direction overrides or invisible formatting characters (U+200B-U+200D, U+2060, U+FEFF): 422 `role_invalid` with `errors{<field>: ["invalid_characters"]}` for `name`, and nothing is written. A full-replace body that re-sends a stored value UNCHANGED is accepted (a value stored before the rule existed never blocks an untouched save); only a changed value is checked.
+        Text a person types that other people read is refused when it holds control characters (including CR, LF and TAB), Unicode direction overrides, or invisible or line-breaking characters (zero-width space, soft hyphen, word joiner and invisible operators, Hangul fillers, line and paragraph separators, annotation, object-replacement and tag characters, BOM; a zero-width joiner or non-joiner is accepted only INSIDE a word, between two letters or marks): 422 `role_invalid` with `errors{<field>: ["invalid_characters"]}` for `name`, and nothing is written. A full-replace body that re-sends a stored value UNCHANGED is accepted (a value stored before the rule existed never blocks an untouched save); only a changed value is checked.
       x-required-permissions: [identity.roles.update]
       parameters:
         - $ref: '#/components/parameters/XCommandId'
@@ -1451,7 +1451,7 @@ paths:
         edge OR the cleared edge for audit.
         Requires `identity.roles.update` (satisfied by `tenant.admin` in the caller's own tenant, or by `platform.*` equivalents for platform operators; ADR 0068).
 
-        Text a person types that other people read is refused when it holds control characters (including CR, LF and TAB), Unicode direction overrides or invisible formatting characters (U+200B-U+200D, U+2060, U+FEFF): 422 `role_hierarchy_invalid_reason` with `errors{<field>: ["invalid_characters"]}` for `reason`, and nothing is written.
+        Text a person types that other people read is refused when it holds control characters (including CR, LF and TAB), Unicode direction overrides, or invisible or line-breaking characters (zero-width space, soft hyphen, word joiner and invisible operators, Hangul fillers, line and paragraph separators, annotation, object-replacement and tag characters, BOM; a zero-width joiner or non-joiner is accepted only INSIDE a word, between two letters or marks): 422 `role_hierarchy_invalid_reason` with `errors{<field>: ["invalid_characters"]}` for `reason`, and nothing is written.
       x-required-permissions: [identity.roles.update]
       parameters:
         - $ref: '#/components/parameters/XCommandId'
@@ -1692,7 +1692,7 @@ paths:
         Requires `platform.users.manage` held by a platform-tenant operator; platform-tenant membership alone is refused with 403 `forbidden`.
         An operator cannot change their own Person: the caller's own `personId` is refused with 403 `self_modification_forbidden` (super users exempt).
 
-        Text a person types that other people read is refused when it holds control characters (including CR, LF and TAB), Unicode direction overrides or invisible formatting characters (U+200B-U+200D, U+2060, U+FEFF): 422 `person_invalid` with `errors{<field>: ["invalid_characters"]}` for `first_name`, `last_name`, and nothing is written. A full-replace body that re-sends a stored value UNCHANGED is accepted (a value stored before the rule existed never blocks an untouched save); only a changed value is checked.
+        Text a person types that other people read is refused when it holds control characters (including CR, LF and TAB), Unicode direction overrides, or invisible or line-breaking characters (zero-width space, soft hyphen, word joiner and invisible operators, Hangul fillers, line and paragraph separators, annotation, object-replacement and tag characters, BOM; a zero-width joiner or non-joiner is accepted only INSIDE a word, between two letters or marks): 422 `person_invalid` with `errors{<field>: ["invalid_characters"]}` for `first_name`, `last_name`, and nothing is written. A full-replace body that re-sends a stored value UNCHANGED is accepted (a value stored before the rule existed never blocks an untouched save); only a changed value is checked.
       parameters:
         - $ref: '#/components/parameters/XCommandId'
         - { $ref: '#/components/parameters/PersonId' }
@@ -1720,7 +1720,7 @@ paths:
         Requires `platform.users.manage` held by a platform-tenant operator; platform-tenant membership alone is refused with 403 `forbidden`.
         An operator cannot change their own Person: the caller's own `personId` is refused with 403 `self_modification_forbidden` (super users exempt).
 
-        Text a person types that other people read is refused when it holds control characters (including CR, LF and TAB), Unicode direction overrides or invisible formatting characters (U+200B-U+200D, U+2060, U+FEFF): 422 `person_invalid` with `errors{<field>: ["invalid_characters"]}` for `reason`, and nothing is written.
+        Text a person types that other people read is refused when it holds control characters (including CR, LF and TAB), Unicode direction overrides, or invisible or line-breaking characters (zero-width space, soft hyphen, word joiner and invisible operators, Hangul fillers, line and paragraph separators, annotation, object-replacement and tag characters, BOM; a zero-width joiner or non-joiner is accepted only INSIDE a word, between two letters or marks): 422 `person_invalid` with `errors{<field>: ["invalid_characters"]}` for `reason`, and nothing is written.
       parameters:
         - $ref: '#/components/parameters/XCommandId'
         - { $ref: '#/components/parameters/PersonId' }
@@ -1765,7 +1765,7 @@ paths:
         Requires `identity.users.anonymise` held by a platform-tenant operator; platform-tenant membership alone is refused with 403 `forbidden`.
         An operator cannot change their own Person: the caller's own `personId` is refused with 403 `self_modification_forbidden` (super users exempt).
 
-        Text a person types that other people read is refused when it holds control characters (including CR, LF and TAB), Unicode direction overrides or invisible formatting characters (U+200B-U+200D, U+2060, U+FEFF): 422 `person_invalid` with `errors{<field>: ["invalid_characters"]}` for `reason`, and nothing is written.
+        Text a person types that other people read is refused when it holds control characters (including CR, LF and TAB), Unicode direction overrides, or invisible or line-breaking characters (zero-width space, soft hyphen, word joiner and invisible operators, Hangul fillers, line and paragraph separators, annotation, object-replacement and tag characters, BOM; a zero-width joiner or non-joiner is accepted only INSIDE a word, between two letters or marks): 422 `person_invalid` with `errors{<field>: ["invalid_characters"]}` for `reason`, and nothing is written.
       parameters:
         - $ref: '#/components/parameters/XCommandId'
         - { $ref: '#/components/parameters/PersonId' }
@@ -1848,7 +1848,7 @@ paths:
 
         Requires `platform.impersonation.manage` held by a platform-tenant operator; platform-tenant membership alone, and `platform.tenants.manage`, are refused with 403 `forbidden` (a session mints a `tenant.admin` token for the target tenant, so it has its own permission; `tenant.admin` never implies it).
 
-        Text a person types that other people read is refused when it holds control characters (including CR, LF and TAB), Unicode direction overrides or invisible formatting characters (U+200B-U+200D, U+2060, U+FEFF): 422 `impersonation_invalid` with `errors{<field>: ["invalid_characters"]}` for `reason`, and nothing is written.
+        Text a person types that other people read is refused when it holds control characters (including CR, LF and TAB), Unicode direction overrides, or invisible or line-breaking characters (zero-width space, soft hyphen, word joiner and invisible operators, Hangul fillers, line and paragraph separators, annotation, object-replacement and tag characters, BOM; a zero-width joiner or non-joiner is accepted only INSIDE a word, between two letters or marks): 422 `impersonation_invalid` with `errors{<field>: ["invalid_characters"]}` for `reason`, and nothing is written.
       requestBody:
         required: true
         content:
@@ -1972,7 +1972,7 @@ paths:
         (`permission_not_requestable`). `identity.users.create` is requested only at the Administrator tier or
         above (403 `admin_tier_required` below it; owner ruling 2026-11-21).
 
-        Text a person types that other people read is refused when it holds control characters (including CR, LF and TAB), Unicode direction overrides or invisible formatting characters (U+200B-U+200D, U+2060, U+FEFF): 422 `permission_request_invalid` with `errors{<field>: ["invalid_characters"]}` for `reason`, and nothing is written.
+        Text a person types that other people read is refused when it holds control characters (including CR, LF and TAB), Unicode direction overrides, or invisible or line-breaking characters (zero-width space, soft hyphen, word joiner and invisible operators, Hangul fillers, line and paragraph separators, annotation, object-replacement and tag characters, BOM; a zero-width joiner or non-joiner is accepted only INSIDE a word, between two letters or marks): 422 `permission_request_invalid` with `errors{<field>: ["invalid_characters"]}` for `reason`, and nothing is written.
       requestBody:
         required: true
         content:
@@ -2087,7 +2087,7 @@ paths:
         existed, stays pending; the approver can deny it and the requester can cancel it) → requester
         still active (409 `permission_request_requester_inactive`; the request stays pending).
 
-        Text a person types that other people read is refused when it holds control characters (including CR, LF and TAB), Unicode direction overrides or invisible formatting characters (U+200B-U+200D, U+2060, U+FEFF): 422 `permission_request_invalid` with `errors{<field>: ["invalid_characters"]}` for `decision_reason`, and nothing is written.
+        Text a person types that other people read is refused when it holds control characters (including CR, LF and TAB), Unicode direction overrides, or invisible or line-breaking characters (zero-width space, soft hyphen, word joiner and invisible operators, Hangul fillers, line and paragraph separators, annotation, object-replacement and tag characters, BOM; a zero-width joiner or non-joiner is accepted only INSIDE a word, between two letters or marks): 422 `permission_request_invalid` with `errors{<field>: ["invalid_characters"]}` for `decision_reason`, and nothing is written.
       parameters:
         - $ref: '#/components/parameters/XCommandId'
         - { $ref: '#/components/parameters/PermissionRequestId' }
@@ -2130,7 +2130,7 @@ paths:
         Deny per ADR 0055 audit canon. Same eligibility and check order as Approve, except that the
         denier need not hold the requested permission (nor `identity.roles.approve` as an Administrator).
 
-        Text a person types that other people read is refused when it holds control characters (including CR, LF and TAB), Unicode direction overrides or invisible formatting characters (U+200B-U+200D, U+2060, U+FEFF): 422 `permission_request_invalid` with `errors{<field>: ["invalid_characters"]}` for `decision_reason`, and nothing is written.
+        Text a person types that other people read is refused when it holds control characters (including CR, LF and TAB), Unicode direction overrides, or invisible or line-breaking characters (zero-width space, soft hyphen, word joiner and invisible operators, Hangul fillers, line and paragraph separators, annotation, object-replacement and tag characters, BOM; a zero-width joiner or non-joiner is accepted only INSIDE a word, between two letters or marks): 422 `permission_request_invalid` with `errors{<field>: ["invalid_characters"]}` for `decision_reason`, and nothing is written.
       parameters:
         - $ref: '#/components/parameters/XCommandId'
         - { $ref: '#/components/parameters/PermissionRequestId' }
@@ -4532,8 +4532,9 @@ components:
         `message` stay populated for backward compat. Validation failures
         carry the `errors` map (field name → list of messages). The stable field
         code `invalid_characters` marks text a person typed that holds control,
-        direction-override or invisible formatting characters (see the operations
-        that accept names, titles and reasons).
+        direction-override, invisible or line-breaking characters (see the operations
+        that accept names, titles and reasons). A zero-width joiner or non-joiner
+        between two letters or marks of one word is accepted and must not be stripped.
       properties:
         type:   { type: string, description: 'RFC 9457 §3.1.1 — canonical type URI' }
         title:  { type: string, description: 'RFC 9457 §3.1.2 — human-readable summary' }
