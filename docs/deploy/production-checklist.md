@@ -62,7 +62,10 @@ matters and how to check it.
    needs headroom).
 7. **On the BFF** (leadkart-web): `ADDRESS_HEADER` and `XFF_DEPTH` must equal, and
    never exceed, the number of proxies in front of the BFF. A larger depth lets a
-   client choose the address the api sees.
+   client choose the address the api sees. Also on the BFF: `ORIGIN` and
+   `PUBLIC_SITE_URL` must both be set to the public `https://` origin (no path, no
+   trailing slash). With `ORIGIN` unset the BFF falls back to the request's `Host`
+   header; with `PUBLIC_SITE_URL` unset link previews carry no absolute image.
 
 8. **Rotating the JWT signing key signs out some people: do it off-peak.** The
     refresh grace window (item below) derives its successor token from the signing key;
