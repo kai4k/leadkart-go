@@ -336,12 +336,12 @@ func handleRegisterTenant(log *slog.Logger, a app.Application) http.Handler {
 		}
 		s, err := slug.New(req.Slug)
 		if err != nil {
-			writeError(w, http.StatusBadRequest, ErrCodeInvalidSlug, err.Error())
+			writeBadField(w, ErrCodeInvalidSlug, "slug", err)
 			return
 		}
 		addr, err := email.New(req.AdminEmail)
 		if err != nil {
-			writeError(w, http.StatusBadRequest, ErrCodeInvalidEmail, err.Error())
+			writeBadField(w, ErrCodeInvalidEmail, "admin_email", err)
 			return
 		}
 
@@ -940,7 +940,7 @@ func handleRequestEmailChange(log *slog.Logger, a app.Application) http.Handler 
 		}
 		newAddr, err := email.New(req.NewEmail)
 		if err != nil {
-			writeError(w, http.StatusBadRequest, ErrCodeInvalidEmail, err.Error())
+			writeBadField(w, ErrCodeInvalidEmail, "new_email", err)
 			return
 		}
 		err = a.Commands.RequestEmailChange.Handle(r.Context(), command.RequestEmailChangeCommand{
@@ -1065,6 +1065,22 @@ func writeValidationError(w http.ResponseWriter, detail string, fields map[strin
 		Error:   ErrCodeValidationFailed,
 		Message: detail,
 		Errors:  fields,
+	})
+}
+
+// writeBadField answers a 400 for a request field that failed its value-object
+// parse (invalid_slug, invalid_email): the same status and error code as before,
+// plus errors{<field>: [<code>]} so a form can mark the field. The message keeps
+// the parser's wording and never echoes the offending value.
+func writeBadField(w http.ResponseWriter, code, field string, err error) {
+	writeJSON(w, http.StatusBadRequest, ErrorResponse{
+		Type:    problemType(code),
+		Title:   http.StatusText(http.StatusBadRequest),
+		Status:  http.StatusBadRequest,
+		Detail:  err.Error(),
+		Error:   code,
+		Message: err.Error(),
+		Errors:  map[string][]string{field: {code}},
 	})
 }
 

@@ -392,7 +392,7 @@ func handleCreateUser(log *slog.Logger, a app.Application) http.Handler {
 		}
 		addr, err := email.New(req.Email)
 		if err != nil {
-			writeError(w, http.StatusBadRequest, ErrCodeInvalidEmail, err.Error())
+			writeBadField(w, ErrCodeInvalidEmail, "email", err)
 			return
 		}
 		// Audit chain — caller's MembershipID stamps the new user's

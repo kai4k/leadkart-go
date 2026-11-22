@@ -58,8 +58,12 @@ func TestE2E_RegisterTenant_InvalidInputIsRefusedNotA500_NothingWritten(t *testi
 		{"empty admin_last_name", with("reg-f", func(c *in) { c.last = "" }), 422, "person_invalid", "admin_last_name", "required"},
 		{"over-long admin_first_name", with("reg-g", func(c *in) { c.first = strings.Repeat("x", 101) }), 422, "person_invalid", "admin_first_name", "too_long"},
 		{"over-long admin_last_name", with("reg-h", func(c *in) { c.last = strings.Repeat("x", 101) }), 422, "person_invalid", "admin_last_name", "too_long"},
-		{"bad slug", with("Bad Slug!", func(c *in) { c.email = "reg-slug@e2e.test" }), 400, "invalid_slug", "", ""},
-		{"bad email", with("reg-i", func(c *in) { c.email = "not-an-email" }), 400, "invalid_email", "", ""},
+		{"bad slug", with("Bad Slug!", func(c *in) { c.email = "reg-slug@e2e.test" }), 400, "invalid_slug", "slug", "invalid_slug"},
+		{"slug of two characters", with("ab", func(c *in) { c.email = "reg-ab@e2e.test" }), 400, "invalid_slug", "slug", "invalid_slug"},
+		{"slug with a double hyphen", with("a--b-c", func(c *in) { c.email = "reg-dh@e2e.test" }), 400, "invalid_slug", "slug", "invalid_slug"},
+		{"slug of 64 characters", with(strings.Repeat("s", 64), func(c *in) { c.email = "reg-64@e2e.test" }), 400, "invalid_slug", "slug", "invalid_slug"},
+		{"bad email", with("reg-i", func(c *in) { c.email = "not-an-email" }), 400, "invalid_email", "admin_email", "invalid_email"},
+		{"email with a doubled dot", with("reg-j", func(c *in) { c.email = "a..b@e2e.test" }), 400, "invalid_email", "admin_email", "invalid_email"},
 	}
 	for _, c := range cases {
 		r := register(c.in)
@@ -74,12 +78,12 @@ func TestE2E_RegisterTenant_InvalidInputIsRefusedNotA500_NothingWritten(t *testi
 		if c.wantField != "" && (len(er.Errors[c.wantField]) != 1 || er.Errors[c.wantField][0] != c.wantFieldC) {
 			t.Errorf("%s: errors = %v; want {%s:[%s]}", c.name, er.Errors, c.wantField, c.wantFieldC)
 		}
-		if c.in.slug != "Bad Slug!" {
+		if c.wantCode != "invalid_slug" {
 			if got := f.authedJSON(t, http.MethodGet, "/api/v1/tenants/by-slug/"+c.in.slug, op, nil); got.status != http.StatusNotFound {
 				t.Errorf("%s: a refused registration left a tenant behind: %d %s", c.name, got.status, got.body)
 			}
 		}
-		if c.in.email != "not-an-email" {
+		if c.in.email != "not-an-email" && !strings.Contains(c.in.email, "..") {
 			if got := f.authedJSON(t, http.MethodGet, "/api/v1/platform/persons?email="+c.in.email, reader, nil); got.status != http.StatusNotFound {
 				t.Errorf("%s: a refused registration left a person behind: %d %s", c.name, got.status, got.body)
 			}

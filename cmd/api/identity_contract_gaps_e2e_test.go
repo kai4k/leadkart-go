@@ -530,3 +530,31 @@ func TestE2E_I5_NamesAreStoredTrimmed(t *testing.T) {
 		t.Errorf("an untouched save rewrote the stored names: %q / %q", l, d)
 	}
 }
+
+// C7 + I6: invalid_slug and invalid_email name their field (the status and the
+// code are unchanged).
+func TestE2E_C7_I6_InvalidEmailNamesItsField(t *testing.T) {
+	f := newE2EFixture(t)
+	owner := f.registerAndLogin(t, "i6")
+	decodeErr := func(r httpResp) ports.ErrorResponse {
+		t.Helper()
+		var er ports.ErrorResponse
+		if err := json.Unmarshal(r.body, &er); err != nil {
+			t.Fatalf("decode %s: %v", r.body, err)
+		}
+		return er
+	}
+	want := func(what string, r httpResp, field string) {
+		t.Helper()
+		er := decodeErr(r)
+		if r.status != http.StatusBadRequest || er.Error != "invalid_email" || len(er.Errors[field]) != 1 || er.Errors[field][0] != "invalid_email" {
+			t.Errorf("%s: %d %s, want 400 invalid_email with errors{%s:[invalid_email]}", what, r.status, r.body, field)
+		}
+	}
+	for _, bad := range []string{"a..b@x.com", ".a@x.com", "a,b@x.com", "not-an-email"} {
+		want("add member "+bad, f.authedJSON(t, http.MethodPost, "/api/v1/users", owner.AccessToken,
+			ports.CreateUserRequest{Email: bad, Password: "Member-Pass-2026!x", FirstName: "A", LastName: "B"}), "email")
+		want("change email "+bad, f.authedJSON(t, http.MethodPost, "/api/v1/auth/request-email-change", owner.AccessToken,
+			ports.RequestEmailChangeRequest{NewEmail: bad}), "new_email")
+	}
+}

@@ -424,6 +424,7 @@ paths:
         regardless of whether the target email is already taken — defeats
         account enumeration. The unique-index at apply time enforces the
         actual constraint via POST /api/v1/auth/confirm-email-change.
+        A malformed new email is 400 `invalid_email` with `errors{new_email: ["invalid_email"]}`.
       requestBody:
         required: true
         content:
@@ -661,7 +662,8 @@ paths:
             `display_name`, `admin_first_name`, `admin_last_name`; the code is `required`
             (blank), `too_long` (company names over 200 bytes, admin names over 100) or
             `invalid_characters`. A malformed `slug` or `admin_email` is a 400
-            (`invalid_slug` / `invalid_email`), not a 422. Never a 500.
+            (`invalid_slug` / `invalid_email`) carrying `errors{slug: ["invalid_slug"]}` /
+            `errors{admin_email: ["invalid_email"]}`, not a 422. Never a 500.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
@@ -1056,7 +1058,7 @@ paths:
         '403':
           description: "`forbidden` (the caller lacks `identity.users.create`, including every member below the Administrator tier), `admin_tier_required` (the caller's stored rank is below the Administrator tier), or `tenant_scope_forbidden` (see TenantScopeForbidden)"
           content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } }
-        '400': { description: "`invalid_body` — the body is not valid JSON; `invalid_email` — the email is not a valid address", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+        '400': { description: "`invalid_body` — the body is not valid JSON; `invalid_email` — the email is not a valid address (with `errors{email: [\"invalid_email\"]}`)", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
         '409': { description: "`email_has_active_membership` — the email already has an active membership in another tenant", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
         '422': { description: "`password_policy_violation` — the password fails the target tenant's policy (field `errors.password`, see PasswordPolicyViolation); `user_invalid` — the new membership violates a domain invariant (see `message`)", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
 
@@ -4836,7 +4838,7 @@ components:
       type: object
       required: [slug, legal_name, display_name, admin_email, admin_password, admin_first_name, admin_last_name]
       properties:
-        slug:             { type: string, pattern: '^[a-z0-9-]+$', minLength: 2, maxLength: 100 }
+        slug:             { type: string, pattern: '^[a-z0-9]([a-z0-9-]*[a-z0-9])?$', minLength: 3, maxLength: 63, description: "Trimmed, then 3 to 63 characters of lowercase letters, digits and hyphens, starting and ending with a letter or digit, with no double hyphen (`--`). Anything else is 400 `invalid_slug` with `errors{slug: [\"invalid_slug\"]}`." }
         legal_name:       { type: string, maxLength: 200, description: "Trimmed first, then measured (1 to 200 bytes of UTF-8, not characters) and stored trimmed." }
         display_name:     { type: string, maxLength: 200, description: "Trimmed first, then measured (1 to 200 bytes of UTF-8, not characters) and stored trimmed." }
         admin_email:      { type: string, format: email }
