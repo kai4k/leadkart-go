@@ -580,6 +580,7 @@ func TestArch_DomainHasNoInfraImports(t *testing.T) {
 		"druglicence":   true,
 		"pagination":    true,
 		"tenancy":       true,
+		"hsncode":       true, // the one HSN code rule (trimmed, 4/6/8 digits); stdlib only
 		"textlimit":     true, // the one length check + wire code for free text; stdlib only
 		"humantext":     true, // the one rule for text people type that others read; pure rune checks
 		"parcel":        true, // the pack rules Orders and Dispatch must agree on; stdlib only
@@ -626,7 +627,7 @@ func TestArch_DomainHasNoInfraImports(t *testing.T) {
 		t.Logf("DOMAIN-PURITY VIOLATIONS — %d", len(violations))
 		t.Logf("Per ADR 0002 + 0047 + Vernon IDDD ch. 4: domain is pure Go.")
 		t.Logf("Allowed common/* leaves: errs, ids, slug, email, phone, pan,")
-		t.Logf("gst, postaladdress, druglicence, pagination, tenancy, humantext, parcel.")
+		t.Logf("gst, postaladdress, druglicence, pagination, tenancy, humantext, parcel, textlimit, hsncode.")
 		for _, v := range violations {
 			t.Errorf("%s\n  imports: %s\n  why: %s", v.file, v.imp, v.reason)
 		}

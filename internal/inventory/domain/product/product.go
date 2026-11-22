@@ -18,6 +18,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/leadkart/leadkart-go/internal/common/errs"
+	"github.com/leadkart/leadkart-go/internal/common/hsncode"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
@@ -32,8 +33,8 @@ const (
 	DosageFormMaxLength = 50
 	PackSizeMinLength   = 1
 	PackSizeMaxLength   = 100
-	HSNCodeMinLength    = 4
-	HSNCodeMaxLength    = 10
+	HSNCodeMinLength    = 4 // shortest HSN code; the full rule lives in common/hsncode
+	HSNCodeMaxLength    = 8 // longest HSN code (the DB CHECK still allows up to 10: rows stored before the rule)
 	ManufacturerMaxLen  = 200
 	GSTRateBpsMin       = 0     // 0%
 	GSTRateBpsMax       = 10000 // 100% — practical ceiling; basis points
@@ -98,7 +99,7 @@ type UpdateSpec struct {
 //   - SKU trimmed + upper-cased, 1..SKUMaxLength
 //   - Name trimmed, 1..NameMaxLength
 //   - DosageForm + PackSize trimmed, length-bounded
-//   - HSNCode 4..10 digits (Indian GST)
+//   - HSNCode trimmed, 4, 6 or 8 digits, leading zero allowed (common/hsncode)
 //   - GSTRateBps in [0, 10000] (basis points; 1200 = 12%)
 //   - Manufacturer trimmed, <=ManufacturerMaxLen
 type Product struct {
@@ -166,10 +167,11 @@ func New(id ID, tenantID tenant.ID, actorID membership.ID, spec Spec, now time.T
 	if err != nil {
 		return nil, err
 	}
-	hsn, err := validateHSN(spec.HSNCode)
+	hsnCode, err := hsncode.New(spec.HSNCode) // the one HSN rule: trimmed, 4/6/8 digits, leading zero allowed
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: hsn_code: %w", ErrInvalid, err)
 	}
+	hsn := hsnCode.String()
 	if spec.GSTRateBps < GSTRateBpsMin || spec.GSTRateBps > GSTRateBpsMax {
 		return nil, fmt.Errorf("%w: gst_rate_bps %d not in [%d,%d]",
 			ErrInvalid, spec.GSTRateBps, GSTRateBpsMin, GSTRateBpsMax)
@@ -247,7 +249,8 @@ func (p *Product) DosageForm() string { return p.dosageForm }
 // PackSize returns the pack-size descriptor ("10x10", "100ml bottle", ...).
 func (p *Product) PackSize() string { return p.packSize }
 
-// HSNCode returns the Indian HSN code (4..10 digits).
+// HSNCode returns the Indian HSN code (4, 6 or 8 digits for a product created
+// under the current rule).
 func (p *Product) HSNCode() string { return p.hsnCode }
 
 // GSTRateBps returns the GST rate in basis points (1200 = 12.00%; never float).
@@ -543,20 +546,6 @@ func validateBoundedTrim(raw, field string, min, max int) (string, error) {
 	if len(t) < min || len(t) > max {
 		return "", fmt.Errorf("%w: %s length %d not in [%d,%d]",
 			ErrInvalid, field, len(t), min, max)
-	}
-	return t, nil
-}
-
-func validateHSN(raw string) (string, error) {
-	t := strings.TrimSpace(raw)
-	if len(t) < HSNCodeMinLength || len(t) > HSNCodeMaxLength {
-		return "", fmt.Errorf("%w: hsn_code length %d not in [%d,%d]",
-			ErrInvalid, len(t), HSNCodeMinLength, HSNCodeMaxLength)
-	}
-	for _, r := range t {
-		if r < '0' || r > '9' {
-			return "", fmt.Errorf("%w: hsn_code must be all-digits (got %q)", ErrInvalid, t)
-		}
 	}
 	return t, nil
 }

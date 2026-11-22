@@ -462,3 +462,27 @@ func TestE2E_Dispatch_TextOverItsDatabaseLimitIs422(t *testing.T) {
 		t.Fatalf("failure reason at 1000: status %d body %s; want 204", resp.status, resp.body)
 	}
 }
+
+// TestE2E_Inventory_HSNRule is I7 over the wire: 0402 (a real chapter 04 code)
+// is accepted; 5, 7, 9 and 10 digits are 422 (the old Product rule took them).
+func TestE2E_Inventory_HSNRule(t *testing.T) {
+	f := newE2EFixture(t)
+	tok := f.registerAndLogin(t, "hsnrule").AccessToken
+	create := func(sku, hsn string) (int, []byte) {
+		resp := f.authedJSON(t, http.MethodPost, "/api/v1/inventory/products", tok, invports.CreateProductRequest{
+			SKU: sku, Name: "Product " + sku, DosageForm: "tablet", PackSize: "10x10", HSNCode: hsn, GSTRateBps: new(500),
+		})
+		return resp.status, resp.body
+	}
+	if st, body := create("HSN-0402", "0402"); st != http.StatusCreated {
+		t.Fatalf("hsn 0402: status %d body %s; want 201", st, body)
+	}
+	if st, body := create("HSN-SP", " 30049099 "); st != http.StatusCreated {
+		t.Fatalf("padded hsn: status %d body %s; want 201 (trimmed)", st, body)
+	}
+	for i, hsn := range []string{"30041", "3004102", "300410200", "3004102000", "300", "3004XX"} {
+		if st, body := create("HSN-BAD-"+string(rune('A'+i)), hsn); st != http.StatusUnprocessableEntity {
+			t.Fatalf("hsn %q: status %d body %s; want 422", hsn, st, body)
+		}
+	}
+}

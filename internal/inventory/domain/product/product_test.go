@@ -386,3 +386,40 @@ func TestUnmarshalFromDB_DoesNotEmitEvents(t *testing.T) {
 
 func strPtr(s string) *string { return &s }
 func intPtr(i int) *int       { return &i }
+
+// I7: the Product domain uses the one HSN rule (common/hsncode): trimmed, ASCII
+// digits only, 4, 6 or 8 of them, leading zero allowed.
+func TestNew_HSNRule(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		hsn  string
+		want string // "" means refused
+	}{
+		{"3004", "3004"}, {"300410", "300410"}, {"30041020", "30041020"},
+		{"0402", "0402"}, {"04021010", "04021010"}, // chapters 01-09 are real
+		{" 3004 ", "3004"}, // trimmed
+		{"30041", ""}, {"3004102", ""}, {"300410200", ""}, {"3004102000", ""}, // 5, 7, 9, 10 digits passed before
+		{"300", ""}, {"30", ""}, {"3004XYZX", ""}, {"30 04", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.hsn, func(t *testing.T) {
+			t.Parallel()
+			pid, tid, actor := freshIDs(t)
+			spec := validSpec()
+			spec.HSNCode = tc.hsn
+			p, err := product.New(pid, tid, actor, spec, fixedNow)
+			if tc.want == "" {
+				if !errors.Is(err, product.ErrInvalid) {
+					t.Fatalf("HSN %q: want ErrInvalid, got %v", tc.hsn, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("HSN %q: %v", tc.hsn, err)
+			}
+			if p.HSNCode() != tc.want {
+				t.Fatalf("HSN %q stored as %q, want %q", tc.hsn, p.HSNCode(), tc.want)
+			}
+		})
+	}
+}

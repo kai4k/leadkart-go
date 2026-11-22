@@ -4,7 +4,6 @@
 //
 // HSN code structure (India GST):
 //
-//   - 2 digits — chapter (broad category)
 //   - 4 digits — heading (mandatory for tenants with annual turnover
 //     > ₹5 crore)
 //   - 6 digits — subheading (international WCO standard)
@@ -12,11 +11,15 @@
 //     enables full duty / GST classification)
 //
 // LeadKart's tenants are primarily PCD pharma operators whose turnover
-// typically exceeds the 4-digit threshold. We support all four lengths
-// — operators pick the granularity their accountant needs.
+// typically exceeds the 4-digit threshold, so the 2-digit chapter alone is not
+// accepted as a product code. Operators pick the granularity their accountant
+// needs among 4, 6 and 8.
 //
-// Validation: digits only; length ∈ {2, 4, 6, 8}; first digit non-zero
-// (chapter 00 isn't allocated in the HSN table).
+// THE rule, the only one in the codebase (the Product domain uses it): the
+// value is trimmed of surrounding whitespace, then holds ASCII digits only,
+// exactly 4, 6 or 8 of them. A leading zero is part of the code: chapters
+// 01-09 are real (`0402` is milk and cream), so the first digit is NOT
+// restricted.
 //
 // Note: GSTR-1 + GSTR-3B reporting requires the code AS DECLARED to the
 // GST portal — we don't cross-validate against the HSN master table
@@ -29,28 +32,25 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"strings"
 )
 
 // ErrInvalid is the sentinel for VO invariant failures.
 var ErrInvalid = errors.New("hsncode: invalid")
 
-// pattern: 2, 4, 6, or 8 digits, first digit 1-9.
-var pattern = regexp.MustCompile(`^[1-9][0-9]{1,7}$`)
+// pattern: 4, 6 or 8 ASCII digits, any first digit.
+var pattern = regexp.MustCompile(`^(?:[0-9]{4}|[0-9]{6}|[0-9]{8})$`)
 
 // Code is the validated HSN code string.
 type Code string
 
-// New validates raw against the HSN canon.
+// New trims raw and validates it against the HSN rule above.
 func New(raw string) (Code, error) {
-	if !pattern.MatchString(raw) {
-		return "", fmt.Errorf("%w: %q is not a valid HSN code (2/4/6/8 digits, first 1-9)",
-			ErrInvalid, raw)
+	t := strings.TrimSpace(raw)
+	if !pattern.MatchString(t) {
+		return "", fmt.Errorf("%w: %q is not a valid HSN code (4, 6 or 8 digits)", ErrInvalid, t)
 	}
-	switch len(raw) {
-	case 2, 4, 6, 8:
-		return Code(raw), nil
-	}
-	return "", fmt.Errorf("%w: %q length %d not in {2, 4, 6, 8}", ErrInvalid, raw, len(raw))
+	return Code(t), nil
 }
 
 // MustNew is the init-time / test variant — panics on invalid input.
