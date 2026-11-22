@@ -271,6 +271,9 @@ type UserDto struct {
 	LeftAt        time.Time `json:"left_at,omitzero"`
 	ReportsTo     string    `json:"reports_to,omitzero"`
 	RoleIDs       []string  `json:"role_ids"`
+	// PermissionOverrides is present on the single-user read GET /users/{id} only,
+	// and only for a caller who may change them; absent for everyone else.
+	PermissionOverrides *UserPermissionOverridesDto `json:"permission_overrides,omitzero"`
 }
 
 // ListUsersResponse — GET /api/v1/users. Keyset-paginated per ADR 0038.
@@ -764,4 +767,21 @@ type ErrorResponse struct {
 	// name, value = list of error messages). Populated by validation
 	// failures; nil for non-validation errors.
 	Errors map[string][]string `json:"errors,omitzero"`
+}
+
+// UserPermissionOverridesDto is a member's live permission overrides: the
+// grants not yet expired and the revoked names. PATCH .../permission-overrides
+// replaces both lists, so a client starts a save from this and re-sends what it
+// does not mean to remove.
+type UserPermissionOverridesDto struct {
+	Granted []GrantedOverrideDto `json:"granted"`
+	Revoked []string             `json:"revoked"`
+}
+
+// GrantedOverrideDto is one granted override. ExpiresAt is absent for a
+// permanent grant. Re-sending a time-bound grant by name keeps its expiry; the
+// request cannot extend it.
+type GrantedOverrideDto struct {
+	Name      string    `json:"name"`
+	ExpiresAt time.Time `json:"expires_at,omitzero"`
 }

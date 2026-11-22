@@ -1052,6 +1052,8 @@ paths:
       summary: Get one user (membership) by ID
       description: |
         Requires `identity.users.view` or self (path id equals the caller's membership) (satisfied by `tenant.admin` in the caller's own tenant, or by `platform.*` equivalents for platform operators; ADR 0068).
+
+        `permission_overrides` (live grants with their expiry, and revoked names) is returned ONLY to a caller who holds `identity.users.update_permissions` AND may act on this member (strictly outranks them; owners on owners; super users and exempt platform operators); for every other caller the field is absent (never an error). It is what `PATCH .../permission-overrides` replaces, so a form seeds from it and re-sends what it does not mean to remove.
       x-required-permissions: [identity.users.view, self]
       parameters:
         - { $ref: '#/components/parameters/UserId' }
@@ -1191,7 +1193,7 @@ paths:
       tags: [users]
       summary: Replace user's granted + revoked permission overlays atomically
       description: |
-        Both arrays are required; empty arrays clear the corresponding overlay. Permission names
+        Both arrays are required; empty arrays clear the corresponding overlay. This REPLACES the whole set: read the current one first from `GET /users/{userId}` (`permission_overrides`) and re-send what must stay. A name that is already a live grant and is re-sent keeps its existing expiry (a time-bound grant from an approved permission request stays time-bound and cannot be extended by re-sending it); every other granted name is permanent. Permission names
         MUST match the closed `permission.IdentityPermissions` catalogue;
         unknown names surface as 422 (`permission_unknown`). A name listed twice in one array is stored once; a name present in BOTH arrays is a 422 `validation_failed` with `errors{revoked: ["also_granted"]}` (compare your own two arrays to find the names).
         Requires `identity.users.update_permissions` (satisfied by `tenant.admin` in the caller's own tenant, or by `platform.*` equivalents for platform operators; ADR 0068). Self-target forbidden (`self_modification_forbidden`). The caller must strictly outrank the target member (`insufficient_rank`; owners may act on owners; super users and exempt platform operators are exempt), decided inside the transaction that holds the tenant's authority lock (ADR 0069). Conferring a permission the caller does not hold is rejected with `grant_exceeds_authority`.
@@ -4967,6 +4969,27 @@ components:
         role_ids:
           type: array
           items: { type: string, format: uuid }
+        permission_overrides: { $ref: '#/components/schemas/UserPermissionOverridesDto' }
+
+    UserPermissionOverridesDto:
+      type: object
+      description: |
+        A member's live permission overrides. Present on `GET /users/{userId}` only, and only for a caller who may change them. `granted` lists the grants not yet expired; `revoked` the names taken away. Re-sending a time-bound grant by name in `PATCH .../permission-overrides` keeps its expiry; the request has no way to extend it.
+      required: [granted, revoked]
+      properties:
+        granted:
+          type: array
+          items: { $ref: '#/components/schemas/GrantedOverrideDto' }
+        revoked:
+          type: array
+          items: { type: string }
+
+    GrantedOverrideDto:
+      type: object
+      required: [name]
+      properties:
+        name:       { type: string }
+        expires_at: { type: string, format: date-time, description: Absent for a permanent grant. }
 
     ListUsersResponse:
       type: object

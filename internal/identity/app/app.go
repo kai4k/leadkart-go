@@ -104,6 +104,7 @@ type Queries struct {
 	GetTenant                 query.GetTenantHandler
 	GetTenantBySlug           query.GetTenantBySlugHandler
 	GetUser                   query.GetUserHandler
+	GetUserOverrides          query.GetUserOverridesHandler
 	ListUsers                 query.ListUsersHandler
 	ListUsersPaged            query.ListUsersPagedHandler
 	GetRole                   query.GetRoleHandler

@@ -4,11 +4,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/leadkart/leadkart-go/internal/common/pagination"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/authority"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/role"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
 
@@ -241,4 +245,114 @@ func composeUserView(m *membership.Membership, p *person.Person) UserView {
 		ReportsTo:     m.ReportsTo().String(),
 		RoleIDs:       roles,
 	}
+}
+
+// ----- GetUserOverridesQuery -----------------------------------------------
+
+// OverrideView is one live granted override. A zero ExpiresAt is a permanent
+// grant; a non-zero one is time-bound (typically from an approved permission
+// request).
+type OverrideView struct {
+	Name      string
+	ExpiresAt time.Time
+}
+
+// UserOverridesView is a member's live permission overrides: the grants not yet
+// expired and the revoked names. It is what a replace-overrides save starts
+// from, so a client can re-send what is there instead of erasing it.
+type UserOverridesView struct {
+	// Visible is false when the actor may not change this member's overrides: the
+	// other fields are then empty and the port omits the field.
+	Visible bool
+	Granted []OverrideView
+	Revoked []string
+}
+
+// GetUserOverridesQuery asks for one member's overrides on behalf of Actor.
+type GetUserOverridesQuery struct {
+	TenantID     tenant.ID
+	MembershipID membership.ID
+	// Actor is built once by the port via authn.AuthorityFrom; the zero value sees nothing.
+	Actor authority.Actor
+}
+
+// GetUserOverridesHandler loads the overrides for callers allowed to change them.
+type GetUserOverridesHandler struct {
+	memberships membership.Repository
+	roles       role.Repository
+	persons     person.Repository
+	now         func() time.Time
+}
+
+// NewGetUserOverridesHandler wires the handler. Nil `now` means time.Now.
+func NewGetUserOverridesHandler(m membership.Repository, r role.Repository, p person.Repository, now func() time.Time) GetUserOverridesHandler {
+	if m == nil {
+		panic("query: NewGetUserOverridesHandler memberships repository required")
+	}
+	if r == nil {
+		panic("query: NewGetUserOverridesHandler roles repository required")
+	}
+	if p == nil {
+		panic("query: NewGetUserOverridesHandler persons repository required")
+	}
+	if now == nil {
+		now = time.Now
+	}
+	return GetUserOverridesHandler{memberships: m, roles: r, persons: p, now: now}
+}
+
+// Handle returns the member's live overrides, Visible when the actor may change
+// them (the same authority decision the replace route makes first:
+// [authority.Actor.MayActOn], so a member never sees their own overrides unless
+// they are a super user, and a caller of lower or equal rank sees nothing). A
+// refusal is (zero view, nil): the overrides are simply absent, never an
+// error that tells a caller anything. The route's permission gate is the
+// port's job; this decides rank. [membership.ErrNotFound] when the member is
+// not in the tenant.
+func (h GetUserOverridesHandler) Handle(ctx context.Context, q GetUserOverridesQuery) (UserOverridesView, error) {
+	if q.TenantID.IsZero() {
+		return UserOverridesView{}, errors.New("get_user_overrides: tenant id required")
+	}
+	if q.MembershipID.IsZero() {
+		return UserOverridesView{}, errors.New("get_user_overrides: membership id required")
+	}
+	if !q.Actor.Valid() {
+		return UserOverridesView{}, nil
+	}
+	m, err := h.memberships.GetByID(ctx, q.TenantID, q.MembershipID)
+	if err != nil {
+		return UserOverridesView{}, fmt.Errorf("get_user_overrides: load membership: %w", err)
+	}
+	var roles []*role.Role
+	if ids := m.RoleAssignments(); len(ids) > 0 {
+		if roles, err = h.roles.GetByIDsIncludingDeleted(ctx, q.TenantID, ids); err != nil {
+			return UserOverridesView{}, fmt.Errorf("get_user_overrides: load roles: %w", err)
+		}
+	}
+	p, err := h.persons.GetByID(ctx, m.PersonID())
+	if err != nil {
+		return UserOverridesView{}, fmt.Errorf("get_user_overrides: load person %s: %w", m.PersonID(), err)
+	}
+	now := h.now()
+	target, err := authority.MemberOf(m, roles, now, authority.NewPersonState(p.IsActive(), p.IsGloballySuspended(), p.IsAnonymised()))
+	if err != nil {
+		// A member whose roles cannot be loaded consistently has no decidable rank:
+		// show nothing rather than guess.
+		return UserOverridesView{}, nil
+	}
+	if q.Actor.MayActOn(target) != nil {
+		return UserOverridesView{}, nil
+	}
+	live := target.Overrides()
+	out := UserOverridesView{Granted: make([]OverrideView, 0, len(live.Granted)), Revoked: slices.Clone(live.Revoked)}
+	for _, g := range live.Granted {
+		out.Granted = append(out.Granted, OverrideView{Name: g.Name, ExpiresAt: g.ExpiresAt.UTC()})
+	}
+	slices.SortFunc(out.Granted, func(a, b OverrideView) int { return strings.Compare(a.Name, b.Name) })
+	slices.Sort(out.Revoked)
+	if out.Revoked == nil {
+		out.Revoked = []string{}
+	}
+	out.Visible = true
+	return out, nil
 }

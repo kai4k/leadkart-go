@@ -14,6 +14,7 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/app/command"
 	"github.com/leadkart/leadkart-go/internal/identity/app/query"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/permission"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/person"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/role"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
@@ -43,7 +44,26 @@ func handleGetUser(log *slog.Logger, a app.Application) http.Handler {
 			writeError(w, http.StatusInternalServerError, ErrCodeInternalError, "")
 			return
 		}
-		writeJSON(w, http.StatusOK, projectUserViewToDto(view))
+		dto := projectUserViewToDto(view)
+		// The overrides ride the single read for a caller who holds the permission
+		// that changes them AND may act on this member (rank, not self). Anyone else
+		// gets the user without the field: no error, nothing to learn from.
+		if authn.Satisfies(r.Context(), permission.IdentityPermissions.Users.UpdatePermissions) {
+			ov, oerr := a.Queries.GetUserOverrides.Handle(r.Context(), query.GetUserOverridesQuery{
+				TenantID: tenant.ID(tid), MembershipID: id, Actor: authn.AuthorityFrom(r.Context())})
+			switch {
+			case errors.Is(oerr, membership.ErrNotFound):
+				writeError(w, http.StatusNotFound, ErrCodeUserNotFound, "")
+				return
+			case oerr != nil:
+				log.ErrorContext(r.Context(), "get user overrides failed", "err", oerr)
+				writeError(w, http.StatusInternalServerError, ErrCodeInternalError, "")
+				return
+			case ov.Visible:
+				dto.PermissionOverrides = projectOverridesToDto(ov)
+			}
+		}
+		writeJSON(w, http.StatusOK, dto)
 	})
 }
 
@@ -489,4 +509,15 @@ func projectUserViewToDto(v query.UserView) UserDto {
 		ReportsTo:     v.ReportsTo,
 		RoleIDs:       v.RoleIDs,
 	}
+}
+
+func projectOverridesToDto(v query.UserOverridesView) *UserPermissionOverridesDto {
+	out := &UserPermissionOverridesDto{Granted: make([]GrantedOverrideDto, 0, len(v.Granted)), Revoked: v.Revoked}
+	if out.Revoked == nil {
+		out.Revoked = []string{}
+	}
+	for _, g := range v.Granted {
+		out.Granted = append(out.Granted, GrantedOverrideDto{Name: g.Name, ExpiresAt: g.ExpiresAt})
+	}
+	return out
 }
