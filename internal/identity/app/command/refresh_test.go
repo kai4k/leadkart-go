@@ -1180,3 +1180,25 @@ func TestRefresh_Grace_LogsEveryReplayWithoutTheClient(t *testing.T) {
 		}
 	}
 }
+
+// A refreshed access token still names the same session (the family survives rotation).
+func TestRefresh_AccessTokenKeepsItsFamily(t *testing.T) {
+	t.Parallel()
+	rig := newRefreshRig(t)
+	fx := seedFullRefreshFixture(t, rig)
+	res, err := rig.handler.Handle(t.Context(), command.RefreshCommand{RefreshTokenPlain: fx.plaintext})
+	if err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	claims, err := rig.issuer.Verify(res.AccessToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if claims.FamilyID == "" {
+		t.Fatal("a refreshed token carries no family_id")
+	}
+	fams, err := rig.families.ListActiveForPerson(t.Context(), fx.person.ID())
+	if err != nil || len(fams) != 1 || fams[0].ID().String() != claims.FamilyID {
+		t.Errorf("family_id = %q, families %v (%v); want the one rotated family", claims.FamilyID, fams, err)
+	}
+}

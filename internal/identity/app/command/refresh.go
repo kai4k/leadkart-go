@@ -344,6 +344,7 @@ func (h RefreshHandler) Handle(ctx context.Context, cmd RefreshCommand) (Refresh
 		// Minted from the stored Person, like login: the flag survives refresh and
 		// is gone with the first token after the password change.
 		MustChangePassword: p.MustChangePassword(),
+		FamilyID:           family.ID().String(),
 	})
 	if err != nil {
 		return RefreshResult{}, fmt.Errorf("refresh: issue jwt: %w", err)

@@ -350,3 +350,28 @@ func TestVerify_RawAudienceAndActShapes(t *testing.T) {
 		})
 	}
 }
+
+func TestIssue_FamilyIDClaim_RoundTripsAndStaysEmptyWhenAbsent(t *testing.T) {
+	t.Parallel()
+	iss := issuerWithSecret(t, "k1", hex32a, time.Date(2026, 5, 6, 12, 0, 0, 0, time.UTC))
+	args := validArgs()
+	args.FamilyID = "0198a000-0000-7000-8000-000000000001"
+	tok, err := iss.Issue(args)
+	if err != nil {
+		t.Fatalf("Issue: %v", err)
+	}
+	c, err := iss.Verify(tok)
+	if err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	if c.FamilyID != args.FamilyID {
+		t.Errorf("family_id = %q, want %q", c.FamilyID, args.FamilyID)
+	}
+	tok, err = iss.Issue(validArgs())
+	if err != nil {
+		t.Fatalf("Issue: %v", err)
+	}
+	if c, err = iss.Verify(tok); err != nil || c.FamilyID != "" {
+		t.Errorf("a token minted without the claim verifies as %q, %v; want empty", c.FamilyID, err)
+	}
+}

@@ -1029,3 +1029,33 @@ func TestLogin_CorruptedPasswordHash_WrappedVerifyError(t *testing.T) {
 		t.Errorf("FailedLoginCount: ErrFormat branch did not bump counter")
 	}
 }
+
+// The access token names the session (refresh-token family) it was minted for, so
+// "sign out my other devices" can keep this one.
+func TestLogin_AccessTokenNamesItsFamily(t *testing.T) {
+	t.Parallel()
+	rig := newLoginRig(t)
+	const plain = "correct horse battery staple"
+	p := newPersonWithPassword(t, plain)
+	tn := newTenantWithSlug(t, "acme")
+	m := activeMembership(t, p, tn)
+	seedLoginCandidate(t, rig, p, m)
+	if err := rig.tenants.Add(t.Context(), tn); err != nil {
+		t.Fatalf("tenants.Add: %v", err)
+	}
+	res, err := rig.handler.Handle(t.Context(), command.LoginCommand{Email: p.Email(), Password: plain, DeviceLabel: "d"})
+	if err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	fams, err := rig.families.ListActiveForPerson(t.Context(), p.ID())
+	if err != nil || len(fams) != 1 {
+		t.Fatalf("families = %d, %v; want 1", len(fams), err)
+	}
+	claims, err := rig.issuer.Verify(res.AccessToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if claims.FamilyID == "" || claims.FamilyID != fams[0].ID().String() {
+		t.Errorf("family_id = %q, want the persisted family %q", claims.FamilyID, fams[0].ID())
+	}
+}

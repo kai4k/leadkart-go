@@ -104,6 +104,12 @@ type Claims struct {
 	// minted before the claim existed carry no flag and read as false.
 	MustChangePassword bool `json:"must_change_password,omitzero"`
 
+	// FamilyID is the refresh-token family (the session) this token was minted for:
+	// login and refresh set it, so "sign out my OTHER devices" can keep this one.
+	// Empty on impersonation tokens (no refresh path) and on tokens minted before the
+	// claim existed; the session routes treat an empty one as "current session unknown".
+	FamilyID string `json:"family_id,omitzero"`
+
 	// Act carries the RFC 8693 actor claim for impersonation tokens.
 	// Nil for regular tokens. Read-only at the verification layer;
 	// only the Issue() path populates it.
@@ -159,6 +165,10 @@ type IssueArgs struct {
 	// MustChangePassword mints the must_change_password claim (login and refresh
 	// pass the stored Person's flag; impersonation tokens never set it).
 	MustChangePassword bool
+
+	// FamilyID mints the family_id claim: login and refresh pass the session's
+	// refresh-token family. Impersonation tokens never set it.
+	FamilyID string
 
 	// Optional overrides for the impersonation path (ADR 0045).
 	Audience string        // default AudienceClaim
@@ -237,6 +247,7 @@ func (i *Issuer) Issue(args IssueArgs) (string, error) {
 		Rank:          args.Rank,
 
 		MustChangePassword: args.MustChangePassword,
+		FamilyID:           args.FamilyID,
 		Act:                args.Act,
 	}
 	tok := jwtv5.NewWithClaims(jwtv5.SigningMethodHS256, claims)

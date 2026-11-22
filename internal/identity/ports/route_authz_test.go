@@ -86,6 +86,7 @@ func TestRouteAuthz_IdentityRoutesRequirePermissions(t *testing.T) {
 	u, r, tn := "/api/v1/users/", "/api/v1/roles/", "/api/v1/tenants/"+azTenant
 	routes := []struct{ method, path, perm string }{
 		{"GET", "/api/v1/users", p.Users.View},
+		{"GET", "/api/v1/users/search?q=ab", p.Crm.Leads.Assign},
 		{"GET", u + azOther, p.Users.View},
 		{"PATCH", u + azOther + "/profile", p.Users.Update},
 		{"POST", u + azOther + "/deactivate", p.Users.Deactivate},

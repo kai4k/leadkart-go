@@ -527,6 +527,8 @@ paths:
     delete:
       tags: [sessions]
       summary: Revoke all sessions (optionally excluding current)
+      description: |
+        The body is optional; an empty body (or `except_current: false`) revokes every session of the caller, this one included. With `except_current: true` the session the access token was minted for (its `family_id` claim, set at login and kept by every refresh) is kept and only the others are revoked; `revoked_count` counts the sessions this call ended, never the kept one. A token that does not name its session (minted before the claim existed) cannot say which one to keep: 409 `current_session_unknown`, nothing is revoked, refresh the token and retry. A body that is present but not valid JSON is 400 `invalid_body` and nothing is revoked (it is never read as "revoke everything").
       requestBody:
         content:
           application/json:
@@ -534,6 +536,12 @@ paths:
       responses:
         '429': { $ref: '#/components/responses/TooManyRequests' }
         '403': { $ref: '#/components/responses/SessionRefused' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '409':
+          description: "`current_session_unknown`: `except_current` was asked but the access token carries no session id; nothing was revoked. Refresh the token and retry."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
         '200':
           description: Sessions revoked
           content:
@@ -4814,7 +4822,7 @@ components:
     RevokeAllSessionsRequest:
       type: object
       properties:
-        except_current: { type: boolean }
+        except_current: { type: boolean, description: "Keep the session this access token belongs to (its `family_id` claim) and revoke the others." }
         reason:         { type: string }
 
     RevokeAllSessionsResponse:

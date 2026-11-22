@@ -10,6 +10,7 @@
 package main
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -358,5 +359,83 @@ func TestE2E_C4_UsersListStatusFilter(t *testing.T) {
 	back, _ := list(own, "?page_size=200")
 	if slices.Contains(idsOf(inact), w.gone.membershipID) || !slices.Contains(idsOf(back), w.gone.membershipID) || back.StatusCounts.Inactive != 1 {
 		t.Errorf("after reactivation: inactive %v, counts %+v", idsOf(inact), back.StatusCounts)
+	}
+}
+
+// familyOf reads the family_id claim of an access token (the session it belongs to).
+func familyOf(t *testing.T, token string) string {
+	t.Helper()
+	parts := strings.Split(token, ".")
+	if len(parts) != 3 {
+		t.Fatalf("not a JWT: %q", token)
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		t.Fatalf("decode payload: %v", err)
+	}
+	var c struct {
+		FamilyID string `json:"family_id"`
+	}
+	if err := json.Unmarshal(raw, &c); err != nil {
+		t.Fatalf("payload: %v", err)
+	}
+	return c.FamilyID
+}
+
+// I1: "sign out other devices" keeps the device that asked.
+func TestE2E_I1_SignOutOtherDevicesKeepsThisOne(t *testing.T) {
+	f := newE2EFixture(t)
+	owner := f.registerAndLogin(t, "i1")
+	m := f.createMember(t, owner, "i1dev")
+	phone, laptop, tablet := f.loginToken(t, m.email, m.password), f.loginToken(t, m.email, m.password), f.loginToken(t, m.email, m.password)
+	famPhone, famLaptop, famTablet := familyOf(t, phone), familyOf(t, laptop), familyOf(t, tablet)
+	if famPhone == "" || famPhone == famLaptop || famLaptop == famTablet {
+		t.Fatalf("each login must carry its own family_id, got %q %q %q", famPhone, famLaptop, famTablet)
+	}
+	if got := f.sessionIDs(t, phone); len(got) != 3 {
+		t.Fatalf("sessions before = %v, want 3", got)
+	}
+
+	// a body that does not parse must not read as "everything"
+	if r := f.authedJSON(t, http.MethodDelete, "/api/v1/auth/sessions", phone, rawBody(`{"except_current":"true"}`)); r.status != http.StatusBadRequest {
+		t.Fatalf("a malformed body: %d %s, want 400", r.status, r.body)
+	}
+	if got := f.sessionIDs(t, phone); len(got) != 3 {
+		t.Fatalf("a refused call revoked sessions: %v", got)
+	}
+
+	r := f.authedJSON(t, http.MethodDelete, "/api/v1/auth/sessions", phone, ports.RevokeAllSessionsRequest{ExceptCurrent: true})
+	var out ports.RevokeAllSessionsResponse
+	if r.status != http.StatusOK || json.Unmarshal(r.body, &out) != nil || out.RevokedCount != 2 {
+		t.Fatalf("except current: %d %s, want 200 revoked_count 2 (the kept session is not counted)", r.status, r.body)
+	}
+	got := f.sessionIDs(t, phone)
+	if len(got) != 1 || got[0] != famPhone {
+		t.Fatalf("sessions after = %v, want only this device's %s", got, famPhone)
+	}
+	// without the flag it is everything, this device included (unchanged behaviour)
+	r = f.authedJSON(t, http.MethodDelete, "/api/v1/auth/sessions", phone, nil)
+	if r.status != http.StatusOK || json.Unmarshal(r.body, &out) != nil || out.RevokedCount != 1 {
+		t.Fatalf("revoke all: %d %s, want 200 revoked_count 1", r.status, r.body)
+	}
+	if got := f.sessionIDs(t, phone); len(got) != 0 {
+		t.Fatalf("sessions after revoke-all = %v, want none", got)
+	}
+}
+
+// A refreshed token names the same session.
+func TestE2E_I1_RefreshKeepsTheFamilyClaim(t *testing.T) {
+	f := newE2EFixture(t)
+	owner := f.registerAndLogin(t, "i1r")
+	before := familyOf(t, owner.AccessToken)
+	if before == "" {
+		t.Fatal("the login token names no session")
+	}
+	status, lr := f.mustRefresh(t, owner.RefreshToken)
+	if status != http.StatusOK {
+		t.Fatalf("refresh: %d", status)
+	}
+	if after := familyOf(t, lr.AccessToken); after != before {
+		t.Errorf("family after refresh = %q, want %q", after, before)
 	}
 }

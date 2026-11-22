@@ -3,6 +3,7 @@ package ports
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"log/slog"
 	"math"
 	"net/http"
@@ -798,23 +799,28 @@ func handleRevokeAllSessions(log *slog.Logger, a app.Application) http.Handler {
 		// json.Decoder returns io.EOF; treat that as "no overrides".
 		var req RevokeAllSessionsRequest
 		if r.Body != nil {
-			_ = json.NewDecoder(r.Body).Decode(&req) // ignore EOF
+			// Only an EMPTY body is "no overrides". A body that does not parse
+			// ({"except_current":"true"}) must not quietly become "revoke everything,
+			// this device included".
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+				writeError(w, http.StatusBadRequest, ErrCodeInvalidBody, "request body is not valid JSON")
+				return
+			}
 		}
 
 		var except refreshtoken.FamilyID
 		if req.ExceptCurrent {
-			// "ExceptCurrent" requires a way to know WHICH family is
-			// the current one. The JWT does not carry the FamilyID
-			// (refresh-token families are session infra; access tokens
-			// don't reveal them). Until the v0.3+ "current device"
-			// header lands, ExceptCurrent is an explicit opt-in that
-			// has no effect — same total-revoke result as omitting
-			// the field. Documented in OpenAPI.
-			//
-			// TODO(v0.3): add `X-Refresh-Family-Id` header carry-over
-			// or thread the family-id through access-token claims if
-			// product wants per-device "sign me out of others".
-			_ = except
+			// The access token carries the family (session) it was minted for; keep it.
+			// A token without the claim (minted before it existed, or an impersonation
+			// token, which has no session of its own) cannot say which session is the
+			// current one, and "everything except the current one" must never quietly
+			// become "everything": refuse, and the client refreshes and retries.
+			if strings.TrimSpace(c.FamilyID) == "" {
+				writeError(w, http.StatusConflict, ErrCodeCurrentSessionUnknown,
+					"this access token does not name its session; refresh the token and retry")
+				return
+			}
+			except = refreshtoken.FamilyID(c.FamilyID)
 		}
 
 		out, err := a.Commands.RevokeAllSessions.Handle(r.Context(), command.RevokeAllSessionsCommand{

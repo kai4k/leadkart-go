@@ -375,6 +375,11 @@ const (
 	// active, inactive, all. 400 surface.
 	ErrCodeInvalidStatusFilter = "invalid_status_filter"
 
+	// ErrCodeCurrentSessionUnknown — DELETE /v1/auth/sessions with
+	// except_current:true from an access token that carries no session id.
+	// 409; refresh the token and retry.
+	ErrCodeCurrentSessionUnknown = "current_session_unknown"
+
 	// ErrCodeInvalidSearchInclude — GET /v1/search ?include= cleared
 	// all categories. 400 surface — at least one of persons|tenants
 	// must be requested.
