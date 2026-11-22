@@ -1,5 +1,6 @@
 //go:build integration
 
+// arch-test:raw-sql-justified — plants LEGACY stored values (a padded name, an over-cap profile field) that the routes now refuse to write, so no route or typed helper can produce them.
 // arch-test:no-timeout-needed — newAttackWorld → newE2EFixtureWith →
 // startWiredPostgresForHTTP uses context.WithTimeout(90s) internally; per-request
 // HTTP uses t.Context().
@@ -556,5 +557,55 @@ func TestE2E_C7_I6_InvalidEmailNamesItsField(t *testing.T) {
 			ports.CreateUserRequest{Email: bad, Password: "Member-Pass-2026!x", FirstName: "A", LastName: "B"}), "email")
 		want("change email "+bad, f.authedJSON(t, http.MethodPost, "/api/v1/auth/request-email-change", owner.AccessToken,
 			ports.RequestEmailChangeRequest{NewEmail: bad}), "new_email")
+	}
+}
+
+// M1: the profile fields have a server cap (designation and department 120, status
+// message 280, UTF-8 bytes after trimming): too_long, named, nothing written.
+func TestE2E_M1_ProfileFieldsAreCapped(t *testing.T) {
+	f := newE2EFixture(t)
+	owner := f.registerAndLogin(t, "m1")
+	m := f.createMember(t, owner, "m1member")
+	path := "/api/v1/users/" + m.membershipID + "/profile"
+	save := func(d, dep, sm string) httpResp {
+		return f.authedJSON(t, http.MethodPatch, path, owner.AccessToken, ports.UpdateUserProfileRequest{Designation: d, Department: dep, StatusMessage: sm})
+	}
+	if r := save("  "+strings.Repeat("d", 120)+"  ", strings.Repeat("p", 120), strings.Repeat("s", 280)); r.status != http.StatusNoContent {
+		t.Fatalf("every field at its cap (one padded with spaces): %d %s, want 204", r.status, r.body)
+	}
+	for _, c := range []struct{ field, d, dep, sm string }{
+		{"designation", strings.Repeat("d", 121), "", ""},
+		{"department", "", strings.Repeat("p", 121), ""},
+		{"status_message", "", "", strings.Repeat("s", 281)},
+		{"designation", strings.Repeat("é", 61), "", ""}, // 122 bytes
+	} {
+		r := save(c.d, c.dep, c.sm)
+		var er ports.ErrorResponse
+		if err := json.Unmarshal(r.body, &er); err != nil || r.status != http.StatusUnprocessableEntity || er.Error != "user_invalid" || len(er.Errors[c.field]) != 1 || er.Errors[c.field][0] != "too_long" {
+			t.Errorf("%s over its cap: %d %s, want 422 user_invalid errors{%s:[too_long]}", c.field, r.status, r.body, c.field)
+		}
+	}
+	u := f.getUser(t, owner.AccessToken, m.membershipID)
+	if u.Designation != strings.Repeat("d", 120) || u.StatusMessage != strings.Repeat("s", 280) {
+		t.Errorf("a refused save changed the stored profile: %q / %q", u.Designation, u.StatusMessage)
+	}
+	// a stored value over the cap (from before the cap) is accepted when re-sent unchanged
+	long := strings.Repeat("L", 200)
+	tx, err := f.Pool.Begin(t.Context())
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	defer func() { _ = tx.Rollback(t.Context()) }()
+	if _, err := tx.Exec(t.Context(), `SELECT set_config('app.is_platform', 'true', true)`); err != nil {
+		t.Fatalf("platform scope: %v", err)
+	}
+	if tag, err := tx.Exec(t.Context(), `UPDATE identity.tenant_memberships SET designation = $1 WHERE id = $2`, long, m.membershipID); err != nil || tag.RowsAffected() != 1 {
+		t.Fatalf("plant legacy value: %v (rows %d)", err, tag.RowsAffected())
+	}
+	if err := tx.Commit(t.Context()); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+	if r := save(long, strings.Repeat("p", 120), strings.Repeat("s", 280)); r.status != http.StatusNoContent {
+		t.Errorf("re-sending a stored overlong value unchanged: %d %s, want 204", r.status, r.body)
 	}
 }

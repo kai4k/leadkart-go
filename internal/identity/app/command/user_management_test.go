@@ -273,25 +273,31 @@ func TestReactivateUser_AlreadyActive_Idempotent(t *testing.T) {
 	}
 }
 
-// TestUpdateUserProfile_HappyPath_NoLengthRejection — Membership.UpdateProfile
-// has no length invariant; the admin UI clamps, the aggregate stays permissive
-// so retroactive policy tightening doesn't reject existing rows.
-func TestUpdateUserProfile_HappyPath_NoLengthRejection(t *testing.T) {
+// TestUpdateUserProfile_FieldCapsAreEnforcedByTheAggregate — the profile fields
+// are capped in the domain (designation and department 120, status message 280,
+// UTF-8 bytes after trimming): a longer CHANGED value is refused as
+// membership.ErrInvalid and nothing is written; the cap itself is accepted.
+func TestUpdateUserProfile_FieldCapsAreEnforcedByTheAggregate(t *testing.T) {
 	t.Parallel()
 	repo := newFakeMembershipRepo()
 	m := newMembership(t)
 	_ = repo.Add(t.Context(), m) // arch-test:ignore-err
 
-	longMsg := strings.Repeat("a", 500)
 	h := command.NewUpdateUserProfileHandler(fakeUoW{}, &fakeAuthorityLock{}, repo, roletest.NewFakeRepository(), anyPersons{}, func() time.Time { return testNow })
-	if err := h.Handle(t.Context(), command.UpdateUserProfileCommand{
-		Actor:         actorAs(t, m.ID(), authority.RankUser),
-		TenantID:      tenant.ID("33333333-3333-3333-3333-333333333333"),
-		MembershipID:  m.ID(),
-		Designation:   "Sales Manager",
-		Department:    "North Zone",
-		StatusMessage: longMsg,
-	}); err != nil {
-		t.Fatalf("Handle: %v", err)
+	cmd := func(msg string) command.UpdateUserProfileCommand {
+		return command.UpdateUserProfileCommand{
+			Actor:         actorAs(t, m.ID(), authority.RankUser),
+			TenantID:      tenant.ID("33333333-3333-3333-3333-333333333333"),
+			MembershipID:  m.ID(),
+			Designation:   "Sales Manager",
+			Department:    "North Zone",
+			StatusMessage: msg,
+		}
+	}
+	if err := h.Handle(t.Context(), cmd(strings.Repeat("a", 500))); !errors.Is(err, membership.ErrInvalid) {
+		t.Fatalf("500-byte status message: err = %v, want membership.ErrInvalid", err)
+	}
+	if err := h.Handle(t.Context(), cmd(strings.Repeat("a", 280))); err != nil {
+		t.Fatalf("280-byte status message: %v", err)
 	}
 }

@@ -41,6 +41,15 @@ import (
 // ErrInvalid is the sentinel for membership invariant violations.
 var ErrInvalid = errs.New(errs.KindInvalidInput, "membership", "invalid membership")
 
+// Per-tenant profile field caps, in UTF-8 BYTES after trimming (the unit of the
+// other identity name rules: person names 100, company names 200). A stored value
+// over its cap, saved before the cap existed, is accepted when re-sent unchanged.
+const (
+	DesignationMaxLen   = 120
+	DepartmentMaxLen    = 120
+	StatusMessageMaxLen = 280
+)
+
 // GrantedOverride is one entry in the per-Membership permission overlay
 // GRANT slice. ExpiresAt zero = perpetual; otherwise the resolver filters
 // the entry out once now >= ExpiresAt per ADR 0055.
@@ -606,11 +615,19 @@ func (m *Membership) UpdateProfile(designation, department, statusMessage string
 	sm := strings.TrimSpace(statusMessage)
 	// A full replace re-sends the stored values: only a CHANGED field is checked, so a
 	// value stored before the rule existed never blocks an untouched save.
-	for _, f := range []struct{ field, stored, next string }{
-		{"designation", m.designation, d},
-		{"department", m.department, dep},
-		{"status_message", m.statusMessage, sm},
+	for _, f := range []struct {
+		field, stored, next string
+		max                 int
+	}{
+		{"designation", m.designation, d, DesignationMaxLen},
+		{"department", m.department, dep, DepartmentMaxLen},
+		{"status_message", m.statusMessage, sm, StatusMessageMaxLen},
 	} {
+		// The cap is measured on the trimmed value, in UTF-8 bytes like every other
+		// identity name rule; a value that is not being changed is never re-measured.
+		if f.next != f.stored && len(f.next) > f.max {
+			return fmt.Errorf("%w: %w", ErrInvalid, humantext.TooLong(f.field))
+		}
 		if err := humantext.CheckChanged(f.field, f.stored, f.next); err != nil {
 			return fmt.Errorf("%w: %w", ErrInvalid, err)
 		}

@@ -5092,9 +5092,9 @@ components:
       description: Full replace. Every field is required (an empty string clears it); a body that omits one is 400 `invalid_body` and nothing is changed.
       required: [designation, department, status_message]
       properties:
-        designation:    { type: string }
-        department:     { type: string }
-        status_message: { type: string }
+        designation:    { type: string, maxLength: 120, description: "Trimmed, then at most 120 bytes of UTF-8 (not characters); longer is 422 `user_invalid` with `errors{designation: [\"too_long\"]}`. A stored value over the cap, re-sent unchanged, is accepted." }
+        department:     { type: string, maxLength: 120, description: "Same rule as `designation`: 120 bytes after trimming." }
+        status_message: { type: string, maxLength: 280, description: "Trimmed, then at most 280 bytes of UTF-8; longer is 422 `user_invalid` with `errors{status_message: [\"too_long\"]}`." }
 
     DeactivateUserRequest:
       type: object
