@@ -220,3 +220,71 @@ func TestError_WireCodesAndSentinel(t *testing.T) {
 		}
 	}
 }
+
+// Legacy Malayalam chillus are typed consonant + virama (U+0D4D) + ZWJ (U+200D),
+// so the joiner ends the word. Built from code points so no editor can alter them.
+func TestValid_MalayalamChilluWithAJoinerIsAName(t *testing.T) {
+	t.Parallel()
+	const (
+		nna = "ണ" // ണ
+		vir = "്" // ് malayalam virama
+		zwj = "‍"
+		ka  = "ക" // ക
+	)
+	chillu := nna + vir + zwj // ണ്‍ (chillu NN, legacy spelling)
+	cases := []struct{ name, in string }{
+		{"the chillu alone", chillu},
+		{"chillu at the end of a word", ka + chillu},
+		{"chillu mid-string before a space", ka + chillu + " " + ka},
+		{"chillu before a no-break space", ka + chillu + " " + ka},
+		{"two chillus in two words", chillu + " " + chillu},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			if !humantext.Valid(c.in) {
+				t.Errorf("Valid(%+q) = false, want true", c.in)
+			}
+		})
+	}
+}
+
+// The chillu exception is exactly: ZWJ right after U+0D4D, and the word ends there.
+func TestValid_OnlyTheMalayalamChilluJoinerIsAllowedAtAWordEnd(t *testing.T) {
+	t.Parallel()
+	const (
+		zwj    = "‍"
+		zwnj   = "‌"
+		mlVir  = "്"
+		mlNna  = "ണ"
+		devKa  = "क"
+		devVir = "्"
+		taVir  = "்" // Tamil pulli
+		taKa   = "க"
+	)
+	cases := []struct{ name, in string }{
+		{"Devanagari virama + ZWJ at word end", devKa + devVir + zwj},
+		{"Devanagari virama + ZWJ before a space", devKa + devVir + zwj + " " + devKa},
+		{"Tamil pulli + ZWJ at word end", taKa + taVir + zwj},
+		{"Malayalam virama + ZWNJ at word end", mlNna + mlVir + zwnj},
+		{"a letter + ZWJ at word end (no virama)", mlNna + zwj},
+		{"Malayalam virama + two ZWJ", mlNna + mlVir + zwj + zwj},
+		{"Malayalam virama + ZWJ + ZWNJ", mlNna + mlVir + zwj + zwnj},
+		{"Malayalam virama + ZWJ before a digit", mlNna + mlVir + zwj + "1"},
+		{"Malayalam virama + ZWJ before punctuation", mlNna + mlVir + zwj + "."},
+		{"Malayalam virama + ZWJ before a control", mlNna + mlVir + zwj + "\x00"},
+		{"Malayalam virama + ZWJ before a bidi override", mlNna + mlVir + zwj + "‮"},
+		{"Malayalam virama + ZWJ before an emoji", mlNna + mlVir + zwj + "\U0001F468"},
+		{"ZWJ after a space", " " + zwj},
+		{"emoji family sequence", "\U0001F468" + zwj + "\U0001F469"},
+		{"digit + ZWJ", "1" + zwj},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			if humantext.Valid(c.in) {
+				t.Errorf("Valid(%+q) = true, want false", c.in)
+			}
+		})
+	}
+}

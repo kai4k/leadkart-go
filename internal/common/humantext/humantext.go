@@ -26,7 +26,12 @@
 // an Arabic-script language (Persian, Urdu): they choose a conjunct form or break
 // a ligature. U+200C and U+200D are therefore accepted when the rune immediately
 // before AND the rune immediately after are each a letter or a combining mark
-// (Unicode general category L* or M*), that is strictly inside a word. They are
+// (Unicode general category L* or M*), that is strictly inside a word. The one
+// exception is the legacy Malayalam chillu, typed consonant + virama (U+0D4D) +
+// ZWJ: its joiner ENDS the word, so U+200D is also accepted when the rune before
+// it is exactly U+0D4D and the next rune is whitespace or the end of the value.
+// U+200C never has this exception, and a joiner after any other virama (Devanagari,
+// Tamil, ...) at a word end stays refused. Apart from that exception they are
 // refused at the start or the end of the value, next to whitespace, a digit,
 // punctuation, a symbol, another joiner or any other refused character. Emoji
 // sequences glued with a joiner (a family emoji) stay refused: emoji are symbols,
@@ -112,8 +117,8 @@ func Valid(s string) bool {
 	for i, r := range s {
 		switch {
 		case r == zwnj || r == zwj:
-			next, _ := utf8.DecodeRuneInString(s[i+utf8.RuneLen(r):])
-			if !insideWord(prev, next) {
+			next, size := utf8.DecodeRuneInString(s[i+utf8.RuneLen(r):])
+			if !insideWord(prev, next) && !(r == zwj && malayalamChillu(prev, next, size)) {
 				return false
 			}
 		case refused(r):
@@ -127,6 +132,8 @@ func Valid(s string) bool {
 const (
 	zwnj = '\u200c' // ZERO WIDTH NON-JOINER
 	zwj  = '\u200d' // ZERO WIDTH JOINER
+
+	malayalamVirama = '\u0d4d' // MALAYALAM SIGN VIRAMA
 )
 
 // insideWord reports whether a joiner between before and after sits strictly
@@ -135,6 +142,14 @@ const (
 // or a combining mark.
 func insideWord(before, after rune) bool {
 	return wordRune(before) && wordRune(after)
+}
+
+// malayalamChillu reports a legacy chillu spelling: consonant + virama (U+0D4D) +
+// ZWJ, where the joiner ends the word, so it has no letter after it. before is the
+// rune before the ZWJ; after and size are the rune after it and its width (size 0
+// means the end of the string).
+func malayalamChillu(before, after rune, size int) bool {
+	return before == malayalamVirama && (size == 0 || unicode.IsSpace(after))
 }
 
 func wordRune(r rune) bool {
