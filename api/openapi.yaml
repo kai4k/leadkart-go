@@ -5720,14 +5720,14 @@ components:
 
     CreateProductRequest:
       type: object
-      required: [sku, name, dosage_form, pack_size, hsn_code, gst_rate_bps]
+      required: [sku, name, dosage_form, pack_size, hsn_code]
       properties:
         sku:           { type: string, minLength: 1, maxLength: 64 }
         name:          { type: string, minLength: 1, maxLength: 200 }
         dosage_form:   { type: string, minLength: 1, maxLength: 50 }
         pack_size:     { type: string, minLength: 1, maxLength: 100 }
         hsn_code:      { type: string, minLength: 4, maxLength: 10 }
-        gst_rate_bps:  { type: integer, minimum: 0, maximum: 10000 }
+        gst_rate_bps:  { type: integer, minimum: 0, maximum: 10000, description: 'Optional. Absent: the category default is used (as before). An explicit 0 is stored as 0 (a nil-rated product); it is NOT replaced by the default.' }
         manufacturer:  { type: string, maxLength: 200 }
 
     CreateProductResponse:

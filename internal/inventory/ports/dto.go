@@ -40,7 +40,9 @@ type CreateProductRequest struct {
 	DosageForm   string `json:"dosage_form"`
 	PackSize     string `json:"pack_size"`
 	HSNCode      string `json:"hsn_code"`
-	GSTRateBps   int    `json:"gst_rate_bps"`
+	// GSTRateBps is optional: absent takes the category default, an explicit
+	// 0 is stored as 0 (nil-rated medicines exist).
+	GSTRateBps   *int   `json:"gst_rate_bps,omitzero"`
 	Manufacturer string `json:"manufacturer,omitzero"`
 }
 

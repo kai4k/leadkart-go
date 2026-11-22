@@ -24,9 +24,11 @@ import (
 // Product. ActorMembershipID populates the CreatedByMembershipID on the
 // integration event for audit.
 //
-// GSTRateBps: when 0 AND a GstDefaultReader is wired AND ProductCategory
-// resolves to a seeded row in shared.product_category_gst_defaults, the
-// handler substitutes the default value. Non-zero values bypass lookup.
+// GSTRateBps: nil means "not given" — when a GstDefaultReader is wired AND
+// ProductCategory resolves to a seeded row in
+// shared.product_category_gst_defaults, the handler substitutes the default.
+// A non-nil value, including an explicit 0 (a nil-rated product), is used
+// as given and bypasses the lookup.
 //
 // ReorderLevel / ExpiryAlertThresholdDays / ProductCategory carry their
 // canonical defaults (0 / 90 / "General") when omitted.
@@ -38,7 +40,7 @@ type CreateProductCommand struct {
 	DosageForm               string
 	PackSize                 string
 	HSNCode                  string
-	GSTRateBps               int
+	GSTRateBps               *int
 	Manufacturer             string
 	ReorderLevel             int
 	ExpiryAlertThresholdDays int
@@ -51,8 +53,8 @@ type CreateProductResult struct {
 }
 
 // GstDefaultReader is the handler-local interface for resolving the
-// per-category default GST rate (basis points) when the caller passes
-// GSTRateBps == 0. The concrete reader lives in
+// per-category default GST rate (basis points) when the caller gives
+// no GSTRateBps (nil — an explicit 0 is a real rate and never looked up). The concrete reader lives in
 // `internal/common/refdata/` (see [refdata.GstDefaultReader]).
 //
 // Handler-local interface (TDL Wild Workouts canon): consumer-side, no
@@ -69,7 +71,7 @@ type GstDefaultReader interface {
 //
 // gstDefaults is OPTIONAL: when non-nil, the handler resolves a default
 // GST rate from the shared.product_category_gst_defaults reference table
-// for any submission with GSTRateBps == 0.
+// for any submission with GSTRateBps == nil.
 type CreateProductHandler struct {
 	products     product.Repository
 	gstDefaults  GstDefaultReader
@@ -98,11 +100,15 @@ func NewCreateProductHandler(products product.Repository, gstDefaults GstDefault
 // Handle constructs + persists the Product. Outbox event drain rides
 // the adapter's Add path (one-tx with the row insert per ADR 0008).
 //
-// GST default fallback: when cmd.GSTRateBps == 0 AND a GstDefaultReader
-// is wired, the handler looks up the category-driven default.
+// GST default fallback: when cmd.GSTRateBps is nil (absent) AND a
+// GstDefaultReader is wired, the handler looks up the category-driven
+// default. An explicit 0 is kept as 0.
 func (h CreateProductHandler) Handle(ctx context.Context, cmd CreateProductCommand) (CreateProductResult, error) {
-	gst := cmd.GSTRateBps
-	if gst == 0 && h.gstDefaults != nil {
+	gst := 0
+	switch {
+	case cmd.GSTRateBps != nil:
+		gst = *cmd.GSTRateBps
+	case h.gstDefaults != nil:
 		category := cmd.ProductCategory
 		if category == "" {
 			category = product.ProductCategoryDefault

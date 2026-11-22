@@ -17,6 +17,7 @@ import (
 
 	"github.com/google/uuid"
 
+	invports "github.com/leadkart/leadkart-go/internal/inventory/ports"
 	ordersports "github.com/leadkart/leadkart-go/internal/orders/ports"
 )
 
@@ -122,5 +123,60 @@ func TestE2E_Orders_PackRefusesWhatDispatchWouldRefuse(t *testing.T) {
 		ordersports.PackOrderRequest{CarrierName: "BlueDart", BoxCount: 1, WeightGrams: 100})
 	if resp.status != http.StatusNoContent {
 		t.Fatalf("valid pack: status %d body %s", resp.status, resp.body)
+	}
+}
+
+// TestE2E_Inventory_ZeroGSTRateIsKept is C14 over the wire: a product created
+// with an explicit gst_rate_bps 0 reads back 0; one created without the field
+// takes the category default; an update to 0 sticks.
+func TestE2E_Inventory_ZeroGSTRateIsKept(t *testing.T) {
+	f := newE2EFixture(t)
+	tok := f.registerAndLogin(t, "gstzero").AccessToken
+
+	create := func(sku string, body map[string]any) string {
+		t.Helper()
+		body["sku"] = sku
+		body["name"] = "Product " + sku
+		body["dosage_form"] = "tablet"
+		body["pack_size"] = "10x10"
+		body["hsn_code"] = "30049099"
+		resp := f.authedJSON(t, http.MethodPost, "/api/v1/inventory/products", tok, body)
+		if resp.status != http.StatusCreated {
+			t.Fatalf("create %s: status %d body %s", sku, resp.status, resp.body)
+		}
+		var out invports.CreateProductResponse
+		if err := json.Unmarshal(resp.body, &out); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		return out.ProductID
+	}
+	rate := func(id string) int {
+		t.Helper()
+		resp := f.authedJSON(t, http.MethodGet, "/api/v1/inventory/products/"+id, tok, nil)
+		if resp.status != http.StatusOK {
+			t.Fatalf("get product: status %d body %s", resp.status, resp.body)
+		}
+		var dto invports.ProductDto
+		if err := json.Unmarshal(resp.body, &dto); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		return dto.GSTRateBps
+	}
+
+	zero := create("NIL-0", map[string]any{"gst_rate_bps": 0})
+	if got := rate(zero); got != 0 {
+		t.Fatalf("explicit 0 stored as %d, want 0", got)
+	}
+	absent := create("NIL-ABSENT", map[string]any{})
+	if got := rate(absent); got == 0 {
+		t.Fatalf("absent rate stored as 0, want the category default")
+	}
+	five := create("NIL-5", map[string]any{"gst_rate_bps": 500})
+	resp := f.authedJSON(t, http.MethodPatch, "/api/v1/inventory/products/"+five, tok, map[string]any{"gst_rate_bps": 0})
+	if resp.status != http.StatusNoContent && resp.status != http.StatusOK {
+		t.Fatalf("update to 0: status %d body %s", resp.status, resp.body)
+	}
+	if got := rate(five); got != 0 {
+		t.Fatalf("updated to 0 but reads %d", got)
 	}
 }

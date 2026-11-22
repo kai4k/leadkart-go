@@ -94,3 +94,27 @@ func TestUpdateProductHandler_DeletedProduct_ReturnsErrDeleted(t *testing.T) {
 		t.Fatalf("err on update of soft-deleted product: got %v want ErrDeleted", err)
 	}
 }
+
+// C14 (update path): an explicit 0 rate is applied as 0, not skipped.
+func TestUpdateProductHandler_ExplicitZeroGST_IsApplied(t *testing.T) {
+	t.Parallel()
+	repo := newFakeProductRepo()
+	tid := newTenantID(t)
+	actor := newMembershipID(t)
+	p := seedProduct(t, repo, tid, actor, "GST-0")
+	h := command.NewUpdateProductHandler(repo, func() time.Time { return fixedNow })
+
+	err := h.Handle(t.Context(), command.UpdateProductCommand{
+		TenantID: tid, ProductID: p.ID(), ActorMembershipID: actor, GSTRateBps: new(0),
+	})
+	if err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	got, err := repo.GetByID(t.Context(), tid, p.ID())
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if got.GSTRateBps() != 0 {
+		t.Fatalf("gst_rate_bps = %d after explicit 0, want 0", got.GSTRateBps())
+	}
+}

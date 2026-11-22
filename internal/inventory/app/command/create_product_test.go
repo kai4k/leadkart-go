@@ -1,6 +1,7 @@
 package command_test
 
 import (
+	"context"
 	"errors"
 	"testing"
 	"time"
@@ -20,7 +21,7 @@ func TestCreateProductHandler_HappyPath_Persists(t *testing.T) {
 		TenantID: tid, ActorMembershipID: actor,
 		SKU: "AMOX-500", Name: "Amoxicillin 500 mg",
 		DosageForm: "Capsule", PackSize: "10x10",
-		HSNCode: "30049099", GSTRateBps: 1200,
+		HSNCode: "30049099", GSTRateBps: new(1200),
 		Manufacturer: "Acme",
 	})
 	if err != nil {
@@ -46,7 +47,7 @@ func TestCreateProductHandler_RejectsInvalidSpec(t *testing.T) {
 		TenantID: tid, ActorMembershipID: actor,
 		SKU: "", Name: "x", // empty SKU → ErrInvalid
 		DosageForm: "Tablet", PackSize: "10",
-		HSNCode: "3004", GSTRateBps: 1200,
+		HSNCode: "3004", GSTRateBps: new(1200),
 	})
 	if !errors.Is(err, product.ErrInvalid) {
 		t.Fatalf("err: got %v want ErrInvalid", err)
@@ -69,7 +70,7 @@ func TestCreateProductHandler_DuplicateSKU_ReturnsErrSKUTaken(t *testing.T) {
 		TenantID: tid, ActorMembershipID: actor,
 		SKU: "DUP-1", Name: "Second",
 		DosageForm: "Tablet", PackSize: "10",
-		HSNCode: "3004", GSTRateBps: 1200,
+		HSNCode: "3004", GSTRateBps: new(1200),
 	})
 	if !errors.Is(err, product.ErrSKUTaken) {
 		t.Fatalf("err: got %v want ErrSKUTaken", err)
@@ -89,9 +90,56 @@ func TestCreateProductHandler_RepoAddError_Propagates(t *testing.T) {
 		TenantID: tid, ActorMembershipID: actor,
 		SKU: "X-1", Name: "X",
 		DosageForm: "Tablet", PackSize: "10",
-		HSNCode: "3004", GSTRateBps: 1200,
+		HSNCode: "3004", GSTRateBps: new(1200),
 	})
 	if !errors.Is(err, errSentinel) {
 		t.Fatalf("err: got %v want errSentinel propagated", err)
+	}
+}
+
+// fixedGstDefaults answers the same category default for every category.
+type fixedGstDefaults struct{ bps int }
+
+func (f fixedGstDefaults) Default(context.Context, string) (int, bool, error) {
+	return f.bps, true, nil
+}
+
+// C14: an explicit 0% must be stored as 0%, not replaced by the category
+// default; an absent rate still takes the default.
+func TestCreateProductHandler_GSTRate_AbsentVersusExplicitZero(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		gst  *int
+		want int
+	}{
+		{"absent takes the category default", nil, 1200},
+		{"explicit zero stays zero", new(0), 0},
+		{"explicit rate wins over the default", new(500), 500},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			repo := newFakeProductRepo()
+			h := command.NewCreateProductHandler(repo, fixedGstDefaults{bps: 1200},
+				func() time.Time { return fixedNow }, testNewProductID)
+			tid := newTenantID(t)
+
+			out, err := h.Handle(t.Context(), command.CreateProductCommand{
+				TenantID: tid, ActorMembershipID: newMembershipID(t),
+				SKU: "GST-" + tc.name[:3], Name: "Nil rated", DosageForm: "Tablet", PackSize: "10",
+				HSNCode: "3004", GSTRateBps: tc.gst,
+			})
+			if err != nil {
+				t.Fatalf("Handle: %v", err)
+			}
+			p, err := repo.GetByID(t.Context(), tid, out.ProductID)
+			if err != nil {
+				t.Fatalf("GetByID: %v", err)
+			}
+			if p.GSTRateBps() != tc.want {
+				t.Fatalf("stored gst_rate_bps = %d, want %d", p.GSTRateBps(), tc.want)
+			}
+		})
 	}
 }

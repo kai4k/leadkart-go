@@ -73,7 +73,7 @@ func TestE2E_Impersonation_RefusalList_RefusedWithStateUnchangedAndOrdinaryRoute
 		t.Fatalf("create a user under a session: %d %s", r.status, r.body)
 	}
 	if r := f.authedJSON(t, http.MethodPost, "/api/v1/inventory/products", tok, invports.CreateProductRequest{
-		SKU: "IMP-001", Name: "Imp Tablet", DosageForm: "tablet", PackSize: "10x10", HSNCode: "30049099", GSTRateBps: 1200,
+		SKU: "IMP-001", Name: "Imp Tablet", DosageForm: "tablet", PackSize: "10x10", HSNCode: "30049099", GSTRateBps: new(1200),
 	}); r.status != http.StatusCreated {
 		t.Fatalf("create a product under a session: %d %s", r.status, r.body)
 	}
@@ -211,7 +211,7 @@ func TestE2E_Impersonation_WritesInEveryModuleCarryTheOperator(t *testing.T) {
 		{"identity", http.MethodPost, "/api/v1/users", ports.CreateUserRequest{
 			Email: "attributed@e2e.test", Password: "Sup3r-secret-pass!", FirstName: "Attr", LastName: "Member"}, http.StatusCreated},
 		{"inventory", http.MethodPost, "/api/v1/inventory/products", invports.CreateProductRequest{
-			SKU: "ATTR-001", Name: "Attributed Tablet", DosageForm: "tablet", PackSize: "10x10", HSNCode: "30049099", GSTRateBps: 1200}, http.StatusCreated},
+			SKU: "ATTR-001", Name: "Attributed Tablet", DosageForm: "tablet", PackSize: "10x10", HSNCode: "30049099", GSTRateBps: new(1200)}, http.StatusCreated},
 		{"tasks", http.MethodPost, "/api/v1/tasks/work-items", tasksports.CreateWorkItemRequest{
 			Type: "follow_up", Title: "Attributed follow-up", AssignedToMembershipID: tenantA.MembershipID, DueAt: time.Now().Add(48 * time.Hour)}, http.StatusCreated},
 	}
