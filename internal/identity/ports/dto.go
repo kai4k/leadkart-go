@@ -785,3 +785,16 @@ type GrantedOverrideDto struct {
 	Name      string    `json:"name"`
 	ExpiresAt time.Time `json:"expires_at,omitzero"`
 }
+
+// SearchMembersResponse — GET /api/v1/users/search (the member picker). Always
+// a non-nil list; each hit carries a display name and designation only.
+type SearchMembersResponse struct {
+	Members []MemberHitDto `json:"members"`
+}
+
+// MemberHitDto is one picker row: no email, no phone, no person id.
+type MemberHitDto struct {
+	MembershipID string `json:"membership_id"`
+	DisplayName  string `json:"display_name"`
+	Designation  string `json:"designation,omitzero"`
+}

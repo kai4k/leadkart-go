@@ -367,6 +367,10 @@ const (
 	// fewer than 2 characters after trim. 400 surface.
 	ErrCodeSearchQueryTooShort = "search_query_too_short"
 
+	// ErrCodeSearchQueryTooLong — GET /v1/users/search ?q= was over 100
+	// characters after trim. 400 surface.
+	ErrCodeSearchQueryTooLong = "search_query_too_long"
+
 	// ErrCodeInvalidSearchInclude — GET /v1/search ?include= cleared
 	// all categories. 400 surface — at least one of persons|tenants
 	// must be requested.

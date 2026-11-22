@@ -521,3 +521,39 @@ func projectOverridesToDto(v query.UserOverridesView) *UserPermissionOverridesDt
 	}
 	return out
 }
+
+// ----- SearchMembers --------------------------------------------------------
+
+// handleSearchMembers serves GET /api/v1/users/search?q=&limit= — the member
+// picker of lead reassignment. The route's permission gate is crm.leads.assign;
+// the search is scoped to the caller's effective tenant and returns display
+// names and designations only.
+func handleSearchMembers(log *slog.Logger, a app.Application) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		tid, ok := tenancy.FromContext(r.Context())
+		if !ok || tid == "" {
+			writeError(w, http.StatusUnauthorized, ErrCodeInvalidCredentials, "")
+			return
+		}
+		limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+		hits, err := a.Queries.SearchMembers.Handle(r.Context(), query.SearchMembersQuery{
+			TenantID: tenant.ID(tid), Q: r.URL.Query().Get("q"), Limit: limit})
+		switch {
+		case errors.Is(err, query.ErrMemberSearchQueryTooShort):
+			writeError(w, http.StatusBadRequest, ErrCodeSearchQueryTooShort, "q must be at least 2 characters")
+			return
+		case errors.Is(err, query.ErrMemberSearchQueryTooLong):
+			writeError(w, http.StatusBadRequest, ErrCodeSearchQueryTooLong, "q must be at most 100 characters")
+			return
+		case err != nil:
+			log.ErrorContext(r.Context(), "member search failed", "err", err)
+			writeError(w, http.StatusInternalServerError, ErrCodeInternalError, "")
+			return
+		}
+		out := SearchMembersResponse{Members: make([]MemberHitDto, 0, len(hits))}
+		for _, h := range hits {
+			out.Members = append(out.Members, MemberHitDto{MembershipID: h.MembershipID, DisplayName: h.DisplayName, Designation: h.Designation})
+		}
+		writeJSON(w, http.StatusOK, out)
+	})
+}

@@ -166,6 +166,10 @@ func AddRoutes(mux *http.ServeMux, log *slog.Logger, a app.Application, verifier
 		userSelfOrView := authn.RequirePermissionOrSelf(verifier, stampValidator, "userId", p.Users.View)
 		userSelfOrUpdate := authn.RequirePermissionOrSelf(verifier, stampValidator, "userId", p.Users.Update)
 		mux.Handle("GET /api/v1/users", usersView(handleListUsers(log, a)))
+		// The member picker of lead reassignment: readable by whoever may reassign leads.
+		// A literal path beats the {userId} wildcard in the mux.
+		leadsAssign := authn.RequirePermission(verifier, stampValidator, p.Crm.Leads.Assign)
+		mux.Handle("GET /api/v1/users/search", leadsAssign(handleSearchMembers(log, a)))
 		mux.Handle("GET /api/v1/users/{userId}", userSelfOrView(handleGetUser(log, a)))
 		mux.Handle("PATCH /api/v1/users/{userId}/profile",
 			writable(userSelfOrUpdate(handleUpdateUserProfile(log, a))))

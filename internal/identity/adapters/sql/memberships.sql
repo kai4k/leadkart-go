@@ -223,3 +223,24 @@ SELECT membership_id, permission_name, kind, tenant_id, updated_at, expires_at
 FROM   identity.membership_permission_overrides
 WHERE  membership_id = $1
 ORDER  BY permission_name;
+
+-- name: SearchActiveMembersByName :many
+-- Member picker (lead reassignment): ACTIVE members of the transaction tenant
+-- whose display name contains the pattern. Returns the membership id, the
+-- person's names and the designation, never an email or phone. The pattern is
+-- built by the caller with LIKE wildcards escaped (backslash is the escape
+-- character). Persons who are inactive, anonymised or globally suspended are
+-- not offered. tenant_id is bound explicitly on top of RLS. A tenant's
+-- active-member set is small, so the match runs over the (tenant_id) range of
+-- idx_memberships_tenant_active_joined, with no trigram index of its own.
+SELECT m.id AS membership_id, p.first_name, p.last_name, m.designation
+FROM   identity.tenant_memberships m
+JOIN   identity.persons p ON p.id = m.person_id
+WHERE  m.tenant_id = sqlc.arg(tenant_id)::uuid
+  AND  m.status = 'active'
+  AND  p.is_active
+  AND  NOT p.is_anonymised
+  AND  NOT p.is_globally_suspended
+  AND  (p.first_name || ' ' || p.last_name) ILIKE sqlc.arg(pattern)::text
+ORDER  BY lower(p.first_name), lower(p.last_name), m.id
+LIMIT  sqlc.arg('limit');

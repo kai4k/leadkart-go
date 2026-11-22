@@ -10,9 +10,11 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -159,5 +161,117 @@ func TestE2E_C1_OverridesAreShownOnlyToCallersWhoMayChangeThem(t *testing.T) {
 		if u.PermissionOverrides != nil {
 			t.Errorf("the list shows the overrides of %s", u.MembershipID)
 		}
+	}
+}
+
+// C3: the member picker. Active members of the caller's own tenant, by name,
+// for whoever may reassign leads; nothing but id, name and designation.
+func TestE2E_C3_MemberSearch(t *testing.T) {
+	w := newAttackWorld(t)
+	f := w.f
+	search := func(tok, qs string) httpResp {
+		return f.authedJSON(t, http.MethodGet, "/api/v1/users/search"+qs, tok, nil)
+	}
+	decode := func(r httpResp) ports.SearchMembersResponse {
+		t.Helper()
+		if r.status != http.StatusOK {
+			t.Fatalf("search: %d %s", r.status, r.body)
+		}
+		var out ports.SearchMembersResponse
+		if err := json.Unmarshal(r.body, &out); err != nil {
+			t.Fatalf("decode %s: %v", r.body, err)
+		}
+		return out
+	}
+	ids := func(o ports.SearchMembersResponse) []string {
+		out := []string{}
+		for _, m := range o.Members {
+			out = append(out, m.MembershipID)
+		}
+		slices.Sort(out)
+		return out
+	}
+	own := w.owner.AccessToken
+
+	// by name, case-insensitive, substring; two members match "exec"
+	got := decode(search(own, "?q=EXEC"))
+	if want := []string{w.mid(t, "exec"), w.mid(t, "exec2")}; !slices.Equal(ids(got), func() []string { s := slices.Clone(want); slices.Sort(s); return s }()) {
+		t.Errorf("q=EXEC returned %v, want %v", ids(got), want)
+	}
+	for _, m := range got.Members {
+		if !strings.HasSuffix(m.DisplayName, " Member") {
+			t.Errorf("display name %q is not 'first last'", m.DisplayName)
+		}
+	}
+	// nothing but id, name, designation: no email, no phone, no person id
+	raw := search(own, "?q=exec")
+	var generic struct {
+		Members []map[string]any `json:"members"`
+	}
+	if err := json.Unmarshal(raw.body, &generic); err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range generic.Members {
+		for k := range m {
+			if k != "membership_id" && k != "display_name" && k != "designation" {
+				t.Errorf("the picker returns the field %q", k)
+			}
+		}
+	}
+	if strings.Contains(string(raw.body), "@") || strings.Contains(string(raw.body), w.who["exec"].personID) {
+		t.Errorf("the picker leaks an email or a person id: %s", raw.body)
+	}
+	// the email is not searchable (it would leak a mailbox through a name box)
+	if m := decode(search(own, "?q=e2e.test")).Members; len(m) != 0 {
+		t.Errorf("a search by email domain returned %d members", len(m))
+	}
+	// a deactivated member is not offered; another tenant's member is not found
+	if m := decode(search(own, "?q=gone")).Members; len(m) != 0 {
+		t.Errorf("a deactivated member was offered: %+v", m)
+	}
+	if m := decode(search(own, "?q=vexec")).Members; len(m) != 0 {
+		t.Errorf("another company's member was offered: %+v", m)
+	}
+	if m := decode(search(w.victim.AccessToken, "?q=exec")).Members; len(m) != 1 || m[0].MembershipID != w.vExec.membershipID {
+		t.Errorf("the other company's owner got %+v, want only their own vexec", m)
+	}
+	// LIKE wildcards are plain text
+	for _, q := range []string{"%25%25", "_x", "e_ec", "ex%25"} {
+		if m := decode(search(own, "?q="+q)).Members; len(m) != 0 {
+			t.Errorf("q=%s matched %+v: a wildcard was interpreted", q, m)
+		}
+	}
+	// bounds: 2-100 characters after trimming, limit up to 20
+	if r := search(own, "?q=a"); r.status != http.StatusBadRequest || errCodeOf(r) != "search_query_too_short" {
+		t.Errorf("one character: %d %s", r.status, r.body)
+	}
+	if r := search(own, "?q=%20%20a%20%20"); r.status != http.StatusBadRequest || errCodeOf(r) != "search_query_too_short" {
+		t.Errorf("one character padded: %d %s", r.status, r.body)
+	}
+	if r := search(own, "?q="+strings.Repeat("a", 101)); r.status != http.StatusBadRequest || errCodeOf(r) != "search_query_too_long" {
+		t.Errorf("101 characters: %d %s", r.status, r.body)
+	}
+	if r := search(own, ""); r.status != http.StatusBadRequest {
+		t.Errorf("no q: %d %s", r.status, r.body)
+	}
+	if n := len(decode(search(own, "?q=member&limit=1")).Members); n != 1 {
+		t.Errorf("limit=1 returned %d", n)
+	}
+	if n := len(decode(search(own, "?q=member&limit=500")).Members); n > 20 {
+		t.Errorf("limit=500 returned %d, want at most 20", n)
+	}
+	// who may call it: whoever may reassign leads (crm.leads.assign)
+	if r := search(w.tok(t, "sales"), "?q=exec"); r.status != http.StatusOK {
+		t.Errorf("a Sales Manager (may assign leads): %d %s, want 200", r.status, r.body)
+	}
+	if r := search(w.tok(t, "exec"), "?q=exec"); r.status != http.StatusForbidden {
+		t.Errorf("a Sales Executive (may not assign leads): %d %s, want 403", r.status, r.body)
+	}
+	if r := search("", "?q=exec"); r.status != http.StatusUnauthorized {
+		t.Errorf("no token: %d, want 401", r.status)
+	}
+	// a literal route does not shadow a member whose id is a UUID
+	if u := f.getUser(t, own, w.mid(t, "exec")); u.MembershipID != w.mid(t, "exec") {
+		t.Errorf("GET /users/{id} broke: %+v", u)
 	}
 }

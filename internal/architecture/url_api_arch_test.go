@@ -415,6 +415,9 @@ func TestArch_CursorParamsCanonical(t *testing.T) {
 	// KNOWN_VIOLATIONS.md if the team decides to rename later.
 	opAllowList := map[string]bool{
 		"GET /api/v1/search": true,
+		// The member picker is a top-N typeahead like the omni-search: `limit` is a
+		// hard cap (max 20), not a page size.
+		"GET /api/v1/users/search": true,
 	}
 
 	type violation struct {

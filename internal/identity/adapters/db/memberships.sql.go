@@ -677,6 +677,66 @@ func (q *Queries) ListSuperAdminMembershipsInTenant(ctx context.Context, tenantI
 	return items, nil
 }
 
+const searchActiveMembersByName = `-- name: SearchActiveMembersByName :many
+SELECT m.id AS membership_id, p.first_name, p.last_name, m.designation
+FROM   identity.tenant_memberships m
+JOIN   identity.persons p ON p.id = m.person_id
+WHERE  m.tenant_id = $1::uuid
+  AND  m.status = 'active'
+  AND  p.is_active
+  AND  NOT p.is_anonymised
+  AND  NOT p.is_globally_suspended
+  AND  (p.first_name || ' ' || p.last_name) ILIKE $2::text
+ORDER  BY lower(p.first_name), lower(p.last_name), m.id
+LIMIT  $3
+`
+
+type SearchActiveMembersByNameParams struct {
+	TenantID pgtype.UUID
+	Pattern  string
+	Limit    int32
+}
+
+type SearchActiveMembersByNameRow struct {
+	MembershipID pgtype.UUID
+	FirstName    string
+	LastName     string
+	Designation  string
+}
+
+// Member picker (lead reassignment): ACTIVE members of the transaction tenant
+// whose display name contains the pattern. Returns the membership id, the
+// person's names and the designation, never an email or phone. The pattern is
+// built by the caller with LIKE wildcards escaped (backslash is the escape
+// character). Persons who are inactive, anonymised or globally suspended are
+// not offered. tenant_id is bound explicitly on top of RLS. A tenant's
+// active-member set is small, so the match runs over the (tenant_id) range of
+// idx_memberships_tenant_active_joined, with no trigram index of its own.
+func (q *Queries) SearchActiveMembersByName(ctx context.Context, arg SearchActiveMembersByNameParams) ([]SearchActiveMembersByNameRow, error) {
+	rows, err := q.db.Query(ctx, searchActiveMembersByName, arg.TenantID, arg.Pattern, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []SearchActiveMembersByNameRow
+	for rows.Next() {
+		var i SearchActiveMembersByNameRow
+		if err := rows.Scan(
+			&i.MembershipID,
+			&i.FirstName,
+			&i.LastName,
+			&i.Designation,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const updateMembershipProfile = `-- name: UpdateMembershipProfile :exec
 UPDATE identity.tenant_memberships
 SET    designation    = $2,

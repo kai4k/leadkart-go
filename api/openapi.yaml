@@ -1046,6 +1046,35 @@ paths:
         '409': { description: "`email_has_active_membership` — the email already has an active membership in another tenant", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
         '422': { description: "`password_policy_violation` — the password fails the target tenant's policy (field `errors.password`, see PasswordPolicyViolation); `user_invalid` — the new membership violates a domain invariant (see `message`)", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
 
+  /api/v1/users/search:
+    get:
+      tags: [users]
+      summary: Member picker (search active members by name)
+      description: |
+        The picker behind lead reassignment. Requires `crm.leads.assign` (satisfied by `tenant.admin` in the caller's own tenant, or by `platform.*` equivalents for platform operators; ADR 0068), and searches the caller's effective tenant only.
+
+        Returns ACTIVE members whose display name (first name, a space, last name) contains `q`, case-insensitively, best first (by name), at most `limit`. A hit carries `membership_id`, `display_name` and `designation` only: no email, no phone, no person id. A deactivated, anonymised or globally suspended person is never offered. `q` is trimmed and measured in characters: under 2 is 400 `search_query_too_short`, over 100 is 400 `search_query_too_long`. An empty match is 200 with `members: []`, which a client shows as "no match" and keeps apart from a failed call.
+      x-required-permissions: [crm.leads.assign]
+      parameters:
+        - name: q
+          in: query
+          required: true
+          schema: { type: string, minLength: 2, maxLength: 100 }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 20, default: 10 }
+        - $ref: '#/components/parameters/XTenantId'
+      responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+        '200':
+          description: Matching members
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SearchMembersResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/TenantScopeForbidden' }
+
   /api/v1/users/{userId}:
     get:
       tags: [users]
@@ -4990,6 +5019,23 @@ components:
       properties:
         name:       { type: string }
         expires_at: { type: string, format: date-time, description: Absent for a permanent grant. }
+
+    SearchMembersResponse:
+      type: object
+      required: [members]
+      properties:
+        members:
+          type: array
+          items: { $ref: '#/components/schemas/MemberHitDto' }
+
+    MemberHitDto:
+      type: object
+      description: One picker row. No email, no phone, no person id.
+      required: [membership_id, display_name]
+      properties:
+        membership_id: { type: string, format: uuid }
+        display_name:  { type: string }
+        designation:   { type: string }
 
     ListUsersResponse:
       type: object
