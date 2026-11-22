@@ -4837,12 +4837,12 @@ components:
       required: [slug, legal_name, display_name, admin_email, admin_password, admin_first_name, admin_last_name]
       properties:
         slug:             { type: string, pattern: '^[a-z0-9-]+$', minLength: 2, maxLength: 100 }
-        legal_name:       { type: string, maxLength: 200 }
-        display_name:     { type: string, maxLength: 200 }
+        legal_name:       { type: string, maxLength: 200, description: "Trimmed first, then measured (1 to 200 bytes of UTF-8, not characters) and stored trimmed." }
+        display_name:     { type: string, maxLength: 200, description: "Trimmed first, then measured (1 to 200 bytes of UTF-8, not characters) and stored trimmed." }
         admin_email:      { type: string, format: email }
         admin_password:   { type: string, format: password, minLength: 8 }
-        admin_first_name: { type: string }
-        admin_last_name:  { type: string }
+        admin_first_name: { type: string, description: "Trimmed first, then measured (1 to 100 bytes of UTF-8, not characters) and stored trimmed." }
+        admin_last_name:  { type: string, description: "Trimmed first, then measured (1 to 100 bytes of UTF-8, not characters) and stored trimmed." }
 
     RegisterTenantResponse:
       type: object
@@ -4930,8 +4930,8 @@ components:
       description: Full replace. Every field is required; a body that omits one is 400 `invalid_body` (the `errors` map names it) and nothing is changed.
       required: [legal_name, display_name]
       properties:
-        legal_name:   { type: string, maxLength: 200 }
-        display_name: { type: string, maxLength: 200 }
+        legal_name:   { type: string, maxLength: 200, description: "Trimmed first, then measured (1 to 200 bytes of UTF-8, not characters) and stored trimmed. A value re-sent unchanged is accepted even if it was stored with padding before names were trimmed." }
+        display_name: { type: string, maxLength: 200, description: "Trimmed first, then measured (1 to 200 bytes of UTF-8, not characters) and stored trimmed." }
 
     UpdateTenantStatutoryRequest:
       type: object
@@ -5074,8 +5074,8 @@ components:
       properties:
         email:      { type: string, format: email }
         password:   { type: string, format: password, minLength: 8 }
-        first_name: { type: string }
-        last_name:  { type: string }
+        first_name: { type: string, description: "Trimmed first, then measured (1 to 100 bytes of UTF-8, not characters) and stored trimmed." }
+        last_name:  { type: string, description: "Trimmed first, then measured (1 to 100 bytes of UTF-8, not characters) and stored trimmed." }
 
     CreateUserResponse:
       type: object
@@ -5291,8 +5291,8 @@ components:
     UpdatePersonProfileRequest:
       type: object
       properties:
-        first_name: { type: string }
-        last_name:  { type: string }
+        first_name: { type: string, description: "Trimmed first, then measured (1 to 100 bytes of UTF-8, not characters) and stored trimmed. A value re-sent unchanged is accepted." }
+        last_name:  { type: string, description: "Trimmed first, then measured (1 to 100 bytes of UTF-8, not characters) and stored trimmed." }
 
     PlatformStatsResponse:
       type: object

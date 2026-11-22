@@ -88,10 +88,12 @@ func New(id ID, s slug.Slug, legalName, displayName string, adminEmail email.Add
 	if s.IsZero() {
 		return nil, fmt.Errorf("%w: slug required", ErrInvalid)
 	}
-	if strings.TrimSpace(legalName) == "" {
+	// Names are trimmed first, so the limit is measured on what is stored.
+	legalName, displayName = strings.TrimSpace(legalName), strings.TrimSpace(displayName)
+	if legalName == "" {
 		return nil, fmt.Errorf("%w: %w", ErrInvalid, humantext.Required("legal_name"))
 	}
-	if strings.TrimSpace(displayName) == "" {
+	if displayName == "" {
 		return nil, fmt.Errorf("%w: %w", ErrInvalid, humantext.Required("display_name"))
 	}
 	if len(legalName) > nameMaxLen {
@@ -236,29 +238,39 @@ func (t *Tenant) DisplayPreferences() DisplayPreferences { return t.displayPrefe
 // Idempotent: no event when both values are unchanged. Allowed in any status —
 // suspended tenants may rename for legal reasons without re-activating.
 func (t *Tenant) UpdateProfile(legalName, displayName string, now time.Time) error {
-	if strings.TrimSpace(legalName) == "" {
+	// A full replace re-sends the stored values: a value equal to the stored one (as
+	// stored, or once both are trimmed: a name saved before names were trimmed) is
+	// unchanged and never re-checked, so an untouched save is always accepted.
+	legalSame := legalName == t.legalName || strings.TrimSpace(legalName) == strings.TrimSpace(t.legalName)
+	displaySame := displayName == t.displayName || strings.TrimSpace(displayName) == strings.TrimSpace(t.displayName)
+	// Names are trimmed first, so the limit is measured on what is stored.
+	legalName, displayName = strings.TrimSpace(legalName), strings.TrimSpace(displayName)
+	if legalName == "" {
 		return fmt.Errorf("%w: %w", ErrInvalid, humantext.Required("legal_name"))
 	}
-	if strings.TrimSpace(displayName) == "" {
+	if displayName == "" {
 		return fmt.Errorf("%w: %w", ErrInvalid, humantext.Required("display_name"))
 	}
-	if len(legalName) > nameMaxLen {
+	if len(legalName) > nameMaxLen && !legalSame {
 		return fmt.Errorf("%w: %w", ErrInvalid, humantext.TooLong("legal_name"))
 	}
-	if len(displayName) > nameMaxLen {
+	if len(displayName) > nameMaxLen && !displaySame {
 		return fmt.Errorf("%w: %w", ErrInvalid, humantext.TooLong("display_name"))
 	}
-	// A full replace re-sends the stored values: only a CHANGED value is checked, so a
-	// name stored before the rule existed never blocks an untouched save.
-	if err := humantext.CheckChanged("legal_name", t.legalName, legalName); err != nil {
-		return fmt.Errorf("%w: %w", ErrInvalid, err)
+	if !legalSame {
+		if err := humantext.Check("legal_name", legalName); err != nil {
+			return fmt.Errorf("%w: %w", ErrInvalid, err)
+		}
 	}
-	if err := humantext.CheckChanged("display_name", t.displayName, displayName); err != nil {
-		return fmt.Errorf("%w: %w", ErrInvalid, err)
+	if !displaySame {
+		if err := humantext.Check("display_name", displayName); err != nil {
+			return fmt.Errorf("%w: %w", ErrInvalid, err)
+		}
 	}
-	if legalName == t.legalName && displayName == t.displayName {
+	if legalSame && displaySame {
 		return nil
 	}
+	// A real change stores both names trimmed.
 	old := struct{ legal, display string }{t.legalName, t.displayName}
 	t.legalName = legalName
 	t.displayName = displayName

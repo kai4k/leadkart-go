@@ -2,6 +2,7 @@ package tenant_test
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -1166,5 +1167,46 @@ func TestSuspendAndMarkForDeletion_ReasonsAreStoredTrimmedAndReplaysStayIdempote
 	// the same reason typed with other padding is a replay, not a conflict
 	if err := tn.MarkForDeletion("closing the account   ", testNow); err != nil {
 		t.Errorf("a replay with different padding was refused: %v", err)
+	}
+}
+
+func TestNew_CompanyNamesAreTrimmedBeforeTheyAreMeasuredAndStoredTrimmed(t *testing.T) {
+	t.Parallel()
+	tn, err := tenant.New(newID(t), mustSlug(t, "trimco"), "  Acme Pharma Pvt Ltd ", "\tAcme  ", mustEmail(t, "a@acme.io"), testNow)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if tn.LegalName() != "Acme Pharma Pvt Ltd" || tn.DisplayName() != "Acme" {
+		t.Errorf("names = %q / %q, want them trimmed", tn.LegalName(), tn.DisplayName())
+	}
+	if reg, ok := tn.PullEvents()[0].(tenant.RegisteredEvent); !ok || reg.LegalName != "Acme Pharma Pvt Ltd" || reg.DisplayName != "Acme" {
+		t.Errorf("registered event = %#v, want the trimmed names", reg)
+	}
+	two := strings.Repeat("b", 200)
+	if _, err := tenant.New(newID(t), mustSlug(t, "trimco2"), "  "+two+"  ", "X", mustEmail(t, "a@acme.io"), testNow); err != nil {
+		t.Errorf("200 characters padded with spaces was refused: %v", err)
+	}
+	if _, err := tenant.New(newID(t), mustSlug(t, "trimco3"), two+"b", "X", mustEmail(t, "a@acme.io"), testNow); err == nil {
+		t.Error("201 characters was accepted")
+	}
+}
+
+func TestUpdateProfile_CompanyNamesAreTrimmedAndAnUnchangedStoredValueStaysAccepted(t *testing.T) {
+	t.Parallel()
+	legacy := tenant.UnmarshalFromDB(tenant.Snapshot{ID: newID(t), Slug: mustSlug(t, "legacyco"), LegalName: " Old Legal ", DisplayName: "Old ", Status: tenant.StatusActive, CreatedAt: testNow})
+	if err := legacy.UpdateProfile(" Old Legal ", "Old ", testNow); err != nil {
+		t.Fatalf("re-sending the stored values: %v", err)
+	}
+	if got := legacy.PullEvents(); len(got) != 0 {
+		t.Errorf("an untouched save emitted %d events", len(got))
+	}
+	if err := legacy.UpdateProfile("Old Legal", "Old", testNow); err != nil || len(legacy.PullEvents()) != 0 {
+		t.Errorf("a re-send that differs only by padding: err %v, or an event", err)
+	}
+	if err := legacy.UpdateProfile("  New Legal  ", " New ", testNow); err != nil {
+		t.Fatal(err)
+	}
+	if legacy.LegalName() != "New Legal" || legacy.DisplayName() != "New" {
+		t.Errorf("names = %q / %q, want them trimmed", legacy.LegalName(), legacy.DisplayName())
 	}
 }

@@ -13,6 +13,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"github.com/leadkart/leadkart-go/internal/common/ids"
 	"net/http"
 	"slices"
 	"strings"
@@ -465,5 +466,67 @@ func TestE2E_I7_ImpersonationReasonIsMeasuredAfterTrimming(t *testing.T) {
 	list = f.authedJSON(t, http.MethodGet, "/api/v1/platform/impersonation/sessions", platformTok, nil)
 	if err := json.Unmarshal(list.body, &sessions); err != nil || len(sessions.Sessions) != 1 || sessions.Sessions[0].Reason != "investigating ticket 4711" {
 		t.Fatalf("the stored reason is not trimmed: %s (%v)", list.body, err)
+	}
+}
+
+// I5: names are trimmed before they are measured and stored trimmed; a full
+// replace that re-sends an unchanged stored value (even one stored with padding
+// before this rule) stays accepted.
+func TestE2E_I5_NamesAreStoredTrimmed(t *testing.T) {
+	f := newE2EFixture(t)
+	owner := f.registerAndLogin(t, "i5")
+
+	// a person created with padded names
+	suffix := ids.NewV7().String()
+	suffix = suffix[len(suffix)-8:]
+	resp := f.authedJSON(t, http.MethodPost, "/api/v1/users", owner.AccessToken, ports.CreateUserRequest{
+		Email: "i5-" + suffix + "@e2e.test", Password: "Member-Pass-2026!" + suffix, FirstName: "  Ravi ", LastName: "\tKumar  "})
+	if resp.status != http.StatusCreated {
+		t.Fatalf("create: %d %s", resp.status, resp.body)
+	}
+	var cu ports.CreateUserResponse
+	if err := json.Unmarshal(resp.body, &cu); err != nil {
+		t.Fatal(err)
+	}
+	if u := f.getUser(t, owner.AccessToken, cu.MembershipID); u.FirstName != "Ravi" || u.LastName != "Kumar" {
+		t.Errorf("stored names = %q %q, want them trimmed", u.FirstName, u.LastName)
+	}
+	// 100 characters of name plus padding fits (the limit is measured after trimming)
+	long := strings.Repeat("n", 100)
+	if r := f.authedJSON(t, http.MethodPost, "/api/v1/users", owner.AccessToken, ports.CreateUserRequest{
+		Email: "i5b-" + suffix + "@e2e.test", Password: "Member-Pass-2026!" + suffix, FirstName: "   " + long + "   ", LastName: "K"}); r.status != http.StatusCreated {
+		t.Errorf("100 characters padded with spaces: %d %s, want 201", r.status, r.body)
+	}
+	// a blank name is still refused
+	if r := f.authedJSON(t, http.MethodPost, "/api/v1/users", owner.AccessToken, ports.CreateUserRequest{
+		Email: "i5c-" + suffix + "@e2e.test", Password: "Member-Pass-2026!" + suffix, FirstName: "    ", LastName: "K"}); r.status != http.StatusUnprocessableEntity {
+		t.Errorf("a blank first name: %d %s, want 422", r.status, r.body)
+	}
+
+	// the company: a padded rename is stored trimmed
+	path := "/api/v1/tenants/" + owner.TenantID + "/profile"
+	if r := f.authedJSON(t, http.MethodPatch, path, owner.AccessToken, ports.UpdateTenantProfileRequest{LegalName: "  Padded Legal Pvt Ltd ", DisplayName: " Padded "}); r.status != http.StatusNoContent && r.status != http.StatusOK {
+		t.Fatalf("rename: %d %s", r.status, r.body)
+	}
+	tenantNames := func() (string, string) {
+		r := f.authedJSON(t, http.MethodGet, "/api/v1/tenants/"+owner.TenantID, owner.AccessToken, nil)
+		var tn ports.TenantDto
+		if err := json.Unmarshal(r.body, &tn); err != nil || r.status != http.StatusOK {
+			t.Fatalf("get tenant: %d %s (%v)", r.status, r.body, err)
+		}
+		return tn.LegalName, tn.DisplayName
+	}
+	if l, d := tenantNames(); l != "Padded Legal Pvt Ltd" || d != "Padded" {
+		t.Errorf("stored company names = %q / %q, want them trimmed", l, d)
+	}
+	// a company stored with padding (before the rule) accepts its own values back, untouched
+	if _, err := f.Pool.Exec(t.Context(), `UPDATE identity.tenants SET legal_name = ' Legacy Legal ', display_name = ' Legacy ' WHERE id = $1`, owner.TenantID); err != nil {
+		t.Fatalf("plant legacy names: %v", err)
+	}
+	if r := f.authedJSON(t, http.MethodPatch, path, owner.AccessToken, ports.UpdateTenantProfileRequest{LegalName: " Legacy Legal ", DisplayName: " Legacy "}); r.status != http.StatusNoContent && r.status != http.StatusOK {
+		t.Errorf("re-sending the stored, padded values: %d %s, want it accepted", r.status, r.body)
+	}
+	if l, d := tenantNames(); l != " Legacy Legal " || d != " Legacy " {
+		t.Errorf("an untouched save rewrote the stored names: %q / %q", l, d)
 	}
 }

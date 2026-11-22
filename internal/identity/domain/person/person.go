@@ -98,10 +98,12 @@ func New(id ID, e email.Address, firstName, lastName string, passwordHash Passwo
 	if e.IsZero() {
 		return nil, fmt.Errorf("%w: email required", ErrInvalid)
 	}
-	if strings.TrimSpace(firstName) == "" {
+	// Names are trimmed first, so the limit is measured on what is stored.
+	firstName, lastName = strings.TrimSpace(firstName), strings.TrimSpace(lastName)
+	if firstName == "" {
 		return nil, fmt.Errorf("%w: %w", ErrInvalid, humantext.Required("first_name"))
 	}
-	if strings.TrimSpace(lastName) == "" {
+	if lastName == "" {
 		return nil, fmt.Errorf("%w: %w", ErrInvalid, humantext.Required("last_name"))
 	}
 	if len(firstName) > nameMaxLen {
@@ -393,28 +395,39 @@ func (p *Person) UpdateProfile(firstName, lastName string, now time.Time) error 
 	if p.isAnonymised {
 		return fmt.Errorf("%w: cannot update profile of anonymised person", ErrInvalid)
 	}
-	if strings.TrimSpace(firstName) == "" {
+	// A full replace re-sends the stored values: a value equal to the stored one
+	// (as stored, or once both are trimmed: a name saved before names were trimmed)
+	// is unchanged and never re-checked, so an untouched save is always accepted.
+	firstSame := firstName == p.firstName || strings.TrimSpace(firstName) == strings.TrimSpace(p.firstName)
+	lastSame := lastName == p.lastName || strings.TrimSpace(lastName) == strings.TrimSpace(p.lastName)
+	// Names are trimmed first, so the limit is measured on what is stored.
+	firstName, lastName = strings.TrimSpace(firstName), strings.TrimSpace(lastName)
+	if firstName == "" {
 		return fmt.Errorf("%w: %w", ErrInvalid, humantext.Required("first_name"))
 	}
-	if strings.TrimSpace(lastName) == "" {
+	if lastName == "" {
 		return fmt.Errorf("%w: %w", ErrInvalid, humantext.Required("last_name"))
 	}
-	if len(firstName) > nameMaxLen {
+	if len(firstName) > nameMaxLen && !firstSame {
 		return fmt.Errorf("%w: %w", ErrInvalid, humantext.TooLong("first_name"))
 	}
-	if len(lastName) > nameMaxLen {
+	if len(lastName) > nameMaxLen && !lastSame {
 		return fmt.Errorf("%w: %w", ErrInvalid, humantext.TooLong("last_name"))
 	}
-	// A full replace re-sends the stored values: only a CHANGED value is checked.
-	if err := humantext.CheckChanged("first_name", p.firstName, firstName); err != nil {
-		return fmt.Errorf("%w: %w", ErrInvalid, err)
+	if !firstSame {
+		if err := humantext.Check("first_name", firstName); err != nil {
+			return fmt.Errorf("%w: %w", ErrInvalid, err)
+		}
 	}
-	if err := humantext.CheckChanged("last_name", p.lastName, lastName); err != nil {
-		return fmt.Errorf("%w: %w", ErrInvalid, err)
+	if !lastSame {
+		if err := humantext.Check("last_name", lastName); err != nil {
+			return fmt.Errorf("%w: %w", ErrInvalid, err)
+		}
 	}
-	if firstName == p.firstName && lastName == p.lastName {
+	if firstSame && lastSame {
 		return nil
 	}
+	// A real change stores both names trimmed.
 	old := struct{ first, last string }{p.firstName, p.lastName}
 	p.firstName = firstName
 	p.lastName = lastName

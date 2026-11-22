@@ -1151,3 +1151,61 @@ func TestGloballySuspendAndAnonymise_ReasonsAreStoredTrimmed(t *testing.T) {
 		t.Errorf("anonymise event = %#v, want the reason trimmed", ev)
 	}
 }
+
+// ----- names are trimmed, measured after trimming ---------------------------------
+
+func TestNew_NamesAreTrimmedBeforeTheyAreMeasuredAndStoredTrimmed(t *testing.T) {
+	t.Parallel()
+	hash := mustHash(t)
+	p, err := person.New(newID(t), mustEmail(t, "trim@example.test"), "  Ravi ", "\tKumar  ", hash, testNow)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if p.FirstName() != "Ravi" || p.LastName() != "Kumar" {
+		t.Errorf("names = %q %q, want them trimmed", p.FirstName(), p.LastName())
+	}
+	// 100 characters of name plus padding is within the limit; 101 once trimmed is not
+	hundred := strings.Repeat("a", 100)
+	if _, err := person.New(newID(t), mustEmail(t, "t2@example.test"), "  "+hundred+"  ", "K", hash, testNow); err != nil {
+		t.Errorf("100 characters padded with spaces was refused: %v", err)
+	}
+	if _, err := person.New(newID(t), mustEmail(t, "t3@example.test"), hundred+"a", "K", hash, testNow); err == nil {
+		t.Error("101 characters was accepted")
+	}
+	if _, err := person.New(newID(t), mustEmail(t, "t4@example.test"), "   ", "K", hash, testNow); err == nil {
+		t.Error("a blank first name was accepted")
+	}
+}
+
+func TestUpdateProfile_NamesAreTrimmedAndAnUnchangedStoredValueStaysAccepted(t *testing.T) {
+	t.Parallel()
+	hash := mustHash(t)
+	// a person stored before names were trimmed
+	legacy := person.UnmarshalFromDB(person.Snapshot{ID: newID(t), Email: mustEmail(t, "legacy@example.test"), FirstName: " Ravi ", LastName: "Kumar ", PasswordHash: hash, IsActive: true, CreatedAt: testNow})
+	_ = legacy.PullEvents()
+	// the form re-sends the stored values untouched: accepted, nothing changes, no event
+	if err := legacy.UpdateProfile(" Ravi ", "Kumar ", testNow); err != nil {
+		t.Fatalf("re-sending the stored values: %v", err)
+	}
+	if len(legacy.PullEvents()) != 0 || legacy.FirstName() != " Ravi " {
+		t.Errorf("an untouched save changed the person: %q %q", legacy.FirstName(), legacy.LastName())
+	}
+	// the same names without the padding are the same names: no event either
+	if err := legacy.UpdateProfile("Ravi", "Kumar", testNow); err != nil {
+		t.Fatal(err)
+	}
+	if got := legacy.PullEvents(); len(got) != 0 {
+		t.Errorf("a re-send that differs only by padding emitted %d events", len(got))
+	}
+	// a real change is stored trimmed
+	if err := legacy.UpdateProfile("  Anil  ", " Kumar", testNow); err != nil {
+		t.Fatal(err)
+	}
+	if legacy.FirstName() != "Anil" || legacy.LastName() != "Kumar" {
+		t.Errorf("names = %q %q, want them trimmed", legacy.FirstName(), legacy.LastName())
+	}
+	ev, ok := legacy.PullEvents()[0].(person.ProfileUpdatedEvent)
+	if !ok || ev.NewFirstName != "Anil" || ev.NewLastName != "Kumar" {
+		t.Errorf("event = %#v, want the trimmed new names", ev)
+	}
+}
