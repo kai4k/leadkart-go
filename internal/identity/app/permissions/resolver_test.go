@@ -74,6 +74,12 @@ func (f *fakeMembershipRepo) ListAllForPerson(context.Context, person.ID) ([]*me
 func (f *fakeMembershipRepo) ListForTenantPage(context.Context, tenant.ID, time.Time, string, int) ([]*membership.Membership, error) {
 	return nil, errors.New("fake: ListForTenantPage unused")
 }
+func (f *fakeMembershipRepo) ListForTenantPageByStatus(context.Context, tenant.ID, membership.StatusFilter, time.Time, string, int) ([]*membership.Membership, error) {
+	return nil, errors.New("fake: ListForTenantPageByStatus unused")
+}
+func (f *fakeMembershipRepo) CountByStatus(context.Context, tenant.ID) (membership.StatusCounts, error) {
+	return membership.StatusCounts{}, errors.New("fake: CountByStatus unused")
+}
 func (f *fakeMembershipRepo) HasActiveSuperAdmin(context.Context, tenant.ID) (bool, error) {
 	return false, nil
 }

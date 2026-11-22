@@ -204,6 +204,13 @@ func (r membershipsErrRepo) ListForTenantPage(ctx context.Context, tID tenant.ID
 	return r.Repository.ListForTenantPage(ctx, tID, before, beforeID, limit)
 }
 
+func (r membershipsErrRepo) ListForTenantPageByStatus(ctx context.Context, tID tenant.ID, f membership.StatusFilter, before time.Time, beforeID string, limit int) ([]*membership.Membership, error) {
+	if r.listPageErr != nil {
+		return nil, r.listPageErr
+	}
+	return r.Repository.ListForTenantPageByStatus(ctx, tID, f, before, beforeID, limit)
+}
+
 func TestListUsers_PropagatesListError(t *testing.T) {
 	t.Parallel()
 	sentinel := errors.New("list boom")
@@ -509,3 +516,108 @@ func TestListUsersPaged_HonoursCursor(t *testing.T) {
 }
 
 var _ = role.HierarchyLevelDefault // keep roletest import alive
+
+// ----- ?status= listing + counts --------------------------------------------
+
+// statusWorld seeds two active members and one deactivated one in the test tenant,
+// plus one active member of another tenant that no listing may show.
+func statusWorld(t *testing.T) (*membershiptest.FakeRepository, *persontest.FakeRepository, map[string]membership.ID) {
+	t.Helper()
+	persons := persontest.NewFakeRepository()
+	mems := membershiptest.NewFakeRepository()
+	ids := map[string]membership.ID{}
+	add := func(key string, i int, tenantID tenant.ID, deactivate bool) {
+		pid := person.ID(fmt.Sprintf("33333333-0000-0000-0000-00000000000%d", i))
+		if err := persons.Add(t.Context(), newPersonAt(t, pid, fmt.Sprintf("s%d@example.test", i), "S", "T")); err != nil {
+			t.Fatal(err)
+		}
+		mid := membership.ID(fmt.Sprintf("44444444-0000-0000-0000-00000000000%d", i))
+		m, err := membership.New(mid, pid, tenantID, membership.ID(""), testNow.Add(time.Duration(i)*time.Minute))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if deactivate {
+			if err := m.Deactivate("left the company", testNow.Add(time.Hour)); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := mems.Add(t.Context(), m); err != nil {
+			t.Fatal(err)
+		}
+		ids[key] = mid
+	}
+	add("a1", 1, testTenantID, false)
+	add("a2", 2, testTenantID, false)
+	add("gone", 3, testTenantID, true)
+	add("foreign", 4, tenant.ID("99999999-9999-9999-9999-999999999999"), false)
+	return mems, persons, ids
+}
+
+func TestListUsersPaged_StatusFilter(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name   string
+		status membership.StatusFilter
+		want   []string
+	}{
+		{"default is active", "", []string{"a2", "a1"}},
+		{"active", membership.FilterActive, []string{"a2", "a1"}},
+		{"inactive", membership.FilterInactive, []string{"gone"}},
+		{"all", membership.FilterAll, []string{"gone", "a2", "a1"}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			mems, persons, ids := statusWorld(t)
+			page, err := query.NewListUsersPagedHandler(mems, persons).Handle(t.Context(),
+				query.ListUsersPagedQuery{TenantID: testTenantID, PageSize: 10, Status: c.status})
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := []string{}
+			for _, v := range page.Items {
+				for k, id := range ids {
+					if id.String() == v.MembershipID {
+						got = append(got, k)
+					}
+				}
+			}
+			if diff := cmp.Diff(c.want, got); diff != "" {
+				t.Errorf("listed (-want +got): %s", diff)
+			}
+		})
+	}
+}
+
+func TestListUsersPaged_InactivePagesByCursor(t *testing.T) {
+	t.Parallel()
+	mems, persons, _ := statusWorld(t)
+	h := query.NewListUsersPagedHandler(mems, persons)
+	p1, err := h.Handle(t.Context(), query.ListUsersPagedQuery{TenantID: testTenantID, PageSize: 1, Status: membership.FilterAll})
+	if err != nil || len(p1.Items) != 1 || !p1.HasMore {
+		t.Fatalf("page 1 = %+v, %v; want one item and more", p1, err)
+	}
+	cur, err := pagination.Decode(p1.NextCursor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p2, err := h.Handle(t.Context(), query.ListUsersPagedQuery{TenantID: testTenantID, PageSize: 5, Status: membership.FilterAll, Cursor: cur})
+	if err != nil || len(p2.Items) != 2 {
+		t.Fatalf("page 2 = %+v, %v; want the other two", p2, err)
+	}
+}
+
+func TestCountUsersByStatus(t *testing.T) {
+	t.Parallel()
+	mems, _, _ := statusWorld(t)
+	got, err := query.NewCountUsersByStatusHandler(mems).Handle(t.Context(), query.CountUsersByStatusQuery{TenantID: testTenantID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := (query.UserStatusCounts{Active: 2, Inactive: 1}); got != want {
+		t.Errorf("counts = %+v, want %+v (another tenant's member must not count)", got, want)
+	}
+	if _, err := query.NewCountUsersByStatusHandler(mems).Handle(t.Context(), query.CountUsersByStatusQuery{}); err == nil {
+		t.Error("a zero tenant was accepted")
+	}
+}

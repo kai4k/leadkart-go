@@ -275,3 +275,88 @@ func TestE2E_C3_MemberSearch(t *testing.T) {
 		t.Errorf("GET /users/{id} broke: %+v", u)
 	}
 }
+
+// C4: a deactivated member can be listed (?status=inactive) and so found again;
+// the default listing is unchanged; the first page carries the chip counts.
+func TestE2E_C4_UsersListStatusFilter(t *testing.T) {
+	w := newAttackWorld(t)
+	f := w.f
+	own := w.owner.AccessToken
+	list := func(tok, qs string) (ports.ListUsersResponse, httpResp) {
+		r := f.authedJSON(t, http.MethodGet, "/api/v1/users"+qs, tok, nil)
+		var out ports.ListUsersResponse
+		if r.status == http.StatusOK {
+			if err := json.Unmarshal(r.body, &out); err != nil {
+				t.Fatalf("decode %s: %v", r.body, err)
+			}
+		}
+		return out, r
+	}
+	idsOf := func(o ports.ListUsersResponse) []string {
+		out := []string{}
+		for _, u := range o.Users {
+			out = append(out, u.MembershipID)
+		}
+		slices.Sort(out)
+		return out
+	}
+	sorted := func(in ...string) []string { slices.Sort(in); return in }
+
+	def, _ := list(own, "?page_size=200")
+	act, _ := list(own, "?status=active&page_size=200")
+	if !slices.Equal(idsOf(def), idsOf(act)) {
+		t.Fatalf("the default listing differs from ?status=active")
+	}
+	for _, u := range def.Users {
+		if u.Status != "active" {
+			t.Errorf("the default listing holds %s (%s)", u.MembershipID, u.Status)
+		}
+	}
+	inact, _ := list(own, "?status=inactive&page_size=200")
+	if want := sorted(w.gone.membershipID, w.goneOwner.membershipID); !slices.Equal(idsOf(inact), want) {
+		t.Errorf("inactive = %v, want %v", idsOf(inact), want)
+	}
+	for _, u := range inact.Users {
+		if u.Status != "inactive" || u.PermissionOverrides != nil {
+			t.Errorf("inactive row %+v", u)
+		}
+	}
+	all, _ := list(own, "?status=all&page_size=200")
+	if want := sorted(append(idsOf(def), w.gone.membershipID, w.goneOwner.membershipID)...); !slices.Equal(idsOf(all), want) {
+		t.Errorf("all = %v, want %v", idsOf(all), want)
+	}
+	// counts: first page only, the whole tenant whatever the filter
+	for _, qs := range []string{"?page_size=200", "?status=inactive&page_size=1", "?status=all&page_size=200"} {
+		got, _ := list(own, qs)
+		if got.StatusCounts == nil || got.StatusCounts.Active != len(def.Users) || got.StatusCounts.Inactive != 2 {
+			t.Errorf("%s: status_counts = %+v, want active %d inactive 2", qs, got.StatusCounts, len(def.Users))
+		}
+	}
+	first, _ := list(own, "?status=all&page_size=2")
+	if !first.HasMore || first.NextCursor == "" {
+		t.Fatalf("page 1 has no next cursor: %+v", first)
+	}
+	second, _ := list(own, "?status=all&page_size=200&cursor="+first.NextCursor)
+	if second.StatusCounts != nil {
+		t.Errorf("a later page repeats the counts: %+v", second.StatusCounts)
+	}
+	if len(second.Users)+len(first.Users) != len(all.Users) {
+		t.Errorf("paging lost rows: %d + %d != %d", len(first.Users), len(second.Users), len(all.Users))
+	}
+	// a bad filter, and another company never sees these rows
+	if _, r := list(own, "?status=deleted"); r.status != http.StatusBadRequest || errCodeOf(r) != "invalid_status_filter" {
+		t.Errorf("?status=deleted: %d %s", r.status, r.body)
+	}
+	if v, _ := list(w.victim.AccessToken, "?status=all&page_size=200"); len(v.Users) != 2 || v.StatusCounts.Inactive != 0 {
+		t.Errorf("the other company sees %d users, counts %+v", len(v.Users), v.StatusCounts)
+	}
+	// the point of the filter: the member can be found and reactivated, then listed as active
+	if r := f.authedJSON(t, http.MethodPost, "/api/v1/users/"+w.gone.membershipID+"/reactivate", own, nil); r.status != http.StatusNoContent {
+		t.Fatalf("reactivate: %d %s", r.status, r.body)
+	}
+	inact, _ = list(own, "?status=inactive&page_size=200")
+	back, _ := list(own, "?page_size=200")
+	if slices.Contains(idsOf(inact), w.gone.membershipID) || !slices.Contains(idsOf(back), w.gone.membershipID) || back.StatusCounts.Inactive != 1 {
+		t.Errorf("after reactivation: inactive %v, counts %+v", idsOf(inact), back.StatusCounts)
+	}
+}

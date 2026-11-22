@@ -283,6 +283,9 @@ type ListUsersResponse struct {
 	Users      []UserDto `json:"users"`
 	HasMore    bool      `json:"has_more"`
 	NextCursor string    `json:"next_cursor,omitzero"`
+	// StatusCounts is on the first page only (no cursor): members per status, for
+	// the status chips. It is the whole tenant's count whatever ?status= is.
+	StatusCounts *UserStatusCountsDto `json:"status_counts,omitzero"`
 }
 
 // UpdateUserProfileRequest — PATCH /api/v1/users/{userId}/profile.
@@ -797,4 +800,10 @@ type MemberHitDto struct {
 	MembershipID string `json:"membership_id"`
 	DisplayName  string `json:"display_name"`
 	Designation  string `json:"designation,omitzero"`
+}
+
+// UserStatusCountsDto is how many members the tenant has per status.
+type UserStatusCountsDto struct {
+	Active   int `json:"active"`
+	Inactive int `json:"inactive"`
 }

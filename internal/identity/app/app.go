@@ -108,6 +108,7 @@ type Queries struct {
 	SearchMembers             query.SearchMembersHandler
 	ListUsers                 query.ListUsersHandler
 	ListUsersPaged            query.ListUsersPagedHandler
+	CountUsersByStatus        query.CountUsersByStatusHandler
 	GetRole                   query.GetRoleHandler
 	ListRoles                 query.ListRolesHandler
 	GetPerson                 query.GetPersonHandler

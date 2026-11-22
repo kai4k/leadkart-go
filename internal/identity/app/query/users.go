@@ -149,14 +149,17 @@ func (h ListUsersHandler) Handle(ctx context.Context, q ListUsersQuery) ([]UserV
 
 // ----- ListUsersPagedQuery -------------------------------------------------
 
-// ListUsersPagedQuery returns one keyset page of ACTIVE Memberships (ADR 0038).
+// ListUsersPagedQuery returns one keyset page of Memberships (ADR 0038): ACTIVE ones
+// unless Status says otherwise.
 // Zero Cursor = first page. PageSize is clamped by pagination.ClampPageSize.
-// Status filter is hard-coded to 'active' to match the partial index
-// from migration 20260518000001.
+// The active listing keeps the partial index
+// from migration 20260518000001; inactive and all read the tenant's own rows.
 type ListUsersPagedQuery struct {
 	TenantID tenant.ID
 	Cursor   pagination.Cursor
 	PageSize int
+	// Status selects the listing; the zero value is the active listing.
+	Status membership.StatusFilter
 }
 
 // ListUsersPagedHandler runs the keyset list query + Person hydration.
@@ -193,7 +196,11 @@ func (h ListUsersPagedHandler) Handle(ctx context.Context, q ListUsersPagedQuery
 	}
 
 	// Fetch page_size+1; BuildPage sets HasMore + NextCursor accordingly.
-	mems, err := h.memberships.ListForTenantPage(ctx, q.TenantID, beforeAt, beforeID, pageSize+1)
+	filter := q.Status
+	if filter == "" {
+		filter = membership.FilterActive
+	}
+	mems, err := h.memberships.ListForTenantPageByStatus(ctx, q.TenantID, filter, beforeAt, beforeID, pageSize+1)
 	if err != nil {
 		return pagination.Page[UserView]{}, fmt.Errorf("list_users_paged: list memberships: %w", err)
 	}
@@ -355,4 +362,39 @@ func (h GetUserOverridesHandler) Handle(ctx context.Context, q GetUserOverridesQ
 	}
 	out.Visible = true
 	return out, nil
+}
+
+// ----- CountUsersByStatusQuery ----------------------------------------------
+
+// UserStatusCounts is how many members a tenant has per status: the numbers on
+// the users list's status chips.
+type UserStatusCounts struct {
+	Active   int
+	Inactive int
+}
+
+// CountUsersByStatusQuery asks for the counts of one tenant.
+type CountUsersByStatusQuery struct{ TenantID tenant.ID }
+
+// CountUsersByStatusHandler reads the counts (one grouped read of the tenant's rows).
+type CountUsersByStatusHandler struct{ memberships membership.Repository }
+
+// NewCountUsersByStatusHandler wires the handler.
+func NewCountUsersByStatusHandler(m membership.Repository) CountUsersByStatusHandler {
+	if m == nil {
+		panic("query: NewCountUsersByStatusHandler memberships repository required")
+	}
+	return CountUsersByStatusHandler{memberships: m}
+}
+
+// Handle returns the tenant's per-status member counts.
+func (h CountUsersByStatusHandler) Handle(ctx context.Context, q CountUsersByStatusQuery) (UserStatusCounts, error) {
+	if q.TenantID.IsZero() {
+		return UserStatusCounts{}, errors.New("count_users_by_status: tenant id required")
+	}
+	c, err := h.memberships.CountByStatus(ctx, q.TenantID)
+	if err != nil {
+		return UserStatusCounts{}, fmt.Errorf("count_users_by_status: %w", err)
+	}
+	return UserStatusCounts{Active: c.Active, Inactive: c.Inactive}, nil
 }

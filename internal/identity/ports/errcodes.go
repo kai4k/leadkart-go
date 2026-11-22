@@ -371,6 +371,10 @@ const (
 	// characters after trim. 400 surface.
 	ErrCodeSearchQueryTooLong = "search_query_too_long"
 
+	// ErrCodeInvalidStatusFilter — GET /v1/users ?status= is not one of
+	// active, inactive, all. 400 surface.
+	ErrCodeInvalidStatusFilter = "invalid_status_filter"
+
 	// ErrCodeInvalidSearchInclude — GET /v1/search ?include= cleared
 	// all categories. 400 surface — at least one of persons|tenants
 	// must be requested.

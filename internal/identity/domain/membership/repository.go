@@ -89,6 +89,16 @@ type Repository interface {
 	// encode/decode + sentinel construction.
 	ListForTenantPage(ctx context.Context, tenantID tenant.ID, beforeJoinedAt time.Time, beforeID string, limit int) ([]*Membership, error)
 
+	// ListForTenantPageByStatus is ListForTenantPage for any [StatusFilter]:
+	// FilterActive is exactly ListForTenantPage (same index), FilterInactive the
+	// deactivated members, FilterAll both. Same keyset cursor, order
+	// (joined_at DESC, id DESC) and peek-one-extra limit.
+	ListForTenantPageByStatus(ctx context.Context, tenantID tenant.ID, filter StatusFilter, beforeJoinedAt time.Time, beforeID string, limit int) ([]*Membership, error)
+
+	// CountByStatus returns how many Memberships the tenant has in each status
+	// (the counts behind the users list's status chips).
+	CountByStatus(ctx context.Context, tenantID tenant.ID) (StatusCounts, error)
+
 	// ListAllForPerson returns every Membership (Active + Inactive) the
 	// supplied Person holds across ALL tenants. Cross-tenant read —
 	// platform-only path. Used by:
@@ -134,4 +144,34 @@ type Repository interface {
 	// tenant. Powers the re-level reporting rule; the caller holds the tenant
 	// authority lock.
 	ListReportingLinks(ctx context.Context, tenantID tenant.ID, ids []ID) ([]*Membership, error)
+}
+
+// StatusFilter selects which Memberships a tenant listing returns.
+type StatusFilter string
+
+// The three listings of the users endpoint (?status=).
+const (
+	FilterActive   StatusFilter = "active"
+	FilterInactive StatusFilter = "inactive"
+	FilterAll      StatusFilter = "all"
+)
+
+// ParseStatusFilter reads the ?status= query value; an empty value is
+// [FilterActive] (the listing's default, so existing callers are unchanged).
+func ParseStatusFilter(s string) (StatusFilter, bool) {
+	switch StatusFilter(s) {
+	case "", FilterActive:
+		return FilterActive, true
+	case FilterInactive:
+		return FilterInactive, true
+	case FilterAll:
+		return FilterAll, true
+	}
+	return "", false
+}
+
+// StatusCounts is how many Memberships a tenant has in each status.
+type StatusCounts struct {
+	Active   int
+	Inactive int
 }

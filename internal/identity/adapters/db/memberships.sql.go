@@ -11,6 +11,40 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const countMembershipsByStatusInTenant = `-- name: CountMembershipsByStatusInTenant :many
+SELECT status, count(*)::bigint AS total
+FROM   identity.tenant_memberships
+WHERE  tenant_id = $1::uuid
+GROUP  BY status
+`
+
+type CountMembershipsByStatusInTenantRow struct {
+	Status string
+	Total  int64
+}
+
+// One row per status present in the tenant: the counts behind the status chips
+// of the users list. One index range scan of the tenant's rows.
+func (q *Queries) CountMembershipsByStatusInTenant(ctx context.Context, tenantID pgtype.UUID) ([]CountMembershipsByStatusInTenantRow, error) {
+	rows, err := q.db.Query(ctx, countMembershipsByStatusInTenant, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []CountMembershipsByStatusInTenantRow
+	for rows.Next() {
+		var i CountMembershipsByStatusInTenantRow
+		if err := rows.Scan(&i.Status, &i.Total); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const deletePermissionOverridesByMembership = `-- name: DeletePermissionOverridesByMembership :exec
 DELETE FROM identity.membership_permission_overrides
 WHERE  membership_id = $1
@@ -298,6 +332,122 @@ type ListActiveMembershipsInTenantPageParams struct {
 // when frontend asks.
 func (q *Queries) ListActiveMembershipsInTenantPage(ctx context.Context, arg ListActiveMembershipsInTenantPageParams) ([]IdentityTenantMembership, error) {
 	rows, err := q.db.Query(ctx, listActiveMembershipsInTenantPage, arg.BeforeJoinedAt, arg.BeforeID, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []IdentityTenantMembership
+	for rows.Next() {
+		var i IdentityTenantMembership
+		if err := rows.Scan(
+			&i.ID,
+			&i.PersonID,
+			&i.TenantID,
+			&i.Status,
+			&i.JoinedAt,
+			&i.LeftAt,
+			&i.Designation,
+			&i.Department,
+			&i.StatusMessage,
+			&i.ReportsTo,
+			&i.CreatedByMembershipID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listAllMembershipsInTenantPage = `-- name: ListAllMembershipsInTenantPage :many
+SELECT id, person_id, tenant_id, status, joined_at, left_at,
+       designation, department, status_message, reports_to,
+       created_by_membership_id
+FROM   identity.tenant_memberships
+WHERE  tenant_id = $1::uuid
+  AND  (joined_at, id) < ($2::timestamptz, $3::uuid)
+ORDER  BY joined_at DESC, id DESC
+LIMIT  $4
+`
+
+type ListAllMembershipsInTenantPageParams struct {
+	TenantID       pgtype.UUID
+	BeforeJoinedAt pgtype.Timestamptz
+	BeforeID       pgtype.UUID
+	Limit          int32
+}
+
+// Keyset-paginated listing of every status (?status=all), same cursor contract.
+func (q *Queries) ListAllMembershipsInTenantPage(ctx context.Context, arg ListAllMembershipsInTenantPageParams) ([]IdentityTenantMembership, error) {
+	rows, err := q.db.Query(ctx, listAllMembershipsInTenantPage,
+		arg.TenantID,
+		arg.BeforeJoinedAt,
+		arg.BeforeID,
+		arg.Limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []IdentityTenantMembership
+	for rows.Next() {
+		var i IdentityTenantMembership
+		if err := rows.Scan(
+			&i.ID,
+			&i.PersonID,
+			&i.TenantID,
+			&i.Status,
+			&i.JoinedAt,
+			&i.LeftAt,
+			&i.Designation,
+			&i.Department,
+			&i.StatusMessage,
+			&i.ReportsTo,
+			&i.CreatedByMembershipID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listInactiveMembershipsInTenantPage = `-- name: ListInactiveMembershipsInTenantPage :many
+SELECT id, person_id, tenant_id, status, joined_at, left_at,
+       designation, department, status_message, reports_to,
+       created_by_membership_id
+FROM   identity.tenant_memberships
+WHERE  tenant_id = $1::uuid
+  AND  status = 'inactive'
+  AND  (joined_at, id) < ($2::timestamptz, $3::uuid)
+ORDER  BY joined_at DESC, id DESC
+LIMIT  $4
+`
+
+type ListInactiveMembershipsInTenantPageParams struct {
+	TenantID       pgtype.UUID
+	BeforeJoinedAt pgtype.Timestamptz
+	BeforeID       pgtype.UUID
+	Limit          int32
+}
+
+// Keyset-paginated INACTIVE listing (the ?status=inactive form of the users
+// list), same cursor contract as ListActiveMembershipsInTenantPage. A tenant's
+// deactivated set is small, so it reads the (tenant_id) range of
+// idx_memberships_tenant and sorts that.
+func (q *Queries) ListInactiveMembershipsInTenantPage(ctx context.Context, arg ListInactiveMembershipsInTenantPageParams) ([]IdentityTenantMembership, error) {
+	rows, err := q.db.Query(ctx, listInactiveMembershipsInTenantPage,
+		arg.TenantID,
+		arg.BeforeJoinedAt,
+		arg.BeforeID,
+		arg.Limit,
+	)
 	if err != nil {
 		return nil, err
 	}

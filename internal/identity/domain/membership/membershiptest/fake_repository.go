@@ -333,3 +333,46 @@ func (f *FakeRepository) HasActiveSuperAdmin(_ context.Context, _ tenant.ID) (bo
 
 	return false, nil
 }
+
+// ListForTenantPageByStatus mirrors the SQL adapter for every [membership.StatusFilter].
+func (f *FakeRepository) ListForTenantPageByStatus(ctx context.Context, tenantID tenant.ID, filter membership.StatusFilter, beforeJoinedAt time.Time, beforeID string, limit int) ([]*membership.Membership, error) {
+	if filter == membership.FilterActive {
+		return f.ListForTenantPage(ctx, tenantID, beforeJoinedAt, beforeID, limit)
+	}
+	var out []*membership.Membership
+	for _, m := range f.rows {
+		if m.TenantID() != tenantID {
+			continue
+		}
+		if filter == membership.FilterInactive && m.Status() != membership.StatusInactive {
+			continue
+		}
+		if m.JoinedAt().Before(beforeJoinedAt) || (m.JoinedAt().Equal(beforeJoinedAt) && m.ID().String() < beforeID) {
+			out = append(out, m)
+		}
+	}
+	slices.SortFunc(out, func(a, b *membership.Membership) int {
+		return cmp.Or(b.JoinedAt().Compare(a.JoinedAt()), cmp.Compare(b.ID().String(), a.ID().String()))
+	})
+	if limit > 0 && len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
+}
+
+// CountByStatus counts the tenant's memberships per status.
+func (f *FakeRepository) CountByStatus(_ context.Context, tenantID tenant.ID) (membership.StatusCounts, error) {
+	var out membership.StatusCounts
+	for _, m := range f.rows {
+		if m.TenantID() != tenantID {
+			continue
+		}
+		switch m.Status() {
+		case membership.StatusActive:
+			out.Active++
+		case membership.StatusInactive:
+			out.Inactive++
+		}
+	}
+	return out, nil
+}

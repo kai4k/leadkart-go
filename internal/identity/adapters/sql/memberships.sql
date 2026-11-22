@@ -244,3 +244,37 @@ WHERE  m.tenant_id = sqlc.arg(tenant_id)::uuid
   AND  (p.first_name || ' ' || p.last_name) ILIKE sqlc.arg(pattern)::text
 ORDER  BY lower(p.first_name), lower(p.last_name), m.id
 LIMIT  sqlc.arg('limit');
+
+-- name: ListInactiveMembershipsInTenantPage :many
+-- Keyset-paginated INACTIVE listing (the ?status=inactive form of the users
+-- list), same cursor contract as ListActiveMembershipsInTenantPage. A tenant's
+-- deactivated set is small, so it reads the (tenant_id) range of
+-- idx_memberships_tenant and sorts that.
+SELECT id, person_id, tenant_id, status, joined_at, left_at,
+       designation, department, status_message, reports_to,
+       created_by_membership_id
+FROM   identity.tenant_memberships
+WHERE  tenant_id = sqlc.arg(tenant_id)::uuid
+  AND  status = 'inactive'
+  AND  (joined_at, id) < (sqlc.arg(before_joined_at)::timestamptz, sqlc.arg(before_id)::uuid)
+ORDER  BY joined_at DESC, id DESC
+LIMIT  sqlc.arg('limit');
+
+-- name: ListAllMembershipsInTenantPage :many
+-- Keyset-paginated listing of every status (?status=all), same cursor contract.
+SELECT id, person_id, tenant_id, status, joined_at, left_at,
+       designation, department, status_message, reports_to,
+       created_by_membership_id
+FROM   identity.tenant_memberships
+WHERE  tenant_id = sqlc.arg(tenant_id)::uuid
+  AND  (joined_at, id) < (sqlc.arg(before_joined_at)::timestamptz, sqlc.arg(before_id)::uuid)
+ORDER  BY joined_at DESC, id DESC
+LIMIT  sqlc.arg('limit');
+
+-- name: CountMembershipsByStatusInTenant :many
+-- One row per status present in the tenant: the counts behind the status chips
+-- of the users list. One index range scan of the tenant's rows.
+SELECT status, count(*)::bigint AS total
+FROM   identity.tenant_memberships
+WHERE  tenant_id = sqlc.arg(tenant_id)::uuid
+GROUP  BY status;

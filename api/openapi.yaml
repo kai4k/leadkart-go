@@ -984,14 +984,20 @@ paths:
   /api/v1/users:
     get:
       tags: [users]
-      summary: List active members of the caller's tenant (cursor-paginated)
+      summary: List members of the caller's tenant, active by default (cursor-paginated)
       description: |
         Requires `identity.users.view` (satisfied by `tenant.admin` in the caller's own tenant, or by `platform.*` equivalents for platform operators; ADR 0068).
+
+        `?status=active|inactive|all` (default `active`, so existing callers are unchanged) picks the listing; anything else is 400 `invalid_status_filter`. A deactivated member is listed with `?status=inactive` and can be reactivated from there. The FIRST page (no `cursor`) also carries `status_counts` (`active` and `inactive`, the whole tenant whatever `status` is) for the status chips; later pages omit it.
       x-required-permissions: [identity.users.view]
       parameters:
         - $ref: '#/components/parameters/Cursor'
         - $ref: '#/components/parameters/PageSize'
         - $ref: '#/components/parameters/XTenantId'
+        - name: status
+          in: query
+          required: false
+          schema: { type: string, enum: [active, inactive, all], default: active }
       responses:
         '429': { $ref: '#/components/responses/TooManyRequests' }
         '200':
@@ -5046,6 +5052,13 @@ components:
           items: { $ref: '#/components/schemas/UserDto' }
         has_more:    { type: boolean }
         next_cursor: { type: string }
+        status_counts:
+          type: object
+          description: First page only (no cursor). The whole tenant's members per status, whatever `status` filter is in use.
+          required: [active, inactive]
+          properties:
+            active:   { type: integer }
+            inactive: { type: integer }
 
     CreateUserRequest:
       type: object

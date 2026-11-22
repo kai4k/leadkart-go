@@ -74,9 +74,10 @@ func handleGetUser(log *slog.Logger, a app.Application) http.Handler {
 //
 //   - ?cursor=<opaque base64>  — empty / absent = first page
 //   - ?page_size=<int>         — clamped to [1, 200]; default 50
+//   - ?status=active|inactive|all — default active (the listing before the filter existed)
 //
-// Returns ACTIVE memberships only (status='active'). Inactive listing
-// is a future ?status=inactive endpoint.
+// Returns ACTIVE memberships unless ?status= says inactive or all; the first page
+// (no cursor) also carries status_counts for the status chips.
 func handleListUsers(log *slog.Logger, a app.Application) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Tenant scope is the caller's JWT tenant_id (bridged onto ctx
@@ -96,11 +97,18 @@ func handleListUsers(log *slog.Logger, a app.Application) http.Handler {
 			return
 		}
 		pageSize, _ := strconv.Atoi(r.URL.Query().Get("page_size"))
+		status, ok := membership.ParseStatusFilter(r.URL.Query().Get("status"))
+		if !ok {
+			writeError(w, http.StatusBadRequest, ErrCodeInvalidStatusFilter,
+				"status must be one of active, inactive, all")
+			return
+		}
 
 		page, err := a.Queries.ListUsersPaged.Handle(r.Context(), query.ListUsersPagedQuery{
 			TenantID: tenant.ID(tid),
 			Cursor:   cursor,
 			PageSize: pageSize,
+			Status:   status,
 		})
 		if err != nil {
 			log.ErrorContext(r.Context(), "list users failed", "err", err)
@@ -115,6 +123,17 @@ func handleListUsers(log *slog.Logger, a app.Application) http.Handler {
 		}
 		for _, v := range page.Items {
 			out.Users = append(out.Users, projectUserViewToDto(v))
+		}
+		// The status chips' counts ride the FIRST page only (no cursor): they are one
+		// grouped read of the tenant's rows, not something to repeat per page.
+		if cursor.ID == "" && cursor.SortValue.IsZero() {
+			counts, cerr := a.Queries.CountUsersByStatus.Handle(r.Context(), query.CountUsersByStatusQuery{TenantID: tenant.ID(tid)})
+			if cerr != nil {
+				log.ErrorContext(r.Context(), "count users by status failed", "err", cerr)
+				writeError(w, http.StatusInternalServerError, ErrCodeInternalError, "")
+				return
+			}
+			out.StatusCounts = &UserStatusCountsDto{Active: counts.Active, Inactive: counts.Inactive}
 		}
 		writeJSON(w, http.StatusOK, out)
 	})

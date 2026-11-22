@@ -818,3 +818,89 @@ func isMembershipActiveCollision(err error) bool {
 	}
 	return pgErr.ConstraintName == constraintMembershipsPersonActive
 }
+
+// ListForTenantPageByStatus satisfies [membership.Repository]. Active is the
+// ADR 0038 partial-index query unchanged; inactive and all read the tenant's own
+// rows (a deactivated set is small) with the same keyset contract.
+func (r *MembershipRepository) ListForTenantPageByStatus(
+	ctx context.Context,
+	tenantID tenant.ID,
+	filter membership.StatusFilter,
+	beforeJoinedAt time.Time,
+	beforeID string,
+	limit int,
+) ([]*membership.Membership, error) {
+	if filter == membership.FilterActive {
+		return r.ListForTenantPage(ctx, tenantID, beforeJoinedAt, beforeID, limit)
+	}
+	beforeUUID, err := uuid.Parse(beforeID)
+	if err != nil {
+		return nil, fmt.Errorf("membership repo: list-page-by-status: parse before id: %w", err)
+	}
+	tid, err := uuid.Parse(tenantID.String())
+	if err != nil {
+		return nil, fmt.Errorf("membership repo: list-page-by-status: parse tenant id: %w", err)
+	}
+	if limit <= 0 {
+		return nil, fmt.Errorf("membership repo: list-page-by-status: limit must be positive (got %d)", limit)
+	}
+	var out []*membership.Membership
+	err = r.runInTxTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		q := r.q.WithTx(tx)
+		var rows []db.IdentityTenantMembership
+		var qerr error
+		switch filter {
+		case membership.FilterInactive:
+			rows, qerr = q.ListInactiveMembershipsInTenantPage(ctx, db.ListInactiveMembershipsInTenantPageParams{
+				TenantID:       pgconv.PgUUID(tid),
+				BeforeJoinedAt: pgconv.PgRequiredTimestamp(beforeJoinedAt),
+				BeforeID:       pgconv.PgUUID(beforeUUID),
+				Limit:          int32(limit), //nolint:gosec // page_size capped at 200 well within int32
+			})
+		case membership.FilterAll:
+			rows, qerr = q.ListAllMembershipsInTenantPage(ctx, db.ListAllMembershipsInTenantPageParams{
+				TenantID:       pgconv.PgUUID(tid),
+				BeforeJoinedAt: pgconv.PgRequiredTimestamp(beforeJoinedAt),
+				BeforeID:       pgconv.PgUUID(beforeUUID),
+				Limit:          int32(limit), //nolint:gosec // page_size capped at 200 well within int32
+			})
+		default:
+			return fmt.Errorf("membership repo: list-page-by-status: unknown filter %q", filter)
+		}
+		if qerr != nil {
+			return fmt.Errorf("membership repo: list-page-by-status: %w", qerr)
+		}
+		var herr error
+		out, herr = hydrateMemberships(ctx, q, rows)
+		return herr
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// CountByStatus satisfies [membership.Repository].
+func (r *MembershipRepository) CountByStatus(ctx context.Context, tenantID tenant.ID) (membership.StatusCounts, error) {
+	tid, err := uuid.Parse(tenantID.String())
+	if err != nil {
+		return membership.StatusCounts{}, fmt.Errorf("membership repo: count by status: parse tenant id: %w", err)
+	}
+	var out membership.StatusCounts
+	err = r.runInTxTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		rows, qerr := r.q.WithTx(tx).CountMembershipsByStatusInTenant(ctx, pgconv.PgUUID(tid))
+		if qerr != nil {
+			return fmt.Errorf("membership repo: count by status: %w", qerr)
+		}
+		for _, row := range rows {
+			switch row.Status {
+			case membership.StatusActive.String():
+				out.Active = int(row.Total)
+			case membership.StatusInactive.String():
+				out.Inactive = int(row.Total)
+			}
+		}
+		return nil
+	})
+	return out, err
+}
