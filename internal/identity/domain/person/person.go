@@ -815,7 +815,8 @@ func (p *Person) CancelEmailChange(reason string, now time.Time) error {
 //
 // Rejected if Person is anonymised (terminal — already scrubbed).
 func (p *Person) GloballySuspend(reason string, now time.Time) error {
-	if strings.TrimSpace(reason) == "" {
+	reason = strings.TrimSpace(reason) // stored and emitted trimmed
+	if reason == "" {
 		return fmt.Errorf("%w: global suspension reason required for audit", ErrInvalid)
 	}
 	if err := humantext.CheckChanged("reason", p.globalSuspensionReason, reason); err != nil { // a replay of the stored reason stays idempotent
@@ -825,7 +826,7 @@ func (p *Person) GloballySuspend(reason string, now time.Time) error {
 		return fmt.Errorf("%w: cannot suspend anonymised person", ErrInvalid)
 	}
 	if p.isGloballySuspended {
-		if p.globalSuspensionReason == reason {
+		if strings.TrimSpace(p.globalSuspensionReason) == reason { // a reason stored before trimming still matches
 			return nil
 		}
 		return fmt.Errorf("%w: person already suspended (reason: %q)", ErrInvalid, p.globalSuspensionReason)
@@ -878,7 +879,8 @@ func (p *Person) LiftGlobalSuspension(now time.Time) error {
 // fans out [AnonymisedEvent] to other modules so they scrub their own
 // PII (CRM lead notes, Tasks comments, etc.).
 func (p *Person) Anonymise(reason string, now time.Time) error {
-	if strings.TrimSpace(reason) == "" {
+	reason = strings.TrimSpace(reason) // emitted trimmed
+	if reason == "" {
 		return fmt.Errorf("%w: anonymisation reason required for audit", ErrInvalid)
 	}
 	if err := humantext.Check("reason", reason); err != nil {

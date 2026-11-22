@@ -301,7 +301,8 @@ func (m *Membership) ReportsTo() ID { return m.reportsTo }
 //
 // Idempotent — second Deactivate on already-inactive Membership is no-op.
 func (m *Membership) Deactivate(reason string, now time.Time) error {
-	if strings.TrimSpace(reason) == "" {
+	reason = strings.TrimSpace(reason) // stored and emitted trimmed
+	if reason == "" {
 		return fmt.Errorf("%w: deactivation reason required for audit", ErrInvalid)
 	}
 	if err := humantext.Check("reason", reason); err != nil {

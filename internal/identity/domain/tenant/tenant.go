@@ -300,7 +300,8 @@ func (t *Tenant) Activate(now time.Time) error {
 // non-empty (audit requirement, data-retention.md). Idempotent if already
 // suspended. Rejected from PendingDeletion and Deleted.
 func (t *Tenant) Suspend(reason string, now time.Time) error {
-	if strings.TrimSpace(reason) == "" {
+	reason = strings.TrimSpace(reason) // stored and emitted trimmed
+	if reason == "" {
 		return fmt.Errorf("%w: suspension reason required for audit", ErrInvalid)
 	}
 	if err := humantext.Check("reason", reason); err != nil {
@@ -421,7 +422,8 @@ func (t *Tenant) UpdateDisplayPreferences(d DisplayPreferences, now time.Time) e
 // reason mismatch (audit-trail integrity). Rejected from Deleted (terminal)
 // and Pending (never activated — use HardDelete directly).
 func (t *Tenant) MarkForDeletion(reason string, now time.Time) error {
-	if strings.TrimSpace(reason) == "" {
+	reason = strings.TrimSpace(reason) // stored and emitted trimmed
+	if reason == "" {
 		return fmt.Errorf("%w: deletion reason required for audit", ErrInvalid)
 	}
 	if err := humantext.CheckChanged("reason", t.deletionReason, reason); err != nil { // a replay of the stored reason stays idempotent
@@ -432,7 +434,7 @@ func (t *Tenant) MarkForDeletion(reason string, now time.Time) error {
 		// proceed
 	case StatusPendingDeletion:
 		// idempotent only when reason matches
-		if t.deletionReason == reason {
+		if strings.TrimSpace(t.deletionReason) == reason { // a reason stored before trimming still matches
 			return nil
 		}
 		return fmt.Errorf("%w: tenant already pending deletion (reason: %q)", ErrInvalid, t.deletionReason)

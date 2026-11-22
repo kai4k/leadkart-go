@@ -1145,3 +1145,26 @@ func TestParseID_IsTheCanonicalFormOrErrInvalid(t *testing.T) {
 		}
 	}
 }
+
+func TestSuspendAndMarkForDeletion_ReasonsAreStoredTrimmedAndReplaysStayIdempotent(t *testing.T) {
+	t.Parallel()
+	tn := newActiveTenant(t)
+	_ = tn.PullEvents()
+	if err := tn.Suspend("  payment overdue  ", testNow); err != nil {
+		t.Fatal(err)
+	}
+	if s, ok := tn.PullEvents()[0].(tenant.SuspendedEvent); !ok || s.Reason != "payment overdue" {
+		t.Errorf("suspension event = %#v, want the reason trimmed", s)
+	}
+	if err := tn.MarkForDeletion("  closing the account  ", testNow); err != nil {
+		t.Fatal(err)
+	}
+	if tn.DeletionReason() != "closing the account" {
+		t.Errorf("DeletionReason = %q, want it trimmed", tn.DeletionReason())
+	}
+	_ = tn.PullEvents()
+	// the same reason typed with other padding is a replay, not a conflict
+	if err := tn.MarkForDeletion("closing the account   ", testNow); err != nil {
+		t.Errorf("a replay with different padding was refused: %v", err)
+	}
+}

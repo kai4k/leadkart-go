@@ -287,3 +287,21 @@ func TestMembership_CanonicalIDs(t *testing.T) {
 		t.Fatalf("events = %d, want 1 (spelling must not defeat dedup)", n)
 	}
 }
+
+func TestDeactivate_ReasonIsTrimmedAndAWhitespaceReasonIsRefused(t *testing.T) {
+	t.Parallel()
+	m := newMembership(t)
+	_ = m.PullEvents()
+	for _, blank := range []string{"   ", "\t\n"} {
+		if err := m.Deactivate(blank, testNow); err == nil {
+			t.Errorf("Deactivate(%q) accepted a blank reason", blank)
+		}
+	}
+	if err := m.Deactivate("  job change  ", testNow); err != nil {
+		t.Fatalf("Deactivate: %v", err)
+	}
+	ev, ok := m.PullEvents()[0].(membership.DeactivatedEvent)
+	if !ok || ev.Reason != "job change" {
+		t.Errorf("event = %#v, want the reason trimmed", ev)
+	}
+}

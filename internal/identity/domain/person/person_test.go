@@ -1127,3 +1127,27 @@ func TestRecordRejectedPasswordResetAttempt(t *testing.T) {
 		t.Fatalf("fresh request: err=%v count=%d", err, p.PendingPasswordReset().FailedAttempts())
 	}
 }
+
+func TestGloballySuspendAndAnonymise_ReasonsAreStoredTrimmed(t *testing.T) {
+	t.Parallel()
+	p := newPerson(t)
+	_ = p.PullEvents()
+	if err := p.GloballySuspend("  fraud review  ", testNow); err != nil {
+		t.Fatal(err)
+	}
+	if p.GlobalSuspensionReason() != "fraud review" {
+		t.Errorf("GlobalSuspensionReason = %q, want it trimmed", p.GlobalSuspensionReason())
+	}
+	if err := p.GloballySuspend("fraud review ", testNow); err != nil {
+		t.Errorf("a replay with different padding was refused: %v", err)
+	}
+	_ = p.PullEvents()
+	q := newPerson(t)
+	_ = q.PullEvents()
+	if err := q.Anonymise("  erasure request #4711  ", testNow); err != nil {
+		t.Fatal(err)
+	}
+	if ev, ok := q.PullEvents()[0].(person.AnonymisedEvent); !ok || ev.Reason != "erasure request #4711" {
+		t.Errorf("anonymise event = %#v, want the reason trimmed", ev)
+	}
+}

@@ -5320,7 +5320,7 @@ components:
       required: [target_tenant_id, reason]
       properties:
         target_tenant_id: { type: string, format: uuid }
-        reason:           { type: string, minLength: 10 }
+        reason:           { type: string, minLength: 10, description: "The audit reason. Trimmed first, THEN measured (10 characters or more) and stored trimmed: ten spaces are refused (422 `impersonation_invalid`)." }
         duration_minutes: { type: integer, minimum: 1, maximum: 240, default: 30 }
 
     CreateImpersonationSessionResponse:
@@ -5431,6 +5431,7 @@ components:
           type: string
           minLength: 10
           maxLength: 1024
+          description: Trimmed first, THEN measured (10 to 1024 characters) and stored trimmed.
 
     CreatePermissionRequestResponse:
       type: object

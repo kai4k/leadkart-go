@@ -24,6 +24,7 @@ package impersonation
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/leadkart/leadkart-go/internal/common/humantext"
@@ -86,6 +87,8 @@ func NewSession(operatorID, targetTenantID, reason string, duration time.Duratio
 	if targetTenantID == "" {
 		return Session{}, errors.New("impersonation: target tenant id required")
 	}
+	// Measured and stored after trimming: ten spaces are not an audit reason.
+	reason = strings.TrimSpace(reason)
 	if len(reason) < MinReasonLength {
 		return Session{}, errors.New("impersonation: reason too short — DPDP / SOC2 audit minimum 10 chars")
 	}

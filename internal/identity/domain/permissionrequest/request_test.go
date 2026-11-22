@@ -721,3 +721,29 @@ func TestNew_RefusesEveryNonRequestableName(t *testing.T) {
 		}
 	}
 }
+
+// The reason is measured and stored after trimming (the same rule as the
+// impersonation audit reason): padding never counts toward the minimum.
+func TestNew_ReasonIsMeasuredAndStoredAfterTrimming(t *testing.T) {
+	t.Parallel()
+	mk := func(reason string) (*permissionrequest.Request, error) {
+		return permissionrequest.New(
+			permissionrequest.ID(ids.NewV7().String()),
+			tenant.ID(ids.NewV7().String()),
+			membership.ID(ids.NewV7().String()),
+			permission.FromConstant(permission.IdentityPermissions.Users.View),
+			7, reason, fixedClock())
+	}
+	for _, padded := range []string{"   abcd      ", strings.Repeat(" ", 12), "  abcdefghi  "} {
+		if _, err := mk(padded); !errors.Is(err, permissionrequest.ErrInvalidRequest) {
+			t.Errorf("reason %q: err = %v, want ErrInvalidRequest", padded, err)
+		}
+	}
+	r, err := mk("   need access for the audit   ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Reason() != "need access for the audit" {
+		t.Errorf("stored reason = %q, want it trimmed", r.Reason())
+	}
+}

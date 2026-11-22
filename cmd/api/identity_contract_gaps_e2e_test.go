@@ -439,3 +439,31 @@ func TestE2E_I1_RefreshKeepsTheFamilyClaim(t *testing.T) {
 		t.Errorf("family after refresh = %q, want %q", after, before)
 	}
 }
+
+// I7: a blank audit reason opens nothing; a padded one is stored trimmed.
+func TestE2E_I7_ImpersonationReasonIsMeasuredAfterTrimming(t *testing.T) {
+	f := newE2EFixture(t)
+	tenantA := f.registerAndLogin(t, "i7")
+	platformTok := f.mintPlatformToken(t, "")
+	open := func(reason string) httpResp {
+		return f.authedJSON(t, http.MethodPost, "/api/v1/platform/impersonation/sessions", platformTok,
+			ports.CreateImpersonationSessionRequest{TargetTenantID: tenantA.TenantID, Reason: reason})
+	}
+	for _, blank := range []string{strings.Repeat(" ", 10), strings.Repeat(" ", 50), "   short    "} {
+		if r := open(blank); r.status != http.StatusUnprocessableEntity || errCodeOf(r) != ports.ErrCodeImpersonationInvalid {
+			t.Errorf("reason %q: %d %s, want 422 impersonation_invalid", blank, r.status, r.body)
+		}
+	}
+	list := f.authedJSON(t, http.MethodGet, "/api/v1/platform/impersonation/sessions", platformTok, nil)
+	var sessions ports.ListImpersonationSessionsResponse
+	if err := json.Unmarshal(list.body, &sessions); err != nil || len(sessions.Sessions) != 0 {
+		t.Fatalf("a refused reason opened a session: %s (%v)", list.body, err)
+	}
+	if r := open("   investigating ticket 4711   "); r.status != http.StatusCreated {
+		t.Fatalf("a padded reason of real length: %d %s, want 201", r.status, r.body)
+	}
+	list = f.authedJSON(t, http.MethodGet, "/api/v1/platform/impersonation/sessions", platformTok, nil)
+	if err := json.Unmarshal(list.body, &sessions); err != nil || len(sessions.Sessions) != 1 || sessions.Sessions[0].Reason != "investigating ticket 4711" {
+		t.Fatalf("the stored reason is not trimmed: %s (%v)", list.body, err)
+	}
+}
