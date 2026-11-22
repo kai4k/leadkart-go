@@ -3703,7 +3703,7 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
         '500': { $ref: '#/components/responses/InternalServerError' }
-        '422': { $ref: '#/components/responses/Unprocessable' }
+        '422': { description: "Refused before the order changes state, with the rules the consignment note enforces: `carrier_name_required`, `carrier_name_too_long` (over 200 characters), `box_count_invalid` (not above 0), `weight_grams_invalid` (not above 0), `expected_delivery_not_in_future`. Otherwise validation (`validation_failed`).", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
 
   /api/v1/orders/orders/{orderId}/invoice:
     get:
@@ -5959,7 +5959,7 @@ components:
       required: [order_id, carrier_name, box_count, weight_grams]
       properties:
         order_id:             { type: string, format: uuid }
-        carrier_name:         { type: string, minLength: 1 }
+        carrier_name:         { type: string, minLength: 1, maxLength: 200 }
         box_count:            { type: integer, format: int32, minimum: 1 }
         weight_grams:         { type: integer, format: int64, minimum: 1 }
         expected_delivery_at: { type: string, format: date-time }

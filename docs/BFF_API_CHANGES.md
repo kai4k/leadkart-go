@@ -87,6 +87,14 @@ Rank is `capabilities.rank` / `tier` (0 owner, 1 to 10 admin, 11 to 20 manager, 
 | `POST /permission-requests/{id}/cancel` | Serialised with approve and deny. | existing statuses | |
 | stamp rotation | Role assigned or revoked, overrides replaced, deactivate, reactivate, an approval (the requester), a role definition edit (every holder) end the TARGET's old access token. A change that leaves the target as it was ends nothing. Deactivation also ends the session (refresh refused). Manager changes, profile edits, denials and cancellations rotate nothing. | 401 `stale_token` + `WWW-Authenticate` on the target's next request | Refresh silently; the new token carries the new rank and permissions. |
 
+## 4a. Commerce integrity (branch `fix/commerce-integrity`)
+
+New refusals and one shape change on the orders, inventory, CRM and dispatch routes. Every code below is the `error` field of the JSON body; switch on it, never on the message. The 422 answers carry no `errors` map: the code names the rule.
+
+| Endpoint | Change | Status / code | What the web must do |
+|---|---|---|---|
+| `POST /orders/orders/{orderId}/pack` | The pack details are checked BEFORE the order moves, with the same rules the consignment note enforces (it used to move the order to `packed` and then fail in the worker, so the order never dispatched; a blank carrier was a 500). The order stays `confirmed` and nothing is published. | 422 `carrier_name_required`, `carrier_name_too_long` (over 200 characters), `box_count_invalid` (not above 0), `weight_grams_invalid` (not above 0), `expected_delivery_not_in_future` | Require carrier, boxes (at least 1), weight (at least 1 g) and a future delivery date in the pack form; show a message per code. |
+
 ## 5. Not decided yet (do not build around these)
 
 The pending-owner list in [ADR 0069](adr/0069-rank-hierarchy-and-grant-authority.md#pending-owner-confirmation) holds every controller or implementer default (rate-limit numbers, the Argon2 numbers of 2 running and 8 waiting, the 30 s refresh grace, the default password policy, ...). Only the rulings in "Decided by the owner" (the nine of 2026-11-21 included: idle timeout 24 hours, a not-active company's users cannot sign in, the 8-character default policy, and the others) are decisions; the rest may change by configuration or a later ADR.

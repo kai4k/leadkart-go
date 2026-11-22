@@ -29,6 +29,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/leadkart/leadkart-go/internal/common/parcel"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
@@ -109,25 +110,21 @@ func New(in NewInput) (*ConsignmentNote, error) {
 	if err := validateUUID("order_id", in.OrderID.String()); err != nil {
 		return nil, err
 	}
-	carrier := strings.TrimSpace(in.CarrierName)
-	if carrier == "" {
-		return nil, fmt.Errorf("%w: carrier_name required", ErrInvalid)
-	}
-	if in.BoxCount <= 0 {
-		return nil, fmt.Errorf("%w: box_count must be positive (got %d)", ErrInvalid, in.BoxCount)
-	}
-	if in.WeightGrams <= 0 {
-		return nil, fmt.Errorf("%w: weight_grams must be positive (got %d)", ErrInvalid, in.WeightGrams)
-	}
 	if err := validateUUID("created_by_membership_id", in.CreatedByMembershipID.String()); err != nil {
 		return nil, err
 	}
 	if in.Now.IsZero() {
 		return nil, fmt.Errorf("%w: now required", ErrInvalid)
 	}
-	if in.ExpectedDeliveryAt != nil && in.ExpectedDeliveryAt.Before(in.Now) {
-		return nil, fmt.Errorf("%w: expected_delivery_at must be in the future", ErrInvalid)
+	// The pack rules live in common/parcel so Orders (which checks them before
+	// it packs) and this aggregate cannot disagree.
+	if err := parcel.Validate(parcel.Details{
+		CarrierName: in.CarrierName, BoxCount: in.BoxCount,
+		WeightGrams: in.WeightGrams, ExpectedDeliveryAt: in.ExpectedDeliveryAt,
+	}, in.Now); err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
+	carrier := strings.TrimSpace(in.CarrierName)
 	cn := &ConsignmentNote{
 		id:                    in.ID,
 		tenantID:              in.TenantID,

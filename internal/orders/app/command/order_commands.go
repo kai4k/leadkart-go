@@ -2,10 +2,10 @@ package command
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"time"
 
+	"github.com/leadkart/leadkart-go/internal/common/parcel"
 	"github.com/leadkart/leadkart-go/internal/common/pg"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
@@ -179,8 +179,13 @@ func NewPackOrderHandler(uow pg.UnitOfWork, orders order.Repository, enqueuer Ou
 
 // Handle advances to packed + enqueues OrderPackedV1 in one tx.
 func (h PackOrderHandler) Handle(ctx context.Context, cmd PackOrderCommand) error {
-	if cmd.CarrierName == "" {
-		return errors.New("orders pack_order: carrier_name required")
+	// The consignment note's own rules (common/parcel), checked BEFORE any
+	// state change: a pack Dispatch would refuse must never reach `packed`.
+	if err := parcel.Validate(parcel.Details{
+		CarrierName: cmd.CarrierName, BoxCount: cmd.BoxCount,
+		WeightGrams: cmd.WeightGrams, ExpectedDeliveryAt: cmd.ExpectedDeliveryAt,
+	}, h.now().UTC()); err != nil {
+		return fmt.Errorf("orders pack_order: %w", err)
 	}
 	return h.uow.WithinTx(ctx, pg.TxScopeTenant, func(ctx context.Context) error {
 		now := h.now().UTC()
