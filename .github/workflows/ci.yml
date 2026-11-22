@@ -27,7 +27,7 @@ name: CI
 #   changes ─┬─ lint
 #            ├─ unit
 #            ├─ architecture
-#            ├─ integration (matrix × 7 shards in parallel)
+#            ├─ integration (matrix: one shard per module, cmd/api dealt across 5)
 #            ├─ openapi-lint
 #            ├─ migrations-check
 #            └─ docker (build → smoke)
@@ -173,10 +173,17 @@ jobs:
       timeout-minutes: 5
 
   # ---------------------------------------------------------------------------
-  # integration — matrix-sharded by module. 7 shards run in parallel on
-  # separate runners. Wall-time = max(shard) ≈ 2-3 min, vs ~5+ min if
-  # serialized. Each shard pre-pulls postgres:17-alpine + invokes
+  # integration — matrix-sharded by module, each shard on its own runner.
+  # Each shard pre-pulls postgres:17-alpine + invokes
   # `task ci:test:int:shard` with SHARD + PKG env vars.
+  #
+  # cmd/api holds the end-to-end suite (200+ tests, each against a real
+  # Postgres) and no longer fits one runner's 15 minutes under the race
+  # detector, so it is dealt across several runners with `slice` / `slices`.
+  # scripts/testshard builds each runner's -run pattern from `go test -list`:
+  # every test is in exactly one slice and a new test needs no change here.
+  # If a slice nears the timeout, add a slice (one more entry and a higher
+  # `slices` on all of them); do not raise the timeout.
   #
   # When adding a new module: append one matrix entry. The Taskfile
   # variant + the per-shard junit-path naming take care of the rest.
@@ -192,7 +199,11 @@ jobs:
           - { name: identity,       pkg: ./internal/identity/... }
           - { name: inventory,      pkg: ./internal/inventory/... }
           - { name: common,         pkg: ./internal/common/... }
-          - { name: cmd-api,        pkg: ./cmd/api/... }
+          - { name: cmd-api-1,      pkg: ./cmd/api/..., slice: '1', slices: '5' }
+          - { name: cmd-api-2,      pkg: ./cmd/api/..., slice: '2', slices: '5' }
+          - { name: cmd-api-3,      pkg: ./cmd/api/..., slice: '3', slices: '5' }
+          - { name: cmd-api-4,      pkg: ./cmd/api/..., slice: '4', slices: '5' }
+          - { name: cmd-api-5,      pkg: ./cmd/api/..., slice: '5', slices: '5' }
           - { name: platform,       pkg: ./internal/platform/... }
           - { name: crm,            pkg: ./internal/crm/... }
           - { name: cmd-bootstrap,  pkg: ./cmd/bootstrap/... }
@@ -205,6 +216,8 @@ jobs:
       coverage-artifact-name: coverage-integration-${{ matrix.name }}
       env-shard: ${{ matrix.name }}
       env-pkg: ${{ matrix.pkg }}
+      env-slice: ${{ matrix.slice }}
+      env-slices: ${{ matrix.slices }}
       needs-docker: true
 
   # ---------------------------------------------------------------------------

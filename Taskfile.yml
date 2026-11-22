@@ -141,11 +141,22 @@ tasks:
       (Go package selector). CI workflow's matrix strategy sets both.
       Example (local repro of the identity shard):
         SHARD=identity PKG=./internal/identity/... task ci:test:int:shard
+      A package too slow for one runner is dealt across several: set
+      SLICE (1-based) and SLICES and the shard runs only its share of
+      the package's tests. scripts/testshard builds the -run pattern from
+      `go test -list`, so every test is in exactly one slice and a new
+      test needs no change here. Example (slice 2 of 5 of cmd/api):
+        SHARD=cmd-api-2 PKG=./cmd/api/... SLICE=2 SLICES=5 task ci:test:int:shard
     vars:
       SHARD: '{{.SHARD | default "all"}}'
       PKG: '{{.PKG | default "./..."}}'
+      SLICE: '{{.SLICE | default ""}}'
+      SLICES: '{{.SLICES | default ""}}'
     cmds:
-      - go tool gotestsum --junitfile=junit-integration-{{.SHARD}}.xml --format=testname -- -race -shuffle=on -tags=integration -timeout=15m -coverprofile=coverage-integration-{{.SHARD}}.out {{.PKG}}
+      # The pattern is computed first and chained with &&: if listing the
+      # tests fails the shard fails, instead of running with an empty -run
+      # (which would mean "every test").
+      - '{{if .SLICES}}PATTERN="$(go run ./scripts/testshard -tags=integration -slice={{.SLICE}} -of={{.SLICES}} {{.PKG}})" && {{end}}go tool gotestsum --junitfile=junit-integration-{{.SHARD}}.xml --format=testname -- -race -shuffle=on -tags=integration -timeout=15m -coverprofile=coverage-integration-{{.SHARD}}.out {{if .SLICES}}-run "$PATTERN" {{end}}{{.PKG}}'
 
   test:int:compile:
     desc: 'Compile-only check for //go:build integration files. Catches broken integration tests without spinning testcontainers; runs in pre-push gate per ADR 0049 (Wave 7 surfaced an integration-tagged build failure that local `task ci` missed).'

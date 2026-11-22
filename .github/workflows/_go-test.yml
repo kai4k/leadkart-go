@@ -63,6 +63,14 @@ on:
         description: 'PKG env var (matrix-sharded task variants).'
         type: string
         default: ''
+      env-slice:
+        description: 'SLICE env var: which share of the package this job runs, 1-based (empty = the whole package).'
+        type: string
+        default: ''
+      env-slices:
+        description: 'SLICES env var: how many jobs the package is dealt across (empty = the whole package).'
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -92,6 +100,8 @@ jobs:
         env:
           SHARD: ${{ inputs.env-shard }}
           PKG: ${{ inputs.env-pkg }}
+          SLICE: ${{ inputs.env-slice }}
+          SLICES: ${{ inputs.env-slices }}
         run: task ${{ inputs.task-name }}
 
       - name: Upload coverage artifact
