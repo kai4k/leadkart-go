@@ -3652,7 +3652,7 @@ paths:
         '403': { $ref: '#/components/responses/TenantScopeReadOnly' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409':
-          description: Invalid transition or duplicate payment reference
+          description: "`token_payment_already_recorded` — the order is already `token_paid`, so its token payment was recorded; nothing is written. `invalid_state_transition` — the order is in any other state (a later one, or cancelled). `payment_duplicate_reference` — the external reference was already recorded."
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
@@ -3827,6 +3827,12 @@ paths:
     post:
       tags: [orders]
       summary: Record a payment receipt (balance / full / refund)
+      description: |
+        Kinds `full` and `refund` only. `kind: token` is refused with
+        `422 token_payment_route_required`: a token receipt must advance the
+        order, so it goes through `POST /orders/orders/{orderId}/token-payment`.
+        Other payment rules (part payments, an amount over the balance, a state
+        check) are not enforced yet: they wait for an owner decision.
       parameters:
         - { $ref: '#/components/parameters/OrderId' }
         - { $ref: '#/components/parameters/XCommandId' }
@@ -3852,7 +3858,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
-        '422': { $ref: '#/components/responses/Unprocessable' }
+        '422': { description: "`token_payment_route_required` — kind is `token`: use POST /orders/orders/{orderId}/token-payment; otherwise validation (`validation_failed`)", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
         '500': { $ref: '#/components/responses/InternalServerError' }
 
   /api/v1/orders/orders/{orderId}/credit-notes:
@@ -3863,6 +3869,12 @@ paths:
         Post-delivery return (BRD §A-014). Mints a credit_note (partial amount
         allowed) against the order's invoice with a gapless number. Requires
         `orders.orders.manage`. 404 if the order has no invoice.
+
+        The notes on one invoice (credit notes and the cancellation note
+        together) may never add up to more than the invoice's grand total:
+        a note that would pass it is `422 credit_note_exceeds_invoice` and
+        nothing is written. The check counts the notes already issued and runs
+        under a lock, so two concurrent notes cannot both fit.
       parameters:
         - { $ref: '#/components/parameters/OrderId' }
         - { $ref: '#/components/parameters/XCommandId' }
@@ -3884,7 +3896,7 @@ paths:
         '403': { $ref: '#/components/responses/TenantScopeReadOnly' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/TenantNotActive' }
-        '422': { $ref: '#/components/responses/Unprocessable' }
+        '422': { description: "`credit_note_exceeds_invoice` — the notes on the invoice, this one included, would pass its grand total; `credit_note_invalid` — a field is invalid", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
         '500': { $ref: '#/components/responses/InternalServerError' }
 
   /api/v1/crm/leads/{leadId}/lose:

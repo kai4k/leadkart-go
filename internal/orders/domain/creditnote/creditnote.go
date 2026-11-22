@@ -41,6 +41,31 @@ import (
 // ErrInvalid is the sentinel for ctor invariant violations.
 var ErrInvalid = errors.New("creditnote: invalid")
 
+// ErrExceedsInvoice — the notes on an invoice (existing + the new one) would
+// add up to more than the invoice's grand total. Map to HTTP 422.
+var ErrExceedsInvoice = errors.New("creditnote: notes would exceed the invoice total")
+
+// RemainingPaise is what may still be credited against an invoice of
+// invoiceTotalPaise that already carries the existing notes; never negative.
+func RemainingPaise(invoiceTotalPaise int64, existing []*CreditNote) int64 {
+	left := invoiceTotalPaise
+	for _, c := range existing {
+		left -= c.AmountPaise()
+	}
+	return max(left, 0)
+}
+
+// CheckWithinInvoice returns [ErrExceedsInvoice] when amountPaise would take
+// the notes on the invoice past its grand total. Credit notes and the
+// cancellation note count together: all of them reverse the same invoice.
+func CheckWithinInvoice(invoiceTotalPaise int64, existing []*CreditNote, amountPaise int64) error {
+	if remaining := RemainingPaise(invoiceTotalPaise, existing); amountPaise > remaining {
+		return fmt.Errorf("%w: %d paise requested, %d paise of %d still creditable",
+			ErrExceedsInvoice, amountPaise, remaining, invoiceTotalPaise)
+	}
+	return nil
+}
+
 // ID is a UUIDv7.
 type ID string
 

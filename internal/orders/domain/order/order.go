@@ -31,6 +31,11 @@ import (
 // ErrInvalid is the sentinel for ctor / input invariant violations. Map to HTTP 422.
 var ErrInvalid = errors.New("order: invalid")
 
+// ErrTokenAlreadyRecorded is returned by [Order.RecordTokenPayment]'s callers
+// that must not record a second token receipt: the order is already past
+// quotation_approved because its token was taken. Map to HTTP 409.
+var ErrTokenAlreadyRecorded = errors.New("order: token payment already recorded")
+
 // ErrInvalidTransition is returned for a mutator against a terminal state or an
 // illegal (cur, target) edge. Map to HTTP 409.
 var ErrInvalidTransition = errors.New("order: invalid state transition")

@@ -96,7 +96,7 @@ func (r *CreditNoteRepository) ListByInvoice(ctx context.Context, tenantID tenan
 		return nil, fmt.Errorf("orders repo: parse invoice id %q: %w", invoiceID, err)
 	}
 	var out []*creditnote.CreditNote
-	err = r.tx.WithinTxPgxTenant(ctx, tenantID.String(), func(ctx context.Context, tx pgx.Tx) error {
+	run := func(ctx context.Context, tx pgx.Tx) error {
 		rows, gerr := r.q.WithTx(tx).ListCreditNotesByInvoice(ctx, pgconv.PgUUID(iid))
 		if gerr != nil {
 			return fmt.Errorf("orders repo: list credit notes: %w", gerr)
@@ -110,7 +110,14 @@ func (r *CreditNoteRepository) ListByInvoice(ctx context.Context, tenantID tenan
 			out = append(out, hydrated)
 		}
 		return nil
-	})
+	}
+	// Inside a surrounding UoW tx, read through it: the cap check must see
+	// the notes committed before the invoice lock was granted.
+	if tx, ok := pg.TxFromContext(ctx); ok {
+		err = run(ctx, tx)
+	} else {
+		err = r.tx.WithinTxPgxTenant(ctx, tenantID.String(), run)
+	}
 	if err != nil {
 		return nil, err
 	}

@@ -32,13 +32,14 @@ type CompensateOrderCancellationCommand struct {
 // auto-reversed: per BRD §A-014 a post-delivery return is an operator-driven
 // credit note (amount may be partial) — the subscriber logs and acks.
 type CompensateOrderCancellationHandler struct {
-	invoices invoice.Repository
-	mint     MintCreditNoteHandler
+	invoices    invoice.Repository
+	creditNotes creditnote.Repository
+	mint        MintCreditNoteHandler
 }
 
 // NewCompensateOrderCancellationHandler wires the handler.
-func NewCompensateOrderCancellationHandler(invoices invoice.Repository, mint MintCreditNoteHandler) CompensateOrderCancellationHandler {
-	return CompensateOrderCancellationHandler{invoices: invoices, mint: mint}
+func NewCompensateOrderCancellationHandler(invoices invoice.Repository, creditNotes creditnote.Repository, mint MintCreditNoteHandler) CompensateOrderCancellationHandler {
+	return CompensateOrderCancellationHandler{invoices: invoices, creditNotes: creditNotes, mint: mint}
 }
 
 // CompensateOrderCancellationResult reports whether a note was minted this
@@ -63,12 +64,24 @@ func (h CompensateOrderCancellationHandler) Handle(ctx context.Context, cmd Comp
 		// visible (at-least-once redelivery handles transient lag).
 		return CompensateOrderCancellationResult{}, fmt.Errorf("orders compensate_cancellation: load invoice: %w", err)
 	}
+	// The note reverses what the invoice still stands for: its total less the
+	// credit notes already issued (an operator return before the cancel). A
+	// replay finds nothing left. A note minted between this read and the mint
+	// below fails the mint's own cap check and the subscriber retries.
+	existing, err := h.creditNotes.ListByInvoice(ctx, cmd.TenantID, inv.ID())
+	if err != nil {
+		return CompensateOrderCancellationResult{}, fmt.Errorf("orders compensate_cancellation: list notes: %w", err)
+	}
+	remaining := creditnote.RemainingPaise(inv.GrandTotalPaise(), existing)
+	if remaining == 0 {
+		return CompensateOrderCancellationResult{}, nil // already fully reversed (replay)
+	}
 	res, err := h.mint.Handle(ctx, MintCreditNoteCommand{
 		TenantID:           cmd.TenantID,
 		InvoiceID:          inv.ID(),
 		Kind:               invoicenumber.KindCancellationNote.String(),
 		Reason:             "order cancelled: " + cmd.Reason,
-		AmountPaise:        inv.GrandTotalPaise(),
+		AmountPaise:        remaining,
 		IssuedByMembership: cmd.IssuedByMembership,
 	})
 	if err != nil {
@@ -104,6 +117,8 @@ type MintCreditNoteResult struct {
 type MintCreditNoteHandler struct {
 	uow             pg.UnitOfWork
 	creditNotes     creditnote.Repository
+	invoices        invoice.Repository
+	orders          order.Repository
 	allocator       invoicenumber.Allocator
 	now             func() time.Time
 	newCreditNoteID func() creditnote.ID
@@ -111,18 +126,23 @@ type MintCreditNoteHandler struct {
 
 // NewMintCreditNoteHandler wires the handler.
 func NewMintCreditNoteHandler(
-	uow pg.UnitOfWork, creditNotes creditnote.Repository, allocator invoicenumber.Allocator,
-	now func() time.Time, newCreditNoteID func() creditnote.ID,
+	uow pg.UnitOfWork, creditNotes creditnote.Repository, invoices invoice.Repository, orders order.Repository,
+	allocator invoicenumber.Allocator, now func() time.Time, newCreditNoteID func() creditnote.ID,
 ) MintCreditNoteHandler {
 	if now == nil {
 		now = time.Now
 	}
-	return MintCreditNoteHandler{uow: uow, creditNotes: creditNotes, allocator: allocator, now: now, newCreditNoteID: newCreditNoteID}
+	return MintCreditNoteHandler{uow: uow, creditNotes: creditNotes, invoices: invoices, orders: orders, allocator: allocator, now: now, newCreditNoteID: newCreditNoteID}
 }
 
 // Handle mints the credit note atomically. Returns
 // [creditnote.ErrCancellationAlreadyExists] when a cancellation note already
-// exists for the invoice (idempotent compensation replay).
+// exists for the invoice (idempotent compensation replay), and
+// [creditnote.ErrExceedsInvoice] when the notes on the invoice, this one
+// included, would pass its grand total. The invoice's order row is locked first
+// (the invoice table is append-only, with no UPDATE policy, so it cannot be
+// locked itself), so two concurrent notes on one invoice queue and the second
+// counts the first.
 func (h MintCreditNoteHandler) Handle(ctx context.Context, cmd MintCreditNoteCommand) (MintCreditNoteResult, error) {
 	kind := invoicenumber.Kind(cmd.Kind)
 	if kind != invoicenumber.KindCreditNote && kind != invoicenumber.KindCancellationNote {
@@ -134,6 +154,25 @@ func (h MintCreditNoteHandler) Handle(ctx context.Context, cmd MintCreditNoteCom
 	var result MintCreditNoteResult
 	err := h.uow.WithinTx(ctx, pg.TxScopeTenant, func(ctx context.Context) error {
 		now := h.now().UTC()
+		inv, err := h.invoices.GetByID(ctx, cmd.TenantID, cmd.InvoiceID)
+		if err != nil {
+			return fmt.Errorf("load invoice: %w", err)
+		}
+		// Row-lock the order that owns the invoice, persisting nothing: every
+		// note on this invoice passes through here, so they serialise, and the
+		// notes listed below include every one committed before this lock.
+		if err := h.orders.UpdateByID(ctx, cmd.TenantID, inv.OrderID(), func(*order.Order) (bool, error) {
+			return false, nil
+		}); err != nil {
+			return fmt.Errorf("lock invoice order: %w", err)
+		}
+		existing, err := h.creditNotes.ListByInvoice(ctx, cmd.TenantID, inv.ID())
+		if err != nil {
+			return fmt.Errorf("list notes: %w", err)
+		}
+		if err := creditnote.CheckWithinInvoice(inv.GrandTotalPaise(), existing, cmd.AmountPaise); err != nil {
+			return err
+		}
 		num, err := h.allocator.Allocate(ctx, cmd.TenantID, invoicenumber.FromDate(now), kind)
 		if err != nil {
 			return fmt.Errorf("allocate number: %w", err)

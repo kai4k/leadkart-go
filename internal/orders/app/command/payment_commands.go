@@ -12,6 +12,11 @@ import (
 	"github.com/leadkart/leadkart-go/internal/orders/domain/payment"
 )
 
+// ErrTokenPaymentRoute is returned when POST /payments is asked for a token
+// receipt: a token must advance the order, which only the token-payment
+// command does.
+var ErrTokenPaymentRoute = errors.New("orders record_payment: token payments go through the token-payment route")
+
 // RecordPaymentCommand records a balance / full / refund receipt against an
 // order (the token receipt has its own command that also advances the order).
 // Append-only — no order transition.
@@ -52,6 +57,9 @@ func NewRecordPaymentHandler(payments payment.Repository, now func() time.Time, 
 func (h RecordPaymentHandler) Handle(ctx context.Context, cmd RecordPaymentCommand) (RecordPaymentResult, error) {
 	if cmd.TenantID == "" {
 		return RecordPaymentResult{}, errors.New("orders record_payment: tenant id required")
+	}
+	if payment.Kind(cmd.Kind) == payment.KindToken {
+		return RecordPaymentResult{}, ErrTokenPaymentRoute
 	}
 	received := cmd.ReceivedAt
 	if received.IsZero() {

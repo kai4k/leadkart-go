@@ -133,3 +133,50 @@ func TestFakeRepository_CancellationUniquenessPerInvoice(t *testing.T) {
 		t.Errorf("ListByInvoice len=%d want 3", len(list))
 	}
 }
+
+// C12: the notes on one invoice never add up to more than its total.
+func TestCheckWithinInvoice(t *testing.T) {
+	t.Parallel()
+	mk := func(amount int64) *creditnote.CreditNote {
+		c := sampleCDN(t, tenant.ID(ids.NewV7().String()), invoice.ID(ids.NewV7().String()), invoicenumber.KindCreditNote, 1)
+		// rebuild with the wanted amount
+		n, err := creditnote.New(creditnote.NewInput{
+			ID: c.ID(), TenantID: c.TenantID(), InvoiceID: c.InvoiceID(), Number: c.Number(), Kind: c.Kind(),
+			Reason: "r", AmountPaise: amount, IssuedAt: fixedNow(), IssuedByMembership: c.IssuedByMembership(),
+		})
+		if err != nil {
+			t.Fatalf("mk: %v", err)
+		}
+		return n
+	}
+	const total = 100000
+	cases := []struct {
+		name     string
+		existing []*creditnote.CreditNote
+		amount   int64
+		ok       bool
+		left     int64
+	}{
+		{"first note within total", nil, 40000, true, total},
+		{"exactly the total", nil, total, true, total},
+		{"one over the total", nil, total + 1, false, total},
+		{"second note fits the rest", []*creditnote.CreditNote{mk(60000)}, 40000, true, 40000},
+		{"second note one over the rest", []*creditnote.CreditNote{mk(60000)}, 40001, false, 40000},
+		{"nothing left", []*creditnote.CreditNote{mk(60000), mk(40000)}, 1, false, 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			err := creditnote.CheckWithinInvoice(total, tc.existing, tc.amount)
+			if tc.ok != (err == nil) {
+				t.Fatalf("CheckWithinInvoice err = %v, want ok=%v", err, tc.ok)
+			}
+			if !tc.ok && !errors.Is(err, creditnote.ErrExceedsInvoice) {
+				t.Fatalf("err = %v, want ErrExceedsInvoice", err)
+			}
+			if got := creditnote.RemainingPaise(total, tc.existing); got != tc.left {
+				t.Fatalf("RemainingPaise = %d, want %d", got, tc.left)
+			}
+		})
+	}
+}

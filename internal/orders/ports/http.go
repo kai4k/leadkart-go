@@ -112,6 +112,10 @@ func handleMintCreditNote(log *slog.Logger, a app.Application) http.Handler {
 			IssuedByMembership: actor,
 		})
 		switch {
+		case errors.Is(err, creditnote.ErrExceedsInvoice):
+			writeError(w, http.StatusUnprocessableEntity, errCodeCreditNoteExceedsInvoice, err.Error())
+		case errors.Is(err, invoice.ErrNotFound):
+			writeError(w, http.StatusNotFound, errCodeInvoiceNotFound, "order has no invoice to credit")
 		case errors.Is(err, creditnote.ErrInvalid):
 			writeError(w, http.StatusUnprocessableEntity, errCodeCreditNoteInvalid, err.Error())
 		case err != nil:
@@ -451,6 +455,9 @@ func handleRecordPayment(log *slog.Logger, a app.Application) http.Handler {
 			writeJSON(w, http.StatusCreated, RecordPaymentResponse{PaymentID: res.PaymentID.String()})
 		case errors.Is(err, payment.ErrAlreadyExistsForExternalReference):
 			writeError(w, http.StatusConflict, errCodePaymentConflict, "")
+		case errors.Is(err, command.ErrTokenPaymentRoute):
+			writeError(w, http.StatusUnprocessableEntity, errCodeTokenRoute,
+				"a token payment must be recorded with POST /orders/{orderId}/token-payment, which also advances the order")
 		case errors.Is(err, payment.ErrInvalid):
 			writeError(w, http.StatusUnprocessableEntity, errCodeValidation, err.Error())
 		default:

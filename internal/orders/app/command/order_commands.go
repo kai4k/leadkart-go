@@ -52,6 +52,21 @@ func NewRecordTokenPaymentHandler(
 func (h RecordTokenPaymentHandler) Handle(ctx context.Context, cmd RecordTokenPaymentCommand) error {
 	return h.uow.WithinTx(ctx, pg.TxScopeTenant, func(ctx context.Context) error {
 		now := h.now().UTC()
+		// Advance the order FIRST: UpdateByID row-locks it, so a repeated or
+		// concurrent token payment sees token_paid and is refused before any
+		// payment row is written (the transition alone is a self no-op, which
+		// used to let a second receipt through).
+		if err := h.orders.UpdateByID(ctx, cmd.TenantID, cmd.OrderID, func(o *order.Order) (bool, error) {
+			if o.State() == order.StateTokenPaid {
+				return false, order.ErrTokenAlreadyRecorded
+			}
+			if err := o.RecordTokenPayment(cmd.RecordedByMembership, now); err != nil {
+				return false, fmt.Errorf("advance: %w", err)
+			}
+			return true, nil
+		}); err != nil {
+			return err
+		}
 		p, err := payment.New(payment.NewInput{
 			ID:                   h.newPaymentID(),
 			TenantID:             cmd.TenantID,
@@ -71,12 +86,7 @@ func (h RecordTokenPaymentHandler) Handle(ctx context.Context, cmd RecordTokenPa
 		if err := h.payments.Add(ctx, p); err != nil {
 			return fmt.Errorf("orders record_token_payment: add payment: %w", err)
 		}
-		return h.orders.UpdateByID(ctx, cmd.TenantID, cmd.OrderID, func(o *order.Order) (bool, error) {
-			if err := o.RecordTokenPayment(cmd.RecordedByMembership, now); err != nil {
-				return false, fmt.Errorf("advance: %w", err)
-			}
-			return true, nil
-		})
+		return nil
 	})
 }
 

@@ -182,7 +182,8 @@ func TestCompensateOrderCancellation(t *testing.T) {
 	creditNotes := creditnotetest.NewFakeRepository()
 	alloc := invoicenumbertest.NewFakeAllocator()
 	uow := fakeUoW{}
-	orderID := order.ID(uuid.NewString())
+	lockOrders := ordertest.NewFakeRepository()
+	orderID := seedOrderRow(t, lockOrders, tid)
 
 	// Seed the invoice the compensation reverses.
 	num, err := alloc.Allocate(ctx, tid, "2026-27", "invoice")
@@ -198,8 +199,8 @@ func TestCompensateOrderCancellation(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, invoices.Add(ctx, inv))
 
-	mint := command.NewMintCreditNoteHandler(uow, creditNotes, alloc, now, cnID)
-	h := command.NewCompensateOrderCancellationHandler(invoices, mint)
+	mint := command.NewMintCreditNoteHandler(uow, creditNotes, invoices, lockOrders, alloc, now, cnID)
+	h := command.NewCompensateOrderCancellationHandler(invoices, creditNotes, mint)
 
 	cmd := command.CompensateOrderCancellationCommand{
 		TenantID: tid, OrderID: orderID, PriorState: order.StateInvoiced,
@@ -236,11 +237,14 @@ func TestMintCreditNote(t *testing.T) {
 	tid := tenant.ID(uuid.NewString())
 	ctx := t.Context()
 	creditNotes := creditnotetest.NewFakeRepository()
+	invoices := invoicetest.NewFakeRepository()
+	orders := ordertest.NewFakeRepository()
 	alloc := invoicenumbertest.NewFakeAllocator()
 	uow := fakeUoW{}
+	inv := seedInvoice(t, invoices, orders, alloc, tid, 100800)
 
-	res, err := command.NewMintCreditNoteHandler(uow, creditNotes, alloc, now, cnID).Handle(ctx, command.MintCreditNoteCommand{
-		TenantID: tid, InvoiceID: invoice.ID(uuid.NewString()), Kind: "cancellation_note",
+	res, err := command.NewMintCreditNoteHandler(uow, creditNotes, invoices, orders, alloc, now, cnID).Handle(ctx, command.MintCreditNoteCommand{
+		TenantID: tid, InvoiceID: inv.ID(), Kind: "cancellation_note",
 		Reason: "order cancelled post-invoice", AmountPaise: 100800, IssuedByMembership: membership.ID(uuid.NewString()),
 	})
 	require.NoError(t, err)

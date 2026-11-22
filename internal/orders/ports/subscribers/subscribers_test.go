@@ -70,8 +70,8 @@ func newFixture(t *testing.T) *fixture {
 	invoiceOrder := command.NewInvoiceOrderHandler(uow, f.orders, f.invoices, alloc, now, newInvoiceID)
 	attach := command.NewAttachConsignmentHandler(f.orders, now)
 	deliver := command.NewMarkOrderDeliveredHandler(f.orders, now)
-	mint := command.NewMintCreditNoteHandler(uow, f.notes, alloc, now, newNoteID)
-	compensate := command.NewCompensateOrderCancellationHandler(f.invoices, mint)
+	mint := command.NewMintCreditNoteHandler(uow, f.notes, f.invoices, f.orders, alloc, now, newNoteID)
+	compensate := command.NewCompensateOrderCancellationHandler(f.invoices, f.notes, mint)
 
 	f.autoInvoice = subscribers.NewAutoInvoiceSubscriber(invoiceOrder, silentLog())
 	f.created = subscribers.NewConsignmentCreatedSubscriber(invoiceOrder, attach, silentLog())

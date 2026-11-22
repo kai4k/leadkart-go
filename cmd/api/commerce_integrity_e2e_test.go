@@ -231,3 +231,133 @@ func TestE2E_Inventory_PublicMovementRouteRefusesReservationAndRelease(t *testin
 		}
 	}
 }
+
+// ordersInvoicedOrder returns the path of an order in invoiced (grand total
+// 100800: ordersSampleItems).
+func ordersInvoicedOrder(t *testing.T, f e2eFixture, tok string) string {
+	t.Helper()
+	orderPath := ordersConfirmedOrder(t, f, tok)
+	resp := f.authedJSON(t, http.MethodPost, orderPath+"/pack", tok,
+		ordersports.PackOrderRequest{CarrierName: "BlueDart", BoxCount: 1, WeightGrams: 100})
+	if resp.status != http.StatusNoContent {
+		t.Fatalf("pack: status %d body %s", resp.status, resp.body)
+	}
+	resp = f.authedJSON(t, http.MethodPost, orderPath+"/invoice", tok, nil)
+	if resp.status != http.StatusOK {
+		t.Fatalf("invoice: status %d body %s", resp.status, resp.body)
+	}
+	return orderPath
+}
+
+func ordersPaymentCount(t *testing.T, f e2eFixture, tok, orderPath string) int {
+	t.Helper()
+	resp := f.authedJSON(t, http.MethodGet, orderPath+"/payments", tok, nil)
+	var pays ordersports.ListPaymentsResponse
+	if err := json.Unmarshal(resp.body, &pays); err != nil {
+		t.Fatalf("decode payments: %v", err)
+	}
+	return len(pays.Payments)
+}
+
+// TestE2E_Orders_SecondTokenPaymentIsRefused is C11 (Go part): a repeated
+// token payment is 409 and adds no second payment row.
+func TestE2E_Orders_SecondTokenPaymentIsRefused(t *testing.T) {
+	f := newE2EFixture(t)
+	tok := f.registerAndLogin(t, "tokentwice").AccessToken
+	orderPath := ordersTokenPaidOrder(t, f, tok)
+
+	resp := f.authedJSON(t, http.MethodPost, orderPath+"/token-payment", tok, ordersports.RecordTokenPaymentRequest{
+		Method: "upi", AmountPaise: 25000, ExternalReference: "UTR-" + uuid.NewString(),
+	})
+	if resp.status != http.StatusConflict || errorCode(t, resp.body) != "token_payment_already_recorded" {
+		t.Fatalf("second token: status %d body %s; want 409 token_payment_already_recorded", resp.status, resp.body)
+	}
+	if n := ordersPaymentCount(t, f, tok, orderPath); n != 1 {
+		t.Fatalf("payments after refused second token = %d, want 1", n)
+	}
+	if got := ordersState(t, f, tok, orderPath); got != "token_paid" {
+		t.Fatalf("order state %s, want token_paid", got)
+	}
+}
+
+// TestE2E_Orders_PaymentsRouteRefusesToken is C12 (part): kind token on
+// POST /payments would write a row without advancing the order.
+func TestE2E_Orders_PaymentsRouteRefusesToken(t *testing.T) {
+	f := newE2EFixture(t)
+	tok := f.registerAndLogin(t, "paytoken").AccessToken
+	orderPath := ordersApprovedOrder(t, f, tok)
+
+	resp := f.authedJSON(t, http.MethodPost, orderPath+"/payments", tok, ordersports.RecordPaymentRequest{
+		Kind: "token", Method: "upi", AmountPaise: 25000,
+	})
+	if resp.status != http.StatusUnprocessableEntity || errorCode(t, resp.body) != "token_payment_route_required" {
+		t.Fatalf("token on /payments: status %d body %s; want 422 token_payment_route_required", resp.status, resp.body)
+	}
+	if n := ordersPaymentCount(t, f, tok, orderPath); n != 0 {
+		t.Fatalf("payments after refused token = %d, want 0", n)
+	}
+	if got := ordersState(t, f, tok, orderPath); got != "quotation_approved" {
+		t.Fatalf("order state %s, want quotation_approved", got)
+	}
+}
+
+// TestE2E_Orders_CreditNotesCappedAtInvoice is C12 (part): the notes on one
+// invoice never exceed its total (100800), sequentially and under concurrency.
+func TestE2E_Orders_CreditNotesCappedAtInvoice(t *testing.T) {
+	f := newE2EFixture(t)
+	tok := f.registerAndLogin(t, "cnnotecap").AccessToken
+	orderPath := ordersInvoicedOrder(t, f, tok)
+	mint := func(amount int64) (int, []byte) {
+		resp := f.authedJSON(t, http.MethodPost, orderPath+"/credit-notes", tok,
+			ordersports.MintCreditNoteRequest{Reason: "return", AmountPaise: amount})
+		return resp.status, resp.body
+	}
+
+	if st, body := mint(100801); st != http.StatusUnprocessableEntity || errorCode(t, body) != "credit_note_exceeds_invoice" {
+		t.Fatalf("over total: status %d body %s; want 422 credit_note_exceeds_invoice", st, body)
+	}
+	if st, body := mint(100000); st != http.StatusCreated {
+		t.Fatalf("100000: status %d body %s", st, body)
+	}
+	if st, body := mint(801); st != http.StatusUnprocessableEntity || errorCode(t, body) != "credit_note_exceeds_invoice" {
+		t.Fatalf("801 after 100000: status %d body %s; want 422", st, body)
+	}
+	if st, body := mint(800); st != http.StatusCreated {
+		t.Fatalf("800 (the exact remainder): status %d body %s", st, body)
+	}
+	if st, body := mint(1); st != http.StatusUnprocessableEntity || errorCode(t, body) != "credit_note_exceeds_invoice" {
+		t.Fatalf("1 after the invoice is fully credited: status %d body %s; want 422", st, body)
+	}
+}
+
+// TestE2E_Orders_ConcurrentCreditNotesCannotExceedInvoice fires many notes at
+// once on a fresh invoice: the invoice row lock must let exactly the notes
+// that fit through (5 x 20000 <= 100800 < 6 x 20000).
+func TestE2E_Orders_ConcurrentCreditNotesCannotExceedInvoice(t *testing.T) {
+	f := newE2EFixture(t)
+	tok := f.registerAndLogin(t, "cnnoterace").AccessToken
+	orderPath := ordersInvoicedOrder(t, f, tok)
+
+	const workers = 10
+	statuses := make(chan int, workers)
+	for range workers {
+		go func() {
+			resp := f.authedJSON(t, http.MethodPost, orderPath+"/credit-notes", tok,
+				ordersports.MintCreditNoteRequest{Reason: "race", AmountPaise: 20000})
+			statuses <- resp.status
+		}()
+	}
+	created := 0
+	for range workers {
+		switch st := <-statuses; st {
+		case http.StatusCreated:
+			created++
+		case http.StatusUnprocessableEntity:
+		default:
+			t.Fatalf("unexpected status %d from a concurrent credit note", st)
+		}
+	}
+	if created != 5 {
+		t.Fatalf("created %d notes of 20000 on a 100800 invoice, want exactly 5", created)
+	}
+}
