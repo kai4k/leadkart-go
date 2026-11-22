@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/leadkart/leadkart-go/internal/common/pagination"
+	"github.com/leadkart/leadkart-go/internal/common/textlimit"
 	"github.com/leadkart/leadkart-go/internal/crm/app"
 	"github.com/leadkart/leadkart-go/internal/crm/app/command"
 	"github.com/leadkart/leadkart-go/internal/crm/app/query"
@@ -248,6 +249,9 @@ func handleAssignLead(log *slog.Logger, a app.Application) http.Handler {
 		case errors.Is(err, command.ErrLeadTerminal):
 			writeError(w, http.StatusConflict, errCodeLeadTerminal, "")
 			return
+		case errors.Is(err, textlimit.ErrTooLong):
+			writeTooLong(w, err)
+			return
 		case err != nil:
 			log.ErrorContext(r.Context(), "crm: assign lead", "err", err)
 			writeError(w, http.StatusInternalServerError, errCodeInternalError, "")
@@ -367,6 +371,9 @@ func handleLogCall(log *slog.Logger, a app.Application) http.Handler {
 			return
 		case errors.Is(err, command.ErrLeadTerminal):
 			writeError(w, http.StatusConflict, errCodeLeadTerminal, "")
+			return
+		case errors.Is(err, textlimit.ErrTooLong):
+			writeTooLong(w, err)
 			return
 		case err != nil:
 			log.ErrorContext(r.Context(), "crm: log call", "err", err)
@@ -502,6 +509,12 @@ func filterNonEmpty(in []string) []string {
 	return out
 }
 
+// writeTooLong answers 422 "<field>_too_long" for a text over its limit.
+func writeTooLong(w http.ResponseWriter, err error) {
+	te, _ := textlimit.Of(err)
+	writeError(w, http.StatusUnprocessableEntity, te.Code(), te.Error())
+}
+
 func mapMutationErr(w http.ResponseWriter, log *slog.Logger, r *http.Request, err error, op string) {
 	switch {
 	case err == nil:
@@ -510,6 +523,8 @@ func mapMutationErr(w http.ResponseWriter, log *slog.Logger, r *http.Request, er
 		writeError(w, http.StatusNotFound, errCodeLeadNotFound, "")
 	case errors.Is(err, command.ErrLeadTerminal):
 		writeError(w, http.StatusConflict, errCodeLeadTerminal, "")
+	case errors.Is(err, textlimit.ErrTooLong):
+		writeTooLong(w, err)
 	case errors.Is(err, crmlead.ErrInvalid):
 		writeError(w, http.StatusUnprocessableEntity, errCodeInvalidStage, err.Error())
 	case errors.Is(err, crmlead.ErrTerminal):

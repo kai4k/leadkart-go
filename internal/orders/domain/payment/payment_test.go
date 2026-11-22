@@ -2,10 +2,12 @@ package payment_test
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/leadkart/leadkart-go/internal/common/ids"
+	"github.com/leadkart/leadkart-go/internal/common/textlimit"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 	"github.com/leadkart/leadkart-go/internal/orders/domain/order"
@@ -156,4 +158,38 @@ func TestFakeRepository_ListByOrder(t *testing.T) {
 
 func fmtRef(i int) string {
 	return "REF-" + string(rune('A'+i))
+}
+
+// I6: DB limits (CHECK length(): characters) are refused before the insert.
+func TestPayment_New_TextLimits(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		edit func(*payment.NewInput)
+		code string
+	}{
+		{"reference 100 chars ok", func(in *payment.NewInput) { in.ExternalReference = strings.Repeat("x", 100) }, ""},
+		{"reference 100 multibyte chars ok", func(in *payment.NewInput) { in.ExternalReference = strings.Repeat("é", 100) }, ""},
+		{"reference 101 chars", func(in *payment.NewInput) { in.ExternalReference = strings.Repeat("x", 101) }, "external_reference_too_long"},
+		{"notes 2000 chars ok", func(in *payment.NewInput) { in.Notes = strings.Repeat("x", 2000) }, ""},
+		{"notes 2001 chars", func(in *payment.NewInput) { in.Notes = strings.Repeat("x", 2001) }, "notes_too_long"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			in := sampleNewInput(t)
+			tc.edit(&in)
+			_, err := payment.New(in)
+			if tc.code == "" {
+				if err != nil {
+					t.Fatalf("want ok, got %v", err)
+				}
+				return
+			}
+			te, ok := textlimit.Of(err)
+			if !errors.Is(err, payment.ErrInvalid) || !ok || te.Code() != tc.code {
+				t.Fatalf("want ErrInvalid + %s, got %v", tc.code, err)
+			}
+		})
+	}
 }

@@ -2,12 +2,14 @@ package order_test
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 
 	"github.com/leadkart/leadkart-go/internal/common/ids"
+	"github.com/leadkart/leadkart-go/internal/common/textlimit"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 	"github.com/leadkart/leadkart-go/internal/orders/domain/order"
@@ -324,5 +326,27 @@ func TestOrder_UnmarshalFromDB_DoesNotEmit(t *testing.T) {
 	}
 	if got := len(hydrated.PullEvents()); got != 0 {
 		t.Errorf("events=%d want 0 (rehydration must not emit)", got)
+	}
+}
+
+// I6: the cancellation reason has a DB limit (1000 characters).
+func TestOrder_Cancel_ReasonTooLong(t *testing.T) {
+	t.Parallel()
+	o, err := order.New(sampleNewInput(t))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	actor := membership.ID(ids.NewV7().String())
+
+	err = o.Cancel(strings.Repeat("é", 1001), actor, fixedNow())
+	te, ok := textlimit.Of(err)
+	if !errors.Is(err, order.ErrInvalid) || !ok || te.Code() != "reason_too_long" {
+		t.Fatalf("want ErrInvalid + reason_too_long, got %v", err)
+	}
+	if o.State() == order.StateCancelled {
+		t.Fatal("a refused cancel must not change the state")
+	}
+	if err := o.Cancel(strings.Repeat("é", 1000), actor, fixedNow()); err != nil {
+		t.Fatalf("1000 characters must be accepted: %v", err)
 	}
 }

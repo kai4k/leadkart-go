@@ -21,6 +21,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/leadkart/leadkart-go/internal/common/errs"
+	"github.com/leadkart/leadkart-go/internal/common/textlimit"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
 
@@ -623,8 +624,8 @@ func (l *CrmLead) Lose(lostBy, reason string, now time.Time) error {
 	if strings.TrimSpace(reason) == "" {
 		return fmt.Errorf("%w: lose reason required for audit", ErrInvalid)
 	}
-	if len(reason) > lostReasonMax {
-		return fmt.Errorf("%w: lose reason too long (max %d, got %d)", ErrInvalid, lostReasonMax, len(reason))
+	if err := textlimit.Bytes("reason", reason, lostReasonMax); err != nil {
+		return fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
 	if l.stage.IsTerminal() {
 		return fmt.Errorf("%w: stage=%s; lose not allowed", ErrTerminal, l.stage)

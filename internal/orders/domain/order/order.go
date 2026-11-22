@@ -23,6 +23,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/leadkart/leadkart-go/internal/common/textlimit"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 	"github.com/leadkart/leadkart-go/internal/orders/domain/quotation"
@@ -30,6 +31,9 @@ import (
 
 // ErrInvalid is the sentinel for ctor / input invariant violations. Map to HTTP 422.
 var ErrInvalid = errors.New("order: invalid")
+
+// MaxCancellationReasonChars mirrors the CHECK on orders.orders.cancellation_reason.
+const MaxCancellationReasonChars = 1000
 
 // ErrTokenAlreadyRecorded is returned by [Order.RecordTokenPayment]'s callers
 // that must not record a second token receipt: the order is already past
@@ -416,6 +420,9 @@ func (o *Order) Cancel(reason string, actor membership.ID, now time.Time) error 
 	reason = strings.TrimSpace(reason)
 	if reason == "" {
 		return fmt.Errorf("%w: cancellation reason required", ErrInvalid)
+	}
+	if err := textlimit.Chars("reason", reason, MaxCancellationReasonChars); err != nil { // DB CHECK length() <= 1000
+		return fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
 	if actor == "" {
 		return fmt.Errorf("%w: actor required", ErrInvalid)

@@ -2912,6 +2912,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '422': { description: "`reason_too_long` — over 1000 bytes", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
 
   /api/v1/crm/leads/{leadId}/stage:
     post:
@@ -3018,6 +3019,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '422': { description: "`notes_too_long` — over 4000 bytes", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
 
   /api/v1/crm/leads/{leadId}/convert:
     post:
@@ -3327,7 +3329,7 @@ paths:
         '403': { $ref: '#/components/responses/TenantScopeReadOnly' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/TenantNotActive' }
-        '422': { $ref: '#/components/responses/Unprocessable' }
+        '422': { description: "`carrier_name_required`, `carrier_name_too_long` (over 200 characters), `box_count_invalid`, `weight_grams_invalid`, `expected_delivery_not_in_future`; otherwise `invalid_body`", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
         '500': { $ref: '#/components/responses/InternalServerError' }
     get:
       tags: [dispatch]
@@ -3397,7 +3399,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
-        '422': { $ref: '#/components/responses/Unprocessable' }
+        '422': { description: "`docket_number_too_long` — over 100 characters; otherwise `invalid_body`", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
         '500': { $ref: '#/components/responses/InternalServerError' }
 
   /api/v1/dispatch/consignment-notes/{consignmentNoteId}/in-transit:
@@ -3471,7 +3473,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
-        '422': { $ref: '#/components/responses/Unprocessable' }
+        '422': { description: "`reason_too_long` — over 1000 characters; otherwise `invalid_body`", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
         '500': { $ref: '#/components/responses/InternalServerError' }
 
   /api/v1/orders/quotations:
@@ -3656,7 +3658,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
-        '422': { $ref: '#/components/responses/Unprocessable' }
+        '422': { description: "`external_reference_too_long` (over 100 characters), `notes_too_long` (over 2000); otherwise validation (`validation_failed`). Nothing is written.", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
         '500': { $ref: '#/components/responses/InternalServerError' }
 
   /api/v1/orders/orders/{orderId}/confirm:
@@ -3780,7 +3782,7 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
         '500': { $ref: '#/components/responses/InternalServerError' }
-        '422': { $ref: '#/components/responses/Unprocessable' }
+        '422': { description: "`reason_too_long` — over 1000 characters; otherwise validation (`validation_failed`)", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
 
   /api/v1/orders/orders/{orderId}/complete:
     post:
@@ -3858,7 +3860,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
-        '422': { description: "`token_payment_route_required` — kind is `token`: use POST /orders/orders/{orderId}/token-payment; otherwise validation (`validation_failed`)", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+        '422': { description: "`token_payment_route_required` — kind is `token`: use POST /orders/orders/{orderId}/token-payment; `external_reference_too_long` (over 100 characters), `notes_too_long` (over 2000); otherwise validation (`validation_failed`)", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
         '500': { $ref: '#/components/responses/InternalServerError' }
 
   /api/v1/orders/orders/{orderId}/credit-notes:
@@ -3896,7 +3898,7 @@ paths:
         '403': { $ref: '#/components/responses/TenantScopeReadOnly' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/TenantNotActive' }
-        '422': { description: "`credit_note_exceeds_invoice` — the notes on the invoice, this one included, would pass its grand total; `credit_note_invalid` — a field is invalid", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+        '422': { description: "`credit_note_exceeds_invoice` — the notes on the invoice, this one included, would pass its grand total; `reason_too_long` — over 1000 characters; `credit_note_invalid` — a field is invalid", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
         '500': { $ref: '#/components/responses/InternalServerError' }
 
   /api/v1/crm/leads/{leadId}/lose:
@@ -3932,7 +3934,7 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
         '422':
-          description: Reason missing
+          description: "`reason_required` — reason missing; `reason_too_long` — over 1000 bytes (it used to be reported as `invalid_stage`)"
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
@@ -3973,7 +3975,7 @@ paths:
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/TenantNotActive' }
         '422':
-          description: Invalid due_at / assignee
+          description: "`invalid_due_at` — due_at missing or invalid; `notes_too_long` — notes over 2000 bytes (it used to be reported as `invalid_due_at`)"
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
@@ -4081,7 +4083,7 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
         '422':
-          description: Reason missing
+          description: "`reason_required` — reason missing; `reason_too_long` — over 1000 bytes (it used to be reported as `reason_required`)"
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }

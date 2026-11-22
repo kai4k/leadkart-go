@@ -12,11 +12,13 @@ package main
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 
+	dispatchports "github.com/leadkart/leadkart-go/internal/dispatch/ports"
 	invports "github.com/leadkart/leadkart-go/internal/inventory/ports"
 	ordersports "github.com/leadkart/leadkart-go/internal/orders/ports"
 )
@@ -359,5 +361,104 @@ func TestE2E_Orders_ConcurrentCreditNotesCannotExceedInvoice(t *testing.T) {
 	}
 	if created != 5 {
 		t.Fatalf("created %d notes of 20000 on a 100800 invoice, want exactly 5", created)
+	}
+}
+
+// TestE2E_Orders_TextOverItsDatabaseLimitIs422 is I6: a payment reference over
+// 100, payment notes over 2000, a cancel reason over 1000 and a credit-note
+// reason over 1000 characters were database CHECK violations (500). Each is a
+// field-named 422 now; the value at the limit still goes through.
+func TestE2E_Orders_TextOverItsDatabaseLimitIs422(t *testing.T) {
+	f := newE2EFixture(t)
+	tok := f.registerAndLogin(t, "ordertext").AccessToken
+	want := func(stage string, status int, body []byte, code string) {
+		t.Helper()
+		if status != http.StatusUnprocessableEntity || errorCode(t, body) != code {
+			t.Fatalf("%s: status %d body %s; want 422 %s", stage, status, body, code)
+		}
+	}
+
+	// Payment fields (token payment and the general payments route).
+	orderPath := ordersApprovedOrder(t, f, tok)
+	resp := f.authedJSON(t, http.MethodPost, orderPath+"/token-payment", tok, ordersports.RecordTokenPaymentRequest{
+		Method: "upi", AmountPaise: 25000, ExternalReference: strings.Repeat("r", 101),
+	})
+	want("token reference 101", resp.status, resp.body, "external_reference_too_long")
+	if got := ordersState(t, f, tok, orderPath); got != "quotation_approved" {
+		t.Fatalf("refused token payment moved the order to %s", got)
+	}
+	resp = f.authedJSON(t, http.MethodPost, orderPath+"/token-payment", tok, ordersports.RecordTokenPaymentRequest{
+		Method: "upi", AmountPaise: 25000, ExternalReference: strings.Repeat("é", 100), Notes: strings.Repeat("n", 2000),
+	})
+	if resp.status != http.StatusNoContent {
+		t.Fatalf("token payment at the limits: status %d body %s; want 204", resp.status, resp.body)
+	}
+	resp = f.authedJSON(t, http.MethodPost, orderPath+"/payments", tok, ordersports.RecordPaymentRequest{
+		Kind: "full", Method: "upi", AmountPaise: 100, ExternalReference: strings.Repeat("r", 101),
+	})
+	want("payment reference 101", resp.status, resp.body, "external_reference_too_long")
+	resp = f.authedJSON(t, http.MethodPost, orderPath+"/payments", tok, ordersports.RecordPaymentRequest{
+		Kind: "full", Method: "upi", AmountPaise: 100, Notes: strings.Repeat("n", 2001),
+	})
+	want("payment notes 2001", resp.status, resp.body, "notes_too_long")
+
+	// Cancel reason.
+	resp = f.authedJSON(t, http.MethodPost, orderPath+"/cancel", tok, ordersports.CancelOrderRequest{Reason: strings.Repeat("c", 1001)})
+	want("cancel reason 1001", resp.status, resp.body, "reason_too_long")
+	if got := ordersState(t, f, tok, orderPath); got == "cancelled" {
+		t.Fatal("refused cancel changed the order")
+	}
+	resp = f.authedJSON(t, http.MethodPost, orderPath+"/cancel", tok, ordersports.CancelOrderRequest{Reason: strings.Repeat("é", 1000)})
+	if resp.status != http.StatusNoContent {
+		t.Fatalf("cancel reason at 1000: status %d body %s; want 204", resp.status, resp.body)
+	}
+
+	// Credit-note reason.
+	invoiced := ordersInvoicedOrder(t, f, tok)
+	resp = f.authedJSON(t, http.MethodPost, invoiced+"/credit-notes", tok,
+		ordersports.MintCreditNoteRequest{Reason: strings.Repeat("c", 1001), AmountPaise: 100})
+	want("credit note reason 1001", resp.status, resp.body, "reason_too_long")
+}
+
+// TestE2E_Dispatch_TextOverItsDatabaseLimitIs422: docket number over 100 and
+// failure reason over 1000 characters, plus a carrier over 200.
+func TestE2E_Dispatch_TextOverItsDatabaseLimitIs422(t *testing.T) {
+	f := newE2EFixture(t)
+	tok := f.registerAndLogin(t, "dispatchtext").AccessToken
+	want := func(stage string, status int, body []byte, code string) {
+		t.Helper()
+		if status != http.StatusUnprocessableEntity || errorCode(t, body) != code {
+			t.Fatalf("%s: status %d body %s; want 422 %s", stage, status, body, code)
+		}
+	}
+	resp := f.authedJSON(t, http.MethodPost, "/api/v1/dispatch/consignment-notes", tok, dispatchports.CreateConsignmentNoteRequest{
+		OrderID: uuid.NewString(), CarrierName: strings.Repeat("c", 201), BoxCount: 1, WeightGrams: 100,
+	})
+	want("carrier 201", resp.status, resp.body, "carrier_name_too_long")
+
+	create := func() string {
+		resp := f.authedJSON(t, http.MethodPost, "/api/v1/dispatch/consignment-notes", tok, dispatchports.CreateConsignmentNoteRequest{
+			OrderID: uuid.NewString(), CarrierName: "BlueDart", BoxCount: 1, WeightGrams: 100,
+		})
+		var out dispatchports.CreateConsignmentNoteResponse
+		if err := json.Unmarshal(resp.body, &out); err != nil || resp.status != http.StatusCreated {
+			t.Fatalf("create note: status %d body %s", resp.status, resp.body)
+		}
+		return "/api/v1/dispatch/consignment-notes/" + out.ConsignmentNoteID
+	}
+	base := create()
+	resp = f.authedJSON(t, http.MethodPost, base+"/dispatch", tok, dispatchports.MarkDispatchedRequest{DocketNumber: strings.Repeat("d", 101)})
+	want("docket 101", resp.status, resp.body, "docket_number_too_long")
+	resp = f.authedJSON(t, http.MethodPost, base+"/dispatch", tok, dispatchports.MarkDispatchedRequest{DocketNumber: strings.Repeat("é", 100)})
+	if resp.status != http.StatusNoContent {
+		t.Fatalf("docket at 100: status %d body %s; want 204", resp.status, resp.body)
+	}
+
+	base = create()
+	resp = f.authedJSON(t, http.MethodPost, base+"/failed", tok, dispatchports.MarkFailedRequest{Reason: strings.Repeat("f", 1001)})
+	want("failure reason 1001", resp.status, resp.body, "reason_too_long")
+	resp = f.authedJSON(t, http.MethodPost, base+"/failed", tok, dispatchports.MarkFailedRequest{Reason: strings.Repeat("é", 1000)})
+	if resp.status != http.StatusNoContent {
+		t.Fatalf("failure reason at 1000: status %d body %s; want 204", resp.status, resp.body)
 	}
 }

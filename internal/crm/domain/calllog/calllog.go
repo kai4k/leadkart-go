@@ -17,6 +17,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/leadkart/leadkart-go/internal/common/errs"
+	"github.com/leadkart/leadkart-go/internal/common/textlimit"
 	"github.com/leadkart/leadkart-go/internal/crm/domain/crmlead"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
@@ -181,8 +182,8 @@ func NewWithCallback(
 	if err := validateUUIDString("logged-by membership id", strings.TrimSpace(loggedBy)); err != nil {
 		return nil, err
 	}
-	if len(notes) > notesMaxLen {
-		return nil, fmt.Errorf("%w: notes too long (max %d, got %d)", ErrInvalid, notesMaxLen, len(notes))
+	if err := textlimit.Bytes("notes", notes, notesMaxLen); err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
 	if loggedAt.IsZero() {
 		return nil, fmt.Errorf("%w: logged_at required", ErrInvalid)

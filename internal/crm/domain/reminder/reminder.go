@@ -30,6 +30,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/leadkart/leadkart-go/internal/common/errs"
+	"github.com/leadkart/leadkart-go/internal/common/textlimit"
 	"github.com/leadkart/leadkart-go/internal/crm/domain/crmlead"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
@@ -228,8 +229,8 @@ func newReminder(
 	if dueAt.IsZero() {
 		return nil, fmt.Errorf("%w: due_at required", ErrInvalid)
 	}
-	if len(notes) > notesMaxLen {
-		return nil, fmt.Errorf("%w: notes too long (max %d, got %d)", ErrInvalid, notesMaxLen, len(notes))
+	if err := textlimit.Bytes("notes", notes, notesMaxLen); err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
 	if now.IsZero() {
 		return nil, fmt.Errorf("%w: now required", ErrInvalid)
@@ -410,8 +411,8 @@ func (r *Reminder) Cancel(cancelledBy, reason string, now time.Time) error {
 	if strings.TrimSpace(reason) == "" {
 		return fmt.Errorf("%w: cancel reason required for audit", ErrInvalid)
 	}
-	if len(reason) > cancelReasonMaxLen {
-		return fmt.Errorf("%w: cancel reason too long (max %d, got %d)", ErrInvalid, cancelReasonMaxLen, len(reason))
+	if err := textlimit.Bytes("reason", reason, cancelReasonMaxLen); err != nil {
+		return fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
 	if now.IsZero() {
 		return fmt.Errorf("%w: now required", ErrInvalid)

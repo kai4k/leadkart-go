@@ -2,10 +2,12 @@ package creditnote_test
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/leadkart/leadkart-go/internal/common/ids"
+	"github.com/leadkart/leadkart-go/internal/common/textlimit"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 	"github.com/leadkart/leadkart-go/internal/orders/domain/creditnote"
@@ -178,5 +180,27 @@ func TestCheckWithinInvoice(t *testing.T) {
 				t.Fatalf("RemainingPaise = %d, want %d", got, tc.left)
 			}
 		})
+	}
+}
+
+// I6: the credit-note reason has a DB limit (1000 characters).
+func TestCreditNote_New_ReasonTooLong(t *testing.T) {
+	t.Parallel()
+	base := sampleCDN(t, tenant.ID(ids.NewV7().String()), invoice.ID(ids.NewV7().String()), invoicenumber.KindCreditNote, 1)
+	build := func(reason string) error {
+		_, err := creditnote.New(creditnote.NewInput{
+			ID: creditnote.ID(ids.NewV7().String()), TenantID: base.TenantID(), InvoiceID: base.InvoiceID(),
+			Number: base.Number(), Kind: base.Kind(), Reason: reason, AmountPaise: 1, IssuedAt: fixedNow(),
+			IssuedByMembership: base.IssuedByMembership(),
+		})
+		return err
+	}
+	if err := build(strings.Repeat("é", 1000)); err != nil {
+		t.Fatalf("1000 characters must be accepted: %v", err)
+	}
+	err := build(strings.Repeat("é", 1001))
+	te, ok := textlimit.Of(err)
+	if !errors.Is(err, creditnote.ErrInvalid) || !ok || te.Code() != "reason_too_long" {
+		t.Fatalf("want ErrInvalid + reason_too_long, got %v", err)
 	}
 }

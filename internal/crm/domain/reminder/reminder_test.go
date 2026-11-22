@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/leadkart/leadkart-go/internal/common/textlimit"
 	"github.com/leadkart/leadkart-go/internal/crm/domain/crmlead"
 	"github.com/leadkart/leadkart-go/internal/crm/domain/reminder"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
@@ -422,4 +423,16 @@ func mustNewPending(t *testing.T) *reminder.Reminder {
 		t.Fatalf("seed: %v", err)
 	}
 	return r
+}
+
+// I6: a cancel reason over its limit is a field-named, stable refusal.
+func TestCancel_ReasonTooLong_IsTextLimit(t *testing.T) {
+	t.Parallel()
+	r := mustNewPending(t)
+	_ = r.PullEvents()
+	err := r.Cancel(testCreator, strings.Repeat("x", 1001), pinnedNow().Add(time.Hour))
+	te, ok := textlimit.Of(err)
+	if !errors.Is(err, reminder.ErrInvalid) || !ok || te.Code() != "reason_too_long" {
+		t.Fatalf("want ErrInvalid + reason_too_long, got %v", err)
+	}
 }

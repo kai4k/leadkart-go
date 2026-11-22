@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/leadkart/leadkart-go/internal/common/pagination"
+	"github.com/leadkart/leadkart-go/internal/common/textlimit"
 	"github.com/leadkart/leadkart-go/internal/crm/app"
 	"github.com/leadkart/leadkart-go/internal/crm/app/command"
 	"github.com/leadkart/leadkart-go/internal/crm/app/query"
@@ -64,6 +65,9 @@ func handleCreateReminder(log *slog.Logger, a app.Application) http.Handler {
 		switch {
 		case errors.Is(err, command.ErrLeadNotFound):
 			writeError(w, http.StatusNotFound, errCodeLeadNotFound, "")
+			return
+		case errors.Is(err, textlimit.ErrTooLong):
+			writeTooLong(w, err)
 			return
 		case errors.Is(err, reminder.ErrInvalid):
 			writeError(w, http.StatusUnprocessableEntity, errCodeInvalidDueAt, err.Error())
@@ -242,6 +246,8 @@ func mapReminderMutationErr(w http.ResponseWriter, log *slog.Logger, r *http.Req
 		writeError(w, http.StatusNotFound, errCodeReminderNotFound, "")
 	case errors.Is(err, command.ErrReminderTerminal):
 		writeError(w, http.StatusConflict, errCodeReminderTerminal, "")
+	case errors.Is(err, textlimit.ErrTooLong):
+		writeTooLong(w, err)
 	case errors.Is(err, reminder.ErrInvalid):
 		writeError(w, http.StatusUnprocessableEntity, errCodeReasonRequired, err.Error())
 	default:

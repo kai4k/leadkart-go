@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/leadkart/leadkart-go/internal/common/textlimit"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/permission"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 	"github.com/leadkart/leadkart-go/internal/identity/ports/authn"
@@ -116,6 +117,9 @@ func handleMintCreditNote(log *slog.Logger, a app.Application) http.Handler {
 			writeError(w, http.StatusUnprocessableEntity, errCodeCreditNoteExceedsInvoice, err.Error())
 		case errors.Is(err, invoice.ErrNotFound):
 			writeError(w, http.StatusNotFound, errCodeInvoiceNotFound, "order has no invoice to credit")
+		case errors.Is(err, textlimit.ErrTooLong):
+			te, _ := textlimit.Of(err)
+			writeError(w, http.StatusUnprocessableEntity, te.Code(), te.Error())
 		case errors.Is(err, creditnote.ErrInvalid):
 			writeError(w, http.StatusUnprocessableEntity, errCodeCreditNoteInvalid, err.Error())
 		case err != nil:
@@ -455,6 +459,9 @@ func handleRecordPayment(log *slog.Logger, a app.Application) http.Handler {
 			writeJSON(w, http.StatusCreated, RecordPaymentResponse{PaymentID: res.PaymentID.String()})
 		case errors.Is(err, payment.ErrAlreadyExistsForExternalReference):
 			writeError(w, http.StatusConflict, errCodePaymentConflict, "")
+		case errors.Is(err, textlimit.ErrTooLong):
+			te, _ := textlimit.Of(err)
+			writeError(w, http.StatusUnprocessableEntity, te.Code(), te.Error())
 		case errors.Is(err, command.ErrTokenPaymentRoute):
 			writeError(w, http.StatusUnprocessableEntity, errCodeTokenRoute,
 				"a token payment must be recorded with POST /orders/{orderId}/token-payment, which also advances the order")

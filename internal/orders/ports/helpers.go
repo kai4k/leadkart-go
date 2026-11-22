@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/leadkart/leadkart-go/internal/common/parcel"
+	"github.com/leadkart/leadkart-go/internal/common/textlimit"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 	"github.com/leadkart/leadkart-go/internal/identity/ports/authn"
@@ -126,6 +127,9 @@ func mapOrderMutation(w http.ResponseWriter, log *slog.Logger, r *http.Request, 
 		writeError(w, http.StatusConflict, errCodeInvalidTransition, err.Error())
 	case errors.Is(err, payment.ErrAlreadyExistsForExternalReference):
 		writeError(w, http.StatusConflict, errCodePaymentConflict, "")
+	case errors.Is(err, textlimit.ErrTooLong):
+		te, _ := textlimit.Of(err)
+		writeError(w, http.StatusUnprocessableEntity, te.Code(), te.Error())
 	case errors.Is(err, parcel.ErrInvalid):
 		var pe *parcel.Error
 		errors.As(err, &pe)

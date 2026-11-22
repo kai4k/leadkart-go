@@ -32,11 +32,15 @@ import (
 	"strings"
 	"time"
 
+	"github.com/leadkart/leadkart-go/internal/common/textlimit"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 	"github.com/leadkart/leadkart-go/internal/orders/domain/invoice"
 	"github.com/leadkart/leadkart-go/internal/orders/domain/invoicenumber"
 )
+
+// MaxReasonChars mirrors the CHECK on orders.credit_notes.reason.
+const MaxReasonChars = 1000
 
 // ErrInvalid is the sentinel for ctor invariant violations.
 var ErrInvalid = errors.New("creditnote: invalid")
@@ -126,6 +130,9 @@ func New(in NewInput) (*CreditNote, error) {
 	reason := strings.TrimSpace(in.Reason)
 	if reason == "" {
 		return nil, fmt.Errorf("%w: reason required", ErrInvalid)
+	}
+	if err := textlimit.Chars("reason", reason, MaxReasonChars); err != nil { // DB CHECK length() BETWEEN 1 AND 1000
+		return nil, fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
 	if in.AmountPaise <= 0 {
 		return nil, fmt.Errorf("%w: amount_paise must be positive (got %d)", ErrInvalid, in.AmountPaise)

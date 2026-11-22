@@ -23,6 +23,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/leadkart/leadkart-go/internal/common/errs"
+	"github.com/leadkart/leadkart-go/internal/common/textlimit"
 	"github.com/leadkart/leadkart-go/internal/crm/domain/crmlead"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
@@ -101,8 +102,8 @@ func New(id ID, tenantID tenant.ID, leadID crmlead.ID, previousAssignee, assigne
 	if err := validateOptionalUUID("previous assignee membership id", strings.TrimSpace(previousAssignee)); err != nil {
 		return nil, err
 	}
-	if len(reason) > reasonMaxLen {
-		return nil, fmt.Errorf("%w: reason too long (max %d, got %d)", ErrInvalid, reasonMaxLen, len(reason))
+	if err := textlimit.Bytes("reason", reason, reasonMaxLen); err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
 	if assignedAt.IsZero() {
 		return nil, fmt.Errorf("%w: assigned_at required", ErrInvalid)

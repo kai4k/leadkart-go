@@ -2,9 +2,11 @@ package crmlead_test
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/leadkart/leadkart-go/internal/common/textlimit"
 	"github.com/leadkart/leadkart-go/internal/crm/domain/crmlead"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
@@ -547,5 +549,20 @@ func TestUnmarshalFromDB_RoundTrip(t *testing.T) {
 	}
 	if l.PullEvents() != nil {
 		t.Fatal("UnmarshalFromDB should emit no events")
+	}
+}
+
+// I6: a lose reason over its limit is a field-named, stable refusal (it used to
+// travel to the wire as invalid_stage).
+func TestLose_ReasonTooLong_IsTextLimit(t *testing.T) {
+	t.Parallel()
+	l := newLead(t)
+	err := l.Lose(tidMemCloser, strings.Repeat("x", 1001), fixedNow)
+	te, ok := textlimit.Of(err)
+	if !errors.Is(err, crmlead.ErrInvalid) || !ok || te.Code() != "reason_too_long" {
+		t.Fatalf("want ErrInvalid + reason_too_long, got %v", err)
+	}
+	if l.Stage() == crmlead.StageLost {
+		t.Fatal("a refused lose must not change the stage")
 	}
 }

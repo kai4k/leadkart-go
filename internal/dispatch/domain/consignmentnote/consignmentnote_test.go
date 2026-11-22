@@ -2,12 +2,15 @@ package consignmentnote_test
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 
 	"github.com/leadkart/leadkart-go/internal/common/ids"
+	"github.com/leadkart/leadkart-go/internal/common/parcel"
+	"github.com/leadkart/leadkart-go/internal/common/textlimit"
 	"github.com/leadkart/leadkart-go/internal/dispatch/domain/consignmentnote"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
@@ -250,4 +253,38 @@ func TestParseStatus(t *testing.T) {
 	if _, err := consignmentnote.ParseStatus("nonsense"); !errors.Is(err, consignmentnote.ErrInvalid) {
 		t.Errorf("ParseStatus bad: got %v want ErrInvalid", err)
 	}
+}
+
+// I6: docket number and failure reason have DB limits (100 / 1000 characters);
+// a carrier name over 200 is refused by the shared pack rules.
+func TestConsignmentNote_TextLimits(t *testing.T) {
+	t.Parallel()
+	wantCode := func(t *testing.T, err error, code string) {
+		t.Helper()
+		te, ok := textlimit.Of(err)
+		if !errors.Is(err, consignmentnote.ErrInvalid) || !ok || te.Code() != code {
+			t.Fatalf("want ErrInvalid + %s, got %v", code, err)
+		}
+	}
+	actor := membership.ID(ids.NewV7().String())
+
+	cn, err := consignmentnote.New(sampleNewInput(t))
+	require.NoError(t, err)
+	wantCode(t, cn.MarkDispatched(strings.Repeat("d", 101), actor, fixedNow()), "docket_number_too_long")
+	require.Equal(t, consignmentnote.StatusPending, cn.Status(), "a refused docket must not advance the note")
+	require.NoError(t, cn.MarkDispatched(strings.Repeat("é", 100), actor, fixedNow()))
+
+	cn2, err := consignmentnote.New(sampleNewInput(t))
+	require.NoError(t, err)
+	wantCode(t, cn2.MarkFailed(strings.Repeat("é", 1001), actor, fixedNow()), "reason_too_long")
+	require.Equal(t, consignmentnote.StatusPending, cn2.Status())
+	require.NoError(t, cn2.MarkFailed(strings.Repeat("é", 1000), actor, fixedNow()))
+
+	in := sampleNewInput(t)
+	in.CarrierName = strings.Repeat("c", 201)
+	_, err = consignmentnote.New(in)
+	require.ErrorIs(t, err, consignmentnote.ErrInvalid)
+	var pe *parcel.Error
+	require.ErrorAs(t, err, &pe)
+	require.Equal(t, parcel.CodeCarrierTooLong, pe.Code)
 }

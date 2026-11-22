@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/leadkart/leadkart-go/internal/common/parcel"
+	"github.com/leadkart/leadkart-go/internal/common/textlimit"
 	"github.com/leadkart/leadkart-go/internal/dispatch/app"
 	"github.com/leadkart/leadkart-go/internal/dispatch/app/command"
 	"github.com/leadkart/leadkart-go/internal/dispatch/app/query"
@@ -95,7 +97,7 @@ func handleCreate(log *slog.Logger, a app.Application) http.Handler {
 				AlreadyExisted:    out.AlreadyExisted,
 			})
 		case errors.Is(err, consignmentnote.ErrInvalid):
-			writeError(w, http.StatusUnprocessableEntity, errCodeInvalidBody, err.Error())
+			writeInvalid(w, err)
 		default:
 			log.ErrorContext(r.Context(), "dispatch: create consignment note", "err", err)
 			writeError(w, http.StatusInternalServerError, errCodeInternalError, "")
@@ -274,6 +276,22 @@ func parseConsignmentNoteID(w http.ResponseWriter, r *http.Request) (consignment
 	return consignmentnote.ID(id), true
 }
 
+// writeInvalid answers 422 for a domain refusal: the stable code of the rule
+// broken when it has one (a pack rule from common/parcel, a text over its
+// limit), else the generic invalid_body.
+func writeInvalid(w http.ResponseWriter, err error) {
+	var pe *parcel.Error
+	if errors.As(err, &pe) {
+		writeError(w, http.StatusUnprocessableEntity, pe.Code, pe.Detail)
+		return
+	}
+	if te, ok := textlimit.Of(err); ok {
+		writeError(w, http.StatusUnprocessableEntity, te.Code(), te.Error())
+		return
+	}
+	writeError(w, http.StatusUnprocessableEntity, errCodeInvalidBody, err.Error())
+}
+
 func mapMutationErr(w http.ResponseWriter, log *slog.Logger, r *http.Request, err error, op string) {
 	switch {
 	case err == nil:
@@ -283,7 +301,7 @@ func mapMutationErr(w http.ResponseWriter, log *slog.Logger, r *http.Request, er
 	case errors.Is(err, consignmentnote.ErrInvalidTransition):
 		writeError(w, http.StatusConflict, errCodeInvalidStatusTransition, err.Error())
 	case errors.Is(err, consignmentnote.ErrInvalid):
-		writeError(w, http.StatusUnprocessableEntity, errCodeInvalidBody, err.Error())
+		writeInvalid(w, err)
 	default:
 		log.ErrorContext(r.Context(), "dispatch: "+op, "err", err)
 		writeError(w, http.StatusInternalServerError, errCodeInternalError, "")

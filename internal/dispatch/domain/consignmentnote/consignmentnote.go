@@ -30,8 +30,16 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/leadkart/leadkart-go/internal/common/parcel"
+	"github.com/leadkart/leadkart-go/internal/common/textlimit"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
+)
+
+// Limits mirroring the CHECK constraints on dispatch.consignment_notes, in
+// characters (carrier_name's 200 lives with the pack rules in common/parcel).
+const (
+	MaxDocketNumberChars  = 100
+	MaxFailureReasonChars = 1000
 )
 
 // ErrInvalid is the sentinel for ctor / mutator invariant violations.
@@ -269,6 +277,9 @@ func (cn *ConsignmentNote) MarkDispatched(docketNumber string, actor membership.
 	if doc == "" {
 		return fmt.Errorf("%w: docket_number required", ErrInvalid)
 	}
+	if err := textlimit.Chars("docket_number", doc, MaxDocketNumberChars); err != nil { // DB CHECK length() <= 100
+		return fmt.Errorf("%w: %w", ErrInvalid, err)
+	}
 	if cn.status == StatusDispatched {
 		if cn.docketNumber != doc {
 			return fmt.Errorf("%w: docket_number mismatch on re-mark (existing %q, supplied %q)",
@@ -319,6 +330,9 @@ func (cn *ConsignmentNote) MarkFailed(reason string, actor membership.ID, now ti
 	r := strings.TrimSpace(reason)
 	if r == "" {
 		return fmt.Errorf("%w: failure reason required", ErrInvalid)
+	}
+	if err := textlimit.Chars("reason", r, MaxFailureReasonChars); err != nil { // DB CHECK length() <= 1000
+		return fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
 	if err := cn.advance(StatusFailed, actor, now); err != nil {
 		return err

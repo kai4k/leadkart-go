@@ -20,9 +20,16 @@ import (
 	"strings"
 	"time"
 
+	"github.com/leadkart/leadkart-go/internal/common/textlimit"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 	"github.com/leadkart/leadkart-go/internal/orders/domain/order"
+)
+
+// Limits mirroring the CHECK constraints on orders.payments, in characters.
+const (
+	MaxExternalReferenceChars = 100
+	MaxNotesChars             = 2000
 )
 
 // ErrInvalid is the sentinel for ctor invariant violations.
@@ -153,6 +160,15 @@ func New(in NewInput) (*Payment, error) {
 	if in.RecordedByMembership == "" {
 		return nil, fmt.Errorf("%w: recorded_by_membership required", ErrInvalid)
 	}
+	extRef := strings.TrimSpace(in.ExternalReference)
+	notes := strings.TrimSpace(in.Notes)
+	// DB: external_reference <= 100, notes <= 2000 characters (CHECK length()).
+	if err := textlimit.Chars("external_reference", extRef, MaxExternalReferenceChars); err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrInvalid, err)
+	}
+	if err := textlimit.Chars("notes", notes, MaxNotesChars); err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrInvalid, err)
+	}
 	return &Payment{
 		id:                   in.ID,
 		tenantID:             in.TenantID,
@@ -160,8 +176,8 @@ func New(in NewInput) (*Payment, error) {
 		kind:                 in.Kind,
 		method:               in.Method,
 		amountPaise:          in.AmountPaise,
-		externalReference:    strings.TrimSpace(in.ExternalReference),
-		notes:                strings.TrimSpace(in.Notes),
+		externalReference:    extRef,
+		notes:                notes,
 		receivedAt:           in.ReceivedAt,
 		recordedAt:           in.RecordedAt,
 		recordedByMembership: in.RecordedByMembership,
