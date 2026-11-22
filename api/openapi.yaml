@@ -2715,6 +2715,11 @@ paths:
         Rejections (409): insufficient_stock (Outbound > on-hand),
         batch_expired (Inbound on expired batch), conflict (concurrent
         modification after retry cap).
+
+        Only `inbound`, `outbound` and `adjustment` are accepted here.
+        `reservation` and `release` belong to the order saga; asking for
+        them (or any other type) is `422 invalid_movement_type`, nothing
+        written.
       parameters:
         - $ref: '#/components/parameters/XCommandId'
         - { $ref: '#/components/parameters/BatchId' }
@@ -2739,7 +2744,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
-        '422': { $ref: '#/components/responses/Unprocessable' }
+        '422': { description: "`invalid_movement_type` — type is not inbound, outbound or adjustment (`reservation` and `release` are not public); otherwise validation (`validation_failed`)", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
 
     get:
       tags: [inventory]
@@ -5830,7 +5835,7 @@ components:
       type: object
       required: [type, quantity, reason]
       properties:
-        type:             { type: string, enum: [inbound, outbound, adjustment, reservation, release] }
+        type:             { type: string, enum: [inbound, outbound, adjustment, reservation, release], description: 'This route accepts only inbound, outbound and adjustment; reservation and release are the order saga''s and answer 422 invalid_movement_type. (The enum is shared with the movement ledger read shape.)' }
         quantity:         { type: integer, format: int64, minimum: 1, description: 'Positive magnitude; direction implicit in type.' }
         reason:           { type: string, minLength: 1, maxLength: 500 }
         source_reference: { type: string, maxLength: 200 }

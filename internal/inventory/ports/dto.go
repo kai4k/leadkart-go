@@ -35,11 +35,11 @@ type ProductDto struct {
 
 // CreateProductRequest — POST /api/v1/inventory/products.
 type CreateProductRequest struct {
-	SKU          string `json:"sku"`
-	Name         string `json:"name"`
-	DosageForm   string `json:"dosage_form"`
-	PackSize     string `json:"pack_size"`
-	HSNCode      string `json:"hsn_code"`
+	SKU        string `json:"sku"`
+	Name       string `json:"name"`
+	DosageForm string `json:"dosage_form"`
+	PackSize   string `json:"pack_size"`
+	HSNCode    string `json:"hsn_code"`
 	// GSTRateBps is optional: absent takes the category default, an explicit
 	// 0 is stored as 0 (nil-rated medicines exist).
 	GSTRateBps   *int   `json:"gst_rate_bps,omitzero"`
@@ -200,6 +200,7 @@ const (
 	ErrCodeInvalidID           = "invalid_id"
 	ErrCodeInvalidPayload      = "invalid_payload"
 	ErrCodeValidationFailed    = "validation_failed"
+	ErrCodeInvalidMovementType = "invalid_movement_type"
 	ErrCodeNotFound            = "not_found"
 	ErrCodeConflict            = "conflict"
 	ErrCodeAlreadyExists       = "already_exists"

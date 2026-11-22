@@ -457,6 +457,14 @@ func handleLogStockMovement(log *slog.Logger, a app.Application) http.Handler {
 			writeError(w, http.StatusBadRequest, ErrCodeInvalidBody, "request body is not valid JSON")
 			return
 		}
+		// Reservation and release are the order saga's bookkeeping, applied by
+		// the order-event handlers; a person must not forge or drop an
+		// order's hold here. Only the three manual types are public.
+		if !isPublicMovementType(batch.MovementType(req.Type)) {
+			writeError(w, http.StatusUnprocessableEntity, ErrCodeInvalidMovementType,
+				"type must be one of inbound, outbound, adjustment")
+			return
+		}
 		out, err := a.Commands.LogStockMovement.Handle(r.Context(), command.LogStockMovementCommand{
 			TenantID:          tenant.ID(effTenant),
 			BatchID:           batch.ID(batchID.String()),
@@ -702,5 +710,16 @@ func movementViewToDto(v query.MovementView) MovementDto {
 		// ADR 0061 amendment 1 (M3) — View stores *string.
 		SourceReference: v.SourceReference,
 		OccurredAt:      v.OccurredAt,
+	}
+}
+
+// isPublicMovementType reports whether t may be logged through the public
+// movement route: the three manual types, never the saga-owned ones.
+func isPublicMovementType(t batch.MovementType) bool {
+	switch t {
+	case batch.MovementInbound, batch.MovementOutbound, batch.MovementAdjustment:
+		return true
+	default:
+		return false
 	}
 }

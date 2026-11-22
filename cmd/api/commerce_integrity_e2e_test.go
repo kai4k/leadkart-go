@@ -180,3 +180,54 @@ func TestE2E_Inventory_ZeroGSTRateIsKept(t *testing.T) {
 		t.Fatalf("updated to 0 but reads %d", got)
 	}
 }
+
+// invProductWithBatch creates a product and one live batch; returns both ids.
+func invProductWithBatch(t *testing.T, f e2eFixture, tok, sku string) (productID, batchID string) {
+	t.Helper()
+	resp := f.authedJSON(t, http.MethodPost, "/api/v1/inventory/products", tok, invports.CreateProductRequest{
+		SKU: sku, Name: "Product " + sku, DosageForm: "tablet", PackSize: "10x10", HSNCode: "30049099",
+		GSTRateBps: new(1200),
+	})
+	if resp.status != http.StatusCreated {
+		t.Fatalf("create product: status %d body %s", resp.status, resp.body)
+	}
+	var p invports.CreateProductResponse
+	if err := json.Unmarshal(resp.body, &p); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	resp = f.authedJSON(t, http.MethodPost, "/api/v1/inventory/products/"+p.ProductID+"/batches", tok, invports.AddBatchRequest{
+		BatchNumber: "B-" + sku, ManufactureDate: time.Now().AddDate(0, -3, 0), ExpiryDate: time.Now().AddDate(2, 0, 0),
+		ManufacturerName: "Acme", ManufacturingLicenceNumber: "ML-1", MRPPaise: 25000, PurchasePricePaise: 18000,
+	})
+	if resp.status != http.StatusCreated {
+		t.Fatalf("add batch: status %d body %s", resp.status, resp.body)
+	}
+	var b invports.AddBatchResponse
+	if err := json.Unmarshal(resp.body, &b); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	return p.ProductID, b.BatchID
+}
+
+// TestE2E_Inventory_PublicMovementRouteRefusesReservationAndRelease is I3: a
+// stock user must not forge or drop an order's hold through the public route.
+func TestE2E_Inventory_PublicMovementRouteRefusesReservationAndRelease(t *testing.T) {
+	f := newE2EFixture(t)
+	tok := f.registerAndLogin(t, "movetype").AccessToken
+	_, batchID := invProductWithBatch(t, f, tok, "MOVE-1")
+	path := "/api/v1/inventory/batches/" + batchID + "/movements"
+
+	for _, typ := range []string{"reservation", "release", "bogus", ""} {
+		resp := f.authedJSON(t, http.MethodPost, path, tok, invports.LogMovementRequest{Type: typ, Quantity: 1, Reason: "forged"})
+		if resp.status != http.StatusUnprocessableEntity || errorCode(t, resp.body) != "invalid_movement_type" {
+			t.Fatalf("type %q: status %d body %s; want 422 invalid_movement_type", typ, resp.status, resp.body)
+		}
+	}
+	// The three public types still work.
+	for _, typ := range []string{"inbound", "adjustment", "outbound"} {
+		resp := f.authedJSON(t, http.MethodPost, path, tok, invports.LogMovementRequest{Type: typ, Quantity: 1, Reason: "ok"})
+		if resp.status != http.StatusCreated {
+			t.Fatalf("type %q: status %d body %s; want 201", typ, resp.status, resp.body)
+		}
+	}
+}
