@@ -226,17 +226,17 @@ func TestError_WireCodesAndSentinel(t *testing.T) {
 func TestValid_MalayalamChilluWithAJoinerIsAName(t *testing.T) {
 	t.Parallel()
 	const (
-		nna = "ണ" // ണ
-		vir = "്" // ് malayalam virama
-		zwj = "‍"
-		ka  = "ക" // ക
+		nna = "\u0d23" //
+		vir = "\u0d4d" //  malayalam virama
+		zwj = "\u200d"
+		ka  = "\u0d15" //
 	)
-	chillu := nna + vir + zwj // ണ്‍ (chillu NN, legacy spelling)
+	chillu := nna + vir + zwj // chillu NN, legacy spelling
 	cases := []struct{ name, in string }{
 		{"the chillu alone", chillu},
 		{"chillu at the end of a word", ka + chillu},
 		{"chillu mid-string before a space", ka + chillu + " " + ka},
-		{"chillu before a no-break space", ka + chillu + " " + ka},
+		{"chillu before a no-break space", ka + chillu + "\u00a0" + ka},
 		{"two chillus in two words", chillu + " " + chillu},
 	}
 	for _, c := range cases {
@@ -253,14 +253,14 @@ func TestValid_MalayalamChilluWithAJoinerIsAName(t *testing.T) {
 func TestValid_OnlyTheMalayalamChilluJoinerIsAllowedAtAWordEnd(t *testing.T) {
 	t.Parallel()
 	const (
-		zwj    = "‍"
-		zwnj   = "‌"
-		mlVir  = "്"
-		mlNna  = "ണ"
-		devKa  = "क"
-		devVir = "्"
-		taVir  = "்" // Tamil pulli
-		taKa   = "க"
+		zwj    = "\u200d"
+		zwnj   = "\u200c"
+		mlVir  = "\u0d4d"
+		mlNna  = "\u0d23"
+		devKa  = "\u0915"
+		devVir = "\u094d"
+		taVir  = "\u0bcd" // Tamil pulli
+		taKa   = "\u0b95"
 	)
 	cases := []struct{ name, in string }{
 		{"Devanagari virama + ZWJ at word end", devKa + devVir + zwj},
@@ -273,7 +273,7 @@ func TestValid_OnlyTheMalayalamChilluJoinerIsAllowedAtAWordEnd(t *testing.T) {
 		{"Malayalam virama + ZWJ before a digit", mlNna + mlVir + zwj + "1"},
 		{"Malayalam virama + ZWJ before punctuation", mlNna + mlVir + zwj + "."},
 		{"Malayalam virama + ZWJ before a control", mlNna + mlVir + zwj + "\x00"},
-		{"Malayalam virama + ZWJ before a bidi override", mlNna + mlVir + zwj + "‮"},
+		{"Malayalam virama + ZWJ before a bidi override", mlNna + mlVir + zwj + "\u202e"},
 		{"Malayalam virama + ZWJ before an emoji", mlNna + mlVir + zwj + "\U0001F468"},
 		{"ZWJ after a space", " " + zwj},
 		{"emoji family sequence", "\U0001F468" + zwj + "\U0001F469"},

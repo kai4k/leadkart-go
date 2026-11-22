@@ -118,7 +118,8 @@ func Valid(s string) bool {
 		switch {
 		case r == zwnj || r == zwj:
 			next, size := utf8.DecodeRuneInString(s[i+utf8.RuneLen(r):])
-			if !insideWord(prev, next) && !(r == zwj && malayalamChillu(prev, next, size)) {
+			chillu := r == zwj && malayalamChillu(prev, next, size)
+			if !insideWord(prev, next) && !chillu {
 				return false
 			}
 		case refused(r):
