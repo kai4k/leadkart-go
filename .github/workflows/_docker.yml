@@ -107,12 +107,29 @@ jobs:
       # stack refuses to start without an explicit JWT signing key + key
       # ID (canon — secrets must NOT have placeholder defaults). Mint
       # an ephemeral pair per CI run.
-      - name: Mint ephemeral JWT secrets for smoke
+      #
+      # The smoke script signs in as the platform operator before it
+      # registers a tenant (tenant registration is operator-only), so the
+      # bootstrap service needs SuperAdmin credentials as well: without
+      # them bootstrap skips, no operator exists, and the script's first
+      # login fails. One fresh password per run, masked in the logs and
+      # handed to the script through the job environment.
+      - name: Mint ephemeral JWT secrets and operator credentials for smoke
         run: |
+          SMOKE_SUPERADMIN_PASSWORD="Ci-$(openssl rand -hex 12)-A1!"
+          echo "::add-mask::${SMOKE_SUPERADMIN_PASSWORD}"
           {
             echo "LEADKART_JWT__KEY_ID=ci-smoke-$(date +%s)"
             echo "LEADKART_JWT__SIGNING_KEY=$(openssl rand -hex 32)"
+            echo "LEADKART_SUPERADMIN__EMAIL=superadmin@leadkart.local"
+            echo "LEADKART_SUPERADMIN__PASSWORD=${SMOKE_SUPERADMIN_PASSWORD}"
+            echo "LEADKART_SUPERADMIN__FIRST_NAME=Platform"
+            echo "LEADKART_SUPERADMIN__LAST_NAME=SuperAdmin"
           } > docker/.env
+          {
+            echo "SUPERADMIN_EMAIL=superadmin@leadkart.local"
+            echo "SUPERADMIN_PASSWORD=${SMOKE_SUPERADMIN_PASSWORD}"
+          } >> "$GITHUB_ENV"
 
       - name: Bring up full stack
         run: |
