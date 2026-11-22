@@ -180,8 +180,8 @@ func TestE2E_Overrides_DuplicateRevokedIsOneAndOverlapIsAFieldError(t *testing.T
 		t.Fatalf("name in both lists: %d %s, want 422", r.status, r.body)
 	}
 	er := decodeError(t, r.body)
-	if er.Error != "validation_failed" || len(er.Errors["revoked"]) != 1 {
-		t.Fatalf("422 body = %s, want validation_failed with errors.revoked naming the permission", r.body)
+	if er.Error != "validation_failed" || len(er.Errors["revoked"]) != 1 || er.Errors["revoked"][0] != "also_granted" {
+		t.Fatalf("422 body = %s, want validation_failed with errors.revoked = [also_granted]", r.body)
 	}
 }
 
