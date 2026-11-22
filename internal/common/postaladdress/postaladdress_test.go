@@ -120,3 +120,45 @@ func TestZeroIsZero(t *testing.T) {
 		t.Errorf("zero String() = %q", a.String())
 	}
 }
+
+func TestNew_RefusalNamesThePartAndACode(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name                                              string
+		street, city, district, state, stateCode, pincode string
+		part, reason                                      string
+	}{
+		{"street blank", "", "C", "D", "S", "KA", "560001", postaladdress.PartStreet, postaladdress.ReasonRequired},
+		{"street long", strings.Repeat("X", 201), "C", "D", "S", "KA", "560001", postaladdress.PartStreet, postaladdress.ReasonTooLong},
+		{"city blank", "St", "", "D", "S", "KA", "560001", postaladdress.PartCity, postaladdress.ReasonRequired},
+		{"city long", "St", strings.Repeat("X", 81), "D", "S", "KA", "560001", postaladdress.PartCity, postaladdress.ReasonTooLong},
+		{"district long", "St", "C", strings.Repeat("X", 81), "S", "KA", "560001", postaladdress.PartDistrict, postaladdress.ReasonTooLong},
+		{"state blank", "St", "C", "D", "", "KA", "560001", postaladdress.PartState, postaladdress.ReasonRequired},
+		{"state long", "St", "C", "D", strings.Repeat("X", 81), "KA", "560001", postaladdress.PartState, postaladdress.ReasonTooLong},
+		{"state code long", "St", "C", "D", "S", "KARNT", "560001", postaladdress.PartStateCode, postaladdress.ReasonTooLong},
+		{"pincode blank", "St", "C", "D", "S", "KA", "", postaladdress.PartPincode, postaladdress.ReasonRequired},
+		{"pincode bad", "St", "C", "D", "S", "KA", "012345", postaladdress.PartPincode, postaladdress.ReasonInvalidPincode},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := postaladdress.New(tc.street, tc.city, tc.district, tc.state, tc.stateCode, tc.pincode)
+			var pe *postaladdress.PartError
+			if !errors.As(err, &pe) || !errors.Is(err, postaladdress.ErrInvalid) {
+				t.Fatalf("err = %v, want a *PartError matching ErrInvalid", err)
+			}
+			if pe.Part != tc.part || pe.Reason != tc.reason {
+				t.Errorf("part/reason = %s/%s, want %s/%s", pe.Part, pe.Reason, tc.part, tc.reason)
+			}
+		})
+	}
+}
+
+func TestCreate_CityNotServedNamesTheCity(t *testing.T) {
+	t.Parallel()
+	_, err := postaladdress.Create("St", "Mumbai", "560001", postaladdress.LookupData{Cities: []string{"Bangalore"}})
+	var pe *postaladdress.PartError
+	if !errors.As(err, &pe) || pe.Part != postaladdress.PartCity || pe.Reason != postaladdress.ReasonNotServed {
+		t.Fatalf("err = %v, want city/invalid_city", err)
+	}
+}

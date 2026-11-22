@@ -408,8 +408,9 @@ func parseTenantIDPath(w http.ResponseWriter, r *http.Request) (tenant.ID, bool)
 //   - tenant.ErrInvalid (wrapped from aggregate) → 422 (lifecycle
 //     transition rejected, over-length names, missing reason, etc.)
 //   - gst / pan / druglicence / phone / postaladdress ErrInvalid → 422
-//     validation_failed with a per-field `errors` entry (gst_number,
-//     pan_number, drug_licence_number, phone, address)
+//     validation_failed with a per-field `errors` entry holding a stable code
+//     (gst_number, pan_number, drug_licence_number, phone, and one
+//     `address.<part>` key per refused part of a postal address)
 //   - tenant.ErrSlugTaken → 409 (mostly relevant for register flow,
 //     included here for completeness when slug-update endpoints land)
 //   - anything else → 500 + slog.ErrorContext
@@ -429,25 +430,38 @@ func writeTenantMutationResult(w http.ResponseWriter, log *slog.Logger, r *http.
 	case errors.Is(err, tenant.ErrInvalid):
 		writeInvalid(w, ErrCodeTenantInvalid, err)
 	case errors.Is(err, gst.ErrInvalid):
-		writeFieldInvalid(w, "gst_number", "must be a valid 15-character GSTIN")
+		writeFieldInvalid(w, "gst_number", FieldCodeInvalidGSTIN)
 	case errors.Is(err, pan.ErrInvalid):
-		writeFieldInvalid(w, "pan_number", "must be a valid 10-character PAN")
+		writeFieldInvalid(w, "pan_number", FieldCodeInvalidPAN)
 	case errors.Is(err, druglicence.ErrInvalid):
-		writeFieldInvalid(w, "drug_licence_number", "is not a valid drug licence number")
+		writeFieldInvalid(w, "drug_licence_number", FieldCodeInvalidDrugLicence)
 	case errors.Is(err, phone.ErrInvalid):
-		writeFieldInvalid(w, "phone", "must be an E.164 phone number")
+		writeFieldInvalid(w, "phone", FieldCodeInvalidPhone)
 	case errors.Is(err, postaladdress.ErrInvalid):
-		writeFieldInvalid(w, "address", "is not a valid postal address")
+		writeAddressInvalid(w, err)
 	default:
 		log.ErrorContext(r.Context(), "tenant mutation failed", "err", err)
 		writeError(w, http.StatusInternalServerError, ErrCodeInternalError, "")
 	}
 }
 
-// writeFieldInvalid answers 422 validation_failed with one per-field entry,
-// through the shared validation-error writer.
-func writeFieldInvalid(w http.ResponseWriter, field, problem string) {
-	writeValidationError(w, field+" "+problem, map[string][]string{field: {problem}})
+// writeFieldInvalid answers 422 validation_failed with one per-field entry, a
+// stable code (never a sentence), through the shared validation-error writer.
+func writeFieldInvalid(w http.ResponseWriter, field, code string) {
+	writeValidationError(w, field+" is invalid", map[string][]string{field: {code}})
+}
+
+// writeAddressInvalid answers a refused postal address under `address.<part>` with
+// the part's code, so a form marks the input that is wrong. An address refusal that
+// names no part (not produced by the value object today) falls back to the whole
+// object under `address` as "invalid_address".
+func writeAddressInvalid(w http.ResponseWriter, err error) {
+	var pe *postaladdress.PartError
+	if !errors.As(err, &pe) {
+		writeFieldInvalid(w, "address", FieldCodeInvalidAddress)
+		return
+	}
+	writeFieldInvalid(w, "address."+pe.Part, pe.Reason)
 }
 
 // projectViewToDto bridges the application-layer query view to the

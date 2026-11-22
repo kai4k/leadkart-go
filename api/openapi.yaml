@@ -716,7 +716,8 @@ paths:
         accepts a zero Statutory VO for tenants that haven't yet
         onboarded their compliance IDs.
         A malformed GST, PAN or drug-licence number is 422 `validation_failed` with an
-        `errors` entry under `gst_number`, `pan_number` or `drug_licence_number`.
+        `errors` entry under `gst_number` (`["invalid_gstin"]`), `pan_number` (`["invalid_pan"]`) or
+        `drug_licence_number` (`["invalid_drug_licence"]`). Each value is a stable code, never a sentence.
         Requires `identity.tenants.update` (satisfied by `tenant.admin` in the caller's own tenant, or by `platform.*` equivalents for platform operators; ADR 0068).
       x-required-permissions: [identity.tenants.update]
       parameters:
@@ -743,7 +744,11 @@ paths:
       summary: Update tenant admin phone + postal address
       description: |
         A malformed phone or postal address is 422 `validation_failed` with an `errors`
-        entry under `phone` or `address`.
+        entry: `phone: ["invalid_phone"]`, or one entry per refused part of the address under
+        `address.street`, `address.city`, `address.district`, `address.state`, `address.state_code` or
+        `address.pincode`, whose value is `required` (blank), `too_long` (over its limit),
+        `invalid_pincode` (not 6 digits with a leading 1-9) or, for `address.city` only, `invalid_city`.
+        Each value is a stable code, never a sentence.
         Requires `identity.tenants.update` (satisfied by `tenant.admin` in the caller's own tenant, or by `platform.*` equivalents for platform operators; ADR 0068).
       x-required-permissions: [identity.tenants.update]
       parameters:
@@ -1188,7 +1193,7 @@ paths:
       description: |
         Both arrays are required; empty arrays clear the corresponding overlay. Permission names
         MUST match the closed `permission.IdentityPermissions` catalogue;
-        unknown names surface as 422 (`permission_unknown`). A name listed twice in one array is stored once; a name present in BOTH arrays is a 422 `validation_failed` with the names under `errors.revoked`.
+        unknown names surface as 422 (`permission_unknown`). A name listed twice in one array is stored once; a name present in BOTH arrays is a 422 `validation_failed` with `errors{revoked: ["also_granted"]}` (compare your own two arrays to find the names).
         Requires `identity.users.update_permissions` (satisfied by `tenant.admin` in the caller's own tenant, or by `platform.*` equivalents for platform operators; ADR 0068). Self-target forbidden (`self_modification_forbidden`). The caller must strictly outrank the target member (`insufficient_rank`; owners may act on owners; super users and exempt platform operators are exempt), decided inside the transaction that holds the tenant's authority lock (ADR 0069). Conferring a permission the caller does not hold is rejected with `grant_exceeds_authority`.
       x-required-permissions: [identity.users.update_permissions]
       parameters:
@@ -4543,7 +4548,8 @@ components:
       description: |
         RFC 9457 Problem Details + LeadKart legacy fields. Legacy `error`/
         `message` stay populated for backward compat. Validation failures
-        carry the `errors` map (field name → list of messages). The stable field
+        carry the `errors` map (field name → list of stable codes, never sentences; a part of a nested object is
+        keyed `object.part`, e.g. `address.pincode`). The stable field
         code `invalid_characters` marks text a person typed that holds control,
         direction-override, invisible or line-breaking characters (see the operations
         that accept names, titles and reasons). A zero-width joiner or non-joiner

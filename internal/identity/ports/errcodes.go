@@ -386,6 +386,23 @@ const (
 	// the field-level errors map. Emitted by writeValidationError.
 	ErrCodeValidationFailed = "validation_failed"
 
+	// Field codes: the values of the `errors{field: [code]}` map of a 422
+	// validation_failed answer. Each is one snake_case token, never a sentence, so
+	// a client translates or matches it. The value-object ones sit beside the
+	// shared humantext codes (required, too_long, invalid_characters) and the
+	// password rule codes.
+	FieldCodeInvalidGSTIN       = "invalid_gstin"
+	FieldCodeInvalidPAN         = "invalid_pan"
+	FieldCodeInvalidDrugLicence = "invalid_drug_licence"
+	FieldCodeInvalidPhone       = "invalid_phone"
+	// FieldCodeInvalidAddress is the whole-address fallback under `address`; a
+	// postal refusal names its part (`address.pincode`, ...) with postaladdress's
+	// own codes (required, too_long, invalid_pincode, invalid_city).
+	FieldCodeInvalidAddress = "invalid_address"
+	// FieldCodeAlsoGranted is under `revoked`: a permission is listed in both
+	// granted and revoked.
+	FieldCodeAlsoGranted = "also_granted"
+
 	// ----- Permission-elevation approval workflow (ADR 0055) ---------------
 
 	// ErrCodePermissionRequestNotFound — request ID has no row in the

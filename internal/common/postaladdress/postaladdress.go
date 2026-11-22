@@ -12,6 +12,9 @@
 //   - StateCode: optional 2-char code (e.g. "KA", "MH", "DL"); ≤4 chars.
 //   - Street: non-empty, ≤200 chars (address line 1 + 2 concatenated).
 //
+// A refusal is a [*PartError] (it matches [ErrInvalid]) naming the part and a
+// stable wire code, so an HTTP layer answers per part without parsing a message.
+//
 // Cross-validation against the pincodes seed table (city belongs to
 // pincode) is an Application-layer concern — domain-layer Address
 // trusts the inputs are mutually consistent. Per `coding-standards.md`
@@ -30,6 +33,45 @@ import (
 
 // ErrInvalid is returned by [New] / [Create] for validation failures.
 var ErrInvalid = errors.New("postaladdress: invalid")
+
+// Parts of an address a refusal can name. They are the wire field names of the
+// address object (snake_case), so a client marks the input that is wrong.
+const (
+	PartStreet    = "street"
+	PartCity      = "city"
+	PartDistrict  = "district"
+	PartState     = "state"
+	PartStateCode = "state_code"
+	PartPincode   = "pincode"
+)
+
+// Reasons a part is refused, stable wire codes (the same words humantext uses for
+// "blank" and "over its limit").
+const (
+	ReasonRequired       = "required"
+	ReasonTooLong        = "too_long"
+	ReasonInvalidPincode = "invalid_pincode"
+	// ReasonNotServed is a city that the pincode's lookup does not list.
+	ReasonNotServed = "invalid_city"
+)
+
+// PartError is the typed refusal of one part of an address. It matches
+// [ErrInvalid] with [errors.Is]; Part and Reason never carry the value.
+type PartError struct {
+	Part   string // one of the Part* constants
+	Reason string // one of the Reason* constants
+	detail string
+}
+
+// Error is the log-side message.
+func (e *PartError) Error() string { return ErrInvalid.Error() + ": " + e.detail }
+
+// Unwrap makes errors.Is(err, ErrInvalid) true.
+func (e *PartError) Unwrap() error { return ErrInvalid }
+
+func refuse(part, reason, detail string) error {
+	return &PartError{Part: part, Reason: reason, detail: detail}
+}
 
 const (
 	maxStreet    = 200
@@ -62,31 +104,34 @@ func New(street, city, district, state, stateCode, pincode string) (Address, err
 	pincode = strings.TrimSpace(pincode)
 
 	if street == "" {
-		return Address{}, fmt.Errorf("%w: street required", ErrInvalid)
+		return Address{}, refuse(PartStreet, ReasonRequired, "street required")
 	}
 	if len(street) > maxStreet {
-		return Address{}, fmt.Errorf("%w: street too long (max %d)", ErrInvalid, maxStreet)
+		return Address{}, refuse(PartStreet, ReasonTooLong, fmt.Sprintf("street too long (max %d)", maxStreet))
 	}
 	if city == "" {
-		return Address{}, fmt.Errorf("%w: city required", ErrInvalid)
+		return Address{}, refuse(PartCity, ReasonRequired, "city required")
 	}
 	if len(city) > maxLine {
-		return Address{}, fmt.Errorf("%w: city too long (max %d)", ErrInvalid, maxLine)
+		return Address{}, refuse(PartCity, ReasonTooLong, fmt.Sprintf("city too long (max %d)", maxLine))
 	}
 	if len(district) > maxLine {
-		return Address{}, fmt.Errorf("%w: district too long (max %d)", ErrInvalid, maxLine)
+		return Address{}, refuse(PartDistrict, ReasonTooLong, fmt.Sprintf("district too long (max %d)", maxLine))
 	}
 	if state == "" {
-		return Address{}, fmt.Errorf("%w: state required", ErrInvalid)
+		return Address{}, refuse(PartState, ReasonRequired, "state required")
 	}
 	if len(state) > maxLine {
-		return Address{}, fmt.Errorf("%w: state too long (max %d)", ErrInvalid, maxLine)
+		return Address{}, refuse(PartState, ReasonTooLong, fmt.Sprintf("state too long (max %d)", maxLine))
 	}
 	if len(stateCode) > maxStateCode {
-		return Address{}, fmt.Errorf("%w: stateCode too long (max %d)", ErrInvalid, maxStateCode)
+		return Address{}, refuse(PartStateCode, ReasonTooLong, fmt.Sprintf("stateCode too long (max %d)", maxStateCode))
+	}
+	if pincode == "" {
+		return Address{}, refuse(PartPincode, ReasonRequired, "pincode required")
 	}
 	if !pincodePattern.MatchString(pincode) {
-		return Address{}, fmt.Errorf("%w: pincode %q must be 6 digits with leading 1-9", ErrInvalid, pincode)
+		return Address{}, refuse(PartPincode, ReasonInvalidPincode, fmt.Sprintf("pincode %q must be 6 digits with leading 1-9", pincode))
 	}
 	return Address{
 		street:    street,
@@ -120,11 +165,11 @@ type LookupData struct {
 // individually formats correctly. Cross-validation is the bug-catcher.
 func Create(street, city, pincode string, lookup LookupData) (Address, error) {
 	if !pincodePattern.MatchString(strings.TrimSpace(pincode)) {
-		return Address{}, fmt.Errorf("%w: pincode %q must be 6 digits with leading 1-9", ErrInvalid, pincode)
+		return Address{}, refuse(PartPincode, ReasonInvalidPincode, fmt.Sprintf("pincode %q must be 6 digits with leading 1-9", pincode))
 	}
 	cityTrim := strings.TrimSpace(city)
 	if cityTrim == "" {
-		return Address{}, fmt.Errorf("%w: city required", ErrInvalid)
+		return Address{}, refuse(PartCity, ReasonRequired, "city required")
 	}
 	canonicalCity := ""
 	for _, c := range lookup.Cities {
@@ -134,10 +179,8 @@ func Create(street, city, pincode string, lookup LookupData) (Address, error) {
 		}
 	}
 	if canonicalCity == "" {
-		return Address{}, fmt.Errorf(
-			"%w: city %q not served by pincode %s (lookup: %v)",
-			ErrInvalid, cityTrim, pincode, lookup.Cities,
-		)
+		return Address{}, refuse(PartCity, ReasonNotServed,
+			fmt.Sprintf("city %q not served by pincode %s (lookup: %v)", cityTrim, pincode, lookup.Cities))
 	}
 	return New(street, canonicalCity, lookup.District, lookup.State, lookup.StateCode, pincode)
 }
