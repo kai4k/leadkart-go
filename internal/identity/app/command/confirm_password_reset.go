@@ -245,7 +245,7 @@ func (h ConfirmPasswordResetHandler) policyFor(ctx context.Context, id person.ID
 	tn, err := h.tenants.GetByID(ctx, m.TenantID())
 	switch {
 	case err == nil:
-		return tn.Settings().PasswordPolicy(), nil
+		return tn.Settings().EffectivePasswordPolicy(), nil
 	case errors.Is(err, tenant.ErrNotFound):
 		return tenant.DefaultPasswordPolicy(), nil
 	default:

@@ -178,3 +178,41 @@ func TestGetTenantBySlug_HappyPath(t *testing.T) {
 		t.Errorf("Slug = %q", got.Slug)
 	}
 }
+
+// A company that never saved its settings reports the default policy, never the
+// zero one: every field is inside the OpenAPI PasswordPolicyDto bounds.
+func TestGetTenant_FreshTenantReportsTheDefaultPasswordPolicy(t *testing.T) {
+	t.Parallel()
+	tn := newTenant(t, testTenantID, testTenantSlugStr)
+	repo := tenanttest.NewFakeRepository()
+	if err := repo.Add(t.Context(), tn); err != nil {
+		t.Fatal(err)
+	}
+	d := tenant.DefaultPasswordPolicy()
+	want := query.PasswordPolicyView{
+		MinLength: d.MinLength(), RequireUppercase: d.RequireUppercase(), RequireLowercase: d.RequireLowercase(),
+		RequireDigit: d.RequireDigit(), RequireSymbol: d.RequireSymbol(),
+		MaxFailedAttempts: d.MaxFailedAttempts(), LockoutMinutes: d.LockoutMinutes(),
+	}
+	byID, err := query.NewGetTenantHandler(repo).Handle(t.Context(), query.GetTenantQuery{TenantID: tn.ID()})
+	if err != nil {
+		t.Fatalf("GetTenant: %v", err)
+	}
+	if diff := cmp.Diff(want, byID.PasswordPolicy); diff != "" {
+		t.Errorf("GetTenant policy (-want +got):\n%s", diff)
+	}
+	bySlug, err := query.NewGetTenantBySlugHandler(repo).Handle(t.Context(), query.GetTenantBySlugQuery{Slug: tn.Slug()})
+	if err != nil {
+		t.Fatalf("GetTenantBySlug: %v", err)
+	}
+	if diff := cmp.Diff(want, bySlug.PasswordPolicy); diff != "" {
+		t.Errorf("GetTenantBySlug policy (-want +got):\n%s", diff)
+	}
+	all, err := query.NewListAllTenantsHandler(repo).Handle(t.Context(), query.ListAllTenantsQuery{})
+	if err != nil || len(all) != 1 {
+		t.Fatalf("ListAllTenants = %d, %v", len(all), err)
+	}
+	if diff := cmp.Diff(want, all[0].PasswordPolicy); diff != "" {
+		t.Errorf("ListAllTenants policy (-want +got):\n%s", diff)
+	}
+}

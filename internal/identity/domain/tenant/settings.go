@@ -122,6 +122,20 @@ func (p PasswordPolicy) LockoutDuration() time.Duration {
 // minLength=0, so zero value always means "not yet configured".
 func (p PasswordPolicy) IsZero() bool { return p.minLength == 0 }
 
+// Effective returns the policy that binds: p itself when it was configured, the
+// system default when p is the zero policy (a tenant that never saved one). A stored
+// policy is always whole: [NewPasswordPolicy] is the only constructor, it validates
+// every field, and the repository refuses to load a row whose policy columns are
+// neither all zero nor all valid, so there is no partially valid policy to resolve.
+// This is the ONE place "zero means default" is decided; enforcement ([PasswordPolicy.Check])
+// and every read model go through it.
+func (p PasswordPolicy) Effective() PasswordPolicy {
+	if p.IsZero() {
+		return DefaultPasswordPolicy()
+	}
+	return p
+}
+
 // Equal reports whether p and other are identical.
 func (p PasswordPolicy) Equal(other PasswordPolicy) bool {
 	return p == other
@@ -141,6 +155,13 @@ func NewSettings(p PasswordPolicy) Settings {
 
 // PasswordPolicy returns the tenant's password policy.
 func (s Settings) PasswordPolicy() PasswordPolicy { return s.passwordPolicy }
+
+// EffectivePasswordPolicy returns the policy that binds the tenant: the stored one,
+// or the system default when none was saved. Readers (enforcement, the tenant read
+// models, the capabilities rules) use this; only persistence uses the raw
+// [Settings.PasswordPolicy], so that saving an unrelated attribute does not freeze
+// today's default into the row.
+func (s Settings) EffectivePasswordPolicy() PasswordPolicy { return s.passwordPolicy.Effective() }
 
 // IsZero reports whether Settings is uninitialised.
 func (s Settings) IsZero() bool { return s.passwordPolicy.IsZero() }
@@ -193,9 +214,7 @@ func (p PasswordPolicy) Check(plaintext string) error {
 	if len(plaintext) > MaxPasswordBytes {
 		return &PasswordPolicyViolation{Rules: []string{PasswordRuleMaxLength}}
 	}
-	if p.IsZero() {
-		p = DefaultPasswordPolicy()
-	}
+	p = p.Effective()
 	var upper, lower, digit, symbol bool
 	for _, r := range plaintext {
 		switch {

@@ -59,11 +59,7 @@ func (h GetOwnPasswordPolicyHandler) Handle(ctx context.Context, id tenant.ID) (
 	tn, err := h.tenants.GetByID(ctx, id)
 	switch {
 	case err == nil:
-		p := tn.Settings().PasswordPolicy()
-		if p.IsZero() {
-			return rulesOf(tenant.DefaultPasswordPolicy()), nil // a row that predates settings is checked as the default
-		}
-		return rulesOf(p), nil
+		return rulesOf(tn.Settings().EffectivePasswordPolicy()), nil
 	case errors.Is(err, tenant.ErrNotFound):
 		return rulesOf(tenant.DefaultPasswordPolicy()), nil
 	default:

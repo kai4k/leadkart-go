@@ -160,7 +160,7 @@ func (h CreateUserHandler) Handle(
 	if err != nil {
 		return CreateUserResult{}, fmt.Errorf("create user: load tenant: %w", err)
 	}
-	if err := tn.Settings().PasswordPolicy().Check(cmd.Password); err != nil {
+	if err := tn.Settings().EffectivePasswordPolicy().Check(cmd.Password); err != nil {
 		return CreateUserResult{}, err
 	}
 	pwd, err := h.hashPassword(ctx, cmd.Password)

@@ -138,3 +138,23 @@ func TestDefaultPasswordPolicy_IsEightCharactersWithFourClasses(t *testing.T) {
 		})
 	}
 }
+
+// A tenant with no stored policy HAS the default policy: the one accessor every
+// read goes through, so no reader can emit the zero value.
+func TestSettings_EffectivePasswordPolicy_ZeroIsTheDefaultAndAStoredPolicyIsKept(t *testing.T) {
+	t.Parallel()
+	if got, want := (tenant.Settings{}).EffectivePasswordPolicy(), tenant.DefaultPasswordPolicy(); got != want {
+		t.Fatalf("zero settings effective policy = %+v, want the default %+v", got, want)
+	}
+	stored, err := tenant.NewPasswordPolicy(12, true, false, true, false, 7, 30)
+	if err != nil {
+		t.Fatalf("NewPasswordPolicy: %v", err)
+	}
+	if got := tenant.NewSettings(stored).EffectivePasswordPolicy(); got != stored {
+		t.Fatalf("stored policy effective = %+v, want %+v", got, stored)
+	}
+	// The raw accessor stays raw: persistence must not write the default back.
+	if !(tenant.Settings{}).PasswordPolicy().IsZero() {
+		t.Fatal("PasswordPolicy() must stay the stored value so a save does not freeze the default")
+	}
+}

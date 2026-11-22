@@ -268,7 +268,7 @@ func (h ChangePasswordHandler) policyFor(ctx context.Context, id tenant.ID) (ten
 	tn, err := h.tenants.GetByID(ctx, id)
 	switch {
 	case err == nil:
-		return tn.Settings().PasswordPolicy(), nil
+		return tn.Settings().EffectivePasswordPolicy(), nil
 	case errors.Is(err, tenant.ErrNotFound):
 		return tenant.DefaultPasswordPolicy(), nil
 	default:

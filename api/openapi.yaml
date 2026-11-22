@@ -769,6 +769,8 @@ paths:
       tags: [tenants]
       summary: Update tenant password policy
       description: |
+        A company that has not set a policy reports the default policy on every read, so the body a client read back is always accepted (full replace).
+
         Requires `identity.tenants.update_settings` (satisfied by `tenant.admin` in the caller's own tenant, or by `platform.*` equivalents for platform operators; ADR 0068).
       x-required-permissions: [identity.tenants.update_settings]
       parameters:
@@ -4818,9 +4820,12 @@ components:
     PasswordPolicyDto:
       type: object
       description: |
-        A tenant's password policy as stored. A tenant admin may set any rule inside the
-        validated bounds below, INCLUDING rules weaker than the platform default (12
-        characters and all four classes): `min_length` may go down to 8 and any subset of
+        A tenant's password policy. A company that has never saved one reports the system
+        default (8 characters minimum, all four classes required, 5 failed attempts, 15
+        lockout minutes), so every read of a company returns a policy inside the bounds
+        below and a client may send it straight back. A tenant admin may set any rule inside the
+        validated bounds below, INCLUDING rules weaker than the platform default
+        (all four classes): `min_length` may go down to 8 (the default's own length) and any subset of
         the four classes, none included, may be required. The platform guarantees only the
         floors, not the default. `max_failed_attempts` and `lockout_minutes` are accepted,
         stored and returned but NOT ENFORCED: the platform lockout is fixed (10 failures in

@@ -140,8 +140,7 @@ func (h GetTenantBySlugHandler) Handle(ctx context.Context, q GetTenantBySlugQue
 func projectTenant(t *tenant.Tenant) TenantView {
 	statutory := t.Statutory()
 	contact := t.AdminContact()
-	settings := t.Settings()
-	policy := settings.PasswordPolicy()
+	policy := t.Settings().EffectivePasswordPolicy() // a tenant with no stored policy has the default
 	prefs := t.DisplayPreferences()
 	addr := contact.Address()
 
