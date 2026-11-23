@@ -39,6 +39,7 @@ type Router struct {
 	auditW   *audit.Writer
 	log      *slog.Logger
 	retry    RetryConfig
+	timeout  time.Duration
 	poison   message.HandlerMiddleware
 }
 
@@ -63,6 +64,23 @@ type Deps struct {
 	// Retry tunes the per-handler retry middleware. Zero values fall
 	// back to production defaults (5 retries, 200ms→5s exponential).
 	Retry RetryConfig
+	// HandlerTimeout bounds ONE attempt of a handler (the context the handler gets
+	// is cancelled after it). The in-process bus delivers one event at a time and the
+	// forwarder waits for each, so an unbounded handler (a row lock, a hung call)
+	// would stop delivery for every company: this is the bound. Default 5s.
+	HandlerTimeout time.Duration
+}
+
+// defaultHandlerTimeout bounds one handler attempt (see [Deps.HandlerTimeout]).
+const defaultHandlerTimeout = 5 * time.Second
+
+// RetryBudget is the longest a single message can hold the delivery lane: every
+// attempt may run its full timeout and the backoffs sit between them. The outbox
+// forwarder AckDeadline must stay above it, or the message is delivered a second
+// time while its first delivery is still being retried.
+func RetryBudget(retry RetryConfig, handlerTimeout time.Duration) time.Duration {
+	attempts := time.Duration(retry.MaxRetries + 1)
+	return attempts*handlerTimeout + time.Duration(retry.MaxRetries)*retry.MaxInterval
 }
 
 // RetryConfig tunes the retry-middleware exponential backoff.
@@ -146,6 +164,10 @@ func NewRouter(deps Deps) (*Router, error) {
 	if retry == (RetryConfig{}) {
 		retry = DefaultRetry
 	}
+	handlerTimeout := deps.HandlerTimeout
+	if handlerTimeout == 0 {
+		handlerTimeout = defaultHandlerTimeout
+	}
 
 	wlog := watermill.NewSlogLogger(log)
 	r, err := message.NewRouter(message.RouterConfig{CloseTimeout: closeTimeout}, wlog)
@@ -178,6 +200,7 @@ func NewRouter(deps Deps) (*Router, error) {
 		auditW:   deps.AuditWriter,
 		log:      log,
 		retry:    retry,
+		timeout:  handlerTimeout,
 		poison:   poison,
 	}
 
@@ -235,6 +258,7 @@ func (r *Router) AddSubscriber(handlerName string, topic string, fn SubscriberHa
 		IdempotencyMiddleware(r.receiver, handlerName),
 		AuditMiddleware(r.auditW, r.log),
 		retryMiddleware(r.retry),
+		attemptTimeout(r.timeout),
 		wmw.Recoverer,
 	)
 }
@@ -268,6 +292,7 @@ func (r *Router) AddCqrsHandler(p *cqrs.EventProcessor, eh cqrs.EventHandler) er
 		IdempotencyMiddleware(r.receiver, eh.HandlerName()),
 		AuditMiddleware(r.auditW, r.log),
 		retryMiddleware(r.retry),
+		attemptTimeout(r.timeout),
 		wmw.Recoverer,
 	)
 	return nil
@@ -318,4 +343,21 @@ func retryMiddleware(cfg RetryConfig) message.HandlerMiddleware {
 		},
 	}
 	return r.Middleware
+}
+
+// attemptTimeout cancels the message context after d, for ONE attempt, and puts the
+// original context back afterwards. (watermill own Timeout middleware leaves the
+// cancelled context on the message, so the audit write that runs after the handler
+// would fail with context canceled.)
+func attemptTimeout(d time.Duration) message.HandlerMiddleware {
+	return func(h message.HandlerFunc) message.HandlerFunc {
+		return func(msg *message.Message) ([]*message.Message, error) {
+			orig := msg.Context()
+			ctx, cancel := context.WithTimeout(orig, d)
+			defer cancel()
+			defer msg.SetContext(orig)
+			msg.SetContext(ctx)
+			return h(msg)
+		}
+	}
 }

@@ -105,3 +105,17 @@ func EventTypes(rows []OutboxRow) []string {
 	}
 	return out
 }
+
+// DeadLetterCount returns how many common.dead_letter rows the named handler
+// has (a poisoned message is salvaged there after its retries are spent).
+func DeadLetterCount(ctx context.Context, t *testing.T, pool *pgxpool.Pool, handlerName string) int {
+	t.Helper()
+	var n int
+	const q = `
+		SELECT count(*) FROM common.dead_letter WHERE handler_name = $1
+	`
+	if err := pool.QueryRow(ctx, q, handlerName).Scan(&n); err != nil {
+		t.Fatalf("messagingtest: count dead letters: %v", err)
+	}
+	return n
+}

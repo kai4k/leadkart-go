@@ -2,6 +2,7 @@ package messaging
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/ThreeDotsLabs/watermill"
 	wmsql "github.com/ThreeDotsLabs/watermill-sql/v4/pkg/sql"
@@ -9,6 +10,10 @@ import (
 	"github.com/ThreeDotsLabs/watermill/message"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+// ackDeadlineMargin is the slack above the retry budget before the outbox
+// subscriber redelivers an unacknowledged message.
+const ackDeadlineMargin = 30 * time.Second
 
 // NewOutboxForwarder builds the single Watermill Forwarder that drains the
 // shared transactional outbox (OutboxTable) and republishes each event to its
@@ -22,7 +27,8 @@ import (
 // both go through OutboxQueueSchema, so they can't drift.
 //
 // outPub is the destination broker publisher (gochannel in v0.2). Drive the
-// returned Forwarder with Run(ctx)/Close() like the router.
+// returned Forwarder with Run(ctx)/Close() like the router. The subscriber
+// AckDeadline is the retry budget plus [ackDeadlineMargin].
 func NewOutboxForwarder(
 	pool *pgxpool.Pool,
 	outPub message.Publisher,
@@ -31,11 +37,17 @@ func NewOutboxForwarder(
 	if logger == nil {
 		logger = watermill.NopLogger{}
 	}
+	ackDeadline := RetryBudget(DefaultRetry, defaultHandlerTimeout) + ackDeadlineMargin
 	sub, err := wmsql.NewSubscriber(
 		wmsql.BeginnerFromPgx(pool),
 		wmsql.SubscriberConfig{
 			SchemaAdapter:  OutboxQueueSchema(),
 			OffsetsAdapter: OutboxOffsetsAdapter(),
+			// A message is redelivered when it is not acknowledged within this time.
+			// It must exceed the longest a handler may legitimately hold the message
+			// (every attempt at its timeout, plus the backoffs), or a slow handler is
+			// run a second time while its first delivery is still being retried.
+			AckDeadline: &ackDeadline,
 			// Schema is owned by goose (migration 20260604000002); the
 			// library must not issue CREATE TABLE.
 			InitializeSchema: false,

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"testing"
+	"time"
 
 	wmw "github.com/ThreeDotsLabs/watermill/message/router/middleware"
 
@@ -33,5 +34,18 @@ func TestFailureCode_IsStableAndNeverTheRawText(t *testing.T) {
 				t.Errorf("FailureCode = %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestRetryBudget_EveryAttemptAtItsTimeoutPlusTheBackoffs(t *testing.T) {
+	t.Parallel()
+	r := messaging.RetryConfig{MaxRetries: 2, InitialInterval: 10 * time.Millisecond, MaxInterval: 20 * time.Millisecond, Multiplier: 2}
+	if got, want := messaging.RetryBudget(r, 300*time.Millisecond), 3*300*time.Millisecond+2*20*time.Millisecond; got != want {
+		t.Fatalf("budget = %s, want %s", got, want)
+	}
+	// The production default (5 retries, 5s attempts, 5s max backoff) is 55s; the
+	// forwarder AckDeadline is that plus a margin, never below it.
+	if got := messaging.RetryBudget(messaging.DefaultRetry, 5*time.Second); got != 55*time.Second {
+		t.Fatalf("default budget = %s", got)
 	}
 }
