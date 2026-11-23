@@ -147,6 +147,10 @@ type AddBatchRequest struct {
 	ManufacturingLicenceNumber string    `json:"manufacturing_licence_number"`
 	MRPPaise                   int64     `json:"mrp_paise"`
 	PurchasePricePaise         int64     `json:"purchase_price_paise"`
+	// InitialQuantity is optional: the opening stock received with the batch,
+	// written as an inbound movement in the same transaction. Absent or 0
+	// adds an empty batch, as before.
+	InitialQuantity *int64 `json:"initial_quantity,omitzero"`
 }
 
 // AddBatchResponse — 201 body.

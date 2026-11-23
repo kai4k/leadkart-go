@@ -939,7 +939,7 @@ func buildInventoryApp(pool *pgxpool.Pool, hybridCache *cache.HybridCache) inven
 			CreateProduct:    inventorycommand.NewCreateProductHandler(products, gstDefaults, time.Now, newProductID),
 			UpdateProduct:    inventorycommand.NewUpdateProductHandler(products, time.Now),
 			DeleteProduct:    inventorycommand.NewDeleteProductHandler(products, batches, time.Now),
-			AddBatch:         inventorycommand.NewAddBatchHandler(tx, products, batches, time.Now, newBatchID),
+			AddBatch:         inventorycommand.NewAddBatchHandler(tx, products, batches, movements, time.Now, newBatchID, newMovementID),
 			LogStockMovement: inventorycommand.NewLogStockMovementHandler(tx, batches, movements, time.Now, newMovementID),
 		},
 		Queries: inventoryapp.Queries{

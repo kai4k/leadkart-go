@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
 	"github.com/leadkart/leadkart-go/internal/inventory/app/command"
 	"github.com/leadkart/leadkart-go/internal/inventory/domain/batch"
 	"github.com/leadkart/leadkart-go/internal/inventory/domain/product"
@@ -18,7 +19,7 @@ func TestAddBatchHandler_HappyPath_AddsBatch(t *testing.T) {
 	tid := newTenantID(t)
 	actor := newMembershipID(t)
 	p := seedProduct(t, productRepo, tid, actor, "AB-1")
-	h := command.NewAddBatchHandler(uow, productRepo, batchRepo, func() time.Time { return fixedNow }, testNewBatchID)
+	h := command.NewAddBatchHandler(uow, productRepo, batchRepo, newFakeMovementRepo(), func() time.Time { return fixedNow }, testNewBatchID, testNewMovementID)
 
 	out, err := h.Handle(t.Context(), command.AddBatchCommand{
 		TenantID:                   tid,
@@ -52,7 +53,7 @@ func TestAddBatchHandler_MissingProduct_ReturnsErrNotFound(t *testing.T) {
 	productRepo := newFakeProductRepo()
 	batchRepo := newFakeBatchRepo()
 	uow := &fakeUoW{}
-	h := command.NewAddBatchHandler(uow, productRepo, batchRepo, func() time.Time { return fixedNow }, testNewBatchID)
+	h := command.NewAddBatchHandler(uow, productRepo, batchRepo, newFakeMovementRepo(), func() time.Time { return fixedNow }, testNewBatchID, testNewMovementID)
 	tid := newTenantID(t)
 	actor := newMembershipID(t)
 
@@ -92,7 +93,7 @@ func TestAddBatchHandler_SoftDeletedParent_ReturnsErrNotFound(t *testing.T) {
 		t.Fatalf("SoftDelete: %v", err)
 	}
 	_ = p.PullEvents()
-	h := command.NewAddBatchHandler(uow, productRepo, batchRepo, func() time.Time { return fixedNow }, testNewBatchID)
+	h := command.NewAddBatchHandler(uow, productRepo, batchRepo, newFakeMovementRepo(), func() time.Time { return fixedNow }, testNewBatchID, testNewMovementID)
 
 	_, err := h.Handle(t.Context(), command.AddBatchCommand{
 		TenantID:                   tid,
@@ -124,7 +125,7 @@ func TestAddBatchHandler_DuplicateBatchNumber_ReturnsErrBatchNumberTaken(t *test
 	actor := newMembershipID(t)
 	p := seedProduct(t, productRepo, tid, actor, "AB-3")
 	_ = seedBatch(t, batchRepo, p, actor, "DUP-LOT") // arch-test:ignore-err — seed helper, error reported via t.Fatalf inside helper
-	h := command.NewAddBatchHandler(uow, productRepo, batchRepo, func() time.Time { return fixedNow }, testNewBatchID)
+	h := command.NewAddBatchHandler(uow, productRepo, batchRepo, newFakeMovementRepo(), func() time.Time { return fixedNow }, testNewBatchID, testNewMovementID)
 
 	_, err := h.Handle(t.Context(), command.AddBatchCommand{
 		TenantID:                   tid,
@@ -153,7 +154,7 @@ func TestAddBatchHandler_InvalidSpec_ReturnsErrInvalid(t *testing.T) {
 	tid := newTenantID(t)
 	actor := newMembershipID(t)
 	p := seedProduct(t, productRepo, tid, actor, "AB-4")
-	h := command.NewAddBatchHandler(uow, productRepo, batchRepo, func() time.Time { return fixedNow }, testNewBatchID)
+	h := command.NewAddBatchHandler(uow, productRepo, batchRepo, newFakeMovementRepo(), func() time.Time { return fixedNow }, testNewBatchID, testNewMovementID)
 	sameDay := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 
 	_, err := h.Handle(t.Context(), command.AddBatchCommand{
@@ -170,5 +171,117 @@ func TestAddBatchHandler_InvalidSpec_ReturnsErrInvalid(t *testing.T) {
 	})
 	if !errors.Is(err, batch.ErrInvalid) {
 		t.Fatalf("err: got %v want ErrInvalid", err)
+	}
+}
+
+// addBatchCmd is a valid AddBatch command expiring on expiry with the given opening stock.
+func addBatchCmd(p *product.Product, actor membership.ID, expiry time.Time, initial int64) command.AddBatchCommand {
+	return command.AddBatchCommand{
+		TenantID: p.TenantID(), ProductID: p.ID(), ActorMembershipID: actor,
+		BatchNumber:      "LOT-INIT",
+		ManufactureDate:  time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+		ExpiryDate:       expiry,
+		ManufacturerName: "Acme", ManufacturingLicenceNumber: "ML-1", MRPPaise: 25000, PurchasePricePaise: 18000,
+		InitialQuantity: initial,
+	}
+}
+
+// Audit C6: a batch can be added WITH its opening stock. The batch and the
+// inbound ledger row are written in the one unit of work.
+func TestAddBatchHandler_InitialQuantity_StocksTheBatchInTheSameUnitOfWork(t *testing.T) {
+	t.Parallel()
+	productRepo, batchRepo, movementRepo := newFakeProductRepo(), newFakeBatchRepo(), newFakeMovementRepo()
+	uow := &fakeUoW{}
+	actor := newMembershipID(t)
+	p := seedProduct(t, productRepo, newTenantID(t), actor, "AB-INIT")
+	h := command.NewAddBatchHandler(uow, productRepo, batchRepo, movementRepo, func() time.Time { return fixedNow }, testNewBatchID, testNewMovementID)
+
+	out, err := h.Handle(t.Context(), addBatchCmd(p, actor, time.Date(2028, 1, 1, 0, 0, 0, 0, time.UTC), 25))
+	if err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	if uow.Runs() != 1 {
+		t.Fatalf("UoW runs: got %d want 1 (batch and stock share one transaction)", uow.Runs())
+	}
+	b, err := batchRepo.GetByID(t.Context(), p.TenantID(), out.BatchID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if b.QuantityOnHand() != 25 || b.QuantityReserved() != 0 {
+		t.Fatalf("on hand %d reserved %d; want 25 and 0", b.QuantityOnHand(), b.QuantityReserved())
+	}
+	if len(movementRepo.Movements) != 1 {
+		t.Fatalf("ledger rows: got %d want 1", len(movementRepo.Movements))
+	}
+	for _, m := range movementRepo.Movements {
+		if m.BatchID() != out.BatchID || m.Type() != batch.MovementInbound || m.Quantity() != 25 ||
+			m.QuantityOnHandAfter() != 25 || m.Reason() != command.OpeningStockReason || m.ActorMembershipID() != actor {
+			t.Fatalf("ledger row: batch %s type %s quantity %d after %d reason %q actor %s",
+				m.BatchID(), m.Type(), m.Quantity(), m.QuantityOnHandAfter(), m.Reason(), m.ActorMembershipID())
+		}
+	}
+}
+
+// Without an opening quantity nothing changes: an empty batch and no ledger row.
+func TestAddBatchHandler_NoInitialQuantity_WritesNoMovement(t *testing.T) {
+	t.Parallel()
+	productRepo, batchRepo, movementRepo := newFakeProductRepo(), newFakeBatchRepo(), newFakeMovementRepo()
+	actor := newMembershipID(t)
+	p := seedProduct(t, productRepo, newTenantID(t), actor, "AB-NONE")
+	h := command.NewAddBatchHandler(&fakeUoW{}, productRepo, batchRepo, movementRepo, func() time.Time { return fixedNow }, testNewBatchID, testNewMovementID)
+
+	out, err := h.Handle(t.Context(), addBatchCmd(p, actor, time.Date(2028, 1, 1, 0, 0, 0, 0, time.UTC), 0))
+	if err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	b, _ := batchRepo.GetByID(t.Context(), p.TenantID(), out.BatchID)
+	if b.QuantityOnHand() != 0 || b.Version() != 0 || len(movementRepo.Movements) != 0 {
+		t.Fatalf("on hand %d version %d ledger rows %d; want 0, 0 and 0", b.QuantityOnHand(), b.Version(), len(movementRepo.Movements))
+	}
+}
+
+// A refusal of the opening stock is decided BEFORE anything is written, so
+// the batch cannot half-exist: a negative quantity, or stock for a batch that
+// is already expired (the rule every inbound movement has).
+func TestAddBatchHandler_InitialQuantity_RefusedBeforeAnyWrite(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name    string
+		expiry  time.Time
+		initial int64
+		want    error
+	}{
+		{"negative quantity", time.Date(2028, 1, 1, 0, 0, 0, 0, time.UTC), -5, batch.ErrInvalid},
+		{"expired batch", fixedNow.AddDate(0, 0, -1), 5, batch.ErrExpired},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			productRepo, batchRepo, movementRepo := newFakeProductRepo(), newFakeBatchRepo(), newFakeMovementRepo()
+			actor := newMembershipID(t)
+			p := seedProduct(t, productRepo, newTenantID(t), actor, "AB-REF")
+			h := command.NewAddBatchHandler(&fakeUoW{}, productRepo, batchRepo, movementRepo, func() time.Time { return fixedNow }, testNewBatchID, testNewMovementID)
+
+			_, err := h.Handle(t.Context(), addBatchCmd(p, actor, c.expiry, c.initial))
+			if !errors.Is(err, c.want) {
+				t.Fatalf("err: got %v want %v", err, c.want)
+			}
+			if batchRepo.AddCalls != 0 || movementRepo.AddCalls != 0 {
+				t.Fatalf("writes after a refusal: %d batch, %d ledger; want none", batchRepo.AddCalls, movementRepo.AddCalls)
+			}
+		})
+	}
+}
+
+// An expired batch WITHOUT opening stock is still accepted, as before.
+func TestAddBatchHandler_ExpiredBatchWithoutStock_StillAccepted(t *testing.T) {
+	t.Parallel()
+	productRepo, batchRepo := newFakeProductRepo(), newFakeBatchRepo()
+	actor := newMembershipID(t)
+	p := seedProduct(t, productRepo, newTenantID(t), actor, "AB-OLD")
+	h := command.NewAddBatchHandler(&fakeUoW{}, productRepo, batchRepo, newFakeMovementRepo(), func() time.Time { return fixedNow }, testNewBatchID, testNewMovementID)
+
+	if _, err := h.Handle(t.Context(), addBatchCmd(p, actor, fixedNow.AddDate(0, 0, -1), 0)); err != nil {
+		t.Fatalf("Handle: %v", err)
 	}
 }

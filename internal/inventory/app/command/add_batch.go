@@ -11,7 +11,12 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 	"github.com/leadkart/leadkart-go/internal/inventory/domain/batch"
 	"github.com/leadkart/leadkart-go/internal/inventory/domain/product"
+	"github.com/leadkart/leadkart-go/internal/inventory/domain/stockmovement"
 )
+
+// OpeningStockReason is the ledger reason of the inbound movement written
+// when a batch is added together with its opening stock.
+const OpeningStockReason = "Opening stock"
 
 // AddBatchCommand is the validated input for adding a Batch to a Product.
 //
@@ -28,6 +33,10 @@ type AddBatchCommand struct {
 	ManufacturingLicenceNumber string
 	MRPPaise                   int64
 	PurchasePricePaise         int64
+	// InitialQuantity is the opening stock received with the batch. 0 (the
+	// zero value) adds an empty batch, as before. A positive value is applied
+	// as an inbound movement in the same transaction as the batch insert.
+	InitialQuantity int64
 }
 
 // AddBatchResult carries the new BatchID.
@@ -43,34 +52,53 @@ type AddBatchResult struct {
 // load and insert, and the composite FK still accepted the orphan write.
 // Wrapping both in uow.WithinTx closes it — load, re-check, and insert share
 // one tx, so a concurrent SoftDelete serialises on the products row (MVCC).
+//
+// Opening stock (audit C6): with InitialQuantity > 0 the same tx also writes
+// the inbound ledger row, so a batch and its first stock cannot half-exist.
+// The inbound is applied to the new aggregate BEFORE the insert, so its
+// refusals (an expired batch, a bad quantity) are decided before any write and
+// the batch row is inserted already holding the stock.
 type AddBatchHandler struct {
-	uow        pg.UnitOfWork
-	products   product.Repository
-	batches    batch.Repository
-	now        func() time.Time
-	newBatchID func() batch.ID
+	uow           pg.UnitOfWork
+	products      product.Repository
+	batches       batch.Repository
+	movements     stockmovement.Repository
+	now           func() time.Time
+	newBatchID    func() batch.ID
+	newMovementID func() stockmovement.ID
 }
 
 // NewAddBatchHandler wires the handler. now is the injected clock (nil →
-// time.Now). newBatchID is the aggregate-ID factory required by
-// TestArch_HandlersInjectIDFactory; tests inject a deterministic one.
-func NewAddBatchHandler(uow pg.UnitOfWork, products product.Repository, batches batch.Repository, now func() time.Time, newBatchID func() batch.ID) AddBatchHandler {
+// time.Now). newBatchID and newMovementID are the aggregate-ID factories
+// required by TestArch_HandlersInjectIDFactory; tests inject deterministic ones.
+func NewAddBatchHandler(uow pg.UnitOfWork, products product.Repository, batches batch.Repository, movements stockmovement.Repository, now func() time.Time, newBatchID func() batch.ID, newMovementID func() stockmovement.ID) AddBatchHandler {
 	if newBatchID == nil {
 		panic("command: NewAddBatchHandler newBatchID required")
+	}
+	if newMovementID == nil {
+		panic("command: NewAddBatchHandler newMovementID required")
 	}
 	if now == nil {
 		now = time.Now
 	}
-	return AddBatchHandler{uow: uow, products: products, batches: batches, now: now, newBatchID: newBatchID}
+	return AddBatchHandler{
+		uow: uow, products: products, batches: batches, movements: movements,
+		now: now, newBatchID: newBatchID, newMovementID: newMovementID,
+	}
 }
 
 // Handle adds a batch to the product inside one tenant-scoped UoW. Returns
 // product.ErrNotFound for a missing or soft-deleted parent (including the
 // read-then-write race per ADR 0061 amendment 1), batch.ErrInvalid on spec
-// failure, batch.ErrBatchNumberTaken on (product_id, batch_number) collision.
+// failure or a negative InitialQuantity, batch.ErrExpired when opening stock
+// is given for a batch that is already expired, batch.ErrBatchNumberTaken on
+// (product_id, batch_number) collision. On any error nothing is written.
 func (h AddBatchHandler) Handle(ctx context.Context, cmd AddBatchCommand) (AddBatchResult, error) {
 	if cmd.TenantID.IsZero() {
 		return AddBatchResult{}, errors.New("add_batch: tenant id required")
+	}
+	if cmd.InitialQuantity < 0 {
+		return AddBatchResult{}, fmt.Errorf("%w: initial_quantity must be >= 0 (got %d)", batch.ErrInvalid, cmd.InitialQuantity)
 	}
 	now := h.now()
 	var result AddBatchResult
@@ -108,9 +136,20 @@ func (h AddBatchHandler) Handle(ctx context.Context, cmd AddBatchCommand) (AddBa
 		if err != nil {
 			return fmt.Errorf("add batch: construct: %w", err)
 		}
+		var opening *stockmovement.Movement
+		if cmd.InitialQuantity > 0 {
+			if opening, err = h.openingStock(b, cmd, now); err != nil {
+				return err
+			}
+		}
 		// Add joins the surrounding tx via pg.TxFromContext.
 		if err := h.batches.Add(ctx, b); err != nil {
 			return fmt.Errorf("add batch: persist: %w", err)
+		}
+		if opening != nil {
+			if err := h.movements.Add(ctx, opening); err != nil {
+				return fmt.Errorf("add batch: persist opening stock: %w", err)
+			}
 		}
 		result = AddBatchResult{BatchID: b.ID()}
 		return nil
@@ -119,4 +158,27 @@ func (h AddBatchHandler) Handle(ctx context.Context, cmd AddBatchCommand) (AddBa
 		return AddBatchResult{}, err
 	}
 	return result, nil
+}
+
+// openingStock applies cmd.InitialQuantity (above 0) to the not-yet-stored
+// batch as an inbound movement and returns its ledger row. It writes nothing:
+// a refusal here leaves the database untouched.
+func (h AddBatchHandler) openingStock(b *batch.Batch, cmd AddBatchCommand, now time.Time) (*stockmovement.Movement, error) {
+	if err := b.ApplyMovement(batch.MovementInbound, cmd.InitialQuantity, now); err != nil {
+		return nil, fmt.Errorf("add batch: opening stock: %w", err)
+	}
+	m, err := stockmovement.New(h.newMovementID(), stockmovement.Spec{
+		BatchID:             b.ID(),
+		ProductID:           b.ProductID(),
+		TenantID:            b.TenantID(),
+		Type:                batch.MovementInbound,
+		Quantity:            cmd.InitialQuantity,
+		QuantityOnHandAfter: b.QuantityOnHand(),
+		Reason:              OpeningStockReason,
+		ActorMembershipID:   cmd.ActorMembershipID,
+	}, now)
+	if err != nil {
+		return nil, fmt.Errorf("add batch: opening stock: construct movement: %w", err)
+	}
+	return m, nil
 }

@@ -378,6 +378,11 @@ func handleAddBatch(log *slog.Logger, a app.Application) http.Handler {
 			writeError(w, http.StatusBadRequest, ErrCodeInvalidBody, "request body is not valid JSON")
 			return
 		}
+		if req.InitialQuantity != nil && *req.InitialQuantity < 0 {
+			writeFieldErrors(w, http.StatusUnprocessableEntity, ErrCodeValidationFailed,
+				map[string][]string{"initial_quantity": {ruleTooSmall}})
+			return
+		}
 		out, err := a.Commands.AddBatch.Handle(r.Context(), command.AddBatchCommand{
 			TenantID:                   tenant.ID(effTenant),
 			ProductID:                  product.ID(productID.String()),
@@ -389,6 +394,7 @@ func handleAddBatch(log *slog.Logger, a app.Application) http.Handler {
 			ManufacturingLicenceNumber: req.ManufacturingLicenceNumber,
 			MRPPaise:                   req.MRPPaise,
 			PurchasePricePaise:         req.PurchasePricePaise,
+			InitialQuantity:            derefOr(req.InitialQuantity, 0),
 		})
 		switch {
 		case errors.Is(err, product.ErrNotFound):
@@ -396,6 +402,12 @@ func handleAddBatch(log *slog.Logger, a app.Application) http.Handler {
 			return
 		case errors.Is(err, batch.ErrBatchNumberTaken):
 			writeError(w, http.StatusConflict, ErrCodeAlreadyExists, "batch_number already exists for this product")
+			return
+		case errors.Is(err, batch.ErrExpired):
+			// Only reachable with initial_quantity: stock cannot be received
+			// into a batch that is already expired. Nothing was written.
+			writeError(w, http.StatusConflict, ErrCodeBatchExpired,
+				"stock cannot be received into an expired batch; add the batch without initial_quantity")
 			return
 		case errors.Is(err, batch.ErrInvalid):
 			writeError(w, http.StatusUnprocessableEntity, ErrCodeValidationFailed, err.Error())

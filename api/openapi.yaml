@@ -2706,6 +2706,16 @@ paths:
         Requires `inventory.stock.manage`. The parent product MUST exist
         in the caller's tenant scope (cross-tenant or missing → 404).
         batch_number is unique per product on live rows.
+
+        Opening stock: with `initial_quantity` above 0 the batch is created
+        already holding that many units, and one `inbound` movement (reason
+        "Opening stock") is written to its ledger, both in ONE transaction:
+        either the batch exists with its stock, or nothing was written.
+        Without the field (or with 0) the batch starts empty, as before, and
+        stock is added later with `POST /inventory/batches/{batchId}/movements`.
+        Stock cannot be received into a batch that is already expired (the
+        rule of every `inbound` movement): `409 batch_expired`, and the batch
+        is NOT created.
       parameters:
         - $ref: '#/components/parameters/XCommandId'
         - { $ref: '#/components/parameters/ProductId' }
@@ -2726,11 +2736,11 @@ paths:
         '403': { $ref: '#/components/responses/TenantScopeReadOnly' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409':
-          description: batch_number already exists for this product
+          description: "`already_exists` — batch_number already exists for this product; `batch_expired` — `initial_quantity` above 0 for a batch whose expiry date has passed (nothing is written)"
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
-        '422': { $ref: '#/components/responses/Unprocessable' }
+        '422': { description: "`validation_failed` — a field is invalid. A negative `initial_quantity` names the field: `errors.initial_quantity: [too_small]`; the other fields answer with a message only. Nothing is written.", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
 
     get:
       tags: [inventory]
@@ -5988,6 +5998,7 @@ components:
         manufacturing_licence_number:  { type: string, minLength: 1, maxLength: 100 }
         mrp_paise:                     { type: integer, format: int64, minimum: 0 }
         purchase_price_paise:          { type: integer, format: int64, minimum: 0 }
+        initial_quantity:              { type: integer, format: int64, minimum: 0, description: 'Optional. Opening stock in units, received with the batch: written as one `inbound` movement in the same transaction as the batch. Absent or 0: an empty batch (the earlier behaviour). 422 `validation_failed`, `errors.initial_quantity: [too_small]` when negative; 409 `batch_expired` when above 0 and the batch is already expired.' }
 
     AddBatchResponse:
       type: object
