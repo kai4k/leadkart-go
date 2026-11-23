@@ -2,6 +2,8 @@ package subscribers
 
 import (
 	"github.com/ThreeDotsLabs/watermill/components/cqrs"
+
+	"github.com/leadkart/leadkart-go/internal/common/messaging"
 )
 
 // arch-test:idempotency-via-dedup-window — every handler routes through
@@ -25,16 +27,22 @@ func Handlers(
 ) []cqrs.EventHandler {
 	var handlers []cqrs.EventHandler
 	if leadAssigned != nil {
-		handlers = append(handlers, cqrs.NewEventHandler(HandlerLeadAssigned, leadAssigned.Handle))
+		// Replay-safe (also the next two and order-confirmed): the handler only writes one
+		// inbox notification saying something happened, and the happening does not
+		// un-happen. A late "lead assigned" or "order confirmed" is still true, and the
+		// notification's dedup window keeps a double delivery to one row.
+		handlers = append(handlers, messaging.ReplaySafe(cqrs.NewEventHandler(HandlerLeadAssigned, leadAssigned.Handle)))
 	}
 	if workItemCreated != nil {
-		handlers = append(handlers, cqrs.NewEventHandler(HandlerWorkItemCreated, workItemCreated.Handle))
+		handlers = append(handlers, messaging.ReplaySafe(cqrs.NewEventHandler(HandlerWorkItemCreated, workItemCreated.Handle)))
 	}
 	if workItemOverdue != nil {
+		// Not replay-safe: "overdue" is a claim about now. A late one for a task done
+		// since would tell the assignee something false; the daily scan raises it again.
 		handlers = append(handlers, cqrs.NewEventHandler(HandlerWorkItemOverdue, workItemOverdue.Handle))
 	}
 	if orderConfirmed != nil {
-		handlers = append(handlers, cqrs.NewEventHandler(HandlerOrderConfirmed, orderConfirmed.Handle))
+		handlers = append(handlers, messaging.ReplaySafe(cqrs.NewEventHandler(HandlerOrderConfirmed, orderConfirmed.Handle)))
 	}
 	if stockAlerts != nil {
 		handlers = append(handlers, StockAlertHandlers(stockAlerts)...)

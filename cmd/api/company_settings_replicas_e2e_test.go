@@ -57,6 +57,8 @@ type policyStack struct {
 	pool      *pgxpool.Pool
 	pubsub    *gochannel.GoChannel
 	tx        *pg.Transactor
+	// handlerTimeout is the per-attempt handler timeout (zero: the router default).
+	handlerTimeout time.Duration
 }
 
 // runRouter starts a router hosting handlers on the shared pub/sub and stops it
@@ -73,6 +75,7 @@ func (s policyStack) runRouter(t *testing.T, handlers []cqrs.EventHandler) {
 		DeadLetters:      messaging.NewDeadLetterWriter(s.pool, log, time.Now),
 		CloseTimeout:     2 * time.Second,
 		Retry:            messaging.RetryConfig{MaxRetries: 1, InitialInterval: 10 * time.Millisecond, MaxInterval: 50 * time.Millisecond, Multiplier: 2.0},
+		HandlerTimeout:   s.handlerTimeout,
 	})
 	if err != nil {
 		t.Fatalf("messaging.NewRouter: %v", err)

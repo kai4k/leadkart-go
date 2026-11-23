@@ -36,6 +36,8 @@ type replayRig struct {
 	replayer *messaging.DeadLetterReplayer
 }
 
+// startReplayRig runs the handlers on a router with a forwarder. The replayer it returns
+// replays only the handlers the test marked with [messaging.ReplaySafe].
 func startReplayRig(t *testing.T, pool *pgxpool.Pool, retry messaging.RetryConfig, attemptTimeout time.Duration, handlers ...cqrs.EventHandler) replayRig {
 	t.Helper()
 	// t.Context() is cancelled just before the cleanups run; the router and the forwarder must
@@ -95,7 +97,7 @@ func startReplayRig(t *testing.T, pool *pgxpool.Pool, retry messaging.RetryConfi
 			time.Sleep(20 * time.Millisecond) // arch-test:wait-justified — poll interval inside a deadline-bounded loop
 		}
 	})
-	return replayRig{pool: pool, replayer: messaging.NewDeadLetterReplayer(pool, log)}
+	return replayRig{pool: pool, replayer: messaging.NewDeadLetterReplayer(pool, log, messaging.ReplaySafeHandlerNames(handlers))}
 }
 
 func publishTestEvents(t *testing.T, pool *pgxpool.Pool, ns ...int) {
@@ -179,14 +181,14 @@ func TestDeadLetterReplay_ATimedOutEventIsDeliveredOnceTheBlockClears(t *testing
 	var blocked atomic.Bool
 	blocked.Store(true)
 	var successes atomic.Int32
-	h := cqrs.NewEventHandler(handler, func(hctx context.Context, e *pubsubTestEvent) error {
+	h := messaging.ReplaySafe(cqrs.NewEventHandler(handler, func(hctx context.Context, e *pubsubTestEvent) error {
 		if blocked.Load() {
 			<-hctx.Done()
 			return hctx.Err()
 		}
 		successes.Add(1)
 		return nil
-	})
+	}))
 	rig := startReplayRig(t, pool, fastRetry, 150*time.Millisecond, h)
 	publishTestEvents(t, pool, 1)
 	waitUntil(t, 10*time.Second, "the stuck event is dead-lettered", func() bool {
@@ -233,11 +235,11 @@ func TestDeadLetterReplay_IsBounded(t *testing.T) {
 	pool := inboxFixture(t)
 	const handler = "test.replay.bounded.Handler"
 	var attempts atomic.Int32
-	h := cqrs.NewEventHandler(handler, func(hctx context.Context, e *pubsubTestEvent) error {
+	h := messaging.ReplaySafe(cqrs.NewEventHandler(handler, func(hctx context.Context, e *pubsubTestEvent) error {
 		attempts.Add(1)
 		<-hctx.Done()
 		return hctx.Err()
-	})
+	}))
 	rig := startReplayRig(t, pool, fastRetry, 100*time.Millisecond, h)
 	publishTestEvents(t, pool, 1)
 
@@ -274,20 +276,21 @@ func TestDeadLetterReplay_OnlyATimeoutIsReplayedAndOnlyForItsHandler(t *testing.
 	var blocked atomic.Bool
 	blocked.Store(true)
 	var successes atomic.Int32
-	hStuck := cqrs.NewEventHandler(stuck, func(hctx context.Context, e *pubsubTestEvent) error {
+	hStuck := messaging.ReplaySafe(cqrs.NewEventHandler(stuck, func(hctx context.Context, e *pubsubTestEvent) error {
 		if blocked.Load() {
 			<-hctx.Done()
 			return hctx.Err()
 		}
 		successes.Add(1)
 		return nil
-	})
-	hPoisoned := cqrs.NewEventHandler(poisoned, func(context.Context, *pubsubTestEvent) error {
+	}))
+	// The poisoned handler is replay-safe too: only the timeout filter keeps it from running again.
+	hPoisoned := messaging.ReplaySafe(cqrs.NewEventHandler(poisoned, func(context.Context, *pubsubTestEvent) error {
 		mu.Lock()
 		poisonedRuns++
 		mu.Unlock()
 		return messaging.NonRetryable(errors.New("malformed"))
-	})
+	}))
 	rig := startReplayRig(t, pool, fastRetry, 150*time.Millisecond, hStuck, hPoisoned)
 	publishTestEvents(t, pool, 1)
 	waitUntil(t, 10*time.Second, "both are dead-lettered", func() bool {
@@ -296,7 +299,9 @@ func TestDeadLetterReplay_OnlyATimeoutIsReplayedAndOnlyForItsHandler(t *testing.
 	})
 
 	blocked.Store(false)
-	n, err := rig.replayer.ReplayDueFor(t.Context(), time.Now().Add(time.Hour), 10, stuck)
+	// Replay for EVERY handler: the poisoned one is replay-safe, so only the "a timeout and
+	// nothing else" rule keeps its dead letter from being delivered again.
+	n, err := rig.replayer.ReplayDue(t.Context(), time.Now().Add(time.Hour), 10)
 	if err != nil || n != 1 {
 		t.Fatalf("replayed %d, %v; want only the timeout", n, err)
 	}
@@ -309,5 +314,44 @@ func TestDeadLetterReplay_OnlyATimeoutIsReplayedAndOnlyForItsHandler(t *testing.
 	}
 	if got := messagingtest.DeadLetterCount(t.Context(), t, pool, poisoned); got != 1 {
 		t.Fatalf("poisoned dead letters: %d, want 1", got)
+	}
+}
+
+// Review G2c B2: replay is opt-in. A handler that is not marked replay-safe is never
+// delivered again automatically, however it dead-lettered: applying a stale event to an
+// order that has moved on corrupts stock. Its dead letter stays for a person.
+func TestDeadLetterReplay_AHandlerThatIsNotMarkedReplaySafeIsNeverReplayed(t *testing.T) {
+	pool := inboxFixture(t)
+	const handler = "test.replay.optin.Handler"
+	var runs atomic.Int32
+	h := cqrs.NewEventHandler(handler, func(hctx context.Context, e *pubsubTestEvent) error { // not ReplaySafe
+		runs.Add(1)
+		<-hctx.Done()
+		return hctx.Err()
+	})
+	rig := startReplayRig(t, pool, fastRetry, 100*time.Millisecond, h)
+	publishTestEvents(t, pool, 1)
+	waitUntil(t, 10*time.Second, "the stuck event is dead-lettered", func() bool {
+		return messagingtest.DeadLetterCount(t.Context(), t, pool, handler) == 1
+	})
+	before := runs.Load()
+
+	n, err := rig.replayer.ReplayDue(t.Context(), time.Now().Add(24*time.Hour), 10)
+	if err != nil || n != 0 {
+		t.Fatalf("replayed %d, %v; want none for a handler that did not opt in", n, err)
+	}
+	n, err = rig.replayer.ReplayDueFor(t.Context(), time.Now().Add(24*time.Hour), 10, handler)
+	if err != nil || n != 0 {
+		t.Fatalf("replayed %d, %v by name; want none", n, err)
+	}
+	time.Sleep(300 * time.Millisecond) // arch-test:wait-justified — absence of a delivery has no event to wait for
+	if got := runs.Load(); got != before {
+		t.Fatalf("the handler ran %d more times after the replay job", got-before)
+	}
+	if got := messagingtest.DeadLetterCount(t.Context(), t, pool, handler); got != 1 {
+		t.Fatalf("the dead letter must stay: %d rows", got)
+	}
+	if got := messagingtest.ReplayCount(t.Context(), t, pool, handler); got != 0 {
+		t.Fatalf("replays recorded: %d, want 0", got)
 	}
 }

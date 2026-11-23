@@ -509,7 +509,7 @@ func run(ctx context.Context, stdout *os.File) error {
 	phantomLockout := adapters.NewPhantomLockoutRepository(pool, tx, []byte(cfg.JWT.SigningKey))
 	// A handler attempt that timed out is dead-lettered after one retry; this delivers it
 	// again, off the lane (bounded, with backoff; review G2b H1).
-	if err := river.AddWorkerSafely(workers, jobs.NewDeadLetterReplayWorker(messaging.NewDeadLetterReplayer(pool, logger), logger, time.Now)); err != nil {
+	if err := river.AddWorkerSafely(workers, jobs.NewDeadLetterReplayWorker(messaging.NewDeadLetterReplayer(pool, logger, messaging.ReplaySafeHandlerNames(cqrsHandlers)), logger, time.Now)); err != nil {
 		return fmt.Errorf("register dead letter replay worker: %w", err)
 	}
 	if err := river.AddWorkerSafely(workers, identityjobs.NewLoginPhantomPurgeWorker(phantomLockout, logger, time.Now)); err != nil {

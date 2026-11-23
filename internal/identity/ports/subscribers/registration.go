@@ -6,6 +6,8 @@ import (
 
 	"github.com/ThreeDotsLabs/watermill/components/cqrs"
 
+	"github.com/leadkart/leadkart-go/internal/common/messaging"
+
 	"github.com/leadkart/leadkart-go/internal/identity/domain/refreshtoken"
 	"github.com/leadkart/leadkart-go/internal/identity/integrationevents"
 )
@@ -84,18 +86,24 @@ func Handlers(
 	siem := NewReuseDetectedSIEM(log)
 
 	handlers := []cqrs.EventHandler{
-		// Cache-evict (opportunistic).
-		cqrs.NewEventHandler(HandlerInvalidateCacheOnPasswordChanged, invalidate.HandlePasswordChanged),
-		cqrs.NewEventHandler(HandlerInvalidateCacheOnGloballySuspended, invalidate.HandleGloballySuspended),
-		cqrs.NewEventHandler(HandlerInvalidateCacheOnEmailChanged, invalidate.HandleEmailChanged),
-		cqrs.NewEventHandler(HandlerInvalidateCacheOnStampRotated, invalidate.HandleSecurityStampRotated),
+		// Cache-evict (opportunistic). Replay-safe: it only drops a cached stamp, so
+		// delivering it late costs one reload and can never leave a wrong value behind.
+		messaging.ReplaySafe(cqrs.NewEventHandler(HandlerInvalidateCacheOnPasswordChanged, invalidate.HandlePasswordChanged)),
+		messaging.ReplaySafe(cqrs.NewEventHandler(HandlerInvalidateCacheOnGloballySuspended, invalidate.HandleGloballySuspended)),
+		messaging.ReplaySafe(cqrs.NewEventHandler(HandlerInvalidateCacheOnEmailChanged, invalidate.HandleEmailChanged)),
+		messaging.ReplaySafe(cqrs.NewEventHandler(HandlerInvalidateCacheOnStampRotated, invalidate.HandleSecurityStampRotated)),
 
-		// Family-revoke (must-succeed).
-		cqrs.NewEventHandler(HandlerRevokeOnPasswordChange, revoke.HandlePasswordChanged),
-		cqrs.NewEventHandler(HandlerRevokeOnGloballySuspended, revoke.HandleGloballySuspended),
-		cqrs.NewEventHandler(HandlerRevokeOnEmailChanged, revoke.HandleEmailChanged),
-		cqrs.NewEventHandler(HandlerRevokeOnMembershipDeactivate, revoke.HandleMembershipDeactivated),
-		cqrs.NewEventHandler(HandlerRevokeOnTenantSuspended, revoke.HandleTenantSuspended),
+		// Family-revoke (must-succeed). Replay-safe, decided by reading the handlers: a
+		// family only ever goes active -> revoked and Revoke is a no-op on a revoked one,
+		// so a late run cannot undo anything or touch an order, stock or document. The
+		// failure it guards against is the unsafe one (a lost revoke leaves a suspended
+		// or password-changed person's refresh token alive); the worst a late run does is
+		// end a session opened after the event, which costs that person one sign-in.
+		messaging.ReplaySafe(cqrs.NewEventHandler(HandlerRevokeOnPasswordChange, revoke.HandlePasswordChanged)),
+		messaging.ReplaySafe(cqrs.NewEventHandler(HandlerRevokeOnGloballySuspended, revoke.HandleGloballySuspended)),
+		messaging.ReplaySafe(cqrs.NewEventHandler(HandlerRevokeOnEmailChanged, revoke.HandleEmailChanged)),
+		messaging.ReplaySafe(cqrs.NewEventHandler(HandlerRevokeOnMembershipDeactivate, revoke.HandleMembershipDeactivated)),
+		messaging.ReplaySafe(cqrs.NewEventHandler(HandlerRevokeOnTenantSuspended, revoke.HandleTenantSuspended)),
 
 		// SIEM.
 		cqrs.NewEventHandler(HandlerReuseDetectedSIEM, siem.Handle),

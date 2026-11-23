@@ -42,24 +42,30 @@ var replayBackoff = [MaxDeadLetterReplays]time.Duration{time.Minute, 5 * time.Mi
 // a backoff and at most [MaxDeadLetterReplays] times. The dead-letter row is never
 // changed or removed; each replay is one row in common.dead_letter_replay. The inbox
 // keeps a replay that races a late success from running the handler twice.
+//
+// Replay is opt-in: only the handlers named at construction (those their module marked
+// with [ReplaySafe]) are replayed. Every other handler's dead letters stay for a person.
 type DeadLetterReplayer struct {
-	pool *pgxpool.Pool
-	log  *slog.Logger
+	pool       *pgxpool.Pool
+	log        *slog.Logger
+	replaySafe []string
 }
 
-// NewDeadLetterReplayer wires the replayer.
-func NewDeadLetterReplayer(pool *pgxpool.Pool, log *slog.Logger) *DeadLetterReplayer {
+// NewDeadLetterReplayer wires the replayer. replaySafe names the handlers whose timed-out
+// dead letters may be delivered again ([ReplaySafeHandlerNames]); none means none.
+func NewDeadLetterReplayer(pool *pgxpool.Pool, log *slog.Logger, replaySafe []string) *DeadLetterReplayer {
 	if pool == nil || log == nil {
 		panic("messaging: NewDeadLetterReplayer requires pool, log")
 	}
-	return &DeadLetterReplayer{pool: pool, log: log}
+	return &DeadLetterReplayer{pool: pool, log: log, replaySafe: append([]string{}, replaySafe...)}
 }
 
 // dueReplayQuery picks timed-out dead letters that have no replay of their own yet,
 // whose (message, handler) pair is under the replay bound and whose backoff for its
 // next replay has passed at $1. $2 the timeout reason prefix, $3 the backoff in
 // seconds (index n = the wait before replay n+1), $4 the batch size, $5 one handler
-// name or empty for every handler.
+// name or empty for every handler, $6 the handlers marked replay-safe: any other
+// handler's dead letter is never picked.
 const dueReplayQuery = `
 SELECT d.id, d.topic, d.handler_name, d.message_id, d.payload, d.metadata
 FROM   common.dead_letter d
@@ -69,6 +75,7 @@ CROSS  JOIN LATERAL (
        ) done
 WHERE  starts_with(d.reason, $2)
 AND    ($5 = '' OR d.handler_name = $5)
+AND    d.handler_name = ANY($6::text[])
 AND    done.n < cardinality($3::float8[])
 AND    NOT EXISTS (SELECT 1 FROM common.dead_letter_replay r WHERE r.dead_letter_id = d.id)
 AND    d.dead_lettered_at + make_interval(secs => ($3::float8[])[done.n + 1]) <= $1
@@ -98,7 +105,7 @@ func (r *DeadLetterReplayer) ReplayDueFor(ctx context.Context, now time.Time, li
 	for i, d := range replayBackoff {
 		backoff[i] = d.Seconds()
 	}
-	rows, err := r.pool.Query(ctx, dueReplayQuery, now.UTC(), TimeoutReasonPrefix, backoff, limit, handlerName)
+	rows, err := r.pool.Query(ctx, dueReplayQuery, now.UTC(), TimeoutReasonPrefix, backoff, limit, handlerName, r.replaySafe)
 	if err != nil {
 		return 0, fmt.Errorf("messaging: select due dead letters: %w", err)
 	}

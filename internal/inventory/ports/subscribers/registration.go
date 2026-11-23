@@ -2,6 +2,8 @@ package subscribers
 
 import (
 	"github.com/ThreeDotsLabs/watermill/components/cqrs"
+
+	"github.com/leadkart/leadkart-go/internal/common/messaging"
 )
 
 // arch-test:idempotency-via-router-middleware — the cqrs handlers built here are
@@ -36,9 +38,11 @@ func Handlers(
 		handlers = append(handlers, cqrs.NewEventHandler(HandlerReleaseStock, release.Handle))
 	}
 	if policyChanged != nil {
+		// Replay-safe: the replica stores a policy only when its version is newer than
+		// the stored one, so a late delivery is a no-op or an improvement, never a step back.
 		handlers = append(handlers,
-			cqrs.NewEventHandler(HandlerPolicyChanged, policyChanged.Handle),
-			cqrs.NewEventHandler(HandlerPolicyRepublished, policyChanged.HandleRepublished))
+			messaging.ReplaySafe(cqrs.NewEventHandler(HandlerPolicyChanged, policyChanged.Handle)),
+			messaging.ReplaySafe(cqrs.NewEventHandler(HandlerPolicyRepublished, policyChanged.HandleRepublished)))
 	}
 	return handlers
 }

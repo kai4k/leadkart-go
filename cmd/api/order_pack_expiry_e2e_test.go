@@ -39,6 +39,7 @@ import (
 	"github.com/leadkart/leadkart-go/internal/common/pg"
 	dispatchadapters "github.com/leadkart/leadkart-go/internal/dispatch/adapters"
 	dispatchcommand "github.com/leadkart/leadkart-go/internal/dispatch/app/command"
+	dispatchquery "github.com/leadkart/leadkart-go/internal/dispatch/app/query"
 	"github.com/leadkart/leadkart-go/internal/dispatch/domain/consignmentnote"
 	dispatchsubscribers "github.com/leadkart/leadkart-go/internal/dispatch/ports/subscribers"
 	inventoryadapters "github.com/leadkart/leadkart-go/internal/inventory/adapters"
@@ -59,6 +60,17 @@ import (
 type fulfilmentStack struct {
 	pause  func()
 	resume func()
+	// replayer is the dead-letter replayer cmd/worker builds: it replays the handlers
+	// this stack's handlers marked replay-safe, and no others.
+	replayer *messaging.DeadLetterReplayer
+}
+
+// fulfilmentOptions shape the stack for a test that needs handlers to be late.
+type fulfilmentOptions struct {
+	// wrap may replace a handler (for example with one that blocks until a gate opens).
+	wrap func(cqrs.EventHandler) cqrs.EventHandler
+	// handlerTimeout is the per-attempt timeout (zero: the router default).
+	handlerTimeout time.Duration
 }
 
 // startFulfilmentStack runs the production event path for an order's fulfilment:
@@ -68,12 +80,18 @@ type fulfilmentStack struct {
 // publish blocks until a handler has taken the message).
 func startFulfilmentStack(t *testing.T, pool *pgxpool.Pool) *fulfilmentStack {
 	t.Helper()
+	return startFulfilmentStackWith(t, pool, fulfilmentOptions{})
+}
+
+func startFulfilmentStackWith(t *testing.T, pool *pgxpool.Pool, opts fulfilmentOptions) *fulfilmentStack {
+	t.Helper()
 	log := silentLogger()
 	tx := pg.NewTransactor(pool)
 	s := policyStack{
-		pool:   pool,
-		pubsub: messaging.NewPubSub(watermill.NewSlogLogger(log)),
-		tx:     tx,
+		pool:           pool,
+		pubsub:         messaging.NewPubSub(watermill.NewSlogLogger(log)),
+		tx:             tx,
+		handlerTimeout: opts.handlerTimeout,
 	}
 	t.Cleanup(func() { _ = s.pubsub.Close() })
 
@@ -101,12 +119,24 @@ func startFulfilmentStack(t *testing.T, pool *pgxpool.Pool) *fulfilmentStack {
 		ordersadapters.NewInvoiceNumberAllocator(pool), stockGuard, time.Now, func() invoice.ID { return invoice.ID(ids.NewV7().String()) })
 	attach := orderscommand.NewAttachConsignmentHandler(orderRepo, time.Now)
 
+	release := inventorysubscribers.NewReleaseStockSubscriber(
+		inventorycommand.NewReleaseOrderStockHandler(tx, batches, movements, movements, time.Now, newMID), log)
+	dispatchCancelled := dispatchsubscribers.NewOrderCancelledSubscriber(
+		dispatchquery.NewGetConsignmentNoteByOrderHandler(dispatchRepo), dispatchcommand.NewMarkFailedHandler(dispatchRepo, time.Now), log)
+
 	var handlers []cqrs.EventHandler
-	handlers = append(handlers, inventorysubscribers.Handlers(reserve, consume, nil, nil)...)
-	handlers = append(handlers, dispatchsubscribers.Handlers(dispatchPacked, nil)...)
+	handlers = append(handlers, inventorysubscribers.Handlers(reserve, consume, release, nil)...)
+	handlers = append(handlers, dispatchsubscribers.Handlers(dispatchPacked, dispatchCancelled)...)
 	handlers = append(handlers, orderssubscribers.Handlers(
 		orderssubscribers.NewAutoInvoiceSubscriber(invoiceOrder, log),
 		orderssubscribers.NewConsignmentCreatedSubscriber(invoiceOrder, attach, log), nil, nil, nil)...)
+	// The replayer is built from the handlers as registered, before a test wraps any.
+	replayer := messaging.NewDeadLetterReplayer(pool, log, messaging.ReplaySafeHandlerNames(handlers))
+	if opts.wrap != nil {
+		for i, h := range handlers {
+			handlers[i] = opts.wrap(h)
+		}
+	}
 	s.runRouter(t, handlers)
 
 	var stop func()
@@ -127,7 +157,7 @@ func startFulfilmentStack(t *testing.T, pool *pgxpool.Pool) *fulfilmentStack {
 	}
 	start()
 	t.Cleanup(func() { stop() })
-	return &fulfilmentStack{pause: func() { stop() }, resume: start}
+	return &fulfilmentStack{pause: func() { stop() }, resume: start, replayer: replayer}
 }
 
 // confirmedOrderOn quotes, approves, pays the token and confirms an order of 10 units of
