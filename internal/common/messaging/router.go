@@ -400,6 +400,12 @@ func attemptTimeout(d time.Duration) message.HandlerMiddleware {
 				}
 			}
 			if err != nil && led != nil && led.timedOut && led.attemptsAfter >= 1 {
+				// The last attempt after a timeout. Whatever it failed with, the event
+				// is a stuck one and keeps the timeout reason (the replay job reads it),
+				// unless the failure is already permanent: that is its own reason.
+				if _, already := errors.AsType[attemptTimedOutError](err); !already && !IsNonRetryable(err) {
+					err = attemptTimedOutError{after: d, err: err}
+				}
 				err = NonRetryable(err)
 			}
 			return out, err
