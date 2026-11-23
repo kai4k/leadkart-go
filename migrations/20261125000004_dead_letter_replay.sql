@@ -51,4 +51,14 @@ $$;
 
 DROP TABLE IF EXISTS common.dead_letter_replay;
 
+-- The Up took UPDATE and DELETE on the dead letters away from the application role; give
+-- them back (the base grants' state).
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'leadkart_app') THEN
+        GRANT UPDATE, DELETE ON common.dead_letter TO leadkart_app;
+    END IF;
+END
+$$;
+
 -- +goose StatementEnd

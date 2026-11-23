@@ -1286,3 +1286,50 @@ func TestRefreshTokensClientBindingMigration_UpDownUpAndGrants(t *testing.T) {
 		t.Fatalf("after re-up: columns=%v app select/insert/update=%v, want both", columns(), write())
 	}
 }
+
+// deadLetterReplayMigration is the version of 20261125000004_dead_letter_replay.sql.
+const deadLetterReplayMigration = 20261125000004
+
+// Review G2d: the Down of the dead-letter migration undoes what its Up took away. The
+// application role holds only SELECT and INSERT on the dead letters after Up, and holds
+// UPDATE and DELETE on them again after Down (the base grants' state), and Up again takes
+// them away.
+func TestDeadLetterReplayMigration_DownGivesBackWhatUpTookAway(t *testing.T) {
+	dsn := startPostgres(t)
+	db, err := sql.Open("pgx", dsn)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer db.Close()
+	createAppRole(t, db)
+	applyMigrations(t, dsn)
+
+	writes := func() bool {
+		return hasPriv(t, db, `SELECT bool_or(has_table_privilege('leadkart_app', 'common.dead_letter', p))
+			FROM unnest(ARRAY['UPDATE','DELETE']) AS p`)
+	}
+	if writes() {
+		t.Fatal("after up the application role still holds UPDATE or DELETE on common.dead_letter")
+	}
+	gdb, err := goose.OpenDBWithDriver("pgx", dsn)
+	if err != nil {
+		t.Fatalf("goose open: %v", err)
+	}
+	defer gdb.Close()
+	if err := pg.EnsureGooseDialect(); err != nil {
+		t.Fatalf("dialect: %v", err)
+	}
+	if err := goose.DownToContext(t.Context(), gdb, migrationsDir(t), deadLetterReplayMigration-1); err != nil {
+		t.Fatalf("goose down: %v", err)
+	}
+	if !hasPriv(t, db, `SELECT bool_and(has_table_privilege('leadkart_app', 'common.dead_letter', p))
+			FROM unnest(ARRAY['UPDATE','DELETE']) AS p`) {
+		t.Fatal("the down migration did not give UPDATE and DELETE on common.dead_letter back")
+	}
+	if err := goose.UpContext(t.Context(), gdb, migrationsDir(t)); err != nil {
+		t.Fatalf("goose up again: %v", err)
+	}
+	if writes() {
+		t.Fatal("after re-up the application role holds UPDATE or DELETE on common.dead_letter again")
+	}
+}
