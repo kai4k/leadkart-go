@@ -163,13 +163,13 @@ func (h LogStockMovementHandler) persist(ctx context.Context, cmd LogStockMoveme
 	return result, nil
 }
 
-// signedQuantityForType applies the ledger sign convention: Outbound and WriteOff negate,
+// signedQuantityForType applies the ledger sign convention: Outbound, WriteOff and ReturnToMaker negate,
 // everything else keeps the positive magnitude.
 //
 // Adjustment direction (count-up vs shrinkage) is not disambiguated in Slice 1;
 // add a direction enum and branch here when product asks (ADR 0061 §"Deferred").
 func signedQuantityForType(mt batch.MovementType, magnitude int64) int64 {
-	if mt == batch.MovementOutbound || mt == batch.MovementWriteOff {
+	if mt == batch.MovementOutbound || mt == batch.MovementWriteOff || mt == batch.MovementReturnToMaker {
 		return -magnitude
 	}
 	return magnitude

@@ -194,7 +194,7 @@ func TestConsumeOrderStock_ShipsAndReleasesHold(t *testing.T) {
 		{BatchID: b.ID(), ProductID: p.ID(), Quantity: 40},
 	}}
 
-	h := command.NewConsumeOrderStockHandler(uow, batches, movements, ledger, fixedClock, testNewMovementID)
+	h := command.NewConsumeOrderStockHandler(uow, batches, movements, ledger, sellabilitytest.Resolver(fixedNow), fixedClock, testNewMovementID)
 	res, err := h.Handle(t.Context(), command.ConsumeOrderStockCommand{
 		TenantID: p.TenantID(), OrderID: uuid.NewString(), ActorMembershipID: actor,
 	})
@@ -215,7 +215,7 @@ func TestConsumeOrderStock_NothingOutstandingIsNoOp(t *testing.T) {
 	ledger := &fakeReservationLedger{outstanding: nil}
 	actor := newMembershipID(t)
 
-	h := command.NewConsumeOrderStockHandler(uow, batches, movements, ledger, fixedClock, testNewMovementID)
+	h := command.NewConsumeOrderStockHandler(uow, batches, movements, ledger, sellabilitytest.Resolver(fixedNow), fixedClock, testNewMovementID)
 	res, err := h.Handle(t.Context(), command.ConsumeOrderStockCommand{
 		TenantID: newTenantID(t), OrderID: uuid.NewString(), ActorMembershipID: actor,
 	})
@@ -247,4 +247,29 @@ func TestReserveOrderStock_AtFiveAMIST_OnTheFirstOfTheNextMonth_PrintedExpiryIsP
 	require.False(t, res.Reserved)
 	require.Len(t, res.Shortfalls, 1)
 	require.Zero(t, b.QuantityReserved())
+}
+
+// Review B2: units reserved while the batch was sellable cannot ship once its printed
+// month is over: the consume refuses (ErrExpired), the whole transaction changes nothing.
+func TestConsumeOrderStock_RefusesToShipUnitsOfABatchThatHasSinceExpired(t *testing.T) {
+	t.Parallel()
+	batches := newFakeBatchRepo()
+	movements := newFakeMovementRepo()
+	actor := newMembershipID(t)
+	p := seedProduct(t, newFakeProductRepo(), newTenantID(t), actor, "SKU-B2")
+	b := seedBatchExpiryStock(t, batches, p, actor, "JAN27", time.Date(2027, 1, 31, 0, 0, 0, 0, time.UTC), 10)
+	orderID := uuid.NewString()
+	reserve := command.NewReserveOrderStockHandler(&fakeUoW{}, batches, movements, &fakeReservationLedger{}, &fakeEnqueuer{}, sellabilitytest.Resolver(fixedNow), fixedClock, testNewMovementID)
+	res, err := reserve.Handle(t.Context(), command.ReserveOrderStockCommand{
+		TenantID: p.TenantID(), OrderID: orderID, ActorMembershipID: actor, Lines: []command.ReserveLine{{ProductID: p.ID(), Quantity: 10}},
+	})
+	require.NoError(t, err)
+	require.True(t, res.Reserved)
+
+	later := time.Date(2027, 2, 10, 12, 0, 0, 0, time.UTC)
+	ledger := &fakeReservationLedger{outstanding: []stockmovement.OutstandingReservation{{BatchID: b.ID(), ProductID: p.ID(), Quantity: 10}}}
+	consume := command.NewConsumeOrderStockHandler(&fakeUoW{}, batches, movements, ledger, sellabilitytest.Resolver(later), func() time.Time { return later }, testNewMovementID)
+	_, err = consume.Handle(t.Context(), command.ConsumeOrderStockCommand{TenantID: p.TenantID(), OrderID: orderID, ActorMembershipID: actor})
+	require.ErrorIs(t, err, batch.ErrExpired)
+	require.Equal(t, int64(10), b.QuantityOnHand(), "nothing shipped")
 }

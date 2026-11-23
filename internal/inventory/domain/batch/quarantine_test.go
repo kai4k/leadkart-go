@@ -129,3 +129,52 @@ func TestPastPrintedExpiry_OnlyQuarantineAndWriteOffRemain(t *testing.T) {
 		t.Fatalf("inbound on the last day of the printed month: %v", err)
 	}
 }
+
+// Review B2/B3: nothing leaves as a sale or shipment past the PRINTED expiry, whoever
+// calls: not an outbound, and not units that were reserved before the expiry.
+func TestOutbound_PastThePrintedExpiryIsRefusedEvenForReservedUnits(t *testing.T) {
+	t.Parallel()
+	b := stocked(t, 20)
+	if err := b.ApplyMovement(batch.MovementReservation, 8, fixedNow, fixedNow); err != nil {
+		t.Fatal(err)
+	}
+	after := time.Date(2028, 2, 1, 0, 0, 0, 0, time.UTC) // the batch prints 01/2028
+	if err := b.ApplyMovement(batch.MovementOutbound, 3, after, after); !errors.Is(err, batch.ErrExpired) {
+		t.Fatalf("an outbound past the printed expiry: %v", err)
+	}
+	// The consume path: release the hold, then ship. The shipment is the refused half.
+	if err := b.ApplyMovement(batch.MovementRelease, 8, after, after); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.ApplyMovement(batch.MovementOutbound, 8, after, after); !errors.Is(err, batch.ErrExpired) {
+		t.Fatalf("shipping released units past the printed expiry: %v", err)
+	}
+	// On the last day of the printed month it still ships.
+	if err := stocked(t, 5).ApplyMovement(batch.MovementOutbound, 5, fixedNow, time.Date(2028, 1, 31, 0, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatalf("outbound on the last day of the printed month: %v", err)
+	}
+}
+
+func TestReturnToMaker_TakesQuarantinedUnitsOutAndIsAllowedPastExpiry(t *testing.T) {
+	t.Parallel()
+	b := stocked(t, 30)
+	after := time.Date(2028, 2, 1, 0, 0, 0, 0, time.UTC)
+	if err := b.ApplyMovement(batch.MovementReturnToMaker, 5, after, after); !errors.Is(err, batch.ErrInsufficientQuarantined) {
+		t.Fatalf("returning units that are not set apart: %v", err)
+	}
+	if err := b.ApplyMovement(batch.MovementQuarantine, 12, after, after); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.ApplyMovement(batch.MovementReturnToMaker, 7, after, after); err != nil {
+		t.Fatalf("return to the maker past expiry: %v", err)
+	}
+	if b.QuantityOnHand() != 23 || b.QuantityQuarantined() != 5 || b.IsDeleted() {
+		t.Fatalf("on-hand %d quarantined %d deleted %v", b.QuantityOnHand(), b.QuantityQuarantined(), b.IsDeleted())
+	}
+	if !batch.MovementReturnToMaker.IsValid() || !batch.MovementReturnToMaker.IsMutating() {
+		t.Fatal("return_to_maker is a real, on-hand-changing movement type")
+	}
+	if err := b.ApplyMovement(batch.MovementReturnToMaker, 6, after, after); !errors.Is(err, batch.ErrInsufficientQuarantined) {
+		t.Fatalf("returning more than is set apart: %v", err)
+	}
+}

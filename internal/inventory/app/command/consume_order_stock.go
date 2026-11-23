@@ -8,6 +8,7 @@ import (
 	"github.com/leadkart/leadkart-go/internal/common/pg"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
+	"github.com/leadkart/leadkart-go/internal/inventory/app/sellability"
 	"github.com/leadkart/leadkart-go/internal/inventory/domain/batch"
 	"github.com/leadkart/leadkart-go/internal/inventory/domain/stockmovement"
 )
@@ -40,13 +41,14 @@ type ConsumeOrderStockHandler struct {
 	batches       batch.Repository
 	movements     stockmovement.Repository
 	ledger        ReservationLedger
+	window        sellability.Resolver
 	now           func() time.Time
 	newMovementID func() stockmovement.ID
 }
 
 // NewConsumeOrderStockHandler wires the handler. newMovementID required;
 // now nil → time.Now.
-func NewConsumeOrderStockHandler(uow pg.UnitOfWork, batches batch.Repository, movements stockmovement.Repository, ledger ReservationLedger, now func() time.Time, newMovementID func() stockmovement.ID) ConsumeOrderStockHandler {
+func NewConsumeOrderStockHandler(uow pg.UnitOfWork, batches batch.Repository, movements stockmovement.Repository, ledger ReservationLedger, window sellability.Resolver, now func() time.Time, newMovementID func() stockmovement.ID) ConsumeOrderStockHandler {
 	if newMovementID == nil {
 		panic("command: NewConsumeOrderStockHandler newMovementID required")
 	}
@@ -54,7 +56,7 @@ func NewConsumeOrderStockHandler(uow pg.UnitOfWork, batches batch.Repository, mo
 		now = time.Now
 	}
 	return ConsumeOrderStockHandler{
-		uow: uow, batches: batches, movements: movements, ledger: ledger,
+		uow: uow, batches: batches, movements: movements, ledger: ledger, window: window,
 		now: now, newMovementID: newMovementID,
 	}
 }
@@ -76,6 +78,12 @@ func (h ConsumeOrderStockHandler) Handle(ctx context.Context, cmd ConsumeOrderSt
 	}
 
 	now := h.now()
+	// The shipment is judged on the company business day: units reserved before the
+	// printed expiry cannot ship after it (the outbound is refused, the tx rolls back).
+	w, err := h.window.Resolve(ctx, cmd.TenantID)
+	if err != nil {
+		return ConsumeOrderStockResult{}, fmt.Errorf("consume order stock: %w", err)
+	}
 	ref := cmd.OrderID
 	releaseReason := truncateReason("order consume (release hold): " + cmd.OrderID)
 	shipReason := truncateReason("order consume (shipped): " + cmd.OrderID)
@@ -83,11 +91,11 @@ func (h ConsumeOrderStockHandler) Handle(ctx context.Context, cmd ConsumeOrderSt
 		for _, o := range outstanding {
 			var releaseOnHand, shipOnHand int64
 			updErr := h.batches.UpdateByID(ctx, cmd.TenantID, o.BatchID, func(b *batch.Batch) (bool, error) {
-				if merr := b.ApplyMovement(batch.MovementRelease, o.Quantity, now, now); merr != nil {
+				if merr := b.ApplyMovement(batch.MovementRelease, o.Quantity, now, w.Today); merr != nil {
 					return false, merr
 				}
 				releaseOnHand = b.QuantityOnHand() // unchanged by release
-				if merr := b.ApplyMovement(batch.MovementOutbound, o.Quantity, now, now); merr != nil {
+				if merr := b.ApplyMovement(batch.MovementOutbound, o.Quantity, now, w.Today); merr != nil {
 					return false, merr
 				}
 				shipOnHand = b.QuantityOnHand() // reduced by outbound

@@ -451,6 +451,7 @@ func TestArch_MutatorsEmitEventsOnStateChange(t *testing.T) {
 	type recv struct{ typ, method string }
 	allowMethodsPerType := map[recv]bool{
 		{"Batch", "ApplyMovement"}:           true, // paired StockMovement emits the inventory.* event
+		{"Batch", "applyOutbound"}:           true, // paired StockMovement ledger row is the event
 		{"Batch", "applyQuarantineMovement"}: true, // the paired StockMovement row (quarantine, release_quarantine, write_off) is the event
 		{"Batch", "SoftDelete"}:              true, // version bump only; deletion auditing via outbox row
 		{"Role", "ChangeHierarchyLevel"}:     true, // hierarchy edges aggregate owns the event surface (ADR 0058)

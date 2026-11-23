@@ -76,6 +76,10 @@ const (
 	MovementQuarantine MovementType = "quarantine"
 	// MovementReleaseQuarantine returns quarantined units to free stock.
 	MovementReleaseQuarantine MovementType = "release_quarantine"
+	// MovementReturnToMaker takes quarantined units out to the manufacturer (expired
+	// stock may be returned to the maker, Drugs Rules, Rule 65(17)). It is NOT a
+	// sale and not a write-off: the ledger row says what happened to the units.
+	MovementReturnToMaker MovementType = "return_to_maker"
 	// MovementWriteOff removes quarantined units from the books. The batch row
 	// and the ledger keep the history: it is a state change, never a delete.
 	MovementWriteOff MovementType = "write_off"
@@ -86,7 +90,7 @@ func (m MovementType) IsValid() bool {
 	switch m {
 	case MovementInbound, MovementOutbound, MovementAdjustment,
 		MovementReservation, MovementRelease,
-		MovementQuarantine, MovementReleaseQuarantine, MovementWriteOff:
+		MovementQuarantine, MovementReleaseQuarantine, MovementWriteOff, MovementReturnToMaker:
 		return true
 	default:
 		return false
@@ -100,7 +104,7 @@ func (m MovementType) IsValid() bool {
 // true-hold reservation semantics adopted per ADR 0063 §4.
 func (m MovementType) IsMutating() bool {
 	switch m {
-	case MovementInbound, MovementOutbound, MovementAdjustment, MovementWriteOff:
+	case MovementInbound, MovementOutbound, MovementAdjustment, MovementWriteOff, MovementReturnToMaker:
 		return true
 	default:
 		return false
@@ -126,9 +130,9 @@ var ErrInsufficientAvailable = errs.New(errs.KindConflict, "batch", "insufficien
 var ErrReleaseExceedsReserved = errs.New(errs.KindInvalidInput, "batch", "release exceeds reserved quantity")
 
 // ErrExpired — the movement is refused because the batch is past its printed
-// expiry month: stock cannot be received into it or released from quarantine
-// (the legal limit no setting moves). Outbound, quarantine and write-off stay
-// allowed so expired stock can be set apart and disposed of.
+// expiry month: stock cannot be received into it, released from quarantine or
+// shipped (outbound), whoever asks. Quarantine, write-off and return to the maker
+// stay allowed so expired stock can be set apart and disposed of.
 var ErrExpired = errs.New(errs.KindConflict, "batch", "batch is past its printed expiry; the movement is refused")
 
 // ErrInsufficientFree — a quarantine requested more than the batch's free units
@@ -473,16 +477,9 @@ func (b *Batch) ApplyMovement(movement MovementType, quantity int64, now, today 
 		}
 		b.quantityOnHand += quantity
 	case MovementOutbound:
-		if quantity <= 0 {
-			return fmt.Errorf("%w: outbound quantity must be > 0 (got %d)", ErrInvalid, quantity)
+		if err := b.applyOutbound(quantity, today); err != nil {
+			return err
 		}
-		// Outbound may only ship UNRESERVED stock — reserved units are
-		// held for confirmed orders and leave via consume (Release+Outbound).
-		if quantity > b.AvailableQuantity() {
-			return fmt.Errorf("%w: requested %d, available %d (on-hand %d, reserved %d)",
-				ErrInsufficientStock, quantity, b.AvailableQuantity(), b.quantityOnHand, b.quantityReserved)
-		}
-		b.quantityOnHand -= quantity
 	case MovementAdjustment:
 		if quantity == 0 {
 			return fmt.Errorf("%w: adjustment quantity must be non-zero", ErrInvalid)
@@ -522,6 +519,27 @@ func (b *Batch) ApplyMovement(movement MovementType, quantity int64, now, today 
 	return nil
 }
 
+// applyOutbound ships free units. Nothing leaves as a sale or shipment past the
+// PRINTED expiry, whoever calls: expired stock may only be set apart, returned to
+// the maker or written off. That also stops units reserved before the expiry from
+// shipping after it (the consume path releases the hold, then ships).
+func (b *Batch) applyOutbound(quantity int64, today time.Time) error {
+	if quantity <= 0 {
+		return fmt.Errorf("%w: outbound quantity must be > 0 (got %d)", ErrInvalid, quantity)
+	}
+	if b.IsPastPrintedExpiry(today) {
+		return fmt.Errorf("%w: printed expiry %s: expired stock cannot be shipped", ErrExpired, expiry.PrintedMonth(b.expiryDate))
+	}
+	// Outbound may only ship UNRESERVED stock: reserved units are held for confirmed
+	// orders and leave via consume (Release + Outbound).
+	if quantity > b.AvailableQuantity() {
+		return fmt.Errorf("%w: requested %d, available %d (on-hand %d, reserved %d)",
+			ErrInsufficientStock, quantity, b.AvailableQuantity(), b.quantityOnHand, b.quantityReserved)
+	}
+	b.quantityOnHand -= quantity
+	return nil
+}
+
 // applyQuarantineMovement applies quarantine, release_quarantine and write_off.
 func (b *Batch) applyQuarantineMovement(movement MovementType, quantity int64, today time.Time) error {
 	if quantity <= 0 {
@@ -544,7 +562,7 @@ func (b *Batch) applyQuarantineMovement(movement MovementType, quantity int64, t
 			return fmt.Errorf("%w: printed expiry %s", ErrExpired, expiry.PrintedMonth(b.expiryDate))
 		}
 		b.quantityQuarantined -= quantity
-	case MovementWriteOff:
+	case MovementWriteOff, MovementReturnToMaker:
 		if quantity > b.quantityQuarantined {
 			return fmt.Errorf("%w: requested %d, quarantined %d", ErrInsufficientQuarantined, quantity, b.quantityQuarantined)
 		}

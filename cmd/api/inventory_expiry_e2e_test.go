@@ -154,3 +154,49 @@ func syncInventoryReplica(t *testing.T, f e2eFixture, tok string) {
 		t.Fatalf("store the policy in the inventory replica: %v", err)
 	}
 }
+
+// Review B3: stock past its printed expiry cannot leave as an outbound; it is set apart,
+// then returned to the maker or written off. Each step is a ledger row; nothing is deleted.
+func TestE2E_Inventory_ExpiredStockCanOnlyBeSetApartReturnedOrWrittenOff(t *testing.T) {
+	f := newE2EFixture(t)
+	tok := f.registerAndLogin(t, "invexpdispose").AccessToken
+	p := invCreateProduct(t, f, tok, "EXP-DISP", nil)
+	now := time.Now().UTC()
+	old := invAddBatch(t, f, tok, p, "OLD", expiry.MonthEnd(now.Year(), now.Month()-1), nil)
+	id, _ := invObj(t, old.body)["batch_id"].(string)
+	if r := invMove(t, f, tok, id, "adjustment", 10); r.status != http.StatusCreated {
+		t.Fatalf("count correction: %d %s", r.status, r.body)
+	}
+
+	if r := invMove(t, f, tok, id, "outbound", 3); r.status != http.StatusConflict || errorCode(t, r.body) != "batch_expired" {
+		t.Fatalf("an outbound past the printed expiry: %d %s, want 409 batch_expired", r.status, r.body)
+	}
+	if r := invMove(t, f, tok, id, "quarantine", 10); r.status != http.StatusCreated {
+		t.Fatalf("setting expired stock apart: %d %s", r.status, r.body)
+	}
+	if r := invMove(t, f, tok, id, "release_quarantine", 1); r.status != http.StatusConflict || errorCode(t, r.body) != "batch_expired" {
+		t.Fatalf("releasing expired stock: %d %s", r.status, r.body)
+	}
+	if r := invMove(t, f, tok, id, "return_to_maker", 6); r.status != http.StatusCreated {
+		t.Fatalf("return to the maker: %d %s", r.status, r.body)
+	}
+	if r := invMove(t, f, tok, id, "return_to_maker", 5); r.status != http.StatusConflict || errorCode(t, r.body) != "insufficient_quarantined" {
+		t.Fatalf("returning more than is set apart: %d %s", r.status, r.body)
+	}
+	if r := invMove(t, f, tok, id, "write_off", 4); r.status != http.StatusCreated {
+		t.Fatalf("write-off: %d %s", r.status, r.body)
+	}
+	b := invObj(t, f.authedJSON(t, http.MethodGet, "/api/v1/inventory/batches/"+id, tok, nil).body)
+	invWant(t, b, "quantity_on_hand", 0)
+	invWant(t, b, "quantity_quarantined", 0)
+	moves := invObj(t, f.authedJSON(t, http.MethodGet, "/api/v1/inventory/batches/"+id+"/movements", tok, nil).body)["items"].([]any)
+	var kinds []string
+	for _, m := range moves {
+		kinds = append(kinds, m.(map[string]any)["type"].(string))
+	}
+	for _, want := range []string{"adjustment", "quarantine", "return_to_maker", "write_off"} {
+		if !slices.Contains(kinds, want) {
+			t.Fatalf("ledger types %v: missing %s (every step is a kept row)", kinds, want)
+		}
+	}
+}

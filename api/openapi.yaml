@@ -2768,7 +2768,7 @@ paths:
           required: false
           schema:
             type: string
-            enum: [inbound, outbound, adjustment, reservation, release, quarantine, release_quarantine, write_off]
+            enum: [inbound, outbound, adjustment, reservation, release, quarantine, release_quarantine, write_off, return_to_maker]
         - $ref: '#/components/parameters/XTenantId'
       responses:
         '429': { $ref: '#/components/responses/TooManyRequests' }
@@ -6488,7 +6488,7 @@ components:
         batch_id:                 { type: string, format: uuid }
         product_id:               { type: string, format: uuid }
         tenant_id:                { type: string, format: uuid }
-        type:                     { type: string, enum: [inbound, outbound, adjustment, reservation, release, quarantine, release_quarantine, write_off] }
+        type:                     { type: string, enum: [inbound, outbound, adjustment, reservation, release, quarantine, release_quarantine, write_off, return_to_maker] }
         quantity:                 { type: integer, format: int64, description: 'Signed delta; Outbound is negative.' }
         quantity_on_hand_after:   { type: integer, format: int64, minimum: 0 }
         reason:                   { type: string, minLength: 1, maxLength: 500 }
@@ -6500,7 +6500,7 @@ components:
       type: object
       required: [type, quantity, reason]
       properties:
-        type:             { type: string, enum: [inbound, outbound, adjustment, quarantine, release_quarantine, write_off], description: 'Request-only enum: the types a caller may log. `quarantine` sets free units apart as "Not for sale" (never available or shippable); `release_quarantine` returns them (refused once the printed expiry month is over); `write_off` removes quarantined units from on hand (a state change: the batch and its ledger rows stay; 409 `insufficient_quarantined` when asked for more than is set apart). `reservation` and `release` belong to the order saga; they appear in the movement ledger READ shape (`MovementDto.type`) but are refused here with 422 invalid_movement_type, like any other value.' }
+        type:             { type: string, enum: [inbound, outbound, adjustment, quarantine, release_quarantine, write_off, return_to_maker], description: 'Request-only enum: the types a caller may log. `quarantine` sets free units apart as "Not for sale" (never available or shippable); `release_quarantine` returns them (refused once the printed expiry month is over); `write_off` and `return_to_maker` take quarantined units out of on hand (write-off: destroyed or disposed of; return to the maker: sent back to the manufacturer; both are state changes: the batch and every ledger row stay; 409 `insufficient_quarantined` when asked for more than is set apart; both are allowed past the printed expiry). `outbound` is refused once the batch is past its PRINTED expiry (409 `batch_expired`): expired stock is never shipped, whoever reserved it. `reservation` and `release` belong to the order saga; they appear in the movement ledger READ shape (`MovementDto.type`) but are refused here with 422 invalid_movement_type, like any other value.' }
         quantity:         { type: integer, format: int64, minimum: 1, description: 'Positive magnitude; direction implicit in type.' }
         reason:           { type: string, minLength: 1, maxLength: 500 }
         source_reference: { type: string, maxLength: 200 }

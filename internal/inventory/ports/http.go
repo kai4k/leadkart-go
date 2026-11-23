@@ -561,7 +561,7 @@ func handleLogStockMovement(log *slog.Logger, a app.Application) http.Handler {
 		// order's hold here. Only the three manual types are public.
 		if !isPublicMovementType(batch.MovementType(req.Type)) {
 			writeError(w, http.StatusUnprocessableEntity, ErrCodeInvalidMovementType,
-				"type must be one of inbound, outbound, adjustment, quarantine, release_quarantine, write_off")
+				"type must be one of inbound, outbound, adjustment, quarantine, release_quarantine, write_off, return_to_maker")
 			return
 		}
 		out, err := a.Commands.LogStockMovement.Handle(r.Context(), command.LogStockMovementCommand{
@@ -876,7 +876,7 @@ func nonNil(in []string) []string {
 func isPublicMovementType(t batch.MovementType) bool {
 	switch t {
 	case batch.MovementInbound, batch.MovementOutbound, batch.MovementAdjustment,
-		batch.MovementQuarantine, batch.MovementReleaseQuarantine, batch.MovementWriteOff:
+		batch.MovementQuarantine, batch.MovementReleaseQuarantine, batch.MovementWriteOff, batch.MovementReturnToMaker:
 		return true
 	default:
 		return false

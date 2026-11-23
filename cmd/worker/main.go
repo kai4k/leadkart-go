@@ -387,7 +387,7 @@ func run(ctx context.Context, stdout *os.File) error {
 	inventoryPolicyReplica := inventoryadapters.NewPolicyReplicaRepository(pool, tx)
 	inventoryWindow := inventorysellability.NewResolver(inventoryPolicyReplica, time.Now)
 	inventoryReserve := inventorycommand.NewReserveOrderStockHandler(tx, inventoryBatchRepo, inventoryMovementRepo, inventoryMovementRepo, inventoryOutbox, inventoryWindow, time.Now, newStockMovementID)
-	inventoryConsume := inventorycommand.NewConsumeOrderStockHandler(tx, inventoryBatchRepo, inventoryMovementRepo, inventoryMovementRepo, time.Now, newStockMovementID)
+	inventoryConsume := inventorycommand.NewConsumeOrderStockHandler(tx, inventoryBatchRepo, inventoryMovementRepo, inventoryMovementRepo, inventoryWindow, time.Now, newStockMovementID)
 	inventoryRelease := inventorycommand.NewReleaseOrderStockHandler(tx, inventoryBatchRepo, inventoryMovementRepo, inventoryMovementRepo, time.Now, newStockMovementID)
 	inventoryReserveSub := inventorysubscribers.NewReserveStockSubscriber(inventoryReserve, logger)
 	inventoryConsumeSub := inventorysubscribers.NewConsumeStockSubscriber(inventoryConsume, logger)

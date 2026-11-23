@@ -226,7 +226,7 @@ func TestApplyMovement_InboundRejectedAfterExpiry(t *testing.T) {
 	if err := b.ApplyMovement(batch.MovementInbound, 10, fixedNow, fixedNow); !errors.Is(err, batch.ErrExpired) {
 		t.Fatalf("want ErrExpired, got %v", err)
 	}
-	// Outbound from an expired batch IS allowed (write-off / disposal).
+	// Outbound from a batch past its printed expiry is refused (disposal is quarantine, then write-off or return to the maker).
 	if b.QuantityOnHand() != 0 {
 		t.Fatalf("unchanged on-hand: %d", b.QuantityOnHand())
 	}

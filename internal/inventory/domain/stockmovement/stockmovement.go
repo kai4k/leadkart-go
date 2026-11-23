@@ -212,7 +212,7 @@ func validateQuantityForType(mt batch.MovementType, q int64) error {
 		if q <= 0 {
 			return fmt.Errorf("%w: %s quantity must be > 0 (got %d)", ErrInvalid, mt, q)
 		}
-	case batch.MovementOutbound, batch.MovementWriteOff:
+	case batch.MovementOutbound, batch.MovementWriteOff, batch.MovementReturnToMaker:
 		if q >= 0 {
 			return fmt.Errorf("%w: %s quantity must be < 0 (got %d)", ErrInvalid, mt, q)
 		}

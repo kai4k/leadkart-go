@@ -56,7 +56,7 @@ func newReservationRig(t *testing.T) reservationRig {
 		// command.ReservationLedger (the outstanding-by-batch reads).
 		reserve: command.NewReserveOrderStockHandler(tx, batches, movements, movements, enq, sellabilitytest.Resolver(fixedNow), clk, newMID),
 		release: command.NewReleaseOrderStockHandler(tx, batches, movements, movements, clk, newMID),
-		consume: command.NewConsumeOrderStockHandler(tx, batches, movements, movements, clk, newMID),
+		consume: command.NewConsumeOrderStockHandler(tx, batches, movements, movements, sellabilitytest.Resolver(fixedNow), clk, newMID),
 	}
 }
 

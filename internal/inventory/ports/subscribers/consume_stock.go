@@ -2,12 +2,15 @@ package subscribers
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 
+	"github.com/leadkart/leadkart-go/internal/common/messaging"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 	"github.com/leadkart/leadkart-go/internal/inventory/app/command"
+	"github.com/leadkart/leadkart-go/internal/inventory/domain/batch"
 	ordersevents "github.com/leadkart/leadkart-go/internal/orders/integrationevents"
 )
 
@@ -42,7 +45,7 @@ func (h *ConsumeStockSubscriber) Handle(ctx context.Context, evt *ordersevents.O
 		ActorMembershipID: membership.ID(evt.PackedByMembershipID),
 	})
 	if err != nil {
-		return fmt.Errorf("inventory consume-stock: %w", err)
+		return consumeError(err)
 	}
 	if res.Consumed {
 		h.log.InfoContext(ctx, "inventory: reservation consumed as shipment", "order_id", evt.OrderID, "batches", res.BatchCount)
@@ -50,4 +53,14 @@ func (h *ConsumeStockSubscriber) Handle(ctx context.Context, evt *ordersevents.O
 		h.log.DebugContext(ctx, "inventory: nothing to consume for packed order (idempotent no-op)", "order_id", evt.OrderID)
 	}
 	return nil
+}
+
+// consumeError classifies a consume failure. Expired stock can never ship, so
+// retrying cannot change the answer: the event dead-letters at once and the stuck
+// order is visible, not a retry storm. Any other failure is retried.
+func consumeError(err error) error {
+	if errors.Is(err, batch.ErrExpired) {
+		return messaging.NonRetryable(fmt.Errorf("inventory consume-stock: %w", err))
+	}
+	return fmt.Errorf("inventory consume-stock: %w", err)
 }
