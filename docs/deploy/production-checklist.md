@@ -104,13 +104,19 @@ bind to the role that ran the migration, so tables created later by a different 
 would not be granted to `leadkart_app`.
 
 *Repair it* (the role was created late, or two owners migrated). As the owner role that
-ran the migrations, apply the Up block of the grants migration by hand, and of each
-later module grants migration (a module added after it carries its own, today
-`20261123000004_companysettings_grants`), then run `migrate up` once more for
-River's grants. Each block is idempotent:
+ran the migrations, apply the Up block of the grants migration by hand, of each later
+module grants migration (a module added after it carries its own, today
+`20261123000004_companysettings_grants`) **and of each later migration that takes a
+privilege away again** (`20261125000003_audit_log_is_kept_forever`: no DELETE on the
+audit trail; `20261125000004_dead_letter_replay`: no UPDATE or DELETE on the dead-letter
+replays), then run `migrate up` once more for River's grants. The base grants hand the
+role DELETE on every table; skipping the later two leaves it on the audit trail, and the
+api and the worker refuse to boot (`holds DELETE on table common.audit_log_entry, which
+is append-only`). Each block is idempotent:
 
 ```bash
-for f in migrations/20260606000001_application_role_grants.sql migrations/20261123000004_companysettings_grants.sql; do
+for f in migrations/20260606000001_application_role_grants.sql migrations/20261123000004_companysettings_grants.sql \
+         migrations/20261125000003_audit_log_is_kept_forever.sql migrations/20261125000004_dead_letter_replay.sql; do
   sed -n '/^-- +goose Up/,/^-- +goose Down/p' "$f" | psql -v ON_ERROR_STOP=1 "$OWNER_DATABASE_URL"
 done
 ```

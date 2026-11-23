@@ -112,6 +112,30 @@ SELECT current_user::text, absent, missing FROM (
     WHERE n.nspname = 'app' AND p.proname = ANY($6::text[]) AND NOT has_function_privilege(p.oid, 'EXECUTE')
 ) missing ORDER BY ord, missing LIMIT 1`
 
+// extraQuery returns the FIRST privilege the current role holds on a restricted table
+// beyond what its rules allow: an append-only table (the audit trail, the policy
+// history, the dead-letter replays) or a table of a read-only schema. $1 application
+// schemas; $2/$3/$4 the rules as parallel arrays (schema, table or '*', privilege).
+// A role that owns the table, or is a superuser, holds everything implicitly; that is
+// the over-privileged-role check's business (a start-up error in production), so it is
+// skipped here instead of failing every development database.
+const extraQuery = `
+WITH rules AS (
+    SELECT * FROM unnest($2::text[], $3::text[], $4::text[]) AS r(s, t, priv)
+), tbl AS (
+    SELECT c.oid, n.nspname AS s, c.relname AS t
+    FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE c.relkind IN ('r', 'p') AND n.nspname = ANY($1::text[])
+      AND NOT pg_has_role(current_user, c.relowner, 'MEMBER')
+)
+SELECT tbl.s || '.' || tbl.t, p.priv
+FROM tbl CROSS JOIN unnest(ARRAY['SELECT', 'INSERT', 'UPDATE', 'DELETE', 'TRUNCATE']) AS p(priv)
+WHERE NOT EXISTS (SELECT 1 FROM pg_roles r WHERE r.rolname = current_user AND r.rolsuper)
+  AND EXISTS (SELECT 1 FROM rules r WHERE r.s = tbl.s AND r.t IN (tbl.t, '*'))
+  AND has_table_privilege(tbl.oid, p.priv)
+  AND NOT EXISTS (SELECT 1 FROM rules r WHERE r.s = tbl.s AND r.t IN (tbl.t, '*') AND r.priv = p.priv)
+ORDER BY 1, 2 LIMIT 1`
+
 // excessQuery returns the FIRST reason the current role holds more than the
 // application should: superuser and BYPASSRLS each switch row-level security
 // off, and the owner of a table is exempt from its policies. Membership counts
@@ -158,7 +182,10 @@ type PrivilegeCheck struct {
 //     schemas and on River's public.river_* tables, naming the first missing one;
 //  3. the role does not hold MORE than it should: a superuser, a BYPASSRLS role
 //     or the owner of an application table is exempt from row-level security.
-//     That is an error in production and a logged warning elsewhere.
+//     That is an error in production and a logged warning elsewhere;
+//  4. the role holds no privilege an append-only (or read-only) table does not allow,
+//     in every environment: the base grants hand DELETE on every table back, and a
+//     repair that stops there would let the application delete the audit trail.
 //
 // Migration 20260606000001 is a no-op when leadkart_app does not exist yet, and
 // default privileges bind to whichever role ran the migration, so a database
@@ -201,7 +228,8 @@ func VerifyApplicationPrivileges(ctx context.Context, db interface {
 	if found {
 		return fmt.Errorf("pg: database role %q lacks %s: the grants migration (20260606000001_application_role_grants) did not reach this role "+
 			"(it is a no-op when the role does not exist yet, goose records it as applied and will not run it again, and `migrate up` re-applies only River's grants). "+
-			"Fix as the OWNER role that ran the migrations: run the Up block of migrations/20260606000001_application_role_grants.sql and of every later *_grants.sql migration (20261123000004_companysettings_grants.sql) by hand "+
+			"Fix as the OWNER role that ran the migrations: run the Up block of migrations/20260606000001_application_role_grants.sql, of every later *_grants.sql migration (20261123000004_companysettings_grants.sql) "+
+			"and of the later migrations that take privileges away again (20261125000003_audit_log_is_kept_forever.sql, 20261125000004_dead_letter_replay.sql) by hand "+
 			"(docs/deploy/production-checklist.md, \"The application role\"), then `migrate up`. "+
 			"To avoid it: create the role BEFORE the first migration and run every migration as the same owner role", role, missing)
 	}
@@ -220,18 +248,41 @@ func VerifyApplicationPrivileges(ctx context.Context, db interface {
 	if err := rows.Err(); err != nil {
 		return fmt.Errorf("pg: verify application privileges: %w", err)
 	}
-	if reason == "" {
-		return nil
+	rows.Close() // one statement at a time on the connection
+	if reason != "" {
+		const consequence = "row-level security does not apply to it, so tenant isolation is not enforced. " +
+			"Run the application as a plain role (leadkart_app) that owns nothing; keep the owner role for `migrate` and `bootstrap`"
+		if check.Production {
+			return errors.New("pg: refusing to start in production: the application's database role " + reason + "; " + consequence)
+		}
+		check.Logger.WarnContext(ctx, "database role is more privileged than the application needs; "+
+			"fine for local development, a start-up error in production",
+			"reason", reason, "consequence", consequence)
 	}
-	const consequence = "row-level security does not apply to it, so tenant isolation is not enforced. " +
-		"Run the application as a plain role (leadkart_app) that owns nothing; keep the owner role for `migrate` and `bootstrap`"
-	if check.Production {
-		return errors.New("pg: refusing to start in production: the application's database role " + reason + "; " + consequence)
+	return verifyNoExtraPrivileges(ctx, db, args[0].([]string), ruleSchema, ruleTable, rulePriv)
+}
+
+// verifyNoExtraPrivileges refuses a role that holds a privilege an append-only or
+// read-only table does not allow (see [extraQuery]).
+func verifyNoExtraPrivileges(ctx context.Context, db interface {
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+}, schemas, ruleSchema, ruleTable, rulePriv []string) error {
+	rows, err := db.Query(ctx, extraQuery, schemas, ruleSchema, ruleTable, rulePriv)
+	if err != nil {
+		return fmt.Errorf("pg: verify application privileges: %w", err)
 	}
-	check.Logger.WarnContext(ctx, "database role is more privileged than the application needs; "+
-		"fine for local development, a start-up error in production",
-		"reason", reason, "consequence", consequence)
-	return nil
+	defer rows.Close()
+	if !rows.Next() {
+		return rows.Err()
+	}
+	var table, priv string
+	if err := rows.Scan(&table, &priv); err != nil {
+		return fmt.Errorf("pg: verify application privileges: %w", err)
+	}
+	return fmt.Errorf("pg: the application's database role holds %s on table %s, which is append-only for the application (ADR 0071: data is never deleted). "+
+		"Fix as the OWNER role: REVOKE %s ON %s FROM leadkart_app, and run the Up block of every migration that takes privileges away "+
+		"(20261125000003_audit_log_is_kept_forever.sql, 20261125000004_dead_letter_replay.sql) after any repair that re-runs the grants migrations "+
+		"(docs/deploy/production-checklist.md, \"The application role\")", priv, table, priv, table)
 }
 
 // firstRow3 runs query and returns its first (text, bool, text) row, if any.

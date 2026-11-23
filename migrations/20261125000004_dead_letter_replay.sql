@@ -10,7 +10,8 @@
 -- +goose Up
 -- +goose StatementBegin
 
-CREATE TABLE common.dead_letter_replay (
+-- Idempotent: the production checklist's grants repair re-runs this Up block (it carries a REVOKE).
+CREATE TABLE IF NOT EXISTS common.dead_letter_replay (
     id             uuid        PRIMARY KEY,
     dead_letter_id uuid        NOT NULL UNIQUE REFERENCES common.dead_letter (id),
     message_id     text        NOT NULL,
@@ -18,7 +19,7 @@ CREATE TABLE common.dead_letter_replay (
     replayed_at    timestamptz NOT NULL
 );
 
-CREATE INDEX idx_dead_letter_replay_pair
+CREATE INDEX IF NOT EXISTS idx_dead_letter_replay_pair
     ON common.dead_letter_replay (message_id, handler_name);
 
 COMMENT ON TABLE common.dead_letter_replay IS

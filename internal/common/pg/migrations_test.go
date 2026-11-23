@@ -929,7 +929,10 @@ func TestVerifyApplicationPrivileges_FailsWhenRoleWasCreatedAfterMigrating(t *te
 	// the owner (the production checklist's sed | psql, here through the driver).
 	// The base grants migration, then each later module grants migration (a module
 	// added after it carries its own: a migration may not name a later schema).
-	for _, name := range []string{"20260606000001_application_role_grants.sql", "20261123000004_companysettings_grants.sql"} {
+	// The base grants hand the role DELETE on the append-only tables again, so the later migrations
+	// that take privileges away are part of the repair too (the checklist lists the same files).
+	for _, name := range []string{"20260606000001_application_role_grants.sql", "20261123000004_companysettings_grants.sql",
+		"20261125000003_audit_log_is_kept_forever.sql", "20261125000004_dead_letter_replay.sql"} {
 		raw, rerr := os.ReadFile(filepath.Join(migrationsDir(t), name))
 		if rerr != nil {
 			t.Fatalf("read %s: %v", name, rerr)
@@ -966,6 +969,44 @@ func TestVerifyApplicationPrivileges_NamesTheFirstMissingPrivilege(t *testing.T)
 	err = pg.VerifyApplicationPrivileges(t.Context(), appRoleConn(t, dsn), pg.PrivilegeCheck{Production: true, Logger: discardLogger()})
 	if err == nil || !strings.Contains(err.Error(), "INSERT on table common.audit_log_entry") {
 		t.Fatalf("want an error naming INSERT on common.audit_log_entry, got: %v", err)
+	}
+}
+
+// Review G2b M1: the base grants hand the application role DELETE on every table, the
+// audit trail included, and the start-up check passed. A role that holds more than the
+// append-only tables allow is refused, in production and elsewhere.
+func TestVerifyApplicationPrivileges_RefusesExtraPrivilegesOnAppendOnlyTables(t *testing.T) {
+	dsn := startPostgres(t)
+	db, err := sql.Open("pgx", dsn)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer db.Close()
+	createAppRole(t, db)
+	applyMigrations(t, dsn)
+
+	for _, c := range []struct{ grant, want string }{
+		{`GRANT DELETE ON common.audit_log_entry TO leadkart_app`, "DELETE on table common.audit_log_entry"},
+		{`GRANT UPDATE ON companysettings.policy_history TO leadkart_app`, "UPDATE on table companysettings.policy_history"},
+		{`GRANT DELETE ON common.dead_letter_replay TO leadkart_app`, "DELETE on table common.dead_letter_replay"},
+		{`GRANT INSERT ON shared.product_category_gst_defaults TO leadkart_app`, "INSERT on table shared.product_category_gst_defaults"},
+	} {
+		if _, err := db.ExecContext(t.Context(), c.grant); err != nil {
+			t.Fatalf("%s: %v", c.grant, err)
+		}
+		for _, production := range []bool{true, false} {
+			err := pg.VerifyApplicationPrivileges(t.Context(), appRoleConn(t, dsn), pg.PrivilegeCheck{Production: production, Logger: discardLogger()})
+			if err == nil || !strings.Contains(err.Error(), c.want) || !strings.Contains(err.Error(), "append-only") {
+				t.Fatalf("%s (production=%v): want an error naming %q, got: %v", c.grant, production, c.want, err)
+			}
+		}
+		revoke := strings.Replace(strings.Replace(c.grant, "GRANT", "REVOKE", 1), " TO ", " FROM ", 1)
+		if _, err := db.ExecContext(t.Context(), revoke); err != nil {
+			t.Fatalf("%s: %v", revoke, err)
+		}
+	}
+	if err := pg.VerifyApplicationPrivileges(t.Context(), appRoleConn(t, dsn), pg.PrivilegeCheck{Production: true, Logger: discardLogger()}); err != nil {
+		t.Fatalf("after the revokes the check must pass again: %v", err)
 	}
 }
 
