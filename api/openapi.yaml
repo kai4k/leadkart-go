@@ -1045,7 +1045,7 @@ paths:
       description: |
         The picker behind lead reassignment. Requires `crm.leads.assign` (satisfied by `tenant.admin` in the caller's own tenant, or by `platform.*` equivalents for platform operators; ADR 0068), and searches the caller's effective tenant only.
 
-        Returns ACTIVE members whose display name (first name, a space, last name) contains `q`, case-insensitively, best first (by name), at most `limit`. A hit carries `membership_id`, `display_name` and `designation` only: no email, no phone, no person id. A deactivated, anonymised or globally suspended person is never offered. `q` is trimmed and measured in characters: under 2 is 400 `search_query_too_short`, over 100 is 400 `search_query_too_long`. An empty match is 200 with `members: []`, which a client shows as "no match" and keeps apart from a failed call.
+        Returns ACTIVE members whose display name (first name, a space, last name) contains `q`, case-insensitively, best first (by name), at most `limit`. A hit carries `membership_id`, `display_name` and `designation` only: no email, no phone, no person id. A deactivated or globally suspended person is never offered. `q` is trimmed and measured in characters: under 2 is 400 `search_query_too_short`, over 100 is 400 `search_query_too_long`. An empty match is 200 with `members: []`, which a client shows as "no match" and keeps apart from a failed call.
       x-required-permissions: [crm.leads.assign]
       parameters:
         - name: q
