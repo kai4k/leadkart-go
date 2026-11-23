@@ -455,6 +455,14 @@ type InventoryBatch struct {
 	QuantityReserved int64
 }
 
+// Event-fed replica of the company commerce policy (ADR 0070). Upserted only when the event version is newer. No row = defaults at version 0. Tenant-scoped, FORCE RLS.
+type InventoryPolicyReplica struct {
+	TenantID  pgtype.UUID
+	Version   int64
+	Policy    []byte
+	UpdatedAt pgtype.Timestamptz
+}
+
 // Product aggregate. Tenant-scoped, FORCE RLS. SKU unique per tenant on live rows (partial index).
 type InventoryProduct struct {
 	ID           pgtype.UUID

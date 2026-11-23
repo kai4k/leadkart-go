@@ -958,6 +958,7 @@ func buildInventoryApp(pool *pgxpool.Pool, hybridCache *cache.HybridCache) inven
 			ListBatchMovementsPage: inventoryquery.NewListBatchMovementsPageHandler(movements),
 			FefoBatches:            inventoryquery.NewFefoBatchesHandler(batches, time.Now),
 			ListProductCategories:  inventoryquery.NewListProductCategoriesHandler(inventoryadapters.NewProductCategoryReader(gstDefaults)),
+			GetPolicy:              inventoryquery.NewGetPolicyHandler(inventoryadapters.NewPolicyReplicaRepository(pool, tx)),
 		},
 	}
 }

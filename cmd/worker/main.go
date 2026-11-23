@@ -372,6 +372,11 @@ func run(ctx context.Context, stdout *os.File) error {
 	inventoryReserveSub := inventorysubscribers.NewReserveStockSubscriber(inventoryReserve, logger)
 	inventoryConsumeSub := inventorysubscribers.NewConsumeStockSubscriber(inventoryConsume, logger)
 	inventoryReleaseSub := inventorysubscribers.NewReleaseStockSubscriber(inventoryRelease, logger)
+	// companysettings.policy_changed.v1 -> Inventory's replica of the company
+	// commerce policy (ADR 0070): stored only when the version is newer.
+	inventoryPolicyReplica := inventoryadapters.NewPolicyReplicaRepository(pool, tx)
+	inventoryPolicyChangedSub := inventorysubscribers.NewPolicyChangedSubscriber(
+		inventorycommand.NewApplyPolicyHandler(tx, inventoryPolicyReplica), logger)
 
 	// Notifications module (BRD §6.9 — subscriber-decides fan-out). Cross-module
 	// consumers map source events → recipient notifications:
@@ -423,7 +428,7 @@ func run(ctx context.Context, stdout *os.File) error {
 	cqrsHandlers = append(cqrsHandlers, taskssubscribers.Handlers(tasksCallLoggedSub, tasksLeadConvertedSub)...)
 	cqrsHandlers = append(cqrsHandlers, dispatchsubscribers.Handlers(dispatchOrderPacked, dispatchOrderCancelled)...)
 	cqrsHandlers = append(cqrsHandlers, orderssubscribers.Handlers(ordersAutoInvoiceSub, ordersConsignmentCreatedSub, ordersConsignmentDeliveredSub, ordersCancelCompensationSub, ordersPolicyChangedSub)...)
-	cqrsHandlers = append(cqrsHandlers, inventorysubscribers.Handlers(inventoryReserveSub, inventoryConsumeSub, inventoryReleaseSub)...)
+	cqrsHandlers = append(cqrsHandlers, inventorysubscribers.Handlers(inventoryReserveSub, inventoryConsumeSub, inventoryReleaseSub, inventoryPolicyChangedSub)...)
 	cqrsHandlers = append(cqrsHandlers, notificationssubscribers.Handlers(notificationsLeadAssignedSub, notificationsWorkItemCreatedSub, notificationsWorkItemOverdueSub, notificationsOrderConfirmedSub)...)
 	for _, h := range cqrsHandlers {
 		if err := router.AddCqrsHandler(eventProcessor, h); err != nil {

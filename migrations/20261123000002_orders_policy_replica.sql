@@ -27,7 +27,7 @@ CREATE TABLE orders.policy_replica (
 );
 
 ALTER TABLE orders.policy_replica ENABLE ROW LEVEL SECURITY;
-ALTER TABLE orders.policy_replica FORCE  ROW LEVEL SECURITY;
+ALTER TABLE orders.policy_replica FORCE ROW LEVEL SECURITY;
 
 CREATE POLICY orders_policy_replica_select ON orders.policy_replica
     FOR SELECT USING (tenant_id = app.current_tenant() OR app.is_platform());

@@ -16,11 +16,14 @@ import (
 //
 // Post-cqrs (ADR 0067): the EventProcessor derives each handler's subscribe
 // topic from the event alias (orders.order_*.v1 → orders.events), so this takes
-// no topic strings.
+// no topic strings. policyChanged is the cross-module consumer of
+// companysettings.events that keeps the replica of the company commerce policy
+// current (ADR 0070).
 func Handlers(
 	reserve *ReserveStockSubscriber,
 	consume *ConsumeStockSubscriber,
 	release *ReleaseStockSubscriber,
+	policyChanged *PolicyChangedSubscriber,
 ) []cqrs.EventHandler {
 	var handlers []cqrs.EventHandler
 	if reserve != nil {
@@ -31,6 +34,9 @@ func Handlers(
 	}
 	if release != nil {
 		handlers = append(handlers, cqrs.NewEventHandler(HandlerReleaseStock, release.Handle))
+	}
+	if policyChanged != nil {
+		handlers = append(handlers, cqrs.NewEventHandler(HandlerPolicyChanged, policyChanged.Handle))
 	}
 	return handlers
 }

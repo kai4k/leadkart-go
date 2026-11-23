@@ -68,11 +68,11 @@ CREATE INDEX idx_policy_history_tenant_version
     ON companysettings.policy_history (tenant_id, version DESC);
 
 ALTER TABLE companysettings.commerce_policy ENABLE ROW LEVEL SECURITY;
-ALTER TABLE companysettings.commerce_policy FORCE  ROW LEVEL SECURITY;
-ALTER TABLE companysettings.policy_history  ENABLE ROW LEVEL SECURITY;
-ALTER TABLE companysettings.policy_history  FORCE  ROW LEVEL SECURITY;
-ALTER TABLE companysettings.gst_rates       ENABLE ROW LEVEL SECURITY;
-ALTER TABLE companysettings.gst_rates       FORCE  ROW LEVEL SECURITY;
+ALTER TABLE companysettings.commerce_policy FORCE ROW LEVEL SECURITY;
+ALTER TABLE companysettings.policy_history ENABLE ROW LEVEL SECURITY;
+ALTER TABLE companysettings.policy_history FORCE ROW LEVEL SECURITY;
+ALTER TABLE companysettings.gst_rates ENABLE ROW LEVEL SECURITY;
+ALTER TABLE companysettings.gst_rates FORCE ROW LEVEL SECURITY;
 
 CREATE POLICY commerce_policy_select ON companysettings.commerce_policy
     FOR SELECT USING (tenant_id = app.current_tenant() OR app.is_platform());

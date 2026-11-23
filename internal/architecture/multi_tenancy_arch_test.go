@@ -32,6 +32,8 @@ var tenantOwningSchemas = map[string]bool{
 	"identity":  true,
 	"inventory": true,
 	"platform":  true,
+	// companysettings (ADR 0070): every table is tenant-scoped, RLS + FORCE.
+	"companysettings": true,
 }
 
 // rlsOptOutTables: tables that may omit RLS via the explicit marker
