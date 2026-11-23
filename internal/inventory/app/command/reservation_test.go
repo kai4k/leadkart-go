@@ -3,6 +3,7 @@ package command_test
 import (
 	"context"
 	"github.com/leadkart/leadkart-go/internal/common/commercepolicy"
+	"github.com/leadkart/leadkart-go/internal/inventory/app/sellability"
 	"github.com/leadkart/leadkart-go/internal/inventory/app/sellability/sellabilitytest"
 	"testing"
 	"time"
@@ -272,4 +273,32 @@ func TestConsumeOrderStock_RefusesToShipUnitsOfABatchThatHasSinceExpired(t *test
 	_, err = consume.Handle(t.Context(), command.ConsumeOrderStockCommand{TenantID: p.TenantID(), OrderID: orderID, ActorMembershipID: actor})
 	require.ErrorIs(t, err, batch.ErrExpired)
 	require.Equal(t, int64(10), b.QuantityOnHand(), "nothing shipped")
+}
+
+// Review S6: the plan was made on one business day and the transaction runs after midnight:
+// a batch whose cut-off passed in between is refused inside the transaction, nothing reserved.
+func TestReserveOrderStock_RechecksSellabilityInsideTheTransaction(t *testing.T) {
+	t.Parallel()
+	batches := newFakeBatchRepo()
+	movements := newFakeMovementRepo()
+	actor := newMembershipID(t)
+	p := seedProduct(t, newFakeProductRepo(), newTenantID(t), actor, "SKU-S6")
+	b := seedBatchExpiryStock(t, batches, p, actor, "MAY", time.Date(2026, 5, 31, 0, 0, 0, 0, time.UTC), 10)
+
+	pol := commercepolicy.Default()
+	pol.Expiry.StopMonthsBefore = 0
+	clocks := []time.Time{time.Date(2026, 5, 31, 12, 0, 0, 0, time.UTC), time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)} // plan, then the transaction
+	var calls int
+	resolver := sellability.NewResolver(sellabilitytest.Policy{Value: commercepolicy.Versioned{Version: 1, Policy: pol}}, func() time.Time {
+		c := clocks[min(calls, len(clocks)-1)]
+		calls++
+		return c
+	})
+	h := command.NewReserveOrderStockHandler(&fakeUoW{}, batches, movements, &fakeReservationLedger{}, &fakeEnqueuer{}, resolver, fixedClock, testNewMovementID)
+	_, err := h.Handle(t.Context(), command.ReserveOrderStockCommand{
+		TenantID: p.TenantID(), OrderID: uuid.NewString(), ActorMembershipID: actor,
+		Lines: []command.ReserveLine{{ProductID: p.ID(), Quantity: 10}},
+	})
+	require.ErrorIs(t, err, batch.ErrExpired)
+	require.Zero(t, b.QuantityReserved())
 }

@@ -177,9 +177,20 @@ func (h ReserveOrderStockHandler) apply(ctx context.Context, cmd ReserveOrderSto
 	ref := cmd.OrderID
 	reason := truncateReason("order reservation: " + cmd.OrderID)
 	err := h.uow.WithinTx(ctx, pg.TxScopeTenant, func(ctx context.Context) error {
+		// The window is resolved AGAIN inside the transaction: the plan was made before it,
+		// and the business day or the company rule may have moved since (review S6). A batch
+		// that is no longer sellable is refused (the retry plans again and sees the shortfall).
+		w, werr := h.window.Resolve(ctx, cmd.TenantID)
+		if werr != nil {
+			return fmt.Errorf("reserve order stock: %w", werr)
+		}
+		today = w.Today
 		for _, a := range plan {
 			var loaded *batch.Batch
 			updErr := h.batches.UpdateByID(ctx, cmd.TenantID, a.batchID, func(b *batch.Batch) (bool, error) {
+				if !w.IsSellable(b.ExpiryDate()) {
+					return false, fmt.Errorf("%w: batch %s is no longer sellable", batch.ErrExpired, a.batchID)
+				}
 				if merr := b.ApplyMovement(batch.MovementReservation, a.quantity, now, today); merr != nil {
 					return false, merr
 				}
