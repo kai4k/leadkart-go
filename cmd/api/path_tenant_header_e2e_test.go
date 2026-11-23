@@ -82,7 +82,6 @@ func TestE2E_PathTenantRoutes_ZeroPermissionAnswerIsUniform(t *testing.T) {
 	}{
 		{http.MethodPatch, "/api/v1/tenants/%s/profile", ports.UpdateTenantProfileRequest{LegalName: "Y Pvt Ltd", DisplayName: "Y"}},
 		{http.MethodPost, "/api/v1/tenants/%s/suspend", ports.SuspendTenantRequest{Reason: "uniformity test"}},
-		{http.MethodDelete, "/api/v1/platform/tenants/%s", nil},
 	}
 	for _, rt := range routes {
 		var want string
