@@ -105,7 +105,7 @@ func TestE2E_CompanySettings_ConcurrentSavesOnASeededRowAreConflictsNotErrors(t 
 			go func() {
 				defer wg.Done()
 				r := f.authedJSON(t, http.MethodPatch, csSettings, reg.AccessToken,
-					csPatch(version, "", map[string]map[string]any{"expiry": {"stop_months_before": 3 + (round+i)%20}}))
+					csPatch(version, "", map[string]map[string]any{"expiry": {"warning_days": []int{100 + round*savers + i}}}))
 				statuses <- r.status
 			}()
 		}
