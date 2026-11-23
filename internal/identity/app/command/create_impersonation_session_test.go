@@ -142,6 +142,45 @@ func TestCreateImpersonationSession_TargetTenantNotFound_ReturnsErrImpersonation
 	}
 }
 
+// Review G2b M3: an impersonation token writes into the company with tenant-admin
+// authority, so a company that is not active (suspended, or pending) is refused, like an
+// operator's X-Tenant-Id write. Nothing is persisted and no token is minted.
+func TestCreateImpersonationSession_RefusesACompanyThatIsNotActive(t *testing.T) {
+	t.Parallel()
+	for _, status := range []string{"pending", "suspended"} {
+		t.Run(status, func(t *testing.T) {
+			t.Parallel()
+			tenants := newFakeTenantRepo()
+			tn := newTenant(t) // registered: pending
+			if status == "suspended" {
+				if err := tn.Activate(testNow); err != nil {
+					t.Fatalf("Activate: %v", err)
+				}
+				if err := tn.Suspend("billing overdue", testNow); err != nil {
+					t.Fatalf("Suspend: %v", err)
+				}
+			}
+			_ = tenants.Add(t.Context(), tn) // arch-test:ignore-err - test fixture setup
+			store := adapters.NewImpersonationInMemoryStore(func() time.Time { return testNow })
+			h := command.NewCreateImpersonationSessionHandler(store, tenants, newImpersonationIssuer(t), func() time.Time { return testNow })
+
+			res, err := h.Handle(t.Context(), command.CreateImpersonationSessionCommand{
+				OperatorID:            "11111111-1111-1111-1111-111111111111",
+				OperatorSecurityStamp: "stamp-current",
+				TargetTenantID:        tn.ID(),
+				Reason:                "investigate-stuck-onboarding-ticket",
+				Duration:              30 * time.Minute,
+			})
+			if !errors.Is(err, command.ErrImpersonationTargetNotActive) {
+				t.Fatalf("err = %v, want ErrImpersonationTargetNotActive", err)
+			}
+			if res.AccessToken != "" || res.SessionID != "" {
+				t.Fatalf("a refused session minted %+v", res)
+			}
+		})
+	}
+}
+
 // TestCreateImpersonationSession_HappyPath_MintsScopedToken — persists the
 // session + mints a DOWNGRADED scoped JWT (is_platform/is_super_user=false) per
 // ADR 0045.
@@ -149,6 +188,9 @@ func TestCreateImpersonationSession_HappyPath_MintsScopedToken(t *testing.T) {
 	t.Parallel()
 	tenants := newFakeTenantRepo()
 	tn := newTenant(t)
+	if err := tn.Activate(testNow); err != nil {
+		t.Fatalf("Activate: %v", err)
+	}
 	_ = tenants.Add(t.Context(), tn) // arch-test:ignore-err - test fixture setup
 
 	store := adapters.NewImpersonationInMemoryStore(func() time.Time { return testNow })
@@ -201,6 +243,9 @@ func TestCreateImpersonationSession_ResultNamesTheTenant(t *testing.T) {
 	t.Parallel()
 	tenants := newFakeTenantRepo()
 	tn := newTenant(t)
+	if err := tn.Activate(testNow); err != nil {
+		t.Fatalf("Activate: %v", err)
+	}
 	_ = tenants.Add(t.Context(), tn) // arch-test:ignore-err - test fixture setup
 	store := adapters.NewImpersonationInMemoryStore(func() time.Time { return testNow })
 	h := command.NewCreateImpersonationSessionHandler(store, tenants, newImpersonationIssuer(t), func() time.Time { return testNow })

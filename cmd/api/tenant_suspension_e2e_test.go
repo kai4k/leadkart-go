@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/leadkart/leadkart-go/internal/common/ids"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/permission"
 	"github.com/leadkart/leadkart-go/internal/identity/ports"
 )
 
@@ -267,5 +268,28 @@ func TestE2E_Refresh_IdleTimeoutEndsAnUnusedSession(t *testing.T) {
 	}
 	if got := f.revokeReasonOf(t, tok); got != "idle_timeout" {
 		t.Fatalf("revoke reason %q, want idle_timeout", got)
+	}
+}
+
+// Review G2b M3: an impersonation session writes with tenant-admin authority, so it is
+// refused into a suspended company (409 tenant_not_active), like an operator's
+// X-Tenant-Id write; reactivating the company opens the way again.
+func TestE2E_Impersonation_RefusesASuspendedCompany(t *testing.T) {
+	f := newE2EFixture(t)
+	owner := f.registerAndLogin(t, "impsuspended")
+	f.suspendTenantHTTP(t, owner.TenantID)
+
+	p := permission.IdentityPermissions
+	operatorTok := mintOperatorJWTExact(t, f.Issuer, f.persons, "", []string{p.Platform.ImpersonationManage, p.Platform.TenantsView}, false)
+	open := func() httpResp {
+		return f.authedJSON(t, http.MethodPost, "/api/v1/platform/impersonation/sessions", operatorTok,
+			ports.CreateImpersonationSessionRequest{TargetTenantID: owner.TenantID, Reason: "ticket 4712 suspended company", DurationMinutes: 30})
+	}
+	if r := open(); r.status != http.StatusConflict || errCodeOf(r) != "tenant_not_active" {
+		t.Fatalf("session into a suspended company: %d %s, want 409 tenant_not_active", r.status, r.body)
+	}
+	f.activateTenantHTTP(t, owner.TenantID)
+	if r := open(); r.status != http.StatusCreated {
+		t.Fatalf("session into the reactivated company: %d %s, want 201", r.status, r.body)
 	}
 }

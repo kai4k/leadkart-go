@@ -57,6 +57,13 @@ var ErrImpersonationInvalid = errors.New("impersonation: invalid input")
 // ErrImpersonationInvalid so the HTTP layer can return 404 vs 422.
 var ErrImpersonationTargetMissing = errors.New("impersonation: target tenant not found")
 
+// ErrImpersonationTargetNotActive surfaces when the target company is not active
+// (pending or suspended). A session writes into the company with tenant-admin
+// authority, so it is refused like an operator's X-Tenant-Id write to such a company
+// (409 tenant_not_active); the operator reads and reactivates it through the scope
+// routes instead (review G2b M3).
+var ErrImpersonationTargetNotActive = errors.New("impersonation: target tenant is not active")
+
 // CreateImpersonationSessionHandler runs the create flow.
 //
 // Dependencies per ADR 0045:
@@ -125,6 +132,10 @@ func (h CreateImpersonationSessionHandler) Handle(ctx context.Context, cmd Creat
 			return CreateImpersonationSessionResult{}, fmt.Errorf("%w: %s", ErrImpersonationTargetMissing, cmd.TargetTenantID)
 		}
 		return CreateImpersonationSessionResult{}, fmt.Errorf("create_impersonation_session: resolve target: %w", err)
+	}
+
+	if target.Status() != tenant.StatusActive {
+		return CreateImpersonationSessionResult{}, fmt.Errorf("%w: %s is %s", ErrImpersonationTargetNotActive, cmd.TargetTenantID, target.Status())
 	}
 
 	now := h.now()

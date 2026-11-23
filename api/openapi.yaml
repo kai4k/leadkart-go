@@ -1823,6 +1823,11 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '409':
+          description: "`tenant_not_active` — the target company is pending or suspended. A session writes with tenant-admin authority, so it is refused like an `X-Tenant-Id` write to such a company; read it, and reactivate it, through the tenant scope routes instead. Nothing is stored and no token is minted."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
         '422': { $ref: '#/components/responses/Unprocessable' }
         '400': { $ref: '#/components/responses/BadRequest' }
     get:

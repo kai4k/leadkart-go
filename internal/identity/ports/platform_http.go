@@ -304,6 +304,10 @@ func handleCreateImpersonationSession(log *slog.Logger, a app.Application) http.
 			writeError(w, http.StatusNotFound, ErrCodeTenantNotFound, "")
 			return
 		}
+		if errors.Is(err, command.ErrImpersonationTargetNotActive) {
+			writeError(w, http.StatusConflict, ErrCodeTenantNotActive, "the company is not active: its members cannot sign in and no session can be opened into it; reactivate it first")
+			return
+		}
 		if err != nil {
 			log.ErrorContext(r.Context(), "create impersonation session failed", "err", err)
 			writeError(w, http.StatusInternalServerError, ErrCodeInternalError, "")
