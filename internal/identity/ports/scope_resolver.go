@@ -16,10 +16,11 @@ type TenantScopeResolver struct{ a app.Application }
 // NewTenantScopeResolver wires the resolver used by authn.TenantScope.
 func NewTenantScopeResolver(a app.Application) TenantScopeResolver { return TenantScopeResolver{a: a} }
 
-// Lookup classifies a header-supplied target tenant. Suspended
-// tenants are valid scope targets for reads and lifecycle routes (operators
-// must be able to inspect and reactivate them) but not for other writes;
-// missing tenants are unknown.
+// Lookup classifies a header-supplied target tenant. A company that is not
+// active (suspended, or pending) is a valid scope target for reads and lifecycle
+// routes (operators must be able to inspect and reactivate it) but not for other
+// writes; an unreadable status counts as not active (fail closed); missing tenants
+// are unknown.
 func (r TenantScopeResolver) Lookup(ctx context.Context, id string) (authn.TenantScopeState, error) {
 	v, err := r.a.Queries.GetTenant.Handle(ctx, query.GetTenantQuery{TenantID: tenant.ID(id)})
 	if errors.Is(err, tenant.ErrNotFound) {
@@ -28,10 +29,8 @@ func (r TenantScopeResolver) Lookup(ctx context.Context, id string) (authn.Tenan
 	if err != nil {
 		return authn.TenantScopeUnknown, err
 	}
-	switch v.Status {
-	case tenant.StatusSuspended.String():
-		return authn.TenantScopeInactive, nil
-	default:
+	if v.Status == tenant.StatusActive.String() {
 		return authn.TenantScopeActive, nil
 	}
+	return authn.TenantScopeInactive, nil
 }

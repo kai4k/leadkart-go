@@ -53,7 +53,7 @@ const (
 	TenantScopeUnknown TenantScopeState = iota
 	// TenantScopeActive means scope reads and writes are allowed.
 	TenantScopeActive
-	// TenantScopeInactive means suspended. Scope reads and the
+	// TenantScopeInactive means not active (suspended or pending). Scope reads and the
 	// tenant lifecycle routes are allowed; other writes are 409.
 	TenantScopeInactive
 )
@@ -286,7 +286,7 @@ func applyScope(w http.ResponseWriter, r *http.Request, c *jwt.Claims) (*http.Re
 	case state == TenantScopeUnknown:
 		return reject(http.StatusNotFound, errCodeTenantScopeNotFound, "X-Tenant-Id does not name an active tenant", id)
 	case state == TenantScopeInactive && !isReadMethod(r.Method) && route.kind == scopeHonour:
-		return reject(http.StatusConflict, errCodeTenantNotActive, "the scoped tenant is suspended or pending deletion", id)
+		return reject(http.StatusConflict, errCodeTenantNotActive, "the scoped tenant is not active (suspended or pending)", id)
 	}
 
 	sr.log.InfoContext(r.Context(), "operator tenant scope",
