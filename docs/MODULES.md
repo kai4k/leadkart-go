@@ -214,7 +214,7 @@ Existing VOs (already on `main`):
 ### Background jobs (already on `main`)
 
 - `internal/common/jobs/` — river client + migration helper.
-- One existing job: `audit.PurgeJob` (7-year retention enforcement, daily).
+- No job deletes business data or the audit trail (ADR 0071: we never delete any data).
 - Phase A.2/A.3/C.2 each add 1–2 daily jobs.
 
 ---

@@ -21,7 +21,7 @@ Why:
 - **Type-safe job arguments** via Go generics — `river.Worker[ArgsT]`.
 
 Use cases planned for v0.1:
-- Audit log purge (daily cron) — outbox + audit retention per ADR 0027.
+- ~~Audit log purge (daily cron)~~ — removed: the audit trail is kept forever (ADR 0071).
 - Idempotency table compaction (hourly).
 - Notifications fanout (deferred from synchronous request paths).
 

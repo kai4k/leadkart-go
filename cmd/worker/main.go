@@ -464,8 +464,8 @@ func run(ctx context.Context, stdout *os.File) error {
 		}
 	}
 
-	// River background-job pool. v0.2 ships one job - AuditLogPurgeJob -
-	// running daily to enforce the 7-year audit retention. River's own
+	// River background-job pool. No job deletes business data or the audit trail
+	// (ADR 0071: we never delete any data). River's own
 	// migrations run from cmd/migrate as the owner role (this process runs as
 	// the application role and has no CREATE on public); fail fast if they have
 	// not been applied.
@@ -473,9 +473,6 @@ func run(ctx context.Context, stdout *os.File) error {
 		return err
 	}
 	workers := river.NewWorkers()
-	if err := river.AddWorkerSafely(workers, audit.NewPurgeWorker(pool, logger, time.Now)); err != nil {
-		return fmt.Errorf("register audit purge worker: %w", err)
-	}
 	// CRM mature-lead daily scan (BRD §4.7) — flags converted leads
 	// with no reorder activity in the configured window.
 	if err := river.AddWorkerSafely(workers, crmjobs.NewMatureLeadScanWorker(
@@ -506,21 +503,11 @@ func run(ctx context.Context, stdout *os.File) error {
 	if err := river.AddWorkerSafely(workers, identityjobs.NewLoginPhantomPurgeWorker(phantomLockout, logger, time.Now)); err != nil {
 		return fmt.Errorf("register login phantom purge worker: %w", err)
 	}
-	// Tasks module river jobs (Phase C.2 — BRD §6.8): overdue scan + purge.
+	// Tasks module river job (Phase C.2 — BRD §6.8): the overdue scan. Finished work items are kept.
 	if err := river.AddWorkerSafely(workers, tasksjobs.NewOverdueScanWorker(tasksRepo, tasksMarkOverdue, logger, time.Now)); err != nil {
 		return fmt.Errorf("register tasks overdue scan worker: %w", err)
 	}
-	if err := river.AddWorkerSafely(workers, tasksjobs.NewPurgeWorker(tasksRepo, logger, time.Now)); err != nil {
-		return fmt.Errorf("register tasks purge worker: %w", err)
-	}
 	periodics := []*river.PeriodicJob{
-		river.NewPeriodicJob(
-			river.PeriodicInterval(audit.PurgeInterval),
-			func() (river.JobArgs, *river.InsertOpts) {
-				return audit.PurgeJob{}, nil
-			},
-			&river.PeriodicJobOpts{RunOnStart: false},
-		),
 		river.NewPeriodicJob(
 			river.PeriodicInterval(identityjobs.LoginPhantomPurgeInterval),
 			func() (river.JobArgs, *river.InsertOpts) {
@@ -543,13 +530,6 @@ func run(ctx context.Context, stdout *os.File) error {
 			river.PeriodicInterval(tasksjobs.OverdueScanInterval),
 			func() (river.JobArgs, *river.InsertOpts) {
 				return tasksjobs.OverdueScanJob{}, nil
-			},
-			&river.PeriodicJobOpts{RunOnStart: false},
-		),
-		river.NewPeriodicJob(
-			river.PeriodicInterval(tasksjobs.PurgeInterval),
-			func() (river.JobArgs, *river.InsertOpts) {
-				return tasksjobs.PurgeJob{}, nil
 			},
 			&river.PeriodicJobOpts{RunOnStart: false},
 		),

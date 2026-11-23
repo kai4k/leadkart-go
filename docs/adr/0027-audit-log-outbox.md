@@ -1,6 +1,6 @@
 # ADR 0027 — Audit log: outbox table doubles as audit
 
-**Status:** Accepted
+**Status:** Accepted. The Retention section is superseded by ADR 0071: the audit trail has no age limit and no purge job.
 **Date:** 2026-05-05
 
 ## Context

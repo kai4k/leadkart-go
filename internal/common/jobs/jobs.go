@@ -115,7 +115,7 @@ type Config struct {
 	Logger       *slog.Logger
 	// Queues maps queue name → MaxWorkers. Defaults to one default
 	// queue with 10 workers if nil — sufficient for the v0.2 single-
-	// job (audit purge) load.
+	// job load.
 	Queues map[string]river.QueueConfig
 }
 

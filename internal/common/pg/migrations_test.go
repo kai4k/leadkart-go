@@ -548,7 +548,7 @@ func TestAppRoleHasPrivilegesOnEveryApplicationTable(t *testing.T) {
 	dml := []string{"SELECT", "INSERT", "UPDATE", "DELETE"}
 	wantSchemaPrivs := map[string][]string{"shared": {"SELECT"}}
 	wantTableExceptions := map[string][]string{
-		"common.audit_log_entry":           {"SELECT", "INSERT", "DELETE"},
+		"common.audit_log_entry":           {"SELECT", "INSERT"},
 		"common.admin_impersonation_audit": {"SELECT", "INSERT"},
 		"companysettings.policy_history":   {"SELECT", "INSERT"},
 	}
@@ -946,8 +946,8 @@ func TestVerifyApplicationPrivileges_FailsWhenRoleWasCreatedAfterMigrating(t *te
 	}
 }
 
-// A single missing table privilege is named, and the append-only exceptions are
-// enforced in the direction the check can see (DELETE on the audit log is needed).
+// A single missing table privilege is named (INSERT on the audit log; DELETE on it is
+// no longer held by anyone, ADR 0071).
 func TestVerifyApplicationPrivileges_NamesTheFirstMissingPrivilege(t *testing.T) {
 	dsn := startPostgres(t)
 	db, err := sql.Open("pgx", dsn)
@@ -957,13 +957,13 @@ func TestVerifyApplicationPrivileges_NamesTheFirstMissingPrivilege(t *testing.T)
 	defer db.Close()
 	createAppRole(t, db)
 	applyMigrations(t, dsn)
-	if _, err := db.ExecContext(t.Context(), `REVOKE DELETE ON common.audit_log_entry FROM leadkart_app`); err != nil {
+	if _, err := db.ExecContext(t.Context(), `REVOKE INSERT ON common.audit_log_entry FROM leadkart_app`); err != nil {
 		t.Fatalf("revoke: %v", err)
 	}
 
 	err = pg.VerifyApplicationPrivileges(t.Context(), appRoleConn(t, dsn), pg.PrivilegeCheck{Production: true, Logger: discardLogger()})
-	if err == nil || !strings.Contains(err.Error(), "DELETE on table common.audit_log_entry") {
-		t.Fatalf("want an error naming DELETE on common.audit_log_entry, got: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "INSERT on table common.audit_log_entry") {
+		t.Fatalf("want an error naming INSERT on common.audit_log_entry, got: %v", err)
 	}
 }
 

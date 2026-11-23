@@ -6,6 +6,8 @@
 package architecture_test
 
 import (
+	"io/fs"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -146,5 +148,40 @@ func TestArch_NoSensitivePayloadInAudit(t *testing.T) {
 	if len(bad) > 0 {
 		t.Fatalf("audit call site references password/secret/token field — sensitive payload leak:\n  %s",
 			strings.Join(bad, "\n  "))
+	}
+}
+
+// TestArch_NothingDeletesTheAuditTrail pins the owner rule "we never delete any data"
+// (ADR 0071) for the audit trail: no production Go or SQL source deletes from or
+// truncates common.audit_log_entry, so no scheduled job can either. The database
+// side is the revoked DELETE grant (pg.TablePrivilegeExceptions).
+// Scope: production — applies to non-test files.
+//
+// arch-test:no-negative-fixture (a source scan over production files; a planted DELETE file failed it when the gate was written)
+func TestArch_NothingDeletesTheAuditTrail(t *testing.T) {
+	t.Parallel()
+
+	root := internalDir(t)
+	delRE := regexp.MustCompile(`(?is)(DELETE\s+FROM|TRUNCATE(\s+TABLE)?)\s+(ONLY\s+)?(common\.)?audit_log_entry\b`)
+	var bad []string
+	check := func(path string, src []byte) {
+		if delRE.Match(src) {
+			bad = append(bad, pathToSlash(path))
+		}
+	}
+	for _, dir := range []string{root, filepath.Join(root, "..", "cmd")} {
+		walkGoFiles(t, dir, false, check)
+		_ = filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+			if err != nil || d.IsDir() || filepath.Ext(path) != ".sql" {
+				return nil
+			}
+			if src, rerr := os.ReadFile(path); rerr == nil {
+				check(path, src)
+			}
+			return nil
+		})
+	}
+	if len(bad) > 0 {
+		t.Fatalf("source deletes from the audit trail (it is kept forever, ADR 0071):\n  %s", strings.Join(bad, "\n  "))
 	}
 }
