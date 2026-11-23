@@ -85,7 +85,7 @@ func (r *ProductRepository) updateOnTx(ctx context.Context, tx pgx.Tx, id produc
 // GetByID satisfies [product.Repository]. GUC bound from tenantID (ADR 0062).
 func (r *ProductRepository) GetByID(ctx context.Context, tenantID tenant.ID, id product.ID) (*product.Product, error) {
 	var out *product.Product
-	err := r.tx.WithinTxPgxTenant(ctx, tenantID.String(), func(ctx context.Context, tx pgx.Tx) error {
+	run := func(ctx context.Context, tx pgx.Tx) error {
 		q := r.q.WithTx(tx)
 		got, err := loadProduct(ctx, q, id)
 		if err != nil {
@@ -93,7 +93,16 @@ func (r *ProductRepository) GetByID(ctx context.Context, tenantID tenant.ID, id 
 		}
 		out = got
 		return nil
-	})
+	}
+	// Inside a surrounding UoW tx (AddBatchHandler), read through it: a second
+	// pooled connection taken while the caller holds one deadlocks the pool once
+	// the concurrent callers reach the pool size.
+	var err error
+	if tx, ok := pg.TxFromContext(ctx); ok {
+		err = run(ctx, tx)
+	} else {
+		err = r.tx.WithinTxPgxTenant(ctx, tenantID.String(), run)
+	}
 	if err != nil {
 		return nil, err
 	}

@@ -82,12 +82,16 @@ func (r *InvoiceRepository) GetByOrderID(ctx context.Context, tenantID tenant.ID
 	})
 }
 
+// getOne reads one invoice. Inside a surrounding UoW tx it reads THROUGH that
+// tx: a read that took a second pooled connection while its caller holds one
+// deadlocks the pool once the concurrent callers reach the pool size (every
+// connection held by a caller waiting for one more).
 func (r *InvoiceRepository) getOne(
 	ctx context.Context, tenantID tenant.ID,
 	query func(context.Context, *db.Queries) (db.OrdersInvoice, error),
 ) (*invoice.Invoice, error) {
 	var out *invoice.Invoice
-	err := r.tx.WithinTxPgxTenant(ctx, tenantID.String(), func(ctx context.Context, tx pgx.Tx) error {
+	run := func(ctx context.Context, tx pgx.Tx) error {
 		row, gerr := query(ctx, r.q.WithTx(tx))
 		if gerr != nil {
 			if errors.Is(gerr, pgx.ErrNoRows) {
@@ -101,7 +105,13 @@ func (r *InvoiceRepository) getOne(
 		}
 		out = hydrated
 		return nil
-	})
+	}
+	var err error
+	if tx, ok := pg.TxFromContext(ctx); ok {
+		err = run(ctx, tx)
+	} else {
+		err = r.tx.WithinTxPgxTenant(ctx, tenantID.String(), run)
+	}
 	if err != nil {
 		return nil, err
 	}

@@ -73,7 +73,7 @@ func (r *RoleHierarchyEdgeRepository) GetActiveByChild(
 		return nil, fmt.Errorf("edge repo: parse child id %q: %w", childRoleID, err)
 	}
 	var out *rolehierarchy.Edge
-	err = r.tx.WithinTxPgxTenant(ctx, tenantID.String(), func(ctx context.Context, tx pgx.Tx) error {
+	run := func(ctx context.Context, tx pgx.Tx) error {
 		q := r.q.WithTx(tx)
 		row, qerr := q.GetActiveHierarchyEdgeByChild(ctx, pgconv.PgUUID(cid))
 		if qerr != nil {
@@ -88,7 +88,16 @@ func (r *RoleHierarchyEdgeRepository) GetActiveByChild(
 		}
 		out = got
 		return nil
-	})
+	}
+	// Inside a surrounding UoW tx (SetRoleParentHandler, under the tenant
+	// authority lock), read through it: a second pooled connection taken while
+	// the caller holds one deadlocks the pool once the concurrent callers reach
+	// the pool size.
+	if tx, ok := pg.TxFromContext(ctx); ok {
+		err = run(ctx, tx)
+	} else {
+		err = r.tx.WithinTxPgxTenant(ctx, tenantID.String(), run)
+	}
 	if err != nil {
 		return nil, err
 	}
