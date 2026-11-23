@@ -4385,9 +4385,13 @@ paths:
         A refusal names the setting: `422 validation_failed` with
         `errors{"<group>.<setting>": [<code>]}` (codes: `out_of_range`, `invalid_type`,
         `not_an_option`, `required`, `duplicate`, `too_many`, `not_in_allowed`,
-        `value_required`, `value_not_allowed`, `invalid_format`, `unknown_setting`,
-        `managed_elsewhere`) or on `reason`, `expected_version`, `changes`; nothing is
-        changed. Option sets and bounds: `GET` `options`.
+        `value_required`, `value_not_allowed`, `invalid_format`, `in_future`,
+        `unknown_setting`, `managed_elsewhere`) or on `reason` (`required`, `too_long`,
+        `invalid_characters`), `expected_version`, `changes`; nothing is changed. Changing
+        `payment.advance_mode` to `percent` or `fixed` needs `payment.advance_value` in the
+        same patch (`value_required`); the invoice and credit-note prefixes must differ
+        (`duplicate`). The body is read strictly: an unknown key, trailing data, or a group
+        or setting named twice is `400 invalid_body`. Option sets and bounds: `GET` `options`.
       parameters:
         - $ref: '#/components/parameters/XCommandId'
         - $ref: '#/components/parameters/XTenantId'
@@ -5072,7 +5076,7 @@ components:
         changed_keys: { type: array, items: { type: string } }
         reason: { type: string }
         actor_membership_id: { type: string, format: uuid }
-        impersonator_operator_id: { type: string }
+        changed_by_support: { type: boolean, description: 'True when LeadKart support made the change in an impersonation session. The operator person id is not shown to tenant readers.' }
         changed_at: { type: string, format: date-time }
 
     ListCompanySettingsHistoryResponse:
