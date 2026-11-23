@@ -520,13 +520,7 @@ func run(ctx context.Context, stdout *os.File) error {
 		return fmt.Errorf("register tasks overdue scan worker: %w", err)
 	}
 	periodics := []*river.PeriodicJob{
-		river.NewPeriodicJob(
-			river.PeriodicInterval(jobs.DeadLetterReplayInterval),
-			func() (river.JobArgs, *river.InsertOpts) {
-				return jobs.DeadLetterReplayJob{}, nil
-			},
-			&river.PeriodicJobOpts{RunOnStart: false},
-		),
+		jobs.DeadLetterReplayPeriodicJob(),
 		river.NewPeriodicJob(
 			river.PeriodicInterval(identityjobs.LoginPhantomPurgeInterval),
 			func() (river.JobArgs, *river.InsertOpts) {

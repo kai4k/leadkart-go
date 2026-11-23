@@ -50,3 +50,22 @@ func TestDeadLetterReplayWorker_ReportsAFailureSoRiverRetries(t *testing.T) {
 		t.Fatalf("Work error = %v, want the replay error", err)
 	}
 }
+
+// Review G2c N7: the job is on a schedule. A job nobody schedules never runs, and every
+// timed-out dead letter then waits for a person.
+func TestDeadLetterReplay_IsScheduledEveryMinuteAndNotAtStart(t *testing.T) {
+	t.Parallel()
+	at := time.Date(2026, 11, 24, 12, 0, 0, 0, time.UTC)
+	if got := jobs.DeadLetterReplaySchedule().Next(at); !got.Equal(at.Add(time.Minute)) {
+		t.Fatalf("next run %v, want one minute after %v", got, at)
+	}
+	if jobs.DeadLetterReplayPeriodicOpts().RunOnStart {
+		t.Fatal("a worker restart must not add a run")
+	}
+	if jobs.DeadLetterReplayPeriodicJob() == nil {
+		t.Fatal("no periodic job")
+	}
+	if kind := (jobs.DeadLetterReplayJob{}).Kind(); kind != "common.dead_letter_replay" {
+		t.Fatalf("job kind %q changed; river kinds are stable", kind)
+	}
+}

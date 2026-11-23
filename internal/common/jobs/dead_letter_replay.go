@@ -26,6 +26,26 @@ type DeadLetterReplayJob struct{}
 // Kind returns the river-stable job kind. Never rename.
 func (DeadLetterReplayJob) Kind() string { return "common.dead_letter_replay" }
 
+// DeadLetterReplaySchedule is how often the job runs: every [DeadLetterReplayInterval].
+func DeadLetterReplaySchedule() river.PeriodicSchedule {
+	return river.PeriodicInterval(DeadLetterReplayInterval)
+}
+
+// DeadLetterReplayPeriodicOpts does not run the job at worker start: a due dead letter
+// waits for its backoff anyway, and a restart must not add a run.
+func DeadLetterReplayPeriodicOpts() *river.PeriodicJobOpts {
+	return &river.PeriodicJobOpts{RunOnStart: false}
+}
+
+// DeadLetterReplayPeriodicJob is the periodic registration the worker passes to river.
+func DeadLetterReplayPeriodicJob() *river.PeriodicJob {
+	return river.NewPeriodicJob(
+		DeadLetterReplaySchedule(),
+		func() (river.JobArgs, *river.InsertOpts) { return DeadLetterReplayJob{}, nil },
+		DeadLetterReplayPeriodicOpts(),
+	)
+}
+
 // DeadLetterReplayer puts due timed-out dead letters back on the outbox and returns
 // how many. Consumer-defined; messaging.DeadLetterReplayer implements it.
 type DeadLetterReplayer interface {

@@ -355,3 +355,65 @@ func TestDeadLetterReplay_AHandlerThatIsNotMarkedReplaySafeIsNeverReplayed(t *te
 		t.Fatalf("replays recorded: %d, want 0", got)
 	}
 }
+
+// Review G2c N7: overlapping runs of the job (two workers, or a slow run and the next
+// tick) replay each dead letter once. The unique replay row and the rows-affected check
+// are what stop the later runs; without them an event reaches the outbox twice. Many dead
+// letters make the runs walk the same list at once, so they collide.
+func TestDeadLetterReplay_ConcurrentRunsReplayEachDeadLetterOnce(t *testing.T) {
+	pool := inboxFixture(t)
+	const handler = "test.replay.concurrent.Handler"
+	const letters, runs = 40, 12
+	msgIDs := map[string]bool{}
+	for range letters {
+		msgID := uuid.NewString()
+		msgIDs[msgID] = true
+		// No router and no forwarder: the outbox rows the replay writes stay to be counted.
+		if _, err := pool.Exec(t.Context(), `
+			INSERT INTO common.dead_letter (id, topic, handler_name, message_id, reason, payload, metadata, dead_lettered_at)
+			VALUES ($1, 'test.events', $2, $3, $4, '{}', '{}', now() - interval '1 hour')`,
+			uuid.New(), handler, msgID, messaging.TimeoutReasonPrefix+" after 30s: stuck"); err != nil {
+			t.Fatalf("seed dead letter: %v", err)
+		}
+	}
+	replayer := messaging.NewDeadLetterReplayer(pool, silentLog(), []string{handler})
+
+	var wg sync.WaitGroup
+	var replayed atomic.Int32
+	start := make(chan struct{})
+	for range runs {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			n, err := replayer.ReplayDue(t.Context(), time.Now().Add(time.Hour), 100)
+			if err != nil {
+				t.Errorf("a concurrent run failed: %v", err)
+			}
+			replayed.Add(int32(n))
+		}()
+	}
+	close(start)
+	wg.Wait()
+
+	if got := replayed.Load(); got != letters {
+		t.Fatalf("%d runs replayed %d times in all, want exactly %d", runs, got, letters)
+	}
+	if got := messagingtest.ReplayCount(t.Context(), t, pool, handler); got != letters {
+		t.Fatalf("replay rows: %d, want %d", got, letters)
+	}
+	perMessage := map[string]int{}
+	for _, r := range messagingtest.RowsForTopic(messagingtest.DrainOutbox(t.Context(), t, pool), "test.events") {
+		if msgIDs[r.Message.UUID] {
+			perMessage[r.Message.UUID]++
+		}
+	}
+	for id, n := range perMessage {
+		if n != 1 {
+			t.Fatalf("message %s reached the outbox %d times, want once", id, n)
+		}
+	}
+	if len(perMessage) != letters {
+		t.Fatalf("%d messages reached the outbox, want %d", len(perMessage), letters)
+	}
+}
