@@ -28,6 +28,9 @@ type AuditEventView struct {
 	Succeeded     bool
 	FailureReason string
 	PayloadRaw    []byte
+	// BySupport is true when an operator acted under an impersonation session: the
+	// stored user is then the OPERATOR, whose person id the tenant must not see.
+	BySupport bool
 }
 
 // ----- ListAuditEventsByTenant ---------------------------------------------
@@ -75,6 +78,13 @@ func (h ListAuditEventsByTenantHandler) Handle(ctx context.Context, q ListAuditE
 	}
 
 	views := entriesToViews(entries)
+	// The tenant sees THAT support acted, never WHICH operator: under an
+	// impersonation session the stored user is the operator person id.
+	for i := range views {
+		if views[i].BySupport {
+			views[i].ActorID = ""
+		}
+	}
 	return pagination.BuildPage(views, pageSize, func(v AuditEventView) pagination.Cursor {
 		return pagination.Cursor{SortValue: v.OccurredAt, ID: v.ID}
 	}), nil
@@ -159,6 +169,7 @@ func entriesToViews(entries []audit.Entry) []AuditEventView {
 			Succeeded:     e.Succeeded,
 			FailureReason: e.FailureReason,
 			PayloadRaw:    e.Payload,
+			BySupport:     e.ActOperatorID != uuid.Nil,
 		}
 		out = append(out, v)
 	}

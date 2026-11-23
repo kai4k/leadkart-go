@@ -340,3 +340,25 @@ func TestListAuditByUser_PageBoundary_EmitsNextCursor(t *testing.T) {
 		t.Errorf("NextCursor empty")
 	}
 }
+
+// Review B5: under an impersonation session the stored user is the OPERATOR; the tenant
+// feed shows that support acted but never which operator. The person own feed keeps it.
+func TestListAuditEventsByTenant_HidesTheOperatorPersonIdOfImpersonatedRows(t *testing.T) {
+	t.Parallel()
+	operator := uuid.New()
+	member := uuid.New()
+	reader := &fakeAuditReader{tenantEntries: []audit.Entry{
+		{ID: uuid.New(), Action: "identity.membership_deactivated.v1", UserID: operator, ActOperatorID: operator, OccurredAtUTC: time.Now()},
+		{ID: uuid.New(), Action: "identity.person_created.v1", UserID: member, OccurredAtUTC: time.Now()},
+	}}
+	page, err := query.NewListAuditEventsByTenantHandler(reader).Handle(t.Context(), query.ListAuditEventsByTenantQuery{TenantID: tenant.ID(auditTenantUUID)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if page.Items[0].ActorID != "" || !page.Items[0].BySupport {
+		t.Fatalf("an impersonated row must hide the operator and say support acted: %+v", page.Items[0])
+	}
+	if page.Items[1].ActorID != member.String() || page.Items[1].BySupport {
+		t.Fatalf("an ordinary row keeps its actor: %+v", page.Items[1])
+	}
+}

@@ -115,15 +115,16 @@ func projectAuditEventsPage(p pagination.Page[query.AuditEventView]) ListAuditEv
 	events := make([]AuditEventDto, 0, len(p.Items))
 	for _, v := range p.Items {
 		dto := AuditEventDto{
-			ID:            v.ID,
-			Action:        v.Action,
-			ActorID:       v.ActorID,
-			TenantID:      v.TenantID,
-			CorrelationID: v.CorrelationID,
-			OccurredAt:    v.OccurredAt,
-			DurationMs:    v.DurationMs,
-			Succeeded:     v.Succeeded,
-			FailureReason: v.FailureReason,
+			ID:               v.ID,
+			Action:           v.Action,
+			ActorID:          v.ActorID,
+			ChangedBySupport: v.BySupport,
+			TenantID:         v.TenantID,
+			CorrelationID:    v.CorrelationID,
+			OccurredAt:       v.OccurredAt,
+			DurationMs:       v.DurationMs,
+			Succeeded:        v.Succeeded,
+			FailureReason:    v.FailureReason,
 		}
 		if len(v.PayloadRaw) > 0 {
 			// Payload is stored as jsonb in Postgres → returned by

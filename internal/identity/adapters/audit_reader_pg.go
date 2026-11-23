@@ -111,6 +111,7 @@ func rowsToEntries(rows []db.CommonAuditLogEntry) []audit.Entry {
 			Duration:      time.Duration(r.DurationMs) * time.Millisecond,
 			Succeeded:     r.Succeeded,
 			Payload:       r.Payload,
+			ActOperatorID: pgconv.UUIDFromPg(r.ActOperatorID),
 		}
 		if r.FailureReason != nil {
 			e.FailureReason = *r.FailureReason

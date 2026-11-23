@@ -125,16 +125,19 @@ type ChangePasswordRequest struct {
 // AuditEventDto is one audit-log row per ADR 0027 (outbox doubles as
 // audit): action + timestamp + outcome, plus raw-JSON payload.
 type AuditEventDto struct {
-	ID            string          `json:"id"`
-	Action        string          `json:"action"`
-	ActorID       string          `json:"actor_id,omitzero"`
-	TenantID      string          `json:"tenant_id,omitzero"`
-	CorrelationID string          `json:"correlation_id,omitzero"`
-	OccurredAt    time.Time       `json:"occurred_at"`
-	DurationMs    int64           `json:"duration_ms"`
-	Succeeded     bool            `json:"succeeded"`
-	FailureReason string          `json:"failure_reason,omitzero"`
-	Payload       json.RawMessage `json:"payload,omitzero"`
+	ID      string `json:"id"`
+	Action  string `json:"action"`
+	ActorID string `json:"actor_id,omitzero"`
+	// ChangedBySupport is true when LeadKart support acted in an impersonation session;
+	// the operator person id is then not shown on the tenant feed.
+	ChangedBySupport bool            `json:"changed_by_support,omitzero"`
+	TenantID         string          `json:"tenant_id,omitzero"`
+	CorrelationID    string          `json:"correlation_id,omitzero"`
+	OccurredAt       time.Time       `json:"occurred_at"`
+	DurationMs       int64           `json:"duration_ms"`
+	Succeeded        bool            `json:"succeeded"`
+	FailureReason    string          `json:"failure_reason,omitzero"`
+	Payload          json.RawMessage `json:"payload,omitzero"`
 }
 
 // ListAuditEventsResponse — keyset-paginated per ADR 0038. events[]
