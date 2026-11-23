@@ -23,6 +23,7 @@ package audittest
 import (
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -55,4 +56,35 @@ func HasAtLeastOneByAction(t testing.TB, pool *pgxpool.Pool, action string) func
 	return func() bool {
 		return CountByAction(t, pool, action) >= 1
 	}
+}
+
+// Row is the part of an audit row the actor and failure assertions read.
+type Row struct {
+	UserID        *uuid.UUID // nil when the row has no actor
+	Succeeded     bool
+	FailureReason *string // nil when the row records no failure
+}
+
+// RowByAction returns the first audit row for action, and false when none is
+// written yet (the caller polls).
+func RowByAction(t testing.TB, pool *pgxpool.Pool, action string) (Row, bool) {
+	t.Helper()
+	var r Row
+	const q = `
+		SELECT user_id, succeeded, failure_reason FROM common.audit_log_entry
+		WHERE  action = $1
+		LIMIT  1
+	`
+	rows, err := pool.Query(t.Context(), q, action)
+	if err != nil {
+		t.Fatalf("audittest.RowByAction(%q): %v", action, err)
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		return Row{}, false
+	}
+	if err := rows.Scan(&r.UserID, &r.Succeeded, &r.FailureReason); err != nil {
+		t.Fatalf("audittest.RowByAction(%q) scan: %v", action, err)
+	}
+	return r, true
 }

@@ -5901,7 +5901,7 @@ components:
         occurred_at:    { type: string, format: date-time }
         duration_ms:    { type: integer, format: int64 }
         succeeded:      { type: boolean }
-        failure_reason: { type: string }
+        failure_reason: { type: string, description: 'Present only when succeeded is false: a stable code (handler_failed, non_retryable, handler_panic, timeout, canceled), never the raw error text. The detail is in the server log.' }
         payload:        { type: object, description: 'jsonb payload from the original command. Free-form per action.' }
 
     ListAuditEventsResponse:

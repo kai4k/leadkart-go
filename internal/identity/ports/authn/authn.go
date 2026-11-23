@@ -28,6 +28,7 @@ import (
 	"strings"
 
 	"github.com/leadkart/leadkart-go/internal/common/actclaim"
+	"github.com/leadkart/leadkart-go/internal/common/actor"
 	"github.com/leadkart/leadkart-go/internal/common/tenancy"
 	"github.com/leadkart/leadkart-go/internal/identity/app/jwt"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/permission"
@@ -170,6 +171,9 @@ func RequireAuth(verifier Verifier) func(http.Handler) http.Handler {
 				return
 			}
 			ctx := WithClaims(r.Context(), claims)
+			// Who issued the command: the outbox stamps it so the audit
+			// row (and /auth/me/activity) knows the actor.
+			ctx = actor.WithPerson(ctx, claims.Subject)
 			// The operator X-Tenant-Id scope is NOT applied here: RequireFreshStamp
 			// applies it after the security stamp passes (ADR 0068 D7), so a
 			// revoked token never gets tenant-existence answers.

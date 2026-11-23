@@ -16,6 +16,7 @@ import (
 	"go.opentelemetry.io/otel/propagation"
 
 	"github.com/leadkart/leadkart-go/internal/common/actclaim"
+	"github.com/leadkart/leadkart-go/internal/common/actor"
 )
 
 // OutboxForwarderTopic is the single logical topic the transactional
@@ -160,6 +161,9 @@ func stampOutboxMetadata(msg *message.Message, tenantID uuid.UUID, event any) {
 	}
 	if ev, ok := event.(OutboxEvent); ok {
 		msg.Metadata.Set(HeaderOccurredAt, ev.OccurredAt().UTC().Format(time.RFC3339Nano))
+	}
+	if person, ok := actor.PersonFromContext(ctx); ok {
+		msg.Metadata.Set(HeaderActorID, person)
 	}
 	if actOperatorID, actSessionID, actReason := outboxActClaim(ctx); actOperatorID != "" || actSessionID != "" || actReason != "" {
 		if actOperatorID != "" {

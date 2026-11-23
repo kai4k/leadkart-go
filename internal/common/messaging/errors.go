@@ -1,6 +1,11 @@
 package messaging
 
-import "errors"
+import (
+	"context"
+	"errors"
+
+	wmw "github.com/ThreeDotsLabs/watermill/message/router/middleware"
+)
 
 // DeadLetterTopic is where PoisonQueue salvages a message the handler can't
 // process — after retries exhaust, or immediately for a NonRetryable error.
@@ -30,4 +35,34 @@ func NonRetryable(err error) error {
 func IsNonRetryable(err error) bool {
 	_, ok := errors.AsType[nonRetryableError](err)
 	return ok
+}
+
+// Stable failure codes stored in the audit row's failure_reason. They are the
+// only failure text the audit feed exposes.
+const (
+	FailureHandlerFailed = "handler_failed"
+	FailureNonRetryable  = "non_retryable"
+	FailurePanic         = "handler_panic"
+	FailureTimeout       = "timeout"
+	FailureCanceled      = "canceled"
+)
+
+// FailureCode maps a handler error to a stable, safe code. The raw error text
+// is for logs, never for the audit row.
+func FailureCode(err error) string {
+	switch {
+	case err == nil:
+		return ""
+	case errors.Is(err, context.DeadlineExceeded):
+		return FailureTimeout
+	case errors.Is(err, context.Canceled):
+		return FailureCanceled
+	}
+	if _, ok := errors.AsType[wmw.RecoveredPanicError](err); ok {
+		return FailurePanic
+	}
+	if IsNonRetryable(err) {
+		return FailureNonRetryable
+	}
+	return FailureHandlerFailed
 }

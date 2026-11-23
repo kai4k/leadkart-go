@@ -34,6 +34,9 @@ const (
 	HeaderActOperatorID = "act_operator_id"
 	HeaderActSessionID  = "act_session_id"
 	HeaderActReason     = "act_reason"
+	// HeaderActorID is the person (JWT subject) who issued the command that
+	// produced the message; the audit row records it as user_id.
+	HeaderActorID = "actor_id"
 )
 
 // TenantContextMiddleware bridges the tenant_id metadata header into
@@ -132,6 +135,7 @@ func AuditMiddleware(writer *audit.Writer, log *slog.Logger) message.HandlerMidd
 
 			entry := audit.Entry{
 				Action:        msg.Metadata.Get(HeaderEventType),
+				UserID:        parseUUIDHeader(msg.Metadata.Get(HeaderActorID)),
 				TenantID:      parseUUIDHeader(msg.Metadata.Get(HeaderTenantID)),
 				CorrelationID: parseUUIDHeader(msg.Metadata.Get(HeaderCorrelationID)),
 				OccurredAtUTC: parseTimeHeader(msg.Metadata.Get(HeaderOccurredAt)),
@@ -146,7 +150,12 @@ func AuditMiddleware(writer *audit.Writer, log *slog.Logger) message.HandlerMidd
 				ActReason:     msg.Metadata.Get(HeaderActReason),
 			}
 			if err != nil {
-				entry.FailureReason = err.Error()
+				// A stable code, never the raw error: the audit feed is
+				// returned by the API and raw text can carry SQL, constraint
+				// names or internals. The detail goes to the log.
+				entry.FailureReason = FailureCode(err)
+				log.WarnContext(msg.Context(), "audit middleware: handler failed",
+					"action", entry.Action, "failure_code", entry.FailureReason, "err", err)
 			}
 			if werr := writer.Write(msg.Context(), entry); werr != nil {
 				// Audit writer already logs — surface at DEBUG only so
