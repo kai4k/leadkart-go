@@ -187,8 +187,13 @@ func TestLogin_MembershipOrTenantChangesBetweenVerifyAndInsert_IsRefused(t *test
 				return verr
 			})
 			_, err := h.Handle(t.Context(), command.LoginCommand{Email: p.Email(), Password: plain, DeviceLabel: "gap"})
-			if !errors.Is(err, command.ErrInvalidCredentials) {
-				t.Fatalf("%s between verify and insert: %v, want ErrInvalidCredentials", name, err)
+			// A suspension is named only after the password was verified, which it was.
+			want := command.ErrInvalidCredentials
+			if name == "tenant suspended" {
+				want = command.ErrTenantSuspended
+			}
+			if !errors.Is(err, want) {
+				t.Fatalf("%s between verify and insert: %v, want %v", name, err, want)
 			}
 			fams, err := rig.families.ListActiveForPerson(t.Context(), p.ID())
 			if err != nil {

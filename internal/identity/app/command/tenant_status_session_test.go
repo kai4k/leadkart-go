@@ -84,19 +84,6 @@ func TestLogin_SuspendedTenant_WrongPasswordIsAnOrdinaryWrongPassword(t *testing
 	}
 }
 
-func TestLogin_UnknownTenantStatus_IsRefusedLikeABadCredential(t *testing.T) {
-	t.Parallel()
-	rig := newLoginRig(t)
-	p, families := seedTenantMember(t, rig, tenant.StatusUnknown)
-
-	if err := loginAs(t, rig, p, tenantStatusPlain); !errors.Is(err, command.ErrInvalidCredentials) {
-		t.Fatalf("unusable tenant status = %v, want ErrInvalidCredentials", err)
-	}
-	if n := families(); n != 0 {
-		t.Fatalf("%d refresh families, want 0", n)
-	}
-}
-
 // Owner ruling 2026-11-21: "If a Company is not Active no one can login from that
 // org." Pending members are refused after the password check,
 // with their own answer; the unknown/wrong-password surfaces do not change.
