@@ -609,3 +609,34 @@ func TestE2E_M1_ProfileFieldsAreCapped(t *testing.T) {
 		t.Errorf("re-sending a stored overlong value unchanged: %d %s, want 204", r.status, r.body)
 	}
 }
+
+// Item 9: a GSTIN whose embedded PAN is not the supplied PAN names the field
+// (it used to be a field-less 422 tenant_invalid), and nothing is written.
+func TestE2E_GSTPANMismatchNamesItsField(t *testing.T) {
+	f := newE2EFixture(t)
+	owner := f.registerAndLogin(t, "gstpan")
+	path := "/api/v1/tenants/" + owner.TenantID + "/statutory"
+	save := func(gstin, pan string) httpResp {
+		return f.authedJSON(t, http.MethodPatch, path, owner.AccessToken,
+			map[string]any{"gst_number": gstin, "pan_number": pan, "drug_licence_number": ""})
+	}
+	if r := save("29ABCPE1234F1Z5", "ABCPE1234F"); r.status != http.StatusNoContent {
+		t.Fatalf("matching GSTIN and PAN: %d %s, want 204", r.status, r.body)
+	}
+	r := save("29ABCPE1234F1Z5", "ZZZPZ9999G")
+	var er ports.ErrorResponse
+	if err := json.Unmarshal(r.body, &er); err != nil || r.status != http.StatusUnprocessableEntity || er.Error != "tenant_invalid" ||
+		len(er.Errors) != 1 || len(er.Errors["pan_number"]) != 1 || er.Errors["pan_number"][0] != "gstin_pan_mismatch" {
+		t.Fatalf("mismatch: %d %s, want 422 tenant_invalid errors{pan_number:[gstin_pan_mismatch]}", r.status, r.body)
+	}
+	if strings.Contains(string(r.body), "ZZZPZ9999G") || strings.Contains(string(r.body), "ABCPE1234F") {
+		t.Errorf("the refusal echoes a statutory number: %s", r.body)
+	}
+	// a GSTIN alone, or a PAN alone, is not a mismatch
+	if r := save("29ABCPE1234F1Z5", ""); r.status != http.StatusNoContent {
+		t.Errorf("GSTIN without a PAN: %d %s, want 204", r.status, r.body)
+	}
+	if r := save("", "ZZZPZ9999G"); r.status != http.StatusNoContent {
+		t.Errorf("PAN without a GSTIN: %d %s, want 204", r.status, r.body)
+	}
+}

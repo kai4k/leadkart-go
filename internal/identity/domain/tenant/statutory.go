@@ -5,6 +5,7 @@ import (
 
 	"github.com/leadkart/leadkart-go/internal/common/druglicence"
 	"github.com/leadkart/leadkart-go/internal/common/gst"
+	"github.com/leadkart/leadkart-go/internal/common/humantext"
 	"github.com/leadkart/leadkart-go/internal/common/pan"
 )
 
@@ -18,16 +19,20 @@ type Statutory struct {
 	drugLicence druglicence.Number
 }
 
+// CodeGSTINPANMismatch is the wire code, under `pan_number`, of a PAN that is not
+// the one embedded in the supplied GSTIN. Stable: the web matches it.
+const CodeGSTINPANMismatch = "gstin_pan_mismatch"
+
 // NewStatutory composes the optional statutory IDs. Pass zero values for
 // undeclared fields. Cross-validates GST+PAN when both are non-zero:
-// the PAN embedded in GSTIN must equal the supplied PAN.
+// the PAN embedded in GSTIN must equal the supplied PAN. A mismatch is ErrInvalid
+// wrapping a [humantext.Error] that names `pan_number` with [CodeGSTINPANMismatch];
+// it never carries either number.
 func NewStatutory(g gst.Number, p pan.Number, dl druglicence.Number) (Statutory, error) {
 	if !g.IsZero() && !p.IsZero() {
 		if g.PAN() != p.String() {
-			return Statutory{}, fmt.Errorf(
-				"%w: GST-embedded PAN %q does not match supplied PAN %q",
-				ErrInvalid, g.PAN(), p.String(),
-			)
+			return Statutory{}, fmt.Errorf("%w: %w", ErrInvalid,
+				&humantext.Error{Field: "pan_number", Reason: CodeGSTINPANMismatch})
 		}
 	}
 	return Statutory{gst: g, pan: p, drugLicence: dl}, nil

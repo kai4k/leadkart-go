@@ -77,8 +77,9 @@ var ErrInvalidCharacters = errors.New("invalid characters")
 type Error struct {
 	// Field is the request field name as the client sends it (snake_case).
 	Field string
-	// Reason is the wire code: [Code] (also the meaning of ""), [CodeRequired] or
-	// [CodeTooLong].
+	// Reason is the wire code: [Code] (also the meaning of ""), [CodeRequired],
+	// [CodeTooLong], or a rule's own snake_case code for a refusal that belongs to
+	// one field but is none of the three (a PAN that is not the GSTIN's).
 	Reason string
 }
 
@@ -102,8 +103,10 @@ func (e *Error) Error() string {
 		return e.Field + " is required"
 	case CodeTooLong:
 		return e.Field + " is too long"
+	case Code:
+		return e.Field + " must not contain control, direction-override or invisible formatting characters"
 	}
-	return e.Field + " must not contain control, direction-override or invisible formatting characters"
+	return e.Field + " is invalid (" + e.Reason + ")"
 }
 
 // Is makes errors.Is(err, ErrInvalidCharacters) match only a refused-character error.

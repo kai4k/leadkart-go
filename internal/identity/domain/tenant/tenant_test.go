@@ -10,6 +10,7 @@ import (
 	"github.com/leadkart/leadkart-go/internal/common/email"
 	"github.com/leadkart/leadkart-go/internal/common/errs"
 	"github.com/leadkart/leadkart-go/internal/common/gst"
+	"github.com/leadkart/leadkart-go/internal/common/humantext"
 	"github.com/leadkart/leadkart-go/internal/common/ids"
 	"github.com/leadkart/leadkart-go/internal/common/pan"
 	"github.com/leadkart/leadkart-go/internal/common/phone"
@@ -468,6 +469,18 @@ func TestNewStatutory_RejectsGSTPANMismatch(t *testing.T) {
 	_, err := tenant.NewStatutory(g, p, druglicence.Number{})
 	if !errors.Is(err, tenant.ErrInvalid) {
 		t.Errorf("expected ErrInvalid, got %v", err)
+	}
+	// The refusal names the field a form must mark, with a stable code, and never
+	// echoes either number.
+	var he *humantext.Error
+	if !errors.As(err, &he) || he.Field != "pan_number" || he.WireCode() != tenant.CodeGSTINPANMismatch {
+		t.Fatalf("mismatch must be a field error pan_number / %s, got %v", tenant.CodeGSTINPANMismatch, err)
+	}
+	if tenant.CodeGSTINPANMismatch != "gstin_pan_mismatch" {
+		t.Errorf("wire code = %q, want gstin_pan_mismatch (the web matches it)", tenant.CodeGSTINPANMismatch)
+	}
+	if msg := err.Error(); strings.Contains(msg, "ABCPE1234F") || strings.Contains(msg, "ZZZPZ9999G") || strings.Contains(msg, "characters") {
+		t.Errorf("message %q must not echo a number nor claim a character problem", msg)
 	}
 }
 

@@ -728,6 +728,10 @@ paths:
         A malformed GST, PAN or drug-licence number is 422 `validation_failed` with an
         `errors` entry under `gst_number` (`["invalid_gstin"]`), `pan_number` (`["invalid_pan"]`) or
         `drug_licence_number` (`["invalid_drug_licence"]`). Each value is a stable code, never a sentence.
+        When both a GSTIN and a PAN are sent, the PAN must be the one embedded in the GSTIN
+        (characters 3 to 12); otherwise the answer is 422 `tenant_invalid` with
+        `errors{pan_number: ["gstin_pan_mismatch"]}`, nothing is written and the message echoes
+        neither number. A GSTIN alone or a PAN alone is never a mismatch.
         Requires `identity.tenants.update` (satisfied by `tenant.admin` in the caller's own tenant, or by `platform.*` equivalents for platform operators; ADR 0068).
       x-required-permissions: [identity.tenants.update]
       parameters:
@@ -4941,7 +4945,7 @@ components:
       required: [gst_number, pan_number, drug_licence_number]
       properties:
         gst_number:           { type: string }
-        pan_number:           { type: string }
+        pan_number:           { type: string, description: "When `gst_number` is also sent, must equal the PAN embedded in it (characters 3 to 12), else 422 `tenant_invalid` with `errors{pan_number: [\"gstin_pan_mismatch\"]}`." }
         drug_licence_number:  { type: string }
 
     UpdateTenantAdminContactRequest:

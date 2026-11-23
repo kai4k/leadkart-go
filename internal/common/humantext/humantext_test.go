@@ -207,6 +207,10 @@ func TestError_WireCodesAndSentinel(t *testing.T) {
 		{&humantext.Error{Field: "f"}, "invalid_characters", true},
 		{humantext.Required("f"), "required", false},
 		{humantext.TooLong("f"), "too_long", false},
+		{&humantext.Error{Field: "f", Reason: "own_rule"}, "own_rule", false},
+	}
+	if got := (&humantext.Error{Field: "f", Reason: "own_rule"}).Error(); got != "f is invalid (own_rule)" {
+		t.Errorf("a rule's own code must not be reported as a character problem: %q", got)
 	}
 	for _, c := range cases {
 		if got := c.err.WireCode(); got != c.wantCode {

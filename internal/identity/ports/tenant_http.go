@@ -406,7 +406,8 @@ func parseTenantIDPath(w http.ResponseWriter, r *http.Request) (tenant.ID, bool)
 //   - tenant.ErrHasDependents → 409 tenant_has_dependents (hard delete only; the
 //     transaction was rolled back, nothing changed)
 //   - tenant.ErrInvalid (wrapped from aggregate) → 422 (lifecycle
-//     transition rejected, over-length names, missing reason, etc.)
+//     transition rejected, over-length names, missing reason, etc.); a PAN
+//     that is not the GSTIN's names `pan_number` with `gstin_pan_mismatch`
 //   - gst / pan / druglicence / phone / postaladdress ErrInvalid → 422
 //     validation_failed with a per-field `errors` entry holding a stable code
 //     (gst_number, pan_number, drug_licence_number, phone, and one
