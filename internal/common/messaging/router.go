@@ -254,9 +254,11 @@ func (r *Router) AddSubscriber(handlerName string, topic string, fn SubscriberHa
 		r.sub,
 		watermillAdapter(fn),
 	).AddMiddleware(
+		replayTarget(handlerName),
 		r.poison,
 		IdempotencyMiddleware(r.receiver, handlerName),
 		AuditMiddleware(r.auditW, r.log),
+		timeoutLedger,
 		retryMiddleware(r.retry),
 		attemptTimeout(r.timeout),
 		wmw.Recoverer,
@@ -288,9 +290,11 @@ func (r *Router) AddCqrsHandler(p *cqrs.EventProcessor, eh cqrs.EventHandler) er
 		return fmt.Errorf("messaging: add cqrs handler %q: %w", eh.HandlerName(), err)
 	}
 	h.AddMiddleware(
+		replayTarget(eh.HandlerName()),
 		r.poison,
 		IdempotencyMiddleware(r.receiver, eh.HandlerName()),
 		AuditMiddleware(r.auditW, r.log),
+		timeoutLedger,
 		retryMiddleware(r.retry),
 		attemptTimeout(r.timeout),
 		wmw.Recoverer,
@@ -345,19 +349,60 @@ func retryMiddleware(cfg RetryConfig) message.HandlerMiddleware {
 	return r.Middleware
 }
 
+// attemptLedgerKey carries one delivery's [attemptLedger] in the message context.
+type attemptLedgerKey struct{}
+
+// attemptLedger remembers, across the retries of ONE delivery, whether an attempt
+// timed out and how many attempts have run since. A stuck handler holds the
+// delivery lane for every company, so a timeout is allowed at most one more attempt:
+// the message is then dead-lettered and the replay job delivers it again later,
+// off the lane.
+type attemptLedger struct {
+	timedOut      bool
+	attemptsAfter int
+}
+
+// timeoutLedger opens the delivery's ledger. It sits OUTSIDE the retry middleware,
+// which calls the attempt (and so [attemptTimeout]) once per try.
+func timeoutLedger(h message.HandlerFunc) message.HandlerFunc {
+	return func(msg *message.Message) ([]*message.Message, error) {
+		orig := msg.Context()
+		defer msg.SetContext(orig)
+		msg.SetContext(context.WithValue(orig, attemptLedgerKey{}, &attemptLedger{}))
+		return h(msg)
+	}
+}
+
 // attemptTimeout cancels the message context after d, for ONE attempt, and puts the
 // original context back afterwards. (watermill own Timeout middleware leaves the
 // cancelled context on the message, so the audit write that runs after the handler
 // would fail with context canceled.)
+//
+// An attempt ended by its own deadline fails with [TimeoutReasonPrefix]; once one
+// has, the next attempt is the last (the error is made [NonRetryable]).
 func attemptTimeout(d time.Duration) message.HandlerMiddleware {
 	return func(h message.HandlerFunc) message.HandlerFunc {
 		return func(msg *message.Message) ([]*message.Message, error) {
 			orig := msg.Context()
+			led, _ := orig.Value(attemptLedgerKey{}).(*attemptLedger)
+			if led != nil && led.timedOut {
+				led.attemptsAfter++
+			}
 			ctx, cancel := context.WithTimeout(orig, d)
 			defer cancel()
 			defer msg.SetContext(orig)
 			msg.SetContext(ctx)
-			return h(msg)
+			out, err := h(msg)
+			if err != nil && orig.Err() == nil && errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				err = attemptTimedOutError{after: d, err: err}
+				if led != nil {
+					led.timedOut = true
+				}
+			}
+			if err != nil && led != nil && led.timedOut && led.attemptsAfter >= 1 {
+				err = NonRetryable(err)
+			}
+			return out, err
 		}
 	}
 }

@@ -500,6 +500,11 @@ func run(ctx context.Context, stdout *os.File) error {
 	// The repository is built with the same server secret the API uses, but the
 	// purge never touches a key; it deletes by age.
 	phantomLockout := adapters.NewPhantomLockoutRepository(pool, tx, []byte(cfg.JWT.SigningKey))
+	// A handler attempt that timed out is dead-lettered after one retry; this delivers it
+	// again, off the lane (bounded, with backoff; review G2b H1).
+	if err := river.AddWorkerSafely(workers, jobs.NewDeadLetterReplayWorker(messaging.NewDeadLetterReplayer(pool, logger), logger, time.Now)); err != nil {
+		return fmt.Errorf("register dead letter replay worker: %w", err)
+	}
 	if err := river.AddWorkerSafely(workers, identityjobs.NewLoginPhantomPurgeWorker(phantomLockout, logger, time.Now)); err != nil {
 		return fmt.Errorf("register login phantom purge worker: %w", err)
 	}
@@ -508,6 +513,13 @@ func run(ctx context.Context, stdout *os.File) error {
 		return fmt.Errorf("register tasks overdue scan worker: %w", err)
 	}
 	periodics := []*river.PeriodicJob{
+		river.NewPeriodicJob(
+			river.PeriodicInterval(jobs.DeadLetterReplayInterval),
+			func() (river.JobArgs, *river.InsertOpts) {
+				return jobs.DeadLetterReplayJob{}, nil
+			},
+			&river.PeriodicJobOpts{RunOnStart: false},
+		),
 		river.NewPeriodicJob(
 			river.PeriodicInterval(identityjobs.LoginPhantomPurgeInterval),
 			func() (river.JobArgs, *river.InsertOpts) {

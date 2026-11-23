@@ -119,3 +119,37 @@ func DeadLetterCount(ctx context.Context, t *testing.T, pool *pgxpool.Pool, hand
 	}
 	return n
 }
+
+// ReplayCount returns how many replays of the named handler's dead letters are
+// recorded in common.dead_letter_replay.
+func ReplayCount(ctx context.Context, t *testing.T, pool *pgxpool.Pool, handlerName string) int {
+	t.Helper()
+	var n int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM common.dead_letter_replay WHERE handler_name = $1`, handlerName).Scan(&n); err != nil {
+		t.Fatalf("messagingtest: count replays: %v", err)
+	}
+	return n
+}
+
+// DeadLetterMessageIDs returns the distinct original message ids the named handler
+// dead-lettered.
+func DeadLetterMessageIDs(ctx context.Context, t *testing.T, pool *pgxpool.Pool, handlerName string) []string {
+	t.Helper()
+	rows, err := pool.Query(ctx, `SELECT DISTINCT message_id FROM common.dead_letter WHERE handler_name = $1 ORDER BY message_id`, handlerName)
+	if err != nil {
+		t.Fatalf("messagingtest: dead letter message ids: %v", err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			t.Fatalf("messagingtest: scan message id: %v", err)
+		}
+		out = append(out, id)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("messagingtest: dead letter message ids: %v", err)
+	}
+	return out
+}

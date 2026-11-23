@@ -69,7 +69,7 @@ func TestPubSub_AnEventStaysInTheOutboxUntilASubscriberAcknowledgesIt(t *testing
 			t.Errorf("forwarder: %v", err)
 		}
 	}()
-	t.Cleanup(func() { cancel(); <-done })
+	t.Cleanup(func() { cancel(); <-done; _ = fwd.Close() }) // Close: a forwarder left subscribed would claim a later test's outbox row
 
 	// The subscriber receives the event but has not finished (a handler is
 	// mid-flight, as at shutdown): the row must still be in the outbox.
@@ -175,7 +175,7 @@ func TestRouter_AStuckHandlerDoesNotStopDeliveryForOtherCompanies(t *testing.T) 
 		defer close(fdone)
 		_ = fwd.Run(fctx) // arch-test:ignore-err — stops with the test
 	}()
-	t.Cleanup(func() { fcancel(); <-fdone })
+	t.Cleanup(func() { fcancel(); <-fdone; _ = fwd.Close() }) // Close: a forwarder left subscribed would claim a later test's outbox row
 
 	budget := messaging.RetryBudget(retry, attemptTimeout)
 	select {
@@ -186,8 +186,9 @@ func TestRouter_AStuckHandlerDoesNotStopDeliveryForOtherCompanies(t *testing.T) 
 	case <-time.After(budget + 5*time.Second):
 		t.Fatalf("not delivered within the stuck event budget (%s), stuck attempts=%d", budget, stuckAttempts.Load())
 	}
-	if got := stuckAttempts.Load(); got != int32(retry.MaxRetries+1) {
-		t.Fatalf("the stuck event ran %d attempts, want %d (each cut at the timeout)", got, retry.MaxRetries+1)
+	// A timeout is retried at most once (review G2b H1): two attempts, each cut at the timeout.
+	if got := stuckAttempts.Load(); got != 2 {
+		t.Fatalf("the stuck event ran %d attempts, want 2 (each cut at the timeout)", got)
 	}
 	deadline := time.Now().Add(5 * time.Second)
 	// arch-test:wait-justified — bounded poll for the async dead-letter write
@@ -202,7 +203,7 @@ func TestRouter_AStuckHandlerDoesNotStopDeliveryForOtherCompanies(t *testing.T) 
 	}
 	// No redelivery of the stuck event: it ran exactly its attempts, no more.
 	time.Sleep(500 * time.Millisecond) // arch-test:wait-justified — absence of a redelivery has no event to wait for
-	if got := stuckAttempts.Load(); got != int32(retry.MaxRetries+1) {
+	if got := stuckAttempts.Load(); got != 2 {
 		t.Fatalf("the stuck event was redelivered: %d attempts", got)
 	}
 }

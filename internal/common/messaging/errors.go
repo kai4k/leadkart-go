@@ -3,6 +3,8 @@ package messaging
 import (
 	"context"
 	"errors"
+	"fmt"
+	"time"
 
 	wmw "github.com/ThreeDotsLabs/watermill/message/router/middleware"
 )
@@ -36,6 +38,25 @@ func IsNonRetryable(err error) bool {
 	_, ok := errors.AsType[nonRetryableError](err)
 	return ok
 }
+
+// TimeoutReasonPrefix starts the dead-letter reason of a message whose handler ran
+// into its per-attempt timeout. The replay job reads it to tell a stuck event (which
+// is worth delivering again once the block clears) from a poisoned one (which is not).
+const TimeoutReasonPrefix = "handler attempt timed out"
+
+// attemptTimedOutError is what the attempt timeout returns when the attempt's own
+// deadline ended it. It satisfies errors.Is(context.DeadlineExceeded), so the audit
+// failure code stays "timeout".
+type attemptTimedOutError struct {
+	after time.Duration
+	err   error
+}
+
+func (e attemptTimedOutError) Error() string {
+	return fmt.Sprintf("%s after %s: %v", TimeoutReasonPrefix, e.after, e.err)
+}
+func (e attemptTimedOutError) Unwrap() error        { return e.err }
+func (e attemptTimedOutError) Is(target error) bool { return target == context.DeadlineExceeded }
 
 // Stable failure codes stored in the audit row's failure_reason. They are the
 // only failure text the audit feed exposes.

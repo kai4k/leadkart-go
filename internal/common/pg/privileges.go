@@ -42,6 +42,8 @@ func TablePrivilegeExceptions() map[string][]string {
 	return map[string][]string{
 		"common.audit_log_entry":           {"SELECT", "INSERT"},
 		"common.admin_impersonation_audit": {"SELECT", "INSERT"},
+		// Each replay of a timed-out dead letter is kept (review G2b H1).
+		"common.dead_letter_replay": {"SELECT", "INSERT"},
 		// The policy history is append-only for the application (ADR 0070).
 		"companysettings.policy_history": {"SELECT", "INSERT"},
 	}

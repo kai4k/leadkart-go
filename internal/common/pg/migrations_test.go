@@ -208,6 +208,7 @@ func TestMigrationsApplyCleanly(t *testing.T) {
 		"admin_impersonation_audit", // 20260507000006 (ADR 0045)
 		"dead_letter",               // 20260604000001 (ADR 0067)
 		"outbox",                    // 20260604000002 (ADR 0064 shared relay)
+		"dead_letter_replay",        // 20261125000004 (review G2b H1)
 	}
 	for _, table := range expectedCommonTables {
 		var exists bool
@@ -551,6 +552,7 @@ func TestAppRoleHasPrivilegesOnEveryApplicationTable(t *testing.T) {
 		"common.audit_log_entry":           {"SELECT", "INSERT"},
 		"common.admin_impersonation_audit": {"SELECT", "INSERT"},
 		"companysettings.policy_history":   {"SELECT", "INSERT"},
+		"common.dead_letter_replay":        {"SELECT", "INSERT"},
 	}
 	if diff := cmp.Diff(wantSchemaPrivs, pg.SchemaTablePrivileges()); diff != "" {
 		t.Errorf("pg.SchemaTablePrivileges differs from the pinned set (-want +got):\n%s", diff)
