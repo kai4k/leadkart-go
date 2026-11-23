@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/leadkart/leadkart-go/internal/common/expiry"
 	"github.com/leadkart/leadkart-go/internal/common/pg"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
@@ -116,7 +117,9 @@ func (h AddBatchHandler) Handle(ctx context.Context, cmd AddBatchCommand) (AddBa
 	if err != nil {
 		return AddBatchResult{}, fmt.Errorf("add batch: %w", err)
 	}
-	if cmd.ManufactureDate.After(w.Today) {
+	// A date, judged on the company business day: a timestamp later today (UTC) is not
+	// tomorrow, whatever its time of day.
+	if expiry.BusinessDay(cmd.ManufactureDate, w.OffsetMinutes).After(w.Today) {
 		return AddBatchResult{}, fmt.Errorf("%w: manufacture_date %s", batch.ErrManufactureDateInFuture, cmd.ManufactureDate.Format(time.DateOnly))
 	}
 	now := h.now()

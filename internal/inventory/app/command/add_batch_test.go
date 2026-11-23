@@ -304,9 +304,15 @@ func TestAddBatchHandler_ManufactureDateInTheFutureIsRefused(t *testing.T) {
 	if batchRepo.AddCalls != 0 {
 		t.Fatal("a refused batch was written")
 	}
-	cmd.ManufactureDate = time.Date(2026, 5, 24, 0, 0, 0, 0, time.UTC) // today is fine
-	if _, err := h.Handle(t.Context(), cmd); err != nil {
-		t.Fatalf("manufactured today: %v", err)
+	// Today is fine whatever the time of day (review S3: 00:01Z and 23:59Z are both the 24th).
+	for i, at := range []time.Time{
+		time.Date(2026, 5, 24, 0, 0, 0, 0, time.UTC), time.Date(2026, 5, 24, 0, 1, 0, 0, time.UTC), time.Date(2026, 5, 24, 12, 0, 0, 0, time.UTC),
+	} {
+		cmd.ManufactureDate = at
+		cmd.BatchNumber = "LOT-TODAY-" + string(rune('A'+i))
+		if _, err := h.Handle(t.Context(), cmd); err != nil {
+			t.Fatalf("manufactured today at %s: %v", at, err)
+		}
 	}
 }
 
