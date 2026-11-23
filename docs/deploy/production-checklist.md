@@ -108,8 +108,8 @@ ran the migrations, apply the Up block of the grants migration by hand, of each 
 module grants migration (a module added after it carries its own, today
 `20261123000004_companysettings_grants`) **and of each later migration that takes a
 privilege away again** (`20261125000003_audit_log_is_kept_forever`: no DELETE on the
-audit trail; `20261125000004_dead_letter_replay`: no UPDATE or DELETE on the dead-letter
-replays), then run `migrate up` once more for River's grants. The base grants hand the
+audit trail; `20261125000004_dead_letter_replay`: no UPDATE or DELETE on the dead letters
+and their replays), then run `migrate up` once more for River's grants. The base grants hand the
 role DELETE on every table; skipping the later two leaves it on the audit trail, and the
 api and the worker refuse to boot (`holds DELETE on table common.audit_log_entry, which
 is append-only`). Each block is idempotent:

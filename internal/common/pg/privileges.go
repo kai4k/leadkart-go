@@ -42,8 +42,11 @@ func TablePrivilegeExceptions() map[string][]string {
 	return map[string][]string{
 		"common.audit_log_entry":           {"SELECT", "INSERT"},
 		"common.admin_impersonation_audit": {"SELECT", "INSERT"},
-		// Each replay of a timed-out dead letter is kept (review G2b H1).
+		// Each replay of a timed-out dead letter is kept (review G2b H1), and so is the dead
+		// letter itself (review G2c N5). The writer only inserts; the replay job only reads
+		// it and inserts its own row, so the role needs nothing more.
 		"common.dead_letter_replay": {"SELECT", "INSERT"},
+		"common.dead_letter":        {"SELECT", "INSERT"},
 		// The policy history is append-only for the application (ADR 0070).
 		"companysettings.policy_history": {"SELECT", "INSERT"},
 	}

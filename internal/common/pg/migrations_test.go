@@ -553,6 +553,7 @@ func TestAppRoleHasPrivilegesOnEveryApplicationTable(t *testing.T) {
 		"common.admin_impersonation_audit": {"SELECT", "INSERT"},
 		"companysettings.policy_history":   {"SELECT", "INSERT"},
 		"common.dead_letter_replay":        {"SELECT", "INSERT"},
+		"common.dead_letter":               {"SELECT", "INSERT"},
 	}
 	if diff := cmp.Diff(wantSchemaPrivs, pg.SchemaTablePrivileges()); diff != "" {
 		t.Errorf("pg.SchemaTablePrivileges differs from the pinned set (-want +got):\n%s", diff)
@@ -989,6 +990,7 @@ func TestVerifyApplicationPrivileges_RefusesExtraPrivilegesOnAppendOnlyTables(t 
 		{`GRANT DELETE ON common.audit_log_entry TO leadkart_app`, "DELETE on table common.audit_log_entry"},
 		{`GRANT UPDATE ON companysettings.policy_history TO leadkart_app`, "UPDATE on table companysettings.policy_history"},
 		{`GRANT DELETE ON common.dead_letter_replay TO leadkart_app`, "DELETE on table common.dead_letter_replay"},
+		{`GRANT UPDATE ON common.dead_letter TO leadkart_app`, "UPDATE on table common.dead_letter"},
 		// Review G2c N4: what the table-level check missed.
 		{`GRANT UPDATE (handler_name) ON common.dead_letter_replay TO leadkart_app`, "UPDATE on table common.dead_letter_replay"},
 		{`GRANT TRIGGER ON common.audit_log_entry TO leadkart_app`, "TRIGGER on table common.audit_log_entry"},

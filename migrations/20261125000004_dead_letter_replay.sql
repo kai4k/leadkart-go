@@ -5,7 +5,17 @@
 --
 -- Each replay is ONE row here. common.dead_letter is not touched: the dead letter
 -- and every replay of it stay for good (ADR 0071: we never delete any data). The
--- table is append-only for the application (SELECT, INSERT), like the audit trail.
+-- table is append-only for the application (SELECT, INSERT), like the audit trail, and so is
+-- common.dead_letter itself (review G2c N5): the dead-letter writer only inserts, and the
+-- replay job only reads a dead letter and inserts its own row here, so neither needs UPDATE
+-- or DELETE. The replay reads the reason of a dead letter; a rewrite of it would change what
+-- gets replayed.
+--
+-- common.dead_letter_replay has NO row-level security, on purpose: RLS here protects one
+-- company's rows from another, and this table has no tenant id and no payload (a dead letter
+-- id, the message id and handler name, a time), the replay job runs for every company at
+-- once, and the application role cannot change a row of it. The RLS coverage gate does not
+-- look at the `common` schema (cross-cutting infrastructure tables, none of them per company).
 
 -- +goose Up
 -- +goose StatementBegin
@@ -29,6 +39,7 @@ DO $$
 BEGIN
     IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'leadkart_app') THEN
         REVOKE UPDATE, DELETE ON common.dead_letter_replay FROM leadkart_app;
+        REVOKE UPDATE, DELETE ON common.dead_letter FROM leadkart_app;
     END IF;
 END
 $$;
