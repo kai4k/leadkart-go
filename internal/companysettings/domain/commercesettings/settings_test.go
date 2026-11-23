@@ -84,7 +84,7 @@ func TestChange_BumpsVersionRecordsKeysAndEmitsOneEvent(t *testing.T) {
 	s := fresh(t)
 	res, err := s.Change(commercesettings.ChangeInput{
 		ExpectedVersion: 0, Changes: patch(t, map[string]any{"expiry.stop_months_before": 2}),
-		Actor: actor, Now: t0,
+		Actor: actor, MayManage: true, Now: t0,
 	})
 	if err != nil {
 		t.Fatalf("Change: %v", err)
@@ -108,11 +108,11 @@ func TestChange_BumpsVersionRecordsKeysAndEmitsOneEvent(t *testing.T) {
 func TestChange_StaleExpectedVersionIsAConflictAndChangesNothing(t *testing.T) {
 	t.Parallel()
 	s := fresh(t)
-	if _, err := s.Change(commercesettings.ChangeInput{ExpectedVersion: 0, Changes: patch(t, map[string]any{"credit.enabled": true}), Actor: actor, Now: t0}); err != nil {
+	if _, err := s.Change(commercesettings.ChangeInput{ExpectedVersion: 0, Changes: patch(t, map[string]any{"credit.enabled": true}), Actor: actor, MayManage: true, Now: t0}); err != nil {
 		t.Fatal(err)
 	}
 	s.PullEvents()
-	_, err := s.Change(commercesettings.ChangeInput{ExpectedVersion: 0, Changes: patch(t, map[string]any{"credit.enabled": false}), Actor: actor, Now: t0})
+	_, err := s.Change(commercesettings.ChangeInput{ExpectedVersion: 0, Changes: patch(t, map[string]any{"credit.enabled": false}), Actor: actor, MayManage: true, Now: t0})
 	var vc *commercesettings.VersionConflictError
 	if !errors.As(err, &vc) || vc.Current != 1 || vc.Expected != 0 {
 		t.Fatalf("err = %v, want a VersionConflictError{Current:1, Expected:0}", err)
@@ -128,7 +128,7 @@ func TestChange_StaleExpectedVersionIsAConflictAndChangesNothing(t *testing.T) {
 func TestChange_MatchingPatchIsANoOp(t *testing.T) {
 	t.Parallel()
 	s := fresh(t)
-	res, err := s.Change(commercesettings.ChangeInput{ExpectedVersion: 0, Changes: patch(t, map[string]any{"expiry.stop_months_before": 1}), Actor: actor, Now: t0})
+	res, err := s.Change(commercesettings.ChangeInput{ExpectedVersion: 0, Changes: patch(t, map[string]any{"expiry.stop_months_before": 1}), Actor: actor, MayManage: true, Now: t0})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -142,19 +142,19 @@ func TestChange_TaxKeysNeedThePermissionAndAReason(t *testing.T) {
 	tax := patch(t, map[string]any{"invoice.round_off": "nearest_rupee"})
 
 	s := fresh(t)
-	_, err := s.Change(commercesettings.ChangeInput{ExpectedVersion: 0, Changes: tax, Actor: actor, Reason: "per CA", Now: t0})
+	_, err := s.Change(commercesettings.ChangeInput{ExpectedVersion: 0, Changes: tax, Actor: actor, MayManage: true, Reason: "per CA", Now: t0})
 	var denied *commercesettings.TaxManageRequiredError
 	if !errors.As(err, &denied) || len(denied.Keys) != 1 || denied.Keys[0] != "invoice.round_off" {
 		t.Fatalf("without the tax permission: %v", err)
 	}
 
-	_, err = s.Change(commercesettings.ChangeInput{ExpectedVersion: 0, Changes: tax, Actor: actor, MayManageTax: true, Now: t0})
+	_, err = s.Change(commercesettings.ChangeInput{ExpectedVersion: 0, Changes: tax, Actor: actor, MayManage: true, MayManageTax: true, Now: t0})
 	fe := commercepolicy.Fields(err)
 	if fe == nil || fe["reason"][0] != commercepolicy.CodeRequired {
 		t.Fatalf("a tax change without a reason: %v", err)
 	}
 
-	if _, err := s.Change(commercesettings.ChangeInput{ExpectedVersion: 0, Changes: tax, Actor: actor, MayManageTax: true, Reason: "per CA", Now: t0}); err != nil {
+	if _, err := s.Change(commercesettings.ChangeInput{ExpectedVersion: 0, Changes: tax, Actor: actor, MayManage: true, MayManageTax: true, Reason: "per CA", Now: t0}); err != nil {
 		t.Fatalf("tax change with permission and reason: %v", err)
 	}
 	if s.Policy().Invoice.RoundOff != "nearest_rupee" {
@@ -165,7 +165,7 @@ func TestChange_TaxKeysNeedThePermissionAndAReason(t *testing.T) {
 func TestChange_FieldErrorsAreStableCodesAndChangeNothing(t *testing.T) {
 	t.Parallel()
 	s := fresh(t)
-	_, err := s.Change(commercesettings.ChangeInput{ExpectedVersion: 0, Changes: patch(t, map[string]any{"expiry.stop_months_before": -1}), Actor: actor, Now: t0})
+	_, err := s.Change(commercesettings.ChangeInput{ExpectedVersion: 0, Changes: patch(t, map[string]any{"expiry.stop_months_before": -1}), Actor: actor, MayManage: true, Now: t0})
 	fe := commercepolicy.Fields(err)
 	if fe["expiry.stop_months_before"][0] != commercepolicy.CodeOutOfRange {
 		t.Fatalf("err = %v", err)
@@ -182,11 +182,11 @@ func TestChange_ReasonIsBounded(t *testing.T) {
 	for i := range long {
 		long[i] = 'a'
 	}
-	_, err := s.Change(commercesettings.ChangeInput{ExpectedVersion: 0, Changes: patch(t, map[string]any{"credit.enabled": true}), Actor: actor, Reason: string(long), Now: t0})
+	_, err := s.Change(commercesettings.ChangeInput{ExpectedVersion: 0, Changes: patch(t, map[string]any{"credit.enabled": true}), Actor: actor, MayManage: true, Reason: string(long), Now: t0})
 	if fe := commercepolicy.Fields(err); fe["reason"][0] != commercepolicy.CodeTooLong {
 		t.Fatalf("err = %v", err)
 	}
-	_, err = s.Change(commercesettings.ChangeInput{ExpectedVersion: 0, Changes: patch(t, map[string]any{"credit.enabled": true}), Actor: actor, Reason: "bad\x00reason", Now: t0})
+	_, err = s.Change(commercesettings.ChangeInput{ExpectedVersion: 0, Changes: patch(t, map[string]any{"credit.enabled": true}), Actor: actor, MayManage: true, Reason: "bad\x00reason", Now: t0})
 	if fe := commercepolicy.Fields(err); fe["reason"][0] != commercepolicy.CodeInvalidCharacters {
 		t.Fatalf("err = %v", err)
 	}
@@ -292,5 +292,63 @@ func TestRepublish_EmitsTheCurrentVersionWithoutChangingIt(t *testing.T) {
 	}
 	if _, ok := evs[0].(commercesettings.PolicyRepublishedEvent); !ok {
 		t.Fatalf("event = %T", evs[0])
+	}
+}
+
+func TestChange_NonTaxKeysNeedTheManagePermission(t *testing.T) {
+	t.Parallel()
+	s := fresh(t)
+	// Holds only the tax permission: a non-tax key is refused, and it names the key.
+	_, err := s.Change(commercesettings.ChangeInput{
+		ExpectedVersion: 0, Changes: patch(t, map[string]any{"credit.enabled": true}),
+		Actor: actor, MayManageTax: true, MayManage: false, Now: t0,
+	})
+	var denied *commercesettings.ManageRequiredError
+	if !errors.As(err, &denied) || len(denied.Keys) != 1 || denied.Keys[0] != "credit.enabled" {
+		t.Fatalf("a non-tax change without the manage permission: %v", err)
+	}
+	if s.Version() != 0 {
+		t.Fatal("refused change must not bump the version")
+	}
+	// Holds manage only: a tax key is refused, a non-tax key passes.
+	_, err = s.Change(commercesettings.ChangeInput{
+		ExpectedVersion: 0, Changes: patch(t, map[string]any{"credit.enabled": true}),
+		Actor: actor, MayManage: true, Now: t0,
+	})
+	if err != nil {
+		t.Fatalf("manage-only holder changing a non-tax key: %v", err)
+	}
+}
+
+func TestAddGSTRate_ConfirmationDateCannotBeInTheFuture(t *testing.T) {
+	t.Parallel()
+	s := fresh(t)
+	in := commercesettings.AddGSTRateInput{ID: uuid.NewString(), RateBps: 500, Label: "GST 5%", ConfirmedBy: "A", Reason: "r", Actor: actor, Now: t0}
+	in.ConfirmedOn = "2026-11-03" // two days after t0 (2026-11-01 10:00 UTC)
+	if fe := commercepolicy.Fields(s.AddGSTRate(in)); fe["confirmed_on"][0] != commercesettings.CodeInFuture {
+		t.Fatalf("fe = %v", fe)
+	}
+	in.ConfirmedOn = "2026-11-02" // tomorrow UTC: today in IST, allowed
+	if err := s.AddGSTRate(in); err != nil {
+		t.Fatalf("a date that is today somewhere ahead of UTC: %v", err)
+	}
+}
+
+func TestAddGSTRate_ListIsCapped(t *testing.T) {
+	t.Parallel()
+	s := fresh(t)
+	for i := range commercesettings.MaxGSTRates {
+		err := s.AddGSTRate(commercesettings.AddGSTRateInput{
+			ID: uuid.NewString(), RateBps: i, Label: "GST", ConfirmedBy: "A", ConfirmedOn: "2026-10-30", Reason: "r", Actor: actor, Now: t0,
+		})
+		if err != nil {
+			t.Fatalf("rate %d: %v", i, err)
+		}
+	}
+	err := s.AddGSTRate(commercesettings.AddGSTRateInput{
+		ID: uuid.NewString(), RateBps: 9999, Label: "GST", ConfirmedBy: "A", ConfirmedOn: "2026-10-30", Reason: "r", Actor: actor, Now: t0,
+	})
+	if fe := commercepolicy.Fields(err); fe["rate_bps"][0] != commercepolicy.CodeTooMany {
+		t.Fatalf("the %dst rate: %v", commercesettings.MaxGSTRates+1, err)
 	}
 }

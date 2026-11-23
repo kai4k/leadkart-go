@@ -51,3 +51,13 @@ ON CONFLICT (id) DO UPDATE SET
     confirmed_by = EXCLUDED.confirmed_by,
     confirmed_on = EXCLUDED.confirmed_on,
     active       = EXCLUDED.active;
+
+-- name: ListPolicyHistoryPage :many
+-- Newest first; keyset on version (pass the max bigint for the first page).
+SELECT tenant_id, version, policy, changed_keys, actor_membership_id,
+       impersonator_operator_id, reason, changed_at
+FROM   companysettings.policy_history
+WHERE  tenant_id = $1
+  AND  version < $2
+ORDER  BY version DESC
+LIMIT  $3;

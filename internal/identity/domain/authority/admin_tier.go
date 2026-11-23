@@ -35,9 +35,14 @@ import (
 // adminTierOnly is the set. Every route and command that adds a member funnels
 // through identity.users.create: POST /api/v1/users is the only one (tenant
 // registration adds the first Company Owner of a NEW tenant and is operator-only
-// behind platform.tenants.create; the bootstrap CLI is not a route), so the set
-// has one name.
-func adminTierOnly() []string { return []string{permission.IdentityPermissions.Users.Create} }
+// behind platform.tenants.create; the bootstrap CLI is not a route). The company
+// commerce settings joined it (owner ruling 2026-11-23, ADR 0070): only the
+// company's Owner / Admin tier changes them, so company_settings.manage and
+// company_settings.tax.manage are held and conferred only at that tier too.
+func adminTierOnly() []string {
+	p := permission.IdentityPermissions
+	return []string{p.Users.Create, p.CompanySettings.Manage, p.CompanySettings.TaxManage}
+}
 
 // AdminTierOnlyPermissions is the exact set of permissions that only the
 // Administrator tier or above may hold or confer. The slice is a copy.

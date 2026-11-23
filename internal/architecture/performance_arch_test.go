@@ -351,11 +351,13 @@ func TestArch_ListHandlersBoundedByPaginationShape(t *testing.T) {
 		// Bounded by JWT: per-person small set, platform-only operator read.
 		"handleListPersonMemberships": "memberships per person bounded by domain invariant (typically 1-3)",
 		// Bounded by ADR 0040 — uses per-category `limit` param, not cursor.
-		"handleSearch": "omni-search per-category cap via `limit` query param (ADR 0040 cache-key-explosion prevention)",
+		"handleSearch":        "omni-search per-category cap via `limit` query param (ADR 0040 cache-key-explosion prevention)",
 		"handleSearchMembers": "member picker: a top-N typeahead capped at 20 by SearchMembersHandler (no cursor; the caller types a narrower query)",
 		// Bounded by per-process in-memory store size; admin operator surface.
 		"handleListImpersonationSessions": "active impersonation sessions bounded by in-memory store size",
 		// Bounded by per-tenant role count (small N + soft cap by domain).
+		// Bounded by domain: a company holds at most commercesettings.MaxGSTRates rates.
+		"handleListGSTRates":           "a company's GST rate list is capped at commercesettings.MaxGSTRates (ADR 0070); the list is part of the policy and read whole",
 		"handleListRoles":              "roles per tenant bounded by domain invariant (system + small custom set)",
 		"handleListAllTenants":         "platform list of tenants — paginated by HasMore/NextCursor response shape",
 		"handleListUsers":              "delegates to ListUsersPaged → pagination.Page[UserView]",

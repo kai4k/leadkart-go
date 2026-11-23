@@ -216,6 +216,7 @@ func TestArch_RoutesUsePluralNouns(t *testing.T) {
 		"dispatch":      true,
 		"tasks":         true,
 		"notifications": true,
+		"company":       true, // the one company a caller belongs to: a singleton namespace (ADR 0070), like /me
 		"marketplace":   true,
 		"impersonation": true,
 		"me":            true,
@@ -223,6 +224,7 @@ func TestArch_RoutesUsePluralNouns(t *testing.T) {
 
 		// Action / verb endpoints.
 		"audit":                  true,
+		"history":                true, // uncountable sub-resource: the version history of one policy (ADR 0070)
 		"search":                 true,
 		"login":                  true,
 		"logout":                 true,

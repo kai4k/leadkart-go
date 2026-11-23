@@ -24,6 +24,8 @@ import (
 	"testing"
 
 	"github.com/leadkart/leadkart-go/internal/common/httpmw"
+	companysettingsapp "github.com/leadkart/leadkart-go/internal/companysettings/app"
+	companysettingsports "github.com/leadkart/leadkart-go/internal/companysettings/ports"
 	crmapp "github.com/leadkart/leadkart-go/internal/crm/app"
 	crmports "github.com/leadkart/leadkart-go/internal/crm/ports"
 	dispatchapp "github.com/leadkart/leadkart-go/internal/dispatch/app"
@@ -91,6 +93,7 @@ func allRoutesMux(verifier authn.Verifier, validator authn.StampValidator) http.
 	dispatchports.AddRoutes(mux, log, dispatchapp.Application{}, verifier, validator)
 	ordersports.AddRoutes(mux, log, ordersapp.Application{}, verifier, validator)
 	notificationsports.AddRoutes(mux, log, notificationsapp.Application{}, verifier, validator)
+	companysettingsports.AddRoutes(mux, log, companysettingsapp.Application{}, verifier, validator)
 	return httpmw.Recover(log)(mux)
 }
 

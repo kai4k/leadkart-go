@@ -112,6 +112,11 @@ import (
 	"github.com/leadkart/leadkart-go/internal/tasks/domain/workitem"
 	tasksports "github.com/leadkart/leadkart-go/internal/tasks/ports"
 
+	companysettingsadapters "github.com/leadkart/leadkart-go/internal/companysettings/adapters"
+	companysettingsapp "github.com/leadkart/leadkart-go/internal/companysettings/app"
+	companysettingscommand "github.com/leadkart/leadkart-go/internal/companysettings/app/command"
+	companysettingsquery "github.com/leadkart/leadkart-go/internal/companysettings/app/query"
+	companysettingsports "github.com/leadkart/leadkart-go/internal/companysettings/ports"
 	dispatchadapters "github.com/leadkart/leadkart-go/internal/dispatch/adapters"
 	dispatchapp "github.com/leadkart/leadkart-go/internal/dispatch/app"
 	dispatchcommand "github.com/leadkart/leadkart-go/internal/dispatch/app/command"
@@ -380,6 +385,7 @@ func run(ctx context.Context, stdout *os.File, _ []string) error {
 	// Dispatch module wiring (ADR 0063 — BRD §6.6). HTTP read + status
 	// transitions; the OrderPacked subscriber lives in cmd/worker.
 	dispatchAppInstance := buildDispatchApp(pool, time.Now)
+	companySettingsAppInstance := buildCompanySettingsApp(pool, time.Now)
 
 	// Orders module wiring (ADR 0063 — BRD §6.4). Quote→order lifecycle +
 	// gapless FY invoice numbering; saga subscribers live in cmd/worker.
@@ -418,7 +424,7 @@ func run(ctx context.Context, stdout *os.File, _ []string) error {
 		return err
 	}
 	publicHandler := otelhttp.NewHandler(
-		mwChain(newServer(logger, wiring.App, platformWiring.App, inventoryAppInstance, crmWiring.App, tasksAppInstance, dispatchAppInstance, ordersAppInstance, notificationsAppInstance, wiring.Issuer, wiring.StampValidator)),
+		mwChain(newServer(logger, wiring.App, platformWiring.App, inventoryAppInstance, crmWiring.App, tasksAppInstance, dispatchAppInstance, ordersAppInstance, notificationsAppInstance, companySettingsAppInstance, wiring.Issuer, wiring.StampValidator)),
 		"leadkart-api",
 	)
 	srv := &http.Server{
@@ -551,6 +557,7 @@ func newServer(
 	dispatchApp dispatchapp.Application,
 	ordersApp ordersapp.Application,
 	notificationsApp notificationsapp.Application,
+	companySettingsApp companysettingsapp.Application,
 	verifier authn.Verifier,
 	validator authn.StampValidator,
 ) http.Handler {
@@ -564,6 +571,7 @@ func newServer(
 	dispatchports.AddRoutes(mux, log, dispatchApp, verifier, validator)
 	ordersports.AddRoutes(mux, log, ordersApp, verifier, validator)
 	notificationsports.AddRoutes(mux, log, notificationsApp, verifier, validator)
+	companysettingsports.AddRoutes(mux, log, companySettingsApp, verifier, validator)
 	if verifier == nil {
 		return mux
 	}
@@ -1032,6 +1040,31 @@ func buildTasksApp(pool *pgxpool.Pool, now func() time.Time) tasksapp.Applicatio
 			GetWorkItem:   tasksquery.NewGetWorkItemHandler(repo),
 			ListWorkItems: tasksquery.NewListWorkItemsHandler(repo),
 			Dashboard:     tasksquery.NewDashboardHandler(repo, hierarchy, now),
+		},
+	}
+}
+
+// buildCompanySettingsApp wires the company_settings module (ADR 0070): the
+// versioned commerce policy, its history and the GST rate list. The tenant
+// registered seed subscriber and the daily republish job live in cmd/worker.
+func buildCompanySettingsApp(pool *pgxpool.Pool, now func() time.Time) companysettingsapp.Application {
+	tx := pg.NewTransactor(pool)
+	repo := companysettingsadapters.NewSettingsRepository(pool, tx)
+	history := companysettingsadapters.NewSettingsHistoryReader(pool, tx)
+	newRateID := func() string { return ids.NewV7().String() }
+
+	return companysettingsapp.Application{
+		Commands: companysettingsapp.Commands{
+			ChangeSettings: companysettingscommand.NewChangeSettingsHandler(repo, now),
+			AddGSTRate:     companysettingscommand.NewAddGSTRateHandler(repo, now, newRateID),
+			UpdateGSTRate:  companysettingscommand.NewUpdateGSTRateHandler(repo, now),
+			SeedSettings:   companysettingscommand.NewSeedSettingsHandler(repo, now),
+			Republish:      companysettingscommand.NewRepublishHandler(repo, now),
+		},
+		Queries: companysettingsapp.Queries{
+			GetSettings:  companysettingsquery.NewGetSettingsHandler(repo),
+			ListHistory:  companysettingsquery.NewListHistoryHandler(history),
+			ListGSTRates: companysettingsquery.NewListGSTRatesHandler(repo),
 		},
 	}
 }

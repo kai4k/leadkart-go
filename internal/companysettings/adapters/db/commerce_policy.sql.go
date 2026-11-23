@@ -143,6 +143,52 @@ func (q *Queries) ListGSTRates(ctx context.Context, tenantID pgtype.UUID) ([]Com
 	return items, nil
 }
 
+const listPolicyHistoryPage = `-- name: ListPolicyHistoryPage :many
+SELECT tenant_id, version, policy, changed_keys, actor_membership_id,
+       impersonator_operator_id, reason, changed_at
+FROM   companysettings.policy_history
+WHERE  tenant_id = $1
+  AND  version < $2
+ORDER  BY version DESC
+LIMIT  $3
+`
+
+type ListPolicyHistoryPageParams struct {
+	TenantID pgtype.UUID
+	Version  int64
+	Limit    int32
+}
+
+// Newest first; keyset on version (pass the max bigint for the first page).
+func (q *Queries) ListPolicyHistoryPage(ctx context.Context, arg ListPolicyHistoryPageParams) ([]CompanysettingsPolicyHistory, error) {
+	rows, err := q.db.Query(ctx, listPolicyHistoryPage, arg.TenantID, arg.Version, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []CompanysettingsPolicyHistory
+	for rows.Next() {
+		var i CompanysettingsPolicyHistory
+		if err := rows.Scan(
+			&i.TenantID,
+			&i.Version,
+			&i.Policy,
+			&i.ChangedKeys,
+			&i.ActorMembershipID,
+			&i.ImpersonatorOperatorID,
+			&i.Reason,
+			&i.ChangedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const updateCommercePolicy = `-- name: UpdateCommercePolicy :exec
 UPDATE companysettings.commerce_policy SET
     version                  = $2,

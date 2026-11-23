@@ -1,5 +1,8 @@
 //go:build integration
 
+// SQL-CONTRACT COVERAGE for this file (ADR 0062): the policy, history and GST rate
+// queries against real Postgres under RLS, see the header below.
+//
 // arch-test:no-timeout-needed — shared pgtest container + pgxpool conn
 //   timeouts + package-level `task ci:test:int -timeout=15m` bound execution.
 //
@@ -114,7 +117,7 @@ func TestSettingsRepository_ChangePersistsAndStaleSaveConflicts(t *testing.T) {
 	change := func(expected int64, v int) error {
 		return repo.UpdateByID(t.Context(), tid, func(s *commercesettings.Settings) (bool, error) {
 			res, err := s.Change(commercesettings.ChangeInput{
-				ExpectedVersion: expected, Actor: actor, Now: fixedNow,
+				ExpectedVersion: expected, Actor: actor, MayManage: true, Now: fixedNow,
 				Changes: jsonPatch(t, map[string]any{"expiry.stop_months_before": v}),
 			})
 			return res.Changed, err
@@ -152,7 +155,7 @@ func TestSettingsRepository_ConcurrentSavesOnTheSameVersionOneWins(t *testing.T)
 			defer wg.Done()
 			errs[i] = repo.UpdateByID(t.Context(), tid, func(s *commercesettings.Settings) (bool, error) {
 				res, err := s.Change(commercesettings.ChangeInput{
-					ExpectedVersion: 0, Actor: actor, Now: fixedNow,
+					ExpectedVersion: 0, Actor: actor, MayManage: true, Now: fixedNow,
 					Changes: jsonPatch(t, map[string]any{"expiry.stop_months_before": 2 + i}),
 				})
 				return res.Changed, err

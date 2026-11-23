@@ -14,16 +14,23 @@ import (
 // Company Owner are allowed to add users only." The permission that adds users
 // is held and conferred only at the Administrator tier or above.
 
-func TestAdminTierOnly_TheSetIsExactlyUsersCreate(t *testing.T) {
+// The set is users.create plus the two company commerce settings permissions
+// (owner ruling 2026-11-23, ADR 0070: only the company's Owner / Admin tier
+// changes them).
+func TestAdminTierOnly_TheSetIsExactlyUsersCreateAndTheCompanySettingsWrites(t *testing.T) {
 	t.Parallel()
-	want := []string{permission.IdentityPermissions.Users.Create}
+	p := permission.IdentityPermissions
+	want := []string{p.Users.Create, p.CompanySettings.Manage, p.CompanySettings.TaxManage}
 	if got := authority.AdminTierOnlyPermissions(); !slices.Equal(got, want) {
 		t.Fatalf("admin-tier-only set = %v, want exactly %v", got, want)
 	}
-	for _, p := range permission.All() {
-		if got, want := authority.IsAdminTierOnly(p.Name()), p.Name() == permission.IdentityPermissions.Users.Create; got != want {
-			t.Errorf("IsAdminTierOnly(%s) = %v, want %v", p.Name(), got, want)
+	for _, perm := range permission.All() {
+		if got, want := authority.IsAdminTierOnly(perm.Name()), slices.Contains(want, perm.Name()); got != want {
+			t.Errorf("IsAdminTierOnly(%s) = %v, want %v", perm.Name(), got, want)
 		}
+	}
+	if authority.IsAdminTierOnly(p.CompanySettings.Read) {
+		t.Error("company_settings.read is not admin-tier-only: managers read the GST list")
 	}
 }
 

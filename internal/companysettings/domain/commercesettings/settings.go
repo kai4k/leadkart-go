@@ -26,6 +26,10 @@ import (
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
 
+// MaxGSTRates caps a company's GST rate list. A company confirms a handful of
+// rates; the cap keeps the list (part of the policy every event carries) small.
+const MaxGSTRates = 50
+
 // MaxReasonChars is the policy_history.reason column limit, in characters.
 const MaxReasonChars = 500
 
@@ -75,6 +79,14 @@ type TaxManageRequiredError struct{ Keys []string }
 
 func (e *TaxManageRequiredError) Error() string {
 	return "commercesettings: tax-manage settings need the tax permission: " + strings.Join(e.Keys, ", ")
+}
+
+// ManageRequiredError is returned when the patch changes non-tax settings and
+// the caller does not hold company_settings.manage. Map to HTTP 403.
+type ManageRequiredError struct{ Keys []string }
+
+func (e *ManageRequiredError) Error() string {
+	return "commercesettings: these settings need the manage permission: " + strings.Join(e.Keys, ", ")
 }
 
 // Actor is who made a change: the acting membership and, during an
@@ -162,8 +174,10 @@ type ChangeInput struct {
 	Changes         commercepolicy.Changes
 	Reason          string
 	Actor           Actor
-	// MayManageTax is whether the caller holds the tax-manage permission; the
-	// route decides it, the aggregate enforces it per changed key.
+	// MayManage and MayManageTax say whether the caller holds
+	// company_settings.manage and company_settings.tax.manage; the route
+	// decides them, the aggregate enforces them per changed key.
+	MayManage    bool
 	MayManageTax bool
 	Now          time.Time
 }
@@ -187,9 +201,12 @@ func (s *Settings) Change(in ChangeInput) (ChangeResult, error) {
 	if len(res.Changed) == 0 {
 		return ChangeResult{}, nil
 	}
-	taxKeys := taxKeysOf(res.Changed)
+	taxKeys, otherKeys := splitTaxKeys(res.Changed)
 	if len(taxKeys) > 0 && !in.MayManageTax {
 		return ChangeResult{}, &TaxManageRequiredError{Keys: taxKeys}
+	}
+	if len(otherKeys) > 0 && !in.MayManage {
+		return ChangeResult{}, &ManageRequiredError{Keys: otherKeys}
 	}
 	reason, err := checkReason(in.Reason, len(taxKeys) > 0)
 	if err != nil {
@@ -219,7 +236,7 @@ func (s *Settings) AddGSTRate(in AddGSTRateInput) error {
 		return fmt.Errorf("%w: gst rate id not a valid uuid", ErrInvalid)
 	}
 	errs := commercepolicy.CheckGSTRate(in.RateBps, in.Label, in.ConfirmedBy)
-	if code := commercepolicy.CheckDate(in.ConfirmedOn); code != "" {
+	if code := confirmedOnCode(in.ConfirmedOn, in.Now); code != "" {
 		errs["confirmed_on"] = []string{code}
 	}
 	reason, rerr := checkReason(in.Reason, true)
@@ -230,6 +247,9 @@ func (s *Settings) AddGSTRate(in AddGSTRateInput) error {
 	}
 	if slices.ContainsFunc(s.policy.Tax.GSTRates, func(r commercepolicy.GSTRate) bool { return commercepolicy.SameRate(r, rate) }) {
 		errs["label"] = append(errs["label"], commercepolicy.CodeDuplicate)
+	}
+	if len(s.policy.Tax.GSTRates) >= MaxGSTRates {
+		errs["rate_bps"] = append(errs["rate_bps"], commercepolicy.CodeTooMany)
 	}
 	if err := errs.Err(); err != nil {
 		return err
@@ -279,7 +299,7 @@ func (s *Settings) UpdateGSTRate(in UpdateGSTRateInput) error {
 		return nil
 	}
 	errs := commercepolicy.CheckGSTRate(rate.RateBps, rate.Label, rate.ConfirmedBy)
-	if code := commercepolicy.CheckDate(rate.ConfirmedOn); code != "" {
+	if code := confirmedOnCode(rate.ConfirmedOn, in.Now); code != "" {
 		errs["confirmed_on"] = []string{code}
 	}
 	reason, rerr := checkReason(in.Reason, true)
@@ -320,14 +340,17 @@ func (s *Settings) commit(actor Actor, reason string, changedKeys []string, now 
 	})
 }
 
-func taxKeysOf(keys []string) []string {
-	var out []string
+// splitTaxKeys separates the changed keys that need the tax permission from
+// those that need the manage permission.
+func splitTaxKeys(keys []string) (tax, other []string) {
 	for _, k := range keys {
 		if commercepolicy.RequiresTaxManage([]string{k}) {
-			out = append(out, k)
+			tax = append(tax, k)
+		} else {
+			other = append(other, k)
 		}
 	}
-	return out
+	return tax, other
 }
 
 // checkReason trims and bounds a reason; requiredForTax makes a blank one a
@@ -344,6 +367,22 @@ func checkReason(reason string, requiredForTax bool) (string, error) {
 		errs["reason"] = []string{commercepolicy.CodeRequired}
 	}
 	return reason, errs.Err()
+}
+
+// CodeInFuture is the refusal of a confirmation date later than today.
+const CodeInFuture = "in_future"
+
+// confirmedOnCode returns the code a confirmation date breaks, or "". A date
+// after tomorrow (UTC) is in the future whatever the company's time zone.
+func confirmedOnCode(date string, now time.Time) string {
+	if code := commercepolicy.CheckDate(date); code != "" {
+		return code
+	}
+	d, _ := time.Parse(commercepolicy.DateLayout, date)
+	if d.After(now.UTC().AddDate(0, 0, 1)) {
+		return CodeInFuture
+	}
+	return ""
 }
 
 // mergeReasonErr folds a reason refusal into a field-error map.

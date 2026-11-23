@@ -191,6 +191,13 @@ type ordersPermissions struct {
 	Invoices   ordersInvoicesPermissions
 }
 
+// companySettingsPermissions cover the company commerce policy (ADR 0070):
+// Read = the policy, its history and the GST rate list; Manage = change the
+// non-tax settings; TaxManage = change the tax, document and compliance
+// settings and the GST rate list. Manage and TaxManage are held and conferred
+// only at the Administrator tier or above (authority.AdminTierOnlyPermissions).
+type companySettingsPermissions struct{ Read, Manage, TaxManage string }
+
 // notificationsInboxPermissions cover the recipient's own notification inbox
 // (BRD §6.9): Read = list + unread-count; Manage = mark-read / dismiss /
 // read-all on your OWN notifications. Both held by every tenant member — the
@@ -249,6 +256,10 @@ var IdentityPermissions = struct {
 
 	// Notifications bounded context (BRD §6.9) — recipient inbox.
 	Notifications notificationsPermissions
+
+	// Company commerce settings (ADR 0070): the versioned policy, its history
+	// and the GST rate list.
+	CompanySettings companySettingsPermissions
 }{
 	Meta: metaPermissions{
 		TenantAdmin:                "tenant.admin",
@@ -365,6 +376,12 @@ var IdentityPermissions = struct {
 			Manage: "notifications.inbox.manage",
 		},
 	},
+
+	CompanySettings: companySettingsPermissions{
+		Read:      "company_settings.read",
+		Manage:    "company_settings.manage",
+		TaxManage: "company_settings.tax.manage",
+	},
 }
 
 func allNames() []string {
@@ -409,6 +426,9 @@ func allNames() []string {
 
 		// Notifications bounded context (BRD §6.9).
 		p.Notifications.Inbox.Read, p.Notifications.Inbox.Manage,
+
+		// Company commerce settings (ADR 0070).
+		p.CompanySettings.Read, p.CompanySettings.Manage, p.CompanySettings.TaxManage,
 	}
 }
 

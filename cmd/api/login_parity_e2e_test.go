@@ -57,7 +57,7 @@ func newE2EChainFixture(t *testing.T, mutate func(*config.AppConfig)) (e2eFixtur
 	if err != nil {
 		t.Fatalf("buildPublicChain: %v", err)
 	}
-	srv := httptest.NewServer(mw(newServer(silentLogger(), wiring.App, buildPlatformApp(pool, time.Now).App, buildInventoryApp(pool, nil), crmapp.Application{}, buildTasksApp(pool, nil), buildDispatchApp(pool, nil), buildOrdersApp(pool, nil), buildNotificationsApp(pool, nil), wiring.Issuer, wiring.StampValidator)))
+	srv := httptest.NewServer(mw(newServer(silentLogger(), wiring.App, buildPlatformApp(pool, time.Now).App, buildInventoryApp(pool, nil), crmapp.Application{}, buildTasksApp(pool, nil), buildDispatchApp(pool, nil), buildOrdersApp(pool, nil), buildNotificationsApp(pool, nil), buildCompanySettingsApp(pool, nil), wiring.Issuer, wiring.StampValidator)))
 	t.Cleanup(srv.Close)
 	return e2eFixture{URL: srv.URL, Issuer: wiring.Issuer, Pool: pool, app: wiring.App, persons: wiring.Persons, stamps: wiring.StampCache}, wiring
 }

@@ -191,6 +191,8 @@ tags:
     description: ConsignmentNote aggregate — slot creation + carrier status lifecycle (pending → dispatched → in_transit → delivered | failed) per BRD §6.6 (ADR 0063)
   - name: orders
     description: Quotation / Order / Invoice / CreditNote / Payment aggregates — quote→order fulfillment lifecycle + gapless FY invoice numbering per BRD §6.4 (ADR 0063)
+  - name: company
+    description: Company commerce settings - the versioned policy, its history and the company own GST rate list (ADR 0070)
 
 security:
   - BearerAuth: []
@@ -4339,6 +4341,184 @@ paths:
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { description: "Conflict with the current state of the resource (see the `error` code)", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
 
+  # ===== COMPANY COMMERCE SETTINGS (ADR 0070) ============================
+  /api/v1/company/commerce-settings:
+    get:
+      tags: [company]
+      summary: Read the company commerce policy
+      description: |
+        Requires `company_settings.read`. The company's versioned commerce policy:
+        every business rule a company may choose (expiry, shortage handling, pricing,
+        tax and documents, payments and credit, drug schedule), the `version` the next
+        save must send as `expected_version`, and the option metadata of every
+        patchable setting (`options`: its kind, allowed values or bounds, default, and
+        the permission that changes it). A company with no stored policy reads the
+        defaults at `version: 0`. The GST rate list starts EMPTY (there is no default
+        rate); it changes through `/company/gst-rates`.
+      parameters:
+        - $ref: '#/components/parameters/XTenantId'
+      responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+        '200':
+          description: The policy
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CompanySettingsDto' }
+        '400': { $ref: '#/components/responses/TenantScopeInvalid' }
+        '403': { $ref: '#/components/responses/TenantScopeForbidden' }
+
+    patch:
+      tags: [company]
+      summary: Change company commerce settings
+      description: |
+        Requires `company_settings.manage` for the non-tax settings and
+        `company_settings.tax.manage` for the tax, document and compliance settings
+        (`options[].permission` names which); both are held only at the
+        Administrator tier or above. Supplied-key partial update: only the settings
+        in `changes` are applied, and a value equal to the current one changes
+        nothing (the version does not move). `expected_version` is the version the
+        form was loaded at; a stale one is `409 settings_version_conflict` (with
+        `current_version`) and nothing changes. A change to a tax, document or
+        compliance setting also needs `reason`. Every accepted change moves the policy
+        to a new version, records who changed what and why in the history, and
+        reaches Orders and Inventory by event. Returns `200` with the updated policy.
+        A refusal names the setting: `422 validation_failed` with
+        `errors{"<group>.<setting>": [<code>]}` (codes: `out_of_range`, `invalid_type`,
+        `not_an_option`, `required`, `duplicate`, `too_many`, `not_in_allowed`,
+        `value_required`, `value_not_allowed`, `invalid_format`, `unknown_setting`,
+        `managed_elsewhere`) or on `reason`, `expected_version`, `changes`; nothing is
+        changed. Option sets and bounds: `GET` `options`.
+      parameters:
+        - $ref: '#/components/parameters/XCommandId'
+        - $ref: '#/components/parameters/XTenantId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PatchCompanySettingsRequest' }
+      responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+        '200':
+          description: The policy after the change (or unchanged, when the request matched it)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CompanySettingsDto' }
+        '400': { $ref: '#/components/responses/TenantScopeInvalid' }
+        '403': { $ref: '#/components/responses/TenantScopeReadOnly' }
+        '409':
+          description: '`settings_version_conflict`: the settings changed since the form was loaded; reload (`current_version`) and apply the change again'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+
+  /api/v1/company/commerce-settings/history:
+    get:
+      tags: [company]
+      summary: List the versions of the company commerce policy
+      description: |
+        Requires `company_settings.read`. Append-only, newest version first: the whole
+        policy at each version, the keys that changed, the acting membership, the
+        impersonating operator if any, the reason and the time. Keyset-paginated
+        (`cursor`, `page_size`).
+      parameters:
+        - { name: cursor, in: query, required: false, schema: { type: string } }
+        - { name: page_size, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 200 } }
+        - $ref: '#/components/parameters/XTenantId'
+      responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+        '200':
+          description: One page of the history
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ListCompanySettingsHistoryResponse' }
+        '400': { $ref: '#/components/responses/TenantScopeInvalid' }
+        '403': { $ref: '#/components/responses/TenantScopeForbidden' }
+
+  /api/v1/company/gst-rates:
+    get:
+      tags: [company]
+      summary: List the company GST rates
+      description: |
+        Requires `company_settings.read` OR `inventory.catalog.read` OR
+        `inventory.catalog.manage` (the picker a product form reads). The company's
+        own list, in rate order; empty until the company adds a rate. `active=true`
+        drops deactivated rates. `policy_version` is the policy version the list was
+        read at.
+      parameters:
+        - { name: active, in: query, required: false, schema: { type: boolean } }
+        - $ref: '#/components/parameters/XTenantId'
+      responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+        '200':
+          description: The rate list
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ListCompanyGstRatesResponse' }
+        '400': { $ref: '#/components/responses/TenantScopeInvalid' }
+        '403': { $ref: '#/components/responses/TenantScopeForbidden' }
+
+    post:
+      tags: [company]
+      summary: Add a GST rate to the company list
+      description: |
+        Requires `company_settings.tax.manage` (Administrator tier or above). The
+        company confirms each rate by name (`confirmed_by`, `confirmed_on`);
+        LeadKart does not check a rate against the law. `reason` is required. The same
+        `rate_bps` under the same `label` (any case) is `422` with
+        `errors.label: [duplicate]`. Adding a rate moves the policy to a new version.
+        Returns `201` with the rate and the new `policy_version`.
+      parameters:
+        - $ref: '#/components/parameters/XCommandId'
+        - $ref: '#/components/parameters/XTenantId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateCompanyGstRateRequest' }
+      responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+        '201':
+          description: The rate added
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CompanyGstRateChangedDto' }
+        '400': { $ref: '#/components/responses/TenantScopeInvalid' }
+        '403': { $ref: '#/components/responses/TenantScopeReadOnly' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+
+  /api/v1/company/gst-rates/{rateId}:
+    patch:
+      tags: [company]
+      summary: Edit or deactivate a GST rate
+      description: |
+        Requires `company_settings.tax.manage` (Administrator tier or above). A rate is
+        deactivated (`active: false`), never deleted, because products and documents
+        refer to it; the rate itself (`rate_bps`) never changes: add a new rate
+        instead. Supplied-key partial update; `reason` is required. An edit that
+        changes nothing leaves the policy version where it is. Returns `200` with the
+        rate and the `policy_version`.
+      parameters:
+        - $ref: '#/components/parameters/XCommandId'
+        - { name: rateId, in: path, required: true, schema: { type: string, format: uuid } }
+        - $ref: '#/components/parameters/XTenantId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PatchCompanyGstRateRequest' }
+      responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+        '200':
+          description: The rate after the edit
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CompanyGstRateChangedDto' }
+        '400': { $ref: '#/components/responses/TenantScopeInvalid' }
+        '403': { $ref: '#/components/responses/TenantScopeReadOnly' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+
 components:
   securitySchemes:
     BearerAuth:
@@ -4738,6 +4918,10 @@ components:
             (the session reached its absolute lifetime or sat idle past `Refresh.SlidingTTL`) or
             `tenant_suspended` (the person's company is suspended) or `tenant_not_active` (it is
             pending or marked for deletion). Absent everywhere else.
+        current_version:
+          type: integer
+          format: int64
+          description: 'Present only on `409 settings_version_conflict`: the stored policy version to reload.'
         errors:
           type: object
           description: 'Field-level errors (RFC 9457 §3.1 extension). Key = JSON field name; value = list of error strings.'
@@ -4745,6 +4929,210 @@ components:
             type: array
             items: { type: string }
       required: [error]
+
+    # ===== Company commerce settings (ADR 0070) ========================
+    CompanyCommercePolicy:
+      type: object
+      description: |
+        A company's commerce policy, grouped as the PATCH `changes` are. Integer
+        money is paise; `*_bps` are basis points (500 is 5%). Dates are `YYYY-MM-DD`.
+      required: [expiry, fulfilment, pricing, invoice, tax, doc, einvoice, eway, payment, credit, drug_schedule]
+      properties:
+        expiry:
+          type: object
+          required: [stop_months_before, warning_days]
+          properties:
+            stop_months_before: { type: integer, minimum: 0, maximum: 24, description: 'Months before the printed expiry month a batch stops being sellable. 0 is the legal limit, 1 stops at the start of the printed month. Default 1.' }
+            warning_days: { type: array, maxItems: 4, items: { type: integer, minimum: 1, maximum: 730 }, description: 'Days before the last sellable day at which expiry alerts fire; stored descending. Default [180, 90, 30].' }
+        fulfilment:
+          type: object
+          required: [shortage_allowed, shortage_default, hold_keeps_available, invoice_timing]
+          properties:
+            shortage_allowed: { type: array, minItems: 1, items: { type: string, enum: [hold, refuse, partial_backorder, partial_reduce] } }
+            shortage_default: { type: string, enum: [hold, refuse, partial_backorder, partial_reduce], description: 'One of shortage_allowed.' }
+            hold_keeps_available: { type: boolean }
+            invoice_timing: { type: string, enum: [at_pack, at_dispatch] }
+        pricing:
+          type: object
+          required: [rate_override, discount_enabled, discount_max_bps, scheme_enabled, scheme_valuation]
+          properties:
+            rate_override: { type: boolean }
+            discount_enabled: { type: boolean }
+            discount_max_bps: { type: integer, minimum: 0, maximum: 10000 }
+            scheme_enabled: { type: boolean }
+            scheme_valuation: { type: string, enum: [free_quantity, discount_equivalent] }
+        invoice:
+          type: object
+          required: [round_off]
+          properties:
+            round_off: { type: string, enum: [none, nearest_rupee] }
+        tax:
+          type: object
+          required: [gst_rates, credit_note_split, annual_return_filed]
+          properties:
+            gst_rates:
+              type: array
+              description: 'The company own list. Empty by default; changes through /company/gst-rates, never through the settings PATCH.'
+              items: { $ref: '#/components/schemas/CompanyGstRateDto' }
+            credit_note_split: { type: string, enum: [pro_rata, manual_by_rate] }
+            annual_return_filed:
+              type: object
+              description: 'Financial year (`2025-26`) to the filing date.'
+              additionalProperties: { type: string, format: date }
+        doc:
+          type: object
+          required: [invoice_prefix, credit_note_prefix]
+          properties:
+            invoice_prefix: { type: string, pattern: '^[A-Z0-9]{1,4}$' }
+            credit_note_prefix: { type: string, pattern: '^[A-Z0-9]{1,4}$' }
+        einvoice:
+          type: object
+          required: [mode]
+          properties:
+            mode: { type: string, enum: [off, manual_irn] }
+        eway:
+          type: object
+          required: [enforcement]
+          properties:
+            enforcement: { type: string, enum: [warn, block] }
+        payment:
+          type: object
+          required: [advance_mode, advance_value, part_payments, overpayment, dispatch_gate, completion_rule]
+          properties:
+            advance_mode: { type: string, enum: [none, any_amount, percent, fixed] }
+            advance_value: { type: integer, minimum: 0, description: 'Basis points for `percent` (1..10000), paise for `fixed`, 0 otherwise.' }
+            part_payments: { type: boolean }
+            overpayment: { type: string, enum: [refuse, customer_credit, refund_due] }
+            dispatch_gate: { type: string, enum: [none, advance_met, full_payment] }
+            completion_rule: { type: string, enum: [full_payment, on_delivery] }
+        credit:
+          type: object
+          required: [enabled, enforcement, default_limit_paise, default_terms_days, block_on_overdue, overdue_grace_days]
+          properties:
+            enabled: { type: boolean }
+            enforcement: { type: string, enum: [warn, block] }
+            default_limit_paise: { type: integer, minimum: 0 }
+            default_terms_days: { type: integer, minimum: 0, maximum: 365 }
+            block_on_overdue: { type: boolean }
+            overdue_grace_days: { type: integer, minimum: 0, maximum: 365 }
+        drug_schedule:
+          type: object
+          required: [mode]
+          properties:
+            mode: { type: string, enum: [off, optional, required], description: 'Whether the product form records a drug schedule. Default optional.' }
+
+    CompanySettingOption:
+      type: object
+      description: One patchable setting and how to render its control.
+      required: [key, group, kind, default, permission]
+      properties:
+        key: { type: string, description: '`<group>.<setting>`' }
+        group: { type: string }
+        kind: { type: string, enum: [int, bool, enum, enum_set, int_list, code, date_map] }
+        options: { type: array, items: { type: string } }
+        min: { type: integer, format: int64 }
+        max: { type: integer, format: int64 }
+        max_items: { type: integer }
+        default: { description: 'The default value (any JSON type, by kind).' }
+        permission: { type: string, enum: [manage, tax.manage], description: 'The `company_settings.<permission>` that changes it.' }
+
+    CompanySettingsDto:
+      type: object
+      required: [tenant_id, version, policy, options]
+      properties:
+        tenant_id: { type: string, format: uuid }
+        version: { type: integer, format: int64, description: '0 when nothing is stored (the defaults). Send it back as `expected_version`.' }
+        policy: { $ref: '#/components/schemas/CompanyCommercePolicy' }
+        options:
+          type: array
+          items: { $ref: '#/components/schemas/CompanySettingOption' }
+        updated_at: { type: string, format: date-time }
+        updated_by_membership_id: { type: string, format: uuid }
+
+    PatchCompanySettingsRequest:
+      type: object
+      required: [expected_version, changes]
+      properties:
+        expected_version: { type: integer, format: int64, minimum: 0 }
+        reason: { type: string, maxLength: 500, description: 'Required when a tax, document or compliance setting changes.' }
+        changes:
+          type: object
+          minProperties: 1
+          description: 'Group, then setting name: `{"expiry": {"stop_months_before": 2}}`.'
+          additionalProperties:
+            type: object
+            additionalProperties: true
+
+    CompanySettingsHistoryEntry:
+      type: object
+      required: [version, policy, changed_keys, reason, changed_at]
+      properties:
+        version: { type: integer, format: int64 }
+        policy: { $ref: '#/components/schemas/CompanyCommercePolicy' }
+        changed_keys: { type: array, items: { type: string } }
+        reason: { type: string }
+        actor_membership_id: { type: string, format: uuid }
+        impersonator_operator_id: { type: string }
+        changed_at: { type: string, format: date-time }
+
+    ListCompanySettingsHistoryResponse:
+      type: object
+      required: [items, has_more]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/CompanySettingsHistoryEntry' } }
+        has_more: { type: boolean }
+        next_cursor: { type: string }
+
+    CompanyGstRateDto:
+      type: object
+      required: [id, rate_bps, label, confirmed_by, confirmed_on, active]
+      properties:
+        id: { type: string, format: uuid }
+        rate_bps: { type: integer, minimum: 0, maximum: 10000 }
+        label: { type: string, maxLength: 40 }
+        confirmed_by: { type: string, maxLength: 120, description: 'The person who confirmed the rate for the company.' }
+        confirmed_on: { type: string, format: date }
+        active: { type: boolean }
+
+    CompanyGstRateChangedDto:
+      allOf:
+        - $ref: '#/components/schemas/CompanyGstRateDto'
+        - type: object
+          required: [policy_version]
+          properties:
+            policy_version: { type: integer, format: int64, description: 'The policy version the change moved to.' }
+
+    ListCompanyGstRatesResponse:
+      type: object
+      required: [policy_version, items]
+      properties:
+        policy_version: { type: integer, format: int64 }
+        items: { type: array, items: { $ref: '#/components/schemas/CompanyGstRateDto' } }
+
+    CreateCompanyGstRateRequest:
+      type: object
+      required: [rate_bps, label, confirmed_by, confirmed_on, reason]
+      description: |
+        Refusals: `errors.rate_bps` (`required`, `out_of_range`), `errors.label` /
+        `errors.confirmed_by` (`required`, `too_long`, `invalid_characters`; `label` also
+        `duplicate`), `errors.confirmed_on` (`invalid_format`, `in_future`),
+        `errors.reason` (`required`, `too_long`, `invalid_characters`).
+      properties:
+        rate_bps: { type: integer, minimum: 0, maximum: 10000 }
+        label: { type: string, maxLength: 40 }
+        confirmed_by: { type: string, maxLength: 120 }
+        confirmed_on: { type: string, format: date }
+        reason: { type: string, maxLength: 500 }
+
+    PatchCompanyGstRateRequest:
+      type: object
+      required: [reason]
+      properties:
+        label: { type: string, maxLength: 40 }
+        confirmed_by: { type: string, maxLength: 120 }
+        confirmed_on: { type: string, format: date }
+        active: { type: boolean }
+        reason: { type: string, maxLength: 500 }
 
     # ===== Auth ========================================================
     LoginRequest:

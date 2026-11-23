@@ -146,7 +146,7 @@ func newE2EFixtureIdle(t *testing.T, now func() time.Time, cascade bool, grace, 
 	if err != nil {
 		t.Fatalf("trusted proxies: %v", err)
 	}
-	srv := httptest.NewServer(argonClientContext(trusted)(newServer(silentLogger(), wiring.App, buildPlatformApp(pool, now).App, buildInventoryApp(pool, nil), crmapp.Application{}, buildTasksApp(pool, nil), buildDispatchApp(pool, nil), buildOrdersApp(pool, nil), buildNotificationsApp(pool, nil), wiring.Issuer, wiring.StampValidator)))
+	srv := httptest.NewServer(argonClientContext(trusted)(newServer(silentLogger(), wiring.App, buildPlatformApp(pool, now).App, buildInventoryApp(pool, nil), crmapp.Application{}, buildTasksApp(pool, nil), buildDispatchApp(pool, nil), buildOrdersApp(pool, nil), buildNotificationsApp(pool, nil), buildCompanySettingsApp(pool, nil), wiring.Issuer, wiring.StampValidator)))
 	t.Cleanup(srv.Close)
 	return e2eFixture{
 		URL:     srv.URL,
