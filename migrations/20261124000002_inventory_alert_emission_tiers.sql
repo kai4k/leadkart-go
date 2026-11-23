@@ -34,6 +34,10 @@ COMMENT ON TABLE inventory.alert_emissions IS
 ALTER TABLE inventory.alert_emissions DROP CONSTRAINT alert_emissions_pkey;
 ALTER TABLE inventory.alert_emissions DROP CONSTRAINT alert_emissions_kind_check;
 DELETE FROM inventory.alert_emissions WHERE kind = 'expired_on_hand';
+-- Several tiers of one batch on one date would collide on the old key: keep the first.
+DELETE FROM inventory.alert_emissions a USING inventory.alert_emissions b
+ WHERE a.tenant_id = b.tenant_id AND a.kind = b.kind AND a.subject_id = b.subject_id
+   AND a.emitted_date = b.emitted_date AND a.ctid > b.ctid;
 ALTER TABLE inventory.alert_emissions DROP COLUMN emission_key;
 ALTER TABLE inventory.alert_emissions
     ADD CONSTRAINT alert_emissions_kind_check CHECK (kind IN ('batch_expiring', 'product_below_reorder'));
