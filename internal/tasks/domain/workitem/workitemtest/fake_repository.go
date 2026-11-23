@@ -204,37 +204,6 @@ func (r *FakeRepository) ListOverdueCandidates(_ context.Context, tenantID tenan
 	return out, nil
 }
 
-// ListPurgeCandidates returns up to `limit` terminal work items with
-// terminal timestamps < before.
-func (r *FakeRepository) ListPurgeCandidates(_ context.Context, tenantID tenant.ID, before time.Time, limit int) ([]*workitem.WorkItem, error) {
-	out := []*workitem.WorkItem{}
-	for _, w := range r.ByID {
-		if _, deleted := r.Deleted[w.ID()]; deleted {
-			continue
-		}
-		if !tenantID.IsZero() && w.TenantID() != tenantID {
-			continue
-		}
-		switch w.State() {
-		case workitem.StateCompleted:
-			if !w.CompletedAt().Before(before) {
-				continue
-			}
-		case workitem.StateCancelled:
-			if !w.CancelledAt().Before(before) {
-				continue
-			}
-		default:
-			continue
-		}
-		out = append(out, w)
-	}
-	if limit > 0 && len(out) > limit {
-		out = out[:limit]
-	}
-	return out, nil
-}
-
 // DeleteByID flips the soft-delete tombstone. Idempotent — already-
 // deleted returns nil.
 func (r *FakeRepository) DeleteByID(_ context.Context, tenantID tenant.ID, id workitem.ID) error {

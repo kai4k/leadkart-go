@@ -120,21 +120,6 @@ WHERE  NOT is_deleted
 ORDER  BY due_at ASC
 LIMIT  sqlc.arg('row_limit')::int;
 
--- name: ListPurgeCandidates :many
--- Cross-tenant scan for the daily purge job. Terminal rows whose
--- terminal timestamp predates `before` are returned.
-SELECT id, tenant_id, type, priority, state,
-       title, description,
-       assigned_to_membership_id, assigned_by_membership_id,
-       due_at, completed_at, cancelled_at, cancellation_reason,
-       batch_id, source_module, source_entity_type, source_entity_id,
-       created_at, created_by_membership_id
-FROM   tasks.work_items
-WHERE  NOT is_deleted
-  AND  state IN ('completed', 'cancelled')
-  AND  COALESCE(completed_at, cancelled_at) < sqlc.arg('before')::timestamptz
-  AND  (sqlc.narg('tenant_id')::uuid IS NULL OR tenant_id = sqlc.narg('tenant_id')::uuid)
-LIMIT  sqlc.arg('row_limit')::int;
 
 -- name: DashboardCounts :one
 -- Single-query CTE produces the BRD §6.8 dashboard counts:

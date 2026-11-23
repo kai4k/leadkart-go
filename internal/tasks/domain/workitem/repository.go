@@ -83,13 +83,6 @@ type Repository interface {
 	// optional and zero means "all tenants".
 	ListOverdueCandidates(ctx context.Context, tenantID tenant.ID, asOf time.Time, limit int) ([]*WorkItem, error)
 
-	// ListPurgeCandidates returns up to `limit` work items in
-	// completed/cancelled state whose terminal timestamp
-	// (completed_at OR cancelled_at) is strictly before `before`.
-	// Used by the daily purge job per BRD §6.8. Cross-tenant; tenantID
-	// optional.
-	ListPurgeCandidates(ctx context.Context, tenantID tenant.ID, before time.Time, limit int) ([]*WorkItem, error)
-
 	// DeleteByID flips is_deleted = true for the supplied work item
 	// in the supplied tenant (soft delete). Idempotent — already-
 	// deleted returns nil. Returns [ErrNotFound] if no matching live

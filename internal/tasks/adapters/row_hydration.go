@@ -97,12 +97,3 @@ func overdueCandidateRowToWorkItem(row db.ListOverdueCandidatesRow) (*workitem.W
 		row.SourceEntityType, row.SourceEntityID,
 	)
 }
-
-func purgeCandidateRowToWorkItem(row db.ListPurgeCandidatesRow) (*workitem.WorkItem, error) {
-	return snapshotFromColumns(
-		row.ID, row.TenantID, row.AssignedToMembershipID, row.AssignedByMembershipID, row.BatchID, row.CreatedByMembershipID,
-		row.DueAt, row.CompletedAt, row.CancelledAt, row.CreatedAt,
-		row.Type, row.Priority, row.State, row.Title, row.Description, row.CancellationReason, row.SourceModule,
-		row.SourceEntityType, row.SourceEntityID,
-	)
-}

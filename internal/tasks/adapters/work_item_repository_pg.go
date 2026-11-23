@@ -259,47 +259,6 @@ func (r *WorkItemRepository) ListOverdueCandidates(ctx context.Context, tenantID
 	return out, nil
 }
 
-// ListPurgeCandidates satisfies [workitem.Repository] — cross-tenant
-// scan for the daily purge job. Platform scope.
-func (r *WorkItemRepository) ListPurgeCandidates(ctx context.Context, tenantID tenant.ID, before time.Time, limit int) ([]*workitem.WorkItem, error) {
-	if limit <= 0 {
-		limit = 500
-	}
-	var tidParam pgtype.UUID
-	if !tenantID.IsZero() {
-		parsed, err := uuid.Parse(tenantID.String())
-		if err != nil {
-			return nil, fmt.Errorf("tasks repo: parse tenant id %q: %w", tenantID, err)
-		}
-		tidParam = pgconv.PgUUID(parsed)
-	}
-	var out []*workitem.WorkItem
-	err := r.tx.WithinTxPgx(ctx, pg.TxScopePlatform, func(ctx context.Context, tx pgx.Tx) error {
-		q := r.q.WithTx(tx)
-		rows, err := q.ListPurgeCandidates(ctx, db.ListPurgeCandidatesParams{
-			Before:   pgconv.PgRequiredTimestamp(before),
-			TenantID: tidParam,
-			RowLimit: int32(limit), //nolint:gosec // limit ≤ 500
-		})
-		if err != nil {
-			return fmt.Errorf("tasks repo: list purge candidates: %w", err)
-		}
-		out = make([]*workitem.WorkItem, 0, len(rows))
-		for _, row := range rows {
-			hydrated, hErr := purgeCandidateRowToWorkItem(row)
-			if hErr != nil {
-				return hErr
-			}
-			out = append(out, hydrated)
-		}
-		return nil
-	})
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
 // DeleteByID satisfies [workitem.Repository]. Tenant-scoped soft-delete
 // (sets is_deleted = true + deleted_at = now()). Joins a surrounding
 // UnitOfWork tx when ctx carries one (per ADR 0047); otherwise opens its

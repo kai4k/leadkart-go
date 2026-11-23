@@ -22,7 +22,7 @@ type CommonAdminImpersonationAudit struct {
 	IsGodMode      bool
 }
 
-// Auto-written per command via Watermill AuditLoggingMiddleware. 7-year retention; daily purge.
+// Auto-written per command via Watermill AuditLoggingMiddleware. Append-only and kept forever (ADR 0071): the application role holds SELECT and INSERT only.
 type CommonAuditLogEntry struct {
 	ID            pgtype.UUID
 	Action        string
