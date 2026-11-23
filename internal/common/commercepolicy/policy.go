@@ -37,9 +37,15 @@ type Policy struct {
 // Expiry rules. StopMonthsBefore is how many months before the printed expiry
 // month a batch stops being sellable: 0 is the legal limit (sellable through
 // the printed month), 1 stops at the start of the printed month.
+//
+// BusinessDayUTCOffsetMinutes is the company's civil-time offset from UTC, in
+// minutes: the business day (the date every expiry decision uses) is the date
+// at that offset, so it flips at the company's midnight. It is company data;
+// the starting value comes from the embedded defaults file.
 type Expiry struct {
-	StopMonthsBefore int   `json:"stop_months_before"`
-	WarningDays      []int `json:"warning_days"`
+	StopMonthsBefore            int   `json:"stop_months_before"`
+	WarningDays                 []int `json:"warning_days"`
+	BusinessDayUTCOffsetMinutes int   `json:"business_day_utc_offset_minutes"`
 }
 
 // Fulfilment rules for a short order and for invoice timing.
@@ -111,9 +117,14 @@ type Credit struct {
 	OverdueGraceDays  int    `json:"overdue_grace_days"`
 }
 
-// DrugSchedule is whether the product form records a drug schedule.
+// DrugSchedule is whether the product form records a drug schedule (Mode) and
+// the classes a product may carry (Classes). The classes are the company's own
+// list: they start from the embedded defaults, and the company adds, renames and
+// removes them through their own routes. A product stores a class id; nothing in
+// the code is tied to any particular class.
 type DrugSchedule struct {
-	Mode string `json:"mode"`
+	Mode    string          `json:"mode"`
+	Classes []ScheduleClass `json:"classes"`
 }
 
 // Versioned is a policy and the version it was stored at. Version 0 is the
@@ -178,7 +189,7 @@ const (
 // the company's list starts empty.
 func Default() Policy {
 	return Policy{
-		Expiry: Expiry{StopMonthsBefore: 1, WarningDays: []int{180, 90, 30}},
+		Expiry: Expiry{StopMonthsBefore: 1, WarningDays: []int{180, 90, 30}, BusinessDayUTCOffsetMinutes: defaultData().BusinessDayUTCOffsetMinutes},
 		Fulfilment: Fulfilment{
 			ShortageAllowed: []string{ShortageHold, ShortageRefuse, ShortagePartialBackord, ShortagePartialReduce},
 			ShortageDefault: ShortageHold,
@@ -205,7 +216,7 @@ func Default() Policy {
 			Enabled: false, Enforcement: CreditBlock, DefaultLimitPaise: 0,
 			DefaultTermsDays: 30, BlockOnOverdue: true, OverdueGraceDays: 0,
 		},
-		DrugSchedule: DrugSchedule{Mode: DrugScheduleOptional},
+		DrugSchedule: DrugSchedule{Mode: DrugScheduleOptional, Classes: defaultData().scheduleClasses()},
 	}
 }
 
@@ -259,6 +270,7 @@ func (p Policy) Clone() Policy {
 	out.Expiry.WarningDays = append([]int{}, p.Expiry.WarningDays...)
 	out.Fulfilment.ShortageAllowed = append([]string{}, p.Fulfilment.ShortageAllowed...)
 	out.Tax.GSTRates = append([]GSTRate{}, p.Tax.GSTRates...)
+	out.DrugSchedule.Classes = append([]ScheduleClass{}, p.DrugSchedule.Classes...)
 	out.Tax.AnnualReturnFiled = make(map[string]string, len(p.Tax.AnnualReturnFiled))
 	for k, v := range p.Tax.AnnualReturnFiled {
 		out.Tax.AnnualReturnFiled[k] = v

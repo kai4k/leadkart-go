@@ -66,6 +66,7 @@ var fyRE = regexp.MustCompile(`^(\d{4})-(\d{2})$`)
 // deliberately absent: it has its own routes ([ManagedElsewhereKey]).
 var registry = []Setting{
 	{Key: "expiry.stop_months_before", Kind: KindInt, Min: 0, Max: 24, ptr: func(p *Policy) any { return &p.Expiry.StopMonthsBefore }},
+	{Key: "expiry.business_day_utc_offset_minutes", Kind: KindInt, Min: -720, Max: 840, ptr: func(p *Policy) any { return &p.Expiry.BusinessDayUTCOffsetMinutes }},
 	{Key: "expiry.warning_days", Kind: KindIntList, Min: 1, Max: 730, MaxItems: 4, ptr: func(p *Policy) any { return &p.Expiry.WarningDays }},
 
 	{Key: "fulfilment.shortage_allowed", Kind: KindEnumSet, Options: []string{ShortageHold, ShortageRefuse, ShortagePartialBackord, ShortagePartialReduce}, ptr: func(p *Policy) any { return &p.Fulfilment.ShortageAllowed }},
@@ -106,9 +107,17 @@ var registry = []Setting{
 	{Key: "drug_schedule.mode", TaxManage: true, Kind: KindEnum, Options: []string{DrugScheduleOff, DrugScheduleOptional, DrugScheduleRequired}, ptr: func(p *Policy) any { return &p.DrugSchedule.Mode }},
 }
 
-// ManagedElsewhereKey is the one policy key a patch may not set: the GST rate
-// list changes through its own routes.
+// ManagedElsewhereKey is the policy key of the GST rate list, which a patch may
+// not set: the list changes through its own routes.
 const ManagedElsewhereKey = "tax.gst_rates"
+
+// ScheduleClassesKey is the policy key of the drug schedule class list, the
+// other key a patch may not set: it changes through its own routes.
+const ScheduleClassesKey = "drug_schedule.classes"
+
+func managedElsewhere(key string) bool {
+	return key == ManagedElsewhereKey || key == ScheduleClassesKey
+}
 
 func init() {
 	for i := range registry {
@@ -162,7 +171,7 @@ func Apply(p Policy, changes Changes, now time.Time) (Result, FieldErrors) {
 	slices.Sort(keys)
 	var changed []string
 	for _, k := range keys {
-		if k == ManagedElsewhereKey {
+		if managedElsewhere(k) {
 			errs.add(k, CodeManagedElsewhere)
 			continue
 		}
@@ -260,6 +269,9 @@ func Validate(p Policy) FieldErrors {
 	}
 	for _, code := range validateGSTRates(c.Tax.GSTRates) {
 		errs.add(ManagedElsewhereKey, code)
+	}
+	for _, code := range validateScheduleClasses(c.DrugSchedule.Classes) {
+		errs.add(ScheduleClassesKey, code)
 	}
 	return errs
 }

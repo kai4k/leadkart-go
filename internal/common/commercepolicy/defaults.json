@@ -1,0 +1,9 @@
+{
+  "business_day_utc_offset_minutes": 330,
+  "drug_schedule_classes": [
+    { "id": "0197a2c0-0000-7000-8000-000000000001", "label": "Schedule G" },
+    { "id": "0197a2c0-0000-7000-8000-000000000002", "label": "Schedule H" },
+    { "id": "0197a2c0-0000-7000-8000-000000000003", "label": "Schedule H1" },
+    { "id": "0197a2c0-0000-7000-8000-000000000004", "label": "Schedule X" }
+  ]
+}
