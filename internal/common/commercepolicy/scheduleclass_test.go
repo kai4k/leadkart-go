@@ -39,14 +39,23 @@ func TestApply_TheClassListChangesThroughItsOwnRoutesAndTheOffsetIsBounded(t *te
 	if !slices.Equal(errs["drug_schedule.classes"], []string{commercepolicy.CodeManagedElsewhere}) {
 		t.Fatalf("classes through the patch: %v", errs)
 	}
-	for _, off := range []int{-721, 841} {
-		if _, errs := applyAt(p, changes(t, map[string]any{"expiry.business_day_utc_offset_minutes": off})); len(errs["expiry.business_day_utc_offset_minutes"]) == 0 {
-			t.Errorf("offset %d accepted", off)
+	// The offset is market data, not a setting: a patch naming it is refused, so no
+	// company can move the day that the legal expiry limit is judged on.
+	for _, off := range []int{0, -720, 330, 840} {
+		_, errs := applyAt(p, changes(t, map[string]any{"expiry.business_day_utc_offset_minutes": off}))
+		if !slices.Equal(errs["expiry.business_day_utc_offset_minutes"], []string{commercepolicy.CodeUnknownSetting}) {
+			t.Errorf("offset %d patch: %v, want unknown_setting", off, errs)
 		}
 	}
-	res, errs := applyAt(p, changes(t, map[string]any{"expiry.business_day_utc_offset_minutes": 0}))
-	if len(errs) != 0 || res.Policy.Expiry.BusinessDayUTCOffsetMinutes != 0 {
-		t.Fatalf("offset 0 (UTC): %v", errs)
+	for _, info := range commercepolicy.Describe() {
+		if info.Key == "expiry.business_day_utc_offset_minutes" {
+			t.Fatal("the offset must not be offered as a setting")
+		}
+	}
+	bad := commercepolicy.Default()
+	bad.Expiry.BusinessDayUTCOffsetMinutes = 900
+	if len(commercepolicy.Validate(bad)["expiry.business_day_utc_offset_minutes"]) == 0 {
+		t.Error("a stored offset outside real time zones must not validate")
 	}
 }
 

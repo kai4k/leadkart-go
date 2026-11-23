@@ -66,7 +66,6 @@ var fyRE = regexp.MustCompile(`^(\d{4})-(\d{2})$`)
 // deliberately absent: it has its own routes ([ManagedElsewhereKey]).
 var registry = []Setting{
 	{Key: "expiry.stop_months_before", Kind: KindInt, Min: 0, Max: 24, ptr: func(p *Policy) any { return &p.Expiry.StopMonthsBefore }},
-	{Key: "expiry.business_day_utc_offset_minutes", Kind: KindInt, Min: -720, Max: 840, ptr: func(p *Policy) any { return &p.Expiry.BusinessDayUTCOffsetMinutes }},
 	{Key: "expiry.warning_days", Kind: KindIntList, Min: 1, Max: 730, MaxItems: 4, ptr: func(p *Policy) any { return &p.Expiry.WarningDays }},
 
 	{Key: "fulfilment.shortage_allowed", Kind: KindEnumSet, Options: []string{ShortageHold, ShortageRefuse, ShortagePartialBackord, ShortagePartialReduce}, ptr: func(p *Policy) any { return &p.Fulfilment.ShortageAllowed }},
@@ -260,6 +259,12 @@ func Validate(p Policy) FieldErrors {
 		if c.Payment.AdvanceValue != 0 {
 			errs.add("payment.advance_value", CodeValueNotAllowed)
 		}
+	}
+	// The offset is market data, never a company choice (it is not in the registry):
+	// the legal limit "past the printed expiry" is judged on the business day it
+	// defines, so it must stay inside the range of real civil time zones.
+	if off := c.Expiry.BusinessDayUTCOffsetMinutes; off < -720 || off > 840 {
+		errs.add("expiry.business_day_utc_offset_minutes", CodeOutOfRange)
 	}
 	if c.Doc.InvoicePrefix == c.Doc.CreditNotePrefix {
 		// The two series count separately: one prefix would let one number be both an

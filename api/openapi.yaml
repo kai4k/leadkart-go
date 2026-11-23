@@ -4919,7 +4919,7 @@ components:
           type: object
           required: [stop_months_before, warning_days, business_day_utc_offset_minutes]
           properties:
-            business_day_utc_offset_minutes: { type: integer, minimum: -720, maximum: 840, description: 'The company civil time as minutes east of UTC. The business day (every expiry decision) is the date at this offset, so it flips at the company midnight. Default 330 (from the market defaults). Changed under company_settings.manage.' }
+            business_day_utc_offset_minutes: { type: integer, minimum: -720, maximum: 840, readOnly: true, description: 'Where the business day flips (minutes east of UTC): MARKET data, not a company setting. A patch naming it is refused (`unknown_setting`). The legal "past the printed expiry" limit is judged on this day.' }
             stop_months_before: { type: integer, minimum: 0, maximum: 24, description: 'Months before the printed expiry month a batch stops being sellable. 0 is the legal limit, 1 stops at the start of the printed month. Default 1.' }
             warning_days: { type: array, maxItems: 4, items: { type: integer, minimum: 1, maximum: 730 }, description: 'Days before the last sellable day at which expiry alerts fire; stored descending. Default [180, 90, 30].' }
         fulfilment:

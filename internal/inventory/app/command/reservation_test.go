@@ -2,6 +2,7 @@ package command_test
 
 import (
 	"context"
+	"github.com/leadkart/leadkart-go/internal/common/commercepolicy"
 	"github.com/leadkart/leadkart-go/internal/inventory/app/sellability/sellabilitytest"
 	"testing"
 	"time"
@@ -221,4 +222,29 @@ func TestConsumeOrderStock_NothingOutstandingIsNoOp(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, res.Consumed)
 	require.Equal(t, 0, movements.AddCalls)
+}
+
+// Review B1: printed 2026-11, stop 0, and it is 05:00 IST on 1 December. The business
+// day is the market's (no company can move it), so November stock is past its printed
+// expiry: a shortfall, nothing reserved.
+func TestReserveOrderStock_AtFiveAMIST_OnTheFirstOfTheNextMonth_PrintedExpiryIsPast(t *testing.T) {
+	t.Parallel()
+	batches := newFakeBatchRepo()
+	movements := newFakeMovementRepo()
+	actor := newMembershipID(t)
+	p := seedProduct(t, newFakeProductRepo(), newTenantID(t), actor, "SKU-B1")
+	b := seedBatchExpiryStock(t, batches, p, actor, "NOV", time.Date(2026, 11, 30, 0, 0, 0, 0, time.UTC), 10)
+
+	pol := commercepolicy.Default()
+	pol.Expiry.StopMonthsBefore = 0
+	now := time.Date(2026, 11, 30, 23, 30, 0, 0, time.UTC) // 05:00 IST on 1 Dec
+	h := command.NewReserveOrderStockHandler(&fakeUoW{}, batches, movements, &fakeReservationLedger{}, &fakeEnqueuer{}, sellabilitytest.ResolverWith(pol, now), func() time.Time { return now }, testNewMovementID)
+	res, err := h.Handle(t.Context(), command.ReserveOrderStockCommand{
+		TenantID: p.TenantID(), OrderID: uuid.NewString(), ActorMembershipID: actor,
+		Lines: []command.ReserveLine{{ProductID: p.ID(), Quantity: 10}},
+	})
+	require.NoError(t, err)
+	require.False(t, res.Reserved)
+	require.Len(t, res.Shortfalls, 1)
+	require.Zero(t, b.QuantityReserved())
 }

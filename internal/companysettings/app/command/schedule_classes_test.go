@@ -139,17 +139,12 @@ func TestChangeSettings_TheClassListAndTheOffsetAreRegistrySettingsOrManagedElse
 	if got := commercepolicy.Fields(err)["drug_schedule.classes"]; len(got) != 1 || got[0] != commercepolicy.CodeManagedElsewhere {
 		t.Fatalf("the class list changes through its own routes: %v", err)
 	}
-	res, err := h.Handle(t.Context(), command.ChangeSettingsCommand{
+	// The business-day offset is market data: no company can patch it.
+	_, err = h.Handle(t.Context(), command.ChangeSettingsCommand{
 		TenantID: tenantID, ExpectedVersion: 0, MayManage: true,
-		Changes: patch(t, map[string]any{"expiry.business_day_utc_offset_minutes": 0}),
+		Changes: patch(t, map[string]any{"expiry.business_day_utc_offset_minutes": -720}),
 	})
-	if err != nil || res.Policy.Expiry.BusinessDayUTCOffsetMinutes != 0 {
-		t.Fatalf("offset: %+v %v", res, err)
-	}
-	if _, err := h.Handle(t.Context(), command.ChangeSettingsCommand{
-		TenantID: tenantID, ExpectedVersion: 1, MayManage: true,
-		Changes: patch(t, map[string]any{"expiry.business_day_utc_offset_minutes": 900}),
-	}); len(commercepolicy.Fields(err)["expiry.business_day_utc_offset_minutes"]) == 0 {
-		t.Fatalf("an offset past +14:00 must be refused: %v", err)
+	if got := commercepolicy.Fields(err)["expiry.business_day_utc_offset_minutes"]; len(got) != 1 || got[0] != commercepolicy.CodeUnknownSetting {
+		t.Fatalf("the offset patch: %v", err)
 	}
 }
