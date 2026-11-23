@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/stretchr/testify/require"
 
 	"github.com/leadkart/leadkart-go/internal/common/pg"
@@ -201,8 +202,8 @@ func TestInvoiceRepository_AllocatedNumberRoundTrip(t *testing.T) {
 func TestPaymentRepository_AddListAndDuplicateRef(t *testing.T) {
 	repo := adapters.NewPaymentRepository(ordersPool(t), pg.NewTransactor(ordersPool(t)))
 	tid := tenant.ID(uuid.NewString())
-	orderID := order.ID(uuid.NewString())
 	actor := membership.ID(uuid.NewString())
+	orderID := newApprovedOrder(t, adapters.NewOrderRepository(ordersPool(t), pg.NewTransactor(ordersPool(t))), tid, actor).ID()
 	ref := "UTR-" + uuid.NewString()
 
 	mk := func(ref string) *payment.Payment {
@@ -232,4 +233,33 @@ func TestPaymentRepository_AddListAndDuplicateRef(t *testing.T) {
 
 	// Same external reference → idempotency rejection.
 	require.ErrorIs(t, repo.Add(ctx, mk(ref)), payment.ErrAlreadyExistsForExternalReference)
+}
+
+// TestPaymentRepository_RefusesAPaymentForAnUnknownOrder pins the foreign key
+// from orders.payments to orders.orders: the database itself refuses a payment
+// whose order does not exist for the tenant, whatever a handler checked.
+func TestPaymentRepository_RefusesAPaymentForAnUnknownOrder(t *testing.T) {
+	repo := adapters.NewPaymentRepository(ordersPool(t), pg.NewTransactor(ordersPool(t)))
+	tid := tenant.ID(uuid.NewString())
+	actor := membership.ID(uuid.NewString())
+
+	p, err := payment.New(payment.NewInput{
+		ID:                   payment.ID(uuid.NewString()),
+		TenantID:             tid,
+		OrderID:              order.ID(uuid.NewString()),
+		Kind:                 payment.KindToken,
+		Method:               payment.MethodUPI,
+		AmountPaise:          25000,
+		ReceivedAt:           nowUTC(),
+		RecordedAt:           nowUTC(),
+		RecordedByMembership: actor,
+	})
+	require.NoError(t, err)
+
+	ctx := tenancy.WithID(t.Context(), tenancy.ID(tid.String()))
+	addErr := repo.Add(ctx, p)
+	var pgErr *pgconn.PgError
+	require.ErrorAs(t, addErr, &pgErr)
+	require.Equal(t, "23503", pgErr.Code)
+	require.Equal(t, "fk_orders_payments_order", pgErr.ConstraintName)
 }

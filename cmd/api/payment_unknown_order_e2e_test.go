@@ -15,9 +15,9 @@ import (
 )
 
 // TestE2E_Orders_PaymentForUnknownOrderIs404: a payment needs an order the
-// caller can see. orders.payments has no foreign key to orders.orders, so an
-// unknown id (or another company's order) used to be accepted with 201 and
-// left a payment row that belongs to no order.
+// caller can see. the handler refuses an unknown id (or another company's
+// order) with 404, and orders.payments has a tenant-scoped foreign key to
+// orders.orders behind it, so no payment row can belong to no order.
 func TestE2E_Orders_PaymentForUnknownOrderIs404(t *testing.T) {
 	f := newE2EFixture(t)
 	tok := f.registerAndLogin(t, "payunknown").AccessToken
