@@ -56,17 +56,21 @@ func FromPrintedMonth(year int, month time.Month) (time.Time, error) {
 	return MonthEnd(year, month), nil
 }
 
+// MonthLayout is the wire form of an expiry month ("2027-03").
+const MonthLayout = "2006-01"
+
 // ParsePrintedMonth reads "2027-03" (the wire form of an expiry month).
 func ParsePrintedMonth(s string) (time.Time, error) {
-	t, err := time.Parse("2006-01", s)
-	if err != nil || t.Format("2006-01") != s {
+	t, err := time.Parse(MonthLayout, s)
+	t = t.UTC()
+	if err != nil || t.Format(MonthLayout) != s {
 		return time.Time{}, fmt.Errorf("expiry: %q is not a YYYY-MM month", s)
 	}
 	return FromPrintedMonth(t.Year(), t.Month())
 }
 
 // PrintedMonth is the wire form of a stored expiry: "2027-03".
-func PrintedMonth(expiry time.Time) string { return expiry.UTC().Format("2006-01") }
+func PrintedMonth(expiry time.Time) string { return expiry.UTC().Format(MonthLayout) }
 
 // IsMonthEnd reports whether d is the last day of its month (the only form a
 // batch expiry takes).
