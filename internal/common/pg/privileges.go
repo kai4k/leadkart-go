@@ -199,7 +199,7 @@ func VerifyApplicationPrivileges(ctx context.Context, db interface {
 	if found {
 		return fmt.Errorf("pg: database role %q lacks %s: the grants migration (20260606000001_application_role_grants) did not reach this role "+
 			"(it is a no-op when the role does not exist yet, goose records it as applied and will not run it again, and `migrate up` re-applies only River's grants). "+
-			"Fix as the OWNER role that ran the migrations: run the Up block of migrations/20260606000001_application_role_grants.sql by hand "+
+			"Fix as the OWNER role that ran the migrations: run the Up block of migrations/20260606000001_application_role_grants.sql and of every later *_grants.sql migration (20261123000004_companysettings_grants.sql) by hand "+
 			"(docs/deploy/production-checklist.md, \"The application role\"), then `migrate up`. "+
 			"To avoid it: create the role BEFORE the first migration and run every migration as the same owner role", role, missing)
 	}

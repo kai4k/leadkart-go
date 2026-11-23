@@ -16,7 +16,9 @@
 --   gst_rates        the company's list: starts EMPTY, no default rate. A rate is
 --                    confirmed by a named person and deactivated, never deleted.
 --
--- All tenant-scoped, RLS + FORCE.
+-- All tenant-scoped, RLS + FORCE. The application role gets its privileges in
+-- 20261123000004_companysettings_grants:
+-- a new schema needs its own grants, see 20260606000001_application_role_grants.
 
 -- +goose Up
 -- +goose StatementBegin
@@ -97,23 +99,6 @@ COMMENT ON TABLE companysettings.policy_history IS
     'Append-only: the whole policy at every version, with actor, impersonator and reason. The application role holds SELECT and INSERT only.';
 COMMENT ON TABLE companysettings.gst_rates IS
     'The company''s own GST rate list. Starts empty. Deactivated, never deleted.';
-
--- A NEW schema carries its own grants (see 20260606000001_application_role_grants.sql).
-DO $$
-BEGIN
-    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'leadkart_app') THEN
-        RAISE NOTICE 'role leadkart_app does not exist: companysettings grants skipped';
-        RETURN;
-    END IF;
-    GRANT USAGE ON SCHEMA companysettings TO leadkart_app;
-    GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA companysettings TO leadkart_app;
-    GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA companysettings TO leadkart_app;
-    ALTER DEFAULT PRIVILEGES IN SCHEMA companysettings GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO leadkart_app;
-    ALTER DEFAULT PRIVILEGES IN SCHEMA companysettings GRANT USAGE, SELECT ON SEQUENCES TO leadkart_app;
-    -- the history is append-only for the application
-    REVOKE UPDATE, DELETE ON companysettings.policy_history FROM leadkart_app;
-END
-$$;
 
 -- +goose StatementEnd
 

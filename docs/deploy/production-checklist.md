@@ -104,11 +104,15 @@ bind to the role that ran the migration, so tables created later by a different 
 would not be granted to `leadkart_app`.
 
 *Repair it* (the role was created late, or two owners migrated). As the owner role that
-ran the migrations, apply the Up block of the grants migration by hand, then run
-`migrate up` once more for River's grants. The block is idempotent:
+ran the migrations, apply the Up block of the grants migration by hand, and of each
+later module grants migration (a module added after it carries its own, today
+`20261123000004_companysettings_grants`), then run `migrate up` once more for
+River's grants. Each block is idempotent:
 
 ```bash
-sed -n '/^-- +goose Up/,/^-- +goose Down/p' migrations/20260606000001_application_role_grants.sql   | psql -v ON_ERROR_STOP=1 "$OWNER_DATABASE_URL"
+for f in migrations/20260606000001_application_role_grants.sql migrations/20261123000004_companysettings_grants.sql; do
+  sed -n '/^-- +goose Up/,/^-- +goose Down/p' "$f" | psql -v ON_ERROR_STOP=1 "$OWNER_DATABASE_URL"
+done
 ```
 
 (the goose markers are SQL comments, so `psql` reads the block as is; the migrations

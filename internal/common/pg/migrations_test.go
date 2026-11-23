@@ -550,7 +550,7 @@ func TestAppRoleHasPrivilegesOnEveryApplicationTable(t *testing.T) {
 	wantTableExceptions := map[string][]string{
 		"common.audit_log_entry":           {"SELECT", "INSERT", "DELETE"},
 		"common.admin_impersonation_audit": {"SELECT", "INSERT"},
-		"companysettings.policy_history":  {"SELECT", "INSERT"},
+		"companysettings.policy_history":   {"SELECT", "INSERT"},
 	}
 	if diff := cmp.Diff(wantSchemaPrivs, pg.SchemaTablePrivileges()); diff != "" {
 		t.Errorf("pg.SchemaTablePrivileges differs from the pinned set (-want +got):\n%s", diff)
@@ -905,17 +905,21 @@ func TestVerifyApplicationPrivileges_FailsWhenRoleWasCreatedAfterMigrating(t *te
 
 	// The documented manual fix works: run the Up block of the grants migration as
 	// the owner (the production checklist's sed | psql, here through the driver).
-	raw, rerr := os.ReadFile(filepath.Join(migrationsDir(t), "20260606000001_application_role_grants.sql"))
-	if rerr != nil {
-		t.Fatalf("read grants migration: %v", rerr)
-	}
-	up, _, ok := strings.Cut(string(raw), "-- +goose Down")
-	_, up, ok2 := strings.Cut(up, "-- +goose Up")
-	if !ok || !ok2 {
-		t.Fatal("grants migration lost its goose Up/Down markers")
-	}
-	if _, xerr := db.ExecContext(t.Context(), up); xerr != nil {
-		t.Fatalf("manual fix (Up block): %v", xerr)
+	// The base grants migration, then each later module grants migration (a module
+	// added after it carries its own: a migration may not name a later schema).
+	for _, name := range []string{"20260606000001_application_role_grants.sql", "20261123000004_companysettings_grants.sql"} {
+		raw, rerr := os.ReadFile(filepath.Join(migrationsDir(t), name))
+		if rerr != nil {
+			t.Fatalf("read %s: %v", name, rerr)
+		}
+		up, _, ok := strings.Cut(string(raw), "-- +goose Down")
+		_, up, ok2 := strings.Cut(up, "-- +goose Up")
+		if !ok || !ok2 {
+			t.Fatalf("%s lost its goose Up/Down markers", name)
+		}
+		if _, xerr := db.ExecContext(t.Context(), up); xerr != nil {
+			t.Fatalf("manual fix (Up block of %s): %v", name, xerr)
+		}
 	}
 	if verr := pg.VerifyApplicationPrivileges(t.Context(), appRoleConn(t, dsn), pg.PrivilegeCheck{Production: true, Logger: discardLogger()}); verr != nil {
 		t.Fatalf("check still fails after the documented manual fix: %v", verr)

@@ -36,7 +36,7 @@ Every accepted change moves the stored policy to the next version. `PATCH /api/v
 
 ### D4 — History is append-only
 
-`companysettings.policy_history` has one row per version: the whole policy, the changed keys, the acting membership, the impersonating operator (the RFC 8693 `act.sub`) if any, the reason, the time. The application role may only INSERT and SELECT (`pg.TablePrivilegeExceptions`; the grants test pins it). A reason is required whenever a tax, document or compliance setting changes (the settings marked `tax.manage`), and for every GST rate change. The history row is written in the same transaction as the change and the outbox event.
+`companysettings.policy_history` has one row per version: the whole policy, the changed keys, the acting membership, the impersonating operator (the RFC 8693 `act.sub`) if any, the reason, the time. The application role may only INSERT and SELECT (granted by `20261123000004_companysettings_grants`, a module-owned grants migration because the base grants migration may not name a later schema and the documented recovery for a late-created role runs both; `pg.TablePrivilegeExceptions` and the grants test pin it). A reason is required whenever a tax, document or compliance setting changes (the settings marked `tax.manage`), and for every GST rate change. The history row is written in the same transaction as the change and the outbox event.
 
 ### D5 — The GST rate list is the company's own and part of the policy
 
