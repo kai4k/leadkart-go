@@ -431,13 +431,13 @@ func TestReplaceOverrides_OwnerProtectedAndDeltaOnly(t *testing.T) {
 	owner1, owner2 := w.member(t, w.owner), w.member(t, w.owner)
 	h := w.handlers().override
 	ownerActor := actorAs(t, owner1.ID(), authority.RankOwner, tenantAdminEffective()...)
-	if err := h.Handle(t.Context(), command.ReplaceUserPermissionOverridesCommand{TenantID: awTenant, MembershipID: owner2.ID(),
+	if err := h.Handle(t.Context(), command.ReplaceUserPermissionOverridesCommand{TenantID: awTenant, MembershipID: owner2.ID(), OverridesVersion: w.ver(t, owner2),
 		RevokedNames: []string{p.Meta.TenantAdmin}, Actor: ownerActor}); !errors.Is(err, authority.ErrOwnerProtected) {
 		t.Fatalf("strip owner: %v", err)
 	}
 	adminM := w.member(t, w.admin)
 	admin := actorAs(t, adminM.ID(), authority.RankAdmin, tenantAdminEffective()...)
-	if err := h.Handle(t.Context(), command.ReplaceUserPermissionOverridesCommand{TenantID: awTenant, MembershipID: owner2.ID(),
+	if err := h.Handle(t.Context(), command.ReplaceUserPermissionOverridesCommand{TenantID: awTenant, MembershipID: owner2.ID(), OverridesVersion: w.ver(t, owner2),
 		RevokedNames: []string{p.Crm.Leads.Read}, Actor: admin}); !errors.Is(err, authority.ErrInsufficientRank) {
 		t.Fatalf("admin changes owner overrides: %v, want ErrInsufficientRank", err)
 	}
@@ -449,11 +449,11 @@ func TestReplaceOverrides_OwnerProtectedAndDeltaOnly(t *testing.T) {
 		t.Fatalf("setup grant: %v", err)
 	}
 	mgr := actorAs(t, mgrM.ID(), authority.RankManager, p.Crm.Leads.Read, p.Crm.Leads.ReadAll, p.Roles.Approve)
-	if err := h.Handle(t.Context(), command.ReplaceUserPermissionOverridesCommand{TenantID: awTenant, MembershipID: exec.ID(),
+	if err := h.Handle(t.Context(), command.ReplaceUserPermissionOverridesCommand{TenantID: awTenant, MembershipID: exec.ID(), OverridesVersion: w.ver(t, exec),
 		GrantedNames: []string{p.Crm.Leads.Assign, p.Crm.Leads.ReadAll}, Actor: mgr}); err != nil {
 		t.Fatalf("unchanged unheld grant must not be checked: %v", err)
 	}
-	if err := h.Handle(t.Context(), command.ReplaceUserPermissionOverridesCommand{TenantID: awTenant, MembershipID: exec.ID(),
+	if err := h.Handle(t.Context(), command.ReplaceUserPermissionOverridesCommand{TenantID: awTenant, MembershipID: exec.ID(), OverridesVersion: w.ver(t, exec),
 		GrantedNames: []string{p.Crm.Leads.ReadAll}, Actor: mgr}); !errors.Is(err, authority.ErrGrantExceedsAuthority) {
 		t.Fatalf("removing an unheld grant: %v", err)
 	}
@@ -483,7 +483,7 @@ func TestReplaceOverrides_OneClockReading(t *testing.T) {
 			return testNow.Add(time.Duration(calls-1) * 2 * time.Hour)
 		}
 		h := w.handlersAt(clock).override
-		if err := h.Handle(t.Context(), command.ReplaceUserPermissionOverridesCommand{TenantID: awTenant, MembershipID: exec.ID(), GrantedNames: []string{x}, Actor: mgr}); err != nil {
+		if err := h.Handle(t.Context(), command.ReplaceUserPermissionOverridesCommand{TenantID: awTenant, MembershipID: exec.ID(), OverridesVersion: w.ver(t, exec), GrantedNames: []string{x}, Actor: mgr}); err != nil {
 			t.Fatalf("Handle: %v", err)
 		}
 		if calls != 1 {
@@ -498,7 +498,7 @@ func TestReplaceOverrides_OneClockReading(t *testing.T) {
 		t.Parallel()
 		w, exec, mgr := setup(t, testNow)
 		h := w.handlers().override
-		err := h.Handle(t.Context(), command.ReplaceUserPermissionOverridesCommand{TenantID: awTenant, MembershipID: exec.ID(), GrantedNames: []string{x}, Actor: mgr})
+		err := h.Handle(t.Context(), command.ReplaceUserPermissionOverridesCommand{TenantID: awTenant, MembershipID: exec.ID(), OverridesVersion: w.ver(t, exec), GrantedNames: []string{x}, Actor: mgr})
 		if !errors.Is(err, authority.ErrGrantExceedsAuthority) {
 			t.Fatalf("err = %v, want ErrGrantExceedsAuthority", err)
 		}
@@ -507,7 +507,7 @@ func TestReplaceOverrides_OneClockReading(t *testing.T) {
 		t.Parallel()
 		w, exec, mgr := setup(t, testNow.Add(time.Hour))
 		h := w.handlersAt(func() time.Time { return time.Time{} }).override
-		err := h.Handle(t.Context(), command.ReplaceUserPermissionOverridesCommand{TenantID: awTenant, MembershipID: exec.ID(), GrantedNames: []string{x}, Actor: mgr})
+		err := h.Handle(t.Context(), command.ReplaceUserPermissionOverridesCommand{TenantID: awTenant, MembershipID: exec.ID(), OverridesVersion: w.ver(t, exec), GrantedNames: []string{x}, Actor: mgr})
 		if !errors.Is(err, authority.ErrNoAuthority) {
 			t.Fatalf("err = %v, want ErrNoAuthority", err)
 		}
@@ -631,7 +631,7 @@ func TestReplaceOverrides_DuplicateGrantedNamesStillApplyTheRemoval(t *testing.T
 		}})
 	mgr := actorAs(t, mgrM.ID(), authority.RankManager, p.Crm.Leads.Read, p.Crm.Leads.Assign)
 	h := w.handlers().override
-	if err := h.Handle(t.Context(), command.ReplaceUserPermissionOverridesCommand{TenantID: awTenant, MembershipID: exec.ID(),
+	if err := h.Handle(t.Context(), command.ReplaceUserPermissionOverridesCommand{TenantID: awTenant, MembershipID: exec.ID(), OverridesVersion: w.ver(t, exec),
 		GrantedNames: []string{p.Crm.Leads.Read, p.Crm.Leads.Read}, Actor: mgr}); err != nil {
 		t.Fatalf("Handle: %v", err)
 	}
@@ -640,7 +640,7 @@ func TestReplaceOverrides_DuplicateGrantedNamesStillApplyTheRemoval(t *testing.T
 		t.Fatalf("grants after the replace = %+v, want only %s (the removed grant must be gone, not silently kept)", got, p.Crm.Leads.Read)
 	}
 	// and a real no-op still writes nothing
-	if err := h.Handle(t.Context(), command.ReplaceUserPermissionOverridesCommand{TenantID: awTenant, MembershipID: exec.ID(),
+	if err := h.Handle(t.Context(), command.ReplaceUserPermissionOverridesCommand{TenantID: awTenant, MembershipID: exec.ID(), OverridesVersion: w.ver(t, exec),
 		GrantedNames: []string{p.Crm.Leads.Read, p.Crm.Leads.Read}, Actor: mgr}); err != nil {
 		t.Fatalf("repeat: %v", err)
 	}

@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/leadkart/leadkart-go/internal/common/email"
 	"github.com/leadkart/leadkart-go/internal/common/pagination"
@@ -61,6 +62,8 @@ func handleGetUser(log *slog.Logger, a app.Application) http.Handler {
 				return
 			case ov.Visible:
 				dto.PermissionOverrides = projectOverridesToDto(ov)
+				// the version of exactly the overrides returned: the save sends it back
+				dto.OverridesVersion = ov.Version
 			}
 		}
 		writeJSON(w, http.StatusOK, dto)
@@ -295,14 +298,33 @@ func handleReplaceUserPermissionOverrides(log *slog.Logger, a app.Application) h
 		if !decodeFullBody(w, r, &req) {
 			return
 		}
+		// A blank version is a missing one: the same answer as an absent key, so a
+		// client that sends "" learns the field is required instead of being told
+		// the overrides changed.
+		if strings.TrimSpace(req.OverridesVersion) == "" {
+			const msg = "required fields are missing: overrides_version"
+			writeJSON(w, http.StatusBadRequest, ErrorResponse{
+				Type: problemType(ErrCodeInvalidBody), Title: http.StatusText(http.StatusBadRequest), Status: http.StatusBadRequest,
+				Detail: msg, Error: ErrCodeInvalidBody, Message: msg,
+				Errors: map[string][]string{"overrides_version": {"required"}},
+			})
+			return
+		}
 		err := a.Commands.ReplaceUserPermissionOverrides.Handle(r.Context(),
 			command.ReplaceUserPermissionOverridesCommand{
-				TenantID:     tenant.ID(tid),
-				MembershipID: mid,
-				GrantedNames: req.Granted,
-				RevokedNames: req.Revoked,
-				Actor:        authn.AuthorityFrom(r.Context()),
+				TenantID:         tenant.ID(tid),
+				MembershipID:     mid,
+				GrantedNames:     req.Granted,
+				RevokedNames:     req.Revoked,
+				OverridesVersion: req.OverridesVersion,
+				Actor:            authn.AuthorityFrom(r.Context()),
 			})
+		// The live overrides are not the ones this save was made from: nothing was
+		// written, the client reads the user again.
+		if errors.Is(err, command.ErrOverridesChanged) {
+			writeError(w, http.StatusConflict, ErrCodeOverridesChanged, "the permission overrides changed since they were read; read the user again")
+			return
+		}
 		if errors.Is(err, command.ErrPermissionUnknown) {
 			writeError(w, http.StatusUnprocessableEntity, ErrCodePermissionUnknown, err.Error())
 			return

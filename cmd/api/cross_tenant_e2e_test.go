@@ -353,6 +353,37 @@ func (f e2eFixture) doWithHeaders(t *testing.T, method, path, token string, body
 	return r
 }
 
+// overridesVersionNotShown is what a caller who was not shown a member's
+// overrides (no permission, no rank over the member, another tenant) sends as the
+// version: such a caller is refused before any version is compared.
+const overridesVersionNotShown = "not-shown-to-this-caller"
+
+// readOverridesVersion is the overrides_version GET /users/{id} hands the caller
+// for the member a .../permission-overrides path names, or
+// [overridesVersionNotShown] when the read shows the caller none.
+func (f e2eFixture) readOverridesVersion(ctx context.Context, overridesPath, token string, headers map[string]string) string {
+	r, err := f.tryDo(ctx, http.MethodGet, strings.TrimSuffix(overridesPath, "/permission-overrides"), token, nil, headers)
+	if err != nil || r.status != http.StatusOK {
+		return overridesVersionNotShown
+	}
+	var u ports.UserDto
+	if err := json.Unmarshal(r.body, &u); err != nil || u.OverridesVersion == "" {
+		return overridesVersionNotShown
+	}
+	return u.OverridesVersion
+}
+
+// overridesVersion is the version a caller who IS shown the member's overrides
+// reads; it fails the test when the read shows none.
+func (f e2eFixture) overridesVersion(t *testing.T, token, membershipID string) string {
+	t.Helper()
+	u := f.getUser(t, token, membershipID)
+	if u.PermissionOverrides == nil || u.OverridesVersion == "" {
+		t.Fatalf("GET /users/%s shows this caller no overrides_version (overrides %+v)", membershipID, u.PermissionOverrides)
+	}
+	return u.OverridesVersion
+}
+
 // rawBody is a request body sent byte for byte (malformed, duplicate-key and other
 // hand-written JSON); every other body value is JSON-encoded.
 type rawBody string
@@ -361,6 +392,16 @@ type rawBody string
 // error instead of failing the test, so goroutines (race tests) can use it:
 // t.Fatalf is only legal on the test's own goroutine.
 func (f e2eFixture) tryDo(ctx context.Context, method, path, token string, body any, headers map[string]string) (httpResp, error) {
+	// A save of permission overrides must carry the overrides_version of the read
+	// it was made from. A typed body that names none is sent the way a client
+	// sends it: read the user as the SAME caller (same token, same headers), then
+	// save with the version that read returned. A test that means to send a
+	// particular version (a stale one, none at all) sets the field or sends a map
+	// or a rawBody, which are never touched.
+	if req, ok := body.(ports.ReplaceUserPermissionOverridesRequest); ok && req.OverridesVersion == "" && method == http.MethodPatch {
+		req.OverridesVersion = f.readOverridesVersion(ctx, path, token, headers)
+		body = req
+	}
 	var buf io.Reader
 	switch b := body.(type) {
 	case nil:

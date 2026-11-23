@@ -63,7 +63,7 @@ func TestReplaceUserPermissionOverrides_RejectsUnknownPermission(t *testing.T) {
 	w := newAuthzWorld(t)
 	target := w.member(t)
 	err := w.handlers().override.Handle(t.Context(), command.ReplaceUserPermissionOverridesCommand{
-		TenantID: awTenant, MembershipID: target.ID(), GrantedNames: []string{"not.a.permission"}, Actor: w.adminActor(t),
+		TenantID: awTenant, MembershipID: target.ID(), OverridesVersion: w.ver(t, target), GrantedNames: []string{"not.a.permission"}, Actor: w.adminActor(t),
 	})
 	if !errors.Is(err, command.ErrPermissionUnknown) {
 		t.Fatalf("err = %v, want ErrPermissionUnknown", err)
@@ -75,7 +75,7 @@ func TestReplaceUserPermissionOverrides_GrantsAndRevokes_BothApplied(t *testing.
 	w := newAuthzWorld(t)
 	target := w.member(t)
 	if err := w.handlers().override.Handle(t.Context(), command.ReplaceUserPermissionOverridesCommand{
-		TenantID: awTenant, MembershipID: target.ID(), Actor: w.adminActor(t),
+		TenantID: awTenant, MembershipID: target.ID(), OverridesVersion: w.ver(t, target), Actor: w.adminActor(t),
 		// owner ruling 2026-11-21: identity.users.create is admin-tier-only, so this member (no role) is given another name.
 		GrantedNames: []string{permission.IdentityPermissions.Tenants.View, permission.IdentityPermissions.Crm.Leads.Read},
 		RevokedNames: []string{permission.IdentityPermissions.Users.Unlock, permission.IdentityPermissions.Roles.Delete},
@@ -170,7 +170,7 @@ func TestReplaceUserPermissionOverrides_RevokedDuplicatesStoredOnce(t *testing.T
 	target := w.member(t)
 	n := permission.IdentityPermissions.Users.Unlock
 	if err := w.handlers().override.Handle(t.Context(), command.ReplaceUserPermissionOverridesCommand{
-		TenantID: awTenant, MembershipID: target.ID(), Actor: w.adminActor(t), RevokedNames: []string{n, n, n},
+		TenantID: awTenant, MembershipID: target.ID(), OverridesVersion: w.ver(t, target), Actor: w.adminActor(t), RevokedNames: []string{n, n, n},
 	}); err != nil {
 		t.Fatalf("Handle: %v", err)
 	}
@@ -188,7 +188,7 @@ func TestReplaceUserPermissionOverrides_NameInBothListsIsAFieldError(t *testing.
 	target := w.member(t)
 	n := permission.IdentityPermissions.Users.Unlock
 	err := w.handlers().override.Handle(t.Context(), command.ReplaceUserPermissionOverridesCommand{
-		TenantID: awTenant, MembershipID: target.ID(), Actor: w.adminActor(t), GrantedNames: []string{n}, RevokedNames: []string{n},
+		TenantID: awTenant, MembershipID: target.ID(), OverridesVersion: w.ver(t, target), Actor: w.adminActor(t), GrantedNames: []string{n}, RevokedNames: []string{n},
 	})
 	if !errors.Is(err, command.ErrOverridesConflict) {
 		t.Fatalf("err = %v, want ErrOverridesConflict", err)

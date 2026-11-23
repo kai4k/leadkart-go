@@ -94,7 +94,7 @@ func TestE2E_C1_UserReadReturnsOverridesAndASaveCannotErase(t *testing.T) {
 	// the form's save: what the read returned, by name, plus fields the route does not have
 	for _, body := range []any{
 		ports.ReplaceUserPermissionOverridesRequest{Granted: names(ov), Revoked: ov.Revoked},
-		rawBody(fmt.Sprintf(`{"granted":%s,"revoked":[%q],"expires_at":"2099-01-01T00:00:00Z"}`, jsonList(names(ov)), p.Tasks.WorkItems.Manage)),
+		rawBody(fmt.Sprintf(`{"granted":%s,"revoked":[%q],"overrides_version":%q,"expires_at":"2099-01-01T00:00:00Z"}`, jsonList(names(ov)), p.Tasks.WorkItems.Manage, f.overridesVersion(t, own, exec))),
 	} {
 		if r := f.authedJSON(t, http.MethodPatch, path, own, body); r.status != http.StatusNoContent {
 			t.Fatalf("re-send: %d %s", r.status, r.body)

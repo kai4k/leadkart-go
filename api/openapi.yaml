@@ -111,7 +111,7 @@ info:
     user; lower is more senior). ADR 0036 / ADR 0068 / ADR 0069. State conflicts
     on the membership, role and person commands are `409`: `last_owner_protected`,
     `owner_protected`, `member_roles_inconsistent`, `role_system_default`,
-    `role_in_use`, `person_memberships_changing`, `person_active_elsewhere`; input the policy refuses is `422`:
+    `role_in_use`, `person_memberships_changing`, `person_active_elsewhere`, `overrides_changed`; input the policy refuses is `422`:
     `manager_not_eligible`, `role_parent_not_eligible`,
     `role_level_breaks_reporting`, `permission_not_requestable`. In `x-required-permissions`, the token `self`
     is not a permission: it means "the caller's own membership" (the path
@@ -1103,6 +1103,8 @@ paths:
         Requires `identity.users.view` or self (path id equals the caller's membership) (satisfied by `tenant.admin` in the caller's own tenant, or by `platform.*` equivalents for platform operators; ADR 0068).
 
         `permission_overrides` (live grants with their expiry, and revoked names) is returned ONLY to a caller who holds `identity.users.update_permissions` AND may act on this member (strictly outranks them; owners on owners; super users and exempt platform operators); for every other caller the field is absent (never an error). It is what `PATCH .../permission-overrides` replaces, so a form seeds from it and re-sends what it does not mean to remove.
+
+        `overrides_version` is returned with `permission_overrides` (and is absent whenever that field is): an opaque token for exactly the live overrides in this response. It changes whenever the live set does, including at the instant a time-bound grant expires. `PATCH .../permission-overrides` requires it.
       x-required-permissions: [identity.users.view, self]
       parameters:
         - { $ref: '#/components/parameters/UserId' }
@@ -1242,7 +1244,11 @@ paths:
       tags: [users]
       summary: Replace user's granted + revoked permission overlays atomically
       description: |
-        Both arrays are required; empty arrays clear the corresponding overlay. This REPLACES the whole set: read the current one first from `GET /users/{userId}` (`permission_overrides`) and re-send what must stay. A name that is already a live grant and is re-sent keeps its existing expiry (a time-bound grant from an approved permission request stays time-bound and cannot be extended by re-sending it); every other granted name is permanent. Permission names
+        Both arrays are required; empty arrays clear the corresponding overlay. This REPLACES the whole set: read the current one first from `GET /users/{userId}` (`permission_overrides`) and re-send what must stay. A name that is already a live grant and is re-sent keeps its existing expiry (a time-bound grant from an approved permission request stays time-bound and cannot be extended by re-sending it); every other granted name is permanent.
+
+        **Precondition.** `overrides_version` is required: send the value `GET /users/{userId}` returned with the overrides the form was opened on. The save is applied only while the member's live overrides still have that version, decided inside the transaction that holds the tenant's authority lock. When they do not (a time-bound grant has expired since, a permission request was approved, another admin saved, or this same form was already saved once) the answer is `409 overrides_changed` and NOTHING is written: read the user again and repeat the change on what is there now. Without it a re-sent name whose time-bound grant had expired would become a permanent grant, and a grant approved after the form opened would be erased. A caller who may not act on the member is refused by rank (`403`) whatever version is sent. A missing, `null` or blank `overrides_version` is `400 invalid_body` with `errors.overrides_version: ["required"]`. A retry of the SAME request with the same `X-Command-Id` is answered from the stored reply, not re-decided.
+
+        Permission names
         MUST match the closed `permission.IdentityPermissions` catalogue;
         unknown names surface as 422 (`permission_unknown`). A name listed twice in one array is stored once; a name present in BOTH arrays is a 422 `validation_failed` with `errors{revoked: ["also_granted"]}` (compare your own two arrays to find the names).
         Requires `identity.users.update_permissions` (satisfied by `tenant.admin` in the caller's own tenant, or by `platform.*` equivalents for platform operators; ADR 0068). Self-target forbidden (`self_modification_forbidden`). The caller must strictly outrank the target member (`insufficient_rank`; owners may act on owners; super users and exempt platform operators are exempt), decided inside the transaction that holds the tenant's authority lock (ADR 0069). Conferring a permission the caller does not hold is rejected with `grant_exceeds_authority`.
@@ -1262,7 +1268,7 @@ paths:
         '400': { $ref: '#/components/responses/BadRequest' }
         '403': { $ref: '#/components/responses/AuthorityForbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
-        '409': { description: "`owner_protected` — tenant.admin cannot be revoked from an owner; `member_roles_inconsistent` — the member's assigned roles cannot be loaded as this tenant's roles, so its rank cannot be decided; nothing was changed (an assignment row written outside the commands, e.g. an operator repair or a restored backup, pointing at a role of another tenant)", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+        '409': { description: "`overrides_changed` — the member's live overrides are no longer the ones `overrides_version` names (a time-bound grant expired, a request was approved, or someone else saved after the form was opened); nothing was changed, read the user again; `owner_protected` — tenant.admin cannot be revoked from an owner; `member_roles_inconsistent` — the member's assigned roles cannot be loaded as this tenant's roles, so its rank cannot be decided; nothing was changed (an assignment row written outside the commands, e.g. an operator repair or a restored backup, pointing at a role of another tenant)", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
         '422': { $ref: '#/components/responses/Unprocessable' }
 
   /api/v1/users/{userId}/manager:
@@ -5087,11 +5093,14 @@ components:
           type: array
           items: { type: string, format: uuid }
         permission_overrides: { $ref: '#/components/schemas/UserPermissionOverridesDto' }
+        overrides_version:
+          type: string
+          description: Opaque token for the live overrides in `permission_overrides`; present exactly when that field is. Send it back as `overrides_version` in `PATCH .../permission-overrides`. Do not parse or build it.
 
     UserPermissionOverridesDto:
       type: object
       description: |
-        A member's live permission overrides. Present on `GET /users/{userId}` only, and only for a caller who may change them. `granted` lists the grants not yet expired; `revoked` the names taken away. Re-sending a time-bound grant by name in `PATCH .../permission-overrides` keeps its expiry; the request has no way to extend it.
+        A member's live permission overrides. Present on `GET /users/{userId}` only, and only for a caller who may change them. `granted` lists the grants not yet expired; `revoked` the names taken away. Re-sending a time-bound grant by name in `PATCH .../permission-overrides` keeps its expiry; the request has no way to extend it. The `overrides_version` beside this field on the user names exactly this state; a save must send it back.
       required: [granted, revoked]
       properties:
         granted:
@@ -5188,8 +5197,8 @@ components:
 
     ReplaceUserPermissionOverridesRequest:
       type: object
-      description: Atomic replace of both overlays. Both arrays are required (an empty array clears that overlay, `null` is not accepted); a body that omits one is 400 `invalid_body` and nothing is changed.
-      required: [granted, revoked]
+      description: Atomic replace of both overlays. Every field is required (an empty array clears that overlay, `null` is not accepted); a body that omits one is 400 `invalid_body` and nothing is changed.
+      required: [granted, revoked, overrides_version]
       properties:
         granted:
           type: array
@@ -5197,6 +5206,10 @@ components:
         revoked:
           type: array
           items: { type: string }
+        overrides_version:
+          type: string
+          minLength: 1
+          description: The `overrides_version` that `GET /users/{userId}` returned with the overrides this save was made from. The save answers 409 `overrides_changed` when the member's live overrides no longer have it.
 
     # ===== Roles =======================================================
     RoleDto:

@@ -177,7 +177,7 @@ func TestE2E_Impersonation_CannotChangeTheTenantsOwnership(t *testing.T) {
 		t.Fatalf("assign Company Owner under a session: %d %s; want 403", r.status, r.body)
 	}
 	r = f.authedJSON(t, http.MethodPatch, "/api/v1/users/"+member.membershipID+"/permission-overrides", sess.AccessToken,
-		map[string]any{"granted": []string{permission.IdentityPermissions.Meta.TenantAdmin}, "revoked": []string{}})
+		ports.ReplaceUserPermissionOverridesRequest{Granted: []string{permission.IdentityPermissions.Meta.TenantAdmin}, Revoked: []string{}})
 	if r.status != http.StatusForbidden {
 		t.Fatalf("grant tenant.admin under a session: %d %s; want 403", r.status, r.body)
 	}

@@ -288,6 +288,13 @@ const (
 	// 409 surface.
 	ErrCodePersonActiveElsewhere = "person_active_elsewhere"
 
+	// ErrCodeOverridesChanged — a replace-permission-overrides save carried an
+	// overrides_version that is not the version of the member's live overrides:
+	// a time-bound grant expired, a request was approved or someone else saved
+	// after the form was opened. Nothing was changed; the client reads the user
+	// again. 409 surface.
+	ErrCodeOverridesChanged = "overrides_changed"
+
 	// ErrCodePermissionUnknown — replace-permission-overrides request
 	// carried a permission name not in [permission.IdentityPermissions].
 	// 422 surface; offending name in message body.

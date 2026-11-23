@@ -261,7 +261,7 @@ func TestE2E_Impersonation_IdentityWritesNeverAnswer500(t *testing.T) {
 		{"assign role", http.MethodPost, "/api/v1/users/" + m + "/roles", map[string]any{"role_id": otherID}},
 		{"assign manager", http.MethodPut, "/api/v1/users/" + m + "/manager", map[string]any{"manager_id": otherID}},
 		{"remove manager", http.MethodDelete, "/api/v1/users/" + m + "/manager", nil},
-		{"overrides", http.MethodPatch, "/api/v1/users/" + m + "/permission-overrides", map[string]any{"granted": []string{}, "revoked": []string{}}},
+		{"overrides", http.MethodPatch, "/api/v1/users/" + m + "/permission-overrides", ports.ReplaceUserPermissionOverridesRequest{Granted: []string{}, Revoked: []string{}}},
 		{"permission request", http.MethodPost, "/api/v1/permission-requests", ports.CreatePermissionRequestRequest{Permission: "crm.leads.read", DurationDays: 1, Reason: "sweep"}},
 		{"tenant profile", http.MethodPatch, "/api/v1/tenants/" + tenantA.TenantID + "/profile", ports.UpdateTenantProfileRequest{LegalName: "L", DisplayName: "D"}},
 		{"change password", http.MethodPost, "/api/v1/auth/change-password", map[string]any{"current_password": "x", "new_password": "Y-new-pass-2026!x"}},

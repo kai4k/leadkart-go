@@ -21,6 +21,12 @@ const callerMembershipID = membership.ID("99999999-9999-9999-9999-999999999999")
 // grant, a time-bound grant, an expired grant and a revocation.
 func overridesWorld(t *testing.T) (query.GetUserOverridesHandler, time.Time) {
 	t.Helper()
+	return overridesWorldAt(t, func() time.Time { return testNow })
+}
+
+// overridesWorldAt is [overridesWorld] read at the given clock.
+func overridesWorldAt(t *testing.T, now func() time.Time) (query.GetUserOverridesHandler, time.Time) {
+	t.Helper()
 	p := newPerson(t)
 	m := newMembership(t, testMembershipID, p.ID(), testTenantID)
 	r := newRole(t, testRoleID, testTenantID, "Executive")
@@ -48,7 +54,7 @@ func overridesWorld(t *testing.T) (query.GetUserOverridesHandler, time.Time) {
 	if err := persons.Add(t.Context(), p); err != nil {
 		t.Fatal(err)
 	}
-	return query.NewGetUserOverridesHandler(mems, roles, persons, func() time.Time { return testNow }), expiry
+	return query.NewGetUserOverridesHandler(mems, roles, persons, now), expiry
 }
 
 func actorOfRank(t *testing.T, id membership.ID, rank int, super bool) authority.Actor {
@@ -76,6 +82,11 @@ func TestGetUserOverrides_SeniorCallerSeesLiveOverridesWithExpiry(t *testing.T) 
 			{Name: id.Tasks.WorkItems.Read},
 		},
 		Revoked: []string{id.Roles.View},
+		// the version of exactly the live set shown: what a save must send back
+		Version: authority.Overrides{
+			Granted: []authority.Override{{Name: id.Tasks.WorkItems.Read}, {Name: id.Tasks.WorkItems.Manage, ExpiresAt: expiry}},
+			Revoked: []string{id.Roles.View},
+		}.Version(),
 	}
 	if d := cmp.Diff(want, got); d != "" {
 		t.Errorf("overrides (-want +got): %s (an expired grant must not be listed; a permanent grant has a zero expiry)", d)
@@ -109,10 +120,36 @@ func TestGetUserOverrides_CallersWhoMayNotChangeThemSeeNothing(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Handle: %v, want no error (absent, not refused)", err)
 			}
-			if got.Visible || len(got.Granted) != 0 || len(got.Revoked) != 0 {
+			if got.Visible || len(got.Granted) != 0 || len(got.Revoked) != 0 || got.Version != "" {
 				t.Errorf("a caller who may not change the overrides got %+v", got)
 			}
 		})
+	}
+}
+
+// The version is of the LIVE set, so it changes the moment a time-bound grant
+// expires: a form opened before the expiry cannot be saved after it.
+func TestGetUserOverrides_TheVersionChangesWhenAGrantExpires(t *testing.T) {
+	t.Parallel()
+	read := func(at time.Time) query.UserOverridesView {
+		h, _ := overridesWorldAt(t, func() time.Time { return at })
+		got, err := h.Handle(t.Context(), query.GetUserOverridesQuery{
+			TenantID: testTenantID, MembershipID: testMembershipID, Actor: actorOfRank(t, callerMembershipID, 10, false)})
+		if err != nil || !got.Visible {
+			t.Fatalf("Handle at %v = %v, visible=%v", at, err, got.Visible)
+		}
+		return got
+	}
+	before, stillBefore := read(testNow), read(testNow.Add(71*time.Hour))
+	after := read(testNow.Add(72 * time.Hour)) // the instant of expiry is expired
+	if before.Version == "" || before.Version != stillBefore.Version {
+		t.Errorf("versions %q and %q while nothing changed, want the same non-empty version", before.Version, stillBefore.Version)
+	}
+	if after.Version == before.Version {
+		t.Errorf("the version is still %q after the time-bound grant expired (granted now %+v)", after.Version, after.Granted)
+	}
+	if len(after.Granted) != 1 {
+		t.Errorf("granted after the expiry = %+v, want only the permanent grant", after.Granted)
 	}
 }
 

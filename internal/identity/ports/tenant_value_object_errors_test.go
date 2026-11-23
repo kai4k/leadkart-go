@@ -107,7 +107,7 @@ func assertNoSentence(t *testing.T, errs map[string][]string) {
 func TestUserPermissionOverrides_ConflictIsACode(t *testing.T) {
 	t.Parallel()
 	pm := permission.IdentityPermissions
-	body := `{"granted":["` + pm.Roles.Update + `"],"revoked":["` + pm.Roles.Update + `"]}`
+	body := `{"granted":["` + pm.Roles.Update + `"],"revoked":["` + pm.Roles.Update + `"],"overrides_version":"x"}`
 	rec := azServeApp(t, selfTargetApp(t), bodyAdminClaims(pm.Meta.TenantAdmin), "PATCH",
 		"/api/v1/users/"+azOther+"/permission-overrides", body)
 	if rec.Code != http.StatusUnprocessableEntity {

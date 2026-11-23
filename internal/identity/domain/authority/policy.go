@@ -1,8 +1,11 @@
 package authority
 
 import (
+	"crypto/sha256"
+	"encoding/base64"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -342,6 +345,39 @@ func (o Overrides) Equal(other Overrides) bool {
 	}
 	return true
 }
+
+// Version is an opaque fingerprint of this override state: equal for two states
+// exactly when they are the same set ([Overrides.Equal]), whatever the order and
+// however often a name is listed. It is the precondition of a replace: the read
+// hands it out with the LIVE overrides, the save sends it back, and a save whose
+// version no longer matches the live state (a grant expired, an approval landed,
+// someone else saved) is refused instead of applied. It is never empty, so an
+// absent version can never match, and it carries no permission name.
+func (o Overrides) Version() string {
+	// One line per entry: a grant is "name"@expiry, a revocation is "name". The
+	// name is quoted, so no name can imitate a separator, an expiry or a second
+	// entry, and a grant can never read as a revocation.
+	entries := make([]string, 0, len(o.Granted)+len(o.Revoked))
+	for _, g := range o.Granted {
+		// The expiry at the precision the column stores (microseconds), so the same
+		// stored row gives the same version however it was loaded.
+		exp := "permanent"
+		if !g.ExpiresAt.IsZero() {
+			exp = strconv.FormatInt(g.ExpiresAt.UnixMicro(), 10)
+		}
+		entries = append(entries, strconv.Quote(g.Name)+"@"+exp)
+	}
+	for _, n := range o.Revoked {
+		entries = append(entries, strconv.Quote(n))
+	}
+	slices.Sort(entries)
+	sum := sha256.Sum256([]byte(strings.Join(slices.Compact(entries), "\n")))
+	return overridesVersionPrefix + base64.RawURLEncoding.EncodeToString(sum[:18])
+}
+
+// overridesVersionPrefix names the fingerprint's format, so a later change of
+// the recipe makes every outstanding version a mismatch instead of a collision.
+const overridesVersionPrefix = "ov1-"
 
 // mayUnrevoke - H3: an explicit revoke is a deliberate denial, so taking a name
 // OFF a member's revoked list (by an overrides change or by approving a

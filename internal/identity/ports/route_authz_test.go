@@ -146,7 +146,7 @@ func TestRouteAuthz_SelfServiceAndSelfTarget(t *testing.T) {
 	for _, rt := range []struct{ method, path, body string }{
 		{"POST", u + "/deactivate", `{"reason":"self lockout attempt"}`}, {"POST", u + "/reactivate", ""},
 		{"POST", u + "/roles", `{"role_id":"` + azRole + `"}`},
-		{"DELETE", u + "/roles/" + azRole, ""}, {"PATCH", u + "/permission-overrides", `{"granted":[],"revoked":[]}`},
+		{"DELETE", u + "/roles/" + azRole, ""}, {"PATCH", u + "/permission-overrides", `{"granted":[],"revoked":[],"overrides_version":"x"}`},
 		{"PUT", u + "/manager", manager}, {"DELETE", u + "/manager", ""},
 	} {
 		rec := azServeApp(t, a, bodyAdminClaims(p.Meta.TenantAdmin), rt.method, rt.path, rt.body)
@@ -208,6 +208,8 @@ func selfTargetApp(t *testing.T) app.Application {
 	a.Commands.ReplaceRolePermissions = command.NewReplaceRolePermissionsHandler(inlineUoW{}, bodyLock{}, mems, roles, bodyPersons{}, now)
 	a.Commands.GrantRolePermission = command.NewGrantRolePermissionHandler(inlineUoW{}, bodyLock{}, mems, roles, bodyPersons{}, now)
 	a.Commands.RevokeRolePermission = command.NewRevokeRolePermissionHandler(inlineUoW{}, bodyLock{}, mems, roles, bodyPersons{}, now)
+	a.Queries.GetUser = query.NewGetUserHandler(mems, bodyPersons{})
+	a.Queries.GetUserOverrides = query.NewGetUserOverridesHandler(mems, roles, bodyPersons{}, now)
 	return a
 }
 

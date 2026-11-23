@@ -41,7 +41,7 @@ func freshCases() []freshCase {
 		}},
 		{"replace overrides", func(t *testing.T, w *authzWorld, a authority.Actor) (func() bool, error) {
 			target := w.member(t, w.exec)
-			err := w.handlers().override.Handle(t.Context(), command.ReplaceUserPermissionOverridesCommand{TenantID: awTenant, MembershipID: target.ID(),
+			err := w.handlers().override.Handle(t.Context(), command.ReplaceUserPermissionOverridesCommand{TenantID: awTenant, MembershipID: target.ID(), OverridesVersion: w.ver(t, target),
 				GrantedNames: []string{p.Crm.Leads.Read}, Actor: a})
 			return func() bool { return len(target.GrantedPermissions()) > 0 }, err
 		}},
@@ -163,13 +163,13 @@ func TestReplaceOverrides_APermissionRevokedSinceTheTokenCannotBeConferred(t *te
 		RevokedPermissions: []*permission.Permission{permission.FromConstant(p.Users.View)}})
 	target := w.member(t, w.exec)
 	actor := actorAs(t, mgr.ID(), authority.RankManager, p.Users.UpdatePermissions, p.Users.View)
-	err := w.handlers().override.Handle(t.Context(), command.ReplaceUserPermissionOverridesCommand{TenantID: awTenant, MembershipID: target.ID(),
+	err := w.handlers().override.Handle(t.Context(), command.ReplaceUserPermissionOverridesCommand{TenantID: awTenant, MembershipID: target.ID(), OverridesVersion: w.ver(t, target),
 		GrantedNames: []string{p.Users.View}, Actor: actor})
 	if !isErr(err, authority.ErrGrantExceedsAuthority) {
 		t.Fatalf("err = %v, want ErrGrantExceedsAuthority", err)
 	}
 	// A permission the stored facts still grant is conferrable.
-	if err := w.handlers().override.Handle(t.Context(), command.ReplaceUserPermissionOverridesCommand{TenantID: awTenant, MembershipID: target.ID(),
+	if err := w.handlers().override.Handle(t.Context(), command.ReplaceUserPermissionOverridesCommand{TenantID: awTenant, MembershipID: target.ID(), OverridesVersion: w.ver(t, target),
 		GrantedNames: []string{p.Crm.Leads.Read}, Actor: actorAs(t, mgr.ID(), authority.RankManager, p.Users.UpdatePermissions, p.Crm.Leads.Read)}); err != nil {
 		t.Fatalf("conferring a held permission: %v", err)
 	}
@@ -245,7 +245,7 @@ func TestAuthorityCommands_RotateTheTargetsStampOnlyWhenSomethingChanged(t *test
 	assign := command.AssignUserRoleCommand{TenantID: awTenant, MembershipID: target.ID(), RoleID: w.exec.ID(), Actor: admin}
 	step("assign", h.assign.Handle(ctx, assign), "role_assigned")
 	step("assign again (idempotent)", h.assign.Handle(ctx, assign))
-	step("overrides", h.override.Handle(ctx, command.ReplaceUserPermissionOverridesCommand{TenantID: awTenant, MembershipID: target.ID(),
+	step("overrides", h.override.Handle(ctx, command.ReplaceUserPermissionOverridesCommand{TenantID: awTenant, MembershipID: target.ID(), OverridesVersion: w.ver(t, target),
 		GrantedNames: []string{permission.IdentityPermissions.Crm.Leads.Read}, Actor: admin}), "overrides_replaced")
 	step("set manager", h.setMgr.Handle(ctx, command.AssignUserManagerCommand{TenantID: awTenant, MembershipID: target.ID(), ManagerID: mgr.ID(), Actor: admin}))
 	step("clear manager", h.clearMgr.Handle(ctx, command.RemoveUserManagerCommand{TenantID: awTenant, MembershipID: target.ID(), Actor: admin}))
@@ -536,7 +536,7 @@ func TestReplaceOverrides_AnUnchangedSaveWritesNothingAndRotatesNothing(t *testi
 	actor := actorAs(t, admin.ID(), authority.RankAdmin, tenantAdminEffective()...)
 	target := w.member(t, w.exec)
 	save := func(granted, revoked []string) error {
-		return w.handlers().override.Handle(t.Context(), command.ReplaceUserPermissionOverridesCommand{TenantID: awTenant, MembershipID: target.ID(),
+		return w.handlers().override.Handle(t.Context(), command.ReplaceUserPermissionOverridesCommand{TenantID: awTenant, MembershipID: target.ID(), OverridesVersion: w.ver(t, target),
 			GrantedNames: granted, RevokedNames: revoked, Actor: actor})
 	}
 	if err := save([]string{p.Crm.Leads.Read, p.Crm.Leads.Assign}, []string{p.Inventory.Stock.Read}); err != nil {
@@ -561,7 +561,7 @@ func TestReplaceOverrides_AnUnchangedSaveWritesNothingAndRotatesNothing(t *testi
 	}
 	// An empty change on an empty member is a no-op as well.
 	fresh := w.member(t, w.exec)
-	if err := w.handlers().override.Handle(t.Context(), command.ReplaceUserPermissionOverridesCommand{TenantID: awTenant, MembershipID: fresh.ID(), Actor: actor}); err != nil || len(w.rotations) != 2 {
+	if err := w.handlers().override.Handle(t.Context(), command.ReplaceUserPermissionOverridesCommand{TenantID: awTenant, MembershipID: fresh.ID(), OverridesVersion: w.ver(t, fresh), Actor: actor}); err != nil || len(w.rotations) != 2 {
 		t.Fatalf("empty save on an empty member: err %v, rotations %d, want no rotation", err, len(w.rotations))
 	}
 }

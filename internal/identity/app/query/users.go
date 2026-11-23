@@ -273,6 +273,10 @@ type UserOverridesView struct {
 	Visible bool
 	Granted []OverrideView
 	Revoked []string
+	// Version is the [authority.Overrides.Version] of exactly the live set above,
+	// at the instant of this read. A replace-overrides save sends it back and is
+	// applied only while the live set still has it. Empty when not Visible.
+	Version string
 }
 
 // GetUserOverridesQuery asks for one member's overrides on behalf of Actor.
@@ -351,7 +355,7 @@ func (h GetUserOverridesHandler) Handle(ctx context.Context, q GetUserOverridesQ
 		return UserOverridesView{}, nil
 	}
 	live := target.Overrides()
-	out := UserOverridesView{Granted: make([]OverrideView, 0, len(live.Granted)), Revoked: slices.Clone(live.Revoked)}
+	out := UserOverridesView{Granted: make([]OverrideView, 0, len(live.Granted)), Revoked: slices.Clone(live.Revoked), Version: live.Version()}
 	for _, g := range live.Granted {
 		out.Granted = append(out.Granted, OverrideView{Name: g.Name, ExpiresAt: g.ExpiresAt.UTC()})
 	}

@@ -174,9 +174,20 @@ type ReplaceUserPermissionOverridesCommand struct {
 	MembershipID membership.ID
 	GrantedNames []string
 	RevokedNames []string
+	// OverridesVersion is the [authority.Overrides.Version] of the live overrides
+	// the caller's form was opened on (the single-user read hands it out). The
+	// save is applied only while the live overrides still have that version.
+	OverridesVersion string
 	// Actor is built once by the port via authn.AuthorityFrom; the zero value denies.
 	Actor authority.Actor
 }
+
+// ErrOverridesChanged surfaces when the member's live overrides are no longer
+// the ones the save was made from (its OverridesVersion does not match): a
+// time-bound grant expired, a request was approved, or someone else saved.
+// Nothing is written. Wire shape: 409 overrides_changed; the client reads the
+// member again and the admin repeats the change on what is there now.
+var ErrOverridesChanged = errors.New("user: the permission overrides changed since they were read")
 
 // ErrPermissionUnknown surfaces when a permission name in the request
 // doesn't match the closed [permission.IdentityPermissions] catalogue.
@@ -237,6 +248,22 @@ func (h ReplaceUserPermissionOverridesHandler) Handle(ctx context.Context, cmd R
 	}
 	now := h.w.now()
 	upErr := h.w.updateMember(ctx, cmd.TenantID, cmd.MembershipID, cmd.Actor, now, func(ctx context.Context, actor authority.Actor, m *membership.Membership, target authority.Member) error {
+		// Authority first: a caller who may not act on this member is refused by
+		// rank whatever version they sent, so the answer never says whether a
+		// guessed version matched.
+		if err := actor.MayActOn(target); err != nil {
+			return err
+		}
+		// The precondition, on the live overrides read under the tenant authority
+		// lock at this command's one clock reading: a save made from any other
+		// state (a grant has expired since, an approval landed, someone else saved)
+		// is refused whole. Without it a re-sent name whose time-bound grant had
+		// expired would be stored PERMANENT, and a grant approved after the form
+		// opened would be erased. The version is never empty, so no version matches
+		// nothing.
+		if target.Overrides().Version() != cmd.OverridesVersion {
+			return ErrOverridesChanged
+		}
 		after, approved := overridesAfter(target, granted, revoked)
 		if err := actor.MayChangeOverrides(target, after); err != nil {
 			return err

@@ -163,6 +163,8 @@ func TestAttack_Inputs_BodyGamesAreRefusedAndMoveNothing(t *testing.T) {
 	w := newAttackWorld(t)
 	norole, shell := w.mid(t, "norole"), w.roles[shellRoleName]
 	execRole, ownerRole := w.roles[role.SystemRoles.Tenant.SalesExecutive], w.roles[role.SystemRoles.Tenant.CompanyOwner]
+	// every overrides game carries the member's real overrides_version, so the game is the only thing wrong with it
+	ver := `,"overrides_version":"` + w.f.overridesVersion(t, w.tok(t, "admin"), norole) + `"}`
 	generic := []bodyGame{
 		{"empty body", ""}, {"object missing every key", `{}`}, {"null", `null`}, {"array", `[]`}, {"string", `"x"`}, {"number", `7`},
 		{"truncated", `{"role_id":`}, {"trailing garbage", `{"x":1} {"y":2}`},
@@ -176,9 +178,13 @@ func TestAttack_Inputs_BodyGamesAreRefusedAndMoveNothing(t *testing.T) {
 			bodyGame{"null role_id", `{"role_id":null}`}, bodyGame{"numeric role_id", `{"role_id":123}`}, bodyGame{"array role_id", `{"role_id":["` + execRole + `"]}`},
 			bodyGame{"empty role_id", `{"role_id":""}`}, bodyGame{"duplicate keys, the Company Owner role wins", `{"role_id":"` + execRole + `","role_id":"` + ownerRole + `"}`})},
 		{"overrides", http.MethodPatch, "/api/v1/users/" + norole + "/permission-overrides", append(slicesClone(generic),
-			bodyGame{"granted missing", `{"revoked":[]}`}, bodyGame{"revoked missing", `{"granted":[]}`}, bodyGame{"nulls", `{"granted":null,"revoked":null}`},
-			bodyGame{"string lists", `{"granted":"tenant.admin","revoked":[]}`}, bodyGame{"object entries with an expiry", `{"granted":[{"permission":"tenant.admin","expires_at":"2099-01-01T00:00:00Z"}],"revoked":[]}`},
-			bodyGame{"numeric entries", `{"granted":[1],"revoked":[]}`})},
+			bodyGame{"granted missing", `{"revoked":[]` + ver}, bodyGame{"revoked missing", `{"granted":[]` + ver}, bodyGame{"nulls", `{"granted":null,"revoked":null` + ver},
+			bodyGame{"string lists", `{"granted":"tenant.admin","revoked":[]` + ver}, bodyGame{"object entries with an expiry", `{"granted":[{"permission":"tenant.admin","expires_at":"2099-01-01T00:00:00Z"}],"revoked":[]` + ver},
+			bodyGame{"numeric entries", `{"granted":[1],"revoked":[]` + ver},
+			bodyGame{"version missing", `{"granted":[],"revoked":["tasks.work_items.read"]}`}, bodyGame{"version null", `{"granted":[],"revoked":["tasks.work_items.read"],"overrides_version":null}`},
+			bodyGame{"version empty", `{"granted":[],"revoked":["tasks.work_items.read"],"overrides_version":""}`}, bodyGame{"version numeric", `{"granted":[],"revoked":["tasks.work_items.read"],"overrides_version":5}`},
+			bodyGame{"version as a list", `{"granted":[],"revoked":["tasks.work_items.read"],"overrides_version":["` + strings.TrimSuffix(strings.TrimPrefix(ver, `,"overrides_version":"`), `"}`) + `"]}`},
+			bodyGame{"duplicate version keys, the real one first", `{"granted":[],"revoked":["tasks.work_items.read"]` + strings.TrimSuffix(ver, "}") + `,"overrides_version":"x"}`})},
 		{"set manager", http.MethodPut, "/api/v1/users/" + norole + "/manager", append(slicesClone(generic),
 			bodyGame{"null manager", `{"manager_id":null}`}, bodyGame{"empty manager", `{"manager_id":""}`}, bodyGame{"numeric manager", `{"manager_id":5}`})},
 		{"deactivate", http.MethodPost, "/api/v1/users/" + norole + "/deactivate", append(slicesClone(generic),
@@ -281,7 +287,7 @@ func TestAttack_Inputs_ExtraFieldsConferNothing(t *testing.T) {
 
 	// override with an expiry the route does not have: the grant must be permanent, nothing else changes
 	if r := f.authedJSON(t, http.MethodPatch, "/api/v1/users/"+norole+"/permission-overrides", adm, rawBody(fmt.Sprintf(
-		`{"granted":[%q],"revoked":[],"expires_at":"2000-01-01T00:00:00Z","tenant_id":%q}`, p.Tasks.WorkItems.Read, w.victim.TenantID))); r.status != http.StatusNoContent {
+		`{"granted":[%q],"revoked":[],"overrides_version":%q,"expires_at":"2000-01-01T00:00:00Z","tenant_id":%q}`, p.Tasks.WorkItems.Read, f.overridesVersion(t, adm, norole), w.victim.TenantID))); r.status != http.StatusNoContent {
 		t.Fatalf("overrides with extra fields: %d %s, want 204", r.status, r.body)
 	}
 	if ov := w.overridesOf(t, w.owner.TenantID, norole); !strings.Contains(ov, "granted=["+p.Tasks.WorkItems.Read+"@0001-01-01T00:00:00Z]") {
@@ -326,8 +332,8 @@ func TestAttack_Inputs_DuplicateGrantedNamesStillRemove(t *testing.T) {
 		Granted: []string{p.Tasks.WorkItems.Read, p.Tasks.WorkItems.Manage}, Revoked: []string{}}); r.status != http.StatusNoContent {
 		t.Fatalf("setup grant: %d %s", r.status, r.body)
 	}
-	if r := f.authedJSON(t, http.MethodPatch, path, adm, rawBody(fmt.Sprintf(`{"granted":[%q,%q],"revoked":[]}`,
-		p.Tasks.WorkItems.Read, p.Tasks.WorkItems.Read))); r.status != http.StatusNoContent {
+	if r := f.authedJSON(t, http.MethodPatch, path, adm, rawBody(fmt.Sprintf(`{"granted":[%q,%q],"revoked":[],"overrides_version":%q}`,
+		p.Tasks.WorkItems.Read, p.Tasks.WorkItems.Read, f.overridesVersion(t, adm, target)))); r.status != http.StatusNoContent {
 		t.Fatalf("duplicate-name save: %d %s, want 204", r.status, r.body)
 	}
 	ov := w.overridesOf(t, w.owner.TenantID, target)

@@ -100,15 +100,18 @@ func TestDecodeFullBody_RejectsNonObjectAndGarbage(t *testing.T) {
 
 func TestDecodeFullBody_EmptyArraysArePresent(t *testing.T) {
 	t.Parallel()
-	got, _, ok := decodeFull[ReplaceUserPermissionOverridesRequest](t, `{"granted":[],"revoked":[]}`)
+	got, _, ok := decodeFull[ReplaceUserPermissionOverridesRequest](t, `{"granted":[],"revoked":[],"overrides_version":"v"}`)
 	if !ok || len(got.Granted) != 0 {
 		t.Fatalf("empty arrays must be accepted (they clear the overlays): ok=%v %+v", ok, got)
 	}
-	if _, _, ok := decodeFull[ReplaceUserPermissionOverridesRequest](t, `{"granted":["a"]}`); ok {
+	if _, _, ok := decodeFull[ReplaceUserPermissionOverridesRequest](t, `{"granted":["a"],"overrides_version":"v"}`); ok {
 		t.Error("a missing `revoked` must be rejected, not treated as clear")
 	}
-	if _, _, ok := decodeFull[ReplaceUserPermissionOverridesRequest](t, `{"granted":null,"revoked":[]}`); ok {
+	if _, _, ok := decodeFull[ReplaceUserPermissionOverridesRequest](t, `{"granted":null,"revoked":[],"overrides_version":"v"}`); ok {
 		t.Error("null `granted` must be rejected")
+	}
+	if _, _, ok := decodeFull[ReplaceUserPermissionOverridesRequest](t, `{"granted":[],"revoked":[]}`); ok {
+		t.Error("a missing `overrides_version` must be rejected: a save without a precondition is the bug")
 	}
 }
 

@@ -274,6 +274,10 @@ type UserDto struct {
 	// PermissionOverrides is present on the single-user read GET /users/{id} only,
 	// and only for a caller who may change them; absent for everyone else.
 	PermissionOverrides *UserPermissionOverridesDto `json:"permission_overrides,omitzero"`
+	// OverridesVersion is present exactly when PermissionOverrides is: an opaque
+	// token for the live overrides returned beside it. PATCH .../permission-overrides
+	// must send it back and is applied only while the live overrides still have it.
+	OverridesVersion string `json:"overrides_version,omitzero"`
 }
 
 // ListUsersResponse — GET /api/v1/users. Keyset-paginated per ADR 0038.
@@ -308,10 +312,14 @@ type AssignUserRoleRequest struct {
 
 // ReplaceUserPermissionOverridesRequest — PATCH .../permission-overrides.
 // Atomic replace of both overlays; empty arrays clear them. Names must be
-// in [permission.IdentityPermissions]; unknown → 422.
+// in [permission.IdentityPermissions]; unknown → 422. OverridesVersion is the
+// overrides_version GET /users/{userId} returned with the overrides the form
+// was opened on: required, and the save answers 409 overrides_changed when the
+// member's live overrides no longer have it.
 type ReplaceUserPermissionOverridesRequest struct {
-	Granted []string `json:"granted"`
-	Revoked []string `json:"revoked"`
+	Granted          []string `json:"granted"`
+	Revoked          []string `json:"revoked"`
+	OverridesVersion string   `json:"overrides_version"`
 }
 
 // AssignUserManagerRequest — PUT /api/v1/users/{userId}/manager.

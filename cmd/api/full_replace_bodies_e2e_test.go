@@ -49,7 +49,7 @@ func TestE2E_FullReplaceBodies_OmittedFieldIsRejectedAndNothingChanges(t *testin
 		{"user profile", http.MethodPatch, "/api/v1/users/" + v.MembershipID + "/profile",
 			map[string]any{"designation": "Owner", "department": "Management", "status_message": "in the office"}, "department", "department"},
 		{"user permission overrides", http.MethodPatch, "/api/v1/users/" + memberID + "/permission-overrides",
-			map[string]any{"granted": []string{"identity.users.view"}, "revoked": []string{}}, "revoked", "revoked"},
+			map[string]any{"granted": []string{"identity.users.view"}, "revoked": []string{}, "overrides_version": f.overridesVersion(t, tok, memberID)}, "revoked", "revoked"},
 	}
 	for _, tc := range cases {
 		// The full body is accepted and stored.
