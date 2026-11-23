@@ -53,7 +53,11 @@ func invProductBody(sku string, extra map[string]any) map[string]any {
 // invCreateProduct creates a product and returns its id.
 func invCreateProduct(t *testing.T, f e2eFixture, tok, sku string, extra map[string]any) string {
 	t.Helper()
-	resp := f.authedJSON(t, http.MethodPost, "/api/v1/inventory/products", tok, invProductBody(sku, extra))
+	body := invProductBody(sku, extra)
+	if _, given := body["gst_rate_id"]; !given {
+		body["gst_rate_id"] = e2eRate(t, f, tok, 1800) // the form always names a rate of the company list
+	}
+	resp := f.authedJSON(t, http.MethodPost, "/api/v1/inventory/products", tok, body)
 	if resp.status != http.StatusCreated {
 		t.Fatalf("create product %s: status %d body %s", sku, resp.status, resp.body)
 	}
@@ -91,7 +95,7 @@ func TestE2E_Inventory_ProductFormFields(t *testing.T) {
 	f := newE2EFixture(t)
 	tok := f.registerAndLogin(t, "invform").AccessToken
 
-	// Sent on create, read back; the category's default GST rate applies.
+	// Sent on create, read back; the category never decides the GST rate.
 	id := invCreateProduct(t, f, tok, "FORM-1", map[string]any{
 		"product_category": "Nutraceuticals", "reorder_level": 50, "expiry_alert_threshold_days": 30,
 	})
@@ -164,8 +168,9 @@ func TestE2E_Inventory_ProductFormFields(t *testing.T) {
 	invWant(t, p, "product_category", "Diabetic")
 }
 
-// TestE2E_Inventory_ProductCategories: the form reads the categories and their
-// default GST rates from the server (the seeded reference table, unchanged).
+// TestE2E_Inventory_ProductCategories: the form reads the categories from the
+// server (the seeded reference table). A category carries no GST rate: the rate
+// comes from the company own list.
 func TestE2E_Inventory_ProductCategories(t *testing.T) {
 	f := newE2EFixture(t)
 	tok := f.registerAndLogin(t, "invcat").AccessToken
@@ -175,31 +180,21 @@ func TestE2E_Inventory_ProductCategories(t *testing.T) {
 		t.Fatalf("status %d body %s; want 200", resp.status, resp.body)
 	}
 	var out struct {
-		Items []struct {
-			Category          string `json:"category"`
-			DefaultGSTRateBps *int   `json:"default_gst_rate_bps"`
-		} `json:"items"`
+		Items []map[string]any `json:"items"`
 	}
 	if err := json.Unmarshal(resp.body, &out); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	want := map[string]int{
-		"General": 1200, "Gynaecology": 1200, "Paediatrics": 1200, "Diabetic": 1200, "Cardiac": 1200,
-		"Ortho": 1200, "Nephrology": 1200, "Ayurvedic": 1200, "Nutraceuticals": 1800,
-	}
-	if len(out.Items) != len(want) {
-		t.Fatalf("categories = %d, want %d: %s", len(out.Items), len(want), resp.body)
-	}
+	want := []string{"Ayurvedic", "Cardiac", "Diabetic", "General", "Gynaecology", "Nephrology", "Nutraceuticals", "Ortho", "Paediatrics"}
 	names := make([]string, 0, len(out.Items))
 	for _, it := range out.Items {
-		names = append(names, it.Category)
-		rate, ok := want[it.Category]
-		if !ok || it.DefaultGSTRateBps == nil || *it.DefaultGSTRateBps != rate {
-			t.Fatalf("category %q rate %v; want %d (seed unchanged): %s", it.Category, it.DefaultGSTRateBps, rate, resp.body)
+		names = append(names, it["category"].(string))
+		if _, has := it["default_gst_rate_bps"]; has {
+			t.Fatalf("a category must carry no GST rate (no default rate): %v", it)
 		}
 	}
-	if !slices.IsSorted(names) {
-		t.Fatalf("categories not in name order: %v", names)
+	if !slices.Equal(names, want) {
+		t.Fatalf("categories %v, want %v in name order", names, want)
 	}
 
 	// Without a token the list is not served.

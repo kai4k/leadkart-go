@@ -8,10 +8,16 @@ package main
 import (
 	"net/http"
 	"slices"
+	"strconv"
 	"testing"
 	"time"
 
+	"github.com/leadkart/leadkart-go/internal/common/commercepolicy"
 	"github.com/leadkart/leadkart-go/internal/common/expiry"
+	"github.com/leadkart/leadkart-go/internal/common/pg"
+	csports "github.com/leadkart/leadkart-go/internal/companysettings/ports"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
+	inventoryadapters "github.com/leadkart/leadkart-go/internal/inventory/adapters"
 )
 
 func invMove(t *testing.T, f e2eFixture, tok, batchID, kind string, qty int) httpResp {
@@ -116,4 +122,35 @@ func TestE2E_Inventory_ExpiryMonthBucketsQuarantineAndWriteOff(t *testing.T) {
 	pr = invGetProduct(t, f, tok, p)
 	invWant(t, pr, "stock_unsellable", 3)
 	invWant(t, pr, "stock_available", 6)
+}
+
+// e2eRate adds a rate to the company GST list (the company confirms it by name) and
+// returns its id: a product takes its rate ONLY from that list.
+func e2eRate(t *testing.T, f e2eFixture, tok string, bps int) string {
+	t.Helper()
+	r := f.authedJSON(t, http.MethodPost, csRates, tok, map[string]any{
+		"rate_bps": bps, "label": "GST " + time.Now().Format("150405.000000") + "-" + strconv.Itoa(bps), "confirmed_by": "A. Mehta (CA)",
+		"confirmed_on": "2026-10-30", "reason": "e2e fixture",
+	})
+	if r.status != http.StatusCreated {
+		t.Fatalf("add gst rate %d: %d %s", bps, r.status, r.body)
+	}
+	id, _ := invObj(t, r.body)["id"].(string)
+	syncInventoryReplica(t, f, tok)
+	return id
+}
+
+// syncInventoryReplica stores the company current policy version in the Inventory
+// replica, as the policy-changed subscriber does in production.
+func syncInventoryReplica(t *testing.T, f e2eFixture, tok string) {
+	t.Helper()
+	// In production the event stream (forwarder, router) carries the new policy version
+	// to the Inventory replica, which the product handlers read; the e2e fixtures run
+	// without that stream (it is proven in company_settings_replicas_e2e_test), so the
+	// helper stores the current version in the replica as the subscriber would.
+	cur := csDecode[csports.SettingsDto](t, f.authedJSON(t, http.MethodGet, csSettings, tok, nil), http.StatusOK)
+	replica := inventoryadapters.NewPolicyReplicaRepository(f.Pool, pg.NewTransactor(f.Pool))
+	if _, err := replica.StoreIfNewer(t.Context(), tenant.ID(cur.TenantID), commercepolicy.Versioned{Version: cur.Version, Policy: cur.Policy}); err != nil {
+		t.Fatalf("store the policy in the inventory replica: %v", err)
+	}
 }

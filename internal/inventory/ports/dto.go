@@ -19,18 +19,30 @@ import (
 // matches the domain's "empty manufacturer = absent" semantic without
 // the cross-talk per ADR 0061 amendment 1 (M5).
 type ProductDto struct {
-	ID           string    `json:"id"`
-	TenantID     string    `json:"tenant_id"`
-	SKU          string    `json:"sku"`
-	Name         string    `json:"name"`
-	DosageForm   string    `json:"dosage_form"`
-	PackSize     string    `json:"pack_size"`
-	HSNCode      string    `json:"hsn_code"`
-	GSTRateBps   int       `json:"gst_rate_bps"`
-	Manufacturer string    `json:"manufacturer,omitzero"`
-	IsActive     bool      `json:"is_active"`
-	CreatedAt    time.Time `json:"created_at"`
-	UpdatedAt    time.Time `json:"updated_at"`
+	ID           string `json:"id"`
+	TenantID     string `json:"tenant_id"`
+	SKU          string `json:"sku"`
+	Name         string `json:"name"`
+	DosageForm   string `json:"dosage_form"`
+	PackSize     string `json:"pack_size"`
+	HSNCode      string `json:"hsn_code"`
+	GSTRateBps   int    `json:"gst_rate_bps"`
+	Manufacturer string `json:"manufacturer,omitzero"`
+	IsActive     bool   `json:"is_active"`
+	// GSTRateID and GSTRateLabel name the entry of the company GST list the product
+	// uses (empty for a product that predates the list, or when the entry is gone).
+	GSTRateID            string `json:"gst_rate_id,omitzero"`
+	GSTRateLabel         string `json:"gst_rate_label,omitzero"`
+	DefaultSaleRatePaise int64  `json:"default_sale_rate_paise"`
+	GenericName          string `json:"generic_name,omitzero"`
+	Composition          string `json:"composition,omitzero"`
+	StorageCondition     string `json:"storage_condition,omitzero"`
+	// DrugSchedule is the class id (absent when the product carries none);
+	// DrugScheduleLabel is its current label in the company list.
+	DrugSchedule      string    `json:"drug_schedule,omitzero"`
+	DrugScheduleLabel string    `json:"drug_schedule_label,omitzero"`
+	CreatedAt         time.Time `json:"created_at"`
+	UpdatedAt         time.Time `json:"updated_at"`
 	// ProductCategory is never empty: a product stored without one reads "General".
 	ProductCategory string `json:"product_category"`
 	// ReorderLevel 0 means the low-stock alert is off for this product.
@@ -60,10 +72,21 @@ type CreateProductRequest struct {
 	DosageForm string `json:"dosage_form"`
 	PackSize   string `json:"pack_size"`
 	HSNCode    string `json:"hsn_code"`
-	// GSTRateBps is optional: absent takes the category default, an explicit
-	// 0 is stored as 0 (nil-rated medicines exist).
-	GSTRateBps   *int   `json:"gst_rate_bps,omitzero"`
+	// GSTRateID is REQUIRED: the entry of the company GST rate list (GET
+	// /company/gst-rates) the product uses. There is no default rate and no
+	// category fallback; the product takes that entry's rate.
+	GSTRateID    string `json:"gst_rate_id"`
 	Manufacturer string `json:"manufacturer,omitzero"`
+	// DefaultSaleRatePaise is the rate offered on a quotation line (absent or 0: none).
+	DefaultSaleRatePaise *int64 `json:"default_sale_rate_paise,omitzero"`
+	// GenericName, Composition and StorageCondition are optional free text.
+	GenericName      *string `json:"generic_name,omitzero"`
+	Composition      *string `json:"composition,omitzero"`
+	StorageCondition *string `json:"storage_condition,omitzero"`
+	// DrugSchedule is the id of a class of the company own list (GET
+	// /company/drug-schedule-classes). Nullable unless the company chose mode
+	// `required`; refused under mode `off`.
+	DrugSchedule *string `json:"drug_schedule,omitzero"`
 	// ProductCategory is optional: absent or blank is stored as "General".
 	ProductCategory *string `json:"product_category,omitzero"`
 	// ReorderLevel is optional: absent is 0 (no low-stock alert).
@@ -92,20 +115,26 @@ type CreateProductResponse struct {
 // decoder if a true null-clears semantic becomes required.
 type UpdateProductRequest struct {
 	Name         *string `json:"name,omitzero"`
-	GSTRateBps   *int    `json:"gst_rate_bps,omitzero"`
+	GSTRateID    *string `json:"gst_rate_id,omitzero"`
 	IsActive     *bool   `json:"is_active,omitzero"`
 	Manufacturer *string `json:"manufacturer,omitzero"`
+	// DefaultSaleRatePaise sets the rate offered on a quotation line (0 clears it).
+	DefaultSaleRatePaise *int64  `json:"default_sale_rate_paise,omitzero"`
+	GenericName          *string `json:"generic_name,omitzero"`
+	Composition          *string `json:"composition,omitzero"`
+	StorageCondition     *string `json:"storage_condition,omitzero"`
+	// DrugSchedule sets the class id; "" clears it.
+	DrugSchedule *string `json:"drug_schedule,omitzero"`
 	// ProductCategory: a blank value stores the default category "General".
 	ProductCategory          *string `json:"product_category,omitzero"`
 	ReorderLevel             *int    `json:"reorder_level,omitzero"`
 	ExpiryAlertThresholdDays *int    `json:"expiry_alert_threshold_days,omitzero"`
 }
 
-// ProductCategoryDto is one allowed product category with the GST rate a new
-// product in it takes when the request sends no rate.
+// ProductCategoryDto is one allowed product category. It carries no GST rate: a
+// product takes its rate from the company own GST list.
 type ProductCategoryDto struct {
-	Category          string `json:"category"`
-	DefaultGSTRateBps int    `json:"default_gst_rate_bps"`
+	Category string `json:"category"`
 }
 
 // ListProductCategoriesResponse — GET /api/v1/inventory/product-categories.

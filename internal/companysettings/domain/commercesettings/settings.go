@@ -179,7 +179,11 @@ type ChangeInput struct {
 	// decides them, the aggregate enforces them per changed key.
 	MayManage    bool
 	MayManageTax bool
-	Now          time.Time
+	// ScheduledProducts is how many products still carry a drug schedule class,
+	// read from Inventory by the caller; it only matters when the patch turns
+	// drug_schedule.mode off.
+	ScheduledProducts int64
+	Now               time.Time
 }
 
 // ChangeResult says whether the patch moved the version.
@@ -200,6 +204,10 @@ func (s *Settings) Change(in ChangeInput) (ChangeResult, error) {
 	}
 	if len(res.Changed) == 0 {
 		return ChangeResult{}, nil
+	}
+	if res.Policy.DrugSchedule.Mode == commercepolicy.DrugScheduleOff &&
+		s.policy.DrugSchedule.Mode != commercepolicy.DrugScheduleOff && in.ScheduledProducts > 0 {
+		return ChangeResult{}, commercepolicy.FieldErrors{"drug_schedule.mode": {CodeScheduleInUse}}.Err()
 	}
 	taxKeys, otherKeys := splitTaxKeys(res.Changed)
 	if len(taxKeys) > 0 && !in.MayManageTax {

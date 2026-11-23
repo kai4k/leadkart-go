@@ -21,8 +21,13 @@ type Commands struct {
 	ChangeSettings command.ChangeSettingsHandler
 	AddGSTRate     command.AddGSTRateHandler
 	UpdateGSTRate  command.UpdateGSTRateHandler
-	SeedSettings   command.SeedSettingsHandler
-	Republish      command.RepublishHandler
+
+	AddScheduleClass    command.AddScheduleClassHandler
+	RenameScheduleClass command.RenameScheduleClassHandler
+	RemoveScheduleClass command.RemoveScheduleClassHandler
+
+	SeedSettings command.SeedSettingsHandler
+	Republish    command.RepublishHandler
 }
 
 // Queries aggregates all companysettings query handlers.
@@ -30,4 +35,6 @@ type Queries struct {
 	GetSettings  query.GetSettingsHandler
 	ListHistory  query.ListHistoryHandler
 	ListGSTRates query.ListGSTRatesHandler
+
+	ListScheduleClasses query.ListScheduleClassesHandler
 }

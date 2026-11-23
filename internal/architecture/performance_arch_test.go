@@ -357,6 +357,7 @@ func TestArch_ListHandlersBoundedByPaginationShape(t *testing.T) {
 		"handleListImpersonationSessions": "active impersonation sessions bounded by in-memory store size",
 		// Bounded by per-tenant role count (small N + soft cap by domain).
 		// Bounded by domain: a company holds at most commercesettings.MaxGSTRates rates.
+		"handleListScheduleClasses":    "a company drug schedule class list is capped at commercepolicy.MaxScheduleClasses (ADR 0070); the list is part of the policy and read whole",
 		"handleListGSTRates":           "a company's GST rate list is capped at commercesettings.MaxGSTRates (ADR 0070); the list is part of the policy and read whole",
 		"handleListRoles":              "roles per tenant bounded by domain invariant (system + small custom set)",
 		"handleListAllTenants":         "platform list of tenants — paginated by HasMore/NextCursor response shape",

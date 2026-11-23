@@ -34,6 +34,9 @@ type Window struct {
 	OffsetMinutes int
 	// WarningDays is the company's expiry warning tiers (descending).
 	WarningDays []int
+	// Policy is the company policy the window was resolved from (the company lists
+	// the stock and product read models label ids from).
+	Policy commercepolicy.Policy
 	// MinSellable is the one SQL bound: a batch is sellable exactly when
 	// expiry_date >= MinSellable.
 	MinSellable time.Time
@@ -66,7 +69,7 @@ func FromPolicy(p commercepolicy.Policy, now time.Time) Window {
 	today := expiry.BusinessDay(now, off)
 	return Window{
 		Today: today, StopMonthsBefore: n, OffsetMinutes: off,
-		WarningDays: append([]int{}, p.Expiry.WarningDays...),
+		WarningDays: append([]int{}, p.Expiry.WarningDays...), Policy: p.Clone(),
 		MinSellable: expiry.MinSellableExpiry(today, n),
 	}
 }

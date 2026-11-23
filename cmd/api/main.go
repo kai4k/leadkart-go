@@ -949,8 +949,8 @@ func buildInventoryApp(pool *pgxpool.Pool, hybridCache *cache.HybridCache) inven
 
 	return inventoryapp.Application{
 		Commands: inventoryapp.Commands{
-			CreateProduct:    inventorycommand.NewCreateProductHandler(products, gstDefaults, time.Now, newProductID),
-			UpdateProduct:    inventorycommand.NewUpdateProductHandler(products, time.Now),
+			CreateProduct:    inventorycommand.NewCreateProductHandler(products, policyReplica, time.Now, newProductID),
+			UpdateProduct:    inventorycommand.NewUpdateProductHandler(products, policyReplica, time.Now),
 			DeleteProduct:    inventorycommand.NewDeleteProductHandler(products, batches, time.Now),
 			AddBatch:         inventorycommand.NewAddBatchHandler(tx, products, batches, movements, window, time.Now, newBatchID, newMovementID),
 			LogStockMovement: inventorycommand.NewLogStockMovementHandler(tx, batches, movements, window, time.Now, newMovementID),
@@ -963,6 +963,7 @@ func buildInventoryApp(pool *pgxpool.Pool, hybridCache *cache.HybridCache) inven
 			ListBatchMovementsPage: inventoryquery.NewListBatchMovementsPageHandler(movements),
 			FefoBatches:            inventoryquery.NewFefoBatchesHandler(batches, window),
 			ListProductCategories:  inventoryquery.NewListProductCategoriesHandler(inventoryadapters.NewProductCategoryReader(gstDefaults)),
+			ScheduleUsage:          inventoryquery.NewScheduleUsageHandler(inventoryadapters.NewScheduleUsageReader(pool, tx)),
 			GetPolicy:              inventoryquery.NewGetPolicyHandler(policyReplica),
 		},
 	}
@@ -1058,19 +1059,29 @@ func buildCompanySettingsApp(pool *pgxpool.Pool, now func() time.Time) companyse
 	repo := companysettingsadapters.NewSettingsRepository(pool, tx)
 	history := companysettingsadapters.NewSettingsHistoryReader(pool, tx)
 	newRateID := func() string { return ids.NewV7().String() }
+	// Inventory knows which drug schedule classes products carry; this module cannot read
+	// its schema, so the composition root binds the port to an Inventory query.
+	usage := scheduleUsageBridge{usage: inventoryquery.NewScheduleUsageHandler(inventoryadapters.NewScheduleUsageReader(pool, tx))}
 
 	return companysettingsapp.Application{
 		Commands: companysettingsapp.Commands{
-			ChangeSettings: companysettingscommand.NewChangeSettingsHandler(repo, now),
+			ChangeSettings: companysettingscommand.NewChangeSettingsHandler(repo, usage, now),
 			AddGSTRate:     companysettingscommand.NewAddGSTRateHandler(repo, now, newRateID),
 			UpdateGSTRate:  companysettingscommand.NewUpdateGSTRateHandler(repo, now),
-			SeedSettings:   companysettingscommand.NewSeedSettingsHandler(repo, now),
-			Republish:      companysettingscommand.NewRepublishHandler(repo, now),
+
+			AddScheduleClass:    companysettingscommand.NewAddScheduleClassHandler(repo, now, newRateID),
+			RenameScheduleClass: companysettingscommand.NewRenameScheduleClassHandler(repo, now),
+			RemoveScheduleClass: companysettingscommand.NewRemoveScheduleClassHandler(repo, usage, now),
+
+			SeedSettings: companysettingscommand.NewSeedSettingsHandler(repo, now),
+			Republish:    companysettingscommand.NewRepublishHandler(repo, now),
 		},
 		Queries: companysettingsapp.Queries{
 			GetSettings:  companysettingsquery.NewGetSettingsHandler(repo),
 			ListHistory:  companysettingsquery.NewListHistoryHandler(history),
 			ListGSTRates: companysettingsquery.NewListGSTRatesHandler(repo),
+
+			ListScheduleClasses: companysettingsquery.NewListScheduleClassesHandler(repo),
 		},
 	}
 }
@@ -1164,4 +1175,18 @@ func buildNotificationsApp(pool *pgxpool.Pool, now func() time.Time) notificatio
 			UnreadCount: notificationsquery.NewUnreadCountHandler(repo),
 		},
 	}
+}
+
+// scheduleUsageBridge binds the company settings port (which drug schedule classes
+// do products carry) to the Inventory query.
+type scheduleUsageBridge struct {
+	usage inventoryquery.ScheduleUsageHandler
+}
+
+func (b scheduleUsageBridge) ProductsWithSchedule(ctx context.Context, tenantID tenant.ID) (int64, error) {
+	return b.usage.ProductsWithAnyClass(ctx, tenantID)
+}
+
+func (b scheduleUsageBridge) ProductsWithClass(ctx context.Context, tenantID tenant.ID, classID string) (int64, error) {
+	return b.usage.ProductsWithClass(ctx, tenantID, classID)
 }

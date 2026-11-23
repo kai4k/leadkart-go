@@ -17,6 +17,7 @@ import (
 
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
+	"github.com/leadkart/leadkart-go/internal/inventory/app/sellability"
 	"github.com/leadkart/leadkart-go/internal/inventory/domain/product"
 )
 
@@ -24,16 +25,14 @@ import (
 // Product. ActorMembershipID populates the CreatedByMembershipID on the
 // integration event for audit.
 //
-// GSTRateBps: nil means "not given" — when a GstDefaultReader is wired AND
-// ProductCategory resolves to a seeded row in
-// shared.product_category_gst_defaults, the handler substitutes the default.
-// A non-nil value, including an explicit 0 (a nil-rated product), is used
-// as given and bypasses the lookup.
-//
-// ReorderLevel and ProductCategory carry their canonical defaults (0 and
-// "General") when omitted. ExpiryAlertThresholdDays: nil means "not given" and
-// takes [product.ExpiryAlertThresholdDaysDefault] (90, BRD §6.5); a non-nil
-// value, including an explicit 0 (the alert switched off), is used as given.
+// GSTRateID is the entry of the company GST rate list the product uses; it is
+// REQUIRED (there is no default rate and no category fallback) and its rate is
+// the list entry's rate. DrugSchedule is a class id from the company own list:
+// nullable unless the company chose `required`. ReorderLevel and ProductCategory
+// carry their canonical defaults (0 and "General") when omitted.
+// ExpiryAlertThresholdDays: nil means "not given" and takes
+// [product.ExpiryAlertThresholdDaysDefault] (90, BRD section 6.5); a non-nil value,
+// including an explicit 0 (the alert switched off), is used as given.
 type CreateProductCommand struct {
 	TenantID                 tenant.ID
 	ActorMembershipID        membership.ID
@@ -42,11 +41,18 @@ type CreateProductCommand struct {
 	DosageForm               string
 	PackSize                 string
 	HSNCode                  string
-	GSTRateBps               *int
+	GSTRateID                string
 	Manufacturer             string
 	ReorderLevel             int
 	ExpiryAlertThresholdDays *int
 	ProductCategory          string
+	DefaultSaleRatePaise     int64
+	GenericName              string
+	Composition              string
+	StorageCondition         string
+	DrugSchedule             string
+	// DrugScheduleGiven says whether the request named drug_schedule at all.
+	DrugScheduleGiven bool
 }
 
 // CreateProductResult carries the new ProductID.
@@ -54,29 +60,14 @@ type CreateProductResult struct {
 	ProductID product.ID
 }
 
-// GstDefaultReader is the handler-local interface for resolving the
-// per-category default GST rate (basis points) when the caller gives
-// no GSTRateBps (nil — an explicit 0 is a real rate and never looked up). The concrete reader lives in
-// `internal/common/refdata/` (see [refdata.GstDefaultReader]).
-//
-// Handler-local interface (TDL Wild Workouts canon): consumer-side, no
-// cross-module import of the concrete adapter package.
-type GstDefaultReader interface {
-	// Default returns the GST rate in basis points for category, the
-	// `found` flag, or (0, false, nil) when no row matches. Errors
-	// surface only on infrastructure failure (cache + DB both down).
-	Default(ctx context.Context, category string) (int, bool, error)
-}
-
 // CreateProductHandler — single-aggregate insert + outbox drain.
 // Wire-contract: ErrSKUTaken surfaces as HTTP 409.
 //
-// gstDefaults is OPTIONAL: when non-nil, the handler resolves a default
-// GST rate from the shared.product_category_gst_defaults reference table
-// for any submission with GSTRateBps == nil.
+// The company lists (GST rates, drug schedule classes) are read from the
+// Inventory replica of the policy.
 type CreateProductHandler struct {
 	products     product.Repository
-	gstDefaults  GstDefaultReader
+	policy       sellability.PolicyReader
 	now          func() time.Time
 	newProductID func() product.ID
 }
@@ -87,41 +78,31 @@ type CreateProductHandler struct {
 //
 // newProductID is the aggregate-ID factory per the
 // `TestArch_HandlersInjectIDFactory` discipline.
-//
-// gstDefaults may be nil (no per-category lookup; caller supplies GST).
-func NewCreateProductHandler(products product.Repository, gstDefaults GstDefaultReader, now func() time.Time, newProductID func() product.ID) CreateProductHandler {
-	if newProductID == nil {
-		panic("command: NewCreateProductHandler newProductID required")
+func NewCreateProductHandler(products product.Repository, policy sellability.PolicyReader, now func() time.Time, newProductID func() product.ID) CreateProductHandler {
+	if newProductID == nil || policy == nil {
+		panic("command: NewCreateProductHandler newProductID and policy required")
 	}
 	if now == nil {
 		now = time.Now
 	}
-	return CreateProductHandler{products: products, gstDefaults: gstDefaults, now: now, newProductID: newProductID}
+	return CreateProductHandler{products: products, policy: policy, now: now, newProductID: newProductID}
 }
 
 // Handle constructs + persists the Product. Outbox event drain rides
 // the adapter's Add path (one-tx with the row insert per ADR 0008).
 //
-// GST default fallback: when cmd.GSTRateBps is nil (absent) AND a
-// GstDefaultReader is wired, the handler looks up the category-driven
-// default. An explicit 0 is kept as 0.
+// The GST rate and the drug schedule class are checked against the company lists;
+// a refusal is a [*FieldRefusal] (422 with errors{field:[code]}) and nothing is written.
 func (h CreateProductHandler) Handle(ctx context.Context, cmd CreateProductCommand) (CreateProductResult, error) {
-	gst := 0
-	switch {
-	case cmd.GSTRateBps != nil:
-		gst = *cmd.GSTRateBps
-	case h.gstDefaults != nil:
-		category := cmd.ProductCategory
-		if category == "" {
-			category = product.ProductCategoryDefault
-		}
-		def, found, err := h.gstDefaults.Default(ctx, category)
-		if err != nil {
-			return CreateProductResult{}, fmt.Errorf("create product: gst default lookup: %w", err)
-		}
-		if found {
-			gst = def
-		}
+	pol, err := h.policy.ReadPolicy(ctx, cmd.TenantID)
+	if err != nil {
+		return CreateProductResult{}, fmt.Errorf("create product: read policy: %w", err)
+	}
+	gst, refusal := resolveCatalogue(pol.Policy, catalogueChoice{
+		GSTRateID: cmd.GSTRateID, RequireGST: true, DrugSchedule: cmd.DrugSchedule, ScheduleGiven: cmd.DrugScheduleGiven, Create: true,
+	})
+	if refusal != nil {
+		return CreateProductResult{}, refusal
 	}
 	threshold := product.ExpiryAlertThresholdDaysDefault
 	if cmd.ExpiryAlertThresholdDays != nil {
@@ -142,6 +123,12 @@ func (h CreateProductHandler) Handle(ctx context.Context, cmd CreateProductComma
 			ReorderLevel:             cmd.ReorderLevel,
 			ExpiryAlertThresholdDays: threshold,
 			ProductCategory:          cmd.ProductCategory,
+			GSTRateID:                cmd.GSTRateID,
+			DefaultSaleRatePaise:     cmd.DefaultSaleRatePaise,
+			GenericName:              cmd.GenericName,
+			Composition:              cmd.Composition,
+			StorageCondition:         cmd.StorageCondition,
+			DrugScheduleClassID:      cmd.DrugSchedule,
 		},
 		h.now(),
 	)

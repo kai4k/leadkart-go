@@ -114,6 +114,47 @@ func (h ListGSTRatesHandler) Handle(ctx context.Context, q ListGSTRatesQuery) (G
 	return GSTRatesView{PolicyVersion: s.Version(), Items: items}, nil
 }
 
+// ----- ListScheduleClasses ---------------------------------------------------
+
+// ScheduleClassesView is the company's drug schedule class list and the policy
+// version it was read at.
+type ScheduleClassesView struct {
+	PolicyVersion int64
+	Mode          string
+	Items         []commercepolicy.ScheduleClass
+}
+
+// ListScheduleClassesQuery selects the tenant's class list.
+type ListScheduleClassesQuery struct {
+	TenantID tenant.ID
+}
+
+// ListScheduleClassesHandler reads the list.
+type ListScheduleClassesHandler struct {
+	settings commercesettings.Repository
+}
+
+// NewListScheduleClassesHandler wires the handler.
+func NewListScheduleClassesHandler(settings commercesettings.Repository) ListScheduleClassesHandler {
+	if settings == nil {
+		panic("query: NewListScheduleClassesHandler settings required")
+	}
+	return ListScheduleClassesHandler{settings: settings}
+}
+
+// Handle returns the list in label order.
+func (h ListScheduleClassesHandler) Handle(ctx context.Context, q ListScheduleClassesQuery) (ScheduleClassesView, error) {
+	if q.TenantID == "" {
+		return ScheduleClassesView{}, errors.New("list drug schedule classes: tenant id required")
+	}
+	s, err := h.settings.GetByID(ctx, q.TenantID)
+	if err != nil {
+		return ScheduleClassesView{}, fmt.Errorf("list drug schedule classes: %w", err)
+	}
+	p := s.Policy()
+	return ScheduleClassesView{PolicyVersion: s.Version(), Mode: p.DrugSchedule.Mode, Items: p.DrugSchedule.Classes}, nil
+}
+
 // ----- ListHistory ------------------------------------------------------------
 
 // HistoryEntry is one stored version: the whole policy then, what changed, who

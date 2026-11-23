@@ -38,7 +38,7 @@ func patch(t *testing.T, kv map[string]any) commercepolicy.Changes {
 func TestChangeSettingsHandler_ReturnsTheUpdatedPolicyAndVersion(t *testing.T) {
 	t.Parallel()
 	repo := commercesettingstest.NewFakeRepository()
-	h := command.NewChangeSettingsHandler(repo, now)
+	h := command.NewChangeSettingsHandler(repo, fakeUsage{}, now)
 	res, err := h.Handle(t.Context(), command.ChangeSettingsCommand{
 		TenantID: tenantID, ExpectedVersion: 0, ActorMembershipID: member, MayManage: true,
 		Changes: patch(t, map[string]any{"expiry.stop_months_before": 4}),
@@ -57,7 +57,7 @@ func TestChangeSettingsHandler_ReturnsTheUpdatedPolicyAndVersion(t *testing.T) {
 func TestChangeSettingsHandler_StaleVersionIsAConflict(t *testing.T) {
 	t.Parallel()
 	repo := commercesettingstest.NewFakeRepository()
-	h := command.NewChangeSettingsHandler(repo, now)
+	h := command.NewChangeSettingsHandler(repo, fakeUsage{}, now)
 	cmd := command.ChangeSettingsCommand{TenantID: tenantID, ActorMembershipID: member, MayManage: true, Changes: patch(t, map[string]any{"credit.enabled": true})}
 	if _, err := h.Handle(t.Context(), cmd); err != nil {
 		t.Fatal(err)
@@ -75,7 +75,7 @@ func TestChangeSettingsHandler_StaleVersionIsAConflict(t *testing.T) {
 func TestChangeSettingsHandler_NoOpEmitsNothing(t *testing.T) {
 	t.Parallel()
 	repo := commercesettingstest.NewFakeRepository()
-	h := command.NewChangeSettingsHandler(repo, now)
+	h := command.NewChangeSettingsHandler(repo, fakeUsage{}, now)
 	res, err := h.Handle(t.Context(), command.ChangeSettingsCommand{
 		TenantID: tenantID, MayManage: true, Changes: patch(t, map[string]any{"expiry.stop_months_before": 1}),
 	})
@@ -86,7 +86,7 @@ func TestChangeSettingsHandler_NoOpEmitsNothing(t *testing.T) {
 
 func TestChangeSettingsHandler_RequiresATenant(t *testing.T) {
 	t.Parallel()
-	h := command.NewChangeSettingsHandler(commercesettingstest.NewFakeRepository(), now)
+	h := command.NewChangeSettingsHandler(commercesettingstest.NewFakeRepository(), fakeUsage{}, now)
 	if _, err := h.Handle(t.Context(), command.ChangeSettingsCommand{}); err == nil {
 		t.Fatal("a missing tenant must be refused")
 	}

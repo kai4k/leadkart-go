@@ -147,6 +147,13 @@ func productStockRowToView(row db.ListProductStockPageRow) query.ProductView {
 		ReorderLevel:             int(row.ReorderLevel),
 		ExpiryAlertThresholdDays: int(row.ExpiryAlertThresholdDays),
 
+		GSTRateID:            uuidString(row.GstRateID),
+		DefaultSaleRatePaise: row.DefaultSaleRatePaise,
+		GenericName:          row.GenericName,
+		Composition:          row.Composition,
+		StorageCondition:     row.StorageCondition,
+		DrugScheduleClassID:  uuidString(row.DrugScheduleClassID),
+
 		StockOnHand:      row.StockOnHand,
 		StockReserved:    row.StockReserved,
 		StockAvailable:   row.StockAvailable,

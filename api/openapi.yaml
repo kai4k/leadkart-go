@@ -4524,6 +4524,122 @@ paths:
         '404': { $ref: '#/components/responses/NotFound' }
         '422': { $ref: '#/components/responses/Unprocessable' }
 
+  /api/v1/company/drug-schedule-classes:
+    get:
+      tags: [company]
+      summary: List the company drug schedule classes
+      description: |
+        Requires `company_settings.read` OR `inventory.catalog.read` OR
+        `inventory.catalog.manage` (the picker a product form reads). The company's own
+        list of classes a product may carry, in label order. It starts from the
+        defaults of the market the company is created in and is the company's to add
+        to, rename or remove: nothing in the API is tied to a particular class. `mode`
+        is the current `drug_schedule.mode`; `policy_version` is the policy version the
+        list was read at.
+      parameters:
+        - $ref: '#/components/parameters/XTenantId'
+      responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+        '200':
+          description: The class list
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CompanyScheduleClassesDto' }
+        '400': { $ref: '#/components/responses/TenantScopeInvalid' }
+        '403': { $ref: '#/components/responses/TenantScopeForbidden' }
+
+    post:
+      tags: [company]
+      summary: Add a drug schedule class to the company list
+      description: |
+        Requires `company_settings.tax.manage` (Administrator tier or above). `reason` is
+        required. The same `label` (any case) is `422` with `errors.label: [duplicate]`;
+        a list at its cap of 30 is `errors.label: [too_many]`. Adding a class moves the
+        policy to a new version. Returns `201` with the updated list, the new class in
+        `class` and the new `policy_version`.
+      parameters:
+        - $ref: '#/components/parameters/XCommandId'
+        - $ref: '#/components/parameters/XTenantId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateCompanyScheduleClassRequest' }
+      responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+        '201':
+          description: The class added
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CompanyScheduleClassesDto' }
+        '400': { $ref: '#/components/responses/TenantScopeInvalid' }
+        '403': { $ref: '#/components/responses/TenantScopeReadOnly' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+
+  /api/v1/company/drug-schedule-classes/{classId}:
+    patch:
+      tags: [company]
+      summary: Rename a drug schedule class
+      description: |
+        Requires `company_settings.tax.manage`. A product stores the class `id`, so a
+        rename never touches a product. `reason` is required. A rename to the current
+        label leaves the policy version where it is. Returns `200` with the updated list.
+      parameters:
+        - $ref: '#/components/parameters/XCommandId'
+        - { name: classId, in: path, required: true, schema: { type: string, format: uuid } }
+        - $ref: '#/components/parameters/XTenantId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PatchCompanyScheduleClassRequest' }
+      responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+        '200':
+          description: The list after the rename
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CompanyScheduleClassesDto' }
+        '400': { $ref: '#/components/responses/TenantScopeInvalid' }
+        '403': { $ref: '#/components/responses/TenantScopeReadOnly' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+
+    delete:
+      tags: [company]
+      summary: Remove a drug schedule class
+      description: |
+        Requires `company_settings.tax.manage`. The body carries the `reason` (required).
+        A class a product still carries cannot be removed: `409
+        drug_schedule_class_in_use` and nothing changes; clear it from those products
+        first. A removal moves the policy to a new version and is kept in the history.
+        Returns `200` with the updated list.
+      parameters:
+        - $ref: '#/components/parameters/XCommandId'
+        - { name: classId, in: path, required: true, schema: { type: string, format: uuid } }
+        - $ref: '#/components/parameters/XTenantId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DeleteCompanyScheduleClassRequest' }
+      responses:
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+        '200':
+          description: The list after the removal
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CompanyScheduleClassesDto' }
+        '400': { $ref: '#/components/responses/TenantScopeInvalid' }
+        '403': { $ref: '#/components/responses/TenantScopeReadOnly' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: '`drug_schedule_class_in_use`: a product still carries the class'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+
 components:
   securitySchemes:
     BearerAuth:
@@ -4945,8 +5061,9 @@ components:
       properties:
         expiry:
           type: object
-          required: [stop_months_before, warning_days]
+          required: [stop_months_before, warning_days, business_day_utc_offset_minutes]
           properties:
+            business_day_utc_offset_minutes: { type: integer, minimum: -720, maximum: 840, description: 'The company civil time as minutes east of UTC. The business day (every expiry decision) is the date at this offset, so it flips at the company midnight. Default 330 (from the market defaults). Changed under company_settings.manage.' }
             stop_months_before: { type: integer, minimum: 0, maximum: 24, description: 'Months before the printed expiry month a batch stops being sellable. 0 is the legal limit, 1 stops at the start of the printed month. Default 1.' }
             warning_days: { type: array, maxItems: 4, items: { type: integer, minimum: 1, maximum: 730 }, description: 'Days before the last sellable day at which expiry alerts fire; stored descending. Default [180, 90, 30].' }
         fulfilment:
@@ -5022,9 +5139,10 @@ components:
             overdue_grace_days: { type: integer, minimum: 0, maximum: 365 }
         drug_schedule:
           type: object
-          required: [mode]
+          required: [mode, classes]
           properties:
-            mode: { type: string, enum: [off, optional, required], description: 'Whether the product form records a drug schedule. Default optional.' }
+            mode: { type: string, enum: [off, optional, required], description: 'Whether the product form records a drug schedule. Default optional. Turning it off is refused (`errors["drug_schedule.mode"]: [schedule_in_use]`) while any product carries a class.' }
+            classes: { type: array, maxItems: 30, items: { $ref: '#/components/schemas/CompanyScheduleClassDto' }, description: 'The classes a product may carry. Read-only here: it changes through /company/drug-schedule-classes (`managed_elsewhere` on the settings PATCH).' }
 
     CompanySettingOption:
       type: object
@@ -5087,6 +5205,46 @@ components:
         items: { type: array, items: { $ref: '#/components/schemas/CompanySettingsHistoryEntry' } }
         has_more: { type: boolean }
         next_cursor: { type: string }
+
+    CompanyScheduleClassDto:
+      type: object
+      required: [id, label]
+      properties:
+        id: { type: string, format: uuid, description: 'What a product stores; stable across renames.' }
+        label: { type: string, maxLength: 40 }
+
+    CompanyScheduleClassesDto:
+      type: object
+      required: [policy_version, items]
+      properties:
+        policy_version: { type: integer, format: int64 }
+        mode: { type: string, enum: [off, optional, required] }
+        items: { type: array, items: { $ref: '#/components/schemas/CompanyScheduleClassDto' } }
+        class: { $ref: '#/components/schemas/CompanyScheduleClassDto' }
+
+    CreateCompanyScheduleClassRequest:
+      type: object
+      required: [label, reason]
+      description: |
+        Refusals: `errors.label` (`required`, `too_long`, `invalid_characters`,
+        `duplicate`, `too_many`), `errors.reason` (`required`, `too_long`,
+        `invalid_characters`).
+      properties:
+        label: { type: string, maxLength: 40 }
+        reason: { type: string, maxLength: 500 }
+
+    PatchCompanyScheduleClassRequest:
+      type: object
+      required: [label, reason]
+      properties:
+        label: { type: string, maxLength: 40 }
+        reason: { type: string, maxLength: 500 }
+
+    DeleteCompanyScheduleClassRequest:
+      type: object
+      required: [reason]
+      properties:
+        reason: { type: string, maxLength: 500 }
 
     CompanyGstRateDto:
       type: object
@@ -6318,7 +6476,7 @@ components:
         balance:   { type: integer, format: int64 }
     ProductDto:
       type: object
-      required: [id, tenant_id, sku, name, dosage_form, pack_size, hsn_code, gst_rate_bps, is_active, created_at, updated_at, product_category, reorder_level, expiry_alert_threshold_days, stock_on_hand, stock_reserved, stock_available, stock_unsellable, stock_quarantined]
+      required: [id, tenant_id, sku, name, dosage_form, pack_size, hsn_code, gst_rate_bps, is_active, created_at, updated_at, product_category, reorder_level, expiry_alert_threshold_days, stock_on_hand, stock_reserved, stock_available, stock_unsellable, stock_quarantined, default_sale_rate_paise]
       properties:
         id:            { type: string, format: uuid }
         tenant_id:     { type: string, format: uuid }
@@ -6340,20 +6498,35 @@ components:
         stock_available:             { type: integer, format: int64, minimum: 0, description: 'The free units (not reserved, not quarantined) of batches still SELLABLE today under the company expiry rule (`expiry.stop_months_before`, business day at `expiry.business_day_utc_offset_minutes`). What can be sold.' }
         stock_unsellable:            { type: integer, format: int64, minimum: 0, description: 'Free units of batches past the company sellable cut-off that are not quarantined yet. Never sold; they should be set apart (`quarantine` movement).' }
         stock_quarantined:           { type: integer, format: int64, minimum: 0, description: 'Units set apart as "Not for sale" (Drugs Rules, Rule 65(17)). Part of `stock_on_hand`, never available.' }
+        gst_rate_id:                 { type: string, format: uuid, description: 'The entry of the company GST list the product uses. Absent for a product that predates the list.' }
+        gst_rate_label:              { type: string, description: 'The current label of that entry; absent when the entry is gone.' }
+        default_sale_rate_paise:     { type: integer, format: int64, minimum: 0, description: 'The rate offered on a quotation line (0: none).' }
+        generic_name:                { type: string }
+        composition:                 { type: string }
+        storage_condition:           { type: string }
+        drug_schedule:               { type: string, format: uuid, description: 'The id of the class (company own list) the product carries; absent when none.' }
+        drug_schedule_label:         { type: string, description: 'The current label of that class; absent when the class is gone.' }
         earliest_expiry:             { type: string, format: date-time, description: 'The soonest expiry (the last day of the printed month, midnight UTC) among the SELLABLE batches that hold stock. Absent when none does.' }
 
     CreateProductRequest:
       type: object
-      required: [sku, name, dosage_form, pack_size, hsn_code]
+      required: [sku, name, dosage_form, pack_size, hsn_code, gst_rate_id]
+      description: |
+        Refusals name their field: `errors.gst_rate_id` (`required`, `not_in_list`, `inactive`), `errors.drug_schedule` (`required`, `not_in_list`, `schedule_off`). Nothing is written on a refusal. The company lists are read from the Inventory replica of the policy, which follows a change by event, so a rate added a moment ago may be `not_in_list` until it arrives.
       properties:
         sku:           { type: string, minLength: 1, maxLength: 64 }
         name:          { type: string, minLength: 1, maxLength: 200 }
         dosage_form:   { type: string, minLength: 1, maxLength: 50 }
         pack_size:     { type: string, minLength: 1, maxLength: 100 }
         hsn_code:      { type: string, minLength: 4, maxLength: 8, pattern: '^([0-9]{4}|[0-9]{6}|[0-9]{8})$', description: 'ASCII digits only, exactly 4, 6 or 8 of them; a leading zero is allowed (0402 is a real code). Send it trimmed (the server also trims surrounding whitespace before it checks). Anything else is 422 validation_failed. The READ shape (`ProductDto.hsn_code`) still allows 4..10 digits for rows stored before this rule.' }
-        gst_rate_bps:  { type: integer, minimum: 0, maximum: 10000, description: 'Optional. Absent: the category default is used (as before). An explicit 0 is stored as 0 (a nil-rated product); it is NOT replaced by the default.' }
+        gst_rate_id:   { type: string, format: uuid, description: 'REQUIRED. The entry of the company GST rate list (`GET /company/gst-rates`) the product uses; the product takes that entry rate (a nil-rated entry is 0%). There is no default rate and no category fallback.' }
         manufacturer:  { type: string, maxLength: 200 }
-        product_category:            { type: string, maxLength: 64, description: 'Optional. Absent or blank: `General`. Trimmed; at most 64 characters. It selects the default GST rate when `gst_rate_bps` is absent (a category that is not in `GET /inventory/product-categories` has no default, so the rate is then 0: send a category from that list, or send the rate). 422 `validation_failed`, `errors.product_category`: `too_long` (over 64 characters), `invalid_characters` (holds the NUL character).' }
+        generic_name:     { type: string, maxLength: 200, description: 'Optional free text.' }
+        composition:      { type: string, maxLength: 1000, description: 'Optional free text.' }
+        storage_condition: { type: string, maxLength: 200, description: 'Optional free text.' }
+        default_sale_rate_paise: { type: integer, format: int64, minimum: 0, description: 'Optional. The rate offered on a quotation line, in paise (Rs 100 crore cap). 0 or absent: none.' }
+        drug_schedule: { type: string, format: uuid, description: 'Optional. The id of a class of the COMPANY OWN list (`GET /company/drug-schedule-classes`); nothing in the API is tied to a particular class. Nullable at every `drug_schedule.mode` except where the company chose `required` (then it is needed: `errors.drug_schedule: [required]`). Under mode `off` a class is refused (`schedule_off`). A class that is not in the list is `not_in_list`.' }
+        product_category:            { type: string, maxLength: 64, description: 'Optional. Absent or blank: `General`. Trimmed; at most 64 characters.' }
         reorder_level:               { type: integer, minimum: 0, maximum: 2147483647, default: 0, description: 'Optional. Units below which the product is low on stock; 0 (the default) switches the low-stock alert off. 422 `validation_failed`, `errors.reorder_level`: `too_small` (below 0), `too_large` (above 2147483647).' }
         expiry_alert_threshold_days: { type: integer, minimum: 0, maximum: 36500, default: 90, description: 'Optional. Absent: 90. An explicit 0 switches the expiry alert off and is stored as 0. 422 `validation_failed`, `errors.expiry_alert_threshold_days`: `too_small` (below 0), `too_large` (above 36500).' }
 
@@ -6368,19 +6541,23 @@ components:
       description: 'Partial-update payload — only fields present in the JSON body are applied (omitted fields retain prior value). JSON null is treated as omission; field clearing is not supported. Deliberately NOT RFC 7396 merge-patch semantics.'
       properties:
         name:          { type: string, minLength: 1, maxLength: 200 }
-        gst_rate_bps:  { type: integer, minimum: 0, maximum: 10000 }
+        gst_rate_id:   { type: string, format: uuid, description: 'Moves the product to another entry of the company GST list (the entry must be active; keeping the current one is always allowed). Blank is `required`.' }
         is_active:     { type: boolean }
         manufacturer:  { type: string, maxLength: 200 }
-        product_category:            { type: string, maxLength: 64, description: 'A blank value stores `General`. Changing the category never changes `gst_rate_bps`. 422 `validation_failed`, `errors.product_category`: `too_long` (over 64 characters), `invalid_characters` (holds the NUL character).' }
+        generic_name:     { type: string, maxLength: 200, description: 'Optional free text.' }
+        composition:      { type: string, maxLength: 1000, description: 'Optional free text.' }
+        storage_condition: { type: string, maxLength: 200, description: 'Optional free text.' }
+        default_sale_rate_paise: { type: integer, format: int64, minimum: 0, description: 'Optional. The rate offered on a quotation line, in paise (Rs 100 crore cap). 0 or absent: none.' }
+        drug_schedule: { type: string, description: 'The id of a class of the COMPANY OWN list (`GET /company/drug-schedule-classes`). A blank string clears it. Clearing is refused only where the company chose mode `required` (`errors.drug_schedule: [required]`); a class is refused under mode `off` (`schedule_off`) and when not in the list (`not_in_list`).' }
+        product_category:            { type: string, maxLength: 64, description: 'A blank value stores `General`. Changing the category never changes the GST rate. 422 `validation_failed`, `errors.product_category`: `too_long` (over 64 characters), `invalid_characters` (holds the NUL character).' }
         reorder_level:               { type: integer, minimum: 0, maximum: 2147483647, description: '0 switches the low-stock alert off. 422 `validation_failed`, `errors.reorder_level`: `too_small`, `too_large`.' }
         expiry_alert_threshold_days: { type: integer, minimum: 0, maximum: 36500, description: '0 switches the expiry alert off. 422 `validation_failed`, `errors.expiry_alert_threshold_days`: `too_small`, `too_large`.' }
 
     ProductCategoryDto:
       type: object
-      required: [category, default_gst_rate_bps]
+      required: [category]
       properties:
         category:             { type: string, minLength: 1, maxLength: 64 }
-        default_gst_rate_bps: { type: integer, minimum: 0, maximum: 10000, description: 'GST rate in basis points (1200 = 12%) a new product in this category takes when the create request sends no `gst_rate_bps`.' }
 
     ListProductCategoriesResponse:
       type: object

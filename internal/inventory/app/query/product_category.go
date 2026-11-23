@@ -5,11 +5,10 @@ import (
 	"fmt"
 )
 
-// ProductCategoryView is one allowed product category with the GST rate
-// (basis points) a new product in it takes when the request gives none.
+// ProductCategoryView is one allowed product category. It carries no GST rate:
+// a product takes its rate from the company own GST list, never from its category.
 type ProductCategoryView struct {
-	Category          string
-	DefaultGSTRateBps int
+	Category string
 }
 
 // ProductCategoryReader is the read-side interface for the category reference

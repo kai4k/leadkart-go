@@ -490,7 +490,13 @@ type InventoryProduct struct {
 	// Batches with expiry_date <= now() + this days threshold trigger BatchExpiringSoonV1 via the daily ExpiryScanJob. Default 90 per BRD §6.5.
 	ExpiryAlertThresholdDays int32
 	// Drives the default GST percentage via shared.product_category_gst_defaults; also matches lead ProductRanges for catalogue browsing (BRD §6.5 + Appendix C.5).
-	ProductCategory string
+	ProductCategory      string
+	GstRateID            pgtype.UUID
+	DefaultSaleRatePaise int64
+	GenericName          string
+	Composition          string
+	StorageCondition     string
+	DrugScheduleClassID  pgtype.UUID
 }
 
 // Append-only stock-movement ledger. Tenant-scoped, FORCE RLS. NO update/delete policies (Vernon IDDD append-only aggregate).

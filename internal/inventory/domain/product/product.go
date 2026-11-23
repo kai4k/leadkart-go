@@ -56,6 +56,13 @@ const (
 	ProductCategoryMinLength = 1
 	ProductCategoryMaxLength = 64
 	ProductCategoryDefault   = "General"
+
+	// Optional catalogue text; mirror the migration CHECKs.
+	GenericNameMaxLen      = 200
+	CompositionMaxLen      = 1000
+	StorageConditionMaxLen = 200
+	// DefaultSaleRateMaxPaise caps the default sale rate (Rs 100 crore, the line cap).
+	DefaultSaleRateMaxPaise = 100_00_00_000 * 100
 )
 
 // ErrInvalid is returned (wrapped via %w) by [New] and [Update] on invariant violation.
@@ -85,6 +92,18 @@ type Spec struct {
 	ReorderLevel             int
 	ExpiryAlertThresholdDays int
 	ProductCategory          string
+	// GSTRateID is the entry of the company GST rate list the product uses; the
+	// application layer resolves it (GSTRateBps is that entry's rate). Optional at
+	// the domain: a UUID when given.
+	GSTRateID string
+	// DefaultSaleRatePaise is the rate offered on a quotation line (0: none).
+	DefaultSaleRatePaise int64
+	GenericName          string
+	Composition          string
+	StorageCondition     string
+	// DrugScheduleClassID is the company drug schedule class (an id from its own
+	// list); empty means the product carries none. Nothing here knows any class.
+	DrugScheduleClassID string
 }
 
 // UpdateSpec is the partial-update input for [Product.Update].
@@ -98,6 +117,15 @@ type UpdateSpec struct {
 	ReorderLevel             *int
 	ExpiryAlertThresholdDays *int
 	ProductCategory          *string
+	// GSTRateID with GSTRateBps moves the product to another entry of the company
+	// rate list (the application layer resolves both).
+	GSTRateID            *string
+	DefaultSaleRatePaise *int64
+	GenericName          *string
+	Composition          *string
+	StorageCondition     *string
+	// DrugScheduleClassID sets the class; a pointer to "" clears it.
+	DrugScheduleClassID *string
 }
 
 // Product is the aggregate root.
@@ -124,6 +152,12 @@ type Product struct {
 	reorderLevel             int
 	expiryAlertThresholdDays int
 	productCategory          string
+	gstRateID                string
+	defaultSaleRatePaise     int64
+	genericName              string
+	composition              string
+	storageCondition         string
+	drugScheduleClassID      string
 	createdAt                time.Time
 	updatedAt                time.Time
 	deleted                  bool
@@ -198,8 +232,18 @@ func New(id ID, tenantID tenant.ID, actorID membership.ID, spec Spec, now time.T
 	if err := textlimit.Chars("product_category", category, ProductCategoryMaxLength); err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
+	extra, err := validateCatalogue(spec)
+	if err != nil {
+		return nil, err
+	}
 	now = now.UTC()
 	p := &Product{
+		gstRateID:                extra.gstRateID,
+		defaultSaleRatePaise:     spec.DefaultSaleRatePaise,
+		genericName:              extra.genericName,
+		composition:              extra.composition,
+		storageCondition:         extra.storageCondition,
+		drugScheduleClassID:      extra.drugScheduleClassID,
 		id:                       id,
 		tenantID:                 tenantID,
 		sku:                      sku,
@@ -234,6 +278,26 @@ func New(id ID, tenantID tenant.ID, actorID membership.ID, spec Spec, now time.T
 
 // ID returns the Product's primary key.
 func (p *Product) ID() ID { return p.id }
+
+// GSTRateID returns the id of the company GST rate list entry the product uses
+// (empty for a product that predates the list).
+func (p *Product) GSTRateID() string { return p.gstRateID }
+
+// DefaultSaleRatePaise returns the rate offered on a quotation line (0: none).
+func (p *Product) DefaultSaleRatePaise() int64 { return p.defaultSaleRatePaise }
+
+// GenericName returns the optional generic name.
+func (p *Product) GenericName() string { return p.genericName }
+
+// Composition returns the optional composition text.
+func (p *Product) Composition() string { return p.composition }
+
+// StorageCondition returns the optional storage condition text.
+func (p *Product) StorageCondition() string { return p.storageCondition }
+
+// DrugScheduleClassID returns the company drug schedule class the product
+// carries (empty when none).
+func (p *Product) DrugScheduleClassID() string { return p.drugScheduleClassID }
 
 // TenantID returns the FK to [tenant.Tenant].
 func (p *Product) TenantID() tenant.ID { return p.tenantID }
@@ -348,6 +412,11 @@ func (p *Product) Update(actorID membership.ID, spec UpdateSpec, now time.Time) 
 		return err
 	}
 	changed = append(changed, ext...)
+	cat, err := p.applyCatalogueUpdates(spec)
+	if err != nil {
+		return err
+	}
+	changed = append(changed, cat...)
 	if len(changed) == 0 {
 		return nil
 	}
@@ -409,6 +478,97 @@ func (p *Product) applyExtendedUpdates(spec UpdateSpec) ([]string, error) {
 		}
 	}
 	return changed, nil
+}
+
+// applyCatalogueUpdates applies the G2 catalogue fields: the GST rate list entry,
+// the default sale rate, the optional texts and the drug schedule class. All of
+// them are validated before any is applied, so a refused update changes nothing.
+func (p *Product) applyCatalogueUpdates(spec UpdateSpec) ([]string, error) {
+	next := Spec{
+		GSTRateID: p.gstRateID, DefaultSaleRatePaise: p.defaultSaleRatePaise, GenericName: p.genericName,
+		Composition: p.composition, StorageCondition: p.storageCondition, DrugScheduleClassID: p.drugScheduleClassID,
+	}
+	if spec.GSTRateID != nil {
+		next.GSTRateID = *spec.GSTRateID
+	}
+	if spec.DefaultSaleRatePaise != nil {
+		next.DefaultSaleRatePaise = *spec.DefaultSaleRatePaise
+	}
+	if spec.GenericName != nil {
+		next.GenericName = *spec.GenericName
+	}
+	if spec.Composition != nil {
+		next.Composition = *spec.Composition
+	}
+	if spec.StorageCondition != nil {
+		next.StorageCondition = *spec.StorageCondition
+	}
+	if spec.DrugScheduleClassID != nil {
+		next.DrugScheduleClassID = *spec.DrugScheduleClassID
+	}
+	v, err := validateCatalogue(next)
+	if err != nil {
+		return nil, err
+	}
+	var changed []string
+	set := func(field string, differs bool, apply func()) {
+		if differs {
+			apply()
+			changed = append(changed, field)
+		}
+	}
+	set("gst_rate_id", v.gstRateID != p.gstRateID, func() { p.gstRateID = v.gstRateID })
+	set("default_sale_rate_paise", next.DefaultSaleRatePaise != p.defaultSaleRatePaise, func() { p.defaultSaleRatePaise = next.DefaultSaleRatePaise })
+	set("generic_name", v.genericName != p.genericName, func() { p.genericName = v.genericName })
+	set("composition", v.composition != p.composition, func() { p.composition = v.composition })
+	set("storage_condition", v.storageCondition != p.storageCondition, func() { p.storageCondition = v.storageCondition })
+	set("drug_schedule", v.drugScheduleClassID != p.drugScheduleClassID, func() { p.drugScheduleClassID = v.drugScheduleClassID })
+	return changed, nil
+}
+
+type catalogue struct {
+	gstRateID, genericName, composition, storageCondition, drugScheduleClassID string
+}
+
+// validateCatalogue checks the G2 catalogue fields of a spec and returns their
+// stored (trimmed) form.
+func validateCatalogue(spec Spec) (catalogue, error) {
+	var c catalogue
+	for _, f := range []struct {
+		name, in string
+		out      *string
+	}{
+		{"gst_rate_id", spec.GSTRateID, &c.gstRateID},
+		{"drug_schedule", spec.DrugScheduleClassID, &c.drugScheduleClassID},
+	} {
+		v := strings.TrimSpace(f.in)
+		if v != "" {
+			if _, err := uuid.Parse(v); err != nil {
+				return catalogue{}, fmt.Errorf("%w: %s is not a valid uuid", ErrInvalid, f.name)
+			}
+		}
+		*f.out = v
+	}
+	if spec.DefaultSaleRatePaise < 0 || spec.DefaultSaleRatePaise > DefaultSaleRateMaxPaise {
+		return catalogue{}, fmt.Errorf("%w: default_sale_rate_paise %d not in [0,%d]", ErrInvalid, spec.DefaultSaleRatePaise, DefaultSaleRateMaxPaise)
+	}
+	for _, f := range []struct {
+		name string
+		in   string
+		max  int
+		out  *string
+	}{
+		{"generic_name", spec.GenericName, GenericNameMaxLen, &c.genericName},
+		{"composition", spec.Composition, CompositionMaxLen, &c.composition},
+		{"storage_condition", spec.StorageCondition, StorageConditionMaxLen, &c.storageCondition},
+	} {
+		v := strings.TrimSpace(f.in)
+		if err := textlimit.Chars(f.name, v, f.max); err != nil {
+			return catalogue{}, fmt.Errorf("%w: %w", ErrInvalid, err)
+		}
+		*f.out = v
+	}
+	return c, nil
 }
 
 // Activate sets is_active = true via [Update].
@@ -478,6 +638,12 @@ type Snapshot struct {
 	ReorderLevel             int
 	ExpiryAlertThresholdDays int
 	ProductCategory          string
+	GSTRateID                string
+	DefaultSaleRatePaise     int64
+	GenericName              string
+	Composition              string
+	StorageCondition         string
+	DrugScheduleClassID      string
 	CreatedAt                time.Time
 	UpdatedAt                time.Time
 	IsDeleted                bool
@@ -506,6 +672,12 @@ func UnmarshalFromDB(s Snapshot) *Product {
 		reorderLevel:             s.ReorderLevel,
 		expiryAlertThresholdDays: s.ExpiryAlertThresholdDays,
 		productCategory:          cat,
+		gstRateID:                s.GSTRateID,
+		defaultSaleRatePaise:     s.DefaultSaleRatePaise,
+		genericName:              s.GenericName,
+		composition:              s.Composition,
+		storageCondition:         s.StorageCondition,
+		drugScheduleClassID:      s.DrugScheduleClassID,
 		createdAt:                s.CreatedAt,
 		updatedAt:                s.UpdatedAt,
 		deleted:                  s.IsDeleted,

@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"github.com/leadkart/leadkart-go/internal/common/expiry"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -166,21 +167,28 @@ func TestE2E_Inventory_ZeroGSTRateIsKept(t *testing.T) {
 		return dto.GSTRateBps
 	}
 
-	zero := create("NIL-0", map[string]any{"gst_rate_bps": 0})
+	// The rate comes from the company list ONLY: a nil-rated entry (0%) is a rate like
+	// any other, no rate at all is refused (there is no category default), and a product
+	// moves to another entry by id.
+	nilRate := e2eRate(t, f, tok, 0)
+	fiveRate := e2eRate(t, f, tok, 500)
+	zero := create("NIL-0", map[string]any{"gst_rate_id": nilRate})
 	if got := rate(zero); got != 0 {
-		t.Fatalf("explicit 0 stored as %d, want 0", got)
+		t.Fatalf("a nil-rated entry stored as %d, want 0", got)
 	}
-	absent := create("NIL-ABSENT", map[string]any{})
-	if got := rate(absent); got == 0 {
-		t.Fatalf("absent rate stored as 0, want the category default")
+	resp := f.authedJSON(t, http.MethodPost, "/api/v1/inventory/products", tok, map[string]any{
+		"sku": "NIL-ABSENT", "name": "Product", "dosage_form": "tablet", "pack_size": "10x10", "hsn_code": "30049099", "product_category": "Nutraceuticals",
+	})
+	if resp.status != http.StatusUnprocessableEntity || !slices.Equal(invFieldCodes(t, resp.body, "gst_rate_id"), []string{"required"}) {
+		t.Fatalf("a product with no rate: %d %s, want 422 gst_rate_id required (no default rate)", resp.status, resp.body)
 	}
-	five := create("NIL-5", map[string]any{"gst_rate_bps": 500})
-	resp := f.authedJSON(t, http.MethodPatch, "/api/v1/inventory/products/"+five, tok, map[string]any{"gst_rate_bps": 0})
+	five := create("NIL-5", map[string]any{"gst_rate_id": fiveRate})
+	resp = f.authedJSON(t, http.MethodPatch, "/api/v1/inventory/products/"+five, tok, map[string]any{"gst_rate_id": nilRate})
 	if resp.status != http.StatusNoContent && resp.status != http.StatusOK {
-		t.Fatalf("update to 0: status %d body %s", resp.status, resp.body)
+		t.Fatalf("update to the nil entry: status %d body %s", resp.status, resp.body)
 	}
 	if got := rate(five); got != 0 {
-		t.Fatalf("updated to 0 but reads %d", got)
+		t.Fatalf("moved to the nil entry but reads %d", got)
 	}
 }
 
@@ -189,7 +197,7 @@ func invProductWithBatch(t *testing.T, f e2eFixture, tok, sku string) (productID
 	t.Helper()
 	resp := f.authedJSON(t, http.MethodPost, "/api/v1/inventory/products", tok, invports.CreateProductRequest{
 		SKU: sku, Name: "Product " + sku, DosageForm: "tablet", PackSize: "10x10", HSNCode: "30049099",
-		GSTRateBps: new(1200),
+		GSTRateID: e2eRate(t, f, tok, 1200),
 	})
 	if resp.status != http.StatusCreated {
 		t.Fatalf("create product: status %d body %s", resp.status, resp.body)
@@ -469,9 +477,10 @@ func TestE2E_Dispatch_TextOverItsDatabaseLimitIs422(t *testing.T) {
 func TestE2E_Inventory_HSNRule(t *testing.T) {
 	f := newE2EFixture(t)
 	tok := f.registerAndLogin(t, "hsnrule").AccessToken
+	hsnRate := e2eRate(t, f, tok, 500)
 	create := func(sku, hsn string) (int, []byte) {
 		resp := f.authedJSON(t, http.MethodPost, "/api/v1/inventory/products", tok, invports.CreateProductRequest{
-			SKU: sku, Name: "Product " + sku, DosageForm: "tablet", PackSize: "10x10", HSNCode: hsn, GSTRateBps: new(500),
+			SKU: sku, Name: "Product " + sku, DosageForm: "tablet", PackSize: "10x10", HSNCode: hsn, GSTRateID: hsnRate,
 		})
 		return resp.status, resp.body
 	}

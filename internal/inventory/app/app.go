@@ -37,5 +37,6 @@ type Queries struct {
 	FefoBatches            query.FefoBatchesHandler
 	ListProductCategories  query.ListProductCategoriesHandler
 	// GetPolicy reads the replica of the company commerce policy (ADR 0070).
-	GetPolicy query.GetPolicyHandler
+	ScheduleUsage query.ScheduleUsageHandler
+	GetPolicy     query.GetPolicyHandler
 }

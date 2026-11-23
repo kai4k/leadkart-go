@@ -42,6 +42,8 @@ func AddRoutes(mux *http.ServeMux, log *slog.Logger, a app.Application, verifier
 	ratesRead := authn.RequireAnyPermission(verifier, stampValidator,
 		p.CompanySettings.Read, p.Inventory.Catalog.Read, p.Inventory.Catalog.Manage)
 	taxManage := authn.RequirePermission(verifier, stampValidator, p.CompanySettings.TaxManage)
+	// The class list is the picker of the product form, so catalogue readers read it too.
+	classesRead := ratesRead
 
 	mux.Handle("GET /api/v1/company/commerce-settings", settingsRead(handleGetSettings(log, a)))
 	mux.Handle("PATCH /api/v1/company/commerce-settings", settingsWrite(handlePatchSettings(log, a)))
@@ -49,6 +51,10 @@ func AddRoutes(mux *http.ServeMux, log *slog.Logger, a app.Application, verifier
 	mux.Handle("GET /api/v1/company/gst-rates", ratesRead(handleListGSTRates(log, a)))
 	mux.Handle("POST /api/v1/company/gst-rates", taxManage(handleCreateGSTRate(log, a)))
 	mux.Handle("PATCH /api/v1/company/gst-rates/{rateId}", taxManage(handlePatchGSTRate(log, a)))
+	mux.Handle("GET /api/v1/company/drug-schedule-classes", classesRead(handleListScheduleClasses(log, a)))
+	mux.Handle("POST /api/v1/company/drug-schedule-classes", taxManage(handleCreateScheduleClass(log, a)))
+	mux.Handle("PATCH /api/v1/company/drug-schedule-classes/{classId}", taxManage(handlePatchScheduleClass(log, a)))
+	mux.Handle("DELETE /api/v1/company/drug-schedule-classes/{classId}", taxManage(handleDeleteScheduleClass(log, a)))
 }
 
 // ----- Handlers --------------------------------------------------------------
@@ -260,6 +266,115 @@ func handlePatchGSTRate(log *slog.Logger, a app.Application) http.Handler {
 	})
 }
 
+func handleListScheduleClasses(log *slog.Logger, a app.Application) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		effTenant, ok := authn.EffectiveTenantID(r.Context())
+		if !ok {
+			writeError(w, http.StatusUnauthorized, ErrCodeUnauthenticated, "")
+			return
+		}
+		view, err := a.Queries.ListScheduleClasses.Handle(r.Context(), query.ListScheduleClassesQuery{TenantID: tenant.ID(effTenant)})
+		if err != nil {
+			log.ErrorContext(r.Context(), "list drug schedule classes failed", "err", err)
+			writeError(w, http.StatusInternalServerError, ErrCodeInternalError, "")
+			return
+		}
+		writeJSON(w, http.StatusOK, ScheduleClassesDto{PolicyVersion: view.PolicyVersion, Mode: view.Mode, Items: classesToDto(view.Items)})
+	})
+}
+
+// scheduleActor reads the acting membership and any impersonating operator off
+// the request; it writes 401 and returns false when the claims are missing.
+func scheduleActor(w http.ResponseWriter, r *http.Request) (tenant.ID, membership.ID, string, bool) {
+	effTenant, ok := authn.EffectiveTenantID(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, ErrCodeUnauthenticated, "")
+		return "", "", "", false
+	}
+	c, ok := authn.ClaimsFromContext(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, ErrCodeUnauthenticated, "")
+		return "", "", "", false
+	}
+	op := ""
+	if c.Act != nil {
+		op = c.Act.Sub
+	}
+	return tenant.ID(effTenant), membership.ID(authn.ActorMembershipID(r.Context())), op, true
+}
+
+func handleCreateScheduleClass(log *slog.Logger, a app.Application) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		tid, actor, op, ok := scheduleActor(w, r)
+		if !ok {
+			return
+		}
+		var req CreateScheduleClassRequest
+		if !decodeStrict(w, r, &req) {
+			return
+		}
+		out, err := a.Commands.AddScheduleClass.Handle(r.Context(), command.AddScheduleClassCommand{
+			TenantID: tid, Label: req.Label, Reason: req.Reason, ActorMembershipID: actor, ImpersonatorOperatorID: op,
+		})
+		if err != nil {
+			writeCommandError(w, r, log, "create drug schedule class", err)
+			return
+		}
+		writeJSON(w, http.StatusCreated, scheduleChangedDto(out))
+	})
+}
+
+func handlePatchScheduleClass(log *slog.Logger, a app.Application) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		tid, actor, op, ok := scheduleActor(w, r)
+		if !ok {
+			return
+		}
+		classID, ok := parsePathUUID(w, r, "classId")
+		if !ok {
+			return
+		}
+		var req PatchScheduleClassRequest
+		if !decodeStrict(w, r, &req) {
+			return
+		}
+		out, err := a.Commands.RenameScheduleClass.Handle(r.Context(), command.RenameScheduleClassCommand{
+			TenantID: tid, ClassID: classID.String(), Label: req.Label, Reason: req.Reason,
+			ActorMembershipID: actor, ImpersonatorOperatorID: op,
+		})
+		if err != nil {
+			writeCommandError(w, r, log, "patch drug schedule class", err)
+			return
+		}
+		writeJSON(w, http.StatusOK, scheduleChangedDto(out))
+	})
+}
+
+func handleDeleteScheduleClass(log *slog.Logger, a app.Application) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		tid, actor, op, ok := scheduleActor(w, r)
+		if !ok {
+			return
+		}
+		classID, ok := parsePathUUID(w, r, "classId")
+		if !ok {
+			return
+		}
+		var req DeleteScheduleClassRequest
+		if !decodeStrict(w, r, &req) {
+			return
+		}
+		out, err := a.Commands.RemoveScheduleClass.Handle(r.Context(), command.RemoveScheduleClassCommand{
+			TenantID: tid, ClassID: classID.String(), Reason: req.Reason, ActorMembershipID: actor, ImpersonatorOperatorID: op,
+		})
+		if err != nil {
+			writeCommandError(w, r, log, "delete drug schedule class", err)
+			return
+		}
+		writeJSON(w, http.StatusOK, scheduleChangedDto(out))
+	})
+}
+
 // ----- Helpers ---------------------------------------------------------------
 
 // writeCommandError maps a command error to the wire: 409 for a stale version,
@@ -284,6 +399,10 @@ func writeCommandError(w http.ResponseWriter, r *http.Request, log *slog.Logger,
 		writeError(w, http.StatusForbidden, ErrCodeForbidden, "missing permission company_settings.manage for: "+strings.Join(needManage.Keys, ", "))
 	case errors.Is(err, commercesettings.ErrGSTRateNotFound):
 		writeError(w, http.StatusNotFound, ErrCodeNotFound, "gst rate not found")
+	case errors.Is(err, commercesettings.ErrScheduleClassNotFound):
+		writeError(w, http.StatusNotFound, ErrCodeNotFound, "drug schedule class not found")
+	case errors.Is(err, commercesettings.ErrScheduleClassInUse):
+		writeError(w, http.StatusConflict, ErrCodeScheduleClassInUse, "a product still carries this class; clear it from those products first")
 	case commercepolicy.Fields(err) != nil:
 		writeFieldErrors(w, http.StatusUnprocessableEntity, ErrCodeValidationFailed, commercepolicy.Fields(err))
 	default:
@@ -309,6 +428,23 @@ func settingsViewToDto(v *query.SettingsView) SettingsDto {
 		TenantID: v.TenantID, Version: v.Version, Policy: v.Policy, Options: v.Options,
 		UpdatedAt: v.UpdatedAt, UpdatedByMembershipID: v.UpdatedBy,
 	}
+}
+
+func classesToDto(in []commercepolicy.ScheduleClass) []ScheduleClassDto {
+	out := make([]ScheduleClassDto, 0, len(in))
+	for _, c := range in {
+		out = append(out, ScheduleClassDto{ID: c.ID, Label: c.Label})
+	}
+	return out
+}
+
+func scheduleChangedDto(r command.ScheduleClassResult) ScheduleClassesDto {
+	dto := ScheduleClassesDto{PolicyVersion: r.PolicyVersion, Items: classesToDto(r.Items)}
+	if r.Class.ID != "" {
+		c := ScheduleClassDto{ID: r.Class.ID, Label: r.Class.Label}
+		dto.Class = &c
+	}
+	return dto
 }
 
 func rateToDto(r commercepolicy.GSTRate) GSTRateDto {

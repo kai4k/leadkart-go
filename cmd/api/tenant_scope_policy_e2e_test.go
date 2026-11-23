@@ -52,7 +52,7 @@ func TestE2E_TenantScope_ForeignWritesReadOnlyByDefault(t *testing.T) {
 			t.Errorf("%s: orders write under scope: %d %s, want 403 tenant_scope_read_only", name, q.status, q.body)
 		}
 		pr := f.doWithHeaders(t, http.MethodPost, "/api/v1/inventory/products", tok, invports.CreateProductRequest{
-			SKU: "RO-001", Name: "Read Only", DosageForm: "tablet", PackSize: "10x10", HSNCode: "30049099", GSTRateBps: new(1200),
+			SKU: "RO-001", Name: "Read Only", DosageForm: "tablet", PackSize: "10x10", HSNCode: "30049099", GSTRateID: "00000000-0000-4000-8000-000000000001",
 		}, scopeHdr(a.TenantID))
 		if pr.status != http.StatusForbidden || decodeErrorCode(t, pr.body) != "tenant_scope_read_only" {
 			t.Errorf("%s: inventory write under scope: %d %s, want 403 tenant_scope_read_only", name, pr.status, pr.body)

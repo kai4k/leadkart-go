@@ -100,6 +100,42 @@ type PatchGSTRateRequest struct {
 	Reason      string  `json:"reason"`
 }
 
+// ----- Drug schedule classes --------------------------------------------------
+
+// ScheduleClassDto is one entry of the company drug schedule class list. A
+// product stores the id; the label can be renamed.
+type ScheduleClassDto struct {
+	ID    string `json:"id"`
+	Label string `json:"label"`
+}
+
+// ScheduleClassesDto is the company class list, the schedule mode and the
+// policy version it was read at (or moved to by a change).
+type ScheduleClassesDto struct {
+	PolicyVersion int64              `json:"policy_version"`
+	Mode          string             `json:"mode,omitzero"`
+	Items         []ScheduleClassDto `json:"items"`
+	// Class is the class a create or rename acted on.
+	Class *ScheduleClassDto `json:"class,omitzero"`
+}
+
+// CreateScheduleClassRequest adds a class. reason is required.
+type CreateScheduleClassRequest struct {
+	Label  string `json:"label"`
+	Reason string `json:"reason"`
+}
+
+// PatchScheduleClassRequest renames a class. reason is required.
+type PatchScheduleClassRequest struct {
+	Label  string `json:"label"`
+	Reason string `json:"reason"`
+}
+
+// DeleteScheduleClassRequest removes a class. reason is required.
+type DeleteScheduleClassRequest struct {
+	Reason string `json:"reason"`
+}
+
 // ----- Error envelope --------------------------------------------------------
 
 // ErrorResponse mirrors the other modules' RFC 9457 Problem Details shape with
@@ -128,5 +164,6 @@ const (
 	ErrCodeUnauthenticated         = "unauthenticated"
 	ErrCodeForbidden               = "forbidden"
 	ErrCodeSettingsVersionConflict = "settings_version_conflict"
+	ErrCodeScheduleClassInUse      = "drug_schedule_class_in_use"
 	ErrCodeInternalError           = "internal_error"
 )

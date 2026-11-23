@@ -8,6 +8,7 @@ import (
 
 	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
+	"github.com/leadkart/leadkart-go/internal/inventory/app/sellability"
 	"github.com/leadkart/leadkart-go/internal/inventory/domain/product"
 )
 
@@ -22,7 +23,7 @@ type UpdateProductCommand struct {
 	ProductID         product.ID
 	ActorMembershipID membership.ID
 	Name              *string
-	GSTRateBps        *int
+	GSTRateID         *string
 	IsActive          *bool
 	Manufacturer      *string
 	// ReorderLevel, ExpiryAlertThresholdDays and ProductCategory are the
@@ -31,22 +32,32 @@ type UpdateProductCommand struct {
 	ReorderLevel             *int
 	ExpiryAlertThresholdDays *int
 	ProductCategory          *string
+	DefaultSaleRatePaise     *int64
+	GenericName              *string
+	Composition              *string
+	StorageCondition         *string
+	// DrugSchedule is the class id; a pointer to "" clears it. nil leaves it alone.
+	DrugSchedule *string
 }
 
 // UpdateProductHandler runs load → updateFn → persist plus event drain under
 // the repository's tx (TDL UpdateFn pattern, ADR 0004).
 type UpdateProductHandler struct {
 	products product.Repository
+	policy   sellability.PolicyReader
 	now      func() time.Time
 }
 
 // NewUpdateProductHandler wires the handler. now is the injected clock (nil →
 // time.Now).
-func NewUpdateProductHandler(products product.Repository, now func() time.Time) UpdateProductHandler {
+func NewUpdateProductHandler(products product.Repository, policy sellability.PolicyReader, now func() time.Time) UpdateProductHandler {
+	if policy == nil {
+		panic("command: NewUpdateProductHandler policy required")
+	}
 	if now == nil {
 		now = time.Now
 	}
-	return UpdateProductHandler{products: products, now: now}
+	return UpdateProductHandler{products: products, policy: policy, now: now}
 }
 
 // Handle applies the partial update. ErrNotFound → 404, product.ErrInvalid →
@@ -56,10 +67,38 @@ func (h UpdateProductHandler) Handle(ctx context.Context, cmd UpdateProductComma
 		return errors.New("update_product: tenant id required")
 	}
 	now := h.now()
-	err := h.products.UpdateByID(ctx, cmd.TenantID, cmd.ProductID, func(p *product.Product) (bool, error) {
+	// The company lists are read BEFORE the product row is locked (ReadPolicy joins a
+	// caller transaction when there is one; here there is none).
+	pol, err := h.policy.ReadPolicy(ctx, cmd.TenantID)
+	if err != nil {
+		return fmt.Errorf("update product: read policy: %w", err)
+	}
+	err = h.products.UpdateByID(ctx, cmd.TenantID, cmd.ProductID, func(p *product.Product) (bool, error) {
+		var rate *int
+		if cmd.GSTRateID != nil || cmd.DrugSchedule != nil {
+			if cmd.GSTRateID != nil && *cmd.GSTRateID == "" {
+				return false, &FieldRefusal{Fields: map[string][]string{"gst_rate_id": {CodeRequired}}}
+			}
+			bps, refusal := resolveCatalogue(pol.Policy, catalogueChoice{
+				CurrentGSTRateID: p.GSTRateID(), GSTRateID: derefString(cmd.GSTRateID),
+				ScheduleGiven: cmd.DrugSchedule != nil, DrugSchedule: derefString(cmd.DrugSchedule),
+			})
+			if refusal != nil {
+				return false, refusal
+			}
+			if bps >= 0 {
+				rate = &bps
+			}
+		}
 		if err := p.Update(cmd.ActorMembershipID, product.UpdateSpec{
 			Name:                     cmd.Name,
-			GSTRateBps:               cmd.GSTRateBps,
+			GSTRateBps:               rate,
+			GSTRateID:                cmd.GSTRateID,
+			DefaultSaleRatePaise:     cmd.DefaultSaleRatePaise,
+			GenericName:              cmd.GenericName,
+			Composition:              cmd.Composition,
+			StorageCondition:         cmd.StorageCondition,
+			DrugScheduleClassID:      cmd.DrugSchedule,
 			IsActive:                 cmd.IsActive,
 			Manufacturer:             cmd.Manufacturer,
 			ReorderLevel:             cmd.ReorderLevel,
@@ -78,4 +117,11 @@ func (h UpdateProductHandler) Handle(ctx context.Context, cmd UpdateProductComma
 		return fmt.Errorf("update product: %w", err)
 	}
 	return nil
+}
+
+func derefString(p *string) string {
+	if p == nil {
+		return ""
+	}
+	return *p
 }

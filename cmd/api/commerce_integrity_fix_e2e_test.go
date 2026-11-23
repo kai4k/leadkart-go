@@ -118,8 +118,9 @@ func TestE2E_Commerce_NULInTextIs422NeverA500(t *testing.T) {
 
 	// ----- inventory (its refusals keep the one code it has always used) ---------
 	products := "/api/v1/inventory/products"
+	rate1200 := e2eRate(t, f, tok, 1200)
 	product := func(edit func(*invports.CreateProductRequest)) invports.CreateProductRequest {
-		p := invports.CreateProductRequest{SKU: "NUL-" + uuid.NewString()[:8], Name: "Product", DosageForm: "tablet", PackSize: "10x10", HSNCode: "30049099", GSTRateBps: new(1200)}
+		p := invports.CreateProductRequest{SKU: "NUL-" + uuid.NewString()[:8], Name: "Product", DosageForm: "tablet", PackSize: "10x10", HSNCode: "30049099", GSTRateID: rate1200}
 		edit(&p)
 		return p
 	}
@@ -232,7 +233,7 @@ func TestE2E_Inventory_LimitsCountCharactersNotBytes(t *testing.T) {
 	// Product: every text field at its limit, in Devanagari.
 	atLimit := invports.CreateProductRequest{
 		SKU: dev(64), Name: dev(200), DosageForm: dev(50), PackSize: dev(100), HSNCode: "30049099",
-		GSTRateBps: new(1200), Manufacturer: dev(200),
+		GSTRateID: e2eRate(t, f, tok, 1200), Manufacturer: dev(200),
 	}
 	resp := f.authedJSON(t, http.MethodPost, products, tok, atLimit)
 	var p invports.CreateProductResponse

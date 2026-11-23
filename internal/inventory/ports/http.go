@@ -123,13 +123,23 @@ func handleCreateProduct(log *slog.Logger, a app.Application) http.Handler {
 			DosageForm:               req.DosageForm,
 			PackSize:                 req.PackSize,
 			HSNCode:                  req.HSNCode,
-			GSTRateBps:               req.GSTRateBps,
+			GSTRateID:                strings.TrimSpace(req.GSTRateID),
 			Manufacturer:             req.Manufacturer,
+			DefaultSaleRatePaise:     derefOr(req.DefaultSaleRatePaise, 0),
+			GenericName:              derefOr(req.GenericName, ""),
+			Composition:              derefOr(req.Composition, ""),
+			StorageCondition:         derefOr(req.StorageCondition, ""),
+			DrugSchedule:             strings.TrimSpace(derefOr(req.DrugSchedule, "")),
+			DrugScheduleGiven:        req.DrugSchedule != nil,
 			ProductCategory:          derefOr(req.ProductCategory, ""),
 			ReorderLevel:             derefOr(req.ReorderLevel, 0),
 			ExpiryAlertThresholdDays: req.ExpiryAlertThresholdDays,
 		})
+		var refusal *command.FieldRefusal
 		switch {
+		case errors.As(err, &refusal):
+			writeFieldErrors(w, http.StatusUnprocessableEntity, ErrCodeValidationFailed, refusal.Fields)
+			return
 		case errors.Is(err, product.ErrSKUTaken):
 			writeError(w, http.StatusConflict, ErrCodeAlreadyExists, "sku already exists in this tenant")
 			return
@@ -268,14 +278,23 @@ func handleUpdateProduct(log *slog.Logger, a app.Application) http.Handler {
 			ProductID:                product.ID(id.String()),
 			ActorMembershipID:        membership.ID(c.MembershipID),
 			Name:                     req.Name,
-			GSTRateBps:               req.GSTRateBps,
+			GSTRateID:                trimmed(req.GSTRateID),
 			IsActive:                 req.IsActive,
 			Manufacturer:             req.Manufacturer,
+			DefaultSaleRatePaise:     req.DefaultSaleRatePaise,
+			GenericName:              req.GenericName,
+			Composition:              req.Composition,
+			StorageCondition:         req.StorageCondition,
+			DrugSchedule:             trimmed(req.DrugSchedule),
 			ReorderLevel:             req.ReorderLevel,
 			ExpiryAlertThresholdDays: req.ExpiryAlertThresholdDays,
 			ProductCategory:          req.ProductCategory,
 		})
+		var refusal *command.FieldRefusal
 		switch {
+		case errors.As(err, &refusal):
+			writeFieldErrors(w, http.StatusUnprocessableEntity, ErrCodeValidationFailed, refusal.Fields)
+			return
 		case errors.Is(err, product.ErrNotFound):
 			writeError(w, http.StatusNotFound, ErrCodeNotFound, "")
 			return
@@ -353,7 +372,7 @@ func handleListProductCategories(log *slog.Logger, a app.Application) http.Handl
 		}
 		items := make([]ProductCategoryDto, 0, len(views))
 		for _, v := range views {
-			items = append(items, ProductCategoryDto{Category: v.Category, DefaultGSTRateBps: v.DefaultGSTRateBps})
+			items = append(items, ProductCategoryDto{Category: v.Category})
 		}
 		writeJSON(w, http.StatusOK, ListProductCategoriesResponse{Items: items})
 	})
@@ -709,6 +728,15 @@ func parsePageSize(raw string) int {
 	return n
 }
 
+// trimmed returns a pointer to the trimmed value, or nil when p is nil.
+func trimmed(p *string) *string {
+	if p == nil {
+		return nil
+	}
+	v := strings.TrimSpace(*p)
+	return &v
+}
+
 // derefOr returns *p, or fallback when the request did not send the field.
 func derefOr[T comparable](p *T, fallback T) T {
 	if p == nil {
@@ -768,6 +796,15 @@ func productViewToDto(v query.ProductView) ProductDto {
 		ProductCategory:          v.ProductCategory,
 		ReorderLevel:             v.ReorderLevel,
 		ExpiryAlertThresholdDays: v.ExpiryAlertThresholdDays,
+
+		GSTRateID:            v.GSTRateID,
+		GSTRateLabel:         v.GSTRateLabel,
+		DefaultSaleRatePaise: v.DefaultSaleRatePaise,
+		GenericName:          v.GenericName,
+		Composition:          v.Composition,
+		StorageCondition:     v.StorageCondition,
+		DrugSchedule:         v.DrugScheduleClassID,
+		DrugScheduleLabel:    v.DrugScheduleLabel,
 
 		StockOnHand:      v.StockOnHand,
 		StockReserved:    v.StockReserved,

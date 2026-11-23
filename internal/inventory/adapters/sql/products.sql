@@ -7,11 +7,13 @@
 INSERT INTO inventory.products (
     id, tenant_id, sku, name, dosage_form, pack_size, hsn_code,
     gst_rate_bps, manufacturer, is_active, created_at, updated_at,
-    reorder_level, expiry_alert_threshold_days, product_category
+    reorder_level, expiry_alert_threshold_days, product_category,
+    gst_rate_id, default_sale_rate_paise, generic_name, composition, storage_condition, drug_schedule_class_id
 ) VALUES (
     $1, $2, $3, $4, $5, $6, $7,
     $8, $9, $10, $11, $12,
-    $13, $14, $15
+    $13, $14, $15,
+    $16, $17, $18, $19, $20, $21
 );
 
 -- name: GetProductByID :one
@@ -21,7 +23,8 @@ SELECT id, tenant_id, sku, name, dosage_form, pack_size, hsn_code,
        gst_rate_bps, manufacturer, is_active,
        created_at, updated_at, is_deleted, deleted_at, deleted_by,
        created_by_membership_id, reorder_level, expiry_alert_threshold_days,
-       product_category
+       product_category,
+       gst_rate_id, default_sale_rate_paise, generic_name, composition, storage_condition, drug_schedule_class_id
 FROM   inventory.products
 WHERE  id = $1
 AND    NOT is_deleted;
@@ -38,7 +41,13 @@ SET    name                        = $2,
        updated_at                  = $6,
        reorder_level               = $7,
        expiry_alert_threshold_days = $8,
-       product_category            = $9
+       product_category            = $9,
+       gst_rate_id                 = $10,
+       default_sale_rate_paise     = $11,
+       generic_name                = $12,
+       composition                 = $13,
+       storage_condition           = $14,
+       drug_schedule_class_id      = $15
 WHERE  id = $1
 AND    NOT is_deleted;
 
@@ -61,7 +70,8 @@ SELECT id, tenant_id, sku, name, dosage_form, pack_size, hsn_code,
        gst_rate_bps, manufacturer, is_active,
        created_at, updated_at, is_deleted, deleted_at, deleted_by,
        created_by_membership_id, reorder_level, expiry_alert_threshold_days,
-       product_category
+       product_category,
+       gst_rate_id, default_sale_rate_paise, generic_name, composition, storage_condition, drug_schedule_class_id
 FROM   inventory.products
 WHERE  tenant_id = $1
 AND    NOT is_deleted
@@ -85,6 +95,7 @@ LIMIT  sqlc.arg('limit');
 SELECT p.id, p.tenant_id, p.sku, p.name, p.dosage_form, p.pack_size, p.hsn_code,
        p.gst_rate_bps, p.manufacturer, p.is_active, p.created_at, p.updated_at,
        p.reorder_level, p.expiry_alert_threshold_days, p.product_category,
+       p.gst_rate_id, p.default_sale_rate_paise, p.generic_name, p.composition, p.storage_condition, p.drug_schedule_class_id,
        COALESCE(s.stock_on_hand, 0)::bigint     AS stock_on_hand,
        COALESCE(s.stock_reserved, 0)::bigint    AS stock_reserved,
        COALESCE(s.stock_quarantined, 0)::bigint AS stock_quarantined,
@@ -137,6 +148,7 @@ AND    NOT p.is_deleted;
 SELECT p.id, p.tenant_id, p.sku, p.name, p.dosage_form, p.pack_size, p.hsn_code,
        p.gst_rate_bps, p.manufacturer, p.is_active, p.created_at, p.updated_at,
        p.reorder_level, p.expiry_alert_threshold_days, p.product_category,
+       p.gst_rate_id, p.default_sale_rate_paise, p.generic_name, p.composition, p.storage_condition, p.drug_schedule_class_id,
        COALESCE(s.stock_on_hand, 0)::bigint     AS stock_on_hand,
        COALESCE(s.stock_reserved, 0)::bigint    AS stock_reserved,
        COALESCE(s.stock_quarantined, 0)::bigint AS stock_quarantined,
@@ -182,3 +194,21 @@ AND    (
 AND    (p.created_at, p.id) < (sqlc.arg('cursor_created_at')::timestamptz, sqlc.arg('cursor_id')::uuid)
 ORDER  BY p.created_at DESC, p.id DESC
 LIMIT  sqlc.arg('limit');
+
+-- name: CountProductsWithScheduleClass :one
+-- How many LIVE products carry a drug schedule class (any class). The company
+-- settings module asks before it lets the schedule mode go to off.
+SELECT count(*)::bigint
+FROM   inventory.products
+WHERE  tenant_id = $1
+AND    NOT is_deleted
+AND    drug_schedule_class_id IS NOT NULL;
+
+-- name: CountProductsWithClass :one
+-- How many LIVE products carry the given class. A class a product carries cannot
+-- be removed from the company list.
+SELECT count(*)::bigint
+FROM   inventory.products
+WHERE  tenant_id = $1
+AND    NOT is_deleted
+AND    drug_schedule_class_id = $2;

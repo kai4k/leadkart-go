@@ -180,7 +180,7 @@ func TestE2E_TenantScope_InventoryActsInScopedTenant(t *testing.T) {
 	op := f.mintPlatformTokenWith(t, nil, true)
 
 	created := f.authedJSON(t, http.MethodPost, "/api/v1/inventory/products", a.AccessToken, invports.CreateProductRequest{
-		SKU: "SCOPE-001", Name: "Scoped Tablet", DosageForm: "tablet", PackSize: "10x10", HSNCode: "30049099", GSTRateBps: new(1200),
+		SKU: "SCOPE-001", Name: "Scoped Tablet", DosageForm: "tablet", PackSize: "10x10", HSNCode: "30049099", GSTRateID: e2eRate(t, f, a.AccessToken, 1200),
 	})
 	if created.status != http.StatusCreated {
 		t.Fatalf("tenant A admin create product: %d %s", created.status, created.body)

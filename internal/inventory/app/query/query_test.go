@@ -379,7 +379,7 @@ func (f fakeCategoryReader) ListProductCategories(context.Context) ([]query.Prod
 
 func TestListProductCategoriesHandler_ReturnsTheReferenceList(t *testing.T) {
 	t.Parallel()
-	want := []query.ProductCategoryView{{Category: "General", DefaultGSTRateBps: 1200}, {Category: "Nutraceuticals", DefaultGSTRateBps: 1800}}
+	want := []query.ProductCategoryView{{Category: "General"}, {Category: "Nutraceuticals"}}
 	got, err := query.NewListProductCategoriesHandler(fakeCategoryReader{out: want}).Handle(t.Context(), query.ListProductCategoriesQuery{})
 	if err != nil {
 		t.Fatalf("Handle: %v", err)

@@ -456,6 +456,7 @@ func TestArch_MutatorsEmitEventsOnStateChange(t *testing.T) {
 		{"Role", "ChangeHierarchyLevel"}:     true, // hierarchy edges aggregate owns the event surface (ADR 0058)
 		{"Order", "AttachInvoice"}:           true, // event emitted via advance(StateInvoiced, ...) per ADR 0063 §4 state-machine canon
 		{"Order", "AttachConsignment"}:       true, // event emitted via advance(StateDispatched, ...) per ADR 0063 §4 state-machine canon
+		{"Product", "applyCatalogueUpdates"}: true, // sub-applier of Update; the single UpdatedEvent is emitted by Update after merging changed-field sets
 		{"Product", "applyExtendedUpdates"}:  true, // sub-applier of Update; the single UpdatedEvent is emitted by Update after merging changed-field sets
 	}
 

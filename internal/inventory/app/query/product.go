@@ -39,6 +39,18 @@ type ProductView struct {
 	ReorderLevel             int
 	ExpiryAlertThresholdDays int
 
+	// The G2 catalogue fields. GSTRateLabel and DrugScheduleLabel are resolved from
+	// the company policy (the lists the ids point into) by the query handlers; they
+	// are empty when the id is empty or no longer in the list.
+	GSTRateID            string
+	GSTRateLabel         string
+	DefaultSaleRatePaise int64
+	GenericName          string
+	Composition          string
+	StorageCondition     string
+	DrugScheduleClassID  string
+	DrugScheduleLabel    string
+
 	// The five stock buckets of the live batches; they sum: StockOnHand =
 	// StockReserved + StockAvailable + StockUnsellable + StockQuarantined.
 	// Available is the free units of sellable batches (what can be sold);
@@ -114,7 +126,11 @@ func (h GetProductHandler) Handle(ctx context.Context, q GetProductQuery) (Produ
 	if err != nil {
 		return ProductView{}, fmt.Errorf("get product: %w", err)
 	}
-	return h.products.GetProduct(ctx, q.TenantID, q.ProductID, w)
+	v, err := h.products.GetProduct(ctx, q.TenantID, q.ProductID, w)
+	if err != nil {
+		return ProductView{}, err
+	}
+	return labelled(v, w), nil
 }
 
 // ListProductsPageQuery — cursor-paginated product list under tenant scope.
@@ -149,6 +165,9 @@ func (h ListProductsPageHandler) Handle(ctx context.Context, q ListProductsPageQ
 	if err != nil {
 		return pagination.Page[ProductView]{}, fmt.Errorf("list products: %w", err)
 	}
+	for i := range rows {
+		rows[i] = labelled(rows[i], w)
+	}
 	page := pagination.BuildPage(rows, size, func(v ProductView) pagination.Cursor {
 		return pagination.Cursor{SortValue: v.CreatedAt, ID: v.ID}
 	})
@@ -156,4 +175,17 @@ func (h ListProductsPageHandler) Handle(ctx context.Context, q ListProductsPageQ
 		page.Items = []ProductView{}
 	}
 	return page, nil
+}
+
+// labelled fills the labels of the company lists the product ids point into.
+func labelled(v ProductView, w sellability.Window) ProductView {
+	for _, r := range w.Policy.Tax.GSTRates {
+		if r.ID == v.GSTRateID {
+			v.GSTRateLabel = r.Label
+		}
+	}
+	if c, ok := w.Policy.DrugSchedule.ScheduleClassByID(v.DrugScheduleClassID); ok {
+		v.DrugScheduleLabel = c.Label
+	}
+	return v
 }

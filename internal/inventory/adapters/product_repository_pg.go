@@ -212,6 +212,12 @@ func insertProductRow(ctx context.Context, q *db.Queries, p *product.Product) er
 		//nolint:gosec // bounded by aggregate invariant (>= 0)
 		ExpiryAlertThresholdDays: int32(p.ExpiryAlertThresholdDays()),
 		ProductCategory:          p.ProductCategory(),
+		GstRateID:                optionalUUID(p.GSTRateID()),
+		DefaultSaleRatePaise:     p.DefaultSaleRatePaise(),
+		GenericName:              p.GenericName(),
+		Composition:              p.Composition(),
+		StorageCondition:         p.StorageCondition(),
+		DrugScheduleClassID:      optionalUUID(p.DrugScheduleClassID()),
 	})
 	if err != nil {
 		if isSKUUniqueViolation(err) {
@@ -252,6 +258,12 @@ func persistProductState(ctx context.Context, q *db.Queries, p *product.Product)
 		//nolint:gosec // bounded by aggregate invariant (>= 0)
 		ExpiryAlertThresholdDays: int32(p.ExpiryAlertThresholdDays()),
 		ProductCategory:          p.ProductCategory(),
+		GstRateID:                optionalUUID(p.GSTRateID()),
+		DefaultSaleRatePaise:     p.DefaultSaleRatePaise(),
+		GenericName:              p.GenericName(),
+		Composition:              p.Composition(),
+		StorageCondition:         p.StorageCondition(),
+		DrugScheduleClassID:      optionalUUID(p.DrugScheduleClassID()),
 	})
 	if err != nil {
 		if isSKUUniqueViolation(err) {
@@ -283,6 +295,12 @@ func rowToProduct(row db.InventoryProduct) (*product.Product, error) {
 		ReorderLevel:             int(row.ReorderLevel),
 		ExpiryAlertThresholdDays: int(row.ExpiryAlertThresholdDays),
 		ProductCategory:          row.ProductCategory,
+		GSTRateID:                uuidString(row.GstRateID),
+		DefaultSaleRatePaise:     row.DefaultSaleRatePaise,
+		GenericName:              row.GenericName,
+		Composition:              row.Composition,
+		StorageCondition:         row.StorageCondition,
+		DrugScheduleClassID:      uuidString(row.DrugScheduleClassID),
 		CreatedAt:                pgconv.TimeFromPg(row.CreatedAt),
 		UpdatedAt:                pgconv.TimeFromPg(row.UpdatedAt),
 		IsDeleted:                row.IsDeleted,
@@ -328,4 +346,24 @@ func isSKUUniqueViolation(err error) bool {
 		return false
 	}
 	return pgErr.ConstraintName == constraintProductTenantSku
+}
+
+// optionalUUID is the column value of an optional uuid: NULL for the empty string.
+func optionalUUID(s string) pgtype.UUID {
+	if s == "" {
+		return pgtype.UUID{}
+	}
+	id, err := uuid.Parse(s)
+	if err != nil {
+		return pgtype.UUID{} // the aggregate validated it; unreachable
+	}
+	return pgconv.PgUUID(id)
+}
+
+// uuidString is the string form of an optional uuid column ("" when NULL).
+func uuidString(u pgtype.UUID) string {
+	if !u.Valid {
+		return ""
+	}
+	return pgconv.UUIDFromPg(u).String()
 }

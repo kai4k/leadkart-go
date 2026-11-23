@@ -35,7 +35,7 @@ func (r *ProductCategoryReader) ListProductCategories(ctx context.Context) ([]qu
 	}
 	out := make([]query.ProductCategoryView, 0, len(rows))
 	for _, row := range rows {
-		out = append(out, query.ProductCategoryView{Category: row.Category, DefaultGSTRateBps: row.RateBps})
+		out = append(out, query.ProductCategoryView{Category: row.Category})
 	}
 	return out, nil
 }

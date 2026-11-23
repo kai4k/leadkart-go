@@ -2,9 +2,13 @@ package command_test
 
 import (
 	"errors"
+	"slices"
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
+	"github.com/leadkart/leadkart-go/internal/common/commercepolicy"
 	"github.com/leadkart/leadkart-go/internal/inventory/app/command"
 	"github.com/leadkart/leadkart-go/internal/inventory/domain/product"
 )
@@ -15,7 +19,7 @@ func TestUpdateProductHandler_HappyPath_AppliesPartial(t *testing.T) {
 	tid := newTenantID(t)
 	actor := newMembershipID(t)
 	p := seedProduct(t, repo, tid, actor, "UPD-1")
-	h := command.NewUpdateProductHandler(repo, func() time.Time { return fixedNow })
+	h := newUpdate(repo, commercepolicy.DrugScheduleOptional)
 
 	newName := "Renamed"
 	err := h.Handle(t.Context(), command.UpdateProductCommand{
@@ -35,7 +39,7 @@ func TestUpdateProductHandler_HappyPath_AppliesPartial(t *testing.T) {
 func TestUpdateProductHandler_MissingProduct_ReturnsErrNotFound(t *testing.T) {
 	t.Parallel()
 	repo := newFakeProductRepo()
-	h := command.NewUpdateProductHandler(repo, func() time.Time { return fixedNow })
+	h := newUpdate(repo, commercepolicy.DrugScheduleOptional)
 	tid := newTenantID(t)
 	actor := newMembershipID(t)
 
@@ -46,25 +50,6 @@ func TestUpdateProductHandler_MissingProduct_ReturnsErrNotFound(t *testing.T) {
 	})
 	if !errors.Is(err, product.ErrNotFound) {
 		t.Fatalf("err: got %v want ErrNotFound", err)
-	}
-}
-
-// Out-of-range GST → ErrInvalid from the aggregate's Update guard.
-func TestUpdateProductHandler_InvalidGSTRate_ReturnsErrInvalid(t *testing.T) {
-	t.Parallel()
-	repo := newFakeProductRepo()
-	tid := newTenantID(t)
-	actor := newMembershipID(t)
-	p := seedProduct(t, repo, tid, actor, "GST-1")
-	h := command.NewUpdateProductHandler(repo, func() time.Time { return fixedNow })
-
-	bad := 99999 // > 10000 ceiling
-	err := h.Handle(t.Context(), command.UpdateProductCommand{
-		TenantID: tid, ProductID: p.ID(), ActorMembershipID: actor,
-		GSTRateBps: &bad,
-	})
-	if !errors.Is(err, product.ErrInvalid) {
-		t.Fatalf("err: got %v want ErrInvalid", err)
 	}
 }
 
@@ -81,7 +66,7 @@ func TestUpdateProductHandler_DeletedProduct_ReturnsErrDeleted(t *testing.T) {
 		t.Fatalf("SoftDelete: %v", err)
 	}
 	_ = p.PullEvents()
-	h := command.NewUpdateProductHandler(repo, func() time.Time { return fixedNow })
+	h := newUpdate(repo, commercepolicy.DrugScheduleOptional)
 
 	newName := "Late"
 	err := h.Handle(t.Context(), command.UpdateProductCommand{
@@ -95,27 +80,104 @@ func TestUpdateProductHandler_DeletedProduct_ReturnsErrDeleted(t *testing.T) {
 	}
 }
 
-// C14 (update path): an explicit 0 rate is applied as 0, not skipped.
-func TestUpdateProductHandler_ExplicitZeroGST_IsApplied(t *testing.T) {
+func newUpdate(repo product.Repository, mode string) command.UpdateProductHandler {
+	pol, _ := policyLists(mode)
+	return command.NewUpdateProductHandler(repo, pol, func() time.Time { return fixedNow })
+}
+
+// A product moves to another entry of the company rate list; an explicit 0% entry
+// is applied as 0. A deactivated or unknown entry is refused and nothing changes.
+func TestUpdateProductHandler_GSTMovesToAnotherListEntry(t *testing.T) {
 	t.Parallel()
 	repo := newFakeProductRepo()
-	tid := newTenantID(t)
-	actor := newMembershipID(t)
+	tid, actor := newTenantID(t), newMembershipID(t)
 	p := seedProduct(t, repo, tid, actor, "GST-0")
-	h := command.NewUpdateProductHandler(repo, func() time.Time { return fixedNow })
+	pol, l := policyLists(commercepolicy.DrugScheduleOptional)
+	h := command.NewUpdateProductHandler(repo, pol, func() time.Time { return fixedNow })
 
-	err := h.Handle(t.Context(), command.UpdateProductCommand{
-		TenantID: tid, ProductID: p.ID(), ActorMembershipID: actor, GSTRateBps: new(0),
-	})
-	if err != nil {
+	for _, tc := range []struct {
+		id   string
+		want []string
+	}{{l.retired, []string{command.CodeInactive}}, {uuid.NewString(), []string{command.CodeNotInList}}, {"", []string{command.CodeRequired}}} {
+		err := h.Handle(t.Context(), command.UpdateProductCommand{TenantID: tid, ProductID: p.ID(), ActorMembershipID: actor, GSTRateID: &tc.id})
+		if got := fieldCodes(t, err, "gst_rate_id"); !slices.Equal(got, tc.want) {
+			t.Fatalf("rate %q: codes %v, want %v", tc.id, got, tc.want)
+		}
+	}
+	nilID := l.nilRated
+	if err := h.Handle(t.Context(), command.UpdateProductCommand{TenantID: tid, ProductID: p.ID(), ActorMembershipID: actor, GSTRateID: &nilID}); err != nil {
 		t.Fatalf("Handle: %v", err)
 	}
-	got, err := repo.GetByID(t.Context(), tid, p.ID())
-	if err != nil {
-		t.Fatalf("GetByID: %v", err)
+	got, _ := repo.GetByID(t.Context(), tid, p.ID())
+	if got.GSTRateBps() != 0 || got.GSTRateID() != l.nilRated {
+		t.Fatalf("rate %d id %s after choosing the nil entry", got.GSTRateBps(), got.GSTRateID())
 	}
-	if got.GSTRateBps() != 0 {
-		t.Fatalf("gst_rate_bps = %d after explicit 0, want 0", got.GSTRateBps())
+}
+
+// The schedule is set, changed and cleared through the company list, and the company
+// mode decides what is allowed. Clearing is always allowed except under required.
+func TestUpdateProductHandler_DrugScheduleFollowsTheCompanyModeAndList(t *testing.T) {
+	t.Parallel()
+	for _, mode := range []string{commercepolicy.DrugScheduleOptional, commercepolicy.DrugScheduleOff, commercepolicy.DrugScheduleRequired} {
+		t.Run(mode, func(t *testing.T) {
+			t.Parallel()
+			repo := newFakeProductRepo()
+			tid, actor := newTenantID(t), newMembershipID(t)
+			p := seedProduct(t, repo, tid, actor, "SCH-1")
+			pol, l := policyLists(mode)
+			h := command.NewUpdateProductHandler(repo, pol, func() time.Time { return fixedNow })
+			set := func(id string) error {
+				return h.Handle(t.Context(), command.UpdateProductCommand{TenantID: tid, ProductID: p.ID(), ActorMembershipID: actor, DrugSchedule: &id})
+			}
+
+			err := set(l.classA)
+			if mode == commercepolicy.DrugScheduleOff {
+				if got := fieldCodes(t, err, "drug_schedule"); !slices.Equal(got, []string{command.CodeScheduleIsOff}) {
+					t.Fatalf("a class under mode off: %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("set a class: %v", err)
+			}
+			if got, _ := repo.GetByID(t.Context(), tid, p.ID()); got.DrugScheduleClassID() != l.classA {
+				t.Fatalf("stored %q", got.DrugScheduleClassID())
+			}
+			if got := fieldCodes(t, set(uuid.NewString()), "drug_schedule"); !slices.Equal(got, []string{command.CodeNotInList}) {
+				t.Fatalf("a class outside the list: %v", got)
+			}
+			err = set("")
+			if mode == commercepolicy.DrugScheduleRequired {
+				if got := fieldCodes(t, err, "drug_schedule"); !slices.Equal(got, []string{command.CodeRequired}) {
+					t.Fatalf("clearing under required: %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("clearing: %v", err)
+			}
+			if got, _ := repo.GetByID(t.Context(), tid, p.ID()); got.DrugScheduleClassID() != "" {
+				t.Fatalf("the class was not cleared: %q", got.DrugScheduleClassID())
+			}
+		})
+	}
+}
+
+// Under mode off a product that already carries a class may still be edited and the
+// class cleared: the refusal is on SETTING one.
+func TestUpdateProductHandler_ClearingAClassIsAllowedUnderModeOff(t *testing.T) {
+	t.Parallel()
+	repo := newFakeProductRepo()
+	tid, actor := newTenantID(t), newMembershipID(t)
+	p := seedProduct(t, repo, tid, actor, "SCH-OFF")
+	pol, l := policyLists(commercepolicy.DrugScheduleOff)
+	h := command.NewUpdateProductHandler(repo, pol, func() time.Time { return fixedNow })
+	if err := p.Update(actor, product.UpdateSpec{DrugScheduleClassID: &l.classA}, fixedNow); err != nil {
+		t.Fatal(err)
+	}
+	empty := ""
+	if err := h.Handle(t.Context(), command.UpdateProductCommand{TenantID: tid, ProductID: p.ID(), ActorMembershipID: actor, DrugSchedule: &empty}); err != nil {
+		t.Fatalf("clearing under off: %v", err)
 	}
 }
 
@@ -126,7 +188,7 @@ func TestUpdateProductHandler_AppliesFormFields(t *testing.T) {
 	tid := newTenantID(t)
 	actor := newMembershipID(t)
 	p := seedProduct(t, repo, tid, actor, "UPD-FORM")
-	h := command.NewUpdateProductHandler(repo, func() time.Time { return fixedNow })
+	h := newUpdate(repo, commercepolicy.DrugScheduleOptional)
 
 	category := "Diabetic"
 	err := h.Handle(t.Context(), command.UpdateProductCommand{

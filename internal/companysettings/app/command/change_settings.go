@@ -7,6 +7,7 @@ package command
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -48,18 +49,19 @@ type SettingsResult struct {
 // ChangeSettingsHandler applies a patch under the tenant's policy row lock.
 type ChangeSettingsHandler struct {
 	settings commercesettings.Repository
+	usage    ScheduleUsageReader
 	now      func() time.Time
 }
 
 // NewChangeSettingsHandler wires the handler.
-func NewChangeSettingsHandler(settings commercesettings.Repository, now func() time.Time) ChangeSettingsHandler {
-	if settings == nil {
-		panic("command: NewChangeSettingsHandler settings required")
+func NewChangeSettingsHandler(settings commercesettings.Repository, usage ScheduleUsageReader, now func() time.Time) ChangeSettingsHandler {
+	if settings == nil || usage == nil {
+		panic("command: NewChangeSettingsHandler settings and usage required")
 	}
 	if now == nil {
 		now = time.Now
 	}
-	return ChangeSettingsHandler{settings: settings, now: now}
+	return ChangeSettingsHandler{settings: settings, usage: usage, now: now}
 }
 
 // Handle runs the change. A stale ExpectedVersion is
@@ -69,12 +71,23 @@ func (h ChangeSettingsHandler) Handle(ctx context.Context, cmd ChangeSettingsCom
 	if cmd.TenantID == "" {
 		return SettingsResult{}, errors.New("change company settings: tenant id required")
 	}
+	// Whether any product carries a schedule class is Inventory's fact; it is read
+	// BEFORE the policy row is locked (a second connection under the lock is the
+	// pool-deadlock shape) and only when the patch turns the schedule mode off.
+	var scheduled int64
+	if turnsScheduleOff(cmd.Changes) {
+		n, err := h.usage.ProductsWithSchedule(ctx, cmd.TenantID)
+		if err != nil {
+			return SettingsResult{}, fmt.Errorf("change company settings: read schedule usage: %w", err)
+		}
+		scheduled = n
+	}
 	var out SettingsResult
 	err := h.settings.UpdateByID(ctx, cmd.TenantID, func(s *commercesettings.Settings) (bool, error) {
 		res, err := s.Change(commercesettings.ChangeInput{
 			ExpectedVersion: cmd.ExpectedVersion, Changes: cmd.Changes, Reason: cmd.Reason,
 			Actor:     commercesettings.Actor{MembershipID: cmd.ActorMembershipID, ImpersonatorOperatorID: cmd.ImpersonatorOperatorID},
-			MayManage: cmd.MayManage, MayManageTax: cmd.MayManageTax, Now: h.now(),
+			MayManage: cmd.MayManage, MayManageTax: cmd.MayManageTax, ScheduledProducts: scheduled, Now: h.now(),
 		})
 		if err != nil {
 			return false, err
@@ -86,6 +99,16 @@ func (h ChangeSettingsHandler) Handle(ctx context.Context, cmd ChangeSettingsCom
 		return SettingsResult{}, fmt.Errorf("change company settings: %w", err)
 	}
 	return out, nil
+}
+
+// turnsScheduleOff reports whether the patch sets drug_schedule.mode to off.
+func turnsScheduleOff(changes commercepolicy.Changes) bool {
+	raw, ok := changes["drug_schedule.mode"]
+	if !ok {
+		return false
+	}
+	var v string
+	return json.Unmarshal(raw, &v) == nil && v == commercepolicy.DrugScheduleOff
 }
 
 func resultOf(s *commercesettings.Settings, changed bool) SettingsResult {
