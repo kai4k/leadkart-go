@@ -259,7 +259,7 @@ func (h ChangePasswordHandler) verifyPassword(ctx context.Context, password, enc
 
 // policyFor returns the password policy of the caller's tenant, or the default
 // when the command carries no tenant or the tenant row is gone (a person whose
-// tenant was hard-deleted can still rotate the credential). Any other read
+// tenant row is missing can still rotate the credential). Any other read
 // failure is an error, never a silent fallback to a weaker rule.
 func (h ChangePasswordHandler) policyFor(ctx context.Context, id tenant.ID) (tenant.PasswordPolicy, error) {
 	if id.IsZero() {

@@ -225,9 +225,9 @@ func TestTenantScopePolicy_PathConflict(t *testing.T) {
 		// A header equal to the path tenant selects nothing (F4): the home tenant stays bound.
 		{"lifecycle same tenant", lifecycle, "POST", "/api/v1/tenants/" + tenantB + "/suspend", tenantB, 200, tenantA},
 		{"lifecycle no header", lifecycle, "POST", "/api/v1/tenants/" + tenantB + "/suspend", "", 200, tenantA},
-		{"hard delete conflict", pathOnly, "DELETE", "/api/v1/platform/tenants/" + tenantB, tenantA, 400, ""},
-		{"hard delete same tenant", pathOnly, "DELETE", "/api/v1/platform/tenants/" + tenantB, tenantB, 200, tenantA},
-		{"hard delete no header", pathOnly, "DELETE", "/api/v1/platform/tenants/" + tenantB, "", 200, tenantA},
+		{"path only conflict", pathOnly, "DELETE", "/api/v1/platform/tenants/" + tenantB, tenantA, 400, ""},
+		{"path only same tenant", pathOnly, "DELETE", "/api/v1/platform/tenants/" + tenantB, tenantB, 200, tenantA},
+		{"path only no header", pathOnly, "DELETE", "/api/v1/platform/tenants/" + tenantB, "", 200, tenantA},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

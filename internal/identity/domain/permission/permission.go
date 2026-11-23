@@ -84,7 +84,7 @@ type platformPermissions struct {
 	TenantsOwnership string
 }
 type tenantsPermissions struct {
-	View, Update, UpdateSettings, Suspend, Activate, Delete string
+	View, Update, UpdateSettings, Suspend, Activate string
 }
 type usersPermissions struct {
 	View, Create, Update, Deactivate, Reactivate, Unlock, UpdatePermissions string
@@ -283,7 +283,6 @@ var IdentityPermissions = struct {
 		UpdateSettings: "identity.tenants.update_settings",
 		Suspend:        "identity.tenants.suspend",
 		Activate:       "identity.tenants.activate",
-		Delete:         "identity.tenants.delete",
 	},
 	Users: usersPermissions{
 		View:              "identity.users.view",
@@ -391,7 +390,7 @@ func allNames() []string {
 		p.Platform.UsersView, p.Platform.UsersCreate, p.Platform.UsersManage,
 		p.Platform.RolesView, p.Platform.RolesManage, p.Platform.ImpersonationManage, p.Platform.TenantsOwnership,
 		p.Tenants.View, p.Tenants.Update, p.Tenants.UpdateSettings,
-		p.Tenants.Suspend, p.Tenants.Activate, p.Tenants.Delete,
+		p.Tenants.Suspend, p.Tenants.Activate,
 		p.Users.View, p.Users.Create, p.Users.Update,
 		p.Users.Deactivate, p.Users.Reactivate, p.Users.Unlock,
 		p.Users.UpdatePermissions,

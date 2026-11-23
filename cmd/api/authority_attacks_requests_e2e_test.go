@@ -43,7 +43,7 @@ func TestAttack_Requests_NothingUnrequestableIsEverSubmitted(t *testing.T) {
 	w := newAttackWorld(t)
 	p := permission.IdentityPermissions
 	names := []string{p.Meta.TenantAdmin, p.Platform.TenantsView, p.Platform.TenantsManage, p.Platform.UsersManage, p.Platform.RolesManage,
-		p.Platform.ImpersonationManage, p.Platform.TenantsOwnership, p.Tenants.Suspend, p.Tenants.Delete, p.PlatformLeadCredits.Topup}
+		p.Platform.ImpersonationManage, p.Platform.TenantsOwnership, p.Tenants.Suspend, p.PlatformLeadCredits.Topup}
 	var rows []attack
 	for _, actor := range []string{"admin", "office", "adminRO", "senior", "sales", "hr", "lead", "exec", "exec2"} {
 		for _, name := range names {

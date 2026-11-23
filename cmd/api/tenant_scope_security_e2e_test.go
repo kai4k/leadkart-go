@@ -134,9 +134,6 @@ func TestE2E_TenantScope_LifecycleConflictAndSuspendedTenant(t *testing.T) {
 	for _, route := range []struct{ method, path string }{
 		{http.MethodPost, "/api/v1/tenants/" + b.TenantID + "/suspend"},
 		{http.MethodPost, "/api/v1/tenants/" + b.TenantID + "/activate"},
-		{http.MethodPost, "/api/v1/tenants/" + b.TenantID + "/mark-for-deletion"},
-		{http.MethodPost, "/api/v1/tenants/" + b.TenantID + "/restore"},
-		{http.MethodDelete, "/api/v1/platform/tenants/" + b.TenantID},
 	} {
 		r := f.doWithHeaders(t, route.method, route.path, op, struct{}{}, scopeHdr(a.TenantID))
 		if r.status != http.StatusBadRequest || decodeErrorCode(t, r.body) != "tenant_scope_conflict" {

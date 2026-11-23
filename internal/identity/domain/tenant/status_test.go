@@ -17,8 +17,6 @@ func TestStatus_String(t *testing.T) {
 		{tenant.StatusPending, "pending"},
 		{tenant.StatusActive, "active"},
 		{tenant.StatusSuspended, "suspended"},
-		{tenant.StatusPendingDeletion, "pending_deletion"},
-		{tenant.StatusDeleted, "deleted"},
 	}
 	for _, tc := range cases {
 		tc := tc
@@ -42,8 +40,8 @@ func TestParseStatus(t *testing.T) {
 		{"pending", "pending", tenant.StatusPending, false},
 		{"active", "active", tenant.StatusActive, false},
 		{"suspended", "suspended", tenant.StatusSuspended, false},
-		{"pending_deletion", "pending_deletion", tenant.StatusPendingDeletion, false},
-		{"deleted", "deleted", tenant.StatusDeleted, false},
+		{"pending_deletion is gone", "pending_deletion", tenant.StatusUnknown, true},
+		{"deleted is gone", "deleted", tenant.StatusUnknown, true},
 		{"unknown", "unknown", tenant.StatusUnknown, true},
 		{"empty", "", tenant.StatusUnknown, true},
 		{"junk", "junk", tenant.StatusUnknown, true},
@@ -78,13 +76,11 @@ func TestParseStatus(t *testing.T) {
 func TestStatus_MembersMaySignIn_OnlyActive(t *testing.T) {
 	t.Parallel()
 	cases := map[tenant.Status]bool{
-		tenant.StatusUnknown:         false,
-		tenant.StatusPending:         false,
-		tenant.StatusActive:          true,
-		tenant.StatusSuspended:       false,
-		tenant.StatusPendingDeletion: false,
-		tenant.StatusDeleted:         false,
-		tenant.Status(99):            false,
+		tenant.StatusUnknown:   false,
+		tenant.StatusPending:   false,
+		tenant.StatusActive:    true,
+		tenant.StatusSuspended: false,
+		tenant.Status(99):      false,
 	}
 	for st, want := range cases {
 		if got := st.MembersMaySignIn(); got != want {

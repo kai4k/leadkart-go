@@ -343,8 +343,8 @@ func (f *FakeRepository) ListActiveRefsForPersonInTx(_ context.Context, personID
 //
 // The conservative-false answer mirrors the empty-tenant case in
 // production — i.e. a tenant with no SuperAdmin role assignments. It
-// does NOT bypass platform-tenant deletion guards; the deletion
-// commands consult this method via the SQL adapter at runtime.
+// does NOT bypass the platform-tenant guard; the suspend
+// command consults this method via the SQL adapter at runtime.
 func (f *FakeRepository) HasActiveSuperAdmin(_ context.Context, _ tenant.ID) (bool, error) {
 
 	return false, nil

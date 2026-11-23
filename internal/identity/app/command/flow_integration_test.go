@@ -313,7 +313,7 @@ func TestFlow_CheckSessionTarget_ReadsTheCurrentState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CheckSessionTarget: %v", err)
 	}
-	if got.PersonID != reg.PersonID || got.TenantID != reg.TenantID || !got.MembershipActive || got.TenantStatus == tenant.StatusDeleted {
+	if got.PersonID != reg.PersonID || got.TenantID != reg.TenantID || !got.MembershipActive || got.TenantStatus == tenant.StatusUnknown {
 		t.Fatalf("fresh registration: %+v", got)
 	}
 
@@ -412,11 +412,11 @@ func TestE2E_LoginThenRequirePermissionGate(t *testing.T) {
 		t.Fatal("granted gate: sentinel did not run")
 	}
 
-	// 5. Guarded by a permission CompanyOwner does NOT carry (Tenants.Delete
+	// 5. Guarded by a permission CompanyOwner does NOT carry (Tenants.Suspend
 	//    is a platform-tier permission). 403, sentinel never runs.
 	called = false
 	gateForbidden := authn.RequirePermission(issuer, stamps,
-		permission.IdentityPermissions.Tenants.Delete)(sentinel)
+		permission.IdentityPermissions.Tenants.Suspend)(sentinel)
 	req = httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/admin", nil)
 	req.Header.Set("Authorization", "Bearer "+loginOut.AccessToken)
 	rec = httptest.NewRecorder()

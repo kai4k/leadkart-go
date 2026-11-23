@@ -347,42 +347,6 @@ func handleActivateTenant(log *slog.Logger, a app.Application) http.Handler {
 	})
 }
 
-// ----- MarkTenantForDeletion ------------------------------------------------
-
-func handleMarkTenantForDeletion(log *slog.Logger, a app.Application) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		id, ok := parseTenantIDPath(w, r)
-		if !ok {
-			return
-		}
-		var req MarkTenantForDeletionRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeError(w, http.StatusBadRequest, ErrCodeInvalidBody, "request body is not valid JSON")
-			return
-		}
-		err := a.Commands.MarkTenantForDeletion.Handle(r.Context(), command.MarkTenantForDeletionCommand{
-			TenantID: id,
-			Reason:   req.Reason,
-		})
-		writeTenantMutationResult(w, log, r, err)
-	})
-}
-
-// ----- RestoreTenant --------------------------------------------------------
-
-func handleRestoreTenant(log *slog.Logger, a app.Application) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		id, ok := parseTenantIDPath(w, r)
-		if !ok {
-			return
-		}
-		err := a.Commands.RestoreTenant.Handle(r.Context(), command.RestoreTenantCommand{
-			TenantID: id,
-		})
-		writeTenantMutationResult(w, log, r, err)
-	})
-}
-
 // ----- Helpers --------------------------------------------------------------
 
 // parseTenantIDPath extracts + validates the {tenantId} path
@@ -403,8 +367,6 @@ func parseTenantIDPath(w http.ResponseWriter, r *http.Request) (tenant.ID, bool)
 //
 //   - nil          → 204 No Content
 //   - tenant.ErrNotFound / command.ErrTenantNotFound → 404
-//   - tenant.ErrHasDependents → 409 tenant_has_dependents (hard delete only; the
-//     transaction was rolled back, nothing changed)
 //   - tenant.ErrInvalid (wrapped from aggregate) → 422 (lifecycle
 //     transition rejected, over-length names, missing reason, etc.); a PAN
 //     that is not the GSTIN's names `pan_number` with `gstin_pan_mismatch`
@@ -424,10 +386,7 @@ func writeTenantMutationResult(w http.ResponseWriter, log *slog.Logger, r *http.
 		writeError(w, http.StatusNotFound, ErrCodeTenantNotFound, "")
 	case errors.Is(err, command.ErrPlatformTenantUndeletable):
 		writeError(w, http.StatusUnprocessableEntity, ErrCodePlatformTenantUndeletable,
-			"this tenant holds an active SuperAdmin role and cannot be deleted via the standard lifecycle API")
-	case errors.Is(err, tenant.ErrHasDependents):
-		writeError(w, http.StatusConflict, ErrCodeTenantHasDependents,
-			"the tenant still has dependent records (members, roles, ...) and cannot be deleted; nothing was changed")
+			"this tenant holds an active SuperAdmin role and cannot be suspended via the standard lifecycle API")
 	case errors.Is(err, tenant.ErrInvalid):
 		writeInvalid(w, ErrCodeTenantInvalid, err)
 	case errors.Is(err, gst.ErrInvalid):
@@ -470,20 +429,18 @@ func writeAddressInvalid(w http.ResponseWriter, err error) {
 // free of `json:` tags + time.Time formatting concerns.
 func projectViewToDto(v query.TenantView) TenantDto {
 	return TenantDto{
-		ID:                  v.ID,
-		Slug:                v.Slug,
-		LegalName:           v.LegalName,
-		DisplayName:         v.DisplayName,
-		Status:              v.Status,
-		CreatedAt:           v.CreatedAt,
-		ActivatedAt:         v.ActivatedAt,
-		SuspendedAt:         v.SuspendedAt,
-		DeletionScheduledAt: v.DeletionScheduledAt,
-		DeletionReason:      v.DeletionReason,
-		GSTNumber:           v.GSTNumber,
-		PANNumber:           v.PANNumber,
-		DrugLicenceNumber:   v.DrugLicenceNumber,
-		AdminPhone:          v.AdminPhone,
+		ID:                v.ID,
+		Slug:              v.Slug,
+		LegalName:         v.LegalName,
+		DisplayName:       v.DisplayName,
+		Status:            v.Status,
+		CreatedAt:         v.CreatedAt,
+		ActivatedAt:       v.ActivatedAt,
+		SuspendedAt:       v.SuspendedAt,
+		GSTNumber:         v.GSTNumber,
+		PANNumber:         v.PANNumber,
+		DrugLicenceNumber: v.DrugLicenceNumber,
+		AdminPhone:        v.AdminPhone,
 		AdminAddress: AdminAddressDto{
 			Street:    v.AdminAddress.Street,
 			City:      v.AdminAddress.City,

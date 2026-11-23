@@ -75,7 +75,7 @@ func TestRequirePlatformGate_SuperUserPasses(t *testing.T) {
 	t.Parallel()
 	c := platformMember()
 	c.IsSuperUser = true
-	if code, _, _ := gateProbe(t, c, permission.IdentityPermissions.Tenants.Delete); code != http.StatusOK {
+	if code, _, _ := gateProbe(t, c, permission.IdentityPermissions.Tenants.Suspend); code != http.StatusOK {
 		t.Fatalf("super user: %d, want 200", code)
 	}
 }

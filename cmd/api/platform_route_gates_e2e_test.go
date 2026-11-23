@@ -33,9 +33,6 @@ func platformGateRoutes() []platformRoute {
 	return []platformRoute{
 		{"suspend tenant", http.MethodPost, func(v registeredTenant) string { return "/api/v1/tenants/" + v.TenantID + "/suspend" }, reason},
 		{"activate tenant", http.MethodPost, func(v registeredTenant) string { return "/api/v1/tenants/" + v.TenantID + "/activate" }, none},
-		{"mark tenant for deletion", http.MethodPost, func(v registeredTenant) string { return "/api/v1/tenants/" + v.TenantID + "/mark-for-deletion" }, reason},
-		{"restore tenant", http.MethodPost, func(v registeredTenant) string { return "/api/v1/tenants/" + v.TenantID + "/restore" }, none},
-		{"hard delete tenant", http.MethodDelete, func(v registeredTenant) string { return "/api/v1/platform/tenants/" + v.TenantID }, none},
 		{"global suspend person", http.MethodPost, func(v registeredTenant) string { return "/api/v1/platform/persons/" + v.PersonID + "/global-suspend" },
 			func(registeredTenant) any { return ports.GlobalSuspendPersonRequest{Reason: "gate test reason"} }},
 		{"lift global suspension", http.MethodPost, func(v registeredTenant) string {
@@ -178,8 +175,8 @@ func TestE2E_PlatformGates_RightPermissionSucceeds(t *testing.T) {
 
 	deact := mintOperatorJWTExact(t, f.Issuer, f.persons, "", []string{scope, p.Platform.UsersManage}, false)
 	v := f.registerAndLogin(t, "okdeact")
-	f.addSecondOwner(t, v, "okdeact-b") // the last owner cannot be deactivated (ADR 0069 H6)
-	if r := f.doWithHeaders(t, http.MethodPost, "/api/v1/users/"+v.MembershipID+"/deactivate", deact, ports.DeactivateUserRequest{Reason: "gate test reason"}, scopeHdr(v.TenantID)); r.status != http.StatusNoContent {
+	m := f.createMember(t, v, "okdeactm") // a plain member: deactivating an owner needs platform.tenants.ownership
+	if r := f.doWithHeaders(t, http.MethodPost, "/api/v1/users/"+m.membershipID+"/deactivate", deact, ports.DeactivateUserRequest{Reason: "gate test reason"}, scopeHdr(v.TenantID)); r.status != http.StatusNoContent {
 		t.Errorf("operator with platform.users.manage: %d %s, want 204", r.status, r.body)
 	}
 
@@ -190,10 +187,6 @@ func TestE2E_PlatformGates_RightPermissionSucceeds(t *testing.T) {
 	}
 	if r := f.authedJSON(t, http.MethodPost, "/api/v1/tenants/"+w.TenantID+"/activate", susp, nil); r.status != http.StatusNoContent {
 		t.Errorf("operator with identity.tenants.activate: %d %s, want 204", r.status, r.body)
-	}
-	// suspend permission does not open mark-for-deletion (identity.tenants.delete).
-	if r := f.authedJSON(t, http.MethodPost, "/api/v1/tenants/"+w.TenantID+"/mark-for-deletion", susp, ports.MarkTenantForDeletionRequest{Reason: "gate test reason"}); r.status != http.StatusForbidden {
-		t.Errorf("suspend-only operator mark-for-deletion: %d %s, want 403", r.status, r.body)
 	}
 
 	users := mintOperatorJWTExact(t, f.Issuer, f.persons, "", []string{p.Platform.UsersManage}, false)

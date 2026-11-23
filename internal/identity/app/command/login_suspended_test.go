@@ -152,15 +152,15 @@ func TestLogin_PersonBecomesTerminalBetweenVerifyAndInsert_IsRefused(t *testing.
 
 // Fix round 13, item 8: the membership and the tenant are re-read INSIDE the
 // session transaction (after the person's SHARE lock). A membership deactivated, or
-// a tenant deleted, between the resolve and the family insert yields no session.
+// a tenant suspended, between the resolve and the family insert yields no session.
 func TestLogin_MembershipOrTenantChangesBetweenVerifyAndInsert_IsRefused(t *testing.T) {
 	t.Parallel()
 	for name, change := range map[string]func(rig wiredLoginRig, m *membership.Membership) error{
 		"membership deactivated": func(_ wiredLoginRig, m *membership.Membership) error {
 			return m.Deactivate("offboarded", testNow)
 		},
-		"tenant deleted": func(rig wiredLoginRig, _ *membership.Membership) error {
-			rig.router.tenantStatus = tenant.StatusDeleted
+		"tenant suspended": func(rig wiredLoginRig, _ *membership.Membership) error {
+			rig.router.tenantStatus = tenant.StatusSuspended
 			return nil
 		},
 	} {

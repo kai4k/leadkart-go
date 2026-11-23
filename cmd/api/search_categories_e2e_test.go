@@ -16,7 +16,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/leadkart/leadkart-go/internal/common/email"
+	"github.com/leadkart/leadkart-go/internal/common/ids"
 	"github.com/leadkart/leadkart-go/internal/common/pg"
+	"github.com/leadkart/leadkart-go/internal/common/slug"
 	"github.com/leadkart/leadkart-go/internal/identity/adapters"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/permission"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
@@ -97,21 +100,45 @@ func TestE2E_Search_CacheDoesNotCrossCategories(t *testing.T) {
 	}
 }
 
-// A tenant in the terminal `deleted` state is not searchable. The query used to
-// exclude a status ('hard_deleted') that does not exist, so deleted tenants kept
-// showing up in operator search.
-func TestE2E_Search_DoesNotReturnDeletedTenants(t *testing.T) {
+// bareTenant inserts a pending tenant with no memberships, roles or other
+// dependents, through the repository (the path RegisterTenant's tenant insert uses).
+func bareTenant(t *testing.T, f e2eFixture, namePrefix string) tenant.ID {
+	t.Helper()
+	suffix := ids.NewV7().String()[24:]
+	s, err := slug.New(namePrefix + "-" + suffix)
+	if err != nil {
+		t.Fatalf("slug: %v", err)
+	}
+	admin, err := email.New(namePrefix + "-" + suffix + "@e2e.test")
+	if err != nil {
+		t.Fatalf("email: %v", err)
+	}
+	id := tenant.ID(ids.NewV7().String())
+	tn, err := tenant.New(id, s, namePrefix+" Pharma", namePrefix, admin, testNow)
+	if err != nil {
+		t.Fatalf("tenant.New: %v", err)
+	}
+	if err := adapters.NewTenantRepository(f.Pool, pg.NewTransactor(f.Pool)).Add(t.Context(), tn); err != nil {
+		t.Fatalf("add tenant: %v", err)
+	}
+	return id
+}
+
+// No company is ever deleted, so none is hidden from operator search: a
+// suspended company is found like an active one (the query no longer filters on
+// a status).
+func TestE2E_Search_ReturnsSuspendedTenantsToo(t *testing.T) {
 	f := newE2EFixture(t)
 	p := permission.IdentityPermissions
 	op := mintOperatorJWTExact(t, f.Issuer, f.persons, "", []string{p.Platform.TenantsView}, false)
 
 	live := bareTenant(t, f, "srchlive")
-	gone := bareTenant(t, f, "srchgone")
+	suspended := bareTenant(t, f, "srchsusp")
 	repo := adapters.NewTenantRepository(f.Pool, pg.NewTransactor(f.Pool))
-	if err := repo.UpdateByID(t.Context(), gone, func(tn *tenant.Tenant) (bool, error) {
-		return true, tn.HardDelete(testNow)
+	if err := repo.UpdateByID(t.Context(), suspended, func(tn *tenant.Tenant) (bool, error) {
+		return true, tn.Suspend("search test", testNow)
 	}); err != nil {
-		t.Fatalf("transition to deleted: %v", err)
+		t.Fatalf("transition to suspended: %v", err)
 	}
 
 	r := f.authedJSON(t, http.MethodGet, "/api/v1/search?q=srch&include=tenants", op, nil)
@@ -129,7 +156,7 @@ func TestE2E_Search_DoesNotReturnDeletedTenants(t *testing.T) {
 	if !seen[string(live)] {
 		t.Errorf("control: the live tenant %s is missing from the results", live)
 	}
-	if seen[string(gone)] {
-		t.Errorf("the deleted tenant %s is returned by search", gone)
+	if !seen[string(suspended)] {
+		t.Errorf("the suspended tenant %s is missing from the results", suspended)
 	}
 }

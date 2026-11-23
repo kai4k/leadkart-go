@@ -330,7 +330,7 @@ func TestRequirePermission_SuperUser_BypassesCheck(t *testing.T) {
 	}
 	s := &sentinel{}
 	mw := authn.RequirePermission(v, alwaysFresh{},
-		permission.IdentityPermissions.Tenants.Delete)(s.handler())
+		permission.IdentityPermissions.Tenants.Suspend)(s.handler())
 	rec := httptest.NewRecorder()
 	mw.ServeHTTP(rec, newRequest(t, "Bearer tok"))
 	if rec.Code != http.StatusOK {

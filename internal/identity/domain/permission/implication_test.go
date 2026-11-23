@@ -22,7 +22,7 @@ func TestImpliedByTenantAdmin(t *testing.T) {
 		{p.Platform.TenantsView, false}, {p.Platform.UsersManage, false}, {p.Platform.RolesManage, false},
 		{p.Platform.ImpersonationManage, false}, {p.Platform.TenantsOwnership, false},
 		{p.PlatformUnverifiedContacts.Manage, false}, {p.PlatformLeadCredits.Topup, false},
-		{p.Tenants.Suspend, false}, {p.Tenants.Activate, false}, {p.Tenants.Delete, false},
+		{p.Tenants.Suspend, false}, {p.Tenants.Activate, false},
 		{"not.a.permission", false}, {"", false},
 	}
 	for _, tc := range cases {

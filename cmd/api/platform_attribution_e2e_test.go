@@ -48,7 +48,7 @@ func assertAttributed(t *testing.T, rows [][2]string, operatorID, what string) {
 	}
 }
 
-// Header-less suspend, mark-for-deletion + hard delete were attributed nowhere durable.
+// A header-less suspend and a header-scoped deactivation carry the operator.
 func TestE2E_PlatformRoutes_DestructiveWritesCarryOperatorAttribution(t *testing.T) {
 	f := newE2EFixture(t)
 	p := permission.IdentityPermissions
@@ -65,31 +65,12 @@ func TestE2E_PlatformRoutes_DestructiveWritesCarryOperatorAttribution(t *testing
 	})
 
 	// arch-test:serial — shares the fixture and the outbox with its siblings.
-	t.Run("mark for deletion and hard delete without header", func(t *testing.T) {
-		v := f.registerAndLogin(t, "attrdel")
-		opID := "0197c4a0-7000-7000-8000-00000000a002"
-		op := mintOperatorJWTExact(t, f.Issuer, f.persons, opID, []string{p.Tenants.Delete}, false)
-		if r := f.authedJSON(t, http.MethodPost, "/api/v1/tenants/"+v.TenantID+"/mark-for-deletion", op, ports.MarkTenantForDeletionRequest{Reason: "attribution test"}); r.status != http.StatusNoContent {
-			t.Fatalf("mark-for-deletion: %d %s", r.status, r.body)
-		}
-		assertAttributed(t, outboxActFor(t, f, "tenant_marked_for_deletion"), opID, "mark for deletion")
-		// The hard delete runs on a tenant without dependents (a registered tenant
-		// has members, which now refuse the delete with 409; see
-		// hard_delete_tenant_e2e_test.go), so it succeeds and writes its row.
-		free := bareTenant(t, f, "attrfree")
-		if r := f.authedJSON(t, http.MethodDelete, "/api/v1/platform/tenants/"+string(free), op, nil); r.status != http.StatusNoContent {
-			t.Fatalf("hard delete: %d %s", r.status, r.body)
-		}
-		assertAttributed(t, outboxActFor(t, f, "tenant_deleted"), opID, "hard delete")
-	})
-
-	// arch-test:serial — shares the fixture and the outbox with its siblings.
 	t.Run("an existing header-scope claim is kept", func(t *testing.T) {
 		v := f.registerAndLogin(t, "attrkeep")
-		f.addSecondOwner(t, v, "attrkeep-b") // the last owner cannot be deactivated (ADR 0069 H6)
+		m := f.createMember(t, v, "attrkeepm") // a plain member: deactivating an owner needs platform.tenants.ownership
 		opID := "0197c4a0-7000-7000-8000-00000000a004"
 		op := mintOperatorJWTExact(t, f.Issuer, f.persons, opID, []string{p.Platform.UsersManage, p.Platform.TenantsView}, false)
-		if r := f.doWithHeaders(t, http.MethodPost, "/api/v1/users/"+v.MembershipID+"/deactivate", op, ports.DeactivateUserRequest{Reason: "attribution test"}, scopeHdr(v.TenantID)); r.status != http.StatusNoContent {
+		if r := f.doWithHeaders(t, http.MethodPost, "/api/v1/users/"+m.membershipID+"/deactivate", op, ports.DeactivateUserRequest{Reason: "attribution test"}, scopeHdr(v.TenantID)); r.status != http.StatusNoContent {
 			t.Fatalf("deactivate via header: %d %s", r.status, r.body)
 		}
 		rows := outboxActFor(t, f, "membership_deactivated")

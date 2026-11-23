@@ -62,7 +62,7 @@ const impersonationRefusedPrefix = "/api/v1/platform/"
 // request's r.Pattern, like the allowlist above):
 //
 //   - the platform-anchored routes that live on tenant paths: tenant registration,
-//     the lifecycle commands (suspend, activate, mark-for-deletion, restore), the
+//     the lifecycle commands (suspend, activate), the
 //     operator omni-search;
 //   - the self-service routes that act on "the caller": credential, email,
 //     sessions and activity of the synthetic membership an impersonation token
@@ -89,8 +89,6 @@ var impersonationRefusedRoutes = []string{
 	"POST /api/v1/permission-requests/{requestId}/deny",
 	"POST /api/v1/tenants",
 	"POST /api/v1/tenants/{tenantId}/activate",
-	"POST /api/v1/tenants/{tenantId}/mark-for-deletion",
-	"POST /api/v1/tenants/{tenantId}/restore",
 	"POST /api/v1/tenants/{tenantId}/suspend",
 }
 

@@ -13,7 +13,7 @@
 //     a mock-with-canned-responses. It honors every contract guarantee:
 //     ErrNotFound on missing IDs/slugs, ErrSlugTaken on duplicate slug
 //     at Add time (mirrors the SQL unique-constraint translation),
-//     created_at ordering on ListAll, idempotent HardDeleteRow.
+//     created_at ordering on ListAll.
 //   - Single-test-owner pattern: each test creates its OWN
 //     FakeRepository via [NewFakeRepository] — no shared mutable state
 //     across tests. t.Parallel is naturally safe because no two tests
@@ -43,16 +43,13 @@ import (
 // internal maps are initialised. Single-test-owner: do NOT share one
 // instance across tests; each test creates its own.
 type FakeRepository struct {
-	// rows is the tenant index by ID. Tenants are not soft-deleted at
-	// the row level (status='Deleted' is the aggregate-level terminal
-	// state; HardDeleteRow physically removes the row), so we just
-	// delete on HardDeleteRow rather than carrying a tombstone flag.
+	// rows is the tenant index by ID. A tenant is never deleted (ADR 0071).
 	rows map[tenant.ID]*tenant.Tenant
 
 	// slugs is the slug → tenant.ID index for ErrSlugTaken enforcement.
 	// Mirrors the SQL unique constraint on tenants.slug — there is no
 	// partial-index here because tenants.slug is a global unique key
-	// regardless of status. A HardDeleteRow frees the slug.
+	// regardless of status.
 	slugs map[string]tenant.ID
 }
 
@@ -154,18 +151,4 @@ func (f *FakeRepository) ListAll(_ context.Context) ([]*tenant.Tenant, error) {
 		return a.CreatedAt().Compare(b.CreatedAt())
 	})
 	return out, nil
-}
-
-// HardDeleteRow physically removes the tenant row. Idempotent —
-// deleting an already-deleted row no-ops without error (mirrors the
-// SQL adapter's DELETE … WHERE id = $1 semantics).
-func (f *FakeRepository) HardDeleteRow(_ context.Context, id tenant.ID) error {
-
-	t, ok := f.rows[id]
-	if !ok {
-		return nil
-	}
-	delete(f.slugs, t.Slug().String())
-	delete(f.rows, id)
-	return nil
 }

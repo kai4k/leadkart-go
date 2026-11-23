@@ -210,58 +210,6 @@ func (TenantDisplayPreferencesUpdatedV1) Topic() string {
 // OccurredAt returns the domain timestamp.
 func (e TenantDisplayPreferencesUpdatedV1) OccurredAt() time.Time { return e.OccurredAtUTC }
 
-// TenantMarkedForDeletionV1 — operator entered the 30-day grace window
-// per `data-retention.md` "Tenant deletion saga". Subscribers MAY
-// block tenant ops immediately or wait for terminal TenantDeletedV1.
-type TenantMarkedForDeletionV1 struct {
-	platformMarker
-
-	TenantID       uuid.UUID `json:"tenant_id"`
-	Reason         string    `json:"reason"`
-	ScheduledAtUTC time.Time `json:"scheduled_at_utc"`
-	OccurredAtUTC  time.Time `json:"occurred_at_utc"`
-}
-
-// Topic returns the canonical wire alias.
-func (TenantMarkedForDeletionV1) Topic() string { return "identity.tenant_marked_for_deletion.v1" }
-
-// OccurredAt returns the domain timestamp.
-func (e TenantMarkedForDeletionV1) OccurredAt() time.Time { return e.OccurredAtUTC }
-
-// TenantRestoredV1 — pending deletion cancelled within the grace
-// window. Subscribers that blocked ops on TenantMarkedForDeletionV1
-// re-enable.
-type TenantRestoredV1 struct {
-	platformMarker
-
-	TenantID      uuid.UUID `json:"tenant_id"`
-	OccurredAtUTC time.Time `json:"occurred_at_utc"`
-}
-
-// Topic returns the canonical wire alias.
-func (TenantRestoredV1) Topic() string { return "identity.tenant_restored.v1" }
-
-// OccurredAt returns the domain timestamp.
-func (e TenantRestoredV1) OccurredAt() time.Time { return e.OccurredAtUTC }
-
-// TenantDeletedV1 — terminal hard-delete event. Subscribers SHOULD
-// anonymise remaining PII per their module's classification (CRM
-// lead notes, Tasks comments). Audit log retained 7 years per SOC2
-// CC4.1 / DPDP §12; tenant row retained for FK integrity.
-type TenantDeletedV1 struct {
-	platformMarker
-
-	TenantID      uuid.UUID `json:"tenant_id"`
-	Reason        string    `json:"reason"`
-	OccurredAtUTC time.Time `json:"occurred_at_utc"`
-}
-
-// Topic returns the canonical wire alias.
-func (TenantDeletedV1) Topic() string { return "identity.tenant_deleted.v1" }
-
-// OccurredAt returns the domain timestamp.
-func (e TenantDeletedV1) OccurredAt() time.Time { return e.OccurredAtUTC }
-
 // Compile-time assertions: each Tenant-aggregate event is Platform +
 // Event. Build fails if a future field-rename or method drop breaks
 // the contract.
@@ -274,9 +222,6 @@ var (
 	_ Platform = TenantSettingsUpdatedV1{}
 	_ Platform = TenantDisplayPreferencesUpdatedV1{}
 	_ Platform = TenantSuspendedV1{}
-	_ Platform = TenantMarkedForDeletionV1{}
-	_ Platform = TenantRestoredV1{}
-	_ Platform = TenantDeletedV1{}
 
 	_ = register(TenantRegisteredV1{})
 	_ = register(TenantActivatedV1{})
@@ -286,7 +231,4 @@ var (
 	_ = register(TenantSettingsUpdatedV1{})
 	_ = register(TenantDisplayPreferencesUpdatedV1{})
 	_ = register(TenantSuspendedV1{})
-	_ = register(TenantMarkedForDeletionV1{})
-	_ = register(TenantRestoredV1{})
-	_ = register(TenantDeletedV1{})
 )

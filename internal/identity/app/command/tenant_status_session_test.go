@@ -84,13 +84,13 @@ func TestLogin_SuspendedTenant_WrongPasswordIsAnOrdinaryWrongPassword(t *testing
 	}
 }
 
-func TestLogin_DeletedTenant_IsRefusedLikeABadCredential(t *testing.T) {
+func TestLogin_UnknownTenantStatus_IsRefusedLikeABadCredential(t *testing.T) {
 	t.Parallel()
 	rig := newLoginRig(t)
-	p, families := seedTenantMember(t, rig, tenant.StatusDeleted)
+	p, families := seedTenantMember(t, rig, tenant.StatusUnknown)
 
 	if err := loginAs(t, rig, p, tenantStatusPlain); !errors.Is(err, command.ErrInvalidCredentials) {
-		t.Fatalf("deleted tenant = %v, want ErrInvalidCredentials", err)
+		t.Fatalf("unusable tenant status = %v, want ErrInvalidCredentials", err)
 	}
 	if n := families(); n != 0 {
 		t.Fatalf("%d refresh families, want 0", n)
@@ -98,11 +98,11 @@ func TestLogin_DeletedTenant_IsRefusedLikeABadCredential(t *testing.T) {
 }
 
 // Owner ruling 2026-11-21: "If a Company is not Active no one can login from that
-// org." Pending and pending_deletion members are refused after the password check,
+// org." Pending members are refused after the password check,
 // with their own answer; the unknown/wrong-password surfaces do not change.
 func TestLogin_NotActiveTenant_CorrectPasswordIsRefusedAsTenantNotActive(t *testing.T) {
 	t.Parallel()
-	for _, status := range []tenant.Status{tenant.StatusPending, tenant.StatusPendingDeletion} {
+	for _, status := range []tenant.Status{tenant.StatusPending} {
 		t.Run(status.String(), func(t *testing.T) {
 			t.Parallel()
 			rig := newLoginRig(t)
@@ -150,23 +150,6 @@ func TestLogin_RegisteredTenant_FirstAdminSignsIn(t *testing.T) {
 	rig.router.tenantStatus = tn.Status() // what the router reads for the registered tenant
 	if err := loginAs(t, rig, p, tenantStatusPlain); err != nil {
 		t.Fatalf("first admin of a just-registered tenant (status %s) = %v, want a session", tn.Status(), err)
-	}
-}
-
-// A company restored from deletion lets its members sign in again.
-func TestLogin_RestoredTenant_SignsInAgain(t *testing.T) {
-	t.Parallel()
-	rig := newLoginRig(t)
-	p, families := seedTenantMember(t, rig, tenant.StatusPendingDeletion)
-	if err := loginAs(t, rig, p, tenantStatusPlain); !errors.Is(err, command.ErrTenantNotActive) {
-		t.Fatalf("while pending deletion: %v", err)
-	}
-	rig.router.tenantStatus = tenant.StatusActive
-	if err := loginAs(t, rig, p, tenantStatusPlain); err != nil {
-		t.Fatalf("after restore: %v", err)
-	}
-	if n := families(); n != 1 {
-		t.Fatalf("%d families, want 1", n)
 	}
 }
 
@@ -219,49 +202,17 @@ func TestRefresh_SuspendedTenant_IsRejectedAndTheFamilyRevoked(t *testing.T) {
 	}
 }
 
-func TestRefresh_DeletedTenant_IsRejectedAndTheFamilyRevoked(t *testing.T) {
-	t.Parallel()
-	rig := newRefreshRig(t)
-	fx := seedFullRefreshFixture(t, rig)
-	if err := rig.tenants.UpdateByID(t.Context(), fx.tenant.ID(), func(loaded *tenant.Tenant) (bool, error) {
-		if err := loaded.Activate(testNow); err != nil {
-			return false, err
-		}
-		if err := loaded.MarkForDeletion("closed", testNow); err != nil {
-			return false, err
-		}
-		return true, loaded.HardDelete(testNow.Add(31 * 24 * time.Hour))
-	}); err != nil {
-		t.Fatalf("delete: %v", err)
-	}
-
-	_, err := rig.handler.Handle(t.Context(), command.RefreshCommand{RefreshTokenPlain: fx.plaintext})
-	if !errors.Is(err, command.ErrRefreshRejected) || errors.Is(err, command.ErrTenantSuspended) {
-		t.Fatalf("deleted tenant refresh = %v, want a plain ErrRefreshRejected", err)
-	}
-	fam, gerr := rig.families.GetByTokenHash(t.Context(), refreshmintHashOf(t, fx.plaintext))
-	if gerr != nil {
-		t.Fatal(gerr)
-	}
-	if !fam.IsRevoked() || fam.RevokeReason() != "tenant_deleted" {
-		t.Fatalf("family revoked=%v reason=%q, want revoked with tenant_deleted", fam.IsRevoked(), fam.RevokeReason())
-	}
-}
-
-// Owner ruling 2026-11-21: a pending or pending-deletion company's sessions end at
+// Owner ruling 2026-11-21: a pending company's sessions end at
 // the next refresh, with reason tenant_not_active, and the family is revoked with the
-// same reason. Restoring the company does not bring the family back.
+// same reason.
 func TestRefresh_NotActiveTenant_IsRejectedWithItsReasonAndTheFamilyRevoked(t *testing.T) {
 	t.Parallel()
-	for _, status := range []tenant.Status{tenant.StatusPending, tenant.StatusPendingDeletion} {
+	for _, status := range []tenant.Status{tenant.StatusPending} {
 		t.Run(status.String(), func(t *testing.T) {
 			t.Parallel()
 			rig := newRefreshRig(t)
 			fx := seedFullRefreshFixture(t, rig)
 			if err := rig.tenants.UpdateByID(t.Context(), fx.tenant.ID(), func(loaded *tenant.Tenant) (bool, error) {
-				if status == tenant.StatusPendingDeletion {
-					return true, loaded.MarkForDeletion("closed", testNow)
-				}
 				return true, setStatusPending(loaded)
 			}); err != nil {
 				t.Fatalf("move tenant to %s: %v", status, err)
@@ -415,7 +366,7 @@ func TestRefresh_Idle_AGraceReplayExtendsNothing(t *testing.T) {
 // ----- MaySignIn on the credential-changing commands (item 4) -----------------------
 
 // A deactivated person is refused by change-password and the email-change request
-// exactly like a deactivated or suspended one: all of them ask Person.MaySignIn.
+// exactly like a suspended one: all of them ask Person.MaySignIn.
 func TestChangePassword_DeactivatedPerson_IsRefusedLikeAWrongPassword(t *testing.T) {
 	t.Parallel()
 	p := newPersonInactive(t, "real-current-pw")

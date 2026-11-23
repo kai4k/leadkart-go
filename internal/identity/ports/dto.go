@@ -543,22 +543,20 @@ type TenantDto struct {
 	DisplayName string `json:"display_name"`
 	// admin_email removed in migration 20260507000008 — now derived
 	// (CompanyOwner membership → person.email). Use /v1/users instead.
-	Status              string            `json:"status"`
-	CreatedAt           time.Time         `json:"created_at"`
-	ActivatedAt         time.Time         `json:"activated_at,omitzero"`
-	SuspendedAt         time.Time         `json:"suspended_at,omitzero"`
-	DeletionScheduledAt time.Time         `json:"deletion_scheduled_at,omitzero"`
-	DeletionReason      string            `json:"deletion_reason,omitzero"`
-	GSTNumber           string            `json:"gst_number,omitzero"`
-	PANNumber           string            `json:"pan_number,omitzero"`
-	DrugLicenceNumber   string            `json:"drug_licence_number,omitzero"`
-	AdminPhone          string            `json:"admin_phone,omitzero"`
-	AdminAddress        AdminAddressDto   `json:"admin_address"`
-	PasswordPolicy      PasswordPolicyDto `json:"password_policy"`
-	Locale              string            `json:"locale,omitzero"`
-	TimeZone            string            `json:"time_zone,omitzero"`
-	DateFormat          string            `json:"date_format,omitzero"`
-	Currency            string            `json:"currency,omitzero"`
+	Status            string            `json:"status"`
+	CreatedAt         time.Time         `json:"created_at"`
+	ActivatedAt       time.Time         `json:"activated_at,omitzero"`
+	SuspendedAt       time.Time         `json:"suspended_at,omitzero"`
+	GSTNumber         string            `json:"gst_number,omitzero"`
+	PANNumber         string            `json:"pan_number,omitzero"`
+	DrugLicenceNumber string            `json:"drug_licence_number,omitzero"`
+	AdminPhone        string            `json:"admin_phone,omitzero"`
+	AdminAddress      AdminAddressDto   `json:"admin_address"`
+	PasswordPolicy    PasswordPolicyDto `json:"password_policy"`
+	Locale            string            `json:"locale,omitzero"`
+	TimeZone          string            `json:"time_zone,omitzero"`
+	DateFormat        string            `json:"date_format,omitzero"`
+	Currency          string            `json:"currency,omitzero"`
 }
 
 // AdminAddressDto is the postal-address slice of [TenantDto].
@@ -618,12 +616,6 @@ type UpdateTenantDisplayPreferencesRequest struct {
 
 // SuspendTenantRequest — POST .../suspend. Reason required (data-retention.md audit).
 type SuspendTenantRequest struct {
-	Reason string `json:"reason"`
-}
-
-// MarkTenantForDeletionRequest — POST .../mark-for-deletion. Reason
-// required (DPDP §12 + SOC2 CC4.1 audit).
-type MarkTenantForDeletionRequest struct {
 	Reason string `json:"reason"`
 }
 

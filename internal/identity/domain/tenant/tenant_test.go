@@ -574,16 +574,6 @@ func TestUpdateStatutory_AllowedInAllNonTerminalStatuses(t *testing.T) {
 	}
 }
 
-func TestUpdateStatutory_RejectedOnDeletedTenant(t *testing.T) {
-	t.Parallel()
-	tn := newPendingTenant(t)
-	_ = tn.HardDelete(testNow) // arch-test:ignore-err - test fixture setup
-	s, _ := tenant.NewStatutory(mustGST(t, "29ABCPE1234F1Z5"), mustPAN(t, "ABCPE1234F"), druglicence.Number{})
-	if err := tn.UpdateStatutory(s, testNow); !errors.Is(err, tenant.ErrInvalid) {
-		t.Errorf("expected ErrInvalid on deleted tenant, got %v", err)
-	}
-}
-
 // ----- UpdateAdminContact ---------------------------------------------------
 
 func mustPhone(t *testing.T, raw string) phone.Number {
@@ -646,16 +636,6 @@ func TestUpdateAdminContact_NoOp_WhenUnchanged(t *testing.T) {
 	}
 	if got := tn.PullEvents(); len(got) != 0 {
 		t.Errorf("expected 0 events, got %d", len(got))
-	}
-}
-
-func TestUpdateAdminContact_RejectedOnDeletedTenant(t *testing.T) {
-	t.Parallel()
-	tn := newPendingTenant(t)
-	_ = tn.HardDelete(testNow) // arch-test:ignore-err - test fixture setup
-	c := tenant.NewAdminContact(mustPhone(t, "+919876543210"), mustAddress(t))
-	if err := tn.UpdateAdminContact(c, testNow); !errors.Is(err, tenant.ErrInvalid) {
-		t.Errorf("expected ErrInvalid on deleted tenant, got %v", err)
 	}
 }
 
@@ -776,16 +756,6 @@ func TestUpdateSettings_NoOp_WhenUnchanged(t *testing.T) {
 	}
 }
 
-func TestUpdateSettings_RejectedOnDeletedTenant(t *testing.T) {
-	t.Parallel()
-	tn := newPendingTenant(t)
-	_ = tn.HardDelete(testNow) // arch-test:ignore-err - test fixture setup
-	s := tenant.NewSettings(tenant.DefaultPasswordPolicy())
-	if err := tn.UpdateSettings(s, testNow); !errors.Is(err, tenant.ErrInvalid) {
-		t.Errorf("expected ErrInvalid on deleted, got %v", err)
-	}
-}
-
 // ----- UpdateDisplayPreferences ---------------------------------------------
 
 func TestNewDisplayPreferences_AcceptsValid(t *testing.T) {
@@ -902,222 +872,6 @@ func TestUpdateDisplayPreferences_NoOp_WhenUnchanged(t *testing.T) {
 	}
 }
 
-func TestUpdateDisplayPreferences_RejectedOnDeletedTenant(t *testing.T) {
-	t.Parallel()
-	tn := newPendingTenant(t)
-	_ = tn.HardDelete(testNow) // arch-test:ignore-err - test fixture setup
-	d := tenant.DefaultDisplayPreferences()
-	if err := tn.UpdateDisplayPreferences(d, testNow); !errors.Is(err, tenant.ErrInvalid) {
-		t.Errorf("expected ErrInvalid on deleted, got %v", err)
-	}
-}
-
-// ----- Deletion lifecycle ---------------------------------------------------
-
-func TestMarkForDeletion_FromActive_TransitionsToPendingDeletion(t *testing.T) {
-	t.Parallel()
-
-	tn := newActiveTenant(t)
-	_ = tn.PullEvents()
-
-	if err := tn.MarkForDeletion("operator-requested-exit", testNow); err != nil {
-		t.Fatalf("MarkForDeletion: %v", err)
-	}
-	if tn.Status() != tenant.StatusPendingDeletion {
-		t.Errorf("Status = %v, want PendingDeletion", tn.Status())
-	}
-	if tn.DeletionReason() != "operator-requested-exit" {
-		t.Errorf("Reason = %q", tn.DeletionReason())
-	}
-	if tn.DeletionScheduledAt().IsZero() {
-		t.Error("DeletionScheduledAt is zero")
-	}
-
-	events := tn.PullEvents()
-	if len(events) != 1 {
-		t.Fatalf("events: %d", len(events))
-	}
-	if _, ok := events[0].(tenant.MarkedForDeletionEvent); !ok {
-		t.Errorf("event[0] = %T, want MarkedForDeletionEvent", events[0])
-	}
-}
-
-func TestMarkForDeletion_FromSuspended_Allowed(t *testing.T) {
-	t.Parallel()
-	tn := newSuspendedTenant(t)
-	_ = tn.PullEvents()
-	if err := tn.MarkForDeletion("billing-exit", testNow); err != nil {
-		t.Fatalf("MarkForDeletion suspended: %v", err)
-	}
-	if tn.Status() != tenant.StatusPendingDeletion {
-		t.Errorf("Status = %v", tn.Status())
-	}
-}
-
-func TestMarkForDeletion_FromPending_Rejected(t *testing.T) {
-	t.Parallel()
-	tn := newPendingTenant(t)
-	err := tn.MarkForDeletion("never-onboarded", testNow)
-	if !errors.Is(err, tenant.ErrInvalid) {
-		t.Errorf("expected ErrInvalid, got %v", err)
-	}
-}
-
-func TestMarkForDeletion_RequiresReason(t *testing.T) {
-	t.Parallel()
-	tn := newActiveTenant(t)
-	for _, raw := range []string{"", "   ", "\t"} {
-		if err := tn.MarkForDeletion(raw, testNow); !errors.Is(err, tenant.ErrInvalid) {
-			t.Errorf("MarkForDeletion(%q): expected ErrInvalid, got %v", raw, err)
-		}
-	}
-}
-
-func TestMarkForDeletion_IdempotentOnSameReason(t *testing.T) {
-	t.Parallel()
-	tn := newActiveTenant(t)
-	_ = tn.MarkForDeletion("exit", testNow) // arch-test:ignore-err - test fixture setup
-	_ = tn.PullEvents()
-	if err := tn.MarkForDeletion("exit", testNow); err != nil {
-		t.Errorf("idempotent same reason: %v", err)
-	}
-	if got := tn.PullEvents(); len(got) != 0 {
-		t.Errorf("expected 0 events on idempotent re-mark, got %d", len(got))
-	}
-}
-
-func TestMarkForDeletion_RejectedOnDifferentReason(t *testing.T) {
-	t.Parallel()
-	tn := newActiveTenant(t)
-	_ = tn.MarkForDeletion("billing", testNow) // arch-test:ignore-err - test fixture setup
-	err := tn.MarkForDeletion("compliance", testNow)
-	if !errors.Is(err, tenant.ErrInvalid) {
-		t.Errorf("expected ErrInvalid on conflicting reason, got %v", err)
-	}
-}
-
-func TestRestoreFromDeletion_FromPendingDeletion_TransitionsToActive(t *testing.T) {
-	t.Parallel()
-
-	tn := newActiveTenant(t)
-	_ = tn.MarkForDeletion("oops-undo-me", testNow) // arch-test:ignore-err - test fixture setup
-	_ = tn.PullEvents()
-
-	if err := tn.RestoreFromDeletion(testNow); err != nil {
-		t.Fatalf("RestoreFromDeletion: %v", err)
-	}
-	if tn.Status() != tenant.StatusActive {
-		t.Errorf("Status = %v", tn.Status())
-	}
-	if !tn.DeletionScheduledAt().IsZero() {
-		t.Error("DeletionScheduledAt not cleared")
-	}
-	if tn.DeletionReason() != "" {
-		t.Errorf("DeletionReason not cleared: %q", tn.DeletionReason())
-	}
-	events := tn.PullEvents()
-	if len(events) != 1 {
-		t.Fatalf("events: %d", len(events))
-	}
-	if _, ok := events[0].(tenant.RestoredEvent); !ok {
-		t.Errorf("event[0] = %T, want RestoredEvent", events[0])
-	}
-}
-
-func TestRestoreFromDeletion_FromActive_NoOp(t *testing.T) {
-	t.Parallel()
-	tn := newActiveTenant(t)
-	_ = tn.PullEvents()
-	if err := tn.RestoreFromDeletion(testNow); err != nil {
-		t.Errorf("idempotent restore from active: %v", err)
-	}
-	if got := tn.PullEvents(); len(got) != 0 {
-		t.Errorf("expected 0 events, got %d", len(got))
-	}
-}
-
-func TestHardDelete_FromPendingDeletion_TransitionsToDeleted(t *testing.T) {
-	t.Parallel()
-
-	tn := newActiveTenant(t)
-	_ = tn.MarkForDeletion("exit", testNow) // arch-test:ignore-err - test fixture setup
-	_ = tn.PullEvents()
-
-	if err := tn.HardDelete(testNow); err != nil {
-		t.Fatalf("HardDelete: %v", err)
-	}
-	if tn.Status() != tenant.StatusDeleted {
-		t.Errorf("Status = %v", tn.Status())
-	}
-	if tn.HardDeletedAt().IsZero() {
-		t.Error("HardDeletedAt is zero")
-	}
-
-	events := tn.PullEvents()
-	if len(events) != 1 {
-		t.Fatalf("events: %d", len(events))
-	}
-	ev, ok := events[0].(tenant.DeletedEvent)
-	if !ok {
-		t.Fatalf("event[0] = %T, want DeletedEvent", events[0])
-	}
-	if ev.Reason != "exit" {
-		t.Errorf("Reason = %q, want exit", ev.Reason)
-	}
-}
-
-func TestHardDelete_FromPending_AdminAbandonment(t *testing.T) {
-	t.Parallel()
-	// Never activated: admin abandonment skips the grace window.
-	tn := newPendingTenant(t)
-	_ = tn.PullEvents()
-	if err := tn.HardDelete(testNow); err != nil {
-		t.Fatalf("HardDelete on pending: %v", err)
-	}
-	if tn.Status() != tenant.StatusDeleted {
-		t.Errorf("Status = %v", tn.Status())
-	}
-}
-
-func TestHardDelete_FromActive_RejectedWithoutMarking(t *testing.T) {
-	t.Parallel()
-	tn := newActiveTenant(t)
-	if err := tn.HardDelete(testNow); !errors.Is(err, tenant.ErrInvalid) {
-		t.Errorf("expected ErrInvalid hard-deleting active tenant, got %v", err)
-	}
-}
-
-func TestHardDelete_Idempotent(t *testing.T) {
-	t.Parallel()
-	tn := newPendingTenant(t)
-	_ = tn.HardDelete(testNow) // arch-test:ignore-err - test fixture setup
-	_ = tn.PullEvents()
-	if err := tn.HardDelete(testNow); err != nil {
-		t.Errorf("idempotent hard-delete: %v", err)
-	}
-	if got := tn.PullEvents(); len(got) != 0 {
-		t.Errorf("expected 0 events on idempotent terminal, got %d", len(got))
-	}
-}
-
-func TestActivate_RejectedFromPendingDeletion(t *testing.T) {
-	t.Parallel()
-	tn := newActiveTenant(t)
-	_ = tn.MarkForDeletion("exit", testNow) // arch-test:ignore-err - test fixture setup
-	if err := tn.Activate(testNow); !errors.Is(err, tenant.ErrInvalid) {
-		t.Errorf("expected ErrInvalid activating pending-deletion tenant, got %v", err)
-	}
-}
-
-func TestSuspend_RejectedFromPendingDeletion(t *testing.T) {
-	t.Parallel()
-	tn := newActiveTenant(t)
-	_ = tn.MarkForDeletion("exit", testNow) // arch-test:ignore-err - test fixture setup
-	if err := tn.Suspend("billing", testNow); !errors.Is(err, tenant.ErrInvalid) {
-		t.Errorf("expected ErrInvalid suspending pending-deletion tenant, got %v", err)
-	}
-}
-
 // ----- Helpers --------------------------------------------------------------
 
 func newPendingTenant(t *testing.T) *tenant.Tenant {
@@ -1160,7 +914,7 @@ func TestParseID_IsTheCanonicalFormOrErrInvalid(t *testing.T) {
 	}
 }
 
-func TestSuspendAndMarkForDeletion_ReasonsAreStoredTrimmedAndReplaysStayIdempotent(t *testing.T) {
+func TestSuspend_ReasonsAreStoredTrimmedAndReplaysStayIdempotent(t *testing.T) {
 	t.Parallel()
 	tn := newActiveTenant(t)
 	_ = tn.PullEvents()
@@ -1169,17 +923,6 @@ func TestSuspendAndMarkForDeletion_ReasonsAreStoredTrimmedAndReplaysStayIdempote
 	}
 	if s, ok := tn.PullEvents()[0].(tenant.SuspendedEvent); !ok || s.Reason != "payment overdue" {
 		t.Errorf("suspension event = %#v, want the reason trimmed", s)
-	}
-	if err := tn.MarkForDeletion("  closing the account  ", testNow); err != nil {
-		t.Fatal(err)
-	}
-	if tn.DeletionReason() != "closing the account" {
-		t.Errorf("DeletionReason = %q, want it trimmed", tn.DeletionReason())
-	}
-	_ = tn.PullEvents()
-	// the same reason typed with other padding is a replay, not a conflict
-	if err := tn.MarkForDeletion("closing the account   ", testNow); err != nil {
-		t.Errorf("a replay with different padding was refused: %v", err)
 	}
 }
 

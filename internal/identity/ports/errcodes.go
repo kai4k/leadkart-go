@@ -70,10 +70,9 @@ const (
 
 	// RefreshReasonTenantNotActive is the `reason` of a refresh_rejected answer for a
 	// session of a company that is not active for any reason other than suspension: it
-	// is pending, or marked for deletion (owner ruling 2026-11-21: "If a Company is not
+	// is pending (owner ruling 2026-11-21: "If a Company is not
 	// Active no one can login from that org."). The family is revoked as
-	// `tenant_not_active`; restoring the company does not bring it back, its members
-	// sign in again. Only given for a refresh token the caller already holds.
+	// `tenant_not_active`; its members sign in again once the company is active. Only given for a refresh token the caller already holds.
 	RefreshReasonTenantNotActive = "tenant_not_active"
 
 	// ErrCodeTenantSuspended — login with the CORRECT password for a member of a
@@ -84,9 +83,8 @@ const (
 	ErrCodeTenantSuspended = "tenant_suspended"
 
 	// ErrCodeTenantNotActive — login with the CORRECT password for a member of a
-	// company that is pending or marked for deletion (403). Answered only after the
-	// password was verified, exactly like [ErrCodeTenantSuspended]; a deleted company
-	// stays invalid_credentials. The web shows "your company is not active; contact
+	// company that is pending (403). Answered only after the
+	// password was verified, exactly like [ErrCodeTenantSuspended]. The web shows "your company is not active; contact
 	// support".
 	ErrCodeTenantNotActive = "tenant_not_active"
 
@@ -177,17 +175,11 @@ const (
 	// (over-length name, terminal-state transition, etc.). 422 surface.
 	ErrCodeTenantInvalid = "tenant_invalid"
 
-	// ErrCodePlatformTenantUndeletable — destructive lifecycle command
-	// (Suspend / MarkForDeletion / HardDelete) targeted a tenant that
-	// holds an active SuperAdmin role-holder. 422 surface. Operators
-	// must rotate SuperAdmins off the tenant first per migration
-	// 20260507000008's deletion guard.
+	// ErrCodePlatformTenantUndeletable — the suspend command targeted a
+	// tenant that holds an active SuperAdmin role-holder. 422 surface.
+	// Operators must rotate SuperAdmins off the tenant first per migration
+	// 20260507000008's guard. (The code keeps its name: the web matches it.)
 	ErrCodePlatformTenantUndeletable = "platform_tenant_undeletable"
-
-	// ErrCodeTenantHasDependents — hard delete refused because other rows (memberships,
-	// roles, ...) still reference the tenant. 409 surface. The whole operation is
-	// rolled back: the tenant keeps its status and no tenant_deleted event is published.
-	ErrCodeTenantHasDependents = "tenant_has_dependents"
 
 	// ErrCodeUserNotFound — membership ID has no row in caller's
 	// tenant. 404 surface; collapses "wrong tenant" + "doesn't exist"

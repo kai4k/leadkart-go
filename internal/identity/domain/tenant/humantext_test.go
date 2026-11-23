@@ -65,12 +65,11 @@ func TestUpdateProfile_RefusesAChangedNameButAcceptsAnUnchangedLegacyOne(t *test
 	}
 }
 
-func TestSuspendAndMarkForDeletion_RefuseReasonsWithControlCharacters(t *testing.T) {
+func TestSuspend_RefuseReasonsWithControlCharacters(t *testing.T) {
 	t.Parallel()
 	active := func() *tenant.Tenant {
 		return tenant.UnmarshalFromDB(tenant.Snapshot{ID: tenant.ID("11111111-1111-1111-1111-111111111111"),
 			Slug: mustSlug(t, "acme-pharma"), LegalName: "Acme", DisplayName: "Acme", Status: tenant.StatusActive, CreatedAt: testNow})
 	}
 	requireInvalidCharacters(t, active().Suspend("unpaid"+rlo+"invoice", testNow), "reason")
-	requireInvalidCharacters(t, active().MarkForDeletion("closing\nacme", testNow), "reason")
 }

@@ -48,8 +48,6 @@ type Commands struct {
 	UpdateTenantDisplayPreferences command.UpdateTenantDisplayPreferencesHandler
 	SuspendTenant                  command.SuspendTenantHandler
 	ActivateTenant                 command.ActivateTenantHandler
-	MarkTenantForDeletion          command.MarkTenantForDeletionHandler
-	RestoreTenant                  command.RestoreTenantHandler
 
 	// User (Membership) management.
 	UpdateUserProfile              command.UpdateUserProfileHandler
@@ -75,7 +73,6 @@ type Commands struct {
 	GlobalSuspendPerson        command.GlobalSuspendPersonHandler
 	LiftPersonGlobalSuspension command.LiftPersonGlobalSuspensionHandler
 	UpdatePersonProfile        command.UpdatePersonProfileHandler
-	HardDeleteTenant           command.HardDeleteTenantHandler
 
 	// Platform — impersonation sessions.
 	CreateImpersonationSession command.CreateImpersonationSessionHandler

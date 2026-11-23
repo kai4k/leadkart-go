@@ -138,10 +138,10 @@ type Repository interface {
 	// HasActiveSuperAdmin reports whether the supplied tenant has any
 	// active Membership holding a role flagged is_super_admin=true.
 	//
-	// Backstop for the platform-tenant deletion guard: tenants holding
-	// any SuperAdmin role-holder cannot be Suspended, MarkedForDeletion,
-	// or HardDeleted via the standard lifecycle commands — the platform
-	// would lose its god-mode operator surface if accidentally deleted.
+	// Backstop for the platform-tenant guard: tenants holding
+	// any SuperAdmin role-holder cannot be Suspended via the standard
+	// lifecycle commands — the platform would lose its god-mode operator
+	// surface if accidentally suspended.
 	//
 	// Cross-tenant query — runs under TxScopePlatform. Uses the partial
 	// index idx_roles_super_admin (O(1) where-clause) so the call is

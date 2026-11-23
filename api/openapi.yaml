@@ -87,7 +87,7 @@ info:
     the scoped tenant's own data, `GET /api/v1/platform/marketplace/leads` and
     `GET /api/v1/platform/lead-credits/balance` (they are gated by tenant permissions;
     the marketplace purchase stays refused), on tenant
-    registration, tenant suspend / activate / mark-for-deletion / restore,
+    registration, tenant suspend / activate,
     `GET /api/v1/search`, and the routes that
     act on "the caller": change password, request email change, sessions, own
     activity, and permission-request submit / approve / deny / cancel. Capabilities
@@ -225,12 +225,12 @@ paths:
             answered only after the password was verified, so a wrong password or an unknown
             email still answers `401 invalid_credentials` and the code tells a stranger
             nothing. `tenant_not_active`: the password was CORRECT but the company is
-            neither active nor suspended nor deleted, that is `pending` or marked for
-            deletion (`pending_deletion`); same rule (owner ruling 2026-11-21: only an active
-            company's members sign in; restoring the company or an operator's activation
+            neither active nor suspended, that is `pending`; same rule (owner ruling
+            2026-11-21: only an active company's members sign in; an operator's activation
             brings them back). A company registered by an operator is created `active`, so
-            its first admin signs in. A deleted company, and one with no usable membership,
-            stay `401 invalid_credentials`.
+            its first admin signs in. A company with no usable membership stays
+            `401 invalid_credentials`. A company is never deleted: it is pending, active or
+            suspended.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
@@ -292,10 +292,9 @@ paths:
         and so is a member of a SUSPENDED company: `401 refresh_rejected` with
         `reason: tenant_suspended` (the family is revoked as `tenant_suspended`; a
         reactivated company's members sign in again, the old session does not return).
-        A member of a company that is `pending` or marked for deletion is refused the same
+        A member of a company that is `pending` is refused the same
         way with `reason: tenant_not_active` (the family is revoked as `tenant_not_active`;
-        a restored company's members sign in again). A deleted company's members are
-        refused without a reason. Suspending a company or marking it for deletion also
+        an activated company's members sign in again). Suspending a company also
         revokes its members' families (outbox subscriber), but an access token already
         issued stays valid until its own expiry (600 s).
       requestBody:
@@ -314,7 +313,7 @@ paths:
             Refresh rejected (consumed / expired / family revoked / reuse). For a session that
             ended by time (absolute lifetime or idle timeout) the body carries
             `reason: session_expired`; for a member of a suspended company
-            `reason: tenant_suspended`; for a member of a pending or marked-for-deletion
+            `reason: tenant_suspended`; for a member of a pending
             company `reason: tenant_not_active`.
           content:
             application/json:
@@ -895,9 +894,7 @@ paths:
       description: |
         A company registered through `POST /api/v1/tenants` is created `active`, so activating
         it answers 204 and changes nothing (no event, `activated_at` is kept): idempotent, not
-        an error. Activating a company in `pending_deletion` is 422 `tenant_invalid` (restore it instead) and a
-        deleted one is 422 `tenant_invalid`.
-        Requires `identity.tenants.activate` held by a platform-tenant operator; platform-tenant membership alone is refused with 403 `forbidden`.
+        an error.         Requires `identity.tenants.activate` held by a platform-tenant operator; platform-tenant membership alone is refused with 403 `forbidden`.
       parameters:
         - $ref: '#/components/parameters/XCommandId'
         - { $ref: '#/components/parameters/TenantId' }
@@ -905,56 +902,6 @@ paths:
       responses:
         '429': { $ref: '#/components/responses/TooManyRequests' }
         '204': { description: Tenant activated }
-        '403': { $ref: '#/components/responses/TenantScopeForbidden' }
-        '404': { $ref: '#/components/responses/NotFound' }
-        '422': { $ref: '#/components/responses/Unprocessable' }
-        '400': { $ref: '#/components/responses/BadRequest' }
-        '409': { description: "Conflict with the current state of the resource (see the `error` code)", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
-
-  /api/v1/tenants/{tenantId}/mark-for-deletion:
-    post:
-      tags: [tenants]
-      summary: Mark tenant for deletion (Platform-only)
-      description: |
-        Schedules the tenant for hard-deletion after the retention window.
-        Reason is mandatory (DPDP §12 + SOC2 CC4.1 audit requirement).
-        Tenants holding an active SuperAdmin role refuse the transition
-        with 422 (`platform_tenant_undeletable`).
-
-        Requires `identity.tenants.delete` held by a platform-tenant operator; platform-tenant membership alone is refused with 403 `forbidden`.
-
-        Text a person types that other people read is refused when it holds control characters (including CR, LF and TAB), Unicode direction overrides, or invisible or line-breaking characters (zero-width space, soft hyphen, word joiner and invisible operators, Hangul fillers, line and paragraph separators, annotation, object-replacement and tag characters, BOM; a zero-width joiner or non-joiner is accepted only INSIDE a word, between two letters or marks): 422 `tenant_invalid` with `errors{<field>: ["invalid_characters"]}` for `reason`, and nothing is written.
-      parameters:
-        - $ref: '#/components/parameters/XCommandId'
-        - { $ref: '#/components/parameters/TenantId' }
-        - $ref: '#/components/parameters/XTenantId'
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: '#/components/schemas/MarkTenantForDeletionRequest' }
-      responses:
-        '429': { $ref: '#/components/responses/TooManyRequests' }
-        '204': { description: Tenant marked for deletion }
-        '403': { $ref: '#/components/responses/TenantScopeForbidden' }
-        '404': { $ref: '#/components/responses/NotFound' }
-        '422': { $ref: '#/components/responses/Unprocessable' }
-        '400': { $ref: '#/components/responses/BadRequest' }
-        '409': { description: "Conflict with the current state of the resource (see the `error` code)", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
-
-  /api/v1/tenants/{tenantId}/restore:
-    post:
-      tags: [tenants]
-      summary: Restore a tenant from marked-for-deletion (Platform-only)
-      description: |
-        Requires `identity.tenants.delete` (there is no dedicated restore permission) held by a platform-tenant operator; platform-tenant membership alone is refused with 403 `forbidden`.
-      parameters:
-        - $ref: '#/components/parameters/XCommandId'
-        - { $ref: '#/components/parameters/TenantId' }
-        - $ref: '#/components/parameters/XTenantId'
-      responses:
-        '429': { $ref: '#/components/responses/TooManyRequests' }
-        '204': { description: Tenant restored }
         '403': { $ref: '#/components/responses/TenantScopeForbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '422': { $ref: '#/components/responses/Unprocessable' }
@@ -1678,41 +1625,6 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/ListAllTenantsResponse' }
         '403': { $ref: '#/components/responses/Forbidden' }
-
-  /api/v1/platform/tenants/{tenantId}:
-    delete:
-      tags: [platform]
-      summary: Hard-delete a tenant (irrecoverable; Platform-only)
-      description: |
-        Bypasses the marked-for-deletion lifecycle. Tenants holding an
-        active SuperAdmin role refuse with 422
-        (`platform_tenant_undeletable`).
-
-        The transition to `deleted`, its `tenant_deleted` outbox event and the row delete
-        run in ONE transaction. A tenant that still has dependent records (members, roles,
-        ...) is refused with 409 `tenant_has_dependents`: nothing is changed, the tenant
-        keeps its status and no event is published. Remove or reassign the dependents first;
-        there is no cascade.
-
-        Requires `identity.tenants.delete` held by a platform-tenant operator; platform-tenant membership alone is refused with 403 `forbidden`.
-        The tenant comes from the path only: `X-Tenant-Id` is never applied here, and a
-        value that differs from the path tenant is 400 `tenant_scope_conflict`. The
-        operator is attributed on the outbox row (`act_operator_id`, reason `platform-route`).
-      parameters:
-        - $ref: '#/components/parameters/TenantId'
-        - $ref: '#/components/parameters/XTenantId'
-      responses:
-        '429': { $ref: '#/components/responses/TooManyRequests' }
-        '204': { description: Tenant hard-deleted }
-        '400': { $ref: '#/components/responses/TenantScopeInvalid' }
-        '403': { $ref: '#/components/responses/Forbidden' }
-        '404': { $ref: '#/components/responses/NotFound' }
-        '409':
-          description: The tenant still has dependent records (`tenant_has_dependents`); nothing was changed
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/ErrorResponse' }
-        '422': { $ref: '#/components/responses/Unprocessable' }
 
   /api/v1/platform/persons/{personId}:
     get:
@@ -4658,22 +4570,22 @@ components:
         attributed durably: its outbox and audit rows carry `act_operator_id`
         (the operator) with reason `tenant-via-header` (header) or
         `tenant-via-path` (URL path only). Platform-gated routes that carry
-        neither (header-less lifecycle calls, hard delete, platform person
+        neither (header-less lifecycle calls, platform person
         operations, platform-module writes) use reason `platform-route`.
 
-        On a path-tenant route (`/api/v1/tenants/{tenantId}/...`, lifecycle,
-        hard delete) a header equal to the path tenant selects nothing: no scope
+        On a path-tenant route (`/api/v1/tenants/{tenantId}/...`, lifecycle)
+        a header equal to the path tenant selects nothing: no scope
         authority is needed and no tenant is looked up, so the answer is the
         route's own permission gate whether or not the header is sent.
 
         Errors for an honoured header: 400 `invalid_tenant_scope` (not a UUID,
         or supplied more than once), 400 `tenant_scope_conflict` (differs from
         the path tenant on `/api/v1/tenants/{tenantId}` routes, where the path
-        wins; also on `DELETE /api/v1/platform/tenants/{tenantId}`), 403
+        wins), 403
         `tenant_scope_forbidden` (caller lacks scope authority), 403
         `tenant_scope_read_only` (see above), 404 `tenant_scope_not_found`
-        (unknown or deleted tenant), 409 `tenant_not_active` (a write into a
-        suspended or pending-deletion tenant on a non-path route; reads and
+        (unknown tenant), 409 `tenant_not_active` (a write into a
+        suspended tenant on a non-path route; reads and
         path-tenant routes are allowed), 403 `tenant_scope_not_supported`
         (routes that act on the caller's own tenant only: permission requests
         and the marketplace lead purchase).
@@ -4886,7 +4798,7 @@ components:
           schema: { $ref: '#/components/schemas/ErrorResponse' }
     TenantNotActive:
       description: |
-        The tenant selected by `X-Tenant-Id` is suspended or pending deletion, so it can be
+        The tenant selected by `X-Tenant-Id` is suspended, so it can be
         read and its lifecycle managed but not written otherwise (`tenant_not_active`).
         Routes that carry the tenant in the path (`/api/v1/tenants/{tenantId}/...`) are
         exempt: the path is authoritative there, with or without the header.
@@ -4982,7 +4894,7 @@ components:
             (RFC 9457 extension). Present only on `401 refresh_rejected`: `session_expired`
             (the session reached its absolute lifetime or sat idle past `Refresh.SlidingTTL`) or
             `tenant_suspended` (the person's company is suspended) or `tenant_not_active` (it is
-            pending or marked for deletion). Absent everywhere else.
+            pending). Absent everywhere else.
         current_version:
           type: integer
           format: int64
@@ -5460,12 +5372,10 @@ components:
         slug:         { type: string }
         legal_name:   { type: string }
         display_name: { type: string }
-        status:       { type: string, enum: [pending, active, suspended, pending_deletion, deleted] }
+        status:       { type: string, enum: [pending, active, suspended] }
         created_at:   { type: string, format: date-time }
         activated_at: { type: string, format: date-time }
         suspended_at: { type: string, format: date-time }
-        deletion_scheduled_at: { type: string, format: date-time }
-        deletion_reason: { type: string }
         gst_number:           { type: string }
         pan_number:           { type: string }
         drug_licence_number:  { type: string }
@@ -5580,12 +5490,6 @@ components:
         currency:    { type: string }
 
     SuspendTenantRequest:
-      type: object
-      required: [reason]
-      properties:
-        reason: { type: string, minLength: 1 }
-
-    MarkTenantForDeletionRequest:
       type: object
       required: [reason]
       properties:

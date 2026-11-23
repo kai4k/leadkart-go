@@ -364,11 +364,11 @@ func (h RefreshHandler) Handle(ctx context.Context, cmd RefreshCommand) (Refresh
 // usableTenant loads the family's tenant and ends the session of a member of a
 // company that is not active (owner ruling 2026-11-21): the family is revoked, so the
 // silent refresh never mints a token for it, and the next sign-in answers the login's
-// own tenant_suspended / tenant_not_active. A reactivated or restored tenant does not
+// own tenant_suspended / tenant_not_active. A reactivated tenant does not
 // bring the family back; its members sign in again. A suspended tenant answers
 // [ErrRefreshRejected] together with [ErrTenantSuspended] (the BFF shows "your company
-// is suspended"); a pending or marked-for-deletion one together with
-// [ErrTenantNotActive]; a deleted one is a plain [ErrRefreshRejected].
+// is suspended"); a pending one together with
+// [ErrTenantNotActive]; any other unusable status is a plain [ErrRefreshRejected].
 func (h RefreshHandler) usableTenant(ctx context.Context, family *refreshtoken.Family, now time.Time) (*tenant.Tenant, error) {
 	tn, err := h.tenants.GetByID(ctx, family.TenantID())
 	if err != nil {
@@ -382,11 +382,9 @@ func (h RefreshHandler) usableTenant(ctx context.Context, family *refreshtoken.F
 	case tenant.StatusSuspended:
 		reason = "tenant_suspended"
 		rejected = fmt.Errorf("%w (%w)", ErrRefreshRejected, ErrTenantSuspended)
-	case tenant.StatusPending, tenant.StatusPendingDeletion:
+	case tenant.StatusPending:
 		reason = "tenant_not_active"
 		rejected = fmt.Errorf("%w (%w)", ErrRefreshRejected, ErrTenantNotActive)
-	case tenant.StatusDeleted:
-		reason = "tenant_deleted"
 	}
 	_ = h.families.UpdateByID(ctx, family.ID(), func(f *refreshtoken.Family) (bool, error) {
 		return true, f.Revoke(reason, now)

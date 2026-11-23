@@ -111,36 +111,3 @@ type DisplayPreferencesUpdatedEvent struct {
 }
 
 func (DisplayPreferencesUpdatedEvent) isTenantEvent() {}
-
-// MarkedForDeletionEvent fires when [Tenant.MarkForDeletion] is called,
-// entering the 30-day grace window (data-retention.md). Subscribers may
-// block tenant ops immediately or wait for DeletedEvent — per-module choice.
-type MarkedForDeletionEvent struct {
-	TenantID    ID
-	Reason      string
-	ScheduledAt time.Time
-	At          time.Time
-}
-
-func (MarkedForDeletionEvent) isTenantEvent() {}
-
-// RestoredEvent fires when [Tenant.RestoreFromDeletion] cancels a pending
-// deletion. Subscribers that blocked ops on MarkedForDeletionEvent must re-enable.
-type RestoredEvent struct {
-	TenantID ID
-	At       time.Time
-}
-
-func (RestoredEvent) isTenantEvent() {}
-
-// DeletedEvent fires when [Tenant.HardDelete] is called after the grace
-// window expires. Terminal state. Subscribers should anonymise remaining PII
-// per their module's data-retention classification. Tenant row is retained
-// for FK integrity; audit log is kept 7 years.
-type DeletedEvent struct {
-	TenantID ID
-	Reason   string
-	At       time.Time
-}
-
-func (DeletedEvent) isTenantEvent() {}

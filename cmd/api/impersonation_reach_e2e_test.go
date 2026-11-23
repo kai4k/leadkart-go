@@ -101,7 +101,6 @@ func TestE2E_Impersonation_RefusalList_RefusedWithStateUnchangedAndOrdinaryRoute
 	f.requireImpersonationRefused(t, "end the session", http.MethodDelete, "/api/v1/platform/impersonation/sessions/"+sess.SessionID, tok, nil)
 	f.requireImpersonationRefused(t, "platform stats", http.MethodGet, "/api/v1/platform/stats", tok, nil)
 	f.requireImpersonationRefused(t, "platform tenants", http.MethodGet, "/api/v1/platform/tenants", tok, nil)
-	f.requireImpersonationRefused(t, "hard delete a tenant", http.MethodDelete, "/api/v1/platform/tenants/"+tenantA.TenantID, tok, nil)
 	f.requireImpersonationRefused(t, "platform persons", http.MethodGet, "/api/v1/platform/persons", tok, nil)
 	f.requireImpersonationRefused(t, "marketplace purchase", http.MethodPost, "/api/v1/platform/marketplace/leads/"+someID+"/purchase", tok, map[string]string{})
 	f.requireImpersonationRefused(t, "lead credit top-up", http.MethodPost, "/api/v1/platform/lead-credits/topup", tok, map[string]string{})
@@ -123,7 +122,6 @@ func TestE2E_Impersonation_RefusalList_RefusedWithStateUnchangedAndOrdinaryRoute
 	// Tenant-path routes that are platform-anchored.
 	f.requireImpersonationRefused(t, "register a tenant", http.MethodPost, "/api/v1/tenants", tok, map[string]string{})
 	f.requireImpersonationRefused(t, "suspend the tenant", http.MethodPost, "/api/v1/tenants/"+tenantA.TenantID+"/suspend", tok, ports.SuspendTenantRequest{Reason: "reach e2e suspend"})
-	f.requireImpersonationRefused(t, "mark for deletion", http.MethodPost, "/api/v1/tenants/"+tenantA.TenantID+"/mark-for-deletion", tok, ports.MarkTenantForDeletionRequest{Reason: "reach e2e delete"})
 	f.requireImpersonationRefused(t, "omni-search", http.MethodGet, "/api/v1/search?q=impreach", tok, nil)
 
 	// State is unchanged: the password still logs in, the tenant is not suspended

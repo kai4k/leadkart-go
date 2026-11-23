@@ -3,7 +3,6 @@ package ports
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -11,7 +10,6 @@ import (
 	"testing"
 
 	"github.com/leadkart/leadkart-go/internal/identity/app/command"
-	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 )
 
 func TestWriteTenantMutationResult_MapsOutcomes(t *testing.T) {
@@ -26,7 +24,6 @@ func TestWriteTenantMutationResult_MapsOutcomes(t *testing.T) {
 		{"success", nil, http.StatusNoContent, ""},
 		{"not found", command.ErrTenantNotFound, http.StatusNotFound, ErrCodeTenantNotFound},
 		{"platform tenant", command.ErrPlatformTenantUndeletable, http.StatusUnprocessableEntity, ErrCodePlatformTenantUndeletable},
-		{"dependents", fmt.Errorf("hard_delete_tenant: row delete: %w", tenant.ErrHasDependents), http.StatusConflict, "tenant_has_dependents"},
 		{"unexpected", errors.New("boom"), http.StatusInternalServerError, ErrCodeInternalError},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

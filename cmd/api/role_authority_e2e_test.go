@@ -182,7 +182,7 @@ func TestE2E_RoleCommands_PolicyDecides(t *testing.T) {
 		f.wantForbidden(t, "revoke unheld", r, http.StatusForbidden, "grant_exceeds_authority")
 		r = f.authedJSON(t, http.MethodPut, rolePath(id, "/permissions"), mgrTok, ports.ReplaceRolePermissionsRequest{Permissions: []string{}})
 		f.wantForbidden(t, "empty a role that carries an unheld permission", r, http.StatusForbidden, "grant_exceeds_authority")
-		r = f.authedJSON(t, http.MethodPut, rolePath(id, "/permissions"), mgrTok, ports.ReplaceRolePermissionsRequest{Permissions: []string{p.Tenants.Delete}})
+		r = f.authedJSON(t, http.MethodPut, rolePath(id, "/permissions"), mgrTok, ports.ReplaceRolePermissionsRequest{Permissions: []string{p.Tenants.Suspend}})
 		f.wantForbidden(t, "confer a platform-reserved name", r, http.StatusForbidden, "grant_exceeds_authority")
 		if got := f.roleDto(t, owner.AccessToken, id).Permissions; len(got) != 2 {
 			t.Errorf("a refused call changed the role: %v", got)

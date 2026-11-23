@@ -71,8 +71,7 @@ var ErrInvalidCredentials = errors.New("login: invalid credentials")
 var ErrTenantSuspended = errors.New("tenant suspended")
 
 // ErrTenantNotActive is returned by login when the password was verified and the
-// person's company is neither active nor suspended nor deleted: it is pending or
-// marked for deletion. Owner ruling 2026-11-21: "If a Company is not Active no one
+// person's company is neither active nor suspended: it is pending. Owner ruling 2026-11-21: "If a Company is not Active no one
 // can login from that org." Like [ErrTenantSuspended] it is only ever returned AFTER
 // the password check. Refresh wraps it together with [ErrRefreshRejected].
 var ErrTenantNotActive = errors.New("tenant not active")
@@ -333,8 +332,8 @@ func NewLoginHandler(
 //  5. Load the full membership + the Tenant (tenant_slug claim).
 //  6. In ONE transaction: re-read the person under a SHARE lock, refuse when the
 //     credential is no longer the verified one or the tenant's members may not sign
-//     in (suspended: [ErrTenantSuspended]; pending or marked for deletion:
-//     [ErrTenantNotActive]; deleted: [ErrInvalidCredentials]), insert
+//     in (suspended: [ErrTenantSuspended]; pending:
+//     [ErrTenantNotActive]; an unusable status: [ErrInvalidCredentials]), insert
 //     the refresh family.
 //  7. Issue JWT with per-Membership claims and the stamp read under that lock.
 //
@@ -453,7 +452,7 @@ func (h LoginHandler) Handle(ctx context.Context, cmd LoginCommand) (LoginResult
 //
 // After the person read, in the same transaction, the membership and the tenant are
 // re-read ([AuthRouter.CheckSessionTarget]): a membership deactivated, moved to
-// another tenant or removed, or a tenant deleted, since the login resolved them
+// another tenant or removed, or a tenant suspended, since the login resolved them
 // yields no session (the same 401 as a wrong password). That read takes NO lock (a
 // plain SELECT), so the lock order is unchanged: authority commands take tenant
 // advisory → membership → person; this transaction takes person (share) then the
@@ -487,13 +486,13 @@ func (h LoginHandler) openSession(ctx context.Context, id person.ID, verified pe
 			return ErrInvalidCredentials
 		}
 		// The password was verified (and is still the stored one, above), so naming
-		// the status reveals nothing to someone who does not know it. A deleted (or
-		// otherwise unusable) tenant stays the ordinary refusal.
+		// the status reveals nothing to someone who does not know it. An unknown
+		// (never persisted) status stays the ordinary refusal.
 		if !target.TenantStatus.MembersMaySignIn() {
 			switch target.TenantStatus {
 			case tenant.StatusSuspended:
 				return ErrTenantSuspended
-			case tenant.StatusPending, tenant.StatusPendingDeletion:
+			case tenant.StatusPending:
 				return ErrTenantNotActive
 			default:
 				return ErrInvalidCredentials

@@ -49,11 +49,11 @@ const (
 type TenantScopeState int
 
 const (
-	// TenantScopeUnknown means no such tenant, or a deleted one. Never scoped into.
+	// TenantScopeUnknown means no such tenant. Never scoped into.
 	TenantScopeUnknown TenantScopeState = iota
 	// TenantScopeActive means scope reads and writes are allowed.
 	TenantScopeActive
-	// TenantScopeInactive means suspended or pending deletion. Scope reads and the
+	// TenantScopeInactive means suspended. Scope reads and the
 	// tenant lifecycle routes are allowed; other writes are 409.
 	TenantScopeInactive
 )
@@ -202,7 +202,7 @@ func TenantScopeMatchesPath(pathVar string) func(http.Handler) http.Handler {
 }
 
 // TenantScopeLifecycle is [TenantScopeMatchesPath] for the tenant lifecycle
-// routes (suspend / activate / mark-for-deletion / restore).
+// routes (suspend / activate).
 func TenantScopeLifecycle(pathVar string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return markRoute(func(r *scopeRoute) { r.kind, r.pathVar = scopePathLifecycle, pathVar }, next)

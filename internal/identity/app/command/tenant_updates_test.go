@@ -228,56 +228,6 @@ func TestActivateTenant_Idempotent(t *testing.T) {
 	}
 }
 
-func TestMarkTenantForDeletion_HappyPath(t *testing.T) {
-	t.Parallel()
-	repo := newFakeTenantRepo()
-	tn := newTenant(t)
-	_ = tn.Activate(testNow) // arch-test:ignore-err - test fixture setup
-	tn.PullEvents()
-	_ = repo.Add(t.Context(), tn) // arch-test:ignore-err - test fixture setup
-
-	h := command.NewMarkTenantForDeletionHandler(repo, newFakeMembershipRepo(), func() time.Time { return testNow })
-	if err := h.Handle(t.Context(), command.MarkTenantForDeletionCommand{
-		TenantID: tn.ID(),
-		Reason:   "operator: tenant-requested-closure",
-	}); err != nil {
-		t.Fatalf("Handle: %v", err)
-	}
-	if tn.Status() != tenant.StatusPendingDeletion {
-		t.Errorf("Status = %v, want PendingDeletion", tn.Status())
-	}
-}
-
-func TestRestoreTenant_FromPendingDeletion(t *testing.T) {
-	t.Parallel()
-	repo := newFakeTenantRepo()
-	tn := newTenant(t)
-	_ = tn.Activate(testNow)                       // arch-test:ignore-err - test fixture setup
-	_ = tn.MarkForDeletion("test-reason", testNow) // arch-test:ignore-err - test fixture setup
-	tn.PullEvents()
-	_ = repo.Add(t.Context(), tn) // arch-test:ignore-err - test fixture setup
-
-	h := command.NewRestoreTenantHandler(repo, func() time.Time { return testNow })
-	if err := h.Handle(t.Context(), command.RestoreTenantCommand{TenantID: tn.ID()}); err != nil {
-		t.Fatalf("Handle: %v", err)
-	}
-	if tn.Status() != tenant.StatusActive {
-		t.Errorf("Status = %v, want Active", tn.Status())
-	}
-}
-
-func TestRestoreTenant_NotFound(t *testing.T) {
-	t.Parallel()
-	repo := newFakeTenantRepo()
-	h := command.NewRestoreTenantHandler(repo, func() time.Time { return testNow })
-	err := h.Handle(t.Context(), command.RestoreTenantCommand{
-		TenantID: tenant.ID("99999999-9999-9999-9999-999999999999"),
-	})
-	if !errors.Is(err, command.ErrTenantNotFound) {
-		t.Fatalf("err = %v, want ErrTenantNotFound", err)
-	}
-}
-
 // ----- Lifecycle handlers: input + guard + state-machine coverage --------
 //
 // Table-driven for the trivial input-validation arms; named tests for
@@ -300,14 +250,6 @@ func TestTenantLifecycle_InputRejections(t *testing.T) {
 			return command.NewActivateTenantHandler(newFakeTenantRepo(), func() time.Time { return testNow }).
 				Handle(t.Context(), command.ActivateTenantCommand{})
 		}},
-		{"MarkForDeletion", func() error {
-			return command.NewMarkTenantForDeletionHandler(newFakeTenantRepo(), newFakeMembershipRepo(), func() time.Time { return testNow }).
-				Handle(t.Context(), command.MarkTenantForDeletionCommand{Reason: "x"})
-		}},
-		{"Restore", func() error {
-			return command.NewRestoreTenantHandler(newFakeTenantRepo(), func() time.Time { return testNow }).
-				Handle(t.Context(), command.RestoreTenantCommand{})
-		}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -321,7 +263,7 @@ func TestTenantLifecycle_InputRejections(t *testing.T) {
 }
 
 // TestSuspendTenant_PlatformTenant_RejectsBeforeTransition exercises
-// the deletion-guard arm: if the tenant holds an active SuperAdmin
+// the platform-tenant guard arm: if the tenant holds an active SuperAdmin
 // role-holder, Suspend short-circuits with ErrPlatformTenantUndeletable
 // BEFORE any aggregate transition fires.
 func TestSuspendTenant_PlatformTenant_RejectsBeforeTransition(t *testing.T) {
@@ -371,44 +313,24 @@ func TestSuspendTenant_GuardErrorWrapped(t *testing.T) {
 	}
 }
 
-// TestSuspendTenant_AggregateRejection_WrongState exercises the
-// wrap-around-aggregate-error branch. Aggregate refuses Suspend on
-// PendingDeletion → handler wraps with "suspend_tenant: %w".
-func TestSuspendTenant_AggregateRejection_WrongState(t *testing.T) {
+// TestSuspendTenant_AggregateRejection_BlankReason exercises the
+// wrap-around-aggregate-error branch. Aggregate refuses Suspend without a
+// reason → handler wraps with "suspend_tenant: %w".
+func TestSuspendTenant_AggregateRejection_BlankReason(t *testing.T) {
 	t.Parallel()
 	repo := newFakeTenantRepo()
 	tn := newTenant(t)
-	_ = tn.Activate(testNow)                         // arch-test:ignore-err
-	_ = tn.MarkForDeletion("ops-test-init", testNow) // arch-test:ignore-err
+	_ = tn.Activate(testNow) // arch-test:ignore-err
 	tn.PullEvents()
 	_ = repo.Add(t.Context(), tn) // arch-test:ignore-err
 
 	h := command.NewSuspendTenantHandler(repo, newFakeMembershipRepo(), func() time.Time { return testNow })
 	err := h.Handle(t.Context(), command.SuspendTenantCommand{
 		TenantID: tn.ID(),
-		Reason:   "billing-overdue",
+		Reason:   "  ",
 	})
 	if !errors.Is(err, tenant.ErrInvalid) {
-		t.Fatalf("err = %v, want wraps tenant.ErrInvalid (pending deletion)", err)
-	}
-}
-
-// TestActivateTenant_AggregateRejection_FromDeleted — Deleted is
-// terminal; Activate refuses with wrapped ErrInvalid.
-func TestActivateTenant_AggregateRejection_FromDeleted(t *testing.T) {
-	t.Parallel()
-	repo := newFakeTenantRepo()
-	tn := newTenant(t)
-	_ = tn.Activate(testNow)                         // arch-test:ignore-err
-	_ = tn.MarkForDeletion("ops-test-init", testNow) // arch-test:ignore-err
-	_ = tn.HardDelete(testNow)                       // arch-test:ignore-err
-	tn.PullEvents()
-	_ = repo.Add(t.Context(), tn) // arch-test:ignore-err
-
-	h := command.NewActivateTenantHandler(repo, func() time.Time { return testNow })
-	err := h.Handle(t.Context(), command.ActivateTenantCommand{TenantID: tn.ID()})
-	if !errors.Is(err, tenant.ErrInvalid) {
-		t.Fatalf("err = %v, want wraps tenant.ErrInvalid (terminal)", err)
+		t.Fatalf("err = %v, want wraps tenant.ErrInvalid (blank reason)", err)
 	}
 }
 
@@ -425,93 +347,7 @@ func TestActivateTenant_NotFound(t *testing.T) {
 	}
 }
 
-// TestMarkTenantForDeletion_PlatformTenant_RejectsBeforeTransition
-// — same guard as Suspend; refuses to mark the platform tenant.
-func TestMarkTenantForDeletion_PlatformTenant_RejectsBeforeTransition(t *testing.T) {
-	t.Parallel()
-	repo := newFakeTenantRepo()
-	tn := newTenant(t)
-	_ = tn.Activate(testNow) // arch-test:ignore-err
-	tn.PullEvents()
-	_ = repo.Add(t.Context(), tn) // arch-test:ignore-err
-
-	h := command.NewMarkTenantForDeletionHandler(repo, platformTenantMembers(), func() time.Time { return testNow })
-	err := h.Handle(t.Context(), command.MarkTenantForDeletionCommand{
-		TenantID: tn.ID(),
-		Reason:   "ops: lifecycle test",
-	})
-	if !errors.Is(err, command.ErrPlatformTenantUndeletable) {
-		t.Fatalf("err = %v, want ErrPlatformTenantUndeletable", err)
-	}
-	if tn.Status() != tenant.StatusActive {
-		t.Errorf("Status = %v, want Active (guard must short-circuit)", tn.Status())
-	}
-}
-
-// TestMarkTenantForDeletion_GuardErrorWrapped — generic HasActiveSuperAdmin
-// failure surfaces as the wrapped guard error.
-func TestMarkTenantForDeletion_GuardErrorWrapped(t *testing.T) {
-	t.Parallel()
-	repo := newFakeTenantRepo()
-	tn := newTenant(t)
-	_ = tn.Activate(testNow) // arch-test:ignore-err
-	tn.PullEvents()
-	_ = repo.Add(t.Context(), tn) // arch-test:ignore-err
-
-	h := command.NewMarkTenantForDeletionHandler(repo, boomingPlatformGuard(errBoom), func() time.Time { return testNow })
-	err := h.Handle(t.Context(), command.MarkTenantForDeletionCommand{
-		TenantID: tn.ID(),
-		Reason:   "ops: lifecycle test",
-	})
-	if !errors.Is(err, errBoom) {
-		t.Fatalf("err = %v, want chain includes errBoom", err)
-	}
-}
-
-// TestMarkTenantForDeletion_ReasonMismatch_OnAlreadyPending — once a
-// tenant is PendingDeletion, MarkForDeletion is idempotent ONLY when
-// the supplied reason matches the existing schedule's reason. Any
-// other reason is rejected with wrapped ErrInvalid (audit integrity).
-func TestMarkTenantForDeletion_ReasonMismatch_OnAlreadyPending(t *testing.T) {
-	t.Parallel()
-	repo := newFakeTenantRepo()
-	tn := newTenant(t)
-	_ = tn.Activate(testNow)                                   // arch-test:ignore-err
-	_ = tn.MarkForDeletion("original: ops-initiated", testNow) // arch-test:ignore-err
-	tn.PullEvents()
-	_ = repo.Add(t.Context(), tn) // arch-test:ignore-err
-
-	h := command.NewMarkTenantForDeletionHandler(repo, newFakeMembershipRepo(), func() time.Time { return testNow })
-	err := h.Handle(t.Context(), command.MarkTenantForDeletionCommand{
-		TenantID: tn.ID(),
-		Reason:   "different: customer-requested",
-	})
-	if !errors.Is(err, tenant.ErrInvalid) {
-		t.Fatalf("err = %v, want wraps tenant.ErrInvalid (reason mismatch)", err)
-	}
-}
-
-// TestRestoreTenant_AggregateRejection_FromSuspended — Restore is legal
-// only from PendingDeletion. Calling on a Suspended tenant hits the
-// aggregate's default arm + wraps ErrInvalid. (Already-Active is
-// idempotent per the aggregate doc, so that's NOT a rejection path.)
-func TestRestoreTenant_AggregateRejection_FromSuspended(t *testing.T) {
-	t.Parallel()
-	repo := newFakeTenantRepo()
-	tn := newTenant(t)
-	_ = tn.Activate(testNow)                    // arch-test:ignore-err
-	_ = tn.Suspend("ops-test-suspend", testNow) // arch-test:ignore-err
-	tn.PullEvents()
-	_ = repo.Add(t.Context(), tn) // arch-test:ignore-err
-
-	h := command.NewRestoreTenantHandler(repo, func() time.Time { return testNow })
-	err := h.Handle(t.Context(), command.RestoreTenantCommand{TenantID: tn.ID()})
-	if !errors.Is(err, tenant.ErrInvalid) {
-		t.Fatalf("err = %v, want wraps tenant.ErrInvalid (not pending deletion)", err)
-	}
-}
-
-// TestSuspendTenant_NotFound + TestMarkForDeletion_NotFound — propagate
+// TestSuspendTenant_NotFound — propagate
 // ErrTenantNotFound sentinel from the repo, not raw tenant.ErrNotFound.
 func TestSuspendTenant_NotFound(t *testing.T) {
 	t.Parallel()
@@ -520,19 +356,6 @@ func TestSuspendTenant_NotFound(t *testing.T) {
 	err := h.Handle(t.Context(), command.SuspendTenantCommand{
 		TenantID: tenant.ID("99999999-9999-9999-9999-999999999999"),
 		Reason:   "ops",
-	})
-	if !errors.Is(err, command.ErrTenantNotFound) {
-		t.Fatalf("err = %v, want ErrTenantNotFound", err)
-	}
-}
-
-func TestMarkTenantForDeletion_NotFound(t *testing.T) {
-	t.Parallel()
-	repo := newFakeTenantRepo()
-	h := command.NewMarkTenantForDeletionHandler(repo, newFakeMembershipRepo(), func() time.Time { return testNow })
-	err := h.Handle(t.Context(), command.MarkTenantForDeletionCommand{
-		TenantID: tenant.ID("99999999-9999-9999-9999-999999999999"),
-		Reason:   "ops: test",
 	})
 	if !errors.Is(err, command.ErrTenantNotFound) {
 		t.Fatalf("err = %v, want ErrTenantNotFound", err)

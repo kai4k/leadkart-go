@@ -91,21 +91,6 @@ func handleListAllTenants(log *slog.Logger, a app.Application) http.Handler {
 	})
 }
 
-// ----- HardDeleteTenant -----------------------------------------------------
-
-func handleHardDeleteTenant(log *slog.Logger, a app.Application) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		id, ok := parseTenantIDPath(w, r)
-		if !ok {
-			return
-		}
-		err := a.Commands.HardDeleteTenant.Handle(r.Context(), command.HardDeleteTenantCommand{
-			TenantID: id,
-		})
-		writeTenantMutationResult(w, log, r, err)
-	})
-}
-
 // ----- GetPerson ------------------------------------------------------------
 
 func handleGetPerson(log *slog.Logger, a app.Application) http.Handler {

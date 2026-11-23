@@ -206,8 +206,6 @@ Generated from `ports.AddRoutes` by `TestArch_BFFRouteGateTable` (the test fails
 | `POST /api/v1/tenants` | platform operator and `platform.tenants.create` | default: reads honoured for an operator; a write is refused (403 `tenant_scope_read_only`) |
 | `POST /api/v1/tenants/{tenantId}/suspend` | platform operator and `identity.tenants.suspend` | path tenant (the URL names the tenant; a header that differs is 400 `tenant_scope_conflict`) |
 | `POST /api/v1/tenants/{tenantId}/activate` | platform operator and `identity.tenants.activate` | path tenant (the URL names the tenant; a header that differs is 400 `tenant_scope_conflict`) |
-| `POST /api/v1/tenants/{tenantId}/mark-for-deletion` | platform operator and `identity.tenants.delete` | path tenant (the URL names the tenant; a header that differs is 400 `tenant_scope_conflict`) |
-| `POST /api/v1/tenants/{tenantId}/restore` | platform operator and `identity.tenants.delete` | path tenant (the URL names the tenant; a header that differs is 400 `tenant_scope_conflict`) |
 | `GET /api/v1/users` | `identity.users.view` | default: reads honoured for an operator; a write is refused (403 `tenant_scope_read_only`) |
 | `GET /api/v1/users/search` | `crm.leads.assign` | default: reads honoured for an operator; a write is refused (403 `tenant_scope_read_only`) |
 | `GET /api/v1/users/{userId}` | `identity.users.view`, or the member's own record (`{userId}`) | default: reads honoured for an operator; a write is refused (403 `tenant_scope_read_only`) |
@@ -230,7 +228,6 @@ Generated from `ports.AddRoutes` by `TestArch_BFFRouteGateTable` (the test fails
 | `PATCH /api/v1/roles/{roleId}/parent` | `identity.roles.update` | honoured; writes allowed |
 | `DELETE /api/v1/roles/{roleId}` | `identity.roles.delete` | honoured; writes allowed |
 | `GET /api/v1/platform/tenants` | platform operator and `platform.tenants.view` | default: reads honoured for an operator; a write is refused (403 `tenant_scope_read_only`) |
-| `DELETE /api/v1/platform/tenants/{tenantId}` | platform operator and `identity.tenants.delete` | path tenant (the URL names the tenant; a header that differs is 400 `tenant_scope_conflict`) |
 | `GET /api/v1/platform/persons/{personId}` | platform operator and `platform.users.view` | default: reads honoured for an operator; a write is refused (403 `tenant_scope_read_only`) |
 | `GET /api/v1/platform/persons` | platform operator and `platform.users.view` | default: reads honoured for an operator; a write is refused (403 `tenant_scope_read_only`) |
 | `GET /api/v1/platform/persons/{personId}/memberships` | platform operator and `platform.users.view` | default: reads honoured for an operator; a write is refused (403 `tenant_scope_read_only`) |

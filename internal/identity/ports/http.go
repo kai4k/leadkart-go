@@ -129,12 +129,9 @@ func AddRoutes(mux *http.ServeMux, log *slog.Logger, a app.Application, verifier
 		// platform(perm...) = platform-tenant anchor AND every named permission:
 		// platform-tenant membership alone authorises nothing.
 		platform := authn.RequirePlatformGate(verifier, stampValidator)
-		// Tenant lifecycle writes stay possible against a suspended or pending-
-		// deletion tenant; a conflicting X-Tenant-Id is 400 (path wins).
+		// Tenant lifecycle writes stay possible against a suspended tenant; a
+		// conflicting X-Tenant-Id is 400 (path wins).
 		lifecycle := authn.TenantScopeLifecycle("tenantId")
-		// Hard delete acts on the path tenant only: the header is conflict-checked,
-		// never applied.
-		scopePathOnly := authn.TenantScopePathOnly("tenantId")
 
 		// Tenant onboarding is operator-only (ADR 0053 "no public sign-up
 		// surface"; BRD PlatformManager onboarding; ADR 0068 D6).
@@ -144,10 +141,6 @@ func AddRoutes(mux *http.ServeMux, log *slog.Logger, a app.Application, verifier
 			lifecycle(platform(p.Tenants.Suspend)(handleSuspendTenant(log, a))))
 		mux.Handle("POST /api/v1/tenants/{tenantId}/activate",
 			lifecycle(platform(p.Tenants.Activate)(handleActivateTenant(log, a))))
-		mux.Handle("POST /api/v1/tenants/{tenantId}/mark-for-deletion",
-			lifecycle(platform(p.Tenants.Delete)(handleMarkTenantForDeletion(log, a))))
-		mux.Handle("POST /api/v1/tenants/{tenantId}/restore",
-			lifecycle(platform(p.Tenants.Delete)(handleRestoreTenant(log, a))))
 
 		// User (Membership) management — permission-gated per ADR 0036/0068.
 		// Self-assigned roles/overrides/status/manager (D3) are refused by the
@@ -218,8 +211,6 @@ func AddRoutes(mux *http.ServeMux, log *slog.Logger, a app.Application, verifier
 		// A.7.b — these endpoints don't require an active session).
 		mux.Handle("GET /api/v1/platform/tenants",
 			platform(p.Platform.TenantsView)(handleListAllTenants(log, a)))
-		mux.Handle("DELETE /api/v1/platform/tenants/{tenantId}",
-			scopePathOnly(platform(p.Tenants.Delete)(handleHardDeleteTenant(log, a))))
 		// An operator must not suspend or edit their own person; composed
 		// INSIDE the platform gate (DenySelfPerson is an inner middleware).
 		notSelfPerson := authn.DenySelfPerson("personId")

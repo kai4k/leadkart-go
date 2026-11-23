@@ -217,8 +217,6 @@ var impersonationRefusedOutsideThePlatformPlane = []string{
 	"POST /api/v1/permission-requests/{requestId}/deny",
 	"POST /api/v1/tenants",
 	"POST /api/v1/tenants/{tenantId}/activate",
-	"POST /api/v1/tenants/{tenantId}/mark-for-deletion",
-	"POST /api/v1/tenants/{tenantId}/restore",
 	"POST /api/v1/tenants/{tenantId}/suspend",
 }
 

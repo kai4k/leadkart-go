@@ -13,14 +13,14 @@ INSERT INTO identity.tenants (
     password_require_digit, password_require_symbol,
     password_max_failed_attempts, password_lockout_minutes,
     locale, time_zone, date_format, currency,
-    deletion_scheduled_at, deletion_reason, hard_deleted_at, activated_at
+    activated_at
 ) VALUES (
     $1, $2, $3, $4, $5, $6,
     $7, $8, $9,
     $10, $11, $12, $13, $14, $15, $16,
     $17, $18, $19, $20, $21, $22, $23,
     $24, $25, $26, $27,
-    $28, $29, $30, $31
+    $28
 );
 
 -- name: GetTenantByID :one
@@ -33,8 +33,7 @@ SELECT id, slug, legal_name, display_name, status,
        password_min_length, password_require_uppercase, password_require_lowercase,
        password_require_digit, password_require_symbol,
        password_max_failed_attempts, password_lockout_minutes,
-       locale, time_zone, date_format, currency,
-       deletion_scheduled_at, deletion_reason, hard_deleted_at
+       locale, time_zone, date_format, currency
 FROM   identity.tenants
 WHERE  id = $1;
 
@@ -48,8 +47,7 @@ SELECT id, slug, legal_name, display_name, status,
        password_min_length, password_require_uppercase, password_require_lowercase,
        password_require_digit, password_require_symbol,
        password_max_failed_attempts, password_lockout_minutes,
-       locale, time_zone, date_format, currency,
-       deletion_scheduled_at, deletion_reason, hard_deleted_at
+       locale, time_zone, date_format, currency
 FROM   identity.tenants
 WHERE  slug = $1;
 
@@ -67,16 +65,14 @@ SELECT id, slug, legal_name, display_name, status,
        password_min_length, password_require_uppercase, password_require_lowercase,
        password_require_digit, password_require_symbol,
        password_max_failed_attempts, password_lockout_minutes,
-       locale, time_zone, date_format, currency,
-       deletion_scheduled_at, deletion_reason, hard_deleted_at
+       locale, time_zone, date_format, currency
 FROM   identity.tenants
 ORDER  BY created_at DESC;
 
 -- name: UpdateTenant :exec
 -- General-purpose update covering UpdateProfile + UpdateStatutory +
 -- UpdateAdminContact + UpdateSettings + UpdateDisplayPreferences +
--- Activate + Suspend + MarkForDeletion + RestoreFromDeletion +
--- HardDelete. Repository writes whatever the aggregate currently says.
+-- Activate + Suspend. Repository writes whatever the aggregate currently says.
 --
 -- admin_email removed in migration 20260507000008 — current admin
 -- email is derived at read-time via JOIN through CompanyOwner role.
@@ -106,20 +102,8 @@ SET    legal_name                  = $2,
        locale                       = $24,
        time_zone                    = $25,
        date_format                  = $26,
-       currency                     = $27,
-       deletion_scheduled_at        = $28,
-       deletion_reason              = $29,
-       hard_deleted_at              = $30
+       currency                     = $27
 WHERE  id = $1;
-
--- name: HardDeleteTenant :exec
--- Operator-only physical row delete. Per data-retention.md
--- "Tenant deletion saga": HardDelete is the final step after the
--- 30-day grace window expires AND every module has acknowledged the
--- deletion event. The aggregate's HardDelete() method gates this on
--- StatusPendingDeletion + grace expiry; the SQL is unconditional.
-DELETE FROM identity.tenants WHERE id = $1;
-
 
 -- name: SearchTenantsByText :many
 -- Cross-tenant tenants search per ADR 0040 (pg_trgm). Backed by
@@ -129,15 +113,14 @@ DELETE FROM identity.tenants WHERE id = $1;
 -- Tenants is non-RLS so this runs in any scope; the HTTP layer
 -- gates on RequirePlatform anyway. similarity() ranking surfaces
 -- closer matches first. Caller MUST bound query length at the
--- boundary (2-100 chars). Tenants in the terminal `deleted` state are excluded.
+-- boundary (2-100 chars).
 SELECT id, slug, legal_name, display_name, status, created_at,
        similarity(
            lower(slug) || ' ' || lower(legal_name) || ' ' || lower(display_name),
            lower(sqlc.arg(query))
        ) AS rank
 FROM   identity.tenants
-WHERE  status != 'deleted'
-AND    (lower(slug) || ' ' || lower(legal_name) || ' ' || lower(display_name))
+WHERE  (lower(slug) || ' ' || lower(legal_name) || ' ' || lower(display_name))
        ILIKE '%' || lower(sqlc.arg(query)) || '%'
 ORDER  BY rank DESC, id DESC
 LIMIT  sqlc.arg('limit');

@@ -34,18 +34,12 @@ func TestE2E_PathTenantRoutes_MatchingHeaderEqualsNoHeader(t *testing.T) {
 		}
 	}
 
-	susp := mintOperatorJWTExact(t, f.Issuer, f.persons, "", []string{p.Tenants.Suspend, p.Tenants.Activate, p.Tenants.Delete}, false)
+	susp := mintOperatorJWTExact(t, f.Issuer, f.persons, "", []string{p.Tenants.Suspend, p.Tenants.Activate}, false)
 	if r := f.doWithHeaders(t, http.MethodPost, "/api/v1/tenants/"+v.TenantID+"/suspend", susp, ports.SuspendTenantRequest{Reason: "path header test"}, scopeHdr(v.TenantID)); r.status != http.StatusNoContent {
 		t.Errorf("identity.tenants.suspend POST suspend with matching header: %d %s, want 204", r.status, r.body)
 	}
 	if r := f.doWithHeaders(t, http.MethodPost, "/api/v1/tenants/"+v.TenantID+"/activate", susp, nil, scopeHdr(v.TenantID)); r.status != http.StatusNoContent {
 		t.Errorf("identity.tenants.activate POST activate with matching header: %d %s, want 204", r.status, r.body)
-	}
-	// Hard delete: the gates must pass. The final SQL DELETE of a tenant that
-	// still has memberships fails the tenant_memberships FK (500, a pre-existing
-	// deletion-saga gap), so 204 is not asserted.
-	if r := f.doWithHeaders(t, http.MethodDelete, "/api/v1/platform/tenants/"+v.TenantID, susp, nil, scopeHdr(v.TenantID)); r.status == http.StatusUnauthorized || r.status == http.StatusForbidden || r.status == http.StatusBadRequest {
-		t.Errorf("identity.tenants.delete hard delete with matching header refused by a gate: %d %s", r.status, r.body)
 	}
 }
 

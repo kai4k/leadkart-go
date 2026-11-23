@@ -398,9 +398,6 @@ type IdentityTenant struct {
 	TimeZone                  string
 	DateFormat                string
 	Currency                  string
-	DeletionScheduledAt       pgtype.Timestamptz
-	DeletionReason            string
-	HardDeletedAt             pgtype.Timestamptz
 }
 
 // Per-tenant junction (Person ↔ Tenant). Tenant-scoped, FORCE RLS. Single-Active-Membership invariant via partial unique index.

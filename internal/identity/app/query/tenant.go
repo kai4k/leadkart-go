@@ -27,12 +27,10 @@ type TenantView struct {
 	DisplayName string
 	// AdminEmail removed in migration 20260507000008; derive admin via
 	// CompanyOwner-role membership (ListUsers / GetMembership path).
-	Status              string
-	CreatedAt           time.Time
-	ActivatedAt         time.Time
-	SuspendedAt         time.Time
-	DeletionScheduledAt time.Time
-	DeletionReason      string
+	Status      string
+	CreatedAt   time.Time
+	ActivatedAt time.Time
+	SuspendedAt time.Time
 
 	// Statutory — Indian compliance IDs (empty until declared).
 	GSTNumber         string
@@ -145,16 +143,14 @@ func projectTenant(t *tenant.Tenant) TenantView {
 	addr := contact.Address()
 
 	return TenantView{
-		ID:                  t.ID().String(),
-		Slug:                t.Slug().String(),
-		LegalName:           t.LegalName(),
-		DisplayName:         t.DisplayName(),
-		Status:              t.Status().String(),
-		CreatedAt:           t.CreatedAt().UTC(),
-		ActivatedAt:         t.ActivatedAt().UTC(),
-		SuspendedAt:         t.SuspendedAt().UTC(),
-		DeletionScheduledAt: t.DeletionScheduledAt().UTC(),
-		DeletionReason:      t.DeletionReason(),
+		ID:          t.ID().String(),
+		Slug:        t.Slug().String(),
+		LegalName:   t.LegalName(),
+		DisplayName: t.DisplayName(),
+		Status:      t.Status().String(),
+		CreatedAt:   t.CreatedAt().UTC(),
+		ActivatedAt: t.ActivatedAt().UTC(),
+		SuspendedAt: t.SuspendedAt().UTC(),
 
 		GSTNumber:         statutory.GST().String(),
 		PANNumber:         statutory.PAN().String(),

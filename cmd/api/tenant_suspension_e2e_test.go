@@ -89,28 +89,29 @@ func TestE2E_RegisteredTenant_IsActive_FirstAdminSignsInAndRefreshes(t *testing.
 }
 
 // A tenant that is not active for any reason other than suspension (pending: a future
-// self-signup; pending_deletion: marked for deletion) answers 403 tenant_not_active
-// after the password check, and refresh answers 401 refresh_rejected / tenant_not_active
-// with the family revoked as tenant_not_active. A wrong password stays the ordinary 401.
-// Operators acting into the tenant keep working: restoring brings the members back.
-func TestE2E_NotActiveTenant_MembersCannotSignInOrRefresh_RestoreBringsThemBack(t *testing.T) {
+// self-signup) answers 403 tenant_not_active after the password check, and refresh
+// answers 401 refresh_rejected / tenant_not_active with the family revoked as
+// tenant_not_active. A wrong password stays the ordinary 401. Operators acting into
+// the tenant keep working: activating it brings the members back.
+func TestE2E_PendingTenant_MembersCannotSignInOrRefresh_ActivationBringsThemBack(t *testing.T) {
 	f := newE2EFixture(t)
 	owner := f.registerAndLogin(t, "notactco")
 	m := f.createMember(t, owner, "notactm")
 	pair := f.loginPair(t, m.email, m.password)
 	su := f.mintPlatformTokenWith(t, nil, true)
 
-	if r := f.authedJSON(t, http.MethodPost, "/api/v1/tenants/"+owner.TenantID+"/mark-for-deletion", su, ports.MarkTenantForDeletionRequest{Reason: "customer left"}); r.status != http.StatusNoContent {
-		t.Fatalf("mark-for-deletion: %d %s", r.status, r.body)
+	// pending (what a future self-signup would create).
+	if _, err := f.Pool.Exec(t.Context(), `UPDATE identity.tenants SET status = 'pending', activated_at = NULL WHERE id = $1`, owner.TenantID); err != nil {
+		t.Fatalf("force pending: %v", err)
 	}
-	if got := f.tenantStatusOf(t, owner.TenantID); got != "pending_deletion" {
-		t.Fatalf("status %q, want pending_deletion", got)
+	if got := f.tenantStatusOf(t, owner.TenantID); got != "pending" {
+		t.Fatalf("status %q, want pending", got)
 	}
 
 	before := f.familyCount(t, m.personID)
 	r := f.postJSON(t, "/api/v1/auth/login", ports.LoginRequest{Email: m.email, Password: m.password, DeviceLabel: "d"})
 	if r.status != http.StatusForbidden || decodeError(t, r.body).Error != ports.ErrCodeTenantNotActive {
-		t.Fatalf("pending_deletion login: %d %s, want 403 tenant_not_active", r.status, r.body)
+		t.Fatalf("pending login: %d %s, want 403 tenant_not_active", r.status, r.body)
 	}
 	if got := f.familyCount(t, m.personID); got != before {
 		t.Fatalf("families %d -> %d: a refused login must not open one", before, got)
@@ -118,76 +119,28 @@ func TestE2E_NotActiveTenant_MembersCannotSignInOrRefresh_RestoreBringsThemBack(
 	wrong := f.postJSON(t, "/api/v1/auth/login", ports.LoginRequest{Email: m.email, Password: "Wrong-Pass-2026!zzzzz", DeviceLabel: "d"})
 	unknown := f.postJSON(t, "/api/v1/auth/login", ports.LoginRequest{Email: "nobody-" + ids.NewV7().String()[24:] + "@e2e.test", Password: "Wrong-Pass-2026!zzzzz", DeviceLabel: "d"})
 	if wrong.status != http.StatusUnauthorized || surfaceOf(wrong) != surfaceOf(unknown) {
-		t.Fatalf("wrong password for a pending_deletion member %+v differs from unknown email %+v: the status leaks", surfaceOf(wrong), surfaceOf(unknown))
+		t.Fatalf("wrong password for a pending member %+v differs from unknown email %+v: the status leaks", surfaceOf(wrong), surfaceOf(unknown))
 	}
 
 	rr := f.postJSON(t, "/api/v1/auth/refresh", ports.RefreshRequest{RefreshToken: pair.RefreshToken})
 	e := decodeError(t, rr.body)
 	if rr.status != http.StatusUnauthorized || e.Error != ports.ErrCodeRefreshRejected || e.Reason != ports.RefreshReasonTenantNotActive {
-		t.Fatalf("pending_deletion refresh: %d %s, want 401 refresh_rejected / tenant_not_active", rr.status, rr.body)
+		t.Fatalf("pending refresh: %d %s, want 401 refresh_rejected / tenant_not_active", rr.status, rr.body)
 	}
 	if got := f.revokeReasonOf(t, pair.RefreshToken); got != "tenant_not_active" {
 		t.Fatalf("family revoke reason %q, want tenant_not_active", got)
 	}
 
-	// An operator acting into the tenant keeps working (that is how it is restored).
+	// An operator acting into the tenant keeps working (that is how it is activated).
 	if lr := f.doWithHeaders(t, http.MethodGet, "/api/v1/users", su, nil, scopeHdr(owner.TenantID)); lr.status != http.StatusOK {
-		t.Fatalf("operator read into the pending_deletion tenant: %d %s, want 200", lr.status, lr.body)
-	}
-	if r := f.authedJSON(t, http.MethodPost, "/api/v1/tenants/"+owner.TenantID+"/restore", su, nil); r.status != http.StatusNoContent {
-		t.Fatalf("restore: %d %s", r.status, r.body)
-	}
-	if lr := f.postJSON(t, "/api/v1/auth/login", ports.LoginRequest{Email: m.email, Password: m.password, DeviceLabel: "back"}); lr.status != http.StatusOK {
-		t.Fatalf("login after restore: %d %s, want 200", lr.status, lr.body)
-	}
-	if rr := f.postJSON(t, "/api/v1/auth/refresh", ports.RefreshRequest{RefreshToken: pair.RefreshToken}); rr.status != http.StatusUnauthorized {
-		t.Fatalf("the revoked pre-deletion session came back: %d %s", rr.status, rr.body)
-	}
-
-	// pending (what a future self-signup would create): same answer, and activating it
-	// (the operator's approval) lets the members in.
-	if _, err := f.Pool.Exec(t.Context(), `UPDATE identity.tenants SET status = 'pending', activated_at = NULL WHERE id = $1`, owner.TenantID); err != nil {
-		t.Fatalf("force pending: %v", err)
-	}
-	pr := f.postJSON(t, "/api/v1/auth/login", ports.LoginRequest{Email: m.email, Password: m.password, DeviceLabel: "d"})
-	if pr.status != http.StatusForbidden || decodeError(t, pr.body).Error != ports.ErrCodeTenantNotActive {
-		t.Fatalf("pending login: %d %s, want 403 tenant_not_active", pr.status, pr.body)
+		t.Fatalf("operator read into the pending tenant: %d %s, want 200", lr.status, lr.body)
 	}
 	f.activateTenantHTTP(t, owner.TenantID)
-	if lr := f.postJSON(t, "/api/v1/auth/login", ports.LoginRequest{Email: m.email, Password: m.password, DeviceLabel: "approved"}); lr.status != http.StatusOK {
+	if lr := f.postJSON(t, "/api/v1/auth/login", ports.LoginRequest{Email: m.email, Password: m.password, DeviceLabel: "back"}); lr.status != http.StatusOK {
 		t.Fatalf("login after activation: %d %s, want 200", lr.status, lr.body)
 	}
-}
-
-// With the cascade running: marking a company for deletion ends every live session of
-// its members, and only that company's.
-func TestE2E_MarkedForDeletionTenant_CascadeRevokesLiveSessions(t *testing.T) {
-	f := newE2EFixtureWithCascade(t, func() time.Time { return time.Now().UTC() })
-	owner := f.registerAndLogin(t, "delcasco")
-	other := f.registerAndLogin(t, "delcasot")
-	m := f.createMember(t, owner, "delcasm")
-	f.loginPair(t, m.email, m.password)
-	if f.activeFamiliesOfTenant(t, owner.TenantID) < 2 {
-		t.Fatalf("setup: want at least 2 live sessions, have %d", f.activeFamiliesOfTenant(t, owner.TenantID))
-	}
-	su := f.mintPlatformTokenWith(t, nil, true)
-	if r := f.authedJSON(t, http.MethodPost, "/api/v1/tenants/"+owner.TenantID+"/mark-for-deletion", su, ports.MarkTenantForDeletionRequest{Reason: "customer left"}); r.status != http.StatusNoContent {
-		t.Fatalf("mark-for-deletion: %d %s", r.status, r.body)
-	}
-	deadline := time.Now().Add(15 * time.Second)
-	for f.activeFamiliesOfTenant(t, owner.TenantID) != 0 {
-		if time.Now().After(deadline) {
-			t.Fatalf("%d live sessions of the marked tenant after 15 s: the cascade did not run", f.activeFamiliesOfTenant(t, owner.TenantID))
-		}
-		time.Sleep(100 * time.Millisecond) // arch-test:wait-justified — poll interval inside a deadline-bounded loop awaiting the async mark-for-deletion cascade (forwarder→router→subscriber)
-	}
-	var reasons int
-	if err := f.Pool.QueryRow(t.Context(),
-		`SELECT count(*) FROM identity.refresh_token_families WHERE tenant_id = $1 AND revoke_reason = 'tenant_not_active'`, owner.TenantID).Scan(&reasons); err != nil || reasons < 2 {
-		t.Fatalf("%d families revoked as tenant_not_active (%v), want at least 2", reasons, err)
-	}
-	if f.activeFamiliesOfTenant(t, other.TenantID) == 0 {
-		t.Fatal("another tenant's sessions were revoked")
+	if rr := f.postJSON(t, "/api/v1/auth/refresh", ports.RefreshRequest{RefreshToken: pair.RefreshToken}); rr.status != http.StatusUnauthorized {
+		t.Fatalf("the revoked pre-activation session came back: %d %s", rr.status, rr.body)
 	}
 }
 
