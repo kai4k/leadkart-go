@@ -312,6 +312,22 @@ func (f *FakeRepository) ListAllForPerson(_ context.Context, personID person.ID)
 	return out, nil
 }
 
+// ListActiveRefsForPersonInTx returns the id and tenant of the Person's ACTIVE
+// Memberships across all tenants, ordered by tenant. The fake has no
+// transaction to require; the SQL adapter refuses to run outside one.
+func (f *FakeRepository) ListActiveRefsForPersonInTx(_ context.Context, personID person.ID) ([]membership.ActiveRef, error) {
+	var out []membership.ActiveRef
+	for _, m := range f.rows {
+		if m.PersonID() == personID && m.Status() == membership.StatusActive {
+			out = append(out, membership.ActiveRef{ID: m.ID(), TenantID: m.TenantID()})
+		}
+	}
+	slices.SortFunc(out, func(a, b membership.ActiveRef) int {
+		return cmp.Compare(a.TenantID.String(), b.TenantID.String())
+	})
+	return out, nil
+}
+
 // HasActiveSuperAdmin always returns false in the fake — the
 // Membership aggregate doesn't expose the role's is_super_admin flag
 // (that joins through identity.role_assignments + identity.roles in

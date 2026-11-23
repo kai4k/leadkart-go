@@ -21,6 +21,12 @@ var ErrNotFound = errs.New(errs.KindNotFound, "membership", "membership not foun
 // surfaces from the SQLSTATE 23505 constraint violation.
 var ErrAlreadyActive = errs.New(errs.KindConflict, "membership", "person already has active membership")
 
+// ActiveRef names one active Membership of a Person: its id and its tenant.
+type ActiveRef struct {
+	ID       ID
+	TenantID tenant.ID
+}
+
 // Repository persists Membership aggregates.
 //
 // Membership IS tenant-scoped — RLS policies on `identity.tenant_memberships`
@@ -113,6 +119,21 @@ type Repository interface {
 	// Membership constraint"). Returns an empty slice (not ErrNotFound)
 	// when the Person has no Memberships.
 	ListAllForPerson(ctx context.Context, personID person.ID) ([]*Membership, error)
+
+	// ListActiveRefsForPersonInTx returns the id and tenant of every ACTIVE
+	// Membership the Person holds across ALL tenants, ordered by tenant, read ON
+	// THE CALLER'S UNIT OF WORK: it never takes a connection of its own, and it
+	// refuses to run when ctx carries no transaction. Whatever scope that unit
+	// of work has (one tenant's, or the platform's), it has the same scope when
+	// this returns.
+	//
+	// It exists for ONE caller, the person change guard: the guard re-reads the
+	// person's memberships while it holds a tenant authority lock and the person
+	// row, and a read that asked the pool for a second connection there stalls
+	// the API for every tenant once the pool's other connections are held by
+	// requests waiting on those locks. A fitness test pins that nothing else
+	// calls it; every other cross-tenant read uses [Repository.ListAllForPerson].
+	ListActiveRefsForPersonInTx(ctx context.Context, personID person.ID) ([]ActiveRef, error)
 
 	// HasActiveSuperAdmin reports whether the supplied tenant has any
 	// active Membership holding a role flagged is_super_admin=true.

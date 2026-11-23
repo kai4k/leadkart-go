@@ -45,6 +45,14 @@ const maxGuardAttempts = 3
 // reads the memberships again: when the
 // active set is not the one that was guarded, nothing is applied and the guard
 // starts over (at most [maxGuardAttempts] times, then [ErrPersonMembershipsChanging]).
+//
+// One connection: from the moment a transaction is open the guard reads only
+// THROUGH it. While it holds a tenant authority lock and the person row, every
+// authority command of that tenant and every login of that person waits on it,
+// each holding a pooled connection; a read that asked the pool for one more
+// would wait for a connection none of them can release, and the API would stall
+// for every tenant. The first list is read before any transaction, where a
+// connection of its own is harmless.
 type PersonChangeGuard struct{ w authorityWriter }
 
 // NewPersonChangeGuard wires the guard over the same facts loader the
@@ -128,16 +136,20 @@ func (g PersonChangeGuard) runOnce(ctx context.Context, personID person.ID, chan
 	return nil
 }
 
-// lockVerifyAndChange runs inside the change transaction: it takes the person
-// row, re-reads the person's memberships and applies the change only when their
-// active set is the one the guard decided on.
+// lockVerifyAndChange runs inside the change transaction (a tenant's, or the
+// platform's when the person has no active membership): it takes the person
+// row, re-reads the person's active memberships ON THAT TRANSACTION and applies
+// the change only when they are the ones the guard decided on.
 func (g PersonChangeGuard) lockVerifyAndChange(ctx context.Context, personID person.ID, guarded []*membership.Membership, change func(ctx context.Context) error) error {
 	if err := g.w.lockPerson(ctx, personID); err != nil {
 		return err
 	}
-	now, err := g.activeMemberships(ctx, personID)
+	// The tenant authority lock and the person row are held: this read must not
+	// ask the pool for a second connection (see the type's comment), so it is the
+	// repository's one read that runs on the caller's transaction.
+	now, err := g.w.facts.memberships.ListActiveRefsForPersonInTx(ctx, personID)
 	if err != nil {
-		return err
+		return fmt.Errorf("person change guard: re-read memberships: %w", err)
 	}
 	if !sameActiveSet(guarded, now) {
 		return errMembershipsChanged
@@ -145,8 +157,13 @@ func (g PersonChangeGuard) lockVerifyAndChange(ctx context.Context, personID per
 	return change(ctx)
 }
 
-// sameActiveSet reports whether both lists name the same memberships (both are
-// ordered by tenant, and a person has at most one active membership per tenant).
-func sameActiveSet(a, b []*membership.Membership) bool {
-	return slices.EqualFunc(a, b, func(x, y *membership.Membership) bool { return x.ID() == y.ID() })
+// sameActiveSet reports whether the guarded memberships are exactly the active
+// ones read now (both ordered by tenant; a person has at most one active
+// membership per tenant).
+func sameActiveSet(guarded []*membership.Membership, now []membership.ActiveRef) bool {
+	now = slices.Clone(now)
+	slices.SortFunc(now, func(a, b membership.ActiveRef) int {
+		return strings.Compare(a.TenantID.String(), b.TenantID.String())
+	})
+	return slices.EqualFunc(guarded, now, func(x *membership.Membership, y membership.ActiveRef) bool { return x.ID() == y.ID })
 }

@@ -71,6 +71,9 @@ func (f *fakeMembershipRepo) ListReportingLinks(context.Context, tenant.ID, []me
 func (f *fakeMembershipRepo) ListAllForPerson(context.Context, person.ID) ([]*membership.Membership, error) {
 	return nil, errors.New("fake: ListAllForPerson unused")
 }
+func (f *fakeMembershipRepo) ListActiveRefsForPersonInTx(context.Context, person.ID) ([]membership.ActiveRef, error) {
+	return nil, errors.New("fake: ListActiveRefsForPersonInTx unused")
+}
 func (f *fakeMembershipRepo) ListForTenantPage(context.Context, tenant.ID, time.Time, string, int) ([]*membership.Membership, error) {
 	return nil, errors.New("fake: ListForTenantPage unused")
 }

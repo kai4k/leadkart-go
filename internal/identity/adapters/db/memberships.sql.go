@@ -295,6 +295,43 @@ func (q *Queries) InsertRoleAssignment(ctx context.Context, arg InsertRoleAssign
 	return err
 }
 
+const listActiveMembershipRefsForPerson = `-- name: ListActiveMembershipRefsForPerson :many
+SELECT id, tenant_id
+FROM   identity.tenant_memberships
+WHERE  person_id = $1
+  AND  status    = 'active'
+ORDER  BY tenant_id
+`
+
+type ListActiveMembershipRefsForPersonRow struct {
+	ID       pgtype.UUID
+	TenantID pgtype.UUID
+}
+
+// The person's ACTIVE memberships in every tenant, id and tenant only. Run by
+// MembershipRepository.ListActiveRefsForPersonInTx inside a savepoint that sets
+// the platform scope and is rolled back, on the caller's transaction: the person
+// change guard's re-read under the tenant authority lock and the person row.
+func (q *Queries) ListActiveMembershipRefsForPerson(ctx context.Context, personID pgtype.UUID) ([]ListActiveMembershipRefsForPersonRow, error) {
+	rows, err := q.db.Query(ctx, listActiveMembershipRefsForPerson, personID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListActiveMembershipRefsForPersonRow
+	for rows.Next() {
+		var i ListActiveMembershipRefsForPersonRow
+		if err := rows.Scan(&i.ID, &i.TenantID); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listActiveMembershipsInTenantPage = `-- name: ListActiveMembershipsInTenantPage :many
 SELECT id, person_id, tenant_id, status, joined_at, left_at,
        designation, department, status_message, reports_to,

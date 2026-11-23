@@ -450,6 +450,81 @@ func (r *MembershipRepository) ListAllForPerson(
 	return out, nil
 }
 
+// ErrNoTx is returned by [MembershipRepository.ListActiveRefsForPersonInTx] when
+// ctx carries no unit-of-work transaction: that read exists to stay on its
+// caller's connection, so it never opens one of its own.
+var ErrNoTx = errors.New("identity: this membership read must run inside a UoW tx")
+
+// platformReadRollbackTimeout bounds the rollback to the savepoint when the
+// caller's context is already cancelled (the rollback is what takes the platform
+// scope off the transaction again, so it is not skipped).
+const platformReadRollbackTimeout = 5 * time.Second
+
+// ListActiveRefsForPersonInTx satisfies [membership.Repository]: the person's
+// active memberships in every tenant, read on the transaction ctx carries.
+//
+// The caller's transaction is usually scoped to ONE tenant, and row-level
+// security would hide the person's memberships elsewhere. The read therefore
+// runs inside a savepoint that turns the platform scope on and is then ROLLED
+// BACK, on success and on error: rolling back to a savepoint restores a
+// transaction-local setting to what it was before the savepoint, so the
+// transaction leaves this method with exactly the scope it entered with. A pure
+// read loses nothing in the rollback.
+func (r *MembershipRepository) ListActiveRefsForPersonInTx(ctx context.Context, personID person.ID) ([]membership.ActiveRef, error) {
+	uid, err := parsePersonIDForMembership(personID)
+	if err != nil {
+		return nil, err
+	}
+	tx, ok := pg.TxFromContext(ctx)
+	if !ok {
+		return nil, ErrNoTx
+	}
+	var out []membership.ActiveRef
+	err = readAsPlatformOnTx(ctx, tx, func(sp pgx.Tx) error {
+		rows, err := r.q.WithTx(sp).ListActiveMembershipRefsForPerson(ctx, pgconv.PgUUID(uid))
+		if err != nil {
+			return fmt.Errorf("membership repo: list active refs for person: %w", err)
+		}
+		out = make([]membership.ActiveRef, 0, len(rows))
+		for _, row := range rows {
+			out = append(out, membership.ActiveRef{
+				ID:       membership.ID(pgconv.UUIDFromPg(row.ID).String()),
+				TenantID: tenant.ID(pgconv.UUIDFromPg(row.TenantID).String()),
+			})
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// readAsPlatformOnTx runs read on tx with the platform scope on, inside a
+// savepoint that is always rolled back (see ListActiveRefsForPersonInTx, its
+// only caller). When the savepoint cannot be rolled back the transaction may
+// still carry the platform scope, so that is an error even if read succeeded:
+// the caller must not go on. The rollback runs on a context of its own, so a
+// caller's cancelled context does not skip it.
+func readAsPlatformOnTx(ctx context.Context, tx pgx.Tx, read func(sp pgx.Tx) error) error {
+	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), platformReadRollbackTimeout)
+	defer cancel()
+	sp, err := tx.Begin(ctx) // SAVEPOINT
+	if err != nil {
+		return fmt.Errorf("membership repo: platform read: savepoint: %w", err)
+	}
+	// Only a panic inside read reaches this one; every return has run the checked rollback below.
+	defer sp.Rollback(rctx) //nolint:errcheck // after the checked rollback this is a no-op on a closed savepoint
+	readErr := pg.SetPlatformOnTx(ctx, sp)
+	if readErr == nil {
+		readErr = read(sp)
+	}
+	if rerr := sp.Rollback(rctx); rerr != nil { // ROLLBACK TO SAVEPOINT
+		return errors.Join(readErr, fmt.Errorf("membership repo: platform read: the scope could not be restored: %w", rerr))
+	}
+	return readErr
+}
+
 // ----- Helpers ---------------------------------------------------------------
 
 // loadMembership reads the membership without locking it (read paths).

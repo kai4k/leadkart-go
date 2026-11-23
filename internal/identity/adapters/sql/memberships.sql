@@ -78,6 +78,17 @@ FROM   identity.tenant_memberships
 WHERE  person_id = $1
 ORDER  BY joined_at;
 
+-- name: ListActiveMembershipRefsForPerson :many
+-- The person's ACTIVE memberships in every tenant, id and tenant only. Run by
+-- MembershipRepository.ListActiveRefsForPersonInTx inside a savepoint that sets
+-- the platform scope and is rolled back, on the caller's transaction: the person
+-- change guard's re-read under the tenant authority lock and the person row.
+SELECT id, tenant_id
+FROM   identity.tenant_memberships
+WHERE  person_id = $1
+  AND  status    = 'active'
+ORDER  BY tenant_id;
+
 -- name: ListMembershipsInCurrentTenant :many
 -- Cross-membership query under tenant scope — RLS filters to the
 -- current tenant via SET LOCAL app.tenant_id. Used by tenant-admin
