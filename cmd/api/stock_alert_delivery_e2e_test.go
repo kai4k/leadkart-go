@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -153,5 +154,44 @@ func TestE2E_StockAlerts_AnExpiryAlertReachesTheCompanyAdministrator(t *testing.
 	}
 	if n, err := scanner.ScanReorder(t.Context(), tid); err != nil || n != 0 {
 		t.Fatalf("a second reorder scan raised %d, err %v; want 0", n, err)
+	}
+}
+
+// Review G2 mutant: alerts go to ACTIVE members only. A deactivated member who holds the
+// role stops being an addressee; the owner still is.
+func TestE2E_StockAlerts_RecipientsAreActiveMembersOnly(t *testing.T) {
+	f := newE2EFixture(t)
+	tx := pg.NewTransactor(f.Pool)
+	holders := holdersRecipients{holders: identityadapters.NewPermissionHolderReader(f.Pool, tx)}
+	owner := f.registerAndLogin(t, "recipients")
+	second := f.addSecondOwner(t, owner, "recipients-2")
+	tid := tenant.ID(owner.TenantID)
+
+	got, err := holders.StockAlertRecipients(t.Context(), tid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := func(ms []membership.ID) []string {
+		out := make([]string, 0, len(ms))
+		for _, m := range ms {
+			out = append(out, m.String())
+		}
+		return out
+	}
+	if !slices.Contains(ids(got), owner.MembershipID) || !slices.Contains(ids(got), second.membershipID) {
+		t.Fatalf("both owners are addressees while active: %v", ids(got))
+	}
+
+	r := f.authedJSON(t, http.MethodPost, "/api/v1/users/"+second.membershipID+"/deactivate", owner.AccessToken,
+		map[string]any{"reason": "left the company"})
+	if r.status != http.StatusNoContent && r.status != http.StatusOK {
+		t.Fatalf("deactivate: %d %s", r.status, r.body)
+	}
+	got, err = holders.StockAlertRecipients(t.Context(), tid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if slices.Contains(ids(got), second.membershipID) || !slices.Contains(ids(got), owner.MembershipID) {
+		t.Fatalf("only the active owner is an addressee after deactivation: %v", ids(got))
 	}
 }

@@ -12,6 +12,7 @@ import (
 
 	"github.com/leadkart/leadkart-go/internal/common/commercepolicy"
 	csports "github.com/leadkart/leadkart-go/internal/companysettings/ports"
+	"github.com/leadkart/leadkart-go/internal/identity/domain/permission"
 )
 
 const csClasses = "/api/v1/company/drug-schedule-classes"
@@ -131,5 +132,34 @@ func TestE2E_DrugSchedule_AnUnusedDefaultClassCanBeRemoved(t *testing.T) {
 	}
 	if r := f.authedJSON(t, http.MethodDelete, csClasses+"/00000000-0000-4000-8000-0000000000aa", tok, map[string]any{"reason": "x"}); r.status != http.StatusNotFound {
 		t.Fatalf("an unknown class: %d", r.status)
+	}
+}
+
+// Review G2 mutant: the class list is company data guarded by tax.manage on every write.
+// A member without it is refused on create, rename and remove (403), and the list is untouched.
+func TestE2E_DrugSchedule_ClassWritesNeedTheTaxManagePermission(t *testing.T) {
+	f := newE2EFixture(t)
+	owner := f.registerAndLogin(t, "classgate")
+	// An admin-tier role holding company_settings.manage but NOT tax.manage: the nearest
+	// grant, which must not open the class list.
+	cp := permission.IdentityPermissions.CompanySettings
+	plain := csTokenAt(t, f, owner, 10, cp.Read, cp.Manage)
+	before := csDecode[csports.ScheduleClassesDto](t, f.authedJSON(t, http.MethodGet, csClasses, owner.AccessToken, nil), http.StatusOK)
+	if len(before.Items) == 0 {
+		t.Fatal("the company starts with a default class list")
+	}
+
+	if r := f.authedJSON(t, http.MethodPost, csClasses, plain, map[string]any{"label": "Sneaky", "reason": "no right"}); r.status != http.StatusForbidden {
+		t.Fatalf("create without tax.manage: %d %s, want 403", r.status, r.body)
+	}
+	if r := f.authedJSON(t, http.MethodPatch, csClasses+"/"+before.Items[0].ID, plain, map[string]any{"label": "Renamed", "reason": "no right"}); r.status != http.StatusForbidden {
+		t.Fatalf("rename without tax.manage: %d %s, want 403", r.status, r.body)
+	}
+	if r := f.authedJSON(t, http.MethodDelete, csClasses+"/"+before.Items[0].ID, plain, map[string]any{"reason": "no right"}); r.status != http.StatusForbidden {
+		t.Fatalf("remove without tax.manage: %d %s, want 403", r.status, r.body)
+	}
+	after := csDecode[csports.ScheduleClassesDto](t, f.authedJSON(t, http.MethodGet, csClasses, owner.AccessToken, nil), http.StatusOK)
+	if len(after.Items) != len(before.Items) {
+		t.Fatalf("a refused write changed the list: %d -> %d", len(before.Items), len(after.Items))
 	}
 }

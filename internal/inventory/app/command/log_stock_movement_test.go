@@ -6,6 +6,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
+
+	"github.com/leadkart/leadkart-go/internal/common/commercepolicy"
+
 	"github.com/leadkart/leadkart-go/internal/inventory/app/command"
 	"github.com/leadkart/leadkart-go/internal/inventory/domain/batch"
 )
@@ -199,5 +203,36 @@ func TestLogStockMovementHandler_NegativeMagnitude_ReturnsErrInvalid(t *testing.
 	})
 	if !errors.Is(err, batch.ErrInvalid) {
 		t.Fatalf("err: got %v want ErrInvalid (negative magnitude)", err)
+	}
+}
+
+// Review G2 mutant: stock received into a batch that is already past the company
+// sellable cut-off (but not past its printed expiry) is accepted with the
+// past_sellable_cutoff warning; stock into a sellable batch carries none.
+func TestLogStockMovementHandler_InboundPastTheCutoffWarns(t *testing.T) {
+	t.Parallel()
+	pol := commercepolicy.Default()
+	pol.Expiry.StopMonthsBefore = 3
+	for name, tc := range map[string]struct {
+		expiry time.Time
+		want   []string
+	}{
+		"inside the cut-off": {time.Date(2026, 6, 30, 0, 0, 0, 0, time.UTC), []string{command.WarningPastSellableCutoff}},
+		"sellable":           {time.Date(2027, 6, 30, 0, 0, 0, 0, time.UTC), nil},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			batches := newFakeBatchRepo()
+			actor := newMembershipID(t)
+			tid := newTenantID(t)
+			p := seedProduct(t, newFakeProductRepo(), tid, actor, "SKU-WARN")
+			b := seedBatchExpiryStock(t, batches, p, actor, "LOT-W", tc.expiry, 5)
+			h := command.NewLogStockMovementHandler(&fakeUoW{}, batches, newFakeMovementRepo(), sellabilitytest.ResolverWith(pol, fixedNow), func() time.Time { return fixedNow }, testNewMovementID)
+			res, err := h.Handle(t.Context(), command.LogStockMovementCommand{
+				TenantID: tid, BatchID: b.ID(), ActorMembershipID: actor, Type: batch.MovementInbound, Quantity: 1, Reason: "grn",
+			})
+			require.NoError(t, err)
+			require.Equal(t, tc.want, res.Warnings)
+		})
 	}
 }
