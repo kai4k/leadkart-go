@@ -275,6 +275,27 @@ func TestConsumeOrderStock_RefusesToShipUnitsOfABatchThatHasSinceExpired(t *test
 	require.Equal(t, int64(10), b.QuantityOnHand(), "nothing shipped")
 }
 
+// Review L2: the consume is judged on the company BUSINESS day, not the UTC date. At 20:00 UTC on
+// 31 January it is already 1 February at the market offset (+05:30): a batch printed 2027-01 is
+// past its printed expiry, so its reserved units cannot ship. Judged on the UTC date the shipment
+// would go out for another five and a half hours.
+func TestConsumeOrderStock_IsJudgedOnTheBusinessDayNotTheUTCDate(t *testing.T) {
+	t.Parallel()
+	batches := newFakeBatchRepo()
+	movements := newFakeMovementRepo()
+	actor := newMembershipID(t)
+	p := seedProduct(t, newFakeProductRepo(), newTenantID(t), actor, "SKU-L2")
+	b := seedBatchExpiryStock(t, batches, p, actor, "JAN27", time.Date(2027, 1, 31, 0, 0, 0, 0, time.UTC), 10)
+	require.NoError(t, b.ApplyMovement(batch.MovementReservation, 10, fixedNow, fixedNow))
+
+	now := time.Date(2027, 1, 31, 20, 0, 0, 0, time.UTC) // 01:30 IST on 1 February
+	ledger := &fakeReservationLedger{outstanding: []stockmovement.OutstandingReservation{{BatchID: b.ID(), ProductID: p.ID(), Quantity: 10}}}
+	consume := command.NewConsumeOrderStockHandler(&fakeUoW{}, batches, movements, ledger, sellabilitytest.Resolver(now), func() time.Time { return now }, testNewMovementID)
+	_, err := consume.Handle(t.Context(), command.ConsumeOrderStockCommand{TenantID: p.TenantID(), OrderID: uuid.NewString(), ActorMembershipID: actor})
+	require.ErrorIs(t, err, batch.ErrExpired)
+	require.Equal(t, int64(10), b.QuantityOnHand(), "nothing shipped")
+}
+
 // Review S6: the plan was made on one business day and the transaction runs after midnight:
 // a batch whose cut-off passed in between is refused inside the transaction, nothing reserved.
 func TestReserveOrderStock_RechecksSellabilityInsideTheTransaction(t *testing.T) {

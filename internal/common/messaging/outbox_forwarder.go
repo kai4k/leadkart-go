@@ -15,6 +15,23 @@ import (
 // subscriber redelivers an unacknowledged message.
 const ackDeadlineMargin = 30 * time.Second
 
+// outboxSubscriberConfig is the watermill-sql subscriber configuration of the outbox
+// forwarder. A message is redelivered when it is not acknowledged within AckDeadline,
+// which must exceed the longest a handler may legitimately hold the message (every
+// attempt at its timeout, plus the backoffs), or a slow handler is run a second time
+// while its first delivery is still being retried.
+func outboxSubscriberConfig() wmsql.SubscriberConfig {
+	ackDeadline := RetryBudget(DefaultRetry, defaultHandlerTimeout) + ackDeadlineMargin
+	return wmsql.SubscriberConfig{
+		SchemaAdapter:  OutboxQueueSchema(),
+		OffsetsAdapter: OutboxOffsetsAdapter(),
+		AckDeadline:    &ackDeadline,
+		// Schema is owned by goose (migration 20260604000002); the
+		// library must not issue CREATE TABLE.
+		InitializeSchema: false,
+	}
+}
+
 // NewOutboxForwarder builds the single Watermill Forwarder that drains the
 // shared transactional outbox (OutboxTable) and republishes each event to its
 // destination module topic on outPub. Replaces the four hand-rolled per-module
@@ -37,23 +54,7 @@ func NewOutboxForwarder(
 	if logger == nil {
 		logger = watermill.NopLogger{}
 	}
-	ackDeadline := RetryBudget(DefaultRetry, defaultHandlerTimeout) + ackDeadlineMargin
-	sub, err := wmsql.NewSubscriber(
-		wmsql.BeginnerFromPgx(pool),
-		wmsql.SubscriberConfig{
-			SchemaAdapter:  OutboxQueueSchema(),
-			OffsetsAdapter: OutboxOffsetsAdapter(),
-			// A message is redelivered when it is not acknowledged within this time.
-			// It must exceed the longest a handler may legitimately hold the message
-			// (every attempt at its timeout, plus the backoffs), or a slow handler is
-			// run a second time while its first delivery is still being retried.
-			AckDeadline: &ackDeadline,
-			// Schema is owned by goose (migration 20260604000002); the
-			// library must not issue CREATE TABLE.
-			InitializeSchema: false,
-		},
-		logger,
-	)
+	sub, err := wmsql.NewSubscriber(wmsql.BeginnerFromPgx(pool), outboxSubscriberConfig(), logger)
 	if err != nil {
 		return nil, fmt.Errorf("outbox forwarder: new sql subscriber: %w", err)
 	}
