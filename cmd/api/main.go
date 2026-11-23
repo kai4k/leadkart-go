@@ -924,6 +924,7 @@ func buildPlatformApp(pool *pgxpool.Pool, now func() time.Time) platformWiringRe
 func buildInventoryApp(pool *pgxpool.Pool, hybridCache *cache.HybridCache) inventoryapp.Application {
 	tx := pg.NewTransactor(pool)
 	products := inventoryadapters.NewProductRepository(pool, tx)
+	productReader := inventoryadapters.NewProductReader(pool, tx)
 	batches := inventoryadapters.NewBatchRepository(pool, tx)
 	movements := inventoryadapters.NewStockMovementRepository(pool, tx)
 	gstDefaults := refdata.NewGstDefaultReaderPG(pool, hybridCache)
@@ -942,8 +943,8 @@ func buildInventoryApp(pool *pgxpool.Pool, hybridCache *cache.HybridCache) inven
 			LogStockMovement: inventorycommand.NewLogStockMovementHandler(tx, batches, movements, time.Now, newMovementID),
 		},
 		Queries: inventoryapp.Queries{
-			GetProduct:             inventoryquery.NewGetProductHandler(products),
-			ListProductsPage:       inventoryquery.NewListProductsPageHandler(products),
+			GetProduct:             inventoryquery.NewGetProductHandler(productReader, time.Now),
+			ListProductsPage:       inventoryquery.NewListProductsPageHandler(productReader, time.Now),
 			GetBatch:               inventoryquery.NewGetBatchHandler(batches),
 			ListBatchesByProduct:   inventoryquery.NewListBatchesByProductHandler(batches),
 			ListBatchMovementsPage: inventoryquery.NewListBatchMovementsPageHandler(movements),

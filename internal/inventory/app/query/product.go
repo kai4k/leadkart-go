@@ -12,11 +12,14 @@ import (
 	"github.com/leadkart/leadkart-go/internal/inventory/domain/product"
 )
 
-// ProductView is the flat read model for a single product. Per STRICT
-// CQRS (TDL canon) query handlers project the write aggregate into this
-// read DTO; the [product.Product] aggregate NEVER leaks past the app
-// layer into ports/. The port serializes this View into the wire
-// ProductDto (1:1).
+// ProductView is the flat read model for a single product: the catalogue row
+// plus the stock figures a screen shows next to it. Per STRICT CQRS (TDL
+// canon) the [product.Product] aggregate NEVER leaks past the app layer into
+// ports/. The port serializes this View into the wire ProductDto (1:1).
+//
+// The stock figures cross two aggregates (Product and its Batches), so they
+// are read by a [ProductReader] in one statement, not assembled from
+// repositories.
 type ProductView struct {
 	ID           string
 	TenantID     string
@@ -34,29 +37,49 @@ type ProductView struct {
 	ProductCategory          string
 	ReorderLevel             int
 	ExpiryAlertThresholdDays int
+
+	// StockOnHand and StockReserved add up the product's live batches that
+	// are not expired (expiry date after today): units in an expired batch
+	// are not stock. StockAvailable is on hand minus reserved, what can
+	// still be sold.
+	StockOnHand    int64
+	StockReserved  int64
+	StockAvailable int64
+	// EarliestExpiry is the soonest expiry date among those batches that
+	// hold stock; nil when the product has no unexpired stock.
+	EarliestExpiry *time.Time
 }
 
-// projectProduct maps the write aggregate to the flat read View — the
-// single source of truth for product read projection.
-func projectProduct(p *product.Product) ProductView {
-	return ProductView{
-		ID:           p.ID().String(),
-		TenantID:     p.TenantID().String(),
-		SKU:          p.SKU(),
-		Name:         p.Name(),
-		DosageForm:   p.DosageForm(),
-		PackSize:     p.PackSize(),
-		HSNCode:      p.HSNCode(),
-		GSTRateBps:   p.GSTRateBps(),
-		Manufacturer: p.Manufacturer(),
-		IsActive:     p.IsActive(),
-		CreatedAt:    p.CreatedAt(),
-		UpdatedAt:    p.UpdatedAt(),
+// ProductListFilter narrows the product list. The zero value filters nothing.
+type ProductListFilter struct {
+	// Search is a case-insensitive substring of "sku name".
+	Search string
+	// ActiveOnly keeps is_active products only.
+	ActiveOnly bool
+	// Category, DosageForm and Manufacturer are exact, case-insensitive matches.
+	Category     string
+	DosageForm   string
+	Manufacturer string
+	// LowStock keeps products with a reorder level above 0 whose StockOnHand
+	// is below it (the rule the daily reorder scan alerts on).
+	LowStock bool
+	// ExpiringWithinDays, when set, keeps products whose EarliestExpiry is
+	// on or before today plus that many days.
+	ExpiringWithinDays *int
+}
 
-		ProductCategory:          p.ProductCategory(),
-		ReorderLevel:             p.ReorderLevel(),
-		ExpiryAlertThresholdDays: p.ExpiryAlertThresholdDays(),
-	}
+// ProductReader is the read side of the product screens, declared with its
+// consumer. The implementation lives in inventory/adapters.
+//
+// today is the date "expired" is judged against (UTC, date only), passed in
+// so the handler and the SQL share one moment. tenantID is explicit per
+// ADR 0062; RLS remains the backstop.
+type ProductReader interface {
+	// GetProduct returns the live product or [product.ErrNotFound].
+	GetProduct(ctx context.Context, tenantID tenant.ID, id product.ID, today time.Time) (ProductView, error)
+	// ListProducts returns at most limit live products after cursor, ordered
+	// (created_at DESC, id DESC) per ADR 0038.
+	ListProducts(ctx context.Context, tenantID tenant.ID, filter ProductListFilter, today time.Time, cursor pagination.Cursor, limit int) ([]ProductView, error)
 }
 
 // GetProductQuery — single-product read.
@@ -69,65 +92,62 @@ type GetProductQuery struct {
 	ProductID product.ID
 }
 
-// GetProductHandler returns a Product or product.ErrNotFound.
+// GetProductHandler returns a Product view or product.ErrNotFound.
 type GetProductHandler struct {
-	products product.Repository
+	products ProductReader
+	now      func() time.Time
 }
 
-// NewGetProductHandler wires the handler.
-func NewGetProductHandler(products product.Repository) GetProductHandler {
-	return GetProductHandler{products: products}
+// NewGetProductHandler wires the handler. now is the explicit time source
+// (nil → time.Now); it decides which batches are expired.
+func NewGetProductHandler(products ProductReader, now func() time.Time) GetProductHandler {
+	if now == nil {
+		now = time.Now
+	}
+	return GetProductHandler{products: products, now: now}
 }
 
 // Handle returns the product View or product.ErrNotFound.
 func (h GetProductHandler) Handle(ctx context.Context, q GetProductQuery) (ProductView, error) {
-	p, err := h.products.GetByID(ctx, q.TenantID, q.ProductID)
-	if err != nil {
-		return ProductView{}, err
-	}
-	return projectProduct(p), nil
+	return h.products.GetProduct(ctx, q.TenantID, q.ProductID, h.now())
 }
 
-// ListProductsPageQuery — cursor-paginated product list under tenant
-// scope. Filters: ActiveOnly / DosageForm / Manufacturer / Search.
+// ListProductsPageQuery — cursor-paginated product list under tenant scope.
 type ListProductsPageQuery struct {
-	TenantID     tenant.ID
-	Cursor       pagination.Cursor
-	PageSize     int
-	ActiveOnly   bool
-	DosageForm   string
-	Manufacturer string
-	Search       string
+	TenantID tenant.ID
+	Cursor   pagination.Cursor
+	PageSize int
+	Filter   ProductListFilter
 }
 
 // ListProductsPageHandler returns a keyset-paginated page.
 type ListProductsPageHandler struct {
-	products product.Repository
+	products ProductReader
+	now      func() time.Time
 }
 
-// NewListProductsPageHandler wires the handler.
-func NewListProductsPageHandler(products product.Repository) ListProductsPageHandler {
-	return ListProductsPageHandler{products: products}
+// NewListProductsPageHandler wires the handler. now is the explicit time
+// source (nil → time.Now); it decides which batches are expired.
+func NewListProductsPageHandler(products ProductReader, now func() time.Time) ListProductsPageHandler {
+	if now == nil {
+		now = time.Now
+	}
+	return ListProductsPageHandler{products: products, now: now}
 }
 
-// Handle returns the page of ProductView.
+// Handle returns the page of ProductView. It asks the reader for one row more
+// than the page holds; pagination.BuildPage turns the extra row into HasMore.
 func (h ListProductsPageHandler) Handle(ctx context.Context, q ListProductsPageQuery) (pagination.Page[ProductView], error) {
-	page, err := h.products.ListPage(ctx, q.TenantID, product.ListFilter{
-		Search:       q.Search,
-		ActiveOnly:   q.ActiveOnly,
-		DosageForm:   q.DosageForm,
-		Manufacturer: q.Manufacturer,
-	}, q.Cursor, pagination.ClampPageSize(q.PageSize))
+	size := pagination.ClampPageSize(q.PageSize)
+	rows, err := h.products.ListProducts(ctx, q.TenantID, q.Filter, h.now(), q.Cursor, size+1)
 	if err != nil {
 		return pagination.Page[ProductView]{}, fmt.Errorf("list products: %w", err)
 	}
-	views := make([]ProductView, 0, len(page.Items))
-	for _, p := range page.Items {
-		views = append(views, projectProduct(p))
+	page := pagination.BuildPage(rows, size, func(v ProductView) pagination.Cursor {
+		return pagination.Cursor{SortValue: v.CreatedAt, ID: v.ID}
+	})
+	if page.Items == nil {
+		page.Items = []ProductView{}
 	}
-	return pagination.Page[ProductView]{
-		Items:      views,
-		HasMore:    page.HasMore,
-		NextCursor: page.NextCursor,
-	}, nil
+	return page, nil
 }

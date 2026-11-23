@@ -37,6 +37,14 @@ type ProductDto struct {
 	ReorderLevel int `json:"reorder_level"`
 	// ExpiryAlertThresholdDays 0 means the expiry alert is off for this product.
 	ExpiryAlertThresholdDays int `json:"expiry_alert_threshold_days"`
+	// StockOnHand and StockReserved add up the product's live batches that
+	// are not expired; StockAvailable is on hand minus reserved.
+	StockOnHand    int64 `json:"stock_on_hand"`
+	StockReserved  int64 `json:"stock_reserved"`
+	StockAvailable int64 `json:"stock_available"`
+	// EarliestExpiry is the soonest expiry among the unexpired batches that
+	// hold stock; left out when there is none.
+	EarliestExpiry *time.Time `json:"earliest_expiry,omitzero"`
 }
 
 // CreateProductRequest — POST /api/v1/inventory/products.
@@ -122,9 +130,12 @@ type BatchDto struct {
 	MRPPaise                   int64     `json:"mrp_paise"`
 	PurchasePricePaise         int64     `json:"purchase_price_paise"`
 	QuantityOnHand             int64     `json:"quantity_on_hand"`
-	Version                    int64     `json:"version"`
-	CreatedAt                  time.Time `json:"created_at"`
-	UpdatedAt                  time.Time `json:"updated_at"`
+	// QuantityReserved is the part of QuantityOnHand held for confirmed
+	// orders; only on hand minus reserved can be sold, moved out or adjusted down.
+	QuantityReserved int64     `json:"quantity_reserved"`
+	Version          int64     `json:"version"`
+	CreatedAt        time.Time `json:"created_at"`
+	UpdatedAt        time.Time `json:"updated_at"`
 }
 
 // AddBatchRequest — POST /api/v1/inventory/products/{productId}/batches.

@@ -27,6 +27,7 @@ type BatchView struct {
 	MRPPaise                   int64
 	PurchasePricePaise         int64
 	QuantityOnHand             int64
+	QuantityReserved           int64
 	Version                    int64
 	CreatedAt                  time.Time
 	UpdatedAt                  time.Time
@@ -47,6 +48,7 @@ func projectBatch(b *batch.Batch) BatchView {
 		MRPPaise:                   b.MRPPaise(),
 		PurchasePricePaise:         b.PurchasePricePaise(),
 		QuantityOnHand:             b.QuantityOnHand(),
+		QuantityReserved:           b.QuantityReserved(),
 		Version:                    b.Version(),
 		CreatedAt:                  b.CreatedAt(),
 		UpdatedAt:                  b.UpdatedAt(),

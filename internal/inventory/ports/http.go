@@ -170,14 +170,21 @@ func handleListProducts(log *slog.Logger, a app.Application) http.Handler {
 				return
 			}
 		}
-		page, err := a.Queries.ListProductsPage.Handle(r.Context(), query.ListProductsPageQuery{
-			TenantID:     tenant.ID(effTenant),
-			Cursor:       cursor,
-			PageSize:     pageSize,
+		filter := query.ProductListFilter{
 			ActiveOnly:   activeFilter == "true",
 			DosageForm:   strings.TrimSpace(q.Get("dosage_form")),
 			Manufacturer: strings.TrimSpace(q.Get("manufacturer")),
 			Search:       strings.TrimSpace(q.Get("search")),
+		}
+		if errs := productStockFilters(q, &filter); errs != nil {
+			writeFieldErrors(w, http.StatusBadRequest, ErrCodeInvalidQuery, errs)
+			return
+		}
+		page, err := a.Queries.ListProductsPage.Handle(r.Context(), query.ListProductsPageQuery{
+			TenantID: tenant.ID(effTenant),
+			Cursor:   cursor,
+			PageSize: pageSize,
+			Filter:   filter,
 		})
 		if err != nil {
 			log.ErrorContext(r.Context(), "list products failed", "err", err)
@@ -728,6 +735,11 @@ func productViewToDto(v query.ProductView) ProductDto {
 		ProductCategory:          v.ProductCategory,
 		ReorderLevel:             v.ReorderLevel,
 		ExpiryAlertThresholdDays: v.ExpiryAlertThresholdDays,
+
+		StockOnHand:    v.StockOnHand,
+		StockReserved:  v.StockReserved,
+		StockAvailable: v.StockAvailable,
+		EarliestExpiry: v.EarliestExpiry,
 	}
 }
 
@@ -745,6 +757,7 @@ func batchViewToDto(v query.BatchView) BatchDto {
 		MRPPaise:                   v.MRPPaise,
 		PurchasePricePaise:         v.PurchasePricePaise,
 		QuantityOnHand:             v.QuantityOnHand,
+		QuantityReserved:           v.QuantityReserved,
 		Version:                    v.Version,
 		CreatedAt:                  v.CreatedAt,
 		UpdatedAt:                  v.UpdatedAt,

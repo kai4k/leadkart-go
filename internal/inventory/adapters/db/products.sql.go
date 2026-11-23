@@ -51,6 +51,86 @@ func (q *Queries) GetProductByID(ctx context.Context, id pgtype.UUID) (Inventory
 	return i, err
 }
 
+const getProductStockByID = `-- name: GetProductStockByID :one
+SELECT p.id, p.tenant_id, p.sku, p.name, p.dosage_form, p.pack_size, p.hsn_code,
+       p.gst_rate_bps, p.manufacturer, p.is_active, p.created_at, p.updated_at,
+       p.reorder_level, p.expiry_alert_threshold_days, p.product_category,
+       COALESCE(s.stock_on_hand, 0)::bigint  AS stock_on_hand,
+       COALESCE(s.stock_reserved, 0)::bigint AS stock_reserved,
+       s.earliest_expiry::date               AS earliest_expiry
+FROM   inventory.products p
+LEFT   JOIN LATERAL (
+           SELECT SUM(b.quantity_on_hand)  AS stock_on_hand,
+                  SUM(b.quantity_reserved) AS stock_reserved,
+                  MIN(b.expiry_date) FILTER (WHERE b.quantity_on_hand > 0) AS earliest_expiry
+           FROM   inventory.batches b
+           WHERE  b.product_id = p.id
+           AND    b.tenant_id  = p.tenant_id
+           AND    NOT b.is_deleted
+           AND    b.expiry_date > $1::date
+       ) s ON true
+WHERE  p.id = $2
+AND    NOT p.is_deleted
+`
+
+type GetProductStockByIDParams struct {
+	Today pgtype.Date
+	ID    pgtype.UUID
+}
+
+type GetProductStockByIDRow struct {
+	ID                       pgtype.UUID
+	TenantID                 pgtype.UUID
+	Sku                      string
+	Name                     string
+	DosageForm               string
+	PackSize                 string
+	HsnCode                  string
+	GstRateBps               int32
+	Manufacturer             string
+	IsActive                 bool
+	CreatedAt                pgtype.Timestamptz
+	UpdatedAt                pgtype.Timestamptz
+	ReorderLevel             int32
+	ExpiryAlertThresholdDays int32
+	ProductCategory          string
+	StockOnHand              int64
+	StockReserved            int64
+	EarliestExpiry           pgtype.Date
+}
+
+// Read model for the product detail: the product row plus its stock totals,
+// in ONE statement (no per-product follow-up read). The totals count LIVE
+// batches that are NOT expired (expiry_date > today, the rule the FEFO picker
+// and the reorder scan use): units in an expired batch are not stock.
+// earliest_expiry is the soonest expiry among those batches that hold stock;
+// NULL when none does. RLS scopes both tables to the caller's tenant.
+func (q *Queries) GetProductStockByID(ctx context.Context, arg GetProductStockByIDParams) (GetProductStockByIDRow, error) {
+	row := q.db.QueryRow(ctx, getProductStockByID, arg.Today, arg.ID)
+	var i GetProductStockByIDRow
+	err := row.Scan(
+		&i.ID,
+		&i.TenantID,
+		&i.Sku,
+		&i.Name,
+		&i.DosageForm,
+		&i.PackSize,
+		&i.HsnCode,
+		&i.GstRateBps,
+		&i.Manufacturer,
+		&i.IsActive,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.ReorderLevel,
+		&i.ExpiryAlertThresholdDays,
+		&i.ProductCategory,
+		&i.StockOnHand,
+		&i.StockReserved,
+		&i.EarliestExpiry,
+	)
+	return i, err
+}
+
 const insertProduct = `-- name: InsertProduct :exec
 
 INSERT INTO inventory.products (
@@ -105,6 +185,151 @@ func (q *Queries) InsertProduct(ctx context.Context, arg InsertProductParams) er
 		arg.ProductCategory,
 	)
 	return err
+}
+
+const listProductStockPage = `-- name: ListProductStockPage :many
+SELECT p.id, p.tenant_id, p.sku, p.name, p.dosage_form, p.pack_size, p.hsn_code,
+       p.gst_rate_bps, p.manufacturer, p.is_active, p.created_at, p.updated_at,
+       p.reorder_level, p.expiry_alert_threshold_days, p.product_category,
+       COALESCE(s.stock_on_hand, 0)::bigint  AS stock_on_hand,
+       COALESCE(s.stock_reserved, 0)::bigint AS stock_reserved,
+       s.earliest_expiry::date               AS earliest_expiry
+FROM   inventory.products p
+LEFT   JOIN LATERAL (
+           SELECT SUM(b.quantity_on_hand)  AS stock_on_hand,
+                  SUM(b.quantity_reserved) AS stock_reserved,
+                  MIN(b.expiry_date) FILTER (WHERE b.quantity_on_hand > 0) AS earliest_expiry
+           FROM   inventory.batches b
+           WHERE  b.product_id = p.id
+           AND    b.tenant_id  = p.tenant_id
+           AND    NOT b.is_deleted
+           AND    b.expiry_date > $1::date
+       ) s ON true
+WHERE  p.tenant_id = $2
+AND    NOT p.is_deleted
+AND    (NOT $3::boolean OR p.is_active = true)
+AND    (
+        $4::text = ''
+        OR (lower(p.sku) || ' ' || lower(p.name)) ILIKE '%' || lower($4) || '%'
+       )
+AND    ($5::text = '' OR lower(p.product_category) = lower($5))
+AND    ($6::text = '' OR lower(p.dosage_form) = lower($6))
+AND    ($7::text = '' OR lower(p.manufacturer) = lower($7))
+AND    (
+        NOT $8::boolean
+        OR (p.reorder_level > 0 AND COALESCE(s.stock_on_hand, 0) < p.reorder_level)
+       )
+AND    (
+        $9::int < 0
+        OR s.earliest_expiry <= $1::date + $9::int
+       )
+AND    (p.created_at, p.id) < ($10::timestamptz, $11::uuid)
+ORDER  BY p.created_at DESC, p.id DESC
+LIMIT  $12
+`
+
+type ListProductStockPageParams struct {
+	Today              pgtype.Date
+	TenantID           pgtype.UUID
+	ActiveOnly         bool
+	Search             string
+	Category           string
+	DosageForm         string
+	Manufacturer       string
+	LowStock           bool
+	ExpiringWithinDays int32
+	CursorCreatedAt    pgtype.Timestamptz
+	CursorID           pgtype.UUID
+	Limit              int32
+}
+
+type ListProductStockPageRow struct {
+	ID                       pgtype.UUID
+	TenantID                 pgtype.UUID
+	Sku                      string
+	Name                     string
+	DosageForm               string
+	PackSize                 string
+	HsnCode                  string
+	GstRateBps               int32
+	Manufacturer             string
+	IsActive                 bool
+	CreatedAt                pgtype.Timestamptz
+	UpdatedAt                pgtype.Timestamptz
+	ReorderLevel             int32
+	ExpiryAlertThresholdDays int32
+	ProductCategory          string
+	StockOnHand              int64
+	StockReserved            int64
+	EarliestExpiry           pgtype.Date
+}
+
+// Read model for the product list: one statement returns the page WITH each
+// product's stock totals (same definitions as GetProductStockByID), so the
+// list never issues a query per row. Keyset on (created_at, id) DESC per
+// ADR 0038, as ListProductsByTenantPage.
+//
+// Filters (each one is off at its neutral value):
+//
+//	active_only          false
+//	search               ''   substring of "sku name", case-insensitive
+//	category             ''   exact product_category, case-insensitive
+//	dosage_form          ''   exact, case-insensitive
+//	manufacturer         ''   exact, case-insensitive
+//	low_stock            false; true = reorder_level > 0 AND stock_on_hand <
+//	                     reorder_level (the reorder scan's rule)
+//	expiring_within_days -1;  n >= 0 = a live, in-stock, not-expired batch
+//	                     expires on or before today + n days
+func (q *Queries) ListProductStockPage(ctx context.Context, arg ListProductStockPageParams) ([]ListProductStockPageRow, error) {
+	rows, err := q.db.Query(ctx, listProductStockPage,
+		arg.Today,
+		arg.TenantID,
+		arg.ActiveOnly,
+		arg.Search,
+		arg.Category,
+		arg.DosageForm,
+		arg.Manufacturer,
+		arg.LowStock,
+		arg.ExpiringWithinDays,
+		arg.CursorCreatedAt,
+		arg.CursorID,
+		arg.Limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListProductStockPageRow
+	for rows.Next() {
+		var i ListProductStockPageRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.TenantID,
+			&i.Sku,
+			&i.Name,
+			&i.DosageForm,
+			&i.PackSize,
+			&i.HsnCode,
+			&i.GstRateBps,
+			&i.Manufacturer,
+			&i.IsActive,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.ReorderLevel,
+			&i.ExpiryAlertThresholdDays,
+			&i.ProductCategory,
+			&i.StockOnHand,
+			&i.StockReserved,
+			&i.EarliestExpiry,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listProductsByTenantPage = `-- name: ListProductsByTenantPage :many

@@ -3,19 +3,23 @@ package ports
 import (
 	"errors"
 	"net/http"
+	"net/url"
+	"strconv"
 	"strings"
 
 	"github.com/leadkart/leadkart-go/internal/common/textlimit"
+	"github.com/leadkart/leadkart-go/internal/inventory/app/query"
 	"github.com/leadkart/leadkart-go/internal/inventory/domain/product"
 )
 
 // Rule codes carried in errors{field:[code]}. Wire-stable; the names follow the
-// identity module's (`required`, `too_long`, `invalid_characters`).
+// identity module's (`required`, `too_long`, `invalid_characters`, `invalid_type`).
 const (
 	ruleTooLong           = "too_long"
 	ruleInvalidCharacters = "invalid_characters"
 	ruleTooSmall          = "too_small"
 	ruleTooLarge          = "too_large"
+	ruleInvalidType       = "invalid_type"
 )
 
 // msgFieldsInvalid is the fixed message of a refusal that names its fields.
@@ -61,6 +65,41 @@ func productFieldErrors(category *string, reorderLevel, thresholdDays *int) map[
 	errs.intRange("reorder_level", reorderLevel, product.ReorderLevelMin, product.ReorderLevelMax)
 	errs.intRange("expiry_alert_threshold_days", thresholdDays,
 		product.ExpiryAlertThresholdDaysMin, product.ExpiryAlertThresholdDaysMax)
+	if len(errs) == 0 {
+		return nil
+	}
+	return errs
+}
+
+// productStockFilters reads the product list's stock filters (`category`,
+// `low_stock`, `expiring_within_days`) into filter. A value the server cannot
+// read is refused by name, never ignored: a list that silently dropped
+// `low_stock=yes` would show every product as if it were low on stock.
+// Returns nil when all pass.
+func productStockFilters(q url.Values, filter *query.ProductListFilter) map[string][]string {
+	errs := fieldErrors{}
+
+	category := strings.TrimSpace(q.Get("category"))
+	errs.text("category", &category, product.ProductCategoryMaxLength)
+	filter.Category = category
+
+	switch q.Get("low_stock") {
+	case "", "false":
+	case "true":
+		filter.LowStock = true
+	default:
+		errs.add("low_stock", ruleInvalidType)
+	}
+
+	if raw := q.Get("expiring_within_days"); raw != "" {
+		days, err := strconv.Atoi(raw)
+		if err != nil {
+			errs.add("expiring_within_days", ruleInvalidType)
+		} else {
+			errs.intRange("expiring_within_days", &days, 0, product.ExpiryAlertThresholdDaysMax)
+			filter.ExpiringWithinDays = &days
+		}
+	}
 	if len(errs) == 0 {
 		return nil
 	}

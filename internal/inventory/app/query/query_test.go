@@ -10,7 +10,6 @@ import (
 
 	"github.com/leadkart/leadkart-go/internal/common/ids"
 	"github.com/leadkart/leadkart-go/internal/common/pagination"
-	"github.com/leadkart/leadkart-go/internal/identity/domain/membership"
 	"github.com/leadkart/leadkart-go/internal/identity/domain/tenant"
 	"github.com/leadkart/leadkart-go/internal/inventory/app/query"
 	"github.com/leadkart/leadkart-go/internal/inventory/domain/batch"
@@ -24,41 +23,40 @@ var fixedNow = time.Date(2026, 5, 24, 12, 0, 0, 0, time.UTC)
 
 // ----- minimal fakes mirroring the command-side shape ----------------------
 
-type fakeProductRepo struct {
-	mu       sync.Mutex
-	products map[product.ID]*product.Product
-	getErr   error
-	listPage pagination.Page[*product.Product]
-	listErr  error
+// fakeProductReader is the read model the product handlers ask; it records
+// what it was asked so a test can check the filter, the date and the limit.
+type fakeProductReader struct {
+	mu        sync.Mutex
+	views     []query.ProductView
+	err       error
+	gotFilter query.ProductListFilter
+	gotToday  time.Time
+	gotLimit  int
 }
 
-func newFakeProductRepo() *fakeProductRepo {
-	return &fakeProductRepo{products: make(map[product.ID]*product.Product)}
-}
-
-func (r *fakeProductRepo) Add(context.Context, *product.Product) error { return nil }
-func (r *fakeProductRepo) UpdateByID(context.Context, tenant.ID, product.ID, func(*product.Product) (bool, error)) error {
-	return nil
-}
-
-func (r *fakeProductRepo) GetByID(_ context.Context, _ tenant.ID, id product.ID) (*product.Product, error) {
+func (r *fakeProductReader) GetProduct(_ context.Context, tid tenant.ID, id product.ID, today time.Time) (query.ProductView, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.getErr != nil {
-		return nil, r.getErr
+	r.gotToday = today
+	if r.err != nil {
+		return query.ProductView{}, r.err
 	}
-	p, ok := r.products[id]
-	if !ok || p.IsDeleted() {
-		return nil, product.ErrNotFound
+	for _, v := range r.views {
+		if v.ID == id.String() && v.TenantID == tid.String() {
+			return v, nil
+		}
 	}
-	return p, nil
+	return query.ProductView{}, product.ErrNotFound
 }
 
-func (r *fakeProductRepo) ListPage(context.Context, tenant.ID, product.ListFilter, pagination.Cursor, int) (pagination.Page[*product.Product], error) {
-	if r.listErr != nil {
-		return pagination.Page[*product.Product]{}, r.listErr
+func (r *fakeProductReader) ListProducts(_ context.Context, _ tenant.ID, f query.ProductListFilter, today time.Time, _ pagination.Cursor, limit int) ([]query.ProductView, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.gotFilter, r.gotToday, r.gotLimit = f, today, limit
+	if r.err != nil {
+		return nil, r.err
 	}
-	return r.listPage, nil
+	return r.views[:min(limit, len(r.views))], nil
 }
 
 type fakeBatchRepo struct {
@@ -127,7 +125,7 @@ func (r *fakeMovementRepo) ListByBatchPage(_ context.Context, _ tenant.ID, _ bat
 
 // compile-time interface satisfaction
 var (
-	_ product.Repository       = (*fakeProductRepo)(nil)
+	_ query.ProductReader      = (*fakeProductReader)(nil)
 	_ batch.Repository         = (*fakeBatchRepo)(nil)
 	_ stockmovement.Repository = (*fakeMovementRepo)(nil)
 )
@@ -141,50 +139,44 @@ func newTenantID(t *testing.T) tenant.ID {
 	return tenant.ID(ids.NewV7().String())
 }
 
-func newMembershipID(t *testing.T) membership.ID {
-	t.Helper()
-	return membership.ID(ids.NewV7().String())
-}
-
 // ----- GetProduct ----------------------------------------------------------
+
+func clock() time.Time { return fixedNow }
 
 func TestGetProductHandler_HappyPath(t *testing.T) {
 	t.Parallel()
-	repo := newFakeProductRepo()
 	tid := newTenantID(t)
-	actor := newMembershipID(t)
-	p, _ := product.New(product.ID(ids.NewV7().String()), tid, actor,
-		product.Spec{SKU: "GP-1", Name: "X", DosageForm: "Tablet",
-			PackSize: "10", HSNCode: "3004", GSTRateBps: 1200},
-		fixedNow)
-	repo.products[p.ID()] = p
-	_ = p.PullEvents()
+	expiry := fixedNow.AddDate(0, 1, 0)
+	want := query.ProductView{
+		ID: ids.NewV7().String(), TenantID: tid.String(), SKU: "GP-1",
+		StockOnHand: 60, StockReserved: 15, StockAvailable: 45, EarliestExpiry: &expiry,
+	}
+	reader := &fakeProductReader{views: []query.ProductView{want}}
 
-	h := query.NewGetProductHandler(repo)
-	got, err := h.Handle(t.Context(), query.GetProductQuery{ProductID: p.ID()})
+	got, err := query.NewGetProductHandler(reader, clock).Handle(t.Context(), query.GetProductQuery{TenantID: tid, ProductID: product.ID(want.ID)})
 	if err != nil {
 		t.Fatalf("Handle: %v", err)
 	}
-	if got.ID != p.ID().String() {
-		t.Fatalf("id mismatch: got %q want %q", got.ID, p.ID().String())
+	if got != want {
+		t.Fatalf("got %+v, want %+v", got, want)
+	}
+	if !reader.gotToday.Equal(fixedNow) {
+		t.Fatalf("expiry judged at %v, want the handler's clock %v", reader.gotToday, fixedNow)
 	}
 }
 
 func TestGetProductHandler_NotFound(t *testing.T) {
 	t.Parallel()
-	repo := newFakeProductRepo()
-	h := query.NewGetProductHandler(repo)
+	h := query.NewGetProductHandler(&fakeProductReader{}, clock)
 	_, err := h.Handle(t.Context(), query.GetProductQuery{ProductID: product.ID("nope")})
 	if !errors.Is(err, product.ErrNotFound) {
 		t.Fatalf("err: got %v want ErrNotFound", err)
 	}
 }
 
-func TestGetProductHandler_RepoError_Propagates(t *testing.T) {
+func TestGetProductHandler_ReaderError_Propagates(t *testing.T) {
 	t.Parallel()
-	repo := newFakeProductRepo()
-	repo.getErr = errSentinel
-	h := query.NewGetProductHandler(repo)
+	h := query.NewGetProductHandler(&fakeProductReader{err: errSentinel}, clock)
 	_, err := h.Handle(t.Context(), query.GetProductQuery{ProductID: product.ID("any")})
 	if !errors.Is(err, errSentinel) {
 		t.Fatalf("err: got %v want errSentinel propagated", err)
@@ -193,34 +185,60 @@ func TestGetProductHandler_RepoError_Propagates(t *testing.T) {
 
 // ----- ListProductsPage ----------------------------------------------------
 
-func TestListProductsPageHandler_HappyPath_PassesFilter(t *testing.T) {
+func TestListProductsPageHandler_PassesFilterAndClockAndAsksOneExtraRow(t *testing.T) {
 	t.Parallel()
-	repo := newFakeProductRepo()
-	repo.listPage = pagination.Page[*product.Product]{Items: []*product.Product{}}
-	h := query.NewListProductsPageHandler(repo)
-	tid := newTenantID(t)
+	reader := &fakeProductReader{}
+	days := 30
+	filter := query.ProductListFilter{ActiveOnly: true, Category: "Cardiac", LowStock: true, ExpiringWithinDays: &days}
 
-	page, err := h.Handle(t.Context(), query.ListProductsPageQuery{
-		TenantID: tid, PageSize: 25, ActiveOnly: true,
+	page, err := query.NewListProductsPageHandler(reader, clock).Handle(t.Context(), query.ListProductsPageQuery{
+		TenantID: newTenantID(t), PageSize: 25, Filter: filter,
 	})
 	if err != nil {
 		t.Fatalf("Handle: %v", err)
 	}
-	if page.Items == nil {
-		t.Fatal("Items: nil — expected non-nil slice from BuildPage shape")
+	if page.Items == nil || page.HasMore {
+		t.Fatalf("empty list: items %v has_more %v; want an empty non-nil slice and no next page", page.Items, page.HasMore)
+	}
+	if reader.gotFilter != filter {
+		t.Fatalf("filter reached the reader as %+v, want %+v", reader.gotFilter, filter)
+	}
+	if reader.gotLimit != 26 || !reader.gotToday.Equal(fixedNow) {
+		t.Fatalf("limit %d today %v; want 26 (page size + 1) and %v", reader.gotLimit, reader.gotToday, fixedNow)
 	}
 }
 
-func TestListProductsPageHandler_RepoError_Propagates(t *testing.T) {
+func TestListProductsPageHandler_ExtraRowBecomesHasMore(t *testing.T) {
 	t.Parallel()
-	repo := newFakeProductRepo()
-	repo.listErr = errSentinel
-	h := query.NewListProductsPageHandler(repo)
-	tid := newTenantID(t)
+	reader := &fakeProductReader{}
+	for i := range 3 {
+		reader.views = append(reader.views, query.ProductView{
+			ID: ids.NewV7().String(), CreatedAt: fixedNow.Add(-time.Duration(i) * time.Minute),
+		})
+	}
 
-	_, err := h.Handle(t.Context(), query.ListProductsPageQuery{
-		TenantID: tid, PageSize: 25,
+	page, err := query.NewListProductsPageHandler(reader, clock).Handle(t.Context(), query.ListProductsPageQuery{
+		TenantID: newTenantID(t), PageSize: 2,
 	})
+	if err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	if len(page.Items) != 2 || !page.HasMore || page.NextCursor == "" {
+		t.Fatalf("items %d has_more %v cursor %q; want 2, true and a cursor", len(page.Items), page.HasMore, page.NextCursor)
+	}
+	cur, err := pagination.Decode(page.NextCursor)
+	if err != nil {
+		t.Fatalf("decode cursor: %v", err)
+	}
+	if cur.ID != reader.views[1].ID || !cur.SortValue.Equal(reader.views[1].CreatedAt) {
+		t.Fatalf("cursor %+v does not point at the last row of the page", cur)
+	}
+}
+
+func TestListProductsPageHandler_ReaderError_Propagates(t *testing.T) {
+	t.Parallel()
+	h := query.NewListProductsPageHandler(&fakeProductReader{err: errSentinel}, clock)
+	_, err := h.Handle(t.Context(), query.ListProductsPageQuery{TenantID: newTenantID(t), PageSize: 25})
 	if !errors.Is(err, errSentinel) {
 		t.Fatalf("err: got %v want errSentinel propagated", err)
 	}
@@ -375,5 +393,26 @@ func TestListProductCategoriesHandler_ReaderError_Propagates(t *testing.T) {
 	_, err := query.NewListProductCategoriesHandler(fakeCategoryReader{err: boom}).Handle(t.Context(), query.ListProductCategoriesQuery{})
 	if !errors.Is(err, boom) {
 		t.Fatalf("err %v, want it to wrap the reader's error", err)
+	}
+}
+
+// A batch read carries the reserved quantity next to on hand, so a screen can
+// show what can really be sold or adjusted.
+func TestGetBatchHandler_CarriesQuantityReserved(t *testing.T) {
+	t.Parallel()
+	repo := newFakeBatchRepo()
+	tid := newTenantID(t)
+	id := batch.ID(ids.NewV7().String())
+	repo.batches[id] = batch.UnmarshalFromDB(batch.Snapshot{
+		ID: id, TenantID: tid, ProductID: product.ID(ids.NewV7().String()),
+		QuantityOnHand: 40, QuantityReserved: 15,
+	})
+
+	got, err := query.NewGetBatchHandler(repo).Handle(t.Context(), query.GetBatchQuery{TenantID: tid, BatchID: id})
+	if err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	if got.QuantityOnHand != 40 || got.QuantityReserved != 15 {
+		t.Fatalf("on hand %d reserved %d; want 40 and 15", got.QuantityOnHand, got.QuantityReserved)
 	}
 }

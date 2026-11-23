@@ -2535,8 +2535,14 @@ paths:
       summary: List Products (cursor-paginated)
       description: |
         Requires `inventory.catalog.read` OR `inventory.catalog.manage`.
-        Returns the live (non-deleted) products for the caller's tenant
-        ordered (created_at, id) DESC. Filters narrow the result set.
+        Returns the live (non-deleted) products for the caller's tenant.
+        The order is fixed: newest first, (created_at, id) DESC, keyset
+        paginated with `cursor` and `page_size`; there is no `sort`
+        parameter. Every item carries its stock totals and earliest expiry
+        (see `ProductDto`), read in the same statement as the page. Filters
+        narrow the result set and combine with AND. "Today" is the current
+        UTC date; a batch is expired when its expiry date is today or
+        earlier.
       parameters:
         - { $ref: '#/components/parameters/Cursor' }
         - { $ref: '#/components/parameters/PageSize' }
@@ -2544,20 +2550,37 @@ paths:
           in: query
           required: false
           schema: { type: string, enum: ['true', 'false'] }
-          description: When 'true', restricts to is_active products.
+          description: When 'true', restricts to is_active products. Any other value is no filter (there is no "inactive only" filter).
         - name: dosage_form
           in: query
           required: false
           schema: { type: string }
+          description: Exact match on `dosage_form`, case-insensitive, trimmed.
         - name: manufacturer
           in: query
           required: false
           schema: { type: string }
+          description: Exact match on `manufacturer`, case-insensitive, trimmed.
         - name: search
           in: query
           required: false
           schema: { type: string }
-          description: pg_trgm fuzzy match on (sku || name) per ADR 0040.
+          description: Case-insensitive substring of "sku name", trimmed.
+        - name: category
+          in: query
+          required: false
+          schema: { type: string, maxLength: 64 }
+          description: 'Exact match on `product_category`, case-insensitive, trimmed. One category. 400 `invalid_query`, `errors.category`: `too_long` (over 64 characters), `invalid_characters` (holds the NUL character).'
+        - name: low_stock
+          in: query
+          required: false
+          schema: { type: string, enum: ['true', 'false'] }
+          description: "`true`: only products with `reorder_level` above 0 whose `stock_on_hand` is below it (the rule of the daily reorder alert; a product with `reorder_level` 0 is never low on stock). `false` or absent: no filter. Any other value: 400 `invalid_query`, `errors.low_stock: [invalid_type]`."
+        - name: expiring_within_days
+          in: query
+          required: false
+          schema: { type: integer, minimum: 0, maximum: 36500 }
+          description: 'Only products whose `earliest_expiry` is on or before today plus this many days (so: an unexpired batch that holds stock expires within the window; the bound is inclusive; 0 matches nothing, because a batch expiring today is already expired). 400 `invalid_query`, `errors.expiring_within_days`: `invalid_type` (not an integer), `too_small` (below 0), `too_large` (above 36500).'
         - $ref: '#/components/parameters/XTenantId'
       responses:
         '429': { $ref: '#/components/responses/TooManyRequests' }
@@ -2566,7 +2589,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ListProductsResponse' }
-        '400': { description: "`invalid_query` — a malformed cursor, or a `search`, `dosage_form` or `manufacturer` filter holding the NUL character (`%00`; it used to be a 500)", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+        '400': { description: "`invalid_query` — a malformed cursor, or a `search`, `dosage_form` or `manufacturer` filter holding the NUL character (`%00`; it used to be a 500); or a `category`, `low_stock` or `expiring_within_days` value the server cannot read, named in `errors{<param>: [<rule>]}` (rules on each parameter)", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/TenantScopeForbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -5854,7 +5877,7 @@ components:
         balance:   { type: integer, format: int64 }
     ProductDto:
       type: object
-      required: [id, tenant_id, sku, name, dosage_form, pack_size, hsn_code, gst_rate_bps, is_active, created_at, updated_at, product_category, reorder_level, expiry_alert_threshold_days]
+      required: [id, tenant_id, sku, name, dosage_form, pack_size, hsn_code, gst_rate_bps, is_active, created_at, updated_at, product_category, reorder_level, expiry_alert_threshold_days, stock_on_hand, stock_reserved, stock_available]
       properties:
         id:            { type: string, format: uuid }
         tenant_id:     { type: string, format: uuid }
@@ -5871,6 +5894,10 @@ components:
         product_category:            { type: string, minLength: 1, maxLength: 64, description: 'Never empty: a product stored without a category reads `General`. Free text; the values the form offers come from `GET /inventory/product-categories`.' }
         reorder_level:               { type: integer, minimum: 0, maximum: 2147483647, description: 'Units. 0: the low-stock alert is off for this product.' }
         expiry_alert_threshold_days: { type: integer, minimum: 0, maximum: 36500, description: 'Days before expiry at which a batch is reported as expiring soon. 0: the expiry alert is off for this product.' }
+        stock_on_hand:               { type: integer, format: int64, minimum: 0, description: 'Units on hand, added up over the product''s live batches that are NOT expired (expiry date after today, UTC). Units in an expired batch are not counted: they cannot be sold.' }
+        stock_reserved:              { type: integer, format: int64, minimum: 0, description: 'Of `stock_on_hand`, the units held for confirmed orders (same batches).' }
+        stock_available:             { type: integer, format: int64, minimum: 0, description: '`stock_on_hand` minus `stock_reserved`: what can still be sold.' }
+        earliest_expiry:             { type: string, format: date-time, description: 'The soonest expiry date among the unexpired batches that hold stock (midnight UTC, the shape of `BatchDto.expiry_date`). Absent when the product has no unexpired stock.' }
 
     CreateProductRequest:
       type: object
@@ -5932,7 +5959,7 @@ components:
 
     BatchDto:
       type: object
-      required: [id, product_id, tenant_id, batch_number, manufacture_date, expiry_date, manufacturer_name, manufacturing_licence_number, mrp_paise, purchase_price_paise, quantity_on_hand, version, created_at, updated_at]
+      required: [id, product_id, tenant_id, batch_number, manufacture_date, expiry_date, manufacturer_name, manufacturing_licence_number, mrp_paise, purchase_price_paise, quantity_on_hand, quantity_reserved, version, created_at, updated_at]
       properties:
         id:                            { type: string, format: uuid }
         product_id:                    { type: string, format: uuid }
@@ -5945,6 +5972,7 @@ components:
         mrp_paise:                     { type: integer, format: int64, minimum: 0, description: 'Maximum Retail Price in paise (1 INR = 100 paise; Stripe canon)' }
         purchase_price_paise:          { type: integer, format: int64, minimum: 0 }
         quantity_on_hand:              { type: integer, format: int64, minimum: 0 }
+        quantity_reserved:             { type: integer, format: int64, minimum: 0, description: 'Of `quantity_on_hand`, the units held for confirmed orders. Only `quantity_on_hand - quantity_reserved` can be sold, moved out (`outbound`) or adjusted away; asking for more is 409 `insufficient_stock`.' }
         version:                       { type: integer, format: int64, description: 'Optimistic-concurrency token (Vernon IDDD ch.10)' }
         created_at:                    { type: string, format: date-time }
         updated_at:                    { type: string, format: date-time }
